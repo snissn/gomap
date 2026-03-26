@@ -430,6 +430,9 @@ func (f *File) Read(ptr page.ValuePtr, verifyCRC bool) ([]byte, error) {
 	if f == nil || f.File == nil {
 		return nil, errors.New("valuelog: nil file")
 	}
+	if err := f.ensureCurrentWritableReadable(); err != nil {
+		return nil, err
+	}
 	if val, err, ok := f.readViaMmap(ptr, verifyCRC); ok {
 		f.mmapReadHits.Add(1)
 		return val, err
@@ -445,6 +448,9 @@ func (f *File) Read(ptr page.ValuePtr, verifyCRC bool) ([]byte, error) {
 func (f *File) ReadUnsafe(ptr page.ValuePtr, verifyCRC bool) ([]byte, error) {
 	if f == nil || f.File == nil {
 		return nil, errors.New("valuelog: nil file")
+	}
+	if err := f.ensureCurrentWritableReadable(); err != nil {
+		return nil, err
 	}
 	if val, err, ok := f.readViaMmapView(ptr, verifyCRC); ok {
 		f.mmapReadHits.Add(1)
@@ -483,6 +489,9 @@ func (f *File) ReadUnsafeTo(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]by
 	if f == nil || f.File == nil {
 		return nil, false, errors.New("valuelog: nil file")
 	}
+	if err := f.ensureCurrentWritableReadable(); err != nil {
+		return nil, false, err
+	}
 	if val, usedDst, err, ok := f.readViaMmapViewTo(ptr, verifyCRC, dst); ok {
 		f.mmapReadHits.Add(1)
 		return val, usedDst, err
@@ -516,6 +525,9 @@ func (f *File) ReadUnsafeTo(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]by
 func (f *File) ReadAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte, error) {
 	if f == nil || f.File == nil {
 		return nil, errors.New("valuelog: nil file")
+	}
+	if err := f.ensureCurrentWritableReadable(); err != nil {
+		return nil, err
 	}
 	if val, err, ok := f.readViaMmapAppend(ptr, verifyCRC, dst); ok {
 		f.mmapReadHits.Add(1)
@@ -588,6 +600,8 @@ func (f *File) ReadAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte
 				return nil, err
 			}
 			oldLen := len(dst)
+			noteGrowReadAppendCompressedFallback(len(val))
+			noteGrowReadAppendCompressedFallbackDst(dst, len(val))
 			dst = grow(dst, len(val))
 			copy(dst[oldLen:], val)
 			return dst, nil
@@ -653,6 +667,8 @@ func (f *File) ReadAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte
 		return nil, err
 	}
 	oldLen := len(dst)
+	noteGrowReadAppendCompressedFallback(len(val))
+	noteGrowReadAppendCompressedFallbackDst(dst, len(val))
 	dst = grow(dst, len(val))
 	copy(dst[oldLen:], val)
 	return dst, nil
@@ -664,6 +680,7 @@ func (f *File) ReadUnsafeAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) (
 
 func (f *File) appendPayloadFromFile(dst []byte, off int64, payloadLen int) ([]byte, error) {
 	oldLen := len(dst)
+	noteGrowReadAppendPayload(payloadLen)
 	dst = grow(dst, payloadLen)
 	payload := dst[oldLen : oldLen+payloadLen]
 	if _, err := f.File.ReadAt(payload, off); err != nil {
@@ -774,13 +791,14 @@ type Manager struct {
 
 	refreshScans atomic.Uint64
 
-	disableReadChecksum      bool
-	dictLookup               DictLookup
-	templateLookup           TemplateLookup
-	templateDecodeOpts       templ.DecodeOptions
-	templateDefCache         *templateDefCache
-	groupedFrameCacheEntries int
-	groupedFrameCacheMaxRaw  int
+	disableReadChecksum        bool
+	dictLookup                 DictLookup
+	templateLookup             TemplateLookup
+	templateDecodeOpts         templ.DecodeOptions
+	templateDefCache           *templateDefCache
+	groupedFrameCacheEntries   int
+	groupedFrameCacheMaxRaw    int
+	currentWritableReadBarrier atomic.Value
 }
 
 func NewManager(dir string) (*Manager, error) {
@@ -801,6 +819,44 @@ func (m *Manager) SetDisableReadChecksum(disable bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.disableReadChecksum = disable
+}
+
+// SetCurrentWritableReadBarrier installs an optional callback that is invoked
+// before reading a segment still marked currentWritable. Cached mode uses this
+// to flush the owning writer so backend-internal tree reads do not observe EOF
+// from still-buffered grouped records.
+func (m *Manager) SetCurrentWritableReadBarrier(fn func(fileID uint32) error) {
+	if m == nil {
+		return
+	}
+	if fn == nil {
+		var cleared func(fileID uint32) error
+		m.currentWritableReadBarrier.Store(cleared)
+		return
+	}
+	m.currentWritableReadBarrier.Store(fn)
+}
+
+func (m *Manager) currentWritableBarrier() func(uint32) error {
+	if m == nil {
+		return nil
+	}
+	if v := m.currentWritableReadBarrier.Load(); v != nil {
+		if fn, ok := v.(func(uint32) error); ok {
+			return fn
+		}
+	}
+	return nil
+}
+
+func (f *File) ensureCurrentWritableReadable() error {
+	if f == nil || !f.currentWritable.Load() || f.manager == nil {
+		return nil
+	}
+	if barrier := f.manager.currentWritableBarrier(); barrier != nil {
+		return barrier(f.ID)
+	}
+	return nil
 }
 
 func (m *Manager) ReadChecksumEnabled() bool {

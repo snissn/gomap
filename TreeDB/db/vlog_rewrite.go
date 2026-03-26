@@ -27,6 +27,9 @@ import (
 
 const defaultValueLogRewriteSegmentBytes = 128 << 20
 
+const rewriteDictMinPayloadBytes = 32 << 10
+const rewriteDictBatchMaxK = 64
+
 // ValueLogRewriteStats summarizes rewrite compaction results.
 type ValueLogRewriteStats struct {
 	SegmentsBefore int
@@ -1957,10 +1960,18 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 		iter := tree.New(d.Pager(), newValueReader(state.ValueLogSet), root).
 			IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
 		rewriter := &rewriteIterator{
-			inner:  iter,
-			ptrMap: ptrMap,
-			vlogs:  state.ValueLogSet,
-			writer: writer,
+			inner:      iter,
+			ptrMap:     ptrMap,
+			vlogs:      state.ValueLogSet,
+			writer:     writer,
+			readValue:  d.valueLogManager.Read,
+			dictLookup: opts.ValueLog.DictLookup,
+		}
+		if !rewriter.Valid() {
+			if err := rewriter.Error(); err != nil {
+				_ = rewriter.Close()
+				return 0, err
+			}
 		}
 		buildOpts := bulk.BuildOptions{
 			LeafPrefixCompression: opts.LeafPrefixCompression,
@@ -1974,6 +1985,12 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 		newRoot, err := bulk.BuildWithOptions(rewriter, alloc, newPager, buildOpts)
 		_ = rewriter.Close()
 		if err != nil {
+			return 0, err
+		}
+		// Pointer mappings returned while grouped dict batches are still pending
+		// rely on batch-flush offset stability; flush here so record-count stats
+		// and subsequent tree builds observe committed batches.
+		if err := writer.flushPendingDictBatch(); err != nil {
 			return 0, err
 		}
 		stats.RecordsCopied = writer.records
@@ -2090,10 +2107,105 @@ type rewriteWriter struct {
 	blockCodec       valuelog.BlockCodec
 	w                *valuelog.Writer
 	records          int
+
+	pendingDictID      uint64
+	pendingDict        []byte
+	pendingDictStart   int64
+	pendingDictRaw     int
+	pendingDictRecords []valuelog.Record
+	pendingDictPtrs    []page.ValuePtr
+	pendingDictDst     []page.ValuePtr
 }
 
 func newRewriteWriter(walDir string, lane, startSeq uint32, maxSize int64) *rewriteWriter {
 	return &rewriteWriter{walDir: walDir, lane: lane, seq: startSeq, start: startSeq, maxSize: maxSize}
+}
+
+func rewriteDictFrameRecordLen(rawPayloadBytes, k int) int64 {
+	if rawPayloadBytes < 0 {
+		rawPayloadBytes = 0
+	}
+	if k < 1 {
+		k = 1
+	}
+	bodyLen := valuelog.FrameHeaderSize + (k * 8) + ((k + 1) * 4) + rawPayloadBytes
+	return int64(valuelog.HeaderSize + bodyLen)
+}
+
+func (w *rewriteWriter) hasPendingDictBatch() bool {
+	return w != nil && len(w.pendingDictRecords) > 0
+}
+
+func (w *rewriteWriter) resetPendingDictBatch() {
+	if w == nil {
+		return
+	}
+	w.pendingDictID = 0
+	w.pendingDict = nil
+	w.pendingDictStart = 0
+	w.pendingDictRaw = 0
+	w.pendingDictRecords = w.pendingDictRecords[:0]
+	w.pendingDictPtrs = w.pendingDictPtrs[:0]
+}
+
+func (w *rewriteWriter) maybeRotateForEstimate(estimate int64) error {
+	if w == nil || w.w == nil {
+		return nil
+	}
+	if w.maxSize <= 0 {
+		return nil
+	}
+	if estimate < 0 {
+		estimate = 0
+	}
+	if w.w.Size() == 0 {
+		return nil
+	}
+	if w.w.Size()+estimate <= w.maxSize {
+		return nil
+	}
+	return w.rotate()
+}
+
+func (w *rewriteWriter) flushPendingDictBatch() error {
+	if w == nil || !w.hasPendingDictBatch() {
+		return nil
+	}
+	if w.w == nil {
+		return errors.New("vlog-rewrite: nil writer")
+	}
+	n := len(w.pendingDictRecords)
+	if cap(w.pendingDictDst) < n {
+		w.pendingDictDst = make([]page.ValuePtr, n)
+	}
+	dst := w.pendingDictDst[:n]
+	ptrs, _, err := w.w.AppendFrameWithStatsInto(w.pendingDictID, w.pendingDict, w.pendingDictRecords, dst)
+	if err != nil {
+		return err
+	}
+	if len(ptrs) != n {
+		return fmt.Errorf("vlog-rewrite: dict batch pointer count mismatch got=%d want=%d", len(ptrs), n)
+	}
+	if len(w.pendingDictPtrs) == n {
+		for i := range ptrs {
+			// Returned pointers may carry a non-zero record-length hint while the
+			// predicted pointers intentionally use hint=0 to avoid depending on
+			// post-encode frame length. Offset+file must still match.
+			if ptrs[i].FileID != w.pendingDictPtrs[i].FileID || ptrs[i].Offset != w.pendingDictPtrs[i].Offset {
+				return fmt.Errorf(
+					"vlog-rewrite: dict batch pointer mismatch idx=%d got=(file=%d,off=%d) want=(file=%d,off=%d)",
+					i,
+					ptrs[i].FileID,
+					ptrs[i].Offset,
+					w.pendingDictPtrs[i].FileID,
+					w.pendingDictPtrs[i].Offset,
+				)
+			}
+		}
+	}
+	w.records += n
+	w.resetPendingDictBatch()
+	return nil
 }
 
 func (w *rewriteWriter) AppendLeafPage(leafPage []byte) (page.ValuePtr, error) {
@@ -2119,6 +2231,11 @@ func (w *rewriteWriter) ensureWriter() error {
 }
 
 func (w *rewriteWriter) rotate() error {
+	if w.hasPendingDictBatch() {
+		if err := w.flushPendingDictBatch(); err != nil {
+			return err
+		}
+	}
 	nextSeq := w.seq + 1
 	fileID, err := valuelog.EncodeFileID(w.lane, nextSeq)
 	if err != nil {
@@ -2147,6 +2264,9 @@ func (w *rewriteWriter) appendRaw(raw []byte, length uint32) (page.ValuePtr, err
 	if err := w.ensureWriter(); err != nil {
 		return page.ValuePtr{}, err
 	}
+	if err := w.flushPendingDictBatch(); err != nil {
+		return page.ValuePtr{}, err
+	}
 	if w.maxSize > 0 && w.w.Size()+int64(len(raw)) > w.maxSize {
 		if err := w.rotate(); err != nil {
 			return page.ValuePtr{}, err
@@ -2161,44 +2281,144 @@ func (w *rewriteWriter) appendRaw(raw []byte, length uint32) (page.ValuePtr, err
 }
 
 func (w *rewriteWriter) appendValue(rid uint64, value []byte) (page.ValuePtr, error) {
+	return w.appendValueWithDict(0, nil, rid, value)
+}
+
+func (w *rewriteWriter) appendValueWithDict(dictID uint64, dict []byte, rid uint64, value []byte) (page.ValuePtr, error) {
 	if err := w.ensureWriter(); err != nil {
 		return page.ValuePtr{}, err
 	}
-	if w.maxSize > 0 && w.w.Size()+int64(valuelog.HeaderSize+len(value)) > w.maxSize {
-		if err := w.rotate(); err != nil {
+	if dictID == 0 || len(dict) == 0 {
+		if err := w.flushPendingDictBatch(); err != nil {
+			return page.ValuePtr{}, err
+		}
+		if err := w.maybeRotateForEstimate(int64(valuelog.HeaderSize + len(value))); err != nil {
+			return page.ValuePtr{}, err
+		}
+		ptr, err := w.w.Append(0, nil, rid, value)
+		if err != nil {
+			return page.ValuePtr{}, err
+		}
+		w.records++
+		return ptr, nil
+	}
+
+	// Flush when dict stream changes or when the pending batch has reached the
+	// target grouped-frame width.
+	if w.hasPendingDictBatch() && w.pendingDictID != dictID {
+		if err := w.flushPendingDictBatch(); err != nil {
 			return page.ValuePtr{}, err
 		}
 	}
-	ptr, err := w.w.Append(0, nil, rid, value)
-	if err != nil {
-		return page.ValuePtr{}, err
+	maxK := rewriteDictBatchMaxK
+	if maxK < 1 {
+		maxK = 1
 	}
-	w.records++
+	if maxK > valuelog.MaxFrameK {
+		maxK = valuelog.MaxFrameK
+	}
+	if w.hasPendingDictBatch() && len(w.pendingDictRecords) >= maxK {
+		if err := w.flushPendingDictBatch(); err != nil {
+			return page.ValuePtr{}, err
+		}
+	}
+
+	if !w.hasPendingDictBatch() {
+		if err := w.maybeRotateForEstimate(rewriteDictFrameRecordLen(len(value), 1)); err != nil {
+			return page.ValuePtr{}, err
+		}
+		w.pendingDictID = dictID
+		w.pendingDict = dict
+		w.pendingDictStart = w.w.Size()
+		w.pendingDictRaw = 0
+		w.pendingDictRecords = w.pendingDictRecords[:0]
+		w.pendingDictPtrs = w.pendingDictPtrs[:0]
+	}
+
+	// Keep each pending grouped dict frame within the segment size cap so
+	// predicted pointers remain anchored to this segment.
+	projectedK := len(w.pendingDictRecords) + 1
+	projectedRaw := w.pendingDictRaw + len(value)
+	if w.maxSize > 0 &&
+		w.pendingDictStart+rewriteDictFrameRecordLen(projectedRaw, projectedK) > w.maxSize &&
+		len(w.pendingDictRecords) > 0 {
+		if err := w.flushPendingDictBatch(); err != nil {
+			return page.ValuePtr{}, err
+		}
+		if err := w.maybeRotateForEstimate(rewriteDictFrameRecordLen(len(value), 1)); err != nil {
+			return page.ValuePtr{}, err
+		}
+		w.pendingDictID = dictID
+		w.pendingDict = dict
+		w.pendingDictStart = w.w.Size()
+		w.pendingDictRaw = 0
+	}
+
+	w.pendingDictRecords = append(w.pendingDictRecords, valuelog.Record{
+		RID:   rid,
+		Value: value,
+	})
+	w.pendingDictRaw += len(value)
+	subIndex := len(w.pendingDictRecords) - 1
+	ptr := page.ValuePtr{
+		Offset: uint64(w.pendingDictStart + 4),
+		Length: page.ValuePtrMarkGrouped(0, uint8(subIndex)),
+		FileID: w.w.FileID(),
+	}
+	w.pendingDictPtrs = append(w.pendingDictPtrs, ptr)
+	if len(w.pendingDictRecords) >= maxK {
+		if err := w.flushPendingDictBatch(); err != nil {
+			return page.ValuePtr{}, err
+		}
+	}
 	return ptr, nil
 }
 
 func (w *rewriteWriter) Sync() error {
-	if w == nil || w.w == nil {
+	if w == nil {
+		return nil
+	}
+	if err := w.flushPendingDictBatch(); err != nil {
+		return err
+	}
+	if w.w == nil {
 		return nil
 	}
 	return w.w.Sync()
 }
 
 func (w *rewriteWriter) Flush() error {
-	if w == nil || w.w == nil {
+	if w == nil {
+		return nil
+	}
+	if err := w.flushPendingDictBatch(); err != nil {
+		return err
+	}
+	if w.w == nil {
 		return nil
 	}
 	return w.w.Flush()
 }
 
 func (w *rewriteWriter) Close() error {
-	if w == nil || w.w == nil {
+	if w == nil {
+		return nil
+	}
+	if err := w.flushPendingDictBatch(); err != nil {
+		return err
+	}
+	if w.w == nil {
 		return nil
 	}
 	return w.w.Close()
 }
 
 func (w *rewriteWriter) createdFileIDs() ([]uint32, error) {
+	if w != nil {
+		if err := w.flushPendingDictBatch(); err != nil {
+			return nil, err
+		}
+	}
 	if w == nil || w.seq <= w.start {
 		return nil, nil
 	}
@@ -2214,15 +2434,21 @@ func (w *rewriteWriter) createdFileIDs() ([]uint32, error) {
 }
 
 type rewriteIterator struct {
-	inner  iteratorWithEntry
-	ptrMap map[recordKey]recordLoc
-	vlogs  *valuelog.Set
-	writer *rewriteWriter
-	err    error
-	cached bool
-	val    []byte
-	ptr    page.ValuePtr
-	flags  byte
+	inner      iteratorWithEntry
+	ptrMap     map[recordKey]recordLoc
+	vlogs      *valuelog.Set
+	writer     *rewriteWriter
+	readValue  func(page.ValuePtr) ([]byte, error)
+	dictLookup valuelog.DictLookup
+	err        error
+	cached     bool
+	val        []byte
+	ptr        page.ValuePtr
+	flags      byte
+
+	preferredDictByFile map[uint32]uint64
+	preferredDictGlobal uint64
+	dictCache           map[uint64]rewriteDictCacheEntry
 }
 
 type iteratorWithEntry interface {
@@ -2245,11 +2471,18 @@ type iteratorWithEntry interface {
 type recordKey struct {
 	fileID uint32
 	offset uint64
+	subIdx uint8
 }
 
 type recordLoc struct {
 	fileID uint32
 	offset uint64
+	length uint32
+}
+
+type rewriteDictCacheEntry struct {
+	bytes []byte
+	ok    bool
 }
 
 func (it *rewriteIterator) ensure() {
@@ -2284,9 +2517,14 @@ func (it *rewriteIterator) rewritePtr(ptr page.ValuePtr) (page.ValuePtr, error) 
 	key := recordKey{
 		fileID: ptr.FileID,
 		offset: ptr.Offset,
+		subIdx: page.ValuePtrSubIndex(ptr),
 	}
 	if cached, ok := it.ptrMap[key]; ok {
-		return page.ValuePtr{Offset: cached.offset, FileID: cached.fileID, Length: ptr.Length}, nil
+		return page.ValuePtr{
+			Offset: cached.offset,
+			FileID: cached.fileID,
+			Length: cached.length,
+		}, nil
 	}
 	f := it.vlogs.Files[ptr.FileID]
 	if f == nil || f.File == nil {
@@ -2296,12 +2534,336 @@ func (it *rewriteIterator) rewritePtr(ptr page.ValuePtr) (page.ValuePtr, error) 
 	if err != nil {
 		return page.ValuePtr{}, err
 	}
-	newPtr, err := it.writer.appendRaw(raw, ptr.Length)
+	var (
+		frameHeader valuelog.FrameHeader
+		rids        []uint64
+		offsets     []uint32
+		payload     []byte
+	)
+	if len(raw) >= valuelog.HeaderSize {
+		frameHeader, rids, offsets, payload, err = valuelog.DecodeFrame(raw[valuelog.HeaderSize:])
+		if err == nil {
+			it.notePreferredDictID(ptr.FileID, frameHeader.DictID)
+			if frameHeader.DictID != 0 && it.readValue != nil {
+				// Warm decode path and dict lookup for this source segment so later
+				// block frames can opportunistically reuse the observed dictionary.
+				if _, readErr := it.readValue(ptr); readErr != nil && !errors.Is(readErr, valuelog.ErrMissingDict) {
+					return page.ValuePtr{}, readErr
+				}
+			}
+		}
+	}
+	newPtr := page.ValuePtr{}
+	reencoded, ok, err := it.reencodeGroupedDictFrame(ptr, frameHeader, rids)
 	if err != nil {
 		return page.ValuePtr{}, err
 	}
-	it.ptrMap[key] = recordLoc{fileID: newPtr.FileID, offset: newPtr.Offset}
-	return page.ValuePtr{Offset: newPtr.Offset, FileID: newPtr.FileID, Length: ptr.Length}, nil
+	if !ok {
+		reencoded, ok, err = it.reencodeGroupedBlockFrameWithDict(ptr, frameHeader, rids, offsets)
+	}
+	if err != nil {
+		return page.ValuePtr{}, err
+	}
+	if !ok {
+		reencoded, ok, err = it.reencodeSingleRecord(ptr, frameHeader, rids, offsets, payload)
+	}
+	if err != nil {
+		return page.ValuePtr{}, err
+	}
+	if ok {
+		newPtr = reencoded
+	} else {
+		newPtr, err = it.writer.appendRaw(raw, ptr.Length)
+		if err != nil {
+			return page.ValuePtr{}, err
+		}
+		if frameHeader.K > 0 && int(frameHeader.K) <= valuelog.MaxFrameK && len(offsets) == int(frameHeader.K)+1 {
+			recordLenHint := page.ValuePtrRecordLength(page.ValuePtr{Length: newPtr.Length})
+			for i := 0; i < int(frameHeader.K); i++ {
+				subPtr := page.ValuePtr{
+					Offset: newPtr.Offset,
+					FileID: newPtr.FileID,
+					Length: page.ValuePtrMarkGrouped(recordLenHint, uint8(i)),
+				}
+				it.ptrMap[recordKey{
+					fileID: ptr.FileID,
+					offset: ptr.Offset,
+					subIdx: uint8(i),
+				}] = recordLoc{
+					fileID: subPtr.FileID,
+					offset: subPtr.Offset,
+					length: subPtr.Length,
+				}
+			}
+			if cached, ok := it.ptrMap[key]; ok {
+				return page.ValuePtr{
+					Offset: cached.offset,
+					FileID: cached.fileID,
+					Length: cached.length,
+				}, nil
+			}
+		}
+	}
+	it.ptrMap[key] = recordLoc{fileID: newPtr.FileID, offset: newPtr.Offset, length: newPtr.Length}
+	return page.ValuePtr{
+		Offset: newPtr.Offset,
+		FileID: newPtr.FileID,
+		Length: newPtr.Length,
+	}, nil
+}
+
+func (it *rewriteIterator) reencodeGroupedDictFrame(ptr page.ValuePtr, frameHeader valuelog.FrameHeader, rids []uint64) (page.ValuePtr, bool, error) {
+	if it == nil || it.writer == nil || !it.writer.blockCompression || it.readValue == nil {
+		return page.ValuePtr{}, false, nil
+	}
+	if frameHeader.DictID == 0 || frameHeader.K == 0 {
+		return page.ValuePtr{}, false, nil
+	}
+	k := int(frameHeader.K)
+	if k <= 0 || k > valuelog.MaxFrameK || k > len(rids) || k > 255 {
+		return page.ValuePtr{}, false, nil
+	}
+	dict, ok := it.dictBytesForID(frameHeader.DictID)
+	if !ok || len(dict) == 0 {
+		return page.ValuePtr{}, false, nil
+	}
+
+	for i := 0; i < k; i++ {
+		src := page.ValuePtr{
+			Offset: ptr.Offset,
+			FileID: ptr.FileID,
+			Length: page.ValuePtrMarkGrouped(0, uint8(i)),
+		}
+		value, err := it.readValue(src)
+		if err != nil {
+			if errors.Is(err, valuelog.ErrMissingDict) {
+				return page.ValuePtr{}, false, nil
+			}
+			return page.ValuePtr{}, false, err
+		}
+		dst, err := it.writer.appendValueWithDict(frameHeader.DictID, dict, rids[i], value)
+		if err != nil {
+			if errors.Is(err, valuelog.ErrMissingDict) {
+				return page.ValuePtr{}, false, nil
+			}
+			return page.ValuePtr{}, false, err
+		}
+		it.ptrMap[recordKey{
+			fileID: ptr.FileID,
+			offset: ptr.Offset,
+			subIdx: uint8(i),
+		}] = recordLoc{
+			fileID: dst.FileID,
+			offset: dst.Offset,
+			length: dst.Length,
+		}
+	}
+	key := recordKey{
+		fileID: ptr.FileID,
+		offset: ptr.Offset,
+		subIdx: page.ValuePtrSubIndex(ptr),
+	}
+	if mapped, ok := it.ptrMap[key]; ok {
+		return page.ValuePtr{
+			Offset: mapped.offset,
+			FileID: mapped.fileID,
+			Length: mapped.length,
+		}, true, nil
+	}
+	return page.ValuePtr{}, false, fmt.Errorf(
+		"vlog-rewrite: missing mapped grouped dict subrecord file=%d offset=%d sub=%d",
+		ptr.FileID,
+		ptr.Offset,
+		page.ValuePtrSubIndex(ptr),
+	)
+}
+
+func (it *rewriteIterator) reencodeGroupedBlockFrameWithDict(ptr page.ValuePtr, frameHeader valuelog.FrameHeader, rids []uint64, offsets []uint32) (page.ValuePtr, bool, error) {
+	if it == nil || it.writer == nil || !it.writer.blockCompression || it.readValue == nil {
+		return page.ValuePtr{}, false, nil
+	}
+	if frameHeader.DictID != 0 || frameHeader.K <= 1 {
+		return page.ValuePtr{}, false, nil
+	}
+	k := int(frameHeader.K)
+	if k <= 0 || k > valuelog.MaxFrameK || k > len(rids) || len(offsets) != k+1 || k > 255 {
+		return page.ValuePtr{}, false, nil
+	}
+	dictID := it.preferredDictID(ptr.FileID)
+	if dictID == 0 {
+		return page.ValuePtr{}, false, nil
+	}
+	dict, ok := it.dictBytesForID(dictID)
+	if !ok || len(dict) == 0 {
+		return page.ValuePtr{}, false, nil
+	}
+	for i := 0; i < k; i++ {
+		recordLen := int(offsets[i+1] - offsets[i])
+		if recordLen < rewriteDictMinPayloadBytes {
+			return page.ValuePtr{}, false, nil
+		}
+	}
+
+	for i := 0; i < k; i++ {
+		src := page.ValuePtr{
+			Offset: ptr.Offset,
+			FileID: ptr.FileID,
+			Length: page.ValuePtrMarkGrouped(0, uint8(i)),
+		}
+		value, err := it.readValue(src)
+		if err != nil {
+			if errors.Is(err, valuelog.ErrMissingDict) {
+				return page.ValuePtr{}, false, nil
+			}
+			return page.ValuePtr{}, false, err
+		}
+		if len(value) < rewriteDictMinPayloadBytes {
+			return page.ValuePtr{}, false, nil
+		}
+		dst, err := it.writer.appendValueWithDict(dictID, dict, rids[i], value)
+		if err != nil {
+			if errors.Is(err, valuelog.ErrMissingDict) {
+				return page.ValuePtr{}, false, nil
+			}
+			return page.ValuePtr{}, false, err
+		}
+		it.ptrMap[recordKey{
+			fileID: ptr.FileID,
+			offset: ptr.Offset,
+			subIdx: uint8(i),
+		}] = recordLoc{
+			fileID: dst.FileID,
+			offset: dst.Offset,
+			length: dst.Length,
+		}
+	}
+	key := recordKey{
+		fileID: ptr.FileID,
+		offset: ptr.Offset,
+		subIdx: page.ValuePtrSubIndex(ptr),
+	}
+	if mapped, ok := it.ptrMap[key]; ok {
+		return page.ValuePtr{
+			Offset: mapped.offset,
+			FileID: mapped.fileID,
+			Length: mapped.length,
+		}, true, nil
+	}
+	return page.ValuePtr{}, false, fmt.Errorf(
+		"vlog-rewrite: missing mapped grouped block subrecord file=%d offset=%d sub=%d",
+		ptr.FileID,
+		ptr.Offset,
+		page.ValuePtrSubIndex(ptr),
+	)
+}
+
+func (it *rewriteIterator) reencodeSingleRecord(ptr page.ValuePtr, frameHeader valuelog.FrameHeader, rids []uint64, offsets []uint32, payload []byte) (page.ValuePtr, bool, error) {
+	if it == nil || it.writer == nil || !it.writer.blockCompression {
+		return page.ValuePtr{}, false, nil
+	}
+	if frameHeader.K != 1 {
+		return page.ValuePtr{}, false, nil
+	}
+	if len(rids) != 1 || len(offsets) != 2 {
+		return page.ValuePtr{}, false, nil
+	}
+	start, end := offsets[0], offsets[1]
+	if start > end {
+		return page.ValuePtr{}, false, nil
+	}
+
+	// Single uncompressed records: keep existing behavior and re-encode with the
+	// configured block codec.
+	if frameHeader.Flags&valuelog.FrameFlagCompressed == 0 {
+		if end > uint32(len(payload)) {
+			return page.ValuePtr{}, false, nil
+		}
+		newPtr, err := it.writer.appendValue(rids[0], payload[start:end])
+		if err != nil {
+			return page.ValuePtr{}, false, err
+		}
+		return newPtr, true, nil
+	}
+
+	// For large single-record block frames, reuse the segment's observed dict
+	// (when available) to increase post-rewrite dict coverage. This runs only
+	// in rewrite, not on the ingest hot path.
+	if frameHeader.DictID != 0 || it.readValue == nil {
+		return page.ValuePtr{}, false, nil
+	}
+	if int(end-start) < rewriteDictMinPayloadBytes {
+		return page.ValuePtr{}, false, nil
+	}
+	dictID := it.preferredDictID(ptr.FileID)
+	if dictID == 0 {
+		return page.ValuePtr{}, false, nil
+	}
+	dict, ok := it.dictBytesForID(dictID)
+	if !ok || len(dict) == 0 {
+		return page.ValuePtr{}, false, nil
+	}
+	value, err := it.readValue(ptr)
+	if err != nil {
+		if errors.Is(err, valuelog.ErrMissingDict) {
+			return page.ValuePtr{}, false, nil
+		}
+		return page.ValuePtr{}, false, err
+	}
+	newPtr, err := it.writer.appendValueWithDict(dictID, dict, rids[0], value)
+	if err != nil {
+		if errors.Is(err, valuelog.ErrMissingDict) {
+			return page.ValuePtr{}, false, nil
+		}
+		return page.ValuePtr{}, false, err
+	}
+	return newPtr, true, nil
+}
+
+func (it *rewriteIterator) notePreferredDictID(fileID uint32, dictID uint64) {
+	if it == nil || dictID == 0 {
+		return
+	}
+	if it.preferredDictByFile == nil {
+		it.preferredDictByFile = make(map[uint32]uint64)
+	}
+	if _, exists := it.preferredDictByFile[fileID]; !exists {
+		it.preferredDictByFile[fileID] = dictID
+	}
+	if it.preferredDictGlobal == 0 {
+		it.preferredDictGlobal = dictID
+	}
+}
+
+func (it *rewriteIterator) preferredDictID(fileID uint32) uint64 {
+	if it == nil {
+		return 0
+	}
+	if it.preferredDictByFile != nil {
+		if dictID := it.preferredDictByFile[fileID]; dictID != 0 {
+			return dictID
+		}
+	}
+	return it.preferredDictGlobal
+}
+
+func (it *rewriteIterator) dictBytesForID(dictID uint64) ([]byte, bool) {
+	if it == nil || dictID == 0 || it.dictLookup == nil {
+		return nil, false
+	}
+	if it.dictCache == nil {
+		it.dictCache = make(map[uint64]rewriteDictCacheEntry)
+	}
+	if cached, ok := it.dictCache[dictID]; ok {
+		return cached.bytes, cached.ok
+	}
+	dict, err := it.dictLookup(dictID)
+	if err != nil || len(dict) == 0 {
+		it.dictCache[dictID] = rewriteDictCacheEntry{ok: false}
+		return nil, false
+	}
+	dictCopy := append([]byte(nil), dict...)
+	it.dictCache[dictID] = rewriteDictCacheEntry{bytes: dictCopy, ok: true}
+	return dictCopy, true
 }
 
 func (it *rewriteIterator) Valid() bool {

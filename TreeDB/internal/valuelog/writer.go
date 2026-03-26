@@ -637,6 +637,20 @@ func (w *Writer) Size() int64 {
 	return w.size
 }
 
+// PendingBytes reports bytes accepted by the writer but not yet flushed to the
+// underlying file descriptor. For file-backed writers this is the append-buffer
+// tail that same-process readers cannot see through ReadAt until flushed.
+func (w *Writer) PendingBytes() int {
+	if w == nil {
+		return 0
+	}
+	pending := len(w.appendBuf)
+	if w.bw != nil {
+		pending += w.bw.Buffered()
+	}
+	return pending
+}
+
 func (w *Writer) Flush() error {
 	if err := w.flushNoTrim(); err != nil {
 		return err
@@ -1352,11 +1366,15 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 
 		// If recent probes show compression yields no benefit, temporarily skip
 		// zstd. We periodically probe again so we can adapt if data changes.
+		forceDictProbe := shouldForceDictProbe(rawPayloadBytes)
 		if w.skipRemain > 0 {
+			if !shouldProbeLargeDictDuringBackoff(w.skipRemain, rawPayloadBytes) {
+				w.skipRemain--
+				return writeRaw(false, 0)
+			}
 			w.skipRemain--
-			return writeRaw(false, 0)
 		}
-		if w.shouldSkipCompression(rawPayloadBytes) {
+		if w.shouldSkipCompression(rawPayloadBytes) && !forceDictProbe {
 			return writeRaw(false, 0)
 		}
 
@@ -1481,7 +1499,11 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 			codecs.encPool.Put(enc)
 
 			encodedLen := len(w.appendBuf) - encodedStart
-			if !w.shouldKeepCompressed(rawPayloadBytes, encodedLen, encodeNs) {
+			keepCompressed := w.shouldKeepCompressed(rawPayloadBytes, encodedLen, encodeNs)
+			if !keepCompressed && shouldForceKeepLargeDictCompressed(rawPayloadBytes, encodedLen) {
+				keepCompressed = true
+			}
+			if !keepCompressed {
 				w.appendBuf = w.appendBuf[:recordStart]
 				if w.noBenefit < 0xff {
 					w.noBenefit++
@@ -1603,6 +1625,9 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 		keepCompressed := false
 		if encodeErr == nil {
 			keepCompressed = w.shouldKeepCompressed(rawPayloadBytes, len(encoded), encodeNs)
+			if !keepCompressed && shouldForceKeepLargeDictCompressed(rawPayloadBytes, len(encoded)) {
+				keepCompressed = true
+			}
 		}
 		if encodeErr != nil && !errors.Is(encodeErr, errEncodedTooLarge) {
 			return nil, FrameStats{}, encodeErr

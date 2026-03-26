@@ -10,6 +10,7 @@ import (
 	"math/bits"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"runtime/debug"
 	"runtime/metrics"
@@ -70,6 +71,8 @@ var valueLogPreparedFramesPool sync.Pool     // stores []preparedDictFrame
 var valueLogDictPrepareResultsPool sync.Pool // stores chan vlogDictPrepareResult
 var valueLogKeyLeaseMu sync.Mutex
 var valueLogKeyLeases [][][]byte
+var backendValueLogReadBarrierRegistryMu sync.Mutex
+var backendValueLogReadBarrierRegistry = make(map[uintptr]map[*DB]struct{})
 
 // Batch arena pooling can retain substantial heap across restore spikes. Track
 // pooled bytes and enforce a byte-budget to cap retention.
@@ -91,6 +94,27 @@ var batchArenaBorrowPreflightBlockedTotal atomic.Uint64
 var batchArenaBorrowPreflightBlockedBytesTotal atomic.Uint64
 var batchArenaStealSuppressedDeferredTotal atomic.Uint64
 var batchArenaStealSuppressedDeferredEntriesTotal atomic.Uint64
+var batchArenaCopyKeyCallsTotal atomic.Uint64
+var batchArenaCopyKeyBytesTotal atomic.Uint64
+var batchArenaCopyValueCallsTotal atomic.Uint64
+var batchArenaCopyValueBytesTotal atomic.Uint64
+var batchArenaCopyKeyValueCallsTotal atomic.Uint64
+var batchArenaCopyKeyValueBytesTotal atomic.Uint64
+var batchArenaCopyPtrValueCallsTotal atomic.Uint64
+var batchArenaCopyPtrValueBytesTotal atomic.Uint64
+var batchSetCallsTotal atomic.Uint64
+var batchSetBytesTotal atomic.Uint64
+var batchSetViewCallsTotal atomic.Uint64
+var batchSetViewBytesTotal atomic.Uint64
+var batchSetCallerSamplesTotal atomic.Uint64
+var batchSetCallerSampleSeq atomic.Uint64
+var batchSetCallerStatsMap sync.Map
+var dbGetCallerSamplesTotal atomic.Uint64
+var dbGetCallerSampleSeq atomic.Uint64
+var dbGetCallerStatsMap sync.Map
+var snapshotGetCallerSamplesTotal atomic.Uint64
+var snapshotGetCallerSampleSeq atomic.Uint64
+var snapshotGetCallerStatsMap sync.Map
 var poolPressureState atomic.Value
 var poolPressureMu sync.Mutex
 var poolPressureLastLeaseTrimUnixNano atomic.Int64
@@ -101,16 +125,28 @@ var entrySlicePoolTrimRunsTotal atomic.Uint64
 var entrySlicePoolTrimDropBytesTotal atomic.Uint64
 var entrySliceLeaseHitTotal atomic.Uint64
 var entrySliceLeaseHitBytesTotal atomic.Uint64
+var entrySliceLeaseHitRequestedBytesTotal atomic.Uint64
+var entrySliceLeaseHitExcessBytesTotal atomic.Uint64
 var entrySlicePoolHitTotal atomic.Uint64
 var entrySlicePoolHitBytesTotal atomic.Uint64
+var entrySlicePoolHitRequestedBytesTotal atomic.Uint64
+var entrySlicePoolHitExcessBytesTotal atomic.Uint64
 var entrySliceFreshAllocTotal atomic.Uint64
 var entrySliceFreshAllocBytesTotal atomic.Uint64
+var entrySliceFreshAllocRequestedBytesTotal atomic.Uint64
+var entrySliceFreshAllocExcessBytesTotal atomic.Uint64
 var entrySlicePutLeaseTotal atomic.Uint64
 var entrySlicePutLeaseBytesTotal atomic.Uint64
 var entrySlicePutPoolTotal atomic.Uint64
 var entrySlicePutPoolBytesTotal atomic.Uint64
 var entrySlicePutDropBudgetTotal atomic.Uint64
 var entrySlicePutDropBudgetBytesTotal atomic.Uint64
+var snapshotReadQueueInlineHitsTotal atomic.Uint64
+var snapshotReadQueueInlineBytesTotal atomic.Uint64
+var snapshotReadQueuePointerHitsTotal atomic.Uint64
+var snapshotReadQueuePointerBytesTotal atomic.Uint64
+var snapshotReadBackendHitsTotal atomic.Uint64
+var snapshotReadBackendBytesTotal atomic.Uint64
 var flushMergeShadowedOpsTotal atomic.Uint64
 var flushMergeAppliedOpsTotal atomic.Uint64
 var flushMergeDeferredShadowedOpsTotal atomic.Uint64
@@ -134,6 +170,9 @@ var poolPressureReadMemStats = runtime.ReadMemStats
 var poolPressureMemoryLimit = func() int64 {
 	return debug.SetMemoryLimit(-1)
 }
+var batchSetCallerSampleMod = loadUintEnvDefault("TREEDB_DEBUG_BATCH_SET_CALLER_SAMPLE_MOD", 0)
+var dbGetCallerSampleMod = loadUintEnvDefault("TREEDB_DEBUG_DB_GET_CALLER_SAMPLE_MOD", 0)
+var snapshotGetCallerSampleMod = loadUintEnvDefault("TREEDB_DEBUG_SNAPSHOT_GET_CALLER_SAMPLE_MOD", 0)
 
 var runtimeNumGC = func() uint64 {
 	samples := []metrics.Sample{{Name: "/gc/cycles/total:gc-cycles"}}
@@ -176,8 +215,34 @@ type poolPressureSnapshot struct {
 	memoryLimitBytes   int64
 }
 
+type memtableResidencySummary struct {
+	count int
+	len   int
+	size  int64
+}
+
+type memtableResidencyBreakdown struct {
+	total      memtableResidencySummary
+	skiplist   memtableResidencySummary
+	hashSorted memtableResidencySummary
+	btree      memtableResidencySummary
+	appendOnly memtableResidencySummary
+}
+
+type batchSetCallerSampleStats struct {
+	calls atomic.Uint64
+	bytes atomic.Uint64
+}
+
+type batchSetCallerSampleSnapshot struct {
+	frame string
+	calls uint64
+	bytes uint64
+}
+
 const (
 	poolPressureRefreshInterval = 250 * time.Millisecond
+	processMemorySampleInterval = 1 * time.Second
 	// Treat high/critical pressure as heap residency (not alloc churn). These
 	// thresholds target restore-like peaks where pool retention can inflate RSS.
 	poolPressureHighHeapBytes     = uint64(4 << 30)
@@ -244,6 +309,148 @@ func computeBatchArenaPoolBudgetBytesForProcs(procs int) int64 {
 		budget = maxBudgetBytes
 	}
 	return budget
+}
+
+func loadUintEnvDefault(key string, def uint64) uint64 {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return def
+	}
+	v, err := strconv.ParseUint(raw, 10, 64)
+	if err != nil {
+		return def
+	}
+	return v
+}
+
+func maybeRecordBatchSetCallerSample(bytes int) {
+	maybeRecordCallerSample(batchSetCallerSampleMod, &batchSetCallerSampleSeq, &batchSetCallerSamplesTotal, &batchSetCallerStatsMap, bytes)
+}
+
+func maybeRecordDBGetCallerSample(bytes int) {
+	maybeRecordCallerSample(dbGetCallerSampleMod, &dbGetCallerSampleSeq, &dbGetCallerSamplesTotal, &dbGetCallerStatsMap, bytes)
+}
+
+func maybeRecordSnapshotGetCallerSample(bytes int) {
+	maybeRecordCallerSample(snapshotGetCallerSampleMod, &snapshotGetCallerSampleSeq, &snapshotGetCallerSamplesTotal, &snapshotGetCallerStatsMap, bytes)
+}
+
+func maybeRecordCallerSample(mod uint64, seqCounter, totalCounter *atomic.Uint64, statsMap *sync.Map, bytes int) {
+	if mod == 0 {
+		return
+	}
+	seq := seqCounter.Add(1)
+	if mod > 1 && seq%mod != 0 {
+		return
+	}
+	frame := captureCallerChain()
+	statsAny, _ := statsMap.LoadOrStore(frame, &batchSetCallerSampleStats{})
+	stats := statsAny.(*batchSetCallerSampleStats)
+	stats.calls.Add(1)
+	stats.bytes.Add(uint64(bytes))
+	totalCounter.Add(1)
+}
+
+func captureCallerChain() string {
+	var pcs [12]uintptr
+	n := runtime.Callers(4, pcs[:])
+	if n == 0 {
+		return "unknown"
+	}
+	frames := runtime.CallersFrames(pcs[:n])
+	parts := make([]string, 0, 4)
+	for len(parts) < 4 {
+		frame, more := frames.Next()
+		fn := compactCallerFunc(frame.Function)
+		if fn != "" && !skipCallerFunc(fn) {
+			parts = append(parts, fn)
+		}
+		if !more {
+			break
+		}
+	}
+	if len(parts) == 0 {
+		return "unknown"
+	}
+	return strings.Join(parts, " <= ")
+}
+
+func skipCallerFunc(fn string) bool {
+	switch {
+	case strings.HasPrefix(fn, "runtime."),
+		strings.HasPrefix(fn, "runtime/"),
+		strings.HasPrefix(fn, "testing."),
+		strings.Contains(fn, ".tRunner"),
+		strings.Contains(fn, "maybeRecordCallerSample"),
+		strings.Contains(fn, "captureCallerChain"),
+		strings.Contains(fn, "gomap/TreeDB/caching.(*DB).Get"),
+		strings.Contains(fn, "gomap/TreeDB/caching.(*Snapshot).Get"),
+		strings.Contains(fn, "gomap/TreeDB.(*DB).Get"),
+		strings.Contains(fn, "gomap/TreeDB.(*DB).GetUnsafe"),
+		strings.Contains(fn, "gomap/TreeDB/db.(*DB).Get"),
+		strings.Contains(fn, "gomap/TreeDB/db.(*DB).GetUnsafe"),
+		strings.Contains(fn, "gomap/TreeDB/db.(*Snapshot).Get"),
+		strings.Contains(fn, "gomap/kvstore/adapters/treedb.(*DB).GetUnsafe"):
+		return true
+	default:
+		return false
+	}
+}
+
+func compactCallerFunc(fn string) string {
+	if fn == "" {
+		return ""
+	}
+	for _, prefix := range [...]string{
+		"github.com/snissn/",
+		"github.com/cosmos/",
+		"github.com/cometbft/",
+	} {
+		fn = strings.TrimPrefix(fn, prefix)
+	}
+	return fn
+}
+
+func callerSampleSnapshots(statsMap *sync.Map, limit int) []batchSetCallerSampleSnapshot {
+	snaps := make([]batchSetCallerSampleSnapshot, 0, 16)
+	statsMap.Range(func(key, value any) bool {
+		frame, _ := key.(string)
+		stats, _ := value.(*batchSetCallerSampleStats)
+		if frame == "" || stats == nil {
+			return true
+		}
+		snaps = append(snaps, batchSetCallerSampleSnapshot{
+			frame: frame,
+			calls: stats.calls.Load(),
+			bytes: stats.bytes.Load(),
+		})
+		return true
+	})
+	sort.Slice(snaps, func(i, j int) bool {
+		if snaps[i].bytes != snaps[j].bytes {
+			return snaps[i].bytes > snaps[j].bytes
+		}
+		if snaps[i].calls != snaps[j].calls {
+			return snaps[i].calls > snaps[j].calls
+		}
+		return snaps[i].frame < snaps[j].frame
+	})
+	if limit > 0 && len(snaps) > limit {
+		snaps = snaps[:limit]
+	}
+	return snaps
+}
+
+func batchSetCallerSnapshots(limit int) []batchSetCallerSampleSnapshot {
+	return callerSampleSnapshots(&batchSetCallerStatsMap, limit)
+}
+
+func dbGetCallerSnapshots(limit int) []batchSetCallerSampleSnapshot {
+	return callerSampleSnapshots(&dbGetCallerStatsMap, limit)
+}
+
+func snapshotGetCallerSnapshots(limit int) []batchSetCallerSampleSnapshot {
+	return callerSampleSnapshots(&snapshotGetCallerStatsMap, limit)
 }
 
 func classifyPoolPressureLevel(usedBytes uint64, memoryLimitBytes int64) poolPressureLevel {
@@ -3081,8 +3288,13 @@ func (db *DB) flushValueLog(laneIDs ...int) error {
 	return nil
 }
 
-func (db *DB) flushDeferredValueLogForBackendRead() error {
-	if db == nil || !db.deferredValueLogEnabled() || !db.valueLogEnabled() {
+// flushValueLogForBackendRead makes value-log bytes visible to backend reads
+// once pointer-bearing backend keys may already reference them. This matters
+// even when deferred value-log mode is disabled: durability-none grouped
+// appends can leave the current segment tail buffered in-process while backend
+// keys already point at those records.
+func (db *DB) flushValueLogForBackendRead() error {
+	if db == nil || !db.valueLogEnabled() {
 		return nil
 	}
 	dirtySeq := db.backendReadVlogDirtySeq.Load()
@@ -3094,6 +3306,147 @@ func (db *DB) flushDeferredValueLogForBackendRead() error {
 	}
 	db.backendReadVlogFlushedSeq.Store(dirtySeq)
 	return nil
+}
+
+type valueLogReadBarrierSetter interface {
+	SetCurrentValueLogReadBarrier(func(fileID uint32) error)
+}
+
+func backendValueLogReadBarrierKey(backend any) uintptr {
+	if backend == nil {
+		return 0
+	}
+	v := reflect.ValueOf(backend)
+	if !v.IsValid() {
+		return 0
+	}
+	switch v.Kind() {
+	case reflect.Pointer, reflect.UnsafePointer:
+		return v.Pointer()
+	default:
+		return 0
+	}
+}
+
+func registerBackendValueLogReadBarrierDB(key uintptr, db *DB) {
+	if key == 0 || db == nil {
+		return
+	}
+	backendValueLogReadBarrierRegistryMu.Lock()
+	owners := backendValueLogReadBarrierRegistry[key]
+	if owners == nil {
+		owners = make(map[*DB]struct{})
+		backendValueLogReadBarrierRegistry[key] = owners
+	}
+	owners[db] = struct{}{}
+	backendValueLogReadBarrierRegistryMu.Unlock()
+}
+
+func unregisterBackendValueLogReadBarrierDB(key uintptr, db *DB) int {
+	if key == 0 || db == nil {
+		return 0
+	}
+	backendValueLogReadBarrierRegistryMu.Lock()
+	defer backendValueLogReadBarrierRegistryMu.Unlock()
+	owners := backendValueLogReadBarrierRegistry[key]
+	if owners == nil {
+		return 0
+	}
+	delete(owners, db)
+	if len(owners) == 0 {
+		delete(backendValueLogReadBarrierRegistry, key)
+		return 0
+	}
+	return len(owners)
+}
+
+func snapshotBackendValueLogReadBarrierDBs(key uintptr) []*DB {
+	if key == 0 {
+		return nil
+	}
+	backendValueLogReadBarrierRegistryMu.Lock()
+	owners := backendValueLogReadBarrierRegistry[key]
+	dbs := make([]*DB, 0, len(owners))
+	for db := range owners {
+		dbs = append(dbs, db)
+	}
+	backendValueLogReadBarrierRegistryMu.Unlock()
+	return dbs
+}
+
+func dispatchBackendValueLogReadBarrier(key uintptr, fileID uint32) error {
+	dbs := snapshotBackendValueLogReadBarrierDBs(key)
+	if len(dbs) == 0 {
+		return nil
+	}
+	laneID, _ := valuelog.DecodeFileID(fileID)
+	var firstErr error
+	flushedAny := false
+	for _, db := range dbs {
+		if db == nil || db.closing.Load() {
+			continue
+		}
+		if int(laneID) >= len(db.lanes) {
+			continue
+		}
+		if err := db.flushValueLogLane(&db.lanes[laneID]); err != nil {
+			if errors.Is(err, errWALUnavailable) {
+				continue
+			}
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		flushedAny = true
+	}
+	if flushedAny {
+		return nil
+	}
+	return firstErr
+}
+
+func (db *DB) installBackendValueLogReadBarrier() {
+	if db == nil {
+		return
+	}
+	barrierSetter, ok := db.backend.(valueLogReadBarrierSetter)
+	if !ok {
+		return
+	}
+	key := backendValueLogReadBarrierKey(db.backend)
+	if key == 0 {
+		barrierSetter.SetCurrentValueLogReadBarrier(func(fileID uint32) error {
+			laneID, _ := valuelog.DecodeFileID(fileID)
+			if int(laneID) >= len(db.lanes) {
+				return nil
+			}
+			return db.flushValueLogLane(&db.lanes[laneID])
+		})
+		return
+	}
+	registerBackendValueLogReadBarrierDB(key, db)
+	barrierSetter.SetCurrentValueLogReadBarrier(func(fileID uint32) error {
+		return dispatchBackendValueLogReadBarrier(key, fileID)
+	})
+}
+
+func (db *DB) clearBackendValueLogReadBarrier() {
+	if db == nil {
+		return
+	}
+	barrierSetter, ok := db.backend.(valueLogReadBarrierSetter)
+	if !ok {
+		return
+	}
+	key := backendValueLogReadBarrierKey(db.backend)
+	if key == 0 {
+		barrierSetter.SetCurrentValueLogReadBarrier(nil)
+		return
+	}
+	if remaining := unregisterBackendValueLogReadBarrierDB(key, db); remaining == 0 {
+		barrierSetter.SetCurrentValueLogReadBarrier(nil)
+	}
 }
 
 func (db *DB) syncValueLog(laneIDs ...int) error {
@@ -3140,8 +3493,10 @@ func (db *DB) flushValueLogLane(l *lane) error {
 		}
 		// Always take vlogMu first so flush acts as a write barrier for in-flight appends.
 		if !l.vlogDirty.Load() {
-			l.vlogMu.Unlock()
-			return nil
+			if pending, ok := w.(interface{ PendingBytes() int }); !ok || pending.PendingBytes() == 0 {
+				l.vlogMu.Unlock()
+				return nil
+			}
 		}
 		start := time.Now()
 		err := w.Flush()
@@ -4483,6 +4838,12 @@ type DB struct {
 	batchArenaAllocClassBytes     atomic.Uint64
 	batchArenaUsedBytes           atomic.Uint64
 	batchArenaTailWasteBytes      atomic.Uint64
+	batchArenaMainAllocClassBytes atomic.Uint64
+	batchArenaMainUsedBytes       atomic.Uint64
+	batchArenaMainTailWasteBytes  atomic.Uint64
+	batchArenaPtrAllocClassBytes  atomic.Uint64
+	batchArenaPtrUsedBytes        atomic.Uint64
+	batchArenaPtrTailWasteBytes   atomic.Uint64
 	batchArenaTailCompactRuns     atomic.Uint64
 	batchArenaTailCompactCopied   atomic.Uint64
 	batchArenaTailCompactSaved    atomic.Uint64
@@ -4786,16 +5147,28 @@ type DB struct {
 	bgErr                                   error
 
 	// Backpressure state
-	queueBacklogBytes        atomic.Int64
-	flushBpsEWMA             float64
-	queueLaneIDMisses        atomic.Int64
-	backendWriteBatchesTotal atomic.Int64
-	domainIngressMu          sync.Mutex
-	domainIngressCh          []chan domainIngressRequest
-	domainIngressEnqueued    atomic.Uint64
-	domainIngressProcessed   atomic.Uint64
-	domainIngressFallback    atomic.Uint64
-	domainIngressDepthMax    atomic.Uint64
+	queueBacklogBytes                  atomic.Int64
+	flushBpsEWMA                       float64
+	queueLaneIDMisses                  atomic.Int64
+	backendWriteBatchesTotal           atomic.Int64
+	domainIngressMu                    sync.Mutex
+	domainIngressCh                    []chan domainIngressRequest
+	domainIngressEnqueued              atomic.Uint64
+	domainIngressProcessed             atomic.Uint64
+	domainIngressFallback              atomic.Uint64
+	domainIngressDepthMax              atomic.Uint64
+	processRSSBytes                    atomic.Uint64
+	processRSSHWMBytes                 atomic.Uint64
+	processPeakRSSBytes                atomic.Uint64
+	processPeakHeapAllocBytes          atomic.Uint64
+	processPeakHeapInuseBytes          atomic.Uint64
+	processPeakTotalSysBytes           atomic.Uint64
+	processPeakVlogMmapActiveBytes     atomic.Uint64
+	processPeakVlogMmapCurrentBytes    atomic.Uint64
+	processPeakVlogMmapSealedBytes     atomic.Uint64
+	processPeakVlogMmapActiveSegments  atomic.Uint64
+	processPeakVlogMmapCurrentSegments atomic.Uint64
+	processPeakVlogMmapSealedSegments  atomic.Uint64
 
 	// Lifecycle
 	closeCh chan struct{}
@@ -5179,6 +5552,28 @@ func (db *DB) retainMemtableView() *memtableView {
 		}
 		if view.refs.CompareAndSwap(0, 2) {
 			db.noteMemtableViewRetain()
+			return view
+		}
+	}
+}
+
+func (db *DB) retainMemtableViewUntracked() *memtableView {
+	if db == nil {
+		return nil
+	}
+	for {
+		view := db.memtables.Load()
+		if view == nil {
+			return nil
+		}
+		if n := view.refs.Add(1); n > 1 {
+			return view
+		}
+		view.refs.Add(-1)
+		if db.memtables.Load() != view {
+			continue
+		}
+		if view.refs.CompareAndSwap(0, 2) {
 			return view
 		}
 	}
@@ -5754,6 +6149,54 @@ func adaptiveDecisionReasonString(v uint32) string {
 	default:
 		return "unknown"
 	}
+}
+
+func addMemtableResidencySummary(dst *memtableResidencySummary, mt memtable.Table) {
+	if dst == nil || mt == nil {
+		return
+	}
+	dst.count++
+	dst.len += mt.Len()
+	dst.size += mt.Size()
+}
+
+func summarizeMemtableResidency(tables []memtable.Table) memtableResidencyBreakdown {
+	var out memtableResidencyBreakdown
+	for _, mt := range tables {
+		if mt == nil {
+			continue
+		}
+		addMemtableResidencySummary(&out.total, mt)
+		switch mt.(type) {
+		case *memtable.Memtable:
+			addMemtableResidencySummary(&out.skiplist, mt)
+		case *memtable.HashSorted:
+			addMemtableResidencySummary(&out.hashSorted, mt)
+		case *memtable.BTree:
+			addMemtableResidencySummary(&out.btree, mt)
+		case *memtable.AppendOnly:
+			addMemtableResidencySummary(&out.appendOnly, mt)
+		default:
+			addMemtableResidencySummary(&out.skiplist, mt)
+		}
+	}
+	return out
+}
+
+func addMemtableResidencyStats(stats map[string]string, prefix string, summary memtableResidencyBreakdown) {
+	if stats == nil || prefix == "" {
+		return
+	}
+	add := func(name string, s memtableResidencySummary) {
+		stats[prefix+"."+name+".count"] = fmt.Sprintf("%d", s.count)
+		stats[prefix+"."+name+".entries"] = fmt.Sprintf("%d", s.len)
+		stats[prefix+"."+name+".size_bytes"] = fmt.Sprintf("%d", s.size)
+	}
+	add("total", summary.total)
+	add("skiplist", summary.skiplist)
+	add("hash_sorted", summary.hashSorted)
+	add("btree", summary.btree)
+	add("append_only", summary.appendOnly)
 }
 
 func (r *keyRange) add(key []byte) {
@@ -6461,6 +6904,16 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		// Callers may explicitly disable training via TrainBytes < 0.
 		valueLogDictTrain.TrainBytes = compression.DefaultTrainBytes
 	}
+	if valueLogDictTrain.TrainBytes > 0 &&
+		valueLogDictTrain.MinRecords == 0 &&
+		opts.ForceValueLogPointers &&
+		valueLogCompressionMode == vlogCompressionAuto &&
+		valueLogAutoPolicy == vlogAutoThroughput {
+		// Pointer-heavy ingest streams are often front-loaded with the largest
+		// value-log pressure. Lower the initial profile record floor so the first
+		// dictionary can publish earlier and influence more of the run.
+		valueLogDictTrain.MinRecords = 8
+	}
 	valueLogDictMaxK := opts.ValueLogDictMaxK
 	if valueLogDictMaxK <= 0 {
 		valueLogDictMaxK = 32
@@ -6728,6 +7181,17 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	db.materializationLastDrainUnixNano.Store(nowNS)
 	db.publishWatermarkLastUnixNano = nowNS
 
+	var outerLeafPageLogSetter interface {
+		SetLeafPageLog(backenddb.LeafPageLog)
+	}
+	if opts.IndexOuterLeavesInValueLog {
+		setter, ok := backend.(interface{ SetLeafPageLog(backenddb.LeafPageLog) })
+		if !ok {
+			return nil, errors.New("cachingdb: backend does not support value-log leaf pages")
+		}
+		outerLeafPageLogSetter = setter
+	}
+
 	// Open initial value-log segments (if enabled) and journal/commit log
 	// segments (if enabled). Journal and value log are decoupled.
 	if db.valueLogEnabled() {
@@ -6810,12 +7274,8 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		}
 	}
 
-	if opts.IndexOuterLeavesInValueLog {
-		setter, ok := backend.(interface{ SetLeafPageLog(backenddb.LeafPageLog) })
-		if !ok {
-			return nil, errors.New("cachingdb: backend does not support value-log leaf pages")
-		}
-		setter.SetLeafPageLog(newCachingLeafPageLog(db, 0))
+	if outerLeafPageLogSetter != nil {
+		outerLeafPageLogSetter.SetLeafPageLog(newCachingLeafPageLog(db, 0))
 	}
 	if opts.DisableWAL {
 		// Stage the adaptive gate on the fastest cached profile first. WAL-on
@@ -6829,6 +7289,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 			})
 		}
 	}
+	db.installBackendValueLogReadBarrier()
 
 	// Publish initial memtable snapshot for lock-free reads.
 	db.mu.Lock()
@@ -6837,6 +7298,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	db.mu.Unlock()
 
 	db.startDomainIngressWorkers()
+	db.startProcessMemorySampler()
 
 	// Start background flusher
 	db.wg.Add(1)
@@ -6977,6 +7439,105 @@ func (db *DB) backgroundError() error {
 	db.bgErrMu.Lock()
 	defer db.bgErrMu.Unlock()
 	return db.bgErr
+}
+
+type vlogMmapStatsSnapshot struct {
+	activeSegments  uint64
+	activeBytes     uint64
+	currentSegments uint64
+	currentBytes    uint64
+	sealedSegments  uint64
+	sealedBytes     uint64
+	deadBytes       uint64
+}
+
+func parseUintStat(stats map[string]string, key string) uint64 {
+	if len(stats) == 0 {
+		return 0
+	}
+	raw, ok := stats[key]
+	if !ok || raw == "" {
+		return 0
+	}
+	v, err := strconv.ParseUint(raw, 10, 64)
+	if err != nil {
+		return 0
+	}
+	return v
+}
+
+func backendVlogMmapStatsSnapshot(stats map[string]string) vlogMmapStatsSnapshot {
+	return vlogMmapStatsSnapshot{
+		activeSegments:  parseUintStat(stats, "treedb.vlog.mmap_active_segments"),
+		activeBytes:     parseUintStat(stats, "treedb.vlog.mmap_active_bytes"),
+		currentSegments: parseUintStat(stats, "treedb.vlog.mmap_current_segments"),
+		currentBytes:    parseUintStat(stats, "treedb.vlog.mmap_current_bytes"),
+		sealedSegments:  parseUintStat(stats, "treedb.vlog.mmap_sealed_segments"),
+		sealedBytes:     parseUintStat(stats, "treedb.vlog.mmap_sealed_bytes"),
+		deadBytes:       parseUintStat(stats, "treedb.vlog.mmap_dead_bytes"),
+	}
+}
+
+func cacheVlogMmapStatsSnapshot(reader *valuelog.Manager) vlogMmapStatsSnapshot {
+	if reader == nil {
+		return vlogMmapStatsSnapshot{}
+	}
+	currentSegments, currentBytes, sealedSegments, sealedBytes, _, deadBytes := reader.MmapResidencyStats()
+	return vlogMmapStatsSnapshot{
+		activeSegments:  currentSegments + sealedSegments,
+		activeBytes:     currentBytes + sealedBytes,
+		currentSegments: currentSegments,
+		currentBytes:    currentBytes,
+		sealedSegments:  sealedSegments,
+		sealedBytes:     sealedBytes,
+		deadBytes:       deadBytes,
+	}
+}
+
+func (db *DB) sampleProcessMemoryPeaks(backendMmap vlogMmapStatsSnapshot) {
+	if db == nil {
+		return
+	}
+	snap := samplePoolPressureSnapshot(time.Now())
+	updateAtomicMax(&db.processPeakHeapAllocBytes, snap.heapAllocBytes)
+	updateAtomicMax(&db.processPeakHeapInuseBytes, snap.heapInuseBytes)
+	updateAtomicMax(&db.processPeakTotalSysBytes, snap.totalSysBytes)
+	if rssBytes, rssHWMBytes, ok := currentProcessRSSBytes(); ok {
+		db.processRSSBytes.Store(rssBytes)
+		db.processRSSHWMBytes.Store(rssHWMBytes)
+		updateAtomicMax(&db.processPeakRSSBytes, rssBytes)
+		if rssHWMBytes > 0 {
+			updateAtomicMax(&db.processPeakRSSBytes, rssHWMBytes)
+		}
+	}
+	cacheMmap := cacheVlogMmapStatsSnapshot(db.valueLogReader)
+	updateAtomicMax(&db.processPeakVlogMmapActiveBytes, cacheMmap.activeBytes+backendMmap.activeBytes)
+	updateAtomicMax(&db.processPeakVlogMmapCurrentBytes, cacheMmap.currentBytes+backendMmap.currentBytes)
+	updateAtomicMax(&db.processPeakVlogMmapSealedBytes, cacheMmap.sealedBytes+backendMmap.sealedBytes)
+	updateAtomicMax(&db.processPeakVlogMmapActiveSegments, cacheMmap.activeSegments+backendMmap.activeSegments)
+	updateAtomicMax(&db.processPeakVlogMmapCurrentSegments, cacheMmap.currentSegments+backendMmap.currentSegments)
+	updateAtomicMax(&db.processPeakVlogMmapSealedSegments, cacheMmap.sealedSegments+backendMmap.sealedSegments)
+}
+
+func (db *DB) startProcessMemorySampler() {
+	if db == nil {
+		return
+	}
+	db.sampleProcessMemoryPeaks(vlogMmapStatsSnapshot{})
+	db.wg.Add(1)
+	go func() {
+		defer db.wg.Done()
+		ticker := time.NewTicker(processMemorySampleInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				db.sampleProcessMemoryPeaks(vlogMmapStatsSnapshot{})
+			case <-db.closeCh:
+				return
+			}
+		}
+	}()
 }
 
 // StartAutoCheckpoint enables a background loop that periodically forces a
@@ -7533,6 +8094,13 @@ var vlogAckPool = sync.Pool{
 	New: func() any { return &vlogAck{} },
 }
 
+type batchArenaKind uint8
+
+const (
+	batchArenaKindMain batchArenaKind = iota + 1
+	batchArenaKindPtr
+)
+
 type vlogDictPrepareTask struct {
 	fi             int
 	dictID         uint64
@@ -7767,6 +8335,7 @@ func getEntrySlice(capacity int) []batch.Entry {
 	if capacity < 0 {
 		capacity = 0
 	}
+	requestedBytes := uint64(capacity) * uint64(entrySliceEntrySizeBytes)
 	idx, classCap, ok := entrySliceLeaseClassForLen(capacity)
 	if !ok {
 		return make([]batch.Entry, 0, capacity)
@@ -7789,6 +8358,10 @@ func getEntrySlice(capacity int) []batch.Entry {
 			if cap(s) >= capacity {
 				entrySliceLeaseHitTotal.Add(1)
 				entrySliceLeaseHitBytesTotal.Add(uint64(leaseBytes))
+				entrySliceLeaseHitRequestedBytesTotal.Add(requestedBytes)
+				if granted := uint64(leaseBytes); granted > requestedBytes {
+					entrySliceLeaseHitExcessBytesTotal.Add(granted - requestedBytes)
+				}
 				return s[:0]
 			}
 			if capIdx, ok := entrySliceLeaseClassForCap(cap(s)); ok {
@@ -7803,6 +8376,10 @@ func getEntrySlice(capacity int) []batch.Entry {
 			}
 			entrySliceFreshAllocTotal.Add(1)
 			entrySliceFreshAllocBytesTotal.Add(uint64(classCap) * uint64(entrySliceEntrySizeBytes))
+			entrySliceFreshAllocRequestedBytesTotal.Add(requestedBytes)
+			if granted := uint64(classCap) * uint64(entrySliceEntrySizeBytes); granted > requestedBytes {
+				entrySliceFreshAllocExcessBytesTotal.Add(granted - requestedBytes)
+			}
 			return make([]batch.Entry, 0, classCap)
 		}
 	}
@@ -7818,6 +8395,10 @@ func getEntrySlice(capacity int) []batch.Entry {
 			if cap(s) >= capacity && cap(s) <= maxReuseCap {
 				entrySlicePoolHitTotal.Add(1)
 				entrySlicePoolHitBytesTotal.Add(uint64(poolBytes))
+				entrySlicePoolHitRequestedBytesTotal.Add(requestedBytes)
+				if granted := uint64(poolBytes); granted > requestedBytes {
+					entrySlicePoolHitExcessBytesTotal.Add(granted - requestedBytes)
+				}
 				return s[:0]
 			}
 		}
@@ -7825,6 +8406,10 @@ func getEntrySlice(capacity int) []batch.Entry {
 	maybeResetEntrySlicePoolBytesAfterGC()
 	entrySliceFreshAllocTotal.Add(1)
 	entrySliceFreshAllocBytesTotal.Add(uint64(classCap) * uint64(entrySliceEntrySizeBytes))
+	entrySliceFreshAllocRequestedBytesTotal.Add(requestedBytes)
+	if granted := uint64(classCap) * uint64(entrySliceEntrySizeBytes); granted > requestedBytes {
+		entrySliceFreshAllocExcessBytesTotal.Add(granted - requestedBytes)
+	}
 	return make([]batch.Entry, 0, classCap)
 }
 
@@ -14176,6 +14761,7 @@ func (db *DB) Close() error {
 	var errs []error
 	hadMemtables := false
 	db.closing.Store(true)
+	db.clearBackendValueLogReadBarrier()
 	unregisterTreeDBExpvarStatsDB(db)
 	db.stopDomainIngressWorkers()
 	db.waitForRetainedValueLogPrune()
@@ -16680,7 +17266,6 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 			}
 		}
 		db.mu.Unlock()
-
 		removed := false
 		for _, walPath := range deletable {
 			db.dropValueLogSegment(walPath)
@@ -16961,7 +17546,6 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 		}
 	}
 	db.mu.Unlock()
-
 	removed := false
 	for _, walPath := range deletable {
 		db.dropValueLogSegment(walPath)
@@ -17710,7 +18294,7 @@ func (db *DB) GetManyParallelPlan(keyCount int) (workers int, parallel bool) {
 }
 
 func (db *DB) backendGetMany(keys [][]byte) ([][]byte, error) {
-	if err := db.flushDeferredValueLogForBackendRead(); err != nil {
+	if err := db.flushValueLogForBackendRead(); err != nil {
 		return nil, err
 	}
 	if mg, ok := db.backend.(backendManyGetter); ok {
@@ -17741,10 +18325,14 @@ func (db *DB) Get(key []byte) ([]byte, error) {
 		db.releaseMemtableView(view)
 	}
 	if bypass {
-		if err := db.flushDeferredValueLogForBackendRead(); err != nil {
+		if err := db.flushValueLogForBackendRead(); err != nil {
 			return nil, err
 		}
-		return db.backend.Get(key)
+		val, err := db.backend.Get(key)
+		if err == nil && val != nil {
+			maybeRecordDBGetCallerSample(len(val))
+		}
+		return val, err
 	}
 	val, found, err := db.getMemtable(key)
 	if err != nil {
@@ -17758,10 +18346,14 @@ func (db *DB) Get(key []byte) ([]byte, error) {
 		copy(cpy, val)
 		return cpy, nil
 	}
-	if err := db.flushDeferredValueLogForBackendRead(); err != nil {
+	if err := db.flushValueLogForBackendRead(); err != nil {
 		return nil, err
 	}
-	return db.backend.Get(key)
+	val, err = db.backend.Get(key)
+	if err == nil && val != nil {
+		maybeRecordDBGetCallerSample(len(val))
+	}
+	return val, err
 }
 
 // GetMany returns safe copies of values for keys.
@@ -17868,7 +18460,7 @@ func (db *DB) GetAppend(key, dst []byte) ([]byte, error) {
 	}
 
 	// 2. Backend
-	if err := db.flushDeferredValueLogForBackendRead(); err != nil {
+	if err := db.flushValueLogForBackendRead(); err != nil {
 		return dst, err
 	}
 	return db.backend.GetAppend(key, dst)
@@ -17934,6 +18526,9 @@ func (db *DB) Stats() map[string]string {
 	if stats == nil {
 		stats = make(map[string]string)
 	}
+	backendVlogMmap := backendVlogMmapStatsSnapshot(stats)
+	stats["treedb.process.identity.wal_dir"] = db.dir
+	db.sampleProcessMemoryPeaks(backendVlogMmap)
 	db.mu.RLock()
 	queueLen := len(db.queue)
 	flushThreshold := db.flushThreshold
@@ -17954,6 +18549,25 @@ func (db *DB) Stats() map[string]string {
 		}
 	}
 	db.mu.RUnlock()
+	var mutableTables []memtable.Table
+	var queueTables []memtable.Table
+	if view := db.retainMemtableViewUntracked(); view != nil {
+		mutableTables = append(mutableTables, view.mutables...)
+		queueTables = append(queueTables, view.queue...)
+		db.releaseMemtableViewRef(view, false)
+	} else {
+		db.mu.RLock()
+		if len(db.mutableShards) > 0 {
+			mutableTables = make([]memtable.Table, len(db.mutableShards))
+			for i := range db.mutableShards {
+				mutableTables[i] = db.mutableShards[i].mem
+			}
+		}
+		queueTables = append(queueTables, db.queue...)
+		db.mu.RUnlock()
+	}
+	mutableResidency := summarizeMemtableResidency(mutableTables)
+	queueResidency := summarizeMemtableResidency(queueTables)
 	var walCurrentBytes int64
 	var walClosedBytes int64
 	var queueLagBuckets [vlogQueueLagBucketCount]uint64
@@ -18120,6 +18734,10 @@ func (db *DB) Stats() map[string]string {
 	} else {
 		stats["treedb.cache.memtable_mode_config"] = "fixed"
 	}
+	addMemtableResidencyStats(stats, "treedb.cache.memtable_residency.mutable", mutableResidency)
+	addMemtableResidencyStats(stats, "treedb.cache.memtable_residency.queue", queueResidency)
+	addMemtableResidencyStats(stats, "treedb.process.memtable_residency.mutable", mutableResidency)
+	addMemtableResidencyStats(stats, "treedb.process.memtable_residency.queue", queueResidency)
 	memWrites := db.memtableStats.writes.Load()
 	memSeqWrites := db.memtableStats.seqWrites.Load()
 	memOverwriteWrites := db.memtableStats.overwriteWrites.Load()
@@ -18217,6 +18835,12 @@ func (db *DB) Stats() map[string]string {
 	arenaAllocClassBytes := db.batchArenaAllocClassBytes.Load()
 	arenaUsedBytes := db.batchArenaUsedBytes.Load()
 	arenaTailWasteBytes := db.batchArenaTailWasteBytes.Load()
+	arenaMainAllocClassBytes := db.batchArenaMainAllocClassBytes.Load()
+	arenaMainUsedBytes := db.batchArenaMainUsedBytes.Load()
+	arenaMainTailWasteBytes := db.batchArenaMainTailWasteBytes.Load()
+	arenaPtrAllocClassBytes := db.batchArenaPtrAllocClassBytes.Load()
+	arenaPtrUsedBytes := db.batchArenaPtrUsedBytes.Load()
+	arenaPtrTailWasteBytes := db.batchArenaPtrTailWasteBytes.Load()
 	arenaTailCompactRuns := db.batchArenaTailCompactRuns.Load()
 	arenaTailCompactCopied := db.batchArenaTailCompactCopied.Load()
 	arenaTailCompactSaved := db.batchArenaTailCompactSaved.Load()
@@ -18245,6 +18869,12 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.batch_arena.alloc_class_bytes_total"] = fmt.Sprintf("%d", arenaAllocClassBytes)
 	stats["treedb.cache.batch_arena.used_bytes_total"] = fmt.Sprintf("%d", arenaUsedBytes)
 	stats["treedb.cache.batch_arena.tail_waste_bytes_total"] = fmt.Sprintf("%d", arenaTailWasteBytes)
+	stats["treedb.cache.batch_arena.main.alloc_class_bytes_total"] = fmt.Sprintf("%d", arenaMainAllocClassBytes)
+	stats["treedb.cache.batch_arena.main.used_bytes_total"] = fmt.Sprintf("%d", arenaMainUsedBytes)
+	stats["treedb.cache.batch_arena.main.tail_waste_bytes_total"] = fmt.Sprintf("%d", arenaMainTailWasteBytes)
+	stats["treedb.cache.batch_arena.ptr.alloc_class_bytes_total"] = fmt.Sprintf("%d", arenaPtrAllocClassBytes)
+	stats["treedb.cache.batch_arena.ptr.used_bytes_total"] = fmt.Sprintf("%d", arenaPtrUsedBytes)
+	stats["treedb.cache.batch_arena.ptr.tail_waste_bytes_total"] = fmt.Sprintf("%d", arenaPtrTailWasteBytes)
 	stats["treedb.cache.batch_arena.tail_compact_runs_total"] = fmt.Sprintf("%d", arenaTailCompactRuns)
 	stats["treedb.cache.batch_arena.tail_compact_copied_bytes_total"] = fmt.Sprintf("%d", arenaTailCompactCopied)
 	stats["treedb.cache.batch_arena.tail_compact_saved_bytes_total"] = fmt.Sprintf("%d", arenaTailCompactSaved)
@@ -18256,6 +18886,39 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.batch_arena.borrow_preflight_blocked_bytes_total"] = fmt.Sprintf("%d", batchArenaBorrowPreflightBlockedBytesTotal.Load())
 	stats["treedb.cache.batch_arena.steal_suppressed_deferred_total"] = fmt.Sprintf("%d", batchArenaStealSuppressedDeferredTotal.Load())
 	stats["treedb.cache.batch_arena.steal_suppressed_deferred_entries_total"] = fmt.Sprintf("%d", batchArenaStealSuppressedDeferredEntriesTotal.Load())
+	stats["treedb.cache.batch_arena.copy_source.key.calls_total"] = fmt.Sprintf("%d", batchArenaCopyKeyCallsTotal.Load())
+	stats["treedb.cache.batch_arena.copy_source.key.bytes_total"] = fmt.Sprintf("%d", batchArenaCopyKeyBytesTotal.Load())
+	stats["treedb.cache.batch_arena.copy_source.value.calls_total"] = fmt.Sprintf("%d", batchArenaCopyValueCallsTotal.Load())
+	stats["treedb.cache.batch_arena.copy_source.value.bytes_total"] = fmt.Sprintf("%d", batchArenaCopyValueBytesTotal.Load())
+	stats["treedb.cache.batch_arena.copy_source.key_value.calls_total"] = fmt.Sprintf("%d", batchArenaCopyKeyValueCallsTotal.Load())
+	stats["treedb.cache.batch_arena.copy_source.key_value.bytes_total"] = fmt.Sprintf("%d", batchArenaCopyKeyValueBytesTotal.Load())
+	stats["treedb.cache.batch_arena.copy_source.ptr_value.calls_total"] = fmt.Sprintf("%d", batchArenaCopyPtrValueCallsTotal.Load())
+	stats["treedb.cache.batch_arena.copy_source.ptr_value.bytes_total"] = fmt.Sprintf("%d", batchArenaCopyPtrValueBytesTotal.Load())
+	stats["treedb.cache.batch.set.calls_total"] = fmt.Sprintf("%d", batchSetCallsTotal.Load())
+	stats["treedb.cache.batch.set.bytes_total"] = fmt.Sprintf("%d", batchSetBytesTotal.Load())
+	stats["treedb.cache.batch.set_view.calls_total"] = fmt.Sprintf("%d", batchSetViewCallsTotal.Load())
+	stats["treedb.cache.batch.set_view.bytes_total"] = fmt.Sprintf("%d", batchSetViewBytesTotal.Load())
+	stats["treedb.cache.batch.set_caller.sample_mod"] = fmt.Sprintf("%d", batchSetCallerSampleMod)
+	stats["treedb.cache.batch.set_caller.samples_total"] = fmt.Sprintf("%d", batchSetCallerSamplesTotal.Load())
+	for i, caller := range batchSetCallerSnapshots(8) {
+		stats[fmt.Sprintf("treedb.cache.batch.set_caller.top.%d.frame", i)] = caller.frame
+		stats[fmt.Sprintf("treedb.cache.batch.set_caller.top.%d.calls_total", i)] = fmt.Sprintf("%d", caller.calls)
+		stats[fmt.Sprintf("treedb.cache.batch.set_caller.top.%d.bytes_total", i)] = fmt.Sprintf("%d", caller.bytes)
+	}
+	stats["treedb.cache.read_path.db_get_caller.sample_mod"] = fmt.Sprintf("%d", dbGetCallerSampleMod)
+	stats["treedb.cache.read_path.db_get_caller.samples_total"] = fmt.Sprintf("%d", dbGetCallerSamplesTotal.Load())
+	for i, caller := range dbGetCallerSnapshots(8) {
+		stats[fmt.Sprintf("treedb.cache.read_path.db_get_caller.top.%d.frame", i)] = caller.frame
+		stats[fmt.Sprintf("treedb.cache.read_path.db_get_caller.top.%d.calls_total", i)] = fmt.Sprintf("%d", caller.calls)
+		stats[fmt.Sprintf("treedb.cache.read_path.db_get_caller.top.%d.bytes_total", i)] = fmt.Sprintf("%d", caller.bytes)
+	}
+	stats["treedb.cache.read_path.snapshot_get_caller.sample_mod"] = fmt.Sprintf("%d", snapshotGetCallerSampleMod)
+	stats["treedb.cache.read_path.snapshot_get_caller.samples_total"] = fmt.Sprintf("%d", snapshotGetCallerSamplesTotal.Load())
+	for i, caller := range snapshotGetCallerSnapshots(8) {
+		stats[fmt.Sprintf("treedb.cache.read_path.snapshot_get_caller.top.%d.frame", i)] = caller.frame
+		stats[fmt.Sprintf("treedb.cache.read_path.snapshot_get_caller.top.%d.calls_total", i)] = fmt.Sprintf("%d", caller.calls)
+		stats[fmt.Sprintf("treedb.cache.read_path.snapshot_get_caller.top.%d.bytes_total", i)] = fmt.Sprintf("%d", caller.bytes)
+	}
 	stats["treedb.process.batch_arena.pool_budget_bytes"] = arenaPoolBudget
 	stats["treedb.process.batch_arena.pool_budget_effective_bytes"] = arenaPoolBudgetEffective
 	stats["treedb.process.batch_arena.pool_bytes_estimate"] = arenaPoolEstimate
@@ -18275,6 +18938,12 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.process.batch_arena.alloc_class_bytes_total"] = fmt.Sprintf("%d", arenaAllocClassBytes)
 	stats["treedb.process.batch_arena.used_bytes_total"] = fmt.Sprintf("%d", arenaUsedBytes)
 	stats["treedb.process.batch_arena.tail_waste_bytes_total"] = fmt.Sprintf("%d", arenaTailWasteBytes)
+	stats["treedb.process.batch_arena.main.alloc_class_bytes_total"] = fmt.Sprintf("%d", arenaMainAllocClassBytes)
+	stats["treedb.process.batch_arena.main.used_bytes_total"] = fmt.Sprintf("%d", arenaMainUsedBytes)
+	stats["treedb.process.batch_arena.main.tail_waste_bytes_total"] = fmt.Sprintf("%d", arenaMainTailWasteBytes)
+	stats["treedb.process.batch_arena.ptr.alloc_class_bytes_total"] = fmt.Sprintf("%d", arenaPtrAllocClassBytes)
+	stats["treedb.process.batch_arena.ptr.used_bytes_total"] = fmt.Sprintf("%d", arenaPtrUsedBytes)
+	stats["treedb.process.batch_arena.ptr.tail_waste_bytes_total"] = fmt.Sprintf("%d", arenaPtrTailWasteBytes)
 	stats["treedb.process.batch_arena.tail_compact_runs_total"] = fmt.Sprintf("%d", arenaTailCompactRuns)
 	stats["treedb.process.batch_arena.tail_compact_copied_bytes_total"] = fmt.Sprintf("%d", arenaTailCompactCopied)
 	stats["treedb.process.batch_arena.tail_compact_saved_bytes_total"] = fmt.Sprintf("%d", arenaTailCompactSaved)
@@ -18286,6 +18955,39 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.process.batch_arena.borrow_preflight_blocked_bytes_total"] = fmt.Sprintf("%d", batchArenaBorrowPreflightBlockedBytesTotal.Load())
 	stats["treedb.process.batch_arena.steal_suppressed_deferred_total"] = fmt.Sprintf("%d", batchArenaStealSuppressedDeferredTotal.Load())
 	stats["treedb.process.batch_arena.steal_suppressed_deferred_entries_total"] = fmt.Sprintf("%d", batchArenaStealSuppressedDeferredEntriesTotal.Load())
+	stats["treedb.process.batch_arena.copy_source.key.calls_total"] = fmt.Sprintf("%d", batchArenaCopyKeyCallsTotal.Load())
+	stats["treedb.process.batch_arena.copy_source.key.bytes_total"] = fmt.Sprintf("%d", batchArenaCopyKeyBytesTotal.Load())
+	stats["treedb.process.batch_arena.copy_source.value.calls_total"] = fmt.Sprintf("%d", batchArenaCopyValueCallsTotal.Load())
+	stats["treedb.process.batch_arena.copy_source.value.bytes_total"] = fmt.Sprintf("%d", batchArenaCopyValueBytesTotal.Load())
+	stats["treedb.process.batch_arena.copy_source.key_value.calls_total"] = fmt.Sprintf("%d", batchArenaCopyKeyValueCallsTotal.Load())
+	stats["treedb.process.batch_arena.copy_source.key_value.bytes_total"] = fmt.Sprintf("%d", batchArenaCopyKeyValueBytesTotal.Load())
+	stats["treedb.process.batch_arena.copy_source.ptr_value.calls_total"] = fmt.Sprintf("%d", batchArenaCopyPtrValueCallsTotal.Load())
+	stats["treedb.process.batch_arena.copy_source.ptr_value.bytes_total"] = fmt.Sprintf("%d", batchArenaCopyPtrValueBytesTotal.Load())
+	stats["treedb.process.batch.set.calls_total"] = fmt.Sprintf("%d", batchSetCallsTotal.Load())
+	stats["treedb.process.batch.set.bytes_total"] = fmt.Sprintf("%d", batchSetBytesTotal.Load())
+	stats["treedb.process.batch.set_view.calls_total"] = fmt.Sprintf("%d", batchSetViewCallsTotal.Load())
+	stats["treedb.process.batch.set_view.bytes_total"] = fmt.Sprintf("%d", batchSetViewBytesTotal.Load())
+	stats["treedb.process.batch.set_caller.sample_mod"] = fmt.Sprintf("%d", batchSetCallerSampleMod)
+	stats["treedb.process.batch.set_caller.samples_total"] = fmt.Sprintf("%d", batchSetCallerSamplesTotal.Load())
+	for i, caller := range batchSetCallerSnapshots(8) {
+		stats[fmt.Sprintf("treedb.process.batch.set_caller.top.%d.frame", i)] = caller.frame
+		stats[fmt.Sprintf("treedb.process.batch.set_caller.top.%d.calls_total", i)] = fmt.Sprintf("%d", caller.calls)
+		stats[fmt.Sprintf("treedb.process.batch.set_caller.top.%d.bytes_total", i)] = fmt.Sprintf("%d", caller.bytes)
+	}
+	stats["treedb.process.read_path.db_get_caller.sample_mod"] = fmt.Sprintf("%d", dbGetCallerSampleMod)
+	stats["treedb.process.read_path.db_get_caller.samples_total"] = fmt.Sprintf("%d", dbGetCallerSamplesTotal.Load())
+	for i, caller := range dbGetCallerSnapshots(8) {
+		stats[fmt.Sprintf("treedb.process.read_path.db_get_caller.top.%d.frame", i)] = caller.frame
+		stats[fmt.Sprintf("treedb.process.read_path.db_get_caller.top.%d.calls_total", i)] = fmt.Sprintf("%d", caller.calls)
+		stats[fmt.Sprintf("treedb.process.read_path.db_get_caller.top.%d.bytes_total", i)] = fmt.Sprintf("%d", caller.bytes)
+	}
+	stats["treedb.process.read_path.snapshot_get_caller.sample_mod"] = fmt.Sprintf("%d", snapshotGetCallerSampleMod)
+	stats["treedb.process.read_path.snapshot_get_caller.samples_total"] = fmt.Sprintf("%d", snapshotGetCallerSamplesTotal.Load())
+	for i, caller := range snapshotGetCallerSnapshots(8) {
+		stats[fmt.Sprintf("treedb.process.read_path.snapshot_get_caller.top.%d.frame", i)] = caller.frame
+		stats[fmt.Sprintf("treedb.process.read_path.snapshot_get_caller.top.%d.calls_total", i)] = fmt.Sprintf("%d", caller.calls)
+		stats[fmt.Sprintf("treedb.process.read_path.snapshot_get_caller.top.%d.bytes_total", i)] = fmt.Sprintf("%d", caller.bytes)
+	}
 	stats["treedb.cache.entry_slice.pool_budget_bytes"] = fmt.Sprintf("%d", entrySliceBaseBudget)
 	stats["treedb.cache.entry_slice.pool_budget_effective_bytes"] = fmt.Sprintf("%d", entrySliceEffectiveBudget)
 	stats["treedb.cache.entry_slice.retained_bytes_estimate"] = fmt.Sprintf("%d", entrySlicePoolBytes.Load())
@@ -18293,16 +18995,28 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.entry_slice.trim_drop_bytes_total"] = fmt.Sprintf("%d", entrySlicePoolTrimDropBytesTotal.Load())
 	stats["treedb.cache.entry_slice.get.lease_hits_total"] = fmt.Sprintf("%d", entrySliceLeaseHitTotal.Load())
 	stats["treedb.cache.entry_slice.get.lease_hit_bytes_total"] = fmt.Sprintf("%d", entrySliceLeaseHitBytesTotal.Load())
+	stats["treedb.cache.entry_slice.get.lease_hit_requested_bytes_total"] = fmt.Sprintf("%d", entrySliceLeaseHitRequestedBytesTotal.Load())
+	stats["treedb.cache.entry_slice.get.lease_hit_excess_bytes_total"] = fmt.Sprintf("%d", entrySliceLeaseHitExcessBytesTotal.Load())
 	stats["treedb.cache.entry_slice.get.pool_hits_total"] = fmt.Sprintf("%d", entrySlicePoolHitTotal.Load())
 	stats["treedb.cache.entry_slice.get.pool_hit_bytes_total"] = fmt.Sprintf("%d", entrySlicePoolHitBytesTotal.Load())
+	stats["treedb.cache.entry_slice.get.pool_hit_requested_bytes_total"] = fmt.Sprintf("%d", entrySlicePoolHitRequestedBytesTotal.Load())
+	stats["treedb.cache.entry_slice.get.pool_hit_excess_bytes_total"] = fmt.Sprintf("%d", entrySlicePoolHitExcessBytesTotal.Load())
 	stats["treedb.cache.entry_slice.get.fresh_alloc_total"] = fmt.Sprintf("%d", entrySliceFreshAllocTotal.Load())
 	stats["treedb.cache.entry_slice.get.fresh_alloc_bytes_total"] = fmt.Sprintf("%d", entrySliceFreshAllocBytesTotal.Load())
+	stats["treedb.cache.entry_slice.get.fresh_alloc_requested_bytes_total"] = fmt.Sprintf("%d", entrySliceFreshAllocRequestedBytesTotal.Load())
+	stats["treedb.cache.entry_slice.get.fresh_alloc_excess_bytes_total"] = fmt.Sprintf("%d", entrySliceFreshAllocExcessBytesTotal.Load())
 	stats["treedb.cache.entry_slice.put.lease_total"] = fmt.Sprintf("%d", entrySlicePutLeaseTotal.Load())
 	stats["treedb.cache.entry_slice.put.lease_bytes_total"] = fmt.Sprintf("%d", entrySlicePutLeaseBytesTotal.Load())
 	stats["treedb.cache.entry_slice.put.pool_total"] = fmt.Sprintf("%d", entrySlicePutPoolTotal.Load())
 	stats["treedb.cache.entry_slice.put.pool_bytes_total"] = fmt.Sprintf("%d", entrySlicePutPoolBytesTotal.Load())
 	stats["treedb.cache.entry_slice.put.drop_budget_total"] = fmt.Sprintf("%d", entrySlicePutDropBudgetTotal.Load())
 	stats["treedb.cache.entry_slice.put.drop_budget_bytes_total"] = fmt.Sprintf("%d", entrySlicePutDropBudgetBytesTotal.Load())
+	stats["treedb.cache.read_path.snapshot.queue_inline_hits_total"] = fmt.Sprintf("%d", snapshotReadQueueInlineHitsTotal.Load())
+	stats["treedb.cache.read_path.snapshot.queue_inline_bytes_total"] = fmt.Sprintf("%d", snapshotReadQueueInlineBytesTotal.Load())
+	stats["treedb.cache.read_path.snapshot.queue_pointer_hits_total"] = fmt.Sprintf("%d", snapshotReadQueuePointerHitsTotal.Load())
+	stats["treedb.cache.read_path.snapshot.queue_pointer_bytes_total"] = fmt.Sprintf("%d", snapshotReadQueuePointerBytesTotal.Load())
+	stats["treedb.cache.read_path.snapshot.backend_hits_total"] = fmt.Sprintf("%d", snapshotReadBackendHitsTotal.Load())
+	stats["treedb.cache.read_path.snapshot.backend_bytes_total"] = fmt.Sprintf("%d", snapshotReadBackendBytesTotal.Load())
 	mergeShadowedOpsTotal := flushMergeShadowedOpsTotal.Load()
 	mergeAppliedOpsTotal := flushMergeAppliedOpsTotal.Load()
 	mergeDeferredShadowedOpsTotal := flushMergeDeferredShadowedOpsTotal.Load()
@@ -18331,16 +19045,28 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.process.entry_slice.trim_drop_bytes_total"] = fmt.Sprintf("%d", entrySlicePoolTrimDropBytesTotal.Load())
 	stats["treedb.process.entry_slice.get.lease_hits_total"] = fmt.Sprintf("%d", entrySliceLeaseHitTotal.Load())
 	stats["treedb.process.entry_slice.get.lease_hit_bytes_total"] = fmt.Sprintf("%d", entrySliceLeaseHitBytesTotal.Load())
+	stats["treedb.process.entry_slice.get.lease_hit_requested_bytes_total"] = fmt.Sprintf("%d", entrySliceLeaseHitRequestedBytesTotal.Load())
+	stats["treedb.process.entry_slice.get.lease_hit_excess_bytes_total"] = fmt.Sprintf("%d", entrySliceLeaseHitExcessBytesTotal.Load())
 	stats["treedb.process.entry_slice.get.pool_hits_total"] = fmt.Sprintf("%d", entrySlicePoolHitTotal.Load())
 	stats["treedb.process.entry_slice.get.pool_hit_bytes_total"] = fmt.Sprintf("%d", entrySlicePoolHitBytesTotal.Load())
+	stats["treedb.process.entry_slice.get.pool_hit_requested_bytes_total"] = fmt.Sprintf("%d", entrySlicePoolHitRequestedBytesTotal.Load())
+	stats["treedb.process.entry_slice.get.pool_hit_excess_bytes_total"] = fmt.Sprintf("%d", entrySlicePoolHitExcessBytesTotal.Load())
 	stats["treedb.process.entry_slice.get.fresh_alloc_total"] = fmt.Sprintf("%d", entrySliceFreshAllocTotal.Load())
 	stats["treedb.process.entry_slice.get.fresh_alloc_bytes_total"] = fmt.Sprintf("%d", entrySliceFreshAllocBytesTotal.Load())
+	stats["treedb.process.entry_slice.get.fresh_alloc_requested_bytes_total"] = fmt.Sprintf("%d", entrySliceFreshAllocRequestedBytesTotal.Load())
+	stats["treedb.process.entry_slice.get.fresh_alloc_excess_bytes_total"] = fmt.Sprintf("%d", entrySliceFreshAllocExcessBytesTotal.Load())
 	stats["treedb.process.entry_slice.put.lease_total"] = fmt.Sprintf("%d", entrySlicePutLeaseTotal.Load())
 	stats["treedb.process.entry_slice.put.lease_bytes_total"] = fmt.Sprintf("%d", entrySlicePutLeaseBytesTotal.Load())
 	stats["treedb.process.entry_slice.put.pool_total"] = fmt.Sprintf("%d", entrySlicePutPoolTotal.Load())
 	stats["treedb.process.entry_slice.put.pool_bytes_total"] = fmt.Sprintf("%d", entrySlicePutPoolBytesTotal.Load())
 	stats["treedb.process.entry_slice.put.drop_budget_total"] = fmt.Sprintf("%d", entrySlicePutDropBudgetTotal.Load())
 	stats["treedb.process.entry_slice.put.drop_budget_bytes_total"] = fmt.Sprintf("%d", entrySlicePutDropBudgetBytesTotal.Load())
+	stats["treedb.process.read_path.snapshot.queue_inline_hits_total"] = fmt.Sprintf("%d", snapshotReadQueueInlineHitsTotal.Load())
+	stats["treedb.process.read_path.snapshot.queue_inline_bytes_total"] = fmt.Sprintf("%d", snapshotReadQueueInlineBytesTotal.Load())
+	stats["treedb.process.read_path.snapshot.queue_pointer_hits_total"] = fmt.Sprintf("%d", snapshotReadQueuePointerHitsTotal.Load())
+	stats["treedb.process.read_path.snapshot.queue_pointer_bytes_total"] = fmt.Sprintf("%d", snapshotReadQueuePointerBytesTotal.Load())
+	stats["treedb.process.read_path.snapshot.backend_hits_total"] = fmt.Sprintf("%d", snapshotReadBackendHitsTotal.Load())
+	stats["treedb.process.read_path.snapshot.backend_bytes_total"] = fmt.Sprintf("%d", snapshotReadBackendBytesTotal.Load())
 	stats["treedb.process.flush_merge.shadowed_ops_total"] = fmt.Sprintf("%d", mergeShadowedOpsTotal)
 	stats["treedb.process.flush_merge.applied_ops_total"] = fmt.Sprintf("%d", mergeAppliedOpsTotal)
 	if mergeAppliedOpsTotal > 0 {
@@ -18425,6 +19151,24 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.process.memory.pool_pressure_normal_samples_total"] = fmt.Sprintf("%d", poolPressureNormalSamplesTotal.Load())
 	stats["treedb.process.memory.pool_pressure_high_samples_total"] = fmt.Sprintf("%d", poolPressureHighSamplesTotal.Load())
 	stats["treedb.process.memory.pool_pressure_critical_samples_total"] = fmt.Sprintf("%d", poolPressureCriticalSamplesTotal.Load())
+	rssBytes := db.processRSSBytes.Load()
+	rssHWMBytes := db.processRSSHWMBytes.Load()
+	stats["treedb.process.memory.rss_bytes"] = fmt.Sprintf("%d", rssBytes)
+	stats["treedb.process.memory.rss_hwm_bytes"] = fmt.Sprintf("%d", rssHWMBytes)
+	if rssBytes > poolPressure.heapInuseBytes {
+		stats["treedb.process.memory.rss_minus_heap_inuse_bytes"] = fmt.Sprintf("%d", rssBytes-poolPressure.heapInuseBytes)
+	} else {
+		stats["treedb.process.memory.rss_minus_heap_inuse_bytes"] = "0"
+	}
+	if rssBytes > poolPressure.totalSysBytes {
+		stats["treedb.process.memory.rss_minus_total_sys_bytes"] = fmt.Sprintf("%d", rssBytes-poolPressure.totalSysBytes)
+	} else {
+		stats["treedb.process.memory.rss_minus_total_sys_bytes"] = "0"
+	}
+	stats["treedb.process.memory.peak_rss_bytes"] = fmt.Sprintf("%d", db.processPeakRSSBytes.Load())
+	stats["treedb.process.memory.peak_heap_alloc_bytes"] = fmt.Sprintf("%d", db.processPeakHeapAllocBytes.Load())
+	stats["treedb.process.memory.peak_heap_inuse_bytes"] = fmt.Sprintf("%d", db.processPeakHeapInuseBytes.Load())
+	stats["treedb.process.memory.peak_total_sys_bytes"] = fmt.Sprintf("%d", db.processPeakTotalSysBytes.Load())
 	db.domainIngressMu.Lock()
 	ingressWorkers := len(db.domainIngressCh)
 	ingressQueueSize := db.domainIngressQueueSize
@@ -18666,6 +19410,15 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_decode_buffer_grow.allocated_bytes_total"] = fmt.Sprintf("%d", growStats.AllocatedBytesTotal)
 	stats["treedb.cache.vlog_decode_buffer_grow.copied_bytes_total"] = fmt.Sprintf("%d", growStats.CopiedBytesTotal)
 	stats["treedb.cache.vlog_decode_buffer_grow.capacity_waste_bytes_total"] = fmt.Sprintf("%d", growStats.CapacityWasteBytesTotal)
+	stats["treedb.cache.vlog_decode_buffer_grow.read_append_compressed_fallback.calls_total"] = fmt.Sprintf("%d", growStats.ReadAppendCompressedFallbackCallsTotal)
+	stats["treedb.cache.vlog_decode_buffer_grow.read_append_compressed_fallback.requested_bytes_total"] = fmt.Sprintf("%d", growStats.ReadAppendCompressedFallbackRequestedBytesTotal)
+	stats["treedb.cache.vlog_decode_buffer_grow.read_append_compressed_fallback.dst_present_calls_total"] = fmt.Sprintf("%d", growStats.ReadAppendCompressedFallbackDstPresentCallsTotal)
+	stats["treedb.cache.vlog_decode_buffer_grow.read_append_compressed_fallback.dst_fit_calls_total"] = fmt.Sprintf("%d", growStats.ReadAppendCompressedFallbackDstFitCallsTotal)
+	stats["treedb.cache.vlog_decode_buffer_grow.read_append_compressed_fallback.dst_fit_requested_bytes_total"] = fmt.Sprintf("%d", growStats.ReadAppendCompressedFallbackDstFitRequestedBytesTotal)
+	stats["treedb.cache.vlog_decode_buffer_grow.read_append_payload.calls_total"] = fmt.Sprintf("%d", growStats.ReadAppendPayloadCallsTotal)
+	stats["treedb.cache.vlog_decode_buffer_grow.read_append_payload.requested_bytes_total"] = fmt.Sprintf("%d", growStats.ReadAppendPayloadRequestedBytesTotal)
+	stats["treedb.cache.vlog_decode_buffer_grow.read_append_current_mmap_direct_decode.calls_total"] = fmt.Sprintf("%d", growStats.ReadAppendCurrentMmapDirectDecodeCallsTotal)
+	stats["treedb.cache.vlog_decode_buffer_grow.read_append_current_mmap_direct_decode.requested_bytes_total"] = fmt.Sprintf("%d", growStats.ReadAppendCurrentMmapDirectDecodeRequestedBytesTotal)
 	if growStats.CallsTotal > 0 {
 		stats["treedb.cache.vlog_decode_buffer_grow.realloc_rate"] = fmt.Sprintf("%.6f", float64(growStats.ReallocCallsTotal)/float64(growStats.CallsTotal))
 	}
@@ -18676,6 +19429,7 @@ func (db *DB) Stats() map[string]string {
 	if growStats.RequestedBytesTotal > 0 {
 		stats["treedb.cache.vlog_decode_buffer_grow.overalloc_ratio"] = fmt.Sprintf("%.6f", float64(growStats.AllocatedBytesTotal)/float64(growStats.RequestedBytesTotal))
 	}
+	cacheVlogMmap := cacheVlogMmapStatsSnapshot(db.valueLogReader)
 	if db.valueLogReader != nil {
 		remaps, deadMappings := db.valueLogReader.RemapStats()
 		stats["treedb.cache.vlog_mmap.remaps"] = fmt.Sprintf("%d", remaps)
@@ -18683,18 +19437,13 @@ func (db *DB) Stats() map[string]string {
 		stats["treedb.cache.vlog_mmap.dead_mappings.cap_base"] = fmt.Sprintf("%d", valuelog.MaxDeadMappings)
 		stats["treedb.cache.vlog_mmap.max_mapped_sealed_segments"] = fmt.Sprintf("%d", valuelog.MaxMappedSealedSegments)
 		stats["treedb.cache.vlog_mmap.max_mapped_sealed_bytes"] = fmt.Sprintf("%d", valuelog.MaxMappedSealedBytes)
-		currentSegments, currentBytes, sealedSegments, sealedBytes, _, deadBytes := db.valueLogReader.MmapResidencyStats()
-		stats["treedb.cache.vlog_mmap.active_segments"] = fmt.Sprintf("%d", currentSegments+sealedSegments)
-		stats["treedb.cache.vlog_mmap.active_bytes"] = fmt.Sprintf("%d", currentBytes+sealedBytes)
-		stats["treedb.cache.vlog_mmap.current_segments"] = fmt.Sprintf("%d", currentSegments)
-		stats["treedb.cache.vlog_mmap.current_bytes"] = fmt.Sprintf("%d", currentBytes)
-		stats["treedb.cache.vlog_mmap.sealed_segments"] = fmt.Sprintf("%d", sealedSegments)
-		stats["treedb.cache.vlog_mmap.sealed_bytes"] = fmt.Sprintf("%d", sealedBytes)
-		stats["treedb.cache.vlog_mmap.dead_bytes"] = fmt.Sprintf("%d", deadBytes)
-		stats["treedb.process.memory.vlog_mmap_active_bytes"] = fmt.Sprintf("%d", currentBytes+sealedBytes)
-		stats["treedb.process.memory.vlog_mmap_current_bytes"] = fmt.Sprintf("%d", currentBytes)
-		stats["treedb.process.memory.vlog_mmap_sealed_bytes"] = fmt.Sprintf("%d", sealedBytes)
-		stats["treedb.process.memory.vlog_mmap_dead_bytes"] = fmt.Sprintf("%d", deadBytes)
+		stats["treedb.cache.vlog_mmap.active_segments"] = fmt.Sprintf("%d", cacheVlogMmap.activeSegments)
+		stats["treedb.cache.vlog_mmap.active_bytes"] = fmt.Sprintf("%d", cacheVlogMmap.activeBytes)
+		stats["treedb.cache.vlog_mmap.current_segments"] = fmt.Sprintf("%d", cacheVlogMmap.currentSegments)
+		stats["treedb.cache.vlog_mmap.current_bytes"] = fmt.Sprintf("%d", cacheVlogMmap.currentBytes)
+		stats["treedb.cache.vlog_mmap.sealed_segments"] = fmt.Sprintf("%d", cacheVlogMmap.sealedSegments)
+		stats["treedb.cache.vlog_mmap.sealed_bytes"] = fmt.Sprintf("%d", cacheVlogMmap.sealedBytes)
+		stats["treedb.cache.vlog_mmap.dead_bytes"] = fmt.Sprintf("%d", cacheVlogMmap.deadBytes)
 		sealedDeniedCountCap, sealedDeniedBytesCap := db.valueLogReader.SealedMapDeniedByReasonStats()
 		stats["treedb.cache.vlog_mmap.sealed_map_denied.count_cap"] = fmt.Sprintf("%d", sealedDeniedCountCap)
 		stats["treedb.cache.vlog_mmap.sealed_map_denied.bytes_cap"] = fmt.Sprintf("%d", sealedDeniedBytesCap)
@@ -18719,6 +19468,33 @@ func (db *DB) Stats() map[string]string {
 			stats["treedb.cache.vlog_template_def_cache.hit_ratio"] = fmt.Sprintf("%.6f", float64(hits)/float64(total))
 		}
 	}
+	stats["treedb.process.memory.vlog_mmap_backend_active_bytes"] = fmt.Sprintf("%d", backendVlogMmap.activeBytes)
+	stats["treedb.process.memory.vlog_mmap_backend_current_bytes"] = fmt.Sprintf("%d", backendVlogMmap.currentBytes)
+	stats["treedb.process.memory.vlog_mmap_backend_sealed_bytes"] = fmt.Sprintf("%d", backendVlogMmap.sealedBytes)
+	stats["treedb.process.memory.vlog_mmap_backend_dead_bytes"] = fmt.Sprintf("%d", backendVlogMmap.deadBytes)
+	stats["treedb.process.memory.vlog_mmap_backend_active_segments"] = fmt.Sprintf("%d", backendVlogMmap.activeSegments)
+	stats["treedb.process.memory.vlog_mmap_backend_current_segments"] = fmt.Sprintf("%d", backendVlogMmap.currentSegments)
+	stats["treedb.process.memory.vlog_mmap_backend_sealed_segments"] = fmt.Sprintf("%d", backendVlogMmap.sealedSegments)
+	stats["treedb.process.memory.vlog_mmap_cache_active_bytes"] = fmt.Sprintf("%d", cacheVlogMmap.activeBytes)
+	stats["treedb.process.memory.vlog_mmap_cache_current_bytes"] = fmt.Sprintf("%d", cacheVlogMmap.currentBytes)
+	stats["treedb.process.memory.vlog_mmap_cache_sealed_bytes"] = fmt.Sprintf("%d", cacheVlogMmap.sealedBytes)
+	stats["treedb.process.memory.vlog_mmap_cache_dead_bytes"] = fmt.Sprintf("%d", cacheVlogMmap.deadBytes)
+	stats["treedb.process.memory.vlog_mmap_cache_active_segments"] = fmt.Sprintf("%d", cacheVlogMmap.activeSegments)
+	stats["treedb.process.memory.vlog_mmap_cache_current_segments"] = fmt.Sprintf("%d", cacheVlogMmap.currentSegments)
+	stats["treedb.process.memory.vlog_mmap_cache_sealed_segments"] = fmt.Sprintf("%d", cacheVlogMmap.sealedSegments)
+	stats["treedb.process.memory.vlog_mmap_active_bytes"] = fmt.Sprintf("%d", cacheVlogMmap.activeBytes+backendVlogMmap.activeBytes)
+	stats["treedb.process.memory.vlog_mmap_current_bytes"] = fmt.Sprintf("%d", cacheVlogMmap.currentBytes+backendVlogMmap.currentBytes)
+	stats["treedb.process.memory.vlog_mmap_sealed_bytes"] = fmt.Sprintf("%d", cacheVlogMmap.sealedBytes+backendVlogMmap.sealedBytes)
+	stats["treedb.process.memory.vlog_mmap_dead_bytes"] = fmt.Sprintf("%d", cacheVlogMmap.deadBytes+backendVlogMmap.deadBytes)
+	stats["treedb.process.memory.vlog_mmap_active_segments"] = fmt.Sprintf("%d", cacheVlogMmap.activeSegments+backendVlogMmap.activeSegments)
+	stats["treedb.process.memory.vlog_mmap_current_segments"] = fmt.Sprintf("%d", cacheVlogMmap.currentSegments+backendVlogMmap.currentSegments)
+	stats["treedb.process.memory.vlog_mmap_sealed_segments"] = fmt.Sprintf("%d", cacheVlogMmap.sealedSegments+backendVlogMmap.sealedSegments)
+	stats["treedb.process.memory.peak_vlog_mmap_active_bytes"] = fmt.Sprintf("%d", db.processPeakVlogMmapActiveBytes.Load())
+	stats["treedb.process.memory.peak_vlog_mmap_current_bytes"] = fmt.Sprintf("%d", db.processPeakVlogMmapCurrentBytes.Load())
+	stats["treedb.process.memory.peak_vlog_mmap_sealed_bytes"] = fmt.Sprintf("%d", db.processPeakVlogMmapSealedBytes.Load())
+	stats["treedb.process.memory.peak_vlog_mmap_active_segments"] = fmt.Sprintf("%d", db.processPeakVlogMmapActiveSegments.Load())
+	stats["treedb.process.memory.peak_vlog_mmap_current_segments"] = fmt.Sprintf("%d", db.processPeakVlogMmapCurrentSegments.Load())
+	stats["treedb.process.memory.peak_vlog_mmap_sealed_segments"] = fmt.Sprintf("%d", db.processPeakVlogMmapSealedSegments.Load())
 	stats["treedb.cache.vlog_dict.pause_remaining_bytes"] = fmt.Sprintf("%d", db.valueLogDictPauseRemaining.Load())
 	stats["treedb.cache.vlog_dict.incompressible_hold_remaining_bytes"] = fmt.Sprintf("%d", db.valueLogDictIncompressibleHoldRemaining.Load())
 	stats["treedb.cache.vlog_dict.incompressible_hits"] = fmt.Sprintf("%d", db.valueLogDictIncompressibleHits.Load())
@@ -18953,7 +19729,7 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 	if err := db.ensureBackendRange(); err != nil {
 		return nil, err
 	}
-	if err := db.flushDeferredValueLogForBackendRead(); err != nil {
+	if err := db.flushValueLogForBackendRead(); err != nil {
 		return nil, err
 	}
 
@@ -19313,7 +20089,7 @@ func (it *concatUnsafeIterator) Domain() (start, end []byte) { return nil, nil }
 
 func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
 	db.noteRead()
-	if err := db.flushDeferredValueLogForBackendRead(); err != nil {
+	if err := db.flushValueLogForBackendRead(); err != nil {
 		return nil, err
 	}
 
@@ -19735,7 +20511,7 @@ func (db *DB) observeBatchCopyBytes(n int) {
 	}
 }
 
-func (db *DB) noteBatchArenaChunkAlloc(requestedCap, classCap int) {
+func (db *DB) noteBatchArenaChunkAlloc(kind batchArenaKind, requestedCap, classCap int) {
 	if db == nil {
 		return
 	}
@@ -19744,10 +20520,16 @@ func (db *DB) noteBatchArenaChunkAlloc(requestedCap, classCap int) {
 	}
 	if classCap > 0 {
 		db.batchArenaAllocClassBytes.Add(uint64(classCap))
+		switch kind {
+		case batchArenaKindMain:
+			db.batchArenaMainAllocClassBytes.Add(uint64(classCap))
+		case batchArenaKindPtr:
+			db.batchArenaPtrAllocClassBytes.Add(uint64(classCap))
+		}
 	}
 }
 
-func (db *DB) noteBatchArenaChunkFinalize(used, classCap int) {
+func (db *DB) noteBatchArenaChunkFinalize(kind batchArenaKind, used, classCap int) {
 	if db == nil || classCap <= 0 {
 		return
 	}
@@ -19759,6 +20541,14 @@ func (db *DB) noteBatchArenaChunkFinalize(used, classCap int) {
 	}
 	db.batchArenaUsedBytes.Add(uint64(used))
 	db.batchArenaTailWasteBytes.Add(uint64(classCap - used))
+	switch kind {
+	case batchArenaKindMain:
+		db.batchArenaMainUsedBytes.Add(uint64(used))
+		db.batchArenaMainTailWasteBytes.Add(uint64(classCap - used))
+	case batchArenaKindPtr:
+		db.batchArenaPtrUsedBytes.Add(uint64(used))
+		db.batchArenaPtrTailWasteBytes.Add(uint64(classCap - used))
+	}
 }
 
 func (db *DB) noteBatchArenaTailCompact(copiedBytes, classCap int) {
@@ -19988,7 +20778,7 @@ func (b *Batch) drainCopyArenaChunks() [][]byte {
 		return nil
 	}
 	if b.db != nil && cap(b.copyArena) > 0 {
-		b.db.noteBatchArenaChunkFinalize(len(b.copyArena), cap(b.copyArena))
+		b.db.noteBatchArenaChunkFinalize(batchArenaKindMain, len(b.copyArena), cap(b.copyArena))
 	}
 	chunks := b.copyArenaChunks
 	if bytes := batchArenaChunksCapBytes(chunks); bytes > 0 {
@@ -20016,7 +20806,7 @@ func (b *Batch) drainPtrCopyArenaChunks() [][]byte {
 		return nil
 	}
 	if b.db != nil && cap(b.ptrCopyArena) > 0 {
-		b.db.noteBatchArenaChunkFinalize(len(b.ptrCopyArena), cap(b.ptrCopyArena))
+		b.db.noteBatchArenaChunkFinalize(batchArenaKindPtr, len(b.ptrCopyArena), cap(b.ptrCopyArena))
 	}
 	chunks := b.ptrCopyArenaChunks
 	if bytes := batchArenaChunksCapBytes(chunks); bytes > 0 {
@@ -20074,20 +20864,20 @@ func (b *Batch) subArenaInFlightBytes(n int64) {
 }
 
 func (b *Batch) arenaCopy(n int) []byte {
-	return b.arenaCopyInto(&b.copyArena, &b.copyArenaChunks, &b.copyBytes, n, b.copyArenaCap)
+	return b.arenaCopyInto(batchArenaKindMain, &b.copyArena, &b.copyArenaChunks, &b.copyBytes, n, b.copyArenaCap)
 }
 
 func (b *Batch) arenaCopyPtr(n int) []byte {
-	return b.arenaCopyInto(&b.ptrCopyArena, &b.ptrCopyArenaChunks, &b.ptrCopyBytes, n, 0)
+	return b.arenaCopyInto(batchArenaKindPtr, &b.ptrCopyArena, &b.ptrCopyArenaChunks, &b.ptrCopyBytes, n, 0)
 }
 
-func (b *Batch) arenaCopyInto(arena *[]byte, chunks *[][]byte, copyBytes *int, n int, initialCap int) []byte {
+func (b *Batch) arenaCopyInto(kind batchArenaKind, arena *[]byte, chunks *[][]byte, copyBytes *int, n int, initialCap int) []byte {
 	if n == 0 {
 		return nil
 	}
 	if cap(*arena)-len(*arena) < n {
 		if b != nil && b.db != nil && cap(*arena) > 0 {
-			b.db.noteBatchArenaChunkFinalize(len(*arena), cap(*arena))
+			b.db.noteBatchArenaChunkFinalize(kind, len(*arena), cap(*arena))
 		}
 		chunkCap := cap(*arena) * 2
 		if chunkCap < batchCopyArenaMinChunk {
@@ -20120,7 +20910,7 @@ func (b *Batch) arenaCopyInto(arena *[]byte, chunks *[][]byte, copyBytes *int, n
 			b.addArenaInFlightBytes(cap(chunk))
 		}
 		if b != nil && b.db != nil {
-			b.db.noteBatchArenaChunkAlloc(chunkCap, cap(chunk))
+			b.db.noteBatchArenaChunkAlloc(kind, chunkCap, cap(chunk))
 		}
 		*arena = chunk[:0]
 		*chunks = append(*chunks, *arena)
@@ -20132,18 +20922,30 @@ func (b *Batch) arenaCopyInto(arena *[]byte, chunks *[][]byte, copyBytes *int, n
 }
 
 func (b *Batch) cloneKey(key []byte) []byte {
+	batchArenaCopyKeyCallsTotal.Add(1)
+	if len(key) > 0 {
+		batchArenaCopyKeyBytesTotal.Add(uint64(len(key)))
+	}
 	dst := b.arenaCopy(len(key))
 	copy(dst, key)
 	return dst
 }
 
 func (b *Batch) cloneValue(value []byte) []byte {
+	batchArenaCopyValueCallsTotal.Add(1)
+	if len(value) > 0 {
+		batchArenaCopyValueBytesTotal.Add(uint64(len(value)))
+	}
 	dst := b.arenaCopy(len(value))
 	copy(dst, value)
 	return dst
 }
 
 func (b *Batch) cloneKeyValue(key, value []byte) ([]byte, []byte) {
+	batchArenaCopyKeyValueCallsTotal.Add(1)
+	if n := len(key) + len(value); n > 0 {
+		batchArenaCopyKeyValueBytesTotal.Add(uint64(n))
+	}
 	buf := b.arenaCopy(len(key) + len(value))
 	keyCopy := buf[:len(key):len(key)]
 	copy(keyCopy, key)
@@ -20153,6 +20955,10 @@ func (b *Batch) cloneKeyValue(key, value []byte) ([]byte, []byte) {
 }
 
 func (b *Batch) clonePtrValue(value []byte) []byte {
+	batchArenaCopyPtrValueCallsTotal.Add(1)
+	if len(value) > 0 {
+		batchArenaCopyPtrValueBytesTotal.Add(uint64(len(value)))
+	}
 	dst := b.arenaCopyPtr(len(value))
 	copy(dst, value)
 	return dst
@@ -20209,7 +21015,7 @@ func sliceAliasesArenaTail(s, tail []byte) bool {
 	return uintptr(len(s)) <= uintptr(len(tail))-offset
 }
 
-func (b *Batch) releaseCompactedBatchArenaTail(chunks *[][]byte, arena *[]byte, copiedBytes int) {
+func (b *Batch) releaseCompactedBatchArenaTail(kind batchArenaKind, chunks *[][]byte, arena *[]byte, copiedBytes int) {
 	if b == nil || chunks == nil || arena == nil || len(*chunks) == 0 || cap(*arena) == 0 {
 		return
 	}
@@ -20224,7 +21030,7 @@ func (b *Batch) releaseCompactedBatchArenaTail(chunks *[][]byte, arena *[]byte, 
 	(*chunks)[last] = nil
 	*chunks = (*chunks)[:last]
 	if b.db != nil {
-		b.db.noteBatchArenaChunkFinalize(used, classCap)
+		b.db.noteBatchArenaChunkFinalize(kind, used, classCap)
 		b.db.noteBatchArenaTailCompact(copiedBytes, classCap)
 	}
 	*arena = nil
@@ -20253,7 +21059,7 @@ func (b *Batch) compactUnderfilledMainArenaTail() {
 	if copiedBytes == 0 {
 		return
 	}
-	b.releaseCompactedBatchArenaTail(&b.copyArenaChunks, &b.copyArena, copiedBytes)
+	b.releaseCompactedBatchArenaTail(batchArenaKindMain, &b.copyArenaChunks, &b.copyArena, copiedBytes)
 }
 
 func (b *Batch) compactUnderfilledPtrArenaTail() {
@@ -20276,7 +21082,7 @@ func (b *Batch) compactUnderfilledPtrArenaTail() {
 	if copiedBytes == 0 {
 		return
 	}
-	b.releaseCompactedBatchArenaTail(&b.ptrCopyArenaChunks, &b.ptrCopyArena, copiedBytes)
+	b.releaseCompactedBatchArenaTail(batchArenaKindPtr, &b.ptrCopyArenaChunks, &b.ptrCopyArena, copiedBytes)
 }
 
 func (b *Batch) maybeCompactUnderfilledArenaTails() {
@@ -20306,6 +21112,9 @@ func (b *Batch) Set(key, value []byte) error {
 	if value == nil {
 		return ErrValueNil
 	}
+	batchSetCallsTotal.Add(1)
+	batchSetBytesTotal.Add(uint64(len(key) + len(value)))
+	maybeRecordBatchSetCallerSample(len(key) + len(value))
 
 	idx := len(b.entries)
 	var keyCopy, valCopy []byte
@@ -20364,6 +21173,8 @@ func (b *Batch) SetView(key, value []byte) error {
 	if value == nil {
 		return ErrValueNil
 	}
+	batchSetViewCallsTotal.Add(1)
+	batchSetViewBytesTotal.Add(uint64(len(key) + len(value)))
 
 	if b.backend != nil {
 		b.batchRange.add(key)

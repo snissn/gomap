@@ -147,6 +147,75 @@ func TestValueLogDictClassifierBypass_ArmsIncompressibleHold(t *testing.T) {
 	}
 }
 
+func TestValueLogDictClassifierBypass_IgnoresOuterLeafPages(t *testing.T) {
+	db := &DB{
+		indexOuterLeavesInValueLog:          true,
+		valueLogDictIncompressibleHoldBytes: 256 << 10,
+		valueLogDictMetricsPauseBytes:       1 << 20,
+	}
+	pageValue := make([]byte, 4096)
+	for i := range pageValue {
+		pageValue[i] = byte(i)
+	}
+	if db.valueLogDictClassifierBypass(pageValue, false) {
+		t.Fatalf("expected outer-leaf page value to be ignored by classifier bypass")
+	}
+	if hold := db.valueLogDictIncompressibleHoldRemaining.Load(); hold != 0 {
+		t.Fatalf("expected no incompressible hold from outer-leaf page sample, hold=%d", hold)
+	}
+}
+
+func TestValueLogDictCollectSamples_IgnoresOuterLeafPages(t *testing.T) {
+	tr := newValueLogDictClassifierTrainer(t)
+	db := &DB{
+		indexOuterLeavesInValueLog:           true,
+		valueLogDictTrainer:                  tr,
+		valueLogDictMetricsPauseBytes:        1 << 20,
+		valueLogDictProbeBytes:               64 << 10,
+		valueLogDictPausedSampleStride:       256,
+		valueLogDictIncompressibleProbeBytes: 64 << 10,
+	}
+	records := compressibleValueLogRecords(512, 4096)
+	db.valueLogDictCollectSamples(records)
+	stats := tr.Stats()
+	if stats.Enqueued != 0 {
+		t.Fatalf("expected no trainer enqueue for outer-leaf page samples, got=%d", stats.Enqueued)
+	}
+}
+
+func TestValueLogDictClassifierBypass_AllowsLargeValuesAfterDictPublish(t *testing.T) {
+	db := &DB{
+		valueLogDictIncompressibleHoldBytes:  256 << 10,
+		valueLogDictIncompressibleProbeBytes: 64 << 10,
+		valueLogDictMetricsPauseBytes:        1 << 20,
+	}
+	db.valueLogDictLastAppliedDictID.Store(7)
+
+	highEntropy := make([]byte, 43<<10)
+	for i := range highEntropy {
+		highEntropy[i] = byte(i)
+	}
+	if db.valueLogDictClassifierBypass(highEntropy, false) {
+		t.Fatalf("expected large values to skip classifier bypass after dict publish")
+	}
+	if hold := db.valueLogDictIncompressibleHoldRemaining.Load(); hold != 0 {
+		t.Fatalf("expected incompressible hold to remain inactive for large value, hold=%d", hold)
+	}
+}
+
+func TestShouldBypassValueLogDictForRecords_AllowsLargeValuesAfterDictPublish(t *testing.T) {
+	db := &DB{
+		valueLogDictIncompressibleHoldBytes:  256 << 10,
+		valueLogDictIncompressibleProbeBytes: 64 << 10,
+		valueLogDictMetricsPauseBytes:        1 << 20,
+	}
+	db.valueLogDictLastAppliedDictID.Store(9)
+	records := highEntropyValueLogRecords(8, 43<<10)
+	if db.shouldBypassValueLogDictForRecords(records, false) {
+		t.Fatalf("expected large record batches to bypass classifier gating after dict publish")
+	}
+}
+
 func TestValueLogDictShouldAttemptCompression_IncompressibleHoldProbes(t *testing.T) {
 	db := &DB{
 		valueLogDictIncompressibleHoldBytes:  256 << 10,
@@ -167,6 +236,120 @@ func TestValueLogDictShouldAttemptCompression_IncompressibleHoldProbes(t *testin
 	remaining := db.valueLogDictIncompressibleHoldRemaining.Load()
 	if remaining == 0 {
 		t.Fatalf("expected hold to remain active after one probe")
+	}
+}
+
+func TestValueLogDictShouldAttemptCompression_LargePayloadClampsPauseProbeInterval(t *testing.T) {
+	db := &DB{
+		valueLogDictProbeBytes: 16 << 20,
+	}
+	db.valueLogDictPauseRemaining.Store(64 << 20)
+	db.valueLogDictProbeRemaining.Store(16 << 20)
+
+	attempt, probe, paused := db.valueLogDictShouldAttemptCompression(32 << 10)
+	if attempt || probe || !paused {
+		t.Fatalf("expected initial paused suppression; got attempt=%v probe=%v paused=%v", attempt, probe, paused)
+	}
+	if got := db.valueLogDictProbeRemaining.Load(); got > valueLogDictLargeProbeIntervalClampByte {
+		t.Fatalf("expected probe interval to clamp to <=%d, got=%d", valueLogDictLargeProbeIntervalClampByte, got)
+	}
+
+	probed := false
+	for i := 0; i < 96; i++ {
+		attempt, probe, paused = db.valueLogDictShouldAttemptCompression(32 << 10)
+		if attempt && probe && paused {
+			probed = true
+			break
+		}
+	}
+	if !probed {
+		t.Fatalf("expected paused large-payload probe within bounded attempts after clamp")
+	}
+}
+
+func TestValueLogDictShouldAttemptCompression_LargePayloadPauseProbeDoesNotFireBackToBack(t *testing.T) {
+	const rawLen = 3 << 20
+	db := &DB{
+		valueLogDictProbeBytes: 16 << 20,
+	}
+	db.valueLogDictPauseRemaining.Store(64 << 20)
+	db.valueLogDictProbeRemaining.Store(16 << 20)
+
+	probed := false
+	for i := 0; i < 16; i++ {
+		attempt, probe, paused := db.valueLogDictShouldAttemptCompression(rawLen)
+		if !paused {
+			t.Fatalf("expected paused=true while pause budget remains; got attempt=%v probe=%v paused=%v", attempt, probe, paused)
+		}
+		if attempt && probe {
+			probed = true
+			break
+		}
+	}
+	if !probed {
+		t.Fatalf("expected paused large-payload probe within bounded attempts")
+	}
+
+	attempt, probe, paused := db.valueLogDictShouldAttemptCompression(rawLen)
+	if attempt || probe || !paused {
+		t.Fatalf("expected one full payload suppression after probe; got attempt=%v probe=%v paused=%v", attempt, probe, paused)
+	}
+}
+
+func TestValueLogDictShouldAttemptCompression_LargePayloadClampsIncompressibleProbeInterval(t *testing.T) {
+	db := &DB{
+		valueLogDictIncompressibleHoldBytes:  64 << 20,
+		valueLogDictIncompressibleProbeBytes: 16 << 20,
+	}
+	db.armValueLogDictIncompressibleHoldBytes(0)
+
+	attempt, probe, paused := db.valueLogDictShouldAttemptCompression(32 << 10)
+	if attempt || probe {
+		t.Fatalf("expected incompressible hold suppression before probe; got attempt=%v probe=%v paused=%v", attempt, probe, paused)
+	}
+	if got := db.valueLogDictIncompressibleProbeRemaining.Load(); got > valueLogDictLargeProbeIntervalClampByte {
+		t.Fatalf("expected incompressible probe interval to clamp to <=%d, got=%d", valueLogDictLargeProbeIntervalClampByte, got)
+	}
+
+	probed := false
+	for i := 0; i < 96; i++ {
+		attempt, probe, paused = db.valueLogDictShouldAttemptCompression(32 << 10)
+		if attempt && probe {
+			probed = true
+			break
+		}
+	}
+	if !probed {
+		t.Fatalf("expected incompressible-hold large-payload probe within bounded attempts after clamp")
+	}
+}
+
+func TestValueLogDictIncompressibleDecision_LargePayloadProbeDoesNotFireBackToBack(t *testing.T) {
+	const rawLen = uint64(3 << 20)
+	db := &DB{
+		valueLogDictIncompressibleHoldBytes:  64 << 20,
+		valueLogDictIncompressibleProbeBytes: 16 << 20,
+	}
+	db.armValueLogDictIncompressibleHoldBytes(0)
+
+	probed := false
+	for i := 0; i < 16; i++ {
+		attempt, probe, holding := db.valueLogDictIncompressibleDecision(rawLen, true)
+		if !holding {
+			t.Fatalf("expected incompressible hold to remain active during probe window; got attempt=%v probe=%v holding=%v", attempt, probe, holding)
+		}
+		if attempt && probe {
+			probed = true
+			break
+		}
+	}
+	if !probed {
+		t.Fatalf("expected incompressible large-payload probe within bounded attempts")
+	}
+
+	attempt, probe, holding := db.valueLogDictIncompressibleDecision(rawLen, true)
+	if attempt || probe || !holding {
+		t.Fatalf("expected one full payload suppression after incompressible probe; got attempt=%v probe=%v holding=%v", attempt, probe, holding)
 	}
 }
 

@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -11,6 +12,7 @@ import (
 
 	treedb "github.com/snissn/gomap/TreeDB"
 	treedbdb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/limits"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 )
 
@@ -18,7 +20,7 @@ func TestCollectValueLogAudit_WiresDictLookupFromRoot(t *testing.T) {
 	dir := t.TempDir()
 	buildDictCompressedDBForAudit(t, dir)
 
-	report, err := collectValueLogAudit(dir, treedbdb.ValueLogRewriteOnlineOptions{}, valueLogRIDAuditOptions{})
+	report, err := collectValueLogAudit(dir, treedbdb.ValueLogRewriteOnlineOptions{}, valueLogRIDAuditOptions{}, valueLogFrameScanAuditOptions{})
 	if err != nil {
 		t.Fatalf("collectValueLogAudit(root): %v", err)
 	}
@@ -46,7 +48,7 @@ func TestCollectValueLogAudit_AcceptsMainDBDir(t *testing.T) {
 	dir := t.TempDir()
 	buildDictCompressedDBForAudit(t, dir)
 
-	report, err := collectValueLogAudit(filepath.Join(dir, "maindb"), treedbdb.ValueLogRewriteOnlineOptions{}, valueLogRIDAuditOptions{})
+	report, err := collectValueLogAudit(filepath.Join(dir, "maindb"), treedbdb.ValueLogRewriteOnlineOptions{}, valueLogRIDAuditOptions{}, valueLogFrameScanAuditOptions{})
 	if err != nil {
 		t.Fatalf("collectValueLogAudit(maindb): %v", err)
 	}
@@ -115,6 +117,28 @@ func TestScanValueLogRIDs_ReportsTruncatedSegments(t *testing.T) {
 	}
 }
 
+func TestScanValueLogFrames_RejectsOversizedRecordLength(t *testing.T) {
+	if limits.MaxRecordSize <= 0 {
+		t.Skip("record size cap disabled")
+	}
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "value-l0-000001.log")
+	header := make([]byte, valuelog.HeaderSize)
+	binary.LittleEndian.PutUint32(header[16:20], ^uint32(0))
+	if err := os.WriteFile(path, header, 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	report, err := scanValueLogFrames([]valueLogSegmentAudit{{Name: filepath.Base(path), Path: path, Bytes: int64(len(header))}}, valueLogFrameScanAuditOptions{Enabled: true})
+	if !errors.Is(err, valuelog.ErrRecordTooLarge) {
+		t.Fatalf("scanValueLogFrames error=%v want %v", err, valuelog.ErrRecordTooLarge)
+	}
+	if report != nil {
+		t.Fatalf("scanValueLogFrames report=%+v want nil on oversized record", report)
+	}
+}
+
 func TestScanValueLogRIDs_StopOnFirstDuplicate(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "value-l0-000001.log")
@@ -173,6 +197,39 @@ func TestScanValueLogRIDs_MaxTrackedRIDs(t *testing.T) {
 		MaxTrackedRIDs: 1,
 	}); err == nil {
 		t.Fatal("expected max tracked RIDs error")
+	}
+}
+
+func TestCollectValueLogAudit_FrameScanIncludesModeAndLengthBreakdown(t *testing.T) {
+	dir := t.TempDir()
+	buildDictCompressedDBForAudit(t, dir)
+
+	report, err := collectValueLogAudit(dir, treedbdb.ValueLogRewriteOnlineOptions{}, valueLogRIDAuditOptions{}, valueLogFrameScanAuditOptions{
+		Enabled:    true,
+		TopLengths: 8,
+	})
+	if err != nil {
+		t.Fatalf("collectValueLogAudit(frame scan): %v", err)
+	}
+	if report.FrameScan == nil {
+		t.Fatalf("expected frame scan report")
+	}
+	if report.FrameScan.RecordsTotal == 0 {
+		t.Fatalf("expected non-zero frame scan records")
+	}
+	dictMode, ok := report.FrameScan.Modes["grouped_dict"]
+	if !ok || dictMode.Frames == 0 || dictMode.Subrecords == 0 {
+		t.Fatalf("expected grouped_dict mode stats, got=%+v", report.FrameScan.Modes)
+	}
+	found16K := false
+	for _, row := range report.FrameScan.TopRecordLengthsByBytes {
+		if row.Length == 16<<10 && row.Records > 0 && row.Bytes > 0 {
+			found16K = true
+			break
+		}
+	}
+	if !found16K {
+		t.Fatalf("expected 16KiB record length in top lengths, got=%+v", report.FrameScan.TopRecordLengthsByBytes)
 	}
 }
 

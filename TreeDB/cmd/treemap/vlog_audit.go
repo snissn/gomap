@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bufio"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -15,6 +17,7 @@ import (
 
 	treedb "github.com/snissn/gomap/TreeDB"
 	treedbdb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/limits"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 )
 
@@ -34,6 +37,7 @@ type valueLogAuditReport struct {
 	RIDScan        valueLogRIDAudit             `json:"rid_scan"`
 	GCDryRun       treedbdb.ValueLogGCStats     `json:"gc_dry_run"`
 	RewritePlan    treedbdb.ValueLogRewritePlan `json:"rewrite_plan"`
+	FrameScan      *valueLogFrameScanAudit      `json:"frame_scan,omitempty"`
 	Stats          map[string]string            `json:"stats,omitempty"`
 }
 
@@ -51,10 +55,49 @@ type valueLogRIDAuditOptions struct {
 	MaxTrackedRIDs       int
 }
 
+type valueLogFrameScanAuditOptions struct {
+	Enabled    bool
+	TopLengths int
+}
+
+type valueLogFrameModeAudit struct {
+	Frames             int64 `json:"frames"`
+	Subrecords         int64 `json:"subrecords"`
+	RawPayloadBytes    int64 `json:"raw_payload_bytes"`
+	StoredPayloadBytes int64 `json:"stored_payload_bytes"`
+}
+
+type valueLogRecordLengthAudit struct {
+	Length  int   `json:"length"`
+	Records int64 `json:"records"`
+	Bytes   int64 `json:"bytes"`
+}
+
+type valueLogFrameScanAudit struct {
+	RecordsTotal            int64                             `json:"records_total"`
+	UngroupedRecords        int64                             `json:"ungrouped_records"`
+	UngroupedBytes          int64                             `json:"ungrouped_bytes"`
+	GroupedFrames           int64                             `json:"grouped_frames"`
+	GroupedSubrecords       int64                             `json:"grouped_subrecords"`
+	GroupedRawPayloadBytes  int64                             `json:"grouped_raw_payload_bytes"`
+	GroupedStoredPayload    int64                             `json:"grouped_stored_payload_bytes"`
+	PageLike4096Records     int64                             `json:"page_like_4096_records"`
+	PageLike4096Bytes       int64                             `json:"page_like_4096_bytes"`
+	Large40To48KRecords     int64                             `json:"large_40_to_48k_records"`
+	Large40To48KBytes       int64                             `json:"large_40_to_48k_bytes"`
+	TruncatedSegments       int                               `json:"truncated_segments,omitempty"`
+	Modes                   map[string]valueLogFrameModeAudit `json:"modes,omitempty"`
+	TopRecordLengthsByBytes []valueLogRecordLengthAudit       `json:"top_record_lengths_by_bytes,omitempty"`
+}
+
+const recordFlagGroupedAudit byte = 1 << 0
+
 func runVlogAudit(dir string, args []string) {
 	fs := flag.NewFlagSet("vlog-audit", flag.ExitOnError)
 	rw := fs.Bool("rw", false, "Open read-write (required; may replay WAL or repair files)")
 	asJSON := fs.Bool("json", false, "Emit machine-readable JSON")
+	frameStats := fs.Bool("frame-stats", false, "Scan value-log records and report frame-mode + record-length stats")
+	frameTopLengths := fs.Int("frame-top-lengths", 12, "Number of top record lengths (by retained bytes) to report with -frame-stats")
 	maxSegments := fs.Int("rewrite-max-segments", 0, "Rewrite-plan selection cap in segments (0=none)")
 	maxBytes := fs.Int64("rewrite-max-bytes", 0, "Rewrite-plan live-byte selection cap (0=none)")
 	minStaleRatio := fs.Float64("rewrite-min-stale-ratio", 0, "Rewrite-plan minimum per-segment stale ratio (0..1)")
@@ -75,6 +118,9 @@ func runVlogAudit(dir string, args []string) {
 	}, valueLogRIDAuditOptions{
 		StopOnFirstDuplicate: *stopOnFirstDuplicate,
 		MaxTrackedRIDs:       *maxTrackedRIDs,
+	}, valueLogFrameScanAuditOptions{
+		Enabled:    *frameStats,
+		TopLengths: *frameTopLengths,
 	})
 	if err != nil {
 		fatalf("ValueLog audit error: %v", err)
@@ -128,6 +174,58 @@ func runVlogAudit(dir string, args []string) {
 		report.RewritePlan.SelectedBytesStale,
 		report.RewritePlan.SourceFileIDs,
 	)
+	if report.FrameScan != nil {
+		scan := report.FrameScan
+		groupedRatio := floatRatio(scan.GroupedStoredPayload, scan.GroupedRawPayloadBytes)
+		totalRaw := scan.UngroupedBytes + scan.GroupedRawPayloadBytes
+		totalStored := scan.UngroupedBytes + scan.GroupedStoredPayload
+		totalRatio := floatRatio(totalStored, totalRaw)
+		fmt.Printf("frame_scan: records_total=%d grouped_frames=%d grouped_subrecords=%d ungrouped_records=%d truncated_segments=%d\n",
+			scan.RecordsTotal,
+			scan.GroupedFrames,
+			scan.GroupedSubrecords,
+			scan.UngroupedRecords,
+			scan.TruncatedSegments,
+		)
+		fmt.Printf("frame_scan_bytes: grouped_raw=%d grouped_stored=%d grouped_ratio=%.6f ungrouped=%d total_ratio=%.6f\n",
+			scan.GroupedRawPayloadBytes,
+			scan.GroupedStoredPayload,
+			groupedRatio,
+			scan.UngroupedBytes,
+			totalRatio,
+		)
+		fmt.Printf("frame_scan_focus: page_4096_records=%d page_4096_bytes=%d large_40_to_48k_records=%d large_40_to_48k_bytes=%d\n",
+			scan.PageLike4096Records,
+			scan.PageLike4096Bytes,
+			scan.Large40To48KRecords,
+			scan.Large40To48KBytes,
+		)
+		if len(scan.Modes) > 0 {
+			keys := make([]string, 0, len(scan.Modes))
+			for k := range scan.Modes {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+			fmt.Println("frame_scan_modes:")
+			for _, k := range keys {
+				mode := scan.Modes[k]
+				fmt.Printf("  %s frames=%d subrecords=%d raw=%d stored=%d ratio=%.6f\n",
+					k,
+					mode.Frames,
+					mode.Subrecords,
+					mode.RawPayloadBytes,
+					mode.StoredPayloadBytes,
+					floatRatio(mode.StoredPayloadBytes, mode.RawPayloadBytes),
+				)
+			}
+		}
+		if len(scan.TopRecordLengthsByBytes) > 0 {
+			fmt.Println("frame_scan_top_record_lengths:")
+			for _, row := range scan.TopRecordLengthsByBytes {
+				fmt.Printf("  len=%d records=%d bytes=%d\n", row.Length, row.Records, row.Bytes)
+			}
+		}
+	}
 	if len(report.Stats) > 0 {
 		keys := make([]string, 0, len(report.Stats))
 		for k := range report.Stats {
@@ -149,7 +247,7 @@ func runVlogAudit(dir string, args []string) {
 	}
 }
 
-func collectValueLogAudit(dir string, rewriteOpts treedbdb.ValueLogRewriteOnlineOptions, ridOpts valueLogRIDAuditOptions) (report valueLogAuditReport, err error) {
+func collectValueLogAudit(dir string, rewriteOpts treedbdb.ValueLogRewriteOnlineOptions, ridOpts valueLogRIDAuditOptions, frameOpts valueLogFrameScanAuditOptions) (report valueLogAuditReport, err error) {
 	report = valueLogAuditReport{Dir: dir}
 	mainDir, err := resolveTreemapMainDir(dir)
 	if err != nil {
@@ -169,6 +267,12 @@ func collectValueLogAudit(dir string, rewriteOpts treedbdb.ValueLogRewriteOnline
 	report.RIDScan, err = scanValueLogRIDs(segs, ridOpts)
 	if err != nil {
 		return report, err
+	}
+	if frameOpts.Enabled {
+		report.FrameScan, err = scanValueLogFrames(segs, frameOpts)
+		if err != nil {
+			return report, err
+		}
 	}
 
 	backend, cleanup, err := treedb.OpenBackend(treedb.Options{Dir: rootDir, ReadOnly: false})
@@ -198,6 +302,177 @@ func collectValueLogAudit(dir string, rewriteOpts treedbdb.ValueLogRewriteOnline
 		return report, err
 	}
 	return report, nil
+}
+
+func scanValueLogFrames(segments []valueLogSegmentAudit, opts valueLogFrameScanAuditOptions) (*valueLogFrameScanAudit, error) {
+	topN := opts.TopLengths
+	if topN <= 0 {
+		topN = 10
+	}
+	maxValueLen := int64(^uint32(0))
+	if limits.MaxRecordSize > 0 {
+		maxValueLen = limits.MaxRecordSize - int64(valuelog.HeaderSize)
+		if maxValueLen < 0 {
+			maxValueLen = 0
+		}
+	}
+	out := &valueLogFrameScanAudit{
+		Modes: make(map[string]valueLogFrameModeAudit),
+	}
+	byLength := make(map[int]valueLogRecordLengthAudit)
+	addLen := func(n int64) {
+		if n < 0 || n > maxValueLen {
+			return
+		}
+		length := int(n)
+		row := byLength[length]
+		row.Length = length
+		row.Records++
+		row.Bytes += n
+		byLength[length] = row
+		if length == 4096 {
+			out.PageLike4096Records++
+			out.PageLike4096Bytes += n
+		}
+		if length >= (40<<10) && length <= (48<<10) {
+			out.Large40To48KRecords++
+			out.Large40To48KBytes += n
+		}
+	}
+
+	for _, seg := range segments {
+		f, err := os.Open(seg.Path)
+		if err != nil {
+			return nil, err
+		}
+		reader := bufio.NewReaderSize(f, 1<<20)
+		var payloadBuf []byte
+		for {
+			var header [valuelog.HeaderSize]byte
+			if _, err := io.ReadFull(reader, header[:]); err != nil {
+				if errors.Is(err, io.EOF) {
+					break
+				}
+				if errors.Is(err, io.ErrUnexpectedEOF) {
+					out.TruncatedSegments++
+					break
+				}
+				_ = f.Close()
+				return nil, err
+			}
+			valueLen := int64(binary.LittleEndian.Uint32(header[16:20]))
+			if valueLen > maxValueLen {
+				_ = f.Close()
+				return nil, valuelog.ErrRecordTooLarge
+			}
+			payloadLen := int(valueLen)
+			if cap(payloadBuf) < payloadLen {
+				payloadBuf = make([]byte, payloadLen)
+			}
+			payload := payloadBuf[:payloadLen]
+			if _, err := io.ReadFull(reader, payload); err != nil {
+				if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+					out.TruncatedSegments++
+					break
+				}
+				_ = f.Close()
+				return nil, err
+			}
+			flags := header[5]
+			if flags&recordFlagGroupedAudit == 0 {
+				n := valueLen
+				out.RecordsTotal++
+				out.UngroupedRecords++
+				out.UngroupedBytes += n
+				addLen(n)
+
+				mode := out.Modes["raw_ungrouped"]
+				mode.Frames++
+				mode.Subrecords++
+				mode.RawPayloadBytes += n
+				mode.StoredPayloadBytes += n
+				out.Modes["raw_ungrouped"] = mode
+				continue
+			}
+
+			frameHeader, _, offsets, framePayload, err := valuelog.DecodeFrame(payload)
+			if err != nil {
+				_ = f.Close()
+				return nil, err
+			}
+			if len(offsets) == 0 {
+				_ = f.Close()
+				return nil, valuelog.ErrCorrupt
+			}
+			rawPayloadBytes := int64(offsets[len(offsets)-1])
+			storedPayloadBytes := int64(len(framePayload))
+			subrecords := int64(len(offsets) - 1)
+
+			out.RecordsTotal += subrecords
+			out.GroupedFrames++
+			out.GroupedSubrecords += subrecords
+			out.GroupedRawPayloadBytes += rawPayloadBytes
+			out.GroupedStoredPayload += storedPayloadBytes
+
+			modeKey := groupedFrameModeName(frameHeader)
+			mode := out.Modes[modeKey]
+			mode.Frames++
+			mode.Subrecords += subrecords
+			mode.RawPayloadBytes += rawPayloadBytes
+			mode.StoredPayloadBytes += storedPayloadBytes
+			out.Modes[modeKey] = mode
+
+			for i := 0; i+1 < len(offsets); i++ {
+				n := int64(offsets[i+1] - offsets[i])
+				addLen(n)
+			}
+		}
+		if err := f.Close(); err != nil {
+			return nil, err
+		}
+	}
+
+	lengths := make([]valueLogRecordLengthAudit, 0, len(byLength))
+	for _, row := range byLength {
+		lengths = append(lengths, row)
+	}
+	sort.Slice(lengths, func(i, j int) bool {
+		if lengths[i].Bytes == lengths[j].Bytes {
+			return lengths[i].Length < lengths[j].Length
+		}
+		return lengths[i].Bytes > lengths[j].Bytes
+	})
+	if len(lengths) > topN {
+		lengths = lengths[:topN]
+	}
+	out.TopRecordLengthsByBytes = lengths
+	return out, nil
+}
+
+func groupedFrameModeName(h valuelog.FrameHeader) string {
+	if h.Flags&valuelog.FrameFlagCompressed == 0 {
+		return "grouped_raw"
+	}
+	if h.DictID != 0 {
+		return "grouped_dict"
+	}
+	switch valuelog.BlockCodec(h.Reserved) {
+	case valuelog.BlockCodecSnappy:
+		return "grouped_block_snappy"
+	case valuelog.BlockCodecLZ4:
+		return "grouped_block_lz4"
+	case valuelog.BlockCodecNone:
+		return "grouped_block_none"
+	default:
+		return fmt.Sprintf("grouped_block_codec_%d", h.Reserved)
+	}
+}
+
+func floatRatio(num, den int64) float64 {
+	if den <= 0 {
+		return 0
+	}
+	return float64(num) / float64(den)
 }
 
 func resolveTreemapMainDir(dir string) (string, error) {

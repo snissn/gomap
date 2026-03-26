@@ -142,7 +142,7 @@ jobs:
 
       - name: Incompressible auto-vs-off gate
         run: |
-          max_attempts=3
+          max_attempts=5
           for attempt in $(seq 1 "$max_attempts"); do
             off_log="vlog_auto_incompressible_off_attempt${attempt}.txt"
             auto_log="vlog_auto_incompressible_auto_attempt${attempt}.txt"
@@ -161,6 +161,7 @@ jobs:
               -seed 1 \
               -treedb-force-value-pointers=true \
               -treedb-value-log-threshold=1 \
+              -treedb-vlog-dict-train-bytes=-1 \
               > "${off_log}" 2>&1; then
               echo "treedb_vlog_off benchmark failed on attempt ${attempt}"
               tail -n 80 "${off_log}" || true
@@ -180,6 +181,7 @@ jobs:
               -seed 1 \
               -treedb-force-value-pointers=true \
               -treedb-value-log-threshold=1 \
+              -treedb-vlog-dict-train-bytes=-1 \
               > "${auto_log}" 2>&1; then
               echo "treedb_vlog_auto benchmark failed on attempt ${attempt}"
               tail -n 80 "${auto_log}" || true

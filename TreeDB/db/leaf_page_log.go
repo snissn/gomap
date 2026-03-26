@@ -49,5 +49,17 @@ func (db *DB) RegisterValueLogSegment(path string, fileID uint32) error {
 	if db.valueLogManager == nil {
 		return fmt.Errorf("value-log segment registration unavailable: manager not initialized")
 	}
-	return db.valueLogManager.RegisterSegment(path, fileID)
+	if err := db.valueLogManager.RegisterSegment(path, fileID); err != nil {
+		return err
+	}
+	return db.valueLogManager.PromoteCurrentWritable(fileID)
+}
+
+// SetCurrentValueLogReadBarrier installs a callback that will be invoked before
+// backend-internal reads of segments still marked currentWritable.
+func (db *DB) SetCurrentValueLogReadBarrier(fn func(fileID uint32) error) {
+	if db == nil || db.valueLogManager == nil {
+		return
+	}
+	db.valueLogManager.SetCurrentWritableReadBarrier(fn)
 }

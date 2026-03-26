@@ -9,6 +9,7 @@ import (
 	"github.com/snissn/compress/zstd"
 	"github.com/snissn/gomap/TreeDB/internal/compression"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
+	"github.com/snissn/gomap/TreeDB/page"
 )
 
 const (
@@ -20,6 +21,14 @@ const (
 	// bound hot-path CPU even when TrainBytes is large.
 	valueLogDictCollectMaxPerBatchRecords = 16384
 	valueLogDictCollectMinPerBatchBytes   = 32 << 10
+	// Once a dictionary has been published, large payload streams are better
+	// judged by observed frame ratios than by byte-alphabet heuristics.
+	valueLogDictClassifierLargePayloadBypassMin = 32 << 10
+	// Large payload streams recover slower from pause/hold when probe intervals
+	// are sized for generic traffic. Clamp probe cadence for large records so
+	// dict mode can re-engage earlier after a transient degraded period.
+	valueLogDictLargeProbeMinPayloadBytes   = 16 << 10
+	valueLogDictLargeProbeIntervalClampByte = 2 << 20
 )
 
 type dictStoreWriter interface {
@@ -99,6 +108,44 @@ func (db *DB) valueLogDictMinSavingsRatio() float64 {
 	return 0.02
 }
 
+func (db *DB) valueLogDictHasPublishedDict() bool {
+	return db != nil && db.valueLogDictLastAppliedDictID.Load() != 0
+}
+
+func (db *DB) valueLogDictIgnoreValueForSignal(value []byte) bool {
+	if db == nil || len(value) == 0 {
+		return false
+	}
+	// Outer-leaf pages (fixed 4KiB pages) are structurally different from large
+	// non-page payloads and can dominate dict signal/training in pointer-heavy
+	// runs. Keep them on block codecs and avoid letting them steer dict state.
+	return db.indexOuterLeavesInValueLog && len(value) == page.PageSize
+}
+
+func (db *DB) seedVlogCompressionSelectorsDictRatio(payloadRatio, totalRatio float64) {
+	if db == nil {
+		return
+	}
+	seedRatio := payloadRatio
+	if seedRatio <= 0 {
+		seedRatio = totalRatio
+	}
+	if totalRatio > seedRatio {
+		seedRatio = totalRatio
+	}
+	seedRatio = normalizeMetricRatio(seedRatio)
+	// Keep selector seeding conservative: if the active profile ratio is close
+	// to raw, defer to normal per-frame selector learning.
+	if seedRatio >= 0.98 {
+		return
+	}
+	for i := range db.lanes {
+		if s := db.lanes[i].vlogCompressionSelector; s != nil {
+			s.seedDictCandidate(seedRatio)
+		}
+	}
+}
+
 func (db *DB) armValueLogDictPauseBytes(pauseBytes uint64) {
 	if db == nil {
 		return
@@ -174,8 +221,17 @@ func (db *DB) valueLogDictIncompressibleDecision(rawLen uint64, allowProbe bool)
 			if probeBytes == 0 {
 				return false, false, true
 			}
+			probeBytes = valueLogDictProbeIntervalForPayload(probeBytes, rawLen)
 			probeRemaining := db.valueLogDictIncompressibleProbeRemaining.Load()
 			for {
+				if probeRemaining > probeBytes {
+					if db.valueLogDictIncompressibleProbeRemaining.CompareAndSwap(probeRemaining, probeBytes) {
+						probeRemaining = probeBytes
+					} else {
+						probeRemaining = db.valueLogDictIncompressibleProbeRemaining.Load()
+					}
+					continue
+				}
 				if probeRemaining <= rawLen {
 					nextProbe := probeBytes
 					if next > 0 && nextProbe > next {
@@ -197,6 +253,12 @@ func (db *DB) valueLogDictIncompressibleDecision(rawLen uint64, allowProbe bool)
 
 func (db *DB) valueLogDictClassifierBypass(value []byte, probeCompression bool) bool {
 	if db == nil || probeCompression {
+		return false
+	}
+	if db.valueLogDictIgnoreValueForSignal(value) {
+		return false
+	}
+	if db.valueLogDictHasPublishedDict() && len(value) >= valueLogDictClassifierLargePayloadBypassMin {
 		return false
 	}
 	if attempt, _, holding := db.valueLogDictIncompressibleDecision(uint64(len(value)), false); holding && !attempt {
@@ -230,6 +292,9 @@ func (db *DB) shouldBypassValueLogDictForRecords(records []valuelog.Record, prob
 		return false
 	}
 	rawBytes := saturatingRawPayloadBytes(records)
+	if db.valueLogDictHasPublishedDict() && rawBytes/uint64(len(records)) >= valueLogDictClassifierLargePayloadBypassMin {
+		return false
+	}
 	if attempt, _, holding := db.valueLogDictIncompressibleDecision(rawBytes, false); holding && !attempt {
 		return true
 	}
@@ -241,6 +306,9 @@ func (db *DB) shouldBypassValueLogDictForRecords(records []valuelog.Record, prob
 	incompressible := 0
 	for i := 0; i < len(records) && samples < 4; i += step {
 		v := records[i].Value
+		if db.valueLogDictIgnoreValueForSignal(v) {
+			continue
+		}
 		if len(v) < 4096 {
 			continue
 		}
@@ -317,6 +385,9 @@ func (db *DB) valueLogDictCollectSamples(records []valuelog.Record) {
 			continue
 		}
 		v := records[i].Value
+		if db.valueLogDictIgnoreValueForSignal(v) {
+			continue
+		}
 		if db.valueLogDictClassifierBypass(v, false) {
 			// One high-entropy sample is enough to stop this collect pass and keep
 			// the write path cheap on incompressible streams.
@@ -398,6 +469,9 @@ func (db *DB) valueLogDictCollectSample(value []byte) {
 	if db.valueLogDictPaused() && !db.valueLogDictShouldCollectPaused() {
 		return
 	}
+	if db.valueLogDictIgnoreValueForSignal(value) {
+		return
+	}
 	if db.valueLogDictClassifierBypass(value, false) {
 		return
 	}
@@ -452,7 +526,7 @@ func (db *DB) ensureValueLogDictTrainer() {
 		}
 		candidateK = filtered
 	}
-	tr.SetAutotuneCandidates(candidateK, db.valueLogAutotuneOptions.CandidateHistoryBytes)
+	tr.SetAutotuneCandidates(candidateK, db.valueLogAutotuneOptions.CandidateHistoryBytes, db.valueLogAutotuneOptions.CandidateDictBytes)
 	db.valueLogDictTrainer = tr
 	db.valueLogDictMetrics = compression.NewMetrics(compression.MetricsOptions{
 		AdaptiveRatio:  db.valueLogDictAdaptiveRatio,
@@ -549,6 +623,7 @@ func (db *DB) applyValueLogDictProfile() {
 	if !ok || profile == nil || len(profile.Dict) == 0 {
 		return
 	}
+	db.seedVlogCompressionSelectorsDictRatio(profile.PayloadRatio, profile.TotalRatio)
 	ioNsPerStoredByte := 0.0
 	if db.valueLogAutotuneOptions.Mode != valuelog.AutotuneOff {
 		ioNsPerStoredByte = db.valueLogAutotuneMetrics.snapshot().IoNsPerStoredByte
@@ -704,13 +779,23 @@ func (db *DB) valueLogDictShouldAttemptCompression(rawLen int) (bool, bool, bool
 			next = remaining - rawBytes
 		}
 		if db.valueLogDictPauseRemaining.CompareAndSwap(remaining, next) {
-			if db.valueLogDictProbeBytes == 0 {
+			probeBytes := db.valueLogDictProbeBytes
+			if probeBytes == 0 {
 				return false, false, true
 			}
+			probeBytes = valueLogDictProbeIntervalForPayload(probeBytes, rawBytes)
 			probeRemaining := db.valueLogDictProbeRemaining.Load()
 			for {
+				if probeRemaining > probeBytes {
+					if db.valueLogDictProbeRemaining.CompareAndSwap(probeRemaining, probeBytes) {
+						probeRemaining = probeBytes
+					} else {
+						probeRemaining = db.valueLogDictProbeRemaining.Load()
+					}
+					continue
+				}
 				if probeRemaining <= rawBytes {
-					if db.valueLogDictProbeRemaining.CompareAndSwap(probeRemaining, db.valueLogDictProbeBytes) {
+					if db.valueLogDictProbeRemaining.CompareAndSwap(probeRemaining, probeBytes) {
 						return true, true, true
 					}
 				} else if db.valueLogDictProbeRemaining.CompareAndSwap(probeRemaining, probeRemaining-rawBytes) {
@@ -722,6 +807,25 @@ func (db *DB) valueLogDictShouldAttemptCompression(rawLen int) (bool, bool, bool
 		remaining = db.valueLogDictPauseRemaining.Load()
 	}
 	return true, false, false
+}
+
+func valueLogDictProbeIntervalForPayload(baseProbeBytes, rawBytes uint64) uint64 {
+	if baseProbeBytes == 0 {
+		return 0
+	}
+	probeBytes := baseProbeBytes
+	if rawBytes >= valueLogDictLargeProbeMinPayloadBytes && probeBytes > valueLogDictLargeProbeIntervalClampByte {
+		probeBytes = valueLogDictLargeProbeIntervalClampByte
+	}
+	// Avoid probe-on-every-write behavior when payload meets/exceeds the clamped
+	// interval; keep at least one full payload between probes.
+	if rawBytes > 0 && probeBytes <= rawBytes {
+		if rawBytes == ^uint64(0) {
+			return rawBytes
+		}
+		probeBytes = rawBytes + 1
+	}
+	return probeBytes
 }
 
 func (db *DB) valueLogDictObservePayload(rawPayloadBytes, storedPayloadBytes uint64, records int) {

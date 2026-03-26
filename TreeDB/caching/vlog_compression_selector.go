@@ -69,6 +69,14 @@ const (
 	// Larger grouped-frame targets reduce per-record compression overhead for
 	// large forced-pointer streams.
 	forcePointerBlockTargetCompressedBytes = 32 << 10
+	// For large payloads, allow strong observed dict wins to override generic
+	// throughput scoring so we do not lock highly-compressible streams into
+	// block mode.
+	largePayloadDictPreferMinPayloadBytes = 32 << 10
+	largePayloadDictPreferMinSamples      = 4
+	largePayloadDictPreferAbsRatioMax     = 0.15
+	largePayloadDictPreferRelRatioMax     = 0.35
+	largePayloadDictPreferHugeRelRatioMax = 0.20
 )
 
 func normalizeVlogCompressionMode(v uint8) vlogCompressionMode {
@@ -204,6 +212,33 @@ type vlogCompressionSelector struct {
 	bypassBytes       uint64
 }
 
+func (s *vlogCompressionSelector) seedDictCandidate(ratio float64) {
+	if s == nil {
+		return
+	}
+	ratio = normalizeMetricRatio(ratio)
+	// Ignore neutral/negative hints; this seed is only for clear dict wins.
+	if ratio >= 0.98 {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	m := s.metrics[vlogAutoCandidateDict]
+	if m.samples == 0 || ratio < normalizeMetricRatio(m.ratio) {
+		m.ratio = ratio
+	}
+	// Keep throughput neutral to avoid biasing policy decisions toward "size at
+	// all costs" in throughput mode.
+	if m.throughput <= 0 {
+		m.throughput = 1.0
+	}
+	if m.samples == 0 {
+		m.samples = 1
+	}
+	s.metrics[vlogAutoCandidateDict] = m
+}
+
 func (s *vlogCompressionSelector) normalizeLargePayloadCandidate(c vlogAutoCandidate, unitPayloadBytes int) vlogAutoCandidate {
 	if s == nil {
 		return c
@@ -220,6 +255,48 @@ func (s *vlogCompressionSelector) normalizeLargePayloadCandidate(c vlogAutoCandi
 		}
 	}
 	return c
+}
+
+func (s *vlogCompressionSelector) shouldPreferLargePayloadDict(dictAvailable bool, unitPayloadBytes int) bool {
+	if s == nil || !dictAvailable || unitPayloadBytes < largePayloadDictPreferMinPayloadBytes {
+		return false
+	}
+	dict := s.metric(vlogAutoCandidateDict)
+	if dict.samples < largePayloadDictPreferMinSamples {
+		return false
+	}
+	snappy := s.metric(vlogAutoCandidateBlockSnappy)
+	lz4 := s.metric(vlogAutoCandidateBlockLZ4)
+	bestBlock := snappy
+	if lz4.samples > bestBlock.samples ||
+		(lz4.samples == bestBlock.samples && (lz4.ratio < bestBlock.ratio || (lz4.ratio == bestBlock.ratio && lz4.throughput > bestBlock.throughput))) {
+		bestBlock = lz4
+	}
+
+	strongAbsolute := dict.ratio <= largePayloadDictPreferAbsRatioMax
+	strongRelative := bestBlock.samples >= largePayloadDictPreferMinSamples &&
+		dict.ratio <= bestBlock.ratio*largePayloadDictPreferRelRatioMax
+	if !strongAbsolute && !strongRelative {
+		return false
+	}
+	if bestBlock.samples < largePayloadDictPreferMinSamples {
+		return strongAbsolute
+	}
+
+	switch s.policy {
+	case vlogAutoThroughput:
+		if dict.throughput >= bestBlock.throughput*0.60 {
+			return true
+		}
+		return dict.ratio <= bestBlock.ratio*largePayloadDictPreferHugeRelRatioMax
+	case vlogAutoBalanced:
+		if dict.throughput >= bestBlock.throughput*0.45 {
+			return true
+		}
+		return dict.ratio <= bestBlock.ratio*largePayloadDictPreferHugeRelRatioMax
+	default:
+		return true
+	}
 }
 
 func (c vlogAutoCandidate) suffix() string {
@@ -651,6 +728,9 @@ func (s *vlogCompressionSelector) choose(dictAvailable bool, rawPayloadBytes, un
 				}
 				s.probeRemaining = nextProbe
 				candidate := s.preferredProbeCandidate(dictAvailable)
+				if s.shouldPreferLargePayloadDict(dictAvailable, unitPayloadBytes) {
+					candidate = vlogAutoCandidateDict
+				}
 				candidate = s.normalizeLargePayloadCandidate(candidate, unitPayloadBytes)
 				s.probeAttempts++
 				mode, codec := candidateWriteMode(candidate, s.seedCodec)
@@ -678,6 +758,9 @@ func (s *vlogCompressionSelector) choose(dictAvailable bool, rawPayloadBytes, un
 			s.exploreRemaining = nextInterval
 			if nextInterval == s.exploreBytes && !s.shouldSkipExploration(dictAvailable) {
 				candidate := s.preferredExplorationCandidate(dictAvailable)
+				if s.shouldPreferLargePayloadDict(dictAvailable, unitPayloadBytes) {
+					candidate = vlogAutoCandidateDict
+				}
 				candidate = s.normalizeLargePayloadCandidate(candidate, unitPayloadBytes)
 				if candidate != s.currentCandidate {
 					s.probeAttempts++
@@ -688,6 +771,18 @@ func (s *vlogCompressionSelector) choose(dictAvailable bool, rawPayloadBytes, un
 		} else {
 			s.exploreRemaining -= rawBytes
 		}
+	}
+
+	if s.shouldPreferLargePayloadDict(dictAvailable, unitPayloadBytes) {
+		if s.currentCandidate != vlogAutoCandidateDict {
+			s.switches[s.currentCandidate][vlogAutoCandidateDict]++
+			s.currentCandidate = vlogAutoCandidateDict
+			s.modeBytes = rawBytes
+		} else {
+			s.modeBytes += rawBytes
+		}
+		mode, codec := candidateWriteMode(vlogAutoCandidateDict, s.seedCodec)
+		return mode, codec, false
 	}
 
 	target := s.preferredCandidate(dictAvailable)

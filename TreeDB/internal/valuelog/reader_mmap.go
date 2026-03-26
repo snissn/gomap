@@ -47,6 +47,7 @@ const (
 	deadMappingBytesPerStep     = 256 << 10 // increase cap by 1 per 256KiB mapped
 	maxDeadMappingsEnvKey       = "TREEDB_VLOG_MAX_DEAD_MAPPINGS"
 	enableAdaptiveCapEnvKey     = "TREEDB_VLOG_ADAPTIVE_DEAD_MAPPINGS"
+	enableCurrentWritableEnvKey = "TREEDB_VLOG_ENABLE_CURRENT_WRITABLE_MMAP"
 	maxMappedSealedEnvKey       = "TREEDB_VLOG_MAX_MAPPED_SEALED_SEGMENTS"
 	maxMappedSealedBytesEnvKey  = "TREEDB_VLOG_MAX_MAPPED_SEALED_BYTES"
 	defaultAdaptiveCapEnabled   = true
@@ -55,10 +56,11 @@ const (
 )
 
 var (
-	maxDeadMappingsExplicit bool
-	adaptiveDeadMappings          = defaultAdaptiveCapEnabled
-	MaxMappedSealedSegments       = defaultMaxMappedSealed
-	MaxMappedSealedBytes    int64 = defaultMaxMappedSealedBytes
+	maxDeadMappingsExplicit   bool
+	adaptiveDeadMappings            = defaultAdaptiveCapEnabled
+	enableCurrentWritableMmap       = false
+	MaxMappedSealedSegments         = defaultMaxMappedSealed
+	MaxMappedSealedBytes      int64 = defaultMaxMappedSealedBytes
 )
 
 func init() {
@@ -74,6 +76,14 @@ func init() {
 			adaptiveDeadMappings = false
 		case "1", "true", "on", "yes":
 			adaptiveDeadMappings = true
+		}
+	}
+	if raw := strings.TrimSpace(os.Getenv(enableCurrentWritableEnvKey)); raw != "" {
+		switch strings.ToLower(raw) {
+		case "0", "false", "off", "no":
+			enableCurrentWritableMmap = false
+		case "1", "true", "on", "yes":
+			enableCurrentWritableMmap = true
 		}
 	}
 	if raw := strings.TrimSpace(os.Getenv(maxMappedSealedEnvKey)); raw != "" {
@@ -130,11 +140,14 @@ func (f *File) usesPersistentMmap() bool {
 	if f.manager == nil {
 		return true
 	}
-	return f.currentWritable.Load()
+	return enableCurrentWritableMmap && f.currentWritable.Load()
 }
 
 func (f *File) tryEnableSealedLazyMmap() bool {
 	if f == nil || f.closed.Load() || f.File == nil {
+		return false
+	}
+	if f.currentWritable.Load() && !enableCurrentWritableMmap {
 		return false
 	}
 	if f.usesPersistentMmap() {
@@ -1087,6 +1100,7 @@ func (f *File) readViaMmapAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 	// to avoid a decode-scratch allocation + extra copy.
 	if f.templateLookup == nil && k == 1 && subIndex == 0 && valStart == 0 && valEnd == rawLen {
 		oldLen := len(dst)
+		noteGrowReadAppendCurrentMmapDirectDecode(int(rawLen))
 		dst = grow(dst, int(rawLen))
 		out, err := decodeFramePayloadTo(frame, payload[prefixLen:], f.dictLookup, rawLen, dst[oldLen:oldLen])
 		if err != nil {

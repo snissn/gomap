@@ -28,6 +28,7 @@ func init() {
 		setBoolIfUnset("treedb-allow-unsafe", true, isSet, treedbAllowUnsafe)
 		setBoolIfUnset("treedb-index-optimizations", true, isSet, treedbIndexOptimizations)
 		setStringIfUnset("treedb-vlog-auto-policy", "throughput", isSet, treedbVlogAutoPolicy)
+		setStringIfUnset("treedb-vlog-compression-autotune", "medium", isSet, treedbVlogCompressionAutotune)
 
 		// Badger
 		setBoolIfUnset("badger-nosync", true, isSet, badgerNoSync)
@@ -57,6 +58,7 @@ func init() {
 		setBoolIfUnset("treedb-allow-unsafe", true, isSet, treedbAllowUnsafe)
 		setBoolIfUnset("treedb-index-optimizations", true, isSet, treedbIndexOptimizations)
 		setStringIfUnset("treedb-vlog-auto-policy", "throughput", isSet, treedbVlogAutoPolicy)
+		setStringIfUnset("treedb-vlog-compression-autotune", "medium", isSet, treedbVlogCompressionAutotune)
 
 		// Other DBs: match "fast" behavior (nosync).
 		setBoolIfUnset("badger-nosync", true, isSet, badgerNoSync)

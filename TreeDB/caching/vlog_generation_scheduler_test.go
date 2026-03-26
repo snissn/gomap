@@ -2115,11 +2115,18 @@ func TestVlogGenerationRewriteResume_CancelBackoffExpires(t *testing.T) {
 	}
 
 	db.vlogGenerationLastRewriteUnixNano.Store(0)
-	db.vlogGenerationRewriteCanceledLastNS.Store(time.Now().Add(-2 * vlogGenerationRewriteCancelBackoff).UnixNano())
-	db.maybeRunVlogGenerationMaintenance(false)
-	_, callsAfterSecond := recorder.recordedRewrite()
-	if callsAfterSecond < callsAfterFirst+1 {
-		t.Fatalf("rewrite calls after expired cancel backoff=%d want at least %d", callsAfterSecond, callsAfterFirst+1)
+	deadline := time.Now().Add(schedulerTestWait(t))
+	for {
+		db.vlogGenerationRewriteCanceledLastNS.Store(time.Now().Add(-2 * vlogGenerationRewriteCancelBackoff).UnixNano())
+		db.maybeRunVlogGenerationMaintenance(false)
+		_, callsAfterSecond := recorder.recordedRewrite()
+		if callsAfterSecond >= callsAfterFirst+1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("rewrite calls after expired cancel backoff=%d want at least %d", callsAfterSecond, callsAfterFirst+1)
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }
 
