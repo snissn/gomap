@@ -204,6 +204,33 @@ type vlogCompressionSelector struct {
 	bypassBytes       uint64
 }
 
+func (s *vlogCompressionSelector) seedDictCandidate(ratio float64) {
+	if s == nil {
+		return
+	}
+	ratio = normalizeMetricRatio(ratio)
+	// Ignore neutral/negative hints; this seed is only for clear dict wins.
+	if ratio >= 0.98 {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	m := s.metrics[vlogAutoCandidateDict]
+	if m.samples == 0 || ratio < normalizeMetricRatio(m.ratio) {
+		m.ratio = ratio
+	}
+	// Keep throughput neutral to avoid biasing policy decisions toward "size at
+	// all costs" in throughput mode.
+	if m.throughput <= 0 {
+		m.throughput = 1.0
+	}
+	if m.samples == 0 {
+		m.samples = 1
+	}
+	s.metrics[vlogAutoCandidateDict] = m
+}
+
 func (s *vlogCompressionSelector) normalizeLargePayloadCandidate(c vlogAutoCandidate, unitPayloadBytes int) vlogAutoCandidate {
 	if s == nil {
 		return c

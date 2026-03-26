@@ -89,6 +89,43 @@ func TestVlogCompressionSelector_DictSelectionByPolicy(t *testing.T) {
 	}
 }
 
+func TestVlogCompressionSelector_SeedDictCandidate_PromotesThroughputChoice(t *testing.T) {
+	s := newVlogCompressionSelector(vlogAutoThroughput, 0, 0)
+	s.dwellBytes = 0
+	s.metrics[vlogAutoCandidateOff] = vlogCandidateMetrics{ratio: 1.0, throughput: 1.0, samples: 16}
+	s.metrics[vlogAutoCandidateBlockSnappy] = vlogCandidateMetrics{ratio: 0.58, throughput: 0.95, samples: 16}
+	s.metrics[vlogAutoCandidateBlockLZ4] = vlogCandidateMetrics{ratio: 0.60, throughput: 0.96, samples: 16}
+
+	s.seedDictCandidate(0.10)
+
+	mode, _, _ := s.choose(true, 4096, 4096)
+	if mode != vlogWriteDict {
+		t.Fatalf("expected seeded dict candidate to win throughput choice, got %v", mode)
+	}
+}
+
+func TestDBSeedVlogCompressionSelectorsDictRatio(t *testing.T) {
+	db := &DB{
+		lanes: []lane{
+			{vlogCompressionSelector: newVlogCompressionSelector(vlogAutoThroughput, 0, 0)},
+			{vlogCompressionSelector: newVlogCompressionSelector(vlogAutoBalanced, 0, 0)},
+		},
+	}
+
+	db.seedVlogCompressionSelectorsDictRatio(0.08, 0.12)
+
+	for i := range db.lanes {
+		s := db.lanes[i].vlogCompressionSelector
+		m := s.metric(vlogAutoCandidateDict)
+		if m.samples == 0 {
+			t.Fatalf("lane %d: expected dict samples to be seeded", i)
+		}
+		if m.ratio > 0.12 {
+			t.Fatalf("lane %d: expected conservative seeded ratio <= 0.12, got %.3f", i, m.ratio)
+		}
+	}
+}
+
 func TestVlogCompressionSelector_DwellPreventsFlap(t *testing.T) {
 	s := newVlogCompressionSelectorWithSeed(vlogAutoBalanced, 0, 0, valuelog.BlockCodecSnappy)
 	s.dwellBytes = 4096

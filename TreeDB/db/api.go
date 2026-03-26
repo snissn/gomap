@@ -473,6 +473,11 @@ func (db *DB) Stats() map[string]string {
 	if growStats.RequestedBytesTotal > 0 {
 		stats["treedb.vlog.decode_buffer_grow.overalloc_ratio"] = fmt.Sprintf("%.6f", float64(growStats.AllocatedBytesTotal)/float64(growStats.RequestedBytesTotal))
 	}
+	readPathStats := tree.ReadPathStatsSnapshot()
+	stats["treedb.process.read_path.backend_tree.get_append_inline_hits_total"] = fmt.Sprintf("%d", readPathStats.GetAppendInlineHitsTotal)
+	stats["treedb.process.read_path.backend_tree.get_append_inline_bytes_total"] = fmt.Sprintf("%d", readPathStats.GetAppendInlineBytesTotal)
+	stats["treedb.process.read_path.backend_tree.get_append_pointer_hits_total"] = fmt.Sprintf("%d", readPathStats.GetAppendPointerHitsTotal)
+	stats["treedb.process.read_path.backend_tree.get_append_pointer_bytes_total"] = fmt.Sprintf("%d", readPathStats.GetAppendPointerBytesTotal)
 
 	if db.valueLogManager != nil {
 		vlogRemaps, vlogDeadMappings := db.valueLogManager.RemapStats()

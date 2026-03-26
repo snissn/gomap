@@ -9,6 +9,7 @@ import (
 	"github.com/snissn/compress/zstd"
 	"github.com/snissn/gomap/TreeDB/internal/compression"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
+	"github.com/snissn/gomap/TreeDB/page"
 )
 
 const (
@@ -20,6 +21,9 @@ const (
 	// bound hot-path CPU even when TrainBytes is large.
 	valueLogDictCollectMaxPerBatchRecords = 16384
 	valueLogDictCollectMinPerBatchBytes   = 32 << 10
+	// Once a dictionary has been published, large payload streams are better
+	// judged by observed frame ratios than by byte-alphabet heuristics.
+	valueLogDictClassifierLargePayloadBypassMin = 32 << 10
 )
 
 type dictStoreWriter interface {
@@ -97,6 +101,44 @@ func (db *DB) valueLogDictMinSavingsRatio() float64 {
 		return 0.05
 	}
 	return 0.02
+}
+
+func (db *DB) valueLogDictHasPublishedDict() bool {
+	return db != nil && db.valueLogDictLastAppliedDictID.Load() != 0
+}
+
+func (db *DB) valueLogDictIgnoreValueForSignal(value []byte) bool {
+	if db == nil || len(value) == 0 {
+		return false
+	}
+	// Outer-leaf pages (fixed 4KiB pages) are structurally different from large
+	// non-page payloads and can dominate dict signal/training in pointer-heavy
+	// runs. Keep them on block codecs and avoid letting them steer dict state.
+	return db.indexOuterLeavesInValueLog && len(value) == page.PageSize
+}
+
+func (db *DB) seedVlogCompressionSelectorsDictRatio(payloadRatio, totalRatio float64) {
+	if db == nil {
+		return
+	}
+	seedRatio := payloadRatio
+	if seedRatio <= 0 {
+		seedRatio = totalRatio
+	}
+	if totalRatio > seedRatio {
+		seedRatio = totalRatio
+	}
+	seedRatio = normalizeMetricRatio(seedRatio)
+	// Keep selector seeding conservative: if the active profile ratio is close
+	// to raw, defer to normal per-frame selector learning.
+	if seedRatio >= 0.98 {
+		return
+	}
+	for i := range db.lanes {
+		if s := db.lanes[i].vlogCompressionSelector; s != nil {
+			s.seedDictCandidate(seedRatio)
+		}
+	}
 }
 
 func (db *DB) armValueLogDictPauseBytes(pauseBytes uint64) {
@@ -199,6 +241,12 @@ func (db *DB) valueLogDictClassifierBypass(value []byte, probeCompression bool) 
 	if db == nil || probeCompression {
 		return false
 	}
+	if db.valueLogDictIgnoreValueForSignal(value) {
+		return false
+	}
+	if db.valueLogDictHasPublishedDict() && len(value) >= valueLogDictClassifierLargePayloadBypassMin {
+		return false
+	}
 	if attempt, _, holding := db.valueLogDictIncompressibleDecision(uint64(len(value)), false); holding && !attempt {
 		return true
 	}
@@ -230,6 +278,9 @@ func (db *DB) shouldBypassValueLogDictForRecords(records []valuelog.Record, prob
 		return false
 	}
 	rawBytes := saturatingRawPayloadBytes(records)
+	if db.valueLogDictHasPublishedDict() && rawBytes/uint64(len(records)) >= valueLogDictClassifierLargePayloadBypassMin {
+		return false
+	}
 	if attempt, _, holding := db.valueLogDictIncompressibleDecision(rawBytes, false); holding && !attempt {
 		return true
 	}
@@ -241,6 +292,9 @@ func (db *DB) shouldBypassValueLogDictForRecords(records []valuelog.Record, prob
 	incompressible := 0
 	for i := 0; i < len(records) && samples < 4; i += step {
 		v := records[i].Value
+		if db.valueLogDictIgnoreValueForSignal(v) {
+			continue
+		}
 		if len(v) < 4096 {
 			continue
 		}
@@ -317,6 +371,9 @@ func (db *DB) valueLogDictCollectSamples(records []valuelog.Record) {
 			continue
 		}
 		v := records[i].Value
+		if db.valueLogDictIgnoreValueForSignal(v) {
+			continue
+		}
 		if db.valueLogDictClassifierBypass(v, false) {
 			// One high-entropy sample is enough to stop this collect pass and keep
 			// the write path cheap on incompressible streams.
@@ -396,6 +453,9 @@ func (db *DB) valueLogDictCollectSample(value []byte) {
 		return
 	}
 	if db.valueLogDictPaused() && !db.valueLogDictShouldCollectPaused() {
+		return
+	}
+	if db.valueLogDictIgnoreValueForSignal(value) {
 		return
 	}
 	if db.valueLogDictClassifierBypass(value, false) {
@@ -549,6 +609,7 @@ func (db *DB) applyValueLogDictProfile() {
 	if !ok || profile == nil || len(profile.Dict) == 0 {
 		return
 	}
+	db.seedVlogCompressionSelectorsDictRatio(profile.PayloadRatio, profile.TotalRatio)
 	ioNsPerStoredByte := 0.0
 	if db.valueLogAutotuneOptions.Mode != valuelog.AutotuneOff {
 		ioNsPerStoredByte = db.valueLogAutotuneMetrics.snapshot().IoNsPerStoredByte

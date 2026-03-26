@@ -278,6 +278,12 @@ func TestStatsIncludesWatermarkLagDriftMetric(t *testing.T) {
 	if _, ok := stats["treedb.publish.watermark.lag_drift_bytes_per_sec"]; !ok {
 		t.Fatalf("missing treedb.publish.watermark.lag_drift_bytes_per_sec")
 	}
+	if _, ok := stats["treedb.process.read_path.backend_tree.get_append_inline_hits_total"]; !ok {
+		t.Fatalf("missing treedb.process.read_path.backend_tree.get_append_inline_hits_total")
+	}
+	if _, ok := stats["treedb.process.read_path.backend_tree.get_append_pointer_hits_total"]; !ok {
+		t.Fatalf("missing treedb.process.read_path.backend_tree.get_append_pointer_hits_total")
+	}
 }
 
 func TestIteratorOptions_SnapshotCompatibility(t *testing.T) {

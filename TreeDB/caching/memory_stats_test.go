@@ -1,8 +1,13 @@
 package caching
 
 import (
+	"os"
 	"strconv"
+	"strings"
+	"sync"
 	"testing"
+
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
 
 type mockBackendWithStats struct {
@@ -78,6 +83,28 @@ func TestProcessMemoryStatsIncludeRuntimeBreakdown(t *testing.T) {
 		"treedb.process.memory.vlog_mmap_cache_active_segments",
 		"treedb.process.memory.vlog_mmap_cache_current_segments",
 		"treedb.process.memory.vlog_mmap_cache_sealed_segments",
+		"treedb.process.memtable_residency.mutable.total.count",
+		"treedb.process.memtable_residency.mutable.total.entries",
+		"treedb.process.memtable_residency.mutable.total.size_bytes",
+		"treedb.process.memtable_residency.queue.total.count",
+		"treedb.process.memtable_residency.queue.total.entries",
+		"treedb.process.memtable_residency.queue.total.size_bytes",
+		"treedb.process.read_path.snapshot.queue_inline_hits_total",
+		"treedb.process.read_path.snapshot.queue_inline_bytes_total",
+		"treedb.process.read_path.snapshot.queue_pointer_hits_total",
+		"treedb.process.read_path.snapshot.queue_pointer_bytes_total",
+		"treedb.process.read_path.snapshot.backend_hits_total",
+		"treedb.process.read_path.snapshot.backend_bytes_total",
+		"treedb.process.batch.set.calls_total",
+		"treedb.process.batch.set.bytes_total",
+		"treedb.process.batch.set_view.calls_total",
+		"treedb.process.batch.set_view.bytes_total",
+		"treedb.process.batch.set_caller.sample_mod",
+		"treedb.process.batch.set_caller.samples_total",
+		"treedb.process.read_path.db_get_caller.sample_mod",
+		"treedb.process.read_path.db_get_caller.samples_total",
+		"treedb.process.read_path.snapshot_get_caller.sample_mod",
+		"treedb.process.read_path.snapshot_get_caller.samples_total",
 		"treedb.cache.append_only.mutable_from_lease_total",
 		"treedb.cache.append_only.mutable_from_pool_total",
 		"treedb.cache.append_only.mutable_new_alloc_total",
@@ -110,6 +137,136 @@ func TestProcessMemoryStatsIncludeRuntimeBreakdown(t *testing.T) {
 	}
 	if _, err := strconv.ParseFloat(rawGCFraction, 64); err != nil {
 		t.Fatalf("gc_cpu_fraction parse: %v", err)
+	}
+}
+
+func resetBatchSetCallerSamplingForTest() {
+	batchSetCallerSamplesTotal.Store(0)
+	batchSetCallerSampleSeq.Store(0)
+	batchSetCallerStatsMap = sync.Map{}
+}
+
+func resetReadCallerSamplingForTest() {
+	dbGetCallerSamplesTotal.Store(0)
+	dbGetCallerSampleSeq.Store(0)
+	dbGetCallerStatsMap = sync.Map{}
+	snapshotGetCallerSamplesTotal.Store(0)
+	snapshotGetCallerSampleSeq.Store(0)
+	snapshotGetCallerStatsMap = sync.Map{}
+}
+
+func batchSetCallerStatsTestWrite(t *testing.T, b *Batch) {
+	t.Helper()
+	if err := b.Set([]byte("caller-key"), []byte("caller-value")); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+}
+
+func TestBatchSetCallerStatsSampled(t *testing.T) {
+	prevMod := batchSetCallerSampleMod
+	batchSetCallerSampleMod = 1
+	t.Cleanup(func() { batchSetCallerSampleMod = prevMod })
+	resetBatchSetCallerSamplingForTest()
+
+	dir := t.TempDir()
+	db, err := Open(dir, NewMockBackend(), Options{
+		DisableWAL:  true,
+		AllowUnsafe: true,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	b := db.NewBatch()
+	batchSetCallerStatsTestWrite(t, b)
+
+	stats := db.Stats()
+	if got := mustStatInt64(t, stats, "treedb.process.batch.set_caller.samples_total"); got != 1 {
+		t.Fatalf("samples_total=%d want 1", got)
+	}
+	if got := mustStatInt64(t, stats, "treedb.process.batch.set_caller.top.0.calls_total"); got != 1 {
+		t.Fatalf("top.0.calls_total=%d want 1", got)
+	}
+	frame := stats["treedb.process.batch.set_caller.top.0.frame"]
+	if !strings.Contains(frame, "batchSetCallerStatsTestWrite") {
+		t.Fatalf("top.0.frame=%q want caller helper", frame)
+	}
+}
+
+func dbGetCallerStatsTestRead(t *testing.T, db *DB, key []byte) {
+	t.Helper()
+	if _, err := db.Get(key); err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+}
+
+func snapshotGetCallerStatsTestRead(t *testing.T, snap *Snapshot, key []byte) {
+	t.Helper()
+	if _, err := snap.Get(key); err != nil {
+		t.Fatalf("Snapshot.Get: %v", err)
+	}
+}
+
+func TestReadCallerStatsSampled(t *testing.T) {
+	prevDBMod := dbGetCallerSampleMod
+	prevSnapshotMod := snapshotGetCallerSampleMod
+	dbGetCallerSampleMod = 1
+	snapshotGetCallerSampleMod = 1
+	t.Cleanup(func() {
+		dbGetCallerSampleMod = prevDBMod
+		snapshotGetCallerSampleMod = prevSnapshotMod
+	})
+	resetReadCallerSamplingForTest()
+
+	dir := t.TempDir()
+	backendDir := dir + "/backend"
+	if err := os.MkdirAll(backendDir, 0o755); err != nil {
+		t.Fatalf("mkdir backend dir: %v", err)
+	}
+	backend, err := backenddb.Open(backenddb.Options{Dir: backendDir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+
+	db, err := Open(dir, backend, Options{
+		DisableWAL:  true,
+		AllowUnsafe: true,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	if err := db.Set([]byte("read-caller-key"), []byte("read-caller-value")); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+
+	dbGetCallerStatsTestRead(t, db, []byte("read-caller-key"))
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		t.Fatalf("AcquireSnapshot: nil")
+	}
+	defer func() { _ = snap.Close() }()
+	snapshotGetCallerStatsTestRead(t, snap, []byte("read-caller-key"))
+
+	stats := db.Stats()
+	if got := mustStatInt64(t, stats, "treedb.process.read_path.db_get_caller.samples_total"); got != 1 {
+		t.Fatalf("db_get samples_total=%d want 1", got)
+	}
+	if got := mustStatInt64(t, stats, "treedb.process.read_path.snapshot_get_caller.samples_total"); got != 1 {
+		t.Fatalf("snapshot_get samples_total=%d want 1", got)
+	}
+	dbFrame := stats["treedb.process.read_path.db_get_caller.top.0.frame"]
+	if !strings.Contains(dbFrame, "dbGetCallerStatsTestRead") {
+		t.Fatalf("db_get top.0.frame=%q want caller helper", dbFrame)
+	}
+	snapshotFrame := stats["treedb.process.read_path.snapshot_get_caller.top.0.frame"]
+	if !strings.Contains(snapshotFrame, "snapshotGetCallerStatsTestRead") {
+		t.Fatalf("snapshot_get top.0.frame=%q want caller helper", snapshotFrame)
 	}
 }
 

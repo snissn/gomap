@@ -147,6 +147,75 @@ func TestValueLogDictClassifierBypass_ArmsIncompressibleHold(t *testing.T) {
 	}
 }
 
+func TestValueLogDictClassifierBypass_IgnoresOuterLeafPages(t *testing.T) {
+	db := &DB{
+		indexOuterLeavesInValueLog:          true,
+		valueLogDictIncompressibleHoldBytes: 256 << 10,
+		valueLogDictMetricsPauseBytes:       1 << 20,
+	}
+	pageValue := make([]byte, 4096)
+	for i := range pageValue {
+		pageValue[i] = byte(i)
+	}
+	if db.valueLogDictClassifierBypass(pageValue, false) {
+		t.Fatalf("expected outer-leaf page value to be ignored by classifier bypass")
+	}
+	if hold := db.valueLogDictIncompressibleHoldRemaining.Load(); hold != 0 {
+		t.Fatalf("expected no incompressible hold from outer-leaf page sample, hold=%d", hold)
+	}
+}
+
+func TestValueLogDictCollectSamples_IgnoresOuterLeafPages(t *testing.T) {
+	tr := newValueLogDictClassifierTrainer(t)
+	db := &DB{
+		indexOuterLeavesInValueLog:           true,
+		valueLogDictTrainer:                  tr,
+		valueLogDictMetricsPauseBytes:        1 << 20,
+		valueLogDictProbeBytes:               64 << 10,
+		valueLogDictPausedSampleStride:       256,
+		valueLogDictIncompressibleProbeBytes: 64 << 10,
+	}
+	records := compressibleValueLogRecords(512, 4096)
+	db.valueLogDictCollectSamples(records)
+	stats := tr.Stats()
+	if stats.Enqueued != 0 {
+		t.Fatalf("expected no trainer enqueue for outer-leaf page samples, got=%d", stats.Enqueued)
+	}
+}
+
+func TestValueLogDictClassifierBypass_AllowsLargeValuesAfterDictPublish(t *testing.T) {
+	db := &DB{
+		valueLogDictIncompressibleHoldBytes:  256 << 10,
+		valueLogDictIncompressibleProbeBytes: 64 << 10,
+		valueLogDictMetricsPauseBytes:        1 << 20,
+	}
+	db.valueLogDictLastAppliedDictID.Store(7)
+
+	highEntropy := make([]byte, 43<<10)
+	for i := range highEntropy {
+		highEntropy[i] = byte(i)
+	}
+	if db.valueLogDictClassifierBypass(highEntropy, false) {
+		t.Fatalf("expected large values to skip classifier bypass after dict publish")
+	}
+	if hold := db.valueLogDictIncompressibleHoldRemaining.Load(); hold != 0 {
+		t.Fatalf("expected incompressible hold to remain inactive for large value, hold=%d", hold)
+	}
+}
+
+func TestShouldBypassValueLogDictForRecords_AllowsLargeValuesAfterDictPublish(t *testing.T) {
+	db := &DB{
+		valueLogDictIncompressibleHoldBytes:  256 << 10,
+		valueLogDictIncompressibleProbeBytes: 64 << 10,
+		valueLogDictMetricsPauseBytes:        1 << 20,
+	}
+	db.valueLogDictLastAppliedDictID.Store(9)
+	records := highEntropyValueLogRecords(8, 43<<10)
+	if db.shouldBypassValueLogDictForRecords(records, false) {
+		t.Fatalf("expected large record batches to bypass classifier gating after dict publish")
+	}
+}
+
 func TestValueLogDictShouldAttemptCompression_IncompressibleHoldProbes(t *testing.T) {
 	db := &DB{
 		valueLogDictIncompressibleHoldBytes:  256 << 10,

@@ -1,6 +1,18 @@
 package caching
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
+
+func containsAll(s string, subs ...string) bool {
+	for _, sub := range subs {
+		if !strings.Contains(s, sub) {
+			return false
+		}
+	}
+	return true
+}
 
 func TestSelectTreeDBExpvarStatsFiltersAndCoerces(t *testing.T) {
 	stats := map[string]string{
@@ -14,6 +26,10 @@ func TestSelectTreeDBExpvarStatsFiltersAndCoerces(t *testing.T) {
 		"treedb.process.memory.pool_pressure_level":                     "critical",
 		"treedb.cache.batch_arena.pool_bytes_estimate":                  "65536",
 		"treedb.process.batch_arena.retained_bytes_global_max_estimate": "1048576",
+		"treedb.process.memtable_residency.queue.total.size_bytes":      "2048",
+		"treedb.process.read_path.snapshot.backend_bytes_total":         "8192",
+		"treedb.process.batch.set.bytes_total":                          "4096",
+		"treedb.process.batch.set_caller.top.0.frame":                   "snissn/iavl.batchSetOwned <= cosmossdk.io/store/rootmulti.(*Store).Restore",
 		"treedb.process.flush_merge.applied_ops_total":                  "12",
 		"treedb.cache.backpressure_mode":                                "adaptive",
 		"treedb.cache.entry_slice.trim_runs_total":                      "77",
@@ -54,6 +70,18 @@ func TestSelectTreeDBExpvarStatsFiltersAndCoerces(t *testing.T) {
 	}
 	if v, ok := got["treedb.process.batch_arena.retained_bytes_global_max_estimate"].(int64); !ok || v != 1048576 {
 		t.Fatalf("batch_arena.retained_bytes_global_max_estimate=%T(%v) want int64(1048576)", got["treedb.process.batch_arena.retained_bytes_global_max_estimate"], got["treedb.process.batch_arena.retained_bytes_global_max_estimate"])
+	}
+	if v, ok := got["treedb.process.memtable_residency.queue.total.size_bytes"].(int64); !ok || v != 2048 {
+		t.Fatalf("memtable_residency.queue.total.size_bytes=%T(%v) want int64(2048)", got["treedb.process.memtable_residency.queue.total.size_bytes"], got["treedb.process.memtable_residency.queue.total.size_bytes"])
+	}
+	if v, ok := got["treedb.process.read_path.snapshot.backend_bytes_total"].(int64); !ok || v != 8192 {
+		t.Fatalf("read_path.snapshot.backend_bytes_total=%T(%v) want int64(8192)", got["treedb.process.read_path.snapshot.backend_bytes_total"], got["treedb.process.read_path.snapshot.backend_bytes_total"])
+	}
+	if v, ok := got["treedb.process.batch.set.bytes_total"].(int64); !ok || v != 4096 {
+		t.Fatalf("batch.set.bytes_total=%T(%v) want int64(4096)", got["treedb.process.batch.set.bytes_total"], got["treedb.process.batch.set.bytes_total"])
+	}
+	if v, ok := got["treedb.process.batch.set_caller.top.0.frame"].(string); !ok || !containsAll(v, "iavl.batchSetOwned", "rootmulti") {
+		t.Fatalf("batch.set_caller.top.0.frame=%T(%v) want caller string", got["treedb.process.batch.set_caller.top.0.frame"], got["treedb.process.batch.set_caller.top.0.frame"])
 	}
 	if v, ok := got["treedb.process.flush_merge.applied_ops_total"].(int64); !ok || v != 12 {
 		t.Fatalf("flush_merge.applied_ops_total=%T(%v) want int64(12)", got["treedb.process.flush_merge.applied_ops_total"], got["treedb.process.flush_merge.applied_ops_total"])

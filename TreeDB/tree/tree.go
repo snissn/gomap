@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -22,6 +23,27 @@ var leafRefPageScratchPool = sync.Pool{
 	New: func() any {
 		return &leafRefPageScratch{buf: make([]byte, 0, page.PageSize)}
 	},
+}
+
+type ReadPathStats struct {
+	GetAppendInlineHitsTotal   uint64
+	GetAppendInlineBytesTotal  uint64
+	GetAppendPointerHitsTotal  uint64
+	GetAppendPointerBytesTotal uint64
+}
+
+var treeGetAppendInlineHitsTotal atomic.Uint64
+var treeGetAppendInlineBytesTotal atomic.Uint64
+var treeGetAppendPointerHitsTotal atomic.Uint64
+var treeGetAppendPointerBytesTotal atomic.Uint64
+
+func ReadPathStatsSnapshot() ReadPathStats {
+	return ReadPathStats{
+		GetAppendInlineHitsTotal:   treeGetAppendInlineHitsTotal.Load(),
+		GetAppendInlineBytesTotal:  treeGetAppendInlineBytesTotal.Load(),
+		GetAppendPointerHitsTotal:  treeGetAppendPointerHitsTotal.Load(),
+		GetAppendPointerBytesTotal: treeGetAppendPointerBytesTotal.Load(),
+	}
 }
 
 func getLeafRefPageScratch() *leafRefPageScratch {
@@ -513,12 +535,17 @@ func (t *Tree) GetAppend(key, dst []byte) ([]byte, error) {
 		return dst, err
 	}
 	if appendedDirect {
+		treeGetAppendInlineHitsTotal.Add(1)
+		if n := len(val) - len(dst); n > 0 {
+			treeGetAppendInlineBytesTotal.Add(uint64(n))
+		}
 		return val, nil
 	}
 	if flags&node.FlagTombstone != 0 {
 		return dst, ErrKeyNotFound
 	}
 	if flags&node.FlagPointer != 0 {
+		treeGetAppendPointerHitsTotal.Add(1)
 		if t.slabKeyAppender != nil {
 			oldLen := len(dst)
 			tail, err := t.slabKeyAppender.ReadUnsafeAppendForKey(ptr, key, dst[oldLen:oldLen])
@@ -526,6 +553,9 @@ func (t *Tree) GetAppend(key, dst []byte) ([]byte, error) {
 				return dst, err
 			}
 			if oldLen == 0 {
+				if len(tail) > 0 {
+					treeGetAppendPointerBytesTotal.Add(uint64(len(tail)))
+				}
 				return tail, nil
 			}
 			if len(tail) == 0 {
@@ -534,9 +564,11 @@ func (t *Tree) GetAppend(key, dst []byte) ([]byte, error) {
 			if cap(dst) > oldLen {
 				base := dst[:cap(dst):cap(dst)]
 				if &tail[0] == &base[oldLen] {
+					treeGetAppendPointerBytesTotal.Add(uint64(len(tail)))
 					return dst[:oldLen+len(tail)], nil
 				}
 			}
+			treeGetAppendPointerBytesTotal.Add(uint64(len(tail)))
 			return append(dst[:oldLen], tail...), nil
 		}
 		if t.slabKeyReader != nil {
@@ -547,6 +579,7 @@ func (t *Tree) GetAppend(key, dst []byte) ([]byte, error) {
 			if out == nil {
 				return dst, nil
 			}
+			treeGetAppendPointerBytesTotal.Add(uint64(len(out)))
 			return append(dst, out...), nil
 		}
 		if t.slabAppender != nil {
@@ -556,6 +589,9 @@ func (t *Tree) GetAppend(key, dst []byte) ([]byte, error) {
 				return dst, err
 			}
 			if oldLen == 0 {
+				if len(tail) > 0 {
+					treeGetAppendPointerBytesTotal.Add(uint64(len(tail)))
+				}
 				return tail, nil
 			}
 			if len(tail) == 0 {
@@ -564,9 +600,11 @@ func (t *Tree) GetAppend(key, dst []byte) ([]byte, error) {
 			if cap(dst) > oldLen {
 				base := dst[:cap(dst):cap(dst)]
 				if &tail[0] == &base[oldLen] {
+					treeGetAppendPointerBytesTotal.Add(uint64(len(tail)))
 					return dst[:oldLen+len(tail)], nil
 				}
 			}
+			treeGetAppendPointerBytesTotal.Add(uint64(len(tail)))
 			return append(dst[:oldLen], tail...), nil
 		}
 		out, err := t.slabReader.ReadUnsafe(ptr)
@@ -576,10 +614,16 @@ func (t *Tree) GetAppend(key, dst []byte) ([]byte, error) {
 		if out == nil {
 			return dst, nil
 		}
+		treeGetAppendPointerBytesTotal.Add(uint64(len(out)))
 		return append(dst, out...), nil
 	}
 	if val == nil {
+		treeGetAppendInlineHitsTotal.Add(1)
 		return dst, nil
+	}
+	treeGetAppendInlineHitsTotal.Add(1)
+	if len(val) > 0 {
+		treeGetAppendInlineBytesTotal.Add(uint64(len(val)))
 	}
 	return append(dst, val...), nil
 }

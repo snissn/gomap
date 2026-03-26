@@ -91,6 +91,27 @@ var batchArenaBorrowPreflightBlockedTotal atomic.Uint64
 var batchArenaBorrowPreflightBlockedBytesTotal atomic.Uint64
 var batchArenaStealSuppressedDeferredTotal atomic.Uint64
 var batchArenaStealSuppressedDeferredEntriesTotal atomic.Uint64
+var batchArenaCopyKeyCallsTotal atomic.Uint64
+var batchArenaCopyKeyBytesTotal atomic.Uint64
+var batchArenaCopyValueCallsTotal atomic.Uint64
+var batchArenaCopyValueBytesTotal atomic.Uint64
+var batchArenaCopyKeyValueCallsTotal atomic.Uint64
+var batchArenaCopyKeyValueBytesTotal atomic.Uint64
+var batchArenaCopyPtrValueCallsTotal atomic.Uint64
+var batchArenaCopyPtrValueBytesTotal atomic.Uint64
+var batchSetCallsTotal atomic.Uint64
+var batchSetBytesTotal atomic.Uint64
+var batchSetViewCallsTotal atomic.Uint64
+var batchSetViewBytesTotal atomic.Uint64
+var batchSetCallerSamplesTotal atomic.Uint64
+var batchSetCallerSampleSeq atomic.Uint64
+var batchSetCallerStatsMap sync.Map
+var dbGetCallerSamplesTotal atomic.Uint64
+var dbGetCallerSampleSeq atomic.Uint64
+var dbGetCallerStatsMap sync.Map
+var snapshotGetCallerSamplesTotal atomic.Uint64
+var snapshotGetCallerSampleSeq atomic.Uint64
+var snapshotGetCallerStatsMap sync.Map
 var poolPressureState atomic.Value
 var poolPressureMu sync.Mutex
 var poolPressureLastLeaseTrimUnixNano atomic.Int64
@@ -101,16 +122,28 @@ var entrySlicePoolTrimRunsTotal atomic.Uint64
 var entrySlicePoolTrimDropBytesTotal atomic.Uint64
 var entrySliceLeaseHitTotal atomic.Uint64
 var entrySliceLeaseHitBytesTotal atomic.Uint64
+var entrySliceLeaseHitRequestedBytesTotal atomic.Uint64
+var entrySliceLeaseHitExcessBytesTotal atomic.Uint64
 var entrySlicePoolHitTotal atomic.Uint64
 var entrySlicePoolHitBytesTotal atomic.Uint64
+var entrySlicePoolHitRequestedBytesTotal atomic.Uint64
+var entrySlicePoolHitExcessBytesTotal atomic.Uint64
 var entrySliceFreshAllocTotal atomic.Uint64
 var entrySliceFreshAllocBytesTotal atomic.Uint64
+var entrySliceFreshAllocRequestedBytesTotal atomic.Uint64
+var entrySliceFreshAllocExcessBytesTotal atomic.Uint64
 var entrySlicePutLeaseTotal atomic.Uint64
 var entrySlicePutLeaseBytesTotal atomic.Uint64
 var entrySlicePutPoolTotal atomic.Uint64
 var entrySlicePutPoolBytesTotal atomic.Uint64
 var entrySlicePutDropBudgetTotal atomic.Uint64
 var entrySlicePutDropBudgetBytesTotal atomic.Uint64
+var snapshotReadQueueInlineHitsTotal atomic.Uint64
+var snapshotReadQueueInlineBytesTotal atomic.Uint64
+var snapshotReadQueuePointerHitsTotal atomic.Uint64
+var snapshotReadQueuePointerBytesTotal atomic.Uint64
+var snapshotReadBackendHitsTotal atomic.Uint64
+var snapshotReadBackendBytesTotal atomic.Uint64
 var flushMergeShadowedOpsTotal atomic.Uint64
 var flushMergeAppliedOpsTotal atomic.Uint64
 var flushMergeDeferredShadowedOpsTotal atomic.Uint64
@@ -134,6 +167,9 @@ var poolPressureReadMemStats = runtime.ReadMemStats
 var poolPressureMemoryLimit = func() int64 {
 	return debug.SetMemoryLimit(-1)
 }
+var batchSetCallerSampleMod = loadUintEnvDefault("TREEDB_DEBUG_BATCH_SET_CALLER_SAMPLE_MOD", 0)
+var dbGetCallerSampleMod = loadUintEnvDefault("TREEDB_DEBUG_DB_GET_CALLER_SAMPLE_MOD", 0)
+var snapshotGetCallerSampleMod = loadUintEnvDefault("TREEDB_DEBUG_SNAPSHOT_GET_CALLER_SAMPLE_MOD", 0)
 
 var runtimeNumGC = func() uint64 {
 	samples := []metrics.Sample{{Name: "/gc/cycles/total:gc-cycles"}}
@@ -174,6 +210,31 @@ type poolPressureSnapshot struct {
 	totalSysBytes      uint64
 	nonHeapSysBytes    uint64
 	memoryLimitBytes   int64
+}
+
+type memtableResidencySummary struct {
+	count int
+	len   int
+	size  int64
+}
+
+type memtableResidencyBreakdown struct {
+	total      memtableResidencySummary
+	skiplist   memtableResidencySummary
+	hashSorted memtableResidencySummary
+	btree      memtableResidencySummary
+	appendOnly memtableResidencySummary
+}
+
+type batchSetCallerSampleStats struct {
+	calls atomic.Uint64
+	bytes atomic.Uint64
+}
+
+type batchSetCallerSampleSnapshot struct {
+	frame string
+	calls uint64
+	bytes uint64
 }
 
 const (
@@ -245,6 +306,148 @@ func computeBatchArenaPoolBudgetBytesForProcs(procs int) int64 {
 		budget = maxBudgetBytes
 	}
 	return budget
+}
+
+func loadUintEnvDefault(key string, def uint64) uint64 {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return def
+	}
+	v, err := strconv.ParseUint(raw, 10, 64)
+	if err != nil {
+		return def
+	}
+	return v
+}
+
+func maybeRecordBatchSetCallerSample(bytes int) {
+	maybeRecordCallerSample(batchSetCallerSampleMod, &batchSetCallerSampleSeq, &batchSetCallerSamplesTotal, &batchSetCallerStatsMap, bytes)
+}
+
+func maybeRecordDBGetCallerSample(bytes int) {
+	maybeRecordCallerSample(dbGetCallerSampleMod, &dbGetCallerSampleSeq, &dbGetCallerSamplesTotal, &dbGetCallerStatsMap, bytes)
+}
+
+func maybeRecordSnapshotGetCallerSample(bytes int) {
+	maybeRecordCallerSample(snapshotGetCallerSampleMod, &snapshotGetCallerSampleSeq, &snapshotGetCallerSamplesTotal, &snapshotGetCallerStatsMap, bytes)
+}
+
+func maybeRecordCallerSample(mod uint64, seqCounter, totalCounter *atomic.Uint64, statsMap *sync.Map, bytes int) {
+	if mod == 0 {
+		return
+	}
+	seq := seqCounter.Add(1)
+	if mod > 1 && seq%mod != 0 {
+		return
+	}
+	frame := captureCallerChain()
+	statsAny, _ := statsMap.LoadOrStore(frame, &batchSetCallerSampleStats{})
+	stats := statsAny.(*batchSetCallerSampleStats)
+	stats.calls.Add(1)
+	stats.bytes.Add(uint64(bytes))
+	totalCounter.Add(1)
+}
+
+func captureCallerChain() string {
+	var pcs [12]uintptr
+	n := runtime.Callers(4, pcs[:])
+	if n == 0 {
+		return "unknown"
+	}
+	frames := runtime.CallersFrames(pcs[:n])
+	parts := make([]string, 0, 4)
+	for len(parts) < 4 {
+		frame, more := frames.Next()
+		fn := compactCallerFunc(frame.Function)
+		if fn != "" && !skipCallerFunc(fn) {
+			parts = append(parts, fn)
+		}
+		if !more {
+			break
+		}
+	}
+	if len(parts) == 0 {
+		return "unknown"
+	}
+	return strings.Join(parts, " <= ")
+}
+
+func skipCallerFunc(fn string) bool {
+	switch {
+	case strings.HasPrefix(fn, "runtime."),
+		strings.HasPrefix(fn, "runtime/"),
+		strings.HasPrefix(fn, "testing."),
+		strings.Contains(fn, ".tRunner"),
+		strings.Contains(fn, "maybeRecordCallerSample"),
+		strings.Contains(fn, "captureCallerChain"),
+		strings.Contains(fn, "gomap/TreeDB/caching.(*DB).Get"),
+		strings.Contains(fn, "gomap/TreeDB/caching.(*Snapshot).Get"),
+		strings.Contains(fn, "gomap/TreeDB.(*DB).Get"),
+		strings.Contains(fn, "gomap/TreeDB.(*DB).GetUnsafe"),
+		strings.Contains(fn, "gomap/TreeDB/db.(*DB).Get"),
+		strings.Contains(fn, "gomap/TreeDB/db.(*DB).GetUnsafe"),
+		strings.Contains(fn, "gomap/TreeDB/db.(*Snapshot).Get"),
+		strings.Contains(fn, "gomap/kvstore/adapters/treedb.(*DB).GetUnsafe"):
+		return true
+	default:
+		return false
+	}
+}
+
+func compactCallerFunc(fn string) string {
+	if fn == "" {
+		return ""
+	}
+	for _, prefix := range [...]string{
+		"github.com/snissn/",
+		"github.com/cosmos/",
+		"github.com/cometbft/",
+	} {
+		fn = strings.TrimPrefix(fn, prefix)
+	}
+	return fn
+}
+
+func callerSampleSnapshots(statsMap *sync.Map, limit int) []batchSetCallerSampleSnapshot {
+	snaps := make([]batchSetCallerSampleSnapshot, 0, 16)
+	statsMap.Range(func(key, value any) bool {
+		frame, _ := key.(string)
+		stats, _ := value.(*batchSetCallerSampleStats)
+		if frame == "" || stats == nil {
+			return true
+		}
+		snaps = append(snaps, batchSetCallerSampleSnapshot{
+			frame: frame,
+			calls: stats.calls.Load(),
+			bytes: stats.bytes.Load(),
+		})
+		return true
+	})
+	sort.Slice(snaps, func(i, j int) bool {
+		if snaps[i].bytes != snaps[j].bytes {
+			return snaps[i].bytes > snaps[j].bytes
+		}
+		if snaps[i].calls != snaps[j].calls {
+			return snaps[i].calls > snaps[j].calls
+		}
+		return snaps[i].frame < snaps[j].frame
+	})
+	if limit > 0 && len(snaps) > limit {
+		snaps = snaps[:limit]
+	}
+	return snaps
+}
+
+func batchSetCallerSnapshots(limit int) []batchSetCallerSampleSnapshot {
+	return callerSampleSnapshots(&batchSetCallerStatsMap, limit)
+}
+
+func dbGetCallerSnapshots(limit int) []batchSetCallerSampleSnapshot {
+	return callerSampleSnapshots(&dbGetCallerStatsMap, limit)
+}
+
+func snapshotGetCallerSnapshots(limit int) []batchSetCallerSampleSnapshot {
+	return callerSampleSnapshots(&snapshotGetCallerStatsMap, limit)
 }
 
 func classifyPoolPressureLevel(usedBytes uint64, memoryLimitBytes int64) poolPressureLevel {
@@ -4491,6 +4694,12 @@ type DB struct {
 	batchArenaAllocClassBytes     atomic.Uint64
 	batchArenaUsedBytes           atomic.Uint64
 	batchArenaTailWasteBytes      atomic.Uint64
+	batchArenaMainAllocClassBytes atomic.Uint64
+	batchArenaMainUsedBytes       atomic.Uint64
+	batchArenaMainTailWasteBytes  atomic.Uint64
+	batchArenaPtrAllocClassBytes  atomic.Uint64
+	batchArenaPtrUsedBytes        atomic.Uint64
+	batchArenaPtrTailWasteBytes   atomic.Uint64
 	batchArenaTailCompactRuns     atomic.Uint64
 	batchArenaTailCompactCopied   atomic.Uint64
 	batchArenaTailCompactSaved    atomic.Uint64
@@ -5776,6 +5985,54 @@ func adaptiveDecisionReasonString(v uint32) string {
 	}
 }
 
+func addMemtableResidencySummary(dst *memtableResidencySummary, mt memtable.Table) {
+	if dst == nil || mt == nil {
+		return
+	}
+	dst.count++
+	dst.len += mt.Len()
+	dst.size += mt.Size()
+}
+
+func summarizeMemtableResidency(tables []memtable.Table) memtableResidencyBreakdown {
+	var out memtableResidencyBreakdown
+	for _, mt := range tables {
+		if mt == nil {
+			continue
+		}
+		addMemtableResidencySummary(&out.total, mt)
+		switch mt.(type) {
+		case *memtable.Memtable:
+			addMemtableResidencySummary(&out.skiplist, mt)
+		case *memtable.HashSorted:
+			addMemtableResidencySummary(&out.hashSorted, mt)
+		case *memtable.BTree:
+			addMemtableResidencySummary(&out.btree, mt)
+		case *memtable.AppendOnly:
+			addMemtableResidencySummary(&out.appendOnly, mt)
+		default:
+			addMemtableResidencySummary(&out.skiplist, mt)
+		}
+	}
+	return out
+}
+
+func addMemtableResidencyStats(stats map[string]string, prefix string, summary memtableResidencyBreakdown) {
+	if stats == nil || prefix == "" {
+		return
+	}
+	add := func(name string, s memtableResidencySummary) {
+		stats[prefix+"."+name+".count"] = fmt.Sprintf("%d", s.count)
+		stats[prefix+"."+name+".entries"] = fmt.Sprintf("%d", s.len)
+		stats[prefix+"."+name+".size_bytes"] = fmt.Sprintf("%d", s.size)
+	}
+	add("total", summary.total)
+	add("skiplist", summary.skiplist)
+	add("hash_sorted", summary.hashSorted)
+	add("btree", summary.btree)
+	add("append_only", summary.appendOnly)
+}
+
 func (r *keyRange) add(key []byte) {
 	if key == nil {
 		return
@@ -6480,6 +6737,16 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		// default so dict compression can become active without additional config.
 		// Callers may explicitly disable training via TrainBytes < 0.
 		valueLogDictTrain.TrainBytes = compression.DefaultTrainBytes
+	}
+	if valueLogDictTrain.TrainBytes > 0 &&
+		valueLogDictTrain.MinRecords == 0 &&
+		opts.ForceValueLogPointers &&
+		valueLogCompressionMode == vlogCompressionAuto &&
+		valueLogAutoPolicy == vlogAutoThroughput {
+		// Pointer-heavy ingest streams are often front-loaded with the largest
+		// value-log pressure. Lower the initial profile record floor so the first
+		// dictionary can publish earlier and influence more of the run.
+		valueLogDictTrain.MinRecords = 8
 	}
 	valueLogDictMaxK := opts.ValueLogDictMaxK
 	if valueLogDictMaxK <= 0 {
@@ -7665,6 +7932,13 @@ var vlogAckPool = sync.Pool{
 	New: func() any { return &vlogAck{} },
 }
 
+type batchArenaKind uint8
+
+const (
+	batchArenaKindMain batchArenaKind = iota + 1
+	batchArenaKindPtr
+)
+
 type vlogDictPrepareTask struct {
 	fi             int
 	dictID         uint64
@@ -7899,6 +8173,7 @@ func getEntrySlice(capacity int) []batch.Entry {
 	if capacity < 0 {
 		capacity = 0
 	}
+	requestedBytes := uint64(capacity) * uint64(entrySliceEntrySizeBytes)
 	idx, classCap, ok := entrySliceLeaseClassForLen(capacity)
 	if !ok {
 		return make([]batch.Entry, 0, capacity)
@@ -7921,6 +8196,10 @@ func getEntrySlice(capacity int) []batch.Entry {
 			if cap(s) >= capacity {
 				entrySliceLeaseHitTotal.Add(1)
 				entrySliceLeaseHitBytesTotal.Add(uint64(leaseBytes))
+				entrySliceLeaseHitRequestedBytesTotal.Add(requestedBytes)
+				if granted := uint64(leaseBytes); granted > requestedBytes {
+					entrySliceLeaseHitExcessBytesTotal.Add(granted - requestedBytes)
+				}
 				return s[:0]
 			}
 			if capIdx, ok := entrySliceLeaseClassForCap(cap(s)); ok {
@@ -7935,6 +8214,10 @@ func getEntrySlice(capacity int) []batch.Entry {
 			}
 			entrySliceFreshAllocTotal.Add(1)
 			entrySliceFreshAllocBytesTotal.Add(uint64(classCap) * uint64(entrySliceEntrySizeBytes))
+			entrySliceFreshAllocRequestedBytesTotal.Add(requestedBytes)
+			if granted := uint64(classCap) * uint64(entrySliceEntrySizeBytes); granted > requestedBytes {
+				entrySliceFreshAllocExcessBytesTotal.Add(granted - requestedBytes)
+			}
 			return make([]batch.Entry, 0, classCap)
 		}
 	}
@@ -7950,6 +8233,10 @@ func getEntrySlice(capacity int) []batch.Entry {
 			if cap(s) >= capacity && cap(s) <= maxReuseCap {
 				entrySlicePoolHitTotal.Add(1)
 				entrySlicePoolHitBytesTotal.Add(uint64(poolBytes))
+				entrySlicePoolHitRequestedBytesTotal.Add(requestedBytes)
+				if granted := uint64(poolBytes); granted > requestedBytes {
+					entrySlicePoolHitExcessBytesTotal.Add(granted - requestedBytes)
+				}
 				return s[:0]
 			}
 		}
@@ -7957,6 +8244,10 @@ func getEntrySlice(capacity int) []batch.Entry {
 	maybeResetEntrySlicePoolBytesAfterGC()
 	entrySliceFreshAllocTotal.Add(1)
 	entrySliceFreshAllocBytesTotal.Add(uint64(classCap) * uint64(entrySliceEntrySizeBytes))
+	entrySliceFreshAllocRequestedBytesTotal.Add(requestedBytes)
+	if granted := uint64(classCap) * uint64(entrySliceEntrySizeBytes); granted > requestedBytes {
+		entrySliceFreshAllocExcessBytesTotal.Add(granted - requestedBytes)
+	}
 	return make([]batch.Entry, 0, classCap)
 }
 
@@ -17874,7 +18165,11 @@ func (db *DB) Get(key []byte) ([]byte, error) {
 		if err := db.flushValueLogForBackendRead(); err != nil {
 			return nil, err
 		}
-		return db.backend.Get(key)
+		val, err := db.backend.Get(key)
+		if err == nil && val != nil {
+			maybeRecordDBGetCallerSample(len(val))
+		}
+		return val, err
 	}
 	val, found, err := db.getMemtable(key)
 	if err != nil {
@@ -17891,7 +18186,11 @@ func (db *DB) Get(key []byte) ([]byte, error) {
 	if err := db.flushValueLogForBackendRead(); err != nil {
 		return nil, err
 	}
-	return db.backend.Get(key)
+	val, err = db.backend.Get(key)
+	if err == nil && val != nil {
+		maybeRecordDBGetCallerSample(len(val))
+	}
+	return val, err
 }
 
 // GetMany returns safe copies of values for keys.
@@ -18087,6 +18386,25 @@ func (db *DB) Stats() map[string]string {
 		}
 	}
 	db.mu.RUnlock()
+	var mutableTables []memtable.Table
+	var queueTables []memtable.Table
+	if view := db.retainMemtableView(); view != nil {
+		mutableTables = append(mutableTables, view.mutables...)
+		queueTables = append(queueTables, view.queue...)
+		db.releaseMemtableView(view)
+	} else {
+		db.mu.RLock()
+		if len(db.mutableShards) > 0 {
+			mutableTables = make([]memtable.Table, len(db.mutableShards))
+			for i := range db.mutableShards {
+				mutableTables[i] = db.mutableShards[i].mem
+			}
+		}
+		queueTables = append(queueTables, db.queue...)
+		db.mu.RUnlock()
+	}
+	mutableResidency := summarizeMemtableResidency(mutableTables)
+	queueResidency := summarizeMemtableResidency(queueTables)
 	var walCurrentBytes int64
 	var walClosedBytes int64
 	var queueLagBuckets [vlogQueueLagBucketCount]uint64
@@ -18253,6 +18571,10 @@ func (db *DB) Stats() map[string]string {
 	} else {
 		stats["treedb.cache.memtable_mode_config"] = "fixed"
 	}
+	addMemtableResidencyStats(stats, "treedb.cache.memtable_residency.mutable", mutableResidency)
+	addMemtableResidencyStats(stats, "treedb.cache.memtable_residency.queue", queueResidency)
+	addMemtableResidencyStats(stats, "treedb.process.memtable_residency.mutable", mutableResidency)
+	addMemtableResidencyStats(stats, "treedb.process.memtable_residency.queue", queueResidency)
 	memWrites := db.memtableStats.writes.Load()
 	memSeqWrites := db.memtableStats.seqWrites.Load()
 	memOverwriteWrites := db.memtableStats.overwriteWrites.Load()
@@ -18350,6 +18672,12 @@ func (db *DB) Stats() map[string]string {
 	arenaAllocClassBytes := db.batchArenaAllocClassBytes.Load()
 	arenaUsedBytes := db.batchArenaUsedBytes.Load()
 	arenaTailWasteBytes := db.batchArenaTailWasteBytes.Load()
+	arenaMainAllocClassBytes := db.batchArenaMainAllocClassBytes.Load()
+	arenaMainUsedBytes := db.batchArenaMainUsedBytes.Load()
+	arenaMainTailWasteBytes := db.batchArenaMainTailWasteBytes.Load()
+	arenaPtrAllocClassBytes := db.batchArenaPtrAllocClassBytes.Load()
+	arenaPtrUsedBytes := db.batchArenaPtrUsedBytes.Load()
+	arenaPtrTailWasteBytes := db.batchArenaPtrTailWasteBytes.Load()
 	arenaTailCompactRuns := db.batchArenaTailCompactRuns.Load()
 	arenaTailCompactCopied := db.batchArenaTailCompactCopied.Load()
 	arenaTailCompactSaved := db.batchArenaTailCompactSaved.Load()
@@ -18378,6 +18706,12 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.batch_arena.alloc_class_bytes_total"] = fmt.Sprintf("%d", arenaAllocClassBytes)
 	stats["treedb.cache.batch_arena.used_bytes_total"] = fmt.Sprintf("%d", arenaUsedBytes)
 	stats["treedb.cache.batch_arena.tail_waste_bytes_total"] = fmt.Sprintf("%d", arenaTailWasteBytes)
+	stats["treedb.cache.batch_arena.main.alloc_class_bytes_total"] = fmt.Sprintf("%d", arenaMainAllocClassBytes)
+	stats["treedb.cache.batch_arena.main.used_bytes_total"] = fmt.Sprintf("%d", arenaMainUsedBytes)
+	stats["treedb.cache.batch_arena.main.tail_waste_bytes_total"] = fmt.Sprintf("%d", arenaMainTailWasteBytes)
+	stats["treedb.cache.batch_arena.ptr.alloc_class_bytes_total"] = fmt.Sprintf("%d", arenaPtrAllocClassBytes)
+	stats["treedb.cache.batch_arena.ptr.used_bytes_total"] = fmt.Sprintf("%d", arenaPtrUsedBytes)
+	stats["treedb.cache.batch_arena.ptr.tail_waste_bytes_total"] = fmt.Sprintf("%d", arenaPtrTailWasteBytes)
 	stats["treedb.cache.batch_arena.tail_compact_runs_total"] = fmt.Sprintf("%d", arenaTailCompactRuns)
 	stats["treedb.cache.batch_arena.tail_compact_copied_bytes_total"] = fmt.Sprintf("%d", arenaTailCompactCopied)
 	stats["treedb.cache.batch_arena.tail_compact_saved_bytes_total"] = fmt.Sprintf("%d", arenaTailCompactSaved)
@@ -18389,6 +18723,39 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.batch_arena.borrow_preflight_blocked_bytes_total"] = fmt.Sprintf("%d", batchArenaBorrowPreflightBlockedBytesTotal.Load())
 	stats["treedb.cache.batch_arena.steal_suppressed_deferred_total"] = fmt.Sprintf("%d", batchArenaStealSuppressedDeferredTotal.Load())
 	stats["treedb.cache.batch_arena.steal_suppressed_deferred_entries_total"] = fmt.Sprintf("%d", batchArenaStealSuppressedDeferredEntriesTotal.Load())
+	stats["treedb.cache.batch_arena.copy_source.key.calls_total"] = fmt.Sprintf("%d", batchArenaCopyKeyCallsTotal.Load())
+	stats["treedb.cache.batch_arena.copy_source.key.bytes_total"] = fmt.Sprintf("%d", batchArenaCopyKeyBytesTotal.Load())
+	stats["treedb.cache.batch_arena.copy_source.value.calls_total"] = fmt.Sprintf("%d", batchArenaCopyValueCallsTotal.Load())
+	stats["treedb.cache.batch_arena.copy_source.value.bytes_total"] = fmt.Sprintf("%d", batchArenaCopyValueBytesTotal.Load())
+	stats["treedb.cache.batch_arena.copy_source.key_value.calls_total"] = fmt.Sprintf("%d", batchArenaCopyKeyValueCallsTotal.Load())
+	stats["treedb.cache.batch_arena.copy_source.key_value.bytes_total"] = fmt.Sprintf("%d", batchArenaCopyKeyValueBytesTotal.Load())
+	stats["treedb.cache.batch_arena.copy_source.ptr_value.calls_total"] = fmt.Sprintf("%d", batchArenaCopyPtrValueCallsTotal.Load())
+	stats["treedb.cache.batch_arena.copy_source.ptr_value.bytes_total"] = fmt.Sprintf("%d", batchArenaCopyPtrValueBytesTotal.Load())
+	stats["treedb.cache.batch.set.calls_total"] = fmt.Sprintf("%d", batchSetCallsTotal.Load())
+	stats["treedb.cache.batch.set.bytes_total"] = fmt.Sprintf("%d", batchSetBytesTotal.Load())
+	stats["treedb.cache.batch.set_view.calls_total"] = fmt.Sprintf("%d", batchSetViewCallsTotal.Load())
+	stats["treedb.cache.batch.set_view.bytes_total"] = fmt.Sprintf("%d", batchSetViewBytesTotal.Load())
+	stats["treedb.cache.batch.set_caller.sample_mod"] = fmt.Sprintf("%d", batchSetCallerSampleMod)
+	stats["treedb.cache.batch.set_caller.samples_total"] = fmt.Sprintf("%d", batchSetCallerSamplesTotal.Load())
+	for i, caller := range batchSetCallerSnapshots(8) {
+		stats[fmt.Sprintf("treedb.cache.batch.set_caller.top.%d.frame", i)] = caller.frame
+		stats[fmt.Sprintf("treedb.cache.batch.set_caller.top.%d.calls_total", i)] = fmt.Sprintf("%d", caller.calls)
+		stats[fmt.Sprintf("treedb.cache.batch.set_caller.top.%d.bytes_total", i)] = fmt.Sprintf("%d", caller.bytes)
+	}
+	stats["treedb.cache.read_path.db_get_caller.sample_mod"] = fmt.Sprintf("%d", dbGetCallerSampleMod)
+	stats["treedb.cache.read_path.db_get_caller.samples_total"] = fmt.Sprintf("%d", dbGetCallerSamplesTotal.Load())
+	for i, caller := range dbGetCallerSnapshots(8) {
+		stats[fmt.Sprintf("treedb.cache.read_path.db_get_caller.top.%d.frame", i)] = caller.frame
+		stats[fmt.Sprintf("treedb.cache.read_path.db_get_caller.top.%d.calls_total", i)] = fmt.Sprintf("%d", caller.calls)
+		stats[fmt.Sprintf("treedb.cache.read_path.db_get_caller.top.%d.bytes_total", i)] = fmt.Sprintf("%d", caller.bytes)
+	}
+	stats["treedb.cache.read_path.snapshot_get_caller.sample_mod"] = fmt.Sprintf("%d", snapshotGetCallerSampleMod)
+	stats["treedb.cache.read_path.snapshot_get_caller.samples_total"] = fmt.Sprintf("%d", snapshotGetCallerSamplesTotal.Load())
+	for i, caller := range snapshotGetCallerSnapshots(8) {
+		stats[fmt.Sprintf("treedb.cache.read_path.snapshot_get_caller.top.%d.frame", i)] = caller.frame
+		stats[fmt.Sprintf("treedb.cache.read_path.snapshot_get_caller.top.%d.calls_total", i)] = fmt.Sprintf("%d", caller.calls)
+		stats[fmt.Sprintf("treedb.cache.read_path.snapshot_get_caller.top.%d.bytes_total", i)] = fmt.Sprintf("%d", caller.bytes)
+	}
 	stats["treedb.process.batch_arena.pool_budget_bytes"] = arenaPoolBudget
 	stats["treedb.process.batch_arena.pool_budget_effective_bytes"] = arenaPoolBudgetEffective
 	stats["treedb.process.batch_arena.pool_bytes_estimate"] = arenaPoolEstimate
@@ -18408,6 +18775,12 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.process.batch_arena.alloc_class_bytes_total"] = fmt.Sprintf("%d", arenaAllocClassBytes)
 	stats["treedb.process.batch_arena.used_bytes_total"] = fmt.Sprintf("%d", arenaUsedBytes)
 	stats["treedb.process.batch_arena.tail_waste_bytes_total"] = fmt.Sprintf("%d", arenaTailWasteBytes)
+	stats["treedb.process.batch_arena.main.alloc_class_bytes_total"] = fmt.Sprintf("%d", arenaMainAllocClassBytes)
+	stats["treedb.process.batch_arena.main.used_bytes_total"] = fmt.Sprintf("%d", arenaMainUsedBytes)
+	stats["treedb.process.batch_arena.main.tail_waste_bytes_total"] = fmt.Sprintf("%d", arenaMainTailWasteBytes)
+	stats["treedb.process.batch_arena.ptr.alloc_class_bytes_total"] = fmt.Sprintf("%d", arenaPtrAllocClassBytes)
+	stats["treedb.process.batch_arena.ptr.used_bytes_total"] = fmt.Sprintf("%d", arenaPtrUsedBytes)
+	stats["treedb.process.batch_arena.ptr.tail_waste_bytes_total"] = fmt.Sprintf("%d", arenaPtrTailWasteBytes)
 	stats["treedb.process.batch_arena.tail_compact_runs_total"] = fmt.Sprintf("%d", arenaTailCompactRuns)
 	stats["treedb.process.batch_arena.tail_compact_copied_bytes_total"] = fmt.Sprintf("%d", arenaTailCompactCopied)
 	stats["treedb.process.batch_arena.tail_compact_saved_bytes_total"] = fmt.Sprintf("%d", arenaTailCompactSaved)
@@ -18419,6 +18792,39 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.process.batch_arena.borrow_preflight_blocked_bytes_total"] = fmt.Sprintf("%d", batchArenaBorrowPreflightBlockedBytesTotal.Load())
 	stats["treedb.process.batch_arena.steal_suppressed_deferred_total"] = fmt.Sprintf("%d", batchArenaStealSuppressedDeferredTotal.Load())
 	stats["treedb.process.batch_arena.steal_suppressed_deferred_entries_total"] = fmt.Sprintf("%d", batchArenaStealSuppressedDeferredEntriesTotal.Load())
+	stats["treedb.process.batch_arena.copy_source.key.calls_total"] = fmt.Sprintf("%d", batchArenaCopyKeyCallsTotal.Load())
+	stats["treedb.process.batch_arena.copy_source.key.bytes_total"] = fmt.Sprintf("%d", batchArenaCopyKeyBytesTotal.Load())
+	stats["treedb.process.batch_arena.copy_source.value.calls_total"] = fmt.Sprintf("%d", batchArenaCopyValueCallsTotal.Load())
+	stats["treedb.process.batch_arena.copy_source.value.bytes_total"] = fmt.Sprintf("%d", batchArenaCopyValueBytesTotal.Load())
+	stats["treedb.process.batch_arena.copy_source.key_value.calls_total"] = fmt.Sprintf("%d", batchArenaCopyKeyValueCallsTotal.Load())
+	stats["treedb.process.batch_arena.copy_source.key_value.bytes_total"] = fmt.Sprintf("%d", batchArenaCopyKeyValueBytesTotal.Load())
+	stats["treedb.process.batch_arena.copy_source.ptr_value.calls_total"] = fmt.Sprintf("%d", batchArenaCopyPtrValueCallsTotal.Load())
+	stats["treedb.process.batch_arena.copy_source.ptr_value.bytes_total"] = fmt.Sprintf("%d", batchArenaCopyPtrValueBytesTotal.Load())
+	stats["treedb.process.batch.set.calls_total"] = fmt.Sprintf("%d", batchSetCallsTotal.Load())
+	stats["treedb.process.batch.set.bytes_total"] = fmt.Sprintf("%d", batchSetBytesTotal.Load())
+	stats["treedb.process.batch.set_view.calls_total"] = fmt.Sprintf("%d", batchSetViewCallsTotal.Load())
+	stats["treedb.process.batch.set_view.bytes_total"] = fmt.Sprintf("%d", batchSetViewBytesTotal.Load())
+	stats["treedb.process.batch.set_caller.sample_mod"] = fmt.Sprintf("%d", batchSetCallerSampleMod)
+	stats["treedb.process.batch.set_caller.samples_total"] = fmt.Sprintf("%d", batchSetCallerSamplesTotal.Load())
+	for i, caller := range batchSetCallerSnapshots(8) {
+		stats[fmt.Sprintf("treedb.process.batch.set_caller.top.%d.frame", i)] = caller.frame
+		stats[fmt.Sprintf("treedb.process.batch.set_caller.top.%d.calls_total", i)] = fmt.Sprintf("%d", caller.calls)
+		stats[fmt.Sprintf("treedb.process.batch.set_caller.top.%d.bytes_total", i)] = fmt.Sprintf("%d", caller.bytes)
+	}
+	stats["treedb.process.read_path.db_get_caller.sample_mod"] = fmt.Sprintf("%d", dbGetCallerSampleMod)
+	stats["treedb.process.read_path.db_get_caller.samples_total"] = fmt.Sprintf("%d", dbGetCallerSamplesTotal.Load())
+	for i, caller := range dbGetCallerSnapshots(8) {
+		stats[fmt.Sprintf("treedb.process.read_path.db_get_caller.top.%d.frame", i)] = caller.frame
+		stats[fmt.Sprintf("treedb.process.read_path.db_get_caller.top.%d.calls_total", i)] = fmt.Sprintf("%d", caller.calls)
+		stats[fmt.Sprintf("treedb.process.read_path.db_get_caller.top.%d.bytes_total", i)] = fmt.Sprintf("%d", caller.bytes)
+	}
+	stats["treedb.process.read_path.snapshot_get_caller.sample_mod"] = fmt.Sprintf("%d", snapshotGetCallerSampleMod)
+	stats["treedb.process.read_path.snapshot_get_caller.samples_total"] = fmt.Sprintf("%d", snapshotGetCallerSamplesTotal.Load())
+	for i, caller := range snapshotGetCallerSnapshots(8) {
+		stats[fmt.Sprintf("treedb.process.read_path.snapshot_get_caller.top.%d.frame", i)] = caller.frame
+		stats[fmt.Sprintf("treedb.process.read_path.snapshot_get_caller.top.%d.calls_total", i)] = fmt.Sprintf("%d", caller.calls)
+		stats[fmt.Sprintf("treedb.process.read_path.snapshot_get_caller.top.%d.bytes_total", i)] = fmt.Sprintf("%d", caller.bytes)
+	}
 	stats["treedb.cache.entry_slice.pool_budget_bytes"] = fmt.Sprintf("%d", entrySliceBaseBudget)
 	stats["treedb.cache.entry_slice.pool_budget_effective_bytes"] = fmt.Sprintf("%d", entrySliceEffectiveBudget)
 	stats["treedb.cache.entry_slice.retained_bytes_estimate"] = fmt.Sprintf("%d", entrySlicePoolBytes.Load())
@@ -18426,16 +18832,28 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.entry_slice.trim_drop_bytes_total"] = fmt.Sprintf("%d", entrySlicePoolTrimDropBytesTotal.Load())
 	stats["treedb.cache.entry_slice.get.lease_hits_total"] = fmt.Sprintf("%d", entrySliceLeaseHitTotal.Load())
 	stats["treedb.cache.entry_slice.get.lease_hit_bytes_total"] = fmt.Sprintf("%d", entrySliceLeaseHitBytesTotal.Load())
+	stats["treedb.cache.entry_slice.get.lease_hit_requested_bytes_total"] = fmt.Sprintf("%d", entrySliceLeaseHitRequestedBytesTotal.Load())
+	stats["treedb.cache.entry_slice.get.lease_hit_excess_bytes_total"] = fmt.Sprintf("%d", entrySliceLeaseHitExcessBytesTotal.Load())
 	stats["treedb.cache.entry_slice.get.pool_hits_total"] = fmt.Sprintf("%d", entrySlicePoolHitTotal.Load())
 	stats["treedb.cache.entry_slice.get.pool_hit_bytes_total"] = fmt.Sprintf("%d", entrySlicePoolHitBytesTotal.Load())
+	stats["treedb.cache.entry_slice.get.pool_hit_requested_bytes_total"] = fmt.Sprintf("%d", entrySlicePoolHitRequestedBytesTotal.Load())
+	stats["treedb.cache.entry_slice.get.pool_hit_excess_bytes_total"] = fmt.Sprintf("%d", entrySlicePoolHitExcessBytesTotal.Load())
 	stats["treedb.cache.entry_slice.get.fresh_alloc_total"] = fmt.Sprintf("%d", entrySliceFreshAllocTotal.Load())
 	stats["treedb.cache.entry_slice.get.fresh_alloc_bytes_total"] = fmt.Sprintf("%d", entrySliceFreshAllocBytesTotal.Load())
+	stats["treedb.cache.entry_slice.get.fresh_alloc_requested_bytes_total"] = fmt.Sprintf("%d", entrySliceFreshAllocRequestedBytesTotal.Load())
+	stats["treedb.cache.entry_slice.get.fresh_alloc_excess_bytes_total"] = fmt.Sprintf("%d", entrySliceFreshAllocExcessBytesTotal.Load())
 	stats["treedb.cache.entry_slice.put.lease_total"] = fmt.Sprintf("%d", entrySlicePutLeaseTotal.Load())
 	stats["treedb.cache.entry_slice.put.lease_bytes_total"] = fmt.Sprintf("%d", entrySlicePutLeaseBytesTotal.Load())
 	stats["treedb.cache.entry_slice.put.pool_total"] = fmt.Sprintf("%d", entrySlicePutPoolTotal.Load())
 	stats["treedb.cache.entry_slice.put.pool_bytes_total"] = fmt.Sprintf("%d", entrySlicePutPoolBytesTotal.Load())
 	stats["treedb.cache.entry_slice.put.drop_budget_total"] = fmt.Sprintf("%d", entrySlicePutDropBudgetTotal.Load())
 	stats["treedb.cache.entry_slice.put.drop_budget_bytes_total"] = fmt.Sprintf("%d", entrySlicePutDropBudgetBytesTotal.Load())
+	stats["treedb.cache.read_path.snapshot.queue_inline_hits_total"] = fmt.Sprintf("%d", snapshotReadQueueInlineHitsTotal.Load())
+	stats["treedb.cache.read_path.snapshot.queue_inline_bytes_total"] = fmt.Sprintf("%d", snapshotReadQueueInlineBytesTotal.Load())
+	stats["treedb.cache.read_path.snapshot.queue_pointer_hits_total"] = fmt.Sprintf("%d", snapshotReadQueuePointerHitsTotal.Load())
+	stats["treedb.cache.read_path.snapshot.queue_pointer_bytes_total"] = fmt.Sprintf("%d", snapshotReadQueuePointerBytesTotal.Load())
+	stats["treedb.cache.read_path.snapshot.backend_hits_total"] = fmt.Sprintf("%d", snapshotReadBackendHitsTotal.Load())
+	stats["treedb.cache.read_path.snapshot.backend_bytes_total"] = fmt.Sprintf("%d", snapshotReadBackendBytesTotal.Load())
 	mergeShadowedOpsTotal := flushMergeShadowedOpsTotal.Load()
 	mergeAppliedOpsTotal := flushMergeAppliedOpsTotal.Load()
 	mergeDeferredShadowedOpsTotal := flushMergeDeferredShadowedOpsTotal.Load()
@@ -18464,16 +18882,28 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.process.entry_slice.trim_drop_bytes_total"] = fmt.Sprintf("%d", entrySlicePoolTrimDropBytesTotal.Load())
 	stats["treedb.process.entry_slice.get.lease_hits_total"] = fmt.Sprintf("%d", entrySliceLeaseHitTotal.Load())
 	stats["treedb.process.entry_slice.get.lease_hit_bytes_total"] = fmt.Sprintf("%d", entrySliceLeaseHitBytesTotal.Load())
+	stats["treedb.process.entry_slice.get.lease_hit_requested_bytes_total"] = fmt.Sprintf("%d", entrySliceLeaseHitRequestedBytesTotal.Load())
+	stats["treedb.process.entry_slice.get.lease_hit_excess_bytes_total"] = fmt.Sprintf("%d", entrySliceLeaseHitExcessBytesTotal.Load())
 	stats["treedb.process.entry_slice.get.pool_hits_total"] = fmt.Sprintf("%d", entrySlicePoolHitTotal.Load())
 	stats["treedb.process.entry_slice.get.pool_hit_bytes_total"] = fmt.Sprintf("%d", entrySlicePoolHitBytesTotal.Load())
+	stats["treedb.process.entry_slice.get.pool_hit_requested_bytes_total"] = fmt.Sprintf("%d", entrySlicePoolHitRequestedBytesTotal.Load())
+	stats["treedb.process.entry_slice.get.pool_hit_excess_bytes_total"] = fmt.Sprintf("%d", entrySlicePoolHitExcessBytesTotal.Load())
 	stats["treedb.process.entry_slice.get.fresh_alloc_total"] = fmt.Sprintf("%d", entrySliceFreshAllocTotal.Load())
 	stats["treedb.process.entry_slice.get.fresh_alloc_bytes_total"] = fmt.Sprintf("%d", entrySliceFreshAllocBytesTotal.Load())
+	stats["treedb.process.entry_slice.get.fresh_alloc_requested_bytes_total"] = fmt.Sprintf("%d", entrySliceFreshAllocRequestedBytesTotal.Load())
+	stats["treedb.process.entry_slice.get.fresh_alloc_excess_bytes_total"] = fmt.Sprintf("%d", entrySliceFreshAllocExcessBytesTotal.Load())
 	stats["treedb.process.entry_slice.put.lease_total"] = fmt.Sprintf("%d", entrySlicePutLeaseTotal.Load())
 	stats["treedb.process.entry_slice.put.lease_bytes_total"] = fmt.Sprintf("%d", entrySlicePutLeaseBytesTotal.Load())
 	stats["treedb.process.entry_slice.put.pool_total"] = fmt.Sprintf("%d", entrySlicePutPoolTotal.Load())
 	stats["treedb.process.entry_slice.put.pool_bytes_total"] = fmt.Sprintf("%d", entrySlicePutPoolBytesTotal.Load())
 	stats["treedb.process.entry_slice.put.drop_budget_total"] = fmt.Sprintf("%d", entrySlicePutDropBudgetTotal.Load())
 	stats["treedb.process.entry_slice.put.drop_budget_bytes_total"] = fmt.Sprintf("%d", entrySlicePutDropBudgetBytesTotal.Load())
+	stats["treedb.process.read_path.snapshot.queue_inline_hits_total"] = fmt.Sprintf("%d", snapshotReadQueueInlineHitsTotal.Load())
+	stats["treedb.process.read_path.snapshot.queue_inline_bytes_total"] = fmt.Sprintf("%d", snapshotReadQueueInlineBytesTotal.Load())
+	stats["treedb.process.read_path.snapshot.queue_pointer_hits_total"] = fmt.Sprintf("%d", snapshotReadQueuePointerHitsTotal.Load())
+	stats["treedb.process.read_path.snapshot.queue_pointer_bytes_total"] = fmt.Sprintf("%d", snapshotReadQueuePointerBytesTotal.Load())
+	stats["treedb.process.read_path.snapshot.backend_hits_total"] = fmt.Sprintf("%d", snapshotReadBackendHitsTotal.Load())
+	stats["treedb.process.read_path.snapshot.backend_bytes_total"] = fmt.Sprintf("%d", snapshotReadBackendBytesTotal.Load())
 	stats["treedb.process.flush_merge.shadowed_ops_total"] = fmt.Sprintf("%d", mergeShadowedOpsTotal)
 	stats["treedb.process.flush_merge.applied_ops_total"] = fmt.Sprintf("%d", mergeAppliedOpsTotal)
 	if mergeAppliedOpsTotal > 0 {
@@ -18817,6 +19247,15 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_decode_buffer_grow.allocated_bytes_total"] = fmt.Sprintf("%d", growStats.AllocatedBytesTotal)
 	stats["treedb.cache.vlog_decode_buffer_grow.copied_bytes_total"] = fmt.Sprintf("%d", growStats.CopiedBytesTotal)
 	stats["treedb.cache.vlog_decode_buffer_grow.capacity_waste_bytes_total"] = fmt.Sprintf("%d", growStats.CapacityWasteBytesTotal)
+	stats["treedb.cache.vlog_decode_buffer_grow.read_append_compressed_fallback.calls_total"] = fmt.Sprintf("%d", growStats.ReadAppendCompressedFallbackCallsTotal)
+	stats["treedb.cache.vlog_decode_buffer_grow.read_append_compressed_fallback.requested_bytes_total"] = fmt.Sprintf("%d", growStats.ReadAppendCompressedFallbackRequestedBytesTotal)
+	stats["treedb.cache.vlog_decode_buffer_grow.read_append_compressed_fallback.dst_present_calls_total"] = fmt.Sprintf("%d", growStats.ReadAppendCompressedFallbackDstPresentCallsTotal)
+	stats["treedb.cache.vlog_decode_buffer_grow.read_append_compressed_fallback.dst_fit_calls_total"] = fmt.Sprintf("%d", growStats.ReadAppendCompressedFallbackDstFitCallsTotal)
+	stats["treedb.cache.vlog_decode_buffer_grow.read_append_compressed_fallback.dst_fit_requested_bytes_total"] = fmt.Sprintf("%d", growStats.ReadAppendCompressedFallbackDstFitRequestedBytesTotal)
+	stats["treedb.cache.vlog_decode_buffer_grow.read_append_payload.calls_total"] = fmt.Sprintf("%d", growStats.ReadAppendPayloadCallsTotal)
+	stats["treedb.cache.vlog_decode_buffer_grow.read_append_payload.requested_bytes_total"] = fmt.Sprintf("%d", growStats.ReadAppendPayloadRequestedBytesTotal)
+	stats["treedb.cache.vlog_decode_buffer_grow.read_append_current_mmap_direct_decode.calls_total"] = fmt.Sprintf("%d", growStats.ReadAppendCurrentMmapDirectDecodeCallsTotal)
+	stats["treedb.cache.vlog_decode_buffer_grow.read_append_current_mmap_direct_decode.requested_bytes_total"] = fmt.Sprintf("%d", growStats.ReadAppendCurrentMmapDirectDecodeRequestedBytesTotal)
 	if growStats.CallsTotal > 0 {
 		stats["treedb.cache.vlog_decode_buffer_grow.realloc_rate"] = fmt.Sprintf("%.6f", float64(growStats.ReallocCallsTotal)/float64(growStats.CallsTotal))
 	}
@@ -19909,7 +20348,7 @@ func (db *DB) observeBatchCopyBytes(n int) {
 	}
 }
 
-func (db *DB) noteBatchArenaChunkAlloc(requestedCap, classCap int) {
+func (db *DB) noteBatchArenaChunkAlloc(kind batchArenaKind, requestedCap, classCap int) {
 	if db == nil {
 		return
 	}
@@ -19918,10 +20357,16 @@ func (db *DB) noteBatchArenaChunkAlloc(requestedCap, classCap int) {
 	}
 	if classCap > 0 {
 		db.batchArenaAllocClassBytes.Add(uint64(classCap))
+		switch kind {
+		case batchArenaKindMain:
+			db.batchArenaMainAllocClassBytes.Add(uint64(classCap))
+		case batchArenaKindPtr:
+			db.batchArenaPtrAllocClassBytes.Add(uint64(classCap))
+		}
 	}
 }
 
-func (db *DB) noteBatchArenaChunkFinalize(used, classCap int) {
+func (db *DB) noteBatchArenaChunkFinalize(kind batchArenaKind, used, classCap int) {
 	if db == nil || classCap <= 0 {
 		return
 	}
@@ -19933,6 +20378,14 @@ func (db *DB) noteBatchArenaChunkFinalize(used, classCap int) {
 	}
 	db.batchArenaUsedBytes.Add(uint64(used))
 	db.batchArenaTailWasteBytes.Add(uint64(classCap - used))
+	switch kind {
+	case batchArenaKindMain:
+		db.batchArenaMainUsedBytes.Add(uint64(used))
+		db.batchArenaMainTailWasteBytes.Add(uint64(classCap - used))
+	case batchArenaKindPtr:
+		db.batchArenaPtrUsedBytes.Add(uint64(used))
+		db.batchArenaPtrTailWasteBytes.Add(uint64(classCap - used))
+	}
 }
 
 func (db *DB) noteBatchArenaTailCompact(copiedBytes, classCap int) {
@@ -20162,7 +20615,7 @@ func (b *Batch) drainCopyArenaChunks() [][]byte {
 		return nil
 	}
 	if b.db != nil && cap(b.copyArena) > 0 {
-		b.db.noteBatchArenaChunkFinalize(len(b.copyArena), cap(b.copyArena))
+		b.db.noteBatchArenaChunkFinalize(batchArenaKindMain, len(b.copyArena), cap(b.copyArena))
 	}
 	chunks := b.copyArenaChunks
 	if bytes := batchArenaChunksCapBytes(chunks); bytes > 0 {
@@ -20190,7 +20643,7 @@ func (b *Batch) drainPtrCopyArenaChunks() [][]byte {
 		return nil
 	}
 	if b.db != nil && cap(b.ptrCopyArena) > 0 {
-		b.db.noteBatchArenaChunkFinalize(len(b.ptrCopyArena), cap(b.ptrCopyArena))
+		b.db.noteBatchArenaChunkFinalize(batchArenaKindPtr, len(b.ptrCopyArena), cap(b.ptrCopyArena))
 	}
 	chunks := b.ptrCopyArenaChunks
 	if bytes := batchArenaChunksCapBytes(chunks); bytes > 0 {
@@ -20248,20 +20701,20 @@ func (b *Batch) subArenaInFlightBytes(n int64) {
 }
 
 func (b *Batch) arenaCopy(n int) []byte {
-	return b.arenaCopyInto(&b.copyArena, &b.copyArenaChunks, &b.copyBytes, n, b.copyArenaCap)
+	return b.arenaCopyInto(batchArenaKindMain, &b.copyArena, &b.copyArenaChunks, &b.copyBytes, n, b.copyArenaCap)
 }
 
 func (b *Batch) arenaCopyPtr(n int) []byte {
-	return b.arenaCopyInto(&b.ptrCopyArena, &b.ptrCopyArenaChunks, &b.ptrCopyBytes, n, 0)
+	return b.arenaCopyInto(batchArenaKindPtr, &b.ptrCopyArena, &b.ptrCopyArenaChunks, &b.ptrCopyBytes, n, 0)
 }
 
-func (b *Batch) arenaCopyInto(arena *[]byte, chunks *[][]byte, copyBytes *int, n int, initialCap int) []byte {
+func (b *Batch) arenaCopyInto(kind batchArenaKind, arena *[]byte, chunks *[][]byte, copyBytes *int, n int, initialCap int) []byte {
 	if n == 0 {
 		return nil
 	}
 	if cap(*arena)-len(*arena) < n {
 		if b != nil && b.db != nil && cap(*arena) > 0 {
-			b.db.noteBatchArenaChunkFinalize(len(*arena), cap(*arena))
+			b.db.noteBatchArenaChunkFinalize(kind, len(*arena), cap(*arena))
 		}
 		chunkCap := cap(*arena) * 2
 		if chunkCap < batchCopyArenaMinChunk {
@@ -20294,7 +20747,7 @@ func (b *Batch) arenaCopyInto(arena *[]byte, chunks *[][]byte, copyBytes *int, n
 			b.addArenaInFlightBytes(cap(chunk))
 		}
 		if b != nil && b.db != nil {
-			b.db.noteBatchArenaChunkAlloc(chunkCap, cap(chunk))
+			b.db.noteBatchArenaChunkAlloc(kind, chunkCap, cap(chunk))
 		}
 		*arena = chunk[:0]
 		*chunks = append(*chunks, *arena)
@@ -20306,18 +20759,30 @@ func (b *Batch) arenaCopyInto(arena *[]byte, chunks *[][]byte, copyBytes *int, n
 }
 
 func (b *Batch) cloneKey(key []byte) []byte {
+	batchArenaCopyKeyCallsTotal.Add(1)
+	if len(key) > 0 {
+		batchArenaCopyKeyBytesTotal.Add(uint64(len(key)))
+	}
 	dst := b.arenaCopy(len(key))
 	copy(dst, key)
 	return dst
 }
 
 func (b *Batch) cloneValue(value []byte) []byte {
+	batchArenaCopyValueCallsTotal.Add(1)
+	if len(value) > 0 {
+		batchArenaCopyValueBytesTotal.Add(uint64(len(value)))
+	}
 	dst := b.arenaCopy(len(value))
 	copy(dst, value)
 	return dst
 }
 
 func (b *Batch) cloneKeyValue(key, value []byte) ([]byte, []byte) {
+	batchArenaCopyKeyValueCallsTotal.Add(1)
+	if n := len(key) + len(value); n > 0 {
+		batchArenaCopyKeyValueBytesTotal.Add(uint64(n))
+	}
 	buf := b.arenaCopy(len(key) + len(value))
 	keyCopy := buf[:len(key):len(key)]
 	copy(keyCopy, key)
@@ -20327,6 +20792,10 @@ func (b *Batch) cloneKeyValue(key, value []byte) ([]byte, []byte) {
 }
 
 func (b *Batch) clonePtrValue(value []byte) []byte {
+	batchArenaCopyPtrValueCallsTotal.Add(1)
+	if len(value) > 0 {
+		batchArenaCopyPtrValueBytesTotal.Add(uint64(len(value)))
+	}
 	dst := b.arenaCopyPtr(len(value))
 	copy(dst, value)
 	return dst
@@ -20383,7 +20852,7 @@ func sliceAliasesArenaTail(s, tail []byte) bool {
 	return uintptr(len(s)) <= uintptr(len(tail))-offset
 }
 
-func (b *Batch) releaseCompactedBatchArenaTail(chunks *[][]byte, arena *[]byte, copiedBytes int) {
+func (b *Batch) releaseCompactedBatchArenaTail(kind batchArenaKind, chunks *[][]byte, arena *[]byte, copiedBytes int) {
 	if b == nil || chunks == nil || arena == nil || len(*chunks) == 0 || cap(*arena) == 0 {
 		return
 	}
@@ -20398,7 +20867,7 @@ func (b *Batch) releaseCompactedBatchArenaTail(chunks *[][]byte, arena *[]byte, 
 	(*chunks)[last] = nil
 	*chunks = (*chunks)[:last]
 	if b.db != nil {
-		b.db.noteBatchArenaChunkFinalize(used, classCap)
+		b.db.noteBatchArenaChunkFinalize(kind, used, classCap)
 		b.db.noteBatchArenaTailCompact(copiedBytes, classCap)
 	}
 	*arena = nil
@@ -20427,7 +20896,7 @@ func (b *Batch) compactUnderfilledMainArenaTail() {
 	if copiedBytes == 0 {
 		return
 	}
-	b.releaseCompactedBatchArenaTail(&b.copyArenaChunks, &b.copyArena, copiedBytes)
+	b.releaseCompactedBatchArenaTail(batchArenaKindMain, &b.copyArenaChunks, &b.copyArena, copiedBytes)
 }
 
 func (b *Batch) compactUnderfilledPtrArenaTail() {
@@ -20450,7 +20919,7 @@ func (b *Batch) compactUnderfilledPtrArenaTail() {
 	if copiedBytes == 0 {
 		return
 	}
-	b.releaseCompactedBatchArenaTail(&b.ptrCopyArenaChunks, &b.ptrCopyArena, copiedBytes)
+	b.releaseCompactedBatchArenaTail(batchArenaKindPtr, &b.ptrCopyArenaChunks, &b.ptrCopyArena, copiedBytes)
 }
 
 func (b *Batch) maybeCompactUnderfilledArenaTails() {
@@ -20480,6 +20949,9 @@ func (b *Batch) Set(key, value []byte) error {
 	if value == nil {
 		return ErrValueNil
 	}
+	batchSetCallsTotal.Add(1)
+	batchSetBytesTotal.Add(uint64(len(key) + len(value)))
+	maybeRecordBatchSetCallerSample(len(key) + len(value))
 
 	idx := len(b.entries)
 	var keyCopy, valCopy []byte
@@ -20538,6 +21010,8 @@ func (b *Batch) SetView(key, value []byte) error {
 	if value == nil {
 		return ErrValueNil
 	}
+	batchSetViewCallsTotal.Add(1)
+	batchSetViewBytesTotal.Add(uint64(len(key) + len(value)))
 
 	if b.backend != nil {
 		b.batchRange.add(key)

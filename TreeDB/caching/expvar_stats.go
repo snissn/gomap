@@ -128,8 +128,11 @@ func selectTreeDBExpvarStats(stats map[string]string) map[string]any {
 func isProcessWideExpvarKey(k string) bool {
 	processPrefixes := [...]string{
 		"treedb.process.memory.",
+		"treedb.process.batch.",
 		"treedb.process.batch_arena.",
 		"treedb.process.entry_slice.",
+		"treedb.process.memtable_residency.",
+		"treedb.process.read_path.",
 		"treedb.process.flush_merge.",
 		"treedb.process.append_only.",
 		"treedb.process.append_only_direct_arena.",

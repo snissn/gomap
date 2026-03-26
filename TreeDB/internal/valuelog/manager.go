@@ -600,6 +600,8 @@ func (f *File) ReadAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte
 				return nil, err
 			}
 			oldLen := len(dst)
+			noteGrowReadAppendCompressedFallback(len(val))
+			noteGrowReadAppendCompressedFallbackDst(dst, len(val))
 			dst = grow(dst, len(val))
 			copy(dst[oldLen:], val)
 			return dst, nil
@@ -665,6 +667,8 @@ func (f *File) ReadAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte
 		return nil, err
 	}
 	oldLen := len(dst)
+	noteGrowReadAppendCompressedFallback(len(val))
+	noteGrowReadAppendCompressedFallbackDst(dst, len(val))
 	dst = grow(dst, len(val))
 	copy(dst[oldLen:], val)
 	return dst, nil
@@ -676,6 +680,7 @@ func (f *File) ReadUnsafeAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) (
 
 func (f *File) appendPayloadFromFile(dst []byte, off int64, payloadLen int) ([]byte, error) {
 	oldLen := len(dst)
+	noteGrowReadAppendPayload(payloadLen)
 	dst = grow(dst, payloadLen)
 	payload := dst[oldLen : oldLen+payloadLen]
 	if _, err := f.File.ReadAt(payload, off); err != nil {
