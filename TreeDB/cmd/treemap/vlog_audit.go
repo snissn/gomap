@@ -67,27 +67,38 @@ type valueLogFrameModeAudit struct {
 	StoredPayloadBytes int64 `json:"stored_payload_bytes"`
 }
 
+type valueLogRecordModeAudit struct {
+	Records            int64 `json:"records"`
+	RawPayloadBytes    int64 `json:"raw_payload_bytes"`
+	StoredPayloadBytes int64 `json:"stored_payload_bytes"`
+}
+
 type valueLogRecordLengthAudit struct {
-	Length  int   `json:"length"`
-	Records int64 `json:"records"`
-	Bytes   int64 `json:"bytes"`
+	Length      int   `json:"length"`
+	Records     int64 `json:"records"`
+	Bytes       int64 `json:"bytes"`
+	StoredBytes int64 `json:"stored_bytes"`
 }
 
 type valueLogFrameScanAudit struct {
-	RecordsTotal            int64                             `json:"records_total"`
-	UngroupedRecords        int64                             `json:"ungrouped_records"`
-	UngroupedBytes          int64                             `json:"ungrouped_bytes"`
-	GroupedFrames           int64                             `json:"grouped_frames"`
-	GroupedSubrecords       int64                             `json:"grouped_subrecords"`
-	GroupedRawPayloadBytes  int64                             `json:"grouped_raw_payload_bytes"`
-	GroupedStoredPayload    int64                             `json:"grouped_stored_payload_bytes"`
-	PageLike4096Records     int64                             `json:"page_like_4096_records"`
-	PageLike4096Bytes       int64                             `json:"page_like_4096_bytes"`
-	Large40To48KRecords     int64                             `json:"large_40_to_48k_records"`
-	Large40To48KBytes       int64                             `json:"large_40_to_48k_bytes"`
-	TruncatedSegments       int                               `json:"truncated_segments,omitempty"`
-	Modes                   map[string]valueLogFrameModeAudit `json:"modes,omitempty"`
-	TopRecordLengthsByBytes []valueLogRecordLengthAudit       `json:"top_record_lengths_by_bytes,omitempty"`
+	RecordsTotal            int64                              `json:"records_total"`
+	UngroupedRecords        int64                              `json:"ungrouped_records"`
+	UngroupedBytes          int64                              `json:"ungrouped_bytes"`
+	GroupedFrames           int64                              `json:"grouped_frames"`
+	GroupedSubrecords       int64                              `json:"grouped_subrecords"`
+	GroupedRawPayloadBytes  int64                              `json:"grouped_raw_payload_bytes"`
+	GroupedStoredPayload    int64                              `json:"grouped_stored_payload_bytes"`
+	PageLike4096Records     int64                              `json:"page_like_4096_records"`
+	PageLike4096Bytes       int64                              `json:"page_like_4096_bytes"`
+	PageLike4096StoredBytes int64                              `json:"page_like_4096_stored_bytes"`
+	PageLike4096Modes       map[string]valueLogRecordModeAudit `json:"page_like_4096_modes,omitempty"`
+	Large40To48KRecords     int64                              `json:"large_40_to_48k_records"`
+	Large40To48KBytes       int64                              `json:"large_40_to_48k_bytes"`
+	Large40To48KStoredBytes int64                              `json:"large_40_to_48k_stored_bytes"`
+	Large40To48KModes       map[string]valueLogRecordModeAudit `json:"large_40_to_48k_modes,omitempty"`
+	TruncatedSegments       int                                `json:"truncated_segments,omitempty"`
+	Modes                   map[string]valueLogFrameModeAudit  `json:"modes,omitempty"`
+	TopRecordLengthsByBytes []valueLogRecordLengthAudit        `json:"top_record_lengths_by_bytes,omitempty"`
 }
 
 const recordFlagGroupedAudit byte = 1 << 0
@@ -200,6 +211,14 @@ func runVlogAudit(dir string, args []string) {
 			scan.Large40To48KRecords,
 			scan.Large40To48KBytes,
 		)
+		fmt.Printf("frame_scan_focus_bytes: page_4096_stored=%d page_4096_ratio=%.6f large_40_to_48k_stored=%d large_40_to_48k_ratio=%.6f\n",
+			scan.PageLike4096StoredBytes,
+			floatRatio(scan.PageLike4096StoredBytes, scan.PageLike4096Bytes),
+			scan.Large40To48KStoredBytes,
+			floatRatio(scan.Large40To48KStoredBytes, scan.Large40To48KBytes),
+		)
+		printRecordModeBreakdown("page_4096", scan.PageLike4096Modes)
+		printRecordModeBreakdown("large_40_to_48k", scan.Large40To48KModes)
 		if len(scan.Modes) > 0 {
 			keys := make([]string, 0, len(scan.Modes))
 			for k := range scan.Modes {
@@ -222,7 +241,13 @@ func runVlogAudit(dir string, args []string) {
 		if len(scan.TopRecordLengthsByBytes) > 0 {
 			fmt.Println("frame_scan_top_record_lengths:")
 			for _, row := range scan.TopRecordLengthsByBytes {
-				fmt.Printf("  len=%d records=%d bytes=%d\n", row.Length, row.Records, row.Bytes)
+				fmt.Printf("  len=%d records=%d raw=%d stored=%d ratio=%.6f\n",
+					row.Length,
+					row.Records,
+					row.Bytes,
+					row.StoredBytes,
+					floatRatio(row.StoredBytes, row.Bytes),
+				)
 			}
 		}
 	}
@@ -317,26 +342,33 @@ func scanValueLogFrames(segments []valueLogSegmentAudit, opts valueLogFrameScanA
 		}
 	}
 	out := &valueLogFrameScanAudit{
-		Modes: make(map[string]valueLogFrameModeAudit),
+		Modes:             make(map[string]valueLogFrameModeAudit),
+		PageLike4096Modes: make(map[string]valueLogRecordModeAudit),
+		Large40To48KModes: make(map[string]valueLogRecordModeAudit),
 	}
 	byLength := make(map[int]valueLogRecordLengthAudit)
-	addLen := func(n int64) {
-		if n < 0 || n > maxValueLen {
+	addLen := func(modeKey string, rawBytes, storedBytes int64) {
+		if rawBytes < 0 || rawBytes > maxValueLen {
 			return
 		}
-		length := int(n)
+		length := int(rawBytes)
 		row := byLength[length]
 		row.Length = length
 		row.Records++
-		row.Bytes += n
+		row.Bytes += rawBytes
+		row.StoredBytes += storedBytes
 		byLength[length] = row
 		if length == 4096 {
 			out.PageLike4096Records++
-			out.PageLike4096Bytes += n
+			out.PageLike4096Bytes += rawBytes
+			out.PageLike4096StoredBytes += storedBytes
+			addRecordModeContribution(out.PageLike4096Modes, modeKey, rawBytes, storedBytes)
 		}
 		if length >= (40<<10) && length <= (48<<10) {
 			out.Large40To48KRecords++
-			out.Large40To48KBytes += n
+			out.Large40To48KBytes += rawBytes
+			out.Large40To48KStoredBytes += storedBytes
+			addRecordModeContribution(out.Large40To48KModes, modeKey, rawBytes, storedBytes)
 		}
 	}
 
@@ -384,7 +416,7 @@ func scanValueLogFrames(segments []valueLogSegmentAudit, opts valueLogFrameScanA
 				out.RecordsTotal++
 				out.UngroupedRecords++
 				out.UngroupedBytes += n
-				addLen(n)
+				addLen("raw_ungrouped", n, n)
 
 				mode := out.Modes["raw_ungrouped"]
 				mode.Frames++
@@ -422,9 +454,13 @@ func scanValueLogFrames(segments []valueLogSegmentAudit, opts valueLogFrameScanA
 			mode.StoredPayloadBytes += storedPayloadBytes
 			out.Modes[modeKey] = mode
 
+			recordRawLengths := make([]int64, 0, len(offsets)-1)
 			for i := 0; i+1 < len(offsets); i++ {
-				n := int64(offsets[i+1] - offsets[i])
-				addLen(n)
+				recordRawLengths = append(recordRawLengths, int64(offsets[i+1]-offsets[i]))
+			}
+			recordStoredShares := apportionStoredBytesByRaw(recordRawLengths, storedPayloadBytes)
+			for i := 0; i < len(recordRawLengths); i++ {
+				addLen(modeKey, recordRawLengths[i], recordStoredShares[i])
 			}
 		}
 		if err := f.Close(); err != nil {
@@ -473,6 +509,95 @@ func floatRatio(num, den int64) float64 {
 		return 0
 	}
 	return float64(num) / float64(den)
+}
+
+func addRecordModeContribution(dst map[string]valueLogRecordModeAudit, modeKey string, rawBytes, storedBytes int64) {
+	row := dst[modeKey]
+	row.Records++
+	row.RawPayloadBytes += rawBytes
+	row.StoredPayloadBytes += storedBytes
+	dst[modeKey] = row
+}
+
+func apportionStoredBytesByRaw(rawLengths []int64, storedTotal int64) []int64 {
+	if len(rawLengths) == 0 {
+		return nil
+	}
+	shares := make([]int64, len(rawLengths))
+	if storedTotal <= 0 {
+		return shares
+	}
+	var rawTotal int64
+	for _, n := range rawLengths {
+		if n > 0 {
+			rawTotal += n
+		}
+	}
+	if rawTotal <= 0 {
+		shares[len(shares)-1] = storedTotal
+		return shares
+	}
+	type remainder struct {
+		idx  int
+		frac int64
+		raw  int64
+	}
+	ranked := make([]remainder, 0, len(rawLengths))
+	var assigned int64
+	for i, n := range rawLengths {
+		if n <= 0 {
+			continue
+		}
+		numer := storedTotal * n
+		base := numer / rawTotal
+		shares[i] = base
+		assigned += base
+		ranked = append(ranked, remainder{
+			idx:  i,
+			frac: numer % rawTotal,
+			raw:  n,
+		})
+	}
+	leftover := storedTotal - assigned
+	if leftover <= 0 || len(ranked) == 0 {
+		return shares
+	}
+	sort.Slice(ranked, func(i, j int) bool {
+		if ranked[i].frac == ranked[j].frac {
+			if ranked[i].raw == ranked[j].raw {
+				return ranked[i].idx < ranked[j].idx
+			}
+			return ranked[i].raw > ranked[j].raw
+		}
+		return ranked[i].frac > ranked[j].frac
+	})
+	for i := int64(0); i < leftover; i++ {
+		idx := ranked[int(i)%len(ranked)].idx
+		shares[idx]++
+	}
+	return shares
+}
+
+func printRecordModeBreakdown(label string, modes map[string]valueLogRecordModeAudit) {
+	if len(modes) == 0 {
+		return
+	}
+	keys := make([]string, 0, len(modes))
+	for k := range modes {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	fmt.Printf("frame_scan_focus_modes(%s):\n", label)
+	for _, k := range keys {
+		row := modes[k]
+		fmt.Printf("  %s records=%d raw=%d stored=%d ratio=%.6f\n",
+			k,
+			row.Records,
+			row.RawPayloadBytes,
+			row.StoredPayloadBytes,
+			floatRatio(row.StoredPayloadBytes, row.RawPayloadBytes),
+		)
+	}
 }
 
 func resolveTreemapMainDir(dir string) (string, error) {
