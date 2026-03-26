@@ -24,6 +24,11 @@ const (
 	// Once a dictionary has been published, large payload streams are better
 	// judged by observed frame ratios than by byte-alphabet heuristics.
 	valueLogDictClassifierLargePayloadBypassMin = 32 << 10
+	// Large payload streams recover slower from pause/hold when probe intervals
+	// are sized for generic traffic. Clamp probe cadence for large records so
+	// dict mode can re-engage earlier after a transient degraded period.
+	valueLogDictLargeProbeMinPayloadBytes   = 16 << 10
+	valueLogDictLargeProbeIntervalClampByte = 2 << 20
 )
 
 type dictStoreWriter interface {
@@ -216,8 +221,17 @@ func (db *DB) valueLogDictIncompressibleDecision(rawLen uint64, allowProbe bool)
 			if probeBytes == 0 {
 				return false, false, true
 			}
+			probeBytes = valueLogDictProbeIntervalForPayload(probeBytes, rawLen)
 			probeRemaining := db.valueLogDictIncompressibleProbeRemaining.Load()
 			for {
+				if probeRemaining > probeBytes {
+					if db.valueLogDictIncompressibleProbeRemaining.CompareAndSwap(probeRemaining, probeBytes) {
+						probeRemaining = probeBytes
+					} else {
+						probeRemaining = db.valueLogDictIncompressibleProbeRemaining.Load()
+					}
+					continue
+				}
 				if probeRemaining <= rawLen {
 					nextProbe := probeBytes
 					if next > 0 && nextProbe > next {
@@ -765,13 +779,23 @@ func (db *DB) valueLogDictShouldAttemptCompression(rawLen int) (bool, bool, bool
 			next = remaining - rawBytes
 		}
 		if db.valueLogDictPauseRemaining.CompareAndSwap(remaining, next) {
-			if db.valueLogDictProbeBytes == 0 {
+			probeBytes := db.valueLogDictProbeBytes
+			if probeBytes == 0 {
 				return false, false, true
 			}
+			probeBytes = valueLogDictProbeIntervalForPayload(probeBytes, rawBytes)
 			probeRemaining := db.valueLogDictProbeRemaining.Load()
 			for {
+				if probeRemaining > probeBytes {
+					if db.valueLogDictProbeRemaining.CompareAndSwap(probeRemaining, probeBytes) {
+						probeRemaining = probeBytes
+					} else {
+						probeRemaining = db.valueLogDictProbeRemaining.Load()
+					}
+					continue
+				}
 				if probeRemaining <= rawBytes {
-					if db.valueLogDictProbeRemaining.CompareAndSwap(probeRemaining, db.valueLogDictProbeBytes) {
+					if db.valueLogDictProbeRemaining.CompareAndSwap(probeRemaining, probeBytes) {
 						return true, true, true
 					}
 				} else if db.valueLogDictProbeRemaining.CompareAndSwap(probeRemaining, probeRemaining-rawBytes) {
@@ -783,6 +807,22 @@ func (db *DB) valueLogDictShouldAttemptCompression(rawLen int) (bool, bool, bool
 		remaining = db.valueLogDictPauseRemaining.Load()
 	}
 	return true, false, false
+}
+
+func valueLogDictProbeIntervalForPayload(baseProbeBytes, rawBytes uint64) uint64 {
+	if baseProbeBytes == 0 {
+		return 0
+	}
+	probeBytes := baseProbeBytes
+	if rawBytes >= valueLogDictLargeProbeMinPayloadBytes && probeBytes > valueLogDictLargeProbeIntervalClampByte {
+		probeBytes = valueLogDictLargeProbeIntervalClampByte
+	}
+	// Avoid probe-on-every-write behavior when payload exceeds the clamped
+	// interval; keep at least one full payload between probes.
+	if rawBytes > 0 && probeBytes < rawBytes {
+		probeBytes = rawBytes
+	}
+	return probeBytes
 }
 
 func (db *DB) valueLogDictObservePayload(rawPayloadBytes, storedPayloadBytes uint64, records int) {

@@ -239,6 +239,62 @@ func TestValueLogDictShouldAttemptCompression_IncompressibleHoldProbes(t *testin
 	}
 }
 
+func TestValueLogDictShouldAttemptCompression_LargePayloadClampsPauseProbeInterval(t *testing.T) {
+	db := &DB{
+		valueLogDictProbeBytes: 16 << 20,
+	}
+	db.valueLogDictPauseRemaining.Store(64 << 20)
+	db.valueLogDictProbeRemaining.Store(16 << 20)
+
+	attempt, probe, paused := db.valueLogDictShouldAttemptCompression(32 << 10)
+	if attempt || probe || !paused {
+		t.Fatalf("expected initial paused suppression; got attempt=%v probe=%v paused=%v", attempt, probe, paused)
+	}
+	if got := db.valueLogDictProbeRemaining.Load(); got > valueLogDictLargeProbeIntervalClampByte {
+		t.Fatalf("expected probe interval to clamp to <=%d, got=%d", valueLogDictLargeProbeIntervalClampByte, got)
+	}
+
+	probed := false
+	for i := 0; i < 96; i++ {
+		attempt, probe, paused = db.valueLogDictShouldAttemptCompression(32 << 10)
+		if attempt && probe && paused {
+			probed = true
+			break
+		}
+	}
+	if !probed {
+		t.Fatalf("expected paused large-payload probe within bounded attempts after clamp")
+	}
+}
+
+func TestValueLogDictShouldAttemptCompression_LargePayloadClampsIncompressibleProbeInterval(t *testing.T) {
+	db := &DB{
+		valueLogDictIncompressibleHoldBytes:  64 << 20,
+		valueLogDictIncompressibleProbeBytes: 16 << 20,
+	}
+	db.armValueLogDictIncompressibleHoldBytes(0)
+
+	attempt, probe, paused := db.valueLogDictShouldAttemptCompression(32 << 10)
+	if attempt || probe {
+		t.Fatalf("expected incompressible hold suppression before probe; got attempt=%v probe=%v paused=%v", attempt, probe, paused)
+	}
+	if got := db.valueLogDictIncompressibleProbeRemaining.Load(); got > valueLogDictLargeProbeIntervalClampByte {
+		t.Fatalf("expected incompressible probe interval to clamp to <=%d, got=%d", valueLogDictLargeProbeIntervalClampByte, got)
+	}
+
+	probed := false
+	for i := 0; i < 96; i++ {
+		attempt, probe, paused = db.valueLogDictShouldAttemptCompression(32 << 10)
+		if attempt && probe {
+			probed = true
+			break
+		}
+	}
+	if !probed {
+		t.Fatalf("expected incompressible-hold large-payload probe within bounded attempts after clamp")
+	}
+}
+
 func TestValueLogDictCollectSamples_SkipsDuringIncompressibleHold(t *testing.T) {
 	tr := newValueLogDictClassifierTrainer(t)
 	db := &DB{
