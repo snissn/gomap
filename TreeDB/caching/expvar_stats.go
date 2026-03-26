@@ -60,8 +60,18 @@ func unregisterTreeDBExpvarStatsDB(db *DB) {
 	}
 	treedbExpvarDBsMu.Lock()
 	delete(treedbExpvarDBs, db)
+	var replacement *DB
+	for candidate := range treedbExpvarDBs {
+		replacement = candidate
+		break
+	}
 	treedbExpvarDBsMu.Unlock()
-	treedbExpvarCurrentDB.CompareAndSwap(db, nil)
+	if treedbExpvarCurrentDB.CompareAndSwap(db, replacement) {
+		return
+	}
+	if replacement != nil {
+		treedbExpvarCurrentDB.CompareAndSwap(nil, replacement)
+	}
 }
 
 func currentTreeDBExpvarStats() map[string]any {
@@ -92,10 +102,7 @@ func currentTreeDBExpvarStats() map[string]any {
 		if db == nil {
 			continue
 		}
-		key := db.dir
-		if key == "" {
-			key = fmt.Sprintf("db_%p", db)
-		}
+		key := treeDBExpvarInstanceKey(db)
 		instanceStats := selectTreeDBExpvarStats(db.Stats())
 		instanceStats["treedb.expvar.wal_dir"] = db.dir
 		instanceStats["treedb.expvar.is_current"] = current == db
@@ -103,6 +110,16 @@ func currentTreeDBExpvarStats() map[string]any {
 	}
 	out["instances"] = instances
 	return out
+}
+
+func treeDBExpvarInstanceKey(db *DB) string {
+	if db == nil {
+		return ""
+	}
+	if db.dir == "" {
+		return fmt.Sprintf("db_%p", db)
+	}
+	return fmt.Sprintf("%s#%p", db.dir, db)
 }
 
 func selectTreeDBExpvarStats(stats map[string]string) map[string]any {

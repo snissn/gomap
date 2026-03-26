@@ -17,6 +17,7 @@ import (
 
 	treedb "github.com/snissn/gomap/TreeDB"
 	treedbdb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/limits"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 )
 
@@ -308,12 +309,19 @@ func scanValueLogFrames(segments []valueLogSegmentAudit, opts valueLogFrameScanA
 	if topN <= 0 {
 		topN = 10
 	}
+	maxValueLen := int64(^uint32(0))
+	if limits.MaxRecordSize > 0 {
+		maxValueLen = limits.MaxRecordSize - int64(valuelog.HeaderSize)
+		if maxValueLen < 0 {
+			maxValueLen = 0
+		}
+	}
 	out := &valueLogFrameScanAudit{
 		Modes: make(map[string]valueLogFrameModeAudit),
 	}
 	byLength := make(map[int]valueLogRecordLengthAudit)
 	addLen := func(n int64) {
-		if n < 0 || n > int64(^uint32(0)) {
+		if n < 0 || n > maxValueLen {
 			return
 		}
 		length := int(n)
@@ -338,6 +346,7 @@ func scanValueLogFrames(segments []valueLogSegmentAudit, opts valueLogFrameScanA
 			return nil, err
 		}
 		reader := bufio.NewReaderSize(f, 1<<20)
+		var payloadBuf []byte
 		for {
 			var header [valuelog.HeaderSize]byte
 			if _, err := io.ReadFull(reader, header[:]); err != nil {
@@ -351,12 +360,16 @@ func scanValueLogFrames(segments []valueLogSegmentAudit, opts valueLogFrameScanA
 				_ = f.Close()
 				return nil, err
 			}
-			valueLen := binary.LittleEndian.Uint32(header[16:20])
-			if int64(valueLen) > int64(^uint32(0)) {
+			valueLen := int64(binary.LittleEndian.Uint32(header[16:20]))
+			if valueLen > maxValueLen {
 				_ = f.Close()
 				return nil, valuelog.ErrRecordTooLarge
 			}
-			payload := make([]byte, int(valueLen))
+			payloadLen := int(valueLen)
+			if cap(payloadBuf) < payloadLen {
+				payloadBuf = make([]byte, payloadLen)
+			}
+			payload := payloadBuf[:payloadLen]
 			if _, err := io.ReadFull(reader, payload); err != nil {
 				if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
 					out.TruncatedSegments++
@@ -367,7 +380,7 @@ func scanValueLogFrames(segments []valueLogSegmentAudit, opts valueLogFrameScanA
 			}
 			flags := header[5]
 			if flags&recordFlagGroupedAudit == 0 {
-				n := int64(valueLen)
+				n := valueLen
 				out.RecordsTotal++
 				out.UngroupedRecords++
 				out.UngroupedBytes += n

@@ -829,6 +829,11 @@ func (m *Manager) SetCurrentWritableReadBarrier(fn func(fileID uint32) error) {
 	if m == nil {
 		return
 	}
+	if fn == nil {
+		var cleared func(fileID uint32) error
+		m.currentWritableReadBarrier.Store(cleared)
+		return
+	}
 	m.currentWritableReadBarrier.Store(fn)
 }
 

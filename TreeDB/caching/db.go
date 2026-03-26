@@ -3305,6 +3305,38 @@ func (db *DB) flushValueLogForBackendRead() error {
 	return nil
 }
 
+func (db *DB) installBackendValueLogReadBarrier() {
+	if db == nil {
+		return
+	}
+	barrierSetter, ok := db.backend.(interface {
+		SetCurrentValueLogReadBarrier(func(fileID uint32) error)
+	})
+	if !ok {
+		return
+	}
+	barrierSetter.SetCurrentValueLogReadBarrier(func(fileID uint32) error {
+		laneID, _ := valuelog.DecodeFileID(fileID)
+		if int(laneID) < 0 || int(laneID) >= len(db.lanes) {
+			return nil
+		}
+		return db.flushValueLogLane(&db.lanes[laneID])
+	})
+}
+
+func (db *DB) clearBackendValueLogReadBarrier() {
+	if db == nil {
+		return
+	}
+	barrierSetter, ok := db.backend.(interface {
+		SetCurrentValueLogReadBarrier(func(fileID uint32) error)
+	})
+	if !ok {
+		return
+	}
+	barrierSetter.SetCurrentValueLogReadBarrier(nil)
+}
+
 func (db *DB) syncValueLog(laneIDs ...int) error {
 	if !db.valueLogEnabled() {
 		return nil
@@ -5413,6 +5445,28 @@ func (db *DB) retainMemtableView() *memtableView {
 	}
 }
 
+func (db *DB) retainMemtableViewUntracked() *memtableView {
+	if db == nil {
+		return nil
+	}
+	for {
+		view := db.memtables.Load()
+		if view == nil {
+			return nil
+		}
+		if n := view.refs.Add(1); n > 1 {
+			return view
+		}
+		view.refs.Add(-1)
+		if db.memtables.Load() != view {
+			continue
+		}
+		if view.refs.CompareAndSwap(0, 2) {
+			return view
+		}
+	}
+}
+
 func (db *DB) releaseMemtableView(view *memtableView) {
 	db.releaseMemtableViewRef(view, true)
 }
@@ -6999,17 +7053,6 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		lanes:                 lanes,
 		flushLaneMu:           make([]sync.Mutex, len(lanes)),
 	}
-	if barrierSetter, ok := backend.(interface {
-		SetCurrentValueLogReadBarrier(func(fileID uint32) error)
-	}); ok {
-		barrierSetter.SetCurrentValueLogReadBarrier(func(fileID uint32) error {
-			laneID, _ := valuelog.DecodeFileID(fileID)
-			if int(laneID) < 0 || int(laneID) >= len(db.lanes) {
-				return nil
-			}
-			return db.flushValueLogLane(&db.lanes[laneID])
-		})
-	}
 	db.storeMemtableMode(mode)
 	if maxExistingRID > 0 {
 		db.nextRID.Store(maxExistingRID)
@@ -7127,6 +7170,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 			})
 		}
 	}
+	db.installBackendValueLogReadBarrier()
 
 	// Publish initial memtable snapshot for lock-free reads.
 	db.mu.Lock()
@@ -7331,7 +7375,7 @@ func cacheVlogMmapStatsSnapshot(reader *valuelog.Manager) vlogMmapStatsSnapshot 
 	}
 }
 
-func (db *DB) sampleProcessMemoryPeaks() {
+func (db *DB) sampleProcessMemoryPeaks(backendMmap vlogMmapStatsSnapshot) {
 	if db == nil {
 		return
 	}
@@ -7348,7 +7392,6 @@ func (db *DB) sampleProcessMemoryPeaks() {
 		}
 	}
 	cacheMmap := cacheVlogMmapStatsSnapshot(db.valueLogReader)
-	backendMmap := backendVlogMmapStatsSnapshot(db.backend.Stats())
 	updateAtomicMax(&db.processPeakVlogMmapActiveBytes, cacheMmap.activeBytes+backendMmap.activeBytes)
 	updateAtomicMax(&db.processPeakVlogMmapCurrentBytes, cacheMmap.currentBytes+backendMmap.currentBytes)
 	updateAtomicMax(&db.processPeakVlogMmapSealedBytes, cacheMmap.sealedBytes+backendMmap.sealedBytes)
@@ -7361,7 +7404,7 @@ func (db *DB) startProcessMemorySampler() {
 	if db == nil {
 		return
 	}
-	db.sampleProcessMemoryPeaks()
+	db.sampleProcessMemoryPeaks(vlogMmapStatsSnapshot{})
 	db.wg.Add(1)
 	go func() {
 		defer db.wg.Done()
@@ -7370,7 +7413,7 @@ func (db *DB) startProcessMemorySampler() {
 		for {
 			select {
 			case <-ticker.C:
-				db.sampleProcessMemoryPeaks()
+				db.sampleProcessMemoryPeaks(vlogMmapStatsSnapshot{})
 			case <-db.closeCh:
 				return
 			}
@@ -14599,6 +14642,7 @@ func (db *DB) Close() error {
 	var errs []error
 	hadMemtables := false
 	db.closing.Store(true)
+	db.clearBackendValueLogReadBarrier()
 	unregisterTreeDBExpvarStatsDB(db)
 	db.stopDomainIngressWorkers()
 	db.waitForRetainedValueLogPrune()
@@ -18363,9 +18407,9 @@ func (db *DB) Stats() map[string]string {
 	if stats == nil {
 		stats = make(map[string]string)
 	}
-	stats["treedb.process.identity.wal_dir"] = db.dir
-	db.sampleProcessMemoryPeaks()
 	backendVlogMmap := backendVlogMmapStatsSnapshot(stats)
+	stats["treedb.process.identity.wal_dir"] = db.dir
+	db.sampleProcessMemoryPeaks(backendVlogMmap)
 	db.mu.RLock()
 	queueLen := len(db.queue)
 	flushThreshold := db.flushThreshold
@@ -18388,10 +18432,10 @@ func (db *DB) Stats() map[string]string {
 	db.mu.RUnlock()
 	var mutableTables []memtable.Table
 	var queueTables []memtable.Table
-	if view := db.retainMemtableView(); view != nil {
+	if view := db.retainMemtableViewUntracked(); view != nil {
 		mutableTables = append(mutableTables, view.mutables...)
 		queueTables = append(queueTables, view.queue...)
-		db.releaseMemtableView(view)
+		db.releaseMemtableViewRef(view, false)
 	} else {
 		db.mu.RLock()
 		if len(db.mutableShards) > 0 {

@@ -98,19 +98,37 @@ func TestSelectTreeDBExpvarStatsEmpty(t *testing.T) {
 	}
 }
 
-func TestCurrentTreeDBExpvarStatsIncludesInstances(t *testing.T) {
+func resetTreeDBExpvarRegistryForTest(t *testing.T) {
+	t.Helper()
 	treedbExpvarDBsMu.Lock()
 	oldDBs := treedbExpvarDBs
 	treedbExpvarDBs = make(map[*DB]struct{})
 	treedbExpvarDBsMu.Unlock()
 	oldCurrent := treedbExpvarCurrentDB.Load()
 	treedbExpvarCurrentDB.Store(nil)
-	defer func() {
+	t.Cleanup(func() {
 		treedbExpvarCurrentDB.Store(oldCurrent)
 		treedbExpvarDBsMu.Lock()
 		treedbExpvarDBs = oldDBs
 		treedbExpvarDBsMu.Unlock()
-	}()
+	})
+}
+
+func findExpvarInstanceByWalDir(instances map[string]any, walDir string) (map[string]any, bool) {
+	for _, raw := range instances {
+		inst, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		if inst["treedb.expvar.wal_dir"] == walDir {
+			return inst, true
+		}
+	}
+	return nil, false
+}
+
+func TestCurrentTreeDBExpvarStatsIncludesInstances(t *testing.T) {
+	resetTreeDBExpvarRegistryForTest(t)
 
 	dbA := &DB{
 		dir: "/tmp/a/wal",
@@ -152,13 +170,13 @@ func TestCurrentTreeDBExpvarStatsIncludesInstances(t *testing.T) {
 	if len(instances) != 2 {
 		t.Fatalf("len(instances)=%d want 2", len(instances))
 	}
-	instA, ok := instances["/tmp/a/wal"].(map[string]any)
+	instA, ok := findExpvarInstanceByWalDir(instances, "/tmp/a/wal")
 	if !ok {
-		t.Fatalf("instance /tmp/a/wal missing or wrong type: %T", instances["/tmp/a/wal"])
+		t.Fatalf("instance /tmp/a/wal missing")
 	}
-	instB, ok := instances["/tmp/b/wal"].(map[string]any)
+	instB, ok := findExpvarInstanceByWalDir(instances, "/tmp/b/wal")
 	if !ok {
-		t.Fatalf("instance /tmp/b/wal missing or wrong type: %T", instances["/tmp/b/wal"])
+		t.Fatalf("instance /tmp/b/wal missing")
 	}
 	if instA["treedb.expvar.is_current"] != false {
 		t.Fatalf("instance a is_current=%v want false", instA["treedb.expvar.is_current"])
@@ -168,5 +186,103 @@ func TestCurrentTreeDBExpvarStatsIncludesInstances(t *testing.T) {
 	}
 	if instA["treedb.expvar.wal_dir"] != "/tmp/a/wal" || instB["treedb.expvar.wal_dir"] != "/tmp/b/wal" {
 		t.Fatalf("unexpected instance wal dirs: a=%v b=%v", instA["treedb.expvar.wal_dir"], instB["treedb.expvar.wal_dir"])
+	}
+}
+
+func TestCurrentTreeDBExpvarStatsDuplicateWalDirKeepsDistinctInstances(t *testing.T) {
+	resetTreeDBExpvarRegistryForTest(t)
+
+	dbA := &DB{
+		dir: "/tmp/shared/wal",
+		backend: &mockBackendWithStats{
+			MockBackend: NewMockBackend(),
+			stats: map[string]string{
+				"treedb.process.identity.wal_dir":        "/tmp/shared/wal",
+				"treedb.process.memory.heap_inuse_bytes": "111",
+			},
+		},
+	}
+	dbB := &DB{
+		dir: "/tmp/shared/wal",
+		backend: &mockBackendWithStats{
+			MockBackend: NewMockBackend(),
+			stats: map[string]string{
+				"treedb.process.identity.wal_dir":        "/tmp/shared/wal",
+				"treedb.process.memory.heap_inuse_bytes": "222",
+			},
+		},
+	}
+
+	registerTreeDBExpvarStatsDB(dbA)
+	registerTreeDBExpvarStatsDB(dbB)
+
+	got := currentTreeDBExpvarStats()
+	instances, ok := got["instances"].(map[string]any)
+	if !ok {
+		t.Fatalf("instances=%T want map[string]any", got["instances"])
+	}
+	if got["treedb.expvar.instances_count"] != 2 {
+		t.Fatalf("instances_count=%v want 2", got["treedb.expvar.instances_count"])
+	}
+	if len(instances) != 2 {
+		t.Fatalf("len(instances)=%d want 2", len(instances))
+	}
+	seenSharedWalDir := 0
+	for key, raw := range instances {
+		inst, ok := raw.(map[string]any)
+		if !ok {
+			t.Fatalf("instance %q type=%T want map[string]any", key, raw)
+		}
+		if inst["treedb.expvar.wal_dir"] == "/tmp/shared/wal" {
+			seenSharedWalDir++
+		}
+	}
+	if seenSharedWalDir != 2 {
+		t.Fatalf("instances with shared wal dir=%d want 2", seenSharedWalDir)
+	}
+}
+
+func TestUnregisterTreeDBExpvarStatsDBKeepsCurrentWhenOthersRemain(t *testing.T) {
+	resetTreeDBExpvarRegistryForTest(t)
+
+	dbA := &DB{
+		dir: "/tmp/a/wal",
+		backend: &mockBackendWithStats{
+			MockBackend: NewMockBackend(),
+			stats: map[string]string{
+				"treedb.process.identity.wal_dir": "/tmp/a/wal",
+			},
+		},
+	}
+	dbB := &DB{
+		dir: "/tmp/b/wal",
+		backend: &mockBackendWithStats{
+			MockBackend: NewMockBackend(),
+			stats: map[string]string{
+				"treedb.process.identity.wal_dir": "/tmp/b/wal",
+			},
+		},
+	}
+
+	registerTreeDBExpvarStatsDB(dbA)
+	registerTreeDBExpvarStatsDB(dbB)
+	unregisterTreeDBExpvarStatsDB(dbB)
+
+	got := currentTreeDBExpvarStats()
+	if got["treedb.expvar.current_wal_dir"] != "/tmp/a/wal" {
+		t.Fatalf("current_wal_dir=%v want /tmp/a/wal", got["treedb.expvar.current_wal_dir"])
+	}
+	if got["treedb.expvar.instances_count"] != 1 {
+		t.Fatalf("instances_count=%v want 1", got["treedb.expvar.instances_count"])
+	}
+	instances, ok := got["instances"].(map[string]any)
+	if !ok {
+		t.Fatalf("instances=%T want map[string]any", got["instances"])
+	}
+	if len(instances) != 1 {
+		t.Fatalf("len(instances)=%d want 1", len(instances))
+	}
+	if _, ok := findExpvarInstanceByWalDir(instances, "/tmp/a/wal"); !ok {
+		t.Fatalf("instance /tmp/a/wal missing after unregister")
 	}
 }

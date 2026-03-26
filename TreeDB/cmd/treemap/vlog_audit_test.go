@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -11,6 +12,7 @@ import (
 
 	treedb "github.com/snissn/gomap/TreeDB"
 	treedbdb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/limits"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 )
 
@@ -112,6 +114,28 @@ func TestScanValueLogRIDs_ReportsTruncatedSegments(t *testing.T) {
 	}
 	if report.TruncatedSegments != 1 {
 		t.Fatalf("TruncatedSegments=%d want 1", report.TruncatedSegments)
+	}
+}
+
+func TestScanValueLogFrames_RejectsOversizedRecordLength(t *testing.T) {
+	if limits.MaxRecordSize <= 0 {
+		t.Skip("record size cap disabled")
+	}
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "value-l0-000001.log")
+	header := make([]byte, valuelog.HeaderSize)
+	binary.LittleEndian.PutUint32(header[16:20], ^uint32(0))
+	if err := os.WriteFile(path, header, 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	report, err := scanValueLogFrames([]valueLogSegmentAudit{{Name: filepath.Base(path), Path: path, Bytes: int64(len(header))}}, valueLogFrameScanAuditOptions{Enabled: true})
+	if !errors.Is(err, valuelog.ErrRecordTooLarge) {
+		t.Fatalf("scanValueLogFrames error=%v want %v", err, valuelog.ErrRecordTooLarge)
+	}
+	if report != nil {
+		t.Fatalf("scanValueLogFrames report=%+v want nil on oversized record", report)
 	}
 }
 

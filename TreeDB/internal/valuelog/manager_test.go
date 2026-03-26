@@ -120,6 +120,33 @@ func TestManagerPromoteCurrentWritable_SwitchesPriorLaneSegmentToSealed(t *testi
 	}
 }
 
+func TestManagerSetCurrentWritableReadBarrier_NilClearsCallback(t *testing.T) {
+	mgr := &Manager{}
+	calls := 0
+	mgr.SetCurrentWritableReadBarrier(func(fileID uint32) error {
+		calls++
+		if fileID != 9 {
+			t.Fatalf("barrier fileID=%d want 9", fileID)
+		}
+		return nil
+	})
+	barrier := mgr.currentWritableBarrier()
+	if barrier == nil {
+		t.Fatalf("expected installed barrier")
+	}
+	if err := barrier(9); err != nil {
+		t.Fatalf("barrier(9): %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("barrier calls=%d want 1", calls)
+	}
+
+	mgr.SetCurrentWritableReadBarrier(nil)
+	if barrier := mgr.currentWritableBarrier(); barrier != nil {
+		t.Fatalf("expected nil barrier after clear")
+	}
+}
+
 func TestManagerReadUnsafe_CurrentWritableFallsBackWithoutPersistentMmap(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("mmap not supported on windows")
