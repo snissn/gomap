@@ -28,7 +28,7 @@ import (
 const defaultValueLogRewriteSegmentBytes = 128 << 20
 
 const rewriteDictMinPayloadBytes = 32 << 10
-const rewriteDictBatchMaxK = 32
+const rewriteDictBatchMaxK = 64
 
 // ValueLogRewriteStats summarizes rewrite compaction results.
 type ValueLogRewriteStats struct {
