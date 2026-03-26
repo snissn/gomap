@@ -148,28 +148,29 @@ func TestBuildTreeDBOptions_MaintenanceModeBenchDisablesBackgroundLoops(t *testi
 }
 
 type savedTreeDBFlagState struct {
-	indexOptimizations     bool
-	indexOuterLeavesInVlog bool
-	forcePointers          bool
-	leafPrefix             bool
-	columnarLeaves         bool
-	packedValuePtr         bool
-	internalBaseDelta      bool
-	chunkSize              int64
-	vlogAutoPolicy         string
-	vlogGenerationPolicy   string
-	vlogGenHotBytes        int64
-	vlogGenWarmBytes       int64
-	vlogGenColdBytes       int64
-	vlogRewriteBudgetBPS   int64
-	vlogRewriteBudgetRPS   int
-	disableWAL             bool
-	relaxedSync            bool
-	disableChecksum        bool
-	allowUnsafe            bool
-	maintenanceMode        string
-	flushThreshold         int64
-	explicitFlags          map[string]bool
+	indexOptimizations      bool
+	indexOuterLeavesInVlog  bool
+	forcePointers           bool
+	leafPrefix              bool
+	columnarLeaves          bool
+	packedValuePtr          bool
+	internalBaseDelta       bool
+	chunkSize               int64
+	vlogAutoPolicy          string
+	vlogCompressionAutotune string
+	vlogGenerationPolicy    string
+	vlogGenHotBytes         int64
+	vlogGenWarmBytes        int64
+	vlogGenColdBytes        int64
+	vlogRewriteBudgetBPS    int64
+	vlogRewriteBudgetRPS    int
+	disableWAL              bool
+	relaxedSync             bool
+	disableChecksum         bool
+	allowUnsafe             bool
+	maintenanceMode         string
+	flushThreshold          int64
+	explicitFlags           map[string]bool
 }
 
 func saveTreeDBFlagState() savedTreeDBFlagState {
@@ -178,28 +179,29 @@ func saveTreeDBFlagState() savedTreeDBFlagState {
 		copyMap[k] = v
 	}
 	return savedTreeDBFlagState{
-		indexOptimizations:     *treedbIndexOptimizations,
-		indexOuterLeavesInVlog: *treedbIndexOuterLeavesInVlog,
-		forcePointers:          *treedbForceValuePointers,
-		leafPrefix:             *treedbLeafPrefixCompression,
-		columnarLeaves:         *treedbIndexColumnarLeaves,
-		packedValuePtr:         *treedbIndexPackedValuePtr,
-		internalBaseDelta:      *treedbIndexInternalBaseDelta,
-		chunkSize:              *treedbChunkSize,
-		vlogAutoPolicy:         *treedbVlogAutoPolicy,
-		vlogGenerationPolicy:   *treedbVlogGenerationPolicy,
-		vlogGenHotBytes:        *treedbVlogGenerationHotSegmentBytes,
-		vlogGenWarmBytes:       *treedbVlogGenerationWarmSegmentBytes,
-		vlogGenColdBytes:       *treedbVlogGenerationColdSegmentBytes,
-		vlogRewriteBudgetBPS:   *treedbVlogRewriteBudgetBytesPerSec,
-		vlogRewriteBudgetRPS:   *treedbVlogRewriteBudgetRecordsPerSec,
-		disableWAL:             *treedbDisableWAL,
-		relaxedSync:            *treedbRelaxedSync,
-		disableChecksum:        *treedbDisableReadChecksum,
-		allowUnsafe:            *treedbAllowUnsafe,
-		maintenanceMode:        *treedbMaintenanceMode,
-		flushThreshold:         *treedbFlushThreshold,
-		explicitFlags:          copyMap,
+		indexOptimizations:      *treedbIndexOptimizations,
+		indexOuterLeavesInVlog:  *treedbIndexOuterLeavesInVlog,
+		forcePointers:           *treedbForceValuePointers,
+		leafPrefix:              *treedbLeafPrefixCompression,
+		columnarLeaves:          *treedbIndexColumnarLeaves,
+		packedValuePtr:          *treedbIndexPackedValuePtr,
+		internalBaseDelta:       *treedbIndexInternalBaseDelta,
+		chunkSize:               *treedbChunkSize,
+		vlogAutoPolicy:          *treedbVlogAutoPolicy,
+		vlogCompressionAutotune: *treedbVlogCompressionAutotune,
+		vlogGenerationPolicy:    *treedbVlogGenerationPolicy,
+		vlogGenHotBytes:         *treedbVlogGenerationHotSegmentBytes,
+		vlogGenWarmBytes:        *treedbVlogGenerationWarmSegmentBytes,
+		vlogGenColdBytes:        *treedbVlogGenerationColdSegmentBytes,
+		vlogRewriteBudgetBPS:    *treedbVlogRewriteBudgetBytesPerSec,
+		vlogRewriteBudgetRPS:    *treedbVlogRewriteBudgetRecordsPerSec,
+		disableWAL:              *treedbDisableWAL,
+		relaxedSync:             *treedbRelaxedSync,
+		disableChecksum:         *treedbDisableReadChecksum,
+		allowUnsafe:             *treedbAllowUnsafe,
+		maintenanceMode:         *treedbMaintenanceMode,
+		flushThreshold:          *treedbFlushThreshold,
+		explicitFlags:           copyMap,
 	}
 }
 
@@ -213,6 +215,7 @@ func restoreTreeDBFlagState(s savedTreeDBFlagState) {
 	*treedbIndexInternalBaseDelta = s.internalBaseDelta
 	*treedbChunkSize = s.chunkSize
 	*treedbVlogAutoPolicy = s.vlogAutoPolicy
+	*treedbVlogCompressionAutotune = s.vlogCompressionAutotune
 	*treedbVlogGenerationPolicy = s.vlogGenerationPolicy
 	*treedbVlogGenerationHotSegmentBytes = s.vlogGenHotBytes
 	*treedbVlogGenerationWarmSegmentBytes = s.vlogGenWarmBytes
@@ -238,6 +241,7 @@ func resetTreeDBIndexFlagsForTest() {
 	*treedbIndexInternalBaseDelta = false
 	*treedbChunkSize = defaultTreeDBChunkSizeBytes
 	*treedbVlogAutoPolicy = "balanced"
+	*treedbVlogCompressionAutotune = "off"
 	*treedbVlogGenerationPolicy = "default"
 	*treedbVlogGenerationHotSegmentBytes = 0
 	*treedbVlogGenerationWarmSegmentBytes = 0
@@ -267,6 +271,9 @@ func TestApplyProfile_FastAndWALOnFastEnableIndexOptimizations(t *testing.T) {
 	if got := *treedbVlogAutoPolicy; got != "throughput" {
 		t.Fatalf("expected fast profile to set treedb-vlog-auto-policy=throughput, got %q", got)
 	}
+	if got := *treedbVlogCompressionAutotune; got != "medium" {
+		t.Fatalf("expected fast profile to set treedb-vlog-compression-autotune=medium, got %q", got)
+	}
 	if !*treedbDisableWAL {
 		t.Fatalf("expected fast profile to disable WAL")
 	}
@@ -283,6 +290,9 @@ func TestApplyProfile_FastAndWALOnFastEnableIndexOptimizations(t *testing.T) {
 	}
 	if got := *treedbVlogAutoPolicy; got != "throughput" {
 		t.Fatalf("expected wal_on_fast profile to set treedb-vlog-auto-policy=throughput, got %q", got)
+	}
+	if got := *treedbVlogCompressionAutotune; got != "medium" {
+		t.Fatalf("expected wal_on_fast profile to set treedb-vlog-compression-autotune=medium, got %q", got)
 	}
 	if *treedbDisableWAL {
 		t.Fatalf("expected wal_on_fast profile to keep WAL enabled")
