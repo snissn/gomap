@@ -199,13 +199,95 @@ func TestCollectValueLogAudit_FrameScanIncludesModeAndLengthBreakdown(t *testing
 	}
 	found16K := false
 	for _, row := range report.FrameScan.TopRecordLengthsByBytes {
-		if row.Length == 16<<10 && row.Records > 0 && row.Bytes > 0 {
+		if row.Length == 16<<10 && row.Records > 0 && row.Bytes > 0 && row.StoredBytes > 0 {
 			found16K = true
 			break
 		}
 	}
 	if !found16K {
 		t.Fatalf("expected 16KiB record length in top lengths, got=%+v", report.FrameScan.TopRecordLengthsByBytes)
+	}
+}
+
+func TestScanValueLogFrames_FocusModeBreakdownForUngroupedLengths(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "value-l0-000001.log")
+	fileID := mustEncodeAuditFileID(t, 0, 1)
+	w, err := valuelog.NewWriter(path, fileID)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	if _, err := w.Append(0, nil, 1, bytes.Repeat([]byte{0x11}, 4096)); err != nil {
+		_ = w.Close()
+		t.Fatalf("Append(4KiB): %v", err)
+	}
+	if _, err := w.Append(0, nil, 2, bytes.Repeat([]byte{0x22}, 43008)); err != nil {
+		_ = w.Close()
+		t.Fatalf("Append(43KiB): %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	scan, err := scanValueLogFrames([]valueLogSegmentAudit{{
+		Name:  filepath.Base(path),
+		Path:  path,
+		Bytes: 0,
+	}}, valueLogFrameScanAuditOptions{Enabled: true, TopLengths: 8})
+	if err != nil {
+		t.Fatalf("scanValueLogFrames: %v", err)
+	}
+	if scan.PageLike4096Records != 1 || scan.PageLike4096Bytes != 4096 || scan.PageLike4096StoredBytes != 4096 {
+		t.Fatalf("unexpected 4KiB focus totals: records=%d bytes=%d stored=%d", scan.PageLike4096Records, scan.PageLike4096Bytes, scan.PageLike4096StoredBytes)
+	}
+	pageMode, ok := scan.PageLike4096Modes["raw_ungrouped"]
+	if !ok {
+		pageMode, ok = scan.PageLike4096Modes["grouped_raw"]
+	}
+	if !ok {
+		t.Fatalf("expected raw_ungrouped or grouped_raw mode for 4KiB focus, got=%+v", scan.PageLike4096Modes)
+	}
+	if pageMode.Records != 1 || pageMode.RawPayloadBytes != 4096 || pageMode.StoredPayloadBytes != 4096 {
+		t.Fatalf("unexpected 4KiB mode totals: %+v", pageMode)
+	}
+	if scan.Large40To48KRecords != 1 || scan.Large40To48KBytes != 43008 || scan.Large40To48KStoredBytes != 43008 {
+		t.Fatalf("unexpected 40-48KiB focus totals: records=%d bytes=%d stored=%d", scan.Large40To48KRecords, scan.Large40To48KBytes, scan.Large40To48KStoredBytes)
+	}
+	largeMode, ok := scan.Large40To48KModes["raw_ungrouped"]
+	if !ok {
+		largeMode, ok = scan.Large40To48KModes["grouped_raw"]
+	}
+	if !ok {
+		t.Fatalf("expected raw_ungrouped or grouped_raw mode for 40-48KiB focus, got=%+v", scan.Large40To48KModes)
+	}
+	if largeMode.Records != 1 || largeMode.RawPayloadBytes != 43008 || largeMode.StoredPayloadBytes != 43008 {
+		t.Fatalf("unexpected 40-48KiB mode totals: %+v", largeMode)
+	}
+}
+
+func TestApportionStoredBytesByRaw_ConservesTotals(t *testing.T) {
+	raw := []int64{43008, 43008, 4096}
+	shares := apportionStoredBytesByRaw(raw, 1000)
+	if len(shares) != len(raw) {
+		t.Fatalf("shares len=%d want=%d", len(shares), len(raw))
+	}
+	var sum int64
+	for _, n := range shares {
+		sum += n
+	}
+	if sum != 1000 {
+		t.Fatalf("sum(shares)=%d want=1000", sum)
+	}
+	if shares[0] != shares[1] {
+		t.Fatalf("expected equal shares for equal raw lengths, got %d vs %d", shares[0], shares[1])
+	}
+	if shares[2] >= shares[0] {
+		t.Fatalf("expected smaller share for 4KiB value, got shares=%v", shares)
+	}
+
+	zeroRaw := apportionStoredBytesByRaw([]int64{0, 0}, 7)
+	if len(zeroRaw) != 2 || zeroRaw[0] != 0 || zeroRaw[1] != 7 {
+		t.Fatalf("zero-raw apportion unexpected: %v", zeroRaw)
 	}
 }
 
