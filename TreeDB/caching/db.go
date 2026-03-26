@@ -3381,6 +3381,7 @@ func dispatchBackendValueLogReadBarrier(key uintptr, fileID uint32) error {
 	}
 	laneID, _ := valuelog.DecodeFileID(fileID)
 	var firstErr error
+	flushedAny := false
 	for _, db := range dbs {
 		if db == nil || db.closing.Load() {
 			continue
@@ -3397,6 +3398,9 @@ func dispatchBackendValueLogReadBarrier(key uintptr, fileID uint32) error {
 			}
 			continue
 		}
+		flushedAny = true
+	}
+	if flushedAny {
 		return nil
 	}
 	return firstErr
