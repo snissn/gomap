@@ -220,6 +220,19 @@ const (
 	ValueLogAutoSize
 )
 
+// ValueLogDictClassMode controls whether dictionary state is shared across all
+// value-log payloads or split by payload class.
+type ValueLogDictClassMode uint8
+
+const (
+	// ValueLogDictClassSingle keeps one shared dictionary stream for all
+	// value-log payloads.
+	ValueLogDictClassSingle ValueLogDictClassMode = iota
+	// ValueLogDictClassSplitOuterLeaf keeps separate dictionary streams for
+	// outer-leaf payloads and single-value payloads.
+	ValueLogDictClassSplitOuterLeaf
+)
+
 // ValueLogGenerationPolicy controls generation-aware value-log placement.
 // PR1 scaffolding: behavior remains legacy append-only until allocator/rewrite
 // phases land; this policy is currently configuration + observability only.
@@ -305,6 +318,9 @@ type ValueLogOptions struct {
 	IncompressibleProbeIntervalBytes int
 	// AutoPolicy controls auto-mode bias (throughput, balanced, size).
 	AutoPolicy ValueLogAutoPolicy
+	// DictClassMode controls dictionary-state partitioning:
+	// 0=single (default shared dict stream), 1=split_outer_leaf.
+	DictClassMode ValueLogDictClassMode
 
 	// PointerThreshold controls when value-log pointers are used.
 	// Values <= 0 use a default threshold. In cached mode, relaxed durability

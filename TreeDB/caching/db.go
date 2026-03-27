@@ -2431,14 +2431,6 @@ func (db *DB) rewriteValueLogOpsForBackend(ops []batch.Entry, durability journal
 		return nil, err
 	}
 
-	// Best-effort: use the current dict when available.
-	dictID := uint64(0)
-	if db.dictStore != nil {
-		if id, err := db.currentDictID(context.Background()); err == nil {
-			dictID = id
-		}
-	}
-
 	keys := getValueLogKeys(len(eligible))
 	defer putValueLogKeys(keys)
 	values := getValueLogKeys(len(eligible))
@@ -2454,6 +2446,13 @@ func (db *DB) rewriteValueLogOpsForBackend(ops []batch.Entry, durability journal
 	}
 	if len(records) == 0 {
 		return ops, nil
+	}
+	dictID := uint64(0)
+	if db.dictStore != nil {
+		class := db.valueLogDictClassForRecordSplit(db.classifyVlogPayloadSplitForRecords(records))
+		if id, err := db.currentDictIDForClass(context.Background(), class); err == nil {
+			dictID = id
+		}
 	}
 	startRID := db.nextRID.Add(uint64(len(records))) - uint64(len(records)) + 1
 	for i := range records {
@@ -2570,10 +2569,6 @@ func (db *DB) flushDeferredValueLogMemtable(
 	}
 
 	vlogLane := (*lane)(nil)
-	var (
-		dictID      uint64
-		dictIDReady bool
-	)
 	ensureVlogLane := func() error {
 		if vlogLane != nil {
 			return nil
@@ -2583,14 +2578,6 @@ func (db *DB) flushDeferredValueLogMemtable(
 			return err
 		}
 		vlogLane = l
-		if !dictIDReady {
-			if db.dictStore != nil {
-				if id, err := db.currentDictID(context.Background()); err == nil {
-					dictID = id
-				}
-			}
-			dictIDReady = true
-		}
 		return nil
 	}
 
@@ -2696,6 +2683,13 @@ func (db *DB) flushDeferredValueLogMemtable(
 		records[i].RID = startRID + uint64(i)
 	}
 
+	dictID := uint64(0)
+	if db.dictStore != nil {
+		class := db.valueLogDictClassForRecordSplit(db.classifyVlogPayloadSplitForRecords(records))
+		if id, err := db.currentDictIDForClass(context.Background(), class); err == nil {
+			dictID = id
+		}
+	}
 	ptrs, err := db.appendValueLog(vlogLane, dictID, nil, records, durability)
 	if err != nil {
 		return 0, err
@@ -2834,10 +2828,6 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 
 	backendPendingOps := 0
 	vlogLane := (*lane)(nil)
-	var (
-		dictID      uint64
-		dictIDReady bool
-	)
 	ensureVlogLane := func() error {
 		if vlogLane != nil {
 			return nil
@@ -2847,14 +2837,6 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 			return err
 		}
 		vlogLane = l
-		if !dictIDReady {
-			if db.dictStore != nil {
-				if id, err := db.currentDictID(context.Background()); err == nil {
-					dictID = id
-				}
-			}
-			dictIDReady = true
-		}
 		return nil
 	}
 
@@ -2913,6 +2895,13 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 				records[i].RID = startRID + uint64(i)
 			}
 
+			dictID := uint64(0)
+			if db.dictStore != nil {
+				class := db.valueLogDictClassForRecordSplit(db.classifyVlogPayloadSplitForRecords(records))
+				if id, err := db.currentDictIDForClass(context.Background(), class); err == nil {
+					dictID = id
+				}
+			}
 			ptrs, err := db.appendValueLog(vlogLane, dictID, nil, records, durability)
 			putValueLogRecordsNoClear(records)
 			putOuterLeafArena(outerArena)
@@ -3063,9 +3052,25 @@ func (db *DB) SetDictStore(store DictStore) {
 	db.dictStore = store
 	db.dictCurrentCached.Store(0)
 	db.dictCurrentOps.Store(0)
+	for class := 0; class < vlogDictClassCount; class++ {
+		db.dictCurrentCachedByClass[class].Store(0)
+		db.dictCurrentOpsByClass[class].Store(0)
+	}
 	if store != nil {
 		if dictID, err := store.GetCurrent(context.Background()); err == nil {
 			db.dictCurrentCached.Store(dictID)
+			db.dictCurrentCachedByClass[vlogDictClassSingleValue].Store(dictID)
+		}
+		if db.dictClassMode() == vlogDictClassModeSplitOuterLeaf {
+			if byClass, ok := store.(dictStoreCurrentByClass); ok {
+				for class := 0; class < vlogDictClassCount; class++ {
+					dictID, err := byClass.GetCurrentForClass(context.Background(), vlogDictClassSuffix(vlogDictClass(class)))
+					if err != nil {
+						continue
+					}
+					db.dictCurrentCachedByClass[class].Store(dictID)
+				}
+			}
 		}
 	}
 	db.valueLogDictBytesMu.Lock()
@@ -3114,11 +3119,37 @@ func (db *DB) templateLookup(ctx context.Context, templateID uint64) ([]byte, er
 }
 
 func (db *DB) currentDictID(ctx context.Context) (uint64, error) {
+	return db.currentDictIDForClass(ctx, vlogDictClassSingleValue)
+}
+
+func (db *DB) currentDictIDForClass(ctx context.Context, class vlogDictClass) (uint64, error) {
 	if db == nil || db.dictStore == nil {
 		return 0, nil
 	}
-	// Avoid per-write dictdb reads on the hot path; refresh every N uses.
 	const refreshEvery = uint64(1 << 16)
+	if db.dictClassMode() == vlogDictClassModeSplitOuterLeaf {
+		if byClass, ok := db.dictStore.(dictStoreCurrentByClass); ok {
+			classIdx := int(class)
+			if classIdx < 0 || classIdx >= vlogDictClassCount {
+				classIdx = int(vlogDictClassSingleValue)
+			}
+			seq := db.dictCurrentOpsByClass[classIdx].Add(1)
+			if seq&(refreshEvery-1) != 0 {
+				return db.dictCurrentCachedByClass[classIdx].Load(), nil
+			}
+			dictID, err := byClass.GetCurrentForClass(ctx, vlogDictClassSuffix(class))
+			if err != nil {
+				// Fall back to cached value on transient errors (best-effort).
+				return db.dictCurrentCachedByClass[classIdx].Load(), nil
+			}
+			db.dictCurrentCachedByClass[classIdx].Store(dictID)
+			if class == vlogDictClassSingleValue {
+				db.dictCurrentCached.Store(dictID)
+			}
+			return dictID, nil
+		}
+	}
+	// Avoid per-write dictdb reads on the hot path; refresh every N uses.
 	seq := db.dictCurrentOps.Add(1)
 	if seq&(refreshEvery-1) != 0 {
 		return db.dictCurrentCached.Load(), nil
@@ -3129,6 +3160,12 @@ func (db *DB) currentDictID(ctx context.Context) (uint64, error) {
 		return db.dictCurrentCached.Load(), nil
 	}
 	db.dictCurrentCached.Store(dictID)
+	classIdx := int(class)
+	if classIdx < 0 || classIdx >= vlogDictClassCount {
+		classIdx = int(vlogDictClassSingleValue)
+	}
+	db.dictCurrentCachedByClass[classIdx].Store(dictID)
+	db.dictCurrentCachedByClass[vlogDictClassSingleValue].Store(dictID)
 	return dictID, nil
 }
 
@@ -4710,6 +4747,9 @@ type Options struct {
 	// ValueLogDictMaxK clamps the maximum group size (K) used for dict-compressed
 	// value-log frames. Values <= 0 use the default (32).
 	ValueLogDictMaxK int
+	// ValueLogDictClassMode controls dictionary-state partitioning:
+	// 0=single shared dict stream, 1=split outer-leaf vs single-value streams.
+	ValueLogDictClassMode uint8
 	// ValueLogDictFrameEncodeLevel controls the zstd encoder level used for
 	// dict-compressed value-log frames. Values <= 0 use SpeedFastest.
 	ValueLogDictFrameEncodeLevel zstd.EncoderLevel
@@ -4762,6 +4802,14 @@ type Options struct {
 type DictStore interface {
 	GetCurrent(ctx context.Context) (uint64, error)
 	GetDictBytes(ctx context.Context, dictID uint64) ([]byte, error)
+}
+
+type dictStoreCurrentByClass interface {
+	GetCurrentForClass(ctx context.Context, class string) (uint64, error)
+}
+
+type dictStoreWriterByClass interface {
+	SetCurrentForClass(ctx context.Context, class string, dictID uint64) error
 }
 
 type batchArenaLease struct {
@@ -4946,6 +4994,7 @@ type DB struct {
 	// Value-log dictionary compression (cached mode).
 	valueLogDictTrain              compression.TrainConfig
 	valueLogDictMaxK               int
+	valueLogDictClassMode          uint8
 	valueLogDictFrameEncodeLevel   zstd.EncoderLevel
 	valueLogDictFrameEnableEntropy bool
 	valueLogDictSampleStride       uint64
@@ -4958,11 +5007,12 @@ type DB struct {
 	valueLogDictMetricsMinRecords  int
 	valueLogDictMetricsPauseBytes  int
 
-	valueLogDictTrainerMu sync.Mutex
-	valueLogDictTrainer   *compression.Trainer
-	valueLogDictKickCh    chan struct{}
-	valueLogDictMetrics   compression.Metrics
-	valueLogDictFrames    struct {
+	valueLogDictTrainerMu      sync.Mutex
+	valueLogDictTrainer        *compression.Trainer
+	valueLogDictTrainerByClass [vlogDictClassCount]*compression.Trainer
+	valueLogDictKickCh         chan struct{}
+	valueLogDictMetrics        compression.Metrics
+	valueLogDictFrames         struct {
 		total     atomic.Uint64
 		attempted atomic.Uint64
 		kept      atomic.Uint64
@@ -4987,15 +5037,23 @@ type DB struct {
 	valueLogDictPausedSampleStride           uint64
 	valueLogDictPausedSampleCounter          atomic.Uint64
 	valueLogDictLastAppliedDictHash          atomic.Uint64
+	valueLogDictLastAppliedDictHashByClass   [vlogDictClassCount]atomic.Uint64
 	valueLogDictLastAppliedDictID            atomic.Uint64
 	valueLogDictLastPublishUnixNano          atomic.Int64
 	valueLogDictLastKUpdateUnixNano          atomic.Int64
 	valueLogDictCurrentK                     atomic.Uint32
-	valueLogDictKMu                          sync.RWMutex
-	valueLogDictKCache                       map[uint64]int
-	valueLogDictBytesMu                      sync.Mutex
-	valueLogDictBytesID                      uint64
-	valueLogDictBytes                        []byte
+	valueLogDictClassFrames                  struct {
+		total     [vlogDictClassCount]atomic.Uint64
+		attempted [vlogDictClassCount]atomic.Uint64
+		kept      [vlogDictClassCount]atomic.Uint64
+	}
+	valueLogDictLastAppliedDictIDByClass [vlogDictClassCount]atomic.Uint64
+	valueLogDictCurrentKByClass          [vlogDictClassCount]atomic.Uint32
+	valueLogDictKMu                      sync.RWMutex
+	valueLogDictKCache                   map[uint64]int
+	valueLogDictBytesMu                  sync.Mutex
+	valueLogDictBytesID                  uint64
+	valueLogDictBytes                    []byte
 
 	// Value-log template compression (cached mode).
 	valueLogTemplateEnabled    bool
@@ -5007,8 +5065,10 @@ type DB struct {
 	// Cached dictdb current pointer to avoid per-write lookups on the hot path.
 	// A stale dictID is safe (it always points to a durable dict); at worst we
 	// lag adoption of a newly trained dictionary.
-	dictCurrentCached atomic.Uint64
-	dictCurrentOps    atomic.Uint64
+	dictCurrentCached        atomic.Uint64
+	dictCurrentOps           atomic.Uint64
+	dictCurrentCachedByClass [vlogDictClassCount]atomic.Uint64
+	dictCurrentOpsByClass    [vlogDictClassCount]atomic.Uint64
 
 	// Config
 	dir                                               string
@@ -6933,6 +6993,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	if valueLogDictMaxK > valuelog.MaxFrameK {
 		valueLogDictMaxK = valuelog.MaxFrameK
 	}
+	valueLogDictClassMode := normalizeVlogDictClassMode(opts.ValueLogDictClassMode)
 
 	valueLogDictFrameEncodeLevel := opts.ValueLogDictFrameEncodeLevel
 	if valueLogDictFrameEncodeLevel <= 0 {
@@ -7141,6 +7202,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		maxValueLogRetainedBytesHard:         opts.MaxValueLogRetainedBytesHard,
 		valueLogDictTrain:                    valueLogDictTrain,
 		valueLogDictMaxK:                     valueLogDictMaxK,
+		valueLogDictClassMode:                uint8(valueLogDictClassMode),
 		valueLogDictFrameEncodeLevel:         valueLogDictFrameEncodeLevel,
 		valueLogDictFrameEnableEntropy:       valueLogDictFrameEnableEntropy,
 		valueLogDictAdaptiveRatio:            valueLogDictAdaptiveRatio,
@@ -14940,10 +15002,27 @@ func (db *DB) Close() error {
 	// lane files so Close cannot race a background live-ID walk.
 	db.waitForRetainedValueLogPrune()
 	db.valueLogDictTrainerMu.Lock()
-	trainer := db.valueLogDictTrainer
+	trainers := make([]*compression.Trainer, 0, 1+vlogDictClassCount)
+	if db.valueLogDictTrainer != nil {
+		trainers = append(trainers, db.valueLogDictTrainer)
+	}
+	for i := range db.valueLogDictTrainerByClass {
+		if tr := db.valueLogDictTrainerByClass[i]; tr != nil {
+			trainers = append(trainers, tr)
+			db.valueLogDictTrainerByClass[i] = nil
+		}
+	}
 	db.valueLogDictTrainer = nil
 	db.valueLogDictTrainerMu.Unlock()
-	if trainer != nil {
+	closed := make(map[*compression.Trainer]struct{}, len(trainers))
+	for _, trainer := range trainers {
+		if trainer == nil {
+			continue
+		}
+		if _, ok := closed[trainer]; ok {
+			continue
+		}
+		closed[trainer] = struct{}{}
 		trainer.Close()
 	}
 	if db.valueLogTemplateEngine != nil {
@@ -15196,8 +15275,9 @@ func (db *DB) setDirect(key, value []byte, sync bool) error {
 
 	if allowPointers {
 		dictID := uint64(0)
-		if db.valueLogDictTrain.TrainBytes > 0 {
-			id, err := db.currentDictID(context.Background())
+		class := db.valueLogDictClassForValue(value)
+		if db.dictStore != nil && (db.valueLogDictTrain.TrainBytes > 0 || db.dictClassMode() == vlogDictClassModeSplitOuterLeaf) {
+			id, err := db.currentDictIDForClass(context.Background(), class)
 			if err != nil {
 				db.writeMu.RUnlock()
 				return err
@@ -22042,11 +22122,19 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 		}
 	}
 
-	if !allDeletes && allowPointers && eligibleCount > 0 {
-		if err := b.freezeDictID(context.Background()); err != nil {
-			b.db.writeMu.RUnlock()
-			return err
+	resolveBatchDictID := func(records []valuelog.Record) uint64 {
+		if b.db == nil || b.db.dictStore == nil || len(records) == 0 {
+			return 0
 		}
+		class := b.db.valueLogDictClassForRecordSplit(b.db.classifyVlogPayloadSplitForRecords(records))
+		id, err := b.db.currentDictIDForClass(context.Background(), class)
+		if err != nil {
+			return 0
+		}
+		return id
+	}
+
+	if !allDeletes && allowPointers && eligibleCount > 0 {
 		if multiLanePointers {
 			type laneValueLogBatch struct {
 				laneID      int
@@ -22123,7 +22211,8 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 				wg.Add(1)
 				go func(batch *laneValueLogBatch) {
 					defer wg.Done()
-					batch.ptrs, batch.err = b.db.appendValueLog(&b.db.lanes[batch.laneID], b.dictID, nil, batch.records, durability)
+					dictID := resolveBatchDictID(batch.records)
+					batch.ptrs, batch.err = b.db.appendValueLog(&b.db.lanes[batch.laneID], dictID, nil, batch.records, durability)
 				}(lb)
 			}
 			wg.Wait()
@@ -22207,7 +22296,8 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 					}
 				}
 			}
-			ptrs, buildErr = b.db.appendValueLog(lane, b.dictID, nil, valueRecords, durability)
+			dictID := resolveBatchDictID(valueRecords)
+			ptrs, buildErr = b.db.appendValueLog(lane, dictID, nil, valueRecords, durability)
 			if buildErr != nil {
 				b.db.writeMu.RUnlock()
 				return buildErr

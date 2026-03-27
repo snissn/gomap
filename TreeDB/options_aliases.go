@@ -52,6 +52,13 @@ const (
 	ValueLogAutoSize       = db.ValueLogAutoSize
 )
 
+type ValueLogDictClassMode = db.ValueLogDictClassMode
+
+const (
+	ValueLogDictClassSingle         = db.ValueLogDictClassSingle
+	ValueLogDictClassSplitOuterLeaf = db.ValueLogDictClassSplitOuterLeaf
+)
+
 type ValueLogGenerationPolicy = db.ValueLogGenerationPolicy
 type ValueLogGenerationConfig = db.ValueLogGenerationConfig
 

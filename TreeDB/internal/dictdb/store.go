@@ -85,6 +85,27 @@ func (s *Store) GetCurrent(_ context.Context) (uint64, error) {
 	return binary.BigEndian.Uint64(val), nil
 }
 
+// GetCurrentForClass returns the current dictionary ID for a payload class.
+// Empty class falls back to the legacy global current marker.
+func (s *Store) GetCurrentForClass(_ context.Context, class string) (uint64, error) {
+	if s == nil || s.backend == nil {
+		return 0, errStoreUnavailable
+	}
+	key := currentKeyForClass(class)
+	val, err := s.backend.Get(key)
+	if err != nil {
+		return 0, err
+	}
+	if val == nil {
+		// Backward compatibility: fall back to legacy global current marker.
+		return s.GetCurrent(context.Background())
+	}
+	if len(val) != 8 {
+		return 0, fmt.Errorf("dictdb: invalid current size %d", len(val))
+	}
+	return binary.BigEndian.Uint64(val), nil
+}
+
 // PutDictBytes inserts dict bytes (deduped by hash) and returns its dictID.
 func (s *Store) PutDictBytes(ctx context.Context, dictBytes []byte) (uint64, error) {
 	if s == nil || s.backend == nil {
@@ -208,6 +229,33 @@ func (s *Store) SetCurrent(ctx context.Context, dictID uint64) error {
 	return s.backend.SetSync(currentKey(), buf)
 }
 
+// SetCurrentForClass marks dictID as the current dictionary for a payload class.
+// Empty class falls back to the legacy global current marker.
+func (s *Store) SetCurrentForClass(ctx context.Context, class string, dictID uint64) error {
+	if s == nil || s.backend == nil {
+		return errStoreUnavailable
+	}
+	key := currentKeyForClass(class)
+	if len(key) == 0 {
+		return s.SetCurrent(ctx, dictID)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if dictID == 0 {
+		return s.backend.DeleteSync(key)
+	}
+	val, err := s.backend.Get(bytesKey(dictID))
+	if err != nil {
+		return err
+	}
+	if val == nil {
+		return fmt.Errorf("dictdb: dict %d not found", dictID)
+	}
+	buf := make([]byte, 8)
+	binary.BigEndian.PutUint64(buf, dictID)
+	return s.backend.SetSync(key, buf)
+}
+
 // SetK stores the preferred frame group size (K) for dictID.
 func (s *Store) SetK(ctx context.Context, dictID uint64, k int) error {
 	if s == nil || s.backend == nil {
@@ -294,6 +342,14 @@ func kKey(dictID uint64) []byte {
 
 func currentKey() []byte {
 	return []byte("current")
+}
+
+func currentKeyForClass(class string) []byte {
+	class = strings.TrimSpace(strings.ToLower(class))
+	if class == "" || class == "single" || class == "default" {
+		return currentKey()
+	}
+	return []byte("current/" + class)
 }
 
 func (s *Store) ensureValueLogWriterLocked() (*valuelog.Writer, error) {

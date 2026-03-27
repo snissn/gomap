@@ -125,12 +125,16 @@ func TestApplyEnvMaintenanceOverrides_VlogDictTrainOverrides(t *testing.T) {
 func TestApplyEnvMaintenanceOverrides_VlogDictFrameOptions(t *testing.T) {
 	opts := Options{}
 	t.Setenv(envVlogDictMaxK, "16")
+	t.Setenv(envVlogDictClassMode, "split_outer_leaf")
 	t.Setenv(envVlogDictZstdLevel, "best")
 	t.Setenv(envVlogDictEntropy, "true")
 	applyEnvMaintenanceOverrides(&opts)
 
 	if got := opts.ValueLog.DictMaxK; got != 16 {
 		t.Fatalf("expected max k=16, got %d", got)
+	}
+	if got := opts.ValueLog.DictClassMode; got != ValueLogDictClassSplitOuterLeaf {
+		t.Fatalf("expected dict class mode split_outer_leaf, got %v", got)
 	}
 	if got := opts.ValueLog.DictFrameEncodeLevel; got != zstd.SpeedBestCompression {
 		t.Fatalf("expected zstd level=best, got %v", got)

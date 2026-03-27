@@ -580,6 +580,7 @@ func Open(opts Options) (*DB, error) {
 		ForceValueLogPointers:                    opts.ValueLog.ForcePointers,
 		ValueLogDictTrain:                        opts.ValueLog.DictTrain,
 		ValueLogDictMaxK:                         opts.ValueLog.DictMaxK,
+		ValueLogDictClassMode:                    uint8(opts.ValueLog.DictClassMode),
 		ValueLogDictFrameEncodeLevel:             opts.ValueLog.DictFrameEncodeLevel,
 		ValueLogDictFrameEnableEntropy:           opts.ValueLog.DictFrameEnableEntropy,
 		ValueLogDictAdaptiveRatio:                opts.ValueLog.DictAdaptiveRatio,
@@ -691,6 +692,7 @@ const (
 	envVlogDictDedupWindow       = "TREEDB_VLOG_DICT_DEDUP_WINDOW"              // int
 	envVlogDictTrainLevel        = "TREEDB_VLOG_DICT_TRAIN_LEVEL"               // int
 	envVlogDictMaxK              = "TREEDB_VLOG_DICT_MAX_K"                     // int
+	envVlogDictClassMode         = "TREEDB_VLOG_DICT_CLASS_MODE"                // single|split_outer_leaf
 	envVlogDictZstdLevel         = "TREEDB_VLOG_DICT_ZSTD_LEVEL"                // fastest|default|better|best|int
 	envVlogDictEntropy           = "TREEDB_VLOG_DICT_ENTROPY"                   // bool
 	envVlogDictAdaptiveRatio     = "TREEDB_VLOG_DICT_ADAPTIVE_RATIO"            // float64
@@ -787,6 +789,14 @@ func applyEnvMaintenanceOverrides(opts *Options) {
 	}
 	if v, ok := envInt(envVlogDictMaxK); ok {
 		opts.ValueLog.DictMaxK = v
+	}
+	if v, ok := envString(envVlogDictClassMode); ok {
+		switch strings.ToLower(strings.TrimSpace(v)) {
+		case "single", "":
+			opts.ValueLog.DictClassMode = ValueLogDictClassSingle
+		case "split_outer_leaf", "split-outer-leaf", "split", "outer_leaf_split":
+			opts.ValueLog.DictClassMode = ValueLogDictClassSplitOuterLeaf
+		}
 	}
 	if v, ok := envString(envVlogDictZstdLevel); ok {
 		if level, ok := parseZstdEncoderLevel(v); ok {
