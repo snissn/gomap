@@ -320,3 +320,70 @@ Takeaway:
 
 - Mask templates are now usable/correct in this harness and dramatically improve pointer-value compression on this corpus.
 - The outer-leaf side remains the active gap and still requires a different transform/routing strategy.
+
+## 8) Outer-Leaf Transform Follow-up (2026-03-27)
+
+Prototype:
+
+- Added `header_dir_delta_v1` in `template_lab`:
+  - carries `PageID+Checksum` as side bytes (same as `header_v1`)
+  - delta-encodes outer-leaf columnar-prefix directory metadata in-place (key dir, value dir, prefix dir)
+  - reverse path restores original bytes exactly (lossless round-trip tests added in `TreeDB/cmd/template_lab/main_test.go`)
+
+Focused run (20k outer-leaf pages):
+
+```bash
+go run ./TreeDB/cmd/template_lab \
+  -corpus-dir /tmp/template_corpus_run_20260327_120046 \
+  -dataset outer_leaf \
+  -max-records 20000 \
+  -outer-leaf-pretransform header_dir_delta_v1 \
+  -disable-mask-templates=false \
+  -warmup-passes 1 \
+  -measure-passes 1 \
+  -sweep-min-savings 1,4,8 \
+  -sweep-fingerprint-k 8 \
+  -sweep-max-fetch 8,16 \
+  -include-off=true \
+  -out-json /tmp/template_lab_outer_header_dir_delta_20k.json \
+  -out-md /tmp/template_lab_outer_header_dir_delta_20k.md
+```
+
+Aggressive follow-up (same corpus/run size):
+
+```bash
+go run ./TreeDB/cmd/template_lab \
+  -corpus-dir /tmp/template_corpus_run_20260327_120046 \
+  -dataset outer_leaf \
+  -max-records 20000 \
+  -outer-leaf-pretransform header_dir_delta_v1 \
+  -disable-mask-templates=false \
+  -warmup-passes 1 \
+  -measure-passes 1 \
+  -wait-after-warmup-ms 10000 \
+  -sweep-min-savings 1,4,8 \
+  -sweep-fingerprint-k 8 \
+  -sweep-max-fetch 8,16 \
+  -template-train-sample-stride 1 \
+  -template-synthesize-every 8 \
+  -template-min-anchor-freq 2 \
+  -template-min-presence-ratio 0.6 \
+  -template-min-publish-savings 1 \
+  -template-min-publish-ratio 0.7 \
+  -template-cold-search-after 1000000000 \
+  -template-cold-search-probe-every 1 \
+  -include-off=true \
+  -out-json /tmp/template_lab_outer_header_dir_delta_20k_aggr.json \
+  -out-md /tmp/template_lab_outer_header_dir_delta_20k_aggr.md
+```
+
+Observed (both baseline and aggressive):
+
+- outer-leaf keeps: `0` across all tested rows
+- encoded bytes: unchanged from raw
+- reason counters (aggressive): `tmpl_no_candidates=40000`, `templates_published=0`
+
+Conclusion:
+
+- Even with directory normalization and permissive training/cold-search settings, this corpus did not synthesize usable outer-leaf templates.
+- Next optimization effort should prioritize non-template paths for outer-leaf pages (block/dict strategy and/or outer-leaf-specific codec work), while retaining template focus primarily for pointer-value payloads.

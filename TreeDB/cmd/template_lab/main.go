@@ -40,6 +40,14 @@ type runConfig struct {
 	MaxTemplateFetch      int
 	OuterLeafPretransform string
 	DisableMaskTemplates  bool
+	TrainSampleStride     int
+	SynthesizeEvery       int
+	MinAnchorFreq         int
+	MinPresenceRatio      float64
+	MinPublishSavings     int
+	MinPublishRatio       float64
+	ColdSearchAfter       int
+	ColdSearchProbeEvery  int
 }
 
 type runResult struct {
@@ -74,51 +82,160 @@ type datasetSpec struct {
 }
 
 const (
-	outerLeafPretransformOff      = "off"
-	outerLeafPretransformHeaderV1 = "header_v1"
+	outerLeafPretransformOff               = "off"
+	outerLeafPretransformHeaderV1          = "header_v1"
+	outerLeafPretransformHeaderDirDeltaV1  = "header_dir_delta_v1"
+	outerLeafColumnarPrefixPackedLeafFlags = uint16(0xF004)
 )
 
-var outerLeafPretransformMagic = []byte{'T', 'L', 0x01}
+var (
+	outerLeafPretransformMagicHeaderV1         = []byte{'T', 'L', 0x01}
+	outerLeafPretransformMagicHeaderDirDeltaV1 = []byte{'T', 'L', 0x02}
+)
+
+type outerLeafColumnarPrefixLayout struct {
+	count     int
+	keyDirOff int
+	valDirOff int
+	flagsOff  int
+	prefixOff int
+	prefixEnd int
+}
+
+func detectOuterLeafColumnarPrefixLayout(page []byte) (outerLeafColumnarPrefixLayout, bool) {
+	if len(page) < 16 {
+		return outerLeafColumnarPrefixLayout{}, false
+	}
+	flags := binary.LittleEndian.Uint16(page[12:14])
+	if flags != outerLeafColumnarPrefixPackedLeafFlags {
+		return outerLeafColumnarPrefixLayout{}, false
+	}
+	count := int(binary.LittleEndian.Uint16(page[14:16]))
+	if count <= 0 {
+		return outerLeafColumnarPrefixLayout{}, false
+	}
+	keyDirOff := 16
+	valDirOff := keyDirOff + count*2
+	flagsOff := valDirOff + count*2
+	prefixOff := flagsOff + count
+	prefixEnd := prefixOff + count*2
+	if prefixEnd > len(page) {
+		return outerLeafColumnarPrefixLayout{}, false
+	}
+	keysBase := int(binary.LittleEndian.Uint16(page[keyDirOff : keyDirOff+2]))
+	if keysBase < prefixEnd || keysBase > len(page) {
+		return outerLeafColumnarPrefixLayout{}, false
+	}
+	return outerLeafColumnarPrefixLayout{
+		count:     count,
+		keyDirOff: keyDirOff,
+		valDirOff: valDirOff,
+		flagsOff:  flagsOff,
+		prefixOff: prefixOff,
+		prefixEnd: prefixEnd,
+	}, true
+}
+
+func deltaEncodeU16LERegion(buf []byte, off, count int) {
+	if count <= 1 || off < 0 || off+count*2 > len(buf) {
+		return
+	}
+	for i := count - 1; i >= 1; i-- {
+		curOff := off + i*2
+		prevOff := off + (i-1)*2
+		cur := binary.LittleEndian.Uint16(buf[curOff : curOff+2])
+		prev := binary.LittleEndian.Uint16(buf[prevOff : prevOff+2])
+		binary.LittleEndian.PutUint16(buf[curOff:curOff+2], cur-prev)
+	}
+}
+
+func deltaDecodeU16LERegion(buf []byte, off, count int) {
+	if count <= 1 || off < 0 || off+count*2 > len(buf) {
+		return
+	}
+	for i := 1; i < count; i++ {
+		curOff := off + i*2
+		prevOff := off + (i-1)*2
+		cur := binary.LittleEndian.Uint16(buf[curOff : curOff+2])
+		prev := binary.LittleEndian.Uint16(buf[prevOff : prevOff+2])
+		binary.LittleEndian.PutUint16(buf[curOff:curOff+2], cur+prev)
+	}
+}
 
 func applyOuterLeafPretransform(value []byte, mode string) []byte {
-	if mode != outerLeafPretransformHeaderV1 {
+	if mode == outerLeafPretransformOff {
 		return value
 	}
-	// Page header fields (PageID + Checksum) are often high-churn bytes.
-	// Carry them in a small side prefix and zero them in the page payload
-	// before template matching.
 	if len(value) < 12 {
 		return value
 	}
-	out := make([]byte, 0, len(outerLeafPretransformMagic)+12+len(value))
-	out = append(out, outerLeafPretransformMagic...)
-	out = append(out, value[:12]...)
 	page := append([]byte(nil), value...)
-	for i := 0; i < 12; i++ {
-		page[i] = 0
+	switch mode {
+	case outerLeafPretransformHeaderV1:
+		out := make([]byte, 0, len(outerLeafPretransformMagicHeaderV1)+12+len(value))
+		out = append(out, outerLeafPretransformMagicHeaderV1...)
+		out = append(out, value[:12]...)
+		for i := 0; i < 12; i++ {
+			page[i] = 0
+		}
+		out = append(out, page...)
+		return out
+	case outerLeafPretransformHeaderDirDeltaV1:
+		out := make([]byte, 0, len(outerLeafPretransformMagicHeaderDirDeltaV1)+12+len(value))
+		out = append(out, outerLeafPretransformMagicHeaderDirDeltaV1...)
+		out = append(out, value[:12]...)
+		for i := 0; i < 12; i++ {
+			page[i] = 0
+		}
+		if layout, ok := detectOuterLeafColumnarPrefixLayout(page); ok {
+			deltaEncodeU16LERegion(page, layout.keyDirOff, layout.count)
+			deltaEncodeU16LERegion(page, layout.valDirOff, layout.count)
+			deltaEncodeU16LERegion(page, layout.prefixOff, layout.count)
+		}
+		out = append(out, page...)
+		return out
+	default:
+		return value
 	}
-	out = append(out, page...)
-	return out
+}
+
+func reverseHeaderSideTransform(payload []byte, magic []byte) ([]byte, bool, error) {
+	if len(payload) < len(magic)+12 {
+		return nil, false, errors.New("pretransform: payload too short")
+	}
+	if !bytes.Equal(payload[:len(magic)], magic) {
+		return payload, false, nil
+	}
+	header := payload[len(magic) : len(magic)+12]
+	page := append([]byte(nil), payload[len(magic)+12:]...)
+	if len(page) < 12 {
+		return nil, false, errors.New("pretransform: transformed page too short")
+	}
+	copy(page[:12], header)
+	return page, true, nil
 }
 
 func reverseOuterLeafPretransform(payload []byte, mode string) ([]byte, error) {
-	if mode != outerLeafPretransformHeaderV1 {
+	switch mode {
+	case outerLeafPretransformOff:
+		return payload, nil
+	case outerLeafPretransformHeaderV1:
+		page, _, err := reverseHeaderSideTransform(payload, outerLeafPretransformMagicHeaderV1)
+		return page, err
+	case outerLeafPretransformHeaderDirDeltaV1:
+		page, transformed, err := reverseHeaderSideTransform(payload, outerLeafPretransformMagicHeaderDirDeltaV1)
+		if err != nil || !transformed {
+			return page, err
+		}
+		if layout, ok := detectOuterLeafColumnarPrefixLayout(page); ok {
+			deltaDecodeU16LERegion(page, layout.keyDirOff, layout.count)
+			deltaDecodeU16LERegion(page, layout.valDirOff, layout.count)
+			deltaDecodeU16LERegion(page, layout.prefixOff, layout.count)
+		}
+		return page, nil
+	default:
 		return payload, nil
 	}
-	magicLen := len(outerLeafPretransformMagic)
-	if len(payload) < magicLen+12 {
-		return nil, errors.New("pretransform: payload too short")
-	}
-	if !bytes.Equal(payload[:magicLen], outerLeafPretransformMagic) {
-		return payload, nil
-	}
-	header := payload[magicLen : magicLen+12]
-	page := append([]byte(nil), payload[magicLen+12:]...)
-	if len(page) < 12 {
-		return nil, errors.New("pretransform: transformed page too short")
-	}
-	copy(page[:12], header)
-	return page, nil
 }
 
 type memTemplateStore struct {
@@ -417,6 +534,30 @@ func runTemplateLab(ds datasetSpec, cfg runConfig, warmupPasses, measurePasses i
 			tcfg.MaxTemplateFetch = cfg.MaxTemplateFetch
 		}
 		tcfg.DisableMaskTemplates = cfg.DisableMaskTemplates
+		if cfg.TrainSampleStride > 0 {
+			tcfg.TrainSampleStride = cfg.TrainSampleStride
+		}
+		if cfg.SynthesizeEvery > 0 {
+			tcfg.SynthesizeEverySamples = cfg.SynthesizeEvery
+		}
+		if cfg.MinAnchorFreq > 0 {
+			tcfg.MinAnchorFreq = cfg.MinAnchorFreq
+		}
+		if cfg.MinPresenceRatio > 0 {
+			tcfg.MinPresenceRatio = cfg.MinPresenceRatio
+		}
+		if cfg.MinPublishSavings > 0 {
+			tcfg.MinPublishSavingsBytes = cfg.MinPublishSavings
+		}
+		if cfg.MinPublishRatio > 0 {
+			tcfg.MinPublishRatio = cfg.MinPublishRatio
+		}
+		if cfg.ColdSearchAfter > 0 {
+			tcfg.ColdSearchAfter = cfg.ColdSearchAfter
+		}
+		if cfg.ColdSearchProbeEvery > 0 {
+			tcfg.ColdSearchProbeEvery = cfg.ColdSearchProbeEvery
+		}
 	}
 	engine := templ.NewEngine(tcfg)
 	defer engine.Close()
@@ -605,17 +746,25 @@ func main() {
 	sweepMinSavings := flag.String("sweep-min-savings", "1,4,8", "comma-separated MinSavingsBytes sweep")
 	sweepFingerprintK := flag.String("sweep-fingerprint-k", "8", "comma-separated FingerprintK sweep")
 	sweepMaxFetch := flag.String("sweep-max-fetch", "8,16", "comma-separated MaxTemplateFetch sweep")
-	outerLeafPretransform := flag.String("outer-leaf-pretransform", outerLeafPretransformOff, "outer leaf pretransform: off|header_v1")
+	outerLeafPretransform := flag.String("outer-leaf-pretransform", outerLeafPretransformOff, "outer leaf pretransform: off|header_v1|header_dir_delta_v1")
 	disableMaskTemplates := flag.Bool("disable-mask-templates", false, "disable mask templates (anchor-only template mode)")
+	trainSampleStride := flag.Int("template-train-sample-stride", 0, "template training sample stride override (0=default)")
+	synthesizeEvery := flag.Int("template-synthesize-every", 0, "template synthesize-every override (0=default)")
+	minAnchorFreq := flag.Int("template-min-anchor-freq", 0, "template min-anchor-freq override (0=default)")
+	minPresenceRatio := flag.Float64("template-min-presence-ratio", 0, "template min-presence-ratio override (0=default)")
+	minPublishSavings := flag.Int("template-min-publish-savings", 0, "template min-publish-savings-bytes override (0=default)")
+	minPublishRatio := flag.Float64("template-min-publish-ratio", 0, "template min-publish-ratio override (0=default)")
+	coldSearchAfter := flag.Int("template-cold-search-after", 0, "template cold-search-after override (0=default)")
+	coldSearchProbeEvery := flag.Int("template-cold-search-probe-every", 0, "template cold-search-probe-every override (0=default)")
 	includeOff := flag.Bool("include-off", true, "include off baseline")
 	outJSON := flag.String("out-json", "", "optional JSON report path")
 	outMD := flag.String("out-md", "", "optional markdown report path")
 	flag.Parse()
 
 	switch strings.ToLower(strings.TrimSpace(*outerLeafPretransform)) {
-	case outerLeafPretransformOff, outerLeafPretransformHeaderV1:
+	case outerLeafPretransformOff, outerLeafPretransformHeaderV1, outerLeafPretransformHeaderDirDeltaV1:
 	default:
-		log.Fatalf("invalid -outer-leaf-pretransform=%q (expected off|header_v1)", *outerLeafPretransform)
+		log.Fatalf("invalid -outer-leaf-pretransform=%q (expected off|header_v1|header_dir_delta_v1)", *outerLeafPretransform)
 	}
 
 	if *corpusDir != "" {
@@ -681,11 +830,29 @@ func main() {
 
 	configs := make([]runConfig, 0, len(minSavingsList)*len(fingerprintKList)*len(maxFetchList)+1)
 	pretransformMode := strings.ToLower(strings.TrimSpace(*outerLeafPretransform))
+	tuning := runConfig{
+		TrainSampleStride:    *trainSampleStride,
+		SynthesizeEvery:      *synthesizeEvery,
+		MinAnchorFreq:        *minAnchorFreq,
+		MinPresenceRatio:     *minPresenceRatio,
+		MinPublishSavings:    *minPublishSavings,
+		MinPublishRatio:      *minPublishRatio,
+		ColdSearchAfter:      *coldSearchAfter,
+		ColdSearchProbeEvery: *coldSearchProbeEvery,
+	}
 	if *includeOff {
 		configs = append(configs, runConfig{
 			Mode:                  "off",
 			OuterLeafPretransform: pretransformMode,
 			DisableMaskTemplates:  *disableMaskTemplates,
+			TrainSampleStride:     tuning.TrainSampleStride,
+			SynthesizeEvery:       tuning.SynthesizeEvery,
+			MinAnchorFreq:         tuning.MinAnchorFreq,
+			MinPresenceRatio:      tuning.MinPresenceRatio,
+			MinPublishSavings:     tuning.MinPublishSavings,
+			MinPublishRatio:       tuning.MinPublishRatio,
+			ColdSearchAfter:       tuning.ColdSearchAfter,
+			ColdSearchProbeEvery:  tuning.ColdSearchProbeEvery,
 		})
 	}
 	for _, minSavings := range minSavingsList {
@@ -698,6 +865,14 @@ func main() {
 					MaxTemplateFetch:      fetch,
 					OuterLeafPretransform: pretransformMode,
 					DisableMaskTemplates:  *disableMaskTemplates,
+					TrainSampleStride:     tuning.TrainSampleStride,
+					SynthesizeEvery:       tuning.SynthesizeEvery,
+					MinAnchorFreq:         tuning.MinAnchorFreq,
+					MinPresenceRatio:      tuning.MinPresenceRatio,
+					MinPublishSavings:     tuning.MinPublishSavings,
+					MinPublishRatio:       tuning.MinPublishRatio,
+					ColdSearchAfter:       tuning.ColdSearchAfter,
+					ColdSearchProbeEvery:  tuning.ColdSearchProbeEvery,
 				})
 			}
 		}

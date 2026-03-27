@@ -39,4 +39,14 @@ go run ./TreeDB/cmd/template_lab \
 - `-dataset both` runs separate rows for `pointer` and `outer_leaf` corpora.
 - `-max-records` caps records per dataset for fast local iteration.
 - `-outer-leaf-pretransform header_v1` enables a reversible outer-leaf header normalization prototype for lab experiments.
+- `-outer-leaf-pretransform header_dir_delta_v1` additionally delta-normalizes outer-leaf directory metadata (lossless) for experimental matching.
 - `-disable-mask-templates=false` (default) enables full template mode. Set `true` for anchor-only diagnostic runs.
+- Optional template training/routing overrides are available for investigation:
+  - `-template-train-sample-stride`
+  - `-template-synthesize-every`
+  - `-template-min-anchor-freq`
+  - `-template-min-presence-ratio`
+  - `-template-min-publish-savings`
+  - `-template-min-publish-ratio`
+  - `-template-cold-search-after`
+  - `-template-cold-search-probe-every`
