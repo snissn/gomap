@@ -606,7 +606,7 @@ func main() {
 	sweepFingerprintK := flag.String("sweep-fingerprint-k", "8", "comma-separated FingerprintK sweep")
 	sweepMaxFetch := flag.String("sweep-max-fetch", "8,16", "comma-separated MaxTemplateFetch sweep")
 	outerLeafPretransform := flag.String("outer-leaf-pretransform", outerLeafPretransformOff, "outer leaf pretransform: off|header_v1")
-	disableMaskTemplates := flag.Bool("disable-mask-templates", true, "disable mask templates (anchor-only template mode)")
+	disableMaskTemplates := flag.Bool("disable-mask-templates", false, "disable mask templates (anchor-only template mode)")
 	includeOff := flag.Bool("include-off", true, "include off baseline")
 	outJSON := flag.String("out-json", "", "optional JSON report path")
 	outMD := flag.String("out-md", "", "optional markdown report path")

@@ -23,7 +23,7 @@ go run ./TreeDB/cmd/template_lab \
   -corpus-dir /tmp/template_corpus_fast \
   -dataset both \
   -outer-leaf-pretransform off \
-  -disable-mask-templates true \
+  -disable-mask-templates false \
   -warmup-passes 1 \
   -measure-passes 1 \
   -sweep-min-savings 1,4,8 \
@@ -39,4 +39,4 @@ go run ./TreeDB/cmd/template_lab \
 - `-dataset both` runs separate rows for `pointer` and `outer_leaf` corpora.
 - `-max-records` caps records per dataset for fast local iteration.
 - `-outer-leaf-pretransform header_v1` enables a reversible outer-leaf header normalization prototype for lab experiments.
-- `-disable-mask-templates=true` runs anchor-only template mode in the lab harness. Set `false` when explicitly investigating mask-template behavior.
+- `-disable-mask-templates=false` (default) enables full template mode. Set `true` for anchor-only diagnostic runs.

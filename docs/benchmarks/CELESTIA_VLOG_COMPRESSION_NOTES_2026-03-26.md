@@ -252,3 +252,71 @@ Takeaways:
 - Outer-leaf payloads currently do not admit profitable template frames under this prototype/config set.
 - `header_v1` pre-transform did not improve outer-leaf template effectiveness.
 - For reproducible lab runs we used `-disable-mask-templates=true` (anchor-only), while mask-template behavior remains a separate correctness/perf investigation thread.
+
+## 7) Mask Template Correctness Fix + Rerun (2026-03-27)
+
+Issue found:
+
+- Sparse mask encoding reused the input value slice and mutated it in place.
+- This caused deterministic decode-mismatch failures in the lab harness and could corrupt caller-owned buffers.
+
+Fix:
+
+- `TreeDB/template/match.go`: removed in-place sparse mask payload construction; sparse payload encoding is now non-mutating.
+- Added regression test:
+  - `TreeDB/template/engine_test.go::TestEncodeMaskTemplateSparse_DoesNotMutateInput`
+
+Validation:
+
+```bash
+go test ./TreeDB/template -count=1
+```
+
+Mask-enabled rerun commands:
+
+```bash
+go run ./TreeDB/cmd/template_lab \
+  -corpus-dir /tmp/template_corpus_run_20260327_120046 \
+  -dataset both \
+  -outer-leaf-pretransform off \
+  -disable-mask-templates=false \
+  -warmup-passes 1 \
+  -measure-passes 1 \
+  -sweep-min-savings 1,4,8 \
+  -sweep-fingerprint-k 8 \
+  -sweep-max-fetch 8,16 \
+  -include-off=true \
+  -out-json /tmp/template_lab_run_mask_on_off_20260327.json \
+  -out-md /tmp/template_lab_run_mask_on_off_20260327.md
+
+go run ./TreeDB/cmd/template_lab \
+  -corpus-dir /tmp/template_corpus_run_20260327_120046 \
+  -dataset both \
+  -outer-leaf-pretransform header_v1 \
+  -disable-mask-templates=false \
+  -warmup-passes 1 \
+  -measure-passes 1 \
+  -sweep-min-savings 1,4,8 \
+  -sweep-fingerprint-k 8 \
+  -sweep-max-fetch 8,16 \
+  -include-off=true \
+  -out-json /tmp/template_lab_run_mask_on_header_v1_20260327.json \
+  -out-md /tmp/template_lab_run_mask_on_header_v1_20260327.md
+```
+
+Results:
+
+- Pointer corpus (best row from mask-enabled off run):
+  - `tmpl_ms4_fk8_fetch16`
+  - encoded bytes: `132,634,951` vs raw `880,146,915`
+  - encoded savings: `84.93%`
+  - encoded gzip: `19,144,812` vs raw gzip `428,482,010`
+- Outer-leaf corpus:
+  - template keeps remained `0` across tested configs
+  - encoded and gzip bytes unchanged from raw
+- `header_v1` still did not improve outer-leaf keep rate in this pass.
+
+Takeaway:
+
+- Mask templates are now usable/correct in this harness and dramatically improve pointer-value compression on this corpus.
+- The outer-leaf side remains the active gap and still requires a different transform/routing strategy.
