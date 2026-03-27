@@ -2168,6 +2168,106 @@ func (db *DB) buildOuterLeafValueRecords(keys [][]byte, values [][]byte) ([]valu
 	return records, groups, nil, nil
 }
 
+type valueLogDictClassRange struct {
+	start int
+	end   int
+	class vlogDictClass
+}
+
+func (db *DB) valueLogDictClassRangesForRecords(records []valuelog.Record) []valueLogDictClassRange {
+	if len(records) == 0 {
+		return nil
+	}
+	ranges := make([]valueLogDictClassRange, 0, 4)
+	start := 0
+	class := db.valueLogDictClassForValue(records[0].Value)
+	for i := 1; i < len(records); i++ {
+		nextClass := db.valueLogDictClassForValue(records[i].Value)
+		if nextClass == class {
+			continue
+		}
+		ranges = append(ranges, valueLogDictClassRange{
+			start: start,
+			end:   i,
+			class: class,
+		})
+		start = i
+		class = nextClass
+	}
+	ranges = append(ranges, valueLogDictClassRange{
+		start: start,
+		end:   len(records),
+		class: class,
+	})
+	return ranges
+}
+
+func (db *DB) appendValueLogForRecords(l *lane, records []valuelog.Record, durability journalDurability) ([]page.ValuePtr, error) {
+	if len(records) == 0 {
+		return nil, nil
+	}
+	ranges := db.valueLogDictClassRangesForRecords(records)
+	if len(ranges) == 0 {
+		return nil, nil
+	}
+	resolveDictID := func(class vlogDictClass, cache *[vlogDictClassCount]uint64, cached *[vlogDictClassCount]bool) (uint64, error) {
+		if db == nil || db.dictStore == nil {
+			return 0, nil
+		}
+		classIdx := int(class)
+		if classIdx < 0 || classIdx >= vlogDictClassCount {
+			classIdx = int(vlogDictClassSingleValue)
+			class = vlogDictClassSingleValue
+		}
+		if cached[classIdx] {
+			return cache[classIdx], nil
+		}
+		id, err := db.currentDictIDForClass(context.Background(), class)
+		if err != nil {
+			return 0, err
+		}
+		cache[classIdx] = id
+		cached[classIdx] = true
+		return id, nil
+	}
+
+	var (
+		dictIDCache  [vlogDictClassCount]uint64
+		dictIDCached [vlogDictClassCount]bool
+	)
+	if len(ranges) == 1 {
+		dictID, err := resolveDictID(ranges[0].class, &dictIDCache, &dictIDCached)
+		if err != nil {
+			return nil, err
+		}
+		return db.appendValueLog(l, dictID, nil, records, durability)
+	}
+
+	ptrs := getValueLogPtrsCap(len(records))
+	ptrs = ptrs[:len(records)]
+	for i := range ranges {
+		r := ranges[i]
+		dictID, err := resolveDictID(r.class, &dictIDCache, &dictIDCached)
+		if err != nil {
+			putValueLogPtrs(ptrs)
+			return nil, err
+		}
+		segPtrs, err := db.appendValueLog(l, dictID, nil, records[r.start:r.end], durability)
+		if err != nil {
+			putValueLogPtrs(ptrs)
+			return nil, err
+		}
+		if len(segPtrs) != r.end-r.start {
+			putValueLogPtrs(segPtrs)
+			putValueLogPtrs(ptrs)
+			return nil, fmt.Errorf("cachingdb: value-log segment returned %d ptrs for %d records", len(segPtrs), r.end-r.start)
+		}
+		copy(ptrs[r.start:r.end], segPtrs)
+		putValueLogPtrs(segPtrs)
+	}
+	return ptrs, nil
+}
+
 func fallbackAutoVlogWriteMode(mode vlogCompressionMode, writeMode vlogCompressionWriteMode, allowDictFallback bool) vlogCompressionWriteMode {
 	if writeMode != vlogWriteDict {
 		return writeMode
@@ -2447,18 +2547,11 @@ func (db *DB) rewriteValueLogOpsForBackend(ops []batch.Entry, durability journal
 	if len(records) == 0 {
 		return ops, nil
 	}
-	dictID := uint64(0)
-	if db.dictStore != nil {
-		class := db.valueLogDictClassForRecordSplit(db.classifyVlogPayloadSplitForRecords(records))
-		if id, err := db.currentDictIDForClass(context.Background(), class); err == nil {
-			dictID = id
-		}
-	}
 	startRID := db.nextRID.Add(uint64(len(records))) - uint64(len(records)) + 1
 	for i := range records {
 		records[i].RID = startRID + uint64(i)
 	}
-	ptrs, err := db.appendValueLog(lane, dictID, nil, records, durability)
+	ptrs, err := db.appendValueLogForRecords(lane, records, durability)
 	if err != nil {
 		putValueLogRecordsNoClear(records)
 		putOuterLeafArena(outerArena)
@@ -2683,14 +2776,7 @@ func (db *DB) flushDeferredValueLogMemtable(
 		records[i].RID = startRID + uint64(i)
 	}
 
-	dictID := uint64(0)
-	if db.dictStore != nil {
-		class := db.valueLogDictClassForRecordSplit(db.classifyVlogPayloadSplitForRecords(records))
-		if id, err := db.currentDictIDForClass(context.Background(), class); err == nil {
-			dictID = id
-		}
-	}
-	ptrs, err := db.appendValueLog(vlogLane, dictID, nil, records, durability)
+	ptrs, err := db.appendValueLogForRecords(vlogLane, records, durability)
 	if err != nil {
 		return 0, err
 	}
@@ -2895,14 +2981,7 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 				records[i].RID = startRID + uint64(i)
 			}
 
-			dictID := uint64(0)
-			if db.dictStore != nil {
-				class := db.valueLogDictClassForRecordSplit(db.classifyVlogPayloadSplitForRecords(records))
-				if id, err := db.currentDictIDForClass(context.Background(), class); err == nil {
-					dictID = id
-				}
-			}
-			ptrs, err := db.appendValueLog(vlogLane, dictID, nil, records, durability)
+			ptrs, err := db.appendValueLogForRecords(vlogLane, records, durability)
 			putValueLogRecordsNoClear(records)
 			putOuterLeafArena(outerArena)
 			if err != nil {
@@ -22122,18 +22201,6 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 		}
 	}
 
-	resolveBatchDictID := func(records []valuelog.Record) uint64 {
-		if b.db == nil || b.db.dictStore == nil || len(records) == 0 {
-			return 0
-		}
-		class := b.db.valueLogDictClassForRecordSplit(b.db.classifyVlogPayloadSplitForRecords(records))
-		id, err := b.db.currentDictIDForClass(context.Background(), class)
-		if err != nil {
-			return 0
-		}
-		return id
-	}
-
 	if !allDeletes && allowPointers && eligibleCount > 0 {
 		if multiLanePointers {
 			type laneValueLogBatch struct {
@@ -22211,8 +22278,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 				wg.Add(1)
 				go func(batch *laneValueLogBatch) {
 					defer wg.Done()
-					dictID := resolveBatchDictID(batch.records)
-					batch.ptrs, batch.err = b.db.appendValueLog(&b.db.lanes[batch.laneID], dictID, nil, batch.records, durability)
+					batch.ptrs, batch.err = b.db.appendValueLogForRecords(&b.db.lanes[batch.laneID], batch.records, durability)
 				}(lb)
 			}
 			wg.Wait()
@@ -22296,8 +22362,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 					}
 				}
 			}
-			dictID := resolveBatchDictID(valueRecords)
-			ptrs, buildErr = b.db.appendValueLog(lane, dictID, nil, valueRecords, durability)
+			ptrs, buildErr = b.db.appendValueLogForRecords(lane, valueRecords, durability)
 			if buildErr != nil {
 				b.db.writeMu.RUnlock()
 				return buildErr

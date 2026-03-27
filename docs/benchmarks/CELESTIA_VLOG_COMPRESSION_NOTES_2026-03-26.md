@@ -172,3 +172,83 @@ Takeaway:
   heights.
 - For future A/Bs, prefer fixed-height or frozen-remote runs to reduce drift in
   pre-rewrite byte comparisons.
+
+## 6) Template Lab Sweep (2026-03-27)
+
+Goal:
+
+- Evaluate template pre-transform opportunities with class-isolated corpora:
+  - pointer-backed value payloads
+  - outer-leaf page payloads
+- Compare baseline (`off`) vs template configs and `header_v1` outer-leaf pre-transform.
+
+Corpus extraction:
+
+```bash
+go run ./TreeDB/cmd/template_corpus_extract \
+  -app-dir /home/mikers/.celestia-app-mainnet-treedb-20260326232754/data/application.db \
+  -out-dir /tmp/template_corpus_run_20260327_120046 \
+  -pointer-limit 0 \
+  -outer-leaf-limit 50000 \
+  -pointer-stride 1 \
+  -outer-leaf-stride 1 \
+  -overwrite
+```
+
+Extracted corpus summary:
+
+- pointer records: `21401`
+- pointer bytes: `880,146,915`
+- outer-leaf records: `50000`
+- outer-leaf bytes: `204,800,000`
+
+Sweep commands:
+
+```bash
+go run ./TreeDB/cmd/template_lab \
+  -corpus-dir /tmp/template_corpus_run_20260327_120046 \
+  -dataset both \
+  -outer-leaf-pretransform off \
+  -disable-mask-templates true \
+  -warmup-passes 1 \
+  -measure-passes 1 \
+  -sweep-min-savings 1,4,8 \
+  -sweep-fingerprint-k 8 \
+  -sweep-max-fetch 8,16 \
+  -include-off=true \
+  -out-json /tmp/template_lab_run_off_20260327.json \
+  -out-md /tmp/template_lab_run_off_20260327.md
+
+go run ./TreeDB/cmd/template_lab \
+  -corpus-dir /tmp/template_corpus_run_20260327_120046 \
+  -dataset both \
+  -outer-leaf-pretransform header_v1 \
+  -disable-mask-templates true \
+  -warmup-passes 1 \
+  -measure-passes 1 \
+  -sweep-min-savings 1,4,8 \
+  -sweep-fingerprint-k 8 \
+  -sweep-max-fetch 8,16 \
+  -include-off=true \
+  -out-json /tmp/template_lab_run_header_v1_20260327.json \
+  -out-md /tmp/template_lab_run_header_v1_20260327.md
+```
+
+Results:
+
+- pointer corpus:
+  - template keeps: `20092 / 42802 attempted`
+  - encoded bytes: `876,711,183` vs raw `880,146,915`
+  - byte savings: `0.3904%`
+  - gzip sanity: `427,462,007` vs raw gzip `428,482,010`
+- outer-leaf corpus:
+  - template keeps: `0 / 100000 attempted` (all tested configs)
+  - encoded bytes: no change from raw
+  - `header_v1` pre-transform: no keep increase and no encoded-byte reduction
+
+Takeaways:
+
+- Current template path yields a small but measurable gain on pointer values.
+- Outer-leaf payloads currently do not admit profitable template frames under this prototype/config set.
+- `header_v1` pre-transform did not improve outer-leaf template effectiveness.
+- For reproducible lab runs we used `-disable-mask-templates=true` (anchor-only), while mask-template behavior remains a separate correctness/perf investigation thread.

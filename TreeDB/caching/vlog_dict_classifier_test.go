@@ -325,6 +325,58 @@ func TestClassifyVlogPayloadSplitForRecords(t *testing.T) {
 	}
 }
 
+func TestValueLogDictClassRangesForRecords_SplitOuterLeaf(t *testing.T) {
+	db := &DB{
+		indexOuterLeavesInValueLog: true,
+		valueLogDictClassMode:      uint8(vlogDictClassModeSplitOuterLeaf),
+	}
+	outerLeafPage := make([]byte, 4096)
+	singleValue := []byte("single-value")
+	records := []valuelog.Record{
+		{RID: 1, Value: outerLeafPage},
+		{RID: 2, Value: outerLeafPage},
+		{RID: 3, Value: singleValue},
+		{RID: 4, Value: singleValue},
+		{RID: 5, Value: outerLeafPage},
+	}
+
+	ranges := db.valueLogDictClassRangesForRecords(records)
+	if len(ranges) != 3 {
+		t.Fatalf("expected 3 class ranges, got=%d", len(ranges))
+	}
+	if ranges[0].start != 0 || ranges[0].end != 2 || ranges[0].class != vlogDictClassOuterLeaf {
+		t.Fatalf("unexpected range[0]=%+v", ranges[0])
+	}
+	if ranges[1].start != 2 || ranges[1].end != 4 || ranges[1].class != vlogDictClassSingleValue {
+		t.Fatalf("unexpected range[1]=%+v", ranges[1])
+	}
+	if ranges[2].start != 4 || ranges[2].end != 5 || ranges[2].class != vlogDictClassOuterLeaf {
+		t.Fatalf("unexpected range[2]=%+v", ranges[2])
+	}
+}
+
+func TestValueLogDictClassRangesForRecords_SingleMode(t *testing.T) {
+	db := &DB{
+		indexOuterLeavesInValueLog: true,
+		valueLogDictClassMode:      uint8(vlogDictClassModeSingle),
+	}
+	outerLeafPage := make([]byte, 4096)
+	singleValue := []byte("single-value")
+	records := []valuelog.Record{
+		{RID: 1, Value: outerLeafPage},
+		{RID: 2, Value: singleValue},
+		{RID: 3, Value: outerLeafPage},
+	}
+
+	ranges := db.valueLogDictClassRangesForRecords(records)
+	if len(ranges) != 1 {
+		t.Fatalf("expected 1 class range in single mode, got=%d", len(ranges))
+	}
+	if ranges[0].start != 0 || ranges[0].end != len(records) || ranges[0].class != vlogDictClassSingleValue {
+		t.Fatalf("unexpected single-mode range=%+v", ranges[0])
+	}
+}
+
 func TestClassifyVlogOuterLeafCodecKindForValue(t *testing.T) {
 	db := &DB{indexOuterLeavesInValueLog: true}
 	legacy := make([]byte, 4096)

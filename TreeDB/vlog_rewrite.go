@@ -13,6 +13,23 @@ type ValueLogRewriteStats struct {
 	BytesBefore    int64
 	BytesAfter     int64
 	RecordsCopied  int
+
+	TemplateRecordsAttempted int
+	TemplateRecordsKept      int
+	TemplateInputBytes       int64
+	TemplateOutputBytes      int64
+
+	TemplatePointerRecordsAttempted int
+	TemplatePointerRecordsKept      int
+	TemplatePointerInputBytes       int64
+	TemplatePointerOutputBytes      int64
+	TemplatePointerReasons          map[string]uint64
+
+	TemplateOuterLeafRecordsAttempted int
+	TemplateOuterLeafRecordsKept      int
+	TemplateOuterLeafInputBytes       int64
+	TemplateOuterLeafOutputBytes      int64
+	TemplateOuterLeafReasons          map[string]uint64
 }
 
 // ValueLogRewriteOnlineOptions controls online rewrite batching behavior.

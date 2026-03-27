@@ -421,6 +421,9 @@ type ValueLogOptions struct {
 	TemplateConfig template.Config
 	// TemplateReadStrict controls strict template decode behavior.
 	TemplateReadStrict bool
+	// TemplateStore provides template routing/definition lookups for template
+	// encoding (for example in offline rewrite prepass experiments).
+	TemplateStore template.Store
 	// TemplateLookup provides template definition bytes for value-log decoding.
 	TemplateLookup valuelog.TemplateLookup
 	// TemplateDecodeOptions controls decode caps for template payloads.

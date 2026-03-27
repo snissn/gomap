@@ -147,6 +147,9 @@ func wireSideStoreLookups(rootDir string, opts *Options) (func() error, error) {
 			}
 			closers = append(closers, templateBackend.Close)
 			store := templatedb.New(templateBackendKV{db: templateBackend}, templatedb.Config{})
+			if opts.ValueLog.TemplateMode != template.TemplateOff && opts.ValueLog.TemplateStore == nil {
+				opts.ValueLog.TemplateStore = store
+			}
 
 			if opts.ValueLog.TemplateDecodeOptions == (template.DecodeOptions{}) {
 				tcfg := template.NormalizeConfig(opts.ValueLog.TemplateConfig)
