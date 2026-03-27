@@ -67,3 +67,29 @@ func TestValueLogDictCandidateK_ForcePointersKeepsExplicitDefaultCandidateSet(t 
 		t.Fatalf("valueLogDictCandidateK explicit default: got=%v want=%v", got, want)
 	}
 }
+
+func TestValueLogDictTrainerIOCost_SizePolicyDisablesIOCostModel(t *testing.T) {
+	var metrics vlogAutotuneMetrics
+	metrics.seed(0.25, 7.5)
+	db := &DB{
+		valueLogAutoPolicy:     uint8(vlogAutoSize),
+		valueLogAutotuneOptions: valuelog.AutotuneOptions{Mode: valuelog.AutotuneMedium},
+		valueLogAutotuneMetrics: metrics,
+	}
+	if got := db.valueLogDictTrainerIOCost(); got != 0 {
+		t.Fatalf("valueLogDictTrainerIOCost size policy: got=%f want=0", got)
+	}
+}
+
+func TestValueLogDictTrainerIOCost_ThroughputPolicyUsesIOCostModel(t *testing.T) {
+	var metrics vlogAutotuneMetrics
+	metrics.seed(0.25, 7.5)
+	db := &DB{
+		valueLogAutoPolicy:      uint8(vlogAutoThroughput),
+		valueLogAutotuneOptions: valuelog.AutotuneOptions{Mode: valuelog.AutotuneMedium},
+		valueLogAutotuneMetrics: metrics,
+	}
+	if got := db.valueLogDictTrainerIOCost(); got <= 0 {
+		t.Fatalf("valueLogDictTrainerIOCost throughput policy: got=%f want>0", got)
+	}
+}

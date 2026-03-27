@@ -311,6 +311,76 @@ func TestChooseValueLogBlockWriteK_ForcePointerAutoWithSelectorUsesLaneRatio(t *
 	}
 }
 
+func TestChooseValueLogBlockWriteK_DictAggressiveUsesLaneRatio(t *testing.T) {
+	db := &DB{
+		valueLogCompressionMode:  uint8(vlogCompressionDict),
+		valueLogAutoPolicy:       uint8(vlogAutoBalanced),
+		valueLogBlockTargetBytes: 4096,
+		valueLogAutotuneOptions:  valuelog.AutotuneOptions{Mode: valuelog.AutotuneAggressive},
+	}
+	selector := newVlogCompressionSelector(vlogAutoBalanced, 0, 0)
+	l := &lane{vlogCompressionSelector: selector}
+
+	// Seed lane block-ratio stats with a compressible signal.
+	for i := 0; i < 8; i++ {
+		db.observeVlogWriteMode(
+			l,
+			vlogWriteBlock,
+			valuelog.BlockCodecSnappy,
+			4096,
+			4096,
+			1024,
+			false,
+			1000,
+		)
+	}
+	laneRatio := laneVlogBlockObservedRatio(l, valuelog.BlockCodecSnappy)
+	if laneRatio >= 0.98 {
+		t.Fatalf("expected compressible lane ratio signal, got %.6f", laneRatio)
+	}
+
+	// Poison selector block ratio to mimic noisy selector state in dict mode.
+	selector.metrics[vlogAutoCandidateBlockSnappy] = vlogCandidateMetrics{ratio: 1.10, throughput: 1.0, samples: 16}
+
+	const (
+		records         = 128
+		rawPayloadBytes = records * 256
+	)
+	got := db.chooseValueLogBlockWriteK(l, records, rawPayloadBytes, valuelog.BlockCodecSnappy)
+	want := valuelog.ChooseBlockGroupK(records, rawPayloadBytes, db.valueLogBlockTargetBytes, laneRatio)
+	if got != want {
+		t.Fatalf("expected dict/aggressive K to follow lane ratio, got=%d want=%d lane_ratio=%.6f", got, want, laneRatio)
+	}
+
+	selectorRatio := selector.blockObservedRatio(valuelog.BlockCodecSnappy)
+	selectorWant := valuelog.ChooseBlockGroupK(records, rawPayloadBytes, db.valueLogBlockTargetBytes, selectorRatio)
+	if got == selectorWant {
+		t.Fatalf("expected dict/aggressive K to ignore selector ratio=%.6f, got=%d selector_want=%d", selectorRatio, got, selectorWant)
+	}
+}
+
+func TestChooseValueLogBlockWriteK_DictAggressiveWALOffForcePointersUsesMaxFrameK(t *testing.T) {
+	db := &DB{
+		valueLogCompressionMode:  uint8(vlogCompressionDict),
+		valueLogAutoPolicy:       uint8(vlogAutoBalanced),
+		valueLogBlockTargetBytes: 4096,
+		valueLogAutotuneOptions:  valuelog.AutotuneOptions{Mode: valuelog.AutotuneAggressive},
+		forceValueLogPointers:    true,
+		disableJournal:           true,
+	}
+	selector := newVlogCompressionSelector(vlogAutoBalanced, 0, 0)
+	l := &lane{vlogCompressionSelector: selector}
+
+	const (
+		records         = 256
+		rawPayloadBytes = records * 128
+	)
+	got := db.chooseValueLogBlockWriteK(l, records, rawPayloadBytes, valuelog.BlockCodecLZ4)
+	if got != valuelog.MaxFrameK {
+		t.Fatalf("expected dict/aggressive WAL-off force-pointer K=%d, got=%d", valuelog.MaxFrameK, got)
+	}
+}
+
 func TestChooseValueLogBlockWriteK_ForcePointerSmallPayloadKeepsBaseTarget(t *testing.T) {
 	l := &lane{}
 	base := &DB{
@@ -679,7 +749,7 @@ func TestVlogCompressionSelector_LargePayloadThroughputKeepsBlockWithoutStrongDi
 	}
 }
 
-func TestResolveVlogWriteMode_LargePayloadBalancedBypassesSelectorToLZ4(t *testing.T) {
+func TestResolveVlogWriteMode_LargePayloadBalancedBypassesSelectorToConfiguredBlock(t *testing.T) {
 	db := &DB{
 		valueLogCompressionMode: uint8(vlogCompressionAuto),
 		valueLogAutoPolicy:      uint8(vlogAutoBalanced),
@@ -687,8 +757,27 @@ func TestResolveVlogWriteMode_LargePayloadBalancedBypassesSelectorToLZ4(t *testi
 	}
 	l := &lane{vlogCompressionSelector: newVlogCompressionSelector(vlogAutoBalanced, 0, 0)}
 	mode, codec, probe := db.resolveVlogWriteMode(l, 0, 2048, 2048)
+	if mode != vlogWriteBlock || codec != valuelog.BlockCodecSnappy || probe {
+		t.Fatalf("expected configured block codec without probe for large payload, got mode=%v codec=%v probe=%t", mode, codec, probe)
+	}
+}
+
+func TestResolveVlogWriteMode_LargePayloadBalancedUsesObservedBetterBlockCodec(t *testing.T) {
+	db := &DB{
+		valueLogCompressionMode: uint8(vlogCompressionAuto),
+		valueLogAutoPolicy:      uint8(vlogAutoBalanced),
+		valueLogBlockCodec:      valuelog.BlockCodecSnappy,
+	}
+	l := &lane{vlogCompressionSelector: newVlogCompressionSelector(vlogAutoBalanced, 0, 0)}
+
+	for i := 0; i < largePayloadBlockCodecMinSamples; i++ {
+		observeLaneVlogBlockRatio(l, valuelog.BlockCodecSnappy, 4096, 3000)
+		observeLaneVlogBlockRatio(l, valuelog.BlockCodecLZ4, 4096, 1800)
+	}
+
+	mode, codec, probe := db.resolveVlogWriteMode(l, 0, 2048, 2048)
 	if mode != vlogWriteBlock || codec != valuelog.BlockCodecLZ4 || probe {
-		t.Fatalf("expected lz4 block write without probe for large payload, got mode=%v codec=%v probe=%t", mode, codec, probe)
+		t.Fatalf("expected observed better block codec for large payload, got mode=%v codec=%v probe=%t", mode, codec, probe)
 	}
 }
 
@@ -875,6 +964,59 @@ func TestObserveVlogWriteMode_RecordsWriteModeBytesByBucket(t *testing.T) {
 	}
 }
 
+func TestRecordLaneVlogPayloadKindObservation(t *testing.T) {
+	l := &lane{}
+	recordLaneVlogPayloadKindObservation(l, vlogPayloadKindOuterLeaf, 40<<10, 10<<10)
+	recordLaneVlogPayloadKindObservation(l, vlogPayloadKindSingleValue, 8<<10, 4<<10)
+	recordLaneVlogPayloadKindObservation(l, vlogPayloadKindMixed, 1024, 512)
+
+	snap := snapshotLaneVlogPayloadKind(l)
+	if got := snap.RawBytes[vlogPayloadKindOuterLeaf]; got != 40<<10 {
+		t.Fatalf("outer-leaf raw bytes=%d", got)
+	}
+	if got := snap.StoredBytes[vlogPayloadKindSingleValue]; got != 4<<10 {
+		t.Fatalf("single-value stored bytes=%d", got)
+	}
+	if got := snap.Frames[vlogPayloadKindMixed]; got != 1 {
+		t.Fatalf("mixed frames=%d", got)
+	}
+}
+
+func TestRecordLaneVlogPayloadSplitObservation(t *testing.T) {
+	l := &lane{}
+	recordLaneVlogPayloadSplitObservation(l, vlogPayloadSplitOuterLeaf, 40<<10, 10<<10, 10)
+	recordLaneVlogPayloadSplitObservation(l, vlogPayloadSplitSingleValue, 8<<10, 4<<10, 20)
+
+	snap := snapshotLaneVlogPayloadSplit(l)
+	if got := snap.RawBytes[vlogPayloadSplitOuterLeaf]; got != 40<<10 {
+		t.Fatalf("outer-leaf split raw bytes=%d", got)
+	}
+	if got := snap.StoredBytes[vlogPayloadSplitSingleValue]; got != 4<<10 {
+		t.Fatalf("single-value split stored bytes=%d", got)
+	}
+	if got := snap.Records[vlogPayloadSplitOuterLeaf]; got != 10 {
+		t.Fatalf("outer-leaf split records=%d", got)
+	}
+}
+
+func TestRecordLaneVlogOuterLeafCodecObservation(t *testing.T) {
+	l := &lane{}
+	recordLaneVlogOuterLeafCodecObservation(l, vlogOuterLeafCodecLZ4, 40<<10, 10<<10)
+	recordLaneVlogOuterLeafCodecObservation(l, vlogOuterLeafCodecNone, 8<<10, 8<<10)
+	recordLaneVlogOuterLeafCodecObservation(l, vlogOuterLeafCodecMixed, 1024, 512)
+
+	snap := snapshotLaneVlogOuterLeafCodec(l)
+	if got := snap.RawBytes[vlogOuterLeafCodecLZ4]; got != 40<<10 {
+		t.Fatalf("outer-leaf lz4 raw bytes=%d", got)
+	}
+	if got := snap.StoredBytes[vlogOuterLeafCodecNone]; got != 8<<10 {
+		t.Fatalf("outer-leaf none stored bytes=%d", got)
+	}
+	if got := snap.Frames[vlogOuterLeafCodecMixed]; got != 1 {
+		t.Fatalf("outer-leaf mixed frames=%d", got)
+	}
+}
+
 func TestStats_ExposeVlogWriteModeBreakdown(t *testing.T) {
 	dir := t.TempDir()
 	backend := &mockBackendWithStats{MockBackend: NewMockBackend()}
@@ -888,6 +1030,12 @@ func TestStats_ExposeVlogWriteModeBreakdown(t *testing.T) {
 	t.Cleanup(func() { _ = db.Close() })
 	db.observeVlogWriteMode(&db.lanes[0], vlogWriteDict, valuelog.BlockCodecSnappy, 40<<10, 40<<10, 10<<10, false, 1000)
 	db.observeVlogWriteMode(&db.lanes[0], vlogWriteBlock, valuelog.BlockCodecLZ4, 8<<10, 8<<10, 4<<10, false, 1000)
+	recordLaneVlogPayloadKindObservation(&db.lanes[0], vlogPayloadKindOuterLeaf, 40<<10, 10<<10)
+	recordLaneVlogPayloadKindObservation(&db.lanes[0], vlogPayloadKindSingleValue, 8<<10, 4<<10)
+	recordLaneVlogPayloadSplitObservation(&db.lanes[0], vlogPayloadSplitOuterLeaf, 40<<10, 10<<10, 10)
+	recordLaneVlogPayloadSplitObservation(&db.lanes[0], vlogPayloadSplitSingleValue, 8<<10, 4<<10, 20)
+	recordLaneVlogOuterLeafCodecObservation(&db.lanes[0], vlogOuterLeafCodecLZ4, 40<<10, 10<<10)
+	recordLaneVlogOuterLeafCodecObservation(&db.lanes[0], vlogOuterLeafCodecNone, 8<<10, 8<<10)
 
 	stats := db.Stats()
 	if got := stats["treedb.cache.vlog_write_mode.raw_bytes.dict"]; got != "40960" {
@@ -898,5 +1046,26 @@ func TestStats_ExposeVlogWriteModeBreakdown(t *testing.T) {
 	}
 	if got := stats["treedb.cache.vlog_write_mode.bucket.frames.dict.le_49152"]; got != "1" {
 		t.Fatalf("dict bucket frames stat=%q", got)
+	}
+	if got := stats["treedb.cache.vlog_payload_kind.raw_bytes.outer_leaf"]; got != "40960" {
+		t.Fatalf("outer-leaf raw bytes stat=%q", got)
+	}
+	if got := stats["treedb.cache.vlog_payload_kind.stored_ratio.single_value"]; got != "0.500000" {
+		t.Fatalf("single-value stored ratio stat=%q", got)
+	}
+	if got := stats["treedb.cache.vlog_payload_split.raw_bytes.outer_leaf"]; got != "40960" {
+		t.Fatalf("payload split outer-leaf raw bytes stat=%q", got)
+	}
+	if got := stats["treedb.cache.vlog_payload_split.stored_ratio.single_value"]; got != "0.500000" {
+		t.Fatalf("payload split single-value stored ratio stat=%q", got)
+	}
+	if got := stats["treedb.cache.vlog_payload_split.records.single_value"]; got != "20" {
+		t.Fatalf("payload split single-value records stat=%q", got)
+	}
+	if got := stats["treedb.cache.vlog_outer_leaf_codec.raw_bytes.lz4"]; got != "40960" {
+		t.Fatalf("outer-leaf codec lz4 raw bytes stat=%q", got)
+	}
+	if got := stats["treedb.cache.vlog_outer_leaf_codec.stored_ratio.none"]; got != "1.000000" {
+		t.Fatalf("outer-leaf codec none stored ratio stat=%q", got)
 	}
 }

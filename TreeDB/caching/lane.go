@@ -59,6 +59,15 @@ type lane struct {
 	vlogWriteModeBucketRawBytes    [vlogCompressionWriteModeCount][vlogPayloadBucketCount]atomic.Uint64
 	vlogWriteModeBucketStoredBytes [vlogCompressionWriteModeCount][vlogPayloadBucketCount]atomic.Uint64
 	vlogWriteModeBucketFrames      [vlogCompressionWriteModeCount][vlogPayloadBucketCount]atomic.Uint64
+	vlogPayloadKindRawBytes        [vlogPayloadKindCount]atomic.Uint64
+	vlogPayloadKindStoredBytes     [vlogPayloadKindCount]atomic.Uint64
+	vlogPayloadKindFrames          [vlogPayloadKindCount]atomic.Uint64
+	vlogPayloadSplitRawBytes       [vlogPayloadSplitKindCount]atomic.Uint64
+	vlogPayloadSplitStoredBytes    [vlogPayloadSplitKindCount]atomic.Uint64
+	vlogPayloadSplitRecords        [vlogPayloadSplitKindCount]atomic.Uint64
+	vlogOuterLeafCodecRawBytes     [vlogOuterLeafCodecKindCount]atomic.Uint64
+	vlogOuterLeafCodecStoredBytes  [vlogOuterLeafCodecKindCount]atomic.Uint64
+	vlogOuterLeafCodecFrames       [vlogOuterLeafCodecKindCount]atomic.Uint64
 	vlogQueueing                   atomic.Bool
 	vlogQueueEnqueued              atomic.Uint64
 	vlogQueueLagCount              atomic.Uint64

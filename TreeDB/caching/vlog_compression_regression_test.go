@@ -26,6 +26,376 @@ func TestResolveVlogWriteMode_DefaultUsesAutoBehavior(t *testing.T) {
 	}
 }
 
+func TestResolveVlogWriteMode_DictAggressiveFallsBackToBlockWithoutDict(t *testing.T) {
+	db := &DB{
+		valueLogCompressionMode: uint8(vlogCompressionDict),
+		valueLogBlockCodec:      valuelog.BlockCodecSnappy,
+		valueLogAutotuneOptions: valuelog.AutotuneOptions{Mode: valuelog.AutotuneAggressive},
+	}
+
+	mode, codec, probe := db.resolveVlogWriteMode(nil, 0, 4096, 4096)
+	if mode != vlogWriteBlock || codec != valuelog.BlockCodecSnappy || probe {
+		t.Fatalf("dict/aggressive with no dict should fall back to block/snappy, got mode=%v codec=%v probe=%v", mode, codec, probe)
+	}
+}
+
+func TestResolveVlogWriteMode_DictAggressiveLargeOuterLeafPayloadPrefersBlock(t *testing.T) {
+	db := &DB{
+		valueLogCompressionMode:    uint8(vlogCompressionDict),
+		valueLogBlockCodec:         valuelog.BlockCodecLZ4,
+		valueLogAutotuneOptions:    valuelog.AutotuneOptions{Mode: valuelog.AutotuneAggressive},
+		indexOuterLeavesInValueLog: true,
+	}
+
+	selector := newVlogCompressionSelector(vlogAutoBalanced, 0, 0)
+	l := &lane{vlogCompressionSelector: selector}
+	mode, codec, probe := db.resolveVlogWriteMode(l, 7, 48<<10, 48<<10)
+	if mode != vlogWriteBlock || codec != valuelog.BlockCodecLZ4 || probe {
+		t.Fatalf("dict/aggressive large outer-leaf payload should prefer block/lz4, got mode=%v codec=%v probe=%v", mode, codec, probe)
+	}
+}
+
+func TestResolveVlogWriteMode_DictAggressiveSizeLargeOuterLeafPayloadCanUseDict(t *testing.T) {
+	db := &DB{
+		valueLogCompressionMode:    uint8(vlogCompressionDict),
+		valueLogAutoPolicy:         uint8(vlogAutoSize),
+		valueLogBlockCodec:         valuelog.BlockCodecLZ4,
+		valueLogAutotuneOptions:    valuelog.AutotuneOptions{Mode: valuelog.AutotuneAggressive},
+		indexOuterLeavesInValueLog: true,
+	}
+
+	selector := newVlogCompressionSelector(vlogAutoSize, 0, 0)
+	selector.dwellBytes = 0
+	selector.currentCandidate = vlogAutoCandidateBlockLZ4
+	selector.metrics[vlogAutoCandidateOff] = vlogCandidateMetrics{ratio: 1.0, throughput: 1.0, samples: 16}
+	selector.metrics[vlogAutoCandidateBlockSnappy] = vlogCandidateMetrics{ratio: 0.74, throughput: 1.05, samples: 16}
+	selector.metrics[vlogAutoCandidateBlockLZ4] = vlogCandidateMetrics{ratio: 0.70, throughput: 1.10, samples: 16}
+	selector.metrics[vlogAutoCandidateDict] = vlogCandidateMetrics{ratio: 0.08, throughput: 0.90, samples: 16}
+
+	l := &lane{vlogCompressionSelector: selector}
+	mode, codec, probe := db.resolveVlogWriteMode(l, 7, 48<<10, 48<<10)
+	if mode != vlogWriteDict || codec != valuelog.BlockCodecSnappy || probe {
+		t.Fatalf("dict/aggressive+size large outer-leaf payload should allow dict selector path, got mode=%v codec=%v probe=%v", mode, codec, probe)
+	}
+}
+
+func TestResolveVlogWriteMode_DictAggressiveSelectorBlockUsesConfiguredCodec(t *testing.T) {
+	db := &DB{
+		valueLogCompressionMode: uint8(vlogCompressionDict),
+		valueLogBlockCodec:      valuelog.BlockCodecLZ4,
+		valueLogAutotuneOptions: valuelog.AutotuneOptions{Mode: valuelog.AutotuneAggressive},
+	}
+
+	selector := newVlogCompressionSelector(vlogAutoThroughput, 0, 0)
+	selector.dwellBytes = 0
+	selector.currentCandidate = vlogAutoCandidateBlockSnappy
+	selector.metrics[vlogAutoCandidateOff] = vlogCandidateMetrics{ratio: 1.0, throughput: 1.0, samples: 16}
+	selector.metrics[vlogAutoCandidateBlockSnappy] = vlogCandidateMetrics{ratio: 0.70, throughput: 1.10, samples: 16}
+	selector.metrics[vlogAutoCandidateBlockLZ4] = vlogCandidateMetrics{ratio: 0.78, throughput: 1.02, samples: 16}
+	selector.metrics[vlogAutoCandidateDict] = vlogCandidateMetrics{ratio: 0.98, throughput: 0.50, samples: 16}
+
+	l := &lane{vlogCompressionSelector: selector}
+	mode, codec, probe := db.resolveVlogWriteMode(l, 7, 4096, 4096)
+	if mode != vlogWriteBlock || codec != valuelog.BlockCodecLZ4 || probe {
+		t.Fatalf("dict/aggressive selector block fallback should use configured block codec, got mode=%v codec=%v probe=%v", mode, codec, probe)
+	}
+}
+
+func TestAppendValueLogOne_DictAggressiveWithoutDictRecordsBlockStats(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "value.log")
+	writer, err := valuelog.NewWriter(path, page.ValueLogFileID(1))
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	defer func() { _ = writer.Close() }()
+
+	selector := newVlogCompressionSelector(vlogAutoBalanced, 0, 0)
+	db := &DB{
+		closeCh:                  make(chan struct{}),
+		valueLogCompressionMode:  uint8(vlogCompressionDict),
+		valueLogBlockCodec:       valuelog.BlockCodecSnappy,
+		valueLogAutotuneOptions:  valuelog.AutotuneOptions{Mode: valuelog.AutotuneAggressive},
+		valueLogBlockTargetBytes: 4096,
+		lanes: []lane{
+			{id: 0, vlog: writer, vlogCompressionSelector: selector},
+		},
+	}
+
+	value := bytes.Repeat([]byte("dict-aggressive-block-fallback-"), 2048)
+	ptr, _, err := db.appendValueLogOne(&db.lanes[0], 0, nil, 1, value, journalDurabilityFlush)
+	if err != nil {
+		t.Fatalf("appendValueLogOne: %v", err)
+	}
+	if ptr == (page.ValuePtr{}) {
+		t.Fatalf("expected non-empty pointer")
+	}
+
+	ratioSnap := snapshotLaneVlogBlockRatio(&db.lanes[0])
+	if ratioSnap.Samples[vlogBlockCodecIndex(valuelog.BlockCodecSnappy)] == 0 {
+		t.Fatalf("expected block ratio sample in dict/aggressive no-dict fallback path")
+	}
+
+	selectorSnap := selector.snapshot()
+	blockFrames := selectorSnap.framesByCandidate[vlogAutoCandidateBlockSnappy] + selectorSnap.framesByCandidate[vlogAutoCandidateBlockLZ4]
+	if blockFrames == 0 {
+		t.Fatalf("expected selector block frame observation in dict/aggressive no-dict fallback path")
+	}
+}
+
+func TestAppendValueLogOne_DictAggressiveOuterLeafBypassUsesBlock(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "value.log")
+	writer, err := valuelog.NewWriter(path, page.ValueLogFileID(1))
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	defer func() { _ = writer.Close() }()
+
+	selector := newVlogCompressionSelector(vlogAutoBalanced, 0, 0)
+	db := &DB{
+		closeCh:                    make(chan struct{}),
+		valueLogCompressionMode:    uint8(vlogCompressionDict),
+		valueLogBlockCodec:         valuelog.BlockCodecLZ4,
+		valueLogAutotuneOptions:    valuelog.AutotuneOptions{Mode: valuelog.AutotuneAggressive},
+		valueLogBlockTargetBytes:   4096,
+		indexOuterLeavesInValueLog: true,
+		lanes: []lane{
+			{id: 0, vlog: writer, vlogCompressionSelector: selector},
+		},
+	}
+
+	// 4KiB pages are treated as outer-leaf payloads and should stay on block
+	// codecs instead of dict mode.
+	value := bytes.Repeat([]byte("outer-leaf-page-like-payload-"), 160)
+	if len(value) < page.PageSize {
+		value = append(value, bytes.Repeat([]byte("x"), page.PageSize-len(value))...)
+	}
+	value = value[:page.PageSize]
+	ptr, _, err := db.appendValueLogOne(&db.lanes[0], 7, []byte("stub-dict"), 1, value, journalDurabilityFlush)
+	if err != nil {
+		t.Fatalf("appendValueLogOne: %v", err)
+	}
+	if ptr == (page.ValuePtr{}) {
+		t.Fatalf("expected non-empty pointer")
+	}
+
+	writeSnap := snapshotLaneVlogWriteMode(&db.lanes[0])
+	if writeSnap.Frames[vlogWriteBlock] == 0 {
+		t.Fatalf("expected outer-leaf bypass to record block write mode frame")
+	}
+	if writeSnap.Frames[vlogWriteDict] != 0 {
+		t.Fatalf("expected no dict write-mode frame for outer-leaf bypass path")
+	}
+}
+
+func TestAppendValueLogOne_DictModeOuterLeafBypassFallsBackToBlock(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "value.log")
+	writer, err := valuelog.NewWriter(path, page.ValueLogFileID(1))
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	defer func() { _ = writer.Close() }()
+
+	db := &DB{
+		closeCh:                    make(chan struct{}),
+		valueLogCompressionMode:    uint8(vlogCompressionDict),
+		valueLogBlockCodec:         valuelog.BlockCodecLZ4,
+		valueLogAutotuneOptions:    valuelog.AutotuneOptions{Mode: valuelog.AutotuneOff},
+		valueLogBlockTargetBytes:   4096,
+		indexOuterLeavesInValueLog: true,
+		lanes: []lane{
+			{id: 0, vlog: writer},
+		},
+	}
+
+	value := bytes.Repeat([]byte("outer-leaf-page-like-payload-"), 160)
+	if len(value) < page.PageSize {
+		value = append(value, bytes.Repeat([]byte("x"), page.PageSize-len(value))...)
+	}
+	value = value[:page.PageSize]
+	ptr, _, err := db.appendValueLogOne(&db.lanes[0], 7, []byte("stub-dict"), 1, value, journalDurabilityFlush)
+	if err != nil {
+		t.Fatalf("appendValueLogOne: %v", err)
+	}
+	if ptr == (page.ValuePtr{}) {
+		t.Fatalf("expected non-empty pointer")
+	}
+
+	writeSnap := snapshotLaneVlogWriteMode(&db.lanes[0])
+	if writeSnap.Frames[vlogWriteBlock] == 0 {
+		t.Fatalf("expected outer-leaf bypass in dict mode to fall back to block")
+	}
+	if writeSnap.Frames[vlogWriteDict] != 0 {
+		t.Fatalf("expected no dict write-mode frame for outer-leaf bypass path")
+	}
+	if writeSnap.Frames[vlogWriteOff] != 0 {
+		t.Fatalf("expected no off/raw write-mode frame for outer-leaf bypass path")
+	}
+}
+
+func TestAppendValueLog_DictModeOuterLeafBypassFallsBackToBlock(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "value.log")
+	writer, err := valuelog.NewWriter(path, page.ValueLogFileID(1))
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	defer func() { _ = writer.Close() }()
+
+	db := &DB{
+		closeCh:                    make(chan struct{}),
+		valueLogCompressionMode:    uint8(vlogCompressionDict),
+		valueLogBlockCodec:         valuelog.BlockCodecLZ4,
+		valueLogAutotuneOptions:    valuelog.AutotuneOptions{Mode: valuelog.AutotuneOff},
+		valueLogBlockTargetBytes:   4096,
+		indexOuterLeavesInValueLog: true,
+		lanes: []lane{
+			{id: 0, vlog: writer},
+		},
+	}
+
+	value := bytes.Repeat([]byte("outer-leaf-page-like-payload-"), 160)
+	if len(value) < page.PageSize {
+		value = append(value, bytes.Repeat([]byte("x"), page.PageSize-len(value))...)
+	}
+	value = value[:page.PageSize]
+
+	records := []valuelog.Record{{RID: 1, Value: value}}
+	ptrs, err := db.appendValueLog(&db.lanes[0], 7, []byte("stub-dict"), records, journalDurabilityFlush)
+	if err != nil {
+		t.Fatalf("appendValueLog: %v", err)
+	}
+	if len(ptrs) != 1 || ptrs[0] == (page.ValuePtr{}) {
+		t.Fatalf("expected one non-empty pointer, got %v", ptrs)
+	}
+
+	writeSnap := snapshotLaneVlogWriteMode(&db.lanes[0])
+	if writeSnap.Frames[vlogWriteBlock] == 0 {
+		t.Fatalf("expected outer-leaf batch bypass in dict mode to fall back to block")
+	}
+	if writeSnap.Frames[vlogWriteDict] != 0 {
+		t.Fatalf("expected no dict write-mode frame for outer-leaf batch bypass path")
+	}
+	if writeSnap.Frames[vlogWriteOff] != 0 {
+		t.Fatalf("expected no off/raw write-mode frame for outer-leaf batch bypass path")
+	}
+}
+
+func TestAppendValueLogOne_AutoOuterLeafDictBypassReappliesNoDictBlockCodec(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "value.log")
+	writer, err := valuelog.NewWriter(path, page.ValueLogFileID(1))
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	defer func() { _ = writer.Close() }()
+
+	selector := newVlogCompressionSelector(vlogAutoBalanced, 0, 0)
+	selector.dwellBytes = 0
+	selector.currentCandidate = vlogAutoCandidateBlockLZ4
+	selector.metrics[vlogAutoCandidateOff] = vlogCandidateMetrics{ratio: 1.0, throughput: 1.0, samples: 16}
+	selector.metrics[vlogAutoCandidateBlockSnappy] = vlogCandidateMetrics{ratio: 0.70, throughput: 1.0, samples: 16}
+	selector.metrics[vlogAutoCandidateBlockLZ4] = vlogCandidateMetrics{ratio: 0.69, throughput: 1.0, samples: 16}
+	selector.metrics[vlogAutoCandidateDict] = vlogCandidateMetrics{ratio: 0.40, throughput: 0.20, samples: 16}
+
+	db := &DB{
+		closeCh:                    make(chan struct{}),
+		valueLogCompressionMode:    uint8(vlogCompressionAuto),
+		valueLogAutoPolicy:         uint8(vlogAutoBalanced),
+		valueLogBlockCodec:         valuelog.BlockCodecSnappy,
+		valueLogBlockTargetBytes:   4096,
+		indexOuterLeavesInValueLog: true,
+		lanes: []lane{
+			{id: 0, vlog: writer, vlogCompressionSelector: selector},
+		},
+	}
+
+	value := bytes.Repeat([]byte("outer-leaf-page-like-payload-"), 160)
+	if len(value) < page.PageSize {
+		value = append(value, bytes.Repeat([]byte("x"), page.PageSize-len(value))...)
+	}
+	value = value[:page.PageSize]
+
+	ptr, _, err := db.appendValueLogOne(&db.lanes[0], 7, []byte("stub-dict"), 1, value, journalDurabilityFlush)
+	if err != nil {
+		t.Fatalf("appendValueLogOne: %v", err)
+	}
+	if ptr == (page.ValuePtr{}) {
+		t.Fatalf("expected non-empty pointer")
+	}
+
+	writeSnap := snapshotLaneVlogWriteMode(&db.lanes[0])
+	if writeSnap.Frames[vlogWriteBlock] == 0 {
+		t.Fatalf("expected block frame for outer-leaf dict bypass in auto mode")
+	}
+	ratioSnap := snapshotLaneVlogBlockRatio(&db.lanes[0])
+	if got := ratioSnap.Samples[vlogBlockCodecIndex(valuelog.BlockCodecSnappy)]; got == 0 {
+		t.Fatalf("expected snappy sample on no-dict fallback path")
+	}
+	if got := ratioSnap.Samples[vlogBlockCodecIndex(valuelog.BlockCodecLZ4)]; got != 0 {
+		t.Fatalf("expected no lz4 sample after no-dict fallback normalization, got %d", got)
+	}
+}
+
+func TestAppendValueLog_AutoOuterLeafDictBypassReappliesNoDictBlockCodec(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "value.log")
+	writer, err := valuelog.NewWriter(path, page.ValueLogFileID(1))
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	defer func() { _ = writer.Close() }()
+
+	selector := newVlogCompressionSelector(vlogAutoBalanced, 0, 0)
+	selector.dwellBytes = 0
+	selector.currentCandidate = vlogAutoCandidateBlockLZ4
+	selector.metrics[vlogAutoCandidateOff] = vlogCandidateMetrics{ratio: 1.0, throughput: 1.0, samples: 16}
+	selector.metrics[vlogAutoCandidateBlockSnappy] = vlogCandidateMetrics{ratio: 0.70, throughput: 1.0, samples: 16}
+	selector.metrics[vlogAutoCandidateBlockLZ4] = vlogCandidateMetrics{ratio: 0.69, throughput: 1.0, samples: 16}
+	selector.metrics[vlogAutoCandidateDict] = vlogCandidateMetrics{ratio: 0.40, throughput: 0.20, samples: 16}
+
+	db := &DB{
+		closeCh:                    make(chan struct{}),
+		valueLogCompressionMode:    uint8(vlogCompressionAuto),
+		valueLogAutoPolicy:         uint8(vlogAutoBalanced),
+		valueLogBlockCodec:         valuelog.BlockCodecSnappy,
+		valueLogBlockTargetBytes:   4096,
+		indexOuterLeavesInValueLog: true,
+		lanes: []lane{
+			{id: 0, vlog: writer, vlogCompressionSelector: selector},
+		},
+	}
+
+	value := bytes.Repeat([]byte("outer-leaf-page-like-payload-"), 160)
+	if len(value) < page.PageSize {
+		value = append(value, bytes.Repeat([]byte("x"), page.PageSize-len(value))...)
+	}
+	value = value[:page.PageSize]
+	records := []valuelog.Record{{RID: 1, Value: value}}
+
+	ptrs, err := db.appendValueLog(&db.lanes[0], 7, []byte("stub-dict"), records, journalDurabilityFlush)
+	if err != nil {
+		t.Fatalf("appendValueLog: %v", err)
+	}
+	if len(ptrs) != 1 || ptrs[0] == (page.ValuePtr{}) {
+		t.Fatalf("expected one non-empty pointer, got %v", ptrs)
+	}
+
+	writeSnap := snapshotLaneVlogWriteMode(&db.lanes[0])
+	if writeSnap.Frames[vlogWriteBlock] == 0 {
+		t.Fatalf("expected block frame for outer-leaf dict bypass batch in auto mode")
+	}
+	ratioSnap := snapshotLaneVlogBlockRatio(&db.lanes[0])
+	if got := ratioSnap.Samples[vlogBlockCodecIndex(valuelog.BlockCodecSnappy)]; got == 0 {
+		t.Fatalf("expected snappy sample on no-dict batch fallback path")
+	}
+	if got := ratioSnap.Samples[vlogBlockCodecIndex(valuelog.BlockCodecLZ4)]; got != 0 {
+		t.Fatalf("expected no lz4 sample after no-dict batch fallback normalization, got %d", got)
+	}
+}
+
 func TestAppendValueLogOne_BlockModeSingleWriteTracksCompressedRatio(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "value.log")

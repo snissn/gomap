@@ -1147,6 +1147,62 @@ func printTreeDBCacheStats(w io.Writer, inst *DBInstance, prefix string) {
 		"treedb.cache.vlog_auto.hold_enters",
 		"treedb.cache.vlog_auto.hold_exits",
 		"treedb.cache.vlog_auto.bypass_bytes",
+		"treedb.cache.vlog_write_mode.raw_bytes.off",
+		"treedb.cache.vlog_write_mode.raw_bytes.block",
+		"treedb.cache.vlog_write_mode.raw_bytes.dict",
+		"treedb.cache.vlog_write_mode.stored_bytes.off",
+		"treedb.cache.vlog_write_mode.stored_bytes.block",
+		"treedb.cache.vlog_write_mode.stored_bytes.dict",
+		"treedb.cache.vlog_write_mode.stored_ratio.off",
+		"treedb.cache.vlog_write_mode.stored_ratio.block",
+		"treedb.cache.vlog_write_mode.stored_ratio.dict",
+		"treedb.cache.vlog_write_mode.frames.off",
+		"treedb.cache.vlog_write_mode.frames.block",
+		"treedb.cache.vlog_write_mode.frames.dict",
+		"treedb.cache.vlog_payload_kind.raw_bytes.single_value",
+		"treedb.cache.vlog_payload_kind.raw_bytes.outer_leaf",
+		"treedb.cache.vlog_payload_kind.raw_bytes.mixed",
+		"treedb.cache.vlog_payload_kind.stored_bytes.single_value",
+		"treedb.cache.vlog_payload_kind.stored_bytes.outer_leaf",
+		"treedb.cache.vlog_payload_kind.stored_bytes.mixed",
+		"treedb.cache.vlog_payload_kind.stored_ratio.single_value",
+		"treedb.cache.vlog_payload_kind.stored_ratio.outer_leaf",
+		"treedb.cache.vlog_payload_kind.stored_ratio.mixed",
+		"treedb.cache.vlog_payload_kind.frames.single_value",
+		"treedb.cache.vlog_payload_kind.frames.outer_leaf",
+		"treedb.cache.vlog_payload_kind.frames.mixed",
+		"treedb.cache.vlog_payload_split.raw_bytes.single_value",
+		"treedb.cache.vlog_payload_split.raw_bytes.outer_leaf",
+		"treedb.cache.vlog_payload_split.stored_bytes.single_value",
+		"treedb.cache.vlog_payload_split.stored_bytes.outer_leaf",
+		"treedb.cache.vlog_payload_split.stored_ratio.single_value",
+		"treedb.cache.vlog_payload_split.stored_ratio.outer_leaf",
+		"treedb.cache.vlog_payload_split.records.single_value",
+		"treedb.cache.vlog_payload_split.records.outer_leaf",
+		"treedb.cache.vlog_outer_leaf_codec.raw_bytes.none",
+		"treedb.cache.vlog_outer_leaf_codec.raw_bytes.snappy",
+		"treedb.cache.vlog_outer_leaf_codec.raw_bytes.lz4",
+		"treedb.cache.vlog_outer_leaf_codec.raw_bytes.legacy_page",
+		"treedb.cache.vlog_outer_leaf_codec.raw_bytes.unknown",
+		"treedb.cache.vlog_outer_leaf_codec.raw_bytes.mixed",
+		"treedb.cache.vlog_outer_leaf_codec.stored_bytes.none",
+		"treedb.cache.vlog_outer_leaf_codec.stored_bytes.snappy",
+		"treedb.cache.vlog_outer_leaf_codec.stored_bytes.lz4",
+		"treedb.cache.vlog_outer_leaf_codec.stored_bytes.legacy_page",
+		"treedb.cache.vlog_outer_leaf_codec.stored_bytes.unknown",
+		"treedb.cache.vlog_outer_leaf_codec.stored_bytes.mixed",
+		"treedb.cache.vlog_outer_leaf_codec.stored_ratio.none",
+		"treedb.cache.vlog_outer_leaf_codec.stored_ratio.snappy",
+		"treedb.cache.vlog_outer_leaf_codec.stored_ratio.lz4",
+		"treedb.cache.vlog_outer_leaf_codec.stored_ratio.legacy_page",
+		"treedb.cache.vlog_outer_leaf_codec.stored_ratio.unknown",
+		"treedb.cache.vlog_outer_leaf_codec.stored_ratio.mixed",
+		"treedb.cache.vlog_outer_leaf_codec.frames.none",
+		"treedb.cache.vlog_outer_leaf_codec.frames.snappy",
+		"treedb.cache.vlog_outer_leaf_codec.frames.lz4",
+		"treedb.cache.vlog_outer_leaf_codec.frames.legacy_page",
+		"treedb.cache.vlog_outer_leaf_codec.frames.unknown",
+		"treedb.cache.vlog_outer_leaf_codec.frames.mixed",
 		"treedb.cache.vlog_block.k.count.snappy",
 		"treedb.cache.vlog_block.k.avg.snappy",
 		"treedb.cache.vlog_block.k.max.snappy",
@@ -1683,7 +1739,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			return err == nil && v != 0
 		}
 		shouldWarmupDictBatchWrite := func() bool {
-			if steady || total <= 0 {
+			if total <= 0 {
 				return false
 			}
 			if _, ok := db.(*treedbadapter.DB); !ok {
@@ -1774,7 +1830,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 					break
 				}
 			}
-			deadline := time.Now().Add(2 * time.Second)
+			deadline := time.Now().Add(5 * time.Second)
 			for !treeDBDictPublished() && time.Now().Before(deadline) {
 				time.Sleep(5 * time.Millisecond)
 			}

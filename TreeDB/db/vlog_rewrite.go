@@ -3,6 +3,7 @@ package db
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -18,6 +19,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/bulk"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/lockfile"
+	"github.com/snissn/gomap/TreeDB/internal/outerleaf"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -29,6 +31,16 @@ const defaultValueLogRewriteSegmentBytes = 128 << 20
 
 const rewriteDictMinPayloadBytes = 32 << 10
 const rewriteDictBatchMaxK = 64
+
+func rewriteAllowDictForSmallPayload(value []byte) bool {
+	if len(value) < page.PageSize {
+		return false
+	}
+	if len(value) == page.PageSize {
+		return true
+	}
+	return outerleaf.HasMagic(value)
+}
 
 // ValueLogRewriteStats summarizes rewrite compaction results.
 type ValueLogRewriteStats struct {
@@ -288,6 +300,63 @@ func valuelogBlockCodecFromDB(codec ValueLogBlockCodec) valuelog.BlockCodec {
 	default:
 		return valuelog.BlockCodecSnappy
 	}
+}
+
+func scanValueLogSegmentPreferredDictID(seg *valuelog.File) uint64 {
+	if seg == nil || seg.File == nil {
+		return 0
+	}
+	info, err := seg.File.Stat()
+	if err != nil {
+		return 0
+	}
+	size := info.Size()
+	if size < int64(valuelog.HeaderSize+valuelog.FrameHeaderSize) {
+		return 0
+	}
+	var (
+		recordHeader [valuelog.HeaderSize]byte
+		frameHeader  [valuelog.FrameHeaderSize]byte
+		off          int64
+	)
+	for off+int64(valuelog.HeaderSize+valuelog.FrameHeaderSize) <= size {
+		if _, err := seg.File.ReadAt(recordHeader[:], off); err != nil {
+			return 0
+		}
+		bodyLen := int64(binary.LittleEndian.Uint32(recordHeader[16:20]))
+		if bodyLen < int64(valuelog.FrameHeaderSize) {
+			return 0
+		}
+		if off+int64(valuelog.HeaderSize)+bodyLen > size {
+			return 0
+		}
+		if _, err := seg.File.ReadAt(frameHeader[:], off+int64(valuelog.HeaderSize)); err != nil {
+			return 0
+		}
+		dictID := binary.LittleEndian.Uint64(frameHeader[4:12])
+		if dictID != 0 {
+			return dictID
+		}
+		off += int64(valuelog.HeaderSize) + bodyLen
+	}
+	return 0
+}
+
+func scanValueLogSetPreferredDictID(set *valuelog.Set) uint64 {
+	if set == nil || len(set.Files) == 0 {
+		return 0
+	}
+	ids := make([]uint32, 0, len(set.Files))
+	for id := range set.Files {
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	for _, id := range ids {
+		if dictID := scanValueLogSegmentPreferredDictID(set.Files[id]); dictID != 0 {
+			return dictID
+		}
+	}
+	return 0
 }
 
 func hasRewriteSourceSelection(opts ValueLogRewriteOnlineOptions) bool {
@@ -1922,6 +1991,9 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 	}
 	writer := newRewriteWriter(walDir, lane, startSeq, maxBytes)
 	writer.nextRID = nextRID
+	// Offline rewrite prioritizes final bytes on disk over encode CPU, so keep
+	// compressed output whenever it reduces stored bytes.
+	writer.SetKeepPolicy(0, 0, 0)
 	compressionMode := opts.ValueLog.Compression
 	if compressionMode == 0 {
 		compressionMode = ValueLogCompressionAuto
@@ -1955,6 +2027,12 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 
 	alloc := &pagerAllocator{p: newPager}
 	ptrMap := make(map[recordKey]recordLoc)
+	preferredDictGlobal := scanValueLogSetPreferredDictID(state.ValueLogSet)
+	if preferredDictGlobal != 0 && opts.ValueLog.DictLookup != nil {
+		if dictBytes, dictErr := opts.ValueLog.DictLookup(preferredDictGlobal); dictErr == nil && len(dictBytes) > 0 {
+			writer.SetLeafDict(preferredDictGlobal, dictBytes)
+		}
+	}
 
 	buildTree := func(root uint64) (uint64, error) {
 		iter := tree.New(d.Pager(), newValueReader(state.ValueLogSet), root).
@@ -1966,6 +2044,7 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 			writer:     writer,
 			readValue:  d.valueLogManager.Read,
 			dictLookup: opts.ValueLog.DictLookup,
+			preferredDictGlobal: preferredDictGlobal,
 		}
 		if !rewriter.Valid() {
 			if err := rewriter.Error(); err != nil {
@@ -2105,6 +2184,11 @@ type rewriteWriter struct {
 	// not consult this setting.
 	blockCompression bool
 	blockCodec       valuelog.BlockCodec
+	keepIoNsPerByte  float64
+	keepEncodeNsRaw  float64
+	keepSafetyMargin float64
+	leafDictID       uint64
+	leafDict         []byte
 	w                *valuelog.Writer
 	records          int
 
@@ -2220,6 +2304,18 @@ func (w *rewriteWriter) AppendLeafPage(leafPage []byte) (page.ValuePtr, error) {
 	if w.nextRID == 0 {
 		return page.ValuePtr{}, fmt.Errorf("value-log rid space exhausted")
 	}
+	if w.leafDictID != 0 && len(w.leafDict) > 0 && rewriteAllowDictForSmallPayload(leafPage) {
+		// LeafRef IDs intentionally omit grouped sub-index bits and therefore
+		// require K=1 frames. Use single-record append so decoded LeafRef pointers
+		// remain stable and do not alias another subrecord in a grouped batch.
+		ptr, err := w.appendSingleValueWithDict(w.leafDictID, w.leafDict, rid, leafPage)
+		if err == nil {
+			return ptr, nil
+		}
+		if !errors.Is(err, valuelog.ErrMissingDict) {
+			return page.ValuePtr{}, err
+		}
+	}
 	return w.appendValue(rid, leafPage)
 }
 
@@ -2248,6 +2344,7 @@ func (w *rewriteWriter) rotate() error {
 			return err
 		}
 		writer.SetBlockCompression(w.blockCodec, w.blockCompression)
+		writer.SetKeepPolicy(w.keepIoNsPerByte, w.keepEncodeNsRaw, w.keepSafetyMargin)
 		w.w = writer
 		w.seq = nextSeq
 		return nil
@@ -2256,8 +2353,34 @@ func (w *rewriteWriter) rotate() error {
 		return err
 	}
 	w.w.SetBlockCompression(w.blockCodec, w.blockCompression)
+	w.w.SetKeepPolicy(w.keepIoNsPerByte, w.keepEncodeNsRaw, w.keepSafetyMargin)
 	w.seq = nextSeq
 	return nil
+}
+
+func (w *rewriteWriter) SetKeepPolicy(ioNsPerStoredByte, encodeNsPerRawByte, safetyMargin float64) {
+	if w == nil {
+		return
+	}
+	w.keepIoNsPerByte = ioNsPerStoredByte
+	w.keepEncodeNsRaw = encodeNsPerRawByte
+	w.keepSafetyMargin = safetyMargin
+	if w.w != nil {
+		w.w.SetKeepPolicy(ioNsPerStoredByte, encodeNsPerRawByte, safetyMargin)
+	}
+}
+
+func (w *rewriteWriter) SetLeafDict(dictID uint64, dict []byte) {
+	if w == nil {
+		return
+	}
+	if dictID == 0 || len(dict) == 0 {
+		w.leafDictID = 0
+		w.leafDict = nil
+		return
+	}
+	w.leafDictID = dictID
+	w.leafDict = append(w.leafDict[:0], dict...)
 }
 
 func (w *rewriteWriter) appendRaw(raw []byte, length uint32) (page.ValuePtr, error) {
@@ -2282,6 +2405,24 @@ func (w *rewriteWriter) appendRaw(raw []byte, length uint32) (page.ValuePtr, err
 
 func (w *rewriteWriter) appendValue(rid uint64, value []byte) (page.ValuePtr, error) {
 	return w.appendValueWithDict(0, nil, rid, value)
+}
+
+func (w *rewriteWriter) appendSingleValueWithDict(dictID uint64, dict []byte, rid uint64, value []byte) (page.ValuePtr, error) {
+	if err := w.ensureWriter(); err != nil {
+		return page.ValuePtr{}, err
+	}
+	if err := w.flushPendingDictBatch(); err != nil {
+		return page.ValuePtr{}, err
+	}
+	if err := w.maybeRotateForEstimate(int64(valuelog.HeaderSize + len(value))); err != nil {
+		return page.ValuePtr{}, err
+	}
+	ptr, err := w.w.Append(dictID, dict, rid, value)
+	if err != nil {
+		return page.ValuePtr{}, err
+	}
+	w.records++
+	return ptr, nil
 }
 
 func (w *rewriteWriter) appendValueWithDict(dictID uint64, dict []byte, rid uint64, value []byte) (page.ValuePtr, error) {
@@ -2699,7 +2840,12 @@ func (it *rewriteIterator) reencodeGroupedBlockFrameWithDict(ptr page.ValuePtr, 
 	}
 	for i := 0; i < k; i++ {
 		recordLen := int(offsets[i+1] - offsets[i])
-		if recordLen < rewriteDictMinPayloadBytes {
+		if recordLen >= rewriteDictMinPayloadBytes {
+			continue
+		}
+		// Keep tiny payloads on block compression. Outer-leaf 4KiB pages are
+		// handled below using decoded payload inspection.
+		if recordLen < page.PageSize {
 			return page.ValuePtr{}, false, nil
 		}
 	}
@@ -2717,7 +2863,7 @@ func (it *rewriteIterator) reencodeGroupedBlockFrameWithDict(ptr page.ValuePtr, 
 			}
 			return page.ValuePtr{}, false, err
 		}
-		if len(value) < rewriteDictMinPayloadBytes {
+		if len(value) < rewriteDictMinPayloadBytes && !rewriteAllowDictForSmallPayload(value) {
 			return page.ValuePtr{}, false, nil
 		}
 		dst, err := it.writer.appendValueWithDict(dictID, dict, rids[i], value)
@@ -2786,12 +2932,13 @@ func (it *rewriteIterator) reencodeSingleRecord(ptr page.ValuePtr, frameHeader v
 	}
 
 	// For large single-record block frames, reuse the segment's observed dict
-	// (when available) to increase post-rewrite dict coverage. This runs only
-	// in rewrite, not on the ingest hot path.
+	// (when available) to increase post-rewrite dict coverage. This runs only in
+	// rewrite, not on the ingest hot path. Treat 4KiB outer-leaf payloads as
+	// eligible even though they are below the generic large-payload threshold.
 	if frameHeader.DictID != 0 || it.readValue == nil {
 		return page.ValuePtr{}, false, nil
 	}
-	if int(end-start) < rewriteDictMinPayloadBytes {
+	if int(end-start) < page.PageSize {
 		return page.ValuePtr{}, false, nil
 	}
 	dictID := it.preferredDictID(ptr.FileID)
@@ -2808,6 +2955,9 @@ func (it *rewriteIterator) reencodeSingleRecord(ptr page.ValuePtr, frameHeader v
 			return page.ValuePtr{}, false, nil
 		}
 		return page.ValuePtr{}, false, err
+	}
+	if len(value) < rewriteDictMinPayloadBytes && !rewriteAllowDictForSmallPayload(value) {
+		return page.ValuePtr{}, false, nil
 	}
 	newPtr, err := it.writer.appendValueWithDict(dictID, dict, rids[0], value)
 	if err != nil {
@@ -2839,8 +2989,28 @@ func (it *rewriteIterator) preferredDictID(fileID uint32) uint64 {
 		return 0
 	}
 	if it.preferredDictByFile != nil {
-		if dictID := it.preferredDictByFile[fileID]; dictID != 0 {
-			return dictID
+		if dictID, ok := it.preferredDictByFile[fileID]; ok {
+			if dictID != 0 {
+				return dictID
+			}
+			return it.preferredDictGlobal
+		}
+	}
+	if it.vlogs != nil && it.vlogs.Files != nil {
+		if seg := it.vlogs.Files[fileID]; seg != nil {
+			dictID := scanValueLogSegmentPreferredDictID(seg)
+			if it.preferredDictByFile == nil {
+				it.preferredDictByFile = make(map[uint32]uint64)
+			}
+			// Cache the scan outcome (including dictID=0) so each segment is
+			// scanned at most once during a rewrite run.
+			it.preferredDictByFile[fileID] = dictID
+			if dictID != 0 {
+				if it.preferredDictGlobal == 0 {
+					it.preferredDictGlobal = dictID
+				}
+				return dictID
+			}
 		}
 	}
 	return it.preferredDictGlobal

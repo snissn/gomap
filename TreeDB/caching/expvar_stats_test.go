@@ -23,6 +23,7 @@ func TestSelectTreeDBExpvarStatsFiltersAndCoerces(t *testing.T) {
 		"treedb.cache.vlog_mmap.enabled":                                "true",
 		"treedb.cache.vlog_decode_buffer_grow.calls_total":              "42",
 		"treedb.cache.vlog_write_mode.raw_bytes.dict":                   "40960",
+		"treedb.cache.vlog_payload_split.raw_bytes.outer_leaf":          "1024",
 		"treedb.cache.vlog_auto.bytes.dict":                             "8192",
 		"treedb.cache.vlog_dict.current_k":                              "32",
 		"treedb.process.memory.heap_inuse_bytes":                        "4096",
@@ -61,6 +62,9 @@ func TestSelectTreeDBExpvarStatsFiltersAndCoerces(t *testing.T) {
 	}
 	if v, ok := got["treedb.cache.vlog_write_mode.raw_bytes.dict"].(int64); !ok || v != 40960 {
 		t.Fatalf("vlog_write_mode.raw_bytes.dict=%T(%v) want int64(40960)", got["treedb.cache.vlog_write_mode.raw_bytes.dict"], got["treedb.cache.vlog_write_mode.raw_bytes.dict"])
+	}
+	if v, ok := got["treedb.cache.vlog_payload_split.raw_bytes.outer_leaf"].(int64); !ok || v != 1024 {
+		t.Fatalf("vlog_payload_split.raw_bytes.outer_leaf=%T(%v) want int64(1024)", got["treedb.cache.vlog_payload_split.raw_bytes.outer_leaf"], got["treedb.cache.vlog_payload_split.raw_bytes.outer_leaf"])
 	}
 	if v, ok := got["treedb.cache.vlog_auto.bytes.dict"].(int64); !ok || v != 8192 {
 		t.Fatalf("vlog_auto.bytes.dict=%T(%v) want int64(8192)", got["treedb.cache.vlog_auto.bytes.dict"], got["treedb.cache.vlog_auto.bytes.dict"])
