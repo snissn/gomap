@@ -98,6 +98,27 @@ func TestTrainerSetOnAccept_CallsCallback(t *testing.T) {
 	}
 }
 
+func TestTrainerAcceptProfile_BootstrapUpgradeResumesCollecting(t *testing.T) {
+	tr := &Trainer{
+		targetBytes:         64 << 10,
+		minRecords:          64,
+		dictBytes:           32 << 10,
+		bootstrapBytes:      32 << 10,
+		bootstrapMinRecords: 8,
+		bootstrapDictBytes:  8 << 10,
+	}
+	tr.collecting.Store(false)
+
+	tr.AcceptProfile(&ActiveProfile{Timestamp: time.Now(), TotalRatio: 0.5})
+
+	if !tr.upgradePending.Load() {
+		t.Fatalf("expected upgradePending to be set after first bootstrap profile")
+	}
+	if !tr.collecting.Load() {
+		t.Fatalf("expected collecting to resume after first bootstrap profile")
+	}
+}
+
 func TestTrainerCanSelectExpandedDictCandidates(t *testing.T) {
 	tr := NewTrainer(TrainConfig{
 		TrainBytes:     64 << 10,
@@ -130,5 +151,37 @@ func TestTrainerCanSelectExpandedDictCandidates(t *testing.T) {
 	}
 	if p.DictBytes != 96<<10 {
 		t.Fatalf("dict bytes=%d want=%d", p.DictBytes, 96<<10)
+	}
+}
+
+func TestNewTrainer_BootstrapMinRecordsClamp(t *testing.T) {
+	tr := NewTrainer(TrainConfig{
+		TrainBytes:     1 << 20,
+		DictBytes:      32 << 10,
+		MinRecords:     64,
+		MaxRecordBytes: 64 << 10,
+		SampleStride:   1,
+	}, Config{Kind: KindZSTD, Level: zstd.SpeedFastest}, false, false)
+	if tr == nil {
+		t.Fatalf("expected non-nil trainer")
+	}
+	if got, want := tr.bootstrapMinRecords, uint64(DefaultTrainBootstrapMinRecords); got != want {
+		t.Fatalf("bootstrapMinRecords clamp: got=%d want=%d", got, want)
+	}
+}
+
+func TestNewTrainer_BootstrapMinRecordsRespectsLowerMinRecords(t *testing.T) {
+	tr := NewTrainer(TrainConfig{
+		TrainBytes:     1 << 20,
+		DictBytes:      32 << 10,
+		MinRecords:     8,
+		MaxRecordBytes: 64 << 10,
+		SampleStride:   1,
+	}, Config{Kind: KindZSTD, Level: zstd.SpeedFastest}, false, false)
+	if tr == nil {
+		t.Fatalf("expected non-nil trainer")
+	}
+	if got, want := tr.bootstrapMinRecords, uint64(8); got != want {
+		t.Fatalf("bootstrapMinRecords respect lower minRecords: got=%d want=%d", got, want)
 	}
 }

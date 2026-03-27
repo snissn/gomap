@@ -108,7 +108,64 @@ Validation:
 go test ./TreeDB/caching -run 'TestValueLogAutotuneShouldSwitch|TestValueLogDictTrainerIOCost|TestValueLogDictCandidateK' -count=1
 ```
 
-## 4) Notes
+## 4) Bootstrap-K follow-up (2026-03-26 late pass)
+
+To reduce bootstrap bias on large-value streams, we added:
+
+- `TreeDB/internal/compression/trainer.go`
+  - `DefaultTrainBootstrapMinRecords` raised to `32` (from `8`)
+  - after first bootstrap profile accept, trainer resumes collecting for upgrade-followup
+
+Validation:
+
+```bash
+go test ./TreeDB/internal/compression -count=1
+```
+
+Celestia run used:
+
+```bash
+LOCAL_GOMAP_DIR=/home/mikers/dev/snissn/gomap-phasehook-active \
+TREEDB_OPEN_PROFILE=fast \
+TREEDB_VLOG_COMPRESSION=auto \
+TREEDB_VLOG_AUTO_POLICY=size \
+STOP_AT_LOCAL_HEIGHT=10402026 \
+~/run_celestia.sh
+```
+
+Run artifacts:
+
+- launcher log: `/tmp/cel_fast_size_bootstrap32_20260326232729.log`
+- run home: `/home/mikers/.celestia-app-mainnet-treedb-20260326232754`
+
+Observed dict behavior:
+
+- `dict training trained dict ... dict_bytes=65536 samples=32 ...`
+- `value-log dict published ... k=16 ...`
+
+Measured bytes:
+
+- pre-rewrite app dir: `5610552827`
+- pre-rewrite gzip: `4000189977`
+- rewrite:
+  - `segments_before=23 segments_after=17`
+  - `bytes_before=5268562411 bytes_after=2227827818`
+- post-rewrite app dir: `2268092050`
+- post-rewrite gzip: `1815227655`
+
+Near-height comparison reference (older run, pre bootstrap-K tweak):
+
+- run home: `/home/mikers/.celestia-app-mainnet-treedb-20260326230729`
+- dict behavior there: `dict_bytes=40960`, `samples=8`, `k=8`
+- post-rewrite app/gzip: `2219558390` / `1811956666`
+
+Takeaway:
+
+- bootstrap behavior moved from `k=8` to `k=16` with larger first-pass sample windows.
+- post-rewrite gzip remained in the same band despite height drift; fixed-height
+  freezing is still recommended for strict A/B comparisons.
+
+## 5) Notes
 
 - A one-time forced second-stage retrain hook was tested during this session and
   reverted due noisy/inconclusive run-to-run behavior under varying final
