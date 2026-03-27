@@ -7022,23 +7022,9 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 
 	valueLogAutotuneCandidateKSet := len(opts.ValueLogCompressionAutotune.CandidateK) > 0
 	valueLogAutotune := valuelog.NormalizeAutotuneOptions(opts.ValueLogCompressionAutotune, true)
-	valueLogTemplateEnabled := opts.ValueLogTemplateMode != template.TemplateOff
-	valueLogTemplateCfg := template.NormalizeConfig(opts.ValueLogTemplateConfig)
-	if opts.ValueLogTemplateMode == template.TemplatePrepass {
-		// TemplatePrepass can be CPU-heavy (template match + dict/zstd encode). If
-		// templates have not been kept recently, enter cold mode sooner so we don't
-		// pay candidate lookup/matching cost on every value.
-		if opts.ValueLogTemplateConfig.ColdSearchAfter <= 0 {
-			valueLogTemplateCfg.ColdSearchAfter = 64
-		}
-		if opts.ValueLogTemplateConfig.ColdSearchProbeEvery <= 0 {
-			valueLogTemplateCfg.ColdSearchProbeEvery = 64
-		}
-	}
-	valueLogTemplateDecodeOpts := template.DecodeOptions{MaxGaps: valueLogTemplateCfg.MaxGaps, MaxDecodedBytes: valueLogTemplateCfg.MaxDecodedBytes, DefCacheSize: valueLogTemplateCfg.DefCacheSize}
-	if valueLogTemplateDecodeOpts.MaxDecodedBytes <= 0 && limits.MaxRecordSize > 0 {
-		valueLogTemplateDecodeOpts.MaxDecodedBytes = int(limits.MaxRecordSize)
-	}
+	valueLogTemplateEnabled := false
+	valueLogTemplateMode := template.TemplateOff
+	valueLogTemplateDecodeOpts := template.DecodeOptions{}
 
 	// Favor aggressive sampling so the first dict arrives quickly. The trainer
 	// still caps total work via TrainBytes and queue backpressure.
@@ -7217,24 +7203,19 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		valueLogAutotuneOptions:              valueLogAutotune,
 		valueLogAutotuneCandidateKSet:        valueLogAutotuneCandidateKSet,
 		valueLogTemplateEnabled:              valueLogTemplateEnabled,
-		valueLogTemplateMode:                 opts.ValueLogTemplateMode,
-		valueLogTemplateReadStrict:           opts.ValueLogTemplateReadStrict,
+		valueLogTemplateMode:                 valueLogTemplateMode,
+		valueLogTemplateReadStrict:           false,
 		valueLogTemplateDecodeOpts:           valueLogTemplateDecodeOpts,
-		valueLogTemplateEngine: func() *template.Engine {
-			if !valueLogTemplateEnabled {
-				return nil
-			}
-			return template.NewEngine(valueLogTemplateCfg)
-		}(),
-		mutableShards:         mutableShards,
-		mutableShardMask:      uint64(shardCount - 1),
-		hashSortedIndexer:     indexer,
-		closeCh:               make(chan struct{}),
-		flushCh:               make(chan struct{}, 1),
-		autoCheckpointOnceCh:  make(chan struct{}, 1),
-		autoCheckpointWriteCh: make(chan struct{}, 1),
-		lanes:                 lanes,
-		flushLaneMu:           make([]sync.Mutex, len(lanes)),
+		valueLogTemplateEngine:               nil,
+		mutableShards:                        mutableShards,
+		mutableShardMask:                     uint64(shardCount - 1),
+		hashSortedIndexer:                    indexer,
+		closeCh:                              make(chan struct{}),
+		flushCh:                              make(chan struct{}, 1),
+		autoCheckpointOnceCh:                 make(chan struct{}, 1),
+		autoCheckpointWriteCh:                make(chan struct{}, 1),
+		lanes:                                lanes,
+		flushLaneMu:                          make([]sync.Mutex, len(lanes)),
 	}
 	db.storeMemtableMode(mode)
 	if maxExistingRID > 0 {

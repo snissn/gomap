@@ -188,6 +188,18 @@ func writePathStatsInto(stats map[string]string, info writePathInfo) {
 	stats["treedb.write_path.redo_log"] = info.redoLog
 }
 
+func forceTemplateCompressionOff(opts *Options) {
+	if opts == nil {
+		return
+	}
+	// Template compression remains experimental; keep runtime paths disabled so
+	// normal TreeDB opens only exercise dict/block/off value-log compression.
+	opts.ValueLog.TemplateMode = template.TemplateOff
+	opts.ValueLog.TemplateReadStrict = false
+	opts.ValueLog.TemplateLookup = nil
+	opts.ValueLog.TemplateDecodeOptions = template.DecodeOptions{}
+}
+
 func (db *DB) ensureOpen() error {
 	if db == nil || (db.cached == nil && db.backend == nil) {
 		return ErrClosed
@@ -312,6 +324,7 @@ func Open(opts Options) (*DB, error) {
 	}
 
 	applyEnvMaintenanceOverrides(&opts)
+	forceTemplateCompressionOff(&opts)
 
 	writePath := writePathFromOptions(opts)
 	if envBool(envWritePathLog) {

@@ -114,3 +114,12 @@ Selected diagnostics:
 - The class-split plumbing is active and learns class-specific candidates.
 - For this workload/config, effective on-disk output remains block-snappy-only after rewrite.
 - Result: split class mode is effectively neutral for end-run bytes and gzip sanity in this benchmark.
+
+## Current State (2026-03-27)
+
+- Primary optimization target remains dict/block value-log compression for end-of-run
+  bytes (`dir`) with gzip as a sanity check.
+- Template pre-transform experiments were informative for isolated pointer corpora,
+  but were not a clear win for full Celestia outer-leaf heavy storage paths.
+- Runtime template compression is now forced off in `treedb.Open`/cached opens so it
+  does not affect production/benchmark runtime behavior while dict work continues.
