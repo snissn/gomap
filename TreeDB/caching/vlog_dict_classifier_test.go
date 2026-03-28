@@ -419,7 +419,7 @@ func TestValueLogDictCollectSamples_IgnoresOuterLeafPages(t *testing.T) {
 		valueLogDictPausedSampleStride:       256,
 		valueLogDictIncompressibleProbeBytes: 64 << 10,
 	}
-	records := compressibleValueLogRecords(512, 4096)
+	records := markOuterLeafMagicRecords(compressibleValueLogRecords(512, 4096))
 	db.valueLogDictCollectSamples(records)
 	stats := tr.Stats()
 	if stats.Enqueued != 0 {

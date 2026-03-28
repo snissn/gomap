@@ -165,13 +165,14 @@ func TestAppendValueLogOne_DictAggressiveOuterLeafBypassUsesBlock(t *testing.T) 
 		},
 	}
 
-	// 4KiB pages are treated as outer-leaf payloads and should stay on block
-	// codecs instead of dict mode.
+	// Explicit outer-leaf magic payloads should stay on block codecs instead of
+	// dict mode.
 	value := bytes.Repeat([]byte("outer-leaf-page-like-payload-"), 160)
 	if len(value) < page.PageSize {
 		value = append(value, bytes.Repeat([]byte("x"), page.PageSize-len(value))...)
 	}
 	value = value[:page.PageSize]
+	value = markOuterLeafMagic(value)
 	ptr, _, err := db.appendValueLogOne(&db.lanes[0], 7, []byte("stub-dict"), 1, value, journalDurabilityFlush)
 	if err != nil {
 		t.Fatalf("appendValueLogOne: %v", err)
@@ -215,6 +216,7 @@ func TestAppendValueLogOne_DictModeOuterLeafBypassFallsBackToBlock(t *testing.T)
 		value = append(value, bytes.Repeat([]byte("x"), page.PageSize-len(value))...)
 	}
 	value = value[:page.PageSize]
+	value = markOuterLeafMagic(value)
 	ptr, _, err := db.appendValueLogOne(&db.lanes[0], 7, []byte("stub-dict"), 1, value, journalDurabilityFlush)
 	if err != nil {
 		t.Fatalf("appendValueLogOne: %v", err)
@@ -261,6 +263,7 @@ func TestAppendValueLog_DictModeOuterLeafBypassFallsBackToBlock(t *testing.T) {
 		value = append(value, bytes.Repeat([]byte("x"), page.PageSize-len(value))...)
 	}
 	value = value[:page.PageSize]
+	value = markOuterLeafMagic(value)
 
 	records := []valuelog.Record{{RID: 1, Value: value}}
 	ptrs, err := db.appendValueLog(&db.lanes[0], 7, []byte("stub-dict"), records, journalDurabilityFlush)
