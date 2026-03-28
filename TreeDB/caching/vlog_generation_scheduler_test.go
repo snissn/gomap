@@ -2778,6 +2778,76 @@ func TestVlogGenerationRewritePlan_StageConfirmationExecutesConfirmedSubset(t *t
 	}
 }
 
+func TestVlogGenerationRewritePlan_StageConfirmationDebtDrainProcessesMultipleSegments(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	recorder := &rewriteBudgetRecordingBackend{
+		DB: backend,
+		planResponse: backenddb.ValueLogRewritePlan{
+			SourceFileIDs: []uint32{11, 22, 33},
+			SelectedSegments: []backenddb.ValueLogRewritePlanSegment{
+				{FileID: 11, BytesTotal: 64 << 20, BytesLive: 8 << 20, BytesStale: 56 << 20, StaleRatio: 0.875},
+				{FileID: 22, BytesTotal: 64 << 20, BytesLive: 16 << 20, BytesStale: 48 << 20, StaleRatio: 0.75},
+				{FileID: 33, BytesTotal: 64 << 20, BytesLive: 24 << 20, BytesStale: 40 << 20, StaleRatio: 0.625},
+			},
+			SegmentsTotal:      3,
+			SegmentsSelected:   3,
+			BytesTotal:         192 << 20,
+			BytesLive:          48 << 20,
+			BytesStale:         144 << 20,
+			SelectedBytesTotal: 192 << 20,
+			SelectedBytesLive:  48 << 20,
+			SelectedBytesStale: 144 << 20,
+		},
+		rewriteResponse: backenddb.ValueLogRewriteStats{
+			BytesBefore:   192 << 20,
+			BytesAfter:    48 << 20,
+			RecordsCopied: 3,
+		},
+	}
+
+	db, cleanup := openRewriteQueueTestDB(t, dir, recorder)
+	t.Cleanup(cleanup)
+	db.valueLogRewriteTriggerBytes = 0
+	db.valueLogRewriteTriggerRatioPPM = 1
+	db.valueLogGenerationHotTarget = 0
+	db.vlogGenerationRewriteBudgetTokensBytes.Store(defaultVlogGenerationWarmTargetBytes * 4)
+	forceVlogMaintenanceIdle(db)
+
+	if err := db.setVlogGenerationRewriteLedgerWithStage([]backenddb.ValueLogRewritePlanSegment{
+		{FileID: 11, BytesTotal: 64 << 20, BytesLive: 8 << 20, BytesStale: 56 << 20, StaleRatio: 0.875},
+		{FileID: 22, BytesTotal: 64 << 20, BytesLive: 16 << 20, BytesStale: 48 << 20, StaleRatio: 0.75},
+		{FileID: 33, BytesTotal: 64 << 20, BytesLive: 24 << 20, BytesStale: 40 << 20, StaleRatio: 0.625},
+	}, true, time.Now().Add(-vlogGenerationRewriteMinInterval-time.Second).UnixNano()); err != nil {
+		t.Fatalf("seed staged rewrite ledger: %v", err)
+	}
+	forceRewriteStageConfirmDue(t, db)
+
+	db.maybeRunVlogGenerationMaintenanceWithOptions(false, vlogGenerationMaintenanceOptions{
+		bypassQuiet:           true,
+		skipRetainedPruneWait: true,
+		skipCheckpoint:        false,
+		rewriteDebtDrain:      true,
+		debugSource:           "rewrite_stage_confirm",
+	})
+
+	rewriteOpts, rewriteCalls := recorder.recordedRewrite()
+	if rewriteCalls != 1 {
+		t.Fatalf("rewrite calls after staged confirmation=%d want=1", rewriteCalls)
+	}
+	if got := len(rewriteOpts.SourceFileIDs); got <= 1 {
+		t.Fatalf("rewrite SourceFileIDs after staged confirmation=%v want multiple ids", rewriteOpts.SourceFileIDs)
+	}
+	if got := len(rewriteOpts.SourceFileIDs); got > vlogGenerationRewriteDebtDrainMaxSegments {
+		t.Fatalf("rewrite SourceFileIDs len=%d want <= %d", got, vlogGenerationRewriteDebtDrainMaxSegments)
+	}
+}
+
 func TestVlogGenerationRewritePlan_StageConfirmationReplansEvenWhenOtherTriggersFire(t *testing.T) {
 	prepareDirectSchedulerTest(t)
 

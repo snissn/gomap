@@ -12306,7 +12306,7 @@ func (db *DB) vlogGenerationRewriteMaxSegmentsForRun(queueLen int, budgetTokens 
 	}
 	// Checkpoint-kick retries should keep each debt-drain run small to reduce
 	// write amplification when foreground ingest is still active.
-	if opts.bypassQuiet && !opts.skipCheckpoint {
+	if opts.bypassQuiet && !opts.skipCheckpoint && !vlogGenerationIsStageConfirmSource(opts) && !vlogGenerationIsAgeBlockedSource(opts) {
 		return 1
 	}
 	maxSegments = queueLen
@@ -13513,7 +13513,9 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 					}
 					confirmed := stableVlogGenerationRewriteLedgerSegments(stagedLedger, plan.SelectedSegments)
 					if len(confirmed) > 0 {
-						plan = filterVlogGenerationRewritePlanToSegments(plan, confirmed)
+						// Treat confirmation overlap as a stability signal, then run
+						// the current sparse plan (not just the overlap subset) so live
+						// maintenance can make forward progress within short sync windows.
 						shouldRewrite = true
 						reason = vlogGenerationReasonRewriteResume
 					} else {
@@ -13790,9 +13792,15 @@ planned:
 					}
 				}
 				rewriteQueue = append([]uint32(nil), rewritePlan.SourceFileIDs...)
-				// Do not debt-drain freshly planned work in the same pass; only apply
-				// multi-segment debt-drain to explicit resume queues.
-				rewriteMaxSegments = vlogGenerationRewriteResumeMaxSegments
+				// Do not debt-drain freshly planned work in the same pass. The only
+				// exception is a confirmed staged rewrite-resume pass, which should
+				// be allowed to consume debt in bounded multi-segment chunks.
+				allowPlanDebtDrain := reason == vlogGenerationReasonRewriteResume && opts.rewriteDebtDrain
+				if allowPlanDebtDrain {
+					rewriteMaxSegments = db.vlogGenerationRewriteMaxSegmentsForRun(len(rewriteQueue), budgetTokens, opts)
+				} else {
+					rewriteMaxSegments = vlogGenerationRewriteResumeMaxSegments
+				}
 				// If the token bucket is enabled and empty, persist the plan/ledger but
 				// skip running the rewrite until we have budget to spend.
 				if db.vlogGenerationRewriteBudgetEnabled() && budgetTokens <= 0 {
