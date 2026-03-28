@@ -113,7 +113,9 @@ run_variant() {
       source "$env_file"
       set +a
     fi
-    bash -lc "$RUN_CMD"
+    # Non-login shell avoids user profile side effects (e.g. tty-dependent exports)
+    # that can fail under nohup/background runs.
+    bash -c "$RUN_CMD"
   ) >"$run_dir/launcher.log" 2>&1
   local run_end
   run_end=$(date +%s)
