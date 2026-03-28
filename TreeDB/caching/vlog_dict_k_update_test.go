@@ -308,12 +308,12 @@ func TestSetDictStore_SplitModeClassZeroUsesGlobalCurrent(t *testing.T) {
 	}
 }
 
-func TestCurrentDictIDForClass_SplitModeClassZeroFallsBackToGlobalCached(t *testing.T) {
+func TestCurrentDictIDForClass_SplitModeClassZeroRefreshesGlobalCurrent(t *testing.T) {
 	store := &classReadWriteDictStoreForClassPublishTest{
 		legacyDictStoreForClassPublishTest: &legacyDictStoreForClassPublishTest{
-			currentID: 88,
-			dicts:     map[uint64][]byte{88: []byte("global-dict")},
-			nextID:    88,
+			currentID: 99,
+			dicts:     map[uint64][]byte{99: []byte("global-dict")},
+			nextID:    99,
 		},
 		classCurrent: map[string]uint64{},
 	}
@@ -329,10 +329,13 @@ func TestCurrentDictIDForClass_SplitModeClassZeroFallsBackToGlobalCached(t *test
 	if err != nil {
 		t.Fatalf("currentDictIDForClass: %v", err)
 	}
-	if dictID != 88 {
-		t.Fatalf("expected class refresh to fall back to global current=88, got %d", dictID)
+	if dictID != 99 {
+		t.Fatalf("expected class refresh to read global current=99 on class miss, got %d", dictID)
 	}
-	if got := db.dictCurrentCachedByClass[vlogDictClassOuterLeaf].Load(); got != 88 {
-		t.Fatalf("expected outer-leaf cache to remain global current=88, got %d", got)
+	if got := db.dictCurrentCachedByClass[vlogDictClassOuterLeaf].Load(); got != 99 {
+		t.Fatalf("expected outer-leaf cache to refresh to global current=99, got %d", got)
+	}
+	if got := db.dictCurrentCached.Load(); got != 99 {
+		t.Fatalf("expected global cache to refresh to store current=99, got %d", got)
 	}
 }
