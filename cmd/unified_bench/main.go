@@ -1827,19 +1827,28 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 					end = warmupKeys
 				}
 				if setView != nil {
-					for j := i; j < end; j++ {
-						var keyView []byte
-						if precomputeKeys {
-							keyView = warmupKeyBytes[j*8 : (j+1)*8]
-						} else {
-							var key [8]byte
-							encodeKey(key[:], uint64(j)+warmupBase)
-							keyView = key[:]
+					if precomputeKeys {
+						for j := i; j < end; j++ {
+							keyView := warmupKeyBytes[j*8 : (j+1)*8]
+							value := values[valPos%len(values)]
+							valPos++
+							if err := setView(keyView, value); err != nil {
+								return 0, fmt.Errorf("%s warmup: set: %w", testLabel, err)
+							}
 						}
-						value := values[valPos%len(values)]
-						valPos++
-						if err := setView(keyView, value); err != nil {
-							return 0, fmt.Errorf("%s warmup: set: %w", testLabel, err)
+					} else {
+						// SetView is zero-copy: keep keys in a stable owned slab until commit.
+						need := (end - i) * 8
+						keysView := make([]byte, need)
+						for j := i; j < end; j++ {
+							off := (j - i) * 8
+							keyView := keysView[off : off+8]
+							encodeKey(keyView, uint64(j)+warmupBase)
+							value := values[valPos%len(values)]
+							valPos++
+							if err := setView(keyView, value); err != nil {
+								return 0, fmt.Errorf("%s warmup: set: %w", testLabel, err)
+							}
 						}
 					}
 				} else {
