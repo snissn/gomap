@@ -4196,6 +4196,16 @@ type valueLogSetRefresher interface {
 type retainedValueLogPruneStats struct {
 	RemovedSegments         int
 	RemovedBytes            int64
+	InUseSkippedSegments    int
+	InUseSkippedBytes       int64
+	CandidateSegments       int
+	CandidateBytes          int64
+	LiveSkippedSegments     int
+	LiveSkippedBytes        int64
+	ParseSkippedSegments    int
+	ParseSkippedBytes       int64
+	ZombieMarkedSegments    int
+	ZombieMarkedBytes       int64
 	AbortedForegroundWrites bool
 	RetriedWithoutWriteGate bool
 	RetrySucceeded          bool
@@ -4233,12 +4243,20 @@ func (db *DB) pruneRetainedValueLogs(force bool) retainedValueLogPruneStats {
 		inUse[path] = struct{}{}
 	}
 
-	candidatePaths := make([]string, 0, len(paths))
+	type pruneCandidate struct {
+		path string
+		size int64
+	}
+	candidatePaths := make([]pruneCandidate, 0, len(paths))
 	for _, path := range paths {
+		size := db.valueLogClosedSegmentSize(path)
 		if _, ok := inUse[path]; ok {
+			out.InUseSkippedSegments++
+			if size > 0 {
+				out.InUseSkippedBytes += size
+			}
 			continue
 		}
-		size := db.valueLogClosedSegmentSize(path)
 		if db.cleanupMissingRetainedValueLog(path) {
 			if size > 0 {
 				out.RemovedSegments++
@@ -4246,7 +4264,11 @@ func (db *DB) pruneRetainedValueLogs(force bool) retainedValueLogPruneStats {
 			}
 			continue
 		}
-		candidatePaths = append(candidatePaths, path)
+		out.CandidateSegments++
+		if size > 0 {
+			out.CandidateBytes += size
+		}
+		candidatePaths = append(candidatePaths, pruneCandidate{path: path, size: size})
 	}
 	if len(candidatePaths) == 0 {
 		return out
@@ -4271,20 +4293,37 @@ func (db *DB) pruneRetainedValueLogs(force bool) retainedValueLogPruneStats {
 
 	removed := false
 	marked := false
-	for _, path := range candidatePaths {
-		size := db.valueLogClosedSegmentSize(path)
+	for _, candidate := range candidatePaths {
+		path := candidate.path
+		size := candidate.size
 		laneID, seq, valueLog, ok := parseLogSeq(filepath.Base(path))
 		if !ok || !valueLog {
+			out.ParseSkippedSegments++
+			if size > 0 {
+				out.ParseSkippedBytes += size
+			}
 			continue
 		}
 		if laneID < 0 {
+			out.ParseSkippedSegments++
+			if size > 0 {
+				out.ParseSkippedBytes += size
+			}
 			continue
 		}
 		id, err := valuelog.EncodeFileID(uint32(laneID), uint32(seq))
 		if err != nil {
+			out.ParseSkippedSegments++
+			if size > 0 {
+				out.ParseSkippedBytes += size
+			}
 			continue
 		}
 		if _, ok := live[id]; ok {
+			out.LiveSkippedSegments++
+			if size > 0 {
+				out.LiveSkippedBytes += size
+			}
 			continue
 		}
 
@@ -4310,6 +4349,10 @@ func (db *DB) pruneRetainedValueLogs(force bool) retainedValueLogPruneStats {
 				}
 				db.reportError(fmt.Errorf("cachingdb: failed to mark value-log %d zombie: %w", id, err))
 				continue
+			}
+			out.ZombieMarkedSegments++
+			if size > 0 {
+				out.ZombieMarkedBytes += size
 			}
 			marked = true
 		} else {
@@ -4517,6 +4560,36 @@ func (db *DB) scheduleRetainedValueLogPruneWithForce(force bool) {
 		}
 		if pruneStats.RemovedBytes > 0 {
 			db.retainedValueLogPruneRemovedBytes.Add(uint64(pruneStats.RemovedBytes))
+		}
+		if pruneStats.InUseSkippedSegments > 0 {
+			db.retainedValueLogPruneInUseSkippedSegments.Add(uint64(pruneStats.InUseSkippedSegments))
+		}
+		if pruneStats.InUseSkippedBytes > 0 {
+			db.retainedValueLogPruneInUseSkippedBytes.Add(uint64(pruneStats.InUseSkippedBytes))
+		}
+		if pruneStats.CandidateSegments > 0 {
+			db.retainedValueLogPruneCandidateSegments.Add(uint64(pruneStats.CandidateSegments))
+		}
+		if pruneStats.CandidateBytes > 0 {
+			db.retainedValueLogPruneCandidateBytes.Add(uint64(pruneStats.CandidateBytes))
+		}
+		if pruneStats.LiveSkippedSegments > 0 {
+			db.retainedValueLogPruneLiveSkippedSegments.Add(uint64(pruneStats.LiveSkippedSegments))
+		}
+		if pruneStats.LiveSkippedBytes > 0 {
+			db.retainedValueLogPruneLiveSkippedBytes.Add(uint64(pruneStats.LiveSkippedBytes))
+		}
+		if pruneStats.ParseSkippedSegments > 0 {
+			db.retainedValueLogPruneParseSkippedSegments.Add(uint64(pruneStats.ParseSkippedSegments))
+		}
+		if pruneStats.ParseSkippedBytes > 0 {
+			db.retainedValueLogPruneParseSkippedBytes.Add(uint64(pruneStats.ParseSkippedBytes))
+		}
+		if pruneStats.ZombieMarkedSegments > 0 {
+			db.retainedValueLogPruneZombieMarkedSegments.Add(uint64(pruneStats.ZombieMarkedSegments))
+		}
+		if pruneStats.ZombieMarkedBytes > 0 {
+			db.retainedValueLogPruneZombieMarkedBytes.Add(uint64(pruneStats.ZombieMarkedBytes))
 		}
 	}()
 }
@@ -5315,6 +5388,16 @@ type DB struct {
 	retainedValueLogPruneForegroundAbortRuns       atomic.Uint64
 	retainedValueLogPruneRemovedSegments           atomic.Uint64
 	retainedValueLogPruneRemovedBytes              atomic.Uint64
+	retainedValueLogPruneInUseSkippedSegments      atomic.Uint64
+	retainedValueLogPruneInUseSkippedBytes         atomic.Uint64
+	retainedValueLogPruneCandidateSegments         atomic.Uint64
+	retainedValueLogPruneCandidateBytes            atomic.Uint64
+	retainedValueLogPruneLiveSkippedSegments       atomic.Uint64
+	retainedValueLogPruneLiveSkippedBytes          atomic.Uint64
+	retainedValueLogPruneParseSkippedSegments      atomic.Uint64
+	retainedValueLogPruneParseSkippedBytes         atomic.Uint64
+	retainedValueLogPruneZombieMarkedSegments      atomic.Uint64
+	retainedValueLogPruneZombieMarkedBytes         atomic.Uint64
 	retainedValueLogPruneScheduleRequests          atomic.Uint64
 	retainedValueLogPruneScheduleForcedRequests    atomic.Uint64
 	retainedValueLogPruneScheduleSkipClosing       atomic.Uint64
@@ -19964,6 +20047,16 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_retained_prune.foreground_abort_runs"] = fmt.Sprintf("%d", db.retainedValueLogPruneForegroundAbortRuns.Load())
 	stats["treedb.cache.vlog_retained_prune.removed_segments"] = fmt.Sprintf("%d", db.retainedValueLogPruneRemovedSegments.Load())
 	stats["treedb.cache.vlog_retained_prune.removed_bytes"] = fmt.Sprintf("%d", db.retainedValueLogPruneRemovedBytes.Load())
+	stats["treedb.cache.vlog_retained_prune.in_use_skipped_segments"] = fmt.Sprintf("%d", db.retainedValueLogPruneInUseSkippedSegments.Load())
+	stats["treedb.cache.vlog_retained_prune.in_use_skipped_bytes"] = fmt.Sprintf("%d", db.retainedValueLogPruneInUseSkippedBytes.Load())
+	stats["treedb.cache.vlog_retained_prune.candidate_segments"] = fmt.Sprintf("%d", db.retainedValueLogPruneCandidateSegments.Load())
+	stats["treedb.cache.vlog_retained_prune.candidate_bytes"] = fmt.Sprintf("%d", db.retainedValueLogPruneCandidateBytes.Load())
+	stats["treedb.cache.vlog_retained_prune.live_skipped_segments"] = fmt.Sprintf("%d", db.retainedValueLogPruneLiveSkippedSegments.Load())
+	stats["treedb.cache.vlog_retained_prune.live_skipped_bytes"] = fmt.Sprintf("%d", db.retainedValueLogPruneLiveSkippedBytes.Load())
+	stats["treedb.cache.vlog_retained_prune.parse_skipped_segments"] = fmt.Sprintf("%d", db.retainedValueLogPruneParseSkippedSegments.Load())
+	stats["treedb.cache.vlog_retained_prune.parse_skipped_bytes"] = fmt.Sprintf("%d", db.retainedValueLogPruneParseSkippedBytes.Load())
+	stats["treedb.cache.vlog_retained_prune.zombie_marked_segments"] = fmt.Sprintf("%d", db.retainedValueLogPruneZombieMarkedSegments.Load())
+	stats["treedb.cache.vlog_retained_prune.zombie_marked_bytes"] = fmt.Sprintf("%d", db.retainedValueLogPruneZombieMarkedBytes.Load())
 	stats["treedb.cache.vlog_retained_prune.pressure_bytes"] = fmt.Sprintf("%d", db.retainedPrunePressureBytes())
 	stats["treedb.cache.vlog_retained_prune.schedule_requests"] = fmt.Sprintf("%d", db.retainedValueLogPruneScheduleRequests.Load())
 	stats["treedb.cache.vlog_retained_prune.schedule_forced_requests"] = fmt.Sprintf("%d", db.retainedValueLogPruneScheduleForcedRequests.Load())

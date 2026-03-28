@@ -2027,7 +2027,7 @@ func TestPruneRetainedValueLogs_SkipsLiveScanWhenAllRetainedPathsInUse(t *testin
 	}
 	cache.markValueLogRetain(retained)
 
-	cache.pruneRetainedValueLogs(false)
+	pruneStats := cache.pruneRetainedValueLogs(false)
 
 	backend.mu.RLock()
 	iteratorCalls := backend.iteratorCalls
@@ -2037,6 +2037,12 @@ func TestPruneRetainedValueLogs_SkipsLiveScanWhenAllRetainedPathsInUse(t *testin
 	}
 	if !cache.valueLogRetained(retained) {
 		t.Fatalf("expected in-use retained path to remain retained")
+	}
+	if pruneStats.InUseSkippedSegments != 1 {
+		t.Fatalf("InUseSkippedSegments=%d want 1", pruneStats.InUseSkippedSegments)
+	}
+	if pruneStats.CandidateSegments != 0 {
+		t.Fatalf("CandidateSegments=%d want 0", pruneStats.CandidateSegments)
 	}
 }
 
