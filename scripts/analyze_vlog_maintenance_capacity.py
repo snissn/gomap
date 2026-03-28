@@ -248,6 +248,19 @@ def build_summary(stats: dict[str, Any]) -> dict[str, Any]:
         "gc_last_eligible_bytes": metric_int(stats, "treedb.cache.vlog_generation.gc.last_eligible_bytes"),
         "gc_last_pending_bytes": metric_int(stats, "treedb.cache.vlog_generation.gc.last_pending_bytes"),
         "gc_last_protected_retained_bytes": metric_int(stats, "treedb.cache.vlog_generation.gc.last_protected_retained_bytes"),
+        "retained_prune_closed_bytes": metric_int(stats, "treedb.cache.vlog_retained_prune.closed_bytes"),
+        "retained_prune_runs": metric_int(stats, "treedb.cache.vlog_retained_prune.runs"),
+        "retained_prune_forced_runs": metric_int(stats, "treedb.cache.vlog_retained_prune.forced_runs"),
+        "retained_prune_candidate_segments": metric_int(stats, "treedb.cache.vlog_retained_prune.candidate_segments"),
+        "retained_prune_candidate_bytes": metric_int(stats, "treedb.cache.vlog_retained_prune.candidate_bytes"),
+        "retained_prune_removed_segments": metric_int(stats, "treedb.cache.vlog_retained_prune.removed_segments"),
+        "retained_prune_removed_bytes": metric_int(stats, "treedb.cache.vlog_retained_prune.removed_bytes"),
+        "retained_prune_in_use_skipped_segments": metric_int(stats, "treedb.cache.vlog_retained_prune.in_use_skipped_segments"),
+        "retained_prune_in_use_skipped_bytes": metric_int(stats, "treedb.cache.vlog_retained_prune.in_use_skipped_bytes"),
+        "retained_prune_live_skipped_segments": metric_int(stats, "treedb.cache.vlog_retained_prune.live_skipped_segments"),
+        "retained_prune_live_skipped_bytes": metric_int(stats, "treedb.cache.vlog_retained_prune.live_skipped_bytes"),
+        "retained_prune_zombie_marked_segments": metric_int(stats, "treedb.cache.vlog_retained_prune.zombie_marked_segments"),
+        "retained_prune_zombie_marked_bytes": metric_int(stats, "treedb.cache.vlog_retained_prune.zombie_marked_bytes"),
         "observed_gc_pending_ids": metric_int(stats, "treedb.cache.vlog_generation.observed_gc.pending_ids"),
         "observed_gc_queued_ids": metric_int(stats, "treedb.cache.vlog_generation.observed_gc.queued_ids"),
         "observed_gc_taken_ids": metric_int(stats, "treedb.cache.vlog_generation.observed_gc.taken_ids"),
@@ -335,6 +348,14 @@ def build_summary(stats: dict[str, Any]) -> dict[str, Any]:
     m["observed_gc_source_bytes_deleted_of_eligible_pct"] = pct(
         m["observed_gc_source_bytes_deleted_total"],
         m["observed_gc_source_bytes_eligible_total"],
+    )
+    m["retained_prune_removed_candidate_segments_pct"] = pct(
+        m["retained_prune_removed_segments"],
+        m["retained_prune_candidate_segments"],
+    )
+    m["retained_prune_removed_candidate_bytes_pct"] = pct(
+        m["retained_prune_removed_bytes"],
+        m["retained_prune_candidate_bytes"],
     )
 
     return m
@@ -432,6 +453,19 @@ def print_report(summary: dict[str, Any], source_file: Path, run_home: str, inst
     print(
         "  checkpoint-kick: "
         f"runs={summary['checkpoint_kick_runs']} rewrite_runs={summary['checkpoint_kick_rewrite_runs']} gc_runs={summary['checkpoint_kick_gc_runs']}"
+    )
+    print(
+        "  retained-prune: "
+        f"runs={summary['retained_prune_runs']} forced={summary['retained_prune_forced_runs']} closed={human_bytes(summary['retained_prune_closed_bytes'])} "
+        f"candidates={summary['retained_prune_candidate_segments']} ({human_bytes(summary['retained_prune_candidate_bytes'])}) "
+        f"removed={summary['retained_prune_removed_segments']} ({human_bytes(summary['retained_prune_removed_bytes'])}) "
+        f"(seg_removed_pct={summary['retained_prune_removed_candidate_segments_pct']:.1f}%, bytes_removed_pct={summary['retained_prune_removed_candidate_bytes_pct']:.1f}%)"
+    )
+    print(
+        "  retained-prune skips: "
+        f"in_use={summary['retained_prune_in_use_skipped_segments']} ({human_bytes(summary['retained_prune_in_use_skipped_bytes'])}) "
+        f"live={summary['retained_prune_live_skipped_segments']} ({human_bytes(summary['retained_prune_live_skipped_bytes'])}) "
+        f"zombie_marked={summary['retained_prune_zombie_marked_segments']} ({human_bytes(summary['retained_prune_zombie_marked_bytes'])})"
     )
     print("")
 
