@@ -7045,7 +7045,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	valueLogAutotuneCandidateKSet := len(opts.ValueLogCompressionAutotune.CandidateK) > 0
 	valueLogAutotune := valuelog.NormalizeAutotuneOptions(opts.ValueLogCompressionAutotune, true)
 	if opts.ValueLogTemplateMode != template.TemplateOff || opts.ValueLogTemplateReadStrict {
-		log.Printf("cachingdb: template compression options are currently disabled; ignoring ValueLogTemplateMode=%d", opts.ValueLogTemplateMode)
+		log.Printf("cachingdb: template compression options are currently disabled; ignoring ValueLogTemplateMode=%d, ValueLogTemplateReadStrict=%t", opts.ValueLogTemplateMode, opts.ValueLogTemplateReadStrict)
 	}
 	valueLogTemplateEnabled := false
 	valueLogTemplateMode := template.TemplateOff

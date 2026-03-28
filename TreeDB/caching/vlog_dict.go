@@ -996,16 +996,8 @@ func (db *DB) applyValueLogDictProfileForClass(class vlogDictClass) {
 		if ks, ok := store.(dictStoreK); ok {
 			dictID := db.valueLogDictLastAppliedDictIDByClass[class].Load()
 			if dictID == 0 {
-				if db.dictClassMode() == vlogDictClassModeSplitOuterLeaf {
-					if byClass, ok := db.dictStore.(dictStoreCurrentByClass); ok {
-						id, err := byClass.GetCurrentForClass(context.Background(), vlogDictClassSuffix(class))
-						if err == nil {
-							dictID = id
-						}
-					}
-				}
-				if dictID == 0 {
-					dictID = db.dictCurrentCached.Load()
+				if id, err := db.currentDictIDForClass(context.Background(), class); err == nil {
+					dictID = id
 				}
 			}
 			if dictID == 0 {
