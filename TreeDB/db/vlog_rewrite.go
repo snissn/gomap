@@ -2038,12 +2038,12 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 		iter := tree.New(d.Pager(), newValueReader(state.ValueLogSet), root).
 			IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
 		rewriter := &rewriteIterator{
-			inner:      iter,
-			ptrMap:     ptrMap,
-			vlogs:      state.ValueLogSet,
-			writer:     writer,
-			readValue:  d.valueLogManager.Read,
-			dictLookup: opts.ValueLog.DictLookup,
+			inner:               iter,
+			ptrMap:              ptrMap,
+			vlogs:               state.ValueLogSet,
+			writer:              writer,
+			readValue:           d.valueLogManager.Read,
+			dictLookup:          opts.ValueLog.DictLookup,
 			preferredDictGlobal: preferredDictGlobal,
 		}
 		if !rewriter.Valid() {

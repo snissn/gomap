@@ -29,8 +29,8 @@ const (
 	// Bootstrap defaults. These are intentionally smaller than the steady-state
 	// TrainBytes/DictBytes targets so dict compression becomes active quickly,
 	// reducing sensitivity to TrainBytes tuning.
-	DefaultTrainBootstrapBytes      = 32 << 10
-	DefaultTrainBootstrapDictBytes  = 8 << 10
+	DefaultTrainBootstrapBytes     = 32 << 10
+	DefaultTrainBootstrapDictBytes = 8 << 10
 	// Keep bootstrap record count high enough to evaluate K candidates beyond
 	// tiny groups on large-value streams.
 	DefaultTrainBootstrapMinRecords = 32
