@@ -11431,7 +11431,7 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 					encodeNsPerRaw = 0
 				}
 				if finalWriteMode == vlogWriteBlock &&
-					(mode == vlogCompressionAuto || mode == vlogCompressionDict) {
+					(mode == vlogCompressionAuto || (mode == vlogCompressionDict && db.vlogSelectorEnabled(mode))) {
 					ioNsPerStored = 0
 					encodeNsPerRaw = 0
 				}
