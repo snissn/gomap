@@ -29,12 +29,14 @@ type ValueLogGCStats struct {
 	SegmentsProtected  int
 	SegmentsEligible   int
 	SegmentsDeleted    int
+	SegmentsPending    int
 	BytesTotal         int64
 	BytesReferenced    int64
 	BytesActive        int64
 	BytesProtected     int64
 	BytesEligible      int64
 	BytesDeleted       int64
+	BytesPending       int64
 }
 
 // ValueLogGC deletes fully-unreferenced value-log segments.
@@ -163,6 +165,12 @@ func (db *DB) ValueLogGC(ctx context.Context, opts ValueLogGCOptions) (ValueLogG
 				return stats, err
 			}
 		}
+	}
+	if stats.SegmentsEligible > stats.SegmentsDeleted {
+		stats.SegmentsPending = stats.SegmentsEligible - stats.SegmentsDeleted
+	}
+	if stats.BytesEligible > stats.BytesDeleted {
+		stats.BytesPending = stats.BytesEligible - stats.BytesDeleted
 	}
 
 	currentSet := vm.CurrentSetNoRefresh()

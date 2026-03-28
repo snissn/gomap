@@ -5713,6 +5713,18 @@ func TestVlogGenerationStats_ReportRewriteBacklogAndDurations(t *testing.T) {
 	db.vlogGenerationRewriteBudgetTokensBytes.Store(512)
 	db.vlogGenerationRewriteBudgetConsumed.Store(1536)
 	db.vlogGenerationRewriteAgeBlockedUntilNS.Store(time.Now().Add(5 * time.Second).UnixNano())
+	db.vlogGenerationLastGCSegmentsReferenced.Store(7)
+	db.vlogGenerationLastGCBytesReferenced.Store(700)
+	db.vlogGenerationLastGCSegmentsActive.Store(4)
+	db.vlogGenerationLastGCBytesActive.Store(400)
+	db.vlogGenerationLastGCSegmentsProtected.Store(3)
+	db.vlogGenerationLastGCBytesProtected.Store(300)
+	db.vlogGenerationLastGCSegmentsEligible.Store(6)
+	db.vlogGenerationLastGCBytesEligible.Store(600)
+	db.vlogGenerationLastGCSegmentsDeleted.Store(2)
+	db.vlogGenerationLastGCBytesDeleted.Store(200)
+	db.vlogGenerationLastGCSegmentsPending.Store(4)
+	db.vlogGenerationLastGCBytesPending.Store(400)
 	db.vlogGenerationMaintenanceSkipStageNotDue.Store(5)
 	db.vlogGenerationMaintenanceSkipStageDue.Store(2)
 	db.vlogGenerationRewritePlanSelectedSegments.Store(6)
@@ -5763,6 +5775,42 @@ func TestVlogGenerationStats_ReportRewriteBacklogAndDurations(t *testing.T) {
 	}
 	if got := stats["treedb.cache.vlog_generation.gc.exec.avg_ms"]; got != "30.000" {
 		t.Fatalf("gc exec avg ms=%q want 30.000", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.gc.last_referenced_segments"]; got != "7" {
+		t.Fatalf("gc last referenced segments=%q want 7", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.gc.last_referenced_bytes"]; got != "700" {
+		t.Fatalf("gc last referenced bytes=%q want 700", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.gc.last_active_segments"]; got != "4" {
+		t.Fatalf("gc last active segments=%q want 4", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.gc.last_active_bytes"]; got != "400" {
+		t.Fatalf("gc last active bytes=%q want 400", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.gc.last_protected_segments"]; got != "3" {
+		t.Fatalf("gc last protected segments=%q want 3", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.gc.last_protected_bytes"]; got != "300" {
+		t.Fatalf("gc last protected bytes=%q want 300", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.gc.last_eligible_segments"]; got != "6" {
+		t.Fatalf("gc last eligible segments=%q want 6", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.gc.last_eligible_bytes"]; got != "600" {
+		t.Fatalf("gc last eligible bytes=%q want 600", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.gc.last_deleted_segments"]; got != "2" {
+		t.Fatalf("gc last deleted segments=%q want 2", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.gc.last_deleted_bytes"]; got != "200" {
+		t.Fatalf("gc last deleted bytes=%q want 200", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.gc.last_pending_segments"]; got != "4" {
+		t.Fatalf("gc last pending segments=%q want 4", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.gc.last_pending_bytes"]; got != "400" {
+		t.Fatalf("gc last pending bytes=%q want 400", got)
 	}
 	if got := stats["treedb.cache.vlog_generation.vacuum.exec.total_ms"]; got != "44.000" {
 		t.Fatalf("vacuum exec total ms=%q want 44.000", got)

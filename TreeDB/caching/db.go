@@ -5216,6 +5216,18 @@ type DB struct {
 	vlogGenerationLastGCDryRunUnixNano          atomic.Int64
 	vlogGenerationLastGCDryRunBytesEligible     atomic.Int64
 	vlogGenerationLastGCDryRunSegsEligible      atomic.Int64
+	vlogGenerationLastGCBytesReferenced         atomic.Int64
+	vlogGenerationLastGCSegmentsReferenced      atomic.Int64
+	vlogGenerationLastGCBytesActive             atomic.Int64
+	vlogGenerationLastGCSegmentsActive          atomic.Int64
+	vlogGenerationLastGCBytesProtected          atomic.Int64
+	vlogGenerationLastGCSegmentsProtected       atomic.Int64
+	vlogGenerationLastGCBytesEligible           atomic.Int64
+	vlogGenerationLastGCSegmentsEligible        atomic.Int64
+	vlogGenerationLastGCBytesDeleted            atomic.Int64
+	vlogGenerationLastGCSegmentsDeleted         atomic.Int64
+	vlogGenerationLastGCBytesPending            atomic.Int64
+	vlogGenerationLastGCSegmentsPending         atomic.Int64
 	vlogGenerationChurnBytes                    atomic.Uint64
 	vlogGenerationSchedulerState                atomic.Uint32
 	vlogGenerationMaintenanceActive             atomic.Bool
@@ -12497,6 +12509,24 @@ func (db *DB) observeVlogGenerationGCExecDuration(d time.Duration) {
 	observeDurationNanos(&db.vlogGenerationGCExecTotalNanos, &db.vlogGenerationGCExecMaxNanos, d)
 }
 
+func (db *DB) observeVlogGenerationGCStats(stats backenddb.ValueLogGCStats) {
+	if db == nil {
+		return
+	}
+	db.vlogGenerationLastGCBytesReferenced.Store(stats.BytesReferenced)
+	db.vlogGenerationLastGCSegmentsReferenced.Store(int64(stats.SegmentsReferenced))
+	db.vlogGenerationLastGCBytesActive.Store(stats.BytesActive)
+	db.vlogGenerationLastGCSegmentsActive.Store(int64(stats.SegmentsActive))
+	db.vlogGenerationLastGCBytesProtected.Store(stats.BytesProtected)
+	db.vlogGenerationLastGCSegmentsProtected.Store(int64(stats.SegmentsProtected))
+	db.vlogGenerationLastGCBytesEligible.Store(stats.BytesEligible)
+	db.vlogGenerationLastGCSegmentsEligible.Store(int64(stats.SegmentsEligible))
+	db.vlogGenerationLastGCBytesDeleted.Store(stats.BytesDeleted)
+	db.vlogGenerationLastGCSegmentsDeleted.Store(int64(stats.SegmentsDeleted))
+	db.vlogGenerationLastGCBytesPending.Store(stats.BytesPending)
+	db.vlogGenerationLastGCSegmentsPending.Store(int64(stats.SegmentsPending))
+}
+
 func (db *DB) observeVlogGenerationVacuumExecDuration(d time.Duration) {
 	if db == nil {
 		return
@@ -13955,6 +13985,7 @@ planned:
 					db.debugVlogMaintf("gc_after_rewrite_err reason=%s err=%v dur_ms=%.3f", vlogGenerationReasonString(reason), gcErr, float64(gcDur.Microseconds())/1000)
 					return fmt.Errorf("generational gc after rewrite: %w", gcErr)
 				}
+				db.observeVlogGenerationGCStats(gcStats)
 				if gcStats.BytesDeleted > 0 {
 					gcBytesDeleted = int64(gcStats.BytesDeleted)
 					effectiveBytesAfter -= gcBytesDeleted
@@ -14163,6 +14194,7 @@ planned:
 		if err != nil {
 			return fmt.Errorf("generational gc: %w", err)
 		}
+		db.observeVlogGenerationGCStats(gcStats)
 		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
 		db.vlogGenerationGCRuns.Add(1)
 		if gcStats.SegmentsDeleted > 0 {
@@ -19864,6 +19896,18 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_generation.rewrite.last_unix_nano"] = fmt.Sprintf("%d", db.vlogGenerationLastRewriteUnixNano.Load())
 	stats["treedb.cache.vlog_generation.gc.deleted_segments"] = fmt.Sprintf("%d", db.vlogGenerationGCSegmentsDeleted.Load())
 	stats["treedb.cache.vlog_generation.gc.deleted_bytes"] = fmt.Sprintf("%d", db.vlogGenerationGCBytesDeleted.Load())
+	stats["treedb.cache.vlog_generation.gc.last_referenced_segments"] = fmt.Sprintf("%d", db.vlogGenerationLastGCSegmentsReferenced.Load())
+	stats["treedb.cache.vlog_generation.gc.last_referenced_bytes"] = fmt.Sprintf("%d", db.vlogGenerationLastGCBytesReferenced.Load())
+	stats["treedb.cache.vlog_generation.gc.last_active_segments"] = fmt.Sprintf("%d", db.vlogGenerationLastGCSegmentsActive.Load())
+	stats["treedb.cache.vlog_generation.gc.last_active_bytes"] = fmt.Sprintf("%d", db.vlogGenerationLastGCBytesActive.Load())
+	stats["treedb.cache.vlog_generation.gc.last_protected_segments"] = fmt.Sprintf("%d", db.vlogGenerationLastGCSegmentsProtected.Load())
+	stats["treedb.cache.vlog_generation.gc.last_protected_bytes"] = fmt.Sprintf("%d", db.vlogGenerationLastGCBytesProtected.Load())
+	stats["treedb.cache.vlog_generation.gc.last_eligible_segments"] = fmt.Sprintf("%d", db.vlogGenerationLastGCSegmentsEligible.Load())
+	stats["treedb.cache.vlog_generation.gc.last_eligible_bytes"] = fmt.Sprintf("%d", db.vlogGenerationLastGCBytesEligible.Load())
+	stats["treedb.cache.vlog_generation.gc.last_deleted_segments"] = fmt.Sprintf("%d", db.vlogGenerationLastGCSegmentsDeleted.Load())
+	stats["treedb.cache.vlog_generation.gc.last_deleted_bytes"] = fmt.Sprintf("%d", db.vlogGenerationLastGCBytesDeleted.Load())
+	stats["treedb.cache.vlog_generation.gc.last_pending_segments"] = fmt.Sprintf("%d", db.vlogGenerationLastGCSegmentsPending.Load())
+	stats["treedb.cache.vlog_generation.gc.last_pending_bytes"] = fmt.Sprintf("%d", db.vlogGenerationLastGCBytesPending.Load())
 	stats["treedb.cache.vlog_generation.gc.runs"] = fmt.Sprintf("%d", db.vlogGenerationGCRuns.Load())
 	stats["treedb.cache.vlog_generation.gc.exec.total_ms"] = fmt.Sprintf("%.3f", float64(gcExecTotalNS)/float64(time.Millisecond))
 	stats["treedb.cache.vlog_generation.gc.exec.max_ms"] = fmt.Sprintf("%.3f", float64(gcExecMaxNS)/float64(time.Millisecond))
