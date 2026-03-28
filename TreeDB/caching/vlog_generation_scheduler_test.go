@@ -4112,6 +4112,40 @@ func TestVlogGenerationMaintenance_PeriodicSkipsWhenMaintenancePhaseNonSteady(t 
 	}
 }
 
+func TestVlogGenerationMaintenance_PeriodicPreflightSkipsHotNoPending(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	recorder := &rewriteBudgetRecordingBackend{
+		DB:              backend,
+		rewriteResponse: backenddb.ValueLogRewriteStats{BytesBefore: 64, BytesAfter: 32, RecordsCopied: 1},
+	}
+
+	db, cleanup := openRewriteQueueTestDB(t, dir, recorder)
+	t.Cleanup(cleanup)
+	skipRetainedPrune(db)
+
+	hot := time.Now().UnixNano()
+	db.lastForegroundWriteUnixNano.Store(hot)
+	db.lastForegroundReadUnixNano.Store(hot)
+	db.vlogGenerationCheckpointKickPending.Store(false)
+	db.vlogGenerationDeferredMaintenancePending.Store(false)
+
+	if ran := db.maybeRunPeriodicVlogGenerationMaintenance(false); ran {
+		t.Fatal("periodic maintenance unexpectedly entered during hot foreground with no pending wake")
+	}
+	if got := db.vlogGenerationMaintenanceAttempts.Load(); got != 0 {
+		t.Fatalf("maintenance attempts=%d want 0 on preflight skip", got)
+	}
+	if _, calls := recorder.recordedRewrite(); calls != 0 {
+		t.Fatalf("rewrite calls=%d want 0 on preflight skip", calls)
+	}
+}
+
 func TestCheckpoint_KickSkipsWhenMaintenancePhaseNonSteady(t *testing.T) {
 	disableVlogGenerationLoop(t)
 

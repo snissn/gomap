@@ -12195,6 +12195,19 @@ func (db *DB) maybeRunPeriodicVlogGenerationMaintenance(runGC bool) bool {
 		db.debugVlogMaintf("periodic_skip reason=maintenance_phase phase=%s run_gc=%t", maintenancePhaseString(uint32(db.MaintenancePhase())), runGC)
 		return false
 	}
+	// Coarse preflight: while foreground activity is hot, avoid entering the
+	// maintenance engine unless a deferred/checkpoint wake is pending. This
+	// prevents high-frequency periodic no-op acquisitions.
+	if !runGC {
+		now := time.Now()
+		quiet := db.foregroundActivityQuietFor(now, vlogGenerationMaintenanceQuietWindow, vlogForegroundReadQuietWindow)
+		if !quiet &&
+			!db.vlogGenerationCheckpointKickPending.Load() &&
+			!db.vlogGenerationDeferredMaintenancePending.Load() &&
+			!db.vlogGenerationDeferredMaintenanceDue(now) {
+			return false
+		}
+	}
 	db.maybeRunVlogGenerationMaintenance(runGC)
 	return true
 }
