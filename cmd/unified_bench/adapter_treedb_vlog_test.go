@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"testing"
 
 	treedb "github.com/snissn/gomap/TreeDB"
@@ -110,6 +111,33 @@ func TestBuildTreeDBOptions_VlogAutoPolicyFlag(t *testing.T) {
 	}
 	if opts.ValueLog.AutoPolicy != treedb.ValueLogAutoThroughput {
 		t.Fatalf("unexpected auto policy: %v", opts.ValueLog.AutoPolicy)
+	}
+}
+
+func TestBuildTreeDBOptions_VlogDictClassModeFlag(t *testing.T) {
+	saved := saveTreeDBFlagState()
+	defer restoreTreeDBFlagState(saved)
+
+	*treedbVlogDictClassMode = "split_outer_leaf"
+	opts, rep, err := buildTreeDBOptions("")
+	if err != nil {
+		t.Fatalf("buildTreeDBOptions: %v", err)
+	}
+	if opts.ValueLog.DictClassMode != treedb.ValueLogDictClassSplitOuterLeaf {
+		t.Fatalf("unexpected dict class mode: %v", opts.ValueLog.DictClassMode)
+	}
+	if got := rep.formatText(""); !strings.Contains(got, "vlog.dict_class_mode=split_outer_leaf") {
+		t.Fatalf("resolved options missing split class mode: %q", got)
+	}
+}
+
+func TestBuildTreeDBOptions_InvalidVlogDictClassMode(t *testing.T) {
+	saved := saveTreeDBFlagState()
+	defer restoreTreeDBFlagState(saved)
+
+	*treedbVlogDictClassMode = "bad_mode"
+	if _, _, err := buildTreeDBOptions(""); err == nil {
+		t.Fatalf("expected error for invalid dict class mode")
 	}
 }
 

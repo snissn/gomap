@@ -157,6 +157,7 @@ type savedTreeDBFlagState struct {
 	internalBaseDelta       bool
 	chunkSize               int64
 	vlogAutoPolicy          string
+	vlogDictClassMode       string
 	vlogCompressionAutotune string
 	vlogGenerationPolicy    string
 	vlogGenHotBytes         int64
@@ -188,6 +189,7 @@ func saveTreeDBFlagState() savedTreeDBFlagState {
 		internalBaseDelta:       *treedbIndexInternalBaseDelta,
 		chunkSize:               *treedbChunkSize,
 		vlogAutoPolicy:          *treedbVlogAutoPolicy,
+		vlogDictClassMode:       *treedbVlogDictClassMode,
 		vlogCompressionAutotune: *treedbVlogCompressionAutotune,
 		vlogGenerationPolicy:    *treedbVlogGenerationPolicy,
 		vlogGenHotBytes:         *treedbVlogGenerationHotSegmentBytes,
@@ -215,6 +217,7 @@ func restoreTreeDBFlagState(s savedTreeDBFlagState) {
 	*treedbIndexInternalBaseDelta = s.internalBaseDelta
 	*treedbChunkSize = s.chunkSize
 	*treedbVlogAutoPolicy = s.vlogAutoPolicy
+	*treedbVlogDictClassMode = s.vlogDictClassMode
 	*treedbVlogCompressionAutotune = s.vlogCompressionAutotune
 	*treedbVlogGenerationPolicy = s.vlogGenerationPolicy
 	*treedbVlogGenerationHotSegmentBytes = s.vlogGenHotBytes
@@ -241,6 +244,7 @@ func resetTreeDBIndexFlagsForTest() {
 	*treedbIndexInternalBaseDelta = false
 	*treedbChunkSize = defaultTreeDBChunkSizeBytes
 	*treedbVlogAutoPolicy = "balanced"
+	*treedbVlogDictClassMode = "single"
 	*treedbVlogCompressionAutotune = "off"
 	*treedbVlogGenerationPolicy = "default"
 	*treedbVlogGenerationHotSegmentBytes = 0

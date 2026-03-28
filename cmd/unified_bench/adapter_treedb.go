@@ -87,6 +87,7 @@ var (
 	treedbVlogDictProbeIntervalBytes      = flag.Int("treedb-vlog-dict-probe-interval-bytes", 0, "TreeDB: probe interval bytes while incompressible hold is active (0=default)")
 	treedbVlogDictMinSavingsRatio         = flag.Float64("treedb-vlog-dict-min-savings-ratio", 0, "TreeDB: value-log dict min payload savings ratio (0=default)")
 	treedbVlogDictK                       = flag.Int("treedb-vlog-dict-k", 0, "TreeDB: value-log dict frame grouping K (records/frame, 0=default)")
+	treedbVlogDictClassMode               = flag.String("treedb-vlog-dict-class-mode", "single", "TreeDB: value-log dict class mode (single|split_outer_leaf)")
 	treedbVlogCompressionAutotune         = flag.String("treedb-vlog-compression-autotune", "off", "TreeDB: value-log compression autotune mode (off|medium|aggressive|default)")
 	treedbVlogDictFrameEncodeLevel        = flag.String("treedb-vlog-dict-frame-encode-level", "engine", "TreeDB: zstd encoder level for dict-compressed value-log frames (engine|fastest|default|better|best|all|<int>)")
 	treedbVlogDictFrameEntropyMode        = flag.String("treedb-vlog-dict-frame-entropy", "engine", "TreeDB: dict-frame entropy mode (engine|on|off|both). Controls WithNoEntropyCompression.")
@@ -348,6 +349,7 @@ func (r treeDBOptionsReport) formatText(indent string) string {
 	lines = append(lines, fmt.Sprintf("vlog.compression=%s", formatTreeDBVlogCompression(r.opts.ValueLog.Compression)))
 	lines = append(lines, fmt.Sprintf("vlog.block_codec=%s", formatTreeDBVlogBlockCodec(r.opts.ValueLog.BlockCodec)))
 	lines = append(lines, fmt.Sprintf("vlog.auto_policy=%s", formatTreeDBVlogAutoPolicy(r.opts.ValueLog.AutoPolicy)))
+	lines = append(lines, fmt.Sprintf("vlog.dict_class_mode=%s", formatTreeDBVlogDictClassMode(r.opts.ValueLog.DictClassMode)))
 	lines = append(lines, fmt.Sprintf("vlog.generation_policy=%s", formatTreeDBVlogGenerationPolicy(r.opts.ValueLog.Generational.Policy)))
 	lines = append(lines, fmt.Sprintf("vlog.generation_hot_segment_bytes=%d", r.opts.ValueLog.Generational.HotSegmentTargetBytes))
 	lines = append(lines, fmt.Sprintf("vlog.generation_warm_segment_bytes=%d", r.opts.ValueLog.Generational.WarmSegmentTargetBytes))
@@ -462,6 +464,28 @@ func formatTreeDBVlogAutoPolicy(policy treedb.ValueLogAutoPolicy) string {
 		return "size"
 	default:
 		return fmt.Sprintf("auto_policy_%d", policy)
+	}
+}
+
+func formatTreeDBVlogDictClassMode(mode treedb.ValueLogDictClassMode) string {
+	switch mode {
+	case treedb.ValueLogDictClassSingle:
+		return "single"
+	case treedb.ValueLogDictClassSplitOuterLeaf:
+		return "split_outer_leaf"
+	default:
+		return fmt.Sprintf("dict_class_mode_%d", mode)
+	}
+}
+
+func parseTreeDBVlogDictClassMode(s string) (treedb.ValueLogDictClassMode, error) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "", "default", "single":
+		return treedb.ValueLogDictClassSingle, nil
+	case "split_outer_leaf":
+		return treedb.ValueLogDictClassSplitOuterLeaf, nil
+	default:
+		return treedb.ValueLogDictClassSingle, fmt.Errorf("unsupported -treedb-vlog-dict-class-mode=%q (expected single|split_outer_leaf)", s)
 	}
 }
 
@@ -612,6 +636,11 @@ func buildTreeDBOptions(dir string) (treedb.Options, treeDBOptionsReport, error)
 		return treedb.Options{}, treeDBOptionsReport{}, err
 	}
 	opts.ValueLog.AutoPolicy = autoPolicy
+	dictClassMode, err := parseTreeDBVlogDictClassMode(*treedbVlogDictClassMode)
+	if err != nil {
+		return treedb.Options{}, treeDBOptionsReport{}, err
+	}
+	opts.ValueLog.DictClassMode = dictClassMode
 	genPolicy, err := parseTreeDBVlogGenerationPolicy(*treedbVlogGenerationPolicy)
 	if err != nil {
 		return treedb.Options{}, treeDBOptionsReport{}, err
