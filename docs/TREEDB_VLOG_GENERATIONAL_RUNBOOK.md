@@ -32,6 +32,27 @@ Primary keys:
 - `treedb.cache.vlog_generation.vacuum.runs`
 - `treedb.cache.vlog_generation.vacuum.failures`
 
+## Live Run Capacity Report
+For `run_celestia`-style runs, analyze the latest diagnostics snapshot with:
+
+```bash
+./scripts/analyze_vlog_maintenance_capacity.py
+```
+
+Optional explicit input:
+
+```bash
+./scripts/analyze_vlog_maintenance_capacity.py ~/.celestia-app-mainnet-treedb-<timestamp>
+./scripts/analyze_vlog_maintenance_capacity.py ~/.celestia-app-mainnet-treedb-<timestamp>/sync/diagnostics/<file>.debug_vars.json
+```
+
+The report highlights:
+- maintenance lane pressure (attempt/acquire/collision + skip mix)
+- rewrite plan-to-exec realization
+- stale-bytes processed vs immediate reclaim
+- observed-source replay drain
+- GC eligibility/protection signals
+
 ## Bench Commands
 ### Churn sanity (TreeDB)
 ```bash
