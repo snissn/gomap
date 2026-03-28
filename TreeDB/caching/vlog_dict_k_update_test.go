@@ -18,6 +18,11 @@ type legacyDictStoreForClassPublishTest struct {
 	dicts     map[uint64][]byte
 }
 
+type classWriterOnlyDictStoreForClassPublishTest struct {
+	*legacyDictStoreForClassPublishTest
+	classCurrent map[string]uint64
+}
+
 func (s *legacyDictStoreForClassPublishTest) GetCurrent(context.Context) (uint64, error) {
 	if s == nil {
 		return 0, errors.New("nil store")
@@ -61,6 +66,17 @@ func (s *legacyDictStoreForClassPublishTest) SetCurrent(_ context.Context, dictI
 		return errors.New("nil store")
 	}
 	s.currentID = dictID
+	return nil
+}
+
+func (s *classWriterOnlyDictStoreForClassPublishTest) SetCurrentForClass(_ context.Context, class string, dictID uint64) error {
+	if s == nil {
+		return errors.New("nil store")
+	}
+	if s.classCurrent == nil {
+		s.classCurrent = make(map[string]uint64)
+	}
+	s.classCurrent[class] = dictID
 	return nil
 }
 
@@ -155,5 +171,50 @@ func TestApplyValueLogDictProfileForClass_LegacyStoreFallbackRefreshesGlobalCach
 	}
 	if got := store.currentID; got != db.dictCurrentCached.Load() {
 		t.Fatalf("expected global cache to mirror store current dict id, store=%d cached=%d", got, db.dictCurrentCached.Load())
+	}
+}
+
+func TestApplyValueLogDictProfileForClass_ClassWriterWithoutClassReaderFallsBackToGlobalCurrent(t *testing.T) {
+	tr := &compression.Trainer{}
+	dictBytes := []byte("outer-leaf-dictionary")
+	dictHash := xxhash.Sum64(dictBytes)
+	tr.AcceptProfile(&compression.ActiveProfile{
+		DictHash:     dictHash,
+		DictBytes:    len(dictBytes),
+		Dict:         dictBytes,
+		K:            8,
+		PayloadRatio: 0.6,
+		TotalRatio:   0.6,
+		Timestamp:    time.Now(),
+	})
+
+	store := &classWriterOnlyDictStoreForClassPublishTest{
+		legacyDictStoreForClassPublishTest: &legacyDictStoreForClassPublishTest{
+			currentID: 41,
+			dicts:     map[uint64][]byte{41: []byte("old-dict")},
+			nextID:    41,
+		},
+	}
+	db := &DB{
+		dictStore:             store,
+		valueLogDictClassMode: uint8(vlogDictClassModeSplitOuterLeaf),
+	}
+	db.valueLogDictTrainerByClass[vlogDictClassOuterLeaf] = tr
+	db.dictCurrentCached.Store(41)
+	db.dictCurrentOps.Store(99)
+
+	db.applyValueLogDictProfileForClass(vlogDictClassOuterLeaf)
+
+	if got := store.currentID; got == 41 {
+		t.Fatalf("expected global current marker update, got stale=%d", got)
+	}
+	if got := db.dictCurrentCached.Load(); got != store.currentID {
+		t.Fatalf("expected global cache to match updated store current, cached=%d store=%d", got, store.currentID)
+	}
+	if got := db.dictCurrentOps.Load(); got != 0 {
+		t.Fatalf("expected global cache ops reset, got=%d", got)
+	}
+	if got := len(store.classCurrent); got != 0 {
+		t.Fatalf("expected class-specific marker not to be used without class reader, writes=%d", got)
 	}
 }

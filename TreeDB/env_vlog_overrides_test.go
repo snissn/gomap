@@ -143,3 +143,13 @@ func TestApplyEnvMaintenanceOverrides_VlogDictFrameOptions(t *testing.T) {
 		t.Fatalf("expected entropy=true, got false")
 	}
 }
+
+func TestApplyEnvMaintenanceOverrides_VlogDictClassModeDefaultAlias(t *testing.T) {
+	opts := Options{}
+	opts.ValueLog.DictClassMode = ValueLogDictClassSplitOuterLeaf
+	t.Setenv(envVlogDictClassMode, "default")
+	applyEnvMaintenanceOverrides(&opts)
+	if got := opts.ValueLog.DictClassMode; got != ValueLogDictClassSingle {
+		t.Fatalf("expected dict class mode single for default alias, got %v", got)
+	}
+}

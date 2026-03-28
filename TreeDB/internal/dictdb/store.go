@@ -87,7 +87,7 @@ func (s *Store) GetCurrent(_ context.Context) (uint64, error) {
 
 // GetCurrentForClass returns the current dictionary ID for a payload class.
 // Empty class falls back to the legacy global current marker.
-func (s *Store) GetCurrentForClass(_ context.Context, class string) (uint64, error) {
+func (s *Store) GetCurrentForClass(ctx context.Context, class string) (uint64, error) {
 	if s == nil || s.backend == nil {
 		return 0, errStoreUnavailable
 	}
@@ -98,7 +98,7 @@ func (s *Store) GetCurrentForClass(_ context.Context, class string) (uint64, err
 	}
 	if val == nil {
 		// Backward compatibility: fall back to legacy global current marker.
-		return s.GetCurrent(context.Background())
+		return s.GetCurrent(ctx)
 	}
 	if len(val) != 8 {
 		return 0, fmt.Errorf("dictdb: invalid current size %d", len(val))

@@ -630,8 +630,8 @@ func (db *DB) valueLogDictTrainerForClass(class vlogDictClass) *compression.Trai
 	if db == nil {
 		return nil
 	}
-	db.valueLogDictTrainerMu.Lock()
-	defer db.valueLogDictTrainerMu.Unlock()
+	db.valueLogDictTrainerMu.RLock()
+	defer db.valueLogDictTrainerMu.RUnlock()
 	if int(class) >= vlogDictClassCount {
 		class = vlogDictClassSingleValue
 	}
@@ -1046,7 +1046,9 @@ func (db *DB) applyValueLogDictProfileForClass(class vlogDictClass) {
 	classMode := db.dictClassMode()
 	publishedViaGlobalCurrent := false
 	if classMode == vlogDictClassModeSplitOuterLeaf {
-		if byClassWriter, ok := store.(dictStoreWriterByClass); ok {
+		byClassWriter, hasClassWriter := store.(dictStoreWriterByClass)
+		_, hasClassReader := store.(dictStoreCurrentByClass)
+		if hasClassWriter && hasClassReader {
 			if err := byClassWriter.SetCurrentForClass(ctx, vlogDictClassSuffix(class), dictID); err != nil {
 				db.reportError(err)
 				return

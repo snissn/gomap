@@ -804,11 +804,14 @@ func applyEnvMaintenanceOverrides(opts *Options) {
 		opts.ValueLog.DictMaxK = v
 	}
 	if v, ok := envString(envVlogDictClassMode); ok {
-		switch strings.ToLower(strings.TrimSpace(v)) {
-		case "single":
+		mode := strings.ToLower(strings.TrimSpace(v))
+		switch mode {
+		case "single", "default":
 			opts.ValueLog.DictClassMode = ValueLogDictClassSingle
 		case "split_outer_leaf", "split-outer-leaf", "split", "outer_leaf_split":
 			opts.ValueLog.DictClassMode = ValueLogDictClassSplitOuterLeaf
+		default:
+			log.Printf("treedb: unsupported %s=%q; keeping existing ValueLog.DictClassMode", envVlogDictClassMode, v)
 		}
 	}
 	if v, ok := envString(envVlogDictZstdLevel); ok {
