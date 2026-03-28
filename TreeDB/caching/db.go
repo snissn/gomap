@@ -4175,6 +4175,9 @@ func (db *DB) allowValueLogPointers() bool {
 	if bytes >= limit {
 		if db.valueLogHardCapWarned.CompareAndSwap(false, true) {
 			db.reportError(fmt.Errorf("cachingdb: retained value-log bytes %d exceed hard cap %d; disabling new value-log pointers", bytes, limit))
+			// Hard-cap entry means retained bytes are now constraining placement.
+			// Request an eager retained prune so lifecycle pins can drain promptly.
+			db.scheduleRetainedValueLogPruneForce()
 		}
 		return false
 	}

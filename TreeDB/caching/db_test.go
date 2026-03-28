@@ -2358,6 +2358,42 @@ func TestRetainedValueLogPruneForce_RetriesAfterForegroundWritesResume(t *testin
 	}
 }
 
+func TestAllowValueLogPointers_HardCapRequestsForcedRetainedPrune(t *testing.T) {
+	cache := &DB{}
+	cache.testSkipRetainedPrune = true
+	cache.maxValueLogRetainedBytesHard = 1024
+	cache.valueLogRetainedClosedBytes.Store(2048)
+
+	if cache.allowValueLogPointers() {
+		t.Fatalf("allowValueLogPointers=true, want false when hard cap exceeded")
+	}
+	if got := cache.retainedValueLogPruneScheduleForcedRequests.Load(); got != 1 {
+		t.Fatalf("schedule_forced_requests=%d want 1 after first hard-cap crossing", got)
+	}
+
+	// Re-check while still over cap should not repeatedly re-schedule until
+	// retained bytes drop back below the hard cap.
+	if cache.allowValueLogPointers() {
+		t.Fatalf("allowValueLogPointers=true on repeated over-cap check, want false")
+	}
+	if got := cache.retainedValueLogPruneScheduleForcedRequests.Load(); got != 1 {
+		t.Fatalf("schedule_forced_requests=%d want 1 after repeated over-cap check", got)
+	}
+
+	cache.valueLogRetainedClosedBytes.Store(0)
+	if !cache.allowValueLogPointers() {
+		t.Fatalf("allowValueLogPointers=false, want true after dropping below hard cap")
+	}
+
+	cache.valueLogRetainedClosedBytes.Store(4096)
+	if cache.allowValueLogPointers() {
+		t.Fatalf("allowValueLogPointers=true after second hard-cap crossing, want false")
+	}
+	if got := cache.retainedValueLogPruneScheduleForcedRequests.Load(); got != 2 {
+		t.Fatalf("schedule_forced_requests=%d want 2 after second hard-cap crossing", got)
+	}
+}
+
 func TestCheckpoint_RateLimitsRetainedValueLogPrune(t *testing.T) {
 	dir := t.TempDir()
 	backend := NewMockBackend()

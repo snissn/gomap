@@ -153,3 +153,16 @@ func TestApplyEnvMaintenanceOverrides_VlogDictClassModeDefaultAlias(t *testing.T
 		t.Fatalf("expected dict class mode single for default alias, got %v", got)
 	}
 }
+
+func TestApplyEnvMaintenanceOverrides_VlogRetainedCaps(t *testing.T) {
+	opts := Options{}
+	t.Setenv(envVlogMaxRetainedBytes, "123456")
+	t.Setenv(envVlogMaxRetainedBytesHard, "654321")
+	applyEnvMaintenanceOverrides(&opts)
+	if got := opts.ValueLog.MaxRetainedBytes; got != 123456 {
+		t.Fatalf("expected max retained bytes=123456, got %d", got)
+	}
+	if got := opts.ValueLog.MaxRetainedBytesHard; got != 654321 {
+		t.Fatalf("expected max retained bytes hard=654321, got %d", got)
+	}
+}

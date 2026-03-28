@@ -710,6 +710,8 @@ const (
 	envVlogDictEntropy           = "TREEDB_VLOG_DICT_ENTROPY"                   // bool
 	envVlogDictAdaptiveRatio     = "TREEDB_VLOG_DICT_ADAPTIVE_RATIO"            // float64
 	envVlogDictMinPayloadSavings = "TREEDB_VLOG_DICT_MIN_PAYLOAD_SAVINGS_RATIO" // float64
+	envVlogMaxRetainedBytes      = "TREEDB_VLOG_MAX_RETAINED_BYTES"             // int64
+	envVlogMaxRetainedBytesHard  = "TREEDB_VLOG_MAX_RETAINED_BYTES_HARD"        // int64
 )
 
 func applyEnvMaintenanceOverrides(opts *Options) {
@@ -827,6 +829,12 @@ func applyEnvMaintenanceOverrides(opts *Options) {
 	}
 	if v, ok := envFloat64(envVlogDictMinPayloadSavings); ok {
 		opts.ValueLog.DictMinPayloadSavingsRatio = v
+	}
+	if v, ok := envInt(envVlogMaxRetainedBytes); ok {
+		opts.ValueLog.MaxRetainedBytes = int64(v)
+	}
+	if v, ok := envInt(envVlogMaxRetainedBytesHard); ok {
+		opts.ValueLog.MaxRetainedBytesHard = int64(v)
 	}
 }
 
