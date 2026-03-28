@@ -3041,6 +3041,13 @@ func (it *rewriteIterator) preferredDictID(fileID uint32) (uint64, error) {
 			if err != nil {
 				return 0, err
 			}
+			if dictID != 0 {
+				// Only pin the segment-local preference when the dict bytes are
+				// actually resolvable. Segments can contain stale dict IDs.
+				if _, ok := it.dictBytesForID(dictID); !ok {
+					dictID = 0
+				}
+			}
 			if it.preferredDictByFile == nil {
 				it.preferredDictByFile = make(map[uint32]uint64)
 			}

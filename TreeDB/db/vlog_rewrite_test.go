@@ -1188,6 +1188,69 @@ func TestScanValueLogSegmentPreferredDictID_IgnoresInvalidRecordVersion(t *testi
 	}
 }
 
+func TestRewriteIteratorPreferredDictID_FallsBackWhenScannedDictUnavailable(t *testing.T) {
+	dir := t.TempDir()
+	fileID := uint32(1)
+	path := filepath.Join(dir, "value-l0-000001.log")
+
+	// Write a minimal grouped frame record with a non-zero dictID so the
+	// preferred-dict segment scan discovers it.
+	rawRecord := make([]byte, valuelog.HeaderSize+valuelog.FrameHeaderSize)
+	rawRecord[4] = valuelog.Version
+	rawRecord[5] = 1 << 0 // grouped record flag
+	binary.LittleEndian.PutUint32(rawRecord[16:20], uint32(valuelog.FrameHeaderSize))
+	rawRecord[valuelog.HeaderSize] = valuelog.FrameVersion
+	scannedDictID := uint64(12345)
+	binary.LittleEndian.PutUint64(rawRecord[valuelog.HeaderSize+4:valuelog.HeaderSize+12], scannedDictID)
+	if err := os.WriteFile(path, rawRecord, 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	readFile, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("Open read file: %v", err)
+	}
+	defer closeNoErr(t, readFile)
+
+	globalDictID := uint64(777)
+	it := &rewriteIterator{
+		vlogs: &valuelog.Set{
+			Files: map[uint32]*valuelog.File{
+				fileID: &valuelog.File{File: readFile},
+			},
+		},
+		preferredDictGlobal: globalDictID,
+		dictLookup: func(id uint64) ([]byte, error) {
+			if id == globalDictID {
+				return []byte{1, 2, 3, 4}, nil
+			}
+			return nil, valuelog.ErrMissingDict
+		},
+	}
+
+	got, err := it.preferredDictID(fileID)
+	if err != nil {
+		t.Fatalf("preferredDictID first call: %v", err)
+	}
+	if got != globalDictID {
+		t.Fatalf("preferredDictID first call=%d want=%d", got, globalDictID)
+	}
+	if it.preferredDictByFile[fileID] != 0 {
+		t.Fatalf("preferredDictByFile[%d]=%d want 0 for unresolved scanned dict", fileID, it.preferredDictByFile[fileID])
+	}
+	if cached, ok := it.dictCache[scannedDictID]; !ok || cached.ok {
+		t.Fatalf("expected unresolved scanned dictID %d to be cached as miss", scannedDictID)
+	}
+
+	got, err = it.preferredDictID(fileID)
+	if err != nil {
+		t.Fatalf("preferredDictID second call: %v", err)
+	}
+	if got != globalDictID {
+		t.Fatalf("preferredDictID second call=%d want=%d", got, globalDictID)
+	}
+}
+
 func TestValueLogRewriteOffline_ReencodesGroupedBlockOuterLeafPagesWithObservedDict(t *testing.T) {
 	dir := t.TempDir()
 
