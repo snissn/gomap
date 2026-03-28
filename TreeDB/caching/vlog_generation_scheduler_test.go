@@ -5643,6 +5643,10 @@ func TestVlogGenerationStats_ReportRewriteBacklogAndDurations(t *testing.T) {
 	db.vlogGenerationRewriteBudgetTokensBytes.Store(512)
 	db.vlogGenerationRewriteBudgetConsumed.Store(1536)
 	db.vlogGenerationRewriteAgeBlockedUntilNS.Store(time.Now().Add(5 * time.Second).UnixNano())
+	db.vlogGenerationMaintenanceSkipStageNotDue.Store(5)
+	db.vlogGenerationMaintenanceSkipStageDue.Store(2)
+	db.vlogGenerationRewritePlanSelectedSegments.Store(6)
+	db.vlogGenerationRewriteExecSourceSegments.Store(3)
 
 	db.vlogGenerationRewriteQueueMu.Lock()
 	db.vlogGenerationRewriteQueueLoaded = true
@@ -5730,5 +5734,17 @@ func TestVlogGenerationStats_ReportRewriteBacklogAndDurations(t *testing.T) {
 	}
 	if got := stats["treedb.cache.vlog_generation.rewrite_budget.tokens_utilization_pct"]; got == "" {
 		t.Fatalf("rewrite budget utilization pct missing")
+	}
+	if got := stats["treedb.cache.vlog_generation.maintenance.skip.stage_gate_not_due"]; got != "5" {
+		t.Fatalf("maintenance skip stage gate not due=%q want 5", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.maintenance.skip.stage_gate_due_reserved"]; got != "2" {
+		t.Fatalf("maintenance skip stage gate due reserved=%q want 2", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.plan_selected_segments_total"]; got != "6" {
+		t.Fatalf("rewrite plan selected segments total=%q want 6", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.exec.source_segments_total"]; got != "3" {
+		t.Fatalf("rewrite exec source segments total=%q want 3", got)
 	}
 }

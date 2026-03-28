@@ -5181,6 +5181,7 @@ type DB struct {
 	vlogGenerationRewritePlanErrors             atomic.Uint64
 	vlogGenerationRewritePlanEmpty              atomic.Uint64
 	vlogGenerationRewritePlanSelected           atomic.Uint64
+	vlogGenerationRewritePlanSelectedSegments   atomic.Uint64
 	vlogGenerationRewritePlanSelectedBytes      atomic.Uint64
 	vlogGenerationRewritePlanSelectedLiveBytes  atomic.Uint64
 	vlogGenerationRewritePlanSelectedStaleBytes atomic.Uint64
@@ -5220,6 +5221,8 @@ type DB struct {
 	vlogGenerationMaintenanceSkipWALOnPeriodic  atomic.Uint64
 	vlogGenerationMaintenanceSkipPhase          atomic.Uint64
 	vlogGenerationMaintenanceSkipStageGate      atomic.Uint64
+	vlogGenerationMaintenanceSkipStageNotDue    atomic.Uint64
+	vlogGenerationMaintenanceSkipStageDue       atomic.Uint64
 	vlogGenerationMaintenanceSkipAgeBlocked     atomic.Uint64
 	vlogGenerationMaintenanceSkipPriority       atomic.Uint64
 	vlogGenerationMaintenanceSkipQuiet          atomic.Uint64
@@ -5259,6 +5262,7 @@ type DB struct {
 	vlogGenerationRewritePlanMaxNanos       atomic.Uint64
 	vlogGenerationRewriteExecTotalNanos     atomic.Uint64
 	vlogGenerationRewriteExecMaxNanos       atomic.Uint64
+	vlogGenerationRewriteExecSourceSegments atomic.Uint64
 	vlogGenerationGCExecTotalNanos          atomic.Uint64
 	vlogGenerationGCExecMaxNanos            atomic.Uint64
 	vlogGenerationVacuumExecTotalNanos      atomic.Uint64
@@ -12531,6 +12535,18 @@ func (db *DB) observeVlogGenerationRewritePlanOutcomeWithDuration(plan backenddb
 	}
 	if len(plan.SourceFileIDs) > 0 || len(plan.SelectedSegments) > 0 || plan.SegmentsSelected > 0 {
 		db.vlogGenerationRewritePlanSelected.Add(1)
+		selectedSegments := plan.SegmentsSelected
+		if selectedSegments <= 0 {
+			switch {
+			case len(plan.SelectedSegments) > 0:
+				selectedSegments = len(plan.SelectedSegments)
+			case len(plan.SourceFileIDs) > 0:
+				selectedSegments = len(plan.SourceFileIDs)
+			}
+		}
+		if selectedSegments > 0 {
+			db.vlogGenerationRewritePlanSelectedSegments.Add(uint64(selectedSegments))
+		}
 		selectedTotal := plan.SelectedBytesTotal
 		selectedLive := plan.SelectedBytesLive
 		selectedStale := plan.SelectedBytesStale
@@ -13257,6 +13273,7 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 			// has elapsed. The only valid next step is to wait for confirmation.
 			if !vlogGenerationIsStageConfirmSource(opts) {
 				db.vlogGenerationMaintenanceSkipStageGate.Add(1)
+				db.vlogGenerationMaintenanceSkipStageNotDue.Add(1)
 				return
 			}
 		} else if !vlogGenerationIsStageConfirmSource(opts) {
@@ -13264,6 +13281,7 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 			// explicit stage-confirm wake instead of letting generic retries or
 			// periodic passes reacquire it first.
 			db.vlogGenerationMaintenanceSkipStageGate.Add(1)
+			db.vlogGenerationMaintenanceSkipStageDue.Add(1)
 			return
 		}
 	}
@@ -14008,6 +14026,9 @@ planned:
 			}
 			db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
 			db.vlogGenerationRewriteRuns.Add(1)
+			if sourceSegments := len(rewriteOpts.SourceFileIDs); sourceSegments > 0 {
+				db.vlogGenerationRewriteExecSourceSegments.Add(uint64(sourceSegments))
+			}
 			rewriteBytesIn := int64(0)
 			if processedLedgerOK {
 				rewriteBytesIn = processedLedgerLiveBytes
@@ -19706,6 +19727,8 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_generation.maintenance.skip.wal_on_periodic"] = fmt.Sprintf("%d", db.vlogGenerationMaintenanceSkipWALOnPeriodic.Load())
 	stats["treedb.cache.vlog_generation.maintenance.skip.maintenance_phase"] = fmt.Sprintf("%d", db.vlogGenerationMaintenanceSkipPhase.Load())
 	stats["treedb.cache.vlog_generation.maintenance.skip.stage_gate"] = fmt.Sprintf("%d", db.vlogGenerationMaintenanceSkipStageGate.Load())
+	stats["treedb.cache.vlog_generation.maintenance.skip.stage_gate_not_due"] = fmt.Sprintf("%d", db.vlogGenerationMaintenanceSkipStageNotDue.Load())
+	stats["treedb.cache.vlog_generation.maintenance.skip.stage_gate_due_reserved"] = fmt.Sprintf("%d", db.vlogGenerationMaintenanceSkipStageDue.Load())
 	stats["treedb.cache.vlog_generation.maintenance.skip.age_blocked_gate"] = fmt.Sprintf("%d", db.vlogGenerationMaintenanceSkipAgeBlocked.Load())
 	stats["treedb.cache.vlog_generation.maintenance.skip.priority_pending"] = fmt.Sprintf("%d", db.vlogGenerationMaintenanceSkipPriority.Load())
 	stats["treedb.cache.vlog_generation.maintenance.skip.quiet_window"] = fmt.Sprintf("%d", db.vlogGenerationMaintenanceSkipQuiet.Load())
@@ -19778,9 +19801,11 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_generation.rewrite.plan_errors"] = fmt.Sprintf("%d", db.vlogGenerationRewritePlanErrors.Load())
 	stats["treedb.cache.vlog_generation.rewrite.plan_empty"] = fmt.Sprintf("%d", db.vlogGenerationRewritePlanEmpty.Load())
 	stats["treedb.cache.vlog_generation.rewrite.plan_selected"] = fmt.Sprintf("%d", db.vlogGenerationRewritePlanSelected.Load())
+	stats["treedb.cache.vlog_generation.rewrite.plan_selected_segments_total"] = fmt.Sprintf("%d", db.vlogGenerationRewritePlanSelectedSegments.Load())
 	stats["treedb.cache.vlog_generation.rewrite.plan_selected_bytes_total"] = fmt.Sprintf("%d", db.vlogGenerationRewritePlanSelectedBytes.Load())
 	stats["treedb.cache.vlog_generation.rewrite.plan_selected_bytes_live"] = fmt.Sprintf("%d", db.vlogGenerationRewritePlanSelectedLiveBytes.Load())
 	stats["treedb.cache.vlog_generation.rewrite.plan_selected_bytes_stale"] = fmt.Sprintf("%d", db.vlogGenerationRewritePlanSelectedStaleBytes.Load())
+	stats["treedb.cache.vlog_generation.rewrite.exec.source_segments_total"] = fmt.Sprintf("%d", db.vlogGenerationRewriteExecSourceSegments.Load())
 	stats["treedb.cache.vlog_generation.rewrite.canceled_runs"] = fmt.Sprintf("%d", db.vlogGenerationRewriteCanceledRuns.Load())
 	stats["treedb.cache.vlog_generation.rewrite.canceled_last_unix_nano"] = fmt.Sprintf("%d", db.vlogGenerationRewriteCanceledLastNS.Load())
 	stats["treedb.cache.vlog_generation.rewrite.queue_prune_runs"] = fmt.Sprintf("%d", db.vlogGenerationRewriteQueuePruneRuns.Load())
