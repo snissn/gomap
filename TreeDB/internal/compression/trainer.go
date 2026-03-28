@@ -16,20 +16,24 @@ import (
 )
 
 const (
-	DefaultTrainBytes           = 1 << 20
-	DefaultTrainDictBytes       = 32 << 10
-	DefaultTrainMinRecords      = 64
-	DefaultTrainMaxRecordBytes  = 64 << 10
-	DefaultTrainQueue           = 128
+	DefaultTrainBytes          = 1 << 20
+	DefaultTrainDictBytes      = 32 << 10
+	DefaultTrainMinRecords     = 64
+	DefaultTrainMaxRecordBytes = 64 << 10
+	// Keep enough buffered samples to bootstrap a first dict during short,
+	// front-end-heavy ingest windows without dropping most candidates.
+	DefaultTrainQueue           = 512
 	DefaultTrainDedupWindow     = 16
 	DefaultTrainMaxHistoryBytes = 128 << 10
 
 	// Bootstrap defaults. These are intentionally smaller than the steady-state
 	// TrainBytes/DictBytes targets so dict compression becomes active quickly,
 	// reducing sensitivity to TrainBytes tuning.
-	DefaultTrainBootstrapBytes      = 128 << 10
-	DefaultTrainBootstrapDictBytes  = 8 << 10
-	DefaultTrainBootstrapMinRecords = 16
+	DefaultTrainBootstrapBytes     = 32 << 10
+	DefaultTrainBootstrapDictBytes = 8 << 10
+	// Keep bootstrap record count high enough to evaluate K candidates beyond
+	// tiny groups on large-value streams.
+	DefaultTrainBootstrapMinRecords = 32
 
 	// Adaptive gating constants for dict+K refresh.
 	MinProfileBytes       = 64 << 20 // 64 MiB
@@ -1194,6 +1198,11 @@ func (t *Trainer) acceptProfile(profile *ActiveProfile) {
 	t.lastRejectReason.Store("")
 	if first && (t.bootstrapBytes < t.targetBytes || t.bootstrapMinRecords < t.minRecords || t.bootstrapDictBytes < t.dictBytes) {
 		t.upgradePending.Store(true)
+		// Bootstrap training uses a small sample window to get an initial dict
+		// quickly. Once the first profile is accepted, continue collecting so the
+		// trainer can run a fuller follow-up pass and potentially improve dict
+		// size/history/K from steady-state data.
+		t.collecting.Store(true)
 	}
 	if v := t.onAccept.Load(); v != nil {
 		if fn, ok := v.(func(*ActiveProfile)); ok && fn != nil {

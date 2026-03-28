@@ -20,6 +20,30 @@ type errorBatchReaderDB struct {
 	readBatchCalls int
 }
 
+type fixedNameDB struct {
+	name string
+}
+
+func (d *fixedNameDB) Name() string {
+	return d.name
+}
+
+func (d *fixedNameDB) Close() error {
+	return nil
+}
+
+func (d *fixedNameDB) Get(key []byte) ([]byte, error) {
+	return nil, nil
+}
+
+func (d *fixedNameDB) Set(key, value []byte) error {
+	return nil
+}
+
+func (d *fixedNameDB) Delete(key []byte) error {
+	return nil
+}
+
 func (d *errorBatchReaderDB) Name() string {
 	return "ReadBatchSentinel"
 }
@@ -956,6 +980,21 @@ func TestRunBenchmark_KeyShapePrefix4RejectsOverflow(t *testing.T) {
 	}
 }
 
+func TestClampWarmupKeyCount(t *testing.T) {
+	if got := clampWarmupKeyCount(benchKeyShapeBE8Prefix4, uint64(math.MaxUint32)-3, 10); got != 4 {
+		t.Fatalf("prefix4 clamp mismatch: got %d want 4", got)
+	}
+	if got := clampWarmupKeyCount(benchKeyShapeBE8Prefix4, uint64(math.MaxUint32)+1, 10); got != 0 {
+		t.Fatalf("prefix4 out-of-range base should clamp to 0, got %d", got)
+	}
+	if got := clampWarmupKeyCount(benchKeyShapeBE8, math.MaxUint64-8, 16); got != 9 {
+		t.Fatalf("be8 clamp mismatch near max uint64: got %d want 9", got)
+	}
+	if got := clampWarmupKeyCount(benchKeyShapeBE8, 100, 32); got != 32 {
+		t.Fatalf("be8 in-range should preserve warmup count, got %d", got)
+	}
+}
+
 func TestMakeWriteValuePool_RepeatNotAllIdentical(t *testing.T) {
 	values, err := makeWriteValuePool(1, "repeat", 128, 32)
 	if err != nil {
@@ -1030,6 +1069,97 @@ func TestParseTreeDBVlogCompressionVariant(t *testing.T) {
 		if !tc.wantErr && err != nil {
 			t.Fatalf("unexpected error for %q: %v", tc.in, err)
 		}
+	}
+}
+
+func TestRenderKeptDirsString_SortsAndUsesWrapperNames(t *testing.T) {
+	got := renderKeptDirsString([]*DBInstance{
+		{Name: "zeta", Wrapper: &fixedNameDB{name: "B DB"}, Dir: "/tmp/b"},
+		{Name: "alpha", Wrapper: &fixedNameDB{name: "A DB"}, Dir: "/tmp/a"},
+		{Name: "missing_dir", Wrapper: &fixedNameDB{name: "Skip DB"}, Dir: ""},
+		{Name: "fallback_only", Wrapper: nil, Dir: "/tmp/fallback"},
+		nil,
+	})
+	want := "" +
+		"A DB: /tmp/a\n" +
+		"B DB: /tmp/b\n" +
+		"fallback_only: /tmp/fallback\n"
+	if got != want {
+		t.Fatalf("renderKeptDirsString mismatch\n--- got ---\n%s--- want ---\n%s", got, want)
+	}
+}
+
+func TestRenderMarkdownSingle_KeepDirIncludesKeptSection(t *testing.T) {
+	run := BenchRun{
+		Config: BenchConfig{
+			Keys:         100,
+			ValueSize:    16,
+			BatchSize:    10,
+			RangeQueries: 0,
+			RangeSpan:    0,
+			KeepDir:      true,
+		},
+		Instances: []*DBInstance{
+			{Name: "fake", Wrapper: &fixedNameDB{name: "FakeDB"}, Dir: "/tmp/bench-fake"},
+		},
+		TestOrder: []string{"batch_write"},
+		DisplayNames: map[string]string{
+			"batch_write": "Batch Write",
+		},
+		Results: map[string]map[string]float64{
+			"batch_write": {
+				"FakeDB": 1234,
+			},
+		},
+	}
+
+	md := renderMarkdownSingle(run)
+	if !strings.Contains(md, "## Kept Data Directories") {
+		t.Fatalf("expected kept directories section, got:\n%s", md)
+	}
+	if !strings.Contains(md, "FakeDB: /tmp/bench-fake") {
+		t.Fatalf("expected kept directory line in markdown, got:\n%s", md)
+	}
+}
+
+func TestRenderMarkdownSweep_KeepDirIncludesKeptSection(t *testing.T) {
+	makeRun := func(keys int, dir string) BenchRun {
+		return BenchRun{
+			Config: BenchConfig{
+				Keys:         keys,
+				ValueSize:    16,
+				BatchSize:    10,
+				RangeQueries: 0,
+				RangeSpan:    0,
+				KeepDir:      true,
+			},
+			Instances: []*DBInstance{
+				{Name: "fake", Wrapper: &fixedNameDB{name: "FakeDB"}, Dir: dir},
+			},
+			TestOrder: []string{"batch_write"},
+			DisplayNames: map[string]string{
+				"batch_write": "Batch Write",
+			},
+			Results: map[string]map[string]float64{
+				"batch_write": {
+					"FakeDB": 1234,
+				},
+			},
+		}
+	}
+
+	md := renderMarkdownSweep([]BenchRun{
+		makeRun(100, "/tmp/bench-fake-100"),
+		makeRun(200, "/tmp/bench-fake-200"),
+	})
+	if !strings.Contains(md, "## Kept Data Directories") {
+		t.Fatalf("expected kept directories section, got:\n%s", md)
+	}
+	if !strings.Contains(md, "keys=100") || !strings.Contains(md, "keys=200") {
+		t.Fatalf("expected keyed kept-directory subsections, got:\n%s", md)
+	}
+	if !strings.Contains(md, "FakeDB: /tmp/bench-fake-100") || !strings.Contains(md, "FakeDB: /tmp/bench-fake-200") {
+		t.Fatalf("expected kept directory rows, got:\n%s", md)
 	}
 }
 

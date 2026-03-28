@@ -8,8 +8,8 @@ import (
 
 	"github.com/snissn/compress/zstd"
 	"github.com/snissn/gomap/TreeDB/internal/compression"
+	"github.com/snissn/gomap/TreeDB/internal/outerleaf"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
-	"github.com/snissn/gomap/TreeDB/page"
 )
 
 const (
@@ -29,6 +29,11 @@ const (
 	// dict mode can re-engage earlier after a transient degraded period.
 	valueLogDictLargeProbeMinPayloadBytes   = 16 << 10
 	valueLogDictLargeProbeIntervalClampByte = 2 << 20
+	// Outer-leaf block codec is encoded in byte 5 of TOL2 payload headers.
+	outerLeafCodecHeaderOffset = 5
+	outerLeafCodecNoneID       = 0
+	outerLeafCodecSnappyID     = 1
+	outerLeafCodecLZ4ID        = 2
 )
 
 type dictStoreWriter interface {
@@ -108,22 +113,240 @@ func (db *DB) valueLogDictMinSavingsRatio() float64 {
 	return 0.02
 }
 
+func (db *DB) valueLogDictTrainerIOCost() float64 {
+	if db == nil {
+		return 0
+	}
+	if db.valueLogAutotuneOptions.Mode == valuelog.AutotuneOff {
+		return 0
+	}
+	// In size policy, keep dictionary training ratio-first so profile selection
+	// tracks compression ratio improvements instead of throughput trade-offs.
+	if normalizeVlogAutoPolicy(db.valueLogAutoPolicy) == vlogAutoSize {
+		return 0
+	}
+	return db.valueLogAutotuneMetrics.snapshot().IoNsPerStoredByte
+}
+
 func (db *DB) valueLogDictHasPublishedDict() bool {
 	return db != nil && db.valueLogDictLastAppliedDictID.Load() != 0
 }
 
-func (db *DB) valueLogDictIgnoreValueForSignal(value []byte) bool {
+func (db *DB) valueLogDictAllowOuterLeaf() bool {
+	if db == nil || !db.indexOuterLeavesInValueLog {
+		return false
+	}
+	// Keep default behavior conservative: only permit outer-leaf dict writes on
+	// explicitly size-biased runs.
+	if normalizeVlogAutoPolicy(db.valueLogAutoPolicy) != vlogAutoSize {
+		return false
+	}
+	switch normalizeVlogCompressionMode(db.valueLogCompressionMode) {
+	case vlogCompressionDict:
+		// Require autotune to be enabled so poor dict fits can back off.
+		return db.valueLogAutotuneOptions.Mode != valuelog.AutotuneOff
+	case vlogCompressionAuto:
+		return true
+	default:
+		return false
+	}
+}
+
+func (db *DB) isOuterLeafValueLogPayload(value []byte) bool {
 	if db == nil || len(value) == 0 {
 		return false
 	}
-	// Outer-leaf pages (fixed 4KiB pages) are structurally different from large
-	// non-page payloads and can dominate dict signal/training in pointer-heavy
-	// runs. Keep them on block codecs and avoid letting them steer dict state.
-	return db.indexOuterLeavesInValueLog && len(value) == page.PageSize
+	if !db.indexOuterLeavesInValueLog {
+		return false
+	}
+	return outerleaf.HasMagic(value)
+}
+
+func (db *DB) classifyVlogPayloadKindForValue(value []byte) vlogPayloadKind {
+	if db.isOuterLeafValueLogPayload(value) {
+		return vlogPayloadKindOuterLeaf
+	}
+	return vlogPayloadKindSingleValue
+}
+
+type vlogPayloadRecordSplit struct {
+	Kind                vlogPayloadKind
+	OuterLeafRawBytes   int
+	SingleValueRawBytes int
+	OuterLeafRecords    int
+	SingleValueRecords  int
+}
+
+func (s vlogPayloadRecordSplit) totalRawBytes() int {
+	return s.OuterLeafRawBytes + s.SingleValueRawBytes
+}
+
+func (s vlogPayloadRecordSplit) totalRecords() int {
+	return s.OuterLeafRecords + s.SingleValueRecords
+}
+
+func (db *DB) classifyVlogPayloadKindForRecords(records []valuelog.Record) vlogPayloadKind {
+	return db.classifyVlogPayloadSplitForRecords(records).Kind
+}
+
+func (db *DB) classifyVlogPayloadSplitForRecords(records []valuelog.Record) vlogPayloadRecordSplit {
+	var out vlogPayloadRecordSplit
+	if len(records) == 0 {
+		out.Kind = vlogPayloadKindMixed
+		return out
+	}
+	for i := range records {
+		rawBytes := len(records[i].Value)
+		if db.isOuterLeafValueLogPayload(records[i].Value) {
+			out.OuterLeafRawBytes += rawBytes
+			out.OuterLeafRecords++
+		} else {
+			out.SingleValueRawBytes += rawBytes
+			out.SingleValueRecords++
+		}
+	}
+	switch {
+	case out.OuterLeafRecords > 0 && out.SingleValueRecords > 0:
+		out.Kind = vlogPayloadKindMixed
+	case out.OuterLeafRecords > 0:
+		out.Kind = vlogPayloadKindOuterLeaf
+	case out.SingleValueRecords > 0:
+		out.Kind = vlogPayloadKindSingleValue
+	default:
+		out.Kind = vlogPayloadKindMixed
+	}
+	return out
+}
+
+func recordLaneVlogPayloadSplitFromSummary(l *lane, split vlogPayloadRecordSplit, storedPayloadBytes int) {
+	if l == nil {
+		return
+	}
+	outerRawBytes := split.OuterLeafRawBytes
+	if outerRawBytes < 0 {
+		outerRawBytes = 0
+	}
+	singleRawBytes := split.SingleValueRawBytes
+	if singleRawBytes < 0 {
+		singleRawBytes = 0
+	}
+	outerRawU := uint64(outerRawBytes)
+	singleRawU := uint64(singleRawBytes)
+	totalRawU := outerRawU + singleRawU
+	if totalRawU < outerRawU {
+		totalRawU = ^uint64(0)
+	}
+	if totalRawU == 0 {
+		return
+	}
+	if storedPayloadBytes <= 0 {
+		maxInt := int(^uint(0) >> 1)
+		if totalRawU > uint64(maxInt) {
+			storedPayloadBytes = maxInt
+		} else {
+			storedPayloadBytes = int(totalRawU)
+		}
+	}
+	outerStored := 0
+	singleStored := 0
+	switch {
+	case outerRawU > 0 && singleRawU > 0:
+		uStored := uint64(storedPayloadBytes)
+		uOuter := outerRawU
+		uTotal := totalRawU
+		var outerStoredU uint64
+		if uTotal > 0 {
+			hi, lo := bits.Mul64(uStored, uOuter)
+			if hi == 0 {
+				outerStoredU = lo / uTotal
+			} else if hi < uTotal {
+				outerStoredU, _ = bits.Div64(hi, lo, uTotal)
+			} else {
+				// Defensive clamp for impossible overflow cases.
+				outerStoredU = uStored
+			}
+		}
+		if outerStoredU > uStored {
+			outerStoredU = uStored
+		}
+		outerStored = int(outerStoredU)
+		singleStored = storedPayloadBytes - outerStored
+	case outerRawU > 0:
+		outerStored = storedPayloadBytes
+	case singleRawU > 0:
+		singleStored = storedPayloadBytes
+	}
+	if singleRawBytes > 0 {
+		recordLaneVlogPayloadSplitObservation(l, vlogPayloadSplitSingleValue, singleRawBytes, singleStored, split.SingleValueRecords)
+	}
+	if outerRawBytes > 0 {
+		recordLaneVlogPayloadSplitObservation(l, vlogPayloadSplitOuterLeaf, outerRawBytes, outerStored, split.OuterLeafRecords)
+	}
+}
+
+func (db *DB) classifyVlogOuterLeafCodecKindForValue(value []byte) vlogOuterLeafCodecKind {
+	if !db.isOuterLeafValueLogPayload(value) {
+		return vlogOuterLeafCodecMixed
+	}
+	if !outerleaf.HasMagic(value) {
+		// Legacy fixed-size leaf pages (4KiB) predate TOL2 block headers.
+		return vlogOuterLeafCodecLegacyPage
+	}
+	if len(value) <= outerLeafCodecHeaderOffset {
+		return vlogOuterLeafCodecUnknown
+	}
+	switch value[outerLeafCodecHeaderOffset] {
+	case outerLeafCodecNoneID:
+		return vlogOuterLeafCodecNone
+	case outerLeafCodecSnappyID:
+		return vlogOuterLeafCodecSnappy
+	case outerLeafCodecLZ4ID:
+		return vlogOuterLeafCodecLZ4
+	default:
+		return vlogOuterLeafCodecUnknown
+	}
+}
+
+func (db *DB) classifyVlogOuterLeafCodecKindForRecords(records []valuelog.Record) vlogOuterLeafCodecKind {
+	if len(records) == 0 {
+		return vlogOuterLeafCodecMixed
+	}
+	kind := vlogOuterLeafCodecMixed
+	for i := range records {
+		next := db.classifyVlogOuterLeafCodecKindForValue(records[i].Value)
+		if next == vlogOuterLeafCodecMixed {
+			return vlogOuterLeafCodecMixed
+		}
+		if kind == vlogOuterLeafCodecMixed {
+			kind = next
+			continue
+		}
+		if next != kind {
+			return vlogOuterLeafCodecMixed
+		}
+	}
+	return kind
+}
+
+func (db *DB) valueLogDictIgnoreValueForSignal(value []byte) bool {
+	// Outer-leaf payloads are structurally different from value streams and can
+	// dominate dict signal/training in pointer-heavy runs. Keep both legacy fixed
+	// 4KiB pages and v3 outer-leaf blocks on block codecs by default.
+	if db.isOuterLeafValueLogPayload(value) {
+		return !db.valueLogDictAllowOuterLeaf()
+	}
+	return false
 }
 
 func (db *DB) seedVlogCompressionSelectorsDictRatio(payloadRatio, totalRatio float64) {
 	if db == nil {
+		return
+	}
+	if normalizeVlogCompressionMode(db.valueLogCompressionMode) == vlogCompressionDict &&
+		db.valueLogAutotuneOptions.Mode == valuelog.AutotuneAggressive {
+		// In explicit dict+aggressive mode, let selector decisions be driven by
+		// observed frame outcomes. Profile-level dict seeds can be overly
+		// optimistic for small-value streams and delay block fallback.
 		return
 	}
 	seedRatio := payloadRatio
@@ -255,8 +478,16 @@ func (db *DB) valueLogDictClassifierBypass(value []byte, probeCompression bool) 
 	if db == nil || probeCompression {
 		return false
 	}
-	if db.valueLogDictIgnoreValueForSignal(value) {
+	if db.isOuterLeafValueLogPayload(value) && db.valueLogDictAllowOuterLeaf() {
+		// Size-biased outer-leaf runs should lean on observed frame outcomes
+		// instead of byte-alphabet heuristics so we do not suppress dict tries
+		// on structured pages with high local entropy.
 		return false
+	}
+	if db.valueLogDictIgnoreValueForSignal(value) {
+		// Outer-leaf pages should stay on block codecs and should not arm
+		// incompressible hold state for dictionary sampling.
+		return true
 	}
 	if db.valueLogDictHasPublishedDict() && len(value) >= valueLogDictClassifierLargePayloadBypassMin {
 		return false
@@ -292,6 +523,9 @@ func (db *DB) shouldBypassValueLogDictForRecords(records []valuelog.Record, prob
 		return false
 	}
 	rawBytes := saturatingRawPayloadBytes(records)
+	if db.valueLogDictAllowOuterLeaf() && db.classifyVlogPayloadKindForRecords(records) == vlogPayloadKindOuterLeaf {
+		return false
+	}
 	if db.valueLogDictHasPublishedDict() && rawBytes/uint64(len(records)) >= valueLogDictClassifierLargePayloadBypassMin {
 		return false
 	}
@@ -304,9 +538,11 @@ func (db *DB) shouldBypassValueLogDictForRecords(records []valuelog.Record, prob
 	}
 	samples := 0
 	incompressible := 0
+	ignored := 0
 	for i := 0; i < len(records) && samples < 4; i += step {
 		v := records[i].Value
 		if db.valueLogDictIgnoreValueForSignal(v) {
+			ignored++
 			continue
 		}
 		if len(v) < 4096 {
@@ -318,6 +554,11 @@ func (db *DB) shouldBypassValueLogDictForRecords(records []valuelog.Record, prob
 		}
 	}
 	if samples == 0 {
+		// Only bypass on ignored samples when the entire batch is outer-leaf
+		// payloads. Sparse stride sampling can otherwise miss regular values.
+		if ignored > 0 && db.classifyVlogPayloadKindForRecords(records) == vlogPayloadKindOuterLeaf {
+			return true
+		}
 		return false
 	}
 	// Count classification decisions (not payload samples) so sampled/skipped share units.
@@ -358,8 +599,8 @@ func (db *DB) valueLogDictCollectSamples(records []valuelog.Record) {
 	//
 	// This avoids pathological small-K choices (e.g. k=2/4) that increase frame
 	// overhead and reduce write throughput for small values.
-	if db.valueLogAutotuneOptions.Mode != valuelog.AutotuneOff {
-		tr.SetAutotuneIOCost(db.valueLogAutotuneMetrics.snapshot().IoNsPerStoredByte)
+	if ioNsPerStoredByte := db.valueLogDictTrainerIOCost(); ioNsPerStoredByte > 0 {
+		tr.SetAutotuneIOCost(ioNsPerStoredByte)
 	}
 	stride := db.valueLogDictSampleStride
 	if stride <= 1 {
@@ -456,8 +697,8 @@ func (db *DB) valueLogDictCollectSample(value []byte) {
 	if db.valueLogDictIncompressibleHoldRemaining.Load() > 0 {
 		return
 	}
-	if db.valueLogAutotuneOptions.Mode != valuelog.AutotuneOff {
-		tr.SetAutotuneIOCost(db.valueLogAutotuneMetrics.snapshot().IoNsPerStoredByte)
+	if ioNsPerStoredByte := db.valueLogDictTrainerIOCost(); ioNsPerStoredByte > 0 {
+		tr.SetAutotuneIOCost(ioNsPerStoredByte)
 	}
 	stride := db.valueLogDictSampleStride
 	if stride <= 1 {
@@ -508,7 +749,12 @@ func (db *DB) ensureValueLogDictTrainer() {
 	if tr == nil {
 		return
 	}
-	tr.SetOnAccept(func(_ *compression.ActiveProfile) { db.valueLogDictKick() })
+	tr.SetOnAccept(func(_ *compression.ActiveProfile) {
+		// Publish accepted profiles immediately so short ingest benchmarks can
+		// start writing dict frames before teardown.
+		db.applyValueLogDictProfile()
+		db.valueLogDictKick()
+	})
 	candidateK := db.valueLogDictCandidateK()
 	if len(candidateK) > 0 {
 		seen := make(map[int]struct{}, len(candidateK))
@@ -545,7 +791,7 @@ func (db *DB) valueLogDictCandidateK() []int {
 		return nil
 	}
 	defaultCandidateK := []int{1, 2, 4, 8, 16, 32}
-	forcePointerCandidateK := []int{8, 16, 32}
+	forcePointerCandidateK := []int{8, 16, 32, 64, 96, 128}
 	if len(db.valueLogAutotuneOptions.CandidateK) > 0 {
 		if db.forceValueLogPointers && !db.valueLogAutotuneCandidateKSet && intSlicesEqual(db.valueLogAutotuneOptions.CandidateK, defaultCandidateK) {
 			out := make([]int, len(forcePointerCandidateK))
@@ -627,7 +873,9 @@ func (db *DB) applyValueLogDictProfile() {
 	ioNsPerStoredByte := 0.0
 	if db.valueLogAutotuneOptions.Mode != valuelog.AutotuneOff {
 		ioNsPerStoredByte = db.valueLogAutotuneMetrics.snapshot().IoNsPerStoredByte
-		tr.SetAutotuneIOCost(ioNsPerStoredByte)
+	}
+	if trainerIoNsPerStoredByte := db.valueLogDictTrainerIOCost(); trainerIoNsPerStoredByte > 0 {
+		tr.SetAutotuneIOCost(trainerIoNsPerStoredByte)
 	}
 	profileK := db.clampValueLogDictK(profile.K)
 	candidate := db.valueLogAutotuneCandidate(profile, profileK)
@@ -917,13 +1165,19 @@ func (db *DB) chooseValueLogDictWriteK(baseK, records, rawPayloadBytes int) int 
 		return k
 	}
 	avg := rawPayloadBytes / records
+	tinyTarget := 96
+	smallTarget := 64
+	if db != nil && db.forceValueLogPointers {
+		tinyTarget = 128
+		smallTarget = 96
+	}
 	// For tiny values, larger grouped frames materially reduce per-frame metadata
 	// and lock/write overhead in dict mode.
 	switch {
-	case avg <= 160 && k < 96:
-		k = 96
-	case avg <= 192 && k < 64:
-		k = 64
+	case avg <= 160 && k < tinyTarget:
+		k = tinyTarget
+	case avg <= 192 && k < smallTarget:
+		k = smallTarget
 	case avg <= 256 && k < 32:
 		k = 32
 	}

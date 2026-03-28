@@ -2168,8 +2168,14 @@ func (db *DB) buildOuterLeafValueRecords(keys [][]byte, values [][]byte) ([]valu
 	return records, groups, nil, nil
 }
 
-func fallbackAutoVlogWriteMode(mode vlogCompressionMode, writeMode vlogCompressionWriteMode) vlogCompressionWriteMode {
-	if mode == vlogCompressionAuto && writeMode == vlogWriteDict {
+func fallbackAutoVlogWriteMode(mode vlogCompressionMode, writeMode vlogCompressionWriteMode, allowDictFallback bool) vlogCompressionWriteMode {
+	if writeMode != vlogWriteDict {
+		return writeMode
+	}
+	if mode == vlogCompressionAuto {
+		return vlogWriteBlock
+	}
+	if mode == vlogCompressionDict && allowDictFallback {
 		return vlogWriteBlock
 	}
 	return writeMode
@@ -6907,8 +6913,8 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	if valueLogDictTrain.TrainBytes > 0 &&
 		valueLogDictTrain.MinRecords == 0 &&
 		opts.ForceValueLogPointers &&
-		valueLogCompressionMode == vlogCompressionAuto &&
-		valueLogAutoPolicy == vlogAutoThroughput {
+		(valueLogCompressionMode == vlogCompressionDict ||
+			(valueLogCompressionMode == vlogCompressionAuto && valueLogAutoPolicy == vlogAutoThroughput)) {
 		// Pointer-heavy ingest streams are often front-loaded with the largest
 		// value-log pressure. Lower the initial profile record floor so the first
 		// dictionary can publish earlier and influence more of the run.
@@ -6917,6 +6923,9 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	valueLogDictMaxK := opts.ValueLogDictMaxK
 	if valueLogDictMaxK <= 0 {
 		valueLogDictMaxK = 32
+		if opts.ForceValueLogPointers {
+			valueLogDictMaxK = 128
+		}
 	}
 	if valueLogDictMaxK < 1 {
 		valueLogDictMaxK = 1
@@ -9609,6 +9618,8 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 	if len(requests) > len(planScratch) {
 		plans = make([]vlogBatchPlan, 0, len(requests))
 	}
+	mode := normalizeVlogCompressionMode(db.valueLogCompressionMode)
+	allowDictFallback := mode == vlogCompressionAuto || (mode == vlogCompressionDict && db.vlogSelectorEnabled(mode))
 	for i := 0; i < len(requests); {
 		writeMode := requests[i].writeMode
 		blockCodec := normalizeSelectorBlockCodec(requests[i].blockCodec)
@@ -9621,7 +9632,10 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 			dictID = 0
 			dict = nil
 			if writeMode == vlogWriteDict {
-				writeMode = vlogWriteOff
+				writeMode = fallbackAutoVlogWriteMode(mode, writeMode, allowDictFallback)
+				if writeMode == vlogWriteDict {
+					writeMode = vlogWriteOff
+				}
 			}
 		}
 		probe := requests[i].probeCompression
@@ -9640,7 +9654,10 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 				nextDictID = 0
 			}
 			if nextMode == vlogWriteDict && nextDictID == 0 {
-				nextMode = vlogWriteOff
+				nextMode = fallbackAutoVlogWriteMode(mode, nextMode, allowDictFallback)
+				if nextMode == vlogWriteDict {
+					nextMode = vlogWriteOff
+				}
 			}
 			if nextMode != writeMode {
 				break
@@ -9915,7 +9932,9 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 			baseEncodeNsPerRaw = 0
 		}
 	}
-	autoSelectorMode := normalizeVlogCompressionMode(db.valueLogCompressionMode) == vlogCompressionAuto
+	autoSelectorMode := mode == vlogCompressionAuto
+	dictMode := mode == vlogCompressionDict
+	selectorEnabled := db.vlogSelectorEnabled(mode)
 
 	ptrs = getValueLogPtrsCap(len(records))
 	ptrs = ptrs[:len(records)]
@@ -9930,9 +9949,10 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 		if policySetter != nil {
 			ioNsPerStored := baseIoNsPerStored
 			encodeNsPerRaw := baseEncodeNsPerRaw
-			// In auto mode, block candidate evaluation must observe real compressed
-			// output (not keep-policy short-circuits), same as explicit probes.
-			if plan.probe || (autoSelectorMode && plan.writeMode == vlogWriteBlock) {
+			// In selector-driven modes, block candidate evaluation must observe
+			// real compressed output (not keep-policy short-circuits), same as
+			// explicit probes.
+			if plan.probe || (selectorEnabled && (autoSelectorMode || dictMode) && plan.writeMode == vlogWriteBlock) {
 				ioNsPerStored = 0
 				encodeNsPerRaw = 0
 			}
@@ -10203,6 +10223,14 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 			unitForSelector := rawForSelector
 			if recordsInPlan := plan.end - plan.start; recordsInPlan > 0 {
 				unitForSelector = rawForSelector / recordsInPlan
+			}
+			segment := records[plan.start:plan.end]
+			payloadSplit := db.classifyVlogPayloadSplitForRecords(segment)
+			recordLaneVlogPayloadKindObservation(l, payloadSplit.Kind, rawForSelector, storedForSelector)
+			recordLaneVlogPayloadSplitFromSummary(l, payloadSplit, storedForSelector)
+			if payloadSplit.Kind != vlogPayloadKindSingleValue {
+				outerLeafCodecKind := db.classifyVlogOuterLeafCodecKindForRecords(segment)
+				recordLaneVlogOuterLeafCodecObservation(l, outerLeafCodecKind, rawForSelector, storedForSelector)
 			}
 			db.observeVlogWriteMode(l, plan.writeMode, codec, rawForSelector, unitForSelector, storedForSelector, plan.probe, plan.wallNs)
 		}
@@ -10602,18 +10630,46 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	}
 
 	mode := normalizeVlogCompressionMode(db.valueLogCompressionMode)
+	allowDictFallback := mode == vlogCompressionAuto || (mode == vlogCompressionDict && db.vlogSelectorEnabled(mode))
+	payloadKindForFallback := db.classifyVlogPayloadKindForRecords(records)
+	outerLeafPayloadsOnly := payloadKindForFallback == vlogPayloadKindOuterLeaf
+	dictFallbackWriteMode := func(current vlogCompressionWriteMode) vlogCompressionWriteMode {
+		next := fallbackAutoVlogWriteMode(mode, current, allowDictFallback)
+		if mode == vlogCompressionDict && next == vlogWriteDict && outerLeafPayloadsOnly {
+			// Keep explicit dict mode strict for value payloads, but avoid writing
+			// known outer-leaf pages raw when dict is bypassed.
+			return vlogWriteBlock
+		}
+		return next
+	}
 	selectorPayloadBytes := rawPayloadBytes
 	selectorUnitPayloadBytes := rawPayloadBytes
 	if n := len(records); n > 0 {
 		selectorUnitPayloadBytes = rawPayloadBytes / n
 	}
-	writeMode, blockCodec, selectorProbe := db.resolveVlogWriteMode(l, dictID, selectorPayloadBytes, selectorUnitPayloadBytes)
+	writeMode, blockCodec, selectorProbe := db.resolveVlogWriteMode(l, dictID, selectorPayloadBytes, selectorUnitPayloadBytes, outerLeafPayloadsOnly)
+	normalizeNoDictBlockCodec := func() {
+		if writeMode != vlogWriteBlock {
+			return
+		}
+		if normalizeVlogCompressionMode(db.valueLogCompressionMode) != vlogCompressionAuto {
+			return
+		}
+		if normalizeVlogAutoPolicy(db.valueLogAutoPolicy) == vlogAutoThroughput {
+			return
+		}
+		if selectorUnitPayloadBytes < 2048 {
+			return
+		}
+		blockCodec = chooseLargePayloadNoDictBlockCodec(l, db.valueLogBlockCodec)
+	}
 	blockMode := writeMode == vlogWriteBlock
 	probeCompression := selectorProbe
 	paused := false
 	if writeMode != vlogWriteDict {
 		dictID = 0
 		dict = nil
+		normalizeNoDictBlockCodec()
 	}
 
 	if dictID != 0 {
@@ -10623,23 +10679,26 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 		if !attemptCompression {
 			dictID = 0
 			dict = nil
-			writeMode = fallbackAutoVlogWriteMode(mode, writeMode)
+			writeMode = dictFallbackWriteMode(writeMode)
 			blockMode = writeMode == vlogWriteBlock
+			normalizeNoDictBlockCodec()
 		}
 	}
 	if dictID != 0 && db.shouldBypassValueLogDictForRecords(records, probeCompression) {
 		dictID = 0
 		dict = nil
-		writeMode = fallbackAutoVlogWriteMode(mode, writeMode)
+		writeMode = dictFallbackWriteMode(writeMode)
 		blockMode = writeMode == vlogWriteBlock
+		normalizeNoDictBlockCodec()
 	}
 	if dictID != 0 && db.valueLogAutotuneOptions.DisableBelowValueBytes > 0 {
 		avg := rawPayloadBytes / len(records)
 		if avg < db.valueLogAutotuneOptions.DisableBelowValueBytes {
 			dictID = 0
 			dict = nil
-			writeMode = fallbackAutoVlogWriteMode(mode, writeMode)
+			writeMode = dictFallbackWriteMode(writeMode)
 			blockMode = writeMode == vlogWriteBlock
+			normalizeNoDictBlockCodec()
 		}
 	}
 	if dictID != 0 && len(dict) == 0 {
@@ -10648,8 +10707,9 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 		} else {
 			dictID = 0
 			dict = nil
-			writeMode = fallbackAutoVlogWriteMode(mode, writeMode)
+			writeMode = dictFallbackWriteMode(writeMode)
 			blockMode = writeMode == vlogWriteBlock
+			normalizeNoDictBlockCodec()
 		}
 	}
 	switch mode {
@@ -10751,9 +10811,10 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	}
 	ioNsPerStoredForWriter := ioNsPerStored
 	encodeNsPerRawForWriter := encodeNsPerRaw
-	if normalizeVlogCompressionMode(db.valueLogCompressionMode) == vlogCompressionAuto && finalWriteMode == vlogWriteBlock {
-		// Keep-policy bypass is required for fair auto-mode block evaluation; the
-		// selector should decide whether block stays active based on real outcomes.
+	blockEvalBypass := mode == vlogCompressionAuto || (mode == vlogCompressionDict && db.vlogSelectorEnabled(mode))
+	if blockEvalBypass && finalWriteMode == vlogWriteBlock {
+		// Keep-policy bypass is required for fair selector-driven block
+		// evaluation; mode choice should rely on real frame outcomes.
 		ioNsPerStoredForWriter = 0
 		encodeNsPerRawForWriter = 0
 	}
@@ -11143,6 +11204,13 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 		}
 	}
 	selectorWallNs := time.Since(selectorStart).Nanoseconds()
+	payloadSplit := db.classifyVlogPayloadSplitForRecords(records)
+	recordLaneVlogPayloadKindObservation(l, payloadSplit.Kind, rawForSelector, storedForSelector)
+	recordLaneVlogPayloadSplitFromSummary(l, payloadSplit, storedForSelector)
+	if payloadSplit.Kind != vlogPayloadKindSingleValue {
+		outerLeafCodecKind := db.classifyVlogOuterLeafCodecKindForRecords(records)
+		recordLaneVlogOuterLeafCodecObservation(l, outerLeafCodecKind, rawForSelector, storedForSelector)
+	}
 	db.observeVlogWriteMode(l, finalWriteMode, finalBlockCodec, rawForSelector, unitForSelector, storedForSelector, probeCompression, selectorWallNs)
 
 	if bytesWrittenLive > 0 {
@@ -11242,11 +11310,38 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 	}
 
 	mode := normalizeVlogCompressionMode(db.valueLogCompressionMode)
-	writeMode, blockCodec, selectorProbe := db.resolveVlogWriteMode(l, dictID, len(value), len(value))
+	allowDictFallback := mode == vlogCompressionAuto || (mode == vlogCompressionDict && db.vlogSelectorEnabled(mode))
+	outerLeafPayload := db.isOuterLeafValueLogPayload(value)
+	dictFallbackWriteMode := func(current vlogCompressionWriteMode) vlogCompressionWriteMode {
+		next := fallbackAutoVlogWriteMode(mode, current, allowDictFallback)
+		if mode == vlogCompressionDict && next == vlogWriteDict && outerLeafPayload {
+			// In explicit dict mode, keep outer-leaf pages on block codecs when
+			// dict compression is bypassed.
+			return vlogWriteBlock
+		}
+		return next
+	}
+	writeMode, blockCodec, selectorProbe := db.resolveVlogWriteMode(l, dictID, len(value), len(value), outerLeafPayload)
+	normalizeNoDictBlockCodec := func() {
+		if writeMode != vlogWriteBlock {
+			return
+		}
+		if normalizeVlogCompressionMode(db.valueLogCompressionMode) != vlogCompressionAuto {
+			return
+		}
+		if normalizeVlogAutoPolicy(db.valueLogAutoPolicy) == vlogAutoThroughput {
+			return
+		}
+		if len(value) < 2048 {
+			return
+		}
+		blockCodec = chooseLargePayloadNoDictBlockCodec(l, db.valueLogBlockCodec)
+	}
 	probeCompression := selectorProbe
 	if writeMode != vlogWriteDict {
 		dictID = 0
 		dict = nil
+		normalizeNoDictBlockCodec()
 	}
 	if dictID != 0 {
 		attemptCompression, dictProbe, _ := db.valueLogDictShouldAttemptCompression(len(value))
@@ -11254,18 +11349,21 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 		if !attemptCompression {
 			dictID = 0
 			dict = nil
-			writeMode = fallbackAutoVlogWriteMode(mode, writeMode)
+			writeMode = dictFallbackWriteMode(writeMode)
+			normalizeNoDictBlockCodec()
 		}
 	}
 	if dictID != 0 && db.shouldBypassValueLogDictForValue(value, probeCompression) {
 		dictID = 0
 		dict = nil
-		writeMode = fallbackAutoVlogWriteMode(mode, writeMode)
+		writeMode = dictFallbackWriteMode(writeMode)
+		normalizeNoDictBlockCodec()
 	}
 	if dictID != 0 && db.valueLogAutotuneOptions.DisableBelowValueBytes > 0 && len(value) < db.valueLogAutotuneOptions.DisableBelowValueBytes {
 		dictID = 0
 		dict = nil
-		writeMode = fallbackAutoVlogWriteMode(mode, writeMode)
+		writeMode = dictFallbackWriteMode(writeMode)
+		normalizeNoDictBlockCodec()
 	}
 	if dictID != 0 && len(dict) == 0 {
 		if b, dictErr := db.dictBytes(context.Background(), dictID); dictErr == nil {
@@ -11273,7 +11371,8 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 		} else {
 			dictID = 0
 			dict = nil
-			writeMode = fallbackAutoVlogWriteMode(mode, writeMode)
+			writeMode = dictFallbackWriteMode(writeMode)
+			normalizeNoDictBlockCodec()
 		}
 	}
 	finalWriteMode := vlogWriteOff
@@ -11328,6 +11427,11 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 				ioNsPerStored := snap.IoNsPerStoredByte
 				encodeNsPerRaw := snap.EncodeNsPerRawByte
 				if db.valueLogAutotuneOptions.Mode == valuelog.AutotuneOff {
+					ioNsPerStored = 0
+					encodeNsPerRaw = 0
+				}
+				if finalWriteMode == vlogWriteBlock &&
+					(mode == vlogCompressionAuto || (mode == vlogCompressionDict && db.vlogSelectorEnabled(mode))) {
 					ioNsPerStored = 0
 					encodeNsPerRaw = 0
 				}
@@ -11418,6 +11522,17 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 				}
 			}
 			selectorWallNs := time.Since(selectorStart).Nanoseconds()
+			payloadKind := db.classifyVlogPayloadKindForValue(value)
+			recordLaneVlogPayloadKindObservation(l, payloadKind, len(value), storedForSelector)
+			if payloadKind == vlogPayloadKindOuterLeaf {
+				recordLaneVlogPayloadSplitObservation(l, vlogPayloadSplitOuterLeaf, len(value), storedForSelector, 1)
+			} else {
+				recordLaneVlogPayloadSplitObservation(l, vlogPayloadSplitSingleValue, len(value), storedForSelector, 1)
+			}
+			if payloadKind != vlogPayloadKindSingleValue {
+				outerLeafCodecKind := db.classifyVlogOuterLeafCodecKindForValue(value)
+				recordLaneVlogOuterLeafCodecObservation(l, outerLeafCodecKind, len(value), storedForSelector)
+			}
 			db.observeVlogWriteMode(l, finalWriteMode, finalBlockCodec, len(value), len(value), storedForSelector, probeCompression, selectorWallNs)
 			return ptr, retainPath, nil
 		}
@@ -11488,6 +11603,11 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 		ioNsPerStored := snap.IoNsPerStoredByte
 		encodeNsPerRaw := snap.EncodeNsPerRawByte
 		if db.valueLogAutotuneOptions.Mode == valuelog.AutotuneOff {
+			ioNsPerStored = 0
+			encodeNsPerRaw = 0
+		}
+		if finalWriteMode == vlogWriteBlock &&
+			(mode == vlogCompressionAuto || (mode == vlogCompressionDict && db.vlogSelectorEnabled(mode))) {
 			ioNsPerStored = 0
 			encodeNsPerRaw = 0
 		}
@@ -11617,6 +11737,17 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 		}
 	}
 	selectorWallNs := time.Since(selectorStart).Nanoseconds()
+	payloadKind := db.classifyVlogPayloadKindForValue(value)
+	recordLaneVlogPayloadKindObservation(l, payloadKind, len(value), storedForSelector)
+	if payloadKind == vlogPayloadKindOuterLeaf {
+		recordLaneVlogPayloadSplitObservation(l, vlogPayloadSplitOuterLeaf, len(value), storedForSelector, 1)
+	} else {
+		recordLaneVlogPayloadSplitObservation(l, vlogPayloadSplitSingleValue, len(value), storedForSelector, 1)
+	}
+	if payloadKind != vlogPayloadKindSingleValue {
+		outerLeafCodecKind := db.classifyVlogOuterLeafCodecKindForValue(value)
+		recordLaneVlogOuterLeafCodecObservation(l, outerLeafCodecKind, len(value), storedForSelector)
+	}
 	db.observeVlogWriteMode(l, finalWriteMode, finalBlockCodec, len(value), len(value), storedForSelector, probeCompression, selectorWallNs)
 	if totalBytes > 0 {
 		l.vlogLiveBytes.Add(totalBytes)
@@ -19550,6 +19681,92 @@ func (db *DB) Stats() map[string]string {
 			stats["treedb.cache.vlog_block.ratio."+suffix] = fmt.Sprintf("%.6f", ratio)
 		}
 		stats["treedb.cache.vlog_block.ratio.samples."+suffix] = fmt.Sprintf("%d", blockRatioSamples[codecIdx])
+	}
+	var (
+		writeSnap          vlogWriteModeSnapshot
+		payloadKindSnap    vlogPayloadKindSnapshot
+		payloadSplitSnap   vlogPayloadSplitSnapshot
+		outerLeafCodecSnap vlogOuterLeafCodecSnapshot
+	)
+	for i := range db.lanes {
+		laneSnap := snapshotLaneVlogWriteMode(&db.lanes[i])
+		kindSnap := snapshotLaneVlogPayloadKind(&db.lanes[i])
+		splitSnap := snapshotLaneVlogPayloadSplit(&db.lanes[i])
+		outerCodecSnap := snapshotLaneVlogOuterLeafCodec(&db.lanes[i])
+		for mode := 0; mode < vlogCompressionWriteModeCount; mode++ {
+			writeSnap.RawBytes[mode] += laneSnap.RawBytes[mode]
+			writeSnap.StoredBytes[mode] += laneSnap.StoredBytes[mode]
+			writeSnap.Frames[mode] += laneSnap.Frames[mode]
+			for bucket := 0; bucket < vlogPayloadBucketCount; bucket++ {
+				writeSnap.BucketRawBytes[mode][bucket] += laneSnap.BucketRawBytes[mode][bucket]
+				writeSnap.BucketStoredBytes[mode][bucket] += laneSnap.BucketStoredBytes[mode][bucket]
+				writeSnap.BucketFrames[mode][bucket] += laneSnap.BucketFrames[mode][bucket]
+			}
+		}
+		for kind := 0; kind < vlogPayloadKindCount; kind++ {
+			payloadKindSnap.RawBytes[kind] += kindSnap.RawBytes[kind]
+			payloadKindSnap.StoredBytes[kind] += kindSnap.StoredBytes[kind]
+			payloadKindSnap.Frames[kind] += kindSnap.Frames[kind]
+		}
+		for kind := 0; kind < vlogPayloadSplitKindCount; kind++ {
+			payloadSplitSnap.RawBytes[kind] += splitSnap.RawBytes[kind]
+			payloadSplitSnap.StoredBytes[kind] += splitSnap.StoredBytes[kind]
+			payloadSplitSnap.Records[kind] += splitSnap.Records[kind]
+		}
+		for kind := 0; kind < vlogOuterLeafCodecKindCount; kind++ {
+			outerLeafCodecSnap.RawBytes[kind] += outerCodecSnap.RawBytes[kind]
+			outerLeafCodecSnap.StoredBytes[kind] += outerCodecSnap.StoredBytes[kind]
+			outerLeafCodecSnap.Frames[kind] += outerCodecSnap.Frames[kind]
+		}
+	}
+	for mode := 0; mode < vlogCompressionWriteModeCount; mode++ {
+		suffix := vlogWriteModeSuffix(vlogCompressionWriteMode(mode))
+		stats["treedb.cache.vlog_write_mode.raw_bytes."+suffix] = fmt.Sprintf("%d", writeSnap.RawBytes[mode])
+		stats["treedb.cache.vlog_write_mode.stored_bytes."+suffix] = fmt.Sprintf("%d", writeSnap.StoredBytes[mode])
+		stats["treedb.cache.vlog_write_mode.frames."+suffix] = fmt.Sprintf("%d", writeSnap.Frames[mode])
+		if writeSnap.RawBytes[mode] > 0 {
+			stats["treedb.cache.vlog_write_mode.stored_ratio."+suffix] = fmt.Sprintf("%.6f", float64(writeSnap.StoredBytes[mode])/float64(writeSnap.RawBytes[mode]))
+		}
+		for bucket := 0; bucket < vlogPayloadBucketCount; bucket++ {
+			bucketSuffix := vlogPayloadBucketSuffix(bucket)
+			stats["treedb.cache.vlog_write_mode.bucket.raw_bytes."+suffix+"."+bucketSuffix] = fmt.Sprintf("%d", writeSnap.BucketRawBytes[mode][bucket])
+			stats["treedb.cache.vlog_write_mode.bucket.stored_bytes."+suffix+"."+bucketSuffix] = fmt.Sprintf("%d", writeSnap.BucketStoredBytes[mode][bucket])
+			stats["treedb.cache.vlog_write_mode.bucket.frames."+suffix+"."+bucketSuffix] = fmt.Sprintf("%d", writeSnap.BucketFrames[mode][bucket])
+			if writeSnap.BucketRawBytes[mode][bucket] > 0 {
+				key := "treedb.cache.vlog_write_mode.bucket.stored_ratio." + suffix + "." + bucketSuffix
+				stats[key] = fmt.Sprintf("%.6f", float64(writeSnap.BucketStoredBytes[mode][bucket])/float64(writeSnap.BucketRawBytes[mode][bucket]))
+			}
+		}
+	}
+	for kind := 0; kind < vlogPayloadKindCount; kind++ {
+		suffix := vlogPayloadKindSuffix(vlogPayloadKind(kind))
+		stats["treedb.cache.vlog_payload_kind.raw_bytes."+suffix] = fmt.Sprintf("%d", payloadKindSnap.RawBytes[kind])
+		stats["treedb.cache.vlog_payload_kind.stored_bytes."+suffix] = fmt.Sprintf("%d", payloadKindSnap.StoredBytes[kind])
+		stats["treedb.cache.vlog_payload_kind.frames."+suffix] = fmt.Sprintf("%d", payloadKindSnap.Frames[kind])
+		if payloadKindSnap.RawBytes[kind] > 0 {
+			key := "treedb.cache.vlog_payload_kind.stored_ratio." + suffix
+			stats[key] = fmt.Sprintf("%.6f", float64(payloadKindSnap.StoredBytes[kind])/float64(payloadKindSnap.RawBytes[kind]))
+		}
+	}
+	for kind := 0; kind < vlogPayloadSplitKindCount; kind++ {
+		suffix := vlogPayloadSplitSuffix(vlogPayloadSplitKind(kind))
+		stats["treedb.cache.vlog_payload_split.raw_bytes."+suffix] = fmt.Sprintf("%d", payloadSplitSnap.RawBytes[kind])
+		stats["treedb.cache.vlog_payload_split.stored_bytes."+suffix] = fmt.Sprintf("%d", payloadSplitSnap.StoredBytes[kind])
+		stats["treedb.cache.vlog_payload_split.records."+suffix] = fmt.Sprintf("%d", payloadSplitSnap.Records[kind])
+		if payloadSplitSnap.RawBytes[kind] > 0 {
+			key := "treedb.cache.vlog_payload_split.stored_ratio." + suffix
+			stats[key] = fmt.Sprintf("%.6f", float64(payloadSplitSnap.StoredBytes[kind])/float64(payloadSplitSnap.RawBytes[kind]))
+		}
+	}
+	for kind := 0; kind < vlogOuterLeafCodecKindCount; kind++ {
+		suffix := vlogOuterLeafCodecSuffix(vlogOuterLeafCodecKind(kind))
+		stats["treedb.cache.vlog_outer_leaf_codec.raw_bytes."+suffix] = fmt.Sprintf("%d", outerLeafCodecSnap.RawBytes[kind])
+		stats["treedb.cache.vlog_outer_leaf_codec.stored_bytes."+suffix] = fmt.Sprintf("%d", outerLeafCodecSnap.StoredBytes[kind])
+		stats["treedb.cache.vlog_outer_leaf_codec.frames."+suffix] = fmt.Sprintf("%d", outerLeafCodecSnap.Frames[kind])
+		if outerLeafCodecSnap.RawBytes[kind] > 0 {
+			key := "treedb.cache.vlog_outer_leaf_codec.stored_ratio." + suffix
+			stats[key] = fmt.Sprintf("%.6f", float64(outerLeafCodecSnap.StoredBytes[kind])/float64(outerLeafCodecSnap.RawBytes[kind]))
+		}
 	}
 	if normalizeVlogCompressionMode(db.valueLogCompressionMode) == vlogCompressionAuto {
 		var autoSnap vlogCompressionSelectorStats

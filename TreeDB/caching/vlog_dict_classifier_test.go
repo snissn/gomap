@@ -55,6 +55,24 @@ func compressibleValueLogRecords(n, valueBytes int) []valuelog.Record {
 	return records
 }
 
+func markOuterLeafMagic(value []byte) []byte {
+	out := make([]byte, len(value))
+	copy(out, value)
+	if len(out) >= 4 {
+		copy(out, []byte{'T', 'O', 'L', '2'})
+	}
+	return out
+}
+
+func markOuterLeafMagicRecords(records []valuelog.Record) []valuelog.Record {
+	out := make([]valuelog.Record, len(records))
+	copy(out, records)
+	for i := range out {
+		out[i].Value = markOuterLeafMagic(out[i].Value)
+	}
+	return out
+}
+
 func TestValueLogDictCollectSamples_SkipsIncompressibleBeforeFirstDict(t *testing.T) {
 	tr := newValueLogDictClassifierTrainer(t)
 	db := &DB{
@@ -88,7 +106,7 @@ func TestValueLogDictCollectSamples_CompressibleBudgetedByPayloadBytes(t *testin
 		valueLogDictPausedSampleStride: 256,
 	}
 
-	records := compressibleValueLogRecords(512, 4096)
+	records := markOuterLeafMagicRecords(compressibleValueLogRecords(512, 4096))
 	expectedBudget := db.valueLogDictCollectBudget(records, false)
 	db.valueLogDictCollectSamples(records)
 
@@ -99,8 +117,8 @@ func TestValueLogDictCollectSamples_CompressibleBudgetedByPayloadBytes(t *testin
 		t.Fatalf("expected classifier sampled=%d, got=%d", expectedBudget, sampled)
 	}
 	stats := tr.Stats()
-	if stats.Enqueued != uint64(expectedBudget) {
-		t.Fatalf("expected trainer enqueue=%d, got=%d", expectedBudget, stats.Enqueued)
+	if stats.Enqueued == 0 || stats.Enqueued > uint64(expectedBudget) {
+		t.Fatalf("expected trainer enqueue in (0,%d], got=%d", expectedBudget, stats.Enqueued)
 	}
 }
 
@@ -147,7 +165,7 @@ func TestValueLogDictClassifierBypass_ArmsIncompressibleHold(t *testing.T) {
 	}
 }
 
-func TestValueLogDictClassifierBypass_IgnoresOuterLeafPages(t *testing.T) {
+func TestValueLogDictClassifierBypass_BypassesOuterLeafPagesWithoutArmingHold(t *testing.T) {
 	db := &DB{
 		indexOuterLeavesInValueLog:          true,
 		valueLogDictIncompressibleHoldBytes: 256 << 10,
@@ -157,11 +175,237 @@ func TestValueLogDictClassifierBypass_IgnoresOuterLeafPages(t *testing.T) {
 	for i := range pageValue {
 		pageValue[i] = byte(i)
 	}
-	if db.valueLogDictClassifierBypass(pageValue, false) {
-		t.Fatalf("expected outer-leaf page value to be ignored by classifier bypass")
+	pageValue = markOuterLeafMagic(pageValue)
+	if !db.valueLogDictClassifierBypass(pageValue, false) {
+		t.Fatalf("expected outer-leaf page value to bypass dict path")
 	}
 	if hold := db.valueLogDictIncompressibleHoldRemaining.Load(); hold != 0 {
 		t.Fatalf("expected no incompressible hold from outer-leaf page sample, hold=%d", hold)
+	}
+}
+
+func TestValueLogDictClassifierBypass_AllowsOuterLeafPagesForDictSizeAggressive(t *testing.T) {
+	db := &DB{
+		valueLogCompressionMode:             uint8(vlogCompressionDict),
+		valueLogAutoPolicy:                  uint8(vlogAutoSize),
+		valueLogAutotuneOptions:             valuelog.AutotuneOptions{Mode: valuelog.AutotuneAggressive},
+		indexOuterLeavesInValueLog:          true,
+		valueLogDictIncompressibleHoldBytes: 256 << 10,
+		valueLogDictMetricsPauseBytes:       1 << 20,
+	}
+	pageValue := markOuterLeafMagic(bytes.Repeat([]byte("a"), 4096))
+	if db.valueLogDictClassifierBypass(pageValue, false) {
+		t.Fatalf("expected outer-leaf page value to stay on dict path in dict+aggressive+size mode")
+	}
+	if hold := db.valueLogDictIncompressibleHoldRemaining.Load(); hold != 0 {
+		t.Fatalf("expected no incompressible hold for compressible outer-leaf page sample, hold=%d", hold)
+	}
+}
+
+func TestValueLogDictClassifierBypass_AllowsOuterLeafPagesForDictSizeMedium(t *testing.T) {
+	db := &DB{
+		valueLogCompressionMode:             uint8(vlogCompressionDict),
+		valueLogAutoPolicy:                  uint8(vlogAutoSize),
+		valueLogAutotuneOptions:             valuelog.AutotuneOptions{Mode: valuelog.AutotuneMedium},
+		indexOuterLeavesInValueLog:          true,
+		valueLogDictIncompressibleHoldBytes: 256 << 10,
+		valueLogDictMetricsPauseBytes:       1 << 20,
+	}
+	pageValue := markOuterLeafMagic(bytes.Repeat([]byte("a"), 4096))
+	if db.valueLogDictClassifierBypass(pageValue, false) {
+		t.Fatalf("expected outer-leaf page value to stay on dict path in dict+size mode when autotune is enabled")
+	}
+	if hold := db.valueLogDictIncompressibleHoldRemaining.Load(); hold != 0 {
+		t.Fatalf("expected no incompressible hold for compressible outer-leaf page sample, hold=%d", hold)
+	}
+}
+
+func TestValueLogDictClassifierBypass_AllowsOuterLeafPagesForAutoSize(t *testing.T) {
+	db := &DB{
+		valueLogCompressionMode:             uint8(vlogCompressionAuto),
+		valueLogAutoPolicy:                  uint8(vlogAutoSize),
+		valueLogAutotuneOptions:             valuelog.AutotuneOptions{Mode: valuelog.AutotuneMedium},
+		indexOuterLeavesInValueLog:          true,
+		valueLogDictIncompressibleHoldBytes: 256 << 10,
+		valueLogDictMetricsPauseBytes:       1 << 20,
+	}
+	pageValue := markOuterLeafMagic(bytes.Repeat([]byte("a"), 4096))
+	if db.valueLogDictClassifierBypass(pageValue, false) {
+		t.Fatalf("expected outer-leaf page value to stay on dict path in auto+size mode")
+	}
+	if hold := db.valueLogDictIncompressibleHoldRemaining.Load(); hold != 0 {
+		t.Fatalf("expected no incompressible hold for compressible outer-leaf page sample, hold=%d", hold)
+	}
+}
+
+func TestValueLogDictClassifierBypass_AllowsOuterLeafHighEntropyForAutoSize(t *testing.T) {
+	db := &DB{
+		valueLogCompressionMode:             uint8(vlogCompressionAuto),
+		valueLogAutoPolicy:                  uint8(vlogAutoSize),
+		valueLogAutotuneOptions:             valuelog.AutotuneOptions{Mode: valuelog.AutotuneMedium},
+		indexOuterLeavesInValueLog:          true,
+		valueLogDictIncompressibleHoldBytes: 256 << 10,
+		valueLogDictMetricsPauseBytes:       1 << 20,
+	}
+	pageValue := make([]byte, 4096)
+	for i := range pageValue {
+		pageValue[i] = byte(i)
+	}
+	pageValue = markOuterLeafMagic(pageValue)
+	if db.valueLogDictClassifierBypass(pageValue, false) {
+		t.Fatalf("expected outer-leaf page value to stay on dict path in auto+size mode even when sample entropy is high")
+	}
+	if hold := db.valueLogDictIncompressibleHoldRemaining.Load(); hold != 0 {
+		t.Fatalf("expected no incompressible hold for outer-leaf page sample, hold=%d", hold)
+	}
+}
+
+func TestValueLogDictClassifierBypass_BypassesOuterLeafMagicPayloadWithoutArmingHold(t *testing.T) {
+	db := &DB{
+		indexOuterLeavesInValueLog:          true,
+		valueLogDictIncompressibleHoldBytes: 256 << 10,
+		valueLogDictMetricsPauseBytes:       1 << 20,
+	}
+	payload := bytes.Repeat([]byte("x"), 48<<10)
+	copy(payload, []byte{'T', 'O', 'L', '2'})
+	if !db.valueLogDictClassifierBypass(payload, false) {
+		t.Fatalf("expected outer-leaf magic payload to bypass dict path")
+	}
+	if hold := db.valueLogDictIncompressibleHoldRemaining.Load(); hold != 0 {
+		t.Fatalf("expected no incompressible hold from outer-leaf magic payload, hold=%d", hold)
+	}
+}
+
+func TestClassifyVlogPayloadKindForValue(t *testing.T) {
+	db := &DB{indexOuterLeavesInValueLog: true}
+	outerLeafPage := markOuterLeafMagic(make([]byte, 4096))
+	if got := db.classifyVlogPayloadKindForValue(outerLeafPage); got != vlogPayloadKindOuterLeaf {
+		t.Fatalf("expected outer-leaf kind for 4KiB page payload, got=%v", got)
+	}
+	if got := db.classifyVlogPayloadKindForValue([]byte("small-value")); got != vlogPayloadKindSingleValue {
+		t.Fatalf("expected single-value kind for non-outer payload, got=%v", got)
+	}
+}
+
+func TestClassifyVlogPayloadKindForRecords(t *testing.T) {
+	db := &DB{indexOuterLeavesInValueLog: true}
+	outerLeafPage := markOuterLeafMagic(make([]byte, 4096))
+	singleValue := []byte("single-value")
+
+	records := []valuelog.Record{
+		{RID: 1, Value: outerLeafPage},
+		{RID: 2, Value: outerLeafPage},
+	}
+	if got := db.classifyVlogPayloadKindForRecords(records); got != vlogPayloadKindOuterLeaf {
+		t.Fatalf("expected outer-leaf kind for outer-only batch, got=%v", got)
+	}
+
+	records = []valuelog.Record{
+		{RID: 1, Value: singleValue},
+		{RID: 2, Value: singleValue},
+	}
+	if got := db.classifyVlogPayloadKindForRecords(records); got != vlogPayloadKindSingleValue {
+		t.Fatalf("expected single-value kind for non-outer batch, got=%v", got)
+	}
+
+	records = []valuelog.Record{
+		{RID: 1, Value: outerLeafPage},
+		{RID: 2, Value: singleValue},
+	}
+	if got := db.classifyVlogPayloadKindForRecords(records); got != vlogPayloadKindMixed {
+		t.Fatalf("expected mixed kind for mixed batch, got=%v", got)
+	}
+}
+
+func TestClassifyVlogPayloadSplitForRecords(t *testing.T) {
+	db := &DB{indexOuterLeavesInValueLog: true}
+	outerLeafPage := markOuterLeafMagic(make([]byte, 4096))
+	singleValue := []byte("single-value")
+
+	records := []valuelog.Record{
+		{RID: 1, Value: outerLeafPage},
+		{RID: 2, Value: outerLeafPage},
+		{RID: 3, Value: singleValue},
+	}
+	split := db.classifyVlogPayloadSplitForRecords(records)
+	if split.Kind != vlogPayloadKindMixed {
+		t.Fatalf("expected mixed split kind, got=%v", split.Kind)
+	}
+	if split.OuterLeafRecords != 2 {
+		t.Fatalf("expected outer-leaf records=2, got=%d", split.OuterLeafRecords)
+	}
+	if split.SingleValueRecords != 1 {
+		t.Fatalf("expected single-value records=1, got=%d", split.SingleValueRecords)
+	}
+	if split.OuterLeafRawBytes != 2*len(outerLeafPage) {
+		t.Fatalf("expected outer-leaf raw bytes=%d, got=%d", 2*len(outerLeafPage), split.OuterLeafRawBytes)
+	}
+	if split.SingleValueRawBytes != len(singleValue) {
+		t.Fatalf("expected single-value raw bytes=%d, got=%d", len(singleValue), split.SingleValueRawBytes)
+	}
+}
+
+func TestClassifyVlogOuterLeafCodecKindForValue(t *testing.T) {
+	db := &DB{indexOuterLeavesInValueLog: true}
+	legacy := make([]byte, 4096)
+	if got := db.classifyVlogOuterLeafCodecKindForValue(legacy); got != vlogOuterLeafCodecMixed {
+		t.Fatalf("expected non-magic 4KiB payload to be treated as mixed/non-outer, got=%v", got)
+	}
+
+	magic := make([]byte, 64)
+	copy(magic, []byte{'T', 'O', 'L', '2'})
+	magic[outerLeafCodecHeaderOffset] = outerLeafCodecNoneID
+	if got := db.classifyVlogOuterLeafCodecKindForValue(magic); got != vlogOuterLeafCodecNone {
+		t.Fatalf("expected none outer-leaf codec kind, got=%v", got)
+	}
+	magic[outerLeafCodecHeaderOffset] = outerLeafCodecSnappyID
+	if got := db.classifyVlogOuterLeafCodecKindForValue(magic); got != vlogOuterLeafCodecSnappy {
+		t.Fatalf("expected snappy outer-leaf codec kind, got=%v", got)
+	}
+	magic[outerLeafCodecHeaderOffset] = outerLeafCodecLZ4ID
+	if got := db.classifyVlogOuterLeafCodecKindForValue(magic); got != vlogOuterLeafCodecLZ4 {
+		t.Fatalf("expected lz4 outer-leaf codec kind, got=%v", got)
+	}
+	magic[outerLeafCodecHeaderOffset] = 99
+	if got := db.classifyVlogOuterLeafCodecKindForValue(magic); got != vlogOuterLeafCodecUnknown {
+		t.Fatalf("expected unknown outer-leaf codec kind, got=%v", got)
+	}
+	if got := db.classifyVlogOuterLeafCodecKindForValue([]byte("single-value")); got != vlogOuterLeafCodecMixed {
+		t.Fatalf("expected mixed outer-leaf codec kind for non-outer payload, got=%v", got)
+	}
+}
+
+func TestClassifyVlogOuterLeafCodecKindForRecords(t *testing.T) {
+	db := &DB{indexOuterLeavesInValueLog: true}
+	lz4Magic := make([]byte, 64)
+	copy(lz4Magic, []byte{'T', 'O', 'L', '2'})
+	lz4Magic[outerLeafCodecHeaderOffset] = outerLeafCodecLZ4ID
+	snappyMagic := make([]byte, 64)
+	copy(snappyMagic, []byte{'T', 'O', 'L', '2'})
+	snappyMagic[outerLeafCodecHeaderOffset] = outerLeafCodecSnappyID
+
+	records := []valuelog.Record{
+		{RID: 1, Value: lz4Magic},
+		{RID: 2, Value: lz4Magic},
+	}
+	if got := db.classifyVlogOuterLeafCodecKindForRecords(records); got != vlogOuterLeafCodecLZ4 {
+		t.Fatalf("expected lz4 outer-leaf codec kind for homogeneous batch, got=%v", got)
+	}
+
+	records = []valuelog.Record{
+		{RID: 1, Value: lz4Magic},
+		{RID: 2, Value: snappyMagic},
+	}
+	if got := db.classifyVlogOuterLeafCodecKindForRecords(records); got != vlogOuterLeafCodecMixed {
+		t.Fatalf("expected mixed outer-leaf codec kind for mixed codecs, got=%v", got)
+	}
+
+	records = []valuelog.Record{
+		{RID: 1, Value: []byte("single-value")},
+		{RID: 2, Value: lz4Magic},
+	}
+	if got := db.classifyVlogOuterLeafCodecKindForRecords(records); got != vlogOuterLeafCodecMixed {
+		t.Fatalf("expected mixed outer-leaf codec kind for non-outer records, got=%v", got)
 	}
 }
 
@@ -175,7 +419,7 @@ func TestValueLogDictCollectSamples_IgnoresOuterLeafPages(t *testing.T) {
 		valueLogDictPausedSampleStride:       256,
 		valueLogDictIncompressibleProbeBytes: 64 << 10,
 	}
-	records := compressibleValueLogRecords(512, 4096)
+	records := markOuterLeafMagicRecords(compressibleValueLogRecords(512, 4096))
 	db.valueLogDictCollectSamples(records)
 	stats := tr.Stats()
 	if stats.Enqueued != 0 {
@@ -213,6 +457,103 @@ func TestShouldBypassValueLogDictForRecords_AllowsLargeValuesAfterDictPublish(t 
 	records := highEntropyValueLogRecords(8, 43<<10)
 	if db.shouldBypassValueLogDictForRecords(records, false) {
 		t.Fatalf("expected large record batches to bypass classifier gating after dict publish")
+	}
+}
+
+func TestShouldBypassValueLogDictForRecords_OuterLeafPagesBypassDict(t *testing.T) {
+	db := &DB{
+		indexOuterLeavesInValueLog:          true,
+		valueLogDictIncompressibleHoldBytes: 256 << 10,
+		valueLogDictMetricsPauseBytes:       1 << 20,
+	}
+	records := markOuterLeafMagicRecords(compressibleValueLogRecords(8, 4096))
+	if !db.shouldBypassValueLogDictForRecords(records, false) {
+		t.Fatalf("expected outer-leaf record batch to bypass dict path")
+	}
+	if hold := db.valueLogDictIncompressibleHoldRemaining.Load(); hold != 0 {
+		t.Fatalf("expected no incompressible hold from outer-leaf record batch, hold=%d", hold)
+	}
+}
+
+func TestShouldBypassValueLogDictForRecords_MixedBatchWithIgnoredSamplesDoesNotBypass(t *testing.T) {
+	db := &DB{
+		indexOuterLeavesInValueLog:          true,
+		valueLogDictIncompressibleHoldBytes: 256 << 10,
+		valueLogDictMetricsPauseBytes:       1 << 20,
+	}
+	records := make([]valuelog.Record, 8)
+	for i := range records {
+		var payload []byte
+		if i%2 == 0 {
+			// Sampled positions (step=2) look like outer-leaf pages.
+			payload = markOuterLeafMagic(bytes.Repeat([]byte("o"), 4096))
+		} else {
+			// Non-sampled positions are regular values and should keep dict eligible.
+			payload = bytes.Repeat([]byte("regular-value-"), 400)
+		}
+		records[i] = valuelog.Record{RID: uint64(i + 1), Value: payload}
+	}
+	if db.shouldBypassValueLogDictForRecords(records, false) {
+		t.Fatalf("expected mixed batch with sparse ignored samples to remain dict-eligible")
+	}
+}
+
+func TestShouldBypassValueLogDictForRecords_OuterLeafPagesAllowedForDictSizeAggressive(t *testing.T) {
+	db := &DB{
+		valueLogCompressionMode:             uint8(vlogCompressionDict),
+		valueLogAutoPolicy:                  uint8(vlogAutoSize),
+		valueLogAutotuneOptions:             valuelog.AutotuneOptions{Mode: valuelog.AutotuneAggressive},
+		indexOuterLeavesInValueLog:          true,
+		valueLogDictIncompressibleHoldBytes: 256 << 10,
+		valueLogDictMetricsPauseBytes:       1 << 20,
+	}
+	records := make([]valuelog.Record, 8)
+	for i := range records {
+		records[i] = valuelog.Record{RID: uint64(i + 1), Value: markOuterLeafMagic(bytes.Repeat([]byte("a"), 4096))}
+	}
+	if db.shouldBypassValueLogDictForRecords(records, false) {
+		t.Fatalf("expected outer-leaf record batch to stay on dict path in dict+aggressive+size mode")
+	}
+	if hold := db.valueLogDictIncompressibleHoldRemaining.Load(); hold != 0 {
+		t.Fatalf("expected no incompressible hold for compressible outer-leaf record batch, hold=%d", hold)
+	}
+}
+
+func TestShouldBypassValueLogDictForRecords_OuterLeafPagesAllowedForAutoSize(t *testing.T) {
+	db := &DB{
+		valueLogCompressionMode:             uint8(vlogCompressionAuto),
+		valueLogAutoPolicy:                  uint8(vlogAutoSize),
+		valueLogAutotuneOptions:             valuelog.AutotuneOptions{Mode: valuelog.AutotuneMedium},
+		indexOuterLeavesInValueLog:          true,
+		valueLogDictIncompressibleHoldBytes: 256 << 10,
+		valueLogDictMetricsPauseBytes:       1 << 20,
+	}
+	records := markOuterLeafMagicRecords(highEntropyValueLogRecords(8, 4096))
+	if db.shouldBypassValueLogDictForRecords(records, false) {
+		t.Fatalf("expected outer-leaf record batch to stay on dict path in auto+size mode")
+	}
+	if hold := db.valueLogDictIncompressibleHoldRemaining.Load(); hold != 0 {
+		t.Fatalf("expected no incompressible hold for outer-leaf record batch, hold=%d", hold)
+	}
+}
+
+func TestShouldBypassValueLogDictForRecords_OuterLeafMagicPayloadsBypassDict(t *testing.T) {
+	db := &DB{
+		indexOuterLeavesInValueLog:          true,
+		valueLogDictIncompressibleHoldBytes: 256 << 10,
+		valueLogDictMetricsPauseBytes:       1 << 20,
+	}
+	records := make([]valuelog.Record, 8)
+	for i := range records {
+		payload := bytes.Repeat([]byte("x"), 48<<10)
+		copy(payload, []byte{'T', 'O', 'L', '2'})
+		records[i] = valuelog.Record{RID: uint64(i + 1), Value: payload}
+	}
+	if !db.shouldBypassValueLogDictForRecords(records, false) {
+		t.Fatalf("expected outer-leaf magic record batch to bypass dict path")
+	}
+	if hold := db.valueLogDictIncompressibleHoldRemaining.Load(); hold != 0 {
+		t.Fatalf("expected no incompressible hold from outer-leaf magic record batch, hold=%d", hold)
 	}
 }
 

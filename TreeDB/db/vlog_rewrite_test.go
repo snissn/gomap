@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"hash/crc32"
 	"io"
 	"os"
 	"path/filepath"
@@ -926,6 +927,417 @@ func TestValueLogRewriteOffline_ReencodesGroupedBlockFramesWithObservedDict(t *t
 	}
 
 	b := db.NewBatch().(*Batch)
+	if err := b.SetPointer([]byte("z1"), ptrDict); err != nil {
+		t.Fatalf("set pointer z1: %v", err)
+	}
+	// Put grouped block pointers on keys that sort before the dict-keyed entry.
+	// This verifies rewrite can discover a preferred dict even when block frames
+	// are visited first in key order.
+	if err := b.SetPointer([]byte("a1"), ptrsBlock[0]); err != nil {
+		t.Fatalf("set pointer a1: %v", err)
+	}
+	if err := b.SetPointer([]byte("a2"), ptrsBlock[1]); err != nil {
+		t.Fatalf("set pointer a2: %v", err)
+	}
+	if err := b.SetPointer([]byte("a3"), ptrsBlock[2]); err != nil {
+		t.Fatalf("set pointer a3: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("seed write: %v", err)
+	}
+	closeNoErr(t, b)
+	closeNoErr(t, db)
+
+	stats, err := ValueLogRewriteOffline(opts)
+	if err != nil {
+		t.Fatalf("ValueLogRewriteOffline: %v", err)
+	}
+	if stats.RecordsCopied == 0 {
+		t.Fatalf("expected copied records, got %+v", stats)
+	}
+
+	dictFrames := 0
+	blockFrames := 0
+	maxDictK := 0
+	segments, err := listWALSegments(dir)
+	if err != nil {
+		t.Fatalf("list segments: %v", err)
+	}
+	for _, seg := range segments {
+		if !seg.valueLog {
+			continue
+		}
+		f, err := os.Open(seg.path)
+		if err != nil {
+			t.Fatalf("open %s: %v", filepath.Base(seg.path), err)
+		}
+		func() {
+			defer f.Close()
+			for {
+				var header [valuelog.HeaderSize]byte
+				if _, err := io.ReadFull(f, header[:]); err != nil {
+					if err == io.EOF || err == io.ErrUnexpectedEOF {
+						return
+					}
+					t.Fatalf("read header %s: %v", filepath.Base(seg.path), err)
+				}
+				bodyLen := binary.LittleEndian.Uint32(header[16:20])
+				body := make([]byte, int(bodyLen))
+				if _, err := io.ReadFull(f, body); err != nil {
+					t.Fatalf("read body %s: %v", filepath.Base(seg.path), err)
+				}
+				frameHeader, _, _, _, err := valuelog.DecodeFrame(body)
+				if err != nil {
+					t.Fatalf("DecodeFrame %s: %v", filepath.Base(seg.path), err)
+				}
+				if frameHeader.DictID == dictID {
+					dictFrames++
+					if int(frameHeader.K) > maxDictK {
+						maxDictK = int(frameHeader.K)
+					}
+				}
+				if frameHeader.DictID == 0 && frameHeader.Flags&valuelog.FrameFlagCompressed != 0 {
+					blockFrames++
+				}
+			}
+		}()
+	}
+	if dictFrames == 0 {
+		t.Fatalf("expected rewrite to produce dict frames, dictFrames=%d", dictFrames)
+	}
+	if maxDictK < 3 {
+		t.Fatalf("expected grouped block re-encodes to batch under dict, maxDictK=%d", maxDictK)
+	}
+	if blockFrames != 0 {
+		t.Fatalf("expected grouped block frames to be rewritten under dict, blockFrames=%d", blockFrames)
+	}
+
+	db2, err := Open(opts)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer closeNoErr(t, db2)
+	got1, err := db2.Get([]byte("z1"))
+	if err != nil {
+		t.Fatalf("Get z1: %v", err)
+	}
+	if !bytes.Equal(got1, value1) {
+		t.Fatalf("z1 mismatch after rewrite")
+	}
+	got2, err := db2.Get([]byte("a1"))
+	if err != nil {
+		t.Fatalf("Get a1: %v", err)
+	}
+	if !bytes.Equal(got2, value2) {
+		t.Fatalf("a1 mismatch after rewrite")
+	}
+	got3, err := db2.Get([]byte("a2"))
+	if err != nil {
+		t.Fatalf("Get a2: %v", err)
+	}
+	if !bytes.Equal(got3, value3) {
+		t.Fatalf("a2 mismatch after rewrite")
+	}
+	got4, err := db2.Get([]byte("a3"))
+	if err != nil {
+		t.Fatalf("Get a3: %v", err)
+	}
+	if !bytes.Equal(got4, value4) {
+		t.Fatalf("a3 mismatch after rewrite")
+	}
+}
+
+func TestScanValueLogSegmentPreferredDictID_ToleratesTruncatedTail(t *testing.T) {
+	dir := t.TempDir()
+	fileID, err := valuelog.EncodeFileID(0, 1)
+	if err != nil {
+		t.Fatalf("EncodeFileID: %v", err)
+	}
+	path := filepath.Join(dir, "value-l0-000001.log")
+	w, err := valuelog.NewWriter(path, fileID)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	value := bytes.Repeat([]byte("rewrite/truncated-tail"), 512)
+	if _, err := w.Append(0, nil, 1, value); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close writer: %v", err)
+	}
+
+	// Append a partial trailing frame body to simulate a torn tail record.
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0)
+	if err != nil {
+		t.Fatalf("OpenFile append: %v", err)
+	}
+	tail := make([]byte, valuelog.HeaderSize+valuelog.FrameHeaderSize)
+	binary.LittleEndian.PutUint32(tail[16:20], uint32(valuelog.FrameHeaderSize+128))
+	if _, err := f.Write(tail); err != nil {
+		_ = f.Close()
+		t.Fatalf("append tail: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close append file: %v", err)
+	}
+
+	readFile, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("Open read file: %v", err)
+	}
+	defer closeNoErr(t, readFile)
+
+	seg := &valuelog.File{File: readFile}
+	dictID, err := scanValueLogSegmentPreferredDictID(seg)
+	if err != nil {
+		t.Fatalf("scanValueLogSegmentPreferredDictID: %v", err)
+	}
+	if dictID != 0 {
+		t.Fatalf("expected no preferred dict ID, got %d", dictID)
+	}
+}
+
+func TestScanValueLogSegmentPreferredDictID_SkipsNonGroupedRecords(t *testing.T) {
+	dir := t.TempDir()
+	fileID, err := valuelog.EncodeFileID(0, 1)
+	if err != nil {
+		t.Fatalf("EncodeFileID: %v", err)
+	}
+	path := filepath.Join(dir, "value-l0-000001.log")
+	w, err := valuelog.NewWriter(path, fileID)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+
+	rawPayload := make([]byte, valuelog.FrameHeaderSize+16)
+	binary.LittleEndian.PutUint64(rawPayload[4:12], uint64(0xdeadbeefcafebabe))
+	rawRecord := make([]byte, valuelog.HeaderSize+len(rawPayload))
+	rawRecord[4] = valuelog.Version
+	binary.LittleEndian.PutUint64(rawRecord[8:16], 1)
+	binary.LittleEndian.PutUint32(rawRecord[16:20], uint32(len(rawPayload)))
+	copy(rawRecord[valuelog.HeaderSize:], rawPayload)
+	binary.LittleEndian.PutUint32(rawRecord[0:4], crc32.ChecksumIEEE(rawRecord[4:]))
+	if _, err := w.AppendRawRecord(rawRecord, uint32(len(rawRecord)-4)); err != nil {
+		t.Fatalf("AppendRawRecord: %v", err)
+	}
+
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close writer: %v", err)
+	}
+
+	readFile, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("Open read file: %v", err)
+	}
+	defer closeNoErr(t, readFile)
+
+	seg := &valuelog.File{File: readFile}
+	dictID, err := scanValueLogSegmentPreferredDictID(seg)
+	if err != nil {
+		t.Fatalf("scanValueLogSegmentPreferredDictID: %v", err)
+	}
+	if dictID != 0 {
+		t.Fatalf("expected no preferred dict ID from non-grouped record, got %d", dictID)
+	}
+}
+
+func TestScanValueLogSegmentPreferredDictID_IgnoresInvalidRecordVersion(t *testing.T) {
+	dir := t.TempDir()
+	fileID, err := valuelog.EncodeFileID(0, 1)
+	if err != nil {
+		t.Fatalf("EncodeFileID: %v", err)
+	}
+	path := filepath.Join(dir, "value-l0-000001.log")
+	w, err := valuelog.NewWriter(path, fileID)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+
+	payload := make([]byte, valuelog.FrameHeaderSize)
+	payload[0] = valuelog.FrameVersion
+	binary.LittleEndian.PutUint64(payload[4:12], 0xfeedface)
+
+	rawRecord := make([]byte, valuelog.HeaderSize+len(payload))
+	rawRecord[4] = 0 // invalid/unexpected record version
+	rawRecord[5] = 1 // grouped flag set
+	binary.LittleEndian.PutUint64(rawRecord[8:16], 1)
+	binary.LittleEndian.PutUint32(rawRecord[16:20], uint32(len(payload)))
+	copy(rawRecord[valuelog.HeaderSize:], payload)
+	binary.LittleEndian.PutUint32(rawRecord[0:4], crc32.ChecksumIEEE(rawRecord[4:]))
+	if _, err := w.AppendRawRecord(rawRecord, uint32(len(rawRecord)-4)); err != nil {
+		t.Fatalf("AppendRawRecord: %v", err)
+	}
+
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close writer: %v", err)
+	}
+
+	readFile, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("Open read file: %v", err)
+	}
+	defer closeNoErr(t, readFile)
+
+	seg := &valuelog.File{File: readFile}
+	dictID, err := scanValueLogSegmentPreferredDictID(seg)
+	if err != nil {
+		t.Fatalf("scanValueLogSegmentPreferredDictID: %v", err)
+	}
+	if dictID != 0 {
+		t.Fatalf("expected no preferred dict ID from invalid record version, got %d", dictID)
+	}
+}
+
+func TestRewriteIteratorPreferredDictID_FallsBackWhenScannedDictUnavailable(t *testing.T) {
+	dir := t.TempDir()
+	fileID := uint32(1)
+	path := filepath.Join(dir, "value-l0-000001.log")
+
+	// Write a minimal grouped frame record with a non-zero dictID so the
+	// preferred-dict segment scan discovers it.
+	rawRecord := make([]byte, valuelog.HeaderSize+valuelog.FrameHeaderSize)
+	rawRecord[4] = valuelog.Version
+	rawRecord[5] = 1 << 0 // grouped record flag
+	binary.LittleEndian.PutUint32(rawRecord[16:20], uint32(valuelog.FrameHeaderSize))
+	rawRecord[valuelog.HeaderSize] = valuelog.FrameVersion
+	scannedDictID := uint64(12345)
+	binary.LittleEndian.PutUint64(rawRecord[valuelog.HeaderSize+4:valuelog.HeaderSize+12], scannedDictID)
+	if err := os.WriteFile(path, rawRecord, 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	readFile, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("Open read file: %v", err)
+	}
+	defer closeNoErr(t, readFile)
+
+	globalDictID := uint64(777)
+	it := &rewriteIterator{
+		vlogs: &valuelog.Set{
+			Files: map[uint32]*valuelog.File{
+				fileID: &valuelog.File{File: readFile},
+			},
+		},
+		preferredDictGlobal: globalDictID,
+		dictLookup: func(id uint64) ([]byte, error) {
+			if id == globalDictID {
+				return []byte{1, 2, 3, 4}, nil
+			}
+			return nil, valuelog.ErrMissingDict
+		},
+	}
+
+	got, err := it.preferredDictID(fileID)
+	if err != nil {
+		t.Fatalf("preferredDictID first call: %v", err)
+	}
+	if got != globalDictID {
+		t.Fatalf("preferredDictID first call=%d want=%d", got, globalDictID)
+	}
+	if it.preferredDictByFile[fileID] != 0 {
+		t.Fatalf("preferredDictByFile[%d]=%d want 0 for unresolved scanned dict", fileID, it.preferredDictByFile[fileID])
+	}
+	if cached, ok := it.dictCache[scannedDictID]; !ok || cached.ok {
+		t.Fatalf("expected unresolved scanned dictID %d to be cached as miss", scannedDictID)
+	}
+
+	got, err = it.preferredDictID(fileID)
+	if err != nil {
+		t.Fatalf("preferredDictID second call: %v", err)
+	}
+	if got != globalDictID {
+		t.Fatalf("preferredDictID second call=%d want=%d", got, globalDictID)
+	}
+}
+
+func TestValueLogRewriteOffline_ReencodesGroupedBlockOuterLeafPagesWithObservedDict(t *testing.T) {
+	dir := t.TempDir()
+
+	outerLeafPage := func(tag byte) []byte {
+		v := make([]byte, page.PageSize)
+		copy(v, bytes.Repeat([]byte("outerleaf/rewrite/dict/"), 256))
+		for i := 0; i < len(v); i += 257 {
+			v[i] = tag
+		}
+		return v
+	}
+	value1 := outerLeafPage('a')
+	value2 := outerLeafPage('b')
+	value3 := outerLeafPage('c')
+	value4 := outerLeafPage('d')
+	samples := [][]byte{value1, value2, value3, value4}
+	history := append([]byte(nil), value1...)
+	dictID := uint64(90422)
+	dict, err := zstd.BuildDict(zstd.BuildDictOptions{
+		ID:       uint32(dictID),
+		Contents: samples,
+		History:  history,
+		Offsets:  [3]int{1, 4, 8},
+		Level:    zstd.SpeedFastest,
+	})
+	if err != nil {
+		t.Fatalf("BuildDict: %v", err)
+	}
+	if len(dict) == 0 {
+		t.Fatalf("BuildDict returned empty dict")
+	}
+
+	dictLookup := func(id uint64) ([]byte, error) {
+		if id != dictID {
+			return nil, valuelog.ErrMissingDict
+		}
+		return dict, nil
+	}
+	opts := Options{
+		Dir: dir,
+		ValueLog: ValueLogOptions{
+			Compression: ValueLogCompressionBlock,
+			BlockCodec:  ValueLogBlockSnappy,
+			DictLookup:  dictLookup,
+		},
+	}
+
+	db, err := Open(opts)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	walDir := filepath.Join(dir, "wal")
+	if err := os.MkdirAll(walDir, 0o755); err != nil {
+		t.Fatalf("mkdir wal: %v", err)
+	}
+	fileID, err := valuelog.EncodeFileID(0, 1)
+	if err != nil {
+		t.Fatalf("file id: %v", err)
+	}
+	path := filepath.Join(walDir, "value-l0-000001.log")
+	w, err := valuelog.NewWriter(path, fileID)
+	if err != nil {
+		t.Fatalf("new writer: %v", err)
+	}
+	w.SetBlockCompression(valuelog.BlockCodecSnappy, true)
+	ptrDict, err := w.Append(dictID, dict, 1, value1)
+	if err != nil {
+		t.Fatalf("append dict: %v", err)
+	}
+	groupedRecords := []valuelog.Record{
+		{RID: 2, Value: value2},
+		{RID: 3, Value: value3},
+		{RID: 4, Value: value4},
+	}
+	ptrsBlock, _, err := w.AppendFrameWithStats(0, nil, groupedRecords)
+	if err != nil {
+		t.Fatalf("append grouped block frame: %v", err)
+	}
+	if len(ptrsBlock) != len(groupedRecords) {
+		t.Fatalf("grouped pointer count mismatch: got=%d want=%d", len(ptrsBlock), len(groupedRecords))
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("close writer: %v", err)
+	}
+
+	b := db.NewBatch().(*Batch)
 	if err := b.SetPointer([]byte("k1"), ptrDict); err != nil {
 		t.Fatalf("set pointer k1: %v", err)
 	}
@@ -1002,10 +1414,10 @@ func TestValueLogRewriteOffline_ReencodesGroupedBlockFramesWithObservedDict(t *t
 		t.Fatalf("expected rewrite to produce dict frames, dictFrames=%d", dictFrames)
 	}
 	if maxDictK < 3 {
-		t.Fatalf("expected grouped block re-encodes to batch under dict, maxDictK=%d", maxDictK)
+		t.Fatalf("expected grouped 4KiB block frames to batch under dict, maxDictK=%d", maxDictK)
 	}
 	if blockFrames != 0 {
-		t.Fatalf("expected grouped block frames to be rewritten under dict, blockFrames=%d", blockFrames)
+		t.Fatalf("expected grouped 4KiB block frames to be rewritten under dict, blockFrames=%d", blockFrames)
 	}
 
 	db2, err := Open(opts)
@@ -1131,6 +1543,186 @@ func TestRewriteWriter_DictBatchMaxSizeGuardAppliesAtOffsetZero(t *testing.T) {
 	}
 	if maxK > 1 {
 		t.Fatalf("expected offset-zero max-size guard to split grouped dict frame, maxK=%d", maxK)
+	}
+}
+
+func TestRewriteWriter_AppendLeafPageUsesLeafDictWhenConfigured(t *testing.T) {
+	walDir := t.TempDir()
+
+	leafPage := func(tag byte) []byte {
+		v := make([]byte, page.PageSize)
+		copy(v, bytes.Repeat([]byte("rewrite/leaf/page/dict/"), 256))
+		for i := 0; i < len(v); i += 257 {
+			v[i] = tag
+		}
+		return v
+	}
+	valueA := leafPage('a')
+	valueB := leafPage('b')
+	valueC := leafPage('c')
+	dictID := uint64(94022)
+	history := append([]byte(nil), valueA...)
+	if len(history) > 8<<10 {
+		history = history[:8<<10]
+	}
+	dict, err := zstd.BuildDict(zstd.BuildDictOptions{
+		ID:       uint32(dictID),
+		Contents: [][]byte{valueA, valueB, valueC},
+		History:  history,
+		Offsets:  [3]int{1, 4, 8},
+		Level:    zstd.SpeedFastest,
+	})
+	if err != nil {
+		t.Fatalf("BuildDict: %v", err)
+	}
+	if len(dict) == 0 {
+		t.Fatalf("BuildDict returned empty dict")
+	}
+
+	w := newRewriteWriter(walDir, 0, 0, defaultValueLogRewriteSegmentBytes)
+	w.blockCompression = true
+	w.blockCodec = valuelog.BlockCodecSnappy
+	w.SetKeepPolicy(0, 0, 0)
+	w.SetLeafDict(dictID, dict)
+	ptrA, err := w.AppendLeafPage(valueA)
+	if err != nil {
+		t.Fatalf("append leaf A: %v", err)
+	}
+	ptrB, err := w.AppendLeafPage(valueB)
+	if err != nil {
+		t.Fatalf("append leaf B: %v", err)
+	}
+	ptrC, err := w.AppendLeafPage(valueC)
+	if err != nil {
+		t.Fatalf("append leaf C: %v", err)
+	}
+	if page.ValuePtrSubIndex(ptrA) != 0 || page.ValuePtrSubIndex(ptrB) != 0 || page.ValuePtrSubIndex(ptrC) != 0 {
+		t.Fatalf("leaf pointers must keep grouped sub-index 0 for leafref encoding: A=%d B=%d C=%d",
+			page.ValuePtrSubIndex(ptrA), page.ValuePtrSubIndex(ptrB), page.ValuePtrSubIndex(ptrC))
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("close rewrite writer: %v", err)
+	}
+
+	paths, err := filepath.Glob(filepath.Join(walDir, "value-l0-*.log"))
+	if err != nil {
+		t.Fatalf("glob segments: %v", err)
+	}
+	if len(paths) == 0 {
+		t.Fatalf("expected rewrite writer to create value-log segments")
+	}
+
+	dictFrames := 0
+	blockFrames := 0
+	maxDictK := 0
+	for _, path := range paths {
+		f, err := os.Open(path)
+		if err != nil {
+			t.Fatalf("open %s: %v", filepath.Base(path), err)
+		}
+		func() {
+			defer f.Close()
+			for {
+				var header [valuelog.HeaderSize]byte
+				if _, err := io.ReadFull(f, header[:]); err != nil {
+					if err == io.EOF || err == io.ErrUnexpectedEOF {
+						return
+					}
+					t.Fatalf("read header %s: %v", filepath.Base(path), err)
+				}
+				bodyLen := binary.LittleEndian.Uint32(header[16:20])
+				body := make([]byte, int(bodyLen))
+				if _, err := io.ReadFull(f, body); err != nil {
+					t.Fatalf("read body %s: %v", filepath.Base(path), err)
+				}
+				frameHeader, _, _, _, err := valuelog.DecodeFrame(body)
+				if err != nil {
+					t.Fatalf("DecodeFrame %s: %v", filepath.Base(path), err)
+				}
+				if frameHeader.DictID == dictID {
+					dictFrames++
+					if int(frameHeader.K) > maxDictK {
+						maxDictK = int(frameHeader.K)
+					}
+				}
+				if frameHeader.DictID == 0 && frameHeader.Flags&valuelog.FrameFlagCompressed != 0 {
+					blockFrames++
+				}
+			}
+		}()
+	}
+	if dictFrames == 0 {
+		t.Fatalf("expected leaf pages to be written with dict frames")
+	}
+	if maxDictK != 1 {
+		t.Fatalf("expected leaf dict writes to remain single-record (k=1), maxDictK=%d", maxDictK)
+	}
+	if blockFrames != 0 {
+		t.Fatalf("expected no block-compressed frames when leaf dict is configured, blockFrames=%d", blockFrames)
+	}
+}
+
+func TestRewriteWriter_AppendLeafPageSkipsLeafDictWhenCompressionDisabled(t *testing.T) {
+	walDir := t.TempDir()
+	leafPage := bytes.Repeat([]byte("rewrite/leaf/page/dict/off/"), 256)
+	if len(leafPage) < page.PageSize {
+		leafPage = append(leafPage, bytes.Repeat([]byte{'x'}, page.PageSize-len(leafPage))...)
+	}
+	leafPage = leafPage[:page.PageSize]
+
+	w := newRewriteWriter(walDir, 0, 0, defaultValueLogRewriteSegmentBytes)
+	w.blockCompression = false
+	w.blockCodec = valuelog.BlockCodecSnappy
+	w.SetLeafDict(31001, []byte("dummy-dict-bytes"))
+	if _, err := w.AppendLeafPage(leafPage); err != nil {
+		t.Fatalf("AppendLeafPage: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	paths, err := filepath.Glob(filepath.Join(walDir, "value-l0-*.log"))
+	if err != nil {
+		t.Fatalf("glob segments: %v", err)
+	}
+	if len(paths) == 0 {
+		t.Fatalf("expected output segment")
+	}
+
+	foundDictFrame := false
+	for _, path := range paths {
+		f, err := os.Open(path)
+		if err != nil {
+			t.Fatalf("open %s: %v", filepath.Base(path), err)
+		}
+		func() {
+			defer f.Close()
+			for {
+				var header [valuelog.HeaderSize]byte
+				if _, err := io.ReadFull(f, header[:]); err != nil {
+					if err == io.EOF || err == io.ErrUnexpectedEOF {
+						return
+					}
+					t.Fatalf("read header %s: %v", filepath.Base(path), err)
+				}
+				bodyLen := binary.LittleEndian.Uint32(header[16:20])
+				body := make([]byte, int(bodyLen))
+				if _, err := io.ReadFull(f, body); err != nil {
+					t.Fatalf("read body %s: %v", filepath.Base(path), err)
+				}
+				frameHeader, _, _, _, err := valuelog.DecodeFrame(body)
+				if err != nil {
+					t.Fatalf("DecodeFrame %s: %v", filepath.Base(path), err)
+				}
+				if frameHeader.DictID != 0 {
+					foundDictFrame = true
+					return
+				}
+			}
+		}()
+	}
+	if foundDictFrame {
+		t.Fatalf("expected compression-off leaf rewrite to avoid dict frames")
 	}
 }
 

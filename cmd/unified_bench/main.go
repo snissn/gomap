@@ -86,6 +86,7 @@ var (
 	checkpointEveryOps              = flag.Int("checkpoint-every-ops", 0, "Force a best-effort durability checkpoint every N ops during write-heavy tests (0=disabled; DBs that support Checkpoint())")
 	checkpointEveryBytes            = flag.Int64("checkpoint-every-bytes", 0, "Force a best-effort durability checkpoint every N approx bytes during write-heavy tests (0=disabled; DBs that support Checkpoint())")
 	batchWriteSteadyCheckpointBytes = flag.Int64("batch-write-steady-checkpoint-bytes", 64<<20, "batch_write_steady: default periodic checkpoint interval in bytes when checkpoint-every-* flags are unset (0 disables)")
+	batchWriteDictWarmup            = flag.Bool("batch-write-dict-warmup", false, "Enable pre-measurement dict warmup writes for batch_write* (TreeDB dict mode); off by default to keep measured runs on empty DB state")
 
 	flushdrainCheckpointMax = flag.Duration("flushdrain-checkpoint-max", 0, "Abort flushdrain suite if checkpoint-before-random_read exceeds this duration (0=disabled)")
 
@@ -164,6 +165,7 @@ type BenchConfig struct {
 	CheckpointEveryOps              int
 	CheckpointEveryBytes            int64
 	BatchWriteSteadyCheckpointBytes int64
+	BatchWriteDictWarmup            bool
 
 	SettleBeforeScans bool
 
@@ -315,6 +317,28 @@ func (s benchKeyShape) validate(maxKey uint64) error {
 	return nil
 }
 
+func (s benchKeyShape) maxKey() uint64 {
+	if s == benchKeyShapeBE8Prefix4 {
+		return uint64(math.MaxUint32)
+	}
+	return math.MaxUint64
+}
+
+func clampWarmupKeyCount(shape benchKeyShape, warmupBase uint64, warmupKeys int) int {
+	if warmupKeys <= 0 {
+		return 0
+	}
+	maxKey := shape.maxKey()
+	if warmupBase > maxKey {
+		return 0
+	}
+	remaining := maxKey - warmupBase + 1
+	if uint64(warmupKeys) > remaining {
+		return int(remaining)
+	}
+	return warmupKeys
+}
+
 func main() {
 	flag.Usage = customUsage
 	flag.Parse()
@@ -411,6 +435,7 @@ func main() {
 		CheckpointEveryOps:               *checkpointEveryOps,
 		CheckpointEveryBytes:             *checkpointEveryBytes,
 		BatchWriteSteadyCheckpointBytes:  *batchWriteSteadyCheckpointBytes,
+		BatchWriteDictWarmup:             *batchWriteDictWarmup,
 		SettleBeforeScans:                *settleBeforeScans,
 		TreeDBCacheStatsBeforeReads:      *treedbCacheStatsBeforeReads,
 		TreeDBCacheStatsAfterTests:       *treedbCacheStatsAfterTests,
@@ -668,6 +693,13 @@ func main() {
 			fmt.Println("TreeDB ValueLog Rewrite (After Run)")
 			fmt.Print(renderTreeDBVlogRewriteString(run.TreeDBVlogRewrite))
 		}
+		if run.Config.KeepDir {
+			if kept := strings.TrimSpace(renderKeptDirsString(run.Instances)); kept != "" {
+				fmt.Println()
+				fmt.Println("Kept Data Directories")
+				fmt.Print(kept)
+			}
+		}
 		if hasArtifacts {
 			runBenchprof(*profileDir)
 		}
@@ -721,6 +753,13 @@ func main() {
 				fmt.Println()
 				fmt.Println("TreeDB ValueLog Rewrite (After Run)")
 				fmt.Print(renderTreeDBVlogRewriteString(run.TreeDBVlogRewrite))
+			}
+			if run.Config.KeepDir {
+				if kept := strings.TrimSpace(renderKeptDirsString(run.Instances)); kept != "" {
+					fmt.Println()
+					fmt.Println("Kept Data Directories")
+					fmt.Print(kept)
+				}
 			}
 		}
 	case "markdown":
@@ -1133,6 +1172,62 @@ func printTreeDBCacheStats(w io.Writer, inst *DBInstance, prefix string) {
 		"treedb.cache.vlog_auto.hold_enters",
 		"treedb.cache.vlog_auto.hold_exits",
 		"treedb.cache.vlog_auto.bypass_bytes",
+		"treedb.cache.vlog_write_mode.raw_bytes.off",
+		"treedb.cache.vlog_write_mode.raw_bytes.block",
+		"treedb.cache.vlog_write_mode.raw_bytes.dict",
+		"treedb.cache.vlog_write_mode.stored_bytes.off",
+		"treedb.cache.vlog_write_mode.stored_bytes.block",
+		"treedb.cache.vlog_write_mode.stored_bytes.dict",
+		"treedb.cache.vlog_write_mode.stored_ratio.off",
+		"treedb.cache.vlog_write_mode.stored_ratio.block",
+		"treedb.cache.vlog_write_mode.stored_ratio.dict",
+		"treedb.cache.vlog_write_mode.frames.off",
+		"treedb.cache.vlog_write_mode.frames.block",
+		"treedb.cache.vlog_write_mode.frames.dict",
+		"treedb.cache.vlog_payload_kind.raw_bytes.single_value",
+		"treedb.cache.vlog_payload_kind.raw_bytes.outer_leaf",
+		"treedb.cache.vlog_payload_kind.raw_bytes.mixed",
+		"treedb.cache.vlog_payload_kind.stored_bytes.single_value",
+		"treedb.cache.vlog_payload_kind.stored_bytes.outer_leaf",
+		"treedb.cache.vlog_payload_kind.stored_bytes.mixed",
+		"treedb.cache.vlog_payload_kind.stored_ratio.single_value",
+		"treedb.cache.vlog_payload_kind.stored_ratio.outer_leaf",
+		"treedb.cache.vlog_payload_kind.stored_ratio.mixed",
+		"treedb.cache.vlog_payload_kind.frames.single_value",
+		"treedb.cache.vlog_payload_kind.frames.outer_leaf",
+		"treedb.cache.vlog_payload_kind.frames.mixed",
+		"treedb.cache.vlog_payload_split.raw_bytes.single_value",
+		"treedb.cache.vlog_payload_split.raw_bytes.outer_leaf",
+		"treedb.cache.vlog_payload_split.stored_bytes.single_value",
+		"treedb.cache.vlog_payload_split.stored_bytes.outer_leaf",
+		"treedb.cache.vlog_payload_split.stored_ratio.single_value",
+		"treedb.cache.vlog_payload_split.stored_ratio.outer_leaf",
+		"treedb.cache.vlog_payload_split.records.single_value",
+		"treedb.cache.vlog_payload_split.records.outer_leaf",
+		"treedb.cache.vlog_outer_leaf_codec.raw_bytes.none",
+		"treedb.cache.vlog_outer_leaf_codec.raw_bytes.snappy",
+		"treedb.cache.vlog_outer_leaf_codec.raw_bytes.lz4",
+		"treedb.cache.vlog_outer_leaf_codec.raw_bytes.legacy_page",
+		"treedb.cache.vlog_outer_leaf_codec.raw_bytes.unknown",
+		"treedb.cache.vlog_outer_leaf_codec.raw_bytes.mixed",
+		"treedb.cache.vlog_outer_leaf_codec.stored_bytes.none",
+		"treedb.cache.vlog_outer_leaf_codec.stored_bytes.snappy",
+		"treedb.cache.vlog_outer_leaf_codec.stored_bytes.lz4",
+		"treedb.cache.vlog_outer_leaf_codec.stored_bytes.legacy_page",
+		"treedb.cache.vlog_outer_leaf_codec.stored_bytes.unknown",
+		"treedb.cache.vlog_outer_leaf_codec.stored_bytes.mixed",
+		"treedb.cache.vlog_outer_leaf_codec.stored_ratio.none",
+		"treedb.cache.vlog_outer_leaf_codec.stored_ratio.snappy",
+		"treedb.cache.vlog_outer_leaf_codec.stored_ratio.lz4",
+		"treedb.cache.vlog_outer_leaf_codec.stored_ratio.legacy_page",
+		"treedb.cache.vlog_outer_leaf_codec.stored_ratio.unknown",
+		"treedb.cache.vlog_outer_leaf_codec.stored_ratio.mixed",
+		"treedb.cache.vlog_outer_leaf_codec.frames.none",
+		"treedb.cache.vlog_outer_leaf_codec.frames.snappy",
+		"treedb.cache.vlog_outer_leaf_codec.frames.lz4",
+		"treedb.cache.vlog_outer_leaf_codec.frames.legacy_page",
+		"treedb.cache.vlog_outer_leaf_codec.frames.unknown",
+		"treedb.cache.vlog_outer_leaf_codec.frames.mixed",
 		"treedb.cache.vlog_block.k.count.snappy",
 		"treedb.cache.vlog_block.k.avg.snappy",
 		"treedb.cache.vlog_block.k.max.snappy",
@@ -1602,12 +1697,6 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 		if err != nil {
 			return 0, fmt.Errorf("%s values: %w", testLabel, err)
 		}
-		start := time.Now()
-		pc := newPeriodicCheckpoint(cfg)
-		if steady && pc == nil && cfg.BatchWriteSteadyCheckpointBytes > 0 {
-			pc = &periodicCheckpoint{everyBytes: cfg.BatchWriteSteadyCheckpointBytes}
-		}
-		perOpBytes := int64(8 + cfg.ValueSize)
 		total := cfg.Keys
 		valPos := 0
 		// Keep the precomputed-key optimization bounded so very large runs do
@@ -1660,6 +1749,151 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				_ = batch.Close()
 			}
 		}()
+
+		treeDBDictPublished := func() bool {
+			sp, ok := db.(kvstore.StatsProvider)
+			if !ok {
+				return false
+			}
+			stats := sp.Stats()
+			raw := strings.TrimSpace(stats["treedb.cache.vlog_dict.last_applied_dict_id"])
+			if raw == "" {
+				return false
+			}
+			v, err := strconv.ParseUint(raw, 10, 64)
+			return err == nil && v != 0
+		}
+		shouldWarmupDictBatchWrite := func() bool {
+			if !cfg.BatchWriteDictWarmup {
+				return false
+			}
+			if total <= 0 {
+				return false
+			}
+			if _, ok := db.(*treedbadapter.DB); !ok {
+				return false
+			}
+			mode, _, err := parseTreeDBVlogCompressionMode(*treedbVlogCompression)
+			if err == nil && mode == treedb.ValueLogCompressionDict {
+				return true
+			}
+			name := strings.ToLower(strings.TrimSpace(db.Name()))
+			return strings.Contains(name, "vlog=dict") || strings.Contains(name, "vlog_dict=on")
+		}
+		if shouldWarmupDictBatchWrite() {
+			warmupKeys := total / 4
+			if warmupKeys < cfg.BatchSize {
+				warmupKeys = cfg.BatchSize
+			}
+			if warmupKeys > total {
+				warmupKeys = total
+			}
+			if warmupKeys > 128_000 {
+				warmupKeys = 128_000
+			}
+			// Keep warmup writes disjoint from measured keys so throughput/IO
+			// remains comparable across modes.
+			warmupBase := uint64(cfg.Keys) * 2
+			if uint64(cfg.Keys) > math.MaxUint64/2 {
+				warmupBase = math.MaxUint64
+			}
+			warmupKeys = clampWarmupKeyCount(keyShape, warmupBase, warmupKeys)
+			var warmupKeyBytes []byte
+			if precomputeKeys && warmupKeys > 0 {
+				warmupKeyBytes = make([]byte, warmupKeys*8)
+				for j := 0; j < warmupKeys; j++ {
+					encodeKey(warmupKeyBytes[j*8:(j+1)*8], uint64(j)+warmupBase)
+				}
+			}
+			for i := 0; i < warmupKeys; i += cfg.BatchSize {
+				if batch == nil {
+					if err := openBatch(); err != nil {
+						return 0, fmt.Errorf("%s warmup: new batch: %w", testLabel, err)
+					}
+				} else if resetBatch != nil {
+					resetBatch()
+				} else {
+					if err := batch.Close(); err != nil {
+						return 0, fmt.Errorf("%s warmup: close: %w", testLabel, err)
+					}
+					batch = nil
+					if err := openBatch(); err != nil {
+						return 0, fmt.Errorf("%s warmup: new batch: %w", testLabel, err)
+					}
+				}
+
+				end := i + cfg.BatchSize
+				if end > warmupKeys {
+					end = warmupKeys
+				}
+				if setView != nil {
+					if precomputeKeys {
+						for j := i; j < end; j++ {
+							keyView := warmupKeyBytes[j*8 : (j+1)*8]
+							value := values[valPos%len(values)]
+							valPos++
+							if err := setView(keyView, value); err != nil {
+								return 0, fmt.Errorf("%s warmup: set: %w", testLabel, err)
+							}
+						}
+					} else {
+						// SetView is zero-copy: keep keys in a stable owned slab until commit.
+						need := (end - i) * 8
+						keysView := make([]byte, need)
+						for j := i; j < end; j++ {
+							off := (j - i) * 8
+							keyView := keysView[off : off+8]
+							encodeKey(keyView, uint64(j)+warmupBase)
+							value := values[valPos%len(values)]
+							valPos++
+							if err := setView(keyView, value); err != nil {
+								return 0, fmt.Errorf("%s warmup: set: %w", testLabel, err)
+							}
+						}
+					}
+				} else {
+					for j := i; j < end; j++ {
+						var keyView []byte
+						if precomputeKeys {
+							keyView = warmupKeyBytes[j*8 : (j+1)*8]
+						} else {
+							var key [8]byte
+							encodeKey(key[:], uint64(j)+warmupBase)
+							keyView = key[:]
+						}
+						value := values[valPos%len(values)]
+						valPos++
+						if err := batch.Set(keyView, value); err != nil {
+							return 0, fmt.Errorf("%s warmup: set: %w", testLabel, err)
+						}
+					}
+				}
+				if err := batch.Commit(); err != nil {
+					return 0, fmt.Errorf("%s warmup: commit: %w", testLabel, err)
+				}
+				if resetBatch == nil {
+					if err := batch.Close(); err != nil {
+						return 0, fmt.Errorf("%s warmup: close: %w", testLabel, err)
+					}
+					batch = nil
+				}
+				if treeDBDictPublished() {
+					break
+				}
+			}
+			deadline := time.Now().Add(5 * time.Second)
+			for !treeDBDictPublished() && time.Now().Before(deadline) {
+				time.Sleep(5 * time.Millisecond)
+			}
+			valPos = 0
+		}
+
+		start := time.Now()
+		pc := newPeriodicCheckpoint(cfg)
+		if steady && pc == nil && cfg.BatchWriteSteadyCheckpointBytes > 0 {
+			pc = &periodicCheckpoint{everyBytes: cfg.BatchWriteSteadyCheckpointBytes}
+		}
+		perOpBytes := int64(8 + cfg.ValueSize)
 		for i := 0; i < total; i += cfg.BatchSize {
 			if i&8191 == 0 {
 				if err := guard.Checkpoint(); err != nil {
@@ -3867,6 +4101,54 @@ func renderNonTreeDBDiskUsageString(usage map[string]dirDiskUsage, treedbUsage m
 	return sb.String()
 }
 
+type keptDirEntry struct {
+	name string
+	dir  string
+}
+
+func renderKeptDirsString(instances []*DBInstance) string {
+	if len(instances) == 0 {
+		return ""
+	}
+	rows := make([]keptDirEntry, 0, len(instances))
+	for _, inst := range instances {
+		if inst == nil {
+			continue
+		}
+		dir := strings.TrimSpace(inst.Dir)
+		if dir == "" {
+			continue
+		}
+		name := strings.TrimSpace(inst.Name)
+		if inst.Wrapper != nil {
+			if wrapperName := strings.TrimSpace(inst.Wrapper.Name()); wrapperName != "" {
+				name = wrapperName
+			}
+		}
+		if name == "" {
+			name = "(unnamed)"
+		}
+		rows = append(rows, keptDirEntry{name: name, dir: dir})
+	}
+	if len(rows) == 0 {
+		return ""
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		if rows[i].name == rows[j].name {
+			return rows[i].dir < rows[j].dir
+		}
+		return rows[i].name < rows[j].name
+	})
+	var sb strings.Builder
+	for _, row := range rows {
+		sb.WriteString(row.name)
+		sb.WriteString(": ")
+		sb.WriteString(row.dir)
+		sb.WriteByte('\n')
+	}
+	return sb.String()
+}
+
 func renderMarkdownSingle(run BenchRun) string {
 	var sb strings.Builder
 	sb.WriteString("# unified_bench\n\n")
@@ -3964,6 +4246,15 @@ func renderMarkdownSingle(run BenchRun) string {
 		sb.WriteString("```text\n")
 		sb.WriteString(renderTreeDBVlogRewriteString(run.TreeDBVlogRewrite))
 		sb.WriteString("```\n")
+	}
+	if run.Config.KeepDir {
+		if kept := strings.TrimSpace(renderKeptDirsString(run.Instances)); kept != "" {
+			sb.WriteString("\n")
+			sb.WriteString("## Kept Data Directories\n\n")
+			sb.WriteString("```text\n")
+			sb.WriteString(kept)
+			sb.WriteString("\n```\n")
+		}
 	}
 	return sb.String()
 }
@@ -4074,6 +4365,33 @@ func renderMarkdownSweep(runs []BenchRun) string {
 			sb.WriteString("```text\n")
 			sb.WriteString(renderTreeDBVlogRewriteString(run.TreeDBVlogRewrite))
 			sb.WriteString("```\n\n")
+		}
+	}
+
+	anyKept := false
+	for _, run := range runs {
+		if !run.Config.KeepDir {
+			continue
+		}
+		if strings.TrimSpace(renderKeptDirsString(run.Instances)) != "" {
+			anyKept = true
+			break
+		}
+	}
+	if anyKept {
+		sb.WriteString("## Kept Data Directories\n\n")
+		for _, run := range runs {
+			if !run.Config.KeepDir {
+				continue
+			}
+			kept := strings.TrimSpace(renderKeptDirsString(run.Instances))
+			if kept == "" {
+				continue
+			}
+			sb.WriteString(fmt.Sprintf("keys=%s\n\n", formatInt(run.Config.Keys)))
+			sb.WriteString("```text\n")
+			sb.WriteString(kept)
+			sb.WriteString("\n```\n\n")
 		}
 	}
 
