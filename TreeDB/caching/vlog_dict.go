@@ -82,6 +82,9 @@ func (db *DB) valueLogDictClassForPayloadKind(kind vlogPayloadKind) vlogDictClas
 }
 
 func (db *DB) valueLogDictClassForValue(value []byte) vlogDictClass {
+	if db.dictClassMode() != vlogDictClassModeSplitOuterLeaf {
+		return vlogDictClassSingleValue
+	}
 	return db.valueLogDictClassForPayloadKind(db.classifyVlogPayloadKindForValue(value))
 }
 
@@ -100,6 +103,13 @@ func (db *DB) valueLogDictClassForRecordSplit(split vlogPayloadRecordSplit) vlog
 	default:
 		return vlogDictClassSingleValue
 	}
+}
+
+func (db *DB) valueLogDictClassForRecords(records []valuelog.Record) vlogDictClass {
+	if db.dictClassMode() != vlogDictClassModeSplitOuterLeaf {
+		return vlogDictClassSingleValue
+	}
+	return db.valueLogDictClassForRecordSplit(db.classifyVlogPayloadSplitForRecords(records))
 }
 
 func vlogDictClassSuffix(class vlogDictClass) string {
@@ -645,8 +655,7 @@ func (db *DB) valueLogDictCollectSamples(records []valuelog.Record) {
 	if db == nil {
 		return
 	}
-	split := db.classifyVlogPayloadSplitForRecords(records)
-	class := db.valueLogDictClassForRecordSplit(split)
+	class := db.valueLogDictClassForRecords(records)
 	tr := db.valueLogDictTrainerForClass(class)
 	if tr == nil || !tr.ShouldCollect() {
 		return

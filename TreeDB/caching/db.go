@@ -2450,7 +2450,7 @@ func (db *DB) rewriteValueLogOpsForBackend(ops []batch.Entry, durability journal
 	}
 	dictID := uint64(0)
 	if db.dictStore != nil {
-		class := db.valueLogDictClassForRecordSplit(db.classifyVlogPayloadSplitForRecords(records))
+		class := db.valueLogDictClassForRecords(records)
 		if id, err := db.currentDictIDForClass(context.Background(), class); err == nil {
 			dictID = id
 		}
@@ -2686,7 +2686,7 @@ func (db *DB) flushDeferredValueLogMemtable(
 
 	dictID := uint64(0)
 	if db.dictStore != nil {
-		class := db.valueLogDictClassForRecordSplit(db.classifyVlogPayloadSplitForRecords(records))
+		class := db.valueLogDictClassForRecords(records)
 		if id, err := db.currentDictIDForClass(context.Background(), class); err == nil {
 			dictID = id
 		}
@@ -2898,7 +2898,7 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 
 			dictID := uint64(0)
 			if db.dictStore != nil {
-				class := db.valueLogDictClassForRecordSplit(db.classifyVlogPayloadSplitForRecords(records))
+				class := db.valueLogDictClassForRecords(records)
 				if id, err := db.currentDictIDForClass(context.Background(), class); err == nil {
 					dictID = id
 				}
