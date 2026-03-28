@@ -86,7 +86,8 @@ func (s *Store) GetCurrent(_ context.Context) (uint64, error) {
 }
 
 // GetCurrentForClass returns the current dictionary ID for a payload class.
-// Empty class falls back to the legacy global current marker.
+// Empty class and aliases "single"/"default" fall back to the legacy global
+// current marker.
 func (s *Store) GetCurrentForClass(ctx context.Context, class string) (uint64, error) {
 	if s == nil || s.backend == nil {
 		return 0, errStoreUnavailable
@@ -230,7 +231,8 @@ func (s *Store) SetCurrent(ctx context.Context, dictID uint64) error {
 }
 
 // SetCurrentForClass marks dictID as the current dictionary for a payload class.
-// Empty class falls back to the legacy global current marker.
+// Empty class and aliases "single"/"default" use the legacy global current key.
+// A dictID of 0 clears the class marker via DeleteSync.
 func (s *Store) SetCurrentForClass(ctx context.Context, class string, dictID uint64) error {
 	if s == nil || s.backend == nil {
 		return errStoreUnavailable
