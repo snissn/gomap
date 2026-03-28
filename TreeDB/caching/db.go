@@ -4699,9 +4699,13 @@ func (db *DB) queueVlogGenerationObservedSourceGCList(ids []uint32) {
 	if db == nil || len(ids) == 0 {
 		return
 	}
+	nowUnixNano := time.Now().UnixNano()
 	db.vlogGenerationObservedGCMu.Lock()
 	if db.vlogGenerationObservedGCSourceIDs == nil {
 		db.vlogGenerationObservedGCSourceIDs = make(map[uint32]struct{}, len(ids))
+	}
+	if db.vlogGenerationObservedGCFirstQueuedUnixNano == nil {
+		db.vlogGenerationObservedGCFirstQueuedUnixNano = make(map[uint32]int64, len(ids))
 	}
 	added := 0
 	for _, id := range ids {
@@ -4712,6 +4716,9 @@ func (db *DB) queueVlogGenerationObservedSourceGCList(ids []uint32) {
 			continue
 		}
 		db.vlogGenerationObservedGCSourceIDs[id] = struct{}{}
+		if _, exists := db.vlogGenerationObservedGCFirstQueuedUnixNano[id]; !exists {
+			db.vlogGenerationObservedGCFirstQueuedUnixNano[id] = nowUnixNano
+		}
 		added++
 	}
 	db.vlogGenerationObservedGCMu.Unlock()
@@ -4725,9 +4732,13 @@ func (db *DB) queueVlogGenerationObservedSourceGCIDs(ids map[uint32]struct{}) {
 	if db == nil || len(ids) == 0 {
 		return
 	}
+	nowUnixNano := time.Now().UnixNano()
 	db.vlogGenerationObservedGCMu.Lock()
 	if db.vlogGenerationObservedGCSourceIDs == nil {
 		db.vlogGenerationObservedGCSourceIDs = make(map[uint32]struct{}, len(ids))
+	}
+	if db.vlogGenerationObservedGCFirstQueuedUnixNano == nil {
+		db.vlogGenerationObservedGCFirstQueuedUnixNano = make(map[uint32]int64, len(ids))
 	}
 	added := 0
 	for id := range ids {
@@ -4738,6 +4749,9 @@ func (db *DB) queueVlogGenerationObservedSourceGCIDs(ids map[uint32]struct{}) {
 			continue
 		}
 		db.vlogGenerationObservedGCSourceIDs[id] = struct{}{}
+		if _, exists := db.vlogGenerationObservedGCFirstQueuedUnixNano[id]; !exists {
+			db.vlogGenerationObservedGCFirstQueuedUnixNano[id] = nowUnixNano
+		}
 		added++
 	}
 	db.vlogGenerationObservedGCMu.Unlock()
@@ -4770,6 +4784,92 @@ func (db *DB) takeVlogGenerationObservedSourceGCList() []uint32 {
 		db.vlogGenerationObservedGCTakenIDs.Add(uint64(len(out)))
 	}
 	return out
+}
+
+func (db *DB) finalizeVlogGenerationObservedSourceGCIDs(ids []uint32, dropped bool) {
+	if db == nil || len(ids) == 0 {
+		return
+	}
+	nowUnixNano := time.Now().UnixNano()
+	totalLatencyMS := uint64(0)
+	maxLatencyMS := uint64(0)
+	finalized := 0
+	seen := make(map[uint32]struct{}, len(ids))
+	db.vlogGenerationObservedGCMu.Lock()
+	for _, id := range ids {
+		if id == 0 {
+			continue
+		}
+		if _, exists := seen[id]; exists {
+			continue
+		}
+		seen[id] = struct{}{}
+		finalized++
+		delete(db.vlogGenerationObservedGCRetryAttempts, id)
+		if startUnixNano, exists := db.vlogGenerationObservedGCFirstQueuedUnixNano[id]; exists {
+			delete(db.vlogGenerationObservedGCFirstQueuedUnixNano, id)
+			if startUnixNano > 0 && nowUnixNano > startUnixNano {
+				latencyMS := uint64((nowUnixNano - startUnixNano) / int64(time.Millisecond))
+				totalLatencyMS += latencyMS
+				if latencyMS > maxLatencyMS {
+					maxLatencyMS = latencyMS
+				}
+			}
+		}
+	}
+	db.vlogGenerationObservedGCMu.Unlock()
+	if finalized == 0 {
+		return
+	}
+	if dropped {
+		db.vlogGenerationObservedGCLatencyDroppedIDs.Add(uint64(finalized))
+	} else {
+		db.vlogGenerationObservedGCLatencyCompletedIDs.Add(uint64(finalized))
+	}
+	if totalLatencyMS > 0 {
+		db.vlogGenerationObservedGCLatencyTotalMS.Add(totalLatencyMS)
+		updateAtomicMaxUint64(&db.vlogGenerationObservedGCLatencyMaxMS, maxLatencyMS)
+	}
+}
+
+func (db *DB) retryVlogGenerationObservedSourceGCList(ids []uint32) (queuedIDs, droppedIDs int) {
+	if db == nil || len(ids) == 0 {
+		return 0, 0
+	}
+	retry := make([]uint32, 0, len(ids))
+	dropped := make([]uint32, 0, len(ids))
+	seen := make(map[uint32]struct{}, len(ids))
+	db.vlogGenerationObservedGCMu.Lock()
+	if db.vlogGenerationObservedGCRetryAttempts == nil {
+		db.vlogGenerationObservedGCRetryAttempts = make(map[uint32]uint8, len(ids))
+	}
+	for _, id := range ids {
+		if id == 0 {
+			continue
+		}
+		if _, exists := seen[id]; exists {
+			continue
+		}
+		seen[id] = struct{}{}
+		attempts := db.vlogGenerationObservedGCRetryAttempts[id]
+		if attempts >= vlogGenerationObservedGCRetryMaxAttempts {
+			delete(db.vlogGenerationObservedGCRetryAttempts, id)
+			dropped = append(dropped, id)
+			continue
+		}
+		db.vlogGenerationObservedGCRetryAttempts[id] = attempts + 1
+		retry = append(retry, id)
+	}
+	db.vlogGenerationObservedGCMu.Unlock()
+	if len(retry) > 0 {
+		db.vlogGenerationObservedGCRetryQueued.Add(1)
+		db.queueVlogGenerationObservedSourceGCList(retry)
+	}
+	if len(dropped) > 0 {
+		db.vlogGenerationObservedGCRetryDropped.Add(uint64(len(dropped)))
+		db.finalizeVlogGenerationObservedSourceGCIDs(dropped, true)
+	}
+	return len(retry), len(dropped)
 }
 
 func (db *DB) scheduleRetainedValueLogPrune() {
@@ -5717,6 +5817,13 @@ type DB struct {
 	vlogGenerationObservedGCTakenIDs                            atomic.Uint64
 	vlogGenerationObservedGCRuns                                atomic.Uint64
 	vlogGenerationObservedGCRetryQueued                         atomic.Uint64
+	vlogGenerationObservedGCRetryDropped                        atomic.Uint64
+	vlogGenerationObservedGCRetryAttempts                       map[uint32]uint8
+	vlogGenerationObservedGCFirstQueuedUnixNano                 map[uint32]int64
+	vlogGenerationObservedGCLatencyCompletedIDs                 atomic.Uint64
+	vlogGenerationObservedGCLatencyDroppedIDs                   atomic.Uint64
+	vlogGenerationObservedGCLatencyTotalMS                      atomic.Uint64
+	vlogGenerationObservedGCLatencyMaxMS                        atomic.Uint64
 	vlogGenerationObservedGCSourceSegmentsTotal                 atomic.Uint64
 	vlogGenerationObservedGCSourceSegmentsEligibleTotal         atomic.Uint64
 	vlogGenerationObservedGCSourceSegmentsDeletedTotal          atomic.Uint64
@@ -6019,6 +6126,9 @@ const (
 	// requests while replay GC is trying to converge. Allow a faster cadence for
 	// that targeted path without dropping the generic min-interval guard.
 	retainedPruneObservedMinInterval = 3 * time.Second
+	// Bound observed-source replay retries so a permanently retained-protected ID
+	// cannot stay queued forever when replay GC cannot make progress.
+	vlogGenerationObservedGCRetryMaxAttempts = uint8(3)
 	// Coordinate index vacuum with major rewrite windows; do not run on every GC.
 	vlogGenerationVacuumTriggerRewriteBytes = int64(64 << 20)
 	vlogGenerationVacuumMinInterval         = 5 * time.Minute
@@ -15018,8 +15128,13 @@ planned:
 			len(observedSourceGCIDs),
 		)
 		if forceObservedSourceGC {
-			db.vlogGenerationObservedGCRetryQueued.Add(1)
-			db.queueVlogGenerationObservedSourceGCList(observedSourceGCIDs)
+			queuedIDs, droppedIDs := db.retryVlogGenerationObservedSourceGCList(observedSourceGCIDs)
+			db.debugVlogMaintf(
+				"gc_observed_retry reason=disabled_env observed_ids=%d queued_ids=%d dropped_ids=%d",
+				len(observedSourceGCIDs),
+				queuedIDs,
+				droppedIDs,
+			)
 		}
 		return
 	}
@@ -15045,8 +15160,13 @@ planned:
 			len(observedSourceGCIDs),
 		)
 		if forceObservedSourceGC {
-			db.vlogGenerationObservedGCRetryQueued.Add(1)
-			db.queueVlogGenerationObservedSourceGCList(observedSourceGCIDs)
+			queuedIDs, droppedIDs := db.retryVlogGenerationObservedSourceGCList(observedSourceGCIDs)
+			db.debugVlogMaintf(
+				"gc_observed_retry reason=backend_no_gcer observed_ids=%d queued_ids=%d dropped_ids=%d",
+				len(observedSourceGCIDs),
+				queuedIDs,
+				droppedIDs,
+			)
 		}
 		return
 	}
@@ -15154,9 +15274,19 @@ planned:
 			)
 			db.queueRetainedPruneObservedSourceIDs(observedSourceGCIDs)
 			db.scheduleRetainedValueLogPruneForce()
-			db.vlogGenerationObservedGCRetryQueued.Add(1)
-			db.queueVlogGenerationObservedSourceGCList(observedSourceGCIDs)
-			db.vlogGenerationCheckpointKickPending.Store(true)
+			queuedIDs, droppedIDs := db.retryVlogGenerationObservedSourceGCList(observedSourceGCIDs)
+			if queuedIDs > 0 {
+				db.vlogGenerationCheckpointKickPending.Store(true)
+			}
+			db.debugVlogMaintf(
+				"gc_observed_retry_result reason=retained_protected observed_ids=%d queued_ids=%d dropped_ids=%d max_attempts=%d",
+				len(observedSourceGCIDs),
+				queuedIDs,
+				droppedIDs,
+				vlogGenerationObservedGCRetryMaxAttempts,
+			)
+		} else if forceObservedSourceGC {
+			db.finalizeVlogGenerationObservedSourceGCIDs(observedSourceGCIDs, false)
 		}
 		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
 		db.vlogGenerationGCRuns.Add(1)
@@ -15177,8 +15307,13 @@ planned:
 			err,
 		)
 		if forceObservedSourceGC {
-			db.vlogGenerationObservedGCRetryQueued.Add(1)
-			db.queueVlogGenerationObservedSourceGCList(observedSourceGCIDs)
+			queuedIDs, droppedIDs := db.retryVlogGenerationObservedSourceGCList(observedSourceGCIDs)
+			db.debugVlogMaintf(
+				"gc_observed_retry reason=gc_error observed_ids=%d queued_ids=%d dropped_ids=%d",
+				len(observedSourceGCIDs),
+				queuedIDs,
+				droppedIDs,
+			)
 		}
 		if errors.Is(err, context.Canceled) {
 			db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
@@ -20701,6 +20836,13 @@ func (db *DB) Stats() map[string]string {
 	db.vlogGenerationObservedGCMu.Lock()
 	observedGCPending := len(db.vlogGenerationObservedGCSourceIDs)
 	db.vlogGenerationObservedGCMu.Unlock()
+	observedGCLatencyCompleted := db.vlogGenerationObservedGCLatencyCompletedIDs.Load()
+	observedGCLatencyDropped := db.vlogGenerationObservedGCLatencyDroppedIDs.Load()
+	observedGCLatencyTotalMS := db.vlogGenerationObservedGCLatencyTotalMS.Load()
+	observedGCLatencyAvgMS := 0.0
+	if totalObservedGCLatencyIDs := observedGCLatencyCompleted + observedGCLatencyDropped; totalObservedGCLatencyIDs > 0 {
+		observedGCLatencyAvgMS = float64(observedGCLatencyTotalMS) / float64(totalObservedGCLatencyIDs)
+	}
 	rewriteAgeBlockedUntilNS := db.vlogGenerationRewriteAgeBlockedUntilNS.Load()
 	rewriteAgeBlockedRemainingMS := int64(0)
 	if rewriteAgeBlockedUntilNS > 0 {
@@ -20908,6 +21050,13 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_generation.observed_gc.taken_ids"] = fmt.Sprintf("%d", db.vlogGenerationObservedGCTakenIDs.Load())
 	stats["treedb.cache.vlog_generation.observed_gc.runs"] = fmt.Sprintf("%d", db.vlogGenerationObservedGCRuns.Load())
 	stats["treedb.cache.vlog_generation.observed_gc.retry_queued"] = fmt.Sprintf("%d", db.vlogGenerationObservedGCRetryQueued.Load())
+	stats["treedb.cache.vlog_generation.observed_gc.retry_dropped"] = fmt.Sprintf("%d", db.vlogGenerationObservedGCRetryDropped.Load())
+	stats["treedb.cache.vlog_generation.observed_gc.retry_max_attempts"] = fmt.Sprintf("%d", vlogGenerationObservedGCRetryMaxAttempts)
+	stats["treedb.cache.vlog_generation.observed_gc.latency.completed_ids"] = fmt.Sprintf("%d", observedGCLatencyCompleted)
+	stats["treedb.cache.vlog_generation.observed_gc.latency.dropped_ids"] = fmt.Sprintf("%d", observedGCLatencyDropped)
+	stats["treedb.cache.vlog_generation.observed_gc.latency.total_ms"] = fmt.Sprintf("%d", observedGCLatencyTotalMS)
+	stats["treedb.cache.vlog_generation.observed_gc.latency.max_ms"] = fmt.Sprintf("%d", db.vlogGenerationObservedGCLatencyMaxMS.Load())
+	stats["treedb.cache.vlog_generation.observed_gc.latency.avg_ms"] = fmt.Sprintf("%.3f", observedGCLatencyAvgMS)
 	stats["treedb.cache.vlog_generation.observed_gc.source_segments_total"] = fmt.Sprintf("%d", db.vlogGenerationObservedGCSourceSegmentsTotal.Load())
 	stats["treedb.cache.vlog_generation.observed_gc.source_segments_eligible_total"] = fmt.Sprintf("%d", db.vlogGenerationObservedGCSourceSegmentsEligibleTotal.Load())
 	stats["treedb.cache.vlog_generation.observed_gc.source_segments_deleted_total"] = fmt.Sprintf("%d", db.vlogGenerationObservedGCSourceSegmentsDeletedTotal.Load())

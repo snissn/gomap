@@ -297,6 +297,12 @@ def build_summary(stats: dict[str, Any]) -> dict[str, Any]:
         "observed_gc_taken_ids": metric_int(stats, "treedb.cache.vlog_generation.observed_gc.taken_ids"),
         "observed_gc_runs": metric_int(stats, "treedb.cache.vlog_generation.observed_gc.runs"),
         "observed_gc_retry_queued": metric_int(stats, "treedb.cache.vlog_generation.observed_gc.retry_queued"),
+        "observed_gc_retry_dropped": metric_int(stats, "treedb.cache.vlog_generation.observed_gc.retry_dropped"),
+        "observed_gc_retry_max_attempts": metric_int(stats, "treedb.cache.vlog_generation.observed_gc.retry_max_attempts"),
+        "observed_gc_latency_completed_ids": metric_int(stats, "treedb.cache.vlog_generation.observed_gc.latency.completed_ids"),
+        "observed_gc_latency_dropped_ids": metric_int(stats, "treedb.cache.vlog_generation.observed_gc.latency.dropped_ids"),
+        "observed_gc_latency_total_ms": metric_int(stats, "treedb.cache.vlog_generation.observed_gc.latency.total_ms"),
+        "observed_gc_latency_max_ms": metric_int(stats, "treedb.cache.vlog_generation.observed_gc.latency.max_ms"),
         "observed_gc_source_segments_total": metric_int(stats, "treedb.cache.vlog_generation.observed_gc.source_segments_total"),
         "observed_gc_source_segments_eligible_total": metric_int(stats, "treedb.cache.vlog_generation.observed_gc.source_segments_eligible_total"),
         "observed_gc_source_segments_deleted_total": metric_int(stats, "treedb.cache.vlog_generation.observed_gc.source_segments_deleted_total"),
@@ -375,6 +381,12 @@ def build_summary(stats: dict[str, Any]) -> dict[str, Any]:
     )
 
     m["observed_gc_drain_pct"] = pct(m["observed_gc_taken_ids"], m["observed_gc_queued_ids"])
+    m["observed_gc_latency_finalized_ids"] = m["observed_gc_latency_completed_ids"] + m["observed_gc_latency_dropped_ids"]
+    m["observed_gc_latency_avg_ms"] = (
+        (float(m["observed_gc_latency_total_ms"]) / float(m["observed_gc_latency_finalized_ids"]))
+        if m["observed_gc_latency_finalized_ids"] > 0
+        else 0.0
+    )
     m["observed_gc_source_segments_eligible_pct"] = pct(
         m["observed_gc_source_segments_eligible_total"],
         m["observed_gc_source_segments_total"],
@@ -604,6 +616,16 @@ def print_report(summary: dict[str, Any], source_file: Path, run_home: str, inst
         f"(drain={summary['observed_gc_drain_pct']:.1f}%, retries={summary['observed_gc_retry_queued']}, runs={summary['observed_gc_runs']})"
     )
     print(
+        "  retry budget/latency: "
+        f"max_attempts={summary['observed_gc_retry_max_attempts']} "
+        f"retry_dropped={summary['observed_gc_retry_dropped']} "
+        f"finalized_ids={summary['observed_gc_latency_finalized_ids']} "
+        f"(completed={summary['observed_gc_latency_completed_ids']}, dropped={summary['observed_gc_latency_dropped_ids']}) "
+        f"latency total_ms={summary['observed_gc_latency_total_ms']} "
+        f"avg_ms={summary['observed_gc_latency_avg_ms']:.3f} "
+        f"max_ms={summary['observed_gc_latency_max_ms']}"
+    )
+    print(
         "  observed-source totals: "
         f"segments total={summary['observed_gc_source_segments_total']} "
         f"eligible={summary['observed_gc_source_segments_eligible_total']} "
@@ -659,6 +681,8 @@ def print_report(summary: dict[str, Any], source_file: Path, run_home: str, inst
         notes.append("rewrite copied stale bytes but immediate reclaim is zero; inspect GC eligibility/protection and post-run rewrite window")
     if summary["observed_gc_pending_ids"] > 0:
         notes.append("observed-source GC backlog still pending; may need longer run window or higher checkpoint-kick pressure")
+    if summary["observed_gc_retry_dropped"] > 0:
+        notes.append("observed-source GC retries hit max-attempt budget for some IDs; inspect retained-prune throughput and checkpoint-kick cadence")
     if summary["maintenance_collision_rate_pct"] > 20.0:
         notes.append("maintenance collision rate is high; lane contention may be throttling rewrite/GC progress")
     if summary["rewrite_segment_realization_pct"] < 60.0 and summary["rewrite_plan_selected_segments_total"] > 0:

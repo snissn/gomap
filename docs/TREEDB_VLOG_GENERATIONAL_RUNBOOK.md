@@ -56,6 +56,47 @@ The report highlights:
 - zombie inventory (pinned vs unpinned bytes)
 - GC eligibility/protection signals
 
+## Interleaved A/B Harness
+For sync+rewrite tradeoff validation, use the interleaved harness:
+
+```bash
+cat >/tmp/cel_control.env <<'EOF'
+LOCAL_GOMAP_DIR=/path/to/control/gomap
+TREEDB_OPEN_PROFILE=fast
+EOF
+
+cat >/tmp/cel_candidate.env <<'EOF'
+LOCAL_GOMAP_DIR=/path/to/candidate/gomap
+TREEDB_OPEN_PROFILE=fast
+EOF
+
+CONTROL_ENV_FILE=/tmp/cel_control.env \
+CANDIDATE_ENV_FILE=/tmp/cel_candidate.env \
+MAX_PAIRS=10 \
+MIN_PAIRS=4 \
+CLEAR_WIN_PAIRS=3 \
+CLEAR_LOSS_PAIRS=3 \
+./scripts/run_celestia_ab.sh
+```
+
+Default pair metric focus:
+- `T_sync`: sync duration (seconds)
+- `S_sync_app`: app dir bytes at sync end
+- `S_sync_wal`: `application.db/maindb/wal` bytes at sync end
+- `T_rw`: offline `vlog-rewrite` wall time
+- `S_post_wal`: WAL bytes after offline rewrite
+- `T_total = T_sync + T_rw`
+- `max_rss_kb` (memory guardrail)
+
+Outputs:
+- `artifacts/celestia_ab/<ts>/runs.csv`
+- `artifacts/celestia_ab/<ts>/pairs.csv`
+- `artifacts/celestia_ab/<ts>/summary.md`
+- per-run JSON under `artifacts/celestia_ab/<ts>/runs/*/run.json`
+
+The harness alternates run order per pair (`control->candidate`, then
+`candidate->control`) and can stop early on clear win/loss signals.
+
 ## Experimental Knob
 - `TREEDB_ENABLE_VLOG_GENERATION_PRECHECKPOINT_REWRITE=1`
   - WAL-off only.

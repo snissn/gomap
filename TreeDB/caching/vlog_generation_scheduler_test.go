@@ -1298,6 +1298,139 @@ func TestVlogGenerationMaintenance_ObservedSourceGCBypassQuietIgnoresForegroundR
 	}
 }
 
+func TestVlogGenerationMaintenance_ObservedSourceGCCompletionClearsRetryState(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+	t.Setenv(envDisableVlogGenerationRewrite, "1")
+
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	recorder := &rewriteBudgetRecordingBackend{
+		DB: backend,
+		gcResponse: backenddb.ValueLogGCStats{
+			ObservedSourceSegments:         1,
+			ObservedSourceSegmentsEligible: 1,
+			ObservedSourceSegmentsDeleted:  1,
+			ObservedSourceBytes:            256,
+			ObservedSourceBytesEligible:    256,
+			ObservedSourceBytesDeleted:     256,
+		},
+	}
+
+	db, cleanup := openRewriteQueueTestDB(t, dir, recorder)
+	defer cleanup()
+	skipRetainedPrune(db)
+
+	db.queueVlogGenerationObservedSourceGCList([]uint32{41})
+	db.vlogGenerationLastGCUnixNano.Store(time.Now().Add(-time.Minute).UnixNano())
+	forceVlogMaintenanceIdle(db)
+
+	db.maybeRunVlogGenerationMaintenanceWithOptions(true, vlogGenerationMaintenanceOptions{
+		bypassQuiet:           true,
+		skipRetainedPruneWait: true,
+		skipCheckpoint:        true,
+		rewriteDebtDrain:      true,
+	})
+
+	if got := recorder.recordedGCObservedSourceCalls(); got != 1 {
+		t.Fatalf("observed-source gc calls=%d want 1", got)
+	}
+	if got := db.vlogGenerationObservedGCRetryQueued.Load(); got != 0 {
+		t.Fatalf("observed-source gc retry queued=%d want 0", got)
+	}
+	if got := db.vlogGenerationObservedGCRetryDropped.Load(); got != 0 {
+		t.Fatalf("observed-source gc retry dropped=%d want 0", got)
+	}
+	if got := db.vlogGenerationObservedGCLatencyCompletedIDs.Load(); got != 1 {
+		t.Fatalf("observed-source gc latency completed ids=%d want 1", got)
+	}
+	if got := db.vlogGenerationObservedGCLatencyDroppedIDs.Load(); got != 0 {
+		t.Fatalf("observed-source gc latency dropped ids=%d want 0", got)
+	}
+	if pending := len(db.takeVlogGenerationObservedSourceGCList()); pending != 0 {
+		t.Fatalf("observed-source gc pending ids=%d want 0", pending)
+	}
+	db.vlogGenerationObservedGCMu.Lock()
+	if _, exists := db.vlogGenerationObservedGCRetryAttempts[41]; exists {
+		db.vlogGenerationObservedGCMu.Unlock()
+		t.Fatalf("retry attempt state still present for observed id 41")
+	}
+	if _, exists := db.vlogGenerationObservedGCFirstQueuedUnixNano[41]; exists {
+		db.vlogGenerationObservedGCMu.Unlock()
+		t.Fatalf("first queued timestamp still present for observed id 41")
+	}
+	db.vlogGenerationObservedGCMu.Unlock()
+}
+
+func TestVlogGenerationMaintenance_ObservedSourceGCRetryBudgetDropsAfterMaxAttempts(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+	t.Setenv(envDisableVlogGenerationRewrite, "1")
+
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	recorder := &rewriteBudgetRecordingBackend{
+		DB: backend,
+		gcResponse: backenddb.ValueLogGCStats{
+			ObservedSourceSegments:                  1,
+			ObservedSourceSegmentsEligible:          0,
+			ObservedSourceSegmentsProtectedRetained: 1,
+			ObservedSourceBytes:                     128,
+			ObservedSourceBytesProtectedRetained:    128,
+		},
+	}
+
+	db, cleanup := openRewriteQueueTestDB(t, dir, recorder)
+	defer cleanup()
+	skipRetainedPrune(db)
+
+	db.queueVlogGenerationObservedSourceGCList([]uint32{73})
+	passes := int(vlogGenerationObservedGCRetryMaxAttempts) + 1
+	for i := 0; i < passes; i++ {
+		db.vlogGenerationLastGCUnixNano.Store(time.Now().Add(-time.Minute).UnixNano())
+		forceVlogMaintenanceIdle(db)
+		db.maybeRunVlogGenerationMaintenanceWithOptions(true, vlogGenerationMaintenanceOptions{
+			bypassQuiet:           true,
+			skipRetainedPruneWait: true,
+			skipCheckpoint:        true,
+			rewriteDebtDrain:      true,
+		})
+	}
+
+	if got := recorder.recordedGCObservedSourceCalls(); got != passes {
+		t.Fatalf("observed-source gc calls=%d want %d", got, passes)
+	}
+	if got := db.vlogGenerationObservedGCRetryQueued.Load(); got != uint64(vlogGenerationObservedGCRetryMaxAttempts) {
+		t.Fatalf("observed-source gc retry queued=%d want %d", got, vlogGenerationObservedGCRetryMaxAttempts)
+	}
+	if got := db.vlogGenerationObservedGCRetryDropped.Load(); got != 1 {
+		t.Fatalf("observed-source gc retry dropped=%d want 1", got)
+	}
+	if got := db.vlogGenerationObservedGCLatencyCompletedIDs.Load(); got != 0 {
+		t.Fatalf("observed-source gc latency completed ids=%d want 0", got)
+	}
+	if got := db.vlogGenerationObservedGCLatencyDroppedIDs.Load(); got != 1 {
+		t.Fatalf("observed-source gc latency dropped ids=%d want 1", got)
+	}
+	if pending := len(db.takeVlogGenerationObservedSourceGCList()); pending != 0 {
+		t.Fatalf("observed-source gc pending ids=%d want 0", pending)
+	}
+	db.vlogGenerationObservedGCMu.Lock()
+	if _, exists := db.vlogGenerationObservedGCRetryAttempts[73]; exists {
+		db.vlogGenerationObservedGCMu.Unlock()
+		t.Fatalf("retry attempt state still present for observed id 73 after drop")
+	}
+	if _, exists := db.vlogGenerationObservedGCFirstQueuedUnixNano[73]; exists {
+		db.vlogGenerationObservedGCMu.Unlock()
+		t.Fatalf("first queued timestamp still present for observed id 73 after drop")
+	}
+	db.vlogGenerationObservedGCMu.Unlock()
+}
+
 func TestVlogGenerationRewrite_FreshPlanExecIgnoresForegroundCancelUntilBoundedComplete(t *testing.T) {
 	prepareDirectSchedulerTest(t)
 
@@ -6268,6 +6401,11 @@ func TestVlogGenerationStats_ReportRewriteBacklogAndDurations(t *testing.T) {
 	db.vlogGenerationObservedGCTakenIDs.Store(9)
 	db.vlogGenerationObservedGCRuns.Store(3)
 	db.vlogGenerationObservedGCRetryQueued.Store(2)
+	db.vlogGenerationObservedGCRetryDropped.Store(1)
+	db.vlogGenerationObservedGCLatencyCompletedIDs.Store(6)
+	db.vlogGenerationObservedGCLatencyDroppedIDs.Store(2)
+	db.vlogGenerationObservedGCLatencyTotalMS.Store(640)
+	db.vlogGenerationObservedGCLatencyMaxMS.Store(210)
 	db.vlogGenerationObservedGCSourceSegmentsTotal.Store(11)
 	db.vlogGenerationObservedGCSourceSegmentsEligibleTotal.Store(5)
 	db.vlogGenerationObservedGCSourceSegmentsDeletedTotal.Store(3)
@@ -6564,6 +6702,27 @@ func TestVlogGenerationStats_ReportRewriteBacklogAndDurations(t *testing.T) {
 	}
 	if got := stats["treedb.cache.vlog_generation.observed_gc.retry_queued"]; got != "2" {
 		t.Fatalf("observed gc retry queued=%q want 2", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.observed_gc.retry_dropped"]; got != "1" {
+		t.Fatalf("observed gc retry dropped=%q want 1", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.observed_gc.retry_max_attempts"]; got != "3" {
+		t.Fatalf("observed gc retry max attempts=%q want 3", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.observed_gc.latency.completed_ids"]; got != "6" {
+		t.Fatalf("observed gc latency completed ids=%q want 6", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.observed_gc.latency.dropped_ids"]; got != "2" {
+		t.Fatalf("observed gc latency dropped ids=%q want 2", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.observed_gc.latency.total_ms"]; got != "640" {
+		t.Fatalf("observed gc latency total ms=%q want 640", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.observed_gc.latency.max_ms"]; got != "210" {
+		t.Fatalf("observed gc latency max ms=%q want 210", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.observed_gc.latency.avg_ms"]; got != "80.000" {
+		t.Fatalf("observed gc latency avg ms=%q want 80.000", got)
 	}
 	if got := stats["treedb.cache.vlog_generation.observed_gc.source_segments_total"]; got != "11" {
 		t.Fatalf("observed gc source segments total=%q want 11", got)
