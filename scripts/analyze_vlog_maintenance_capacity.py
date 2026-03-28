@@ -300,10 +300,17 @@ def build_summary(stats: dict[str, Any]) -> dict[str, Any]:
         "observed_gc_source_segments_total": metric_int(stats, "treedb.cache.vlog_generation.observed_gc.source_segments_total"),
         "observed_gc_source_segments_eligible_total": metric_int(stats, "treedb.cache.vlog_generation.observed_gc.source_segments_eligible_total"),
         "observed_gc_source_segments_deleted_total": metric_int(stats, "treedb.cache.vlog_generation.observed_gc.source_segments_deleted_total"),
+        "observed_gc_source_segments_protected_in_use_total": metric_int(stats, "treedb.cache.vlog_generation.observed_gc.source_segments_protected_in_use_total"),
+        "observed_gc_source_segments_protected_retained_total": metric_int(stats, "treedb.cache.vlog_generation.observed_gc.source_segments_protected_retained_total"),
+        "observed_gc_source_segments_protected_overlap_total": metric_int(stats, "treedb.cache.vlog_generation.observed_gc.source_segments_protected_overlap_total"),
+        "observed_gc_source_segments_protected_other_total": metric_int(stats, "treedb.cache.vlog_generation.observed_gc.source_segments_protected_other_total"),
         "observed_gc_source_bytes_total": metric_int(stats, "treedb.cache.vlog_generation.observed_gc.source_bytes_total"),
         "observed_gc_source_bytes_eligible_total": metric_int(stats, "treedb.cache.vlog_generation.observed_gc.source_bytes_eligible_total"),
         "observed_gc_source_bytes_deleted_total": metric_int(stats, "treedb.cache.vlog_generation.observed_gc.source_bytes_deleted_total"),
+        "observed_gc_source_bytes_protected_in_use_total": metric_int(stats, "treedb.cache.vlog_generation.observed_gc.source_bytes_protected_in_use_total"),
         "observed_gc_source_bytes_protected_retained_total": metric_int(stats, "treedb.cache.vlog_generation.observed_gc.source_bytes_protected_retained_total"),
+        "observed_gc_source_bytes_protected_overlap_total": metric_int(stats, "treedb.cache.vlog_generation.observed_gc.source_bytes_protected_overlap_total"),
+        "observed_gc_source_bytes_protected_other_total": metric_int(stats, "treedb.cache.vlog_generation.observed_gc.source_bytes_protected_other_total"),
         "checkpoint_kick_runs": metric_int(stats, "treedb.cache.vlog_generation.checkpoint_kick.runs"),
         "checkpoint_kick_gc_runs": metric_int(stats, "treedb.cache.vlog_generation.checkpoint_kick.gc_runs"),
         "checkpoint_kick_rewrite_runs": metric_int(stats, "treedb.cache.vlog_generation.checkpoint_kick.rewrite_runs"),
@@ -387,6 +394,38 @@ def build_summary(stats: dict[str, Any]) -> dict[str, Any]:
     m["observed_gc_source_bytes_deleted_of_eligible_pct"] = pct(
         m["observed_gc_source_bytes_deleted_total"],
         m["observed_gc_source_bytes_eligible_total"],
+    )
+    m["observed_gc_source_segments_protected_in_use_pct"] = pct(
+        m["observed_gc_source_segments_protected_in_use_total"],
+        m["observed_gc_source_segments_total"],
+    )
+    m["observed_gc_source_segments_protected_retained_pct"] = pct(
+        m["observed_gc_source_segments_protected_retained_total"],
+        m["observed_gc_source_segments_total"],
+    )
+    m["observed_gc_source_segments_protected_overlap_pct"] = pct(
+        m["observed_gc_source_segments_protected_overlap_total"],
+        m["observed_gc_source_segments_total"],
+    )
+    m["observed_gc_source_segments_protected_other_pct"] = pct(
+        m["observed_gc_source_segments_protected_other_total"],
+        m["observed_gc_source_segments_total"],
+    )
+    m["observed_gc_source_bytes_protected_in_use_pct"] = pct(
+        m["observed_gc_source_bytes_protected_in_use_total"],
+        m["observed_gc_source_bytes_total"],
+    )
+    m["observed_gc_source_bytes_protected_retained_pct"] = pct(
+        m["observed_gc_source_bytes_protected_retained_total"],
+        m["observed_gc_source_bytes_total"],
+    )
+    m["observed_gc_source_bytes_protected_overlap_pct"] = pct(
+        m["observed_gc_source_bytes_protected_overlap_total"],
+        m["observed_gc_source_bytes_total"],
+    )
+    m["observed_gc_source_bytes_protected_other_pct"] = pct(
+        m["observed_gc_source_bytes_protected_other_total"],
+        m["observed_gc_source_bytes_total"],
     )
     m["retained_prune_removed_candidate_segments_pct"] = pct(
         m["retained_prune_removed_segments"],
@@ -580,6 +619,25 @@ def print_report(summary: dict[str, Any], source_file: Path, run_home: str, inst
         f"(eligible_pct={summary['observed_gc_source_bytes_eligible_pct']:.1f}%, "
         f"deleted_pct={summary['observed_gc_source_bytes_deleted_pct']:.1f}%, "
         f"deleted_of_eligible={summary['observed_gc_source_bytes_deleted_of_eligible_pct']:.1f}%)"
+    )
+    print(
+        "  observed-source protection mix: "
+        f"segments in_use={summary['observed_gc_source_segments_protected_in_use_total']} "
+        f"retained={summary['observed_gc_source_segments_protected_retained_total']} "
+        f"overlap={summary['observed_gc_source_segments_protected_overlap_total']} "
+        f"other={summary['observed_gc_source_segments_protected_other_total']} "
+        f"(in_use={summary['observed_gc_source_segments_protected_in_use_pct']:.1f}%, "
+        f"retained={summary['observed_gc_source_segments_protected_retained_pct']:.1f}%, "
+        f"overlap={summary['observed_gc_source_segments_protected_overlap_pct']:.1f}%, "
+        f"other={summary['observed_gc_source_segments_protected_other_pct']:.1f}%) "
+        f"bytes in_use={human_bytes(summary['observed_gc_source_bytes_protected_in_use_total'])} "
+        f"retained={human_bytes(summary['observed_gc_source_bytes_protected_retained_total'])} "
+        f"overlap={human_bytes(summary['observed_gc_source_bytes_protected_overlap_total'])} "
+        f"other={human_bytes(summary['observed_gc_source_bytes_protected_other_total'])} "
+        f"(in_use={summary['observed_gc_source_bytes_protected_in_use_pct']:.1f}%, "
+        f"retained={summary['observed_gc_source_bytes_protected_retained_pct']:.1f}%, "
+        f"overlap={summary['observed_gc_source_bytes_protected_overlap_pct']:.1f}%, "
+        f"other={summary['observed_gc_source_bytes_protected_other_pct']:.1f}%)"
     )
     print(
         "  observed-source retained-prune totals: "

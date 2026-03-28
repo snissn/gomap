@@ -6271,10 +6271,17 @@ func TestVlogGenerationStats_ReportRewriteBacklogAndDurations(t *testing.T) {
 	db.vlogGenerationObservedGCSourceSegmentsTotal.Store(11)
 	db.vlogGenerationObservedGCSourceSegmentsEligibleTotal.Store(5)
 	db.vlogGenerationObservedGCSourceSegmentsDeletedTotal.Store(3)
+	db.vlogGenerationObservedGCSourceSegmentsProtectedInUseTotal.Store(1)
+	db.vlogGenerationObservedGCSourceSegmentsProtectedRetainedTotal.Store(2)
+	db.vlogGenerationObservedGCSourceSegmentsProtectedOverlapTotal.Store(3)
+	db.vlogGenerationObservedGCSourceSegmentsProtectedOtherTotal.Store(4)
 	db.vlogGenerationObservedGCSourceBytesTotal.Store(1100)
 	db.vlogGenerationObservedGCSourceBytesEligibleTotal.Store(500)
 	db.vlogGenerationObservedGCSourceBytesDeletedTotal.Store(300)
+	db.vlogGenerationObservedGCSourceBytesProtectedInUseTotal.Store(50)
 	db.vlogGenerationObservedGCSourceBytesProtectedRetainedTotal.Store(250)
+	db.vlogGenerationObservedGCSourceBytesProtectedOverlapTotal.Store(75)
+	db.vlogGenerationObservedGCSourceBytesProtectedOtherTotal.Store(25)
 
 	db.vlogGenerationRewriteQueueMu.Lock()
 	db.vlogGenerationRewriteQueueLoaded = true
@@ -6567,6 +6574,18 @@ func TestVlogGenerationStats_ReportRewriteBacklogAndDurations(t *testing.T) {
 	if got := stats["treedb.cache.vlog_generation.observed_gc.source_segments_deleted_total"]; got != "3" {
 		t.Fatalf("observed gc source segments deleted total=%q want 3", got)
 	}
+	if got := stats["treedb.cache.vlog_generation.observed_gc.source_segments_protected_in_use_total"]; got != "1" {
+		t.Fatalf("observed gc source segments protected in-use total=%q want 1", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.observed_gc.source_segments_protected_retained_total"]; got != "2" {
+		t.Fatalf("observed gc source segments protected retained total=%q want 2", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.observed_gc.source_segments_protected_overlap_total"]; got != "3" {
+		t.Fatalf("observed gc source segments protected overlap total=%q want 3", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.observed_gc.source_segments_protected_other_total"]; got != "4" {
+		t.Fatalf("observed gc source segments protected other total=%q want 4", got)
+	}
 	if got := stats["treedb.cache.vlog_generation.observed_gc.source_bytes_total"]; got != "1100" {
 		t.Fatalf("observed gc source bytes total=%q want 1100", got)
 	}
@@ -6576,7 +6595,16 @@ func TestVlogGenerationStats_ReportRewriteBacklogAndDurations(t *testing.T) {
 	if got := stats["treedb.cache.vlog_generation.observed_gc.source_bytes_deleted_total"]; got != "300" {
 		t.Fatalf("observed gc source bytes deleted total=%q want 300", got)
 	}
+	if got := stats["treedb.cache.vlog_generation.observed_gc.source_bytes_protected_in_use_total"]; got != "50" {
+		t.Fatalf("observed gc source bytes protected in-use total=%q want 50", got)
+	}
 	if got := stats["treedb.cache.vlog_generation.observed_gc.source_bytes_protected_retained_total"]; got != "250" {
 		t.Fatalf("observed gc source bytes protected retained total=%q want 250", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.observed_gc.source_bytes_protected_overlap_total"]; got != "75" {
+		t.Fatalf("observed gc source bytes protected overlap total=%q want 75", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.observed_gc.source_bytes_protected_other_total"]; got != "25" {
+		t.Fatalf("observed gc source bytes protected other total=%q want 25", got)
 	}
 }

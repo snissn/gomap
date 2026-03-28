@@ -5720,10 +5720,17 @@ type DB struct {
 	vlogGenerationObservedGCSourceSegmentsTotal                 atomic.Uint64
 	vlogGenerationObservedGCSourceSegmentsEligibleTotal         atomic.Uint64
 	vlogGenerationObservedGCSourceSegmentsDeletedTotal          atomic.Uint64
+	vlogGenerationObservedGCSourceSegmentsProtectedInUseTotal   atomic.Uint64
+	vlogGenerationObservedGCSourceSegmentsProtectedRetainedTotal atomic.Uint64
+	vlogGenerationObservedGCSourceSegmentsProtectedOverlapTotal atomic.Uint64
+	vlogGenerationObservedGCSourceSegmentsProtectedOtherTotal   atomic.Uint64
 	vlogGenerationObservedGCSourceBytesTotal                    atomic.Int64
 	vlogGenerationObservedGCSourceBytesEligibleTotal            atomic.Int64
 	vlogGenerationObservedGCSourceBytesDeletedTotal             atomic.Int64
+	vlogGenerationObservedGCSourceBytesProtectedInUseTotal      atomic.Int64
 	vlogGenerationObservedGCSourceBytesProtectedRetainedTotal   atomic.Int64
+	vlogGenerationObservedGCSourceBytesProtectedOverlapTotal    atomic.Int64
+	vlogGenerationObservedGCSourceBytesProtectedOtherTotal      atomic.Int64
 	retainedPruneMu                                             sync.Mutex
 	retainedPruneDone                                           chan struct{}
 	vlogGenerationRemapSuccesses                                atomic.Uint64
@@ -13190,10 +13197,17 @@ func (db *DB) observeVlogGenerationGCStats(stats backenddb.ValueLogGCStats) {
 	db.vlogGenerationObservedGCSourceSegmentsTotal.Add(uint64(stats.ObservedSourceSegments))
 	db.vlogGenerationObservedGCSourceSegmentsEligibleTotal.Add(uint64(stats.ObservedSourceSegmentsEligible))
 	db.vlogGenerationObservedGCSourceSegmentsDeletedTotal.Add(uint64(stats.ObservedSourceSegmentsDeleted))
+	db.vlogGenerationObservedGCSourceSegmentsProtectedInUseTotal.Add(uint64(stats.ObservedSourceSegmentsProtectedInUse))
+	db.vlogGenerationObservedGCSourceSegmentsProtectedRetainedTotal.Add(uint64(stats.ObservedSourceSegmentsProtectedRetained))
+	db.vlogGenerationObservedGCSourceSegmentsProtectedOverlapTotal.Add(uint64(stats.ObservedSourceSegmentsProtectedOverlap))
+	db.vlogGenerationObservedGCSourceSegmentsProtectedOtherTotal.Add(uint64(stats.ObservedSourceSegmentsProtectedOther))
 	db.vlogGenerationObservedGCSourceBytesTotal.Add(stats.ObservedSourceBytes)
 	db.vlogGenerationObservedGCSourceBytesEligibleTotal.Add(stats.ObservedSourceBytesEligible)
 	db.vlogGenerationObservedGCSourceBytesDeletedTotal.Add(stats.ObservedSourceBytesDeleted)
+	db.vlogGenerationObservedGCSourceBytesProtectedInUseTotal.Add(stats.ObservedSourceBytesProtectedInUse)
 	db.vlogGenerationObservedGCSourceBytesProtectedRetainedTotal.Add(stats.ObservedSourceBytesProtectedRetained)
+	db.vlogGenerationObservedGCSourceBytesProtectedOverlapTotal.Add(stats.ObservedSourceBytesProtectedOverlap)
+	db.vlogGenerationObservedGCSourceBytesProtectedOtherTotal.Add(stats.ObservedSourceBytesProtectedOther)
 }
 
 func (db *DB) observeVlogGenerationVacuumExecDuration(d time.Duration) {
@@ -20897,10 +20911,17 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_generation.observed_gc.source_segments_total"] = fmt.Sprintf("%d", db.vlogGenerationObservedGCSourceSegmentsTotal.Load())
 	stats["treedb.cache.vlog_generation.observed_gc.source_segments_eligible_total"] = fmt.Sprintf("%d", db.vlogGenerationObservedGCSourceSegmentsEligibleTotal.Load())
 	stats["treedb.cache.vlog_generation.observed_gc.source_segments_deleted_total"] = fmt.Sprintf("%d", db.vlogGenerationObservedGCSourceSegmentsDeletedTotal.Load())
+	stats["treedb.cache.vlog_generation.observed_gc.source_segments_protected_in_use_total"] = fmt.Sprintf("%d", db.vlogGenerationObservedGCSourceSegmentsProtectedInUseTotal.Load())
+	stats["treedb.cache.vlog_generation.observed_gc.source_segments_protected_retained_total"] = fmt.Sprintf("%d", db.vlogGenerationObservedGCSourceSegmentsProtectedRetainedTotal.Load())
+	stats["treedb.cache.vlog_generation.observed_gc.source_segments_protected_overlap_total"] = fmt.Sprintf("%d", db.vlogGenerationObservedGCSourceSegmentsProtectedOverlapTotal.Load())
+	stats["treedb.cache.vlog_generation.observed_gc.source_segments_protected_other_total"] = fmt.Sprintf("%d", db.vlogGenerationObservedGCSourceSegmentsProtectedOtherTotal.Load())
 	stats["treedb.cache.vlog_generation.observed_gc.source_bytes_total"] = fmt.Sprintf("%d", db.vlogGenerationObservedGCSourceBytesTotal.Load())
 	stats["treedb.cache.vlog_generation.observed_gc.source_bytes_eligible_total"] = fmt.Sprintf("%d", db.vlogGenerationObservedGCSourceBytesEligibleTotal.Load())
 	stats["treedb.cache.vlog_generation.observed_gc.source_bytes_deleted_total"] = fmt.Sprintf("%d", db.vlogGenerationObservedGCSourceBytesDeletedTotal.Load())
+	stats["treedb.cache.vlog_generation.observed_gc.source_bytes_protected_in_use_total"] = fmt.Sprintf("%d", db.vlogGenerationObservedGCSourceBytesProtectedInUseTotal.Load())
 	stats["treedb.cache.vlog_generation.observed_gc.source_bytes_protected_retained_total"] = fmt.Sprintf("%d", db.vlogGenerationObservedGCSourceBytesProtectedRetainedTotal.Load())
+	stats["treedb.cache.vlog_generation.observed_gc.source_bytes_protected_overlap_total"] = fmt.Sprintf("%d", db.vlogGenerationObservedGCSourceBytesProtectedOverlapTotal.Load())
+	stats["treedb.cache.vlog_generation.observed_gc.source_bytes_protected_other_total"] = fmt.Sprintf("%d", db.vlogGenerationObservedGCSourceBytesProtectedOtherTotal.Load())
 	stats["treedb.cache.vlog_generation.rewrite.exec.source_segments_total"] = fmt.Sprintf("%d", db.vlogGenerationRewriteExecSourceSegments.Load())
 	stats["treedb.cache.vlog_generation.rewrite.exec.source_segments_requested_total"] = fmt.Sprintf("%d", db.vlogGenerationRewriteSourceSegmentsRequestedTotal.Load())
 	stats["treedb.cache.vlog_generation.rewrite.exec.source_segments_still_referenced_total"] = fmt.Sprintf("%d", db.vlogGenerationRewriteSourceSegmentsStillReferencedTotal.Load())
