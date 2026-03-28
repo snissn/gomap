@@ -5442,7 +5442,13 @@ type DB struct {
 	vlogGenerationRewriteIneffectiveBytesIn        atomic.Uint64
 	vlogGenerationRewriteIneffectiveBytesOut       atomic.Uint64
 	vlogGenerationRewriteCanceledRuns              atomic.Uint64
+	vlogGenerationRewriteCanceledFreshPlanRuns     atomic.Uint64
+	vlogGenerationRewriteCanceledQueuedDebtRuns    atomic.Uint64
 	vlogGenerationRewriteCanceledLastNS            atomic.Int64
+	vlogGenerationRewriteDeadlineRuns              atomic.Uint64
+	vlogGenerationRewriteDeadlineFreshPlanRuns     atomic.Uint64
+	vlogGenerationRewriteDeadlineQueuedDebtRuns    atomic.Uint64
+	vlogGenerationRewriteDeadlineLastNS            atomic.Int64
 	vlogGenerationRewriteQueuePruneRuns            atomic.Uint64
 	vlogGenerationRewriteQueuePruneIDs             atomic.Uint64
 	vlogGenerationGCSegmentsDeleted                atomic.Uint64
@@ -12918,12 +12924,30 @@ func (db *DB) vlogGenerationRewritePlanBackoffActive(now time.Time) bool {
 	return now.Sub(time.Unix(0, lastCanceled)) < vlogGenerationRewritePlanCancelBackoff
 }
 
-func (db *DB) observeVlogGenerationRewriteCanceled() {
+func (db *DB) observeVlogGenerationRewriteCanceled(queuedDebt bool) {
 	if db == nil {
 		return
 	}
 	db.vlogGenerationRewriteCanceledRuns.Add(1)
+	if queuedDebt {
+		db.vlogGenerationRewriteCanceledQueuedDebtRuns.Add(1)
+	} else {
+		db.vlogGenerationRewriteCanceledFreshPlanRuns.Add(1)
+	}
 	db.vlogGenerationRewriteCanceledLastNS.Store(time.Now().UnixNano())
+}
+
+func (db *DB) observeVlogGenerationRewriteDeadline(queuedDebt bool) {
+	if db == nil {
+		return
+	}
+	db.vlogGenerationRewriteDeadlineRuns.Add(1)
+	if queuedDebt {
+		db.vlogGenerationRewriteDeadlineQueuedDebtRuns.Add(1)
+	} else {
+		db.vlogGenerationRewriteDeadlineFreshPlanRuns.Add(1)
+	}
+	db.vlogGenerationRewriteDeadlineLastNS.Store(time.Now().UnixNano())
 }
 
 func (db *DB) observeVlogGenerationRewriteQueuePrune(dropped int) {
@@ -14227,14 +14251,17 @@ planned:
 			db.observeVlogGenerationRewriteExecDuration(rewriteDur)
 			if err != nil {
 				db.debugVlogMaintf("rewrite_err reason=%s err=%v dur_ms=%.3f", vlogGenerationReasonString(reason), err, float64(rewriteDur.Microseconds())/1000)
+				queuedDebt := hadRewriteQueue && len(processedRewriteIDs) > 0
 				if errors.Is(err, context.Canceled) {
-					db.observeVlogGenerationRewriteCanceled()
+					db.observeVlogGenerationRewriteCanceled(queuedDebt)
 					if len(processedRewriteIDs) > 0 {
 						// A canceled rewrite that already selected a queued chunk should
 						// immediately queue a checkpoint-kick retry. The retry executes
 						// as resumable debt with bounded non-cancel semantics.
 						db.vlogGenerationCheckpointKickPending.Store(true)
 					}
+				} else if errors.Is(err, context.DeadlineExceeded) {
+					db.observeVlogGenerationRewriteDeadline(queuedDebt)
 				}
 				return fmt.Errorf("generational rewrite: %w", err)
 			}
@@ -20199,7 +20226,13 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_generation.rewrite.plan_penalty_filter.to_empty_runs"] = fmt.Sprintf("%d", db.vlogGenerationRewritePlanPenaltyFilterToEmpty.Load())
 	stats["treedb.cache.vlog_generation.rewrite.exec.source_segments_total"] = fmt.Sprintf("%d", db.vlogGenerationRewriteExecSourceSegments.Load())
 	stats["treedb.cache.vlog_generation.rewrite.canceled_runs"] = fmt.Sprintf("%d", db.vlogGenerationRewriteCanceledRuns.Load())
+	stats["treedb.cache.vlog_generation.rewrite.canceled_runs.fresh_plan"] = fmt.Sprintf("%d", db.vlogGenerationRewriteCanceledFreshPlanRuns.Load())
+	stats["treedb.cache.vlog_generation.rewrite.canceled_runs.queued_debt"] = fmt.Sprintf("%d", db.vlogGenerationRewriteCanceledQueuedDebtRuns.Load())
 	stats["treedb.cache.vlog_generation.rewrite.canceled_last_unix_nano"] = fmt.Sprintf("%d", db.vlogGenerationRewriteCanceledLastNS.Load())
+	stats["treedb.cache.vlog_generation.rewrite.deadline_runs"] = fmt.Sprintf("%d", db.vlogGenerationRewriteDeadlineRuns.Load())
+	stats["treedb.cache.vlog_generation.rewrite.deadline_runs.fresh_plan"] = fmt.Sprintf("%d", db.vlogGenerationRewriteDeadlineFreshPlanRuns.Load())
+	stats["treedb.cache.vlog_generation.rewrite.deadline_runs.queued_debt"] = fmt.Sprintf("%d", db.vlogGenerationRewriteDeadlineQueuedDebtRuns.Load())
+	stats["treedb.cache.vlog_generation.rewrite.deadline_last_unix_nano"] = fmt.Sprintf("%d", db.vlogGenerationRewriteDeadlineLastNS.Load())
 	stats["treedb.cache.vlog_generation.rewrite.queue_prune_runs"] = fmt.Sprintf("%d", db.vlogGenerationRewriteQueuePruneRuns.Load())
 	stats["treedb.cache.vlog_generation.rewrite.queue_prune_ids"] = fmt.Sprintf("%d", db.vlogGenerationRewriteQueuePruneIDs.Load())
 	stats["treedb.cache.vlog_generation.rewrite.ineffective_runs"] = fmt.Sprintf("%d", db.vlogGenerationRewriteIneffectiveRuns.Load())

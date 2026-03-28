@@ -355,6 +355,38 @@ func TestObserveVlogGenerationRewritePlanPenaltyFilterCounters(t *testing.T) {
 	}
 }
 
+func TestObserveVlogGenerationRewriteCanceledCountersByQueueState(t *testing.T) {
+	db := &DB{}
+	db.observeVlogGenerationRewriteCanceled(false)
+	db.observeVlogGenerationRewriteCanceled(true)
+
+	if got, want := db.vlogGenerationRewriteCanceledRuns.Load(), uint64(2); got != want {
+		t.Fatalf("rewrite canceled total=%d want=%d", got, want)
+	}
+	if got, want := db.vlogGenerationRewriteCanceledFreshPlanRuns.Load(), uint64(1); got != want {
+		t.Fatalf("rewrite canceled fresh=%d want=%d", got, want)
+	}
+	if got, want := db.vlogGenerationRewriteCanceledQueuedDebtRuns.Load(), uint64(1); got != want {
+		t.Fatalf("rewrite canceled queued=%d want=%d", got, want)
+	}
+}
+
+func TestObserveVlogGenerationRewriteDeadlineCountersByQueueState(t *testing.T) {
+	db := &DB{}
+	db.observeVlogGenerationRewriteDeadline(false)
+	db.observeVlogGenerationRewriteDeadline(true)
+
+	if got, want := db.vlogGenerationRewriteDeadlineRuns.Load(), uint64(2); got != want {
+		t.Fatalf("rewrite deadline total=%d want=%d", got, want)
+	}
+	if got, want := db.vlogGenerationRewriteDeadlineFreshPlanRuns.Load(), uint64(1); got != want {
+		t.Fatalf("rewrite deadline fresh=%d want=%d", got, want)
+	}
+	if got, want := db.vlogGenerationRewriteDeadlineQueuedDebtRuns.Load(), uint64(1); got != want {
+		t.Fatalf("rewrite deadline queued=%d want=%d", got, want)
+	}
+}
+
 func TestMaybeRunVlogGenerationMaintenanceWithOptions_TracksWalOnPeriodicSkip(t *testing.T) {
 	db := &DB{valueLogGenerationPolicy: uint8(backenddb.ValueLogGenerationHotWarmCold)}
 	db.maybeRunVlogGenerationMaintenanceWithOptions(true, vlogGenerationMaintenanceOptions{})
@@ -978,6 +1010,12 @@ func TestVlogGenerationRewrite_QueuedExecIgnoresForegroundCancelUntilBoundedComp
 	if got := stats["treedb.cache.vlog_generation.rewrite.canceled_runs"]; got != "0" {
 		t.Fatalf("rewrite canceled runs=%q want 0 for bounded queued rewrite", got)
 	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.canceled_runs.fresh_plan"]; got != "0" {
+		t.Fatalf("rewrite canceled fresh runs=%q want 0 for bounded queued rewrite", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.canceled_runs.queued_debt"]; got != "0" {
+		t.Fatalf("rewrite canceled queued runs=%q want 0 for bounded queued rewrite", got)
+	}
 }
 
 func TestVlogGenerationRewrite_CanceledFreshPlanQueuesPendingResume(t *testing.T) {
@@ -1085,6 +1123,12 @@ func TestVlogGenerationRewrite_CanceledFreshPlanQueuesPendingResume(t *testing.T
 	stats := db.Stats()
 	if got := stats["treedb.cache.vlog_generation.rewrite.canceled_runs"]; got != "1" {
 		t.Fatalf("rewrite canceled runs=%q want 1", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.canceled_runs.fresh_plan"]; got != "1" {
+		t.Fatalf("rewrite canceled fresh runs=%q want 1", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.canceled_runs.queued_debt"]; got != "0" {
+		t.Fatalf("rewrite canceled queued runs=%q want 0", got)
 	}
 }
 
