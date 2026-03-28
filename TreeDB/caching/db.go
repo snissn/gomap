@@ -1860,6 +1860,10 @@ const (
 	envDisableVlogGenerationVacuum         = "TREEDB_DISABLE_VLOG_GENERATION_VACUUM"
 	envDisableVlogGenerationLoop           = "TREEDB_DISABLE_VLOG_GENERATION_LOOP"
 	envDisableVlogGenerationCheckpointKick = "TREEDB_DISABLE_VLOG_GENERATION_CHECKPOINT_KICK"
+	// Experimental WAL-off override: allow rewrite planning/execution before the
+	// first explicit checkpoint. Disabled by default because it can add restore
+	// contention during early state-sync.
+	envEnableVlogGenerationPreCheckpointRewrite = "TREEDB_ENABLE_VLOG_GENERATION_PRECHECKPOINT_REWRITE"
 	// Diagnostic toggle for WAL-off checkpoint-time sparse-index vacuum.
 	envDisableCheckpointAutoVacuum         = "TREEDB_DISABLE_CHECKPOINT_AUTO_VACUUM"
 	minMemtablePrealloc                    = 64 * 1024
@@ -6039,6 +6043,11 @@ const (
 	// During checkpoint-kick debt drain, allow a bounded multi-segment rewrite
 	// selection so debt can converge faster than one-segment-per-pass.
 	vlogGenerationRewriteDebtDrainMaxSegments = 8
+	// Freshly planned rewrites normally execute one segment to limit immediate
+	// write amplification. In explicit debt-drain mode, allow a small burst once
+	// the queue is materially large so convergence does not stall.
+	vlogGenerationRewriteFreshPlanDebtDrainMinSegments = 4
+	vlogGenerationRewriteFreshPlanDebtDrainMaxSegments = 4
 )
 
 func (db *DB) flushBackendEntriesCap(totalOps int, sync bool) int {
@@ -12964,6 +12973,23 @@ func (db *DB) vlogGenerationRewriteMaxSegmentsForRun(queueLen int, budgetTokens 
 	return maxSegments
 }
 
+func (db *DB) vlogGenerationRewriteMaxSegmentsForFreshPlan(queueLen int, budgetTokens int64, opts vlogGenerationMaintenanceOptions) int {
+	if db == nil || queueLen <= 1 || !opts.rewriteDebtDrain {
+		return vlogGenerationRewriteResumeMaxSegments
+	}
+	if queueLen < vlogGenerationRewriteFreshPlanDebtDrainMinSegments {
+		return vlogGenerationRewriteResumeMaxSegments
+	}
+	maxSegments := db.vlogGenerationRewriteMaxSegmentsForRun(queueLen, budgetTokens, opts)
+	if maxSegments > vlogGenerationRewriteFreshPlanDebtDrainMaxSegments {
+		maxSegments = vlogGenerationRewriteFreshPlanDebtDrainMaxSegments
+	}
+	if maxSegments < 1 {
+		maxSegments = 1
+	}
+	return maxSegments
+}
+
 const maxPositiveInt64 = int64(^uint64(0) >> 1)
 
 func addClampInt64(cur, add, limit int64) int64 {
@@ -14021,7 +14047,8 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 	// caused real restore stalls. Keep WAL-on profiles eligible for maintenance
 	// before the first checkpoint; starving that path causes the main value-log
 	// lane to grow unchecked during restore.
-	if db.disableJournal && db.checkpointRuns.Load() == 0 && !runGC && len(rewriteQueue) == 0 && !opts.skipCheckpoint {
+	allowPreCheckpointRewrite := envBool(envEnableVlogGenerationPreCheckpointRewrite)
+	if db.disableJournal && db.checkpointRuns.Load() == 0 && !runGC && len(rewriteQueue) == 0 && !opts.skipCheckpoint && !allowPreCheckpointRewrite {
 		db.vlogGenerationMaintenanceSkipPreCheckpoint.Add(1)
 		return
 	}
@@ -14510,12 +14537,12 @@ planned:
 				// Do not debt-drain freshly planned work in the same pass. The only
 				// exception is a confirmed staged rewrite-resume pass, which should
 				// be allowed to consume debt in bounded multi-segment chunks.
-				allowPlanDebtDrain := reason == vlogGenerationReasonRewriteResume && opts.rewriteDebtDrain
-				if allowPlanDebtDrain {
-					rewriteMaxSegments = db.vlogGenerationRewriteMaxSegmentsForRun(len(rewriteQueue), budgetTokens, opts)
-				} else {
-					rewriteMaxSegments = vlogGenerationRewriteResumeMaxSegments
-				}
+					allowPlanDebtDrain := reason == vlogGenerationReasonRewriteResume && opts.rewriteDebtDrain
+					if allowPlanDebtDrain {
+						rewriteMaxSegments = db.vlogGenerationRewriteMaxSegmentsForRun(len(rewriteQueue), budgetTokens, opts)
+					} else {
+						rewriteMaxSegments = db.vlogGenerationRewriteMaxSegmentsForFreshPlan(len(rewriteQueue), budgetTokens, opts)
+					}
 				// If the token bucket is enabled and empty, persist the plan/ledger but
 				// skip running the rewrite until we have budget to spend.
 				if db.vlogGenerationRewriteBudgetEnabled() && budgetTokens <= 0 {

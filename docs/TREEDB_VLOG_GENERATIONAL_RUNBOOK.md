@@ -56,6 +56,13 @@ The report highlights:
 - zombie inventory (pinned vs unpinned bytes)
 - GC eligibility/protection signals
 
+## Experimental Knob
+- `TREEDB_ENABLE_VLOG_GENERATION_PRECHECKPOINT_REWRITE=1`
+  - WAL-off only.
+  - Allows rewrite planning/execution before the first explicit checkpoint.
+  - Default is disabled to avoid adding early restore contention.
+  - Use for controlled `run_celestia` experiments when `maintenance.skip.before_first_checkpoint` dominates and live rewrite never starts.
+
 ## Bench Commands
 ### Churn sanity (TreeDB)
 ```bash

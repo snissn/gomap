@@ -730,6 +730,51 @@ func TestVlogGenerationRewriteMaxSegmentsForRun_ClampsDebtDrainQueue(t *testing.
 	}
 }
 
+func TestVlogGenerationRewriteMaxSegmentsForFreshPlan_BelowQueueThreshold(t *testing.T) {
+	db := &DB{
+		valueLogRewriteBudgetBytes:   1024,
+		valueLogGenerationWarmTarget: 256,
+	}
+	got := db.vlogGenerationRewriteMaxSegmentsForFreshPlan(
+		vlogGenerationRewriteFreshPlanDebtDrainMinSegments-1,
+		1<<20,
+		vlogGenerationMaintenanceOptions{rewriteDebtDrain: true, debugSource: "rewrite_age_blocked"},
+	)
+	if got != vlogGenerationRewriteResumeMaxSegments {
+		t.Fatalf("fresh-plan queue<threshold got=%d want=%d", got, vlogGenerationRewriteResumeMaxSegments)
+	}
+}
+
+func TestVlogGenerationRewriteMaxSegmentsForFreshPlan_ClampsToFreshCap(t *testing.T) {
+	db := &DB{
+		valueLogRewriteBudgetBytes:   1 << 20,
+		valueLogGenerationWarmTarget: 64,
+	}
+	got := db.vlogGenerationRewriteMaxSegmentsForFreshPlan(
+		vlogGenerationRewriteFreshPlanDebtDrainMinSegments+8,
+		1<<20,
+		vlogGenerationMaintenanceOptions{rewriteDebtDrain: true, debugSource: "rewrite_age_blocked"},
+	)
+	if got != vlogGenerationRewriteFreshPlanDebtDrainMaxSegments {
+		t.Fatalf("fresh-plan clamp got=%d want=%d", got, vlogGenerationRewriteFreshPlanDebtDrainMaxSegments)
+	}
+}
+
+func TestVlogGenerationRewriteMaxSegmentsForFreshPlan_AllowsStaleRatioDebtDrain(t *testing.T) {
+	db := &DB{
+		valueLogRewriteBudgetBytes:   1 << 20,
+		valueLogGenerationWarmTarget: 64,
+	}
+	got := db.vlogGenerationRewriteMaxSegmentsForFreshPlan(
+		vlogGenerationRewriteFreshPlanDebtDrainMinSegments+8,
+		1<<20,
+		vlogGenerationMaintenanceOptions{rewriteDebtDrain: true, debugSource: "rewrite_age_blocked"},
+	)
+	if got != vlogGenerationRewriteFreshPlanDebtDrainMaxSegments {
+		t.Fatalf("fresh-plan stale-ratio got=%d want=%d", got, vlogGenerationRewriteFreshPlanDebtDrainMaxSegments)
+	}
+}
+
 type rewriteBudgetRecordingBackend struct {
 	*backenddb.DB
 
@@ -4454,6 +4499,133 @@ func TestVlogGenerationMaintenance_PeriodicGCSkipsInWALOnMode(t *testing.T) {
 	}
 	if got := db.checkpointRuns.Load(); got != 0 {
 		t.Fatalf("checkpoint runs=%d want 0 for WAL-on periodic GC skip", got)
+	}
+}
+
+func TestVlogGenerationMaintenance_WALOffPreCheckpointSkipsRewriteByDefault(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	recorder := &rewriteBudgetRecordingBackend{
+		DB: backend,
+		planResponse: backenddb.ValueLogRewritePlan{
+			SourceFileIDs: []uint32{11},
+			SelectedSegments: []backenddb.ValueLogRewritePlanSegment{
+				{FileID: 11, BytesTotal: 64, BytesLive: 32, BytesStale: 32, StaleRatio: 0.5},
+			},
+			SegmentsSelected:   1,
+			SelectedBytesTotal: 64,
+			SelectedBytesLive:  32,
+			SelectedBytesStale: 32,
+		},
+		rewriteResponse: backenddb.ValueLogRewriteStats{BytesBefore: 64, BytesAfter: 32, RecordsCopied: 1},
+	}
+
+	db, err := Open(dir, recorder, Options{
+		AllowUnsafe:                      true,
+		DisableWAL:                       true,
+		JournalLanes:                     1,
+		ValueLogGenerationPolicy:         uint8(backenddb.ValueLogGenerationHotWarmCold),
+		ValueLogRewriteTriggerTotalBytes: 1,
+		ValueLogRewriteBudgetBytesPerSec: 1024,
+		ForceValueLogPointers:            true,
+	})
+	if err != nil {
+		t.Fatalf("open cachingdb: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	skipRetainedPrune(db)
+
+	value := make([]byte, 2048)
+	b := db.NewBatch()
+	if err := b.Set([]byte("k"), value); err != nil {
+		_ = b.Close()
+		t.Fatalf("set: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		_ = b.Close()
+		t.Fatalf("write: %v", err)
+	}
+	_ = b.Close()
+	forceVlogMaintenanceIdle(db)
+	db.vlogGenerationRewriteBudgetTokensBytes.Store(1024)
+
+	db.maybeRunVlogGenerationMaintenance(false)
+
+	if _, calls := recorder.recordedRewrite(); calls != 0 {
+		t.Fatalf("rewrite calls=%d want 0 before first checkpoint", calls)
+	}
+	stats := db.Stats()
+	if got := stats["treedb.cache.vlog_generation.maintenance.skip.before_first_checkpoint"]; got != "1" {
+		t.Fatalf("pre-checkpoint skip=%q want 1", got)
+	}
+}
+
+func TestVlogGenerationMaintenance_WALOffPreCheckpointCanRunWithEnvOverride(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+	t.Setenv(envEnableVlogGenerationPreCheckpointRewrite, "1")
+
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	recorder := &rewriteBudgetRecordingBackend{
+		DB: backend,
+		planResponse: backenddb.ValueLogRewritePlan{
+			SourceFileIDs: []uint32{11},
+			SelectedSegments: []backenddb.ValueLogRewritePlanSegment{
+				{FileID: 11, BytesTotal: 64, BytesLive: 32, BytesStale: 32, StaleRatio: 0.5},
+			},
+			SegmentsSelected:   1,
+			SelectedBytesTotal: 64,
+			SelectedBytesLive:  32,
+			SelectedBytesStale: 32,
+		},
+		rewriteResponse: backenddb.ValueLogRewriteStats{BytesBefore: 64, BytesAfter: 32, RecordsCopied: 1},
+	}
+
+	db, err := Open(dir, recorder, Options{
+		AllowUnsafe:                      true,
+		DisableWAL:                       true,
+		JournalLanes:                     1,
+		ValueLogGenerationPolicy:         uint8(backenddb.ValueLogGenerationHotWarmCold),
+		ValueLogRewriteTriggerTotalBytes: 1,
+		ValueLogRewriteBudgetBytesPerSec: 1024,
+		ForceValueLogPointers:            true,
+	})
+	if err != nil {
+		t.Fatalf("open cachingdb: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	skipRetainedPrune(db)
+
+	value := make([]byte, 2048)
+	b := db.NewBatch()
+	if err := b.Set([]byte("k"), value); err != nil {
+		_ = b.Close()
+		t.Fatalf("set: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		_ = b.Close()
+		t.Fatalf("write: %v", err)
+	}
+	_ = b.Close()
+	forceVlogMaintenanceIdle(db)
+	db.vlogGenerationRewriteBudgetTokensBytes.Store(1024)
+
+	db.maybeRunVlogGenerationMaintenance(false)
+
+	if _, calls := recorder.recordedRewrite(); calls != 1 {
+		t.Fatalf("rewrite calls=%d want 1 with pre-checkpoint override", calls)
+	}
+	stats := db.Stats()
+	if got := stats["treedb.cache.vlog_generation.maintenance.skip.before_first_checkpoint"]; got != "0" {
+		t.Fatalf("pre-checkpoint skip=%q want 0 with override", got)
 	}
 }
 

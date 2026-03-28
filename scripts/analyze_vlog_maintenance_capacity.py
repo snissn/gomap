@@ -441,10 +441,12 @@ def print_report(summary: dict[str, Any], source_file: Path, run_home: str, inst
     print(
         "  skip pressure: "
         f"total={summary['maintenance_skip_total']} "
+        f"pre_checkpoint={skips['before_first_checkpoint']} "
         f"stage_gate={skips['stage_gate']} "
         f"stage_not_due={skips['stage_gate_not_due']} "
         f"age_blocked={skips['age_blocked_gate']} "
         f"quiet={skips['quiet_window']} "
+        f"priority={skips['priority_pending']} "
         f"checkpoint={skips['checkpoint_inflight']}"
     )
     print("")
