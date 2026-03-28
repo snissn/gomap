@@ -5598,3 +5598,124 @@ func TestVlogGenerationGC_SkipsDuringRecentForegroundWrites(t *testing.T) {
 		t.Fatalf("gc calls=%d/%d want 0/0 while foreground writes are hot", dryRunCalls, realCalls)
 	}
 }
+
+func TestVlogGenerationStats_ReportRewriteBacklogAndDurations(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	recorder := &rewriteBudgetRecordingBackend{DB: backend}
+
+	db, cleanup := openRewriteQueueTestDB(t, dir, recorder)
+	defer cleanup()
+
+	db.vlogGenerationMaintenanceAcquired.Store(2)
+	db.vlogGenerationMaintenancePassTotalNanos.Store(uint64((40 * time.Millisecond).Nanoseconds()))
+	db.vlogGenerationMaintenancePassMaxNanos.Store(uint64((30 * time.Millisecond).Nanoseconds()))
+	db.vlogGenerationRewritePlanRuns.Store(4)
+	db.vlogGenerationRewritePlanTotalNanos.Store(uint64((80 * time.Millisecond).Nanoseconds()))
+	db.vlogGenerationRewritePlanMaxNanos.Store(uint64((50 * time.Millisecond).Nanoseconds()))
+	db.vlogGenerationRewriteRuns.Store(3)
+	db.vlogGenerationRewriteExecTotalNanos.Store(uint64((150 * time.Millisecond).Nanoseconds()))
+	db.vlogGenerationRewriteExecMaxNanos.Store(uint64((70 * time.Millisecond).Nanoseconds()))
+	db.vlogGenerationGCRuns.Store(2)
+	db.vlogGenerationGCExecTotalNanos.Store(uint64((60 * time.Millisecond).Nanoseconds()))
+	db.vlogGenerationGCExecMaxNanos.Store(uint64((35 * time.Millisecond).Nanoseconds()))
+	db.vlogGenerationVacuumRuns.Store(2)
+	db.vlogGenerationVacuumExecTotalNanos.Store(uint64((44 * time.Millisecond).Nanoseconds()))
+	db.vlogGenerationVacuumExecMaxNanos.Store(uint64((25 * time.Millisecond).Nanoseconds()))
+	db.vlogGenerationRewriteBudgetTokensBytes.Store(512)
+	db.vlogGenerationRewriteBudgetConsumed.Store(1536)
+	db.vlogGenerationRewriteAgeBlockedUntilNS.Store(time.Now().Add(5 * time.Second).UnixNano())
+
+	db.vlogGenerationRewriteQueueMu.Lock()
+	db.vlogGenerationRewriteQueueLoaded = true
+	db.vlogGenerationRewriteQueue = []uint32{11, 12}
+	db.vlogGenerationRewriteLedger = []backenddb.ValueLogRewritePlanSegment{
+		{FileID: 11, BytesTotal: 1000, BytesLive: 700, BytesStale: 300},
+		{FileID: 12, BytesTotal: 500, BytesLive: 500, BytesStale: 0},
+	}
+	db.vlogGenerationRewritePenalties = map[uint32]valueLogGenerationRewritePenalty{
+		11: {Attempts: 1, CooldownUntilUnixNano: time.Now().Add(time.Minute).UnixNano()},
+	}
+	db.vlogGenerationRewriteStagePending = true
+	db.vlogGenerationRewriteStageObservedUnixNano = 1234
+	db.vlogGenerationRewriteQueueMu.Unlock()
+
+	stats := db.Stats()
+	if got := stats["treedb.cache.vlog_generation.maintenance.pass.total_ms"]; got != "40.000" {
+		t.Fatalf("maintenance pass total ms=%q want 40.000", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.maintenance.pass.max_ms"]; got != "30.000" {
+		t.Fatalf("maintenance pass max ms=%q want 30.000", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.maintenance.pass.avg_ms"]; got != "20.000" {
+		t.Fatalf("maintenance pass avg ms=%q want 20.000", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.plan.total_ms"]; got != "80.000" {
+		t.Fatalf("rewrite plan total ms=%q want 80.000", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.plan.avg_ms"]; got != "20.000" {
+		t.Fatalf("rewrite plan avg ms=%q want 20.000", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.exec.total_ms"]; got != "150.000" {
+		t.Fatalf("rewrite exec total ms=%q want 150.000", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.exec.avg_ms"]; got != "50.000" {
+		t.Fatalf("rewrite exec avg ms=%q want 50.000", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.gc.exec.total_ms"]; got != "60.000" {
+		t.Fatalf("gc exec total ms=%q want 60.000", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.gc.exec.avg_ms"]; got != "30.000" {
+		t.Fatalf("gc exec avg ms=%q want 30.000", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.vacuum.exec.total_ms"]; got != "44.000" {
+		t.Fatalf("vacuum exec total ms=%q want 44.000", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.vacuum.exec.avg_ms"]; got != "22.000" {
+		t.Fatalf("vacuum exec avg ms=%q want 22.000", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.ledger_segments"]; got != "2" {
+		t.Fatalf("rewrite ledger segments=%q want 2", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.ledger_bytes_total"]; got != "1500" {
+		t.Fatalf("rewrite ledger bytes total=%q want 1500", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.ledger_bytes_live"]; got != "1200" {
+		t.Fatalf("rewrite ledger bytes live=%q want 1200", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.ledger_bytes_stale"]; got != "300" {
+		t.Fatalf("rewrite ledger bytes stale=%q want 300", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.ledger_stale_ratio_ppm"]; got != "200000" {
+		t.Fatalf("rewrite ledger stale ratio ppm=%q want 200000", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.stage_pending"]; got != "true" {
+		t.Fatalf("rewrite stage pending=%q want true", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.stage_observed_unix_nano"]; got != "1234" {
+		t.Fatalf("rewrite stage observed=%q want 1234", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.penalties_active"]; got != "1" {
+		t.Fatalf("rewrite penalties active=%q want 1", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.age_blocked_remaining_ms"]; got == "0" {
+		t.Fatalf("rewrite age blocked remaining ms=%q want >0", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite_budget.tokens_bytes"]; got != "512" {
+		t.Fatalf("rewrite budget tokens bytes=%q want 512", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite_budget.consumed_bytes_total"]; got != "1536" {
+		t.Fatalf("rewrite budget consumed=%q want 1536", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite_budget.tokens_cap_bytes"]; got == "0" {
+		t.Fatalf("rewrite budget cap bytes=%q want non-zero", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite_budget.tokens_utilization_pct"]; got == "" {
+		t.Fatalf("rewrite budget utilization pct missing")
+	}
+}
