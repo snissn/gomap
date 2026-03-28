@@ -3158,24 +3158,24 @@ func (db *DB) currentDictIDForClass(ctx context.Context, class vlogDictClass) (u
 				return db.dictCurrentCachedByClass[classIdx].Load(), nil
 			}
 			dictID, err := byClass.GetCurrentForClass(ctx, vlogDictClassSuffix(clampedClass))
-				if err != nil {
-					// Fall back to cached value on transient errors (best-effort).
-					return db.dictCurrentCachedByClass[classIdx].Load(), nil
+			if err != nil {
+				// Fall back to cached value on transient errors (best-effort).
+				return db.dictCurrentCachedByClass[classIdx].Load(), nil
+			}
+			if dictID == 0 {
+				// Class marker can legitimately be unset; refresh legacy global current.
+				globalDictID, globalErr := db.dictStore.GetCurrent(ctx)
+				if globalErr != nil {
+					dictID = db.dictCurrentCached.Load()
+				} else {
+					dictID = globalDictID
+					db.dictCurrentCached.Store(globalDictID)
+					db.dictCurrentCachedByClass[vlogDictClassSingleValue].Store(globalDictID)
 				}
-				if dictID == 0 {
-					// Class marker can legitimately be unset; refresh legacy global current.
-					globalDictID, globalErr := db.dictStore.GetCurrent(ctx)
-					if globalErr != nil {
-						dictID = db.dictCurrentCached.Load()
-					} else {
-						dictID = globalDictID
-						db.dictCurrentCached.Store(globalDictID)
-						db.dictCurrentCachedByClass[vlogDictClassSingleValue].Store(globalDictID)
-					}
-				}
-				db.dictCurrentCachedByClass[classIdx].Store(dictID)
-				if clampedClass == vlogDictClassSingleValue {
-					db.dictCurrentCached.Store(dictID)
+			}
+			db.dictCurrentCachedByClass[classIdx].Store(dictID)
+			if clampedClass == vlogDictClassSingleValue {
+				db.dictCurrentCached.Store(dictID)
 			}
 			return dictID, nil
 		}
