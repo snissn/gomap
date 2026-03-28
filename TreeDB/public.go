@@ -805,7 +805,7 @@ func applyEnvMaintenanceOverrides(opts *Options) {
 	}
 	if v, ok := envString(envVlogDictClassMode); ok {
 		switch strings.ToLower(strings.TrimSpace(v)) {
-		case "single", "":
+		case "single":
 			opts.ValueLog.DictClassMode = ValueLogDictClassSingle
 		case "split_outer_leaf", "split-outer-leaf", "split", "outer_leaf_split":
 			opts.ValueLog.DictClassMode = ValueLogDictClassSplitOuterLeaf

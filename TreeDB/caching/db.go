@@ -5042,18 +5042,13 @@ type DB struct {
 	valueLogDictLastPublishUnixNano          atomic.Int64
 	valueLogDictLastKUpdateUnixNano          atomic.Int64
 	valueLogDictCurrentK                     atomic.Uint32
-	valueLogDictClassFrames                  struct {
-		total     [vlogDictClassCount]atomic.Uint64
-		attempted [vlogDictClassCount]atomic.Uint64
-		kept      [vlogDictClassCount]atomic.Uint64
-	}
-	valueLogDictLastAppliedDictIDByClass [vlogDictClassCount]atomic.Uint64
-	valueLogDictCurrentKByClass          [vlogDictClassCount]atomic.Uint32
-	valueLogDictKMu                      sync.RWMutex
-	valueLogDictKCache                   map[uint64]int
-	valueLogDictBytesMu                  sync.Mutex
-	valueLogDictBytesID                  uint64
-	valueLogDictBytes                    []byte
+	valueLogDictLastAppliedDictIDByClass     [vlogDictClassCount]atomic.Uint64
+	valueLogDictCurrentKByClass              [vlogDictClassCount]atomic.Uint32
+	valueLogDictKMu                          sync.RWMutex
+	valueLogDictKCache                       map[uint64]int
+	valueLogDictBytesMu                      sync.Mutex
+	valueLogDictBytesID                      uint64
+	valueLogDictBytes                        []byte
 
 	// Value-log template compression (cached mode).
 	valueLogTemplateEnabled    bool
@@ -20566,10 +20561,6 @@ type Batch struct {
 	firstKey       []byte
 	lastKey        []byte
 	batchRange     keyRange
-	dictID         uint64
-	dictIDValid    bool
-	dictBytes      []byte
-	dictBytesValid bool
 }
 
 func (db *DB) NewBatch() *Batch {
@@ -21018,10 +21009,6 @@ func (b *Batch) Reset() {
 	b.firstKey = nil
 	b.lastKey = nil
 	b.batchRange = keyRange{}
-	b.dictID = 0
-	b.dictIDValid = false
-	b.dictBytes = nil
-	b.dictBytesValid = false
 	b.maxEntries = 0
 	if b.ptrValueIdxs != nil {
 		b.ptrValueIdxs = b.ptrValueIdxs[:0]
@@ -21745,38 +21732,6 @@ func (b *Batch) WriteSync() error {
 	return b.write(true)
 }
 
-func (b *Batch) freezeDictID(ctx context.Context) error {
-	if b.dictIDValid {
-		return nil
-	}
-	if b.db == nil {
-		return nil
-	}
-	dictID, err := b.db.currentDictID(ctx)
-	if err != nil {
-		return err
-	}
-	b.dictID = dictID
-	b.dictIDValid = true
-	return nil
-}
-
-func (b *Batch) ensureDictBytes(ctx context.Context) ([]byte, error) {
-	if b.dictBytesValid {
-		return b.dictBytes, nil
-	}
-	if b.db == nil {
-		return nil, nil
-	}
-	dictBytes, err := b.db.dictBytes(ctx, b.dictID)
-	if err != nil {
-		return nil, err
-	}
-	b.dictBytes = dictBytes
-	b.dictBytesValid = true
-	return dictBytes, nil
-}
-
 func (b *Batch) write(sync bool) error {
 	if b.closed {
 		return ErrBatchClosed
@@ -22103,11 +22058,40 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 		}
 	}
 
-	resolveBatchDictID := func(records []valuelog.Record) uint64 {
-		if b.db == nil || b.db.dictStore == nil || len(records) == 0 {
+	finalizeBatchDictSplit := func(split *vlogPayloadRecordSplit) {
+		if split == nil {
+			return
+		}
+		switch {
+		case split.OuterLeafRecords > 0 && split.SingleValueRecords > 0:
+			split.Kind = vlogPayloadKindMixed
+		case split.OuterLeafRecords > 0:
+			split.Kind = vlogPayloadKindOuterLeaf
+		case split.SingleValueRecords > 0:
+			split.Kind = vlogPayloadKindSingleValue
+		default:
+			split.Kind = vlogPayloadKindMixed
+		}
+	}
+	accumulateBatchDictSplit := func(split *vlogPayloadRecordSplit, payload []byte) {
+		if split == nil {
+			return
+		}
+		rawBytes := len(payload)
+		if b.db.isOuterLeafValueLogPayload(payload) {
+			split.OuterLeafRawBytes += rawBytes
+			split.OuterLeafRecords++
+		} else {
+			split.SingleValueRawBytes += rawBytes
+			split.SingleValueRecords++
+		}
+	}
+	resolveBatchDictID := func(split vlogPayloadRecordSplit) uint64 {
+		if b.db == nil || b.db.dictStore == nil || split.totalRecords() == 0 {
 			return 0
 		}
-		class := b.db.valueLogDictClassForRecordSplit(b.db.classifyVlogPayloadSplitForRecords(records))
+		finalizeBatchDictSplit(&split)
+		class := b.db.valueLogDictClassForRecordSplit(split)
 		id, err := b.db.currentDictIDForClass(context.Background(), class)
 		if err != nil {
 			return 0
@@ -22118,12 +22102,13 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 	if !allDeletes && allowPointers && eligibleCount > 0 {
 		if multiLanePointers {
 			type laneValueLogBatch struct {
-				laneID      int
-				idxs        []int
-				records     []valuelog.Record
-				safeNoClear bool
-				ptrs        []page.ValuePtr
-				err         error
+				laneID       int
+				idxs         []int
+				records      []valuelog.Record
+				payloadSplit vlogPayloadRecordSplit
+				safeNoClear  bool
+				ptrs         []page.ValuePtr
+				err          error
 			}
 
 			laneCounts := make([]int, len(b.db.lanes))
@@ -22184,6 +22169,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 				}
 				lb.idxs = append(lb.idxs, idx)
 				lb.records = append(lb.records, valuelog.Record{RID: rid, Value: payload})
+				accumulateBatchDictSplit(&lb.payloadSplit, payload)
 			}
 
 			var wg sync.WaitGroup
@@ -22192,7 +22178,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 				wg.Add(1)
 				go func(batch *laneValueLogBatch) {
 					defer wg.Done()
-					dictID := resolveBatchDictID(batch.records)
+					dictID := resolveBatchDictID(batch.payloadSplit)
 					batch.ptrs, batch.err = b.db.appendValueLog(&b.db.lanes[batch.laneID], dictID, nil, batch.records, durability)
 				}(lb)
 			}
@@ -22262,9 +22248,11 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 			defer putValueLogRecordsNoClear(valueRecords)
 			defer putOuterLeafArena(outerArena)
 			startRID := b.db.nextRID.Add(uint64(len(valueRecords))) - uint64(len(valueRecords)) + 1
+			var valueSplit vlogPayloadRecordSplit
 			for i := range valueRecords {
 				rid := startRID + uint64(i)
 				valueRecords[i].RID = rid
+				accumulateBatchDictSplit(&valueSplit, valueRecords[i].Value)
 				if rids != nil {
 					group := groups[i]
 					if group.start < 0 || group.end < group.start || group.end > len(eligibleIdxs) {
@@ -22277,7 +22265,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 					}
 				}
 			}
-			dictID := resolveBatchDictID(valueRecords)
+			dictID := resolveBatchDictID(valueSplit)
 			ptrs, buildErr = b.db.appendValueLog(lane, dictID, nil, valueRecords, durability)
 			if buildErr != nil {
 				b.db.writeMu.RUnlock()

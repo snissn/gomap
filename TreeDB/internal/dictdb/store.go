@@ -236,9 +236,6 @@ func (s *Store) SetCurrentForClass(ctx context.Context, class string, dictID uin
 		return errStoreUnavailable
 	}
 	key := currentKeyForClass(class)
-	if len(key) == 0 {
-		return s.SetCurrent(ctx, dictID)
-	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if dictID == 0 {

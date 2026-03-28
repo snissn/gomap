@@ -2,6 +2,7 @@ package caching
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -10,6 +11,58 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/compression"
 	"github.com/snissn/gomap/TreeDB/internal/dictdb"
 )
+
+type legacyDictStoreForClassPublishTest struct {
+	nextID    uint64
+	currentID uint64
+	dicts     map[uint64][]byte
+}
+
+func (s *legacyDictStoreForClassPublishTest) GetCurrent(context.Context) (uint64, error) {
+	if s == nil {
+		return 0, errors.New("nil store")
+	}
+	return s.currentID, nil
+}
+
+func (s *legacyDictStoreForClassPublishTest) GetDictBytes(_ context.Context, dictID uint64) ([]byte, error) {
+	if s == nil {
+		return nil, errors.New("nil store")
+	}
+	if dictID == 0 {
+		return nil, nil
+	}
+	b, ok := s.dicts[dictID]
+	if !ok {
+		return nil, nil
+	}
+	out := make([]byte, len(b))
+	copy(out, b)
+	return out, nil
+}
+
+func (s *legacyDictStoreForClassPublishTest) PutDictBytes(_ context.Context, dict []byte) (uint64, error) {
+	if s == nil {
+		return 0, errors.New("nil store")
+	}
+	if s.dicts == nil {
+		s.dicts = make(map[uint64][]byte)
+	}
+	s.nextID++
+	id := s.nextID
+	out := make([]byte, len(dict))
+	copy(out, dict)
+	s.dicts[id] = out
+	return id, nil
+}
+
+func (s *legacyDictStoreForClassPublishTest) SetCurrent(_ context.Context, dictID uint64) error {
+	if s == nil {
+		return errors.New("nil store")
+	}
+	s.currentID = dictID
+	return nil
+}
 
 func TestApplyValueLogDictProfileUpdatesKForSameDict(t *testing.T) {
 	dir := t.TempDir()
@@ -62,5 +115,45 @@ func TestApplyValueLogDictProfileUpdatesKForSameDict(t *testing.T) {
 	}
 	if curK := int(db.valueLogDictCurrentK.Load()); curK != 16 {
 		t.Fatalf("expected currentK=16, got %d", curK)
+	}
+}
+
+func TestApplyValueLogDictProfileForClass_LegacyStoreFallbackRefreshesGlobalCache(t *testing.T) {
+	tr := &compression.Trainer{}
+	dictBytes := []byte("outer-leaf-dictionary")
+	dictHash := xxhash.Sum64(dictBytes)
+	tr.AcceptProfile(&compression.ActiveProfile{
+		DictHash:     dictHash,
+		DictBytes:    len(dictBytes),
+		Dict:         dictBytes,
+		K:            8,
+		PayloadRatio: 0.6,
+		TotalRatio:   0.6,
+		Timestamp:    time.Now(),
+	})
+
+	store := &legacyDictStoreForClassPublishTest{
+		currentID: 41,
+		dicts:     map[uint64][]byte{41: []byte("old-dict")},
+		nextID:    41,
+	}
+	db := &DB{
+		dictStore:             store,
+		valueLogDictClassMode: uint8(vlogDictClassModeSplitOuterLeaf),
+	}
+	db.valueLogDictTrainerByClass[vlogDictClassOuterLeaf] = tr
+	db.dictCurrentCached.Store(41)
+	db.dictCurrentOps.Store(77)
+
+	db.applyValueLogDictProfileForClass(vlogDictClassOuterLeaf)
+
+	if got := db.dictCurrentCached.Load(); got == 41 {
+		t.Fatalf("expected global dict cache to refresh on legacy fallback publish, got stale=%d", got)
+	}
+	if got := db.dictCurrentOps.Load(); got != 0 {
+		t.Fatalf("expected global dict cache ops to reset, got=%d", got)
+	}
+	if got := store.currentID; got != db.dictCurrentCached.Load() {
+		t.Fatalf("expected global cache to mirror store current dict id, store=%d cached=%d", got, db.dictCurrentCached.Load())
 	}
 }

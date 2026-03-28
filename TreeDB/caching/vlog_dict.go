@@ -1043,7 +1043,9 @@ func (db *DB) applyValueLogDictProfileForClass(class vlogDictClass) {
 		db.reportError(err)
 		return
 	}
-	if db.dictClassMode() == vlogDictClassModeSplitOuterLeaf {
+	classMode := db.dictClassMode()
+	publishedViaGlobalCurrent := false
+	if classMode == vlogDictClassModeSplitOuterLeaf {
 		if byClassWriter, ok := store.(dictStoreWriterByClass); ok {
 			if err := byClassWriter.SetCurrentForClass(ctx, vlogDictClassSuffix(class), dictID); err != nil {
 				db.reportError(err)
@@ -1052,10 +1054,14 @@ func (db *DB) applyValueLogDictProfileForClass(class vlogDictClass) {
 		} else if err := writer.SetCurrent(ctx, dictID); err != nil {
 			db.reportError(err)
 			return
+		} else {
+			publishedViaGlobalCurrent = true
 		}
 	} else if err := writer.SetCurrent(ctx, dictID); err != nil {
 		db.reportError(err)
 		return
+	} else {
+		publishedViaGlobalCurrent = true
 	}
 	// Make new dictionaries visible to the write path immediately. We intentionally
 	// avoid per-write dictdb reads (currentDictID refreshes only every N uses), so
@@ -1066,7 +1072,7 @@ func (db *DB) applyValueLogDictProfileForClass(class vlogDictClass) {
 	}
 	db.dictCurrentCachedByClass[classIdx].Store(dictID)
 	db.dictCurrentOpsByClass[classIdx].Store(0)
-	if class == vlogDictClassSingleValue || db.dictClassMode() != vlogDictClassModeSplitOuterLeaf {
+	if class == vlogDictClassSingleValue || classMode != vlogDictClassModeSplitOuterLeaf || publishedViaGlobalCurrent {
 		db.dictCurrentCached.Store(dictID)
 		db.dictCurrentOps.Store(0)
 	}
