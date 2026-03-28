@@ -4639,6 +4639,16 @@ func (db *DB) takeRetainedPruneObservedSourceIDs() map[uint32]struct{} {
 	return out
 }
 
+func (db *DB) retainedPruneObservedSourcePending() bool {
+	if db == nil {
+		return false
+	}
+	db.retainedPruneObservedMu.Lock()
+	pending := len(db.retainedPruneObservedSourceIDs) > 0
+	db.retainedPruneObservedMu.Unlock()
+	return pending
+}
+
 func (db *DB) queueVlogGenerationObservedSourceGCList(ids []uint32) {
 	if db == nil || len(ids) == 0 {
 		return
@@ -4782,8 +4792,12 @@ func (db *DB) scheduleRetainedValueLogPruneWithForce(force bool) {
 		}
 		db.checkpointMu.Unlock()
 		now := time.Now()
+		minInterval := retainedPruneMinInterval
+		if effectiveForce && db.retainedPruneObservedSourcePending() {
+			minInterval = retainedPruneObservedMinInterval
+		}
 		last := db.retainedPruneLastStartUnixNano.Load()
-		if last > 0 && now.Sub(time.Unix(0, last)) < retainedPruneMinInterval {
+		if last > 0 && now.Sub(time.Unix(0, last)) < minInterval {
 			db.retainedValueLogPruneScheduleSkipMinInterval.Add(1)
 			return
 		}
@@ -5934,6 +5948,10 @@ const (
 	// Retained-path prune is opportunistic reclaim. Do not restart a full live-ID
 	// scan on every periodic checkpoint during a hot workload.
 	retainedPruneMinInterval = 30 * time.Second
+	// Rewrite-observed source IDs can quickly re-trigger forced retained-prune
+	// requests while replay GC is trying to converge. Allow a faster cadence for
+	// that targeted path without dropping the generic min-interval guard.
+	retainedPruneObservedMinInterval = 3 * time.Second
 	// Coordinate index vacuum with major rewrite windows; do not run on every GC.
 	vlogGenerationVacuumTriggerRewriteBytes = int64(64 << 20)
 	vlogGenerationVacuumMinInterval         = 5 * time.Minute
