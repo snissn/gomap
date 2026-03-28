@@ -434,9 +434,9 @@ func main() {
 		VacuumBetweenTests:               *vacuumBetweenTests,
 		CheckpointEveryOps:               *checkpointEveryOps,
 		CheckpointEveryBytes:             *checkpointEveryBytes,
-			BatchWriteSteadyCheckpointBytes:  *batchWriteSteadyCheckpointBytes,
-			BatchWriteDictWarmup:            *batchWriteDictWarmup,
-			SettleBeforeScans:                *settleBeforeScans,
+		BatchWriteSteadyCheckpointBytes:  *batchWriteSteadyCheckpointBytes,
+		BatchWriteDictWarmup:             *batchWriteDictWarmup,
+		SettleBeforeScans:                *settleBeforeScans,
 		TreeDBCacheStatsBeforeReads:      *treedbCacheStatsBeforeReads,
 		TreeDBCacheStatsAfterTests:       *treedbCacheStatsAfterTests,
 		TreeDBVlogRewriteAfterRun:        *treedbVlogRewriteAfterRun,
@@ -1763,13 +1763,13 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			v, err := strconv.ParseUint(raw, 10, 64)
 			return err == nil && v != 0
 		}
-			shouldWarmupDictBatchWrite := func() bool {
-				if !cfg.BatchWriteDictWarmup {
-					return false
-				}
-				if total <= 0 {
-					return false
-				}
+		shouldWarmupDictBatchWrite := func() bool {
+			if !cfg.BatchWriteDictWarmup {
+				return false
+			}
+			if total <= 0 {
+				return false
+			}
 			if _, ok := db.(*treedbadapter.DB); !ok {
 				return false
 			}
