@@ -5819,6 +5819,28 @@ func TestVlogGenerationStats_ReportRewriteBacklogAndDurations(t *testing.T) {
 	db.vlogGenerationLastGCBytesDeleted.Store(200)
 	db.vlogGenerationLastGCSegmentsPending.Store(4)
 	db.vlogGenerationLastGCBytesPending.Store(400)
+	db.vlogGenerationLastGCObservedSourceSegments.Store(2)
+	db.vlogGenerationLastGCObservedSourceSegmentsReferenced.Store(0)
+	db.vlogGenerationLastGCObservedSourceSegmentsActive.Store(0)
+	db.vlogGenerationLastGCObservedSourceSegmentsProtected.Store(2)
+	db.vlogGenerationLastGCObservedSourceSegmentsProtectedInUse.Store(0)
+	db.vlogGenerationLastGCObservedSourceSegmentsProtectedRetained.Store(2)
+	db.vlogGenerationLastGCObservedSourceSegmentsProtectedOverlap.Store(0)
+	db.vlogGenerationLastGCObservedSourceSegmentsProtectedOther.Store(0)
+	db.vlogGenerationLastGCObservedSourceSegmentsEligible.Store(0)
+	db.vlogGenerationLastGCObservedSourceSegmentsDeleted.Store(0)
+	db.vlogGenerationLastGCObservedSourceSegmentsPending.Store(0)
+	db.vlogGenerationLastGCObservedSourceBytes.Store(250)
+	db.vlogGenerationLastGCObservedSourceBytesReferenced.Store(0)
+	db.vlogGenerationLastGCObservedSourceBytesActive.Store(0)
+	db.vlogGenerationLastGCObservedSourceBytesProtected.Store(250)
+	db.vlogGenerationLastGCObservedSourceBytesProtectedInUse.Store(0)
+	db.vlogGenerationLastGCObservedSourceBytesProtectedRetained.Store(250)
+	db.vlogGenerationLastGCObservedSourceBytesProtectedOverlap.Store(0)
+	db.vlogGenerationLastGCObservedSourceBytesProtectedOther.Store(0)
+	db.vlogGenerationLastGCObservedSourceBytesEligible.Store(0)
+	db.vlogGenerationLastGCObservedSourceBytesDeleted.Store(0)
+	db.vlogGenerationLastGCObservedSourceBytesPending.Store(0)
 	db.vlogGenerationMaintenanceSkipStageNotDue.Store(5)
 	db.vlogGenerationMaintenanceSkipStageDue.Store(2)
 	db.vlogGenerationRewritePlanSelectedSegments.Store(6)
@@ -5935,6 +5957,72 @@ func TestVlogGenerationStats_ReportRewriteBacklogAndDurations(t *testing.T) {
 	}
 	if got := stats["treedb.cache.vlog_generation.gc.last_pending_bytes"]; got != "400" {
 		t.Fatalf("gc last pending bytes=%q want 400", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.gc.last_observed_source.segments"]; got != "2" {
+		t.Fatalf("gc last observed source segments=%q want 2", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.gc.last_observed_source.segments_referenced"]; got != "0" {
+		t.Fatalf("gc last observed source segments referenced=%q want 0", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.gc.last_observed_source.segments_active"]; got != "0" {
+		t.Fatalf("gc last observed source segments active=%q want 0", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.gc.last_observed_source.segments_protected"]; got != "2" {
+		t.Fatalf("gc last observed source segments protected=%q want 2", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.gc.last_observed_source.segments_protected_in_use"]; got != "0" {
+		t.Fatalf("gc last observed source segments protected in-use=%q want 0", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.gc.last_observed_source.segments_protected_retained"]; got != "2" {
+		t.Fatalf("gc last observed source segments protected retained=%q want 2", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.gc.last_observed_source.segments_protected_overlap"]; got != "0" {
+		t.Fatalf("gc last observed source segments protected overlap=%q want 0", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.gc.last_observed_source.segments_protected_other"]; got != "0" {
+		t.Fatalf("gc last observed source segments protected other=%q want 0", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.gc.last_observed_source.segments_eligible"]; got != "0" {
+		t.Fatalf("gc last observed source segments eligible=%q want 0", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.gc.last_observed_source.segments_deleted"]; got != "0" {
+		t.Fatalf("gc last observed source segments deleted=%q want 0", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.gc.last_observed_source.segments_pending"]; got != "0" {
+		t.Fatalf("gc last observed source segments pending=%q want 0", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.gc.last_observed_source.bytes"]; got != "250" {
+		t.Fatalf("gc last observed source bytes=%q want 250", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.gc.last_observed_source.bytes_referenced"]; got != "0" {
+		t.Fatalf("gc last observed source bytes referenced=%q want 0", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.gc.last_observed_source.bytes_active"]; got != "0" {
+		t.Fatalf("gc last observed source bytes active=%q want 0", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.gc.last_observed_source.bytes_protected"]; got != "250" {
+		t.Fatalf("gc last observed source bytes protected=%q want 250", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.gc.last_observed_source.bytes_protected_in_use"]; got != "0" {
+		t.Fatalf("gc last observed source bytes protected in-use=%q want 0", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.gc.last_observed_source.bytes_protected_retained"]; got != "250" {
+		t.Fatalf("gc last observed source bytes protected retained=%q want 250", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.gc.last_observed_source.bytes_protected_overlap"]; got != "0" {
+		t.Fatalf("gc last observed source bytes protected overlap=%q want 0", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.gc.last_observed_source.bytes_protected_other"]; got != "0" {
+		t.Fatalf("gc last observed source bytes protected other=%q want 0", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.gc.last_observed_source.bytes_eligible"]; got != "0" {
+		t.Fatalf("gc last observed source bytes eligible=%q want 0", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.gc.last_observed_source.bytes_deleted"]; got != "0" {
+		t.Fatalf("gc last observed source bytes deleted=%q want 0", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.gc.last_observed_source.bytes_pending"]; got != "0" {
+		t.Fatalf("gc last observed source bytes pending=%q want 0", got)
 	}
 	if got := stats["treedb.cache.vlog_generation.vacuum.exec.total_ms"]; got != "44.000" {
 		t.Fatalf("vacuum exec total ms=%q want 44.000", got)

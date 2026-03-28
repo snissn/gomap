@@ -199,11 +199,24 @@ func TestValueLogGC_ProtectedPathBreakdownStats(t *testing.T) {
 	inUseOnlyPath := filepath.Join(dir, "wal", "value-l0-000001.log")
 	retainedOnlyPath := filepath.Join(dir, "wal", "value-l0-000002.log")
 	overlapPath := filepath.Join(dir, "wal", "value-l0-000003.log")
+	observedInUseID, err := valuelog.EncodeFileID(0, 1)
+	if err != nil {
+		t.Fatalf("observed in-use fileid: %v", err)
+	}
+	observedRetainedID, err := valuelog.EncodeFileID(0, 2)
+	if err != nil {
+		t.Fatalf("observed retained fileid: %v", err)
+	}
+	observedOverlapID, err := valuelog.EncodeFileID(0, 3)
+	if err != nil {
+		t.Fatalf("observed overlap fileid: %v", err)
+	}
 
 	stats, err := db.ValueLogGC(context.Background(), ValueLogGCOptions{
 		DryRun:                 true,
 		ProtectedInUsePaths:    []string{inUseOnlyPath, overlapPath},
 		ProtectedRetainedPaths: []string{retainedOnlyPath, overlapPath},
+		ObservedSourceFileIDs:  []uint32{observedInUseID, observedRetainedID, observedOverlapID},
 	})
 	if err != nil {
 		t.Fatalf("ValueLogGC: %v", err)
@@ -244,6 +257,62 @@ func TestValueLogGC_ProtectedPathBreakdownStats(t *testing.T) {
 	}
 	if stats.BytesProtectedOther != 0 {
 		t.Fatalf("bytes protected other=%d want 0", stats.BytesProtectedOther)
+	}
+	if stats.ObservedSourceSegments != 3 {
+		t.Fatalf("observed source segments=%d want 3", stats.ObservedSourceSegments)
+	}
+	if stats.ObservedSourceSegmentsReferenced != 0 {
+		t.Fatalf("observed source segments referenced=%d want 0", stats.ObservedSourceSegmentsReferenced)
+	}
+	if stats.ObservedSourceSegmentsActive != 0 {
+		t.Fatalf("observed source segments active=%d want 0", stats.ObservedSourceSegmentsActive)
+	}
+	if stats.ObservedSourceSegmentsProtected != 3 {
+		t.Fatalf("observed source segments protected=%d want 3", stats.ObservedSourceSegmentsProtected)
+	}
+	if stats.ObservedSourceSegmentsProtectedInUse != 1 {
+		t.Fatalf("observed source segments protected in-use=%d want 1", stats.ObservedSourceSegmentsProtectedInUse)
+	}
+	if stats.ObservedSourceSegmentsProtectedRetained != 1 {
+		t.Fatalf("observed source segments protected retained=%d want 1", stats.ObservedSourceSegmentsProtectedRetained)
+	}
+	if stats.ObservedSourceSegmentsProtectedOverlap != 1 {
+		t.Fatalf("observed source segments protected overlap=%d want 1", stats.ObservedSourceSegmentsProtectedOverlap)
+	}
+	if stats.ObservedSourceSegmentsProtectedOther != 0 {
+		t.Fatalf("observed source segments protected other=%d want 0", stats.ObservedSourceSegmentsProtectedOther)
+	}
+	if stats.ObservedSourceSegmentsEligible != 0 {
+		t.Fatalf("observed source segments eligible=%d want 0", stats.ObservedSourceSegmentsEligible)
+	}
+	if stats.ObservedSourceSegmentsDeleted != 0 {
+		t.Fatalf("observed source segments deleted=%d want 0", stats.ObservedSourceSegmentsDeleted)
+	}
+	if stats.ObservedSourceSegmentsPending != 0 {
+		t.Fatalf("observed source segments pending=%d want 0", stats.ObservedSourceSegmentsPending)
+	}
+	if stats.ObservedSourceBytes <= 0 {
+		t.Fatalf("observed source bytes=%d want >0", stats.ObservedSourceBytes)
+	}
+	if stats.ObservedSourceBytesProtected <= 0 {
+		t.Fatalf("observed source bytes protected=%d want >0", stats.ObservedSourceBytesProtected)
+	}
+	if stats.ObservedSourceBytesProtectedInUse <= 0 ||
+		stats.ObservedSourceBytesProtectedRetained <= 0 ||
+		stats.ObservedSourceBytesProtectedOverlap <= 0 {
+		t.Fatalf("expected non-zero observed source protected byte buckets, got %+v", stats)
+	}
+	if stats.ObservedSourceBytesProtectedOther != 0 {
+		t.Fatalf("observed source bytes protected other=%d want 0", stats.ObservedSourceBytesProtectedOther)
+	}
+	if stats.ObservedSourceBytesEligible != 0 {
+		t.Fatalf("observed source bytes eligible=%d want 0", stats.ObservedSourceBytesEligible)
+	}
+	if stats.ObservedSourceBytesDeleted != 0 {
+		t.Fatalf("observed source bytes deleted=%d want 0", stats.ObservedSourceBytesDeleted)
+	}
+	if stats.ObservedSourceBytesPending != 0 {
+		t.Fatalf("observed source bytes pending=%d want 0", stats.ObservedSourceBytesPending)
 	}
 }
 

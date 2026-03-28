@@ -27,32 +27,58 @@ type ValueLogGCOptions struct {
 	ProtectedInUsePaths []string
 	// ProtectedRetainedPaths are paths pinned by pointer lifecycle retention.
 	ProtectedRetainedPaths []string
+	// ObservedSourceFileIDs enables per-classification probe counters for a
+	// caller-provided subset of segment IDs (for example, rewrite-selected
+	// source segments). IDs not present in the current set are ignored.
+	ObservedSourceFileIDs []uint32
 }
 
 // ValueLogGCStats summarizes value-log GC work.
 type ValueLogGCStats struct {
-	SegmentsTotal             int
-	SegmentsReferenced        int
-	SegmentsActive            int
-	SegmentsProtected         int
-	SegmentsProtectedInUse    int
-	SegmentsProtectedRetained int
-	SegmentsProtectedOverlap  int
-	SegmentsProtectedOther    int
-	SegmentsEligible          int
-	SegmentsDeleted           int
-	SegmentsPending           int
-	BytesTotal                int64
-	BytesReferenced           int64
-	BytesActive               int64
-	BytesProtected            int64
-	BytesProtectedInUse       int64
-	BytesProtectedRetained    int64
-	BytesProtectedOverlap     int64
-	BytesProtectedOther       int64
-	BytesEligible             int64
-	BytesDeleted              int64
-	BytesPending              int64
+	SegmentsTotal                           int
+	SegmentsReferenced                      int
+	SegmentsActive                          int
+	SegmentsProtected                       int
+	SegmentsProtectedInUse                  int
+	SegmentsProtectedRetained               int
+	SegmentsProtectedOverlap                int
+	SegmentsProtectedOther                  int
+	SegmentsEligible                        int
+	SegmentsDeleted                         int
+	SegmentsPending                         int
+	BytesTotal                              int64
+	BytesReferenced                         int64
+	BytesActive                             int64
+	BytesProtected                          int64
+	BytesProtectedInUse                     int64
+	BytesProtectedRetained                  int64
+	BytesProtectedOverlap                   int64
+	BytesProtectedOther                     int64
+	BytesEligible                           int64
+	BytesDeleted                            int64
+	BytesPending                            int64
+	ObservedSourceSegments                  int
+	ObservedSourceSegmentsReferenced        int
+	ObservedSourceSegmentsActive            int
+	ObservedSourceSegmentsProtected         int
+	ObservedSourceSegmentsProtectedInUse    int
+	ObservedSourceSegmentsProtectedRetained int
+	ObservedSourceSegmentsProtectedOverlap  int
+	ObservedSourceSegmentsProtectedOther    int
+	ObservedSourceSegmentsEligible          int
+	ObservedSourceSegmentsDeleted           int
+	ObservedSourceSegmentsPending           int
+	ObservedSourceBytes                     int64
+	ObservedSourceBytesReferenced           int64
+	ObservedSourceBytesActive               int64
+	ObservedSourceBytesProtected            int64
+	ObservedSourceBytesProtectedInUse       int64
+	ObservedSourceBytesProtectedRetained    int64
+	ObservedSourceBytesProtectedOverlap     int64
+	ObservedSourceBytesProtectedOther       int64
+	ObservedSourceBytesEligible             int64
+	ObservedSourceBytesDeleted              int64
+	ObservedSourceBytesPending              int64
 }
 
 // ValueLogGC deletes fully-unreferenced value-log segments.
@@ -127,27 +153,49 @@ func (db *DB) ValueLogGC(ctx context.Context, opts ValueLogGCOptions) (ValueLogG
 		protectedRetainedPaths[path] = struct{}{}
 	}
 	type candidate struct {
-		path string
-		size int64
+		path     string
+		size     int64
+		observed bool
 	}
 	candidates := make(map[uint32]candidate)
+	observedSourceIDs := make(map[uint32]struct{}, len(opts.ObservedSourceFileIDs))
+	for _, id := range opts.ObservedSourceFileIDs {
+		if id == 0 {
+			continue
+		}
+		observedSourceIDs[id] = struct{}{}
+	}
 
 	for id, f := range set.Files {
 		if err := ctx.Err(); err != nil {
 			return stats, err
 		}
 		size := fileSize(f)
+		observed := false
+		if _, ok := observedSourceIDs[id]; ok {
+			observed = true
+			stats.ObservedSourceSegments++
+			stats.ObservedSourceBytes += size
+		}
 		stats.SegmentsTotal++
 		stats.BytesTotal += size
 
 		if _, ok := referenced[id]; ok {
 			stats.SegmentsReferenced++
 			stats.BytesReferenced += size
+			if observed {
+				stats.ObservedSourceSegmentsReferenced++
+				stats.ObservedSourceBytesReferenced += size
+			}
 			continue
 		}
 		if _, ok := keptIDs[id]; ok {
 			stats.SegmentsActive++
 			stats.BytesActive += size
+			if observed {
+				stats.ObservedSourceSegmentsActive++
+				stats.ObservedSourceBytesActive += size
+			}
 			continue
 		}
 		_, inUseProtected := protectedInUsePaths[f.Path]
@@ -155,16 +203,32 @@ func (db *DB) ValueLogGC(ctx context.Context, opts ValueLogGCOptions) (ValueLogG
 		if inUseProtected || retainedProtected {
 			stats.SegmentsProtected++
 			stats.BytesProtected += size
+			if observed {
+				stats.ObservedSourceSegmentsProtected++
+				stats.ObservedSourceBytesProtected += size
+			}
 			switch {
 			case inUseProtected && retainedProtected:
 				stats.SegmentsProtectedOverlap++
 				stats.BytesProtectedOverlap += size
+				if observed {
+					stats.ObservedSourceSegmentsProtectedOverlap++
+					stats.ObservedSourceBytesProtectedOverlap += size
+				}
 			case inUseProtected:
 				stats.SegmentsProtectedInUse++
 				stats.BytesProtectedInUse += size
+				if observed {
+					stats.ObservedSourceSegmentsProtectedInUse++
+					stats.ObservedSourceBytesProtectedInUse += size
+				}
 			default:
 				stats.SegmentsProtectedRetained++
 				stats.BytesProtectedRetained += size
+				if observed {
+					stats.ObservedSourceSegmentsProtectedRetained++
+					stats.ObservedSourceBytesProtectedRetained += size
+				}
 			}
 			continue
 		}
@@ -173,11 +237,21 @@ func (db *DB) ValueLogGC(ctx context.Context, opts ValueLogGCOptions) (ValueLogG
 			stats.BytesProtected += size
 			stats.SegmentsProtectedOther++
 			stats.BytesProtectedOther += size
+			if observed {
+				stats.ObservedSourceSegmentsProtected++
+				stats.ObservedSourceBytesProtected += size
+				stats.ObservedSourceSegmentsProtectedOther++
+				stats.ObservedSourceBytesProtectedOther += size
+			}
 			continue
 		}
 
 		stats.SegmentsEligible++
 		stats.BytesEligible += size
+		if observed {
+			stats.ObservedSourceSegmentsEligible++
+			stats.ObservedSourceBytesEligible += size
+		}
 
 		if opts.DryRun {
 			continue
@@ -185,7 +259,7 @@ func (db *DB) ValueLogGC(ctx context.Context, opts ValueLogGCOptions) (ValueLogG
 		if err := vm.MarkZombie(id); err != nil {
 			return stats, err
 		}
-		candidates[id] = candidate{path: f.Path, size: size}
+		candidates[id] = candidate{path: f.Path, size: size, observed: observed}
 	}
 
 	if opts.DryRun {
@@ -212,6 +286,10 @@ func (db *DB) ValueLogGC(ctx context.Context, opts ValueLogGCOptions) (ValueLogG
 			if os.IsNotExist(err) {
 				stats.SegmentsDeleted++
 				stats.BytesDeleted += info.size
+				if info.observed {
+					stats.ObservedSourceSegmentsDeleted++
+					stats.ObservedSourceBytesDeleted += info.size
+				}
 			} else {
 				return stats, err
 			}
@@ -222,6 +300,12 @@ func (db *DB) ValueLogGC(ctx context.Context, opts ValueLogGCOptions) (ValueLogG
 	}
 	if stats.BytesEligible > stats.BytesDeleted {
 		stats.BytesPending = stats.BytesEligible - stats.BytesDeleted
+	}
+	if stats.ObservedSourceSegmentsEligible > stats.ObservedSourceSegmentsDeleted {
+		stats.ObservedSourceSegmentsPending = stats.ObservedSourceSegmentsEligible - stats.ObservedSourceSegmentsDeleted
+	}
+	if stats.ObservedSourceBytesEligible > stats.ObservedSourceBytesDeleted {
+		stats.ObservedSourceBytesPending = stats.ObservedSourceBytesEligible - stats.ObservedSourceBytesDeleted
 	}
 
 	currentSet := vm.CurrentSetNoRefresh()
