@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 	"testing"
 	"time"
@@ -1131,6 +1132,52 @@ func TestVlogGenerationRewrite_ObservedSourceRetainedBlock_RunsSecondGC(t *testi
 	}
 	if got := db.vlogGenerationLastGCObservedSourceBytesDeleted.Load(); got != 64 {
 		t.Fatalf("last observed source deleted bytes=%d want 64 after second gc", got)
+	}
+}
+
+func TestVlogGenerationObservedSourceGCQueue_CountersAndDedupe(t *testing.T) {
+	db := &DB{}
+
+	db.queueVlogGenerationObservedSourceGCList([]uint32{7, 9, 7, 0})
+	db.queueVlogGenerationObservedSourceGCIDs(map[uint32]struct{}{
+		0:  {},
+		9:  {},
+		12: {},
+	})
+
+	if got := db.vlogGenerationObservedGCQueuedBatches.Load(); got != 2 {
+		t.Fatalf("queued batches=%d want 2", got)
+	}
+	if got := db.vlogGenerationObservedGCQueuedIDs.Load(); got != 3 {
+		t.Fatalf("queued ids=%d want 3", got)
+	}
+
+	ids := db.takeVlogGenerationObservedSourceGCList()
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	want := []uint32{7, 9, 12}
+	if len(ids) != len(want) {
+		t.Fatalf("taken ids len=%d want %d (%v)", len(ids), len(want), ids)
+	}
+	for i := range ids {
+		if ids[i] != want[i] {
+			t.Fatalf("taken ids[%d]=%d want %d (all=%v)", i, ids[i], want[i], ids)
+		}
+	}
+
+	if got := db.vlogGenerationObservedGCTakenBatches.Load(); got != 1 {
+		t.Fatalf("taken batches=%d want 1", got)
+	}
+	if got := db.vlogGenerationObservedGCTakenIDs.Load(); got != uint64(len(want)) {
+		t.Fatalf("taken ids=%d want %d", got, len(want))
+	}
+
+	// Empty take should not mutate taken counters.
+	_ = db.takeVlogGenerationObservedSourceGCList()
+	if got := db.vlogGenerationObservedGCTakenBatches.Load(); got != 1 {
+		t.Fatalf("taken batches after empty take=%d want 1", got)
+	}
+	if got := db.vlogGenerationObservedGCTakenIDs.Load(); got != uint64(len(want)) {
+		t.Fatalf("taken ids after empty take=%d want %d", got, len(want))
 	}
 }
 
@@ -5971,6 +6018,12 @@ func TestVlogGenerationStats_ReportRewriteBacklogAndDurations(t *testing.T) {
 	db.vlogGenerationRewriteProcessedStaleBytes.Store(450)
 	db.vlogGenerationRewriteNoReclaimRuns.Store(3)
 	db.vlogGenerationRewriteNoReclaimStaleBytes.Store(320)
+	db.vlogGenerationObservedGCQueuedBatches.Store(5)
+	db.vlogGenerationObservedGCQueuedIDs.Store(12)
+	db.vlogGenerationObservedGCTakenBatches.Store(4)
+	db.vlogGenerationObservedGCTakenIDs.Store(9)
+	db.vlogGenerationObservedGCRuns.Store(3)
+	db.vlogGenerationObservedGCRetryQueued.Store(2)
 
 	db.vlogGenerationRewriteQueueMu.Lock()
 	db.vlogGenerationRewriteQueueLoaded = true
@@ -5985,6 +6038,12 @@ func TestVlogGenerationStats_ReportRewriteBacklogAndDurations(t *testing.T) {
 	db.vlogGenerationRewriteStagePending = true
 	db.vlogGenerationRewriteStageObservedUnixNano = 1234
 	db.vlogGenerationRewriteQueueMu.Unlock()
+	db.vlogGenerationObservedGCMu.Lock()
+	db.vlogGenerationObservedGCSourceIDs = map[uint32]struct{}{
+		101: {},
+		102: {},
+	}
+	db.vlogGenerationObservedGCMu.Unlock()
 
 	stats := db.Stats()
 	if got := stats["treedb.cache.vlog_generation.maintenance.pass.total_ms"]; got != "40.000" {
@@ -6226,5 +6285,26 @@ func TestVlogGenerationStats_ReportRewriteBacklogAndDurations(t *testing.T) {
 	}
 	if got := stats["treedb.cache.vlog_generation.rewrite.no_reclaim_stale_bytes"]; got != "320" {
 		t.Fatalf("rewrite no reclaim stale bytes=%q want 320", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.observed_gc.pending_ids"]; got != "2" {
+		t.Fatalf("observed gc pending ids=%q want 2", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.observed_gc.queued_batches"]; got != "5" {
+		t.Fatalf("observed gc queued batches=%q want 5", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.observed_gc.queued_ids"]; got != "12" {
+		t.Fatalf("observed gc queued ids=%q want 12", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.observed_gc.taken_batches"]; got != "4" {
+		t.Fatalf("observed gc taken batches=%q want 4", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.observed_gc.taken_ids"]; got != "9" {
+		t.Fatalf("observed gc taken ids=%q want 9", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.observed_gc.runs"]; got != "3" {
+		t.Fatalf("observed gc runs=%q want 3", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.observed_gc.retry_queued"]; got != "2" {
+		t.Fatalf("observed gc retry queued=%q want 2", got)
 	}
 }

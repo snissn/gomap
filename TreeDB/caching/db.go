@@ -4647,13 +4647,22 @@ func (db *DB) queueVlogGenerationObservedSourceGCList(ids []uint32) {
 	if db.vlogGenerationObservedGCSourceIDs == nil {
 		db.vlogGenerationObservedGCSourceIDs = make(map[uint32]struct{}, len(ids))
 	}
+	added := 0
 	for _, id := range ids {
 		if id == 0 {
 			continue
 		}
+		if _, exists := db.vlogGenerationObservedGCSourceIDs[id]; exists {
+			continue
+		}
 		db.vlogGenerationObservedGCSourceIDs[id] = struct{}{}
+		added++
 	}
 	db.vlogGenerationObservedGCMu.Unlock()
+	if added > 0 {
+		db.vlogGenerationObservedGCQueuedBatches.Add(1)
+		db.vlogGenerationObservedGCQueuedIDs.Add(uint64(added))
+	}
 }
 
 func (db *DB) queueVlogGenerationObservedSourceGCIDs(ids map[uint32]struct{}) {
@@ -4664,13 +4673,22 @@ func (db *DB) queueVlogGenerationObservedSourceGCIDs(ids map[uint32]struct{}) {
 	if db.vlogGenerationObservedGCSourceIDs == nil {
 		db.vlogGenerationObservedGCSourceIDs = make(map[uint32]struct{}, len(ids))
 	}
+	added := 0
 	for id := range ids {
 		if id == 0 {
 			continue
 		}
+		if _, exists := db.vlogGenerationObservedGCSourceIDs[id]; exists {
+			continue
+		}
 		db.vlogGenerationObservedGCSourceIDs[id] = struct{}{}
+		added++
 	}
 	db.vlogGenerationObservedGCMu.Unlock()
+	if added > 0 {
+		db.vlogGenerationObservedGCQueuedBatches.Add(1)
+		db.vlogGenerationObservedGCQueuedIDs.Add(uint64(added))
+	}
 }
 
 func (db *DB) takeVlogGenerationObservedSourceGCList() []uint32 {
@@ -4691,6 +4709,10 @@ func (db *DB) takeVlogGenerationObservedSourceGCList() []uint32 {
 	}
 	db.vlogGenerationObservedGCSourceIDs = nil
 	db.vlogGenerationObservedGCMu.Unlock()
+	if len(out) > 0 {
+		db.vlogGenerationObservedGCTakenBatches.Add(1)
+		db.vlogGenerationObservedGCTakenIDs.Add(uint64(len(out)))
+	}
 	return out
 }
 
@@ -5615,6 +5637,12 @@ type DB struct {
 	retainedPruneObservedSourceIDs                              map[uint32]struct{}
 	vlogGenerationObservedGCMu                                  sync.Mutex
 	vlogGenerationObservedGCSourceIDs                           map[uint32]struct{}
+	vlogGenerationObservedGCQueuedBatches                       atomic.Uint64
+	vlogGenerationObservedGCQueuedIDs                           atomic.Uint64
+	vlogGenerationObservedGCTakenBatches                        atomic.Uint64
+	vlogGenerationObservedGCTakenIDs                            atomic.Uint64
+	vlogGenerationObservedGCRuns                                atomic.Uint64
+	vlogGenerationObservedGCRetryQueued                         atomic.Uint64
 	retainedPruneMu                                             sync.Mutex
 	retainedPruneDone                                           chan struct{}
 	vlogGenerationRemapSuccesses                                atomic.Uint64
@@ -14855,6 +14883,7 @@ planned:
 	forceObservedSourceGC := len(observedSourceGCIDs) > 0
 	if envBool(envDisableVlogGenerationGC) {
 		if forceObservedSourceGC {
+			db.vlogGenerationObservedGCRetryQueued.Add(1)
 			db.queueVlogGenerationObservedSourceGCList(observedSourceGCIDs)
 		}
 		return
@@ -14869,6 +14898,7 @@ planned:
 	gcer, ok := db.backend.(backendValueLogGCer)
 	if !ok {
 		if forceObservedSourceGC {
+			db.vlogGenerationObservedGCRetryQueued.Add(1)
 			db.queueVlogGenerationObservedSourceGCList(observedSourceGCIDs)
 		}
 		return
@@ -14903,6 +14933,7 @@ planned:
 		gcOpts := db.valueLogGCOptions(false)
 		if forceObservedSourceGC {
 			gcOpts.ObservedSourceFileIDs = append([]uint32(nil), observedSourceGCIDs...)
+			db.vlogGenerationObservedGCRuns.Add(1)
 		}
 		gcStart := time.Now()
 		gcStats, err := gcer.ValueLogGC(ctx, gcOpts)
@@ -14926,6 +14957,7 @@ planned:
 			gcStats.ObservedSourceSegmentsEligible == 0 {
 			db.queueRetainedPruneObservedSourceIDs(observedSourceGCIDs)
 			db.scheduleRetainedValueLogPruneForce()
+			db.vlogGenerationObservedGCRetryQueued.Add(1)
 			db.queueVlogGenerationObservedSourceGCList(observedSourceGCIDs)
 			db.vlogGenerationCheckpointKickPending.Store(true)
 		}
@@ -14941,6 +14973,7 @@ planned:
 	})
 	if err != nil {
 		if forceObservedSourceGC {
+			db.vlogGenerationObservedGCRetryQueued.Add(1)
 			db.queueVlogGenerationObservedSourceGCList(observedSourceGCIDs)
 		}
 		if errors.Is(err, context.Canceled) {
@@ -20462,6 +20495,9 @@ func (db *DB) Stats() map[string]string {
 		}
 	}
 	db.vlogGenerationRewriteQueueMu.Unlock()
+	db.vlogGenerationObservedGCMu.Lock()
+	observedGCPending := len(db.vlogGenerationObservedGCSourceIDs)
+	db.vlogGenerationObservedGCMu.Unlock()
 	rewriteAgeBlockedUntilNS := db.vlogGenerationRewriteAgeBlockedUntilNS.Load()
 	rewriteAgeBlockedRemainingMS := int64(0)
 	if rewriteAgeBlockedUntilNS > 0 {
@@ -20648,6 +20684,13 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_generation.rewrite.plan_penalty_filter.runs"] = fmt.Sprintf("%d", db.vlogGenerationRewritePlanPenaltyFilterRuns.Load())
 	stats["treedb.cache.vlog_generation.rewrite.plan_penalty_filter.segments"] = fmt.Sprintf("%d", db.vlogGenerationRewritePlanPenaltyFilterSegments.Load())
 	stats["treedb.cache.vlog_generation.rewrite.plan_penalty_filter.to_empty_runs"] = fmt.Sprintf("%d", db.vlogGenerationRewritePlanPenaltyFilterToEmpty.Load())
+	stats["treedb.cache.vlog_generation.observed_gc.pending_ids"] = fmt.Sprintf("%d", observedGCPending)
+	stats["treedb.cache.vlog_generation.observed_gc.queued_batches"] = fmt.Sprintf("%d", db.vlogGenerationObservedGCQueuedBatches.Load())
+	stats["treedb.cache.vlog_generation.observed_gc.queued_ids"] = fmt.Sprintf("%d", db.vlogGenerationObservedGCQueuedIDs.Load())
+	stats["treedb.cache.vlog_generation.observed_gc.taken_batches"] = fmt.Sprintf("%d", db.vlogGenerationObservedGCTakenBatches.Load())
+	stats["treedb.cache.vlog_generation.observed_gc.taken_ids"] = fmt.Sprintf("%d", db.vlogGenerationObservedGCTakenIDs.Load())
+	stats["treedb.cache.vlog_generation.observed_gc.runs"] = fmt.Sprintf("%d", db.vlogGenerationObservedGCRuns.Load())
+	stats["treedb.cache.vlog_generation.observed_gc.retry_queued"] = fmt.Sprintf("%d", db.vlogGenerationObservedGCRetryQueued.Load())
 	stats["treedb.cache.vlog_generation.rewrite.exec.source_segments_total"] = fmt.Sprintf("%d", db.vlogGenerationRewriteExecSourceSegments.Load())
 	stats["treedb.cache.vlog_generation.rewrite.exec.source_segments_requested_total"] = fmt.Sprintf("%d", db.vlogGenerationRewriteSourceSegmentsRequestedTotal.Load())
 	stats["treedb.cache.vlog_generation.rewrite.exec.source_segments_still_referenced_total"] = fmt.Sprintf("%d", db.vlogGenerationRewriteSourceSegmentsStillReferencedTotal.Load())
