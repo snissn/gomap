@@ -109,7 +109,9 @@ run_variant() {
     set -euo pipefail
     if [[ -n "$env_file" ]]; then
       # shellcheck source=/dev/null
+      set -a
       source "$env_file"
+      set +a
     fi
     bash -lc "$RUN_CMD"
   ) >"$run_dir/launcher.log" 2>&1
