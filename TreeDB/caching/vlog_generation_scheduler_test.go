@@ -2612,6 +2612,17 @@ func TestVlogGenerationRewritePlan_StageConfirmationExecutesConfirmedSubset(t *t
 		debugSource:           "rewrite_stage_confirm",
 	})
 
+	deadline := time.Now().Add(2 * schedulerTestWait(t))
+	for {
+		if _, rewriteCalls := recorder.recordedRewrite(); rewriteCalls >= 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			_, rewriteCalls := recorder.recordedRewrite()
+			t.Fatalf("rewrite calls after staged confirmation=%d want=1", rewriteCalls)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	rewriteOpts, rewriteCalls := recorder.recordedRewrite()
 	if rewriteCalls != 1 {
 		t.Fatalf("rewrite calls after staged confirmation=%d want=1", rewriteCalls)
