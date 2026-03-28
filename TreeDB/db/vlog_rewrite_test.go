@@ -1141,6 +1141,53 @@ func TestScanValueLogSegmentPreferredDictID_SkipsNonGroupedRecords(t *testing.T)
 	}
 }
 
+func TestScanValueLogSegmentPreferredDictID_IgnoresInvalidRecordVersion(t *testing.T) {
+	dir := t.TempDir()
+	fileID, err := valuelog.EncodeFileID(0, 1)
+	if err != nil {
+		t.Fatalf("EncodeFileID: %v", err)
+	}
+	path := filepath.Join(dir, "value-l0-000001.log")
+	w, err := valuelog.NewWriter(path, fileID)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+
+	payload := make([]byte, valuelog.FrameHeaderSize)
+	payload[0] = valuelog.FrameVersion
+	binary.LittleEndian.PutUint64(payload[4:12], 0xfeedface)
+
+	rawRecord := make([]byte, valuelog.HeaderSize+len(payload))
+	rawRecord[4] = 0 // invalid/unexpected record version
+	rawRecord[5] = 1 // grouped flag set
+	binary.LittleEndian.PutUint64(rawRecord[8:16], 1)
+	binary.LittleEndian.PutUint32(rawRecord[16:20], uint32(len(payload)))
+	copy(rawRecord[valuelog.HeaderSize:], payload)
+	binary.LittleEndian.PutUint32(rawRecord[0:4], crc32.ChecksumIEEE(rawRecord[4:]))
+	if _, err := w.AppendRawRecord(rawRecord, uint32(len(rawRecord)-4)); err != nil {
+		t.Fatalf("AppendRawRecord: %v", err)
+	}
+
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close writer: %v", err)
+	}
+
+	readFile, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("Open read file: %v", err)
+	}
+	defer closeNoErr(t, readFile)
+
+	seg := &valuelog.File{File: readFile}
+	dictID, err := scanValueLogSegmentPreferredDictID(seg)
+	if err != nil {
+		t.Fatalf("scanValueLogSegmentPreferredDictID: %v", err)
+	}
+	if dictID != 0 {
+		t.Fatalf("expected no preferred dict ID from invalid record version, got %d", dictID)
+	}
+}
+
 func TestValueLogRewriteOffline_ReencodesGroupedBlockOuterLeafPagesWithObservedDict(t *testing.T) {
 	dir := t.TempDir()
 

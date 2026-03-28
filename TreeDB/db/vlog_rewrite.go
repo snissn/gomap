@@ -328,6 +328,10 @@ func scanValueLogSegmentPreferredDictID(seg *valuelog.File) (uint64, error) {
 			}
 			return 0, err
 		}
+		if recordHeader[4] != valuelog.Version {
+			// Best-effort scan only understands value-log record layout.
+			return 0, nil
+		}
 		bodyLen := int64(binary.LittleEndian.Uint32(recordHeader[16:20]))
 		if off+int64(valuelog.HeaderSize)+bodyLen > size {
 			// Best-effort scan: tolerate truncated trailing frame bodies.
