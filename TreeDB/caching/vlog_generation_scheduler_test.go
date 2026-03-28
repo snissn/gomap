@@ -5719,6 +5719,14 @@ func TestVlogGenerationStats_ReportRewriteBacklogAndDurations(t *testing.T) {
 	db.vlogGenerationLastGCBytesActive.Store(400)
 	db.vlogGenerationLastGCSegmentsProtected.Store(3)
 	db.vlogGenerationLastGCBytesProtected.Store(300)
+	db.vlogGenerationLastGCSegmentsProtectedInUse.Store(1)
+	db.vlogGenerationLastGCBytesProtectedInUse.Store(100)
+	db.vlogGenerationLastGCSegmentsProtectedRetained.Store(1)
+	db.vlogGenerationLastGCBytesProtectedRetained.Store(120)
+	db.vlogGenerationLastGCSegmentsProtectedOverlap.Store(1)
+	db.vlogGenerationLastGCBytesProtectedOverlap.Store(80)
+	db.vlogGenerationLastGCSegmentsProtectedOther.Store(0)
+	db.vlogGenerationLastGCBytesProtectedOther.Store(0)
 	db.vlogGenerationLastGCSegmentsEligible.Store(6)
 	db.vlogGenerationLastGCBytesEligible.Store(600)
 	db.vlogGenerationLastGCSegmentsDeleted.Store(2)
@@ -5793,6 +5801,30 @@ func TestVlogGenerationStats_ReportRewriteBacklogAndDurations(t *testing.T) {
 	}
 	if got := stats["treedb.cache.vlog_generation.gc.last_protected_bytes"]; got != "300" {
 		t.Fatalf("gc last protected bytes=%q want 300", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.gc.last_protected_in_use_segments"]; got != "1" {
+		t.Fatalf("gc last protected in use segments=%q want 1", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.gc.last_protected_in_use_bytes"]; got != "100" {
+		t.Fatalf("gc last protected in use bytes=%q want 100", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.gc.last_protected_retained_segments"]; got != "1" {
+		t.Fatalf("gc last protected retained segments=%q want 1", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.gc.last_protected_retained_bytes"]; got != "120" {
+		t.Fatalf("gc last protected retained bytes=%q want 120", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.gc.last_protected_overlap_segments"]; got != "1" {
+		t.Fatalf("gc last protected overlap segments=%q want 1", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.gc.last_protected_overlap_bytes"]; got != "80" {
+		t.Fatalf("gc last protected overlap bytes=%q want 80", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.gc.last_protected_other_segments"]; got != "0" {
+		t.Fatalf("gc last protected other segments=%q want 0", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.gc.last_protected_other_bytes"]; got != "0" {
+		t.Fatalf("gc last protected other bytes=%q want 0", got)
 	}
 	if got := stats["treedb.cache.vlog_generation.gc.last_eligible_segments"]; got != "6" {
 		t.Fatalf("gc last eligible segments=%q want 6", got)

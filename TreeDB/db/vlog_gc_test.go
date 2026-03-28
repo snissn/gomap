@@ -176,6 +176,77 @@ func TestValueLogGC_ProtectedPathsDoNotKeepHistoricalRewriteLanes(t *testing.T) 
 	}
 }
 
+func TestValueLogGC_ProtectedPathBreakdownStats(t *testing.T) {
+	dir := t.TempDir()
+
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	for seq := 1; seq <= 5; seq++ {
+		seq := seq
+		appendPointersInNewSegment(t, dir, 0, uint32(seq), uint64(seq)*1_000, 1, func(int) []byte {
+			return bytes.Repeat([]byte(fmt.Sprintf("lane0-seq%d|", seq)), 32)
+		})
+	}
+
+	if err := db.RefreshValueLogSet(); err != nil {
+		t.Fatalf("RefreshValueLogSet: %v", err)
+	}
+
+	inUseOnlyPath := filepath.Join(dir, "wal", "value-l0-000001.log")
+	retainedOnlyPath := filepath.Join(dir, "wal", "value-l0-000002.log")
+	overlapPath := filepath.Join(dir, "wal", "value-l0-000003.log")
+
+	stats, err := db.ValueLogGC(context.Background(), ValueLogGCOptions{
+		DryRun:                 true,
+		ProtectedInUsePaths:    []string{inUseOnlyPath, overlapPath},
+		ProtectedRetainedPaths: []string{retainedOnlyPath, overlapPath},
+	})
+	if err != nil {
+		t.Fatalf("ValueLogGC: %v", err)
+	}
+
+	if stats.SegmentsTotal != 5 {
+		t.Fatalf("segments total=%d want 5", stats.SegmentsTotal)
+	}
+	if stats.SegmentsActive != 2 {
+		t.Fatalf("segments active=%d want 2", stats.SegmentsActive)
+	}
+	if stats.SegmentsProtected != 3 {
+		t.Fatalf("segments protected=%d want 3", stats.SegmentsProtected)
+	}
+	if stats.SegmentsProtectedInUse != 1 {
+		t.Fatalf("segments protected in-use=%d want 1", stats.SegmentsProtectedInUse)
+	}
+	if stats.SegmentsProtectedRetained != 1 {
+		t.Fatalf("segments protected retained=%d want 1", stats.SegmentsProtectedRetained)
+	}
+	if stats.SegmentsProtectedOverlap != 1 {
+		t.Fatalf("segments protected overlap=%d want 1", stats.SegmentsProtectedOverlap)
+	}
+	if stats.SegmentsProtectedOther != 0 {
+		t.Fatalf("segments protected other=%d want 0", stats.SegmentsProtectedOther)
+	}
+	if stats.SegmentsEligible != 0 {
+		t.Fatalf("segments eligible=%d want 0", stats.SegmentsEligible)
+	}
+	if stats.SegmentsDeleted != 0 {
+		t.Fatalf("segments deleted=%d want 0", stats.SegmentsDeleted)
+	}
+	if stats.BytesProtected <= 0 {
+		t.Fatalf("bytes protected=%d want >0", stats.BytesProtected)
+	}
+	if stats.BytesProtectedInUse <= 0 || stats.BytesProtectedRetained <= 0 || stats.BytesProtectedOverlap <= 0 {
+		t.Fatalf("expected non-zero protected byte buckets, got %+v", stats)
+	}
+	if stats.BytesProtectedOther != 0 {
+		t.Fatalf("bytes protected other=%d want 0", stats.BytesProtectedOther)
+	}
+}
+
 func TestValueLogGC_KeepsReferencedPointerSegments_WithOuterLeavesInValueLog(t *testing.T) {
 	dir := t.TempDir()
 

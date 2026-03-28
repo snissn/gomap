@@ -17,26 +17,42 @@ const valueLogKeepRecentSegmentsPerLane = 2
 
 // ValueLogGCOptions controls value-log garbage collection.
 type ValueLogGCOptions struct {
-	DryRun         bool
+	DryRun bool
+	// ProtectedPaths preserves legacy callers that provide a single merged set
+	// of protected paths. Prefer the specific ProtectedInUsePaths and
+	// ProtectedRetainedPaths fields for blocker classification.
 	ProtectedPaths []string
+	// ProtectedInUsePaths are paths that may still be referenced by mutable
+	// in-memory state during online maintenance.
+	ProtectedInUsePaths []string
+	// ProtectedRetainedPaths are paths pinned by pointer lifecycle retention.
+	ProtectedRetainedPaths []string
 }
 
 // ValueLogGCStats summarizes value-log GC work.
 type ValueLogGCStats struct {
-	SegmentsTotal      int
-	SegmentsReferenced int
-	SegmentsActive     int
-	SegmentsProtected  int
-	SegmentsEligible   int
-	SegmentsDeleted    int
-	SegmentsPending    int
-	BytesTotal         int64
-	BytesReferenced    int64
-	BytesActive        int64
-	BytesProtected     int64
-	BytesEligible      int64
-	BytesDeleted       int64
-	BytesPending       int64
+	SegmentsTotal             int
+	SegmentsReferenced        int
+	SegmentsActive            int
+	SegmentsProtected         int
+	SegmentsProtectedInUse    int
+	SegmentsProtectedRetained int
+	SegmentsProtectedOverlap  int
+	SegmentsProtectedOther    int
+	SegmentsEligible          int
+	SegmentsDeleted           int
+	SegmentsPending           int
+	BytesTotal                int64
+	BytesReferenced           int64
+	BytesActive               int64
+	BytesProtected            int64
+	BytesProtectedInUse       int64
+	BytesProtectedRetained    int64
+	BytesProtectedOverlap     int64
+	BytesProtectedOther       int64
+	BytesEligible             int64
+	BytesDeleted              int64
+	BytesPending              int64
 }
 
 // ValueLogGC deletes fully-unreferenced value-log segments.
@@ -83,8 +99,9 @@ func (db *DB) ValueLogGC(ctx context.Context, opts ValueLogGCOptions) (ValueLogG
 		set = vm.CurrentSetNoRefresh()
 	}
 	keptIDs := currentValueLogIDs(set)
-	if len(opts.ProtectedPaths) > 0 {
-		if recent := recentValueLogIDsForProtectedPaths(set, valueLogKeepRecentSegmentsPerLane, opts.ProtectedPaths); len(recent) > 0 {
+	protectedAll := mergeUniqueNonEmptyPaths(opts.ProtectedPaths, opts.ProtectedInUsePaths, opts.ProtectedRetainedPaths)
+	if len(protectedAll) > 0 {
+		if recent := recentValueLogIDsForProtectedPaths(set, valueLogKeepRecentSegmentsPerLane, protectedAll); len(recent) > 0 {
 			keptIDs = recent
 		}
 	}
@@ -94,6 +111,20 @@ func (db *DB) ValueLogGC(ctx context.Context, opts ValueLogGCOptions) (ValueLogG
 			continue
 		}
 		protectedPaths[path] = struct{}{}
+	}
+	protectedInUsePaths := make(map[string]struct{}, len(opts.ProtectedInUsePaths))
+	for _, path := range opts.ProtectedInUsePaths {
+		if path == "" {
+			continue
+		}
+		protectedInUsePaths[path] = struct{}{}
+	}
+	protectedRetainedPaths := make(map[string]struct{}, len(opts.ProtectedRetainedPaths))
+	for _, path := range opts.ProtectedRetainedPaths {
+		if path == "" {
+			continue
+		}
+		protectedRetainedPaths[path] = struct{}{}
 	}
 	type candidate struct {
 		path string
@@ -119,9 +150,29 @@ func (db *DB) ValueLogGC(ctx context.Context, opts ValueLogGCOptions) (ValueLogG
 			stats.BytesActive += size
 			continue
 		}
+		_, inUseProtected := protectedInUsePaths[f.Path]
+		_, retainedProtected := protectedRetainedPaths[f.Path]
+		if inUseProtected || retainedProtected {
+			stats.SegmentsProtected++
+			stats.BytesProtected += size
+			switch {
+			case inUseProtected && retainedProtected:
+				stats.SegmentsProtectedOverlap++
+				stats.BytesProtectedOverlap += size
+			case inUseProtected:
+				stats.SegmentsProtectedInUse++
+				stats.BytesProtectedInUse += size
+			default:
+				stats.SegmentsProtectedRetained++
+				stats.BytesProtectedRetained += size
+			}
+			continue
+		}
 		if _, ok := protectedPaths[f.Path]; ok {
 			stats.SegmentsProtected++
 			stats.BytesProtected += size
+			stats.SegmentsProtectedOther++
+			stats.BytesProtectedOther += size
 			continue
 		}
 
@@ -206,6 +257,24 @@ func currentValueLogIDs(set *valuelog.Set) map[uint32]struct{} {
 		}
 	}
 	return active
+}
+
+func mergeUniqueNonEmptyPaths(pathSets ...[]string) []string {
+	seen := make(map[string]struct{})
+	var out []string
+	for _, paths := range pathSets {
+		for _, path := range paths {
+			if path == "" {
+				continue
+			}
+			if _, ok := seen[path]; ok {
+				continue
+			}
+			seen[path] = struct{}{}
+			out = append(out, path)
+		}
+	}
+	return out
 }
 
 func recentValueLogIDs(set *valuelog.Set, keepPerLane int) map[uint32]struct{} {
