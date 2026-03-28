@@ -64,7 +64,7 @@ type modeDef struct {
 
 func main() {
 	input := flag.String("input", "", "Path to JSONL dataset with {val} records")
-	inputEncoding := flag.String("input-encoding", "auto", "Input value encoding: auto|string|base64|hex")
+	inputEncoding := flag.String("input-encoding", "auto", "Input value encoding: auto|string|base64|hex (auto uses per-record encoding or defaults to string)")
 	trainN := flag.Int("train", 15000, "Training sample count")
 	evalN := flag.Int("eval", 5000, "Evaluation sample count")
 	capBytes := flag.Int("cap", 0, "Maximum bytes kept per value (0 disables)")
@@ -356,24 +356,32 @@ func loadValues(path string, trainN, evalN, capBytes int, inputEncoding string) 
 		}
 		if len(line) > 0 {
 			lineNum++
+			trimmed := bytes.TrimSpace(line)
+			if len(trimmed) == 0 {
+				if readErr == io.EOF {
+					break
+				}
+				continue
+			}
 			var rec kvRecord
-			if err := json.Unmarshal(bytes.TrimSpace(line), &rec); err == nil {
-				enc := resolveInputEncoding(inputEncoding, rec)
-				val, err := decodeValue(rec.Val, enc)
-				if err != nil {
-					return nil, nil, fmt.Errorf("line %d: %w", lineNum, err)
-				}
-				if capBytes > 0 && len(val) > capBytes {
-					val = val[:capBytes]
-				}
-				if len(val) > 0 {
-					vv := make([]byte, len(val))
-					copy(vv, val)
-					if len(train) < trainN {
-						train = append(train, vv)
-					} else if len(eval) < evalN {
-						eval = append(eval, vv)
-					}
+			if err := json.Unmarshal(trimmed, &rec); err != nil {
+				return nil, nil, fmt.Errorf("line %d: invalid json record: %w (snippet=%q)", lineNum, err, previewLine(trimmed, 160))
+			}
+			enc := resolveInputEncoding(inputEncoding, rec)
+			val, err := decodeValue(rec.Val, enc)
+			if err != nil {
+				return nil, nil, fmt.Errorf("line %d: %w", lineNum, err)
+			}
+			if capBytes > 0 && len(val) > capBytes {
+				val = val[:capBytes]
+			}
+			if len(val) > 0 {
+				vv := make([]byte, len(val))
+				copy(vv, val)
+				if len(train) < trainN {
+					train = append(train, vv)
+				} else if len(eval) < evalN {
+					eval = append(eval, vv)
 				}
 			}
 		}
@@ -393,12 +401,23 @@ func resolveInputEncoding(flagValue string, rec kvRecord) string {
 		if recEnc := strings.ToLower(strings.TrimSpace(rec.Encoding)); recEnc != "" {
 			return recEnc
 		}
-		if _, err := base64.StdEncoding.DecodeString(strings.TrimSpace(rec.Val)); err == nil {
-			return "base64"
-		}
 		return "string"
 	}
 	return enc
+}
+
+func previewLine(line []byte, max int) string {
+	if max <= 0 {
+		max = 1
+	}
+	s := strings.TrimSpace(string(line))
+	if len(s) <= max {
+		return s
+	}
+	if max <= 3 {
+		return s[:max]
+	}
+	return s[:max-3] + "..."
 }
 
 func decodeValue(raw, encoding string) ([]byte, error) {

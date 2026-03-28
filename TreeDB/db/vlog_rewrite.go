@@ -302,17 +302,17 @@ func valuelogBlockCodecFromDB(codec ValueLogBlockCodec) valuelog.BlockCodec {
 	}
 }
 
-func scanValueLogSegmentPreferredDictID(seg *valuelog.File) uint64 {
+func scanValueLogSegmentPreferredDictID(seg *valuelog.File) (uint64, error) {
 	if seg == nil || seg.File == nil {
-		return 0
+		return 0, nil
 	}
 	info, err := seg.File.Stat()
 	if err != nil {
-		return 0
+		return 0, err
 	}
 	size := info.Size()
 	if size < int64(valuelog.HeaderSize+valuelog.FrameHeaderSize) {
-		return 0
+		return 0, nil
 	}
 	var (
 		recordHeader [valuelog.HeaderSize]byte
@@ -321,30 +321,30 @@ func scanValueLogSegmentPreferredDictID(seg *valuelog.File) uint64 {
 	)
 	for off+int64(valuelog.HeaderSize+valuelog.FrameHeaderSize) <= size {
 		if _, err := seg.File.ReadAt(recordHeader[:], off); err != nil {
-			return 0
+			return 0, err
 		}
 		bodyLen := int64(binary.LittleEndian.Uint32(recordHeader[16:20]))
 		if bodyLen < int64(valuelog.FrameHeaderSize) {
-			return 0
+			return 0, fmt.Errorf("vlog-rewrite: invalid frame body length %d at offset %d", bodyLen, off)
 		}
 		if off+int64(valuelog.HeaderSize)+bodyLen > size {
-			return 0
+			return 0, fmt.Errorf("vlog-rewrite: truncated frame body at offset %d", off)
 		}
 		if _, err := seg.File.ReadAt(frameHeader[:], off+int64(valuelog.HeaderSize)); err != nil {
-			return 0
+			return 0, err
 		}
 		dictID := binary.LittleEndian.Uint64(frameHeader[4:12])
 		if dictID != 0 {
-			return dictID
+			return dictID, nil
 		}
 		off += int64(valuelog.HeaderSize) + bodyLen
 	}
-	return 0
+	return 0, nil
 }
 
-func scanValueLogSetPreferredDictID(set *valuelog.Set) uint64 {
+func scanValueLogSetPreferredDictID(set *valuelog.Set) (uint64, error) {
 	if set == nil || len(set.Files) == 0 {
-		return 0
+		return 0, nil
 	}
 	ids := make([]uint32, 0, len(set.Files))
 	for id := range set.Files {
@@ -352,11 +352,15 @@ func scanValueLogSetPreferredDictID(set *valuelog.Set) uint64 {
 	}
 	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
 	for _, id := range ids {
-		if dictID := scanValueLogSegmentPreferredDictID(set.Files[id]); dictID != 0 {
-			return dictID
+		dictID, err := scanValueLogSegmentPreferredDictID(set.Files[id])
+		if err != nil {
+			return 0, fmt.Errorf("vlog-rewrite: scan preferred dict segment file=%d: %w", id, err)
+		}
+		if dictID != 0 {
+			return dictID, nil
 		}
 	}
-	return 0
+	return 0, nil
 }
 
 func hasRewriteSourceSelection(opts ValueLogRewriteOnlineOptions) bool {
@@ -2027,8 +2031,13 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 
 	alloc := &pagerAllocator{p: newPager}
 	ptrMap := make(map[recordKey]recordLoc)
-	preferredDictGlobal := scanValueLogSetPreferredDictID(state.ValueLogSet)
-	if preferredDictGlobal != 0 && opts.ValueLog.DictLookup != nil {
+	preferredDictGlobal, err := scanValueLogSetPreferredDictID(state.ValueLogSet)
+	if err != nil {
+		_ = newPager.Close()
+		_ = d.Close()
+		return stats, err
+	}
+	if writer.blockCompression && preferredDictGlobal != 0 && opts.ValueLog.DictLookup != nil {
 		if dictBytes, dictErr := opts.ValueLog.DictLookup(preferredDictGlobal); dictErr == nil && len(dictBytes) > 0 {
 			writer.SetLeafDict(preferredDictGlobal, dictBytes)
 		}
@@ -2038,12 +2047,12 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 		iter := tree.New(d.Pager(), newValueReader(state.ValueLogSet), root).
 			IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
 		rewriter := &rewriteIterator{
-			inner:      iter,
-			ptrMap:     ptrMap,
-			vlogs:      state.ValueLogSet,
-			writer:     writer,
-			readValue:  d.valueLogManager.Read,
-			dictLookup: opts.ValueLog.DictLookup,
+			inner:               iter,
+			ptrMap:              ptrMap,
+			vlogs:               state.ValueLogSet,
+			writer:              writer,
+			readValue:           d.valueLogManager.Read,
+			dictLookup:          opts.ValueLog.DictLookup,
 			preferredDictGlobal: preferredDictGlobal,
 		}
 		if !rewriter.Valid() {
@@ -2304,7 +2313,7 @@ func (w *rewriteWriter) AppendLeafPage(leafPage []byte) (page.ValuePtr, error) {
 	if w.nextRID == 0 {
 		return page.ValuePtr{}, fmt.Errorf("value-log rid space exhausted")
 	}
-	if w.leafDictID != 0 && len(w.leafDict) > 0 && rewriteAllowDictForSmallPayload(leafPage) {
+	if w.blockCompression && w.leafDictID != 0 && len(w.leafDict) > 0 && rewriteAllowDictForSmallPayload(leafPage) {
 		// LeafRef IDs intentionally omit grouped sub-index bits and therefore
 		// require K=1 frames. Use single-record append so decoded LeafRef pointers
 		// remain stable and do not alias another subrecord in a grouped batch.
@@ -2830,7 +2839,10 @@ func (it *rewriteIterator) reencodeGroupedBlockFrameWithDict(ptr page.ValuePtr, 
 	if k <= 0 || k > valuelog.MaxFrameK || k > len(rids) || len(offsets) != k+1 || k > 255 {
 		return page.ValuePtr{}, false, nil
 	}
-	dictID := it.preferredDictID(ptr.FileID)
+	dictID, err := it.preferredDictID(ptr.FileID)
+	if err != nil {
+		return page.ValuePtr{}, false, err
+	}
 	if dictID == 0 {
 		return page.ValuePtr{}, false, nil
 	}
@@ -2941,7 +2953,10 @@ func (it *rewriteIterator) reencodeSingleRecord(ptr page.ValuePtr, frameHeader v
 	if int(end-start) < page.PageSize {
 		return page.ValuePtr{}, false, nil
 	}
-	dictID := it.preferredDictID(ptr.FileID)
+	dictID, err := it.preferredDictID(ptr.FileID)
+	if err != nil {
+		return page.ValuePtr{}, false, err
+	}
 	if dictID == 0 {
 		return page.ValuePtr{}, false, nil
 	}
@@ -2984,21 +2999,24 @@ func (it *rewriteIterator) notePreferredDictID(fileID uint32, dictID uint64) {
 	}
 }
 
-func (it *rewriteIterator) preferredDictID(fileID uint32) uint64 {
+func (it *rewriteIterator) preferredDictID(fileID uint32) (uint64, error) {
 	if it == nil {
-		return 0
+		return 0, nil
 	}
 	if it.preferredDictByFile != nil {
 		if dictID, ok := it.preferredDictByFile[fileID]; ok {
 			if dictID != 0 {
-				return dictID
+				return dictID, nil
 			}
-			return it.preferredDictGlobal
+			return it.preferredDictGlobal, nil
 		}
 	}
 	if it.vlogs != nil && it.vlogs.Files != nil {
 		if seg := it.vlogs.Files[fileID]; seg != nil {
-			dictID := scanValueLogSegmentPreferredDictID(seg)
+			dictID, err := scanValueLogSegmentPreferredDictID(seg)
+			if err != nil {
+				return 0, err
+			}
 			if it.preferredDictByFile == nil {
 				it.preferredDictByFile = make(map[uint32]uint64)
 			}
@@ -3009,11 +3027,11 @@ func (it *rewriteIterator) preferredDictID(fileID uint32) uint64 {
 				if it.preferredDictGlobal == 0 {
 					it.preferredDictGlobal = dictID
 				}
-				return dictID
+				return dictID, nil
 			}
 		}
 	}
-	return it.preferredDictGlobal
+	return it.preferredDictGlobal, nil
 }
 
 func (it *rewriteIterator) dictBytesForID(dictID uint64) ([]byte, bool) {

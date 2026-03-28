@@ -1457,6 +1457,70 @@ func TestRewriteWriter_AppendLeafPageUsesLeafDictWhenConfigured(t *testing.T) {
 	}
 }
 
+func TestRewriteWriter_AppendLeafPageSkipsLeafDictWhenCompressionDisabled(t *testing.T) {
+	walDir := t.TempDir()
+	leafPage := bytes.Repeat([]byte("rewrite/leaf/page/dict/off/"), 256)
+	if len(leafPage) < page.PageSize {
+		leafPage = append(leafPage, bytes.Repeat([]byte{'x'}, page.PageSize-len(leafPage))...)
+	}
+	leafPage = leafPage[:page.PageSize]
+
+	w := newRewriteWriter(walDir, 0, 0, defaultValueLogRewriteSegmentBytes)
+	w.blockCompression = false
+	w.blockCodec = valuelog.BlockCodecSnappy
+	w.SetLeafDict(31001, []byte("dummy-dict-bytes"))
+	if _, err := w.AppendLeafPage(leafPage); err != nil {
+		t.Fatalf("AppendLeafPage: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	paths, err := filepath.Glob(filepath.Join(walDir, "value-l0-*.log"))
+	if err != nil {
+		t.Fatalf("glob segments: %v", err)
+	}
+	if len(paths) == 0 {
+		t.Fatalf("expected output segment")
+	}
+
+	foundDictFrame := false
+	for _, path := range paths {
+		f, err := os.Open(path)
+		if err != nil {
+			t.Fatalf("open %s: %v", filepath.Base(path), err)
+		}
+		func() {
+			defer f.Close()
+			for {
+				var header [valuelog.HeaderSize]byte
+				if _, err := io.ReadFull(f, header[:]); err != nil {
+					if err == io.EOF || err == io.ErrUnexpectedEOF {
+						return
+					}
+					t.Fatalf("read header %s: %v", filepath.Base(path), err)
+				}
+				bodyLen := binary.LittleEndian.Uint32(header[16:20])
+				body := make([]byte, int(bodyLen))
+				if _, err := io.ReadFull(f, body); err != nil {
+					t.Fatalf("read body %s: %v", filepath.Base(path), err)
+				}
+				frameHeader, _, _, _, err := valuelog.DecodeFrame(body)
+				if err != nil {
+					t.Fatalf("DecodeFrame %s: %v", filepath.Base(path), err)
+				}
+				if frameHeader.DictID != 0 {
+					foundDictFrame = true
+					return
+				}
+			}
+		}()
+	}
+	if foundDictFrame {
+		t.Fatalf("expected compression-off leaf rewrite to avoid dict frames")
+	}
+}
+
 func TestValueLogRewrite_BatchedPointerSwap_SnapshotIsolation(t *testing.T) {
 	dir := t.TempDir()
 

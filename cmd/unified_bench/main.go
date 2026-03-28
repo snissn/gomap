@@ -1763,6 +1763,16 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			if warmupKeys > 128_000 {
 				warmupKeys = 128_000
 			}
+			// Keep warmup writes disjoint from measured keys so throughput/IO
+			// remains comparable across modes.
+			warmupBase := uint64(cfg.Keys) * 2
+			var warmupKeyBytes []byte
+			if precomputeKeys && warmupKeys > 0 {
+				warmupKeyBytes = make([]byte, warmupKeys*8)
+				for j := 0; j < warmupKeys; j++ {
+					encodeKey(warmupKeyBytes[j*8:(j+1)*8], uint64(j)+warmupBase)
+				}
+			}
 			for i := 0; i < warmupKeys; i += cfg.BatchSize {
 				if batch == nil {
 					if err := openBatch(); err != nil {
@@ -1788,10 +1798,10 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 					for j := i; j < end; j++ {
 						var keyView []byte
 						if precomputeKeys {
-							keyView = keyBytes[j*8 : (j+1)*8]
+							keyView = warmupKeyBytes[j*8 : (j+1)*8]
 						} else {
 							var key [8]byte
-							encodeKey(key[:], uint64(j+cfg.Keys))
+							encodeKey(key[:], uint64(j)+warmupBase)
 							keyView = key[:]
 						}
 						value := values[valPos%len(values)]
@@ -1804,10 +1814,10 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 					for j := i; j < end; j++ {
 						var keyView []byte
 						if precomputeKeys {
-							keyView = keyBytes[j*8 : (j+1)*8]
+							keyView = warmupKeyBytes[j*8 : (j+1)*8]
 						} else {
 							var key [8]byte
-							encodeKey(key[:], uint64(j+cfg.Keys))
+							encodeKey(key[:], uint64(j)+warmupBase)
 							keyView = key[:]
 						}
 						value := values[valPos%len(values)]

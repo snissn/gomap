@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"math"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -321,6 +322,24 @@ func TestApportionStoredBytesByRaw_ConservesTotals(t *testing.T) {
 	zeroRaw := apportionStoredBytesByRaw([]int64{0, 0}, 7)
 	if len(zeroRaw) != 2 || zeroRaw[0] != 0 || zeroRaw[1] != 7 {
 		t.Fatalf("zero-raw apportion unexpected: %v", zeroRaw)
+	}
+
+	// Large-value apportioning must avoid integer overflow and conserve totals.
+	largeRaw := []int64{math.MaxInt32, math.MaxInt32 - 1, 1}
+	largeStored := int64(math.MaxInt64 - 12345)
+	largeShares := apportionStoredBytesByRaw(largeRaw, largeStored)
+	if len(largeShares) != len(largeRaw) {
+		t.Fatalf("large shares len=%d want=%d", len(largeShares), len(largeRaw))
+	}
+	var largeSum int64
+	for _, n := range largeShares {
+		if n < 0 {
+			t.Fatalf("expected non-negative large share, got %d in %v", n, largeShares)
+		}
+		largeSum += n
+	}
+	if largeSum != largeStored {
+		t.Fatalf("sum(large shares)=%d want=%d shares=%v", largeSum, largeStored, largeShares)
 	}
 }
 
