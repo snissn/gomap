@@ -306,6 +306,7 @@ func scanValueLogSegmentPreferredDictID(seg *valuelog.File) (uint64, error) {
 	if seg == nil || seg.File == nil {
 		return 0, nil
 	}
+	const recordFlagGrouped byte = 1 << 0
 	info, err := seg.File.Stat()
 	if err != nil {
 		return 0, err
@@ -328,12 +329,17 @@ func scanValueLogSegmentPreferredDictID(seg *valuelog.File) (uint64, error) {
 			return 0, err
 		}
 		bodyLen := int64(binary.LittleEndian.Uint32(recordHeader[16:20]))
-		if bodyLen < int64(valuelog.FrameHeaderSize) {
-			// Best-effort scan: malformed tail frames should not abort rewrite.
-			return 0, nil
-		}
 		if off+int64(valuelog.HeaderSize)+bodyLen > size {
 			// Best-effort scan: tolerate truncated trailing frame bodies.
+			return 0, nil
+		}
+		// Legacy/non-grouped records do not carry frame headers; skip them.
+		if recordHeader[5]&recordFlagGrouped == 0 {
+			off += int64(valuelog.HeaderSize) + bodyLen
+			continue
+		}
+		if bodyLen < int64(valuelog.FrameHeaderSize) {
+			// Best-effort scan: malformed tail frames should not abort rewrite.
 			return 0, nil
 		}
 		if _, err := seg.File.ReadAt(frameHeader[:], off+int64(valuelog.HeaderSize)); err != nil {
@@ -342,6 +348,10 @@ func scanValueLogSegmentPreferredDictID(seg *valuelog.File) (uint64, error) {
 				return 0, nil
 			}
 			return 0, err
+		}
+		if frameHeader[0] != valuelog.FrameVersion {
+			off += int64(valuelog.HeaderSize) + bodyLen
+			continue
 		}
 		dictID := binary.LittleEndian.Uint64(frameHeader[4:12])
 		if dictID != 0 {
@@ -2433,7 +2443,7 @@ func (w *rewriteWriter) appendSingleValueWithDict(dictID uint64, dict []byte, ri
 	if err := w.flushPendingDictBatch(); err != nil {
 		return page.ValuePtr{}, err
 	}
-	if err := w.maybeRotateForEstimate(int64(valuelog.HeaderSize + len(value))); err != nil {
+	if err := w.maybeRotateForEstimate(rewriteDictFrameRecordLen(len(value), 1)); err != nil {
 		return page.ValuePtr{}, err
 	}
 	ptr, err := w.w.Append(dictID, dict, rid, value)

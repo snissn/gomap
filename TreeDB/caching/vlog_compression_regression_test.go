@@ -15,12 +15,12 @@ func TestResolveVlogWriteMode_DefaultUsesAutoBehavior(t *testing.T) {
 		valueLogBlockCodec:      valuelog.BlockCodecSnappy,
 	}
 
-	mode, _, probe := db.resolveVlogWriteMode(nil, 0, 4096, 4096)
+	mode, _, probe := db.resolveVlogWriteMode(nil, 0, 4096, 4096, false)
 	if mode != vlogWriteBlock || probe {
 		t.Fatalf("default mode with no dict should follow auto/block, got mode=%v probe=%v", mode, probe)
 	}
 
-	mode, _, probe = db.resolveVlogWriteMode(nil, 7, 4096, 4096)
+	mode, _, probe = db.resolveVlogWriteMode(nil, 7, 4096, 4096, false)
 	if mode != vlogWriteDict || probe {
 		t.Fatalf("default mode with dict should follow auto/dict, got mode=%v probe=%v", mode, probe)
 	}
@@ -33,7 +33,7 @@ func TestResolveVlogWriteMode_DictAggressiveFallsBackToBlockWithoutDict(t *testi
 		valueLogAutotuneOptions: valuelog.AutotuneOptions{Mode: valuelog.AutotuneAggressive},
 	}
 
-	mode, codec, probe := db.resolveVlogWriteMode(nil, 0, 4096, 4096)
+	mode, codec, probe := db.resolveVlogWriteMode(nil, 0, 4096, 4096, false)
 	if mode != vlogWriteBlock || codec != valuelog.BlockCodecSnappy || probe {
 		t.Fatalf("dict/aggressive with no dict should fall back to block/snappy, got mode=%v codec=%v probe=%v", mode, codec, probe)
 	}
@@ -49,7 +49,7 @@ func TestResolveVlogWriteMode_DictAggressiveLargeOuterLeafPayloadPrefersBlock(t 
 
 	selector := newVlogCompressionSelector(vlogAutoBalanced, 0, 0)
 	l := &lane{vlogCompressionSelector: selector}
-	mode, codec, probe := db.resolveVlogWriteMode(l, 7, 48<<10, 48<<10)
+	mode, codec, probe := db.resolveVlogWriteMode(l, 7, 48<<10, 48<<10, true)
 	if mode != vlogWriteBlock || codec != valuelog.BlockCodecLZ4 || probe {
 		t.Fatalf("dict/aggressive large outer-leaf payload should prefer block/lz4, got mode=%v codec=%v probe=%v", mode, codec, probe)
 	}
@@ -73,7 +73,7 @@ func TestResolveVlogWriteMode_DictAggressiveSizeLargeOuterLeafPayloadCanUseDict(
 	selector.metrics[vlogAutoCandidateDict] = vlogCandidateMetrics{ratio: 0.08, throughput: 0.90, samples: 16}
 
 	l := &lane{vlogCompressionSelector: selector}
-	mode, codec, probe := db.resolveVlogWriteMode(l, 7, 48<<10, 48<<10)
+	mode, codec, probe := db.resolveVlogWriteMode(l, 7, 48<<10, 48<<10, true)
 	if mode != vlogWriteDict || codec != valuelog.BlockCodecSnappy || probe {
 		t.Fatalf("dict/aggressive+size large outer-leaf payload should allow dict selector path, got mode=%v codec=%v probe=%v", mode, codec, probe)
 	}
@@ -95,7 +95,7 @@ func TestResolveVlogWriteMode_DictAggressiveSelectorBlockUsesConfiguredCodec(t *
 	selector.metrics[vlogAutoCandidateDict] = vlogCandidateMetrics{ratio: 0.98, throughput: 0.50, samples: 16}
 
 	l := &lane{vlogCompressionSelector: selector}
-	mode, codec, probe := db.resolveVlogWriteMode(l, 7, 4096, 4096)
+	mode, codec, probe := db.resolveVlogWriteMode(l, 7, 4096, 4096, false)
 	if mode != vlogWriteBlock || codec != valuelog.BlockCodecLZ4 || probe {
 		t.Fatalf("dict/aggressive selector block fallback should use configured block codec, got mode=%v codec=%v probe=%v", mode, codec, probe)
 	}

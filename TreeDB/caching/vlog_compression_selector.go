@@ -1460,7 +1460,7 @@ func (db *DB) vlogSelectorEnabled(mode vlogCompressionMode) bool {
 	}
 }
 
-func (db *DB) resolveVlogWriteMode(l *lane, dictID uint64, rawPayloadBytes, unitPayloadBytes int) (vlogCompressionWriteMode, valuelog.BlockCodec, bool) {
+func (db *DB) resolveVlogWriteMode(l *lane, dictID uint64, rawPayloadBytes, unitPayloadBytes int, outerLeafPayload bool) (vlogCompressionWriteMode, valuelog.BlockCodec, bool) {
 	mode := normalizeVlogCompressionMode(db.valueLogCompressionMode)
 	switch mode {
 	case vlogCompressionOff:
@@ -1478,6 +1478,7 @@ func (db *DB) resolveVlogWriteMode(l *lane, dictID uint64, rawPayloadBytes, unit
 			return vlogWriteOff, db.valueLogBlockCodec, false
 		}
 		if db.vlogSelectorEnabled(mode) &&
+			outerLeafPayload &&
 			db.indexOuterLeavesInValueLog &&
 			!db.valueLogDictAllowOuterLeaf() &&
 			unitPayloadBytes >= valueLogDictClassifierLargePayloadBypassMin {

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"hash/crc32"
 	"io"
 	"os"
 	"path/filepath"
@@ -1093,6 +1094,50 @@ func TestScanValueLogSegmentPreferredDictID_ToleratesTruncatedTail(t *testing.T)
 	}
 	if dictID != 0 {
 		t.Fatalf("expected no preferred dict ID, got %d", dictID)
+	}
+}
+
+func TestScanValueLogSegmentPreferredDictID_SkipsNonGroupedRecords(t *testing.T) {
+	dir := t.TempDir()
+	fileID, err := valuelog.EncodeFileID(0, 1)
+	if err != nil {
+		t.Fatalf("EncodeFileID: %v", err)
+	}
+	path := filepath.Join(dir, "value-l0-000001.log")
+	w, err := valuelog.NewWriter(path, fileID)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+
+	rawPayload := make([]byte, valuelog.FrameHeaderSize+16)
+	binary.LittleEndian.PutUint64(rawPayload[4:12], uint64(0xdeadbeefcafebabe))
+	rawRecord := make([]byte, valuelog.HeaderSize+len(rawPayload))
+	rawRecord[4] = valuelog.Version
+	binary.LittleEndian.PutUint64(rawRecord[8:16], 1)
+	binary.LittleEndian.PutUint32(rawRecord[16:20], uint32(len(rawPayload)))
+	copy(rawRecord[valuelog.HeaderSize:], rawPayload)
+	binary.LittleEndian.PutUint32(rawRecord[0:4], crc32.ChecksumIEEE(rawRecord[4:]))
+	if _, err := w.AppendRawRecord(rawRecord, uint32(len(rawRecord)-4)); err != nil {
+		t.Fatalf("AppendRawRecord: %v", err)
+	}
+
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close writer: %v", err)
+	}
+
+	readFile, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("Open read file: %v", err)
+	}
+	defer closeNoErr(t, readFile)
+
+	seg := &valuelog.File{File: readFile}
+	dictID, err := scanValueLogSegmentPreferredDictID(seg)
+	if err != nil {
+		t.Fatalf("scanValueLogSegmentPreferredDictID: %v", err)
+	}
+	if dictID != 0 {
+		t.Fatalf("expected no preferred dict ID from non-grouped record, got %d", dictID)
 	}
 }
 
