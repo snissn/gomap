@@ -222,7 +222,12 @@ def build_summary(stats: dict[str, Any]) -> dict[str, Any]:
         "rewrite_plan_runs": metric_int(stats, "treedb.cache.vlog_generation.rewrite.plan_runs"),
         "rewrite_plan_selected": metric_int(stats, "treedb.cache.vlog_generation.rewrite.plan_selected"),
         "rewrite_plan_empty": metric_int(stats, "treedb.cache.vlog_generation.rewrite.plan_empty"),
+        "rewrite_plan_empty_no_selection": metric_int(stats, "treedb.cache.vlog_generation.rewrite.plan_empty.no_selection"),
+        "rewrite_plan_empty_age_blocked": metric_int(stats, "treedb.cache.vlog_generation.rewrite.plan_empty.age_blocked"),
         "rewrite_plan_selected_segments_total": metric_int(stats, "treedb.cache.vlog_generation.rewrite.plan_selected_segments_total"),
+        "rewrite_plan_penalty_filter_runs": metric_int(stats, "treedb.cache.vlog_generation.rewrite.plan_penalty_filter.runs"),
+        "rewrite_plan_penalty_filter_segments": metric_int(stats, "treedb.cache.vlog_generation.rewrite.plan_penalty_filter.segments"),
+        "rewrite_plan_penalty_filter_to_empty_runs": metric_int(stats, "treedb.cache.vlog_generation.rewrite.plan_penalty_filter.to_empty_runs"),
         "rewrite_exec_source_segments_total": metric_int(stats, "treedb.cache.vlog_generation.rewrite.exec.source_segments_total"),
         "rewrite_exec_source_segments_requested_total": metric_int(stats, "treedb.cache.vlog_generation.rewrite.exec.source_segments_requested_total"),
         "rewrite_exec_source_segments_still_referenced_total": metric_int(stats, "treedb.cache.vlog_generation.rewrite.exec.source_segments_still_referenced_total"),
@@ -456,6 +461,17 @@ def print_report(summary: dict[str, Any], source_file: Path, run_home: str, inst
         "  plan runs/selected/empty: "
         f"{summary['rewrite_plan_runs']} / {summary['rewrite_plan_selected']} / {summary['rewrite_plan_empty']} "
         f"(select_rate={summary['rewrite_plan_select_rate_pct']:.1f}%)"
+    )
+    print(
+        "  plan-empty breakdown: "
+        f"no_selection={summary['rewrite_plan_empty_no_selection']} "
+        f"age_blocked={summary['rewrite_plan_empty_age_blocked']}"
+    )
+    print(
+        "  plan penalty-filter: "
+        f"runs={summary['rewrite_plan_penalty_filter_runs']} "
+        f"segments={summary['rewrite_plan_penalty_filter_segments']} "
+        f"to_empty_runs={summary['rewrite_plan_penalty_filter_to_empty_runs']}"
     )
     print(
         "  selected->executed segments: "
