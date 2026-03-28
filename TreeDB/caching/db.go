@@ -4639,6 +4639,61 @@ func (db *DB) takeRetainedPruneObservedSourceIDs() map[uint32]struct{} {
 	return out
 }
 
+func (db *DB) queueVlogGenerationObservedSourceGCList(ids []uint32) {
+	if db == nil || len(ids) == 0 {
+		return
+	}
+	db.vlogGenerationObservedGCMu.Lock()
+	if db.vlogGenerationObservedGCSourceIDs == nil {
+		db.vlogGenerationObservedGCSourceIDs = make(map[uint32]struct{}, len(ids))
+	}
+	for _, id := range ids {
+		if id == 0 {
+			continue
+		}
+		db.vlogGenerationObservedGCSourceIDs[id] = struct{}{}
+	}
+	db.vlogGenerationObservedGCMu.Unlock()
+}
+
+func (db *DB) queueVlogGenerationObservedSourceGCIDs(ids map[uint32]struct{}) {
+	if db == nil || len(ids) == 0 {
+		return
+	}
+	db.vlogGenerationObservedGCMu.Lock()
+	if db.vlogGenerationObservedGCSourceIDs == nil {
+		db.vlogGenerationObservedGCSourceIDs = make(map[uint32]struct{}, len(ids))
+	}
+	for id := range ids {
+		if id == 0 {
+			continue
+		}
+		db.vlogGenerationObservedGCSourceIDs[id] = struct{}{}
+	}
+	db.vlogGenerationObservedGCMu.Unlock()
+}
+
+func (db *DB) takeVlogGenerationObservedSourceGCList() []uint32 {
+	if db == nil {
+		return nil
+	}
+	db.vlogGenerationObservedGCMu.Lock()
+	if len(db.vlogGenerationObservedGCSourceIDs) == 0 {
+		db.vlogGenerationObservedGCMu.Unlock()
+		return nil
+	}
+	out := make([]uint32, 0, len(db.vlogGenerationObservedGCSourceIDs))
+	for id := range db.vlogGenerationObservedGCSourceIDs {
+		if id == 0 {
+			continue
+		}
+		out = append(out, id)
+	}
+	db.vlogGenerationObservedGCSourceIDs = nil
+	db.vlogGenerationObservedGCMu.Unlock()
+	return out
+}
+
 func (db *DB) scheduleRetainedValueLogPrune() {
 	db.scheduleRetainedValueLogPruneWithForce(false)
 }
@@ -4722,6 +4777,7 @@ func (db *DB) scheduleRetainedValueLogPruneWithForce(force bool) {
 		if len(observedSourceIDs) > 0 && (pruneStats.ObservedSourceZombieMarkedSegments > 0 || pruneStats.ObservedSourceRemovedSegments > 0) {
 			// When a retained prune processes rewrite-observed source segments,
 			// queue a near-term maintenance pass so GC can re-check reclaim state.
+			db.queueVlogGenerationObservedSourceGCIDs(observedSourceIDs)
 			db.vlogGenerationCheckpointKickPending.Store(true)
 		}
 	}()
@@ -5557,6 +5613,8 @@ type DB struct {
 	retainedPruneForceRequested                                 atomic.Bool
 	retainedPruneObservedMu                                     sync.Mutex
 	retainedPruneObservedSourceIDs                              map[uint32]struct{}
+	vlogGenerationObservedGCMu                                  sync.Mutex
+	vlogGenerationObservedGCSourceIDs                           map[uint32]struct{}
 	retainedPruneMu                                             sync.Mutex
 	retainedPruneDone                                           chan struct{}
 	vlogGenerationRemapSuccesses                                atomic.Uint64
@@ -14599,10 +14657,23 @@ planned:
 						gcStats = gcStatsAfterPrune
 					}
 				}
+				if len(processedRewriteIDs) > 0 &&
+					gcStats.ObservedSourceSegments > 0 &&
+					gcStats.ObservedSourceSegmentsProtectedRetained > 0 &&
+					gcStats.ObservedSourceSegmentsEligible == 0 {
+					// Rewrite-selected source segments remained retained-protected
+					// after in-pass prune/GC. Queue an observed-source replay GC for
+					// the next maintenance pass.
+					db.queueVlogGenerationObservedSourceGCList(processedRewriteIDs)
+					db.vlogGenerationCheckpointKickPending.Store(true)
+				}
 				if gcStats.BytesProtectedRetained > 0 && gcStats.BytesEligible == 0 && db.valueLogRetainedClosedBytes.Load() > 0 {
 					// Retained-path protection can starve live reclaim even when rewrite
 					// processed stale payload in-pass. Kick an eager retained prune so
 					// lifecycle pins can drain without waiting for byte-pressure gates.
+					if len(processedRewriteIDs) > 0 {
+						db.queueRetainedPruneObservedSourceIDs(processedRewriteIDs)
+					}
 					db.scheduleRetainedValueLogPruneForce()
 				}
 			}
@@ -14780,26 +14851,34 @@ planned:
 		return
 	}
 
+	observedSourceGCIDs := db.takeVlogGenerationObservedSourceGCList()
+	forceObservedSourceGC := len(observedSourceGCIDs) > 0
 	if envBool(envDisableVlogGenerationGC) {
+		if forceObservedSourceGC {
+			db.queueVlogGenerationObservedSourceGCList(observedSourceGCIDs)
+		}
 		return
 	}
 	// GC is a best-effort background maintenance task. It requires a checkpoint
 	// barrier to be safe, and that barrier can be very expensive during sustained
 	// ingest/restore when the flush queue is non-empty. Avoid introducing long
 	// stalls by only running the GC path when the cached write queue is drained.
-	if queueLen != 0 {
+	if queueLen != 0 && !forceObservedSourceGC {
 		return
 	}
 	gcer, ok := db.backend.(backendValueLogGCer)
 	if !ok {
+		if forceObservedSourceGC {
+			db.queueVlogGenerationObservedSourceGCList(observedSourceGCIDs)
+		}
 		return
 	}
-	needEligibilityEstimate := !runGC && !db.shouldRunVlogGenerationGC(retained, reclaimable, churnBps)
+	needEligibilityEstimate := !runGC && !forceObservedSourceGC && !db.shouldRunVlogGenerationGC(retained, reclaimable, churnBps)
 	now = time.Now()
 	lastGC := db.vlogGenerationLastGCUnixNano.Load()
 	if lastGC > 0 {
 		lastAt := time.Unix(0, lastGC)
-		if now.Sub(lastAt) < vlogGenerationGCMinInterval {
+		if !forceObservedSourceGC && now.Sub(lastAt) < vlogGenerationGCMinInterval {
 			return
 		}
 	}
@@ -14822,6 +14901,9 @@ planned:
 		db.vlogGenerationLastGCUnixNano.Store(now.UnixNano())
 		ctx, cancel := db.foregroundMaintenanceContext(30 * time.Second)
 		gcOpts := db.valueLogGCOptions(false)
+		if forceObservedSourceGC {
+			gcOpts.ObservedSourceFileIDs = append([]uint32(nil), observedSourceGCIDs...)
+		}
 		gcStart := time.Now()
 		gcStats, err := gcer.ValueLogGC(ctx, gcOpts)
 		cancel()
@@ -14833,7 +14915,19 @@ planned:
 		if gcStats.BytesProtectedRetained > 0 && gcStats.BytesEligible == 0 && db.valueLogRetainedClosedBytes.Load() > 0 {
 			// When GC classifies all reclaim blockers as retained-path protection,
 			// trigger an eager retained prune pass to release stale lifecycle pins.
+			if forceObservedSourceGC {
+				db.queueRetainedPruneObservedSourceIDs(observedSourceGCIDs)
+			}
 			db.scheduleRetainedValueLogPruneForce()
+		}
+		if forceObservedSourceGC &&
+			gcStats.ObservedSourceSegments > 0 &&
+			gcStats.ObservedSourceSegmentsProtectedRetained > 0 &&
+			gcStats.ObservedSourceSegmentsEligible == 0 {
+			db.queueRetainedPruneObservedSourceIDs(observedSourceGCIDs)
+			db.scheduleRetainedValueLogPruneForce()
+			db.queueVlogGenerationObservedSourceGCList(observedSourceGCIDs)
+			db.vlogGenerationCheckpointKickPending.Store(true)
 		}
 		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
 		db.vlogGenerationGCRuns.Add(1)
@@ -14846,6 +14940,9 @@ planned:
 		return nil
 	})
 	if err != nil {
+		if forceObservedSourceGC {
+			db.queueVlogGenerationObservedSourceGCList(observedSourceGCIDs)
+		}
 		if errors.Is(err, context.Canceled) {
 			db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
 			return
