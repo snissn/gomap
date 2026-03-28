@@ -4194,6 +4194,8 @@ type retainedValueLogPruneStats struct {
 	RemovedSegments         int
 	RemovedBytes            int64
 	AbortedForegroundWrites bool
+	RetriedWithoutWriteGate bool
+	RetrySucceeded          bool
 }
 
 func (db *DB) valueLogClosedSegmentSize(path string) int64 {
@@ -4213,7 +4215,7 @@ func (db *DB) valueLogClosedSegmentSize(path string) int64 {
 	return l.vlogClosedSizes[path]
 }
 
-func (db *DB) pruneRetainedValueLogs() retainedValueLogPruneStats {
+func (db *DB) pruneRetainedValueLogs(force bool) retainedValueLogPruneStats {
 	var out retainedValueLogPruneStats
 	if !db.valueLogEnabled() {
 		return out
@@ -4248,6 +4250,13 @@ func (db *DB) pruneRetainedValueLogs() retainedValueLogPruneStats {
 	}
 
 	live, err := db.collectValueLogLiveIDsUntil(db.lastForegroundWriteUnixNano.Load())
+	if err != nil && force && errors.Is(err, errForegroundWritesResumed) {
+		out.RetriedWithoutWriteGate = true
+		live, err = db.collectValueLogLiveIDsUntil(0)
+		if err == nil {
+			out.RetrySucceeded = true
+		}
+	}
 	if err != nil {
 		if errors.Is(err, errForegroundWritesResumed) {
 			out.AbortedForegroundWrites = true
@@ -4490,7 +4499,13 @@ func (db *DB) scheduleRetainedValueLogPruneWithForce(force bool) {
 			db.retainedValueLogPruneForcedRuns.Add(1)
 		}
 		db.retainedValueLogPruneLastUnixNano.Store(now.UnixNano())
-		pruneStats := db.pruneRetainedValueLogs()
+		pruneStats := db.pruneRetainedValueLogs(effectiveForce)
+		if pruneStats.RetriedWithoutWriteGate {
+			db.retainedValueLogPruneWriteGateRetries.Add(1)
+			if pruneStats.RetrySucceeded {
+				db.retainedValueLogPruneWriteGateRetrySuccesses.Add(1)
+			}
+		}
 		if pruneStats.AbortedForegroundWrites {
 			db.retainedValueLogPruneForegroundAbortRuns.Add(1)
 		}
@@ -5304,6 +5319,8 @@ type DB struct {
 	retainedValueLogPruneScheduleSkipNoClosedBytes atomic.Uint64
 	retainedValueLogPruneScheduleSkipBelowPressure atomic.Uint64
 	retainedValueLogPruneScheduleSkipMinInterval   atomic.Uint64
+	retainedValueLogPruneWriteGateRetries          atomic.Uint64
+	retainedValueLogPruneWriteGateRetrySuccesses   atomic.Uint64
 	retainedPruneForceRequested                    atomic.Bool
 	retainedPruneMu                                sync.Mutex
 	retainedPruneDone                              chan struct{}
@@ -19952,6 +19969,8 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_retained_prune.schedule_skip.no_closed_bytes"] = fmt.Sprintf("%d", db.retainedValueLogPruneScheduleSkipNoClosedBytes.Load())
 	stats["treedb.cache.vlog_retained_prune.schedule_skip.below_pressure"] = fmt.Sprintf("%d", db.retainedValueLogPruneScheduleSkipBelowPressure.Load())
 	stats["treedb.cache.vlog_retained_prune.schedule_skip.min_interval"] = fmt.Sprintf("%d", db.retainedValueLogPruneScheduleSkipMinInterval.Load())
+	stats["treedb.cache.vlog_retained_prune.write_gate_retries"] = fmt.Sprintf("%d", db.retainedValueLogPruneWriteGateRetries.Load())
+	stats["treedb.cache.vlog_retained_prune.write_gate_retry_successes"] = fmt.Sprintf("%d", db.retainedValueLogPruneWriteGateRetrySuccesses.Load())
 	stats["treedb.cache.vlog_retained_prune.force_pending"] = fmt.Sprintf("%t", db.retainedPruneForceRequested.Load())
 	stats["treedb.cache.vlog_generation.policy"] = fmt.Sprintf("%d", db.valueLogGenerationPolicy)
 	stats["treedb.cache.vlog_generation.enabled"] = fmt.Sprintf("%t", db.valueLogGenerationPolicy == uint8(backenddb.ValueLogGenerationHotWarmCold))

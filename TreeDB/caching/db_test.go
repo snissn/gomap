@@ -2027,7 +2027,7 @@ func TestPruneRetainedValueLogs_SkipsLiveScanWhenAllRetainedPathsInUse(t *testin
 	}
 	cache.markValueLogRetain(retained)
 
-	cache.pruneRetainedValueLogs()
+	cache.pruneRetainedValueLogs(false)
 
 	backend.mu.RLock()
 	iteratorCalls := backend.iteratorCalls
@@ -2276,6 +2276,85 @@ func TestRetainedValueLogPrune_AbortsWhenForegroundWritesResume(t *testing.T) {
 	}
 	if !cache.valueLogRetained(retainedPath) {
 		t.Fatalf("retained path unmarked after prune abort")
+	}
+}
+
+func TestRetainedValueLogPruneForce_RetriesAfterForegroundWritesResume(t *testing.T) {
+	dir := t.TempDir()
+	backend := NewMockBackend()
+	backend.iteratorStartedCh = make(chan struct{})
+	backend.iteratorBlockCh = make(chan struct{})
+
+	cache, err := Open(dir, backend, Options{
+		DisableWAL:               true,
+		RelaxedSync:              true,
+		AllowUnsafe:              true,
+		FlushThreshold:           1 << 20,
+		ValueLogPointerThreshold: 1,
+	})
+	if err != nil {
+		t.Fatalf("cache open: %v", err)
+	}
+	defer cache.Close()
+
+	fileID, err := valuelog.EncodeFileID(0, 212)
+	if err != nil {
+		t.Fatalf("EncodeFileID: %v", err)
+	}
+	retainedPath := filepath.Join(dir, "wal", "value-l0-000212.log")
+	if err := os.MkdirAll(filepath.Dir(retainedPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	w, err := valuelog.NewWriter(retainedPath, fileID)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	if _, err := w.Append(0, nil, 1, bytes.Repeat([]byte("r"), 128)); err != nil {
+		_ = w.Close()
+		t.Fatalf("Append: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close writer: %v", err)
+	}
+	cache.markValueLogRetain(retainedPath)
+	seedRetainedPrunePressure(cache, retainedPath, 2<<30)
+	cache.lastForegroundWriteUnixNano.Store(time.Now().Add(-2 * retainedPruneQuietWindow).UnixNano())
+
+	cache.scheduleRetainedValueLogPruneForce()
+
+	select {
+	case <-backend.iteratorStartedCh:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("forced prune did not start")
+	}
+
+	lastWrite := cache.lastForegroundWriteUnixNano.Load()
+	deadline := time.Now().Add(2 * time.Second)
+	for !cache.foregroundWritesResumedSince(lastWrite) {
+		if time.Now().After(deadline) {
+			t.Fatalf("foreground write timestamp did not advance")
+		}
+		cache.noteWrite()
+		time.Sleep(time.Millisecond)
+	}
+	close(backend.iteratorBlockCh)
+	cache.waitForRetainedValueLogPrune()
+
+	if cache.valueLogRetained(retainedPath) {
+		t.Fatalf("retained path still marked after forced retry prune")
+	}
+	stats := cache.Stats()
+	if got := stats["treedb.cache.vlog_retained_prune.forced_runs"]; got != "1" {
+		t.Fatalf("forced_runs=%q want 1", got)
+	}
+	if got := stats["treedb.cache.vlog_retained_prune.foreground_abort_runs"]; got != "0" {
+		t.Fatalf("foreground_abort_runs=%q want 0", got)
+	}
+	if got := stats["treedb.cache.vlog_retained_prune.write_gate_retries"]; got != "1" {
+		t.Fatalf("write_gate_retries=%q want 1", got)
+	}
+	if got := stats["treedb.cache.vlog_retained_prune.write_gate_retry_successes"]; got != "1" {
+		t.Fatalf("write_gate_retry_successes=%q want 1", got)
 	}
 }
 
