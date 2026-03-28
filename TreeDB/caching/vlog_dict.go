@@ -10,7 +10,6 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/compression"
 	"github.com/snissn/gomap/TreeDB/internal/outerleaf"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
-	"github.com/snissn/gomap/TreeDB/page"
 )
 
 const (
@@ -159,9 +158,6 @@ func (db *DB) isOuterLeafValueLogPayload(value []byte) bool {
 	}
 	if !db.indexOuterLeavesInValueLog {
 		return false
-	}
-	if len(value) == page.PageSize {
-		return true
 	}
 	return outerleaf.HasMagic(value)
 }
