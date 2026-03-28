@@ -321,16 +321,26 @@ func scanValueLogSegmentPreferredDictID(seg *valuelog.File) (uint64, error) {
 	)
 	for off+int64(valuelog.HeaderSize+valuelog.FrameHeaderSize) <= size {
 		if _, err := seg.File.ReadAt(recordHeader[:], off); err != nil {
+			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+				// Best-effort scan: tolerate torn tails and stop hint discovery.
+				return 0, nil
+			}
 			return 0, err
 		}
 		bodyLen := int64(binary.LittleEndian.Uint32(recordHeader[16:20]))
 		if bodyLen < int64(valuelog.FrameHeaderSize) {
-			return 0, fmt.Errorf("vlog-rewrite: invalid frame body length %d at offset %d", bodyLen, off)
+			// Best-effort scan: malformed tail frames should not abort rewrite.
+			return 0, nil
 		}
 		if off+int64(valuelog.HeaderSize)+bodyLen > size {
-			return 0, fmt.Errorf("vlog-rewrite: truncated frame body at offset %d", off)
+			// Best-effort scan: tolerate truncated trailing frame bodies.
+			return 0, nil
 		}
 		if _, err := seg.File.ReadAt(frameHeader[:], off+int64(valuelog.HeaderSize)); err != nil {
+			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+				// Best-effort scan: tolerate torn tails and stop hint discovery.
+				return 0, nil
+			}
 			return 0, err
 		}
 		dictID := binary.LittleEndian.Uint64(frameHeader[4:12])

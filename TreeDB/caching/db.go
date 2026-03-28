@@ -9934,6 +9934,7 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 	}
 	autoSelectorMode := mode == vlogCompressionAuto
 	dictMode := mode == vlogCompressionDict
+	selectorEnabled := db.vlogSelectorEnabled(mode)
 
 	ptrs = getValueLogPtrsCap(len(records))
 	ptrs = ptrs[:len(records)]
@@ -9951,7 +9952,7 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 			// In selector-driven modes, block candidate evaluation must observe
 			// real compressed output (not keep-policy short-circuits), same as
 			// explicit probes.
-			if plan.probe || ((autoSelectorMode || dictMode) && plan.writeMode == vlogWriteBlock) {
+			if plan.probe || (selectorEnabled && (autoSelectorMode || dictMode) && plan.writeMode == vlogWriteBlock) {
 				ioNsPerStored = 0
 				encodeNsPerRaw = 0
 			}
@@ -10810,7 +10811,7 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	}
 	ioNsPerStoredForWriter := ioNsPerStored
 	encodeNsPerRawForWriter := encodeNsPerRaw
-	blockEvalBypass := (mode == vlogCompressionAuto) || (mode == vlogCompressionDict)
+	blockEvalBypass := mode == vlogCompressionAuto || (mode == vlogCompressionDict && db.vlogSelectorEnabled(mode))
 	if blockEvalBypass && finalWriteMode == vlogWriteBlock {
 		// Keep-policy bypass is required for fair selector-driven block
 		// evaluation; mode choice should rely on real frame outcomes.

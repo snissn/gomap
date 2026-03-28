@@ -455,6 +455,29 @@ func TestShouldBypassValueLogDictForRecords_OuterLeafPagesBypassDict(t *testing.
 	}
 }
 
+func TestShouldBypassValueLogDictForRecords_MixedBatchWithIgnoredSamplesDoesNotBypass(t *testing.T) {
+	db := &DB{
+		indexOuterLeavesInValueLog:          true,
+		valueLogDictIncompressibleHoldBytes: 256 << 10,
+		valueLogDictMetricsPauseBytes:       1 << 20,
+	}
+	records := make([]valuelog.Record, 8)
+	for i := range records {
+		var payload []byte
+		if i%2 == 0 {
+			// Sampled positions (step=2) look like outer-leaf pages.
+			payload = bytes.Repeat([]byte("o"), 4096)
+		} else {
+			// Non-sampled positions are regular values and should keep dict eligible.
+			payload = bytes.Repeat([]byte("regular-value-"), 400)
+		}
+		records[i] = valuelog.Record{RID: uint64(i + 1), Value: payload}
+	}
+	if db.shouldBypassValueLogDictForRecords(records, false) {
+		t.Fatalf("expected mixed batch with sparse ignored samples to remain dict-eligible")
+	}
+}
+
 func TestShouldBypassValueLogDictForRecords_OuterLeafPagesAllowedForDictSizeAggressive(t *testing.T) {
 	db := &DB{
 		valueLogCompressionMode:             uint8(vlogCompressionDict),

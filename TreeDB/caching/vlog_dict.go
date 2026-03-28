@@ -528,9 +528,9 @@ func (db *DB) shouldBypassValueLogDictForRecords(records []valuelog.Record, prob
 		}
 	}
 	if samples == 0 {
-		// If sampled records are all outer-leaf pages, bypass dict for this batch
-		// and keep them on block codecs.
-		if ignored > 0 {
+		// Only bypass on ignored samples when the entire batch is outer-leaf
+		// payloads. Sparse stride sampling can otherwise miss regular values.
+		if ignored > 0 && db.classifyVlogPayloadKindForRecords(records) == vlogPayloadKindOuterLeaf {
 			return true
 		}
 		return false
