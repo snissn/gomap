@@ -999,6 +999,31 @@ func TestRecordLaneVlogPayloadSplitObservation(t *testing.T) {
 	}
 }
 
+func TestRecordLaneVlogPayloadSplitFromSummary_LargeMixedDoesNotOverflow(t *testing.T) {
+	l := &lane{}
+	maxInt := int(^uint(0) >> 1)
+	stored := maxInt - 7
+	split := vlogPayloadRecordSplit{
+		Kind:                vlogPayloadKindMixed,
+		OuterLeafRecords:    1,
+		SingleValueRecords:  1,
+		OuterLeafRawBytes:   maxInt - 11,
+		SingleValueRawBytes: maxInt - 13,
+	}
+
+	recordLaneVlogPayloadSplitFromSummary(l, split, stored)
+
+	snap := snapshotLaneVlogPayloadSplit(l)
+	outerStored := snap.StoredBytes[vlogPayloadSplitOuterLeaf]
+	singleStored := snap.StoredBytes[vlogPayloadSplitSingleValue]
+	if outerStored > uint64(stored) {
+		t.Fatalf("outer stored bytes overflowed: outer=%d stored=%d", outerStored, stored)
+	}
+	if outerStored+singleStored != uint64(stored) {
+		t.Fatalf("stored split mismatch: outer=%d single=%d total=%d", outerStored, singleStored, stored)
+	}
+}
+
 func TestRecordLaneVlogOuterLeafCodecObservation(t *testing.T) {
 	l := &lane{}
 	recordLaneVlogOuterLeafCodecObservation(l, vlogOuterLeafCodecLZ4, 40<<10, 10<<10)

@@ -226,35 +226,65 @@ func recordLaneVlogPayloadSplitFromSummary(l *lane, split vlogPayloadRecordSplit
 	if l == nil {
 		return
 	}
-	totalRaw := split.totalRawBytes()
-	if totalRaw <= 0 {
+	outerRawBytes := split.OuterLeafRawBytes
+	if outerRawBytes < 0 {
+		outerRawBytes = 0
+	}
+	singleRawBytes := split.SingleValueRawBytes
+	if singleRawBytes < 0 {
+		singleRawBytes = 0
+	}
+	outerRawU := uint64(outerRawBytes)
+	singleRawU := uint64(singleRawBytes)
+	totalRawU := outerRawU + singleRawU
+	if totalRawU < outerRawU {
+		totalRawU = ^uint64(0)
+	}
+	if totalRawU == 0 {
 		return
 	}
 	if storedPayloadBytes <= 0 {
-		storedPayloadBytes = totalRaw
+		maxInt := int(^uint(0) >> 1)
+		if totalRawU > uint64(maxInt) {
+			storedPayloadBytes = maxInt
+		} else {
+			storedPayloadBytes = int(totalRawU)
+		}
 	}
 	outerStored := 0
 	singleStored := 0
 	switch {
-	case split.OuterLeafRawBytes > 0 && split.SingleValueRawBytes > 0:
-		outerStored = int((int64(storedPayloadBytes) * int64(split.OuterLeafRawBytes)) / int64(totalRaw))
-		if outerStored < 0 {
-			outerStored = 0
+	case outerRawU > 0 && singleRawU > 0:
+		uStored := uint64(storedPayloadBytes)
+		uOuter := outerRawU
+		uTotal := totalRawU
+		var outerStoredU uint64
+		if uTotal > 0 {
+			hi, lo := bits.Mul64(uStored, uOuter)
+			if hi == 0 {
+				outerStoredU = lo / uTotal
+			} else if hi < uTotal {
+				outerStoredU, _ = bits.Div64(hi, lo, uTotal)
+			} else {
+				// Defensive clamp for impossible overflow cases.
+				outerStoredU = uStored
+			}
 		}
-		if outerStored > storedPayloadBytes {
-			outerStored = storedPayloadBytes
+		if outerStoredU > uStored {
+			outerStoredU = uStored
 		}
+		outerStored = int(outerStoredU)
 		singleStored = storedPayloadBytes - outerStored
-	case split.OuterLeafRawBytes > 0:
+	case outerRawU > 0:
 		outerStored = storedPayloadBytes
-	case split.SingleValueRawBytes > 0:
+	case singleRawU > 0:
 		singleStored = storedPayloadBytes
 	}
-	if split.SingleValueRawBytes > 0 {
-		recordLaneVlogPayloadSplitObservation(l, vlogPayloadSplitSingleValue, split.SingleValueRawBytes, singleStored, split.SingleValueRecords)
+	if singleRawBytes > 0 {
+		recordLaneVlogPayloadSplitObservation(l, vlogPayloadSplitSingleValue, singleRawBytes, singleStored, split.SingleValueRecords)
 	}
-	if split.OuterLeafRawBytes > 0 {
-		recordLaneVlogPayloadSplitObservation(l, vlogPayloadSplitOuterLeaf, split.OuterLeafRawBytes, outerStored, split.OuterLeafRecords)
+	if outerRawBytes > 0 {
+		recordLaneVlogPayloadSplitObservation(l, vlogPayloadSplitOuterLeaf, outerRawBytes, outerStored, split.OuterLeafRecords)
 	}
 }
 
