@@ -49,8 +49,11 @@ Optional explicit input:
 The report highlights:
 - maintenance lane pressure (attempt/acquire/collision + skip mix)
 - rewrite plan-to-exec realization
+- rewrite source outcomes (requested vs still-referenced vs unreferenced)
 - stale-bytes processed vs immediate reclaim
 - observed-source replay drain
+- observed-source retained-prune outcomes (candidate/live-skipped/zombie-marked/removed)
+- zombie inventory (pinned vs unpinned bytes)
 - GC eligibility/protection signals
 
 ## Bench Commands

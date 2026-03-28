@@ -224,6 +224,12 @@ def build_summary(stats: dict[str, Any]) -> dict[str, Any]:
         "rewrite_plan_empty": metric_int(stats, "treedb.cache.vlog_generation.rewrite.plan_empty"),
         "rewrite_plan_selected_segments_total": metric_int(stats, "treedb.cache.vlog_generation.rewrite.plan_selected_segments_total"),
         "rewrite_exec_source_segments_total": metric_int(stats, "treedb.cache.vlog_generation.rewrite.exec.source_segments_total"),
+        "rewrite_exec_source_segments_requested_total": metric_int(stats, "treedb.cache.vlog_generation.rewrite.exec.source_segments_requested_total"),
+        "rewrite_exec_source_segments_still_referenced_total": metric_int(stats, "treedb.cache.vlog_generation.rewrite.exec.source_segments_still_referenced_total"),
+        "rewrite_exec_source_segments_unreferenced_total": metric_int(stats, "treedb.cache.vlog_generation.rewrite.exec.source_segments_unreferenced_total"),
+        "rewrite_exec_source_segments_requested_last": metric_int(stats, "treedb.cache.vlog_generation.rewrite.exec.source_segments_requested_last"),
+        "rewrite_exec_source_segments_still_referenced_last": metric_int(stats, "treedb.cache.vlog_generation.rewrite.exec.source_segments_still_referenced_last"),
+        "rewrite_exec_source_segments_unreferenced_last": metric_int(stats, "treedb.cache.vlog_generation.rewrite.exec.source_segments_unreferenced_last"),
         "rewrite_plan_selected_bytes_stale": metric_int(stats, "treedb.cache.vlog_generation.rewrite.plan_selected_bytes_stale"),
         "rewrite_processed_stale_bytes": metric_int(stats, "treedb.cache.vlog_generation.rewrite.processed_stale_bytes"),
         "rewrite_processed_live_bytes": metric_int(stats, "treedb.cache.vlog_generation.rewrite.processed_live_bytes"),
@@ -261,6 +267,26 @@ def build_summary(stats: dict[str, Any]) -> dict[str, Any]:
         "retained_prune_live_skipped_bytes": metric_int(stats, "treedb.cache.vlog_retained_prune.live_skipped_bytes"),
         "retained_prune_zombie_marked_segments": metric_int(stats, "treedb.cache.vlog_retained_prune.zombie_marked_segments"),
         "retained_prune_zombie_marked_bytes": metric_int(stats, "treedb.cache.vlog_retained_prune.zombie_marked_bytes"),
+        "vlog_zombie_segments": metric_int(stats, "treedb.cache.vlog_zombie.segments"),
+        "vlog_zombie_bytes": metric_int(stats, "treedb.cache.vlog_zombie.bytes"),
+        "vlog_zombie_pinned_segments": metric_int(stats, "treedb.cache.vlog_zombie.pinned_segments"),
+        "vlog_zombie_pinned_bytes": metric_int(stats, "treedb.cache.vlog_zombie.pinned_bytes"),
+        "vlog_zombie_unpinned_segments": metric_int(stats, "treedb.cache.vlog_zombie.unpinned_segments"),
+        "vlog_zombie_unpinned_bytes": metric_int(stats, "treedb.cache.vlog_zombie.unpinned_bytes"),
+        "retained_prune_observed_source_segments_total": metric_int(stats, "treedb.cache.vlog_retained_prune.observed_source.segments_total"),
+        "retained_prune_observed_source_bytes_total": metric_int(stats, "treedb.cache.vlog_retained_prune.observed_source.bytes_total"),
+        "retained_prune_observed_source_candidate_segments_total": metric_int(stats, "treedb.cache.vlog_retained_prune.observed_source.segments_candidate_total"),
+        "retained_prune_observed_source_candidate_bytes_total": metric_int(stats, "treedb.cache.vlog_retained_prune.observed_source.bytes_candidate_total"),
+        "retained_prune_observed_source_removed_segments_total": metric_int(stats, "treedb.cache.vlog_retained_prune.observed_source.segments_removed_total"),
+        "retained_prune_observed_source_removed_bytes_total": metric_int(stats, "treedb.cache.vlog_retained_prune.observed_source.bytes_removed_total"),
+        "retained_prune_observed_source_in_use_skipped_segments_total": metric_int(stats, "treedb.cache.vlog_retained_prune.observed_source.segments_in_use_skipped_total"),
+        "retained_prune_observed_source_in_use_skipped_bytes_total": metric_int(stats, "treedb.cache.vlog_retained_prune.observed_source.bytes_in_use_skipped_total"),
+        "retained_prune_observed_source_live_skipped_segments_total": metric_int(stats, "treedb.cache.vlog_retained_prune.observed_source.segments_live_skipped_total"),
+        "retained_prune_observed_source_live_skipped_bytes_total": metric_int(stats, "treedb.cache.vlog_retained_prune.observed_source.bytes_live_skipped_total"),
+        "retained_prune_observed_source_parse_skipped_segments_total": metric_int(stats, "treedb.cache.vlog_retained_prune.observed_source.segments_parse_skipped_total"),
+        "retained_prune_observed_source_parse_skipped_bytes_total": metric_int(stats, "treedb.cache.vlog_retained_prune.observed_source.bytes_parse_skipped_total"),
+        "retained_prune_observed_source_zombie_marked_segments_total": metric_int(stats, "treedb.cache.vlog_retained_prune.observed_source.segments_zombie_marked_total"),
+        "retained_prune_observed_source_zombie_marked_bytes_total": metric_int(stats, "treedb.cache.vlog_retained_prune.observed_source.bytes_zombie_marked_total"),
         "observed_gc_pending_ids": metric_int(stats, "treedb.cache.vlog_generation.observed_gc.pending_ids"),
         "observed_gc_queued_ids": metric_int(stats, "treedb.cache.vlog_generation.observed_gc.queued_ids"),
         "observed_gc_taken_ids": metric_int(stats, "treedb.cache.vlog_generation.observed_gc.taken_ids"),
@@ -305,6 +331,14 @@ def build_summary(stats: dict[str, Any]) -> dict[str, Any]:
     m["rewrite_segment_realization_pct"] = pct(
         m["rewrite_exec_source_segments_total"],
         m["rewrite_plan_selected_segments_total"],
+    )
+    m["rewrite_source_unreferenced_pct"] = pct(
+        m["rewrite_exec_source_segments_unreferenced_total"],
+        m["rewrite_exec_source_segments_requested_total"],
+    )
+    m["rewrite_source_still_referenced_pct"] = pct(
+        m["rewrite_exec_source_segments_still_referenced_total"],
+        m["rewrite_exec_source_segments_requested_total"],
     )
     m["rewrite_stale_selection_coverage_pct"] = pct(
         m["rewrite_processed_stale_bytes"],
@@ -357,6 +391,26 @@ def build_summary(stats: dict[str, Any]) -> dict[str, Any]:
         m["retained_prune_removed_bytes"],
         m["retained_prune_candidate_bytes"],
     )
+    m["retained_prune_observed_removed_candidate_segments_pct"] = pct(
+        m["retained_prune_observed_source_removed_segments_total"],
+        m["retained_prune_observed_source_candidate_segments_total"],
+    )
+    m["retained_prune_observed_removed_candidate_bytes_pct"] = pct(
+        m["retained_prune_observed_source_removed_bytes_total"],
+        m["retained_prune_observed_source_candidate_bytes_total"],
+    )
+    m["retained_prune_observed_live_skipped_candidate_segments_pct"] = pct(
+        m["retained_prune_observed_source_live_skipped_segments_total"],
+        m["retained_prune_observed_source_candidate_segments_total"],
+    )
+    m["retained_prune_observed_live_skipped_candidate_bytes_pct"] = pct(
+        m["retained_prune_observed_source_live_skipped_bytes_total"],
+        m["retained_prune_observed_source_candidate_bytes_total"],
+    )
+    m["vlog_zombie_pinned_bytes_pct"] = pct(
+        m["vlog_zombie_pinned_bytes"],
+        m["vlog_zombie_bytes"],
+    )
 
     return m
 
@@ -405,6 +459,16 @@ def print_report(summary: dict[str, Any], source_file: Path, run_home: str, inst
         "  selected->executed segments: "
         f"{summary['rewrite_plan_selected_segments_total']} -> {summary['rewrite_exec_source_segments_total']} "
         f"(realization={summary['rewrite_segment_realization_pct']:.1f}%)"
+    )
+    print(
+        "  source outcomes (exec): "
+        f"requested_total={summary['rewrite_exec_source_segments_requested_total']} "
+        f"unreferenced_total={summary['rewrite_exec_source_segments_unreferenced_total']} "
+        f"still_referenced_total={summary['rewrite_exec_source_segments_still_referenced_total']} "
+        f"(unref_pct={summary['rewrite_source_unreferenced_pct']:.1f}%, still_ref_pct={summary['rewrite_source_still_referenced_pct']:.1f}%) "
+        f"last=requested:{summary['rewrite_exec_source_segments_requested_last']} "
+        f"unref:{summary['rewrite_exec_source_segments_unreferenced_last']} "
+        f"still_ref:{summary['rewrite_exec_source_segments_still_referenced_last']}"
     )
     print(
         "  selected stale vs processed stale: "
@@ -467,6 +531,13 @@ def print_report(summary: dict[str, Any], source_file: Path, run_home: str, inst
         f"live={summary['retained_prune_live_skipped_segments']} ({human_bytes(summary['retained_prune_live_skipped_bytes'])}) "
         f"zombie_marked={summary['retained_prune_zombie_marked_segments']} ({human_bytes(summary['retained_prune_zombie_marked_bytes'])})"
     )
+    print(
+        "  zombie inventory: "
+        f"total={summary['vlog_zombie_segments']} ({human_bytes(summary['vlog_zombie_bytes'])}) "
+        f"pinned={summary['vlog_zombie_pinned_segments']} ({human_bytes(summary['vlog_zombie_pinned_bytes'])}) "
+        f"unpinned={summary['vlog_zombie_unpinned_segments']} ({human_bytes(summary['vlog_zombie_unpinned_bytes'])}) "
+        f"(pinned_bytes_pct={summary['vlog_zombie_pinned_bytes_pct']:.1f}%)"
+    )
     print("")
 
     print("Observed-source replay")
@@ -492,6 +563,19 @@ def print_report(summary: dict[str, Any], source_file: Path, run_home: str, inst
         f"deleted_pct={summary['observed_gc_source_bytes_deleted_pct']:.1f}%, "
         f"deleted_of_eligible={summary['observed_gc_source_bytes_deleted_of_eligible_pct']:.1f}%)"
     )
+    print(
+        "  observed-source retained-prune totals: "
+        f"seen={summary['retained_prune_observed_source_segments_total']} ({human_bytes(summary['retained_prune_observed_source_bytes_total'])}) "
+        f"candidate={summary['retained_prune_observed_source_candidate_segments_total']} ({human_bytes(summary['retained_prune_observed_source_candidate_bytes_total'])}) "
+        f"removed={summary['retained_prune_observed_source_removed_segments_total']} ({human_bytes(summary['retained_prune_observed_source_removed_bytes_total'])}) "
+        f"zombie_marked={summary['retained_prune_observed_source_zombie_marked_segments_total']} ({human_bytes(summary['retained_prune_observed_source_zombie_marked_bytes_total'])}) "
+        f"live_skipped={summary['retained_prune_observed_source_live_skipped_segments_total']} ({human_bytes(summary['retained_prune_observed_source_live_skipped_bytes_total'])}) "
+        f"in_use_skipped={summary['retained_prune_observed_source_in_use_skipped_segments_total']} ({human_bytes(summary['retained_prune_observed_source_in_use_skipped_bytes_total'])}) "
+        f"(removed_of_candidate={summary['retained_prune_observed_removed_candidate_segments_pct']:.1f}% seg / "
+        f"{summary['retained_prune_observed_removed_candidate_bytes_pct']:.1f}% bytes, "
+        f"live_skip_of_candidate={summary['retained_prune_observed_live_skipped_candidate_segments_pct']:.1f}% seg / "
+        f"{summary['retained_prune_observed_live_skipped_candidate_bytes_pct']:.1f}% bytes)"
+    )
 
     print("")
     notes: list[str] = []
@@ -503,6 +587,13 @@ def print_report(summary: dict[str, Any], source_file: Path, run_home: str, inst
         notes.append("maintenance collision rate is high; lane contention may be throttling rewrite/GC progress")
     if summary["rewrite_segment_realization_pct"] < 60.0 and summary["rewrite_plan_selected_segments_total"] > 0:
         notes.append("rewrite segment realization is low; staged debt is being selected faster than executed")
+    if (
+        summary["rewrite_exec_source_segments_unreferenced_total"] > 0
+        and summary["retained_prune_observed_source_zombie_marked_segments_total"] > 0
+        and summary["observed_gc_source_segments_deleted_total"] == 0
+        and summary["vlog_zombie_segments"] == 0
+    ):
+        notes.append("rewrite-selected sources became unreferenced and were zombie-marked, but GC delete counters stayed zero; reclaim likely happened via zombie lifecycle outside GC byte accounting")
     if not notes:
         notes.append("no obvious maintenance-lane bottleneck signature in this snapshot")
 

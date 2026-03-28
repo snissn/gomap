@@ -4243,6 +4243,48 @@ func (db *DB) observeRetainedValueLogPruneStats(pruneStats retainedValueLogPrune
 	db.retainedValueLogPruneLastObservedSourceParseSkippedBytes.Store(pruneStats.ObservedSourceParseSkippedBytes)
 	db.retainedValueLogPruneLastObservedSourceZombieMarkedSegments.Store(int64(pruneStats.ObservedSourceZombieMarkedSegments))
 	db.retainedValueLogPruneLastObservedSourceZombieMarkedBytes.Store(pruneStats.ObservedSourceZombieMarkedBytes)
+	if pruneStats.ObservedSourceSegments > 0 {
+		db.retainedValueLogPruneObservedSourceSegmentsTotal.Add(uint64(pruneStats.ObservedSourceSegments))
+	}
+	if pruneStats.ObservedSourceBytes > 0 {
+		db.retainedValueLogPruneObservedSourceBytesTotal.Add(pruneStats.ObservedSourceBytes)
+	}
+	if pruneStats.ObservedSourceCandidateSegments > 0 {
+		db.retainedValueLogPruneObservedSourceCandidateSegmentsTotal.Add(uint64(pruneStats.ObservedSourceCandidateSegments))
+	}
+	if pruneStats.ObservedSourceCandidateBytes > 0 {
+		db.retainedValueLogPruneObservedSourceCandidateBytesTotal.Add(pruneStats.ObservedSourceCandidateBytes)
+	}
+	if pruneStats.ObservedSourceRemovedSegments > 0 {
+		db.retainedValueLogPruneObservedSourceRemovedSegmentsTotal.Add(uint64(pruneStats.ObservedSourceRemovedSegments))
+	}
+	if pruneStats.ObservedSourceRemovedBytes > 0 {
+		db.retainedValueLogPruneObservedSourceRemovedBytesTotal.Add(pruneStats.ObservedSourceRemovedBytes)
+	}
+	if pruneStats.ObservedSourceInUseSkippedSegments > 0 {
+		db.retainedValueLogPruneObservedSourceInUseSkippedSegmentsTotal.Add(uint64(pruneStats.ObservedSourceInUseSkippedSegments))
+	}
+	if pruneStats.ObservedSourceInUseSkippedBytes > 0 {
+		db.retainedValueLogPruneObservedSourceInUseSkippedBytesTotal.Add(pruneStats.ObservedSourceInUseSkippedBytes)
+	}
+	if pruneStats.ObservedSourceLiveSkippedSegments > 0 {
+		db.retainedValueLogPruneObservedSourceLiveSkippedSegmentsTotal.Add(uint64(pruneStats.ObservedSourceLiveSkippedSegments))
+	}
+	if pruneStats.ObservedSourceLiveSkippedBytes > 0 {
+		db.retainedValueLogPruneObservedSourceLiveSkippedBytesTotal.Add(pruneStats.ObservedSourceLiveSkippedBytes)
+	}
+	if pruneStats.ObservedSourceParseSkippedSegments > 0 {
+		db.retainedValueLogPruneObservedSourceParseSkippedSegmentsTotal.Add(uint64(pruneStats.ObservedSourceParseSkippedSegments))
+	}
+	if pruneStats.ObservedSourceParseSkippedBytes > 0 {
+		db.retainedValueLogPruneObservedSourceParseSkippedBytesTotal.Add(pruneStats.ObservedSourceParseSkippedBytes)
+	}
+	if pruneStats.ObservedSourceZombieMarkedSegments > 0 {
+		db.retainedValueLogPruneObservedSourceZombieMarkedSegmentsTotal.Add(uint64(pruneStats.ObservedSourceZombieMarkedSegments))
+	}
+	if pruneStats.ObservedSourceZombieMarkedBytes > 0 {
+		db.retainedValueLogPruneObservedSourceZombieMarkedBytesTotal.Add(pruneStats.ObservedSourceZombieMarkedBytes)
+	}
 	if pruneStats.RetriedWithoutWriteGate {
 		db.retainedValueLogPruneWriteGateRetries.Add(1)
 		if pruneStats.RetrySucceeded {
@@ -5637,6 +5679,20 @@ type DB struct {
 	retainedValueLogPruneLastObservedSourceParseSkippedBytes    atomic.Int64
 	retainedValueLogPruneLastObservedSourceZombieMarkedSegments atomic.Int64
 	retainedValueLogPruneLastObservedSourceZombieMarkedBytes    atomic.Int64
+	retainedValueLogPruneObservedSourceSegmentsTotal            atomic.Uint64
+	retainedValueLogPruneObservedSourceBytesTotal               atomic.Int64
+	retainedValueLogPruneObservedSourceCandidateSegmentsTotal   atomic.Uint64
+	retainedValueLogPruneObservedSourceCandidateBytesTotal      atomic.Int64
+	retainedValueLogPruneObservedSourceRemovedSegmentsTotal     atomic.Uint64
+	retainedValueLogPruneObservedSourceRemovedBytesTotal        atomic.Int64
+	retainedValueLogPruneObservedSourceInUseSkippedSegmentsTotal atomic.Uint64
+	retainedValueLogPruneObservedSourceInUseSkippedBytesTotal   atomic.Int64
+	retainedValueLogPruneObservedSourceLiveSkippedSegmentsTotal atomic.Uint64
+	retainedValueLogPruneObservedSourceLiveSkippedBytesTotal    atomic.Int64
+	retainedValueLogPruneObservedSourceParseSkippedSegmentsTotal atomic.Uint64
+	retainedValueLogPruneObservedSourceParseSkippedBytesTotal   atomic.Int64
+	retainedValueLogPruneObservedSourceZombieMarkedSegmentsTotal atomic.Uint64
+	retainedValueLogPruneObservedSourceZombieMarkedBytesTotal   atomic.Int64
 	retainedValueLogPruneScheduleRequests                       atomic.Uint64
 	retainedValueLogPruneScheduleForcedRequests                 atomic.Uint64
 	retainedValueLogPruneScheduleSkipClosing                    atomic.Uint64
@@ -20676,6 +20732,20 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_retained_prune.last_observed_source.bytes_parse_skipped"] = fmt.Sprintf("%d", db.retainedValueLogPruneLastObservedSourceParseSkippedBytes.Load())
 	stats["treedb.cache.vlog_retained_prune.last_observed_source.segments_zombie_marked"] = fmt.Sprintf("%d", db.retainedValueLogPruneLastObservedSourceZombieMarkedSegments.Load())
 	stats["treedb.cache.vlog_retained_prune.last_observed_source.bytes_zombie_marked"] = fmt.Sprintf("%d", db.retainedValueLogPruneLastObservedSourceZombieMarkedBytes.Load())
+	stats["treedb.cache.vlog_retained_prune.observed_source.segments_total"] = fmt.Sprintf("%d", db.retainedValueLogPruneObservedSourceSegmentsTotal.Load())
+	stats["treedb.cache.vlog_retained_prune.observed_source.bytes_total"] = fmt.Sprintf("%d", db.retainedValueLogPruneObservedSourceBytesTotal.Load())
+	stats["treedb.cache.vlog_retained_prune.observed_source.segments_candidate_total"] = fmt.Sprintf("%d", db.retainedValueLogPruneObservedSourceCandidateSegmentsTotal.Load())
+	stats["treedb.cache.vlog_retained_prune.observed_source.bytes_candidate_total"] = fmt.Sprintf("%d", db.retainedValueLogPruneObservedSourceCandidateBytesTotal.Load())
+	stats["treedb.cache.vlog_retained_prune.observed_source.segments_removed_total"] = fmt.Sprintf("%d", db.retainedValueLogPruneObservedSourceRemovedSegmentsTotal.Load())
+	stats["treedb.cache.vlog_retained_prune.observed_source.bytes_removed_total"] = fmt.Sprintf("%d", db.retainedValueLogPruneObservedSourceRemovedBytesTotal.Load())
+	stats["treedb.cache.vlog_retained_prune.observed_source.segments_in_use_skipped_total"] = fmt.Sprintf("%d", db.retainedValueLogPruneObservedSourceInUseSkippedSegmentsTotal.Load())
+	stats["treedb.cache.vlog_retained_prune.observed_source.bytes_in_use_skipped_total"] = fmt.Sprintf("%d", db.retainedValueLogPruneObservedSourceInUseSkippedBytesTotal.Load())
+	stats["treedb.cache.vlog_retained_prune.observed_source.segments_live_skipped_total"] = fmt.Sprintf("%d", db.retainedValueLogPruneObservedSourceLiveSkippedSegmentsTotal.Load())
+	stats["treedb.cache.vlog_retained_prune.observed_source.bytes_live_skipped_total"] = fmt.Sprintf("%d", db.retainedValueLogPruneObservedSourceLiveSkippedBytesTotal.Load())
+	stats["treedb.cache.vlog_retained_prune.observed_source.segments_parse_skipped_total"] = fmt.Sprintf("%d", db.retainedValueLogPruneObservedSourceParseSkippedSegmentsTotal.Load())
+	stats["treedb.cache.vlog_retained_prune.observed_source.bytes_parse_skipped_total"] = fmt.Sprintf("%d", db.retainedValueLogPruneObservedSourceParseSkippedBytesTotal.Load())
+	stats["treedb.cache.vlog_retained_prune.observed_source.segments_zombie_marked_total"] = fmt.Sprintf("%d", db.retainedValueLogPruneObservedSourceZombieMarkedSegmentsTotal.Load())
+	stats["treedb.cache.vlog_retained_prune.observed_source.bytes_zombie_marked_total"] = fmt.Sprintf("%d", db.retainedValueLogPruneObservedSourceZombieMarkedBytesTotal.Load())
 	stats["treedb.cache.vlog_retained_prune.pressure_bytes"] = fmt.Sprintf("%d", db.retainedPrunePressureBytes())
 	stats["treedb.cache.vlog_retained_prune.schedule_requests"] = fmt.Sprintf("%d", db.retainedValueLogPruneScheduleRequests.Load())
 	stats["treedb.cache.vlog_retained_prune.schedule_forced_requests"] = fmt.Sprintf("%d", db.retainedValueLogPruneScheduleForcedRequests.Load())
@@ -21060,6 +21130,16 @@ func (db *DB) Stats() map[string]string {
 		stats["treedb.cache.vlog_mmap.dead_mappings.cap_base"] = fmt.Sprintf("%d", valuelog.MaxDeadMappings)
 		stats["treedb.cache.vlog_mmap.max_mapped_sealed_segments"] = fmt.Sprintf("%d", valuelog.MaxMappedSealedSegments)
 		stats["treedb.cache.vlog_mmap.max_mapped_sealed_bytes"] = fmt.Sprintf("%d", valuelog.MaxMappedSealedBytes)
+		zombieSegments, zombieBytes, zombiePinnedSegments, zombiePinnedBytes, zombieUnpinnedSegments, zombieUnpinnedBytes := db.valueLogReader.ZombieStats()
+		stats["treedb.cache.vlog_zombie.segments"] = fmt.Sprintf("%d", zombieSegments)
+		stats["treedb.cache.vlog_zombie.bytes"] = fmt.Sprintf("%d", zombieBytes)
+		stats["treedb.cache.vlog_zombie.pinned_segments"] = fmt.Sprintf("%d", zombiePinnedSegments)
+		stats["treedb.cache.vlog_zombie.pinned_bytes"] = fmt.Sprintf("%d", zombiePinnedBytes)
+		stats["treedb.cache.vlog_zombie.unpinned_segments"] = fmt.Sprintf("%d", zombieUnpinnedSegments)
+		stats["treedb.cache.vlog_zombie.unpinned_bytes"] = fmt.Sprintf("%d", zombieUnpinnedBytes)
+		stats["treedb.process.memory.vlog_zombie_bytes_estimate"] = fmt.Sprintf("%d", zombieBytes)
+		stats["treedb.process.memory.vlog_zombie_pinned_bytes_estimate"] = fmt.Sprintf("%d", zombiePinnedBytes)
+		stats["treedb.process.memory.vlog_zombie_unpinned_bytes_estimate"] = fmt.Sprintf("%d", zombieUnpinnedBytes)
 		stats["treedb.cache.vlog_mmap.active_segments"] = fmt.Sprintf("%d", cacheVlogMmap.activeSegments)
 		stats["treedb.cache.vlog_mmap.active_bytes"] = fmt.Sprintf("%d", cacheVlogMmap.activeBytes)
 		stats["treedb.cache.vlog_mmap.current_segments"] = fmt.Sprintf("%d", cacheVlogMmap.currentSegments)

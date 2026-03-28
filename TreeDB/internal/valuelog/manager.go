@@ -1290,6 +1290,50 @@ func (m *Manager) RemapStats() (remaps uint64, deadMappings uint64) {
 	return remaps, deadMappings
 }
 
+func valueLogFileSizeBestEffort(f *File) uint64 {
+	if f == nil {
+		return 0
+	}
+	if known := f.fileSize.Load(); known > 0 {
+		return uint64(known)
+	}
+	if data, _ := f.mmapData.Load().([]byte); len(data) > 0 {
+		return uint64(len(data))
+	}
+	if f.Path != "" {
+		if info, err := os.Stat(f.Path); err == nil && info.Size() > 0 {
+			return uint64(info.Size())
+		}
+	}
+	return 0
+}
+
+// ZombieStats reports tracked zombie segments and their approximate byte totals.
+// A zombie remains on disk until all snapshots release it (RefCount reaches 0).
+func (m *Manager) ZombieStats() (segments uint64, bytes uint64, pinnedSegments uint64, pinnedBytes uint64, unpinnedSegments uint64, unpinnedBytes uint64) {
+	if m == nil {
+		return 0, 0, 0, 0, 0, 0
+	}
+	m.mu.RLock()
+	for _, f := range m.files {
+		if f == nil || !f.IsZombie.Load() {
+			continue
+		}
+		segments++
+		size := valueLogFileSizeBestEffort(f)
+		bytes += size
+		if f.RefCount.Load() > 0 {
+			pinnedSegments++
+			pinnedBytes += size
+			continue
+		}
+		unpinnedSegments++
+		unpinnedBytes += size
+	}
+	m.mu.RUnlock()
+	return segments, bytes, pinnedSegments, pinnedBytes, unpinnedSegments, unpinnedBytes
+}
+
 // MmapResidencyStats reports aggregate mmap residency split by segment type:
 // current writable segments, sealed segments, and dead mappings/bytes.
 func (m *Manager) MmapResidencyStats() (currentSegments uint64, currentBytes uint64, sealedSegments uint64, sealedBytes uint64, deadMappings uint64, deadBytes uint64) {

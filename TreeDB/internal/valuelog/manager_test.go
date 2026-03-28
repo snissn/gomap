@@ -92,6 +92,38 @@ func TestManagerMmapResidencyStatsAggregatesCounters(t *testing.T) {
 	}
 }
 
+func TestManagerZombieStatsAggregatesPinnedAndUnpinned(t *testing.T) {
+	mgr := &Manager{
+		files: map[uint32]*File{
+			1: {},
+			2: {},
+			3: {},
+		},
+	}
+	// Zombie + pinned.
+	mgr.files[1].IsZombie.Store(true)
+	mgr.files[1].RefCount.Store(2)
+	mgr.files[1].fileSize.Store(100)
+	// Zombie + unpinned.
+	mgr.files[2].IsZombie.Store(true)
+	mgr.files[2].RefCount.Store(0)
+	mgr.files[2].fileSize.Store(200)
+	// Non-zombie should be ignored.
+	mgr.files[3].RefCount.Store(9)
+	mgr.files[3].fileSize.Store(300)
+
+	segments, bytes, pinnedSegments, pinnedBytes, unpinnedSegments, unpinnedBytes := mgr.ZombieStats()
+	if segments != 2 || bytes != 300 {
+		t.Fatalf("ZombieStats total mismatch: segments=%d bytes=%d want segments=2 bytes=300", segments, bytes)
+	}
+	if pinnedSegments != 1 || pinnedBytes != 100 {
+		t.Fatalf("ZombieStats pinned mismatch: segments=%d bytes=%d want segments=1 bytes=100", pinnedSegments, pinnedBytes)
+	}
+	if unpinnedSegments != 1 || unpinnedBytes != 200 {
+		t.Fatalf("ZombieStats unpinned mismatch: segments=%d bytes=%d want segments=1 bytes=200", unpinnedSegments, unpinnedBytes)
+	}
+}
+
 func TestManagerPromoteCurrentWritable_SwitchesPriorLaneSegmentToSealed(t *testing.T) {
 	mgr := &Manager{
 		files:                 make(map[uint32]*File),
