@@ -3058,9 +3058,11 @@ func (db *DB) SetDictStore(store DictStore) {
 		db.dictCurrentOpsByClass[class].Store(0)
 	}
 	if store != nil {
+		globalCurrent := uint64(0)
 		if dictID, err := store.GetCurrent(context.Background()); err == nil {
 			db.dictCurrentCached.Store(dictID)
 			db.dictCurrentCachedByClass[vlogDictClassSingleValue].Store(dictID)
+			globalCurrent = dictID
 		}
 		if db.dictClassMode() == vlogDictClassModeSplitOuterLeaf {
 			byClass, hasClassReader := store.(dictStoreCurrentByClass)
@@ -3072,9 +3074,16 @@ func (db *DB) SetDictStore(store DictStore) {
 					if err != nil {
 						continue
 					}
+					if dictID == 0 {
+						dictID = globalCurrent
+					}
+					if dictID == 0 {
+						continue
+					}
 					db.dictCurrentCachedByClass[class].Store(dictID)
 					if clampedClass == vlogDictClassSingleValue {
 						db.dictCurrentCached.Store(dictID)
+						globalCurrent = dictID
 					}
 				}
 			}
@@ -3152,6 +3161,9 @@ func (db *DB) currentDictIDForClass(ctx context.Context, class vlogDictClass) (u
 			if err != nil {
 				// Fall back to cached value on transient errors (best-effort).
 				return db.dictCurrentCachedByClass[classIdx].Load(), nil
+			}
+			if dictID == 0 {
+				dictID = db.dictCurrentCached.Load()
 			}
 			db.dictCurrentCachedByClass[classIdx].Store(dictID)
 			if clampedClass == vlogDictClassSingleValue {

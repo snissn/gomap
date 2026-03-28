@@ -283,3 +283,56 @@ func TestApplyValueLogDictProfileForClass_SingleClassUpdatesGlobalAndClassCurren
 		t.Fatalf("expected class current to match global current, class=%d global=%d", got, store.currentID)
 	}
 }
+
+func TestSetDictStore_SplitModeClassZeroUsesGlobalCurrent(t *testing.T) {
+	store := &classReadWriteDictStoreForClassPublishTest{
+		legacyDictStoreForClassPublishTest: &legacyDictStoreForClassPublishTest{
+			currentID: 77,
+			dicts:     map[uint64][]byte{77: []byte("global-dict")},
+			nextID:    77,
+		},
+		classCurrent: map[string]uint64{},
+	}
+	db := &DB{valueLogDictClassMode: uint8(vlogDictClassModeSplitOuterLeaf)}
+
+	db.SetDictStore(store)
+
+	if got := db.dictCurrentCached.Load(); got != 77 {
+		t.Fatalf("expected global dict current=77, got %d", got)
+	}
+	if got := db.dictCurrentCachedByClass[vlogDictClassSingleValue].Load(); got != 77 {
+		t.Fatalf("expected single-value class current to fall back to global=77, got %d", got)
+	}
+	if got := db.dictCurrentCachedByClass[vlogDictClassOuterLeaf].Load(); got != 77 {
+		t.Fatalf("expected outer-leaf class current to fall back to global=77, got %d", got)
+	}
+}
+
+func TestCurrentDictIDForClass_SplitModeClassZeroFallsBackToGlobalCached(t *testing.T) {
+	store := &classReadWriteDictStoreForClassPublishTest{
+		legacyDictStoreForClassPublishTest: &legacyDictStoreForClassPublishTest{
+			currentID: 88,
+			dicts:     map[uint64][]byte{88: []byte("global-dict")},
+			nextID:    88,
+		},
+		classCurrent: map[string]uint64{},
+	}
+	db := &DB{
+		dictStore:             store,
+		valueLogDictClassMode: uint8(vlogDictClassModeSplitOuterLeaf),
+	}
+	db.dictCurrentCached.Store(88)
+	db.dictCurrentCachedByClass[vlogDictClassOuterLeaf].Store(88)
+	db.dictCurrentOpsByClass[vlogDictClassOuterLeaf].Store((1 << 16) - 1) // force refresh
+
+	dictID, err := db.currentDictIDForClass(context.Background(), vlogDictClassOuterLeaf)
+	if err != nil {
+		t.Fatalf("currentDictIDForClass: %v", err)
+	}
+	if dictID != 88 {
+		t.Fatalf("expected class refresh to fall back to global current=88, got %d", dictID)
+	}
+	if got := db.dictCurrentCachedByClass[vlogDictClassOuterLeaf].Load(); got != 88 {
+		t.Fatalf("expected outer-leaf cache to remain global current=88, got %d", got)
+	}
+}
