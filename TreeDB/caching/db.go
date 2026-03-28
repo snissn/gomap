@@ -5530,20 +5530,26 @@ type DB struct {
 	// Rewrite budget token bucket (bytes) for online maintenance. This lets us
 	// interpret ValueLogRewriteBudgetBytesPerSec as a true per-second bandwidth
 	// budget while still running maintenance at coarse intervals.
-	vlogGenerationRewriteBudgetLastUnixNano atomic.Int64
-	vlogGenerationRewriteBudgetTokensBytes  atomic.Int64
-	vlogGenerationRewriteBudgetConsumed     atomic.Uint64
-	vlogGenerationRewritePlanTotalNanos     atomic.Uint64
-	vlogGenerationRewritePlanMaxNanos       atomic.Uint64
-	vlogGenerationRewriteExecTotalNanos     atomic.Uint64
-	vlogGenerationRewriteExecMaxNanos       atomic.Uint64
-	vlogGenerationRewriteExecSourceSegments atomic.Uint64
-	vlogGenerationGCExecTotalNanos          atomic.Uint64
-	vlogGenerationGCExecMaxNanos            atomic.Uint64
-	vlogGenerationVacuumExecTotalNanos      atomic.Uint64
-	vlogGenerationVacuumExecMaxNanos        atomic.Uint64
-	bgErrMu                                 sync.Mutex
-	bgErr                                   error
+	vlogGenerationRewriteBudgetLastUnixNano                 atomic.Int64
+	vlogGenerationRewriteBudgetTokensBytes                  atomic.Int64
+	vlogGenerationRewriteBudgetConsumed                     atomic.Uint64
+	vlogGenerationRewritePlanTotalNanos                     atomic.Uint64
+	vlogGenerationRewritePlanMaxNanos                       atomic.Uint64
+	vlogGenerationRewriteExecTotalNanos                     atomic.Uint64
+	vlogGenerationRewriteExecMaxNanos                       atomic.Uint64
+	vlogGenerationRewriteExecSourceSegments                 atomic.Uint64
+	vlogGenerationRewriteSourceSegmentsRequestedTotal       atomic.Uint64
+	vlogGenerationRewriteSourceSegmentsStillReferencedTotal atomic.Uint64
+	vlogGenerationRewriteSourceSegmentsUnreferencedTotal    atomic.Uint64
+	vlogGenerationRewriteSourceSegmentsRequestedLast        atomic.Uint64
+	vlogGenerationRewriteSourceSegmentsStillReferencedLast  atomic.Uint64
+	vlogGenerationRewriteSourceSegmentsUnreferencedLast     atomic.Uint64
+	vlogGenerationGCExecTotalNanos                          atomic.Uint64
+	vlogGenerationGCExecMaxNanos                            atomic.Uint64
+	vlogGenerationVacuumExecTotalNanos                      atomic.Uint64
+	vlogGenerationVacuumExecMaxNanos                        atomic.Uint64
+	bgErrMu                                                 sync.Mutex
+	bgErr                                                   error
 
 	// Backpressure state
 	queueBacklogBytes                  atomic.Int64
@@ -14408,6 +14414,30 @@ planned:
 			if sourceSegments := len(rewriteOpts.SourceFileIDs); sourceSegments > 0 {
 				db.vlogGenerationRewriteExecSourceSegments.Add(uint64(sourceSegments))
 			}
+			sourceSegmentsRequested := uint64(0)
+			if stats.SourceSegmentsRequested > 0 {
+				sourceSegmentsRequested = uint64(stats.SourceSegmentsRequested)
+			}
+			sourceSegmentsStillReferenced := uint64(0)
+			if stats.SourceSegmentsStillReferenced > 0 {
+				sourceSegmentsStillReferenced = uint64(stats.SourceSegmentsStillReferenced)
+			}
+			sourceSegmentsUnreferenced := uint64(0)
+			if stats.SourceSegmentsUnreferenced > 0 {
+				sourceSegmentsUnreferenced = uint64(stats.SourceSegmentsUnreferenced)
+			}
+			db.vlogGenerationRewriteSourceSegmentsRequestedLast.Store(sourceSegmentsRequested)
+			db.vlogGenerationRewriteSourceSegmentsStillReferencedLast.Store(sourceSegmentsStillReferenced)
+			db.vlogGenerationRewriteSourceSegmentsUnreferencedLast.Store(sourceSegmentsUnreferenced)
+			if sourceSegmentsRequested > 0 {
+				db.vlogGenerationRewriteSourceSegmentsRequestedTotal.Add(sourceSegmentsRequested)
+			}
+			if sourceSegmentsStillReferenced > 0 {
+				db.vlogGenerationRewriteSourceSegmentsStillReferencedTotal.Add(sourceSegmentsStillReferenced)
+			}
+			if sourceSegmentsUnreferenced > 0 {
+				db.vlogGenerationRewriteSourceSegmentsUnreferencedTotal.Add(sourceSegmentsUnreferenced)
+			}
 			rewriteBytesIn := int64(0)
 			if processedLedgerOK {
 				rewriteBytesIn = processedLedgerLiveBytes
@@ -20225,6 +20255,12 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_generation.rewrite.plan_penalty_filter.segments"] = fmt.Sprintf("%d", db.vlogGenerationRewritePlanPenaltyFilterSegments.Load())
 	stats["treedb.cache.vlog_generation.rewrite.plan_penalty_filter.to_empty_runs"] = fmt.Sprintf("%d", db.vlogGenerationRewritePlanPenaltyFilterToEmpty.Load())
 	stats["treedb.cache.vlog_generation.rewrite.exec.source_segments_total"] = fmt.Sprintf("%d", db.vlogGenerationRewriteExecSourceSegments.Load())
+	stats["treedb.cache.vlog_generation.rewrite.exec.source_segments_requested_total"] = fmt.Sprintf("%d", db.vlogGenerationRewriteSourceSegmentsRequestedTotal.Load())
+	stats["treedb.cache.vlog_generation.rewrite.exec.source_segments_still_referenced_total"] = fmt.Sprintf("%d", db.vlogGenerationRewriteSourceSegmentsStillReferencedTotal.Load())
+	stats["treedb.cache.vlog_generation.rewrite.exec.source_segments_unreferenced_total"] = fmt.Sprintf("%d", db.vlogGenerationRewriteSourceSegmentsUnreferencedTotal.Load())
+	stats["treedb.cache.vlog_generation.rewrite.exec.source_segments_requested_last"] = fmt.Sprintf("%d", db.vlogGenerationRewriteSourceSegmentsRequestedLast.Load())
+	stats["treedb.cache.vlog_generation.rewrite.exec.source_segments_still_referenced_last"] = fmt.Sprintf("%d", db.vlogGenerationRewriteSourceSegmentsStillReferencedLast.Load())
+	stats["treedb.cache.vlog_generation.rewrite.exec.source_segments_unreferenced_last"] = fmt.Sprintf("%d", db.vlogGenerationRewriteSourceSegmentsUnreferencedLast.Load())
 	stats["treedb.cache.vlog_generation.rewrite.canceled_runs"] = fmt.Sprintf("%d", db.vlogGenerationRewriteCanceledRuns.Load())
 	stats["treedb.cache.vlog_generation.rewrite.canceled_runs.fresh_plan"] = fmt.Sprintf("%d", db.vlogGenerationRewriteCanceledFreshPlanRuns.Load())
 	stats["treedb.cache.vlog_generation.rewrite.canceled_runs.queued_debt"] = fmt.Sprintf("%d", db.vlogGenerationRewriteCanceledQueuedDebtRuns.Load())

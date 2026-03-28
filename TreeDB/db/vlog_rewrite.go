@@ -49,6 +49,15 @@ type ValueLogRewriteStats struct {
 	BytesBefore    int64
 	BytesAfter     int64
 	RecordsCopied  int
+	// SourceSegmentsRequested is the number of source segments selected for this
+	// rewrite run after applying selection filters.
+	SourceSegmentsRequested int
+	// SourceSegmentsStillReferenced is the subset of selected source segments
+	// that remained referenced after rewrite pointer swaps and cleanup.
+	SourceSegmentsStillReferenced int
+	// SourceSegmentsUnreferenced is the subset of selected source segments that
+	// became unreferenced after rewrite pointer swaps and cleanup.
+	SourceSegmentsUnreferenced int
 }
 
 // ValueLogRewritePlan summarizes which segments a sparse online rewrite would
@@ -1180,6 +1189,7 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		}
 		sourceIDs, _ = selectRewriteSourceSegmentsWithStats(opts, set.Files, active, liveByID)
 		restrictSource = true
+		stats.SourceSegmentsRequested = len(sourceIDs)
 	}
 	_ = db.valueLogManager.Release(set)
 	if restrictSource && len(sourceIDs) == 0 {
@@ -1350,6 +1360,16 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 	referencedAfter, err := db.referencedValueLogSegments(context.Background())
 	if err != nil {
 		return stats, err
+	}
+	if len(sourceIDs) > 0 {
+		stillReferenced := 0
+		for id := range sourceIDs {
+			if _, ok := referencedAfter[id]; ok {
+				stillReferenced++
+			}
+		}
+		stats.SourceSegmentsStillReferenced = stillReferenced
+		stats.SourceSegmentsUnreferenced = len(sourceIDs) - stillReferenced
 	}
 	var protectedPaths map[string]struct{}
 	allowActiveSkip := len(opts.ProtectedPaths) > 0

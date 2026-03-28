@@ -2867,6 +2867,15 @@ func TestValueLogRewriteOnline_SourceFileIDsWithStaleFilterMatchesPlanSelection(
 	if stats.RecordsCopied != 1 {
 		t.Fatalf("expected one rewritten record from selected explicit source, got %d", stats.RecordsCopied)
 	}
+	if stats.SourceSegmentsRequested != 1 {
+		t.Fatalf("source segments requested=%d want 1", stats.SourceSegmentsRequested)
+	}
+	if stats.SourceSegmentsStillReferenced != 0 {
+		t.Fatalf("source segments still referenced=%d want 0", stats.SourceSegmentsStillReferenced)
+	}
+	if stats.SourceSegmentsUnreferenced != 1 {
+		t.Fatalf("source segments unreferenced=%d want 1", stats.SourceSegmentsUnreferenced)
+	}
 
 	ptrK1, flagsK1 := readProjectedPointerByKey(t, db, []byte("k1"))
 	ptrK2, flagsK2 := readProjectedPointerByKey(t, db, []byte("k2"))

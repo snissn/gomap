@@ -8,11 +8,14 @@ import (
 
 // ValueLogRewriteStats summarizes value-log rewrite compaction results.
 type ValueLogRewriteStats struct {
-	SegmentsBefore int
-	SegmentsAfter  int
-	BytesBefore    int64
-	BytesAfter     int64
-	RecordsCopied  int
+	SegmentsBefore                int
+	SegmentsAfter                 int
+	BytesBefore                   int64
+	BytesAfter                    int64
+	RecordsCopied                 int
+	SourceSegmentsRequested       int
+	SourceSegmentsStillReferenced int
+	SourceSegmentsUnreferenced    int
 }
 
 // ValueLogRewriteOnlineOptions controls online rewrite batching behavior.
