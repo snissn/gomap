@@ -1953,6 +1953,57 @@ func TestCachingDB_PrunesRetainedValueLog(t *testing.T) {
 	}
 }
 
+func TestOpen_InitializesRetainedClosedBytesFromExistingSegments(t *testing.T) {
+	dir := t.TempDir()
+
+	opts := Options{
+		DisableWAL:               true,
+		RelaxedSync:              true,
+		AllowUnsafe:              true,
+		FlushThreshold:           1 << 20,
+		ValueLogPointerThreshold: 1,
+	}
+
+	backend1, err := db.Open(db.Options{Dir: dir, ChunkSize: 64 * 1024})
+	if err != nil {
+		t.Fatalf("backend1 open: %v", err)
+	}
+	cache1, err := Open(dir, backend1, opts)
+	if err != nil {
+		_ = backend1.Close()
+		t.Fatalf("cache1 open: %v", err)
+	}
+
+	if err := cache1.Set([]byte("k"), bytes.Repeat([]byte("x"), page.DefaultInlineThreshold+256)); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	cache1.flushAll(false)
+	if err := cache1.rotateValueLogLocked(&cache1.lanes[0]); err != nil {
+		t.Fatalf("rotateValueLogLocked: %v", err)
+	}
+	if got := cache1.valueLogRetainedClosedBytes.Load(); got <= 0 {
+		t.Fatalf("pre-close retained closed bytes=%d want >0", got)
+	}
+	if err := cache1.Close(); err != nil {
+		t.Fatalf("cache1 close: %v", err)
+	}
+
+	backend2, err := db.Open(db.Options{Dir: dir, ChunkSize: 64 * 1024})
+	if err != nil {
+		t.Fatalf("backend2 open: %v", err)
+	}
+	cache2, err := Open(dir, backend2, opts)
+	if err != nil {
+		_ = backend2.Close()
+		t.Fatalf("cache2 open: %v", err)
+	}
+	defer cache2.Close()
+
+	if got := cache2.valueLogRetainedClosedBytes.Load(); got <= 0 {
+		t.Fatalf("reopen retained closed bytes=%d want >0", got)
+	}
+}
+
 func TestPruneRetainedValueLogs_SkipsLiveScanWhenAllRetainedPathsInUse(t *testing.T) {
 	dir := t.TempDir()
 	backend := NewMockBackend()
@@ -2360,6 +2411,145 @@ func TestCheckpoint_SkipsRetainedValueLogPruneBelowPressureThreshold(t *testing.
 	}
 	if cache.retainedPruneActive() {
 		cache.waitForRetainedValueLogPrune()
+	}
+	stats := cache.Stats()
+	if got := stats["treedb.cache.vlog_retained_prune.schedule_requests"]; got != "1" {
+		t.Fatalf("schedule_requests=%q want 1", got)
+	}
+	if got := stats["treedb.cache.vlog_retained_prune.schedule_forced_requests"]; got != "0" {
+		t.Fatalf("schedule_forced_requests=%q want 0", got)
+	}
+	if got := stats["treedb.cache.vlog_retained_prune.schedule_skip.below_pressure"]; got != "1" {
+		t.Fatalf("schedule_skip.below_pressure=%q want 1", got)
+	}
+	if got := stats["treedb.cache.vlog_retained_prune.closed_bytes"]; got != "128" {
+		t.Fatalf("closed_bytes=%q want 128", got)
+	}
+}
+
+func TestRetainedValueLogPruneForce_BypassesPressureThreshold(t *testing.T) {
+	dir := t.TempDir()
+	backend := NewMockBackend()
+	backend.iteratorStartedCh = make(chan struct{})
+	backend.iteratorBlockCh = make(chan struct{})
+
+	cache, err := Open(dir, backend, Options{
+		DisableWAL:               true,
+		RelaxedSync:              true,
+		AllowUnsafe:              true,
+		FlushThreshold:           1 << 20,
+		MaxValueLogRetainedBytes: 1 << 20,
+		ValueLogPointerThreshold: 1,
+	})
+	if err != nil {
+		t.Fatalf("cache open: %v", err)
+	}
+	defer cache.Close()
+
+	fileID, err := valuelog.EncodeFileID(0, 245)
+	if err != nil {
+		t.Fatalf("EncodeFileID: %v", err)
+	}
+	retainedPath := filepath.Join(dir, "wal", "value-l0-000245.log")
+	if err := os.MkdirAll(filepath.Dir(retainedPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	w, err := valuelog.NewWriter(retainedPath, fileID)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	if _, err := w.Append(0, nil, 1, bytes.Repeat([]byte("t"), 128)); err != nil {
+		_ = w.Close()
+		t.Fatalf("Append: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close writer: %v", err)
+	}
+	cache.markValueLogRetain(retainedPath)
+	seedRetainedPrunePressure(cache, retainedPath, 128)
+	cache.lastForegroundWriteUnixNano.Store(time.Now().Add(-2 * retainedPruneQuietWindow).UnixNano())
+
+	cache.scheduleRetainedValueLogPruneForce()
+
+	select {
+	case <-backend.iteratorStartedCh:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("forced retained prune did not start below pressure threshold")
+	}
+	close(backend.iteratorBlockCh)
+	cache.waitForRetainedValueLogPrune()
+	stats := cache.Stats()
+	if got := stats["treedb.cache.vlog_retained_prune.schedule_forced_requests"]; got != "1" {
+		t.Fatalf("schedule_forced_requests=%q want 1", got)
+	}
+	if got := stats["treedb.cache.vlog_retained_prune.forced_runs"]; got != "1" {
+		t.Fatalf("forced_runs=%q want 1", got)
+	}
+}
+
+func TestRetainedValueLogPruneForce_PreemptsQuietWait(t *testing.T) {
+	dir := t.TempDir()
+	backend := NewMockBackend()
+	backend.iteratorStartedCh = make(chan struct{})
+	backend.iteratorBlockCh = make(chan struct{})
+
+	cache, err := Open(dir, backend, Options{
+		DisableWAL:               true,
+		RelaxedSync:              true,
+		AllowUnsafe:              true,
+		FlushThreshold:           1 << 20,
+		ValueLogPointerThreshold: 1,
+	})
+	if err != nil {
+		t.Fatalf("cache open: %v", err)
+	}
+	defer cache.Close()
+
+	fileID, err := valuelog.EncodeFileID(0, 246)
+	if err != nil {
+		t.Fatalf("EncodeFileID: %v", err)
+	}
+	retainedPath := filepath.Join(dir, "wal", "value-l0-000246.log")
+	if err := os.MkdirAll(filepath.Dir(retainedPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	w, err := valuelog.NewWriter(retainedPath, fileID)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	if _, err := w.Append(0, nil, 1, bytes.Repeat([]byte("u"), 128)); err != nil {
+		_ = w.Close()
+		t.Fatalf("Append: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close writer: %v", err)
+	}
+	cache.markValueLogRetain(retainedPath)
+	seedRetainedPrunePressure(cache, retainedPath, 2<<30)
+	cache.lastForegroundWriteUnixNano.Store(time.Now().UnixNano())
+
+	cache.scheduleRetainedValueLogPrune()
+	select {
+	case <-backend.iteratorStartedCh:
+		t.Fatalf("retained prune started before quiet window elapsed")
+	case <-time.After(retainedPruneNegativeAssertWait):
+	}
+
+	cache.scheduleRetainedValueLogPruneForce()
+
+	select {
+	case <-backend.iteratorStartedCh:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("forced retained prune did not preempt quiet-window wait")
+	}
+	close(backend.iteratorBlockCh)
+	cache.waitForRetainedValueLogPrune()
+	stats := cache.Stats()
+	if got := stats["treedb.cache.vlog_retained_prune.schedule_forced_requests"]; got != "1" {
+		t.Fatalf("schedule_forced_requests=%q want 1", got)
+	}
+	if got := stats["treedb.cache.vlog_retained_prune.forced_runs"]; got != "1" {
+		t.Fatalf("forced_runs=%q want 1", got)
 	}
 }
 
