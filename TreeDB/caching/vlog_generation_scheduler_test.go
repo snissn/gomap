@@ -5717,6 +5717,10 @@ func TestVlogGenerationStats_ReportRewriteBacklogAndDurations(t *testing.T) {
 	db.vlogGenerationMaintenanceSkipStageDue.Store(2)
 	db.vlogGenerationRewritePlanSelectedSegments.Store(6)
 	db.vlogGenerationRewriteExecSourceSegments.Store(3)
+	db.vlogGenerationRewriteProcessedLiveBytes.Store(900)
+	db.vlogGenerationRewriteProcessedStaleBytes.Store(450)
+	db.vlogGenerationRewriteNoReclaimRuns.Store(3)
+	db.vlogGenerationRewriteNoReclaimStaleBytes.Store(320)
 
 	db.vlogGenerationRewriteQueueMu.Lock()
 	db.vlogGenerationRewriteQueueLoaded = true
@@ -5816,5 +5820,17 @@ func TestVlogGenerationStats_ReportRewriteBacklogAndDurations(t *testing.T) {
 	}
 	if got := stats["treedb.cache.vlog_generation.rewrite.exec.source_segments_total"]; got != "3" {
 		t.Fatalf("rewrite exec source segments total=%q want 3", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.processed_live_bytes"]; got != "900" {
+		t.Fatalf("rewrite processed live bytes=%q want 900", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.processed_stale_bytes"]; got != "450" {
+		t.Fatalf("rewrite processed stale bytes=%q want 450", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.no_reclaim_runs"]; got != "3" {
+		t.Fatalf("rewrite no reclaim runs=%q want 3", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.no_reclaim_stale_bytes"]; got != "320" {
+		t.Fatalf("rewrite no reclaim stale bytes=%q want 320", got)
 	}
 }

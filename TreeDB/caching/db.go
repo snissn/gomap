@@ -5175,6 +5175,10 @@ type DB struct {
 	vlogGenerationRewriteBytesIn                atomic.Uint64
 	vlogGenerationRewriteBytesOut               atomic.Uint64
 	vlogGenerationRewriteReclaimedBytes         atomic.Uint64
+	vlogGenerationRewriteProcessedLiveBytes     atomic.Uint64
+	vlogGenerationRewriteProcessedStaleBytes    atomic.Uint64
+	vlogGenerationRewriteNoReclaimRuns          atomic.Uint64
+	vlogGenerationRewriteNoReclaimStaleBytes    atomic.Uint64
 	vlogGenerationRewriteRuns                   atomic.Uint64
 	vlogGenerationRewritePlanRuns               atomic.Uint64
 	vlogGenerationRewritePlanCanceled           atomic.Uint64
@@ -13964,6 +13968,14 @@ planned:
 				db.vlogGenerationRewriteReclaimedBytes.Add(uint64(effectiveBytesBefore - effectiveBytesAfter))
 			}
 			locallyEffectiveProcessedDebt := len(processedRewriteIDs) > 0 && processedLedgerOK && processedLedgerStaleBytes > 0 && stats.RecordsCopied > 0
+			if processedLedgerOK {
+				if processedLedgerLiveBytes > 0 {
+					db.vlogGenerationRewriteProcessedLiveBytes.Add(uint64(processedLedgerLiveBytes))
+				}
+				if processedLedgerStaleBytes > 0 {
+					db.vlogGenerationRewriteProcessedStaleBytes.Add(uint64(processedLedgerStaleBytes))
+				}
+			}
 			if effectiveBytesBefore > 0 && effectiveBytesAfter >= effectiveBytesBefore && !locallyEffectiveProcessedDebt {
 				db.vlogGenerationRewriteIneffectiveRuns.Add(1)
 				db.vlogGenerationRewriteIneffectiveBytesIn.Add(uint64(effectiveBytesBefore))
@@ -13994,6 +14006,12 @@ planned:
 				}
 			}
 			if locallyEffectiveProcessedDebt {
+				if effectiveBytesAfter >= effectiveBytesBefore {
+					db.vlogGenerationRewriteNoReclaimRuns.Add(1)
+					if processedLedgerStaleBytes > 0 {
+						db.vlogGenerationRewriteNoReclaimStaleBytes.Add(uint64(processedLedgerStaleBytes))
+					}
+				}
 				db.debugVlogMaintf(
 					"rewrite_effective_local reason=%s processed_ids=%d planned_total=%d planned_live=%d planned_stale=%d global_bytes_before=%d global_bytes_after=%d gc_bytes_deleted=%d records=%d",
 					vlogGenerationReasonString(reason),
@@ -19802,6 +19820,10 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_generation.segments.cold"] = fmt.Sprintf("%d", retained.SegmentsCold)
 	stats["treedb.cache.vlog_generation.rewrite.bytes_in"] = fmt.Sprintf("%d", db.vlogGenerationRewriteBytesIn.Load())
 	stats["treedb.cache.vlog_generation.rewrite.bytes_out"] = fmt.Sprintf("%d", db.vlogGenerationRewriteBytesOut.Load())
+	stats["treedb.cache.vlog_generation.rewrite.processed_live_bytes"] = fmt.Sprintf("%d", db.vlogGenerationRewriteProcessedLiveBytes.Load())
+	stats["treedb.cache.vlog_generation.rewrite.processed_stale_bytes"] = fmt.Sprintf("%d", db.vlogGenerationRewriteProcessedStaleBytes.Load())
+	stats["treedb.cache.vlog_generation.rewrite.no_reclaim_runs"] = fmt.Sprintf("%d", db.vlogGenerationRewriteNoReclaimRuns.Load())
+	stats["treedb.cache.vlog_generation.rewrite.no_reclaim_stale_bytes"] = fmt.Sprintf("%d", db.vlogGenerationRewriteNoReclaimStaleBytes.Load())
 	stats["treedb.cache.vlog_generation.rewrite.runs"] = fmt.Sprintf("%d", db.vlogGenerationRewriteRuns.Load())
 	stats["treedb.cache.vlog_generation.rewrite.plan_runs"] = fmt.Sprintf("%d", db.vlogGenerationRewritePlanRuns.Load())
 	stats["treedb.cache.vlog_generation.rewrite.plan_canceled"] = fmt.Sprintf("%d", db.vlogGenerationRewritePlanCanceled.Load())
