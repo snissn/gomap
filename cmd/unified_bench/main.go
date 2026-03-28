@@ -86,6 +86,7 @@ var (
 	checkpointEveryOps              = flag.Int("checkpoint-every-ops", 0, "Force a best-effort durability checkpoint every N ops during write-heavy tests (0=disabled; DBs that support Checkpoint())")
 	checkpointEveryBytes            = flag.Int64("checkpoint-every-bytes", 0, "Force a best-effort durability checkpoint every N approx bytes during write-heavy tests (0=disabled; DBs that support Checkpoint())")
 	batchWriteSteadyCheckpointBytes = flag.Int64("batch-write-steady-checkpoint-bytes", 64<<20, "batch_write_steady: default periodic checkpoint interval in bytes when checkpoint-every-* flags are unset (0 disables)")
+	batchWriteDictWarmup            = flag.Bool("batch-write-dict-warmup", false, "Enable pre-measurement dict warmup writes for batch_write* (TreeDB dict mode); off by default to keep measured runs on empty DB state")
 
 	flushdrainCheckpointMax = flag.Duration("flushdrain-checkpoint-max", 0, "Abort flushdrain suite if checkpoint-before-random_read exceeds this duration (0=disabled)")
 
@@ -164,6 +165,7 @@ type BenchConfig struct {
 	CheckpointEveryOps              int
 	CheckpointEveryBytes            int64
 	BatchWriteSteadyCheckpointBytes int64
+	BatchWriteDictWarmup            bool
 
 	SettleBeforeScans bool
 
@@ -432,8 +434,9 @@ func main() {
 		VacuumBetweenTests:               *vacuumBetweenTests,
 		CheckpointEveryOps:               *checkpointEveryOps,
 		CheckpointEveryBytes:             *checkpointEveryBytes,
-		BatchWriteSteadyCheckpointBytes:  *batchWriteSteadyCheckpointBytes,
-		SettleBeforeScans:                *settleBeforeScans,
+			BatchWriteSteadyCheckpointBytes:  *batchWriteSteadyCheckpointBytes,
+			BatchWriteDictWarmup:            *batchWriteDictWarmup,
+			SettleBeforeScans:                *settleBeforeScans,
 		TreeDBCacheStatsBeforeReads:      *treedbCacheStatsBeforeReads,
 		TreeDBCacheStatsAfterTests:       *treedbCacheStatsAfterTests,
 		TreeDBVlogRewriteAfterRun:        *treedbVlogRewriteAfterRun,
@@ -1760,10 +1763,13 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			v, err := strconv.ParseUint(raw, 10, 64)
 			return err == nil && v != 0
 		}
-		shouldWarmupDictBatchWrite := func() bool {
-			if total <= 0 {
-				return false
-			}
+			shouldWarmupDictBatchWrite := func() bool {
+				if !cfg.BatchWriteDictWarmup {
+					return false
+				}
+				if total <= 0 {
+					return false
+				}
 			if _, ok := db.(*treedbadapter.DB); !ok {
 				return false
 			}
