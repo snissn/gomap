@@ -5424,11 +5424,16 @@ type DB struct {
 	vlogGenerationRewritePlanCanceled              atomic.Uint64
 	vlogGenerationRewritePlanErrors                atomic.Uint64
 	vlogGenerationRewritePlanEmpty                 atomic.Uint64
+	vlogGenerationRewritePlanEmptyAgeBlocked       atomic.Uint64
+	vlogGenerationRewritePlanEmptyNoSelection      atomic.Uint64
 	vlogGenerationRewritePlanSelected              atomic.Uint64
 	vlogGenerationRewritePlanSelectedSegments      atomic.Uint64
 	vlogGenerationRewritePlanSelectedBytes         atomic.Uint64
 	vlogGenerationRewritePlanSelectedLiveBytes     atomic.Uint64
 	vlogGenerationRewritePlanSelectedStaleBytes    atomic.Uint64
+	vlogGenerationRewritePlanPenaltyFilterRuns     atomic.Uint64
+	vlogGenerationRewritePlanPenaltyFilterSegments atomic.Uint64
+	vlogGenerationRewritePlanPenaltyFilterToEmpty  atomic.Uint64
 	vlogGenerationRewritePlanCanceledLastNS        atomic.Int64
 	vlogGenerationRewriteAgeBlockedUntilNS         atomic.Int64
 	vlogGenerationRewriteAgeBlockedWakeRunning     atomic.Bool
@@ -12880,6 +12885,22 @@ func (db *DB) observeVlogGenerationRewritePlanOutcomeWithDuration(plan backenddb
 		return
 	}
 	db.vlogGenerationRewritePlanEmpty.Add(1)
+	if plan.AgeBlockedSegments > 0 && plan.AgeBlockedMinRemainingAge > 0 {
+		db.vlogGenerationRewritePlanEmptyAgeBlocked.Add(1)
+	} else {
+		db.vlogGenerationRewritePlanEmptyNoSelection.Add(1)
+	}
+}
+
+func (db *DB) observeVlogGenerationRewritePlanPenaltyFilter(before, after int) {
+	if db == nil || before <= 0 || after >= before {
+		return
+	}
+	db.vlogGenerationRewritePlanPenaltyFilterRuns.Add(1)
+	db.vlogGenerationRewritePlanPenaltyFilterSegments.Add(uint64(before - after))
+	if after == 0 {
+		db.vlogGenerationRewritePlanPenaltyFilterToEmpty.Add(1)
+	}
 }
 
 func isVlogGenerationPlannerCanceled(err error) bool {
@@ -13785,6 +13806,7 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 			}
 		} else if len(plan.SourceFileIDs) > 0 {
 			db.clearVlogGenerationRewriteAgeBlockedUntil()
+			beforePenaltyFilter := len(plan.SourceFileIDs)
 			plan, err = db.filterVlogGenerationRewritePlanPenalties(plan, now)
 			if err != nil {
 				db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
@@ -13793,6 +13815,7 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 				}
 				return
 			}
+			db.observeVlogGenerationRewritePlanPenaltyFilter(beforePenaltyFilter, len(plan.SourceFileIDs))
 			updatePlanTimestamp = true
 			if len(plan.SourceFileIDs) > 0 {
 				if stagePending {
@@ -13940,6 +13963,7 @@ planned:
 				}
 				if len(plan.SourceFileIDs) > 0 {
 					db.clearVlogGenerationRewriteAgeBlockedUntil()
+					beforePenaltyFilter := len(plan.SourceFileIDs)
 					plan, err = db.filterVlogGenerationRewritePlanPenalties(plan, now)
 					if err != nil {
 						db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
@@ -13949,6 +13973,7 @@ planned:
 						}
 						return
 					}
+					db.observeVlogGenerationRewritePlanPenaltyFilter(beforePenaltyFilter, len(plan.SourceFileIDs))
 				}
 				if len(plan.SourceFileIDs) == 0 {
 					if shouldDeferVlogGenerationRewritePlanForAge(plan, vlogGenerationRewriteMinSegmentAge) {
@@ -20162,11 +20187,16 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_generation.rewrite.plan_canceled_last_unix_nano"] = fmt.Sprintf("%d", db.vlogGenerationRewritePlanCanceledLastNS.Load())
 	stats["treedb.cache.vlog_generation.rewrite.plan_errors"] = fmt.Sprintf("%d", db.vlogGenerationRewritePlanErrors.Load())
 	stats["treedb.cache.vlog_generation.rewrite.plan_empty"] = fmt.Sprintf("%d", db.vlogGenerationRewritePlanEmpty.Load())
+	stats["treedb.cache.vlog_generation.rewrite.plan_empty.age_blocked"] = fmt.Sprintf("%d", db.vlogGenerationRewritePlanEmptyAgeBlocked.Load())
+	stats["treedb.cache.vlog_generation.rewrite.plan_empty.no_selection"] = fmt.Sprintf("%d", db.vlogGenerationRewritePlanEmptyNoSelection.Load())
 	stats["treedb.cache.vlog_generation.rewrite.plan_selected"] = fmt.Sprintf("%d", db.vlogGenerationRewritePlanSelected.Load())
 	stats["treedb.cache.vlog_generation.rewrite.plan_selected_segments_total"] = fmt.Sprintf("%d", db.vlogGenerationRewritePlanSelectedSegments.Load())
 	stats["treedb.cache.vlog_generation.rewrite.plan_selected_bytes_total"] = fmt.Sprintf("%d", db.vlogGenerationRewritePlanSelectedBytes.Load())
 	stats["treedb.cache.vlog_generation.rewrite.plan_selected_bytes_live"] = fmt.Sprintf("%d", db.vlogGenerationRewritePlanSelectedLiveBytes.Load())
 	stats["treedb.cache.vlog_generation.rewrite.plan_selected_bytes_stale"] = fmt.Sprintf("%d", db.vlogGenerationRewritePlanSelectedStaleBytes.Load())
+	stats["treedb.cache.vlog_generation.rewrite.plan_penalty_filter.runs"] = fmt.Sprintf("%d", db.vlogGenerationRewritePlanPenaltyFilterRuns.Load())
+	stats["treedb.cache.vlog_generation.rewrite.plan_penalty_filter.segments"] = fmt.Sprintf("%d", db.vlogGenerationRewritePlanPenaltyFilterSegments.Load())
+	stats["treedb.cache.vlog_generation.rewrite.plan_penalty_filter.to_empty_runs"] = fmt.Sprintf("%d", db.vlogGenerationRewritePlanPenaltyFilterToEmpty.Load())
 	stats["treedb.cache.vlog_generation.rewrite.exec.source_segments_total"] = fmt.Sprintf("%d", db.vlogGenerationRewriteExecSourceSegments.Load())
 	stats["treedb.cache.vlog_generation.rewrite.canceled_runs"] = fmt.Sprintf("%d", db.vlogGenerationRewriteCanceledRuns.Load())
 	stats["treedb.cache.vlog_generation.rewrite.canceled_last_unix_nano"] = fmt.Sprintf("%d", db.vlogGenerationRewriteCanceledLastNS.Load())

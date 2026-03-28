@@ -320,6 +320,41 @@ func TestObserveVlogGenerationRewritePlanOutcome_SelectedTracksSegmentFallbackBy
 	}
 }
 
+func TestObserveVlogGenerationRewritePlanOutcome_EmptyReasonBuckets(t *testing.T) {
+	db := &DB{}
+	db.observeVlogGenerationRewritePlanOutcome(backenddb.ValueLogRewritePlan{
+		AgeBlockedSegments:        2,
+		AgeBlockedMinRemainingAge: 3 * time.Second,
+	}, nil)
+	db.observeVlogGenerationRewritePlanOutcome(backenddb.ValueLogRewritePlan{}, nil)
+
+	if got, want := db.vlogGenerationRewritePlanEmpty.Load(), uint64(2); got != want {
+		t.Fatalf("plan empty=%d want=%d", got, want)
+	}
+	if got, want := db.vlogGenerationRewritePlanEmptyAgeBlocked.Load(), uint64(1); got != want {
+		t.Fatalf("plan empty age-blocked=%d want=%d", got, want)
+	}
+	if got, want := db.vlogGenerationRewritePlanEmptyNoSelection.Load(), uint64(1); got != want {
+		t.Fatalf("plan empty no-selection=%d want=%d", got, want)
+	}
+}
+
+func TestObserveVlogGenerationRewritePlanPenaltyFilterCounters(t *testing.T) {
+	db := &DB{}
+	db.observeVlogGenerationRewritePlanPenaltyFilter(5, 2)
+	db.observeVlogGenerationRewritePlanPenaltyFilter(2, 0)
+
+	if got, want := db.vlogGenerationRewritePlanPenaltyFilterRuns.Load(), uint64(2); got != want {
+		t.Fatalf("penalty filter runs=%d want=%d", got, want)
+	}
+	if got, want := db.vlogGenerationRewritePlanPenaltyFilterSegments.Load(), uint64(5); got != want {
+		t.Fatalf("penalty filter segments=%d want=%d", got, want)
+	}
+	if got, want := db.vlogGenerationRewritePlanPenaltyFilterToEmpty.Load(), uint64(1); got != want {
+		t.Fatalf("penalty filter to-empty=%d want=%d", got, want)
+	}
+}
+
 func TestMaybeRunVlogGenerationMaintenanceWithOptions_TracksWalOnPeriodicSkip(t *testing.T) {
 	db := &DB{valueLogGenerationPolicy: uint8(backenddb.ValueLogGenerationHotWarmCold)}
 	db.maybeRunVlogGenerationMaintenanceWithOptions(true, vlogGenerationMaintenanceOptions{})
@@ -4559,6 +4594,12 @@ func TestVlogGenerationRewritePlan_TracksEmptyPlanOutcome(t *testing.T) {
 	if got := stats["treedb.cache.vlog_generation.rewrite.plan_empty"]; got != "1" {
 		t.Fatalf("plan empty=%q want 1", got)
 	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.plan_empty.age_blocked"]; got != "0" {
+		t.Fatalf("plan empty age-blocked=%q want 0", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.plan_empty.no_selection"]; got != "1" {
+		t.Fatalf("plan empty no-selection=%q want 1", got)
+	}
 	if got := stats["treedb.cache.vlog_generation.rewrite.plan_selected"]; got != "0" {
 		t.Fatalf("plan selected=%q want 0", got)
 	}
@@ -4567,6 +4608,15 @@ func TestVlogGenerationRewritePlan_TracksEmptyPlanOutcome(t *testing.T) {
 	}
 	if got := stats["treedb.cache.vlog_generation.rewrite.plan_errors"]; got != "0" {
 		t.Fatalf("plan errors=%q want 0", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.plan_penalty_filter.runs"]; got != "0" {
+		t.Fatalf("plan penalty-filter runs=%q want 0", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.plan_penalty_filter.segments"]; got != "0" {
+		t.Fatalf("plan penalty-filter segments=%q want 0", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.plan_penalty_filter.to_empty_runs"]; got != "0" {
+		t.Fatalf("plan penalty-filter to-empty=%q want 0", got)
 	}
 }
 
