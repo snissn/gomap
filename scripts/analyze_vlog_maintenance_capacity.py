@@ -253,6 +253,13 @@ def build_summary(stats: dict[str, Any]) -> dict[str, Any]:
         "observed_gc_taken_ids": metric_int(stats, "treedb.cache.vlog_generation.observed_gc.taken_ids"),
         "observed_gc_runs": metric_int(stats, "treedb.cache.vlog_generation.observed_gc.runs"),
         "observed_gc_retry_queued": metric_int(stats, "treedb.cache.vlog_generation.observed_gc.retry_queued"),
+        "observed_gc_source_segments_total": metric_int(stats, "treedb.cache.vlog_generation.observed_gc.source_segments_total"),
+        "observed_gc_source_segments_eligible_total": metric_int(stats, "treedb.cache.vlog_generation.observed_gc.source_segments_eligible_total"),
+        "observed_gc_source_segments_deleted_total": metric_int(stats, "treedb.cache.vlog_generation.observed_gc.source_segments_deleted_total"),
+        "observed_gc_source_bytes_total": metric_int(stats, "treedb.cache.vlog_generation.observed_gc.source_bytes_total"),
+        "observed_gc_source_bytes_eligible_total": metric_int(stats, "treedb.cache.vlog_generation.observed_gc.source_bytes_eligible_total"),
+        "observed_gc_source_bytes_deleted_total": metric_int(stats, "treedb.cache.vlog_generation.observed_gc.source_bytes_deleted_total"),
+        "observed_gc_source_bytes_protected_retained_total": metric_int(stats, "treedb.cache.vlog_generation.observed_gc.source_bytes_protected_retained_total"),
         "checkpoint_kick_runs": metric_int(stats, "treedb.cache.vlog_generation.checkpoint_kick.runs"),
         "checkpoint_kick_gc_runs": metric_int(stats, "treedb.cache.vlog_generation.checkpoint_kick.gc_runs"),
         "checkpoint_kick_rewrite_runs": metric_int(stats, "treedb.cache.vlog_generation.checkpoint_kick.rewrite_runs"),
@@ -309,6 +316,26 @@ def build_summary(stats: dict[str, Any]) -> dict[str, Any]:
     )
 
     m["observed_gc_drain_pct"] = pct(m["observed_gc_taken_ids"], m["observed_gc_queued_ids"])
+    m["observed_gc_source_segments_eligible_pct"] = pct(
+        m["observed_gc_source_segments_eligible_total"],
+        m["observed_gc_source_segments_total"],
+    )
+    m["observed_gc_source_segments_deleted_pct"] = pct(
+        m["observed_gc_source_segments_deleted_total"],
+        m["observed_gc_source_segments_total"],
+    )
+    m["observed_gc_source_bytes_eligible_pct"] = pct(
+        m["observed_gc_source_bytes_eligible_total"],
+        m["observed_gc_source_bytes_total"],
+    )
+    m["observed_gc_source_bytes_deleted_pct"] = pct(
+        m["observed_gc_source_bytes_deleted_total"],
+        m["observed_gc_source_bytes_total"],
+    )
+    m["observed_gc_source_bytes_deleted_of_eligible_pct"] = pct(
+        m["observed_gc_source_bytes_deleted_total"],
+        m["observed_gc_source_bytes_eligible_total"],
+    )
 
     return m
 
@@ -413,6 +440,23 @@ def print_report(summary: dict[str, Any], source_file: Path, run_home: str, inst
         "  queued/taken/pending ids: "
         f"{summary['observed_gc_queued_ids']} / {summary['observed_gc_taken_ids']} / {summary['observed_gc_pending_ids']} "
         f"(drain={summary['observed_gc_drain_pct']:.1f}%, retries={summary['observed_gc_retry_queued']}, runs={summary['observed_gc_runs']})"
+    )
+    print(
+        "  observed-source totals: "
+        f"segments total={summary['observed_gc_source_segments_total']} "
+        f"eligible={summary['observed_gc_source_segments_eligible_total']} "
+        f"deleted={summary['observed_gc_source_segments_deleted_total']} "
+        f"(eligible_pct={summary['observed_gc_source_segments_eligible_pct']:.1f}%, deleted_pct={summary['observed_gc_source_segments_deleted_pct']:.1f}%)"
+    )
+    print(
+        "  observed-source bytes: "
+        f"total={human_bytes(summary['observed_gc_source_bytes_total'])} "
+        f"eligible={human_bytes(summary['observed_gc_source_bytes_eligible_total'])} "
+        f"deleted={human_bytes(summary['observed_gc_source_bytes_deleted_total'])} "
+        f"protected_retained={human_bytes(summary['observed_gc_source_bytes_protected_retained_total'])} "
+        f"(eligible_pct={summary['observed_gc_source_bytes_eligible_pct']:.1f}%, "
+        f"deleted_pct={summary['observed_gc_source_bytes_deleted_pct']:.1f}%, "
+        f"deleted_of_eligible={summary['observed_gc_source_bytes_deleted_of_eligible_pct']:.1f}%)"
     )
 
     print("")

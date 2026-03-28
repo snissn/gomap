@@ -6089,6 +6089,13 @@ func TestVlogGenerationStats_ReportRewriteBacklogAndDurations(t *testing.T) {
 	db.vlogGenerationObservedGCTakenIDs.Store(9)
 	db.vlogGenerationObservedGCRuns.Store(3)
 	db.vlogGenerationObservedGCRetryQueued.Store(2)
+	db.vlogGenerationObservedGCSourceSegmentsTotal.Store(11)
+	db.vlogGenerationObservedGCSourceSegmentsEligibleTotal.Store(5)
+	db.vlogGenerationObservedGCSourceSegmentsDeletedTotal.Store(3)
+	db.vlogGenerationObservedGCSourceBytesTotal.Store(1100)
+	db.vlogGenerationObservedGCSourceBytesEligibleTotal.Store(500)
+	db.vlogGenerationObservedGCSourceBytesDeletedTotal.Store(300)
+	db.vlogGenerationObservedGCSourceBytesProtectedRetainedTotal.Store(250)
 
 	db.vlogGenerationRewriteQueueMu.Lock()
 	db.vlogGenerationRewriteQueueLoaded = true
@@ -6371,5 +6378,26 @@ func TestVlogGenerationStats_ReportRewriteBacklogAndDurations(t *testing.T) {
 	}
 	if got := stats["treedb.cache.vlog_generation.observed_gc.retry_queued"]; got != "2" {
 		t.Fatalf("observed gc retry queued=%q want 2", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.observed_gc.source_segments_total"]; got != "11" {
+		t.Fatalf("observed gc source segments total=%q want 11", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.observed_gc.source_segments_eligible_total"]; got != "5" {
+		t.Fatalf("observed gc source segments eligible total=%q want 5", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.observed_gc.source_segments_deleted_total"]; got != "3" {
+		t.Fatalf("observed gc source segments deleted total=%q want 3", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.observed_gc.source_bytes_total"]; got != "1100" {
+		t.Fatalf("observed gc source bytes total=%q want 1100", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.observed_gc.source_bytes_eligible_total"]; got != "500" {
+		t.Fatalf("observed gc source bytes eligible total=%q want 500", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.observed_gc.source_bytes_deleted_total"]; got != "300" {
+		t.Fatalf("observed gc source bytes deleted total=%q want 300", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.observed_gc.source_bytes_protected_retained_total"]; got != "250" {
+		t.Fatalf("observed gc source bytes protected retained total=%q want 250", got)
 	}
 }

@@ -5643,6 +5643,13 @@ type DB struct {
 	vlogGenerationObservedGCTakenIDs                            atomic.Uint64
 	vlogGenerationObservedGCRuns                                atomic.Uint64
 	vlogGenerationObservedGCRetryQueued                         atomic.Uint64
+	vlogGenerationObservedGCSourceSegmentsTotal                 atomic.Uint64
+	vlogGenerationObservedGCSourceSegmentsEligibleTotal         atomic.Uint64
+	vlogGenerationObservedGCSourceSegmentsDeletedTotal          atomic.Uint64
+	vlogGenerationObservedGCSourceBytesTotal                    atomic.Int64
+	vlogGenerationObservedGCSourceBytesEligibleTotal            atomic.Int64
+	vlogGenerationObservedGCSourceBytesDeletedTotal             atomic.Int64
+	vlogGenerationObservedGCSourceBytesProtectedRetainedTotal   atomic.Int64
 	retainedPruneMu                                             sync.Mutex
 	retainedPruneDone                                           chan struct{}
 	vlogGenerationRemapSuccesses                                atomic.Uint64
@@ -13080,6 +13087,13 @@ func (db *DB) observeVlogGenerationGCStats(stats backenddb.ValueLogGCStats) {
 	db.vlogGenerationLastGCObservedSourceBytesEligible.Store(stats.ObservedSourceBytesEligible)
 	db.vlogGenerationLastGCObservedSourceBytesDeleted.Store(stats.ObservedSourceBytesDeleted)
 	db.vlogGenerationLastGCObservedSourceBytesPending.Store(stats.ObservedSourceBytesPending)
+	db.vlogGenerationObservedGCSourceSegmentsTotal.Add(uint64(stats.ObservedSourceSegments))
+	db.vlogGenerationObservedGCSourceSegmentsEligibleTotal.Add(uint64(stats.ObservedSourceSegmentsEligible))
+	db.vlogGenerationObservedGCSourceSegmentsDeletedTotal.Add(uint64(stats.ObservedSourceSegmentsDeleted))
+	db.vlogGenerationObservedGCSourceBytesTotal.Add(stats.ObservedSourceBytes)
+	db.vlogGenerationObservedGCSourceBytesEligibleTotal.Add(stats.ObservedSourceBytesEligible)
+	db.vlogGenerationObservedGCSourceBytesDeletedTotal.Add(stats.ObservedSourceBytesDeleted)
+	db.vlogGenerationObservedGCSourceBytesProtectedRetainedTotal.Add(stats.ObservedSourceBytesProtectedRetained)
 }
 
 func (db *DB) observeVlogGenerationVacuumExecDuration(d time.Duration) {
@@ -20766,6 +20780,13 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_generation.observed_gc.taken_ids"] = fmt.Sprintf("%d", db.vlogGenerationObservedGCTakenIDs.Load())
 	stats["treedb.cache.vlog_generation.observed_gc.runs"] = fmt.Sprintf("%d", db.vlogGenerationObservedGCRuns.Load())
 	stats["treedb.cache.vlog_generation.observed_gc.retry_queued"] = fmt.Sprintf("%d", db.vlogGenerationObservedGCRetryQueued.Load())
+	stats["treedb.cache.vlog_generation.observed_gc.source_segments_total"] = fmt.Sprintf("%d", db.vlogGenerationObservedGCSourceSegmentsTotal.Load())
+	stats["treedb.cache.vlog_generation.observed_gc.source_segments_eligible_total"] = fmt.Sprintf("%d", db.vlogGenerationObservedGCSourceSegmentsEligibleTotal.Load())
+	stats["treedb.cache.vlog_generation.observed_gc.source_segments_deleted_total"] = fmt.Sprintf("%d", db.vlogGenerationObservedGCSourceSegmentsDeletedTotal.Load())
+	stats["treedb.cache.vlog_generation.observed_gc.source_bytes_total"] = fmt.Sprintf("%d", db.vlogGenerationObservedGCSourceBytesTotal.Load())
+	stats["treedb.cache.vlog_generation.observed_gc.source_bytes_eligible_total"] = fmt.Sprintf("%d", db.vlogGenerationObservedGCSourceBytesEligibleTotal.Load())
+	stats["treedb.cache.vlog_generation.observed_gc.source_bytes_deleted_total"] = fmt.Sprintf("%d", db.vlogGenerationObservedGCSourceBytesDeletedTotal.Load())
+	stats["treedb.cache.vlog_generation.observed_gc.source_bytes_protected_retained_total"] = fmt.Sprintf("%d", db.vlogGenerationObservedGCSourceBytesProtectedRetainedTotal.Load())
 	stats["treedb.cache.vlog_generation.rewrite.exec.source_segments_total"] = fmt.Sprintf("%d", db.vlogGenerationRewriteExecSourceSegments.Load())
 	stats["treedb.cache.vlog_generation.rewrite.exec.source_segments_requested_total"] = fmt.Sprintf("%d", db.vlogGenerationRewriteSourceSegmentsRequestedTotal.Load())
 	stats["treedb.cache.vlog_generation.rewrite.exec.source_segments_still_referenced_total"] = fmt.Sprintf("%d", db.vlogGenerationRewriteSourceSegmentsStillReferencedTotal.Load())
