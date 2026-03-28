@@ -1102,9 +1102,12 @@ func (db *DB) applyValueLogDictProfileForClass(class vlogDictClass) {
 	}
 	db.valueLogDictLastPublishUnixNano.Store(time.Now().UnixNano())
 
-	// Reset ratio tracking for the new dict.
-	db.valueLogDictMetrics.SetSlab(1)
-	db.valueLogDictMetrics.Reset(1)
+	// Reset shared ratio tracking only when the publish updates the global current.
+	// In split mode, a class-specific publish should not wipe the shared window.
+	if class == vlogDictClassSingleValue || classMode != vlogDictClassModeSplitOuterLeaf || publishedViaGlobalCurrent {
+		db.valueLogDictMetrics.SetSlab(1)
+		db.valueLogDictMetrics.Reset(1)
+	}
 
 	log.Printf("treedb: value-log dict published class=%s dict_id=%d k=%d payload_ratio=%.3f total_ratio=%.3f",
 		vlogDictClassSuffix(class), dictID, profileK, profile.PayloadRatio, profile.TotalRatio)

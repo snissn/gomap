@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"math"
 	"math/bits"
 	"os"
@@ -3062,13 +3063,19 @@ func (db *DB) SetDictStore(store DictStore) {
 			db.dictCurrentCachedByClass[vlogDictClassSingleValue].Store(dictID)
 		}
 		if db.dictClassMode() == vlogDictClassModeSplitOuterLeaf {
-			if byClass, ok := store.(dictStoreCurrentByClass); ok {
+			byClass, hasClassReader := store.(dictStoreCurrentByClass)
+			_, hasClassWriter := store.(dictStoreWriterByClass)
+			if hasClassReader && hasClassWriter {
 				for class := 0; class < vlogDictClassCount; class++ {
-					dictID, err := byClass.GetCurrentForClass(context.Background(), vlogDictClassSuffix(vlogDictClass(class)))
+					clampedClass := vlogDictClass(class)
+					dictID, err := byClass.GetCurrentForClass(context.Background(), vlogDictClassSuffix(clampedClass))
 					if err != nil {
 						continue
 					}
 					db.dictCurrentCachedByClass[class].Store(dictID)
+					if clampedClass == vlogDictClassSingleValue {
+						db.dictCurrentCached.Store(dictID)
+					}
 				}
 			}
 		}
@@ -3127,23 +3134,27 @@ func (db *DB) currentDictIDForClass(ctx context.Context, class vlogDictClass) (u
 		return 0, nil
 	}
 	const refreshEvery = uint64(1 << 16)
+	clampedClass := class
+	classIdx := int(clampedClass)
+	if classIdx < 0 || classIdx >= vlogDictClassCount {
+		clampedClass = vlogDictClassSingleValue
+		classIdx = int(clampedClass)
+	}
 	if db.dictClassMode() == vlogDictClassModeSplitOuterLeaf {
-		if byClass, ok := db.dictStore.(dictStoreCurrentByClass); ok {
-			classIdx := int(class)
-			if classIdx < 0 || classIdx >= vlogDictClassCount {
-				classIdx = int(vlogDictClassSingleValue)
-			}
+		byClass, hasClassReader := db.dictStore.(dictStoreCurrentByClass)
+		_, hasClassWriter := db.dictStore.(dictStoreWriterByClass)
+		if hasClassReader && hasClassWriter {
 			seq := db.dictCurrentOpsByClass[classIdx].Add(1)
 			if seq&(refreshEvery-1) != 0 {
 				return db.dictCurrentCachedByClass[classIdx].Load(), nil
 			}
-			dictID, err := byClass.GetCurrentForClass(ctx, vlogDictClassSuffix(class))
+			dictID, err := byClass.GetCurrentForClass(ctx, vlogDictClassSuffix(clampedClass))
 			if err != nil {
 				// Fall back to cached value on transient errors (best-effort).
 				return db.dictCurrentCachedByClass[classIdx].Load(), nil
 			}
 			db.dictCurrentCachedByClass[classIdx].Store(dictID)
-			if class == vlogDictClassSingleValue {
+			if clampedClass == vlogDictClassSingleValue {
 				db.dictCurrentCached.Store(dictID)
 			}
 			return dictID, nil
@@ -3160,10 +3171,6 @@ func (db *DB) currentDictIDForClass(ctx context.Context, class vlogDictClass) (u
 		return db.dictCurrentCached.Load(), nil
 	}
 	db.dictCurrentCached.Store(dictID)
-	classIdx := int(class)
-	if classIdx < 0 || classIdx >= vlogDictClassCount {
-		classIdx = int(vlogDictClassSingleValue)
-	}
 	db.dictCurrentCachedByClass[classIdx].Store(dictID)
 	db.dictCurrentCachedByClass[vlogDictClassSingleValue].Store(dictID)
 	return dictID, nil
@@ -7017,6 +7024,9 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 
 	valueLogAutotuneCandidateKSet := len(opts.ValueLogCompressionAutotune.CandidateK) > 0
 	valueLogAutotune := valuelog.NormalizeAutotuneOptions(opts.ValueLogCompressionAutotune, true)
+	if opts.ValueLogTemplateMode != template.TemplateOff || opts.ValueLogTemplateReadStrict {
+		log.Printf("cachingdb: template compression options are currently disabled; ignoring ValueLogTemplateMode=%d", opts.ValueLogTemplateMode)
+	}
 	valueLogTemplateEnabled := false
 	valueLogTemplateMode := template.TemplateOff
 	valueLogTemplateDecodeOpts := template.DecodeOptions{}
