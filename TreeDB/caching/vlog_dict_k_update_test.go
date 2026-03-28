@@ -23,6 +23,11 @@ type classWriterOnlyDictStoreForClassPublishTest struct {
 	classCurrent map[string]uint64
 }
 
+type classReadWriteDictStoreForClassPublishTest struct {
+	*legacyDictStoreForClassPublishTest
+	classCurrent map[string]uint64
+}
+
 func (s *legacyDictStoreForClassPublishTest) GetCurrent(context.Context) (uint64, error) {
 	if s == nil {
 		return 0, errors.New("nil store")
@@ -78,6 +83,27 @@ func (s *classWriterOnlyDictStoreForClassPublishTest) SetCurrentForClass(_ conte
 	}
 	s.classCurrent[class] = dictID
 	return nil
+}
+
+func (s *classReadWriteDictStoreForClassPublishTest) SetCurrentForClass(_ context.Context, class string, dictID uint64) error {
+	if s == nil {
+		return errors.New("nil store")
+	}
+	if s.classCurrent == nil {
+		s.classCurrent = make(map[string]uint64)
+	}
+	s.classCurrent[class] = dictID
+	return nil
+}
+
+func (s *classReadWriteDictStoreForClassPublishTest) GetCurrentForClass(_ context.Context, class string) (uint64, error) {
+	if s == nil {
+		return 0, errors.New("nil store")
+	}
+	if s.classCurrent == nil {
+		return 0, nil
+	}
+	return s.classCurrent[class], nil
 }
 
 func TestApplyValueLogDictProfileUpdatesKForSameDict(t *testing.T) {
@@ -216,5 +242,44 @@ func TestApplyValueLogDictProfileForClass_ClassWriterWithoutClassReaderFallsBack
 	}
 	if got := len(store.classCurrent); got != 0 {
 		t.Fatalf("expected class-specific marker not to be used without class reader, writes=%d", got)
+	}
+}
+
+func TestApplyValueLogDictProfileForClass_SingleClassUpdatesGlobalAndClassCurrent(t *testing.T) {
+	tr := &compression.Trainer{}
+	dictBytes := []byte("single-value-dictionary")
+	dictHash := xxhash.Sum64(dictBytes)
+	tr.AcceptProfile(&compression.ActiveProfile{
+		DictHash:     dictHash,
+		DictBytes:    len(dictBytes),
+		Dict:         dictBytes,
+		K:            8,
+		PayloadRatio: 0.6,
+		TotalRatio:   0.6,
+		Timestamp:    time.Now(),
+	})
+
+	store := &classReadWriteDictStoreForClassPublishTest{
+		legacyDictStoreForClassPublishTest: &legacyDictStoreForClassPublishTest{
+			currentID: 55,
+			dicts:     map[uint64][]byte{55: []byte("old-dict")},
+			nextID:    55,
+		},
+		classCurrent: map[string]uint64{vlogDictClassSuffix(vlogDictClassSingleValue): 55},
+	}
+	db := &DB{
+		dictStore:             store,
+		valueLogDictClassMode: uint8(vlogDictClassModeSplitOuterLeaf),
+	}
+	db.valueLogDictTrainerByClass[vlogDictClassSingleValue] = tr
+
+	db.applyValueLogDictProfileForClass(vlogDictClassSingleValue)
+
+	if store.currentID == 55 {
+		t.Fatalf("expected global current marker to update for single class publish")
+	}
+	classKey := vlogDictClassSuffix(vlogDictClassSingleValue)
+	if got := store.classCurrent[classKey]; got != store.currentID {
+		t.Fatalf("expected class current to match global current, class=%d global=%d", got, store.currentID)
 	}
 }

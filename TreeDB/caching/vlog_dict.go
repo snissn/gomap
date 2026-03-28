@@ -1053,6 +1053,15 @@ func (db *DB) applyValueLogDictProfileForClass(class vlogDictClass) {
 				db.reportError(err)
 				return
 			}
+			if class == vlogDictClassSingleValue {
+				// Keep legacy global current in sync for mode switches/reopen paths
+				// that read only the global marker.
+				if err := writer.SetCurrent(ctx, dictID); err != nil {
+					db.reportError(err)
+					return
+				}
+				publishedViaGlobalCurrent = true
+			}
 		} else if err := writer.SetCurrent(ctx, dictID); err != nil {
 			db.reportError(err)
 			return

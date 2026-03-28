@@ -10848,7 +10848,7 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	}
 	ioNsPerStoredForWriter := ioNsPerStored
 	encodeNsPerRawForWriter := encodeNsPerRaw
-	blockEvalBypass := (mode == vlogCompressionAuto) || (mode == vlogCompressionDict)
+	blockEvalBypass := mode == vlogCompressionAuto || (mode == vlogCompressionDict && db.vlogSelectorEnabled(mode))
 	if blockEvalBypass && finalWriteMode == vlogWriteBlock {
 		// Keep-policy bypass is required for fair selector-driven block
 		// evaluation; mode choice should rely on real frame outcomes.
@@ -11644,7 +11644,7 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 			encodeNsPerRaw = 0
 		}
 		if finalWriteMode == vlogWriteBlock &&
-			(mode == vlogCompressionAuto || mode == vlogCompressionDict) {
+			(mode == vlogCompressionAuto || (mode == vlogCompressionDict && db.vlogSelectorEnabled(mode))) {
 			ioNsPerStored = 0
 			encodeNsPerRaw = 0
 		}
