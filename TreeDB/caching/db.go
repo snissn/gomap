@@ -14228,7 +14228,7 @@ planned:
 			}
 			var ctx context.Context
 			var cancel context.CancelFunc
-			if hadRewriteQueue && len(processedRewriteIDs) > 0 {
+			if len(processedRewriteIDs) > 0 {
 				ctx, cancel = context.WithTimeout(context.Background(), vlogGenerationRewriteBoundedExecTimeout)
 			} else {
 				ctx, cancel = db.foregroundMaintenanceContext(2 * time.Minute)

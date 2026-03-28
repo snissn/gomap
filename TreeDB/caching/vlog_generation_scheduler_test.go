@@ -1018,7 +1018,7 @@ func TestVlogGenerationRewrite_QueuedExecIgnoresForegroundCancelUntilBoundedComp
 	}
 }
 
-func TestVlogGenerationRewrite_CanceledFreshPlanQueuesPendingResume(t *testing.T) {
+func TestVlogGenerationRewrite_FreshPlanExecIgnoresForegroundCancelUntilBoundedComplete(t *testing.T) {
 	prepareDirectSchedulerTest(t)
 
 	dir := t.TempDir()
@@ -1090,42 +1090,34 @@ func TestVlogGenerationRewrite_CanceledFreshPlanQueuesPendingResume(t *testing.T
 
 	select {
 	case <-done:
-	case <-time.After(2 * wait):
-		t.Fatalf("initial rewrite did not cancel under foreground activity")
-	}
-
-	deadline := time.Now().Add(2 * wait)
-	for blocking.recordedRewriteCalls() < 2 {
-		if time.Now().After(deadline) {
-			t.Fatalf("pending checkpoint-kick resume did not run (calls=%d)", blocking.recordedRewriteCalls())
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	if ttl := blocking.recordedRewriteTTL(); ttl < 20*time.Second {
-		t.Fatalf("resume rewrite context ttl=%s want around %s", ttl, vlogGenerationRewriteBoundedExecTimeout)
+		t.Fatalf("rewrite completed early under foreground activity; expected bounded fresh-plan rewrite to continue until release (ctx_ttl=%s)", blocking.recordedRewriteTTL())
+	case <-time.After(250 * time.Millisecond):
 	}
 
 	releaseRewrite()
-	deadline = time.Now().Add(2 * wait)
-	for {
-		queue, qerr := db.currentVlogGenerationRewriteQueue()
-		if qerr != nil {
-			t.Fatalf("load rewrite queue: %v", qerr)
-		}
-		if len(queue) == 0 {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("rewrite queue not drained after resume release: queue=%v calls=%d", queue, blocking.recordedRewriteCalls())
-		}
-		time.Sleep(10 * time.Millisecond)
+	select {
+	case <-done:
+	case <-time.After(2 * wait):
+		t.Fatalf("rewrite did not finish after release")
 	}
+	if ttl := blocking.recordedRewriteTTL(); ttl < 20*time.Second {
+		t.Fatalf("fresh-plan rewrite context ttl=%s want around %s", ttl, vlogGenerationRewriteBoundedExecTimeout)
+	}
+
+	queue, qerr := db.currentVlogGenerationRewriteQueue()
+	if qerr != nil {
+		t.Fatalf("load rewrite queue: %v", qerr)
+	}
+	if len(queue) != 0 {
+		t.Fatalf("rewrite queue not drained after release: queue=%v calls=%d", queue, blocking.recordedRewriteCalls())
+	}
+
 	stats := db.Stats()
-	if got := stats["treedb.cache.vlog_generation.rewrite.canceled_runs"]; got != "1" {
-		t.Fatalf("rewrite canceled runs=%q want 1", got)
+	if got := stats["treedb.cache.vlog_generation.rewrite.canceled_runs"]; got != "0" {
+		t.Fatalf("rewrite canceled runs=%q want 0", got)
 	}
-	if got := stats["treedb.cache.vlog_generation.rewrite.canceled_runs.fresh_plan"]; got != "1" {
-		t.Fatalf("rewrite canceled fresh runs=%q want 1", got)
+	if got := stats["treedb.cache.vlog_generation.rewrite.canceled_runs.fresh_plan"]; got != "0" {
+		t.Fatalf("rewrite canceled fresh runs=%q want 0", got)
 	}
 	if got := stats["treedb.cache.vlog_generation.rewrite.canceled_runs.queued_debt"]; got != "0" {
 		t.Fatalf("rewrite canceled queued runs=%q want 0", got)
