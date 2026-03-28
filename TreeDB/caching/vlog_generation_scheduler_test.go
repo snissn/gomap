@@ -393,6 +393,19 @@ func TestRunVlogGenerationMaintenanceRetries_CoalescesPendingCollisionRetries(t 
 	}
 
 	db.vlogGenerationMaintenanceActive.Store(true)
+	db.vlogGenerationCheckpointKickPending.Store(false)
+	db.runVlogGenerationMaintenanceRetries(vlogGenerationMaintenanceOptions{
+		bypassQuiet:           true,
+		skipRetainedPruneWait: true,
+		skipCheckpoint:        false,
+		rewriteDebtDrain:      true,
+		debugSource:           "checkpoint_pending",
+	}, 30*time.Millisecond, false)
+	if got := db.vlogGenerationMaintenanceCollisions.Load(); got != 0 {
+		t.Fatalf("checkpoint retry collisions while active=%d want=0", got)
+	}
+
+	db.vlogGenerationMaintenanceActive.Store(true)
 	db.vlogGenerationDeferredMaintenancePending.Store(true)
 	db.runVlogGenerationMaintenanceRetries(vlogGenerationMaintenanceOptions{
 		bypassQuiet:           true,

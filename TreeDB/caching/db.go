@@ -13047,35 +13047,21 @@ func (db *DB) runVlogGenerationMaintenanceRetries(opts vlogGenerationMaintenance
 	deadline := time.Now().Add(retryWindow)
 	sleepDelay := 10 * time.Millisecond
 	for !db.closing.Load() {
-		// Once retry intent is already queued, avoid repeatedly colliding with
-		// the active maintenance pass; wait for release or deadline instead.
+		// Retry loops should never hammer an already-active maintenance pass.
+		// Wait for release/deadline instead of repeatedly colliding and inflating
+		// maintenance.attempts/collisions under hot checkpoint-kick activity.
 		if db.vlogGenerationMaintenanceActive.Load() {
-			if stopWhenAcquired && db.vlogGenerationDeferredMaintenancePending.Load() {
-				if time.Now().After(deadline) {
-					return
-				}
-				time.Sleep(sleepDelay)
-				if sleepDelay < 100*time.Millisecond {
-					sleepDelay *= 2
-					if sleepDelay > 100*time.Millisecond {
-						sleepDelay = 100 * time.Millisecond
-					}
-				}
-				continue
+			if time.Now().After(deadline) {
+				return
 			}
-			if !stopWhenAcquired && db.vlogGenerationCheckpointKickPending.Load() {
-				if time.Now().After(deadline) {
-					return
+			time.Sleep(sleepDelay)
+			if sleepDelay < 100*time.Millisecond {
+				sleepDelay *= 2
+				if sleepDelay > 100*time.Millisecond {
+					sleepDelay = 100 * time.Millisecond
 				}
-				time.Sleep(sleepDelay)
-				if sleepDelay < 100*time.Millisecond {
-					sleepDelay *= 2
-					if sleepDelay > 100*time.Millisecond {
-						sleepDelay = 100 * time.Millisecond
-					}
-				}
-				continue
 			}
+			continue
 		}
 		attempt++
 		if opts.debugSource != "" {
