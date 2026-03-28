@@ -273,6 +273,53 @@ func TestShouldRunVlogGenerationRewrite_NoTrigger(t *testing.T) {
 	}
 }
 
+func TestObserveVlogGenerationRewritePlanOutcome_SelectedTracksBytes(t *testing.T) {
+	db := &DB{}
+	db.observeVlogGenerationRewritePlanOutcome(backenddb.ValueLogRewritePlan{
+		SourceFileIDs:      []uint32{11},
+		SegmentsSelected:   1,
+		SelectedBytesTotal: 1024,
+		SelectedBytesLive:  640,
+		SelectedBytesStale: 384,
+	}, nil)
+	if got, want := db.vlogGenerationRewritePlanRuns.Load(), uint64(1); got != want {
+		t.Fatalf("plan runs=%d want=%d", got, want)
+	}
+	if got, want := db.vlogGenerationRewritePlanSelected.Load(), uint64(1); got != want {
+		t.Fatalf("plan selected=%d want=%d", got, want)
+	}
+	if got, want := db.vlogGenerationRewritePlanSelectedBytes.Load(), uint64(1024); got != want {
+		t.Fatalf("plan selected bytes total=%d want=%d", got, want)
+	}
+	if got, want := db.vlogGenerationRewritePlanSelectedLiveBytes.Load(), uint64(640); got != want {
+		t.Fatalf("plan selected bytes live=%d want=%d", got, want)
+	}
+	if got, want := db.vlogGenerationRewritePlanSelectedStaleBytes.Load(), uint64(384); got != want {
+		t.Fatalf("plan selected bytes stale=%d want=%d", got, want)
+	}
+}
+
+func TestObserveVlogGenerationRewritePlanOutcome_SelectedTracksSegmentFallbackBytes(t *testing.T) {
+	db := &DB{}
+	db.observeVlogGenerationRewritePlanOutcome(backenddb.ValueLogRewritePlan{
+		SourceFileIDs:    []uint32{11, 22},
+		SegmentsSelected: 2,
+		SelectedSegments: []backenddb.ValueLogRewritePlanSegment{
+			{FileID: 11, BytesTotal: 100, BytesLive: 25, BytesStale: 75},
+			{FileID: 22, BytesTotal: 120, BytesLive: 40, BytesStale: 80},
+		},
+	}, nil)
+	if got, want := db.vlogGenerationRewritePlanSelectedBytes.Load(), uint64(220); got != want {
+		t.Fatalf("fallback selected bytes total=%d want=%d", got, want)
+	}
+	if got, want := db.vlogGenerationRewritePlanSelectedLiveBytes.Load(), uint64(65); got != want {
+		t.Fatalf("fallback selected bytes live=%d want=%d", got, want)
+	}
+	if got, want := db.vlogGenerationRewritePlanSelectedStaleBytes.Load(), uint64(155); got != want {
+		t.Fatalf("fallback selected bytes stale=%d want=%d", got, want)
+	}
+}
+
 func TestVlogGenerationRewriteMinStaleRatioForGenericPass_UsesQualityFloor(t *testing.T) {
 	db := &DB{valueLogRewriteTriggerRatioPPM: 200000}
 	if got, want := db.vlogGenerationRewriteMinStaleRatioForGenericPass(8<<30), vlogGenerationRewriteGenericMinSegmentStaleRatio; got != want {

@@ -139,6 +139,7 @@ func selectTreeDBExpvarStats(stats map[string]string) map[string]any {
 			strings.HasPrefix(k, "treedb.cache.vlog_payload_split.") ||
 			strings.HasPrefix(k, "treedb.cache.vlog_auto.") ||
 			strings.HasPrefix(k, "treedb.cache.vlog_dict.") ||
+			strings.HasPrefix(k, "treedb.cache.vlog_generation.") ||
 			strings.HasPrefix(k, "treedb.cache.vlog_payload_kind.") ||
 			strings.HasPrefix(k, "treedb.cache.vlog_outer_leaf_codec.") ||
 			strings.HasPrefix(k, "treedb.cache.batch_arena.") {
