@@ -487,16 +487,16 @@ func TestRunVlogGenerationMaintenanceRetries_CoalescesPendingCollisionRetries(t 
 	}
 }
 
-func TestVlogGenerationRewriteMinStaleRatioForGenericPass_UsesQualityFloor(t *testing.T) {
+func TestVlogGenerationRewriteMinStaleRatioForGenericPass_UsesConfiguredTriggerRatio(t *testing.T) {
 	db := &DB{valueLogRewriteTriggerRatioPPM: 200000}
-	if got, want := db.vlogGenerationRewriteMinStaleRatioForGenericPass(8<<30), vlogGenerationRewriteGenericMinSegmentStaleRatio; got != want {
+	if got, want := db.vlogGenerationRewriteMinStaleRatioForGenericPass(8<<30), 0.50; got != want {
 		t.Fatalf("generic min stale ratio=%f want=%f", got, want)
 	}
 }
 
-func TestVlogGenerationRewriteMinStaleRatioForGenericPass_UsesHigherConfiguredRatio(t *testing.T) {
+func TestVlogGenerationRewriteMinStaleRatioForGenericPass_UsesHigherConfiguredTriggerRatio(t *testing.T) {
 	db := &DB{valueLogRewriteTriggerRatioPPM: 800000}
-	if got, want := db.vlogGenerationRewriteMinStaleRatioForGenericPass(8<<30), vlogGenerationRewriteGenericMinSegmentStaleRatio; got != want {
+	if got, want := db.vlogGenerationRewriteMinStaleRatioForGenericPass(8<<30), 0.80; got != want {
 		t.Fatalf("generic min stale ratio=%f want=%f", got, want)
 	}
 }
@@ -515,9 +515,16 @@ func TestVlogGenerationRewriteMinStaleRatioForGenericPass_DisabledBelowEfficacyF
 	}
 }
 
+func TestVlogGenerationRewriteMinStaleRatioForGenericPass_DefaultWithoutConfiguredTrigger(t *testing.T) {
+	db := &DB{valueLogRewriteTriggerRatioPPM: 0}
+	if got, want := db.vlogGenerationRewriteMinStaleRatioForGenericPass(8<<30), vlogGenerationRewriteGenericMinSegmentStaleRatio; got != want {
+		t.Fatalf("generic min stale ratio=%f want=%f", got, want)
+	}
+}
+
 func TestVlogGenerationRewriteMinStaleRatioForQueuedDebt_UsesGenericFloorForTotalBytes(t *testing.T) {
 	db := &DB{valueLogRewriteTriggerRatioPPM: 200000}
-	if got, want := db.vlogGenerationRewriteMinStaleRatioForQueuedDebt(8<<30, vlogGenerationReasonTotalBytes), vlogGenerationRewriteGenericMinSegmentStaleRatio; got != want {
+	if got, want := db.vlogGenerationRewriteMinStaleRatioForQueuedDebt(8<<30, vlogGenerationReasonTotalBytes), 0.50; got != want {
 		t.Fatalf("queued total-bytes min stale ratio=%f want=%f", got, want)
 	}
 }

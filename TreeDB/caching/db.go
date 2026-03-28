@@ -15440,11 +15440,10 @@ func (db *DB) vlogGenerationRewriteMinStaleRatioForGenericPass(totalBytes int64)
 	if totalBytes < vlogGenerationRewriteEfficacyMinTotalBytes {
 		return 0
 	}
-	ratio := vlogGenerationRewriteGenericMinSegmentStaleRatio
-	if configured := db.vlogGenerationRewriteMinStaleRatioForStaleRatioTrigger(totalBytes); configured > ratio {
-		ratio = configured
+	if configured := db.vlogGenerationRewriteMinStaleRatioForStaleRatioTrigger(totalBytes); configured > 0 {
+		return configured
 	}
-	return ratio
+	return vlogGenerationRewriteGenericMinSegmentStaleRatio
 }
 
 func (db *DB) vlogGenerationRewriteMinStaleRatioForQueuedDebt(totalBytes int64, reason uint32) float64 {
