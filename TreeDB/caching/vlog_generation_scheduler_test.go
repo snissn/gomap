@@ -320,6 +320,62 @@ func TestObserveVlogGenerationRewritePlanOutcome_SelectedTracksSegmentFallbackBy
 	}
 }
 
+func TestMaybeRunVlogGenerationMaintenanceWithOptions_TracksWalOnPeriodicSkip(t *testing.T) {
+	db := &DB{valueLogGenerationPolicy: uint8(backenddb.ValueLogGenerationHotWarmCold)}
+	db.maybeRunVlogGenerationMaintenanceWithOptions(true, vlogGenerationMaintenanceOptions{})
+	if got, want := db.vlogGenerationMaintenanceAttempts.Load(), uint64(1); got != want {
+		t.Fatalf("maintenance attempts=%d want=%d", got, want)
+	}
+	if got, want := db.vlogGenerationMaintenanceSkipWALOnPeriodic.Load(), uint64(1); got != want {
+		t.Fatalf("maintenance wal-on periodic skips=%d want=%d", got, want)
+	}
+	if got := db.vlogGenerationMaintenanceAcquired.Load(); got != 0 {
+		t.Fatalf("maintenance acquired=%d want=0", got)
+	}
+}
+
+func TestMaybeRunVlogGenerationMaintenanceWithOptions_TracksCollision(t *testing.T) {
+	db := &DB{valueLogGenerationPolicy: uint8(backenddb.ValueLogGenerationHotWarmCold)}
+	db.vlogGenerationMaintenanceActive.Store(true)
+	db.maybeRunVlogGenerationMaintenanceWithOptions(false, vlogGenerationMaintenanceOptions{})
+	if got, want := db.vlogGenerationMaintenanceAttempts.Load(), uint64(1); got != want {
+		t.Fatalf("maintenance attempts=%d want=%d", got, want)
+	}
+	if got, want := db.vlogGenerationMaintenanceCollisions.Load(), uint64(1); got != want {
+		t.Fatalf("maintenance collisions=%d want=%d", got, want)
+	}
+	if got := db.vlogGenerationMaintenanceAcquired.Load(); got != 0 {
+		t.Fatalf("maintenance acquired=%d want=0", got)
+	}
+}
+
+func TestShouldRunVlogGenerationIndexVacuum_TracksSkipReasons(t *testing.T) {
+	db := &DB{valueLogGenerationPolicy: uint8(backenddb.ValueLogGenerationHotWarmCold)}
+	now := time.Now()
+	if db.shouldRunVlogGenerationIndexVacuum(vlogGenerationVacuumTriggerRewriteBytes-1, now) {
+		t.Fatalf("expected vacuum to skip below rewrite trigger")
+	}
+	if got, want := db.vlogGenerationVacuumSkippedRewriteBytes.Load(), uint64(1); got != want {
+		t.Fatalf("vacuum skipped_rewrite_bytes=%d want=%d", got, want)
+	}
+	db.vlogGenerationLastVacuumUnixNano.Store(now.UnixNano())
+	if db.shouldRunVlogGenerationIndexVacuum(vlogGenerationVacuumTriggerRewriteBytes, now) {
+		t.Fatalf("expected vacuum to skip during cooldown")
+	}
+	if got, want := db.vlogGenerationVacuumSkippedCooldown.Load(), uint64(1); got != want {
+		t.Fatalf("vacuum skipped_cooldown=%d want=%d", got, want)
+	}
+}
+
+func TestMaybeRunVlogGenerationIndexVacuum_TracksDisabledSkip(t *testing.T) {
+	t.Setenv(envDisableVlogGenerationVacuum, "1")
+	db := &DB{valueLogGenerationPolicy: uint8(backenddb.ValueLogGenerationHotWarmCold)}
+	db.maybeRunVlogGenerationIndexVacuum(vlogGenerationVacuumTriggerRewriteBytes)
+	if got, want := db.vlogGenerationVacuumSkippedDisabled.Load(), uint64(1); got != want {
+		t.Fatalf("vacuum skipped_disabled=%d want=%d", got, want)
+	}
+}
+
 func TestVlogGenerationRewriteMinStaleRatioForGenericPass_UsesQualityFloor(t *testing.T) {
 	db := &DB{valueLogRewriteTriggerRatioPPM: 200000}
 	if got, want := db.vlogGenerationRewriteMinStaleRatioForGenericPass(8<<30), vlogGenerationRewriteGenericMinSegmentStaleRatio; got != want {

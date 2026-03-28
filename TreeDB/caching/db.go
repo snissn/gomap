@@ -5200,6 +5200,9 @@ type DB struct {
 	vlogGenerationGCRuns                        atomic.Uint64
 	vlogGenerationVacuumRuns                    atomic.Uint64
 	vlogGenerationVacuumFailures                atomic.Uint64
+	vlogGenerationVacuumSkippedDisabled         atomic.Uint64
+	vlogGenerationVacuumSkippedRewriteBytes     atomic.Uint64
+	vlogGenerationVacuumSkippedCooldown         atomic.Uint64
 	vlogGenerationLastVacuumUnixNano            atomic.Int64
 	vlogGenerationLastRewritePlanUnixNano       atomic.Int64
 	vlogGenerationLastRewriteUnixNano           atomic.Int64
@@ -5211,6 +5214,20 @@ type DB struct {
 	vlogGenerationChurnBytes                    atomic.Uint64
 	vlogGenerationSchedulerState                atomic.Uint32
 	vlogGenerationMaintenanceActive             atomic.Bool
+	vlogGenerationMaintenanceAttempts           atomic.Uint64
+	vlogGenerationMaintenanceAcquired           atomic.Uint64
+	vlogGenerationMaintenanceCollisions         atomic.Uint64
+	vlogGenerationMaintenanceSkipWALOnPeriodic  atomic.Uint64
+	vlogGenerationMaintenanceSkipPhase          atomic.Uint64
+	vlogGenerationMaintenanceSkipStageGate      atomic.Uint64
+	vlogGenerationMaintenanceSkipAgeBlocked     atomic.Uint64
+	vlogGenerationMaintenanceSkipPriority       atomic.Uint64
+	vlogGenerationMaintenanceSkipQuiet          atomic.Uint64
+	vlogGenerationMaintenanceSkipPreCheckpoint  atomic.Uint64
+	vlogGenerationMaintenanceSkipCheckpointing  atomic.Uint64
+	vlogGenerationMaintenancePassNoop           atomic.Uint64
+	vlogGenerationMaintenancePassWithRewrite    atomic.Uint64
+	vlogGenerationMaintenancePassWithGC         atomic.Uint64
 	vlogGenerationLastReason                    atomic.Uint32
 	vlogGenerationCheckpointKickRuns            atomic.Uint64
 	vlogGenerationCheckpointKickRewriteRuns     atomic.Uint64
@@ -13016,14 +13033,17 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 	if db == nil || db.closing.Load() || db.valueLogGenerationPolicy != uint8(backenddb.ValueLogGenerationHotWarmCold) {
 		return
 	}
+	db.vlogGenerationMaintenanceAttempts.Add(1)
 	// In WAL-on mode, the periodic "runGC" tick must not enter the maintenance
 	// engine at all. Checkpoint-coupled work belongs to the explicit
 	// checkpoint-kick/deferred paths; letting the periodic GC tick even acquire
 	// maintenanceActive can strand that slot behind hot restore-time locks.
 	if runGC && !db.disableJournal && !opts.bypassQuiet {
+		db.vlogGenerationMaintenanceSkipWALOnPeriodic.Add(1)
 		return
 	}
 	if db.suppressBackgroundVlogGenerationForMaintenancePhase() {
+		db.vlogGenerationMaintenanceSkipPhase.Add(1)
 		if opts.debugSource != "" {
 			db.debugVlogMaintf(
 				"maintenance_skip reason=maintenance_phase source=%s phase=%s checkpoint_pending=%t deferred_pending=%t",
@@ -13039,6 +13059,7 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 	// checkpoint-kick path can race otherwise, which causes overlapping rewrite
 	// runs to compete on the same resume queue.
 	if !db.vlogGenerationMaintenanceActive.CompareAndSwap(false, true) {
+		db.vlogGenerationMaintenanceCollisions.Add(1)
 		// Checkpoint-kick retries are high-priority and quiet-window-bypassed by
 		// design. If they collide with an active pass, queue exactly one retry to
 		// run right after the active pass exits.
@@ -13057,6 +13078,9 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 		return
 	}
 	acquired = true
+	db.vlogGenerationMaintenanceAcquired.Add(1)
+	rewriteRunsBefore := db.vlogGenerationRewriteRuns.Load()
+	gcRunsBefore := db.vlogGenerationGCRuns.Load()
 	activeSource := vlogGenerationMaintenanceDebugSource(opts)
 	activeStart := time.Now()
 	db.debugVlogMaintf(
@@ -13082,6 +13106,17 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 		// the original retry goroutine to still be alive.
 		db.scheduleDueVlogGenerationDeferredMaintenance()
 		db.schedulePendingVlogGenerationCheckpointKick()
+		rewriteRan := db.vlogGenerationRewriteRuns.Load() > rewriteRunsBefore
+		gcRan := db.vlogGenerationGCRuns.Load() > gcRunsBefore
+		if rewriteRan {
+			db.vlogGenerationMaintenancePassWithRewrite.Add(1)
+		}
+		if gcRan {
+			db.vlogGenerationMaintenancePassWithGC.Add(1)
+		}
+		if !rewriteRan && !gcRan {
+			db.vlogGenerationMaintenancePassNoop.Add(1)
+		}
 	}()
 	now := time.Now()
 	quiet := db.foregroundActivityQuietFor(now, vlogGenerationMaintenanceQuietWindow, vlogForegroundReadQuietWindow)
@@ -13124,16 +13159,19 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 			// passes spend long maintenance windows before the confirmation delay
 			// has elapsed. The only valid next step is to wait for confirmation.
 			if !vlogGenerationIsStageConfirmSource(opts) {
+				db.vlogGenerationMaintenanceSkipStageGate.Add(1)
 				return
 			}
 		} else if !vlogGenerationIsStageConfirmSource(opts) {
 			// When confirmation becomes due, reserve the maintenance slot for the
 			// explicit stage-confirm wake instead of letting generic retries or
 			// periodic passes reacquire it first.
+			db.vlogGenerationMaintenanceSkipStageGate.Add(1)
 			return
 		}
 	}
 	if !stagePending && ageBlockedDue && !vlogGenerationIsAgeBlockedSource(opts) {
+		db.vlogGenerationMaintenanceSkipAgeBlocked.Add(1)
 		return
 	}
 	// Checkpoint-collision retries and timer-driven confirmation wakes should run
@@ -13141,11 +13179,13 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 	// collisions where periodic maintenance keeps reacquiring the scheduler while
 	// the higher-priority retry is still trying to run.
 	if !opts.bypassQuiet && (db.vlogGenerationCheckpointKickPending.Load() || db.vlogGenerationDeferredMaintenancePending.Load()) {
+		db.vlogGenerationMaintenanceSkipPriority.Add(1)
 		return
 	}
 	// Explicit GC runs bypass the foreground quiet-window gate so callers can
 	// force a safety/cleanup pass even while foreground activity is ongoing.
 	if !runGC && !opts.bypassQuiet && !quiet {
+		db.vlogGenerationMaintenanceSkipQuiet.Add(1)
 		return
 	}
 	// In WAL-off mode, do not start rewrite/GC planning before the first
@@ -13156,6 +13196,7 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 	// before the first checkpoint; starving that path causes the main value-log
 	// lane to grow unchecked during restore.
 	if db.disableJournal && db.checkpointRuns.Load() == 0 && !runGC && len(rewriteQueue) == 0 && !opts.skipCheckpoint {
+		db.vlogGenerationMaintenanceSkipPreCheckpoint.Add(1)
 		return
 	}
 	// Retained-prune and generation maintenance use the same foreground quiet-window gate.
@@ -13176,10 +13217,12 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 				return
 			}
 		} else {
+			db.vlogGenerationMaintenanceSkipCheckpointing.Add(1)
 			return
 		}
 	}
 	if db.checkpointing.Load() {
+		db.vlogGenerationMaintenanceSkipCheckpointing.Add(1)
 		return
 	}
 	now = time.Now()
@@ -14144,6 +14187,7 @@ func (db *DB) maybeRunVlogGenerationIndexVacuum(rewriteBytesIn int64) {
 		return
 	}
 	if envBool(envDisableVlogGenerationVacuum) {
+		db.vlogGenerationVacuumSkippedDisabled.Add(1)
 		return
 	}
 	vacuumer, ok := db.backend.(backendIndexVacuumer)
@@ -14186,12 +14230,14 @@ func (db *DB) shouldRunVlogGenerationIndexVacuum(rewriteBytesIn int64, now time.
 		return false
 	}
 	if rewriteBytesIn < vlogGenerationVacuumTriggerRewriteBytes {
+		db.vlogGenerationVacuumSkippedRewriteBytes.Add(1)
 		return false
 	}
 	last := db.vlogGenerationLastVacuumUnixNano.Load()
 	if last > 0 {
 		lastAt := time.Unix(0, last)
 		if now.Sub(lastAt) < vlogGenerationVacuumMinInterval {
+			db.vlogGenerationVacuumSkippedCooldown.Add(1)
 			return false
 		}
 	}
@@ -19491,6 +19537,20 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_generation.checkpoint_kick.runs"] = fmt.Sprintf("%d", db.vlogGenerationCheckpointKickRuns.Load())
 	stats["treedb.cache.vlog_generation.checkpoint_kick.rewrite_runs"] = fmt.Sprintf("%d", db.vlogGenerationCheckpointKickRewriteRuns.Load())
 	stats["treedb.cache.vlog_generation.checkpoint_kick.gc_runs"] = fmt.Sprintf("%d", db.vlogGenerationCheckpointKickGCRuns.Load())
+	stats["treedb.cache.vlog_generation.maintenance.attempts"] = fmt.Sprintf("%d", db.vlogGenerationMaintenanceAttempts.Load())
+	stats["treedb.cache.vlog_generation.maintenance.acquired"] = fmt.Sprintf("%d", db.vlogGenerationMaintenanceAcquired.Load())
+	stats["treedb.cache.vlog_generation.maintenance.collisions"] = fmt.Sprintf("%d", db.vlogGenerationMaintenanceCollisions.Load())
+	stats["treedb.cache.vlog_generation.maintenance.skip.wal_on_periodic"] = fmt.Sprintf("%d", db.vlogGenerationMaintenanceSkipWALOnPeriodic.Load())
+	stats["treedb.cache.vlog_generation.maintenance.skip.maintenance_phase"] = fmt.Sprintf("%d", db.vlogGenerationMaintenanceSkipPhase.Load())
+	stats["treedb.cache.vlog_generation.maintenance.skip.stage_gate"] = fmt.Sprintf("%d", db.vlogGenerationMaintenanceSkipStageGate.Load())
+	stats["treedb.cache.vlog_generation.maintenance.skip.age_blocked_gate"] = fmt.Sprintf("%d", db.vlogGenerationMaintenanceSkipAgeBlocked.Load())
+	stats["treedb.cache.vlog_generation.maintenance.skip.priority_pending"] = fmt.Sprintf("%d", db.vlogGenerationMaintenanceSkipPriority.Load())
+	stats["treedb.cache.vlog_generation.maintenance.skip.quiet_window"] = fmt.Sprintf("%d", db.vlogGenerationMaintenanceSkipQuiet.Load())
+	stats["treedb.cache.vlog_generation.maintenance.skip.before_first_checkpoint"] = fmt.Sprintf("%d", db.vlogGenerationMaintenanceSkipPreCheckpoint.Load())
+	stats["treedb.cache.vlog_generation.maintenance.skip.checkpoint_inflight"] = fmt.Sprintf("%d", db.vlogGenerationMaintenanceSkipCheckpointing.Load())
+	stats["treedb.cache.vlog_generation.maintenance.passes.noop"] = fmt.Sprintf("%d", db.vlogGenerationMaintenancePassNoop.Load())
+	stats["treedb.cache.vlog_generation.maintenance.passes.with_rewrite"] = fmt.Sprintf("%d", db.vlogGenerationMaintenancePassWithRewrite.Load())
+	stats["treedb.cache.vlog_generation.maintenance.passes.with_gc"] = fmt.Sprintf("%d", db.vlogGenerationMaintenancePassWithGC.Load())
 	stats["treedb.cache.vlog_generation.churn_bytes_total"] = fmt.Sprintf("%d", db.vlogGenerationChurnBytes.Load())
 	stats["treedb.cache.vlog_generation.churn_bytes_per_sec"] = fmt.Sprintf("%d", db.vlogGenerationLastChurnBps.Load())
 	stats["treedb.cache.vlog_generation.rewrite.queue_len"] = fmt.Sprintf("%d", rewriteQueueLen)
@@ -19554,6 +19614,9 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_generation.gc.dry_run.last_eligible_segments"] = fmt.Sprintf("%d", db.vlogGenerationLastGCDryRunSegsEligible.Load())
 	stats["treedb.cache.vlog_generation.vacuum.runs"] = fmt.Sprintf("%d", db.vlogGenerationVacuumRuns.Load())
 	stats["treedb.cache.vlog_generation.vacuum.failures"] = fmt.Sprintf("%d", db.vlogGenerationVacuumFailures.Load())
+	stats["treedb.cache.vlog_generation.vacuum.skipped_disabled"] = fmt.Sprintf("%d", db.vlogGenerationVacuumSkippedDisabled.Load())
+	stats["treedb.cache.vlog_generation.vacuum.skipped_rewrite_bytes"] = fmt.Sprintf("%d", db.vlogGenerationVacuumSkippedRewriteBytes.Load())
+	stats["treedb.cache.vlog_generation.vacuum.skipped_cooldown"] = fmt.Sprintf("%d", db.vlogGenerationVacuumSkippedCooldown.Load())
 	stats["treedb.cache.vlog_generation.vacuum.last_unix_nano"] = fmt.Sprintf("%d", db.vlogGenerationLastVacuumUnixNano.Load())
 	stats["treedb.cache.vlog_generation.remap.successes"] = fmt.Sprintf("%d", db.vlogGenerationRemapSuccesses.Load())
 	stats["treedb.cache.vlog_generation.remap.failures"] = fmt.Sprintf("%d", db.vlogGenerationRemapFailures.Load())
