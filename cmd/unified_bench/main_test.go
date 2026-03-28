@@ -980,6 +980,21 @@ func TestRunBenchmark_KeyShapePrefix4RejectsOverflow(t *testing.T) {
 	}
 }
 
+func TestClampWarmupKeyCount(t *testing.T) {
+	if got := clampWarmupKeyCount(benchKeyShapeBE8Prefix4, uint64(math.MaxUint32)-3, 10); got != 4 {
+		t.Fatalf("prefix4 clamp mismatch: got %d want 4", got)
+	}
+	if got := clampWarmupKeyCount(benchKeyShapeBE8Prefix4, uint64(math.MaxUint32)+1, 10); got != 0 {
+		t.Fatalf("prefix4 out-of-range base should clamp to 0, got %d", got)
+	}
+	if got := clampWarmupKeyCount(benchKeyShapeBE8, math.MaxUint64-8, 16); got != 9 {
+		t.Fatalf("be8 clamp mismatch near max uint64: got %d want 9", got)
+	}
+	if got := clampWarmupKeyCount(benchKeyShapeBE8, 100, 32); got != 32 {
+		t.Fatalf("be8 in-range should preserve warmup count, got %d", got)
+	}
+}
+
 func TestMakeWriteValuePool_RepeatNotAllIdentical(t *testing.T) {
 	values, err := makeWriteValuePool(1, "repeat", 128, 32)
 	if err != nil {

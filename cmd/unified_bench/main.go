@@ -315,6 +315,28 @@ func (s benchKeyShape) validate(maxKey uint64) error {
 	return nil
 }
 
+func (s benchKeyShape) maxKey() uint64 {
+	if s == benchKeyShapeBE8Prefix4 {
+		return uint64(math.MaxUint32)
+	}
+	return math.MaxUint64
+}
+
+func clampWarmupKeyCount(shape benchKeyShape, warmupBase uint64, warmupKeys int) int {
+	if warmupKeys <= 0 {
+		return 0
+	}
+	maxKey := shape.maxKey()
+	if warmupBase > maxKey {
+		return 0
+	}
+	remaining := maxKey - warmupBase + 1
+	if uint64(warmupKeys) > remaining {
+		return int(remaining)
+	}
+	return warmupKeys
+}
+
 func main() {
 	flag.Usage = customUsage
 	flag.Parse()
@@ -1766,6 +1788,10 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			// Keep warmup writes disjoint from measured keys so throughput/IO
 			// remains comparable across modes.
 			warmupBase := uint64(cfg.Keys) * 2
+			if uint64(cfg.Keys) > math.MaxUint64/2 {
+				warmupBase = math.MaxUint64
+			}
+			warmupKeys = clampWarmupKeyCount(keyShape, warmupBase, warmupKeys)
 			var warmupKeyBytes []byte
 			if precomputeKeys && warmupKeys > 0 {
 				warmupKeyBytes = make([]byte, warmupKeys*8)
