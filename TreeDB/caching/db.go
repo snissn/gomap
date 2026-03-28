@@ -12188,6 +12188,9 @@ func (db *DB) maybeRunPeriodicVlogGenerationMaintenance(runGC bool) bool {
 	if db == nil {
 		return false
 	}
+	if db.vlogGenerationMaintenanceActive.Load() {
+		return false
+	}
 	if db.suppressBackgroundVlogGenerationForMaintenancePhase() {
 		db.debugVlogMaintf("periodic_skip reason=maintenance_phase phase=%s run_gc=%t", maintenancePhaseString(uint32(db.MaintenancePhase())), runGC)
 		return false
@@ -12968,6 +12971,36 @@ func (db *DB) runVlogGenerationMaintenanceRetries(opts vlogGenerationMaintenance
 	deadline := time.Now().Add(retryWindow)
 	sleepDelay := 10 * time.Millisecond
 	for !db.closing.Load() {
+		// Once retry intent is already queued, avoid repeatedly colliding with
+		// the active maintenance pass; wait for release or deadline instead.
+		if db.vlogGenerationMaintenanceActive.Load() {
+			if stopWhenAcquired && db.vlogGenerationDeferredMaintenancePending.Load() {
+				if time.Now().After(deadline) {
+					return
+				}
+				time.Sleep(sleepDelay)
+				if sleepDelay < 100*time.Millisecond {
+					sleepDelay *= 2
+					if sleepDelay > 100*time.Millisecond {
+						sleepDelay = 100 * time.Millisecond
+					}
+				}
+				continue
+			}
+			if !stopWhenAcquired && db.vlogGenerationCheckpointKickPending.Load() {
+				if time.Now().After(deadline) {
+					return
+				}
+				time.Sleep(sleepDelay)
+				if sleepDelay < 100*time.Millisecond {
+					sleepDelay *= 2
+					if sleepDelay > 100*time.Millisecond {
+						sleepDelay = 100 * time.Millisecond
+					}
+				}
+				continue
+			}
+		}
 		attempt++
 		if opts.debugSource != "" {
 			db.debugVlogMaintf(

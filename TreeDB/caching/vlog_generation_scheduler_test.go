@@ -376,6 +376,36 @@ func TestMaybeRunVlogGenerationIndexVacuum_TracksDisabledSkip(t *testing.T) {
 	}
 }
 
+func TestRunVlogGenerationMaintenanceRetries_CoalescesPendingCollisionRetries(t *testing.T) {
+	db := &DB{valueLogGenerationPolicy: uint8(backenddb.ValueLogGenerationHotWarmCold)}
+
+	db.vlogGenerationMaintenanceActive.Store(true)
+	db.vlogGenerationCheckpointKickPending.Store(true)
+	db.runVlogGenerationMaintenanceRetries(vlogGenerationMaintenanceOptions{
+		bypassQuiet:           true,
+		skipRetainedPruneWait: true,
+		skipCheckpoint:        false,
+		rewriteDebtDrain:      true,
+		debugSource:           "checkpoint_pending",
+	}, 30*time.Millisecond, false)
+	if got := db.vlogGenerationMaintenanceCollisions.Load(); got != 0 {
+		t.Fatalf("checkpoint pending retry collisions=%d want=0", got)
+	}
+
+	db.vlogGenerationMaintenanceActive.Store(true)
+	db.vlogGenerationDeferredMaintenancePending.Store(true)
+	db.runVlogGenerationMaintenanceRetries(vlogGenerationMaintenanceOptions{
+		bypassQuiet:           true,
+		skipRetainedPruneWait: true,
+		skipCheckpoint:        false,
+		rewriteDebtDrain:      true,
+		debugSource:           "rewrite_stage_confirm",
+	}, 30*time.Millisecond, true)
+	if got := db.vlogGenerationMaintenanceCollisions.Load(); got != 0 {
+		t.Fatalf("deferred pending retry collisions=%d want=0", got)
+	}
+}
+
 func TestVlogGenerationRewriteMinStaleRatioForGenericPass_UsesQualityFloor(t *testing.T) {
 	db := &DB{valueLogRewriteTriggerRatioPPM: 200000}
 	if got, want := db.vlogGenerationRewriteMinStaleRatioForGenericPass(8<<30), vlogGenerationRewriteGenericMinSegmentStaleRatio; got != want {
