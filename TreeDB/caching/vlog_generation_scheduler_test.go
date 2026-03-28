@@ -741,6 +741,7 @@ type rewriteBudgetRecordingBackend struct {
 	gcResponse      backenddb.ValueLogGCStats
 	gcResponses     []backenddb.ValueLogGCStats
 	gcErr           error
+	gcFn            func(context.Context, backenddb.ValueLogGCOptions) (backenddb.ValueLogGCStats, error)
 }
 
 func (b *rewriteBudgetRecordingBackend) ValueLogRewritePlan(ctx context.Context, opts backenddb.ValueLogRewriteOnlineOptions) (backenddb.ValueLogRewritePlan, error) {
@@ -770,6 +771,7 @@ func (b *rewriteBudgetRecordingBackend) ValueLogGC(ctx context.Context, opts bac
 	b.mu.Lock()
 	b.gcCalls++
 	b.gcOpts = append(b.gcOpts, cloneGCOptsForTest(opts))
+	customFn := b.gcFn
 	stats := b.gcResponse
 	if len(b.gcResponses) > 0 {
 		idx := b.gcCalls - 1
@@ -783,6 +785,9 @@ func (b *rewriteBudgetRecordingBackend) ValueLogGC(ctx context.Context, opts bac
 	}
 	err := b.gcErr
 	b.mu.Unlock()
+	if customFn != nil {
+		return customFn(ctx, opts)
+	}
 	return stats, err
 }
 
@@ -1178,6 +1183,66 @@ func TestVlogGenerationObservedSourceGCQueue_CountersAndDedupe(t *testing.T) {
 	}
 	if got := db.vlogGenerationObservedGCTakenIDs.Load(); got != uint64(len(want)) {
 		t.Fatalf("taken ids after empty take=%d want %d", got, len(want))
+	}
+}
+
+func TestVlogGenerationMaintenance_ObservedSourceGCBypassQuietIgnoresForegroundResume(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+	t.Setenv(envDisableVlogGenerationRewrite, "1")
+
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	recorder := &rewriteBudgetRecordingBackend{
+		DB: backend,
+		gcFn: func(ctx context.Context, _ backenddb.ValueLogGCOptions) (backenddb.ValueLogGCStats, error) {
+			select {
+			case <-time.After(200 * time.Millisecond):
+				if err := ctx.Err(); err != nil {
+					return backenddb.ValueLogGCStats{}, err
+				}
+				return backenddb.ValueLogGCStats{}, nil
+			case <-ctx.Done():
+				return backenddb.ValueLogGCStats{}, ctx.Err()
+			}
+		},
+	}
+
+	db, cleanup := openRewriteQueueTestDB(t, dir, recorder)
+	defer cleanup()
+	skipRetainedPrune(db)
+
+	db.queueVlogGenerationObservedSourceGCList([]uint32{11})
+	db.vlogGenerationLastGCUnixNano.Store(time.Now().Add(-time.Minute).UnixNano())
+	forceVlogMaintenanceIdle(db)
+
+	go func() {
+		time.Sleep(30 * time.Millisecond)
+		hot := time.Now().UnixNano()
+		db.lastForegroundWriteUnixNano.Store(hot)
+		db.lastForegroundReadUnixNano.Store(hot)
+	}()
+
+	db.maybeRunVlogGenerationMaintenanceWithOptions(true, vlogGenerationMaintenanceOptions{
+		bypassQuiet:           true,
+		skipRetainedPruneWait: true,
+		skipCheckpoint:        true,
+		rewriteDebtDrain:      true,
+	})
+
+	if got := recorder.recordedGCObservedSourceCalls(); got != 1 {
+		t.Fatalf("observed-source gc calls=%d want 1", got)
+	}
+	if got := db.vlogGenerationGCRuns.Load(); got != 1 {
+		t.Fatalf("gc runs=%d want 1", got)
+	}
+	if got := db.vlogGenerationObservedGCRetryQueued.Load(); got != 0 {
+		t.Fatalf("observed-source gc retry queued=%d want 0", got)
+	}
+	if pending := len(db.takeVlogGenerationObservedSourceGCList()); pending != 0 {
+		t.Fatalf("observed-source gc pending ids=%d want 0", pending)
 	}
 }
 

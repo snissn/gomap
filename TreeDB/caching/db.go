@@ -14516,7 +14516,7 @@ planned:
 			if len(processedRewriteIDs) > 0 {
 				ctx, cancel = context.WithTimeout(context.Background(), vlogGenerationRewriteBoundedExecTimeout)
 			} else {
-				ctx, cancel = db.foregroundMaintenanceContext(2 * time.Minute)
+				ctx, cancel = db.vlogGenerationMaintenanceContext(2*time.Minute, opts)
 			}
 			db.debugVlogMaintf(
 				"rewrite_exec reason=%s source_ids=%d max_segments=%d budget_tokens=%d max_source_bytes=%d min_stale_ratio=%.6f queue_len=%d ledger_live_bytes=%d",
@@ -14882,6 +14882,12 @@ planned:
 	observedSourceGCIDs := db.takeVlogGenerationObservedSourceGCList()
 	forceObservedSourceGC := len(observedSourceGCIDs) > 0
 	if envBool(envDisableVlogGenerationGC) {
+		db.debugVlogMaintf(
+			"gc_skip reason=disabled_env run_gc=%t force_observed=%t observed_ids=%d",
+			runGC,
+			forceObservedSourceGC,
+			len(observedSourceGCIDs),
+		)
 		if forceObservedSourceGC {
 			db.vlogGenerationObservedGCRetryQueued.Add(1)
 			db.queueVlogGenerationObservedSourceGCList(observedSourceGCIDs)
@@ -14893,10 +14899,22 @@ planned:
 	// ingest/restore when the flush queue is non-empty. Avoid introducing long
 	// stalls by only running the GC path when the cached write queue is drained.
 	if queueLen != 0 && !forceObservedSourceGC {
+		db.debugVlogMaintf(
+			"gc_skip reason=queue_not_drained run_gc=%t queue_len=%d force_observed=%t",
+			runGC,
+			queueLen,
+			forceObservedSourceGC,
+		)
 		return
 	}
 	gcer, ok := db.backend.(backendValueLogGCer)
 	if !ok {
+		db.debugVlogMaintf(
+			"gc_skip reason=backend_no_gcer run_gc=%t force_observed=%t observed_ids=%d",
+			runGC,
+			forceObservedSourceGC,
+			len(observedSourceGCIDs),
+		)
 		if forceObservedSourceGC {
 			db.vlogGenerationObservedGCRetryQueued.Add(1)
 			db.queueVlogGenerationObservedSourceGCList(observedSourceGCIDs)
@@ -14909,6 +14927,14 @@ planned:
 	if lastGC > 0 {
 		lastAt := time.Unix(0, lastGC)
 		if !forceObservedSourceGC && now.Sub(lastAt) < vlogGenerationGCMinInterval {
+			db.debugVlogMaintf(
+				"gc_skip reason=min_interval run_gc=%t force_observed=%t observed_ids=%d since_ms=%.3f min_ms=%.3f",
+				runGC,
+				forceObservedSourceGC,
+				len(observedSourceGCIDs),
+				float64(now.Sub(lastAt).Microseconds())/1000,
+				float64(vlogGenerationGCMinInterval.Microseconds())/1000,
+			)
 			return
 		}
 	}
@@ -14924,24 +14950,59 @@ planned:
 				return fmt.Errorf("generational gc dry-run: %w", err)
 			}
 			if gcStats.BytesEligible < vlogGenerationGCMinBytes && gcStats.SegmentsEligible == 0 {
+				db.debugVlogMaintf(
+					"gc_skip reason=below_eligibility_floor run_gc=%t force_observed=%t eligible_bytes=%d eligible_segments=%d min_bytes=%d",
+					runGC,
+					forceObservedSourceGC,
+					gcStats.BytesEligible,
+					gcStats.SegmentsEligible,
+					vlogGenerationGCMinBytes,
+				)
 				return nil
 			}
 		}
 		now := time.Now()
 		db.vlogGenerationLastGCUnixNano.Store(now.UnixNano())
-		ctx, cancel := db.foregroundMaintenanceContext(30 * time.Second)
+		ctx, cancel := db.vlogGenerationMaintenanceContext(30*time.Second, opts)
 		gcOpts := db.valueLogGCOptions(false)
 		if forceObservedSourceGC {
 			gcOpts.ObservedSourceFileIDs = append([]uint32(nil), observedSourceGCIDs...)
 			db.vlogGenerationObservedGCRuns.Add(1)
 		}
+		db.debugVlogMaintf(
+			"gc_run start run_gc=%t force_observed=%t observed_ids=%d need_estimate=%t",
+			runGC,
+			forceObservedSourceGC,
+			len(observedSourceGCIDs),
+			needEligibilityEstimate,
+		)
 		gcStart := time.Now()
 		gcStats, err := gcer.ValueLogGC(ctx, gcOpts)
 		cancel()
 		db.observeVlogGenerationGCExecDuration(time.Since(gcStart))
 		if err != nil {
+			db.debugVlogMaintf(
+				"gc_run err run_gc=%t force_observed=%t observed_ids=%d err=%v",
+				runGC,
+				forceObservedSourceGC,
+				len(observedSourceGCIDs),
+				err,
+			)
 			return fmt.Errorf("generational gc: %w", err)
 		}
+		db.debugVlogMaintf(
+			"gc_run done run_gc=%t force_observed=%t observed_ids=%d deleted_segments=%d deleted_bytes=%d protected_retained_bytes=%d observed_segments=%d observed_eligible=%d observed_deleted=%d observed_protected_retained=%d",
+			runGC,
+			forceObservedSourceGC,
+			len(observedSourceGCIDs),
+			gcStats.SegmentsDeleted,
+			gcStats.BytesDeleted,
+			gcStats.BytesProtectedRetained,
+			gcStats.ObservedSourceSegments,
+			gcStats.ObservedSourceSegmentsEligible,
+			gcStats.ObservedSourceSegmentsDeleted,
+			gcStats.ObservedSourceSegmentsProtectedRetained,
+		)
 		db.observeVlogGenerationGCStats(gcStats)
 		if gcStats.BytesProtectedRetained > 0 && gcStats.BytesEligible == 0 && db.valueLogRetainedClosedBytes.Load() > 0 {
 			// When GC classifies all reclaim blockers as retained-path protection,
@@ -14955,6 +15016,13 @@ planned:
 			gcStats.ObservedSourceSegments > 0 &&
 			gcStats.ObservedSourceSegmentsProtectedRetained > 0 &&
 			gcStats.ObservedSourceSegmentsEligible == 0 {
+			db.debugVlogMaintf(
+				"gc_observed_retry reason=retained_protected observed_ids=%d observed_segments=%d observed_protected_retained=%d observed_eligible=%d",
+				len(observedSourceGCIDs),
+				gcStats.ObservedSourceSegments,
+				gcStats.ObservedSourceSegmentsProtectedRetained,
+				gcStats.ObservedSourceSegmentsEligible,
+			)
 			db.queueRetainedPruneObservedSourceIDs(observedSourceGCIDs)
 			db.scheduleRetainedValueLogPruneForce()
 			db.vlogGenerationObservedGCRetryQueued.Add(1)
@@ -14972,6 +15040,13 @@ planned:
 		return nil
 	})
 	if err != nil {
+		db.debugVlogMaintf(
+			"gc_maintenance_err run_gc=%t force_observed=%t observed_ids=%d err=%v",
+			runGC,
+			forceObservedSourceGC,
+			len(observedSourceGCIDs),
+			err,
+		)
 		if forceObservedSourceGC {
 			db.vlogGenerationObservedGCRetryQueued.Add(1)
 			db.queueVlogGenerationObservedSourceGCList(observedSourceGCIDs)
