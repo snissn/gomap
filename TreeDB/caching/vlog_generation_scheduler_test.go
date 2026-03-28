@@ -736,7 +736,9 @@ type rewriteBudgetRecordingBackend struct {
 	rewriteResponse backenddb.ValueLogRewriteStats
 	rewriteErr      error
 	gcCalls         int
+	gcOpts          []backenddb.ValueLogGCOptions
 	gcResponse      backenddb.ValueLogGCStats
+	gcResponses     []backenddb.ValueLogGCStats
 	gcErr           error
 }
 
@@ -766,7 +768,18 @@ func (b *rewriteBudgetRecordingBackend) ValueLogRewriteOnline(ctx context.Contex
 func (b *rewriteBudgetRecordingBackend) ValueLogGC(ctx context.Context, opts backenddb.ValueLogGCOptions) (backenddb.ValueLogGCStats, error) {
 	b.mu.Lock()
 	b.gcCalls++
+	b.gcOpts = append(b.gcOpts, cloneGCOptsForTest(opts))
 	stats := b.gcResponse
+	if len(b.gcResponses) > 0 {
+		idx := b.gcCalls - 1
+		if idx < 0 {
+			idx = 0
+		}
+		if idx >= len(b.gcResponses) {
+			idx = len(b.gcResponses) - 1
+		}
+		stats = b.gcResponses[idx]
+	}
 	err := b.gcErr
 	b.mu.Unlock()
 	return stats, err
@@ -785,6 +798,15 @@ func cloneRewriteOptsForTest(opts backenddb.ValueLogRewriteOnlineOptions) backen
 	return cloned
 }
 
+func cloneGCOptsForTest(opts backenddb.ValueLogGCOptions) backenddb.ValueLogGCOptions {
+	cloned := opts
+	cloned.ProtectedPaths = append([]string(nil), opts.ProtectedPaths...)
+	cloned.ProtectedInUsePaths = append([]string(nil), opts.ProtectedInUsePaths...)
+	cloned.ProtectedRetainedPaths = append([]string(nil), opts.ProtectedRetainedPaths...)
+	cloned.ObservedSourceFileIDs = append([]uint32(nil), opts.ObservedSourceFileIDs...)
+	return cloned
+}
+
 func (b *rewriteBudgetRecordingBackend) recordedPlan() (backenddb.ValueLogRewriteOnlineOptions, int) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -794,7 +816,31 @@ func (b *rewriteBudgetRecordingBackend) recordedPlan() (backenddb.ValueLogRewrit
 func (b *rewriteBudgetRecordingBackend) recordedGC() (backenddb.ValueLogGCStats, int) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.gcResponse, b.gcCalls
+	stats := b.gcResponse
+	if len(b.gcResponses) > 0 && b.gcCalls > 0 {
+		idx := b.gcCalls - 1
+		if idx >= len(b.gcResponses) {
+			idx = len(b.gcResponses) - 1
+		}
+		stats = b.gcResponses[idx]
+	}
+	return stats, b.gcCalls
+}
+
+func (b *rewriteBudgetRecordingBackend) recordedGCObservedSourceCalls() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	count := 0
+	for _, opts := range b.gcOpts {
+		if opts.DryRun {
+			continue
+		}
+		if len(opts.ObservedSourceFileIDs) == 0 {
+			continue
+		}
+		count++
+	}
+	return count
 }
 
 func openRewriteQueueTestDB(t *testing.T, dir string, recorder *rewriteBudgetRecordingBackend) (*DB, func()) {
@@ -899,7 +945,7 @@ func TestVlogGenerationMaintenance_SerializesConcurrentRuns(t *testing.T) {
 
 	// While the first pass is still inside rewrite, a concurrent pass should be
 	// skipped by the maintenance-active gate instead of issuing a second rewrite.
-	db.maybeRunVlogGenerationMaintenanceWithOptions(true, vlogGenerationMaintenanceOptions{
+	db.maybeRunVlogGenerationMaintenanceWithOptions(false, vlogGenerationMaintenanceOptions{
 		bypassQuiet:           true,
 		skipRetainedPruneWait: true,
 		skipCheckpoint:        true,
@@ -1015,6 +1061,76 @@ func TestVlogGenerationRewrite_QueuedExecIgnoresForegroundCancelUntilBoundedComp
 	}
 	if got := stats["treedb.cache.vlog_generation.rewrite.canceled_runs.queued_debt"]; got != "0" {
 		t.Fatalf("rewrite canceled queued runs=%q want 0 for bounded queued rewrite", got)
+	}
+}
+
+func TestVlogGenerationRewrite_ObservedSourceRetainedBlock_RunsSecondGC(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	recorder := &rewriteBudgetRecordingBackend{
+		DB: backend,
+		rewriteResponse: backenddb.ValueLogRewriteStats{
+			BytesBefore:                   128,
+			BytesAfter:                    128,
+			RecordsCopied:                 1,
+			SourceSegmentsRequested:       1,
+			SourceSegmentsStillReferenced: 0,
+			SourceSegmentsUnreferenced:    1,
+		},
+		gcResponses: []backenddb.ValueLogGCStats{
+			{
+				BytesProtectedRetained:                  64,
+				BytesEligible:                           0,
+				ObservedSourceSegments:                  1,
+				ObservedSourceSegmentsReferenced:        0,
+				ObservedSourceSegmentsEligible:          0,
+				ObservedSourceSegmentsProtectedRetained: 1,
+				ObservedSourceBytesProtectedRetained:    64,
+			},
+			{
+				BytesProtectedRetained:         0,
+				BytesEligible:                  64,
+				BytesDeleted:                   64,
+				ObservedSourceSegments:         1,
+				ObservedSourceSegmentsEligible: 1,
+				ObservedSourceSegmentsDeleted:  1,
+				ObservedSourceBytesEligible:    64,
+				ObservedSourceBytesDeleted:     64,
+			},
+		},
+	}
+
+	db, cleanup := openRewriteQueueTestDB(t, dir, recorder)
+	defer cleanup()
+	skipRetainedPrune(db)
+
+	if err := db.setVlogGenerationRewriteQueue([]uint32{11}); err != nil {
+		t.Fatalf("seed rewrite queue: %v", err)
+	}
+	db.vlogGenerationRewriteBudgetTokensBytes.Store(1024)
+	forceVlogMaintenanceIdle(db)
+	forceRetainedPruneIdle(db)
+
+	db.maybeRunVlogGenerationMaintenanceWithOptions(true, vlogGenerationMaintenanceOptions{
+		bypassQuiet:           true,
+		skipRetainedPruneWait: true,
+		skipCheckpoint:        true,
+		rewriteDebtDrain:      true,
+	})
+
+	if got := recorder.recordedGCObservedSourceCalls(); got != 2 {
+		t.Fatalf("observed-source gc calls=%d want 2 when observed source is retained-blocked", got)
+	}
+	if got := db.vlogGenerationLastGCObservedSourceSegmentsEligible.Load(); got != 1 {
+		t.Fatalf("last observed source eligible segments=%d want 1 after second gc", got)
+	}
+	if got := db.vlogGenerationLastGCObservedSourceBytesDeleted.Load(); got != 64 {
+		t.Fatalf("last observed source deleted bytes=%d want 64 after second gc", got)
 	}
 }
 

@@ -4194,21 +4194,100 @@ type valueLogSetRefresher interface {
 }
 
 type retainedValueLogPruneStats struct {
-	RemovedSegments         int
-	RemovedBytes            int64
-	InUseSkippedSegments    int
-	InUseSkippedBytes       int64
-	CandidateSegments       int
-	CandidateBytes          int64
-	LiveSkippedSegments     int
-	LiveSkippedBytes        int64
-	ParseSkippedSegments    int
-	ParseSkippedBytes       int64
-	ZombieMarkedSegments    int
-	ZombieMarkedBytes       int64
-	AbortedForegroundWrites bool
-	RetriedWithoutWriteGate bool
-	RetrySucceeded          bool
+	RemovedSegments                    int
+	RemovedBytes                       int64
+	InUseSkippedSegments               int
+	InUseSkippedBytes                  int64
+	CandidateSegments                  int
+	CandidateBytes                     int64
+	LiveSkippedSegments                int
+	LiveSkippedBytes                   int64
+	ParseSkippedSegments               int
+	ParseSkippedBytes                  int64
+	ZombieMarkedSegments               int
+	ZombieMarkedBytes                  int64
+	ObservedSourceSegments             int
+	ObservedSourceBytes                int64
+	ObservedSourceCandidateSegments    int
+	ObservedSourceCandidateBytes       int64
+	ObservedSourceRemovedSegments      int
+	ObservedSourceRemovedBytes         int64
+	ObservedSourceInUseSkippedSegments int
+	ObservedSourceInUseSkippedBytes    int64
+	ObservedSourceLiveSkippedSegments  int
+	ObservedSourceLiveSkippedBytes     int64
+	ObservedSourceParseSkippedSegments int
+	ObservedSourceParseSkippedBytes    int64
+	ObservedSourceZombieMarkedSegments int
+	ObservedSourceZombieMarkedBytes    int64
+	AbortedForegroundWrites            bool
+	RetriedWithoutWriteGate            bool
+	RetrySucceeded                     bool
+}
+
+func (db *DB) observeRetainedValueLogPruneStats(pruneStats retainedValueLogPruneStats) {
+	if db == nil {
+		return
+	}
+	db.retainedValueLogPruneLastObservedSourceSegments.Store(int64(pruneStats.ObservedSourceSegments))
+	db.retainedValueLogPruneLastObservedSourceBytes.Store(pruneStats.ObservedSourceBytes)
+	db.retainedValueLogPruneLastObservedSourceCandidateSegments.Store(int64(pruneStats.ObservedSourceCandidateSegments))
+	db.retainedValueLogPruneLastObservedSourceCandidateBytes.Store(pruneStats.ObservedSourceCandidateBytes)
+	db.retainedValueLogPruneLastObservedSourceRemovedSegments.Store(int64(pruneStats.ObservedSourceRemovedSegments))
+	db.retainedValueLogPruneLastObservedSourceRemovedBytes.Store(pruneStats.ObservedSourceRemovedBytes)
+	db.retainedValueLogPruneLastObservedSourceInUseSkippedSegments.Store(int64(pruneStats.ObservedSourceInUseSkippedSegments))
+	db.retainedValueLogPruneLastObservedSourceInUseSkippedBytes.Store(pruneStats.ObservedSourceInUseSkippedBytes)
+	db.retainedValueLogPruneLastObservedSourceLiveSkippedSegments.Store(int64(pruneStats.ObservedSourceLiveSkippedSegments))
+	db.retainedValueLogPruneLastObservedSourceLiveSkippedBytes.Store(pruneStats.ObservedSourceLiveSkippedBytes)
+	db.retainedValueLogPruneLastObservedSourceParseSkippedSegments.Store(int64(pruneStats.ObservedSourceParseSkippedSegments))
+	db.retainedValueLogPruneLastObservedSourceParseSkippedBytes.Store(pruneStats.ObservedSourceParseSkippedBytes)
+	db.retainedValueLogPruneLastObservedSourceZombieMarkedSegments.Store(int64(pruneStats.ObservedSourceZombieMarkedSegments))
+	db.retainedValueLogPruneLastObservedSourceZombieMarkedBytes.Store(pruneStats.ObservedSourceZombieMarkedBytes)
+	if pruneStats.RetriedWithoutWriteGate {
+		db.retainedValueLogPruneWriteGateRetries.Add(1)
+		if pruneStats.RetrySucceeded {
+			db.retainedValueLogPruneWriteGateRetrySuccesses.Add(1)
+		}
+	}
+	if pruneStats.AbortedForegroundWrites {
+		db.retainedValueLogPruneForegroundAbortRuns.Add(1)
+	}
+	if pruneStats.RemovedSegments > 0 {
+		db.retainedValueLogPruneRemovedSegments.Add(uint64(pruneStats.RemovedSegments))
+	}
+	if pruneStats.RemovedBytes > 0 {
+		db.retainedValueLogPruneRemovedBytes.Add(uint64(pruneStats.RemovedBytes))
+	}
+	if pruneStats.InUseSkippedSegments > 0 {
+		db.retainedValueLogPruneInUseSkippedSegments.Add(uint64(pruneStats.InUseSkippedSegments))
+	}
+	if pruneStats.InUseSkippedBytes > 0 {
+		db.retainedValueLogPruneInUseSkippedBytes.Add(uint64(pruneStats.InUseSkippedBytes))
+	}
+	if pruneStats.CandidateSegments > 0 {
+		db.retainedValueLogPruneCandidateSegments.Add(uint64(pruneStats.CandidateSegments))
+	}
+	if pruneStats.CandidateBytes > 0 {
+		db.retainedValueLogPruneCandidateBytes.Add(uint64(pruneStats.CandidateBytes))
+	}
+	if pruneStats.LiveSkippedSegments > 0 {
+		db.retainedValueLogPruneLiveSkippedSegments.Add(uint64(pruneStats.LiveSkippedSegments))
+	}
+	if pruneStats.LiveSkippedBytes > 0 {
+		db.retainedValueLogPruneLiveSkippedBytes.Add(uint64(pruneStats.LiveSkippedBytes))
+	}
+	if pruneStats.ParseSkippedSegments > 0 {
+		db.retainedValueLogPruneParseSkippedSegments.Add(uint64(pruneStats.ParseSkippedSegments))
+	}
+	if pruneStats.ParseSkippedBytes > 0 {
+		db.retainedValueLogPruneParseSkippedBytes.Add(uint64(pruneStats.ParseSkippedBytes))
+	}
+	if pruneStats.ZombieMarkedSegments > 0 {
+		db.retainedValueLogPruneZombieMarkedSegments.Add(uint64(pruneStats.ZombieMarkedSegments))
+	}
+	if pruneStats.ZombieMarkedBytes > 0 {
+		db.retainedValueLogPruneZombieMarkedBytes.Add(uint64(pruneStats.ZombieMarkedBytes))
+	}
 }
 
 func (db *DB) valueLogClosedSegmentSize(path string) int64 {
@@ -4229,6 +4308,10 @@ func (db *DB) valueLogClosedSegmentSize(path string) int64 {
 }
 
 func (db *DB) pruneRetainedValueLogs(force bool) retainedValueLogPruneStats {
+	return db.pruneRetainedValueLogsWithObserved(force, nil)
+}
+
+func (db *DB) pruneRetainedValueLogsWithObserved(force bool, observedSourceIDs map[uint32]struct{}) retainedValueLogPruneStats {
 	var out retainedValueLogPruneStats
 	if !db.valueLogEnabled() {
 		return out
@@ -4244,16 +4327,39 @@ func (db *DB) pruneRetainedValueLogs(force bool) retainedValueLogPruneStats {
 	}
 
 	type pruneCandidate struct {
-		path string
-		size int64
+		path     string
+		size     int64
+		id       uint32
+		hasID    bool
+		observed bool
 	}
 	candidatePaths := make([]pruneCandidate, 0, len(paths))
 	for _, path := range paths {
 		size := db.valueLogClosedSegmentSize(path)
+		candidate := pruneCandidate{path: path, size: size}
+		if laneID, seq, valueLog, ok := parseLogSeq(filepath.Base(path)); ok && valueLog && laneID >= 0 {
+			if id, err := valuelog.EncodeFileID(uint32(laneID), uint32(seq)); err == nil {
+				candidate.id = id
+				candidate.hasID = true
+				if _, ok := observedSourceIDs[id]; ok {
+					candidate.observed = true
+					out.ObservedSourceSegments++
+					if size > 0 {
+						out.ObservedSourceBytes += size
+					}
+				}
+			}
+		}
 		if _, ok := inUse[path]; ok {
 			out.InUseSkippedSegments++
 			if size > 0 {
 				out.InUseSkippedBytes += size
+			}
+			if candidate.observed {
+				out.ObservedSourceInUseSkippedSegments++
+				if size > 0 {
+					out.ObservedSourceInUseSkippedBytes += size
+				}
 			}
 			continue
 		}
@@ -4262,13 +4368,25 @@ func (db *DB) pruneRetainedValueLogs(force bool) retainedValueLogPruneStats {
 				out.RemovedSegments++
 				out.RemovedBytes += size
 			}
+			if candidate.observed {
+				out.ObservedSourceRemovedSegments++
+				if size > 0 {
+					out.ObservedSourceRemovedBytes += size
+				}
+			}
 			continue
 		}
 		out.CandidateSegments++
 		if size > 0 {
 			out.CandidateBytes += size
 		}
-		candidatePaths = append(candidatePaths, pruneCandidate{path: path, size: size})
+		if candidate.observed {
+			out.ObservedSourceCandidateSegments++
+			if size > 0 {
+				out.ObservedSourceCandidateBytes += size
+			}
+		}
+		candidatePaths = append(candidatePaths, candidate)
 	}
 	if len(candidatePaths) == 0 {
 		return out
@@ -4296,26 +4414,17 @@ func (db *DB) pruneRetainedValueLogs(force bool) retainedValueLogPruneStats {
 	for _, candidate := range candidatePaths {
 		path := candidate.path
 		size := candidate.size
-		laneID, seq, valueLog, ok := parseLogSeq(filepath.Base(path))
-		if !ok || !valueLog {
+		id := candidate.id
+		if !candidate.hasID {
 			out.ParseSkippedSegments++
 			if size > 0 {
 				out.ParseSkippedBytes += size
 			}
-			continue
-		}
-		if laneID < 0 {
-			out.ParseSkippedSegments++
-			if size > 0 {
-				out.ParseSkippedBytes += size
-			}
-			continue
-		}
-		id, err := valuelog.EncodeFileID(uint32(laneID), uint32(seq))
-		if err != nil {
-			out.ParseSkippedSegments++
-			if size > 0 {
-				out.ParseSkippedBytes += size
+			if candidate.observed {
+				out.ObservedSourceParseSkippedSegments++
+				if size > 0 {
+					out.ObservedSourceParseSkippedBytes += size
+				}
 			}
 			continue
 		}
@@ -4323,6 +4432,12 @@ func (db *DB) pruneRetainedValueLogs(force bool) retainedValueLogPruneStats {
 			out.LiveSkippedSegments++
 			if size > 0 {
 				out.LiveSkippedBytes += size
+			}
+			if candidate.observed {
+				out.ObservedSourceLiveSkippedSegments++
+				if size > 0 {
+					out.ObservedSourceLiveSkippedBytes += size
+				}
 			}
 			continue
 		}
@@ -4338,12 +4453,24 @@ func (db *DB) pruneRetainedValueLogs(force bool) retainedValueLogPruneStats {
 						out.RemovedSegments++
 						out.RemovedBytes += size
 					}
+					if candidate.observed {
+						out.ObservedSourceRemovedSegments++
+						if size > 0 {
+							out.ObservedSourceRemovedBytes += size
+						}
+					}
 					continue
 				}
 				if db.cleanupMissingRetainedValueLog(path) {
 					if size > 0 {
 						out.RemovedSegments++
 						out.RemovedBytes += size
+					}
+					if candidate.observed {
+						out.ObservedSourceRemovedSegments++
+						if size > 0 {
+							out.ObservedSourceRemovedBytes += size
+						}
 					}
 					continue
 				}
@@ -4353,6 +4480,12 @@ func (db *DB) pruneRetainedValueLogs(force bool) retainedValueLogPruneStats {
 			out.ZombieMarkedSegments++
 			if size > 0 {
 				out.ZombieMarkedBytes += size
+			}
+			if candidate.observed {
+				out.ObservedSourceZombieMarkedSegments++
+				if size > 0 {
+					out.ObservedSourceZombieMarkedBytes += size
+				}
 			}
 			marked = true
 		} else {
@@ -4365,6 +4498,12 @@ func (db *DB) pruneRetainedValueLogs(force bool) retainedValueLogPruneStats {
 			if size > 0 {
 				out.RemovedSegments++
 				out.RemovedBytes += size
+			}
+			if candidate.observed {
+				out.ObservedSourceRemovedSegments++
+				if size > 0 {
+					out.ObservedSourceRemovedBytes += size
+				}
 			}
 		}
 		db.forgetValueLogRetain(path)
@@ -4468,6 +4607,38 @@ func (db *DB) waitForRetainedValueLogPruneQuietOrForce(quietWindow time.Duration
 	}
 }
 
+func (db *DB) queueRetainedPruneObservedSourceIDs(ids []uint32) {
+	if db == nil || len(ids) == 0 {
+		return
+	}
+	db.retainedPruneObservedMu.Lock()
+	if db.retainedPruneObservedSourceIDs == nil {
+		db.retainedPruneObservedSourceIDs = make(map[uint32]struct{}, len(ids))
+	}
+	for _, id := range ids {
+		if id == 0 {
+			continue
+		}
+		db.retainedPruneObservedSourceIDs[id] = struct{}{}
+	}
+	db.retainedPruneObservedMu.Unlock()
+}
+
+func (db *DB) takeRetainedPruneObservedSourceIDs() map[uint32]struct{} {
+	if db == nil {
+		return nil
+	}
+	db.retainedPruneObservedMu.Lock()
+	if len(db.retainedPruneObservedSourceIDs) == 0 {
+		db.retainedPruneObservedMu.Unlock()
+		return nil
+	}
+	out := db.retainedPruneObservedSourceIDs
+	db.retainedPruneObservedSourceIDs = nil
+	db.retainedPruneObservedMu.Unlock()
+	return out
+}
+
 func (db *DB) scheduleRetainedValueLogPrune() {
 	db.scheduleRetainedValueLogPruneWithForce(false)
 }
@@ -4545,51 +4716,13 @@ func (db *DB) scheduleRetainedValueLogPruneWithForce(force bool) {
 			db.retainedValueLogPruneForcedRuns.Add(1)
 		}
 		db.retainedValueLogPruneLastUnixNano.Store(now.UnixNano())
-		pruneStats := db.pruneRetainedValueLogs(effectiveForce)
-		if pruneStats.RetriedWithoutWriteGate {
-			db.retainedValueLogPruneWriteGateRetries.Add(1)
-			if pruneStats.RetrySucceeded {
-				db.retainedValueLogPruneWriteGateRetrySuccesses.Add(1)
-			}
-		}
-		if pruneStats.AbortedForegroundWrites {
-			db.retainedValueLogPruneForegroundAbortRuns.Add(1)
-		}
-		if pruneStats.RemovedSegments > 0 {
-			db.retainedValueLogPruneRemovedSegments.Add(uint64(pruneStats.RemovedSegments))
-		}
-		if pruneStats.RemovedBytes > 0 {
-			db.retainedValueLogPruneRemovedBytes.Add(uint64(pruneStats.RemovedBytes))
-		}
-		if pruneStats.InUseSkippedSegments > 0 {
-			db.retainedValueLogPruneInUseSkippedSegments.Add(uint64(pruneStats.InUseSkippedSegments))
-		}
-		if pruneStats.InUseSkippedBytes > 0 {
-			db.retainedValueLogPruneInUseSkippedBytes.Add(uint64(pruneStats.InUseSkippedBytes))
-		}
-		if pruneStats.CandidateSegments > 0 {
-			db.retainedValueLogPruneCandidateSegments.Add(uint64(pruneStats.CandidateSegments))
-		}
-		if pruneStats.CandidateBytes > 0 {
-			db.retainedValueLogPruneCandidateBytes.Add(uint64(pruneStats.CandidateBytes))
-		}
-		if pruneStats.LiveSkippedSegments > 0 {
-			db.retainedValueLogPruneLiveSkippedSegments.Add(uint64(pruneStats.LiveSkippedSegments))
-		}
-		if pruneStats.LiveSkippedBytes > 0 {
-			db.retainedValueLogPruneLiveSkippedBytes.Add(uint64(pruneStats.LiveSkippedBytes))
-		}
-		if pruneStats.ParseSkippedSegments > 0 {
-			db.retainedValueLogPruneParseSkippedSegments.Add(uint64(pruneStats.ParseSkippedSegments))
-		}
-		if pruneStats.ParseSkippedBytes > 0 {
-			db.retainedValueLogPruneParseSkippedBytes.Add(uint64(pruneStats.ParseSkippedBytes))
-		}
-		if pruneStats.ZombieMarkedSegments > 0 {
-			db.retainedValueLogPruneZombieMarkedSegments.Add(uint64(pruneStats.ZombieMarkedSegments))
-		}
-		if pruneStats.ZombieMarkedBytes > 0 {
-			db.retainedValueLogPruneZombieMarkedBytes.Add(uint64(pruneStats.ZombieMarkedBytes))
+		observedSourceIDs := db.takeRetainedPruneObservedSourceIDs()
+		pruneStats := db.pruneRetainedValueLogsWithObserved(effectiveForce, observedSourceIDs)
+		db.observeRetainedValueLogPruneStats(pruneStats)
+		if len(observedSourceIDs) > 0 && (pruneStats.ObservedSourceZombieMarkedSegments > 0 || pruneStats.ObservedSourceRemovedSegments > 0) {
+			// When a retained prune processes rewrite-observed source segments,
+			// queue a near-term maintenance pass so GC can re-check reclaim state.
+			db.vlogGenerationCheckpointKickPending.Store(true)
 		}
 	}()
 }
@@ -5398,6 +5531,20 @@ type DB struct {
 	retainedValueLogPruneParseSkippedBytes                      atomic.Uint64
 	retainedValueLogPruneZombieMarkedSegments                   atomic.Uint64
 	retainedValueLogPruneZombieMarkedBytes                      atomic.Uint64
+	retainedValueLogPruneLastObservedSourceSegments             atomic.Int64
+	retainedValueLogPruneLastObservedSourceBytes                atomic.Int64
+	retainedValueLogPruneLastObservedSourceCandidateSegments    atomic.Int64
+	retainedValueLogPruneLastObservedSourceCandidateBytes       atomic.Int64
+	retainedValueLogPruneLastObservedSourceRemovedSegments      atomic.Int64
+	retainedValueLogPruneLastObservedSourceRemovedBytes         atomic.Int64
+	retainedValueLogPruneLastObservedSourceInUseSkippedSegments atomic.Int64
+	retainedValueLogPruneLastObservedSourceInUseSkippedBytes    atomic.Int64
+	retainedValueLogPruneLastObservedSourceLiveSkippedSegments  atomic.Int64
+	retainedValueLogPruneLastObservedSourceLiveSkippedBytes     atomic.Int64
+	retainedValueLogPruneLastObservedSourceParseSkippedSegments atomic.Int64
+	retainedValueLogPruneLastObservedSourceParseSkippedBytes    atomic.Int64
+	retainedValueLogPruneLastObservedSourceZombieMarkedSegments atomic.Int64
+	retainedValueLogPruneLastObservedSourceZombieMarkedBytes    atomic.Int64
 	retainedValueLogPruneScheduleRequests                       atomic.Uint64
 	retainedValueLogPruneScheduleForcedRequests                 atomic.Uint64
 	retainedValueLogPruneScheduleSkipClosing                    atomic.Uint64
@@ -5408,6 +5555,8 @@ type DB struct {
 	retainedValueLogPruneWriteGateRetries                       atomic.Uint64
 	retainedValueLogPruneWriteGateRetrySuccesses                atomic.Uint64
 	retainedPruneForceRequested                                 atomic.Bool
+	retainedPruneObservedMu                                     sync.Mutex
+	retainedPruneObservedSourceIDs                              map[uint32]struct{}
 	retainedPruneMu                                             sync.Mutex
 	retainedPruneDone                                           chan struct{}
 	vlogGenerationRemapSuccesses                                atomic.Uint64
@@ -14334,27 +14483,121 @@ planned:
 				}
 			}
 			if gcer, ok := db.backend.(backendValueLogGCer); ok {
-				gcCtx, gcCancel := context.WithTimeout(context.Background(), 30*time.Second)
-				gcStart := time.Now()
 				gcOpts := db.valueLogGCOptions(false)
 				if len(processedRewriteIDs) > 0 {
 					gcOpts.ObservedSourceFileIDs = append([]uint32(nil), processedRewriteIDs...)
 				}
-				gcStats, gcErr := gcer.ValueLogGC(gcCtx, gcOpts)
-				gcCancel()
-				gcDur := time.Since(gcStart)
-				db.observeVlogGenerationGCExecDuration(gcDur)
+				runGC := func(phase string) (backenddb.ValueLogGCStats, error) {
+					gcCtx, gcCancel := context.WithTimeout(context.Background(), 30*time.Second)
+					gcStart := time.Now()
+					gcStats, gcErr := gcer.ValueLogGC(gcCtx, gcOpts)
+					gcCancel()
+					gcDur := time.Since(gcStart)
+					db.observeVlogGenerationGCExecDuration(gcDur)
+					if gcErr != nil {
+						db.debugVlogMaintf(
+							"gc_after_rewrite_err reason=%s phase=%s err=%v dur_ms=%.3f",
+							vlogGenerationReasonString(reason),
+							phase,
+							gcErr,
+							float64(gcDur.Microseconds())/1000,
+						)
+						return backenddb.ValueLogGCStats{}, gcErr
+					}
+					db.observeVlogGenerationGCStats(gcStats)
+					db.vlogGenerationGCRuns.Add(1)
+					if gcStats.SegmentsDeleted > 0 {
+						db.vlogGenerationGCSegmentsDeleted.Add(uint64(gcStats.SegmentsDeleted))
+					}
+					if gcStats.BytesDeleted > 0 {
+						db.vlogGenerationGCBytesDeleted.Add(uint64(gcStats.BytesDeleted))
+						gcBytesDeleted += int64(gcStats.BytesDeleted)
+						effectiveBytesAfter -= int64(gcStats.BytesDeleted)
+						if effectiveBytesAfter < 0 {
+							effectiveBytesAfter = 0
+						}
+					}
+					db.debugVlogMaintf(
+						"gc_after_rewrite_done reason=%s phase=%s dur_ms=%.3f",
+						vlogGenerationReasonString(reason),
+						phase,
+						float64(gcDur.Microseconds())/1000,
+					)
+					return gcStats, nil
+				}
+
+				gcStats, gcErr := runGC("initial")
 				if gcErr != nil {
-					db.debugVlogMaintf("gc_after_rewrite_err reason=%s err=%v dur_ms=%.3f", vlogGenerationReasonString(reason), gcErr, float64(gcDur.Microseconds())/1000)
 					return fmt.Errorf("generational gc after rewrite: %w", gcErr)
 				}
-				db.observeVlogGenerationGCStats(gcStats)
-				db.vlogGenerationGCRuns.Add(1)
-				if gcStats.SegmentsDeleted > 0 {
-					db.vlogGenerationGCSegmentsDeleted.Add(uint64(gcStats.SegmentsDeleted))
-				}
-				if gcStats.BytesDeleted > 0 {
-					db.vlogGenerationGCBytesDeleted.Add(uint64(gcStats.BytesDeleted))
+
+				rewriteBlockedByRetained := len(processedRewriteIDs) > 0 &&
+					gcStats.ObservedSourceSegments > 0 &&
+					gcStats.ObservedSourceSegmentsReferenced == 0 &&
+					gcStats.ObservedSourceSegmentsEligible == 0 &&
+					gcStats.ObservedSourceSegmentsProtectedRetained > 0
+				if rewriteBlockedByRetained {
+					if db.retainedPruneActive() {
+						db.queueRetainedPruneObservedSourceIDs(processedRewriteIDs)
+						// A prune is already in flight. Ensure a follow-up attempt stays queued.
+						db.scheduleRetainedValueLogPruneForce()
+						// Request a follow-up maintenance pass so GC can re-evaluate
+						// rewrite-observed source segments after the in-flight prune completes.
+						db.vlogGenerationCheckpointKickPending.Store(true)
+					} else {
+						observedSourceIDSet := make(map[uint32]struct{}, len(processedRewriteIDs))
+						for _, id := range processedRewriteIDs {
+							if id == 0 {
+								continue
+							}
+							observedSourceIDSet[id] = struct{}{}
+						}
+						nowPrune := time.Now()
+						db.retainedPruneLastStartUnixNano.Store(nowPrune.UnixNano())
+						db.retainedValueLogPruneRuns.Add(1)
+						db.retainedValueLogPruneForcedRuns.Add(1)
+						db.retainedValueLogPruneLastUnixNano.Store(nowPrune.UnixNano())
+						pruneStats := db.pruneRetainedValueLogsWithObserved(true, observedSourceIDSet)
+						db.observeRetainedValueLogPruneStats(pruneStats)
+						db.debugVlogMaintf(
+							"rewrite_retained_prune reason=%s observed_source_retained_segments=%d observed_source_retained_bytes=%d observed_source_seen_segments=%d observed_source_seen_bytes=%d observed_source_candidate_segments=%d observed_source_candidate_bytes=%d observed_source_removed_segments=%d observed_source_removed_bytes=%d observed_source_zombie_marked_segments=%d observed_source_zombie_marked_bytes=%d observed_source_live_skipped_segments=%d observed_source_live_skipped_bytes=%d observed_source_in_use_skipped_segments=%d observed_source_in_use_skipped_bytes=%d observed_source_parse_skipped_segments=%d observed_source_parse_skipped_bytes=%d removed_segments=%d removed_bytes=%d zombie_marked_segments=%d zombie_marked_bytes=%d live_skipped_segments=%d live_skipped_bytes=%d aborted=%t",
+							vlogGenerationReasonString(reason),
+							gcStats.ObservedSourceSegmentsProtectedRetained,
+							gcStats.ObservedSourceBytesProtectedRetained,
+							pruneStats.ObservedSourceSegments,
+							pruneStats.ObservedSourceBytes,
+							pruneStats.ObservedSourceCandidateSegments,
+							pruneStats.ObservedSourceCandidateBytes,
+							pruneStats.ObservedSourceRemovedSegments,
+							pruneStats.ObservedSourceRemovedBytes,
+							pruneStats.ObservedSourceZombieMarkedSegments,
+							pruneStats.ObservedSourceZombieMarkedBytes,
+							pruneStats.ObservedSourceLiveSkippedSegments,
+							pruneStats.ObservedSourceLiveSkippedBytes,
+							pruneStats.ObservedSourceInUseSkippedSegments,
+							pruneStats.ObservedSourceInUseSkippedBytes,
+							pruneStats.ObservedSourceParseSkippedSegments,
+							pruneStats.ObservedSourceParseSkippedBytes,
+							pruneStats.RemovedSegments,
+							pruneStats.RemovedBytes,
+							pruneStats.ZombieMarkedSegments,
+							pruneStats.ZombieMarkedBytes,
+							pruneStats.LiveSkippedSegments,
+							pruneStats.LiveSkippedBytes,
+							pruneStats.AbortedForegroundWrites,
+						)
+						// Refresh protected path sets after inline retained prune so
+						// the follow-up GC pass evaluates updated retention state.
+						gcOpts = db.valueLogGCOptions(false)
+						if len(processedRewriteIDs) > 0 {
+							gcOpts.ObservedSourceFileIDs = append([]uint32(nil), processedRewriteIDs...)
+						}
+						gcStatsAfterPrune, gcErr := runGC("post_retained_prune")
+						if gcErr != nil {
+							return fmt.Errorf("generational gc after retained prune: %w", gcErr)
+						}
+						gcStats = gcStatsAfterPrune
+					}
 				}
 				if gcStats.BytesProtectedRetained > 0 && gcStats.BytesEligible == 0 && db.valueLogRetainedClosedBytes.Load() > 0 {
 					// Retained-path protection can starve live reclaim even when rewrite
@@ -14362,14 +14605,6 @@ planned:
 					// lifecycle pins can drain without waiting for byte-pressure gates.
 					db.scheduleRetainedValueLogPruneForce()
 				}
-				if gcStats.BytesDeleted > 0 {
-					gcBytesDeleted = int64(gcStats.BytesDeleted)
-					effectiveBytesAfter -= gcBytesDeleted
-					if effectiveBytesAfter < 0 {
-						effectiveBytesAfter = 0
-					}
-				}
-				db.debugVlogMaintf("gc_after_rewrite_done reason=%s dur_ms=%.3f", vlogGenerationReasonString(reason), float64(gcDur.Microseconds())/1000)
 			}
 			if effectiveBytesBefore > effectiveBytesAfter {
 				db.vlogGenerationRewriteReclaimedBytes.Add(uint64(effectiveBytesBefore - effectiveBytesAfter))
@@ -20187,6 +20422,20 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_retained_prune.parse_skipped_bytes"] = fmt.Sprintf("%d", db.retainedValueLogPruneParseSkippedBytes.Load())
 	stats["treedb.cache.vlog_retained_prune.zombie_marked_segments"] = fmt.Sprintf("%d", db.retainedValueLogPruneZombieMarkedSegments.Load())
 	stats["treedb.cache.vlog_retained_prune.zombie_marked_bytes"] = fmt.Sprintf("%d", db.retainedValueLogPruneZombieMarkedBytes.Load())
+	stats["treedb.cache.vlog_retained_prune.last_observed_source.segments"] = fmt.Sprintf("%d", db.retainedValueLogPruneLastObservedSourceSegments.Load())
+	stats["treedb.cache.vlog_retained_prune.last_observed_source.bytes"] = fmt.Sprintf("%d", db.retainedValueLogPruneLastObservedSourceBytes.Load())
+	stats["treedb.cache.vlog_retained_prune.last_observed_source.segments_candidate"] = fmt.Sprintf("%d", db.retainedValueLogPruneLastObservedSourceCandidateSegments.Load())
+	stats["treedb.cache.vlog_retained_prune.last_observed_source.bytes_candidate"] = fmt.Sprintf("%d", db.retainedValueLogPruneLastObservedSourceCandidateBytes.Load())
+	stats["treedb.cache.vlog_retained_prune.last_observed_source.segments_removed"] = fmt.Sprintf("%d", db.retainedValueLogPruneLastObservedSourceRemovedSegments.Load())
+	stats["treedb.cache.vlog_retained_prune.last_observed_source.bytes_removed"] = fmt.Sprintf("%d", db.retainedValueLogPruneLastObservedSourceRemovedBytes.Load())
+	stats["treedb.cache.vlog_retained_prune.last_observed_source.segments_in_use_skipped"] = fmt.Sprintf("%d", db.retainedValueLogPruneLastObservedSourceInUseSkippedSegments.Load())
+	stats["treedb.cache.vlog_retained_prune.last_observed_source.bytes_in_use_skipped"] = fmt.Sprintf("%d", db.retainedValueLogPruneLastObservedSourceInUseSkippedBytes.Load())
+	stats["treedb.cache.vlog_retained_prune.last_observed_source.segments_live_skipped"] = fmt.Sprintf("%d", db.retainedValueLogPruneLastObservedSourceLiveSkippedSegments.Load())
+	stats["treedb.cache.vlog_retained_prune.last_observed_source.bytes_live_skipped"] = fmt.Sprintf("%d", db.retainedValueLogPruneLastObservedSourceLiveSkippedBytes.Load())
+	stats["treedb.cache.vlog_retained_prune.last_observed_source.segments_parse_skipped"] = fmt.Sprintf("%d", db.retainedValueLogPruneLastObservedSourceParseSkippedSegments.Load())
+	stats["treedb.cache.vlog_retained_prune.last_observed_source.bytes_parse_skipped"] = fmt.Sprintf("%d", db.retainedValueLogPruneLastObservedSourceParseSkippedBytes.Load())
+	stats["treedb.cache.vlog_retained_prune.last_observed_source.segments_zombie_marked"] = fmt.Sprintf("%d", db.retainedValueLogPruneLastObservedSourceZombieMarkedSegments.Load())
+	stats["treedb.cache.vlog_retained_prune.last_observed_source.bytes_zombie_marked"] = fmt.Sprintf("%d", db.retainedValueLogPruneLastObservedSourceZombieMarkedBytes.Load())
 	stats["treedb.cache.vlog_retained_prune.pressure_bytes"] = fmt.Sprintf("%d", db.retainedPrunePressureBytes())
 	stats["treedb.cache.vlog_retained_prune.schedule_requests"] = fmt.Sprintf("%d", db.retainedValueLogPruneScheduleRequests.Load())
 	stats["treedb.cache.vlog_retained_prune.schedule_forced_requests"] = fmt.Sprintf("%d", db.retainedValueLogPruneScheduleForcedRequests.Load())
