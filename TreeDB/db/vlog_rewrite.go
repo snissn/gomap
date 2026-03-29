@@ -31,6 +31,7 @@ const defaultValueLogRewriteSegmentBytes = 128 << 20
 
 const rewriteDictMinPayloadBytes = 32 << 10
 const rewriteDictBatchMaxK = 64
+const rewriteReadScratchMaxCap = 1 << 20 // 1MiB cap to avoid retaining oversized decode buffers
 
 func rewriteAllowDictForSmallPayload(value []byte) bool {
 	if len(value) < page.PageSize {
@@ -1230,6 +1231,7 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 	swaps := make([]rewriteSwap, 0, batchSize)
 	localityPolicy := normalizeValueLogRewriteLocalityPolicy(opts.LocalityPolicy)
 	candidates := make([]rewriteCandidate, 0, batchSize)
+	var rewriteReadScratch []byte
 	var canceledErr error
 
 	flushBatch := func() error {
@@ -1243,13 +1245,22 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 			return err
 		}
 		for _, candidate := range candidates {
-			val, err := db.valueLogManager.Read(candidate.oldPtr)
+			val, usedScratch, err := db.valueLogManager.ReadUnsafeTo(candidate.oldPtr, rewriteReadScratch)
 			if err != nil {
 				return err
 			}
 			newPtr, err := writer.appendValue(startRID, val)
 			if err != nil {
 				return err
+			}
+			if usedScratch {
+				// Reuse decode storage across records to reduce alloc churn while
+				// bounding retained capacity to avoid RSS blow-ups on outliers.
+				if cap(val) > rewriteReadScratchMaxCap {
+					rewriteReadScratch = nil
+				} else {
+					rewriteReadScratch = val[:0]
+				}
 			}
 			startRID++
 			stats.RecordsCopied++
