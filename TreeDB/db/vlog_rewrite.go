@@ -1977,7 +1977,8 @@ func (db *DB) applyRewriteSwapBatchOptimistic(swaps []rewriteSwap, sync bool) (b
 	defer batch.Release(b)
 	b.Reserve(len(swaps))
 
-	if err := collectRewriteSwapPointerMatches(tr, b, swaps); err != nil {
+	rewriteDelta, err := collectRewriteSwapPointerMatches(tr, b, swaps)
+	if err != nil {
 		return false, err
 	}
 
@@ -1998,13 +1999,9 @@ func (db *DB) applyRewriteSwapBatchOptimistic(swaps []rewriteSwap, sync bool) (b
 		return false, err
 	}
 	entries = b.SortedEntries()
-	vlogRefDelta, err := db.buildValueLogRefDelta(idx.pager, rootID, baseSeq, entries)
-	if err != nil {
-		freeErr := tracker.FreeAll()
-		if freeErr != nil {
-			return false, errors.Join(err, freeErr)
-		}
-		return false, err
+	var vlogRefDelta *valueLogRefDelta
+	if db.valueLogRefTracker != nil && db.valueLogRefTracker.canTrack(baseSeq) && !db.indexOuterLeavesInValueLog {
+		vlogRefDelta = rewriteDelta
 	}
 
 	db.commitMu.Lock()
@@ -2064,7 +2061,8 @@ func (db *DB) applyRewriteSwapBatchSerialized(swaps []rewriteSwap, sync bool) er
 	defer batch.Release(b)
 	b.Reserve(len(swaps))
 
-	if err := collectRewriteSwapPointerMatches(tr, b, swaps); err != nil {
+	rewriteDelta, err := collectRewriteSwapPointerMatches(tr, b, swaps)
+	if err != nil {
 		return err
 	}
 
@@ -2079,9 +2077,9 @@ func (db *DB) applyRewriteSwapBatchSerialized(swaps []rewriteSwap, sync bool) er
 		return err
 	}
 	entries = b.SortedEntries()
-	vlogRefDelta, err := db.buildValueLogRefDelta(idx.pager, rootID, baseSeq, entries)
-	if err != nil {
-		return err
+	var vlogRefDelta *valueLogRefDelta
+	if db.valueLogRefTracker != nil && db.valueLogRefTracker.canTrack(baseSeq) && !db.indexOuterLeavesInValueLog {
+		vlogRefDelta = rewriteDelta
 	}
 	if err := db.finalizeCommit(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, db.indexOuterLeavesInValueLog, vlogRefDelta); err != nil {
 		return err
@@ -2092,9 +2090,9 @@ func (db *DB) applyRewriteSwapBatchSerialized(swaps []rewriteSwap, sync bool) er
 	return nil
 }
 
-func collectRewriteSwapPointerMatches(tr *tree.Tree, b *batch.Batch, swaps []rewriteSwap) error {
+func collectRewriteSwapPointerMatches(tr *tree.Tree, b *batch.Batch, swaps []rewriteSwap) (*valueLogRefDelta, error) {
 	if tr == nil || b == nil || len(swaps) == 0 {
-		return nil
+		return nil, nil
 	}
 	// Sort in-place to avoid per-batch swap-slice copies on rewrite hot paths.
 	sort.Slice(swaps, func(i, j int) bool {
@@ -2103,6 +2101,7 @@ func collectRewriteSwapPointerMatches(tr *tree.Tree, b *batch.Batch, swaps []rew
 
 	it := tr.IteratorWithOptions(swaps[0].key, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
 	defer func() { _ = it.Close() }()
+	var delta *valueLogRefDelta
 
 	for _, swap := range swaps {
 		for it.Valid() {
@@ -2118,14 +2117,28 @@ func collectRewriteSwapPointerMatches(tr *tree.Tree, b *batch.Batch, swaps []rew
 			_, ptr, flags := it.UnsafeEntry()
 			if flags&node.FlagPointer != 0 && ptr == swap.oldPtr {
 				if err := b.SetPointerView(swap.key, swap.newPtr); err != nil {
-					return err
+					return nil, err
+				}
+				if page.IsValueLogFileID(swap.oldPtr.FileID) || page.IsValueLogFileID(swap.newPtr.FileID) {
+					if delta == nil {
+						delta = newValueLogRefDelta()
+					}
+					if page.IsValueLogFileID(swap.oldPtr.FileID) {
+						delta.add(swap.oldPtr.FileID, -1)
+					}
+					if page.IsValueLogFileID(swap.newPtr.FileID) {
+						delta.add(swap.newPtr.FileID, 1)
+					}
 				}
 			}
 			it.Next()
 			break
 		}
 	}
-	return it.Error()
+	if err := it.Error(); err != nil {
+		return nil, err
+	}
+	return delta, nil
 }
 
 // ValueLogRewriteOffline rewrites value-log pointers into new segments and
