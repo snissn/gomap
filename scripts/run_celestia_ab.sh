@@ -281,6 +281,16 @@ def safe_int(raw: str | None, default: int = 0) -> int:
         except Exception:
             return default
 
+def safe_div(num, den):
+    try:
+        if den is None or float(den) == 0:
+            return None
+        if num is None:
+            return None
+        return float(num) / float(den)
+    except Exception:
+        return None
+
 def probe_sync_progress(node_log_path: Path | None) -> dict[str, object]:
     progress = {
         "node_log_present": False,
@@ -347,6 +357,22 @@ if not resolved_invalid_reason and rewrite_attempted == 1 and rewrite_rc != 0:
     resolved_invalid_reason = "rewrite_failed"
 valid = resolved_invalid_reason == ""
 t_total = (t_sync + t_rw) if valid else None
+trust_height = safe_int(sync.get("trust_height"), 0)
+stop_at_local_height = safe_int(sync.get("stop_at_local_height"), 0)
+final_local_height = safe_int(sync.get("final_local_height"), 0)
+final_remote_height = safe_int(sync.get("final_remote_height"), 0)
+final_remote_height_actual = safe_int(sync.get("final_remote_height_actual"), 0)
+freeze_remote_height_at_start = safe_int(sync.get("freeze_remote_height_at_start"), 0)
+blocks_synced = 0
+if trust_height > 0 and final_local_height >= trust_height:
+    blocks_synced = final_local_height - trust_height
+remote_minus_stop_height = None
+if stop_at_local_height > 0 and final_remote_height > 0:
+    remote_minus_stop_height = final_remote_height - stop_at_local_height
+s_sync_app_bytes_per_block = safe_div(pre_app_bytes, blocks_synced)
+s_post_app_bytes_per_block = safe_div(post_app_bytes, blocks_synced)
+t_sync_seconds_per_block = safe_div(t_sync, blocks_synced)
+t_total_seconds_per_block = safe_div(t_total, blocks_synced) if t_total is not None else None
 
 result = {
     "pair_index": pair_index,
@@ -366,6 +392,14 @@ result = {
         "duration_seconds": t_sync,
         "max_rss_kb": safe_int(sync.get("max_rss_kb"), 0),
         "max_hwm_kb": safe_int(sync.get("max_hwm_kb"), 0),
+        "freeze_remote_height_at_start": freeze_remote_height_at_start,
+        "trust_height": trust_height,
+        "stop_at_local_height": stop_at_local_height,
+        "final_local_height": final_local_height,
+        "final_remote_height": final_remote_height,
+        "final_remote_height_actual": final_remote_height_actual,
+        "blocks_synced": blocks_synced,
+        "remote_minus_stop_height": remote_minus_stop_height,
         "end_app_bytes": safe_int(sync.get("end_app_bytes"), pre_app_bytes),
         "end_data_bytes": safe_int(sync.get("end_data_bytes"), 0),
         "end_home_bytes": safe_int(sync.get("end_home_bytes"), 0),
@@ -389,7 +423,12 @@ result = {
         "s_sync_wal_bytes": pre_wal_bytes,
         "s_post_app_bytes": post_app_bytes,
         "s_post_wal_bytes": post_wal_bytes,
+        "s_sync_app_bytes_per_block": s_sync_app_bytes_per_block,
+        "s_post_app_bytes_per_block": s_post_app_bytes_per_block,
         "max_rss_kb": safe_int(sync.get("max_rss_kb"), 0),
+        "blocks_synced": blocks_synced,
+        "t_sync_seconds_per_block": t_sync_seconds_per_block,
+        "t_total_seconds_per_block": t_total_seconds_per_block,
     },
     "maintenance_summary": maintenance,
 }
@@ -483,6 +522,18 @@ with runs_csv.open("w", newline="", encoding="utf-8") as fh:
         "s_post_app_bytes",
         "s_post_wal_bytes",
         "max_rss_kb",
+        "blocks_synced",
+        "trust_height",
+        "stop_at_local_height",
+        "final_local_height",
+        "final_remote_height",
+        "final_remote_height_actual",
+        "freeze_remote_height_at_start",
+        "remote_minus_stop_height",
+        "s_sync_app_bytes_per_block",
+        "s_post_app_bytes_per_block",
+        "t_sync_seconds_per_block",
+        "t_total_seconds_per_block",
         "valid",
         "invalid_reason",
         "run_exit_code",
@@ -499,6 +550,7 @@ with runs_csv.open("w", newline="", encoding="utf-8") as fh:
         s = r.get("sizes", {}) or {}
         rw = r.get("rewrite", {}) or {}
         summary = r.get("maintenance_summary", {}) or {}
+        sync = r.get("sync", {}) or {}
         valid = run_is_valid(r)
         w.writerow([
             int(r.get("pair_index", 0)),
@@ -512,6 +564,18 @@ with runs_csv.open("w", newline="", encoding="utf-8") as fh:
             s.get("post_app_bytes"),
             s.get("post_wal_bytes"),
             m.get("max_rss_kb"),
+            m.get("blocks_synced"),
+            sync.get("trust_height"),
+            sync.get("stop_at_local_height"),
+            sync.get("final_local_height"),
+            sync.get("final_remote_height"),
+            sync.get("final_remote_height_actual"),
+            sync.get("freeze_remote_height_at_start"),
+            sync.get("remote_minus_stop_height"),
+            m.get("s_sync_app_bytes_per_block"),
+            m.get("s_post_app_bytes_per_block"),
+            m.get("t_sync_seconds_per_block"),
+            m.get("t_total_seconds_per_block"),
             valid,
             run_invalid_reason(r),
             run_exit_code(r),
@@ -553,6 +617,9 @@ for pair in sorted(by_pair):
             "delta_t_total_seconds": None,
             "delta_s_sync_app_bytes": None,
             "delta_s_post_wal_bytes": None,
+            "delta_blocks_synced": None,
+            "delta_s_sync_app_bytes_per_block": None,
+            "delta_t_total_seconds_per_block": None,
             "control_valid": ctrl_valid,
             "candidate_valid": cand_valid,
             "control_invalid_reason": ctrl_reason,
@@ -570,6 +637,12 @@ for pair in sorted(by_pair):
     base_sync = bm.get("t_sync_seconds")
     cand_sync_app = cm.get("s_sync_app_bytes")
     base_sync_app = bm.get("s_sync_app_bytes")
+    cand_blocks = cm.get("blocks_synced")
+    base_blocks = bm.get("blocks_synced")
+    cand_sync_app_per_block = cm.get("s_sync_app_bytes_per_block")
+    base_sync_app_per_block = bm.get("s_sync_app_bytes_per_block")
+    cand_total_per_block = cm.get("t_total_seconds_per_block")
+    base_total_per_block = bm.get("t_total_seconds_per_block")
 
     def delta(a, b):
         if a is None or b is None:
@@ -580,6 +653,9 @@ for pair in sorted(by_pair):
     d_sync = delta(cand_sync, base_sync)
     d_post_wal = delta(cand_post_wal, base_post_wal)
     d_sync_app = delta(cand_sync_app, base_sync_app)
+    d_blocks = delta(cand_blocks, base_blocks)
+    d_sync_app_per_block = delta(cand_sync_app_per_block, base_sync_app_per_block)
+    d_total_per_block = delta(cand_total_per_block, base_total_per_block)
 
     outcome = "neutral"
     if d_post_wal is not None and d_total is not None:
@@ -598,6 +674,9 @@ for pair in sorted(by_pair):
         "delta_t_total_seconds": d_total,
         "delta_s_sync_app_bytes": d_sync_app,
         "delta_s_post_wal_bytes": d_post_wal,
+        "delta_blocks_synced": d_blocks,
+        "delta_s_sync_app_bytes_per_block": d_sync_app_per_block,
+        "delta_t_total_seconds_per_block": d_total_per_block,
         "control_valid": ctrl_valid,
         "candidate_valid": cand_valid,
         "control_invalid_reason": ctrl_reason,
@@ -614,6 +693,9 @@ with pairs_csv.open("w", newline="", encoding="utf-8") as fh:
         "delta_t_total_seconds",
         "delta_s_sync_app_bytes",
         "delta_s_post_wal_bytes",
+        "delta_blocks_synced",
+        "delta_s_sync_app_bytes_per_block",
+        "delta_t_total_seconds_per_block",
         "control_valid",
         "candidate_valid",
         "control_invalid_reason",
@@ -627,6 +709,9 @@ with pairs_csv.open("w", newline="", encoding="utf-8") as fh:
             r["delta_t_total_seconds"],
             r["delta_s_sync_app_bytes"],
             r["delta_s_post_wal_bytes"],
+            r["delta_blocks_synced"],
+            r["delta_s_sync_app_bytes_per_block"],
+            r["delta_t_total_seconds_per_block"],
             r["control_valid"],
             r["candidate_valid"],
             r["control_invalid_reason"],
@@ -637,6 +722,11 @@ with pairs_csv.open("w", newline="", encoding="utf-8") as fh:
 scored_rows = [row for row in pair_rows if row.get("outcome") != "invalid"]
 completed_pairs = len(scored_rows)
 neutral = max(0, completed_pairs - wins - losses)
+nonzero_block_drift_pairs = 0
+for row in scored_rows:
+    d = row.get("delta_blocks_synced")
+    if d is not None and d != 0:
+        nonzero_block_drift_pairs += 1
 neutral_streak = 0
 for row in reversed(scored_rows):
     if row.get("outcome") == "neutral":
@@ -687,6 +777,7 @@ lines.append(f"- observed pairs: `{raw_pairs}`")
 lines.append(f"- scored pairs: `{completed_pairs}`")
 lines.append(f"- invalid pairs skipped: `{invalid_pairs}`")
 lines.append(f"- wins/losses/neutral: `{wins}` / `{losses}` / `{neutral}`")
+lines.append(f"- pairs with block-count drift: `{nonzero_block_drift_pairs}`")
 lines.append(f"- neutral streak (tail): `{neutral_streak}`")
 lines.append(f"- invalid streak (tail): `{invalid_streak}`")
 lines.append(f"- size tolerance bytes: `{size_tol}`")
@@ -713,6 +804,9 @@ if pair_rows:
     lines.append(f"- delta_t_total_seconds: `{last['delta_t_total_seconds']}`")
     lines.append(f"- delta_s_sync_app_bytes: `{last['delta_s_sync_app_bytes']}`")
     lines.append(f"- delta_s_post_wal_bytes: `{last['delta_s_post_wal_bytes']}`")
+    lines.append(f"- delta_blocks_synced: `{last['delta_blocks_synced']}`")
+    lines.append(f"- delta_s_sync_app_bytes_per_block: `{last['delta_s_sync_app_bytes_per_block']}`")
+    lines.append(f"- delta_t_total_seconds_per_block: `{last['delta_t_total_seconds_per_block']}`")
 summary_md.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 payload = {
@@ -722,6 +816,7 @@ payload = {
     "wins": wins,
     "losses": losses,
     "neutral": neutral,
+    "nonzero_block_drift_pairs": nonzero_block_drift_pairs,
     "neutral_streak": neutral_streak,
     "invalid_streak": invalid_streak,
     "stop": stop,

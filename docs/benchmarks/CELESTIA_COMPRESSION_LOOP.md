@@ -67,6 +67,19 @@ Outputs:
 - `pairs.csv`
 - per-run `run.json`
 
+Signal hygiene additions in `run_celestia` A/B artifacts:
+- `runs.csv` now includes `blocks_synced` plus normalized metrics:
+  - `s_sync_app_bytes_per_block`
+  - `s_post_app_bytes_per_block`
+  - `t_sync_seconds_per_block`
+  - `t_total_seconds_per_block`
+- `pairs.csv` now includes:
+  - `delta_blocks_synced`
+  - `delta_s_sync_app_bytes_per_block`
+  - `delta_t_total_seconds_per_block`
+- `summary.md` includes `pairs with block-count drift` so moving-target runs
+  are visible before making a promote/reject decision.
+
 ## Stage 2: Pprof/Implementation Efficiency Pass
 
 Run this stage before full `run_celestia` if fast gate shows:

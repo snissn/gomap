@@ -94,6 +94,7 @@ Default pair metric focus:
 - `S_post_wal`: WAL bytes after offline rewrite
 - `T_total = T_sync + T_rw`
 - `max_rss_kb` (memory guardrail)
+- `blocks_synced` and normalized metrics (`*_per_block`) to de-noise moving-target runs
 
 Outputs:
 - `artifacts/celestia_ab/<ts>/runs.csv`
@@ -103,6 +104,8 @@ Outputs:
 
 The harness alternates run order per pair (`control->candidate`, then
 `candidate->control`) and can stop early on clear win/loss signals.
+For stable pair scoring, prefer `FREEZE_REMOTE_HEIGHT_AT_START=1` and validate
+`delta_blocks_synced` stays near zero across pairs.
 
 ## Experimental Knob
 - `TREEDB_ENABLE_VLOG_GENERATION_PRECHECKPOINT_REWRITE=1`
