@@ -44,6 +44,13 @@ type kScore struct {
 	score        float64
 }
 
+const (
+	// Bound evaluation work so training cost stays predictable on long streams.
+	// Use even down-sampling rather than prefix truncation to preserve shape.
+	maxChooseKEvalSamples = 4096
+	maxDecodeCostSamples  = 256
+)
+
 func ChooseKForDict(dict []byte, samples [][]byte) (profile *ActiveProfile) {
 	return ChooseKForDictOptions(dict, samples, ChooseKOptions{})
 }
@@ -59,8 +66,8 @@ func ChooseKForDictOptions(dict []byte, samples [][]byte, opts ChooseKOptions) (
 		return nil
 	}
 	eval := samples
-	if len(eval) > 10000 {
-		eval = eval[:10000]
+	if len(eval) > maxChooseKEvalSamples {
+		eval = evenlySampleRecords(eval, maxChooseKEvalSamples)
 	}
 	rawTotal := 0
 	for _, v := range eval {
@@ -70,9 +77,9 @@ func ChooseKForDictOptions(dict []byte, samples [][]byte, opts ChooseKOptions) (
 		return nil
 	}
 
-	nsPerByte := decodeCostEstimate(dict, eval)
-	if opts.DecodeNsPerRawByte > 0 {
-		nsPerByte = opts.DecodeNsPerRawByte
+	nsPerByte := opts.DecodeNsPerRawByte
+	if nsPerByte <= 0 {
+		nsPerByte = decodeCostEstimate(dict, eval)
 	}
 	ks := opts.CandidateK
 	if len(ks) == 0 {
@@ -81,11 +88,20 @@ func ChooseKForDictOptions(dict []byte, samples [][]byte, opts ChooseKOptions) (
 	ks = normalizeCandidateK(ks)
 	var sharedEnc *zstd.Encoder
 	if dict != nil {
-		if enc, err := zstd.NewWriter(nil, zstd.WithEncoderDict(dict), zstd.WithEncoderLevel(zstd.SpeedFastest)); err == nil {
+		if enc, err := zstd.NewWriter(nil,
+			zstd.WithEncoderDict(dict),
+			zstd.WithEncoderLevel(zstd.SpeedFastest),
+			zstd.WithEncoderConcurrency(1),
+			zstd.WithEncoderCRC(false),
+		); err == nil {
 			sharedEnc = enc
 		}
 	} else {
-		if enc, err := zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedFastest)); err == nil {
+		if enc, err := zstd.NewWriter(nil,
+			zstd.WithEncoderLevel(zstd.SpeedFastest),
+			zstd.WithEncoderConcurrency(1),
+			zstd.WithEncoderCRC(false),
+		); err == nil {
 			sharedEnc = enc
 		}
 	}
@@ -223,9 +239,18 @@ func batchTotals(dict []byte, samples [][]byte, k int, encodeNsPerRawByte float6
 	var enc *zstd.Encoder
 	var err error
 	if dict != nil {
-		enc, err = zstd.NewWriter(nil, zstd.WithEncoderDict(dict), zstd.WithEncoderLevel(zstd.SpeedFastest))
+		enc, err = zstd.NewWriter(nil,
+			zstd.WithEncoderDict(dict),
+			zstd.WithEncoderLevel(zstd.SpeedFastest),
+			zstd.WithEncoderConcurrency(1),
+			zstd.WithEncoderCRC(false),
+		)
 	} else {
-		enc, err = zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedFastest))
+		enc, err = zstd.NewWriter(nil,
+			zstd.WithEncoderLevel(zstd.SpeedFastest),
+			zstd.WithEncoderConcurrency(1),
+			zstd.WithEncoderCRC(false),
+		)
 	}
 	if err != nil {
 		return 0, 0, 0, 0
@@ -291,30 +316,39 @@ func batchTotalsWithEncoder(enc *zstd.Encoder, samples [][]byte, k int, encodeNs
 }
 
 func decodeCostEstimate(dict []byte, samples [][]byte) float64 {
-	n := len(samples)
-	if n > 500 {
-		n = 500
+	eval := samples
+	if len(eval) > maxDecodeCostSamples {
+		eval = evenlySampleRecords(eval, maxDecodeCostSamples)
 	}
-	enc, err := zstd.NewWriter(nil, zstd.WithEncoderDict(dict), zstd.WithEncoderLevel(zstd.SpeedFastest))
+	n := len(eval)
+	enc, err := zstd.NewWriter(nil,
+		zstd.WithEncoderDict(dict),
+		zstd.WithEncoderLevel(zstd.SpeedFastest),
+		zstd.WithEncoderConcurrency(1),
+		zstd.WithEncoderCRC(false),
+	)
 	if err != nil {
 		return 1.0
 	}
 	defer enc.Close()
-	frames := make([][]byte, n)
+
 	totalRaw := 0
+	var encoded []byte
 	for i := 0; i < n; i++ {
-		totalRaw += len(samples[i])
-		frames[i] = enc.EncodeAll(samples[i], nil)
+		totalRaw += len(eval[i])
+		encoded = enc.EncodeAll(eval[i], encoded[:0])
 	}
 	dec, err := zstd.NewReader(nil, zstd.WithDecoderDicts(dict))
 	if err != nil {
 		return 1.0
 	}
 	defer dec.Close()
+
 	var out []byte
 	start := time.Now()
 	for i := 0; i < n; i++ {
-		out, _ = dec.DecodeAll(frames[i], out[:0])
+		encoded = enc.EncodeAll(eval[i], encoded[:0])
+		out, _ = dec.DecodeAll(encoded, out[:0])
 		if len(out) > 0 {
 			_ = out[0]
 		}
@@ -324,4 +358,27 @@ func decodeCostEstimate(dict []byte, samples [][]byte) float64 {
 		return 1.0
 	}
 	return float64(elapsed.Nanoseconds()) / float64(totalRaw)
+}
+
+func evenlySampleRecords(samples [][]byte, limit int) [][]byte {
+	if limit <= 0 || len(samples) <= limit {
+		return samples
+	}
+	out := make([][]byte, 0, limit)
+	last := -1
+	for i := 0; i < limit; i++ {
+		idx := (i * len(samples)) / limit
+		if idx >= len(samples) {
+			idx = len(samples) - 1
+		}
+		if idx <= last {
+			idx = last + 1
+			if idx >= len(samples) {
+				idx = len(samples) - 1
+			}
+		}
+		last = idx
+		out = append(out, samples[idx])
+	}
+	return out
 }

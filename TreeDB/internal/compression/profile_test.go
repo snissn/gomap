@@ -42,7 +42,11 @@ func TestBatchTotalsWithEncoder_MatchesBatchTotals_NoDict(t *testing.T) {
 
 	for _, k := range []int{1, 2, 4, 8} {
 		wantPayload, wantMeta, wantRaw, wantEncodeNS := batchTotals(nil, samples, k, encodeNsPerRawByte)
-		enc, err := zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedFastest))
+		enc, err := zstd.NewWriter(nil,
+			zstd.WithEncoderLevel(zstd.SpeedFastest),
+			zstd.WithEncoderConcurrency(1),
+			zstd.WithEncoderCRC(false),
+		)
 		if err != nil {
 			t.Fatalf("new writer: %v", err)
 		}
@@ -66,7 +70,12 @@ func TestBatchTotalsWithEncoder_MatchesBatchTotals_WithDict(t *testing.T) {
 
 	for _, k := range []int{1, 2, 3, 6} {
 		wantPayload, wantMeta, wantRaw, wantEncodeNS := batchTotals(dict, samples, k, encodeNsPerRawByte)
-		enc, err := zstd.NewWriter(nil, zstd.WithEncoderDict(dict), zstd.WithEncoderLevel(zstd.SpeedFastest))
+		enc, err := zstd.NewWriter(nil,
+			zstd.WithEncoderDict(dict),
+			zstd.WithEncoderLevel(zstd.SpeedFastest),
+			zstd.WithEncoderConcurrency(1),
+			zstd.WithEncoderCRC(false),
+		)
 		if err != nil {
 			t.Fatalf("new dict writer: %v", err)
 		}
