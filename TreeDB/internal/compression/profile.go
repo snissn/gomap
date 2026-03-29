@@ -79,6 +79,21 @@ func ChooseKForDictOptions(dict []byte, samples [][]byte, opts ChooseKOptions) (
 		ks = []int{1, 2, 4, 8, 16, 32}
 	}
 	ks = normalizeCandidateK(ks)
+	var sharedEnc *zstd.Encoder
+	if dict != nil {
+		if enc, err := zstd.NewWriter(nil, zstd.WithEncoderDict(dict), zstd.WithEncoderLevel(zstd.SpeedFastest)); err == nil {
+			sharedEnc = enc
+		}
+	} else {
+		if enc, err := zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedFastest)); err == nil {
+			sharedEnc = enc
+		}
+	}
+	if sharedEnc != nil {
+		defer sharedEnc.Close()
+	}
+	var concatScratch []byte
+	var encodedScratch []byte
 	scores := make([]kScore, 0, len(ks))
 	var baseline kScore
 	for _, k := range ks {
@@ -89,7 +104,12 @@ func ChooseKForDictOptions(dict []byte, samples [][]byte, opts ChooseKOptions) (
 		if used == 0 {
 			continue
 		}
-		payload, meta, raw, encodeNs := batchTotals(dict, eval[:used], k, opts.EncodeNsPerRawByte)
+		payload, meta, raw, encodeNs := 0, 0, 0, int64(0)
+		if sharedEnc != nil {
+			payload, meta, raw, encodeNs = batchTotalsWithEncoder(sharedEnc, eval[:used], k, opts.EncodeNsPerRawByte, &concatScratch, &encodedScratch)
+		} else {
+			payload, meta, raw, encodeNs = batchTotals(dict, eval[:used], k, opts.EncodeNsPerRawByte)
+		}
 		if raw == 0 {
 			continue
 		}
@@ -200,7 +220,6 @@ func batchTotals(dict []byte, samples [][]byte, k int, encodeNsPerRawByte float6
 		return 0, 0, 0, 0
 	}
 	samples = samples[:n]
-	batches := n / k
 	var enc *zstd.Encoder
 	var err error
 	if dict != nil {
@@ -212,6 +231,23 @@ func batchTotals(dict []byte, samples [][]byte, k int, encodeNsPerRawByte float6
 		return 0, 0, 0, 0
 	}
 	defer enc.Close()
+	var concatScratch []byte
+	var encodedScratch []byte
+	return batchTotalsWithEncoder(enc, samples, k, encodeNsPerRawByte, &concatScratch, &encodedScratch)
+}
+
+func batchTotalsWithEncoder(enc *zstd.Encoder, samples [][]byte, k int, encodeNsPerRawByte float64, concatScratch *[]byte, encodedScratch *[]byte) (payload int, meta int, raw int, encodeNs int64) {
+	if enc == nil || k <= 0 {
+		return 0, 0, 0, 0
+	}
+	n := (len(samples) / k) * k
+	if n == 0 {
+		return 0, 0, 0, 0
+	}
+	samples = samples[:n]
+	batches := n / k
+	buf := *concatScratch
+	encoded := *encodedScratch
 	started := time.Now()
 	for b := 0; b < batches; b++ {
 		start := b * k
@@ -221,14 +257,18 @@ func batchTotals(dict []byte, samples [][]byte, k int, encodeNsPerRawByte float6
 			raw += len(samples[i])
 			total += len(samples[i])
 		}
-		buf := make([]byte, total)
+		if cap(buf) < total {
+			buf = make([]byte, total)
+		} else {
+			buf = buf[:total]
+		}
 		pos := 0
 		for i := start; i < end; i++ {
 			copy(buf[pos:], samples[i])
 			pos += len(samples[i])
 		}
-		c := enc.EncodeAll(buf, nil)
-		payload += len(c)
+		encoded = enc.EncodeAll(buf, encoded[:0])
+		payload += len(encoded)
 		// Account for the full on-disk framing overhead:
 		// - record header (CRC/version/flags/txn/bodyLen)
 		// - frame header + dict_id + RID table + offsets table
@@ -245,6 +285,8 @@ func batchTotals(dict []byte, samples [][]byte, k int, encodeNsPerRawByte float6
 	} else {
 		encodeNs = time.Since(started).Nanoseconds()
 	}
+	*concatScratch = buf[:0]
+	*encodedScratch = encoded[:0]
 	return payload, meta, raw, encodeNs
 }
 
