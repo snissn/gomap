@@ -504,6 +504,11 @@ func (f *File) ReadUnsafeTo(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]by
 			}
 		}
 		f.mmapReadFallbackReadAt.Add(1)
+		if !verifyCRC {
+			if val, usedDst, err, ok := f.readGroupedCompressedFromFileTo(ptr, dst); ok {
+				return val, usedDst, err
+			}
+		}
 		return ReadAtWithDictTo(f.File, ptr, verifyCRC, f.dictLookup, f.templateLookup, f.templateDefCache, f.templateDecodeOpts, dst)
 	}
 	// Avoid per-read Stat/lock churn once we have exhausted the dead-mapping
@@ -519,7 +524,183 @@ func (f *File) ReadUnsafeTo(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]by
 		f.mmapReadMissDeadMappingCap.Add(1)
 	}
 	f.mmapReadFallbackReadAt.Add(1)
+	if !verifyCRC {
+		if val, usedDst, err, ok := f.readGroupedCompressedFromFileTo(ptr, dst); ok {
+			return val, usedDst, err
+		}
+	}
 	return ReadAtWithDictTo(f.File, ptr, verifyCRC, f.dictLookup, f.templateLookup, f.templateDefCache, f.templateDecodeOpts, dst)
+}
+
+// readGroupedCompressedFromFileTo handles grouped+compressed reads on the
+// non-mmap fallback path while reusing File grouped-frame cache entries.
+//
+// ok=false means the caller should fall back to the generic ReadAtWithDictTo
+// decoder path (for non-grouped / uncompressed / checksum-verified cases).
+func (f *File) readGroupedCompressedFromFileTo(ptr page.ValuePtr, dst []byte) ([]byte, bool, error, bool) {
+	if f == nil || f.File == nil {
+		return nil, false, errors.New("valuelog: nil file"), true
+	}
+	if ptr.Offset < 4 || !page.ValuePtrIsGrouped(ptr) {
+		return nil, false, nil, false
+	}
+
+	start := int64(ptr.Offset - 4)
+	var header [HeaderSize]byte
+	if _, err := f.File.ReadAt(header[:], start); err != nil {
+		return nil, false, err, true
+	}
+	if header[4] != Version {
+		return nil, false, ErrCorrupt, true
+	}
+	if header[5]&recordFlagGrouped == 0 {
+		return nil, false, nil, false
+	}
+	valueLen := binary.LittleEndian.Uint32(header[16:20])
+	if recordSizeExceedsMax(valueLen) {
+		return nil, false, ErrRecordTooLarge, true
+	}
+	expectedLen := uint32(headerWithoutCRC) + valueLen
+	if !page.ValuePtrRecordLengthHintMatches(ptr, expectedLen) {
+		return nil, false, ErrCorrupt, true
+	}
+	if int(valueLen) < FrameHeaderSize {
+		return nil, false, ErrCorrupt, true
+	}
+
+	frameOff := start + HeaderSize
+	var frameHeader [FrameHeaderSize]byte
+	if _, err := f.File.ReadAt(frameHeader[:], frameOff); err != nil {
+		return nil, false, err, true
+	}
+	if frameHeader[0] != FrameVersion {
+		return nil, false, ErrCorrupt, true
+	}
+	k := int(frameHeader[2])
+	if k <= 0 || k > MaxFrameK {
+		return nil, false, ErrCorrupt, true
+	}
+	if frameHeader[1]&FrameFlagCompressed == 0 {
+		return nil, false, nil, false
+	}
+
+	subIndex := int(page.ValuePtrSubIndex(ptr))
+	if subIndex < 0 || subIndex >= k {
+		return nil, false, ErrCorrupt, true
+	}
+	if cachedRaw, valStart, valEnd, rawLen, hit := f.groupedFrameCacheLookup(start, false, subIndex); hit {
+		if uint32(len(cachedRaw)) != rawLen || valEnd < valStart || valEnd > rawLen {
+			return nil, false, ErrCorrupt, true
+		}
+		val := cachedRaw[valStart:valEnd]
+		if f.templateLookup != nil && templ.IsEncodedPayload(val) {
+			decoded, err := templ.DecodePayloadAppend(nil, val, func(id uint64) (templ.TemplateDef, error) {
+				return resolveTemplateDef(id, f.templateLookup, f.templateDefCache)
+			}, f.templateDecodeOpts)
+			if err != nil {
+				return nil, false, err, true
+			}
+			return decoded, false, nil, true
+		}
+		if dst != nil && cap(dst) >= len(val) {
+			out := dst[:len(val)]
+			copy(out, val)
+			return out, true, nil, true
+		}
+		out := make([]byte, len(val))
+		copy(out, val)
+		return out, false, nil, true
+	}
+
+	ridBytes := k * 8
+	offsetBytes := (k + 1) * 4
+	prefixLen := FrameHeaderSize + ridBytes + offsetBytes
+	if int(valueLen) < prefixLen {
+		return nil, false, ErrCorrupt, true
+	}
+
+	payloadScratch := getDecodeScratch(int(valueLen))
+	defer putDecodeScratch(payloadScratch)
+	payload := payloadScratch[:int(valueLen)]
+	if _, err := f.File.ReadAt(payload, start+HeaderSize); err != nil {
+		return nil, false, err, true
+	}
+
+	off := FrameHeaderSize + ridBytes
+	var offsets [MaxFrameK + 1]uint32
+	prev := uint32(0)
+	for i := 0; i < k+1; i++ {
+		cur := binary.LittleEndian.Uint32(payload[off : off+4])
+		if cur < prev {
+			return nil, false, ErrCorrupt, true
+		}
+		offsets[i] = cur
+		prev = cur
+		off += 4
+	}
+	rawLen := offsets[k]
+	if limits.MaxRecordSize > 0 && int64(rawLen) > limits.MaxRecordSize {
+		return nil, false, ErrRecordTooLarge, true
+	}
+	valStart := offsets[subIndex]
+	valEnd := offsets[subIndex+1]
+	if valEnd < valStart || valEnd > rawLen {
+		return nil, false, ErrCorrupt, true
+	}
+
+	frame := FrameHeader{
+		Version:  frameHeader[0],
+		Flags:    frameHeader[1],
+		K:        uint8(k),
+		Reserved: frameHeader[3],
+		DictID:   binary.LittleEndian.Uint64(frameHeader[4:12]),
+	}
+
+	raw := f.takeDecodeScratch(int(rawLen))
+	pooledRaw := true
+	raw, err := decodeFramePayloadTo(frame, payload[prefixLen:], f.dictLookup, rawLen, raw)
+	if err != nil {
+		if pooledRaw {
+			f.releaseDecodeScratch(raw)
+		}
+		return nil, false, err, true
+	}
+	if uint32(len(raw)) != rawLen {
+		if pooledRaw {
+			f.releaseDecodeScratch(raw)
+		}
+		return nil, false, ErrCorrupt, true
+	}
+	cachedRaw := f.groupedFrameCacheStore(start, false, k, offsets, raw, true)
+
+	val := raw[valStart:valEnd]
+	if f.templateLookup != nil && templ.IsEncodedPayload(val) {
+		decoded, err := templ.DecodePayloadAppend(nil, val, func(id uint64) (templ.TemplateDef, error) {
+			return resolveTemplateDef(id, f.templateLookup, f.templateDefCache)
+		}, f.templateDecodeOpts)
+		if pooledRaw && !cachedRaw {
+			f.releaseDecodeScratch(raw)
+		}
+		if err != nil {
+			return nil, false, err, true
+		}
+		return decoded, false, nil, true
+	}
+
+	if dst != nil && cap(dst) >= len(val) {
+		out := dst[:len(val)]
+		copy(out, val)
+		if pooledRaw && !cachedRaw {
+			f.releaseDecodeScratch(raw)
+		}
+		return out, true, nil, true
+	}
+	out := make([]byte, len(val))
+	copy(out, val)
+	if pooledRaw && !cachedRaw {
+		f.releaseDecodeScratch(raw)
+	}
+	return out, false, nil, true
 }
 
 func (f *File) ReadAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte, error) {
