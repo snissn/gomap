@@ -4309,8 +4309,8 @@ func TestCheckpoint_KicksVlogGenerationRewriteDespiteRecentForegroundActivity(t 
 	if _, calls := recorder.recordedPlan(); calls != 1 {
 		t.Fatalf("plan calls=%d want=1", calls)
 	}
-	if got := db.checkpointRuns.Load(); got < 2 {
-		t.Fatalf("checkpoint runs=%d want >=2", got)
+	if got := db.checkpointRuns.Load(); got < 1 {
+		t.Fatalf("checkpoint runs=%d want >=1", got)
 	}
 	stats := db.Stats()
 	if got := stats["treedb.cache.vlog_generation.checkpoint_kick.runs"]; got != "1" {
@@ -4489,7 +4489,7 @@ func TestCheckpoint_KickSelfDrainsMaintenanceCollision(t *testing.T) {
 	<-release
 }
 
-func TestCheckpoint_KicksVlogGenerationGCDespiteRecentForegroundActivity(t *testing.T) {
+func TestCheckpoint_KickDoesNotForceGCDuringRecentForegroundActivity(t *testing.T) {
 	disableVlogGenerationLoop(t)
 	t.Setenv(envDisableVlogGenerationRewrite, "1")
 
@@ -4536,31 +4536,19 @@ func TestCheckpoint_KicksVlogGenerationGCDespiteRecentForegroundActivity(t *test
 		t.Fatalf("checkpoint: %v", err)
 	}
 
-	deadline := time.Now().Add(2 * schedulerTestWait(t))
-	for {
-		_, realCalls, _ := recorder.recordedCalls()
-		if realCalls == 1 {
-			break
-		}
-		if time.Now().After(deadline) {
-			dryCalls, realCalls, _ := recorder.recordedCalls()
-			t.Fatalf("checkpoint kick did not run gc in time: dryCalls=%d realCalls=%d", dryCalls, realCalls)
-		}
-		time.Sleep(10 * time.Millisecond)
+	time.Sleep(150 * time.Millisecond)
+	if dryCalls, realCalls, _ := recorder.recordedCalls(); dryCalls != 0 || realCalls != 0 {
+		t.Fatalf("gc calls dry=%d real=%d want dry=0 real=0", dryCalls, realCalls)
 	}
-
-	if dryCalls, realCalls, _ := recorder.recordedCalls(); dryCalls != 0 || realCalls != 1 {
-		t.Fatalf("gc calls dry=%d real=%d want dry=0 real=1", dryCalls, realCalls)
-	}
-	if got := db.checkpointRuns.Load(); got < 2 {
-		t.Fatalf("checkpoint runs=%d want >=2", got)
+	if got := db.checkpointRuns.Load(); got != 1 {
+		t.Fatalf("checkpoint runs=%d want 1", got)
 	}
 	stats := db.Stats()
 	if got := stats["treedb.cache.vlog_generation.checkpoint_kick.runs"]; got != "1" {
 		t.Fatalf("checkpoint kick runs=%q want 1", got)
 	}
-	if got := stats["treedb.cache.vlog_generation.checkpoint_kick.gc_runs"]; got != "1" {
-		t.Fatalf("checkpoint kick gc runs=%q want 1", got)
+	if got := stats["treedb.cache.vlog_generation.checkpoint_kick.gc_runs"]; got != "0" {
+		t.Fatalf("checkpoint kick gc runs=%q want 0", got)
 	}
 	if got := stats["treedb.cache.vlog_generation.checkpoint_kick.active"]; got != "false" {
 		t.Fatalf("checkpoint kick active=%q want false", got)
@@ -4594,6 +4582,50 @@ func TestVlogGenerationMaintenance_PeriodicGCSkipsWhileRewriteAgeBlocked(t *test
 
 	if _, calls := recorder.recordedGC(); calls != 0 {
 		t.Fatalf("periodic GC should yield while rewrite age-blocked; gc calls=%d", calls)
+	}
+}
+
+func TestVlogGenerationMaintenance_PeriodicGCNoopCooldown(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+	t.Setenv(envDisableVlogGenerationRewrite, "1")
+
+	dir := t.TempDir()
+
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	recorder := &rewriteBudgetRecordingBackend{
+		DB:         backend,
+		gcResponse: backenddb.ValueLogGCStats{},
+	}
+
+	db, cleanup := openRewriteQueueTestDB(t, dir, recorder)
+	t.Cleanup(cleanup)
+	skipRetainedPrune(db)
+	forceVlogMaintenanceIdle(db)
+
+	quietSince := time.Now().Add(-2 * vlogGenerationMaintenanceQuietWindow).UnixNano()
+	db.lastForegroundWriteUnixNano.Store(quietSince)
+	db.lastForegroundReadUnixNano.Store(quietSince)
+	db.activeForegroundIterators.Store(0)
+
+	db.maybeRunVlogGenerationMaintenance(true)
+
+	if _, calls := recorder.recordedGC(); calls != 1 {
+		t.Fatalf("first periodic GC calls=%d want=1", calls)
+	}
+	if got := db.vlogGenerationLastGCNoopUnixNano.Load(); got <= 0 {
+		t.Fatalf("last GC noop unix nano=%d want >0 after zero-eligibility pass", got)
+	}
+
+	// Bypass the normal min-interval gate; noop cooldown should still suppress.
+	db.vlogGenerationLastGCUnixNano.Store(time.Now().Add(-2 * vlogGenerationGCMinInterval).UnixNano())
+	forceVlogMaintenanceIdle(db)
+	db.maybeRunVlogGenerationMaintenance(true)
+
+	if _, calls := recorder.recordedGC(); calls != 1 {
+		t.Fatalf("periodic GC should skip under noop cooldown; calls=%d want=1", calls)
 	}
 }
 

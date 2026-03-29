@@ -5893,6 +5893,7 @@ type DB struct {
 	vlogGenerationLastRewritePlanUnixNano                       atomic.Int64
 	vlogGenerationLastRewriteUnixNano                           atomic.Int64
 	vlogGenerationLastGCUnixNano                                atomic.Int64
+	vlogGenerationLastGCNoopUnixNano                            atomic.Int64
 	vlogGenerationLastCheckpointKickUnixNano                    atomic.Int64
 	vlogGenerationLastGCDryRunUnixNano                          atomic.Int64
 	vlogGenerationLastGCDryRunBytesEligible                     atomic.Int64
@@ -6096,6 +6097,7 @@ const (
 	vlogGenerationGCMinBytes                = int64(1 << 20)
 	vlogGenerationRewriteMinInterval        = 30 * time.Second
 	vlogGenerationGCMinInterval             = 45 * time.Second
+	vlogGenerationGCNoopMinInterval         = 3 * time.Minute
 	vlogGenerationCheckpointKickMinInterval = 5 * time.Second
 	vlogGenerationCheckpointKickRetryWindow = 5 * time.Second
 	vlogGenerationDeferredRetryWindow       = 30 * time.Second
@@ -12959,17 +12961,16 @@ func (db *DB) maybeRunPeriodicVlogGenerationMaintenance(runGC bool) bool {
 		return false
 	}
 	// Coarse preflight: while foreground activity is hot, avoid entering the
-	// maintenance engine unless a deferred/checkpoint wake is pending. This
-	// prevents high-frequency periodic no-op acquisitions.
-	if !runGC {
-		now := time.Now()
-		quiet := db.foregroundActivityQuietFor(now, vlogGenerationMaintenanceQuietWindow, vlogForegroundReadQuietWindow)
-		if !quiet &&
-			!db.vlogGenerationCheckpointKickPending.Load() &&
-			!db.vlogGenerationDeferredMaintenancePending.Load() &&
-			!db.vlogGenerationDeferredMaintenanceDue(now) {
-			return false
-		}
+	// maintenance engine unless a deferred/checkpoint wake is pending. Apply this
+	// to both rewrite and periodic GC ticks; otherwise runGC ticks can still
+	// issue expensive full scans every interval during restore-heavy sync phases.
+	now := time.Now()
+	quiet := db.foregroundActivityQuietFor(now, vlogGenerationMaintenanceQuietWindow, vlogForegroundReadQuietWindow)
+	if !quiet &&
+		!db.vlogGenerationCheckpointKickPending.Load() &&
+		!db.vlogGenerationDeferredMaintenancePending.Load() &&
+		!db.vlogGenerationDeferredMaintenanceDue(now) {
+		return false
 	}
 	db.maybeRunVlogGenerationMaintenance(runGC)
 	return true
@@ -13900,7 +13901,7 @@ func (db *DB) scheduleDueVlogGenerationDeferredMaintenance() {
 }
 
 func (db *DB) runVlogGenerationCheckpointKickRetries(opts vlogGenerationMaintenanceOptions) {
-	db.runVlogGenerationMaintenanceRetries(opts, vlogGenerationCheckpointKickRetryWindow, false)
+	db.runVlogGenerationMaintenanceRetries(opts, vlogGenerationCheckpointKickRetryWindow, true)
 }
 
 func (db *DB) runVlogGenerationMaintenanceRetries(opts vlogGenerationMaintenanceOptions, retryWindow time.Duration, stopWhenAcquired bool) {
@@ -13951,7 +13952,11 @@ func (db *DB) runVlogGenerationMaintenanceRetries(opts vlogGenerationMaintenance
 				db.vlogGenerationMaintenanceActive.Load(),
 			)
 		}
-		ran := db.maybeRunVlogGenerationMaintenanceWithOptions(true, opts)
+		// Retry-driven maintenance (checkpoint kick / deferred stage confirmation)
+		// prioritizes rewrite debt progress. Keep periodic/full-scan GC on the
+		// normal scheduler path to avoid introducing long full-scan stalls on hot
+		// checkpoint-triggered retries.
+		ran := db.maybeRunVlogGenerationMaintenanceWithOptions(false, opts)
 		if stopWhenAcquired && ran {
 			if opts.debugSource != "" {
 				db.debugVlogMaintf(
@@ -15120,6 +15125,12 @@ planned:
 
 	observedSourceGCIDs := db.takeVlogGenerationObservedSourceGCList()
 	forceObservedSourceGC := len(observedSourceGCIDs) > 0
+	if !runGC && opts.bypassQuiet && !forceObservedSourceGC {
+		// Checkpoint-kick/deferred retry passes are rewrite-priority. Do not run
+		// opportunistic GC here unless we are replaying observed-source IDs from
+		// a prior rewrite/GC cycle.
+		return
+	}
 	if envBool(envDisableVlogGenerationGC) {
 		db.debugVlogMaintf(
 			"gc_skip reason=disabled_env run_gc=%t force_observed=%t observed_ids=%d",
@@ -15170,7 +15181,9 @@ planned:
 		}
 		return
 	}
-	needEligibilityEstimate := !runGC && !forceObservedSourceGC && !db.shouldRunVlogGenerationGC(retained, reclaimable, churnBps)
+	// Retry-driven checkpoint/deferred passes are rewrite-priority paths. Avoid
+	// issuing GC dry-run scans there; let periodic/manual GC decide eligibility.
+	needEligibilityEstimate := !runGC && !opts.bypassQuiet && !forceObservedSourceGC && !db.shouldRunVlogGenerationGC(retained, reclaimable, churnBps)
 	now = time.Now()
 	lastGC := db.vlogGenerationLastGCUnixNano.Load()
 	if lastGC > 0 {
@@ -15185,6 +15198,21 @@ planned:
 				float64(vlogGenerationGCMinInterval.Microseconds())/1000,
 			)
 			return
+		}
+	}
+	if !forceObservedSourceGC {
+		lastNoop := db.vlogGenerationLastGCNoopUnixNano.Load()
+		if lastNoop > 0 {
+			lastNoopAt := time.Unix(0, lastNoop)
+			if now.Sub(lastNoopAt) < vlogGenerationGCNoopMinInterval {
+				db.debugVlogMaintf(
+					"gc_skip reason=noop_cooldown run_gc=%t since_ms=%.3f min_ms=%.3f",
+					runGC,
+					float64(now.Sub(lastNoopAt).Microseconds())/1000,
+					float64(vlogGenerationGCNoopMinInterval.Microseconds())/1000,
+				)
+				return
+			}
 		}
 	}
 	db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerRunning)
@@ -15253,6 +15281,15 @@ planned:
 			gcStats.ObservedSourceSegmentsProtectedRetained,
 		)
 		db.observeVlogGenerationGCStats(gcStats)
+		if !forceObservedSourceGC &&
+			gcStats.BytesDeleted == 0 &&
+			gcStats.SegmentsDeleted == 0 &&
+			gcStats.BytesEligible == 0 &&
+			gcStats.SegmentsEligible == 0 {
+			db.vlogGenerationLastGCNoopUnixNano.Store(now.UnixNano())
+		} else {
+			db.vlogGenerationLastGCNoopUnixNano.Store(0)
+		}
 		if gcStats.BytesProtectedRetained > 0 && gcStats.BytesEligible == 0 && db.valueLogRetainedClosedBytes.Load() > 0 {
 			// When GC classifies all reclaim blockers as retained-path protection,
 			// trigger an eager retained prune pass to release stale lifecycle pins.
