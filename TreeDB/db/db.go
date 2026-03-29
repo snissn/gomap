@@ -1587,14 +1587,21 @@ func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired [
 	post.oldState = db.state.Load()
 	var valueLogSet *valuelog.Set
 	if db.valueLogManager != nil {
-		needRefresh := forceValueLogRefresh
-		if !needRefresh && len(touchedValueLogSegments) > 0 {
+		needRefresh := false
+		if len(touchedValueLogSegments) > 0 {
 			for _, id := range touchedValueLogSegments {
 				if !db.valueLogManager.HasSegment(id) {
 					needRefresh = true
 					break
 				}
 			}
+		}
+		if forceValueLogRefresh {
+			// Outer-leaf commits can rotate multiple value-log segments within a
+			// single commit. Registering only the current segment can miss
+			// intermediate referenced segments, so force a full refresh to keep the
+			// published ValueLogSet complete for snapshot readers.
+			needRefresh = true
 		}
 		if needRefresh {
 			if err := db.valueLogManager.Refresh(); err != nil {
