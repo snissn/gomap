@@ -457,6 +457,17 @@ func selectExplicitRewriteSourceIDs(sourceFileIDs []uint32, files map[uint32]*va
 	return selected
 }
 
+func selectSingleExplicitRewriteSourceID(sourceFileIDs []uint32, files map[uint32]*valuelog.File) (uint32, bool) {
+	if len(sourceFileIDs) != 1 || len(files) == 0 {
+		return 0, false
+	}
+	id := sourceFileIDs[0]
+	if _, ok := files[id]; !ok {
+		return 0, false
+	}
+	return id, true
+}
+
 func rewritePlanNeedsLiveEstimate(opts ValueLogRewriteOnlineOptions) bool {
 	if !hasRewriteSourceSelection(opts) {
 		return false
@@ -1225,13 +1236,26 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		stats.BytesBefore += fileSize(set.Files[id])
 	}
 	var (
-		sourceIDs      map[uint32]struct{}
-		restrictSource bool
+		sourceIDs          map[uint32]struct{}
+		singleSourceID     uint32
+		restrictSource     bool
+		restrictSingleID   bool
+		sourceSegmentCount int
 	)
 	if hasOnlyExplicitRewriteSources(opts) {
-		sourceIDs = selectExplicitRewriteSourceIDs(opts.SourceFileIDs, set.Files)
+		if id, ok := selectSingleExplicitRewriteSourceID(opts.SourceFileIDs, set.Files); ok {
+			singleSourceID = id
+			restrictSingleID = true
+		} else {
+			sourceIDs = selectExplicitRewriteSourceIDs(opts.SourceFileIDs, set.Files)
+		}
 		restrictSource = true
-		stats.SourceSegmentsRequested = len(sourceIDs)
+		if restrictSingleID {
+			sourceSegmentCount = 1
+		} else {
+			sourceSegmentCount = len(sourceIDs)
+		}
+		stats.SourceSegmentsRequested = sourceSegmentCount
 	} else if hasRewriteSourceSelection(opts) {
 		active := currentValueLogIDs(set)
 		var liveByID map[uint32]int64
@@ -1244,10 +1268,11 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		}
 		sourceIDs, _ = selectRewriteSourceSegmentsWithStats(opts, set.Files, active, liveByID)
 		restrictSource = true
-		stats.SourceSegmentsRequested = len(sourceIDs)
+		sourceSegmentCount = len(sourceIDs)
+		stats.SourceSegmentsRequested = sourceSegmentCount
 	}
 	_ = db.valueLogManager.Release(set)
-	if restrictSource && len(sourceIDs) == 0 {
+	if restrictSource && sourceSegmentCount == 0 {
 		// No source segments selected: this rewrite pass is a no-op.
 		stats.SegmentsAfter = stats.SegmentsBefore
 		stats.BytesAfter = stats.BytesBefore
@@ -1417,8 +1442,14 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 			continue
 		}
 		if restrictSource {
-			if _, ok := sourceIDs[oldPtr.FileID]; !ok {
-				continue
+			if restrictSingleID {
+				if oldPtr.FileID != singleSourceID {
+					continue
+				}
+			} else {
+				if _, ok := sourceIDs[oldPtr.FileID]; !ok {
+					continue
+				}
 			}
 		}
 		unsafeKey := it.UnsafeKey()
@@ -1451,8 +1482,8 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		// by LeafRef pointers even if all key/value pointers are rewritten. Move
 		// referenced leaf pages out of the selected source segments so cleanup can
 		// actually reclaim space.
-		if restrictSource && db.indexOuterLeavesInValueLog && len(sourceIDs) > 0 {
-			copied, copiedBytes, err := db.rewriteLeafRefsOnline(ctx, writer, ridAlloc, sourceIDs, opts.SyncEachBatch)
+		if restrictSource && db.indexOuterLeavesInValueLog && sourceSegmentCount > 0 {
+			copied, copiedBytes, err := db.rewriteLeafRefsOnline(ctx, writer, ridAlloc, sourceIDs, singleSourceID, restrictSingleID, opts.SyncEachBatch)
 			if err != nil {
 				return stats, err
 			}
@@ -1492,15 +1523,25 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 	if err != nil {
 		return stats, err
 	}
-	if len(sourceIDs) > 0 {
-		stillReferenced := 0
-		for id := range sourceIDs {
-			if _, ok := referencedAfter[id]; ok {
-				stillReferenced++
+	if sourceSegmentCount > 0 {
+		if restrictSingleID {
+			if _, ok := referencedAfter[singleSourceID]; ok {
+				stats.SourceSegmentsStillReferenced = 1
+				stats.SourceSegmentsUnreferenced = 0
+			} else {
+				stats.SourceSegmentsStillReferenced = 0
+				stats.SourceSegmentsUnreferenced = 1
 			}
+		} else {
+			stillReferenced := 0
+			for id := range sourceIDs {
+				if _, ok := referencedAfter[id]; ok {
+					stillReferenced++
+				}
+			}
+			stats.SourceSegmentsStillReferenced = stillReferenced
+			stats.SourceSegmentsUnreferenced = len(sourceIDs) - stillReferenced
 		}
-		stats.SourceSegmentsStillReferenced = stillReferenced
-		stats.SourceSegmentsUnreferenced = len(sourceIDs) - stillReferenced
 	}
 	var protectedPaths map[string]struct{}
 	allowActiveSkip := len(opts.ProtectedPaths) > 0
@@ -1538,32 +1579,37 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		}
 		_ = db.valueLogManager.Release(currentSet)
 	}
-	zombieCandidates := make(map[uint32]struct{}, len(oldValueIDs)+len(newValueIDs))
-	for id := range oldValueIDs {
-		zombieCandidates[id] = struct{}{}
-	}
-	for _, id := range newValueIDs {
-		zombieCandidates[id] = struct{}{}
-	}
-	for id := range zombieCandidates {
+	markZombieCandidate := func(id uint32, existedBefore bool) error {
 		if _, ok := referencedAfter[id]; ok {
-			continue
+			return nil
 		}
 		if _, ok := protectedIDs[id]; ok {
-			continue
+			return nil
 		}
 		// Never mark currently-active pre-existing segments zombie when callers
 		// provide ProtectedPaths (cached-mode maintenance). Concurrent writers may
 		// still be appending records whose pointers are not yet visible in the
 		// backend index.
-		if allowActiveSkip {
+		if allowActiveSkip && existedBefore {
 			if _, ok := activeIDs[id]; ok {
-				if _, existed := oldValueIDs[id]; existed {
-					continue
-				}
+				return nil
 			}
 		}
 		if err := db.valueLogManager.MarkZombie(id); err != nil {
+			return err
+		}
+		return nil
+	}
+	for id := range oldValueIDs {
+		if err := markZombieCandidate(id, true); err != nil {
+			return stats, err
+		}
+	}
+	for _, id := range newValueIDs {
+		if _, existed := oldValueIDs[id]; existed {
+			continue
+		}
+		if err := markZombieCandidate(id, false); err != nil {
 			return stats, err
 		}
 	}
@@ -1609,7 +1655,9 @@ type leafRefRewriteCtx struct {
 	writer   *rewriteWriter
 	ridAlloc *rewriteRIDAllocator
 
-	sourceIDs map[uint32]struct{}
+	sourceIDs      map[uint32]struct{}
+	singleSourceID uint32
+	hasSingleID    bool
 
 	leafMap     map[uint64]uint64 // old leafref id -> new leafref id
 	internalMap map[uint64]uint64 // old internal page id -> new page id
@@ -1661,7 +1709,11 @@ func (c *leafRefRewriteCtx) rewriteNode(id uint64) (uint64, bool, error) {
 				return mapped, mapped != id, nil
 			}
 		}
-		if c.sourceIDs != nil {
+		if c.hasSingleID {
+			if ptr.FileID != c.singleSourceID {
+				return id, false, nil
+			}
+		} else if c.sourceIDs != nil {
 			if _, ok := c.sourceIDs[ptr.FileID]; !ok {
 				return id, false, nil
 			}
@@ -1804,7 +1856,7 @@ func (c *leafRefRewriteCtx) rewriteNode(id uint64) (uint64, bool, error) {
 	}
 }
 
-func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, ridAlloc *rewriteRIDAllocator, sourceIDs map[uint32]struct{}, sync bool) (copied int, copiedBytes int64, err error) {
+func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, ridAlloc *rewriteRIDAllocator, sourceIDs map[uint32]struct{}, singleSourceID uint32, hasSingleSourceID bool, sync bool) (copied int, copiedBytes int64, err error) {
 	if db == nil {
 		return 0, 0, fmt.Errorf("missing db")
 	}
@@ -1820,9 +1872,9 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 	if writer == nil || ridAlloc == nil {
 		return 0, 0, fmt.Errorf("vlog-rewrite: missing writer/rid state")
 	}
-	// Treat nil sourceIDs as "all sources" and an empty, non-nil map as "no
-	// sources". The latter means there is nothing to rewrite.
-	if sourceIDs != nil && len(sourceIDs) == 0 {
+	// Treat nil sourceIDs (with no single-source constraint) as "all sources"
+	// and an empty, non-nil map as "no sources".
+	if !hasSingleSourceID && sourceIDs != nil && len(sourceIDs) == 0 {
 		return 0, 0, nil
 	}
 	if ctx == nil {
@@ -1863,14 +1915,16 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 	}()
 
 	leafCtx := &leafRefRewriteCtx{
-		ctx:        ctx,
-		db:         db,
-		pager:      idx.pager,
-		leafReader: &snap.reader,
-		alloc:      tracker,
-		writer:     writer,
-		ridAlloc:   ridAlloc,
-		sourceIDs:  sourceIDs,
+		ctx:            ctx,
+		db:             db,
+		pager:          idx.pager,
+		leafReader:     &snap.reader,
+		alloc:          tracker,
+		writer:         writer,
+		ridAlloc:       ridAlloc,
+		sourceIDs:      sourceIDs,
+		singleSourceID: singleSourceID,
+		hasSingleID:    hasSingleSourceID,
 	}
 	if toer, ok := leafCtx.leafReader.(unsafeToReader); ok {
 		leafCtx.leafToer = toer
