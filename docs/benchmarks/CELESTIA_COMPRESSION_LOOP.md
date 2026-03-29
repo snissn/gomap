@@ -87,6 +87,9 @@ Now includes anti-loop safeguards:
 - clear stop (improvement/regression)
 - futility stop (`futile_remaining_pairs`)
 - low-signal neutral-streak stop (`low_signal_neutral_streak`)
+- strict new-run-home detection (no fallback to old run dirs)
+- per-variant timeout/retry for stuck syncs
+- invalid-pair streak stop (`invalid_pair_streak`)
 
 Example:
 
@@ -97,9 +100,17 @@ CLEAR_WIN_PAIRS=2 \
 CLEAR_LOSS_PAIRS=2 \
 LOW_SIGNAL_MIN_PAIRS=3 \
 LOW_SIGNAL_NEUTRAL_STREAK=3 \
+RUN_TIMEOUT_SECONDS=1800 \
+RUN_MAX_ATTEMPTS_PER_VARIANT=2 \
+RUN_RETRY_SLEEP_SECONDS=20 \
+INVALID_PAIR_STREAK_STOP=2 \
 REWRITE_ENABLED=1 \
 ./scripts/run_celestia_ab.sh
 ```
+
+Notes:
+- Pair execution remains strictly single-run at a time and interleaved by pair order.
+- Invalid runs (timeout, launcher failure, missing new run home, rewrite failure) are recorded but excluded from pair scoring.
 
 ## Process Review Cadence
 

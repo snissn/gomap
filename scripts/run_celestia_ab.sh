@@ -19,6 +19,10 @@ STOP_ON_CLEAR="${STOP_ON_CLEAR:-1}"
 SLEEP_BETWEEN_RUNS_SECONDS="${SLEEP_BETWEEN_RUNS_SECONDS:-5}"
 LOW_SIGNAL_MIN_PAIRS="${LOW_SIGNAL_MIN_PAIRS:-3}"
 LOW_SIGNAL_NEUTRAL_STREAK="${LOW_SIGNAL_NEUTRAL_STREAK:-3}"
+RUN_TIMEOUT_SECONDS="${RUN_TIMEOUT_SECONDS:-1800}"
+RUN_MAX_ATTEMPTS_PER_VARIANT="${RUN_MAX_ATTEMPTS_PER_VARIANT:-2}"
+RUN_RETRY_SLEEP_SECONDS="${RUN_RETRY_SLEEP_SECONDS:-20}"
+INVALID_PAIR_STREAK_STOP="${INVALID_PAIR_STREAK_STOP:-2}"
 TS="$(date +%Y%m%d%H%M%S)"
 OUT="${OUT_DIR:-$ROOT/artifacts/celestia_ab/$TS}"
 
@@ -32,6 +36,22 @@ if [[ ! -x "$ANALYZER" ]]; then
 fi
 if [[ "$MAX_PAIRS" -lt 1 ]]; then
   echo "MAX_PAIRS must be >= 1" >&2
+  exit 1
+fi
+if [[ "$RUN_TIMEOUT_SECONDS" -lt 0 ]]; then
+  echo "RUN_TIMEOUT_SECONDS must be >= 0" >&2
+  exit 1
+fi
+if [[ "$RUN_MAX_ATTEMPTS_PER_VARIANT" -lt 1 ]]; then
+  echo "RUN_MAX_ATTEMPTS_PER_VARIANT must be >= 1" >&2
+  exit 1
+fi
+if [[ "$RUN_RETRY_SLEEP_SECONDS" -lt 0 ]]; then
+  echo "RUN_RETRY_SLEEP_SECONDS must be >= 0" >&2
+  exit 1
+fi
+if [[ "$INVALID_PAIR_STREAK_STOP" -lt 1 ]]; then
+  echo "INVALID_PAIR_STREAK_STOP must be >= 1" >&2
   exit 1
 fi
 
@@ -55,6 +75,10 @@ stop_on_clear=$STOP_ON_CLEAR
 sleep_between_runs_seconds=$SLEEP_BETWEEN_RUNS_SECONDS
 low_signal_min_pairs=$LOW_SIGNAL_MIN_PAIRS
 low_signal_neutral_streak=$LOW_SIGNAL_NEUTRAL_STREAK
+run_timeout_seconds=$RUN_TIMEOUT_SECONDS
+run_max_attempts_per_variant=$RUN_MAX_ATTEMPTS_PER_VARIANT
+run_retry_sleep_seconds=$RUN_RETRY_SLEEP_SECONDS
+invalid_pair_streak_stop=$INVALID_PAIR_STREAK_STOP
 META
 
 list_run_homes() {
@@ -90,8 +114,7 @@ detect_new_run_home() {
       return 0
     fi
   done < <(list_run_homes)
-
-  list_run_homes | head -n 1
+  return 1
 }
 
 run_variant() {
@@ -104,47 +127,86 @@ run_variant() {
   local run_dir="$OUT/runs/$run_id"
   mkdir -p "$run_dir"
 
-  local before_file="$run_dir/before_homes.txt"
-  list_run_homes >"$before_file"
-
-  local run_start
-  run_start=$(date +%s)
-  (
-    set -euo pipefail
-    if [[ -n "$env_file" ]]; then
-      # shellcheck source=/dev/null
-      set -a
-      source "$env_file"
-      set +a
-    fi
-    # Non-login shell avoids user profile side effects (e.g. tty-dependent exports)
-    # that can fail under nohup/background runs.
-    bash -c "$RUN_CMD"
-  ) >"$run_dir/launcher.log" 2>&1
-  local run_end
-  run_end=$(date +%s)
-
-  local run_home
-  run_home="$(detect_new_run_home "$before_file")"
-  if [[ -z "$run_home" || ! -d "$run_home" ]]; then
-    echo "failed to detect run home for $run_id" >&2
-    exit 1
-  fi
-
-  local app_db="$run_home/data/application.db"
-  local pre_app_bytes pre_wal_bytes
-  pre_app_bytes="$(du_bytes "$app_db")"
-  pre_wal_bytes="$(du_bytes "$app_db/maindb/wal")"
-
-  local analyze_json="$run_dir/maintenance.json"
-  if ! "$ANALYZER" --json "$run_home" >"$analyze_json" 2>"$run_dir/analyze.stderr.log"; then
-    rm -f "$analyze_json"
-  fi
-
+  local run_home=""
+  local app_db=""
+  local run_start=0
+  local run_end=0
+  local run_rc=0
+  local attempt_used=0
+  local invalid_reason=""
+  local pre_app_bytes=0
+  local pre_wal_bytes=0
+  local post_app_bytes=0
+  local post_wal_bytes=0
   local rewrite_attempted=0
   local rewrite_seconds=0
   local rewrite_rc=0
-  if [[ "$REWRITE_ENABLED" == "1" && -x "$TREEMAP_BIN" && -d "$app_db" ]]; then
+  local analyze_json="$run_dir/maintenance.json"
+  rm -f "$analyze_json"
+  : >"$run_dir/attempts.log"
+
+  local attempt
+  for ((attempt = 1; attempt <= RUN_MAX_ATTEMPTS_PER_VARIANT; attempt++)); do
+    attempt_used="$attempt"
+    local attempt_dir="$run_dir/attempt_${attempt}"
+    mkdir -p "$attempt_dir"
+
+    local before_file="$attempt_dir/before_homes.txt"
+    list_run_homes >"$before_file"
+
+    run_start=$(date +%s)
+    set +e
+    (
+      set -euo pipefail
+      if [[ -n "$env_file" ]]; then
+        # shellcheck source=/dev/null
+        set -a
+        source "$env_file"
+        set +a
+      fi
+      # Non-login shell avoids user profile side effects (e.g. tty-dependent exports)
+      # that can fail under nohup/background runs.
+      if [[ "$RUN_TIMEOUT_SECONDS" -gt 0 ]] && command -v timeout >/dev/null 2>&1; then
+        timeout --signal=TERM --kill-after=60 "${RUN_TIMEOUT_SECONDS}s" bash -c "$RUN_CMD"
+      else
+        bash -c "$RUN_CMD"
+      fi
+    ) >"$attempt_dir/launcher.log" 2>&1
+    run_rc=$?
+    set -e
+    cp "$attempt_dir/launcher.log" "$run_dir/launcher.log"
+    run_end=$(date +%s)
+
+    run_home="$(detect_new_run_home "$before_file" || true)"
+    invalid_reason=""
+    if [[ "$run_rc" -eq 124 || "$run_rc" -eq 137 || "$run_rc" -eq 143 ]]; then
+      invalid_reason="run_timeout"
+    elif [[ "$run_rc" -ne 0 ]]; then
+      invalid_reason="run_cmd_failed"
+    elif [[ -z "$run_home" || ! -d "$run_home" ]]; then
+      invalid_reason="run_home_missing"
+    fi
+
+    echo "attempt=$attempt run_exit_code=$run_rc invalid_reason=${invalid_reason:-none} run_home=${run_home:-<none>}" >>"$run_dir/attempts.log"
+    if [[ -z "$invalid_reason" ]]; then
+      break
+    fi
+    if (( attempt < RUN_MAX_ATTEMPTS_PER_VARIANT )); then
+      sleep "$RUN_RETRY_SLEEP_SECONDS"
+    fi
+  done
+
+  if [[ -n "$run_home" && -d "$run_home" ]]; then
+    app_db="$run_home/data/application.db"
+    pre_app_bytes="$(du_bytes "$app_db")"
+    pre_wal_bytes="$(du_bytes "$app_db/maindb/wal")"
+
+    if ! "$ANALYZER" --json "$run_home" >"$analyze_json" 2>"$run_dir/analyze.stderr.log"; then
+      rm -f "$analyze_json"
+    fi
+  fi
+
+  if [[ -z "$invalid_reason" && "$REWRITE_ENABLED" == "1" && -x "$TREEMAP_BIN" && -n "$app_db" && -d "$app_db" ]]; then
     rewrite_attempted=1
     local rewrite_start
     rewrite_start=$(date +%s)
@@ -155,21 +217,23 @@ run_variant() {
     local rewrite_end
     rewrite_end=$(date +%s)
     rewrite_seconds=$((rewrite_end - rewrite_start))
-  else
-    rewrite_rc=0
+    if [[ "$rewrite_rc" -ne 0 ]]; then
+      invalid_reason="rewrite_failed"
+    fi
   fi
 
-  local post_app_bytes post_wal_bytes
-  post_app_bytes="$(du_bytes "$app_db")"
-  post_wal_bytes="$(du_bytes "$app_db/maindb/wal")"
+  if [[ -n "$app_db" ]]; then
+    post_app_bytes="$(du_bytes "$app_db")"
+    post_wal_bytes="$(du_bytes "$app_db/maindb/wal")"
+  fi
 
   local run_json="$run_dir/run.json"
-  python3 - "$run_home" "$run_json" "$variant" "$pair_index" "$run_start" "$run_end" "$rewrite_attempted" "$rewrite_seconds" "$rewrite_rc" "$pre_app_bytes" "$pre_wal_bytes" "$post_app_bytes" "$post_wal_bytes" "$analyze_json" <<'PY'
+  python3 - "$run_home" "$run_json" "$variant" "$pair_index" "$run_start" "$run_end" "$rewrite_attempted" "$rewrite_seconds" "$rewrite_rc" "$pre_app_bytes" "$pre_wal_bytes" "$post_app_bytes" "$post_wal_bytes" "$analyze_json" "$invalid_reason" "$run_rc" "$attempt_used" "$RUN_MAX_ATTEMPTS_PER_VARIANT" "$RUN_TIMEOUT_SECONDS" <<'PY'
 import json
 import sys
 from pathlib import Path
 
-run_home = Path(sys.argv[1])
+run_home_raw = sys.argv[1]
 out_path = Path(sys.argv[2])
 variant = sys.argv[3]
 pair_index = int(sys.argv[4])
@@ -183,6 +247,12 @@ pre_wal_bytes = int(sys.argv[11])
 post_app_bytes = int(sys.argv[12])
 post_wal_bytes = int(sys.argv[13])
 analyze_json_path = Path(sys.argv[14])
+invalid_reason = str(sys.argv[15]).strip()
+run_exit_code = int(sys.argv[16])
+attempt = int(sys.argv[17])
+max_attempts = int(sys.argv[18])
+run_timeout_seconds = int(sys.argv[19])
+run_home = Path(run_home_raw) if run_home_raw else None
 
 def parse_sync_time(path: Path) -> dict[str, str]:
     out: dict[str, str] = {}
@@ -210,7 +280,8 @@ def safe_int(raw: str | None, default: int = 0) -> int:
         except Exception:
             return default
 
-sync = parse_sync_time(run_home / "sync" / "sync-time.log")
+sync_path = run_home / "sync" / "sync-time.log" if run_home is not None else None
+sync = parse_sync_time(sync_path) if sync_path is not None else {}
 maintenance = {}
 if analyze_json_path.is_file():
     try:
@@ -224,15 +295,25 @@ if analyze_json_path.is_file():
 
 t_sync = safe_int(sync.get("duration_seconds"), max(0, run_end - run_start))
 t_rw = rewrite_seconds if rewrite_attempted == 1 else 0
-if rewrite_attempted == 1 and rewrite_rc != 0:
-    t_total = None
-else:
-    t_total = t_sync + t_rw
+resolved_invalid_reason = invalid_reason
+if not resolved_invalid_reason and rewrite_attempted == 1 and rewrite_rc != 0:
+    resolved_invalid_reason = "rewrite_failed"
+valid = resolved_invalid_reason == ""
+t_total = (t_sync + t_rw) if valid else None
 
 result = {
     "pair_index": pair_index,
     "variant": variant,
-    "run_home": str(run_home),
+    "run_home": run_home_raw,
+    "status": {
+        "valid": valid,
+        "invalid_reason": resolved_invalid_reason,
+        "run_exit_code": run_exit_code,
+        "attempt": attempt,
+        "max_attempts": max_attempts,
+        "run_timeout_seconds": run_timeout_seconds,
+        "sync_time_present": sync_path.is_file() if sync_path is not None else False,
+    },
     "sync": {
         "duration_seconds": t_sync,
         "max_rss_kb": safe_int(sync.get("max_rss_kb"), 0),
@@ -268,12 +349,16 @@ out_path.write_text(json.dumps(result, indent=2, sort_keys=True), encoding="utf-
 print(out_path)
 PY
 
-  echo "run_id=$run_id run_home=$run_home json=$run_json"
+  local run_valid="false"
+  if [[ -z "$invalid_reason" ]]; then
+    run_valid="true"
+  fi
+  echo "run_id=$run_id run_home=${run_home:-<none>} valid=$run_valid invalid_reason=${invalid_reason:-none} attempts=$attempt_used/$RUN_MAX_ATTEMPTS_PER_VARIANT json=$run_json"
 }
 
 aggregate_and_decide() {
   local decision_json="$OUT/decision.json"
-  python3 - "$OUT" "$SIZE_TOLERANCE_BYTES" "$TIME_TOLERANCE_SECONDS" "$MIN_PAIRS" "$CLEAR_WIN_PAIRS" "$CLEAR_LOSS_PAIRS" "$MAX_PAIRS" "$STOP_ON_CLEAR" "$LOW_SIGNAL_MIN_PAIRS" "$LOW_SIGNAL_NEUTRAL_STREAK" "$decision_json" <<'PY'
+  python3 - "$OUT" "$SIZE_TOLERANCE_BYTES" "$TIME_TOLERANCE_SECONDS" "$MIN_PAIRS" "$CLEAR_WIN_PAIRS" "$CLEAR_LOSS_PAIRS" "$MAX_PAIRS" "$STOP_ON_CLEAR" "$LOW_SIGNAL_MIN_PAIRS" "$LOW_SIGNAL_NEUTRAL_STREAK" "$INVALID_PAIR_STREAK_STOP" "$decision_json" <<'PY'
 import csv
 import json
 import sys
@@ -289,7 +374,8 @@ max_pairs = int(sys.argv[7])
 stop_on_clear = sys.argv[8] == "1"
 low_signal_min_pairs = int(sys.argv[9])
 low_signal_neutral_streak = int(sys.argv[10])
-decision_path = Path(sys.argv[11])
+invalid_pair_streak_stop = int(sys.argv[11])
+decision_path = Path(sys.argv[12])
 
 run_files = sorted(out.glob("runs/*/run.json"))
 runs = []
@@ -300,6 +386,39 @@ for p in run_files:
         continue
 
 runs.sort(key=lambda r: (int(r.get("pair_index", 0)), str(r.get("variant", ""))))
+
+def run_is_valid(run: dict) -> bool:
+    status = run.get("status")
+    if isinstance(status, dict) and "valid" in status:
+        return bool(status.get("valid"))
+    metrics = run.get("metrics", {}) or {}
+    rewrite = run.get("rewrite", {}) or {}
+    return metrics.get("t_total_seconds") is not None and int(rewrite.get("exit_code", 0)) == 0
+
+def run_invalid_reason(run: dict) -> str:
+    status = run.get("status")
+    if isinstance(status, dict):
+        return str(status.get("invalid_reason", "") or "")
+    return ""
+
+def run_attempt(run: dict):
+    status = run.get("status")
+    if isinstance(status, dict):
+        return status.get("attempt")
+    return None
+
+def run_max_attempts(run: dict):
+    status = run.get("status")
+    if isinstance(status, dict):
+        return status.get("max_attempts")
+    return None
+
+def run_exit_code(run: dict):
+    status = run.get("status")
+    if isinstance(status, dict) and status.get("run_exit_code") is not None:
+        return status.get("run_exit_code")
+    rewrite = run.get("rewrite", {}) or {}
+    return rewrite.get("exit_code")
 
 runs_csv = out / "runs.csv"
 with runs_csv.open("w", newline="", encoding="utf-8") as fh:
@@ -316,6 +435,11 @@ with runs_csv.open("w", newline="", encoding="utf-8") as fh:
         "s_post_app_bytes",
         "s_post_wal_bytes",
         "max_rss_kb",
+        "valid",
+        "invalid_reason",
+        "run_exit_code",
+        "run_attempt",
+        "run_max_attempts",
         "rewrite_exit_code",
         "rewrite_runs",
         "gc_runs",
@@ -327,6 +451,7 @@ with runs_csv.open("w", newline="", encoding="utf-8") as fh:
         s = r.get("sizes", {}) or {}
         rw = r.get("rewrite", {}) or {}
         summary = r.get("maintenance_summary", {}) or {}
+        valid = run_is_valid(r)
         w.writerow([
             int(r.get("pair_index", 0)),
             str(r.get("variant", "")),
@@ -339,6 +464,11 @@ with runs_csv.open("w", newline="", encoding="utf-8") as fh:
             s.get("post_app_bytes"),
             s.get("post_wal_bytes"),
             m.get("max_rss_kb"),
+            valid,
+            run_invalid_reason(r),
+            run_exit_code(r),
+            run_attempt(r),
+            run_max_attempts(r),
             rw.get("exit_code"),
             summary.get("rewrite_runs", 0),
             summary.get("gc_runs", 0),
@@ -354,11 +484,33 @@ for r in runs:
 pair_rows = []
 wins = 0
 losses = 0
+raw_pairs = 0
+invalid_pairs = 0
 for pair in sorted(by_pair):
     row = by_pair[pair]
     ctrl = row.get("control")
     cand = row.get("candidate")
     if not ctrl or not cand:
+        continue
+    raw_pairs += 1
+    ctrl_valid = run_is_valid(ctrl)
+    cand_valid = run_is_valid(cand)
+    ctrl_reason = run_invalid_reason(ctrl)
+    cand_reason = run_invalid_reason(cand)
+    if not ctrl_valid or not cand_valid:
+        invalid_pairs += 1
+        pair_rows.append({
+            "pair_index": pair,
+            "delta_t_sync_seconds": None,
+            "delta_t_total_seconds": None,
+            "delta_s_sync_app_bytes": None,
+            "delta_s_post_wal_bytes": None,
+            "control_valid": ctrl_valid,
+            "candidate_valid": cand_valid,
+            "control_invalid_reason": ctrl_reason,
+            "candidate_invalid_reason": cand_reason,
+            "outcome": "invalid",
+        })
         continue
     cm = cand.get("metrics", {}) or {}
     bm = ctrl.get("metrics", {}) or {}
@@ -398,6 +550,10 @@ for pair in sorted(by_pair):
         "delta_t_total_seconds": d_total,
         "delta_s_sync_app_bytes": d_sync_app,
         "delta_s_post_wal_bytes": d_post_wal,
+        "control_valid": ctrl_valid,
+        "candidate_valid": cand_valid,
+        "control_invalid_reason": ctrl_reason,
+        "candidate_invalid_reason": cand_reason,
         "outcome": outcome,
     })
 
@@ -410,6 +566,10 @@ with pairs_csv.open("w", newline="", encoding="utf-8") as fh:
         "delta_t_total_seconds",
         "delta_s_sync_app_bytes",
         "delta_s_post_wal_bytes",
+        "control_valid",
+        "candidate_valid",
+        "control_invalid_reason",
+        "candidate_invalid_reason",
         "outcome",
     ])
     for r in pair_rows:
@@ -419,15 +579,26 @@ with pairs_csv.open("w", newline="", encoding="utf-8") as fh:
             r["delta_t_total_seconds"],
             r["delta_s_sync_app_bytes"],
             r["delta_s_post_wal_bytes"],
+            r["control_valid"],
+            r["candidate_valid"],
+            r["control_invalid_reason"],
+            r["candidate_invalid_reason"],
             r["outcome"],
         ])
 
-completed_pairs = len(pair_rows)
+scored_rows = [row for row in pair_rows if row.get("outcome") != "invalid"]
+completed_pairs = len(scored_rows)
 neutral = max(0, completed_pairs - wins - losses)
 neutral_streak = 0
-for row in reversed(pair_rows):
+for row in reversed(scored_rows):
     if row.get("outcome") == "neutral":
         neutral_streak += 1
+        continue
+    break
+invalid_streak = 0
+for row in reversed(pair_rows):
+    if row.get("outcome") == "invalid":
+        invalid_streak += 1
         continue
     break
 
@@ -441,7 +612,7 @@ if stop_on_clear and completed_pairs >= min_pairs:
         stop = True
         reason = "clear_regression"
     else:
-        remaining = max(0, max_pairs - completed_pairs)
+        remaining = max(0, max_pairs - raw_pairs)
         can_reach_clear_win = (wins + remaining) >= clear_win_pairs
         can_reach_clear_loss = (losses + remaining) >= clear_loss_pairs
         if not can_reach_clear_win and not can_reach_clear_loss:
@@ -452,7 +623,11 @@ if (not stop) and completed_pairs >= low_signal_min_pairs and neutral_streak >= 
     stop = True
     reason = "low_signal_neutral_streak"
 
-if (not stop) and completed_pairs >= max_pairs:
+if (not stop) and invalid_streak >= invalid_pair_streak_stop:
+    stop = True
+    reason = "invalid_pair_streak"
+
+if (not stop) and raw_pairs >= max_pairs:
     stop = True
     reason = "max_pairs"
 
@@ -460,13 +635,17 @@ summary_md = out / "summary.md"
 lines = []
 lines.append("# run_celestia A/B summary")
 lines.append("")
-lines.append(f"- completed pairs: `{completed_pairs}`")
+lines.append(f"- observed pairs: `{raw_pairs}`")
+lines.append(f"- scored pairs: `{completed_pairs}`")
+lines.append(f"- invalid pairs skipped: `{invalid_pairs}`")
 lines.append(f"- wins/losses/neutral: `{wins}` / `{losses}` / `{neutral}`")
 lines.append(f"- neutral streak (tail): `{neutral_streak}`")
+lines.append(f"- invalid streak (tail): `{invalid_streak}`")
 lines.append(f"- size tolerance bytes: `{size_tol}`")
 lines.append(f"- time tolerance seconds: `{time_tol}`")
 lines.append(f"- low-signal min pairs: `{low_signal_min_pairs}`")
 lines.append(f"- low-signal neutral streak: `{low_signal_neutral_streak}`")
+lines.append(f"- invalid pair streak stop: `{invalid_pair_streak_stop}`")
 lines.append(f"- decision: `{reason}`")
 lines.append("")
 lines.append("## Artifacts")
@@ -480,6 +659,8 @@ if pair_rows:
     lines.append("## Last Pair")
     lines.append("")
     lines.append(f"- pair: `{last['pair_index']}` outcome=`{last['outcome']}`")
+    lines.append(f"- control_valid: `{last['control_valid']}` reason=`{last['control_invalid_reason']}`")
+    lines.append(f"- candidate_valid: `{last['candidate_valid']}` reason=`{last['candidate_invalid_reason']}`")
     lines.append(f"- delta_t_sync_seconds: `{last['delta_t_sync_seconds']}`")
     lines.append(f"- delta_t_total_seconds: `{last['delta_t_total_seconds']}`")
     lines.append(f"- delta_s_sync_app_bytes: `{last['delta_s_sync_app_bytes']}`")
@@ -487,11 +668,14 @@ if pair_rows:
 summary_md.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 payload = {
+    "observed_pairs": raw_pairs,
     "completed_pairs": completed_pairs,
+    "invalid_pairs": invalid_pairs,
     "wins": wins,
     "losses": losses,
     "neutral": neutral,
     "neutral_streak": neutral_streak,
+    "invalid_streak": invalid_streak,
     "stop": stop,
     "reason": reason,
 }
