@@ -95,6 +95,30 @@ func segmentAgeSeconds(path string, now time.Time) int64 {
 	return int64(age / time.Second)
 }
 
+func advanceSegmentAgeSeconds(h valueLogSegmentHealth, now time.Time) int64 {
+	age := h.AgeSeconds
+	if age < 0 {
+		age = 0
+	}
+	if h.LastUpdatedUnixNano <= 0 {
+		return age
+	}
+	prevSec := h.LastUpdatedUnixNano / int64(time.Second)
+	nowSec := now.Unix()
+	if nowSec <= prevSec {
+		return age
+	}
+	delta := nowSec - prevSec
+	if delta <= 0 {
+		return age
+	}
+	// Clamp on overflow to preserve monotonic, bounded metadata.
+	if age > int64(^uint64(0)>>1)-delta {
+		return int64(^uint64(0) >> 1)
+	}
+	return age + delta
+}
+
 func updateValueLogHealthAfterGC(dbDir string, set *valuelog.Set, referenced map[uint32]struct{}) error {
 	path := valueLogHealthPath(dbDir)
 	health, err := loadValueLogHealth(path)
@@ -120,7 +144,10 @@ func updateValueLogHealthAfterGC(dbDir string, set *valuelog.Set, referenced map
 			} else if size > 0 && h.LiveBytes > size {
 				h.LiveBytes = size
 			}
-			h.AgeSeconds = segmentAgeSeconds(f.Path, now)
+			// Avoid per-segment stat calls on the GC fast path; preserve age via
+			// monotonic last-update deltas and refresh from disk only in fallback
+			// scans below.
+			h.AgeSeconds = advanceSegmentAgeSeconds(h, now)
 			h.LastUpdatedUnixNano = now.UnixNano()
 			health[id] = h
 		}
@@ -163,7 +190,7 @@ func updateValueLogHealthAfterGC(dbDir string, set *valuelog.Set, referenced map
 	return saveValueLogHealth(path, health)
 }
 
-func updateValueLogHealthAfterRewrite(dbDir string, oldValueIDs map[uint32]struct{}) error {
+func updateValueLogHealthAfterRewrite(dbDir string, oldValueIDs map[uint32]struct{}, set *valuelog.Set) error {
 	path := valueLogHealthPath(dbDir)
 	health, err := loadValueLogHealth(path)
 	if err != nil {
@@ -175,6 +202,32 @@ func updateValueLogHealthAfterRewrite(dbDir string, oldValueIDs map[uint32]struc
 		if h, ok := health[id]; ok && h.RewriteCount >= nextRewriteCount {
 			nextRewriteCount = h.RewriteCount + 1
 		}
+	}
+
+	// Online rewrite callers can provide a current manager set and avoid an
+	// expensive directory rescan on the hot path.
+	if set != nil {
+		out := make(map[uint32]valueLogSegmentHealth, len(set.Files))
+		for id, f := range set.Files {
+			if f == nil {
+				continue
+			}
+			h := health[id]
+			if _, wasOld := oldValueIDs[id]; !wasOld {
+				if h.RewriteCount < nextRewriteCount {
+					h.RewriteCount = nextRewriteCount
+				}
+			}
+			size := fileSize(f)
+			h.SegmentBytes = size
+			h.LiveBytes = size
+			// Online rewrite callers pass a manager set; avoid expensive stat calls
+			// per segment and keep age monotonic from prior metadata timestamps.
+			h.AgeSeconds = advanceSegmentAgeSeconds(h, now)
+			h.LastUpdatedUnixNano = now.UnixNano()
+			out[id] = h
+		}
+		return saveValueLogHealth(path, out)
 	}
 
 	segments, err := listWALSegments(dbDir)
