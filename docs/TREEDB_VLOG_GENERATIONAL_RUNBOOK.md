@@ -86,6 +86,13 @@ CLEAR_LOSS_PAIRS=3 \
 ./scripts/run_celestia_ab.sh
 ```
 
+Recommended for probe loops (faster fail on low-signal state-sync stalls):
+- Set `FREEZE_REMOTE_HEIGHT_AT_START=1` in both env files so pair targets are stable.
+- Set `ZERO_LOCAL_FAIL_SECONDS=<n>` (for example `120` to `300`) to abort runs that
+  stay at `local=0` too long even if restore I/O is active.
+- Keep `NO_PROGRESS_FAIL_SECONDS`/`NO_PROGRESS_HARD_FAIL_SECONDS` as a secondary
+  backstop for non-zero-local stalls.
+
 Default pair metric focus:
 - `T_sync`: sync duration (seconds)
 - `S_sync_app`: app dir bytes at sync end
