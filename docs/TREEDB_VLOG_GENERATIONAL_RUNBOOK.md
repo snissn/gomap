@@ -10,6 +10,7 @@
 - `-treedb-vlog-generation-policy hot_warm_cold`
 - `-treedb-vlog-rewrite-trigger-total-bytes` set for your dataset size
 - `-treedb-vlog-rewrite-budget-bytes-per-sec` and/or `-treedb-vlog-rewrite-budget-records-per-sec`
+- `-treedb-vlog-rewrite-min-segment-age-ms` keep default for production; lower only for short-loop experiments
 
 ## Maintenance Model
 - Rewrite: threshold-triggered and budget-bounded.
@@ -23,6 +24,12 @@ Primary keys:
 - `treedb.cache.vlog_generation.scheduler_state`
 - `treedb.cache.vlog_generation.scheduler_last_reason`
 - `treedb.cache.vlog_generation.churn_bytes_per_sec`
+- `treedb.cache.vlog_generation.rewrite.min_segment_age_ms`
+- `treedb.cache.vlog_generation.rewrite.plan_runs`
+- `treedb.cache.vlog_generation.rewrite.plan_empty`
+- `treedb.cache.vlog_generation.rewrite.plan_empty.age_blocked`
+- `treedb.cache.vlog_generation.rewrite.plan_selected`
+- `treedb.cache.vlog_generation.rewrite.ledger_bytes_stale`
 - `treedb.cache.vlog_generation.rewrite.runs`
 - `treedb.cache.vlog_generation.rewrite.bytes_in`
 - `treedb.cache.vlog_generation.rewrite.bytes_out`

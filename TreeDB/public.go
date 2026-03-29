@@ -590,6 +590,7 @@ func Open(opts Options) (*DB, error) {
 		ValueLogRewriteTriggerStaleRatioPPM:      opts.ValueLog.Generational.RewriteTriggerStaleRatioPPM,
 		ValueLogRewriteTriggerTotalBytes:         opts.ValueLog.Generational.RewriteTriggerTotalBytes,
 		ValueLogRewriteTriggerChurnPerSec:        opts.ValueLog.Generational.RewriteTriggerChurnPerSec,
+		ValueLogRewriteMinSegmentAge:             opts.ValueLog.Generational.RewriteMinSegmentAge,
 		ForceValueLogPointers:                    opts.ValueLog.ForcePointers,
 		ValueLogDictTrain:                        opts.ValueLog.DictTrain,
 		ValueLogDictMaxK:                         opts.ValueLog.DictMaxK,

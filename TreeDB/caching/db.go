@@ -5343,6 +5343,11 @@ type Options struct {
 	ValueLogRewriteTriggerTotalBytes int64
 	// ValueLogRewriteTriggerChurnPerSec triggers rewrite by churn rate.
 	ValueLogRewriteTriggerChurnPerSec int64
+	// ValueLogRewriteMinSegmentAge gates online rewrite to source segments that
+	// are at least this old.
+	//
+	// 0 uses the implementation default.
+	ValueLogRewriteMinSegmentAge time.Duration
 	// ForceValueLogPointers stores all values out-of-line in the value log.
 	ForceValueLogPointers bool
 	// DisableReadChecksum skips CRC verification on value-log reads.
@@ -5589,6 +5594,7 @@ type DB struct {
 	valueLogRewriteTriggerRatioPPM uint32
 	valueLogRewriteTriggerBytes    int64
 	valueLogRewriteTriggerChurn    int64
+	valueLogRewriteMinSegmentAge   time.Duration
 	valueLogReader                 *valuelog.Manager
 	valueLogHotLanes               []int
 	valueLogWarmLanes              []int
@@ -7654,6 +7660,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	valueLogRewriteTriggerRatioPPM := opts.ValueLogRewriteTriggerStaleRatioPPM
 	valueLogRewriteTriggerBytes := opts.ValueLogRewriteTriggerTotalBytes
 	valueLogRewriteTriggerChurn := opts.ValueLogRewriteTriggerChurnPerSec
+	valueLogRewriteMinSegmentAge := opts.ValueLogRewriteMinSegmentAge
 	if valueLogGenerationHotTarget < 0 {
 		return nil, fmt.Errorf("cachingdb: invalid value-log generational hot segment target bytes %d", valueLogGenerationHotTarget)
 	}
@@ -7675,6 +7682,9 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	if valueLogRewriteTriggerChurn < 0 {
 		return nil, fmt.Errorf("cachingdb: invalid value-log generational rewrite trigger churn/sec %d", valueLogRewriteTriggerChurn)
 	}
+	if valueLogRewriteMinSegmentAge < 0 {
+		return nil, fmt.Errorf("cachingdb: invalid value-log generational rewrite min segment age %s", valueLogRewriteMinSegmentAge)
+	}
 	if valueLogGenerationPolicyUint8 == uint8(backenddb.ValueLogGenerationHotWarmCold) {
 		if valueLogGenerationHotTarget == 0 {
 			valueLogGenerationHotTarget = defaultVlogGenerationHotTargetBytes
@@ -7694,6 +7704,9 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		if valueLogRewriteTriggerRatioPPM == 0 {
 			valueLogRewriteTriggerRatioPPM = defaultVlogRewriteTriggerStalePPM
 		}
+	}
+	if valueLogRewriteMinSegmentAge == 0 {
+		valueLogRewriteMinSegmentAge = vlogGenerationRewriteMinSegmentAge
 	}
 	valueLogRawWritevMinAvgBytes := opts.ValueLogRawWritevMinAvgBytes
 	if valueLogRawWritevMinAvgBytes < 0 {
@@ -7992,6 +8005,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		valueLogRewriteTriggerRatioPPM:       valueLogRewriteTriggerRatioPPM,
 		valueLogRewriteTriggerBytes:          valueLogRewriteTriggerBytes,
 		valueLogRewriteTriggerChurn:          valueLogRewriteTriggerChurn,
+		valueLogRewriteMinSegmentAge:         valueLogRewriteMinSegmentAge,
 		memtableValueLogPointers:             true,
 		indexOuterLeavesInValueLog:           opts.IndexOuterLeavesInValueLog,
 		valueLogReader:                       valueLogReader,
@@ -14322,7 +14336,7 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 			MaxSourceBytes:       maxSourceBytes,
 			MinSegmentStaleRatio: minStaleRatio,
 			MinSegmentStaleBytes: 1,
-			MinSegmentAge:        vlogGenerationRewriteMinSegmentAge,
+			MinSegmentAge:        db.valueLogRewriteMinSegmentAge,
 		}
 		planStart := time.Now()
 		plan, err := planner.ValueLogRewritePlan(ctx, planOpts)
@@ -14481,7 +14495,7 @@ planned:
 					MaxSourceBytes:       maxSourceBytes,
 					MinSegmentStaleRatio: minStaleRatio,
 					MinSegmentStaleBytes: vlogGenerationRewriteMinSegmentStaleBytes,
-					MinSegmentAge:        vlogGenerationRewriteMinSegmentAge,
+					MinSegmentAge:        db.valueLogRewriteMinSegmentAge,
 				})
 				cancel()
 				planDur := time.Since(planStart)
@@ -14535,14 +14549,14 @@ planned:
 					db.observeVlogGenerationRewritePlanPenaltyFilter(beforePenaltyFilter, len(plan.SourceFileIDs))
 				}
 				if len(plan.SourceFileIDs) == 0 {
-					if shouldDeferVlogGenerationRewritePlanForAge(plan, vlogGenerationRewriteMinSegmentAge) {
+					if shouldDeferVlogGenerationRewritePlanForAge(plan, db.valueLogRewriteMinSegmentAge) {
 						db.setVlogGenerationRewriteAgeBlockedUntil(now.Add(plan.AgeBlockedMinRemainingAge))
 						db.debugVlogMaintf(
 							"rewrite_plan pre_rewrite age_blocked segments=%d stale_bytes=%d retry_after_ms=%d min_age_ms=%d",
 							plan.AgeBlockedSegments,
 							plan.AgeBlockedBytesStale,
 							plan.AgeBlockedMinRemainingAge.Milliseconds(),
-							vlogGenerationRewriteMinSegmentAge.Milliseconds(),
+							db.valueLogRewriteMinSegmentAge.Milliseconds(),
 						)
 					} else {
 						db.clearVlogGenerationRewriteAgeBlockedUntil()
@@ -14759,7 +14773,7 @@ planned:
 				rewriteOpts.MaxSourceBytes = maxSourceBytes
 				rewriteOpts.MinSegmentStaleRatio = db.vlogGenerationRewriteMinStaleRatioForGenericPass(totalBytes)
 				rewriteOpts.MinSegmentStaleBytes = vlogGenerationRewriteMinSegmentStaleBytes
-				rewriteOpts.MinSegmentAge = vlogGenerationRewriteMinSegmentAge
+				rewriteOpts.MinSegmentAge = db.valueLogRewriteMinSegmentAge
 			}
 			var ctx context.Context
 			var cancel context.CancelFunc
@@ -21109,6 +21123,7 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_generation.rewrite_trigger.stale_ratio_ppm"] = fmt.Sprintf("%d", db.valueLogRewriteTriggerRatioPPM)
 	stats["treedb.cache.vlog_generation.rewrite_trigger.total_bytes"] = fmt.Sprintf("%d", db.valueLogRewriteTriggerBytes)
 	stats["treedb.cache.vlog_generation.rewrite_trigger.churn_per_sec"] = fmt.Sprintf("%d", db.valueLogRewriteTriggerChurn)
+	stats["treedb.cache.vlog_generation.rewrite.min_segment_age_ms"] = fmt.Sprintf("%d", db.valueLogRewriteMinSegmentAge.Milliseconds())
 	// PR1 scaffolding: legacy allocator still owns placement; report retained
 	// totals under hot generation until generation-aware allocator lands.
 	stats["treedb.cache.vlog_generation.bytes.live.total"] = fmt.Sprintf("%d", retained.BytesTotal)

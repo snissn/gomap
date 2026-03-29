@@ -40,6 +40,7 @@ VLOG_COMPRESSION_AUTOTUNE="${VLOG_COMPRESSION_AUTOTUNE:-aggressive}"
 VLOG_COMPRESSION_VARIANT="${VLOG_COMPRESSION_VARIANT:-dict}"
 DICT_TRAIN_BYTES="${DICT_TRAIN_BYTES:-1048576}"
 DICT_BYTES="${DICT_BYTES:-32768}"
+VLOG_REWRITE_MIN_SEGMENT_AGE_MS="${VLOG_REWRITE_MIN_SEGMENT_AGE_MS:-}"
 
 REWRITE_ENABLED="${REWRITE_ENABLED:-1}"
 REWRITE_ARGS="${REWRITE_ARGS:--rw}"
@@ -255,6 +256,9 @@ run_variant() {
     -treedb-vlog-dict-train-bytes "$DICT_TRAIN_BYTES"
     -treedb-vlog-dict-dict-bytes "$DICT_BYTES"
   )
+  if [[ -n "$VLOG_REWRITE_MIN_SEGMENT_AGE_MS" ]]; then
+    cmd+=(-treedb-vlog-rewrite-min-segment-age-ms "$VLOG_REWRITE_MIN_SEGMENT_AGE_MS")
+  fi
 
   if [[ -n "$COMMON_EXTRA_FLAGS" ]]; then
     # shellcheck disable=SC2206
@@ -737,6 +741,7 @@ vlog_compression_autotune=$VLOG_COMPRESSION_AUTOTUNE
 vlog_compression_variant=$VLOG_COMPRESSION_VARIANT
 dict_train_bytes=$DICT_TRAIN_BYTES
 dict_bytes=$DICT_BYTES
+vlog_rewrite_min_segment_age_ms=$VLOG_REWRITE_MIN_SEGMENT_AGE_MS
 rewrite_enabled=$REWRITE_ENABLED
 rewrite_args=$REWRITE_ARGS
 measure_gzip=$MEASURE_GZIP

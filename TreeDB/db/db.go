@@ -280,6 +280,11 @@ type ValueLogGenerationConfig struct {
 	// RewriteTriggerChurnPerSec triggers rewrite when churn rate exceeds
 	// threshold (0 disables).
 	RewriteTriggerChurnPerSec int64
+	// RewriteMinSegmentAge gates online rewrite to source segments that are at
+	// least this old.
+	//
+	// 0 uses the implementation default.
+	RewriteMinSegmentAge time.Duration
 }
 
 // ValueLogDomainThreshold overrides inline-vs-pointer placement policy for keys
@@ -967,6 +972,9 @@ func validateOptions(opts Options) error {
 	}
 	if opts.ValueLog.Generational.RewriteTriggerChurnPerSec < 0 {
 		return fmt.Errorf("treedb: invalid value-log generational rewrite trigger churn/sec %d", opts.ValueLog.Generational.RewriteTriggerChurnPerSec)
+	}
+	if opts.ValueLog.Generational.RewriteMinSegmentAge < 0 {
+		return fmt.Errorf("treedb: invalid value-log generational rewrite min segment age %s", opts.ValueLog.Generational.RewriteMinSegmentAge)
 	}
 	seenDomains := make(map[string]struct{}, len(opts.ValueLog.DomainInlineThresholds))
 	for i := range opts.ValueLog.DomainInlineThresholds {
