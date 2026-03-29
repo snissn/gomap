@@ -111,6 +111,7 @@ REWRITE_ENABLED=1 \
 Notes:
 - Pair execution remains strictly single-run at a time and interleaved by pair order.
 - Invalid runs (timeout, launcher failure, missing new run home, rewrite failure) are recorded but excluded from pair scoring.
+- Per-run `run.json` now includes `status.sync_probe` (last snapshot chunk, last and max snapshot totals, fetch event count, state-sync-complete flag) for timeout forensics.
 
 ## Process Review Cadence
 

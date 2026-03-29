@@ -230,6 +230,7 @@ run_variant() {
   local run_json="$run_dir/run.json"
   python3 - "$run_home" "$run_json" "$variant" "$pair_index" "$run_start" "$run_end" "$rewrite_attempted" "$rewrite_seconds" "$rewrite_rc" "$pre_app_bytes" "$pre_wal_bytes" "$post_app_bytes" "$post_wal_bytes" "$analyze_json" "$invalid_reason" "$run_rc" "$attempt_used" "$RUN_MAX_ATTEMPTS_PER_VARIANT" "$RUN_TIMEOUT_SECONDS" <<'PY'
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -280,8 +281,54 @@ def safe_int(raw: str | None, default: int = 0) -> int:
         except Exception:
             return default
 
+def probe_sync_progress(node_log_path: Path | None) -> dict[str, object]:
+    progress = {
+        "node_log_present": False,
+        "last_snapshot_chunk": 0,
+        "last_snapshot_total": 0,
+        "last_nonzero_snapshot_total": 0,
+        "max_snapshot_total": 0,
+        "snapshot_fetch_events": 0,
+        "state_sync_complete": False,
+    }
+    if node_log_path is None or not node_log_path.is_file():
+        return progress
+
+    progress["node_log_present"] = True
+    try:
+        text = node_log_path.read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return progress
+
+    last_chunk = 0
+    last_total = 0
+    last_nonzero_total = 0
+    max_total = 0
+    events = 0
+    for m in re.finditer(r"Fetching snapshot chunk chunk=(\d+).*total=(\d+)", text):
+        events += 1
+        try:
+            last_chunk = int(m.group(1))
+            last_total = int(m.group(2))
+            if last_total > 0:
+                last_nonzero_total = last_total
+            if last_total > max_total:
+                max_total = last_total
+        except Exception:
+            continue
+
+    progress["last_snapshot_chunk"] = last_chunk
+    progress["last_snapshot_total"] = last_total
+    progress["last_nonzero_snapshot_total"] = last_nonzero_total
+    progress["max_snapshot_total"] = max_total
+    progress["snapshot_fetch_events"] = events
+    progress["state_sync_complete"] = ("State sync complete" in text) or ("statesync complete" in text.lower())
+    return progress
+
 sync_path = run_home / "sync" / "sync-time.log" if run_home is not None else None
 sync = parse_sync_time(sync_path) if sync_path is not None else {}
+node_log_path = run_home / "sync" / "node.log" if run_home is not None else None
+sync_probe = probe_sync_progress(node_log_path)
 maintenance = {}
 if analyze_json_path.is_file():
     try:
@@ -313,6 +360,7 @@ result = {
         "max_attempts": max_attempts,
         "run_timeout_seconds": run_timeout_seconds,
         "sync_time_present": sync_path.is_file() if sync_path is not None else False,
+        "sync_probe": sync_probe,
     },
     "sync": {
         "duration_seconds": t_sync,
