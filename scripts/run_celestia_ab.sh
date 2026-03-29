@@ -23,6 +23,11 @@ RUN_TIMEOUT_SECONDS="${RUN_TIMEOUT_SECONDS:-1800}"
 RUN_MAX_ATTEMPTS_PER_VARIANT="${RUN_MAX_ATTEMPTS_PER_VARIANT:-2}"
 RUN_RETRY_SLEEP_SECONDS="${RUN_RETRY_SLEEP_SECONDS:-20}"
 INVALID_PAIR_STREAK_STOP="${INVALID_PAIR_STREAK_STOP:-2}"
+AB_DISABLE_HEAVY_DIAGNOSTICS="${AB_DISABLE_HEAVY_DIAGNOSTICS:-1}"
+AB_CAPTURE_HEAP_ON_MAX_RSS="${AB_CAPTURE_HEAP_ON_MAX_RSS:-0}"
+AB_CAPTURE_PPROF_ON_STUCK="${AB_CAPTURE_PPROF_ON_STUCK:-0}"
+AB_CAPTURE_FULL_SMAPS_ON_MAX_RSS="${AB_CAPTURE_FULL_SMAPS_ON_MAX_RSS:-0}"
+AB_CAPTURE_DEBUG_VARS_ON_MAX_RSS="${AB_CAPTURE_DEBUG_VARS_ON_MAX_RSS:-0}"
 TS="$(date +%Y%m%d%H%M%S)"
 OUT="${OUT_DIR:-$ROOT/artifacts/celestia_ab/$TS}"
 
@@ -79,6 +84,11 @@ run_timeout_seconds=$RUN_TIMEOUT_SECONDS
 run_max_attempts_per_variant=$RUN_MAX_ATTEMPTS_PER_VARIANT
 run_retry_sleep_seconds=$RUN_RETRY_SLEEP_SECONDS
 invalid_pair_streak_stop=$INVALID_PAIR_STREAK_STOP
+ab_disable_heavy_diagnostics=$AB_DISABLE_HEAVY_DIAGNOSTICS
+ab_capture_heap_on_max_rss=$AB_CAPTURE_HEAP_ON_MAX_RSS
+ab_capture_pprof_on_stuck=$AB_CAPTURE_PPROF_ON_STUCK
+ab_capture_full_smaps_on_max_rss=$AB_CAPTURE_FULL_SMAPS_ON_MAX_RSS
+ab_capture_debug_vars_on_max_rss=$AB_CAPTURE_DEBUG_VARS_ON_MAX_RSS
 META
 
 list_run_homes() {
@@ -163,6 +173,14 @@ run_variant() {
         set -a
         source "$env_file"
         set +a
+      fi
+      if [[ "$AB_DISABLE_HEAVY_DIAGNOSTICS" == "1" ]]; then
+        # A/B runs prioritize stable wall-time+size measurements. Heavy
+        # diagnostics can dominate runtime and produce invalid comparisons.
+        export CAPTURE_HEAP_ON_MAX_RSS="${CAPTURE_HEAP_ON_MAX_RSS:-$AB_CAPTURE_HEAP_ON_MAX_RSS}"
+        export CAPTURE_PPROF_ON_STUCK="${CAPTURE_PPROF_ON_STUCK:-$AB_CAPTURE_PPROF_ON_STUCK}"
+        export CAPTURE_FULL_SMAPS_ON_MAX_RSS="${CAPTURE_FULL_SMAPS_ON_MAX_RSS:-$AB_CAPTURE_FULL_SMAPS_ON_MAX_RSS}"
+        export CAPTURE_DEBUG_VARS_ON_MAX_RSS="${CAPTURE_DEBUG_VARS_ON_MAX_RSS:-$AB_CAPTURE_DEBUG_VARS_ON_MAX_RSS}"
       fi
       # Non-login shell avoids user profile side effects (e.g. tty-dependent exports)
       # that can fail under nohup/background runs.

@@ -431,6 +431,32 @@ func hasRewriteSourceSelection(opts ValueLogRewriteOnlineOptions) bool {
 	return false
 }
 
+func hasOnlyExplicitRewriteSources(opts ValueLogRewriteOnlineOptions) bool {
+	return len(opts.SourceFileIDs) > 0 &&
+		opts.MaxSourceSegments <= 0 &&
+		opts.MaxSourceBytes <= 0 &&
+		opts.MinSegmentStaleRatio <= 0 &&
+		opts.MinSegmentStaleBytes <= 0 &&
+		opts.MinSegmentAge <= 0
+}
+
+func selectExplicitRewriteSourceIDs(sourceFileIDs []uint32, files map[uint32]*valuelog.File) map[uint32]struct{} {
+	if len(sourceFileIDs) == 0 || len(files) == 0 {
+		return nil
+	}
+	selected := make(map[uint32]struct{}, len(sourceFileIDs))
+	for _, id := range sourceFileIDs {
+		if _, ok := files[id]; !ok {
+			continue
+		}
+		selected[id] = struct{}{}
+	}
+	if len(selected) == 0 {
+		return nil
+	}
+	return selected
+}
+
 func rewritePlanNeedsLiveEstimate(opts ValueLogRewriteOnlineOptions) bool {
 	if !hasRewriteSourceSelection(opts) {
 		return false
@@ -491,8 +517,6 @@ func (db *DB) ValueLogRewritePlan(ctx context.Context, opts ValueLogRewriteOnlin
 		plan.BytesTotal += fileSize(f)
 	}
 
-	active := currentValueLogIDs(set)
-
 	var liveByID map[uint32]int64
 	var err error
 	// Without selection knobs, the plan is just the global totals and should not
@@ -508,7 +532,10 @@ func (db *DB) ValueLogRewritePlan(ctx context.Context, opts ValueLogRewriteOnlin
 
 	sourceIDs := map[uint32]struct{}(nil)
 	var selectionStats rewriteSourceSelectionStats
-	if hasRewriteSourceSelection(opts) {
+	if hasOnlyExplicitRewriteSources(opts) {
+		sourceIDs = selectExplicitRewriteSourceIDs(opts.SourceFileIDs, set.Files)
+	} else if hasRewriteSourceSelection(opts) {
+		active := currentValueLogIDs(set)
 		sourceIDs, selectionStats = selectRewriteSourceSegmentsWithStats(opts, set.Files, active, liveByID)
 	}
 	plan.AgeBlockedSegments = selectionStats.ageBlockedSegments
@@ -1201,7 +1228,11 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		sourceIDs      map[uint32]struct{}
 		restrictSource bool
 	)
-	if hasRewriteSourceSelection(opts) {
+	if hasOnlyExplicitRewriteSources(opts) {
+		sourceIDs = selectExplicitRewriteSourceIDs(opts.SourceFileIDs, set.Files)
+		restrictSource = true
+		stats.SourceSegmentsRequested = len(sourceIDs)
+	} else if hasRewriteSourceSelection(opts) {
 		active := currentValueLogIDs(set)
 		var liveByID map[uint32]int64
 		if rewritePlanNeedsLiveEstimate(opts) {
