@@ -50,6 +50,14 @@ type ValueLogRewriteStats struct {
 	BytesBefore    int64
 	BytesAfter     int64
 	RecordsCopied  int
+	// Value* counters track key/value-pointer payload copied by the main rewrite
+	// pointer swap path.
+	ValueRecordsCopied int
+	ValueBytesCopied   int64
+	// LeafRef* counters track outer-leaf page payload copied by the leaf-ref
+	// rewrite path (indexOuterLeavesInValueLog mode).
+	LeafRefRecordsCopied int
+	LeafRefBytesCopied   int64
 	// SourceSegmentsRequested is the number of source segments selected for this
 	// rewrite run after applying selection filters.
 	SourceSegmentsRequested int
@@ -1264,6 +1272,8 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 			}
 			startRID++
 			stats.RecordsCopied++
+			stats.ValueRecordsCopied++
+			stats.ValueBytesCopied += int64(len(val))
 			swaps = append(swaps, rewriteSwap{
 				key:    candidate.key,
 				oldPtr: candidate.oldPtr,
@@ -1334,11 +1344,13 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		// referenced leaf pages out of the selected source segments so cleanup can
 		// actually reclaim space.
 		if restrictSource && db.indexOuterLeavesInValueLog && len(sourceIDs) > 0 {
-			copied, err := db.rewriteLeafRefsOnline(ctx, writer, ridAlloc, sourceIDs, opts.SyncEachBatch)
+			copied, copiedBytes, err := db.rewriteLeafRefsOnline(ctx, writer, ridAlloc, sourceIDs, opts.SyncEachBatch)
 			if err != nil {
 				return stats, err
 			}
 			stats.RecordsCopied += copied
+			stats.LeafRefRecordsCopied += copied
+			stats.LeafRefBytesCopied += copiedBytes
 		}
 	} else {
 		// Stop publishing further swaps after cancellation; cleanup below still
@@ -1484,8 +1496,9 @@ type leafRefRewriteCtx struct {
 	leafMap     map[uint64]uint64 // old leafref id -> new leafref id
 	internalMap map[uint64]uint64 // old internal page id -> new page id
 
-	retired []uint64
-	copied  int
+	retired     []uint64
+	copied      int
+	copiedBytes int64
 }
 
 func (c *leafRefRewriteCtx) rewriteNode(id uint64) (uint64, bool, error) {
@@ -1542,6 +1555,7 @@ func (c *leafRefRewriteCtx) rewriteNode(id uint64) (uint64, bool, error) {
 		}
 		c.leafMap[id] = leafID
 		c.copied++
+		c.copiedBytes += int64(len(leafPage))
 		return leafID, true, nil
 	}
 
@@ -1639,32 +1653,32 @@ func (c *leafRefRewriteCtx) rewriteNode(id uint64) (uint64, bool, error) {
 	}
 }
 
-func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, ridAlloc *rewriteRIDAllocator, sourceIDs map[uint32]struct{}, sync bool) (copied int, err error) {
+func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, ridAlloc *rewriteRIDAllocator, sourceIDs map[uint32]struct{}, sync bool) (copied int, copiedBytes int64, err error) {
 	if db == nil {
-		return 0, fmt.Errorf("missing db")
+		return 0, 0, fmt.Errorf("missing db")
 	}
 	if !db.indexOuterLeavesInValueLog {
-		return 0, nil
+		return 0, 0, nil
 	}
 	if db.readOnly {
-		return 0, ErrReadOnly
+		return 0, 0, ErrReadOnly
 	}
 	if db.valueLogManager == nil {
-		return 0, fmt.Errorf("value log manager unavailable")
+		return 0, 0, fmt.Errorf("value log manager unavailable")
 	}
 	if writer == nil || ridAlloc == nil {
-		return 0, fmt.Errorf("vlog-rewrite: missing writer/rid state")
+		return 0, 0, fmt.Errorf("vlog-rewrite: missing writer/rid state")
 	}
 	// Treat nil sourceIDs as "all sources" and an empty, non-nil map as "no
 	// sources". The latter means there is nothing to rewrite.
 	if sourceIDs != nil && len(sourceIDs) == 0 {
-		return 0, nil
+		return 0, 0, nil
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if err := ctx.Err(); err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 
 	db.writeMu.Lock()
@@ -1673,7 +1687,7 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 	snap := db.AcquireSnapshot()
 	if snap == nil || snap.idx == nil || snap.state == nil {
 		closeRewriteSnapshot(&err, snap)
-		return 0, fmt.Errorf("missing snapshot state")
+		return 0, 0, fmt.Errorf("missing snapshot state")
 	}
 	defer closeRewriteSnapshot(&err, snap)
 
@@ -1710,33 +1724,33 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 
 	newSysRoot, sysChanged, err := leafCtx.rewriteNode(sysRoot)
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	newRoot, userChanged, err := leafCtx.rewriteNode(rootID)
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	if !sysChanged && !userChanged {
-		return 0, nil
+		return 0, 0, nil
 	}
 
 	// Ensure the copied leaf-page records are visible before publishing new leaf
 	// refs that point at them.
 	if sync {
 		if err := writer.Sync(); err != nil {
-			return 0, err
+			return 0, 0, err
 		}
 	} else {
 		if err := writer.Flush(); err != nil {
-			return 0, err
+			return 0, 0, err
 		}
 	}
 
 	if err := db.finalizeCommit(newRoot, newSysRoot, leafCtx.retired, sync, adaptive.Metrics{}, nil, db.indexOuterLeavesInValueLog, nil); err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	tracker = nil
-	return leafCtx.copied, nil
+	return leafCtx.copied, leafCtx.copiedBytes, nil
 }
 
 func nextRewriteRIDStart(segments []logSegment) (uint64, error) {
