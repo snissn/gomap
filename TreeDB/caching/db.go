@@ -20937,6 +20937,46 @@ func (db *DB) Stats() map[string]string {
 	rewriteExecTotalNS := db.vlogGenerationRewriteExecTotalNanos.Load()
 	rewriteExecMaxNS := db.vlogGenerationRewriteExecMaxNanos.Load()
 	rewriteRuns := db.vlogGenerationRewriteRuns.Load()
+	rewriteBytesInTotal := db.vlogGenerationRewriteBytesIn.Load()
+	rewriteBytesOutTotal := db.vlogGenerationRewriteBytesOut.Load()
+	rewriteReclaimedBytesTotal := db.vlogGenerationRewriteReclaimedBytes.Load()
+	rewriteProcessedLiveBytes := db.vlogGenerationRewriteProcessedLiveBytes.Load()
+	rewriteProcessedStaleBytes := db.vlogGenerationRewriteProcessedStaleBytes.Load()
+	rewriteProcessedTotal := rewriteProcessedLiveBytes + rewriteProcessedStaleBytes
+	rewriteBudgetConsumedTotal := db.vlogGenerationRewriteBudgetConsumed.Load()
+	rewriteChurnBps := db.vlogGenerationLastChurnBps.Load()
+	rewriteExecSeconds := 0.0
+	if rewriteExecTotalNS > 0 {
+		rewriteExecSeconds = float64(rewriteExecTotalNS) / float64(time.Second)
+	}
+	rewriteBytesInPerSec := 0.0
+	rewriteBytesOutPerSec := 0.0
+	rewriteReclaimedBytesPerSec := 0.0
+	rewriteBudgetConsumedPerSec := 0.0
+	if rewriteExecSeconds > 0 {
+		rewriteBytesInPerSec = float64(rewriteBytesInTotal) / rewriteExecSeconds
+		rewriteBytesOutPerSec = float64(rewriteBytesOutTotal) / rewriteExecSeconds
+		rewriteReclaimedBytesPerSec = float64(rewriteReclaimedBytesTotal) / rewriteExecSeconds
+		rewriteBudgetConsumedPerSec = float64(rewriteBudgetConsumedTotal) / rewriteExecSeconds
+	}
+	rewriteOutputRatio := 0.0
+	rewriteReclaimRatio := 0.0
+	if rewriteBytesInTotal > 0 {
+		rewriteOutputRatio = float64(rewriteBytesOutTotal) / float64(rewriteBytesInTotal)
+		rewriteReclaimRatio = float64(rewriteReclaimedBytesTotal) / float64(rewriteBytesInTotal)
+	}
+	rewriteProcessedStaleRatio := 0.0
+	if rewriteProcessedTotal > 0 {
+		rewriteProcessedStaleRatio = float64(rewriteProcessedStaleBytes) / float64(rewriteProcessedTotal)
+	}
+	rewriteBudgetConsumedSharePct := 0.0
+	if db.valueLogRewriteBudgetBytes > 0 {
+		rewriteBudgetConsumedSharePct = (rewriteBudgetConsumedPerSec / float64(db.valueLogRewriteBudgetBytes)) * 100.0
+	}
+	rewriteReclaimedVsChurnRatio := 0.0
+	if rewriteChurnBps > 0 {
+		rewriteReclaimedVsChurnRatio = rewriteReclaimedBytesPerSec / float64(rewriteChurnBps)
+	}
 	gcExecTotalNS := db.vlogGenerationGCExecTotalNanos.Load()
 	gcExecMaxNS := db.vlogGenerationGCExecMaxNanos.Load()
 	gcRuns := db.vlogGenerationGCRuns.Load()
@@ -21038,7 +21078,7 @@ func (db *DB) Stats() map[string]string {
 		stats["treedb.cache.vlog_generation.maintenance.pass.avg_ms"] = "0.000"
 	}
 	stats["treedb.cache.vlog_generation.churn_bytes_total"] = fmt.Sprintf("%d", db.vlogGenerationChurnBytes.Load())
-	stats["treedb.cache.vlog_generation.churn_bytes_per_sec"] = fmt.Sprintf("%d", db.vlogGenerationLastChurnBps.Load())
+	stats["treedb.cache.vlog_generation.churn_bytes_per_sec"] = fmt.Sprintf("%d", rewriteChurnBps)
 	stats["treedb.cache.vlog_generation.rewrite.queue_len"] = fmt.Sprintf("%d", rewriteQueueLen)
 	stats["treedb.cache.vlog_generation.rewrite.queue_loaded"] = fmt.Sprintf("%t", rewriteQueueLoaded)
 	stats["treedb.cache.vlog_generation.rewrite.ledger_segments"] = fmt.Sprintf("%d", rewriteLedgerSegments)
@@ -21063,7 +21103,9 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_generation.rewrite_budget.tokens_bytes"] = fmt.Sprintf("%d", rewriteBudgetTokens)
 	stats["treedb.cache.vlog_generation.rewrite_budget.tokens_cap_bytes"] = fmt.Sprintf("%d", rewriteBudgetCap)
 	stats["treedb.cache.vlog_generation.rewrite_budget.tokens_utilization_pct"] = fmt.Sprintf("%.3f", rewriteBudgetUtilPct)
-	stats["treedb.cache.vlog_generation.rewrite_budget.consumed_bytes_total"] = fmt.Sprintf("%d", db.vlogGenerationRewriteBudgetConsumed.Load())
+	stats["treedb.cache.vlog_generation.rewrite_budget.consumed_bytes_total"] = fmt.Sprintf("%d", rewriteBudgetConsumedTotal)
+	stats["treedb.cache.vlog_generation.rewrite_budget.consumed_bytes_per_sec"] = fmt.Sprintf("%.3f", rewriteBudgetConsumedPerSec)
+	stats["treedb.cache.vlog_generation.rewrite_budget.consumed_share_of_budget_pct"] = fmt.Sprintf("%.3f", rewriteBudgetConsumedSharePct)
 	stats["treedb.cache.vlog_generation.rewrite_trigger.stale_ratio_ppm"] = fmt.Sprintf("%d", db.valueLogRewriteTriggerRatioPPM)
 	stats["treedb.cache.vlog_generation.rewrite_trigger.total_bytes"] = fmt.Sprintf("%d", db.valueLogRewriteTriggerBytes)
 	stats["treedb.cache.vlog_generation.rewrite_trigger.churn_per_sec"] = fmt.Sprintf("%d", db.valueLogRewriteTriggerChurn)
@@ -21085,10 +21127,17 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_generation.segments.hot"] = fmt.Sprintf("%d", retained.SegmentsHot)
 	stats["treedb.cache.vlog_generation.segments.warm"] = fmt.Sprintf("%d", retained.SegmentsWarm)
 	stats["treedb.cache.vlog_generation.segments.cold"] = fmt.Sprintf("%d", retained.SegmentsCold)
-	stats["treedb.cache.vlog_generation.rewrite.bytes_in"] = fmt.Sprintf("%d", db.vlogGenerationRewriteBytesIn.Load())
-	stats["treedb.cache.vlog_generation.rewrite.bytes_out"] = fmt.Sprintf("%d", db.vlogGenerationRewriteBytesOut.Load())
-	stats["treedb.cache.vlog_generation.rewrite.processed_live_bytes"] = fmt.Sprintf("%d", db.vlogGenerationRewriteProcessedLiveBytes.Load())
-	stats["treedb.cache.vlog_generation.rewrite.processed_stale_bytes"] = fmt.Sprintf("%d", db.vlogGenerationRewriteProcessedStaleBytes.Load())
+	stats["treedb.cache.vlog_generation.rewrite.bytes_in"] = fmt.Sprintf("%d", rewriteBytesInTotal)
+	stats["treedb.cache.vlog_generation.rewrite.bytes_out"] = fmt.Sprintf("%d", rewriteBytesOutTotal)
+	stats["treedb.cache.vlog_generation.rewrite.processed_live_bytes"] = fmt.Sprintf("%d", rewriteProcessedLiveBytes)
+	stats["treedb.cache.vlog_generation.rewrite.processed_stale_bytes"] = fmt.Sprintf("%d", rewriteProcessedStaleBytes)
+	stats["treedb.cache.vlog_generation.rewrite.reclaim_ratio"] = fmt.Sprintf("%.6f", rewriteReclaimRatio)
+	stats["treedb.cache.vlog_generation.rewrite.output_ratio"] = fmt.Sprintf("%.6f", rewriteOutputRatio)
+	stats["treedb.cache.vlog_generation.rewrite.processed_stale_ratio"] = fmt.Sprintf("%.6f", rewriteProcessedStaleRatio)
+	stats["treedb.cache.vlog_generation.rewrite.exec.bytes_in_per_sec"] = fmt.Sprintf("%.3f", rewriteBytesInPerSec)
+	stats["treedb.cache.vlog_generation.rewrite.exec.bytes_out_per_sec"] = fmt.Sprintf("%.3f", rewriteBytesOutPerSec)
+	stats["treedb.cache.vlog_generation.rewrite.exec.reclaimed_bytes_per_sec"] = fmt.Sprintf("%.3f", rewriteReclaimedBytesPerSec)
+	stats["treedb.cache.vlog_generation.rewrite.exec.reclaimed_vs_churn_ratio"] = fmt.Sprintf("%.6f", rewriteReclaimedVsChurnRatio)
 	stats["treedb.cache.vlog_generation.rewrite.no_reclaim_runs"] = fmt.Sprintf("%d", db.vlogGenerationRewriteNoReclaimRuns.Load())
 	stats["treedb.cache.vlog_generation.rewrite.no_reclaim_stale_bytes"] = fmt.Sprintf("%d", db.vlogGenerationRewriteNoReclaimStaleBytes.Load())
 	stats["treedb.cache.vlog_generation.rewrite.runs"] = fmt.Sprintf("%d", db.vlogGenerationRewriteRuns.Load())
