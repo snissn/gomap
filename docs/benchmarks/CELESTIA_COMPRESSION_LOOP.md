@@ -1,0 +1,118 @@
+# Celestia Compression Iteration Loop
+
+This loop exists to avoid slow, low-signal experimentation.
+
+Primary objective:
+- Reduce on-disk `application.db` bytes.
+
+Secondary objectives:
+- Keep combined wall time (`sync + rewrite`) bounded.
+- Avoid memory regressions (`max_rss`).
+- Keep gzip as a sanity check, not the primary objective.
+
+## Stage 0: Hypothesis Contract (Required)
+
+Before running anything expensive, define:
+- hypothesis: what changed and why it should help
+- expected effect size: minimum size delta worth promoting
+- time budget: max acceptable wall-time regression
+- rollback condition: what result means we stop and redesign
+
+If expected effect size is below threshold, do not run full `run_celestia` yet.
+
+## Stage 1: Fast Gate (Default Iteration Loop)
+
+Use `scripts/celestia_fast_gate.sh` for fast interleaved control/candidate A/B.
+
+What it measures per run:
+- pre-rewrite size: `sync_app`, `sync_wal`, optional `sync_gzip`
+- post-rewrite size: `post_app`, `post_wal`, optional `post_gzip`
+- timing: benchmark duration + rewrite duration + total
+- throughput: batch-write ops/sec from unified-bench output
+
+Defaults chosen for celestia-like pressure:
+- `-profile fast`
+- `-val-pattern celestia_height_prefix_fill`
+- dict compression enabled
+- dict defaults passed explicitly:
+  - `-treedb-vlog-dict-train-bytes=1048576`
+  - `-treedb-vlog-dict-dict-bytes=32768`
+
+Fast-gate anti-loop safeguards:
+- interleaved order alternates each pair (bias reduction)
+- early clear stop (improvement/regression)
+- futility stop when remaining pairs cannot reach a clear decision
+- low-signal stop on neutral-streak threshold
+- per-run process review artifact (`process_review.md`)
+
+Example:
+
+```bash
+MAX_PAIRS=6 \
+MIN_PAIRS=3 \
+CLEAR_WIN_PAIRS=2 \
+CLEAR_LOSS_PAIRS=2 \
+LOW_SIGNAL_MIN_PAIRS=3 \
+LOW_SIGNAL_NEUTRAL_STREAK=3 \
+SIZE_FIELD=s_post_app_bytes \
+SIZE_TOLERANCE_BYTES=$((64<<20)) \
+TIME_TOLERANCE_SECONDS=30 \
+./scripts/celestia_fast_gate.sh
+```
+
+Outputs:
+- `summary.md`
+- `process_review.md`
+- `runs.csv`
+- `pairs.csv`
+- per-run `run.json`
+
+## Stage 2: Pprof/Implementation Efficiency Pass
+
+Run this stage before full `run_celestia` if fast gate shows:
+- promising size gains with time regression, or
+- ambiguous neutral outcomes near threshold.
+
+Goal:
+- remove avoidable implementation overhead (copying/alloc/lock contention)
+- preserve size gains while pulling time back inside budget
+
+## Stage 3: Full `run_celestia` A/B Confirmation
+
+Only promote candidates that pass Stage 1 and Stage 2.
+
+Use `scripts/run_celestia_ab.sh` with interleaved pairs and stop rules.
+
+Now includes anti-loop safeguards:
+- clear stop (improvement/regression)
+- futility stop (`futile_remaining_pairs`)
+- low-signal neutral-streak stop (`low_signal_neutral_streak`)
+
+Example:
+
+```bash
+MAX_PAIRS=4 \
+MIN_PAIRS=3 \
+CLEAR_WIN_PAIRS=2 \
+CLEAR_LOSS_PAIRS=2 \
+LOW_SIGNAL_MIN_PAIRS=3 \
+LOW_SIGNAL_NEUTRAL_STREAK=3 \
+REWRITE_ENABLED=1 \
+./scripts/run_celestia_ab.sh
+```
+
+## Process Review Cadence
+
+Review and revise the loop after every decision event:
+- `clear_improvement`
+- `clear_regression`
+- `futile_remaining_pairs`
+- `low_signal_neutral_streak`
+
+Required review questions:
+- Was the fast gate predictive of full-run direction?
+- Were thresholds too strict or too loose for current goals?
+- Did we spend time validating changes below meaningful effect size?
+- Is the next candidate large enough to justify promotion?
+
+If two consecutive campaigns end in low-signal/futility, tighten promotion gates and bundle larger candidate deltas before next full run.

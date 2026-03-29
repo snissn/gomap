@@ -17,6 +17,8 @@ SIZE_TOLERANCE_BYTES="${SIZE_TOLERANCE_BYTES:-67108864}"
 TIME_TOLERANCE_SECONDS="${TIME_TOLERANCE_SECONDS:-120}"
 STOP_ON_CLEAR="${STOP_ON_CLEAR:-1}"
 SLEEP_BETWEEN_RUNS_SECONDS="${SLEEP_BETWEEN_RUNS_SECONDS:-5}"
+LOW_SIGNAL_MIN_PAIRS="${LOW_SIGNAL_MIN_PAIRS:-3}"
+LOW_SIGNAL_NEUTRAL_STREAK="${LOW_SIGNAL_NEUTRAL_STREAK:-3}"
 TS="$(date +%Y%m%d%H%M%S)"
 OUT="${OUT_DIR:-$ROOT/artifacts/celestia_ab/$TS}"
 
@@ -51,6 +53,8 @@ size_tolerance_bytes=$SIZE_TOLERANCE_BYTES
 time_tolerance_seconds=$TIME_TOLERANCE_SECONDS
 stop_on_clear=$STOP_ON_CLEAR
 sleep_between_runs_seconds=$SLEEP_BETWEEN_RUNS_SECONDS
+low_signal_min_pairs=$LOW_SIGNAL_MIN_PAIRS
+low_signal_neutral_streak=$LOW_SIGNAL_NEUTRAL_STREAK
 META
 
 list_run_homes() {
@@ -269,7 +273,7 @@ PY
 
 aggregate_and_decide() {
   local decision_json="$OUT/decision.json"
-  python3 - "$OUT" "$SIZE_TOLERANCE_BYTES" "$TIME_TOLERANCE_SECONDS" "$MIN_PAIRS" "$CLEAR_WIN_PAIRS" "$CLEAR_LOSS_PAIRS" "$MAX_PAIRS" "$STOP_ON_CLEAR" "$decision_json" <<'PY'
+  python3 - "$OUT" "$SIZE_TOLERANCE_BYTES" "$TIME_TOLERANCE_SECONDS" "$MIN_PAIRS" "$CLEAR_WIN_PAIRS" "$CLEAR_LOSS_PAIRS" "$MAX_PAIRS" "$STOP_ON_CLEAR" "$LOW_SIGNAL_MIN_PAIRS" "$LOW_SIGNAL_NEUTRAL_STREAK" "$decision_json" <<'PY'
 import csv
 import json
 import sys
@@ -283,7 +287,9 @@ clear_win_pairs = int(sys.argv[5])
 clear_loss_pairs = int(sys.argv[6])
 max_pairs = int(sys.argv[7])
 stop_on_clear = sys.argv[8] == "1"
-decision_path = Path(sys.argv[9])
+low_signal_min_pairs = int(sys.argv[9])
+low_signal_neutral_streak = int(sys.argv[10])
+decision_path = Path(sys.argv[11])
 
 run_files = sorted(out.glob("runs/*/run.json"))
 runs = []
@@ -417,27 +423,50 @@ with pairs_csv.open("w", newline="", encoding="utf-8") as fh:
         ])
 
 completed_pairs = len(pair_rows)
+neutral = max(0, completed_pairs - wins - losses)
+neutral_streak = 0
+for row in reversed(pair_rows):
+    if row.get("outcome") == "neutral":
+        neutral_streak += 1
+        continue
+    break
+
 reason = "continue"
 stop = False
-if completed_pairs >= max_pairs:
-    stop = True
-    reason = "max_pairs"
-elif stop_on_clear and completed_pairs >= min_pairs:
+if stop_on_clear and completed_pairs >= min_pairs:
     if wins >= clear_win_pairs and wins > losses:
         stop = True
         reason = "clear_improvement"
     elif losses >= clear_loss_pairs and losses > wins:
         stop = True
         reason = "clear_regression"
+    else:
+        remaining = max(0, max_pairs - completed_pairs)
+        can_reach_clear_win = (wins + remaining) >= clear_win_pairs
+        can_reach_clear_loss = (losses + remaining) >= clear_loss_pairs
+        if not can_reach_clear_win and not can_reach_clear_loss:
+            stop = True
+            reason = "futile_remaining_pairs"
+
+if (not stop) and completed_pairs >= low_signal_min_pairs and neutral_streak >= low_signal_neutral_streak:
+    stop = True
+    reason = "low_signal_neutral_streak"
+
+if (not stop) and completed_pairs >= max_pairs:
+    stop = True
+    reason = "max_pairs"
 
 summary_md = out / "summary.md"
 lines = []
 lines.append("# run_celestia A/B summary")
 lines.append("")
 lines.append(f"- completed pairs: `{completed_pairs}`")
-lines.append(f"- wins/losses/neutral: `{wins}` / `{losses}` / `{max(0, completed_pairs - wins - losses)}`")
+lines.append(f"- wins/losses/neutral: `{wins}` / `{losses}` / `{neutral}`")
+lines.append(f"- neutral streak (tail): `{neutral_streak}`")
 lines.append(f"- size tolerance bytes: `{size_tol}`")
 lines.append(f"- time tolerance seconds: `{time_tol}`")
+lines.append(f"- low-signal min pairs: `{low_signal_min_pairs}`")
+lines.append(f"- low-signal neutral streak: `{low_signal_neutral_streak}`")
 lines.append(f"- decision: `{reason}`")
 lines.append("")
 lines.append("## Artifacts")
@@ -461,7 +490,8 @@ payload = {
     "completed_pairs": completed_pairs,
     "wins": wins,
     "losses": losses,
-    "neutral": max(0, completed_pairs - wins - losses),
+    "neutral": neutral,
+    "neutral_streak": neutral_streak,
     "stop": stop,
     "reason": reason,
 }
