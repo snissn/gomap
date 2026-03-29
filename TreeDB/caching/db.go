@@ -1860,6 +1860,11 @@ const (
 	envDisableVlogGenerationVacuum         = "TREEDB_DISABLE_VLOG_GENERATION_VACUUM"
 	envDisableVlogGenerationLoop           = "TREEDB_DISABLE_VLOG_GENERATION_LOOP"
 	envDisableVlogGenerationCheckpointKick = "TREEDB_DISABLE_VLOG_GENERATION_CHECKPOINT_KICK"
+	// Experimental WAL-off checkpoint-kick guard: when enabled, avoid starting
+	// fresh rewrite planning during hot foreground activity. Queued rewrite debt
+	// (or deferred maintenance due) remains eligible so resumable progress is not
+	// starved.
+	envEnableVlogGenerationCheckpointKickHotDebtOnly = "TREEDB_ENABLE_VLOG_GENERATION_CHECKPOINT_KICK_HOT_DEBT_ONLY"
 	// Experimental WAL-off override: allow rewrite planning/execution before the
 	// first explicit checkpoint. Disabled by default because it can add restore
 	// contention during early state-sync.
@@ -5965,6 +5970,7 @@ type DB struct {
 	vlogGenerationCheckpointKickRuns                            atomic.Uint64
 	vlogGenerationCheckpointKickRewriteRuns                     atomic.Uint64
 	vlogGenerationCheckpointKickGCRuns                          atomic.Uint64
+	vlogGenerationCheckpointKickSkippedHotNoDebt                atomic.Uint64
 	vlogGenerationCheckpointKickPending                         atomic.Bool
 	vlogGenerationDeferredMaintenancePending                    atomic.Bool
 	vlogGenerationDeferredMaintenanceRunning                    atomic.Bool
@@ -15429,6 +15435,34 @@ func (db *DB) maybeKickVlogGenerationMaintenanceAfterCheckpoint() {
 		return
 	}
 	now := time.Now()
+	rewriteDisabled := envBool(envDisableVlogGenerationRewrite)
+	rewriteQueueLen := 0
+	if !rewriteDisabled {
+		rewriteQueue, qerr := db.currentVlogGenerationRewriteQueue()
+		if qerr != nil {
+			db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
+			if db.notifyError != nil {
+				db.notifyError(fmt.Errorf("cachingdb: load generational rewrite queue for checkpoint kick: %w", qerr))
+			}
+			return
+		}
+		rewriteQueueLen = len(rewriteQueue)
+	}
+	if envBool(envEnableVlogGenerationCheckpointKickHotDebtOnly) && !rewriteDisabled {
+		quiet := db.foregroundActivityQuietFor(now, vlogGenerationMaintenanceQuietWindow, vlogForegroundReadQuietWindow)
+		if !quiet && rewriteQueueLen == 0 && !db.vlogGenerationDeferredMaintenanceDue(now) {
+			db.vlogGenerationCheckpointKickSkippedHotNoDebt.Add(1)
+			db.debugVlogMaintf(
+				"checkpoint_kick_skip reason=foreground_hot_no_debt quiet=%t queue_len=%d checkpoint_pending=%t deferred_pending=%t deferred_due=%t",
+				quiet,
+				rewriteQueueLen,
+				db.vlogGenerationCheckpointKickPending.Load(),
+				db.vlogGenerationDeferredMaintenancePending.Load(),
+				db.vlogGenerationDeferredMaintenanceDue(now),
+			)
+			return
+		}
+	}
 	last := db.vlogGenerationLastCheckpointKickUnixNano.Load()
 	if last > 0 && now.Sub(time.Unix(0, last)) < vlogGenerationCheckpointKickMinInterval {
 		db.debugVlogMaintf(
@@ -15440,16 +15474,8 @@ func (db *DB) maybeKickVlogGenerationMaintenanceAfterCheckpoint() {
 	}
 	// Avoid forcing extra checkpoint boundaries when rewrite is clearly ineligible.
 	// Skip this fast-path when rewrite is disabled so GC-only kicks still run.
-	if !envBool(envDisableVlogGenerationRewrite) {
-		rewriteQueue, qerr := db.currentVlogGenerationRewriteQueue()
-		if qerr != nil {
-			db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
-			if db.notifyError != nil {
-				db.notifyError(fmt.Errorf("cachingdb: load generational rewrite queue for checkpoint kick: %w", qerr))
-			}
-			return
-		}
-		if len(rewriteQueue) == 0 {
+	if !rewriteDisabled {
+		if rewriteQueueLen == 0 {
 			if trigger := db.valueLogRewriteTriggerBytes; trigger > 0 {
 				retained, bytes := db.valueLogRetainedStats()
 				if bytes < trigger && retained < 2 {
@@ -20987,6 +21013,7 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_generation.checkpoint_kick.runs"] = fmt.Sprintf("%d", db.vlogGenerationCheckpointKickRuns.Load())
 	stats["treedb.cache.vlog_generation.checkpoint_kick.rewrite_runs"] = fmt.Sprintf("%d", db.vlogGenerationCheckpointKickRewriteRuns.Load())
 	stats["treedb.cache.vlog_generation.checkpoint_kick.gc_runs"] = fmt.Sprintf("%d", db.vlogGenerationCheckpointKickGCRuns.Load())
+	stats["treedb.cache.vlog_generation.checkpoint_kick.skipped_hot_no_debt"] = fmt.Sprintf("%d", db.vlogGenerationCheckpointKickSkippedHotNoDebt.Load())
 	stats["treedb.cache.vlog_generation.maintenance.attempts"] = fmt.Sprintf("%d", db.vlogGenerationMaintenanceAttempts.Load())
 	stats["treedb.cache.vlog_generation.maintenance.acquired"] = fmt.Sprintf("%d", db.vlogGenerationMaintenanceAcquired.Load())
 	stats["treedb.cache.vlog_generation.maintenance.collisions"] = fmt.Sprintf("%d", db.vlogGenerationMaintenanceCollisions.Load())

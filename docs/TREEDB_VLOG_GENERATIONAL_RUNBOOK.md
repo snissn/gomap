@@ -103,6 +103,11 @@ The harness alternates run order per pair (`control->candidate`, then
   - Allows rewrite planning/execution before the first explicit checkpoint.
   - Default is disabled to avoid adding early restore contention.
   - Use for controlled `run_celestia` experiments when `maintenance.skip.before_first_checkpoint` dominates and live rewrite never starts.
+- `TREEDB_ENABLE_VLOG_GENERATION_CHECKPOINT_KICK_HOT_DEBT_ONLY=1`
+  - WAL-off only.
+  - During checkpoint-kick maintenance, skips starting a fresh rewrite plan while foreground activity is hot and rewrite queue debt is empty.
+  - Still allows queued rewrite debt (and deferred-due passes) to run.
+  - Default is disabled.
 
 ## Bench Commands
 ### Churn sanity (TreeDB)

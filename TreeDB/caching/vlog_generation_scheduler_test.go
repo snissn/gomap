@@ -4324,6 +4324,52 @@ func TestCheckpoint_KicksVlogGenerationRewriteDespiteRecentForegroundActivity(t 
 	}
 }
 
+func TestCheckpoint_KickHotDebtOnlySkipsFreshPlanDuringRecentForegroundActivity(t *testing.T) {
+	disableVlogGenerationLoop(t)
+	t.Setenv(envEnableVlogGenerationCheckpointKickHotDebtOnly, "1")
+
+	dir := t.TempDir()
+
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	recorder := &rewriteBudgetRecordingBackend{
+		DB: backend,
+		planResponse: backenddb.ValueLogRewritePlan{
+			SourceFileIDs:     []uint32{11},
+			SelectedBytesLive: 128,
+		},
+		rewriteResponse: backenddb.ValueLogRewriteStats{BytesBefore: 64, BytesAfter: 32, RecordsCopied: 1},
+	}
+
+	db, cleanup := openRewriteQueueTestDB(t, dir, recorder)
+	t.Cleanup(cleanup)
+	skipRetainedPrune(db)
+	db.testSkipVlogCheckpointKick = false
+
+	hot := time.Now().UnixNano()
+	db.lastForegroundWriteUnixNano.Store(hot)
+	db.lastForegroundReadUnixNano.Store(hot)
+
+	db.maybeKickVlogGenerationMaintenanceAfterCheckpoint()
+
+	time.Sleep(150 * time.Millisecond)
+	if _, calls := recorder.recordedPlan(); calls != 0 {
+		t.Fatalf("plan calls=%d want 0", calls)
+	}
+	if _, calls := recorder.recordedRewrite(); calls != 0 {
+		t.Fatalf("rewrite calls=%d want 0", calls)
+	}
+	stats := db.Stats()
+	if got := stats["treedb.cache.vlog_generation.checkpoint_kick.runs"]; got != "0" {
+		t.Fatalf("checkpoint kick runs=%q want 0", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.checkpoint_kick.skipped_hot_no_debt"]; got != "1" {
+		t.Fatalf("checkpoint kick skipped_hot_no_debt=%q want 1", got)
+	}
+}
+
 func TestCheckpoint_DoesNotKickVlogGenerationRewrite_WALOn(t *testing.T) {
 	disableVlogGenerationLoop(t)
 
@@ -4427,6 +4473,64 @@ func TestCheckpoint_KicksQueuedRewriteDebtBelowTriggerFloor(t *testing.T) {
 			_, rewriteCalls := recorder.recordedRewrite()
 			_, planCalls := recorder.recordedPlan()
 			t.Fatalf("checkpoint kick with queued debt did not run rewrite in time: planCalls=%d rewriteCalls=%d", planCalls, rewriteCalls)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	stats := db.Stats()
+	if got := stats["treedb.cache.vlog_generation.checkpoint_kick.runs"]; got != "1" {
+		t.Fatalf("checkpoint kick runs=%q want 1", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.checkpoint_kick.rewrite_runs"]; got != "1" {
+		t.Fatalf("checkpoint kick rewrite runs=%q want 1", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.checkpoint_kick.skipped_hot_no_debt"]; got != "0" {
+		t.Fatalf("checkpoint kick skipped_hot_no_debt=%q want 0", got)
+	}
+}
+
+func TestCheckpoint_KickHotDebtOnlyStillRunsQueuedRewriteDebtDuringRecentForegroundActivity(t *testing.T) {
+	disableVlogGenerationLoop(t)
+	t.Setenv(envEnableVlogGenerationCheckpointKickHotDebtOnly, "1")
+
+	dir := t.TempDir()
+
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	recorder := &rewriteBudgetRecordingBackend{
+		DB: backend,
+		planResponse: backenddb.ValueLogRewritePlan{
+			SourceFileIDs:     []uint32{11},
+			SelectedBytesLive: 128,
+		},
+		rewriteResponse: backenddb.ValueLogRewriteStats{BytesBefore: 64, BytesAfter: 32, RecordsCopied: 1},
+	}
+
+	db, cleanup := openRewriteQueueTestDB(t, dir, recorder)
+	t.Cleanup(cleanup)
+	skipRetainedPrune(db)
+	db.testSkipVlogCheckpointKick = false
+	db.valueLogRewriteTriggerBytes = 1 << 30
+	if err := db.setVlogGenerationRewriteQueue([]uint32{11}); err != nil {
+		t.Fatalf("seed rewrite queue: %v", err)
+	}
+	db.vlogGenerationRewriteBudgetTokensBytes.Store(1024)
+	hot := time.Now().UnixNano()
+	db.lastForegroundWriteUnixNano.Store(hot)
+	db.lastForegroundReadUnixNano.Store(hot)
+
+	db.maybeKickVlogGenerationMaintenanceAfterCheckpoint()
+
+	deadline := time.Now().Add(2 * schedulerTestWait(t))
+	for {
+		if _, calls := recorder.recordedRewrite(); calls == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			_, rewriteCalls := recorder.recordedRewrite()
+			t.Fatalf("checkpoint kick with queued debt did not run rewrite in time: rewriteCalls=%d", rewriteCalls)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}

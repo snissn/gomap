@@ -320,6 +320,7 @@ def build_summary(stats: dict[str, Any]) -> dict[str, Any]:
         "checkpoint_kick_runs": metric_int(stats, "treedb.cache.vlog_generation.checkpoint_kick.runs"),
         "checkpoint_kick_gc_runs": metric_int(stats, "treedb.cache.vlog_generation.checkpoint_kick.gc_runs"),
         "checkpoint_kick_rewrite_runs": metric_int(stats, "treedb.cache.vlog_generation.checkpoint_kick.rewrite_runs"),
+        "checkpoint_kick_skipped_hot_no_debt": metric_int(stats, "treedb.cache.vlog_generation.checkpoint_kick.skipped_hot_no_debt"),
     }
 
     skip_keys = [
@@ -504,6 +505,13 @@ def print_report(summary: dict[str, Any], source_file: Path, run_home: str, inst
         f"quiet={skips['quiet_window']} "
         f"priority={skips['priority_pending']} "
         f"checkpoint={skips['checkpoint_inflight']}"
+    )
+    print(
+        "  checkpoint-kick: "
+        f"runs={summary['checkpoint_kick_runs']} "
+        f"rewrite_runs={summary['checkpoint_kick_rewrite_runs']} "
+        f"gc_runs={summary['checkpoint_kick_gc_runs']} "
+        f"skipped_hot_no_debt={summary['checkpoint_kick_skipped_hot_no_debt']}"
     )
     print("")
 
