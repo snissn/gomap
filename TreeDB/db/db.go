@@ -1596,17 +1596,23 @@ func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired [
 				}
 			}
 		}
-		if forceValueLogRefresh && len(touchedValueLogSegments) == 0 {
+		if forceValueLogRefresh {
 			// Outer-leaf commits can keep ValueLogSet complete without a full
 			// scan when the leaf log can report/register its current segment.
+			//
+			// Call this regardless of touchedValueLogSegments. Some commit paths
+			// can touch pointer-backed segments that are already known while also
+			// publishing outer-leaf pages through a leaf log that cannot report
+			// or register its current segment. In that case we must fall back to
+			// one manager refresh to avoid publishing an incomplete ValueLogSet.
 			registered, err := db.ensureLeafPageLogSegmentRegistered()
 			if err != nil {
 				db.mu.Unlock()
 				return post, err
 			}
 			if !registered {
-				// If callers cannot report touched segments and no registration
-				// path is available, force one refresh as a safety fallback.
+				// If no registration path is available, force one refresh as a
+				// safety fallback before publishing the new state.
 				needRefresh = true
 			}
 		}
