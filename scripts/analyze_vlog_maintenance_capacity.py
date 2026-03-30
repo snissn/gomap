@@ -240,6 +240,12 @@ def build_summary(stats: dict[str, Any]) -> dict[str, Any]:
         "rewrite_exec_source_segments_requested_last": metric_int(stats, "treedb.cache.vlog_generation.rewrite.exec.source_segments_requested_last"),
         "rewrite_exec_source_segments_still_referenced_last": metric_int(stats, "treedb.cache.vlog_generation.rewrite.exec.source_segments_still_referenced_last"),
         "rewrite_exec_source_segments_unreferenced_last": metric_int(stats, "treedb.cache.vlog_generation.rewrite.exec.source_segments_unreferenced_last"),
+        "rewrite_exec_source_bytes_requested_total": metric_int(stats, "treedb.cache.vlog_generation.rewrite.exec.source_bytes_requested_total"),
+        "rewrite_exec_source_bytes_still_referenced_total": metric_int(stats, "treedb.cache.vlog_generation.rewrite.exec.source_bytes_still_referenced_total"),
+        "rewrite_exec_source_bytes_unreferenced_total": metric_int(stats, "treedb.cache.vlog_generation.rewrite.exec.source_bytes_unreferenced_total"),
+        "rewrite_exec_source_bytes_requested_last": metric_int(stats, "treedb.cache.vlog_generation.rewrite.exec.source_bytes_requested_last"),
+        "rewrite_exec_source_bytes_still_referenced_last": metric_int(stats, "treedb.cache.vlog_generation.rewrite.exec.source_bytes_still_referenced_last"),
+        "rewrite_exec_source_bytes_unreferenced_last": metric_int(stats, "treedb.cache.vlog_generation.rewrite.exec.source_bytes_unreferenced_last"),
         "rewrite_plan_selected_bytes_stale": metric_int(stats, "treedb.cache.vlog_generation.rewrite.plan_selected_bytes_stale"),
         "rewrite_processed_stale_bytes": metric_int(stats, "treedb.cache.vlog_generation.rewrite.processed_stale_bytes"),
         "rewrite_processed_live_bytes": metric_int(stats, "treedb.cache.vlog_generation.rewrite.processed_live_bytes"),
@@ -376,6 +382,14 @@ def build_summary(stats: dict[str, Any]) -> dict[str, Any]:
     m["rewrite_source_still_referenced_pct"] = pct(
         m["rewrite_exec_source_segments_still_referenced_total"],
         m["rewrite_exec_source_segments_requested_total"],
+    )
+    m["rewrite_source_unreferenced_bytes_pct"] = pct(
+        m["rewrite_exec_source_bytes_unreferenced_total"],
+        m["rewrite_exec_source_bytes_requested_total"],
+    )
+    m["rewrite_source_still_referenced_bytes_pct"] = pct(
+        m["rewrite_exec_source_bytes_still_referenced_total"],
+        m["rewrite_exec_source_bytes_requested_total"],
     )
     m["rewrite_stale_selection_coverage_pct"] = pct(
         m["rewrite_processed_stale_bytes"],
@@ -564,6 +578,17 @@ def print_report(summary: dict[str, Any], source_file: Path, run_home: str, inst
         f"last=requested:{summary['rewrite_exec_source_segments_requested_last']} "
         f"unref:{summary['rewrite_exec_source_segments_unreferenced_last']} "
         f"still_ref:{summary['rewrite_exec_source_segments_still_referenced_last']}"
+    )
+    print(
+        "  source outcomes bytes (exec): "
+        f"requested_total={human_bytes(summary['rewrite_exec_source_bytes_requested_total'])} "
+        f"unreferenced_total={human_bytes(summary['rewrite_exec_source_bytes_unreferenced_total'])} "
+        f"still_referenced_total={human_bytes(summary['rewrite_exec_source_bytes_still_referenced_total'])} "
+        f"(unref_pct={summary['rewrite_source_unreferenced_bytes_pct']:.1f}%, "
+        f"still_ref_pct={summary['rewrite_source_still_referenced_bytes_pct']:.1f}%) "
+        f"last=requested:{human_bytes(summary['rewrite_exec_source_bytes_requested_last'])} "
+        f"unref:{human_bytes(summary['rewrite_exec_source_bytes_unreferenced_last'])} "
+        f"still_ref:{human_bytes(summary['rewrite_exec_source_bytes_still_referenced_last'])}"
     )
     print(
         "  selected stale vs processed stale: "

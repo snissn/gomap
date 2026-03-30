@@ -161,6 +161,7 @@ Notes:
   - command timeout: `AB_LIGHT_VLOG_STATS_TIMEOUT_SECONDS` (default `20`)
   - capture path uses `treemap vlog-gc -rw -dry-run` (backend maintenance path; no delete/write side effects)
   - outputs land in each run directory as `light_stats_pre.txt` / `light_stats_post.txt`, and summarized values are included in `run.json` + `runs.csv`.
+- `runs.csv` now also includes rewrite-capacity counters from diagnostics summaries (plan runs/selection, source segment+byte outcomes, ledger bytes, budget utilization, observed-GC drain pct) so candidate/control behavior can be compared without opening each `run.json`.
 - To use pre-policy behavior, set `AB_POLICY=legacy`.
 
 ## Process Review Cadence

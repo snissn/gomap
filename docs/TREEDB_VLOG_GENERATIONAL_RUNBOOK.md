@@ -33,6 +33,9 @@ Primary keys:
 - `treedb.cache.vlog_generation.rewrite.runs`
 - `treedb.cache.vlog_generation.rewrite.bytes_in`
 - `treedb.cache.vlog_generation.rewrite.bytes_out`
+- `treedb.cache.vlog_generation.rewrite.exec.source_bytes_requested_total`
+- `treedb.cache.vlog_generation.rewrite.exec.source_bytes_still_referenced_total`
+- `treedb.cache.vlog_generation.rewrite.exec.source_bytes_unreferenced_total`
 - `treedb.cache.vlog_generation.gc.runs`
 - `treedb.cache.vlog_generation.gc.deleted_segments`
 - `treedb.cache.vlog_generation.gc.deleted_bytes`

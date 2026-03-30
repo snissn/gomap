@@ -3474,6 +3474,15 @@ func TestValueLogRewriteOnline_SourceFileIDsWithStaleFilterMatchesPlanSelection(
 	if stats.SourceSegmentsUnreferenced != 1 {
 		t.Fatalf("source segments unreferenced=%d want 1", stats.SourceSegmentsUnreferenced)
 	}
+	if stats.SourceBytesRequested <= 0 {
+		t.Fatalf("source bytes requested=%d want > 0", stats.SourceBytesRequested)
+	}
+	if stats.SourceBytesStillReferenced != 0 {
+		t.Fatalf("source bytes still referenced=%d want 0", stats.SourceBytesStillReferenced)
+	}
+	if stats.SourceBytesUnreferenced != stats.SourceBytesRequested {
+		t.Fatalf("source bytes unreferenced=%d want requested=%d", stats.SourceBytesUnreferenced, stats.SourceBytesRequested)
+	}
 
 	ptrK1, flagsK1 := readProjectedPointerByKey(t, db, []byte("k1"))
 	ptrK2, flagsK2 := readProjectedPointerByKey(t, db, []byte("k2"))
