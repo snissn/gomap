@@ -5,7 +5,6 @@ import (
 	"math"
 	"os"
 	"path/filepath"
-	"strconv"
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
@@ -25,7 +24,7 @@ type valueLogSegmentHealth struct {
 }
 
 type valueLogHealthFile struct {
-	Segments map[string]valueLogSegmentHealth `json:"segments"`
+	Segments map[uint32]valueLogSegmentHealth `json:"segments"`
 }
 
 func valueLogHealthPath(dir string) string {
@@ -54,12 +53,8 @@ func loadValueLogHealth(path string) (map[uint32]valueLogSegmentHealth, error) {
 			return out, nil
 		}
 	}
-	for k, v := range raw.Segments {
-		id64, err := strconv.ParseUint(k, 10, 32)
-		if err != nil {
-			continue
-		}
-		out[uint32(id64)] = v
+	for id, h := range raw.Segments {
+		out[id] = h
 	}
 	return out, nil
 }
@@ -69,12 +64,9 @@ func saveValueLogHealth(path string, health map[uint32]valueLogSegmentHealth) er
 		return nil
 	}
 	raw := valueLogHealthFile{
-		Segments: make(map[string]valueLogSegmentHealth, len(health)),
+		Segments: health,
 	}
-	for id, h := range health {
-		raw.Segments[strconv.FormatUint(uint64(id), 10)] = h
-	}
-	data, err := json.MarshalIndent(raw, "", "  ")
+	data, err := json.Marshal(raw)
 	if err != nil {
 		return err
 	}
