@@ -2,6 +2,7 @@ package db
 
 import (
 	"encoding/json"
+	"math"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -113,8 +114,8 @@ func advanceSegmentAgeSeconds(h valueLogSegmentHealth, now time.Time) int64 {
 		return age
 	}
 	// Clamp on overflow to preserve monotonic, bounded metadata.
-	if age > int64(^uint64(0)>>1)-delta {
-		return int64(^uint64(0) >> 1)
+	if age > math.MaxInt64-delta {
+		return math.MaxInt64
 	}
 	return age + delta
 }

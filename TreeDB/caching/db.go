@@ -4477,8 +4477,8 @@ func (db *DB) pruneRetainedValueLogsWithObserved(force bool, observedSourceIDs m
 			continue
 		}
 		if db.cleanupMissingRetainedValueLog(path) {
+			out.RemovedSegments++
 			if size > 0 {
-				out.RemovedSegments++
 				out.RemovedBytes += size
 			}
 			if candidate.observed {
@@ -4562,8 +4562,8 @@ func (db *DB) pruneRetainedValueLogsWithObserved(force bool, observedSourceIDs m
 			if err := marker.MarkValueLogZombie(id); err != nil {
 				if errors.Is(err, valuelog.ErrFileNotFound) && db.cleanupOrphanedRetainedValueLog(path) {
 					removed = true
+					out.RemovedSegments++
 					if size > 0 {
-						out.RemovedSegments++
 						out.RemovedBytes += size
 					}
 					if candidate.observed {
@@ -4575,8 +4575,8 @@ func (db *DB) pruneRetainedValueLogsWithObserved(force bool, observedSourceIDs m
 					continue
 				}
 				if db.cleanupMissingRetainedValueLog(path) {
+					out.RemovedSegments++
 					if size > 0 {
-						out.RemovedSegments++
 						out.RemovedBytes += size
 					}
 					if candidate.observed {
@@ -4608,8 +4608,8 @@ func (db *DB) pruneRetainedValueLogsWithObserved(force bool, observedSourceIDs m
 			db.untrackValueLogSegmentLocked(path)
 			db.mu.Unlock()
 			removed = true
+			out.RemovedSegments++
 			if size > 0 {
-				out.RemovedSegments++
 				out.RemovedBytes += size
 			}
 			if candidate.observed {
@@ -4710,6 +4710,11 @@ func (db *DB) waitForRetainedValueLogPruneQuietOrForce(quietWindow time.Duration
 			return true
 		}
 		if db.foregroundActivityQuietFor(time.Now(), quietWindow, vlogForegroundReadQuietWindow) {
+			// Re-check immediately before returning so force requests racing with
+			// the quiet-window transition are not dropped.
+			if db.retainedPruneForceRequested.Swap(false) {
+				return true
+			}
 			return false
 		}
 		select {
@@ -4828,7 +4833,7 @@ func (db *DB) queueVlogGenerationObservedSourceGCIDs(ids map[uint32]struct{}) {
 	}
 }
 
-func (db *DB) takeVlogGenerationObservedSourceGCList() []uint32 {
+func (db *DB) takeVlogGenerationObservedSourceGCListBefore(cutoffUnixNano int64) []uint32 {
 	if db == nil {
 		return nil
 	}
@@ -4837,20 +4842,37 @@ func (db *DB) takeVlogGenerationObservedSourceGCList() []uint32 {
 		db.vlogGenerationObservedGCMu.Unlock()
 		return nil
 	}
+	remaining := make(map[uint32]struct{}, len(db.vlogGenerationObservedGCSourceIDs))
 	out := make([]uint32, 0, len(db.vlogGenerationObservedGCSourceIDs))
 	for id := range db.vlogGenerationObservedGCSourceIDs {
 		if id == 0 {
 			continue
 		}
+		firstQueued := int64(0)
+		if db.vlogGenerationObservedGCFirstQueuedUnixNano != nil {
+			firstQueued = db.vlogGenerationObservedGCFirstQueuedUnixNano[id]
+		}
+		if cutoffUnixNano > 0 && firstQueued > cutoffUnixNano {
+			remaining[id] = struct{}{}
+			continue
+		}
 		out = append(out, id)
 	}
-	db.vlogGenerationObservedGCSourceIDs = nil
+	if len(remaining) == 0 {
+		db.vlogGenerationObservedGCSourceIDs = nil
+	} else {
+		db.vlogGenerationObservedGCSourceIDs = remaining
+	}
 	db.vlogGenerationObservedGCMu.Unlock()
 	if len(out) > 0 {
 		db.vlogGenerationObservedGCTakenBatches.Add(1)
 		db.vlogGenerationObservedGCTakenIDs.Add(uint64(len(out)))
 	}
 	return out
+}
+
+func (db *DB) takeVlogGenerationObservedSourceGCList() []uint32 {
+	return db.takeVlogGenerationObservedSourceGCListBefore(0)
 }
 
 func (db *DB) finalizeVlogGenerationObservedSourceGCIDs(ids []uint32, dropped bool) {
@@ -4966,8 +4988,26 @@ func (db *DB) scheduleRetainedValueLogPruneWithForce(force bool) {
 		return
 	}
 	if db.retainedPruneDone != nil {
+		inFlightDone := db.retainedPruneDone
 		db.retainedValueLogPruneScheduleSkipInFlight.Add(1)
 		db.retainedPruneMu.Unlock()
+		if force && inFlightDone != nil {
+			// Force requests that arrive while a prune is in-flight should get a
+			// follow-up attempt immediately after the active prune exits.
+			db.wg.Add(1)
+			go func(done <-chan struct{}) {
+				defer db.wg.Done()
+				if done != nil {
+					<-done
+				}
+				if db == nil || db.closing.Load() {
+					return
+				}
+				if db.retainedPruneForceRequested.Load() {
+					db.scheduleRetainedValueLogPruneWithForce(false)
+				}
+			}(inFlightDone)
+		}
 		return
 	}
 	done := make(chan struct{})
@@ -8743,10 +8783,25 @@ func (db *DB) vlogGenerationMaintenanceContext(timeout time.Duration, opts vlogG
 	// quiet-window gate. Keep this context timeout-bounded, but do not
 	// self-cancel on immediate foreground activity resumes.
 	if opts.bypassQuiet {
+		var (
+			ctx    context.Context
+			cancel context.CancelFunc
+		)
 		if timeout > 0 {
-			return context.WithTimeout(context.Background(), timeout)
+			ctx, cancel = context.WithTimeout(context.Background(), timeout)
+		} else {
+			ctx, cancel = context.WithCancel(context.Background())
 		}
-		return context.WithCancel(context.Background())
+		// Preserve close-aware cancellation even on bypass-quiet paths.
+		go func() {
+			select {
+			case <-ctx.Done():
+				return
+			case <-db.closeCh:
+				cancel()
+			}
+		}()
+		return ctx, cancel
 	}
 	return db.foregroundMaintenanceContext(timeout)
 }
@@ -15310,7 +15365,7 @@ planned:
 		return
 	}
 
-	observedSourceGCIDs := db.takeVlogGenerationObservedSourceGCList()
+	observedSourceGCIDs := db.takeVlogGenerationObservedSourceGCListBefore(activeStart.UnixNano())
 	forceObservedSourceGC := len(observedSourceGCIDs) > 0
 	if !runGC && opts.bypassQuiet && !forceObservedSourceGC {
 		// Checkpoint-kick/deferred retry passes are rewrite-priority. Do not run
@@ -21312,7 +21367,14 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_generation.rewrite.ledger_bytes_live"] = fmt.Sprintf("%d", rewriteLedgerBytesLive)
 	stats["treedb.cache.vlog_generation.rewrite.ledger_bytes_stale"] = fmt.Sprintf("%d", rewriteLedgerBytesStale)
 	if rewriteLedgerBytesTotal > 0 {
-		stats["treedb.cache.vlog_generation.rewrite.ledger_stale_ratio_ppm"] = fmt.Sprintf("%d", (rewriteLedgerBytesStale*1_000_000)/rewriteLedgerBytesTotal)
+		staleRatioPPM := 0.0
+		if rewriteLedgerBytesStale > 0 {
+			staleRatioPPM = (float64(rewriteLedgerBytesStale) / float64(rewriteLedgerBytesTotal)) * 1_000_000.0
+		}
+		if staleRatioPPM > 1_000_000.0 {
+			staleRatioPPM = 1_000_000.0
+		}
+		stats["treedb.cache.vlog_generation.rewrite.ledger_stale_ratio_ppm"] = fmt.Sprintf("%d", int64(staleRatioPPM))
 	} else {
 		stats["treedb.cache.vlog_generation.rewrite.ledger_stale_ratio_ppm"] = "0"
 	}

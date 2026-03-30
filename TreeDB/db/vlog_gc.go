@@ -128,8 +128,15 @@ func (db *DB) ValueLogGC(ctx context.Context, opts ValueLogGCOptions) (ValueLogG
 	protectedAll := mergeUniqueNonEmptyPaths(opts.ProtectedPaths, opts.ProtectedInUsePaths, opts.ProtectedRetainedPaths)
 	if len(protectedAll) > 0 {
 		if recent := recentValueLogIDsForProtectedPaths(set, valueLogKeepRecentSegmentsPerLane, protectedAll); len(recent) > 0 {
-			for id := range recent {
-				keptIDs[id] = struct{}{}
+			// Protected-path mode should keep a narrow recent window only for the
+			// protected lanes so historical rewrite lanes remain eligible. Keep the
+			// current primary-lane segment as a safety guard for live writes.
+			keptIDs = recent
+			for id := range currentValueLogIDs(set) {
+				lane, _ := valuelog.DecodeFileID(id)
+				if lane == 0 {
+					keptIDs[id] = struct{}{}
+				}
 			}
 		}
 	}

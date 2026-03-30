@@ -7,7 +7,16 @@ RUN_HOME_GLOB="${RUN_HOME_GLOB:-$HOME/.celestia-app-mainnet-treedb-*}"
 RUN_CMD="${RUN_CMD:-$HOME/run_celestia.sh}"
 CONTROL_ENV_FILE="${CONTROL_ENV_FILE:-}"
 CANDIDATE_ENV_FILE="${CANDIDATE_ENV_FILE:-}"
-TREEMAP_BIN="${TREEMAP_BIN:-/home/mikers/dev/snissn/celestia-app-p4/build/treemap-local}"
+TREEMAP_BIN="${TREEMAP_BIN:-}"
+if [[ -z "$TREEMAP_BIN" ]]; then
+  if [[ -x "$ROOT/build/treemap-local" ]]; then
+    TREEMAP_BIN="$ROOT/build/treemap-local"
+  elif command -v treemap-local >/dev/null 2>&1; then
+    TREEMAP_BIN="$(command -v treemap-local)"
+  elif command -v treemap >/dev/null 2>&1; then
+    TREEMAP_BIN="$(command -v treemap)"
+  fi
+fi
 REWRITE_ENABLED="${REWRITE_ENABLED:-1}"
 MAX_PAIRS="${MAX_PAIRS:-10}"
 MIN_PAIRS="${MIN_PAIRS:-4}"
@@ -92,7 +101,15 @@ ab_capture_debug_vars_on_max_rss=$AB_CAPTURE_DEBUG_VARS_ON_MAX_RSS
 META
 
 list_run_homes() {
-  ls -1dt $RUN_HOME_GLOB 2>/dev/null || true
+  local homes=()
+  while IFS= read -r path; do
+    [[ -d "$path" ]] || continue
+    homes+=("$path")
+  done < <(compgen -G "$RUN_HOME_GLOB" 2>/dev/null || true)
+  if [[ "${#homes[@]}" -eq 0 ]]; then
+    return 0
+  fi
+  ls -1dt -- "${homes[@]}" 2>/dev/null || true
 }
 
 du_bytes() {

@@ -87,23 +87,13 @@ func ChooseKForDictOptions(dict []byte, samples [][]byte, opts ChooseKOptions) (
 	}
 	ks = normalizeCandidateK(ks)
 	var sharedEnc *zstd.Encoder
-	if dict != nil {
-		if enc, err := zstd.NewWriter(nil,
-			zstd.WithEncoderDict(dict),
-			zstd.WithEncoderLevel(zstd.SpeedFastest),
-			zstd.WithEncoderConcurrency(1),
-			zstd.WithEncoderCRC(false),
-		); err == nil {
-			sharedEnc = enc
-		}
-	} else {
-		if enc, err := zstd.NewWriter(nil,
-			zstd.WithEncoderLevel(zstd.SpeedFastest),
-			zstd.WithEncoderConcurrency(1),
-			zstd.WithEncoderCRC(false),
-		); err == nil {
-			sharedEnc = enc
-		}
+	if enc, err := zstd.NewWriter(nil,
+		zstd.WithEncoderDict(dict),
+		zstd.WithEncoderLevel(zstd.SpeedFastest),
+		zstd.WithEncoderConcurrency(1),
+		zstd.WithEncoderCRC(false),
+	); err == nil {
+		sharedEnc = enc
 	}
 	if sharedEnc != nil {
 		defer sharedEnc.Close()

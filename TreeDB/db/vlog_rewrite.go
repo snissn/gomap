@@ -502,6 +502,9 @@ func (db *DB) ValueLogRewritePlan(ctx context.Context, opts ValueLogRewriteOnlin
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if err := db.publishValueLogSetNoRefresh(); err != nil {
+		return plan, err
+	}
 
 	// Prefer no-refresh snapshots to avoid repeated filesystem scans on the hot
 	// path. Fall back to a refresh if the manager has not yet discovered any
@@ -722,62 +725,75 @@ func closeRewriteSnapshot(errp *error, snap *Snapshot) {
 }
 
 func (db *DB) estimateValueLogLiveBytesBySegment(ctx context.Context) (_ map[uint32]int64, err error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-
-	snap := db.AcquireSnapshot()
-	if snap == nil || snap.state == nil || snap.idx == nil {
-		closeRewriteSnapshot(&err, snap)
-		return nil, fmt.Errorf("missing snapshot state")
-	}
-	defer closeRewriteSnapshot(&err, snap)
-	cacheKey, cacheable := rewritePlanLiveBytesKeyForState(snap.state)
-	if cacheable {
-		if liveByID, ok := db.loadCachedValueLogLiveBytes(cacheKey); ok {
-			return liveByID, nil
+	estimate := func() (_ map[uint32]int64, err error) {
+		if ctx == nil {
+			ctx = context.Background()
 		}
-	}
-	runRewritePlanLiveEstimateHook()
-	liveByID := make(map[uint32]int64)
 
-	// Pointer-projection iterators can return many keys pointing at the same
-	// grouped value-log record. When estimating live bytes we must count each
-	// referenced record once, not once per referencing key, otherwise grouped
-	// workloads will vastly over-count live bytes and mask stale segments.
-	var seenGroupedRecords map[groupedRecordKey]struct{}
+		snap := db.AcquireSnapshot()
+		if snap == nil || snap.state == nil || snap.idx == nil {
+			closeRewriteSnapshot(&err, snap)
+			return nil, fmt.Errorf("missing snapshot state")
+		}
+		defer closeRewriteSnapshot(&err, snap)
+		cacheKey, cacheable := rewritePlanLiveBytesKeyForState(snap.state)
+		if cacheable {
+			if liveByID, ok := db.loadCachedValueLogLiveBytes(cacheKey); ok {
+				return liveByID, nil
+			}
+		}
+		runRewritePlanLiveEstimateHook()
+		liveByID := make(map[uint32]int64)
 
-	userIter := snap.tree.IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
-	if err := db.collectValueLogLiveBytes(ctx, userIter, liveByID, &seenGroupedRecords, snap.state.ValueLogSet); err != nil {
+		// Pointer-projection iterators can return many keys pointing at the same
+		// grouped value-log record. When estimating live bytes we must count each
+		// referenced record once, not once per referencing key, otherwise grouped
+		// workloads will vastly over-count live bytes and mask stale segments.
+		var seenGroupedRecords map[groupedRecordKey]struct{}
+
+		userIter := snap.tree.IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
+		if err := db.collectValueLogLiveBytes(ctx, userIter, liveByID, &seenGroupedRecords, snap.state.ValueLogSet); err != nil {
+			_ = userIter.Close()
+			return nil, err
+		}
 		_ = userIter.Close()
-		return nil, err
-	}
-	_ = userIter.Close()
 
-	sysIter := tree.New(snap.idx.pager, newValueReader(snap.state.ValueLogSet), snap.state.SystemRootPageID).
-		IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
-	if err := db.collectValueLogLiveBytes(ctx, sysIter, liveByID, &seenGroupedRecords, snap.state.ValueLogSet); err != nil {
+		sysIter := tree.New(snap.idx.pager, newValueReader(snap.state.ValueLogSet), snap.state.SystemRootPageID).
+			IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
+		if err := db.collectValueLogLiveBytes(ctx, sysIter, liveByID, &seenGroupedRecords, snap.state.ValueLogSet); err != nil {
+			_ = sysIter.Close()
+			return nil, err
+		}
 		_ = sysIter.Close()
-		return nil, err
-	}
-	_ = sysIter.Close()
 
-	// When outer leaves are stored in the value log, leaf pages are referenced by
-	// LeafRef child IDs (not normal key/value pointers) and must be included in
-	// live-byte estimation; otherwise rewrite planning can select "stale" segments
-	// that are actually pinned by live leaf pages.
-	if snap.idx != nil && snap.idx.pager != nil {
-		if err := db.collectLeafRefValueLogLiveBytes(ctx, snap.idx.pager, snap.state.RootPageID, liveByID, &seenGroupedRecords, snap.state.ValueLogSet); err != nil {
-			return nil, err
+		// When outer leaves are stored in the value log, leaf pages are referenced by
+		// LeafRef child IDs (not normal key/value pointers) and must be included in
+		// live-byte estimation; otherwise rewrite planning can select "stale" segments
+		// that are actually pinned by live leaf pages.
+		if snap.idx != nil && snap.idx.pager != nil {
+			if err := db.collectLeafRefValueLogLiveBytes(ctx, snap.idx.pager, snap.state.RootPageID, liveByID, &seenGroupedRecords, snap.state.ValueLogSet); err != nil {
+				return nil, err
+			}
+			if err := db.collectLeafRefValueLogLiveBytes(ctx, snap.idx.pager, snap.state.SystemRootPageID, liveByID, &seenGroupedRecords, snap.state.ValueLogSet); err != nil {
+				return nil, err
+			}
 		}
-		if err := db.collectLeafRefValueLogLiveBytes(ctx, snap.idx.pager, snap.state.SystemRootPageID, liveByID, &seenGroupedRecords, snap.state.ValueLogSet); err != nil {
-			return nil, err
+		if cacheable {
+			db.storeCachedValueLogLiveBytes(cacheKey, liveByID)
 		}
+		return liveByID, nil
 	}
-	if cacheable {
-		db.storeCachedValueLogLiveBytes(cacheKey, liveByID)
+
+	liveByID, err := estimate()
+	if err != nil && errors.Is(err, valuelog.ErrFileNotFound) {
+		// Refresh/re-publish value-log set once when live-byte estimation races
+		// segment registration (for example, new outer-leaf segments).
+		if refreshErr := db.RefreshValueLogSet(); refreshErr != nil {
+			return nil, refreshErr
+		}
+		return estimate()
 	}
-	return liveByID, nil
+	return liveByID, err
 }
 
 type groupedRecordKey struct {
@@ -1209,6 +1225,9 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if err := db.publishValueLogSetNoRefresh(); err != nil {
+		return stats, err
+	}
 
 	// Prefer no-refresh snapshots to avoid repeated filesystem scans on the hot
 	// path. Fall back to a refresh if the manager has not yet discovered any
@@ -1341,6 +1360,7 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 	const rewriteReadScratchInitCap = 1024
 	rewriteReadScratch := make([]byte, 0, rewriteReadScratchInitCap)
 	var canceledErr error
+	readRefreshRetried := false
 
 	flushBatch := func() error {
 		if len(candidates) == 0 {
@@ -1358,6 +1378,13 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 				rewriteReadScratch = make([]byte, 0, rewriteReadScratchInitCap)
 			}
 			val, usedScratch, err := db.valueLogManager.ReadUnsafeTo(candidate.oldPtr, rewriteReadScratch)
+			if err != nil && errors.Is(err, valuelog.ErrFileNotFound) && !readRefreshRetried {
+				if refreshErr := db.RefreshValueLogSet(); refreshErr != nil {
+					return refreshErr
+				}
+				readRefreshRetried = true
+				val, usedScratch, err = db.valueLogManager.ReadUnsafeTo(candidate.oldPtr, rewriteReadScratch)
+			}
 			if err != nil {
 				return err
 			}
@@ -1665,11 +1692,38 @@ type leafRefRewriteCtx struct {
 	retired     []uint64
 	copied      int
 	copiedBytes int64
+
+	readRefreshRetried bool
 }
 
 func (c *leafRefRewriteCtx) readLeafPage(ptr page.ValuePtr) ([]byte, error) {
-	if c == nil || c.leafReader == nil {
+	if c == nil {
 		return nil, fmt.Errorf("vlog-rewrite: value-log snapshot reader unavailable")
+	}
+	if c.leafReader == nil && (c.db == nil || c.db.valueLogManager == nil) {
+		return nil, fmt.Errorf("vlog-rewrite: value-log snapshot reader unavailable")
+	}
+	if c.db != nil && c.db.valueLogManager != nil {
+		if cap(c.leafScratch) < page.PageSize {
+			c.leafScratch = make([]byte, 0, page.PageSize)
+		} else {
+			c.leafScratch = c.leafScratch[:0]
+		}
+		leafPage, usedScratch, err := c.db.valueLogManager.ReadUnsafeTo(ptr, c.leafScratch[:0])
+		if err != nil && errors.Is(err, valuelog.ErrFileNotFound) && !c.readRefreshRetried {
+			if refreshErr := c.db.RefreshValueLogSet(); refreshErr != nil {
+				return nil, refreshErr
+			}
+			c.readRefreshRetried = true
+			leafPage, usedScratch, err = c.db.valueLogManager.ReadUnsafeTo(ptr, c.leafScratch[:0])
+		}
+		if err != nil {
+			return nil, err
+		}
+		if usedScratch {
+			c.leafScratch = leafPage[:0]
+		}
+		return leafPage, nil
 	}
 	if c.leafToer != nil {
 		if cap(c.leafScratch) < page.PageSize {

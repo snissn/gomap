@@ -15,6 +15,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/atomicfile"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/leafrefscan"
+	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/pager"
@@ -309,12 +310,28 @@ func (db *DB) referencedValueLogSegments(ctx context.Context) (map[uint32]struct
 	if db.valueLogRefTracker != nil {
 		if refs, ok := db.valueLogRefTracker.referencedSet(seq); ok {
 			if err := db.mergeLeafRefValueLogRefs(ctx, refs); err != nil {
+				if errors.Is(err, valuelog.ErrFileNotFound) {
+					if refreshErr := db.RefreshValueLogSet(); refreshErr != nil {
+						return nil, refreshErr
+					}
+					if retryErr := db.mergeLeafRefValueLogRefs(ctx, refs); retryErr == nil {
+						return refs, nil
+					} else {
+						return nil, retryErr
+					}
+				}
 				return nil, err
 			}
 			return refs, nil
 		}
 	}
 	counts, scannedSeq, err := db.scanValueLogRefCounts(ctx)
+	if err != nil && errors.Is(err, valuelog.ErrFileNotFound) {
+		if refreshErr := db.RefreshValueLogSet(); refreshErr != nil {
+			return nil, refreshErr
+		}
+		counts, scannedSeq, err = db.scanValueLogRefCounts(ctx)
+	}
 	if err != nil {
 		return nil, err
 	}

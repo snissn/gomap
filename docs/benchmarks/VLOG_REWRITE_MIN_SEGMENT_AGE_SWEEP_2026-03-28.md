@@ -55,7 +55,7 @@ so this setting is not suitable for production-like loops.
 ## Interleaved A/B confirmation
 
 Using `scripts/celestia_fast_gate.sh` with same binaries and only this flag as
-candidate delta (`CANDIDATE_EXTRA_FLAGS='-treedb-vlog-rewrite-min-segment-age-ms 1'`):
+candidate delta (`CANDIDATE_EXTRA_FLAGS='-treedb-vlog-rewrite-min-segment-age-ms 1000'`):
 
 - Output: `/tmp/gomap_minage_gate_ctr4Ji/gate`
 - Decision: `clear_regression`

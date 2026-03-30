@@ -22,9 +22,14 @@ from typing import Any
 
 
 def human_bytes(value: float) -> str:
-    if value is None or math.isnan(value):
+    if value is None:
         return "n/a"
-    n = float(value)
+    try:
+        n = float(value)
+    except (TypeError, ValueError):
+        return "n/a"
+    if math.isnan(n):
+        return "n/a"
     if n < 0:
         return f"-{human_bytes(-n)}"
     units = ["B", "KiB", "MiB", "GiB", "TiB"]
@@ -337,9 +342,22 @@ def build_summary(stats: dict[str, Any]) -> dict[str, Any]:
     ]
     skip_map = {k.split(".")[-1]: metric_int(stats, k) for k in skip_keys}
     m["maintenance_skip"] = skip_map
-    m["maintenance_skip_total"] = sum(skip_map.values())
+    # stage_gate is an umbrella that is also reflected in *_not_due / *_due_reserved.
+    m["maintenance_skip_total"] = (
+        skip_map.get("wal_on_periodic", 0)
+        + skip_map.get("maintenance_phase", 0)
+        + skip_map.get("stage_gate_not_due", 0)
+        + skip_map.get("stage_gate_due_reserved", 0)
+        + skip_map.get("age_blocked_gate", 0)
+        + skip_map.get("priority_pending", 0)
+        + skip_map.get("quiet_window", 0)
+        + skip_map.get("before_first_checkpoint", 0)
+        + skip_map.get("checkpoint_inflight", 0)
+    )
 
-    passes_total = m["maintenance_noop"] + m["maintenance_with_rewrite"] + m["maintenance_with_gc"]
+    # Maintenance pass counters are not mutually exclusive: a pass can run both
+    # rewrite and GC. Prefer acquired as the canonical pass count.
+    passes_total = m["maintenance_acquired"]
     m["maintenance_passes_total"] = passes_total
     m["maintenance_acquire_rate_pct"] = pct(m["maintenance_acquired"], m["maintenance_attempts"])
     m["maintenance_collision_rate_pct"] = pct(m["maintenance_collisions"], m["maintenance_attempts"])

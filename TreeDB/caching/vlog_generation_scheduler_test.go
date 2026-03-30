@@ -489,14 +489,14 @@ func TestRunVlogGenerationMaintenanceRetries_CoalescesPendingCollisionRetries(t 
 
 func TestVlogGenerationRewriteMinStaleRatioForGenericPass_UsesConfiguredTriggerRatio(t *testing.T) {
 	db := &DB{valueLogRewriteTriggerRatioPPM: 200000}
-	if got, want := db.vlogGenerationRewriteMinStaleRatioForGenericPass(8<<30), 0.50; got != want {
+	if got, want := db.vlogGenerationRewriteMinStaleRatioForGenericPass(8<<30), 0.85; got != want {
 		t.Fatalf("generic min stale ratio=%f want=%f", got, want)
 	}
 }
 
 func TestVlogGenerationRewriteMinStaleRatioForGenericPass_UsesHigherConfiguredTriggerRatio(t *testing.T) {
 	db := &DB{valueLogRewriteTriggerRatioPPM: 800000}
-	if got, want := db.vlogGenerationRewriteMinStaleRatioForGenericPass(8<<30), 0.80; got != want {
+	if got, want := db.vlogGenerationRewriteMinStaleRatioForGenericPass(8<<30), 0.85; got != want {
 		t.Fatalf("generic min stale ratio=%f want=%f", got, want)
 	}
 }
@@ -524,7 +524,7 @@ func TestVlogGenerationRewriteMinStaleRatioForGenericPass_DefaultWithoutConfigur
 
 func TestVlogGenerationRewriteMinStaleRatioForQueuedDebt_UsesGenericFloorForTotalBytes(t *testing.T) {
 	db := &DB{valueLogRewriteTriggerRatioPPM: 200000}
-	if got, want := db.vlogGenerationRewriteMinStaleRatioForQueuedDebt(8<<30, vlogGenerationReasonTotalBytes), 0.50; got != want {
+	if got, want := db.vlogGenerationRewriteMinStaleRatioForQueuedDebt(8<<30, vlogGenerationReasonTotalBytes), 0.85; got != want {
 		t.Fatalf("queued total-bytes min stale ratio=%f want=%f", got, want)
 	}
 }
@@ -6616,7 +6616,7 @@ func TestVlogGenerationStats_ReportRewriteBacklogAndDurations(t *testing.T) {
 	db.vlogGenerationRewriteBudgetConsumed.Store(1536)
 	db.valueLogRewriteBudgetBytes = 2048
 	db.vlogGenerationLastChurnBps.Store(2500)
-	db.vlogGenerationRewriteAgeBlockedUntilNS.Store(time.Now().Add(5 * time.Second).UnixNano())
+	db.vlogGenerationRewriteAgeBlockedUntilNS.Store(time.Now().Add(5 * time.Minute).UnixNano())
 	db.vlogGenerationLastGCSegmentsReferenced.Store(7)
 	db.vlogGenerationLastGCBytesReferenced.Store(700)
 	db.vlogGenerationLastGCSegmentsActive.Store(4)
