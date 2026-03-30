@@ -1585,26 +1585,28 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		protectedIDs map[uint32]struct{}
 		activeIDs    map[uint32]struct{}
 	)
-	currentSet := db.valueLogManager.CurrentSetNoRefresh()
-	if currentSet != nil {
-		if allowActiveSkip {
-			activeIDs = recentValueLogIDsForProtectedPaths(currentSet, valueLogKeepRecentSegmentsPerLane, opts.ProtectedPaths)
-			if len(activeIDs) == 0 {
-				activeIDs = currentValueLogIDs(currentSet)
-			}
-		}
-		if len(protectedPaths) > 0 {
-			protectedIDs = make(map[uint32]struct{})
-			for id, f := range currentSet.Files {
-				if f == nil || f.Path == "" {
-					continue
-				}
-				if _, ok := protectedPaths[f.Path]; ok {
-					protectedIDs[id] = struct{}{}
+	if allowActiveSkip || len(protectedPaths) > 0 {
+		currentSet := db.valueLogManager.CurrentSetNoRefresh()
+		if currentSet != nil {
+			if allowActiveSkip {
+				activeIDs = recentValueLogIDsForProtectedPaths(currentSet, valueLogKeepRecentSegmentsPerLane, opts.ProtectedPaths)
+				if len(activeIDs) == 0 {
+					activeIDs = currentValueLogIDs(currentSet)
 				}
 			}
+			if len(protectedPaths) > 0 {
+				protectedIDs = make(map[uint32]struct{})
+				for id, f := range currentSet.Files {
+					if f == nil || f.Path == "" {
+						continue
+					}
+					if _, ok := protectedPaths[f.Path]; ok {
+						protectedIDs[id] = struct{}{}
+					}
+				}
+			}
+			_ = db.valueLogManager.Release(currentSet)
 		}
-		_ = db.valueLogManager.Release(currentSet)
 	}
 	markZombieCandidate := func(id uint32, existedBefore bool) error {
 		if _, ok := referencedAfter[id]; ok {
