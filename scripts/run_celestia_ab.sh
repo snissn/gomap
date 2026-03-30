@@ -728,6 +728,7 @@ for pair in sorted(by_pair):
             "control_invalid_reason": ctrl_reason,
             "candidate_invalid_reason": cand_reason,
             "pair_invalid_reason": "run_invalid",
+            "drift_scored_outcome": "n/a",
             "outcome": outcome,
         })
         continue
@@ -761,7 +762,45 @@ for pair in sorted(by_pair):
     d_sync_app_per_block = delta(cand_sync_app_per_block, base_sync_app_per_block)
     d_total_per_block = delta(cand_total_per_block, base_total_per_block)
 
+    win = False
+    loss = False
+    use_per_block = (
+        scoring_mode == "per_block"
+        and d_sync_app_per_block is not None
+        and d_total_per_block is not None
+        and base_blocks is not None
+        and int(base_blocks) > 0
+    )
+    if use_per_block:
+        size_tol_metric = float(size_tol) / float(base_blocks)
+        time_tol_metric = float(time_tol) / float(base_blocks)
+        size_delta_metric = d_sync_app_per_block
+        time_delta_metric = d_total_per_block
+    elif d_post_wal is not None and d_total is not None:
+        size_tol_metric = float(size_tol)
+        time_tol_metric = float(time_tol)
+        size_delta_metric = d_post_wal
+        time_delta_metric = d_total
+    else:
+        size_tol_metric = None
+        time_tol_metric = None
+        size_delta_metric = None
+        time_delta_metric = None
+    if size_delta_metric is not None and time_delta_metric is not None:
+        win = (size_delta_metric <= -size_tol_metric) and (time_delta_metric <= time_tol_metric)
+        loss = (size_delta_metric >= size_tol_metric) and (time_delta_metric >= -time_tol_metric)
+
+    drift_scored_outcome = "n/a"
     outcome = "neutral"
+    if size_delta_metric is not None and time_delta_metric is not None:
+        drift_scored_outcome = "neutral"
+        if win and not loss:
+            drift_scored_outcome = "win"
+            outcome = "win"
+        elif loss and not win:
+            drift_scored_outcome = "loss"
+            outcome = "loss"
+
     pair_invalid_reason = ""
     if block_drift_tolerance >= 0 and d_blocks is not None and abs(int(d_blocks)) > block_drift_tolerance:
         if allow_drift_scoring:
@@ -771,40 +810,11 @@ for pair in sorted(by_pair):
             pair_invalid_reason = "block_drift_too_high"
             invalid_pairs += 1
             block_drift_invalid_pairs += 1
-    if outcome != "invalid":
-        win = False
-        loss = False
-        use_per_block = (
-            scoring_mode == "per_block"
-            and d_sync_app_per_block is not None
-            and d_total_per_block is not None
-            and base_blocks is not None
-            and int(base_blocks) > 0
-        )
-        if use_per_block:
-            size_tol_metric = float(size_tol) / float(base_blocks)
-            time_tol_metric = float(time_tol) / float(base_blocks)
-            size_delta_metric = d_sync_app_per_block
-            time_delta_metric = d_total_per_block
-        elif d_post_wal is not None and d_total is not None:
-            size_tol_metric = float(size_tol)
-            time_tol_metric = float(time_tol)
-            size_delta_metric = d_post_wal
-            time_delta_metric = d_total
-        else:
-            size_tol_metric = None
-            time_tol_metric = None
-            size_delta_metric = None
-            time_delta_metric = None
-        if size_delta_metric is not None and time_delta_metric is not None:
-            win = (size_delta_metric <= -size_tol_metric) and (time_delta_metric <= time_tol_metric)
-            loss = (size_delta_metric >= size_tol_metric) and (time_delta_metric >= -time_tol_metric)
-        if win and not loss:
-            outcome = "win"
-            wins += 1
-        elif loss and not win:
-            outcome = "loss"
-            losses += 1
+
+    if outcome == "win":
+        wins += 1
+    elif outcome == "loss":
+        losses += 1
 
     pair_rows.append({
         "pair_index": pair,
@@ -820,6 +830,7 @@ for pair in sorted(by_pair):
         "control_invalid_reason": ctrl_reason,
         "candidate_invalid_reason": cand_reason,
         "pair_invalid_reason": pair_invalid_reason,
+        "drift_scored_outcome": drift_scored_outcome,
         "outcome": outcome,
     })
 
@@ -840,6 +851,7 @@ with pairs_csv.open("w", newline="", encoding="utf-8") as fh:
         "control_invalid_reason",
         "candidate_invalid_reason",
         "pair_invalid_reason",
+        "drift_scored_outcome",
         "outcome",
     ])
     for r in pair_rows:
@@ -857,6 +869,7 @@ with pairs_csv.open("w", newline="", encoding="utf-8") as fh:
             r["control_invalid_reason"],
             r["candidate_invalid_reason"],
             r["pair_invalid_reason"],
+            r["drift_scored_outcome"],
             r["outcome"],
         ])
 
@@ -947,6 +960,7 @@ if pair_rows:
     lines.append(f"- control_valid: `{last['control_valid']}` reason=`{last['control_invalid_reason']}`")
     lines.append(f"- candidate_valid: `{last['candidate_valid']}` reason=`{last['candidate_invalid_reason']}`")
     lines.append(f"- pair_invalid_reason: `{last['pair_invalid_reason']}`")
+    lines.append(f"- drift_scored_outcome: `{last['drift_scored_outcome']}`")
     lines.append(f"- delta_t_sync_seconds: `{last['delta_t_sync_seconds']}`")
     lines.append(f"- delta_t_total_seconds: `{last['delta_t_total_seconds']}`")
     lines.append(f"- delta_s_sync_app_bytes: `{last['delta_s_sync_app_bytes']}`")
