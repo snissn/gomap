@@ -2237,7 +2237,6 @@ func (db *DB) applyRewriteSwapBatchOptimistic(swaps []rewriteSwap, sync bool) (b
 		}
 		return false, err
 	}
-	entries = b.SortedEntries()
 	var vlogRefDelta *valueLogRefDelta
 	if trackValueLogRefDelta {
 		vlogRefDelta = rewriteDelta
@@ -2264,7 +2263,7 @@ func (db *DB) applyRewriteSwapBatchOptimistic(swaps []rewriteSwap, sync bool) (b
 	}
 	db.finalizeCommitPostWork(post)
 	if db.vacuum.Active() {
-		db.vacuum.RecordOps(b.Ops())
+		db.vacuum.RecordEntries(entries)
 	}
 	return true, nil
 }
@@ -2317,7 +2316,6 @@ func (db *DB) applyRewriteSwapBatchSerialized(swaps []rewriteSwap, sync bool) er
 	if err != nil {
 		return err
 	}
-	entries = b.SortedEntries()
 	var vlogRefDelta *valueLogRefDelta
 	if trackValueLogRefDelta {
 		vlogRefDelta = rewriteDelta
@@ -2326,7 +2324,7 @@ func (db *DB) applyRewriteSwapBatchSerialized(swaps []rewriteSwap, sync bool) er
 		return err
 	}
 	if db.vacuum.Active() {
-		db.vacuum.RecordOps(b.Ops())
+		db.vacuum.RecordEntries(entries)
 	}
 	return nil
 }

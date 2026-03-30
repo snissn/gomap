@@ -83,6 +83,27 @@ func (r *vacuumRecorder) RecordOps(ops map[string]batch.Entry) {
 	}
 }
 
+func (r *vacuumRecorder) RecordEntries(entries []batch.Entry) {
+	if !r.active.Load() || len(entries) == 0 {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.active.Load() {
+		return
+	}
+	if r.ops == nil {
+		r.ops = make(map[string]batch.Entry, len(entries))
+	}
+	for i := range entries {
+		entry := entries[i]
+		if len(entry.Key) == 0 {
+			continue
+		}
+		r.ops[string(entry.Key)] = vacuumRecordCopyEntry(entry)
+	}
+}
+
 func (r *vacuumRecorder) Drain() map[string]batch.Entry {
 	r.mu.Lock()
 	defer r.mu.Unlock()
