@@ -36,7 +36,7 @@ const rewriteDictMinPayloadBytes = 32 << 10
 const rewriteDictBatchMaxK = 64
 const rewriteReadScratchMaxCap = 1 << 20 // 1MiB cap to avoid retaining oversized decode buffers
 const rewriteKeyArenaMaxCap = 1 << 20    // 1MiB cap to avoid retaining oversized key arenas
-const leafRefRewriteMapInitCap = 128      // initial map capacity for small leafref rewrite batches
+const leafRefRewriteMapInitCap = 128     // initial map capacity for small leafref rewrite batches
 
 var rewriteRIDStartScanner = nextRewriteRIDStart
 var rewriteWALSegmentsLister = listWALSegments
