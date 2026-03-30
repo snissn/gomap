@@ -836,20 +836,20 @@ func applyEnvMaintenanceOverrides(opts *Options) {
 	if v, ok := envFloat64(envVlogDictMinPayloadSavings); ok {
 		opts.ValueLog.DictMinPayloadSavingsRatio = v
 	}
-	if v, ok := envInt(envVlogMaxRetainedBytes); ok {
-		opts.ValueLog.MaxRetainedBytes = int64(v)
+	if v, ok := envInt64(envVlogMaxRetainedBytes); ok {
+		opts.ValueLog.MaxRetainedBytes = v
 	}
-	if v, ok := envInt(envVlogMaxRetainedBytesHard); ok {
-		opts.ValueLog.MaxRetainedBytesHard = int64(v)
+	if v, ok := envInt64(envVlogMaxRetainedBytesHard); ok {
+		opts.ValueLog.MaxRetainedBytesHard = v
 	}
-	if v, ok := envInt(envVlogRewriteBudgetBytesPerSec); ok {
-		opts.ValueLog.Generational.RewriteBudgetBytesPerSec = int64(v)
+	if v, ok := envInt64(envVlogRewriteBudgetBytesPerSec); ok {
+		opts.ValueLog.Generational.RewriteBudgetBytesPerSec = v
 	}
 	if v, ok := envInt(envVlogRewriteBudgetRecordsPerSec); ok {
 		opts.ValueLog.Generational.RewriteBudgetRecordsPerSec = v
 	}
-	if v, ok := envInt(envVlogRewriteTriggerTotalBytes); ok {
-		opts.ValueLog.Generational.RewriteTriggerTotalBytes = int64(v)
+	if v, ok := envInt64(envVlogRewriteTriggerTotalBytes); ok {
+		opts.ValueLog.Generational.RewriteTriggerTotalBytes = v
 	}
 	if v, ok := envInt(envVlogRewriteTriggerStaleRatioPPM); ok {
 		if v < 0 {
@@ -861,8 +861,8 @@ func applyEnvMaintenanceOverrides(opts *Options) {
 		}
 		opts.ValueLog.Generational.RewriteTriggerStaleRatioPPM = uint32(v)
 	}
-	if v, ok := envInt(envVlogRewriteTriggerChurnPerSec); ok {
-		opts.ValueLog.Generational.RewriteTriggerChurnPerSec = int64(v)
+	if v, ok := envInt64(envVlogRewriteTriggerChurnPerSec); ok {
+		opts.ValueLog.Generational.RewriteTriggerChurnPerSec = v
 	}
 }
 
@@ -949,6 +949,22 @@ func envInt(name string) (int, bool) {
 		return 0, false
 	}
 	parsed, err := strconv.Atoi(val)
+	if err != nil {
+		return 0, false
+	}
+	return parsed, true
+}
+
+func envInt64(name string) (int64, bool) {
+	val, ok := os.LookupEnv(name)
+	if !ok {
+		return 0, false
+	}
+	val = strings.TrimSpace(val)
+	if val == "" {
+		return 0, false
+	}
+	parsed, err := strconv.ParseInt(val, 10, 64)
 	if err != nil {
 		return 0, false
 	}
