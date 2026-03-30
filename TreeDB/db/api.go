@@ -94,6 +94,55 @@ func (db *DB) refreshOnValueLogFileNotFound(err error) bool {
 	return errors.Is(err, valuelog.ErrFileNotFound)
 }
 
+func (db *DB) refreshValueLogSetForReadRetry(observedEpoch uint64) error {
+	if db == nil {
+		return ErrClosed
+	}
+	for {
+		db.readRetryRefreshMu.Lock()
+		if !db.readRetryRefreshInFlight {
+			if db.readRetryRefreshEpoch.Load() != observedEpoch {
+				db.readRetryRefreshSkippedEpoch.Add(1)
+				db.readRetryRefreshMu.Unlock()
+				return nil
+			}
+			done := make(chan struct{})
+			db.readRetryRefreshInFlight = true
+			db.readRetryRefreshDone = done
+			db.readRetryRefreshErr = nil
+			db.readRetryRefreshLeaderCount.Add(1)
+			db.readRetryRefreshMu.Unlock()
+
+			err := db.RefreshValueLogSet()
+
+			db.readRetryRefreshMu.Lock()
+			db.readRetryRefreshErr = err
+			if err == nil {
+				db.readRetryRefreshEpoch.Add(1)
+			}
+			db.readRetryRefreshInFlight = false
+			db.readRetryRefreshDone = nil
+			close(done)
+			db.readRetryRefreshMu.Unlock()
+			return err
+		}
+		done := db.readRetryRefreshDone
+		db.readRetryRefreshFollowerCount.Add(1)
+		db.readRetryRefreshMu.Unlock()
+
+		if done == nil {
+			runtime.Gosched()
+			continue
+		}
+
+		<-done
+		db.readRetryRefreshMu.Lock()
+		err := db.readRetryRefreshErr
+		db.readRetryRefreshMu.Unlock()
+		return err
+	}
+}
+
 // Get returns the value for a key.
 //
 // Semantics: Returns a safe copy of the value.
@@ -107,9 +156,10 @@ func (db *DB) Get(key []byte) ([]byte, error) {
 		return snap.Get(key)
 	}
 
+	retryEpoch := db.readRetryRefreshEpoch.Load()
 	val, err := readOnce()
 	if db.refreshOnValueLogFileNotFound(err) {
-		if refreshErr := db.RefreshValueLogSet(); refreshErr != nil {
+		if refreshErr := db.refreshValueLogSetForReadRetry(retryEpoch); refreshErr != nil {
 			return nil, refreshErr
 		}
 		val, err = readOnce()
@@ -125,9 +175,10 @@ func (db *DB) Get(key []byte) ([]byte, error) {
 // Semantics: Returns safe copies of values. Missing keys are returned as nil
 // entries with no error.
 func (db *DB) GetMany(keys [][]byte) ([][]byte, error) {
+	retryEpoch := db.readRetryRefreshEpoch.Load()
 	out, err := db.getManyOnce(keys)
 	if db.refreshOnValueLogFileNotFound(err) {
-		if refreshErr := db.RefreshValueLogSet(); refreshErr != nil {
+		if refreshErr := db.refreshValueLogSetForReadRetry(retryEpoch); refreshErr != nil {
 			return nil, refreshErr
 		}
 		return db.getManyOnce(keys)
@@ -258,9 +309,10 @@ func (db *DB) GetAppend(key, dst []byte) ([]byte, error) {
 		return snap.GetAppend(key, base)
 	}
 
+	retryEpoch := db.readRetryRefreshEpoch.Load()
 	val, err := readOnce(dst)
 	if db.refreshOnValueLogFileNotFound(err) {
-		if refreshErr := db.RefreshValueLogSet(); refreshErr != nil {
+		if refreshErr := db.refreshValueLogSetForReadRetry(retryEpoch); refreshErr != nil {
 			return dst, refreshErr
 		}
 		val, err = readOnce(dst)
@@ -556,6 +608,10 @@ func (db *DB) Stats() map[string]string {
 		if total := gHits + gMisses; total > 0 {
 			stats["treedb.vlog.grouped_frame_cache.hit_ratio"] = fmt.Sprintf("%.6f", float64(gHits)/float64(total))
 		}
+
+		stats["treedb.vlog.read_retry_refresh.leader_calls"] = fmt.Sprintf("%d", db.readRetryRefreshLeaderCount.Load())
+		stats["treedb.vlog.read_retry_refresh.follower_calls"] = fmt.Sprintf("%d", db.readRetryRefreshFollowerCount.Load())
+		stats["treedb.vlog.read_retry_refresh.skipped_epoch_calls"] = fmt.Sprintf("%d", db.readRetryRefreshSkippedEpoch.Load())
 
 		hits, misses, entries, capacity := db.valueLogManager.TemplateDefCacheStats()
 		stats["treedb.vlog.template_def_cache.hits"] = fmt.Sprintf("%d", hits)

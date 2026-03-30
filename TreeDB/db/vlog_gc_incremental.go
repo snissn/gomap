@@ -46,9 +46,18 @@ const (
 )
 
 type valueLogRefDelta struct {
-	inline  [4]valueLogRefDeltaEntry
+	inline  [16]valueLogRefDeltaEntry
 	inlineN int
 	changes map[uint32]int64
+}
+
+const valueLogRefDeltaPromotedMapInitCap = 128
+const valueLogRefDeltaPoolMaxRetainedEntries = 512
+
+var valueLogRefDeltaPool = sync.Pool{
+	New: func() any {
+		return &valueLogRefDelta{}
+	},
 }
 
 type valueLogRefDeltaEntry struct {
@@ -57,7 +66,38 @@ type valueLogRefDeltaEntry struct {
 }
 
 func newValueLogRefDelta() *valueLogRefDelta {
-	return &valueLogRefDelta{}
+	d, _ := valueLogRefDeltaPool.Get().(*valueLogRefDelta)
+	if d == nil {
+		return &valueLogRefDelta{}
+	}
+	return d
+}
+
+func releaseValueLogRefDelta(d *valueLogRefDelta) {
+	if d == nil {
+		return
+	}
+	d.resetForReuse()
+	valueLogRefDeltaPool.Put(d)
+}
+
+func (d *valueLogRefDelta) resetForReuse() {
+	if d == nil {
+		return
+	}
+	if d.inlineN > 0 {
+		clear(d.inline[:d.inlineN])
+		d.inlineN = 0
+	}
+	if d.changes == nil {
+		return
+	}
+	// Keep small/typical maps warm for reuse; drop unusually large maps.
+	if len(d.changes) > valueLogRefDeltaPoolMaxRetainedEntries {
+		d.changes = nil
+		return
+	}
+	clear(d.changes)
 }
 
 func (d *valueLogRefDelta) add(fileID uint32, delta int64) {
@@ -85,7 +125,11 @@ func (d *valueLogRefDelta) add(fileID uint32, delta int64) {
 			d.inlineN++
 			return
 		}
-		d.changes = make(map[uint32]int64, d.inlineN+1)
+		capHint := d.inlineN + 1
+		if capHint < valueLogRefDeltaPromotedMapInitCap {
+			capHint = valueLogRefDeltaPromotedMapInitCap
+		}
+		d.changes = make(map[uint32]int64, capHint)
 		for i := 0; i < d.inlineN; i++ {
 			entry := d.inline[i]
 			if entry.delta == 0 {

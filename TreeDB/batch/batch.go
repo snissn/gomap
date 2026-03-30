@@ -63,6 +63,7 @@ type Batch struct {
 	touchedValueLogSmall    [4]uint32
 	touchedValueLogSmallLen int
 	touchedValueLog         map[uint32]struct{}
+	hasValueLogPointers     bool
 	sorted                  bool
 	lastKey                 []byte
 	closed                  bool
@@ -140,6 +141,7 @@ func (b *Batch) resetLocked() {
 	}
 	b.touchedValueLog = nil
 	b.touchedValueLogSmallLen = 0
+	b.hasValueLogPointers = false
 	b.byteSize = 0
 	b.sorted = true
 	b.lastKey = nil
@@ -163,6 +165,7 @@ func (b *Batch) resetForPool() {
 	}
 	b.touchedValueLog = nil
 	b.touchedValueLogSmallLen = 0
+	b.hasValueLogPointers = false
 	b.sorted = true
 	b.lastKey = nil
 	b.resetArenaLocked()
@@ -441,6 +444,7 @@ func (b *Batch) SetPointer(key []byte, ptr page.ValuePtr) error {
 		IsPtr:    true,
 	}
 	b.entries = append(b.entries, entry)
+	b.hasValueLogPointers = true
 	b.noteTouchedValueLog(ptr)
 	b.noteKeyOrder(entry.Key)
 	return nil
@@ -454,6 +458,48 @@ func (b *Batch) SetPointer(key []byte, ptr page.ValuePtr) error {
 // best-effort optimization used by higher-level layers (e.g. cached flush
 // streaming).
 func (b *Batch) SetPointerView(key []byte, ptr page.ValuePtr) error {
+	return b.setPointerViewInternal(key, ptr, true)
+}
+
+// SetPointerViewNoTouch is an internal-performance helper that records a
+// pointer Put without copying key bytes and without tracking touched value-log
+// segments. Callers must separately provide touched segment hints when commit
+// publication needs them.
+func (b *Batch) SetPointerViewNoTouch(key []byte, ptr page.ValuePtr) error {
+	return b.setPointerViewInternal(key, ptr, false)
+}
+
+// AppendPointerViewNoTouchTrustedSorted appends a pointer Put without input
+// validation, touched-segment tracking, or key-order checks. Caller must
+// guarantee: batch is open, key is non-empty, ptr is a value-log pointer, and
+// appended keys are already non-decreasing.
+func (b *Batch) AppendPointerViewNoTouchTrustedSorted(key []byte, ptr page.ValuePtr) {
+	if b == nil {
+		return
+	}
+	b.entries = append(b.entries, Entry{
+		Type:     OpPut,
+		Key:      key,
+		ValuePtr: ptr,
+		IsPtr:    true,
+	})
+	b.hasValueLogPointers = true
+	if b.sorted {
+		b.lastKey = key
+	}
+}
+
+// NoteTouchedValueLogFileID is an internal helper that records a touched
+// value-log segment without appending a batch entry.
+func (b *Batch) NoteTouchedValueLogFileID(fileID uint32) {
+	if b == nil || !page.IsValueLogFileID(fileID) {
+		return
+	}
+	b.hasValueLogPointers = true
+	b.noteTouchedValueLogFileID(fileID)
+}
+
+func (b *Batch) setPointerViewInternal(key []byte, ptr page.ValuePtr, noteTouched bool) error {
 	if err := b.ensureOpen(); err != nil {
 		return err
 	}
@@ -469,7 +515,10 @@ func (b *Batch) SetPointerView(key []byte, ptr page.ValuePtr) error {
 		ValuePtr: ptr,
 		IsPtr:    true,
 	})
-	b.noteTouchedValueLog(ptr)
+	b.hasValueLogPointers = true
+	if noteTouched {
+		b.noteTouchedValueLog(ptr)
+	}
 	b.noteKeyOrder(key)
 	return nil
 }
@@ -536,6 +585,7 @@ func (b *Batch) SetOps(ops []Entry) error {
 			if !page.IsValueLogFileID(op.ValuePtr.FileID) {
 				return fmt.Errorf("invalid value-log pointer in SetOps: file %d", op.ValuePtr.FileID)
 			}
+			b.hasValueLogPointers = true
 			b.noteTouchedValueLog(op.ValuePtr)
 		}
 		b.noteKeyOrder(op.Key)
@@ -600,7 +650,7 @@ func (b *Batch) HasValueLogPointers() bool {
 	if b == nil {
 		return false
 	}
-	return b.touchedValueLogSmallLen > 0 || len(b.touchedValueLog) > 0
+	return b.hasValueLogPointers
 }
 
 // TouchedValueLogSegments reports the value-log segments that were touched by
@@ -637,7 +687,10 @@ func (b *Batch) noteTouchedValueLog(ptr page.ValuePtr) {
 	if !page.IsValueLogFileID(ptr.FileID) {
 		return
 	}
-	id := ptr.FileID
+	b.noteTouchedValueLogFileID(ptr.FileID)
+}
+
+func (b *Batch) noteTouchedValueLogFileID(id uint32) {
 	for i := 0; i < b.touchedValueLogSmallLen; i++ {
 		if b.touchedValueLogSmall[i] == id {
 			return

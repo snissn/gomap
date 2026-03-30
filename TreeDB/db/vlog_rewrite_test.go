@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/snissn/compress/zstd"
+	batchpkg "github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -88,6 +89,43 @@ func TestRewriteSwapsKeySorted(t *testing.T) {
 	}
 	if !rewriteSwapsKeySorted(duplicates) {
 		t.Fatalf("expected duplicate keys to be treated as sorted")
+	}
+}
+
+func TestNoteRewriteSwapTouchedSegments(t *testing.T) {
+	b := batchpkg.New(nil, page.DefaultInlineThreshold)
+	t.Cleanup(func() { _ = b.Close() })
+
+	swaps := []rewriteSwap{
+		{newPtr: page.ValuePtr{FileID: page.ValueLogFileID(7)}},
+		{newPtr: page.ValuePtr{FileID: page.ValueLogFileID(2)}},
+		{newPtr: page.ValuePtr{FileID: page.ValueLogFileID(7)}},
+		{newPtr: page.ValuePtr{FileID: 12}}, // non-value-log file ID
+		{newPtr: page.ValuePtr{FileID: page.ValueLogFileID(5)}},
+	}
+	noteRewriteSwapTouchedSegments(b, swaps)
+	got := b.TouchedValueLogSegments()
+	if len(got) != 3 {
+		t.Fatalf("len(got)=%d want=3 (got=%v)", len(got), got)
+	}
+	slices.Sort(got)
+	want := []uint32{
+		page.ValueLogFileID(2),
+		page.ValueLogFileID(5),
+		page.ValueLogFileID(7),
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("touched segments=%v want=%v", got, want)
+	}
+
+	b.Reset()
+	noteRewriteSwapTouchedSegments(b, []rewriteSwap{
+		{newPtr: page.ValuePtr{FileID: 1}},
+		{newPtr: page.ValuePtr{FileID: 2}},
+	})
+	none := b.TouchedValueLogSegments()
+	if len(none) != 0 {
+		t.Fatalf("non-value-log touched segments=%v want=[]", none)
 	}
 }
 
@@ -1695,6 +1733,74 @@ func buildRewriteTemplateFixture(t *testing.T) (templ.Config, rewriteTemplateSto
 	}
 	value := []byte(`{"type":"account","id":"acct-000001","status":"bonded","chain":"celestia"}`)
 	return cfg, store, lookup, value
+}
+
+func TestRewriteWriter_CreatedFileIDs_StableAcrossCalls(t *testing.T) {
+	const (
+		lane     = uint32(2)
+		startSeq = uint32(7)
+		maxSize  = int64(512)
+	)
+
+	w := newRewriteWriter(t.TempDir(), lane, startSeq, maxSize)
+	value := bytes.Repeat([]byte("rewrite-created-ids|"), 24)
+
+	for i := 0; i < 3; i++ {
+		if _, err := w.appendValue(uint64(i+1), value); err != nil {
+			t.Fatalf("appendValue(%d): %v", i+1, err)
+		}
+	}
+
+	ids1, err := w.createdFileIDs()
+	if err != nil {
+		t.Fatalf("createdFileIDs first: %v", err)
+	}
+	if len(ids1) != 3 {
+		t.Fatalf("expected 3 created IDs, got %d", len(ids1))
+	}
+	if cap(ids1) != len(ids1) {
+		t.Fatalf("expected append-safe created ID view (cap=len), len=%d cap=%d", len(ids1), cap(ids1))
+	}
+	for i := range ids1 {
+		want, err := valuelog.EncodeFileID(lane, startSeq+1+uint32(i))
+		if err != nil {
+			t.Fatalf("EncodeFileID(%d): %v", i, err)
+		}
+		if ids1[i] != want {
+			t.Fatalf("created ID[%d] mismatch: got=%d want=%d", i, ids1[i], want)
+		}
+	}
+
+	ids2, err := w.createdFileIDs()
+	if err != nil {
+		t.Fatalf("createdFileIDs second: %v", err)
+	}
+	if !reflect.DeepEqual(ids2, ids1) {
+		t.Fatalf("created IDs changed across calls: first=%v second=%v", ids1, ids2)
+	}
+
+	_ = append(ids1, 999)
+	ids3, err := w.createdFileIDs()
+	if err != nil {
+		t.Fatalf("createdFileIDs after append copy: %v", err)
+	}
+	if !reflect.DeepEqual(ids3, ids2) {
+		t.Fatalf("created IDs changed after caller append: before=%v after=%v", ids2, ids3)
+	}
+
+	if _, err := w.appendValue(4, value); err != nil {
+		t.Fatalf("appendValue(4): %v", err)
+	}
+	ids4, err := w.createdFileIDs()
+	if err != nil {
+		t.Fatalf("createdFileIDs after additional append: %v", err)
+	}
+	if len(ids4) != 4 {
+		t.Fatalf("expected created IDs to grow to 4, got %d", len(ids4))
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
 }
 
 func TestRewriteWriter_TemplatePrepassEncodesBeforeDict(t *testing.T) {

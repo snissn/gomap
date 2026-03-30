@@ -2144,6 +2144,31 @@ func (db *DB) splitValueLogEnabled() bool {
 	return true
 }
 
+// ReserveValueLogRIDs reserves a contiguous RID range from the cached-mode
+// shared allocator and returns the starting RID.
+func (db *DB) ReserveValueLogRIDs(count int) (uint64, error) {
+	if db == nil {
+		return 0, fmt.Errorf("value-log rid allocator unavailable")
+	}
+	if count <= 0 {
+		return 0, fmt.Errorf("value-log rid allocator requires positive count: count=%d", count)
+	}
+	need := uint64(count)
+	for {
+		cur := db.nextRID.Load()
+		if need > (^uint64(0) - cur) {
+			return 0, fmt.Errorf("value-log rid space exhausted")
+		}
+		next := cur + need
+		if next == 0 || next < cur {
+			return 0, fmt.Errorf("value-log rid space exhausted")
+		}
+		if db.nextRID.CompareAndSwap(cur, next) {
+			return cur + 1, nil
+		}
+	}
+}
+
 func (db *DB) valueLogThresholdForKey(key []byte) int {
 	if db == nil {
 		return page.DefaultInlineThreshold
@@ -14984,17 +15009,7 @@ planned:
 				SyncEachBatch:   false,
 				MaxSegmentBytes: db.valueLogGenerationWarmTarget,
 				ProtectedPaths:  db.valueLogProtectedPaths(),
-				ReserveRIDs: func(count int) (uint64, error) {
-					if count <= 0 {
-						return 0, nil
-					}
-					end := db.nextRID.Add(uint64(count))
-					start := end - uint64(count) + 1
-					if start == 0 || end < start {
-						return 0, fmt.Errorf("value-log rid space exhausted")
-					}
-					return start, nil
-				},
+				ReserveRIDs:     db.ReserveValueLogRIDs,
 			}
 			processedRewriteIDs := []uint32(nil)
 			processedLedgerTotalBytes := int64(0)

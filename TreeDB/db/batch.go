@@ -205,6 +205,11 @@ func (b *Batch) writeOptimistic(sync bool) (bool, error) {
 		}
 		return false, err
 	}
+	defer func() {
+		if vlogRefDelta != nil {
+			releaseValueLogRefDelta(vlogRefDelta)
+		}
+	}()
 	b.db.commitMu.Lock()
 	b.db.mu.RLock()
 	currentRoot := b.db.meta.UserRootPageID
@@ -226,9 +231,10 @@ func (b *Batch) writeOptimistic(sync bool) (bool, error) {
 		b.db.writeMu.RUnlock()
 		return false, err
 	}
+	vlogRefDelta = nil
 	b.db.finalizeCommitPostWork(post)
 	if b.db.vacuum.Active() {
-		b.db.vacuum.RecordOps(b.batch.Ops())
+		b.db.vacuum.RecordEntries(entries)
 	}
 	b.db.writeMu.RUnlock()
 	return true, nil
@@ -262,6 +268,11 @@ func (b *Batch) writeSerialized(sync bool) error {
 	if err != nil {
 		return err
 	}
+	defer func() {
+		if vlogRefDelta != nil {
+			releaseValueLogRefDelta(vlogRefDelta)
+		}
+	}()
 
 	b.db.mu.Lock()
 	if b.db.meta.UserRootPageID != rootID {
@@ -275,8 +286,9 @@ func (b *Batch) writeSerialized(sync bool) error {
 	if err := b.db.finalizeCommit(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta); err != nil {
 		return err
 	}
+	vlogRefDelta = nil
 	if b.db.vacuum.Active() {
-		b.db.vacuum.RecordOps(b.batch.Ops())
+		b.db.vacuum.RecordEntries(entries)
 	}
 	return nil
 }

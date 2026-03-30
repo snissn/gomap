@@ -114,6 +114,17 @@ type DB struct {
 
 	state atomic.Pointer[DBState]
 
+	// readRetryRefresh* deduplicates read-triggered value-log refreshes
+	// (ErrFileNotFound retry path) so concurrent readers share one refresh scan.
+	readRetryRefreshMu            sync.Mutex
+	readRetryRefreshInFlight      bool
+	readRetryRefreshDone          chan struct{}
+	readRetryRefreshErr           error
+	readRetryRefreshEpoch         atomic.Uint64
+	readRetryRefreshLeaderCount   atomic.Uint64
+	readRetryRefreshFollowerCount atomic.Uint64
+	readRetryRefreshSkippedEpoch  atomic.Uint64
+
 	notifyError func(error)
 	bgErrMu     sync.Mutex
 	bgErr       error
@@ -1660,6 +1671,9 @@ func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired [
 func (db *DB) finalizeCommitPostWork(post finalizeCommitPost) {
 	var durPrune time.Duration
 
+	if post.vlogRefDelta != nil {
+		defer releaseValueLogRefDelta(post.vlogRefDelta)
+	}
 	if db.valueLogRefTracker != nil {
 		if post.vlogRefDelta != nil {
 			if err := db.valueLogRefTracker.applyDelta(post.commitSeq, post.vlogRefDelta); err != nil {

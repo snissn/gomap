@@ -114,6 +114,13 @@ The harness alternates run order per pair (`control->candidate`, then
 For stable pair scoring, prefer `FREEZE_REMOTE_HEIGHT_AT_START=1` and validate
 `delta_blocks_synced` stays near zero across pairs.
 
+Scoring policy defaults:
+- `AB_POLICY=low_noise` (default)
+  - `SCORING_MODE=per_block`
+  - `BLOCK_DRIFT_TOLERANCE=50`
+  - `ALLOW_DRIFT_SCORING=0`
+- `AB_POLICY=legacy` to restore historical behavior (`absolute` scoring, drift gate disabled by default).
+
 ## Experimental Knob
 - `TREEDB_ENABLE_VLOG_GENERATION_PRECHECKPOINT_REWRITE=1`
   - WAL-off only.

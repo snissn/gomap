@@ -1375,6 +1375,10 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 	batchSize := normalizeValueLogRewriteBatchSize(opts.BatchSize)
 	swaps := make([]rewriteSwap, 0, batchSize)
 	batchCreatedIDs := make([]uint32, 0, 4)
+	var (
+		lastRegisteredCreatedID uint32
+		hasLastRegisteredID     bool
+	)
 	localityPolicy := normalizeValueLogRewriteLocalityPolicy(opts.LocalityPolicy)
 	candidates := make([]rewriteCandidate, 0, batchSize)
 	candidateKeyArena := make([]byte, 0, 16<<10)
@@ -1428,14 +1432,9 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 			stats.RecordsCopied++
 			stats.ValueRecordsCopied++
 			stats.ValueBytesCopied += int64(len(val))
-			seenID := false
-			for _, id := range batchCreatedIDs {
-				if id == newPtr.FileID {
-					seenID = true
-					break
-				}
-			}
-			if !seenID {
+			// rewriteWriter appends monotonically by segment; IDs only change on
+			// rotate and never return to a prior segment.
+			if len(batchCreatedIDs) == 0 || batchCreatedIDs[len(batchCreatedIDs)-1] != newPtr.FileID {
 				batchCreatedIDs = append(batchCreatedIDs, newPtr.FileID)
 			}
 			swaps = append(swaps, rewriteSwap{
@@ -1456,6 +1455,9 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		// Register rewrite-created segments before publishing pointer swaps so
 		// finalizeCommit can stay on CurrentSetNoRefresh and avoid full scans.
 		for _, id := range batchCreatedIDs {
+			if hasLastRegisteredID && id == lastRegisteredCreatedID {
+				continue
+			}
 			path := db.valueLogManager.SegmentPath(id)
 			if err := db.valueLogManager.RegisterSegment(path, id); err != nil {
 				return err
@@ -1463,6 +1465,8 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 			if err := db.valueLogManager.PromoteCurrentWritable(id); err != nil {
 				return err
 			}
+			lastRegisteredCreatedID = id
+			hasLastRegisteredID = true
 		}
 		if err := db.applyRewriteSwapBatch(swaps, opts.SyncEachBatch); err != nil {
 			return err
@@ -2220,6 +2224,7 @@ func (db *DB) applyRewriteSwapBatchOptimistic(swaps []rewriteSwap, sync bool) (b
 	if len(entries) == 0 {
 		return true, nil
 	}
+	noteRewriteSwapTouchedSegments(b, swaps)
 	touchedValueLogSegments := b.TouchedValueLogSegments()
 
 	tracker := newAllocTracker(idx.allocator)
@@ -2232,11 +2237,15 @@ func (db *DB) applyRewriteSwapBatchOptimistic(swaps []rewriteSwap, sync bool) (b
 		}
 		return false, err
 	}
-	entries = b.SortedEntries()
 	var vlogRefDelta *valueLogRefDelta
 	if trackValueLogRefDelta {
 		vlogRefDelta = rewriteDelta
 	}
+	defer func() {
+		if vlogRefDelta != nil {
+			releaseValueLogRefDelta(vlogRefDelta)
+		}
+	}()
 
 	db.commitMu.Lock()
 	db.mu.RLock()
@@ -2257,9 +2266,10 @@ func (db *DB) applyRewriteSwapBatchOptimistic(swaps []rewriteSwap, sync bool) (b
 	if err != nil {
 		return false, err
 	}
+	vlogRefDelta = nil
 	db.finalizeCommitPostWork(post)
 	if db.vacuum.Active() {
-		db.vacuum.RecordOps(b.Ops())
+		db.vacuum.RecordEntries(entries)
 	}
 	return true, nil
 }
@@ -2305,22 +2315,28 @@ func (db *DB) applyRewriteSwapBatchSerialized(swaps []rewriteSwap, sync bool) er
 	if len(entries) == 0 {
 		return nil
 	}
+	noteRewriteSwapTouchedSegments(b, swaps)
 	touchedValueLogSegments := b.TouchedValueLogSegments()
 
 	newRoot, retired, metrics, err := idx.zipper.Apply(rootID, b)
 	if err != nil {
 		return err
 	}
-	entries = b.SortedEntries()
 	var vlogRefDelta *valueLogRefDelta
 	if trackValueLogRefDelta {
 		vlogRefDelta = rewriteDelta
 	}
+	defer func() {
+		if vlogRefDelta != nil {
+			releaseValueLogRefDelta(vlogRefDelta)
+		}
+	}()
 	if err := db.finalizeCommit(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, db.indexOuterLeavesInValueLog, vlogRefDelta); err != nil {
 		return err
 	}
+	vlogRefDelta = nil
 	if db.vacuum.Active() {
-		db.vacuum.RecordOps(b.Ops())
+		db.vacuum.RecordEntries(entries)
 	}
 	return nil
 }
@@ -2353,9 +2369,9 @@ func collectRewriteSwapPointerMatches(tr *tree.Tree, b *batch.Batch, swaps []rew
 			}
 			_, ptr, flags := it.UnsafeEntry()
 			if flags&node.FlagPointer != 0 && ptr == swap.oldPtr {
-				if err := b.SetPointerView(swap.key, swap.newPtr); err != nil {
-					return nil, err
-				}
+				// Rewrite swap batches derive touched segments explicitly and avoid
+				// per-entry touched-segment tracking overhead here.
+				b.AppendPointerViewNoTouchTrustedSorted(swap.key, swap.newPtr)
 				if trackValueLogRefDelta && (page.IsValueLogFileID(swap.oldPtr.FileID) || page.IsValueLogFileID(swap.newPtr.FileID)) {
 					if delta == nil {
 						delta = newValueLogRefDelta()
@@ -2373,9 +2389,19 @@ func collectRewriteSwapPointerMatches(tr *tree.Tree, b *batch.Batch, swaps []rew
 		}
 	}
 	if err := it.Error(); err != nil {
+		releaseValueLogRefDelta(delta)
 		return nil, err
 	}
 	return delta, nil
+}
+
+func noteRewriteSwapTouchedSegments(b *batch.Batch, swaps []rewriteSwap) {
+	if b == nil || len(swaps) == 0 {
+		return
+	}
+	for _, swap := range swaps {
+		b.NoteTouchedValueLogFileID(swap.newPtr.FileID)
+	}
 }
 
 func rewriteSwapsKeySorted(swaps []rewriteSwap) bool {
@@ -2685,7 +2711,6 @@ type rewriteWriter struct {
 	walDir  string
 	lane    uint32
 	seq     uint32
-	start   uint32
 	maxSize int64
 	nextRID uint64
 	// currentPath/currentFileID cache the active writer segment identity so
@@ -2723,6 +2748,7 @@ type rewriteWriter struct {
 	templateOuterLeafOutBytes int64
 	w                         *valuelog.Writer
 	records                   int
+	createdIDs                []uint32
 
 	pendingDictID      uint64
 	pendingDict        []byte
@@ -2741,7 +2767,7 @@ const (
 )
 
 func newRewriteWriter(walDir string, lane, startSeq uint32, maxSize int64) *rewriteWriter {
-	return &rewriteWriter{walDir: walDir, lane: lane, seq: startSeq, start: startSeq, maxSize: maxSize}
+	return &rewriteWriter{walDir: walDir, lane: lane, seq: startSeq, maxSize: maxSize}
 }
 
 func rewriteDictFrameRecordLen(rawPayloadBytes, k int) int64 {
@@ -2895,6 +2921,7 @@ func (w *rewriteWriter) rotate() error {
 		writer.SetKeepPolicy(w.keepIoNsPerByte, w.keepEncodeNsRaw, w.keepSafetyMargin)
 		w.w = writer
 		w.seq = nextSeq
+		w.createdIDs = append(w.createdIDs, fileID)
 		w.currentPath = path
 		w.currentFileID = fileID
 		return nil
@@ -2905,6 +2932,7 @@ func (w *rewriteWriter) rotate() error {
 	w.w.SetBlockCompression(w.blockCodec, w.blockCompression)
 	w.w.SetKeepPolicy(w.keepIoNsPerByte, w.keepEncodeNsRaw, w.keepSafetyMargin)
 	w.seq = nextSeq
+	w.createdIDs = append(w.createdIDs, fileID)
 	w.currentPath = path
 	w.currentFileID = fileID
 	return nil
@@ -3270,18 +3298,10 @@ func (w *rewriteWriter) createdFileIDs() ([]uint32, error) {
 			return nil, err
 		}
 	}
-	if w == nil || w.seq <= w.start {
+	if w == nil || len(w.createdIDs) == 0 {
 		return nil, nil
 	}
-	out := make([]uint32, 0, int(w.seq-w.start))
-	for seq := w.start + 1; seq <= w.seq; seq++ {
-		id, err := valuelog.EncodeFileID(w.lane, seq)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, id)
-	}
-	return out, nil
+	return w.createdIDs[:len(w.createdIDs):len(w.createdIDs)], nil
 }
 
 type rewriteIterator struct {
