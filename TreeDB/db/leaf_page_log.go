@@ -80,6 +80,9 @@ func (db *DB) ensureLeafPageLogSegmentRegistered() (bool, error) {
 		return false, nil
 	}
 	if db.valueLogManager.HasSegment(fileID) {
+		if err := db.valueLogManager.PromoteCurrentWritable(fileID); err != nil {
+			return false, err
+		}
 		return true, nil
 	}
 	if err := db.valueLogManager.RegisterSegment(path, fileID); err != nil {
