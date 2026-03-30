@@ -87,3 +87,338 @@ Run an interleaved sequence with more pairs (stop-on-significance) and include t
 - `treedb.cache.vlog_generation.checkpoint_kick.skipped_hot_no_debt`
 
 to confirm skip path activation frequency under full mainnet sync pressure.
+
+## 2026-03-29 Follow-Up (Hybrid Wake Path)
+Code under test additionally keeps hot-debt-only skip behavior, but adds a bounded
+deferred wake that retries checkpoint-kick after the maintenance quiet window.
+
+### Repro Command
+```bash
+LOCAL_GOMAP_DIR=/home/mikers/dev/snissn/gomap-phasehook-active \
+USE_LOCAL_TREE_STACK=1 \
+TREEDB_OPEN_PROFILE=fast \
+~/run_celestia.sh
+```
+
+Run home:
+
+- `/home/mikers/.celestia-app-mainnet-treedb-20260329044918`
+
+### Sync Result (pre offline rewrite)
+- `duration_seconds=402`
+- `end_app_bytes=4,762,541,410`
+- `max_rss_kb=11,078,464`
+
+### Offline Rewrite Result
+Command:
+
+```bash
+/home/mikers/dev/snissn/celestia-app-p4/build/treemap-local \
+  vlog-rewrite /home/mikers/.celestia-app-mainnet-treedb-20260329044918/data/application.db -rw
+```
+
+Result:
+
+- `elapsed_seconds=46.23`
+- `max_rss_kb=201,432`
+- `bytes_before=4,633,867,260`
+- `bytes_after=2,232,674,890`
+- `segments_before=21`
+- `segments_after=17`
+- `records=1,030,810`
+- `post_rewrite_app_bytes=2,273,530,132`
+- `post_rewrite_gzip_bytes=1,861,954,157` (`gzip -1` over application.db)
+
+### Context vs Recent Fast Runs
+Recent same-day fast-profile runs (no offline rewrite in `duration_seconds`) were:
+
+- `20260329034043`: `duration_seconds=303`, `end_app_bytes=5,339,008,353`
+- `20260329035348`: `duration_seconds=317`, `end_app_bytes=5,259,222,322`
+- `20260329040218`: `duration_seconds=315`, `end_app_bytes=5,247,290,570`
+- `20260329040840`: `duration_seconds=360`, `end_app_bytes=5,261,253,378`
+- `20260329041947`: `duration_seconds=327`, `end_app_bytes=5,339,742,186`
+- `20260329042621`: `duration_seconds=303`, `end_app_bytes=5,293,282,308`
+
+Observed tradeoff in this follow-up sample:
+
+- Better pre-rewrite size (`4.76G` vs recent `~5.25G-5.34G`)
+- Slower sync wall-time (`402s` vs recent `~303s-360s`)
+- Sync + offline rewrite total wall-time `~448s`
+
+Note: pre-rewrite gzip for this exact run was not captured before rewrite; include
+that in the next controlled interleaved A/B pass.
+
+## 2026-03-29 Rewrite No-Rescan Follow-Up
+Patch under test:
+
+- Online `ValueLogRewriteOnline` now reuses the manager's post-publish set for:
+  - rewrite health metadata update
+  - `SegmentsAfter`/`BytesAfter` stats
+- This avoids extra WAL directory scans on the online rewrite hot path.
+
+### Single `run_celestia` sanity run
+Command:
+
+```bash
+LOCAL_GOMAP_DIR=/home/mikers/dev/snissn/gomap-phasehook-active \
+USE_LOCAL_TREE_STACK=1 \
+TREEDB_OPEN_PROFILE=fast \
+TRUST_HEIGHT=10432048 \
+TRUST_HASH=11DFB276B9941D4A5C071641A9F4166F4A7FE2FA2AFC6B5106715D5BAB0EAAB1 \
+STOP_AT_LOCAL_HEIGHT=10434185 \
+~/run_celestia.sh
+```
+
+Run home:
+
+- `/home/mikers/.celestia-app-mainnet-treedb-20260329060509`
+
+Sync result:
+
+- `duration_seconds=280`
+- `end_app_bytes=4,343,298,864` (from `sync-time.log`)
+- `sync_app_bytes=4,344,366,789` (post-run `du -sb`)
+- `max_rss_kb=7,419,948`
+
+Offline rewrite:
+
+```bash
+/home/mikers/dev/snissn/celestia-app-p4/build/treemap-local \
+  vlog-rewrite /home/mikers/.celestia-app-mainnet-treedb-20260329060509/data/application.db -rw
+```
+
+- `rewrite_seconds=45`
+- `segments_before=19`
+- `segments_after=16`
+- `bytes_before=4,191,577,486`
+- `bytes_after=2,015,614,944`
+- `records=966,376`
+- `post_app_bytes=2,054,110,809`
+- `post_wal_bytes=2,015,619,040`
+- `post_gzip_bytes=1,701,847,087` (`gzip -1`)
+
+### Microbench signal (rewrite path)
+Benchmark:
+
+```bash
+GOWORK=off go test ./TreeDB/db -run '^$' \
+  -bench 'BenchmarkValueLogRewriteOnline_LeafRefs_ReserveRIDs$' \
+  -benchmem -benchtime=3x -count=1
+```
+
+Before no-rescan patch:
+
+- `26630695 ns/op`
+- `4807149 B/op`
+- `1845 allocs/op`
+
+After no-rescan patch:
+
+- `26645666 ns/op`
+- `4768021 B/op`
+- `1430 allocs/op`
+
+Interpretation:
+
+- Runtime stayed effectively flat in this microbench.
+- Allocation pressure improved materially (`~22.5%` fewer allocs/op).
+- End-to-end significance still needs interleaved control/candidate runs.
+
+### Patch-Isolated A/B (same commit, local diff only)
+Purpose: isolate this uncommitted no-rescan patch from all other branch deltas.
+
+Control/candidate setup:
+
+- `control`: clean detached worktree at current `HEAD` (`/tmp/gomap_patch_base_20260329061302`)
+- `candidate`: working tree (`/home/mikers/dev/snissn/gomap-phasehook-active`)
+- shared env: `TREEDB_OPEN_PROFILE=fast`, fixed trust/stop-height, offline rewrite enabled
+
+Harness:
+
+```bash
+OUT_DIR=/tmp/celestia_ab_patch_20260329061302 \
+CONTROL_ENV_FILE=/tmp/celestia_ab_patch_ctrl_20260329061302.env \
+CANDIDATE_ENV_FILE=/tmp/celestia_ab_patch_cand_20260329061302.env \
+MAX_PAIRS=1 MIN_PAIRS=1 CLEAR_WIN_PAIRS=1 CLEAR_LOSS_PAIRS=1 \
+LOW_SIGNAL_MIN_PAIRS=1 LOW_SIGNAL_NEUTRAL_STREAK=1 \
+SIZE_TOLERANCE_BYTES=$((64<<20)) TIME_TOLERANCE_SECONDS=120 \
+REWRITE_ENABLED=1 RUN_TIMEOUT_SECONDS=1800 RUN_MAX_ATTEMPTS_PER_VARIANT=2 \
+./scripts/run_celestia_ab.sh
+```
+
+Result (`candidate - control`):
+
+- `delta_t_sync_seconds = -9`
+- `delta_t_total_seconds = -12`
+- `delta_s_sync_app_bytes = -61,351,635`
+- `delta_s_post_wal_bytes = -1,186,655`
+- outcome: `neutral` (below `64 MiB` size tolerance and `120s` time tolerance)
+
+Pair notes:
+
+- This pair was valid (`control_valid=true`, `candidate_valid=true`) but noisy
+  (both runs entered extended state-sync discover/apply phases).
+
+### Fast-Loop Follow-Up: Cached Segment Size Reuse
+Additional patch:
+
+- Exported best-effort segment size from value-log file metadata and reused it
+  in DB-side `fileSize(...)` callers to reduce repeated `stat(2)` calls on the
+  rewrite/health stats path.
+
+Primary microbench (`-benchtime=3x`, same host):
+
+- previous (after no-rescan patch): `26645666 ns/op`, `4768021 B/op`, `1430 allocs/op`
+- with cached-size reuse: `25392517 ns/op`, `4641410 B/op`, `855 allocs/op`
+
+Secondary check:
+
+- `BenchmarkValueLogRewriteOnline_ValuePointers`: `20536220 ns/op`, `4608546 B/op`, `710 allocs/op`
+
+Interpretation:
+
+- This is a meaningful additional allocation drop on the rewrite hot path in the
+  fast loop.
+- A long multi-pair end-to-end A/B attempt was started but aborted due another
+  high-noise near-target crawl in control (slow/no-signal loop).
+
+### Single-Run Follow-Up With Cached-Size Reuse
+Command (same profile/trust/stop-height as prior sanity runs):
+
+```bash
+LOCAL_GOMAP_DIR=/home/mikers/dev/snissn/gomap-phasehook-active \
+USE_LOCAL_TREE_STACK=1 \
+TREEDB_OPEN_PROFILE=fast \
+TRUST_HEIGHT=10432048 \
+TRUST_HASH=11DFB276B9941D4A5C071641A9F4166F4A7FE2FA2AFC6B5106715D5BAB0EAAB1 \
+STOP_AT_LOCAL_HEIGHT=10434185 \
+~/run_celestia.sh
+```
+
+Run home:
+
+- `/home/mikers/.celestia-app-mainnet-treedb-20260329063701`
+
+Sync result:
+
+- `duration_seconds=225`
+- `end_app_bytes=4,767,004,994`
+- `max_rss_kb=8,024,660`
+
+Offline rewrite:
+
+```bash
+/home/mikers/dev/snissn/celestia-app-p4/build/treemap-local \
+  vlog-rewrite /home/mikers/.celestia-app-mainnet-treedb-20260329063701/data/application.db -rw
+```
+
+- `rewrite_seconds=42`
+- `segments_before=20`
+- `segments_after=15`
+- `bytes_before=4,645,416,218`
+- `bytes_after=1,955,509,927`
+- `post_app_bytes=1,990,068,009`
+- `post_wal_bytes=1,955,509,927`
+- `post_gzip_bytes=1,668,555,899` (`gzip -1`)
+
+Delta vs prior sanity run (`/home/mikers/.celestia-app-mainnet-treedb-20260329060509`):
+
+- `sync_duration_seconds`: `280 -> 225` (`-55s`, `-19.64%`)
+- `sync_end_app_bytes`: `4,343,298,864 -> 4,767,004,994` (`+423,706,130`, `+9.76%`)
+- `sync_max_rss_kb`: `7,419,948 -> 8,024,660` (`+604,712`, `+8.15%`)
+- `postrewrite_wal_bytes`: `2,015,619,040 -> 1,955,509,927` (`-60,109,113`, `-2.98%`)
+- `postrewrite_app_bytes`: `2,054,110,809 -> 1,990,068,009` (`-64,042,800`, `-3.12%`)
+- `postrewrite_gzip_bytes`: `1,701,847,087 -> 1,668,555,899` (`-33,291,188`, `-1.96%`)
+
+Notes:
+
+- This is still a single-run comparison and remains susceptible to state-sync
+  phase variance.
+- It confirms the new patch does not obviously hurt post-rewrite size and
+  remains consistent with the microbench allocation improvements.
+
+## 2026-03-29 Follow-Up: Remove Forced Commit-Time Value-Log Refresh
+Patch under test:
+
+- Commit publish path now relies on touched-segment checks and registered
+  value-log segments instead of forcing `valueLogManager.Refresh()` whenever
+  `indexOuterLeavesInValueLog` is enabled.
+- Added refresh-scan guard coverage for outer-leaf write loops.
+
+### Targeted correctness checks
+Command:
+
+```bash
+GOWORK=off go test ./TreeDB/db -run \
+'Test(InlineCommitSkipsValueLogRefresh|PointerCommitRefreshesValueLogSet|PointerCommitSkipsValueLogRefreshWhenSegmentAlreadyRegistered|OuterLeafCommitPublishesRegisteredSegmentWithoutExplicitRefresh|OuterLeafWriteLoopSkipsForcedValueLogRefreshScans|ValueLogGC_DoesNotRescanWhenSetAlreadyPopulated|ValueLogRewritePlan_DoesNotRescanWhenSetAlreadyPopulated|ValueLogRewriteOnline_LeafRefsReserveRIDs_DoesNotRefreshManager)$' \
+-count=1
+```
+
+Result:
+
+- `ok github.com/snissn/gomap/TreeDB/db`
+
+### Fast microbench signal (outer-leaf write loop)
+Command:
+
+```bash
+GOWORK=off go test ./TreeDB/db -run '^$' \
+  -bench 'BenchmarkOuterLeafWriteLoop_(NoRefresh|ForcedRefresh)$' \
+  -benchmem -benchtime=1x -count=1
+```
+
+Result:
+
+- `NoRefresh`: `2.081s/op`, `0 refresh_scans/iter`, `33,565,000 B/op`, `63,734 allocs/op`
+- `ForcedRefresh`: `2.098s/op`, `2000 refresh_scans/iter`, `35,315,952 B/op`, `95,740 allocs/op`
+
+Interpretation:
+
+- In this local synthetic loop, forced refresh has modest wall-time impact but
+  materially higher allocation churn.
+- This supports keeping forced refresh off when segment registration is already
+  in place.
+
+### `run_celestia` probe
+Command:
+
+```bash
+LOCAL_GOMAP_DIR=/home/mikers/dev/snissn/gomap-phasehook-active \
+USE_LOCAL_TREE_STACK=1 \
+TREEDB_OPEN_PROFILE=fast \
+TRUST_HEIGHT=10432048 \
+TRUST_HASH=11DFB276B9941D4A5C071641A9F4166F4A7FE2FA2AFC6B5106715D5BAB0EAAB1 \
+STOP_AT_LOCAL_HEIGHT=10434185 \
+~/run_celestia.sh
+```
+
+Attempt A (`/home/mikers/.celestia-app-mainnet-treedb-20260329065615`):
+
+- Aborted by node panic at block `10434001`:
+  - `collections: not found: key 'no_key' ... distribution.v1beta1.Params`
+- Treated as invalid datapoint (no completed sync metrics).
+
+Attempt B (`/home/mikers/.celestia-app-mainnet-treedb-20260329070113`):
+
+- `duration_seconds=302`
+- `end_app_bytes=3,188,229,248` (from `sync-time.log`)
+- `max_rss_kb=8,784,824`
+- `rewrite_seconds=43`
+- `segments_before=14`, `segments_after=16`
+- `bytes_before=2,972,289,592`, `bytes_after=2,016,638,090`
+- `post_app_bytes=2,055,063,050`
+- `post_wal_bytes=2,016,638,090`
+- `post_gzip_bytes=1,701,260,711`
+
+Comparison vs prior cached-size sanity run (`/home/mikers/.celestia-app-mainnet-treedb-20260329063701`):
+
+- `sync_seconds`: `225 -> 302` (`+77s`)
+- `sync_end_app_bytes`: `4,767,004,994 -> 3,188,229,248` (`-1,578,775,746`)
+- `post_app_bytes`: `1,990,068,009 -> 2,055,063,050` (`+64,995,041`)
+- `post_gzip_bytes`: `1,668,555,899 -> 1,701,260,711` (`+32,704,812`)
+
+Interpretation:
+
+- Full-run outcome remains noisy; this sample does not show a clear wall-time +
+  post-rewrite size win despite better pre-rewrite app bytes.
+- Keep this change as “candidate” pending interleaved control/candidate pairs.
