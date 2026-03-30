@@ -851,13 +851,13 @@ func applyEnvMaintenanceOverrides(opts *Options) {
 	if v, ok := envInt64(envVlogRewriteTriggerTotalBytes); ok {
 		opts.ValueLog.Generational.RewriteTriggerTotalBytes = v
 	}
-	if v, ok := envInt(envVlogRewriteTriggerStaleRatioPPM); ok {
+	if v, ok := envInt64(envVlogRewriteTriggerStaleRatioPPM); ok {
 		if v < 0 {
 			v = 0
 		}
-		maxUint32Int := int(^uint32(0))
-		if v > maxUint32Int {
-			v = maxUint32Int
+		maxUint32Int64 := int64(^uint32(0))
+		if v > maxUint32Int64 {
+			v = maxUint32Int64
 		}
 		opts.ValueLog.Generational.RewriteTriggerStaleRatioPPM = uint32(v)
 	}
