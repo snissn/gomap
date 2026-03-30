@@ -321,6 +321,9 @@ func decodeCostEstimate(dict []byte, samples [][]byte) float64 {
 		eval = evenlySampleRecords(eval, maxDecodeCostSamples)
 	}
 	n := len(eval)
+	if n == 0 {
+		return 1.0
+	}
 	enc, err := zstd.NewWriter(nil,
 		zstd.WithEncoderDict(dict),
 		zstd.WithEncoderLevel(zstd.SpeedFastest),
@@ -334,9 +337,11 @@ func decodeCostEstimate(dict []byte, samples [][]byte) float64 {
 
 	totalRaw := 0
 	var encoded []byte
+	encodedFrames := make([][]byte, 0, n)
 	for i := 0; i < n; i++ {
 		totalRaw += len(eval[i])
 		encoded = enc.EncodeAll(eval[i], encoded[:0])
+		encodedFrames = append(encodedFrames, append([]byte(nil), encoded...))
 	}
 	dec, err := zstd.NewReader(nil, zstd.WithDecoderDicts(dict))
 	if err != nil {
@@ -347,8 +352,7 @@ func decodeCostEstimate(dict []byte, samples [][]byte) float64 {
 	var out []byte
 	start := time.Now()
 	for i := 0; i < n; i++ {
-		encoded = enc.EncodeAll(eval[i], encoded[:0])
-		out, _ = dec.DecodeAll(encoded, out[:0])
+		out, _ = dec.DecodeAll(encodedFrames[i], out[:0])
 		if len(out) > 0 {
 			_ = out[0]
 		}

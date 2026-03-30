@@ -129,7 +129,8 @@ func selectTreeDBExpvarStats(stats map[string]string) map[string]any {
 	out := make(map[string]any)
 	for k, v := range stats {
 		// Export only process-wide metric families under treedb.process.* and
-		// select cache/backend families used for mmap/decode/batch-arena tracking.
+		// select cache/backend families used for mmap/decode/batch-arena,
+		// compression, and live vlog-generation maintenance tracking.
 		if isProcessWideExpvarKey(k) ||
 			strings.HasPrefix(k, "treedb.process.identity.") ||
 			strings.HasPrefix(k, "treedb.vlog.mmap") ||

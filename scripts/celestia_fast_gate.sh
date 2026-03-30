@@ -185,7 +185,12 @@ setup_bins() {
   fi
 
   if ! git cat-file -e "${BASELINE_HASH}^{commit}" >/dev/null 2>&1; then
-    git fetch --no-tags --depth=1 origin "$BASELINE_HASH" >/dev/null 2>&1 || git fetch --no-tags origin "$BASELINE_HASH" >/dev/null 2>&1
+    fetch_refspec="$BASELINE_HASH"
+    if [[ "$BASELINE_HASH" == origin/* ]]; then
+      remote_branch="${BASELINE_HASH#origin/}"
+      fetch_refspec="+refs/heads/${remote_branch}:refs/remotes/origin/${remote_branch}"
+    fi
+    git fetch --no-tags --depth=1 origin "$fetch_refspec" >/dev/null 2>&1 || git fetch --no-tags origin "$fetch_refspec" >/dev/null 2>&1
   fi
 
   WORKTREE_PATH="$OUT/worktrees/baseline"

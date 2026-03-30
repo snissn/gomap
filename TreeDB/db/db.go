@@ -1596,12 +1596,19 @@ func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired [
 				}
 			}
 		}
-		if forceValueLogRefresh {
-			// Outer-leaf commits can rotate multiple value-log segments within a
-			// single commit. Registering only the current segment can miss
-			// intermediate referenced segments, so force a full refresh to keep the
-			// published ValueLogSet complete for snapshot readers.
-			needRefresh = true
+		if forceValueLogRefresh && len(touchedValueLogSegments) == 0 {
+			// Outer-leaf commits can keep ValueLogSet complete without a full
+			// scan when the leaf log can report/register its current segment.
+			registered, err := db.ensureLeafPageLogSegmentRegistered()
+			if err != nil {
+				db.mu.Unlock()
+				return post, err
+			}
+			if !registered {
+				// If callers cannot report touched segments and no registration
+				// path is available, force one refresh as a safety fallback.
+				needRefresh = true
+			}
 		}
 		if needRefresh {
 			if err := db.valueLogManager.Refresh(); err != nil {
