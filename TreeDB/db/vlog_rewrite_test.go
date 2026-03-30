@@ -91,6 +91,70 @@ func TestRewriteSwapsKeySorted(t *testing.T) {
 	}
 }
 
+func TestLeafRefRewriteCtx_LeafRemapInlinePromotion(t *testing.T) {
+	var ctx leafRefRewriteCtx
+
+	for i := 0; i < leafRefRewriteInlineRemapCap; i++ {
+		oldID := uint64(i + 1)
+		newID := uint64(i + 1001)
+		ctx.storeLeafRemap(oldID, newID)
+	}
+	if ctx.leafMap != nil {
+		t.Fatalf("leaf map allocated before inline cache filled")
+	}
+	for i := 0; i < leafRefRewriteInlineRemapCap; i++ {
+		oldID := uint64(i + 1)
+		want := uint64(i + 1001)
+		got, ok := ctx.lookupLeafRemap(oldID)
+		if !ok || got != want {
+			t.Fatalf("lookup leaf remap[%d]: got=%d ok=%v want=%d", i, got, ok, want)
+		}
+	}
+
+	promoteOld := uint64(9999)
+	promoteNew := uint64(19999)
+	ctx.storeLeafRemap(promoteOld, promoteNew)
+	if ctx.leafMap == nil {
+		t.Fatalf("leaf map not promoted after inline cache overflow")
+	}
+	got, ok := ctx.lookupLeafRemap(promoteOld)
+	if !ok || got != promoteNew {
+		t.Fatalf("lookup promoted leaf remap: got=%d ok=%v want=%d", got, ok, promoteNew)
+	}
+}
+
+func TestLeafRefRewriteCtx_InternalRemapInlinePromotion(t *testing.T) {
+	var ctx leafRefRewriteCtx
+
+	for i := 0; i < leafRefRewriteInlineRemapCap; i++ {
+		oldID := uint64(i + 11)
+		newID := uint64(i + 2011)
+		ctx.storeInternalRemap(oldID, newID)
+	}
+	if ctx.internalMap != nil {
+		t.Fatalf("internal map allocated before inline cache filled")
+	}
+	for i := 0; i < leafRefRewriteInlineRemapCap; i++ {
+		oldID := uint64(i + 11)
+		want := uint64(i + 2011)
+		got, ok := ctx.lookupInternalRemap(oldID)
+		if !ok || got != want {
+			t.Fatalf("lookup internal remap[%d]: got=%d ok=%v want=%d", i, got, ok, want)
+		}
+	}
+
+	promoteOld := uint64(8888)
+	promoteNew := uint64(28888)
+	ctx.storeInternalRemap(promoteOld, promoteNew)
+	if ctx.internalMap == nil {
+		t.Fatalf("internal map not promoted after inline cache overflow")
+	}
+	got, ok := ctx.lookupInternalRemap(promoteOld)
+	if !ok || got != promoteNew {
+		t.Fatalf("lookup promoted internal remap: got=%d ok=%v want=%d", got, ok, promoteNew)
+	}
+}
+
 func TestValueLogRewriteOffline_RewritesAndShrinks(t *testing.T) {
 	dir := t.TempDir()
 
