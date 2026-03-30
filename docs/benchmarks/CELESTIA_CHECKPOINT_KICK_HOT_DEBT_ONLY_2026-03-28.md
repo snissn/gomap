@@ -474,3 +474,40 @@ Interpretation:
 
 - This is a small but consistent allocation reduction in the rewrite hot path
   without measured throughput regression in this sample size.
+
+### Follow-on microbench: leafref rewrite map bootstrap sizing
+Change:
+
+- Reduce initial `leafMap` and `internalMap` capacities in leafref online rewrite
+  from `1024` to `128` so small rewrites avoid over-allocating map buckets.
+
+Commands:
+
+```bash
+# Baseline (HEAD~1) in temporary worktree
+git worktree add /tmp/gomap_base_leafrefs HEAD~1
+GOWORK=off go test -C /tmp/gomap_base_leafrefs ./TreeDB/db -run '^$' \
+  -bench '^BenchmarkValueLogRewriteOnline_LeafRefs_ReserveRIDs$' \
+  -benchmem -benchtime=20x -count=12 -cpu=1 \
+  > /tmp/leafrefs_base_cpu1.txt
+git worktree remove /tmp/gomap_base_leafrefs --force
+
+# Candidate (current branch)
+GOWORK=off go test ./TreeDB/db -run '^$' \
+  -bench '^BenchmarkValueLogRewriteOnline_LeafRefs_ReserveRIDs$' \
+  -benchmem -benchtime=20x -count=12 -cpu=1 \
+  > /tmp/leafrefs_cand_cpu1.txt
+
+benchstat /tmp/leafrefs_base_cpu1.txt /tmp/leafrefs_cand_cpu1.txt
+```
+
+Result summary:
+
+- `sec/op`: `19.34ms -> 19.03ms` (`-1.57%`, `p=0.045`, `n=12`)
+- `rewrite_allocs/op`: `230.2 -> 226.2` (`-1.74%`, `p<0.001`, `n=12`)
+- `B/op`: `4.152MiB -> 4.091MiB` (`-1.47%`, `p<0.001`, `n=12`)
+
+Interpretation:
+
+- Small but consistent allocation reduction on leafref rewrite with no latency
+  regression in the controlled (`-cpu=1`) sample.

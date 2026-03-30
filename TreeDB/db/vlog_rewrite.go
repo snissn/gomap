@@ -1820,7 +1820,8 @@ func (c *leafRefRewriteCtx) rewriteNode(id uint64) (uint64, bool, error) {
 			return id, false, err
 		}
 		if c.leafMap == nil {
-			c.leafMap = make(map[uint64]uint64, 1024)
+			// Keep initial maps modest on small rewrites; they grow as needed.
+			c.leafMap = make(map[uint64]uint64, 128)
 		}
 		c.leafMap[id] = leafID
 		c.copied++
@@ -1917,7 +1918,8 @@ func (c *leafRefRewriteCtx) rewriteNode(id uint64) (uint64, bool, error) {
 			c.retired = append(c.retired, id)
 		}
 		if c.internalMap == nil {
-			c.internalMap = make(map[uint64]uint64, 1024)
+			// Keep initial maps modest on small rewrites; they grow as needed.
+			c.internalMap = make(map[uint64]uint64, 128)
 		}
 		c.internalMap[id] = newID
 		return newID, true, nil
