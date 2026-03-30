@@ -1375,6 +1375,10 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 	batchSize := normalizeValueLogRewriteBatchSize(opts.BatchSize)
 	swaps := make([]rewriteSwap, 0, batchSize)
 	batchCreatedIDs := make([]uint32, 0, 4)
+	var (
+		lastRegisteredCreatedID uint32
+		hasLastRegisteredID     bool
+	)
 	localityPolicy := normalizeValueLogRewriteLocalityPolicy(opts.LocalityPolicy)
 	candidates := make([]rewriteCandidate, 0, batchSize)
 	candidateKeyArena := make([]byte, 0, 16<<10)
@@ -1428,14 +1432,9 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 			stats.RecordsCopied++
 			stats.ValueRecordsCopied++
 			stats.ValueBytesCopied += int64(len(val))
-			seenID := false
-			for _, id := range batchCreatedIDs {
-				if id == newPtr.FileID {
-					seenID = true
-					break
-				}
-			}
-			if !seenID {
+			// rewriteWriter appends monotonically by segment; IDs only change on
+			// rotate and never return to a prior segment.
+			if len(batchCreatedIDs) == 0 || batchCreatedIDs[len(batchCreatedIDs)-1] != newPtr.FileID {
 				batchCreatedIDs = append(batchCreatedIDs, newPtr.FileID)
 			}
 			swaps = append(swaps, rewriteSwap{
@@ -1456,6 +1455,9 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		// Register rewrite-created segments before publishing pointer swaps so
 		// finalizeCommit can stay on CurrentSetNoRefresh and avoid full scans.
 		for _, id := range batchCreatedIDs {
+			if hasLastRegisteredID && id == lastRegisteredCreatedID {
+				continue
+			}
 			path := db.valueLogManager.SegmentPath(id)
 			if err := db.valueLogManager.RegisterSegment(path, id); err != nil {
 				return err
@@ -1463,6 +1465,8 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 			if err := db.valueLogManager.PromoteCurrentWritable(id); err != nil {
 				return err
 			}
+			lastRegisteredCreatedID = id
+			hasLastRegisteredID = true
 		}
 		if err := db.applyRewriteSwapBatch(swaps, opts.SyncEachBatch); err != nil {
 			return err
