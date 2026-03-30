@@ -55,6 +55,8 @@ AB_CAPTURE_HEAP_ON_MAX_RSS="${AB_CAPTURE_HEAP_ON_MAX_RSS:-0}"
 AB_CAPTURE_PPROF_ON_STUCK="${AB_CAPTURE_PPROF_ON_STUCK:-0}"
 AB_CAPTURE_FULL_SMAPS_ON_MAX_RSS="${AB_CAPTURE_FULL_SMAPS_ON_MAX_RSS:-0}"
 AB_CAPTURE_DEBUG_VARS_ON_MAX_RSS="${AB_CAPTURE_DEBUG_VARS_ON_MAX_RSS:-0}"
+AB_CAPTURE_LIGHT_VLOG_STATS="${AB_CAPTURE_LIGHT_VLOG_STATS:-1}"
+AB_LIGHT_VLOG_STATS_TIMEOUT_SECONDS="${AB_LIGHT_VLOG_STATS_TIMEOUT_SECONDS:-20}"
 TS="$(date +%Y%m%d%H%M%S)"
 
 if [[ "$#" -gt 4 ]]; then
@@ -120,6 +122,14 @@ if [[ "$ALLOW_DRIFT_SCORING" != "0" && "$ALLOW_DRIFT_SCORING" != "1" ]]; then
   echo "ALLOW_DRIFT_SCORING must be 0 or 1" >&2
   exit 1
 fi
+if [[ "$AB_CAPTURE_LIGHT_VLOG_STATS" != "0" && "$AB_CAPTURE_LIGHT_VLOG_STATS" != "1" ]]; then
+  echo "AB_CAPTURE_LIGHT_VLOG_STATS must be 0 or 1" >&2
+  exit 1
+fi
+if [[ "$AB_LIGHT_VLOG_STATS_TIMEOUT_SECONDS" -lt 0 ]]; then
+  echo "AB_LIGHT_VLOG_STATS_TIMEOUT_SECONDS must be >= 0" >&2
+  exit 1
+fi
 
 mkdir -p "$OUT/runs"
 
@@ -154,6 +164,8 @@ ab_capture_heap_on_max_rss=$AB_CAPTURE_HEAP_ON_MAX_RSS
 ab_capture_pprof_on_stuck=$AB_CAPTURE_PPROF_ON_STUCK
 ab_capture_full_smaps_on_max_rss=$AB_CAPTURE_FULL_SMAPS_ON_MAX_RSS
 ab_capture_debug_vars_on_max_rss=$AB_CAPTURE_DEBUG_VARS_ON_MAX_RSS
+ab_capture_light_vlog_stats=$AB_CAPTURE_LIGHT_VLOG_STATS
+ab_light_vlog_stats_timeout_seconds=$AB_LIGHT_VLOG_STATS_TIMEOUT_SECONDS
 META
 
 list_run_homes() {
@@ -200,6 +212,43 @@ detect_new_run_home() {
   return 1
 }
 
+capture_light_vlog_stats() {
+  local app_db="$1"
+  local out_file="$2"
+  local err_file="$3"
+
+  rm -f "$out_file" "$err_file"
+
+  if [[ "$AB_CAPTURE_LIGHT_VLOG_STATS" != "1" ]]; then
+    return 2
+  fi
+  if [[ -z "$TREEMAP_BIN" || ! -x "$TREEMAP_BIN" ]]; then
+    return 3
+  fi
+  if [[ ! -d "$app_db" ]]; then
+    return 4
+  fi
+
+  local rc=0
+  local -a cmd=("$TREEMAP_BIN" vlog-gc "$app_db" "-rw" "-dry-run")
+
+  set +e
+  if [[ "$AB_LIGHT_VLOG_STATS_TIMEOUT_SECONDS" -gt 0 ]] && command -v timeout >/dev/null 2>&1; then
+    timeout --signal=TERM --kill-after=30 "${AB_LIGHT_VLOG_STATS_TIMEOUT_SECONDS}s" "${cmd[@]}" >"$out_file" 2>"$err_file"
+    rc=$?
+  else
+    "${cmd[@]}" >"$out_file" 2>"$err_file"
+    rc=$?
+  fi
+  set -e
+  if [[ "$rc" -eq 0 && -s "$out_file" ]]; then
+    return 0
+  fi
+
+  rm -f "$out_file"
+  return 1
+}
+
 run_variant() {
   local pair_index="$1"
   local variant="$2"
@@ -225,7 +274,14 @@ run_variant() {
   local rewrite_seconds=0
   local rewrite_rc=0
   local analyze_json="$run_dir/maintenance.json"
+  local light_stats_pre="$run_dir/light_stats_pre.txt"
+  local light_stats_pre_err="$run_dir/light_stats_pre.stderr.log"
+  local light_stats_post="$run_dir/light_stats_post.txt"
+  local light_stats_post_err="$run_dir/light_stats_post.stderr.log"
+  local light_stats_pre_rc=2
+  local light_stats_post_rc=2
   rm -f "$analyze_json"
+  rm -f "$light_stats_pre" "$light_stats_pre_err" "$light_stats_post" "$light_stats_post_err"
   : >"$run_dir/attempts.log"
 
   local attempt
@@ -295,6 +351,12 @@ run_variant() {
     if ! "$ANALYZER" --json "$run_home" >"$analyze_json" 2>"$run_dir/analyze.stderr.log"; then
       rm -f "$analyze_json"
     fi
+
+    if capture_light_vlog_stats "$app_db" "$light_stats_pre" "$light_stats_pre_err"; then
+      light_stats_pre_rc=0
+    else
+      light_stats_pre_rc=$?
+    fi
   fi
 
   if [[ -z "$invalid_reason" && "$REWRITE_ENABLED" == "1" && -x "$TREEMAP_BIN" && -n "$app_db" && -d "$app_db" ]]; then
@@ -316,10 +378,15 @@ run_variant() {
   if [[ -n "$app_db" ]]; then
     post_app_bytes="$(du_bytes "$app_db")"
     post_wal_bytes="$(du_bytes "$app_db/maindb/wal")"
+    if capture_light_vlog_stats "$app_db" "$light_stats_post" "$light_stats_post_err"; then
+      light_stats_post_rc=0
+    else
+      light_stats_post_rc=$?
+    fi
   fi
 
   local run_json="$run_dir/run.json"
-  python3 - "$run_home" "$run_json" "$variant" "$pair_index" "$run_start" "$run_end" "$rewrite_attempted" "$rewrite_seconds" "$rewrite_rc" "$pre_app_bytes" "$pre_wal_bytes" "$post_app_bytes" "$post_wal_bytes" "$analyze_json" "$invalid_reason" "$run_rc" "$attempt_used" "$RUN_MAX_ATTEMPTS_PER_VARIANT" "$RUN_TIMEOUT_SECONDS" <<'PY'
+  python3 - "$run_home" "$run_json" "$variant" "$pair_index" "$run_start" "$run_end" "$rewrite_attempted" "$rewrite_seconds" "$rewrite_rc" "$pre_app_bytes" "$pre_wal_bytes" "$post_app_bytes" "$post_wal_bytes" "$analyze_json" "$light_stats_pre" "$light_stats_pre_rc" "$light_stats_post" "$light_stats_post_rc" "$invalid_reason" "$run_rc" "$attempt_used" "$RUN_MAX_ATTEMPTS_PER_VARIANT" "$RUN_TIMEOUT_SECONDS" <<'PY'
 import json
 import re
 import sys
@@ -339,11 +406,15 @@ pre_wal_bytes = int(sys.argv[11])
 post_app_bytes = int(sys.argv[12])
 post_wal_bytes = int(sys.argv[13])
 analyze_json_path = Path(sys.argv[14])
-invalid_reason = str(sys.argv[15]).strip()
-run_exit_code = int(sys.argv[16])
-attempt = int(sys.argv[17])
-max_attempts = int(sys.argv[18])
-run_timeout_seconds = int(sys.argv[19])
+light_stats_pre_path = Path(sys.argv[15])
+light_stats_pre_rc = int(sys.argv[16])
+light_stats_post_path = Path(sys.argv[17])
+light_stats_post_rc = int(sys.argv[18])
+invalid_reason = str(sys.argv[19]).strip()
+run_exit_code = int(sys.argv[20])
+attempt = int(sys.argv[21])
+max_attempts = int(sys.argv[22])
+run_timeout_seconds = int(sys.argv[23])
 run_home = Path(run_home_raw) if run_home_raw else None
 
 def parse_sync_time(path: Path) -> dict[str, str]:
@@ -372,6 +443,17 @@ def safe_int(raw: str | None, default: int = 0) -> int:
         except Exception:
             return default
 
+def safe_float(raw: str | None, default: float = 0.0) -> float:
+    if raw is None:
+        return default
+    s = str(raw).strip()
+    if not s:
+        return default
+    try:
+        return float(s)
+    except Exception:
+        return default
+
 def safe_div(num, den):
     try:
         if den is None or float(den) == 0:
@@ -381,6 +463,167 @@ def safe_div(num, den):
         return float(num) / float(den)
     except Exception:
         return None
+
+def parse_treemap_stats(path: Path) -> dict[str, str]:
+    out: dict[str, str] = {}
+    if not path.is_file():
+        return out
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return out
+    for raw in text.splitlines():
+        line = raw.strip()
+        m = re.search(
+            r"segments total=(\d+)\s+referenced=(\d+)\s+active=(\d+)\s+eligible=(\d+)\s+deleted=(\d+)\s+"
+            r"bytes_total=(\d+)\s+bytes_referenced=(\d+)\s+bytes_active=(\d+)\s+bytes_eligible=(\d+)\s+bytes_deleted=(\d+)",
+            line,
+        )
+        if m:
+            out["vlog_gc_segments_total"] = m.group(1)
+            out["vlog_gc_segments_referenced"] = m.group(2)
+            out["vlog_gc_segments_active"] = m.group(3)
+            out["vlog_gc_segments_eligible"] = m.group(4)
+            out["vlog_gc_segments_deleted"] = m.group(5)
+            out["vlog_gc_bytes_total"] = m.group(6)
+            out["vlog_gc_bytes_referenced"] = m.group(7)
+            out["vlog_gc_bytes_active"] = m.group(8)
+            out["vlog_gc_bytes_eligible"] = m.group(9)
+            out["vlog_gc_bytes_deleted"] = m.group(10)
+            continue
+        if not line or line == "Stats:" or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if not key:
+            continue
+        out[key] = value.strip()
+    return out
+
+def build_light_summary(stats: dict[str, str]) -> dict[str, object]:
+    if not stats:
+        return {}
+    def stat_int(*keys: str) -> int:
+        for key in keys:
+            if key in stats:
+                return safe_int(stats.get(key), 0)
+        return 0
+
+    def stat_str(*keys: str) -> str:
+        for key in keys:
+            if key in stats:
+                return str(stats.get(key, "")).strip()
+        return ""
+
+    out: dict[str, object] = {
+        "bytes_live_total": stat_int(
+            "vlog_gc_bytes_referenced",
+            "treedb.cache.vlog_generation.bytes.live.total",
+            "treedb.vlog_generation.bytes.live.total",
+        ),
+        "bytes_stale_total": stat_int(
+            "vlog_gc_bytes_eligible",
+            "treedb.cache.vlog_generation.bytes.stale.total",
+            "treedb.vlog_generation.bytes.stale.total",
+        ),
+        "bytes_total_total": stat_int(
+            "vlog_gc_bytes_total",
+            "treedb.cache.vlog_generation.bytes.total.total",
+            "treedb.vlog_generation.bytes.total.total",
+        ),
+        "bytes_active_total": stat_int("vlog_gc_bytes_active"),
+        "bytes_deleted_total": stat_int("vlog_gc_bytes_deleted"),
+        "bytes_live_hot": stat_int(
+            "treedb.cache.vlog_generation.bytes.live.hot",
+            "treedb.vlog_generation.bytes.live.hot",
+        ),
+        "bytes_live_warm": stat_int(
+            "treedb.cache.vlog_generation.bytes.live.warm",
+            "treedb.vlog_generation.bytes.live.warm",
+        ),
+        "bytes_live_cold": stat_int(
+            "treedb.cache.vlog_generation.bytes.live.cold",
+            "treedb.vlog_generation.bytes.live.cold",
+        ),
+        "bytes_stale_hot": stat_int(
+            "treedb.cache.vlog_generation.bytes.stale.hot",
+            "treedb.vlog_generation.bytes.stale.hot",
+        ),
+        "bytes_stale_warm": stat_int(
+            "treedb.cache.vlog_generation.bytes.stale.warm",
+            "treedb.vlog_generation.bytes.stale.warm",
+        ),
+        "bytes_stale_cold": stat_int(
+            "treedb.cache.vlog_generation.bytes.stale.cold",
+            "treedb.vlog_generation.bytes.stale.cold",
+        ),
+        "segments_total": stat_int(
+            "vlog_gc_segments_total",
+            "treedb.cache.vlog_generation.segments.total",
+            "treedb.vlog_generation.segments.total",
+        ),
+        "segments_referenced": stat_int("vlog_gc_segments_referenced"),
+        "segments_active": stat_int("vlog_gc_segments_active"),
+        "segments_eligible": stat_int("vlog_gc_segments_eligible"),
+        "segments_deleted": stat_int("vlog_gc_segments_deleted"),
+        "segments_hot": stat_int(
+            "treedb.cache.vlog_generation.segments.hot",
+            "treedb.vlog_generation.segments.hot",
+        ),
+        "segments_warm": stat_int(
+            "treedb.cache.vlog_generation.segments.warm",
+            "treedb.vlog_generation.segments.warm",
+        ),
+        "segments_cold": stat_int(
+            "treedb.cache.vlog_generation.segments.cold",
+            "treedb.vlog_generation.segments.cold",
+        ),
+        "rewrite_queue_len": stat_int("treedb.cache.vlog_generation.rewrite.queue_len"),
+        "rewrite_queue_live_bytes_after_tokens": stat_int(
+            "treedb.cache.vlog_generation.rewrite.queue_live_bytes_after_tokens",
+        ),
+        "rewrite_penalties_active": stat_int("treedb.cache.vlog_generation.rewrite.penalties_active"),
+        "rewrite_age_blocked_remaining_ms": stat_int(
+            "treedb.cache.vlog_generation.rewrite.age_blocked_remaining_ms",
+        ),
+        "gc_last_eligible_bytes": stat_int(
+            "treedb.cache.vlog_generation.gc.last_eligible_bytes",
+            "treedb.vlog_generation.gc.last_eligible_bytes",
+        ),
+        "gc_last_pending_bytes": stat_int(
+            "treedb.cache.vlog_generation.gc.last_pending_bytes",
+            "treedb.vlog_generation.gc.last_pending_bytes",
+        ),
+        "gc_last_protected_retained_bytes": stat_int(
+            "treedb.cache.vlog_generation.gc.last_protected_retained_bytes",
+            "treedb.vlog_generation.gc.last_protected_retained_bytes",
+        ),
+    }
+    phase = stat_str(
+        "treedb.cache.vlog_generation.maintenance_phase",
+        "treedb.vlog_generation.scheduler_state",
+    )
+    if phase:
+        out["maintenance_phase"] = phase
+    total = safe_float(out.get("bytes_total_total"), 0.0)
+    stale = safe_float(out.get("bytes_stale_total"), 0.0)
+    if total > 0:
+        out["bytes_stale_ratio_pct"] = 100.0 * stale / total
+    else:
+        out["bytes_stale_ratio_pct"] = 0.0
+    return out
+
+def diff_light(pre: dict[str, object], post: dict[str, object]) -> dict[str, float]:
+    out: dict[str, float] = {}
+    if not pre or not post:
+        return out
+    for key, post_value in post.items():
+        if key not in pre:
+            continue
+        pre_value = pre[key]
+        if isinstance(pre_value, (int, float)) and isinstance(post_value, (int, float)):
+            out[key] = float(post_value) - float(pre_value)
+    return out
 
 def probe_sync_progress(node_log_path: Path | None) -> dict[str, object]:
     progress = {
@@ -431,6 +674,7 @@ sync = parse_sync_time(sync_path) if sync_path is not None else {}
 node_log_path = run_home / "sync" / "node.log" if run_home is not None else None
 sync_probe = probe_sync_progress(node_log_path)
 maintenance = {}
+maintenance_source = "none"
 if analyze_json_path.is_file():
     try:
         payload = json.loads(analyze_json_path.read_text(encoding="utf-8"))
@@ -438,8 +682,16 @@ if analyze_json_path.is_file():
             summary = payload.get("summary")
             if isinstance(summary, dict):
                 maintenance = summary
+                maintenance_source = "diagnostics_json"
     except Exception:
         maintenance = {}
+        maintenance_source = "none"
+
+light_pre_stats = parse_treemap_stats(light_stats_pre_path) if light_stats_pre_rc == 0 else {}
+light_post_stats = parse_treemap_stats(light_stats_post_path) if light_stats_post_rc == 0 else {}
+maintenance_light_pre = build_light_summary(light_pre_stats)
+maintenance_light_post = build_light_summary(light_post_stats)
+maintenance_light_delta = diff_light(maintenance_light_pre, maintenance_light_post)
 
 t_sync = safe_int(sync.get("duration_seconds"), max(0, run_end - run_start))
 t_rw = rewrite_seconds if rewrite_attempted == 1 else 0
@@ -524,7 +776,19 @@ result = {
         "t_sync_seconds_per_block": t_sync_seconds_per_block,
         "t_total_seconds_per_block": t_total_seconds_per_block,
     },
+    "maintenance_summary_source": maintenance_source,
     "maintenance_summary": maintenance,
+    "maintenance_light": {
+        "capture": {
+            "pre_exit_code": light_stats_pre_rc,
+            "pre_file": str(light_stats_pre_path) if light_stats_pre_path.is_file() else "",
+            "post_exit_code": light_stats_post_rc,
+            "post_file": str(light_stats_post_path) if light_stats_post_path.is_file() else "",
+        },
+        "pre": maintenance_light_pre,
+        "post": maintenance_light_post,
+        "delta": maintenance_light_delta,
+    },
 }
 out_path.write_text(json.dumps(result, indent=2, sort_keys=True), encoding="utf-8")
 print(out_path)
@@ -642,12 +906,38 @@ with runs_csv.open("w", newline="", encoding="utf-8") as fh:
         "gc_runs",
         "observed_gc_retry_queued",
         "observed_gc_retry_dropped",
+        "maintenance_summary_source",
+        "light_pre_bytes_total",
+        "light_pre_bytes_stale",
+        "light_pre_segments_total",
+        "light_pre_stale_ratio_pct",
+        "light_post_bytes_total",
+        "light_post_bytes_stale",
+        "light_post_segments_total",
+        "light_post_stale_ratio_pct",
+        "light_delta_bytes_total",
+        "light_delta_bytes_stale",
+        "light_delta_segments_total",
     ])
     for r in runs:
         m = r.get("metrics", {}) or {}
         s = r.get("sizes", {}) or {}
         rw = r.get("rewrite", {}) or {}
         summary = r.get("maintenance_summary", {}) or {}
+        light = r.get("maintenance_light", {}) or {}
+        light_pre = {}
+        light_post = {}
+        light_delta = {}
+        if isinstance(light, dict):
+            maybe_pre = light.get("pre", {})
+            maybe_post = light.get("post", {})
+            maybe_delta = light.get("delta", {})
+            if isinstance(maybe_pre, dict):
+                light_pre = maybe_pre
+            if isinstance(maybe_post, dict):
+                light_post = maybe_post
+            if isinstance(maybe_delta, dict):
+                light_delta = maybe_delta
         sync = r.get("sync", {}) or {}
         valid = run_is_valid(r)
         w.writerow([
@@ -684,6 +974,18 @@ with runs_csv.open("w", newline="", encoding="utf-8") as fh:
             summary.get("gc_runs", 0),
             summary.get("observed_gc_retry_queued", 0),
             summary.get("observed_gc_retry_dropped", 0),
+            r.get("maintenance_summary_source", ""),
+            light_pre.get("bytes_total_total"),
+            light_pre.get("bytes_stale_total"),
+            light_pre.get("segments_total"),
+            light_pre.get("bytes_stale_ratio_pct"),
+            light_post.get("bytes_total_total"),
+            light_post.get("bytes_stale_total"),
+            light_post.get("segments_total"),
+            light_post.get("bytes_stale_ratio_pct"),
+            light_delta.get("bytes_total_total"),
+            light_delta.get("bytes_stale_total"),
+            light_delta.get("segments_total"),
         ])
 
 by_pair: dict[int, dict[str, dict]] = {}

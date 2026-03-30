@@ -33,6 +33,7 @@ const usageText = `Usage:
 Commands:
   info            Print stats and fragmentation report
   stats           Print stats
+  backend-stats   Print backend stats without cache-layer side effects
   frag            Print fragmentation report
   verify          Full scan verification (counts items)
   checkpoint       Force a durable checkpoint (requires -rw)
@@ -80,6 +81,8 @@ func main() {
 		runInfo(dir, args)
 	case "stats":
 		runStats(dir, args)
+	case "backend-stats":
+		runBackendStats(dir, args)
 	case "frag":
 		runFrag(dir, args)
 	case "verify":
@@ -396,6 +399,19 @@ func runStats(dir string, args []string) {
 	db := openTreeDB(dir, *rw)
 	defer closeTreeDB(db)
 	printStats(db.Stats())
+}
+
+func runBackendStats(dir string, args []string) {
+	fs := flag.NewFlagSet("backend-stats", flag.ExitOnError)
+	rw := fs.Bool("rw", false, "Open backend read-write (unsafe; may replay WAL or repair files)")
+	_ = fs.Parse(args)
+
+	backend, cleanup, err := treedb.OpenBackend(treedb.Options{Dir: dir, ReadOnly: !*rw})
+	if err != nil {
+		fatalf("Failed to open backend DB: %v", err)
+	}
+	defer func() { _ = cleanup() }()
+	printStats(backend.Stats())
 }
 
 func runFrag(dir string, args []string) {

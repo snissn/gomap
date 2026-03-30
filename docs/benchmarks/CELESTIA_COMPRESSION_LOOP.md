@@ -156,6 +156,11 @@ Notes:
 - Pair execution remains strictly single-run at a time and interleaved by pair order.
 - Invalid runs (timeout, launcher failure, missing new run home, rewrite failure) are recorded but excluded from pair scoring.
 - Per-run `run.json` now includes `status.sync_probe` (last snapshot chunk, last and max snapshot totals, fetch event count, state-sync-complete flag) for timeout forensics.
+- `run_celestia_ab` now captures lightweight pre/post rewrite TreeDB stats snapshots when possible (without requiring heavy diagnostics JSON):
+  - enable/disable: `AB_CAPTURE_LIGHT_VLOG_STATS=1|0` (default `1`)
+  - command timeout: `AB_LIGHT_VLOG_STATS_TIMEOUT_SECONDS` (default `20`)
+  - capture path uses `treemap vlog-gc -rw -dry-run` (backend maintenance path; no delete/write side effects)
+  - outputs land in each run directory as `light_stats_pre.txt` / `light_stats_post.txt`, and summarized values are included in `run.json` + `runs.csv`.
 - To use pre-policy behavior, set `AB_POLICY=legacy`.
 
 ## Process Review Cadence
