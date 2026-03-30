@@ -6718,6 +6718,12 @@ func TestVlogGenerationStats_ReportRewriteBacklogAndDurations(t *testing.T) {
 	db.vlogGenerationRewriteSourceSegmentsRequestedLast.Store(2)
 	db.vlogGenerationRewriteSourceSegmentsStillReferencedLast.Store(1)
 	db.vlogGenerationRewriteSourceSegmentsUnreferencedLast.Store(1)
+	db.vlogGenerationRewriteSourceBytesRequestedTotal.Store(5000)
+	db.vlogGenerationRewriteSourceBytesStillReferencedTotal.Store(1800)
+	db.vlogGenerationRewriteSourceBytesUnreferencedTotal.Store(3200)
+	db.vlogGenerationRewriteSourceBytesRequestedLast.Store(2200)
+	db.vlogGenerationRewriteSourceBytesStillReferencedLast.Store(700)
+	db.vlogGenerationRewriteSourceBytesUnreferencedLast.Store(1500)
 	db.vlogGenerationRewriteProcessedLiveBytes.Store(900)
 	db.vlogGenerationRewriteProcessedStaleBytes.Store(450)
 	db.vlogGenerationRewriteNoReclaimRuns.Store(3)
@@ -7061,6 +7067,24 @@ func TestVlogGenerationStats_ReportRewriteBacklogAndDurations(t *testing.T) {
 	}
 	if got := stats["treedb.cache.vlog_generation.rewrite.exec.source_segments_unreferenced_last"]; got != "1" {
 		t.Fatalf("rewrite exec source segments unreferenced last=%q want 1", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.exec.source_bytes_requested_total"]; got != "5000" {
+		t.Fatalf("rewrite exec source bytes requested total=%q want 5000", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.exec.source_bytes_still_referenced_total"]; got != "1800" {
+		t.Fatalf("rewrite exec source bytes still referenced total=%q want 1800", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.exec.source_bytes_unreferenced_total"]; got != "3200" {
+		t.Fatalf("rewrite exec source bytes unreferenced total=%q want 3200", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.exec.source_bytes_requested_last"]; got != "2200" {
+		t.Fatalf("rewrite exec source bytes requested last=%q want 2200", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.exec.source_bytes_still_referenced_last"]; got != "700" {
+		t.Fatalf("rewrite exec source bytes still referenced last=%q want 700", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.exec.source_bytes_unreferenced_last"]; got != "1500" {
+		t.Fatalf("rewrite exec source bytes unreferenced last=%q want 1500", got)
 	}
 	if got := stats["treedb.cache.vlog_generation.rewrite.processed_live_bytes"]; got != "900" {
 		t.Fatalf("rewrite processed live bytes=%q want 900", got)

@@ -20,6 +20,9 @@ type ValueLogRewriteStats struct {
 	SourceSegmentsRequested       int
 	SourceSegmentsStillReferenced int
 	SourceSegmentsUnreferenced    int
+	SourceBytesRequested          int64
+	SourceBytesStillReferenced    int64
+	SourceBytesUnreferenced       int64
 
 	TemplateRecordsAttempted int
 	TemplateRecordsKept      int

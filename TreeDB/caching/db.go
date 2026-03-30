@@ -6315,6 +6315,12 @@ type DB struct {
 	vlogGenerationRewriteSourceSegmentsRequestedLast        atomic.Uint64
 	vlogGenerationRewriteSourceSegmentsStillReferencedLast  atomic.Uint64
 	vlogGenerationRewriteSourceSegmentsUnreferencedLast     atomic.Uint64
+	vlogGenerationRewriteSourceBytesRequestedTotal          atomic.Uint64
+	vlogGenerationRewriteSourceBytesStillReferencedTotal    atomic.Uint64
+	vlogGenerationRewriteSourceBytesUnreferencedTotal       atomic.Uint64
+	vlogGenerationRewriteSourceBytesRequestedLast           atomic.Uint64
+	vlogGenerationRewriteSourceBytesStillReferencedLast     atomic.Uint64
+	vlogGenerationRewriteSourceBytesUnreferencedLast        atomic.Uint64
 	vlogGenerationGCExecTotalNanos                          atomic.Uint64
 	vlogGenerationGCExecMaxNanos                            atomic.Uint64
 	vlogGenerationVacuumExecTotalNanos                      atomic.Uint64
@@ -15437,9 +15443,24 @@ planned:
 			if stats.SourceSegmentsUnreferenced > 0 {
 				sourceSegmentsUnreferenced = uint64(stats.SourceSegmentsUnreferenced)
 			}
+			sourceBytesRequested := uint64(0)
+			if stats.SourceBytesRequested > 0 {
+				sourceBytesRequested = uint64(stats.SourceBytesRequested)
+			}
+			sourceBytesStillReferenced := uint64(0)
+			if stats.SourceBytesStillReferenced > 0 {
+				sourceBytesStillReferenced = uint64(stats.SourceBytesStillReferenced)
+			}
+			sourceBytesUnreferenced := uint64(0)
+			if stats.SourceBytesUnreferenced > 0 {
+				sourceBytesUnreferenced = uint64(stats.SourceBytesUnreferenced)
+			}
 			db.vlogGenerationRewriteSourceSegmentsRequestedLast.Store(sourceSegmentsRequested)
 			db.vlogGenerationRewriteSourceSegmentsStillReferencedLast.Store(sourceSegmentsStillReferenced)
 			db.vlogGenerationRewriteSourceSegmentsUnreferencedLast.Store(sourceSegmentsUnreferenced)
+			db.vlogGenerationRewriteSourceBytesRequestedLast.Store(sourceBytesRequested)
+			db.vlogGenerationRewriteSourceBytesStillReferencedLast.Store(sourceBytesStillReferenced)
+			db.vlogGenerationRewriteSourceBytesUnreferencedLast.Store(sourceBytesUnreferenced)
 			if sourceSegmentsRequested > 0 {
 				db.vlogGenerationRewriteSourceSegmentsRequestedTotal.Add(sourceSegmentsRequested)
 			}
@@ -15448,6 +15469,15 @@ planned:
 			}
 			if sourceSegmentsUnreferenced > 0 {
 				db.vlogGenerationRewriteSourceSegmentsUnreferencedTotal.Add(sourceSegmentsUnreferenced)
+			}
+			if sourceBytesRequested > 0 {
+				db.vlogGenerationRewriteSourceBytesRequestedTotal.Add(sourceBytesRequested)
+			}
+			if sourceBytesStillReferenced > 0 {
+				db.vlogGenerationRewriteSourceBytesStillReferencedTotal.Add(sourceBytesStillReferenced)
+			}
+			if sourceBytesUnreferenced > 0 {
+				db.vlogGenerationRewriteSourceBytesUnreferencedTotal.Add(sourceBytesUnreferenced)
 			}
 			rewriteBytesIn := int64(0)
 			if processedLedgerOK {
@@ -21773,6 +21803,12 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_generation.rewrite.exec.source_segments_requested_last"] = fmt.Sprintf("%d", db.vlogGenerationRewriteSourceSegmentsRequestedLast.Load())
 	stats["treedb.cache.vlog_generation.rewrite.exec.source_segments_still_referenced_last"] = fmt.Sprintf("%d", db.vlogGenerationRewriteSourceSegmentsStillReferencedLast.Load())
 	stats["treedb.cache.vlog_generation.rewrite.exec.source_segments_unreferenced_last"] = fmt.Sprintf("%d", db.vlogGenerationRewriteSourceSegmentsUnreferencedLast.Load())
+	stats["treedb.cache.vlog_generation.rewrite.exec.source_bytes_requested_total"] = fmt.Sprintf("%d", db.vlogGenerationRewriteSourceBytesRequestedTotal.Load())
+	stats["treedb.cache.vlog_generation.rewrite.exec.source_bytes_still_referenced_total"] = fmt.Sprintf("%d", db.vlogGenerationRewriteSourceBytesStillReferencedTotal.Load())
+	stats["treedb.cache.vlog_generation.rewrite.exec.source_bytes_unreferenced_total"] = fmt.Sprintf("%d", db.vlogGenerationRewriteSourceBytesUnreferencedTotal.Load())
+	stats["treedb.cache.vlog_generation.rewrite.exec.source_bytes_requested_last"] = fmt.Sprintf("%d", db.vlogGenerationRewriteSourceBytesRequestedLast.Load())
+	stats["treedb.cache.vlog_generation.rewrite.exec.source_bytes_still_referenced_last"] = fmt.Sprintf("%d", db.vlogGenerationRewriteSourceBytesStillReferencedLast.Load())
+	stats["treedb.cache.vlog_generation.rewrite.exec.source_bytes_unreferenced_last"] = fmt.Sprintf("%d", db.vlogGenerationRewriteSourceBytesUnreferencedLast.Load())
 	stats["treedb.cache.vlog_generation.rewrite.canceled_runs"] = fmt.Sprintf("%d", db.vlogGenerationRewriteCanceledRuns.Load())
 	stats["treedb.cache.vlog_generation.rewrite.canceled_runs.fresh_plan"] = fmt.Sprintf("%d", db.vlogGenerationRewriteCanceledFreshPlanRuns.Load())
 	stats["treedb.cache.vlog_generation.rewrite.canceled_runs.queued_debt"] = fmt.Sprintf("%d", db.vlogGenerationRewriteCanceledQueuedDebtRuns.Load())

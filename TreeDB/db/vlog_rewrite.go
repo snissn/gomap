@@ -77,6 +77,14 @@ type ValueLogRewriteStats struct {
 	// SourceSegmentsUnreferenced is the subset of selected source segments that
 	// became unreferenced after rewrite pointer swaps and cleanup.
 	SourceSegmentsUnreferenced int
+	// SourceBytesRequested is the total bytes across selected source segments.
+	SourceBytesRequested int64
+	// SourceBytesStillReferenced is the bytes of selected source segments that
+	// remained referenced after rewrite pointer swaps and cleanup.
+	SourceBytesStillReferenced int64
+	// SourceBytesUnreferenced is the bytes of selected source segments that
+	// became unreferenced after rewrite pointer swaps and cleanup.
+	SourceBytesUnreferenced int64
 
 	TemplateRecordsAttempted int
 	TemplateRecordsKept      int
@@ -1283,13 +1291,21 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		restrictSource     bool
 		restrictSingleID   bool
 		sourceSegmentCount int
+		sourceSegmentBytes map[uint32]int64
 	)
 	if hasOnlyExplicitRewriteSources(opts) {
 		if id, ok := selectSingleExplicitRewriteSourceID(opts.SourceFileIDs, set.Files); ok {
 			singleSourceID = id
 			restrictSingleID = true
+			sourceSegmentBytes = map[uint32]int64{
+				id: fileSize(set.Files[id]),
+			}
 		} else {
 			sourceIDs = selectExplicitRewriteSourceIDs(opts.SourceFileIDs, set.Files)
+			sourceSegmentBytes = make(map[uint32]int64, len(sourceIDs))
+			for id := range sourceIDs {
+				sourceSegmentBytes[id] = fileSize(set.Files[id])
+			}
 		}
 		restrictSource = true
 		if restrictSingleID {
@@ -1312,8 +1328,27 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		restrictSource = true
 		sourceSegmentCount = len(sourceIDs)
 		stats.SourceSegmentsRequested = sourceSegmentCount
+		sourceSegmentBytes = make(map[uint32]int64, len(sourceIDs))
+		for id := range sourceIDs {
+			sourceSegmentBytes[id] = fileSize(set.Files[id])
+		}
 	}
 	_ = db.valueLogManager.Release(set)
+	if sourceSegmentCount > 0 {
+		if restrictSingleID {
+			if size, ok := sourceSegmentBytes[singleSourceID]; ok && size > 0 {
+				stats.SourceBytesRequested = size
+			}
+		} else {
+			var requestedBytes int64
+			for _, size := range sourceSegmentBytes {
+				if size > 0 {
+					requestedBytes += size
+				}
+			}
+			stats.SourceBytesRequested = requestedBytes
+		}
+	}
 	if restrictSource && sourceSegmentCount == 0 {
 		// No source segments selected: this rewrite pass is a no-op.
 		stats.SegmentsAfter = stats.SegmentsBefore
@@ -1579,22 +1614,36 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 	}
 	if sourceSegmentCount > 0 {
 		if restrictSingleID {
+			sourceBytes := sourceSegmentBytes[singleSourceID]
 			if _, ok := referencedAfter[singleSourceID]; ok {
 				stats.SourceSegmentsStillReferenced = 1
 				stats.SourceSegmentsUnreferenced = 0
+				stats.SourceBytesStillReferenced = sourceBytes
+				stats.SourceBytesUnreferenced = 0
 			} else {
 				stats.SourceSegmentsStillReferenced = 0
 				stats.SourceSegmentsUnreferenced = 1
+				stats.SourceBytesStillReferenced = 0
+				stats.SourceBytesUnreferenced = sourceBytes
 			}
 		} else {
 			stillReferenced := 0
+			var stillReferencedBytes int64
+			var unreferencedBytes int64
 			for id := range sourceIDs {
 				if _, ok := referencedAfter[id]; ok {
 					stillReferenced++
+					if size, okSize := sourceSegmentBytes[id]; okSize && size > 0 {
+						stillReferencedBytes += size
+					}
+				} else if size, okSize := sourceSegmentBytes[id]; okSize && size > 0 {
+					unreferencedBytes += size
 				}
 			}
 			stats.SourceSegmentsStillReferenced = stillReferenced
 			stats.SourceSegmentsUnreferenced = len(sourceIDs) - stillReferenced
+			stats.SourceBytesStillReferenced = stillReferencedBytes
+			stats.SourceBytesUnreferenced = unreferencedBytes
 		}
 	}
 	var protectedPaths map[string]struct{}
