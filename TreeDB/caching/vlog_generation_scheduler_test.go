@@ -6634,6 +6634,10 @@ func TestVlogGenerationStats_ReportRewriteBacklogAndDurations(t *testing.T) {
 	db.vlogGenerationRewriteRuns.Store(3)
 	db.vlogGenerationRewriteExecTotalNanos.Store(uint64((150 * time.Millisecond).Nanoseconds()))
 	db.vlogGenerationRewriteExecMaxNanos.Store(uint64((70 * time.Millisecond).Nanoseconds()))
+	db.vlogGenerationRewriteExecLastLiveBytes.Store(1000)
+	db.vlogGenerationRewriteExecLastBytesOut.Store(600)
+	db.vlogGenerationRewriteExecLastDurationNanos.Store(uint64((40 * time.Millisecond).Nanoseconds()))
+	db.vlogGenerationRewriteExecLastUnixNano.Store(7777)
 	db.vlogGenerationRewriteBytesIn.Store(1000)
 	db.vlogGenerationRewriteBytesOut.Store(600)
 	db.vlogGenerationRewriteReclaimedBytes.Store(400)
@@ -6747,6 +6751,14 @@ func TestVlogGenerationStats_ReportRewriteBacklogAndDurations(t *testing.T) {
 	db.vlogGenerationObservedGCSourceIDs = map[uint32]struct{}{
 		101: {},
 		102: {},
+	}
+	db.vlogGenerationObservedGCFirstQueuedUnixNano = map[uint32]int64{
+		101: time.Now().Add(-3 * time.Second).UnixNano(),
+		102: time.Now().Add(-1200 * time.Millisecond).UnixNano(),
+	}
+	db.vlogGenerationObservedGCRetryAttempts = map[uint32]uint8{
+		101: 2,
+		102: 1,
 	}
 	db.vlogGenerationObservedGCMu.Unlock()
 
@@ -6922,6 +6934,21 @@ func TestVlogGenerationStats_ReportRewriteBacklogAndDurations(t *testing.T) {
 	if got := stats["treedb.cache.vlog_generation.rewrite.ledger_bytes_stale"]; got != "300" {
 		t.Fatalf("rewrite ledger bytes stale=%q want 300", got)
 	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.queue_run_segment_cap"]; got != "1" {
+		t.Fatalf("rewrite queue run segment cap=%q want 1", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.checkpoint_kick"]; got != "1" {
+		t.Fatalf("rewrite queue run segment cap checkpoint kick=%q want 1", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.queue_live_bytes_after_tokens"]; got != "688" {
+		t.Fatalf("rewrite queue live bytes after tokens=%q want 688", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.queue_eta_seconds.budget"]; got != "0.336" {
+		t.Fatalf("rewrite queue eta budget seconds=%q want 0.336", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.queue_eta_seconds.recent_exec"]; got != "0.028" {
+		t.Fatalf("rewrite queue eta recent exec seconds=%q want 0.028", got)
+	}
 	if got := stats["treedb.cache.vlog_generation.rewrite.ledger_stale_ratio_ppm"]; got != "200000" {
 		t.Fatalf("rewrite ledger stale ratio ppm=%q want 200000", got)
 	}
@@ -6931,8 +6958,20 @@ func TestVlogGenerationStats_ReportRewriteBacklogAndDurations(t *testing.T) {
 	if got := stats["treedb.cache.vlog_generation.rewrite.stage_observed_unix_nano"]; got != "1234" {
 		t.Fatalf("rewrite stage observed=%q want 1234", got)
 	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.stage_observed_age_ms"]; got == "0" {
+		t.Fatalf("rewrite stage observed age ms=%q want >0", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.stage_due"]; got != "true" {
+		t.Fatalf("rewrite stage due=%q want true", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.stage_due_in_ms"]; got != "0" {
+		t.Fatalf("rewrite stage due in ms=%q want 0", got)
+	}
 	if got := stats["treedb.cache.vlog_generation.rewrite.penalties_active"]; got != "1" {
 		t.Fatalf("rewrite penalties active=%q want 1", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.age_blocked_due"]; got != "false" {
+		t.Fatalf("rewrite age blocked due=%q want false", got)
 	}
 	if got := stats["treedb.cache.vlog_generation.rewrite.age_blocked_remaining_ms"]; got == "0" {
 		t.Fatalf("rewrite age blocked remaining ms=%q want >0", got)
@@ -6960,6 +6999,30 @@ func TestVlogGenerationStats_ReportRewriteBacklogAndDurations(t *testing.T) {
 	}
 	if got := stats["treedb.cache.vlog_generation.maintenance.skip.stage_gate_due_reserved"]; got != "2" {
 		t.Fatalf("maintenance skip stage gate due reserved=%q want 2", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.maintenance.foreground_quiet"]; got != "true" {
+		t.Fatalf("maintenance foreground quiet=%q want true", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.maintenance.foreground_write_quiet"]; got != "true" {
+		t.Fatalf("maintenance foreground write quiet=%q want true", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.maintenance.foreground_read_quiet"]; got != "true" {
+		t.Fatalf("maintenance foreground read quiet=%q want true", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.maintenance.foreground_active_iterators"]; got != "0" {
+		t.Fatalf("maintenance foreground active iterators=%q want 0", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.maintenance.foreground_last_write_unix_nano"]; got == "0" {
+		t.Fatalf("maintenance foreground last write unix nano=%q want >0", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.maintenance.foreground_last_read_unix_nano"]; got == "0" {
+		t.Fatalf("maintenance foreground last read unix nano=%q want >0", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.maintenance.foreground_write_age_ms"]; got == "0" {
+		t.Fatalf("maintenance foreground write age ms=%q want >0", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.maintenance.foreground_read_age_ms"]; got == "0" {
+		t.Fatalf("maintenance foreground read age ms=%q want >0", got)
 	}
 	if got := stats["treedb.cache.vlog_generation.rewrite.plan_selected_segments_total"]; got != "6" {
 		t.Fatalf("rewrite plan selected segments total=%q want 6", got)
@@ -7012,6 +7075,21 @@ func TestVlogGenerationStats_ReportRewriteBacklogAndDurations(t *testing.T) {
 	if got := stats["treedb.cache.vlog_generation.rewrite.exec.reclaimed_vs_churn_ratio"]; got != "1.066667" {
 		t.Fatalf("rewrite reclaimed vs churn ratio=%q want 1.066667", got)
 	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.exec.last_live_bytes"]; got != "1000" {
+		t.Fatalf("rewrite exec last live bytes=%q want 1000", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.exec.last_bytes_out"]; got != "600" {
+		t.Fatalf("rewrite exec last bytes out=%q want 600", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.exec.last_duration_ms"]; got != "40.000" {
+		t.Fatalf("rewrite exec last duration ms=%q want 40.000", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.exec.last_live_bytes_per_sec"]; got != "25000.000" {
+		t.Fatalf("rewrite exec last live bytes/sec=%q want 25000.000", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.exec.last_unix_nano"]; got != "7777" {
+		t.Fatalf("rewrite exec last unix nano=%q want 7777", got)
+	}
 	if got := stats["treedb.cache.vlog_generation.rewrite.no_reclaim_runs"]; got != "3" {
 		t.Fatalf("rewrite no reclaim runs=%q want 3", got)
 	}
@@ -7020,6 +7098,21 @@ func TestVlogGenerationStats_ReportRewriteBacklogAndDurations(t *testing.T) {
 	}
 	if got := stats["treedb.cache.vlog_generation.observed_gc.pending_ids"]; got != "2" {
 		t.Fatalf("observed gc pending ids=%q want 2", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.observed_gc.pending_oldest_unix_nano"]; got == "0" {
+		t.Fatalf("observed gc pending oldest unix nano=%q want >0", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.observed_gc.pending_oldest_age_ms"]; got == "0" {
+		t.Fatalf("observed gc pending oldest age ms=%q want >0", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.observed_gc.pending_retry_ids"]; got != "2" {
+		t.Fatalf("observed gc pending retry ids=%q want 2", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.observed_gc.pending_retry_attempts_total"]; got != "3" {
+		t.Fatalf("observed gc pending retry attempts total=%q want 3", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.observed_gc.pending_retry_attempts_max"]; got != "2" {
+		t.Fatalf("observed gc pending retry attempts max=%q want 2", got)
 	}
 	if got := stats["treedb.cache.vlog_generation.observed_gc.queued_batches"]; got != "5" {
 		t.Fatalf("observed gc queued batches=%q want 5", got)

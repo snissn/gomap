@@ -6147,6 +6147,10 @@ type DB struct {
 	vlogGenerationRewritePlanMaxNanos                       atomic.Uint64
 	vlogGenerationRewriteExecTotalNanos                     atomic.Uint64
 	vlogGenerationRewriteExecMaxNanos                       atomic.Uint64
+	vlogGenerationRewriteExecLastLiveBytes                  atomic.Int64
+	vlogGenerationRewriteExecLastBytesOut                   atomic.Int64
+	vlogGenerationRewriteExecLastDurationNanos              atomic.Uint64
+	vlogGenerationRewriteExecLastUnixNano                   atomic.Int64
 	vlogGenerationRewriteExecSourceSegments                 atomic.Uint64
 	vlogGenerationRewriteSourceSegmentsRequestedTotal       atomic.Uint64
 	vlogGenerationRewriteSourceSegmentsStillReferencedTotal atomic.Uint64
@@ -15316,6 +15320,14 @@ planned:
 			if stats.BytesAfter > 0 {
 				db.vlogGenerationRewriteBytesOut.Add(uint64(stats.BytesAfter))
 			}
+			rewriteBytesOut := int64(stats.BytesAfter)
+			if rewriteBytesOut < 0 {
+				rewriteBytesOut = 0
+			}
+			db.vlogGenerationRewriteExecLastLiveBytes.Store(rewriteBytesIn)
+			db.vlogGenerationRewriteExecLastBytesOut.Store(rewriteBytesOut)
+			db.vlogGenerationRewriteExecLastDurationNanos.Store(uint64(rewriteDur))
+			db.vlogGenerationRewriteExecLastUnixNano.Store(time.Now().UnixNano())
 			consumed := int64(0)
 			if processedLedgerOK {
 				consumed = processedLedgerLiveBytes
@@ -21175,9 +21187,32 @@ func (db *DB) Stats() map[string]string {
 		}
 	}
 	db.vlogGenerationRewriteQueueMu.Unlock()
+	statsNow := time.Now()
 	db.vlogGenerationObservedGCMu.Lock()
 	observedGCPending := len(db.vlogGenerationObservedGCSourceIDs)
+	observedGCPendingOldestNS := int64(0)
+	observedGCPendingRetryIDs := 0
+	observedGCPendingRetryAttemptsTotal := uint64(0)
+	observedGCPendingRetryAttemptsMax := uint8(0)
+	for id := range db.vlogGenerationObservedGCSourceIDs {
+		if firstQueued, ok := db.vlogGenerationObservedGCFirstQueuedUnixNano[id]; ok && firstQueued > 0 {
+			if observedGCPendingOldestNS == 0 || firstQueued < observedGCPendingOldestNS {
+				observedGCPendingOldestNS = firstQueued
+			}
+		}
+		if attempts, ok := db.vlogGenerationObservedGCRetryAttempts[id]; ok && attempts > 0 {
+			observedGCPendingRetryIDs++
+			observedGCPendingRetryAttemptsTotal += uint64(attempts)
+			if attempts > observedGCPendingRetryAttemptsMax {
+				observedGCPendingRetryAttemptsMax = attempts
+			}
+		}
+	}
 	db.vlogGenerationObservedGCMu.Unlock()
+	observedGCPendingOldestAgeMS := int64(0)
+	if observedGCPendingOldestNS > 0 && observedGCPendingOldestNS < statsNow.UnixNano() {
+		observedGCPendingOldestAgeMS = time.Duration(statsNow.UnixNano() - observedGCPendingOldestNS).Milliseconds()
+	}
 	observedGCLatencyCompleted := db.vlogGenerationObservedGCLatencyCompletedIDs.Load()
 	observedGCLatencyDropped := db.vlogGenerationObservedGCLatencyDroppedIDs.Load()
 	observedGCLatencyTotalMS := db.vlogGenerationObservedGCLatencyTotalMS.Load()
@@ -21188,10 +21223,45 @@ func (db *DB) Stats() map[string]string {
 	rewriteAgeBlockedUntilNS := db.vlogGenerationRewriteAgeBlockedUntilNS.Load()
 	rewriteAgeBlockedRemainingMS := int64(0)
 	if rewriteAgeBlockedUntilNS > 0 {
-		if d := time.Until(time.Unix(0, rewriteAgeBlockedUntilNS)); d > 0 {
-			rewriteAgeBlockedRemainingMS = d.Milliseconds()
+		blockedUntil := time.Unix(0, rewriteAgeBlockedUntilNS)
+		if remaining := blockedUntil.Sub(statsNow); remaining > 0 {
+			rewriteAgeBlockedRemainingMS = remaining.Milliseconds()
 		}
 	}
+	foregroundWriteQuiet := db.foregroundWriteQuietFor(statsNow, vlogGenerationMaintenanceQuietWindow)
+	foregroundReadQuiet := db.foregroundReadQuietFor(statsNow, vlogForegroundReadQuietWindow)
+	foregroundQuiet := foregroundWriteQuiet && foregroundReadQuiet
+	foregroundActiveIters := db.activeForegroundIterators.Load()
+	foregroundLastWriteNS := db.lastForegroundWriteUnixNano.Load()
+	foregroundLastReadNS := db.lastForegroundReadUnixNano.Load()
+	foregroundWriteAgeMS := int64(0)
+	if foregroundLastWriteNS > 0 && foregroundLastWriteNS < statsNow.UnixNano() {
+		foregroundWriteAgeMS = time.Duration(statsNow.UnixNano() - foregroundLastWriteNS).Milliseconds()
+	}
+	foregroundReadAgeMS := int64(0)
+	if foregroundLastReadNS > 0 && foregroundLastReadNS < statsNow.UnixNano() {
+		foregroundReadAgeMS = time.Duration(statsNow.UnixNano() - foregroundLastReadNS).Milliseconds()
+	}
+	rewriteStageDue := false
+	rewriteStageDueInMS := int64(0)
+	rewriteStageObservedAgeMS := int64(0)
+	if rewriteStageObservedNS > 0 {
+		if rewriteStageObservedNS < statsNow.UnixNano() {
+			rewriteStageObservedAgeMS = time.Duration(statsNow.UnixNano() - rewriteStageObservedNS).Milliseconds()
+		}
+		if rewriteStagePending {
+			dueAt := time.Unix(0, rewriteStageObservedNS).Add(vlogGenerationRewriteMinInterval)
+			if !statsNow.Before(dueAt) {
+				rewriteStageDue = true
+			} else {
+				remaining := dueAt.Sub(statsNow)
+				if remaining > 0 {
+					rewriteStageDueInMS = remaining.Milliseconds()
+				}
+			}
+		}
+	}
+	rewriteAgeBlockedDue := rewriteAgeBlockedUntilNS > 0 && !statsNow.Before(time.Unix(0, rewriteAgeBlockedUntilNS))
 	rewriteBudgetTokens := db.vlogGenerationRewriteBudgetTokensBytes.Load()
 	if rewriteBudgetTokens < 0 {
 		rewriteBudgetTokens = 0
@@ -21206,6 +21276,28 @@ func (db *DB) Stats() map[string]string {
 		if rewriteBudgetUtilPct > 100.0 {
 			rewriteBudgetUtilPct = 100.0
 		}
+	}
+	rewriteQueueLiveBytesAfterTokens := rewriteLedgerBytesLive - rewriteBudgetTokens
+	if rewriteQueueLiveBytesAfterTokens < 0 {
+		rewriteQueueLiveBytesAfterTokens = 0
+	}
+	rewriteQueueRunSegmentCap := 0
+	rewriteQueueRunSegmentCapCheckpointKick := 0
+	if rewriteQueueLen > 0 {
+		rewriteQueueRunSegmentCap = db.vlogGenerationRewriteMaxSegmentsForRun(
+			rewriteQueueLen,
+			rewriteBudgetTokens,
+			vlogGenerationMaintenanceOptions{rewriteDebtDrain: true},
+		)
+		rewriteQueueRunSegmentCapCheckpointKick = db.vlogGenerationRewriteMaxSegmentsForRun(
+			rewriteQueueLen,
+			rewriteBudgetTokens,
+			vlogGenerationMaintenanceOptions{rewriteDebtDrain: true, bypassQuiet: true},
+		)
+	}
+	rewriteQueueETABudgetSeconds := 0.0
+	if rewriteLedgerBytesLive > 0 && db.valueLogRewriteBudgetBytes > 0 {
+		rewriteQueueETABudgetSeconds = float64(rewriteQueueLiveBytesAfterTokens) / float64(db.valueLogRewriteBudgetBytes)
 	}
 	maintenancePassTotalNS := db.vlogGenerationMaintenancePassTotalNanos.Load()
 	maintenancePassMaxNS := db.vlogGenerationMaintenancePassMaxNanos.Load()
@@ -21227,6 +21319,25 @@ func (db *DB) Stats() map[string]string {
 	rewriteProcessedStaleBytes := db.vlogGenerationRewriteProcessedStaleBytes.Load()
 	rewriteProcessedTotal := rewriteProcessedLiveBytes + rewriteProcessedStaleBytes
 	rewriteBudgetConsumedTotal := db.vlogGenerationRewriteBudgetConsumed.Load()
+	rewriteLastExecLiveBytes := db.vlogGenerationRewriteExecLastLiveBytes.Load()
+	if rewriteLastExecLiveBytes < 0 {
+		rewriteLastExecLiveBytes = 0
+	}
+	rewriteLastExecBytesOut := db.vlogGenerationRewriteExecLastBytesOut.Load()
+	if rewriteLastExecBytesOut < 0 {
+		rewriteLastExecBytesOut = 0
+	}
+	rewriteLastExecDurationNS := db.vlogGenerationRewriteExecLastDurationNanos.Load()
+	rewriteLastExecUnixNano := db.vlogGenerationRewriteExecLastUnixNano.Load()
+	rewriteLastExecDurationMS := float64(rewriteLastExecDurationNS) / float64(time.Millisecond)
+	rewriteLastExecLiveBytesPerSec := 0.0
+	if rewriteLastExecDurationNS > 0 && rewriteLastExecLiveBytes > 0 {
+		rewriteLastExecLiveBytesPerSec = (float64(rewriteLastExecLiveBytes) * float64(time.Second)) / float64(rewriteLastExecDurationNS)
+	}
+	rewriteQueueETARecentExecSeconds := 0.0
+	if rewriteQueueLiveBytesAfterTokens > 0 && rewriteLastExecLiveBytesPerSec > 0 {
+		rewriteQueueETARecentExecSeconds = float64(rewriteQueueLiveBytesAfterTokens) / rewriteLastExecLiveBytesPerSec
+	}
 	rewriteChurnBps := db.vlogGenerationLastChurnBps.Load()
 	rewriteExecSeconds := 0.0
 	if rewriteExecTotalNS > 0 {
@@ -21352,6 +21463,14 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_generation.maintenance.skip.quiet_window"] = fmt.Sprintf("%d", db.vlogGenerationMaintenanceSkipQuiet.Load())
 	stats["treedb.cache.vlog_generation.maintenance.skip.before_first_checkpoint"] = fmt.Sprintf("%d", db.vlogGenerationMaintenanceSkipPreCheckpoint.Load())
 	stats["treedb.cache.vlog_generation.maintenance.skip.checkpoint_inflight"] = fmt.Sprintf("%d", db.vlogGenerationMaintenanceSkipCheckpointing.Load())
+	stats["treedb.cache.vlog_generation.maintenance.foreground_quiet"] = fmt.Sprintf("%t", foregroundQuiet)
+	stats["treedb.cache.vlog_generation.maintenance.foreground_write_quiet"] = fmt.Sprintf("%t", foregroundWriteQuiet)
+	stats["treedb.cache.vlog_generation.maintenance.foreground_read_quiet"] = fmt.Sprintf("%t", foregroundReadQuiet)
+	stats["treedb.cache.vlog_generation.maintenance.foreground_active_iterators"] = fmt.Sprintf("%d", foregroundActiveIters)
+	stats["treedb.cache.vlog_generation.maintenance.foreground_last_write_unix_nano"] = fmt.Sprintf("%d", foregroundLastWriteNS)
+	stats["treedb.cache.vlog_generation.maintenance.foreground_last_read_unix_nano"] = fmt.Sprintf("%d", foregroundLastReadNS)
+	stats["treedb.cache.vlog_generation.maintenance.foreground_write_age_ms"] = fmt.Sprintf("%d", foregroundWriteAgeMS)
+	stats["treedb.cache.vlog_generation.maintenance.foreground_read_age_ms"] = fmt.Sprintf("%d", foregroundReadAgeMS)
 	stats["treedb.cache.vlog_generation.maintenance.passes.noop"] = fmt.Sprintf("%d", db.vlogGenerationMaintenancePassNoop.Load())
 	stats["treedb.cache.vlog_generation.maintenance.passes.with_rewrite"] = fmt.Sprintf("%d", db.vlogGenerationMaintenancePassWithRewrite.Load())
 	stats["treedb.cache.vlog_generation.maintenance.passes.with_gc"] = fmt.Sprintf("%d", db.vlogGenerationMaintenancePassWithGC.Load())
@@ -21366,10 +21485,15 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_generation.churn_bytes_per_sec"] = fmt.Sprintf("%d", rewriteChurnBps)
 	stats["treedb.cache.vlog_generation.rewrite.queue_len"] = fmt.Sprintf("%d", rewriteQueueLen)
 	stats["treedb.cache.vlog_generation.rewrite.queue_loaded"] = fmt.Sprintf("%t", rewriteQueueLoaded)
+	stats["treedb.cache.vlog_generation.rewrite.queue_run_segment_cap"] = fmt.Sprintf("%d", rewriteQueueRunSegmentCap)
+	stats["treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.checkpoint_kick"] = fmt.Sprintf("%d", rewriteQueueRunSegmentCapCheckpointKick)
 	stats["treedb.cache.vlog_generation.rewrite.ledger_segments"] = fmt.Sprintf("%d", rewriteLedgerSegments)
 	stats["treedb.cache.vlog_generation.rewrite.ledger_bytes_total"] = fmt.Sprintf("%d", rewriteLedgerBytesTotal)
 	stats["treedb.cache.vlog_generation.rewrite.ledger_bytes_live"] = fmt.Sprintf("%d", rewriteLedgerBytesLive)
 	stats["treedb.cache.vlog_generation.rewrite.ledger_bytes_stale"] = fmt.Sprintf("%d", rewriteLedgerBytesStale)
+	stats["treedb.cache.vlog_generation.rewrite.queue_live_bytes_after_tokens"] = fmt.Sprintf("%d", rewriteQueueLiveBytesAfterTokens)
+	stats["treedb.cache.vlog_generation.rewrite.queue_eta_seconds.budget"] = fmt.Sprintf("%.3f", rewriteQueueETABudgetSeconds)
+	stats["treedb.cache.vlog_generation.rewrite.queue_eta_seconds.recent_exec"] = fmt.Sprintf("%.3f", rewriteQueueETARecentExecSeconds)
 	if rewriteLedgerBytesTotal > 0 {
 		staleRatioPPM := 0.0
 		if rewriteLedgerBytesStale > 0 {
@@ -21384,8 +21508,12 @@ func (db *DB) Stats() map[string]string {
 	}
 	stats["treedb.cache.vlog_generation.rewrite.stage_pending"] = fmt.Sprintf("%t", rewriteStagePending)
 	stats["treedb.cache.vlog_generation.rewrite.stage_observed_unix_nano"] = fmt.Sprintf("%d", rewriteStageObservedNS)
+	stats["treedb.cache.vlog_generation.rewrite.stage_observed_age_ms"] = fmt.Sprintf("%d", rewriteStageObservedAgeMS)
+	stats["treedb.cache.vlog_generation.rewrite.stage_due"] = fmt.Sprintf("%t", rewriteStageDue)
+	stats["treedb.cache.vlog_generation.rewrite.stage_due_in_ms"] = fmt.Sprintf("%d", rewriteStageDueInMS)
 	stats["treedb.cache.vlog_generation.rewrite.penalties_active"] = fmt.Sprintf("%d", rewritePenaltiesActive)
 	stats["treedb.cache.vlog_generation.rewrite.age_blocked_until_unix_nano"] = fmt.Sprintf("%d", rewriteAgeBlockedUntilNS)
+	stats["treedb.cache.vlog_generation.rewrite.age_blocked_due"] = fmt.Sprintf("%t", rewriteAgeBlockedDue)
 	stats["treedb.cache.vlog_generation.rewrite.age_blocked_remaining_ms"] = fmt.Sprintf("%d", rewriteAgeBlockedRemainingMS)
 	stats["treedb.cache.vlog_generation.hot.segment_target_bytes"] = fmt.Sprintf("%d", db.valueLogGenerationHotTarget)
 	stats["treedb.cache.vlog_generation.warm.segment_target_bytes"] = fmt.Sprintf("%d", db.valueLogGenerationWarmTarget)
@@ -21435,6 +21563,11 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_generation.rewrite.exec.bytes_out_per_sec"] = fmt.Sprintf("%.3f", rewriteBytesOutPerSec)
 	stats["treedb.cache.vlog_generation.rewrite.exec.reclaimed_bytes_per_sec"] = fmt.Sprintf("%.3f", rewriteReclaimedBytesPerSec)
 	stats["treedb.cache.vlog_generation.rewrite.exec.reclaimed_vs_churn_ratio"] = fmt.Sprintf("%.6f", rewriteReclaimedVsChurnRatio)
+	stats["treedb.cache.vlog_generation.rewrite.exec.last_live_bytes"] = fmt.Sprintf("%d", rewriteLastExecLiveBytes)
+	stats["treedb.cache.vlog_generation.rewrite.exec.last_bytes_out"] = fmt.Sprintf("%d", rewriteLastExecBytesOut)
+	stats["treedb.cache.vlog_generation.rewrite.exec.last_duration_ms"] = fmt.Sprintf("%.3f", rewriteLastExecDurationMS)
+	stats["treedb.cache.vlog_generation.rewrite.exec.last_live_bytes_per_sec"] = fmt.Sprintf("%.3f", rewriteLastExecLiveBytesPerSec)
+	stats["treedb.cache.vlog_generation.rewrite.exec.last_unix_nano"] = fmt.Sprintf("%d", rewriteLastExecUnixNano)
 	stats["treedb.cache.vlog_generation.rewrite.no_reclaim_runs"] = fmt.Sprintf("%d", db.vlogGenerationRewriteNoReclaimRuns.Load())
 	stats["treedb.cache.vlog_generation.rewrite.no_reclaim_stale_bytes"] = fmt.Sprintf("%d", db.vlogGenerationRewriteNoReclaimStaleBytes.Load())
 	stats["treedb.cache.vlog_generation.rewrite.runs"] = fmt.Sprintf("%d", db.vlogGenerationRewriteRuns.Load())
@@ -21454,6 +21587,11 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_generation.rewrite.plan_penalty_filter.segments"] = fmt.Sprintf("%d", db.vlogGenerationRewritePlanPenaltyFilterSegments.Load())
 	stats["treedb.cache.vlog_generation.rewrite.plan_penalty_filter.to_empty_runs"] = fmt.Sprintf("%d", db.vlogGenerationRewritePlanPenaltyFilterToEmpty.Load())
 	stats["treedb.cache.vlog_generation.observed_gc.pending_ids"] = fmt.Sprintf("%d", observedGCPending)
+	stats["treedb.cache.vlog_generation.observed_gc.pending_oldest_unix_nano"] = fmt.Sprintf("%d", observedGCPendingOldestNS)
+	stats["treedb.cache.vlog_generation.observed_gc.pending_oldest_age_ms"] = fmt.Sprintf("%d", observedGCPendingOldestAgeMS)
+	stats["treedb.cache.vlog_generation.observed_gc.pending_retry_ids"] = fmt.Sprintf("%d", observedGCPendingRetryIDs)
+	stats["treedb.cache.vlog_generation.observed_gc.pending_retry_attempts_total"] = fmt.Sprintf("%d", observedGCPendingRetryAttemptsTotal)
+	stats["treedb.cache.vlog_generation.observed_gc.pending_retry_attempts_max"] = fmt.Sprintf("%d", observedGCPendingRetryAttemptsMax)
 	stats["treedb.cache.vlog_generation.observed_gc.queued_batches"] = fmt.Sprintf("%d", db.vlogGenerationObservedGCQueuedBatches.Load())
 	stats["treedb.cache.vlog_generation.observed_gc.queued_ids"] = fmt.Sprintf("%d", db.vlogGenerationObservedGCQueuedIDs.Load())
 	stats["treedb.cache.vlog_generation.observed_gc.taken_batches"] = fmt.Sprintf("%d", db.vlogGenerationObservedGCTakenBatches.Load())
