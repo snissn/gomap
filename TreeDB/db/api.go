@@ -1,6 +1,7 @@
 package db
 
 import (
+	"errors"
 	"fmt"
 	"runtime"
 	"sync"
@@ -86,16 +87,33 @@ func (db *DB) acquireSnapshotOrErr() (*Snapshot, error) {
 	return snap, nil
 }
 
+func (db *DB) refreshOnValueLogFileNotFound(err error) bool {
+	if db == nil || db.valueLogManager == nil {
+		return false
+	}
+	return errors.Is(err, valuelog.ErrFileNotFound)
+}
+
 // Get returns the value for a key.
 //
 // Semantics: Returns a safe copy of the value.
 func (db *DB) Get(key []byte) ([]byte, error) {
-	snap, err := db.acquireSnapshotOrErr()
-	if err != nil {
-		return nil, err
+	readOnce := func() ([]byte, error) {
+		snap, err := db.acquireSnapshotOrErr()
+		if err != nil {
+			return nil, err
+		}
+		defer snap.Close()
+		return snap.Get(key)
 	}
-	defer snap.Close()
-	val, err := snap.Get(key)
+
+	val, err := readOnce()
+	if db.refreshOnValueLogFileNotFound(err) {
+		if refreshErr := db.RefreshValueLogSet(); refreshErr != nil {
+			return nil, refreshErr
+		}
+		val, err = readOnce()
+	}
 	if err == tree.ErrKeyNotFound {
 		return nil, nil
 	}
@@ -107,6 +125,17 @@ func (db *DB) Get(key []byte) ([]byte, error) {
 // Semantics: Returns safe copies of values. Missing keys are returned as nil
 // entries with no error.
 func (db *DB) GetMany(keys [][]byte) ([][]byte, error) {
+	out, err := db.getManyOnce(keys)
+	if db.refreshOnValueLogFileNotFound(err) {
+		if refreshErr := db.RefreshValueLogSet(); refreshErr != nil {
+			return nil, refreshErr
+		}
+		return db.getManyOnce(keys)
+	}
+	return out, err
+}
+
+func (db *DB) getManyOnce(keys [][]byte) ([][]byte, error) {
 	out := make([][]byte, len(keys))
 	if len(keys) == 0 {
 		return out, nil
@@ -220,12 +249,22 @@ func (db *DB) Dir() string {
 // GetAppend appends the value for the key to dst and returns the new slice.
 // If the key is not found, it returns dst and ErrKeyNotFound.
 func (db *DB) GetAppend(key, dst []byte) ([]byte, error) {
-	snap, err := db.acquireSnapshotOrErr()
-	if err != nil {
-		return dst, err
+	readOnce := func(base []byte) ([]byte, error) {
+		snap, err := db.acquireSnapshotOrErr()
+		if err != nil {
+			return base, err
+		}
+		defer snap.Close()
+		return snap.GetAppend(key, base)
 	}
-	defer snap.Close()
-	val, err := snap.GetAppend(key, dst)
+
+	val, err := readOnce(dst)
+	if db.refreshOnValueLogFileNotFound(err) {
+		if refreshErr := db.RefreshValueLogSet(); refreshErr != nil {
+			return dst, refreshErr
+		}
+		val, err = readOnce(dst)
+	}
 	if err == tree.ErrKeyNotFound {
 		return dst, err
 	}
