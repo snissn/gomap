@@ -199,13 +199,23 @@ type frameEntry struct {
 }
 
 func NewReader(path string, fileID uint32) (*Reader, error) {
+	return NewReaderWithBufferSize(path, fileID, defaultBufferSize)
+}
+
+// NewReaderWithBufferSize creates a value-log reader with an explicit bufio
+// read buffer size. Callers doing metadata-only scans can use a smaller buffer
+// to reduce transient allocation footprint.
+func NewReaderWithBufferSize(path string, fileID uint32, bufferSize int) (*Reader, error) {
+	if bufferSize <= 0 {
+		bufferSize = defaultBufferSize
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
 	return &Reader{
 		f:            f,
-		r:            bufio.NewReaderSize(f, defaultBufferSize),
+		r:            bufio.NewReaderSize(f, bufferSize),
 		fileID:       fileID,
 		verifies:     true,
 		decodeValues: true,

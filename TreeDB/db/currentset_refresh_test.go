@@ -39,6 +39,7 @@ func writeValueLogRecord(t *testing.T, dir string, lane, seq uint32, value []byt
 type registeredLeafPageLog struct {
 	db         *DB
 	dir        string
+	path       string
 	w          *valuelog.Writer
 	fileID     uint32
 	nextRID    uint64
@@ -63,6 +64,7 @@ func (l *registeredLeafPageLog) ensureWriter() error {
 	}
 	l.w = w
 	l.fileID = fileID
+	l.path = path
 	if !l.registered {
 		if err := l.db.RegisterValueLogSegment(path, fileID); err != nil {
 			_ = w.Close()
@@ -103,6 +105,13 @@ func (l *registeredLeafPageLog) Close() error {
 	err := l.w.Close()
 	l.w = nil
 	return err
+}
+
+func (l *registeredLeafPageLog) CurrentValueLogSegment() (string, uint32, bool) {
+	if l == nil || !l.registered || l.path == "" || l.fileID == 0 {
+		return "", 0, false
+	}
+	return l.path, l.fileID, true
 }
 
 func TestInlineCommitSkipsValueLogRefresh(t *testing.T) {
@@ -272,9 +281,14 @@ func TestOuterLeafCommitPublishesRegisteredSegmentWithoutExplicitRefresh(t *test
 	leafLog := &registeredLeafPageLog{db: d, dir: dir}
 	defer func() { _ = leafLog.Close() }()
 	d.SetLeafPageLog(leafLog)
+	refreshBefore := d.valueLogManager.RefreshScanCount()
 
 	if err := d.Set([]byte("k"), []byte("v")); err != nil {
 		t.Fatalf("Set: %v", err)
+	}
+	refreshAfter := d.valueLogManager.RefreshScanCount()
+	if refreshAfter != refreshBefore {
+		t.Fatalf("outer-leaf commit triggered value-log refresh scan: before=%d after=%d", refreshBefore, refreshAfter)
 	}
 
 	st := d.State()
@@ -291,6 +305,91 @@ func TestOuterLeafCommitPublishesRegisteredSegmentWithoutExplicitRefresh(t *test
 	}
 	if !bytes.Equal(got, []byte("v")) {
 		t.Fatalf("Get mismatch: got %q want %q", got, "v")
+	}
+}
+
+func TestOuterLeafWriteLoopSkipsForcedValueLogRefreshScans(t *testing.T) {
+	dir := t.TempDir()
+	d, err := Open(Options{
+		Dir:                        dir,
+		IndexOuterLeavesInValueLog: true,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	if d.valueLogManager == nil {
+		t.Fatalf("missing value log manager")
+	}
+	leafLog := &registeredLeafPageLog{db: d, dir: dir}
+	defer func() { _ = leafLog.Close() }()
+	d.SetLeafPageLog(leafLog)
+	before := d.valueLogManager.RefreshScanCount()
+
+	for i := 0; i < 200; i++ {
+		key := []byte(fmt.Sprintf("k-%06d", i))
+		val := []byte(fmt.Sprintf("v-%06d", i))
+		if err := d.Set(key, val); err != nil {
+			t.Fatalf("Set %d: %v", i, err)
+		}
+	}
+
+	after := d.valueLogManager.RefreshScanCount()
+	if after != before {
+		t.Fatalf("outer-leaf write loop triggered value-log refresh scans: before=%d after=%d", before, after)
+	}
+}
+
+func BenchmarkOuterLeafWriteLoop_NoRefresh(b *testing.B) {
+	benchmarkOuterLeafWriteLoop(b, false)
+}
+
+func BenchmarkOuterLeafWriteLoop_ForcedRefresh(b *testing.B) {
+	benchmarkOuterLeafWriteLoop(b, true)
+}
+
+func benchmarkOuterLeafWriteLoop(b *testing.B, forceRefresh bool) {
+	const writesPerIter = 2000
+	var totalRefreshScans uint64
+
+	for i := 0; i < b.N; i++ {
+		b.StopTimer()
+		dir := b.TempDir()
+		d, err := Open(Options{
+			Dir:                        dir,
+			IndexOuterLeavesInValueLog: true,
+		})
+		if err != nil {
+			b.Fatalf("Open: %v", err)
+		}
+		leafLog := &registeredLeafPageLog{db: d, dir: dir}
+		d.SetLeafPageLog(leafLog)
+		refreshBefore := d.valueLogManager.RefreshScanCount()
+		b.StartTimer()
+
+		for j := 0; j < writesPerIter; j++ {
+			key := []byte(fmt.Sprintf("k-%06d-%06d", i, j))
+			val := []byte(fmt.Sprintf("v-%06d-%06d", i, j))
+			if err := d.Set(key, val); err != nil {
+				b.Fatalf("Set %d: %v", j, err)
+			}
+			if forceRefresh {
+				if err := d.RefreshValueLogSet(); err != nil {
+					b.Fatalf("RefreshValueLogSet: %v", err)
+				}
+			}
+		}
+
+		b.StopTimer()
+		totalRefreshScans += d.valueLogManager.RefreshScanCount() - refreshBefore
+		_ = leafLog.Close()
+		_ = d.Close()
+	}
+
+	if b.N > 0 {
+		b.ReportMetric(float64(writesPerIter), "writes/iter")
+		b.ReportMetric(float64(totalRefreshScans)/float64(b.N), "refresh_scans/iter")
 	}
 }
 

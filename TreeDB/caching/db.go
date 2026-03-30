@@ -73,7 +73,12 @@ var valueLogDictPrepareResultsPool sync.Pool // stores chan vlogDictPrepareResul
 var valueLogKeyLeaseMu sync.Mutex
 var valueLogKeyLeases [][][]byte
 var backendValueLogReadBarrierRegistryMu sync.Mutex
-var backendValueLogReadBarrierRegistry = make(map[uintptr]map[*DB]struct{})
+var backendValueLogReadBarrierRegistry = make(map[uintptr]*backendValueLogReadBarrierOwners)
+
+type backendValueLogReadBarrierOwners struct {
+	set      map[*DB]struct{}
+	snapshot []*DB
+}
 
 // Batch arena pooling can retain substantial heap across restore spikes. Track
 // pooled bytes and enforce a byte-budget to cap retention.
@@ -3414,10 +3419,15 @@ func registerBackendValueLogReadBarrierDB(key uintptr, db *DB) {
 	backendValueLogReadBarrierRegistryMu.Lock()
 	owners := backendValueLogReadBarrierRegistry[key]
 	if owners == nil {
-		owners = make(map[*DB]struct{})
+		owners = &backendValueLogReadBarrierOwners{
+			set: make(map[*DB]struct{}),
+		}
 		backendValueLogReadBarrierRegistry[key] = owners
 	}
-	owners[db] = struct{}{}
+	if _, exists := owners.set[db]; !exists {
+		owners.set[db] = struct{}{}
+		rebuildBackendValueLogReadBarrierSnapshot(owners)
+	}
 	backendValueLogReadBarrierRegistryMu.Unlock()
 }
 
@@ -3431,12 +3441,28 @@ func unregisterBackendValueLogReadBarrierDB(key uintptr, db *DB) int {
 	if owners == nil {
 		return 0
 	}
-	delete(owners, db)
-	if len(owners) == 0 {
+	delete(owners.set, db)
+	if len(owners.set) == 0 {
 		delete(backendValueLogReadBarrierRegistry, key)
 		return 0
 	}
-	return len(owners)
+	rebuildBackendValueLogReadBarrierSnapshot(owners)
+	return len(owners.snapshot)
+}
+
+func rebuildBackendValueLogReadBarrierSnapshot(owners *backendValueLogReadBarrierOwners) {
+	if owners == nil {
+		return
+	}
+	if len(owners.set) == 0 {
+		owners.snapshot = nil
+		return
+	}
+	snapshot := make([]*DB, 0, len(owners.set))
+	for db := range owners.set {
+		snapshot = append(snapshot, db)
+	}
+	owners.snapshot = snapshot
 }
 
 func snapshotBackendValueLogReadBarrierDBs(key uintptr) []*DB {
@@ -3445,9 +3471,9 @@ func snapshotBackendValueLogReadBarrierDBs(key uintptr) []*DB {
 	}
 	backendValueLogReadBarrierRegistryMu.Lock()
 	owners := backendValueLogReadBarrierRegistry[key]
-	dbs := make([]*DB, 0, len(owners))
-	for db := range owners {
-		dbs = append(dbs, db)
+	var dbs []*DB
+	if owners != nil && len(owners.snapshot) > 0 {
+		dbs = owners.snapshot
 	}
 	backendValueLogReadBarrierRegistryMu.Unlock()
 	return dbs
@@ -3458,7 +3484,7 @@ func dispatchBackendValueLogReadBarrier(key uintptr, fileID uint32) error {
 	if len(dbs) == 0 {
 		return nil
 	}
-	laneID, _ := valuelog.DecodeFileID(fileID)
+	laneID, seq := valuelog.DecodeFileID(fileID)
 	var firstErr error
 	flushedAny := false
 	for _, db := range dbs {
@@ -3468,7 +3494,15 @@ func dispatchBackendValueLogReadBarrier(key uintptr, fileID uint32) error {
 		if int(laneID) >= len(db.lanes) {
 			continue
 		}
-		if err := db.flushValueLogLane(&db.lanes[laneID]); err != nil {
+		l := &db.lanes[laneID]
+		// Reads against sealed segments do not need a lane flush barrier.
+		if db.currentValueLogSeq(l) != int(seq) {
+			continue
+		}
+		if l.backendReadDirtySeq.Load() == l.backendReadFlushedSeq.Load() {
+			continue
+		}
+		if err := db.flushValueLogLane(l); err != nil {
 			if errors.Is(err, errWALUnavailable) {
 				continue
 			}
@@ -3585,6 +3619,7 @@ func (db *DB) flushValueLogLane(l *lane) error {
 		db.debugVlogTiming("vlog_flush", int(l.id), "vlogMu", waited, time.Since(start))
 		if err == nil {
 			l.vlogDirty.Store(false)
+			l.backendReadFlushedSeq.Store(l.backendReadDirtySeq.Load())
 		}
 		l.vlogMu.Unlock()
 		return err
@@ -3603,6 +3638,9 @@ func (db *DB) flushValueLogLane(l *lane) error {
 		db.testOnVlogFlush(int(l.id))
 	}
 	db.debugVlogTiming("wal_flush", int(l.id), "walMu", waited, time.Since(start))
+	if err == nil {
+		l.backendReadFlushedSeq.Store(l.backendReadDirtySeq.Load())
+	}
 	l.walMu.Unlock()
 	return err
 }
@@ -4090,6 +4128,7 @@ func (db *DB) collectIteratorValueLogLiveIDsUntil(it iterator.UnsafeIterator, li
 	}
 	defer it.Close()
 	seen := 0
+	var outerLeafReadScratch []byte
 	for it.Valid() {
 		if seen > 0 && seen&foregroundWriteResumeCheckMask == 0 && db.foregroundWritesResumedSince(lastWrite) {
 			return errForegroundWritesResumed
@@ -4097,7 +4136,7 @@ func (db *DB) collectIteratorValueLogLiveIDsUntil(it iterator.UnsafeIterator, li
 		_, ptr, flags := it.UnsafeEntry()
 		if flags&node.FlagPointer != 0 && page.IsValueLogFileID(ptr.FileID) {
 			live[ptr.FileID] = struct{}{}
-			if err := db.collectNestedValueLogLiveIDsFromOuterLeaf(ptr, live); err != nil {
+			if err := db.collectNestedValueLogLiveIDsFromOuterLeaf(ptr, live, &outerLeafReadScratch); err != nil {
 				return err
 			}
 		}
@@ -4113,13 +4152,36 @@ func (db *DB) collectIteratorValueLogLiveIDsUntil(it iterator.UnsafeIterator, li
 	return nil
 }
 
-func (db *DB) collectNestedValueLogLiveIDsFromOuterLeaf(ptr page.ValuePtr, live map[uint32]struct{}) error {
+const nestedOuterLeafReadScratchDefaultCap = 64 << 10
+
+func (db *DB) collectNestedValueLogLiveIDsFromOuterLeaf(ptr page.ValuePtr, live map[uint32]struct{}, readScratch *[]byte) error {
 	if db == nil || len(live) == 0 || db.valueLogReader == nil {
 		return nil
 	}
-	raw, err := db.valueLogReader.Read(ptr)
-	if err != nil {
-		return err
+	var (
+		raw []byte
+		err error
+	)
+	if readScratch != nil {
+		dst := *readScratch
+		if dst == nil {
+			dst = make([]byte, 0, nestedOuterLeafReadScratchDefaultCap)
+		} else {
+			dst = dst[:0]
+		}
+		var usedDst bool
+		raw, usedDst, err = db.valueLogReader.ReadUnsafeTo(ptr, dst)
+		if err != nil {
+			return err
+		}
+		if usedDst {
+			*readScratch = raw[:0]
+		}
+	} else {
+		raw, err = db.valueLogReader.Read(ptr)
+		if err != nil {
+			return err
+		}
 	}
 	if !outerleaf.HasMagic(raw) {
 		return nil
@@ -4991,6 +5053,38 @@ func (db *DB) waitForRetainedValueLogPrune() {
 	}
 }
 
+func (db *DB) runRetainedValueLogPruneInline(force bool, observedSourceIDs map[uint32]struct{}) (retainedValueLogPruneStats, bool) {
+	var out retainedValueLogPruneStats
+	if db == nil || !db.valueLogEnabled() {
+		return out, false
+	}
+	db.retainedPruneMu.Lock()
+	if db.closing.Load() || db.retainedPruneDone != nil {
+		db.retainedPruneMu.Unlock()
+		return out, false
+	}
+	done := make(chan struct{})
+	db.retainedPruneDone = done
+	db.retainedPruneMu.Unlock()
+	defer func() {
+		db.retainedPruneMu.Lock()
+		close(done)
+		db.retainedPruneDone = nil
+		db.retainedPruneMu.Unlock()
+	}()
+
+	nowPrune := time.Now()
+	db.retainedPruneLastStartUnixNano.Store(nowPrune.UnixNano())
+	db.retainedValueLogPruneRuns.Add(1)
+	if force {
+		db.retainedValueLogPruneForcedRuns.Add(1)
+	}
+	db.retainedValueLogPruneLastUnixNano.Store(nowPrune.UnixNano())
+	out = db.pruneRetainedValueLogsWithObserved(force, observedSourceIDs)
+	db.observeRetainedValueLogPruneStats(out)
+	return out, true
+}
+
 func (db *DB) checkpointForBackendMaintenance() error {
 	return db.runWithBackendMaintenance(nil)
 }
@@ -5738,264 +5832,266 @@ type DB struct {
 	valueLogMaxSegmentBytes                           int64
 	journalCompression                                bool
 
-	disableJournal                                              bool
-	relaxedSync                                                 bool
-	notifyError                                                 func(error)
-	debugFlushPointers                                          bool
-	debugFlushTiming                                            bool
-	debugPtrEligible                                            atomic.Int64
-	debugPtrUsed                                                atomic.Int64
-	debugPtrNoPtr                                               atomic.Int64
-	debugPtrDenied                                              atomic.Int64
-	debugPtrDisabled                                            atomic.Int64
-	checkpointRuns                                              atomic.Uint64
-	checkpointTotalNs                                           atomic.Uint64
-	checkpointMaxNs                                             atomic.Uint64
-	checkpointNoopSkips                                         atomic.Uint64
-	checkpointFlushMuWaitNs                                     atomic.Uint64
-	checkpointFlushMuWaitMaxNs                                  atomic.Uint64
-	checkpointAutoVacuumRuns                                    atomic.Uint64
-	checkpointAutoVacuumLastCheckRun                            atomic.Uint64
-	checkpointAutoVacuumLastPages                               atomic.Uint64
-	checkpointAutoVacuumLastInternalP50                         atomic.Uint64
-	checkpointAutoVacuumLastInternalAvg                         atomic.Uint64
-	lastForegroundWriteUnixNano                                 atomic.Int64
-	lastForegroundReadUnixNano                                  atomic.Int64
-	foregroundReadStampCounter                                  atomic.Uint32
-	activeForegroundIterators                                   atomic.Int64
-	retainedPruneLastStartUnixNano                              atomic.Int64
-	retainedValueLogPruneLastUnixNano                           atomic.Int64
-	retainedValueLogPruneRuns                                   atomic.Uint64
-	retainedValueLogPruneForcedRuns                             atomic.Uint64
-	retainedValueLogPruneForegroundAbortRuns                    atomic.Uint64
-	retainedValueLogPruneRemovedSegments                        atomic.Uint64
-	retainedValueLogPruneRemovedBytes                           atomic.Uint64
-	retainedValueLogPruneInUseSkippedSegments                   atomic.Uint64
-	retainedValueLogPruneInUseSkippedBytes                      atomic.Uint64
-	retainedValueLogPruneCandidateSegments                      atomic.Uint64
-	retainedValueLogPruneCandidateBytes                         atomic.Uint64
-	retainedValueLogPruneLiveSkippedSegments                    atomic.Uint64
-	retainedValueLogPruneLiveSkippedBytes                       atomic.Uint64
-	retainedValueLogPruneParseSkippedSegments                   atomic.Uint64
-	retainedValueLogPruneParseSkippedBytes                      atomic.Uint64
-	retainedValueLogPruneZombieMarkedSegments                   atomic.Uint64
-	retainedValueLogPruneZombieMarkedBytes                      atomic.Uint64
-	retainedValueLogPruneLastObservedSourceSegments             atomic.Int64
-	retainedValueLogPruneLastObservedSourceBytes                atomic.Int64
-	retainedValueLogPruneLastObservedSourceCandidateSegments    atomic.Int64
-	retainedValueLogPruneLastObservedSourceCandidateBytes       atomic.Int64
-	retainedValueLogPruneLastObservedSourceRemovedSegments      atomic.Int64
-	retainedValueLogPruneLastObservedSourceRemovedBytes         atomic.Int64
-	retainedValueLogPruneLastObservedSourceInUseSkippedSegments atomic.Int64
-	retainedValueLogPruneLastObservedSourceInUseSkippedBytes    atomic.Int64
-	retainedValueLogPruneLastObservedSourceLiveSkippedSegments  atomic.Int64
-	retainedValueLogPruneLastObservedSourceLiveSkippedBytes     atomic.Int64
-	retainedValueLogPruneLastObservedSourceParseSkippedSegments atomic.Int64
-	retainedValueLogPruneLastObservedSourceParseSkippedBytes    atomic.Int64
-	retainedValueLogPruneLastObservedSourceZombieMarkedSegments atomic.Int64
-	retainedValueLogPruneLastObservedSourceZombieMarkedBytes    atomic.Int64
-	retainedValueLogPruneObservedSourceSegmentsTotal            atomic.Uint64
-	retainedValueLogPruneObservedSourceBytesTotal               atomic.Int64
-	retainedValueLogPruneObservedSourceCandidateSegmentsTotal   atomic.Uint64
-	retainedValueLogPruneObservedSourceCandidateBytesTotal      atomic.Int64
-	retainedValueLogPruneObservedSourceRemovedSegmentsTotal     atomic.Uint64
-	retainedValueLogPruneObservedSourceRemovedBytesTotal        atomic.Int64
+	disableJournal                                               bool
+	relaxedSync                                                  bool
+	notifyError                                                  func(error)
+	debugFlushPointers                                           bool
+	debugFlushTiming                                             bool
+	debugPtrEligible                                             atomic.Int64
+	debugPtrUsed                                                 atomic.Int64
+	debugPtrNoPtr                                                atomic.Int64
+	debugPtrDenied                                               atomic.Int64
+	debugPtrDisabled                                             atomic.Int64
+	checkpointRuns                                               atomic.Uint64
+	checkpointTotalNs                                            atomic.Uint64
+	checkpointMaxNs                                              atomic.Uint64
+	checkpointNoopSkips                                          atomic.Uint64
+	checkpointFlushMuWaitNs                                      atomic.Uint64
+	checkpointFlushMuWaitMaxNs                                   atomic.Uint64
+	checkpointAutoVacuumRuns                                     atomic.Uint64
+	checkpointAutoVacuumLastCheckRun                             atomic.Uint64
+	checkpointAutoVacuumLastPages                                atomic.Uint64
+	checkpointAutoVacuumLastInternalP50                          atomic.Uint64
+	checkpointAutoVacuumLastInternalAvg                          atomic.Uint64
+	lastForegroundWriteUnixNano                                  atomic.Int64
+	lastForegroundReadUnixNano                                   atomic.Int64
+	foregroundReadStampCounter                                   atomic.Uint32
+	activeForegroundIterators                                    atomic.Int64
+	retainedPruneLastStartUnixNano                               atomic.Int64
+	retainedValueLogPruneLastUnixNano                            atomic.Int64
+	retainedValueLogPruneRuns                                    atomic.Uint64
+	retainedValueLogPruneForcedRuns                              atomic.Uint64
+	retainedValueLogPruneForegroundAbortRuns                     atomic.Uint64
+	retainedValueLogPruneRemovedSegments                         atomic.Uint64
+	retainedValueLogPruneRemovedBytes                            atomic.Uint64
+	retainedValueLogPruneInUseSkippedSegments                    atomic.Uint64
+	retainedValueLogPruneInUseSkippedBytes                       atomic.Uint64
+	retainedValueLogPruneCandidateSegments                       atomic.Uint64
+	retainedValueLogPruneCandidateBytes                          atomic.Uint64
+	retainedValueLogPruneLiveSkippedSegments                     atomic.Uint64
+	retainedValueLogPruneLiveSkippedBytes                        atomic.Uint64
+	retainedValueLogPruneParseSkippedSegments                    atomic.Uint64
+	retainedValueLogPruneParseSkippedBytes                       atomic.Uint64
+	retainedValueLogPruneZombieMarkedSegments                    atomic.Uint64
+	retainedValueLogPruneZombieMarkedBytes                       atomic.Uint64
+	retainedValueLogPruneLastObservedSourceSegments              atomic.Int64
+	retainedValueLogPruneLastObservedSourceBytes                 atomic.Int64
+	retainedValueLogPruneLastObservedSourceCandidateSegments     atomic.Int64
+	retainedValueLogPruneLastObservedSourceCandidateBytes        atomic.Int64
+	retainedValueLogPruneLastObservedSourceRemovedSegments       atomic.Int64
+	retainedValueLogPruneLastObservedSourceRemovedBytes          atomic.Int64
+	retainedValueLogPruneLastObservedSourceInUseSkippedSegments  atomic.Int64
+	retainedValueLogPruneLastObservedSourceInUseSkippedBytes     atomic.Int64
+	retainedValueLogPruneLastObservedSourceLiveSkippedSegments   atomic.Int64
+	retainedValueLogPruneLastObservedSourceLiveSkippedBytes      atomic.Int64
+	retainedValueLogPruneLastObservedSourceParseSkippedSegments  atomic.Int64
+	retainedValueLogPruneLastObservedSourceParseSkippedBytes     atomic.Int64
+	retainedValueLogPruneLastObservedSourceZombieMarkedSegments  atomic.Int64
+	retainedValueLogPruneLastObservedSourceZombieMarkedBytes     atomic.Int64
+	retainedValueLogPruneObservedSourceSegmentsTotal             atomic.Uint64
+	retainedValueLogPruneObservedSourceBytesTotal                atomic.Int64
+	retainedValueLogPruneObservedSourceCandidateSegmentsTotal    atomic.Uint64
+	retainedValueLogPruneObservedSourceCandidateBytesTotal       atomic.Int64
+	retainedValueLogPruneObservedSourceRemovedSegmentsTotal      atomic.Uint64
+	retainedValueLogPruneObservedSourceRemovedBytesTotal         atomic.Int64
 	retainedValueLogPruneObservedSourceInUseSkippedSegmentsTotal atomic.Uint64
-	retainedValueLogPruneObservedSourceInUseSkippedBytesTotal   atomic.Int64
-	retainedValueLogPruneObservedSourceLiveSkippedSegmentsTotal atomic.Uint64
-	retainedValueLogPruneObservedSourceLiveSkippedBytesTotal    atomic.Int64
+	retainedValueLogPruneObservedSourceInUseSkippedBytesTotal    atomic.Int64
+	retainedValueLogPruneObservedSourceLiveSkippedSegmentsTotal  atomic.Uint64
+	retainedValueLogPruneObservedSourceLiveSkippedBytesTotal     atomic.Int64
 	retainedValueLogPruneObservedSourceParseSkippedSegmentsTotal atomic.Uint64
-	retainedValueLogPruneObservedSourceParseSkippedBytesTotal   atomic.Int64
+	retainedValueLogPruneObservedSourceParseSkippedBytesTotal    atomic.Int64
 	retainedValueLogPruneObservedSourceZombieMarkedSegmentsTotal atomic.Uint64
-	retainedValueLogPruneObservedSourceZombieMarkedBytesTotal   atomic.Int64
-	retainedValueLogPruneScheduleRequests                       atomic.Uint64
-	retainedValueLogPruneScheduleForcedRequests                 atomic.Uint64
-	retainedValueLogPruneScheduleSkipClosing                    atomic.Uint64
-	retainedValueLogPruneScheduleSkipInFlight                   atomic.Uint64
-	retainedValueLogPruneScheduleSkipNoClosedBytes              atomic.Uint64
-	retainedValueLogPruneScheduleSkipBelowPressure              atomic.Uint64
-	retainedValueLogPruneScheduleSkipMinInterval                atomic.Uint64
-	retainedValueLogPruneWriteGateRetries                       atomic.Uint64
-	retainedValueLogPruneWriteGateRetrySuccesses                atomic.Uint64
-	retainedPruneForceRequested                                 atomic.Bool
-	retainedPruneObservedMu                                     sync.Mutex
-	retainedPruneObservedSourceIDs                              map[uint32]struct{}
-	vlogGenerationObservedGCMu                                  sync.Mutex
-	vlogGenerationObservedGCSourceIDs                           map[uint32]struct{}
-	vlogGenerationObservedGCQueuedBatches                       atomic.Uint64
-	vlogGenerationObservedGCQueuedIDs                           atomic.Uint64
-	vlogGenerationObservedGCTakenBatches                        atomic.Uint64
-	vlogGenerationObservedGCTakenIDs                            atomic.Uint64
-	vlogGenerationObservedGCRuns                                atomic.Uint64
-	vlogGenerationObservedGCRetryQueued                         atomic.Uint64
-	vlogGenerationObservedGCRetryDropped                        atomic.Uint64
-	vlogGenerationObservedGCRetryAttempts                       map[uint32]uint8
-	vlogGenerationObservedGCFirstQueuedUnixNano                 map[uint32]int64
-	vlogGenerationObservedGCLatencyCompletedIDs                 atomic.Uint64
-	vlogGenerationObservedGCLatencyDroppedIDs                   atomic.Uint64
-	vlogGenerationObservedGCLatencyTotalMS                      atomic.Uint64
-	vlogGenerationObservedGCLatencyMaxMS                        atomic.Uint64
-	vlogGenerationObservedGCSourceSegmentsTotal                 atomic.Uint64
-	vlogGenerationObservedGCSourceSegmentsEligibleTotal         atomic.Uint64
-	vlogGenerationObservedGCSourceSegmentsDeletedTotal          atomic.Uint64
-	vlogGenerationObservedGCSourceSegmentsProtectedInUseTotal   atomic.Uint64
+	retainedValueLogPruneObservedSourceZombieMarkedBytesTotal    atomic.Int64
+	retainedValueLogPruneScheduleRequests                        atomic.Uint64
+	retainedValueLogPruneScheduleForcedRequests                  atomic.Uint64
+	retainedValueLogPruneScheduleSkipClosing                     atomic.Uint64
+	retainedValueLogPruneScheduleSkipInFlight                    atomic.Uint64
+	retainedValueLogPruneScheduleSkipNoClosedBytes               atomic.Uint64
+	retainedValueLogPruneScheduleSkipBelowPressure               atomic.Uint64
+	retainedValueLogPruneScheduleSkipMinInterval                 atomic.Uint64
+	retainedValueLogPruneWriteGateRetries                        atomic.Uint64
+	retainedValueLogPruneWriteGateRetrySuccesses                 atomic.Uint64
+	retainedPruneForceRequested                                  atomic.Bool
+	retainedPruneObservedMu                                      sync.Mutex
+	retainedPruneObservedSourceIDs                               map[uint32]struct{}
+	vlogGenerationObservedGCMu                                   sync.Mutex
+	vlogGenerationObservedGCSourceIDs                            map[uint32]struct{}
+	vlogGenerationObservedGCQueuedBatches                        atomic.Uint64
+	vlogGenerationObservedGCQueuedIDs                            atomic.Uint64
+	vlogGenerationObservedGCTakenBatches                         atomic.Uint64
+	vlogGenerationObservedGCTakenIDs                             atomic.Uint64
+	vlogGenerationObservedGCRuns                                 atomic.Uint64
+	vlogGenerationObservedGCRetryQueued                          atomic.Uint64
+	vlogGenerationObservedGCRetryDropped                         atomic.Uint64
+	vlogGenerationObservedGCRetryAttempts                        map[uint32]uint8
+	vlogGenerationObservedGCFirstQueuedUnixNano                  map[uint32]int64
+	vlogGenerationObservedGCLatencyCompletedIDs                  atomic.Uint64
+	vlogGenerationObservedGCLatencyDroppedIDs                    atomic.Uint64
+	vlogGenerationObservedGCLatencyTotalMS                       atomic.Uint64
+	vlogGenerationObservedGCLatencyMaxMS                         atomic.Uint64
+	vlogGenerationObservedGCSourceSegmentsTotal                  atomic.Uint64
+	vlogGenerationObservedGCSourceSegmentsEligibleTotal          atomic.Uint64
+	vlogGenerationObservedGCSourceSegmentsDeletedTotal           atomic.Uint64
+	vlogGenerationObservedGCSourceSegmentsProtectedInUseTotal    atomic.Uint64
 	vlogGenerationObservedGCSourceSegmentsProtectedRetainedTotal atomic.Uint64
-	vlogGenerationObservedGCSourceSegmentsProtectedOverlapTotal atomic.Uint64
-	vlogGenerationObservedGCSourceSegmentsProtectedOtherTotal   atomic.Uint64
-	vlogGenerationObservedGCSourceBytesTotal                    atomic.Int64
-	vlogGenerationObservedGCSourceBytesEligibleTotal            atomic.Int64
-	vlogGenerationObservedGCSourceBytesDeletedTotal             atomic.Int64
-	vlogGenerationObservedGCSourceBytesProtectedInUseTotal      atomic.Int64
-	vlogGenerationObservedGCSourceBytesProtectedRetainedTotal   atomic.Int64
-	vlogGenerationObservedGCSourceBytesProtectedOverlapTotal    atomic.Int64
-	vlogGenerationObservedGCSourceBytesProtectedOtherTotal      atomic.Int64
-	retainedPruneMu                                             sync.Mutex
-	retainedPruneDone                                           chan struct{}
-	vlogGenerationRemapSuccesses                                atomic.Uint64
-	vlogGenerationRemapFailures                                 atomic.Uint64
-	vlogGenerationRewriteBytesIn                                atomic.Uint64
-	vlogGenerationRewriteBytesOut                               atomic.Uint64
-	vlogGenerationRewriteReclaimedBytes                         atomic.Uint64
-	vlogGenerationRewriteValueRecordsCopied                     atomic.Uint64
-	vlogGenerationRewriteValueBytesCopied                       atomic.Uint64
-	vlogGenerationRewriteLeafRefRecordsCopied                   atomic.Uint64
-	vlogGenerationRewriteLeafRefBytesCopied                     atomic.Uint64
-	vlogGenerationRewriteProcessedLiveBytes                     atomic.Uint64
-	vlogGenerationRewriteProcessedStaleBytes                    atomic.Uint64
-	vlogGenerationRewriteNoReclaimRuns                          atomic.Uint64
-	vlogGenerationRewriteNoReclaimStaleBytes                    atomic.Uint64
-	vlogGenerationRewriteRuns                                   atomic.Uint64
-	vlogGenerationRewritePlanRuns                               atomic.Uint64
-	vlogGenerationRewritePlanCanceled                           atomic.Uint64
-	vlogGenerationRewritePlanErrors                             atomic.Uint64
-	vlogGenerationRewritePlanEmpty                              atomic.Uint64
-	vlogGenerationRewritePlanEmptyAgeBlocked                    atomic.Uint64
-	vlogGenerationRewritePlanEmptyNoSelection                   atomic.Uint64
-	vlogGenerationRewritePlanSelected                           atomic.Uint64
-	vlogGenerationRewritePlanSelectedSegments                   atomic.Uint64
-	vlogGenerationRewritePlanSelectedBytes                      atomic.Uint64
-	vlogGenerationRewritePlanSelectedLiveBytes                  atomic.Uint64
-	vlogGenerationRewritePlanSelectedStaleBytes                 atomic.Uint64
-	vlogGenerationRewritePlanPenaltyFilterRuns                  atomic.Uint64
-	vlogGenerationRewritePlanPenaltyFilterSegments              atomic.Uint64
-	vlogGenerationRewritePlanPenaltyFilterToEmpty               atomic.Uint64
-	vlogGenerationRewritePlanCanceledLastNS                     atomic.Int64
-	vlogGenerationRewriteAgeBlockedUntilNS                      atomic.Int64
-	vlogGenerationRewriteAgeBlockedWakeRunning                  atomic.Bool
-	vlogGenerationRewriteIneffectiveLastNS                      atomic.Int64
-	vlogGenerationRewriteIneffectiveRuns                        atomic.Uint64
-	vlogGenerationRewriteIneffectiveBytesIn                     atomic.Uint64
-	vlogGenerationRewriteIneffectiveBytesOut                    atomic.Uint64
-	vlogGenerationRewriteCanceledRuns                           atomic.Uint64
-	vlogGenerationRewriteCanceledFreshPlanRuns                  atomic.Uint64
-	vlogGenerationRewriteCanceledQueuedDebtRuns                 atomic.Uint64
-	vlogGenerationRewriteCanceledLastNS                         atomic.Int64
-	vlogGenerationRewriteDeadlineRuns                           atomic.Uint64
-	vlogGenerationRewriteDeadlineFreshPlanRuns                  atomic.Uint64
-	vlogGenerationRewriteDeadlineQueuedDebtRuns                 atomic.Uint64
-	vlogGenerationRewriteDeadlineLastNS                         atomic.Int64
-	vlogGenerationRewriteQueuePruneRuns                         atomic.Uint64
-	vlogGenerationRewriteQueuePruneIDs                          atomic.Uint64
-	vlogGenerationGCSegmentsDeleted                             atomic.Uint64
-	vlogGenerationGCBytesDeleted                                atomic.Uint64
-	vlogGenerationGCRuns                                        atomic.Uint64
-	vlogGenerationVacuumRuns                                    atomic.Uint64
-	vlogGenerationVacuumFailures                                atomic.Uint64
-	vlogGenerationVacuumSkippedDisabled                         atomic.Uint64
-	vlogGenerationVacuumSkippedRewriteBytes                     atomic.Uint64
-	vlogGenerationVacuumSkippedCooldown                         atomic.Uint64
-	vlogGenerationLastVacuumUnixNano                            atomic.Int64
-	vlogGenerationLastRewritePlanUnixNano                       atomic.Int64
-	vlogGenerationLastRewriteUnixNano                           atomic.Int64
-	vlogGenerationLastGCUnixNano                                atomic.Int64
-	vlogGenerationLastGCNoopUnixNano                            atomic.Int64
-	vlogGenerationLastCheckpointKickUnixNano                    atomic.Int64
-	vlogGenerationLastGCDryRunUnixNano                          atomic.Int64
-	vlogGenerationLastGCDryRunBytesEligible                     atomic.Int64
-	vlogGenerationLastGCDryRunSegsEligible                      atomic.Int64
-	vlogGenerationLastGCBytesReferenced                         atomic.Int64
-	vlogGenerationLastGCSegmentsReferenced                      atomic.Int64
-	vlogGenerationLastGCBytesActive                             atomic.Int64
-	vlogGenerationLastGCSegmentsActive                          atomic.Int64
-	vlogGenerationLastGCBytesProtected                          atomic.Int64
-	vlogGenerationLastGCSegmentsProtected                       atomic.Int64
-	vlogGenerationLastGCBytesProtectedInUse                     atomic.Int64
-	vlogGenerationLastGCSegmentsProtectedInUse                  atomic.Int64
-	vlogGenerationLastGCBytesProtectedRetained                  atomic.Int64
-	vlogGenerationLastGCSegmentsProtectedRetained               atomic.Int64
-	vlogGenerationLastGCBytesProtectedOverlap                   atomic.Int64
-	vlogGenerationLastGCSegmentsProtectedOverlap                atomic.Int64
-	vlogGenerationLastGCBytesProtectedOther                     atomic.Int64
-	vlogGenerationLastGCSegmentsProtectedOther                  atomic.Int64
-	vlogGenerationLastGCBytesEligible                           atomic.Int64
-	vlogGenerationLastGCSegmentsEligible                        atomic.Int64
-	vlogGenerationLastGCBytesDeleted                            atomic.Int64
-	vlogGenerationLastGCSegmentsDeleted                         atomic.Int64
-	vlogGenerationLastGCBytesPending                            atomic.Int64
-	vlogGenerationLastGCSegmentsPending                         atomic.Int64
-	vlogGenerationLastGCObservedSourceSegments                  atomic.Int64
-	vlogGenerationLastGCObservedSourceSegmentsReferenced        atomic.Int64
-	vlogGenerationLastGCObservedSourceSegmentsActive            atomic.Int64
-	vlogGenerationLastGCObservedSourceSegmentsProtected         atomic.Int64
-	vlogGenerationLastGCObservedSourceSegmentsProtectedInUse    atomic.Int64
-	vlogGenerationLastGCObservedSourceSegmentsProtectedRetained atomic.Int64
-	vlogGenerationLastGCObservedSourceSegmentsProtectedOverlap  atomic.Int64
-	vlogGenerationLastGCObservedSourceSegmentsProtectedOther    atomic.Int64
-	vlogGenerationLastGCObservedSourceSegmentsEligible          atomic.Int64
-	vlogGenerationLastGCObservedSourceSegmentsDeleted           atomic.Int64
-	vlogGenerationLastGCObservedSourceSegmentsPending           atomic.Int64
-	vlogGenerationLastGCObservedSourceBytes                     atomic.Int64
-	vlogGenerationLastGCObservedSourceBytesReferenced           atomic.Int64
-	vlogGenerationLastGCObservedSourceBytesActive               atomic.Int64
-	vlogGenerationLastGCObservedSourceBytesProtected            atomic.Int64
-	vlogGenerationLastGCObservedSourceBytesProtectedInUse       atomic.Int64
-	vlogGenerationLastGCObservedSourceBytesProtectedRetained    atomic.Int64
-	vlogGenerationLastGCObservedSourceBytesProtectedOverlap     atomic.Int64
-	vlogGenerationLastGCObservedSourceBytesProtectedOther       atomic.Int64
-	vlogGenerationLastGCObservedSourceBytesEligible             atomic.Int64
-	vlogGenerationLastGCObservedSourceBytesDeleted              atomic.Int64
-	vlogGenerationLastGCObservedSourceBytesPending              atomic.Int64
-	vlogGenerationChurnBytes                                    atomic.Uint64
-	vlogGenerationSchedulerState                                atomic.Uint32
-	vlogGenerationMaintenanceActive                             atomic.Bool
-	vlogGenerationMaintenanceAttempts                           atomic.Uint64
-	vlogGenerationMaintenanceAcquired                           atomic.Uint64
-	vlogGenerationMaintenanceCollisions                         atomic.Uint64
-	vlogGenerationMaintenanceSkipWALOnPeriodic                  atomic.Uint64
-	vlogGenerationMaintenanceSkipPhase                          atomic.Uint64
-	vlogGenerationMaintenanceSkipStageGate                      atomic.Uint64
-	vlogGenerationMaintenanceSkipStageNotDue                    atomic.Uint64
-	vlogGenerationMaintenanceSkipStageDue                       atomic.Uint64
-	vlogGenerationMaintenanceSkipAgeBlocked                     atomic.Uint64
-	vlogGenerationMaintenanceSkipPriority                       atomic.Uint64
-	vlogGenerationMaintenanceSkipQuiet                          atomic.Uint64
-	vlogGenerationMaintenanceSkipPreCheckpoint                  atomic.Uint64
-	vlogGenerationMaintenanceSkipCheckpointing                  atomic.Uint64
-	vlogGenerationMaintenancePassNoop                           atomic.Uint64
-	vlogGenerationMaintenancePassWithRewrite                    atomic.Uint64
-	vlogGenerationMaintenancePassWithGC                         atomic.Uint64
-	vlogGenerationMaintenancePassTotalNanos                     atomic.Uint64
-	vlogGenerationMaintenancePassMaxNanos                       atomic.Uint64
-	vlogGenerationLastReason                                    atomic.Uint32
-	vlogGenerationCheckpointKickRuns                            atomic.Uint64
-	vlogGenerationCheckpointKickRewriteRuns                     atomic.Uint64
-	vlogGenerationCheckpointKickGCRuns                          atomic.Uint64
-	vlogGenerationCheckpointKickSkippedHotNoDebt                atomic.Uint64
-	vlogGenerationCheckpointKickPending                         atomic.Bool
-	vlogGenerationDeferredMaintenancePending                    atomic.Bool
-	vlogGenerationDeferredMaintenanceRunning                    atomic.Bool
-	vlogGenerationRewriteStageWakeObservedNS                    atomic.Int64
-	vlogGenerationRewriteQueueMu                                sync.Mutex
-	vlogGenerationCheckpointKickActive                          atomic.Bool
-	vlogGenerationRewriteQueue                                  []uint32
-	vlogGenerationRewriteLedger                                 []backenddb.ValueLogRewritePlanSegment
-	vlogGenerationRewritePenalties                              map[uint32]valueLogGenerationRewritePenalty
-	vlogGenerationRewriteStagePending                           bool
-	vlogGenerationRewriteStageObservedUnixNano                  int64
-	vlogGenerationRewriteQueueLoaded                            bool
-	vlogGenerationLastChurnBps                                  atomic.Int64
-	vlogGenerationLastChurnSampleBytes                          atomic.Uint64
-	vlogGenerationLastChurnSampleNS                             atomic.Int64
+	vlogGenerationObservedGCSourceSegmentsProtectedOverlapTotal  atomic.Uint64
+	vlogGenerationObservedGCSourceSegmentsProtectedOtherTotal    atomic.Uint64
+	vlogGenerationObservedGCSourceBytesTotal                     atomic.Int64
+	vlogGenerationObservedGCSourceBytesEligibleTotal             atomic.Int64
+	vlogGenerationObservedGCSourceBytesDeletedTotal              atomic.Int64
+	vlogGenerationObservedGCSourceBytesProtectedInUseTotal       atomic.Int64
+	vlogGenerationObservedGCSourceBytesProtectedRetainedTotal    atomic.Int64
+	vlogGenerationObservedGCSourceBytesProtectedOverlapTotal     atomic.Int64
+	vlogGenerationObservedGCSourceBytesProtectedOtherTotal       atomic.Int64
+	retainedPruneMu                                              sync.Mutex
+	retainedPruneDone                                            chan struct{}
+	vlogGenerationRemapSuccesses                                 atomic.Uint64
+	vlogGenerationRemapFailures                                  atomic.Uint64
+	vlogGenerationRewriteBytesIn                                 atomic.Uint64
+	vlogGenerationRewriteBytesOut                                atomic.Uint64
+	vlogGenerationRewriteReclaimedBytes                          atomic.Uint64
+	vlogGenerationRewriteValueRecordsCopied                      atomic.Uint64
+	vlogGenerationRewriteValueBytesCopied                        atomic.Uint64
+	vlogGenerationRewriteLeafRefRecordsCopied                    atomic.Uint64
+	vlogGenerationRewriteLeafRefBytesCopied                      atomic.Uint64
+	vlogGenerationRewriteProcessedLiveBytes                      atomic.Uint64
+	vlogGenerationRewriteProcessedStaleBytes                     atomic.Uint64
+	vlogGenerationRewriteNoReclaimRuns                           atomic.Uint64
+	vlogGenerationRewriteNoReclaimStaleBytes                     atomic.Uint64
+	vlogGenerationRewriteRuns                                    atomic.Uint64
+	vlogGenerationRewritePlanRuns                                atomic.Uint64
+	vlogGenerationRewritePlanCanceled                            atomic.Uint64
+	vlogGenerationRewritePlanErrors                              atomic.Uint64
+	vlogGenerationRewritePlanEmpty                               atomic.Uint64
+	vlogGenerationRewritePlanEmptyAgeBlocked                     atomic.Uint64
+	vlogGenerationRewritePlanEmptyNoSelection                    atomic.Uint64
+	vlogGenerationRewritePlanSelected                            atomic.Uint64
+	vlogGenerationRewritePlanSelectedSegments                    atomic.Uint64
+	vlogGenerationRewritePlanSelectedBytes                       atomic.Uint64
+	vlogGenerationRewritePlanSelectedLiveBytes                   atomic.Uint64
+	vlogGenerationRewritePlanSelectedStaleBytes                  atomic.Uint64
+	vlogGenerationRewritePlanPenaltyFilterRuns                   atomic.Uint64
+	vlogGenerationRewritePlanPenaltyFilterSegments               atomic.Uint64
+	vlogGenerationRewritePlanPenaltyFilterToEmpty                atomic.Uint64
+	vlogGenerationRewritePlanCanceledLastNS                      atomic.Int64
+	vlogGenerationRewriteAgeBlockedUntilNS                       atomic.Int64
+	vlogGenerationRewriteAgeBlockedWakeRunning                   atomic.Bool
+	vlogGenerationRewriteIneffectiveLastNS                       atomic.Int64
+	vlogGenerationRewriteIneffectiveRuns                         atomic.Uint64
+	vlogGenerationRewriteIneffectiveBytesIn                      atomic.Uint64
+	vlogGenerationRewriteIneffectiveBytesOut                     atomic.Uint64
+	vlogGenerationRewriteCanceledRuns                            atomic.Uint64
+	vlogGenerationRewriteCanceledFreshPlanRuns                   atomic.Uint64
+	vlogGenerationRewriteCanceledQueuedDebtRuns                  atomic.Uint64
+	vlogGenerationRewriteCanceledLastNS                          atomic.Int64
+	vlogGenerationRewriteDeadlineRuns                            atomic.Uint64
+	vlogGenerationRewriteDeadlineFreshPlanRuns                   atomic.Uint64
+	vlogGenerationRewriteDeadlineQueuedDebtRuns                  atomic.Uint64
+	vlogGenerationRewriteDeadlineLastNS                          atomic.Int64
+	vlogGenerationRewriteQueuePruneRuns                          atomic.Uint64
+	vlogGenerationRewriteQueuePruneIDs                           atomic.Uint64
+	vlogGenerationGCSegmentsDeleted                              atomic.Uint64
+	vlogGenerationGCBytesDeleted                                 atomic.Uint64
+	vlogGenerationGCRuns                                         atomic.Uint64
+	vlogGenerationVacuumRuns                                     atomic.Uint64
+	vlogGenerationVacuumFailures                                 atomic.Uint64
+	vlogGenerationVacuumSkippedDisabled                          atomic.Uint64
+	vlogGenerationVacuumSkippedRewriteBytes                      atomic.Uint64
+	vlogGenerationVacuumSkippedCooldown                          atomic.Uint64
+	vlogGenerationLastVacuumUnixNano                             atomic.Int64
+	vlogGenerationLastRewritePlanUnixNano                        atomic.Int64
+	vlogGenerationLastRewriteUnixNano                            atomic.Int64
+	vlogGenerationLastGCUnixNano                                 atomic.Int64
+	vlogGenerationLastGCNoopUnixNano                             atomic.Int64
+	vlogGenerationLastCheckpointKickUnixNano                     atomic.Int64
+	vlogGenerationLastGCDryRunUnixNano                           atomic.Int64
+	vlogGenerationLastGCDryRunBytesEligible                      atomic.Int64
+	vlogGenerationLastGCDryRunSegsEligible                       atomic.Int64
+	vlogGenerationLastGCBytesReferenced                          atomic.Int64
+	vlogGenerationLastGCSegmentsReferenced                       atomic.Int64
+	vlogGenerationLastGCBytesActive                              atomic.Int64
+	vlogGenerationLastGCSegmentsActive                           atomic.Int64
+	vlogGenerationLastGCBytesProtected                           atomic.Int64
+	vlogGenerationLastGCSegmentsProtected                        atomic.Int64
+	vlogGenerationLastGCBytesProtectedInUse                      atomic.Int64
+	vlogGenerationLastGCSegmentsProtectedInUse                   atomic.Int64
+	vlogGenerationLastGCBytesProtectedRetained                   atomic.Int64
+	vlogGenerationLastGCSegmentsProtectedRetained                atomic.Int64
+	vlogGenerationLastGCBytesProtectedOverlap                    atomic.Int64
+	vlogGenerationLastGCSegmentsProtectedOverlap                 atomic.Int64
+	vlogGenerationLastGCBytesProtectedOther                      atomic.Int64
+	vlogGenerationLastGCSegmentsProtectedOther                   atomic.Int64
+	vlogGenerationLastGCBytesEligible                            atomic.Int64
+	vlogGenerationLastGCSegmentsEligible                         atomic.Int64
+	vlogGenerationLastGCBytesDeleted                             atomic.Int64
+	vlogGenerationLastGCSegmentsDeleted                          atomic.Int64
+	vlogGenerationLastGCBytesPending                             atomic.Int64
+	vlogGenerationLastGCSegmentsPending                          atomic.Int64
+	vlogGenerationLastGCObservedSourceSegments                   atomic.Int64
+	vlogGenerationLastGCObservedSourceSegmentsReferenced         atomic.Int64
+	vlogGenerationLastGCObservedSourceSegmentsActive             atomic.Int64
+	vlogGenerationLastGCObservedSourceSegmentsProtected          atomic.Int64
+	vlogGenerationLastGCObservedSourceSegmentsProtectedInUse     atomic.Int64
+	vlogGenerationLastGCObservedSourceSegmentsProtectedRetained  atomic.Int64
+	vlogGenerationLastGCObservedSourceSegmentsProtectedOverlap   atomic.Int64
+	vlogGenerationLastGCObservedSourceSegmentsProtectedOther     atomic.Int64
+	vlogGenerationLastGCObservedSourceSegmentsEligible           atomic.Int64
+	vlogGenerationLastGCObservedSourceSegmentsDeleted            atomic.Int64
+	vlogGenerationLastGCObservedSourceSegmentsPending            atomic.Int64
+	vlogGenerationLastGCObservedSourceBytes                      atomic.Int64
+	vlogGenerationLastGCObservedSourceBytesReferenced            atomic.Int64
+	vlogGenerationLastGCObservedSourceBytesActive                atomic.Int64
+	vlogGenerationLastGCObservedSourceBytesProtected             atomic.Int64
+	vlogGenerationLastGCObservedSourceBytesProtectedInUse        atomic.Int64
+	vlogGenerationLastGCObservedSourceBytesProtectedRetained     atomic.Int64
+	vlogGenerationLastGCObservedSourceBytesProtectedOverlap      atomic.Int64
+	vlogGenerationLastGCObservedSourceBytesProtectedOther        atomic.Int64
+	vlogGenerationLastGCObservedSourceBytesEligible              atomic.Int64
+	vlogGenerationLastGCObservedSourceBytesDeleted               atomic.Int64
+	vlogGenerationLastGCObservedSourceBytesPending               atomic.Int64
+	vlogGenerationChurnBytes                                     atomic.Uint64
+	vlogGenerationSchedulerState                                 atomic.Uint32
+	vlogGenerationMaintenanceActive                              atomic.Bool
+	vlogGenerationMaintenanceAttempts                            atomic.Uint64
+	vlogGenerationMaintenanceAcquired                            atomic.Uint64
+	vlogGenerationMaintenanceCollisions                          atomic.Uint64
+	vlogGenerationMaintenanceSkipWALOnPeriodic                   atomic.Uint64
+	vlogGenerationMaintenanceSkipPhase                           atomic.Uint64
+	vlogGenerationMaintenanceSkipStageGate                       atomic.Uint64
+	vlogGenerationMaintenanceSkipStageNotDue                     atomic.Uint64
+	vlogGenerationMaintenanceSkipStageDue                        atomic.Uint64
+	vlogGenerationMaintenanceSkipAgeBlocked                      atomic.Uint64
+	vlogGenerationMaintenanceSkipPriority                        atomic.Uint64
+	vlogGenerationMaintenanceSkipQuiet                           atomic.Uint64
+	vlogGenerationMaintenanceSkipPreCheckpoint                   atomic.Uint64
+	vlogGenerationMaintenanceSkipCheckpointing                   atomic.Uint64
+	vlogGenerationMaintenancePassNoop                            atomic.Uint64
+	vlogGenerationMaintenancePassWithRewrite                     atomic.Uint64
+	vlogGenerationMaintenancePassWithGC                          atomic.Uint64
+	vlogGenerationMaintenancePassTotalNanos                      atomic.Uint64
+	vlogGenerationMaintenancePassMaxNanos                        atomic.Uint64
+	vlogGenerationLastReason                                     atomic.Uint32
+	vlogGenerationCheckpointKickRuns                             atomic.Uint64
+	vlogGenerationCheckpointKickRewriteRuns                      atomic.Uint64
+	vlogGenerationCheckpointKickGCRuns                           atomic.Uint64
+	vlogGenerationCheckpointKickSkippedHotNoDebt                 atomic.Uint64
+	vlogGenerationCheckpointKickHotNoDebtWakeRuns                atomic.Uint64
+	vlogGenerationCheckpointKickPending                          atomic.Bool
+	vlogGenerationCheckpointKickHotNoDebtWakeRunning             atomic.Bool
+	vlogGenerationDeferredMaintenancePending                     atomic.Bool
+	vlogGenerationDeferredMaintenanceRunning                     atomic.Bool
+	vlogGenerationRewriteStageWakeObservedNS                     atomic.Int64
+	vlogGenerationRewriteQueueMu                                 sync.Mutex
+	vlogGenerationCheckpointKickActive                           atomic.Bool
+	vlogGenerationRewriteQueue                                   []uint32
+	vlogGenerationRewriteLedger                                  []backenddb.ValueLogRewritePlanSegment
+	vlogGenerationRewritePenalties                               map[uint32]valueLogGenerationRewritePenalty
+	vlogGenerationRewriteStagePending                            bool
+	vlogGenerationRewriteStageObservedUnixNano                   int64
+	vlogGenerationRewriteQueueLoaded                             bool
+	vlogGenerationLastChurnBps                                   atomic.Int64
+	vlogGenerationLastChurnSampleBytes                           atomic.Uint64
+	vlogGenerationLastChurnSampleNS                              atomic.Int64
 	// Rewrite budget token bucket (bytes) for online maintenance. This lets us
 	// interpret ValueLogRewriteBudgetBytesPerSec as a true per-second bandwidth
 	// budget while still running maintenance at coarse intervals.
@@ -11037,6 +11133,9 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 		} else if totalBytes > 0 {
 			l.vlogDirty.Store(true)
 		}
+		if !needSync && !needFlush && !deferredFlushed && totalBytes > 0 {
+			l.backendReadDirtySeq.Add(1)
+		}
 	}
 	if err == nil && totalBytes > 0 {
 		l.vlogLiveBytes.Add(totalBytes)
@@ -12005,6 +12104,9 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 		} else if bytesWrittenLive > 0 {
 			l.vlogDirty.Store(true)
 		}
+		if durability == journalDurabilityNone && !durableBoundary && bytesWrittenLive > 0 {
+			l.backendReadDirtySeq.Add(1)
+		}
 	}
 	if db.testBeforeVlogUnlock != nil {
 		db.testBeforeVlogUnlock(int(l.id))
@@ -12373,6 +12475,9 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 				} else if totalBytes > 0 {
 					l.vlogDirty.Store(true)
 				}
+				if durability == journalDurabilityNone && !durableBoundary && totalBytes > 0 {
+					l.backendReadDirtySeq.Add(1)
+				}
 			}
 			if db.testBeforeVlogUnlock != nil {
 				db.testBeforeVlogUnlock(int(l.id))
@@ -12576,6 +12681,9 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 			l.vlogDirty.Store(false)
 		} else if totalBytes > 0 {
 			l.vlogDirty.Store(true)
+		}
+		if durability == journalDurabilityNone && !durableBoundary && totalBytes > 0 {
+			l.backendReadDirtySeq.Add(1)
 		}
 	}
 	if db.testBeforeVlogUnlock != nil {
@@ -13924,6 +14032,31 @@ func (db *DB) scheduleDueVlogGenerationDeferredMaintenance() {
 	})
 }
 
+func (db *DB) scheduleVlogGenerationCheckpointKickHotNoDebtWake() {
+	if db == nil || db.closing.Load() {
+		return
+	}
+	if !db.vlogGenerationCheckpointKickHotNoDebtWakeRunning.CompareAndSwap(false, true) {
+		return
+	}
+	db.wg.Add(1)
+	go func() {
+		defer db.wg.Done()
+		defer db.vlogGenerationCheckpointKickHotNoDebtWakeRunning.Store(false)
+		// Checkpoint-kick hot-debt-only skips should still get one bounded
+		// follow-up attempt when the same maintenance quiet criterion is met.
+		db.waitForForegroundMaintenanceQuietWindow(vlogGenerationMaintenanceQuietWindow)
+		if db.closing.Load() {
+			return
+		}
+		if !db.foregroundActivityQuietFor(time.Now(), vlogGenerationMaintenanceQuietWindow, vlogForegroundReadQuietWindow) {
+			return
+		}
+		db.vlogGenerationCheckpointKickHotNoDebtWakeRuns.Add(1)
+		db.maybeKickVlogGenerationMaintenanceAfterCheckpoint()
+	}()
+}
+
 func (db *DB) runVlogGenerationCheckpointKickRetries(opts vlogGenerationMaintenanceOptions) {
 	db.runVlogGenerationMaintenanceRetries(opts, vlogGenerationCheckpointKickRetryWindow, true)
 }
@@ -14103,12 +14236,6 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 			db.vlogGenerationDeferredMaintenancePending.Load(),
 		)
 		db.observeVlogGenerationMaintenancePassDuration(passDur)
-		db.vlogGenerationMaintenanceActive.Store(false)
-		// If a deferred confirmation/age wake became due while this pass held the
-		// scheduler active, requeue it immediately on exit instead of relying on
-		// the original retry goroutine to still be alive.
-		db.scheduleDueVlogGenerationDeferredMaintenance()
-		db.schedulePendingVlogGenerationCheckpointKick()
 		rewriteRan := db.vlogGenerationRewriteRuns.Load() > rewriteRunsBefore
 		gcRan := db.vlogGenerationGCRuns.Load() > gcRunsBefore
 		if rewriteRan {
@@ -14120,6 +14247,12 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 		if !rewriteRan && !gcRan {
 			db.vlogGenerationMaintenancePassNoop.Add(1)
 		}
+		db.vlogGenerationMaintenanceActive.Store(false)
+		// If a deferred confirmation/age wake became due while this pass held the
+		// scheduler active, requeue it immediately on exit instead of relying on
+		// the original retry goroutine to still be alive.
+		db.scheduleDueVlogGenerationDeferredMaintenance()
+		db.schedulePendingVlogGenerationCheckpointKick()
 	}()
 	now := time.Now()
 	quiet := db.foregroundActivityQuietFor(now, vlogGenerationMaintenanceQuietWindow, vlogForegroundReadQuietWindow)
@@ -14275,7 +14408,11 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 		shouldRewrite = false
 		reason = vlogGenerationReasonNone
 	}
-	ineffectiveBackoff := !hasExecutableRewriteQueue && db.vlogGenerationRewriteIneffectiveBackoffActive(now) && !allowCheckpointKickBypass && !ageBlockedRetryDue
+	// Apply ineffective-backoff uniformly. Previously checkpoint-kick fresh-plan
+	// passes bypassed this guard, which can create repeated no-reclaim rewrite/GC
+	// loops during active sync windows.
+	ineffectiveBackoff := db.vlogGenerationRewriteIneffectiveBackoffActive(now) &&
+		!ageBlockedRetryDue
 	if ineffectiveBackoff {
 		shouldRewrite = false
 		reason = vlogGenerationReasonNone
@@ -14690,12 +14827,12 @@ planned:
 				// Do not debt-drain freshly planned work in the same pass. The only
 				// exception is a confirmed staged rewrite-resume pass, which should
 				// be allowed to consume debt in bounded multi-segment chunks.
-					allowPlanDebtDrain := reason == vlogGenerationReasonRewriteResume && opts.rewriteDebtDrain
-					if allowPlanDebtDrain {
-						rewriteMaxSegments = db.vlogGenerationRewriteMaxSegmentsForRun(len(rewriteQueue), budgetTokens, opts)
-					} else {
-						rewriteMaxSegments = db.vlogGenerationRewriteMaxSegmentsForFreshPlan(len(rewriteQueue), budgetTokens, opts)
-					}
+				allowPlanDebtDrain := reason == vlogGenerationReasonRewriteResume && opts.rewriteDebtDrain
+				if allowPlanDebtDrain {
+					rewriteMaxSegments = db.vlogGenerationRewriteMaxSegmentsForRun(len(rewriteQueue), budgetTokens, opts)
+				} else {
+					rewriteMaxSegments = db.vlogGenerationRewriteMaxSegmentsForFreshPlan(len(rewriteQueue), budgetTokens, opts)
+				}
 				// If the token bucket is enabled and empty, persist the plan/ledger but
 				// skip running the rewrite until we have budget to spend.
 				if db.vlogGenerationRewriteBudgetEnabled() && budgetTokens <= 0 {
@@ -14891,28 +15028,15 @@ planned:
 					gcStats.ObservedSourceSegmentsEligible == 0 &&
 					gcStats.ObservedSourceSegmentsProtectedRetained > 0
 				if rewriteBlockedByRetained {
-					if db.retainedPruneActive() {
-						db.queueRetainedPruneObservedSourceIDs(processedRewriteIDs)
-						// A prune is already in flight. Ensure a follow-up attempt stays queued.
-						db.scheduleRetainedValueLogPruneForce()
-						// Request a follow-up maintenance pass so GC can re-evaluate
-						// rewrite-observed source segments after the in-flight prune completes.
-						db.vlogGenerationCheckpointKickPending.Store(true)
-					} else {
-						observedSourceIDSet := make(map[uint32]struct{}, len(processedRewriteIDs))
-						for _, id := range processedRewriteIDs {
-							if id == 0 {
-								continue
-							}
-							observedSourceIDSet[id] = struct{}{}
+					observedSourceIDSet := make(map[uint32]struct{}, len(processedRewriteIDs))
+					for _, id := range processedRewriteIDs {
+						if id == 0 {
+							continue
 						}
-						nowPrune := time.Now()
-						db.retainedPruneLastStartUnixNano.Store(nowPrune.UnixNano())
-						db.retainedValueLogPruneRuns.Add(1)
-						db.retainedValueLogPruneForcedRuns.Add(1)
-						db.retainedValueLogPruneLastUnixNano.Store(nowPrune.UnixNano())
-						pruneStats := db.pruneRetainedValueLogsWithObserved(true, observedSourceIDSet)
-						db.observeRetainedValueLogPruneStats(pruneStats)
+						observedSourceIDSet[id] = struct{}{}
+					}
+					pruneStats, inlinePruneRan := db.runRetainedValueLogPruneInline(true, observedSourceIDSet)
+					if inlinePruneRan {
 						db.debugVlogMaintf(
 							"rewrite_retained_prune reason=%s observed_source_retained_segments=%d observed_source_retained_bytes=%d observed_source_seen_segments=%d observed_source_seen_bytes=%d observed_source_candidate_segments=%d observed_source_candidate_bytes=%d observed_source_removed_segments=%d observed_source_removed_bytes=%d observed_source_zombie_marked_segments=%d observed_source_zombie_marked_bytes=%d observed_source_live_skipped_segments=%d observed_source_live_skipped_bytes=%d observed_source_in_use_skipped_segments=%d observed_source_in_use_skipped_bytes=%d observed_source_parse_skipped_segments=%d observed_source_parse_skipped_bytes=%d removed_segments=%d removed_bytes=%d zombie_marked_segments=%d zombie_marked_bytes=%d live_skipped_segments=%d live_skipped_bytes=%d aborted=%t",
 							vlogGenerationReasonString(reason),
@@ -14951,15 +15075,21 @@ planned:
 							return fmt.Errorf("generational gc after retained prune: %w", gcErr)
 						}
 						gcStats = gcStatsAfterPrune
+					} else {
+						db.queueRetainedPruneObservedSourceIDs(processedRewriteIDs)
+						// A prune is already in flight. Ensure a follow-up attempt stays queued.
+						db.scheduleRetainedValueLogPruneForce()
 					}
 				}
-				if len(processedRewriteIDs) > 0 &&
+				rewriteBlockedByActive := len(processedRewriteIDs) > 0 &&
 					gcStats.ObservedSourceSegments > 0 &&
-					gcStats.ObservedSourceSegmentsProtectedRetained > 0 &&
-					gcStats.ObservedSourceSegmentsEligible == 0 {
-					// Rewrite-selected source segments remained retained-protected
-					// after in-pass prune/GC. Queue an observed-source replay GC for
-					// the next maintenance pass.
+					gcStats.ObservedSourceSegmentsReferenced == 0 &&
+					gcStats.ObservedSourceSegmentsEligible == 0 &&
+					gcStats.ObservedSourceSegmentsActive > 0
+				if rewriteBlockedByActive {
+					// Rewrite-selected source segments can remain temporarily active when
+					// the writer is still appending. Queue observed-source replay and a
+					// checkpoint-kick so follow-up maintenance can rotate/re-check quickly.
 					db.queueVlogGenerationObservedSourceGCList(processedRewriteIDs)
 					db.vlogGenerationCheckpointKickPending.Store(true)
 				}
@@ -15017,6 +15147,7 @@ planned:
 			if locallyEffectiveProcessedDebt {
 				if effectiveBytesAfter >= effectiveBytesBefore {
 					db.vlogGenerationRewriteNoReclaimRuns.Add(1)
+					db.vlogGenerationRewriteIneffectiveLastNS.Store(time.Now().UnixNano())
 					if processedLedgerStaleBytes > 0 {
 						db.vlogGenerationRewriteNoReclaimStaleBytes.Add(uint64(processedLedgerStaleBytes))
 					}
@@ -15358,6 +15489,29 @@ planned:
 				droppedIDs,
 				vlogGenerationObservedGCRetryMaxAttempts,
 			)
+		} else if forceObservedSourceGC &&
+			gcStats.ObservedSourceSegments > 0 &&
+			gcStats.ObservedSourceSegmentsReferenced == 0 &&
+			gcStats.ObservedSourceSegmentsActive > 0 &&
+			gcStats.ObservedSourceSegmentsEligible == 0 {
+			db.debugVlogMaintf(
+				"gc_observed_retry reason=active_source observed_ids=%d observed_segments=%d observed_active=%d observed_eligible=%d",
+				len(observedSourceGCIDs),
+				gcStats.ObservedSourceSegments,
+				gcStats.ObservedSourceSegmentsActive,
+				gcStats.ObservedSourceSegmentsEligible,
+			)
+			queuedIDs, droppedIDs := db.retryVlogGenerationObservedSourceGCList(observedSourceGCIDs)
+			if queuedIDs > 0 {
+				db.vlogGenerationCheckpointKickPending.Store(true)
+			}
+			db.debugVlogMaintf(
+				"gc_observed_retry_result reason=active_source observed_ids=%d queued_ids=%d dropped_ids=%d max_attempts=%d",
+				len(observedSourceGCIDs),
+				queuedIDs,
+				droppedIDs,
+				vlogGenerationObservedGCRetryMaxAttempts,
+			)
 		} else if forceObservedSourceGC {
 			db.finalizeVlogGenerationObservedSourceGCIDs(observedSourceGCIDs, false)
 		}
@@ -15482,13 +15636,15 @@ func (db *DB) maybeKickVlogGenerationMaintenanceAfterCheckpoint() {
 		quiet := db.foregroundActivityQuietFor(now, vlogGenerationMaintenanceQuietWindow, vlogForegroundReadQuietWindow)
 		if !quiet && rewriteQueueLen == 0 && !db.vlogGenerationDeferredMaintenanceDue(now) {
 			db.vlogGenerationCheckpointKickSkippedHotNoDebt.Add(1)
+			db.scheduleVlogGenerationCheckpointKickHotNoDebtWake()
 			db.debugVlogMaintf(
-				"checkpoint_kick_skip reason=foreground_hot_no_debt quiet=%t queue_len=%d checkpoint_pending=%t deferred_pending=%t deferred_due=%t",
+				"checkpoint_kick_skip reason=foreground_hot_no_debt quiet=%t queue_len=%d checkpoint_pending=%t deferred_pending=%t deferred_due=%t hot_no_debt_wake_running=%t",
 				quiet,
 				rewriteQueueLen,
 				db.vlogGenerationCheckpointKickPending.Load(),
 				db.vlogGenerationDeferredMaintenancePending.Load(),
 				db.vlogGenerationDeferredMaintenanceDue(now),
+				db.vlogGenerationCheckpointKickHotNoDebtWakeRunning.Load(),
 			)
 			return
 		}
@@ -16075,15 +16231,21 @@ func (db *DB) Checkpoint() error {
 		}
 		hasQueue = len(db.queue) > 0
 	} else if db.disableJournal && !hasQueue && !hasDirtyVLog {
-		db.mu.Unlock()
-		releaseWriteMu()
-		db.checkpointNoopSkips.Add(1)
-		if err := db.maybeVacuumSparseIndexOnCheckpoint(); err != nil {
-			return err
+		// Checkpoint-kick retries may need to rotate current value-log segments
+		// even when there is no new foreground dirtiness, so observed-source GC
+		// can re-check recently rewritten active sources.
+		forceVLogRotate := db.vlogGenerationCheckpointKickPending.Load()
+		if !forceVLogRotate {
+			db.mu.Unlock()
+			releaseWriteMu()
+			db.checkpointNoopSkips.Add(1)
+			if err := db.maybeVacuumSparseIndexOnCheckpoint(); err != nil {
+				return err
+			}
+			db.checkValueLogRetention()
+			db.scheduleRetainedValueLogPrune()
+			return nil
 		}
-		db.checkValueLogRetention()
-		db.scheduleRetainedValueLogPrune()
-		return nil
 	}
 	walDir := db.dir
 	preRotateWALPaths := db.currentWALPaths()
@@ -21088,6 +21250,8 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_generation.checkpoint_kick.rewrite_runs"] = fmt.Sprintf("%d", db.vlogGenerationCheckpointKickRewriteRuns.Load())
 	stats["treedb.cache.vlog_generation.checkpoint_kick.gc_runs"] = fmt.Sprintf("%d", db.vlogGenerationCheckpointKickGCRuns.Load())
 	stats["treedb.cache.vlog_generation.checkpoint_kick.skipped_hot_no_debt"] = fmt.Sprintf("%d", db.vlogGenerationCheckpointKickSkippedHotNoDebt.Load())
+	stats["treedb.cache.vlog_generation.checkpoint_kick.hot_no_debt_wake.running"] = fmt.Sprintf("%t", db.vlogGenerationCheckpointKickHotNoDebtWakeRunning.Load())
+	stats["treedb.cache.vlog_generation.checkpoint_kick.hot_no_debt_wake.runs"] = fmt.Sprintf("%d", db.vlogGenerationCheckpointKickHotNoDebtWakeRuns.Load())
 	stats["treedb.cache.vlog_generation.maintenance.attempts"] = fmt.Sprintf("%d", db.vlogGenerationMaintenanceAttempts.Load())
 	stats["treedb.cache.vlog_generation.maintenance.acquired"] = fmt.Sprintf("%d", db.vlogGenerationMaintenanceAcquired.Load())
 	stats["treedb.cache.vlog_generation.maintenance.collisions"] = fmt.Sprintf("%d", db.vlogGenerationMaintenanceCollisions.Load())

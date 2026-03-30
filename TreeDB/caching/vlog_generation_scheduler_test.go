@@ -1431,6 +1431,74 @@ func TestVlogGenerationMaintenance_ObservedSourceGCRetryBudgetDropsAfterMaxAttem
 	db.vlogGenerationObservedGCMu.Unlock()
 }
 
+func TestVlogGenerationMaintenance_ObservedSourceActiveRetryBudgetDropsAfterMaxAttempts(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+	t.Setenv(envDisableVlogGenerationRewrite, "1")
+
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	recorder := &rewriteBudgetRecordingBackend{
+		DB: backend,
+		gcResponse: backenddb.ValueLogGCStats{
+			ObservedSourceSegments:           1,
+			ObservedSourceSegmentsReferenced: 0,
+			ObservedSourceSegmentsActive:     1,
+			ObservedSourceSegmentsEligible:   0,
+			ObservedSourceBytes:              128,
+			ObservedSourceBytesActive:        128,
+		},
+	}
+
+	db, cleanup := openRewriteQueueTestDB(t, dir, recorder)
+	defer cleanup()
+	skipRetainedPrune(db)
+
+	db.queueVlogGenerationObservedSourceGCList([]uint32{77})
+	passes := int(vlogGenerationObservedGCRetryMaxAttempts) + 1
+	for i := 0; i < passes; i++ {
+		db.vlogGenerationLastGCUnixNano.Store(time.Now().Add(-time.Minute).UnixNano())
+		forceVlogMaintenanceIdle(db)
+		db.maybeRunVlogGenerationMaintenanceWithOptions(true, vlogGenerationMaintenanceOptions{
+			bypassQuiet:           true,
+			skipRetainedPruneWait: true,
+			skipCheckpoint:        true,
+			rewriteDebtDrain:      true,
+		})
+	}
+
+	if got := recorder.recordedGCObservedSourceCalls(); got != passes {
+		t.Fatalf("observed-source gc calls=%d want %d", got, passes)
+	}
+	if got := db.vlogGenerationObservedGCRetryQueued.Load(); got != uint64(vlogGenerationObservedGCRetryMaxAttempts) {
+		t.Fatalf("observed-source gc retry queued=%d want %d", got, vlogGenerationObservedGCRetryMaxAttempts)
+	}
+	if got := db.vlogGenerationObservedGCRetryDropped.Load(); got != 1 {
+		t.Fatalf("observed-source gc retry dropped=%d want 1", got)
+	}
+	if got := db.vlogGenerationObservedGCLatencyCompletedIDs.Load(); got != 0 {
+		t.Fatalf("observed-source gc latency completed ids=%d want 0", got)
+	}
+	if got := db.vlogGenerationObservedGCLatencyDroppedIDs.Load(); got != 1 {
+		t.Fatalf("observed-source gc latency dropped ids=%d want 1", got)
+	}
+	if pending := len(db.takeVlogGenerationObservedSourceGCList()); pending != 0 {
+		t.Fatalf("observed-source gc pending ids=%d want 0", pending)
+	}
+	db.vlogGenerationObservedGCMu.Lock()
+	if _, exists := db.vlogGenerationObservedGCRetryAttempts[77]; exists {
+		db.vlogGenerationObservedGCMu.Unlock()
+		t.Fatalf("retry attempt state still present for observed id 77 after drop")
+	}
+	if _, exists := db.vlogGenerationObservedGCFirstQueuedUnixNano[77]; exists {
+		db.vlogGenerationObservedGCMu.Unlock()
+		t.Fatalf("first queued timestamp still present for observed id 77 after drop")
+	}
+	db.vlogGenerationObservedGCMu.Unlock()
+}
+
 func TestVlogGenerationRewrite_FreshPlanExecIgnoresForegroundCancelUntilBoundedComplete(t *testing.T) {
 	prepareDirectSchedulerTest(t)
 
@@ -4171,7 +4239,7 @@ func TestVlogGenerationRewrite_IneffectiveBackoffSkipsImmediateGenericRetry(t *t
 	}
 }
 
-func TestVlogGenerationRewrite_IneffectiveBackoffCheckpointKickBypasses(t *testing.T) {
+func TestVlogGenerationRewrite_IneffectiveBackoffCheckpointKickFreshPlanSkips(t *testing.T) {
 	prepareDirectSchedulerTest(t)
 
 	dir := t.TempDir()
@@ -4205,11 +4273,11 @@ func TestVlogGenerationRewrite_IneffectiveBackoffCheckpointKickBypasses(t *testi
 		rewriteDebtDrain:      true,
 	})
 
-	if _, calls := recorder.recordedPlan(); calls != 1 {
-		t.Fatalf("plan calls with checkpoint-kick ineffective-backoff bypass=%d want=1", calls)
+	if _, calls := recorder.recordedPlan(); calls != 0 {
+		t.Fatalf("plan calls with checkpoint-kick ineffective-backoff skip=%d want=0", calls)
 	}
-	if _, calls := recorder.recordedRewrite(); calls != 1 {
-		t.Fatalf("rewrite calls with checkpoint-kick ineffective-backoff bypass=%d want=1", calls)
+	if _, calls := recorder.recordedRewrite(); calls != 0 {
+		t.Fatalf("rewrite calls with checkpoint-kick ineffective-backoff skip=%d want=0", calls)
 	}
 }
 
@@ -4367,6 +4435,75 @@ func TestCheckpoint_KickHotDebtOnlySkipsFreshPlanDuringRecentForegroundActivity(
 	}
 	if got := stats["treedb.cache.vlog_generation.checkpoint_kick.skipped_hot_no_debt"]; got != "1" {
 		t.Fatalf("checkpoint kick skipped_hot_no_debt=%q want 1", got)
+	}
+}
+
+func TestCheckpoint_KickHotDebtOnlyWakeRunsAfterForegroundQuiets(t *testing.T) {
+	disableVlogGenerationLoop(t)
+	t.Setenv(envEnableVlogGenerationCheckpointKickHotDebtOnly, "1")
+
+	dir := t.TempDir()
+
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	recorder := &rewriteBudgetRecordingBackend{
+		DB: backend,
+		planResponse: backenddb.ValueLogRewritePlan{
+			SourceFileIDs:     []uint32{11},
+			SelectedBytesLive: 128,
+		},
+		rewriteResponse: backenddb.ValueLogRewriteStats{BytesBefore: 64, BytesAfter: 32, RecordsCopied: 1},
+	}
+
+	db, cleanup := openRewriteQueueTestDB(t, dir, recorder)
+	t.Cleanup(cleanup)
+	skipRetainedPrune(db)
+	db.testSkipVlogCheckpointKick = false
+
+	hot := time.Now().UnixNano()
+	db.lastForegroundWriteUnixNano.Store(hot)
+	db.lastForegroundReadUnixNano.Store(hot)
+	db.maybeKickVlogGenerationMaintenanceAfterCheckpoint()
+
+	time.Sleep(150 * time.Millisecond)
+	if _, calls := recorder.recordedPlan(); calls != 0 {
+		t.Fatalf("plan calls=%d want 0 before quiet wake", calls)
+	}
+	if _, calls := recorder.recordedRewrite(); calls != 0 {
+		t.Fatalf("rewrite calls=%d want 0 before quiet wake", calls)
+	}
+
+	quietAt := time.Now().Add(-2 * vlogGenerationMaintenanceQuietWindow).UnixNano()
+	db.lastForegroundWriteUnixNano.Store(quietAt)
+	db.lastForegroundReadUnixNano.Store(quietAt)
+
+	deadline := time.Now().Add(2 * schedulerTestWait(t))
+	for {
+		if _, calls := recorder.recordedRewrite(); calls == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			_, rewriteCalls := recorder.recordedRewrite()
+			_, planCalls := recorder.recordedPlan()
+			t.Fatalf("hot-debt wake did not run rewrite in time: planCalls=%d rewriteCalls=%d", planCalls, rewriteCalls)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	stats := db.Stats()
+	if got := stats["treedb.cache.vlog_generation.checkpoint_kick.skipped_hot_no_debt"]; got != "1" {
+		t.Fatalf("checkpoint kick skipped_hot_no_debt=%q want 1", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.checkpoint_kick.hot_no_debt_wake.runs"]; got != "1" {
+		t.Fatalf("checkpoint kick hot_no_debt_wake runs=%q want 1", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.checkpoint_kick.runs"]; got != "1" {
+		t.Fatalf("checkpoint kick runs=%q want 1", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.checkpoint_kick.hot_no_debt_wake.running"]; got != "false" {
+		t.Fatalf("checkpoint kick hot_no_debt_wake running=%q want false", got)
 	}
 }
 

@@ -441,6 +441,12 @@ func (f *File) Read(ptr page.ValuePtr, verifyCRC bool) ([]byte, error) {
 	if data != nil && deadMappingsCapExhausted(f.deadMappingsCount.Load(), len(data)) {
 		f.mmapReadMissDeadMappingCap.Add(1)
 	}
+	if !verifyCRC {
+		if val, _, err, ok := f.readGroupedCompressedFromFileTo(ptr, nil); ok {
+			f.mmapReadFallbackReadAt.Add(1)
+			return val, err
+		}
+	}
 	f.mmapReadFallbackReadAt.Add(1)
 	return ReadAtWithDict(f.File, ptr, verifyCRC, f.dictLookup, f.templateLookup, f.templateDefCache, f.templateDecodeOpts)
 }
@@ -775,17 +781,9 @@ func (f *File) ReadAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte
 		}
 		fFlags := frameHeader[1]
 		if fFlags&FrameFlagCompressed != 0 {
-			// Fallback to the full decoder (will allocate).
-			val, err := ReadAtWithDict(f.File, ptr, verifyCRC, f.dictLookup, f.templateLookup, f.templateDefCache, f.templateDecodeOpts)
-			if err != nil {
-				return nil, err
-			}
-			oldLen := len(dst)
-			noteGrowReadAppendCompressedFallback(len(val))
-			noteGrowReadAppendCompressedFallbackDst(dst, len(val))
-			dst = grow(dst, len(val))
-			copy(dst[oldLen:], val)
-			return dst, nil
+			// Fallback to the full decoder path. Prefer decode-to-tail so hot
+			// append callers can reuse dst capacity and avoid per-read allocs.
+			return f.appendDecodedRecordTo(ptr, verifyCRC, dst)
 		}
 		ridBytes := k * 8
 		offsetBytes := (k + 1) * 4
@@ -843,11 +841,25 @@ func (f *File) ReadAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte
 
 	// Slow path: use existing decoder and append.
 	f.mmapReadFallbackReadAt.Add(1)
-	val, err := ReadAtWithDict(f.File, ptr, verifyCRC, f.dictLookup, f.templateLookup, f.templateDefCache, f.templateDecodeOpts)
+	return f.appendDecodedRecordTo(ptr, verifyCRC, dst)
+}
+
+func (f *File) appendDecodedRecordTo(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte, error) {
+	if f == nil || f.File == nil {
+		return nil, errors.New("valuelog: nil file")
+	}
+	oldLen := len(dst)
+	var tail []byte
+	if oldLen <= cap(dst) {
+		tail = dst[oldLen:cap(dst)]
+	}
+	val, usedDst, err := ReadAtWithDictTo(f.File, ptr, verifyCRC, f.dictLookup, f.templateLookup, f.templateDefCache, f.templateDecodeOpts, tail[:0])
 	if err != nil {
 		return nil, err
 	}
-	oldLen := len(dst)
+	if usedDst {
+		return dst[:oldLen+len(val)], nil
+	}
 	noteGrowReadAppendCompressedFallback(len(val))
 	noteGrowReadAppendCompressedFallbackDst(dst, len(val))
 	dst = grow(dst, len(val))
@@ -1211,6 +1223,39 @@ func (m *Manager) PromoteCurrentWritable(fileID uint32) error {
 	return nil
 }
 
+// RewriteLaneHint returns a best-effort lane/start-seq hint for creating new
+// rewrite segments without scanning the filesystem.
+//
+// It considers all currently tracked segments (including zombies) to avoid
+// immediate lane/seq reuse while deletes are pending.
+func (m *Manager) RewriteLaneHint() (lane uint32, startSeq uint32, ok bool) {
+	if m == nil {
+		return 0, 0, false
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	const lanes = 256
+	var used [lanes]bool
+	var maxSeq [lanes]uint32
+	for id := range m.files {
+		l, s := DecodeFileID(id)
+		if l >= lanes {
+			continue
+		}
+		used[l] = true
+		if s > maxSeq[l] {
+			maxSeq[l] = s
+		}
+	}
+	for l := uint32(lanes - 1); l > 0; l-- {
+		if !used[l] {
+			return l, 0, true
+		}
+	}
+	return 0, maxSeq[0], true
+}
+
 // CurrentSet returns a snapshot of the current value-log files.
 func (m *Manager) CurrentSet() *Set {
 	_ = m.Refresh()
@@ -1489,6 +1534,25 @@ func valueLogFileSizeBestEffort(f *File) uint64 {
 	return 0
 }
 
+func valueLogFileSizeNoStat(f *File) uint64 {
+	if f == nil {
+		return 0
+	}
+	if known := f.fileSize.Load(); known > 0 {
+		return uint64(known)
+	}
+	if data, _ := f.mmapData.Load().([]byte); len(data) > 0 {
+		return uint64(len(data))
+	}
+	return 0
+}
+
+// SizeBestEffort returns the current best-effort segment size in bytes.
+// It prefers cached size/mmap metadata and only falls back to stat when needed.
+func (f *File) SizeBestEffort() int64 {
+	return int64(valueLogFileSizeBestEffort(f))
+}
+
 // ZombieStats reports tracked zombie segments and their approximate byte totals.
 // A zombie remains on disk until all snapshots release it (RefCount reaches 0).
 func (m *Manager) ZombieStats() (segments uint64, bytes uint64, pinnedSegments uint64, pinnedBytes uint64, unpinnedSegments uint64, unpinnedBytes uint64) {
@@ -1501,7 +1565,9 @@ func (m *Manager) ZombieStats() (segments uint64, bytes uint64, pinnedSegments u
 			continue
 		}
 		segments++
-		size := valueLogFileSizeBestEffort(f)
+		// Keep ZombieStats lock-friendly: avoid filesystem stats while the
+		// manager lock is held and rely on cached segment sizes only.
+		size := valueLogFileSizeNoStat(f)
 		bytes += size
 		if f.RefCount.Load() > 0 {
 			pinnedSegments++
@@ -1772,7 +1838,13 @@ func listSegments(dir string) ([]segmentInfo, error) {
 		return nil, err
 	}
 
-	var segments []segmentInfo
+	sep := string(os.PathSeparator)
+	dirPrefix := dir
+	if !strings.HasSuffix(dirPrefix, sep) {
+		dirPrefix += sep
+	}
+
+	segments := make([]segmentInfo, 0, len(entries))
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
@@ -1780,40 +1852,33 @@ func listSegments(dir string) ([]segmentInfo, error) {
 		name := entry.Name()
 		const prefix = "value-"
 		const suffix = ".log"
-		if !strings.HasPrefix(name, prefix) || !strings.HasSuffix(name, suffix) {
+		if len(name) <= len(prefix)+len(suffix) || !strings.HasPrefix(name, prefix) || !strings.HasSuffix(name, suffix) {
 			continue
 		}
-
-		parseLaneSeq := func(rest string) (uint32, uint32, bool) {
-			parts := strings.SplitN(rest, "-", 2)
-			if len(parts) != 2 {
-				return 0, 0, false
-			}
-			lane, err := strconv.ParseUint(parts[0], 10, 32)
-			if err != nil {
-				return 0, 0, false
-			}
-			seq, err := strconv.ParseUint(parts[1], 10, 32)
-			if err != nil {
-				return 0, 0, false
-			}
-			return uint32(lane), uint32(seq), true
-		}
-
 		var (
-			id  uint32
-			err error
+			id uint32
+			ok bool
 		)
-		core := strings.TrimSuffix(strings.TrimPrefix(name, prefix), suffix)
-		if strings.HasPrefix(core, "l") {
-			lane, seq, ok := parseLaneSeq(strings.TrimPrefix(core, "l"))
-			if !ok {
+		core := name[len(prefix) : len(name)-len(suffix)]
+		if len(core) == 0 {
+			continue
+		}
+		if core[0] == 'l' {
+			laneSeq := core[1:]
+			dash := strings.IndexByte(laneSeq, '-')
+			if dash <= 0 || dash >= len(laneSeq)-1 {
 				continue
 			}
-			id, err = EncodeFileID(lane, seq)
+			lane, err := strconv.ParseUint(laneSeq[:dash], 10, 32)
 			if err != nil {
 				continue
 			}
+			seq, err := strconv.ParseUint(laneSeq[dash+1:], 10, 32)
+			if err != nil {
+				continue
+			}
+			id, err = EncodeFileID(uint32(lane), uint32(seq))
+			ok = err == nil
 		} else {
 			seq, parseErr := strconv.ParseUint(core, 10, 32)
 			if parseErr != nil {
@@ -1824,11 +1889,15 @@ func listSegments(dir string) ([]segmentInfo, error) {
 				continue
 			}
 			id = page.ValueLogFileID(uint32(seq))
+			ok = true
+		}
+		if !ok {
+			continue
 		}
 
 		segments = append(segments, segmentInfo{
 			id:   id,
-			path: filepath.Join(dir, name),
+			path: dirPrefix + name,
 		})
 	}
 

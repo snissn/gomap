@@ -450,15 +450,5 @@ func fileSize(f *valuelog.File) int64 {
 	if f == nil {
 		return 0
 	}
-	if f.File != nil {
-		if info, err := f.File.Stat(); err == nil {
-			return info.Size()
-		}
-	}
-	if f.Path != "" {
-		if info, err := os.Stat(f.Path); err == nil {
-			return info.Size()
-		}
-	}
-	return 0
+	return f.SizeBestEffort()
 }

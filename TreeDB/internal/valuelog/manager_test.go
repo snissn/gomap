@@ -882,6 +882,51 @@ func TestManagerRefresh_IgnoresSegmentRemovedAfterScan(t *testing.T) {
 	}
 }
 
+func TestListSegments_ParsesLaneAndLegacyNames(t *testing.T) {
+	dir := t.TempDir()
+	names := []string{
+		"value-l1-000003.log",
+		"value-l0-000010.log",
+		"value-000002.log",
+		"value-lbad-1.log",
+		"value-l2-nope.log",
+		"commit-l0-000001.log",
+		"value-l0-000001.tmp",
+	}
+	for _, name := range names {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o644); err != nil {
+			t.Fatalf("WriteFile(%q): %v", name, err)
+		}
+	}
+
+	segments, err := listSegments(dir)
+	if err != nil {
+		t.Fatalf("listSegments: %v", err)
+	}
+
+	wantLane0, err := EncodeFileID(0, 10)
+	if err != nil {
+		t.Fatalf("EncodeFileID lane0: %v", err)
+	}
+	wantLane1, err := EncodeFileID(1, 3)
+	if err != nil {
+		t.Fatalf("EncodeFileID lane1: %v", err)
+	}
+	want := []segmentInfo{
+		{id: page.ValueLogFileID(2), path: filepath.Join(dir, "value-000002.log")},
+		{id: wantLane0, path: filepath.Join(dir, "value-l0-000010.log")},
+		{id: wantLane1, path: filepath.Join(dir, "value-l1-000003.log")},
+	}
+	if len(segments) != len(want) {
+		t.Fatalf("len(segments)=%d want %d; got=%+v", len(segments), len(want), segments)
+	}
+	for i := range want {
+		if segments[i].id != want[i].id || segments[i].path != want[i].path {
+			t.Fatalf("segment[%d]=%+v want %+v", i, segments[i], want[i])
+		}
+	}
+}
+
 func TestManagerRegisterSegment_ReinitializesNilFilesMap(t *testing.T) {
 	dir := t.TempDir()
 
@@ -916,4 +961,58 @@ func TestManagerRegisterSegment_ReinitializesNilFilesMap(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 	mgr = nil
+}
+
+func TestManagerRewriteLaneHint_PrefersHighestUnusedLane(t *testing.T) {
+	mgr := &Manager{
+		files: make(map[uint32]*File),
+	}
+	id0, err := EncodeFileID(0, 7)
+	if err != nil {
+		t.Fatalf("EncodeFileID lane0: %v", err)
+	}
+	id1, err := EncodeFileID(1, 3)
+	if err != nil {
+		t.Fatalf("EncodeFileID lane1: %v", err)
+	}
+	id255, err := EncodeFileID(255, 9)
+	if err != nil {
+		t.Fatalf("EncodeFileID lane255: %v", err)
+	}
+	mgr.files[id0] = &File{ID: id0}
+	mgr.files[id1] = &File{ID: id1}
+	mgr.files[id255] = &File{ID: id255}
+
+	lane, seq, ok := mgr.RewriteLaneHint()
+	if !ok {
+		t.Fatalf("RewriteLaneHint ok=false")
+	}
+	if lane != 254 || seq != 0 {
+		t.Fatalf("RewriteLaneHint=(lane=%d seq=%d) want lane=254 seq=0", lane, seq)
+	}
+}
+
+func TestManagerRewriteLaneHint_FallsBackToLaneZeroMaxSeqWhenAllLanesUsed(t *testing.T) {
+	mgr := &Manager{
+		files: make(map[uint32]*File),
+	}
+	for lane := uint32(0); lane <= 255; lane++ {
+		seq := uint32(1)
+		if lane == 0 {
+			seq = 42
+		}
+		id, err := EncodeFileID(lane, seq)
+		if err != nil {
+			t.Fatalf("EncodeFileID lane=%d seq=%d: %v", lane, seq, err)
+		}
+		mgr.files[id] = &File{ID: id}
+	}
+
+	lane, seq, ok := mgr.RewriteLaneHint()
+	if !ok {
+		t.Fatalf("RewriteLaneHint ok=false")
+	}
+	if lane != 0 || seq != 42 {
+		t.Fatalf("RewriteLaneHint=(lane=%d seq=%d) want lane=0 seq=42", lane, seq)
+	}
 }
