@@ -484,12 +484,15 @@ def delta(a, b):
 pair_rows = []
 wins = 0
 losses = 0
+raw_pairs = 0
+invalid_pairs = 0
 for pair in sorted(by_pair):
     row = by_pair[pair]
     ctrl = row.get("control")
     cand = row.get("candidate")
     if not ctrl or not cand:
         continue
+    raw_pairs += 1
 
     cm = cand.get("metrics", {}) or {}
     bm = ctrl.get("metrics", {}) or {}
@@ -512,7 +515,10 @@ for pair in sorted(by_pair):
     ctrl_rewrite_failed = bool(ctrl_rewrite.get("attempted")) and int(ctrl_rewrite.get("exit_code", 0) or 0) != 0
 
     outcome = "neutral"
-    if cand_rewrite_failed and not ctrl_rewrite_failed:
+    if cand_rewrite_failed and ctrl_rewrite_failed:
+        outcome = "invalid"
+        invalid_pairs += 1
+    elif cand_rewrite_failed and not ctrl_rewrite_failed:
         outcome = "loss"
         losses += 1
     elif ctrl_rewrite_failed and not cand_rewrite_failed:
@@ -584,10 +590,11 @@ with pairs_csv.open("w", newline="", encoding="utf-8") as fh:
             ]
         )
 
-completed_pairs = len(pair_rows)
+scored_rows = [row for row in pair_rows if row.get("outcome") != "invalid"]
+completed_pairs = len(scored_rows)
 neutral = max(0, completed_pairs - wins - losses)
 neutral_streak = 0
-for row in reversed(pair_rows):
+for row in reversed(scored_rows):
     if row.get("outcome") == "neutral":
         neutral_streak += 1
         continue
@@ -603,7 +610,7 @@ if stop_on_clear and completed_pairs >= min_pairs:
         stop = True
         reason = "clear_regression"
     else:
-        remaining = max(0, max_pairs - completed_pairs)
+        remaining = max(0, max_pairs - raw_pairs)
         can_reach_clear_win = (wins + remaining) >= clear_win_pairs
         can_reach_clear_loss = (losses + remaining) >= clear_loss_pairs
         if not can_reach_clear_win and not can_reach_clear_loss:
@@ -614,7 +621,7 @@ if (not stop) and completed_pairs >= low_signal_min_pairs and neutral_streak >= 
     stop = True
     reason = "low_signal_neutral_streak"
 
-if (not stop) and completed_pairs >= max_pairs:
+if (not stop) and raw_pairs >= max_pairs:
     stop = True
     reason = "max_pairs"
 
@@ -631,7 +638,9 @@ summary_md = out / "summary.md"
 lines = []
 lines.append("# celestia_fast_gate summary")
 lines.append("")
-lines.append(f"- completed pairs: `{completed_pairs}`")
+lines.append(f"- observed pairs: `{raw_pairs}`")
+lines.append(f"- scored pairs: `{completed_pairs}`")
+lines.append(f"- invalid pairs skipped: `{invalid_pairs}`")
 lines.append(f"- wins/losses/neutral: `{wins}` / `{losses}` / `{neutral}`")
 lines.append(f"- neutral streak (tail): `{neutral_streak}`")
 lines.append(f"- size field: `{size_field}`")
@@ -678,7 +687,9 @@ else:
 review_md.write_text("\n".join(review) + "\n", encoding="utf-8")
 
 payload = {
+    "observed_pairs": raw_pairs,
     "completed_pairs": completed_pairs,
+    "invalid_pairs": invalid_pairs,
     "wins": wins,
     "losses": losses,
     "neutral": neutral,

@@ -650,7 +650,7 @@ for pair in sorted(by_pair):
     cand_reason = run_invalid_reason(cand)
     if not ctrl_valid or not cand_valid:
         outcome = "invalid"
-        if (not cand_valid) and cand_reason == "rewrite_failed":
+        if ctrl_valid and (not cand_valid) and cand_reason == "rewrite_failed":
             outcome = "loss"
             losses += 1
         invalid_pairs += 1
