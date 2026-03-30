@@ -614,8 +614,7 @@ func (b *Batch) TouchedValueLogSegments() []uint32 {
 		return nil
 	}
 	if len(b.touchedValueLog) == 0 {
-		out := make([]uint32, b.touchedValueLogSmallLen)
-		copy(out, b.touchedValueLogSmall[:b.touchedValueLogSmallLen])
+		out := b.touchedValueLogSmall[:b.touchedValueLogSmallLen]
 		if len(out) > 1 {
 			sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
 		}
