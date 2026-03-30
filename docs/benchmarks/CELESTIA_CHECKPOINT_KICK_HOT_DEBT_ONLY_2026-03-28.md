@@ -549,3 +549,40 @@ Interpretation:
 
 - This provides a meaningful allocation reduction on the leafref rewrite path
   with no measured throughput regression in this sample.
+
+### Follow-on microbench: inline value-log ref delta before map promotion
+Change:
+
+- Use inline storage for `valueLogRefDelta` changes and promote to a map only
+  after inline capacity is exceeded.
+
+Commands:
+
+```bash
+# Baseline (HEAD~1) in temporary worktree
+git worktree add /tmp/gomap_base_valueptr_delta HEAD~1
+GOWORK=off go test -C /tmp/gomap_base_valueptr_delta ./TreeDB/db -run '^$' \
+  -bench '^BenchmarkValueLogRewriteOnline_ValuePointers$' \
+  -benchmem -benchtime=20x -count=8 \
+  > /tmp/valueptr_delta_base_defcpu.txt
+git worktree remove /tmp/gomap_base_valueptr_delta --force
+
+# Candidate (current branch)
+GOWORK=off go test ./TreeDB/db -run '^$' \
+  -bench '^BenchmarkValueLogRewriteOnline_ValuePointers$' \
+  -benchmem -benchtime=20x -count=8 \
+  > /tmp/valueptr_delta_cand_defcpu.txt
+
+benchstat /tmp/valueptr_delta_base_defcpu.txt /tmp/valueptr_delta_cand_defcpu.txt
+```
+
+Result summary:
+
+- `sec/op`: statistically unchanged (`p=0.130`, `n=8`)
+- `rewrite_allocs/op`: `187.1 -> 185.2` (`-1.02%`, `p=0.007`, `n=8`)
+- `allocs/op`: `186.5 -> 185.0` (`-0.80%`, `p=0.030`, `n=8`)
+
+Interpretation:
+
+- Small but consistent allocation reduction in the value-pointer rewrite path
+  with no measured throughput regression in this sample.

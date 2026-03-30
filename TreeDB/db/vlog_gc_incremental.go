@@ -46,16 +46,55 @@ const (
 )
 
 type valueLogRefDelta struct {
+	inline  [4]valueLogRefDeltaEntry
+	inlineN int
 	changes map[uint32]int64
 }
 
+type valueLogRefDeltaEntry struct {
+	fileID uint32
+	delta  int64
+}
+
 func newValueLogRefDelta() *valueLogRefDelta {
-	return &valueLogRefDelta{changes: make(map[uint32]int64)}
+	return &valueLogRefDelta{}
 }
 
 func (d *valueLogRefDelta) add(fileID uint32, delta int64) {
 	if d == nil || delta == 0 {
 		return
+	}
+	if d.changes == nil {
+		for i := 0; i < d.inlineN; i++ {
+			if d.inline[i].fileID != fileID {
+				continue
+			}
+			next := d.inline[i].delta + delta
+			if next == 0 {
+				last := d.inlineN - 1
+				d.inline[i] = d.inline[last]
+				d.inline[last] = valueLogRefDeltaEntry{}
+				d.inlineN = last
+				return
+			}
+			d.inline[i].delta = next
+			return
+		}
+		if d.inlineN < len(d.inline) {
+			d.inline[d.inlineN] = valueLogRefDeltaEntry{fileID: fileID, delta: delta}
+			d.inlineN++
+			return
+		}
+		d.changes = make(map[uint32]int64, d.inlineN+1)
+		for i := 0; i < d.inlineN; i++ {
+			entry := d.inline[i]
+			if entry.delta == 0 {
+				continue
+			}
+			d.changes[entry.fileID] = entry.delta
+			d.inline[i] = valueLogRefDeltaEntry{}
+		}
+		d.inlineN = 0
 	}
 	next := d.changes[fileID] + delta
 	if next == 0 {
@@ -63,6 +102,30 @@ func (d *valueLogRefDelta) add(fileID uint32, delta int64) {
 		return
 	}
 	d.changes[fileID] = next
+}
+
+func (d *valueLogRefDelta) forEachChange(fn func(fileID uint32, change int64) error) error {
+	if d == nil {
+		return nil
+	}
+	if d.changes != nil {
+		for fileID, change := range d.changes {
+			if err := fn(fileID, change); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	for i := 0; i < d.inlineN; i++ {
+		entry := d.inline[i]
+		if entry.delta == 0 {
+			continue
+		}
+		if err := fn(entry.fileID, entry.delta); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 type valueLogRefTracker struct {
@@ -134,7 +197,7 @@ func (t *valueLogRefTracker) applyDelta(nextCommitSeq uint64, delta *valueLogRef
 		return fmt.Errorf("treedb: value-log ref tracker sequence mismatch: have=%d next=%d", t.commitSeq, nextCommitSeq)
 	}
 
-	for fileID, change := range delta.changes {
+	if err := delta.forEachChange(func(fileID uint32, change int64) error {
 		switch {
 		case change > 0:
 			t.counts[fileID] += uint64(change)
@@ -151,6 +214,9 @@ func (t *valueLogRefTracker) applyDelta(nextCommitSeq uint64, delta *valueLogRef
 				t.counts[fileID] = cur
 			}
 		}
+		return nil
+	}); err != nil {
+		return err
 	}
 
 	t.commitSeq = nextCommitSeq
