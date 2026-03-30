@@ -36,6 +36,7 @@ const rewriteDictMinPayloadBytes = 32 << 10
 const rewriteDictBatchMaxK = 64
 const rewriteReadScratchMaxCap = 1 << 20 // 1MiB cap to avoid retaining oversized decode buffers
 const rewriteKeyArenaMaxCap = 1 << 20    // 1MiB cap to avoid retaining oversized key arenas
+const leafRefRewriteMapInitCap = 128      // initial map capacity for small leafref rewrite batches
 
 var rewriteRIDStartScanner = nextRewriteRIDStart
 var rewriteWALSegmentsLister = listWALSegments
@@ -1821,7 +1822,7 @@ func (c *leafRefRewriteCtx) rewriteNode(id uint64) (uint64, bool, error) {
 		}
 		if c.leafMap == nil {
 			// Keep initial maps modest on small rewrites; they grow as needed.
-			c.leafMap = make(map[uint64]uint64, 128)
+			c.leafMap = make(map[uint64]uint64, leafRefRewriteMapInitCap)
 		}
 		c.leafMap[id] = leafID
 		c.copied++
@@ -1919,7 +1920,7 @@ func (c *leafRefRewriteCtx) rewriteNode(id uint64) (uint64, bool, error) {
 		}
 		if c.internalMap == nil {
 			// Keep initial maps modest on small rewrites; they grow as needed.
-			c.internalMap = make(map[uint64]uint64, 128)
+			c.internalMap = make(map[uint64]uint64, leafRefRewriteMapInitCap)
 		}
 		c.internalMap[id] = newID
 		return newID, true, nil
