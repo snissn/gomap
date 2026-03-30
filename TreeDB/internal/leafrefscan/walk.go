@@ -3,6 +3,7 @@ package leafrefscan
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -11,6 +12,52 @@ import (
 type GetFunc func(pageID uint64) ([]byte, error)
 type VerifyFunc func(pageID uint64, n node.Node) error
 type VisitFunc func(ptr page.ValuePtr) error
+
+type walkState struct {
+	stack   []uint64
+	visited map[uint64]struct{}
+}
+
+var walkStatePool = sync.Pool{
+	New: func() any {
+		return &walkState{
+			stack:   make([]uint64, 0, 128),
+			visited: make(map[uint64]struct{}, 1024),
+		}
+	},
+}
+
+func getWalkState() *walkState {
+	if v := walkStatePool.Get(); v != nil {
+		if s, ok := v.(*walkState); ok && s != nil {
+			s.stack = s.stack[:0]
+			clear(s.visited)
+			return s
+		}
+	}
+	return &walkState{
+		stack:   make([]uint64, 0, 128),
+		visited: make(map[uint64]struct{}, 1024),
+	}
+}
+
+func putWalkState(s *walkState) {
+	if s == nil {
+		return
+	}
+	if cap(s.stack) > 1<<16 {
+		s.stack = make([]uint64, 0, 128)
+	} else {
+		s.stack = s.stack[:0]
+	}
+	// Avoid retaining pathological maps; keep the common-size cache hot.
+	if len(s.visited) > 1<<15 {
+		s.visited = make(map[uint64]struct{}, 1024)
+	} else {
+		clear(s.visited)
+	}
+	walkStatePool.Put(s)
+}
 
 // Walk visits every leaf-ref pointer reachable from rootID.
 func Walk(ctx context.Context, rootID uint64, get GetFunc, verify VerifyFunc, visit VisitFunc) error {
@@ -30,9 +77,14 @@ func Walk(ctx context.Context, rootID uint64, get GetFunc, verify VerifyFunc, vi
 		return visit(ptr)
 	}
 
-	stack := make([]uint64, 0, 128)
+	state := getWalkState()
+	stack := state.stack
+	visited := state.visited
+	defer func() {
+		state.stack = stack
+		putWalkState(state)
+	}()
 	stack = append(stack, rootID)
-	visited := make(map[uint64]struct{}, 1024)
 
 	for len(stack) > 0 {
 		if err := ctx.Err(); err != nil {
