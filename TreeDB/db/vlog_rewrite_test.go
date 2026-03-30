@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/snissn/compress/zstd"
+	batchpkg "github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -91,7 +92,10 @@ func TestRewriteSwapsKeySorted(t *testing.T) {
 	}
 }
 
-func TestCollectRewriteSwapTouchedSegments(t *testing.T) {
+func TestNoteRewriteSwapTouchedSegments(t *testing.T) {
+	b := batchpkg.New(nil, page.DefaultInlineThreshold)
+	t.Cleanup(func() { _ = b.Close() })
+
 	swaps := []rewriteSwap{
 		{newPtr: page.ValuePtr{FileID: page.ValueLogFileID(7)}},
 		{newPtr: page.ValuePtr{FileID: page.ValueLogFileID(2)}},
@@ -99,7 +103,8 @@ func TestCollectRewriteSwapTouchedSegments(t *testing.T) {
 		{newPtr: page.ValuePtr{FileID: 12}}, // non-value-log file ID
 		{newPtr: page.ValuePtr{FileID: page.ValueLogFileID(5)}},
 	}
-	got := collectRewriteSwapTouchedSegments(swaps)
+	noteRewriteSwapTouchedSegments(b, swaps)
+	got := b.TouchedValueLogSegments()
 	if len(got) != 3 {
 		t.Fatalf("len(got)=%d want=3 (got=%v)", len(got), got)
 	}
@@ -113,10 +118,12 @@ func TestCollectRewriteSwapTouchedSegments(t *testing.T) {
 		t.Fatalf("touched segments=%v want=%v", got, want)
 	}
 
-	none := collectRewriteSwapTouchedSegments([]rewriteSwap{
+	b.Reset()
+	noteRewriteSwapTouchedSegments(b, []rewriteSwap{
 		{newPtr: page.ValuePtr{FileID: 1}},
 		{newPtr: page.ValuePtr{FileID: 2}},
 	})
+	none := b.TouchedValueLogSegments()
 	if len(none) != 0 {
 		t.Fatalf("non-value-log touched segments=%v want=[]", none)
 	}

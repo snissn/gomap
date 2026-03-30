@@ -2224,7 +2224,8 @@ func (db *DB) applyRewriteSwapBatchOptimistic(swaps []rewriteSwap, sync bool) (b
 	if len(entries) == 0 {
 		return true, nil
 	}
-	touchedValueLogSegments := collectRewriteSwapTouchedSegments(swaps)
+	noteRewriteSwapTouchedSegments(b, swaps)
+	touchedValueLogSegments := b.TouchedValueLogSegments()
 
 	tracker := newAllocTracker(idx.allocator)
 	z := idx.zipper.CloneWithAllocator(tracker)
@@ -2309,7 +2310,8 @@ func (db *DB) applyRewriteSwapBatchSerialized(swaps []rewriteSwap, sync bool) er
 	if len(entries) == 0 {
 		return nil
 	}
-	touchedValueLogSegments := collectRewriteSwapTouchedSegments(swaps)
+	noteRewriteSwapTouchedSegments(b, swaps)
+	touchedValueLogSegments := b.TouchedValueLogSegments()
 
 	newRoot, retired, metrics, err := idx.zipper.Apply(rootID, b)
 	if err != nil {
@@ -2384,56 +2386,13 @@ func collectRewriteSwapPointerMatches(tr *tree.Tree, b *batch.Batch, swaps []rew
 	return delta, nil
 }
 
-func collectRewriteSwapTouchedSegments(swaps []rewriteSwap) []uint32 {
-	if len(swaps) == 0 {
-		return nil
+func noteRewriteSwapTouchedSegments(b *batch.Batch, swaps []rewriteSwap) {
+	if b == nil || len(swaps) == 0 {
+		return
 	}
-	var (
-		small   [16]uint32
-		smallN  int
-		extra   map[uint32]struct{}
-		present bool
-	)
 	for _, swap := range swaps {
-		id := swap.newPtr.FileID
-		if !page.IsValueLogFileID(id) {
-			continue
-		}
-		present = true
-		seen := false
-		for i := 0; i < smallN; i++ {
-			if small[i] == id {
-				seen = true
-				break
-			}
-		}
-		if seen {
-			continue
-		}
-		if extra != nil {
-			if _, ok := extra[id]; ok {
-				continue
-			}
-			extra[id] = struct{}{}
-			continue
-		}
-		if smallN < len(small) {
-			small[smallN] = id
-			smallN++
-			continue
-		}
-		extra = make(map[uint32]struct{}, 8)
-		extra[id] = struct{}{}
+		b.NoteTouchedValueLogFileID(swap.newPtr.FileID)
 	}
-	if !present {
-		return nil
-	}
-	out := make([]uint32, 0, smallN+len(extra))
-	out = append(out, small[:smallN]...)
-	for id := range extra {
-		out = append(out, id)
-	}
-	return out
 }
 
 func rewriteSwapsKeySorted(swaps []rewriteSwap) bool {

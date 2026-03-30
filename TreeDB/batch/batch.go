@@ -469,6 +469,16 @@ func (b *Batch) SetPointerViewNoTouch(key []byte, ptr page.ValuePtr) error {
 	return b.setPointerViewInternal(key, ptr, false)
 }
 
+// NoteTouchedValueLogFileID is an internal helper that records a touched
+// value-log segment without appending a batch entry.
+func (b *Batch) NoteTouchedValueLogFileID(fileID uint32) {
+	if b == nil || !page.IsValueLogFileID(fileID) {
+		return
+	}
+	b.hasValueLogPointers = true
+	b.noteTouchedValueLogFileID(fileID)
+}
+
 func (b *Batch) setPointerViewInternal(key []byte, ptr page.ValuePtr, noteTouched bool) error {
 	if err := b.ensureOpen(); err != nil {
 		return err
@@ -657,7 +667,10 @@ func (b *Batch) noteTouchedValueLog(ptr page.ValuePtr) {
 	if !page.IsValueLogFileID(ptr.FileID) {
 		return
 	}
-	id := ptr.FileID
+	b.noteTouchedValueLogFileID(ptr.FileID)
+}
+
+func (b *Batch) noteTouchedValueLogFileID(id uint32) {
 	for i := 0; i < b.touchedValueLogSmallLen; i++ {
 		if b.touchedValueLogSmall[i] == id {
 			return

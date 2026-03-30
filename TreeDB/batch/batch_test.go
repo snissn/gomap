@@ -211,3 +211,30 @@ func TestSetPointerViewNoTouch_SkipsTouchedSegmentTracking(t *testing.T) {
 		t.Fatalf("TouchedValueLogSegments()=%v, want []", got)
 	}
 }
+
+func TestNoteTouchedValueLogFileID(t *testing.T) {
+	b := New(newMapValueReader(), page.DefaultInlineThreshold)
+	t.Cleanup(func() { _ = b.Close() })
+
+	b.NoteTouchedValueLogFileID(123) // non-value-log ID: ignored
+	if got := b.TouchedValueLogSegments(); len(got) != 0 {
+		t.Fatalf("TouchedValueLogSegments()=%v, want []", got)
+	}
+
+	b.NoteTouchedValueLogFileID(page.ValueLogFileID(4))
+	b.NoteTouchedValueLogFileID(page.ValueLogFileID(2))
+	b.NoteTouchedValueLogFileID(page.ValueLogFileID(4)) // duplicate
+	got := b.TouchedValueLogSegments()
+	want := []uint32{page.ValueLogFileID(2), page.ValueLogFileID(4)}
+	if len(got) != len(want) {
+		t.Fatalf("len(TouchedValueLogSegments())=%d want=%d (got=%v)", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("TouchedValueLogSegments()[%d]=%d want=%d (all=%v)", i, got[i], want[i], got)
+		}
+	}
+	if !b.HasValueLogPointers() {
+		t.Fatalf("HasValueLogPointers()=false, want true")
+	}
+}
