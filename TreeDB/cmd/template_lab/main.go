@@ -484,6 +484,33 @@ func parseReasonStats(stats map[string]string) map[string]uint64 {
 	return out
 }
 
+func saturatingSub(curr, base uint64) uint64 {
+	if curr <= base {
+		return 0
+	}
+	return curr - base
+}
+
+func diffReasonStats(curr, base map[string]uint64) map[string]uint64 {
+	if len(curr) == 0 {
+		return nil
+	}
+	out := make(map[string]uint64)
+	for reason, currCount := range curr {
+		baseCount := uint64(0)
+		if base != nil {
+			baseCount = base[reason]
+		}
+		if currCount > baseCount {
+			out[reason] = currCount - baseCount
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
 func waitForTrainer(engine *templ.Engine, maxWait time.Duration) {
 	if engine == nil || maxWait <= 0 {
 		return
@@ -594,6 +621,12 @@ func runTemplateLab(ds datasetSpec, cfg runConfig, warmupPasses, measurePasses i
 		}
 	}
 	waitForTrainer(engine, waitAfterWarmup)
+	baselineStats := engine.StatsSnapshot()
+	baselineAttempted := parseUintStat(baselineStats, "attempted")
+	baselineMatched := parseUintStat(baselineStats, "matched")
+	baselineKept := parseUintStat(baselineStats, "kept")
+	baselinePublished := parseUintStat(baselineStats, "templates_published_total")
+	baselineReasons := parseReasonStats(baselineStats)
 
 	if measurePasses <= 0 {
 		measurePasses = 1
@@ -672,11 +705,11 @@ func runTemplateLab(ds datasetSpec, cfg runConfig, warmupPasses, measurePasses i
 	}
 
 	stats := engine.StatsSnapshot()
-	res.Attempted = parseUintStat(stats, "attempted")
-	res.Matched = parseUintStat(stats, "matched")
-	res.Kept = parseUintStat(stats, "kept")
-	res.TemplatesPublished = parseUintStat(stats, "templates_published_total")
-	res.Reasons = parseReasonStats(stats)
+	res.Attempted = saturatingSub(parseUintStat(stats, "attempted"), baselineAttempted)
+	res.Matched = saturatingSub(parseUintStat(stats, "matched"), baselineMatched)
+	res.Kept = saturatingSub(parseUintStat(stats, "kept"), baselineKept)
+	res.TemplatesPublished = saturatingSub(parseUintStat(stats, "templates_published_total"), baselinePublished)
+	res.Reasons = diffReasonStats(parseReasonStats(stats), baselineReasons)
 	return res, nil
 }
 
