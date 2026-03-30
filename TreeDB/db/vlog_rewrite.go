@@ -37,6 +37,7 @@ const rewriteDictBatchMaxK = 64
 const rewriteReadScratchMaxCap = 1 << 20 // 1MiB cap to avoid retaining oversized decode buffers
 const rewriteKeyArenaMaxCap = 1 << 20    // 1MiB cap to avoid retaining oversized key arenas
 const leafRefRewriteMapInitCap = 128     // initial map capacity for small leafref rewrite batches
+const leafRefRewriteInlineChildCap = 64  // stack-backed child-id scratch for common small internal nodes
 
 var rewriteRIDStartScanner = nextRewriteRIDStart
 var rewriteWALSegmentsLister = listWALSegments
@@ -1859,6 +1860,7 @@ func (c *leafRefRewriteCtx) rewriteNode(id uint64) (uint64, bool, error) {
 			return id, false, nil
 		}
 		var childIDs []uint64
+		var childIDsInline [leafRefRewriteInlineChildCap]uint64
 		for i := uint16(0); i < count; i++ {
 			_, childID, err := n.GetInternalEntryView(i)
 			if err != nil {
@@ -1869,7 +1871,11 @@ func (c *leafRefRewriteCtx) rewriteNode(id uint64) (uint64, bool, error) {
 				return id, false, err
 			}
 			if childChanged && childIDs == nil {
-				childIDs = make([]uint64, int(count))
+				if int(count) <= len(childIDsInline) {
+					childIDs = childIDsInline[:int(count)]
+				} else {
+					childIDs = make([]uint64, int(count))
+				}
 				for j := uint16(0); j < i; j++ {
 					_, prevChild, err := n.GetInternalEntryView(j)
 					if err != nil {
