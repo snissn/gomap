@@ -120,10 +120,10 @@ type DB struct {
 	readRetryRefreshInFlight      bool
 	readRetryRefreshDone          chan struct{}
 	readRetryRefreshErr           error
-	readRetryRefreshLastSuccess   time.Time
+	readRetryRefreshEpoch         atomic.Uint64
 	readRetryRefreshLeaderCount   atomic.Uint64
 	readRetryRefreshFollowerCount atomic.Uint64
-	readRetryRefreshSkippedRecent atomic.Uint64
+	readRetryRefreshSkippedEpoch  atomic.Uint64
 
 	notifyError func(error)
 	bgErrMu     sync.Mutex

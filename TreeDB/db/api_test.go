@@ -762,11 +762,11 @@ func TestGet_ConcurrentStaleReadRetry_DedupesRefresh(t *testing.T) {
 
 	afterScans := db.valueLogManager.RefreshScanCount()
 	if delta := afterScans - beforeScans; delta != 1 {
-		t.Fatalf("expected one refresh scan for concurrent stale retries: before=%d after=%d delta=%d leaders=%d followers=%d skipped_recent=%d",
+		t.Fatalf("expected one refresh scan for concurrent stale retries: before=%d after=%d delta=%d leaders=%d followers=%d skipped_epoch=%d",
 			beforeScans, afterScans, delta,
 			db.readRetryRefreshLeaderCount.Load(),
 			db.readRetryRefreshFollowerCount.Load(),
-			db.readRetryRefreshSkippedRecent.Load(),
+			db.readRetryRefreshSkippedEpoch.Load(),
 		)
 	}
 	if leaders := db.readRetryRefreshLeaderCount.Load(); leaders != 1 {
