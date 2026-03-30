@@ -21192,6 +21192,38 @@ func (db *DB) Stats() map[string]string {
 			rewriteAgeBlockedRemainingMS = d.Milliseconds()
 		}
 	}
+	statsNow := time.Now()
+	foregroundWriteQuiet := db.foregroundWriteQuietFor(statsNow, vlogGenerationMaintenanceQuietWindow)
+	foregroundReadQuiet := db.foregroundReadQuietFor(statsNow, vlogForegroundReadQuietWindow)
+	foregroundQuiet := foregroundWriteQuiet && foregroundReadQuiet
+	foregroundActiveIters := db.activeForegroundIterators.Load()
+	foregroundLastWriteNS := db.lastForegroundWriteUnixNano.Load()
+	foregroundLastReadNS := db.lastForegroundReadUnixNano.Load()
+	foregroundWriteAgeMS := int64(0)
+	if foregroundLastWriteNS > 0 && foregroundLastWriteNS < statsNow.UnixNano() {
+		foregroundWriteAgeMS = time.Duration(statsNow.UnixNano() - foregroundLastWriteNS).Milliseconds()
+	}
+	foregroundReadAgeMS := int64(0)
+	if foregroundLastReadNS > 0 && foregroundLastReadNS < statsNow.UnixNano() {
+		foregroundReadAgeMS = time.Duration(statsNow.UnixNano() - foregroundLastReadNS).Milliseconds()
+	}
+	rewriteStageDue := false
+	rewriteStageDueInMS := int64(0)
+	rewriteStageObservedAgeMS := int64(0)
+	if rewriteStageObservedNS > 0 {
+		if rewriteStageObservedNS < statsNow.UnixNano() {
+			rewriteStageObservedAgeMS = time.Duration(statsNow.UnixNano() - rewriteStageObservedNS).Milliseconds()
+		}
+		if rewriteStagePending {
+			dueAt := time.Unix(0, rewriteStageObservedNS).Add(vlogGenerationRewriteMinInterval)
+			if !statsNow.Before(dueAt) {
+				rewriteStageDue = true
+			} else {
+				rewriteStageDueInMS = time.Until(dueAt).Milliseconds()
+			}
+		}
+	}
+	rewriteAgeBlockedDue := rewriteAgeBlockedUntilNS > 0 && !statsNow.Before(time.Unix(0, rewriteAgeBlockedUntilNS))
 	rewriteBudgetTokens := db.vlogGenerationRewriteBudgetTokensBytes.Load()
 	if rewriteBudgetTokens < 0 {
 		rewriteBudgetTokens = 0
@@ -21352,6 +21384,14 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_generation.maintenance.skip.quiet_window"] = fmt.Sprintf("%d", db.vlogGenerationMaintenanceSkipQuiet.Load())
 	stats["treedb.cache.vlog_generation.maintenance.skip.before_first_checkpoint"] = fmt.Sprintf("%d", db.vlogGenerationMaintenanceSkipPreCheckpoint.Load())
 	stats["treedb.cache.vlog_generation.maintenance.skip.checkpoint_inflight"] = fmt.Sprintf("%d", db.vlogGenerationMaintenanceSkipCheckpointing.Load())
+	stats["treedb.cache.vlog_generation.maintenance.foreground_quiet"] = fmt.Sprintf("%t", foregroundQuiet)
+	stats["treedb.cache.vlog_generation.maintenance.foreground_write_quiet"] = fmt.Sprintf("%t", foregroundWriteQuiet)
+	stats["treedb.cache.vlog_generation.maintenance.foreground_read_quiet"] = fmt.Sprintf("%t", foregroundReadQuiet)
+	stats["treedb.cache.vlog_generation.maintenance.foreground_active_iterators"] = fmt.Sprintf("%d", foregroundActiveIters)
+	stats["treedb.cache.vlog_generation.maintenance.foreground_last_write_unix_nano"] = fmt.Sprintf("%d", foregroundLastWriteNS)
+	stats["treedb.cache.vlog_generation.maintenance.foreground_last_read_unix_nano"] = fmt.Sprintf("%d", foregroundLastReadNS)
+	stats["treedb.cache.vlog_generation.maintenance.foreground_write_age_ms"] = fmt.Sprintf("%d", foregroundWriteAgeMS)
+	stats["treedb.cache.vlog_generation.maintenance.foreground_read_age_ms"] = fmt.Sprintf("%d", foregroundReadAgeMS)
 	stats["treedb.cache.vlog_generation.maintenance.passes.noop"] = fmt.Sprintf("%d", db.vlogGenerationMaintenancePassNoop.Load())
 	stats["treedb.cache.vlog_generation.maintenance.passes.with_rewrite"] = fmt.Sprintf("%d", db.vlogGenerationMaintenancePassWithRewrite.Load())
 	stats["treedb.cache.vlog_generation.maintenance.passes.with_gc"] = fmt.Sprintf("%d", db.vlogGenerationMaintenancePassWithGC.Load())
@@ -21384,8 +21424,12 @@ func (db *DB) Stats() map[string]string {
 	}
 	stats["treedb.cache.vlog_generation.rewrite.stage_pending"] = fmt.Sprintf("%t", rewriteStagePending)
 	stats["treedb.cache.vlog_generation.rewrite.stage_observed_unix_nano"] = fmt.Sprintf("%d", rewriteStageObservedNS)
+	stats["treedb.cache.vlog_generation.rewrite.stage_observed_age_ms"] = fmt.Sprintf("%d", rewriteStageObservedAgeMS)
+	stats["treedb.cache.vlog_generation.rewrite.stage_due"] = fmt.Sprintf("%t", rewriteStageDue)
+	stats["treedb.cache.vlog_generation.rewrite.stage_due_in_ms"] = fmt.Sprintf("%d", rewriteStageDueInMS)
 	stats["treedb.cache.vlog_generation.rewrite.penalties_active"] = fmt.Sprintf("%d", rewritePenaltiesActive)
 	stats["treedb.cache.vlog_generation.rewrite.age_blocked_until_unix_nano"] = fmt.Sprintf("%d", rewriteAgeBlockedUntilNS)
+	stats["treedb.cache.vlog_generation.rewrite.age_blocked_due"] = fmt.Sprintf("%t", rewriteAgeBlockedDue)
 	stats["treedb.cache.vlog_generation.rewrite.age_blocked_remaining_ms"] = fmt.Sprintf("%d", rewriteAgeBlockedRemainingMS)
 	stats["treedb.cache.vlog_generation.hot.segment_target_bytes"] = fmt.Sprintf("%d", db.valueLogGenerationHotTarget)
 	stats["treedb.cache.vlog_generation.warm.segment_target_bytes"] = fmt.Sprintf("%d", db.valueLogGenerationWarmTarget)

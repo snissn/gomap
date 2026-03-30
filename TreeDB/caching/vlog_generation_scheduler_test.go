@@ -6931,8 +6931,20 @@ func TestVlogGenerationStats_ReportRewriteBacklogAndDurations(t *testing.T) {
 	if got := stats["treedb.cache.vlog_generation.rewrite.stage_observed_unix_nano"]; got != "1234" {
 		t.Fatalf("rewrite stage observed=%q want 1234", got)
 	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.stage_observed_age_ms"]; got == "0" {
+		t.Fatalf("rewrite stage observed age ms=%q want >0", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.stage_due"]; got != "true" {
+		t.Fatalf("rewrite stage due=%q want true", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.stage_due_in_ms"]; got != "0" {
+		t.Fatalf("rewrite stage due in ms=%q want 0", got)
+	}
 	if got := stats["treedb.cache.vlog_generation.rewrite.penalties_active"]; got != "1" {
 		t.Fatalf("rewrite penalties active=%q want 1", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.age_blocked_due"]; got != "false" {
+		t.Fatalf("rewrite age blocked due=%q want false", got)
 	}
 	if got := stats["treedb.cache.vlog_generation.rewrite.age_blocked_remaining_ms"]; got == "0" {
 		t.Fatalf("rewrite age blocked remaining ms=%q want >0", got)
@@ -6960,6 +6972,30 @@ func TestVlogGenerationStats_ReportRewriteBacklogAndDurations(t *testing.T) {
 	}
 	if got := stats["treedb.cache.vlog_generation.maintenance.skip.stage_gate_due_reserved"]; got != "2" {
 		t.Fatalf("maintenance skip stage gate due reserved=%q want 2", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.maintenance.foreground_quiet"]; got != "true" {
+		t.Fatalf("maintenance foreground quiet=%q want true", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.maintenance.foreground_write_quiet"]; got != "true" {
+		t.Fatalf("maintenance foreground write quiet=%q want true", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.maintenance.foreground_read_quiet"]; got != "true" {
+		t.Fatalf("maintenance foreground read quiet=%q want true", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.maintenance.foreground_active_iterators"]; got != "0" {
+		t.Fatalf("maintenance foreground active iterators=%q want 0", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.maintenance.foreground_last_write_unix_nano"]; got == "0" {
+		t.Fatalf("maintenance foreground last write unix nano=%q want >0", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.maintenance.foreground_last_read_unix_nano"]; got == "0" {
+		t.Fatalf("maintenance foreground last read unix nano=%q want >0", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.maintenance.foreground_write_age_ms"]; got == "0" {
+		t.Fatalf("maintenance foreground write age ms=%q want >0", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.maintenance.foreground_read_age_ms"]; got == "0" {
+		t.Fatalf("maintenance foreground read age ms=%q want >0", got)
 	}
 	if got := stats["treedb.cache.vlog_generation.rewrite.plan_selected_segments_total"]; got != "6" {
 		t.Fatalf("rewrite plan selected segments total=%q want 6", got)
