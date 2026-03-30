@@ -663,7 +663,7 @@ func main() {
 		probeEngine := template.NewEngine(cfg)
 		probeStore := readOnlyTemplateStore{inner: store}
 
-		if mode == "prefix" || mode == "mixed" {
+		if (mode == "prefix" || mode == "mixed") && *probe > 0 {
 			start := []byte(*prefix)
 			end := prefixEnd(start)
 			pit, err := backend.Iterator(start, end)
@@ -677,7 +677,7 @@ func main() {
 			probeAttempted += a
 			probeKept += k
 		}
-		if mode == "pointer" || mode == "mixed" {
+		if (mode == "pointer" || mode == "mixed") && pProbe > 0 {
 			pit, err := backend.Iterator(nil, nil)
 			if err != nil {
 				log.Fatalf("iterator probe pointer: %v", err)
@@ -691,7 +691,7 @@ func main() {
 			probeAttempted += a
 			probeKept += k
 		}
-		if mode == "outerleaf" || mode == "mixed" {
+		if (mode == "outerleaf" || mode == "mixed") && oProbe > 0 {
 			a, k, err := probeOuterLeaf(probeEngine, probeStore, backend, oProbe)
 			if err != nil {
 				log.Fatalf("probe outerleaf: %v", err)

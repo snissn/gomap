@@ -704,6 +704,9 @@ func runTemplateLab(ds datasetSpec, cfg runConfig, warmupPasses, measurePasses i
 		res.DecodeNsPerByte = float64(decodeNS) / float64(res.RawBytes)
 	}
 
+	// Publish runs asynchronously in trainer workers; wait before reading
+	// final published/matched counters for measured output.
+	waitForTrainer(engine, waitAfterWarmup)
 	stats := engine.StatsSnapshot()
 	res.Attempted = saturatingSub(parseUintStat(stats, "attempted"), baselineAttempted)
 	res.Matched = saturatingSub(parseUintStat(stats, "matched"), baselineMatched)
