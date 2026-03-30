@@ -57,7 +57,6 @@ AB_CAPTURE_FULL_SMAPS_ON_MAX_RSS="${AB_CAPTURE_FULL_SMAPS_ON_MAX_RSS:-0}"
 AB_CAPTURE_DEBUG_VARS_ON_MAX_RSS="${AB_CAPTURE_DEBUG_VARS_ON_MAX_RSS:-0}"
 AB_CAPTURE_LIGHT_VLOG_STATS="${AB_CAPTURE_LIGHT_VLOG_STATS:-1}"
 AB_LIGHT_VLOG_STATS_TIMEOUT_SECONDS="${AB_LIGHT_VLOG_STATS_TIMEOUT_SECONDS:-20}"
-AB_LIGHT_VLOG_STATS_RW_OPEN="${AB_LIGHT_VLOG_STATS_RW_OPEN:-1}"
 TS="$(date +%Y%m%d%H%M%S)"
 
 if [[ "$#" -gt 4 ]]; then
@@ -131,10 +130,6 @@ if [[ "$AB_LIGHT_VLOG_STATS_TIMEOUT_SECONDS" -lt 0 ]]; then
   echo "AB_LIGHT_VLOG_STATS_TIMEOUT_SECONDS must be >= 0" >&2
   exit 1
 fi
-if [[ "$AB_LIGHT_VLOG_STATS_RW_OPEN" != "0" && "$AB_LIGHT_VLOG_STATS_RW_OPEN" != "1" ]]; then
-  echo "AB_LIGHT_VLOG_STATS_RW_OPEN must be 0 or 1" >&2
-  exit 1
-fi
 
 mkdir -p "$OUT/runs"
 
@@ -171,7 +166,6 @@ ab_capture_full_smaps_on_max_rss=$AB_CAPTURE_FULL_SMAPS_ON_MAX_RSS
 ab_capture_debug_vars_on_max_rss=$AB_CAPTURE_DEBUG_VARS_ON_MAX_RSS
 ab_capture_light_vlog_stats=$AB_CAPTURE_LIGHT_VLOG_STATS
 ab_light_vlog_stats_timeout_seconds=$AB_LIGHT_VLOG_STATS_TIMEOUT_SECONDS
-ab_light_vlog_stats_rw_open=$AB_LIGHT_VLOG_STATS_RW_OPEN
 META
 
 list_run_homes() {
@@ -236,39 +230,23 @@ capture_light_vlog_stats() {
   fi
 
   local rc=0
-  if [[ "$AB_LIGHT_VLOG_STATS_RW_OPEN" == "1" ]]; then
-    local -a cmd_rw=("$TREEMAP_BIN" stats "$app_db" "-rw")
-    set +e
-    if [[ "$AB_LIGHT_VLOG_STATS_TIMEOUT_SECONDS" -gt 0 ]] && command -v timeout >/dev/null 2>&1; then
-      timeout --signal=TERM --kill-after=30 "${AB_LIGHT_VLOG_STATS_TIMEOUT_SECONDS}s" "${cmd_rw[@]}" >"$out_file" 2>"$err_file"
-      rc=$?
-    else
-      "${cmd_rw[@]}" >"$out_file" 2>"$err_file"
-      rc=$?
-    fi
-    set -e
-    if [[ "$rc" -eq 0 && -s "$out_file" ]]; then
-      return 0
-    fi
-    echo "[light-stats] rw-open capture failed (rc=$rc); retrying read-only stats." >>"$err_file"
-  fi
+  local -a cmd=("$TREEMAP_BIN" vlog-gc "$app_db" "-rw" "-dry-run")
 
-  local -a cmd_ro=("$TREEMAP_BIN" stats "$app_db")
   set +e
   if [[ "$AB_LIGHT_VLOG_STATS_TIMEOUT_SECONDS" -gt 0 ]] && command -v timeout >/dev/null 2>&1; then
-    timeout --signal=TERM --kill-after=30 "${AB_LIGHT_VLOG_STATS_TIMEOUT_SECONDS}s" "${cmd_ro[@]}" >"$out_file" 2>>"$err_file"
+    timeout --signal=TERM --kill-after=30 "${AB_LIGHT_VLOG_STATS_TIMEOUT_SECONDS}s" "${cmd[@]}" >"$out_file" 2>"$err_file"
     rc=$?
   else
-    "${cmd_ro[@]}" >"$out_file" 2>>"$err_file"
+    "${cmd[@]}" >"$out_file" 2>"$err_file"
     rc=$?
   fi
   set -e
-
-  if [[ "$rc" -ne 0 || ! -s "$out_file" ]]; then
-    rm -f "$out_file"
-    return 1
+  if [[ "$rc" -eq 0 && -s "$out_file" ]]; then
+    return 0
   fi
-  return 0
+
+  rm -f "$out_file"
+  return 1
 }
 
 run_variant() {
@@ -496,6 +474,23 @@ def parse_treemap_stats(path: Path) -> dict[str, str]:
         return out
     for raw in text.splitlines():
         line = raw.strip()
+        m = re.search(
+            r"segments total=(\d+)\s+referenced=(\d+)\s+active=(\d+)\s+eligible=(\d+)\s+deleted=(\d+)\s+"
+            r"bytes_total=(\d+)\s+bytes_referenced=(\d+)\s+bytes_active=(\d+)\s+bytes_eligible=(\d+)\s+bytes_deleted=(\d+)",
+            line,
+        )
+        if m:
+            out["vlog_gc_segments_total"] = m.group(1)
+            out["vlog_gc_segments_referenced"] = m.group(2)
+            out["vlog_gc_segments_active"] = m.group(3)
+            out["vlog_gc_segments_eligible"] = m.group(4)
+            out["vlog_gc_segments_deleted"] = m.group(5)
+            out["vlog_gc_bytes_total"] = m.group(6)
+            out["vlog_gc_bytes_referenced"] = m.group(7)
+            out["vlog_gc_bytes_active"] = m.group(8)
+            out["vlog_gc_bytes_eligible"] = m.group(9)
+            out["vlog_gc_bytes_deleted"] = m.group(10)
+            continue
         if not line or line == "Stats:" or "=" not in line:
             continue
         key, value = line.split("=", 1)
@@ -522,17 +517,22 @@ def build_light_summary(stats: dict[str, str]) -> dict[str, object]:
 
     out: dict[str, object] = {
         "bytes_live_total": stat_int(
+            "vlog_gc_bytes_referenced",
             "treedb.cache.vlog_generation.bytes.live.total",
             "treedb.vlog_generation.bytes.live.total",
         ),
         "bytes_stale_total": stat_int(
+            "vlog_gc_bytes_eligible",
             "treedb.cache.vlog_generation.bytes.stale.total",
             "treedb.vlog_generation.bytes.stale.total",
         ),
         "bytes_total_total": stat_int(
+            "vlog_gc_bytes_total",
             "treedb.cache.vlog_generation.bytes.total.total",
             "treedb.vlog_generation.bytes.total.total",
         ),
+        "bytes_active_total": stat_int("vlog_gc_bytes_active"),
+        "bytes_deleted_total": stat_int("vlog_gc_bytes_deleted"),
         "bytes_live_hot": stat_int(
             "treedb.cache.vlog_generation.bytes.live.hot",
             "treedb.vlog_generation.bytes.live.hot",
@@ -558,9 +558,14 @@ def build_light_summary(stats: dict[str, str]) -> dict[str, object]:
             "treedb.vlog_generation.bytes.stale.cold",
         ),
         "segments_total": stat_int(
+            "vlog_gc_segments_total",
             "treedb.cache.vlog_generation.segments.total",
             "treedb.vlog_generation.segments.total",
         ),
+        "segments_referenced": stat_int("vlog_gc_segments_referenced"),
+        "segments_active": stat_int("vlog_gc_segments_active"),
+        "segments_eligible": stat_int("vlog_gc_segments_eligible"),
+        "segments_deleted": stat_int("vlog_gc_segments_deleted"),
         "segments_hot": stat_int(
             "treedb.cache.vlog_generation.segments.hot",
             "treedb.vlog_generation.segments.hot",
