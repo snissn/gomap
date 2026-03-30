@@ -69,7 +69,7 @@ func (w *corpusWriter) WriteRecord(payload []byte) error {
 	if w == nil || w.buf == nil {
 		return errors.New("nil corpus writer")
 	}
-	if len(payload) > int(^uint32(0)) {
+	if uint64(len(payload)) > uint64(^uint32(0)) {
 		return fmt.Errorf("record too large: %d bytes", len(payload))
 	}
 	var hdr [4]byte
@@ -96,11 +96,13 @@ func (w *corpusWriter) Close() error {
 		if err := w.buf.Flush(); err != nil && first == nil {
 			first = err
 		}
+		w.buf = nil
 	}
 	if w.file != nil {
 		if err := w.file.Close(); err != nil && first == nil {
 			first = err
 		}
+		w.file = nil
 	}
 	return first
 }
@@ -176,7 +178,15 @@ func extractOuterLeafCorpus(backend *treedbdb.DB, writer *corpusWriter, limit, s
 		return 0, errors.New("value-log reader unavailable")
 	}
 
-	seen := make(map[outerLeafKey]struct{}, 1<<20)
+	initialCap := 1 << 10
+	if limit > 0 {
+		if limit < (1 << 20) {
+			initialCap = limit
+		} else {
+			initialCap = 1 << 20
+		}
+	}
+	seen := make(map[outerLeafKey]struct{}, initialCap)
 	visit := func(ptr page.ValuePtr) error {
 		if !page.IsValueLogFileID(ptr.FileID) {
 			return nil
@@ -268,20 +278,26 @@ func main() {
 	outerLeafPath := filepath.Join(*outDir, "outer_leaf_pages.bin")
 	manifestPath := filepath.Join(*outDir, "manifest.json")
 
-	pointerWriter, err := newCorpusWriter(pointerPath, *overwrite)
-	if err != nil {
-		log.Fatalf("open pointer corpus: %v", err)
+	var pointerWriter *corpusWriter
+	if !*skipPointer {
+		pointerWriter, err = newCorpusWriter(pointerPath, *overwrite)
+		if err != nil {
+			log.Fatalf("open pointer corpus: %v", err)
+		}
+		defer func() {
+			_ = pointerWriter.Close()
+		}()
 	}
-	defer func() {
-		_ = pointerWriter.Close()
-	}()
-	outerWriter, err := newCorpusWriter(outerLeafPath, *overwrite)
-	if err != nil {
-		log.Fatalf("open outer-leaf corpus: %v", err)
+	var outerWriter *corpusWriter
+	if !*skipOuterLeaf {
+		outerWriter, err = newCorpusWriter(outerLeafPath, *overwrite)
+		if err != nil {
+			log.Fatalf("open outer-leaf corpus: %v", err)
+		}
+		defer func() {
+			_ = outerWriter.Close()
+		}()
 	}
-	defer func() {
-		_ = outerWriter.Close()
-	}()
 
 	pointerScanned := 0
 	if !*skipPointer {
@@ -289,9 +305,9 @@ func main() {
 		if err != nil {
 			log.Fatalf("extract pointer corpus: %v", err)
 		}
-	}
-	if err := pointerWriter.Close(); err != nil {
-		log.Fatalf("close pointer corpus: %v", err)
+		if err := pointerWriter.Close(); err != nil {
+			log.Fatalf("close pointer corpus: %v", err)
+		}
 	}
 
 	outerLeafScanned := 0
@@ -300,9 +316,22 @@ func main() {
 		if err != nil {
 			log.Fatalf("extract outer-leaf corpus: %v", err)
 		}
+		if err := outerWriter.Close(); err != nil {
+			log.Fatalf("close outer-leaf corpus: %v", err)
+		}
 	}
-	if err := outerWriter.Close(); err != nil {
-		log.Fatalf("close outer-leaf corpus: %v", err)
+
+	pointerRecords := 0
+	pointerRawBytes := int64(0)
+	if pointerWriter != nil {
+		pointerRecords = pointerWriter.records
+		pointerRawBytes = pointerWriter.rawBytes
+	}
+	outerLeafRecords := 0
+	outerLeafRawBytes := int64(0)
+	if outerWriter != nil {
+		outerLeafRecords = outerWriter.records
+		outerLeafRawBytes = outerWriter.rawBytes
 	}
 
 	manifest := corpusManifest{
@@ -313,16 +342,16 @@ func main() {
 		Pointer: corpusSectionManifest{
 			File:     filepath.Base(pointerPath),
 			Scanned:  pointerScanned,
-			Records:  pointerWriter.records,
-			RawBytes: pointerWriter.rawBytes,
+			Records:  pointerRecords,
+			RawBytes: pointerRawBytes,
 			Limit:    *pointerLimit,
 			Stride:   *pointerStride,
 		},
 		OuterLeaf: corpusSectionManifest{
 			File:     filepath.Base(outerLeafPath),
 			Scanned:  outerLeafScanned,
-			Records:  outerWriter.records,
-			RawBytes: outerWriter.rawBytes,
+			Records:  outerLeafRecords,
+			RawBytes: outerLeafRawBytes,
 			Limit:    *outerLeafLimit,
 			Stride:   *outerLeafStride,
 		},
@@ -333,10 +362,10 @@ func main() {
 
 	fmt.Printf("template-corpus-extract: out=%s pointer_records=%d pointer_bytes=%d outer_leaf_records=%d outer_leaf_bytes=%d manifest=%s\n",
 		*outDir,
-		pointerWriter.records,
-		pointerWriter.rawBytes,
-		outerWriter.records,
-		outerWriter.rawBytes,
+		pointerRecords,
+		pointerRawBytes,
+		outerLeafRecords,
+		outerLeafRawBytes,
 		manifestPath,
 	)
 }

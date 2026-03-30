@@ -200,11 +200,14 @@ func applyOuterLeafPretransform(value []byte, mode string) []byte {
 }
 
 func reverseHeaderSideTransform(payload []byte, magic []byte) ([]byte, bool, error) {
-	if len(payload) < len(magic)+12 {
-		return nil, false, errors.New("pretransform: payload too short")
+	if len(payload) < len(magic) {
+		return payload, false, nil
 	}
 	if !bytes.Equal(payload[:len(magic)], magic) {
 		return payload, false, nil
+	}
+	if len(payload) < len(magic)+12 {
+		return nil, false, errors.New("pretransform: payload too short")
 	}
 	header := payload[len(magic) : len(magic)+12]
 	page := append([]byte(nil), payload[len(magic)+12:]...)
@@ -334,7 +337,11 @@ type gzipRecordSizer struct {
 
 func newGzipRecordSizer() *gzipRecordSizer {
 	cw := &countingWriter{}
-	gw, _ := gzip.NewWriterLevel(cw, gzip.BestSpeed)
+	gw, err := gzip.NewWriterLevel(cw, gzip.BestSpeed)
+	if err != nil {
+		log.Printf("gzip.NewWriterLevel(%d) failed: %v; falling back to default level", gzip.BestSpeed, err)
+		gw = gzip.NewWriter(cw)
+	}
 	return &gzipRecordSizer{cw: cw, gw: gw}
 }
 
@@ -342,7 +349,7 @@ func (s *gzipRecordSizer) WriteRecord(payload []byte) error {
 	if s == nil || s.gw == nil {
 		return errors.New("nil gzip sizer")
 	}
-	if len(payload) > int(^uint32(0)) {
+	if uint64(len(payload)) > uint64(^uint32(0)) {
 		return fmt.Errorf("record too large: %d", len(payload))
 	}
 	var hdr [4]byte
@@ -390,6 +397,9 @@ func readCorpusFile(path string, maxRecords int) ([][]byte, error) {
 			return nil, err
 		}
 		n := binary.LittleEndian.Uint32(hdr[:])
+		if uint64(n) > uint64(^uint(0)>>1) {
+			return nil, fmt.Errorf("record too large for platform int: %d", n)
+		}
 		buf := make([]byte, int(n))
 		if n > 0 {
 			if _, err := io.ReadFull(r, buf); err != nil {
@@ -624,9 +634,13 @@ func runTemplateLab(ds datasetSpec, cfg runConfig, warmupPasses, measurePasses i
 				decoded = payload
 			}
 			decodeNS += time.Since(decodeStart).Nanoseconds()
-			recovered, err := reverseOuterLeafPretransform(decoded, cfg.OuterLeafPretransform)
-			if err != nil {
-				return res, fmt.Errorf("reverse pretransform failed: %w", err)
+			recovered := decoded
+			if ds.Name == "outer_leaf" {
+				var err error
+				recovered, err = reverseOuterLeafPretransform(decoded, cfg.OuterLeafPretransform)
+				if err != nil {
+					return res, fmt.Errorf("reverse pretransform failed: %w", err)
+				}
 			}
 			if !bytes.Equal(recovered, value) {
 				preview := payload
@@ -760,6 +774,8 @@ func main() {
 	outJSON := flag.String("out-json", "", "optional JSON report path")
 	outMD := flag.String("out-md", "", "optional markdown report path")
 	flag.Parse()
+	pointerFileExplicit := strings.TrimSpace(*pointerFile) != ""
+	outerLeafFileExplicit := strings.TrimSpace(*outerLeafFile) != ""
 
 	switch strings.ToLower(strings.TrimSpace(*outerLeafPretransform)) {
 	case outerLeafPretransformOff, outerLeafPretransformHeaderV1, outerLeafPretransformHeaderDirDeltaV1:
@@ -777,10 +793,10 @@ func main() {
 		manifestPath := filepath.Join(*corpusDir, "manifest.json")
 		if _, err := os.Stat(manifestPath); err == nil {
 			if manifest, err := loadManifest(manifestPath); err == nil {
-				if manifest.Pointer.File != "" {
+				if !pointerFileExplicit && manifest.Pointer.File != "" {
 					*pointerFile = filepath.Join(*corpusDir, manifest.Pointer.File)
 				}
-				if manifest.OuterLeaf.File != "" {
+				if !outerLeafFileExplicit && manifest.OuterLeaf.File != "" {
 					*outerLeafFile = filepath.Join(*corpusDir, manifest.OuterLeaf.File)
 				}
 			}

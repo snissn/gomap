@@ -2206,6 +2206,9 @@ func (db *DB) appendValueLogForRecords(l *lane, records []valuelog.Record, durab
 	if len(records) == 0 {
 		return nil, nil
 	}
+	if db != nil && db.dictStore == nil {
+		return db.appendValueLog(l, 0, nil, records, durability)
+	}
 	ranges := db.valueLogDictClassRangesForRecords(records)
 	if len(ranges) == 0 {
 		return nil, nil

@@ -78,6 +78,20 @@ func statU64(m map[string]string, k string) uint64 {
 	return u
 }
 
+func applyPersistedFormatConfig(dir string, opts *treedbdb.Options) {
+	if opts == nil || opts.IgnoreFormatConfig {
+		return
+	}
+	cfg, ok, err := treedbdb.LoadFormatConfig(dir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: format config for %s: %v\n", dir, err)
+		return
+	}
+	if ok {
+		cfg.ApplyToOptions(opts)
+	}
+}
+
 func countPrefix(db *treedbdb.DB, prefix []byte) (int, error) {
 	it, err := db.Iterator(prefix, prefixEnd(prefix))
 	if err != nil {
@@ -426,24 +440,46 @@ func main() {
 		log.Fatal("-app-dir is required")
 	}
 
-	templateDir := filepath.Join(*appDir, "templatedb")
-	tmplDB, err := treedbdb.Open(treedbdb.Options{Dir: templateDir, DisableBackgroundPrune: true})
+	rootDir := filepath.Clean(*appDir)
+	mainDir := rootDir
+	if info, statErr := os.Stat(filepath.Join(rootDir, "maindb", "index.db")); statErr == nil && !info.IsDir() {
+		mainDir = filepath.Join(rootDir, "maindb")
+	} else if filepath.Base(rootDir) == "maindb" {
+		rootDir = filepath.Dir(rootDir)
+	}
+
+	templateDir := filepath.Join(rootDir, "templatedb")
+	templateOpts := treedbdb.Options{
+		Dir:                    templateDir,
+		DisableBackgroundPrune: true,
+	}
+	applyPersistedFormatConfig(templateDir, &templateOpts)
+	tmplDB, err := treedbdb.Open(templateOpts)
 	if err != nil {
 		log.Fatalf("open templatedb: %v", err)
 	}
 	defer tmplDB.Close()
 	store := templatedb.New(templateBackendKV{db: tmplDB}, templatedb.Config{})
 
-	mainDir := *appDir
-	if info, statErr := os.Stat(filepath.Join(*appDir, "maindb")); statErr == nil && info.IsDir() {
-		mainDir = filepath.Join(*appDir, "maindb")
-	}
 	backendOpts := treedbdb.Options{
 		Dir:                    mainDir,
 		ReadOnly:               true,
 		DisableBackgroundPrune: true,
 	}
-	dictDir := filepath.Join(*appDir, "dictdb")
+	applyPersistedFormatConfig(mainDir, &backendOpts)
+	backendOpts.ValueLog.TemplateLookup = func(templateID uint64) ([]byte, error) {
+		return store.GetTemplateDef(context.Background(), templateID)
+	}
+	if backendOpts.ValueLog.TemplateDecodeOptions == (template.DecodeOptions{}) {
+		tcfg := template.NormalizeConfig(backendOpts.ValueLog.TemplateConfig)
+		backendOpts.ValueLog.TemplateDecodeOptions = template.DecodeOptions{
+			MaxDecodedBytes: tcfg.MaxDecodedBytes,
+			MaxGaps:         tcfg.MaxGaps,
+			DefCacheSize:    tcfg.DefCacheSize,
+		}
+	}
+
+	dictDir := filepath.Join(rootDir, "dictdb")
 	dictIndex := filepath.Join(dictDir, "index.db")
 	if info, statErr := os.Stat(dictIndex); statErr == nil && !info.IsDir() {
 		dictOpts := treedbdb.Options{
@@ -452,6 +488,8 @@ func main() {
 			DisableBackgroundPrune:     true,
 			IndexOuterLeavesInValueLog: false,
 		}
+		applyPersistedFormatConfig(dictDir, &dictOpts)
+		dictOpts.IndexOuterLeavesInValueLog = false
 		dictBackend, err := treedbdb.Open(dictOpts)
 		if err != nil {
 			log.Fatalf("open dictdb: %v", err)
@@ -534,9 +572,6 @@ func main() {
 			log.Fatalf("iterator train prefix: %v", err)
 		}
 		l := *limit
-		if mode == "mixed" {
-			l = pLimit
-		}
 		prefixStats, err = trainPrefix(engine, store, it, l, *stride, *printEvery)
 		if err != nil {
 			log.Fatalf("train prefix: %v", err)
@@ -587,11 +622,7 @@ func main() {
 			if err != nil {
 				log.Fatalf("iterator probe prefix: %v", err)
 			}
-			prefixLimit := *probe
-			if mode == "mixed" {
-				prefixLimit = pProbe
-			}
-			a, k, err := probePrefix(probeEngine, store, pit, prefixLimit)
+			a, k, err := probePrefix(probeEngine, store, pit, *probe)
 			if err != nil {
 				log.Fatalf("probe prefix: %v", err)
 			}
