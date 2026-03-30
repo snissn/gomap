@@ -520,3 +520,162 @@ func TestNewBatchWithSize_ForcePointersOverridesDomainThresholds(t *testing.T) {
 		t.Fatalf("batch.Close: %v", err)
 	}
 }
+
+func forceStalePublishedValueLogSetForReadRetryTest(t *testing.T, db *DB) {
+	t.Helper()
+	if db == nil || db.valueLogManager == nil {
+		t.Fatalf("missing db/value log manager")
+	}
+	db.mu.Lock()
+	oldState := db.state.Load()
+	if oldState == nil {
+		db.mu.Unlock()
+		t.Fatalf("missing db state")
+	}
+	staleSet := &valuelog.Set{Files: map[uint32]*valuelog.File{}}
+	staleSet.RefCount.Store(1)
+	stale := &DBState{
+		CommitSeq:        oldState.CommitSeq,
+		RootPageID:       oldState.RootPageID,
+		SystemRootPageID: oldState.SystemRootPageID,
+		ValueLogSet:      staleSet,
+	}
+	db.state.Store(stale)
+	db.publishSnapshotView(db.idx.Load(), stale, db.valueLogManager)
+	db.mu.Unlock()
+	if oldState.ValueLogSet != nil {
+		if err := db.valueLogManager.Release(oldState.ValueLogSet); err != nil {
+			t.Fatalf("release old set: %v", err)
+		}
+	}
+}
+
+func TestGet_RetriesAfterRefreshingStaleValueLogSet(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	key := []byte("k-retry")
+	want := bytes.Repeat([]byte("r"), 256)
+	fileID, err := valuelog.EncodeFileID(0, 1)
+	if err != nil {
+		t.Fatalf("EncodeFileID: %v", err)
+	}
+	walDir := filepath.Join(dir, "wal")
+	if err := os.MkdirAll(walDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(wal): %v", err)
+	}
+	w, err := valuelog.NewWriter(filepath.Join(walDir, "value-l0-000001.log"), fileID)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	ptr, err := w.Append(0, nil, 1, want)
+	if err != nil {
+		_ = w.Close()
+		t.Fatalf("Append: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close writer: %v", err)
+	}
+
+	b := db.NewBatch().(*Batch)
+	if err := b.SetPointer(key, ptr); err != nil {
+		_ = b.Close()
+		t.Fatalf("SetPointer: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		_ = b.Close()
+		t.Fatalf("Write: %v", err)
+	}
+	_ = b.Close()
+	if _, err := db.Get(key); err != nil {
+		t.Fatalf("initial Get: %v", err)
+	}
+
+	forceStalePublishedValueLogSetForReadRetryTest(t, db)
+	before := db.valueLogManager.RefreshScanCount()
+	got, err := db.Get(key)
+	if err != nil {
+		t.Fatalf("Get after stale state: %v", err)
+	}
+	after := db.valueLogManager.RefreshScanCount()
+	if after <= before {
+		t.Fatalf("expected Get retry to refresh value-log set: before=%d after=%d", before, after)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("Get mismatch after retry")
+	}
+}
+
+func TestGetMany_RetriesAfterRefreshingStaleValueLogSet(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	keys := make([][]byte, 160)
+	want := make([][]byte, len(keys))
+	ptrs := make([]page.ValuePtr, len(keys))
+	fileID, err := valuelog.EncodeFileID(0, 1)
+	if err != nil {
+		t.Fatalf("EncodeFileID: %v", err)
+	}
+	walDir := filepath.Join(dir, "wal")
+	if err := os.MkdirAll(walDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(wal): %v", err)
+	}
+	w, err := valuelog.NewWriter(filepath.Join(walDir, "value-l0-000001.log"), fileID)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	for i := range keys {
+		keys[i] = []byte(fmt.Sprintf("k-many-%03d", i))
+		want[i] = bytes.Repeat([]byte{byte('a' + (i % 26))}, 192)
+		ptr, appendErr := w.Append(0, nil, uint64(i+1), want[i])
+		if appendErr != nil {
+			_ = w.Close()
+			t.Fatalf("Append %d: %v", i, appendErr)
+		}
+		ptrs[i] = ptr
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close writer: %v", err)
+	}
+
+	b := db.NewBatch().(*Batch)
+	for i := range keys {
+		if err := b.SetPointer(keys[i], ptrs[i]); err != nil {
+			_ = b.Close()
+			t.Fatalf("SetPointer %d: %v", i, err)
+		}
+	}
+	if err := b.Write(); err != nil {
+		_ = b.Close()
+		t.Fatalf("Write: %v", err)
+	}
+	_ = b.Close()
+
+	forceStalePublishedValueLogSetForReadRetryTest(t, db)
+	before := db.valueLogManager.RefreshScanCount()
+	got, err := db.GetMany(keys)
+	if err != nil {
+		t.Fatalf("GetMany after stale state: %v", err)
+	}
+	after := db.valueLogManager.RefreshScanCount()
+	if after <= before {
+		t.Fatalf("expected GetMany retry to refresh value-log set: before=%d after=%d", before, after)
+	}
+	if len(got) != len(want) {
+		t.Fatalf("GetMany len mismatch: got=%d want=%d", len(got), len(want))
+	}
+	for i := range want {
+		if !bytes.Equal(got[i], want[i]) {
+			t.Fatalf("GetMany[%d] mismatch", i)
+		}
+	}
+}
