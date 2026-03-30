@@ -20,6 +20,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
+	templ "github.com/snissn/gomap/TreeDB/template"
 	"github.com/snissn/gomap/TreeDB/tree"
 )
 
@@ -1512,6 +1513,242 @@ func TestValueLogRewriteOffline_ReencodesGroupedBlockOuterLeafPagesWithObservedD
 	}
 	if !bytes.Equal(got4, value4) {
 		t.Fatalf("k4 mismatch after rewrite")
+	}
+}
+
+type rewriteTemplateStore struct {
+	templateID uint64
+	defBytes   []byte
+}
+
+func (s rewriteTemplateStore) GetCandidates(context.Context, uint64, int) ([]templ.Candidate, error) {
+	if s.templateID == 0 || len(s.defBytes) == 0 {
+		return nil, nil
+	}
+	return []templ.Candidate{{ID: s.templateID, Size: len(s.defBytes)}}, nil
+}
+
+func (s rewriteTemplateStore) GetTemplateDef(_ context.Context, templateID uint64) ([]byte, error) {
+	if templateID == 0 || templateID != s.templateID {
+		return nil, templ.ErrMissingTemplate
+	}
+	return append([]byte(nil), s.defBytes...), nil
+}
+
+func (s rewriteTemplateStore) PutTemplateDef(_ context.Context, defBytes []byte, _ []uint64) (uint64, error) {
+	return templ.TemplateID(defBytes, 0), nil
+}
+
+func readFirstRewriteFrameHeader(t *testing.T, walDir string) valuelog.FrameHeader {
+	t.Helper()
+	paths, err := filepath.Glob(filepath.Join(walDir, "value-l0-*.log"))
+	if err != nil {
+		t.Fatalf("glob value-log files: %v", err)
+	}
+	if len(paths) == 0 {
+		t.Fatalf("expected at least one value-log file in %s", walDir)
+	}
+	slices.Sort(paths)
+	f, err := os.Open(paths[0])
+	if err != nil {
+		t.Fatalf("open %s: %v", filepath.Base(paths[0]), err)
+	}
+	defer f.Close()
+	var header [valuelog.HeaderSize]byte
+	if _, err := io.ReadFull(f, header[:]); err != nil {
+		t.Fatalf("read record header: %v", err)
+	}
+	bodyLen := binary.LittleEndian.Uint32(header[16:20])
+	body := make([]byte, int(bodyLen))
+	if _, err := io.ReadFull(f, body); err != nil {
+		t.Fatalf("read frame body: %v", err)
+	}
+	frameHeader, _, _, _, err := valuelog.DecodeFrame(body)
+	if err != nil {
+		t.Fatalf("DecodeFrame: %v", err)
+	}
+	return frameHeader
+}
+
+func buildRewriteTemplateFixture(t *testing.T) (templ.Config, rewriteTemplateStore, func(uint64) ([]byte, error), []byte) {
+	t.Helper()
+	def := templ.TemplateDef{
+		Kind: templ.TemplateAnchors,
+		Anchors: [][]byte{
+			[]byte(`{"type":"account","id":"`),
+			[]byte(`","status":"bonded","chain":"celestia"}`),
+		},
+	}
+	defBytes, err := templ.EncodeTemplateDef(def, templ.Config{})
+	if err != nil {
+		t.Fatalf("EncodeTemplateDef: %v", err)
+	}
+	templateID := templ.TemplateID(defBytes, 0)
+	store := rewriteTemplateStore{templateID: templateID, defBytes: defBytes}
+	lookup := func(id uint64) ([]byte, error) {
+		if id != templateID {
+			return nil, valuelog.ErrMissingTemplate
+		}
+		return append([]byte(nil), defBytes...), nil
+	}
+	cfg := templ.Config{
+		MinSavingsBytes:    1,
+		FingerprintK:       8,
+		FingerprintW:       8,
+		MaxFingerprints:    16,
+		MaxFPReads:         16,
+		MaxCandidatesPerFP: 8,
+		MaxTemplateFetch:   8,
+	}
+	value := []byte(`{"type":"account","id":"acct-000001","status":"bonded","chain":"celestia"}`)
+	return cfg, store, lookup, value
+}
+
+func TestRewriteWriter_TemplatePrepassEncodesBeforeDict(t *testing.T) {
+	walDir := t.TempDir()
+	cfg, store, lookup, value := buildRewriteTemplateFixture(t)
+
+	dictID := uint64(95101)
+	sampleA := bytes.Repeat(value, 64)
+	sampleB := bytes.Repeat([]byte(`{"type":"account","id":"acct-000002","status":"bonded","chain":"celestia"}`), 64)
+	sampleC := bytes.Repeat([]byte(`{"type":"account","id":"acct-000003","status":"bonded","chain":"celestia"}`), 64)
+	history := append([]byte(nil), sampleA...)
+	if len(history) > 8<<10 {
+		history = history[:8<<10]
+	}
+	dict, err := zstd.BuildDict(zstd.BuildDictOptions{
+		ID:       uint32(dictID),
+		Contents: [][]byte{sampleA, sampleB, sampleC},
+		History:  history,
+		Offsets:  [3]int{1, 4, 8},
+		Level:    zstd.SpeedFastest,
+	})
+	if err != nil {
+		t.Fatalf("BuildDict: %v", err)
+	}
+	if len(dict) == 0 {
+		t.Fatalf("BuildDict returned empty dict")
+	}
+
+	w := newRewriteWriter(walDir, 0, 0, 64<<20)
+	w.SetTemplateCompression(templ.TemplatePrepass, cfg, store)
+	ptr, err := w.appendValueWithDict(dictID, dict, 1, value)
+	if err != nil {
+		t.Fatalf("appendValueWithDict: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("close rewrite writer: %v", err)
+	}
+	if w.templateAttempts == 0 {
+		t.Fatalf("expected template prepass attempts > 0")
+	}
+	if w.templateKept == 0 {
+		t.Fatalf("expected template prepass keeps > 0")
+	}
+	if w.templateOutBytes >= w.templateInBytes {
+		t.Fatalf("expected template prepass to reduce bytes: in=%d out=%d", w.templateInBytes, w.templateOutBytes)
+	}
+
+	frameHeader := readFirstRewriteFrameHeader(t, walDir)
+	if frameHeader.DictID != dictID {
+		t.Fatalf("expected dict rewrite to remain active under prepass, got dictID=%d", frameHeader.DictID)
+	}
+
+	m, err := valuelog.NewManager(walDir)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	defer m.Close()
+	m.SetDictLookup(func(id uint64) ([]byte, error) {
+		if id != dictID {
+			return nil, valuelog.ErrMissingDict
+		}
+		return dict, nil
+	})
+	gotEncoded, err := m.Read(ptr)
+	if err != nil {
+		t.Fatalf("Read encoded: %v", err)
+	}
+	if !templ.IsEncodedPayload(gotEncoded) {
+		t.Fatalf("expected template-encoded payload before decode, got=%q", gotEncoded)
+	}
+
+	m.SetTemplateLookup(lookup, templ.DecodeOptions{})
+	gotDecoded, err := m.Read(ptr)
+	if err != nil {
+		t.Fatalf("Read decoded: %v", err)
+	}
+	if !bytes.Equal(gotDecoded, value) {
+		t.Fatalf("decoded payload mismatch: got=%q want=%q", gotDecoded, value)
+	}
+}
+
+func TestRewriteWriter_TemplateOnlyDisablesDictCompression(t *testing.T) {
+	walDir := t.TempDir()
+	cfg, store, lookup, value := buildRewriteTemplateFixture(t)
+
+	dictID := uint64(95102)
+	sampleA := bytes.Repeat(value, 64)
+	sampleB := bytes.Repeat([]byte(`{"type":"account","id":"acct-000004","status":"bonded","chain":"celestia"}`), 64)
+	history := append([]byte(nil), sampleA...)
+	if len(history) > 8<<10 {
+		history = history[:8<<10]
+	}
+	dict, err := zstd.BuildDict(zstd.BuildDictOptions{
+		ID:       uint32(dictID),
+		Contents: [][]byte{sampleA, sampleB},
+		History:  history,
+		Offsets:  [3]int{1, 4, 8},
+		Level:    zstd.SpeedFastest,
+	})
+	if err != nil {
+		t.Fatalf("BuildDict: %v", err)
+	}
+	if len(dict) == 0 {
+		t.Fatalf("BuildDict returned empty dict")
+	}
+
+	w := newRewriteWriter(walDir, 0, 0, 64<<20)
+	w.SetTemplateCompression(templ.TemplateOnly, cfg, store)
+	ptr, err := w.appendValueWithDict(dictID, dict, 1, value)
+	if err != nil {
+		t.Fatalf("appendValueWithDict: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("close rewrite writer: %v", err)
+	}
+	if w.templateAttempts == 0 {
+		t.Fatalf("expected template-only attempts > 0")
+	}
+	if w.templateKept == 0 {
+		t.Fatalf("expected template-only keeps > 0")
+	}
+
+	frameHeader := readFirstRewriteFrameHeader(t, walDir)
+	if frameHeader.DictID != 0 {
+		t.Fatalf("expected template-only mode to bypass dict compression, got dictID=%d", frameHeader.DictID)
+	}
+
+	m, err := valuelog.NewManager(walDir)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	defer m.Close()
+	gotEncoded, err := m.Read(ptr)
+	if err != nil {
+		t.Fatalf("Read encoded: %v", err)
+	}
+	if !templ.IsEncodedPayload(gotEncoded) {
+		t.Fatalf("expected template-encoded payload, got=%q", gotEncoded)
+	}
+
+	m.SetTemplateLookup(lookup, templ.DecodeOptions{})
+	gotDecoded, err := m.Read(ptr)
+	if err != nil {
+		t.Fatalf("Read decoded: %v", err)
+	}
+	if !bytes.Equal(gotDecoded, value) {
+		t.Fatalf("decoded payload mismatch: got=%q want=%q", gotDecoded, value)
 	}
 }
 

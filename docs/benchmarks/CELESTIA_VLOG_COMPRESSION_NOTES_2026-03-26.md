@@ -172,3 +172,218 @@ Takeaway:
   heights.
 - For future A/Bs, prefer fixed-height or frozen-remote runs to reduce drift in
   pre-rewrite byte comparisons.
+
+## 6) Template Lab Sweep (2026-03-27)
+
+Goal:
+
+- Evaluate template pre-transform opportunities with class-isolated corpora:
+  - pointer-backed value payloads
+  - outer-leaf page payloads
+- Compare baseline (`off`) vs template configs and `header_v1` outer-leaf pre-transform.
+
+Corpus extraction:
+
+```bash
+go run ./TreeDB/cmd/template_corpus_extract \
+  -app-dir /home/mikers/.celestia-app-mainnet-treedb-20260326232754/data/application.db \
+  -out-dir /tmp/template_corpus_run_20260327_120046 \
+  -pointer-limit 0 \
+  -outer-leaf-limit 50000 \
+  -pointer-stride 1 \
+  -outer-leaf-stride 1 \
+  -overwrite
+```
+
+Extracted corpus summary:
+
+- pointer records: `21401`
+- pointer bytes: `880,146,915`
+- outer-leaf records: `50000`
+- outer-leaf bytes: `204,800,000`
+
+Sweep commands:
+
+```bash
+go run ./TreeDB/cmd/template_lab \
+  -corpus-dir /tmp/template_corpus_run_20260327_120046 \
+  -dataset both \
+  -outer-leaf-pretransform off \
+  -disable-mask-templates true \
+  -warmup-passes 1 \
+  -measure-passes 1 \
+  -sweep-min-savings 1,4,8 \
+  -sweep-fingerprint-k 8 \
+  -sweep-max-fetch 8,16 \
+  -include-off=true \
+  -out-json /tmp/template_lab_run_off_20260327.json \
+  -out-md /tmp/template_lab_run_off_20260327.md
+
+go run ./TreeDB/cmd/template_lab \
+  -corpus-dir /tmp/template_corpus_run_20260327_120046 \
+  -dataset both \
+  -outer-leaf-pretransform header_v1 \
+  -disable-mask-templates true \
+  -warmup-passes 1 \
+  -measure-passes 1 \
+  -sweep-min-savings 1,4,8 \
+  -sweep-fingerprint-k 8 \
+  -sweep-max-fetch 8,16 \
+  -include-off=true \
+  -out-json /tmp/template_lab_run_header_v1_20260327.json \
+  -out-md /tmp/template_lab_run_header_v1_20260327.md
+```
+
+Results:
+
+- pointer corpus:
+  - template keeps: `20092 / 42802 attempted`
+  - encoded bytes: `876,711,183` vs raw `880,146,915`
+  - byte savings: `0.3904%`
+  - gzip sanity: `427,462,007` vs raw gzip `428,482,010`
+- outer-leaf corpus:
+  - template keeps: `0 / 100000 attempted` (all tested configs)
+  - encoded bytes: no change from raw
+  - `header_v1` pre-transform: no keep increase and no encoded-byte reduction
+
+Takeaways:
+
+- Current template path yields a small but measurable gain on pointer values.
+- Outer-leaf payloads currently do not admit profitable template frames under this prototype/config set.
+- `header_v1` pre-transform did not improve outer-leaf template effectiveness.
+- For reproducible lab runs we used `-disable-mask-templates=true` (anchor-only), while mask-template behavior remains a separate correctness/perf investigation thread.
+
+## 7) Mask Template Correctness Fix + Rerun (2026-03-27)
+
+Issue found:
+
+- Sparse mask encoding reused the input value slice and mutated it in place.
+- This caused deterministic decode-mismatch failures in the lab harness and could corrupt caller-owned buffers.
+
+Fix:
+
+- `TreeDB/template/match.go`: removed in-place sparse mask payload construction; sparse payload encoding is now non-mutating.
+- Added regression test:
+  - `TreeDB/template/engine_test.go::TestEncodeMaskTemplateSparse_DoesNotMutateInput`
+
+Validation:
+
+```bash
+go test ./TreeDB/template -count=1
+```
+
+Mask-enabled rerun commands:
+
+```bash
+go run ./TreeDB/cmd/template_lab \
+  -corpus-dir /tmp/template_corpus_run_20260327_120046 \
+  -dataset both \
+  -outer-leaf-pretransform off \
+  -disable-mask-templates=false \
+  -warmup-passes 1 \
+  -measure-passes 1 \
+  -sweep-min-savings 1,4,8 \
+  -sweep-fingerprint-k 8 \
+  -sweep-max-fetch 8,16 \
+  -include-off=true \
+  -out-json /tmp/template_lab_run_mask_on_off_20260327.json \
+  -out-md /tmp/template_lab_run_mask_on_off_20260327.md
+
+go run ./TreeDB/cmd/template_lab \
+  -corpus-dir /tmp/template_corpus_run_20260327_120046 \
+  -dataset both \
+  -outer-leaf-pretransform header_v1 \
+  -disable-mask-templates=false \
+  -warmup-passes 1 \
+  -measure-passes 1 \
+  -sweep-min-savings 1,4,8 \
+  -sweep-fingerprint-k 8 \
+  -sweep-max-fetch 8,16 \
+  -include-off=true \
+  -out-json /tmp/template_lab_run_mask_on_header_v1_20260327.json \
+  -out-md /tmp/template_lab_run_mask_on_header_v1_20260327.md
+```
+
+Results:
+
+- Pointer corpus (best row from mask-enabled off run):
+  - `tmpl_ms4_fk8_fetch16`
+  - encoded bytes: `132,634,951` vs raw `880,146,915`
+  - encoded savings: `84.93%`
+  - encoded gzip: `19,144,812` vs raw gzip `428,482,010`
+- Outer-leaf corpus:
+  - template keeps remained `0` across tested configs
+  - encoded and gzip bytes unchanged from raw
+- `header_v1` still did not improve outer-leaf keep rate in this pass.
+
+Takeaway:
+
+- Mask templates are now usable/correct in this harness and dramatically improve pointer-value compression on this corpus.
+- The outer-leaf side remains the active gap and still requires a different transform/routing strategy.
+
+## 8) Outer-Leaf Transform Follow-up (2026-03-27)
+
+Prototype:
+
+- Added `header_dir_delta_v1` in `template_lab`:
+  - carries `PageID+Checksum` as side bytes (same as `header_v1`)
+  - delta-encodes outer-leaf columnar-prefix directory metadata in-place (key dir, value dir, prefix dir)
+  - reverse path restores original bytes exactly (lossless round-trip tests added in `TreeDB/cmd/template_lab/main_test.go`)
+
+Focused run (20k outer-leaf pages):
+
+```bash
+go run ./TreeDB/cmd/template_lab \
+  -corpus-dir /tmp/template_corpus_run_20260327_120046 \
+  -dataset outer_leaf \
+  -max-records 20000 \
+  -outer-leaf-pretransform header_dir_delta_v1 \
+  -disable-mask-templates=false \
+  -warmup-passes 1 \
+  -measure-passes 1 \
+  -sweep-min-savings 1,4,8 \
+  -sweep-fingerprint-k 8 \
+  -sweep-max-fetch 8,16 \
+  -include-off=true \
+  -out-json /tmp/template_lab_outer_header_dir_delta_20k.json \
+  -out-md /tmp/template_lab_outer_header_dir_delta_20k.md
+```
+
+Aggressive follow-up (same corpus/run size):
+
+```bash
+go run ./TreeDB/cmd/template_lab \
+  -corpus-dir /tmp/template_corpus_run_20260327_120046 \
+  -dataset outer_leaf \
+  -max-records 20000 \
+  -outer-leaf-pretransform header_dir_delta_v1 \
+  -disable-mask-templates=false \
+  -warmup-passes 1 \
+  -measure-passes 1 \
+  -wait-after-warmup-ms 10000 \
+  -sweep-min-savings 1,4,8 \
+  -sweep-fingerprint-k 8 \
+  -sweep-max-fetch 8,16 \
+  -template-train-sample-stride 1 \
+  -template-synthesize-every 8 \
+  -template-min-anchor-freq 2 \
+  -template-min-presence-ratio 0.6 \
+  -template-min-publish-savings 1 \
+  -template-min-publish-ratio 0.7 \
+  -template-cold-search-after 1000000000 \
+  -template-cold-search-probe-every 1 \
+  -include-off=true \
+  -out-json /tmp/template_lab_outer_header_dir_delta_20k_aggr.json \
+  -out-md /tmp/template_lab_outer_header_dir_delta_20k_aggr.md
+```
+
+Observed (both baseline and aggressive):
+
+- outer-leaf keeps: `0` across all tested rows
+- encoded bytes: unchanged from raw
+- reason counters (aggressive): `tmpl_no_candidates=40000`, `templates_published=0`
+
+Conclusion:
+
+- Even with directory normalization and permissive training/cold-search settings, this corpus did not synthesize usable outer-leaf templates.
+- Next optimization effort should prioritize non-template paths for outer-leaf pages (block/dict strategy and/or outer-leaf-specific codec work), while retaining template focus primarily for pointer-value payloads.

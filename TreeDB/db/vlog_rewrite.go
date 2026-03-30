@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -24,6 +26,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/pager"
+	"github.com/snissn/gomap/TreeDB/template"
 	"github.com/snissn/gomap/TreeDB/tree"
 )
 
@@ -71,6 +74,23 @@ type ValueLogRewriteStats struct {
 	// SourceSegmentsUnreferenced is the subset of selected source segments that
 	// became unreferenced after rewrite pointer swaps and cleanup.
 	SourceSegmentsUnreferenced int
+
+	TemplateRecordsAttempted int
+	TemplateRecordsKept      int
+	TemplateInputBytes       int64
+	TemplateOutputBytes      int64
+
+	TemplatePointerRecordsAttempted int
+	TemplatePointerRecordsKept      int
+	TemplatePointerInputBytes       int64
+	TemplatePointerOutputBytes      int64
+	TemplatePointerReasons          map[string]uint64
+
+	TemplateOuterLeafRecordsAttempted int
+	TemplateOuterLeafRecordsKept      int
+	TemplateOuterLeafInputBytes       int64
+	TemplateOuterLeafOutputBytes      int64
+	TemplateOuterLeafReasons          map[string]uint64
 }
 
 // ValueLogRewritePlan summarizes which segments a sparse online rewrite would
@@ -2375,6 +2395,7 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 	// Offline rewrite prioritizes final bytes on disk over encode CPU, so keep
 	// compressed output whenever it reduces stored bytes.
 	writer.SetKeepPolicy(0, 0, 0)
+	writer.SetTemplateCompression(opts.ValueLog.TemplateMode, opts.ValueLog.TemplateConfig, opts.ValueLog.TemplateStore)
 	compressionMode := opts.ValueLog.Compression
 	if compressionMode == 0 {
 		compressionMode = ValueLogCompressionAuto
@@ -2459,6 +2480,20 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 			return 0, err
 		}
 		stats.RecordsCopied = writer.records
+		stats.TemplateRecordsAttempted = writer.templateAttempts
+		stats.TemplateRecordsKept = writer.templateKept
+		stats.TemplateInputBytes = writer.templateInBytes
+		stats.TemplateOutputBytes = writer.templateOutBytes
+		stats.TemplatePointerRecordsAttempted = writer.templatePointerAttempts
+		stats.TemplatePointerRecordsKept = writer.templatePointerKept
+		stats.TemplatePointerInputBytes = writer.templatePointerInBytes
+		stats.TemplatePointerOutputBytes = writer.templatePointerOutBytes
+		stats.TemplatePointerReasons = copyTemplateReasonMap(writer.templateClassReasonCounts(rewriteTemplateClassPointerValue))
+		stats.TemplateOuterLeafRecordsAttempted = writer.templateOuterLeafAttempts
+		stats.TemplateOuterLeafRecordsKept = writer.templateOuterLeafKept
+		stats.TemplateOuterLeafInputBytes = writer.templateOuterLeafInBytes
+		stats.TemplateOuterLeafOutputBytes = writer.templateOuterLeafOutBytes
+		stats.TemplateOuterLeafReasons = copyTemplateReasonMap(writer.templateClassReasonCounts(rewriteTemplateClassOuterLeaf))
 		return newRoot, nil
 	}
 
@@ -2572,15 +2607,34 @@ type rewriteWriter struct {
 	// blockCompression enables per-frame block compression for dictID=0 append
 	// paths (used by online rewrite). Offline rewrites use AppendRawRecord and do
 	// not consult this setting.
-	blockCompression bool
-	blockCodec       valuelog.BlockCodec
-	keepIoNsPerByte  float64
-	keepEncodeNsRaw  float64
-	keepSafetyMargin float64
-	leafDictID       uint64
-	leafDict         []byte
-	w                *valuelog.Writer
-	records          int
+	blockCompression        bool
+	blockCodec              valuelog.BlockCodec
+	keepIoNsPerByte         float64
+	keepEncodeNsRaw         float64
+	keepSafetyMargin        float64
+	leafDictID              uint64
+	leafDict                []byte
+	templateMode            template.Mode
+	templateEngineValue     *template.Engine
+	templateEngineOuterLeaf *template.Engine
+	templateStore           template.Store
+	templateCfg             template.Config
+	templateAttempts        int
+	templateKept            int
+	templateInBytes         int64
+	templateOutBytes        int64
+
+	templatePointerAttempts int
+	templatePointerKept     int
+	templatePointerInBytes  int64
+	templatePointerOutBytes int64
+
+	templateOuterLeafAttempts int
+	templateOuterLeafKept     int
+	templateOuterLeafInBytes  int64
+	templateOuterLeafOutBytes int64
+	w                         *valuelog.Writer
+	records                   int
 
 	pendingDictID      uint64
 	pendingDict        []byte
@@ -2590,6 +2644,13 @@ type rewriteWriter struct {
 	pendingDictPtrs    []page.ValuePtr
 	pendingDictDst     []page.ValuePtr
 }
+
+type rewriteTemplateClass uint8
+
+const (
+	rewriteTemplateClassPointerValue rewriteTemplateClass = iota
+	rewriteTemplateClassOuterLeaf
+)
 
 func newRewriteWriter(walDir string, lane, startSeq uint32, maxSize int64) *rewriteWriter {
 	return &rewriteWriter{walDir: walDir, lane: lane, seq: startSeq, start: startSeq, maxSize: maxSize}
@@ -2698,7 +2759,7 @@ func (w *rewriteWriter) AppendLeafPage(leafPage []byte) (page.ValuePtr, error) {
 		// LeafRef IDs intentionally omit grouped sub-index bits and therefore
 		// require K=1 frames. Use single-record append so decoded LeafRef pointers
 		// remain stable and do not alias another subrecord in a grouped batch.
-		ptr, err := w.appendSingleValueWithDict(w.leafDictID, w.leafDict, rid, leafPage)
+		ptr, err := w.appendSingleValueWithDictClass(rewriteTemplateClassOuterLeaf, w.leafDictID, w.leafDict, rid, leafPage)
 		if err == nil {
 			return ptr, nil
 		}
@@ -2706,7 +2767,7 @@ func (w *rewriteWriter) AppendLeafPage(leafPage []byte) (page.ValuePtr, error) {
 			return page.ValuePtr{}, err
 		}
 	}
-	return w.appendValue(rid, leafPage)
+	return w.appendValueWithDictClass(rewriteTemplateClassOuterLeaf, 0, nil, rid, leafPage)
 }
 
 // CurrentValueLogSegment reports the writer's current segment identity.
@@ -2786,6 +2847,153 @@ func (w *rewriteWriter) SetLeafDict(dictID uint64, dict []byte) {
 	w.leafDict = append(w.leafDict[:0], dict...)
 }
 
+func (w *rewriteWriter) SetTemplateCompression(mode template.Mode, cfg template.Config, store template.Store) {
+	if w == nil {
+		return
+	}
+	w.closeTemplateCompression()
+	w.templateMode = mode
+	w.templateStore = store
+	w.templateCfg = template.NormalizeConfig(cfg)
+	if mode == template.TemplateOff || store == nil {
+		return
+	}
+	w.templateEngineValue = template.NewEngine(w.templateCfg)
+	w.templateEngineOuterLeaf = template.NewEngine(w.templateCfg)
+}
+
+func (w *rewriteWriter) closeTemplateCompression() {
+	if w == nil {
+		return
+	}
+	if w.templateEngineValue != nil {
+		w.templateEngineValue.Close()
+		w.templateEngineValue = nil
+	}
+	if w.templateEngineOuterLeaf != nil {
+		w.templateEngineOuterLeaf.Close()
+		w.templateEngineOuterLeaf = nil
+	}
+}
+
+func (w *rewriteWriter) templateEngineForClass(class rewriteTemplateClass) *template.Engine {
+	if w == nil {
+		return nil
+	}
+	switch class {
+	case rewriteTemplateClassOuterLeaf:
+		return w.templateEngineOuterLeaf
+	default:
+		return w.templateEngineValue
+	}
+}
+
+func (w *rewriteWriter) applyTemplateCompression(class rewriteTemplateClass, dictID uint64, dict []byte, value []byte) (uint64, []byte, []byte) {
+	if w == nil {
+		return dictID, dict, value
+	}
+	originalLen := len(value)
+	engine := w.templateEngineForClass(class)
+	switch w.templateMode {
+	case template.TemplateOnly:
+		if engine == nil || w.templateStore == nil {
+			return dictID, dict, value
+		}
+		dictID = 0
+		dict = nil
+	case template.TemplatePrepass:
+		if engine == nil || w.templateStore == nil {
+			return dictID, dict, value
+		}
+		// Keep dict path active and template-encode first.
+	case template.TemplateOff:
+		return dictID, dict, value
+	default:
+		return dictID, dict, value
+	}
+	w.templateAttempts++
+	w.templateInBytes += int64(originalLen)
+	switch class {
+	case rewriteTemplateClassOuterLeaf:
+		w.templateOuterLeafAttempts++
+		w.templateOuterLeafInBytes += int64(originalLen)
+	default:
+		w.templatePointerAttempts++
+		w.templatePointerInBytes += int64(originalLen)
+	}
+	if payload, ok := engine.Encode(nil, value, w.templateStore); ok && len(payload) > 0 {
+		value = payload
+		w.templateKept++
+		switch class {
+		case rewriteTemplateClassOuterLeaf:
+			w.templateOuterLeafKept++
+		default:
+			w.templatePointerKept++
+		}
+	}
+	switch class {
+	case rewriteTemplateClassOuterLeaf:
+		w.templateOuterLeafOutBytes += int64(len(value))
+	default:
+		w.templatePointerOutBytes += int64(len(value))
+	}
+	w.templateOutBytes += int64(len(value))
+	return dictID, dict, value
+}
+
+func parseTemplateReasonSnapshot(snapshot map[string]string) map[string]uint64 {
+	if len(snapshot) == 0 {
+		return nil
+	}
+	out := make(map[string]uint64)
+	for key, value := range snapshot {
+		if !strings.HasPrefix(key, "reason.") {
+			continue
+		}
+		reason := strings.TrimPrefix(key, "reason.")
+		if reason == "" {
+			continue
+		}
+		n, err := strconv.ParseUint(value, 10, 64)
+		if err != nil || n == 0 {
+			continue
+		}
+		out[reason] = n
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func copyTemplateReasonMap(in map[string]uint64) map[string]uint64 {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]uint64, len(in))
+	for k, v := range in {
+		if v == 0 {
+			continue
+		}
+		out[k] = v
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func (w *rewriteWriter) templateClassReasonCounts(class rewriteTemplateClass) map[string]uint64 {
+	if w == nil {
+		return nil
+	}
+	engine := w.templateEngineForClass(class)
+	if engine == nil {
+		return nil
+	}
+	return parseTemplateReasonSnapshot(engine.StatsSnapshot())
+}
+
 func (w *rewriteWriter) appendRaw(raw []byte, length uint32) (page.ValuePtr, error) {
 	if err := w.ensureWriter(); err != nil {
 		return page.ValuePtr{}, err
@@ -2807,13 +3015,18 @@ func (w *rewriteWriter) appendRaw(raw []byte, length uint32) (page.ValuePtr, err
 }
 
 func (w *rewriteWriter) appendValue(rid uint64, value []byte) (page.ValuePtr, error) {
-	return w.appendValueWithDict(0, nil, rid, value)
+	return w.appendValueWithDictClass(rewriteTemplateClassPointerValue, 0, nil, rid, value)
 }
 
 func (w *rewriteWriter) appendSingleValueWithDict(dictID uint64, dict []byte, rid uint64, value []byte) (page.ValuePtr, error) {
+	return w.appendSingleValueWithDictClass(rewriteTemplateClassPointerValue, dictID, dict, rid, value)
+}
+
+func (w *rewriteWriter) appendSingleValueWithDictClass(class rewriteTemplateClass, dictID uint64, dict []byte, rid uint64, value []byte) (page.ValuePtr, error) {
 	if err := w.ensureWriter(); err != nil {
 		return page.ValuePtr{}, err
 	}
+	dictID, dict, value = w.applyTemplateCompression(class, dictID, dict, value)
 	if err := w.flushPendingDictBatch(); err != nil {
 		return page.ValuePtr{}, err
 	}
@@ -2829,9 +3042,14 @@ func (w *rewriteWriter) appendSingleValueWithDict(dictID uint64, dict []byte, ri
 }
 
 func (w *rewriteWriter) appendValueWithDict(dictID uint64, dict []byte, rid uint64, value []byte) (page.ValuePtr, error) {
+	return w.appendValueWithDictClass(rewriteTemplateClassPointerValue, dictID, dict, rid, value)
+}
+
+func (w *rewriteWriter) appendValueWithDictClass(class rewriteTemplateClass, dictID uint64, dict []byte, rid uint64, value []byte) (page.ValuePtr, error) {
 	if err := w.ensureWriter(); err != nil {
 		return page.ValuePtr{}, err
 	}
+	dictID, dict, value = w.applyTemplateCompression(class, dictID, dict, value)
 	if dictID == 0 || len(dict) == 0 {
 		if err := w.flushPendingDictBatch(); err != nil {
 			return page.ValuePtr{}, err
@@ -2948,6 +3166,7 @@ func (w *rewriteWriter) Close() error {
 	if w == nil {
 		return nil
 	}
+	defer w.closeTemplateCompression()
 	if err := w.flushPendingDictBatch(); err != nil {
 		return err
 	}

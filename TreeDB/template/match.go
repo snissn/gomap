@@ -255,35 +255,6 @@ func encodeMaskTemplate(value []byte, def TemplateDef, templateID uint64, useSpa
 			}
 		}
 		payloadLen := payloadHeader + uvarintLen(templateID) + varCount
-		reuse := cap(value) >= payloadLen
-		if reuse {
-			out := value[:payloadLen]
-			scratchStart := len(value) - varCount
-			if len(def.VarPositions) > 0 {
-				for i := varCount - 1; i >= 0; i-- {
-					pos := def.VarPositions[i]
-					outIdx := scratchStart + i
-					value[outIdx] = value[pos]
-				}
-			} else {
-				idx := varCount - 1
-				for i := len(value) - 1; i >= 0; i-- {
-					if varMask[i/8]&(1<<uint(i%8)) == 0 {
-						continue
-					}
-					value[scratchStart+idx] = value[i]
-					idx--
-				}
-			}
-			out[0] = magic0
-			out[1] = magic1
-			out[2] = payloadVer
-			out[3] = flagEncoded | flagMask
-			off := payloadHeader
-			off += binary.PutUvarint(out[off:], templateID)
-			copy(out[off:], value[scratchStart:scratchStart+varCount])
-			return out
-		}
 		out := make([]byte, payloadLen)
 		out[0] = magic0
 		out[1] = magic1

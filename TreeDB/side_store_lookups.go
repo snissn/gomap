@@ -129,7 +129,8 @@ func wireSideStoreLookups(rootDir string, opts *Options) (func() error, error) {
 			}
 			templateOpts := *opts
 			templateOpts.Dir = templateDir
-			templateOpts.ReadOnly = true
+			templateReadOnly := opts.ReadOnly || opts.ValueLog.TemplateMode == template.TemplateOff
+			templateOpts.ReadOnly = templateReadOnly
 			templateOpts.ChunkSize = templateChunk
 			templateOpts.DisableBackgroundPrune = true
 			templateOpts.IgnoreFormatConfig = false
@@ -147,6 +148,9 @@ func wireSideStoreLookups(rootDir string, opts *Options) (func() error, error) {
 			}
 			closers = append(closers, templateBackend.Close)
 			store := templatedb.New(templateBackendKV{db: templateBackend}, templatedb.Config{})
+			if !templateReadOnly && opts.ValueLog.TemplateMode != template.TemplateOff && opts.ValueLog.TemplateStore == nil {
+				opts.ValueLog.TemplateStore = store
+			}
 
 			if opts.ValueLog.TemplateDecodeOptions == (template.DecodeOptions{}) {
 				tcfg := template.NormalizeConfig(opts.ValueLog.TemplateConfig)
