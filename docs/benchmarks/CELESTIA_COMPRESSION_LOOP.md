@@ -90,6 +90,33 @@ Goal:
 - remove avoidable implementation overhead (copying/alloc/lock contention)
 - preserve size gains while pulling time back inside budget
 
+## Incremental Rewrite Lab Gate (Post-864)
+
+When testing incremental rewrite/scheduler changes, require this order:
+1. microbench gate
+2. optional pprof efficiency pass (if microbench regresses)
+3. then `run_celestia` A/B
+
+Required microbench gate command:
+
+```bash
+./scripts/rewrite_micro_gate.sh
+```
+
+Gate policy:
+- Baseline and candidate must both report:
+  - `BenchmarkValueLogRewriteOnline_LeafRefs`
+  - `BenchmarkValueLogRewriteOnline_LeafRefs_ReserveRIDs`
+- Promote to `run_celestia` only when:
+  - allocs/op is non-regressing (or improved), and
+  - ns/op regression is either absent or explained by a concrete, fixable implementation issue.
+
+For full `run_celestia` proof runs, set `TREEMAP_BIN` explicitly so rewrite is never silently skipped:
+
+```bash
+TREEMAP_BIN=/home/mikers/dev/snissn/celestia-app-p4/build/treemap-local
+```
+
 ## Stage 3: Full `run_celestia` A/B Confirmation
 
 Only promote candidates that pass Stage 1 and Stage 2.
