@@ -3292,7 +3292,21 @@ func TestVlogGenerationRewritePlan_StageConfirmationExecutesConfirmedSubset(t *t
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	rewriteOpts, rewriteCalls := recorder.recordedRewrite()
+	rewriteDeadline := time.Now().Add(2 * schedulerTestWait(t))
+	var (
+		rewriteOpts  backenddb.ValueLogRewriteOnlineOptions
+		rewriteCalls int
+	)
+	for {
+		rewriteOpts, rewriteCalls = recorder.recordedRewrite()
+		if rewriteCalls >= 1 {
+			break
+		}
+		if time.Now().After(rewriteDeadline) {
+			t.Fatalf("rewrite calls after staged confirmation=%d want=1", rewriteCalls)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	if rewriteCalls != 1 {
 		t.Fatalf("rewrite calls after staged confirmation=%d want=1", rewriteCalls)
 	}
@@ -3431,7 +3445,21 @@ func TestVlogGenerationRewritePlan_StageConfirmationReplansEvenWhenOtherTriggers
 	if planCalls != 1 {
 		t.Fatalf("plan calls after staged confirmation=%d want 1", planCalls)
 	}
-	rewriteOpts, rewriteCalls := recorder.recordedRewrite()
+	rewriteDeadline := time.Now().Add(2 * schedulerTestWait(t))
+	var (
+		rewriteOpts  backenddb.ValueLogRewriteOnlineOptions
+		rewriteCalls int
+	)
+	for {
+		rewriteOpts, rewriteCalls = recorder.recordedRewrite()
+		if rewriteCalls >= 1 {
+			break
+		}
+		if time.Now().After(rewriteDeadline) {
+			t.Fatalf("rewrite calls after staged confirmation=%d want 1", rewriteCalls)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	if rewriteCalls != 1 {
 		t.Fatalf("rewrite calls after staged confirmation=%d want 1", rewriteCalls)
 	}
