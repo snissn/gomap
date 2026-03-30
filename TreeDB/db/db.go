@@ -114,6 +114,17 @@ type DB struct {
 
 	state atomic.Pointer[DBState]
 
+	// readRetryRefresh* deduplicates read-triggered value-log refreshes
+	// (ErrFileNotFound retry path) so concurrent readers share one refresh scan.
+	readRetryRefreshMu            sync.Mutex
+	readRetryRefreshInFlight      bool
+	readRetryRefreshDone          chan struct{}
+	readRetryRefreshErr           error
+	readRetryRefreshLastSuccess   time.Time
+	readRetryRefreshLeaderCount   atomic.Uint64
+	readRetryRefreshFollowerCount atomic.Uint64
+	readRetryRefreshSkippedRecent atomic.Uint64
+
 	notifyError func(error)
 	bgErrMu     sync.Mutex
 	bgErr       error

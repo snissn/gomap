@@ -6,6 +6,7 @@ import (
 	"runtime"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
@@ -19,6 +20,7 @@ const (
 	getManyParallelMinKeys          = 128
 	getManyParallelMinKeysPerWorker = 32
 	getManyParallelMaxWorkers       = 8
+	readRetryRefreshRecentWindow    = 250 * time.Millisecond
 )
 
 var getManyEmptyValue = []byte{}
@@ -94,6 +96,63 @@ func (db *DB) refreshOnValueLogFileNotFound(err error) bool {
 	return errors.Is(err, valuelog.ErrFileNotFound)
 }
 
+func (db *DB) refreshValueLogSetForReadRetry() error {
+	if db == nil {
+		return ErrClosed
+	}
+	for {
+		db.readRetryRefreshMu.Lock()
+		if !db.readRetryRefreshInFlight {
+			if db.readRetryRefreshErr == nil && !db.readRetryRefreshLastSuccess.IsZero() && time.Since(db.readRetryRefreshLastSuccess) <= readRetryRefreshRecentWindow {
+				db.readRetryRefreshSkippedRecent.Add(1)
+				db.readRetryRefreshMu.Unlock()
+				return nil
+			}
+			done := make(chan struct{})
+			db.readRetryRefreshInFlight = true
+			db.readRetryRefreshDone = done
+			db.readRetryRefreshErr = nil
+			db.readRetryRefreshLeaderCount.Add(1)
+			db.readRetryRefreshMu.Unlock()
+
+			err := db.RefreshValueLogSet()
+
+			db.readRetryRefreshMu.Lock()
+			db.readRetryRefreshErr = err
+			if err == nil {
+				db.readRetryRefreshLastSuccess = time.Now()
+			}
+			db.readRetryRefreshInFlight = false
+			db.readRetryRefreshDone = nil
+			close(done)
+			db.readRetryRefreshMu.Unlock()
+			return err
+		}
+		done := db.readRetryRefreshDone
+		db.readRetryRefreshFollowerCount.Add(1)
+		db.readRetryRefreshMu.Unlock()
+
+		if done == nil {
+			runtime.Gosched()
+			continue
+		}
+
+		for {
+			select {
+			case <-done:
+				db.readRetryRefreshMu.Lock()
+				err := db.readRetryRefreshErr
+				db.readRetryRefreshMu.Unlock()
+				return err
+			case <-time.After(25 * time.Millisecond):
+				if db.closing.Load() {
+					return ErrClosed
+				}
+			}
+		}
+	}
+}
+
 // Get returns the value for a key.
 //
 // Semantics: Returns a safe copy of the value.
@@ -109,7 +168,7 @@ func (db *DB) Get(key []byte) ([]byte, error) {
 
 	val, err := readOnce()
 	if db.refreshOnValueLogFileNotFound(err) {
-		if refreshErr := db.RefreshValueLogSet(); refreshErr != nil {
+		if refreshErr := db.refreshValueLogSetForReadRetry(); refreshErr != nil {
 			return nil, refreshErr
 		}
 		val, err = readOnce()
@@ -127,7 +186,7 @@ func (db *DB) Get(key []byte) ([]byte, error) {
 func (db *DB) GetMany(keys [][]byte) ([][]byte, error) {
 	out, err := db.getManyOnce(keys)
 	if db.refreshOnValueLogFileNotFound(err) {
-		if refreshErr := db.RefreshValueLogSet(); refreshErr != nil {
+		if refreshErr := db.refreshValueLogSetForReadRetry(); refreshErr != nil {
 			return nil, refreshErr
 		}
 		return db.getManyOnce(keys)
@@ -260,7 +319,7 @@ func (db *DB) GetAppend(key, dst []byte) ([]byte, error) {
 
 	val, err := readOnce(dst)
 	if db.refreshOnValueLogFileNotFound(err) {
-		if refreshErr := db.RefreshValueLogSet(); refreshErr != nil {
+		if refreshErr := db.refreshValueLogSetForReadRetry(); refreshErr != nil {
 			return dst, refreshErr
 		}
 		val, err = readOnce(dst)
@@ -556,6 +615,10 @@ func (db *DB) Stats() map[string]string {
 		if total := gHits + gMisses; total > 0 {
 			stats["treedb.vlog.grouped_frame_cache.hit_ratio"] = fmt.Sprintf("%.6f", float64(gHits)/float64(total))
 		}
+
+		stats["treedb.vlog.read_retry_refresh.leader_calls"] = fmt.Sprintf("%d", db.readRetryRefreshLeaderCount.Load())
+		stats["treedb.vlog.read_retry_refresh.follower_calls"] = fmt.Sprintf("%d", db.readRetryRefreshFollowerCount.Load())
+		stats["treedb.vlog.read_retry_refresh.skipped_recent_calls"] = fmt.Sprintf("%d", db.readRetryRefreshSkippedRecent.Load())
 
 		hits, misses, entries, capacity := db.valueLogManager.TemplateDefCacheStats()
 		stats["treedb.vlog.template_def_cache.hits"] = fmt.Sprintf("%d", hits)

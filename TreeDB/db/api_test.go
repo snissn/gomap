@@ -679,3 +679,97 @@ func TestGetMany_RetriesAfterRefreshingStaleValueLogSet(t *testing.T) {
 		}
 	}
 }
+
+func TestGet_ConcurrentStaleReadRetry_DedupesRefresh(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	key := []byte("k-retry-concurrent")
+	want := bytes.Repeat([]byte("x"), 320)
+	fileID, err := valuelog.EncodeFileID(0, 1)
+	if err != nil {
+		t.Fatalf("EncodeFileID: %v", err)
+	}
+	walDir := filepath.Join(dir, "wal")
+	if err := os.MkdirAll(walDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(wal): %v", err)
+	}
+	w, err := valuelog.NewWriter(filepath.Join(walDir, "value-l0-000001.log"), fileID)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	ptr, err := w.Append(0, nil, 1, want)
+	if err != nil {
+		_ = w.Close()
+		t.Fatalf("Append: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close writer: %v", err)
+	}
+
+	b := db.NewBatch().(*Batch)
+	if err := b.SetPointer(key, ptr); err != nil {
+		_ = b.Close()
+		t.Fatalf("SetPointer: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		_ = b.Close()
+		t.Fatalf("Write: %v", err)
+	}
+	_ = b.Close()
+
+	// Baseline read before forcing stale publication.
+	if got, err := db.Get(key); err != nil || !bytes.Equal(got, want) {
+		t.Fatalf("initial Get: err=%v match=%v", err, bytes.Equal(got, want))
+	}
+
+	forceStalePublishedValueLogSetForReadRetryTest(t, db)
+	beforeScans := db.valueLogManager.RefreshScanCount()
+
+	const workers = 48
+	start := make(chan struct{})
+	errCh := make(chan error, workers)
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			got, err := db.Get(key)
+			if err != nil {
+				errCh <- err
+				return
+			}
+			if !bytes.Equal(got, want) {
+				errCh <- fmt.Errorf("value mismatch after concurrent retry")
+				return
+			}
+			errCh <- nil
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		if err != nil {
+			t.Fatalf("concurrent Get: %v", err)
+		}
+	}
+
+	afterScans := db.valueLogManager.RefreshScanCount()
+	if delta := afterScans - beforeScans; delta != 1 {
+		t.Fatalf("expected one refresh scan for concurrent stale retries: before=%d after=%d delta=%d leaders=%d followers=%d skipped_recent=%d",
+			beforeScans, afterScans, delta,
+			db.readRetryRefreshLeaderCount.Load(),
+			db.readRetryRefreshFollowerCount.Load(),
+			db.readRetryRefreshSkippedRecent.Load(),
+		)
+	}
+	if leaders := db.readRetryRefreshLeaderCount.Load(); leaders != 1 {
+		t.Fatalf("expected one read-retry refresh leader call, got %d", leaders)
+	}
+}
