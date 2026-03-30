@@ -350,7 +350,7 @@ func TestValueLogDictClassRangesForRecords_SplitOuterLeaf(t *testing.T) {
 		indexOuterLeavesInValueLog: true,
 		valueLogDictClassMode:      uint8(vlogDictClassModeSplitOuterLeaf),
 	}
-	outerLeafPage := make([]byte, 4096)
+	outerLeafPage := markOuterLeafMagic(make([]byte, 4096))
 	singleValue := []byte("single-value")
 	records := []valuelog.Record{
 		{RID: 1, Value: outerLeafPage},
@@ -380,7 +380,7 @@ func TestValueLogDictClassRangesForRecords_SingleMode(t *testing.T) {
 		indexOuterLeavesInValueLog: true,
 		valueLogDictClassMode:      uint8(vlogDictClassModeSingle),
 	}
-	outerLeafPage := make([]byte, 4096)
+	outerLeafPage := markOuterLeafMagic(make([]byte, 4096))
 	singleValue := []byte("single-value")
 	records := []valuelog.Record{
 		{RID: 1, Value: outerLeafPage},
