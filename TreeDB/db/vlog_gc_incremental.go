@@ -570,17 +570,33 @@ func (db *DB) buildValueLogRefDelta(p *pager.Pager, rootID uint64, baseSeq uint6
 	if db == nil || db.valueLogRefTracker == nil || !db.valueLogRefTracker.canTrack(baseSeq) {
 		return nil, nil
 	}
-	if db.indexOuterLeavesInValueLog {
-		return nil, nil
-	}
 	delta := newValueLogRefDelta()
 	if p == nil {
 		return delta, nil
 	}
-	tr := tree.New(p, nil, rootID)
+	var vlogSet *valuelog.Set
+	if db.indexOuterLeavesInValueLog {
+		if state := db.state.Load(); state != nil {
+			vlogSet = state.ValueLogSet
+		}
+		if vlogSet == nil || db.valueLogManager == nil {
+			// Keep outer-leaf writes functional even if the value-log reader
+			// context is unavailable; fallback to full-scan tracker rebuild.
+			return nil, nil
+		}
+		db.valueLogManager.Acquire(vlogSet)
+		defer func() { _ = db.valueLogManager.Release(vlogSet) }()
+	}
+	tr := tree.New(p, newValueReader(vlogSet), rootID)
 	for i := range entries {
 		oldFileID, oldRef, err := lookupValueLogRefAtKey(tr, entries[i].Key)
 		if err != nil {
+			if errors.Is(err, valuelog.ErrFileNotFound) {
+				// Value-log set visibility can lag briefly behind outer-leaf
+				// writes. Fall back to full-scan tracker rebuild for this commit
+				// instead of failing foreground writes.
+				return nil, nil
+			}
 			return nil, err
 		}
 		if oldRef {

@@ -2110,6 +2110,12 @@ func TestValueLogRewriteOnline_LeafRefsReserveRIDs_DoesNotRefreshManager(t *test
 	db, sourceIDs, cleanup := setupLeafRefRewriteBench(t, 768)
 	defer cleanup()
 
+	seqBefore := db.currentCommitSeq()
+	_, ok := db.valueLogRefTracker.referencedSet(seqBefore)
+	if !ok {
+		t.Fatalf("expected incremental ref set before rewrite seq=%d", seqBefore)
+	}
+
 	refreshBefore := db.valueLogManager.RefreshScanCount()
 	nextRID := uint64(1 << 40)
 	stats, err := db.ValueLogRewriteOnline(context.Background(), ValueLogRewriteOnlineOptions{
@@ -2132,6 +2138,26 @@ func TestValueLogRewriteOnline_LeafRefsReserveRIDs_DoesNotRefreshManager(t *test
 	}
 	if delta := db.valueLogManager.RefreshScanCount() - refreshBefore; delta != 0 {
 		t.Fatalf("expected reserve leafref rewrite to avoid manager refresh scans, got %d", delta)
+	}
+	seqAfter := db.currentCommitSeq()
+	_, ok = db.valueLogRefTracker.referencedSet(seqAfter)
+	if !ok {
+		t.Fatalf("expected incremental ref set after rewrite seq=%d", seqAfter)
+	}
+	fullCounts, fullSeq, err := db.scanValueLogRefCounts(context.Background())
+	if err != nil {
+		t.Fatalf("scanValueLogRefCounts: %v", err)
+	}
+	if fullSeq != seqAfter {
+		t.Fatalf("scan seq mismatch: got=%d want=%d", fullSeq, seqAfter)
+	}
+	fullRefs := valueLogRefSetFromCounts(fullCounts)
+	mergedRefs, err := db.referencedValueLogSegments(context.Background())
+	if err != nil {
+		t.Fatalf("referencedValueLogSegments: %v", err)
+	}
+	if !reflect.DeepEqual(mergedRefs, fullRefs) {
+		t.Fatalf("merged/full-scan mismatch after rewrite: merged=%d full=%d", len(mergedRefs), len(fullRefs))
 	}
 }
 
