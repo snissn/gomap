@@ -52,6 +52,13 @@ type valueLogRefDelta struct {
 }
 
 const valueLogRefDeltaPromotedMapInitCap = 128
+const valueLogRefDeltaPoolMaxRetainedEntries = 512
+
+var valueLogRefDeltaPool = sync.Pool{
+	New: func() any {
+		return &valueLogRefDelta{}
+	},
+}
 
 type valueLogRefDeltaEntry struct {
 	fileID uint32
@@ -59,7 +66,38 @@ type valueLogRefDeltaEntry struct {
 }
 
 func newValueLogRefDelta() *valueLogRefDelta {
-	return &valueLogRefDelta{}
+	d, _ := valueLogRefDeltaPool.Get().(*valueLogRefDelta)
+	if d == nil {
+		return &valueLogRefDelta{}
+	}
+	return d
+}
+
+func releaseValueLogRefDelta(d *valueLogRefDelta) {
+	if d == nil {
+		return
+	}
+	d.resetForReuse()
+	valueLogRefDeltaPool.Put(d)
+}
+
+func (d *valueLogRefDelta) resetForReuse() {
+	if d == nil {
+		return
+	}
+	if d.inlineN > 0 {
+		clear(d.inline[:d.inlineN])
+		d.inlineN = 0
+	}
+	if d.changes == nil {
+		return
+	}
+	// Keep small/typical maps warm for reuse; drop unusually large maps.
+	if len(d.changes) > valueLogRefDeltaPoolMaxRetainedEntries {
+		d.changes = nil
+		return
+	}
+	clear(d.changes)
 }
 
 func (d *valueLogRefDelta) add(fileID uint32, delta int64) {

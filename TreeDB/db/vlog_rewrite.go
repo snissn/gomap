@@ -2241,6 +2241,11 @@ func (db *DB) applyRewriteSwapBatchOptimistic(swaps []rewriteSwap, sync bool) (b
 	if trackValueLogRefDelta {
 		vlogRefDelta = rewriteDelta
 	}
+	defer func() {
+		if vlogRefDelta != nil {
+			releaseValueLogRefDelta(vlogRefDelta)
+		}
+	}()
 
 	db.commitMu.Lock()
 	db.mu.RLock()
@@ -2261,6 +2266,7 @@ func (db *DB) applyRewriteSwapBatchOptimistic(swaps []rewriteSwap, sync bool) (b
 	if err != nil {
 		return false, err
 	}
+	vlogRefDelta = nil
 	db.finalizeCommitPostWork(post)
 	if db.vacuum.Active() {
 		db.vacuum.RecordEntries(entries)
@@ -2320,9 +2326,15 @@ func (db *DB) applyRewriteSwapBatchSerialized(swaps []rewriteSwap, sync bool) er
 	if trackValueLogRefDelta {
 		vlogRefDelta = rewriteDelta
 	}
+	defer func() {
+		if vlogRefDelta != nil {
+			releaseValueLogRefDelta(vlogRefDelta)
+		}
+	}()
 	if err := db.finalizeCommit(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, db.indexOuterLeavesInValueLog, vlogRefDelta); err != nil {
 		return err
 	}
+	vlogRefDelta = nil
 	if db.vacuum.Active() {
 		db.vacuum.RecordEntries(entries)
 	}
@@ -2377,6 +2389,7 @@ func collectRewriteSwapPointerMatches(tr *tree.Tree, b *batch.Batch, swaps []rew
 		}
 	}
 	if err := it.Error(); err != nil {
+		releaseValueLogRefDelta(delta)
 		return nil, err
 	}
 	return delta, nil

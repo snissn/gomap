@@ -1660,6 +1660,9 @@ func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired [
 func (db *DB) finalizeCommitPostWork(post finalizeCommitPost) {
 	var durPrune time.Duration
 
+	if post.vlogRefDelta != nil {
+		defer releaseValueLogRefDelta(post.vlogRefDelta)
+	}
 	if db.valueLogRefTracker != nil {
 		if post.vlogRefDelta != nil {
 			if err := db.valueLogRefTracker.applyDelta(post.commitSeq, post.vlogRefDelta); err != nil {

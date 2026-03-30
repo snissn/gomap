@@ -456,6 +456,9 @@ func BenchmarkCollectRewriteSwapPointerMatches_DeltaTracking(b *testing.B) {
 			if !trackDelta && delta != nil {
 				b.Fatalf("expected nil delta when tracking disabled")
 			}
+			if trackDelta {
+				releaseValueLogRefDelta(delta)
+			}
 		}
 	}
 
