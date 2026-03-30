@@ -46,7 +46,7 @@ const (
 )
 
 type valueLogRefDelta struct {
-	inline  [4]valueLogRefDeltaEntry
+	inline  [16]valueLogRefDeltaEntry
 	inlineN int
 	changes map[uint32]int64
 }
