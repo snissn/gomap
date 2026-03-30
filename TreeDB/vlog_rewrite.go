@@ -114,6 +114,9 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 			// backend rewrite's active-segment protection.
 			backendOpts.ProtectedPaths = []string{""}
 		}
+		if backendOpts.ReserveRIDs == nil {
+			backendOpts.ReserveRIDs = db.cached.ReserveValueLogRIDs
+		}
 	}
 	stats, err := db.backend.ValueLogRewriteOnline(ctx, backendOpts)
 	if err != nil {
