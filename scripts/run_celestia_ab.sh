@@ -32,6 +32,7 @@ RUN_TIMEOUT_SECONDS="${RUN_TIMEOUT_SECONDS:-1800}"
 RUN_MAX_ATTEMPTS_PER_VARIANT="${RUN_MAX_ATTEMPTS_PER_VARIANT:-2}"
 RUN_RETRY_SLEEP_SECONDS="${RUN_RETRY_SLEEP_SECONDS:-20}"
 INVALID_PAIR_STREAK_STOP="${INVALID_PAIR_STREAK_STOP:-2}"
+BLOCK_DRIFT_TOLERANCE="${BLOCK_DRIFT_TOLERANCE:--1}"
 AB_DISABLE_HEAVY_DIAGNOSTICS="${AB_DISABLE_HEAVY_DIAGNOSTICS:-1}"
 AB_CAPTURE_HEAP_ON_MAX_RSS="${AB_CAPTURE_HEAP_ON_MAX_RSS:-0}"
 AB_CAPTURE_PPROF_ON_STUCK="${AB_CAPTURE_PPROF_ON_STUCK:-0}"
@@ -72,6 +73,10 @@ if [[ "$INVALID_PAIR_STREAK_STOP" -lt 1 ]]; then
   echo "INVALID_PAIR_STREAK_STOP must be >= 1" >&2
   exit 1
 fi
+if [[ "$BLOCK_DRIFT_TOLERANCE" -lt -1 ]]; then
+  echo "BLOCK_DRIFT_TOLERANCE must be >= -1 (set -1 to disable drift gating)" >&2
+  exit 1
+fi
 
 mkdir -p "$OUT/runs"
 
@@ -97,6 +102,7 @@ run_timeout_seconds=$RUN_TIMEOUT_SECONDS
 run_max_attempts_per_variant=$RUN_MAX_ATTEMPTS_PER_VARIANT
 run_retry_sleep_seconds=$RUN_RETRY_SLEEP_SECONDS
 invalid_pair_streak_stop=$INVALID_PAIR_STREAK_STOP
+block_drift_tolerance=$BLOCK_DRIFT_TOLERANCE
 ab_disable_heavy_diagnostics=$AB_DISABLE_HEAVY_DIAGNOSTICS
 ab_capture_heap_on_max_rss=$AB_CAPTURE_HEAP_ON_MAX_RSS
 ab_capture_pprof_on_stuck=$AB_CAPTURE_PPROF_ON_STUCK
@@ -484,7 +490,7 @@ PY
 
 aggregate_and_decide() {
   local decision_json="$OUT/decision.json"
-  python3 - "$OUT" "$SIZE_TOLERANCE_BYTES" "$TIME_TOLERANCE_SECONDS" "$MIN_PAIRS" "$CLEAR_WIN_PAIRS" "$CLEAR_LOSS_PAIRS" "$MAX_PAIRS" "$STOP_ON_CLEAR" "$LOW_SIGNAL_MIN_PAIRS" "$LOW_SIGNAL_NEUTRAL_STREAK" "$INVALID_PAIR_STREAK_STOP" "$decision_json" <<'PY'
+  python3 - "$OUT" "$SIZE_TOLERANCE_BYTES" "$TIME_TOLERANCE_SECONDS" "$MIN_PAIRS" "$CLEAR_WIN_PAIRS" "$CLEAR_LOSS_PAIRS" "$MAX_PAIRS" "$STOP_ON_CLEAR" "$LOW_SIGNAL_MIN_PAIRS" "$LOW_SIGNAL_NEUTRAL_STREAK" "$INVALID_PAIR_STREAK_STOP" "$BLOCK_DRIFT_TOLERANCE" "$decision_json" <<'PY'
 import csv
 import json
 import sys
@@ -501,7 +507,8 @@ stop_on_clear = sys.argv[8] == "1"
 low_signal_min_pairs = int(sys.argv[9])
 low_signal_neutral_streak = int(sys.argv[10])
 invalid_pair_streak_stop = int(sys.argv[11])
-decision_path = Path(sys.argv[12])
+block_drift_tolerance = int(sys.argv[12])
+decision_path = Path(sys.argv[13])
 
 run_files = sorted(out.glob("runs/*/run.json"))
 runs = []
@@ -637,6 +644,7 @@ wins = 0
 losses = 0
 raw_pairs = 0
 invalid_pairs = 0
+block_drift_invalid_pairs = 0
 for pair in sorted(by_pair):
     row = by_pair[pair]
     ctrl = row.get("control")
@@ -667,6 +675,7 @@ for pair in sorted(by_pair):
             "candidate_valid": cand_valid,
             "control_invalid_reason": ctrl_reason,
             "candidate_invalid_reason": cand_reason,
+            "pair_invalid_reason": "run_invalid",
             "outcome": outcome,
         })
         continue
@@ -701,7 +710,13 @@ for pair in sorted(by_pair):
     d_total_per_block = delta(cand_total_per_block, base_total_per_block)
 
     outcome = "neutral"
-    if d_post_wal is not None and d_total is not None:
+    pair_invalid_reason = ""
+    if block_drift_tolerance >= 0 and d_blocks is not None and abs(int(d_blocks)) > block_drift_tolerance:
+        outcome = "invalid"
+        pair_invalid_reason = "block_drift_too_high"
+        invalid_pairs += 1
+        block_drift_invalid_pairs += 1
+    elif d_post_wal is not None and d_total is not None:
         win = (d_post_wal <= -size_tol) and (d_total <= time_tol)
         loss = (d_post_wal >= size_tol) and (d_total >= -time_tol)
         if win and not loss:
@@ -724,6 +739,7 @@ for pair in sorted(by_pair):
         "candidate_valid": cand_valid,
         "control_invalid_reason": ctrl_reason,
         "candidate_invalid_reason": cand_reason,
+        "pair_invalid_reason": pair_invalid_reason,
         "outcome": outcome,
     })
 
@@ -743,6 +759,7 @@ with pairs_csv.open("w", newline="", encoding="utf-8") as fh:
         "candidate_valid",
         "control_invalid_reason",
         "candidate_invalid_reason",
+        "pair_invalid_reason",
         "outcome",
     ])
     for r in pair_rows:
@@ -759,6 +776,7 @@ with pairs_csv.open("w", newline="", encoding="utf-8") as fh:
             r["candidate_valid"],
             r["control_invalid_reason"],
             r["candidate_invalid_reason"],
+            r["pair_invalid_reason"],
             r["outcome"],
         ])
 
@@ -819,6 +837,7 @@ lines.append("")
 lines.append(f"- observed pairs: `{raw_pairs}`")
 lines.append(f"- scored pairs: `{completed_pairs}`")
 lines.append(f"- invalid pairs skipped: `{invalid_pairs}`")
+lines.append(f"- invalid pairs (block drift gate): `{block_drift_invalid_pairs}`")
 lines.append(f"- wins/losses/neutral: `{wins}` / `{losses}` / `{neutral}`")
 lines.append(f"- pairs with block-count drift: `{nonzero_block_drift_pairs}`")
 lines.append(f"- neutral streak (tail): `{neutral_streak}`")
@@ -828,6 +847,7 @@ lines.append(f"- time tolerance seconds: `{time_tol}`")
 lines.append(f"- low-signal min pairs: `{low_signal_min_pairs}`")
 lines.append(f"- low-signal neutral streak: `{low_signal_neutral_streak}`")
 lines.append(f"- invalid pair streak stop: `{invalid_pair_streak_stop}`")
+lines.append(f"- block drift tolerance (abs blocks, -1=disabled): `{block_drift_tolerance}`")
 lines.append(f"- decision: `{reason}`")
 lines.append("")
 lines.append("## Artifacts")
@@ -843,6 +863,7 @@ if pair_rows:
     lines.append(f"- pair: `{last['pair_index']}` outcome=`{last['outcome']}`")
     lines.append(f"- control_valid: `{last['control_valid']}` reason=`{last['control_invalid_reason']}`")
     lines.append(f"- candidate_valid: `{last['candidate_valid']}` reason=`{last['candidate_invalid_reason']}`")
+    lines.append(f"- pair_invalid_reason: `{last['pair_invalid_reason']}`")
     lines.append(f"- delta_t_sync_seconds: `{last['delta_t_sync_seconds']}`")
     lines.append(f"- delta_t_total_seconds: `{last['delta_t_total_seconds']}`")
     lines.append(f"- delta_s_sync_app_bytes: `{last['delta_s_sync_app_bytes']}`")
@@ -856,6 +877,7 @@ payload = {
     "observed_pairs": raw_pairs,
     "completed_pairs": completed_pairs,
     "invalid_pairs": invalid_pairs,
+    "block_drift_invalid_pairs": block_drift_invalid_pairs,
     "wins": wins,
     "losses": losses,
     "neutral": neutral,
