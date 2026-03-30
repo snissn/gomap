@@ -165,6 +165,7 @@ type savedTreeDBFlagState struct {
 	vlogGenColdBytes        int64
 	vlogRewriteBudgetBPS    int64
 	vlogRewriteBudgetRPS    int
+	vlogRewriteMinAgeMS     int
 	disableWAL              bool
 	relaxedSync             bool
 	disableChecksum         bool
@@ -197,6 +198,7 @@ func saveTreeDBFlagState() savedTreeDBFlagState {
 		vlogGenColdBytes:        *treedbVlogGenerationColdSegmentBytes,
 		vlogRewriteBudgetBPS:    *treedbVlogRewriteBudgetBytesPerSec,
 		vlogRewriteBudgetRPS:    *treedbVlogRewriteBudgetRecordsPerSec,
+		vlogRewriteMinAgeMS:     *treedbVlogRewriteMinSegmentAgeMS,
 		disableWAL:              *treedbDisableWAL,
 		relaxedSync:             *treedbRelaxedSync,
 		disableChecksum:         *treedbDisableReadChecksum,
@@ -225,6 +227,7 @@ func restoreTreeDBFlagState(s savedTreeDBFlagState) {
 	*treedbVlogGenerationColdSegmentBytes = s.vlogGenColdBytes
 	*treedbVlogRewriteBudgetBytesPerSec = s.vlogRewriteBudgetBPS
 	*treedbVlogRewriteBudgetRecordsPerSec = s.vlogRewriteBudgetRPS
+	*treedbVlogRewriteMinSegmentAgeMS = s.vlogRewriteMinAgeMS
 	*treedbDisableWAL = s.disableWAL
 	*treedbRelaxedSync = s.relaxedSync
 	*treedbDisableReadChecksum = s.disableChecksum
@@ -252,6 +255,7 @@ func resetTreeDBIndexFlagsForTest() {
 	*treedbVlogGenerationColdSegmentBytes = 0
 	*treedbVlogRewriteBudgetBytesPerSec = 0
 	*treedbVlogRewriteBudgetRecordsPerSec = 0
+	*treedbVlogRewriteMinSegmentAgeMS = 0
 	*treedbDisableWAL = false
 	*treedbRelaxedSync = false
 	*treedbDisableReadChecksum = false

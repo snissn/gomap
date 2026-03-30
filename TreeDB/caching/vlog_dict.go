@@ -10,7 +10,6 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/compression"
 	"github.com/snissn/gomap/TreeDB/internal/outerleaf"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
-	"github.com/snissn/gomap/TreeDB/page"
 )
 
 const (
@@ -82,6 +81,9 @@ func (db *DB) valueLogDictClassForPayloadKind(kind vlogPayloadKind) vlogDictClas
 }
 
 func (db *DB) valueLogDictClassForValue(value []byte) vlogDictClass {
+	if db.dictClassMode() != vlogDictClassModeSplitOuterLeaf {
+		return vlogDictClassSingleValue
+	}
 	return db.valueLogDictClassForPayloadKind(db.classifyVlogPayloadKindForValue(value))
 }
 
@@ -100,6 +102,13 @@ func (db *DB) valueLogDictClassForRecordSplit(split vlogPayloadRecordSplit) vlog
 	default:
 		return vlogDictClassSingleValue
 	}
+}
+
+func (db *DB) valueLogDictClassForRecords(records []valuelog.Record) vlogDictClass {
+	if db.dictClassMode() != vlogDictClassModeSplitOuterLeaf {
+		return vlogDictClassSingleValue
+	}
+	return db.valueLogDictClassForRecordSplit(db.classifyVlogPayloadSplitForRecords(records))
 }
 
 func vlogDictClassSuffix(class vlogDictClass) string {
@@ -234,9 +243,6 @@ func (db *DB) isOuterLeafValueLogPayload(value []byte) bool {
 	if !db.indexOuterLeavesInValueLog {
 		return false
 	}
-	if len(value) == page.PageSize {
-		return true
-	}
 	return outerleaf.HasMagic(value)
 }
 
@@ -300,35 +306,65 @@ func recordLaneVlogPayloadSplitFromSummary(l *lane, split vlogPayloadRecordSplit
 	if l == nil {
 		return
 	}
-	totalRaw := split.totalRawBytes()
-	if totalRaw <= 0 {
+	outerRawBytes := split.OuterLeafRawBytes
+	if outerRawBytes < 0 {
+		outerRawBytes = 0
+	}
+	singleRawBytes := split.SingleValueRawBytes
+	if singleRawBytes < 0 {
+		singleRawBytes = 0
+	}
+	outerRawU := uint64(outerRawBytes)
+	singleRawU := uint64(singleRawBytes)
+	totalRawU := outerRawU + singleRawU
+	if totalRawU < outerRawU {
+		totalRawU = ^uint64(0)
+	}
+	if totalRawU == 0 {
 		return
 	}
 	if storedPayloadBytes <= 0 {
-		storedPayloadBytes = totalRaw
+		maxInt := int(^uint(0) >> 1)
+		if totalRawU > uint64(maxInt) {
+			storedPayloadBytes = maxInt
+		} else {
+			storedPayloadBytes = int(totalRawU)
+		}
 	}
 	outerStored := 0
 	singleStored := 0
 	switch {
-	case split.OuterLeafRawBytes > 0 && split.SingleValueRawBytes > 0:
-		outerStored = int((int64(storedPayloadBytes) * int64(split.OuterLeafRawBytes)) / int64(totalRaw))
-		if outerStored < 0 {
-			outerStored = 0
+	case outerRawU > 0 && singleRawU > 0:
+		uStored := uint64(storedPayloadBytes)
+		uOuter := outerRawU
+		uTotal := totalRawU
+		var outerStoredU uint64
+		if uTotal > 0 {
+			hi, lo := bits.Mul64(uStored, uOuter)
+			if hi == 0 {
+				outerStoredU = lo / uTotal
+			} else if hi < uTotal {
+				outerStoredU, _ = bits.Div64(hi, lo, uTotal)
+			} else {
+				// Defensive clamp for impossible overflow cases.
+				outerStoredU = uStored
+			}
 		}
-		if outerStored > storedPayloadBytes {
-			outerStored = storedPayloadBytes
+		if outerStoredU > uStored {
+			outerStoredU = uStored
 		}
+		outerStored = int(outerStoredU)
 		singleStored = storedPayloadBytes - outerStored
-	case split.OuterLeafRawBytes > 0:
+	case outerRawU > 0:
 		outerStored = storedPayloadBytes
-	case split.SingleValueRawBytes > 0:
+	case singleRawU > 0:
 		singleStored = storedPayloadBytes
 	}
-	if split.SingleValueRawBytes > 0 {
-		recordLaneVlogPayloadSplitObservation(l, vlogPayloadSplitSingleValue, split.SingleValueRawBytes, singleStored, split.SingleValueRecords)
+	if singleRawBytes > 0 {
+		recordLaneVlogPayloadSplitObservation(l, vlogPayloadSplitSingleValue, singleRawBytes, singleStored, split.SingleValueRecords)
 	}
-	if split.OuterLeafRawBytes > 0 {
-		recordLaneVlogPayloadSplitObservation(l, vlogPayloadSplitOuterLeaf, split.OuterLeafRawBytes, outerStored, split.OuterLeafRecords)
+	if outerRawBytes > 0 {
+		recordLaneVlogPayloadSplitObservation(l, vlogPayloadSplitOuterLeaf, outerRawBytes, outerStored, split.OuterLeafRecords)
 	}
 }
 
@@ -602,9 +638,9 @@ func (db *DB) shouldBypassValueLogDictForRecords(records []valuelog.Record, prob
 		}
 	}
 	if samples == 0 {
-		// If sampled records are all outer-leaf pages, bypass dict for this batch
-		// and keep them on block codecs.
-		if ignored > 0 {
+		// Only bypass on ignored samples when the entire batch is outer-leaf
+		// payloads. Sparse stride sampling can otherwise miss regular values.
+		if ignored > 0 && db.classifyVlogPayloadKindForRecords(records) == vlogPayloadKindOuterLeaf {
 			return true
 		}
 		return false
@@ -630,8 +666,8 @@ func (db *DB) valueLogDictTrainerForClass(class vlogDictClass) *compression.Trai
 	if db == nil {
 		return nil
 	}
-	db.valueLogDictTrainerMu.Lock()
-	defer db.valueLogDictTrainerMu.Unlock()
+	db.valueLogDictTrainerMu.RLock()
+	defer db.valueLogDictTrainerMu.RUnlock()
 	if int(class) >= vlogDictClassCount {
 		class = vlogDictClassSingleValue
 	}
@@ -645,8 +681,7 @@ func (db *DB) valueLogDictCollectSamples(records []valuelog.Record) {
 	if db == nil {
 		return
 	}
-	split := db.classifyVlogPayloadSplitForRecords(records)
-	class := db.valueLogDictClassForRecordSplit(split)
+	class := db.valueLogDictClassForRecords(records)
 	tr := db.valueLogDictTrainerForClass(class)
 	if tr == nil || !tr.ShouldCollect() {
 		return
@@ -987,16 +1022,8 @@ func (db *DB) applyValueLogDictProfileForClass(class vlogDictClass) {
 		if ks, ok := store.(dictStoreK); ok {
 			dictID := db.valueLogDictLastAppliedDictIDByClass[class].Load()
 			if dictID == 0 {
-				if db.dictClassMode() == vlogDictClassModeSplitOuterLeaf {
-					if byClass, ok := db.dictStore.(dictStoreCurrentByClass); ok {
-						id, err := byClass.GetCurrentForClass(context.Background(), vlogDictClassSuffix(class))
-						if err == nil {
-							dictID = id
-						}
-					}
-				}
-				if dictID == 0 {
-					dictID = db.dictCurrentCached.Load()
+				if id, err := db.currentDictIDForClass(context.Background(), class); err == nil {
+					dictID = id
 				}
 			}
 			if dictID == 0 {
@@ -1043,19 +1070,36 @@ func (db *DB) applyValueLogDictProfileForClass(class vlogDictClass) {
 		db.reportError(err)
 		return
 	}
-	if db.dictClassMode() == vlogDictClassModeSplitOuterLeaf {
-		if byClassWriter, ok := store.(dictStoreWriterByClass); ok {
+	classMode := db.dictClassMode()
+	publishedViaGlobalCurrent := false
+	if classMode == vlogDictClassModeSplitOuterLeaf {
+		byClassWriter, hasClassWriter := store.(dictStoreWriterByClass)
+		_, hasClassReader := store.(dictStoreCurrentByClass)
+		if hasClassWriter && hasClassReader {
 			if err := byClassWriter.SetCurrentForClass(ctx, vlogDictClassSuffix(class), dictID); err != nil {
 				db.reportError(err)
 				return
 			}
+			if class == vlogDictClassSingleValue {
+				// Keep legacy global current in sync for mode switches/reopen paths
+				// that read only the global marker.
+				if err := writer.SetCurrent(ctx, dictID); err != nil {
+					db.reportError(err)
+					return
+				}
+				publishedViaGlobalCurrent = true
+			}
 		} else if err := writer.SetCurrent(ctx, dictID); err != nil {
 			db.reportError(err)
 			return
+		} else {
+			publishedViaGlobalCurrent = true
 		}
 	} else if err := writer.SetCurrent(ctx, dictID); err != nil {
 		db.reportError(err)
 		return
+	} else {
+		publishedViaGlobalCurrent = true
 	}
 	// Make new dictionaries visible to the write path immediately. We intentionally
 	// avoid per-write dictdb reads (currentDictID refreshes only every N uses), so
@@ -1066,7 +1110,7 @@ func (db *DB) applyValueLogDictProfileForClass(class vlogDictClass) {
 	}
 	db.dictCurrentCachedByClass[classIdx].Store(dictID)
 	db.dictCurrentOpsByClass[classIdx].Store(0)
-	if class == vlogDictClassSingleValue || db.dictClassMode() != vlogDictClassModeSplitOuterLeaf {
+	if class == vlogDictClassSingleValue || classMode != vlogDictClassModeSplitOuterLeaf || publishedViaGlobalCurrent {
 		db.dictCurrentCached.Store(dictID)
 		db.dictCurrentOps.Store(0)
 	}
@@ -1085,9 +1129,12 @@ func (db *DB) applyValueLogDictProfileForClass(class vlogDictClass) {
 	}
 	db.valueLogDictLastPublishUnixNano.Store(time.Now().UnixNano())
 
-	// Reset ratio tracking for the new dict.
-	db.valueLogDictMetrics.SetSlab(1)
-	db.valueLogDictMetrics.Reset(1)
+	// Reset shared ratio tracking only when the publish updates the global current.
+	// In split mode, a class-specific publish should not wipe the shared window.
+	if class == vlogDictClassSingleValue || classMode != vlogDictClassModeSplitOuterLeaf || publishedViaGlobalCurrent {
+		db.valueLogDictMetrics.SetSlab(1)
+		db.valueLogDictMetrics.Reset(1)
+	}
 
 	log.Printf("treedb: value-log dict published class=%s dict_id=%d k=%d payload_ratio=%.3f total_ratio=%.3f",
 		vlogDictClassSuffix(class), dictID, profileK, profile.PayloadRatio, profile.TotalRatio)

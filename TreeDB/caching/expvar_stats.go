@@ -129,7 +129,8 @@ func selectTreeDBExpvarStats(stats map[string]string) map[string]any {
 	out := make(map[string]any)
 	for k, v := range stats {
 		// Export only process-wide metric families under treedb.process.* and
-		// select cache/backend families used for mmap/decode/batch-arena tracking.
+		// select cache/backend families used for mmap/decode/batch-arena,
+		// compression, vlog zombie accounting, and live maintenance tracking.
 		if isProcessWideExpvarKey(k) ||
 			strings.HasPrefix(k, "treedb.process.identity.") ||
 			strings.HasPrefix(k, "treedb.vlog.mmap") ||
@@ -139,6 +140,11 @@ func selectTreeDBExpvarStats(stats map[string]string) map[string]any {
 			strings.HasPrefix(k, "treedb.cache.vlog_payload_split.") ||
 			strings.HasPrefix(k, "treedb.cache.vlog_auto.") ||
 			strings.HasPrefix(k, "treedb.cache.vlog_dict.") ||
+			strings.HasPrefix(k, "treedb.cache.vlog_generation.") ||
+			strings.HasPrefix(k, "treedb.cache.vlog_retained_prune.") ||
+			strings.HasPrefix(k, "treedb.cache.vlog_zombie.") ||
+			strings.HasPrefix(k, "treedb.cache.vlog_payload_kind.") ||
+			strings.HasPrefix(k, "treedb.cache.vlog_outer_leaf_codec.") ||
 			strings.HasPrefix(k, "treedb.cache.batch_arena.") {
 			out[k] = coerceStatsValue(v)
 		}

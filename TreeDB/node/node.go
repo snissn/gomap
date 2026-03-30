@@ -134,6 +134,29 @@ func NewNodeView(data []byte) Node {
 	return n
 }
 
+// SetKeyScratch installs caller-owned key scratch for prefix key reconstruction.
+// The slice must not be mutated concurrently while the node is in use.
+func (n *Node) SetKeyScratch(buf []byte) {
+	if n == nil {
+		return
+	}
+	if cap(buf) == 0 {
+		n.keyScratch = nil
+		return
+	}
+	n.keyScratch = buf[:0]
+}
+
+// TakeKeyScratch detaches and returns the node key scratch buffer, if any.
+func (n *Node) TakeKeyScratch() []byte {
+	if n == nil || cap(n.keyScratch) == 0 {
+		return nil
+	}
+	out := n.keyScratch[:0]
+	n.keyScratch = nil
+	return out
+}
+
 // Data returns the underlying byte slice.
 func (n *Node) Data() []byte {
 	return n.data

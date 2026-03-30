@@ -55,6 +55,24 @@ func compressibleValueLogRecords(n, valueBytes int) []valuelog.Record {
 	return records
 }
 
+func markOuterLeafMagic(value []byte) []byte {
+	out := make([]byte, len(value))
+	copy(out, value)
+	if len(out) >= 4 {
+		copy(out, []byte{'T', 'O', 'L', '2'})
+	}
+	return out
+}
+
+func markOuterLeafMagicRecords(records []valuelog.Record) []valuelog.Record {
+	out := make([]valuelog.Record, len(records))
+	copy(out, records)
+	for i := range out {
+		out[i].Value = markOuterLeafMagic(out[i].Value)
+	}
+	return out
+}
+
 func TestValueLogDictCollectSamples_SkipsIncompressibleBeforeFirstDict(t *testing.T) {
 	tr := newValueLogDictClassifierTrainer(t)
 	db := &DB{
@@ -88,7 +106,7 @@ func TestValueLogDictCollectSamples_CompressibleBudgetedByPayloadBytes(t *testin
 		valueLogDictPausedSampleStride: 256,
 	}
 
-	records := compressibleValueLogRecords(512, 4096)
+	records := markOuterLeafMagicRecords(compressibleValueLogRecords(512, 4096))
 	expectedBudget := db.valueLogDictCollectBudget(records, false)
 	db.valueLogDictCollectSamples(records)
 
@@ -157,6 +175,7 @@ func TestValueLogDictClassifierBypass_BypassesOuterLeafPagesWithoutArmingHold(t 
 	for i := range pageValue {
 		pageValue[i] = byte(i)
 	}
+	pageValue = markOuterLeafMagic(pageValue)
 	if !db.valueLogDictClassifierBypass(pageValue, false) {
 		t.Fatalf("expected outer-leaf page value to bypass dict path")
 	}
@@ -174,7 +193,7 @@ func TestValueLogDictClassifierBypass_AllowsOuterLeafPagesForDictSizeAggressive(
 		valueLogDictIncompressibleHoldBytes: 256 << 10,
 		valueLogDictMetricsPauseBytes:       1 << 20,
 	}
-	pageValue := bytes.Repeat([]byte("a"), 4096)
+	pageValue := markOuterLeafMagic(bytes.Repeat([]byte("a"), 4096))
 	if db.valueLogDictClassifierBypass(pageValue, false) {
 		t.Fatalf("expected outer-leaf page value to stay on dict path in dict+aggressive+size mode")
 	}
@@ -192,7 +211,7 @@ func TestValueLogDictClassifierBypass_AllowsOuterLeafPagesForDictSizeMedium(t *t
 		valueLogDictIncompressibleHoldBytes: 256 << 10,
 		valueLogDictMetricsPauseBytes:       1 << 20,
 	}
-	pageValue := bytes.Repeat([]byte("a"), 4096)
+	pageValue := markOuterLeafMagic(bytes.Repeat([]byte("a"), 4096))
 	if db.valueLogDictClassifierBypass(pageValue, false) {
 		t.Fatalf("expected outer-leaf page value to stay on dict path in dict+size mode when autotune is enabled")
 	}
@@ -210,7 +229,7 @@ func TestValueLogDictClassifierBypass_AllowsOuterLeafPagesForAutoSize(t *testing
 		valueLogDictIncompressibleHoldBytes: 256 << 10,
 		valueLogDictMetricsPauseBytes:       1 << 20,
 	}
-	pageValue := bytes.Repeat([]byte("a"), 4096)
+	pageValue := markOuterLeafMagic(bytes.Repeat([]byte("a"), 4096))
 	if db.valueLogDictClassifierBypass(pageValue, false) {
 		t.Fatalf("expected outer-leaf page value to stay on dict path in auto+size mode")
 	}
@@ -232,6 +251,7 @@ func TestValueLogDictClassifierBypass_AllowsOuterLeafHighEntropyForAutoSize(t *t
 	for i := range pageValue {
 		pageValue[i] = byte(i)
 	}
+	pageValue = markOuterLeafMagic(pageValue)
 	if db.valueLogDictClassifierBypass(pageValue, false) {
 		t.Fatalf("expected outer-leaf page value to stay on dict path in auto+size mode even when sample entropy is high")
 	}
@@ -258,7 +278,7 @@ func TestValueLogDictClassifierBypass_BypassesOuterLeafMagicPayloadWithoutArming
 
 func TestClassifyVlogPayloadKindForValue(t *testing.T) {
 	db := &DB{indexOuterLeavesInValueLog: true}
-	outerLeafPage := make([]byte, 4096)
+	outerLeafPage := markOuterLeafMagic(make([]byte, 4096))
 	if got := db.classifyVlogPayloadKindForValue(outerLeafPage); got != vlogPayloadKindOuterLeaf {
 		t.Fatalf("expected outer-leaf kind for 4KiB page payload, got=%v", got)
 	}
@@ -269,7 +289,7 @@ func TestClassifyVlogPayloadKindForValue(t *testing.T) {
 
 func TestClassifyVlogPayloadKindForRecords(t *testing.T) {
 	db := &DB{indexOuterLeavesInValueLog: true}
-	outerLeafPage := make([]byte, 4096)
+	outerLeafPage := markOuterLeafMagic(make([]byte, 4096))
 	singleValue := []byte("single-value")
 
 	records := []valuelog.Record{
@@ -299,7 +319,7 @@ func TestClassifyVlogPayloadKindForRecords(t *testing.T) {
 
 func TestClassifyVlogPayloadSplitForRecords(t *testing.T) {
 	db := &DB{indexOuterLeavesInValueLog: true}
-	outerLeafPage := make([]byte, 4096)
+	outerLeafPage := markOuterLeafMagic(make([]byte, 4096))
 	singleValue := []byte("single-value")
 
 	records := []valuelog.Record{
@@ -380,8 +400,8 @@ func TestValueLogDictClassRangesForRecords_SingleMode(t *testing.T) {
 func TestClassifyVlogOuterLeafCodecKindForValue(t *testing.T) {
 	db := &DB{indexOuterLeavesInValueLog: true}
 	legacy := make([]byte, 4096)
-	if got := db.classifyVlogOuterLeafCodecKindForValue(legacy); got != vlogOuterLeafCodecLegacyPage {
-		t.Fatalf("expected legacy outer-leaf codec kind for 4KiB payload, got=%v", got)
+	if got := db.classifyVlogOuterLeafCodecKindForValue(legacy); got != vlogOuterLeafCodecMixed {
+		t.Fatalf("expected non-magic 4KiB payload to be treated as mixed/non-outer, got=%v", got)
 	}
 
 	magic := make([]byte, 64)
@@ -451,7 +471,7 @@ func TestValueLogDictCollectSamples_IgnoresOuterLeafPages(t *testing.T) {
 		valueLogDictPausedSampleStride:       256,
 		valueLogDictIncompressibleProbeBytes: 64 << 10,
 	}
-	records := compressibleValueLogRecords(512, 4096)
+	records := markOuterLeafMagicRecords(compressibleValueLogRecords(512, 4096))
 	db.valueLogDictCollectSamples(records)
 	stats := tr.Stats()
 	if stats.Enqueued != 0 {
@@ -498,12 +518,35 @@ func TestShouldBypassValueLogDictForRecords_OuterLeafPagesBypassDict(t *testing.
 		valueLogDictIncompressibleHoldBytes: 256 << 10,
 		valueLogDictMetricsPauseBytes:       1 << 20,
 	}
-	records := compressibleValueLogRecords(8, 4096)
+	records := markOuterLeafMagicRecords(compressibleValueLogRecords(8, 4096))
 	if !db.shouldBypassValueLogDictForRecords(records, false) {
 		t.Fatalf("expected outer-leaf record batch to bypass dict path")
 	}
 	if hold := db.valueLogDictIncompressibleHoldRemaining.Load(); hold != 0 {
 		t.Fatalf("expected no incompressible hold from outer-leaf record batch, hold=%d", hold)
+	}
+}
+
+func TestShouldBypassValueLogDictForRecords_MixedBatchWithIgnoredSamplesDoesNotBypass(t *testing.T) {
+	db := &DB{
+		indexOuterLeavesInValueLog:          true,
+		valueLogDictIncompressibleHoldBytes: 256 << 10,
+		valueLogDictMetricsPauseBytes:       1 << 20,
+	}
+	records := make([]valuelog.Record, 8)
+	for i := range records {
+		var payload []byte
+		if i%2 == 0 {
+			// Sampled positions (step=2) look like outer-leaf pages.
+			payload = markOuterLeafMagic(bytes.Repeat([]byte("o"), 4096))
+		} else {
+			// Non-sampled positions are regular values and should keep dict eligible.
+			payload = bytes.Repeat([]byte("regular-value-"), 400)
+		}
+		records[i] = valuelog.Record{RID: uint64(i + 1), Value: payload}
+	}
+	if db.shouldBypassValueLogDictForRecords(records, false) {
+		t.Fatalf("expected mixed batch with sparse ignored samples to remain dict-eligible")
 	}
 }
 
@@ -518,7 +561,7 @@ func TestShouldBypassValueLogDictForRecords_OuterLeafPagesAllowedForDictSizeAggr
 	}
 	records := make([]valuelog.Record, 8)
 	for i := range records {
-		records[i] = valuelog.Record{RID: uint64(i + 1), Value: bytes.Repeat([]byte("a"), 4096)}
+		records[i] = valuelog.Record{RID: uint64(i + 1), Value: markOuterLeafMagic(bytes.Repeat([]byte("a"), 4096))}
 	}
 	if db.shouldBypassValueLogDictForRecords(records, false) {
 		t.Fatalf("expected outer-leaf record batch to stay on dict path in dict+aggressive+size mode")
@@ -537,7 +580,7 @@ func TestShouldBypassValueLogDictForRecords_OuterLeafPagesAllowedForAutoSize(t *
 		valueLogDictIncompressibleHoldBytes: 256 << 10,
 		valueLogDictMetricsPauseBytes:       1 << 20,
 	}
-	records := highEntropyValueLogRecords(8, 4096)
+	records := markOuterLeafMagicRecords(highEntropyValueLogRecords(8, 4096))
 	if db.shouldBypassValueLogDictForRecords(records, false) {
 		t.Fatalf("expected outer-leaf record batch to stay on dict path in auto+size mode")
 	}

@@ -59,11 +59,14 @@ type Batch struct {
 	byteSize        int
 	inlineThreshold int
 	thresholdForKey func([]byte) int
-	touchedValueLog map[uint32]struct{}
-	sorted          bool
-	lastKey         []byte
-	closed          bool
-	reader          ValueReader
+	// Small-set fast path: most batches touch <=4 value-log segments.
+	touchedValueLogSmall    [4]uint32
+	touchedValueLogSmallLen int
+	touchedValueLog         map[uint32]struct{}
+	sorted                  bool
+	lastKey                 []byte
+	closed                  bool
+	reader                  ValueReader
 }
 
 const maxBatchPoolCap = 1 << 16
@@ -135,6 +138,8 @@ func (b *Batch) resetLocked() {
 	if len(b.touchedValueLog) > 0 {
 		clear(b.touchedValueLog)
 	}
+	b.touchedValueLog = nil
+	b.touchedValueLogSmallLen = 0
 	b.byteSize = 0
 	b.sorted = true
 	b.lastKey = nil
@@ -153,11 +158,11 @@ func (b *Batch) resetForPool() {
 		}
 	}
 	b.byteSize = 0
-	if len(b.touchedValueLog) > 1024 {
-		b.touchedValueLog = nil
-	} else if len(b.touchedValueLog) > 0 {
+	if len(b.touchedValueLog) > 0 {
 		clear(b.touchedValueLog)
 	}
+	b.touchedValueLog = nil
+	b.touchedValueLogSmallLen = 0
 	b.sorted = true
 	b.lastKey = nil
 	b.resetArenaLocked()
@@ -595,17 +600,29 @@ func (b *Batch) HasValueLogPointers() bool {
 	if b == nil {
 		return false
 	}
-	return len(b.touchedValueLog) > 0
+	return b.touchedValueLogSmallLen > 0 || len(b.touchedValueLog) > 0
 }
 
 // TouchedValueLogSegments reports the value-log segments that were touched by
 // pointer puts in this batch. The returned slice is sorted for deterministic
 // commit/publish behavior.
 func (b *Batch) TouchedValueLogSegments() []uint32 {
-	if b == nil || len(b.touchedValueLog) == 0 {
+	if b == nil {
 		return nil
 	}
-	out := make([]uint32, 0, len(b.touchedValueLog))
+	if b.touchedValueLogSmallLen == 0 && len(b.touchedValueLog) == 0 {
+		return nil
+	}
+	if len(b.touchedValueLog) == 0 {
+		out := make([]uint32, b.touchedValueLogSmallLen)
+		copy(out, b.touchedValueLogSmall[:b.touchedValueLogSmallLen])
+		if len(out) > 1 {
+			sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+		}
+		return out
+	}
+	out := make([]uint32, 0, b.touchedValueLogSmallLen+len(b.touchedValueLog))
+	out = append(out, b.touchedValueLogSmall[:b.touchedValueLogSmallLen]...)
 	for id := range b.touchedValueLog {
 		out = append(out, id)
 	}
@@ -617,8 +634,23 @@ func (b *Batch) noteTouchedValueLog(ptr page.ValuePtr) {
 	if !page.IsValueLogFileID(ptr.FileID) {
 		return
 	}
-	if b.touchedValueLog == nil {
-		b.touchedValueLog = make(map[uint32]struct{}, 4)
+	id := ptr.FileID
+	for i := 0; i < b.touchedValueLogSmallLen; i++ {
+		if b.touchedValueLogSmall[i] == id {
+			return
+		}
 	}
-	b.touchedValueLog[ptr.FileID] = struct{}{}
+	if b.touchedValueLog == nil && b.touchedValueLogSmallLen < len(b.touchedValueLogSmall) {
+		b.touchedValueLogSmall[b.touchedValueLogSmallLen] = id
+		b.touchedValueLogSmallLen++
+		return
+	}
+	if b.touchedValueLog == nil {
+		b.touchedValueLog = make(map[uint32]struct{}, b.touchedValueLogSmallLen+4)
+		for i := 0; i < b.touchedValueLogSmallLen; i++ {
+			b.touchedValueLog[b.touchedValueLogSmall[i]] = struct{}{}
+		}
+		b.touchedValueLogSmallLen = 0
+	}
+	b.touchedValueLog[id] = struct{}{}
 }

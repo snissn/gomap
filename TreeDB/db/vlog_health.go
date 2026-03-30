@@ -2,9 +2,9 @@ package db
 
 import (
 	"encoding/json"
+	"math"
 	"os"
 	"path/filepath"
-	"strconv"
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
@@ -24,7 +24,7 @@ type valueLogSegmentHealth struct {
 }
 
 type valueLogHealthFile struct {
-	Segments map[string]valueLogSegmentHealth `json:"segments"`
+	Segments map[uint32]valueLogSegmentHealth `json:"segments"`
 }
 
 func valueLogHealthPath(dir string) string {
@@ -53,12 +53,8 @@ func loadValueLogHealth(path string) (map[uint32]valueLogSegmentHealth, error) {
 			return out, nil
 		}
 	}
-	for k, v := range raw.Segments {
-		id64, err := strconv.ParseUint(k, 10, 32)
-		if err != nil {
-			continue
-		}
-		out[uint32(id64)] = v
+	for id, h := range raw.Segments {
+		out[id] = h
 	}
 	return out, nil
 }
@@ -68,12 +64,9 @@ func saveValueLogHealth(path string, health map[uint32]valueLogSegmentHealth) er
 		return nil
 	}
 	raw := valueLogHealthFile{
-		Segments: make(map[string]valueLogSegmentHealth, len(health)),
+		Segments: health,
 	}
-	for id, h := range health {
-		raw.Segments[strconv.FormatUint(uint64(id), 10)] = h
-	}
-	data, err := json.MarshalIndent(raw, "", "  ")
+	data, err := json.Marshal(raw)
 	if err != nil {
 		return err
 	}
@@ -93,6 +86,30 @@ func segmentAgeSeconds(path string, now time.Time) int64 {
 		return 0
 	}
 	return int64(age / time.Second)
+}
+
+func advanceSegmentAgeSeconds(h valueLogSegmentHealth, now time.Time) int64 {
+	age := h.AgeSeconds
+	if age < 0 {
+		age = 0
+	}
+	if h.LastUpdatedUnixNano <= 0 {
+		return age
+	}
+	prevSec := h.LastUpdatedUnixNano / int64(time.Second)
+	nowSec := now.Unix()
+	if nowSec <= prevSec {
+		return age
+	}
+	delta := nowSec - prevSec
+	if delta <= 0 {
+		return age
+	}
+	// Clamp on overflow to preserve monotonic, bounded metadata.
+	if age > math.MaxInt64-delta {
+		return math.MaxInt64
+	}
+	return age + delta
 }
 
 func updateValueLogHealthAfterGC(dbDir string, set *valuelog.Set, referenced map[uint32]struct{}) error {
@@ -120,7 +137,14 @@ func updateValueLogHealthAfterGC(dbDir string, set *valuelog.Set, referenced map
 			} else if size > 0 && h.LiveBytes > size {
 				h.LiveBytes = size
 			}
-			h.AgeSeconds = segmentAgeSeconds(f.Path, now)
+			// Avoid repeated per-segment stat calls on the GC fast path. For new
+			// segments initialize from filesystem metadata once; thereafter preserve
+			// age with monotonic last-update deltas.
+			if h.LastUpdatedUnixNano == 0 {
+				h.AgeSeconds = segmentAgeSeconds(f.Path, now)
+			} else {
+				h.AgeSeconds = advanceSegmentAgeSeconds(h, now)
+			}
 			h.LastUpdatedUnixNano = now.UnixNano()
 			health[id] = h
 		}
@@ -163,7 +187,7 @@ func updateValueLogHealthAfterGC(dbDir string, set *valuelog.Set, referenced map
 	return saveValueLogHealth(path, health)
 }
 
-func updateValueLogHealthAfterRewrite(dbDir string, oldValueIDs map[uint32]struct{}) error {
+func updateValueLogHealthAfterRewrite(dbDir string, oldValueIDs map[uint32]struct{}, set *valuelog.Set) error {
 	path := valueLogHealthPath(dbDir)
 	health, err := loadValueLogHealth(path)
 	if err != nil {
@@ -175,6 +199,37 @@ func updateValueLogHealthAfterRewrite(dbDir string, oldValueIDs map[uint32]struc
 		if h, ok := health[id]; ok && h.RewriteCount >= nextRewriteCount {
 			nextRewriteCount = h.RewriteCount + 1
 		}
+	}
+
+	// Online rewrite callers can provide a current manager set and avoid an
+	// expensive directory rescan on the hot path.
+	if set != nil {
+		out := make(map[uint32]valueLogSegmentHealth, len(set.Files))
+		for id, f := range set.Files {
+			if f == nil {
+				continue
+			}
+			h := health[id]
+			if _, wasOld := oldValueIDs[id]; !wasOld {
+				if h.RewriteCount < nextRewriteCount {
+					h.RewriteCount = nextRewriteCount
+				}
+			}
+			size := fileSize(f)
+			h.SegmentBytes = size
+			h.LiveBytes = size
+			// Online rewrite callers pass a manager set; keep age monotonic from
+			// prior timestamps when available, but initialize from filesystem
+			// metadata when health metadata is missing/corrupt.
+			if h.LastUpdatedUnixNano == 0 {
+				h.AgeSeconds = segmentAgeSeconds(f.Path, now)
+			} else {
+				h.AgeSeconds = advanceSegmentAgeSeconds(h, now)
+			}
+			h.LastUpdatedUnixNano = now.UnixNano()
+			out[id] = h
+		}
+		return saveValueLogHealth(path, out)
 	}
 
 	segments, err := listWALSegments(dbDir)

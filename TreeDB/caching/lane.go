@@ -83,6 +83,8 @@ type lane struct {
 	vlogQueueDriftLastAtNs         int64
 	vlogQueueDriftCurrentNs        uint64
 	vlogDirty                      atomic.Bool
+	backendReadDirtySeq            atomic.Uint64
+	backendReadFlushedSeq          atomic.Uint64
 	vlogLiveBytes                  atomic.Int64
 	vlogClosedBytes                atomic.Int64
 	vlogClosedSizes                map[string]int64

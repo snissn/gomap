@@ -756,7 +756,7 @@ func TestResolveVlogWriteMode_LargePayloadBalancedBypassesSelectorToConfiguredBl
 		valueLogBlockCodec:      valuelog.BlockCodecSnappy,
 	}
 	l := &lane{vlogCompressionSelector: newVlogCompressionSelector(vlogAutoBalanced, 0, 0)}
-	mode, codec, probe := db.resolveVlogWriteMode(l, 0, 2048, 2048)
+	mode, codec, probe := db.resolveVlogWriteMode(l, 0, 2048, 2048, false)
 	if mode != vlogWriteBlock || codec != valuelog.BlockCodecSnappy || probe {
 		t.Fatalf("expected configured block codec without probe for large payload, got mode=%v codec=%v probe=%t", mode, codec, probe)
 	}
@@ -775,7 +775,7 @@ func TestResolveVlogWriteMode_LargePayloadBalancedUsesObservedBetterBlockCodec(t
 		observeLaneVlogBlockRatio(l, valuelog.BlockCodecLZ4, 4096, 1800)
 	}
 
-	mode, codec, probe := db.resolveVlogWriteMode(l, 0, 2048, 2048)
+	mode, codec, probe := db.resolveVlogWriteMode(l, 0, 2048, 2048, false)
 	if mode != vlogWriteBlock || codec != valuelog.BlockCodecLZ4 || probe {
 		t.Fatalf("expected observed better block codec for large payload, got mode=%v codec=%v probe=%t", mode, codec, probe)
 	}
@@ -797,7 +797,7 @@ func TestResolveVlogWriteMode_ThroughputPolicyBypassesSelectorForMediumPayload(t
 	s.metrics[vlogAutoCandidateBlockLZ4] = vlogCandidateMetrics{ratio: 0.99, throughput: 0.5, samples: 16}
 	l := &lane{vlogCompressionSelector: s}
 
-	mode, codec, probe := db.resolveVlogWriteMode(l, 0, 256, 256)
+	mode, codec, probe := db.resolveVlogWriteMode(l, 0, 256, 256, false)
 	if mode != vlogWriteBlock || codec != valuelog.BlockCodecSnappy || probe {
 		t.Fatalf("expected throughput policy medium payload to force configured block codec, got mode=%v codec=%v probe=%t", mode, codec, probe)
 	}
@@ -818,7 +818,7 @@ func TestResolveVlogWriteMode_ThroughputPolicyLargePayloadWithDictCanPreferDict(
 	s.metrics[vlogAutoCandidateDict] = vlogCandidateMetrics{ratio: 0.08, throughput: 0.50, samples: 8}
 	l := &lane{vlogCompressionSelector: s}
 
-	mode, codec, probe := db.resolveVlogWriteMode(l, 9, 43<<10, 43<<10)
+	mode, codec, probe := db.resolveVlogWriteMode(l, 9, 43<<10, 43<<10, false)
 	if mode != vlogWriteDict || codec != valuelog.BlockCodecSnappy || probe {
 		t.Fatalf("expected large payload with strong dict signal to choose dict mode, got mode=%v codec=%v probe=%t", mode, codec, probe)
 	}
@@ -870,7 +870,7 @@ func TestResolveVlogWriteMode_ForcePointersLargeBypassesSelectorToConfiguredBloc
 	s.metrics[vlogAutoCandidateBlockSnappy] = vlogCandidateMetrics{ratio: 0.99, throughput: 0.5, samples: 16}
 	l := &lane{vlogCompressionSelector: s}
 
-	mode, codec, probe := db.resolveVlogWriteMode(l, 0, 1025, 1025)
+	mode, codec, probe := db.resolveVlogWriteMode(l, 0, 1025, 1025, false)
 	if mode != vlogWriteBlock || codec != valuelog.BlockCodecSnappy || probe {
 		t.Fatalf("expected force-pointer large payload to force configured block codec, got mode=%v codec=%v probe=%t", mode, codec, probe)
 	}
@@ -996,6 +996,31 @@ func TestRecordLaneVlogPayloadSplitObservation(t *testing.T) {
 	}
 	if got := snap.Records[vlogPayloadSplitOuterLeaf]; got != 10 {
 		t.Fatalf("outer-leaf split records=%d", got)
+	}
+}
+
+func TestRecordLaneVlogPayloadSplitFromSummary_LargeMixedDoesNotOverflow(t *testing.T) {
+	l := &lane{}
+	maxInt := int(^uint(0) >> 1)
+	stored := maxInt - 7
+	split := vlogPayloadRecordSplit{
+		Kind:                vlogPayloadKindMixed,
+		OuterLeafRecords:    1,
+		SingleValueRecords:  1,
+		OuterLeafRawBytes:   maxInt - 11,
+		SingleValueRawBytes: maxInt - 13,
+	}
+
+	recordLaneVlogPayloadSplitFromSummary(l, split, stored)
+
+	snap := snapshotLaneVlogPayloadSplit(l)
+	outerStored := snap.StoredBytes[vlogPayloadSplitOuterLeaf]
+	singleStored := snap.StoredBytes[vlogPayloadSplitSingleValue]
+	if outerStored > uint64(stored) {
+		t.Fatalf("outer stored bytes overflowed: outer=%d stored=%d", outerStored, stored)
+	}
+	if outerStored+singleStored != uint64(stored) {
+		t.Fatalf("stored split mismatch: outer=%d single=%d total=%d", outerStored, singleStored, stored)
 	}
 }
 

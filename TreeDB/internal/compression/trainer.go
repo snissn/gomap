@@ -838,7 +838,12 @@ func (t *Trainer) train(samples [][]byte, dictBytes int, level zstd.EncoderLevel
 		}
 	}
 
-	enc, err := zstd.NewWriter(nil, zstd.WithEncoderLevel(level), zstd.WithEncoderCRC(false), zstd.WithEncoderDict(bestProfile.Dict))
+	enc, err := zstd.NewWriter(nil,
+		zstd.WithEncoderLevel(level),
+		zstd.WithEncoderCRC(false),
+		zstd.WithEncoderConcurrency(1),
+		zstd.WithEncoderDict(bestProfile.Dict),
+	)
 	if err != nil {
 		log.Printf("treedb: dict training encode setup failed stream=%d err=%v", slabID, err)
 		return
@@ -930,7 +935,12 @@ func shapeAndValidateDict(dict []byte, dictBytes int, level zstd.EncoderLevel) (
 }
 
 func validateDict(dict []byte, level zstd.EncoderLevel) error {
-	enc, err := zstd.NewWriter(nil, zstd.WithEncoderLevel(level), zstd.WithEncoderCRC(false), zstd.WithEncoderDict(dict))
+	enc, err := zstd.NewWriter(nil,
+		zstd.WithEncoderLevel(level),
+		zstd.WithEncoderCRC(false),
+		zstd.WithEncoderConcurrency(1),
+		zstd.WithEncoderDict(dict),
+	)
 	if err != nil {
 		return err
 	}

@@ -9,6 +9,8 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math"
+	"math/big"
 	"os"
 	"path/filepath"
 	"sort"
@@ -544,17 +546,38 @@ func apportionStoredBytesByRaw(rawLengths []int64, storedTotal int64) []int64 {
 	}
 	ranked := make([]remainder, 0, len(rawLengths))
 	var assigned int64
+	den := big.NewInt(rawTotal)
+	var numerBig big.Int
+	var nBig big.Int
+	var baseBig big.Int
+	var remBig big.Int
+	maxSafeN := int64(math.MaxInt64)
+	if storedTotal > 0 {
+		maxSafeN = math.MaxInt64 / storedTotal
+	}
 	for i, n := range rawLengths {
 		if n <= 0 {
 			continue
 		}
-		numer := storedTotal * n
-		base := numer / rawTotal
+		var base int64
+		var frac int64
+		if n <= maxSafeN {
+			numer := storedTotal * n
+			base = numer / rawTotal
+			frac = numer % rawTotal
+		} else {
+			numerBig.SetInt64(storedTotal)
+			nBig.SetInt64(n)
+			numerBig.Mul(&numerBig, &nBig)
+			baseBig.QuoRem(&numerBig, den, &remBig)
+			base = baseBig.Int64()
+			frac = remBig.Int64()
+		}
 		shares[i] = base
 		assigned += base
 		ranked = append(ranked, remainder{
 			idx:  i,
-			frac: numer % rawTotal,
+			frac: frac,
 			raw:  n,
 		})
 	}
@@ -571,8 +594,11 @@ func apportionStoredBytesByRaw(rawLengths []int64, storedTotal int64) []int64 {
 		}
 		return ranked[i].frac > ranked[j].frac
 	})
+	if maxLeftover := int64(len(ranked)); leftover > maxLeftover {
+		leftover = maxLeftover
+	}
 	for i := int64(0); i < leftover; i++ {
-		idx := ranked[int(i)%len(ranked)].idx
+		idx := ranked[i].idx
 		shares[idx]++
 	}
 	return shares

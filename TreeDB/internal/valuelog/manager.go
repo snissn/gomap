@@ -275,34 +275,59 @@ func (f *File) setGroupedFrameCacheEntries(entries int) {
 	f.groupedFrameCacheMisses = 0
 }
 
-func (f *File) groupedFrameCacheLookup(start int64, verifyCRC bool, subIndex int) (raw []byte, valStart, valEnd, rawLen uint32, ok bool) {
+func (f *File) groupedFrameCacheReadTo(start int64, verifyCRC bool, subIndex int, dst []byte) (out []byte, usedDst bool, err error, hit bool) {
 	f.cacheMu.Lock()
-	defer f.cacheMu.Unlock()
 	if f.groupedFrameCacheEntries <= 0 {
-		return nil, 0, 0, 0, false
+		f.cacheMu.Unlock()
+		return nil, false, nil, false
 	}
 	if len(f.groupedFrameCache) == 0 {
 		f.groupedFrameCacheMisses++
-		return nil, 0, 0, 0, false
+		f.cacheMu.Unlock()
+		return nil, false, nil, false
 	}
 	for i := range f.groupedFrameCache {
 		e := &f.groupedFrameCache[i]
 		if e.k <= 0 || e.start != start || e.verifyCRC != verifyCRC || subIndex < 0 || subIndex >= e.k {
 			continue
 		}
-		valStart = e.offsets[subIndex]
-		valEnd = e.offsets[subIndex+1]
-		rawLen = e.offsets[e.k]
+		valStart := e.offsets[subIndex]
+		valEnd := e.offsets[subIndex+1]
+		rawLen := e.offsets[e.k]
 		if valEnd < valStart || valEnd > rawLen || uint32(len(e.raw)) != rawLen {
 			continue
 		}
 		f.groupedFrameCacheClock++
 		e.used = f.groupedFrameCacheClock
 		f.groupedFrameCacheHits++
-		return e.raw, valStart, valEnd, rawLen, true
+		val := e.raw[valStart:valEnd]
+		if f.templateLookup != nil && templ.IsEncodedPayload(val) {
+			// Copy payload while holding cacheMu so callers do not race with cache
+			// entry eviction/reuse after unlock.
+			encoded := append([]byte(nil), val...)
+			f.cacheMu.Unlock()
+			decoded, decErr := templ.DecodePayloadAppend(nil, encoded, func(id uint64) (templ.TemplateDef, error) {
+				return resolveTemplateDef(id, f.templateLookup, f.templateDefCache)
+			}, f.templateDecodeOpts)
+			if decErr != nil {
+				return nil, false, decErr, true
+			}
+			return decoded, false, nil, true
+		}
+		if dst != nil && cap(dst) >= len(val) {
+			out := dst[:len(val)]
+			copy(out, val)
+			f.cacheMu.Unlock()
+			return out, true, nil, true
+		}
+		out := make([]byte, len(val))
+		copy(out, val)
+		f.cacheMu.Unlock()
+		return out, false, nil, true
 	}
 	f.groupedFrameCacheMisses++
-	return nil, 0, 0, 0, false
+	f.cacheMu.Unlock()
+	return nil, false, nil, false
 }
 
 func (f *File) groupedFrameCacheStore(start int64, verifyCRC bool, k int, offsets [MaxFrameK + 1]uint32, raw []byte, pooled bool) bool {
@@ -441,6 +466,12 @@ func (f *File) Read(ptr page.ValuePtr, verifyCRC bool) ([]byte, error) {
 	if data != nil && deadMappingsCapExhausted(f.deadMappingsCount.Load(), len(data)) {
 		f.mmapReadMissDeadMappingCap.Add(1)
 	}
+	if !verifyCRC {
+		if val, _, err, ok := f.readGroupedCompressedFromFileTo(ptr, nil); ok {
+			f.mmapReadFallbackReadAt.Add(1)
+			return val, err
+		}
+	}
 	f.mmapReadFallbackReadAt.Add(1)
 	return ReadAtWithDict(f.File, ptr, verifyCRC, f.dictLookup, f.templateLookup, f.templateDefCache, f.templateDecodeOpts)
 }
@@ -504,6 +535,11 @@ func (f *File) ReadUnsafeTo(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]by
 			}
 		}
 		f.mmapReadFallbackReadAt.Add(1)
+		if !verifyCRC {
+			if val, usedDst, err, ok := f.readGroupedCompressedFromFileTo(ptr, dst); ok {
+				return val, usedDst, err
+			}
+		}
 		return ReadAtWithDictTo(f.File, ptr, verifyCRC, f.dictLookup, f.templateLookup, f.templateDefCache, f.templateDecodeOpts, dst)
 	}
 	// Avoid per-read Stat/lock churn once we have exhausted the dead-mapping
@@ -519,7 +555,163 @@ func (f *File) ReadUnsafeTo(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]by
 		f.mmapReadMissDeadMappingCap.Add(1)
 	}
 	f.mmapReadFallbackReadAt.Add(1)
+	if !verifyCRC {
+		if val, usedDst, err, ok := f.readGroupedCompressedFromFileTo(ptr, dst); ok {
+			return val, usedDst, err
+		}
+	}
 	return ReadAtWithDictTo(f.File, ptr, verifyCRC, f.dictLookup, f.templateLookup, f.templateDefCache, f.templateDecodeOpts, dst)
+}
+
+// readGroupedCompressedFromFileTo handles grouped+compressed reads on the
+// non-mmap fallback path while reusing File grouped-frame cache entries.
+//
+// ok=false means the caller should fall back to the generic ReadAtWithDictTo
+// decoder path (for non-grouped / uncompressed / checksum-verified cases).
+func (f *File) readGroupedCompressedFromFileTo(ptr page.ValuePtr, dst []byte) ([]byte, bool, error, bool) {
+	if f == nil || f.File == nil {
+		return nil, false, errors.New("valuelog: nil file"), true
+	}
+	if ptr.Offset < 4 || !page.ValuePtrIsGrouped(ptr) {
+		return nil, false, nil, false
+	}
+
+	start := int64(ptr.Offset - 4)
+	var header [HeaderSize]byte
+	if _, err := f.File.ReadAt(header[:], start); err != nil {
+		return nil, false, err, true
+	}
+	if header[4] != Version {
+		return nil, false, ErrCorrupt, true
+	}
+	if header[5]&recordFlagGrouped == 0 {
+		return nil, false, nil, false
+	}
+	valueLen := binary.LittleEndian.Uint32(header[16:20])
+	if recordSizeExceedsMax(valueLen) {
+		return nil, false, ErrRecordTooLarge, true
+	}
+	expectedLen := uint32(headerWithoutCRC) + valueLen
+	if !page.ValuePtrRecordLengthHintMatches(ptr, expectedLen) {
+		return nil, false, ErrCorrupt, true
+	}
+	if int(valueLen) < FrameHeaderSize {
+		return nil, false, ErrCorrupt, true
+	}
+
+	frameOff := start + HeaderSize
+	var frameHeader [FrameHeaderSize]byte
+	if _, err := f.File.ReadAt(frameHeader[:], frameOff); err != nil {
+		return nil, false, err, true
+	}
+	if frameHeader[0] != FrameVersion {
+		return nil, false, ErrCorrupt, true
+	}
+	k := int(frameHeader[2])
+	if k <= 0 || k > MaxFrameK {
+		return nil, false, ErrCorrupt, true
+	}
+	if frameHeader[1]&FrameFlagCompressed == 0 {
+		return nil, false, nil, false
+	}
+
+	subIndex := int(page.ValuePtrSubIndex(ptr))
+	if subIndex < 0 || subIndex >= k {
+		return nil, false, ErrCorrupt, true
+	}
+	if out, usedDst, err, hit := f.groupedFrameCacheReadTo(start, false, subIndex, dst); hit {
+		return out, usedDst, err, true
+	}
+
+	ridBytes := k * 8
+	offsetBytes := (k + 1) * 4
+	prefixLen := FrameHeaderSize + ridBytes + offsetBytes
+	if int(valueLen) < prefixLen {
+		return nil, false, ErrCorrupt, true
+	}
+
+	payload := make([]byte, int(valueLen))
+	if _, err := f.File.ReadAt(payload, start+HeaderSize); err != nil {
+		return nil, false, err, true
+	}
+
+	off := FrameHeaderSize + ridBytes
+	var offsets [MaxFrameK + 1]uint32
+	prev := uint32(0)
+	for i := 0; i < k+1; i++ {
+		cur := binary.LittleEndian.Uint32(payload[off : off+4])
+		if cur < prev {
+			return nil, false, ErrCorrupt, true
+		}
+		offsets[i] = cur
+		prev = cur
+		off += 4
+	}
+	rawLen := offsets[k]
+	if limits.MaxRecordSize > 0 && int64(rawLen) > limits.MaxRecordSize {
+		return nil, false, ErrRecordTooLarge, true
+	}
+	valStart := offsets[subIndex]
+	valEnd := offsets[subIndex+1]
+	if valEnd < valStart || valEnd > rawLen {
+		return nil, false, ErrCorrupt, true
+	}
+
+	frame := FrameHeader{
+		Version:  frameHeader[0],
+		Flags:    frameHeader[1],
+		K:        uint8(k),
+		Reserved: frameHeader[3],
+		DictID:   binary.LittleEndian.Uint64(frameHeader[4:12]),
+	}
+
+	raw := f.takeDecodeScratch(int(rawLen))
+	pooledRaw := true
+	raw, err := decodeFramePayloadTo(frame, payload[prefixLen:], f.dictLookup, rawLen, raw)
+	if err != nil {
+		if pooledRaw {
+			f.releaseDecodeScratch(raw)
+		}
+		return nil, false, err, true
+	}
+	if uint32(len(raw)) != rawLen {
+		if pooledRaw {
+			f.releaseDecodeScratch(raw)
+		}
+		return nil, false, ErrCorrupt, true
+	}
+	val := raw[valStart:valEnd]
+	if f.templateLookup != nil && templ.IsEncodedPayload(val) {
+		encoded := append([]byte(nil), val...)
+		cachedRaw := f.groupedFrameCacheStore(start, false, k, offsets, raw, pooledRaw)
+		if pooledRaw && !cachedRaw {
+			f.releaseDecodeScratch(raw)
+		}
+		decoded, err := templ.DecodePayloadAppend(nil, encoded, func(id uint64) (templ.TemplateDef, error) {
+			return resolveTemplateDef(id, f.templateLookup, f.templateDefCache)
+		}, f.templateDecodeOpts)
+		if err != nil {
+			return nil, false, err, true
+		}
+		return decoded, false, nil, true
+	}
+
+	if dst != nil && cap(dst) >= len(val) {
+		out := dst[:len(val)]
+		copy(out, val)
+		cachedRaw := f.groupedFrameCacheStore(start, false, k, offsets, raw, pooledRaw)
+		if pooledRaw && !cachedRaw {
+			f.releaseDecodeScratch(raw)
+		}
+		return out, true, nil, true
+	}
+	out := make([]byte, len(val))
+	copy(out, val)
+	cachedRaw := f.groupedFrameCacheStore(start, false, k, offsets, raw, pooledRaw)
+	if pooledRaw && !cachedRaw {
+		f.releaseDecodeScratch(raw)
+	}
+	return out, false, nil, true
 }
 
 func (f *File) ReadAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte, error) {
@@ -594,17 +786,9 @@ func (f *File) ReadAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte
 		}
 		fFlags := frameHeader[1]
 		if fFlags&FrameFlagCompressed != 0 {
-			// Fallback to the full decoder (will allocate).
-			val, err := ReadAtWithDict(f.File, ptr, verifyCRC, f.dictLookup, f.templateLookup, f.templateDefCache, f.templateDecodeOpts)
-			if err != nil {
-				return nil, err
-			}
-			oldLen := len(dst)
-			noteGrowReadAppendCompressedFallback(len(val))
-			noteGrowReadAppendCompressedFallbackDst(dst, len(val))
-			dst = grow(dst, len(val))
-			copy(dst[oldLen:], val)
-			return dst, nil
+			// Fallback to the full decoder path. Prefer decode-to-tail so hot
+			// append callers can reuse dst capacity and avoid per-read allocs.
+			return f.appendDecodedRecordTo(ptr, verifyCRC, dst)
 		}
 		ridBytes := k * 8
 		offsetBytes := (k + 1) * 4
@@ -662,11 +846,25 @@ func (f *File) ReadAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte
 
 	// Slow path: use existing decoder and append.
 	f.mmapReadFallbackReadAt.Add(1)
-	val, err := ReadAtWithDict(f.File, ptr, verifyCRC, f.dictLookup, f.templateLookup, f.templateDefCache, f.templateDecodeOpts)
+	return f.appendDecodedRecordTo(ptr, verifyCRC, dst)
+}
+
+func (f *File) appendDecodedRecordTo(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte, error) {
+	if f == nil || f.File == nil {
+		return nil, errors.New("valuelog: nil file")
+	}
+	oldLen := len(dst)
+	var tail []byte
+	if oldLen <= cap(dst) {
+		tail = dst[oldLen:cap(dst)]
+	}
+	val, usedDst, err := ReadAtWithDictTo(f.File, ptr, verifyCRC, f.dictLookup, f.templateLookup, f.templateDefCache, f.templateDecodeOpts, tail[:0])
 	if err != nil {
 		return nil, err
 	}
-	oldLen := len(dst)
+	if usedDst {
+		return dst[:oldLen+len(val)], nil
+	}
 	noteGrowReadAppendCompressedFallback(len(val))
 	noteGrowReadAppendCompressedFallbackDst(dst, len(val))
 	dst = grow(dst, len(val))
@@ -1030,6 +1228,39 @@ func (m *Manager) PromoteCurrentWritable(fileID uint32) error {
 	return nil
 }
 
+// RewriteLaneHint returns a best-effort lane/start-seq hint for creating new
+// rewrite segments without scanning the filesystem.
+//
+// It considers all currently tracked segments (including zombies) to avoid
+// immediate lane/seq reuse while deletes are pending.
+func (m *Manager) RewriteLaneHint() (lane uint32, startSeq uint32, ok bool) {
+	if m == nil {
+		return 0, 0, false
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	const lanes = 256
+	var used [lanes]bool
+	var maxSeq [lanes]uint32
+	for id := range m.files {
+		l, s := DecodeFileID(id)
+		if l >= lanes {
+			continue
+		}
+		used[l] = true
+		if s > maxSeq[l] {
+			maxSeq[l] = s
+		}
+	}
+	for l := uint32(lanes - 1); l > 0; l-- {
+		if !used[l] {
+			return l, 0, true
+		}
+	}
+	return 0, maxSeq[0], true
+}
+
 // CurrentSet returns a snapshot of the current value-log files.
 func (m *Manager) CurrentSet() *Set {
 	_ = m.Refresh()
@@ -1290,6 +1521,71 @@ func (m *Manager) RemapStats() (remaps uint64, deadMappings uint64) {
 	return remaps, deadMappings
 }
 
+func valueLogFileSizeBestEffort(f *File) uint64 {
+	if f == nil {
+		return 0
+	}
+	if known := f.fileSize.Load(); known > 0 {
+		return uint64(known)
+	}
+	if data, _ := f.mmapData.Load().([]byte); len(data) > 0 {
+		return uint64(len(data))
+	}
+	if f.Path != "" {
+		if info, err := os.Stat(f.Path); err == nil && info.Size() > 0 {
+			return uint64(info.Size())
+		}
+	}
+	return 0
+}
+
+func valueLogFileSizeNoStat(f *File) uint64 {
+	if f == nil {
+		return 0
+	}
+	if known := f.fileSize.Load(); known > 0 {
+		return uint64(known)
+	}
+	if data, _ := f.mmapData.Load().([]byte); len(data) > 0 {
+		return uint64(len(data))
+	}
+	return 0
+}
+
+// SizeBestEffort returns the current best-effort segment size in bytes.
+// It prefers cached size/mmap metadata and only falls back to stat when needed.
+func (f *File) SizeBestEffort() int64 {
+	return int64(valueLogFileSizeBestEffort(f))
+}
+
+// ZombieStats reports tracked zombie segments and their approximate byte totals.
+// A zombie remains on disk until all snapshots release it (RefCount reaches 0).
+func (m *Manager) ZombieStats() (segments uint64, bytes uint64, pinnedSegments uint64, pinnedBytes uint64, unpinnedSegments uint64, unpinnedBytes uint64) {
+	if m == nil {
+		return 0, 0, 0, 0, 0, 0
+	}
+	m.mu.RLock()
+	for _, f := range m.files {
+		if f == nil || !f.IsZombie.Load() {
+			continue
+		}
+		segments++
+		// Keep ZombieStats lock-friendly: avoid filesystem stats while the
+		// manager lock is held and rely on cached segment sizes only.
+		size := valueLogFileSizeNoStat(f)
+		bytes += size
+		if f.RefCount.Load() > 0 {
+			pinnedSegments++
+			pinnedBytes += size
+			continue
+		}
+		unpinnedSegments++
+		unpinnedBytes += size
+	}
+	m.mu.RUnlock()
+	return segments, bytes, pinnedSegments, pinnedBytes, unpinnedSegments, unpinnedBytes
+}
+
 // MmapResidencyStats reports aggregate mmap residency split by segment type:
 // current writable segments, sealed segments, and dead mappings/bytes.
 func (m *Manager) MmapResidencyStats() (currentSegments uint64, currentBytes uint64, sealedSegments uint64, sealedBytes uint64, deadMappings uint64, deadBytes uint64) {
@@ -1547,7 +1843,7 @@ func listSegments(dir string) ([]segmentInfo, error) {
 		return nil, err
 	}
 
-	var segments []segmentInfo
+	segments := make([]segmentInfo, 0, len(entries))
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
@@ -1555,40 +1851,33 @@ func listSegments(dir string) ([]segmentInfo, error) {
 		name := entry.Name()
 		const prefix = "value-"
 		const suffix = ".log"
-		if !strings.HasPrefix(name, prefix) || !strings.HasSuffix(name, suffix) {
+		if len(name) <= len(prefix)+len(suffix) || !strings.HasPrefix(name, prefix) || !strings.HasSuffix(name, suffix) {
 			continue
 		}
-
-		parseLaneSeq := func(rest string) (uint32, uint32, bool) {
-			parts := strings.SplitN(rest, "-", 2)
-			if len(parts) != 2 {
-				return 0, 0, false
-			}
-			lane, err := strconv.ParseUint(parts[0], 10, 32)
-			if err != nil {
-				return 0, 0, false
-			}
-			seq, err := strconv.ParseUint(parts[1], 10, 32)
-			if err != nil {
-				return 0, 0, false
-			}
-			return uint32(lane), uint32(seq), true
-		}
-
 		var (
-			id  uint32
-			err error
+			id uint32
+			ok bool
 		)
-		core := strings.TrimSuffix(strings.TrimPrefix(name, prefix), suffix)
-		if strings.HasPrefix(core, "l") {
-			lane, seq, ok := parseLaneSeq(strings.TrimPrefix(core, "l"))
-			if !ok {
+		core := name[len(prefix) : len(name)-len(suffix)]
+		if len(core) == 0 {
+			continue
+		}
+		if core[0] == 'l' {
+			laneSeq := core[1:]
+			dash := strings.IndexByte(laneSeq, '-')
+			if dash <= 0 || dash >= len(laneSeq)-1 {
 				continue
 			}
-			id, err = EncodeFileID(lane, seq)
+			lane, err := strconv.ParseUint(laneSeq[:dash], 10, 32)
 			if err != nil {
 				continue
 			}
+			seq, err := strconv.ParseUint(laneSeq[dash+1:], 10, 32)
+			if err != nil {
+				continue
+			}
+			id, err = EncodeFileID(uint32(lane), uint32(seq))
+			ok = err == nil
 		} else {
 			seq, parseErr := strconv.ParseUint(core, 10, 32)
 			if parseErr != nil {
@@ -1599,6 +1888,10 @@ func listSegments(dir string) ([]segmentInfo, error) {
 				continue
 			}
 			id = page.ValueLogFileID(uint32(seq))
+			ok = true
+		}
+		if !ok {
+			continue
 		}
 
 		segments = append(segments, segmentInfo{

@@ -86,6 +86,7 @@ var (
 	checkpointEveryOps              = flag.Int("checkpoint-every-ops", 0, "Force a best-effort durability checkpoint every N ops during write-heavy tests (0=disabled; DBs that support Checkpoint())")
 	checkpointEveryBytes            = flag.Int64("checkpoint-every-bytes", 0, "Force a best-effort durability checkpoint every N approx bytes during write-heavy tests (0=disabled; DBs that support Checkpoint())")
 	batchWriteSteadyCheckpointBytes = flag.Int64("batch-write-steady-checkpoint-bytes", 64<<20, "batch_write_steady: default periodic checkpoint interval in bytes when checkpoint-every-* flags are unset (0 disables)")
+	batchWriteDictWarmup            = flag.Bool("batch-write-dict-warmup", false, "Enable pre-measurement dict warmup writes for batch_write* (TreeDB dict mode); off by default to keep measured runs on empty DB state")
 
 	flushdrainCheckpointMax = flag.Duration("flushdrain-checkpoint-max", 0, "Abort flushdrain suite if checkpoint-before-random_read exceeds this duration (0=disabled)")
 
@@ -164,6 +165,7 @@ type BenchConfig struct {
 	CheckpointEveryOps              int
 	CheckpointEveryBytes            int64
 	BatchWriteSteadyCheckpointBytes int64
+	BatchWriteDictWarmup            bool
 
 	SettleBeforeScans bool
 
@@ -315,6 +317,28 @@ func (s benchKeyShape) validate(maxKey uint64) error {
 	return nil
 }
 
+func (s benchKeyShape) maxKey() uint64 {
+	if s == benchKeyShapeBE8Prefix4 {
+		return uint64(math.MaxUint32)
+	}
+	return math.MaxUint64
+}
+
+func clampWarmupKeyCount(shape benchKeyShape, warmupBase uint64, warmupKeys int) int {
+	if warmupKeys <= 0 {
+		return 0
+	}
+	maxKey := shape.maxKey()
+	if warmupBase > maxKey {
+		return 0
+	}
+	remaining := maxKey - warmupBase + 1
+	if uint64(warmupKeys) > remaining {
+		return int(remaining)
+	}
+	return warmupKeys
+}
+
 func main() {
 	flag.Usage = customUsage
 	flag.Parse()
@@ -411,6 +435,7 @@ func main() {
 		CheckpointEveryOps:               *checkpointEveryOps,
 		CheckpointEveryBytes:             *checkpointEveryBytes,
 		BatchWriteSteadyCheckpointBytes:  *batchWriteSteadyCheckpointBytes,
+		BatchWriteDictWarmup:             *batchWriteDictWarmup,
 		SettleBeforeScans:                *settleBeforeScans,
 		TreeDBCacheStatsBeforeReads:      *treedbCacheStatsBeforeReads,
 		TreeDBCacheStatsAfterTests:       *treedbCacheStatsAfterTests,
@@ -1245,8 +1270,26 @@ func printTreeDBCacheStats(w io.Writer, inst *DBInstance, prefix string) {
 		"treedb.cache.vlog_generation.policy",
 		"treedb.cache.vlog_generation.scheduler_state",
 		"treedb.cache.vlog_generation.scheduler_last_reason",
+		"treedb.cache.vlog_generation.maintenance_phase",
+		"treedb.cache.vlog_generation.maintenance.attempts",
+		"treedb.cache.vlog_generation.maintenance.acquired",
+		"treedb.cache.vlog_generation.maintenance.collisions",
+		"treedb.cache.vlog_generation.maintenance.skip.wal_on_periodic",
+		"treedb.cache.vlog_generation.maintenance.skip.maintenance_phase",
+		"treedb.cache.vlog_generation.maintenance.skip.stage_gate",
+		"treedb.cache.vlog_generation.maintenance.skip.stage_gate_not_due",
+		"treedb.cache.vlog_generation.maintenance.skip.stage_gate_due_reserved",
+		"treedb.cache.vlog_generation.maintenance.skip.age_blocked_gate",
+		"treedb.cache.vlog_generation.maintenance.skip.priority_pending",
+		"treedb.cache.vlog_generation.maintenance.skip.quiet_window",
+		"treedb.cache.vlog_generation.maintenance.skip.before_first_checkpoint",
+		"treedb.cache.vlog_generation.maintenance.skip.checkpoint_inflight",
 		"treedb.cache.vlog_generation.churn_bytes_total",
 		"treedb.cache.vlog_generation.churn_bytes_per_sec",
+		"treedb.cache.vlog_generation.rewrite_trigger.stale_ratio_ppm",
+		"treedb.cache.vlog_generation.rewrite_trigger.total_bytes",
+		"treedb.cache.vlog_generation.rewrite_trigger.churn_per_sec",
+		"treedb.cache.vlog_generation.rewrite.min_segment_age_ms",
 		"treedb.cache.vlog_generation.bytes.live.total",
 		"treedb.cache.vlog_generation.bytes.live.hot",
 		"treedb.cache.vlog_generation.bytes.live.warm",
@@ -1260,14 +1303,106 @@ func printTreeDBCacheStats(w io.Writer, inst *DBInstance, prefix string) {
 		"treedb.cache.vlog_generation.segments.hot",
 		"treedb.cache.vlog_generation.segments.warm",
 		"treedb.cache.vlog_generation.segments.cold",
+		"treedb.cache.vlog_generation.rewrite.queue_len",
+		"treedb.cache.vlog_generation.rewrite.queue_loaded",
+		"treedb.cache.vlog_generation.rewrite.ledger_segments",
+		"treedb.cache.vlog_generation.rewrite.ledger_bytes_total",
+		"treedb.cache.vlog_generation.rewrite.ledger_bytes_live",
+		"treedb.cache.vlog_generation.rewrite.ledger_bytes_stale",
+		"treedb.cache.vlog_generation.rewrite.ledger_stale_ratio_ppm",
+		"treedb.cache.vlog_generation.rewrite.stage_pending",
+		"treedb.cache.vlog_generation.rewrite.stage_observed_unix_nano",
+		"treedb.cache.vlog_generation.rewrite.penalties_active",
+		"treedb.cache.vlog_generation.rewrite.age_blocked_until_unix_nano",
+		"treedb.cache.vlog_generation.rewrite.age_blocked_remaining_ms",
+		"treedb.cache.vlog_generation.rewrite.plan_runs",
+		"treedb.cache.vlog_generation.rewrite.plan_canceled",
+		"treedb.cache.vlog_generation.rewrite.plan_errors",
+		"treedb.cache.vlog_generation.rewrite.plan_empty",
+		"treedb.cache.vlog_generation.rewrite.plan_empty.age_blocked",
+		"treedb.cache.vlog_generation.rewrite.plan_empty.no_selection",
+		"treedb.cache.vlog_generation.rewrite.plan_selected",
+		"treedb.cache.vlog_generation.rewrite.plan_selected_segments_total",
+		"treedb.cache.vlog_generation.rewrite.plan_selected_bytes_total",
+		"treedb.cache.vlog_generation.rewrite.plan_selected_bytes_live",
+		"treedb.cache.vlog_generation.rewrite.plan_selected_bytes_stale",
 		"treedb.cache.vlog_generation.rewrite.bytes_in",
 		"treedb.cache.vlog_generation.rewrite.bytes_out",
+		"treedb.cache.vlog_generation.rewrite.value_records_copied",
+		"treedb.cache.vlog_generation.rewrite.value_bytes_copied",
+		"treedb.cache.vlog_generation.rewrite.leafref_records_copied",
+		"treedb.cache.vlog_generation.rewrite.leafref_bytes_copied",
+		"treedb.cache.vlog_generation.rewrite.reclaim_ratio",
+		"treedb.cache.vlog_generation.rewrite.output_ratio",
+		"treedb.cache.vlog_generation.rewrite.processed_stale_ratio",
+		"treedb.cache.vlog_generation.rewrite.exec.bytes_in_per_sec",
+		"treedb.cache.vlog_generation.rewrite.exec.bytes_out_per_sec",
+		"treedb.cache.vlog_generation.rewrite.exec.reclaimed_bytes_per_sec",
+		"treedb.cache.vlog_generation.rewrite.exec.reclaimed_vs_churn_ratio",
+		"treedb.cache.vlog_generation.rewrite.no_reclaim_runs",
+		"treedb.cache.vlog_generation.rewrite.no_reclaim_stale_bytes",
+		"treedb.cache.vlog_generation.rewrite.canceled_runs",
+		"treedb.cache.vlog_generation.rewrite.deadline_runs",
+		"treedb.cache.vlog_generation.rewrite.ineffective_runs",
+		"treedb.cache.vlog_generation.rewrite_budget.consumed_bytes_per_sec",
+		"treedb.cache.vlog_generation.rewrite_budget.consumed_share_of_budget_pct",
+		"treedb.cache.vlog_generation.rewrite_budget.bytes_per_sec",
+		"treedb.cache.vlog_generation.rewrite_budget.records_per_sec",
+		"treedb.cache.vlog_generation.rewrite_budget.tokens_bytes",
+		"treedb.cache.vlog_generation.rewrite_budget.tokens_cap_bytes",
+		"treedb.cache.vlog_generation.rewrite_budget.tokens_utilization_pct",
+		"treedb.cache.vlog_generation.rewrite_budget.consumed_bytes_total",
 		"treedb.cache.vlog_generation.rewrite.runs",
 		"treedb.cache.vlog_generation.gc.deleted_segments",
 		"treedb.cache.vlog_generation.gc.deleted_bytes",
+		"treedb.cache.vlog_generation.gc.last_observed_source.segments",
+		"treedb.cache.vlog_generation.gc.last_observed_source.segments_referenced",
+		"treedb.cache.vlog_generation.gc.last_observed_source.segments_active",
+		"treedb.cache.vlog_generation.gc.last_observed_source.segments_protected",
+		"treedb.cache.vlog_generation.gc.last_observed_source.segments_eligible",
+		"treedb.cache.vlog_generation.gc.last_observed_source.segments_deleted",
+		"treedb.cache.vlog_generation.gc.last_observed_source.segments_pending",
+		"treedb.cache.vlog_generation.gc.last_observed_source.segments_protected_retained",
+		"treedb.cache.vlog_generation.gc.last_observed_source.segments_protected_in_use",
+		"treedb.cache.vlog_generation.gc.last_observed_source.segments_protected_overlap",
+		"treedb.cache.vlog_generation.gc.last_observed_source.segments_protected_other",
+		"treedb.cache.vlog_generation.gc.last_observed_source.bytes",
+		"treedb.cache.vlog_generation.gc.last_observed_source.bytes_referenced",
+		"treedb.cache.vlog_generation.gc.last_observed_source.bytes_active",
+		"treedb.cache.vlog_generation.gc.last_observed_source.bytes_protected",
+		"treedb.cache.vlog_generation.gc.last_observed_source.bytes_eligible",
+		"treedb.cache.vlog_generation.gc.last_observed_source.bytes_deleted",
+		"treedb.cache.vlog_generation.gc.last_observed_source.bytes_pending",
+		"treedb.cache.vlog_generation.gc.last_observed_source.bytes_protected_retained",
+		"treedb.cache.vlog_generation.gc.last_observed_source.bytes_protected_in_use",
+		"treedb.cache.vlog_generation.gc.last_observed_source.bytes_protected_overlap",
+		"treedb.cache.vlog_generation.gc.last_observed_source.bytes_protected_other",
 		"treedb.cache.vlog_generation.gc.runs",
+		"treedb.cache.vlog_retained_prune.runs",
+		"treedb.cache.vlog_retained_prune.forced_runs",
+		"treedb.cache.vlog_retained_prune.schedule_requests",
+		"treedb.cache.vlog_retained_prune.schedule_forced_requests",
+		"treedb.cache.vlog_retained_prune.schedule_skip.closing",
+		"treedb.cache.vlog_retained_prune.schedule_skip.inflight",
+		"treedb.cache.vlog_retained_prune.schedule_skip.no_closed_bytes",
+		"treedb.cache.vlog_retained_prune.schedule_skip.below_pressure",
+		"treedb.cache.vlog_retained_prune.schedule_skip.min_interval",
+		"treedb.cache.vlog_retained_prune.force_pending",
+		"treedb.cache.vlog_retained_prune.closed_bytes",
+		"treedb.cache.vlog_retained_prune.removed_segments",
+		"treedb.cache.vlog_retained_prune.removed_bytes",
+		"treedb.cache.vlog_retained_prune.in_use_skipped_segments",
+		"treedb.cache.vlog_retained_prune.in_use_skipped_bytes",
+		"treedb.cache.vlog_retained_prune.live_skipped_segments",
+		"treedb.cache.vlog_retained_prune.live_skipped_bytes",
+		"treedb.cache.vlog_retained_prune.zombie_marked_segments",
+		"treedb.cache.vlog_retained_prune.zombie_marked_bytes",
 		"treedb.cache.vlog_generation.vacuum.runs",
 		"treedb.cache.vlog_generation.vacuum.failures",
+		"treedb.cache.vlog_generation.checkpoint_kick.pending",
+		"treedb.cache.vlog_generation.checkpoint_kick.runs",
+		"treedb.cache.vlog_generation.checkpoint_kick.rewrite_runs",
+		"treedb.cache.vlog_generation.checkpoint_kick.gc_runs",
 		"treedb.cache.vlog_generation.remap.successes",
 		"treedb.cache.vlog_generation.remap.failures",
 		"treedb.vlog.outer_leaf_block_cache.policy",
@@ -1739,6 +1874,9 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			return err == nil && v != 0
 		}
 		shouldWarmupDictBatchWrite := func() bool {
+			if !cfg.BatchWriteDictWarmup {
+				return false
+			}
 			if total <= 0 {
 				return false
 			}
@@ -1763,6 +1901,20 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			if warmupKeys > 128_000 {
 				warmupKeys = 128_000
 			}
+			// Keep warmup writes disjoint from measured keys so throughput/IO
+			// remains comparable across modes.
+			warmupBase := uint64(cfg.Keys) * 2
+			if uint64(cfg.Keys) > math.MaxUint64/2 {
+				warmupBase = math.MaxUint64
+			}
+			warmupKeys = clampWarmupKeyCount(keyShape, warmupBase, warmupKeys)
+			var warmupKeyBytes []byte
+			if precomputeKeys && warmupKeys > 0 {
+				warmupKeyBytes = make([]byte, warmupKeys*8)
+				for j := 0; j < warmupKeys; j++ {
+					encodeKey(warmupKeyBytes[j*8:(j+1)*8], uint64(j)+warmupBase)
+				}
+			}
 			for i := 0; i < warmupKeys; i += cfg.BatchSize {
 				if batch == nil {
 					if err := openBatch(); err != nil {
@@ -1785,29 +1937,38 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 					end = warmupKeys
 				}
 				if setView != nil {
-					for j := i; j < end; j++ {
-						var keyView []byte
-						if precomputeKeys {
-							keyView = keyBytes[j*8 : (j+1)*8]
-						} else {
-							var key [8]byte
-							encodeKey(key[:], uint64(j+cfg.Keys))
-							keyView = key[:]
+					if precomputeKeys {
+						for j := i; j < end; j++ {
+							keyView := warmupKeyBytes[j*8 : (j+1)*8]
+							value := values[valPos%len(values)]
+							valPos++
+							if err := setView(keyView, value); err != nil {
+								return 0, fmt.Errorf("%s warmup: set: %w", testLabel, err)
+							}
 						}
-						value := values[valPos%len(values)]
-						valPos++
-						if err := setView(keyView, value); err != nil {
-							return 0, fmt.Errorf("%s warmup: set: %w", testLabel, err)
+					} else {
+						// SetView is zero-copy: keep keys in a stable owned slab until commit.
+						need := (end - i) * 8
+						keysView := make([]byte, need)
+						for j := i; j < end; j++ {
+							off := (j - i) * 8
+							keyView := keysView[off : off+8]
+							encodeKey(keyView, uint64(j)+warmupBase)
+							value := values[valPos%len(values)]
+							valPos++
+							if err := setView(keyView, value); err != nil {
+								return 0, fmt.Errorf("%s warmup: set: %w", testLabel, err)
+							}
 						}
 					}
 				} else {
 					for j := i; j < end; j++ {
 						var keyView []byte
 						if precomputeKeys {
-							keyView = keyBytes[j*8 : (j+1)*8]
+							keyView = warmupKeyBytes[j*8 : (j+1)*8]
 						} else {
 							var key [8]byte
-							encodeKey(key[:], uint64(j+cfg.Keys))
+							encodeKey(key[:], uint64(j)+warmupBase)
 							keyView = key[:]
 						}
 						value := values[valPos%len(values)]

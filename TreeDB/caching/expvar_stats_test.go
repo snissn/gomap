@@ -26,6 +26,11 @@ func TestSelectTreeDBExpvarStatsFiltersAndCoerces(t *testing.T) {
 		"treedb.cache.vlog_payload_split.raw_bytes.outer_leaf":          "1024",
 		"treedb.cache.vlog_auto.bytes.dict":                             "8192",
 		"treedb.cache.vlog_dict.current_k":                              "32",
+		"treedb.cache.vlog_payload_kind.raw_bytes.single_value":         "2048",
+		"treedb.cache.vlog_outer_leaf_codec.raw_bytes.lz4":              "512",
+		"treedb.cache.vlog_generation.rewrite.reclaimed_bytes":          "1234",
+		"treedb.cache.vlog_retained_prune.runs":                         "3",
+		"treedb.cache.vlog_zombie.pinned_bytes":                         "4096",
 		"treedb.process.memory.heap_inuse_bytes":                        "4096",
 		"treedb.process.memory.pool_pressure_level":                     "critical",
 		"treedb.cache.batch_arena.pool_bytes_estimate":                  "65536",
@@ -71,6 +76,21 @@ func TestSelectTreeDBExpvarStatsFiltersAndCoerces(t *testing.T) {
 	}
 	if v, ok := got["treedb.cache.vlog_dict.current_k"].(int64); !ok || v != 32 {
 		t.Fatalf("vlog_dict.current_k=%T(%v) want int64(32)", got["treedb.cache.vlog_dict.current_k"], got["treedb.cache.vlog_dict.current_k"])
+	}
+	if v, ok := got["treedb.cache.vlog_payload_kind.raw_bytes.single_value"].(int64); !ok || v != 2048 {
+		t.Fatalf("vlog_payload_kind.raw_bytes.single_value=%T(%v) want int64(2048)", got["treedb.cache.vlog_payload_kind.raw_bytes.single_value"], got["treedb.cache.vlog_payload_kind.raw_bytes.single_value"])
+	}
+	if v, ok := got["treedb.cache.vlog_outer_leaf_codec.raw_bytes.lz4"].(int64); !ok || v != 512 {
+		t.Fatalf("vlog_outer_leaf_codec.raw_bytes.lz4=%T(%v) want int64(512)", got["treedb.cache.vlog_outer_leaf_codec.raw_bytes.lz4"], got["treedb.cache.vlog_outer_leaf_codec.raw_bytes.lz4"])
+	}
+	if v, ok := got["treedb.cache.vlog_generation.rewrite.reclaimed_bytes"].(int64); !ok || v != 1234 {
+		t.Fatalf("vlog_generation.rewrite.reclaimed_bytes=%T(%v) want int64(1234)", got["treedb.cache.vlog_generation.rewrite.reclaimed_bytes"], got["treedb.cache.vlog_generation.rewrite.reclaimed_bytes"])
+	}
+	if v, ok := got["treedb.cache.vlog_retained_prune.runs"].(int64); !ok || v != 3 {
+		t.Fatalf("vlog_retained_prune.runs=%T(%v) want int64(3)", got["treedb.cache.vlog_retained_prune.runs"], got["treedb.cache.vlog_retained_prune.runs"])
+	}
+	if v, ok := got["treedb.cache.vlog_zombie.pinned_bytes"].(int64); !ok || v != 4096 {
+		t.Fatalf("vlog_zombie.pinned_bytes=%T(%v) want int64(4096)", got["treedb.cache.vlog_zombie.pinned_bytes"], got["treedb.cache.vlog_zombie.pinned_bytes"])
 	}
 	if v, ok := got["treedb.process.memory.heap_inuse_bytes"].(int64); !ok || v != 4096 {
 		t.Fatalf("heap_inuse_bytes=%T(%v) want int64(4096)", got["treedb.process.memory.heap_inuse_bytes"], got["treedb.process.memory.heap_inuse_bytes"])

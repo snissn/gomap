@@ -131,6 +131,23 @@ func TestBuildTreeDBOptions_VlogDictClassModeFlag(t *testing.T) {
 	}
 }
 
+func TestBuildTreeDBOptions_VlogRewriteMinSegmentAgeFlag(t *testing.T) {
+	saved := saveTreeDBFlagState()
+	defer restoreTreeDBFlagState(saved)
+
+	*treedbVlogRewriteMinSegmentAgeMS = 5000
+	opts, rep, err := buildTreeDBOptions("")
+	if err != nil {
+		t.Fatalf("buildTreeDBOptions: %v", err)
+	}
+	if got := opts.ValueLog.Generational.RewriteMinSegmentAge.Milliseconds(); got != 5000 {
+		t.Fatalf("unexpected rewrite min segment age ms: got=%d want=5000", got)
+	}
+	if got := rep.formatText(""); !strings.Contains(got, "vlog.rewrite_min_segment_age_ms=5000") {
+		t.Fatalf("resolved options missing rewrite min segment age: %q", got)
+	}
+}
+
 func TestBuildTreeDBOptions_InvalidVlogDictClassMode(t *testing.T) {
 	saved := saveTreeDBFlagState()
 	defer restoreTreeDBFlagState(saved)
