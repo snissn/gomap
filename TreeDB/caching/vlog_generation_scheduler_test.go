@@ -3393,11 +3393,9 @@ func TestVlogGenerationRewritePlan_StageConfirmationReplansEvenWhenOtherTriggers
 	if err != nil {
 		t.Fatalf("open backend: %v", err)
 	}
-	planCalls := 0
 	recorder := &rewriteBudgetRecordingBackend{
 		DB: backend,
 		planFn: func(opts backenddb.ValueLogRewriteOnlineOptions) (backenddb.ValueLogRewritePlan, error) {
-			planCalls++
 			return backenddb.ValueLogRewritePlan{
 				SourceFileIDs: []uint32{22},
 				SelectedSegments: []backenddb.ValueLogRewritePlanSegment{
@@ -3440,9 +3438,20 @@ func TestVlogGenerationRewritePlan_StageConfirmationReplansEvenWhenOtherTriggers
 		skipRetainedPruneWait: true,
 		skipCheckpoint:        true,
 		debugSource:           "rewrite_stage_confirm",
-	})
+		})
 
-	if planCalls != 1 {
+	planDeadline := time.Now().Add(2 * schedulerTestWait(t))
+	for {
+		_, planCalls := recorder.recordedPlan()
+		if planCalls >= 1 {
+			break
+		}
+		if time.Now().After(planDeadline) {
+			t.Fatalf("plan calls after staged confirmation=%d want 1", planCalls)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if _, planCalls := recorder.recordedPlan(); planCalls != 1 {
 		t.Fatalf("plan calls after staged confirmation=%d want 1", planCalls)
 	}
 	rewriteDeadline := time.Now().Add(2 * schedulerTestWait(t))
@@ -3477,11 +3486,9 @@ func TestVlogGenerationRewritePlan_StageConfirmationClearsStagedDebtWhenPlanEmpt
 		t.Fatalf("open backend: %v", err)
 	}
 
-	planCalls := 0
 	recorder := &rewriteBudgetRecordingBackend{
 		DB: backend,
 		planFn: func(opts backenddb.ValueLogRewriteOnlineOptions) (backenddb.ValueLogRewritePlan, error) {
-			planCalls++
 			return backenddb.ValueLogRewritePlan{
 				SegmentsTotal: 4,
 				BytesTotal:    256 << 20,
@@ -3515,9 +3522,20 @@ func TestVlogGenerationRewritePlan_StageConfirmationClearsStagedDebtWhenPlanEmpt
 		skipCheckpoint:        false,
 		rewriteDebtDrain:      true,
 		debugSource:           "rewrite_stage_confirm",
-	})
+		})
 
-	if planCalls != 1 {
+	planDeadline := time.Now().Add(2 * schedulerTestWait(t))
+	for {
+		_, planCalls := recorder.recordedPlan()
+		if planCalls >= 1 {
+			break
+		}
+		if time.Now().After(planDeadline) {
+			t.Fatalf("plan calls=%d want 1", planCalls)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if _, planCalls := recorder.recordedPlan(); planCalls != 1 {
 		t.Fatalf("plan calls=%d want 1", planCalls)
 	}
 	if _, calls := recorder.recordedRewrite(); calls != 0 {
