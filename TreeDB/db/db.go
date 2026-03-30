@@ -280,6 +280,11 @@ type ValueLogGenerationConfig struct {
 	// RewriteTriggerChurnPerSec triggers rewrite when churn rate exceeds
 	// threshold (0 disables).
 	RewriteTriggerChurnPerSec int64
+	// RewriteMinSegmentAge gates online rewrite to source segments that are at
+	// least this old.
+	//
+	// 0 uses the implementation default.
+	RewriteMinSegmentAge time.Duration
 }
 
 // ValueLogDomainThreshold overrides inline-vs-pointer placement policy for keys
@@ -968,6 +973,9 @@ func validateOptions(opts Options) error {
 	if opts.ValueLog.Generational.RewriteTriggerChurnPerSec < 0 {
 		return fmt.Errorf("treedb: invalid value-log generational rewrite trigger churn/sec %d", opts.ValueLog.Generational.RewriteTriggerChurnPerSec)
 	}
+	if opts.ValueLog.Generational.RewriteMinSegmentAge < 0 {
+		return fmt.Errorf("treedb: invalid value-log generational rewrite min segment age %s", opts.ValueLog.Generational.RewriteMinSegmentAge)
+	}
 	seenDomains := make(map[string]struct{}, len(opts.ValueLog.DomainInlineThresholds))
 	for i := range opts.ValueLog.DomainInlineThresholds {
 		d := opts.ValueLog.DomainInlineThresholds[i]
@@ -1579,13 +1587,33 @@ func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired [
 	post.oldState = db.state.Load()
 	var valueLogSet *valuelog.Set
 	if db.valueLogManager != nil {
-		needRefresh := forceValueLogRefresh
-		if !needRefresh && len(touchedValueLogSegments) > 0 {
+		needRefresh := false
+		if len(touchedValueLogSegments) > 0 {
 			for _, id := range touchedValueLogSegments {
 				if !db.valueLogManager.HasSegment(id) {
 					needRefresh = true
 					break
 				}
+			}
+		}
+		if forceValueLogRefresh {
+			// Outer-leaf commits can keep ValueLogSet complete without a full
+			// scan when the leaf log can report/register its current segment.
+			//
+			// Call this regardless of touchedValueLogSegments. Some commit paths
+			// can touch pointer-backed segments that are already known while also
+			// publishing outer-leaf pages through a leaf log that cannot report
+			// or register its current segment. In that case we must fall back to
+			// one manager refresh to avoid publishing an incomplete ValueLogSet.
+			registered, err := db.ensureLeafPageLogSegmentRegistered()
+			if err != nil {
+				db.mu.Unlock()
+				return post, err
+			}
+			if !registered {
+				// If no registration path is available, force one refresh as a
+				// safety fallback before publishing the new state.
+				needRefresh = true
 			}
 		}
 		if needRefresh {

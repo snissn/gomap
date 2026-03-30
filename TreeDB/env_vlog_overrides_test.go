@@ -153,3 +153,43 @@ func TestApplyEnvMaintenanceOverrides_VlogDictClassModeDefaultAlias(t *testing.T
 		t.Fatalf("expected dict class mode single for default alias, got %v", got)
 	}
 }
+
+func TestApplyEnvMaintenanceOverrides_VlogRetainedCaps(t *testing.T) {
+	opts := Options{}
+	t.Setenv(envVlogMaxRetainedBytes, "123456")
+	t.Setenv(envVlogMaxRetainedBytesHard, "654321")
+	applyEnvMaintenanceOverrides(&opts)
+	if got := opts.ValueLog.MaxRetainedBytes; got != 123456 {
+		t.Fatalf("expected max retained bytes=123456, got %d", got)
+	}
+	if got := opts.ValueLog.MaxRetainedBytesHard; got != 654321 {
+		t.Fatalf("expected max retained bytes hard=654321, got %d", got)
+	}
+}
+
+func TestApplyEnvMaintenanceOverrides_VlogRewriteControls(t *testing.T) {
+	opts := Options{}
+	t.Setenv(envVlogRewriteBudgetBytesPerSec, "123456789")
+	t.Setenv(envVlogRewriteBudgetRecordsPerSec, "4321")
+	t.Setenv(envVlogRewriteTriggerTotalBytes, "987654321")
+	t.Setenv(envVlogRewriteTriggerStaleRatioPPM, "345678")
+	t.Setenv(envVlogRewriteTriggerChurnPerSec, "13579")
+	applyEnvMaintenanceOverrides(&opts)
+
+	gen := opts.ValueLog.Generational
+	if got := gen.RewriteBudgetBytesPerSec; got != 123456789 {
+		t.Fatalf("expected rewrite budget bytes/sec=123456789, got %d", got)
+	}
+	if got := gen.RewriteBudgetRecordsPerSec; got != 4321 {
+		t.Fatalf("expected rewrite budget records/sec=4321, got %d", got)
+	}
+	if got := gen.RewriteTriggerTotalBytes; got != 987654321 {
+		t.Fatalf("expected rewrite trigger total bytes=987654321, got %d", got)
+	}
+	if got := gen.RewriteTriggerStaleRatioPPM; got != 345678 {
+		t.Fatalf("expected rewrite trigger stale ratio ppm=345678, got %d", got)
+	}
+	if got := gen.RewriteTriggerChurnPerSec; got != 13579 {
+		t.Fatalf("expected rewrite trigger churn/sec=13579, got %d", got)
+	}
+}

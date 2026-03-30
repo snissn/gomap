@@ -70,6 +70,7 @@ var (
 	treedbVlogRewriteTriggerStaleRatioPPM = flag.Uint("treedb-vlog-rewrite-trigger-stale-ratio-ppm", 0, "TreeDB: generational rewrite stale/live trigger in ppm (0=disabled)")
 	treedbVlogRewriteTriggerTotalBytes    = flag.Int64("treedb-vlog-rewrite-trigger-total-bytes", 0, "TreeDB: generational rewrite total retained bytes trigger (0=disabled)")
 	treedbVlogRewriteTriggerChurnPerSec   = flag.Int64("treedb-vlog-rewrite-trigger-churn-per-sec", 0, "TreeDB: generational rewrite churn trigger in bytes/sec (0=disabled)")
+	treedbVlogRewriteMinSegmentAgeMS      = flag.Int("treedb-vlog-rewrite-min-segment-age-ms", 0, "TreeDB: generational rewrite minimum source segment age in milliseconds (0=default)")
 	treedbVlogBlockTargetBytes            = flag.Int("treedb-vlog-block-target-bytes", 0, "TreeDB: value-log block target compressed bytes (0=default)")
 	treedbVlogIncompressibleHoldBytes     = flag.Int("treedb-vlog-incompressible-hold-bytes", 0, "TreeDB: auto-mode incompressible hold bytes (0=default)")
 	treedbVlogIncompressibleProbeBytes    = flag.Int("treedb-vlog-incompressible-probe-bytes", 0, "TreeDB: auto-mode incompressible probe interval bytes (0=default)")
@@ -359,6 +360,11 @@ func (r treeDBOptionsReport) formatText(indent string) string {
 	lines = append(lines, fmt.Sprintf("vlog.rewrite_trigger_stale_ratio_ppm=%d", r.opts.ValueLog.Generational.RewriteTriggerStaleRatioPPM))
 	lines = append(lines, fmt.Sprintf("vlog.rewrite_trigger_total_bytes=%d", r.opts.ValueLog.Generational.RewriteTriggerTotalBytes))
 	lines = append(lines, fmt.Sprintf("vlog.rewrite_trigger_churn_per_sec=%d", r.opts.ValueLog.Generational.RewriteTriggerChurnPerSec))
+	if minAge := r.opts.ValueLog.Generational.RewriteMinSegmentAge; minAge <= 0 {
+		lines = append(lines, fmt.Sprintf("vlog.rewrite_min_segment_age_ms=default (effective=%d)", int((30*time.Second)/time.Millisecond)))
+	} else {
+		lines = append(lines, fmt.Sprintf("vlog.rewrite_min_segment_age_ms=%d", int(minAge/time.Millisecond)))
+	}
 	if target := r.opts.ValueLog.BlockTargetCompressedBytes; target <= 0 {
 		lines = append(lines, "vlog.block_target_bytes=default (effective=4096B)")
 	} else {
@@ -663,6 +669,7 @@ func buildTreeDBOptions(dir string) (treedb.Options, treeDBOptionsReport, error)
 	opts.ValueLog.Generational.RewriteTriggerStaleRatioPPM = clampUint32(uint64(*treedbVlogRewriteTriggerStaleRatioPPM))
 	opts.ValueLog.Generational.RewriteTriggerTotalBytes = *treedbVlogRewriteTriggerTotalBytes
 	opts.ValueLog.Generational.RewriteTriggerChurnPerSec = *treedbVlogRewriteTriggerChurnPerSec
+	opts.ValueLog.Generational.RewriteMinSegmentAge = time.Duration(*treedbVlogRewriteMinSegmentAgeMS) * time.Millisecond
 
 	if maintenanceMode == "bench" {
 		// Disable background maintenance loops. "bench" mode aims for stable

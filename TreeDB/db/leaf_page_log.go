@@ -1,7 +1,9 @@
 package db
 
 import (
+	"errors"
 	"fmt"
+	"os"
 
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -16,6 +18,12 @@ type LeafPageLog interface {
 	AppendLeafPage(leafPage []byte) (page.ValuePtr, error)
 	Flush() error
 	Sync() error
+}
+
+// Optional interface implemented by leaf-page logs that can report their
+// current value-log segment identity.
+type leafPageLogCurrentSegmentProvider interface {
+	CurrentValueLogSegment() (path string, fileID uint32, ok bool)
 }
 
 // SetLeafPageLog installs the value-log appender used for value-log-backed leaf
@@ -53,6 +61,42 @@ func (db *DB) RegisterValueLogSegment(path string, fileID uint32) error {
 		return err
 	}
 	return db.valueLogManager.PromoteCurrentWritable(fileID)
+}
+
+// ensureLeafPageLogSegmentRegistered tries to keep the leaf-page log's current
+// writable segment visible in the value-log manager without a full directory
+// scan. Returns (true, nil) when registration is confirmed on the no-refresh
+// path; callers should fall back to manager.Refresh() when it returns false.
+func (db *DB) ensureLeafPageLogSegmentRegistered() (bool, error) {
+	if db == nil || db.valueLogManager == nil || db.leafPageLog == nil {
+		return false, nil
+	}
+	provider, ok := db.leafPageLog.(leafPageLogCurrentSegmentProvider)
+	if !ok {
+		return false, nil
+	}
+	path, fileID, ok := provider.CurrentValueLogSegment()
+	if !ok || path == "" || fileID == 0 {
+		return false, nil
+	}
+	if db.valueLogManager.HasSegment(fileID) {
+		if err := db.valueLogManager.PromoteCurrentWritable(fileID); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+	if err := db.valueLogManager.RegisterSegment(path, fileID); err != nil {
+		// Segment may have rotated/deleted between report and registration;
+		// caller can fall back to a full refresh in this case.
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, err
+	}
+	if err := db.valueLogManager.PromoteCurrentWritable(fileID); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // SetCurrentValueLogReadBarrier installs a callback that will be invoked before

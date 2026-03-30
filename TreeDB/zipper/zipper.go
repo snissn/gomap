@@ -130,6 +130,9 @@ const (
 	mergeOuterLeafPageKeepCap = 128
 	mergeLeafPageScratchInit  = 16
 	mergeLeafPageScratchKeep  = 128
+	mergeNodeKeyScratchInit   = 16
+	mergeNodeKeyScratchKeep   = 128
+	mergeNodeKeyScratchMaxCap = 1 << 20
 
 	mergeInternalMinParallelChildren         = 8
 	mergeInternalMinParallelOps              = 4096
@@ -144,6 +147,7 @@ type mergeScratch struct {
 	splitKeyArena       []byte
 	outerLeafBuildPages []*outerLeafBuildPage
 	leafPageScratch     [][]byte
+	nodeKeyScratch      [][]byte
 }
 
 func newMergeScratch() *mergeScratch {
@@ -151,6 +155,7 @@ func newMergeScratch() *mergeScratch {
 		splitKeyArena:       make([]byte, 0, mergeSplitKeyArenaInitCap),
 		outerLeafBuildPages: make([]*outerLeafBuildPage, 0, mergeOuterLeafPageInitCap),
 		leafPageScratch:     make([][]byte, 0, mergeLeafPageScratchInit),
+		nodeKeyScratch:      make([][]byte, 0, mergeNodeKeyScratchInit),
 	}
 }
 
@@ -190,6 +195,13 @@ func (s *mergeScratch) reset() {
 			extra[i] = nil
 		}
 		s.leafPageScratch = s.leafPageScratch[:mergeLeafPageScratchKeep]
+	}
+	if n := len(s.nodeKeyScratch); n > mergeNodeKeyScratchKeep {
+		extra := s.nodeKeyScratch[mergeNodeKeyScratchKeep:]
+		for i := range extra {
+			extra[i] = nil
+		}
+		s.nodeKeyScratch = s.nodeKeyScratch[:mergeNodeKeyScratchKeep]
 	}
 }
 
@@ -265,6 +277,39 @@ func (s *mergeScratch) releaseLeafPageScratch(buf []byte) {
 	}
 	s.mu.Unlock()
 	putLeafPageScratch(buf)
+}
+
+func (s *mergeScratch) acquireNodeKeyScratch() []byte {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	n := len(s.nodeKeyScratch)
+	if n > 0 {
+		buf := s.nodeKeyScratch[n-1]
+		s.nodeKeyScratch[n-1] = nil
+		s.nodeKeyScratch = s.nodeKeyScratch[:n-1]
+		s.mu.Unlock()
+		return buf[:0]
+	}
+	s.mu.Unlock()
+	return nil
+}
+
+func (s *mergeScratch) releaseNodeKeyScratch(buf []byte) {
+	if s == nil || cap(buf) == 0 {
+		return
+	}
+	if cap(buf) > mergeNodeKeyScratchMaxCap {
+		return
+	}
+	s.mu.Lock()
+	if len(s.nodeKeyScratch) < mergeNodeKeyScratchKeep {
+		s.nodeKeyScratch = append(s.nodeKeyScratch, buf[:0])
+		s.mu.Unlock()
+		return
+	}
+	s.mu.Unlock()
 }
 
 func acquireLeafPageScratch(s *mergeScratch) []byte {
@@ -1210,6 +1255,15 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 		pendingSplitIdx int
 	)
 	pendingSplitIdx = -1
+
+	if scratch != nil {
+		if keyScratch := scratch.acquireNodeKeyScratch(); keyScratch != nil {
+			oldNode.SetKeyScratch(keyScratch)
+		}
+		defer func() {
+			scratch.releaseNodeKeyScratch(oldNode.TakeKeyScratch())
+		}()
+	}
 
 	// Current target builder
 	target := builder

@@ -2,6 +2,7 @@ package caching
 
 import (
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -50,4 +51,28 @@ func (l *cachingLeafPageLog) Sync() error {
 		return nil
 	}
 	return l.db.syncValueLog(l.laneID)
+}
+
+// CurrentValueLogSegment reports the lane's current writable value-log segment.
+// Backend publish paths use this to avoid full manager refresh scans.
+func (l *cachingLeafPageLog) CurrentValueLogSegment() (string, uint32, bool) {
+	if l == nil || l.db == nil {
+		return "", 0, false
+	}
+	if l.laneID < 0 || l.laneID >= len(l.db.lanes) {
+		return "", 0, false
+	}
+	lane := &l.db.lanes[l.laneID]
+	lane.vlogMu.Lock()
+	path := lane.vlogPath
+	seq := lane.vlogSeq
+	lane.vlogMu.Unlock()
+	if path == "" || seq <= 0 {
+		return "", 0, false
+	}
+	fileID, err := valuelog.EncodeFileID(uint32(l.laneID), uint32(seq))
+	if err != nil {
+		return "", 0, false
+	}
+	return path, fileID, true
 }

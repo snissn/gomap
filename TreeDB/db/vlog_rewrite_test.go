@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"hash/crc32"
 	"io"
@@ -316,6 +317,65 @@ func TestValueLogRewrite_BatchedPointerSwap_ReopenPreservesData(t *testing.T) {
 		if !bytes.Equal(got, want) {
 			t.Fatalf("value mismatch for %q", key)
 		}
+	}
+}
+
+func TestUpdateValueLogHealthAfterRewrite_SetInitAgeFromFileMetadata(t *testing.T) {
+	dir := t.TempDir()
+
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer closeNoErr(t, db)
+
+	ptr := appendPointersInNewSegment(t, dir, 0, 1, 120_000, 1, func(i int) []byte {
+		return bytes.Repeat([]byte{byte(i + 1)}, 256)
+	})[0]
+	b := db.NewBatch().(*Batch)
+	if err := b.SetPointer([]byte("k"), ptr); err != nil {
+		t.Fatalf("set pointer: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	closeNoErr(t, b)
+	if err := db.RefreshValueLogSet(); err != nil {
+		t.Fatalf("RefreshValueLogSet: %v", err)
+	}
+
+	segPath := db.valueLogManager.SegmentPath(ptr.FileID)
+	past := time.Now().Add(-3 * time.Second)
+	if err := os.Chtimes(segPath, past, past); err != nil {
+		t.Fatalf("Chtimes: %v", err)
+	}
+
+	healthPath := valueLogHealthPath(dir)
+	_ = os.Remove(healthPath)
+
+	set := db.valueLogManager.CurrentSetNoRefresh()
+	if set == nil {
+		t.Fatalf("missing current value-log set")
+	}
+	defer func() { _ = db.valueLogManager.Release(set) }()
+	oldIDs := map[uint32]struct{}{ptr.FileID: {}}
+	if err := updateValueLogHealthAfterRewrite(dir, oldIDs, set); err != nil {
+		t.Fatalf("updateValueLogHealthAfterRewrite: %v", err)
+	}
+
+	health, err := loadValueLogHealth(healthPath)
+	if err != nil {
+		t.Fatalf("loadValueLogHealth: %v", err)
+	}
+	h, ok := health[ptr.FileID]
+	if !ok {
+		t.Fatalf("missing health entry for segment %d", ptr.FileID)
+	}
+	if h.LastUpdatedUnixNano == 0 {
+		t.Fatalf("expected LastUpdatedUnixNano to be initialized")
+	}
+	if h.AgeSeconds <= 0 {
+		t.Fatalf("expected AgeSeconds initialized from file metadata, got %d", h.AgeSeconds)
 	}
 }
 
@@ -1962,6 +2022,21 @@ func TestValueLogRewriteOnline_ReserveRIDsUsesExternalAllocator(t *testing.T) {
 		reserveCalls []int
 		nextRIDBase  uint64 = 900_000
 	)
+	origRIDStartScanner := rewriteRIDStartScanner
+	ridStartScanCalls := 0
+	rewriteRIDStartScanner = func([]logSegment) (uint64, error) {
+		ridStartScanCalls++
+		return 0, fmt.Errorf("unexpected rid-start scan")
+	}
+	t.Cleanup(func() { rewriteRIDStartScanner = origRIDStartScanner })
+	origWALLister := rewriteWALSegmentsLister
+	walScanCalls := 0
+	rewriteWALSegmentsLister = func(string) ([]logSegment, error) {
+		walScanCalls++
+		return nil, fmt.Errorf("unexpected wal segment scan")
+	}
+	t.Cleanup(func() { rewriteWALSegmentsLister = origWALLister })
+
 	stats, err := db.ValueLogRewriteOnline(context.Background(), ValueLogRewriteOnlineOptions{
 		SourceFileIDs: []uint32{ptrs[0].FileID},
 		ReserveRIDs: func(count int) (uint64, error) {
@@ -1979,6 +2054,12 @@ func TestValueLogRewriteOnline_ReserveRIDsUsesExternalAllocator(t *testing.T) {
 	}
 	if len(reserveCalls) == 0 {
 		t.Fatalf("expected ReserveRIDs to be called")
+	}
+	if ridStartScanCalls != 0 {
+		t.Fatalf("expected ReserveRIDs mode to skip rid-start scan, calls=%d", ridStartScanCalls)
+	}
+	if walScanCalls != 0 {
+		t.Fatalf("expected ReserveRIDs mode to skip wal segment scan, calls=%d", walScanCalls)
 	}
 
 	segmentsAfter, err := listWALSegments(dir)
@@ -2029,6 +2110,87 @@ func TestValueLogRewriteOnline_ReserveRIDsUsesExternalAllocator(t *testing.T) {
 	}
 	if !reflect.DeepEqual(gotRIDs, wantRIDs) {
 		t.Fatalf("unexpected rewritten RID set: got=%v want=%v", gotRIDs, wantRIDs)
+	}
+}
+
+func TestValueLogRewriteOnline_WithoutReserveRIDs_UsesRIDStartScanner(t *testing.T) {
+	dir := t.TempDir()
+
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	ptrs := appendPointersInNewSegment(t, dir, 0, 1, 310_000, 1, func(i int) []byte {
+		return bytes.Repeat([]byte{byte(i + 1)}, 256)
+	})
+	b := db.NewBatch().(*Batch)
+	if err := b.SetPointer([]byte("k"), ptrs[0]); err != nil {
+		t.Fatalf("set pointer: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("seed write: %v", err)
+	}
+	closeNoErr(t, b)
+
+	sentinel := errors.New("rid-start scan invoked")
+	origRIDStartScanner := rewriteRIDStartScanner
+	ridStartScanCalls := 0
+	rewriteRIDStartScanner = func([]logSegment) (uint64, error) {
+		ridStartScanCalls++
+		return 0, sentinel
+	}
+	t.Cleanup(func() { rewriteRIDStartScanner = origRIDStartScanner })
+	origWALLister := rewriteWALSegmentsLister
+	walScanCalls := 0
+	rewriteWALSegmentsLister = func(dir string) ([]logSegment, error) {
+		walScanCalls++
+		return listWALSegments(dir)
+	}
+	t.Cleanup(func() { rewriteWALSegmentsLister = origWALLister })
+
+	_, err = db.ValueLogRewriteOnline(context.Background(), ValueLogRewriteOnlineOptions{
+		SourceFileIDs: []uint32{ptrs[0].FileID},
+		BatchSize:     1,
+	})
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("expected rid-start scanner error %v, got %v", sentinel, err)
+	}
+	if ridStartScanCalls != 1 {
+		t.Fatalf("expected one rid-start scan call, got %d", ridStartScanCalls)
+	}
+	if walScanCalls == 0 {
+		t.Fatalf("expected wal segment scan in non-reserve mode")
+	}
+}
+
+func TestValueLogRewriteOnline_LeafRefsReserveRIDs_DoesNotRefreshManager(t *testing.T) {
+	db, sourceIDs, cleanup := setupLeafRefRewriteBench(t, 768)
+	defer cleanup()
+
+	refreshBefore := db.valueLogManager.RefreshScanCount()
+	nextRID := uint64(1 << 40)
+	stats, err := db.ValueLogRewriteOnline(context.Background(), ValueLogRewriteOnlineOptions{
+		SourceFileIDs: sourceIDs,
+		BatchSize:     128,
+		ReserveRIDs: func(count int) (uint64, error) {
+			if count <= 0 {
+				return 0, fmt.Errorf("invalid count %d", count)
+			}
+			start := nextRID
+			nextRID += uint64(count)
+			return start, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("ValueLogRewriteOnline: %v", err)
+	}
+	if stats.LeafRefRecordsCopied == 0 {
+		t.Fatalf("expected leafref rewrite to copy records")
+	}
+	if delta := db.valueLogManager.RefreshScanCount() - refreshBefore; delta != 0 {
+		t.Fatalf("expected reserve leafref rewrite to avoid manager refresh scans, got %d", delta)
 	}
 }
 
@@ -2866,6 +3028,15 @@ func TestValueLogRewriteOnline_SourceFileIDsWithStaleFilterMatchesPlanSelection(
 	}
 	if stats.RecordsCopied != 1 {
 		t.Fatalf("expected one rewritten record from selected explicit source, got %d", stats.RecordsCopied)
+	}
+	if stats.SourceSegmentsRequested != 1 {
+		t.Fatalf("source segments requested=%d want 1", stats.SourceSegmentsRequested)
+	}
+	if stats.SourceSegmentsStillReferenced != 0 {
+		t.Fatalf("source segments still referenced=%d want 0", stats.SourceSegmentsStillReferenced)
+	}
+	if stats.SourceSegmentsUnreferenced != 1 {
+		t.Fatalf("source segments unreferenced=%d want 1", stats.SourceSegmentsUnreferenced)
 	}
 
 	ptrK1, flagsK1 := readProjectedPointerByKey(t, db, []byte("k1"))

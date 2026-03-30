@@ -590,6 +590,7 @@ func Open(opts Options) (*DB, error) {
 		ValueLogRewriteTriggerStaleRatioPPM:      opts.ValueLog.Generational.RewriteTriggerStaleRatioPPM,
 		ValueLogRewriteTriggerTotalBytes:         opts.ValueLog.Generational.RewriteTriggerTotalBytes,
 		ValueLogRewriteTriggerChurnPerSec:        opts.ValueLog.Generational.RewriteTriggerChurnPerSec,
+		ValueLogRewriteMinSegmentAge:             opts.ValueLog.Generational.RewriteMinSegmentAge,
 		ForceValueLogPointers:                    opts.ValueLog.ForcePointers,
 		ValueLogDictTrain:                        opts.ValueLog.DictTrain,
 		ValueLogDictMaxK:                         opts.ValueLog.DictMaxK,
@@ -696,20 +697,27 @@ const (
 	//   - Dict training enabled (TrainBytes > 0), and
 	//   - Side stores enabled (dictdb), and
 	//   - Split value log enabled (value pointers used).
-	envVlogDictEnable            = "TREEDB_VLOG_DICT_ENABLE"                    // bool
-	envVlogDictTrainBytes        = "TREEDB_VLOG_DICT_TRAIN_BYTES"               // int
-	envVlogDictBytes             = "TREEDB_VLOG_DICT_BYTES"                     // int
-	envVlogDictMinRecords        = "TREEDB_VLOG_DICT_MIN_RECORDS"               // int
-	envVlogDictMaxRecordBytes    = "TREEDB_VLOG_DICT_MAX_RECORD_BYTES"          // int
-	envVlogDictSampleStride      = "TREEDB_VLOG_DICT_SAMPLE_STRIDE"             // int
-	envVlogDictDedupWindow       = "TREEDB_VLOG_DICT_DEDUP_WINDOW"              // int
-	envVlogDictTrainLevel        = "TREEDB_VLOG_DICT_TRAIN_LEVEL"               // int
-	envVlogDictMaxK              = "TREEDB_VLOG_DICT_MAX_K"                     // int
-	envVlogDictClassMode         = "TREEDB_VLOG_DICT_CLASS_MODE"                // single|split_outer_leaf
-	envVlogDictZstdLevel         = "TREEDB_VLOG_DICT_ZSTD_LEVEL"                // fastest|default|better|best|int
-	envVlogDictEntropy           = "TREEDB_VLOG_DICT_ENTROPY"                   // bool
-	envVlogDictAdaptiveRatio     = "TREEDB_VLOG_DICT_ADAPTIVE_RATIO"            // float64
-	envVlogDictMinPayloadSavings = "TREEDB_VLOG_DICT_MIN_PAYLOAD_SAVINGS_RATIO" // float64
+	envVlogDictEnable                  = "TREEDB_VLOG_DICT_ENABLE"                     // bool
+	envVlogDictTrainBytes              = "TREEDB_VLOG_DICT_TRAIN_BYTES"                // int
+	envVlogDictBytes                   = "TREEDB_VLOG_DICT_BYTES"                      // int
+	envVlogDictMinRecords              = "TREEDB_VLOG_DICT_MIN_RECORDS"                // int
+	envVlogDictMaxRecordBytes          = "TREEDB_VLOG_DICT_MAX_RECORD_BYTES"           // int
+	envVlogDictSampleStride            = "TREEDB_VLOG_DICT_SAMPLE_STRIDE"              // int
+	envVlogDictDedupWindow             = "TREEDB_VLOG_DICT_DEDUP_WINDOW"               // int
+	envVlogDictTrainLevel              = "TREEDB_VLOG_DICT_TRAIN_LEVEL"                // int
+	envVlogDictMaxK                    = "TREEDB_VLOG_DICT_MAX_K"                      // int
+	envVlogDictClassMode               = "TREEDB_VLOG_DICT_CLASS_MODE"                 // single|split_outer_leaf
+	envVlogDictZstdLevel               = "TREEDB_VLOG_DICT_ZSTD_LEVEL"                 // fastest|default|better|best|int
+	envVlogDictEntropy                 = "TREEDB_VLOG_DICT_ENTROPY"                    // bool
+	envVlogDictAdaptiveRatio           = "TREEDB_VLOG_DICT_ADAPTIVE_RATIO"             // float64
+	envVlogDictMinPayloadSavings       = "TREEDB_VLOG_DICT_MIN_PAYLOAD_SAVINGS_RATIO"  // float64
+	envVlogMaxRetainedBytes            = "TREEDB_VLOG_MAX_RETAINED_BYTES"              // int64
+	envVlogMaxRetainedBytesHard        = "TREEDB_VLOG_MAX_RETAINED_BYTES_HARD"         // int64
+	envVlogRewriteBudgetBytesPerSec    = "TREEDB_VLOG_REWRITE_BUDGET_BYTES_PER_SEC"    // int64
+	envVlogRewriteBudgetRecordsPerSec  = "TREEDB_VLOG_REWRITE_BUDGET_RECORDS_PER_SEC"  // int
+	envVlogRewriteTriggerTotalBytes    = "TREEDB_VLOG_REWRITE_TRIGGER_TOTAL_BYTES"     // int64
+	envVlogRewriteTriggerStaleRatioPPM = "TREEDB_VLOG_REWRITE_TRIGGER_STALE_RATIO_PPM" // uint32
+	envVlogRewriteTriggerChurnPerSec   = "TREEDB_VLOG_REWRITE_TRIGGER_CHURN_PER_SEC"   // int64
 )
 
 func applyEnvMaintenanceOverrides(opts *Options) {
@@ -828,6 +836,34 @@ func applyEnvMaintenanceOverrides(opts *Options) {
 	if v, ok := envFloat64(envVlogDictMinPayloadSavings); ok {
 		opts.ValueLog.DictMinPayloadSavingsRatio = v
 	}
+	if v, ok := envInt64(envVlogMaxRetainedBytes); ok {
+		opts.ValueLog.MaxRetainedBytes = v
+	}
+	if v, ok := envInt64(envVlogMaxRetainedBytesHard); ok {
+		opts.ValueLog.MaxRetainedBytesHard = v
+	}
+	if v, ok := envInt64(envVlogRewriteBudgetBytesPerSec); ok {
+		opts.ValueLog.Generational.RewriteBudgetBytesPerSec = v
+	}
+	if v, ok := envInt(envVlogRewriteBudgetRecordsPerSec); ok {
+		opts.ValueLog.Generational.RewriteBudgetRecordsPerSec = v
+	}
+	if v, ok := envInt64(envVlogRewriteTriggerTotalBytes); ok {
+		opts.ValueLog.Generational.RewriteTriggerTotalBytes = v
+	}
+	if v, ok := envInt64(envVlogRewriteTriggerStaleRatioPPM); ok {
+		if v < 0 {
+			v = 0
+		}
+		maxUint32Int64 := int64(^uint32(0))
+		if v > maxUint32Int64 {
+			v = maxUint32Int64
+		}
+		opts.ValueLog.Generational.RewriteTriggerStaleRatioPPM = uint32(v)
+	}
+	if v, ok := envInt64(envVlogRewriteTriggerChurnPerSec); ok {
+		opts.ValueLog.Generational.RewriteTriggerChurnPerSec = v
+	}
 }
 
 func computeDurabilityMode(opts Options) string {
@@ -913,6 +949,22 @@ func envInt(name string) (int, bool) {
 		return 0, false
 	}
 	parsed, err := strconv.Atoi(val)
+	if err != nil {
+		return 0, false
+	}
+	return parsed, true
+}
+
+func envInt64(name string) (int64, bool) {
+	val, ok := os.LookupEnv(name)
+	if !ok {
+		return 0, false
+	}
+	val = strings.TrimSpace(val)
+	if val == "" {
+		return 0, false
+	}
+	parsed, err := strconv.ParseInt(val, 10, 64)
 	if err != nil {
 		return 0, false
 	}
