@@ -127,7 +127,7 @@ func (s readOnlyTemplateStore) GetCandidates(ctx context.Context, fp uint64, max
 
 func (s readOnlyTemplateStore) GetTemplateDef(ctx context.Context, templateID uint64) ([]byte, error) {
 	if s.inner == nil {
-		return nil, nil
+		return nil, template.ErrMissingTemplate
 	}
 	return s.inner.GetTemplateDef(ctx, templateID)
 }
@@ -257,7 +257,20 @@ func trainOuterLeafValues(engine *template.Engine, store *templatedb.Store, back
 		return stats, errors.New("value-log reader unavailable")
 	}
 
-	seen := make(map[outerLeafKey]struct{}, 1<<20)
+	seenCap := 0
+	if limit > 0 {
+		seenCap = limit
+		if stride > 1 {
+			seenCap = (limit + stride - 1) / stride
+		}
+		if seenCap < 1 {
+			seenCap = 1
+		}
+		if seenCap > 1<<20 {
+			seenCap = 1 << 20
+		}
+	}
+	seen := make(map[outerLeafKey]struct{}, seenCap)
 	visit := func(ptr page.ValuePtr) error {
 		key := outerLeafKey{fileID: ptr.FileID, offset: ptr.Offset}
 		if _, ok := seen[key]; ok {
@@ -375,7 +388,14 @@ func probeOuterLeaf(engine *template.Engine, store template.Store, backend *tree
 	if reader == nil {
 		return 0, 0, errors.New("value-log reader unavailable")
 	}
-	seen := make(map[outerLeafKey]struct{}, 1<<20)
+	seenCap := 0
+	if limit > 0 {
+		seenCap = limit
+		if seenCap > 1<<20 {
+			seenCap = 1 << 20
+		}
+	}
+	seen := make(map[outerLeafKey]struct{}, seenCap)
 	visit := func(ptr page.ValuePtr) error {
 		key := outerLeafKey{fileID: ptr.FileID, offset: ptr.Offset}
 		if _, ok := seen[key]; ok {

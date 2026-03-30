@@ -284,9 +284,6 @@ func main() {
 		if err != nil {
 			log.Fatalf("open pointer corpus: %v", err)
 		}
-		defer func() {
-			_ = pointerWriter.Close()
-		}()
 	}
 	var outerWriter *corpusWriter
 	if !*skipOuterLeaf {
@@ -294,9 +291,6 @@ func main() {
 		if err != nil {
 			log.Fatalf("open outer-leaf corpus: %v", err)
 		}
-		defer func() {
-			_ = outerWriter.Close()
-		}()
 	}
 
 	pointerScanned := 0
