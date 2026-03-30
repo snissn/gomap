@@ -511,3 +511,41 @@ Interpretation:
 
 - Small but consistent allocation reduction on leafref rewrite with no latency
   regression in the controlled (`-cpu=1`) sample.
+
+### Follow-on microbench: inline remap cache before map promotion
+Change:
+
+- Add small inline remap caches for leaf/internal id rewrites and promote to maps
+  only after the inline cache fills.
+
+Commands:
+
+```bash
+# Baseline (HEAD~1) in temporary worktree
+git worktree add /tmp/gomap_base_leafrefs_remap HEAD~1
+GOWORK=off go test -C /tmp/gomap_base_leafrefs_remap ./TreeDB/db -run '^$' \
+  -bench '^BenchmarkValueLogRewriteOnline_LeafRefs_ReserveRIDs$' \
+  -benchmem -benchtime=20x -count=8 \
+  > /tmp/leafrefs_remap_base_defcpu.txt
+git worktree remove /tmp/gomap_base_leafrefs_remap --force
+
+# Candidate (current branch)
+GOWORK=off go test ./TreeDB/db -run '^$' \
+  -bench '^BenchmarkValueLogRewriteOnline_LeafRefs_ReserveRIDs$' \
+  -benchmem -benchtime=20x -count=8 \
+  > /tmp/leafrefs_remap_cand_defcpu.txt
+
+benchstat /tmp/leafrefs_remap_base_defcpu.txt /tmp/leafrefs_remap_cand_defcpu.txt
+```
+
+Result summary:
+
+- `sec/op`: statistically unchanged (`p=0.505`, `n=8`)
+- `rewrite_allocs/op`: `235.0 -> 224.4` (`-4.49%`, `p=0.001`, `n=8`)
+- `allocs/op`: `234.5 -> 224.0` (`-4.48%`, `p=0.001`, `n=8`)
+- `B/op`: `4.125MiB -> 4.110MiB` (`-0.37%`, `p=0.015`, `n=8`)
+
+Interpretation:
+
+- This provides a meaningful allocation reduction on the leafref rewrite path
+  with no measured throughput regression in this sample.

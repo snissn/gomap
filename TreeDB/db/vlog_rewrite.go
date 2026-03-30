@@ -38,6 +38,7 @@ const rewriteReadScratchMaxCap = 1 << 20 // 1MiB cap to avoid retaining oversize
 const rewriteKeyArenaMaxCap = 1 << 20    // 1MiB cap to avoid retaining oversized key arenas
 const leafRefRewriteMapInitCap = 128     // initial map capacity for small leafref rewrite batches
 const leafRefRewriteInlineChildCap = 64  // stack-backed child-id scratch for common small internal nodes
+const leafRefRewriteInlineRemapCap = 8   // inline remap cache before promoting to map
 
 var rewriteRIDStartScanner = nextRewriteRIDStart
 var rewriteWALSegmentsLister = listWALSegments
@@ -1710,14 +1711,24 @@ type leafRefRewriteCtx struct {
 	singleSourceID uint32
 	hasSingleID    bool
 
-	leafMap     map[uint64]uint64 // old leafref id -> new leafref id
-	internalMap map[uint64]uint64 // old internal page id -> new page id
+	leafMap            map[uint64]uint64 // old leafref id -> new leafref id
+	leafRemapInline    [leafRefRewriteInlineRemapCap]leafRefRewriteRemap
+	leafRemapInlineLen int
+
+	internalMap            map[uint64]uint64 // old internal page id -> new page id
+	internalRemapInline    [leafRefRewriteInlineRemapCap]leafRefRewriteRemap
+	internalRemapInlineLen int
 
 	retired     []uint64
 	copied      int
 	copiedBytes int64
 
 	readRefreshRetried bool
+}
+
+type leafRefRewriteRemap struct {
+	oldID uint64
+	newID uint64
 }
 
 func (c *leafRefRewriteCtx) readLeafPage(ptr page.ValuePtr) ([]byte, error) {
@@ -1768,6 +1779,70 @@ func (c *leafRefRewriteCtx) readLeafPage(ptr page.ValuePtr) ([]byte, error) {
 	return c.leafReader.ReadUnsafe(ptr)
 }
 
+func (c *leafRefRewriteCtx) lookupLeafRemap(id uint64) (uint64, bool) {
+	if c.leafMap != nil {
+		mapped, ok := c.leafMap[id]
+		return mapped, ok
+	}
+	for i := 0; i < c.leafRemapInlineLen; i++ {
+		pair := c.leafRemapInline[i]
+		if pair.oldID == id {
+			return pair.newID, true
+		}
+	}
+	return 0, false
+}
+
+func (c *leafRefRewriteCtx) storeLeafRemap(oldID, newID uint64) {
+	if c.leafMap != nil {
+		c.leafMap[oldID] = newID
+		return
+	}
+	if c.leafRemapInlineLen < len(c.leafRemapInline) {
+		c.leafRemapInline[c.leafRemapInlineLen] = leafRefRewriteRemap{oldID: oldID, newID: newID}
+		c.leafRemapInlineLen++
+		return
+	}
+	c.leafMap = make(map[uint64]uint64, leafRefRewriteMapInitCap)
+	for i := 0; i < c.leafRemapInlineLen; i++ {
+		pair := c.leafRemapInline[i]
+		c.leafMap[pair.oldID] = pair.newID
+	}
+	c.leafMap[oldID] = newID
+}
+
+func (c *leafRefRewriteCtx) lookupInternalRemap(id uint64) (uint64, bool) {
+	if c.internalMap != nil {
+		mapped, ok := c.internalMap[id]
+		return mapped, ok
+	}
+	for i := 0; i < c.internalRemapInlineLen; i++ {
+		pair := c.internalRemapInline[i]
+		if pair.oldID == id {
+			return pair.newID, true
+		}
+	}
+	return 0, false
+}
+
+func (c *leafRefRewriteCtx) storeInternalRemap(oldID, newID uint64) {
+	if c.internalMap != nil {
+		c.internalMap[oldID] = newID
+		return
+	}
+	if c.internalRemapInlineLen < len(c.internalRemapInline) {
+		c.internalRemapInline[c.internalRemapInlineLen] = leafRefRewriteRemap{oldID: oldID, newID: newID}
+		c.internalRemapInlineLen++
+		return
+	}
+	c.internalMap = make(map[uint64]uint64, leafRefRewriteMapInitCap)
+	for i := 0; i < c.internalRemapInlineLen; i++ {
+		pair := c.internalRemapInline[i]
+		c.internalMap[pair.oldID] = pair.newID
+	}
+	c.internalMap[oldID] = newID
+}
+
 func (c *leafRefRewriteCtx) rewriteNode(id uint64) (uint64, bool, error) {
 	if c == nil {
 		return id, false, errors.New("vlog-rewrite: nil leafref rewrite ctx")
@@ -1782,10 +1857,8 @@ func (c *leafRefRewriteCtx) rewriteNode(id uint64) (uint64, bool, error) {
 	}
 
 	if ptr, ok := page.DecodeLeafRef(id); ok {
-		if c.leafMap != nil {
-			if mapped, ok := c.leafMap[id]; ok {
-				return mapped, mapped != id, nil
-			}
+		if mapped, ok := c.lookupLeafRemap(id); ok {
+			return mapped, mapped != id, nil
 		}
 		if c.hasSingleID {
 			if ptr.FileID != c.singleSourceID {
@@ -1821,20 +1894,14 @@ func (c *leafRefRewriteCtx) rewriteNode(id uint64) (uint64, bool, error) {
 		if err != nil {
 			return id, false, err
 		}
-		if c.leafMap == nil {
-			// Keep initial maps modest on small rewrites; they grow as needed.
-			c.leafMap = make(map[uint64]uint64, leafRefRewriteMapInitCap)
-		}
-		c.leafMap[id] = leafID
+		c.storeLeafRemap(id, leafID)
 		c.copied++
 		c.copiedBytes += int64(len(leafPage))
 		return leafID, true, nil
 	}
 
-	if c.internalMap != nil {
-		if mapped, ok := c.internalMap[id]; ok {
-			return mapped, mapped != id, nil
-		}
+	if mapped, ok := c.lookupInternalRemap(id); ok {
+		return mapped, mapped != id, nil
 	}
 
 	if c.pager == nil {
@@ -1924,11 +1991,7 @@ func (c *leafRefRewriteCtx) rewriteNode(id uint64) (uint64, bool, error) {
 		if id != 0 {
 			c.retired = append(c.retired, id)
 		}
-		if c.internalMap == nil {
-			// Keep initial maps modest on small rewrites; they grow as needed.
-			c.internalMap = make(map[uint64]uint64, leafRefRewriteMapInitCap)
-		}
-		c.internalMap[id] = newID
+		c.storeInternalRemap(id, newID)
 		return newID, true, nil
 
 	case page.PageTypeLeaf:
