@@ -606,6 +606,10 @@ func (b *Batch) HasValueLogPointers() bool {
 // TouchedValueLogSegments reports the value-log segments that were touched by
 // pointer puts in this batch. The returned slice is sorted for deterministic
 // commit/publish behavior.
+//
+// In the small-set fast path, the returned slice aliases internal batch
+// storage and remains valid only until the batch is mutated, reset, or
+// released. Callers must treat the result as read-only.
 func (b *Batch) TouchedValueLogSegments() []uint32 {
 	if b == nil {
 		return nil
@@ -614,12 +618,11 @@ func (b *Batch) TouchedValueLogSegments() []uint32 {
 		return nil
 	}
 	if len(b.touchedValueLog) == 0 {
-		out := make([]uint32, b.touchedValueLogSmallLen)
-		copy(out, b.touchedValueLogSmall[:b.touchedValueLogSmallLen])
+		out := b.touchedValueLogSmall[:b.touchedValueLogSmallLen]
 		if len(out) > 1 {
 			sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
 		}
-		return out
+		return out[:len(out):len(out)]
 	}
 	out := make([]uint32, 0, b.touchedValueLogSmallLen+len(b.touchedValueLog))
 	out = append(out, b.touchedValueLogSmall[:b.touchedValueLogSmallLen]...)

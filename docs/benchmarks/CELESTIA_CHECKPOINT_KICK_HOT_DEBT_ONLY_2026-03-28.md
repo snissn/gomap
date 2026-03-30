@@ -586,3 +586,41 @@ Interpretation:
 
 - Small but consistent allocation reduction in the value-pointer rewrite path
   with no measured throughput regression in this sample.
+
+### Follow-on microbench: no-copy small touched segment view
+Change:
+
+- In `Batch.TouchedValueLogSegments()`, return a sorted view over the existing
+  small touched-segment buffer when the small-set fast path is active (no map),
+  instead of allocating a copied slice.
+
+Commands:
+
+```bash
+# Baseline (HEAD~1) in temporary worktree
+git worktree add /tmp/gomap_base_touchseg HEAD~1
+GOWORK=off go test -C /tmp/gomap_base_touchseg ./TreeDB/db -run '^$' \
+  -bench '^BenchmarkValueLogRewriteOnline_ValuePointers$' \
+  -benchmem -benchtime=20x -count=10 -cpu=1 \
+  > /tmp/vp_touch_base.txt
+git worktree remove /tmp/gomap_base_touchseg --force
+
+# Candidate (current branch)
+GOWORK=off go test ./TreeDB/db -run '^$' \
+  -bench '^BenchmarkValueLogRewriteOnline_ValuePointers$' \
+  -benchmem -benchtime=20x -count=10 -cpu=1 \
+  > /tmp/vp_touch_cand.txt
+
+benchstat /tmp/vp_touch_base.txt /tmp/vp_touch_cand.txt
+```
+
+Result summary:
+
+- `sec/op`: statistically unchanged (`p=0.631`, `n=10`)
+- `rewrite_allocs/op`: `183.0 -> 182.0` (`-0.55%`, `p<0.001`, `n=10`)
+- `allocs/op`: `183.0 -> 182.0` (`-0.55%`, `p<0.001`, `n=10`)
+
+Interpretation:
+
+- Small incremental allocation reduction on value-pointer rewrite with no
+  measured throughput regression in this sample.
