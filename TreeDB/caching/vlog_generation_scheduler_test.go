@@ -4039,7 +4039,21 @@ func TestVlogGenerationRewritePlan_AgeBlockedRetryRunsWhenDue(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	rewriteOpts, rewriteCalls := recorder.recordedRewrite()
+	rewriteDeadline := time.Now().Add(2 * schedulerTestWait(t))
+	var (
+		rewriteOpts  backenddb.ValueLogRewriteOnlineOptions
+		rewriteCalls int
+	)
+	for {
+		rewriteOpts, rewriteCalls = recorder.recordedRewrite()
+		if rewriteCalls >= 1 {
+			break
+		}
+		if time.Now().After(rewriteDeadline) {
+			t.Fatalf("rewrite calls after age-blocked retry=%d want=1", rewriteCalls)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	if rewriteCalls != 1 {
 		t.Fatalf("rewrite calls after age-blocked retry=%d want=1", rewriteCalls)
 	}
