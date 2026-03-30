@@ -238,3 +238,37 @@ func TestNoteTouchedValueLogFileID(t *testing.T) {
 		t.Fatalf("HasValueLogPointers()=false, want true")
 	}
 }
+
+func TestAppendPointerViewNoTouchTrustedSorted(t *testing.T) {
+	b := New(newMapValueReader(), page.DefaultInlineThreshold)
+	t.Cleanup(func() { _ = b.Close() })
+
+	b.AppendPointerViewNoTouchTrustedSorted([]byte("a"), page.ValuePtr{
+		FileID: page.ValueLogFileID(3),
+		Offset: 10,
+		Length: 2,
+	})
+	b.AppendPointerViewNoTouchTrustedSorted([]byte("b"), page.ValuePtr{
+		FileID: page.ValueLogFileID(4),
+		Offset: 20,
+		Length: 2,
+	})
+
+	if !b.HasValueLogPointers() {
+		t.Fatalf("HasValueLogPointers()=false, want true")
+	}
+	if got := b.TouchedValueLogSegments(); len(got) != 0 {
+		t.Fatalf("TouchedValueLogSegments()=%v, want []", got)
+	}
+
+	entries := b.SortedEntries()
+	if len(entries) != 2 {
+		t.Fatalf("len(SortedEntries())=%d want=2", len(entries))
+	}
+	if string(entries[0].Key) != "a" || string(entries[1].Key) != "b" {
+		t.Fatalf("unexpected key order: %q, %q", entries[0].Key, entries[1].Key)
+	}
+	if entries[0].ValuePtr.FileID != page.ValueLogFileID(3) || entries[1].ValuePtr.FileID != page.ValueLogFileID(4) {
+		t.Fatalf("unexpected pointer file IDs: %d, %d", entries[0].ValuePtr.FileID, entries[1].ValuePtr.FileID)
+	}
+}

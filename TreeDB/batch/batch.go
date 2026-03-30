@@ -469,6 +469,26 @@ func (b *Batch) SetPointerViewNoTouch(key []byte, ptr page.ValuePtr) error {
 	return b.setPointerViewInternal(key, ptr, false)
 }
 
+// AppendPointerViewNoTouchTrustedSorted appends a pointer Put without input
+// validation, touched-segment tracking, or key-order checks. Caller must
+// guarantee: batch is open, key is non-empty, ptr is a value-log pointer, and
+// appended keys are already non-decreasing.
+func (b *Batch) AppendPointerViewNoTouchTrustedSorted(key []byte, ptr page.ValuePtr) {
+	if b == nil {
+		return
+	}
+	b.entries = append(b.entries, Entry{
+		Type:     OpPut,
+		Key:      key,
+		ValuePtr: ptr,
+		IsPtr:    true,
+	})
+	b.hasValueLogPointers = true
+	if b.sorted {
+		b.lastKey = key
+	}
+}
+
 // NoteTouchedValueLogFileID is an internal helper that records a touched
 // value-log segment without appending a batch entry.
 func (b *Batch) NoteTouchedValueLogFileID(fileID uint32) {
