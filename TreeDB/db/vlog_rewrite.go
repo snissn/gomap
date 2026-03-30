@@ -2396,7 +2396,6 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 	// compressed output whenever it reduces stored bytes.
 	writer.SetKeepPolicy(0, 0, 0)
 	writer.SetTemplateCompression(opts.ValueLog.TemplateMode, opts.ValueLog.TemplateConfig, opts.ValueLog.TemplateStore)
-	defer writer.closeTemplateCompression()
 	compressionMode := opts.ValueLog.Compression
 	if compressionMode == 0 {
 		compressionMode = ValueLogCompressionAuto
@@ -2894,19 +2893,22 @@ func (w *rewriteWriter) applyTemplateCompression(class rewriteTemplateClass, dic
 		return dictID, dict, value
 	}
 	originalLen := len(value)
+	engine := w.templateEngineForClass(class)
 	switch w.templateMode {
 	case template.TemplateOnly:
+		if engine == nil || w.templateStore == nil {
+			return dictID, dict, value
+		}
 		dictID = 0
 		dict = nil
 	case template.TemplatePrepass:
+		if engine == nil || w.templateStore == nil {
+			return dictID, dict, value
+		}
 		// Keep dict path active and template-encode first.
 	case template.TemplateOff:
 		return dictID, dict, value
 	default:
-		return dictID, dict, value
-	}
-	engine := w.templateEngineForClass(class)
-	if engine == nil || w.templateStore == nil {
 		return dictID, dict, value
 	}
 	w.templateAttempts++

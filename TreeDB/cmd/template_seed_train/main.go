@@ -114,6 +114,28 @@ type trainStats struct {
 	kept      int
 }
 
+type readOnlyTemplateStore struct {
+	inner template.Store
+}
+
+func (s readOnlyTemplateStore) GetCandidates(ctx context.Context, fp uint64, max int) ([]template.Candidate, error) {
+	if s.inner == nil {
+		return nil, nil
+	}
+	return s.inner.GetCandidates(ctx, fp, max)
+}
+
+func (s readOnlyTemplateStore) GetTemplateDef(ctx context.Context, templateID uint64) ([]byte, error) {
+	if s.inner == nil {
+		return nil, nil
+	}
+	return s.inner.GetTemplateDef(ctx, templateID)
+}
+
+func (s readOnlyTemplateStore) PutTemplateDef(context.Context, []byte, []uint64) (uint64, error) {
+	return 0, errors.New("template-seed: probe store is read-only")
+}
+
 var errStopScan = errors.New("template-seed: stop scan")
 
 func shouldSample(idx, stride int) bool {
@@ -289,7 +311,7 @@ func trainOuterLeafValues(engine *template.Engine, store *templatedb.Store, back
 	return stats, nil
 }
 
-func probePrefix(engine *template.Engine, store *templatedb.Store, it iterator.UnsafeIterator, limit int) (attempted, kept int, err error) {
+func probePrefix(engine *template.Engine, store template.Store, it iterator.UnsafeIterator, limit int) (attempted, kept int, err error) {
 	defer it.Close()
 	for ; it.Valid(); it.Next() {
 		if limit > 0 && attempted >= limit {
@@ -310,7 +332,7 @@ func probePrefix(engine *template.Engine, store *templatedb.Store, it iterator.U
 	return attempted, kept, nil
 }
 
-func probePointer(engine *template.Engine, store *templatedb.Store, it iterator.UnsafeIterator, limit int) (attempted, kept int, err error) {
+func probePointer(engine *template.Engine, store template.Store, it iterator.UnsafeIterator, limit int) (attempted, kept int, err error) {
 	defer it.Close()
 	for ; it.Valid(); it.Next() {
 		_, ptr, flags := it.UnsafeEntry()
@@ -335,7 +357,7 @@ func probePointer(engine *template.Engine, store *templatedb.Store, it iterator.
 	return attempted, kept, nil
 }
 
-func probeOuterLeaf(engine *template.Engine, store *templatedb.Store, backend *treedbdb.DB, limit int) (attempted, kept int, err error) {
+func probeOuterLeaf(engine *template.Engine, store template.Store, backend *treedbdb.DB, limit int) (attempted, kept int, err error) {
 	snap := backend.AcquireSnapshot()
 	if snap == nil {
 		return 0, 0, errors.New("acquire snapshot: nil snapshot")
@@ -454,6 +476,12 @@ func main() {
 		DisableBackgroundPrune: true,
 	}
 	applyPersistedFormatConfig(templateDir, &templateOpts)
+	templateOpts.IndexOuterLeavesInValueLog = false
+	templateOpts.ValueLog.Compression = treedbdb.ValueLogCompressionOff
+	templateOpts.ValueLog.DictLookup = nil
+	templateOpts.ValueLog.TemplateMode = template.TemplateOff
+	templateOpts.ValueLog.TemplateLookup = nil
+	templateOpts.ValueLog.TemplateDecodeOptions = template.DecodeOptions{}
 	tmplDB, err := treedbdb.Open(templateOpts)
 	if err != nil {
 		log.Fatalf("open templatedb: %v", err)
@@ -613,7 +641,7 @@ func main() {
 	probeOuterKept := 0
 	if *probe > 0 || pProbe > 0 || oProbe > 0 {
 		probeEngine := template.NewEngine(cfg)
-		defer probeEngine.Close()
+		probeStore := readOnlyTemplateStore{inner: store}
 
 		if mode == "prefix" || mode == "mixed" {
 			start := []byte(*prefix)
@@ -622,7 +650,7 @@ func main() {
 			if err != nil {
 				log.Fatalf("iterator probe prefix: %v", err)
 			}
-			a, k, err := probePrefix(probeEngine, store, pit, *probe)
+			a, k, err := probePrefix(probeEngine, probeStore, pit, *probe)
 			if err != nil {
 				log.Fatalf("probe prefix: %v", err)
 			}
@@ -634,7 +662,7 @@ func main() {
 			if err != nil {
 				log.Fatalf("iterator probe pointer: %v", err)
 			}
-			a, k, err := probePointer(probeEngine, store, pit, pProbe)
+			a, k, err := probePointer(probeEngine, probeStore, pit, pProbe)
 			if err != nil {
 				log.Fatalf("probe pointer: %v", err)
 			}
@@ -644,7 +672,7 @@ func main() {
 			probeKept += k
 		}
 		if mode == "outerleaf" || mode == "mixed" {
-			a, k, err := probeOuterLeaf(probeEngine, store, backend, oProbe)
+			a, k, err := probeOuterLeaf(probeEngine, probeStore, backend, oProbe)
 			if err != nil {
 				log.Fatalf("probe outerleaf: %v", err)
 			}
@@ -653,6 +681,7 @@ func main() {
 			probeAttempted += a
 			probeKept += k
 		}
+		probeEngine.Close()
 	}
 
 	fmt.Printf("seed-summary source=%s scanned=%d processed=%d kept_during_seed=%d elapsed=%s prefix_scanned=%d prefix_processed=%d prefix_kept=%d pointer_scanned=%d pointer_processed=%d pointer_kept=%d outerleaf_scanned=%d outerleaf_processed=%d outerleaf_kept=%d defs_before=%d defs_after=%d fp_before=%d fp_after=%d templates_published=%d publish_defs=%d train_enqueued=%d train_processed=%d probe_attempted=%d probe_kept=%d pointer_probe_attempted=%d pointer_probe_kept=%d outerleaf_probe_attempted=%d outerleaf_probe_kept=%d\n",
