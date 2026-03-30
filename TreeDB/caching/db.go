@@ -21223,8 +21223,9 @@ func (db *DB) Stats() map[string]string {
 	rewriteAgeBlockedUntilNS := db.vlogGenerationRewriteAgeBlockedUntilNS.Load()
 	rewriteAgeBlockedRemainingMS := int64(0)
 	if rewriteAgeBlockedUntilNS > 0 {
-		if d := time.Until(time.Unix(0, rewriteAgeBlockedUntilNS)); d > 0 {
-			rewriteAgeBlockedRemainingMS = d.Milliseconds()
+		blockedUntil := time.Unix(0, rewriteAgeBlockedUntilNS)
+		if remaining := blockedUntil.Sub(statsNow); remaining > 0 {
+			rewriteAgeBlockedRemainingMS = remaining.Milliseconds()
 		}
 	}
 	foregroundWriteQuiet := db.foregroundWriteQuietFor(statsNow, vlogGenerationMaintenanceQuietWindow)
@@ -21253,7 +21254,10 @@ func (db *DB) Stats() map[string]string {
 			if !statsNow.Before(dueAt) {
 				rewriteStageDue = true
 			} else {
-				rewriteStageDueInMS = time.Until(dueAt).Milliseconds()
+				remaining := dueAt.Sub(statsNow)
+				if remaining > 0 {
+					rewriteStageDueInMS = remaining.Milliseconds()
+				}
 			}
 		}
 	}
