@@ -330,42 +330,6 @@ func (f *File) groupedFrameCacheReadTo(start int64, verifyCRC bool, subIndex int
 	return nil, false, nil, false
 }
 
-// groupedFrameCacheLookup returns a detached copy of the requested grouped
-// sub-value. The returned raw slice is never backed by cache-owned storage.
-func (f *File) groupedFrameCacheLookup(start int64, verifyCRC bool, subIndex int) (raw []byte, valStart, valEnd, rawLen uint32, ok bool) {
-	f.cacheMu.Lock()
-	defer f.cacheMu.Unlock()
-	if f.groupedFrameCacheEntries <= 0 {
-		return nil, 0, 0, 0, false
-	}
-	if len(f.groupedFrameCache) == 0 {
-		f.groupedFrameCacheMisses++
-		return nil, 0, 0, 0, false
-	}
-	for i := range f.groupedFrameCache {
-		e := &f.groupedFrameCache[i]
-		if e.k <= 0 || e.start != start || e.verifyCRC != verifyCRC || subIndex < 0 || subIndex >= e.k {
-			continue
-		}
-		valueStart := e.offsets[subIndex]
-		valueEnd := e.offsets[subIndex+1]
-		frameRawLen := e.offsets[e.k]
-		if valueEnd < valueStart || valueEnd > frameRawLen || uint32(len(e.raw)) != frameRawLen {
-			continue
-		}
-		f.groupedFrameCacheClock++
-		e.used = f.groupedFrameCacheClock
-		f.groupedFrameCacheHits++
-
-		valueLen := int(valueEnd - valueStart)
-		rawCopy := make([]byte, valueLen)
-		copy(rawCopy, e.raw[int(valueStart):int(valueEnd)])
-		return rawCopy, 0, uint32(valueLen), uint32(valueLen), true
-	}
-	f.groupedFrameCacheMisses++
-	return nil, 0, 0, 0, false
-}
-
 func (f *File) groupedFrameCacheStore(start int64, verifyCRC bool, k int, offsets [MaxFrameK + 1]uint32, raw []byte, pooled bool) bool {
 	if k <= 0 || len(raw) == 0 {
 		return false

@@ -138,6 +138,7 @@ func (b *Batch) resetLocked() {
 	if len(b.touchedValueLog) > 0 {
 		clear(b.touchedValueLog)
 	}
+	b.touchedValueLog = nil
 	b.touchedValueLogSmallLen = 0
 	b.byteSize = 0
 	b.sorted = true
@@ -157,11 +158,10 @@ func (b *Batch) resetForPool() {
 		}
 	}
 	b.byteSize = 0
-	if len(b.touchedValueLog) > 1024 {
-		b.touchedValueLog = nil
-	} else if len(b.touchedValueLog) > 0 {
+	if len(b.touchedValueLog) > 0 {
 		clear(b.touchedValueLog)
 	}
+	b.touchedValueLog = nil
 	b.touchedValueLogSmallLen = 0
 	b.sorted = true
 	b.lastKey = nil
