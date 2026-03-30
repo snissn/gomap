@@ -51,6 +51,8 @@ type valueLogRefDelta struct {
 	changes map[uint32]int64
 }
 
+const valueLogRefDeltaPromotedMapInitCap = 128
+
 type valueLogRefDeltaEntry struct {
 	fileID uint32
 	delta  int64
@@ -85,7 +87,11 @@ func (d *valueLogRefDelta) add(fileID uint32, delta int64) {
 			d.inlineN++
 			return
 		}
-		d.changes = make(map[uint32]int64, d.inlineN+1)
+		capHint := d.inlineN + 1
+		if capHint < valueLogRefDeltaPromotedMapInitCap {
+			capHint = valueLogRefDeltaPromotedMapInitCap
+		}
+		d.changes = make(map[uint32]int64, capHint)
 		for i := 0; i < d.inlineN; i++ {
 			entry := d.inline[i]
 			if entry.delta == 0 {
