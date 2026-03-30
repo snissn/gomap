@@ -3438,7 +3438,7 @@ func TestVlogGenerationRewritePlan_StageConfirmationReplansEvenWhenOtherTriggers
 		skipRetainedPruneWait: true,
 		skipCheckpoint:        true,
 		debugSource:           "rewrite_stage_confirm",
-		})
+	})
 
 	planDeadline := time.Now().Add(2 * schedulerTestWait(t))
 	for {
@@ -3522,7 +3522,7 @@ func TestVlogGenerationRewritePlan_StageConfirmationClearsStagedDebtWhenPlanEmpt
 		skipCheckpoint:        false,
 		rewriteDebtDrain:      true,
 		debugSource:           "rewrite_stage_confirm",
-		})
+	})
 
 	planDeadline := time.Now().Add(2 * schedulerTestWait(t))
 	for {
