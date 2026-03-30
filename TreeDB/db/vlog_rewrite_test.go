@@ -62,6 +62,35 @@ func assertRewritePlanStableFieldsEqual(t *testing.T, got, want ValueLogRewriteP
 	}
 }
 
+func TestRewriteSwapsKeySorted(t *testing.T) {
+	ordered := []rewriteSwap{
+		{key: []byte("a")},
+		{key: []byte("b")},
+		{key: []byte("c")},
+	}
+	if !rewriteSwapsKeySorted(ordered) {
+		t.Fatalf("expected ordered swaps to be detected as sorted")
+	}
+
+	unsorted := []rewriteSwap{
+		{key: []byte("b")},
+		{key: []byte("a")},
+		{key: []byte("c")},
+	}
+	if rewriteSwapsKeySorted(unsorted) {
+		t.Fatalf("expected unsorted swaps to be detected as unsorted")
+	}
+
+	duplicates := []rewriteSwap{
+		{key: []byte("a")},
+		{key: []byte("a")},
+		{key: []byte("b")},
+	}
+	if !rewriteSwapsKeySorted(duplicates) {
+		t.Fatalf("expected duplicate keys to be treated as sorted")
+	}
+}
+
 func TestValueLogRewriteOffline_RewritesAndShrinks(t *testing.T) {
 	dir := t.TempDir()
 

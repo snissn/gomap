@@ -422,3 +422,55 @@ Interpretation:
 - Full-run outcome remains noisy; this sample does not show a clear wall-time +
   post-rewrite size win despite better pre-rewrite app bytes.
 - Keep this change as “candidate” pending interleaved control/candidate pairs.
+
+## 2026-03-29 Follow-Up: Rewrite Swap Match Sort Fast-Path
+Patch under test:
+
+- `collectRewriteSwapPointerMatches` now skips `sort.Slice` when swap keys are
+  already in non-decreasing order (the common default-locality rewrite path),
+  and only sorts when needed.
+
+### Targeted correctness checks
+Command:
+
+```bash
+GOWORK=off go test ./TreeDB/db -run \
+'TestRewriteSwapsKeySorted|Test(InlineCommitSkipsValueLogRefresh|PointerCommitRefreshesValueLogSet|PointerCommitSkipsValueLogRefreshWhenSegmentAlreadyRegistered|OuterLeafCommitPublishesRegisteredSegmentWithoutExplicitRefresh|OuterLeafWriteLoopSkipsForcedValueLogRefreshScans|ValueLogGC_DoesNotRescanWhenSetAlreadyPopulated|ValueLogRewritePlan_DoesNotRescanWhenSetAlreadyPopulated|ValueLogRewriteOnline_LeafRefsReserveRIDs_DoesNotRefreshManager)$' \
+-count=1
+```
+
+Result:
+
+- `ok github.com/snissn/gomap/TreeDB/db`
+
+### Microbench A/B (same host load, HEAD~1 vs candidate)
+Commands:
+
+```bash
+# Baseline (HEAD~1) in temporary worktree
+git worktree add /tmp/gomap_base_rewrite HEAD~1
+GOWORK=off go test -C /tmp/gomap_base_rewrite ./TreeDB/db -run '^$' \
+  -bench '^BenchmarkValueLogRewriteOnline_ValuePointers$' \
+  -benchmem -benchtime=20x -count=5 \
+  > /tmp/vlog_rewrite_base_headminus1.txt
+git worktree remove /tmp/gomap_base_rewrite --force
+
+# Candidate (current branch)
+GOWORK=off go test ./TreeDB/db -run '^$' \
+  -bench '^BenchmarkValueLogRewriteOnline_ValuePointers$' \
+  -benchmem -benchtime=20x -count=5 \
+  > /tmp/vlog_rewrite_candidate_head.txt
+
+benchstat /tmp/vlog_rewrite_base_headminus1.txt /tmp/vlog_rewrite_candidate_head.txt
+```
+
+Result summary:
+
+- `sec/op`: statistically unchanged (`~`, `p=0.841`, `n=5`)
+- `rewrite_allocs/op`: `189.7 -> 186.6` (`-1.63%`, `p=0.008`, `n=5`)
+- `allocs/op`: `189 -> 186` (`-1.59%`, `p=0.008`, `n=5`)
+
+Interpretation:
+
+- This is a small but consistent allocation reduction in the rewrite hot path
+  without measured throughput regression in this sample size.
