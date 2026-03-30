@@ -39,7 +39,25 @@ AB_CAPTURE_PPROF_ON_STUCK="${AB_CAPTURE_PPROF_ON_STUCK:-0}"
 AB_CAPTURE_FULL_SMAPS_ON_MAX_RSS="${AB_CAPTURE_FULL_SMAPS_ON_MAX_RSS:-0}"
 AB_CAPTURE_DEBUG_VARS_ON_MAX_RSS="${AB_CAPTURE_DEBUG_VARS_ON_MAX_RSS:-0}"
 TS="$(date +%Y%m%d%H%M%S)"
-OUT="${OUT_DIR:-$ROOT/artifacts/celestia_ab/$TS}"
+
+if [[ "$#" -gt 4 ]]; then
+  echo "usage: $0 [out_dir] [run_cmd] [control_env_file] [candidate_env_file]" >&2
+  exit 1
+fi
+if [[ "$#" -ge 1 ]]; then
+  OUT="$1"
+else
+  OUT="${OUT_DIR:-$ROOT/artifacts/celestia_ab/$TS}"
+fi
+if [[ "$#" -ge 2 ]]; then
+  RUN_CMD="$2"
+fi
+if [[ "$#" -ge 3 ]]; then
+  CONTROL_ENV_FILE="$3"
+fi
+if [[ "$#" -ge 4 ]]; then
+  CANDIDATE_ENV_FILE="$4"
+fi
 
 if ! command -v python3 >/dev/null 2>&1; then
   echo "python3 is required" >&2
