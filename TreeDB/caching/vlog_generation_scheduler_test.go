@@ -6748,6 +6748,14 @@ func TestVlogGenerationStats_ReportRewriteBacklogAndDurations(t *testing.T) {
 		101: {},
 		102: {},
 	}
+	db.vlogGenerationObservedGCFirstQueuedUnixNano = map[uint32]int64{
+		101: time.Now().Add(-3 * time.Second).UnixNano(),
+		102: time.Now().Add(-1200 * time.Millisecond).UnixNano(),
+	}
+	db.vlogGenerationObservedGCRetryAttempts = map[uint32]uint8{
+		101: 2,
+		102: 1,
+	}
 	db.vlogGenerationObservedGCMu.Unlock()
 
 	stats := db.Stats()
@@ -7056,6 +7064,21 @@ func TestVlogGenerationStats_ReportRewriteBacklogAndDurations(t *testing.T) {
 	}
 	if got := stats["treedb.cache.vlog_generation.observed_gc.pending_ids"]; got != "2" {
 		t.Fatalf("observed gc pending ids=%q want 2", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.observed_gc.pending_oldest_unix_nano"]; got == "0" {
+		t.Fatalf("observed gc pending oldest unix nano=%q want >0", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.observed_gc.pending_oldest_age_ms"]; got == "0" {
+		t.Fatalf("observed gc pending oldest age ms=%q want >0", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.observed_gc.pending_retry_ids"]; got != "2" {
+		t.Fatalf("observed gc pending retry ids=%q want 2", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.observed_gc.pending_retry_attempts_total"]; got != "3" {
+		t.Fatalf("observed gc pending retry attempts total=%q want 3", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.observed_gc.pending_retry_attempts_max"]; got != "2" {
+		t.Fatalf("observed gc pending retry attempts max=%q want 2", got)
 	}
 	if got := stats["treedb.cache.vlog_generation.observed_gc.queued_batches"]; got != "5" {
 		t.Fatalf("observed gc queued batches=%q want 5", got)

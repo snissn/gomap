@@ -21175,9 +21175,32 @@ func (db *DB) Stats() map[string]string {
 		}
 	}
 	db.vlogGenerationRewriteQueueMu.Unlock()
+	statsNow := time.Now()
 	db.vlogGenerationObservedGCMu.Lock()
 	observedGCPending := len(db.vlogGenerationObservedGCSourceIDs)
+	observedGCPendingOldestNS := int64(0)
+	observedGCPendingRetryIDs := 0
+	observedGCPendingRetryAttemptsTotal := uint64(0)
+	observedGCPendingRetryAttemptsMax := uint8(0)
+	for id := range db.vlogGenerationObservedGCSourceIDs {
+		if firstQueued, ok := db.vlogGenerationObservedGCFirstQueuedUnixNano[id]; ok && firstQueued > 0 {
+			if observedGCPendingOldestNS == 0 || firstQueued < observedGCPendingOldestNS {
+				observedGCPendingOldestNS = firstQueued
+			}
+		}
+		if attempts, ok := db.vlogGenerationObservedGCRetryAttempts[id]; ok && attempts > 0 {
+			observedGCPendingRetryIDs++
+			observedGCPendingRetryAttemptsTotal += uint64(attempts)
+			if attempts > observedGCPendingRetryAttemptsMax {
+				observedGCPendingRetryAttemptsMax = attempts
+			}
+		}
+	}
 	db.vlogGenerationObservedGCMu.Unlock()
+	observedGCPendingOldestAgeMS := int64(0)
+	if observedGCPendingOldestNS > 0 && observedGCPendingOldestNS < statsNow.UnixNano() {
+		observedGCPendingOldestAgeMS = time.Duration(statsNow.UnixNano() - observedGCPendingOldestNS).Milliseconds()
+	}
 	observedGCLatencyCompleted := db.vlogGenerationObservedGCLatencyCompletedIDs.Load()
 	observedGCLatencyDropped := db.vlogGenerationObservedGCLatencyDroppedIDs.Load()
 	observedGCLatencyTotalMS := db.vlogGenerationObservedGCLatencyTotalMS.Load()
@@ -21192,7 +21215,6 @@ func (db *DB) Stats() map[string]string {
 			rewriteAgeBlockedRemainingMS = d.Milliseconds()
 		}
 	}
-	statsNow := time.Now()
 	foregroundWriteQuiet := db.foregroundWriteQuietFor(statsNow, vlogGenerationMaintenanceQuietWindow)
 	foregroundReadQuiet := db.foregroundReadQuietFor(statsNow, vlogForegroundReadQuietWindow)
 	foregroundQuiet := foregroundWriteQuiet && foregroundReadQuiet
@@ -21498,6 +21520,11 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_generation.rewrite.plan_penalty_filter.segments"] = fmt.Sprintf("%d", db.vlogGenerationRewritePlanPenaltyFilterSegments.Load())
 	stats["treedb.cache.vlog_generation.rewrite.plan_penalty_filter.to_empty_runs"] = fmt.Sprintf("%d", db.vlogGenerationRewritePlanPenaltyFilterToEmpty.Load())
 	stats["treedb.cache.vlog_generation.observed_gc.pending_ids"] = fmt.Sprintf("%d", observedGCPending)
+	stats["treedb.cache.vlog_generation.observed_gc.pending_oldest_unix_nano"] = fmt.Sprintf("%d", observedGCPendingOldestNS)
+	stats["treedb.cache.vlog_generation.observed_gc.pending_oldest_age_ms"] = fmt.Sprintf("%d", observedGCPendingOldestAgeMS)
+	stats["treedb.cache.vlog_generation.observed_gc.pending_retry_ids"] = fmt.Sprintf("%d", observedGCPendingRetryIDs)
+	stats["treedb.cache.vlog_generation.observed_gc.pending_retry_attempts_total"] = fmt.Sprintf("%d", observedGCPendingRetryAttemptsTotal)
+	stats["treedb.cache.vlog_generation.observed_gc.pending_retry_attempts_max"] = fmt.Sprintf("%d", observedGCPendingRetryAttemptsMax)
 	stats["treedb.cache.vlog_generation.observed_gc.queued_batches"] = fmt.Sprintf("%d", db.vlogGenerationObservedGCQueuedBatches.Load())
 	stats["treedb.cache.vlog_generation.observed_gc.queued_ids"] = fmt.Sprintf("%d", db.vlogGenerationObservedGCQueuedIDs.Load())
 	stats["treedb.cache.vlog_generation.observed_gc.taken_batches"] = fmt.Sprintf("%d", db.vlogGenerationObservedGCTakenBatches.Load())
