@@ -2024,14 +2024,7 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 		}
 	}
 
-	var vlogRefDelta *valueLogRefDelta
-	if db.valueLogRefTracker != nil && db.valueLogRefTracker.canTrack(snap.state.CommitSeq) {
-		// LeafRef-only rewrites preserve logical key/value pointer cardinality.
-		// Keep the incremental tracker sequence in sync with an empty delta so
-		// maintenance cleanup avoids falling back to full ref scans.
-		vlogRefDelta = newValueLogRefDelta()
-	}
-	if err := db.finalizeCommit(newRoot, newSysRoot, leafCtx.retired, sync, adaptive.Metrics{}, createdIDs, false, vlogRefDelta); err != nil {
+	if err := db.finalizeCommit(newRoot, newSysRoot, leafCtx.retired, sync, adaptive.Metrics{}, createdIDs, false, nil); err != nil {
 		return 0, 0, err
 	}
 	tracker = nil
@@ -2146,7 +2139,7 @@ func (db *DB) applyRewriteSwapBatchOptimistic(swaps []rewriteSwap, sync bool) (b
 	}
 	entries = b.SortedEntries()
 	var vlogRefDelta *valueLogRefDelta
-	if db.valueLogRefTracker != nil && db.valueLogRefTracker.canTrack(baseSeq) {
+	if db.valueLogRefTracker != nil && db.valueLogRefTracker.canTrack(baseSeq) && !db.indexOuterLeavesInValueLog {
 		vlogRefDelta = rewriteDelta
 	}
 
@@ -2224,7 +2217,7 @@ func (db *DB) applyRewriteSwapBatchSerialized(swaps []rewriteSwap, sync bool) er
 	}
 	entries = b.SortedEntries()
 	var vlogRefDelta *valueLogRefDelta
-	if db.valueLogRefTracker != nil && db.valueLogRefTracker.canTrack(baseSeq) {
+	if db.valueLogRefTracker != nil && db.valueLogRefTracker.canTrack(baseSeq) && !db.indexOuterLeavesInValueLog {
 		vlogRefDelta = rewriteDelta
 	}
 	if err := db.finalizeCommit(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, db.indexOuterLeavesInValueLog, vlogRefDelta); err != nil {

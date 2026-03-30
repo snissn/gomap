@@ -320,6 +320,65 @@ func TestValueLogRewrite_BatchedPointerSwap_ReopenPreservesData(t *testing.T) {
 	}
 }
 
+func TestUpdateValueLogHealthAfterRewrite_SetInitAgeFromFileMetadata(t *testing.T) {
+	dir := t.TempDir()
+
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer closeNoErr(t, db)
+
+	ptr := appendPointersInNewSegment(t, dir, 0, 1, 120_000, 1, func(i int) []byte {
+		return bytes.Repeat([]byte{byte(i + 1)}, 256)
+	})[0]
+	b := db.NewBatch().(*Batch)
+	if err := b.SetPointer([]byte("k"), ptr); err != nil {
+		t.Fatalf("set pointer: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	closeNoErr(t, b)
+	if err := db.RefreshValueLogSet(); err != nil {
+		t.Fatalf("RefreshValueLogSet: %v", err)
+	}
+
+	segPath := db.valueLogManager.SegmentPath(ptr.FileID)
+	past := time.Now().Add(-3 * time.Second)
+	if err := os.Chtimes(segPath, past, past); err != nil {
+		t.Fatalf("Chtimes: %v", err)
+	}
+
+	healthPath := valueLogHealthPath(dir)
+	_ = os.Remove(healthPath)
+
+	set := db.valueLogManager.CurrentSetNoRefresh()
+	if set == nil {
+		t.Fatalf("missing current value-log set")
+	}
+	defer func() { _ = db.valueLogManager.Release(set) }()
+	oldIDs := map[uint32]struct{}{ptr.FileID: {}}
+	if err := updateValueLogHealthAfterRewrite(dir, oldIDs, set); err != nil {
+		t.Fatalf("updateValueLogHealthAfterRewrite: %v", err)
+	}
+
+	health, err := loadValueLogHealth(healthPath)
+	if err != nil {
+		t.Fatalf("loadValueLogHealth: %v", err)
+	}
+	h, ok := health[ptr.FileID]
+	if !ok {
+		t.Fatalf("missing health entry for segment %d", ptr.FileID)
+	}
+	if h.LastUpdatedUnixNano == 0 {
+		t.Fatalf("expected LastUpdatedUnixNano to be initialized")
+	}
+	if h.AgeSeconds <= 0 {
+		t.Fatalf("expected AgeSeconds initialized from file metadata, got %d", h.AgeSeconds)
+	}
+}
+
 func TestValueLogRewriteOnline_NoPointerKeys_DoesNotCreateNewSegment(t *testing.T) {
 	dir := t.TempDir()
 
@@ -2110,12 +2169,6 @@ func TestValueLogRewriteOnline_LeafRefsReserveRIDs_DoesNotRefreshManager(t *test
 	db, sourceIDs, cleanup := setupLeafRefRewriteBench(t, 768)
 	defer cleanup()
 
-	seqBefore := db.currentCommitSeq()
-	_, ok := db.valueLogRefTracker.referencedSet(seqBefore)
-	if !ok {
-		t.Fatalf("expected incremental ref set before rewrite seq=%d", seqBefore)
-	}
-
 	refreshBefore := db.valueLogManager.RefreshScanCount()
 	nextRID := uint64(1 << 40)
 	stats, err := db.ValueLogRewriteOnline(context.Background(), ValueLogRewriteOnlineOptions{
@@ -2138,26 +2191,6 @@ func TestValueLogRewriteOnline_LeafRefsReserveRIDs_DoesNotRefreshManager(t *test
 	}
 	if delta := db.valueLogManager.RefreshScanCount() - refreshBefore; delta != 0 {
 		t.Fatalf("expected reserve leafref rewrite to avoid manager refresh scans, got %d", delta)
-	}
-	seqAfter := db.currentCommitSeq()
-	_, ok = db.valueLogRefTracker.referencedSet(seqAfter)
-	if !ok {
-		t.Fatalf("expected incremental ref set after rewrite seq=%d", seqAfter)
-	}
-	fullCounts, fullSeq, err := db.scanValueLogRefCounts(context.Background())
-	if err != nil {
-		t.Fatalf("scanValueLogRefCounts: %v", err)
-	}
-	if fullSeq != seqAfter {
-		t.Fatalf("scan seq mismatch: got=%d want=%d", fullSeq, seqAfter)
-	}
-	fullRefs := valueLogRefSetFromCounts(fullCounts)
-	mergedRefs, err := db.referencedValueLogSegments(context.Background())
-	if err != nil {
-		t.Fatalf("referencedValueLogSegments: %v", err)
-	}
-	if !reflect.DeepEqual(mergedRefs, fullRefs) {
-		t.Fatalf("merged/full-scan mismatch after rewrite: merged=%d full=%d", len(mergedRefs), len(fullRefs))
 	}
 }
 

@@ -515,6 +515,11 @@ for pair in sorted(by_pair):
     if cand_rewrite_failed and not ctrl_rewrite_failed:
         outcome = "loss"
         losses += 1
+    elif ctrl_rewrite_failed and not cand_rewrite_failed:
+        # Baseline rewrite failures make the pair non-comparable; classify as a
+        # conservative loss so fast-gate logic does not treat it as neutral.
+        outcome = "loss"
+        losses += 1
     elif d_size_primary is not None and d_total is not None:
         win = (d_size_primary <= -size_tol) and (d_total <= time_tol)
         loss = (d_size_primary >= size_tol) and (d_total >= -time_tol)

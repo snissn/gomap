@@ -56,6 +56,10 @@ if [[ "$RUN_TIMEOUT_SECONDS" -lt 0 ]]; then
   echo "RUN_TIMEOUT_SECONDS must be >= 0" >&2
   exit 1
 fi
+if [[ "$RUN_TIMEOUT_SECONDS" -gt 0 ]] && ! command -v timeout >/dev/null 2>&1; then
+  echo "RUN_TIMEOUT_SECONDS > 0 requires the 'timeout' command" >&2
+  exit 1
+fi
 if [[ "$RUN_MAX_ATTEMPTS_PER_VARIANT" -lt 1 ]]; then
   echo "RUN_MAX_ATTEMPTS_PER_VARIANT must be >= 1" >&2
   exit 1
@@ -201,7 +205,7 @@ run_variant() {
       fi
       # Non-login shell avoids user profile side effects (e.g. tty-dependent exports)
       # that can fail under nohup/background runs.
-      if [[ "$RUN_TIMEOUT_SECONDS" -gt 0 ]] && command -v timeout >/dev/null 2>&1; then
+      if [[ "$RUN_TIMEOUT_SECONDS" -gt 0 ]]; then
         timeout --signal=TERM --kill-after=60 "${RUN_TIMEOUT_SECONDS}s" bash -c "$RUN_CMD"
       else
         bash -c "$RUN_CMD"

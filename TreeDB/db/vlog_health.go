@@ -226,9 +226,14 @@ func updateValueLogHealthAfterRewrite(dbDir string, oldValueIDs map[uint32]struc
 			size := fileSize(f)
 			h.SegmentBytes = size
 			h.LiveBytes = size
-			// Online rewrite callers pass a manager set; avoid expensive stat calls
-			// per segment and keep age monotonic from prior metadata timestamps.
-			h.AgeSeconds = advanceSegmentAgeSeconds(h, now)
+			// Online rewrite callers pass a manager set; keep age monotonic from
+			// prior timestamps when available, but initialize from filesystem
+			// metadata when health metadata is missing/corrupt.
+			if h.LastUpdatedUnixNano == 0 {
+				h.AgeSeconds = segmentAgeSeconds(f.Path, now)
+			} else {
+				h.AgeSeconds = advanceSegmentAgeSeconds(h, now)
+			}
 			h.LastUpdatedUnixNano = now.UnixNano()
 			out[id] = h
 		}
