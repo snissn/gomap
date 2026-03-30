@@ -330,9 +330,8 @@ func (f *File) groupedFrameCacheReadTo(start int64, verifyCRC bool, subIndex int
 	return nil, false, nil, false
 }
 
-// groupedFrameCacheLookup returns a detached raw frame copy for callers that
-// need offsets into the decoded grouped payload. The returned raw slice is
-// never backed by cache-owned storage.
+// groupedFrameCacheLookup returns a detached copy of the requested grouped
+// sub-value. The returned raw slice is never backed by cache-owned storage.
 func (f *File) groupedFrameCacheLookup(start int64, verifyCRC bool, subIndex int) (raw []byte, valStart, valEnd, rawLen uint32, ok bool) {
 	f.cacheMu.Lock()
 	defer f.cacheMu.Unlock()
@@ -348,18 +347,20 @@ func (f *File) groupedFrameCacheLookup(start int64, verifyCRC bool, subIndex int
 		if e.k <= 0 || e.start != start || e.verifyCRC != verifyCRC || subIndex < 0 || subIndex >= e.k {
 			continue
 		}
-		valStart = e.offsets[subIndex]
-		valEnd = e.offsets[subIndex+1]
-		rawLen = e.offsets[e.k]
-		if valEnd < valStart || valEnd > rawLen || uint32(len(e.raw)) != rawLen {
+		valueStart := e.offsets[subIndex]
+		valueEnd := e.offsets[subIndex+1]
+		frameRawLen := e.offsets[e.k]
+		if valueEnd < valueStart || valueEnd > frameRawLen || uint32(len(e.raw)) != frameRawLen {
 			continue
 		}
 		f.groupedFrameCacheClock++
 		e.used = f.groupedFrameCacheClock
 		f.groupedFrameCacheHits++
-		rawCopy := make([]byte, len(e.raw))
-		copy(rawCopy, e.raw)
-		return rawCopy, valStart, valEnd, rawLen, true
+
+		valueLen := int(valueEnd - valueStart)
+		rawCopy := make([]byte, valueLen)
+		copy(rawCopy, e.raw[int(valueStart):int(valueEnd)])
+		return rawCopy, 0, uint32(valueLen), uint32(valueLen), true
 	}
 	f.groupedFrameCacheMisses++
 	return nil, 0, 0, 0, false
@@ -700,8 +701,8 @@ func (f *File) readGroupedCompressedFromFileTo(ptr page.ValuePtr, dst []byte) ([
 		DictID:   binary.LittleEndian.Uint64(frameHeader[4:12]),
 	}
 
-	raw := make([]byte, 0, int(rawLen))
-	pooledRaw := false
+	raw := f.takeDecodeScratch(int(rawLen))
+	pooledRaw := true
 	raw, err := decodeFramePayloadTo(frame, payload[prefixLen:], f.dictLookup, rawLen, raw)
 	if err != nil {
 		if pooledRaw {
@@ -715,16 +716,16 @@ func (f *File) readGroupedCompressedFromFileTo(ptr page.ValuePtr, dst []byte) ([
 		}
 		return nil, false, ErrCorrupt, true
 	}
-	cachedRaw := f.groupedFrameCacheStore(start, false, k, offsets, raw, false)
-
 	val := raw[valStart:valEnd]
 	if f.templateLookup != nil && templ.IsEncodedPayload(val) {
-		decoded, err := templ.DecodePayloadAppend(nil, val, func(id uint64) (templ.TemplateDef, error) {
-			return resolveTemplateDef(id, f.templateLookup, f.templateDefCache)
-		}, f.templateDecodeOpts)
+		encoded := append([]byte(nil), val...)
+		cachedRaw := f.groupedFrameCacheStore(start, false, k, offsets, raw, pooledRaw)
 		if pooledRaw && !cachedRaw {
 			f.releaseDecodeScratch(raw)
 		}
+		decoded, err := templ.DecodePayloadAppend(nil, encoded, func(id uint64) (templ.TemplateDef, error) {
+			return resolveTemplateDef(id, f.templateLookup, f.templateDefCache)
+		}, f.templateDecodeOpts)
 		if err != nil {
 			return nil, false, err, true
 		}
@@ -734,6 +735,7 @@ func (f *File) readGroupedCompressedFromFileTo(ptr page.ValuePtr, dst []byte) ([
 	if dst != nil && cap(dst) >= len(val) {
 		out := dst[:len(val)]
 		copy(out, val)
+		cachedRaw := f.groupedFrameCacheStore(start, false, k, offsets, raw, pooledRaw)
 		if pooledRaw && !cachedRaw {
 			f.releaseDecodeScratch(raw)
 		}
@@ -741,6 +743,7 @@ func (f *File) readGroupedCompressedFromFileTo(ptr page.ValuePtr, dst []byte) ([
 	}
 	out := make([]byte, len(val))
 	copy(out, val)
+	cachedRaw := f.groupedFrameCacheStore(start, false, k, offsets, raw, pooledRaw)
 	if pooledRaw && !cachedRaw {
 		f.releaseDecodeScratch(raw)
 	}
