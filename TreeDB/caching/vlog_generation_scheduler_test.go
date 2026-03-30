@@ -775,6 +775,43 @@ func TestVlogGenerationRewriteMaxSegmentsForFreshPlan_AllowsStaleRatioDebtDrain(
 	}
 }
 
+func TestVlogGenerationRewriteMaxSegments_UsesOverrideLimits(t *testing.T) {
+	oldResume := vlogGenerationRewriteResumeMaxSegmentsLimit
+	oldDebtDrain := vlogGenerationRewriteDebtDrainMaxSegmentsLimit
+	oldFreshMin := vlogGenerationRewriteFreshPlanDebtDrainMinSegmentsLimit
+	oldFreshMax := vlogGenerationRewriteFreshPlanDebtDrainMaxSegmentsLimit
+	t.Cleanup(func() {
+		vlogGenerationRewriteResumeMaxSegmentsLimit = oldResume
+		vlogGenerationRewriteDebtDrainMaxSegmentsLimit = oldDebtDrain
+		vlogGenerationRewriteFreshPlanDebtDrainMinSegmentsLimit = oldFreshMin
+		vlogGenerationRewriteFreshPlanDebtDrainMaxSegmentsLimit = oldFreshMax
+	})
+
+	vlogGenerationRewriteResumeMaxSegmentsLimit = 3
+	vlogGenerationRewriteDebtDrainMaxSegmentsLimit = 6
+	vlogGenerationRewriteFreshPlanDebtDrainMinSegmentsLimit = 5
+	// max<min should clamp up to min in effective limits.
+	vlogGenerationRewriteFreshPlanDebtDrainMaxSegmentsLimit = 2
+
+	db := &DB{
+		valueLogRewriteBudgetBytes:   1 << 20,
+		valueLogGenerationWarmTarget: 64,
+	}
+
+	if got := db.vlogGenerationRewriteMaxSegmentsForRun(1, 1<<20, vlogGenerationMaintenanceOptions{rewriteDebtDrain: true}); got != 3 {
+		t.Fatalf("run resume override got=%d want=3", got)
+	}
+	if got := db.vlogGenerationRewriteMaxSegmentsForRun(12, 1<<20, vlogGenerationMaintenanceOptions{rewriteDebtDrain: true}); got != 6 {
+		t.Fatalf("run debt-drain override got=%d want=6", got)
+	}
+	if got := db.vlogGenerationRewriteMaxSegmentsForFreshPlan(4, 1<<20, vlogGenerationMaintenanceOptions{rewriteDebtDrain: true, debugSource: "rewrite_age_blocked"}); got != 3 {
+		t.Fatalf("fresh-plan below override min got=%d want=3", got)
+	}
+	if got := db.vlogGenerationRewriteMaxSegmentsForFreshPlan(12, 1<<20, vlogGenerationMaintenanceOptions{rewriteDebtDrain: true, debugSource: "rewrite_age_blocked"}); got != 5 {
+		t.Fatalf("fresh-plan override clamp got=%d want=5", got)
+	}
+}
+
 type rewriteBudgetRecordingBackend struct {
 	*backenddb.DB
 
@@ -6959,6 +6996,18 @@ func TestVlogGenerationStats_ReportRewriteBacklogAndDurations(t *testing.T) {
 	}
 	if got := stats["treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.checkpoint_kick"]; got != "1" {
 		t.Fatalf("rewrite queue run segment cap checkpoint kick=%q want 1", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.queue_config.resume_max_segments"]; got != "1" {
+		t.Fatalf("rewrite queue config resume max segments=%q want 1", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.queue_config.debt_drain_max_segments"]; got != "8" {
+		t.Fatalf("rewrite queue config debt-drain max segments=%q want 8", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.queue_config.fresh_plan_debt_drain_min_segments"]; got != "4" {
+		t.Fatalf("rewrite queue config fresh-plan min segments=%q want 4", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.queue_config.fresh_plan_debt_drain_max_segments"]; got != "4" {
+		t.Fatalf("rewrite queue config fresh-plan max segments=%q want 4", got)
 	}
 	if got := stats["treedb.cache.vlog_generation.rewrite.queue_live_bytes_after_tokens"]; got != "688" {
 		t.Fatalf("rewrite queue live bytes after tokens=%q want 688", got)

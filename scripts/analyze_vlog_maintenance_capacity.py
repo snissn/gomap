@@ -262,6 +262,10 @@ def build_summary(stats: dict[str, Any]) -> dict[str, Any]:
         "rewrite_penalties_active": metric_int(stats, "treedb.cache.vlog_generation.rewrite.penalties_active"),
         "rewrite_budget_consumed_bytes_total": metric_int(stats, "treedb.cache.vlog_generation.rewrite_budget.consumed_bytes_total"),
         "rewrite_budget_tokens_utilization_pct": metric_float(stats, "treedb.cache.vlog_generation.rewrite_budget.tokens_utilization_pct"),
+        "rewrite_queue_config_resume_max_segments": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queue_config.resume_max_segments"),
+        "rewrite_queue_config_debt_drain_max_segments": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queue_config.debt_drain_max_segments"),
+        "rewrite_queue_config_fresh_plan_debt_drain_min_segments": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queue_config.fresh_plan_debt_drain_min_segments"),
+        "rewrite_queue_config_fresh_plan_debt_drain_max_segments": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queue_config.fresh_plan_debt_drain_max_segments"),
         "gc_runs": metric_int(stats, "treedb.cache.vlog_generation.gc.runs"),
         "gc_deleted_bytes": metric_int(stats, "treedb.cache.vlog_generation.gc.deleted_bytes"),
         "gc_deleted_segments": metric_int(stats, "treedb.cache.vlog_generation.gc.deleted_segments"),
@@ -615,6 +619,13 @@ def print_report(summary: dict[str, Any], source_file: Path, run_home: str, inst
         f"age_blocked_ms={summary['rewrite_age_blocked_remaining_ms']} penalties={summary['rewrite_penalties_active']} "
         f"budget_consumed={human_bytes(summary['rewrite_budget_consumed_bytes_total'])} "
         f"budget_util={summary['rewrite_budget_tokens_utilization_pct']:.1f}%"
+    )
+    print(
+        "  queue caps (effective): "
+        f"resume={summary['rewrite_queue_config_resume_max_segments']} "
+        f"debt_drain={summary['rewrite_queue_config_debt_drain_max_segments']} "
+        f"fresh_plan_min={summary['rewrite_queue_config_fresh_plan_debt_drain_min_segments']} "
+        f"fresh_plan_max={summary['rewrite_queue_config_fresh_plan_debt_drain_max_segments']}"
     )
     print("")
 
