@@ -145,10 +145,14 @@ func updateValueLogHealthAfterGC(dbDir string, set *valuelog.Set, referenced map
 			} else if size > 0 && h.LiveBytes > size {
 				h.LiveBytes = size
 			}
-			// Avoid per-segment stat calls on the GC fast path; preserve age via
-			// monotonic last-update deltas and refresh from disk only in fallback
-			// scans below.
-			h.AgeSeconds = advanceSegmentAgeSeconds(h, now)
+			// Avoid repeated per-segment stat calls on the GC fast path. For new
+			// segments initialize from filesystem metadata once; thereafter preserve
+			// age with monotonic last-update deltas.
+			if h.LastUpdatedUnixNano == 0 {
+				h.AgeSeconds = segmentAgeSeconds(f.Path, now)
+			} else {
+				h.AgeSeconds = advanceSegmentAgeSeconds(h, now)
+			}
 			h.LastUpdatedUnixNano = now.UnixNano()
 			health[id] = h
 		}

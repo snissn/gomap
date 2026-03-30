@@ -1838,12 +1838,6 @@ func listSegments(dir string) ([]segmentInfo, error) {
 		return nil, err
 	}
 
-	sep := string(os.PathSeparator)
-	dirPrefix := dir
-	if !strings.HasSuffix(dirPrefix, sep) {
-		dirPrefix += sep
-	}
-
 	segments := make([]segmentInfo, 0, len(entries))
 	for _, entry := range entries {
 		if entry.IsDir() {
@@ -1897,7 +1891,7 @@ func listSegments(dir string) ([]segmentInfo, error) {
 
 		segments = append(segments, segmentInfo{
 			id:   id,
-			path: dirPrefix + name,
+			path: filepath.Join(dir, name),
 		})
 	}
 
