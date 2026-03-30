@@ -2257,10 +2257,12 @@ func collectRewriteSwapPointerMatches(tr *tree.Tree, b *batch.Batch, swaps []rew
 	if tr == nil || b == nil || len(swaps) == 0 {
 		return nil, nil
 	}
-	// Sort in-place to avoid per-batch swap-slice copies on rewrite hot paths.
-	sort.Slice(swaps, func(i, j int) bool {
-		return bytes.Compare(swaps[i].key, swaps[j].key) < 0
-	})
+	if !rewriteSwapsKeySorted(swaps) {
+		// Sort in-place to avoid per-batch swap-slice copies on rewrite hot paths.
+		sort.Slice(swaps, func(i, j int) bool {
+			return bytes.Compare(swaps[i].key, swaps[j].key) < 0
+		})
+	}
 
 	it := tr.IteratorWithOptions(swaps[0].key, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
 	defer func() { _ = it.Close() }()
@@ -2302,6 +2304,20 @@ func collectRewriteSwapPointerMatches(tr *tree.Tree, b *batch.Batch, swaps []rew
 		return nil, err
 	}
 	return delta, nil
+}
+
+func rewriteSwapsKeySorted(swaps []rewriteSwap) bool {
+	if len(swaps) < 2 {
+		return true
+	}
+	prev := swaps[0].key
+	for i := 1; i < len(swaps); i++ {
+		if bytes.Compare(prev, swaps[i].key) > 0 {
+			return false
+		}
+		prev = swaps[i].key
+	}
+	return true
 }
 
 // ValueLogRewriteOffline rewrites value-log pointers into new segments and
