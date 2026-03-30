@@ -2685,7 +2685,6 @@ type rewriteWriter struct {
 	walDir  string
 	lane    uint32
 	seq     uint32
-	start   uint32
 	maxSize int64
 	nextRID uint64
 	// currentPath/currentFileID cache the active writer segment identity so
@@ -2723,6 +2722,7 @@ type rewriteWriter struct {
 	templateOuterLeafOutBytes int64
 	w                         *valuelog.Writer
 	records                   int
+	createdIDs                []uint32
 
 	pendingDictID      uint64
 	pendingDict        []byte
@@ -2741,7 +2741,7 @@ const (
 )
 
 func newRewriteWriter(walDir string, lane, startSeq uint32, maxSize int64) *rewriteWriter {
-	return &rewriteWriter{walDir: walDir, lane: lane, seq: startSeq, start: startSeq, maxSize: maxSize}
+	return &rewriteWriter{walDir: walDir, lane: lane, seq: startSeq, maxSize: maxSize}
 }
 
 func rewriteDictFrameRecordLen(rawPayloadBytes, k int) int64 {
@@ -2895,6 +2895,7 @@ func (w *rewriteWriter) rotate() error {
 		writer.SetKeepPolicy(w.keepIoNsPerByte, w.keepEncodeNsRaw, w.keepSafetyMargin)
 		w.w = writer
 		w.seq = nextSeq
+		w.createdIDs = append(w.createdIDs, fileID)
 		w.currentPath = path
 		w.currentFileID = fileID
 		return nil
@@ -2905,6 +2906,7 @@ func (w *rewriteWriter) rotate() error {
 	w.w.SetBlockCompression(w.blockCodec, w.blockCompression)
 	w.w.SetKeepPolicy(w.keepIoNsPerByte, w.keepEncodeNsRaw, w.keepSafetyMargin)
 	w.seq = nextSeq
+	w.createdIDs = append(w.createdIDs, fileID)
 	w.currentPath = path
 	w.currentFileID = fileID
 	return nil
@@ -3270,18 +3272,10 @@ func (w *rewriteWriter) createdFileIDs() ([]uint32, error) {
 			return nil, err
 		}
 	}
-	if w == nil || w.seq <= w.start {
+	if w == nil || len(w.createdIDs) == 0 {
 		return nil, nil
 	}
-	out := make([]uint32, 0, int(w.seq-w.start))
-	for seq := w.start + 1; seq <= w.seq; seq++ {
-		id, err := valuelog.EncodeFileID(w.lane, seq)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, id)
-	}
-	return out, nil
+	return w.createdIDs[:len(w.createdIDs):len(w.createdIDs)], nil
 }
 
 type rewriteIterator struct {

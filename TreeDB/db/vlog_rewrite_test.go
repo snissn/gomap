@@ -1697,6 +1697,74 @@ func buildRewriteTemplateFixture(t *testing.T) (templ.Config, rewriteTemplateSto
 	return cfg, store, lookup, value
 }
 
+func TestRewriteWriter_CreatedFileIDs_StableAcrossCalls(t *testing.T) {
+	const (
+		lane     = uint32(2)
+		startSeq = uint32(7)
+		maxSize  = int64(512)
+	)
+
+	w := newRewriteWriter(t.TempDir(), lane, startSeq, maxSize)
+	value := bytes.Repeat([]byte("rewrite-created-ids|"), 24)
+
+	for i := 0; i < 3; i++ {
+		if _, err := w.appendValue(uint64(i+1), value); err != nil {
+			t.Fatalf("appendValue(%d): %v", i+1, err)
+		}
+	}
+
+	ids1, err := w.createdFileIDs()
+	if err != nil {
+		t.Fatalf("createdFileIDs first: %v", err)
+	}
+	if len(ids1) != 3 {
+		t.Fatalf("expected 3 created IDs, got %d", len(ids1))
+	}
+	if cap(ids1) != len(ids1) {
+		t.Fatalf("expected append-safe created ID view (cap=len), len=%d cap=%d", len(ids1), cap(ids1))
+	}
+	for i := range ids1 {
+		want, err := valuelog.EncodeFileID(lane, startSeq+1+uint32(i))
+		if err != nil {
+			t.Fatalf("EncodeFileID(%d): %v", i, err)
+		}
+		if ids1[i] != want {
+			t.Fatalf("created ID[%d] mismatch: got=%d want=%d", i, ids1[i], want)
+		}
+	}
+
+	ids2, err := w.createdFileIDs()
+	if err != nil {
+		t.Fatalf("createdFileIDs second: %v", err)
+	}
+	if !reflect.DeepEqual(ids2, ids1) {
+		t.Fatalf("created IDs changed across calls: first=%v second=%v", ids1, ids2)
+	}
+
+	_ = append(ids1, 999)
+	ids3, err := w.createdFileIDs()
+	if err != nil {
+		t.Fatalf("createdFileIDs after append copy: %v", err)
+	}
+	if !reflect.DeepEqual(ids3, ids2) {
+		t.Fatalf("created IDs changed after caller append: before=%v after=%v", ids2, ids3)
+	}
+
+	if _, err := w.appendValue(4, value); err != nil {
+		t.Fatalf("appendValue(4): %v", err)
+	}
+	ids4, err := w.createdFileIDs()
+	if err != nil {
+		t.Fatalf("createdFileIDs after additional append: %v", err)
+	}
+	if len(ids4) != 4 {
+		t.Fatalf("expected created IDs to grow to 4, got %d", len(ids4))
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+}
+
 func TestRewriteWriter_TemplatePrepassEncodesBeforeDict(t *testing.T) {
 	walDir := t.TempDir()
 	cfg, store, lookup, value := buildRewriteTemplateFixture(t)
