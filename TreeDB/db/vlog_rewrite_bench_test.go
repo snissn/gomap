@@ -3,12 +3,14 @@ package db
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
 	"testing"
 
+	batchpkg "github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -421,4 +423,110 @@ func appendPointersInNewSegmentBench(tb testing.TB, dir string, lane, seq uint32
 		tb.Fatalf("close writer: %v", err)
 	}
 	return ptrs
+}
+
+func BenchmarkCollectRewriteSwapPointerMatches_DeltaTracking(b *testing.B) {
+	const swapCount = 4096
+
+	db, swaps, cleanup := setupRewriteSwapMatchBench(b, swapCount)
+	defer cleanup()
+
+	snap := db.AcquireSnapshot()
+	if snap == nil || snap.state == nil {
+		if snap != nil {
+			_ = snap.Close()
+		}
+		b.Fatalf("missing snapshot state")
+	}
+	defer func() { _ = snap.Close() }()
+
+	bench := func(b *testing.B, trackDelta bool) {
+		batch := batchpkg.Acquire(db.valueLogManager, db.InlineThreshold())
+		defer batchpkg.Release(batch)
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			batch.Reset()
+			delta, err := collectRewriteSwapPointerMatches(&snap.tree, batch, swaps, trackDelta)
+			if err != nil {
+				b.Fatalf("collectRewriteSwapPointerMatches: %v", err)
+			}
+			if trackDelta && delta == nil {
+				b.Fatalf("expected non-nil delta when tracking enabled")
+			}
+			if !trackDelta && delta != nil {
+				b.Fatalf("expected nil delta when tracking disabled")
+			}
+		}
+	}
+
+	b.Run("NoDelta", func(b *testing.B) { bench(b, false) })
+	b.Run("WithDelta", func(b *testing.B) { bench(b, true) })
+}
+
+func setupRewriteSwapMatchBench(tb testing.TB, swapCount int) (*DB, []rewriteSwap, func()) {
+	tb.Helper()
+	dir, err := os.MkdirTemp("", "treedb-vlog-rewrite-swap-bench-*")
+	if err != nil {
+		tb.Fatalf("MkdirTemp: %v", err)
+	}
+	db, err := Open(Options{
+		Dir:                    dir,
+		Durability:             DurabilityWALOffRelaxed,
+		DisableBackgroundPrune: true,
+		ValueLog: ValueLogOptions{
+			ForcePointers: true,
+		},
+	})
+	if err != nil {
+		_ = os.RemoveAll(dir)
+		tb.Fatalf("Open: %v", err)
+	}
+
+	bt, ok := db.NewBatch().(*Batch)
+	if !ok {
+		_ = db.Close()
+		_ = os.RemoveAll(dir)
+		tb.Fatalf("NewBatch type assertion failed")
+	}
+
+	swaps := make([]rewriteSwap, 0, swapCount)
+	for i := 0; i < swapCount; i++ {
+		var key [8]byte
+		binary.BigEndian.PutUint64(key[:], uint64(i+1))
+		oldPtr := page.ValuePtr{
+			Offset: uint64(4 + (i * 96)),
+			Length: 96,
+			FileID: page.ValueLogFileID(uint32((i % 64) + 1)),
+		}
+		newPtr := page.ValuePtr{
+			Offset: oldPtr.Offset,
+			Length: oldPtr.Length,
+			FileID: page.ValueLogFileID(uint32((i % 64) + 101)),
+		}
+		if err := bt.SetPointer(key[:], oldPtr); err != nil {
+			_ = bt.Close()
+			_ = db.Close()
+			_ = os.RemoveAll(dir)
+			tb.Fatalf("SetPointer(%d): %v", i, err)
+		}
+		keyCopy := append([]byte(nil), key[:]...)
+		swaps = append(swaps, rewriteSwap{
+			key:    keyCopy,
+			oldPtr: oldPtr,
+			newPtr: newPtr,
+		})
+	}
+	if err := bt.Write(); err != nil {
+		_ = bt.Close()
+		_ = db.Close()
+		_ = os.RemoveAll(dir)
+		tb.Fatalf("seed Write: %v", err)
+	}
+	_ = bt.Close()
+
+	cleanup := func() {
+		_ = db.Close()
+		_ = os.RemoveAll(dir)
+	}
+	return db, swaps, cleanup
 }

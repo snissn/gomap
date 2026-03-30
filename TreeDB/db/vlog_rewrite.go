@@ -2118,7 +2118,8 @@ func (db *DB) applyRewriteSwapBatchOptimistic(swaps []rewriteSwap, sync bool) (b
 	defer batch.Release(b)
 	b.Reserve(len(swaps))
 
-	rewriteDelta, err := collectRewriteSwapPointerMatches(tr, b, swaps)
+	trackValueLogRefDelta := db.valueLogRefTracker != nil && db.valueLogRefTracker.canTrack(baseSeq) && !db.indexOuterLeavesInValueLog
+	rewriteDelta, err := collectRewriteSwapPointerMatches(tr, b, swaps, trackValueLogRefDelta)
 	if err != nil {
 		return false, err
 	}
@@ -2141,7 +2142,7 @@ func (db *DB) applyRewriteSwapBatchOptimistic(swaps []rewriteSwap, sync bool) (b
 	}
 	entries = b.SortedEntries()
 	var vlogRefDelta *valueLogRefDelta
-	if db.valueLogRefTracker != nil && db.valueLogRefTracker.canTrack(baseSeq) && !db.indexOuterLeavesInValueLog {
+	if trackValueLogRefDelta {
 		vlogRefDelta = rewriteDelta
 	}
 
@@ -2202,7 +2203,8 @@ func (db *DB) applyRewriteSwapBatchSerialized(swaps []rewriteSwap, sync bool) er
 	defer batch.Release(b)
 	b.Reserve(len(swaps))
 
-	rewriteDelta, err := collectRewriteSwapPointerMatches(tr, b, swaps)
+	trackValueLogRefDelta := db.valueLogRefTracker != nil && db.valueLogRefTracker.canTrack(baseSeq) && !db.indexOuterLeavesInValueLog
+	rewriteDelta, err := collectRewriteSwapPointerMatches(tr, b, swaps, trackValueLogRefDelta)
 	if err != nil {
 		return err
 	}
@@ -2219,7 +2221,7 @@ func (db *DB) applyRewriteSwapBatchSerialized(swaps []rewriteSwap, sync bool) er
 	}
 	entries = b.SortedEntries()
 	var vlogRefDelta *valueLogRefDelta
-	if db.valueLogRefTracker != nil && db.valueLogRefTracker.canTrack(baseSeq) && !db.indexOuterLeavesInValueLog {
+	if trackValueLogRefDelta {
 		vlogRefDelta = rewriteDelta
 	}
 	if err := db.finalizeCommit(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, db.indexOuterLeavesInValueLog, vlogRefDelta); err != nil {
@@ -2231,7 +2233,7 @@ func (db *DB) applyRewriteSwapBatchSerialized(swaps []rewriteSwap, sync bool) er
 	return nil
 }
 
-func collectRewriteSwapPointerMatches(tr *tree.Tree, b *batch.Batch, swaps []rewriteSwap) (*valueLogRefDelta, error) {
+func collectRewriteSwapPointerMatches(tr *tree.Tree, b *batch.Batch, swaps []rewriteSwap, trackValueLogRefDelta bool) (*valueLogRefDelta, error) {
 	if tr == nil || b == nil || len(swaps) == 0 {
 		return nil, nil
 	}
@@ -2260,7 +2262,7 @@ func collectRewriteSwapPointerMatches(tr *tree.Tree, b *batch.Batch, swaps []rew
 				if err := b.SetPointerView(swap.key, swap.newPtr); err != nil {
 					return nil, err
 				}
-				if page.IsValueLogFileID(swap.oldPtr.FileID) || page.IsValueLogFileID(swap.newPtr.FileID) {
+				if trackValueLogRefDelta && (page.IsValueLogFileID(swap.oldPtr.FileID) || page.IsValueLogFileID(swap.newPtr.FileID)) {
 					if delta == nil {
 						delta = newValueLogRefDelta()
 					}
