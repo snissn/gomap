@@ -3666,6 +3666,7 @@ func (db *DB) syncValueLogLane(l *lane) error {
 		db.debugVlogTiming("vlog_sync", int(l.id), "vlogMu", waited, time.Since(start))
 		if err == nil {
 			l.vlogDirty.Store(false)
+			l.backendReadFlushedSeq.Store(l.backendReadDirtySeq.Load())
 		}
 		l.vlogMu.Unlock()
 		return err
@@ -3684,6 +3685,9 @@ func (db *DB) syncValueLogLane(l *lane) error {
 		db.testOnVlogSync(int(l.id))
 	}
 	db.debugVlogTiming("wal_sync", int(l.id), "walMu", waited, time.Since(start))
+	if err == nil {
+		l.backendReadFlushedSeq.Store(l.backendReadDirtySeq.Load())
+	}
 	l.walMu.Unlock()
 	return err
 }
