@@ -91,6 +91,37 @@ func TestRewriteSwapsKeySorted(t *testing.T) {
 	}
 }
 
+func TestCollectRewriteSwapTouchedSegments(t *testing.T) {
+	swaps := []rewriteSwap{
+		{newPtr: page.ValuePtr{FileID: page.ValueLogFileID(7)}},
+		{newPtr: page.ValuePtr{FileID: page.ValueLogFileID(2)}},
+		{newPtr: page.ValuePtr{FileID: page.ValueLogFileID(7)}},
+		{newPtr: page.ValuePtr{FileID: 12}}, // non-value-log file ID
+		{newPtr: page.ValuePtr{FileID: page.ValueLogFileID(5)}},
+	}
+	got := collectRewriteSwapTouchedSegments(swaps)
+	if len(got) != 3 {
+		t.Fatalf("len(got)=%d want=3 (got=%v)", len(got), got)
+	}
+	slices.Sort(got)
+	want := []uint32{
+		page.ValueLogFileID(2),
+		page.ValueLogFileID(5),
+		page.ValueLogFileID(7),
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("touched segments=%v want=%v", got, want)
+	}
+
+	none := collectRewriteSwapTouchedSegments([]rewriteSwap{
+		{newPtr: page.ValuePtr{FileID: 1}},
+		{newPtr: page.ValuePtr{FileID: 2}},
+	})
+	if len(none) != 0 {
+		t.Fatalf("non-value-log touched segments=%v want=[]", none)
+	}
+}
+
 func TestLeafRefRewriteCtx_LeafRemapInlinePromotion(t *testing.T) {
 	var ctx leafRefRewriteCtx
 

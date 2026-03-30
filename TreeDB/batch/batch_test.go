@@ -185,3 +185,29 @@ func TestTouchedValueLogSegments(t *testing.T) {
 		t.Fatalf("after Reset touched segments = %v, want []", got)
 	}
 }
+
+func TestSetPointerViewNoTouch_SkipsTouchedSegmentTracking(t *testing.T) {
+	b := New(newMapValueReader(), page.DefaultInlineThreshold)
+	t.Cleanup(func() { _ = b.Close() })
+
+	if err := b.SetPointerViewNoTouch([]byte("k-a"), page.ValuePtr{
+		FileID: page.ValueLogFileID(7),
+		Offset: 10,
+		Length: 3,
+	}); err != nil {
+		t.Fatalf("SetPointerViewNoTouch k-a: %v", err)
+	}
+	if err := b.SetPointerViewNoTouch([]byte("k-b"), page.ValuePtr{
+		FileID: page.ValueLogFileID(9),
+		Offset: 20,
+		Length: 5,
+	}); err != nil {
+		t.Fatalf("SetPointerViewNoTouch k-b: %v", err)
+	}
+	if !b.HasValueLogPointers() {
+		t.Fatalf("HasValueLogPointers()=false, want true")
+	}
+	if got := b.TouchedValueLogSegments(); len(got) != 0 {
+		t.Fatalf("TouchedValueLogSegments()=%v, want []", got)
+	}
+}
