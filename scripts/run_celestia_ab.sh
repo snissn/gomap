@@ -628,6 +628,10 @@ for pair in sorted(by_pair):
     ctrl_reason = run_invalid_reason(ctrl)
     cand_reason = run_invalid_reason(cand)
     if not ctrl_valid or not cand_valid:
+        outcome = "invalid"
+        if (not cand_valid) and cand_reason == "rewrite_failed":
+            outcome = "loss"
+            losses += 1
         invalid_pairs += 1
         pair_rows.append({
             "pair_index": pair,
@@ -642,7 +646,7 @@ for pair in sorted(by_pair):
             "candidate_valid": cand_valid,
             "control_invalid_reason": ctrl_reason,
             "candidate_invalid_reason": cand_reason,
-            "outcome": "invalid",
+            "outcome": outcome,
         })
         continue
     cm = cand.get("metrics", {}) or {}

@@ -855,6 +855,10 @@ func applyEnvMaintenanceOverrides(opts *Options) {
 		if v < 0 {
 			v = 0
 		}
+		maxUint32Int := int(^uint32(0))
+		if v > maxUint32Int {
+			v = maxUint32Int
+		}
 		opts.ValueLog.Generational.RewriteTriggerStaleRatioPPM = uint32(v)
 	}
 	if v, ok := envInt(envVlogRewriteTriggerChurnPerSec); ok {

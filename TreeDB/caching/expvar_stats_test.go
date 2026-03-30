@@ -30,6 +30,7 @@ func TestSelectTreeDBExpvarStatsFiltersAndCoerces(t *testing.T) {
 		"treedb.cache.vlog_outer_leaf_codec.raw_bytes.lz4":              "512",
 		"treedb.cache.vlog_generation.rewrite.reclaimed_bytes":          "1234",
 		"treedb.cache.vlog_retained_prune.runs":                         "3",
+		"treedb.cache.vlog_zombie.pinned_bytes":                         "4096",
 		"treedb.process.memory.heap_inuse_bytes":                        "4096",
 		"treedb.process.memory.pool_pressure_level":                     "critical",
 		"treedb.cache.batch_arena.pool_bytes_estimate":                  "65536",
@@ -87,6 +88,9 @@ func TestSelectTreeDBExpvarStatsFiltersAndCoerces(t *testing.T) {
 	}
 	if v, ok := got["treedb.cache.vlog_retained_prune.runs"].(int64); !ok || v != 3 {
 		t.Fatalf("vlog_retained_prune.runs=%T(%v) want int64(3)", got["treedb.cache.vlog_retained_prune.runs"], got["treedb.cache.vlog_retained_prune.runs"])
+	}
+	if v, ok := got["treedb.cache.vlog_zombie.pinned_bytes"].(int64); !ok || v != 4096 {
+		t.Fatalf("vlog_zombie.pinned_bytes=%T(%v) want int64(4096)", got["treedb.cache.vlog_zombie.pinned_bytes"], got["treedb.cache.vlog_zombie.pinned_bytes"])
 	}
 	if v, ok := got["treedb.process.memory.heap_inuse_bytes"].(int64); !ok || v != 4096 {
 		t.Fatalf("heap_inuse_bytes=%T(%v) want int64(4096)", got["treedb.process.memory.heap_inuse_bytes"], got["treedb.process.memory.heap_inuse_bytes"])

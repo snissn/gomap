@@ -128,7 +128,9 @@ func (db *DB) ValueLogGC(ctx context.Context, opts ValueLogGCOptions) (ValueLogG
 	protectedAll := mergeUniqueNonEmptyPaths(opts.ProtectedPaths, opts.ProtectedInUsePaths, opts.ProtectedRetainedPaths)
 	if len(protectedAll) > 0 {
 		if recent := recentValueLogIDsForProtectedPaths(set, valueLogKeepRecentSegmentsPerLane, protectedAll); len(recent) > 0 {
-			keptIDs = recent
+			for id := range recent {
+				keptIDs[id] = struct{}{}
+			}
 		}
 	}
 	protectedPaths := make(map[string]struct{}, len(opts.ProtectedPaths))
@@ -254,6 +256,12 @@ func (db *DB) ValueLogGC(ctx context.Context, opts ValueLogGCOptions) (ValueLogG
 		}
 
 		if opts.DryRun {
+			stats.SegmentsPending++
+			stats.BytesPending += size
+			if observed {
+				stats.ObservedSourceSegmentsPending++
+				stats.ObservedSourceBytesPending += size
+			}
 			continue
 		}
 		if err := vm.MarkZombie(id); err != nil {

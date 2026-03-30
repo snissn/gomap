@@ -4980,7 +4980,8 @@ func (db *DB) scheduleRetainedValueLogPruneWithForce(force bool) {
 			db.retainedPruneDone = nil
 			db.retainedPruneMu.Unlock()
 		}()
-		effectiveForce := force || db.retainedPruneForceRequested.Swap(false)
+		requestedForce := db.retainedPruneForceRequested.Swap(false)
+		effectiveForce := force || requestedForce
 		if !effectiveForce {
 			effectiveForce = db.waitForRetainedValueLogPruneQuietOrForce(retainedPruneQuietWindow)
 		}
@@ -14081,12 +14082,24 @@ func (db *DB) runVlogGenerationMaintenanceRetries(opts vlogGenerationMaintenance
 	}
 	deadline := time.Now().Add(retryWindow)
 	sleepDelay := 10 * time.Millisecond
+	preservePendingIntent := func() {
+		if !stopWhenAcquired || !opts.bypassQuiet || opts.skipCheckpoint {
+			return
+		}
+		// If retries time out while another pass stays active, keep one
+		// checkpoint/deferred retry intent latched for post-release scheduling.
+		db.vlogGenerationCheckpointKickPending.Store(true)
+		if db.vlogGenerationDeferredMaintenanceRunning.Load() {
+			db.vlogGenerationDeferredMaintenancePending.Store(true)
+		}
+	}
 	for !db.closing.Load() {
 		// Retry loops should never hammer an already-active maintenance pass.
 		// Wait for release/deadline instead of repeatedly colliding and inflating
 		// maintenance.attempts/collisions under hot checkpoint-kick activity.
 		if db.vlogGenerationMaintenanceActive.Load() {
 			if time.Now().After(deadline) {
+				preservePendingIntent()
 				return
 			}
 			time.Sleep(sleepDelay)
@@ -14141,6 +14154,7 @@ func (db *DB) runVlogGenerationMaintenanceRetries(opts vlogGenerationMaintenance
 			return
 		}
 		if time.Now().After(deadline) {
+			preservePendingIntent()
 			if opts.debugSource != "" {
 				db.debugVlogMaintf(
 					"maintenance_retry_deadline source=%s attempt=%d checkpoint_pending=%t deferred_pending=%t active=%t",
@@ -14215,6 +14229,8 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 	db.vlogGenerationMaintenanceAcquired.Add(1)
 	rewriteRunsBefore := db.vlogGenerationRewriteRuns.Load()
 	gcRunsBefore := db.vlogGenerationGCRuns.Load()
+	rewriteAttempted := false
+	gcAttempted := false
 	activeSource := vlogGenerationMaintenanceDebugSource(opts)
 	activeStart := time.Now()
 	db.debugVlogMaintf(
@@ -14238,13 +14254,15 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 		db.observeVlogGenerationMaintenancePassDuration(passDur)
 		rewriteRan := db.vlogGenerationRewriteRuns.Load() > rewriteRunsBefore
 		gcRan := db.vlogGenerationGCRuns.Load() > gcRunsBefore
-		if rewriteRan {
+		rewritePass := rewriteRan || rewriteAttempted
+		gcPass := gcRan || gcAttempted
+		if rewritePass {
 			db.vlogGenerationMaintenancePassWithRewrite.Add(1)
 		}
-		if gcRan {
+		if gcPass {
 			db.vlogGenerationMaintenancePassWithGC.Add(1)
 		}
-		if !rewriteRan && !gcRan {
+		if !rewritePass && !gcPass {
 			db.vlogGenerationMaintenancePassNoop.Add(1)
 		}
 		db.vlogGenerationMaintenanceActive.Store(false)
@@ -14935,10 +14953,10 @@ planned:
 				processedLedgerLiveBytes,
 			)
 			rewriteStart := time.Now()
+			rewriteAttempted = true
 			stats, err := rewriter.ValueLogRewriteOnline(ctx, rewriteOpts)
 			cancel()
 			rewriteDur := time.Since(rewriteStart)
-			db.observeVlogGenerationRewriteExecDuration(rewriteDur)
 			if err != nil {
 				db.debugVlogMaintf("rewrite_err reason=%s err=%v dur_ms=%.3f", vlogGenerationReasonString(reason), err, float64(rewriteDur.Microseconds())/1000)
 				queuedDebt := hadRewriteQueue && len(processedRewriteIDs) > 0
@@ -14955,6 +14973,7 @@ planned:
 				}
 				return fmt.Errorf("generational rewrite: %w", err)
 			}
+			db.observeVlogGenerationRewriteExecDuration(rewriteDur)
 			db.debugVlogMaintf(
 				"rewrite_done reason=%s segments_before=%d segments_after=%d bytes_before=%d bytes_after=%d records=%d dur_ms=%.3f",
 				vlogGenerationReasonString(reason),
@@ -14981,10 +15000,10 @@ planned:
 				runGC := func(phase string) (backenddb.ValueLogGCStats, error) {
 					gcCtx, gcCancel := context.WithTimeout(context.Background(), 30*time.Second)
 					gcStart := time.Now()
+					gcAttempted = true
 					gcStats, gcErr := gcer.ValueLogGC(gcCtx, gcOpts)
 					gcCancel()
 					gcDur := time.Since(gcStart)
-					db.observeVlogGenerationGCExecDuration(gcDur)
 					if gcErr != nil {
 						db.debugVlogMaintf(
 							"gc_after_rewrite_err reason=%s phase=%s err=%v dur_ms=%.3f",
@@ -14995,6 +15014,7 @@ planned:
 						)
 						return backenddb.ValueLogGCStats{}, gcErr
 					}
+					db.observeVlogGenerationGCExecDuration(gcDur)
 					db.observeVlogGenerationGCStats(gcStats)
 					db.vlogGenerationGCRuns.Add(1)
 					if gcStats.SegmentsDeleted > 0 {
@@ -15411,7 +15431,6 @@ planned:
 		gcOpts := db.valueLogGCOptions(false)
 		if forceObservedSourceGC {
 			gcOpts.ObservedSourceFileIDs = append([]uint32(nil), observedSourceGCIDs...)
-			db.vlogGenerationObservedGCRuns.Add(1)
 		}
 		db.debugVlogMaintf(
 			"gc_run start run_gc=%t force_observed=%t observed_ids=%d need_estimate=%t",
@@ -15421,9 +15440,10 @@ planned:
 			needEligibilityEstimate,
 		)
 		gcStart := time.Now()
+		gcAttempted = true
 		gcStats, err := gcer.ValueLogGC(ctx, gcOpts)
 		cancel()
-		db.observeVlogGenerationGCExecDuration(time.Since(gcStart))
+		gcDur := time.Since(gcStart)
 		if err != nil {
 			db.debugVlogMaintf(
 				"gc_run err run_gc=%t force_observed=%t observed_ids=%d err=%v",
@@ -15433,6 +15453,10 @@ planned:
 				err,
 			)
 			return fmt.Errorf("generational gc: %w", err)
+		}
+		db.observeVlogGenerationGCExecDuration(gcDur)
+		if forceObservedSourceGC {
+			db.vlogGenerationObservedGCRuns.Add(1)
 		}
 		db.debugVlogMaintf(
 			"gc_run done run_gc=%t force_observed=%t observed_ids=%d deleted_segments=%d deleted_bytes=%d protected_retained_bytes=%d observed_segments=%d observed_eligible=%d observed_deleted=%d observed_protected_retained=%d",
@@ -15755,7 +15779,7 @@ func (db *DB) maybeRunVlogGenerationIndexVacuum(rewriteBytesIn int64) {
 	} else {
 		err = db.runWithBackendMaintenance(runVacuum)
 	}
-	db.observeVlogGenerationVacuumExecDuration(time.Since(vacuumStart))
+	vacuumDur := time.Since(vacuumStart)
 	if err != nil {
 		db.vlogGenerationVacuumFailures.Add(1)
 		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
@@ -15764,6 +15788,7 @@ func (db *DB) maybeRunVlogGenerationIndexVacuum(rewriteBytesIn int64) {
 		}
 		return
 	}
+	db.observeVlogGenerationVacuumExecDuration(vacuumDur)
 	db.vlogGenerationVacuumRuns.Add(1)
 	db.vlogGenerationLastVacuumUnixNano.Store(now.UnixNano())
 	db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
@@ -15866,6 +15891,9 @@ func (db *DB) vlogGenerationRewriteMinStaleRatioForGenericPass(totalBytes int64)
 		return 0
 	}
 	if configured := db.vlogGenerationRewriteMinStaleRatioForStaleRatioTrigger(totalBytes); configured > 0 {
+		if configured < vlogGenerationRewriteGenericMinSegmentStaleRatio {
+			return vlogGenerationRewriteGenericMinSegmentStaleRatio
+		}
 		return configured
 	}
 	return vlogGenerationRewriteGenericMinSegmentStaleRatio

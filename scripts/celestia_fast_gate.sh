@@ -506,9 +506,16 @@ for pair in sorted(by_pair):
     d_post_gzip = delta(cm.get("s_post_gzip_bytes"), bm.get("s_post_gzip_bytes"))
 
     d_size_primary = delta(cm.get(size_field), bm.get(size_field))
+    cand_rewrite = cand.get("rewrite", {}) or {}
+    ctrl_rewrite = ctrl.get("rewrite", {}) or {}
+    cand_rewrite_failed = bool(cand_rewrite.get("attempted")) and int(cand_rewrite.get("exit_code", 0) or 0) != 0
+    ctrl_rewrite_failed = bool(ctrl_rewrite.get("attempted")) and int(ctrl_rewrite.get("exit_code", 0) or 0) != 0
 
     outcome = "neutral"
-    if d_size_primary is not None and d_total is not None:
+    if cand_rewrite_failed and not ctrl_rewrite_failed:
+        outcome = "loss"
+        losses += 1
+    elif d_size_primary is not None and d_total is not None:
         win = (d_size_primary <= -size_tol) and (d_total <= time_tol)
         loss = (d_size_primary >= size_tol) and (d_total >= -time_tol)
         if win and not loss:
