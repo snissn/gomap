@@ -103,6 +103,10 @@ Now includes anti-loop safeguards:
 - strict new-run-home detection (no fallback to old run dirs)
 - per-variant timeout/retry for stuck syncs
 - invalid-pair streak stop (`invalid_pair_streak`)
+- low-noise scoring policy defaults (`AB_POLICY=low_noise`):
+  - `SCORING_MODE=per_block`
+  - `BLOCK_DRIFT_TOLERANCE=50`
+  - `ALLOW_DRIFT_SCORING=0`
 
 Example:
 
@@ -125,6 +129,7 @@ Notes:
 - Pair execution remains strictly single-run at a time and interleaved by pair order.
 - Invalid runs (timeout, launcher failure, missing new run home, rewrite failure) are recorded but excluded from pair scoring.
 - Per-run `run.json` now includes `status.sync_probe` (last snapshot chunk, last and max snapshot totals, fetch event count, state-sync-complete flag) for timeout forensics.
+- To use pre-policy behavior, set `AB_POLICY=legacy`.
 
 ## Process Review Cadence
 

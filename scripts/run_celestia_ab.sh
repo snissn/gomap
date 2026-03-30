@@ -32,9 +32,24 @@ RUN_TIMEOUT_SECONDS="${RUN_TIMEOUT_SECONDS:-1800}"
 RUN_MAX_ATTEMPTS_PER_VARIANT="${RUN_MAX_ATTEMPTS_PER_VARIANT:-2}"
 RUN_RETRY_SLEEP_SECONDS="${RUN_RETRY_SLEEP_SECONDS:-20}"
 INVALID_PAIR_STREAK_STOP="${INVALID_PAIR_STREAK_STOP:-2}"
-BLOCK_DRIFT_TOLERANCE="${BLOCK_DRIFT_TOLERANCE:--1}"
-SCORING_MODE="${SCORING_MODE:-absolute}"
-ALLOW_DRIFT_SCORING="${ALLOW_DRIFT_SCORING:-0}"
+AB_POLICY="${AB_POLICY:-low_noise}"
+if [[ "$AB_POLICY" == "legacy" ]]; then
+  DEFAULT_BLOCK_DRIFT_TOLERANCE=-1
+  DEFAULT_SCORING_MODE=absolute
+  DEFAULT_ALLOW_DRIFT_SCORING=0
+elif [[ "$AB_POLICY" == "low_noise" ]]; then
+  # Default policy for moving-target runs: per-block scoring plus a drift
+  # guardrail to reject large block-count mismatches.
+  DEFAULT_BLOCK_DRIFT_TOLERANCE=50
+  DEFAULT_SCORING_MODE=per_block
+  DEFAULT_ALLOW_DRIFT_SCORING=0
+else
+  echo "AB_POLICY must be one of: low_noise, legacy" >&2
+  exit 1
+fi
+BLOCK_DRIFT_TOLERANCE="${BLOCK_DRIFT_TOLERANCE:-$DEFAULT_BLOCK_DRIFT_TOLERANCE}"
+SCORING_MODE="${SCORING_MODE:-$DEFAULT_SCORING_MODE}"
+ALLOW_DRIFT_SCORING="${ALLOW_DRIFT_SCORING:-$DEFAULT_ALLOW_DRIFT_SCORING}"
 AB_DISABLE_HEAVY_DIAGNOSTICS="${AB_DISABLE_HEAVY_DIAGNOSTICS:-1}"
 AB_CAPTURE_HEAP_ON_MAX_RSS="${AB_CAPTURE_HEAP_ON_MAX_RSS:-0}"
 AB_CAPTURE_PPROF_ON_STUCK="${AB_CAPTURE_PPROF_ON_STUCK:-0}"
@@ -130,6 +145,7 @@ run_timeout_seconds=$RUN_TIMEOUT_SECONDS
 run_max_attempts_per_variant=$RUN_MAX_ATTEMPTS_PER_VARIANT
 run_retry_sleep_seconds=$RUN_RETRY_SLEEP_SECONDS
 invalid_pair_streak_stop=$INVALID_PAIR_STREAK_STOP
+ab_policy=$AB_POLICY
 block_drift_tolerance=$BLOCK_DRIFT_TOLERANCE
 scoring_mode=$SCORING_MODE
 allow_drift_scoring=$ALLOW_DRIFT_SCORING
@@ -523,7 +539,7 @@ PY
 
 aggregate_and_decide() {
   local decision_json="$OUT/decision.json"
-  python3 - "$OUT" "$SIZE_TOLERANCE_BYTES" "$TIME_TOLERANCE_SECONDS" "$MIN_PAIRS" "$CLEAR_WIN_PAIRS" "$CLEAR_LOSS_PAIRS" "$MAX_PAIRS" "$STOP_ON_CLEAR" "$LOW_SIGNAL_MIN_PAIRS" "$LOW_SIGNAL_NEUTRAL_STREAK" "$INVALID_PAIR_STREAK_STOP" "$BLOCK_DRIFT_TOLERANCE" "$decision_json" "$SCORING_MODE" "$ALLOW_DRIFT_SCORING" <<'PY'
+  python3 - "$OUT" "$SIZE_TOLERANCE_BYTES" "$TIME_TOLERANCE_SECONDS" "$MIN_PAIRS" "$CLEAR_WIN_PAIRS" "$CLEAR_LOSS_PAIRS" "$MAX_PAIRS" "$STOP_ON_CLEAR" "$LOW_SIGNAL_MIN_PAIRS" "$LOW_SIGNAL_NEUTRAL_STREAK" "$INVALID_PAIR_STREAK_STOP" "$BLOCK_DRIFT_TOLERANCE" "$decision_json" "$SCORING_MODE" "$ALLOW_DRIFT_SCORING" "$AB_POLICY" <<'PY'
 import csv
 import json
 import sys
@@ -544,6 +560,7 @@ block_drift_tolerance = int(sys.argv[12])
 decision_path = Path(sys.argv[13])
 scoring_mode = str(sys.argv[14]).strip().lower()
 allow_drift_scoring = str(sys.argv[15]).strip() == "1"
+ab_policy = str(sys.argv[16]).strip().lower()
 
 run_files = sorted(out.glob("runs/*/run.json"))
 runs = []
@@ -910,6 +927,7 @@ lines.append(f"- time tolerance seconds: `{time_tol}`")
 lines.append(f"- low-signal min pairs: `{low_signal_min_pairs}`")
 lines.append(f"- low-signal neutral streak: `{low_signal_neutral_streak}`")
 lines.append(f"- invalid pair streak stop: `{invalid_pair_streak_stop}`")
+lines.append(f"- scoring policy: `{ab_policy}`")
 lines.append(f"- block drift tolerance (abs blocks, -1=disabled): `{block_drift_tolerance}`")
 lines.append(f"- scoring mode: `{scoring_mode}`")
 lines.append(f"- allow drift scoring: `{allow_drift_scoring}`")
@@ -949,6 +967,7 @@ payload = {
     "nonzero_block_drift_pairs": nonzero_block_drift_pairs,
     "neutral_streak": neutral_streak,
     "invalid_streak": invalid_streak,
+    "ab_policy": ab_policy,
     "scoring_mode": scoring_mode,
     "allow_drift_scoring": allow_drift_scoring,
     "stop": stop,
