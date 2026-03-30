@@ -2260,6 +2260,56 @@ func (db *DB) appendValueLogForRecords(l *lane, records []valuelog.Record, durab
 		}
 		return db.appendValueLog(l, dictID, nil, records, durability)
 	}
+	// Highly alternating class layouts can explode contiguous ranges and
+	// degrade batching. Re-pack by class to bound append calls.
+	if len(ranges) > 8 {
+		var (
+			classRecords [vlogDictClassCount][]valuelog.Record
+			classIndexes [vlogDictClassCount][]int
+		)
+		for i := range ranges {
+			r := ranges[i]
+			classIdx := int(r.class)
+			if classIdx < 0 || classIdx >= vlogDictClassCount {
+				classIdx = int(vlogDictClassSingleValue)
+			}
+			classRecords[classIdx] = append(classRecords[classIdx], records[r.start:r.end]...)
+			idxs := classIndexes[classIdx]
+			for j := r.start; j < r.end; j++ {
+				idxs = append(idxs, j)
+			}
+			classIndexes[classIdx] = idxs
+		}
+		ptrs := getValueLogPtrsCap(len(records))
+		ptrs = ptrs[:len(records)]
+		for classIdx := 0; classIdx < vlogDictClassCount; classIdx++ {
+			recs := classRecords[classIdx]
+			if len(recs) == 0 {
+				continue
+			}
+			dictID, err := resolveDictID(vlogDictClass(classIdx), &dictIDCache, &dictIDCached)
+			if err != nil {
+				putValueLogPtrs(ptrs)
+				return nil, err
+			}
+			segPtrs, err := db.appendValueLog(l, dictID, nil, recs, durability)
+			if err != nil {
+				putValueLogPtrs(ptrs)
+				return nil, err
+			}
+			if len(segPtrs) != len(recs) {
+				putValueLogPtrs(segPtrs)
+				putValueLogPtrs(ptrs)
+				return nil, fmt.Errorf("cachingdb: value-log segment returned %d ptrs for %d records", len(segPtrs), len(recs))
+			}
+			idxs := classIndexes[classIdx]
+			for j := 0; j < len(segPtrs); j++ {
+				ptrs[idxs[j]] = segPtrs[j]
+			}
+			putValueLogPtrs(segPtrs)
+		}
+		return ptrs, nil
+	}
 
 	ptrs := getValueLogPtrsCap(len(records))
 	ptrs = ptrs[:len(records)]

@@ -646,8 +646,11 @@ func runTemplateLab(ds datasetSpec, cfg runConfig, warmupPasses, measurePasses i
 				return res, err
 			}
 
+			// Keep dataset records immutable across modes/runs even if an
+			// encoder path regresses and writes into the input slice.
+			encodeInput := append([]byte(nil), workingValue...)
 			encodeStart := time.Now()
-			payload, encoded := encodeValue(workingValue)
+			payload, encoded := encodeValue(encodeInput)
 			encodeNS += time.Since(encodeStart).Nanoseconds()
 			res.EncodedBytes += int64(len(payload))
 			if err := encSizer.WriteRecord(payload); err != nil {
@@ -739,7 +742,7 @@ func writeMarkdown(path string, rep report) error {
 		return err
 	}
 	defer f.Close()
-	_, _ = fmt.Fprintln(f, "| Name | Dataset | Records | Raw Bytes | Encoded Bytes | Saved % | Raw Gzip | Enc Gzip | Encode ns/B | Decode ns/B | Kept/Attempted |")
+	_, _ = fmt.Fprintln(f, "| Name | Dataset | Records | Raw Bytes | Encoded Bytes | Saved Ratio | Raw Gzip | Enc Gzip | Encode ns/B | Decode ns/B | Kept/Attempted |")
 	_, _ = fmt.Fprintln(f, "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
 	for _, r := range rep.Results {
 		kept := "-"
