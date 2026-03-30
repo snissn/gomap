@@ -21335,8 +21335,8 @@ func (db *DB) Stats() map[string]string {
 		rewriteLastExecLiveBytesPerSec = (float64(rewriteLastExecLiveBytes) * float64(time.Second)) / float64(rewriteLastExecDurationNS)
 	}
 	rewriteQueueETARecentExecSeconds := 0.0
-	if rewriteLedgerBytesLive > 0 && rewriteLastExecLiveBytesPerSec > 0 {
-		rewriteQueueETARecentExecSeconds = float64(rewriteLedgerBytesLive) / rewriteLastExecLiveBytesPerSec
+	if rewriteQueueLiveBytesAfterTokens > 0 && rewriteLastExecLiveBytesPerSec > 0 {
+		rewriteQueueETARecentExecSeconds = float64(rewriteQueueLiveBytesAfterTokens) / rewriteLastExecLiveBytesPerSec
 	}
 	rewriteChurnBps := db.vlogGenerationLastChurnBps.Load()
 	rewriteExecSeconds := 0.0

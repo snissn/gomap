@@ -6946,8 +6946,8 @@ func TestVlogGenerationStats_ReportRewriteBacklogAndDurations(t *testing.T) {
 	if got := stats["treedb.cache.vlog_generation.rewrite.queue_eta_seconds.budget"]; got != "0.336" {
 		t.Fatalf("rewrite queue eta budget seconds=%q want 0.336", got)
 	}
-	if got := stats["treedb.cache.vlog_generation.rewrite.queue_eta_seconds.recent_exec"]; got != "0.048" {
-		t.Fatalf("rewrite queue eta recent exec seconds=%q want 0.048", got)
+	if got := stats["treedb.cache.vlog_generation.rewrite.queue_eta_seconds.recent_exec"]; got != "0.028" {
+		t.Fatalf("rewrite queue eta recent exec seconds=%q want 0.028", got)
 	}
 	if got := stats["treedb.cache.vlog_generation.rewrite.ledger_stale_ratio_ppm"]; got != "200000" {
 		t.Fatalf("rewrite ledger stale ratio ppm=%q want 200000", got)
