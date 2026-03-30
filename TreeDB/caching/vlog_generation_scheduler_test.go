@@ -6634,6 +6634,10 @@ func TestVlogGenerationStats_ReportRewriteBacklogAndDurations(t *testing.T) {
 	db.vlogGenerationRewriteRuns.Store(3)
 	db.vlogGenerationRewriteExecTotalNanos.Store(uint64((150 * time.Millisecond).Nanoseconds()))
 	db.vlogGenerationRewriteExecMaxNanos.Store(uint64((70 * time.Millisecond).Nanoseconds()))
+	db.vlogGenerationRewriteExecLastLiveBytes.Store(1000)
+	db.vlogGenerationRewriteExecLastBytesOut.Store(600)
+	db.vlogGenerationRewriteExecLastDurationNanos.Store(uint64((40 * time.Millisecond).Nanoseconds()))
+	db.vlogGenerationRewriteExecLastUnixNano.Store(7777)
 	db.vlogGenerationRewriteBytesIn.Store(1000)
 	db.vlogGenerationRewriteBytesOut.Store(600)
 	db.vlogGenerationRewriteReclaimedBytes.Store(400)
@@ -6930,6 +6934,21 @@ func TestVlogGenerationStats_ReportRewriteBacklogAndDurations(t *testing.T) {
 	if got := stats["treedb.cache.vlog_generation.rewrite.ledger_bytes_stale"]; got != "300" {
 		t.Fatalf("rewrite ledger bytes stale=%q want 300", got)
 	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.queue_run_segment_cap"]; got != "1" {
+		t.Fatalf("rewrite queue run segment cap=%q want 1", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.checkpoint_kick"]; got != "1" {
+		t.Fatalf("rewrite queue run segment cap checkpoint kick=%q want 1", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.queue_live_bytes_after_tokens"]; got != "688" {
+		t.Fatalf("rewrite queue live bytes after tokens=%q want 688", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.queue_eta_seconds.budget"]; got != "0.336" {
+		t.Fatalf("rewrite queue eta budget seconds=%q want 0.336", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.queue_eta_seconds.recent_exec"]; got != "0.048" {
+		t.Fatalf("rewrite queue eta recent exec seconds=%q want 0.048", got)
+	}
 	if got := stats["treedb.cache.vlog_generation.rewrite.ledger_stale_ratio_ppm"]; got != "200000" {
 		t.Fatalf("rewrite ledger stale ratio ppm=%q want 200000", got)
 	}
@@ -7055,6 +7074,21 @@ func TestVlogGenerationStats_ReportRewriteBacklogAndDurations(t *testing.T) {
 	}
 	if got := stats["treedb.cache.vlog_generation.rewrite.exec.reclaimed_vs_churn_ratio"]; got != "1.066667" {
 		t.Fatalf("rewrite reclaimed vs churn ratio=%q want 1.066667", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.exec.last_live_bytes"]; got != "1000" {
+		t.Fatalf("rewrite exec last live bytes=%q want 1000", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.exec.last_bytes_out"]; got != "600" {
+		t.Fatalf("rewrite exec last bytes out=%q want 600", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.exec.last_duration_ms"]; got != "40.000" {
+		t.Fatalf("rewrite exec last duration ms=%q want 40.000", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.exec.last_live_bytes_per_sec"]; got != "25000.000" {
+		t.Fatalf("rewrite exec last live bytes/sec=%q want 25000.000", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.exec.last_unix_nano"]; got != "7777" {
+		t.Fatalf("rewrite exec last unix nano=%q want 7777", got)
 	}
 	if got := stats["treedb.cache.vlog_generation.rewrite.no_reclaim_runs"]; got != "3" {
 		t.Fatalf("rewrite no reclaim runs=%q want 3", got)

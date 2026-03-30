@@ -6147,6 +6147,10 @@ type DB struct {
 	vlogGenerationRewritePlanMaxNanos                       atomic.Uint64
 	vlogGenerationRewriteExecTotalNanos                     atomic.Uint64
 	vlogGenerationRewriteExecMaxNanos                       atomic.Uint64
+	vlogGenerationRewriteExecLastLiveBytes                  atomic.Int64
+	vlogGenerationRewriteExecLastBytesOut                   atomic.Int64
+	vlogGenerationRewriteExecLastDurationNanos              atomic.Uint64
+	vlogGenerationRewriteExecLastUnixNano                   atomic.Int64
 	vlogGenerationRewriteExecSourceSegments                 atomic.Uint64
 	vlogGenerationRewriteSourceSegmentsRequestedTotal       atomic.Uint64
 	vlogGenerationRewriteSourceSegmentsStillReferencedTotal atomic.Uint64
@@ -15316,6 +15320,14 @@ planned:
 			if stats.BytesAfter > 0 {
 				db.vlogGenerationRewriteBytesOut.Add(uint64(stats.BytesAfter))
 			}
+			rewriteBytesOut := int64(stats.BytesAfter)
+			if rewriteBytesOut < 0 {
+				rewriteBytesOut = 0
+			}
+			db.vlogGenerationRewriteExecLastLiveBytes.Store(rewriteBytesIn)
+			db.vlogGenerationRewriteExecLastBytesOut.Store(rewriteBytesOut)
+			db.vlogGenerationRewriteExecLastDurationNanos.Store(uint64(rewriteDur))
+			db.vlogGenerationRewriteExecLastUnixNano.Store(time.Now().UnixNano())
 			consumed := int64(0)
 			if processedLedgerOK {
 				consumed = processedLedgerLiveBytes
@@ -21261,6 +21273,28 @@ func (db *DB) Stats() map[string]string {
 			rewriteBudgetUtilPct = 100.0
 		}
 	}
+	rewriteQueueLiveBytesAfterTokens := rewriteLedgerBytesLive - rewriteBudgetTokens
+	if rewriteQueueLiveBytesAfterTokens < 0 {
+		rewriteQueueLiveBytesAfterTokens = 0
+	}
+	rewriteQueueRunSegmentCap := 0
+	rewriteQueueRunSegmentCapCheckpointKick := 0
+	if rewriteQueueLen > 0 {
+		rewriteQueueRunSegmentCap = db.vlogGenerationRewriteMaxSegmentsForRun(
+			rewriteQueueLen,
+			rewriteBudgetTokens,
+			vlogGenerationMaintenanceOptions{rewriteDebtDrain: true},
+		)
+		rewriteQueueRunSegmentCapCheckpointKick = db.vlogGenerationRewriteMaxSegmentsForRun(
+			rewriteQueueLen,
+			rewriteBudgetTokens,
+			vlogGenerationMaintenanceOptions{rewriteDebtDrain: true, bypassQuiet: true},
+		)
+	}
+	rewriteQueueETABudgetSeconds := 0.0
+	if rewriteLedgerBytesLive > 0 && db.valueLogRewriteBudgetBytes > 0 {
+		rewriteQueueETABudgetSeconds = float64(rewriteQueueLiveBytesAfterTokens) / float64(db.valueLogRewriteBudgetBytes)
+	}
 	maintenancePassTotalNS := db.vlogGenerationMaintenancePassTotalNanos.Load()
 	maintenancePassMaxNS := db.vlogGenerationMaintenancePassMaxNanos.Load()
 	maintenancePasses := db.vlogGenerationMaintenanceAcquired.Load()
@@ -21281,6 +21315,25 @@ func (db *DB) Stats() map[string]string {
 	rewriteProcessedStaleBytes := db.vlogGenerationRewriteProcessedStaleBytes.Load()
 	rewriteProcessedTotal := rewriteProcessedLiveBytes + rewriteProcessedStaleBytes
 	rewriteBudgetConsumedTotal := db.vlogGenerationRewriteBudgetConsumed.Load()
+	rewriteLastExecLiveBytes := db.vlogGenerationRewriteExecLastLiveBytes.Load()
+	if rewriteLastExecLiveBytes < 0 {
+		rewriteLastExecLiveBytes = 0
+	}
+	rewriteLastExecBytesOut := db.vlogGenerationRewriteExecLastBytesOut.Load()
+	if rewriteLastExecBytesOut < 0 {
+		rewriteLastExecBytesOut = 0
+	}
+	rewriteLastExecDurationNS := db.vlogGenerationRewriteExecLastDurationNanos.Load()
+	rewriteLastExecUnixNano := db.vlogGenerationRewriteExecLastUnixNano.Load()
+	rewriteLastExecDurationMS := float64(rewriteLastExecDurationNS) / float64(time.Millisecond)
+	rewriteLastExecLiveBytesPerSec := 0.0
+	if rewriteLastExecDurationNS > 0 && rewriteLastExecLiveBytes > 0 {
+		rewriteLastExecLiveBytesPerSec = (float64(rewriteLastExecLiveBytes) * float64(time.Second)) / float64(rewriteLastExecDurationNS)
+	}
+	rewriteQueueETARecentExecSeconds := 0.0
+	if rewriteLedgerBytesLive > 0 && rewriteLastExecLiveBytesPerSec > 0 {
+		rewriteQueueETARecentExecSeconds = float64(rewriteLedgerBytesLive) / rewriteLastExecLiveBytesPerSec
+	}
 	rewriteChurnBps := db.vlogGenerationLastChurnBps.Load()
 	rewriteExecSeconds := 0.0
 	if rewriteExecTotalNS > 0 {
@@ -21428,10 +21481,15 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_generation.churn_bytes_per_sec"] = fmt.Sprintf("%d", rewriteChurnBps)
 	stats["treedb.cache.vlog_generation.rewrite.queue_len"] = fmt.Sprintf("%d", rewriteQueueLen)
 	stats["treedb.cache.vlog_generation.rewrite.queue_loaded"] = fmt.Sprintf("%t", rewriteQueueLoaded)
+	stats["treedb.cache.vlog_generation.rewrite.queue_run_segment_cap"] = fmt.Sprintf("%d", rewriteQueueRunSegmentCap)
+	stats["treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.checkpoint_kick"] = fmt.Sprintf("%d", rewriteQueueRunSegmentCapCheckpointKick)
 	stats["treedb.cache.vlog_generation.rewrite.ledger_segments"] = fmt.Sprintf("%d", rewriteLedgerSegments)
 	stats["treedb.cache.vlog_generation.rewrite.ledger_bytes_total"] = fmt.Sprintf("%d", rewriteLedgerBytesTotal)
 	stats["treedb.cache.vlog_generation.rewrite.ledger_bytes_live"] = fmt.Sprintf("%d", rewriteLedgerBytesLive)
 	stats["treedb.cache.vlog_generation.rewrite.ledger_bytes_stale"] = fmt.Sprintf("%d", rewriteLedgerBytesStale)
+	stats["treedb.cache.vlog_generation.rewrite.queue_live_bytes_after_tokens"] = fmt.Sprintf("%d", rewriteQueueLiveBytesAfterTokens)
+	stats["treedb.cache.vlog_generation.rewrite.queue_eta_seconds.budget"] = fmt.Sprintf("%.3f", rewriteQueueETABudgetSeconds)
+	stats["treedb.cache.vlog_generation.rewrite.queue_eta_seconds.recent_exec"] = fmt.Sprintf("%.3f", rewriteQueueETARecentExecSeconds)
 	if rewriteLedgerBytesTotal > 0 {
 		staleRatioPPM := 0.0
 		if rewriteLedgerBytesStale > 0 {
@@ -21501,6 +21559,11 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_generation.rewrite.exec.bytes_out_per_sec"] = fmt.Sprintf("%.3f", rewriteBytesOutPerSec)
 	stats["treedb.cache.vlog_generation.rewrite.exec.reclaimed_bytes_per_sec"] = fmt.Sprintf("%.3f", rewriteReclaimedBytesPerSec)
 	stats["treedb.cache.vlog_generation.rewrite.exec.reclaimed_vs_churn_ratio"] = fmt.Sprintf("%.6f", rewriteReclaimedVsChurnRatio)
+	stats["treedb.cache.vlog_generation.rewrite.exec.last_live_bytes"] = fmt.Sprintf("%d", rewriteLastExecLiveBytes)
+	stats["treedb.cache.vlog_generation.rewrite.exec.last_bytes_out"] = fmt.Sprintf("%d", rewriteLastExecBytesOut)
+	stats["treedb.cache.vlog_generation.rewrite.exec.last_duration_ms"] = fmt.Sprintf("%.3f", rewriteLastExecDurationMS)
+	stats["treedb.cache.vlog_generation.rewrite.exec.last_live_bytes_per_sec"] = fmt.Sprintf("%.3f", rewriteLastExecLiveBytesPerSec)
+	stats["treedb.cache.vlog_generation.rewrite.exec.last_unix_nano"] = fmt.Sprintf("%d", rewriteLastExecUnixNano)
 	stats["treedb.cache.vlog_generation.rewrite.no_reclaim_runs"] = fmt.Sprintf("%d", db.vlogGenerationRewriteNoReclaimRuns.Load())
 	stats["treedb.cache.vlog_generation.rewrite.no_reclaim_stale_bytes"] = fmt.Sprintf("%d", db.vlogGenerationRewriteNoReclaimStaleBytes.Load())
 	stats["treedb.cache.vlog_generation.rewrite.runs"] = fmt.Sprintf("%d", db.vlogGenerationRewriteRuns.Load())
