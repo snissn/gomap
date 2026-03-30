@@ -235,18 +235,31 @@ capture_light_vlog_stats() {
     return 4
   fi
 
-  local -a cmd=("$TREEMAP_BIN" stats "$app_db")
+  local rc=0
   if [[ "$AB_LIGHT_VLOG_STATS_RW_OPEN" == "1" ]]; then
-    cmd+=("-rw")
+    local -a cmd_rw=("$TREEMAP_BIN" stats "$app_db" "-rw")
+    set +e
+    if [[ "$AB_LIGHT_VLOG_STATS_TIMEOUT_SECONDS" -gt 0 ]] && command -v timeout >/dev/null 2>&1; then
+      timeout --signal=TERM --kill-after=30 "${AB_LIGHT_VLOG_STATS_TIMEOUT_SECONDS}s" "${cmd_rw[@]}" >"$out_file" 2>"$err_file"
+      rc=$?
+    else
+      "${cmd_rw[@]}" >"$out_file" 2>"$err_file"
+      rc=$?
+    fi
+    set -e
+    if [[ "$rc" -eq 0 && -s "$out_file" ]]; then
+      return 0
+    fi
+    echo "[light-stats] rw-open capture failed (rc=$rc); retrying read-only stats." >>"$err_file"
   fi
 
-  local rc=0
+  local -a cmd_ro=("$TREEMAP_BIN" stats "$app_db")
   set +e
   if [[ "$AB_LIGHT_VLOG_STATS_TIMEOUT_SECONDS" -gt 0 ]] && command -v timeout >/dev/null 2>&1; then
-    timeout --signal=TERM --kill-after=30 "${AB_LIGHT_VLOG_STATS_TIMEOUT_SECONDS}s" "${cmd[@]}" >"$out_file" 2>"$err_file"
+    timeout --signal=TERM --kill-after=30 "${AB_LIGHT_VLOG_STATS_TIMEOUT_SECONDS}s" "${cmd_ro[@]}" >"$out_file" 2>>"$err_file"
     rc=$?
   else
-    "${cmd[@]}" >"$out_file" 2>"$err_file"
+    "${cmd_ro[@]}" >"$out_file" 2>>"$err_file"
     rc=$?
   fi
   set -e
@@ -495,38 +508,96 @@ def parse_treemap_stats(path: Path) -> dict[str, str]:
 def build_light_summary(stats: dict[str, str]) -> dict[str, object]:
     if not stats:
         return {}
+    def stat_int(*keys: str) -> int:
+        for key in keys:
+            if key in stats:
+                return safe_int(stats.get(key), 0)
+        return 0
+
+    def stat_str(*keys: str) -> str:
+        for key in keys:
+            if key in stats:
+                return str(stats.get(key, "")).strip()
+        return ""
+
     out: dict[str, object] = {
-        "bytes_live_total": safe_int(stats.get("treedb.cache.vlog_generation.bytes.live.total"), 0),
-        "bytes_stale_total": safe_int(stats.get("treedb.cache.vlog_generation.bytes.stale.total"), 0),
-        "bytes_total_total": safe_int(stats.get("treedb.cache.vlog_generation.bytes.total.total"), 0),
-        "bytes_live_hot": safe_int(stats.get("treedb.cache.vlog_generation.bytes.live.hot"), 0),
-        "bytes_live_warm": safe_int(stats.get("treedb.cache.vlog_generation.bytes.live.warm"), 0),
-        "bytes_live_cold": safe_int(stats.get("treedb.cache.vlog_generation.bytes.live.cold"), 0),
-        "bytes_stale_hot": safe_int(stats.get("treedb.cache.vlog_generation.bytes.stale.hot"), 0),
-        "bytes_stale_warm": safe_int(stats.get("treedb.cache.vlog_generation.bytes.stale.warm"), 0),
-        "bytes_stale_cold": safe_int(stats.get("treedb.cache.vlog_generation.bytes.stale.cold"), 0),
-        "segments_total": safe_int(stats.get("treedb.cache.vlog_generation.segments.total"), 0),
-        "segments_hot": safe_int(stats.get("treedb.cache.vlog_generation.segments.hot"), 0),
-        "segments_warm": safe_int(stats.get("treedb.cache.vlog_generation.segments.warm"), 0),
-        "segments_cold": safe_int(stats.get("treedb.cache.vlog_generation.segments.cold"), 0),
-        "rewrite_queue_len": safe_int(stats.get("treedb.cache.vlog_generation.rewrite.queue_len"), 0),
-        "rewrite_queue_live_bytes_after_tokens": safe_int(
-            stats.get("treedb.cache.vlog_generation.rewrite.queue_live_bytes_after_tokens"),
-            0,
+        "bytes_live_total": stat_int(
+            "treedb.cache.vlog_generation.bytes.live.total",
+            "treedb.vlog_generation.bytes.live.total",
         ),
-        "rewrite_penalties_active": safe_int(stats.get("treedb.cache.vlog_generation.rewrite.penalties_active"), 0),
-        "rewrite_age_blocked_remaining_ms": safe_int(
-            stats.get("treedb.cache.vlog_generation.rewrite.age_blocked_remaining_ms"),
-            0,
+        "bytes_stale_total": stat_int(
+            "treedb.cache.vlog_generation.bytes.stale.total",
+            "treedb.vlog_generation.bytes.stale.total",
         ),
-        "gc_last_eligible_bytes": safe_int(stats.get("treedb.cache.vlog_generation.gc.last_eligible_bytes"), 0),
-        "gc_last_pending_bytes": safe_int(stats.get("treedb.cache.vlog_generation.gc.last_pending_bytes"), 0),
-        "gc_last_protected_retained_bytes": safe_int(
-            stats.get("treedb.cache.vlog_generation.gc.last_protected_retained_bytes"),
-            0,
+        "bytes_total_total": stat_int(
+            "treedb.cache.vlog_generation.bytes.total.total",
+            "treedb.vlog_generation.bytes.total.total",
+        ),
+        "bytes_live_hot": stat_int(
+            "treedb.cache.vlog_generation.bytes.live.hot",
+            "treedb.vlog_generation.bytes.live.hot",
+        ),
+        "bytes_live_warm": stat_int(
+            "treedb.cache.vlog_generation.bytes.live.warm",
+            "treedb.vlog_generation.bytes.live.warm",
+        ),
+        "bytes_live_cold": stat_int(
+            "treedb.cache.vlog_generation.bytes.live.cold",
+            "treedb.vlog_generation.bytes.live.cold",
+        ),
+        "bytes_stale_hot": stat_int(
+            "treedb.cache.vlog_generation.bytes.stale.hot",
+            "treedb.vlog_generation.bytes.stale.hot",
+        ),
+        "bytes_stale_warm": stat_int(
+            "treedb.cache.vlog_generation.bytes.stale.warm",
+            "treedb.vlog_generation.bytes.stale.warm",
+        ),
+        "bytes_stale_cold": stat_int(
+            "treedb.cache.vlog_generation.bytes.stale.cold",
+            "treedb.vlog_generation.bytes.stale.cold",
+        ),
+        "segments_total": stat_int(
+            "treedb.cache.vlog_generation.segments.total",
+            "treedb.vlog_generation.segments.total",
+        ),
+        "segments_hot": stat_int(
+            "treedb.cache.vlog_generation.segments.hot",
+            "treedb.vlog_generation.segments.hot",
+        ),
+        "segments_warm": stat_int(
+            "treedb.cache.vlog_generation.segments.warm",
+            "treedb.vlog_generation.segments.warm",
+        ),
+        "segments_cold": stat_int(
+            "treedb.cache.vlog_generation.segments.cold",
+            "treedb.vlog_generation.segments.cold",
+        ),
+        "rewrite_queue_len": stat_int("treedb.cache.vlog_generation.rewrite.queue_len"),
+        "rewrite_queue_live_bytes_after_tokens": stat_int(
+            "treedb.cache.vlog_generation.rewrite.queue_live_bytes_after_tokens",
+        ),
+        "rewrite_penalties_active": stat_int("treedb.cache.vlog_generation.rewrite.penalties_active"),
+        "rewrite_age_blocked_remaining_ms": stat_int(
+            "treedb.cache.vlog_generation.rewrite.age_blocked_remaining_ms",
+        ),
+        "gc_last_eligible_bytes": stat_int(
+            "treedb.cache.vlog_generation.gc.last_eligible_bytes",
+            "treedb.vlog_generation.gc.last_eligible_bytes",
+        ),
+        "gc_last_pending_bytes": stat_int(
+            "treedb.cache.vlog_generation.gc.last_pending_bytes",
+            "treedb.vlog_generation.gc.last_pending_bytes",
+        ),
+        "gc_last_protected_retained_bytes": stat_int(
+            "treedb.cache.vlog_generation.gc.last_protected_retained_bytes",
+            "treedb.vlog_generation.gc.last_protected_retained_bytes",
         ),
     }
-    phase = stats.get("treedb.cache.vlog_generation.maintenance_phase", "")
+    phase = stat_str(
+        "treedb.cache.vlog_generation.maintenance_phase",
+        "treedb.vlog_generation.scheduler_state",
+    )
     if phase:
         out["maintenance_phase"] = phase
     total = safe_float(out.get("bytes_total_total"), 0.0)

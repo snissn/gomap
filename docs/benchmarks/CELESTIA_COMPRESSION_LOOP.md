@@ -160,6 +160,7 @@ Notes:
   - enable/disable: `AB_CAPTURE_LIGHT_VLOG_STATS=1|0` (default `1`)
   - command timeout: `AB_LIGHT_VLOG_STATS_TIMEOUT_SECONDS` (default `20`)
   - open mode for stats capture: `AB_LIGHT_VLOG_STATS_RW_OPEN=1|0` (default `1`)
+  - if `-rw` capture cannot acquire DB lock, the script automatically retries read-only stats capture
   - outputs land in each run directory as `light_stats_pre.txt` / `light_stats_post.txt`, and summarized values are included in `run.json` + `runs.csv`.
 - To use pre-policy behavior, set `AB_POLICY=legacy`.
 
