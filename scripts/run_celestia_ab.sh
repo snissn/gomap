@@ -432,7 +432,8 @@ if trust_height > 0 and final_local_height >= trust_height:
 remote_minus_stop_height = None
 if stop_at_local_height > 0 and final_remote_height > 0:
     remote_minus_stop_height = final_remote_height - stop_at_local_height
-s_sync_app_bytes_per_block = safe_div(pre_app_bytes, blocks_synced)
+sync_end_app_bytes = safe_int(sync.get("end_app_bytes"), pre_app_bytes)
+s_sync_app_bytes_per_block = safe_div(sync_end_app_bytes, blocks_synced)
 s_post_app_bytes_per_block = safe_div(post_app_bytes, blocks_synced)
 t_sync_seconds_per_block = safe_div(t_sync, blocks_synced)
 t_total_seconds_per_block = safe_div(t_total, blocks_synced) if t_total is not None else None
@@ -463,7 +464,7 @@ result = {
         "final_remote_height_actual": final_remote_height_actual,
         "blocks_synced": blocks_synced,
         "remote_minus_stop_height": remote_minus_stop_height,
-        "end_app_bytes": safe_int(sync.get("end_app_bytes"), pre_app_bytes),
+        "end_app_bytes": sync_end_app_bytes,
         "end_data_bytes": safe_int(sync.get("end_data_bytes"), 0),
         "end_home_bytes": safe_int(sync.get("end_home_bytes"), 0),
     },
@@ -473,7 +474,8 @@ result = {
         "exit_code": rewrite_rc,
     },
     "sizes": {
-        "sync_app_bytes": pre_app_bytes,
+        "sync_app_bytes": sync_end_app_bytes,
+        "du_sync_app_bytes": pre_app_bytes,
         "sync_wal_bytes": pre_wal_bytes,
         "post_app_bytes": post_app_bytes,
         "post_wal_bytes": post_wal_bytes,
@@ -482,7 +484,8 @@ result = {
         "t_sync_seconds": t_sync,
         "t_rewrite_seconds": t_rw,
         "t_total_seconds": t_total,
-        "s_sync_app_bytes": pre_app_bytes,
+        "s_sync_app_bytes": sync_end_app_bytes,
+        "s_du_sync_app_bytes": pre_app_bytes,
         "s_sync_wal_bytes": pre_wal_bytes,
         "s_post_app_bytes": post_app_bytes,
         "s_post_wal_bytes": post_wal_bytes,
