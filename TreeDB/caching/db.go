@@ -15365,7 +15365,7 @@ planned:
 		return
 	}
 
-	observedSourceGCIDs := db.takeVlogGenerationObservedSourceGCListBefore(activeStart.UnixNano())
+	observedSourceGCIDs := db.takeVlogGenerationObservedSourceGCList()
 	forceObservedSourceGC := len(observedSourceGCIDs) > 0
 	if !runGC && opts.bypassQuiet && !forceObservedSourceGC {
 		// Checkpoint-kick/deferred retry passes are rewrite-priority. Do not run
