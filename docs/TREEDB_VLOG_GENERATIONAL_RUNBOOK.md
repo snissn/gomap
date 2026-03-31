@@ -127,6 +127,7 @@ Default pair metric focus:
 - `max_rss_kb` (memory guardrail)
 - `blocks_synced` and normalized metrics (`*_per_block`) to de-noise moving-target runs
 - rewrite efficiency/capacity (`rewrite_exec_reclaimed_vs_churn_ratio`, `rewrite_reclaimed_share_of_budget_pct`, `rewrite_budget_consumed_share_of_budget_pct`, `rewrite_ineffective_runs`, `observed_gc_pending_ids`)
+- rewrite queue + checkpoint-kick pressure (`rewrite_queue_len`, `rewrite_queue_live_bytes_after_tokens`, `rewrite_queue_eta_seconds.budget`, `checkpoint_kick_skipped_hot_no_debt`)
 
 Outputs:
 - `artifacts/celestia_ab/<ts>/runs.csv`
@@ -136,6 +137,7 @@ Outputs:
 - per-run JSON under `artifacts/celestia_ab/<ts>/runs/*/run.json`
 
 `runs.csv` includes per-run rewrite-capacity KPIs and `pairs.csv` includes pair deltas for those KPIs, so candidate/control maintenance behavior can be evaluated directly from CSV outputs.
+This includes queue-pressure and checkpoint-kick fields to diagnose whether rewrite is keeping up incrementally during hot sync windows.
 
 The harness alternates run order per pair (`control->candidate`, then
 `candidate->control`) and can stop early on clear win/loss signals.

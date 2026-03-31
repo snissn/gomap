@@ -959,9 +959,45 @@ def build_maintenance_from_light_stats(stats: dict[str, str]) -> dict[str, objec
         "rewrite_queue_progress_snapshot_errors": stat_int(
             "treedb.cache.vlog_generation.rewrite.queue_progress.snapshot_errors",
         ),
+        "rewrite_queue_len": stat_int(
+            "treedb.cache.vlog_generation.rewrite.queue_len",
+        ),
+        "rewrite_queue_live_bytes_after_tokens": stat_int(
+            "treedb.cache.vlog_generation.rewrite.queue_live_bytes_after_tokens",
+        ),
+        "rewrite_queue_eta_seconds_budget": stat_float(
+            "treedb.cache.vlog_generation.rewrite.queue_eta_seconds.budget",
+        ),
+        "rewrite_queue_eta_seconds_recent_exec": stat_float(
+            "treedb.cache.vlog_generation.rewrite.queue_eta_seconds.recent_exec",
+        ),
+        "rewrite_exec_last_live_bytes": stat_int(
+            "treedb.cache.vlog_generation.rewrite.exec.last_live_bytes",
+        ),
+        "rewrite_exec_last_duration_ms": stat_float(
+            "treedb.cache.vlog_generation.rewrite.exec.last_duration_ms",
+        ),
+        "rewrite_exec_last_live_bytes_per_sec": stat_float(
+            "treedb.cache.vlog_generation.rewrite.exec.last_live_bytes_per_sec",
+        ),
         "rewrite_ledger_bytes_total": stat_int("treedb.cache.vlog_generation.rewrite.ledger_bytes_total"),
         "rewrite_budget_tokens_utilization_pct": stat_float(
             "treedb.cache.vlog_generation.rewrite_budget.tokens_utilization_pct",
+        ),
+        "checkpoint_kick_runs": stat_int(
+            "treedb.cache.vlog_generation.checkpoint_kick.runs",
+        ),
+        "checkpoint_kick_rewrite_runs": stat_int(
+            "treedb.cache.vlog_generation.checkpoint_kick.rewrite_runs",
+        ),
+        "checkpoint_kick_gc_runs": stat_int(
+            "treedb.cache.vlog_generation.checkpoint_kick.gc_runs",
+        ),
+        "checkpoint_kick_skipped_hot_no_debt": stat_int(
+            "treedb.cache.vlog_generation.checkpoint_kick.skipped_hot_no_debt",
+        ),
+        "checkpoint_kick_hot_no_debt_wake_runs": stat_int(
+            "treedb.cache.vlog_generation.checkpoint_kick.hot_no_debt_wake.runs",
         ),
         "gc_runs": stat_int("treedb.cache.vlog_generation.gc.runs"),
         "observed_gc_pending_ids": stat_int("treedb.cache.vlog_generation.observed_gc.pending_ids"),
@@ -1069,6 +1105,11 @@ def build_maintenance_from_light_stats(stats: dict[str, str]) -> dict[str, objec
         (100.0 * float(observed_gc_taken) / float(observed_gc_queued))
         if observed_gc_queued > 0
         else 0.0
+    )
+    checkpoint_kick_runs = safe_float(out.get("checkpoint_kick_runs"), 0.0)
+    checkpoint_kick_rewrite_runs = safe_float(out.get("checkpoint_kick_rewrite_runs"), 0.0)
+    out["checkpoint_kick_rewrite_rate_pct"] = (
+        100.0 * checkpoint_kick_rewrite_runs / checkpoint_kick_runs if checkpoint_kick_runs > 0 else 0.0
     )
     return out
 
@@ -1493,8 +1534,21 @@ with runs_csv.open("w", newline="", encoding="utf-8") as fh:
         "rewrite_queue_progress_live_bytes_net_drain_total",
         "rewrite_queue_progress_live_bytes_delta_last",
         "rewrite_queue_progress_snapshot_errors",
+        "rewrite_queue_len",
+        "rewrite_queue_live_bytes_after_tokens",
+        "rewrite_queue_eta_seconds_budget",
+        "rewrite_queue_eta_seconds_recent_exec",
+        "rewrite_exec_last_live_bytes",
+        "rewrite_exec_last_duration_ms",
+        "rewrite_exec_last_live_bytes_per_sec",
         "rewrite_ledger_bytes_total",
         "rewrite_budget_tokens_utilization_pct",
+        "checkpoint_kick_runs",
+        "checkpoint_kick_rewrite_runs",
+        "checkpoint_kick_rewrite_rate_pct",
+        "checkpoint_kick_gc_runs",
+        "checkpoint_kick_skipped_hot_no_debt",
+        "checkpoint_kick_hot_no_debt_wake_runs",
         "gc_runs",
         "observed_gc_pending_ids",
         "observed_gc_pending_oldest_age_ms",
@@ -1671,8 +1725,21 @@ with runs_csv.open("w", newline="", encoding="utf-8") as fh:
             summary.get("rewrite_queue_progress_live_bytes_net_drain_total", 0),
             summary.get("rewrite_queue_progress_live_bytes_delta_last", 0),
             summary.get("rewrite_queue_progress_snapshot_errors", 0),
+            summary.get("rewrite_queue_len", 0),
+            summary.get("rewrite_queue_live_bytes_after_tokens", 0),
+            summary.get("rewrite_queue_eta_seconds_budget", 0),
+            summary.get("rewrite_queue_eta_seconds_recent_exec", 0),
+            summary.get("rewrite_exec_last_live_bytes", 0),
+            summary.get("rewrite_exec_last_duration_ms", 0),
+            summary.get("rewrite_exec_last_live_bytes_per_sec", 0),
             summary.get("rewrite_ledger_bytes_total", 0),
             summary.get("rewrite_budget_tokens_utilization_pct", 0),
+            summary.get("checkpoint_kick_runs", 0),
+            summary.get("checkpoint_kick_rewrite_runs", 0),
+            summary.get("checkpoint_kick_rewrite_rate_pct", 0),
+            summary.get("checkpoint_kick_gc_runs", 0),
+            summary.get("checkpoint_kick_skipped_hot_no_debt", 0),
+            summary.get("checkpoint_kick_hot_no_debt_wake_runs", 0),
             summary.get("gc_runs", 0),
             summary.get("observed_gc_pending_ids", 0),
             summary.get("observed_gc_pending_oldest_age_ms", 0),
@@ -1759,6 +1826,15 @@ for pair in sorted(by_pair):
             "control_observed_gc_pending_ids": None,
             "candidate_observed_gc_pending_ids": None,
             "delta_observed_gc_pending_ids": None,
+            "control_rewrite_queue_eta_seconds_budget": None,
+            "candidate_rewrite_queue_eta_seconds_budget": None,
+            "delta_rewrite_queue_eta_seconds_budget": None,
+            "control_rewrite_queue_live_bytes_after_tokens": None,
+            "candidate_rewrite_queue_live_bytes_after_tokens": None,
+            "delta_rewrite_queue_live_bytes_after_tokens": None,
+            "control_checkpoint_kick_skipped_hot_no_debt": None,
+            "candidate_checkpoint_kick_skipped_hot_no_debt": None,
+            "delta_checkpoint_kick_skipped_hot_no_debt": None,
             "control_valid": ctrl_valid,
             "candidate_valid": cand_valid,
             "control_invalid_reason": ctrl_reason,
@@ -1812,6 +1888,24 @@ for pair in sorted(by_pair):
     cand_observed_gc_pending_ids = cand_summary.get("observed_gc_pending_ids")
     base_observed_gc_pending_ids = ctrl_summary.get("observed_gc_pending_ids")
     d_observed_gc_pending_ids = delta(cand_observed_gc_pending_ids, base_observed_gc_pending_ids)
+    cand_rewrite_queue_eta_seconds_budget = cand_summary.get("rewrite_queue_eta_seconds_budget")
+    base_rewrite_queue_eta_seconds_budget = ctrl_summary.get("rewrite_queue_eta_seconds_budget")
+    d_rewrite_queue_eta_seconds_budget = delta(
+        cand_rewrite_queue_eta_seconds_budget,
+        base_rewrite_queue_eta_seconds_budget,
+    )
+    cand_rewrite_queue_live_bytes_after_tokens = cand_summary.get("rewrite_queue_live_bytes_after_tokens")
+    base_rewrite_queue_live_bytes_after_tokens = ctrl_summary.get("rewrite_queue_live_bytes_after_tokens")
+    d_rewrite_queue_live_bytes_after_tokens = delta(
+        cand_rewrite_queue_live_bytes_after_tokens,
+        base_rewrite_queue_live_bytes_after_tokens,
+    )
+    cand_checkpoint_kick_skipped_hot_no_debt = cand_summary.get("checkpoint_kick_skipped_hot_no_debt")
+    base_checkpoint_kick_skipped_hot_no_debt = ctrl_summary.get("checkpoint_kick_skipped_hot_no_debt")
+    d_checkpoint_kick_skipped_hot_no_debt = delta(
+        cand_checkpoint_kick_skipped_hot_no_debt,
+        base_checkpoint_kick_skipped_hot_no_debt,
+    )
 
     def ratio(candidate, control):
         c = as_float(candidate)
@@ -1923,6 +2017,15 @@ for pair in sorted(by_pair):
         "control_observed_gc_pending_ids": base_observed_gc_pending_ids,
         "candidate_observed_gc_pending_ids": cand_observed_gc_pending_ids,
         "delta_observed_gc_pending_ids": d_observed_gc_pending_ids,
+        "control_rewrite_queue_eta_seconds_budget": base_rewrite_queue_eta_seconds_budget,
+        "candidate_rewrite_queue_eta_seconds_budget": cand_rewrite_queue_eta_seconds_budget,
+        "delta_rewrite_queue_eta_seconds_budget": d_rewrite_queue_eta_seconds_budget,
+        "control_rewrite_queue_live_bytes_after_tokens": base_rewrite_queue_live_bytes_after_tokens,
+        "candidate_rewrite_queue_live_bytes_after_tokens": cand_rewrite_queue_live_bytes_after_tokens,
+        "delta_rewrite_queue_live_bytes_after_tokens": d_rewrite_queue_live_bytes_after_tokens,
+        "control_checkpoint_kick_skipped_hot_no_debt": base_checkpoint_kick_skipped_hot_no_debt,
+        "candidate_checkpoint_kick_skipped_hot_no_debt": cand_checkpoint_kick_skipped_hot_no_debt,
+        "delta_checkpoint_kick_skipped_hot_no_debt": d_checkpoint_kick_skipped_hot_no_debt,
         "control_valid": ctrl_valid,
         "candidate_valid": cand_valid,
         "control_invalid_reason": ctrl_reason,
@@ -1970,6 +2073,15 @@ with pairs_csv.open("w", newline="", encoding="utf-8") as fh:
         "control_observed_gc_pending_ids",
         "candidate_observed_gc_pending_ids",
         "delta_observed_gc_pending_ids",
+        "control_rewrite_queue_eta_seconds_budget",
+        "candidate_rewrite_queue_eta_seconds_budget",
+        "delta_rewrite_queue_eta_seconds_budget",
+        "control_rewrite_queue_live_bytes_after_tokens",
+        "candidate_rewrite_queue_live_bytes_after_tokens",
+        "delta_rewrite_queue_live_bytes_after_tokens",
+        "control_checkpoint_kick_skipped_hot_no_debt",
+        "candidate_checkpoint_kick_skipped_hot_no_debt",
+        "delta_checkpoint_kick_skipped_hot_no_debt",
         "control_valid",
         "candidate_valid",
         "control_invalid_reason",
@@ -2014,6 +2126,15 @@ with pairs_csv.open("w", newline="", encoding="utf-8") as fh:
             r["control_observed_gc_pending_ids"],
             r["candidate_observed_gc_pending_ids"],
             r["delta_observed_gc_pending_ids"],
+            r["control_rewrite_queue_eta_seconds_budget"],
+            r["candidate_rewrite_queue_eta_seconds_budget"],
+            r["delta_rewrite_queue_eta_seconds_budget"],
+            r["control_rewrite_queue_live_bytes_after_tokens"],
+            r["candidate_rewrite_queue_live_bytes_after_tokens"],
+            r["delta_rewrite_queue_live_bytes_after_tokens"],
+            r["control_checkpoint_kick_skipped_hot_no_debt"],
+            r["candidate_checkpoint_kick_skipped_hot_no_debt"],
+            r["delta_checkpoint_kick_skipped_hot_no_debt"],
             r["control_valid"],
             r["candidate_valid"],
             r["control_invalid_reason"],
@@ -2065,6 +2186,18 @@ delta_ineffective_runs_mean = mean_pair_delta(
 delta_observed_gc_pending_ids_mean = mean_pair_delta(
     scored_rows,
     "delta_observed_gc_pending_ids",
+)
+delta_rewrite_queue_eta_seconds_budget_mean = mean_pair_delta(
+    scored_rows,
+    "delta_rewrite_queue_eta_seconds_budget",
+)
+delta_rewrite_queue_live_bytes_after_tokens_mean = mean_pair_delta(
+    scored_rows,
+    "delta_rewrite_queue_live_bytes_after_tokens",
+)
+delta_checkpoint_kick_skipped_hot_no_debt_mean = mean_pair_delta(
+    scored_rows,
+    "delta_checkpoint_kick_skipped_hot_no_debt",
 )
 neutral_streak = 0
 for row in reversed(scored_rows):
@@ -2210,6 +2343,15 @@ lines.append(
 lines.append(
     f"- mean delta observed_gc_pending_ids: `{delta_observed_gc_pending_ids_mean}`"
 )
+lines.append(
+    f"- mean delta rewrite_queue_eta_seconds_budget: `{delta_rewrite_queue_eta_seconds_budget_mean}`"
+)
+lines.append(
+    f"- mean delta rewrite_queue_live_bytes_after_tokens: `{delta_rewrite_queue_live_bytes_after_tokens_mean}`"
+)
+lines.append(
+    f"- mean delta checkpoint_kick_skipped_hot_no_debt: `{delta_checkpoint_kick_skipped_hot_no_debt_mean}`"
+)
 lines.append(f"- decision: `{reason}`")
 lines.append("")
 lines.append("## Absolute Medians")
@@ -2295,6 +2437,24 @@ if pair_rows:
         f"`{last['candidate_observed_gc_pending_ids']}` / "
         f"`{last['delta_observed_gc_pending_ids']}`"
     )
+    lines.append(
+        f"- rewrite_queue_eta_seconds_budget (control/candidate/delta): "
+        f"`{last['control_rewrite_queue_eta_seconds_budget']}` / "
+        f"`{last['candidate_rewrite_queue_eta_seconds_budget']}` / "
+        f"`{last['delta_rewrite_queue_eta_seconds_budget']}`"
+    )
+    lines.append(
+        f"- rewrite_queue_live_bytes_after_tokens (control/candidate/delta): "
+        f"`{last['control_rewrite_queue_live_bytes_after_tokens']}` / "
+        f"`{last['candidate_rewrite_queue_live_bytes_after_tokens']}` / "
+        f"`{last['delta_rewrite_queue_live_bytes_after_tokens']}`"
+    )
+    lines.append(
+        f"- checkpoint_kick_skipped_hot_no_debt (control/candidate/delta): "
+        f"`{last['control_checkpoint_kick_skipped_hot_no_debt']}` / "
+        f"`{last['candidate_checkpoint_kick_skipped_hot_no_debt']}` / "
+        f"`{last['delta_checkpoint_kick_skipped_hot_no_debt']}`"
+    )
 summary_md.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 payload = {
@@ -2325,6 +2485,9 @@ payload = {
     "mean_delta_rewrite_budget_consumed_share_of_budget_pct": delta_budget_consumed_share_pct_mean,
     "mean_delta_rewrite_ineffective_runs": delta_ineffective_runs_mean,
     "mean_delta_observed_gc_pending_ids": delta_observed_gc_pending_ids_mean,
+    "mean_delta_rewrite_queue_eta_seconds_budget": delta_rewrite_queue_eta_seconds_budget_mean,
+    "mean_delta_rewrite_queue_live_bytes_after_tokens": delta_rewrite_queue_live_bytes_after_tokens_mean,
+    "mean_delta_checkpoint_kick_skipped_hot_no_debt": delta_checkpoint_kick_skipped_hot_no_debt_mean,
     "stop": stop,
     "reason": reason,
 }
