@@ -6386,6 +6386,14 @@ type DB struct {
 	vlogGenerationRewriteQueueFreshPlanSegmentCapDecisions     atomic.Uint64
 	vlogGenerationRewriteQueueRunSegmentCapLimiterCounts       [vlogGenerationRewriteSegmentCapLimiterCount]atomic.Uint64
 	vlogGenerationRewriteQueueFreshPlanSegmentCapLimiterCounts [vlogGenerationRewriteSegmentCapLimiterCount]atomic.Uint64
+	vlogGenerationRewriteQueuedDebtPasses                      atomic.Uint64
+	vlogGenerationRewriteQueuedDebtRewriteStarted              atomic.Uint64
+	vlogGenerationRewriteQueuedDebtSkipQuiet                   atomic.Uint64
+	vlogGenerationRewriteQueuedDebtSkipCancelBackoff           atomic.Uint64
+	vlogGenerationRewriteQueuedDebtSkipIneffectiveBackoff      atomic.Uint64
+	vlogGenerationRewriteQueuedDebtSkipMinInterval             atomic.Uint64
+	vlogGenerationRewriteQueuedDebtSkipBudgetEmpty             atomic.Uint64
+	vlogGenerationRewriteQueuedDebtSkipNoChunk                 atomic.Uint64
 	vlogGenerationGCExecTotalNanos                             atomic.Uint64
 	vlogGenerationGCExecMaxNanos                               atomic.Uint64
 	vlogGenerationVacuumExecTotalNanos                         atomic.Uint64
@@ -15109,6 +15117,9 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 	planner, hasPlanner := db.backend.(backendValueLogRewritePlanner)
 	allowCheckpointKickBypass := opts.bypassQuiet && !opts.skipCheckpoint
 	hasExecutableRewriteQueue := len(rewriteQueue) > 0 && !stagePending
+	if hasExecutableRewriteQueue {
+		db.vlogGenerationRewriteQueuedDebtPasses.Add(1)
+	}
 	allowCheckpointKickRetry := allowCheckpointKickBypass && hasExecutableRewriteQueue
 	ageBlockedRetryDue := len(rewriteQueue) == 0 && db.vlogGenerationRewriteAgeBlockedDue(now)
 	if hasExecutableRewriteQueue {
@@ -15117,6 +15128,7 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 	}
 	rewriteCancelBackoff := hasExecutableRewriteQueue && db.vlogGenerationRewriteCancelBackoffActive(now) && !allowCheckpointKickRetry
 	if rewriteCancelBackoff {
+		db.vlogGenerationRewriteQueuedDebtSkipCancelBackoff.Add(1)
 		shouldRewrite = false
 		reason = vlogGenerationReasonNone
 	}
@@ -15131,6 +15143,9 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 	ineffectiveBackoff := db.vlogGenerationRewriteIneffectiveBackoffActive(now) &&
 		!ageBlockedRetryDue
 	if ineffectiveBackoff {
+		if hasExecutableRewriteQueue {
+			db.vlogGenerationRewriteQueuedDebtSkipIneffectiveBackoff.Add(1)
+		}
 		shouldRewrite = false
 		reason = vlogGenerationReasonNone
 	}
@@ -15138,6 +15153,9 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 	// planning/execution should remain quiet-window-bound unless explicitly
 	// bypassed (checkpoint-kick).
 	if !quiet && !opts.bypassQuiet {
+		if hasExecutableRewriteQueue {
+			db.vlogGenerationRewriteQueuedDebtSkipQuiet.Add(1)
+		}
 		shouldRewrite = false
 		reason = vlogGenerationReasonNone
 	}
@@ -15327,6 +15345,9 @@ planned:
 			if now.Sub(lastAt) < minInterval && !allowCheckpointKickRetry {
 				shouldRewrite = false
 				rewriteMinIntervalBlocked = true
+				if hasExecutableRewriteQueue {
+					db.vlogGenerationRewriteQueuedDebtSkipMinInterval.Add(1)
+				}
 			}
 		}
 	}
@@ -15501,6 +15522,7 @@ planned:
 				// If a queued rewrite is pending, do not run it while the bucket is
 				// empty; that defeats the whole point of a bounded executor.
 				if budgetTokens <= 0 && len(rewriteQueue) > 0 {
+					db.vlogGenerationRewriteQueuedDebtSkipBudgetEmpty.Add(1)
 					db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
 					return nil
 				}
@@ -15597,6 +15619,9 @@ planned:
 					}
 					processedRewriteIDs = vlogGenerationRewriteLedgerChunk(plannedLedgerForExec, rewriteMaxSegments, budgetTokens)
 					if len(processedRewriteIDs) == 0 {
+						if hadRewriteQueue {
+							db.vlogGenerationRewriteQueuedDebtSkipNoChunk.Add(1)
+						}
 						prunedQueue, dropped, pruneErr := db.pruneVlogGenerationRewriteLedgerNonPositiveLive()
 						if pruneErr != nil {
 							return fmt.Errorf("prune generational rewrite plan ledger: %w", pruneErr)
@@ -15634,6 +15659,9 @@ planned:
 					}
 					processedRewriteIDs = vlogGenerationRewriteLedgerChunk(ledger, rewriteMaxSegments, budgetTokens)
 					if len(processedRewriteIDs) == 0 {
+						if hadRewriteQueue {
+							db.vlogGenerationRewriteQueuedDebtSkipNoChunk.Add(1)
+						}
 						prunedQueue, dropped, pruneErr := db.pruneVlogGenerationRewriteLedgerNonPositiveLive()
 						if pruneErr != nil {
 							return fmt.Errorf("prune generational rewrite ledger: %w", pruneErr)
@@ -15679,6 +15707,9 @@ planned:
 				len(rewriteQueue),
 				processedLedgerLiveBytes,
 			)
+			if hadRewriteQueue && len(rewriteOpts.SourceFileIDs) > 0 {
+				db.vlogGenerationRewriteQueuedDebtRewriteStarted.Add(1)
+			}
 			rewriteStart := time.Now()
 			rewriteAttempted = true
 			stats, err := rewriter.ValueLogRewriteOnline(ctx, rewriteOpts)
@@ -22325,6 +22356,14 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_generation.rewrite.queue_config.debt_drain_max_segments"] = fmt.Sprintf("%d", rewriteDebtDrainMaxSegments)
 	stats["treedb.cache.vlog_generation.rewrite.queue_config.fresh_plan_debt_drain_min_segments"] = fmt.Sprintf("%d", rewriteFreshPlanDebtDrainMinSegments)
 	stats["treedb.cache.vlog_generation.rewrite.queue_config.fresh_plan_debt_drain_max_segments"] = fmt.Sprintf("%d", rewriteFreshPlanDebtDrainMaxSegments)
+	stats["treedb.cache.vlog_generation.rewrite.queued_debt.passes"] = fmt.Sprintf("%d", db.vlogGenerationRewriteQueuedDebtPasses.Load())
+	stats["treedb.cache.vlog_generation.rewrite.queued_debt.rewrite_started"] = fmt.Sprintf("%d", db.vlogGenerationRewriteQueuedDebtRewriteStarted.Load())
+	stats["treedb.cache.vlog_generation.rewrite.queued_debt.skip.quiet_window"] = fmt.Sprintf("%d", db.vlogGenerationRewriteQueuedDebtSkipQuiet.Load())
+	stats["treedb.cache.vlog_generation.rewrite.queued_debt.skip.cancel_backoff"] = fmt.Sprintf("%d", db.vlogGenerationRewriteQueuedDebtSkipCancelBackoff.Load())
+	stats["treedb.cache.vlog_generation.rewrite.queued_debt.skip.ineffective_backoff"] = fmt.Sprintf("%d", db.vlogGenerationRewriteQueuedDebtSkipIneffectiveBackoff.Load())
+	stats["treedb.cache.vlog_generation.rewrite.queued_debt.skip.min_interval"] = fmt.Sprintf("%d", db.vlogGenerationRewriteQueuedDebtSkipMinInterval.Load())
+	stats["treedb.cache.vlog_generation.rewrite.queued_debt.skip.budget_empty"] = fmt.Sprintf("%d", db.vlogGenerationRewriteQueuedDebtSkipBudgetEmpty.Load())
+	stats["treedb.cache.vlog_generation.rewrite.queued_debt.skip.no_chunk"] = fmt.Sprintf("%d", db.vlogGenerationRewriteQueuedDebtSkipNoChunk.Load())
 	stats["treedb.cache.vlog_generation.rewrite.queue_progress.passes"] = fmt.Sprintf("%d", rewriteQueueProgressPasses)
 	stats["treedb.cache.vlog_generation.rewrite.queue_progress.snapshot_errors"] = fmt.Sprintf("%d", rewriteQueueProgressSnapshotErrors)
 	stats["treedb.cache.vlog_generation.rewrite.queue_progress.segments_before_total"] = fmt.Sprintf("%d", rewriteQueueProgressSegmentsBeforeTotal)
