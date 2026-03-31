@@ -7793,6 +7793,34 @@ func TestVlogGenerationStats_ReportRewriteBacklogAndDurations(t *testing.T) {
 	}
 }
 
+func TestVlogGenerationStats_QueueCapHintRequiresFullCoverage(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	recorder := &rewriteBudgetRecordingBackend{DB: backend}
+	db, cleanup := openRewriteQueueTestDB(t, dir, recorder)
+	defer cleanup()
+
+	db.valueLogGenerationWarmTarget = 256
+	db.vlogGenerationRewriteBudgetTokensBytes.Store(600)
+	db.vlogGenerationRewriteQueueMu.Lock()
+	db.vlogGenerationRewriteQueueLoaded = true
+	db.vlogGenerationRewriteQueue = []uint32{11, 99}
+	db.vlogGenerationRewriteLedger = []backenddb.ValueLogRewritePlanSegment{
+		{FileID: 11, BytesTotal: 1000, BytesLive: 700, BytesStale: 300},
+	}
+	db.vlogGenerationRewriteQueueMu.Unlock()
+
+	stats := db.Stats()
+	if got := stats["treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.per_segment_budget_bytes"]; got != "256" {
+		t.Fatalf("rewrite queue run segment cap per-segment budget bytes=%q want 256", got)
+	}
+}
+
 func TestVlogGenerationSegmentTargetEnvOverrides(t *testing.T) {
 	prepareDirectSchedulerTest(t)
 	t.Setenv(envVlogGenerationHotSegmentTargetBytes, "65536")

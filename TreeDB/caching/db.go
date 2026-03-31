@@ -21759,6 +21759,8 @@ func (db *DB) Stats() map[string]string {
 	}
 	retained := db.valueLogRetainedStatsDetailed()
 	vlogSegments, vlogBytes := retained.SegmentsTotal, retained.BytesTotal
+	rewriteQueueLiveBytesHint := int64(0)
+	rewriteQueueLiveBytesHintKnown := true
 	db.vlogGenerationRewriteQueueMu.Lock()
 	rewriteQueueLen := len(db.vlogGenerationRewriteQueue)
 	rewriteQueueLoaded := db.vlogGenerationRewriteQueueLoaded
@@ -21779,6 +21781,33 @@ func (db *DB) Stats() map[string]string {
 		}
 		if seg.BytesStale > 0 {
 			rewriteLedgerBytesStale += seg.BytesStale
+		}
+	}
+	if rewriteQueueLen > 0 {
+		rewriteQueueLiveBytesHintKnown = false
+		ledgerByFileID := db.vlogGenerationRewriteLedgerByFileID
+		if len(ledgerByFileID) == 0 && len(db.vlogGenerationRewriteLedger) > 0 {
+			ledgerByFileID = buildVlogGenerationRewriteLedgerByFileID(db.vlogGenerationRewriteLedger)
+			db.vlogGenerationRewriteLedgerByFileID = ledgerByFileID
+		}
+		if len(ledgerByFileID) > 0 {
+			idsPresent := 0
+			idsKnown := 0
+			for _, id := range db.vlogGenerationRewriteQueue {
+				if id == 0 {
+					continue
+				}
+				idsPresent++
+				seg, ok := ledgerByFileID[id]
+				if !ok {
+					continue
+				}
+				idsKnown++
+				if seg.BytesLive > 0 {
+					rewriteQueueLiveBytesHint += seg.BytesLive
+				}
+			}
+			rewriteQueueLiveBytesHintKnown = idsPresent == idsKnown
 		}
 	}
 	db.vlogGenerationRewriteQueueMu.Unlock()
@@ -21891,12 +21920,6 @@ func (db *DB) Stats() map[string]string {
 	rewriteQueueFreshPlanSegmentCapLimiter := vlogGenerationRewriteSegmentCapLimiterNone
 	rewriteQueueFreshPlanSegmentCapByBudget := 0
 	rewriteQueueFreshPlanSegmentCapPerSegmentBudgetBytes := int64(0)
-	rewriteQueueLiveBytesHint := int64(0)
-	rewriteQueueLiveBytesHintKnown := rewriteQueueLen == 0
-	if rewriteQueueLen > 0 && rewriteLedgerSegments > 0 {
-		rewriteQueueLiveBytesHint = rewriteLedgerBytesLive
-		rewriteQueueLiveBytesHintKnown = true
-	}
 	if rewriteQueueLen > 0 {
 		rewriteQueueRunDecision := db.vlogGenerationRewriteSegmentCapForRunWithHint(
 			rewriteQueueLen,
