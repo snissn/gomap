@@ -14093,17 +14093,21 @@ func (db *DB) vlogGenerationRewriteQueueLiveBytesSnapshot(ids []uint32) (liveByt
 	if len(ledgerByFileID) == 0 {
 		return 0, false, nil
 	}
+	idsPresent := 0
+	idsKnown := 0
 	for _, id := range ids {
 		if id == 0 {
 			continue
 		}
+		idsPresent++
 		seg, ok := ledgerByFileID[id]
 		if !ok {
 			continue
 		}
-		known = true
+		idsKnown++
 		liveBytes += seg.BytesLive
 	}
+	known = idsPresent == idsKnown
 	if liveBytes < 0 {
 		liveBytes = 0
 	}

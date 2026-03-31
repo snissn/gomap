@@ -348,11 +348,22 @@ func TestVlogGenerationRewriteQueueLiveBytesSnapshot_UsesLoadedLedger(t *testing
 	if err != nil {
 		t.Fatalf("snapshot error: %v", err)
 	}
-	if !known {
-		t.Fatalf("expected known=true for matching ids")
+	if known {
+		t.Fatalf("expected known=false when queue coverage is partial")
 	}
 	if liveBytes != 200 {
 		t.Fatalf("live bytes=%d want 200", liveBytes)
+	}
+
+	liveBytes, known, err = db.vlogGenerationRewriteQueueLiveBytesSnapshot([]uint32{2, 1, 2, 0})
+	if err != nil {
+		t.Fatalf("snapshot error (full coverage): %v", err)
+	}
+	if !known {
+		t.Fatalf("expected known=true when all queue ids are in the ledger")
+	}
+	if liveBytes != 200 {
+		t.Fatalf("live bytes (full coverage)=%d want 200", liveBytes)
 	}
 
 	liveBytes, known, err = db.vlogGenerationRewriteQueueLiveBytesSnapshot([]uint32{3})
