@@ -1333,9 +1333,6 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 			sourceSegmentBytes[id] = fileSize(set.Files[id])
 		}
 	}
-	segmentsFromSet := rewriteValueLogSegmentsFromSet(set)
-	_ = db.valueLogManager.Release(set)
-	set = nil
 	if sourceSegmentCount > 0 {
 		if restrictSingleID {
 			if size, ok := sourceSegmentBytes[singleSourceID]; ok && size > 0 {
@@ -1378,9 +1375,14 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 			}
 		}
 	}
-	if !needSegScan && len(segmentsFromSet) > 0 {
-		segments = segmentsFromSet
+	if !needSegScan && opts.ReserveRIDs == nil {
+		segments = rewriteValueLogSegmentsFromSet(set)
+		if len(segments) == 0 {
+			needSegScan = true
+		}
 	}
+	_ = db.valueLogManager.Release(set)
+	set = nil
 	if needSegScan {
 		segments, err = rewriteWALSegmentsLister(db.dir)
 		if err != nil {
