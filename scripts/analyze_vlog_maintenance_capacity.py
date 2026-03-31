@@ -373,6 +373,18 @@ def build_summary(stats: dict[str, Any]) -> dict[str, Any]:
         "rewrite_queued_debt_skip_min_interval": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queued_debt.skip.min_interval"),
         "rewrite_queued_debt_skip_budget_empty": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queued_debt.skip.budget_empty"),
         "rewrite_queued_debt_skip_no_chunk": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queued_debt.skip.no_chunk"),
+        "rewrite_queued_debt_exec_runs": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queued_debt.exec.runs"),
+        "rewrite_queued_debt_exec_segments": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queued_debt.exec.segments"),
+        "rewrite_queued_debt_exec_plan_bytes_total": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queued_debt.exec.plan_bytes_total"),
+        "rewrite_queued_debt_exec_plan_bytes_live": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queued_debt.exec.plan_bytes_live"),
+        "rewrite_queued_debt_exec_plan_bytes_stale": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queued_debt.exec.plan_bytes_stale"),
+        "rewrite_queued_debt_exec_effective_bytes_before": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queued_debt.exec.effective_bytes_before"),
+        "rewrite_queued_debt_exec_effective_bytes_after": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queued_debt.exec.effective_bytes_after"),
+        "rewrite_queued_debt_exec_gc_bytes_deleted": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queued_debt.exec.gc_bytes_deleted"),
+        "rewrite_queued_debt_exec_reclaimed_bytes": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queued_debt.exec.reclaimed_bytes"),
+        "rewrite_queued_debt_exec_no_reclaim_runs": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queued_debt.exec.no_reclaim_runs"),
+        "rewrite_queued_debt_exec_source_bytes_requested": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queued_debt.exec.source_bytes_requested"),
+        "rewrite_queued_debt_exec_source_bytes_unreferenced": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queued_debt.exec.source_bytes_unreferenced"),
         "rewrite_queue_live_hint_known": metric_str(stats, "treedb.cache.vlog_generation.rewrite.queue_live_hint.known", "false"),
         "rewrite_queue_live_hint_ids_present": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queue_live_hint.ids_present"),
         "rewrite_queue_live_hint_ids_known": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queue_live_hint.ids_known"),
@@ -571,6 +583,18 @@ def build_summary(stats: dict[str, Any]) -> dict[str, Any]:
         + m["rewrite_queued_debt_skip_min_interval"]
         + m["rewrite_queued_debt_skip_budget_empty"]
         + m["rewrite_queued_debt_skip_no_chunk"]
+    )
+    m["rewrite_queued_debt_exec_reclaim_ratio_pct"] = pct(
+        m["rewrite_queued_debt_exec_reclaimed_bytes"],
+        m["rewrite_queued_debt_exec_effective_bytes_before"],
+    )
+    m["rewrite_queued_debt_exec_no_reclaim_rate_pct"] = pct(
+        m["rewrite_queued_debt_exec_no_reclaim_runs"],
+        m["rewrite_queued_debt_exec_runs"],
+    )
+    m["rewrite_queued_debt_exec_source_unreferenced_bytes_pct"] = pct(
+        m["rewrite_queued_debt_exec_source_bytes_unreferenced"],
+        m["rewrite_queued_debt_exec_source_bytes_requested"],
     )
 
     m["rewrite_plan_select_rate_pct"] = pct(m["rewrite_plan_selected"], m["rewrite_plan_runs"])

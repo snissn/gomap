@@ -1069,6 +1069,42 @@ def build_maintenance_from_light_stats(stats: dict[str, str]) -> dict[str, objec
         "rewrite_queued_debt_skip_no_chunk": stat_int(
             "treedb.cache.vlog_generation.rewrite.queued_debt.skip.no_chunk",
         ),
+        "rewrite_queued_debt_exec_runs": stat_int(
+            "treedb.cache.vlog_generation.rewrite.queued_debt.exec.runs",
+        ),
+        "rewrite_queued_debt_exec_segments": stat_int(
+            "treedb.cache.vlog_generation.rewrite.queued_debt.exec.segments",
+        ),
+        "rewrite_queued_debt_exec_plan_bytes_total": stat_int(
+            "treedb.cache.vlog_generation.rewrite.queued_debt.exec.plan_bytes_total",
+        ),
+        "rewrite_queued_debt_exec_plan_bytes_live": stat_int(
+            "treedb.cache.vlog_generation.rewrite.queued_debt.exec.plan_bytes_live",
+        ),
+        "rewrite_queued_debt_exec_plan_bytes_stale": stat_int(
+            "treedb.cache.vlog_generation.rewrite.queued_debt.exec.plan_bytes_stale",
+        ),
+        "rewrite_queued_debt_exec_effective_bytes_before": stat_int(
+            "treedb.cache.vlog_generation.rewrite.queued_debt.exec.effective_bytes_before",
+        ),
+        "rewrite_queued_debt_exec_effective_bytes_after": stat_int(
+            "treedb.cache.vlog_generation.rewrite.queued_debt.exec.effective_bytes_after",
+        ),
+        "rewrite_queued_debt_exec_gc_bytes_deleted": stat_int(
+            "treedb.cache.vlog_generation.rewrite.queued_debt.exec.gc_bytes_deleted",
+        ),
+        "rewrite_queued_debt_exec_reclaimed_bytes": stat_int(
+            "treedb.cache.vlog_generation.rewrite.queued_debt.exec.reclaimed_bytes",
+        ),
+        "rewrite_queued_debt_exec_no_reclaim_runs": stat_int(
+            "treedb.cache.vlog_generation.rewrite.queued_debt.exec.no_reclaim_runs",
+        ),
+        "rewrite_queued_debt_exec_source_bytes_requested": stat_int(
+            "treedb.cache.vlog_generation.rewrite.queued_debt.exec.source_bytes_requested",
+        ),
+        "rewrite_queued_debt_exec_source_bytes_unreferenced": stat_int(
+            "treedb.cache.vlog_generation.rewrite.queued_debt.exec.source_bytes_unreferenced",
+        ),
         "rewrite_queue_live_hint_known": stat_str(
             "treedb.cache.vlog_generation.rewrite.queue_live_hint.known",
             "false",
@@ -1270,6 +1306,25 @@ def build_maintenance_from_light_stats(stats: dict[str, str]) -> dict[str, objec
         + safe_int(out.get("rewrite_queued_debt_skip_min_interval"), 0)
         + safe_int(out.get("rewrite_queued_debt_skip_budget_empty"), 0)
         + safe_int(out.get("rewrite_queued_debt_skip_no_chunk"), 0)
+    )
+    queued_debt_exec_effective_before = safe_float(out.get("rewrite_queued_debt_exec_effective_bytes_before"), 0.0)
+    queued_debt_exec_reclaimed = safe_float(out.get("rewrite_queued_debt_exec_reclaimed_bytes"), 0.0)
+    out["rewrite_queued_debt_exec_reclaim_ratio_pct"] = (
+        100.0 * queued_debt_exec_reclaimed / queued_debt_exec_effective_before
+        if queued_debt_exec_effective_before > 0
+        else 0.0
+    )
+    queued_debt_exec_runs = safe_float(out.get("rewrite_queued_debt_exec_runs"), 0.0)
+    queued_debt_exec_no_reclaim = safe_float(out.get("rewrite_queued_debt_exec_no_reclaim_runs"), 0.0)
+    out["rewrite_queued_debt_exec_no_reclaim_rate_pct"] = (
+        100.0 * queued_debt_exec_no_reclaim / queued_debt_exec_runs if queued_debt_exec_runs > 0 else 0.0
+    )
+    queued_debt_exec_source_requested = safe_float(out.get("rewrite_queued_debt_exec_source_bytes_requested"), 0.0)
+    queued_debt_exec_source_unreferenced = safe_float(out.get("rewrite_queued_debt_exec_source_bytes_unreferenced"), 0.0)
+    out["rewrite_queued_debt_exec_source_unreferenced_bytes_pct"] = (
+        100.0 * queued_debt_exec_source_unreferenced / queued_debt_exec_source_requested
+        if queued_debt_exec_source_requested > 0
+        else 0.0
     )
 
     out["rewrite_queue_progress_live_bytes_net_drain_total"] = (
@@ -1815,6 +1870,21 @@ with runs_csv.open("w", newline="", encoding="utf-8") as fh:
         "rewrite_queued_debt_skip_min_interval",
         "rewrite_queued_debt_skip_budget_empty",
         "rewrite_queued_debt_skip_no_chunk",
+        "rewrite_queued_debt_exec_runs",
+        "rewrite_queued_debt_exec_segments",
+        "rewrite_queued_debt_exec_plan_bytes_total",
+        "rewrite_queued_debt_exec_plan_bytes_live",
+        "rewrite_queued_debt_exec_plan_bytes_stale",
+        "rewrite_queued_debt_exec_effective_bytes_before",
+        "rewrite_queued_debt_exec_effective_bytes_after",
+        "rewrite_queued_debt_exec_gc_bytes_deleted",
+        "rewrite_queued_debt_exec_reclaimed_bytes",
+        "rewrite_queued_debt_exec_no_reclaim_runs",
+        "rewrite_queued_debt_exec_source_bytes_requested",
+        "rewrite_queued_debt_exec_source_bytes_unreferenced",
+        "rewrite_queued_debt_exec_reclaim_ratio_pct",
+        "rewrite_queued_debt_exec_no_reclaim_rate_pct",
+        "rewrite_queued_debt_exec_source_unreferenced_bytes_pct",
         "rewrite_queue_live_hint_known",
         "rewrite_queue_live_hint_ids_present",
         "rewrite_queue_live_hint_ids_known",
@@ -2029,6 +2099,21 @@ with runs_csv.open("w", newline="", encoding="utf-8") as fh:
             summary.get("rewrite_queued_debt_skip_min_interval", 0),
             summary.get("rewrite_queued_debt_skip_budget_empty", 0),
             summary.get("rewrite_queued_debt_skip_no_chunk", 0),
+            summary.get("rewrite_queued_debt_exec_runs", 0),
+            summary.get("rewrite_queued_debt_exec_segments", 0),
+            summary.get("rewrite_queued_debt_exec_plan_bytes_total", 0),
+            summary.get("rewrite_queued_debt_exec_plan_bytes_live", 0),
+            summary.get("rewrite_queued_debt_exec_plan_bytes_stale", 0),
+            summary.get("rewrite_queued_debt_exec_effective_bytes_before", 0),
+            summary.get("rewrite_queued_debt_exec_effective_bytes_after", 0),
+            summary.get("rewrite_queued_debt_exec_gc_bytes_deleted", 0),
+            summary.get("rewrite_queued_debt_exec_reclaimed_bytes", 0),
+            summary.get("rewrite_queued_debt_exec_no_reclaim_runs", 0),
+            summary.get("rewrite_queued_debt_exec_source_bytes_requested", 0),
+            summary.get("rewrite_queued_debt_exec_source_bytes_unreferenced", 0),
+            summary.get("rewrite_queued_debt_exec_reclaim_ratio_pct", 0),
+            summary.get("rewrite_queued_debt_exec_no_reclaim_rate_pct", 0),
+            summary.get("rewrite_queued_debt_exec_source_unreferenced_bytes_pct", 0),
             summary.get("rewrite_queue_live_hint_known", "false"),
             summary.get("rewrite_queue_live_hint_ids_present", 0),
             summary.get("rewrite_queue_live_hint_ids_known", 0),
