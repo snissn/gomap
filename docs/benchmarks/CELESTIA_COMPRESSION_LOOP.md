@@ -176,6 +176,27 @@ Notes:
 - `runs.csv` now includes checkpoint-like (`bypass` + `checkpoint_pending`) vs non-checkpoint rewrite split metrics, and `pairs.csv` includes deltas for source-efficiency fields such as `delta_rewrite_checkpoint_like_budget_share_pct`.
 - To use pre-policy behavior, set `AB_POLICY=legacy`.
 
+### Segment Granularity Sweep Harness
+
+Use `scripts/celestia_segment_sweep.sh` to run repeatable segment-size sweeps while keeping the same A/B stop policy:
+
+```bash
+CONTROL_ENV_FILE=/tmp/cel_control.env \
+CANDIDATE_BASE_ENV_FILE=/tmp/cel_candidate.env \
+SEGMENT_SCOPE=hot_warm_cold \
+SEGMENT_BYTES_LIST="4194304 8388608 16777216" \
+MAX_PAIRS=4 \
+MIN_PAIRS=3 \
+CLEAR_WIN_PAIRS=2 \
+CLEAR_LOSS_PAIRS=2 \
+./scripts/celestia_segment_sweep.sh
+```
+
+Outputs:
+- `artifacts/celestia_segment_sweep/<ts>/summary.json`
+- `artifacts/celestia_segment_sweep/<ts>/summary.md`
+- per-candidate run outputs under `artifacts/celestia_segment_sweep/<ts>/runs/seg_*`
+
 ## Process Review Cadence
 
 Review and revise the loop after every decision event:

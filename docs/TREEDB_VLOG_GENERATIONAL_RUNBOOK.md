@@ -149,6 +149,16 @@ It also includes checkpoint-like (`bypass` + `checkpoint_pending`) vs non-checkp
 `rewrite_checkpoint_like_budget_share_pct`, `rewrite_checkpoint_like_source_unreferenced_bytes_pct`, and
 `rewrite_non_checkpoint_source_unreferenced_bytes_pct`.
 
+For segment-size candidate sweeps that preserve the same A/B stop policy, use:
+
+```bash
+CONTROL_ENV_FILE=/tmp/cel_control.env \
+CANDIDATE_BASE_ENV_FILE=/tmp/cel_candidate.env \
+SEGMENT_SCOPE=hot_warm_cold \
+SEGMENT_BYTES_LIST="4194304 8388608 16777216" \
+./scripts/celestia_segment_sweep.sh
+```
+
 The harness alternates run order per pair (`control->candidate`, then
 `candidate->control`) and can stop early on clear win/loss signals.
 For stable pair scoring, prefer `FREEZE_REMOTE_HEIGHT_AT_START=1` and validate
