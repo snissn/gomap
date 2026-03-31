@@ -444,6 +444,77 @@ func TestNextRewriteRIDStartFromSet_IgnoresMissingPathEntries(t *testing.T) {
 	}
 }
 
+func TestNextRewriteRIDStartFromSet_MatchesSegmentScanner(t *testing.T) {
+	dir := t.TempDir()
+
+	fileID1, err := valuelog.EncodeFileID(0, 1)
+	if err != nil {
+		t.Fatalf("EncodeFileID(0,1): %v", err)
+	}
+	path1 := filepath.Join(dir, "value-l0-000001.log")
+	w1, err := valuelog.NewWriter(path1, fileID1)
+	if err != nil {
+		t.Fatalf("NewWriter(path1): %v", err)
+	}
+	if _, err := w1.Append(0, nil, 4, bytes.Repeat([]byte("a"), 64)); err != nil {
+		t.Fatalf("Append(path1): %v", err)
+	}
+	if _, err := w1.AppendFrame(0, nil, []valuelog.Record{
+		{RID: 6, Value: bytes.Repeat([]byte("b"), 64)},
+		{RID: 15, Value: bytes.Repeat([]byte("c"), 64)},
+	}); err != nil {
+		t.Fatalf("AppendFrame(path1): %v", err)
+	}
+	closeNoErr(t, w1)
+	f1, err := os.Open(path1)
+	if err != nil {
+		t.Fatalf("Open(path1): %v", err)
+	}
+	defer closeNoErr(t, f1)
+
+	fileID2, err := valuelog.EncodeFileID(0, 2)
+	if err != nil {
+		t.Fatalf("EncodeFileID(0,2): %v", err)
+	}
+	path2 := filepath.Join(dir, "value-l0-000002.log")
+	w2, err := valuelog.NewWriter(path2, fileID2)
+	if err != nil {
+		t.Fatalf("NewWriter(path2): %v", err)
+	}
+	if _, err := w2.Append(0, nil, 22, bytes.Repeat([]byte("d"), 64)); err != nil {
+		t.Fatalf("Append(path2): %v", err)
+	}
+	closeNoErr(t, w2)
+	f2, err := os.Open(path2)
+	if err != nil {
+		t.Fatalf("Open(path2): %v", err)
+	}
+	defer closeNoErr(t, f2)
+
+	segments := []logSegment{
+		{path: path1, fileID: fileID1, valueLog: true},
+		{path: path2, fileID: fileID2, valueLog: true},
+	}
+	wantStart, err := nextRewriteRIDStart(segments)
+	if err != nil {
+		t.Fatalf("nextRewriteRIDStart: %v", err)
+	}
+
+	set := &valuelog.Set{
+		Files: map[uint32]*valuelog.File{
+			fileID1: {ID: fileID1, Path: path1, File: f1},
+			fileID2: {ID: fileID2, Path: path2, File: f2},
+		},
+	}
+	gotStart, err := nextRewriteRIDStartFromSet(set)
+	if err != nil {
+		t.Fatalf("nextRewriteRIDStartFromSet: %v", err)
+	}
+	if gotStart != wantStart {
+		t.Fatalf("start mismatch: from-set=%d from-segments=%d", gotStart, wantStart)
+	}
+}
+
 func TestValueLogRewrite_HealthMetadata_PreservedAcrossReopen(t *testing.T) {
 	dir := t.TempDir()
 
