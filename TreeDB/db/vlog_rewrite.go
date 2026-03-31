@@ -1350,6 +1350,8 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 	}
 	if restrictSource && sourceSegmentCount == 0 {
 		// No source segments selected: this rewrite pass is a no-op.
+		_ = db.valueLogManager.Release(set)
+		set = nil
 		stats.SegmentsAfter = stats.SegmentsBefore
 		stats.BytesAfter = stats.BytesBefore
 		return stats, nil
@@ -1371,14 +1373,18 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 				lane, startSeq = hintLane, hintSeq
 				needSegScan = false
 			} else {
+				_ = db.valueLogManager.Release(set)
+				set = nil
 				return stats, statErr
 			}
 		}
 	}
 	if !needSegScan && opts.ReserveRIDs == nil {
-		segments = rewriteValueLogSegmentsFromSet(set)
-		if len(segments) == 0 {
-			needSegScan = true
+		nextRID, err = nextRewriteRIDStartFromSet(set)
+		if err != nil {
+			_ = db.valueLogManager.Release(set)
+			set = nil
+			return stats, err
 		}
 	}
 	_ = db.valueLogManager.Release(set)
@@ -1390,7 +1396,7 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		}
 		lane, startSeq = chooseRewriteLane(segments)
 	}
-	if opts.ReserveRIDs == nil {
+	if opts.ReserveRIDs == nil && nextRID == 0 {
 		nextRID, err = rewriteRIDStartScanner(segments)
 		if err != nil {
 			return stats, err
@@ -2224,28 +2230,57 @@ func nextRewriteRIDStart(segments []logSegment) (uint64, error) {
 	return maxRID + 1, nil
 }
 
-func rewriteValueLogSegmentsFromSet(set *valuelog.Set) []logSegment {
+func nextRewriteRIDStartFromSet(set *valuelog.Set) (uint64, error) {
 	if set == nil || len(set.Files) == 0 {
-		return nil
+		return 1, nil
 	}
-	segments := make([]logSegment, 0, len(set.Files))
+	const ridScanReaderBufferSize = 64 << 10
+	ids := make([]uint32, 0, len(set.Files))
 	for id, file := range set.Files {
 		if file == nil || file.Path == "" {
 			continue
 		}
-		segments = append(segments, logSegment{
-			fileID:   id,
-			path:     file.Path,
-			valueLog: true,
-		})
+		ids = append(ids, id)
 	}
-	if len(segments) < 2 {
-		return segments
-	}
-	sort.Slice(segments, func(i, j int) bool {
-		return segments[i].fileID < segments[j].fileID
+	sort.Slice(ids, func(i, j int) bool {
+		return ids[i] < ids[j]
 	})
-	return segments
+	maxRID := uint64(0)
+	for _, id := range ids {
+		file := set.Files[id]
+		if file == nil || file.Path == "" {
+			continue
+		}
+		reader, err := valuelog.NewReaderWithBufferSize(file.Path, id, ridScanReaderBufferSize)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			return 0, err
+		}
+		reader.DisableValueDecode()
+		for {
+			rid, _, err := reader.ReadNextMeta()
+			if err == nil {
+				if rid > maxRID {
+					maxRID = rid
+				}
+				continue
+			}
+			if isTruncatedLogError(err) {
+				break
+			}
+			_ = reader.Close()
+			return 0, err
+		}
+		if err := reader.Close(); err != nil {
+			return 0, err
+		}
+	}
+	if maxRID == ^uint64(0) {
+		return 0, fmt.Errorf("value-log rid space exhausted")
+	}
+	return maxRID + 1, nil
 }
 
 func (db *DB) applyRewriteSwapBatch(swaps []rewriteSwap, sync bool) error {

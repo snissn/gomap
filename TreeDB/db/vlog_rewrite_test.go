@@ -2585,6 +2585,15 @@ func TestValueLogRewriteOnline_WithoutReserveRIDs_UsesRIDStartScanner(t *testing
 		return listWALSegments(dir)
 	}
 	t.Cleanup(func() { rewriteWALSegmentsLister = origWALLister })
+	lane, seq, ok := db.valueLogManager.RewriteLaneHint()
+	if !ok {
+		t.Fatalf("RewriteLaneHint: ok=false")
+	}
+	probePath := filepath.Join(dir, "wal", fmt.Sprintf("value-l%d-%06d.log", lane, seq+1))
+	if err := os.WriteFile(probePath, nil, 0o644); err != nil {
+		t.Fatalf("write probe file: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Remove(probePath) })
 
 	_, err = db.ValueLogRewriteOnline(context.Background(), ValueLogRewriteOnlineOptions{
 		SourceFileIDs: []uint32{ptrs[0].FileID},
@@ -2596,10 +2605,62 @@ func TestValueLogRewriteOnline_WithoutReserveRIDs_UsesRIDStartScanner(t *testing
 	if ridStartScanCalls != 1 {
 		t.Fatalf("expected one rid-start scan call, got %d", ridStartScanCalls)
 	}
-	// Non-reserve mode always uses RID start scanning, but may avoid a full WAL
-	// directory scan when lane/start-seq can be derived from manager state.
-	if walScanCalls > 1 {
-		t.Fatalf("unexpected wal scan call count=%d", walScanCalls)
+	if walScanCalls != 1 {
+		t.Fatalf("expected one wal segment scan call, got %d", walScanCalls)
+	}
+}
+
+func TestValueLogRewriteOnline_WithoutReserveRIDs_UsesSetRIDFastPathWhenLaneHintIsClean(t *testing.T) {
+	dir := t.TempDir()
+
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	ptrs := appendPointersInNewSegment(t, dir, 0, 1, 315_000, 1, func(i int) []byte {
+		return bytes.Repeat([]byte{byte(i + 1)}, 256)
+	})
+	b := db.NewBatch().(*Batch)
+	if err := b.SetPointer([]byte("k"), ptrs[0]); err != nil {
+		t.Fatalf("set pointer: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("seed write: %v", err)
+	}
+	closeNoErr(t, b)
+
+	origRIDStartScanner := rewriteRIDStartScanner
+	ridStartScanCalls := 0
+	rewriteRIDStartScanner = func([]logSegment) (uint64, error) {
+		ridStartScanCalls++
+		return 0, fmt.Errorf("unexpected rid-start scan")
+	}
+	t.Cleanup(func() { rewriteRIDStartScanner = origRIDStartScanner })
+	origWALLister := rewriteWALSegmentsLister
+	walScanCalls := 0
+	rewriteWALSegmentsLister = func(string) ([]logSegment, error) {
+		walScanCalls++
+		return nil, fmt.Errorf("unexpected wal segment scan")
+	}
+	t.Cleanup(func() { rewriteWALSegmentsLister = origWALLister })
+
+	stats, err := db.ValueLogRewriteOnline(context.Background(), ValueLogRewriteOnlineOptions{
+		SourceFileIDs: []uint32{ptrs[0].FileID},
+		BatchSize:     1,
+	})
+	if err != nil {
+		t.Fatalf("ValueLogRewriteOnline: %v", err)
+	}
+	if stats.RecordsCopied != 1 {
+		t.Fatalf("expected one copied record, got %d", stats.RecordsCopied)
+	}
+	if ridStartScanCalls != 0 {
+		t.Fatalf("expected no rid-start scan calls, got %d", ridStartScanCalls)
+	}
+	if walScanCalls != 0 {
+		t.Fatalf("expected no wal segment scan calls, got %d", walScanCalls)
 	}
 }
 
