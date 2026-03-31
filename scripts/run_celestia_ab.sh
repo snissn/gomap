@@ -625,6 +625,92 @@ def diff_light(pre: dict[str, object], post: dict[str, object]) -> dict[str, flo
             out[key] = float(post_value) - float(pre_value)
     return out
 
+def build_maintenance_from_light_stats(stats: dict[str, str]) -> dict[str, object]:
+    if not stats:
+        return {}
+    if not any(k.startswith("treedb.cache.vlog_generation.") for k in stats.keys()):
+        return {}
+
+    def stat_int(key: str, default: int = 0) -> int:
+        return safe_int(stats.get(key), default)
+
+    def stat_float(key: str, default: float = 0.0) -> float:
+        return safe_float(stats.get(key), default)
+
+    out: dict[str, object] = {
+        "rewrite_runs": stat_int("treedb.cache.vlog_generation.rewrite.runs"),
+        "rewrite_plan_runs": stat_int("treedb.cache.vlog_generation.rewrite.plan_runs"),
+        "rewrite_plan_selected": stat_int("treedb.cache.vlog_generation.rewrite.plan_selected"),
+        "rewrite_exec_source_segments_requested_total": stat_int(
+            "treedb.cache.vlog_generation.rewrite.exec.source_segments_requested_total",
+        ),
+        "rewrite_exec_source_segments_still_referenced_total": stat_int(
+            "treedb.cache.vlog_generation.rewrite.exec.source_segments_still_referenced_total",
+        ),
+        "rewrite_exec_source_segments_unreferenced_total": stat_int(
+            "treedb.cache.vlog_generation.rewrite.exec.source_segments_unreferenced_total",
+        ),
+        "rewrite_exec_source_bytes_requested_total": stat_int(
+            "treedb.cache.vlog_generation.rewrite.exec.source_bytes_requested_total",
+        ),
+        "rewrite_exec_source_bytes_still_referenced_total": stat_int(
+            "treedb.cache.vlog_generation.rewrite.exec.source_bytes_still_referenced_total",
+        ),
+        "rewrite_exec_source_bytes_unreferenced_total": stat_int(
+            "treedb.cache.vlog_generation.rewrite.exec.source_bytes_unreferenced_total",
+        ),
+        "rewrite_queue_config_resume_max_segments": stat_int(
+            "treedb.cache.vlog_generation.rewrite.queue_config.resume_max_segments",
+        ),
+        "rewrite_queue_config_debt_drain_max_segments": stat_int(
+            "treedb.cache.vlog_generation.rewrite.queue_config.debt_drain_max_segments",
+        ),
+        "rewrite_queue_config_fresh_plan_debt_drain_min_segments": stat_int(
+            "treedb.cache.vlog_generation.rewrite.queue_config.fresh_plan_debt_drain_min_segments",
+        ),
+        "rewrite_queue_config_fresh_plan_debt_drain_max_segments": stat_int(
+            "treedb.cache.vlog_generation.rewrite.queue_config.fresh_plan_debt_drain_max_segments",
+        ),
+        "rewrite_queue_progress_passes": stat_int(
+            "treedb.cache.vlog_generation.rewrite.queue_progress.passes",
+        ),
+        "rewrite_queue_progress_segments_drained_total": stat_int(
+            "treedb.cache.vlog_generation.rewrite.queue_progress.segments_drained_total",
+        ),
+        "rewrite_queue_progress_segments_grown_total": stat_int(
+            "treedb.cache.vlog_generation.rewrite.queue_progress.segments_grown_total",
+        ),
+        "rewrite_queue_progress_segments_delta_last": stat_int(
+            "treedb.cache.vlog_generation.rewrite.queue_progress.segments_delta_last",
+        ),
+        "rewrite_queue_progress_live_bytes_delta_last": stat_int(
+            "treedb.cache.vlog_generation.rewrite.queue_progress.live_bytes_delta_last",
+        ),
+        "rewrite_queue_progress_snapshot_errors": stat_int(
+            "treedb.cache.vlog_generation.rewrite.queue_progress.snapshot_errors",
+        ),
+        "rewrite_ledger_bytes_total": stat_int("treedb.cache.vlog_generation.rewrite.ledger_bytes_total"),
+        "rewrite_budget_tokens_utilization_pct": stat_float(
+            "treedb.cache.vlog_generation.rewrite_budget.tokens_utilization_pct",
+        ),
+        "gc_runs": stat_int("treedb.cache.vlog_generation.gc.runs"),
+        "observed_gc_retry_queued": stat_int("treedb.cache.vlog_generation.observed_gc.retry_queued"),
+        "observed_gc_retry_dropped": stat_int("treedb.cache.vlog_generation.observed_gc.retry_dropped"),
+    }
+
+    out["rewrite_queue_progress_live_bytes_net_drain_total"] = (
+        stat_int("treedb.cache.vlog_generation.rewrite.queue_progress.live_bytes_drained_total")
+        - stat_int("treedb.cache.vlog_generation.rewrite.queue_progress.live_bytes_grown_total")
+    )
+    observed_gc_queued = stat_int("treedb.cache.vlog_generation.observed_gc.queued_ids")
+    observed_gc_taken = stat_int("treedb.cache.vlog_generation.observed_gc.taken_ids")
+    out["observed_gc_drain_pct"] = (
+        (100.0 * float(observed_gc_taken) / float(observed_gc_queued))
+        if observed_gc_queued > 0
+        else 0.0
+    )
+    return out
+
 def probe_sync_progress(node_log_path: Path | None) -> dict[str, object]:
     progress = {
         "node_log_present": False,
@@ -692,6 +778,15 @@ light_post_stats = parse_treemap_stats(light_stats_post_path) if light_stats_pos
 maintenance_light_pre = build_light_summary(light_pre_stats)
 maintenance_light_post = build_light_summary(light_post_stats)
 maintenance_light_delta = diff_light(maintenance_light_pre, maintenance_light_post)
+if not maintenance:
+    maintenance_light_fallback = build_maintenance_from_light_stats(light_post_stats)
+    if maintenance_light_fallback:
+        maintenance = maintenance_light_fallback
+        maintenance_source = "light_stats_post"
+    elif maintenance_light_post:
+        # Keep source attribution explicit even when only static post-run
+        # light stats are available (no in-process diagnostics JSON).
+        maintenance_source = "light_stats_post"
 
 t_sync = safe_int(sync.get("duration_seconds"), max(0, run_end - run_start))
 t_rw = rewrite_seconds if rewrite_attempted == 1 else 0
