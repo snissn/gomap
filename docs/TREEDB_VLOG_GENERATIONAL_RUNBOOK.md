@@ -131,6 +131,7 @@ Outputs:
 - `artifacts/celestia_ab/<ts>/runs.csv`
 - `artifacts/celestia_ab/<ts>/pairs.csv`
 - `artifacts/celestia_ab/<ts>/summary.md`
+- `artifacts/celestia_ab/<ts>/decision.json`
 - per-run JSON under `artifacts/celestia_ab/<ts>/runs/*/run.json`
 
 The harness alternates run order per pair (`control->candidate`, then
@@ -144,6 +145,17 @@ Scoring policy defaults:
   - `BLOCK_DRIFT_TOLERANCE=50`
   - `ALLOW_DRIFT_SCORING=0`
 - `AB_POLICY=legacy` to restore historical behavior (`absolute` scoring, drift gate disabled by default).
+
+Optional composite stop policy:
+- `COMPOSITE_STOP_ON_CLEAR=1` enables weighted time+size stop logic (disabled by default).
+- `COMPOSITE_WEIGHT_TIME` / `COMPOSITE_WEIGHT_SIZE` set relative weight (defaults `0.5` / `0.5`).
+- `COMPOSITE_MIN_PAIRS` controls minimum comparable pairs before composite stop (default `4`).
+- `COMPOSITE_CLEAR_WIN_PCT` / `COMPOSITE_CLEAR_LOSS_PCT` set median composite-score thresholds in percent (defaults `1.0` / `1.0`; lower is better).
+
+Additional reporting:
+- `pairs.csv` includes absolute per-pair control/candidate values and `composite_score_pct`.
+- `summary.md` includes an `Absolute Medians` section for direct control vs candidate totals.
+- `decision.json` includes `absolute_aggregates` and `composite` config/summary fields.
 
 ## Experimental Knob
 - `TREEDB_ENABLE_VLOG_GENERATION_PRECHECKPOINT_REWRITE=1`
