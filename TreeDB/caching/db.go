@@ -6304,6 +6304,10 @@ type DB struct {
 	vlogGenerationMaintenancePassNoop                            atomic.Uint64
 	vlogGenerationMaintenancePassWithRewrite                     atomic.Uint64
 	vlogGenerationMaintenancePassWithGC                          atomic.Uint64
+	vlogGenerationMaintenanceAcquiredBySource                    [vlogGenerationMaintenanceSourceCount]atomic.Uint64
+	vlogGenerationMaintenancePassNoopBySource                    [vlogGenerationMaintenanceSourceCount]atomic.Uint64
+	vlogGenerationMaintenancePassWithRewriteBySource             [vlogGenerationMaintenanceSourceCount]atomic.Uint64
+	vlogGenerationMaintenancePassWithGCBySource                  [vlogGenerationMaintenanceSourceCount]atomic.Uint64
 	vlogGenerationMaintenancePassTotalNanos                      atomic.Uint64
 	vlogGenerationMaintenancePassMaxNanos                        atomic.Uint64
 	vlogGenerationLastReason                                     atomic.Uint32
@@ -9224,6 +9228,53 @@ func vlogGenerationReasonString(v uint32) string {
 		return "rewrite_resume"
 	default:
 		return "unknown"
+	}
+}
+
+const (
+	vlogGenerationMaintenanceSourcePeriodic = iota
+	vlogGenerationMaintenanceSourceBypass
+	vlogGenerationMaintenanceSourceCheckpointPending
+	vlogGenerationMaintenanceSourceRewriteAgeBlocked
+	vlogGenerationMaintenanceSourceRewriteStageConfirm
+	vlogGenerationMaintenanceSourceOther
+)
+
+const vlogGenerationMaintenanceSourceCount = vlogGenerationMaintenanceSourceOther + 1
+
+func vlogGenerationMaintenanceSourceIndex(source string) int {
+	switch source {
+	case "periodic":
+		return vlogGenerationMaintenanceSourcePeriodic
+	case "bypass":
+		return vlogGenerationMaintenanceSourceBypass
+	case "checkpoint_pending":
+		return vlogGenerationMaintenanceSourceCheckpointPending
+	case "rewrite_age_blocked", "rewrite_age_blocked_exit":
+		return vlogGenerationMaintenanceSourceRewriteAgeBlocked
+	case "rewrite_stage_confirm", "rewrite_stage_confirm_exit":
+		return vlogGenerationMaintenanceSourceRewriteStageConfirm
+	default:
+		return vlogGenerationMaintenanceSourceOther
+	}
+}
+
+func vlogGenerationMaintenanceSourceLabel(idx int) string {
+	switch idx {
+	case vlogGenerationMaintenanceSourcePeriodic:
+		return "periodic"
+	case vlogGenerationMaintenanceSourceBypass:
+		return "bypass"
+	case vlogGenerationMaintenanceSourceCheckpointPending:
+		return "checkpoint_pending"
+	case vlogGenerationMaintenanceSourceRewriteAgeBlocked:
+		return "rewrite_age_blocked"
+	case vlogGenerationMaintenanceSourceRewriteStageConfirm:
+		return "rewrite_stage_confirm"
+	case vlogGenerationMaintenanceSourceOther:
+		return "other"
+	default:
+		return "other"
 	}
 }
 
@@ -14788,6 +14839,8 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 	rewriteAttempted := false
 	gcAttempted := false
 	activeSource := vlogGenerationMaintenanceDebugSource(opts)
+	activeSourceIdx := vlogGenerationMaintenanceSourceIndex(activeSource)
+	db.vlogGenerationMaintenanceAcquiredBySource[activeSourceIdx].Add(1)
 	activeStart := time.Now()
 	rewriteQueueSnapshotCaptured := false
 	rewriteQueueBeforeSegments := 0
@@ -14818,12 +14871,15 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 		gcPass := gcRan || gcAttempted
 		if rewritePass {
 			db.vlogGenerationMaintenancePassWithRewrite.Add(1)
+			db.vlogGenerationMaintenancePassWithRewriteBySource[activeSourceIdx].Add(1)
 		}
 		if gcPass {
 			db.vlogGenerationMaintenancePassWithGC.Add(1)
+			db.vlogGenerationMaintenancePassWithGCBySource[activeSourceIdx].Add(1)
 		}
 		if !rewritePass && !gcPass {
 			db.vlogGenerationMaintenancePassNoop.Add(1)
+			db.vlogGenerationMaintenancePassNoopBySource[activeSourceIdx].Add(1)
 		}
 		if rewriteQueueSnapshotCaptured {
 			afterQueue, afterErr := db.currentVlogGenerationRewriteQueue()
@@ -22164,6 +22220,25 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_generation.maintenance.passes.noop"] = fmt.Sprintf("%d", db.vlogGenerationMaintenancePassNoop.Load())
 	stats["treedb.cache.vlog_generation.maintenance.passes.with_rewrite"] = fmt.Sprintf("%d", db.vlogGenerationMaintenancePassWithRewrite.Load())
 	stats["treedb.cache.vlog_generation.maintenance.passes.with_gc"] = fmt.Sprintf("%d", db.vlogGenerationMaintenancePassWithGC.Load())
+	for sourceIdx := 0; sourceIdx < vlogGenerationMaintenanceSourceCount; sourceIdx++ {
+		source := vlogGenerationMaintenanceSourceLabel(sourceIdx)
+		stats["treedb.cache.vlog_generation.maintenance.acquired.source."+source] = fmt.Sprintf(
+			"%d",
+			db.vlogGenerationMaintenanceAcquiredBySource[sourceIdx].Load(),
+		)
+		stats["treedb.cache.vlog_generation.maintenance.passes.noop.source."+source] = fmt.Sprintf(
+			"%d",
+			db.vlogGenerationMaintenancePassNoopBySource[sourceIdx].Load(),
+		)
+		stats["treedb.cache.vlog_generation.maintenance.passes.with_rewrite.source."+source] = fmt.Sprintf(
+			"%d",
+			db.vlogGenerationMaintenancePassWithRewriteBySource[sourceIdx].Load(),
+		)
+		stats["treedb.cache.vlog_generation.maintenance.passes.with_gc.source."+source] = fmt.Sprintf(
+			"%d",
+			db.vlogGenerationMaintenancePassWithGCBySource[sourceIdx].Load(),
+		)
+	}
 	stats["treedb.cache.vlog_generation.maintenance.pass.total_ms"] = fmt.Sprintf("%.3f", float64(maintenancePassTotalNS)/float64(time.Millisecond))
 	stats["treedb.cache.vlog_generation.maintenance.pass.max_ms"] = fmt.Sprintf("%.3f", float64(maintenancePassMaxNS)/float64(time.Millisecond))
 	if maintenancePasses > 0 {

@@ -7141,6 +7141,16 @@ func TestVlogGenerationStats_ReportRewriteBacklogAndDurations(t *testing.T) {
 	db.vlogGenerationLastGCObservedSourceBytesPending.Store(0)
 	db.vlogGenerationMaintenanceSkipStageNotDue.Store(5)
 	db.vlogGenerationMaintenanceSkipStageDue.Store(2)
+	db.vlogGenerationMaintenanceAcquiredBySource[vlogGenerationMaintenanceSourcePeriodic].Store(5)
+	db.vlogGenerationMaintenanceAcquiredBySource[vlogGenerationMaintenanceSourceBypass].Store(2)
+	db.vlogGenerationMaintenanceAcquiredBySource[vlogGenerationMaintenanceSourceCheckpointPending].Store(3)
+	db.vlogGenerationMaintenanceAcquiredBySource[vlogGenerationMaintenanceSourceRewriteAgeBlocked].Store(1)
+	db.vlogGenerationMaintenanceAcquiredBySource[vlogGenerationMaintenanceSourceRewriteStageConfirm].Store(4)
+	db.vlogGenerationMaintenanceAcquiredBySource[vlogGenerationMaintenanceSourceOther].Store(7)
+	db.vlogGenerationMaintenancePassWithRewriteBySource[vlogGenerationMaintenanceSourcePeriodic].Store(2)
+	db.vlogGenerationMaintenancePassWithRewriteBySource[vlogGenerationMaintenanceSourceCheckpointPending].Store(1)
+	db.vlogGenerationMaintenancePassWithGCBySource[vlogGenerationMaintenanceSourceBypass].Store(2)
+	db.vlogGenerationMaintenancePassNoopBySource[vlogGenerationMaintenanceSourceOther].Store(3)
 	db.vlogGenerationRewritePlanSelectedSegments.Store(6)
 	db.vlogGenerationRewriteExecSourceSegments.Store(3)
 	db.vlogGenerationRewriteSourceSegmentsRequestedTotal.Store(5)
@@ -7246,6 +7256,36 @@ func TestVlogGenerationStats_ReportRewriteBacklogAndDurations(t *testing.T) {
 	}
 	if got := stats["treedb.cache.vlog_generation.maintenance.pass.avg_ms"]; got != "20.000" {
 		t.Fatalf("maintenance pass avg ms=%q want 20.000", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.maintenance.acquired.source.periodic"]; got != "5" {
+		t.Fatalf("maintenance acquired source periodic=%q want 5", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.maintenance.acquired.source.bypass"]; got != "2" {
+		t.Fatalf("maintenance acquired source bypass=%q want 2", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.maintenance.acquired.source.checkpoint_pending"]; got != "3" {
+		t.Fatalf("maintenance acquired source checkpoint_pending=%q want 3", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.maintenance.acquired.source.rewrite_age_blocked"]; got != "1" {
+		t.Fatalf("maintenance acquired source rewrite_age_blocked=%q want 1", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.maintenance.acquired.source.rewrite_stage_confirm"]; got != "4" {
+		t.Fatalf("maintenance acquired source rewrite_stage_confirm=%q want 4", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.maintenance.acquired.source.other"]; got != "7" {
+		t.Fatalf("maintenance acquired source other=%q want 7", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.maintenance.passes.with_rewrite.source.periodic"]; got != "2" {
+		t.Fatalf("maintenance rewrite passes source periodic=%q want 2", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.maintenance.passes.with_rewrite.source.checkpoint_pending"]; got != "1" {
+		t.Fatalf("maintenance rewrite passes source checkpoint_pending=%q want 1", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.maintenance.passes.with_gc.source.bypass"]; got != "2" {
+		t.Fatalf("maintenance gc passes source bypass=%q want 2", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.maintenance.passes.noop.source.other"]; got != "3" {
+		t.Fatalf("maintenance noop passes source other=%q want 3", got)
 	}
 	if got := stats["treedb.cache.vlog_generation.rewrite.plan.total_ms"]; got != "80.000" {
 		t.Fatalf("rewrite plan total ms=%q want 80.000", got)
