@@ -75,20 +75,20 @@ run_one() {
   case "$SEGMENT_SCOPE" in
     hot_only)
       {
-        echo "TREEDB_VLOG_GENERATION_HOT_SEGMENT_BYTES=$segment_bytes"
+        echo "TREEDB_VLOG_GENERATION_HOT_SEGMENT_TARGET_BYTES=$segment_bytes"
       } >>"$candidate_env"
       ;;
     hot_warm)
       {
-        echo "TREEDB_VLOG_GENERATION_HOT_SEGMENT_BYTES=$segment_bytes"
-        echo "TREEDB_VLOG_GENERATION_WARM_SEGMENT_BYTES=$segment_bytes"
+        echo "TREEDB_VLOG_GENERATION_HOT_SEGMENT_TARGET_BYTES=$segment_bytes"
+        echo "TREEDB_VLOG_GENERATION_WARM_SEGMENT_TARGET_BYTES=$segment_bytes"
       } >>"$candidate_env"
       ;;
     hot_warm_cold)
       {
-        echo "TREEDB_VLOG_GENERATION_HOT_SEGMENT_BYTES=$segment_bytes"
-        echo "TREEDB_VLOG_GENERATION_WARM_SEGMENT_BYTES=$segment_bytes"
-        echo "TREEDB_VLOG_GENERATION_COLD_SEGMENT_BYTES=$segment_bytes"
+        echo "TREEDB_VLOG_GENERATION_HOT_SEGMENT_TARGET_BYTES=$segment_bytes"
+        echo "TREEDB_VLOG_GENERATION_WARM_SEGMENT_TARGET_BYTES=$segment_bytes"
+        echo "TREEDB_VLOG_GENERATION_COLD_SEGMENT_TARGET_BYTES=$segment_bytes"
       } >>"$candidate_env"
       ;;
     *)
