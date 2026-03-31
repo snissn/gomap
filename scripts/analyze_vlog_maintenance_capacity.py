@@ -281,6 +281,13 @@ def build_summary(stats: dict[str, Any]) -> dict[str, Any]:
         "rewrite_queue_run_segment_cap_limiter_fresh_plan": metric_str(stats, "treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.limiter.fresh_plan", "none"),
         "rewrite_queue_run_segment_cap_by_budget_fresh_plan": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.by_budget.fresh_plan"),
         "rewrite_queue_run_segment_cap_per_segment_budget_bytes_fresh_plan": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.per_segment_budget_bytes.fresh_plan"),
+        "rewrite_queue_run_segment_cap_decisions": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.decisions"),
+        "rewrite_queue_run_segment_cap_decisions_fresh_plan": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.decisions.fresh_plan"),
+        "rewrite_queue_run_segment_cap_limiter_count_budget_tokens": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.limiter_count.budget_tokens"),
+        "rewrite_queue_run_segment_cap_limiter_count_debt_drain_cap": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.limiter_count.debt_drain_cap"),
+        "rewrite_queue_run_segment_cap_limiter_count_checkpoint_kick_safety": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.limiter_count.checkpoint_kick_safety"),
+        "rewrite_queue_run_segment_cap_limiter_count_fresh_plan_queue_threshold": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.limiter_count.fresh_plan_queue_threshold.fresh_plan"),
+        "rewrite_queue_run_segment_cap_limiter_count_fresh_plan_cap": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.limiter_count.fresh_plan_cap.fresh_plan"),
         "rewrite_queue_config_resume_max_segments": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queue_config.resume_max_segments"),
         "rewrite_queue_config_debt_drain_max_segments": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queue_config.debt_drain_max_segments"),
         "rewrite_queue_config_fresh_plan_debt_drain_min_segments": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queue_config.fresh_plan_debt_drain_min_segments"),
@@ -686,6 +693,16 @@ def print_report(summary: dict[str, Any], source_file: Path, run_home: str, inst
         f"fresh_plan={summary['rewrite_queue_run_segment_cap_fresh_plan']} ({summary['rewrite_queue_run_segment_cap_limiter_fresh_plan']}, "
         f"by_budget={summary['rewrite_queue_run_segment_cap_by_budget_fresh_plan']}, "
         f"per_seg_budget={human_bytes(summary['rewrite_queue_run_segment_cap_per_segment_budget_bytes_fresh_plan'])})"
+    )
+    print(
+        "  queue segment-cap limiter counters: "
+        f"run_decisions={summary['rewrite_queue_run_segment_cap_decisions']} "
+        f"fresh_plan_decisions={summary['rewrite_queue_run_segment_cap_decisions_fresh_plan']} "
+        f"budget_tokens={summary['rewrite_queue_run_segment_cap_limiter_count_budget_tokens']} "
+        f"debt_drain_cap={summary['rewrite_queue_run_segment_cap_limiter_count_debt_drain_cap']} "
+        f"checkpoint_kick_safety={summary['rewrite_queue_run_segment_cap_limiter_count_checkpoint_kick_safety']} "
+        f"fresh_plan_queue_threshold={summary['rewrite_queue_run_segment_cap_limiter_count_fresh_plan_queue_threshold']} "
+        f"fresh_plan_cap={summary['rewrite_queue_run_segment_cap_limiter_count_fresh_plan_cap']}"
     )
     print(
         "  queue progress: "
