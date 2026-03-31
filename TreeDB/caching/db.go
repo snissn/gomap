@@ -5960,6 +5960,7 @@ type DB struct {
 	valueLogDictMetricsPauseBytes  int
 
 	valueLogDictTrainerMu      sync.RWMutex
+	valueLogDictApplyMu        sync.RWMutex
 	valueLogDictTrainer        *compression.Trainer
 	valueLogDictTrainerByClass [vlogDictClassCount]*compression.Trainer
 	valueLogDictKickCh         chan struct{}
@@ -17147,6 +17148,10 @@ func (db *DB) Close() error {
 	db.writeMu.Unlock()
 	db.flushMu.Unlock()
 	db.wg.Wait()
+	// Drain any in-flight dict-profile publish callbacks before teardown.
+	// New callbacks will observe closing=true and return without touching stores.
+	db.valueLogDictApplyMu.Lock()
+	db.valueLogDictApplyMu.Unlock()
 	// Retained-prune scans use the live value-log reader and backend state.
 	// Wait for any in-flight prune before tearing down readers or removing
 	// lane files so Close cannot race a background live-ID walk.

@@ -160,6 +160,39 @@ func TestApplyValueLogDictProfileUpdatesKForSameDict(t *testing.T) {
 	}
 }
 
+func TestApplyValueLogDictProfileForClass_ClosingSkipsPublish(t *testing.T) {
+	tr := &compression.Trainer{}
+	dictBytes := []byte("single-value-dictionary")
+	dictHash := xxhash.Sum64(dictBytes)
+	tr.AcceptProfile(&compression.ActiveProfile{
+		DictHash:     dictHash,
+		DictBytes:    len(dictBytes),
+		Dict:         dictBytes,
+		K:            8,
+		PayloadRatio: 0.6,
+		TotalRatio:   0.6,
+		Timestamp:    time.Now(),
+	})
+
+	store := &legacyDictStoreForClassPublishTest{
+		currentID: 41,
+		dicts:     map[uint64][]byte{41: []byte("old-dict")},
+		nextID:    41,
+	}
+	db := &DB{dictStore: store}
+	db.valueLogDictTrainerByClass[vlogDictClassSingleValue] = tr
+	db.closing.Store(true)
+
+	db.applyValueLogDictProfileForClass(vlogDictClassSingleValue)
+
+	if got := store.currentID; got != 41 {
+		t.Fatalf("expected current dict id to remain unchanged while closing, got %d", got)
+	}
+	if got := store.nextID; got != 41 {
+		t.Fatalf("expected no new dict publish while closing, nextID=%d", got)
+	}
+}
+
 func TestApplyValueLogDictProfileForClass_LegacyStoreFallbackRefreshesGlobalCache(t *testing.T) {
 	tr := &compression.Trainer{}
 	dictBytes := []byte("outer-leaf-dictionary")
