@@ -63,6 +63,10 @@ AB_CAPTURE_FULL_SMAPS_ON_MAX_RSS="${AB_CAPTURE_FULL_SMAPS_ON_MAX_RSS:-0}"
 AB_CAPTURE_DEBUG_VARS_ON_MAX_RSS="${AB_CAPTURE_DEBUG_VARS_ON_MAX_RSS:-0}"
 AB_CAPTURE_LIGHT_VLOG_STATS="${AB_CAPTURE_LIGHT_VLOG_STATS:-1}"
 AB_LIGHT_VLOG_STATS_TIMEOUT_SECONDS="${AB_LIGHT_VLOG_STATS_TIMEOUT_SECONDS:-20}"
+AB_CAPTURE_LIVE_DEBUG_VARS="${AB_CAPTURE_LIVE_DEBUG_VARS:-1}"
+AB_LIVE_DEBUG_VARS_INTERVAL_SECONDS="${AB_LIVE_DEBUG_VARS_INTERVAL_SECONDS:-30}"
+AB_LIVE_DEBUG_VARS_TIMEOUT_SECONDS="${AB_LIVE_DEBUG_VARS_TIMEOUT_SECONDS:-5}"
+AB_LIVE_DEBUG_VARS_URL="${AB_LIVE_DEBUG_VARS_URL:-http://127.0.0.1:6062/debug/vars}"
 PAIR_ALIGN_TRUST_FROM_FIRST="${PAIR_ALIGN_TRUST_FROM_FIRST:-0}"
 PAIR_ALIGN_STOP_HEIGHT_FROM_FIRST="${PAIR_ALIGN_STOP_HEIGHT_FROM_FIRST:-0}"
 PAIR_ALIGN_STOP_MARGIN="${PAIR_ALIGN_STOP_MARGIN:-0}"
@@ -143,6 +147,10 @@ if [[ "$AB_CAPTURE_LIGHT_VLOG_STATS" != "0" && "$AB_CAPTURE_LIGHT_VLOG_STATS" !=
   echo "AB_CAPTURE_LIGHT_VLOG_STATS must be 0 or 1" >&2
   exit 1
 fi
+if [[ "$AB_CAPTURE_LIVE_DEBUG_VARS" != "0" && "$AB_CAPTURE_LIVE_DEBUG_VARS" != "1" ]]; then
+  echo "AB_CAPTURE_LIVE_DEBUG_VARS must be 0 or 1" >&2
+  exit 1
+fi
 if [[ "$PAIR_ALIGN_TRUST_FROM_FIRST" != "0" && "$PAIR_ALIGN_TRUST_FROM_FIRST" != "1" ]]; then
   echo "PAIR_ALIGN_TRUST_FROM_FIRST must be 0 or 1" >&2
   exit 1
@@ -157,6 +165,14 @@ if ! [[ "$PAIR_ALIGN_STOP_MARGIN" =~ ^[0-9]+$ ]]; then
 fi
 if [[ "$AB_LIGHT_VLOG_STATS_TIMEOUT_SECONDS" -lt 0 ]]; then
   echo "AB_LIGHT_VLOG_STATS_TIMEOUT_SECONDS must be >= 0" >&2
+  exit 1
+fi
+if [[ "$AB_LIVE_DEBUG_VARS_INTERVAL_SECONDS" -lt 1 ]]; then
+  echo "AB_LIVE_DEBUG_VARS_INTERVAL_SECONDS must be >= 1" >&2
+  exit 1
+fi
+if [[ "$AB_LIVE_DEBUG_VARS_TIMEOUT_SECONDS" -lt 1 ]]; then
+  echo "AB_LIVE_DEBUG_VARS_TIMEOUT_SECONDS must be >= 1" >&2
   exit 1
 fi
 if [[ "$REWRITE_ENABLED" != "0" && "$REWRITE_ENABLED" != "1" ]]; then
@@ -222,6 +238,10 @@ ab_capture_full_smaps_on_max_rss=$AB_CAPTURE_FULL_SMAPS_ON_MAX_RSS
 ab_capture_debug_vars_on_max_rss=$AB_CAPTURE_DEBUG_VARS_ON_MAX_RSS
 ab_capture_light_vlog_stats=$AB_CAPTURE_LIGHT_VLOG_STATS
 ab_light_vlog_stats_timeout_seconds=$AB_LIGHT_VLOG_STATS_TIMEOUT_SECONDS
+ab_capture_live_debug_vars=$AB_CAPTURE_LIVE_DEBUG_VARS
+ab_live_debug_vars_interval_seconds=$AB_LIVE_DEBUG_VARS_INTERVAL_SECONDS
+ab_live_debug_vars_timeout_seconds=$AB_LIVE_DEBUG_VARS_TIMEOUT_SECONDS
+ab_live_debug_vars_url=$AB_LIVE_DEBUG_VARS_URL
 pair_align_trust_from_first=$PAIR_ALIGN_TRUST_FROM_FIRST
 pair_align_stop_height_from_first=$PAIR_ALIGN_STOP_HEIGHT_FROM_FIRST
 pair_align_stop_margin=$PAIR_ALIGN_STOP_MARGIN
@@ -389,9 +409,11 @@ out_lines = []
 if first_json.exists():
     payload = json.loads(first_json.read_text(encoding="utf-8"))
     sync = payload.get("sync") or {}
+    status = payload.get("status") or {}
     run_home_raw = payload.get("run_home") or ""
     run_home = Path(run_home_raw) if run_home_raw else None
     trust_height = scalar_int(sync.get("trust_height"))
+    first_valid = bool(status.get("valid"))
     trust_hash = ""
     if run_home:
         sync_time = run_home / "sync" / "sync-time.log"
@@ -412,9 +434,9 @@ if first_json.exists():
         out_lines.append(f"TRUST_HEIGHT={trust_height}")
         if trust_hash:
             out_lines.append(f"TRUST_HASH={trust_hash}")
-    if align_stop:
+    if align_stop and first_valid:
         final_local = scalar_int(sync.get("final_local_height"))
-        if final_local is not None:
+        if final_local is not None and final_local > 0:
             target = final_local + stop_margin
             if target < 0:
                 target = 0
@@ -425,6 +447,32 @@ if out_lines:
 else:
     out_env.write_text("", encoding="utf-8")
 PY
+}
+
+capture_live_debug_vars_periodic() {
+  local out_file="$1"
+  local run_pid="$2"
+  if [[ "$AB_CAPTURE_LIVE_DEBUG_VARS" != "1" ]]; then
+    return 0
+  fi
+  if ! command -v curl >/dev/null 2>&1; then
+    return 0
+  fi
+
+  local tmp_file="${out_file}.tmp"
+  while kill -0 "$run_pid" >/dev/null 2>&1; do
+    if curl -fsS --max-time "$AB_LIVE_DEBUG_VARS_TIMEOUT_SECONDS" "$AB_LIVE_DEBUG_VARS_URL" >"$tmp_file" 2>/dev/null && [[ -s "$tmp_file" ]]; then
+      mv "$tmp_file" "$out_file"
+    else
+      rm -f "$tmp_file"
+    fi
+    sleep "$AB_LIVE_DEBUG_VARS_INTERVAL_SECONDS"
+  done
+  if curl -fsS --max-time "$AB_LIVE_DEBUG_VARS_TIMEOUT_SECONDS" "$AB_LIVE_DEBUG_VARS_URL" >"$tmp_file" 2>/dev/null && [[ -s "$tmp_file" ]]; then
+    mv "$tmp_file" "$out_file"
+  else
+    rm -f "$tmp_file"
+  fi
 }
 
 run_variant() {
@@ -457,10 +505,12 @@ run_variant() {
   local light_stats_pre_err="$run_dir/light_stats_pre.stderr.log"
   local light_stats_post="$run_dir/light_stats_post.txt"
   local light_stats_post_err="$run_dir/light_stats_post.stderr.log"
+  local live_debug_vars="$run_dir/live_debug_vars_latest.json"
   local light_stats_pre_rc=2
   local light_stats_post_rc=2
   rm -f "$analyze_json"
   rm -f "$light_stats_pre" "$light_stats_pre_err" "$light_stats_post" "$light_stats_post_err"
+  rm -f "$live_debug_vars"
   : >"$run_dir/attempts.log"
 
   local attempt
@@ -470,7 +520,10 @@ run_variant() {
     mkdir -p "$attempt_dir"
 
     local before_file="$attempt_dir/before_homes.txt"
+    local attempt_live_debug_vars="$attempt_dir/live_debug_vars_latest.json"
     list_run_homes >"$before_file"
+    rm -f "$live_debug_vars"
+    rm -f "$attempt_live_debug_vars"
 
     run_start=$(date +%s)
     set +e
@@ -503,10 +556,24 @@ run_variant() {
       else
         bash -c "$RUN_CMD_FROZEN"
       fi
-    ) >"$attempt_dir/launcher.log" 2>&1
+    ) >"$attempt_dir/launcher.log" 2>&1 &
+    local runner_pid=$!
+    local live_sampler_pid=""
+    if [[ "$AB_CAPTURE_LIVE_DEBUG_VARS" == "1" ]]; then
+      capture_live_debug_vars_periodic "$attempt_live_debug_vars" "$runner_pid" &
+      live_sampler_pid=$!
+    fi
+    wait "$runner_pid"
     run_rc=$?
+    if [[ -n "$live_sampler_pid" ]]; then
+      kill "$live_sampler_pid" >/dev/null 2>&1 || true
+      wait "$live_sampler_pid" >/dev/null 2>&1 || true
+    fi
     set -e
     cp "$attempt_dir/launcher.log" "$run_dir/launcher.log"
+    if [[ -s "$attempt_live_debug_vars" ]]; then
+      cp "$attempt_live_debug_vars" "$live_debug_vars"
+    fi
     run_end=$(date +%s)
 
     run_home="$(detect_new_run_home "$before_file" || true)"
@@ -550,6 +617,14 @@ run_variant() {
       "$ANALYZER" --json "$run_home"
     ) >"$analyze_json" 2>"$run_dir/analyze.stderr.log"; then
       rm -f "$analyze_json"
+      if [[ -s "$live_debug_vars" ]]; then
+        if ! (
+          set -euo pipefail
+          "$ANALYZER" --json "$live_debug_vars"
+        ) >"$analyze_json" 2>>"$run_dir/analyze.stderr.log"; then
+          rm -f "$analyze_json"
+        fi
+      fi
     fi
 
     if capture_light_vlog_stats "$app_db" "$light_stats_pre" "$light_stats_pre_err" "$env_file" "$overlay_env_file"; then
@@ -566,6 +641,18 @@ run_variant() {
     set +e
     "$TREEMAP_BIN" vlog-rewrite "$app_db" -rw >"$run_dir/rewrite.log" 2>&1
     rewrite_rc=$?
+    if [[ "$rewrite_rc" -ne 0 ]] && grep -q "requires a clean commitlog" "$run_dir/rewrite.log"; then
+      local checkpoint_rc=0
+      echo "rewrite_retry reason=clean_commitlog action=checkpoint_then_retry" >>"$run_dir/rewrite.log"
+      "$TREEMAP_BIN" checkpoint "$app_db" -rw >>"$run_dir/rewrite.log" 2>&1
+      checkpoint_rc=$?
+      if [[ "$checkpoint_rc" -eq 0 ]]; then
+        "$TREEMAP_BIN" vlog-rewrite "$app_db" -rw >>"$run_dir/rewrite.log" 2>&1
+        rewrite_rc=$?
+      else
+        rewrite_rc=$checkpoint_rc
+      fi
+    fi
     set -e
     local rewrite_end
     rewrite_end=$(date +%s)
@@ -1576,7 +1663,7 @@ if not maintenance:
     maintenance_light_fallback = build_maintenance_from_light_stats(light_post_stats)
     if maintenance_light_fallback:
         maintenance = maintenance_light_fallback
-        maintenance_source = "light_stats_post"
+        maintenance_source = "light_stats_post_offline"
 
 t_sync = safe_int(sync.get("duration_seconds"), max(0, run_end - run_start))
 t_rw = rewrite_seconds if rewrite_attempted == 1 else 0
@@ -1662,6 +1749,7 @@ result = {
         "t_total_seconds_per_block": t_total_seconds_per_block,
     },
     "maintenance_summary_source": maintenance_source,
+    "maintenance_summary_is_live_runtime": maintenance_source == "diagnostics_json",
     "maintenance_summary": maintenance,
     "maintenance_light": {
         "capture": {

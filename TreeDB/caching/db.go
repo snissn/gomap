@@ -6287,6 +6287,7 @@ type DB struct {
 	vlogGenerationLastGCObservedSourceBytesPending               atomic.Int64
 	vlogGenerationChurnBytes                                     atomic.Uint64
 	vlogGenerationSchedulerState                                 atomic.Uint32
+	vlogGenerationSchedulerDisableReason                         atomic.Uint32
 	vlogGenerationMaintenanceActive                              atomic.Bool
 	vlogGenerationMaintenanceAttempts                            atomic.Uint64
 	vlogGenerationMaintenanceAcquired                            atomic.Uint64
@@ -6300,6 +6301,7 @@ type DB struct {
 	vlogGenerationMaintenanceSkipPriority                        atomic.Uint64
 	vlogGenerationMaintenanceSkipQuiet                           atomic.Uint64
 	vlogGenerationMaintenanceSkipPreCheckpoint                   atomic.Uint64
+	vlogGenerationPreCheckpointPeriodicHotPassDone               atomic.Bool
 	vlogGenerationMaintenanceSkipCheckpointing                   atomic.Uint64
 	vlogGenerationMaintenancePassNoop                            atomic.Uint64
 	vlogGenerationMaintenancePassWithRewrite                     atomic.Uint64
@@ -6488,6 +6490,15 @@ const (
 	vlogGenerationSchedulerIdle
 	vlogGenerationSchedulerRunning
 	vlogGenerationSchedulerError
+)
+
+const (
+	vlogGenerationSchedulerDisableReasonNone uint32 = iota
+	vlogGenerationSchedulerDisableReasonNotStarted
+	vlogGenerationSchedulerDisableReasonDisabledEnv
+	vlogGenerationSchedulerDisableReasonWALOn
+	vlogGenerationSchedulerDisableReasonPolicyOff
+	vlogGenerationSchedulerDisableReasonBackendNoRewriter
 )
 
 const (
@@ -8463,6 +8474,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	db.rebuildGenerationLaneSets()
 	db.valueLogAutotuneMetrics.init(valuelog.RealClock{})
 	db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerDisabled)
+	db.vlogGenerationSchedulerDisableReason.Store(vlogGenerationSchedulerDisableReasonNotStarted)
 	db.maintenancePhase.Store(uint32(MaintenancePhaseSteady))
 	db.bpCond = sync.NewCond(&db.bpMu)
 	db.laneCond = sync.NewCond(&db.laneMu)
@@ -9233,6 +9245,25 @@ func vlogGenerationSchedulerStateString(v uint32) string {
 		return "running"
 	case vlogGenerationSchedulerError:
 		return "error"
+	default:
+		return "unknown"
+	}
+}
+
+func vlogGenerationSchedulerDisableReasonString(v uint32) string {
+	switch v {
+	case vlogGenerationSchedulerDisableReasonNone:
+		return "none"
+	case vlogGenerationSchedulerDisableReasonNotStarted:
+		return "not_started"
+	case vlogGenerationSchedulerDisableReasonDisabledEnv:
+		return "disabled_env"
+	case vlogGenerationSchedulerDisableReasonWALOn:
+		return "wal_on"
+	case vlogGenerationSchedulerDisableReasonPolicyOff:
+		return "policy_off"
+	case vlogGenerationSchedulerDisableReasonBackendNoRewriter:
+		return "backend_no_rewriter"
 	default:
 		return "unknown"
 	}
@@ -13460,6 +13491,7 @@ func (db *DB) startVlogGenerationLoop() {
 	}
 	if envBool(envDisableVlogGenerationLoop) {
 		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerDisabled)
+		db.vlogGenerationSchedulerDisableReason.Store(vlogGenerationSchedulerDisableReasonDisabledEnv)
 		return
 	}
 	if !db.disableJournal {
@@ -13467,18 +13499,22 @@ func (db *DB) startVlogGenerationLoop() {
 		// periodic generation loop runs in the background. Keep WAL-on
 		// generation maintenance on explicit/manual paths only.
 		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerDisabled)
+		db.vlogGenerationSchedulerDisableReason.Store(vlogGenerationSchedulerDisableReasonWALOn)
 		return
 	}
 	if db.valueLogGenerationPolicy != uint8(backenddb.ValueLogGenerationHotWarmCold) {
 		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerDisabled)
+		db.vlogGenerationSchedulerDisableReason.Store(vlogGenerationSchedulerDisableReasonPolicyOff)
 		return
 	}
 	if _, ok := db.backend.(backendValueLogRewriter); !ok {
 		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerDisabled)
+		db.vlogGenerationSchedulerDisableReason.Store(vlogGenerationSchedulerDisableReasonBackendNoRewriter)
 		return
 	}
 	// GC integration is optional in this phase; rewrite is required.
 	db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
+	db.vlogGenerationSchedulerDisableReason.Store(vlogGenerationSchedulerDisableReasonNone)
 	db.wg.Add(1)
 	go db.vlogGenerationLoop()
 }
@@ -13520,6 +13556,26 @@ func (db *DB) maybeRunPeriodicVlogGenerationMaintenance(runGC bool) bool {
 		!db.vlogGenerationCheckpointKickPending.Load() &&
 		!db.vlogGenerationDeferredMaintenancePending.Load() &&
 		!db.vlogGenerationDeferredMaintenanceDue(now) {
+		// Experimental pre-checkpoint override: in WAL-off mode before the first
+		// checkpoint, allow one bypassed periodic pass even while foreground is hot
+		// so rewrite planning/execution can be exercised in live restore runs.
+		if !runGC &&
+			db.disableJournal &&
+			db.checkpointRuns.Load() == 0 &&
+			envBool(envEnableVlogGenerationPreCheckpointRewrite) &&
+			db.vlogGenerationPreCheckpointPeriodicHotPassDone.CompareAndSwap(false, true) {
+			acquired := db.maybeRunVlogGenerationMaintenanceWithOptions(false, vlogGenerationMaintenanceOptions{
+				bypassQuiet:           true,
+				skipRetainedPruneWait: true,
+				skipCheckpoint:        false,
+				rewriteDebtDrain:      true,
+				debugSource:           "precheckpoint_periodic_hot",
+			})
+			if !acquired {
+				db.vlogGenerationPreCheckpointPeriodicHotPassDone.Store(false)
+			}
+			return acquired
+		}
 		return false
 	}
 	db.maybeRunVlogGenerationMaintenance(runGC)
@@ -22307,6 +22363,7 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_generation.enabled"] = fmt.Sprintf("%t", db.valueLogGenerationPolicy == uint8(backenddb.ValueLogGenerationHotWarmCold))
 	stats["treedb.cache.vlog_generation.maintenance_phase"] = maintenancePhaseString(db.maintenancePhase.Load())
 	stats["treedb.cache.vlog_generation.scheduler_state"] = vlogGenerationSchedulerStateString(db.vlogGenerationSchedulerState.Load())
+	stats["treedb.cache.vlog_generation.scheduler_disable_reason"] = vlogGenerationSchedulerDisableReasonString(db.vlogGenerationSchedulerDisableReason.Load())
 	stats["treedb.cache.vlog_generation.scheduler_last_reason"] = vlogGenerationReasonString(db.vlogGenerationLastReason.Load())
 	stats["treedb.cache.vlog_generation.checkpoint_kick.active"] = fmt.Sprintf("%t", db.vlogGenerationCheckpointKickActive.Load())
 	stats["treedb.cache.vlog_generation.checkpoint_kick.pending"] = fmt.Sprintf("%t", db.vlogGenerationCheckpointKickPending.Load())

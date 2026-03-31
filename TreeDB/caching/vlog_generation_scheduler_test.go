@@ -67,6 +67,28 @@ func prepareDirectSchedulerTest(t *testing.T) {
 	t.Setenv(envDisableVlogGenerationCheckpointKick, "1")
 }
 
+func openSchedulerGateTestDB(t *testing.T, disableWAL bool, policy uint8) *DB {
+	t.Helper()
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	db, err := Open(dir, backend, Options{
+		AllowUnsafe:              true,
+		DisableWAL:               disableWAL,
+		JournalLanes:             1,
+		ValueLogGenerationPolicy: policy,
+		ForceValueLogPointers:    true,
+	})
+	if err != nil {
+		_ = backend.Close()
+		t.Fatalf("open cachingdb: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	return db
+}
+
 func skipRetainedPrune(db *DB) {
 	if db != nil {
 		db.testSkipRetainedPrune = true
@@ -134,6 +156,50 @@ func (b *blockingRewritePlannerBackend) recordedPlanOutcomes() (completed int, c
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.planCompleted, b.planCanceled
+}
+
+func TestStartVlogGenerationLoop_DisableReasonDisabledEnv(t *testing.T) {
+	t.Setenv(envDisableVlogGenerationLoop, "1")
+
+	db := openSchedulerGateTestDB(t, true, uint8(backenddb.ValueLogGenerationHotWarmCold))
+	if got, want := db.vlogGenerationSchedulerState.Load(), vlogGenerationSchedulerDisabled; got != want {
+		t.Fatalf("scheduler state=%d want=%d", got, want)
+	}
+	if got, want := db.vlogGenerationSchedulerDisableReason.Load(), vlogGenerationSchedulerDisableReasonDisabledEnv; got != want {
+		t.Fatalf("disable reason=%d want=%d", got, want)
+	}
+	stats := db.Stats()
+	if got, want := stats["treedb.cache.vlog_generation.scheduler_disable_reason"], "disabled_env"; got != want {
+		t.Fatalf("stats scheduler_disable_reason=%q want=%q", got, want)
+	}
+}
+
+func TestStartVlogGenerationLoop_DisableReasonWALOn(t *testing.T) {
+	db := openSchedulerGateTestDB(t, false, uint8(backenddb.ValueLogGenerationHotWarmCold))
+	if got, want := db.vlogGenerationSchedulerState.Load(), vlogGenerationSchedulerDisabled; got != want {
+		t.Fatalf("scheduler state=%d want=%d", got, want)
+	}
+	if got, want := db.vlogGenerationSchedulerDisableReason.Load(), vlogGenerationSchedulerDisableReasonWALOn; got != want {
+		t.Fatalf("disable reason=%d want=%d", got, want)
+	}
+	stats := db.Stats()
+	if got, want := stats["treedb.cache.vlog_generation.scheduler_disable_reason"], "wal_on"; got != want {
+		t.Fatalf("stats scheduler_disable_reason=%q want=%q", got, want)
+	}
+}
+
+func TestStartVlogGenerationLoop_DisableReasonPolicyOff(t *testing.T) {
+	db := openSchedulerGateTestDB(t, true, uint8(backenddb.ValueLogGenerationOff))
+	if got, want := db.vlogGenerationSchedulerState.Load(), vlogGenerationSchedulerDisabled; got != want {
+		t.Fatalf("scheduler state=%d want=%d", got, want)
+	}
+	if got, want := db.vlogGenerationSchedulerDisableReason.Load(), vlogGenerationSchedulerDisableReasonPolicyOff; got != want {
+		t.Fatalf("disable reason=%d want=%d", got, want)
+	}
+	stats := db.Stats()
+	if got, want := stats["treedb.cache.vlog_generation.scheduler_disable_reason"], "policy_off"; got != want {
+		t.Fatalf("stats scheduler_disable_reason=%q want=%q", got, want)
+	}
 }
 
 type timedRewritePlannerBackend struct {
@@ -5686,6 +5752,90 @@ func TestVlogGenerationMaintenance_PeriodicPreflightSkipsHotNoPending(t *testing
 	}
 	if _, calls := recorder.recordedRewrite(); calls != 0 {
 		t.Fatalf("rewrite calls=%d want 0 on preflight skip", calls)
+	}
+}
+
+func TestVlogGenerationMaintenance_PeriodicPreflightHotPreCheckpointOverrideRuns(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+	t.Setenv(envEnableVlogGenerationPreCheckpointRewrite, "1")
+
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	recorder := &rewriteBudgetRecordingBackend{
+		DB: backend,
+		planResponse: backenddb.ValueLogRewritePlan{
+			SourceFileIDs: []uint32{11},
+			SelectedSegments: []backenddb.ValueLogRewritePlanSegment{
+				{FileID: 11, BytesTotal: 64, BytesLive: 32, BytesStale: 32, StaleRatio: 0.5},
+			},
+			SegmentsSelected:   1,
+			SelectedBytesTotal: 64,
+			SelectedBytesLive:  32,
+			SelectedBytesStale: 32,
+		},
+		rewriteResponse: backenddb.ValueLogRewriteStats{BytesBefore: 64, BytesAfter: 32, RecordsCopied: 1},
+	}
+
+	db, err := Open(dir, recorder, Options{
+		AllowUnsafe:                      true,
+		DisableWAL:                       true,
+		JournalLanes:                     1,
+		ValueLogGenerationPolicy:         uint8(backenddb.ValueLogGenerationHotWarmCold),
+		ValueLogRewriteTriggerTotalBytes: 1,
+		ValueLogRewriteBudgetBytesPerSec: 1024,
+		ForceValueLogPointers:            true,
+	})
+	if err != nil {
+		t.Fatalf("open cachingdb: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	skipRetainedPrune(db)
+
+	value := make([]byte, 2048)
+	b := db.NewBatch()
+	if err := b.Set([]byte("k"), value); err != nil {
+		_ = b.Close()
+		t.Fatalf("set: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		_ = b.Close()
+		t.Fatalf("write: %v", err)
+	}
+	_ = b.Close()
+	db.vlogGenerationRewriteBudgetTokensBytes.Store(1024)
+
+	hot := time.Now().UnixNano()
+	db.lastForegroundWriteUnixNano.Store(hot)
+	db.lastForegroundReadUnixNano.Store(hot)
+	db.vlogGenerationCheckpointKickPending.Store(false)
+	db.vlogGenerationDeferredMaintenancePending.Store(false)
+
+	if ran := db.maybeRunPeriodicVlogGenerationMaintenance(false); !ran {
+		t.Fatal("periodic maintenance did not run with hot pre-checkpoint override")
+	}
+	if _, calls := recorder.recordedRewrite(); calls != 1 {
+		t.Fatalf("rewrite calls=%d want 1 with hot pre-checkpoint override", calls)
+	}
+	stats := db.Stats()
+	if got := stats["treedb.cache.vlog_generation.maintenance.skip.before_first_checkpoint"]; got != "0" {
+		t.Fatalf("pre-checkpoint skip=%q want 0 with override", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.maintenance.attempts"]; got != "1" {
+		t.Fatalf("maintenance attempts=%q want 1 with override", got)
+	}
+
+	if ran := db.maybeRunPeriodicVlogGenerationMaintenance(false); ran {
+		t.Fatal("periodic maintenance unexpectedly reran after one hot pre-checkpoint override pass")
+	}
+	if _, calls := recorder.recordedRewrite(); calls != 1 {
+		t.Fatalf("rewrite calls=%d want 1 after second hot pre-checkpoint periodic tick", calls)
+	}
+	stats = db.Stats()
+	if got := stats["treedb.cache.vlog_generation.maintenance.attempts"]; got != "1" {
+		t.Fatalf("maintenance attempts=%q want 1 after second hot pre-checkpoint periodic tick", got)
 	}
 }
 
