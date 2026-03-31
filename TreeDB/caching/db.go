@@ -6308,6 +6308,10 @@ type DB struct {
 	vlogGenerationMaintenancePassNoopBySource                    [vlogGenerationMaintenanceSourceCount]atomic.Uint64
 	vlogGenerationMaintenancePassWithRewriteBySource             [vlogGenerationMaintenanceSourceCount]atomic.Uint64
 	vlogGenerationMaintenancePassWithGCBySource                  [vlogGenerationMaintenanceSourceCount]atomic.Uint64
+	vlogGenerationRewriteRunsBySource                            [vlogGenerationMaintenanceSourceCount]atomic.Uint64
+	vlogGenerationRewriteBudgetConsumedBySource                  [vlogGenerationMaintenanceSourceCount]atomic.Uint64
+	vlogGenerationRewriteSourceBytesRequestedBySource            [vlogGenerationMaintenanceSourceCount]atomic.Uint64
+	vlogGenerationRewriteSourceBytesUnreferencedBySource         [vlogGenerationMaintenanceSourceCount]atomic.Uint64
 	vlogGenerationMaintenancePassTotalNanos                      atomic.Uint64
 	vlogGenerationMaintenancePassMaxNanos                        atomic.Uint64
 	vlogGenerationLastReason                                     atomic.Uint32
@@ -13853,7 +13857,7 @@ func mulDivClampPositiveInt64(x, y, div, capValue int64) int64 {
 	return int64(q)
 }
 
-func (db *DB) vlogGenerationConsumeRewriteBudgetBytes(n int64) {
+func (db *DB) vlogGenerationConsumeRewriteBudgetBytes(n int64, sourceIdx int) {
 	if db == nil || n <= 0 {
 		return
 	}
@@ -13866,6 +13870,9 @@ func (db *DB) vlogGenerationConsumeRewriteBudgetBytes(n int64) {
 		if db.vlogGenerationRewriteBudgetTokensBytes.CompareAndSwap(cur, next) {
 			if consumed := cur - next; consumed > 0 {
 				db.vlogGenerationRewriteBudgetConsumed.Add(uint64(consumed))
+				if sourceIdx >= 0 && sourceIdx < vlogGenerationMaintenanceSourceCount {
+					db.vlogGenerationRewriteBudgetConsumedBySource[sourceIdx].Add(uint64(consumed))
+				}
 			}
 			return
 		}
@@ -15932,6 +15939,7 @@ planned:
 			}
 			db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
 			db.vlogGenerationRewriteRuns.Add(1)
+			db.vlogGenerationRewriteRunsBySource[activeSourceIdx].Add(1)
 			if sourceSegments := len(rewriteOpts.SourceFileIDs); sourceSegments > 0 {
 				db.vlogGenerationRewriteExecSourceSegments.Add(uint64(sourceSegments))
 			}
@@ -15976,12 +15984,14 @@ planned:
 			}
 			if sourceBytesRequested > 0 {
 				db.vlogGenerationRewriteSourceBytesRequestedTotal.Add(sourceBytesRequested)
+				db.vlogGenerationRewriteSourceBytesRequestedBySource[activeSourceIdx].Add(sourceBytesRequested)
 			}
 			if sourceBytesStillReferenced > 0 {
 				db.vlogGenerationRewriteSourceBytesStillReferencedTotal.Add(sourceBytesStillReferenced)
 			}
 			if sourceBytesUnreferenced > 0 {
 				db.vlogGenerationRewriteSourceBytesUnreferencedTotal.Add(sourceBytesUnreferenced)
+				db.vlogGenerationRewriteSourceBytesUnreferencedBySource[activeSourceIdx].Add(sourceBytesUnreferenced)
 			}
 			rewriteBytesIn := int64(0)
 			if processedLedgerOK {
@@ -16037,7 +16047,7 @@ planned:
 				db.vlogGenerationRewriteLeafRefBytesCopied.Add(uint64(stats.LeafRefBytesCopied))
 			}
 			if consumed > 0 {
-				db.vlogGenerationConsumeRewriteBudgetBytes(consumed)
+				db.vlogGenerationConsumeRewriteBudgetBytes(consumed, activeSourceIdx)
 			}
 			db.maybeRunVlogGenerationIndexVacuum(int64(stats.BytesBefore))
 			return nil
@@ -22417,6 +22427,25 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_generation.rewrite.no_reclaim_runs"] = fmt.Sprintf("%d", db.vlogGenerationRewriteNoReclaimRuns.Load())
 	stats["treedb.cache.vlog_generation.rewrite.no_reclaim_stale_bytes"] = fmt.Sprintf("%d", db.vlogGenerationRewriteNoReclaimStaleBytes.Load())
 	stats["treedb.cache.vlog_generation.rewrite.runs"] = fmt.Sprintf("%d", db.vlogGenerationRewriteRuns.Load())
+	for sourceIdx := 0; sourceIdx < vlogGenerationMaintenanceSourceCount; sourceIdx++ {
+		source := vlogGenerationMaintenanceSourceLabel(sourceIdx)
+		stats["treedb.cache.vlog_generation.rewrite.runs.source."+source] = fmt.Sprintf(
+			"%d",
+			db.vlogGenerationRewriteRunsBySource[sourceIdx].Load(),
+		)
+		stats["treedb.cache.vlog_generation.rewrite_budget.consumed_bytes_total.source."+source] = fmt.Sprintf(
+			"%d",
+			db.vlogGenerationRewriteBudgetConsumedBySource[sourceIdx].Load(),
+		)
+		stats["treedb.cache.vlog_generation.rewrite.exec.source_bytes_requested_total.source."+source] = fmt.Sprintf(
+			"%d",
+			db.vlogGenerationRewriteSourceBytesRequestedBySource[sourceIdx].Load(),
+		)
+		stats["treedb.cache.vlog_generation.rewrite.exec.source_bytes_unreferenced_total.source."+source] = fmt.Sprintf(
+			"%d",
+			db.vlogGenerationRewriteSourceBytesUnreferencedBySource[sourceIdx].Load(),
+		)
+	}
 	stats["treedb.cache.vlog_generation.rewrite.plan_runs"] = fmt.Sprintf("%d", db.vlogGenerationRewritePlanRuns.Load())
 	stats["treedb.cache.vlog_generation.rewrite.plan_canceled"] = fmt.Sprintf("%d", db.vlogGenerationRewritePlanCanceled.Load())
 	stats["treedb.cache.vlog_generation.rewrite.plan_canceled_last_unix_nano"] = fmt.Sprintf("%d", db.vlogGenerationRewritePlanCanceledLastNS.Load())

@@ -279,6 +279,12 @@ def build_summary(stats: dict[str, Any]) -> dict[str, Any]:
         "maintenance_with_rewrite": metric_int(stats, "treedb.cache.vlog_generation.maintenance.passes.with_rewrite"),
         "maintenance_with_gc": metric_int(stats, "treedb.cache.vlog_generation.maintenance.passes.with_gc"),
         "rewrite_runs": metric_int(stats, "treedb.cache.vlog_generation.rewrite.runs"),
+        "rewrite_runs_source_periodic": metric_int(stats, "treedb.cache.vlog_generation.rewrite.runs.source.periodic"),
+        "rewrite_runs_source_bypass": metric_int(stats, "treedb.cache.vlog_generation.rewrite.runs.source.bypass"),
+        "rewrite_runs_source_checkpoint_pending": metric_int(stats, "treedb.cache.vlog_generation.rewrite.runs.source.checkpoint_pending"),
+        "rewrite_runs_source_rewrite_age_blocked": metric_int(stats, "treedb.cache.vlog_generation.rewrite.runs.source.rewrite_age_blocked"),
+        "rewrite_runs_source_rewrite_stage_confirm": metric_int(stats, "treedb.cache.vlog_generation.rewrite.runs.source.rewrite_stage_confirm"),
+        "rewrite_runs_source_other": metric_int(stats, "treedb.cache.vlog_generation.rewrite.runs.source.other"),
         "rewrite_plan_runs": metric_int(stats, "treedb.cache.vlog_generation.rewrite.plan_runs"),
         "rewrite_plan_selected": metric_int(stats, "treedb.cache.vlog_generation.rewrite.plan_selected"),
         "rewrite_plan_empty": metric_int(stats, "treedb.cache.vlog_generation.rewrite.plan_empty"),
@@ -298,6 +304,18 @@ def build_summary(stats: dict[str, Any]) -> dict[str, Any]:
         "rewrite_exec_source_bytes_requested_total": metric_int(stats, "treedb.cache.vlog_generation.rewrite.exec.source_bytes_requested_total"),
         "rewrite_exec_source_bytes_still_referenced_total": metric_int(stats, "treedb.cache.vlog_generation.rewrite.exec.source_bytes_still_referenced_total"),
         "rewrite_exec_source_bytes_unreferenced_total": metric_int(stats, "treedb.cache.vlog_generation.rewrite.exec.source_bytes_unreferenced_total"),
+        "rewrite_exec_source_bytes_requested_total_source_periodic": metric_int(stats, "treedb.cache.vlog_generation.rewrite.exec.source_bytes_requested_total.source.periodic"),
+        "rewrite_exec_source_bytes_requested_total_source_bypass": metric_int(stats, "treedb.cache.vlog_generation.rewrite.exec.source_bytes_requested_total.source.bypass"),
+        "rewrite_exec_source_bytes_requested_total_source_checkpoint_pending": metric_int(stats, "treedb.cache.vlog_generation.rewrite.exec.source_bytes_requested_total.source.checkpoint_pending"),
+        "rewrite_exec_source_bytes_requested_total_source_rewrite_age_blocked": metric_int(stats, "treedb.cache.vlog_generation.rewrite.exec.source_bytes_requested_total.source.rewrite_age_blocked"),
+        "rewrite_exec_source_bytes_requested_total_source_rewrite_stage_confirm": metric_int(stats, "treedb.cache.vlog_generation.rewrite.exec.source_bytes_requested_total.source.rewrite_stage_confirm"),
+        "rewrite_exec_source_bytes_requested_total_source_other": metric_int(stats, "treedb.cache.vlog_generation.rewrite.exec.source_bytes_requested_total.source.other"),
+        "rewrite_exec_source_bytes_unreferenced_total_source_periodic": metric_int(stats, "treedb.cache.vlog_generation.rewrite.exec.source_bytes_unreferenced_total.source.periodic"),
+        "rewrite_exec_source_bytes_unreferenced_total_source_bypass": metric_int(stats, "treedb.cache.vlog_generation.rewrite.exec.source_bytes_unreferenced_total.source.bypass"),
+        "rewrite_exec_source_bytes_unreferenced_total_source_checkpoint_pending": metric_int(stats, "treedb.cache.vlog_generation.rewrite.exec.source_bytes_unreferenced_total.source.checkpoint_pending"),
+        "rewrite_exec_source_bytes_unreferenced_total_source_rewrite_age_blocked": metric_int(stats, "treedb.cache.vlog_generation.rewrite.exec.source_bytes_unreferenced_total.source.rewrite_age_blocked"),
+        "rewrite_exec_source_bytes_unreferenced_total_source_rewrite_stage_confirm": metric_int(stats, "treedb.cache.vlog_generation.rewrite.exec.source_bytes_unreferenced_total.source.rewrite_stage_confirm"),
+        "rewrite_exec_source_bytes_unreferenced_total_source_other": metric_int(stats, "treedb.cache.vlog_generation.rewrite.exec.source_bytes_unreferenced_total.source.other"),
         "rewrite_exec_source_bytes_requested_last": metric_int(stats, "treedb.cache.vlog_generation.rewrite.exec.source_bytes_requested_last"),
         "rewrite_exec_source_bytes_still_referenced_last": metric_int(stats, "treedb.cache.vlog_generation.rewrite.exec.source_bytes_still_referenced_last"),
         "rewrite_exec_source_bytes_unreferenced_last": metric_int(stats, "treedb.cache.vlog_generation.rewrite.exec.source_bytes_unreferenced_last"),
@@ -316,6 +334,12 @@ def build_summary(stats: dict[str, Any]) -> dict[str, Any]:
         "rewrite_age_blocked_remaining_ms": metric_int(stats, "treedb.cache.vlog_generation.rewrite.age_blocked_remaining_ms"),
         "rewrite_penalties_active": metric_int(stats, "treedb.cache.vlog_generation.rewrite.penalties_active"),
         "rewrite_budget_consumed_bytes_total": metric_int(stats, "treedb.cache.vlog_generation.rewrite_budget.consumed_bytes_total"),
+        "rewrite_budget_consumed_bytes_total_source_periodic": metric_int(stats, "treedb.cache.vlog_generation.rewrite_budget.consumed_bytes_total.source.periodic"),
+        "rewrite_budget_consumed_bytes_total_source_bypass": metric_int(stats, "treedb.cache.vlog_generation.rewrite_budget.consumed_bytes_total.source.bypass"),
+        "rewrite_budget_consumed_bytes_total_source_checkpoint_pending": metric_int(stats, "treedb.cache.vlog_generation.rewrite_budget.consumed_bytes_total.source.checkpoint_pending"),
+        "rewrite_budget_consumed_bytes_total_source_rewrite_age_blocked": metric_int(stats, "treedb.cache.vlog_generation.rewrite_budget.consumed_bytes_total.source.rewrite_age_blocked"),
+        "rewrite_budget_consumed_bytes_total_source_rewrite_stage_confirm": metric_int(stats, "treedb.cache.vlog_generation.rewrite_budget.consumed_bytes_total.source.rewrite_stage_confirm"),
+        "rewrite_budget_consumed_bytes_total_source_other": metric_int(stats, "treedb.cache.vlog_generation.rewrite_budget.consumed_bytes_total.source.other"),
         "rewrite_budget_tokens_utilization_pct": metric_float(stats, "treedb.cache.vlog_generation.rewrite_budget.tokens_utilization_pct"),
         "rewrite_queue_run_segment_cap": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queue_run_segment_cap"),
         "rewrite_queue_run_segment_cap_limiter": metric_str(stats, "treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.limiter", "none"),
@@ -550,6 +574,57 @@ def build_summary(stats: dict[str, Any]) -> dict[str, Any]:
         m["rewrite_exec_source_bytes_still_referenced_total"],
         m["rewrite_exec_source_bytes_requested_total"],
     )
+    m["rewrite_checkpoint_like_runs"] = (
+        m["rewrite_runs_source_bypass"]
+        + m["rewrite_runs_source_checkpoint_pending"]
+    )
+    m["rewrite_non_checkpoint_runs"] = max(
+        0,
+        m["rewrite_runs"] - m["rewrite_checkpoint_like_runs"],
+    )
+    m["rewrite_checkpoint_like_run_share_pct"] = pct(
+        m["rewrite_checkpoint_like_runs"],
+        m["rewrite_runs"],
+    )
+    m["rewrite_checkpoint_like_budget_consumed_bytes_total"] = (
+        m["rewrite_budget_consumed_bytes_total_source_bypass"]
+        + m["rewrite_budget_consumed_bytes_total_source_checkpoint_pending"]
+    )
+    m["rewrite_non_checkpoint_budget_consumed_bytes_total"] = max(
+        0,
+        m["rewrite_budget_consumed_bytes_total"]
+        - m["rewrite_checkpoint_like_budget_consumed_bytes_total"],
+    )
+    m["rewrite_checkpoint_like_budget_share_pct"] = pct(
+        m["rewrite_checkpoint_like_budget_consumed_bytes_total"],
+        m["rewrite_budget_consumed_bytes_total"],
+    )
+    m["rewrite_checkpoint_like_source_bytes_requested_total"] = (
+        m["rewrite_exec_source_bytes_requested_total_source_bypass"]
+        + m["rewrite_exec_source_bytes_requested_total_source_checkpoint_pending"]
+    )
+    m["rewrite_checkpoint_like_source_bytes_unreferenced_total"] = (
+        m["rewrite_exec_source_bytes_unreferenced_total_source_bypass"]
+        + m["rewrite_exec_source_bytes_unreferenced_total_source_checkpoint_pending"]
+    )
+    m["rewrite_non_checkpoint_source_bytes_requested_total"] = max(
+        0,
+        m["rewrite_exec_source_bytes_requested_total"]
+        - m["rewrite_checkpoint_like_source_bytes_requested_total"],
+    )
+    m["rewrite_non_checkpoint_source_bytes_unreferenced_total"] = max(
+        0,
+        m["rewrite_exec_source_bytes_unreferenced_total"]
+        - m["rewrite_checkpoint_like_source_bytes_unreferenced_total"],
+    )
+    m["rewrite_checkpoint_like_source_unreferenced_bytes_pct"] = pct(
+        m["rewrite_checkpoint_like_source_bytes_unreferenced_total"],
+        m["rewrite_checkpoint_like_source_bytes_requested_total"],
+    )
+    m["rewrite_non_checkpoint_source_unreferenced_bytes_pct"] = pct(
+        m["rewrite_non_checkpoint_source_bytes_unreferenced_total"],
+        m["rewrite_non_checkpoint_source_bytes_requested_total"],
+    )
     m["rewrite_stale_selection_coverage_pct"] = pct(
         m["rewrite_processed_stale_bytes"],
         m["rewrite_plan_selected_bytes_stale"],
@@ -778,6 +853,14 @@ def print_report(summary: dict[str, Any], source_file: Path, run_home: str, inst
         f"last=requested:{human_bytes(summary['rewrite_exec_source_bytes_requested_last'])} "
         f"unref:{human_bytes(summary['rewrite_exec_source_bytes_unreferenced_last'])} "
         f"still_ref:{human_bytes(summary['rewrite_exec_source_bytes_still_referenced_last'])}"
+    )
+    print(
+        "  source split (checkpoint-like vs non-checkpoint): "
+        f"runs={summary['rewrite_checkpoint_like_runs']}/{summary['rewrite_non_checkpoint_runs']} "
+        f"(ckpt_like_share={summary['rewrite_checkpoint_like_run_share_pct']:.1f}%) "
+        f"budget={human_bytes(summary['rewrite_checkpoint_like_budget_consumed_bytes_total'])}/{human_bytes(summary['rewrite_non_checkpoint_budget_consumed_bytes_total'])} "
+        f"(ckpt_like_budget_share={summary['rewrite_checkpoint_like_budget_share_pct']:.1f}%) "
+        f"unref_pct={summary['rewrite_checkpoint_like_source_unreferenced_bytes_pct']:.1f}%/{summary['rewrite_non_checkpoint_source_unreferenced_bytes_pct']:.1f}%"
     )
     print(
         "  selected stale vs processed stale: "
