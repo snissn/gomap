@@ -341,6 +341,18 @@ func loadPositiveIntEnvDefault(key string, def int) int {
 	return v
 }
 
+func loadPositiveInt64EnvDefault(key string, def int64) int64 {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return def
+	}
+	v, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || v <= 0 {
+		return def
+	}
+	return v
+}
+
 func maybeRecordBatchSetCallerSample(bytes int) {
 	maybeRecordCallerSample(batchSetCallerSampleMod, &batchSetCallerSampleSeq, &batchSetCallerSamplesTotal, &batchSetCallerStatsMap, bytes)
 }
@@ -1882,6 +1894,10 @@ const (
 	envVlogGenerationRewriteDebtDrainMaxSegments      = "TREEDB_VLOG_GENERATION_REWRITE_DEBT_DRAIN_MAX_SEGMENTS"
 	envVlogGenerationRewriteFreshPlanDebtDrainMinSegs = "TREEDB_VLOG_GENERATION_REWRITE_FRESH_PLAN_DEBT_DRAIN_MIN_SEGMENTS"
 	envVlogGenerationRewriteFreshPlanDebtDrainMaxSegs = "TREEDB_VLOG_GENERATION_REWRITE_FRESH_PLAN_DEBT_DRAIN_MAX_SEGMENTS"
+	// Optional generational segment target overrides for live A/B experiments.
+	envVlogGenerationHotSegmentTargetBytes  = "TREEDB_VLOG_GENERATION_HOT_SEGMENT_TARGET_BYTES"
+	envVlogGenerationWarmSegmentTargetBytes = "TREEDB_VLOG_GENERATION_WARM_SEGMENT_TARGET_BYTES"
+	envVlogGenerationColdSegmentTargetBytes = "TREEDB_VLOG_GENERATION_COLD_SEGMENT_TARGET_BYTES"
 	// Experimental WAL-off checkpoint-kick guard: when enabled, avoid starting
 	// fresh rewrite planning during hot foreground activity. Queued rewrite debt
 	// (or deferred maintenance due) remains eligible so resumable progress is not
@@ -8009,6 +8025,9 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	valueLogGenerationHotTarget := opts.ValueLogGenerationHotSegmentTargetBytes
 	valueLogGenerationWarmTarget := opts.ValueLogGenerationWarmSegmentTargetBytes
 	valueLogGenerationColdTarget := opts.ValueLogGenerationColdSegmentTargetBytes
+	valueLogGenerationHotTarget = loadPositiveInt64EnvDefault(envVlogGenerationHotSegmentTargetBytes, valueLogGenerationHotTarget)
+	valueLogGenerationWarmTarget = loadPositiveInt64EnvDefault(envVlogGenerationWarmSegmentTargetBytes, valueLogGenerationWarmTarget)
+	valueLogGenerationColdTarget = loadPositiveInt64EnvDefault(envVlogGenerationColdSegmentTargetBytes, valueLogGenerationColdTarget)
 	valueLogRewriteBudgetBytes := opts.ValueLogRewriteBudgetBytesPerSec
 	valueLogRewriteBudgetRecords := opts.ValueLogRewriteBudgetRecordsPerSec
 	valueLogRewriteTriggerRatioPPM := opts.ValueLogRewriteTriggerStaleRatioPPM

@@ -7355,3 +7355,40 @@ func TestVlogGenerationStats_ReportRewriteBacklogAndDurations(t *testing.T) {
 		t.Fatalf("observed gc source bytes protected other total=%q want 25", got)
 	}
 }
+
+func TestVlogGenerationSegmentTargetEnvOverrides(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+	t.Setenv(envVlogGenerationHotSegmentTargetBytes, "65536")
+	t.Setenv(envVlogGenerationWarmSegmentTargetBytes, "131072")
+	t.Setenv(envVlogGenerationColdSegmentTargetBytes, "262144")
+
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	recorder := &rewriteBudgetRecordingBackend{DB: backend}
+	db, cleanup := openRewriteQueueTestDB(t, dir, recorder)
+	defer cleanup()
+
+	if got := db.valueLogGenerationHotTarget; got != 65536 {
+		t.Fatalf("hot segment target=%d want 65536", got)
+	}
+	if got := db.valueLogGenerationWarmTarget; got != 131072 {
+		t.Fatalf("warm segment target=%d want 131072", got)
+	}
+	if got := db.valueLogGenerationColdTarget; got != 262144 {
+		t.Fatalf("cold segment target=%d want 262144", got)
+	}
+
+	stats := db.Stats()
+	if got := stats["treedb.cache.vlog_generation.hot.segment_target_bytes"]; got != "65536" {
+		t.Fatalf("hot segment target stats=%q want 65536", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.warm.segment_target_bytes"]; got != "131072" {
+		t.Fatalf("warm segment target stats=%q want 131072", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.cold.segment_target_bytes"]; got != "262144" {
+		t.Fatalf("cold segment target stats=%q want 262144", got)
+	}
+}
