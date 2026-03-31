@@ -2715,6 +2715,64 @@ func TestVlogGenerationRewriteQueue_DoesNotRunWhenBudgetEmpty(t *testing.T) {
 	if _, calls := recorder.recordedRewrite(); calls != 1 {
 		t.Fatalf("rewrite calls with empty budget=%d want still=1", calls)
 	}
+	stats := db.Stats()
+	if got := stats["treedb.cache.vlog_generation.rewrite.queued_debt.passes"]; got != "1" {
+		t.Fatalf("queued debt passes=%q want 1", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.queued_debt.rewrite_started"]; got != "0" {
+		t.Fatalf("queued debt rewrite started=%q want 0", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.queued_debt.skip.budget_empty"]; got != "1" {
+		t.Fatalf("queued debt budget-empty skips=%q want 1", got)
+	}
+}
+
+func TestVlogGenerationRewriteQueue_TracksQueuedDebtNoChunkSkips(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+
+	dir := t.TempDir()
+
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	recorder := &rewriteBudgetRecordingBackend{
+		DB:              backend,
+		rewriteResponse: backenddb.ValueLogRewriteStats{BytesBefore: 64, BytesAfter: 32, RecordsCopied: 1},
+	}
+
+	db, cleanup := openRewriteQueueTestDB(t, dir, recorder)
+	t.Cleanup(cleanup)
+	if err := db.setVlogGenerationRewriteLedger([]backenddb.ValueLogRewritePlanSegment{
+		{FileID: 11, BytesLive: 51, BytesTotal: 100, BytesStale: 49, StaleRatio: 0.49},
+	}); err != nil {
+		t.Fatalf("set ledger: %v", err)
+	}
+	db.vlogGenerationRewriteBudgetTokensBytes.Store(1024)
+	db.vlogGenerationLastRewriteUnixNano.Store(time.Now().Add(-2 * vlogGenerationRewriteResumeMinInterval).UnixNano())
+	forceVlogMaintenanceIdle(db)
+	db.maybeRunVlogGenerationMaintenance(false)
+
+	if _, calls := recorder.recordedRewrite(); calls != 0 {
+		t.Fatalf("rewrite calls=%d want=0 (no executable queued chunk)", calls)
+	}
+	queue, err := db.currentVlogGenerationRewriteQueue()
+	if err != nil {
+		t.Fatalf("current queue: %v", err)
+	}
+	if len(queue) != 0 {
+		t.Fatalf("queue after queued no-chunk pass=%v want empty", queue)
+	}
+	stats := db.Stats()
+	if got := stats["treedb.cache.vlog_generation.rewrite.queued_debt.passes"]; got != "1" {
+		t.Fatalf("queued debt passes=%q want 1", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.queued_debt.rewrite_started"]; got != "0" {
+		t.Fatalf("queued debt rewrite started=%q want 0", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.queued_debt.skip.no_chunk"]; got != "1" {
+		t.Fatalf("queued debt no-chunk skips=%q want 1", got)
+	}
 }
 
 func TestVlogGenerationRewriteQueue_LedgerOrdersByStaleRatio(t *testing.T) {
