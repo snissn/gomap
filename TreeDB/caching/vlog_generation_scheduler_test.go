@@ -979,6 +979,28 @@ func TestVlogGenerationRewriteSegmentCapForRun_Limiter(t *testing.T) {
 	}
 }
 
+func TestVlogGenerationObserveRewriteSegmentCapDecision(t *testing.T) {
+	db := &DB{}
+	runDecision := vlogGenerationRewriteSegmentCapDecision{limiter: vlogGenerationRewriteSegmentCapLimiterBudgetTokens}
+	db.observeVlogGenerationRewriteSegmentCapDecision(runDecision, false)
+	db.observeVlogGenerationRewriteSegmentCapDecision(runDecision, false)
+	freshDecision := vlogGenerationRewriteSegmentCapDecision{limiter: vlogGenerationRewriteSegmentCapLimiterFreshPlanCap}
+	db.observeVlogGenerationRewriteSegmentCapDecision(freshDecision, true)
+
+	if got := db.vlogGenerationRewriteQueueRunSegmentCapDecisions.Load(); got != 2 {
+		t.Fatalf("run decisions=%d want=2", got)
+	}
+	if got := db.vlogGenerationRewriteQueueFreshPlanSegmentCapDecisions.Load(); got != 1 {
+		t.Fatalf("fresh-plan decisions=%d want=1", got)
+	}
+	if got := db.vlogGenerationRewriteQueueRunSegmentCapLimiterCounts[int(vlogGenerationRewriteSegmentCapLimiterBudgetTokens)].Load(); got != 2 {
+		t.Fatalf("run budget_tokens limiter count=%d want=2", got)
+	}
+	if got := db.vlogGenerationRewriteQueueFreshPlanSegmentCapLimiterCounts[int(vlogGenerationRewriteSegmentCapLimiterFreshPlanCap)].Load(); got != 1 {
+		t.Fatalf("fresh-plan fresh_plan_cap limiter count=%d want=1", got)
+	}
+}
+
 func TestVlogGenerationRewriteSegmentCapForFreshPlan_Limiter(t *testing.T) {
 	db := &DB{
 		valueLogRewriteBudgetBytes:   1 << 20,
@@ -7059,6 +7081,12 @@ func TestVlogGenerationStats_ReportRewriteBacklogAndDurations(t *testing.T) {
 	db.vlogGenerationRewriteQueueLiveBytesBeforeLast.Store(1600)
 	db.vlogGenerationRewriteQueueLiveBytesAfterLast.Store(1200)
 	db.vlogGenerationRewriteQueueLiveBytesDeltaLast.Store(-400)
+	db.vlogGenerationRewriteQueueRunSegmentCapDecisions.Store(9)
+	db.vlogGenerationRewriteQueueFreshPlanSegmentCapDecisions.Store(4)
+	db.vlogGenerationRewriteQueueRunSegmentCapLimiterCounts[int(vlogGenerationRewriteSegmentCapLimiterBudgetTokens)].Store(5)
+	db.vlogGenerationRewriteQueueRunSegmentCapLimiterCounts[int(vlogGenerationRewriteSegmentCapLimiterCheckpointKickSafety)].Store(2)
+	db.vlogGenerationRewriteQueueFreshPlanSegmentCapLimiterCounts[int(vlogGenerationRewriteSegmentCapLimiterFreshPlanQueueThreshold)].Store(3)
+	db.vlogGenerationRewriteQueueFreshPlanSegmentCapLimiterCounts[int(vlogGenerationRewriteSegmentCapLimiterFreshPlanCap)].Store(1)
 	db.vlogGenerationRewriteProcessedLiveBytes.Store(900)
 	db.vlogGenerationRewriteProcessedStaleBytes.Store(450)
 	db.vlogGenerationRewriteNoReclaimRuns.Store(3)
@@ -7324,6 +7352,24 @@ func TestVlogGenerationStats_ReportRewriteBacklogAndDurations(t *testing.T) {
 	}
 	if got := stats["treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.per_segment_budget_bytes.fresh_plan"]; got != "0" {
 		t.Fatalf("rewrite queue run segment cap fresh-plan per-segment budget bytes=%q want 0", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.decisions"]; got != "9" {
+		t.Fatalf("rewrite queue run segment cap decisions=%q want 9", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.decisions.fresh_plan"]; got != "4" {
+		t.Fatalf("rewrite queue run segment cap fresh-plan decisions=%q want 4", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.limiter_count.budget_tokens"]; got != "5" {
+		t.Fatalf("rewrite queue run segment cap limiter_count.budget_tokens=%q want 5", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.limiter_count.checkpoint_kick_safety"]; got != "2" {
+		t.Fatalf("rewrite queue run segment cap limiter_count.checkpoint_kick_safety=%q want 2", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.limiter_count.fresh_plan_queue_threshold.fresh_plan"]; got != "3" {
+		t.Fatalf("rewrite queue run segment cap limiter_count.fresh_plan_queue_threshold.fresh_plan=%q want 3", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.limiter_count.fresh_plan_cap.fresh_plan"]; got != "1" {
+		t.Fatalf("rewrite queue run segment cap limiter_count.fresh_plan_cap.fresh_plan=%q want 1", got)
 	}
 	if got := stats["treedb.cache.vlog_generation.rewrite.queue_config.resume_max_segments"]; got != "1" {
 		t.Fatalf("rewrite queue config resume max segments=%q want 1", got)
