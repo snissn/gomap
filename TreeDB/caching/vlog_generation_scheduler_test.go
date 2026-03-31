@@ -2812,6 +2812,34 @@ func TestVlogGenerationRewriteQueue_LedgerOrdersByStaleRatio(t *testing.T) {
 	if got, want := opts.SourceFileIDs, []uint32{22}; len(got) != len(want) || got[0] != want[0] {
 		t.Fatalf("rewrite SourceFileIDs=%v want=%v", got, want)
 	}
+	stats := db.Stats()
+	if got := stats["treedb.cache.vlog_generation.rewrite.queued_debt.rewrite_started"]; got != "1" {
+		t.Fatalf("queued debt rewrite started=%q want 1", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.queued_debt.exec.runs"]; got != "1" {
+		t.Fatalf("queued debt exec runs=%q want 1", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.queued_debt.exec.segments"]; got != "1" {
+		t.Fatalf("queued debt exec segments=%q want 1", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.queued_debt.exec.plan_bytes_total"]; got != "128" {
+		t.Fatalf("queued debt exec plan bytes total=%q want 128", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.queued_debt.exec.plan_bytes_live"]; got != "64" {
+		t.Fatalf("queued debt exec plan bytes live=%q want 64", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.queued_debt.exec.plan_bytes_stale"]; got != "64" {
+		t.Fatalf("queued debt exec plan bytes stale=%q want 64", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.queued_debt.exec.effective_bytes_before"]; got != "64" {
+		t.Fatalf("queued debt exec effective bytes before=%q want 64", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.queued_debt.exec.effective_bytes_after"]; got != "32" {
+		t.Fatalf("queued debt exec effective bytes after=%q want 32", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.queued_debt.exec.reclaimed_bytes"]; got != "32" {
+		t.Fatalf("queued debt exec reclaimed bytes=%q want 32", got)
+	}
 }
 
 func TestVlogGenerationRewriteQueue_PrunesZeroLiveLedgerBeforeResume(t *testing.T) {

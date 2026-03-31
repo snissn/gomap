@@ -6394,6 +6394,18 @@ type DB struct {
 	vlogGenerationRewriteQueuedDebtSkipMinInterval             atomic.Uint64
 	vlogGenerationRewriteQueuedDebtSkipBudgetEmpty             atomic.Uint64
 	vlogGenerationRewriteQueuedDebtSkipNoChunk                 atomic.Uint64
+	vlogGenerationRewriteQueuedDebtExecRuns                    atomic.Uint64
+	vlogGenerationRewriteQueuedDebtExecSegments                atomic.Uint64
+	vlogGenerationRewriteQueuedDebtExecPlanBytesTotal          atomic.Uint64
+	vlogGenerationRewriteQueuedDebtExecPlanBytesLive           atomic.Uint64
+	vlogGenerationRewriteQueuedDebtExecPlanBytesStale          atomic.Uint64
+	vlogGenerationRewriteQueuedDebtExecEffectiveBytesBefore    atomic.Uint64
+	vlogGenerationRewriteQueuedDebtExecEffectiveBytesAfter     atomic.Uint64
+	vlogGenerationRewriteQueuedDebtExecGCBytesDeleted          atomic.Uint64
+	vlogGenerationRewriteQueuedDebtExecReclaimedBytes          atomic.Uint64
+	vlogGenerationRewriteQueuedDebtExecNoReclaimRuns           atomic.Uint64
+	vlogGenerationRewriteQueuedDebtExecSourceBytesRequested    atomic.Uint64
+	vlogGenerationRewriteQueuedDebtExecSourceBytesUnreferenced atomic.Uint64
 	vlogGenerationGCExecTotalNanos                             atomic.Uint64
 	vlogGenerationGCExecMaxNanos                               atomic.Uint64
 	vlogGenerationVacuumExecTotalNanos                         atomic.Uint64
@@ -15884,6 +15896,40 @@ planned:
 			if effectiveBytesBefore > effectiveBytesAfter {
 				db.vlogGenerationRewriteReclaimedBytes.Add(uint64(effectiveBytesBefore - effectiveBytesAfter))
 			}
+			queuedDebtExecuted := hadRewriteQueue && len(processedRewriteIDs) > 0
+			if queuedDebtExecuted {
+				db.vlogGenerationRewriteQueuedDebtExecRuns.Add(1)
+				db.vlogGenerationRewriteQueuedDebtExecSegments.Add(uint64(len(processedRewriteIDs)))
+				if processedLedgerTotalBytes > 0 {
+					db.vlogGenerationRewriteQueuedDebtExecPlanBytesTotal.Add(uint64(processedLedgerTotalBytes))
+				}
+				if processedLedgerLiveBytes > 0 {
+					db.vlogGenerationRewriteQueuedDebtExecPlanBytesLive.Add(uint64(processedLedgerLiveBytes))
+				}
+				if processedLedgerStaleBytes > 0 {
+					db.vlogGenerationRewriteQueuedDebtExecPlanBytesStale.Add(uint64(processedLedgerStaleBytes))
+				}
+				if effectiveBytesBefore > 0 {
+					db.vlogGenerationRewriteQueuedDebtExecEffectiveBytesBefore.Add(uint64(effectiveBytesBefore))
+				}
+				if effectiveBytesAfter > 0 {
+					db.vlogGenerationRewriteQueuedDebtExecEffectiveBytesAfter.Add(uint64(effectiveBytesAfter))
+				}
+				if gcBytesDeleted > 0 {
+					db.vlogGenerationRewriteQueuedDebtExecGCBytesDeleted.Add(uint64(gcBytesDeleted))
+				}
+				if effectiveBytesBefore > effectiveBytesAfter {
+					db.vlogGenerationRewriteQueuedDebtExecReclaimedBytes.Add(uint64(effectiveBytesBefore - effectiveBytesAfter))
+				} else if effectiveBytesBefore > 0 {
+					db.vlogGenerationRewriteQueuedDebtExecNoReclaimRuns.Add(1)
+				}
+				if stats.SourceBytesRequested > 0 {
+					db.vlogGenerationRewriteQueuedDebtExecSourceBytesRequested.Add(uint64(stats.SourceBytesRequested))
+				}
+				if stats.SourceBytesUnreferenced > 0 {
+					db.vlogGenerationRewriteQueuedDebtExecSourceBytesUnreferenced.Add(uint64(stats.SourceBytesUnreferenced))
+				}
+			}
 			locallyEffectiveProcessedDebt := len(processedRewriteIDs) > 0 && processedLedgerOK && processedLedgerStaleBytes > 0 && stats.RecordsCopied > 0
 			if processedLedgerOK {
 				if processedLedgerLiveBytes > 0 {
@@ -22364,6 +22410,18 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_generation.rewrite.queued_debt.skip.min_interval"] = fmt.Sprintf("%d", db.vlogGenerationRewriteQueuedDebtSkipMinInterval.Load())
 	stats["treedb.cache.vlog_generation.rewrite.queued_debt.skip.budget_empty"] = fmt.Sprintf("%d", db.vlogGenerationRewriteQueuedDebtSkipBudgetEmpty.Load())
 	stats["treedb.cache.vlog_generation.rewrite.queued_debt.skip.no_chunk"] = fmt.Sprintf("%d", db.vlogGenerationRewriteQueuedDebtSkipNoChunk.Load())
+	stats["treedb.cache.vlog_generation.rewrite.queued_debt.exec.runs"] = fmt.Sprintf("%d", db.vlogGenerationRewriteQueuedDebtExecRuns.Load())
+	stats["treedb.cache.vlog_generation.rewrite.queued_debt.exec.segments"] = fmt.Sprintf("%d", db.vlogGenerationRewriteQueuedDebtExecSegments.Load())
+	stats["treedb.cache.vlog_generation.rewrite.queued_debt.exec.plan_bytes_total"] = fmt.Sprintf("%d", db.vlogGenerationRewriteQueuedDebtExecPlanBytesTotal.Load())
+	stats["treedb.cache.vlog_generation.rewrite.queued_debt.exec.plan_bytes_live"] = fmt.Sprintf("%d", db.vlogGenerationRewriteQueuedDebtExecPlanBytesLive.Load())
+	stats["treedb.cache.vlog_generation.rewrite.queued_debt.exec.plan_bytes_stale"] = fmt.Sprintf("%d", db.vlogGenerationRewriteQueuedDebtExecPlanBytesStale.Load())
+	stats["treedb.cache.vlog_generation.rewrite.queued_debt.exec.effective_bytes_before"] = fmt.Sprintf("%d", db.vlogGenerationRewriteQueuedDebtExecEffectiveBytesBefore.Load())
+	stats["treedb.cache.vlog_generation.rewrite.queued_debt.exec.effective_bytes_after"] = fmt.Sprintf("%d", db.vlogGenerationRewriteQueuedDebtExecEffectiveBytesAfter.Load())
+	stats["treedb.cache.vlog_generation.rewrite.queued_debt.exec.gc_bytes_deleted"] = fmt.Sprintf("%d", db.vlogGenerationRewriteQueuedDebtExecGCBytesDeleted.Load())
+	stats["treedb.cache.vlog_generation.rewrite.queued_debt.exec.reclaimed_bytes"] = fmt.Sprintf("%d", db.vlogGenerationRewriteQueuedDebtExecReclaimedBytes.Load())
+	stats["treedb.cache.vlog_generation.rewrite.queued_debt.exec.no_reclaim_runs"] = fmt.Sprintf("%d", db.vlogGenerationRewriteQueuedDebtExecNoReclaimRuns.Load())
+	stats["treedb.cache.vlog_generation.rewrite.queued_debt.exec.source_bytes_requested"] = fmt.Sprintf("%d", db.vlogGenerationRewriteQueuedDebtExecSourceBytesRequested.Load())
+	stats["treedb.cache.vlog_generation.rewrite.queued_debt.exec.source_bytes_unreferenced"] = fmt.Sprintf("%d", db.vlogGenerationRewriteQueuedDebtExecSourceBytesUnreferenced.Load())
 	stats["treedb.cache.vlog_generation.rewrite.queue_progress.passes"] = fmt.Sprintf("%d", rewriteQueueProgressPasses)
 	stats["treedb.cache.vlog_generation.rewrite.queue_progress.snapshot_errors"] = fmt.Sprintf("%d", rewriteQueueProgressSnapshotErrors)
 	stats["treedb.cache.vlog_generation.rewrite.queue_progress.segments_before_total"] = fmt.Sprintf("%d", rewriteQueueProgressSegmentsBeforeTotal)
