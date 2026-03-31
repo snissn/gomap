@@ -386,6 +386,30 @@ func TestVlogGenerationRewriteQueueLiveBytesSnapshot_UnknownWhenLedgerMissing(t 
 	}
 }
 
+func TestVlogGenerationRewriteQueueLiveBytesSnapshot_DeduplicatesDuplicateLedgerEntries(t *testing.T) {
+	db := &DB{}
+	db.vlogGenerationRewriteQueueMu.Lock()
+	db.vlogGenerationRewriteQueueLoaded = true
+	db.vlogGenerationRewriteLedger = []backenddb.ValueLogRewritePlanSegment{
+		{FileID: 1, BytesLive: 100},
+		// Duplicate FileID: last entry wins (same as legacy byID behavior).
+		{FileID: 1, BytesLive: 250},
+		{FileID: 2, BytesLive: 50},
+	}
+	db.vlogGenerationRewriteQueueMu.Unlock()
+
+	liveBytes, known, err := db.vlogGenerationRewriteQueueLiveBytesSnapshot([]uint32{1, 2})
+	if err != nil {
+		t.Fatalf("snapshot error with duplicate ledger entries: %v", err)
+	}
+	if !known {
+		t.Fatalf("expected known=true when duplicate-ledger ids are present")
+	}
+	if want := int64(250 + 50); liveBytes != want {
+		t.Fatalf("live bytes with duplicate ledger entries=%d want %d", liveBytes, want)
+	}
+}
+
 func BenchmarkVlogGenerationRewriteQueueLiveBytesSnapshot(b *testing.B) {
 	const (
 		ledgerSegments = 4096
