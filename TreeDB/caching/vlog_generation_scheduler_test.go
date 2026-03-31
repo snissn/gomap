@@ -7401,6 +7401,21 @@ func TestVlogGenerationStats_ReportRewriteBacklogAndDurations(t *testing.T) {
 	if got := stats["treedb.cache.vlog_generation.rewrite.queue_run_segment_cap"]; got != "1" {
 		t.Fatalf("rewrite queue run segment cap=%q want 1", got)
 	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.queue_live_hint.known"]; got != "true" {
+		t.Fatalf("rewrite queue live hint known=%q want true", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.queue_live_hint.ids_present"]; got != "2" {
+		t.Fatalf("rewrite queue live hint ids present=%q want 2", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.queue_live_hint.ids_known"]; got != "2" {
+		t.Fatalf("rewrite queue live hint ids known=%q want 2", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.queue_live_hint.coverage_pct"]; got != "100.000" {
+		t.Fatalf("rewrite queue live hint coverage pct=%q want 100.000", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.queue_live_hint.bytes"]; got != "1200" {
+		t.Fatalf("rewrite queue live hint bytes=%q want 1200", got)
+	}
 	if got := stats["treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.checkpoint_kick"]; got != "1" {
 		t.Fatalf("rewrite queue run segment cap checkpoint kick=%q want 1", got)
 	}
@@ -7816,6 +7831,21 @@ func TestVlogGenerationStats_QueueCapHintRequiresFullCoverage(t *testing.T) {
 	db.vlogGenerationRewriteQueueMu.Unlock()
 
 	stats := db.Stats()
+	if got := stats["treedb.cache.vlog_generation.rewrite.queue_live_hint.known"]; got != "false" {
+		t.Fatalf("rewrite queue live hint known=%q want false", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.queue_live_hint.ids_present"]; got != "2" {
+		t.Fatalf("rewrite queue live hint ids present=%q want 2", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.queue_live_hint.ids_known"]; got != "1" {
+		t.Fatalf("rewrite queue live hint ids known=%q want 1", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.queue_live_hint.coverage_pct"]; got != "50.000" {
+		t.Fatalf("rewrite queue live hint coverage pct=%q want 50.000", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.queue_live_hint.bytes"]; got != "700" {
+		t.Fatalf("rewrite queue live hint bytes=%q want 700", got)
+	}
 	if got := stats["treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.per_segment_budget_bytes"]; got != "256" {
 		t.Fatalf("rewrite queue run segment cap per-segment budget bytes=%q want 256", got)
 	}
