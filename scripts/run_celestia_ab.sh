@@ -948,6 +948,9 @@ def build_maintenance_from_light_stats(stats: dict[str, str]) -> dict[str, objec
         "rewrite_queue_run_segment_cap_limiter_count_checkpoint_kick_safety": stat_int(
             "treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.limiter_count.checkpoint_kick_safety",
         ),
+        "rewrite_queue_run_segment_cap_limiter_count_checkpoint_kick_burst": stat_int(
+            "treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.limiter_count.checkpoint_kick_burst",
+        ),
         "rewrite_queue_run_segment_cap_limiter_count_fresh_plan_queue_threshold": stat_int(
             "treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.limiter_count.fresh_plan_queue_threshold.fresh_plan",
         ),
@@ -1542,6 +1545,7 @@ with runs_csv.open("w", newline="", encoding="utf-8") as fh:
         "rewrite_queue_run_segment_cap_limiter_count_budget_tokens",
         "rewrite_queue_run_segment_cap_limiter_count_debt_drain_cap",
         "rewrite_queue_run_segment_cap_limiter_count_checkpoint_kick_safety",
+        "rewrite_queue_run_segment_cap_limiter_count_checkpoint_kick_burst",
         "rewrite_queue_run_segment_cap_limiter_count_fresh_plan_queue_threshold",
         "rewrite_queue_run_segment_cap_limiter_count_fresh_plan_cap",
         "rewrite_queue_progress_passes",
@@ -1733,6 +1737,7 @@ with runs_csv.open("w", newline="", encoding="utf-8") as fh:
             summary.get("rewrite_queue_run_segment_cap_limiter_count_budget_tokens", 0),
             summary.get("rewrite_queue_run_segment_cap_limiter_count_debt_drain_cap", 0),
             summary.get("rewrite_queue_run_segment_cap_limiter_count_checkpoint_kick_safety", 0),
+            summary.get("rewrite_queue_run_segment_cap_limiter_count_checkpoint_kick_burst", 0),
             summary.get("rewrite_queue_run_segment_cap_limiter_count_fresh_plan_queue_threshold", 0),
             summary.get("rewrite_queue_run_segment_cap_limiter_count_fresh_plan_cap", 0),
             summary.get("rewrite_queue_progress_passes", 0),
