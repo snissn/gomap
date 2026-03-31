@@ -668,9 +668,51 @@ def build_maintenance_from_light_stats(stats: dict[str, str]) -> dict[str, objec
         return str(raw)
 
     out: dict[str, object] = {
+        "maintenance_attempts": stat_int("treedb.cache.vlog_generation.maintenance.attempts"),
+        "maintenance_acquired": stat_int("treedb.cache.vlog_generation.maintenance.acquired"),
+        "maintenance_collisions": stat_int("treedb.cache.vlog_generation.maintenance.collisions"),
+        "maintenance_skip_priority_pending": stat_int(
+            "treedb.cache.vlog_generation.maintenance.skip.priority_pending",
+        ),
+        "maintenance_skip_quiet_window": stat_int(
+            "treedb.cache.vlog_generation.maintenance.skip.quiet_window",
+        ),
+        "maintenance_skip_age_blocked_gate": stat_int(
+            "treedb.cache.vlog_generation.maintenance.skip.age_blocked_gate",
+        ),
+        "maintenance_skip_stage_gate_not_due": stat_int(
+            "treedb.cache.vlog_generation.maintenance.skip.stage_gate_not_due",
+        ),
+        "maintenance_skip_stage_gate_due_reserved": stat_int(
+            "treedb.cache.vlog_generation.maintenance.skip.stage_gate_due_reserved",
+        ),
+        "maintenance_skip_before_first_checkpoint": stat_int(
+            "treedb.cache.vlog_generation.maintenance.skip.before_first_checkpoint",
+        ),
+        "maintenance_skip_checkpoint_inflight": stat_int(
+            "treedb.cache.vlog_generation.maintenance.skip.checkpoint_inflight",
+        ),
+        "maintenance_skip_maintenance_phase": stat_int(
+            "treedb.cache.vlog_generation.maintenance.skip.maintenance_phase",
+        ),
+        "maintenance_skip_wal_on_periodic": stat_int(
+            "treedb.cache.vlog_generation.maintenance.skip.wal_on_periodic",
+        ),
         "rewrite_runs": stat_int("treedb.cache.vlog_generation.rewrite.runs"),
         "rewrite_plan_runs": stat_int("treedb.cache.vlog_generation.rewrite.plan_runs"),
         "rewrite_plan_selected": stat_int("treedb.cache.vlog_generation.rewrite.plan_selected"),
+        "rewrite_plan_selected_segments_total": stat_int(
+            "treedb.cache.vlog_generation.rewrite.plan_selected_segments_total",
+        ),
+        "rewrite_plan_selected_bytes_stale": stat_int(
+            "treedb.cache.vlog_generation.rewrite.plan_selected_bytes_stale",
+        ),
+        "rewrite_processed_stale_bytes": stat_int(
+            "treedb.cache.vlog_generation.rewrite.processed_stale_bytes",
+        ),
+        "rewrite_reclaimed_bytes": stat_int("treedb.cache.vlog_generation.rewrite.reclaimed_bytes"),
+        "rewrite_exec_total_ms": stat_float("treedb.cache.vlog_generation.rewrite.exec.total_ms"),
+        "rewrite_bytes_in": stat_int("treedb.cache.vlog_generation.rewrite.bytes_in"),
         "rewrite_exec_source_segments_requested_total": stat_int(
             "treedb.cache.vlog_generation.rewrite.exec.source_segments_requested_total",
         ),
@@ -786,6 +828,12 @@ def build_maintenance_from_light_stats(stats: dict[str, str]) -> dict[str, objec
         "rewrite_queue_progress_segments_grown_total": stat_int(
             "treedb.cache.vlog_generation.rewrite.queue_progress.segments_grown_total",
         ),
+        "rewrite_queue_progress_live_bytes_known_passes": stat_int(
+            "treedb.cache.vlog_generation.rewrite.queue_progress.live_bytes_known_passes",
+        ),
+        "rewrite_queue_progress_live_bytes_unknown_passes": stat_int(
+            "treedb.cache.vlog_generation.rewrite.queue_progress.live_bytes_unknown_passes",
+        ),
         "rewrite_queue_progress_segments_delta_last": stat_int(
             "treedb.cache.vlog_generation.rewrite.queue_progress.segments_delta_last",
         ),
@@ -804,10 +852,67 @@ def build_maintenance_from_light_stats(stats: dict[str, str]) -> dict[str, objec
         "observed_gc_retry_dropped": stat_int("treedb.cache.vlog_generation.observed_gc.retry_dropped"),
     }
 
+    out["maintenance_skip_total"] = (
+        safe_int(out.get("maintenance_skip_wal_on_periodic"), 0)
+        + safe_int(out.get("maintenance_skip_maintenance_phase"), 0)
+        + safe_int(out.get("maintenance_skip_stage_gate_not_due"), 0)
+        + safe_int(out.get("maintenance_skip_stage_gate_due_reserved"), 0)
+        + safe_int(out.get("maintenance_skip_age_blocked_gate"), 0)
+        + safe_int(out.get("maintenance_skip_priority_pending"), 0)
+        + safe_int(out.get("maintenance_skip_quiet_window"), 0)
+        + safe_int(out.get("maintenance_skip_before_first_checkpoint"), 0)
+        + safe_int(out.get("maintenance_skip_checkpoint_inflight"), 0)
+    )
+    attempts = safe_float(out.get("maintenance_attempts"), 0.0)
+    acquired = safe_float(out.get("maintenance_acquired"), 0.0)
+    collisions = safe_float(out.get("maintenance_collisions"), 0.0)
+    out["maintenance_acquire_rate_pct"] = (100.0 * acquired / attempts) if attempts > 0 else 0.0
+    out["maintenance_collision_rate_pct"] = (100.0 * collisions / attempts) if attempts > 0 else 0.0
+
     out["rewrite_queue_progress_live_bytes_net_drain_total"] = (
         stat_int("treedb.cache.vlog_generation.rewrite.queue_progress.live_bytes_drained_total")
         - stat_int("treedb.cache.vlog_generation.rewrite.queue_progress.live_bytes_grown_total")
     )
+    out["rewrite_queue_progress_segments_net_drain_total"] = (
+        safe_int(out.get("rewrite_queue_progress_segments_drained_total"), 0)
+        - safe_int(out.get("rewrite_queue_progress_segments_grown_total"), 0)
+    )
+    queue_progress_passes = safe_float(out.get("rewrite_queue_progress_passes"), 0.0)
+    known_passes = safe_float(out.get("rewrite_queue_progress_live_bytes_known_passes"), 0.0)
+    out["rewrite_queue_progress_live_bytes_known_pct"] = (
+        100.0 * known_passes / queue_progress_passes if queue_progress_passes > 0 else 0.0
+    )
+
+    selected_segments = safe_float(out.get("rewrite_plan_selected_segments_total"), 0.0)
+    exec_segments = safe_float(out.get("rewrite_exec_source_segments_requested_total"), 0.0)
+    out["rewrite_segment_realization_pct"] = (
+        100.0 * exec_segments / selected_segments if selected_segments > 0 else 0.0
+    )
+    selected_stale = safe_float(out.get("rewrite_plan_selected_bytes_stale"), 0.0)
+    processed_stale = safe_float(out.get("rewrite_processed_stale_bytes"), 0.0)
+    reclaimed = safe_float(out.get("rewrite_reclaimed_bytes"), 0.0)
+    out["rewrite_stale_selection_coverage_pct"] = (
+        100.0 * processed_stale / selected_stale if selected_stale > 0 else 0.0
+    )
+    out["rewrite_immediate_reclaim_pct"] = (
+        100.0 * reclaimed / processed_stale if processed_stale > 0 else 0.0
+    )
+    out["rewrite_stale_not_reclaimed_bytes"] = max(0.0, processed_stale - reclaimed)
+    rewrite_exec_secs = safe_float(out.get("rewrite_exec_total_ms"), 0.0) / 1000.0
+    bytes_in = safe_float(out.get("rewrite_bytes_in"), 0.0)
+    out["rewrite_exec_throughput_bytes_per_sec"] = (
+        bytes_in / rewrite_exec_secs if rewrite_exec_secs > 0 else 0.0
+    )
+    source_bytes_requested = safe_float(out.get("rewrite_exec_source_bytes_requested_total"), 0.0)
+    source_bytes_unref = safe_float(out.get("rewrite_exec_source_bytes_unreferenced_total"), 0.0)
+    source_bytes_still_ref = safe_float(out.get("rewrite_exec_source_bytes_still_referenced_total"), 0.0)
+    out["rewrite_source_unreferenced_bytes_pct"] = (
+        100.0 * source_bytes_unref / source_bytes_requested if source_bytes_requested > 0 else 0.0
+    )
+    out["rewrite_source_still_referenced_bytes_pct"] = (
+        100.0 * source_bytes_still_ref / source_bytes_requested if source_bytes_requested > 0 else 0.0
+    )
+
     observed_gc_queued = stat_int("treedb.cache.vlog_generation.observed_gc.queued_ids")
     observed_gc_taken = stat_int("treedb.cache.vlog_generation.observed_gc.taken_ids")
     out["observed_gc_drain_pct"] = (
@@ -1099,6 +1204,18 @@ with runs_csv.open("w", newline="", encoding="utf-8") as fh:
         "run_attempt",
         "run_max_attempts",
         "rewrite_exit_code",
+        "maintenance_attempts",
+        "maintenance_acquired",
+        "maintenance_collisions",
+        "maintenance_acquire_rate_pct",
+        "maintenance_collision_rate_pct",
+        "maintenance_skip_total",
+        "maintenance_skip_priority_pending",
+        "maintenance_skip_quiet_window",
+        "maintenance_skip_age_blocked_gate",
+        "maintenance_skip_stage_gate_not_due",
+        "maintenance_skip_stage_gate_due_reserved",
+        "maintenance_skip_before_first_checkpoint",
         "rewrite_runs",
         "rewrite_plan_runs",
         "rewrite_plan_selected",
@@ -1108,6 +1225,13 @@ with runs_csv.open("w", newline="", encoding="utf-8") as fh:
         "rewrite_exec_source_bytes_requested_total",
         "rewrite_exec_source_bytes_still_referenced_total",
         "rewrite_exec_source_bytes_unreferenced_total",
+        "rewrite_segment_realization_pct",
+        "rewrite_stale_selection_coverage_pct",
+        "rewrite_immediate_reclaim_pct",
+        "rewrite_stale_not_reclaimed_bytes",
+        "rewrite_exec_throughput_bytes_per_sec",
+        "rewrite_source_unreferenced_bytes_pct",
+        "rewrite_source_still_referenced_bytes_pct",
         "rewrite_queue_config_resume_max_segments",
         "rewrite_queue_config_debt_drain_max_segments",
         "rewrite_queue_config_fresh_plan_debt_drain_min_segments",
@@ -1139,7 +1263,9 @@ with runs_csv.open("w", newline="", encoding="utf-8") as fh:
         "rewrite_queue_progress_passes",
         "rewrite_queue_progress_segments_drained_total",
         "rewrite_queue_progress_segments_grown_total",
+        "rewrite_queue_progress_segments_net_drain_total",
         "rewrite_queue_progress_segments_delta_last",
+        "rewrite_queue_progress_live_bytes_known_pct",
         "rewrite_queue_progress_live_bytes_net_drain_total",
         "rewrite_queue_progress_live_bytes_delta_last",
         "rewrite_queue_progress_snapshot_errors",
@@ -1213,6 +1339,18 @@ with runs_csv.open("w", newline="", encoding="utf-8") as fh:
             run_attempt(r),
             run_max_attempts(r),
             rw.get("exit_code"),
+            summary.get("maintenance_attempts", 0),
+            summary.get("maintenance_acquired", 0),
+            summary.get("maintenance_collisions", 0),
+            summary.get("maintenance_acquire_rate_pct", 0),
+            summary.get("maintenance_collision_rate_pct", 0),
+            summary.get("maintenance_skip_total", 0),
+            summary.get("maintenance_skip_priority_pending", 0),
+            summary.get("maintenance_skip_quiet_window", 0),
+            summary.get("maintenance_skip_age_blocked_gate", 0),
+            summary.get("maintenance_skip_stage_gate_not_due", 0),
+            summary.get("maintenance_skip_stage_gate_due_reserved", 0),
+            summary.get("maintenance_skip_before_first_checkpoint", 0),
             summary.get("rewrite_runs", 0),
             summary.get("rewrite_plan_runs", 0),
             summary.get("rewrite_plan_selected", 0),
@@ -1222,6 +1360,13 @@ with runs_csv.open("w", newline="", encoding="utf-8") as fh:
             summary.get("rewrite_exec_source_bytes_requested_total", 0),
             summary.get("rewrite_exec_source_bytes_still_referenced_total", 0),
             summary.get("rewrite_exec_source_bytes_unreferenced_total", 0),
+            summary.get("rewrite_segment_realization_pct", 0),
+            summary.get("rewrite_stale_selection_coverage_pct", 0),
+            summary.get("rewrite_immediate_reclaim_pct", 0),
+            summary.get("rewrite_stale_not_reclaimed_bytes", 0),
+            summary.get("rewrite_exec_throughput_bytes_per_sec", 0),
+            summary.get("rewrite_source_unreferenced_bytes_pct", 0),
+            summary.get("rewrite_source_still_referenced_bytes_pct", 0),
             summary.get("rewrite_queue_config_resume_max_segments", 0),
             summary.get("rewrite_queue_config_debt_drain_max_segments", 0),
             summary.get("rewrite_queue_config_fresh_plan_debt_drain_min_segments", 0),
@@ -1253,7 +1398,9 @@ with runs_csv.open("w", newline="", encoding="utf-8") as fh:
             summary.get("rewrite_queue_progress_passes", 0),
             summary.get("rewrite_queue_progress_segments_drained_total", 0),
             summary.get("rewrite_queue_progress_segments_grown_total", 0),
+            summary.get("rewrite_queue_progress_segments_net_drain_total", 0),
             summary.get("rewrite_queue_progress_segments_delta_last", 0),
+            summary.get("rewrite_queue_progress_live_bytes_known_pct", 0),
             summary.get("rewrite_queue_progress_live_bytes_net_drain_total", 0),
             summary.get("rewrite_queue_progress_live_bytes_delta_last", 0),
             summary.get("rewrite_queue_progress_snapshot_errors", 0),
