@@ -973,6 +973,11 @@ func (db *DB) applyValueLogDictProfileForClass(class vlogDictClass) {
 	if db == nil {
 		return
 	}
+	db.valueLogDictApplyMu.RLock()
+	defer db.valueLogDictApplyMu.RUnlock()
+	if db.closing.Load() {
+		return
+	}
 	if int(class) >= vlogDictClassCount {
 		class = vlogDictClassSingleValue
 	}

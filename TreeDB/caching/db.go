@@ -5960,6 +5960,7 @@ type DB struct {
 	valueLogDictMetricsPauseBytes  int
 
 	valueLogDictTrainerMu      sync.RWMutex
+	valueLogDictApplyMu        sync.RWMutex
 	valueLogDictTrainer        *compression.Trainer
 	valueLogDictTrainerByClass [vlogDictClassCount]*compression.Trainer
 	valueLogDictKickCh         chan struct{}
@@ -6320,6 +6321,7 @@ type DB struct {
 	vlogGenerationCheckpointKickActive                           atomic.Bool
 	vlogGenerationRewriteQueue                                   []uint32
 	vlogGenerationRewriteLedger                                  []backenddb.ValueLogRewritePlanSegment
+	vlogGenerationRewriteLedgerByFileID                          map[uint32]backenddb.ValueLogRewritePlanSegment
 	vlogGenerationRewritePenalties                               map[uint32]valueLogGenerationRewritePenalty
 	vlogGenerationRewriteStagePending                            bool
 	vlogGenerationRewriteStageObservedUnixNano                   int64
@@ -13938,14 +13940,30 @@ func (db *DB) vlogGenerationRewriteQueueLiveBytesSnapshot(ids []uint32) (liveByt
 	if db == nil || len(ids) == 0 {
 		return 0, true, nil
 	}
-	ledger, err := db.currentVlogGenerationRewriteLedger()
-	if err != nil {
+	db.vlogGenerationRewriteQueueMu.Lock()
+	defer db.vlogGenerationRewriteQueueMu.Unlock()
+	if err := db.loadVlogGenerationRewriteQueueLocked(); err != nil {
 		return 0, false, err
 	}
-	if len(ledger) == 0 {
+	ledgerByFileID := db.vlogGenerationRewriteLedgerByFileID
+	if len(ledgerByFileID) == 0 && len(db.vlogGenerationRewriteLedger) > 0 {
+		ledgerByFileID = buildVlogGenerationRewriteLedgerByFileID(db.vlogGenerationRewriteLedger)
+		db.vlogGenerationRewriteLedgerByFileID = ledgerByFileID
+	}
+	if len(ledgerByFileID) == 0 {
 		return 0, false, nil
 	}
-	liveBytes, known = sumVlogRewritePlanLiveBytes(ledger, ids)
+	for _, id := range ids {
+		if id == 0 {
+			continue
+		}
+		seg, ok := ledgerByFileID[id]
+		if !ok {
+			continue
+		}
+		known = true
+		liveBytes += seg.BytesLive
+	}
 	if liveBytes < 0 {
 		liveBytes = 0
 	}
@@ -17130,6 +17148,10 @@ func (db *DB) Close() error {
 	db.writeMu.Unlock()
 	db.flushMu.Unlock()
 	db.wg.Wait()
+	// Drain any in-flight dict-profile publish callbacks before teardown.
+	// New callbacks will observe closing=true and return without touching stores.
+	db.valueLogDictApplyMu.Lock()
+	db.valueLogDictApplyMu.Unlock()
 	// Retained-prune scans use the live value-log reader and backend state.
 	// Wait for any in-flight prune before tearing down readers or removing
 	// lane files so Close cannot race a background live-ID walk.
