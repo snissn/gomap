@@ -365,6 +365,14 @@ def build_summary(stats: dict[str, Any]) -> dict[str, Any]:
         "rewrite_queue_config_debt_drain_max_segments": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queue_config.debt_drain_max_segments"),
         "rewrite_queue_config_fresh_plan_debt_drain_min_segments": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queue_config.fresh_plan_debt_drain_min_segments"),
         "rewrite_queue_config_fresh_plan_debt_drain_max_segments": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queue_config.fresh_plan_debt_drain_max_segments"),
+        "rewrite_queued_debt_passes": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queued_debt.passes"),
+        "rewrite_queued_debt_rewrite_started": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queued_debt.rewrite_started"),
+        "rewrite_queued_debt_skip_quiet_window": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queued_debt.skip.quiet_window"),
+        "rewrite_queued_debt_skip_cancel_backoff": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queued_debt.skip.cancel_backoff"),
+        "rewrite_queued_debt_skip_ineffective_backoff": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queued_debt.skip.ineffective_backoff"),
+        "rewrite_queued_debt_skip_min_interval": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queued_debt.skip.min_interval"),
+        "rewrite_queued_debt_skip_budget_empty": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queued_debt.skip.budget_empty"),
+        "rewrite_queued_debt_skip_no_chunk": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queued_debt.skip.no_chunk"),
         "rewrite_queue_live_hint_known": metric_str(stats, "treedb.cache.vlog_generation.rewrite.queue_live_hint.known", "false"),
         "rewrite_queue_live_hint_ids_present": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queue_live_hint.ids_present"),
         "rewrite_queue_live_hint_ids_known": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queue_live_hint.ids_known"),
@@ -551,6 +559,18 @@ def build_summary(stats: dict[str, Any]) -> dict[str, Any]:
     m["checkpoint_kick_rewrite_rate_pct"] = pct(
         m["checkpoint_kick_rewrite_runs"],
         m["checkpoint_kick_runs"],
+    )
+    m["rewrite_queued_debt_rewrite_start_rate_pct"] = pct(
+        m["rewrite_queued_debt_rewrite_started"],
+        m["rewrite_queued_debt_passes"],
+    )
+    m["rewrite_queued_debt_skip_total"] = (
+        m["rewrite_queued_debt_skip_quiet_window"]
+        + m["rewrite_queued_debt_skip_cancel_backoff"]
+        + m["rewrite_queued_debt_skip_ineffective_backoff"]
+        + m["rewrite_queued_debt_skip_min_interval"]
+        + m["rewrite_queued_debt_skip_budget_empty"]
+        + m["rewrite_queued_debt_skip_no_chunk"]
     )
 
     m["rewrite_plan_select_rate_pct"] = pct(m["rewrite_plan_selected"], m["rewrite_plan_runs"])
