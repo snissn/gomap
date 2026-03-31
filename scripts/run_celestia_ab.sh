@@ -157,12 +157,21 @@ if [[ "$REWRITE_ENABLED" == "1" && ! -x "$TREEMAP_BIN" ]]; then
   exit 1
 fi
 
+# Freeze the resolved run command early so per-variant env sourcing cannot
+# accidentally mutate the executed launcher command.
+RUN_CMD_FROZEN="$RUN_CMD"
+if [[ "$RUN_CMD_FROZEN" == *"run_celestia_ab.sh"* ]]; then
+  echo "RUN_CMD resolves to run_celestia_ab.sh (self-invocation): $RUN_CMD_FROZEN" >&2
+  exit 1
+fi
+
 mkdir -p "$OUT/runs"
 
 cat >"$OUT/meta.txt" <<META
 ts=$TS
 root=$ROOT
 run_cmd=$RUN_CMD
+run_cmd_frozen=$RUN_CMD_FROZEN
 control_env_file=$CONTROL_ENV_FILE
 candidate_env_file=$CANDIDATE_ENV_FILE
 treemap_bin=$TREEMAP_BIN
@@ -346,9 +355,9 @@ run_variant() {
       # Non-login shell avoids user profile side effects (e.g. tty-dependent exports)
       # that can fail under nohup/background runs.
       if [[ "$RUN_TIMEOUT_SECONDS" -gt 0 ]]; then
-        timeout --signal=TERM --kill-after=60 "${RUN_TIMEOUT_SECONDS}s" bash -c "$RUN_CMD"
+        timeout --signal=TERM --kill-after=60 "${RUN_TIMEOUT_SECONDS}s" bash -c "$RUN_CMD_FROZEN"
       else
-        bash -c "$RUN_CMD"
+        bash -c "$RUN_CMD_FROZEN"
       fi
     ) >"$attempt_dir/launcher.log" 2>&1
     run_rc=$?
