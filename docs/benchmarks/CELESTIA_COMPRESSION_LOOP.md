@@ -172,6 +172,7 @@ Notes:
 - `runs.csv` also includes rewrite queue pressure and checkpoint-kick behavior KPIs (for example `rewrite_queue_len`, `rewrite_queue_live_bytes_after_tokens`, `rewrite_queue_eta_seconds_budget`, `checkpoint_kick_skipped_hot_no_debt`) so incremental rewrite headroom is visible without log spelunking.
 - `runs.csv` includes checkpoint-kick burst limiter usage (`rewrite_queue_run_segment_cap_limiter_count_checkpoint_kick_burst`) so queued-debt burst behavior is visible directly in control/candidate comparisons.
 - `pairs.csv` includes per-pair deltas for those KPIs so control/candidate capacity behavior can be compared without post-processing scripts.
+- `pairs.csv` includes `delta_rewrite_queue_run_segment_cap_limiter_count_checkpoint_kick_burst` so checkpoint-kick burst usage changes are visible at pair level.
 - To use pre-policy behavior, set `AB_POLICY=legacy`.
 
 ## Process Review Cadence

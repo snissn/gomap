@@ -140,7 +140,7 @@ Outputs:
 Light stats snapshots in each run directory are captured via `treemap stats -rw`
 with automatic fallback to `treemap vlog-gc -rw -dry-run`.
 
-`runs.csv` includes per-run rewrite-capacity KPIs (including `rewrite_queue_run_segment_cap_limiter_count_checkpoint_kick_burst`) and `pairs.csv` includes pair deltas for those KPIs, so candidate/control maintenance behavior can be evaluated directly from CSV outputs.
+`runs.csv` includes per-run rewrite-capacity KPIs (including `rewrite_queue_run_segment_cap_limiter_count_checkpoint_kick_burst`) and `pairs.csv` includes pair deltas for those KPIs (including `delta_rewrite_queue_run_segment_cap_limiter_count_checkpoint_kick_burst`), so candidate/control maintenance behavior can be evaluated directly from CSV outputs.
 This includes queue-pressure and checkpoint-kick fields to diagnose whether rewrite is keeping up incrementally during hot sync windows.
 
 The harness alternates run order per pair (`control->candidate`, then
