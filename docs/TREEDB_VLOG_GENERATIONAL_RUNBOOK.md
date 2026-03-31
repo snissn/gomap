@@ -33,13 +33,10 @@ Primary keys:
 - `treedb.cache.vlog_generation.rewrite.queue_run_segment_cap`
 - `treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.limiter`
 - `treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.by_budget`
-- `treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.per_segment_budget_bytes`
 - `treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.checkpoint_kick`
 - `treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.limiter.checkpoint_kick`
-- `treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.per_segment_budget_bytes.checkpoint_kick`
 - `treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.fresh_plan`
 - `treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.limiter.fresh_plan`
-- `treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.per_segment_budget_bytes.fresh_plan`
 - `treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.decisions`
 - `treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.decisions.fresh_plan`
 - `treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.limiter_count.*`
@@ -58,10 +55,6 @@ Primary keys:
 - `treedb.cache.vlog_generation.gc.deleted_bytes`
 - `treedb.cache.vlog_generation.vacuum.runs`
 - `treedb.cache.vlog_generation.vacuum.failures`
-
-Note: `rewrite.queue_run_segment_cap.per_segment_budget_bytes*` uses queue live-byte
-hints when available (average live bytes per queued segment), and falls back to
-the warm segment target when live-byte hints are unavailable.
 
 ## Live Run Capacity Report
 For `run_celestia`-style runs, analyze the latest diagnostics snapshot with:

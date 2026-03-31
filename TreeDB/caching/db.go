@@ -13555,25 +13555,7 @@ type vlogGenerationRewriteSegmentCapDecision struct {
 	debtDrainMaxTarget int
 }
 
-func (db *DB) vlogGenerationRewritePerSegmentBudgetBytes(queueLen int, queueLiveBytes int64, queueLiveKnown bool) int64 {
-	perSegmentBudget := defaultVlogGenerationWarmTargetBytes
-	if db != nil && db.valueLogGenerationWarmTarget > 0 {
-		perSegmentBudget = db.valueLogGenerationWarmTarget
-	}
-	if queueLen <= 0 || !queueLiveKnown || queueLiveBytes <= 0 {
-		return perSegmentBudget
-	}
-	avgLiveBytes := queueLiveBytes / int64(queueLen)
-	if queueLiveBytes%int64(queueLen) != 0 {
-		avgLiveBytes++
-	}
-	if avgLiveBytes > 0 {
-		return avgLiveBytes
-	}
-	return perSegmentBudget
-}
-
-func (db *DB) vlogGenerationRewriteSegmentCapForRunWithHint(queueLen int, budgetTokens int64, queueLiveBytes int64, queueLiveKnown bool, opts vlogGenerationMaintenanceOptions) vlogGenerationRewriteSegmentCapDecision {
+func (db *DB) vlogGenerationRewriteSegmentCapForRun(queueLen int, budgetTokens int64, opts vlogGenerationMaintenanceOptions) vlogGenerationRewriteSegmentCapDecision {
 	resumeMaxSegments := vlogGenerationRewriteResumeMaxSegmentsEffective()
 	decision := vlogGenerationRewriteSegmentCapDecision{
 		maxSegments:        resumeMaxSegments,
@@ -13612,7 +13594,10 @@ func (db *DB) vlogGenerationRewriteSegmentCapForRunWithHint(queueLen int, budget
 		decision.limiter = vlogGenerationRewriteSegmentCapLimiterBudgetEmpty
 		return decision
 	}
-	perSegmentBudget := db.vlogGenerationRewritePerSegmentBudgetBytes(queueLen, queueLiveBytes, queueLiveKnown)
+	perSegmentBudget := db.valueLogGenerationWarmTarget
+	if perSegmentBudget <= 0 {
+		perSegmentBudget = defaultVlogGenerationWarmTargetBytes
+	}
 	decision.perSegmentBudget = perSegmentBudget
 	if perSegmentBudget <= 0 {
 		decision.maxSegments = 1
@@ -13634,15 +13619,11 @@ func (db *DB) vlogGenerationRewriteSegmentCapForRunWithHint(queueLen int, budget
 	return decision
 }
 
-func (db *DB) vlogGenerationRewriteSegmentCapForRun(queueLen int, budgetTokens int64, opts vlogGenerationMaintenanceOptions) vlogGenerationRewriteSegmentCapDecision {
-	return db.vlogGenerationRewriteSegmentCapForRunWithHint(queueLen, budgetTokens, 0, false, opts)
-}
-
 func (db *DB) vlogGenerationRewriteMaxSegmentsForRun(queueLen int, budgetTokens int64, opts vlogGenerationMaintenanceOptions) int {
 	return db.vlogGenerationRewriteSegmentCapForRun(queueLen, budgetTokens, opts).maxSegments
 }
 
-func (db *DB) vlogGenerationRewriteSegmentCapForFreshPlanWithHint(queueLen int, budgetTokens int64, queueLiveBytes int64, queueLiveKnown bool, opts vlogGenerationMaintenanceOptions) vlogGenerationRewriteSegmentCapDecision {
+func (db *DB) vlogGenerationRewriteSegmentCapForFreshPlan(queueLen int, budgetTokens int64, opts vlogGenerationMaintenanceOptions) vlogGenerationRewriteSegmentCapDecision {
 	resumeMaxSegments := vlogGenerationRewriteResumeMaxSegmentsEffective()
 	decision := vlogGenerationRewriteSegmentCapDecision{
 		maxSegments:        resumeMaxSegments,
@@ -13661,7 +13642,7 @@ func (db *DB) vlogGenerationRewriteSegmentCapForFreshPlanWithHint(queueLen int, 
 		decision.limiter = vlogGenerationRewriteSegmentCapLimiterFreshPlanQueueThreshold
 		return decision
 	}
-	decision = db.vlogGenerationRewriteSegmentCapForRunWithHint(queueLen, budgetTokens, queueLiveBytes, queueLiveKnown, opts)
+	decision = db.vlogGenerationRewriteSegmentCapForRun(queueLen, budgetTokens, opts)
 	if decision.maxSegments > freshPlanMax {
 		decision.maxSegments = freshPlanMax
 		decision.limiter = vlogGenerationRewriteSegmentCapLimiterFreshPlanCap
@@ -13670,10 +13651,6 @@ func (db *DB) vlogGenerationRewriteSegmentCapForFreshPlanWithHint(queueLen int, 
 		decision.maxSegments = 1
 	}
 	return decision
-}
-
-func (db *DB) vlogGenerationRewriteSegmentCapForFreshPlan(queueLen int, budgetTokens int64, opts vlogGenerationMaintenanceOptions) vlogGenerationRewriteSegmentCapDecision {
-	return db.vlogGenerationRewriteSegmentCapForFreshPlanWithHint(queueLen, budgetTokens, 0, false, opts)
 }
 
 func (db *DB) vlogGenerationRewriteMaxSegmentsForFreshPlan(queueLen int, budgetTokens int64, opts vlogGenerationMaintenanceOptions) int {
@@ -15407,13 +15384,7 @@ planned:
 			hadRewriteQueue := len(rewriteQueue) > 0
 			rewriteMaxSegments := vlogGenerationRewriteResumeMaxSegments
 			if hadRewriteQueue {
-				runDecision := db.vlogGenerationRewriteSegmentCapForRunWithHint(
-					len(rewriteQueue),
-					budgetTokens,
-					rewriteQueueBeforeLiveBytes,
-					rewriteQueueBeforeLiveKnown,
-					opts,
-				)
+				runDecision := db.vlogGenerationRewriteSegmentCapForRun(len(rewriteQueue), budgetTokens, opts)
 				rewriteMaxSegments = runDecision.maxSegments
 				db.observeVlogGenerationRewriteSegmentCapDecision(runDecision, false)
 			}
@@ -15438,42 +15409,16 @@ planned:
 					}
 				}
 				rewriteQueue = append([]uint32(nil), rewritePlan.SourceFileIDs...)
-				plannedQueueLiveBytes := int64(0)
-				plannedQueueLiveKnown := false
-				if len(rewritePlan.SelectedSegments) > 0 {
-					plannedQueueLiveKnown = true
-					if rewritePlan.SelectedBytesLive > 0 {
-						plannedQueueLiveBytes = rewritePlan.SelectedBytesLive
-					} else {
-						for i := range rewritePlan.SelectedSegments {
-							if live := rewritePlan.SelectedSegments[i].BytesLive; live > 0 {
-								plannedQueueLiveBytes += live
-							}
-						}
-					}
-				}
 				// Do not debt-drain freshly planned work in the same pass. The only
 				// exception is a confirmed staged rewrite-resume pass, which should
 				// be allowed to consume debt in bounded multi-segment chunks.
 				allowPlanDebtDrain := reason == vlogGenerationReasonRewriteResume && opts.rewriteDebtDrain
 				if allowPlanDebtDrain {
-					runDecision := db.vlogGenerationRewriteSegmentCapForRunWithHint(
-						len(rewriteQueue),
-						budgetTokens,
-						plannedQueueLiveBytes,
-						plannedQueueLiveKnown,
-						opts,
-					)
+					runDecision := db.vlogGenerationRewriteSegmentCapForRun(len(rewriteQueue), budgetTokens, opts)
 					rewriteMaxSegments = runDecision.maxSegments
 					db.observeVlogGenerationRewriteSegmentCapDecision(runDecision, false)
 				} else {
-					freshDecision := db.vlogGenerationRewriteSegmentCapForFreshPlanWithHint(
-						len(rewriteQueue),
-						budgetTokens,
-						plannedQueueLiveBytes,
-						plannedQueueLiveKnown,
-						opts,
-					)
+					freshDecision := db.vlogGenerationRewriteSegmentCapForFreshPlan(len(rewriteQueue), budgetTokens, opts)
 					rewriteMaxSegments = freshDecision.maxSegments
 					db.observeVlogGenerationRewriteSegmentCapDecision(freshDecision, true)
 				}
@@ -21887,40 +21832,28 @@ func (db *DB) Stats() map[string]string {
 	rewriteQueueFreshPlanSegmentCapLimiter := vlogGenerationRewriteSegmentCapLimiterNone
 	rewriteQueueFreshPlanSegmentCapByBudget := 0
 	rewriteQueueFreshPlanSegmentCapPerSegmentBudgetBytes := int64(0)
-	rewriteQueueLiveBytesHint := int64(0)
-	rewriteQueueLiveBytesHintKnown := rewriteQueueLen == 0
-	if rewriteQueueLen > 0 && rewriteLedgerSegments > 0 {
-		rewriteQueueLiveBytesHint = rewriteLedgerBytesLive
-		rewriteQueueLiveBytesHintKnown = true
-	}
 	if rewriteQueueLen > 0 {
-		rewriteQueueRunDecision := db.vlogGenerationRewriteSegmentCapForRunWithHint(
+		rewriteQueueRunDecision := db.vlogGenerationRewriteSegmentCapForRun(
 			rewriteQueueLen,
 			rewriteBudgetTokens,
-			rewriteQueueLiveBytesHint,
-			rewriteQueueLiveBytesHintKnown,
 			vlogGenerationMaintenanceOptions{rewriteDebtDrain: true},
 		)
 		rewriteQueueRunSegmentCap = rewriteQueueRunDecision.maxSegments
 		rewriteQueueRunSegmentCapLimiter = rewriteQueueRunDecision.limiter
 		rewriteQueueRunSegmentCapByBudget = rewriteQueueRunDecision.byBudgetSegments
 		rewriteQueueRunSegmentCapPerSegmentBudgetBytes = rewriteQueueRunDecision.perSegmentBudget
-		rewriteQueueRunCheckpointDecision := db.vlogGenerationRewriteSegmentCapForRunWithHint(
+		rewriteQueueRunCheckpointDecision := db.vlogGenerationRewriteSegmentCapForRun(
 			rewriteQueueLen,
 			rewriteBudgetTokens,
-			rewriteQueueLiveBytesHint,
-			rewriteQueueLiveBytesHintKnown,
 			vlogGenerationMaintenanceOptions{rewriteDebtDrain: true, bypassQuiet: true},
 		)
 		rewriteQueueRunSegmentCapCheckpointKick = rewriteQueueRunCheckpointDecision.maxSegments
 		rewriteQueueRunSegmentCapCheckpointKickLimiter = rewriteQueueRunCheckpointDecision.limiter
 		rewriteQueueRunSegmentCapByBudgetCheckpointKick = rewriteQueueRunCheckpointDecision.byBudgetSegments
 		rewriteQueueRunSegmentCapPerSegmentBudgetBytesCheckpointKick = rewriteQueueRunCheckpointDecision.perSegmentBudget
-		rewriteQueueFreshPlanDecision := db.vlogGenerationRewriteSegmentCapForFreshPlanWithHint(
+		rewriteQueueFreshPlanDecision := db.vlogGenerationRewriteSegmentCapForFreshPlan(
 			rewriteQueueLen,
 			rewriteBudgetTokens,
-			rewriteQueueLiveBytesHint,
-			rewriteQueueLiveBytesHintKnown,
 			vlogGenerationMaintenanceOptions{rewriteDebtDrain: true},
 		)
 		rewriteQueueFreshPlanSegmentCap = rewriteQueueFreshPlanDecision.maxSegments
