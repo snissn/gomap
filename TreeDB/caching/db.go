@@ -6547,6 +6547,10 @@ const (
 	// During checkpoint-kick debt drain, allow a bounded multi-segment rewrite
 	// selection so debt can converge faster than one-segment-per-pass.
 	vlogGenerationRewriteDebtDrainMaxSegments = 8
+	// Checkpoint-kick retries run in foreground-adjacent windows; allow a small
+	// burst only when queued debt is clearly non-trivial.
+	vlogGenerationRewriteCheckpointKickBurstMinQueueSegments = 4
+	vlogGenerationRewriteCheckpointKickBurstMaxSegments      = 2
 	// Freshly planned rewrites normally execute one segment to limit immediate
 	// write amplification. In explicit debt-drain mode, allow a small burst once
 	// the queue is materially large so convergence does not stall.
@@ -9282,6 +9286,7 @@ const (
 	vlogGenerationRewriteSegmentCapLimiterNone uint32 = iota
 	vlogGenerationRewriteSegmentCapLimiterResumeDefault
 	vlogGenerationRewriteSegmentCapLimiterCheckpointKickSafety
+	vlogGenerationRewriteSegmentCapLimiterCheckpointKickBurst
 	vlogGenerationRewriteSegmentCapLimiterQueueLen
 	vlogGenerationRewriteSegmentCapLimiterDebtDrainCap
 	vlogGenerationRewriteSegmentCapLimiterBudgetEmpty
@@ -9301,6 +9306,8 @@ func vlogGenerationRewriteSegmentCapLimiterString(v uint32) string {
 		return "resume_default"
 	case vlogGenerationRewriteSegmentCapLimiterCheckpointKickSafety:
 		return "checkpoint_kick_safety"
+	case vlogGenerationRewriteSegmentCapLimiterCheckpointKickBurst:
+		return "checkpoint_kick_burst"
 	case vlogGenerationRewriteSegmentCapLimiterQueueLen:
 		return "queue_len"
 	case vlogGenerationRewriteSegmentCapLimiterDebtDrainCap:
@@ -13643,6 +13650,33 @@ func (db *DB) vlogGenerationRewriteSegmentCapForRunWithHint(queueLen int, budget
 	if opts.bypassQuiet && !opts.skipCheckpoint && !vlogGenerationIsStageConfirmSource(opts) && !vlogGenerationIsAgeBlockedSource(opts) {
 		decision.maxSegments = 1
 		decision.limiter = vlogGenerationRewriteSegmentCapLimiterCheckpointKickSafety
+		if decision.budgetEnabled &&
+			queueLen >= vlogGenerationRewriteCheckpointKickBurstMinQueueSegments &&
+			budgetTokens > 0 {
+			perSegmentBudget := db.vlogGenerationRewritePerSegmentBudgetBytes(queueLen, queueLiveBytes, queueLiveKnown)
+			if perSegmentBudget > 0 {
+				byBudget := int(budgetTokens / perSegmentBudget)
+				if byBudget < 1 {
+					byBudget = 1
+				}
+				burstMax := vlogGenerationRewriteCheckpointKickBurstMaxSegments
+				if burstMax > queueLen {
+					burstMax = queueLen
+				}
+				if burstMax > decision.debtDrainMaxTarget {
+					burstMax = decision.debtDrainMaxTarget
+				}
+				if byBudget < burstMax {
+					burstMax = byBudget
+				}
+				if burstMax > 1 {
+					decision.maxSegments = burstMax
+					decision.limiter = vlogGenerationRewriteSegmentCapLimiterCheckpointKickBurst
+					decision.byBudgetSegments = byBudget
+					decision.perSegmentBudget = perSegmentBudget
+				}
+			}
+		}
 		return decision
 	}
 	decision.maxSegments = queueLen
