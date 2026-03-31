@@ -130,6 +130,18 @@ if [[ "$AB_LIGHT_VLOG_STATS_TIMEOUT_SECONDS" -lt 0 ]]; then
   echo "AB_LIGHT_VLOG_STATS_TIMEOUT_SECONDS must be >= 0" >&2
   exit 1
 fi
+if [[ "$REWRITE_ENABLED" != "0" && "$REWRITE_ENABLED" != "1" ]]; then
+  echo "REWRITE_ENABLED must be 0 or 1" >&2
+  exit 1
+fi
+if [[ "$REWRITE_ENABLED" == "1" && -z "$TREEMAP_BIN" ]]; then
+  echo "REWRITE_ENABLED=1 requires TREEMAP_BIN (set TREEMAP_BIN or ensure treemap-local is discoverable)" >&2
+  exit 1
+fi
+if [[ "$REWRITE_ENABLED" == "1" && ! -x "$TREEMAP_BIN" ]]; then
+  echo "treemap binary not found/executable: $TREEMAP_BIN" >&2
+  exit 1
+fi
 
 mkdir -p "$OUT/runs"
 
