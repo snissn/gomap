@@ -6320,6 +6320,7 @@ type DB struct {
 	vlogGenerationCheckpointKickActive                           atomic.Bool
 	vlogGenerationRewriteQueue                                   []uint32
 	vlogGenerationRewriteLedger                                  []backenddb.ValueLogRewritePlanSegment
+	vlogGenerationRewriteLedgerByFileID                          map[uint32]backenddb.ValueLogRewritePlanSegment
 	vlogGenerationRewritePenalties                               map[uint32]valueLogGenerationRewritePenalty
 	vlogGenerationRewriteStagePending                            bool
 	vlogGenerationRewriteStageObservedUnixNano                   int64
@@ -13943,29 +13944,24 @@ func (db *DB) vlogGenerationRewriteQueueLiveBytesSnapshot(ids []uint32) (liveByt
 	if err := db.loadVlogGenerationRewriteQueueLocked(); err != nil {
 		return 0, false, err
 	}
-	if len(db.vlogGenerationRewriteLedger) == 0 {
+	ledgerByFileID := db.vlogGenerationRewriteLedgerByFileID
+	if len(ledgerByFileID) == 0 && len(db.vlogGenerationRewriteLedger) > 0 {
+		ledgerByFileID = buildVlogGenerationRewriteLedgerByFileID(db.vlogGenerationRewriteLedger)
+		db.vlogGenerationRewriteLedgerByFileID = ledgerByFileID
+	}
+	if len(ledgerByFileID) == 0 {
 		return 0, false, nil
 	}
-	idCounts := make(map[uint32]int, len(ids))
 	for _, id := range ids {
 		if id == 0 {
 			continue
 		}
-		idCounts[id]++
-	}
-	if len(idCounts) == 0 {
-		return 0, false, nil
-	}
-	for _, seg := range db.vlogGenerationRewriteLedger {
-		if seg.FileID == 0 {
-			continue
-		}
-		count, ok := idCounts[seg.FileID]
+		seg, ok := ledgerByFileID[id]
 		if !ok {
 			continue
 		}
 		known = true
-		liveBytes += seg.BytesLive * int64(count)
+		liveBytes += seg.BytesLive
 	}
 	if liveBytes < 0 {
 		liveBytes = 0

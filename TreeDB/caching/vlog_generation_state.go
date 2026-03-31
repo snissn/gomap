@@ -47,6 +47,23 @@ type valueLogGenerationRewritePenalty struct {
 	LastGrowthBytes       int64
 }
 
+func buildVlogGenerationRewriteLedgerByFileID(ledger []backenddb.ValueLogRewritePlanSegment) map[uint32]backenddb.ValueLogRewritePlanSegment {
+	if len(ledger) == 0 {
+		return nil
+	}
+	byFileID := make(map[uint32]backenddb.ValueLogRewritePlanSegment, len(ledger))
+	for _, seg := range ledger {
+		if seg.FileID == 0 {
+			continue
+		}
+		byFileID[seg.FileID] = seg
+	}
+	if len(byFileID) == 0 {
+		return nil
+	}
+	return byFileID
+}
+
 func (db *DB) valueLogGenerationStateRootDir() string {
 	if db == nil || db.dir == "" {
 		return ""
@@ -244,6 +261,7 @@ func (db *DB) loadVlogGenerationRewriteQueueLocked() error {
 	}
 	db.vlogGenerationRewriteQueue = ids
 	db.vlogGenerationRewriteLedger = ledger
+	db.vlogGenerationRewriteLedgerByFileID = buildVlogGenerationRewriteLedgerByFileID(ledger)
 	db.vlogGenerationRewritePenalties = penalties
 	db.vlogGenerationRewriteStagePending = stagePending
 	db.vlogGenerationRewriteStageObservedUnixNano = stageObservedAt
@@ -271,6 +289,7 @@ func (db *DB) setVlogGenerationRewriteQueue(ids []uint32) error {
 	}
 	db.vlogGenerationRewriteQueue = next
 	db.vlogGenerationRewriteLedger = nil
+	db.vlogGenerationRewriteLedgerByFileID = nil
 	db.vlogGenerationRewriteStagePending = false
 	db.vlogGenerationRewriteStageObservedUnixNano = 0
 	db.clearVlogGenerationRewriteStageConfirmation()
@@ -303,6 +322,7 @@ func (db *DB) setVlogGenerationRewriteLedgerWithStage(segments []backenddb.Value
 	}
 	db.vlogGenerationRewriteQueue = nextIDs
 	db.vlogGenerationRewriteLedger = nextLedger
+	db.vlogGenerationRewriteLedgerByFileID = buildVlogGenerationRewriteLedgerByFileID(nextLedger)
 	db.vlogGenerationRewriteStagePending = stagePending
 	db.vlogGenerationRewriteStageObservedUnixNano = stageObservedAt
 	if stagePending && stageObservedAt > 0 {
@@ -385,6 +405,7 @@ func (db *DB) pruneVlogGenerationRewriteLedgerNonPositiveLive() ([]uint32, int, 
 	}
 	db.vlogGenerationRewriteQueue = filteredIDs
 	db.vlogGenerationRewriteLedger = filteredLedger
+	db.vlogGenerationRewriteLedgerByFileID = buildVlogGenerationRewriteLedgerByFileID(filteredLedger)
 	db.vlogGenerationRewriteStagePending = stagePending
 	db.vlogGenerationRewriteStageObservedUnixNano = stageObservedAt
 	if stagePending && stageObservedAt > 0 {
