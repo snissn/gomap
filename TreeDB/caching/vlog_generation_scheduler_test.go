@@ -7851,6 +7851,45 @@ func TestVlogGenerationStats_QueueCapHintRequiresFullCoverage(t *testing.T) {
 	}
 }
 
+func TestVlogGenerationStats_QueueCapHintCoverageWithoutLedger(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	recorder := &rewriteBudgetRecordingBackend{DB: backend}
+	db, cleanup := openRewriteQueueTestDB(t, dir, recorder)
+	defer cleanup()
+
+	db.valueLogGenerationWarmTarget = 256
+	db.vlogGenerationRewriteBudgetTokensBytes.Store(600)
+	db.vlogGenerationRewriteQueueMu.Lock()
+	db.vlogGenerationRewriteQueueLoaded = true
+	db.vlogGenerationRewriteQueue = []uint32{11, 99}
+	db.vlogGenerationRewriteLedger = nil
+	db.vlogGenerationRewriteLedgerByFileID = nil
+	db.vlogGenerationRewriteQueueMu.Unlock()
+
+	stats := db.Stats()
+	if got := stats["treedb.cache.vlog_generation.rewrite.queue_live_hint.known"]; got != "false" {
+		t.Fatalf("rewrite queue live hint known=%q want false", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.queue_live_hint.ids_present"]; got != "2" {
+		t.Fatalf("rewrite queue live hint ids present=%q want 2", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.queue_live_hint.ids_known"]; got != "0" {
+		t.Fatalf("rewrite queue live hint ids known=%q want 0", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.queue_live_hint.coverage_pct"]; got != "0.000" {
+		t.Fatalf("rewrite queue live hint coverage pct=%q want 0.000", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.queue_live_hint.bytes"]; got != "0" {
+		t.Fatalf("rewrite queue live hint bytes=%q want 0", got)
+	}
+}
+
 func TestVlogGenerationSegmentTargetEnvOverrides(t *testing.T) {
 	prepareDirectSchedulerTest(t)
 	t.Setenv(envVlogGenerationHotSegmentTargetBytes, "65536")

@@ -21787,6 +21787,12 @@ func (db *DB) Stats() map[string]string {
 	}
 	if rewriteQueueLen > 0 {
 		rewriteQueueLiveBytesHintKnown = false
+		for _, id := range db.vlogGenerationRewriteQueue {
+			if id == 0 {
+				continue
+			}
+			rewriteQueueLiveHintIDsPresent++
+		}
 		ledgerByFileID := db.vlogGenerationRewriteLedgerByFileID
 		if len(ledgerByFileID) == 0 && len(db.vlogGenerationRewriteLedger) > 0 {
 			ledgerByFileID = buildVlogGenerationRewriteLedgerByFileID(db.vlogGenerationRewriteLedger)
@@ -21797,7 +21803,6 @@ func (db *DB) Stats() map[string]string {
 				if id == 0 {
 					continue
 				}
-				rewriteQueueLiveHintIDsPresent++
 				seg, ok := ledgerByFileID[id]
 				if !ok {
 					continue
