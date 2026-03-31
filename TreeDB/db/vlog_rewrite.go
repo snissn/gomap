@@ -1333,7 +1333,9 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 			sourceSegmentBytes[id] = fileSize(set.Files[id])
 		}
 	}
+	segmentsFromSet := rewriteValueLogSegmentsFromSet(set)
 	_ = db.valueLogManager.Release(set)
+	set = nil
 	if sourceSegmentCount > 0 {
 		if restrictSingleID {
 			if size, ok := sourceSegmentBytes[singleSourceID]; ok && size > 0 {
@@ -1363,7 +1365,7 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		startSeq    uint32
 		needSegScan = true
 	)
-	if opts.ReserveRIDs != nil && db.valueLogManager != nil {
+	if db.valueLogManager != nil {
 		if hintLane, hintSeq, ok := db.valueLogManager.RewriteLaneHint(); ok {
 			probePath := filepath.Join(db.dir, "wal", fmt.Sprintf("value-l%d-%06d.log", hintLane, hintSeq+1))
 			if _, statErr := os.Stat(probePath); statErr == nil {
@@ -1375,6 +1377,9 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 				return stats, statErr
 			}
 		}
+	}
+	if !needSegScan && len(segmentsFromSet) > 0 {
+		segments = segmentsFromSet
 	}
 	if needSegScan {
 		segments, err = rewriteWALSegmentsLister(db.dir)
@@ -2215,6 +2220,30 @@ func nextRewriteRIDStart(segments []logSegment) (uint64, error) {
 		return 0, fmt.Errorf("value-log rid space exhausted")
 	}
 	return maxRID + 1, nil
+}
+
+func rewriteValueLogSegmentsFromSet(set *valuelog.Set) []logSegment {
+	if set == nil || len(set.Files) == 0 {
+		return nil
+	}
+	segments := make([]logSegment, 0, len(set.Files))
+	for id, file := range set.Files {
+		if file == nil || file.Path == "" {
+			continue
+		}
+		segments = append(segments, logSegment{
+			fileID:   id,
+			path:     file.Path,
+			valueLog: true,
+		})
+	}
+	if len(segments) < 2 {
+		return segments
+	}
+	sort.Slice(segments, func(i, j int) bool {
+		return segments[i].fileID < segments[j].fileID
+	})
+	return segments
 }
 
 func (db *DB) applyRewriteSwapBatch(swaps []rewriteSwap, sync bool) error {
