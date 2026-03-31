@@ -63,6 +63,9 @@ AB_CAPTURE_FULL_SMAPS_ON_MAX_RSS="${AB_CAPTURE_FULL_SMAPS_ON_MAX_RSS:-0}"
 AB_CAPTURE_DEBUG_VARS_ON_MAX_RSS="${AB_CAPTURE_DEBUG_VARS_ON_MAX_RSS:-0}"
 AB_CAPTURE_LIGHT_VLOG_STATS="${AB_CAPTURE_LIGHT_VLOG_STATS:-1}"
 AB_LIGHT_VLOG_STATS_TIMEOUT_SECONDS="${AB_LIGHT_VLOG_STATS_TIMEOUT_SECONDS:-20}"
+PAIR_ALIGN_TRUST_FROM_FIRST="${PAIR_ALIGN_TRUST_FROM_FIRST:-0}"
+PAIR_ALIGN_STOP_HEIGHT_FROM_FIRST="${PAIR_ALIGN_STOP_HEIGHT_FROM_FIRST:-0}"
+PAIR_ALIGN_STOP_MARGIN="${PAIR_ALIGN_STOP_MARGIN:-0}"
 TS="$(date +%Y%m%d%H%M%S)"
 
 if [[ "$#" -gt 4 ]]; then
@@ -140,6 +143,18 @@ if [[ "$AB_CAPTURE_LIGHT_VLOG_STATS" != "0" && "$AB_CAPTURE_LIGHT_VLOG_STATS" !=
   echo "AB_CAPTURE_LIGHT_VLOG_STATS must be 0 or 1" >&2
   exit 1
 fi
+if [[ "$PAIR_ALIGN_TRUST_FROM_FIRST" != "0" && "$PAIR_ALIGN_TRUST_FROM_FIRST" != "1" ]]; then
+  echo "PAIR_ALIGN_TRUST_FROM_FIRST must be 0 or 1" >&2
+  exit 1
+fi
+if [[ "$PAIR_ALIGN_STOP_HEIGHT_FROM_FIRST" != "0" && "$PAIR_ALIGN_STOP_HEIGHT_FROM_FIRST" != "1" ]]; then
+  echo "PAIR_ALIGN_STOP_HEIGHT_FROM_FIRST must be 0 or 1" >&2
+  exit 1
+fi
+if ! [[ "$PAIR_ALIGN_STOP_MARGIN" =~ ^[0-9]+$ ]]; then
+  echo "PAIR_ALIGN_STOP_MARGIN must be a non-negative integer" >&2
+  exit 1
+fi
 if [[ "$AB_LIGHT_VLOG_STATS_TIMEOUT_SECONDS" -lt 0 ]]; then
   echo "AB_LIGHT_VLOG_STATS_TIMEOUT_SECONDS must be >= 0" >&2
   exit 1
@@ -207,6 +222,9 @@ ab_capture_full_smaps_on_max_rss=$AB_CAPTURE_FULL_SMAPS_ON_MAX_RSS
 ab_capture_debug_vars_on_max_rss=$AB_CAPTURE_DEBUG_VARS_ON_MAX_RSS
 ab_capture_light_vlog_stats=$AB_CAPTURE_LIGHT_VLOG_STATS
 ab_light_vlog_stats_timeout_seconds=$AB_LIGHT_VLOG_STATS_TIMEOUT_SECONDS
+pair_align_trust_from_first=$PAIR_ALIGN_TRUST_FROM_FIRST
+pair_align_stop_height_from_first=$PAIR_ALIGN_STOP_HEIGHT_FROM_FIRST
+pair_align_stop_margin=$PAIR_ALIGN_STOP_MARGIN
 META
 
 list_run_homes() {
@@ -309,10 +327,81 @@ capture_light_vlog_stats() {
   return 1
 }
 
+run_json_path() {
+  local pair_index="$1"
+  local variant="$2"
+  local run_id
+  run_id=$(printf "%02d_%s" "$pair_index" "$variant")
+  printf '%s/runs/%s/run.json\n' "$OUT" "$run_id"
+}
+
+build_pair_overlay_env() {
+  local first_json="$1"
+  local out_env="$2"
+  python3 - "$first_json" "$out_env" "$PAIR_ALIGN_TRUST_FROM_FIRST" "$PAIR_ALIGN_STOP_HEIGHT_FROM_FIRST" "$PAIR_ALIGN_STOP_MARGIN" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+first_json = Path(sys.argv[1])
+out_env = Path(sys.argv[2])
+align_trust = sys.argv[3] == "1"
+align_stop = sys.argv[4] == "1"
+stop_margin = int(sys.argv[5])
+
+def scalar_int(value):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+out_lines = []
+if first_json.exists():
+    payload = json.loads(first_json.read_text(encoding="utf-8"))
+    sync = payload.get("sync") or {}
+    run_home_raw = payload.get("run_home") or ""
+    run_home = Path(run_home_raw) if run_home_raw else None
+    trust_height = scalar_int(sync.get("trust_height"))
+    trust_hash = ""
+    if run_home:
+        sync_time = run_home / "sync" / "sync-time.log"
+        if sync_time.exists():
+            for line in sync_time.read_text(encoding="utf-8", errors="ignore").splitlines():
+                if "=" not in line:
+                    continue
+                key, value = line.split("=", 1)
+                key = key.strip()
+                value = value.strip()
+                if key == "trust_height":
+                    parsed = scalar_int(value)
+                    if parsed is not None:
+                        trust_height = parsed
+                elif key == "trust_hash":
+                    trust_hash = value
+    if align_trust and trust_height is not None:
+        out_lines.append(f"TRUST_HEIGHT={trust_height}")
+        if trust_hash:
+            out_lines.append(f"TRUST_HASH={trust_hash}")
+    if align_stop:
+        final_local = scalar_int(sync.get("final_local_height"))
+        if final_local is not None:
+            target = final_local + stop_margin
+            if target < 0:
+                target = 0
+            out_lines.append(f"STOP_AT_LOCAL_HEIGHT={target}")
+
+if out_lines:
+    out_env.write_text("\n".join(out_lines) + "\n", encoding="utf-8")
+else:
+    out_env.write_text("", encoding="utf-8")
+PY
+}
+
 run_variant() {
   local pair_index="$1"
   local variant="$2"
   local env_file="$3"
+  local overlay_env_file="${4:-}"
 
   local run_id
   run_id=$(printf "%02d_%s" "$pair_index" "$variant")
@@ -361,6 +450,12 @@ run_variant() {
         set -a
         # shellcheck source=/dev/null
         source "$env_file"
+        set +a
+      fi
+      if [[ -n "$overlay_env_file" && -f "$overlay_env_file" ]]; then
+        set -a
+        # shellcheck source=/dev/null
+        source "$overlay_env_file"
         set +a
       fi
       if [[ "$AB_DISABLE_HEAVY_DIAGNOSTICS" == "1" ]]; then
@@ -2824,15 +2919,35 @@ PY
 
 run_pair() {
   local pair_index="$1"
+  local first_variant=""
+  local second_variant=""
+  local first_env=""
+  local second_env=""
+  local first_json=""
+  local pair_overlay_env=""
+
   if (( pair_index % 2 == 1 )); then
-    run_variant "$pair_index" "control" "$CONTROL_ENV_FILE"
-    sleep "$SLEEP_BETWEEN_RUNS_SECONDS"
-    run_variant "$pair_index" "candidate" "$CANDIDATE_ENV_FILE"
+    first_variant="control"
+    second_variant="candidate"
+    first_env="$CONTROL_ENV_FILE"
+    second_env="$CANDIDATE_ENV_FILE"
   else
-    run_variant "$pair_index" "candidate" "$CANDIDATE_ENV_FILE"
-    sleep "$SLEEP_BETWEEN_RUNS_SECONDS"
-    run_variant "$pair_index" "control" "$CONTROL_ENV_FILE"
+    first_variant="candidate"
+    second_variant="control"
+    first_env="$CANDIDATE_ENV_FILE"
+    second_env="$CONTROL_ENV_FILE"
   fi
+
+  run_variant "$pair_index" "$first_variant" "$first_env"
+  sleep "$SLEEP_BETWEEN_RUNS_SECONDS"
+
+  if [[ "$PAIR_ALIGN_TRUST_FROM_FIRST" == "1" || "$PAIR_ALIGN_STOP_HEIGHT_FROM_FIRST" == "1" ]]; then
+    first_json="$(run_json_path "$pair_index" "$first_variant")"
+    pair_overlay_env="$OUT/runs/$(printf "pair_%02d_overlay.env" "$pair_index")"
+    build_pair_overlay_env "$first_json" "$pair_overlay_env"
+  fi
+
+  run_variant "$pair_index" "$second_variant" "$second_env" "$pair_overlay_env"
 }
 
 echo "output=$OUT"
