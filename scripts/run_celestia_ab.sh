@@ -1859,6 +1859,9 @@ for pair in sorted(by_pair):
             "control_checkpoint_kick_skipped_hot_no_debt": None,
             "candidate_checkpoint_kick_skipped_hot_no_debt": None,
             "delta_checkpoint_kick_skipped_hot_no_debt": None,
+            "control_rewrite_queue_run_segment_cap_limiter_count_checkpoint_kick_burst": None,
+            "candidate_rewrite_queue_run_segment_cap_limiter_count_checkpoint_kick_burst": None,
+            "delta_rewrite_queue_run_segment_cap_limiter_count_checkpoint_kick_burst": None,
             "control_valid": ctrl_valid,
             "candidate_valid": cand_valid,
             "control_invalid_reason": ctrl_reason,
@@ -1929,6 +1932,16 @@ for pair in sorted(by_pair):
     d_checkpoint_kick_skipped_hot_no_debt = delta(
         cand_checkpoint_kick_skipped_hot_no_debt,
         base_checkpoint_kick_skipped_hot_no_debt,
+    )
+    cand_checkpoint_kick_burst_limiter_count = cand_summary.get(
+        "rewrite_queue_run_segment_cap_limiter_count_checkpoint_kick_burst",
+    )
+    base_checkpoint_kick_burst_limiter_count = ctrl_summary.get(
+        "rewrite_queue_run_segment_cap_limiter_count_checkpoint_kick_burst",
+    )
+    d_checkpoint_kick_burst_limiter_count = delta(
+        cand_checkpoint_kick_burst_limiter_count,
+        base_checkpoint_kick_burst_limiter_count,
     )
 
     def ratio(candidate, control):
@@ -2050,6 +2063,9 @@ for pair in sorted(by_pair):
         "control_checkpoint_kick_skipped_hot_no_debt": base_checkpoint_kick_skipped_hot_no_debt,
         "candidate_checkpoint_kick_skipped_hot_no_debt": cand_checkpoint_kick_skipped_hot_no_debt,
         "delta_checkpoint_kick_skipped_hot_no_debt": d_checkpoint_kick_skipped_hot_no_debt,
+        "control_rewrite_queue_run_segment_cap_limiter_count_checkpoint_kick_burst": base_checkpoint_kick_burst_limiter_count,
+        "candidate_rewrite_queue_run_segment_cap_limiter_count_checkpoint_kick_burst": cand_checkpoint_kick_burst_limiter_count,
+        "delta_rewrite_queue_run_segment_cap_limiter_count_checkpoint_kick_burst": d_checkpoint_kick_burst_limiter_count,
         "control_valid": ctrl_valid,
         "candidate_valid": cand_valid,
         "control_invalid_reason": ctrl_reason,
@@ -2106,6 +2122,9 @@ with pairs_csv.open("w", newline="", encoding="utf-8") as fh:
         "control_checkpoint_kick_skipped_hot_no_debt",
         "candidate_checkpoint_kick_skipped_hot_no_debt",
         "delta_checkpoint_kick_skipped_hot_no_debt",
+        "control_rewrite_queue_run_segment_cap_limiter_count_checkpoint_kick_burst",
+        "candidate_rewrite_queue_run_segment_cap_limiter_count_checkpoint_kick_burst",
+        "delta_rewrite_queue_run_segment_cap_limiter_count_checkpoint_kick_burst",
         "control_valid",
         "candidate_valid",
         "control_invalid_reason",
@@ -2159,6 +2178,9 @@ with pairs_csv.open("w", newline="", encoding="utf-8") as fh:
             r["control_checkpoint_kick_skipped_hot_no_debt"],
             r["candidate_checkpoint_kick_skipped_hot_no_debt"],
             r["delta_checkpoint_kick_skipped_hot_no_debt"],
+            r["control_rewrite_queue_run_segment_cap_limiter_count_checkpoint_kick_burst"],
+            r["candidate_rewrite_queue_run_segment_cap_limiter_count_checkpoint_kick_burst"],
+            r["delta_rewrite_queue_run_segment_cap_limiter_count_checkpoint_kick_burst"],
             r["control_valid"],
             r["candidate_valid"],
             r["control_invalid_reason"],
@@ -2222,6 +2244,10 @@ delta_rewrite_queue_live_bytes_after_tokens_mean = mean_pair_delta(
 delta_checkpoint_kick_skipped_hot_no_debt_mean = mean_pair_delta(
     scored_rows,
     "delta_checkpoint_kick_skipped_hot_no_debt",
+)
+delta_checkpoint_kick_burst_limiter_count_mean = mean_pair_delta(
+    scored_rows,
+    "delta_rewrite_queue_run_segment_cap_limiter_count_checkpoint_kick_burst",
 )
 neutral_streak = 0
 for row in reversed(scored_rows):
@@ -2376,6 +2402,9 @@ lines.append(
 lines.append(
     f"- mean delta checkpoint_kick_skipped_hot_no_debt: `{delta_checkpoint_kick_skipped_hot_no_debt_mean}`"
 )
+lines.append(
+    f"- mean delta rewrite_queue_run_segment_cap_limiter_count_checkpoint_kick_burst: `{delta_checkpoint_kick_burst_limiter_count_mean}`"
+)
 lines.append(f"- decision: `{reason}`")
 lines.append("")
 lines.append("## Absolute Medians")
@@ -2479,6 +2508,12 @@ if pair_rows:
         f"`{last['candidate_checkpoint_kick_skipped_hot_no_debt']}` / "
         f"`{last['delta_checkpoint_kick_skipped_hot_no_debt']}`"
     )
+    lines.append(
+        f"- rewrite_queue_run_segment_cap_limiter_count_checkpoint_kick_burst (control/candidate/delta): "
+        f"`{last['control_rewrite_queue_run_segment_cap_limiter_count_checkpoint_kick_burst']}` / "
+        f"`{last['candidate_rewrite_queue_run_segment_cap_limiter_count_checkpoint_kick_burst']}` / "
+        f"`{last['delta_rewrite_queue_run_segment_cap_limiter_count_checkpoint_kick_burst']}`"
+    )
 summary_md.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 payload = {
@@ -2512,6 +2547,7 @@ payload = {
     "mean_delta_rewrite_queue_eta_seconds_budget": delta_rewrite_queue_eta_seconds_budget_mean,
     "mean_delta_rewrite_queue_live_bytes_after_tokens": delta_rewrite_queue_live_bytes_after_tokens_mean,
     "mean_delta_checkpoint_kick_skipped_hot_no_debt": delta_checkpoint_kick_skipped_hot_no_debt_mean,
+    "mean_delta_rewrite_queue_run_segment_cap_limiter_count_checkpoint_kick_burst": delta_checkpoint_kick_burst_limiter_count_mean,
     "stop": stop,
     "reason": reason,
 }
