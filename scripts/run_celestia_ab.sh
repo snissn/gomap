@@ -271,14 +271,33 @@ capture_light_vlog_stats() {
   fi
 
   local rc=0
-  local -a cmd=("$TREEMAP_BIN" vlog-gc "$app_db" "-rw" "-dry-run")
+  local -a cmd_stats=("$TREEMAP_BIN" stats "$app_db" "-rw")
+  local -a cmd_vlog_gc_dry_run=("$TREEMAP_BIN" vlog-gc "$app_db" "-rw" "-dry-run")
 
   set +e
   if [[ "$AB_LIGHT_VLOG_STATS_TIMEOUT_SECONDS" -gt 0 ]] && command -v timeout >/dev/null 2>&1; then
-    timeout --signal=TERM --kill-after=30 "${AB_LIGHT_VLOG_STATS_TIMEOUT_SECONDS}s" "${cmd[@]}" >"$out_file" 2>"$err_file"
+    timeout --signal=TERM --kill-after=30 "${AB_LIGHT_VLOG_STATS_TIMEOUT_SECONDS}s" "${cmd_stats[@]}" >"$out_file" 2>"$err_file"
     rc=$?
   else
-    "${cmd[@]}" >"$out_file" 2>"$err_file"
+    "${cmd_stats[@]}" >"$out_file" 2>"$err_file"
+    rc=$?
+  fi
+  set -e
+  if [[ "$rc" -eq 0 && -s "$out_file" ]]; then
+    return 0
+  fi
+
+  {
+    echo "light-stats primary command failed rc=$rc command=stats_rw"
+    echo "falling back to vlog-gc -dry-run"
+  } >>"$err_file"
+
+  set +e
+  if [[ "$AB_LIGHT_VLOG_STATS_TIMEOUT_SECONDS" -gt 0 ]] && command -v timeout >/dev/null 2>&1; then
+    timeout --signal=TERM --kill-after=30 "${AB_LIGHT_VLOG_STATS_TIMEOUT_SECONDS}s" "${cmd_vlog_gc_dry_run[@]}" >"$out_file" 2>>"$err_file"
+    rc=$?
+  else
+    "${cmd_vlog_gc_dry_run[@]}" >"$out_file" 2>>"$err_file"
     rc=$?
   fi
   set -e

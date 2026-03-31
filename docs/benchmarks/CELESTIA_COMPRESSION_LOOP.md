@@ -160,7 +160,7 @@ Notes:
 - `run_celestia_ab` now captures lightweight pre/post rewrite TreeDB stats snapshots when possible (without requiring heavy diagnostics JSON):
   - enable/disable: `AB_CAPTURE_LIGHT_VLOG_STATS=1|0` (default `1`)
   - command timeout: `AB_LIGHT_VLOG_STATS_TIMEOUT_SECONDS` (default `20`)
-  - capture path uses `treemap vlog-gc -rw -dry-run` (backend maintenance path; no delete/write side effects)
+  - capture path uses `treemap stats -rw` (falls back to `treemap vlog-gc -rw -dry-run` if needed)
   - outputs land in each run directory as `light_stats_pre.txt` / `light_stats_post.txt`, and summarized values are included in `run.json` + `runs.csv`.
 - `runs.csv` now also includes rewrite-capacity counters from diagnostics summaries (plan runs/selection, source segment+byte outcomes, ledger bytes, budget utilization, observed-GC drain pct) so candidate/control behavior can be compared without opening each `run.json`.
 - `pairs.csv` now includes absolute per-pair control/candidate values (`t_sync`, `t_total`, `s_sync_app`, `s_post_wal`, `max_rss_kb`) plus `composite_score_pct` (negative is better).

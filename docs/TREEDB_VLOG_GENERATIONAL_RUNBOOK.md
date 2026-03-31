@@ -136,6 +136,9 @@ Outputs:
 - `artifacts/celestia_ab/<ts>/decision.json`
 - per-run JSON under `artifacts/celestia_ab/<ts>/runs/*/run.json`
 
+Light stats snapshots in each run directory are captured via `treemap stats -rw`
+with automatic fallback to `treemap vlog-gc -rw -dry-run`.
+
 `runs.csv` includes per-run rewrite-capacity KPIs and `pairs.csv` includes pair deltas for those KPIs, so candidate/control maintenance behavior can be evaluated directly from CSV outputs.
 This includes queue-pressure and checkpoint-kick fields to diagnose whether rewrite is keeping up incrementally during hot sync windows.
 
