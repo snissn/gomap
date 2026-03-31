@@ -389,9 +389,11 @@ out_lines = []
 if first_json.exists():
     payload = json.loads(first_json.read_text(encoding="utf-8"))
     sync = payload.get("sync") or {}
+    status = payload.get("status") or {}
     run_home_raw = payload.get("run_home") or ""
     run_home = Path(run_home_raw) if run_home_raw else None
     trust_height = scalar_int(sync.get("trust_height"))
+    first_valid = bool(status.get("valid"))
     trust_hash = ""
     if run_home:
         sync_time = run_home / "sync" / "sync-time.log"
@@ -412,9 +414,9 @@ if first_json.exists():
         out_lines.append(f"TRUST_HEIGHT={trust_height}")
         if trust_hash:
             out_lines.append(f"TRUST_HASH={trust_hash}")
-    if align_stop:
+    if align_stop and first_valid:
         final_local = scalar_int(sync.get("final_local_height"))
-        if final_local is not None:
+        if final_local is not None and final_local > 0:
             target = final_local + stop_margin
             if target < 0:
                 target = 0
