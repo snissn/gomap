@@ -127,6 +127,7 @@ Now includes anti-loop safeguards:
 - clear stop (improvement/regression)
 - futility stop (`futile_remaining_pairs`)
 - low-signal neutral-streak stop (`low_signal_neutral_streak`)
+- optional composite stop (`COMPOSITE_STOP_ON_CLEAR=1`) using weighted time+size score
 - strict new-run-home detection (no fallback to old run dirs)
 - per-variant timeout/retry for stuck syncs
 - invalid-pair streak stop (`invalid_pair_streak`)
@@ -162,6 +163,11 @@ Notes:
   - capture path uses `treemap vlog-gc -rw -dry-run` (backend maintenance path; no delete/write side effects)
   - outputs land in each run directory as `light_stats_pre.txt` / `light_stats_post.txt`, and summarized values are included in `run.json` + `runs.csv`.
 - `runs.csv` now also includes rewrite-capacity counters from diagnostics summaries (plan runs/selection, source segment+byte outcomes, ledger bytes, budget utilization, observed-GC drain pct) so candidate/control behavior can be compared without opening each `run.json`.
+- `pairs.csv` now includes absolute per-pair control/candidate values (`t_sync`, `t_total`, `s_sync_app`, `s_post_wal`, `max_rss_kb`) plus `composite_score_pct` (negative is better).
+- `summary.md` now includes `Absolute Medians` (control vs candidate) in addition to pair deltas.
+- `decision.json` now includes:
+  - `absolute_aggregates` (control/candidate median+mean totals for time, size, and RSS)
+  - `composite` configuration echo and aggregate composite score fields
 - To use pre-policy behavior, set `AB_POLICY=legacy`.
 
 ## Process Review Cadence

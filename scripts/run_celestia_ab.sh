@@ -50,6 +50,12 @@ fi
 BLOCK_DRIFT_TOLERANCE="${BLOCK_DRIFT_TOLERANCE:-$DEFAULT_BLOCK_DRIFT_TOLERANCE}"
 SCORING_MODE="${SCORING_MODE:-$DEFAULT_SCORING_MODE}"
 ALLOW_DRIFT_SCORING="${ALLOW_DRIFT_SCORING:-$DEFAULT_ALLOW_DRIFT_SCORING}"
+COMPOSITE_WEIGHT_TIME="${COMPOSITE_WEIGHT_TIME:-0.5}"
+COMPOSITE_WEIGHT_SIZE="${COMPOSITE_WEIGHT_SIZE:-0.5}"
+COMPOSITE_STOP_ON_CLEAR="${COMPOSITE_STOP_ON_CLEAR:-0}"
+COMPOSITE_MIN_PAIRS="${COMPOSITE_MIN_PAIRS:-4}"
+COMPOSITE_CLEAR_WIN_PCT="${COMPOSITE_CLEAR_WIN_PCT:-1.0}"
+COMPOSITE_CLEAR_LOSS_PCT="${COMPOSITE_CLEAR_LOSS_PCT:-1.0}"
 AB_DISABLE_HEAVY_DIAGNOSTICS="${AB_DISABLE_HEAVY_DIAGNOSTICS:-1}"
 AB_CAPTURE_HEAP_ON_MAX_RSS="${AB_CAPTURE_HEAP_ON_MAX_RSS:-0}"
 AB_CAPTURE_PPROF_ON_STUCK="${AB_CAPTURE_PPROF_ON_STUCK:-0}"
@@ -122,6 +128,14 @@ if [[ "$ALLOW_DRIFT_SCORING" != "0" && "$ALLOW_DRIFT_SCORING" != "1" ]]; then
   echo "ALLOW_DRIFT_SCORING must be 0 or 1" >&2
   exit 1
 fi
+if [[ "$COMPOSITE_STOP_ON_CLEAR" != "0" && "$COMPOSITE_STOP_ON_CLEAR" != "1" ]]; then
+  echo "COMPOSITE_STOP_ON_CLEAR must be 0 or 1" >&2
+  exit 1
+fi
+if [[ "$COMPOSITE_MIN_PAIRS" -lt 1 ]]; then
+  echo "COMPOSITE_MIN_PAIRS must be >= 1" >&2
+  exit 1
+fi
 if [[ "$AB_CAPTURE_LIGHT_VLOG_STATS" != "0" && "$AB_CAPTURE_LIGHT_VLOG_STATS" != "1" ]]; then
   echo "AB_CAPTURE_LIGHT_VLOG_STATS must be 0 or 1" >&2
   exit 1
@@ -171,6 +185,12 @@ ab_policy=$AB_POLICY
 block_drift_tolerance=$BLOCK_DRIFT_TOLERANCE
 scoring_mode=$SCORING_MODE
 allow_drift_scoring=$ALLOW_DRIFT_SCORING
+composite_weight_time=$COMPOSITE_WEIGHT_TIME
+composite_weight_size=$COMPOSITE_WEIGHT_SIZE
+composite_stop_on_clear=$COMPOSITE_STOP_ON_CLEAR
+composite_min_pairs=$COMPOSITE_MIN_PAIRS
+composite_clear_win_pct=$COMPOSITE_CLEAR_WIN_PCT
+composite_clear_loss_pct=$COMPOSITE_CLEAR_LOSS_PCT
 ab_disable_heavy_diagnostics=$AB_DISABLE_HEAVY_DIAGNOSTICS
 ab_capture_heap_on_max_rss=$AB_CAPTURE_HEAP_ON_MAX_RSS
 ab_capture_pprof_on_stuck=$AB_CAPTURE_PPROF_ON_STUCK
@@ -1159,7 +1179,7 @@ PY
 
 aggregate_and_decide() {
   local decision_json="$OUT/decision.json"
-  python3 - "$OUT" "$SIZE_TOLERANCE_BYTES" "$TIME_TOLERANCE_SECONDS" "$MIN_PAIRS" "$CLEAR_WIN_PAIRS" "$CLEAR_LOSS_PAIRS" "$MAX_PAIRS" "$STOP_ON_CLEAR" "$LOW_SIGNAL_MIN_PAIRS" "$LOW_SIGNAL_NEUTRAL_STREAK" "$INVALID_PAIR_STREAK_STOP" "$BLOCK_DRIFT_TOLERANCE" "$decision_json" "$SCORING_MODE" "$ALLOW_DRIFT_SCORING" "$AB_POLICY" <<'PY'
+  python3 - "$OUT" "$SIZE_TOLERANCE_BYTES" "$TIME_TOLERANCE_SECONDS" "$MIN_PAIRS" "$CLEAR_WIN_PAIRS" "$CLEAR_LOSS_PAIRS" "$MAX_PAIRS" "$STOP_ON_CLEAR" "$LOW_SIGNAL_MIN_PAIRS" "$LOW_SIGNAL_NEUTRAL_STREAK" "$INVALID_PAIR_STREAK_STOP" "$BLOCK_DRIFT_TOLERANCE" "$decision_json" "$SCORING_MODE" "$ALLOW_DRIFT_SCORING" "$AB_POLICY" "$COMPOSITE_WEIGHT_TIME" "$COMPOSITE_WEIGHT_SIZE" "$COMPOSITE_STOP_ON_CLEAR" "$COMPOSITE_MIN_PAIRS" "$COMPOSITE_CLEAR_WIN_PCT" "$COMPOSITE_CLEAR_LOSS_PCT" <<'PY'
 import csv
 import json
 import sys
@@ -1181,6 +1201,16 @@ decision_path = Path(sys.argv[13])
 scoring_mode = str(sys.argv[14]).strip().lower()
 allow_drift_scoring = str(sys.argv[15]).strip() == "1"
 ab_policy = str(sys.argv[16]).strip().lower()
+composite_weight_time = float(sys.argv[17])
+composite_weight_size = float(sys.argv[18])
+composite_stop_on_clear = str(sys.argv[19]).strip() == "1"
+composite_min_pairs = int(sys.argv[20])
+composite_clear_win_pct = float(sys.argv[21])
+composite_clear_loss_pct = float(sys.argv[22])
+if composite_weight_time < 0.0 or composite_weight_size < 0.0:
+    raise SystemExit("COMPOSITE_WEIGHT_TIME and COMPOSITE_WEIGHT_SIZE must be >= 0")
+if (composite_weight_time + composite_weight_size) <= 0.0:
+    raise SystemExit("COMPOSITE weights must sum to > 0")
 
 run_files = sorted(out.glob("runs/*/run.json"))
 runs = []
@@ -1191,6 +1221,30 @@ for p in run_files:
         continue
 
 runs.sort(key=lambda r: (int(r.get("pair_index", 0)), str(r.get("variant", ""))))
+
+def as_float(value):
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+def median(values):
+    xs = sorted(v for v in values if v is not None)
+    n = len(xs)
+    if n == 0:
+        return None
+    mid = n // 2
+    if (n % 2) == 1:
+        return xs[mid]
+    return (xs[mid - 1] + xs[mid]) / 2.0
+
+def mean(values):
+    xs = [v for v in values if v is not None]
+    if not xs:
+        return None
+    return sum(xs) / float(len(xs))
 
 def run_is_valid(run: dict) -> bool:
     status = run.get("status")
@@ -1551,6 +1605,17 @@ for pair in sorted(by_pair):
             "delta_blocks_synced": None,
             "delta_s_sync_app_bytes_per_block": None,
             "delta_t_total_seconds_per_block": None,
+            "control_t_sync_seconds": None,
+            "candidate_t_sync_seconds": None,
+            "control_t_total_seconds": None,
+            "candidate_t_total_seconds": None,
+            "control_s_sync_app_bytes": None,
+            "candidate_s_sync_app_bytes": None,
+            "control_s_post_wal_bytes": None,
+            "candidate_s_post_wal_bytes": None,
+            "control_max_rss_kb": None,
+            "candidate_max_rss_kb": None,
+            "composite_score_pct": None,
             "control_valid": ctrl_valid,
             "candidate_valid": cand_valid,
             "control_invalid_reason": ctrl_reason,
@@ -1590,8 +1655,16 @@ for pair in sorted(by_pair):
     d_sync_app_per_block = delta(cand_sync_app_per_block, base_sync_app_per_block)
     d_total_per_block = delta(cand_total_per_block, base_total_per_block)
 
+    def ratio(candidate, control):
+        c = as_float(candidate)
+        b = as_float(control)
+        if c is None or b is None or b == 0.0:
+            return None
+        return c / b
+
     win = False
     loss = False
+    composite_size_ratio = None
     use_per_block = (
         scoring_mode == "per_block"
         and d_sync_app_per_block is not None
@@ -1604,16 +1677,19 @@ for pair in sorted(by_pair):
         time_tol_metric = float(time_tol) / float(base_blocks)
         size_delta_metric = d_sync_app_per_block
         time_delta_metric = d_total_per_block
+        composite_size_ratio = ratio(cand_sync_app_per_block, base_sync_app_per_block)
     elif d_post_wal is not None and d_total is not None:
         size_tol_metric = float(size_tol)
         time_tol_metric = float(time_tol)
         size_delta_metric = d_post_wal
         time_delta_metric = d_total
+        composite_size_ratio = ratio(cand_post_wal, base_post_wal)
     else:
         size_tol_metric = None
         time_tol_metric = None
         size_delta_metric = None
         time_delta_metric = None
+        composite_size_ratio = None
     if size_delta_metric is not None and time_delta_metric is not None:
         win = (size_delta_metric <= -size_tol_metric) and (time_delta_metric <= time_tol_metric)
         loss = (size_delta_metric >= size_tol_metric) and (time_delta_metric >= -time_tol_metric)
@@ -1644,6 +1720,16 @@ for pair in sorted(by_pair):
     elif outcome == "loss":
         losses += 1
 
+    time_ratio = ratio(cand_total, base_total)
+    composite_score_pct = None
+    if time_ratio is not None and composite_size_ratio is not None:
+        weighted = (
+            (composite_weight_time * (time_ratio - 1.0))
+            + (composite_weight_size * (composite_size_ratio - 1.0))
+        )
+        denom = (composite_weight_time + composite_weight_size)
+        composite_score_pct = 100.0 * (weighted / denom)
+
     pair_rows.append({
         "pair_index": pair,
         "delta_t_sync_seconds": d_sync,
@@ -1653,6 +1739,17 @@ for pair in sorted(by_pair):
         "delta_blocks_synced": d_blocks,
         "delta_s_sync_app_bytes_per_block": d_sync_app_per_block,
         "delta_t_total_seconds_per_block": d_total_per_block,
+        "control_t_sync_seconds": base_sync,
+        "candidate_t_sync_seconds": cand_sync,
+        "control_t_total_seconds": base_total,
+        "candidate_t_total_seconds": cand_total,
+        "control_s_sync_app_bytes": base_sync_app,
+        "candidate_s_sync_app_bytes": cand_sync_app,
+        "control_s_post_wal_bytes": base_post_wal,
+        "candidate_s_post_wal_bytes": cand_post_wal,
+        "control_max_rss_kb": bm.get("max_rss_kb"),
+        "candidate_max_rss_kb": cm.get("max_rss_kb"),
+        "composite_score_pct": composite_score_pct,
         "control_valid": ctrl_valid,
         "candidate_valid": cand_valid,
         "control_invalid_reason": ctrl_reason,
@@ -1674,6 +1771,17 @@ with pairs_csv.open("w", newline="", encoding="utf-8") as fh:
         "delta_blocks_synced",
         "delta_s_sync_app_bytes_per_block",
         "delta_t_total_seconds_per_block",
+        "control_t_sync_seconds",
+        "candidate_t_sync_seconds",
+        "control_t_total_seconds",
+        "candidate_t_total_seconds",
+        "control_s_sync_app_bytes",
+        "candidate_s_sync_app_bytes",
+        "control_s_post_wal_bytes",
+        "candidate_s_post_wal_bytes",
+        "control_max_rss_kb",
+        "candidate_max_rss_kb",
+        "composite_score_pct",
         "control_valid",
         "candidate_valid",
         "control_invalid_reason",
@@ -1692,6 +1800,17 @@ with pairs_csv.open("w", newline="", encoding="utf-8") as fh:
             r["delta_blocks_synced"],
             r["delta_s_sync_app_bytes_per_block"],
             r["delta_t_total_seconds_per_block"],
+            r["control_t_sync_seconds"],
+            r["candidate_t_sync_seconds"],
+            r["control_t_total_seconds"],
+            r["candidate_t_total_seconds"],
+            r["control_s_sync_app_bytes"],
+            r["candidate_s_sync_app_bytes"],
+            r["control_s_post_wal_bytes"],
+            r["candidate_s_post_wal_bytes"],
+            r["control_max_rss_kb"],
+            r["candidate_max_rss_kb"],
+            r["composite_score_pct"],
             r["control_valid"],
             r["candidate_valid"],
             r["control_invalid_reason"],
@@ -1722,6 +1841,56 @@ for row in reversed(pair_rows):
         continue
     break
 
+def collect_float(rows, key):
+    out = []
+    for row in rows:
+        out.append(as_float(row.get(key)))
+    return out
+
+comparable_rows = []
+for row in scored_rows:
+    if row.get("control_t_total_seconds") is None or row.get("candidate_t_total_seconds") is None:
+        continue
+    comparable_rows.append(row)
+
+control_t_sync_vals = collect_float(comparable_rows, "control_t_sync_seconds")
+candidate_t_sync_vals = collect_float(comparable_rows, "candidate_t_sync_seconds")
+control_t_total_vals = collect_float(comparable_rows, "control_t_total_seconds")
+candidate_t_total_vals = collect_float(comparable_rows, "candidate_t_total_seconds")
+control_s_sync_app_vals = collect_float(comparable_rows, "control_s_sync_app_bytes")
+candidate_s_sync_app_vals = collect_float(comparable_rows, "candidate_s_sync_app_bytes")
+control_s_post_wal_vals = collect_float(comparable_rows, "control_s_post_wal_bytes")
+candidate_s_post_wal_vals = collect_float(comparable_rows, "candidate_s_post_wal_bytes")
+control_max_rss_vals = collect_float(comparable_rows, "control_max_rss_kb")
+candidate_max_rss_vals = collect_float(comparable_rows, "candidate_max_rss_kb")
+composite_scores = collect_float(comparable_rows, "composite_score_pct")
+
+absolute_aggregates = {
+    "comparable_pairs": len(comparable_rows),
+    "median_control_t_sync_seconds": median(control_t_sync_vals),
+    "median_candidate_t_sync_seconds": median(candidate_t_sync_vals),
+    "mean_control_t_sync_seconds": mean(control_t_sync_vals),
+    "mean_candidate_t_sync_seconds": mean(candidate_t_sync_vals),
+    "median_control_t_total_seconds": median(control_t_total_vals),
+    "median_candidate_t_total_seconds": median(candidate_t_total_vals),
+    "mean_control_t_total_seconds": mean(control_t_total_vals),
+    "mean_candidate_t_total_seconds": mean(candidate_t_total_vals),
+    "median_control_s_sync_app_bytes": median(control_s_sync_app_vals),
+    "median_candidate_s_sync_app_bytes": median(candidate_s_sync_app_vals),
+    "mean_control_s_sync_app_bytes": mean(control_s_sync_app_vals),
+    "mean_candidate_s_sync_app_bytes": mean(candidate_s_sync_app_vals),
+    "median_control_s_post_wal_bytes": median(control_s_post_wal_vals),
+    "median_candidate_s_post_wal_bytes": median(candidate_s_post_wal_vals),
+    "mean_control_s_post_wal_bytes": mean(control_s_post_wal_vals),
+    "mean_candidate_s_post_wal_bytes": mean(candidate_s_post_wal_vals),
+    "median_control_max_rss_kb": median(control_max_rss_vals),
+    "median_candidate_max_rss_kb": median(candidate_max_rss_vals),
+    "mean_control_max_rss_kb": mean(control_max_rss_vals),
+    "mean_candidate_max_rss_kb": mean(candidate_max_rss_vals),
+    "median_composite_score_pct": median(composite_scores),
+    "mean_composite_score_pct": mean(composite_scores),
+}
+
 reason = "continue"
 stop = False
 if stop_on_clear and completed_pairs >= min_pairs:
@@ -1746,6 +1915,18 @@ if (not stop) and completed_pairs >= low_signal_min_pairs and neutral_streak >= 
 if (not stop) and invalid_streak >= invalid_pair_streak_stop:
     stop = True
     reason = "invalid_pair_streak"
+
+comp_pairs = int(absolute_aggregates.get("comparable_pairs", 0) or 0)
+comp_median = absolute_aggregates.get("median_composite_score_pct")
+comp_win_thresh = abs(composite_clear_win_pct)
+comp_loss_thresh = abs(composite_clear_loss_pct)
+if (not stop) and composite_stop_on_clear and comp_pairs >= composite_min_pairs and comp_median is not None:
+    if comp_median <= -comp_win_thresh:
+        stop = True
+        reason = "composite_clear_improvement"
+    elif comp_median >= comp_loss_thresh:
+        stop = True
+        reason = "composite_clear_regression"
 
 if (not stop) and raw_pairs >= max_pairs:
     stop = True
@@ -1772,7 +1953,33 @@ lines.append(f"- scoring policy: `{ab_policy}`")
 lines.append(f"- block drift tolerance (abs blocks, -1=disabled): `{block_drift_tolerance}`")
 lines.append(f"- scoring mode: `{scoring_mode}`")
 lines.append(f"- allow drift scoring: `{allow_drift_scoring}`")
+lines.append(f"- composite weights (time,size): `{composite_weight_time}` / `{composite_weight_size}`")
+lines.append(f"- composite stop on clear: `{composite_stop_on_clear}`")
+lines.append(f"- composite min pairs: `{composite_min_pairs}`")
+lines.append(f"- composite clear thresholds (win/loss pct): `{composite_clear_win_pct}` / `{composite_clear_loss_pct}`")
 lines.append(f"- decision: `{reason}`")
+lines.append("")
+lines.append("## Absolute Medians")
+lines.append("")
+lines.append(f"- comparable pairs: `{absolute_aggregates.get('comparable_pairs')}`")
+lines.append(
+    f"- t_sync seconds (control/candidate): `{absolute_aggregates.get('median_control_t_sync_seconds')}` / `{absolute_aggregates.get('median_candidate_t_sync_seconds')}`"
+)
+lines.append(
+    f"- t_total seconds (control/candidate): `{absolute_aggregates.get('median_control_t_total_seconds')}` / `{absolute_aggregates.get('median_candidate_t_total_seconds')}`"
+)
+lines.append(
+    f"- s_sync_app bytes (control/candidate): `{absolute_aggregates.get('median_control_s_sync_app_bytes')}` / `{absolute_aggregates.get('median_candidate_s_sync_app_bytes')}`"
+)
+lines.append(
+    f"- s_post_wal bytes (control/candidate): `{absolute_aggregates.get('median_control_s_post_wal_bytes')}` / `{absolute_aggregates.get('median_candidate_s_post_wal_bytes')}`"
+)
+lines.append(
+    f"- max_rss_kb (control/candidate): `{absolute_aggregates.get('median_control_max_rss_kb')}` / `{absolute_aggregates.get('median_candidate_max_rss_kb')}`"
+)
+lines.append(
+    f"- composite score pct (median/mean; lower is better): `{absolute_aggregates.get('median_composite_score_pct')}` / `{absolute_aggregates.get('mean_composite_score_pct')}`"
+)
 lines.append("")
 lines.append("## Artifacts")
 lines.append("")
@@ -1796,6 +2003,15 @@ if pair_rows:
     lines.append(f"- delta_blocks_synced: `{last['delta_blocks_synced']}`")
     lines.append(f"- delta_s_sync_app_bytes_per_block: `{last['delta_s_sync_app_bytes_per_block']}`")
     lines.append(f"- delta_t_total_seconds_per_block: `{last['delta_t_total_seconds_per_block']}`")
+    lines.append(f"- control_t_sync_seconds: `{last['control_t_sync_seconds']}`")
+    lines.append(f"- candidate_t_sync_seconds: `{last['candidate_t_sync_seconds']}`")
+    lines.append(f"- control_t_total_seconds: `{last['control_t_total_seconds']}`")
+    lines.append(f"- candidate_t_total_seconds: `{last['candidate_t_total_seconds']}`")
+    lines.append(f"- control_s_post_wal_bytes: `{last['control_s_post_wal_bytes']}`")
+    lines.append(f"- candidate_s_post_wal_bytes: `{last['candidate_s_post_wal_bytes']}`")
+    lines.append(f"- control_max_rss_kb: `{last['control_max_rss_kb']}`")
+    lines.append(f"- candidate_max_rss_kb: `{last['candidate_max_rss_kb']}`")
+    lines.append(f"- composite_score_pct: `{last['composite_score_pct']}`")
 summary_md.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 payload = {
@@ -1812,6 +2028,15 @@ payload = {
     "ab_policy": ab_policy,
     "scoring_mode": scoring_mode,
     "allow_drift_scoring": allow_drift_scoring,
+    "composite": {
+        "weight_time": composite_weight_time,
+        "weight_size": composite_weight_size,
+        "stop_on_clear": composite_stop_on_clear,
+        "min_pairs": composite_min_pairs,
+        "clear_win_pct": composite_clear_win_pct,
+        "clear_loss_pct": composite_clear_loss_pct,
+    },
+    "absolute_aggregates": absolute_aggregates,
     "stop": stop,
     "reason": reason,
 }
