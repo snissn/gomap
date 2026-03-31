@@ -857,16 +857,31 @@ def main() -> int:
         print(f"error: failed to parse JSON from {source}: {exc}", file=sys.stderr)
         return 2
 
-    stats, instance_name = extract_stats(payload, args.instance_pattern)
-    if not stats:
-        print(
-            "error: could not extract treedb stats map from JSON (expected debug_vars shape or flat stats map)",
-            file=sys.stderr,
-        )
-        return 2
+    prebuilt_summary: dict[str, Any] | None = None
+    prebuilt_instance = ""
+    prebuilt_run_home = ""
+    if isinstance(payload, dict):
+        maybe_summary = payload.get("summary")
+        if isinstance(maybe_summary, dict) and "maintenance_attempts" in maybe_summary:
+            prebuilt_summary = maybe_summary
+            prebuilt_instance = str(payload.get("instance", ""))
+            prebuilt_run_home = str(payload.get("run_home", ""))
 
-    summary = build_summary(stats)
-    run_home = find_home_from_path(source)
+    if prebuilt_summary is not None:
+        summary = build_summary({})
+        summary.update(prebuilt_summary)
+        instance_name = prebuilt_instance
+        run_home = prebuilt_run_home or find_home_from_path(source)
+    else:
+        stats, instance_name = extract_stats(payload, args.instance_pattern)
+        if not stats:
+            print(
+                "error: could not extract treedb stats map from JSON (expected debug_vars shape, flat stats map, or maintenance summary JSON)",
+                file=sys.stderr,
+            )
+            return 2
+        summary = build_summary(stats)
+        run_home = find_home_from_path(source)
 
     if args.json:
         out = {
