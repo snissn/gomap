@@ -566,6 +566,18 @@ run_variant() {
     set +e
     "$TREEMAP_BIN" vlog-rewrite "$app_db" -rw >"$run_dir/rewrite.log" 2>&1
     rewrite_rc=$?
+    if [[ "$rewrite_rc" -ne 0 ]] && grep -q "requires a clean commitlog" "$run_dir/rewrite.log"; then
+      local checkpoint_rc=0
+      echo "rewrite_retry reason=clean_commitlog action=checkpoint_then_retry" >>"$run_dir/rewrite.log"
+      "$TREEMAP_BIN" checkpoint "$app_db" -rw >>"$run_dir/rewrite.log" 2>&1
+      checkpoint_rc=$?
+      if [[ "$checkpoint_rc" -eq 0 ]]; then
+        "$TREEMAP_BIN" vlog-rewrite "$app_db" -rw >>"$run_dir/rewrite.log" 2>&1
+        rewrite_rc=$?
+      else
+        rewrite_rc=$checkpoint_rc
+      fi
+    fi
     set -e
     local rewrite_end
     rewrite_end=$(date +%s)
