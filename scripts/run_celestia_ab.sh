@@ -330,8 +330,8 @@ run_variant() {
     (
       set -euo pipefail
       if [[ -n "$env_file" ]]; then
-        # shellcheck source=/dev/null
         set -a
+        # shellcheck source=/dev/null
         source "$env_file"
         set +a
       fi
