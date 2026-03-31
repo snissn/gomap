@@ -4281,6 +4281,9 @@ func TestVlogGenerationMaintenance_CheckpointPendingYieldsToDueAgeBlockedRetry(t
 	db.vlogGenerationCheckpointKickPending.Store(true)
 	t.Cleanup(func() { db.vlogGenerationCheckpointKickPending.Store(false) })
 
+	_, planCallsBefore := recorder.recordedPlan()
+	_, rewriteCallsBefore := recorder.recordedRewrite()
+
 	db.maybeRunVlogGenerationMaintenanceWithOptions(true, vlogGenerationMaintenanceOptions{
 		bypassQuiet:           true,
 		skipRetainedPruneWait: true,
@@ -4289,11 +4292,19 @@ func TestVlogGenerationMaintenance_CheckpointPendingYieldsToDueAgeBlockedRetry(t
 		debugSource:           "checkpoint_pending",
 	})
 
-	if _, calls := recorder.recordedPlan(); calls != 0 {
-		t.Fatalf("checkpoint-pending pass should yield to due age-blocked retry; plan calls=%d", calls)
+	if _, calls := recorder.recordedPlan(); calls != planCallsBefore {
+		t.Fatalf(
+			"checkpoint-pending pass should yield to due age-blocked retry; plan calls before=%d after=%d",
+			planCallsBefore,
+			calls,
+		)
 	}
-	if _, calls := recorder.recordedRewrite(); calls != 0 {
-		t.Fatalf("checkpoint-pending pass should yield to due age-blocked retry; rewrite calls=%d", calls)
+	if _, calls := recorder.recordedRewrite(); calls != rewriteCallsBefore {
+		t.Fatalf(
+			"checkpoint-pending pass should yield to due age-blocked retry; rewrite calls before=%d after=%d",
+			rewriteCallsBefore,
+			calls,
+		)
 	}
 	if !db.vlogGenerationCheckpointKickPending.Load() {
 		t.Fatalf("checkpoint-pending retry should remain queued while due age-blocked retry is pending")
