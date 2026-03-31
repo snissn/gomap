@@ -162,6 +162,8 @@ Notes:
   - capture path uses `treemap vlog-gc -rw -dry-run` (backend maintenance path; no delete/write side effects)
   - outputs land in each run directory as `light_stats_pre.txt` / `light_stats_post.txt`, and summarized values are included in `run.json` + `runs.csv`.
 - `runs.csv` now also includes rewrite-capacity counters from diagnostics summaries (plan runs/selection, source segment+byte outcomes, ledger bytes, budget utilization, observed-GC drain pct) so candidate/control behavior can be compared without opening each `run.json`.
+- `runs.csv` also includes reclaimed-vs-churn and capacity pressure KPIs (for example `rewrite_exec_reclaimed_vs_churn_ratio`, `rewrite_reclaimed_share_of_budget_pct`, `rewrite_budget_consumed_share_of_budget_pct`, `rewrite_ineffective_runs`, `observed_gc_pending_ids`) for faster triage of low-signal loops.
+- `pairs.csv` includes per-pair deltas for those KPIs so control/candidate capacity behavior can be compared without post-processing scripts.
 - To use pre-policy behavior, set `AB_POLICY=legacy`.
 
 ## Process Review Cadence
