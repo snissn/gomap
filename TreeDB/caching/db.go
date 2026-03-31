@@ -13989,6 +13989,10 @@ func (db *DB) observeVlogGenerationRewriteQueueProgress(
 	}
 	if !beforeLiveKnown || !afterLiveKnown {
 		db.vlogGenerationRewriteQueueLiveBytesUnknownPasses.Add(1)
+		// Avoid stale "last pass" values when a pass has no reliable live-bytes snapshot.
+		db.vlogGenerationRewriteQueueLiveBytesBeforeLast.Store(-1)
+		db.vlogGenerationRewriteQueueLiveBytesAfterLast.Store(-1)
+		db.vlogGenerationRewriteQueueLiveBytesDeltaLast.Store(-1)
 		return
 	}
 	db.vlogGenerationRewriteQueueLiveBytesKnownPasses.Add(1)

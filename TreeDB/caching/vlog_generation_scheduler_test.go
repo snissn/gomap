@@ -274,6 +274,65 @@ func TestShouldRunVlogGenerationRewrite_NoTrigger(t *testing.T) {
 	}
 }
 
+func TestObserveVlogGenerationRewriteQueueProgress_LiveBytesUnknownResetsLast(t *testing.T) {
+	db := &DB{}
+	db.vlogGenerationRewriteQueueLiveBytesBeforeLast.Store(1600)
+	db.vlogGenerationRewriteQueueLiveBytesAfterLast.Store(1200)
+	db.vlogGenerationRewriteQueueLiveBytesDeltaLast.Store(-400)
+
+	db.observeVlogGenerationRewriteQueueProgress(
+		4, 1600, false,
+		2, 1200, true,
+	)
+
+	if got, want := db.vlogGenerationRewriteQueueProgressPasses.Load(), uint64(1); got != want {
+		t.Fatalf("queue progress passes=%d want=%d", got, want)
+	}
+	if got, want := db.vlogGenerationRewriteQueueLiveBytesUnknownPasses.Load(), uint64(1); got != want {
+		t.Fatalf("live bytes unknown passes=%d want=%d", got, want)
+	}
+	if got, want := db.vlogGenerationRewriteQueueLiveBytesKnownPasses.Load(), uint64(0); got != want {
+		t.Fatalf("live bytes known passes=%d want=%d", got, want)
+	}
+	if got := db.vlogGenerationRewriteQueueLiveBytesBeforeLast.Load(); got != -1 {
+		t.Fatalf("live bytes before last=%d want -1", got)
+	}
+	if got := db.vlogGenerationRewriteQueueLiveBytesAfterLast.Load(); got != -1 {
+		t.Fatalf("live bytes after last=%d want -1", got)
+	}
+	if got := db.vlogGenerationRewriteQueueLiveBytesDeltaLast.Load(); got != -1 {
+		t.Fatalf("live bytes delta last=%d want -1", got)
+	}
+}
+
+func TestObserveVlogGenerationRewriteQueueProgress_KnownPassOverwritesSentinel(t *testing.T) {
+	db := &DB{}
+	db.observeVlogGenerationRewriteQueueProgress(
+		4, 1600, false,
+		2, 1200, true,
+	)
+	db.observeVlogGenerationRewriteQueueProgress(
+		2, 900, true,
+		1, 700, true,
+	)
+
+	if got, want := db.vlogGenerationRewriteQueueLiveBytesUnknownPasses.Load(), uint64(1); got != want {
+		t.Fatalf("live bytes unknown passes=%d want=%d", got, want)
+	}
+	if got, want := db.vlogGenerationRewriteQueueLiveBytesKnownPasses.Load(), uint64(1); got != want {
+		t.Fatalf("live bytes known passes=%d want=%d", got, want)
+	}
+	if got := db.vlogGenerationRewriteQueueLiveBytesBeforeLast.Load(); got != 900 {
+		t.Fatalf("live bytes before last=%d want 900", got)
+	}
+	if got := db.vlogGenerationRewriteQueueLiveBytesAfterLast.Load(); got != 700 {
+		t.Fatalf("live bytes after last=%d want 700", got)
+	}
+	if got := db.vlogGenerationRewriteQueueLiveBytesDeltaLast.Load(); got != -200 {
+		t.Fatalf("live bytes delta last=%d want -200", got)
+	}
+}
+
 func TestObserveVlogGenerationRewritePlanOutcome_SelectedTracksBytes(t *testing.T) {
 	db := &DB{}
 	db.observeVlogGenerationRewritePlanOutcome(backenddb.ValueLogRewritePlan{
