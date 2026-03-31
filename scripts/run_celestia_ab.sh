@@ -628,14 +628,26 @@ def diff_light(pre: dict[str, object], post: dict[str, object]) -> dict[str, flo
 def build_maintenance_from_light_stats(stats: dict[str, str]) -> dict[str, object]:
     if not stats:
         return {}
-    if not any(k.startswith("treedb.cache.vlog_generation.") for k in stats.keys()):
+    if not any(
+        k.startswith("treedb.cache.vlog_generation.") or k.startswith("treedb.vlog_generation.")
+        for k in stats.keys()
+    ):
         return {}
 
+    def stat_raw(key: str) -> str | None:
+        value = stats.get(key)
+        if value is not None:
+            return value
+        if key.startswith("treedb.cache.vlog_generation."):
+            legacy_key = "treedb.vlog_generation." + key[len("treedb.cache.vlog_generation.") :]
+            return stats.get(legacy_key)
+        return None
+
     def stat_int(key: str, default: int = 0) -> int:
-        return safe_int(stats.get(key), default)
+        return safe_int(stat_raw(key), default)
 
     def stat_float(key: str, default: float = 0.0) -> float:
-        return safe_float(stats.get(key), default)
+        return safe_float(stat_raw(key), default)
 
     out: dict[str, object] = {
         "rewrite_runs": stat_int("treedb.cache.vlog_generation.rewrite.runs"),
@@ -782,10 +794,6 @@ if not maintenance:
     maintenance_light_fallback = build_maintenance_from_light_stats(light_post_stats)
     if maintenance_light_fallback:
         maintenance = maintenance_light_fallback
-        maintenance_source = "light_stats_post"
-    elif maintenance_light_post:
-        # Keep source attribution explicit even when only static post-run
-        # light stats are available (no in-process diagnostics JSON).
         maintenance_source = "light_stats_post"
 
 t_sync = safe_int(sync.get("duration_seconds"), max(0, run_end - run_start))
