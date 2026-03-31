@@ -363,6 +363,31 @@ def build_summary(stats: dict[str, Any]) -> dict[str, Any]:
         "rewrite_queue_progress_live_bytes_before_last": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queue_progress.live_bytes_before_last"),
         "rewrite_queue_progress_live_bytes_after_last": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queue_progress.live_bytes_after_last"),
         "rewrite_queue_progress_live_bytes_delta_last": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queue_progress.live_bytes_delta_last"),
+        "rewrite_queue_len": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queue_len"),
+        "rewrite_queue_live_bytes_after_tokens": metric_int(
+            stats,
+            "treedb.cache.vlog_generation.rewrite.queue_live_bytes_after_tokens",
+        ),
+        "rewrite_queue_eta_seconds_budget": metric_float(
+            stats,
+            "treedb.cache.vlog_generation.rewrite.queue_eta_seconds.budget",
+        ),
+        "rewrite_queue_eta_seconds_recent_exec": metric_float(
+            stats,
+            "treedb.cache.vlog_generation.rewrite.queue_eta_seconds.recent_exec",
+        ),
+        "rewrite_exec_last_live_bytes": metric_int(
+            stats,
+            "treedb.cache.vlog_generation.rewrite.exec.last_live_bytes",
+        ),
+        "rewrite_exec_last_duration_ms": metric_float(
+            stats,
+            "treedb.cache.vlog_generation.rewrite.exec.last_duration_ms",
+        ),
+        "rewrite_exec_last_live_bytes_per_sec": metric_float(
+            stats,
+            "treedb.cache.vlog_generation.rewrite.exec.last_live_bytes_per_sec",
+        ),
         "gc_runs": metric_int(stats, "treedb.cache.vlog_generation.gc.runs"),
         "gc_deleted_bytes": metric_int(stats, "treedb.cache.vlog_generation.gc.deleted_bytes"),
         "gc_deleted_segments": metric_int(stats, "treedb.cache.vlog_generation.gc.deleted_segments"),
@@ -433,6 +458,10 @@ def build_summary(stats: dict[str, Any]) -> dict[str, Any]:
         "checkpoint_kick_gc_runs": metric_int(stats, "treedb.cache.vlog_generation.checkpoint_kick.gc_runs"),
         "checkpoint_kick_rewrite_runs": metric_int(stats, "treedb.cache.vlog_generation.checkpoint_kick.rewrite_runs"),
         "checkpoint_kick_skipped_hot_no_debt": metric_int(stats, "treedb.cache.vlog_generation.checkpoint_kick.skipped_hot_no_debt"),
+        "checkpoint_kick_hot_no_debt_wake_runs": metric_int(
+            stats,
+            "treedb.cache.vlog_generation.checkpoint_kick.hot_no_debt_wake.runs",
+        ),
     }
 
     skip_keys = [
@@ -493,6 +522,10 @@ def build_summary(stats: dict[str, Any]) -> dict[str, Any]:
     m["maintenance_acquired_source_other_pct"] = pct(
         m["maintenance_acquired_source_other"],
         passes_total,
+    )
+    m["checkpoint_kick_rewrite_rate_pct"] = pct(
+        m["checkpoint_kick_rewrite_runs"],
+        m["checkpoint_kick_runs"],
     )
 
     m["rewrite_plan_select_rate_pct"] = pct(m["rewrite_plan_selected"], m["rewrite_plan_runs"])
