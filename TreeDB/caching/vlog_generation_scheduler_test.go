@@ -348,11 +348,22 @@ func TestVlogGenerationRewriteQueueLiveBytesSnapshot_UsesLoadedLedger(t *testing
 	if err != nil {
 		t.Fatalf("snapshot error: %v", err)
 	}
-	if !known {
-		t.Fatalf("expected known=true for matching ids")
+	if known {
+		t.Fatalf("expected known=false when queue coverage is partial")
 	}
 	if liveBytes != 200 {
 		t.Fatalf("live bytes=%d want 200", liveBytes)
+	}
+
+	liveBytes, known, err = db.vlogGenerationRewriteQueueLiveBytesSnapshot([]uint32{2, 1, 2, 0})
+	if err != nil {
+		t.Fatalf("snapshot error (full coverage): %v", err)
+	}
+	if !known {
+		t.Fatalf("expected known=true when all queue ids are in the ledger")
+	}
+	if liveBytes != 200 {
+		t.Fatalf("live bytes (full coverage)=%d want 200", liveBytes)
 	}
 
 	liveBytes, known, err = db.vlogGenerationRewriteQueueLiveBytesSnapshot([]uint32{3})
@@ -976,6 +987,76 @@ func TestVlogGenerationRewriteSegmentCapForRun_Limiter(t *testing.T) {
 	}
 	if checkpointDecision.limiter != vlogGenerationRewriteSegmentCapLimiterCheckpointKickSafety {
 		t.Fatalf("checkpoint limiter=%s want=checkpoint_kick_safety", vlogGenerationRewriteSegmentCapLimiterString(checkpointDecision.limiter))
+	}
+}
+
+func TestVlogGenerationRewriteSegmentCapForRun_UsesQueueLiveHint(t *testing.T) {
+	db := &DB{
+		valueLogRewriteBudgetBytes:   1 << 20,
+		valueLogGenerationWarmTarget: 256,
+	}
+
+	withHint := db.vlogGenerationRewriteSegmentCapForRunWithHint(
+		4,
+		600,
+		800,
+		true,
+		vlogGenerationMaintenanceOptions{rewriteDebtDrain: true},
+	)
+	if withHint.maxSegments != 3 {
+		t.Fatalf("withHint maxSegments=%d want=3", withHint.maxSegments)
+	}
+	if withHint.byBudgetSegments != 3 {
+		t.Fatalf("withHint byBudgetSegments=%d want=3", withHint.byBudgetSegments)
+	}
+	if withHint.perSegmentBudget != 200 {
+		t.Fatalf("withHint perSegmentBudget=%d want=200", withHint.perSegmentBudget)
+	}
+	if withHint.limiter != vlogGenerationRewriteSegmentCapLimiterBudgetTokens {
+		t.Fatalf("withHint limiter=%s want=budget_tokens", vlogGenerationRewriteSegmentCapLimiterString(withHint.limiter))
+	}
+
+	withoutHint := db.vlogGenerationRewriteSegmentCapForRunWithHint(
+		4,
+		600,
+		0,
+		false,
+		vlogGenerationMaintenanceOptions{rewriteDebtDrain: true},
+	)
+	if withoutHint.maxSegments != 2 {
+		t.Fatalf("withoutHint maxSegments=%d want=2", withoutHint.maxSegments)
+	}
+	if withoutHint.byBudgetSegments != 2 {
+		t.Fatalf("withoutHint byBudgetSegments=%d want=2", withoutHint.byBudgetSegments)
+	}
+	if withoutHint.perSegmentBudget != 256 {
+		t.Fatalf("withoutHint perSegmentBudget=%d want=256", withoutHint.perSegmentBudget)
+	}
+}
+
+func TestVlogGenerationRewriteSegmentCapForFreshPlan_UsesQueueLiveHint(t *testing.T) {
+	db := &DB{
+		valueLogRewriteBudgetBytes:   1 << 20,
+		valueLogGenerationWarmTarget: 256,
+	}
+	decision := db.vlogGenerationRewriteSegmentCapForFreshPlanWithHint(
+		vlogGenerationRewriteFreshPlanDebtDrainMinSegments,
+		600,
+		800,
+		true,
+		vlogGenerationMaintenanceOptions{rewriteDebtDrain: true},
+	)
+	if decision.maxSegments != 3 {
+		t.Fatalf("fresh-plan withHint maxSegments=%d want=3", decision.maxSegments)
+	}
+	if decision.byBudgetSegments != 3 {
+		t.Fatalf("fresh-plan withHint byBudgetSegments=%d want=3", decision.byBudgetSegments)
+	}
+	if decision.perSegmentBudget != 200 {
+		t.Fatalf("fresh-plan withHint perSegmentBudget=%d want=200", decision.perSegmentBudget)
+	}
+	if decision.limiter != vlogGenerationRewriteSegmentCapLimiterBudgetTokens {
+		t.Fatalf("fresh-plan withHint limiter=%s want=budget_tokens", vlogGenerationRewriteSegmentCapLimiterString(decision.limiter))
 	}
 }
 
@@ -7335,8 +7416,8 @@ func TestVlogGenerationStats_ReportRewriteBacklogAndDurations(t *testing.T) {
 	if got := stats["treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.by_budget.checkpoint_kick"]; got != "0" {
 		t.Fatalf("rewrite queue run segment cap checkpoint-kick by-budget=%q want 0", got)
 	}
-	if got := stats["treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.per_segment_budget_bytes"]; got != "268435456" {
-		t.Fatalf("rewrite queue run segment cap per-segment budget bytes=%q want 268435456", got)
+	if got := stats["treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.per_segment_budget_bytes"]; got != "600" {
+		t.Fatalf("rewrite queue run segment cap per-segment budget bytes=%q want 600", got)
 	}
 	if got := stats["treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.per_segment_budget_bytes.checkpoint_kick"]; got != "0" {
 		t.Fatalf("rewrite queue run segment cap checkpoint-kick per-segment budget bytes=%q want 0", got)
@@ -7709,6 +7790,34 @@ func TestVlogGenerationStats_ReportRewriteBacklogAndDurations(t *testing.T) {
 	}
 	if got := stats["treedb.cache.vlog_generation.observed_gc.source_bytes_protected_other_total"]; got != "25" {
 		t.Fatalf("observed gc source bytes protected other total=%q want 25", got)
+	}
+}
+
+func TestVlogGenerationStats_QueueCapHintRequiresFullCoverage(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	recorder := &rewriteBudgetRecordingBackend{DB: backend}
+	db, cleanup := openRewriteQueueTestDB(t, dir, recorder)
+	defer cleanup()
+
+	db.valueLogGenerationWarmTarget = 256
+	db.vlogGenerationRewriteBudgetTokensBytes.Store(600)
+	db.vlogGenerationRewriteQueueMu.Lock()
+	db.vlogGenerationRewriteQueueLoaded = true
+	db.vlogGenerationRewriteQueue = []uint32{11, 99}
+	db.vlogGenerationRewriteLedger = []backenddb.ValueLogRewritePlanSegment{
+		{FileID: 11, BytesTotal: 1000, BytesLive: 700, BytesStale: 300},
+	}
+	db.vlogGenerationRewriteQueueMu.Unlock()
+
+	stats := db.Stats()
+	if got := stats["treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.per_segment_budget_bytes"]; got != "256" {
+		t.Fatalf("rewrite queue run segment cap per-segment budget bytes=%q want 256", got)
 	}
 }
 
