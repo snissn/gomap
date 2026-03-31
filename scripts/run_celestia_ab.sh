@@ -1576,7 +1576,7 @@ if not maintenance:
     maintenance_light_fallback = build_maintenance_from_light_stats(light_post_stats)
     if maintenance_light_fallback:
         maintenance = maintenance_light_fallback
-        maintenance_source = "light_stats_post"
+        maintenance_source = "light_stats_post_offline"
 
 t_sync = safe_int(sync.get("duration_seconds"), max(0, run_end - run_start))
 t_rw = rewrite_seconds if rewrite_attempted == 1 else 0
@@ -1662,6 +1662,7 @@ result = {
         "t_total_seconds_per_block": t_total_seconds_per_block,
     },
     "maintenance_summary_source": maintenance_source,
+    "maintenance_summary_is_live_runtime": maintenance_source == "diagnostics_json",
     "maintenance_summary": maintenance,
     "maintenance_light": {
         "capture": {

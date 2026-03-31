@@ -162,6 +162,7 @@ Notes:
   - command timeout: `AB_LIGHT_VLOG_STATS_TIMEOUT_SECONDS` (default `20`)
   - capture path uses `treemap stats -rw` (falls back to `treemap vlog-gc -rw -dry-run` if needed)
   - outputs land in each run directory as `light_stats_pre.txt` / `light_stats_post.txt`, and summarized values are included in `run.json` + `runs.csv`.
+  - these snapshots are offline `treemap` opens, not in-process runtime counters from the live node; `run.json.maintenance_summary_is_live_runtime` marks this (`true` only when diagnostics JSON is present).
 - `runs.csv` now also includes rewrite-capacity counters from diagnostics summaries (plan runs/selection, source segment+byte outcomes, ledger bytes, budget utilization, observed-GC drain pct) so candidate/control behavior can be compared without opening each `run.json`.
 - `pairs.csv` now includes absolute per-pair control/candidate values (`t_sync`, `t_total`, `s_sync_app`, `s_post_wal`, `max_rss_kb`) plus `composite_score_pct` (negative is better).
 - `summary.md` now includes `Absolute Medians` (control vs candidate) in addition to pair deltas.
