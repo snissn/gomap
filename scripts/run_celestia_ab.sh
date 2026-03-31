@@ -1045,6 +1045,30 @@ def build_maintenance_from_light_stats(stats: dict[str, str]) -> dict[str, objec
         "rewrite_queue_config_fresh_plan_debt_drain_max_segments": stat_int(
             "treedb.cache.vlog_generation.rewrite.queue_config.fresh_plan_debt_drain_max_segments",
         ),
+        "rewrite_queued_debt_passes": stat_int(
+            "treedb.cache.vlog_generation.rewrite.queued_debt.passes",
+        ),
+        "rewrite_queued_debt_rewrite_started": stat_int(
+            "treedb.cache.vlog_generation.rewrite.queued_debt.rewrite_started",
+        ),
+        "rewrite_queued_debt_skip_quiet_window": stat_int(
+            "treedb.cache.vlog_generation.rewrite.queued_debt.skip.quiet_window",
+        ),
+        "rewrite_queued_debt_skip_cancel_backoff": stat_int(
+            "treedb.cache.vlog_generation.rewrite.queued_debt.skip.cancel_backoff",
+        ),
+        "rewrite_queued_debt_skip_ineffective_backoff": stat_int(
+            "treedb.cache.vlog_generation.rewrite.queued_debt.skip.ineffective_backoff",
+        ),
+        "rewrite_queued_debt_skip_min_interval": stat_int(
+            "treedb.cache.vlog_generation.rewrite.queued_debt.skip.min_interval",
+        ),
+        "rewrite_queued_debt_skip_budget_empty": stat_int(
+            "treedb.cache.vlog_generation.rewrite.queued_debt.skip.budget_empty",
+        ),
+        "rewrite_queued_debt_skip_no_chunk": stat_int(
+            "treedb.cache.vlog_generation.rewrite.queued_debt.skip.no_chunk",
+        ),
         "rewrite_queue_live_hint_known": stat_str(
             "treedb.cache.vlog_generation.rewrite.queue_live_hint.known",
             "false",
@@ -1233,6 +1257,19 @@ def build_maintenance_from_light_stats(stats: dict[str, str]) -> dict[str, objec
     )
     out["maintenance_acquired_source_other_pct"] = (
         100.0 * safe_float(out.get("maintenance_acquired_source_other"), 0.0) / acquired if acquired > 0 else 0.0
+    )
+    queued_debt_passes = safe_float(out.get("rewrite_queued_debt_passes"), 0.0)
+    queued_debt_rewrite_started = safe_float(out.get("rewrite_queued_debt_rewrite_started"), 0.0)
+    out["rewrite_queued_debt_rewrite_start_rate_pct"] = (
+        100.0 * queued_debt_rewrite_started / queued_debt_passes if queued_debt_passes > 0 else 0.0
+    )
+    out["rewrite_queued_debt_skip_total"] = (
+        safe_int(out.get("rewrite_queued_debt_skip_quiet_window"), 0)
+        + safe_int(out.get("rewrite_queued_debt_skip_cancel_backoff"), 0)
+        + safe_int(out.get("rewrite_queued_debt_skip_ineffective_backoff"), 0)
+        + safe_int(out.get("rewrite_queued_debt_skip_min_interval"), 0)
+        + safe_int(out.get("rewrite_queued_debt_skip_budget_empty"), 0)
+        + safe_int(out.get("rewrite_queued_debt_skip_no_chunk"), 0)
     )
 
     out["rewrite_queue_progress_live_bytes_net_drain_total"] = (
@@ -1768,6 +1805,16 @@ with runs_csv.open("w", newline="", encoding="utf-8") as fh:
         "rewrite_queue_config_debt_drain_max_segments",
         "rewrite_queue_config_fresh_plan_debt_drain_min_segments",
         "rewrite_queue_config_fresh_plan_debt_drain_max_segments",
+        "rewrite_queued_debt_passes",
+        "rewrite_queued_debt_rewrite_started",
+        "rewrite_queued_debt_rewrite_start_rate_pct",
+        "rewrite_queued_debt_skip_total",
+        "rewrite_queued_debt_skip_quiet_window",
+        "rewrite_queued_debt_skip_cancel_backoff",
+        "rewrite_queued_debt_skip_ineffective_backoff",
+        "rewrite_queued_debt_skip_min_interval",
+        "rewrite_queued_debt_skip_budget_empty",
+        "rewrite_queued_debt_skip_no_chunk",
         "rewrite_queue_live_hint_known",
         "rewrite_queue_live_hint_ids_present",
         "rewrite_queue_live_hint_ids_known",
@@ -1972,6 +2019,16 @@ with runs_csv.open("w", newline="", encoding="utf-8") as fh:
             summary.get("rewrite_queue_config_debt_drain_max_segments", 0),
             summary.get("rewrite_queue_config_fresh_plan_debt_drain_min_segments", 0),
             summary.get("rewrite_queue_config_fresh_plan_debt_drain_max_segments", 0),
+            summary.get("rewrite_queued_debt_passes", 0),
+            summary.get("rewrite_queued_debt_rewrite_started", 0),
+            summary.get("rewrite_queued_debt_rewrite_start_rate_pct", 0),
+            summary.get("rewrite_queued_debt_skip_total", 0),
+            summary.get("rewrite_queued_debt_skip_quiet_window", 0),
+            summary.get("rewrite_queued_debt_skip_cancel_backoff", 0),
+            summary.get("rewrite_queued_debt_skip_ineffective_backoff", 0),
+            summary.get("rewrite_queued_debt_skip_min_interval", 0),
+            summary.get("rewrite_queued_debt_skip_budget_empty", 0),
+            summary.get("rewrite_queued_debt_skip_no_chunk", 0),
             summary.get("rewrite_queue_live_hint_known", "false"),
             summary.get("rewrite_queue_live_hint_ids_present", 0),
             summary.get("rewrite_queue_live_hint_ids_known", 0),
@@ -2128,6 +2185,21 @@ for pair in sorted(by_pair):
             "control_rewrite_non_checkpoint_source_unreferenced_bytes_pct": None,
             "candidate_rewrite_non_checkpoint_source_unreferenced_bytes_pct": None,
             "delta_rewrite_non_checkpoint_source_unreferenced_bytes_pct": None,
+            "control_rewrite_queued_debt_passes": None,
+            "candidate_rewrite_queued_debt_passes": None,
+            "delta_rewrite_queued_debt_passes": None,
+            "control_rewrite_queued_debt_rewrite_started": None,
+            "candidate_rewrite_queued_debt_rewrite_started": None,
+            "delta_rewrite_queued_debt_rewrite_started": None,
+            "control_rewrite_queued_debt_rewrite_start_rate_pct": None,
+            "candidate_rewrite_queued_debt_rewrite_start_rate_pct": None,
+            "delta_rewrite_queued_debt_rewrite_start_rate_pct": None,
+            "control_rewrite_queued_debt_skip_budget_empty": None,
+            "candidate_rewrite_queued_debt_skip_budget_empty": None,
+            "delta_rewrite_queued_debt_skip_budget_empty": None,
+            "control_rewrite_queued_debt_skip_no_chunk": None,
+            "candidate_rewrite_queued_debt_skip_no_chunk": None,
+            "delta_rewrite_queued_debt_skip_no_chunk": None,
             "control_valid": ctrl_valid,
             "candidate_valid": cand_valid,
             "control_invalid_reason": ctrl_reason,
@@ -2234,6 +2306,36 @@ for pair in sorted(by_pair):
     d_checkpoint_kick_burst_limiter_count = delta(
         cand_checkpoint_kick_burst_limiter_count,
         base_checkpoint_kick_burst_limiter_count,
+    )
+    cand_rewrite_queued_debt_passes = cand_summary.get("rewrite_queued_debt_passes")
+    base_rewrite_queued_debt_passes = ctrl_summary.get("rewrite_queued_debt_passes")
+    d_rewrite_queued_debt_passes = delta(
+        cand_rewrite_queued_debt_passes,
+        base_rewrite_queued_debt_passes,
+    )
+    cand_rewrite_queued_debt_rewrite_started = cand_summary.get("rewrite_queued_debt_rewrite_started")
+    base_rewrite_queued_debt_rewrite_started = ctrl_summary.get("rewrite_queued_debt_rewrite_started")
+    d_rewrite_queued_debt_rewrite_started = delta(
+        cand_rewrite_queued_debt_rewrite_started,
+        base_rewrite_queued_debt_rewrite_started,
+    )
+    cand_rewrite_queued_debt_rewrite_start_rate_pct = cand_summary.get("rewrite_queued_debt_rewrite_start_rate_pct")
+    base_rewrite_queued_debt_rewrite_start_rate_pct = ctrl_summary.get("rewrite_queued_debt_rewrite_start_rate_pct")
+    d_rewrite_queued_debt_rewrite_start_rate_pct = delta(
+        cand_rewrite_queued_debt_rewrite_start_rate_pct,
+        base_rewrite_queued_debt_rewrite_start_rate_pct,
+    )
+    cand_rewrite_queued_debt_skip_budget_empty = cand_summary.get("rewrite_queued_debt_skip_budget_empty")
+    base_rewrite_queued_debt_skip_budget_empty = ctrl_summary.get("rewrite_queued_debt_skip_budget_empty")
+    d_rewrite_queued_debt_skip_budget_empty = delta(
+        cand_rewrite_queued_debt_skip_budget_empty,
+        base_rewrite_queued_debt_skip_budget_empty,
+    )
+    cand_rewrite_queued_debt_skip_no_chunk = cand_summary.get("rewrite_queued_debt_skip_no_chunk")
+    base_rewrite_queued_debt_skip_no_chunk = ctrl_summary.get("rewrite_queued_debt_skip_no_chunk")
+    d_rewrite_queued_debt_skip_no_chunk = delta(
+        cand_rewrite_queued_debt_skip_no_chunk,
+        base_rewrite_queued_debt_skip_no_chunk,
     )
 
     def ratio(candidate, control):
@@ -2367,6 +2469,21 @@ for pair in sorted(by_pair):
         "control_rewrite_queue_run_segment_cap_limiter_count_checkpoint_kick_burst": base_checkpoint_kick_burst_limiter_count,
         "candidate_rewrite_queue_run_segment_cap_limiter_count_checkpoint_kick_burst": cand_checkpoint_kick_burst_limiter_count,
         "delta_rewrite_queue_run_segment_cap_limiter_count_checkpoint_kick_burst": d_checkpoint_kick_burst_limiter_count,
+        "control_rewrite_queued_debt_passes": base_rewrite_queued_debt_passes,
+        "candidate_rewrite_queued_debt_passes": cand_rewrite_queued_debt_passes,
+        "delta_rewrite_queued_debt_passes": d_rewrite_queued_debt_passes,
+        "control_rewrite_queued_debt_rewrite_started": base_rewrite_queued_debt_rewrite_started,
+        "candidate_rewrite_queued_debt_rewrite_started": cand_rewrite_queued_debt_rewrite_started,
+        "delta_rewrite_queued_debt_rewrite_started": d_rewrite_queued_debt_rewrite_started,
+        "control_rewrite_queued_debt_rewrite_start_rate_pct": base_rewrite_queued_debt_rewrite_start_rate_pct,
+        "candidate_rewrite_queued_debt_rewrite_start_rate_pct": cand_rewrite_queued_debt_rewrite_start_rate_pct,
+        "delta_rewrite_queued_debt_rewrite_start_rate_pct": d_rewrite_queued_debt_rewrite_start_rate_pct,
+        "control_rewrite_queued_debt_skip_budget_empty": base_rewrite_queued_debt_skip_budget_empty,
+        "candidate_rewrite_queued_debt_skip_budget_empty": cand_rewrite_queued_debt_skip_budget_empty,
+        "delta_rewrite_queued_debt_skip_budget_empty": d_rewrite_queued_debt_skip_budget_empty,
+        "control_rewrite_queued_debt_skip_no_chunk": base_rewrite_queued_debt_skip_no_chunk,
+        "candidate_rewrite_queued_debt_skip_no_chunk": cand_rewrite_queued_debt_skip_no_chunk,
+        "delta_rewrite_queued_debt_skip_no_chunk": d_rewrite_queued_debt_skip_no_chunk,
         "control_valid": ctrl_valid,
         "candidate_valid": cand_valid,
         "control_invalid_reason": ctrl_reason,
@@ -2435,6 +2552,21 @@ with pairs_csv.open("w", newline="", encoding="utf-8") as fh:
         "control_rewrite_queue_run_segment_cap_limiter_count_checkpoint_kick_burst",
         "candidate_rewrite_queue_run_segment_cap_limiter_count_checkpoint_kick_burst",
         "delta_rewrite_queue_run_segment_cap_limiter_count_checkpoint_kick_burst",
+        "control_rewrite_queued_debt_passes",
+        "candidate_rewrite_queued_debt_passes",
+        "delta_rewrite_queued_debt_passes",
+        "control_rewrite_queued_debt_rewrite_started",
+        "candidate_rewrite_queued_debt_rewrite_started",
+        "delta_rewrite_queued_debt_rewrite_started",
+        "control_rewrite_queued_debt_rewrite_start_rate_pct",
+        "candidate_rewrite_queued_debt_rewrite_start_rate_pct",
+        "delta_rewrite_queued_debt_rewrite_start_rate_pct",
+        "control_rewrite_queued_debt_skip_budget_empty",
+        "candidate_rewrite_queued_debt_skip_budget_empty",
+        "delta_rewrite_queued_debt_skip_budget_empty",
+        "control_rewrite_queued_debt_skip_no_chunk",
+        "candidate_rewrite_queued_debt_skip_no_chunk",
+        "delta_rewrite_queued_debt_skip_no_chunk",
         "control_valid",
         "candidate_valid",
         "control_invalid_reason",
@@ -2500,6 +2632,21 @@ with pairs_csv.open("w", newline="", encoding="utf-8") as fh:
             r["control_rewrite_queue_run_segment_cap_limiter_count_checkpoint_kick_burst"],
             r["candidate_rewrite_queue_run_segment_cap_limiter_count_checkpoint_kick_burst"],
             r["delta_rewrite_queue_run_segment_cap_limiter_count_checkpoint_kick_burst"],
+            r["control_rewrite_queued_debt_passes"],
+            r["candidate_rewrite_queued_debt_passes"],
+            r["delta_rewrite_queued_debt_passes"],
+            r["control_rewrite_queued_debt_rewrite_started"],
+            r["candidate_rewrite_queued_debt_rewrite_started"],
+            r["delta_rewrite_queued_debt_rewrite_started"],
+            r["control_rewrite_queued_debt_rewrite_start_rate_pct"],
+            r["candidate_rewrite_queued_debt_rewrite_start_rate_pct"],
+            r["delta_rewrite_queued_debt_rewrite_start_rate_pct"],
+            r["control_rewrite_queued_debt_skip_budget_empty"],
+            r["candidate_rewrite_queued_debt_skip_budget_empty"],
+            r["delta_rewrite_queued_debt_skip_budget_empty"],
+            r["control_rewrite_queued_debt_skip_no_chunk"],
+            r["candidate_rewrite_queued_debt_skip_no_chunk"],
+            r["delta_rewrite_queued_debt_skip_no_chunk"],
             r["control_valid"],
             r["candidate_valid"],
             r["control_invalid_reason"],
@@ -2579,6 +2726,26 @@ delta_non_checkpoint_source_unreferenced_bytes_pct_mean = mean_pair_delta(
 delta_checkpoint_kick_burst_limiter_count_mean = mean_pair_delta(
     scored_rows,
     "delta_rewrite_queue_run_segment_cap_limiter_count_checkpoint_kick_burst",
+)
+delta_rewrite_queued_debt_passes_mean = mean_pair_delta(
+    scored_rows,
+    "delta_rewrite_queued_debt_passes",
+)
+delta_rewrite_queued_debt_rewrite_started_mean = mean_pair_delta(
+    scored_rows,
+    "delta_rewrite_queued_debt_rewrite_started",
+)
+delta_rewrite_queued_debt_rewrite_start_rate_pct_mean = mean_pair_delta(
+    scored_rows,
+    "delta_rewrite_queued_debt_rewrite_start_rate_pct",
+)
+delta_rewrite_queued_debt_skip_budget_empty_mean = mean_pair_delta(
+    scored_rows,
+    "delta_rewrite_queued_debt_skip_budget_empty",
+)
+delta_rewrite_queued_debt_skip_no_chunk_mean = mean_pair_delta(
+    scored_rows,
+    "delta_rewrite_queued_debt_skip_no_chunk",
 )
 neutral_streak = 0
 for row in reversed(scored_rows):
@@ -2745,6 +2912,21 @@ lines.append(
 lines.append(
     f"- mean delta rewrite_queue_run_segment_cap_limiter_count_checkpoint_kick_burst: `{delta_checkpoint_kick_burst_limiter_count_mean}`"
 )
+lines.append(
+    f"- mean delta rewrite_queued_debt_passes: `{delta_rewrite_queued_debt_passes_mean}`"
+)
+lines.append(
+    f"- mean delta rewrite_queued_debt_rewrite_started: `{delta_rewrite_queued_debt_rewrite_started_mean}`"
+)
+lines.append(
+    f"- mean delta rewrite_queued_debt_rewrite_start_rate_pct: `{delta_rewrite_queued_debt_rewrite_start_rate_pct_mean}`"
+)
+lines.append(
+    f"- mean delta rewrite_queued_debt_skip_budget_empty: `{delta_rewrite_queued_debt_skip_budget_empty_mean}`"
+)
+lines.append(
+    f"- mean delta rewrite_queued_debt_skip_no_chunk: `{delta_rewrite_queued_debt_skip_no_chunk_mean}`"
+)
 lines.append(f"- decision: `{reason}`")
 lines.append("")
 lines.append("## Absolute Medians")
@@ -2872,6 +3054,36 @@ if pair_rows:
         f"`{last['candidate_rewrite_queue_run_segment_cap_limiter_count_checkpoint_kick_burst']}` / "
         f"`{last['delta_rewrite_queue_run_segment_cap_limiter_count_checkpoint_kick_burst']}`"
     )
+    lines.append(
+        f"- rewrite_queued_debt_passes (control/candidate/delta): "
+        f"`{last['control_rewrite_queued_debt_passes']}` / "
+        f"`{last['candidate_rewrite_queued_debt_passes']}` / "
+        f"`{last['delta_rewrite_queued_debt_passes']}`"
+    )
+    lines.append(
+        f"- rewrite_queued_debt_rewrite_started (control/candidate/delta): "
+        f"`{last['control_rewrite_queued_debt_rewrite_started']}` / "
+        f"`{last['candidate_rewrite_queued_debt_rewrite_started']}` / "
+        f"`{last['delta_rewrite_queued_debt_rewrite_started']}`"
+    )
+    lines.append(
+        f"- rewrite_queued_debt_rewrite_start_rate_pct (control/candidate/delta): "
+        f"`{last['control_rewrite_queued_debt_rewrite_start_rate_pct']}` / "
+        f"`{last['candidate_rewrite_queued_debt_rewrite_start_rate_pct']}` / "
+        f"`{last['delta_rewrite_queued_debt_rewrite_start_rate_pct']}`"
+    )
+    lines.append(
+        f"- rewrite_queued_debt_skip_budget_empty (control/candidate/delta): "
+        f"`{last['control_rewrite_queued_debt_skip_budget_empty']}` / "
+        f"`{last['candidate_rewrite_queued_debt_skip_budget_empty']}` / "
+        f"`{last['delta_rewrite_queued_debt_skip_budget_empty']}`"
+    )
+    lines.append(
+        f"- rewrite_queued_debt_skip_no_chunk (control/candidate/delta): "
+        f"`{last['control_rewrite_queued_debt_skip_no_chunk']}` / "
+        f"`{last['candidate_rewrite_queued_debt_skip_no_chunk']}` / "
+        f"`{last['delta_rewrite_queued_debt_skip_no_chunk']}`"
+    )
 summary_md.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 payload = {
@@ -2909,6 +3121,11 @@ payload = {
     "mean_delta_rewrite_checkpoint_like_source_unreferenced_bytes_pct": delta_checkpoint_like_source_unreferenced_bytes_pct_mean,
     "mean_delta_rewrite_non_checkpoint_source_unreferenced_bytes_pct": delta_non_checkpoint_source_unreferenced_bytes_pct_mean,
     "mean_delta_rewrite_queue_run_segment_cap_limiter_count_checkpoint_kick_burst": delta_checkpoint_kick_burst_limiter_count_mean,
+    "mean_delta_rewrite_queued_debt_passes": delta_rewrite_queued_debt_passes_mean,
+    "mean_delta_rewrite_queued_debt_rewrite_started": delta_rewrite_queued_debt_rewrite_started_mean,
+    "mean_delta_rewrite_queued_debt_rewrite_start_rate_pct": delta_rewrite_queued_debt_rewrite_start_rate_pct_mean,
+    "mean_delta_rewrite_queued_debt_skip_budget_empty": delta_rewrite_queued_debt_skip_budget_empty_mean,
+    "mean_delta_rewrite_queued_debt_skip_no_chunk": delta_rewrite_queued_debt_skip_no_chunk_mean,
     "stop": stop,
     "reason": reason,
 }
