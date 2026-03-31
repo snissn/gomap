@@ -339,6 +339,111 @@ func TestNextRewriteRIDStart_IgnoresSegmentRemovedAfterScan(t *testing.T) {
 	}
 }
 
+func TestNextRewriteRIDStartFromSet_TracksGroupedFrameRIDs(t *testing.T) {
+	dir := t.TempDir()
+
+	fileID1, err := valuelog.EncodeFileID(0, 1)
+	if err != nil {
+		t.Fatalf("EncodeFileID(0,1): %v", err)
+	}
+	path1 := filepath.Join(dir, "value-l0-000001.log")
+	w1, err := valuelog.NewWriter(path1, fileID1)
+	if err != nil {
+		t.Fatalf("NewWriter(path1): %v", err)
+	}
+	if _, err := w1.Append(0, nil, 5, bytes.Repeat([]byte{0x01}, 64)); err != nil {
+		t.Fatalf("Append(path1): %v", err)
+	}
+	if _, err := w1.AppendFrame(0, nil, []valuelog.Record{
+		{RID: 7, Value: bytes.Repeat([]byte{0x02}, 32)},
+		{RID: 23, Value: bytes.Repeat([]byte{0x03}, 32)},
+	}); err != nil {
+		t.Fatalf("AppendFrame(path1): %v", err)
+	}
+	closeNoErr(t, w1)
+	f1, err := os.Open(path1)
+	if err != nil {
+		t.Fatalf("Open(path1): %v", err)
+	}
+	defer closeNoErr(t, f1)
+
+	fileID2, err := valuelog.EncodeFileID(0, 2)
+	if err != nil {
+		t.Fatalf("EncodeFileID(0,2): %v", err)
+	}
+	path2 := filepath.Join(dir, "value-l0-000002.log")
+	w2, err := valuelog.NewWriter(path2, fileID2)
+	if err != nil {
+		t.Fatalf("NewWriter(path2): %v", err)
+	}
+	if _, err := w2.Append(0, nil, 19, bytes.Repeat([]byte{0x04}, 64)); err != nil {
+		t.Fatalf("Append(path2): %v", err)
+	}
+	closeNoErr(t, w2)
+	f2, err := os.Open(path2)
+	if err != nil {
+		t.Fatalf("Open(path2): %v", err)
+	}
+	defer closeNoErr(t, f2)
+
+	set := &valuelog.Set{
+		Files: map[uint32]*valuelog.File{
+			fileID1: {ID: fileID1, Path: path1, File: f1},
+			fileID2: {ID: fileID2, Path: path2, File: f2},
+		},
+	}
+	start, err := nextRewriteRIDStartFromSet(set)
+	if err != nil {
+		t.Fatalf("nextRewriteRIDStartFromSet: %v", err)
+	}
+	if start != 24 {
+		t.Fatalf("start=%d want 24", start)
+	}
+}
+
+func TestNextRewriteRIDStartFromSet_IgnoresMissingPathEntries(t *testing.T) {
+	dir := t.TempDir()
+
+	missingID, err := valuelog.EncodeFileID(0, 1)
+	if err != nil {
+		t.Fatalf("EncodeFileID(0,1): %v", err)
+	}
+	missingPath := filepath.Join(dir, "value-l0-000001.log")
+
+	fileID2, err := valuelog.EncodeFileID(0, 2)
+	if err != nil {
+		t.Fatalf("EncodeFileID(0,2): %v", err)
+	}
+	path2 := filepath.Join(dir, "value-l0-000002.log")
+	w2, err := valuelog.NewWriter(path2, fileID2)
+	if err != nil {
+		t.Fatalf("NewWriter(path2): %v", err)
+	}
+	if _, err := w2.Append(0, nil, 41, bytes.Repeat([]byte{0x05}, 64)); err != nil {
+		t.Fatalf("Append(path2): %v", err)
+	}
+	closeNoErr(t, w2)
+	f2, err := os.Open(path2)
+	if err != nil {
+		t.Fatalf("Open(path2): %v", err)
+	}
+	defer closeNoErr(t, f2)
+
+	set := &valuelog.Set{
+		Files: map[uint32]*valuelog.File{
+			missingID: {ID: missingID, Path: missingPath, File: nil},
+			fileID2:   {ID: fileID2, Path: path2, File: f2},
+		},
+	}
+	start, err := nextRewriteRIDStartFromSet(set)
+	if err != nil {
+		t.Fatalf("nextRewriteRIDStartFromSet: %v", err)
+	}
+	if start != 42 {
+		t.Fatalf("start=%d want 42", start)
+	}
+}
+
 func TestValueLogRewrite_HealthMetadata_PreservedAcrossReopen(t *testing.T) {
 	dir := t.TempDir()
 

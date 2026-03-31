@@ -2234,53 +2234,125 @@ func nextRewriteRIDStartFromSet(set *valuelog.Set) (uint64, error) {
 	if set == nil || len(set.Files) == 0 {
 		return 1, nil
 	}
-	const ridScanReaderBufferSize = 64 << 10
-	ids := make([]uint32, 0, len(set.Files))
-	for id, file := range set.Files {
-		if file == nil || file.Path == "" {
-			continue
-		}
-		ids = append(ids, id)
-	}
-	sort.Slice(ids, func(i, j int) bool {
-		return ids[i] < ids[j]
-	})
 	maxRID := uint64(0)
-	for _, id := range ids {
-		file := set.Files[id]
-		if file == nil || file.Path == "" {
-			continue
-		}
-		reader, err := valuelog.NewReaderWithBufferSize(file.Path, id, ridScanReaderBufferSize)
+	for _, file := range set.Files {
+		segMaxRID, err := scanValueLogFileMaxRID(file)
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) {
 				continue
 			}
 			return 0, err
 		}
-		reader.DisableValueDecode()
-		for {
-			rid, _, err := reader.ReadNextMeta()
-			if err == nil {
-				if rid > maxRID {
-					maxRID = rid
-				}
-				continue
-			}
-			if isTruncatedLogError(err) {
-				break
-			}
-			_ = reader.Close()
-			return 0, err
-		}
-		if err := reader.Close(); err != nil {
-			return 0, err
+		if segMaxRID > maxRID {
+			maxRID = segMaxRID
 		}
 	}
 	if maxRID == ^uint64(0) {
 		return 0, fmt.Errorf("value-log rid space exhausted")
 	}
 	return maxRID + 1, nil
+}
+
+func scanValueLogFileMaxRID(seg *valuelog.File) (uint64, error) {
+	if seg == nil {
+		return 0, nil
+	}
+	f := seg.File
+	closeAfter := false
+	if f == nil && seg.Path != "" {
+		var err error
+		f, err = os.Open(seg.Path)
+		if err != nil {
+			return 0, err
+		}
+		closeAfter = true
+	}
+	if f == nil {
+		return 0, nil
+	}
+	if closeAfter {
+		defer func() { _ = f.Close() }()
+	}
+	info, err := f.Stat()
+	if err != nil {
+		return 0, err
+	}
+	size := info.Size()
+	if size < int64(valuelog.HeaderSize) {
+		return 0, nil
+	}
+
+	const recordFlagGrouped byte = 1 << 0
+	const maxFrameRIDBytes = valuelog.MaxFrameK * 8
+
+	var (
+		header      [valuelog.HeaderSize]byte
+		frameHeader [valuelog.FrameHeaderSize]byte
+		frameRIDs   [maxFrameRIDBytes]byte
+		off         int64
+		maxRID      uint64
+	)
+	for off+int64(valuelog.HeaderSize) <= size {
+		if _, err := f.ReadAt(header[:], off); err != nil {
+			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+				break
+			}
+			return 0, err
+		}
+		if header[4] != valuelog.Version {
+			return 0, valuelog.ErrCorrupt
+		}
+		rid := binary.LittleEndian.Uint64(header[8:16])
+		if rid > maxRID {
+			maxRID = rid
+		}
+		bodyLen := int64(binary.LittleEndian.Uint32(header[16:20]))
+		recordEnd := off + int64(valuelog.HeaderSize) + bodyLen
+		if recordEnd > size {
+			// Best-effort scan: tolerate truncated trailing records.
+			break
+		}
+		if header[5]&recordFlagGrouped != 0 {
+			if bodyLen < int64(valuelog.FrameHeaderSize) {
+				break
+			}
+			frameOff := off + int64(valuelog.HeaderSize)
+			if _, err := f.ReadAt(frameHeader[:], frameOff); err != nil {
+				if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+					break
+				}
+				return 0, err
+			}
+			if frameHeader[0] != valuelog.FrameVersion {
+				return 0, valuelog.ErrCorrupt
+			}
+			k := int(frameHeader[2])
+			if k <= 0 || k > valuelog.MaxFrameK {
+				return 0, valuelog.ErrCorrupt
+			}
+			ridBytes := k * 8
+			if bodyLen < int64(valuelog.FrameHeaderSize+ridBytes) {
+				break
+			}
+			if _, err := f.ReadAt(frameRIDs[:ridBytes], frameOff+int64(valuelog.FrameHeaderSize)); err != nil {
+				if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+					break
+				}
+				return 0, err
+			}
+			for i := 0; i < k; i++ {
+				frameRID := binary.LittleEndian.Uint64(frameRIDs[i*8 : (i+1)*8])
+				if frameRID == 0 {
+					return 0, valuelog.ErrCorrupt
+				}
+				if frameRID > maxRID {
+					maxRID = frameRID
+				}
+			}
+		}
+		off = recordEnd
+	}
+	return maxRID, nil
 }
 
 func (db *DB) applyRewriteSwapBatch(swaps []rewriteSwap, sync bool) error {
