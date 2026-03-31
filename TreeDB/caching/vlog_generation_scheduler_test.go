@@ -6761,6 +6761,24 @@ func TestVlogGenerationStats_ReportRewriteBacklogAndDurations(t *testing.T) {
 	db.vlogGenerationRewriteSourceBytesRequestedLast.Store(2200)
 	db.vlogGenerationRewriteSourceBytesStillReferencedLast.Store(700)
 	db.vlogGenerationRewriteSourceBytesUnreferencedLast.Store(1500)
+	db.vlogGenerationRewriteQueueProgressPasses.Store(7)
+	db.vlogGenerationRewriteQueueProgressSnapshotErrors.Store(1)
+	db.vlogGenerationRewriteQueueSegmentsBeforeTotal.Store(20)
+	db.vlogGenerationRewriteQueueSegmentsAfterTotal.Store(14)
+	db.vlogGenerationRewriteQueueSegmentsDrainedTotal.Store(8)
+	db.vlogGenerationRewriteQueueSegmentsGrownTotal.Store(2)
+	db.vlogGenerationRewriteQueueSegmentsBeforeLast.Store(4)
+	db.vlogGenerationRewriteQueueSegmentsAfterLast.Store(2)
+	db.vlogGenerationRewriteQueueSegmentsDeltaLast.Store(-2)
+	db.vlogGenerationRewriteQueueLiveBytesKnownPasses.Store(6)
+	db.vlogGenerationRewriteQueueLiveBytesUnknownPasses.Store(1)
+	db.vlogGenerationRewriteQueueLiveBytesBeforeTotal.Store(10000)
+	db.vlogGenerationRewriteQueueLiveBytesAfterTotal.Store(7600)
+	db.vlogGenerationRewriteQueueLiveBytesDrainedTotal.Store(3200)
+	db.vlogGenerationRewriteQueueLiveBytesGrownTotal.Store(800)
+	db.vlogGenerationRewriteQueueLiveBytesBeforeLast.Store(1600)
+	db.vlogGenerationRewriteQueueLiveBytesAfterLast.Store(1200)
+	db.vlogGenerationRewriteQueueLiveBytesDeltaLast.Store(-400)
 	db.vlogGenerationRewriteProcessedLiveBytes.Store(900)
 	db.vlogGenerationRewriteProcessedStaleBytes.Store(450)
 	db.vlogGenerationRewriteNoReclaimRuns.Store(3)
@@ -7008,6 +7026,60 @@ func TestVlogGenerationStats_ReportRewriteBacklogAndDurations(t *testing.T) {
 	}
 	if got := stats["treedb.cache.vlog_generation.rewrite.queue_config.fresh_plan_debt_drain_max_segments"]; got != "4" {
 		t.Fatalf("rewrite queue config fresh-plan max segments=%q want 4", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.queue_progress.passes"]; got != "7" {
+		t.Fatalf("rewrite queue progress passes=%q want 7", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.queue_progress.snapshot_errors"]; got != "1" {
+		t.Fatalf("rewrite queue progress snapshot errors=%q want 1", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.queue_progress.segments_before_total"]; got != "20" {
+		t.Fatalf("rewrite queue progress segments before total=%q want 20", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.queue_progress.segments_after_total"]; got != "14" {
+		t.Fatalf("rewrite queue progress segments after total=%q want 14", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.queue_progress.segments_drained_total"]; got != "8" {
+		t.Fatalf("rewrite queue progress segments drained total=%q want 8", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.queue_progress.segments_grown_total"]; got != "2" {
+		t.Fatalf("rewrite queue progress segments grown total=%q want 2", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.queue_progress.segments_before_last"]; got != "4" {
+		t.Fatalf("rewrite queue progress segments before last=%q want 4", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.queue_progress.segments_after_last"]; got != "2" {
+		t.Fatalf("rewrite queue progress segments after last=%q want 2", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.queue_progress.segments_delta_last"]; got != "-2" {
+		t.Fatalf("rewrite queue progress segments delta last=%q want -2", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.queue_progress.live_bytes_known_passes"]; got != "6" {
+		t.Fatalf("rewrite queue progress live bytes known passes=%q want 6", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.queue_progress.live_bytes_unknown_passes"]; got != "1" {
+		t.Fatalf("rewrite queue progress live bytes unknown passes=%q want 1", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.queue_progress.live_bytes_before_total"]; got != "10000" {
+		t.Fatalf("rewrite queue progress live bytes before total=%q want 10000", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.queue_progress.live_bytes_after_total"]; got != "7600" {
+		t.Fatalf("rewrite queue progress live bytes after total=%q want 7600", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.queue_progress.live_bytes_drained_total"]; got != "3200" {
+		t.Fatalf("rewrite queue progress live bytes drained total=%q want 3200", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.queue_progress.live_bytes_grown_total"]; got != "800" {
+		t.Fatalf("rewrite queue progress live bytes grown total=%q want 800", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.queue_progress.live_bytes_before_last"]; got != "1600" {
+		t.Fatalf("rewrite queue progress live bytes before last=%q want 1600", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.queue_progress.live_bytes_after_last"]; got != "1200" {
+		t.Fatalf("rewrite queue progress live bytes after last=%q want 1200", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.queue_progress.live_bytes_delta_last"]; got != "-400" {
+		t.Fatalf("rewrite queue progress live bytes delta last=%q want -400", got)
 	}
 	if got := stats["treedb.cache.vlog_generation.rewrite.queue_live_bytes_after_tokens"]; got != "688" {
 		t.Fatalf("rewrite queue live bytes after tokens=%q want 688", got)

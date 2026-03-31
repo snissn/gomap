@@ -6338,6 +6338,24 @@ type DB struct {
 	vlogGenerationRewriteSourceBytesRequestedLast           atomic.Uint64
 	vlogGenerationRewriteSourceBytesStillReferencedLast     atomic.Uint64
 	vlogGenerationRewriteSourceBytesUnreferencedLast        atomic.Uint64
+	vlogGenerationRewriteQueueProgressPasses                atomic.Uint64
+	vlogGenerationRewriteQueueProgressSnapshotErrors        atomic.Uint64
+	vlogGenerationRewriteQueueSegmentsBeforeTotal           atomic.Uint64
+	vlogGenerationRewriteQueueSegmentsAfterTotal            atomic.Uint64
+	vlogGenerationRewriteQueueSegmentsDrainedTotal          atomic.Uint64
+	vlogGenerationRewriteQueueSegmentsGrownTotal            atomic.Uint64
+	vlogGenerationRewriteQueueSegmentsBeforeLast            atomic.Int64
+	vlogGenerationRewriteQueueSegmentsAfterLast             atomic.Int64
+	vlogGenerationRewriteQueueSegmentsDeltaLast             atomic.Int64
+	vlogGenerationRewriteQueueLiveBytesKnownPasses          atomic.Uint64
+	vlogGenerationRewriteQueueLiveBytesUnknownPasses        atomic.Uint64
+	vlogGenerationRewriteQueueLiveBytesBeforeTotal          atomic.Uint64
+	vlogGenerationRewriteQueueLiveBytesAfterTotal           atomic.Uint64
+	vlogGenerationRewriteQueueLiveBytesDrainedTotal         atomic.Uint64
+	vlogGenerationRewriteQueueLiveBytesGrownTotal           atomic.Uint64
+	vlogGenerationRewriteQueueLiveBytesBeforeLast           atomic.Int64
+	vlogGenerationRewriteQueueLiveBytesAfterLast            atomic.Int64
+	vlogGenerationRewriteQueueLiveBytesDeltaLast            atomic.Int64
 	vlogGenerationGCExecTotalNanos                          atomic.Uint64
 	vlogGenerationGCExecMaxNanos                            atomic.Uint64
 	vlogGenerationVacuumExecTotalNanos                      atomic.Uint64
@@ -13897,6 +13915,77 @@ func (db *DB) observeVlogGenerationRewriteQueuePrune(dropped int) {
 	db.vlogGenerationRewriteQueuePruneIDs.Add(uint64(dropped))
 }
 
+func (db *DB) vlogGenerationRewriteQueueLiveBytesSnapshot(ids []uint32) (liveBytes int64, known bool, err error) {
+	if db == nil || len(ids) == 0 {
+		return 0, true, nil
+	}
+	ledger, err := db.currentVlogGenerationRewriteLedger()
+	if err != nil {
+		return 0, false, err
+	}
+	if len(ledger) == 0 {
+		return 0, false, nil
+	}
+	liveBytes, known = sumVlogRewritePlanLiveBytes(ledger, ids)
+	if liveBytes < 0 {
+		liveBytes = 0
+	}
+	return liveBytes, known, nil
+}
+
+func (db *DB) observeVlogGenerationRewriteQueueProgress(
+	beforeSegments int,
+	beforeLiveBytes int64,
+	beforeLiveKnown bool,
+	afterSegments int,
+	afterLiveBytes int64,
+	afterLiveKnown bool,
+) {
+	if db == nil {
+		return
+	}
+	if beforeSegments < 0 {
+		beforeSegments = 0
+	}
+	if afterSegments < 0 {
+		afterSegments = 0
+	}
+	if beforeLiveBytes < 0 {
+		beforeLiveBytes = 0
+	}
+	if afterLiveBytes < 0 {
+		afterLiveBytes = 0
+	}
+	db.vlogGenerationRewriteQueueProgressPasses.Add(1)
+	db.vlogGenerationRewriteQueueSegmentsBeforeTotal.Add(uint64(beforeSegments))
+	db.vlogGenerationRewriteQueueSegmentsAfterTotal.Add(uint64(afterSegments))
+	db.vlogGenerationRewriteQueueSegmentsBeforeLast.Store(int64(beforeSegments))
+	db.vlogGenerationRewriteQueueSegmentsAfterLast.Store(int64(afterSegments))
+	segmentsDelta := afterSegments - beforeSegments
+	db.vlogGenerationRewriteQueueSegmentsDeltaLast.Store(int64(segmentsDelta))
+	if segmentsDelta < 0 {
+		db.vlogGenerationRewriteQueueSegmentsDrainedTotal.Add(uint64(-segmentsDelta))
+	} else if segmentsDelta > 0 {
+		db.vlogGenerationRewriteQueueSegmentsGrownTotal.Add(uint64(segmentsDelta))
+	}
+	if !beforeLiveKnown || !afterLiveKnown {
+		db.vlogGenerationRewriteQueueLiveBytesUnknownPasses.Add(1)
+		return
+	}
+	db.vlogGenerationRewriteQueueLiveBytesKnownPasses.Add(1)
+	db.vlogGenerationRewriteQueueLiveBytesBeforeTotal.Add(uint64(beforeLiveBytes))
+	db.vlogGenerationRewriteQueueLiveBytesAfterTotal.Add(uint64(afterLiveBytes))
+	db.vlogGenerationRewriteQueueLiveBytesBeforeLast.Store(beforeLiveBytes)
+	db.vlogGenerationRewriteQueueLiveBytesAfterLast.Store(afterLiveBytes)
+	liveDelta := afterLiveBytes - beforeLiveBytes
+	db.vlogGenerationRewriteQueueLiveBytesDeltaLast.Store(liveDelta)
+	if liveDelta < 0 {
+		db.vlogGenerationRewriteQueueLiveBytesDrainedTotal.Add(uint64(-liveDelta))
+	} else if liveDelta > 0 {
+		db.vlogGenerationRewriteQueueLiveBytesGrownTotal.Add(uint64(liveDelta))
+	}
+}
+
 func (db *DB) vlogGenerationRewriteCancelBackoffActive(now time.Time) bool {
 	if db == nil {
 		return false
@@ -14515,6 +14604,10 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 	gcAttempted := false
 	activeSource := vlogGenerationMaintenanceDebugSource(opts)
 	activeStart := time.Now()
+	rewriteQueueSnapshotCaptured := false
+	rewriteQueueBeforeSegments := 0
+	rewriteQueueBeforeLiveBytes := int64(0)
+	rewriteQueueBeforeLiveKnown := true
 	db.debugVlogMaintf(
 		"maintenance_active_acquire source=%s run_gc=%t bypass_quiet=%t skip_checkpoint=%t checkpoint_pending=%t deferred_pending=%t",
 		activeSource,
@@ -14546,6 +14639,36 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 		}
 		if !rewritePass && !gcPass {
 			db.vlogGenerationMaintenancePassNoop.Add(1)
+		}
+		if rewriteQueueSnapshotCaptured {
+			afterQueue, afterErr := db.currentVlogGenerationRewriteQueue()
+			afterSegments := 0
+			afterLiveBytes := int64(0)
+			afterLiveKnown := true
+			if afterErr != nil {
+				db.vlogGenerationRewriteQueueProgressSnapshotErrors.Add(1)
+				afterSegments = rewriteQueueBeforeSegments
+				afterLiveKnown = false
+			} else {
+				afterSegments = len(afterQueue)
+				if afterSegments > 0 {
+					afterLiveKnown = false
+					if liveBytes, known, snapshotErr := db.vlogGenerationRewriteQueueLiveBytesSnapshot(afterQueue); snapshotErr != nil {
+						db.vlogGenerationRewriteQueueProgressSnapshotErrors.Add(1)
+					} else {
+						afterLiveBytes = liveBytes
+						afterLiveKnown = known
+					}
+				}
+			}
+			db.observeVlogGenerationRewriteQueueProgress(
+				rewriteQueueBeforeSegments,
+				rewriteQueueBeforeLiveBytes,
+				rewriteQueueBeforeLiveKnown,
+				afterSegments,
+				afterLiveBytes,
+				afterLiveKnown,
+			)
 		}
 		db.vlogGenerationMaintenanceActive.Store(false)
 		// If a deferred confirmation/age wake became due while this pass held the
@@ -14579,6 +14702,18 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 			db.debugVlogMaintf("rewrite_queue_prune dropped=%d remaining=%d", dropped, len(rewriteQueue))
 		}
 	}
+	rewriteQueueBeforeSegments = len(rewriteQueue)
+	rewriteQueueBeforeLiveBytes = 0
+	rewriteQueueBeforeLiveKnown = rewriteQueueBeforeSegments == 0
+	if rewriteQueueBeforeSegments > 0 {
+		if liveBytes, known, snapshotErr := db.vlogGenerationRewriteQueueLiveBytesSnapshot(rewriteQueue); snapshotErr != nil {
+			db.vlogGenerationRewriteQueueProgressSnapshotErrors.Add(1)
+		} else {
+			rewriteQueueBeforeLiveBytes = liveBytes
+			rewriteQueueBeforeLiveKnown = known
+		}
+	}
+	rewriteQueueSnapshotCaptured = true
 	stagePending, _, stageErr := db.currentVlogGenerationRewriteStage()
 	if stageErr != nil {
 		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
@@ -21574,6 +21709,24 @@ func (db *DB) Stats() map[string]string {
 	if rewriteQueueLiveBytesAfterTokens > 0 && rewriteLastExecLiveBytesPerSec > 0 {
 		rewriteQueueETARecentExecSeconds = float64(rewriteQueueLiveBytesAfterTokens) / rewriteLastExecLiveBytesPerSec
 	}
+	rewriteQueueProgressPasses := db.vlogGenerationRewriteQueueProgressPasses.Load()
+	rewriteQueueProgressSegmentsBeforeTotal := db.vlogGenerationRewriteQueueSegmentsBeforeTotal.Load()
+	rewriteQueueProgressSegmentsAfterTotal := db.vlogGenerationRewriteQueueSegmentsAfterTotal.Load()
+	rewriteQueueProgressSegmentsDrainedTotal := db.vlogGenerationRewriteQueueSegmentsDrainedTotal.Load()
+	rewriteQueueProgressSegmentsGrownTotal := db.vlogGenerationRewriteQueueSegmentsGrownTotal.Load()
+	rewriteQueueProgressSegmentsBeforeLast := db.vlogGenerationRewriteQueueSegmentsBeforeLast.Load()
+	rewriteQueueProgressSegmentsAfterLast := db.vlogGenerationRewriteQueueSegmentsAfterLast.Load()
+	rewriteQueueProgressSegmentsDeltaLast := db.vlogGenerationRewriteQueueSegmentsDeltaLast.Load()
+	rewriteQueueProgressLiveBytesKnownPasses := db.vlogGenerationRewriteQueueLiveBytesKnownPasses.Load()
+	rewriteQueueProgressLiveBytesUnknownPasses := db.vlogGenerationRewriteQueueLiveBytesUnknownPasses.Load()
+	rewriteQueueProgressLiveBytesBeforeTotal := db.vlogGenerationRewriteQueueLiveBytesBeforeTotal.Load()
+	rewriteQueueProgressLiveBytesAfterTotal := db.vlogGenerationRewriteQueueLiveBytesAfterTotal.Load()
+	rewriteQueueProgressLiveBytesDrainedTotal := db.vlogGenerationRewriteQueueLiveBytesDrainedTotal.Load()
+	rewriteQueueProgressLiveBytesGrownTotal := db.vlogGenerationRewriteQueueLiveBytesGrownTotal.Load()
+	rewriteQueueProgressLiveBytesBeforeLast := db.vlogGenerationRewriteQueueLiveBytesBeforeLast.Load()
+	rewriteQueueProgressLiveBytesAfterLast := db.vlogGenerationRewriteQueueLiveBytesAfterLast.Load()
+	rewriteQueueProgressLiveBytesDeltaLast := db.vlogGenerationRewriteQueueLiveBytesDeltaLast.Load()
+	rewriteQueueProgressSnapshotErrors := db.vlogGenerationRewriteQueueProgressSnapshotErrors.Load()
 	rewriteChurnBps := db.vlogGenerationLastChurnBps.Load()
 	rewriteExecSeconds := 0.0
 	if rewriteExecTotalNS > 0 {
@@ -21727,6 +21880,24 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_generation.rewrite.queue_config.debt_drain_max_segments"] = fmt.Sprintf("%d", rewriteDebtDrainMaxSegments)
 	stats["treedb.cache.vlog_generation.rewrite.queue_config.fresh_plan_debt_drain_min_segments"] = fmt.Sprintf("%d", rewriteFreshPlanDebtDrainMinSegments)
 	stats["treedb.cache.vlog_generation.rewrite.queue_config.fresh_plan_debt_drain_max_segments"] = fmt.Sprintf("%d", rewriteFreshPlanDebtDrainMaxSegments)
+	stats["treedb.cache.vlog_generation.rewrite.queue_progress.passes"] = fmt.Sprintf("%d", rewriteQueueProgressPasses)
+	stats["treedb.cache.vlog_generation.rewrite.queue_progress.snapshot_errors"] = fmt.Sprintf("%d", rewriteQueueProgressSnapshotErrors)
+	stats["treedb.cache.vlog_generation.rewrite.queue_progress.segments_before_total"] = fmt.Sprintf("%d", rewriteQueueProgressSegmentsBeforeTotal)
+	stats["treedb.cache.vlog_generation.rewrite.queue_progress.segments_after_total"] = fmt.Sprintf("%d", rewriteQueueProgressSegmentsAfterTotal)
+	stats["treedb.cache.vlog_generation.rewrite.queue_progress.segments_drained_total"] = fmt.Sprintf("%d", rewriteQueueProgressSegmentsDrainedTotal)
+	stats["treedb.cache.vlog_generation.rewrite.queue_progress.segments_grown_total"] = fmt.Sprintf("%d", rewriteQueueProgressSegmentsGrownTotal)
+	stats["treedb.cache.vlog_generation.rewrite.queue_progress.segments_before_last"] = fmt.Sprintf("%d", rewriteQueueProgressSegmentsBeforeLast)
+	stats["treedb.cache.vlog_generation.rewrite.queue_progress.segments_after_last"] = fmt.Sprintf("%d", rewriteQueueProgressSegmentsAfterLast)
+	stats["treedb.cache.vlog_generation.rewrite.queue_progress.segments_delta_last"] = fmt.Sprintf("%d", rewriteQueueProgressSegmentsDeltaLast)
+	stats["treedb.cache.vlog_generation.rewrite.queue_progress.live_bytes_known_passes"] = fmt.Sprintf("%d", rewriteQueueProgressLiveBytesKnownPasses)
+	stats["treedb.cache.vlog_generation.rewrite.queue_progress.live_bytes_unknown_passes"] = fmt.Sprintf("%d", rewriteQueueProgressLiveBytesUnknownPasses)
+	stats["treedb.cache.vlog_generation.rewrite.queue_progress.live_bytes_before_total"] = fmt.Sprintf("%d", rewriteQueueProgressLiveBytesBeforeTotal)
+	stats["treedb.cache.vlog_generation.rewrite.queue_progress.live_bytes_after_total"] = fmt.Sprintf("%d", rewriteQueueProgressLiveBytesAfterTotal)
+	stats["treedb.cache.vlog_generation.rewrite.queue_progress.live_bytes_drained_total"] = fmt.Sprintf("%d", rewriteQueueProgressLiveBytesDrainedTotal)
+	stats["treedb.cache.vlog_generation.rewrite.queue_progress.live_bytes_grown_total"] = fmt.Sprintf("%d", rewriteQueueProgressLiveBytesGrownTotal)
+	stats["treedb.cache.vlog_generation.rewrite.queue_progress.live_bytes_before_last"] = fmt.Sprintf("%d", rewriteQueueProgressLiveBytesBeforeLast)
+	stats["treedb.cache.vlog_generation.rewrite.queue_progress.live_bytes_after_last"] = fmt.Sprintf("%d", rewriteQueueProgressLiveBytesAfterLast)
+	stats["treedb.cache.vlog_generation.rewrite.queue_progress.live_bytes_delta_last"] = fmt.Sprintf("%d", rewriteQueueProgressLiveBytesDeltaLast)
 	stats["treedb.cache.vlog_generation.rewrite.ledger_segments"] = fmt.Sprintf("%d", rewriteLedgerSegments)
 	stats["treedb.cache.vlog_generation.rewrite.ledger_bytes_total"] = fmt.Sprintf("%d", rewriteLedgerBytesTotal)
 	stats["treedb.cache.vlog_generation.rewrite.ledger_bytes_live"] = fmt.Sprintf("%d", rewriteLedgerBytesLive)

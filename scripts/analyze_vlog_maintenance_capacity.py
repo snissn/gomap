@@ -266,6 +266,24 @@ def build_summary(stats: dict[str, Any]) -> dict[str, Any]:
         "rewrite_queue_config_debt_drain_max_segments": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queue_config.debt_drain_max_segments"),
         "rewrite_queue_config_fresh_plan_debt_drain_min_segments": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queue_config.fresh_plan_debt_drain_min_segments"),
         "rewrite_queue_config_fresh_plan_debt_drain_max_segments": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queue_config.fresh_plan_debt_drain_max_segments"),
+        "rewrite_queue_progress_passes": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queue_progress.passes"),
+        "rewrite_queue_progress_snapshot_errors": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queue_progress.snapshot_errors"),
+        "rewrite_queue_progress_segments_before_total": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queue_progress.segments_before_total"),
+        "rewrite_queue_progress_segments_after_total": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queue_progress.segments_after_total"),
+        "rewrite_queue_progress_segments_drained_total": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queue_progress.segments_drained_total"),
+        "rewrite_queue_progress_segments_grown_total": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queue_progress.segments_grown_total"),
+        "rewrite_queue_progress_segments_before_last": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queue_progress.segments_before_last"),
+        "rewrite_queue_progress_segments_after_last": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queue_progress.segments_after_last"),
+        "rewrite_queue_progress_segments_delta_last": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queue_progress.segments_delta_last"),
+        "rewrite_queue_progress_live_bytes_known_passes": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queue_progress.live_bytes_known_passes"),
+        "rewrite_queue_progress_live_bytes_unknown_passes": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queue_progress.live_bytes_unknown_passes"),
+        "rewrite_queue_progress_live_bytes_before_total": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queue_progress.live_bytes_before_total"),
+        "rewrite_queue_progress_live_bytes_after_total": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queue_progress.live_bytes_after_total"),
+        "rewrite_queue_progress_live_bytes_drained_total": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queue_progress.live_bytes_drained_total"),
+        "rewrite_queue_progress_live_bytes_grown_total": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queue_progress.live_bytes_grown_total"),
+        "rewrite_queue_progress_live_bytes_before_last": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queue_progress.live_bytes_before_last"),
+        "rewrite_queue_progress_live_bytes_after_last": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queue_progress.live_bytes_after_last"),
+        "rewrite_queue_progress_live_bytes_delta_last": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queue_progress.live_bytes_delta_last"),
         "gc_runs": metric_int(stats, "treedb.cache.vlog_generation.gc.runs"),
         "gc_deleted_bytes": metric_int(stats, "treedb.cache.vlog_generation.gc.deleted_bytes"),
         "gc_deleted_segments": metric_int(stats, "treedb.cache.vlog_generation.gc.deleted_segments"),
@@ -402,6 +420,18 @@ def build_summary(stats: dict[str, Any]) -> dict[str, Any]:
     m["rewrite_immediate_reclaim_pct"] = pct(
         m["rewrite_reclaimed_bytes"],
         m["rewrite_processed_stale_bytes"],
+    )
+    m["rewrite_queue_progress_segments_net_drain_total"] = (
+        m["rewrite_queue_progress_segments_drained_total"]
+        - m["rewrite_queue_progress_segments_grown_total"]
+    )
+    m["rewrite_queue_progress_live_bytes_net_drain_total"] = (
+        m["rewrite_queue_progress_live_bytes_drained_total"]
+        - m["rewrite_queue_progress_live_bytes_grown_total"]
+    )
+    m["rewrite_queue_progress_live_bytes_known_pct"] = pct(
+        m["rewrite_queue_progress_live_bytes_known_passes"],
+        m["rewrite_queue_progress_passes"],
     )
     m["rewrite_stale_not_reclaimed_bytes"] = max(
         0,
@@ -626,6 +656,18 @@ def print_report(summary: dict[str, Any], source_file: Path, run_home: str, inst
         f"debt_drain={summary['rewrite_queue_config_debt_drain_max_segments']} "
         f"fresh_plan_min={summary['rewrite_queue_config_fresh_plan_debt_drain_min_segments']} "
         f"fresh_plan_max={summary['rewrite_queue_config_fresh_plan_debt_drain_max_segments']}"
+    )
+    print(
+        "  queue progress: "
+        f"passes={summary['rewrite_queue_progress_passes']} "
+        f"segments before/after={summary['rewrite_queue_progress_segments_before_total']}/{summary['rewrite_queue_progress_segments_after_total']} "
+        f"drained={summary['rewrite_queue_progress_segments_drained_total']} "
+        f"grown={summary['rewrite_queue_progress_segments_grown_total']} "
+        f"net_drain={summary['rewrite_queue_progress_segments_net_drain_total']} "
+        f"last_delta={summary['rewrite_queue_progress_segments_delta_last']} "
+        f"live_known={summary['rewrite_queue_progress_live_bytes_known_pct']:.1f}% "
+        f"live net_drain={human_bytes(summary['rewrite_queue_progress_live_bytes_net_drain_total'])} "
+        f"snapshot_errors={summary['rewrite_queue_progress_snapshot_errors']}"
     )
     print("")
 
