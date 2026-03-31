@@ -2596,8 +2596,10 @@ func TestValueLogRewriteOnline_WithoutReserveRIDs_UsesRIDStartScanner(t *testing
 	if ridStartScanCalls != 1 {
 		t.Fatalf("expected one rid-start scan call, got %d", ridStartScanCalls)
 	}
-	if walScanCalls == 0 {
-		t.Fatalf("expected wal segment scan in non-reserve mode")
+	// Non-reserve mode always uses RID start scanning, but may avoid a full WAL
+	// directory scan when lane/start-seq can be derived from manager state.
+	if walScanCalls > 1 {
+		t.Fatalf("unexpected wal scan call count=%d", walScanCalls)
 	}
 }
 
