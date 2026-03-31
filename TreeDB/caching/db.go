@@ -21761,6 +21761,8 @@ func (db *DB) Stats() map[string]string {
 	vlogSegments, vlogBytes := retained.SegmentsTotal, retained.BytesTotal
 	rewriteQueueLiveBytesHint := int64(0)
 	rewriteQueueLiveBytesHintKnown := true
+	rewriteQueueLiveHintIDsPresent := 0
+	rewriteQueueLiveHintIDsKnown := 0
 	db.vlogGenerationRewriteQueueMu.Lock()
 	rewriteQueueLen := len(db.vlogGenerationRewriteQueue)
 	rewriteQueueLoaded := db.vlogGenerationRewriteQueueLoaded
@@ -21785,29 +21787,32 @@ func (db *DB) Stats() map[string]string {
 	}
 	if rewriteQueueLen > 0 {
 		rewriteQueueLiveBytesHintKnown = false
+		for _, id := range db.vlogGenerationRewriteQueue {
+			if id == 0 {
+				continue
+			}
+			rewriteQueueLiveHintIDsPresent++
+		}
 		ledgerByFileID := db.vlogGenerationRewriteLedgerByFileID
 		if len(ledgerByFileID) == 0 && len(db.vlogGenerationRewriteLedger) > 0 {
 			ledgerByFileID = buildVlogGenerationRewriteLedgerByFileID(db.vlogGenerationRewriteLedger)
 			db.vlogGenerationRewriteLedgerByFileID = ledgerByFileID
 		}
 		if len(ledgerByFileID) > 0 {
-			idsPresent := 0
-			idsKnown := 0
 			for _, id := range db.vlogGenerationRewriteQueue {
 				if id == 0 {
 					continue
 				}
-				idsPresent++
 				seg, ok := ledgerByFileID[id]
 				if !ok {
 					continue
 				}
-				idsKnown++
+				rewriteQueueLiveHintIDsKnown++
 				if seg.BytesLive > 0 {
 					rewriteQueueLiveBytesHint += seg.BytesLive
 				}
 			}
-			rewriteQueueLiveBytesHintKnown = idsPresent == idsKnown
+			rewriteQueueLiveBytesHintKnown = rewriteQueueLiveHintIDsPresent == rewriteQueueLiveHintIDsKnown
 		}
 	}
 	db.vlogGenerationRewriteQueueMu.Unlock()
@@ -21958,6 +21963,13 @@ func (db *DB) Stats() map[string]string {
 	rewriteQueueETABudgetSeconds := 0.0
 	if rewriteLedgerBytesLive > 0 && db.valueLogRewriteBudgetBytes > 0 {
 		rewriteQueueETABudgetSeconds = float64(rewriteQueueLiveBytesAfterTokens) / float64(db.valueLogRewriteBudgetBytes)
+	}
+	rewriteQueueLiveHintCoveragePct := 0.0
+	if rewriteQueueLiveHintIDsPresent > 0 {
+		rewriteQueueLiveHintCoveragePct = (float64(rewriteQueueLiveHintIDsKnown) / float64(rewriteQueueLiveHintIDsPresent)) * 100.0
+		if rewriteQueueLiveHintCoveragePct > 100.0 {
+			rewriteQueueLiveHintCoveragePct = 100.0
+		}
 	}
 	maintenancePassTotalNS := db.vlogGenerationMaintenancePassTotalNanos.Load()
 	maintenancePassMaxNS := db.vlogGenerationMaintenancePassMaxNanos.Load()
@@ -22163,6 +22175,11 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_generation.churn_bytes_per_sec"] = fmt.Sprintf("%d", rewriteChurnBps)
 	stats["treedb.cache.vlog_generation.rewrite.queue_len"] = fmt.Sprintf("%d", rewriteQueueLen)
 	stats["treedb.cache.vlog_generation.rewrite.queue_loaded"] = fmt.Sprintf("%t", rewriteQueueLoaded)
+	stats["treedb.cache.vlog_generation.rewrite.queue_live_hint.known"] = fmt.Sprintf("%t", rewriteQueueLiveBytesHintKnown)
+	stats["treedb.cache.vlog_generation.rewrite.queue_live_hint.ids_present"] = fmt.Sprintf("%d", rewriteQueueLiveHintIDsPresent)
+	stats["treedb.cache.vlog_generation.rewrite.queue_live_hint.ids_known"] = fmt.Sprintf("%d", rewriteQueueLiveHintIDsKnown)
+	stats["treedb.cache.vlog_generation.rewrite.queue_live_hint.coverage_pct"] = fmt.Sprintf("%.3f", rewriteQueueLiveHintCoveragePct)
+	stats["treedb.cache.vlog_generation.rewrite.queue_live_hint.bytes"] = fmt.Sprintf("%d", rewriteQueueLiveBytesHint)
 	stats["treedb.cache.vlog_generation.rewrite.queue_run_segment_cap"] = fmt.Sprintf("%d", rewriteQueueRunSegmentCap)
 	stats["treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.checkpoint_kick"] = fmt.Sprintf("%d", rewriteQueueRunSegmentCapCheckpointKick)
 	stats["treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.limiter"] = vlogGenerationRewriteSegmentCapLimiterString(rewriteQueueRunSegmentCapLimiter)

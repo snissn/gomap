@@ -701,6 +701,22 @@ def build_maintenance_from_light_stats(stats: dict[str, str]) -> dict[str, objec
         "rewrite_queue_config_fresh_plan_debt_drain_max_segments": stat_int(
             "treedb.cache.vlog_generation.rewrite.queue_config.fresh_plan_debt_drain_max_segments",
         ),
+        "rewrite_queue_live_hint_known": stat_str(
+            "treedb.cache.vlog_generation.rewrite.queue_live_hint.known",
+            "false",
+        ),
+        "rewrite_queue_live_hint_ids_present": stat_int(
+            "treedb.cache.vlog_generation.rewrite.queue_live_hint.ids_present",
+        ),
+        "rewrite_queue_live_hint_ids_known": stat_int(
+            "treedb.cache.vlog_generation.rewrite.queue_live_hint.ids_known",
+        ),
+        "rewrite_queue_live_hint_coverage_pct": stat_float(
+            "treedb.cache.vlog_generation.rewrite.queue_live_hint.coverage_pct",
+        ),
+        "rewrite_queue_live_hint_bytes": stat_int(
+            "treedb.cache.vlog_generation.rewrite.queue_live_hint.bytes",
+        ),
         "rewrite_queue_run_segment_cap": stat_int(
             "treedb.cache.vlog_generation.rewrite.queue_run_segment_cap",
         ),
@@ -1096,6 +1112,11 @@ with runs_csv.open("w", newline="", encoding="utf-8") as fh:
         "rewrite_queue_config_debt_drain_max_segments",
         "rewrite_queue_config_fresh_plan_debt_drain_min_segments",
         "rewrite_queue_config_fresh_plan_debt_drain_max_segments",
+        "rewrite_queue_live_hint_known",
+        "rewrite_queue_live_hint_ids_present",
+        "rewrite_queue_live_hint_ids_known",
+        "rewrite_queue_live_hint_coverage_pct",
+        "rewrite_queue_live_hint_bytes",
         "rewrite_queue_run_segment_cap",
         "rewrite_queue_run_segment_cap_limiter",
         "rewrite_queue_run_segment_cap_by_budget",
@@ -1205,6 +1226,11 @@ with runs_csv.open("w", newline="", encoding="utf-8") as fh:
             summary.get("rewrite_queue_config_debt_drain_max_segments", 0),
             summary.get("rewrite_queue_config_fresh_plan_debt_drain_min_segments", 0),
             summary.get("rewrite_queue_config_fresh_plan_debt_drain_max_segments", 0),
+            summary.get("rewrite_queue_live_hint_known", "false"),
+            summary.get("rewrite_queue_live_hint_ids_present", 0),
+            summary.get("rewrite_queue_live_hint_ids_known", 0),
+            summary.get("rewrite_queue_live_hint_coverage_pct", 0),
+            summary.get("rewrite_queue_live_hint_bytes", 0),
             summary.get("rewrite_queue_run_segment_cap", 0),
             summary.get("rewrite_queue_run_segment_cap_limiter", "none"),
             summary.get("rewrite_queue_run_segment_cap_by_budget", 0),

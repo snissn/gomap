@@ -292,6 +292,11 @@ def build_summary(stats: dict[str, Any]) -> dict[str, Any]:
         "rewrite_queue_config_debt_drain_max_segments": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queue_config.debt_drain_max_segments"),
         "rewrite_queue_config_fresh_plan_debt_drain_min_segments": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queue_config.fresh_plan_debt_drain_min_segments"),
         "rewrite_queue_config_fresh_plan_debt_drain_max_segments": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queue_config.fresh_plan_debt_drain_max_segments"),
+        "rewrite_queue_live_hint_known": metric_str(stats, "treedb.cache.vlog_generation.rewrite.queue_live_hint.known", "false"),
+        "rewrite_queue_live_hint_ids_present": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queue_live_hint.ids_present"),
+        "rewrite_queue_live_hint_ids_known": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queue_live_hint.ids_known"),
+        "rewrite_queue_live_hint_coverage_pct": metric_float(stats, "treedb.cache.vlog_generation.rewrite.queue_live_hint.coverage_pct"),
+        "rewrite_queue_live_hint_bytes": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queue_live_hint.bytes"),
         "rewrite_queue_progress_passes": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queue_progress.passes"),
         "rewrite_queue_progress_snapshot_errors": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queue_progress.snapshot_errors"),
         "rewrite_queue_progress_segments_before_total": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queue_progress.segments_before_total"),
@@ -682,6 +687,13 @@ def print_report(summary: dict[str, Any], source_file: Path, run_home: str, inst
         f"debt_drain={summary['rewrite_queue_config_debt_drain_max_segments']} "
         f"fresh_plan_min={summary['rewrite_queue_config_fresh_plan_debt_drain_min_segments']} "
         f"fresh_plan_max={summary['rewrite_queue_config_fresh_plan_debt_drain_max_segments']}"
+    )
+    print(
+        "  queue live-hint coverage: "
+        f"known={summary['rewrite_queue_live_hint_known']} "
+        f"ids={summary['rewrite_queue_live_hint_ids_known']}/{summary['rewrite_queue_live_hint_ids_present']} "
+        f"coverage={summary['rewrite_queue_live_hint_coverage_pct']:.1f}% "
+        f"bytes={human_bytes(summary['rewrite_queue_live_hint_bytes'])}"
     )
     print(
         "  queue segment-cap decisions: "
