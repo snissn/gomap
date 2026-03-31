@@ -215,6 +215,13 @@ def metric_float(stats: dict[str, Any], key: str) -> float:
     return safe_float(stats.get(key, 0.0), 0.0)
 
 
+def metric_str(stats: dict[str, Any], key: str, default: str = "") -> str:
+    raw = stats.get(key, default)
+    if raw is None:
+        return default
+    return str(raw)
+
+
 def build_summary(stats: dict[str, Any]) -> dict[str, Any]:
     m = {
         "maintenance_attempts": metric_int(stats, "treedb.cache.vlog_generation.maintenance.attempts"),
@@ -262,6 +269,18 @@ def build_summary(stats: dict[str, Any]) -> dict[str, Any]:
         "rewrite_penalties_active": metric_int(stats, "treedb.cache.vlog_generation.rewrite.penalties_active"),
         "rewrite_budget_consumed_bytes_total": metric_int(stats, "treedb.cache.vlog_generation.rewrite_budget.consumed_bytes_total"),
         "rewrite_budget_tokens_utilization_pct": metric_float(stats, "treedb.cache.vlog_generation.rewrite_budget.tokens_utilization_pct"),
+        "rewrite_queue_run_segment_cap": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queue_run_segment_cap"),
+        "rewrite_queue_run_segment_cap_limiter": metric_str(stats, "treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.limiter", "none"),
+        "rewrite_queue_run_segment_cap_by_budget": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.by_budget"),
+        "rewrite_queue_run_segment_cap_per_segment_budget_bytes": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.per_segment_budget_bytes"),
+        "rewrite_queue_run_segment_cap_checkpoint_kick": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.checkpoint_kick"),
+        "rewrite_queue_run_segment_cap_limiter_checkpoint_kick": metric_str(stats, "treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.limiter.checkpoint_kick", "none"),
+        "rewrite_queue_run_segment_cap_by_budget_checkpoint_kick": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.by_budget.checkpoint_kick"),
+        "rewrite_queue_run_segment_cap_per_segment_budget_bytes_checkpoint_kick": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.per_segment_budget_bytes.checkpoint_kick"),
+        "rewrite_queue_run_segment_cap_fresh_plan": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.fresh_plan"),
+        "rewrite_queue_run_segment_cap_limiter_fresh_plan": metric_str(stats, "treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.limiter.fresh_plan", "none"),
+        "rewrite_queue_run_segment_cap_by_budget_fresh_plan": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.by_budget.fresh_plan"),
+        "rewrite_queue_run_segment_cap_per_segment_budget_bytes_fresh_plan": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.per_segment_budget_bytes.fresh_plan"),
         "rewrite_queue_config_resume_max_segments": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queue_config.resume_max_segments"),
         "rewrite_queue_config_debt_drain_max_segments": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queue_config.debt_drain_max_segments"),
         "rewrite_queue_config_fresh_plan_debt_drain_min_segments": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queue_config.fresh_plan_debt_drain_min_segments"),
@@ -656,6 +675,17 @@ def print_report(summary: dict[str, Any], source_file: Path, run_home: str, inst
         f"debt_drain={summary['rewrite_queue_config_debt_drain_max_segments']} "
         f"fresh_plan_min={summary['rewrite_queue_config_fresh_plan_debt_drain_min_segments']} "
         f"fresh_plan_max={summary['rewrite_queue_config_fresh_plan_debt_drain_max_segments']}"
+    )
+    print(
+        "  queue segment-cap decisions: "
+        f"run={summary['rewrite_queue_run_segment_cap']} ({summary['rewrite_queue_run_segment_cap_limiter']}, by_budget={summary['rewrite_queue_run_segment_cap_by_budget']}, "
+        f"per_seg_budget={human_bytes(summary['rewrite_queue_run_segment_cap_per_segment_budget_bytes'])}) "
+        f"checkpoint_kick={summary['rewrite_queue_run_segment_cap_checkpoint_kick']} ({summary['rewrite_queue_run_segment_cap_limiter_checkpoint_kick']}, "
+        f"by_budget={summary['rewrite_queue_run_segment_cap_by_budget_checkpoint_kick']}, "
+        f"per_seg_budget={human_bytes(summary['rewrite_queue_run_segment_cap_per_segment_budget_bytes_checkpoint_kick'])}) "
+        f"fresh_plan={summary['rewrite_queue_run_segment_cap_fresh_plan']} ({summary['rewrite_queue_run_segment_cap_limiter_fresh_plan']}, "
+        f"by_budget={summary['rewrite_queue_run_segment_cap_by_budget_fresh_plan']}, "
+        f"per_seg_budget={human_bytes(summary['rewrite_queue_run_segment_cap_per_segment_budget_bytes_fresh_plan'])})"
     )
     print(
         "  queue progress: "
