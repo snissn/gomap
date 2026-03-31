@@ -570,6 +570,7 @@ func (db *DB) consumeVlogGenerationRewriteQueueChunk(processed []uint32) error {
 	}
 	db.vlogGenerationRewriteQueue = remaining
 	db.vlogGenerationRewriteLedger = remainingLedger
+	db.vlogGenerationRewriteLedgerByFileID = buildVlogGenerationRewriteLedgerByFileID(remainingLedger)
 	db.vlogGenerationRewriteStagePending = stagePending
 	db.vlogGenerationRewriteStageObservedUnixNano = stageObservedAt
 	if stagePending && stageObservedAt > 0 {

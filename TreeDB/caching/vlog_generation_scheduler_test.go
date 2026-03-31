@@ -410,6 +410,42 @@ func TestVlogGenerationRewriteQueueLiveBytesSnapshot_DeduplicatesDuplicateLedger
 	}
 }
 
+func TestConsumeVlogGenerationRewriteQueueChunk_RebuildsLedgerByFileID(t *testing.T) {
+	db := &DB{}
+	db.vlogGenerationRewriteQueueMu.Lock()
+	db.vlogGenerationRewriteQueueLoaded = true
+	db.vlogGenerationRewriteQueue = []uint32{1, 2}
+	db.vlogGenerationRewriteLedger = []backenddb.ValueLogRewritePlanSegment{
+		{FileID: 1, BytesLive: 100},
+		{FileID: 2, BytesLive: 50},
+	}
+	db.vlogGenerationRewriteLedgerByFileID = map[uint32]backenddb.ValueLogRewritePlanSegment{
+		1: {FileID: 1, BytesLive: 999},
+		2: {FileID: 2, BytesLive: 999},
+		3: {FileID: 3, BytesLive: 999},
+	}
+	db.vlogGenerationRewriteQueueMu.Unlock()
+
+	if err := db.consumeVlogGenerationRewriteQueueChunk([]uint32{1}); err != nil {
+		t.Fatalf("consume queue chunk: %v", err)
+	}
+
+	db.vlogGenerationRewriteQueueMu.Lock()
+	defer db.vlogGenerationRewriteQueueMu.Unlock()
+	if got := db.vlogGenerationRewriteQueue; len(got) != 1 || got[0] != 2 {
+		t.Fatalf("remaining queue=%v want [2]", got)
+	}
+	if got := db.vlogGenerationRewriteLedgerByFileID; len(got) != 1 {
+		t.Fatalf("ledgerByFileID length=%d want 1", len(got))
+	}
+	if _, ok := db.vlogGenerationRewriteLedgerByFileID[1]; ok {
+		t.Fatalf("stale file id 1 remained in ledgerByFileID")
+	}
+	if got := db.vlogGenerationRewriteLedgerByFileID[2].BytesLive; got != 50 {
+		t.Fatalf("ledgerByFileID[2].BytesLive=%d want 50", got)
+	}
+}
+
 func BenchmarkVlogGenerationRewriteQueueLiveBytesSnapshot(b *testing.B) {
 	const (
 		ledgerSegments = 4096
@@ -432,6 +468,9 @@ func BenchmarkVlogGenerationRewriteQueueLiveBytesSnapshot(b *testing.B) {
 	db.vlogGenerationRewriteQueueLoaded = true
 	db.vlogGenerationRewriteLedger = ledger
 	db.vlogGenerationRewriteQueueMu.Unlock()
+	if _, _, err := db.vlogGenerationRewriteQueueLiveBytesSnapshot(ids); err != nil {
+		b.Fatalf("priming snapshot error: %v", err)
+	}
 
 	b.ReportAllocs()
 	b.ResetTimer()
