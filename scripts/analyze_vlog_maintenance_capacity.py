@@ -334,6 +334,7 @@ def build_summary(stats: dict[str, Any]) -> dict[str, Any]:
         "rewrite_queue_run_segment_cap_limiter_count_budget_tokens": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.limiter_count.budget_tokens"),
         "rewrite_queue_run_segment_cap_limiter_count_debt_drain_cap": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.limiter_count.debt_drain_cap"),
         "rewrite_queue_run_segment_cap_limiter_count_checkpoint_kick_safety": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.limiter_count.checkpoint_kick_safety"),
+        "rewrite_queue_run_segment_cap_limiter_count_checkpoint_kick_burst": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.limiter_count.checkpoint_kick_burst"),
         "rewrite_queue_run_segment_cap_limiter_count_fresh_plan_queue_threshold": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.limiter_count.fresh_plan_queue_threshold.fresh_plan"),
         "rewrite_queue_run_segment_cap_limiter_count_fresh_plan_cap": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.limiter_count.fresh_plan_cap.fresh_plan"),
         "rewrite_queue_config_resume_max_segments": metric_int(stats, "treedb.cache.vlog_generation.rewrite.queue_config.resume_max_segments"),
@@ -836,6 +837,7 @@ def print_report(summary: dict[str, Any], source_file: Path, run_home: str, inst
         f"budget_tokens={summary['rewrite_queue_run_segment_cap_limiter_count_budget_tokens']} "
         f"debt_drain_cap={summary['rewrite_queue_run_segment_cap_limiter_count_debt_drain_cap']} "
         f"checkpoint_kick_safety={summary['rewrite_queue_run_segment_cap_limiter_count_checkpoint_kick_safety']} "
+        f"checkpoint_kick_burst={summary['rewrite_queue_run_segment_cap_limiter_count_checkpoint_kick_burst']} "
         f"fresh_plan_queue_threshold={summary['rewrite_queue_run_segment_cap_limiter_count_fresh_plan_queue_threshold']} "
         f"fresh_plan_cap={summary['rewrite_queue_run_segment_cap_limiter_count_fresh_plan_cap']}"
     )

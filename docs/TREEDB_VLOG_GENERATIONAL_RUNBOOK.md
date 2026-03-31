@@ -43,6 +43,7 @@ Primary keys:
 - `treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.decisions`
 - `treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.decisions.fresh_plan`
 - `treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.limiter_count.*`
+- `treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.limiter_count.checkpoint_kick_burst`
 - `treedb.cache.vlog_generation.rewrite.queue_config.resume_max_segments`
 - `treedb.cache.vlog_generation.rewrite.queue_config.debt_drain_max_segments`
 - `treedb.cache.vlog_generation.rewrite.queue_config.fresh_plan_debt_drain_min_segments`
@@ -139,7 +140,7 @@ Outputs:
 Light stats snapshots in each run directory are captured via `treemap stats -rw`
 with automatic fallback to `treemap vlog-gc -rw -dry-run`.
 
-`runs.csv` includes per-run rewrite-capacity KPIs and `pairs.csv` includes pair deltas for those KPIs, so candidate/control maintenance behavior can be evaluated directly from CSV outputs.
+`runs.csv` includes per-run rewrite-capacity KPIs (including `rewrite_queue_run_segment_cap_limiter_count_checkpoint_kick_burst`) and `pairs.csv` includes pair deltas for those KPIs, so candidate/control maintenance behavior can be evaluated directly from CSV outputs.
 This includes queue-pressure and checkpoint-kick fields to diagnose whether rewrite is keeping up incrementally during hot sync windows.
 
 The harness alternates run order per pair (`control->candidate`, then
