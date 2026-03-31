@@ -783,6 +783,24 @@ def build_maintenance_from_light_stats(stats: dict[str, str]) -> dict[str, objec
             "treedb.cache.vlog_generation.maintenance.skip.wal_on_periodic",
         ),
         "rewrite_runs": stat_int("treedb.cache.vlog_generation.rewrite.runs"),
+        "rewrite_runs_source_periodic": stat_int(
+            "treedb.cache.vlog_generation.rewrite.runs.source.periodic",
+        ),
+        "rewrite_runs_source_bypass": stat_int(
+            "treedb.cache.vlog_generation.rewrite.runs.source.bypass",
+        ),
+        "rewrite_runs_source_checkpoint_pending": stat_int(
+            "treedb.cache.vlog_generation.rewrite.runs.source.checkpoint_pending",
+        ),
+        "rewrite_runs_source_rewrite_age_blocked": stat_int(
+            "treedb.cache.vlog_generation.rewrite.runs.source.rewrite_age_blocked",
+        ),
+        "rewrite_runs_source_rewrite_stage_confirm": stat_int(
+            "treedb.cache.vlog_generation.rewrite.runs.source.rewrite_stage_confirm",
+        ),
+        "rewrite_runs_source_other": stat_int(
+            "treedb.cache.vlog_generation.rewrite.runs.source.other",
+        ),
         "rewrite_plan_runs": stat_int("treedb.cache.vlog_generation.rewrite.plan_runs"),
         "rewrite_plan_selected": stat_int("treedb.cache.vlog_generation.rewrite.plan_selected"),
         "rewrite_plan_selected_segments_total": stat_int(
@@ -820,6 +838,24 @@ def build_maintenance_from_light_stats(stats: dict[str, str]) -> dict[str, objec
         ),
         "rewrite_budget_consumed_share_of_budget_pct": stat_float(
             "treedb.cache.vlog_generation.rewrite_budget.consumed_share_of_budget_pct",
+        ),
+        "rewrite_budget_consumed_bytes_total_source_periodic": stat_int(
+            "treedb.cache.vlog_generation.rewrite_budget.consumed_bytes_total.source.periodic",
+        ),
+        "rewrite_budget_consumed_bytes_total_source_bypass": stat_int(
+            "treedb.cache.vlog_generation.rewrite_budget.consumed_bytes_total.source.bypass",
+        ),
+        "rewrite_budget_consumed_bytes_total_source_checkpoint_pending": stat_int(
+            "treedb.cache.vlog_generation.rewrite_budget.consumed_bytes_total.source.checkpoint_pending",
+        ),
+        "rewrite_budget_consumed_bytes_total_source_rewrite_age_blocked": stat_int(
+            "treedb.cache.vlog_generation.rewrite_budget.consumed_bytes_total.source.rewrite_age_blocked",
+        ),
+        "rewrite_budget_consumed_bytes_total_source_rewrite_stage_confirm": stat_int(
+            "treedb.cache.vlog_generation.rewrite_budget.consumed_bytes_total.source.rewrite_stage_confirm",
+        ),
+        "rewrite_budget_consumed_bytes_total_source_other": stat_int(
+            "treedb.cache.vlog_generation.rewrite_budget.consumed_bytes_total.source.other",
         ),
         "rewrite_no_reclaim_runs": stat_int(
             "treedb.cache.vlog_generation.rewrite.no_reclaim_runs",
@@ -865,6 +901,42 @@ def build_maintenance_from_light_stats(stats: dict[str, str]) -> dict[str, objec
         ),
         "rewrite_exec_source_bytes_unreferenced_total": stat_int(
             "treedb.cache.vlog_generation.rewrite.exec.source_bytes_unreferenced_total",
+        ),
+        "rewrite_exec_source_bytes_requested_total_source_periodic": stat_int(
+            "treedb.cache.vlog_generation.rewrite.exec.source_bytes_requested_total.source.periodic",
+        ),
+        "rewrite_exec_source_bytes_requested_total_source_bypass": stat_int(
+            "treedb.cache.vlog_generation.rewrite.exec.source_bytes_requested_total.source.bypass",
+        ),
+        "rewrite_exec_source_bytes_requested_total_source_checkpoint_pending": stat_int(
+            "treedb.cache.vlog_generation.rewrite.exec.source_bytes_requested_total.source.checkpoint_pending",
+        ),
+        "rewrite_exec_source_bytes_requested_total_source_rewrite_age_blocked": stat_int(
+            "treedb.cache.vlog_generation.rewrite.exec.source_bytes_requested_total.source.rewrite_age_blocked",
+        ),
+        "rewrite_exec_source_bytes_requested_total_source_rewrite_stage_confirm": stat_int(
+            "treedb.cache.vlog_generation.rewrite.exec.source_bytes_requested_total.source.rewrite_stage_confirm",
+        ),
+        "rewrite_exec_source_bytes_requested_total_source_other": stat_int(
+            "treedb.cache.vlog_generation.rewrite.exec.source_bytes_requested_total.source.other",
+        ),
+        "rewrite_exec_source_bytes_unreferenced_total_source_periodic": stat_int(
+            "treedb.cache.vlog_generation.rewrite.exec.source_bytes_unreferenced_total.source.periodic",
+        ),
+        "rewrite_exec_source_bytes_unreferenced_total_source_bypass": stat_int(
+            "treedb.cache.vlog_generation.rewrite.exec.source_bytes_unreferenced_total.source.bypass",
+        ),
+        "rewrite_exec_source_bytes_unreferenced_total_source_checkpoint_pending": stat_int(
+            "treedb.cache.vlog_generation.rewrite.exec.source_bytes_unreferenced_total.source.checkpoint_pending",
+        ),
+        "rewrite_exec_source_bytes_unreferenced_total_source_rewrite_age_blocked": stat_int(
+            "treedb.cache.vlog_generation.rewrite.exec.source_bytes_unreferenced_total.source.rewrite_age_blocked",
+        ),
+        "rewrite_exec_source_bytes_unreferenced_total_source_rewrite_stage_confirm": stat_int(
+            "treedb.cache.vlog_generation.rewrite.exec.source_bytes_unreferenced_total.source.rewrite_stage_confirm",
+        ),
+        "rewrite_exec_source_bytes_unreferenced_total_source_other": stat_int(
+            "treedb.cache.vlog_generation.rewrite.exec.source_bytes_unreferenced_total.source.other",
         ),
         "rewrite_queue_config_resume_max_segments": stat_int(
             "treedb.cache.vlog_generation.rewrite.queue_config.resume_max_segments",
@@ -1119,6 +1191,72 @@ def build_maintenance_from_light_stats(stats: dict[str, str]) -> dict[str, objec
     )
     out["rewrite_source_still_referenced_bytes_pct"] = (
         100.0 * source_bytes_still_ref / source_bytes_requested if source_bytes_requested > 0 else 0.0
+    )
+    checkpoint_like_runs = (
+        safe_float(out.get("rewrite_runs_source_bypass"), 0.0)
+        + safe_float(out.get("rewrite_runs_source_checkpoint_pending"), 0.0)
+    )
+    rewrite_runs_total = safe_float(out.get("rewrite_runs"), 0.0)
+    out["rewrite_checkpoint_like_runs"] = checkpoint_like_runs
+    out["rewrite_non_checkpoint_runs"] = max(0.0, rewrite_runs_total - checkpoint_like_runs)
+    out["rewrite_checkpoint_like_run_share_pct"] = (
+        100.0 * checkpoint_like_runs / rewrite_runs_total if rewrite_runs_total > 0 else 0.0
+    )
+
+    budget_consumed_total = safe_float(
+        stat_int("treedb.cache.vlog_generation.rewrite_budget.consumed_bytes_total"),
+        0.0,
+    )
+    checkpoint_like_budget_consumed = (
+        safe_float(out.get("rewrite_budget_consumed_bytes_total_source_bypass"), 0.0)
+        + safe_float(out.get("rewrite_budget_consumed_bytes_total_source_checkpoint_pending"), 0.0)
+    )
+    out["rewrite_checkpoint_like_budget_consumed_bytes_total"] = checkpoint_like_budget_consumed
+    out["rewrite_non_checkpoint_budget_consumed_bytes_total"] = max(
+        0.0,
+        budget_consumed_total - checkpoint_like_budget_consumed,
+    )
+    out["rewrite_checkpoint_like_budget_share_pct"] = (
+        100.0 * checkpoint_like_budget_consumed / budget_consumed_total
+        if budget_consumed_total > 0
+        else 0.0
+    )
+
+    checkpoint_like_source_bytes_requested = (
+        safe_float(out.get("rewrite_exec_source_bytes_requested_total_source_bypass"), 0.0)
+        + safe_float(out.get("rewrite_exec_source_bytes_requested_total_source_checkpoint_pending"), 0.0)
+    )
+    checkpoint_like_source_bytes_unreferenced = (
+        safe_float(out.get("rewrite_exec_source_bytes_unreferenced_total_source_bypass"), 0.0)
+        + safe_float(out.get("rewrite_exec_source_bytes_unreferenced_total_source_checkpoint_pending"), 0.0)
+    )
+    out["rewrite_checkpoint_like_source_bytes_requested_total"] = checkpoint_like_source_bytes_requested
+    out["rewrite_checkpoint_like_source_bytes_unreferenced_total"] = checkpoint_like_source_bytes_unreferenced
+    out["rewrite_non_checkpoint_source_bytes_requested_total"] = max(
+        0.0,
+        source_bytes_requested - checkpoint_like_source_bytes_requested,
+    )
+    out["rewrite_non_checkpoint_source_bytes_unreferenced_total"] = max(
+        0.0,
+        source_bytes_unref - checkpoint_like_source_bytes_unreferenced,
+    )
+    out["rewrite_checkpoint_like_source_unreferenced_bytes_pct"] = (
+        100.0 * checkpoint_like_source_bytes_unreferenced / checkpoint_like_source_bytes_requested
+        if checkpoint_like_source_bytes_requested > 0
+        else 0.0
+    )
+    non_checkpoint_source_bytes_requested = safe_float(
+        out.get("rewrite_non_checkpoint_source_bytes_requested_total"),
+        0.0,
+    )
+    non_checkpoint_source_bytes_unreferenced = safe_float(
+        out.get("rewrite_non_checkpoint_source_bytes_unreferenced_total"),
+        0.0,
+    )
+    out["rewrite_non_checkpoint_source_unreferenced_bytes_pct"] = (
+        100.0 * non_checkpoint_source_bytes_unreferenced / non_checkpoint_source_bytes_requested
+        if non_checkpoint_source_bytes_requested > 0
+        else 0.0
     )
 
     observed_gc_queued = stat_int("treedb.cache.vlog_generation.observed_gc.queued_ids")
@@ -1509,6 +1647,18 @@ with runs_csv.open("w", newline="", encoding="utf-8") as fh:
         "rewrite_budget_bytes_per_sec",
         "rewrite_budget_consumed_bytes_per_sec",
         "rewrite_budget_consumed_share_of_budget_pct",
+        "rewrite_checkpoint_like_runs",
+        "rewrite_non_checkpoint_runs",
+        "rewrite_checkpoint_like_run_share_pct",
+        "rewrite_checkpoint_like_budget_consumed_bytes_total",
+        "rewrite_non_checkpoint_budget_consumed_bytes_total",
+        "rewrite_checkpoint_like_budget_share_pct",
+        "rewrite_checkpoint_like_source_bytes_requested_total",
+        "rewrite_checkpoint_like_source_bytes_unreferenced_total",
+        "rewrite_checkpoint_like_source_unreferenced_bytes_pct",
+        "rewrite_non_checkpoint_source_bytes_requested_total",
+        "rewrite_non_checkpoint_source_bytes_unreferenced_total",
+        "rewrite_non_checkpoint_source_unreferenced_bytes_pct",
         "rewrite_reclaimed_share_of_budget_pct",
         "rewrite_no_reclaim_runs",
         "rewrite_no_reclaim_stale_bytes",
@@ -1701,6 +1851,18 @@ with runs_csv.open("w", newline="", encoding="utf-8") as fh:
             summary.get("rewrite_budget_bytes_per_sec", 0),
             summary.get("rewrite_budget_consumed_bytes_per_sec", 0),
             summary.get("rewrite_budget_consumed_share_of_budget_pct", 0),
+            summary.get("rewrite_checkpoint_like_runs", 0),
+            summary.get("rewrite_non_checkpoint_runs", 0),
+            summary.get("rewrite_checkpoint_like_run_share_pct", 0),
+            summary.get("rewrite_checkpoint_like_budget_consumed_bytes_total", 0),
+            summary.get("rewrite_non_checkpoint_budget_consumed_bytes_total", 0),
+            summary.get("rewrite_checkpoint_like_budget_share_pct", 0),
+            summary.get("rewrite_checkpoint_like_source_bytes_requested_total", 0),
+            summary.get("rewrite_checkpoint_like_source_bytes_unreferenced_total", 0),
+            summary.get("rewrite_checkpoint_like_source_unreferenced_bytes_pct", 0),
+            summary.get("rewrite_non_checkpoint_source_bytes_requested_total", 0),
+            summary.get("rewrite_non_checkpoint_source_bytes_unreferenced_total", 0),
+            summary.get("rewrite_non_checkpoint_source_unreferenced_bytes_pct", 0),
             summary.get("rewrite_reclaimed_share_of_budget_pct", 0),
             summary.get("rewrite_no_reclaim_runs", 0),
             summary.get("rewrite_no_reclaim_stale_bytes", 0),
@@ -1862,6 +2024,15 @@ for pair in sorted(by_pair):
             "control_rewrite_queue_run_segment_cap_limiter_count_checkpoint_kick_burst": None,
             "candidate_rewrite_queue_run_segment_cap_limiter_count_checkpoint_kick_burst": None,
             "delta_rewrite_queue_run_segment_cap_limiter_count_checkpoint_kick_burst": None,
+            "control_rewrite_checkpoint_like_budget_share_pct": None,
+            "candidate_rewrite_checkpoint_like_budget_share_pct": None,
+            "delta_rewrite_checkpoint_like_budget_share_pct": None,
+            "control_rewrite_checkpoint_like_source_unreferenced_bytes_pct": None,
+            "candidate_rewrite_checkpoint_like_source_unreferenced_bytes_pct": None,
+            "delta_rewrite_checkpoint_like_source_unreferenced_bytes_pct": None,
+            "control_rewrite_non_checkpoint_source_unreferenced_bytes_pct": None,
+            "candidate_rewrite_non_checkpoint_source_unreferenced_bytes_pct": None,
+            "delta_rewrite_non_checkpoint_source_unreferenced_bytes_pct": None,
             "control_valid": ctrl_valid,
             "candidate_valid": cand_valid,
             "control_invalid_reason": ctrl_reason,
@@ -1932,6 +2103,32 @@ for pair in sorted(by_pair):
     d_checkpoint_kick_skipped_hot_no_debt = delta(
         cand_checkpoint_kick_skipped_hot_no_debt,
         base_checkpoint_kick_skipped_hot_no_debt,
+    )
+    cand_checkpoint_like_budget_share_pct = cand_summary.get("rewrite_checkpoint_like_budget_share_pct")
+    base_checkpoint_like_budget_share_pct = ctrl_summary.get("rewrite_checkpoint_like_budget_share_pct")
+    d_checkpoint_like_budget_share_pct = delta(
+        cand_checkpoint_like_budget_share_pct,
+        base_checkpoint_like_budget_share_pct,
+    )
+    cand_checkpoint_like_source_unreferenced_bytes_pct = cand_summary.get(
+        "rewrite_checkpoint_like_source_unreferenced_bytes_pct",
+    )
+    base_checkpoint_like_source_unreferenced_bytes_pct = ctrl_summary.get(
+        "rewrite_checkpoint_like_source_unreferenced_bytes_pct",
+    )
+    d_checkpoint_like_source_unreferenced_bytes_pct = delta(
+        cand_checkpoint_like_source_unreferenced_bytes_pct,
+        base_checkpoint_like_source_unreferenced_bytes_pct,
+    )
+    cand_non_checkpoint_source_unreferenced_bytes_pct = cand_summary.get(
+        "rewrite_non_checkpoint_source_unreferenced_bytes_pct",
+    )
+    base_non_checkpoint_source_unreferenced_bytes_pct = ctrl_summary.get(
+        "rewrite_non_checkpoint_source_unreferenced_bytes_pct",
+    )
+    d_non_checkpoint_source_unreferenced_bytes_pct = delta(
+        cand_non_checkpoint_source_unreferenced_bytes_pct,
+        base_non_checkpoint_source_unreferenced_bytes_pct,
     )
     cand_checkpoint_kick_burst_limiter_count = cand_summary.get(
         "rewrite_queue_run_segment_cap_limiter_count_checkpoint_kick_burst",
@@ -2063,6 +2260,15 @@ for pair in sorted(by_pair):
         "control_checkpoint_kick_skipped_hot_no_debt": base_checkpoint_kick_skipped_hot_no_debt,
         "candidate_checkpoint_kick_skipped_hot_no_debt": cand_checkpoint_kick_skipped_hot_no_debt,
         "delta_checkpoint_kick_skipped_hot_no_debt": d_checkpoint_kick_skipped_hot_no_debt,
+        "control_rewrite_checkpoint_like_budget_share_pct": base_checkpoint_like_budget_share_pct,
+        "candidate_rewrite_checkpoint_like_budget_share_pct": cand_checkpoint_like_budget_share_pct,
+        "delta_rewrite_checkpoint_like_budget_share_pct": d_checkpoint_like_budget_share_pct,
+        "control_rewrite_checkpoint_like_source_unreferenced_bytes_pct": base_checkpoint_like_source_unreferenced_bytes_pct,
+        "candidate_rewrite_checkpoint_like_source_unreferenced_bytes_pct": cand_checkpoint_like_source_unreferenced_bytes_pct,
+        "delta_rewrite_checkpoint_like_source_unreferenced_bytes_pct": d_checkpoint_like_source_unreferenced_bytes_pct,
+        "control_rewrite_non_checkpoint_source_unreferenced_bytes_pct": base_non_checkpoint_source_unreferenced_bytes_pct,
+        "candidate_rewrite_non_checkpoint_source_unreferenced_bytes_pct": cand_non_checkpoint_source_unreferenced_bytes_pct,
+        "delta_rewrite_non_checkpoint_source_unreferenced_bytes_pct": d_non_checkpoint_source_unreferenced_bytes_pct,
         "control_rewrite_queue_run_segment_cap_limiter_count_checkpoint_kick_burst": base_checkpoint_kick_burst_limiter_count,
         "candidate_rewrite_queue_run_segment_cap_limiter_count_checkpoint_kick_burst": cand_checkpoint_kick_burst_limiter_count,
         "delta_rewrite_queue_run_segment_cap_limiter_count_checkpoint_kick_burst": d_checkpoint_kick_burst_limiter_count,
@@ -2122,6 +2328,15 @@ with pairs_csv.open("w", newline="", encoding="utf-8") as fh:
         "control_checkpoint_kick_skipped_hot_no_debt",
         "candidate_checkpoint_kick_skipped_hot_no_debt",
         "delta_checkpoint_kick_skipped_hot_no_debt",
+        "control_rewrite_checkpoint_like_budget_share_pct",
+        "candidate_rewrite_checkpoint_like_budget_share_pct",
+        "delta_rewrite_checkpoint_like_budget_share_pct",
+        "control_rewrite_checkpoint_like_source_unreferenced_bytes_pct",
+        "candidate_rewrite_checkpoint_like_source_unreferenced_bytes_pct",
+        "delta_rewrite_checkpoint_like_source_unreferenced_bytes_pct",
+        "control_rewrite_non_checkpoint_source_unreferenced_bytes_pct",
+        "candidate_rewrite_non_checkpoint_source_unreferenced_bytes_pct",
+        "delta_rewrite_non_checkpoint_source_unreferenced_bytes_pct",
         "control_rewrite_queue_run_segment_cap_limiter_count_checkpoint_kick_burst",
         "candidate_rewrite_queue_run_segment_cap_limiter_count_checkpoint_kick_burst",
         "delta_rewrite_queue_run_segment_cap_limiter_count_checkpoint_kick_burst",
@@ -2178,6 +2393,15 @@ with pairs_csv.open("w", newline="", encoding="utf-8") as fh:
             r["control_checkpoint_kick_skipped_hot_no_debt"],
             r["candidate_checkpoint_kick_skipped_hot_no_debt"],
             r["delta_checkpoint_kick_skipped_hot_no_debt"],
+            r["control_rewrite_checkpoint_like_budget_share_pct"],
+            r["candidate_rewrite_checkpoint_like_budget_share_pct"],
+            r["delta_rewrite_checkpoint_like_budget_share_pct"],
+            r["control_rewrite_checkpoint_like_source_unreferenced_bytes_pct"],
+            r["candidate_rewrite_checkpoint_like_source_unreferenced_bytes_pct"],
+            r["delta_rewrite_checkpoint_like_source_unreferenced_bytes_pct"],
+            r["control_rewrite_non_checkpoint_source_unreferenced_bytes_pct"],
+            r["candidate_rewrite_non_checkpoint_source_unreferenced_bytes_pct"],
+            r["delta_rewrite_non_checkpoint_source_unreferenced_bytes_pct"],
             r["control_rewrite_queue_run_segment_cap_limiter_count_checkpoint_kick_burst"],
             r["candidate_rewrite_queue_run_segment_cap_limiter_count_checkpoint_kick_burst"],
             r["delta_rewrite_queue_run_segment_cap_limiter_count_checkpoint_kick_burst"],
@@ -2244,6 +2468,18 @@ delta_rewrite_queue_live_bytes_after_tokens_mean = mean_pair_delta(
 delta_checkpoint_kick_skipped_hot_no_debt_mean = mean_pair_delta(
     scored_rows,
     "delta_checkpoint_kick_skipped_hot_no_debt",
+)
+delta_checkpoint_like_budget_share_pct_mean = mean_pair_delta(
+    scored_rows,
+    "delta_rewrite_checkpoint_like_budget_share_pct",
+)
+delta_checkpoint_like_source_unreferenced_bytes_pct_mean = mean_pair_delta(
+    scored_rows,
+    "delta_rewrite_checkpoint_like_source_unreferenced_bytes_pct",
+)
+delta_non_checkpoint_source_unreferenced_bytes_pct_mean = mean_pair_delta(
+    scored_rows,
+    "delta_rewrite_non_checkpoint_source_unreferenced_bytes_pct",
 )
 delta_checkpoint_kick_burst_limiter_count_mean = mean_pair_delta(
     scored_rows,
@@ -2403,6 +2639,15 @@ lines.append(
     f"- mean delta checkpoint_kick_skipped_hot_no_debt: `{delta_checkpoint_kick_skipped_hot_no_debt_mean}`"
 )
 lines.append(
+    f"- mean delta rewrite_checkpoint_like_budget_share_pct: `{delta_checkpoint_like_budget_share_pct_mean}`"
+)
+lines.append(
+    f"- mean delta rewrite_checkpoint_like_source_unreferenced_bytes_pct: `{delta_checkpoint_like_source_unreferenced_bytes_pct_mean}`"
+)
+lines.append(
+    f"- mean delta rewrite_non_checkpoint_source_unreferenced_bytes_pct: `{delta_non_checkpoint_source_unreferenced_bytes_pct_mean}`"
+)
+lines.append(
     f"- mean delta rewrite_queue_run_segment_cap_limiter_count_checkpoint_kick_burst: `{delta_checkpoint_kick_burst_limiter_count_mean}`"
 )
 lines.append(f"- decision: `{reason}`")
@@ -2509,6 +2754,24 @@ if pair_rows:
         f"`{last['delta_checkpoint_kick_skipped_hot_no_debt']}`"
     )
     lines.append(
+        f"- rewrite_checkpoint_like_budget_share_pct (control/candidate/delta): "
+        f"`{last['control_rewrite_checkpoint_like_budget_share_pct']}` / "
+        f"`{last['candidate_rewrite_checkpoint_like_budget_share_pct']}` / "
+        f"`{last['delta_rewrite_checkpoint_like_budget_share_pct']}`"
+    )
+    lines.append(
+        f"- rewrite_checkpoint_like_source_unreferenced_bytes_pct (control/candidate/delta): "
+        f"`{last['control_rewrite_checkpoint_like_source_unreferenced_bytes_pct']}` / "
+        f"`{last['candidate_rewrite_checkpoint_like_source_unreferenced_bytes_pct']}` / "
+        f"`{last['delta_rewrite_checkpoint_like_source_unreferenced_bytes_pct']}`"
+    )
+    lines.append(
+        f"- rewrite_non_checkpoint_source_unreferenced_bytes_pct (control/candidate/delta): "
+        f"`{last['control_rewrite_non_checkpoint_source_unreferenced_bytes_pct']}` / "
+        f"`{last['candidate_rewrite_non_checkpoint_source_unreferenced_bytes_pct']}` / "
+        f"`{last['delta_rewrite_non_checkpoint_source_unreferenced_bytes_pct']}`"
+    )
+    lines.append(
         f"- rewrite_queue_run_segment_cap_limiter_count_checkpoint_kick_burst (control/candidate/delta): "
         f"`{last['control_rewrite_queue_run_segment_cap_limiter_count_checkpoint_kick_burst']}` / "
         f"`{last['candidate_rewrite_queue_run_segment_cap_limiter_count_checkpoint_kick_burst']}` / "
@@ -2547,6 +2810,9 @@ payload = {
     "mean_delta_rewrite_queue_eta_seconds_budget": delta_rewrite_queue_eta_seconds_budget_mean,
     "mean_delta_rewrite_queue_live_bytes_after_tokens": delta_rewrite_queue_live_bytes_after_tokens_mean,
     "mean_delta_checkpoint_kick_skipped_hot_no_debt": delta_checkpoint_kick_skipped_hot_no_debt_mean,
+    "mean_delta_rewrite_checkpoint_like_budget_share_pct": delta_checkpoint_like_budget_share_pct_mean,
+    "mean_delta_rewrite_checkpoint_like_source_unreferenced_bytes_pct": delta_checkpoint_like_source_unreferenced_bytes_pct_mean,
+    "mean_delta_rewrite_non_checkpoint_source_unreferenced_bytes_pct": delta_non_checkpoint_source_unreferenced_bytes_pct_mean,
     "mean_delta_rewrite_queue_run_segment_cap_limiter_count_checkpoint_kick_burst": delta_checkpoint_kick_burst_limiter_count_mean,
     "stop": stop,
     "reason": reason,

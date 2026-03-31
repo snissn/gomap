@@ -30,6 +30,9 @@ Primary keys:
 - `treedb.cache.vlog_generation.rewrite.plan_empty.age_blocked`
 - `treedb.cache.vlog_generation.rewrite.plan_selected`
 - `treedb.cache.vlog_generation.rewrite.ledger_bytes_stale`
+- `treedb.cache.vlog_generation.rewrite.runs.source.*`
+- `treedb.cache.vlog_generation.rewrite_budget.consumed_bytes_total.source.*`
+- `treedb.cache.vlog_generation.rewrite.exec.source_bytes_{requested,unreferenced}_total.source.*`
 - `treedb.cache.vlog_generation.rewrite.queue_run_segment_cap`
 - `treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.limiter`
 - `treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.by_budget`
@@ -142,6 +145,9 @@ with automatic fallback to `treemap vlog-gc -rw -dry-run`.
 
 `runs.csv` includes per-run rewrite-capacity KPIs (including `rewrite_queue_run_segment_cap_limiter_count_checkpoint_kick_burst`) and `pairs.csv` includes pair deltas for those KPIs (including `delta_rewrite_queue_run_segment_cap_limiter_count_checkpoint_kick_burst`), so candidate/control maintenance behavior can be evaluated directly from CSV outputs.
 This includes queue-pressure and checkpoint-kick fields to diagnose whether rewrite is keeping up incrementally during hot sync windows.
+It also includes checkpoint-like (`bypass` + `checkpoint_pending`) vs non-checkpoint rewrite split metrics:
+`rewrite_checkpoint_like_budget_share_pct`, `rewrite_checkpoint_like_source_unreferenced_bytes_pct`, and
+`rewrite_non_checkpoint_source_unreferenced_bytes_pct`.
 
 The harness alternates run order per pair (`control->candidate`, then
 `candidate->control`) and can stop early on clear win/loss signals.

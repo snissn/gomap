@@ -173,6 +173,7 @@ Notes:
 - `runs.csv` includes checkpoint-kick burst limiter usage (`rewrite_queue_run_segment_cap_limiter_count_checkpoint_kick_burst`) so queued-debt burst behavior is visible directly in control/candidate comparisons.
 - `pairs.csv` includes per-pair deltas for those KPIs so control/candidate capacity behavior can be compared without post-processing scripts.
 - `pairs.csv` includes `delta_rewrite_queue_run_segment_cap_limiter_count_checkpoint_kick_burst` so checkpoint-kick burst usage changes are visible at pair level.
+- `runs.csv` now includes checkpoint-like (`bypass` + `checkpoint_pending`) vs non-checkpoint rewrite split metrics, and `pairs.csv` includes deltas for source-efficiency fields such as `delta_rewrite_checkpoint_like_budget_share_pct`.
 - To use pre-policy behavior, set `AB_POLICY=legacy`.
 
 ## Process Review Cadence
