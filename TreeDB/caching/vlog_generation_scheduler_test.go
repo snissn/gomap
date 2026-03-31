@@ -950,6 +950,35 @@ func TestVlogGenerationRewriteMaxSegmentsForRun_ClampsDebtDrainQueue(t *testing.
 	}
 }
 
+func TestVlogGenerationRewriteSegmentCapForRun_Limiter(t *testing.T) {
+	db := &DB{
+		valueLogRewriteBudgetBytes:   1024,
+		valueLogGenerationWarmTarget: 256,
+	}
+
+	decision := db.vlogGenerationRewriteSegmentCapForRun(4, 256, vlogGenerationMaintenanceOptions{rewriteDebtDrain: true})
+	if decision.maxSegments != 1 {
+		t.Fatalf("maxSegments=%d want=1", decision.maxSegments)
+	}
+	if decision.limiter != vlogGenerationRewriteSegmentCapLimiterBudgetTokens {
+		t.Fatalf("limiter=%s want=budget_tokens", vlogGenerationRewriteSegmentCapLimiterString(decision.limiter))
+	}
+	if decision.byBudgetSegments != 1 {
+		t.Fatalf("byBudgetSegments=%d want=1", decision.byBudgetSegments)
+	}
+	if decision.perSegmentBudget != 256 {
+		t.Fatalf("perSegmentBudget=%d want=256", decision.perSegmentBudget)
+	}
+
+	checkpointDecision := db.vlogGenerationRewriteSegmentCapForRun(4, 1024, vlogGenerationMaintenanceOptions{rewriteDebtDrain: true, bypassQuiet: true})
+	if checkpointDecision.maxSegments != 1 {
+		t.Fatalf("checkpoint maxSegments=%d want=1", checkpointDecision.maxSegments)
+	}
+	if checkpointDecision.limiter != vlogGenerationRewriteSegmentCapLimiterCheckpointKickSafety {
+		t.Fatalf("checkpoint limiter=%s want=checkpoint_kick_safety", vlogGenerationRewriteSegmentCapLimiterString(checkpointDecision.limiter))
+	}
+}
+
 func TestVlogGenerationRewriteMaxSegmentsForFreshPlan_BelowQueueThreshold(t *testing.T) {
 	db := &DB{
 		valueLogRewriteBudgetBytes:   1024,
@@ -7234,6 +7263,24 @@ func TestVlogGenerationStats_ReportRewriteBacklogAndDurations(t *testing.T) {
 	}
 	if got := stats["treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.checkpoint_kick"]; got != "1" {
 		t.Fatalf("rewrite queue run segment cap checkpoint kick=%q want 1", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.limiter"]; got != "budget_tokens" {
+		t.Fatalf("rewrite queue run segment cap limiter=%q want budget_tokens", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.limiter.checkpoint_kick"]; got != "checkpoint_kick_safety" {
+		t.Fatalf("rewrite queue run segment cap checkpoint kick limiter=%q want checkpoint_kick_safety", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.by_budget"]; got != "1" {
+		t.Fatalf("rewrite queue run segment cap by-budget=%q want 1", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.by_budget.checkpoint_kick"]; got != "0" {
+		t.Fatalf("rewrite queue run segment cap checkpoint-kick by-budget=%q want 0", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.per_segment_budget_bytes"]; got != "268435456" {
+		t.Fatalf("rewrite queue run segment cap per-segment budget bytes=%q want 268435456", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.per_segment_budget_bytes.checkpoint_kick"]; got != "0" {
+		t.Fatalf("rewrite queue run segment cap checkpoint-kick per-segment budget bytes=%q want 0", got)
 	}
 	if got := stats["treedb.cache.vlog_generation.rewrite.queue_config.resume_max_segments"]; got != "1" {
 		t.Fatalf("rewrite queue config resume max segments=%q want 1", got)

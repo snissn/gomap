@@ -9223,6 +9223,40 @@ func vlogGenerationReasonString(v uint32) string {
 	}
 }
 
+const (
+	vlogGenerationRewriteSegmentCapLimiterNone uint32 = iota
+	vlogGenerationRewriteSegmentCapLimiterResumeDefault
+	vlogGenerationRewriteSegmentCapLimiterCheckpointKickSafety
+	vlogGenerationRewriteSegmentCapLimiterQueueLen
+	vlogGenerationRewriteSegmentCapLimiterDebtDrainCap
+	vlogGenerationRewriteSegmentCapLimiterBudgetEmpty
+	vlogGenerationRewriteSegmentCapLimiterBudgetPerSegment
+	vlogGenerationRewriteSegmentCapLimiterBudgetTokens
+)
+
+func vlogGenerationRewriteSegmentCapLimiterString(v uint32) string {
+	switch v {
+	case vlogGenerationRewriteSegmentCapLimiterNone:
+		return "none"
+	case vlogGenerationRewriteSegmentCapLimiterResumeDefault:
+		return "resume_default"
+	case vlogGenerationRewriteSegmentCapLimiterCheckpointKickSafety:
+		return "checkpoint_kick_safety"
+	case vlogGenerationRewriteSegmentCapLimiterQueueLen:
+		return "queue_len"
+	case vlogGenerationRewriteSegmentCapLimiterDebtDrainCap:
+		return "debt_drain_cap"
+	case vlogGenerationRewriteSegmentCapLimiterBudgetEmpty:
+		return "budget_empty"
+	case vlogGenerationRewriteSegmentCapLimiterBudgetPerSegment:
+		return "budget_per_segment"
+	case vlogGenerationRewriteSegmentCapLimiterBudgetTokens:
+		return "budget_tokens"
+	default:
+		return "unknown"
+	}
+}
+
 func resetTimer(t *time.Timer, d time.Duration) {
 	if t == nil {
 		return
@@ -13499,48 +13533,82 @@ func vlogGenerationRewriteFreshPlanDebtDrainLimitsEffective() (minSegments int, 
 	return minSegments, maxSegments
 }
 
-func (db *DB) vlogGenerationRewriteMaxSegmentsForRun(queueLen int, budgetTokens int64, opts vlogGenerationMaintenanceOptions) int {
-	maxSegments := vlogGenerationRewriteResumeMaxSegmentsEffective()
+type vlogGenerationRewriteSegmentCapDecision struct {
+	maxSegments        int
+	limiter            uint32
+	byBudgetSegments   int
+	perSegmentBudget   int64
+	budgetEnabled      bool
+	resumeMaxSegments  int
+	debtDrainMaxTarget int
+}
+
+func (db *DB) vlogGenerationRewriteSegmentCapForRun(queueLen int, budgetTokens int64, opts vlogGenerationMaintenanceOptions) vlogGenerationRewriteSegmentCapDecision {
+	resumeMaxSegments := vlogGenerationRewriteResumeMaxSegmentsEffective()
+	decision := vlogGenerationRewriteSegmentCapDecision{
+		maxSegments:        resumeMaxSegments,
+		limiter:            vlogGenerationRewriteSegmentCapLimiterResumeDefault,
+		byBudgetSegments:   0,
+		perSegmentBudget:   0,
+		budgetEnabled:      db != nil && db.vlogGenerationRewriteBudgetEnabled(),
+		resumeMaxSegments:  resumeMaxSegments,
+		debtDrainMaxTarget: vlogGenerationRewriteDebtDrainMaxSegmentsEffective(),
+	}
 	if db == nil || queueLen <= 1 || !opts.rewriteDebtDrain {
-		return maxSegments
+		return decision
 	}
 	// Checkpoint-kick retries should keep each debt-drain run small to reduce
 	// write amplification when foreground ingest is still active.
 	if opts.bypassQuiet && !opts.skipCheckpoint && !vlogGenerationIsStageConfirmSource(opts) && !vlogGenerationIsAgeBlockedSource(opts) {
-		return 1
+		decision.maxSegments = 1
+		decision.limiter = vlogGenerationRewriteSegmentCapLimiterCheckpointKickSafety
+		return decision
 	}
-	maxSegments = queueLen
-	debtDrainCap := vlogGenerationRewriteDebtDrainMaxSegmentsEffective()
-	if maxSegments > debtDrainCap {
-		maxSegments = debtDrainCap
+	decision.maxSegments = queueLen
+	decision.limiter = vlogGenerationRewriteSegmentCapLimiterQueueLen
+	debtDrainCap := decision.debtDrainMaxTarget
+	if decision.maxSegments > debtDrainCap {
+		decision.maxSegments = debtDrainCap
+		decision.limiter = vlogGenerationRewriteSegmentCapLimiterDebtDrainCap
 	}
-	if maxSegments < 1 {
-		maxSegments = 1
+	if decision.maxSegments < 1 {
+		decision.maxSegments = 1
 	}
-	if !db.vlogGenerationRewriteBudgetEnabled() {
-		return maxSegments
+	if !decision.budgetEnabled {
+		return decision
 	}
 	if budgetTokens <= 0 {
-		return 1
+		decision.maxSegments = 1
+		decision.limiter = vlogGenerationRewriteSegmentCapLimiterBudgetEmpty
+		return decision
 	}
 	perSegmentBudget := db.valueLogGenerationWarmTarget
 	if perSegmentBudget <= 0 {
 		perSegmentBudget = defaultVlogGenerationWarmTargetBytes
 	}
+	decision.perSegmentBudget = perSegmentBudget
 	if perSegmentBudget <= 0 {
-		return 1
+		decision.maxSegments = 1
+		decision.limiter = vlogGenerationRewriteSegmentCapLimiterBudgetPerSegment
+		return decision
 	}
 	byBudget := int(budgetTokens / perSegmentBudget)
 	if byBudget < 1 {
 		byBudget = 1
 	}
-	if byBudget < maxSegments {
-		maxSegments = byBudget
+	decision.byBudgetSegments = byBudget
+	if byBudget < decision.maxSegments {
+		decision.maxSegments = byBudget
+		decision.limiter = vlogGenerationRewriteSegmentCapLimiterBudgetTokens
 	}
-	if maxSegments < 1 {
-		maxSegments = 1
+	if decision.maxSegments < 1 {
+		decision.maxSegments = 1
 	}
-	return maxSegments
+	return decision
+}
+
+func (db *DB) vlogGenerationRewriteMaxSegmentsForRun(queueLen int, budgetTokens int64, opts vlogGenerationMaintenanceOptions) int {
+	return db.vlogGenerationRewriteSegmentCapForRun(queueLen, budgetTokens, opts).maxSegments
 }
 
 func (db *DB) vlogGenerationRewriteMaxSegmentsForFreshPlan(queueLen int, budgetTokens int64, opts vlogGenerationMaintenanceOptions) int {
@@ -21699,17 +21767,31 @@ func (db *DB) Stats() map[string]string {
 	rewriteFreshPlanDebtDrainMinSegments, rewriteFreshPlanDebtDrainMaxSegments := vlogGenerationRewriteFreshPlanDebtDrainLimitsEffective()
 	rewriteQueueRunSegmentCap := 0
 	rewriteQueueRunSegmentCapCheckpointKick := 0
+	rewriteQueueRunSegmentCapLimiter := vlogGenerationRewriteSegmentCapLimiterNone
+	rewriteQueueRunSegmentCapCheckpointKickLimiter := vlogGenerationRewriteSegmentCapLimiterNone
+	rewriteQueueRunSegmentCapByBudget := 0
+	rewriteQueueRunSegmentCapByBudgetCheckpointKick := 0
+	rewriteQueueRunSegmentCapPerSegmentBudgetBytes := int64(0)
+	rewriteQueueRunSegmentCapPerSegmentBudgetBytesCheckpointKick := int64(0)
 	if rewriteQueueLen > 0 {
-		rewriteQueueRunSegmentCap = db.vlogGenerationRewriteMaxSegmentsForRun(
+		rewriteQueueRunDecision := db.vlogGenerationRewriteSegmentCapForRun(
 			rewriteQueueLen,
 			rewriteBudgetTokens,
 			vlogGenerationMaintenanceOptions{rewriteDebtDrain: true},
 		)
-		rewriteQueueRunSegmentCapCheckpointKick = db.vlogGenerationRewriteMaxSegmentsForRun(
+		rewriteQueueRunSegmentCap = rewriteQueueRunDecision.maxSegments
+		rewriteQueueRunSegmentCapLimiter = rewriteQueueRunDecision.limiter
+		rewriteQueueRunSegmentCapByBudget = rewriteQueueRunDecision.byBudgetSegments
+		rewriteQueueRunSegmentCapPerSegmentBudgetBytes = rewriteQueueRunDecision.perSegmentBudget
+		rewriteQueueRunCheckpointDecision := db.vlogGenerationRewriteSegmentCapForRun(
 			rewriteQueueLen,
 			rewriteBudgetTokens,
 			vlogGenerationMaintenanceOptions{rewriteDebtDrain: true, bypassQuiet: true},
 		)
+		rewriteQueueRunSegmentCapCheckpointKick = rewriteQueueRunCheckpointDecision.maxSegments
+		rewriteQueueRunSegmentCapCheckpointKickLimiter = rewriteQueueRunCheckpointDecision.limiter
+		rewriteQueueRunSegmentCapByBudgetCheckpointKick = rewriteQueueRunCheckpointDecision.byBudgetSegments
+		rewriteQueueRunSegmentCapPerSegmentBudgetBytesCheckpointKick = rewriteQueueRunCheckpointDecision.perSegmentBudget
 	}
 	rewriteQueueETABudgetSeconds := 0.0
 	if rewriteLedgerBytesLive > 0 && db.valueLogRewriteBudgetBytes > 0 {
@@ -21921,6 +22003,12 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_generation.rewrite.queue_loaded"] = fmt.Sprintf("%t", rewriteQueueLoaded)
 	stats["treedb.cache.vlog_generation.rewrite.queue_run_segment_cap"] = fmt.Sprintf("%d", rewriteQueueRunSegmentCap)
 	stats["treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.checkpoint_kick"] = fmt.Sprintf("%d", rewriteQueueRunSegmentCapCheckpointKick)
+	stats["treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.limiter"] = vlogGenerationRewriteSegmentCapLimiterString(rewriteQueueRunSegmentCapLimiter)
+	stats["treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.limiter.checkpoint_kick"] = vlogGenerationRewriteSegmentCapLimiterString(rewriteQueueRunSegmentCapCheckpointKickLimiter)
+	stats["treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.by_budget"] = fmt.Sprintf("%d", rewriteQueueRunSegmentCapByBudget)
+	stats["treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.by_budget.checkpoint_kick"] = fmt.Sprintf("%d", rewriteQueueRunSegmentCapByBudgetCheckpointKick)
+	stats["treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.per_segment_budget_bytes"] = fmt.Sprintf("%d", rewriteQueueRunSegmentCapPerSegmentBudgetBytes)
+	stats["treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.per_segment_budget_bytes.checkpoint_kick"] = fmt.Sprintf("%d", rewriteQueueRunSegmentCapPerSegmentBudgetBytesCheckpointKick)
 	stats["treedb.cache.vlog_generation.rewrite.queue_config.resume_max_segments"] = fmt.Sprintf("%d", rewriteResumeMaxSegments)
 	stats["treedb.cache.vlog_generation.rewrite.queue_config.debt_drain_max_segments"] = fmt.Sprintf("%d", rewriteDebtDrainMaxSegments)
 	stats["treedb.cache.vlog_generation.rewrite.queue_config.fresh_plan_debt_drain_min_segments"] = fmt.Sprintf("%d", rewriteFreshPlanDebtDrainMinSegments)
