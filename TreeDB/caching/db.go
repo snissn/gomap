@@ -6301,6 +6301,7 @@ type DB struct {
 	vlogGenerationMaintenanceSkipPriority                        atomic.Uint64
 	vlogGenerationMaintenanceSkipQuiet                           atomic.Uint64
 	vlogGenerationMaintenanceSkipPreCheckpoint                   atomic.Uint64
+	vlogGenerationPreCheckpointPeriodicHotPassDone               atomic.Bool
 	vlogGenerationMaintenanceSkipCheckpointing                   atomic.Uint64
 	vlogGenerationMaintenancePassNoop                            atomic.Uint64
 	vlogGenerationMaintenancePassWithRewrite                     atomic.Uint64
@@ -13561,14 +13562,19 @@ func (db *DB) maybeRunPeriodicVlogGenerationMaintenance(runGC bool) bool {
 		if !runGC &&
 			db.disableJournal &&
 			db.checkpointRuns.Load() == 0 &&
-			envBool(envEnableVlogGenerationPreCheckpointRewrite) {
-			return db.maybeRunVlogGenerationMaintenanceWithOptions(false, vlogGenerationMaintenanceOptions{
+			envBool(envEnableVlogGenerationPreCheckpointRewrite) &&
+			db.vlogGenerationPreCheckpointPeriodicHotPassDone.CompareAndSwap(false, true) {
+			acquired := db.maybeRunVlogGenerationMaintenanceWithOptions(false, vlogGenerationMaintenanceOptions{
 				bypassQuiet:           true,
 				skipRetainedPruneWait: true,
 				skipCheckpoint:        false,
 				rewriteDebtDrain:      true,
 				debugSource:           "precheckpoint_periodic_hot",
 			})
+			if !acquired {
+				db.vlogGenerationPreCheckpointPeriodicHotPassDone.Store(false)
+			}
+			return acquired
 		}
 		return false
 	}

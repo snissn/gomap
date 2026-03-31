@@ -522,6 +522,7 @@ run_variant() {
     local before_file="$attempt_dir/before_homes.txt"
     local attempt_live_debug_vars="$attempt_dir/live_debug_vars_latest.json"
     list_run_homes >"$before_file"
+    rm -f "$live_debug_vars"
     rm -f "$attempt_live_debug_vars"
 
     run_start=$(date +%s)

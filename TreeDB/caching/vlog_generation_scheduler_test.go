@@ -5826,6 +5826,17 @@ func TestVlogGenerationMaintenance_PeriodicPreflightHotPreCheckpointOverrideRuns
 	if got := stats["treedb.cache.vlog_generation.maintenance.attempts"]; got != "1" {
 		t.Fatalf("maintenance attempts=%q want 1 with override", got)
 	}
+
+	if ran := db.maybeRunPeriodicVlogGenerationMaintenance(false); ran {
+		t.Fatal("periodic maintenance unexpectedly reran after one hot pre-checkpoint override pass")
+	}
+	if _, calls := recorder.recordedRewrite(); calls != 1 {
+		t.Fatalf("rewrite calls=%d want 1 after second hot pre-checkpoint periodic tick", calls)
+	}
+	stats = db.Stats()
+	if got := stats["treedb.cache.vlog_generation.maintenance.attempts"]; got != "1" {
+		t.Fatalf("maintenance attempts=%q want 1 after second hot pre-checkpoint periodic tick", got)
+	}
 }
 
 func TestCheckpoint_KickSkipsWhenMaintenancePhaseNonSteady(t *testing.T) {
