@@ -275,6 +275,8 @@ capture_light_vlog_stats() {
   local app_db="$1"
   local out_file="$2"
   local err_file="$3"
+  local env_file="${4:-}"
+  local overlay_env_file="${5:-}"
 
   rm -f "$out_file" "$err_file"
 
@@ -293,13 +295,27 @@ capture_light_vlog_stats() {
   local -a cmd_vlog_gc_dry_run=("$TREEMAP_BIN" vlog-gc "$app_db" "-rw" "-dry-run")
 
   set +e
-  if [[ "$AB_LIGHT_VLOG_STATS_TIMEOUT_SECONDS" -gt 0 ]] && command -v timeout >/dev/null 2>&1; then
-    timeout --signal=TERM --kill-after=30 "${AB_LIGHT_VLOG_STATS_TIMEOUT_SECONDS}s" "${cmd_stats[@]}" >"$out_file" 2>"$err_file"
-    rc=$?
-  else
-    "${cmd_stats[@]}" >"$out_file" 2>"$err_file"
-    rc=$?
-  fi
+  (
+    set -euo pipefail
+    if [[ -n "$env_file" ]]; then
+      set -a
+      # shellcheck source=/dev/null
+      source "$env_file"
+      set +a
+    fi
+    if [[ -n "$overlay_env_file" && -f "$overlay_env_file" ]]; then
+      set -a
+      # shellcheck source=/dev/null
+      source "$overlay_env_file"
+      set +a
+    fi
+    if [[ "$AB_LIGHT_VLOG_STATS_TIMEOUT_SECONDS" -gt 0 ]] && command -v timeout >/dev/null 2>&1; then
+      timeout --signal=TERM --kill-after=30 "${AB_LIGHT_VLOG_STATS_TIMEOUT_SECONDS}s" "${cmd_stats[@]}"
+    else
+      "${cmd_stats[@]}"
+    fi
+  ) >"$out_file" 2>"$err_file"
+  rc=$?
   set -e
   if [[ "$rc" -eq 0 && -s "$out_file" ]]; then
     return 0
@@ -311,13 +327,27 @@ capture_light_vlog_stats() {
   } >>"$err_file"
 
   set +e
-  if [[ "$AB_LIGHT_VLOG_STATS_TIMEOUT_SECONDS" -gt 0 ]] && command -v timeout >/dev/null 2>&1; then
-    timeout --signal=TERM --kill-after=30 "${AB_LIGHT_VLOG_STATS_TIMEOUT_SECONDS}s" "${cmd_vlog_gc_dry_run[@]}" >"$out_file" 2>>"$err_file"
-    rc=$?
-  else
-    "${cmd_vlog_gc_dry_run[@]}" >"$out_file" 2>>"$err_file"
-    rc=$?
-  fi
+  (
+    set -euo pipefail
+    if [[ -n "$env_file" ]]; then
+      set -a
+      # shellcheck source=/dev/null
+      source "$env_file"
+      set +a
+    fi
+    if [[ -n "$overlay_env_file" && -f "$overlay_env_file" ]]; then
+      set -a
+      # shellcheck source=/dev/null
+      source "$overlay_env_file"
+      set +a
+    fi
+    if [[ "$AB_LIGHT_VLOG_STATS_TIMEOUT_SECONDS" -gt 0 ]] && command -v timeout >/dev/null 2>&1; then
+      timeout --signal=TERM --kill-after=30 "${AB_LIGHT_VLOG_STATS_TIMEOUT_SECONDS}s" "${cmd_vlog_gc_dry_run[@]}"
+    else
+      "${cmd_vlog_gc_dry_run[@]}"
+    fi
+  ) >"$out_file" 2>>"$err_file"
+  rc=$?
   set -e
   if [[ "$rc" -eq 0 && -s "$out_file" ]]; then
     return 0
@@ -503,11 +533,26 @@ run_variant() {
     pre_app_bytes="$(du_bytes "$app_db")"
     pre_wal_bytes="$(du_bytes "$app_db/maindb/wal")"
 
-    if ! "$ANALYZER" --json "$run_home" >"$analyze_json" 2>"$run_dir/analyze.stderr.log"; then
+    if ! (
+      set -euo pipefail
+      if [[ -n "$env_file" ]]; then
+        set -a
+        # shellcheck source=/dev/null
+        source "$env_file"
+        set +a
+      fi
+      if [[ -n "$overlay_env_file" && -f "$overlay_env_file" ]]; then
+        set -a
+        # shellcheck source=/dev/null
+        source "$overlay_env_file"
+        set +a
+      fi
+      "$ANALYZER" --json "$run_home"
+    ) >"$analyze_json" 2>"$run_dir/analyze.stderr.log"; then
       rm -f "$analyze_json"
     fi
 
-    if capture_light_vlog_stats "$app_db" "$light_stats_pre" "$light_stats_pre_err"; then
+    if capture_light_vlog_stats "$app_db" "$light_stats_pre" "$light_stats_pre_err" "$env_file" "$overlay_env_file"; then
       light_stats_pre_rc=0
     else
       light_stats_pre_rc=$?
@@ -533,7 +578,7 @@ run_variant() {
   if [[ -n "$app_db" ]]; then
     post_app_bytes="$(du_bytes "$app_db")"
     post_wal_bytes="$(du_bytes "$app_db/maindb/wal")"
-    if capture_light_vlog_stats "$app_db" "$light_stats_post" "$light_stats_post_err"; then
+    if capture_light_vlog_stats "$app_db" "$light_stats_post" "$light_stats_post_err" "$env_file" "$overlay_env_file"; then
       light_stats_post_rc=0
     else
       light_stats_post_rc=$?
