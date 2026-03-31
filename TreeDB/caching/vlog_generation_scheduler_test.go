@@ -953,8 +953,8 @@ func TestVlogGenerationRewriteMaxSegmentsForRun_ClampsDebtDrainQueue(t *testing.
 	if got := db.vlogGenerationRewriteMaxSegmentsForRun(vlogGenerationRewriteDebtDrainMaxSegments+5, 1<<20, vlogGenerationMaintenanceOptions{rewriteDebtDrain: true}); got != vlogGenerationRewriteDebtDrainMaxSegments {
 		t.Fatalf("queueLen>%d got=%d want=%d", vlogGenerationRewriteDebtDrainMaxSegments, got, vlogGenerationRewriteDebtDrainMaxSegments)
 	}
-	if got := db.vlogGenerationRewriteMaxSegmentsForRun(4, 1024, vlogGenerationMaintenanceOptions{rewriteDebtDrain: true, bypassQuiet: true}); got != 1 {
-		t.Fatalf("checkpoint-kick got=%d want=1", got)
+	if got := db.vlogGenerationRewriteMaxSegmentsForRun(4, 1024, vlogGenerationMaintenanceOptions{rewriteDebtDrain: true, bypassQuiet: true}); got != 2 {
+		t.Fatalf("checkpoint-kick got=%d want=2", got)
 	}
 	if got := db.vlogGenerationRewriteMaxSegmentsForRun(4, 256, vlogGenerationMaintenanceOptions{rewriteDebtDrain: true}); got != 1 {
 		t.Fatalf("budget clamp got=%d want=1", got)
@@ -982,11 +982,25 @@ func TestVlogGenerationRewriteSegmentCapForRun_Limiter(t *testing.T) {
 	}
 
 	checkpointDecision := db.vlogGenerationRewriteSegmentCapForRun(4, 1024, vlogGenerationMaintenanceOptions{rewriteDebtDrain: true, bypassQuiet: true})
-	if checkpointDecision.maxSegments != 1 {
-		t.Fatalf("checkpoint maxSegments=%d want=1", checkpointDecision.maxSegments)
+	if checkpointDecision.maxSegments != 2 {
+		t.Fatalf("checkpoint maxSegments=%d want=2", checkpointDecision.maxSegments)
 	}
-	if checkpointDecision.limiter != vlogGenerationRewriteSegmentCapLimiterCheckpointKickSafety {
-		t.Fatalf("checkpoint limiter=%s want=checkpoint_kick_safety", vlogGenerationRewriteSegmentCapLimiterString(checkpointDecision.limiter))
+	if checkpointDecision.limiter != vlogGenerationRewriteSegmentCapLimiterCheckpointKickBurst {
+		t.Fatalf("checkpoint limiter=%s want=checkpoint_kick_burst", vlogGenerationRewriteSegmentCapLimiterString(checkpointDecision.limiter))
+	}
+	if checkpointDecision.byBudgetSegments != 4 {
+		t.Fatalf("checkpoint byBudgetSegments=%d want=4", checkpointDecision.byBudgetSegments)
+	}
+	if checkpointDecision.perSegmentBudget != 256 {
+		t.Fatalf("checkpoint perSegmentBudget=%d want=256", checkpointDecision.perSegmentBudget)
+	}
+
+	checkpointSafety := db.vlogGenerationRewriteSegmentCapForRun(3, 1024, vlogGenerationMaintenanceOptions{rewriteDebtDrain: true, bypassQuiet: true})
+	if checkpointSafety.maxSegments != 1 {
+		t.Fatalf("checkpoint safety maxSegments=%d want=1", checkpointSafety.maxSegments)
+	}
+	if checkpointSafety.limiter != vlogGenerationRewriteSegmentCapLimiterCheckpointKickSafety {
+		t.Fatalf("checkpoint safety limiter=%s want=checkpoint_kick_safety", vlogGenerationRewriteSegmentCapLimiterString(checkpointSafety.limiter))
 	}
 }
 
