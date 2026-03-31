@@ -37,6 +37,9 @@ Primary keys:
 - `treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.limiter.checkpoint_kick`
 - `treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.fresh_plan`
 - `treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.limiter.fresh_plan`
+- `treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.decisions`
+- `treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.decisions.fresh_plan`
+- `treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.limiter_count.*`
 - `treedb.cache.vlog_generation.rewrite.queue_config.resume_max_segments`
 - `treedb.cache.vlog_generation.rewrite.queue_config.debt_drain_max_segments`
 - `treedb.cache.vlog_generation.rewrite.queue_config.fresh_plan_debt_drain_min_segments`

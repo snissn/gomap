@@ -6332,54 +6332,58 @@ type DB struct {
 	// Rewrite budget token bucket (bytes) for online maintenance. This lets us
 	// interpret ValueLogRewriteBudgetBytesPerSec as a true per-second bandwidth
 	// budget while still running maintenance at coarse intervals.
-	vlogGenerationRewriteBudgetLastUnixNano                 atomic.Int64
-	vlogGenerationRewriteBudgetTokensBytes                  atomic.Int64
-	vlogGenerationRewriteBudgetConsumed                     atomic.Uint64
-	vlogGenerationRewritePlanTotalNanos                     atomic.Uint64
-	vlogGenerationRewritePlanMaxNanos                       atomic.Uint64
-	vlogGenerationRewriteExecTotalNanos                     atomic.Uint64
-	vlogGenerationRewriteExecMaxNanos                       atomic.Uint64
-	vlogGenerationRewriteExecLastLiveBytes                  atomic.Int64
-	vlogGenerationRewriteExecLastBytesOut                   atomic.Int64
-	vlogGenerationRewriteExecLastDurationNanos              atomic.Uint64
-	vlogGenerationRewriteExecLastUnixNano                   atomic.Int64
-	vlogGenerationRewriteExecSourceSegments                 atomic.Uint64
-	vlogGenerationRewriteSourceSegmentsRequestedTotal       atomic.Uint64
-	vlogGenerationRewriteSourceSegmentsStillReferencedTotal atomic.Uint64
-	vlogGenerationRewriteSourceSegmentsUnreferencedTotal    atomic.Uint64
-	vlogGenerationRewriteSourceSegmentsRequestedLast        atomic.Uint64
-	vlogGenerationRewriteSourceSegmentsStillReferencedLast  atomic.Uint64
-	vlogGenerationRewriteSourceSegmentsUnreferencedLast     atomic.Uint64
-	vlogGenerationRewriteSourceBytesRequestedTotal          atomic.Uint64
-	vlogGenerationRewriteSourceBytesStillReferencedTotal    atomic.Uint64
-	vlogGenerationRewriteSourceBytesUnreferencedTotal       atomic.Uint64
-	vlogGenerationRewriteSourceBytesRequestedLast           atomic.Uint64
-	vlogGenerationRewriteSourceBytesStillReferencedLast     atomic.Uint64
-	vlogGenerationRewriteSourceBytesUnreferencedLast        atomic.Uint64
-	vlogGenerationRewriteQueueProgressPasses                atomic.Uint64
-	vlogGenerationRewriteQueueProgressSnapshotErrors        atomic.Uint64
-	vlogGenerationRewriteQueueSegmentsBeforeTotal           atomic.Uint64
-	vlogGenerationRewriteQueueSegmentsAfterTotal            atomic.Uint64
-	vlogGenerationRewriteQueueSegmentsDrainedTotal          atomic.Uint64
-	vlogGenerationRewriteQueueSegmentsGrownTotal            atomic.Uint64
-	vlogGenerationRewriteQueueSegmentsBeforeLast            atomic.Int64
-	vlogGenerationRewriteQueueSegmentsAfterLast             atomic.Int64
-	vlogGenerationRewriteQueueSegmentsDeltaLast             atomic.Int64
-	vlogGenerationRewriteQueueLiveBytesKnownPasses          atomic.Uint64
-	vlogGenerationRewriteQueueLiveBytesUnknownPasses        atomic.Uint64
-	vlogGenerationRewriteQueueLiveBytesBeforeTotal          atomic.Uint64
-	vlogGenerationRewriteQueueLiveBytesAfterTotal           atomic.Uint64
-	vlogGenerationRewriteQueueLiveBytesDrainedTotal         atomic.Uint64
-	vlogGenerationRewriteQueueLiveBytesGrownTotal           atomic.Uint64
-	vlogGenerationRewriteQueueLiveBytesBeforeLast           atomic.Int64
-	vlogGenerationRewriteQueueLiveBytesAfterLast            atomic.Int64
-	vlogGenerationRewriteQueueLiveBytesDeltaLast            atomic.Int64
-	vlogGenerationGCExecTotalNanos                          atomic.Uint64
-	vlogGenerationGCExecMaxNanos                            atomic.Uint64
-	vlogGenerationVacuumExecTotalNanos                      atomic.Uint64
-	vlogGenerationVacuumExecMaxNanos                        atomic.Uint64
-	bgErrMu                                                 sync.Mutex
-	bgErr                                                   error
+	vlogGenerationRewriteBudgetLastUnixNano                    atomic.Int64
+	vlogGenerationRewriteBudgetTokensBytes                     atomic.Int64
+	vlogGenerationRewriteBudgetConsumed                        atomic.Uint64
+	vlogGenerationRewritePlanTotalNanos                        atomic.Uint64
+	vlogGenerationRewritePlanMaxNanos                          atomic.Uint64
+	vlogGenerationRewriteExecTotalNanos                        atomic.Uint64
+	vlogGenerationRewriteExecMaxNanos                          atomic.Uint64
+	vlogGenerationRewriteExecLastLiveBytes                     atomic.Int64
+	vlogGenerationRewriteExecLastBytesOut                      atomic.Int64
+	vlogGenerationRewriteExecLastDurationNanos                 atomic.Uint64
+	vlogGenerationRewriteExecLastUnixNano                      atomic.Int64
+	vlogGenerationRewriteExecSourceSegments                    atomic.Uint64
+	vlogGenerationRewriteSourceSegmentsRequestedTotal          atomic.Uint64
+	vlogGenerationRewriteSourceSegmentsStillReferencedTotal    atomic.Uint64
+	vlogGenerationRewriteSourceSegmentsUnreferencedTotal       atomic.Uint64
+	vlogGenerationRewriteSourceSegmentsRequestedLast           atomic.Uint64
+	vlogGenerationRewriteSourceSegmentsStillReferencedLast     atomic.Uint64
+	vlogGenerationRewriteSourceSegmentsUnreferencedLast        atomic.Uint64
+	vlogGenerationRewriteSourceBytesRequestedTotal             atomic.Uint64
+	vlogGenerationRewriteSourceBytesStillReferencedTotal       atomic.Uint64
+	vlogGenerationRewriteSourceBytesUnreferencedTotal          atomic.Uint64
+	vlogGenerationRewriteSourceBytesRequestedLast              atomic.Uint64
+	vlogGenerationRewriteSourceBytesStillReferencedLast        atomic.Uint64
+	vlogGenerationRewriteSourceBytesUnreferencedLast           atomic.Uint64
+	vlogGenerationRewriteQueueProgressPasses                   atomic.Uint64
+	vlogGenerationRewriteQueueProgressSnapshotErrors           atomic.Uint64
+	vlogGenerationRewriteQueueSegmentsBeforeTotal              atomic.Uint64
+	vlogGenerationRewriteQueueSegmentsAfterTotal               atomic.Uint64
+	vlogGenerationRewriteQueueSegmentsDrainedTotal             atomic.Uint64
+	vlogGenerationRewriteQueueSegmentsGrownTotal               atomic.Uint64
+	vlogGenerationRewriteQueueSegmentsBeforeLast               atomic.Int64
+	vlogGenerationRewriteQueueSegmentsAfterLast                atomic.Int64
+	vlogGenerationRewriteQueueSegmentsDeltaLast                atomic.Int64
+	vlogGenerationRewriteQueueLiveBytesKnownPasses             atomic.Uint64
+	vlogGenerationRewriteQueueLiveBytesUnknownPasses           atomic.Uint64
+	vlogGenerationRewriteQueueLiveBytesBeforeTotal             atomic.Uint64
+	vlogGenerationRewriteQueueLiveBytesAfterTotal              atomic.Uint64
+	vlogGenerationRewriteQueueLiveBytesDrainedTotal            atomic.Uint64
+	vlogGenerationRewriteQueueLiveBytesGrownTotal              atomic.Uint64
+	vlogGenerationRewriteQueueLiveBytesBeforeLast              atomic.Int64
+	vlogGenerationRewriteQueueLiveBytesAfterLast               atomic.Int64
+	vlogGenerationRewriteQueueLiveBytesDeltaLast               atomic.Int64
+	vlogGenerationRewriteQueueRunSegmentCapDecisions           atomic.Uint64
+	vlogGenerationRewriteQueueFreshPlanSegmentCapDecisions     atomic.Uint64
+	vlogGenerationRewriteQueueRunSegmentCapLimiterCounts       [vlogGenerationRewriteSegmentCapLimiterCount]atomic.Uint64
+	vlogGenerationRewriteQueueFreshPlanSegmentCapLimiterCounts [vlogGenerationRewriteSegmentCapLimiterCount]atomic.Uint64
+	vlogGenerationGCExecTotalNanos                             atomic.Uint64
+	vlogGenerationGCExecMaxNanos                               atomic.Uint64
+	vlogGenerationVacuumExecTotalNanos                         atomic.Uint64
+	vlogGenerationVacuumExecMaxNanos                           atomic.Uint64
+	bgErrMu                                                    sync.Mutex
+	bgErr                                                      error
 
 	// Backpressure state
 	queueBacklogBytes                  atomic.Int64
@@ -9235,6 +9239,8 @@ const (
 	vlogGenerationRewriteSegmentCapLimiterFreshPlanQueueThreshold
 	vlogGenerationRewriteSegmentCapLimiterFreshPlanCap
 )
+
+const vlogGenerationRewriteSegmentCapLimiterCount = int(vlogGenerationRewriteSegmentCapLimiterFreshPlanCap) + 1
 
 func vlogGenerationRewriteSegmentCapLimiterString(v uint32) string {
 	switch v {
@@ -13651,6 +13657,28 @@ func (db *DB) vlogGenerationRewriteMaxSegmentsForFreshPlan(queueLen int, budgetT
 	return db.vlogGenerationRewriteSegmentCapForFreshPlan(queueLen, budgetTokens, opts).maxSegments
 }
 
+func normalizeVlogGenerationRewriteSegmentCapLimiter(v uint32) int {
+	idx := int(v)
+	if idx < 0 || idx >= vlogGenerationRewriteSegmentCapLimiterCount {
+		return int(vlogGenerationRewriteSegmentCapLimiterNone)
+	}
+	return idx
+}
+
+func (db *DB) observeVlogGenerationRewriteSegmentCapDecision(decision vlogGenerationRewriteSegmentCapDecision, freshPlan bool) {
+	if db == nil {
+		return
+	}
+	limiterIdx := normalizeVlogGenerationRewriteSegmentCapLimiter(decision.limiter)
+	if freshPlan {
+		db.vlogGenerationRewriteQueueFreshPlanSegmentCapDecisions.Add(1)
+		db.vlogGenerationRewriteQueueFreshPlanSegmentCapLimiterCounts[limiterIdx].Add(1)
+		return
+	}
+	db.vlogGenerationRewriteQueueRunSegmentCapDecisions.Add(1)
+	db.vlogGenerationRewriteQueueRunSegmentCapLimiterCounts[limiterIdx].Add(1)
+}
+
 const maxPositiveInt64 = int64(^uint64(0) >> 1)
 
 func addClampInt64(cur, add, limit int64) int64 {
@@ -15356,7 +15384,9 @@ planned:
 			hadRewriteQueue := len(rewriteQueue) > 0
 			rewriteMaxSegments := vlogGenerationRewriteResumeMaxSegments
 			if hadRewriteQueue {
-				rewriteMaxSegments = db.vlogGenerationRewriteMaxSegmentsForRun(len(rewriteQueue), budgetTokens, opts)
+				runDecision := db.vlogGenerationRewriteSegmentCapForRun(len(rewriteQueue), budgetTokens, opts)
+				rewriteMaxSegments = runDecision.maxSegments
+				db.observeVlogGenerationRewriteSegmentCapDecision(runDecision, false)
 			}
 			if haveRewritePlan {
 				plannedLedgerForExec := rewritePlan.SelectedSegments
@@ -15384,9 +15414,13 @@ planned:
 				// be allowed to consume debt in bounded multi-segment chunks.
 				allowPlanDebtDrain := reason == vlogGenerationReasonRewriteResume && opts.rewriteDebtDrain
 				if allowPlanDebtDrain {
-					rewriteMaxSegments = db.vlogGenerationRewriteMaxSegmentsForRun(len(rewriteQueue), budgetTokens, opts)
+					runDecision := db.vlogGenerationRewriteSegmentCapForRun(len(rewriteQueue), budgetTokens, opts)
+					rewriteMaxSegments = runDecision.maxSegments
+					db.observeVlogGenerationRewriteSegmentCapDecision(runDecision, false)
 				} else {
-					rewriteMaxSegments = db.vlogGenerationRewriteMaxSegmentsForFreshPlan(len(rewriteQueue), budgetTokens, opts)
+					freshDecision := db.vlogGenerationRewriteSegmentCapForFreshPlan(len(rewriteQueue), budgetTokens, opts)
+					rewriteMaxSegments = freshDecision.maxSegments
+					db.observeVlogGenerationRewriteSegmentCapDecision(freshDecision, true)
 				}
 				// If the token bucket is enabled and empty, persist the plan/ledger but
 				// skip running the rewrite until we have budget to spend.
@@ -22047,6 +22081,16 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.limiter.fresh_plan"] = vlogGenerationRewriteSegmentCapLimiterString(rewriteQueueFreshPlanSegmentCapLimiter)
 	stats["treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.by_budget.fresh_plan"] = fmt.Sprintf("%d", rewriteQueueFreshPlanSegmentCapByBudget)
 	stats["treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.per_segment_budget_bytes.fresh_plan"] = fmt.Sprintf("%d", rewriteQueueFreshPlanSegmentCapPerSegmentBudgetBytes)
+	stats["treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.decisions"] = fmt.Sprintf("%d", db.vlogGenerationRewriteQueueRunSegmentCapDecisions.Load())
+	stats["treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.decisions.fresh_plan"] = fmt.Sprintf("%d", db.vlogGenerationRewriteQueueFreshPlanSegmentCapDecisions.Load())
+	for limiterIdx := 0; limiterIdx < vlogGenerationRewriteSegmentCapLimiterCount; limiterIdx++ {
+		limiter := vlogGenerationRewriteSegmentCapLimiterString(uint32(limiterIdx))
+		if limiter == "unknown" {
+			continue
+		}
+		stats["treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.limiter_count."+limiter] = fmt.Sprintf("%d", db.vlogGenerationRewriteQueueRunSegmentCapLimiterCounts[limiterIdx].Load())
+		stats["treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.limiter_count."+limiter+".fresh_plan"] = fmt.Sprintf("%d", db.vlogGenerationRewriteQueueFreshPlanSegmentCapLimiterCounts[limiterIdx].Load())
+	}
 	stats["treedb.cache.vlog_generation.rewrite.queue_config.resume_max_segments"] = fmt.Sprintf("%d", rewriteResumeMaxSegments)
 	stats["treedb.cache.vlog_generation.rewrite.queue_config.debt_drain_max_segments"] = fmt.Sprintf("%d", rewriteDebtDrainMaxSegments)
 	stats["treedb.cache.vlog_generation.rewrite.queue_config.fresh_plan_debt_drain_min_segments"] = fmt.Sprintf("%d", rewriteFreshPlanDebtDrainMinSegments)
