@@ -649,6 +649,12 @@ def build_maintenance_from_light_stats(stats: dict[str, str]) -> dict[str, objec
     def stat_float(key: str, default: float = 0.0) -> float:
         return safe_float(stat_raw(key), default)
 
+    def stat_str(key: str, default: str = "") -> str:
+        raw = stat_raw(key)
+        if raw is None:
+            return default
+        return str(raw)
+
     out: dict[str, object] = {
         "rewrite_runs": stat_int("treedb.cache.vlog_generation.rewrite.runs"),
         "rewrite_plan_runs": stat_int("treedb.cache.vlog_generation.rewrite.plan_runs"),
@@ -682,6 +688,66 @@ def build_maintenance_from_light_stats(stats: dict[str, str]) -> dict[str, objec
         ),
         "rewrite_queue_config_fresh_plan_debt_drain_max_segments": stat_int(
             "treedb.cache.vlog_generation.rewrite.queue_config.fresh_plan_debt_drain_max_segments",
+        ),
+        "rewrite_queue_run_segment_cap": stat_int(
+            "treedb.cache.vlog_generation.rewrite.queue_run_segment_cap",
+        ),
+        "rewrite_queue_run_segment_cap_limiter": stat_str(
+            "treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.limiter",
+            "none",
+        ),
+        "rewrite_queue_run_segment_cap_by_budget": stat_int(
+            "treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.by_budget",
+        ),
+        "rewrite_queue_run_segment_cap_per_segment_budget_bytes": stat_int(
+            "treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.per_segment_budget_bytes",
+        ),
+        "rewrite_queue_run_segment_cap_checkpoint_kick": stat_int(
+            "treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.checkpoint_kick",
+        ),
+        "rewrite_queue_run_segment_cap_limiter_checkpoint_kick": stat_str(
+            "treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.limiter.checkpoint_kick",
+            "none",
+        ),
+        "rewrite_queue_run_segment_cap_by_budget_checkpoint_kick": stat_int(
+            "treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.by_budget.checkpoint_kick",
+        ),
+        "rewrite_queue_run_segment_cap_per_segment_budget_bytes_checkpoint_kick": stat_int(
+            "treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.per_segment_budget_bytes.checkpoint_kick",
+        ),
+        "rewrite_queue_run_segment_cap_fresh_plan": stat_int(
+            "treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.fresh_plan",
+        ),
+        "rewrite_queue_run_segment_cap_limiter_fresh_plan": stat_str(
+            "treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.limiter.fresh_plan",
+            "none",
+        ),
+        "rewrite_queue_run_segment_cap_by_budget_fresh_plan": stat_int(
+            "treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.by_budget.fresh_plan",
+        ),
+        "rewrite_queue_run_segment_cap_per_segment_budget_bytes_fresh_plan": stat_int(
+            "treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.per_segment_budget_bytes.fresh_plan",
+        ),
+        "rewrite_queue_run_segment_cap_decisions": stat_int(
+            "treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.decisions",
+        ),
+        "rewrite_queue_run_segment_cap_decisions_fresh_plan": stat_int(
+            "treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.decisions.fresh_plan",
+        ),
+        "rewrite_queue_run_segment_cap_limiter_count_budget_tokens": stat_int(
+            "treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.limiter_count.budget_tokens",
+        ),
+        "rewrite_queue_run_segment_cap_limiter_count_debt_drain_cap": stat_int(
+            "treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.limiter_count.debt_drain_cap",
+        ),
+        "rewrite_queue_run_segment_cap_limiter_count_checkpoint_kick_safety": stat_int(
+            "treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.limiter_count.checkpoint_kick_safety",
+        ),
+        "rewrite_queue_run_segment_cap_limiter_count_fresh_plan_queue_threshold": stat_int(
+            "treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.limiter_count.fresh_plan_queue_threshold.fresh_plan",
+        ),
+        "rewrite_queue_run_segment_cap_limiter_count_fresh_plan_cap": stat_int(
+            "treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.limiter_count.fresh_plan_cap.fresh_plan",
         ),
         "rewrite_queue_progress_passes": stat_int(
             "treedb.cache.vlog_generation.rewrite.queue_progress.passes",
@@ -1018,6 +1084,25 @@ with runs_csv.open("w", newline="", encoding="utf-8") as fh:
         "rewrite_queue_config_debt_drain_max_segments",
         "rewrite_queue_config_fresh_plan_debt_drain_min_segments",
         "rewrite_queue_config_fresh_plan_debt_drain_max_segments",
+        "rewrite_queue_run_segment_cap",
+        "rewrite_queue_run_segment_cap_limiter",
+        "rewrite_queue_run_segment_cap_by_budget",
+        "rewrite_queue_run_segment_cap_per_segment_budget_bytes",
+        "rewrite_queue_run_segment_cap_checkpoint_kick",
+        "rewrite_queue_run_segment_cap_limiter_checkpoint_kick",
+        "rewrite_queue_run_segment_cap_by_budget_checkpoint_kick",
+        "rewrite_queue_run_segment_cap_per_segment_budget_bytes_checkpoint_kick",
+        "rewrite_queue_run_segment_cap_fresh_plan",
+        "rewrite_queue_run_segment_cap_limiter_fresh_plan",
+        "rewrite_queue_run_segment_cap_by_budget_fresh_plan",
+        "rewrite_queue_run_segment_cap_per_segment_budget_bytes_fresh_plan",
+        "rewrite_queue_run_segment_cap_decisions",
+        "rewrite_queue_run_segment_cap_decisions_fresh_plan",
+        "rewrite_queue_run_segment_cap_limiter_count_budget_tokens",
+        "rewrite_queue_run_segment_cap_limiter_count_debt_drain_cap",
+        "rewrite_queue_run_segment_cap_limiter_count_checkpoint_kick_safety",
+        "rewrite_queue_run_segment_cap_limiter_count_fresh_plan_queue_threshold",
+        "rewrite_queue_run_segment_cap_limiter_count_fresh_plan_cap",
         "rewrite_queue_progress_passes",
         "rewrite_queue_progress_segments_drained_total",
         "rewrite_queue_progress_segments_grown_total",
@@ -1108,6 +1193,25 @@ with runs_csv.open("w", newline="", encoding="utf-8") as fh:
             summary.get("rewrite_queue_config_debt_drain_max_segments", 0),
             summary.get("rewrite_queue_config_fresh_plan_debt_drain_min_segments", 0),
             summary.get("rewrite_queue_config_fresh_plan_debt_drain_max_segments", 0),
+            summary.get("rewrite_queue_run_segment_cap", 0),
+            summary.get("rewrite_queue_run_segment_cap_limiter", "none"),
+            summary.get("rewrite_queue_run_segment_cap_by_budget", 0),
+            summary.get("rewrite_queue_run_segment_cap_per_segment_budget_bytes", 0),
+            summary.get("rewrite_queue_run_segment_cap_checkpoint_kick", 0),
+            summary.get("rewrite_queue_run_segment_cap_limiter_checkpoint_kick", "none"),
+            summary.get("rewrite_queue_run_segment_cap_by_budget_checkpoint_kick", 0),
+            summary.get("rewrite_queue_run_segment_cap_per_segment_budget_bytes_checkpoint_kick", 0),
+            summary.get("rewrite_queue_run_segment_cap_fresh_plan", 0),
+            summary.get("rewrite_queue_run_segment_cap_limiter_fresh_plan", "none"),
+            summary.get("rewrite_queue_run_segment_cap_by_budget_fresh_plan", 0),
+            summary.get("rewrite_queue_run_segment_cap_per_segment_budget_bytes_fresh_plan", 0),
+            summary.get("rewrite_queue_run_segment_cap_decisions", 0),
+            summary.get("rewrite_queue_run_segment_cap_decisions_fresh_plan", 0),
+            summary.get("rewrite_queue_run_segment_cap_limiter_count_budget_tokens", 0),
+            summary.get("rewrite_queue_run_segment_cap_limiter_count_debt_drain_cap", 0),
+            summary.get("rewrite_queue_run_segment_cap_limiter_count_checkpoint_kick_safety", 0),
+            summary.get("rewrite_queue_run_segment_cap_limiter_count_fresh_plan_queue_threshold", 0),
+            summary.get("rewrite_queue_run_segment_cap_limiter_count_fresh_plan_cap", 0),
             summary.get("rewrite_queue_progress_passes", 0),
             summary.get("rewrite_queue_progress_segments_drained_total", 0),
             summary.get("rewrite_queue_progress_segments_grown_total", 0),
