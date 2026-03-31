@@ -163,6 +163,13 @@ Notes:
   - capture path uses `treemap stats -rw` (falls back to `treemap vlog-gc -rw -dry-run` if needed)
   - outputs land in each run directory as `light_stats_pre.txt` / `light_stats_post.txt`, and summarized values are included in `run.json` + `runs.csv`.
   - these snapshots are offline `treemap` opens, not in-process runtime counters from the live node; `run.json.maintenance_summary_is_live_runtime` marks this (`true` only when diagnostics JSON is present).
+- `run_celestia_ab` also performs a lightweight periodic `/debug/vars` sample during each live run:
+  - enable/disable: `AB_CAPTURE_LIVE_DEBUG_VARS=1|0` (default `1`)
+  - sample interval: `AB_LIVE_DEBUG_VARS_INTERVAL_SECONDS` (default `30`)
+  - per-request timeout: `AB_LIVE_DEBUG_VARS_TIMEOUT_SECONDS` (default `5`)
+  - source URL: `AB_LIVE_DEBUG_VARS_URL` (default `http://127.0.0.1:6062/debug/vars`)
+  - latest successful sample is stored as `live_debug_vars_latest.json` in each run directory
+  - if a successful run lacks on-disk diagnostics JSON, the harness retries maintenance analysis against that sampled payload so `run.json.maintenance_summary` can still reflect live runtime counters
 - `runs.csv` now also includes rewrite-capacity counters from diagnostics summaries (plan runs/selection, source segment+byte outcomes, ledger bytes, budget utilization, observed-GC drain pct) so candidate/control behavior can be compared without opening each `run.json`.
 - `pairs.csv` now includes absolute per-pair control/candidate values (`t_sync`, `t_total`, `s_sync_app`, `s_post_wal`, `max_rss_kb`) plus `composite_score_pct` (negative is better).
 - `summary.md` now includes `Absolute Medians` (control vs candidate) in addition to pair deltas.
