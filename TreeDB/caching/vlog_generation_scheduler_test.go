@@ -333,6 +333,104 @@ func TestObserveVlogGenerationRewriteQueueProgress_KnownPassOverwritesSentinel(t
 	}
 }
 
+func TestVlogGenerationRewriteQueueLiveBytesSnapshot_UsesLoadedLedger(t *testing.T) {
+	db := &DB{}
+	db.vlogGenerationRewriteQueueMu.Lock()
+	db.vlogGenerationRewriteQueueLoaded = true
+	db.vlogGenerationRewriteLedger = []backenddb.ValueLogRewritePlanSegment{
+		{FileID: 1, BytesLive: 100},
+		{FileID: 2, BytesLive: 50},
+		{FileID: 3, BytesLive: -20},
+	}
+	db.vlogGenerationRewriteQueueMu.Unlock()
+
+	liveBytes, known, err := db.vlogGenerationRewriteQueueLiveBytesSnapshot([]uint32{2, 1, 2, 9, 0})
+	if err != nil {
+		t.Fatalf("snapshot error: %v", err)
+	}
+	if !known {
+		t.Fatalf("expected known=true for matching ids")
+	}
+	if liveBytes != 200 {
+		t.Fatalf("live bytes=%d want 200", liveBytes)
+	}
+
+	liveBytes, known, err = db.vlogGenerationRewriteQueueLiveBytesSnapshot([]uint32{3})
+	if err != nil {
+		t.Fatalf("snapshot error (negative clamp): %v", err)
+	}
+	if !known {
+		t.Fatalf("expected known=true for matching negative-live id")
+	}
+	if liveBytes != 0 {
+		t.Fatalf("live bytes clamp=%d want 0", liveBytes)
+	}
+}
+
+func TestVlogGenerationRewriteQueueLiveBytesSnapshot_UnknownWhenLedgerMissing(t *testing.T) {
+	db := &DB{}
+	db.vlogGenerationRewriteQueueMu.Lock()
+	db.vlogGenerationRewriteQueueLoaded = true
+	db.vlogGenerationRewriteLedger = nil
+	db.vlogGenerationRewriteQueueMu.Unlock()
+
+	liveBytes, known, err := db.vlogGenerationRewriteQueueLiveBytesSnapshot([]uint32{1, 2})
+	if err != nil {
+		t.Fatalf("snapshot error: %v", err)
+	}
+	if known {
+		t.Fatalf("expected known=false when ledger is missing")
+	}
+	if liveBytes != 0 {
+		t.Fatalf("live bytes=%d want 0", liveBytes)
+	}
+}
+
+func BenchmarkVlogGenerationRewriteQueueLiveBytesSnapshot(b *testing.B) {
+	const (
+		ledgerSegments = 4096
+		stride         = 8
+	)
+	db := &DB{}
+	ledger := make([]backenddb.ValueLogRewritePlanSegment, 0, ledgerSegments)
+	ids := make([]uint32, 0, ledgerSegments/stride)
+	for i := 1; i <= ledgerSegments; i++ {
+		id := uint32(i)
+		ledger = append(ledger, backenddb.ValueLogRewritePlanSegment{
+			FileID:    id,
+			BytesLive: int64(64 + (i % 31)),
+		})
+		if i%stride == 0 {
+			ids = append(ids, id)
+		}
+	}
+	db.vlogGenerationRewriteQueueMu.Lock()
+	db.vlogGenerationRewriteQueueLoaded = true
+	db.vlogGenerationRewriteLedger = ledger
+	db.vlogGenerationRewriteQueueMu.Unlock()
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	var (
+		lastLiveBytes int64
+		lastKnown     bool
+		lastErr       error
+	)
+	for i := 0; i < b.N; i++ {
+		lastLiveBytes, lastKnown, lastErr = db.vlogGenerationRewriteQueueLiveBytesSnapshot(ids)
+	}
+	b.StopTimer()
+	if lastErr != nil {
+		b.Fatalf("snapshot error: %v", lastErr)
+	}
+	if !lastKnown {
+		b.Fatalf("expected known=true")
+	}
+	if lastLiveBytes <= 0 {
+		b.Fatalf("expected positive live bytes, got %d", lastLiveBytes)
+	}
+}
+
 func TestObserveVlogGenerationRewritePlanOutcome_SelectedTracksBytes(t *testing.T) {
 	db := &DB{}
 	db.observeVlogGenerationRewritePlanOutcome(backenddb.ValueLogRewritePlan{

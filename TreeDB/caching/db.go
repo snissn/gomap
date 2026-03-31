@@ -13938,14 +13938,35 @@ func (db *DB) vlogGenerationRewriteQueueLiveBytesSnapshot(ids []uint32) (liveByt
 	if db == nil || len(ids) == 0 {
 		return 0, true, nil
 	}
-	ledger, err := db.currentVlogGenerationRewriteLedger()
-	if err != nil {
+	db.vlogGenerationRewriteQueueMu.Lock()
+	defer db.vlogGenerationRewriteQueueMu.Unlock()
+	if err := db.loadVlogGenerationRewriteQueueLocked(); err != nil {
 		return 0, false, err
 	}
-	if len(ledger) == 0 {
+	if len(db.vlogGenerationRewriteLedger) == 0 {
 		return 0, false, nil
 	}
-	liveBytes, known = sumVlogRewritePlanLiveBytes(ledger, ids)
+	idCounts := make(map[uint32]int, len(ids))
+	for _, id := range ids {
+		if id == 0 {
+			continue
+		}
+		idCounts[id]++
+	}
+	if len(idCounts) == 0 {
+		return 0, false, nil
+	}
+	for _, seg := range db.vlogGenerationRewriteLedger {
+		if seg.FileID == 0 {
+			continue
+		}
+		count, ok := idCounts[seg.FileID]
+		if !ok {
+			continue
+		}
+		known = true
+		liveBytes += seg.BytesLive * int64(count)
+	}
 	if liveBytes < 0 {
 		liveBytes = 0
 	}
