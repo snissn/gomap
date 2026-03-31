@@ -169,6 +169,7 @@ Notes:
   - `absolute_aggregates` (control/candidate median+mean totals for time, size, and RSS)
   - `composite` configuration echo and aggregate composite score fields
 - `runs.csv` also includes reclaimed-vs-churn and capacity pressure KPIs (for example `rewrite_exec_reclaimed_vs_churn_ratio`, `rewrite_reclaimed_share_of_budget_pct`, `rewrite_budget_consumed_share_of_budget_pct`, `rewrite_ineffective_runs`, `observed_gc_pending_ids`) for faster triage of low-signal loops.
+- `runs.csv` also includes rewrite queue pressure and checkpoint-kick behavior KPIs (for example `rewrite_queue_len`, `rewrite_queue_live_bytes_after_tokens`, `rewrite_queue_eta_seconds_budget`, `checkpoint_kick_skipped_hot_no_debt`) so incremental rewrite headroom is visible without log spelunking.
 - `pairs.csv` includes per-pair deltas for those KPIs so control/candidate capacity behavior can be compared without post-processing scripts.
 - To use pre-policy behavior, set `AB_POLICY=legacy`.
 
