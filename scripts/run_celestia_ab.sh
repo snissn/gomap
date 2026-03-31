@@ -157,12 +157,21 @@ if [[ "$REWRITE_ENABLED" == "1" && ! -x "$TREEMAP_BIN" ]]; then
   exit 1
 fi
 
+# Freeze the resolved run command early so per-variant env sourcing cannot
+# accidentally mutate the executed launcher command.
+RUN_CMD_FROZEN="$RUN_CMD"
+if [[ "$RUN_CMD_FROZEN" == *"run_celestia_ab.sh"* ]]; then
+  echo "RUN_CMD resolves to run_celestia_ab.sh (self-invocation): $RUN_CMD_FROZEN" >&2
+  exit 1
+fi
+
 mkdir -p "$OUT/runs"
 
 cat >"$OUT/meta.txt" <<META
 ts=$TS
 root=$ROOT
 run_cmd=$RUN_CMD
+run_cmd_frozen=$RUN_CMD_FROZEN
 control_env_file=$CONTROL_ENV_FILE
 candidate_env_file=$CANDIDATE_ENV_FILE
 treemap_bin=$TREEMAP_BIN
@@ -346,9 +355,9 @@ run_variant() {
       # Non-login shell avoids user profile side effects (e.g. tty-dependent exports)
       # that can fail under nohup/background runs.
       if [[ "$RUN_TIMEOUT_SECONDS" -gt 0 ]]; then
-        timeout --signal=TERM --kill-after=60 "${RUN_TIMEOUT_SECONDS}s" bash -c "$RUN_CMD"
+        timeout --signal=TERM --kill-after=60 "${RUN_TIMEOUT_SECONDS}s" bash -c "$RUN_CMD_FROZEN"
       else
-        bash -c "$RUN_CMD"
+        bash -c "$RUN_CMD_FROZEN"
       fi
     ) >"$attempt_dir/launcher.log" 2>&1
     run_rc=$?
@@ -767,8 +776,59 @@ def build_maintenance_from_light_stats(stats: dict[str, str]) -> dict[str, objec
             "treedb.cache.vlog_generation.rewrite.processed_stale_bytes",
         ),
         "rewrite_reclaimed_bytes": stat_int("treedb.cache.vlog_generation.rewrite.reclaimed_bytes"),
+        "rewrite_reclaim_ratio": stat_float("treedb.cache.vlog_generation.rewrite.reclaim_ratio"),
+        "rewrite_output_ratio": stat_float("treedb.cache.vlog_generation.rewrite.output_ratio"),
+        "rewrite_processed_stale_ratio": stat_float("treedb.cache.vlog_generation.rewrite.processed_stale_ratio"),
         "rewrite_exec_total_ms": stat_float("treedb.cache.vlog_generation.rewrite.exec.total_ms"),
         "rewrite_bytes_in": stat_int("treedb.cache.vlog_generation.rewrite.bytes_in"),
+        "rewrite_exec_bytes_in_per_sec": stat_float(
+            "treedb.cache.vlog_generation.rewrite.exec.bytes_in_per_sec",
+        ),
+        "rewrite_exec_bytes_out_per_sec": stat_float(
+            "treedb.cache.vlog_generation.rewrite.exec.bytes_out_per_sec",
+        ),
+        "rewrite_exec_reclaimed_bytes_per_sec": stat_float(
+            "treedb.cache.vlog_generation.rewrite.exec.reclaimed_bytes_per_sec",
+        ),
+        "rewrite_exec_reclaimed_vs_churn_ratio": stat_float(
+            "treedb.cache.vlog_generation.rewrite.exec.reclaimed_vs_churn_ratio",
+        ),
+        "rewrite_budget_bytes_per_sec": stat_int(
+            "treedb.cache.vlog_generation.rewrite_budget.bytes_per_sec",
+        ),
+        "rewrite_budget_consumed_bytes_per_sec": stat_float(
+            "treedb.cache.vlog_generation.rewrite_budget.consumed_bytes_per_sec",
+        ),
+        "rewrite_budget_consumed_share_of_budget_pct": stat_float(
+            "treedb.cache.vlog_generation.rewrite_budget.consumed_share_of_budget_pct",
+        ),
+        "rewrite_no_reclaim_runs": stat_int(
+            "treedb.cache.vlog_generation.rewrite.no_reclaim_runs",
+        ),
+        "rewrite_no_reclaim_stale_bytes": stat_int(
+            "treedb.cache.vlog_generation.rewrite.no_reclaim_stale_bytes",
+        ),
+        "rewrite_plan_canceled": stat_int(
+            "treedb.cache.vlog_generation.rewrite.plan_canceled",
+        ),
+        "rewrite_plan_errors": stat_int(
+            "treedb.cache.vlog_generation.rewrite.plan_errors",
+        ),
+        "rewrite_plan_empty_age_blocked": stat_int(
+            "treedb.cache.vlog_generation.rewrite.plan_empty.age_blocked",
+        ),
+        "rewrite_plan_empty_no_selection": stat_int(
+            "treedb.cache.vlog_generation.rewrite.plan_empty.no_selection",
+        ),
+        "rewrite_ineffective_runs": stat_int(
+            "treedb.cache.vlog_generation.rewrite.ineffective_runs",
+        ),
+        "rewrite_ineffective_bytes_in": stat_int(
+            "treedb.cache.vlog_generation.rewrite.ineffective_bytes_in",
+        ),
+        "rewrite_ineffective_bytes_out": stat_int(
+            "treedb.cache.vlog_generation.rewrite.ineffective_bytes_out",
+        ),
         "rewrite_exec_source_segments_requested_total": stat_int(
             "treedb.cache.vlog_generation.rewrite.exec.source_segments_requested_total",
         ),
@@ -904,6 +964,13 @@ def build_maintenance_from_light_stats(stats: dict[str, str]) -> dict[str, objec
             "treedb.cache.vlog_generation.rewrite_budget.tokens_utilization_pct",
         ),
         "gc_runs": stat_int("treedb.cache.vlog_generation.gc.runs"),
+        "observed_gc_pending_ids": stat_int("treedb.cache.vlog_generation.observed_gc.pending_ids"),
+        "observed_gc_pending_oldest_age_ms": stat_int(
+            "treedb.cache.vlog_generation.observed_gc.pending_oldest_age_ms",
+        ),
+        "observed_gc_latency_avg_ms": stat_float(
+            "treedb.cache.vlog_generation.observed_gc.latency.avg_ms",
+        ),
         "observed_gc_retry_queued": stat_int("treedb.cache.vlog_generation.observed_gc.retry_queued"),
         "observed_gc_retry_dropped": stat_int("treedb.cache.vlog_generation.observed_gc.retry_dropped"),
     }
@@ -976,6 +1043,15 @@ def build_maintenance_from_light_stats(stats: dict[str, str]) -> dict[str, objec
     bytes_in = safe_float(out.get("rewrite_bytes_in"), 0.0)
     out["rewrite_exec_throughput_bytes_per_sec"] = (
         bytes_in / rewrite_exec_secs if rewrite_exec_secs > 0 else 0.0
+    )
+    out["rewrite_reclaimed_minus_bytes_in"] = reclaimed - bytes_in
+    out["rewrite_reclaimed_per_bytes_in_pct"] = (
+        100.0 * reclaimed / bytes_in if bytes_in > 0 else 0.0
+    )
+    budget_bytes_per_sec = safe_float(out.get("rewrite_budget_bytes_per_sec"), 0.0)
+    reclaimed_per_sec = safe_float(out.get("rewrite_exec_reclaimed_bytes_per_sec"), 0.0)
+    out["rewrite_reclaimed_share_of_budget_pct"] = (
+        100.0 * reclaimed_per_sec / budget_bytes_per_sec if budget_bytes_per_sec > 0 else 0.0
     )
     source_bytes_requested = safe_float(out.get("rewrite_exec_source_bytes_requested_total"), 0.0)
     source_bytes_unref = safe_float(out.get("rewrite_exec_source_bytes_unreferenced_total"), 0.0)
@@ -1355,9 +1431,31 @@ with runs_csv.open("w", newline="", encoding="utf-8") as fh:
         "rewrite_stale_selection_coverage_pct",
         "rewrite_immediate_reclaim_pct",
         "rewrite_stale_not_reclaimed_bytes",
+        "rewrite_reclaim_ratio",
+        "rewrite_output_ratio",
+        "rewrite_processed_stale_ratio",
+        "rewrite_reclaimed_minus_bytes_in",
+        "rewrite_reclaimed_per_bytes_in_pct",
         "rewrite_exec_throughput_bytes_per_sec",
+        "rewrite_exec_bytes_in_per_sec",
+        "rewrite_exec_bytes_out_per_sec",
+        "rewrite_exec_reclaimed_bytes_per_sec",
+        "rewrite_exec_reclaimed_vs_churn_ratio",
         "rewrite_source_unreferenced_bytes_pct",
         "rewrite_source_still_referenced_bytes_pct",
+        "rewrite_budget_bytes_per_sec",
+        "rewrite_budget_consumed_bytes_per_sec",
+        "rewrite_budget_consumed_share_of_budget_pct",
+        "rewrite_reclaimed_share_of_budget_pct",
+        "rewrite_no_reclaim_runs",
+        "rewrite_no_reclaim_stale_bytes",
+        "rewrite_plan_canceled",
+        "rewrite_plan_errors",
+        "rewrite_plan_empty_age_blocked",
+        "rewrite_plan_empty_no_selection",
+        "rewrite_ineffective_runs",
+        "rewrite_ineffective_bytes_in",
+        "rewrite_ineffective_bytes_out",
         "rewrite_queue_config_resume_max_segments",
         "rewrite_queue_config_debt_drain_max_segments",
         "rewrite_queue_config_fresh_plan_debt_drain_min_segments",
@@ -1398,6 +1496,9 @@ with runs_csv.open("w", newline="", encoding="utf-8") as fh:
         "rewrite_ledger_bytes_total",
         "rewrite_budget_tokens_utilization_pct",
         "gc_runs",
+        "observed_gc_pending_ids",
+        "observed_gc_pending_oldest_age_ms",
+        "observed_gc_latency_avg_ms",
         "observed_gc_drain_pct",
         "observed_gc_retry_queued",
         "observed_gc_retry_dropped",
@@ -1508,9 +1609,31 @@ with runs_csv.open("w", newline="", encoding="utf-8") as fh:
             summary.get("rewrite_stale_selection_coverage_pct", 0),
             summary.get("rewrite_immediate_reclaim_pct", 0),
             summary.get("rewrite_stale_not_reclaimed_bytes", 0),
+            summary.get("rewrite_reclaim_ratio", 0),
+            summary.get("rewrite_output_ratio", 0),
+            summary.get("rewrite_processed_stale_ratio", 0),
+            summary.get("rewrite_reclaimed_minus_bytes_in", 0),
+            summary.get("rewrite_reclaimed_per_bytes_in_pct", 0),
             summary.get("rewrite_exec_throughput_bytes_per_sec", 0),
+            summary.get("rewrite_exec_bytes_in_per_sec", 0),
+            summary.get("rewrite_exec_bytes_out_per_sec", 0),
+            summary.get("rewrite_exec_reclaimed_bytes_per_sec", 0),
+            summary.get("rewrite_exec_reclaimed_vs_churn_ratio", 0),
             summary.get("rewrite_source_unreferenced_bytes_pct", 0),
             summary.get("rewrite_source_still_referenced_bytes_pct", 0),
+            summary.get("rewrite_budget_bytes_per_sec", 0),
+            summary.get("rewrite_budget_consumed_bytes_per_sec", 0),
+            summary.get("rewrite_budget_consumed_share_of_budget_pct", 0),
+            summary.get("rewrite_reclaimed_share_of_budget_pct", 0),
+            summary.get("rewrite_no_reclaim_runs", 0),
+            summary.get("rewrite_no_reclaim_stale_bytes", 0),
+            summary.get("rewrite_plan_canceled", 0),
+            summary.get("rewrite_plan_errors", 0),
+            summary.get("rewrite_plan_empty_age_blocked", 0),
+            summary.get("rewrite_plan_empty_no_selection", 0),
+            summary.get("rewrite_ineffective_runs", 0),
+            summary.get("rewrite_ineffective_bytes_in", 0),
+            summary.get("rewrite_ineffective_bytes_out", 0),
             summary.get("rewrite_queue_config_resume_max_segments", 0),
             summary.get("rewrite_queue_config_debt_drain_max_segments", 0),
             summary.get("rewrite_queue_config_fresh_plan_debt_drain_min_segments", 0),
@@ -1551,6 +1674,9 @@ with runs_csv.open("w", newline="", encoding="utf-8") as fh:
             summary.get("rewrite_ledger_bytes_total", 0),
             summary.get("rewrite_budget_tokens_utilization_pct", 0),
             summary.get("gc_runs", 0),
+            summary.get("observed_gc_pending_ids", 0),
+            summary.get("observed_gc_pending_oldest_age_ms", 0),
+            summary.get("observed_gc_latency_avg_ms", 0),
             summary.get("observed_gc_drain_pct", 0),
             summary.get("observed_gc_retry_queued", 0),
             summary.get("observed_gc_retry_dropped", 0),
@@ -1590,6 +1716,8 @@ for pair in sorted(by_pair):
     cand_valid = run_is_valid(cand)
     ctrl_reason = run_invalid_reason(ctrl)
     cand_reason = run_invalid_reason(cand)
+    ctrl_summary = ctrl.get("maintenance_summary", {}) or {}
+    cand_summary = cand.get("maintenance_summary", {}) or {}
     if not ctrl_valid or not cand_valid:
         outcome = "invalid"
         if ctrl_valid and (not cand_valid) and cand_reason == "rewrite_failed":
@@ -1616,6 +1744,21 @@ for pair in sorted(by_pair):
             "control_max_rss_kb": None,
             "candidate_max_rss_kb": None,
             "composite_score_pct": None,
+            "control_rewrite_reclaimed_vs_churn_ratio": None,
+            "candidate_rewrite_reclaimed_vs_churn_ratio": None,
+            "delta_rewrite_reclaimed_vs_churn_ratio": None,
+            "control_rewrite_reclaimed_share_of_budget_pct": None,
+            "candidate_rewrite_reclaimed_share_of_budget_pct": None,
+            "delta_rewrite_reclaimed_share_of_budget_pct": None,
+            "control_rewrite_budget_consumed_share_of_budget_pct": None,
+            "candidate_rewrite_budget_consumed_share_of_budget_pct": None,
+            "delta_rewrite_budget_consumed_share_of_budget_pct": None,
+            "control_rewrite_ineffective_runs": None,
+            "candidate_rewrite_ineffective_runs": None,
+            "delta_rewrite_ineffective_runs": None,
+            "control_observed_gc_pending_ids": None,
+            "candidate_observed_gc_pending_ids": None,
+            "delta_observed_gc_pending_ids": None,
             "control_valid": ctrl_valid,
             "candidate_valid": cand_valid,
             "control_invalid_reason": ctrl_reason,
@@ -1654,6 +1797,21 @@ for pair in sorted(by_pair):
     d_blocks = delta(cand_blocks, base_blocks)
     d_sync_app_per_block = delta(cand_sync_app_per_block, base_sync_app_per_block)
     d_total_per_block = delta(cand_total_per_block, base_total_per_block)
+    cand_reclaimed_vs_churn = cand_summary.get("rewrite_exec_reclaimed_vs_churn_ratio")
+    base_reclaimed_vs_churn = ctrl_summary.get("rewrite_exec_reclaimed_vs_churn_ratio")
+    d_reclaimed_vs_churn = delta(cand_reclaimed_vs_churn, base_reclaimed_vs_churn)
+    cand_reclaimed_share_budget = cand_summary.get("rewrite_reclaimed_share_of_budget_pct")
+    base_reclaimed_share_budget = ctrl_summary.get("rewrite_reclaimed_share_of_budget_pct")
+    d_reclaimed_share_budget = delta(cand_reclaimed_share_budget, base_reclaimed_share_budget)
+    cand_budget_consumed_share = cand_summary.get("rewrite_budget_consumed_share_of_budget_pct")
+    base_budget_consumed_share = ctrl_summary.get("rewrite_budget_consumed_share_of_budget_pct")
+    d_budget_consumed_share = delta(cand_budget_consumed_share, base_budget_consumed_share)
+    cand_ineffective_runs = cand_summary.get("rewrite_ineffective_runs")
+    base_ineffective_runs = ctrl_summary.get("rewrite_ineffective_runs")
+    d_ineffective_runs = delta(cand_ineffective_runs, base_ineffective_runs)
+    cand_observed_gc_pending_ids = cand_summary.get("observed_gc_pending_ids")
+    base_observed_gc_pending_ids = ctrl_summary.get("observed_gc_pending_ids")
+    d_observed_gc_pending_ids = delta(cand_observed_gc_pending_ids, base_observed_gc_pending_ids)
 
     def ratio(candidate, control):
         c = as_float(candidate)
@@ -1750,6 +1908,21 @@ for pair in sorted(by_pair):
         "control_max_rss_kb": bm.get("max_rss_kb"),
         "candidate_max_rss_kb": cm.get("max_rss_kb"),
         "composite_score_pct": composite_score_pct,
+        "control_rewrite_reclaimed_vs_churn_ratio": base_reclaimed_vs_churn,
+        "candidate_rewrite_reclaimed_vs_churn_ratio": cand_reclaimed_vs_churn,
+        "delta_rewrite_reclaimed_vs_churn_ratio": d_reclaimed_vs_churn,
+        "control_rewrite_reclaimed_share_of_budget_pct": base_reclaimed_share_budget,
+        "candidate_rewrite_reclaimed_share_of_budget_pct": cand_reclaimed_share_budget,
+        "delta_rewrite_reclaimed_share_of_budget_pct": d_reclaimed_share_budget,
+        "control_rewrite_budget_consumed_share_of_budget_pct": base_budget_consumed_share,
+        "candidate_rewrite_budget_consumed_share_of_budget_pct": cand_budget_consumed_share,
+        "delta_rewrite_budget_consumed_share_of_budget_pct": d_budget_consumed_share,
+        "control_rewrite_ineffective_runs": base_ineffective_runs,
+        "candidate_rewrite_ineffective_runs": cand_ineffective_runs,
+        "delta_rewrite_ineffective_runs": d_ineffective_runs,
+        "control_observed_gc_pending_ids": base_observed_gc_pending_ids,
+        "candidate_observed_gc_pending_ids": cand_observed_gc_pending_ids,
+        "delta_observed_gc_pending_ids": d_observed_gc_pending_ids,
         "control_valid": ctrl_valid,
         "candidate_valid": cand_valid,
         "control_invalid_reason": ctrl_reason,
@@ -1782,6 +1955,21 @@ with pairs_csv.open("w", newline="", encoding="utf-8") as fh:
         "control_max_rss_kb",
         "candidate_max_rss_kb",
         "composite_score_pct",
+        "control_rewrite_reclaimed_vs_churn_ratio",
+        "candidate_rewrite_reclaimed_vs_churn_ratio",
+        "delta_rewrite_reclaimed_vs_churn_ratio",
+        "control_rewrite_reclaimed_share_of_budget_pct",
+        "candidate_rewrite_reclaimed_share_of_budget_pct",
+        "delta_rewrite_reclaimed_share_of_budget_pct",
+        "control_rewrite_budget_consumed_share_of_budget_pct",
+        "candidate_rewrite_budget_consumed_share_of_budget_pct",
+        "delta_rewrite_budget_consumed_share_of_budget_pct",
+        "control_rewrite_ineffective_runs",
+        "candidate_rewrite_ineffective_runs",
+        "delta_rewrite_ineffective_runs",
+        "control_observed_gc_pending_ids",
+        "candidate_observed_gc_pending_ids",
+        "delta_observed_gc_pending_ids",
         "control_valid",
         "candidate_valid",
         "control_invalid_reason",
@@ -1811,6 +1999,21 @@ with pairs_csv.open("w", newline="", encoding="utf-8") as fh:
             r["control_max_rss_kb"],
             r["candidate_max_rss_kb"],
             r["composite_score_pct"],
+            r["control_rewrite_reclaimed_vs_churn_ratio"],
+            r["candidate_rewrite_reclaimed_vs_churn_ratio"],
+            r["delta_rewrite_reclaimed_vs_churn_ratio"],
+            r["control_rewrite_reclaimed_share_of_budget_pct"],
+            r["candidate_rewrite_reclaimed_share_of_budget_pct"],
+            r["delta_rewrite_reclaimed_share_of_budget_pct"],
+            r["control_rewrite_budget_consumed_share_of_budget_pct"],
+            r["candidate_rewrite_budget_consumed_share_of_budget_pct"],
+            r["delta_rewrite_budget_consumed_share_of_budget_pct"],
+            r["control_rewrite_ineffective_runs"],
+            r["candidate_rewrite_ineffective_runs"],
+            r["delta_rewrite_ineffective_runs"],
+            r["control_observed_gc_pending_ids"],
+            r["candidate_observed_gc_pending_ids"],
+            r["delta_observed_gc_pending_ids"],
             r["control_valid"],
             r["candidate_valid"],
             r["control_invalid_reason"],
@@ -1828,6 +2031,41 @@ for row in scored_rows:
     d = row.get("delta_blocks_synced")
     if d is not None and d != 0:
         nonzero_block_drift_pairs += 1
+
+def mean_pair_delta(rows, key):
+    vals = []
+    for row in rows:
+        v = row.get(key)
+        if v is None:
+            continue
+        try:
+            vals.append(float(v))
+        except (TypeError, ValueError):
+            continue
+    if not vals:
+        return None
+    return sum(vals) / float(len(vals))
+
+delta_reclaimed_vs_churn_ratio_mean = mean_pair_delta(
+    scored_rows,
+    "delta_rewrite_reclaimed_vs_churn_ratio",
+)
+delta_reclaimed_share_budget_pct_mean = mean_pair_delta(
+    scored_rows,
+    "delta_rewrite_reclaimed_share_of_budget_pct",
+)
+delta_budget_consumed_share_pct_mean = mean_pair_delta(
+    scored_rows,
+    "delta_rewrite_budget_consumed_share_of_budget_pct",
+)
+delta_ineffective_runs_mean = mean_pair_delta(
+    scored_rows,
+    "delta_rewrite_ineffective_runs",
+)
+delta_observed_gc_pending_ids_mean = mean_pair_delta(
+    scored_rows,
+    "delta_observed_gc_pending_ids",
+)
 neutral_streak = 0
 for row in reversed(scored_rows):
     if row.get("outcome") == "neutral":
@@ -1957,6 +2195,21 @@ lines.append(f"- composite weights (time,size): `{composite_weight_time}` / `{co
 lines.append(f"- composite stop on clear: `{composite_stop_on_clear}`")
 lines.append(f"- composite min pairs: `{composite_min_pairs}`")
 lines.append(f"- composite clear thresholds (win/loss pct): `{composite_clear_win_pct}` / `{composite_clear_loss_pct}`")
+lines.append(
+    f"- mean delta rewrite_reclaimed_vs_churn_ratio: `{delta_reclaimed_vs_churn_ratio_mean}`"
+)
+lines.append(
+    f"- mean delta rewrite_reclaimed_share_of_budget_pct: `{delta_reclaimed_share_budget_pct_mean}`"
+)
+lines.append(
+    f"- mean delta rewrite_budget_consumed_share_of_budget_pct: `{delta_budget_consumed_share_pct_mean}`"
+)
+lines.append(
+    f"- mean delta rewrite_ineffective_runs: `{delta_ineffective_runs_mean}`"
+)
+lines.append(
+    f"- mean delta observed_gc_pending_ids: `{delta_observed_gc_pending_ids_mean}`"
+)
 lines.append(f"- decision: `{reason}`")
 lines.append("")
 lines.append("## Absolute Medians")
@@ -2012,6 +2265,36 @@ if pair_rows:
     lines.append(f"- control_max_rss_kb: `{last['control_max_rss_kb']}`")
     lines.append(f"- candidate_max_rss_kb: `{last['candidate_max_rss_kb']}`")
     lines.append(f"- composite_score_pct: `{last['composite_score_pct']}`")
+    lines.append(
+        f"- rewrite_reclaimed_vs_churn_ratio (control/candidate/delta): "
+        f"`{last['control_rewrite_reclaimed_vs_churn_ratio']}` / "
+        f"`{last['candidate_rewrite_reclaimed_vs_churn_ratio']}` / "
+        f"`{last['delta_rewrite_reclaimed_vs_churn_ratio']}`"
+    )
+    lines.append(
+        f"- rewrite_reclaimed_share_of_budget_pct (control/candidate/delta): "
+        f"`{last['control_rewrite_reclaimed_share_of_budget_pct']}` / "
+        f"`{last['candidate_rewrite_reclaimed_share_of_budget_pct']}` / "
+        f"`{last['delta_rewrite_reclaimed_share_of_budget_pct']}`"
+    )
+    lines.append(
+        f"- rewrite_budget_consumed_share_of_budget_pct (control/candidate/delta): "
+        f"`{last['control_rewrite_budget_consumed_share_of_budget_pct']}` / "
+        f"`{last['candidate_rewrite_budget_consumed_share_of_budget_pct']}` / "
+        f"`{last['delta_rewrite_budget_consumed_share_of_budget_pct']}`"
+    )
+    lines.append(
+        f"- rewrite_ineffective_runs (control/candidate/delta): "
+        f"`{last['control_rewrite_ineffective_runs']}` / "
+        f"`{last['candidate_rewrite_ineffective_runs']}` / "
+        f"`{last['delta_rewrite_ineffective_runs']}`"
+    )
+    lines.append(
+        f"- observed_gc_pending_ids (control/candidate/delta): "
+        f"`{last['control_observed_gc_pending_ids']}` / "
+        f"`{last['candidate_observed_gc_pending_ids']}` / "
+        f"`{last['delta_observed_gc_pending_ids']}`"
+    )
 summary_md.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 payload = {
@@ -2037,6 +2320,11 @@ payload = {
         "clear_loss_pct": composite_clear_loss_pct,
     },
     "absolute_aggregates": absolute_aggregates,
+    "mean_delta_rewrite_reclaimed_vs_churn_ratio": delta_reclaimed_vs_churn_ratio_mean,
+    "mean_delta_rewrite_reclaimed_share_of_budget_pct": delta_reclaimed_share_budget_pct_mean,
+    "mean_delta_rewrite_budget_consumed_share_of_budget_pct": delta_budget_consumed_share_pct_mean,
+    "mean_delta_rewrite_ineffective_runs": delta_ineffective_runs_mean,
+    "mean_delta_observed_gc_pending_ids": delta_observed_gc_pending_ids_mean,
     "stop": stop,
     "reason": reason,
 }

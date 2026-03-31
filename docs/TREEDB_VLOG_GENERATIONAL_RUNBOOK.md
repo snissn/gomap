@@ -126,6 +126,7 @@ Default pair metric focus:
 - `T_total = T_sync + T_rw`
 - `max_rss_kb` (memory guardrail)
 - `blocks_synced` and normalized metrics (`*_per_block`) to de-noise moving-target runs
+- rewrite efficiency/capacity (`rewrite_exec_reclaimed_vs_churn_ratio`, `rewrite_reclaimed_share_of_budget_pct`, `rewrite_budget_consumed_share_of_budget_pct`, `rewrite_ineffective_runs`, `observed_gc_pending_ids`)
 
 Outputs:
 - `artifacts/celestia_ab/<ts>/runs.csv`
@@ -133,6 +134,8 @@ Outputs:
 - `artifacts/celestia_ab/<ts>/summary.md`
 - `artifacts/celestia_ab/<ts>/decision.json`
 - per-run JSON under `artifacts/celestia_ab/<ts>/runs/*/run.json`
+
+`runs.csv` includes per-run rewrite-capacity KPIs and `pairs.csv` includes pair deltas for those KPIs, so candidate/control maintenance behavior can be evaluated directly from CSV outputs.
 
 The harness alternates run order per pair (`control->candidate`, then
 `candidate->control`) and can stop early on clear win/loss signals.

@@ -168,6 +168,8 @@ Notes:
 - `decision.json` now includes:
   - `absolute_aggregates` (control/candidate median+mean totals for time, size, and RSS)
   - `composite` configuration echo and aggregate composite score fields
+- `runs.csv` also includes reclaimed-vs-churn and capacity pressure KPIs (for example `rewrite_exec_reclaimed_vs_churn_ratio`, `rewrite_reclaimed_share_of_budget_pct`, `rewrite_budget_consumed_share_of_budget_pct`, `rewrite_ineffective_runs`, `observed_gc_pending_ids`) for faster triage of low-signal loops.
+- `pairs.csv` includes per-pair deltas for those KPIs so control/candidate capacity behavior can be compared without post-processing scripts.
 - To use pre-policy behavior, set `AB_POLICY=legacy`.
 
 ## Process Review Cadence
