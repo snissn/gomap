@@ -227,6 +227,54 @@ def build_summary(stats: dict[str, Any]) -> dict[str, Any]:
         "maintenance_attempts": metric_int(stats, "treedb.cache.vlog_generation.maintenance.attempts"),
         "maintenance_acquired": metric_int(stats, "treedb.cache.vlog_generation.maintenance.acquired"),
         "maintenance_collisions": metric_int(stats, "treedb.cache.vlog_generation.maintenance.collisions"),
+        "maintenance_acquired_source_periodic": metric_int(
+            stats,
+            "treedb.cache.vlog_generation.maintenance.acquired.source.periodic",
+        ),
+        "maintenance_acquired_source_bypass": metric_int(
+            stats,
+            "treedb.cache.vlog_generation.maintenance.acquired.source.bypass",
+        ),
+        "maintenance_acquired_source_checkpoint_pending": metric_int(
+            stats,
+            "treedb.cache.vlog_generation.maintenance.acquired.source.checkpoint_pending",
+        ),
+        "maintenance_acquired_source_rewrite_age_blocked": metric_int(
+            stats,
+            "treedb.cache.vlog_generation.maintenance.acquired.source.rewrite_age_blocked",
+        ),
+        "maintenance_acquired_source_rewrite_stage_confirm": metric_int(
+            stats,
+            "treedb.cache.vlog_generation.maintenance.acquired.source.rewrite_stage_confirm",
+        ),
+        "maintenance_acquired_source_other": metric_int(
+            stats,
+            "treedb.cache.vlog_generation.maintenance.acquired.source.other",
+        ),
+        "maintenance_with_rewrite_source_periodic": metric_int(
+            stats,
+            "treedb.cache.vlog_generation.maintenance.passes.with_rewrite.source.periodic",
+        ),
+        "maintenance_with_rewrite_source_bypass": metric_int(
+            stats,
+            "treedb.cache.vlog_generation.maintenance.passes.with_rewrite.source.bypass",
+        ),
+        "maintenance_with_rewrite_source_checkpoint_pending": metric_int(
+            stats,
+            "treedb.cache.vlog_generation.maintenance.passes.with_rewrite.source.checkpoint_pending",
+        ),
+        "maintenance_with_rewrite_source_rewrite_age_blocked": metric_int(
+            stats,
+            "treedb.cache.vlog_generation.maintenance.passes.with_rewrite.source.rewrite_age_blocked",
+        ),
+        "maintenance_with_rewrite_source_rewrite_stage_confirm": metric_int(
+            stats,
+            "treedb.cache.vlog_generation.maintenance.passes.with_rewrite.source.rewrite_stage_confirm",
+        ),
+        "maintenance_with_rewrite_source_other": metric_int(
+            stats,
+            "treedb.cache.vlog_generation.maintenance.passes.with_rewrite.source.other",
+        ),
         "maintenance_noop": metric_int(stats, "treedb.cache.vlog_generation.maintenance.passes.noop"),
         "maintenance_with_rewrite": metric_int(stats, "treedb.cache.vlog_generation.maintenance.passes.with_rewrite"),
         "maintenance_with_gc": metric_int(stats, "treedb.cache.vlog_generation.maintenance.passes.with_gc"),
@@ -422,6 +470,30 @@ def build_summary(stats: dict[str, Any]) -> dict[str, Any]:
     m["maintenance_collision_rate_pct"] = pct(m["maintenance_collisions"], m["maintenance_attempts"])
     m["maintenance_rewrite_pass_share_pct"] = pct(m["maintenance_with_rewrite"], passes_total)
     m["maintenance_gc_pass_share_pct"] = pct(m["maintenance_with_gc"], passes_total)
+    m["maintenance_acquired_source_periodic_pct"] = pct(
+        m["maintenance_acquired_source_periodic"],
+        passes_total,
+    )
+    m["maintenance_acquired_source_bypass_pct"] = pct(
+        m["maintenance_acquired_source_bypass"],
+        passes_total,
+    )
+    m["maintenance_acquired_source_checkpoint_pending_pct"] = pct(
+        m["maintenance_acquired_source_checkpoint_pending"],
+        passes_total,
+    )
+    m["maintenance_acquired_source_rewrite_age_blocked_pct"] = pct(
+        m["maintenance_acquired_source_rewrite_age_blocked"],
+        passes_total,
+    )
+    m["maintenance_acquired_source_rewrite_stage_confirm_pct"] = pct(
+        m["maintenance_acquired_source_rewrite_stage_confirm"],
+        passes_total,
+    )
+    m["maintenance_acquired_source_other_pct"] = pct(
+        m["maintenance_acquired_source_other"],
+        passes_total,
+    )
 
     m["rewrite_plan_select_rate_pct"] = pct(m["rewrite_plan_selected"], m["rewrite_plan_runs"])
     m["rewrite_segment_realization_pct"] = pct(
@@ -590,6 +662,24 @@ def print_report(summary: dict[str, Any], source_file: Path, run_home: str, inst
         f"rewrite={summary['maintenance_with_rewrite']} "
         f"gc={summary['maintenance_with_gc']} "
         f"(rewrite_share={summary['maintenance_rewrite_pass_share_pct']:.1f}%, gc_share={summary['maintenance_gc_pass_share_pct']:.1f}%)"
+    )
+    print(
+        "  acquired by source: "
+        f"periodic={summary['maintenance_acquired_source_periodic']} ({summary['maintenance_acquired_source_periodic_pct']:.1f}%) "
+        f"bypass={summary['maintenance_acquired_source_bypass']} ({summary['maintenance_acquired_source_bypass_pct']:.1f}%) "
+        f"checkpoint_pending={summary['maintenance_acquired_source_checkpoint_pending']} ({summary['maintenance_acquired_source_checkpoint_pending_pct']:.1f}%) "
+        f"age_blocked={summary['maintenance_acquired_source_rewrite_age_blocked']} ({summary['maintenance_acquired_source_rewrite_age_blocked_pct']:.1f}%) "
+        f"stage_confirm={summary['maintenance_acquired_source_rewrite_stage_confirm']} ({summary['maintenance_acquired_source_rewrite_stage_confirm_pct']:.1f}%) "
+        f"other={summary['maintenance_acquired_source_other']} ({summary['maintenance_acquired_source_other_pct']:.1f}%)"
+    )
+    print(
+        "  rewrite passes by source: "
+        f"periodic={summary['maintenance_with_rewrite_source_periodic']} "
+        f"bypass={summary['maintenance_with_rewrite_source_bypass']} "
+        f"checkpoint_pending={summary['maintenance_with_rewrite_source_checkpoint_pending']} "
+        f"age_blocked={summary['maintenance_with_rewrite_source_rewrite_age_blocked']} "
+        f"stage_confirm={summary['maintenance_with_rewrite_source_rewrite_stage_confirm']} "
+        f"other={summary['maintenance_with_rewrite_source_other']}"
     )
     skips = summary["maintenance_skip"]
     print(
