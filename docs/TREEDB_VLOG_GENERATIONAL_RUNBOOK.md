@@ -30,6 +30,13 @@ Primary keys:
 - `treedb.cache.vlog_generation.rewrite.plan_empty.age_blocked`
 - `treedb.cache.vlog_generation.rewrite.plan_selected`
 - `treedb.cache.vlog_generation.rewrite.ledger_bytes_stale`
+- `treedb.cache.vlog_generation.rewrite.queue_run_segment_cap`
+- `treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.limiter`
+- `treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.by_budget`
+- `treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.checkpoint_kick`
+- `treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.limiter.checkpoint_kick`
+- `treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.fresh_plan`
+- `treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.limiter.fresh_plan`
 - `treedb.cache.vlog_generation.rewrite.queue_config.resume_max_segments`
 - `treedb.cache.vlog_generation.rewrite.queue_config.debt_drain_max_segments`
 - `treedb.cache.vlog_generation.rewrite.queue_config.fresh_plan_debt_drain_min_segments`
@@ -146,6 +153,8 @@ Scoring policy defaults:
   - `TREEDB_VLOG_GENERATION_REWRITE_FRESH_PLAN_DEBT_DRAIN_MAX_SEGMENTS`
   - Effective values are exported in stats under:
     - `treedb.cache.vlog_generation.rewrite.queue_config.*`
+  - Runtime cap decisions are exported in stats under:
+    - `treedb.cache.vlog_generation.rewrite.queue_run_segment_cap*`
 
 ## Bench Commands
 ### Churn sanity (TreeDB)
