@@ -3884,19 +3884,13 @@ func TestVlogGenerationRewritePlan_StagesFreshStaleRatioDebtBeforeRewrite(t *tes
 	db.vlogGenerationLastRewriteUnixNano.Store(0)
 	forceRewriteStageConfirmDue(t, db)
 	forceVlogMaintenanceIdle(db)
-	db.scheduleDueVlogGenerationDeferredMaintenance()
-
-	deadline := time.Now().Add(2 * schedulerTestWait(t))
-	for {
-		if _, calls := recorder.recordedRewrite(); calls >= 1 {
-			break
-		}
-		if time.Now().After(deadline) {
-			_, rewriteCalls := recorder.recordedRewrite()
-			t.Fatalf("rewrite calls after second stale-ratio pass=%d want=1", rewriteCalls)
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	db.maybeRunVlogGenerationMaintenanceWithOptions(false, vlogGenerationMaintenanceOptions{
+		bypassQuiet:           true,
+		skipRetainedPruneWait: true,
+		skipCheckpoint:        false,
+		rewriteDebtDrain:      true,
+		debugSource:           "rewrite_stage_confirm",
+	})
 	rewriteOpts, rewriteCalls := recorder.recordedRewrite()
 	if got, want := rewriteOpts.SourceFileIDs, []uint32{11}; len(got) != len(want) || got[0] != want[0] {
 		t.Fatalf("rewrite SourceFileIDs after staged stale-ratio pass=%v want=%v", got, want)
