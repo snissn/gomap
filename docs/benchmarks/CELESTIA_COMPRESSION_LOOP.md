@@ -135,6 +135,9 @@ Notes:
 - output records are JSONL with `{key,val,encoding}` plus replay metadata; both
   `key` and `val` are base64 so the file can be consumed directly by
   `vlog_dict_realdata`
+- when replaying this corpus to study outer-leaf compression behavior, pass
+  `-bench-index-outer-leaves-in-vlog`; the outer-leaf classifier intentionally
+  stays off when that write-path mode is disabled
 - use this mixed replay loop before narrower outer-leaf-only sweeps when the
   question is overall write-path behavior rather than isolated leaf-page codec
 
@@ -152,6 +155,7 @@ GOWORK=off go run ./TreeDB/cmd/vlog_dict_realdata \
   -bench-compression-mode auto \
   -bench-auto-policy size \
   -bench-dict-class-mode split_outer_leaf \
+  -bench-index-outer-leaves-in-vlog \
   -bench-block-codec snappy \
   -bench-raw-mib 64 \
   -bench-batch 1024 \
