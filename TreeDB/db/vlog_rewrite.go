@@ -1632,14 +1632,16 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 					leafRefMaxCopiedBytes = 0
 				}
 			}
-			copied, copiedBytes, err := db.rewriteLeafRefsOnline(ctx, writer, ridAlloc, sourceIDs, singleSourceID, restrictSingleID, leafRefMaxCopiedBytes, opts.SyncEachBatch)
-			if err != nil {
-				return stats, err
+			if maxCopiedBytes <= 0 || leafRefMaxCopiedBytes > 0 {
+				copied, copiedBytes, err := db.rewriteLeafRefsOnline(ctx, writer, ridAlloc, sourceIDs, singleSourceID, restrictSingleID, leafRefMaxCopiedBytes, opts.SyncEachBatch)
+				if err != nil {
+					return stats, err
+				}
+				stats.RecordsCopied += copied
+				stats.LeafRefRecordsCopied += copied
+				stats.LeafRefBytesCopied += copiedBytes
+				stats.SourceBytesProcessed += copiedBytes
 			}
-			stats.RecordsCopied += copied
-			stats.LeafRefRecordsCopied += copied
-			stats.LeafRefBytesCopied += copiedBytes
-			stats.SourceBytesProcessed += copiedBytes
 		}
 	} else {
 		// Stop publishing further swaps after cancellation; cleanup below still
