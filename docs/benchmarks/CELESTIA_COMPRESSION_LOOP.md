@@ -186,6 +186,7 @@ Notes:
   - source URL: `AB_LIVE_DEBUG_VARS_URL` (default `http://127.0.0.1:6062/debug/vars`)
   - latest successful sample is stored as `live_debug_vars_latest.json` in each run directory
   - if a successful run lacks on-disk diagnostics JSON, the harness retries maintenance analysis against that sampled payload so `run.json.maintenance_summary` can still reflect live runtime counters
+- maintenance summaries also export exact-source counters for `rewrite_stage_confirm` vs `rewrite_stage_confirm_exit`, so restart loops can be separated from the initial stage-confirm pass in `run.json`, `runs.csv`, and `analyze_vlog_maintenance_capacity.py`
 - `runs.csv` now also includes rewrite-capacity counters from diagnostics summaries (plan runs/selection, source segment+byte outcomes, ledger bytes, budget utilization, observed-GC drain pct) so candidate/control behavior can be compared without opening each `run.json`.
 - `pairs.csv` now includes absolute per-pair control/candidate values (`t_sync`, `t_total`, `s_sync_app`, `s_post_wal`, `max_rss_kb`) plus `composite_score_pct` (negative is better).
 - `summary.md` now includes `Absolute Medians` (control vs candidate) in addition to pair deltas.

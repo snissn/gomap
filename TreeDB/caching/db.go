@@ -6306,14 +6306,21 @@ type DB struct {
 	vlogGenerationMaintenancePassNoop                            atomic.Uint64
 	vlogGenerationMaintenancePassWithRewrite                     atomic.Uint64
 	vlogGenerationMaintenancePassWithGC                          atomic.Uint64
+	vlogGenerationDeferredMaintenanceStartsByExactSource         [vlogGenerationMaintenanceExactSourceCount]atomic.Uint64
 	vlogGenerationMaintenanceAcquiredBySource                    [vlogGenerationMaintenanceSourceCount]atomic.Uint64
+	vlogGenerationMaintenanceAcquiredByExactSource               [vlogGenerationMaintenanceExactSourceCount]atomic.Uint64
 	vlogGenerationMaintenancePassNoopBySource                    [vlogGenerationMaintenanceSourceCount]atomic.Uint64
 	vlogGenerationMaintenancePassWithRewriteBySource             [vlogGenerationMaintenanceSourceCount]atomic.Uint64
 	vlogGenerationMaintenancePassWithGCBySource                  [vlogGenerationMaintenanceSourceCount]atomic.Uint64
+	vlogGenerationMaintenancePassWithRewriteByExactSource        [vlogGenerationMaintenanceExactSourceCount]atomic.Uint64
 	vlogGenerationRewriteRunsBySource                            [vlogGenerationMaintenanceSourceCount]atomic.Uint64
+	vlogGenerationRewriteRunsByExactSource                       [vlogGenerationMaintenanceExactSourceCount]atomic.Uint64
 	vlogGenerationRewriteBudgetConsumedBySource                  [vlogGenerationMaintenanceSourceCount]atomic.Uint64
+	vlogGenerationRewriteBudgetConsumedByExactSource             [vlogGenerationMaintenanceExactSourceCount]atomic.Uint64
 	vlogGenerationRewriteSourceBytesRequestedBySource            [vlogGenerationMaintenanceSourceCount]atomic.Uint64
+	vlogGenerationRewriteSourceBytesRequestedByExactSource       [vlogGenerationMaintenanceExactSourceCount]atomic.Uint64
 	vlogGenerationRewriteSourceBytesUnreferencedBySource         [vlogGenerationMaintenanceSourceCount]atomic.Uint64
+	vlogGenerationRewriteSourceBytesUnreferencedByExactSource    [vlogGenerationMaintenanceExactSourceCount]atomic.Uint64
 	vlogGenerationMaintenancePassTotalNanos                      atomic.Uint64
 	vlogGenerationMaintenancePassMaxNanos                        atomic.Uint64
 	vlogGenerationLastReason                                     atomic.Uint32
@@ -9315,6 +9322,45 @@ func vlogGenerationMaintenanceSourceIndex(source string) int {
 		return vlogGenerationMaintenanceSourceRewriteStageConfirm
 	default:
 		return vlogGenerationMaintenanceSourceOther
+	}
+}
+
+const (
+	vlogGenerationMaintenanceExactSourceRewriteAgeBlocked = iota
+	vlogGenerationMaintenanceExactSourceRewriteAgeBlockedExit
+	vlogGenerationMaintenanceExactSourceRewriteStageConfirm
+	vlogGenerationMaintenanceExactSourceRewriteStageConfirmExit
+)
+
+const vlogGenerationMaintenanceExactSourceCount = vlogGenerationMaintenanceExactSourceRewriteStageConfirmExit + 1
+
+func vlogGenerationMaintenanceExactSourceIndex(source string) int {
+	switch source {
+	case "rewrite_age_blocked":
+		return vlogGenerationMaintenanceExactSourceRewriteAgeBlocked
+	case "rewrite_age_blocked_exit":
+		return vlogGenerationMaintenanceExactSourceRewriteAgeBlockedExit
+	case "rewrite_stage_confirm":
+		return vlogGenerationMaintenanceExactSourceRewriteStageConfirm
+	case "rewrite_stage_confirm_exit":
+		return vlogGenerationMaintenanceExactSourceRewriteStageConfirmExit
+	default:
+		return -1
+	}
+}
+
+func vlogGenerationMaintenanceExactSourceLabel(idx int) string {
+	switch idx {
+	case vlogGenerationMaintenanceExactSourceRewriteAgeBlocked:
+		return "rewrite_age_blocked"
+	case vlogGenerationMaintenanceExactSourceRewriteAgeBlockedExit:
+		return "rewrite_age_blocked_exit"
+	case vlogGenerationMaintenanceExactSourceRewriteStageConfirm:
+		return "rewrite_stage_confirm"
+	case vlogGenerationMaintenanceExactSourceRewriteStageConfirmExit:
+		return "rewrite_stage_confirm_exit"
+	default:
+		return "unknown"
 	}
 }
 
@@ -13933,7 +13979,7 @@ func mulDivClampPositiveInt64(x, y, div, capValue int64) int64 {
 	return int64(q)
 }
 
-func (db *DB) vlogGenerationConsumeRewriteBudgetBytes(n int64, sourceIdx int) {
+func (db *DB) vlogGenerationConsumeRewriteBudgetBytes(n int64, sourceIdx int, exactSourceIdx int) {
 	if db == nil || n <= 0 {
 		return
 	}
@@ -13948,6 +13994,9 @@ func (db *DB) vlogGenerationConsumeRewriteBudgetBytes(n int64, sourceIdx int) {
 				db.vlogGenerationRewriteBudgetConsumed.Add(uint64(consumed))
 				if sourceIdx >= 0 && sourceIdx < vlogGenerationMaintenanceSourceCount {
 					db.vlogGenerationRewriteBudgetConsumedBySource[sourceIdx].Add(uint64(consumed))
+				}
+				if exactSourceIdx >= 0 && exactSourceIdx < vlogGenerationMaintenanceExactSourceCount {
+					db.vlogGenerationRewriteBudgetConsumedByExactSource[exactSourceIdx].Add(uint64(consumed))
 				}
 			}
 			return
@@ -14706,6 +14755,9 @@ func (db *DB) startVlogGenerationDeferredMaintenance(opts vlogGenerationMaintena
 	if db == nil || db.closing.Load() {
 		return
 	}
+	if exactSourceIdx := vlogGenerationMaintenanceExactSourceIndex(opts.debugSource); exactSourceIdx >= 0 {
+		db.vlogGenerationDeferredMaintenanceStartsByExactSource[exactSourceIdx].Add(1)
+	}
 	db.vlogGenerationDeferredMaintenancePending.Store(true)
 	if !db.vlogGenerationDeferredMaintenanceRunning.CompareAndSwap(false, true) {
 		return
@@ -14957,7 +15009,11 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 	gcAttempted := false
 	activeSource := vlogGenerationMaintenanceDebugSource(opts)
 	activeSourceIdx := vlogGenerationMaintenanceSourceIndex(activeSource)
+	activeExactSourceIdx := vlogGenerationMaintenanceExactSourceIndex(activeSource)
 	db.vlogGenerationMaintenanceAcquiredBySource[activeSourceIdx].Add(1)
+	if activeExactSourceIdx >= 0 {
+		db.vlogGenerationMaintenanceAcquiredByExactSource[activeExactSourceIdx].Add(1)
+	}
 	activeStart := time.Now()
 	rewriteQueueSnapshotCaptured := false
 	rewriteQueueBeforeSegments := 0
@@ -14989,6 +15045,9 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 		if rewritePass {
 			db.vlogGenerationMaintenancePassWithRewrite.Add(1)
 			db.vlogGenerationMaintenancePassWithRewriteBySource[activeSourceIdx].Add(1)
+			if activeExactSourceIdx >= 0 {
+				db.vlogGenerationMaintenancePassWithRewriteByExactSource[activeExactSourceIdx].Add(1)
+			}
 		}
 		if gcPass {
 			db.vlogGenerationMaintenancePassWithGC.Add(1)
@@ -16073,6 +16132,9 @@ planned:
 			db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
 			db.vlogGenerationRewriteRuns.Add(1)
 			db.vlogGenerationRewriteRunsBySource[activeSourceIdx].Add(1)
+			if activeExactSourceIdx >= 0 {
+				db.vlogGenerationRewriteRunsByExactSource[activeExactSourceIdx].Add(1)
+			}
 			if sourceSegments := len(rewriteOpts.SourceFileIDs); sourceSegments > 0 {
 				db.vlogGenerationRewriteExecSourceSegments.Add(uint64(sourceSegments))
 			}
@@ -16118,6 +16180,9 @@ planned:
 			if sourceBytesRequested > 0 {
 				db.vlogGenerationRewriteSourceBytesRequestedTotal.Add(sourceBytesRequested)
 				db.vlogGenerationRewriteSourceBytesRequestedBySource[activeSourceIdx].Add(sourceBytesRequested)
+				if activeExactSourceIdx >= 0 {
+					db.vlogGenerationRewriteSourceBytesRequestedByExactSource[activeExactSourceIdx].Add(sourceBytesRequested)
+				}
 			}
 			if sourceBytesStillReferenced > 0 {
 				db.vlogGenerationRewriteSourceBytesStillReferencedTotal.Add(sourceBytesStillReferenced)
@@ -16125,6 +16190,9 @@ planned:
 			if sourceBytesUnreferenced > 0 {
 				db.vlogGenerationRewriteSourceBytesUnreferencedTotal.Add(sourceBytesUnreferenced)
 				db.vlogGenerationRewriteSourceBytesUnreferencedBySource[activeSourceIdx].Add(sourceBytesUnreferenced)
+				if activeExactSourceIdx >= 0 {
+					db.vlogGenerationRewriteSourceBytesUnreferencedByExactSource[activeExactSourceIdx].Add(sourceBytesUnreferenced)
+				}
 			}
 			rewriteBytesIn := int64(0)
 			if processedLedgerOK {
@@ -16180,7 +16248,7 @@ planned:
 				db.vlogGenerationRewriteLeafRefBytesCopied.Add(uint64(stats.LeafRefBytesCopied))
 			}
 			if consumed > 0 {
-				db.vlogGenerationConsumeRewriteBudgetBytes(consumed, activeSourceIdx)
+				db.vlogGenerationConsumeRewriteBudgetBytes(consumed, activeSourceIdx, activeExactSourceIdx)
 			}
 			db.maybeRunVlogGenerationIndexVacuum(int64(stats.BytesBefore))
 			return nil
@@ -22417,6 +22485,21 @@ func (db *DB) Stats() map[string]string {
 			db.vlogGenerationMaintenancePassWithGCBySource[sourceIdx].Load(),
 		)
 	}
+	for sourceIdx := 0; sourceIdx < vlogGenerationMaintenanceExactSourceCount; sourceIdx++ {
+		source := vlogGenerationMaintenanceExactSourceLabel(sourceIdx)
+		stats["treedb.cache.vlog_generation.maintenance.deferred_starts.exact_source."+source] = fmt.Sprintf(
+			"%d",
+			db.vlogGenerationDeferredMaintenanceStartsByExactSource[sourceIdx].Load(),
+		)
+		stats["treedb.cache.vlog_generation.maintenance.acquired.exact_source."+source] = fmt.Sprintf(
+			"%d",
+			db.vlogGenerationMaintenanceAcquiredByExactSource[sourceIdx].Load(),
+		)
+		stats["treedb.cache.vlog_generation.maintenance.passes.with_rewrite.exact_source."+source] = fmt.Sprintf(
+			"%d",
+			db.vlogGenerationMaintenancePassWithRewriteByExactSource[sourceIdx].Load(),
+		)
+	}
 	stats["treedb.cache.vlog_generation.maintenance.pass.total_ms"] = fmt.Sprintf("%.3f", float64(maintenancePassTotalNS)/float64(time.Millisecond))
 	stats["treedb.cache.vlog_generation.maintenance.pass.max_ms"] = fmt.Sprintf("%.3f", float64(maintenancePassMaxNS)/float64(time.Millisecond))
 	if maintenancePasses > 0 {
@@ -22598,6 +22681,25 @@ func (db *DB) Stats() map[string]string {
 		stats["treedb.cache.vlog_generation.rewrite.exec.source_bytes_unreferenced_total.source."+source] = fmt.Sprintf(
 			"%d",
 			db.vlogGenerationRewriteSourceBytesUnreferencedBySource[sourceIdx].Load(),
+		)
+	}
+	for sourceIdx := 0; sourceIdx < vlogGenerationMaintenanceExactSourceCount; sourceIdx++ {
+		source := vlogGenerationMaintenanceExactSourceLabel(sourceIdx)
+		stats["treedb.cache.vlog_generation.rewrite.runs.exact_source."+source] = fmt.Sprintf(
+			"%d",
+			db.vlogGenerationRewriteRunsByExactSource[sourceIdx].Load(),
+		)
+		stats["treedb.cache.vlog_generation.rewrite_budget.consumed_bytes_total.exact_source."+source] = fmt.Sprintf(
+			"%d",
+			db.vlogGenerationRewriteBudgetConsumedByExactSource[sourceIdx].Load(),
+		)
+		stats["treedb.cache.vlog_generation.rewrite.exec.source_bytes_requested_total.exact_source."+source] = fmt.Sprintf(
+			"%d",
+			db.vlogGenerationRewriteSourceBytesRequestedByExactSource[sourceIdx].Load(),
+		)
+		stats["treedb.cache.vlog_generation.rewrite.exec.source_bytes_unreferenced_total.exact_source."+source] = fmt.Sprintf(
+			"%d",
+			db.vlogGenerationRewriteSourceBytesUnreferencedByExactSource[sourceIdx].Load(),
 		)
 	}
 	stats["treedb.cache.vlog_generation.rewrite.plan_runs"] = fmt.Sprintf("%d", db.vlogGenerationRewritePlanRuns.Load())

@@ -508,6 +508,40 @@ def build_summary(stats: dict[str, Any]) -> dict[str, Any]:
             "treedb.cache.vlog_generation.checkpoint_kick.hot_no_debt_wake.runs",
         ),
     }
+    for source in (
+        "rewrite_age_blocked",
+        "rewrite_age_blocked_exit",
+        "rewrite_stage_confirm",
+        "rewrite_stage_confirm_exit",
+    ):
+        m[f"maintenance_deferred_starts_exact_{source}"] = metric_int(
+            stats,
+            f"treedb.cache.vlog_generation.maintenance.deferred_starts.exact_source.{source}",
+        )
+        m[f"maintenance_acquired_exact_{source}"] = metric_int(
+            stats,
+            f"treedb.cache.vlog_generation.maintenance.acquired.exact_source.{source}",
+        )
+        m[f"maintenance_with_rewrite_exact_{source}"] = metric_int(
+            stats,
+            f"treedb.cache.vlog_generation.maintenance.passes.with_rewrite.exact_source.{source}",
+        )
+        m[f"rewrite_runs_exact_{source}"] = metric_int(
+            stats,
+            f"treedb.cache.vlog_generation.rewrite.runs.exact_source.{source}",
+        )
+        m[f"rewrite_budget_consumed_bytes_total_exact_{source}"] = metric_int(
+            stats,
+            f"treedb.cache.vlog_generation.rewrite_budget.consumed_bytes_total.exact_source.{source}",
+        )
+        m[f"rewrite_exec_source_bytes_requested_total_exact_{source}"] = metric_int(
+            stats,
+            f"treedb.cache.vlog_generation.rewrite.exec.source_bytes_requested_total.exact_source.{source}",
+        )
+        m[f"rewrite_exec_source_bytes_unreferenced_total_exact_{source}"] = metric_int(
+            stats,
+            f"treedb.cache.vlog_generation.rewrite.exec.source_bytes_unreferenced_total.exact_source.{source}",
+        )
 
     skip_keys = [
         "treedb.cache.vlog_generation.maintenance.skip.wal_on_periodic",
@@ -567,6 +601,14 @@ def build_summary(stats: dict[str, Any]) -> dict[str, Any]:
     m["maintenance_acquired_source_other_pct"] = pct(
         m["maintenance_acquired_source_other"],
         passes_total,
+    )
+    m["maintenance_acquired_exact_rewrite_stage_confirm_total"] = (
+        m["maintenance_acquired_exact_rewrite_stage_confirm"]
+        + m["maintenance_acquired_exact_rewrite_stage_confirm_exit"]
+    )
+    m["maintenance_acquired_exact_rewrite_stage_confirm_exit_share_pct"] = pct(
+        m["maintenance_acquired_exact_rewrite_stage_confirm_exit"],
+        m["maintenance_acquired_exact_rewrite_stage_confirm_total"],
     )
     m["checkpoint_kick_rewrite_rate_pct"] = pct(
         m["checkpoint_kick_rewrite_runs"],
@@ -668,6 +710,22 @@ def build_summary(stats: dict[str, Any]) -> dict[str, Any]:
     m["rewrite_non_checkpoint_source_unreferenced_bytes_pct"] = pct(
         m["rewrite_non_checkpoint_source_bytes_unreferenced_total"],
         m["rewrite_non_checkpoint_source_bytes_requested_total"],
+    )
+    m["rewrite_runs_exact_rewrite_stage_confirm_total"] = (
+        m["rewrite_runs_exact_rewrite_stage_confirm"]
+        + m["rewrite_runs_exact_rewrite_stage_confirm_exit"]
+    )
+    m["rewrite_runs_exact_rewrite_stage_confirm_exit_share_pct"] = pct(
+        m["rewrite_runs_exact_rewrite_stage_confirm_exit"],
+        m["rewrite_runs_exact_rewrite_stage_confirm_total"],
+    )
+    m["rewrite_exec_source_bytes_requested_total_exact_rewrite_stage_confirm_total"] = (
+        m["rewrite_exec_source_bytes_requested_total_exact_rewrite_stage_confirm"]
+        + m["rewrite_exec_source_bytes_requested_total_exact_rewrite_stage_confirm_exit"]
+    )
+    m["rewrite_exec_source_bytes_requested_total_exact_rewrite_stage_confirm_exit_share_pct"] = pct(
+        m["rewrite_exec_source_bytes_requested_total_exact_rewrite_stage_confirm_exit"],
+        m["rewrite_exec_source_bytes_requested_total_exact_rewrite_stage_confirm_total"],
     )
     m["rewrite_stale_selection_coverage_pct"] = pct(
         m["rewrite_processed_stale_bytes"],
@@ -834,6 +892,16 @@ def print_report(summary: dict[str, Any], source_file: Path, run_home: str, inst
         f"stage_confirm={summary['maintenance_with_rewrite_source_rewrite_stage_confirm']} "
         f"other={summary['maintenance_with_rewrite_source_other']}"
     )
+    print(
+        "  stage-confirm exact: "
+        f"deferred={summary['maintenance_deferred_starts_exact_rewrite_stage_confirm']}/"
+        f"{summary['maintenance_deferred_starts_exact_rewrite_stage_confirm_exit']} "
+        f"acquired={summary['maintenance_acquired_exact_rewrite_stage_confirm']}/"
+        f"{summary['maintenance_acquired_exact_rewrite_stage_confirm_exit']} "
+        f"rewrite_passes={summary['maintenance_with_rewrite_exact_rewrite_stage_confirm']}/"
+        f"{summary['maintenance_with_rewrite_exact_rewrite_stage_confirm_exit']} "
+        f"(exit_share={summary['maintenance_acquired_exact_rewrite_stage_confirm_exit_share_pct']:.1f}%)"
+    )
     skips = summary["maintenance_skip"]
     print(
         "  skip pressure: "
@@ -905,6 +973,19 @@ def print_report(summary: dict[str, Any], source_file: Path, run_home: str, inst
         f"budget={human_bytes(summary['rewrite_checkpoint_like_budget_consumed_bytes_total'])}/{human_bytes(summary['rewrite_non_checkpoint_budget_consumed_bytes_total'])} "
         f"(ckpt_like_budget_share={summary['rewrite_checkpoint_like_budget_share_pct']:.1f}%) "
         f"unref_pct={summary['rewrite_checkpoint_like_source_unreferenced_bytes_pct']:.1f}%/{summary['rewrite_non_checkpoint_source_unreferenced_bytes_pct']:.1f}%"
+    )
+    print(
+        "  stage-confirm exact rewrite: "
+        f"runs={summary['rewrite_runs_exact_rewrite_stage_confirm']}/"
+        f"{summary['rewrite_runs_exact_rewrite_stage_confirm_exit']} "
+        f"budget={human_bytes(summary['rewrite_budget_consumed_bytes_total_exact_rewrite_stage_confirm'])}/"
+        f"{human_bytes(summary['rewrite_budget_consumed_bytes_total_exact_rewrite_stage_confirm_exit'])} "
+        f"requested={human_bytes(summary['rewrite_exec_source_bytes_requested_total_exact_rewrite_stage_confirm'])}/"
+        f"{human_bytes(summary['rewrite_exec_source_bytes_requested_total_exact_rewrite_stage_confirm_exit'])} "
+        f"unref={human_bytes(summary['rewrite_exec_source_bytes_unreferenced_total_exact_rewrite_stage_confirm'])}/"
+        f"{human_bytes(summary['rewrite_exec_source_bytes_unreferenced_total_exact_rewrite_stage_confirm_exit'])} "
+        f"(exit_runs_share={summary['rewrite_runs_exact_rewrite_stage_confirm_exit_share_pct']:.1f}%, "
+        f"exit_requested_share={summary['rewrite_exec_source_bytes_requested_total_exact_rewrite_stage_confirm_exit_share_pct']:.1f}%)"
     )
     print(
         "  selected stale vs processed stale: "

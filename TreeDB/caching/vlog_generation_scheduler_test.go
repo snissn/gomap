@@ -7531,10 +7531,38 @@ func TestVlogGenerationStats_ReportRewriteBacklogAndDurations(t *testing.T) {
 	db.vlogGenerationMaintenanceAcquiredBySource[vlogGenerationMaintenanceSourceRewriteAgeBlocked].Store(1)
 	db.vlogGenerationMaintenanceAcquiredBySource[vlogGenerationMaintenanceSourceRewriteStageConfirm].Store(4)
 	db.vlogGenerationMaintenanceAcquiredBySource[vlogGenerationMaintenanceSourceOther].Store(7)
+	db.vlogGenerationDeferredMaintenanceStartsByExactSource[vlogGenerationMaintenanceExactSourceRewriteAgeBlocked].Store(2)
+	db.vlogGenerationDeferredMaintenanceStartsByExactSource[vlogGenerationMaintenanceExactSourceRewriteAgeBlockedExit].Store(1)
+	db.vlogGenerationDeferredMaintenanceStartsByExactSource[vlogGenerationMaintenanceExactSourceRewriteStageConfirm].Store(6)
+	db.vlogGenerationDeferredMaintenanceStartsByExactSource[vlogGenerationMaintenanceExactSourceRewriteStageConfirmExit].Store(3)
+	db.vlogGenerationMaintenanceAcquiredByExactSource[vlogGenerationMaintenanceExactSourceRewriteAgeBlocked].Store(1)
+	db.vlogGenerationMaintenanceAcquiredByExactSource[vlogGenerationMaintenanceExactSourceRewriteAgeBlockedExit].Store(2)
+	db.vlogGenerationMaintenanceAcquiredByExactSource[vlogGenerationMaintenanceExactSourceRewriteStageConfirm].Store(3)
+	db.vlogGenerationMaintenanceAcquiredByExactSource[vlogGenerationMaintenanceExactSourceRewriteStageConfirmExit].Store(1)
 	db.vlogGenerationMaintenancePassWithRewriteBySource[vlogGenerationMaintenanceSourcePeriodic].Store(2)
 	db.vlogGenerationMaintenancePassWithRewriteBySource[vlogGenerationMaintenanceSourceCheckpointPending].Store(1)
+	db.vlogGenerationMaintenancePassWithRewriteByExactSource[vlogGenerationMaintenanceExactSourceRewriteAgeBlocked].Store(1)
+	db.vlogGenerationMaintenancePassWithRewriteByExactSource[vlogGenerationMaintenanceExactSourceRewriteAgeBlockedExit].Store(1)
+	db.vlogGenerationMaintenancePassWithRewriteByExactSource[vlogGenerationMaintenanceExactSourceRewriteStageConfirm].Store(2)
+	db.vlogGenerationMaintenancePassWithRewriteByExactSource[vlogGenerationMaintenanceExactSourceRewriteStageConfirmExit].Store(1)
 	db.vlogGenerationMaintenancePassWithGCBySource[vlogGenerationMaintenanceSourceBypass].Store(2)
 	db.vlogGenerationMaintenancePassNoopBySource[vlogGenerationMaintenanceSourceOther].Store(3)
+	db.vlogGenerationRewriteRunsByExactSource[vlogGenerationMaintenanceExactSourceRewriteAgeBlocked].Store(1)
+	db.vlogGenerationRewriteRunsByExactSource[vlogGenerationMaintenanceExactSourceRewriteAgeBlockedExit].Store(1)
+	db.vlogGenerationRewriteRunsByExactSource[vlogGenerationMaintenanceExactSourceRewriteStageConfirm].Store(2)
+	db.vlogGenerationRewriteRunsByExactSource[vlogGenerationMaintenanceExactSourceRewriteStageConfirmExit].Store(1)
+	db.vlogGenerationRewriteBudgetConsumedByExactSource[vlogGenerationMaintenanceExactSourceRewriteAgeBlocked].Store(64)
+	db.vlogGenerationRewriteBudgetConsumedByExactSource[vlogGenerationMaintenanceExactSourceRewriteAgeBlockedExit].Store(128)
+	db.vlogGenerationRewriteBudgetConsumedByExactSource[vlogGenerationMaintenanceExactSourceRewriteStageConfirm].Store(256)
+	db.vlogGenerationRewriteBudgetConsumedByExactSource[vlogGenerationMaintenanceExactSourceRewriteStageConfirmExit].Store(512)
+	db.vlogGenerationRewriteSourceBytesRequestedByExactSource[vlogGenerationMaintenanceExactSourceRewriteAgeBlocked].Store(100)
+	db.vlogGenerationRewriteSourceBytesRequestedByExactSource[vlogGenerationMaintenanceExactSourceRewriteAgeBlockedExit].Store(200)
+	db.vlogGenerationRewriteSourceBytesRequestedByExactSource[vlogGenerationMaintenanceExactSourceRewriteStageConfirm].Store(300)
+	db.vlogGenerationRewriteSourceBytesRequestedByExactSource[vlogGenerationMaintenanceExactSourceRewriteStageConfirmExit].Store(400)
+	db.vlogGenerationRewriteSourceBytesUnreferencedByExactSource[vlogGenerationMaintenanceExactSourceRewriteAgeBlocked].Store(90)
+	db.vlogGenerationRewriteSourceBytesUnreferencedByExactSource[vlogGenerationMaintenanceExactSourceRewriteAgeBlockedExit].Store(180)
+	db.vlogGenerationRewriteSourceBytesUnreferencedByExactSource[vlogGenerationMaintenanceExactSourceRewriteStageConfirm].Store(270)
+	db.vlogGenerationRewriteSourceBytesUnreferencedByExactSource[vlogGenerationMaintenanceExactSourceRewriteStageConfirmExit].Store(360)
 	db.vlogGenerationRewritePlanSelectedSegments.Store(6)
 	db.vlogGenerationRewriteExecSourceSegments.Store(3)
 	db.vlogGenerationRewriteSourceSegmentsRequestedTotal.Store(5)
@@ -7658,6 +7686,40 @@ func TestVlogGenerationStats_ReportRewriteBacklogAndDurations(t *testing.T) {
 	}
 	if got := stats["treedb.cache.vlog_generation.maintenance.acquired.source.other"]; got != "7" {
 		t.Fatalf("maintenance acquired source other=%q want 7", got)
+	}
+	for key, want := range map[string]string{
+		"treedb.cache.vlog_generation.maintenance.deferred_starts.exact_source.rewrite_age_blocked":                     "2",
+		"treedb.cache.vlog_generation.maintenance.deferred_starts.exact_source.rewrite_age_blocked_exit":                "1",
+		"treedb.cache.vlog_generation.maintenance.deferred_starts.exact_source.rewrite_stage_confirm":                    "6",
+		"treedb.cache.vlog_generation.maintenance.deferred_starts.exact_source.rewrite_stage_confirm_exit":               "3",
+		"treedb.cache.vlog_generation.maintenance.acquired.exact_source.rewrite_age_blocked":                            "1",
+		"treedb.cache.vlog_generation.maintenance.acquired.exact_source.rewrite_age_blocked_exit":                       "2",
+		"treedb.cache.vlog_generation.maintenance.acquired.exact_source.rewrite_stage_confirm":                           "3",
+		"treedb.cache.vlog_generation.maintenance.acquired.exact_source.rewrite_stage_confirm_exit":                      "1",
+		"treedb.cache.vlog_generation.maintenance.passes.with_rewrite.exact_source.rewrite_age_blocked":                 "1",
+		"treedb.cache.vlog_generation.maintenance.passes.with_rewrite.exact_source.rewrite_age_blocked_exit":            "1",
+		"treedb.cache.vlog_generation.maintenance.passes.with_rewrite.exact_source.rewrite_stage_confirm":                "2",
+		"treedb.cache.vlog_generation.maintenance.passes.with_rewrite.exact_source.rewrite_stage_confirm_exit":           "1",
+		"treedb.cache.vlog_generation.rewrite.runs.exact_source.rewrite_age_blocked":                                    "1",
+		"treedb.cache.vlog_generation.rewrite.runs.exact_source.rewrite_age_blocked_exit":                               "1",
+		"treedb.cache.vlog_generation.rewrite.runs.exact_source.rewrite_stage_confirm":                                   "2",
+		"treedb.cache.vlog_generation.rewrite.runs.exact_source.rewrite_stage_confirm_exit":                              "1",
+		"treedb.cache.vlog_generation.rewrite_budget.consumed_bytes_total.exact_source.rewrite_age_blocked":            "64",
+		"treedb.cache.vlog_generation.rewrite_budget.consumed_bytes_total.exact_source.rewrite_age_blocked_exit":      "128",
+		"treedb.cache.vlog_generation.rewrite_budget.consumed_bytes_total.exact_source.rewrite_stage_confirm":          "256",
+		"treedb.cache.vlog_generation.rewrite_budget.consumed_bytes_total.exact_source.rewrite_stage_confirm_exit":     "512",
+		"treedb.cache.vlog_generation.rewrite.exec.source_bytes_requested_total.exact_source.rewrite_age_blocked":      "100",
+		"treedb.cache.vlog_generation.rewrite.exec.source_bytes_requested_total.exact_source.rewrite_age_blocked_exit": "200",
+		"treedb.cache.vlog_generation.rewrite.exec.source_bytes_requested_total.exact_source.rewrite_stage_confirm":    "300",
+		"treedb.cache.vlog_generation.rewrite.exec.source_bytes_requested_total.exact_source.rewrite_stage_confirm_exit": "400",
+		"treedb.cache.vlog_generation.rewrite.exec.source_bytes_unreferenced_total.exact_source.rewrite_age_blocked":      "90",
+		"treedb.cache.vlog_generation.rewrite.exec.source_bytes_unreferenced_total.exact_source.rewrite_age_blocked_exit": "180",
+		"treedb.cache.vlog_generation.rewrite.exec.source_bytes_unreferenced_total.exact_source.rewrite_stage_confirm":    "270",
+		"treedb.cache.vlog_generation.rewrite.exec.source_bytes_unreferenced_total.exact_source.rewrite_stage_confirm_exit": "360",
+	} {
+		if got := stats[key]; got != want {
+			t.Fatalf("%s=%q want %s", key, got, want)
+		}
 	}
 	if got := stats["treedb.cache.vlog_generation.maintenance.passes.with_rewrite.source.periodic"]; got != "2" {
 		t.Fatalf("maintenance rewrite passes source periodic=%q want 2", got)

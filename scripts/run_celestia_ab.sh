@@ -1407,6 +1407,33 @@ def build_maintenance_from_light_stats(stats: dict[str, str]) -> dict[str, objec
         "observed_gc_retry_queued": stat_int("treedb.cache.vlog_generation.observed_gc.retry_queued"),
         "observed_gc_retry_dropped": stat_int("treedb.cache.vlog_generation.observed_gc.retry_dropped"),
     }
+    for source in (
+        "rewrite_age_blocked",
+        "rewrite_age_blocked_exit",
+        "rewrite_stage_confirm",
+        "rewrite_stage_confirm_exit",
+    ):
+        out[f"maintenance_deferred_starts_exact_{source}"] = stat_int(
+            f"treedb.cache.vlog_generation.maintenance.deferred_starts.exact_source.{source}",
+        )
+        out[f"maintenance_acquired_exact_{source}"] = stat_int(
+            f"treedb.cache.vlog_generation.maintenance.acquired.exact_source.{source}",
+        )
+        out[f"maintenance_with_rewrite_exact_{source}"] = stat_int(
+            f"treedb.cache.vlog_generation.maintenance.passes.with_rewrite.exact_source.{source}",
+        )
+        out[f"rewrite_runs_exact_{source}"] = stat_int(
+            f"treedb.cache.vlog_generation.rewrite.runs.exact_source.{source}",
+        )
+        out[f"rewrite_budget_consumed_bytes_total_exact_{source}"] = stat_int(
+            f"treedb.cache.vlog_generation.rewrite_budget.consumed_bytes_total.exact_source.{source}",
+        )
+        out[f"rewrite_exec_source_bytes_requested_total_exact_{source}"] = stat_int(
+            f"treedb.cache.vlog_generation.rewrite.exec.source_bytes_requested_total.exact_source.{source}",
+        )
+        out[f"rewrite_exec_source_bytes_unreferenced_total_exact_{source}"] = stat_int(
+            f"treedb.cache.vlog_generation.rewrite.exec.source_bytes_unreferenced_total.exact_source.{source}",
+        )
 
     out["maintenance_skip_total"] = (
         safe_int(out.get("maintenance_skip_wal_on_periodic"), 0)
@@ -1441,6 +1468,15 @@ def build_maintenance_from_light_stats(stats: dict[str, str]) -> dict[str, objec
     )
     out["maintenance_acquired_source_other_pct"] = (
         100.0 * safe_float(out.get("maintenance_acquired_source_other"), 0.0) / acquired if acquired > 0 else 0.0
+    )
+    stage_confirm_acquired_exact = safe_float(out.get("maintenance_acquired_exact_rewrite_stage_confirm"), 0.0)
+    stage_confirm_exit_acquired_exact = safe_float(out.get("maintenance_acquired_exact_rewrite_stage_confirm_exit"), 0.0)
+    stage_confirm_acquired_exact_total = stage_confirm_acquired_exact + stage_confirm_exit_acquired_exact
+    out["maintenance_acquired_exact_rewrite_stage_confirm_total"] = stage_confirm_acquired_exact_total
+    out["maintenance_acquired_exact_rewrite_stage_confirm_exit_share_pct"] = (
+        100.0 * stage_confirm_exit_acquired_exact / stage_confirm_acquired_exact_total
+        if stage_confirm_acquired_exact_total > 0
+        else 0.0
     )
     queued_debt_passes = safe_float(out.get("rewrite_queued_debt_passes"), 0.0)
     queued_debt_rewrite_started = safe_float(out.get("rewrite_queued_debt_rewrite_started"), 0.0)
@@ -1591,6 +1627,34 @@ def build_maintenance_from_light_stats(stats: dict[str, str]) -> dict[str, objec
     out["rewrite_non_checkpoint_source_unreferenced_bytes_pct"] = (
         100.0 * non_checkpoint_source_bytes_unreferenced / non_checkpoint_source_bytes_requested
         if non_checkpoint_source_bytes_requested > 0
+        else 0.0
+    )
+    stage_confirm_runs_exact = safe_float(out.get("rewrite_runs_exact_rewrite_stage_confirm"), 0.0)
+    stage_confirm_exit_runs_exact = safe_float(out.get("rewrite_runs_exact_rewrite_stage_confirm_exit"), 0.0)
+    stage_confirm_runs_exact_total = stage_confirm_runs_exact + stage_confirm_exit_runs_exact
+    out["rewrite_runs_exact_rewrite_stage_confirm_total"] = stage_confirm_runs_exact_total
+    out["rewrite_runs_exact_rewrite_stage_confirm_exit_share_pct"] = (
+        100.0 * stage_confirm_exit_runs_exact / stage_confirm_runs_exact_total
+        if stage_confirm_runs_exact_total > 0
+        else 0.0
+    )
+    stage_confirm_bytes_requested_exact = safe_float(
+        out.get("rewrite_exec_source_bytes_requested_total_exact_rewrite_stage_confirm"),
+        0.0,
+    )
+    stage_confirm_exit_bytes_requested_exact = safe_float(
+        out.get("rewrite_exec_source_bytes_requested_total_exact_rewrite_stage_confirm_exit"),
+        0.0,
+    )
+    stage_confirm_bytes_requested_exact_total = (
+        stage_confirm_bytes_requested_exact + stage_confirm_exit_bytes_requested_exact
+    )
+    out["rewrite_exec_source_bytes_requested_total_exact_rewrite_stage_confirm_total"] = (
+        stage_confirm_bytes_requested_exact_total
+    )
+    out["rewrite_exec_source_bytes_requested_total_exact_rewrite_stage_confirm_exit_share_pct"] = (
+        100.0 * stage_confirm_exit_bytes_requested_exact / stage_confirm_bytes_requested_exact_total
+        if stage_confirm_bytes_requested_exact_total > 0
         else 0.0
     )
 
@@ -1947,6 +2011,12 @@ with runs_csv.open("w", newline="", encoding="utf-8") as fh:
         "maintenance_acquired_source_rewrite_age_blocked",
         "maintenance_acquired_source_rewrite_stage_confirm",
         "maintenance_acquired_source_other",
+        "maintenance_deferred_starts_exact_rewrite_stage_confirm",
+        "maintenance_deferred_starts_exact_rewrite_stage_confirm_exit",
+        "maintenance_acquired_exact_rewrite_stage_confirm",
+        "maintenance_acquired_exact_rewrite_stage_confirm_exit",
+        "maintenance_acquired_exact_rewrite_stage_confirm_total",
+        "maintenance_acquired_exact_rewrite_stage_confirm_exit_share_pct",
         "maintenance_acquired_source_periodic_pct",
         "maintenance_acquired_source_bypass_pct",
         "maintenance_acquired_source_checkpoint_pending_pct",
@@ -1959,7 +2029,13 @@ with runs_csv.open("w", newline="", encoding="utf-8") as fh:
         "maintenance_with_rewrite_source_rewrite_age_blocked",
         "maintenance_with_rewrite_source_rewrite_stage_confirm",
         "maintenance_with_rewrite_source_other",
+        "maintenance_with_rewrite_exact_rewrite_stage_confirm",
+        "maintenance_with_rewrite_exact_rewrite_stage_confirm_exit",
         "rewrite_runs",
+        "rewrite_runs_exact_rewrite_stage_confirm",
+        "rewrite_runs_exact_rewrite_stage_confirm_exit",
+        "rewrite_runs_exact_rewrite_stage_confirm_total",
+        "rewrite_runs_exact_rewrite_stage_confirm_exit_share_pct",
         "rewrite_plan_runs",
         "rewrite_plan_selected",
         "rewrite_exec_source_segments_requested_total",
@@ -1968,6 +2044,12 @@ with runs_csv.open("w", newline="", encoding="utf-8") as fh:
         "rewrite_exec_source_bytes_requested_total",
         "rewrite_exec_source_bytes_still_referenced_total",
         "rewrite_exec_source_bytes_unreferenced_total",
+        "rewrite_exec_source_bytes_requested_total_exact_rewrite_stage_confirm",
+        "rewrite_exec_source_bytes_requested_total_exact_rewrite_stage_confirm_exit",
+        "rewrite_exec_source_bytes_requested_total_exact_rewrite_stage_confirm_total",
+        "rewrite_exec_source_bytes_requested_total_exact_rewrite_stage_confirm_exit_share_pct",
+        "rewrite_exec_source_bytes_unreferenced_total_exact_rewrite_stage_confirm",
+        "rewrite_exec_source_bytes_unreferenced_total_exact_rewrite_stage_confirm_exit",
         "rewrite_segment_realization_pct",
         "rewrite_stale_selection_coverage_pct",
         "rewrite_immediate_reclaim_pct",
@@ -2178,6 +2260,12 @@ with runs_csv.open("w", newline="", encoding="utf-8") as fh:
             summary.get("maintenance_acquired_source_rewrite_age_blocked", 0),
             summary.get("maintenance_acquired_source_rewrite_stage_confirm", 0),
             summary.get("maintenance_acquired_source_other", 0),
+            summary.get("maintenance_deferred_starts_exact_rewrite_stage_confirm", 0),
+            summary.get("maintenance_deferred_starts_exact_rewrite_stage_confirm_exit", 0),
+            summary.get("maintenance_acquired_exact_rewrite_stage_confirm", 0),
+            summary.get("maintenance_acquired_exact_rewrite_stage_confirm_exit", 0),
+            summary.get("maintenance_acquired_exact_rewrite_stage_confirm_total", 0),
+            summary.get("maintenance_acquired_exact_rewrite_stage_confirm_exit_share_pct", 0),
             summary.get("maintenance_acquired_source_periodic_pct", 0),
             summary.get("maintenance_acquired_source_bypass_pct", 0),
             summary.get("maintenance_acquired_source_checkpoint_pending_pct", 0),
@@ -2190,7 +2278,13 @@ with runs_csv.open("w", newline="", encoding="utf-8") as fh:
             summary.get("maintenance_with_rewrite_source_rewrite_age_blocked", 0),
             summary.get("maintenance_with_rewrite_source_rewrite_stage_confirm", 0),
             summary.get("maintenance_with_rewrite_source_other", 0),
+            summary.get("maintenance_with_rewrite_exact_rewrite_stage_confirm", 0),
+            summary.get("maintenance_with_rewrite_exact_rewrite_stage_confirm_exit", 0),
             summary.get("rewrite_runs", 0),
+            summary.get("rewrite_runs_exact_rewrite_stage_confirm", 0),
+            summary.get("rewrite_runs_exact_rewrite_stage_confirm_exit", 0),
+            summary.get("rewrite_runs_exact_rewrite_stage_confirm_total", 0),
+            summary.get("rewrite_runs_exact_rewrite_stage_confirm_exit_share_pct", 0),
             summary.get("rewrite_plan_runs", 0),
             summary.get("rewrite_plan_selected", 0),
             summary.get("rewrite_exec_source_segments_requested_total", 0),
@@ -2199,6 +2293,12 @@ with runs_csv.open("w", newline="", encoding="utf-8") as fh:
             summary.get("rewrite_exec_source_bytes_requested_total", 0),
             summary.get("rewrite_exec_source_bytes_still_referenced_total", 0),
             summary.get("rewrite_exec_source_bytes_unreferenced_total", 0),
+            summary.get("rewrite_exec_source_bytes_requested_total_exact_rewrite_stage_confirm", 0),
+            summary.get("rewrite_exec_source_bytes_requested_total_exact_rewrite_stage_confirm_exit", 0),
+            summary.get("rewrite_exec_source_bytes_requested_total_exact_rewrite_stage_confirm_total", 0),
+            summary.get("rewrite_exec_source_bytes_requested_total_exact_rewrite_stage_confirm_exit_share_pct", 0),
+            summary.get("rewrite_exec_source_bytes_unreferenced_total_exact_rewrite_stage_confirm", 0),
+            summary.get("rewrite_exec_source_bytes_unreferenced_total_exact_rewrite_stage_confirm_exit", 0),
             summary.get("rewrite_segment_realization_pct", 0),
             summary.get("rewrite_stale_selection_coverage_pct", 0),
             summary.get("rewrite_immediate_reclaim_pct", 0),
