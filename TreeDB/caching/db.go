@@ -6327,8 +6327,6 @@ type DB struct {
 	vlogGenerationDeferredMaintenancePending                     atomic.Bool
 	vlogGenerationDeferredMaintenanceRunning                     atomic.Bool
 	vlogGenerationRewriteStageWakeObservedNS                     atomic.Int64
-	vlogGenerationRewriteStageConfirmLastObservedNS              atomic.Int64
-	vlogGenerationRewriteStageConfirmLastAttemptNS               atomic.Int64
 	vlogGenerationRewriteQueueMu                                 sync.Mutex
 	vlogGenerationCheckpointKickActive                           atomic.Bool
 	vlogGenerationRewriteQueue                                   []uint32
@@ -6518,8 +6516,6 @@ const (
 	vlogGenerationGCEvery                   = 5
 	vlogGenerationGCMinBytes                = int64(1 << 20)
 	vlogGenerationRewriteMinInterval        = 30 * time.Second
-	vlogGenerationRewriteStageConfirmDelay  = 10 * time.Second
-	vlogGenerationRewriteStageConfirmRetry  = 10 * time.Second
 	vlogGenerationGCMinInterval             = 45 * time.Second
 	vlogGenerationGCNoopMinInterval         = 3 * time.Minute
 	vlogGenerationCheckpointKickMinInterval = 5 * time.Second
@@ -14564,16 +14560,6 @@ func (db *DB) clearVlogGenerationRewriteStageConfirmation() {
 		return
 	}
 	db.vlogGenerationRewriteStageWakeObservedNS.Store(0)
-	db.vlogGenerationRewriteStageConfirmLastObservedNS.Store(0)
-	db.vlogGenerationRewriteStageConfirmLastAttemptNS.Store(0)
-}
-
-func (db *DB) noteVlogGenerationRewriteStageConfirmAttempt(observedAt int64, now time.Time) {
-	if db == nil || observedAt <= 0 {
-		return
-	}
-	db.vlogGenerationRewriteStageConfirmLastObservedNS.Store(observedAt)
-	db.vlogGenerationRewriteStageConfirmLastAttemptNS.Store(now.UnixNano())
 }
 
 func (db *DB) scheduleVlogGenerationRewriteStageConfirmation(observedAt int64) {
@@ -14584,7 +14570,7 @@ func (db *DB) scheduleVlogGenerationRewriteStageConfirmation(observedAt int64) {
 		return
 	}
 	db.vlogGenerationRewriteStageWakeObservedNS.Store(observedAt)
-	dueAt := time.Unix(0, observedAt).Add(vlogGenerationRewriteStageConfirmDelay)
+	dueAt := time.Unix(0, observedAt).Add(vlogGenerationRewriteMinInterval)
 	delay := time.Until(dueAt)
 	if delay < 0 {
 		delay = 0
@@ -14674,15 +14660,7 @@ func (db *DB) vlogGenerationRewriteStageConfirmDue(now time.Time) bool {
 	if err != nil || !stagePending || stageObservedAt <= 0 {
 		return false
 	}
-	if now.Before(time.Unix(0, stageObservedAt).Add(vlogGenerationRewriteStageConfirmDelay)) {
-		return false
-	}
-	lastObservedAt := db.vlogGenerationRewriteStageConfirmLastObservedNS.Load()
-	lastAttemptAt := db.vlogGenerationRewriteStageConfirmLastAttemptNS.Load()
-	if lastObservedAt != stageObservedAt || lastAttemptAt <= 0 {
-		return true
-	}
-	return !now.Before(time.Unix(0, lastAttemptAt).Add(vlogGenerationRewriteStageConfirmRetry))
+	return !now.Before(time.Unix(0, stageObservedAt).Add(vlogGenerationRewriteMinInterval))
 }
 
 func (db *DB) vlogGenerationDeferredMaintenanceDue(now time.Time) bool {
@@ -14767,7 +14745,7 @@ func (db *DB) scheduleDueVlogGenerationDeferredMaintenance() {
 	if err != nil || !stagePending || stageObservedAt <= 0 {
 		return
 	}
-	if !db.vlogGenerationRewriteStageConfirmDue(now) {
+	if now.Before(time.Unix(0, stageObservedAt).Add(vlogGenerationRewriteMinInterval)) {
 		return
 	}
 	db.startVlogGenerationDeferredMaintenance(vlogGenerationMaintenanceOptions{
@@ -15094,7 +15072,7 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 		}
 	}
 	rewriteQueueSnapshotCaptured = true
-	stagePending, stageObservedAt, stageErr := db.currentVlogGenerationRewriteStage()
+	stagePending, _, stageErr := db.currentVlogGenerationRewriteStage()
 	if stageErr != nil {
 		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
 		if db.notifyError != nil {
@@ -15122,9 +15100,6 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 			db.vlogGenerationMaintenanceSkipStageDue.Add(1)
 			return
 		}
-	}
-	if stagePending && stageConfirmDue && vlogGenerationIsStageConfirmSource(opts) {
-		db.noteVlogGenerationRewriteStageConfirmAttempt(stageObservedAt, now)
 	}
 	if !stagePending && ageBlockedDue && !vlogGenerationIsAgeBlockedSource(opts) {
 		db.vlogGenerationMaintenanceSkipAgeBlocked.Add(1)
@@ -22137,25 +22112,13 @@ func (db *DB) Stats() map[string]string {
 			rewriteStageObservedAgeMS = time.Duration(statsNow.UnixNano() - rewriteStageObservedNS).Milliseconds()
 		}
 		if rewriteStagePending {
-			dueAt := time.Unix(0, rewriteStageObservedNS).Add(vlogGenerationRewriteStageConfirmDelay)
-			if statsNow.Before(dueAt) {
+			dueAt := time.Unix(0, rewriteStageObservedNS).Add(vlogGenerationRewriteMinInterval)
+			if !statsNow.Before(dueAt) {
+				rewriteStageDue = true
+			} else {
 				remaining := dueAt.Sub(statsNow)
 				if remaining > 0 {
 					rewriteStageDueInMS = remaining.Milliseconds()
-				}
-			} else {
-				rewriteStageDue = true
-				lastObservedAt := db.vlogGenerationRewriteStageConfirmLastObservedNS.Load()
-				lastAttemptAt := db.vlogGenerationRewriteStageConfirmLastAttemptNS.Load()
-				if lastObservedAt == rewriteStageObservedNS && lastAttemptAt > 0 {
-					retryDueAt := time.Unix(0, lastAttemptAt).Add(vlogGenerationRewriteStageConfirmRetry)
-					if statsNow.Before(retryDueAt) {
-						rewriteStageDue = false
-						remaining := retryDueAt.Sub(statsNow)
-						if remaining > 0 {
-							rewriteStageDueInMS = remaining.Milliseconds()
-						}
-					}
 				}
 			}
 		}
