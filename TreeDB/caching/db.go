@@ -6000,6 +6000,7 @@ type DB struct {
 	valueLogDictCurrentK                      atomic.Uint32
 	valueLogDictLastAppliedDictIDByClass      [vlogDictClassCount]atomic.Uint64
 	valueLogDictCurrentKByClass               [vlogDictClassCount]atomic.Uint32
+	valueLogAutoChooseDictByClass             [vlogDictClassCount]atomic.Uint64
 	valueLogDictWriteSelectedByClass          [vlogDictClassCount]atomic.Uint64
 	valueLogDictWriteFinalByClass             [vlogDictClassCount]atomic.Uint64
 	valueLogDictWriteFallbackPauseByClass     [vlogDictClassCount]atomic.Uint64
@@ -23123,6 +23124,7 @@ func (db *DB) Stats() map[string]string {
 		stats["treedb.cache.vlog_dict.last_publish_unix_nano."+suffix] = fmt.Sprintf("%d", db.valueLogDictLastPublishUnixNanoByClass[class].Load())
 		stats["treedb.cache.vlog_dict.last_publish_frames_total."+suffix] = fmt.Sprintf("%d", db.valueLogDictLastPublishFramesTotalByClass[class].Load())
 		stats["treedb.cache.vlog_dict.publish_count."+suffix] = fmt.Sprintf("%d", db.valueLogDictPublishCountByClass[class].Load())
+		stats["treedb.cache.vlog_auto.choose_dict."+suffix] = fmt.Sprintf("%d", db.valueLogAutoChooseDictByClass[class].Load())
 		stats["treedb.cache.vlog_dict.current_k."+suffix] = fmt.Sprintf("%d", db.valueLogDictCurrentKByClass[class].Load())
 		stats["treedb.cache.vlog_dict.current_cached_id."+suffix] = fmt.Sprintf("%d", db.dictCurrentCachedByClass[class].Load())
 		stats["treedb.cache.vlog_dict.write_selected."+suffix] = fmt.Sprintf("%d", db.valueLogDictWriteSelectedByClass[class].Load())

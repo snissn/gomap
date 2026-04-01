@@ -1462,6 +1462,16 @@ func (db *DB) vlogSelectorEnabled(mode vlogCompressionMode) bool {
 
 func (db *DB) resolveVlogWriteMode(l *lane, dictID uint64, rawPayloadBytes, unitPayloadBytes int, outerLeafPayload bool) (vlogCompressionWriteMode, valuelog.BlockCodec, bool) {
 	mode := normalizeVlogCompressionMode(db.valueLogCompressionMode)
+	noteAutoDictChoice := func(chosenMode vlogCompressionWriteMode) {
+		if db == nil || mode != vlogCompressionAuto || chosenMode != vlogWriteDict {
+			return
+		}
+		if outerLeafPayload {
+			db.noteValueLogAutoChooseDict(vlogDictClassOuterLeaf)
+			return
+		}
+		db.noteValueLogAutoChooseDict(vlogDictClassSingleValue)
+	}
 	switch mode {
 	case vlogCompressionOff:
 		return vlogWriteOff, db.valueLogBlockCodec, false
@@ -1499,6 +1509,7 @@ func (db *DB) resolveVlogWriteMode(l *lane, dictID uint64, rawPayloadBytes, unit
 				// vs block, but block writes should honor configured block codec.
 				return vlogWriteBlock, db.valueLogBlockCodec, probe
 			}
+			noteAutoDictChoice(chosenMode)
 			return chosenMode, chosenCodec, probe
 		}
 		return vlogWriteDict, db.valueLogBlockCodec, false
@@ -1521,11 +1532,14 @@ func (db *DB) resolveVlogWriteMode(l *lane, dictID uint64, rawPayloadBytes, unit
 		}
 		if l == nil || l.vlogCompressionSelector == nil {
 			if dictID != 0 {
+				noteAutoDictChoice(vlogWriteDict)
 				return vlogWriteDict, db.valueLogBlockCodec, false
 			}
 			return vlogWriteBlock, db.valueLogBlockCodec, false
 		}
-		return l.vlogCompressionSelector.choose(dictID != 0, rawPayloadBytes, unitPayloadBytes)
+		chosenMode, chosenCodec, probe := l.vlogCompressionSelector.choose(dictID != 0, rawPayloadBytes, unitPayloadBytes)
+		noteAutoDictChoice(chosenMode)
+		return chosenMode, chosenCodec, probe
 	}
 }
 

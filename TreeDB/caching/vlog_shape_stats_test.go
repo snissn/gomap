@@ -102,6 +102,7 @@ func TestStats_ExportsValueLogDictClassKeys(t *testing.T) {
 	cdb.valueLogDictLastPublishUnixNanoByClass[vlogDictClassSingleValue].Store(101)
 	cdb.valueLogDictLastPublishFramesTotalByClass[vlogDictClassSingleValue].Store(29)
 	cdb.valueLogDictPublishCountByClass[vlogDictClassSingleValue].Store(1)
+	cdb.valueLogAutoChooseDictByClass[vlogDictClassSingleValue].Store(9)
 	cdb.valueLogDictCurrentKByClass[vlogDictClassSingleValue].Store(7)
 	cdb.dictCurrentCachedByClass[vlogDictClassSingleValue].Store(17)
 	cdb.valueLogDictWriteSelectedByClass[vlogDictClassSingleValue].Store(3)
@@ -110,6 +111,7 @@ func TestStats_ExportsValueLogDictClassKeys(t *testing.T) {
 	cdb.valueLogDictLastPublishUnixNanoByClass[vlogDictClassOuterLeaf].Store(202)
 	cdb.valueLogDictLastPublishFramesTotalByClass[vlogDictClassOuterLeaf].Store(57)
 	cdb.valueLogDictPublishCountByClass[vlogDictClassOuterLeaf].Store(4)
+	cdb.valueLogAutoChooseDictByClass[vlogDictClassOuterLeaf].Store(12)
 	cdb.valueLogDictCurrentKByClass[vlogDictClassOuterLeaf].Store(13)
 	cdb.dictCurrentCachedByClass[vlogDictClassOuterLeaf].Store(27)
 	cdb.valueLogDictWriteSelectedByClass[vlogDictClassOuterLeaf].Store(11)
@@ -138,6 +140,9 @@ func TestStats_ExportsValueLogDictClassKeys(t *testing.T) {
 	if got := stats["treedb.cache.vlog_dict.publish_count.single_value"]; got != "1" {
 		t.Fatalf("single_value publish count=%q want 1", got)
 	}
+	if got := stats["treedb.cache.vlog_auto.choose_dict.single_value"]; got != "9" {
+		t.Fatalf("single_value auto choose dict=%q want 9", got)
+	}
 	if got := stats["treedb.cache.vlog_dict.last_publish_unix_nano.outer_leaf"]; got != "202" {
 		t.Fatalf("outer_leaf publish unix nano=%q want 202", got)
 	}
@@ -146,6 +151,9 @@ func TestStats_ExportsValueLogDictClassKeys(t *testing.T) {
 	}
 	if got := stats["treedb.cache.vlog_dict.publish_count.outer_leaf"]; got != "4" {
 		t.Fatalf("outer_leaf publish count=%q want 4", got)
+	}
+	if got := stats["treedb.cache.vlog_auto.choose_dict.outer_leaf"]; got != "12" {
+		t.Fatalf("outer_leaf auto choose dict=%q want 12", got)
 	}
 	if got := stats["treedb.cache.vlog_dict.current_k.outer_leaf"]; got != "13" {
 		t.Fatalf("outer_leaf current k=%q want 13", got)

@@ -312,6 +312,7 @@ def build_dict_summary(stats: dict[str, Any]) -> dict[str, Any]:
             "last_publish_unix_nano": metric_int(stats, f"treedb.cache.vlog_dict.last_publish_unix_nano.{suffix}"),
             "last_publish_frames_total": metric_int(stats, f"treedb.cache.vlog_dict.last_publish_frames_total.{suffix}"),
             "publish_count": metric_int(stats, f"treedb.cache.vlog_dict.publish_count.{suffix}"),
+            "auto_choose_dict": metric_int(stats, f"treedb.cache.vlog_auto.choose_dict.{suffix}"),
             "current_k": metric_int(stats, f"treedb.cache.vlog_dict.current_k.{suffix}"),
             "current_cached_id": metric_int(stats, f"treedb.cache.vlog_dict.current_cached_id.{suffix}"),
             "write_selected": metric_int(stats, f"treedb.cache.vlog_dict.write_selected.{suffix}"),
