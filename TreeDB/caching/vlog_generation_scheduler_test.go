@@ -1401,8 +1401,8 @@ func (b *rewriteBudgetRecordingBackend) recordedGCObservedSourceCalls() int {
 	return count
 }
 
-func openRewriteQueueTestDB(t *testing.T, dir string, recorder *rewriteBudgetRecordingBackend) (*DB, func()) {
-	t.Helper()
+func openRewriteQueueTestDB(tb testing.TB, dir string, recorder *rewriteBudgetRecordingBackend) (*DB, func()) {
+	tb.Helper()
 	db, err := Open(dir, recorder, Options{
 		AllowUnsafe:                      true,
 		DisableWAL:                       true,
@@ -1413,26 +1413,102 @@ func openRewriteQueueTestDB(t *testing.T, dir string, recorder *rewriteBudgetRec
 		ForceValueLogPointers:            true,
 	})
 	if err != nil {
-		t.Fatalf("open cachingdb: %v", err)
+		tb.Fatalf("open cachingdb: %v", err)
 	}
 	db.testSkipVlogCheckpointKick = true
 	value := make([]byte, 2048)
 	b := db.NewBatch()
 	if err := b.Set([]byte("k"), value); err != nil {
 		_ = b.Close()
-		t.Fatalf("set: %v", err)
+		tb.Fatalf("set: %v", err)
 	}
 	if err := b.Write(); err != nil {
 		_ = b.Close()
-		t.Fatalf("write: %v", err)
+		tb.Fatalf("write: %v", err)
 	}
 	_ = b.Close()
 	if err := db.Checkpoint(); err != nil {
-		t.Fatalf("checkpoint: %v", err)
+		tb.Fatalf("checkpoint: %v", err)
 	}
 	db.vlogGenerationRewriteBudgetTokensBytes.Store(1024)
 	forceVlogMaintenanceIdle(db)
 	return db, func() { _ = db.Close() }
+}
+
+func resetQueuedDebtMaintenanceBenchmarkState(tb testing.TB, db *DB, segments []backenddb.ValueLogRewritePlanSegment, budgetTokens int64) {
+	tb.Helper()
+	db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
+	db.vlogGenerationCheckpointKickPending.Store(false)
+	db.vlogGenerationRewriteCanceledLastNS.Store(0)
+	db.vlogGenerationRewriteDeadlineLastNS.Store(0)
+	db.vlogGenerationRewriteIneffectiveLastNS.Store(0)
+	db.vlogGenerationLastRewriteUnixNano.Store(0)
+	db.vlogGenerationLastRewritePlanUnixNano.Store(0)
+	db.vlogGenerationRewriteQueueMu.Lock()
+	db.vlogGenerationRewritePenalties = nil
+	db.vlogGenerationRewriteStagePending = false
+	db.vlogGenerationRewriteStageObservedUnixNano = 0
+	db.vlogGenerationRewriteQueueMu.Unlock()
+	db.clearVlogGenerationRewriteStageConfirmation()
+	if err := db.setVlogGenerationRewriteLedger(segments); err != nil {
+		tb.Fatalf("set rewrite ledger: %v", err)
+	}
+	db.vlogGenerationRewriteBudgetTokensBytes.Store(budgetTokens)
+	forceVlogMaintenanceIdle(db)
+}
+
+func BenchmarkVlogGenerationMaintenance_QueuedDebtSourceRelease(b *testing.B) {
+	b.Setenv(envDisableVlogGenerationLoop, "1")
+	b.Setenv(envDisableVlogGenerationCheckpointKick, "1")
+
+	dir := b.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		b.Fatalf("open backend: %v", err)
+	}
+	recorder := &rewriteBudgetRecordingBackend{
+		DB: backend,
+		rewriteResponse: backenddb.ValueLogRewriteStats{
+			BytesBefore:                64 << 20,
+			BytesAfter:                 (64 << 20) + vlogGenerationRewriteIneffectiveGrowthMinBytes + 1,
+			RecordsCopied:              1,
+			SourceSegmentsRequested:    1,
+			SourceSegmentsUnreferenced: 1,
+			SourceBytesRequested:       64 << 20,
+			SourceBytesUnreferenced:    64 << 20,
+		},
+	}
+	db, cleanup := openRewriteQueueTestDB(b, dir, recorder)
+	defer cleanup()
+
+	segments := []backenddb.ValueLogRewritePlanSegment{
+		{FileID: 11, BytesTotal: 256, BytesLive: 64, BytesStale: 192, StaleRatio: 0.75},
+		{FileID: 22, BytesTotal: 256, BytesLive: 64, BytesStale: 192, StaleRatio: 0.75},
+	}
+	resetQueuedDebtMaintenanceBenchmarkState(b, db, segments, 64)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		b.StopTimer()
+		resetQueuedDebtMaintenanceBenchmarkState(b, db, segments, 64)
+		b.StartTimer()
+		acquired := db.maybeRunVlogGenerationMaintenanceWithOptions(false, vlogGenerationMaintenanceOptions{
+			bypassQuiet:           true,
+			skipRetainedPruneWait: true,
+			skipCheckpoint:        true,
+			rewriteDebtDrain:      true,
+			debugSource:           "bench_queued_debt_source_release",
+		})
+		if !acquired {
+			b.Fatalf("maintenance pass not acquired")
+		}
+	}
+	b.StopTimer()
+
+	if _, calls := recorder.recordedRewrite(); calls < b.N {
+		b.Fatalf("rewrite calls=%d want >= %d", calls, b.N)
+	}
 }
 
 func TestVlogGenerationMaintenance_SerializesConcurrentRuns(t *testing.T) {
