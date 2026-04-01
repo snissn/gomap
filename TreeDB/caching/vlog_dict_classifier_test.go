@@ -7,6 +7,8 @@ import (
 	"github.com/snissn/compress/zstd"
 	"github.com/snissn/gomap/TreeDB/internal/compression"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
+	"github.com/snissn/gomap/TreeDB/node"
+	"github.com/snissn/gomap/TreeDB/page"
 )
 
 func newValueLogDictClassifierTrainer(t *testing.T) *compression.Trainer {
@@ -70,6 +72,30 @@ func markOuterLeafMagicRecords(records []valuelog.Record) []valuelog.Record {
 	for i := range out {
 		out[i].Value = markOuterLeafMagic(out[i].Value)
 	}
+	return out
+}
+
+func makeLegacyOuterLeafPage(t *testing.T) []byte {
+	t.Helper()
+	buf := make([]byte, page.PageSize)
+	b := node.NewBuilder(buf, page.PageTypeLeaf)
+	b.SetPageID(1)
+	for i := 0; i < 8; i++ {
+		key := []byte{0x10, 0x20, byte(i)}
+		value := []byte{0x30, 0x40, byte(i)}
+		if err := b.AddLeafEntry(key, value, node.FlagInline, page.ValuePtr{}); err != nil {
+			t.Fatalf("AddLeafEntry(%d): %v", i, err)
+		}
+	}
+	view := b.Finish()
+	if view.Type() != page.PageTypeLeaf {
+		t.Fatalf("Type()=%d want leaf", view.Type())
+	}
+	if !view.VerifyChecksum() {
+		t.Fatalf("expected valid leaf-page checksum")
+	}
+	out := make([]byte, len(view.Data()))
+	copy(out, view.Data())
 	return out
 }
 
@@ -238,6 +264,24 @@ func TestValueLogDictClassifierBypass_AllowsOuterLeafPagesForAutoSize(t *testing
 	}
 }
 
+func TestValueLogDictClassifierBypass_AllowsLegacyOuterLeafPagesForAutoSize(t *testing.T) {
+	db := &DB{
+		valueLogCompressionMode:             uint8(vlogCompressionAuto),
+		valueLogAutoPolicy:                  uint8(vlogAutoSize),
+		valueLogAutotuneOptions:             valuelog.AutotuneOptions{Mode: valuelog.AutotuneMedium},
+		indexOuterLeavesInValueLog:          true,
+		valueLogDictIncompressibleHoldBytes: 256 << 10,
+		valueLogDictMetricsPauseBytes:       1 << 20,
+	}
+	pageValue := makeLegacyOuterLeafPage(t)
+	if db.valueLogDictClassifierBypass(pageValue, false) {
+		t.Fatalf("expected legacy outer-leaf page value to stay on dict path in auto+size mode")
+	}
+	if hold := db.valueLogDictIncompressibleHoldRemaining.Load(); hold != 0 {
+		t.Fatalf("expected no incompressible hold for legacy outer-leaf page sample, hold=%d", hold)
+	}
+}
+
 func TestValueLogDictClassifierBypass_AllowsOuterLeafHighEntropyForAutoSize(t *testing.T) {
 	db := &DB{
 		valueLogCompressionMode:             uint8(vlogCompressionAuto),
@@ -287,6 +331,14 @@ func TestClassifyVlogPayloadKindForValue(t *testing.T) {
 	}
 }
 
+func TestClassifyVlogPayloadKindForValue_LegacyLeafPage(t *testing.T) {
+	db := &DB{indexOuterLeavesInValueLog: true}
+	outerLeafPage := makeLegacyOuterLeafPage(t)
+	if got := db.classifyVlogPayloadKindForValue(outerLeafPage); got != vlogPayloadKindOuterLeaf {
+		t.Fatalf("expected outer-leaf kind for legacy leaf-page payload, got=%v", got)
+	}
+}
+
 func TestClassifyVlogPayloadKindForRecords(t *testing.T) {
 	db := &DB{indexOuterLeavesInValueLog: true}
 	outerLeafPage := markOuterLeafMagic(make([]byte, 4096))
@@ -314,6 +366,13 @@ func TestClassifyVlogPayloadKindForRecords(t *testing.T) {
 	}
 	if got := db.classifyVlogPayloadKindForRecords(records); got != vlogPayloadKindMixed {
 		t.Fatalf("expected mixed kind for mixed batch, got=%v", got)
+	}
+}
+
+func TestClassifyVlogOuterLeafCodecKindForValue_LegacyPage(t *testing.T) {
+	db := &DB{indexOuterLeavesInValueLog: true}
+	if got := db.classifyVlogOuterLeafCodecKindForValue(makeLegacyOuterLeafPage(t)); got != vlogOuterLeafCodecLegacyPage {
+		t.Fatalf("expected legacy outer-leaf codec kind, got=%v", got)
 	}
 }
 

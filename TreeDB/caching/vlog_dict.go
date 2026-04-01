@@ -10,6 +10,8 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/compression"
 	"github.com/snissn/gomap/TreeDB/internal/outerleaf"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
+	"github.com/snissn/gomap/TreeDB/node"
+	"github.com/snissn/gomap/TreeDB/page"
 )
 
 const (
@@ -243,7 +245,14 @@ func (db *DB) isOuterLeafValueLogPayload(value []byte) bool {
 	if !db.indexOuterLeavesInValueLog {
 		return false
 	}
-	return outerleaf.HasMagic(value)
+	if outerleaf.HasMagic(value) {
+		return true
+	}
+	if len(value) != page.PageSize {
+		return false
+	}
+	n := node.NewNodeView(value)
+	return n.Type() == page.PageTypeLeaf && n.VerifyChecksum()
 }
 
 func (db *DB) classifyVlogPayloadKindForValue(value []byte) vlogPayloadKind {
