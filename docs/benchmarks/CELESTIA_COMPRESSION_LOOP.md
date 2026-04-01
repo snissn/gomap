@@ -205,6 +205,52 @@ Outputs:
 - `artifacts/celestia_segment_sweep/<ts>/summary.md`
 - per-candidate run outputs under `artifacts/celestia_segment_sweep/<ts>/runs/seg_*`
 
+### Rejected Path: `hot_only 1MiB`
+
+Do not continue tuning `TREEDB_VLOG_GENERATION_HOT_SEGMENT_TARGET_BYTES=1048576`
+inside the live scheduler path without a new, materially different hypothesis.
+
+Why:
+- It consistently regressed `run_celestia` sync time and pre-rewrite
+  `application.db` size.
+- Removing the checkpoint-like bypass rewrite did not rescue the result.
+- Offline rewrite collapses the candidate back near control, which means the
+  loss is primarily a pre-rewrite fragmentation / segment-count problem rather
+  than a better steady-state layout.
+
+Representative artifacts:
+- baseline bad config:
+  - `artifacts/celestia_ab/hot_only_1m_smoke_20260331135014/summary.md`
+- follow-up with checkpoint-like bypass removed:
+  - `artifacts/celestia_ab/hot_only_1m_skip_low_live_smoke_20260331143719/summary.md`
+
+Key evidence from the follow-up run:
+- control:
+  - `t_sync=379s`
+  - `s_sync_app=3,553,186,986`
+  - offline rewrite: `segments_before=528`, `segments_after=17`,
+    `bytes_before=3,441,325,752`, `bytes_after=2,197,110,371`
+- candidate (`hot_only 1MiB`):
+  - `t_sync=434s`
+  - `s_sync_app=5,066,049,606`
+  - checkpoint-like bypass removed:
+    - `rewrite_runs_source_bypass=0`
+    - `rewrite_checkpoint_like_runs=0`
+  - offline rewrite: `segments_before=5102`, `segments_after=17`,
+    `bytes_before=4,949,728,217`, `bytes_after=2,209,496,347`
+
+Interpretation:
+- The candidate creates far too many tiny hot segments during sync.
+- Live rewrite only drains a tiny fraction of that debt before the run ends.
+- The extra pre-rewrite bytes are dominated by `application.db/maindb/wal`
+  fragmentation, not by a better on-disk final state.
+
+Implication:
+- Prefer a different lever next:
+  - rewrite source selection / quality, or
+  - a separate segment-layout experiment outside the live scheduler loop
+    (for example moderate segment sizes, not `1MiB`).
+
 ## Process Review Cadence
 
 Review and revise the loop after every decision event:
