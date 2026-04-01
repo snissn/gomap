@@ -126,6 +126,32 @@ func TestDBSeedVlogCompressionSelectorsDictRatio(t *testing.T) {
 	}
 }
 
+func TestVlogCompressionSelector_ResetForPublishedDict(t *testing.T) {
+	s := newVlogCompressionSelector(vlogAutoSize, 0, 0)
+	s.currentCandidate = vlogAutoCandidateBlockSnappy
+	s.metrics[vlogAutoCandidateBlockSnappy] = vlogCandidateMetrics{ratio: 0.60, throughput: 1.0, samples: 12}
+	s.metrics[vlogAutoCandidateBlockLZ4] = vlogCandidateMetrics{ratio: 0.58, throughput: 1.02, samples: 11}
+
+	s.resetForPublishedDict(0.26)
+
+	if s.currentCandidate != vlogAutoCandidateDict {
+		t.Fatalf("expected dict current candidate after published reset, got %v", s.currentCandidate)
+	}
+	if got := s.metric(vlogAutoCandidateBlockSnappy); got.samples != 0 || got.ratio != 0.93 {
+		t.Fatalf("expected block snappy metric reset, got %+v", got)
+	}
+	if got := s.metric(vlogAutoCandidateBlockLZ4); got.samples != 0 || got.ratio != 0.92 {
+		t.Fatalf("expected block lz4 metric reset, got %+v", got)
+	}
+	mode, _, probe := s.choose(true, 4096, 4096)
+	if probe {
+		t.Fatalf("expected steady dict choice, not probe")
+	}
+	if mode != vlogWriteDict {
+		t.Fatalf("expected dict mode after published reset, got %v", mode)
+	}
+}
+
 func TestVlogCompressionSelector_DwellPreventsFlap(t *testing.T) {
 	s := newVlogCompressionSelectorWithSeed(vlogAutoBalanced, 0, 0, valuelog.BlockCodecSnappy)
 	s.dwellBytes = 4096

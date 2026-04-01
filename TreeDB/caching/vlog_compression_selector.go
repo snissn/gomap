@@ -253,6 +253,52 @@ func (s *vlogCompressionSelector) seedDictCandidate(ratio float64) {
 	s.metrics[vlogAutoCandidateDict] = m
 }
 
+func defaultVlogAutoMetric(c vlogAutoCandidate) vlogCandidateMetrics {
+	switch c {
+	case vlogAutoCandidateOff:
+		return vlogCandidateMetrics{ratio: 1.0, throughput: 1.0, samples: 1}
+	case vlogAutoCandidateDict:
+		return vlogCandidateMetrics{ratio: 0.92, throughput: 0.90}
+	case vlogAutoCandidateBlockLZ4:
+		return vlogCandidateMetrics{ratio: 0.92, throughput: 0.95}
+	default:
+		return vlogCandidateMetrics{ratio: 0.93, throughput: 0.97}
+	}
+}
+
+func (s *vlogCompressionSelector) resetForPublishedDict(ratio float64) {
+	if s == nil {
+		return
+	}
+	ratio = normalizeMetricRatio(ratio)
+	if ratio >= 0.98 {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	m := s.metrics[vlogAutoCandidateDict]
+	if m.samples == 0 || ratio < normalizeMetricRatio(m.ratio) {
+		m.ratio = ratio
+	}
+	if m.throughput <= 0 {
+		m.throughput = 1.0
+	}
+	if m.samples == 0 {
+		m.samples = 1
+	}
+	s.metrics[vlogAutoCandidateDict] = m
+	s.metrics[vlogAutoCandidateBlockSnappy] = defaultVlogAutoMetric(vlogAutoCandidateBlockSnappy)
+	s.metrics[vlogAutoCandidateBlockLZ4] = defaultVlogAutoMetric(vlogAutoCandidateBlockLZ4)
+	if s.currentCandidate != vlogAutoCandidateDict {
+		s.switches[s.currentCandidate][vlogAutoCandidateDict]++
+		s.currentCandidate = vlogAutoCandidateDict
+	}
+	s.modeBytes = 0
+	s.exploreRemaining = s.exploreBytes
+	s.clearHold()
+}
+
 func (s *vlogCompressionSelector) normalizeLargePayloadCandidate(c vlogAutoCandidate, unitPayloadBytes int) vlogAutoCandidate {
 	if s == nil {
 		return c
@@ -971,10 +1017,10 @@ func newVlogCompressionSelectorWithSeed(policy vlogAutoPolicy, holdBytes, probeB
 		currentCandidate: blockCandidateFromCodec(seedCodec),
 		exploreRemaining: initialExplore,
 		metrics: [vlogAutoCandidateCount]vlogCandidateMetrics{
-			vlogAutoCandidateOff:         {ratio: 1.0, throughput: 1.0, samples: 1},
-			vlogAutoCandidateDict:        {ratio: 0.92, throughput: 0.90},
-			vlogAutoCandidateBlockSnappy: {ratio: 0.93, throughput: 0.97},
-			vlogAutoCandidateBlockLZ4:    {ratio: 0.92, throughput: 0.95},
+			vlogAutoCandidateOff:         defaultVlogAutoMetric(vlogAutoCandidateOff),
+			vlogAutoCandidateDict:        defaultVlogAutoMetric(vlogAutoCandidateDict),
+			vlogAutoCandidateBlockSnappy: defaultVlogAutoMetric(vlogAutoCandidateBlockSnappy),
+			vlogAutoCandidateBlockLZ4:    defaultVlogAutoMetric(vlogAutoCandidateBlockLZ4),
 		},
 	}
 }

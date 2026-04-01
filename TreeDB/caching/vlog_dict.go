@@ -1009,6 +1009,19 @@ func (db *DB) applyValueLogDictProfileForClass(class vlogDictClass) {
 		return
 	}
 	db.seedVlogCompressionSelectorsDictRatio(profile.PayloadRatio, profile.TotalRatio)
+	if class == vlogDictClassOuterLeaf &&
+		normalizeVlogCompressionMode(db.valueLogCompressionMode) == vlogCompressionAuto &&
+		normalizeVlogAutoPolicy(db.valueLogAutoPolicy) == vlogAutoSize {
+		seedRatio := profile.PayloadRatio
+		if profile.TotalRatio > seedRatio {
+			seedRatio = profile.TotalRatio
+		}
+		for i := range db.lanes {
+			if s := db.lanes[i].vlogCompressionSelector; s != nil {
+				s.resetForPublishedDict(seedRatio)
+			}
+		}
+	}
 	ioNsPerStoredByte := 0.0
 	if db.valueLogAutotuneOptions.Mode != valuelog.AutotuneOff {
 		ioNsPerStoredByte = db.valueLogAutotuneMetrics.snapshot().IoNsPerStoredByte
