@@ -370,6 +370,60 @@ func TestParseBenchDictStatUint_PrefersOuterLeafWhenSplitMode(t *testing.T) {
 	}
 }
 
+func TestBenchDictWaitClass_AutoUsesOuterLeafForSplitOuterLeafRuns(t *testing.T) {
+	cfg := benchConfig{
+		DictClassMode:    "split_outer_leaf",
+		DictWaitClass:    "auto",
+		IndexOuterLeaves: true,
+	}
+	if got := benchDictWaitClass(cfg); got != "outer_leaf" {
+		t.Fatalf("benchDictWaitClass(auto split outer leaf)=%q want outer_leaf", got)
+	}
+
+	cfg.IndexOuterLeaves = false
+	if got := benchDictWaitClass(cfg); got != "any" {
+		t.Fatalf("benchDictWaitClass(auto no outer leaf)=%q want any", got)
+	}
+}
+
+func TestDictStatsActive_OuterLeafWaitIgnoresSingleValueActivation(t *testing.T) {
+	cfg := benchConfig{
+		DictClassMode:    "split_outer_leaf",
+		DictWaitClass:    "outer_leaf",
+		IndexOuterLeaves: true,
+	}
+	stats := map[string]string{
+		"treedb.cache.vlog_dict.last_applied_dict_id.single_value": "11",
+		"treedb.cache.vlog_dict.frames_kept":                       "9",
+	}
+	if dictStatsActive(stats, cfg) {
+		t.Fatalf("outer_leaf wait should stay inactive when only single_value dict is active")
+	}
+	stats["treedb.cache.vlog_dict.last_applied_dict_id.outer_leaf"] = "22"
+	if !dictStatsActive(stats, cfg) {
+		t.Fatalf("outer_leaf wait should activate once outer_leaf dict is active")
+	}
+}
+
+func TestDictStatsActive_BothWaitRequiresBothClasses(t *testing.T) {
+	cfg := benchConfig{
+		DictClassMode:    "split_outer_leaf",
+		DictWaitClass:    "both",
+		IndexOuterLeaves: true,
+	}
+	stats := map[string]string{
+		"treedb.cache.vlog_dict.last_applied_dict_id.single_value": "11",
+		"treedb.cache.vlog_dict.last_applied_dict_id.outer_leaf":   "0",
+	}
+	if dictStatsActive(stats, cfg) {
+		t.Fatalf("both wait should remain inactive until both class dicts are active")
+	}
+	stats["treedb.cache.vlog_dict.last_applied_dict_id.outer_leaf"] = "22"
+	if !dictStatsActive(stats, cfg) {
+		t.Fatalf("both wait should activate once both class dicts are active")
+	}
+}
+
 func TestFilterBenchStatsEnd(t *testing.T) {
 	stats := map[string]string{
 		"treedb.cache.vlog_auto.bytes.dict":             "4096",

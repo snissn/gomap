@@ -70,6 +70,7 @@ type benchConfig struct {
 	BlockCodec        string
 	AutoPolicy        string
 	DictClassMode     string
+	DictWaitClass     string
 	IndexOuterLeaves  bool
 	Template          string
 	RawMiB            int
@@ -104,6 +105,7 @@ type benchReport struct {
 	BlockCodec               string            `json:"block_codec,omitempty"`
 	AutoPolicy               string            `json:"auto_policy,omitempty"`
 	DictClassMode            string            `json:"dict_class_mode,omitempty"`
+	DictWaitClass            string            `json:"dict_wait_class,omitempty"`
 	IndexOuterLeaves         bool              `json:"index_outer_leaves_in_vlog,omitempty"`
 	Template                 string            `json:"template"`
 	KeyMode                  string            `json:"key_mode"`
@@ -195,6 +197,7 @@ func main() {
 	benchBlockCodec := flag.String("bench-block-codec", "snappy", "Bench block codec when -bench-compression-mode=block: snappy|lz4")
 	benchAutoPolicy := flag.String("bench-auto-policy", "balanced", "Bench auto-mode bias: balanced|throughput|size")
 	benchDictClassMode := flag.String("bench-dict-class-mode", "single", "Bench dict class mode: single|split_outer_leaf")
+	benchDictWaitClass := flag.String("bench-dict-wait-class", "auto", "Dict class to wait for before steady: auto|any|single_value|outer_leaf|both")
 	benchIndexOuterLeaves := flag.Bool("bench-index-outer-leaves-in-vlog", false, "Enable IndexOuterLeavesInValueLog for the bench DB")
 	benchTemplate := flag.String("bench-template", "off", "Bench template compression: on|off|prepass")
 	benchKeepDir := flag.Bool("bench-keep-dir", false, "Keep bench directory after run")
@@ -268,6 +271,7 @@ func main() {
 			BlockCodec:        *benchBlockCodec,
 			AutoPolicy:        *benchAutoPolicy,
 			DictClassMode:     *benchDictClassMode,
+			DictWaitClass:     *benchDictWaitClass,
 			IndexOuterLeaves:  *benchIndexOuterLeaves,
 			Template:          *benchTemplate,
 			RawMiB:            *benchRawMiB,
@@ -742,6 +746,19 @@ func parseBenchDictClassMode(mode string) (string, treedb.ValueLogDictClassMode,
 	}
 }
 
+func normalizeBenchDictWaitClass(mode string) (string, error) {
+	waitClass := strings.ToLower(strings.TrimSpace(mode))
+	switch waitClass {
+	case "", "auto", "any", "single_value", "outer_leaf", "both":
+		if waitClass == "" {
+			waitClass = "auto"
+		}
+		return waitClass, nil
+	default:
+		return "", fmt.Errorf("unsupported -bench-dict-wait-class=%q (expected auto|any|single_value|outer_leaf|both)", mode)
+	}
+}
+
 func parseBenchBlockCodec(codec string) (string, treedb.ValueLogBlockCodec, error) {
 	c := strings.ToLower(strings.TrimSpace(codec))
 	switch c {
@@ -761,6 +778,7 @@ func runKVBench(input string, capBytes int, cfg benchConfig, train, eval []kvSam
 	cfg.BlockCodec = strings.ToLower(strings.TrimSpace(cfg.BlockCodec))
 	cfg.AutoPolicy = strings.ToLower(strings.TrimSpace(cfg.AutoPolicy))
 	cfg.DictClassMode = strings.ToLower(strings.TrimSpace(cfg.DictClassMode))
+	cfg.DictWaitClass = strings.ToLower(strings.TrimSpace(cfg.DictWaitClass))
 	cfg.Template = strings.ToLower(strings.TrimSpace(cfg.Template))
 	cfg.KeyMode = strings.ToLower(strings.TrimSpace(cfg.KeyMode))
 	if cfg.Template == "" {
@@ -798,6 +816,11 @@ func runKVBench(input string, capBytes int, cfg benchConfig, train, eval []kvSam
 		return nil, err
 	}
 	cfg.DictClassMode = resolvedDictClassMode
+	resolvedDictWaitClass, err := normalizeBenchDictWaitClass(cfg.DictWaitClass)
+	if err != nil {
+		return nil, err
+	}
+	cfg.DictWaitClass = resolvedDictWaitClass
 	if cfg.Template != "on" && cfg.Template != "off" && cfg.Template != "prepass" {
 		return nil, fmt.Errorf("unsupported -bench-template=%q (expected on|off|prepass)", cfg.Template)
 	}
@@ -1180,6 +1203,7 @@ func runKVBench(input string, capBytes int, cfg benchConfig, train, eval []kvSam
 		BlockCodec:          cfg.BlockCodec,
 		AutoPolicy:          cfg.AutoPolicy,
 		DictClassMode:       cfg.DictClassMode,
+		DictWaitClass:       cfg.DictWaitClass,
 		IndexOuterLeaves:    cfg.IndexOuterLeaves,
 		Template:            cfg.Template,
 		KeyMode:             cfg.KeyMode,
@@ -1848,6 +1872,20 @@ func benchDictStatKeyOrder(cfg benchConfig, stem string) []string {
 	return []string{stem}
 }
 
+func benchDictWaitClass(cfg benchConfig) string {
+	waitClass, err := normalizeBenchDictWaitClass(cfg.DictWaitClass)
+	if err != nil {
+		return "auto"
+	}
+	if waitClass != "auto" {
+		return waitClass
+	}
+	if strings.EqualFold(strings.TrimSpace(cfg.DictClassMode), "split_outer_leaf") && cfg.IndexOuterLeaves {
+		return "outer_leaf"
+	}
+	return "any"
+}
+
 func parseBenchDictStatUint(stats map[string]string, cfg benchConfig, stem string) (uint64, bool) {
 	for _, key := range benchDictStatKeyOrder(cfg, stem) {
 		if v, ok := parseStatUint(stats, key); ok {
@@ -1867,13 +1905,41 @@ func parseBenchDictStatInt(stats map[string]string, cfg benchConfig, stem string
 }
 
 func dictStatsActive(stats map[string]string, cfg benchConfig) bool {
-	if dictID, ok := parseBenchDictStatUint(stats, cfg, "treedb.cache.vlog_dict.last_applied_dict_id"); ok && dictID > 0 {
-		return true
+	switch benchDictWaitClass(cfg) {
+	case "single_value":
+		if dictID, ok := parseStatUint(stats, "treedb.cache.vlog_dict.last_applied_dict_id.single_value"); ok && dictID > 0 {
+			return true
+		}
+		if dictID, ok := parseStatUint(stats, "treedb.cache.vlog_dict.last_applied_dict_id"); ok && dictID > 0 {
+			return true
+		}
+		return false
+	case "outer_leaf":
+		if dictID, ok := parseStatUint(stats, "treedb.cache.vlog_dict.last_applied_dict_id.outer_leaf"); ok && dictID > 0 {
+			return true
+		}
+		return false
+	case "both":
+		singleValueActive := false
+		if dictID, ok := parseStatUint(stats, "treedb.cache.vlog_dict.last_applied_dict_id.single_value"); ok && dictID > 0 {
+			singleValueActive = true
+		} else if dictID, ok := parseStatUint(stats, "treedb.cache.vlog_dict.last_applied_dict_id"); ok && dictID > 0 {
+			singleValueActive = true
+		}
+		outerLeafActive := false
+		if dictID, ok := parseStatUint(stats, "treedb.cache.vlog_dict.last_applied_dict_id.outer_leaf"); ok && dictID > 0 {
+			outerLeafActive = true
+		}
+		return singleValueActive && outerLeafActive
+	default:
+		if dictID, ok := parseBenchDictStatUint(stats, cfg, "treedb.cache.vlog_dict.last_applied_dict_id"); ok && dictID > 0 {
+			return true
+		}
+		if kept, ok := parseStatUint(stats, "treedb.cache.vlog_dict.frames_kept"); ok && kept > 0 {
+			return true
+		}
+		return false
 	}
-	if kept, ok := parseStatUint(stats, "treedb.cache.vlog_dict.frames_kept"); ok && kept > 0 {
-		return true
-	}
-	return false
 }
 
 func nudgeDictApplication(db *treedb.DB) error {

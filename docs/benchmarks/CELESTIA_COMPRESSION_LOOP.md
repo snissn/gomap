@@ -249,6 +249,7 @@ GOWORK=off go run ./TreeDB/cmd/vlog_dict_realdata \
   -bench-compression-mode dict \
   -bench-auto-policy size \
   -bench-dict-class-mode split_outer_leaf \
+  -bench-dict-wait-class outer_leaf \
   -bench-block-codec snappy \
   -bench-raw-mib 64 \
   -bench-batch 1024 \
@@ -271,6 +272,7 @@ GOWORK=off go run ./TreeDB/cmd/vlog_dict_realdata \
   -bench-compression-mode auto \
   -bench-auto-policy size \
   -bench-dict-class-mode split_outer_leaf \
+  -bench-dict-wait-class outer_leaf \
   -bench-block-codec snappy \
   -bench-raw-mib 64 \
   -bench-batch 1024 \
@@ -281,6 +283,12 @@ GOWORK=off go run ./TreeDB/cmd/vlog_dict_realdata \
   -bench-dict-bytes 65536 \
   -bench-dict-sample-stride 1
 ```
+
+When `-bench-dict-class-mode split_outer_leaf` is used with
+`-bench-index-outer-leaves-in-vlog`, keep `-bench-dict-wait-class outer_leaf`
+enabled (or leave the new `auto` default in place). Otherwise steady-state can
+start after `single_value` dict activation while `outer_leaf` is still inactive,
+which produces noisy, non-comparable ratios.
 
 Recent write-path result on extracted outer-leaf pages from run `20260331231403`
 (steady-state ratio is the relevant metric because the dict runs pay warmup and
