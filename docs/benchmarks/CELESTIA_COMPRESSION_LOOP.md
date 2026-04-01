@@ -371,6 +371,8 @@ Notes:
     - `last_publish_unix_nano`
     - `last_publish_frames_total`
     - `publish_count`
+    - `auto_resolve_calls`
+    - `auto_resolve_dict_available`
     - `auto_choose_dict`
     - `current_cached_id`
     - `write_selected`
@@ -379,7 +381,7 @@ Notes:
     - `write_fallback_classifier_bypass`
     - `write_fallback_size_floor`
     - `write_fallback_dict_load`
-  - use those when the selector appears to prefer dict but sampled `write_mode.dict` bytes stay at zero; they tell whether auto ever chose dict for the class, whether the outer-leaf dict path was actually selected, whether it later downgraded before encode, and whether the class-specific dict was only published very late in the run
+  - use those when the selector appears to prefer dict but sampled `write_mode.dict` bytes stay at zero; they tell whether auto even saw a nonzero dict for the class, whether auto ever chose dict for the class, whether the outer-leaf dict path was actually selected, whether it later downgraded before encode, and whether the class-specific dict was only published very late in the run
 - maintenance summaries also export exact-source counters for `rewrite_stage_confirm` vs `rewrite_stage_confirm_exit`, so restart loops can be separated from the initial stage-confirm pass in `run.json`, `runs.csv`, and `analyze_vlog_maintenance_capacity.py`
 - retained-prune accounting needs two views:
   - `retained_prune_zombie_marked_bytes` / `retained_prune_removed_bytes` report work done inline by the prune pass itself

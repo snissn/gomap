@@ -1462,15 +1462,18 @@ func (db *DB) vlogSelectorEnabled(mode vlogCompressionMode) bool {
 
 func (db *DB) resolveVlogWriteMode(l *lane, dictID uint64, rawPayloadBytes, unitPayloadBytes int, outerLeafPayload bool) (vlogCompressionWriteMode, valuelog.BlockCodec, bool) {
 	mode := normalizeVlogCompressionMode(db.valueLogCompressionMode)
+	class := vlogDictClassSingleValue
+	if outerLeafPayload {
+		class = vlogDictClassOuterLeaf
+	}
+	if db != nil && mode == vlogCompressionAuto {
+		db.noteValueLogAutoResolve(class, dictID != 0)
+	}
 	noteAutoDictChoice := func(chosenMode vlogCompressionWriteMode) {
 		if db == nil || mode != vlogCompressionAuto || chosenMode != vlogWriteDict {
 			return
 		}
-		if outerLeafPayload {
-			db.noteValueLogAutoChooseDict(vlogDictClassOuterLeaf)
-			return
-		}
-		db.noteValueLogAutoChooseDict(vlogDictClassSingleValue)
+		db.noteValueLogAutoChooseDict(class)
 	}
 	switch mode {
 	case vlogCompressionOff:

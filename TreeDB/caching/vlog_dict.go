@@ -152,6 +152,17 @@ func (db *DB) noteValueLogAutoChooseDict(class vlogDictClass) {
 	db.valueLogAutoChooseDictByClass[normalizeVlogDictClass(class)].Add(1)
 }
 
+func (db *DB) noteValueLogAutoResolve(class vlogDictClass, dictAvailable bool) {
+	if db == nil {
+		return
+	}
+	class = normalizeVlogDictClass(class)
+	db.valueLogAutoResolveCallsByClass[class].Add(1)
+	if dictAvailable {
+		db.valueLogAutoResolveDictAvailableByClass[class].Add(1)
+	}
+}
+
 func (db *DB) noteValueLogDictWriteFinal(class vlogDictClass) {
 	if db == nil {
 		return

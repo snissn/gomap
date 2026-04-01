@@ -102,6 +102,8 @@ func TestStats_ExportsValueLogDictClassKeys(t *testing.T) {
 	cdb.valueLogDictLastPublishUnixNanoByClass[vlogDictClassSingleValue].Store(101)
 	cdb.valueLogDictLastPublishFramesTotalByClass[vlogDictClassSingleValue].Store(29)
 	cdb.valueLogDictPublishCountByClass[vlogDictClassSingleValue].Store(1)
+	cdb.valueLogAutoResolveCallsByClass[vlogDictClassSingleValue].Store(15)
+	cdb.valueLogAutoResolveDictAvailableByClass[vlogDictClassSingleValue].Store(7)
 	cdb.valueLogAutoChooseDictByClass[vlogDictClassSingleValue].Store(9)
 	cdb.valueLogDictCurrentKByClass[vlogDictClassSingleValue].Store(7)
 	cdb.dictCurrentCachedByClass[vlogDictClassSingleValue].Store(17)
@@ -111,6 +113,8 @@ func TestStats_ExportsValueLogDictClassKeys(t *testing.T) {
 	cdb.valueLogDictLastPublishUnixNanoByClass[vlogDictClassOuterLeaf].Store(202)
 	cdb.valueLogDictLastPublishFramesTotalByClass[vlogDictClassOuterLeaf].Store(57)
 	cdb.valueLogDictPublishCountByClass[vlogDictClassOuterLeaf].Store(4)
+	cdb.valueLogAutoResolveCallsByClass[vlogDictClassOuterLeaf].Store(21)
+	cdb.valueLogAutoResolveDictAvailableByClass[vlogDictClassOuterLeaf].Store(18)
 	cdb.valueLogAutoChooseDictByClass[vlogDictClassOuterLeaf].Store(12)
 	cdb.valueLogDictCurrentKByClass[vlogDictClassOuterLeaf].Store(13)
 	cdb.dictCurrentCachedByClass[vlogDictClassOuterLeaf].Store(27)
@@ -140,6 +144,12 @@ func TestStats_ExportsValueLogDictClassKeys(t *testing.T) {
 	if got := stats["treedb.cache.vlog_dict.publish_count.single_value"]; got != "1" {
 		t.Fatalf("single_value publish count=%q want 1", got)
 	}
+	if got := stats["treedb.cache.vlog_auto.resolve_calls.single_value"]; got != "15" {
+		t.Fatalf("single_value resolve calls=%q want 15", got)
+	}
+	if got := stats["treedb.cache.vlog_auto.resolve_dict_available.single_value"]; got != "7" {
+		t.Fatalf("single_value resolve dict available=%q want 7", got)
+	}
 	if got := stats["treedb.cache.vlog_auto.choose_dict.single_value"]; got != "9" {
 		t.Fatalf("single_value auto choose dict=%q want 9", got)
 	}
@@ -151,6 +161,12 @@ func TestStats_ExportsValueLogDictClassKeys(t *testing.T) {
 	}
 	if got := stats["treedb.cache.vlog_dict.publish_count.outer_leaf"]; got != "4" {
 		t.Fatalf("outer_leaf publish count=%q want 4", got)
+	}
+	if got := stats["treedb.cache.vlog_auto.resolve_calls.outer_leaf"]; got != "21" {
+		t.Fatalf("outer_leaf resolve calls=%q want 21", got)
+	}
+	if got := stats["treedb.cache.vlog_auto.resolve_dict_available.outer_leaf"]; got != "18" {
+		t.Fatalf("outer_leaf resolve dict available=%q want 18", got)
 	}
 	if got := stats["treedb.cache.vlog_auto.choose_dict.outer_leaf"]; got != "12" {
 		t.Fatalf("outer_leaf auto choose dict=%q want 12", got)

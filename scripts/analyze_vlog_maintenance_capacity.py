@@ -312,6 +312,11 @@ def build_dict_summary(stats: dict[str, Any]) -> dict[str, Any]:
             "last_publish_unix_nano": metric_int(stats, f"treedb.cache.vlog_dict.last_publish_unix_nano.{suffix}"),
             "last_publish_frames_total": metric_int(stats, f"treedb.cache.vlog_dict.last_publish_frames_total.{suffix}"),
             "publish_count": metric_int(stats, f"treedb.cache.vlog_dict.publish_count.{suffix}"),
+            "auto_resolve_calls": metric_int(stats, f"treedb.cache.vlog_auto.resolve_calls.{suffix}"),
+            "auto_resolve_dict_available": metric_int(
+                stats,
+                f"treedb.cache.vlog_auto.resolve_dict_available.{suffix}",
+            ),
             "auto_choose_dict": metric_int(stats, f"treedb.cache.vlog_auto.choose_dict.{suffix}"),
             "current_k": metric_int(stats, f"treedb.cache.vlog_dict.current_k.{suffix}"),
             "current_cached_id": metric_int(stats, f"treedb.cache.vlog_dict.current_cached_id.{suffix}"),
@@ -1429,6 +1434,9 @@ def print_report(
         print(
             "  dict outer_leaf write-path: "
             f"current_cached_id={(dict_classes.get('outer_leaf', {}) or {}).get('current_cached_id', 0)} "
+            f"auto_resolve_calls={(dict_classes.get('outer_leaf', {}) or {}).get('auto_resolve_calls', 0)} "
+            f"auto_resolve_dict_available={(dict_classes.get('outer_leaf', {}) or {}).get('auto_resolve_dict_available', 0)} "
+            f"auto_choose_dict={(dict_classes.get('outer_leaf', {}) or {}).get('auto_choose_dict', 0)} "
             f"selected={(dict_classes.get('outer_leaf', {}) or {}).get('write_selected', 0)} "
             f"final={(dict_classes.get('outer_leaf', {}) or {}).get('write_final', 0)} "
             f"fallback_pause={(dict_classes.get('outer_leaf', {}) or {}).get('write_fallback_pause', 0)} "
