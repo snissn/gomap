@@ -113,6 +113,38 @@ func (db *DB) valueLogDictClassForRecords(records []valuelog.Record) vlogDictCla
 	return db.valueLogDictClassForRecordSplit(db.classifyVlogPayloadSplitForRecords(records))
 }
 
+func (db *DB) outerLeafDictPublishedThisProcess() bool {
+	if db == nil {
+		return false
+	}
+	return db.valueLogDictLastAppliedDictIDByClass[vlogDictClassOuterLeaf].Load() != 0
+}
+
+func (db *DB) refreshValueLogDictIDFromCachedCurrent(dictID uint64, class vlogDictClass) uint64 {
+	if db == nil || dictID != 0 || db.dictStore == nil {
+		return dictID
+	}
+	if int(class) < 0 || int(class) >= vlogDictClassCount {
+		class = vlogDictClassSingleValue
+	}
+	if db.dictClassMode() == vlogDictClassModeSplitOuterLeaf {
+		if class == vlogDictClassOuterLeaf && !db.outerLeafDictPublishedThisProcess() {
+			return 0
+		}
+		if cached := db.dictCurrentCachedByClass[class].Load(); cached != 0 {
+			return cached
+		}
+		if class == vlogDictClassSingleValue {
+			return db.dictCurrentCached.Load()
+		}
+		return 0
+	}
+	if cached := db.dictCurrentCached.Load(); cached != 0 {
+		return cached
+	}
+	return db.dictCurrentCachedByClass[class].Load()
+}
+
 func vlogDictClassSuffix(class vlogDictClass) string {
 	switch class {
 	case vlogDictClassOuterLeaf:

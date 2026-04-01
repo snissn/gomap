@@ -372,3 +372,36 @@ func TestCurrentDictIDForClass_SplitModeClassZeroRefreshesGlobalCurrent(t *testi
 		t.Fatalf("expected global cache to refresh to store current=99, got %d", got)
 	}
 }
+
+func TestRefreshValueLogDictIDFromCachedCurrent_OuterLeafRequiresLivePublish(t *testing.T) {
+	db := &DB{valueLogDictClassMode: uint8(vlogDictClassModeSplitOuterLeaf)}
+	db.dictStore = &legacyDictStoreForClassPublishTest{}
+	db.dictCurrentCached.Store(17)
+	db.dictCurrentCachedByClass[vlogDictClassOuterLeaf].Store(29)
+
+	if got := db.refreshValueLogDictIDFromCachedCurrent(0, vlogDictClassOuterLeaf); got != 0 {
+		t.Fatalf("expected no outer-leaf cached dict before live publish, got %d", got)
+	}
+}
+
+func TestRefreshValueLogDictIDFromCachedCurrent_OuterLeafUsesClassCacheAfterPublish(t *testing.T) {
+	db := &DB{valueLogDictClassMode: uint8(vlogDictClassModeSplitOuterLeaf)}
+	db.dictStore = &legacyDictStoreForClassPublishTest{}
+	db.dictCurrentCached.Store(17)
+	db.dictCurrentCachedByClass[vlogDictClassOuterLeaf].Store(29)
+	db.valueLogDictLastAppliedDictIDByClass[vlogDictClassOuterLeaf].Store(29)
+
+	if got := db.refreshValueLogDictIDFromCachedCurrent(0, vlogDictClassOuterLeaf); got != 29 {
+		t.Fatalf("expected outer-leaf cached dict after live publish, got %d", got)
+	}
+}
+
+func TestRefreshValueLogDictIDFromCachedCurrent_SingleValueCanUseGlobalCurrent(t *testing.T) {
+	db := &DB{valueLogDictClassMode: uint8(vlogDictClassModeSplitOuterLeaf)}
+	db.dictStore = &legacyDictStoreForClassPublishTest{}
+	db.dictCurrentCached.Store(17)
+
+	if got := db.refreshValueLogDictIDFromCachedCurrent(0, vlogDictClassSingleValue); got != 17 {
+		t.Fatalf("expected single-value path to reuse global cached dict, got %d", got)
+	}
+}
