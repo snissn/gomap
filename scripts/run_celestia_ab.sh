@@ -70,7 +70,10 @@ AB_LIVE_DEBUG_VARS_URL="${AB_LIVE_DEBUG_VARS_URL:-http://127.0.0.1:6062/debug/va
 PAIR_ALIGN_TRUST_FROM_FIRST="${PAIR_ALIGN_TRUST_FROM_FIRST:-0}"
 PAIR_ALIGN_STOP_HEIGHT_FROM_FIRST="${PAIR_ALIGN_STOP_HEIGHT_FROM_FIRST:-0}"
 PAIR_ALIGN_STOP_MARGIN="${PAIR_ALIGN_STOP_MARGIN:-0}"
-PAIR_ALIGN_STOP_POLL_INTERVAL_SECONDS="${PAIR_ALIGN_STOP_POLL_INTERVAL_SECONDS:-0.2}"
+# When the aligned second leg is close to the explicit stop target, a coarse
+# poll interval can overshoot by double-digit blocks under fast catch-up. Use a
+# tighter default here to reduce stop-alignment noise in one-pair A/B runs.
+PAIR_ALIGN_STOP_POLL_INTERVAL_SECONDS="${PAIR_ALIGN_STOP_POLL_INTERVAL_SECONDS:-0.05}"
 TS="$(date +%Y%m%d%H%M%S)"
 
 if [[ "$#" -gt 4 ]]; then
