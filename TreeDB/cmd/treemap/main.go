@@ -42,6 +42,7 @@ Commands:
   vacuum          Rebuild index.db via swap (shrinks file; requires -rw)
   vlog-audit      Audit value-log filesystem, GC, and rewrite-plan state (requires -rw)
   vlog-attribution Attribute live value-log bytes by source class and file (requires -rw)
+  vlog-replay-export Export decoded value-log records as JSONL replay corpus (requires -rw)
   vlog-gc         Delete unreferenced value-log segments (requires -rw)
   vlog-rewrite    Rewrite value-log segments and shrink via swap (requires -rw)
   get             Get a single key
@@ -100,6 +101,8 @@ func main() {
 		runVlogAudit(dir, args)
 	case "vlog-attribution":
 		runVlogAttribution(dir, args)
+	case "vlog-replay-export":
+		runVlogReplayExport(dir, args)
 	case "vlog-gc":
 		runVlogGC(dir, args)
 	case "vlog-rewrite":
