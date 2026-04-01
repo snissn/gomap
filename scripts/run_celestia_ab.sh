@@ -1686,6 +1686,7 @@ if stop_at_local_height > 0 and final_remote_height > 0:
     remote_minus_stop_height = final_remote_height - stop_at_local_height
 sync_end_app_bytes = safe_int(sync.get("end_app_bytes"), pre_app_bytes)
 s_sync_app_bytes_per_block = safe_div(sync_end_app_bytes, blocks_synced)
+s_du_sync_app_bytes_per_block = safe_div(pre_app_bytes, blocks_synced)
 s_post_app_bytes_per_block = safe_div(post_app_bytes, blocks_synced)
 t_sync_seconds_per_block = safe_div(t_sync, blocks_synced)
 t_total_seconds_per_block = safe_div(t_total, blocks_synced) if t_total is not None else None
@@ -1742,6 +1743,7 @@ result = {
         "s_post_app_bytes": post_app_bytes,
         "s_post_wal_bytes": post_wal_bytes,
         "s_sync_app_bytes_per_block": s_sync_app_bytes_per_block,
+        "s_du_sync_app_bytes_per_block": s_du_sync_app_bytes_per_block,
         "s_post_app_bytes_per_block": s_post_app_bytes_per_block,
         "max_rss_kb": safe_int(sync.get("max_rss_kb"), 0),
         "blocks_synced": blocks_synced,
@@ -1887,6 +1889,7 @@ with runs_csv.open("w", newline="", encoding="utf-8") as fh:
         "t_rewrite_seconds",
         "t_total_seconds",
         "s_sync_app_bytes",
+        "s_du_sync_app_bytes",
         "s_sync_wal_bytes",
         "s_post_app_bytes",
         "s_post_wal_bytes",
@@ -1900,6 +1903,7 @@ with runs_csv.open("w", newline="", encoding="utf-8") as fh:
         "freeze_remote_height_at_start",
         "remote_minus_stop_height",
         "s_sync_app_bytes_per_block",
+        "s_du_sync_app_bytes_per_block",
         "s_post_app_bytes_per_block",
         "t_sync_seconds_per_block",
         "t_total_seconds_per_block",
@@ -2116,6 +2120,7 @@ with runs_csv.open("w", newline="", encoding="utf-8") as fh:
             m.get("t_rewrite_seconds"),
             m.get("t_total_seconds"),
             s.get("sync_app_bytes"),
+            s.get("du_sync_app_bytes"),
             s.get("sync_wal_bytes"),
             s.get("post_app_bytes"),
             s.get("post_wal_bytes"),
@@ -2129,6 +2134,7 @@ with runs_csv.open("w", newline="", encoding="utf-8") as fh:
             sync.get("freeze_remote_height_at_start"),
             sync.get("remote_minus_stop_height"),
             m.get("s_sync_app_bytes_per_block"),
+            m.get("s_du_sync_app_bytes_per_block"),
             m.get("s_post_app_bytes_per_block"),
             m.get("t_sync_seconds_per_block"),
             m.get("t_total_seconds_per_block"),
@@ -2435,12 +2441,16 @@ for pair in sorted(by_pair):
     base_post_wal = bm.get("s_post_wal_bytes")
     cand_sync = cm.get("t_sync_seconds")
     base_sync = bm.get("t_sync_seconds")
-    cand_sync_app = cm.get("s_sync_app_bytes")
-    base_sync_app = bm.get("s_sync_app_bytes")
+    cand_launcher_sync_app = cm.get("s_sync_app_bytes")
+    base_launcher_sync_app = bm.get("s_sync_app_bytes")
+    cand_sync_app = cm.get("s_du_sync_app_bytes")
+    base_sync_app = bm.get("s_du_sync_app_bytes")
     cand_blocks = cm.get("blocks_synced")
     base_blocks = bm.get("blocks_synced")
-    cand_sync_app_per_block = cm.get("s_sync_app_bytes_per_block")
-    base_sync_app_per_block = bm.get("s_sync_app_bytes_per_block")
+    cand_launcher_sync_app_per_block = cm.get("s_sync_app_bytes_per_block")
+    base_launcher_sync_app_per_block = bm.get("s_sync_app_bytes_per_block")
+    cand_sync_app_per_block = cm.get("s_du_sync_app_bytes_per_block")
+    base_sync_app_per_block = bm.get("s_du_sync_app_bytes_per_block")
     cand_total_per_block = cm.get("t_total_seconds_per_block")
     base_total_per_block = bm.get("t_total_seconds_per_block")
 
@@ -2452,8 +2462,13 @@ for pair in sorted(by_pair):
     d_total = delta(cand_total, base_total)
     d_sync = delta(cand_sync, base_sync)
     d_post_wal = delta(cand_post_wal, base_post_wal)
+    d_launcher_sync_app = delta(cand_launcher_sync_app, base_launcher_sync_app)
     d_sync_app = delta(cand_sync_app, base_sync_app)
     d_blocks = delta(cand_blocks, base_blocks)
+    d_launcher_sync_app_per_block = delta(
+        cand_launcher_sync_app_per_block,
+        base_launcher_sync_app_per_block,
+    )
     d_sync_app_per_block = delta(cand_sync_app_per_block, base_sync_app_per_block)
     d_total_per_block = delta(cand_total_per_block, base_total_per_block)
     cand_reclaimed_vs_churn = cand_summary.get("rewrite_exec_reclaimed_vs_churn_ratio")
@@ -2636,9 +2651,11 @@ for pair in sorted(by_pair):
         "delta_t_sync_seconds": d_sync,
         "delta_t_total_seconds": d_total,
         "delta_s_sync_app_bytes": d_sync_app,
+        "delta_s_launcher_sync_app_bytes": d_launcher_sync_app,
         "delta_s_post_wal_bytes": d_post_wal,
         "delta_blocks_synced": d_blocks,
         "delta_s_sync_app_bytes_per_block": d_sync_app_per_block,
+        "delta_s_launcher_sync_app_bytes_per_block": d_launcher_sync_app_per_block,
         "delta_t_total_seconds_per_block": d_total_per_block,
         "control_t_sync_seconds": base_sync,
         "candidate_t_sync_seconds": cand_sync,
@@ -2646,6 +2663,8 @@ for pair in sorted(by_pair):
         "candidate_t_total_seconds": cand_total,
         "control_s_sync_app_bytes": base_sync_app,
         "candidate_s_sync_app_bytes": cand_sync_app,
+        "control_s_launcher_sync_app_bytes": base_launcher_sync_app,
+        "candidate_s_launcher_sync_app_bytes": cand_launcher_sync_app,
         "control_s_post_wal_bytes": base_post_wal,
         "candidate_s_post_wal_bytes": cand_post_wal,
         "control_max_rss_kb": bm.get("max_rss_kb"),
@@ -2719,9 +2738,11 @@ with pairs_csv.open("w", newline="", encoding="utf-8") as fh:
         "delta_t_sync_seconds",
         "delta_t_total_seconds",
         "delta_s_sync_app_bytes",
+        "delta_s_launcher_sync_app_bytes",
         "delta_s_post_wal_bytes",
         "delta_blocks_synced",
         "delta_s_sync_app_bytes_per_block",
+        "delta_s_launcher_sync_app_bytes_per_block",
         "delta_t_total_seconds_per_block",
         "control_t_sync_seconds",
         "candidate_t_sync_seconds",
@@ -2729,6 +2750,8 @@ with pairs_csv.open("w", newline="", encoding="utf-8") as fh:
         "candidate_t_total_seconds",
         "control_s_sync_app_bytes",
         "candidate_s_sync_app_bytes",
+        "control_s_launcher_sync_app_bytes",
+        "candidate_s_launcher_sync_app_bytes",
         "control_s_post_wal_bytes",
         "candidate_s_post_wal_bytes",
         "control_max_rss_kb",
@@ -2799,9 +2822,11 @@ with pairs_csv.open("w", newline="", encoding="utf-8") as fh:
             r["delta_t_sync_seconds"],
             r["delta_t_total_seconds"],
             r["delta_s_sync_app_bytes"],
+            r["delta_s_launcher_sync_app_bytes"],
             r["delta_s_post_wal_bytes"],
             r["delta_blocks_synced"],
             r["delta_s_sync_app_bytes_per_block"],
+            r["delta_s_launcher_sync_app_bytes_per_block"],
             r["delta_t_total_seconds_per_block"],
             r["control_t_sync_seconds"],
             r["candidate_t_sync_seconds"],
@@ -2809,6 +2834,8 @@ with pairs_csv.open("w", newline="", encoding="utf-8") as fh:
             r["candidate_t_total_seconds"],
             r["control_s_sync_app_bytes"],
             r["candidate_s_sync_app_bytes"],
+            r["control_s_launcher_sync_app_bytes"],
+            r["candidate_s_launcher_sync_app_bytes"],
             r["control_s_post_wal_bytes"],
             r["candidate_s_post_wal_bytes"],
             r["control_max_rss_kb"],
@@ -2996,6 +3023,8 @@ control_t_total_vals = collect_float(comparable_rows, "control_t_total_seconds")
 candidate_t_total_vals = collect_float(comparable_rows, "candidate_t_total_seconds")
 control_s_sync_app_vals = collect_float(comparable_rows, "control_s_sync_app_bytes")
 candidate_s_sync_app_vals = collect_float(comparable_rows, "candidate_s_sync_app_bytes")
+control_s_launcher_sync_app_vals = collect_float(comparable_rows, "control_s_launcher_sync_app_bytes")
+candidate_s_launcher_sync_app_vals = collect_float(comparable_rows, "candidate_s_launcher_sync_app_bytes")
 control_s_post_wal_vals = collect_float(comparable_rows, "control_s_post_wal_bytes")
 candidate_s_post_wal_vals = collect_float(comparable_rows, "candidate_s_post_wal_bytes")
 control_max_rss_vals = collect_float(comparable_rows, "control_max_rss_kb")
@@ -3016,6 +3045,10 @@ absolute_aggregates = {
     "median_candidate_s_sync_app_bytes": median(candidate_s_sync_app_vals),
     "mean_control_s_sync_app_bytes": mean(control_s_sync_app_vals),
     "mean_candidate_s_sync_app_bytes": mean(candidate_s_sync_app_vals),
+    "median_control_s_launcher_sync_app_bytes": median(control_s_launcher_sync_app_vals),
+    "median_candidate_s_launcher_sync_app_bytes": median(candidate_s_launcher_sync_app_vals),
+    "mean_control_s_launcher_sync_app_bytes": mean(control_s_launcher_sync_app_vals),
+    "mean_candidate_s_launcher_sync_app_bytes": mean(candidate_s_launcher_sync_app_vals),
     "median_control_s_post_wal_bytes": median(control_s_post_wal_vals),
     "median_candidate_s_post_wal_bytes": median(candidate_s_post_wal_vals),
     "mean_control_s_post_wal_bytes": mean(control_s_post_wal_vals),
@@ -3089,6 +3122,7 @@ lines.append(f"- invalid pair streak stop: `{invalid_pair_streak_stop}`")
 lines.append(f"- scoring policy: `{ab_policy}`")
 lines.append(f"- block drift tolerance (abs blocks, -1=disabled): `{block_drift_tolerance}`")
 lines.append(f"- scoring mode: `{scoring_mode}`")
+lines.append("- sync size score source: `du_sync_app_bytes`")
 lines.append(f"- allow drift scoring: `{allow_drift_scoring}`")
 lines.append(f"- composite weights (time,size): `{composite_weight_time}` / `{composite_weight_size}`")
 lines.append(f"- composite stop on clear: `{composite_stop_on_clear}`")
@@ -3157,7 +3191,10 @@ lines.append(
     f"- t_total seconds (control/candidate): `{absolute_aggregates.get('median_control_t_total_seconds')}` / `{absolute_aggregates.get('median_candidate_t_total_seconds')}`"
 )
 lines.append(
-    f"- s_sync_app bytes (control/candidate): `{absolute_aggregates.get('median_control_s_sync_app_bytes')}` / `{absolute_aggregates.get('median_candidate_s_sync_app_bytes')}`"
+    f"- s_du_sync_app bytes (control/candidate, scored): `{absolute_aggregates.get('median_control_s_sync_app_bytes')}` / `{absolute_aggregates.get('median_candidate_s_sync_app_bytes')}`"
+)
+lines.append(
+    f"- s_sync_app bytes (control/candidate, launcher end): `{absolute_aggregates.get('median_control_s_launcher_sync_app_bytes')}` / `{absolute_aggregates.get('median_candidate_s_launcher_sync_app_bytes')}`"
 )
 lines.append(
     f"- s_post_wal bytes (control/candidate): `{absolute_aggregates.get('median_control_s_post_wal_bytes')}` / `{absolute_aggregates.get('median_candidate_s_post_wal_bytes')}`"
@@ -3186,15 +3223,27 @@ if pair_rows:
     lines.append(f"- drift_scored_outcome: `{last['drift_scored_outcome']}`")
     lines.append(f"- delta_t_sync_seconds: `{last['delta_t_sync_seconds']}`")
     lines.append(f"- delta_t_total_seconds: `{last['delta_t_total_seconds']}`")
-    lines.append(f"- delta_s_sync_app_bytes: `{last['delta_s_sync_app_bytes']}`")
+    lines.append(f"- delta_s_du_sync_app_bytes: `{last['delta_s_sync_app_bytes']}`")
+    lines.append(f"- delta_s_sync_app_bytes (launcher end): `{last['delta_s_launcher_sync_app_bytes']}`")
     lines.append(f"- delta_s_post_wal_bytes: `{last['delta_s_post_wal_bytes']}`")
     lines.append(f"- delta_blocks_synced: `{last['delta_blocks_synced']}`")
-    lines.append(f"- delta_s_sync_app_bytes_per_block: `{last['delta_s_sync_app_bytes_per_block']}`")
+    lines.append(f"- delta_s_du_sync_app_bytes_per_block: `{last['delta_s_sync_app_bytes_per_block']}`")
+    lines.append(
+        f"- delta_s_sync_app_bytes_per_block (launcher end): `{last['delta_s_launcher_sync_app_bytes_per_block']}`"
+    )
     lines.append(f"- delta_t_total_seconds_per_block: `{last['delta_t_total_seconds_per_block']}`")
     lines.append(f"- control_t_sync_seconds: `{last['control_t_sync_seconds']}`")
     lines.append(f"- candidate_t_sync_seconds: `{last['candidate_t_sync_seconds']}`")
     lines.append(f"- control_t_total_seconds: `{last['control_t_total_seconds']}`")
     lines.append(f"- candidate_t_total_seconds: `{last['candidate_t_total_seconds']}`")
+    lines.append(f"- control_s_du_sync_app_bytes: `{last['control_s_sync_app_bytes']}`")
+    lines.append(f"- candidate_s_du_sync_app_bytes: `{last['candidate_s_sync_app_bytes']}`")
+    lines.append(
+        f"- control_s_sync_app_bytes (launcher end): `{last['control_s_launcher_sync_app_bytes']}`"
+    )
+    lines.append(
+        f"- candidate_s_sync_app_bytes (launcher end): `{last['candidate_s_launcher_sync_app_bytes']}`"
+    )
     lines.append(f"- control_s_post_wal_bytes: `{last['control_s_post_wal_bytes']}`")
     lines.append(f"- candidate_s_post_wal_bytes: `{last['candidate_s_post_wal_bytes']}`")
     lines.append(f"- control_max_rss_kb: `{last['control_max_rss_kb']}`")

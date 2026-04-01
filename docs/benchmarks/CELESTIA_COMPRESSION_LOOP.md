@@ -25,7 +25,10 @@ If expected effect size is below threshold, do not run full `run_celestia` yet.
 Use `scripts/celestia_fast_gate.sh` for fast interleaved control/candidate A/B.
 
 What it measures per run:
-- pre-rewrite size: `sync_app`, `sync_wal`, optional `sync_gzip`
+- pre-rewrite size:
+  - `du_sync_app` as the primary end-of-run directory metric
+  - `sync_app` as the immediate launcher end-of-sync snapshot
+  - `sync_wal`, optional `sync_gzip`
 - post-rewrite size: `post_app`, `post_wal`, optional `post_gzip`
 - timing: benchmark duration + rewrite duration + total
 - throughput: batch-write ops/sec from unified-bench output
@@ -69,16 +72,24 @@ Outputs:
 
 Signal hygiene additions in `run_celestia` A/B artifacts:
 - `runs.csv` now includes `blocks_synced` plus normalized metrics:
-  - `s_sync_app_bytes_per_block`
+  - `s_sync_app_bytes_per_block` for the launcher end snapshot
+  - `s_du_sync_app_bytes_per_block` for the scored post-run `du` snapshot
   - `s_post_app_bytes_per_block`
   - `t_sync_seconds_per_block`
   - `t_total_seconds_per_block`
 - `pairs.csv` now includes:
   - `delta_blocks_synced`
-  - `delta_s_sync_app_bytes_per_block`
+  - `delta_s_sync_app_bytes_per_block` for the scored post-run `du` snapshot
+  - `delta_s_launcher_sync_app_bytes_per_block` for the launcher end snapshot
   - `delta_t_total_seconds_per_block`
 - `summary.md` includes `pairs with block-count drift` so moving-target runs
   are visible before making a promote/reject decision.
+
+`run_celestia` A/B scoring now uses `du_sync_app_bytes` rather than the
+launcher's immediate `end_app_bytes`. This matches the actual end-of-run
+`application.db` directory size that we optimize for. The launcher-end
+`sync_app_bytes` snapshot is still reported because it can reveal short
+post-sync settling effects, but it is no longer the primary score input.
 
 ## Stage 2: Pprof/Implementation Efficiency Pass
 
