@@ -19,11 +19,13 @@ const vlogGenerationRewriteResumeMaxSegments = 1
 const vlogGenerationRewriteResumeMinInterval = 1 * time.Second
 
 type valueLogGenerationStateFile struct {
-	RewriteSourceFileIDs []string                                   `json:"rewrite_source_file_ids,omitempty"`
-	RewriteDebtLedger    []valueLogGenerationRewriteDebtLedgerEntry `json:"rewrite_debt_ledger,omitempty"`
-	RewritePenalties     []valueLogGenerationRewritePenaltyEntry    `json:"rewrite_penalties,omitempty"`
-	RewriteStagePending  bool                                       `json:"rewrite_stage_pending,omitempty"`
-	RewriteStageObserved int64                                      `json:"rewrite_stage_observed_unix_nano,omitempty"`
+	RewriteSourceFileIDs  []string                                   `json:"rewrite_source_file_ids,omitempty"`
+	RewriteDebtLedger     []valueLogGenerationRewriteDebtLedgerEntry `json:"rewrite_debt_ledger,omitempty"`
+	RewriteDebtChunks     []valueLogGenerationRewriteDebtChunkEntry  `json:"rewrite_debt_chunks,omitempty"`
+	RewriteDebtChunkBytes int64                                      `json:"rewrite_debt_chunk_bytes,omitempty"`
+	RewritePenalties      []valueLogGenerationRewritePenaltyEntry    `json:"rewrite_penalties,omitempty"`
+	RewriteStagePending   bool                                       `json:"rewrite_stage_pending,omitempty"`
+	RewriteStageObserved  int64                                      `json:"rewrite_stage_observed_unix_nano,omitempty"`
 }
 
 type valueLogGenerationRewriteDebtLedgerEntry struct {
@@ -32,6 +34,15 @@ type valueLogGenerationRewriteDebtLedgerEntry struct {
 	BytesLive  int64   `json:"bytes_live,omitempty"`
 	BytesStale int64   `json:"bytes_stale,omitempty"`
 	StaleRatio float64 `json:"stale_ratio,omitempty"`
+}
+
+type valueLogGenerationRewriteDebtChunkEntry struct {
+	FileID      string  `json:"file_id,omitempty"`
+	ChunkOffset int64   `json:"chunk_offset,omitempty"`
+	BytesTotal  int64   `json:"bytes_total,omitempty"`
+	BytesLive   int64   `json:"bytes_live,omitempty"`
+	BytesStale  int64   `json:"bytes_stale,omitempty"`
+	StaleRatio  float64 `json:"stale_ratio,omitempty"`
 }
 
 type valueLogGenerationRewritePenaltyEntry struct {
@@ -62,6 +73,53 @@ func buildVlogGenerationRewriteLedgerByFileID(ledger []backenddb.ValueLogRewrite
 		return nil
 	}
 	return byFileID
+}
+
+func buildVlogGenerationRewriteChunkLedgerByFileID(chunks []backenddb.ValueLogRewritePlanChunk) map[uint32]backenddb.ValueLogRewritePlanSegment {
+	if len(chunks) == 0 {
+		return nil
+	}
+	byFileID := make(map[uint32]backenddb.ValueLogRewritePlanSegment, len(chunks))
+	for _, chunk := range chunks {
+		if chunk.FileID == 0 {
+			continue
+		}
+		seg := byFileID[chunk.FileID]
+		seg.FileID = chunk.FileID
+		seg.BytesTotal += chunk.BytesTotal
+		seg.BytesLive += chunk.BytesLive
+		seg.BytesStale += chunk.BytesStale
+		byFileID[chunk.FileID] = seg
+	}
+	if len(byFileID) == 0 {
+		return nil
+	}
+	for id, seg := range byFileID {
+		if seg.BytesTotal > 0 {
+			seg.StaleRatio = float64(seg.BytesStale) / float64(seg.BytesTotal)
+		}
+		byFileID[id] = seg
+	}
+	return byFileID
+}
+
+func vlogGenerationRewriteChunkLedgerIDs(chunks []backenddb.ValueLogRewritePlanChunk) []uint32 {
+	if len(chunks) == 0 {
+		return nil
+	}
+	seen := make(map[uint32]struct{}, len(chunks))
+	ids := make([]uint32, 0, len(chunks))
+	for _, chunk := range chunks {
+		if chunk.FileID == 0 {
+			continue
+		}
+		if _, ok := seen[chunk.FileID]; ok {
+			continue
+		}
+		seen[chunk.FileID] = struct{}{}
+		ids = append(ids, chunk.FileID)
+	}
+	return ids
 }
 
 func (db *DB) valueLogGenerationStateRootDir() string {
@@ -105,7 +163,7 @@ func saveValueLogGenerationState(path string, raw valueLogGenerationStateFile) e
 	if path == "" {
 		return nil
 	}
-	if len(raw.RewriteSourceFileIDs) == 0 && len(raw.RewriteDebtLedger) == 0 && len(raw.RewritePenalties) == 0 {
+	if len(raw.RewriteSourceFileIDs) == 0 && len(raw.RewriteDebtLedger) == 0 && len(raw.RewriteDebtChunks) == 0 && len(raw.RewritePenalties) == 0 {
 		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 			return err
 		}
@@ -118,10 +176,10 @@ func saveValueLogGenerationState(path string, raw valueLogGenerationStateFile) e
 	return atomicfile.Write(path, data, 0o600)
 }
 
-func loadValueLogGenerationRewriteState(path string) ([]uint32, []backenddb.ValueLogRewritePlanSegment, map[uint32]valueLogGenerationRewritePenalty, bool, int64, error) {
+func loadValueLogGenerationRewriteState(path string) ([]uint32, []backenddb.ValueLogRewritePlanSegment, []backenddb.ValueLogRewritePlanChunk, int64, map[uint32]valueLogGenerationRewritePenalty, bool, int64, error) {
 	raw, err := loadValueLogGenerationState(path)
 	if err != nil {
-		return nil, nil, nil, false, 0, err
+		return nil, nil, nil, 0, nil, false, 0, err
 	}
 
 	penalties := make(map[uint32]valueLogGenerationRewritePenalty, len(raw.RewritePenalties))
@@ -166,16 +224,42 @@ func loadValueLogGenerationRewriteState(path string) ([]uint32, []backenddb.Valu
 		}
 	}
 
+	chunkLedger := make([]backenddb.ValueLogRewritePlanChunk, 0, len(raw.RewriteDebtChunks))
+	if len(raw.RewriteDebtChunks) > 0 {
+		for _, e := range raw.RewriteDebtChunks {
+			if e.FileID == "" {
+				continue
+			}
+			id64, err := strconv.ParseUint(e.FileID, 10, 32)
+			if err != nil || id64 == 0 {
+				continue
+			}
+			chunkLedger = append(chunkLedger, backenddb.ValueLogRewritePlanChunk{
+				FileID:      uint32(id64),
+				ChunkOffset: e.ChunkOffset,
+				BytesTotal:  e.BytesTotal,
+				BytesLive:   e.BytesLive,
+				BytesStale:  e.BytesStale,
+				StaleRatio:  e.StaleRatio,
+			})
+		}
+	}
+
+	if len(chunkLedger) > 0 {
+		ids := vlogGenerationRewriteChunkLedgerIDs(chunkLedger)
+		return ids, nil, chunkLedger, raw.RewriteDebtChunkBytes, penalties, raw.RewriteStagePending, raw.RewriteStageObserved, nil
+	}
+
 	if len(ledger) > 0 {
 		ids := make([]uint32, 0, len(ledger))
 		for _, seg := range ledger {
 			ids = append(ids, seg.FileID)
 		}
-		return ids, ledger, penalties, raw.RewriteStagePending, raw.RewriteStageObserved, nil
+		return ids, ledger, nil, 0, penalties, raw.RewriteStagePending, raw.RewriteStageObserved, nil
 	}
 
 	if len(raw.RewriteSourceFileIDs) == 0 {
-		return nil, nil, penalties, false, 0, nil
+		return nil, nil, nil, 0, penalties, false, 0, nil
 	}
 	out := make([]uint32, 0, len(raw.RewriteSourceFileIDs))
 	for _, s := range raw.RewriteSourceFileIDs {
@@ -189,12 +273,12 @@ func loadValueLogGenerationRewriteState(path string) ([]uint32, []backenddb.Valu
 		out = append(out, uint32(id64))
 	}
 	if len(out) == 0 {
-		return nil, nil, penalties, false, 0, nil
+		return nil, nil, nil, 0, penalties, false, 0, nil
 	}
-	return out, nil, penalties, false, 0, nil
+	return out, nil, nil, 0, penalties, false, 0, nil
 }
 
-func saveValueLogGenerationRewriteState(path string, ids []uint32, ledger []backenddb.ValueLogRewritePlanSegment, penalties map[uint32]valueLogGenerationRewritePenalty, stagePending bool, stageObservedAt int64) error {
+func saveValueLogGenerationRewriteState(path string, ids []uint32, ledger []backenddb.ValueLogRewritePlanSegment, chunkLedger []backenddb.ValueLogRewritePlanChunk, chunkBytes int64, penalties map[uint32]valueLogGenerationRewritePenalty, stagePending bool, stageObservedAt int64) error {
 	raw, err := loadValueLogGenerationState(path)
 	if err != nil {
 		return err
@@ -218,6 +302,22 @@ func saveValueLogGenerationRewriteState(path string, ids []uint32, ledger []back
 				StaleRatio: seg.StaleRatio,
 			})
 		}
+	}
+	raw.RewriteDebtChunks = raw.RewriteDebtChunks[:0]
+	raw.RewriteDebtChunkBytes = 0
+	if len(chunkLedger) > 0 {
+		raw.RewriteDebtChunks = make([]valueLogGenerationRewriteDebtChunkEntry, 0, len(chunkLedger))
+		for _, chunk := range chunkLedger {
+			raw.RewriteDebtChunks = append(raw.RewriteDebtChunks, valueLogGenerationRewriteDebtChunkEntry{
+				FileID:      strconv.FormatUint(uint64(chunk.FileID), 10),
+				ChunkOffset: chunk.ChunkOffset,
+				BytesTotal:  chunk.BytesTotal,
+				BytesLive:   chunk.BytesLive,
+				BytesStale:  chunk.BytesStale,
+				StaleRatio:  chunk.StaleRatio,
+			})
+		}
+		raw.RewriteDebtChunkBytes = chunkBytes
 	}
 	raw.RewritePenalties = raw.RewritePenalties[:0]
 	if len(penalties) > 0 {
@@ -255,13 +355,18 @@ func (db *DB) loadVlogGenerationRewriteQueueLocked() error {
 	if db.vlogGenerationRewriteQueueLoaded {
 		return nil
 	}
-	ids, ledger, penalties, stagePending, stageObservedAt, err := loadValueLogGenerationRewriteState(db.valueLogGenerationStatePath())
+	ids, ledger, chunkLedger, chunkBytes, penalties, stagePending, stageObservedAt, err := loadValueLogGenerationRewriteState(db.valueLogGenerationStatePath())
 	if err != nil {
 		return err
 	}
 	db.vlogGenerationRewriteQueue = ids
 	db.vlogGenerationRewriteLedger = ledger
+	db.vlogGenerationRewriteChunkLedger = chunkLedger
+	db.vlogGenerationRewriteChunkBytes = chunkBytes
 	db.vlogGenerationRewriteLedgerByFileID = buildVlogGenerationRewriteLedgerByFileID(ledger)
+	if len(db.vlogGenerationRewriteLedgerByFileID) == 0 && len(chunkLedger) > 0 {
+		db.vlogGenerationRewriteLedgerByFileID = buildVlogGenerationRewriteChunkLedgerByFileID(chunkLedger)
+	}
 	db.vlogGenerationRewritePenalties = penalties
 	db.vlogGenerationRewriteStagePending = stagePending
 	db.vlogGenerationRewriteStageObservedUnixNano = stageObservedAt
@@ -284,11 +389,13 @@ func (db *DB) setVlogGenerationRewriteQueue(ids []uint32) error {
 		return err
 	}
 	next := append([]uint32(nil), ids...)
-	if err := saveValueLogGenerationRewriteState(db.valueLogGenerationStatePath(), next, nil, db.vlogGenerationRewritePenalties, false, 0); err != nil {
+	if err := saveValueLogGenerationRewriteState(db.valueLogGenerationStatePath(), next, nil, nil, 0, db.vlogGenerationRewritePenalties, false, 0); err != nil {
 		return err
 	}
 	db.vlogGenerationRewriteQueue = next
 	db.vlogGenerationRewriteLedger = nil
+	db.vlogGenerationRewriteChunkLedger = nil
+	db.vlogGenerationRewriteChunkBytes = 0
 	db.vlogGenerationRewriteLedgerByFileID = nil
 	db.vlogGenerationRewriteStagePending = false
 	db.vlogGenerationRewriteStageObservedUnixNano = 0
@@ -298,6 +405,10 @@ func (db *DB) setVlogGenerationRewriteQueue(ids []uint32) error {
 
 func (db *DB) setVlogGenerationRewriteLedger(segments []backenddb.ValueLogRewritePlanSegment) error {
 	return db.setVlogGenerationRewriteLedgerWithStage(segments, false, 0)
+}
+
+func (db *DB) setVlogGenerationRewriteChunkLedger(chunks []backenddb.ValueLogRewritePlanChunk, chunkBytes int64) error {
+	return db.setVlogGenerationRewriteChunkLedgerWithStage(chunks, chunkBytes, false, 0)
 }
 
 func (db *DB) setVlogGenerationRewriteLedgerWithStage(segments []backenddb.ValueLogRewritePlanSegment, stagePending bool, stageObservedAt int64) error {
@@ -317,12 +428,43 @@ func (db *DB) setVlogGenerationRewriteLedgerWithStage(segments []backenddb.Value
 		}
 		nextIDs = append(nextIDs, seg.FileID)
 	}
-	if err := saveValueLogGenerationRewriteState(db.valueLogGenerationStatePath(), nextIDs, nextLedger, db.vlogGenerationRewritePenalties, stagePending, stageObservedAt); err != nil {
+	if err := saveValueLogGenerationRewriteState(db.valueLogGenerationStatePath(), nextIDs, nextLedger, nil, 0, db.vlogGenerationRewritePenalties, stagePending, stageObservedAt); err != nil {
 		return err
 	}
 	db.vlogGenerationRewriteQueue = nextIDs
 	db.vlogGenerationRewriteLedger = nextLedger
+	db.vlogGenerationRewriteChunkLedger = nil
+	db.vlogGenerationRewriteChunkBytes = 0
 	db.vlogGenerationRewriteLedgerByFileID = buildVlogGenerationRewriteLedgerByFileID(nextLedger)
+	db.vlogGenerationRewriteStagePending = stagePending
+	db.vlogGenerationRewriteStageObservedUnixNano = stageObservedAt
+	if stagePending && stageObservedAt > 0 {
+		db.scheduleVlogGenerationRewriteStageConfirmation(stageObservedAt)
+	} else {
+		db.clearVlogGenerationRewriteStageConfirmation()
+	}
+	return nil
+}
+
+func (db *DB) setVlogGenerationRewriteChunkLedgerWithStage(chunks []backenddb.ValueLogRewritePlanChunk, chunkBytes int64, stagePending bool, stageObservedAt int64) error {
+	if db == nil {
+		return nil
+	}
+	db.vlogGenerationRewriteQueueMu.Lock()
+	defer db.vlogGenerationRewriteQueueMu.Unlock()
+	if err := db.loadVlogGenerationRewriteQueueLocked(); err != nil {
+		return err
+	}
+	nextChunks := append([]backenddb.ValueLogRewritePlanChunk(nil), chunks...)
+	nextIDs := vlogGenerationRewriteChunkLedgerIDs(nextChunks)
+	if err := saveValueLogGenerationRewriteState(db.valueLogGenerationStatePath(), nextIDs, nil, nextChunks, chunkBytes, db.vlogGenerationRewritePenalties, stagePending, stageObservedAt); err != nil {
+		return err
+	}
+	db.vlogGenerationRewriteQueue = nextIDs
+	db.vlogGenerationRewriteLedger = nil
+	db.vlogGenerationRewriteChunkLedger = nextChunks
+	db.vlogGenerationRewriteChunkBytes = chunkBytes
+	db.vlogGenerationRewriteLedgerByFileID = buildVlogGenerationRewriteChunkLedgerByFileID(nextChunks)
 	db.vlogGenerationRewriteStagePending = stagePending
 	db.vlogGenerationRewriteStageObservedUnixNano = stageObservedAt
 	if stagePending && stageObservedAt > 0 {
@@ -357,6 +499,18 @@ func (db *DB) currentVlogGenerationRewriteLedger() ([]backenddb.ValueLogRewriteP
 	return append([]backenddb.ValueLogRewritePlanSegment(nil), db.vlogGenerationRewriteLedger...), nil
 }
 
+func (db *DB) currentVlogGenerationRewriteChunkLedger() ([]backenddb.ValueLogRewritePlanChunk, int64, error) {
+	if db == nil {
+		return nil, 0, nil
+	}
+	db.vlogGenerationRewriteQueueMu.Lock()
+	defer db.vlogGenerationRewriteQueueMu.Unlock()
+	if err := db.loadVlogGenerationRewriteQueueLocked(); err != nil {
+		return nil, 0, err
+	}
+	return append([]backenddb.ValueLogRewritePlanChunk(nil), db.vlogGenerationRewriteChunkLedger...), db.vlogGenerationRewriteChunkBytes, nil
+}
+
 func (db *DB) currentVlogGenerationRewriteStage() (bool, int64, error) {
 	if db == nil {
 		return false, 0, nil
@@ -377,6 +531,41 @@ func (db *DB) pruneVlogGenerationRewriteLedgerNonPositiveLive() ([]uint32, int, 
 	defer db.vlogGenerationRewriteQueueMu.Unlock()
 	if err := db.loadVlogGenerationRewriteQueueLocked(); err != nil {
 		return nil, 0, err
+	}
+	if len(db.vlogGenerationRewriteChunkLedger) > 0 {
+		filteredChunks := make([]backenddb.ValueLogRewritePlanChunk, 0, len(db.vlogGenerationRewriteChunkLedger))
+		dropped := 0
+		for _, chunk := range db.vlogGenerationRewriteChunkLedger {
+			if chunk.FileID == 0 || chunk.BytesLive <= 0 {
+				dropped++
+				continue
+			}
+			filteredChunks = append(filteredChunks, chunk)
+		}
+		if dropped == 0 {
+			return append([]uint32(nil), db.vlogGenerationRewriteQueue...), 0, nil
+		}
+		filteredIDs := vlogGenerationRewriteChunkLedgerIDs(filteredChunks)
+		stagePending := db.vlogGenerationRewriteStagePending && len(filteredChunks) > 0
+		stageObservedAt := db.vlogGenerationRewriteStageObservedUnixNano
+		if !stagePending {
+			stageObservedAt = 0
+		}
+		if err := saveValueLogGenerationRewriteState(db.valueLogGenerationStatePath(), filteredIDs, nil, filteredChunks, db.vlogGenerationRewriteChunkBytes, db.vlogGenerationRewritePenalties, stagePending, stageObservedAt); err != nil {
+			return nil, 0, err
+		}
+		db.vlogGenerationRewriteQueue = filteredIDs
+		db.vlogGenerationRewriteLedger = nil
+		db.vlogGenerationRewriteChunkLedger = filteredChunks
+		db.vlogGenerationRewriteLedgerByFileID = buildVlogGenerationRewriteChunkLedgerByFileID(filteredChunks)
+		db.vlogGenerationRewriteStagePending = stagePending
+		db.vlogGenerationRewriteStageObservedUnixNano = stageObservedAt
+		if stagePending && stageObservedAt > 0 {
+			db.scheduleVlogGenerationRewriteStageConfirmation(stageObservedAt)
+		} else {
+			db.clearVlogGenerationRewriteStageConfirmation()
+		}
+		return append([]uint32(nil), filteredIDs...), dropped, nil
 	}
 	if len(db.vlogGenerationRewriteLedger) == 0 {
 		return append([]uint32(nil), db.vlogGenerationRewriteQueue...), 0, nil
@@ -400,7 +589,7 @@ func (db *DB) pruneVlogGenerationRewriteLedgerNonPositiveLive() ([]uint32, int, 
 	if !stagePending {
 		stageObservedAt = 0
 	}
-	if err := saveValueLogGenerationRewriteState(db.valueLogGenerationStatePath(), filteredIDs, filteredLedger, db.vlogGenerationRewritePenalties, stagePending, stageObservedAt); err != nil {
+	if err := saveValueLogGenerationRewriteState(db.valueLogGenerationStatePath(), filteredIDs, filteredLedger, nil, 0, db.vlogGenerationRewritePenalties, stagePending, stageObservedAt); err != nil {
 		return nil, 0, err
 	}
 	db.vlogGenerationRewriteQueue = filteredIDs
@@ -509,6 +698,145 @@ func stableVlogGenerationRewriteLedgerSegments(prev, planned []backenddb.ValueLo
 	return out
 }
 
+type valueLogGenerationRewriteChunkKey struct {
+	FileID      uint32
+	ChunkOffset int64
+}
+
+func vlogGenerationRewriteChunkLedgerChunk(chunks []backenddb.ValueLogRewritePlanChunk, maxChunks int, budgetLiveBytes int64) []backenddb.ValueLogRewritePlanChunk {
+	if len(chunks) == 0 || maxChunks <= 0 {
+		return nil
+	}
+	candidates := make([]backenddb.ValueLogRewritePlanChunk, 0, len(chunks))
+	for _, chunk := range chunks {
+		if chunk.FileID == 0 || chunk.BytesLive <= 0 {
+			continue
+		}
+		candidates = append(candidates, chunk)
+	}
+	if len(candidates) == 0 {
+		return nil
+	}
+	sort.SliceStable(candidates, func(i, j int) bool {
+		a := candidates[i]
+		b := candidates[j]
+		if a.StaleRatio != b.StaleRatio {
+			return a.StaleRatio > b.StaleRatio
+		}
+		if a.BytesStale != b.BytesStale {
+			return a.BytesStale > b.BytesStale
+		}
+		if a.BytesLive != b.BytesLive {
+			return a.BytesLive < b.BytesLive
+		}
+		if a.FileID != b.FileID {
+			return a.FileID < b.FileID
+		}
+		return a.ChunkOffset < b.ChunkOffset
+	})
+	selected := make([]backenddb.ValueLogRewritePlanChunk, 0, maxChunks)
+	remaining := budgetLiveBytes
+	for _, chunk := range candidates {
+		if len(selected) >= maxChunks {
+			break
+		}
+		if budgetLiveBytes > 0 && remaining <= 0 && len(selected) > 0 {
+			break
+		}
+		live := chunk.BytesLive
+		if live < 0 {
+			live = 0
+		}
+		if budgetLiveBytes > 0 && remaining > 0 && live > remaining && len(selected) > 0 {
+			continue
+		}
+		selected = append(selected, chunk)
+		if budgetLiveBytes > 0 && remaining > 0 {
+			remaining -= live
+		}
+	}
+	return selected
+}
+
+func stableVlogGenerationRewriteLedgerChunks(prev, planned []backenddb.ValueLogRewritePlanChunk) []backenddb.ValueLogRewritePlanChunk {
+	if len(prev) == 0 || len(planned) == 0 {
+		return nil
+	}
+	seen := make(map[valueLogGenerationRewriteChunkKey]struct{}, len(prev))
+	for _, chunk := range prev {
+		if chunk.FileID == 0 || chunk.BytesLive <= 0 {
+			continue
+		}
+		seen[valueLogGenerationRewriteChunkKey{FileID: chunk.FileID, ChunkOffset: chunk.ChunkOffset}] = struct{}{}
+	}
+	if len(seen) == 0 {
+		return nil
+	}
+	out := make([]backenddb.ValueLogRewritePlanChunk, 0, len(planned))
+	for _, chunk := range planned {
+		if chunk.FileID == 0 || chunk.BytesLive <= 0 {
+			continue
+		}
+		if _, ok := seen[valueLogGenerationRewriteChunkKey{FileID: chunk.FileID, ChunkOffset: chunk.ChunkOffset}]; !ok {
+			continue
+		}
+		out = append(out, chunk)
+	}
+	return out
+}
+
+func (db *DB) consumeVlogGenerationRewriteChunkLedger(processed []backenddb.ValueLogRewritePlanChunk) error {
+	if db == nil || len(processed) == 0 {
+		return nil
+	}
+	db.vlogGenerationRewriteQueueMu.Lock()
+	defer db.vlogGenerationRewriteQueueMu.Unlock()
+	if err := db.loadVlogGenerationRewriteQueueLocked(); err != nil {
+		return err
+	}
+	if len(db.vlogGenerationRewriteChunkLedger) == 0 {
+		return nil
+	}
+	processedSet := make(map[valueLogGenerationRewriteChunkKey]struct{}, len(processed))
+	for _, chunk := range processed {
+		if chunk.FileID == 0 {
+			continue
+		}
+		processedSet[valueLogGenerationRewriteChunkKey{FileID: chunk.FileID, ChunkOffset: chunk.ChunkOffset}] = struct{}{}
+	}
+	if len(processedSet) == 0 {
+		return nil
+	}
+	remainingChunks := make([]backenddb.ValueLogRewritePlanChunk, 0, len(db.vlogGenerationRewriteChunkLedger))
+	for _, chunk := range db.vlogGenerationRewriteChunkLedger {
+		if _, ok := processedSet[valueLogGenerationRewriteChunkKey{FileID: chunk.FileID, ChunkOffset: chunk.ChunkOffset}]; ok {
+			continue
+		}
+		remainingChunks = append(remainingChunks, chunk)
+	}
+	remainingIDs := vlogGenerationRewriteChunkLedgerIDs(remainingChunks)
+	stagePending := db.vlogGenerationRewriteStagePending && len(remainingChunks) > 0
+	stageObservedAt := db.vlogGenerationRewriteStageObservedUnixNano
+	if !stagePending {
+		stageObservedAt = 0
+	}
+	if err := saveValueLogGenerationRewriteState(db.valueLogGenerationStatePath(), remainingIDs, nil, remainingChunks, db.vlogGenerationRewriteChunkBytes, db.vlogGenerationRewritePenalties, stagePending, stageObservedAt); err != nil {
+		return err
+	}
+	db.vlogGenerationRewriteQueue = remainingIDs
+	db.vlogGenerationRewriteLedger = nil
+	db.vlogGenerationRewriteChunkLedger = remainingChunks
+	db.vlogGenerationRewriteLedgerByFileID = buildVlogGenerationRewriteChunkLedgerByFileID(remainingChunks)
+	db.vlogGenerationRewriteStagePending = stagePending
+	db.vlogGenerationRewriteStageObservedUnixNano = stageObservedAt
+	if stagePending && stageObservedAt > 0 {
+		db.scheduleVlogGenerationRewriteStageConfirmation(stageObservedAt)
+	} else {
+		db.clearVlogGenerationRewriteStageConfirmation()
+	}
+	return nil
+}
+
 func (db *DB) consumeVlogGenerationRewriteQueueChunk(processed []uint32) error {
 	if db == nil || len(processed) == 0 {
 		return nil
@@ -517,6 +845,9 @@ func (db *DB) consumeVlogGenerationRewriteQueueChunk(processed []uint32) error {
 	defer db.vlogGenerationRewriteQueueMu.Unlock()
 	if err := db.loadVlogGenerationRewriteQueueLocked(); err != nil {
 		return err
+	}
+	if len(db.vlogGenerationRewriteChunkLedger) > 0 {
+		return nil
 	}
 	remaining := db.vlogGenerationRewriteQueue
 	remainingLedger := db.vlogGenerationRewriteLedger
@@ -565,7 +896,7 @@ func (db *DB) consumeVlogGenerationRewriteQueueChunk(processed []uint32) error {
 	if !stagePending {
 		stageObservedAt = 0
 	}
-	if err := saveValueLogGenerationRewriteState(db.valueLogGenerationStatePath(), remaining, remainingLedger, db.vlogGenerationRewritePenalties, stagePending, stageObservedAt); err != nil {
+	if err := saveValueLogGenerationRewriteState(db.valueLogGenerationStatePath(), remaining, remainingLedger, nil, 0, db.vlogGenerationRewritePenalties, stagePending, stageObservedAt); err != nil {
 		return err
 	}
 	db.vlogGenerationRewriteQueue = remaining
@@ -590,6 +921,27 @@ func (db *DB) restageVlogGenerationRewriteQueueRemaining(observedAt int64) (int,
 	if err := db.loadVlogGenerationRewriteQueueLocked(); err != nil {
 		return 0, false, err
 	}
+	if len(db.vlogGenerationRewriteChunkLedger) > 0 && len(db.vlogGenerationRewriteQueue) > 0 {
+		if observedAt <= 0 {
+			observedAt = time.Now().UnixNano()
+		}
+		if err := saveValueLogGenerationRewriteState(
+			db.valueLogGenerationStatePath(),
+			append([]uint32(nil), db.vlogGenerationRewriteQueue...),
+			nil,
+			append([]backenddb.ValueLogRewritePlanChunk(nil), db.vlogGenerationRewriteChunkLedger...),
+			db.vlogGenerationRewriteChunkBytes,
+			db.vlogGenerationRewritePenalties,
+			true,
+			observedAt,
+		); err != nil {
+			return 0, false, err
+		}
+		db.vlogGenerationRewriteStagePending = true
+		db.vlogGenerationRewriteStageObservedUnixNano = observedAt
+		db.scheduleVlogGenerationRewriteStageConfirmation(observedAt)
+		return len(db.vlogGenerationRewriteQueue), true, nil
+	}
 	if len(db.vlogGenerationRewriteLedger) == 0 || len(db.vlogGenerationRewriteQueue) == 0 {
 		return len(db.vlogGenerationRewriteQueue), false, nil
 	}
@@ -600,6 +952,8 @@ func (db *DB) restageVlogGenerationRewriteQueueRemaining(observedAt int64) (int,
 		db.valueLogGenerationStatePath(),
 		append([]uint32(nil), db.vlogGenerationRewriteQueue...),
 		append([]backenddb.ValueLogRewritePlanSegment(nil), db.vlogGenerationRewriteLedger...),
+		nil,
+		0,
 		db.vlogGenerationRewritePenalties,
 		true,
 		observedAt,
@@ -637,7 +991,7 @@ func (db *DB) recordVlogGenerationRewritePenalty(ids []uint32, cooldownUntil tim
 		penalty.LastGrowthBytes = growth
 		db.vlogGenerationRewritePenalties[id] = penalty
 	}
-	return saveValueLogGenerationRewriteState(db.valueLogGenerationStatePath(), db.vlogGenerationRewriteQueue, db.vlogGenerationRewriteLedger, db.vlogGenerationRewritePenalties, db.vlogGenerationRewriteStagePending, db.vlogGenerationRewriteStageObservedUnixNano)
+	return saveValueLogGenerationRewriteState(db.valueLogGenerationStatePath(), db.vlogGenerationRewriteQueue, db.vlogGenerationRewriteLedger, db.vlogGenerationRewriteChunkLedger, db.vlogGenerationRewriteChunkBytes, db.vlogGenerationRewritePenalties, db.vlogGenerationRewriteStagePending, db.vlogGenerationRewriteStageObservedUnixNano)
 }
 
 func (db *DB) currentVlogGenerationRewritePenalties() (map[uint32]valueLogGenerationRewritePenalty, error) {
