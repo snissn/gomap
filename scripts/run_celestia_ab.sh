@@ -70,6 +70,7 @@ AB_LIVE_DEBUG_VARS_URL="${AB_LIVE_DEBUG_VARS_URL:-http://127.0.0.1:6062/debug/va
 PAIR_ALIGN_TRUST_FROM_FIRST="${PAIR_ALIGN_TRUST_FROM_FIRST:-0}"
 PAIR_ALIGN_STOP_HEIGHT_FROM_FIRST="${PAIR_ALIGN_STOP_HEIGHT_FROM_FIRST:-0}"
 PAIR_ALIGN_STOP_MARGIN="${PAIR_ALIGN_STOP_MARGIN:-0}"
+PAIR_ALIGN_STOP_POLL_INTERVAL_SECONDS="${PAIR_ALIGN_STOP_POLL_INTERVAL_SECONDS:-1}"
 TS="$(date +%Y%m%d%H%M%S)"
 
 if [[ "$#" -gt 4 ]]; then
@@ -163,6 +164,10 @@ if ! [[ "$PAIR_ALIGN_STOP_MARGIN" =~ ^[0-9]+$ ]]; then
   echo "PAIR_ALIGN_STOP_MARGIN must be a non-negative integer" >&2
   exit 1
 fi
+if ! [[ "$PAIR_ALIGN_STOP_POLL_INTERVAL_SECONDS" =~ ^[1-9][0-9]*$ ]]; then
+  echo "PAIR_ALIGN_STOP_POLL_INTERVAL_SECONDS must be a positive integer" >&2
+  exit 1
+fi
 if [[ "$AB_LIGHT_VLOG_STATS_TIMEOUT_SECONDS" -lt 0 ]]; then
   echo "AB_LIGHT_VLOG_STATS_TIMEOUT_SECONDS must be >= 0" >&2
   exit 1
@@ -245,6 +250,7 @@ ab_live_debug_vars_url=$AB_LIVE_DEBUG_VARS_URL
 pair_align_trust_from_first=$PAIR_ALIGN_TRUST_FROM_FIRST
 pair_align_stop_height_from_first=$PAIR_ALIGN_STOP_HEIGHT_FROM_FIRST
 pair_align_stop_margin=$PAIR_ALIGN_STOP_MARGIN
+pair_align_stop_poll_interval_seconds=$PAIR_ALIGN_STOP_POLL_INTERVAL_SECONDS
 META
 
 list_run_homes() {
@@ -388,7 +394,7 @@ run_json_path() {
 build_pair_overlay_env() {
   local first_json="$1"
   local out_env="$2"
-  python3 - "$first_json" "$out_env" "$PAIR_ALIGN_TRUST_FROM_FIRST" "$PAIR_ALIGN_STOP_HEIGHT_FROM_FIRST" "$PAIR_ALIGN_STOP_MARGIN" <<'PY'
+  python3 - "$first_json" "$out_env" "$PAIR_ALIGN_TRUST_FROM_FIRST" "$PAIR_ALIGN_STOP_HEIGHT_FROM_FIRST" "$PAIR_ALIGN_STOP_MARGIN" "$PAIR_ALIGN_STOP_POLL_INTERVAL_SECONDS" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -398,6 +404,7 @@ out_env = Path(sys.argv[2])
 align_trust = sys.argv[3] == "1"
 align_stop = sys.argv[4] == "1"
 stop_margin = int(sys.argv[5])
+stop_poll_interval_seconds = int(sys.argv[6])
 
 def scalar_int(value):
     try:
@@ -441,6 +448,7 @@ if first_json.exists():
             if target < 0:
                 target = 0
             out_lines.append(f"STOP_AT_LOCAL_HEIGHT={target}")
+            out_lines.append(f"POLL_INTERVAL_SECONDS={stop_poll_interval_seconds}")
 
 if out_lines:
     out_env.write_text("\n".join(out_lines) + "\n", encoding="utf-8")
