@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
+	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -216,5 +217,75 @@ func TestSelectRewriteSourceChunksWithStats_PrefersHighStaleChunk(t *testing.T) 
 	}
 	if got, want := selected[1].ChunkOffset, int64(0); got != want {
 		t.Fatalf("second chunk offset=%d want %d", got, want)
+	}
+}
+
+func TestValueLogRewriteOnline_SourceChunks_RestrictsPointerRewriteSet(t *testing.T) {
+	dir := t.TempDir()
+
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer closeNoErr(t, db)
+
+	ptrs := appendPointersInNewSegment(t, dir, 0, 1, 260_300, 2, func(i int) []byte {
+		return bytes.Repeat([]byte{byte('a' + i)}, 1500)
+	})
+
+	b := db.NewBatch().(*Batch)
+	if err := b.SetPointer([]byte("k1"), ptrs[0]); err != nil {
+		t.Fatalf("set k1: %v", err)
+	}
+	if err := b.SetPointer([]byte("k2"), ptrs[1]); err != nil {
+		t.Fatalf("set k2: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("seed write: %v", err)
+	}
+	closeNoErr(t, b)
+
+	chunkBytes := int64(1024)
+	chunk1, err := valueLogChunkOffsetForPtr(ptrs[0], chunkBytes)
+	if err != nil {
+		t.Fatalf("chunk offset 1: %v", err)
+	}
+	chunk2, err := valueLogChunkOffsetForPtr(ptrs[1], chunkBytes)
+	if err != nil {
+		t.Fatalf("chunk offset 2: %v", err)
+	}
+	if chunk1 == chunk2 {
+		t.Fatalf("expected separate chunk offsets, got %d and %d", chunk1, chunk2)
+	}
+
+	stats, err := db.ValueLogRewriteOnline(context.Background(), ValueLogRewriteOnlineOptions{
+		SourceChunks: []ValueLogRewritePlanChunk{{
+			FileID:      ptrs[0].FileID,
+			ChunkOffset: chunk1,
+			BytesTotal:  chunkBytes,
+		}},
+		SourceChunkBytes: chunkBytes,
+		BatchSize:        8,
+	})
+	if err != nil {
+		t.Fatalf("ValueLogRewriteOnline: %v", err)
+	}
+	if stats.SourceChunksRequested != 1 {
+		t.Fatalf("source chunks requested=%d want 1", stats.SourceChunksRequested)
+	}
+	if stats.RecordsCopied != 1 {
+		t.Fatalf("records copied=%d want 1", stats.RecordsCopied)
+	}
+
+	ptrK1, flagsK1 := readProjectedPointerByKey(t, db, []byte("k1"))
+	ptrK2, flagsK2 := readProjectedPointerByKey(t, db, []byte("k2"))
+	if flagsK1&node.FlagPointer == 0 || flagsK2&node.FlagPointer == 0 {
+		t.Fatalf("expected pointer flags for rewritten keys: k1=%#x k2=%#x", flagsK1, flagsK2)
+	}
+	if ptrK1.FileID == ptrs[0].FileID {
+		t.Fatalf("expected k1 pointer to move off source segment %d", ptrs[0].FileID)
+	}
+	if ptrK2.FileID != ptrs[1].FileID {
+		t.Fatalf("expected k2 pointer to remain on non-selected chunk in source segment %d, got %d", ptrs[1].FileID, ptrK2.FileID)
 	}
 }
