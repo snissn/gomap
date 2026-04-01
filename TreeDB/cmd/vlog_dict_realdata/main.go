@@ -98,66 +98,68 @@ const (
 )
 
 type benchReport struct {
-	Mode                     string   `json:"mode"`
-	Compression              string   `json:"compression"`
-	CompressionMode          string   `json:"compression_mode,omitempty"`
-	BlockCodec               string   `json:"block_codec,omitempty"`
-	AutoPolicy               string   `json:"auto_policy,omitempty"`
-	DictClassMode            string   `json:"dict_class_mode,omitempty"`
-	IndexOuterLeaves         bool     `json:"index_outer_leaves_in_vlog,omitempty"`
-	Template                 string   `json:"template"`
-	KeyMode                  string   `json:"key_mode"`
-	RawMiB                   int      `json:"raw_mib"`
-	Batch                    int      `json:"batch"`
-	Workers                  int      `json:"workers,omitempty"`
-	PointerThreshold         int      `json:"pointer_threshold"`
-	FlushThresholdMiB        int      `json:"flush_threshold_mib,omitempty"`
-	DictTrainMiB             int      `json:"dict_train_mib,omitempty"`
-	DictSampleStride         int      `json:"dict_sample_stride,omitempty"`
-	LoadSeconds              float64  `json:"load_seconds"`
-	PreSteadyDictID          *uint64  `json:"pre_steady_dict_id,omitempty"`
-	PreSteadyFramesKept      *uint64  `json:"pre_steady_frames_kept,omitempty"`
-	TrainSeconds             float64  `json:"train_seconds"`
-	TrainRawBytes            int64    `json:"train_raw_bytes"`
-	TrainRecords             int      `json:"train_records"`
-	WarmupRawBytes           int64    `json:"warmup_raw_bytes,omitempty"`
-	WarmupSeconds            float64  `json:"warmup_seconds,omitempty"`
-	WarmupVlogBytes          int64    `json:"warmup_vlog_bytes,omitempty"`
-	SteadySeconds            float64  `json:"steady_seconds"`
-	SteadyRawBytes           int64    `json:"steady_raw_bytes"`
-	SteadyRecords            int      `json:"steady_records"`
-	SteadyRawMBps            float64  `json:"steady_raw_MBps"`
-	SteadyVlogBytes          int64    `json:"steady_vlog_bytes,omitempty"`
-	SteadyVlogRatio          *float64 `json:"steady_vlog_ratio,omitempty"`
-	TotalVlogRatio           *float64 `json:"total_vlog_ratio,omitempty"`
-	SpeedupVsOff             *float64 `json:"speedup_vs_off,omitempty"`
-	AttemptedFrac            *float64 `json:"attempted_frac,omitempty"`
-	KeptFrac                 *float64 `json:"kept_frac,omitempty"`
-	CurrentK                 *int     `json:"current_k,omitempty"`
-	DictID                   *uint64  `json:"dict_id,omitempty"`
-	FramesTotal              *uint64  `json:"frames_total,omitempty"`
-	FramesAttempted          *uint64  `json:"frames_attempted,omitempty"`
-	FramesKept               *uint64  `json:"frames_kept,omitempty"`
-	KeptOfAttemptedFrac      *float64 `json:"kept_of_attempted_frac,omitempty"`
-	TemplateAttempted        *uint64  `json:"template_attempted,omitempty"`
-	TemplateMatched          *uint64  `json:"template_matched,omitempty"`
-	TemplateKept             *uint64  `json:"template_kept,omitempty"`
-	TemplateSavedBytes       *uint64  `json:"template_saved_bytes,omitempty"`
-	TemplatesPublished       *uint64  `json:"templates_published,omitempty"`
-	MaskSparseUsed           *uint64  `json:"mask_sparse_used,omitempty"`
-	MaskFullUsed             *uint64  `json:"mask_full_used,omitempty"`
-	MaskSparseFrac           *float64 `json:"mask_sparse_frac,omitempty"`
-	TemplateDefCacheHits     *uint64  `json:"template_def_cache_hits,omitempty"`
-	TemplateDefCacheMisses   *uint64  `json:"template_def_cache_misses,omitempty"`
-	TemplateDefCacheHitRatio *float64 `json:"template_def_cache_hit_ratio,omitempty"`
-	TemplateDefCacheEntries  *uint64  `json:"template_def_cache_entries,omitempty"`
-	TemplateDefCacheCapacity *uint64  `json:"template_def_cache_capacity,omitempty"`
-	ValueLogBytes            int64    `json:"value_log_bytes,omitempty"`
-	IndexBytes               int64    `json:"index_bytes,omitempty"`
-	WritePathMode            string   `json:"write_path_mode"`
-	WritePathValueStore      string   `json:"write_path_value_store"`
-	WritePathRedoLog         string   `json:"write_path_redo_log"`
-	BenchDir                 string   `json:"bench_dir"`
+	Mode                     string            `json:"mode"`
+	Compression              string            `json:"compression"`
+	CompressionMode          string            `json:"compression_mode,omitempty"`
+	BlockCodec               string            `json:"block_codec,omitempty"`
+	AutoPolicy               string            `json:"auto_policy,omitempty"`
+	DictClassMode            string            `json:"dict_class_mode,omitempty"`
+	IndexOuterLeaves         bool              `json:"index_outer_leaves_in_vlog,omitempty"`
+	Template                 string            `json:"template"`
+	KeyMode                  string            `json:"key_mode"`
+	RawMiB                   int               `json:"raw_mib"`
+	Batch                    int               `json:"batch"`
+	Workers                  int               `json:"workers,omitempty"`
+	PointerThreshold         int               `json:"pointer_threshold"`
+	FlushThresholdMiB        int               `json:"flush_threshold_mib,omitempty"`
+	DictTrainMiB             int               `json:"dict_train_mib,omitempty"`
+	DictSampleStride         int               `json:"dict_sample_stride,omitempty"`
+	LoadSeconds              float64           `json:"load_seconds"`
+	PreSteadyDictID          *uint64           `json:"pre_steady_dict_id,omitempty"`
+	PreSteadyFramesKept      *uint64           `json:"pre_steady_frames_kept,omitempty"`
+	TrainSeconds             float64           `json:"train_seconds"`
+	TrainRawBytes            int64             `json:"train_raw_bytes"`
+	TrainRecords             int               `json:"train_records"`
+	WarmupRawBytes           int64             `json:"warmup_raw_bytes,omitempty"`
+	WarmupSeconds            float64           `json:"warmup_seconds,omitempty"`
+	WarmupVlogBytes          int64             `json:"warmup_vlog_bytes,omitempty"`
+	SteadySeconds            float64           `json:"steady_seconds"`
+	SteadyRawBytes           int64             `json:"steady_raw_bytes"`
+	SteadyRecords            int               `json:"steady_records"`
+	SteadyRawMBps            float64           `json:"steady_raw_MBps"`
+	SteadyVlogBytes          int64             `json:"steady_vlog_bytes,omitempty"`
+	SteadyVlogRatio          *float64          `json:"steady_vlog_ratio,omitempty"`
+	TotalVlogRatio           *float64          `json:"total_vlog_ratio,omitempty"`
+	SpeedupVsOff             *float64          `json:"speedup_vs_off,omitempty"`
+	AttemptedFrac            *float64          `json:"attempted_frac,omitempty"`
+	KeptFrac                 *float64          `json:"kept_frac,omitempty"`
+	CurrentK                 *int              `json:"current_k,omitempty"`
+	DictID                   *uint64           `json:"dict_id,omitempty"`
+	FramesTotal              *uint64           `json:"frames_total,omitempty"`
+	FramesAttempted          *uint64           `json:"frames_attempted,omitempty"`
+	FramesKept               *uint64           `json:"frames_kept,omitempty"`
+	KeptOfAttemptedFrac      *float64          `json:"kept_of_attempted_frac,omitempty"`
+	TemplateAttempted        *uint64           `json:"template_attempted,omitempty"`
+	TemplateMatched          *uint64           `json:"template_matched,omitempty"`
+	TemplateKept             *uint64           `json:"template_kept,omitempty"`
+	TemplateSavedBytes       *uint64           `json:"template_saved_bytes,omitempty"`
+	TemplatesPublished       *uint64           `json:"templates_published,omitempty"`
+	MaskSparseUsed           *uint64           `json:"mask_sparse_used,omitempty"`
+	MaskFullUsed             *uint64           `json:"mask_full_used,omitempty"`
+	MaskSparseFrac           *float64          `json:"mask_sparse_frac,omitempty"`
+	TemplateDefCacheHits     *uint64           `json:"template_def_cache_hits,omitempty"`
+	TemplateDefCacheMisses   *uint64           `json:"template_def_cache_misses,omitempty"`
+	TemplateDefCacheHitRatio *float64          `json:"template_def_cache_hit_ratio,omitempty"`
+	TemplateDefCacheEntries  *uint64           `json:"template_def_cache_entries,omitempty"`
+	TemplateDefCacheCapacity *uint64           `json:"template_def_cache_capacity,omitempty"`
+	ValueLogBytes            int64             `json:"value_log_bytes,omitempty"`
+	IndexBytes               int64             `json:"index_bytes,omitempty"`
+	WritePathMode            string            `json:"write_path_mode"`
+	WritePathValueStore      string            `json:"write_path_value_store"`
+	WritePathRedoLog         string            `json:"write_path_redo_log"`
+	BenchDir                 string            `json:"bench_dir"`
+	StatsPreSteady           map[string]string `json:"stats_pre_steady,omitempty"`
+	StatsEnd                 map[string]string `json:"stats_end,omitempty"`
 }
 
 type benchKeyState struct {
@@ -899,6 +901,7 @@ func runKVBench(input string, capBytes int, cfg benchConfig, train, eval []kvSam
 
 	var preSteadyDictIDPtr *uint64
 	var preSteadyKeptFramesPtr *uint64
+	var statsPreSteadyFiltered map[string]string
 
 	warmStart := time.Now()
 	var warmRaw int64
@@ -924,6 +927,7 @@ func runKVBench(input string, capBytes int, cfg benchConfig, train, eval []kvSam
 		if err != nil {
 			return nil, err
 		}
+		statsPreSteadyFiltered = filterBenchStatsEnd(snap)
 		dictID, dictOK := parseBenchDictStatUint(snap, cfg, "treedb.cache.vlog_dict.last_applied_dict_id")
 		keptFrames, keptOK := parseStatUint(snap, "treedb.cache.vlog_dict.frames_kept")
 		if dictOK {
@@ -994,6 +998,7 @@ func runKVBench(input string, capBytes int, cfg benchConfig, train, eval []kvSam
 	if err := validateWritePath(statsEnd, expect); err != nil {
 		return nil, err
 	}
+	statsEndFiltered := filterBenchStatsEnd(statsEnd)
 
 	attemptedFrac, attemptedOK := parseStatFloat(statsEnd, "treedb.cache.vlog_dict.attempted_frac")
 	keptFrac, keptOK := parseStatFloat(statsEnd, "treedb.cache.vlog_dict.kept_frac")
@@ -1307,6 +1312,8 @@ func runKVBench(input string, capBytes int, cfg benchConfig, train, eval []kvSam
 		WritePathValueStore: writePathValueStore,
 		WritePathRedoLog:    writePathRedoLog,
 		BenchDir:            benchDir,
+		StatsPreSteady:      statsPreSteadyFiltered,
+		StatsEnd:            statsEndFiltered,
 	}
 	return report, nil
 }
@@ -2073,6 +2080,34 @@ func formatStatUint(val uint64, ok bool) string {
 		return "n/a"
 	}
 	return fmt.Sprintf("%d", val)
+}
+
+func filterBenchStatsEnd(stats map[string]string) map[string]string {
+	if len(stats) == 0 {
+		return nil
+	}
+	includePrefixes := []string{
+		"treedb.cache.vlog_auto.",
+		"treedb.cache.vlog_write_mode.",
+		"treedb.cache.vlog_payload_kind.",
+		"treedb.cache.vlog_payload_split.",
+		"treedb.cache.vlog_outer_leaf_codec.",
+		"treedb.cache.vlog_dict.",
+		"treedb.write_path.",
+	}
+	out := make(map[string]string)
+	for k, v := range stats {
+		for _, prefix := range includePrefixes {
+			if strings.HasPrefix(k, prefix) {
+				out[k] = v
+				break
+			}
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func bytesToMiB(n int64) float64 {

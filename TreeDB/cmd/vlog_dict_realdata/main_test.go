@@ -370,6 +370,32 @@ func TestParseBenchDictStatUint_PrefersOuterLeafWhenSplitMode(t *testing.T) {
 	}
 }
 
+func TestFilterBenchStatsEnd(t *testing.T) {
+	stats := map[string]string{
+		"treedb.cache.vlog_auto.bytes.dict":             "4096",
+		"treedb.cache.vlog_outer_leaf_codec.frames.lz4": "4",
+		"treedb.cache.vlog_dict.current_k.outer_leaf":   "8",
+		"treedb.write_path.mode":                        "cached",
+		"treedb.cache.unrelated":                        "skip",
+	}
+	got := filterBenchStatsEnd(stats)
+	if got["treedb.cache.vlog_auto.bytes.dict"] != "4096" {
+		t.Fatalf("missing vlog_auto bytes: %#v", got)
+	}
+	if got["treedb.cache.vlog_outer_leaf_codec.frames.lz4"] != "4" {
+		t.Fatalf("missing outer_leaf codec stats: %#v", got)
+	}
+	if got["treedb.cache.vlog_dict.current_k.outer_leaf"] != "8" {
+		t.Fatalf("missing dict stats: %#v", got)
+	}
+	if got["treedb.write_path.mode"] != "cached" {
+		t.Fatalf("missing write_path stats: %#v", got)
+	}
+	if _, ok := got["treedb.cache.unrelated"]; ok {
+		t.Fatalf("unexpected unrelated stat in filtered output: %#v", got)
+	}
+}
+
 func TestRunKVBench_WarmupRatioAccounting(t *testing.T) {
 	train, eval, stats, err := generateSyntheticKVDataset("medium_compressible_sparse", 256, 2000, 800)
 	if err != nil {
