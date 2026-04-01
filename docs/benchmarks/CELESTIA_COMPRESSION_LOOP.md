@@ -367,6 +367,15 @@ Notes:
   - `run.json` preserves that object as `write_path_summary`
   - `runs.csv` includes a compact slice for the most useful fields during outer-leaf work: block vs dict stored bytes, outer-leaf split bytes, legacy-page bytes, auto dict/snappy bytes+frame fractions, and the outer-leaf dict id/K
   - `summary.md` now shows the same write-path slice for the last pair so block-to-dict and outer-leaf routing shifts are visible without opening raw debug vars
+  - `write_path_summary.dict.classes.outer_leaf` now also includes:
+    - `current_cached_id`
+    - `write_selected`
+    - `write_final`
+    - `write_fallback_pause`
+    - `write_fallback_classifier_bypass`
+    - `write_fallback_size_floor`
+    - `write_fallback_dict_load`
+  - use those when the selector appears to prefer dict but sampled `write_mode.dict` bytes stay at zero; they tell whether the outer-leaf dict path was actually selected and whether it later downgraded before encode
 - maintenance summaries also export exact-source counters for `rewrite_stage_confirm` vs `rewrite_stage_confirm_exit`, so restart loops can be separated from the initial stage-confirm pass in `run.json`, `runs.csv`, and `analyze_vlog_maintenance_capacity.py`
 - retained-prune accounting needs two views:
   - `retained_prune_zombie_marked_bytes` / `retained_prune_removed_bytes` report work done inline by the prune pass itself

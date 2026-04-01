@@ -100,8 +100,18 @@ func TestStats_ExportsValueLogDictClassKeys(t *testing.T) {
 
 	cdb.valueLogDictLastAppliedDictIDByClass[vlogDictClassSingleValue].Store(11)
 	cdb.valueLogDictCurrentKByClass[vlogDictClassSingleValue].Store(7)
+	cdb.dictCurrentCachedByClass[vlogDictClassSingleValue].Store(17)
+	cdb.valueLogDictWriteSelectedByClass[vlogDictClassSingleValue].Store(3)
+	cdb.valueLogDictWriteFinalByClass[vlogDictClassSingleValue].Store(2)
 	cdb.valueLogDictLastAppliedDictIDByClass[vlogDictClassOuterLeaf].Store(22)
 	cdb.valueLogDictCurrentKByClass[vlogDictClassOuterLeaf].Store(13)
+	cdb.dictCurrentCachedByClass[vlogDictClassOuterLeaf].Store(27)
+	cdb.valueLogDictWriteSelectedByClass[vlogDictClassOuterLeaf].Store(11)
+	cdb.valueLogDictWriteFinalByClass[vlogDictClassOuterLeaf].Store(5)
+	cdb.valueLogDictWriteFallbackPauseByClass[vlogDictClassOuterLeaf].Store(2)
+	cdb.valueLogDictWriteFallbackBypassByClass[vlogDictClassOuterLeaf].Store(3)
+	cdb.valueLogDictWriteFallbackSizeFloorByClass[vlogDictClassOuterLeaf].Store(4)
+	cdb.valueLogDictWriteFallbackDictLoadByClass[vlogDictClassOuterLeaf].Store(6)
 
 	stats := cdb.Stats()
 	if got := stats["treedb.cache.vlog_dict.last_applied_dict_id.single_value"]; got != "11" {
@@ -115,5 +125,35 @@ func TestStats_ExportsValueLogDictClassKeys(t *testing.T) {
 	}
 	if got := stats["treedb.cache.vlog_dict.current_k.outer_leaf"]; got != "13" {
 		t.Fatalf("outer_leaf current k=%q want 13", got)
+	}
+	if got := stats["treedb.cache.vlog_dict.current_cached_id.single_value"]; got != "17" {
+		t.Fatalf("single_value current cached id=%q want 17", got)
+	}
+	if got := stats["treedb.cache.vlog_dict.current_cached_id.outer_leaf"]; got != "27" {
+		t.Fatalf("outer_leaf current cached id=%q want 27", got)
+	}
+	if got := stats["treedb.cache.vlog_dict.write_selected.single_value"]; got != "3" {
+		t.Fatalf("single_value write selected=%q want 3", got)
+	}
+	if got := stats["treedb.cache.vlog_dict.write_final.single_value"]; got != "2" {
+		t.Fatalf("single_value write final=%q want 2", got)
+	}
+	if got := stats["treedb.cache.vlog_dict.write_selected.outer_leaf"]; got != "11" {
+		t.Fatalf("outer_leaf write selected=%q want 11", got)
+	}
+	if got := stats["treedb.cache.vlog_dict.write_final.outer_leaf"]; got != "5" {
+		t.Fatalf("outer_leaf write final=%q want 5", got)
+	}
+	if got := stats["treedb.cache.vlog_dict.write_fallback.pause.outer_leaf"]; got != "2" {
+		t.Fatalf("outer_leaf fallback pause=%q want 2", got)
+	}
+	if got := stats["treedb.cache.vlog_dict.write_fallback.classifier_bypass.outer_leaf"]; got != "3" {
+		t.Fatalf("outer_leaf fallback classifier bypass=%q want 3", got)
+	}
+	if got := stats["treedb.cache.vlog_dict.write_fallback.size_floor.outer_leaf"]; got != "4" {
+		t.Fatalf("outer_leaf fallback size floor=%q want 4", got)
+	}
+	if got := stats["treedb.cache.vlog_dict.write_fallback.dict_load.outer_leaf"]; got != "6" {
+		t.Fatalf("outer_leaf fallback dict load=%q want 6", got)
 	}
 }

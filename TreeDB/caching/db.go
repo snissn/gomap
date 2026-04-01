@@ -5976,32 +5976,38 @@ type DB struct {
 	valueLogAutotuneLastProfile      atomic.Value // *vlogAutotuneProfile
 	valueLogAutotuneLastSwitchFrames atomic.Uint64
 
-	valueLogDictPauseRemaining               atomic.Uint64
-	valueLogDictProbeBytes                   uint64
-	valueLogDictProbeRemaining               atomic.Uint64
-	valueLogDictIncompressibleHoldBytes      uint64
-	valueLogDictIncompressibleHoldRemaining  atomic.Uint64
-	valueLogDictIncompressibleProbeBytes     uint64
-	valueLogDictIncompressibleProbeRemaining atomic.Uint64
-	valueLogDictIncompressibleHitStreak      atomic.Uint32
-	valueLogDictIncompressibleHits           atomic.Uint64
-	valueLogDictIncompressibleHolds          atomic.Uint64
-	valueLogDictIncompressibleBypassBytes    atomic.Uint64
-	valueLogDictPausedSampleStride           uint64
-	valueLogDictPausedSampleCounter          atomic.Uint64
-	valueLogDictLastAppliedDictHash          atomic.Uint64
-	valueLogDictLastAppliedDictHashByClass   [vlogDictClassCount]atomic.Uint64
-	valueLogDictLastAppliedDictID            atomic.Uint64
-	valueLogDictLastPublishUnixNano          atomic.Int64
-	valueLogDictLastKUpdateUnixNano          atomic.Int64
-	valueLogDictCurrentK                     atomic.Uint32
-	valueLogDictLastAppliedDictIDByClass     [vlogDictClassCount]atomic.Uint64
-	valueLogDictCurrentKByClass              [vlogDictClassCount]atomic.Uint32
-	valueLogDictKMu                          sync.RWMutex
-	valueLogDictKCache                       map[uint64]int
-	valueLogDictBytesMu                      sync.Mutex
-	valueLogDictBytesID                      uint64
-	valueLogDictBytes                        []byte
+	valueLogDictPauseRemaining                atomic.Uint64
+	valueLogDictProbeBytes                    uint64
+	valueLogDictProbeRemaining                atomic.Uint64
+	valueLogDictIncompressibleHoldBytes       uint64
+	valueLogDictIncompressibleHoldRemaining   atomic.Uint64
+	valueLogDictIncompressibleProbeBytes      uint64
+	valueLogDictIncompressibleProbeRemaining  atomic.Uint64
+	valueLogDictIncompressibleHitStreak       atomic.Uint32
+	valueLogDictIncompressibleHits            atomic.Uint64
+	valueLogDictIncompressibleHolds           atomic.Uint64
+	valueLogDictIncompressibleBypassBytes     atomic.Uint64
+	valueLogDictPausedSampleStride            uint64
+	valueLogDictPausedSampleCounter           atomic.Uint64
+	valueLogDictLastAppliedDictHash           atomic.Uint64
+	valueLogDictLastAppliedDictHashByClass    [vlogDictClassCount]atomic.Uint64
+	valueLogDictLastAppliedDictID             atomic.Uint64
+	valueLogDictLastPublishUnixNano           atomic.Int64
+	valueLogDictLastKUpdateUnixNano           atomic.Int64
+	valueLogDictCurrentK                      atomic.Uint32
+	valueLogDictLastAppliedDictIDByClass      [vlogDictClassCount]atomic.Uint64
+	valueLogDictCurrentKByClass               [vlogDictClassCount]atomic.Uint32
+	valueLogDictWriteSelectedByClass          [vlogDictClassCount]atomic.Uint64
+	valueLogDictWriteFinalByClass             [vlogDictClassCount]atomic.Uint64
+	valueLogDictWriteFallbackPauseByClass     [vlogDictClassCount]atomic.Uint64
+	valueLogDictWriteFallbackBypassByClass    [vlogDictClassCount]atomic.Uint64
+	valueLogDictWriteFallbackSizeFloorByClass [vlogDictClassCount]atomic.Uint64
+	valueLogDictWriteFallbackDictLoadByClass  [vlogDictClassCount]atomic.Uint64
+	valueLogDictKMu                           sync.RWMutex
+	valueLogDictKCache                        map[uint64]int
+	valueLogDictBytesMu                       sync.Mutex
+	valueLogDictBytesID                       uint64
+	valueLogDictBytes                         []byte
 
 	// Value-log template compression (cached mode).
 	valueLogTemplateEnabled    bool
@@ -12103,8 +12109,10 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 
 	mode := normalizeVlogCompressionMode(db.valueLogCompressionMode)
 	allowDictFallback := mode == vlogCompressionAuto || (mode == vlogCompressionDict && db.vlogSelectorEnabled(mode))
-	payloadKindForFallback := db.classifyVlogPayloadKindForRecords(records)
+	payloadSplitForFallback := db.classifyVlogPayloadSplitForRecords(records)
+	payloadKindForFallback := payloadSplitForFallback.Kind
 	outerLeafPayloadsOnly := payloadKindForFallback == vlogPayloadKindOuterLeaf
+	dictClass := db.valueLogDictClassForRecordSplit(payloadSplitForFallback)
 	dictFallbackWriteMode := func(current vlogCompressionWriteMode) vlogCompressionWriteMode {
 		next := fallbackAutoVlogWriteMode(mode, current, allowDictFallback)
 		if mode == vlogCompressionDict && next == vlogWriteDict && outerLeafPayloadsOnly {
@@ -12120,6 +12128,9 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 		selectorUnitPayloadBytes = rawPayloadBytes / n
 	}
 	writeMode, blockCodec, selectorProbe := db.resolveVlogWriteMode(l, dictID, selectorPayloadBytes, selectorUnitPayloadBytes, outerLeafPayloadsOnly)
+	if dictID != 0 && writeMode == vlogWriteDict {
+		db.noteValueLogDictWriteSelected(dictClass)
+	}
 	normalizeNoDictBlockCodec := func() {
 		if writeMode != vlogWriteBlock {
 			return
@@ -12149,6 +12160,7 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 		probeCompression = probeCompression || dictProbe
 		paused = dictPaused
 		if !attemptCompression {
+			db.noteValueLogDictWriteFallback(dictClass, vlogDictWriteFallbackPause)
 			dictID = 0
 			dict = nil
 			writeMode = dictFallbackWriteMode(writeMode)
@@ -12157,6 +12169,7 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 		}
 	}
 	if dictID != 0 && db.shouldBypassValueLogDictForRecords(records, probeCompression) {
+		db.noteValueLogDictWriteFallback(dictClass, vlogDictWriteFallbackClassifierBypass)
 		dictID = 0
 		dict = nil
 		writeMode = dictFallbackWriteMode(writeMode)
@@ -12166,6 +12179,7 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	if dictID != 0 && db.valueLogAutotuneOptions.DisableBelowValueBytes > 0 {
 		avg := rawPayloadBytes / len(records)
 		if avg < db.valueLogAutotuneOptions.DisableBelowValueBytes {
+			db.noteValueLogDictWriteFallback(dictClass, vlogDictWriteFallbackSizeFloor)
 			dictID = 0
 			dict = nil
 			writeMode = dictFallbackWriteMode(writeMode)
@@ -12177,6 +12191,7 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 		if b, dictErr := db.dictBytes(context.Background(), dictID); dictErr == nil {
 			dict = b
 		} else {
+			db.noteValueLogDictWriteFallback(dictClass, vlogDictWriteFallbackDictLoad)
 			dictID = 0
 			dict = nil
 			writeMode = dictFallbackWriteMode(writeMode)
@@ -12632,6 +12647,7 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 		}
 	}
 	if dictID != 0 && len(dict) > 0 {
+		db.noteValueLogDictWriteFinal(dictClass)
 		if rawFrameBytes == 0 {
 			rawFrameBytes = rawPayloadBytes
 		}
@@ -12679,7 +12695,7 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 		}
 	}
 	selectorWallNs := time.Since(selectorStart).Nanoseconds()
-	payloadSplit := db.classifyVlogPayloadSplitForRecords(records)
+	payloadSplit := payloadSplitForFallback
 	recordLaneVlogPayloadKindObservation(l, payloadSplit.Kind, rawForSelector, storedForSelector)
 	recordLaneVlogPayloadSplitFromSummary(l, payloadSplit, storedForSelector)
 	if payloadSplit.Kind != vlogPayloadKindSingleValue {
@@ -12787,6 +12803,7 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 	mode := normalizeVlogCompressionMode(db.valueLogCompressionMode)
 	allowDictFallback := mode == vlogCompressionAuto || (mode == vlogCompressionDict && db.vlogSelectorEnabled(mode))
 	outerLeafPayload := db.isOuterLeafValueLogPayload(value)
+	dictClass := db.valueLogDictClassForValue(value)
 	dictFallbackWriteMode := func(current vlogCompressionWriteMode) vlogCompressionWriteMode {
 		next := fallbackAutoVlogWriteMode(mode, current, allowDictFallback)
 		if mode == vlogCompressionDict && next == vlogWriteDict && outerLeafPayload {
@@ -12797,6 +12814,9 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 		return next
 	}
 	writeMode, blockCodec, selectorProbe := db.resolveVlogWriteMode(l, dictID, len(value), len(value), outerLeafPayload)
+	if dictID != 0 && writeMode == vlogWriteDict {
+		db.noteValueLogDictWriteSelected(dictClass)
+	}
 	normalizeNoDictBlockCodec := func() {
 		if writeMode != vlogWriteBlock {
 			return
@@ -12822,6 +12842,7 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 		attemptCompression, dictProbe, _ := db.valueLogDictShouldAttemptCompression(len(value))
 		probeCompression = probeCompression || dictProbe
 		if !attemptCompression {
+			db.noteValueLogDictWriteFallback(dictClass, vlogDictWriteFallbackPause)
 			dictID = 0
 			dict = nil
 			writeMode = dictFallbackWriteMode(writeMode)
@@ -12829,12 +12850,14 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 		}
 	}
 	if dictID != 0 && db.shouldBypassValueLogDictForValue(value, probeCompression) {
+		db.noteValueLogDictWriteFallback(dictClass, vlogDictWriteFallbackClassifierBypass)
 		dictID = 0
 		dict = nil
 		writeMode = dictFallbackWriteMode(writeMode)
 		normalizeNoDictBlockCodec()
 	}
 	if dictID != 0 && db.valueLogAutotuneOptions.DisableBelowValueBytes > 0 && len(value) < db.valueLogAutotuneOptions.DisableBelowValueBytes {
+		db.noteValueLogDictWriteFallback(dictClass, vlogDictWriteFallbackSizeFloor)
 		dictID = 0
 		dict = nil
 		writeMode = dictFallbackWriteMode(writeMode)
@@ -12844,6 +12867,7 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 		if b, dictErr := db.dictBytes(context.Background(), dictID); dictErr == nil {
 			dict = b
 		} else {
+			db.noteValueLogDictWriteFallback(dictClass, vlogDictWriteFallbackDictLoad)
 			dictID = 0
 			dict = nil
 			writeMode = dictFallbackWriteMode(writeMode)
@@ -13196,6 +13220,7 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 		db.valueLogDictFrames.kept.Add(1)
 	}
 	if dictID != 0 && len(dict) > 0 {
+		db.noteValueLogDictWriteFinal(dictClass)
 		db.valueLogDictObservePayload(uint64(stats.RawPayloadBytes), uint64(stats.StoredPayloadBytes), stats.Records)
 	}
 	if probeCompression && stats.Kept {
@@ -23093,6 +23118,13 @@ func (db *DB) Stats() map[string]string {
 		suffix := vlogDictClassSuffix(class)
 		stats["treedb.cache.vlog_dict.last_applied_dict_id."+suffix] = fmt.Sprintf("%d", db.valueLogDictLastAppliedDictIDByClass[class].Load())
 		stats["treedb.cache.vlog_dict.current_k."+suffix] = fmt.Sprintf("%d", db.valueLogDictCurrentKByClass[class].Load())
+		stats["treedb.cache.vlog_dict.current_cached_id."+suffix] = fmt.Sprintf("%d", db.dictCurrentCachedByClass[class].Load())
+		stats["treedb.cache.vlog_dict.write_selected."+suffix] = fmt.Sprintf("%d", db.valueLogDictWriteSelectedByClass[class].Load())
+		stats["treedb.cache.vlog_dict.write_final."+suffix] = fmt.Sprintf("%d", db.valueLogDictWriteFinalByClass[class].Load())
+		stats["treedb.cache.vlog_dict.write_fallback.pause."+suffix] = fmt.Sprintf("%d", db.valueLogDictWriteFallbackPauseByClass[class].Load())
+		stats["treedb.cache.vlog_dict.write_fallback.classifier_bypass."+suffix] = fmt.Sprintf("%d", db.valueLogDictWriteFallbackBypassByClass[class].Load())
+		stats["treedb.cache.vlog_dict.write_fallback.size_floor."+suffix] = fmt.Sprintf("%d", db.valueLogDictWriteFallbackSizeFloorByClass[class].Load())
+		stats["treedb.cache.vlog_dict.write_fallback.dict_load."+suffix] = fmt.Sprintf("%d", db.valueLogDictWriteFallbackDictLoadByClass[class].Load())
 	}
 	db.valueLogDictBytesMu.Lock()
 	stats["treedb.cache.vlog_dict.cached_dict_id"] = fmt.Sprintf("%d", db.valueLogDictBytesID)

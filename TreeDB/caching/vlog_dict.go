@@ -122,6 +122,53 @@ func vlogDictClassSuffix(class vlogDictClass) string {
 	}
 }
 
+type vlogDictWriteFallbackReason uint8
+
+const (
+	vlogDictWriteFallbackPause vlogDictWriteFallbackReason = iota
+	vlogDictWriteFallbackClassifierBypass
+	vlogDictWriteFallbackSizeFloor
+	vlogDictWriteFallbackDictLoad
+)
+
+func normalizeVlogDictClass(class vlogDictClass) vlogDictClass {
+	if int(class) < 0 || int(class) >= vlogDictClassCount {
+		return vlogDictClassSingleValue
+	}
+	return class
+}
+
+func (db *DB) noteValueLogDictWriteSelected(class vlogDictClass) {
+	if db == nil {
+		return
+	}
+	db.valueLogDictWriteSelectedByClass[normalizeVlogDictClass(class)].Add(1)
+}
+
+func (db *DB) noteValueLogDictWriteFinal(class vlogDictClass) {
+	if db == nil {
+		return
+	}
+	db.valueLogDictWriteFinalByClass[normalizeVlogDictClass(class)].Add(1)
+}
+
+func (db *DB) noteValueLogDictWriteFallback(class vlogDictClass, reason vlogDictWriteFallbackReason) {
+	if db == nil {
+		return
+	}
+	class = normalizeVlogDictClass(class)
+	switch reason {
+	case vlogDictWriteFallbackPause:
+		db.valueLogDictWriteFallbackPauseByClass[class].Add(1)
+	case vlogDictWriteFallbackClassifierBypass:
+		db.valueLogDictWriteFallbackBypassByClass[class].Add(1)
+	case vlogDictWriteFallbackSizeFloor:
+		db.valueLogDictWriteFallbackSizeFloorByClass[class].Add(1)
+	case vlogDictWriteFallbackDictLoad:
+		db.valueLogDictWriteFallbackDictLoadByClass[class].Add(1)
+	}
+}
+
 type dictStoreWriter interface {
 	PutDictBytes(context.Context, []byte) (uint64, error)
 	SetCurrent(context.Context, uint64) error

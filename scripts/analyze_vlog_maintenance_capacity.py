@@ -310,6 +310,16 @@ def build_dict_summary(stats: dict[str, Any]) -> dict[str, Any]:
         classes[suffix] = {
             "last_applied_dict_id": metric_int(stats, f"treedb.cache.vlog_dict.last_applied_dict_id.{suffix}"),
             "current_k": metric_int(stats, f"treedb.cache.vlog_dict.current_k.{suffix}"),
+            "current_cached_id": metric_int(stats, f"treedb.cache.vlog_dict.current_cached_id.{suffix}"),
+            "write_selected": metric_int(stats, f"treedb.cache.vlog_dict.write_selected.{suffix}"),
+            "write_final": metric_int(stats, f"treedb.cache.vlog_dict.write_final.{suffix}"),
+            "write_fallback_pause": metric_int(stats, f"treedb.cache.vlog_dict.write_fallback.pause.{suffix}"),
+            "write_fallback_classifier_bypass": metric_int(
+                stats,
+                f"treedb.cache.vlog_dict.write_fallback.classifier_bypass.{suffix}",
+            ),
+            "write_fallback_size_floor": metric_int(stats, f"treedb.cache.vlog_dict.write_fallback.size_floor.{suffix}"),
+            "write_fallback_dict_load": metric_int(stats, f"treedb.cache.vlog_dict.write_fallback.dict_load.{suffix}"),
         }
     return {
         "frames_total": metric_int(stats, "treedb.cache.vlog_dict.frames_total"),
@@ -1411,6 +1421,16 @@ def print_report(
             f"kept_frac={dict_summary.get('kept_frac', 0.0):.3f} "
             f"outer_leaf_dict_id={(dict_classes.get('outer_leaf', {}) or {}).get('last_applied_dict_id', 0)} "
             f"outer_leaf_k={(dict_classes.get('outer_leaf', {}) or {}).get('current_k', 0)}"
+        )
+        print(
+            "  dict outer_leaf write-path: "
+            f"current_cached_id={(dict_classes.get('outer_leaf', {}) or {}).get('current_cached_id', 0)} "
+            f"selected={(dict_classes.get('outer_leaf', {}) or {}).get('write_selected', 0)} "
+            f"final={(dict_classes.get('outer_leaf', {}) or {}).get('write_final', 0)} "
+            f"fallback_pause={(dict_classes.get('outer_leaf', {}) or {}).get('write_fallback_pause', 0)} "
+            f"fallback_classifier_bypass={(dict_classes.get('outer_leaf', {}) or {}).get('write_fallback_classifier_bypass', 0)} "
+            f"fallback_size_floor={(dict_classes.get('outer_leaf', {}) or {}).get('write_fallback_size_floor', 0)} "
+            f"fallback_dict_load={(dict_classes.get('outer_leaf', {}) or {}).get('write_fallback_dict_load', 0)}"
         )
 
 
