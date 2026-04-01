@@ -128,6 +128,23 @@ For full `run_celestia` proof runs, set `TREEMAP_BIN` explicitly so rewrite is n
 TREEMAP_BIN=/home/mikers/dev/snissn/celestia-app-p4/build/treemap-local
 ```
 
+To attribute the finished `application.db/maindb/wal` live bytes by source
+class after a run, use:
+
+```bash
+GOWORK=off go run ./TreeDB/cmd/treemap vlog-attribution \
+  ~/.celestia-app-mainnet-treedb-<run-id>/data/application.db \
+  -rw -by-file-top 8
+```
+
+Interpretation notes:
+- `outer_leaf` reports outer-leaf payload records kept live by leafrefs
+- `nested_outer_leaf_pointer` reports value-log payloads reachable through
+  outer-leaf blob refs
+- grouped frame `stored_bytes` are apportioned across live classes by payload
+  share within that frame, so the command is intended for directional source
+  attribution rather than exact reclaim accounting
+
 ## Stage 3: Full `run_celestia` A/B Confirmation
 
 Only promote candidates that pass Stage 1 and Stage 2.
