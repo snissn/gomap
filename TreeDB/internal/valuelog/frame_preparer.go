@@ -405,15 +405,7 @@ func (p *FramePreparer) encodePayload(enc *zstd.Encoder, records []Record, rawPa
 			}
 			return enc.EncodeAllParts(parts[:k], encDst), nil
 		}
-		if cap(p.rawScratch) < rawPayloadBytes {
-			p.rawScratch = make([]byte, rawPayloadBytes)
-		}
-		payload := p.rawScratch[:rawPayloadBytes]
-		off := 0
-		for i := 0; i < k; i++ {
-			off += copy(payload[off:], records[i].Value)
-		}
-		return enc.EncodeAll(payload, encDst), nil
+		return p.encodePayloadStreaming(enc, records[:k], rawPayloadBytes, encDst)
 	}
 
 	return p.encodePayloadStreaming(enc, records[:k], rawPayloadBytes, encDst)
