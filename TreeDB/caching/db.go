@@ -15774,6 +15774,18 @@ planned:
 				removeRewriteIDs := processedRewriteIDs
 				if rewriteOpts.MaxCopiedBytes > 0 {
 					removeRewriteIDs = append([]uint32(nil), stats.SourceFileIDsUnreferenced...)
+					if len(removeRewriteIDs) == 0 &&
+						stats.SourceSegmentsRequested == 0 &&
+						stats.SourceSegmentsStillReferenced == 0 &&
+						stats.SourceSegmentsUnreferenced == 0 &&
+						len(stats.SourceFileIDsStillReferenced) == 0 &&
+						len(stats.SourceFileIDsUnreferenced) == 0 {
+						// The selected queued IDs can disappear from the live value-log
+						// set before execution. In that no-op case the backend reports
+						// no requested/unreferenced sources, so fall back to consuming
+						// the stale queued IDs we actually attempted.
+						removeRewriteIDs = append([]uint32(nil), processedRewriteIDs...)
+					}
 				}
 				if len(removeRewriteIDs) > 0 {
 					if err := db.consumeVlogGenerationRewriteQueueChunk(removeRewriteIDs); err != nil {
