@@ -369,6 +369,37 @@ func (db *DB) currentVlogGenerationRewriteStage() (bool, int64, error) {
 	return db.vlogGenerationRewriteStagePending, db.vlogGenerationRewriteStageObservedUnixNano, nil
 }
 
+func (db *DB) refreshVlogGenerationRewriteStageConfirmation(now time.Time) error {
+	if db == nil {
+		return nil
+	}
+	db.vlogGenerationRewriteQueueMu.Lock()
+	defer db.vlogGenerationRewriteQueueMu.Unlock()
+	if err := db.loadVlogGenerationRewriteQueueLocked(); err != nil {
+		return err
+	}
+	if !db.vlogGenerationRewriteStagePending || db.vlogGenerationRewriteStageObservedUnixNano <= 0 || len(db.vlogGenerationRewriteLedger) == 0 {
+		return nil
+	}
+	observedAt := now.UnixNano()
+	if observedAt <= db.vlogGenerationRewriteStageObservedUnixNano {
+		observedAt = db.vlogGenerationRewriteStageObservedUnixNano + 1
+	}
+	if err := saveValueLogGenerationRewriteState(
+		db.valueLogGenerationStatePath(),
+		db.vlogGenerationRewriteQueue,
+		db.vlogGenerationRewriteLedger,
+		db.vlogGenerationRewritePenalties,
+		true,
+		observedAt,
+	); err != nil {
+		return err
+	}
+	db.vlogGenerationRewriteStageObservedUnixNano = observedAt
+	db.scheduleVlogGenerationRewriteStageConfirmation(observedAt)
+	return nil
+}
+
 func (db *DB) pruneVlogGenerationRewriteLedgerNonPositiveLive() ([]uint32, int, error) {
 	if db == nil {
 		return nil, 0, nil

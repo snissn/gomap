@@ -4916,6 +4916,88 @@ func TestDeferredMaintenanceRetry_RetriesWithoutCheckpointPendingUntilAcquired(t
 	}
 }
 
+func TestDeferredMaintenanceRetry_StageConfirmRefreshesObservedAtAfterAcquiredNoop(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	recorder := &rewriteBudgetRecordingBackend{
+		DB: backend,
+		planResponse: backenddb.ValueLogRewritePlan{
+			SourceFileIDs: []uint32{22},
+			SelectedSegments: []backenddb.ValueLogRewritePlanSegment{
+				{FileID: 22, BytesTotal: 64 << 20, BytesLive: 8 << 20, BytesStale: 56 << 20, StaleRatio: 0.875},
+			},
+			SegmentsTotal:      2,
+			SegmentsSelected:   1,
+			BytesTotal:         128 << 20,
+			BytesLive:          80 << 20,
+			BytesStale:         48 << 20,
+			SelectedBytesTotal: 64 << 20,
+			SelectedBytesLive:  8 << 20,
+			SelectedBytesStale: 56 << 20,
+		},
+	}
+
+	db, cleanup := openRewriteQueueTestDB(t, dir, recorder)
+	t.Cleanup(cleanup)
+	db.valueLogRewriteTriggerBytes = 0
+	db.valueLogRewriteTriggerRatioPPM = 1
+	db.valueLogGenerationHotTarget = 0
+	forceVlogMaintenanceIdle(db)
+
+	observedAt := time.Now().Add(-vlogGenerationRewriteMinInterval - time.Second).UnixNano()
+	if err := db.setVlogGenerationRewriteLedgerWithStage([]backenddb.ValueLogRewritePlanSegment{
+		{FileID: 11, BytesTotal: 64 << 20, BytesLive: 20 << 20, BytesStale: 44 << 20, StaleRatio: 0.6875},
+		{FileID: 22, BytesTotal: 64 << 20, BytesLive: 8 << 20, BytesStale: 56 << 20, StaleRatio: 0.875},
+	}, true, observedAt); err != nil {
+		t.Fatalf("seed staged rewrite ledger: %v", err)
+	}
+	forceRewriteStageConfirmDue(t, db)
+	db.vlogGenerationLastRewriteUnixNano.Store(time.Now().UnixNano())
+
+	db.startVlogGenerationDeferredMaintenance(vlogGenerationMaintenanceOptions{
+		bypassQuiet:           true,
+		skipRetainedPruneWait: true,
+		skipCheckpoint:        false,
+		rewriteDebtDrain:      true,
+		debugSource:           "rewrite_stage_confirm",
+	})
+
+	deadline := time.Now().Add(2 * schedulerTestWait(t))
+	for db.vlogGenerationDeferredMaintenanceRunning.Load() && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if db.vlogGenerationDeferredMaintenanceRunning.Load() {
+		t.Fatalf("deferred retry runner did not stop after acquired no-op stage confirmation")
+	}
+	if _, rewriteCalls := recorder.recordedRewrite(); rewriteCalls != 0 {
+		t.Fatalf("rewrite calls=%d want 0 while resume min interval is active", rewriteCalls)
+	}
+	if _, planCalls := recorder.recordedPlan(); planCalls != 1 {
+		t.Fatalf("plan calls=%d want 1", planCalls)
+	}
+	stagePending, refreshedObservedAt, err := db.currentVlogGenerationRewriteStage()
+	if err != nil {
+		t.Fatalf("current rewrite stage: %v", err)
+	}
+	if !stagePending {
+		t.Fatalf("expected staged rewrite debt to remain pending")
+	}
+	if refreshedObservedAt <= observedAt {
+		t.Fatalf("stage observed_at=%d want > %d", refreshedObservedAt, observedAt)
+	}
+	if db.vlogGenerationRewriteStageConfirmDue(time.Now()) {
+		t.Fatalf("stage confirmation remained immediately due after acquired no-op")
+	}
+	if got := db.vlogGenerationMaintenanceAttempts.Load(); got > 16 {
+		t.Fatalf("maintenance attempts=%d want bounded", got)
+	}
+}
+
 func TestVlogGenerationRewritePlan_AgeBlockedRetryRunsWhenDue(t *testing.T) {
 	prepareDirectSchedulerTest(t)
 

@@ -14986,6 +14986,14 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 				afterLiveKnown,
 			)
 		}
+		if vlogGenerationIsStageConfirmSource(opts) {
+			if err := db.refreshVlogGenerationRewriteStageConfirmation(time.Now()); err != nil {
+				db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
+				if db.notifyError != nil {
+					db.notifyError(fmt.Errorf("cachingdb: refresh staged generational rewrite confirmation: %w", err))
+				}
+			}
+		}
 		db.vlogGenerationMaintenanceActive.Store(false)
 		// If a deferred confirmation/age wake became due while this pass held the
 		// scheduler active, requeue it immediately on exit instead of relying on
