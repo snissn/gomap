@@ -85,6 +85,16 @@ type ValueLogRewriteStats struct {
 	// SourceBytesUnreferenced is the bytes of selected source segments that
 	// became unreferenced after rewrite pointer swaps and cleanup.
 	SourceBytesUnreferenced int64
+	// SourceBytesProcessed is the bounded subset of selected source bytes
+	// actually rewritten in this pass. When zero, the rewrite either copied
+	// nothing or ran without a per-pass source-byte bound.
+	SourceBytesProcessed int64
+	// SourceFileIDsStillReferenced records which selected source segments
+	// remained referenced after cleanup.
+	SourceFileIDsStillReferenced []uint32
+	// SourceFileIDsUnreferenced records which selected source segments became
+	// fully unreferenced after cleanup.
+	SourceFileIDsUnreferenced []uint32
 
 	TemplateRecordsAttempted int
 	TemplateRecordsKept      int
@@ -177,6 +187,9 @@ type ValueLogRewriteOnlineOptions struct {
 	// MaxSourceBytes bounds estimated live bytes selected by sparse segment
 	// selection. Applies only when SourceFileIDs is empty.
 	MaxSourceBytes int64
+	// MaxCopiedBytes bounds the selected source bytes actually rewritten in this
+	// pass. <=0 disables the bound.
+	MaxCopiedBytes int64
 	// MinSegmentStaleRatio requires stale_bytes/segment_size to be at least this
 	// value (0..1) when sparse segment selection is used.
 	MinSegmentStaleRatio float64
@@ -200,8 +213,9 @@ type rewriteSwap struct {
 }
 
 type rewriteCandidate struct {
-	key    []byte
-	oldPtr page.ValuePtr
+	key         []byte
+	oldPtr      page.ValuePtr
+	sourceBytes int64
 }
 
 type rewriteSourceSelectionStats struct {
@@ -1436,6 +1450,11 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 	rewriteReadScratch := make([]byte, 0, rewriteReadScratchInitCap)
 	var canceledErr error
 	readRefreshRetried := false
+	maxCopiedBytes := opts.MaxCopiedBytes
+	if maxCopiedBytes < 0 {
+		maxCopiedBytes = 0
+	}
+	selectedSourceBytes := int64(0)
 
 	flushBatch := func() error {
 		if len(candidates) == 0 {
@@ -1480,6 +1499,9 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 			stats.RecordsCopied++
 			stats.ValueRecordsCopied++
 			stats.ValueBytesCopied += int64(len(val))
+			if candidate.sourceBytes > 0 {
+				stats.SourceBytesProcessed += candidate.sourceBytes
+			}
 			// rewriteWriter appends monotonically by segment; IDs only change on
 			// rotate and never return to a prior segment.
 			if len(batchCreatedIDs) == 0 || batchCreatedIDs[len(batchCreatedIDs)-1] != newPtr.FileID {
@@ -1555,19 +1577,37 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 			}
 		}
 		unsafeKey := it.UnsafeKey()
+		sourceBytes := int64(0)
+		if maxCopiedBytes > 0 {
+			recordLen, err := db.valueLogRecordLengthForRewrite(oldPtr)
+			if err != nil {
+				_ = it.Close()
+				closeRewriteSnapshot(&err, snap)
+				return stats, err
+			}
+			sourceBytes = int64(recordLen)
+			if selectedSourceBytes > 0 && selectedSourceBytes+sourceBytes > maxCopiedBytes {
+				break
+			}
+		}
 		keyStart := len(candidateKeyArena)
 		candidateKeyArena = append(candidateKeyArena, unsafeKey...)
 		key := candidateKeyArena[keyStart:len(candidateKeyArena):len(candidateKeyArena)]
 		candidates = append(candidates, rewriteCandidate{
-			key:    key,
-			oldPtr: oldPtr,
+			key:         key,
+			oldPtr:      oldPtr,
+			sourceBytes: sourceBytes,
 		})
+		selectedSourceBytes += sourceBytes
 		if len(candidates) >= batchSize {
 			if err := flushBatch(); err != nil {
 				_ = it.Close()
 				closeRewriteSnapshot(&err, snap)
 				return stats, err
 			}
+		}
+		if maxCopiedBytes > 0 && selectedSourceBytes >= maxCopiedBytes {
+			break
 		}
 	}
 	iterErr := it.Error()
@@ -1585,13 +1625,21 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		// referenced leaf pages out of the selected source segments so cleanup can
 		// actually reclaim space.
 		if restrictSource && db.indexOuterLeavesInValueLog && sourceSegmentCount > 0 {
-			copied, copiedBytes, err := db.rewriteLeafRefsOnline(ctx, writer, ridAlloc, sourceIDs, singleSourceID, restrictSingleID, opts.SyncEachBatch)
+			leafRefMaxCopiedBytes := int64(0)
+			if maxCopiedBytes > 0 {
+				leafRefMaxCopiedBytes = maxCopiedBytes - stats.SourceBytesProcessed
+				if leafRefMaxCopiedBytes < 0 {
+					leafRefMaxCopiedBytes = 0
+				}
+			}
+			copied, copiedBytes, err := db.rewriteLeafRefsOnline(ctx, writer, ridAlloc, sourceIDs, singleSourceID, restrictSingleID, leafRefMaxCopiedBytes, opts.SyncEachBatch)
 			if err != nil {
 				return stats, err
 			}
 			stats.RecordsCopied += copied
 			stats.LeafRefRecordsCopied += copied
 			stats.LeafRefBytesCopied += copiedBytes
+			stats.SourceBytesProcessed += copiedBytes
 		}
 	} else {
 		// Stop publishing further swaps after cancellation; cleanup below still
@@ -1633,11 +1681,13 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 				stats.SourceSegmentsUnreferenced = 0
 				stats.SourceBytesStillReferenced = sourceBytes
 				stats.SourceBytesUnreferenced = 0
+				stats.SourceFileIDsStillReferenced = append(stats.SourceFileIDsStillReferenced, singleSourceID)
 			} else {
 				stats.SourceSegmentsStillReferenced = 0
 				stats.SourceSegmentsUnreferenced = 1
 				stats.SourceBytesStillReferenced = 0
 				stats.SourceBytesUnreferenced = sourceBytes
+				stats.SourceFileIDsUnreferenced = append(stats.SourceFileIDsUnreferenced, singleSourceID)
 			}
 		} else {
 			stillReferenced := 0
@@ -1646,17 +1696,27 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 			for id := range sourceIDs {
 				if _, ok := referencedAfter[id]; ok {
 					stillReferenced++
+					stats.SourceFileIDsStillReferenced = append(stats.SourceFileIDsStillReferenced, id)
 					if size, okSize := sourceSegmentBytes[id]; okSize && size > 0 {
 						stillReferencedBytes += size
 					}
-				} else if size, okSize := sourceSegmentBytes[id]; okSize && size > 0 {
-					unreferencedBytes += size
+				} else {
+					stats.SourceFileIDsUnreferenced = append(stats.SourceFileIDsUnreferenced, id)
+					if size, okSize := sourceSegmentBytes[id]; okSize && size > 0 {
+						unreferencedBytes += size
+					}
 				}
 			}
 			stats.SourceSegmentsStillReferenced = stillReferenced
 			stats.SourceSegmentsUnreferenced = len(sourceIDs) - stillReferenced
 			stats.SourceBytesStillReferenced = stillReferencedBytes
 			stats.SourceBytesUnreferenced = unreferencedBytes
+			sort.Slice(stats.SourceFileIDsStillReferenced, func(i, j int) bool {
+				return stats.SourceFileIDsStillReferenced[i] < stats.SourceFileIDsStillReferenced[j]
+			})
+			sort.Slice(stats.SourceFileIDsUnreferenced, func(i, j int) bool {
+				return stats.SourceFileIDsUnreferenced[i] < stats.SourceFileIDsUnreferenced[j]
+			})
 		}
 	}
 	var protectedPaths map[string]struct{}
@@ -1785,9 +1845,10 @@ type leafRefRewriteCtx struct {
 	internalRemapInline    [leafRefRewriteInlineRemapCap]leafRefRewriteRemap
 	internalRemapInlineLen int
 
-	retired     []uint64
-	copied      int
-	copiedBytes int64
+	retired        []uint64
+	copied         int
+	copiedBytes    int64
+	maxCopiedBytes int64
 
 	readRefreshRetried bool
 }
@@ -1917,6 +1978,9 @@ func (c *leafRefRewriteCtx) rewriteNode(id uint64) (uint64, bool, error) {
 		if err := c.ctx.Err(); err != nil {
 			return id, false, err
 		}
+	}
+	if c.maxCopiedBytes > 0 && c.copiedBytes >= c.maxCopiedBytes && c.copied > 0 {
+		return id, false, nil
 	}
 	if id == 0 {
 		return 0, false, nil
@@ -2070,7 +2134,7 @@ func (c *leafRefRewriteCtx) rewriteNode(id uint64) (uint64, bool, error) {
 	}
 }
 
-func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, ridAlloc *rewriteRIDAllocator, sourceIDs map[uint32]struct{}, singleSourceID uint32, hasSingleSourceID bool, sync bool) (copied int, copiedBytes int64, err error) {
+func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, ridAlloc *rewriteRIDAllocator, sourceIDs map[uint32]struct{}, singleSourceID uint32, hasSingleSourceID bool, maxCopiedBytes int64, sync bool) (copied int, copiedBytes int64, err error) {
 	if db == nil {
 		return 0, 0, fmt.Errorf("missing db")
 	}
@@ -2139,6 +2203,7 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 		sourceIDs:      sourceIDs,
 		singleSourceID: singleSourceID,
 		hasSingleID:    hasSingleSourceID,
+		maxCopiedBytes: maxCopiedBytes,
 	}
 	if toer, ok := leafCtx.leafReader.(unsafeToReader); ok {
 		leafCtx.leafToer = toer

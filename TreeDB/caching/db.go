@@ -15694,6 +15694,9 @@ planned:
 				ledger, _ := db.currentVlogGenerationRewriteLedger()
 				processedLedgerTotalBytes, processedLedgerLiveBytes, processedLedgerStaleBytes, processedLedgerOK = sumVlogRewritePlanBytes(ledger, processedRewriteIDs)
 				rewriteOpts.SourceFileIDs = processedRewriteIDs
+				if hadRewriteQueue && processedLedgerOK && budgetTokens > 0 && processedLedgerLiveBytes > budgetTokens {
+					rewriteOpts.MaxCopiedBytes = budgetTokens
+				}
 			} else {
 				rewriteOpts.MaxSourceSegments = 0
 				rewriteOpts.MaxSourceBytes = maxSourceBytes
@@ -15709,12 +15712,13 @@ planned:
 				ctx, cancel = db.vlogGenerationMaintenanceContext(2*time.Minute, opts)
 			}
 			db.debugVlogMaintf(
-				"rewrite_exec reason=%s source_ids=%d max_segments=%d budget_tokens=%d max_source_bytes=%d min_stale_ratio=%.6f queue_len=%d ledger_live_bytes=%d",
+				"rewrite_exec reason=%s source_ids=%d max_segments=%d budget_tokens=%d max_source_bytes=%d max_copied_bytes=%d min_stale_ratio=%.6f queue_len=%d ledger_live_bytes=%d",
 				vlogGenerationReasonString(reason),
 				len(rewriteOpts.SourceFileIDs),
 				rewriteMaxSegments,
 				budgetTokens,
 				maxSourceBytes,
+				rewriteOpts.MaxCopiedBytes,
 				rewriteOpts.MinSegmentStaleRatio,
 				len(rewriteQueue),
 				processedLedgerLiveBytes,
@@ -15758,8 +15762,14 @@ planned:
 			effectiveBytesAfter := int64(stats.BytesAfter)
 			gcBytesDeleted := int64(0)
 			if len(processedRewriteIDs) > 0 {
-				if err := db.consumeVlogGenerationRewriteQueueChunk(processedRewriteIDs); err != nil {
-					return fmt.Errorf("consume generational rewrite queue: %w", err)
+				removeRewriteIDs := processedRewriteIDs
+				if rewriteOpts.MaxCopiedBytes > 0 {
+					removeRewriteIDs = append([]uint32(nil), stats.SourceFileIDsUnreferenced...)
+				}
+				if len(removeRewriteIDs) > 0 {
+					if err := db.consumeVlogGenerationRewriteQueueChunk(removeRewriteIDs); err != nil {
+						return fmt.Errorf("consume generational rewrite queue: %w", err)
+					}
 				}
 			}
 			if gcer, ok := db.backend.(backendValueLogGCer); ok {
@@ -16071,7 +16081,9 @@ planned:
 				db.vlogGenerationRewriteSourceBytesUnreferencedBySource[activeSourceIdx].Add(sourceBytesUnreferenced)
 			}
 			rewriteBytesIn := int64(0)
-			if processedLedgerOK {
+			if stats.SourceBytesProcessed > 0 {
+				rewriteBytesIn = stats.SourceBytesProcessed
+			} else if processedLedgerOK {
 				rewriteBytesIn = processedLedgerLiveBytes
 			} else if len(processedRewriteIDs) > 0 && stats.BytesBefore > 0 {
 				rewriteBytesIn = int64(stats.BytesBefore)
@@ -16097,7 +16109,9 @@ planned:
 			db.vlogGenerationRewriteExecLastDurationNanos.Store(uint64(rewriteDur))
 			db.vlogGenerationRewriteExecLastUnixNano.Store(time.Now().UnixNano())
 			consumed := int64(0)
-			if processedLedgerOK {
+			if stats.SourceBytesProcessed > 0 {
+				consumed = stats.SourceBytesProcessed
+			} else if processedLedgerOK {
 				consumed = processedLedgerLiveBytes
 			} else if len(processedRewriteIDs) > 0 && stats.BytesBefore > 0 {
 				consumed = int64(stats.BytesBefore)

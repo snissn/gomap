@@ -2596,6 +2596,94 @@ func TestValueLogRewriteOnline_SourceFileIDs_RestrictsRewriteSet(t *testing.T) {
 	}
 }
 
+func TestValueLogRewriteOnline_MaxCopiedBytes_ProcessesExplicitSourceIncrementally(t *testing.T) {
+	dir := t.TempDir()
+
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer closeNoErr(t, db)
+
+	ptrs := appendPointersInNewSegment(t, dir, 0, 1, 205_000, 2, func(i int) []byte {
+		return bytes.Repeat([]byte{byte('a' + i)}, 256)
+	})
+
+	b := db.NewBatch().(*Batch)
+	if err := b.SetPointer([]byte("k1"), ptrs[0]); err != nil {
+		t.Fatalf("set k1: %v", err)
+	}
+	if err := b.SetPointer([]byte("k2"), ptrs[1]); err != nil {
+		t.Fatalf("set k2: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("seed write: %v", err)
+	}
+	closeNoErr(t, b)
+
+	recordLen, err := db.valueLogRecordLengthForRewrite(ptrs[0])
+	if err != nil {
+		t.Fatalf("record length: %v", err)
+	}
+
+	stats1, err := db.ValueLogRewriteOnline(context.Background(), ValueLogRewriteOnlineOptions{
+		SourceFileIDs:  []uint32{ptrs[0].FileID},
+		BatchSize:      8,
+		MaxCopiedBytes: int64(recordLen),
+	})
+	if err != nil {
+		t.Fatalf("ValueLogRewriteOnline first pass: %v", err)
+	}
+	if stats1.RecordsCopied != 1 {
+		t.Fatalf("first pass copied=%d want 1", stats1.RecordsCopied)
+	}
+	if stats1.SourceSegmentsStillReferenced != 1 || stats1.SourceSegmentsUnreferenced != 0 {
+		t.Fatalf("first pass source segment stats still=%d unref=%d want still=1 unref=0", stats1.SourceSegmentsStillReferenced, stats1.SourceSegmentsUnreferenced)
+	}
+	if !slices.Equal(stats1.SourceFileIDsStillReferenced, []uint32{ptrs[0].FileID}) {
+		t.Fatalf("first pass still referenced ids=%v want [%d]", stats1.SourceFileIDsStillReferenced, ptrs[0].FileID)
+	}
+	if len(stats1.SourceFileIDsUnreferenced) != 0 {
+		t.Fatalf("first pass unreferenced ids=%v want empty", stats1.SourceFileIDsUnreferenced)
+	}
+	if stats1.SourceBytesProcessed != int64(recordLen) {
+		t.Fatalf("first pass source bytes processed=%d want %d", stats1.SourceBytesProcessed, recordLen)
+	}
+
+	ptrK1, _ := readProjectedPointerByKey(t, db, []byte("k1"))
+	ptrK2, _ := readProjectedPointerByKey(t, db, []byte("k2"))
+	if ptrK1.FileID == ptrs[0].FileID && ptrK2.FileID == ptrs[0].FileID {
+		t.Fatalf("expected one pointer to move off source segment after first pass: k1=%d k2=%d source=%d", ptrK1.FileID, ptrK2.FileID, ptrs[0].FileID)
+	}
+	if ptrK1.FileID != ptrs[0].FileID && ptrK2.FileID != ptrs[0].FileID {
+		t.Fatalf("expected one pointer to remain on source segment after first pass: k1=%d k2=%d source=%d", ptrK1.FileID, ptrK2.FileID, ptrs[0].FileID)
+	}
+
+	stats2, err := db.ValueLogRewriteOnline(context.Background(), ValueLogRewriteOnlineOptions{
+		SourceFileIDs:  []uint32{ptrs[0].FileID},
+		BatchSize:      8,
+		MaxCopiedBytes: int64(recordLen),
+	})
+	if err != nil {
+		t.Fatalf("ValueLogRewriteOnline second pass: %v", err)
+	}
+	if stats2.RecordsCopied != 1 {
+		t.Fatalf("second pass copied=%d want 1", stats2.RecordsCopied)
+	}
+	if stats2.SourceSegmentsStillReferenced != 0 || stats2.SourceSegmentsUnreferenced != 1 {
+		t.Fatalf("second pass source segment stats still=%d unref=%d want still=0 unref=1", stats2.SourceSegmentsStillReferenced, stats2.SourceSegmentsUnreferenced)
+	}
+	if !slices.Equal(stats2.SourceFileIDsUnreferenced, []uint32{ptrs[0].FileID}) {
+		t.Fatalf("second pass unreferenced ids=%v want [%d]", stats2.SourceFileIDsUnreferenced, ptrs[0].FileID)
+	}
+
+	ptrK1, _ = readProjectedPointerByKey(t, db, []byte("k1"))
+	ptrK2, _ = readProjectedPointerByKey(t, db, []byte("k2"))
+	if ptrK1.FileID == ptrs[0].FileID || ptrK2.FileID == ptrs[0].FileID {
+		t.Fatalf("expected both pointers off source segment after second pass: k1=%d k2=%d source=%d", ptrK1.FileID, ptrK2.FileID, ptrs[0].FileID)
+	}
+}
+
 func TestValueLogRewriteOnline_ReserveRIDsUsesExternalAllocator(t *testing.T) {
 	dir := t.TempDir()
 
