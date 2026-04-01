@@ -64,6 +64,7 @@ type modeDef struct {
 
 func main() {
 	input := flag.String("input", "", "Path to JSONL dataset with {val} records")
+	inputFormat := flag.String("input-format", "auto", "Input format: auto|jsonl|bin32le")
 	inputEncoding := flag.String("input-encoding", "auto", "Input value encoding: auto|string|base64|hex (auto uses per-record encoding or defaults to string)")
 	trainN := flag.Int("train", 15000, "Training sample count")
 	evalN := flag.Int("eval", 5000, "Evaluation sample count")
@@ -113,7 +114,7 @@ func main() {
 		failf("parse -dict-variants: %v", err)
 	}
 
-	train, eval, err := loadValues(*input, *trainN, *evalN, *capBytes, *inputEncoding)
+	train, eval, err := loadValues(*input, *inputFormat, *trainN, *evalN, *capBytes, *inputEncoding)
 	if err != nil {
 		fail(err)
 	}
@@ -337,7 +338,37 @@ func parseIntList(s string) ([]int, error) {
 	return out, nil
 }
 
-func loadValues(path string, trainN, evalN, capBytes int, inputEncoding string) ([][]byte, [][]byte, error) {
+func loadValues(path, inputFormat string, trainN, evalN, capBytes int, inputEncoding string) ([][]byte, [][]byte, error) {
+	switch normalizeInputFormat(path, inputFormat) {
+	case "jsonl":
+		return loadValuesJSONL(path, trainN, evalN, capBytes, inputEncoding)
+	case "bin32le":
+		return loadValuesBin32LE(path, trainN, evalN, capBytes)
+	default:
+		return nil, nil, fmt.Errorf("unsupported input format %q", inputFormat)
+	}
+}
+
+func normalizeInputFormat(path, inputFormat string) string {
+	format := strings.ToLower(strings.TrimSpace(inputFormat))
+	switch format {
+	case "", "auto":
+		switch strings.ToLower(filepath.Ext(path)) {
+		case ".bin":
+			return "bin32le"
+		default:
+			return "jsonl"
+		}
+	case "jsonl", "json":
+		return "jsonl"
+	case "bin32", "bin32le", "corpus":
+		return "bin32le"
+	default:
+		return format
+	}
+}
+
+func loadValuesJSONL(path string, trainN, evalN, capBytes int, inputEncoding string) ([][]byte, [][]byte, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, nil, err
@@ -389,6 +420,63 @@ func loadValues(path string, trainN, evalN, capBytes int, inputEncoding string) 
 			break
 		}
 		if readErr == io.EOF {
+			break
+		}
+	}
+	return train, eval, nil
+}
+
+func loadValuesBin32LE(path string, trainN, evalN, capBytes int) ([][]byte, [][]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer f.Close()
+
+	train := make([][]byte, 0, trainN)
+	eval := make([][]byte, 0, evalN)
+	reader := bufio.NewReaderSize(f, 1<<20)
+	recordNum := 0
+	var lenBuf [4]byte
+
+	for {
+		_, err := io.ReadFull(reader, lenBuf[:])
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			if err == io.ErrUnexpectedEOF {
+				return nil, nil, fmt.Errorf("record %d: truncated length header", recordNum+1)
+			}
+			return nil, nil, err
+		}
+		recordNum++
+		recordLen := int(uint32(lenBuf[0]) | uint32(lenBuf[1])<<8 | uint32(lenBuf[2])<<16 | uint32(lenBuf[3])<<24)
+		if recordLen < 0 {
+			return nil, nil, fmt.Errorf("record %d: negative length", recordNum)
+		}
+		payload := make([]byte, recordLen)
+		if _, err := io.ReadFull(reader, payload); err != nil {
+			if err == io.EOF || err == io.ErrUnexpectedEOF {
+				return nil, nil, fmt.Errorf("record %d: truncated payload want=%d", recordNum, recordLen)
+			}
+			return nil, nil, err
+		}
+		if capBytes > 0 && len(payload) > capBytes {
+			payload = payload[:capBytes]
+		}
+		if len(payload) == 0 {
+			if len(train) >= trainN && len(eval) >= evalN {
+				break
+			}
+			continue
+		}
+		if len(train) < trainN {
+			train = append(train, payload)
+		} else if len(eval) < evalN {
+			eval = append(eval, payload)
+		}
+		if len(train) >= trainN && len(eval) >= evalN {
 			break
 		}
 	}

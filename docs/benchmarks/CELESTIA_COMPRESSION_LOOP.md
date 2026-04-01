@@ -149,6 +149,42 @@ Interpretation notes:
   share within that frame, so the command is intended for directional source
   attribution rather than exact reclaim accounting
 
+To run the fast codec loop on the extracted outer-leaf page corpus from a
+finished TreeDB home:
+
+```bash
+GOWORK=off go run ./TreeDB/cmd/template_corpus_extract \
+  -app-dir ~/.celestia-app-mainnet-treedb-<run-id>/data/application.db \
+  -out-dir /tmp/outer_leaf_codec_corpus_<run-id> \
+  -skip-pointer \
+  -outer-leaf-limit 20000 \
+  -outer-leaf-stride 1 \
+  -overwrite
+
+GOWORK=off go run ./TreeDB/cmd/vlog_codec_shape_sweep \
+  -input /tmp/outer_leaf_codec_corpus_<run-id>/outer_leaf_pages.bin \
+  -input-format auto \
+  -train 15000 \
+  -eval 5000 \
+  -k 1,2,4,8,16,32 \
+  -level fastest \
+  -out /tmp/outer_leaf_codec_shape_sweep_<run-id>.json
+```
+
+The codec sweep accepts both the older JSONL `{val}` dataset format and the
+binary corpus format emitted by `template_corpus_extract`
+(`u32le length + raw payload`).
+
+Recent outer-leaf corpus result (20k pages from runs `20260331231403` and
+`20260331230641`):
+- best block path: `snappy k=32`, total ratio about `0.535`
+- best dict path: `dict_h64k_s64k_noent k=32`, total ratio about `0.481`
+- relative stored-byte improvement vs best block path: about `10%`
+- the attribution pass on those same homes showed outer-leaf bytes were already
+  about `99.18%` of referenced live value-log bytes and leaf pages were already
+  about `986,765 ppm` full, so this result points at value-log compression of
+  dense 4 KiB leaf pages rather than page-density tuning
+
 ## Stage 3: Full `run_celestia` A/B Confirmation
 
 Only promote candidates that pass Stage 1 and Stage 2.
