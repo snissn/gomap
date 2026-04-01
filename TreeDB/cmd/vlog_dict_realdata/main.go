@@ -68,6 +68,7 @@ type benchConfig struct {
 	Compression       string
 	CompressionMode   string
 	BlockCodec        string
+	BlockTargetBytes  int
 	AutoPolicy        string
 	DictClassMode     string
 	DictWaitClass     string
@@ -103,6 +104,7 @@ type benchReport struct {
 	Compression              string            `json:"compression"`
 	CompressionMode          string            `json:"compression_mode,omitempty"`
 	BlockCodec               string            `json:"block_codec,omitempty"`
+	BlockTargetBytes         int               `json:"block_target_bytes,omitempty"`
 	AutoPolicy               string            `json:"auto_policy,omitempty"`
 	DictClassMode            string            `json:"dict_class_mode,omitempty"`
 	DictWaitClass            string            `json:"dict_wait_class,omitempty"`
@@ -195,6 +197,7 @@ func main() {
 	benchCompression := flag.String("bench-compression", "off", "Bench compression: on|off")
 	benchCompressionMode := flag.String("bench-compression-mode", "default", "Bench compression mode: default|off|dict|block|auto")
 	benchBlockCodec := flag.String("bench-block-codec", "snappy", "Bench block codec when -bench-compression-mode=block: snappy|lz4")
+	benchBlockTargetBytes := flag.Int("bench-block-target-bytes", 0, "Grouped block target compressed bytes (0=default)")
 	benchAutoPolicy := flag.String("bench-auto-policy", "balanced", "Bench auto-mode bias: balanced|throughput|size")
 	benchDictClassMode := flag.String("bench-dict-class-mode", "single", "Bench dict class mode: single|split_outer_leaf")
 	benchDictWaitClass := flag.String("bench-dict-wait-class", "auto", "Dict class to wait for before steady: auto|any|single_value|outer_leaf|both")
@@ -269,6 +272,7 @@ func main() {
 			Compression:       *benchCompression,
 			CompressionMode:   *benchCompressionMode,
 			BlockCodec:        *benchBlockCodec,
+			BlockTargetBytes:  *benchBlockTargetBytes,
 			AutoPolicy:        *benchAutoPolicy,
 			DictClassMode:     *benchDictClassMode,
 			DictWaitClass:     *benchDictWaitClass,
@@ -1201,6 +1205,7 @@ func runKVBench(input string, capBytes int, cfg benchConfig, train, eval []kvSam
 		Compression:         cfg.Compression,
 		CompressionMode:     cfg.CompressionMode,
 		BlockCodec:          cfg.BlockCodec,
+		BlockTargetBytes:    cfg.BlockTargetBytes,
 		AutoPolicy:          cfg.AutoPolicy,
 		DictClassMode:       cfg.DictClassMode,
 		DictWaitClass:       cfg.DictWaitClass,
@@ -1363,15 +1368,16 @@ func benchOptions(cfg benchConfig) (treedb.Options, benchWritePath, error) {
 		Durability:                 treedb.DurabilityDurable,
 		IndexOuterLeavesInValueLog: cfg.IndexOuterLeaves,
 		ValueLog: treedb.ValueLogOptions{
-			PointerThreshold:     cfg.PointerThreshold,
-			MaxRetainedBytesHard: 0,
-			ReadIntegrity:        treedb.IntegrityVerify,
-			Compression:          treedb.ValueLogCompressionOff,
-			BlockCodec:           blockCodec,
-			AutoPolicy:           autoPolicy,
-			DictClassMode:        dictClassMode,
-			CompressionAutotune:  valuelog.AutotuneOptions{Mode: valuelog.AutotuneOff},
-			DictTrain:            compression.TrainConfig{TrainBytes: -1},
+			PointerThreshold:           cfg.PointerThreshold,
+			BlockTargetCompressedBytes: cfg.BlockTargetBytes,
+			MaxRetainedBytesHard:       0,
+			ReadIntegrity:              treedb.IntegrityVerify,
+			Compression:                treedb.ValueLogCompressionOff,
+			BlockCodec:                 blockCodec,
+			AutoPolicy:                 autoPolicy,
+			DictClassMode:              dictClassMode,
+			CompressionAutotune:        valuelog.AutotuneOptions{Mode: valuelog.AutotuneOff},
+			DictTrain:                  compression.TrainConfig{TrainBytes: -1},
 		},
 	}
 	if cfg.FlushThresholdMiB > 0 {

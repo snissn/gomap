@@ -255,6 +255,7 @@ func TestBenchOptions_CompressionModes(t *testing.T) {
 	base := benchConfig{
 		Mode:             "wal_on",
 		PointerThreshold: 1,
+		BlockTargetBytes: 16384,
 		DictTrainMiB:     1,
 		DictSampleStride: 1,
 		BlockCodec:       "lz4",
@@ -310,6 +311,9 @@ func TestBenchOptions_CompressionModes(t *testing.T) {
 	if opts.ValueLog.BlockCodec != treedb.ValueLogBlockLZ4 {
 		t.Fatalf("block: expected lz4 codec, got %v", opts.ValueLog.BlockCodec)
 	}
+	if opts.ValueLog.BlockTargetCompressedBytes != 16384 {
+		t.Fatalf("block: expected block target 16384, got %d", opts.ValueLog.BlockTargetCompressedBytes)
+	}
 	if opts.ValueLog.DictTrain.TrainBytes != -1 {
 		t.Fatalf("block: expected dict train disabled, got %d", opts.ValueLog.DictTrain.TrainBytes)
 	}
@@ -330,6 +334,9 @@ func TestBenchOptions_CompressionModes(t *testing.T) {
 	}
 	if opts.ValueLog.AutoPolicy != treedb.ValueLogAutoSize {
 		t.Fatalf("auto: expected size auto policy, got %v", opts.ValueLog.AutoPolicy)
+	}
+	if opts.ValueLog.BlockTargetCompressedBytes != 16384 {
+		t.Fatalf("auto: expected block target 16384, got %d", opts.ValueLog.BlockTargetCompressedBytes)
 	}
 	if opts.ValueLog.DictClassMode != treedb.ValueLogDictClassSplitOuterLeaf {
 		t.Fatalf("auto: expected split outer-leaf class mode, got %v", opts.ValueLog.DictClassMode)

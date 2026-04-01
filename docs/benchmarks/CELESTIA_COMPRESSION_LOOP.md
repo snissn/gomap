@@ -234,6 +234,9 @@ GOWORK=off go run ./TreeDB/cmd/vlog_dict_realdata \
   -bench-pointer-threshold 1
 ```
 
+`vlog_dict_realdata` also accepts `-bench-block-target-bytes` to sweep grouped
+block size directly. `0` keeps the default 4 KiB target.
+
 Equivalent explicit dict and auto-mode probes:
 
 ```bash
