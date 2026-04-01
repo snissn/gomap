@@ -1222,6 +1222,7 @@ type rewriteBudgetRecordingBackend struct {
 	rewriteCalls    int
 	rewriteResponse backenddb.ValueLogRewriteStats
 	rewriteErr      error
+	rewriteFn       func(context.Context, backenddb.ValueLogRewriteOnlineOptions) (backenddb.ValueLogRewriteStats, error)
 	gcCalls         int
 	gcOpts          []backenddb.ValueLogGCOptions
 	gcResponse      backenddb.ValueLogGCStats
@@ -1249,7 +1250,11 @@ func (b *rewriteBudgetRecordingBackend) ValueLogRewriteOnline(ctx context.Contex
 	b.rewriteCalls++
 	stats := b.rewriteResponse
 	err := b.rewriteErr
+	customFn := b.rewriteFn
 	b.mu.Unlock()
+	if customFn != nil {
+		return customFn(ctx, opts)
+	}
 	return stats, err
 }
 
@@ -3057,6 +3062,102 @@ func TestVlogGenerationRewriteQueue_KeepsStillReferencedSegmentQueuedWhenBounded
 	}
 	if got, want := queue, []uint32{11, 22}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
 		t.Fatalf("queue after bounded rewrite=%v want=%v", got, want)
+	}
+}
+
+func TestVlogGenerationRewriteQueue_BoundedSegmentEventuallyDrainsWithoutReplanning(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+
+	dir := t.TempDir()
+
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	recorder := &rewriteBudgetRecordingBackend{DB: backend}
+	recorder.rewriteFn = func(context.Context, backenddb.ValueLogRewriteOnlineOptions) (backenddb.ValueLogRewriteStats, error) {
+		recorder.mu.Lock()
+		call := recorder.rewriteCalls
+		recorder.mu.Unlock()
+		if call == 1 {
+			return backenddb.ValueLogRewriteStats{
+				BytesBefore:                   2048,
+				BytesAfter:                    1536,
+				RecordsCopied:                 1,
+				SourceBytesProcessed:          1024,
+				SourceSegmentsStillReferenced: 1,
+				SourceFileIDsStillReferenced:  []uint32{11},
+			}, nil
+		}
+		return backenddb.ValueLogRewriteStats{
+			BytesBefore:                2048,
+			BytesAfter:                 1024,
+			RecordsCopied:              1,
+			SourceBytesProcessed:       1024,
+			SourceSegmentsUnreferenced: 1,
+			SourceFileIDsUnreferenced:  []uint32{11},
+		}, nil
+	}
+
+	db, cleanup := openRewriteQueueTestDB(t, dir, recorder)
+	t.Cleanup(cleanup)
+
+	if err := db.setVlogGenerationRewriteLedger([]backenddb.ValueLogRewritePlanSegment{
+		{FileID: 11, BytesLive: 2048, BytesTotal: 4096, BytesStale: 2048, StaleRatio: 0.5},
+	}); err != nil {
+		t.Fatalf("set ledger: %v", err)
+	}
+
+	db.vlogGenerationRewriteBudgetTokensBytes.Store(1024)
+	db.vlogGenerationLastRewriteUnixNano.Store(time.Now().Add(-2 * vlogGenerationRewriteResumeMinInterval).UnixNano())
+	forceVlogMaintenanceIdle(db)
+	db.maybeRunVlogGenerationMaintenance(false)
+
+	if _, calls := recorder.recordedPlan(); calls != 0 {
+		t.Fatalf("plan calls after first bounded pass=%d want=0", calls)
+	}
+	opts, calls := recorder.recordedRewrite()
+	if calls != 1 {
+		t.Fatalf("rewrite calls after first bounded pass=%d want=1", calls)
+	}
+	if got, want := opts.SourceFileIDs, []uint32{11}; len(got) != len(want) || got[0] != want[0] {
+		t.Fatalf("first bounded rewrite SourceFileIDs=%v want=%v", got, want)
+	}
+	if got, want := opts.MaxCopiedBytes, int64(1024); got != want {
+		t.Fatalf("first bounded rewrite MaxCopiedBytes=%d want %d", got, want)
+	}
+	queue, err := db.currentVlogGenerationRewriteQueue()
+	if err != nil {
+		t.Fatalf("current queue after first bounded pass: %v", err)
+	}
+	if got, want := queue, []uint32{11}; len(got) != len(want) || got[0] != want[0] {
+		t.Fatalf("queue after first bounded pass=%v want=%v", got, want)
+	}
+
+	db.vlogGenerationRewriteBudgetTokensBytes.Store(1024)
+	db.vlogGenerationLastRewriteUnixNano.Store(time.Now().Add(-2 * vlogGenerationRewriteResumeMinInterval).UnixNano())
+	forceVlogMaintenanceIdle(db)
+	db.maybeRunVlogGenerationMaintenance(false)
+
+	if _, calls := recorder.recordedPlan(); calls != 0 {
+		t.Fatalf("plan calls after second bounded pass=%d want=0", calls)
+	}
+	opts, calls = recorder.recordedRewrite()
+	if calls != 2 {
+		t.Fatalf("rewrite calls after second bounded pass=%d want=2", calls)
+	}
+	if got, want := opts.SourceFileIDs, []uint32{11}; len(got) != len(want) || got[0] != want[0] {
+		t.Fatalf("second bounded rewrite SourceFileIDs=%v want=%v", got, want)
+	}
+	if got, want := opts.MaxCopiedBytes, int64(1024); got != want {
+		t.Fatalf("second bounded rewrite MaxCopiedBytes=%d want %d", got, want)
+	}
+	queue, err = db.currentVlogGenerationRewriteQueue()
+	if err != nil {
+		t.Fatalf("current queue after second bounded pass: %v", err)
+	}
+	if len(queue) != 0 {
+		t.Fatalf("queue after second bounded pass=%v want empty", queue)
 	}
 }
 
