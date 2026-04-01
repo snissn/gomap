@@ -312,6 +312,21 @@ type treeDBOptionsReport struct {
 	warnings        []string
 }
 
+const treeDBOuterLeafAutoSizeDefaultBlockTargetBytes = 32 << 10
+
+func effectiveTreeDBVlogBlockTargetBytes(opts treedb.Options) int {
+	if opts.ValueLog.BlockTargetCompressedBytes > 0 {
+		return opts.ValueLog.BlockTargetCompressedBytes
+	}
+	if opts.IndexOuterLeavesInValueLog &&
+		opts.ValueLog.Compression == treedb.ValueLogCompressionAuto &&
+		opts.ValueLog.AutoPolicy == treedb.ValueLogAutoSize &&
+		opts.ValueLog.DictClassMode == treedb.ValueLogDictClassSplitOuterLeaf {
+		return treeDBOuterLeafAutoSizeDefaultBlockTargetBytes
+	}
+	return 4096
+}
+
 func (r treeDBOptionsReport) hasReport() bool {
 	if len(r.notes) > 0 || len(r.warnings) > 0 {
 		return true
@@ -366,7 +381,7 @@ func (r treeDBOptionsReport) formatText(indent string) string {
 		lines = append(lines, fmt.Sprintf("vlog.rewrite_min_segment_age_ms=%d", int(minAge/time.Millisecond)))
 	}
 	if target := r.opts.ValueLog.BlockTargetCompressedBytes; target <= 0 {
-		lines = append(lines, "vlog.block_target_bytes=default (effective=4096B)")
+		lines = append(lines, fmt.Sprintf("vlog.block_target_bytes=default (effective=%dB)", effectiveTreeDBVlogBlockTargetBytes(r.opts)))
 	} else {
 		lines = append(lines, fmt.Sprintf("vlog.block_target_bytes=%dB", target))
 	}

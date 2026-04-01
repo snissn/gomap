@@ -41,6 +41,26 @@ func TestBuildTreeDBOptions_DefaultVlogCompressionAuto(t *testing.T) {
 	}
 }
 
+func TestTreeDBOptionsReport_DefaultOuterLeafAutoSizeBlockTarget(t *testing.T) {
+	saved := saveTreeDBFlagState()
+	defer restoreTreeDBFlagState(saved)
+
+	*treedbVlogCompression = "auto"
+	*treedbVlogAutoPolicy = "size"
+	*treedbVlogDictClassMode = "split_outer_leaf"
+	*treedbIndexOuterLeavesInVlog = true
+	*treedbVlogBlockTargetBytes = 0
+
+	_, rep, err := buildTreeDBOptions("")
+	if err != nil {
+		t.Fatalf("buildTreeDBOptions: %v", err)
+	}
+	text := rep.formatText("")
+	if !strings.Contains(text, "vlog.block_target_bytes=default (effective=32768B)") {
+		t.Fatalf("resolved report missing outer-leaf auto-size block target:\n%s", text)
+	}
+}
+
 func TestBuildTreeDBOptions_VlogCompressionBlockFlags(t *testing.T) {
 	saved := saveTreeDBFlagState()
 	defer restoreTreeDBFlagState(saved)

@@ -37,6 +37,40 @@ func TestVlogCompressionSelector_EntersHoldAndProbes(t *testing.T) {
 	}
 }
 
+func TestResolveValueLogBlockTargetCompressedBytes_DefaultsOuterLeafAutoSizePath(t *testing.T) {
+	got := resolveValueLogBlockTargetCompressedBytes(
+		0,
+		true,
+		vlogCompressionAuto,
+		vlogAutoSize,
+		vlogDictClassModeSplitOuterLeaf,
+	)
+	if got != outerLeafAutoSizeDefaultBlockTargetCompressedBytes {
+		t.Fatalf("resolveValueLogBlockTargetCompressedBytes(auto outer_leaf size)=%d want %d", got, outerLeafAutoSizeDefaultBlockTargetCompressedBytes)
+	}
+}
+
+func TestResolveValueLogBlockTargetCompressedBytes_RespectsExplicitAndNonTargetPaths(t *testing.T) {
+	if got := resolveValueLogBlockTargetCompressedBytes(
+		16384,
+		true,
+		vlogCompressionAuto,
+		vlogAutoSize,
+		vlogDictClassModeSplitOuterLeaf,
+	); got != 16384 {
+		t.Fatalf("explicit block target overridden: got=%d want=16384", got)
+	}
+	if got := resolveValueLogBlockTargetCompressedBytes(
+		0,
+		true,
+		vlogCompressionAuto,
+		vlogAutoBalanced,
+		vlogDictClassModeSplitOuterLeaf,
+	); got != 4096 {
+		t.Fatalf("non-size auto path should keep default 4096B, got=%d", got)
+	}
+}
+
 func TestVlogCompressionSelector_ExplorationProbeOutsideHold(t *testing.T) {
 	s := newVlogCompressionSelector(vlogAutoBalanced, 1024, 256)
 	s.exploreBytes = 64
