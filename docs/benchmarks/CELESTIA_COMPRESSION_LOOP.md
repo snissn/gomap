@@ -175,8 +175,9 @@ Notes:
   - outputs land in each run directory as `light_stats_pre.txt` / `light_stats_post.txt`, and summarized values are included in `run.json` + `runs.csv`.
   - these snapshots are offline `treemap` opens, not in-process runtime counters from the live node; `run.json.maintenance_summary_is_live_runtime` marks this (`true` only when diagnostics JSON is present).
 - when `PAIR_ALIGN_STOP_HEIGHT_FROM_FIRST=1`, the second leg also forces a tighter stop poll:
-  - `PAIR_ALIGN_STOP_POLL_INTERVAL_SECONDS` (default `1`)
+  - `PAIR_ALIGN_STOP_POLL_INTERVAL_SECONDS` (default `0.2`)
   - this is written into the overlay as `POLL_INTERVAL_SECONDS` alongside `STOP_AT_LOCAL_HEIGHT`
+  - fractional seconds are allowed
   - use this to reduce avoidable block overshoot and invalid low-noise pairs on stop-aligned runs
 - `run_celestia_ab` also performs a lightweight periodic `/debug/vars` sample during each live run:
   - enable/disable: `AB_CAPTURE_LIVE_DEBUG_VARS=1|0` (default `1`)

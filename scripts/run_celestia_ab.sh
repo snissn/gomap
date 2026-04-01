@@ -70,7 +70,7 @@ AB_LIVE_DEBUG_VARS_URL="${AB_LIVE_DEBUG_VARS_URL:-http://127.0.0.1:6062/debug/va
 PAIR_ALIGN_TRUST_FROM_FIRST="${PAIR_ALIGN_TRUST_FROM_FIRST:-0}"
 PAIR_ALIGN_STOP_HEIGHT_FROM_FIRST="${PAIR_ALIGN_STOP_HEIGHT_FROM_FIRST:-0}"
 PAIR_ALIGN_STOP_MARGIN="${PAIR_ALIGN_STOP_MARGIN:-0}"
-PAIR_ALIGN_STOP_POLL_INTERVAL_SECONDS="${PAIR_ALIGN_STOP_POLL_INTERVAL_SECONDS:-1}"
+PAIR_ALIGN_STOP_POLL_INTERVAL_SECONDS="${PAIR_ALIGN_STOP_POLL_INTERVAL_SECONDS:-0.2}"
 TS="$(date +%Y%m%d%H%M%S)"
 
 if [[ "$#" -gt 4 ]]; then
@@ -164,10 +164,18 @@ if ! [[ "$PAIR_ALIGN_STOP_MARGIN" =~ ^[0-9]+$ ]]; then
   echo "PAIR_ALIGN_STOP_MARGIN must be a non-negative integer" >&2
   exit 1
 fi
-if ! [[ "$PAIR_ALIGN_STOP_POLL_INTERVAL_SECONDS" =~ ^[1-9][0-9]*$ ]]; then
-  echo "PAIR_ALIGN_STOP_POLL_INTERVAL_SECONDS must be a positive integer" >&2
-  exit 1
-fi
+python3 - "$PAIR_ALIGN_STOP_POLL_INTERVAL_SECONDS" <<'PY'
+import sys
+
+value = sys.argv[1]
+try:
+    parsed = float(value)
+except ValueError:
+    parsed = -1.0
+if parsed <= 0:
+    print("PAIR_ALIGN_STOP_POLL_INTERVAL_SECONDS must be a positive number", file=sys.stderr)
+    raise SystemExit(1)
+PY
 if [[ "$AB_LIGHT_VLOG_STATS_TIMEOUT_SECONDS" -lt 0 ]]; then
   echo "AB_LIGHT_VLOG_STATS_TIMEOUT_SECONDS must be >= 0" >&2
   exit 1
@@ -404,7 +412,7 @@ out_env = Path(sys.argv[2])
 align_trust = sys.argv[3] == "1"
 align_stop = sys.argv[4] == "1"
 stop_margin = int(sys.argv[5])
-stop_poll_interval_seconds = int(sys.argv[6])
+stop_poll_interval_seconds = sys.argv[6]
 
 def scalar_int(value):
     try:
