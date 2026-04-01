@@ -143,6 +143,7 @@ func TestResolveBenchCompressionMode(t *testing.T) {
 		{name: "legacy off", mode: "default", legacy: "off", want: "off"},
 		{name: "explicit block", mode: "block", legacy: "off", want: "block"},
 		{name: "explicit dict", mode: "dict", legacy: "off", want: "dict"},
+		{name: "explicit auto", mode: "auto", legacy: "off", want: "auto"},
 		{name: "bad explicit", mode: "nope", legacy: "off", err: true},
 		{name: "bad legacy", mode: "default", legacy: "maybe", err: true},
 	}
@@ -162,6 +163,63 @@ func TestResolveBenchCompressionMode(t *testing.T) {
 				t.Fatalf("got %q want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestParseBenchAutoPolicy(t *testing.T) {
+	cases := []struct {
+		in      string
+		want    string
+		wantID  treedb.ValueLogAutoPolicy
+		wantErr bool
+	}{
+		{in: "balanced", want: "balanced", wantID: treedb.ValueLogAutoBalanced},
+		{in: "throughput", want: "throughput", wantID: treedb.ValueLogAutoThroughput},
+		{in: "size", want: "size", wantID: treedb.ValueLogAutoSize},
+		{in: "bad", wantErr: true},
+	}
+	for _, tc := range cases {
+		gotName, gotID, err := parseBenchAutoPolicy(tc.in)
+		if tc.wantErr {
+			if err == nil {
+				t.Fatalf("expected error for %q", tc.in)
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatalf("parseBenchAutoPolicy(%q): %v", tc.in, err)
+		}
+		if gotName != tc.want || gotID != tc.wantID {
+			t.Fatalf("got (%q,%d) want (%q,%d)", gotName, gotID, tc.want, tc.wantID)
+		}
+	}
+}
+
+func TestParseBenchDictClassMode(t *testing.T) {
+	cases := []struct {
+		in      string
+		want    string
+		wantID  treedb.ValueLogDictClassMode
+		wantErr bool
+	}{
+		{in: "single", want: "single", wantID: treedb.ValueLogDictClassSingle},
+		{in: "split_outer_leaf", want: "split_outer_leaf", wantID: treedb.ValueLogDictClassSplitOuterLeaf},
+		{in: "bad", wantErr: true},
+	}
+	for _, tc := range cases {
+		gotName, gotID, err := parseBenchDictClassMode(tc.in)
+		if tc.wantErr {
+			if err == nil {
+				t.Fatalf("expected error for %q", tc.in)
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatalf("parseBenchDictClassMode(%q): %v", tc.in, err)
+		}
+		if gotName != tc.want || gotID != tc.wantID {
+			t.Fatalf("got (%q,%d) want (%q,%d)", gotName, gotID, tc.want, tc.wantID)
+		}
 	}
 }
 
@@ -200,6 +258,9 @@ func TestBenchOptions_CompressionModes(t *testing.T) {
 		DictTrainMiB:     1,
 		DictSampleStride: 1,
 		BlockCodec:       "lz4",
+		AutoPolicy:       "balanced",
+		DictClassMode:    "single",
+		IndexOuterLeaves: false,
 	}
 
 	offCfg := base
@@ -233,6 +294,9 @@ func TestBenchOptions_CompressionModes(t *testing.T) {
 	if opts.ValueLog.CompressionAutotune.Mode != valuelog.AutotuneMedium {
 		t.Fatalf("dict: expected autotune medium, got %v", opts.ValueLog.CompressionAutotune.Mode)
 	}
+	if opts.ValueLog.AutoPolicy != treedb.ValueLogAutoBalanced {
+		t.Fatalf("dict: expected balanced auto policy, got %v", opts.ValueLog.AutoPolicy)
+	}
 
 	blockCfg := base
 	blockCfg.CompressionMode = "block"
@@ -251,6 +315,58 @@ func TestBenchOptions_CompressionModes(t *testing.T) {
 	}
 	if opts.ValueLog.CompressionAutotune.Mode != valuelog.AutotuneOff {
 		t.Fatalf("block: expected autotune off, got %v", opts.ValueLog.CompressionAutotune.Mode)
+	}
+
+	autoCfg := base
+	autoCfg.CompressionMode = "auto"
+	autoCfg.AutoPolicy = "size"
+	autoCfg.DictClassMode = "split_outer_leaf"
+	opts, _, err = benchOptions(autoCfg)
+	if err != nil {
+		t.Fatalf("benchOptions(auto): %v", err)
+	}
+	if opts.ValueLog.Compression != treedb.ValueLogCompressionAuto {
+		t.Fatalf("auto: unexpected compression mode %v", opts.ValueLog.Compression)
+	}
+	if opts.ValueLog.AutoPolicy != treedb.ValueLogAutoSize {
+		t.Fatalf("auto: expected size auto policy, got %v", opts.ValueLog.AutoPolicy)
+	}
+	if opts.ValueLog.DictClassMode != treedb.ValueLogDictClassSplitOuterLeaf {
+		t.Fatalf("auto: expected split outer-leaf class mode, got %v", opts.ValueLog.DictClassMode)
+	}
+	if opts.ValueLog.DictTrain.TrainBytes <= 0 {
+		t.Fatalf("auto: expected positive train bytes, got %d", opts.ValueLog.DictTrain.TrainBytes)
+	}
+	if opts.ValueLog.CompressionAutotune.Mode != valuelog.AutotuneMedium {
+		t.Fatalf("auto: expected autotune medium, got %v", opts.ValueLog.CompressionAutotune.Mode)
+	}
+
+	autoCfg.IndexOuterLeaves = true
+	opts, _, err = benchOptions(autoCfg)
+	if err != nil {
+		t.Fatalf("benchOptions(auto/index outer leaves): %v", err)
+	}
+	if !opts.IndexOuterLeavesInValueLog {
+		t.Fatalf("auto: expected IndexOuterLeavesInValueLog=true")
+	}
+}
+
+func TestParseBenchDictStatUint_PrefersOuterLeafWhenSplitMode(t *testing.T) {
+	cfg := benchConfig{DictClassMode: "split_outer_leaf"}
+	stats := map[string]string{
+		"treedb.cache.vlog_dict.last_applied_dict_id":              "0",
+		"treedb.cache.vlog_dict.last_applied_dict_id.single_value": "11",
+		"treedb.cache.vlog_dict.last_applied_dict_id.outer_leaf":   "22",
+	}
+	got, ok := parseBenchDictStatUint(stats, cfg, "treedb.cache.vlog_dict.last_applied_dict_id")
+	if !ok {
+		t.Fatalf("expected class-aware dict stat")
+	}
+	if got != 22 {
+		t.Fatalf("got %d want 22", got)
+	}
+	if !dictStatsActive(stats, cfg) {
+		t.Fatalf("expected split-mode dict stats to count as active")
 	}
 }
 

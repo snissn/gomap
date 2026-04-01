@@ -185,6 +185,124 @@ Recent outer-leaf corpus result (20k pages from runs `20260331231403` and
   about `986,765 ppm` full, so this result points at value-log compression of
   dense 4 KiB leaf pages rather than page-density tuning
 
+To exercise the actual TreeDB write path on that same extracted outer-leaf
+corpus, first convert the binary corpus to the JSONL `{val}` format expected by
+`vlog_dict_realdata`:
+
+```bash
+python3 - <<'PY'
+import base64, json, struct
+src = "/tmp/outer_leaf_codec_corpus_<run-id>/outer_leaf_pages.bin"
+dst = "/tmp/outer_leaf_pages_<run-id>.jsonl"
+with open(src, "rb") as f, open(dst, "w", encoding="utf-8") as out:
+    while True:
+        hdr = f.read(4)
+        if not hdr:
+            break
+        if len(hdr) != 4:
+            raise SystemExit("short length header")
+        n = struct.unpack("<I", hdr)[0]
+        payload = f.read(n)
+        if len(payload) != n:
+            raise SystemExit("short payload")
+        out.write(json.dumps({
+            "val": base64.b64encode(payload).decode("ascii"),
+            "encoding": "base64",
+        }))
+        out.write("\n")
+PY
+```
+
+Then run the write-path bench with outer leaves forced into the value log:
+
+```bash
+GOWORK=off go run ./TreeDB/cmd/vlog_dict_realdata \
+  -input /tmp/outer_leaf_pages_<run-id>.jsonl \
+  -input-encoding auto \
+  -train 15000 \
+  -eval 5000 \
+  -cap 0 \
+  -bench-kv \
+  -bench-mode wal_off \
+  -bench-index-outer-leaves-in-vlog \
+  -bench-compression-mode block \
+  -bench-block-codec snappy \
+  -bench-raw-mib 64 \
+  -bench-batch 1024 \
+  -bench-workers 1 \
+  -bench-key-mode sequential \
+  -bench-pointer-threshold 1
+```
+
+Equivalent explicit dict and auto-mode probes:
+
+```bash
+GOWORK=off go run ./TreeDB/cmd/vlog_dict_realdata \
+  -input /tmp/outer_leaf_pages_<run-id>.jsonl \
+  -input-encoding auto \
+  -train 15000 \
+  -eval 5000 \
+  -cap 0 \
+  -bench-kv \
+  -bench-mode wal_off \
+  -bench-index-outer-leaves-in-vlog \
+  -bench-compression-mode dict \
+  -bench-auto-policy size \
+  -bench-dict-class-mode split_outer_leaf \
+  -bench-block-codec snappy \
+  -bench-raw-mib 64 \
+  -bench-batch 1024 \
+  -bench-workers 1 \
+  -bench-key-mode sequential \
+  -bench-pointer-threshold 1 \
+  -bench-dict-train-mib 1 \
+  -bench-dict-bytes 65536 \
+  -bench-dict-sample-stride 1
+
+GOWORK=off go run ./TreeDB/cmd/vlog_dict_realdata \
+  -input /tmp/outer_leaf_pages_<run-id>.jsonl \
+  -input-encoding auto \
+  -train 15000 \
+  -eval 5000 \
+  -cap 0 \
+  -bench-kv \
+  -bench-mode wal_off \
+  -bench-index-outer-leaves-in-vlog \
+  -bench-compression-mode auto \
+  -bench-auto-policy size \
+  -bench-dict-class-mode split_outer_leaf \
+  -bench-block-codec snappy \
+  -bench-raw-mib 64 \
+  -bench-batch 1024 \
+  -bench-workers 1 \
+  -bench-key-mode sequential \
+  -bench-pointer-threshold 1 \
+  -bench-dict-train-mib 1 \
+  -bench-dict-bytes 65536 \
+  -bench-dict-sample-stride 1
+```
+
+Recent write-path result on extracted outer-leaf pages from run `20260331231403`
+(steady-state ratio is the relevant metric because the dict runs pay warmup and
+training overhead before steady begins):
+- block `snappy`:
+  - `steady_raw_MBps=662.084`
+  - `steady_vlog_ratio=0.604185`
+- explicit dict `size + split_outer_leaf + 64 KiB dict`:
+  - `steady_raw_MBps=578.303`
+  - `steady_vlog_ratio=0.498880`
+- auto `size + split_outer_leaf + 64 KiB dict`:
+  - `steady_raw_MBps=599.183`
+  - `steady_vlog_ratio=0.602922`
+
+Interpretation:
+- explicit outer-leaf dicting is now visibly effective on the actual TreeDB
+  write path once legacy 4 KiB leaf pages are classified correctly
+- current auto mode does publish an outer-leaf dict in this setup, but it still
+  lands near the block-compression ratio rather than the explicit dict ratio
+- the next product lever is therefore auto-mode selection/write-mode behavior
+  for outer-leaf streams, not more classification work
+
 ## Stage 3: Full `run_celestia` A/B Confirmation
 
 Only promote candidates that pass Stage 1 and Stage 2.

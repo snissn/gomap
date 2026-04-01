@@ -23089,6 +23089,11 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_dict.last_publish_unix_nano"] = fmt.Sprintf("%d", db.valueLogDictLastPublishUnixNano.Load())
 	stats["treedb.cache.vlog_dict.last_k_update_unix_nano"] = fmt.Sprintf("%d", db.valueLogDictLastKUpdateUnixNano.Load())
 	stats["treedb.cache.vlog_dict.current_k"] = fmt.Sprintf("%d", db.valueLogDictCurrentK.Load())
+	for class := vlogDictClass(0); class < vlogDictClass(vlogDictClassCount); class++ {
+		suffix := vlogDictClassSuffix(class)
+		stats["treedb.cache.vlog_dict.last_applied_dict_id."+suffix] = fmt.Sprintf("%d", db.valueLogDictLastAppliedDictIDByClass[class].Load())
+		stats["treedb.cache.vlog_dict.current_k."+suffix] = fmt.Sprintf("%d", db.valueLogDictCurrentKByClass[class].Load())
+	}
 	db.valueLogDictBytesMu.Lock()
 	stats["treedb.cache.vlog_dict.cached_dict_id"] = fmt.Sprintf("%d", db.valueLogDictBytesID)
 	stats["treedb.cache.vlog_dict.cached_dict_bytes"] = fmt.Sprintf("%d", len(db.valueLogDictBytes))
