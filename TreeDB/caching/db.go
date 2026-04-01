@@ -15457,7 +15457,18 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 						}
 						confirmed := []backenddb.ValueLogRewritePlanChunk(nil)
 						if stagedChunkBytes == 0 || stagedChunkBytes == chunkPlan.ChunkBytes {
-							confirmed = stableVlogGenerationRewriteLedgerChunks(stagedChunks, chunkPlan.SourceChunks)
+							stagedLedger := []backenddb.ValueLogRewritePlanSegment(nil)
+							if len(stagedChunks) == 0 {
+								stagedLedger, ledgerErr = db.currentVlogGenerationRewriteLedger()
+								if ledgerErr != nil {
+									db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
+									if db.notifyError != nil {
+										db.notifyError(fmt.Errorf("cachingdb: load staged generational rewrite ledger: %w", ledgerErr))
+									}
+									return
+								}
+							}
+							confirmed = stableVlogGenerationRewriteLedgerChunksWithSegmentFallback(stagedChunks, stagedLedger, chunkPlan.SourceChunks)
 						}
 						if len(confirmed) > 0 {
 							shouldRewrite = true
@@ -15636,7 +15647,7 @@ planned:
 			}
 		}
 	}
-	if len(rewriteQueue) == 0 && shouldRewrite && hasRewriter && !haveRewritePlan && hasPlanner {
+	if len(rewriteQueue) == 0 && shouldRewrite && hasRewriter && !haveRewritePlan && !haveRewriteChunkPlan && hasPlanner {
 		maxSourceBytes := db.vlogGenerationRewriteBudgetTokensBytes.Load()
 		if maxSourceBytes < 0 {
 			maxSourceBytes = 0
@@ -15831,8 +15842,12 @@ planned:
 				plannedChunksForExec := rewriteChunkPlan.SourceChunks
 				if reason == vlogGenerationReasonStaleRatio && len(rewriteChunkPlan.SourceChunks) > 0 {
 					prevChunks, prevChunkBytes, _ := db.currentVlogGenerationRewriteChunkLedger()
+					prevLedger := []backenddb.ValueLogRewritePlanSegment(nil)
+					if len(prevChunks) == 0 {
+						prevLedger, _ = db.currentVlogGenerationRewriteLedger()
+					}
 					if prevChunkBytes == 0 || prevChunkBytes == rewriteChunkPlan.ChunkBytes {
-						plannedChunksForExec = stableVlogGenerationRewriteLedgerChunks(prevChunks, rewriteChunkPlan.SourceChunks)
+						plannedChunksForExec = stableVlogGenerationRewriteLedgerChunksWithSegmentFallback(prevChunks, prevLedger, rewriteChunkPlan.SourceChunks)
 					} else {
 						plannedChunksForExec = nil
 					}

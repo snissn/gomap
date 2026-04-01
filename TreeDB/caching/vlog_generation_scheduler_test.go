@@ -1360,7 +1360,16 @@ func (b *rewriteBudgetRecordingBackend) ValueLogRewritePlan(ctx context.Context,
 }
 
 func (b *rewriteBudgetRecordingBackend) ValueLogRewriteChunkPlan(ctx context.Context, opts backenddb.ValueLogRewriteOnlineOptions, chunkBytes int64) (backenddb.ValueLogRewriteChunkPlan, error) {
-	plan, err := b.ValueLogRewritePlan(ctx, opts)
+	b.mu.Lock()
+	b.planOpts = cloneRewriteOptsForTest(opts)
+	b.planCalls++
+	plan := b.planResponse
+	err := b.planErr
+	planFn := b.planFn
+	b.mu.Unlock()
+	if planFn != nil {
+		plan, err = planFn(opts)
+	}
 	if err != nil {
 		return backenddb.ValueLogRewriteChunkPlan{}, err
 	}

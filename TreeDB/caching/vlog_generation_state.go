@@ -75,6 +75,29 @@ func buildVlogGenerationRewriteLedgerByFileID(ledger []backenddb.ValueLogRewrite
 	return byFileID
 }
 
+func synthesizeVlogGenerationRewriteLedgerFromChunks(chunks []backenddb.ValueLogRewritePlanChunk) []backenddb.ValueLogRewritePlanSegment {
+	if len(chunks) == 0 {
+		return nil
+	}
+	byFileID := buildVlogGenerationRewriteChunkLedgerByFileID(chunks)
+	if len(byFileID) == 0 {
+		return nil
+	}
+	ids := vlogGenerationRewriteChunkLedgerIDs(chunks)
+	out := make([]backenddb.ValueLogRewritePlanSegment, 0, len(ids))
+	for _, id := range ids {
+		seg, ok := byFileID[id]
+		if !ok || seg.FileID == 0 {
+			continue
+		}
+		out = append(out, seg)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
 func buildVlogGenerationRewriteChunkLedgerByFileID(chunks []backenddb.ValueLogRewritePlanChunk) map[uint32]backenddb.ValueLogRewritePlanSegment {
 	if len(chunks) == 0 {
 		return nil
@@ -496,7 +519,10 @@ func (db *DB) currentVlogGenerationRewriteLedger() ([]backenddb.ValueLogRewriteP
 	if err := db.loadVlogGenerationRewriteQueueLocked(); err != nil {
 		return nil, err
 	}
-	return append([]backenddb.ValueLogRewritePlanSegment(nil), db.vlogGenerationRewriteLedger...), nil
+	if len(db.vlogGenerationRewriteLedger) > 0 {
+		return append([]backenddb.ValueLogRewritePlanSegment(nil), db.vlogGenerationRewriteLedger...), nil
+	}
+	return synthesizeVlogGenerationRewriteLedgerFromChunks(db.vlogGenerationRewriteChunkLedger), nil
 }
 
 func (db *DB) currentVlogGenerationRewriteChunkLedger() ([]backenddb.ValueLogRewritePlanChunk, int64, error) {
@@ -778,6 +804,39 @@ func stableVlogGenerationRewriteLedgerChunks(prev, planned []backenddb.ValueLogR
 			continue
 		}
 		if _, ok := seen[valueLogGenerationRewriteChunkKey{FileID: chunk.FileID, ChunkOffset: chunk.ChunkOffset}]; !ok {
+			continue
+		}
+		out = append(out, chunk)
+	}
+	return out
+}
+
+func stableVlogGenerationRewriteLedgerChunksWithSegmentFallback(prevChunks []backenddb.ValueLogRewritePlanChunk, prevSegments []backenddb.ValueLogRewritePlanSegment, planned []backenddb.ValueLogRewritePlanChunk) []backenddb.ValueLogRewritePlanChunk {
+	if len(planned) == 0 {
+		return nil
+	}
+	if len(prevChunks) > 0 {
+		return stableVlogGenerationRewriteLedgerChunks(prevChunks, planned)
+	}
+	if len(prevSegments) == 0 {
+		return nil
+	}
+	seen := make(map[uint32]struct{}, len(prevSegments))
+	for _, seg := range prevSegments {
+		if seg.FileID == 0 || seg.BytesLive <= 0 {
+			continue
+		}
+		seen[seg.FileID] = struct{}{}
+	}
+	if len(seen) == 0 {
+		return nil
+	}
+	out := make([]backenddb.ValueLogRewritePlanChunk, 0, len(planned))
+	for _, chunk := range planned {
+		if chunk.FileID == 0 || chunk.BytesLive <= 0 {
+			continue
+		}
+		if _, ok := seen[chunk.FileID]; !ok {
 			continue
 		}
 		out = append(out, chunk)
