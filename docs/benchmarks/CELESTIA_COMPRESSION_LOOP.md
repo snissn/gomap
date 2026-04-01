@@ -311,6 +311,13 @@ Interpretation:
 - the next product lever is therefore auto-mode selection/write-mode behavior
   for outer-leaf streams, not more classification work
 
+Follow-up replay sweeps on the mixed `vlog-replay` corpus showed the competing
+block path still had meaningful headroom: increasing grouped block target from
+the default `4 KiB` to `32-64 KiB` improved both throughput and stored-byte
+ratio on `auto + size + split_outer_leaf` without changing dict/block selection
+mix. The current candidate branch therefore defaults the unset block target to
+`32 KiB` only for that explicit outer-leaf auto-size path.
+
 ## Stage 3: Full `run_celestia` A/B Confirmation
 
 Only promote candidates that pass Stage 1 and Stage 2.

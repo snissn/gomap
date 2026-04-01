@@ -7884,6 +7884,23 @@ func validateValueLogDomainThresholds(domains []backenddb.ValueLogDomainThreshol
 	return nil
 }
 
+const outerLeafAutoSizeDefaultBlockTargetCompressedBytes = 32 << 10
+
+func shouldDefaultOuterLeafAutoSizeBlockTarget(configured int, indexOuterLeaves bool, mode vlogCompressionMode, autoPolicy vlogAutoPolicy, dictClassMode vlogDictClassMode) bool {
+	return configured <= 0 &&
+		indexOuterLeaves &&
+		mode == vlogCompressionAuto &&
+		autoPolicy == vlogAutoSize &&
+		dictClassMode == vlogDictClassModeSplitOuterLeaf
+}
+
+func resolveValueLogBlockTargetCompressedBytes(configured int, indexOuterLeaves bool, mode vlogCompressionMode, autoPolicy vlogAutoPolicy, dictClassMode vlogDictClassMode) int {
+	if shouldDefaultOuterLeafAutoSizeBlockTarget(configured, indexOuterLeaves, mode, autoPolicy, dictClassMode) {
+		return outerLeafAutoSizeDefaultBlockTargetCompressedBytes
+	}
+	return valuelog.NormalizeBlockTargetCompressedBytes(configured)
+}
+
 func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	if !opts.AllowUnsafe && (opts.DisableWAL || opts.RelaxedSync || opts.DisableReadChecksum) {
 		return nil, ErrUnsafeOptions
@@ -8193,7 +8210,6 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		valueLogCompressionMode = vlogCompressionAuto
 	}
 	valueLogBlockCodec := normalizeVlogBlockCodec(opts.ValueLogBlockCodec)
-	valueLogBlockTargetBytes := valuelog.NormalizeBlockTargetCompressedBytes(opts.ValueLogBlockTargetCompressedBytes)
 	valueLogIncompressibleHold := opts.ValueLogIncompressibleHoldBytes
 	if valueLogIncompressibleHold <= 0 {
 		valueLogIncompressibleHold = defaultVlogHoldBytes
@@ -8212,6 +8228,14 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		valueLogIncompressibleProbe = valueLogIncompressibleHold
 	}
 	valueLogAutoPolicy := normalizeVlogAutoPolicy(opts.ValueLogAutoPolicy)
+	valueLogDictClassMode := normalizeVlogDictClassMode(opts.ValueLogDictClassMode)
+	valueLogBlockTargetBytes := resolveValueLogBlockTargetCompressedBytes(
+		opts.ValueLogBlockTargetCompressedBytes,
+		opts.IndexOuterLeavesInValueLog,
+		valueLogCompressionMode,
+		valueLogAutoPolicy,
+		valueLogDictClassMode,
+	)
 
 	valueLogDictTrain := opts.ValueLogDictTrain
 	if valueLogCompressionMode == vlogCompressionOff || valueLogCompressionMode == vlogCompressionBlock {
@@ -8246,7 +8270,6 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	if valueLogDictMaxK > valuelog.MaxFrameK {
 		valueLogDictMaxK = valuelog.MaxFrameK
 	}
-	valueLogDictClassMode := normalizeVlogDictClassMode(opts.ValueLogDictClassMode)
 
 	valueLogDictFrameEncodeLevel := opts.ValueLogDictFrameEncodeLevel
 	if valueLogDictFrameEncodeLevel <= 0 {
