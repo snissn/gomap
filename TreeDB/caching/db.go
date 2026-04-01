@@ -15772,8 +15772,10 @@ planned:
 			gcBytesDeleted := int64(0)
 			if len(processedRewriteIDs) > 0 {
 				removeRewriteIDs := processedRewriteIDs
+				applyProgress := false
 				if rewriteOpts.MaxCopiedBytes > 0 {
 					removeRewriteIDs = append([]uint32(nil), stats.SourceFileIDsUnreferenced...)
+					applyProgress = len(stats.SourceFileBytesProcessed) > 0
 					if len(removeRewriteIDs) == 0 &&
 						stats.SourceSegmentsRequested == 0 &&
 						stats.SourceSegmentsStillReferenced == 0 &&
@@ -15785,10 +15787,11 @@ planned:
 						// no requested/unreferenced sources, so fall back to consuming
 						// the stale queued IDs we actually attempted.
 						removeRewriteIDs = append([]uint32(nil), processedRewriteIDs...)
+						applyProgress = false
 					}
 				}
-				if len(removeRewriteIDs) > 0 {
-					if err := db.consumeVlogGenerationRewriteQueueChunk(removeRewriteIDs); err != nil {
+				if len(removeRewriteIDs) > 0 || applyProgress {
+					if err := db.applyVlogGenerationRewriteQueueProgress(processedRewriteIDs, removeRewriteIDs, stats.SourceFileBytesProcessed); err != nil {
 						return fmt.Errorf("consume generational rewrite queue: %w", err)
 					}
 				}

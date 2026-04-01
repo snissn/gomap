@@ -38,7 +38,48 @@ const rewriteReadScratchMaxCap = 1 << 20 // 1MiB cap to avoid retaining oversize
 const rewriteKeyArenaMaxCap = 1 << 20    // 1MiB cap to avoid retaining oversized key arenas
 const leafRefRewriteMapInitCap = 128     // initial map capacity for small leafref rewrite batches
 const leafRefRewriteInlineChildCap = 64  // stack-backed child-id scratch for common small internal nodes
-const leafRefRewriteInlineRemapCap = 8   // inline remap cache before promoting to map
+
+func recordValueLogRewriteSourceProgress(progress map[uint32]int64, fileID uint32, bytes int64) map[uint32]int64 {
+	if fileID == 0 || bytes <= 0 {
+		return progress
+	}
+	if progress == nil {
+		progress = make(map[uint32]int64, 4)
+	}
+	progress[fileID] += bytes
+	return progress
+}
+
+func sortedValueLogRewriteSourceProgress(progress map[uint32]int64) []ValueLogRewriteSourceProgress {
+	if len(progress) == 0 {
+		return nil
+	}
+	ids := make([]uint32, 0, len(progress))
+	for fileID, bytes := range progress {
+		if fileID == 0 || bytes <= 0 {
+			continue
+		}
+		ids = append(ids, fileID)
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	out := make([]ValueLogRewriteSourceProgress, 0, len(ids))
+	for _, fileID := range ids {
+		bytes := progress[fileID]
+		if bytes <= 0 {
+			continue
+		}
+		out = append(out, ValueLogRewriteSourceProgress{FileID: fileID, BytesProcessed: bytes})
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+const leafRefRewriteInlineRemapCap = 8 // inline remap cache before promoting to map
 
 var rewriteRIDStartScanner = nextRewriteRIDStart
 var rewriteWALSegmentsLister = listWALSegments
@@ -51,6 +92,13 @@ func rewriteAllowDictForSmallPayload(value []byte) bool {
 		return true
 	}
 	return outerleaf.HasMagic(value)
+}
+
+// ValueLogRewriteSourceProgress records bounded live-byte progress for a
+// selected source segment during a rewrite pass.
+type ValueLogRewriteSourceProgress struct {
+	FileID         uint32
+	BytesProcessed int64
 }
 
 // ValueLogRewriteStats summarizes rewrite compaction results.
@@ -95,6 +143,9 @@ type ValueLogRewriteStats struct {
 	// SourceFileIDsUnreferenced records which selected source segments became
 	// fully unreferenced after cleanup.
 	SourceFileIDsUnreferenced []uint32
+	// SourceFileBytesProcessed records bounded live-byte progress for selected
+	// source segments processed in this pass. It is ordered by FileID ascending.
+	SourceFileBytesProcessed []ValueLogRewriteSourceProgress
 
 	TemplateRecordsAttempted int
 	TemplateRecordsKept      int
@@ -1450,6 +1501,7 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 	rewriteReadScratch := make([]byte, 0, rewriteReadScratchInitCap)
 	var canceledErr error
 	readRefreshRetried := false
+	var sourceFileBytesProcessed map[uint32]int64
 	maxCopiedBytes := opts.MaxCopiedBytes
 	if maxCopiedBytes < 0 {
 		maxCopiedBytes = 0
@@ -1501,6 +1553,7 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 			stats.ValueBytesCopied += int64(len(val))
 			if candidate.sourceBytes > 0 {
 				stats.SourceBytesProcessed += candidate.sourceBytes
+				sourceFileBytesProcessed = recordValueLogRewriteSourceProgress(sourceFileBytesProcessed, candidate.oldPtr.FileID, candidate.sourceBytes)
 			}
 			// rewriteWriter appends monotonically by segment; IDs only change on
 			// rotate and never return to a prior segment.
@@ -1633,7 +1686,7 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 				}
 			}
 			if maxCopiedBytes <= 0 || leafRefMaxCopiedBytes > 0 {
-				copied, copiedBytes, err := db.rewriteLeafRefsOnline(ctx, writer, ridAlloc, sourceIDs, singleSourceID, restrictSingleID, leafRefMaxCopiedBytes, opts.SyncEachBatch)
+				copied, copiedBytes, leafSourceProgress, err := db.rewriteLeafRefsOnline(ctx, writer, ridAlloc, sourceIDs, singleSourceID, restrictSingleID, leafRefMaxCopiedBytes, opts.SyncEachBatch)
 				if err != nil {
 					return stats, err
 				}
@@ -1641,6 +1694,9 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 				stats.LeafRefRecordsCopied += copied
 				stats.LeafRefBytesCopied += copiedBytes
 				stats.SourceBytesProcessed += copiedBytes
+				for fileID, bytes := range leafSourceProgress {
+					sourceFileBytesProcessed = recordValueLogRewriteSourceProgress(sourceFileBytesProcessed, fileID, bytes)
+				}
 			}
 		}
 	} else {
@@ -1675,6 +1731,7 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 	if err != nil {
 		return stats, err
 	}
+	stats.SourceFileBytesProcessed = sortedValueLogRewriteSourceProgress(sourceFileBytesProcessed)
 	if sourceSegmentCount > 0 {
 		if restrictSingleID {
 			sourceBytes := sourceSegmentBytes[singleSourceID]
@@ -1851,6 +1908,7 @@ type leafRefRewriteCtx struct {
 	copied         int
 	copiedBytes    int64
 	maxCopiedBytes int64
+	sourceProgress map[uint32]int64
 
 	readRefreshRetried bool
 }
@@ -2029,6 +2087,7 @@ func (c *leafRefRewriteCtx) rewriteNode(id uint64) (uint64, bool, error) {
 		c.storeLeafRemap(id, leafID)
 		c.copied++
 		c.copiedBytes += int64(len(leafPage))
+		c.sourceProgress = recordValueLogRewriteSourceProgress(c.sourceProgress, ptr.FileID, int64(len(leafPage)))
 		return leafID, true, nil
 	}
 
@@ -2136,32 +2195,32 @@ func (c *leafRefRewriteCtx) rewriteNode(id uint64) (uint64, bool, error) {
 	}
 }
 
-func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, ridAlloc *rewriteRIDAllocator, sourceIDs map[uint32]struct{}, singleSourceID uint32, hasSingleSourceID bool, maxCopiedBytes int64, sync bool) (copied int, copiedBytes int64, err error) {
+func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, ridAlloc *rewriteRIDAllocator, sourceIDs map[uint32]struct{}, singleSourceID uint32, hasSingleSourceID bool, maxCopiedBytes int64, sync bool) (copied int, copiedBytes int64, sourceProgress map[uint32]int64, err error) {
 	if db == nil {
-		return 0, 0, fmt.Errorf("missing db")
+		return 0, 0, nil, fmt.Errorf("missing db")
 	}
 	if !db.indexOuterLeavesInValueLog {
-		return 0, 0, nil
+		return 0, 0, nil, nil
 	}
 	if db.readOnly {
-		return 0, 0, ErrReadOnly
+		return 0, 0, nil, ErrReadOnly
 	}
 	if db.valueLogManager == nil {
-		return 0, 0, fmt.Errorf("value log manager unavailable")
+		return 0, 0, nil, fmt.Errorf("value log manager unavailable")
 	}
 	if writer == nil || ridAlloc == nil {
-		return 0, 0, fmt.Errorf("vlog-rewrite: missing writer/rid state")
+		return 0, 0, nil, fmt.Errorf("vlog-rewrite: missing writer/rid state")
 	}
 	// Treat nil sourceIDs (with no single-source constraint) as "all sources"
 	// and an empty, non-nil map as "no sources".
 	if !hasSingleSourceID && sourceIDs != nil && len(sourceIDs) == 0 {
-		return 0, 0, nil
+		return 0, 0, nil, nil
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if err := ctx.Err(); err != nil {
-		return 0, 0, err
+		return 0, 0, nil, err
 	}
 
 	db.writeMu.Lock()
@@ -2170,7 +2229,7 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 	snap := db.AcquireSnapshot()
 	if snap == nil || snap.idx == nil || snap.state == nil {
 		closeRewriteSnapshot(&err, snap)
-		return 0, 0, fmt.Errorf("missing snapshot state")
+		return 0, 0, nil, fmt.Errorf("missing snapshot state")
 	}
 	defer closeRewriteSnapshot(&err, snap)
 
@@ -2214,30 +2273,30 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 
 	newSysRoot, sysChanged, err := leafCtx.rewriteNode(sysRoot)
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, nil, err
 	}
 	newRoot, userChanged, err := leafCtx.rewriteNode(rootID)
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, nil, err
 	}
 	if !sysChanged && !userChanged {
-		return 0, 0, nil
+		return 0, 0, nil, nil
 	}
 
 	// Ensure the copied leaf-page records are visible before publishing new leaf
 	// refs that point at them.
 	if sync {
 		if err := writer.Sync(); err != nil {
-			return 0, 0, err
+			return 0, 0, nil, err
 		}
 	} else {
 		if err := writer.Flush(); err != nil {
-			return 0, 0, err
+			return 0, 0, nil, err
 		}
 	}
 	createdIDs, err := writer.createdFileIDs()
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, nil, err
 	}
 	if len(createdIDs) > 0 {
 		// Register rewrite-created segments before commit publication so
@@ -2246,16 +2305,16 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 		for _, id := range createdIDs {
 			path := db.valueLogManager.SegmentPath(id)
 			if err := db.valueLogManager.RegisterSegment(path, id); err != nil {
-				return 0, 0, err
+				return 0, 0, nil, err
 			}
 		}
 	}
 
 	if err := db.finalizeCommit(newRoot, newSysRoot, leafCtx.retired, sync, adaptive.Metrics{}, createdIDs, false, nil); err != nil {
-		return 0, 0, err
+		return 0, 0, nil, err
 	}
 	tracker = nil
-	return leafCtx.copied, leafCtx.copiedBytes, nil
+	return leafCtx.copied, leafCtx.copiedBytes, leafCtx.sourceProgress, nil
 }
 
 func nextRewriteRIDStart(segments []logSegment) (uint64, error) {

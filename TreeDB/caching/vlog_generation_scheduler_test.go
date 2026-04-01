@@ -3027,6 +3027,10 @@ func TestVlogGenerationRewriteQueue_KeepsStillReferencedSegmentQueuedWhenBounded
 			SourceSegmentsStillReferenced: 1,
 			SourceSegmentsUnreferenced:    0,
 			SourceFileIDsStillReferenced:  []uint32{11},
+			SourceFileBytesProcessed: []backenddb.ValueLogRewriteSourceProgress{{
+				FileID:         11,
+				BytesProcessed: 1024,
+			}},
 		},
 	}
 
@@ -3063,6 +3067,19 @@ func TestVlogGenerationRewriteQueue_KeepsStillReferencedSegmentQueuedWhenBounded
 	if got, want := queue, []uint32{11, 22}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
 		t.Fatalf("queue after bounded rewrite=%v want=%v", got, want)
 	}
+	ledger, err := db.currentVlogGenerationRewriteLedger()
+	if err != nil {
+		t.Fatalf("current ledger: %v", err)
+	}
+	if len(ledger) != 2 {
+		t.Fatalf("ledger after bounded rewrite len=%d want 2", len(ledger))
+	}
+	if got := ledger[0]; got.FileID != 11 || got.BytesLive != 1024 || got.BytesStale != 3072 || got.StaleRatio != 0.75 {
+		t.Fatalf("ledger[0] after bounded rewrite=%+v want file=11 live=1024 stale=3072 ratio=0.75", got)
+	}
+	if got := ledger[1]; got.FileID != 22 || got.BytesLive != 1024 || got.BytesStale != 1024 || got.StaleRatio != 0.5 {
+		t.Fatalf("ledger[1] after bounded rewrite=%+v want unchanged", got)
+	}
 }
 
 func TestVlogGenerationRewriteQueue_DebtDrainSelectsMultipleSegmentsAndBoundsExecution(t *testing.T) {
@@ -3085,6 +3102,10 @@ func TestVlogGenerationRewriteQueue_DebtDrainSelectsMultipleSegmentsAndBoundsExe
 			SourceSegmentsUnreferenced:    1,
 			SourceFileIDsStillReferenced:  []uint32{22},
 			SourceFileIDsUnreferenced:     []uint32{33},
+			SourceFileBytesProcessed: []backenddb.ValueLogRewriteSourceProgress{
+				{FileID: 22, BytesProcessed: 44},
+				{FileID: 33, BytesProcessed: 128},
+			},
 		},
 	}
 
@@ -3126,6 +3147,16 @@ func TestVlogGenerationRewriteQueue_DebtDrainSelectsMultipleSegmentsAndBoundsExe
 	}
 	if got, want := queue, []uint32{22}; len(got) != len(want) || got[0] != want[0] {
 		t.Fatalf("queue after bounded debt-drain rewrite=%v want=%v", got, want)
+	}
+	ledger, err := db.currentVlogGenerationRewriteLedger()
+	if err != nil {
+		t.Fatalf("current ledger: %v", err)
+	}
+	if len(ledger) != 1 {
+		t.Fatalf("ledger after bounded debt-drain rewrite len=%d want 1", len(ledger))
+	}
+	if got := ledger[0]; got.FileID != 22 || got.BytesLive != 84 || got.BytesStale != 172 || got.StaleRatio != 0.671875 {
+		t.Fatalf("ledger[0] after bounded debt-drain rewrite=%+v want file=22 live=84 stale=172 ratio=0.671875", got)
 	}
 }
 func TestVlogGenerationRewriteQueue_ConsumesMissingBoundedSourceIDs(t *testing.T) {

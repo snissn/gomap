@@ -2649,6 +2649,9 @@ func TestValueLogRewriteOnline_MaxCopiedBytes_ProcessesExplicitSourceIncremental
 	if stats1.SourceBytesProcessed != int64(recordLen) {
 		t.Fatalf("first pass source bytes processed=%d want %d", stats1.SourceBytesProcessed, recordLen)
 	}
+	if got, want := stats1.SourceFileBytesProcessed, []ValueLogRewriteSourceProgress{{FileID: ptrs[0].FileID, BytesProcessed: int64(recordLen)}}; !slices.Equal(got, want) {
+		t.Fatalf("first pass source file progress=%v want %v", got, want)
+	}
 
 	ptrK1, _ := readProjectedPointerByKey(t, db, []byte("k1"))
 	ptrK2, _ := readProjectedPointerByKey(t, db, []byte("k2"))
@@ -2675,6 +2678,9 @@ func TestValueLogRewriteOnline_MaxCopiedBytes_ProcessesExplicitSourceIncremental
 	}
 	if !slices.Equal(stats2.SourceFileIDsUnreferenced, []uint32{ptrs[0].FileID}) {
 		t.Fatalf("second pass unreferenced ids=%v want [%d]", stats2.SourceFileIDsUnreferenced, ptrs[0].FileID)
+	}
+	if got, want := stats2.SourceFileBytesProcessed, []ValueLogRewriteSourceProgress{{FileID: ptrs[0].FileID, BytesProcessed: int64(recordLen)}}; !slices.Equal(got, want) {
+		t.Fatalf("second pass source file progress=%v want %v", got, want)
 	}
 
 	ptrK1, _ = readProjectedPointerByKey(t, db, []byte("k1"))
@@ -2725,6 +2731,9 @@ func TestValueLogRewriteOnline_MaxCopiedBytes_DoesNotRunLeafRefRewriteWhenBudget
 	}
 	if stats.SourceBytesProcessed != int64(recordLen) {
 		t.Fatalf("source bytes processed=%d want %d", stats.SourceBytesProcessed, recordLen)
+	}
+	if got, want := stats.SourceFileBytesProcessed, []ValueLogRewriteSourceProgress{{FileID: ptrs[0].FileID, BytesProcessed: int64(recordLen)}}; !slices.Equal(got, want) {
+		t.Fatalf("source file progress=%v want %v", got, want)
 	}
 	if !slices.Contains(stats.SourceFileIDsUnreferenced, ptrs[0].FileID) {
 		t.Fatalf("unreferenced ids=%v want pointer source %d", stats.SourceFileIDsUnreferenced, ptrs[0].FileID)
@@ -3001,6 +3010,9 @@ func TestValueLogRewriteOnline_LeafRefsReserveRIDs_DoesNotRefreshManager(t *test
 	}
 	if stats.LeafRefRecordsCopied == 0 {
 		t.Fatalf("expected leafref rewrite to copy records")
+	}
+	if got := stats.SourceFileBytesProcessed; len(got) != 1 || got[0].FileID != sourceIDs[0] || got[0].BytesProcessed != stats.LeafRefBytesCopied {
+		t.Fatalf("leafref source file progress=%v want file=%d bytes=%d", got, sourceIDs[0], stats.LeafRefBytesCopied)
 	}
 	if delta := db.valueLogManager.RefreshScanCount() - refreshBefore; delta != 0 {
 		t.Fatalf("expected reserve leafref rewrite to avoid manager refresh scans, got %d", delta)
