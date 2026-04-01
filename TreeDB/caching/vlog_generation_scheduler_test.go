@@ -4014,6 +4014,136 @@ func TestVlogGenerationRewritePlan_StagesFreshStaleRatioDebtBeforeRewrite(t *tes
 	}
 }
 
+func TestVlogGenerationRewritePlan_StaleRatioBootstrapExecutesSingleSegmentAndKeepsStage(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	recorder := &rewriteBudgetRecordingBackend{
+		DB: backend,
+		planResponse: backenddb.ValueLogRewritePlan{
+			SourceFileIDs: []uint32{11, 22, 33, 44},
+			SelectedSegments: []backenddb.ValueLogRewritePlanSegment{
+				{FileID: 11, BytesTotal: 64 << 20, BytesLive: 8 << 20, BytesStale: 56 << 20, StaleRatio: 0.875},
+				{FileID: 22, BytesTotal: 64 << 20, BytesLive: 16 << 20, BytesStale: 48 << 20, StaleRatio: 0.75},
+				{FileID: 33, BytesTotal: 64 << 20, BytesLive: 24 << 20, BytesStale: 40 << 20, StaleRatio: 0.625},
+				{FileID: 44, BytesTotal: 64 << 20, BytesLive: 32 << 20, BytesStale: 32 << 20, StaleRatio: 0.5},
+			},
+			SegmentsTotal:      4,
+			SegmentsSelected:   4,
+			BytesTotal:         256 << 20,
+			BytesLive:          80 << 20,
+			BytesStale:         176 << 20,
+			SelectedBytesTotal: 256 << 20,
+			SelectedBytesLive:  80 << 20,
+			SelectedBytesStale: 176 << 20,
+		},
+		rewriteResponse: backenddb.ValueLogRewriteStats{
+			BytesBefore:   64 << 20,
+			BytesAfter:    8 << 20,
+			RecordsCopied: 1,
+		},
+	}
+
+	db, cleanup := openRewriteQueueTestDB(t, dir, recorder)
+	t.Cleanup(cleanup)
+	db.valueLogRewriteTriggerBytes = 0
+	db.valueLogRewriteTriggerRatioPPM = 1
+	db.valueLogGenerationHotTarget = 0
+	forceVlogMaintenanceIdle(db)
+
+	db.maybeRunVlogGenerationMaintenance(false)
+
+	rewriteOpts, rewriteCalls := recorder.recordedRewrite()
+	if rewriteCalls != 1 {
+		t.Fatalf("rewrite calls=%d want=1", rewriteCalls)
+	}
+	if got, want := rewriteOpts.SourceFileIDs, []uint32{11}; len(got) != len(want) || got[0] != want[0] {
+		t.Fatalf("rewrite SourceFileIDs after stale-ratio bootstrap=%v want=%v", got, want)
+	}
+	if got, want := rewriteOpts.MaxCopiedBytes, int64(1024); got != want {
+		t.Fatalf("rewrite MaxCopiedBytes after stale-ratio bootstrap=%d want=%d", got, want)
+	}
+	queue, err := db.currentVlogGenerationRewriteQueue()
+	if err != nil {
+		t.Fatalf("current rewrite queue: %v", err)
+	}
+	if got, want := queue, []uint32{22, 33, 44}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] || got[2] != want[2] {
+		t.Fatalf("rewrite queue after stale-ratio bootstrap=%v want=%v", got, want)
+	}
+	stagePending, stageObservedAt, err := db.currentVlogGenerationRewriteStage()
+	if err != nil {
+		t.Fatalf("current rewrite stage: %v", err)
+	}
+	if !stagePending || stageObservedAt <= 0 {
+		t.Fatalf("rewrite stage pending=%t observed_at=%d want true and >0", stagePending, stageObservedAt)
+	}
+}
+
+func TestVlogGenerationRewritePlan_StaleRatioBootstrapSkipsBelowThreshold(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	recorder := &rewriteBudgetRecordingBackend{
+		DB: backend,
+		planResponse: backenddb.ValueLogRewritePlan{
+			SourceFileIDs: []uint32{11, 22, 33},
+			SelectedSegments: []backenddb.ValueLogRewritePlanSegment{
+				{FileID: 11, BytesTotal: 64 << 20, BytesLive: 8 << 20, BytesStale: 56 << 20, StaleRatio: 0.875},
+				{FileID: 22, BytesTotal: 64 << 20, BytesLive: 16 << 20, BytesStale: 48 << 20, StaleRatio: 0.75},
+				{FileID: 33, BytesTotal: 64 << 20, BytesLive: 24 << 20, BytesStale: 40 << 20, StaleRatio: 0.625},
+			},
+			SegmentsTotal:      3,
+			SegmentsSelected:   3,
+			BytesTotal:         192 << 20,
+			BytesLive:          48 << 20,
+			BytesStale:         144 << 20,
+			SelectedBytesTotal: 192 << 20,
+			SelectedBytesLive:  48 << 20,
+			SelectedBytesStale: 144 << 20,
+		},
+		rewriteResponse: backenddb.ValueLogRewriteStats{
+			BytesBefore:   64 << 20,
+			BytesAfter:    8 << 20,
+			RecordsCopied: 1,
+		},
+	}
+
+	db, cleanup := openRewriteQueueTestDB(t, dir, recorder)
+	t.Cleanup(cleanup)
+	db.valueLogRewriteTriggerBytes = 0
+	db.valueLogRewriteTriggerRatioPPM = 1
+	db.valueLogGenerationHotTarget = 0
+	forceVlogMaintenanceIdle(db)
+
+	db.maybeRunVlogGenerationMaintenance(false)
+
+	if _, rewriteCalls := recorder.recordedRewrite(); rewriteCalls != 0 {
+		t.Fatalf("rewrite calls=%d want=0 below bootstrap threshold", rewriteCalls)
+	}
+	queue, err := db.currentVlogGenerationRewriteQueue()
+	if err != nil {
+		t.Fatalf("current rewrite queue: %v", err)
+	}
+	if got, want := queue, []uint32{11, 22, 33}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] || got[2] != want[2] {
+		t.Fatalf("rewrite queue after staged-only stale-ratio pass=%v want=%v", got, want)
+	}
+	stagePending, stageObservedAt, err := db.currentVlogGenerationRewriteStage()
+	if err != nil {
+		t.Fatalf("current rewrite stage: %v", err)
+	}
+	if !stagePending || stageObservedAt <= 0 {
+		t.Fatalf("rewrite stage pending=%t observed_at=%d want true and >0", stagePending, stageObservedAt)
+	}
+}
+
 func TestVlogGenerationRewritePlan_StageConfirmationExecutesConfirmedSubset(t *testing.T) {
 	prepareDirectSchedulerTest(t)
 

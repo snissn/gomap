@@ -13789,6 +13789,20 @@ func (db *DB) vlogGenerationRewriteMaxSegmentsForFreshPlan(queueLen int, budgetT
 	return db.vlogGenerationRewriteSegmentCapForFreshPlan(queueLen, budgetTokens, opts).maxSegments
 }
 
+func (db *DB) shouldBootstrapVlogGenerationStagedRewrite(queueLen int, budgetTokens int64) bool {
+	if queueLen <= 0 {
+		return false
+	}
+	freshPlanMin, _ := vlogGenerationRewriteFreshPlanDebtDrainLimitsEffective()
+	if queueLen < freshPlanMin {
+		return false
+	}
+	if db != nil && db.vlogGenerationRewriteBudgetEnabled() && budgetTokens <= 0 {
+		return false
+	}
+	return true
+}
+
 func normalizeVlogGenerationRewriteSegmentCapLimiter(v uint32) int {
 	idx := int(v)
 	if idx < 0 || idx >= vlogGenerationRewriteSegmentCapLimiterCount {
@@ -15528,6 +15542,7 @@ planned:
 			processedLedgerLiveBytes := int64(0)
 			processedLedgerStaleBytes := int64(0)
 			processedLedgerOK := false
+			stageBootstrapExec := false
 			budgetTokens := int64(0)
 			if db.vlogGenerationRewriteBudgetEnabled() {
 				budgetTokens = db.vlogGenerationRewriteBudgetTokensBytes.Load()
@@ -15554,12 +15569,19 @@ planned:
 			}
 			if haveRewritePlan {
 				plannedLedgerForExec := rewritePlan.SelectedSegments
+				stageLedger := false
+				stageBootstrap := false
 				if reason == vlogGenerationReasonStaleRatio && len(rewritePlan.SelectedSegments) > 0 {
 					prevLedger, _ := db.currentVlogGenerationRewriteLedger()
 					plannedLedgerForExec = stableVlogGenerationRewriteLedgerSegments(prevLedger, rewritePlan.SelectedSegments)
+					stageLedger = len(plannedLedgerForExec) == 0
+					if stageLedger && db.shouldBootstrapVlogGenerationStagedRewrite(len(rewritePlan.SourceFileIDs), budgetTokens) {
+						stageBootstrap = true
+						plannedLedgerForExec = rewritePlan.SelectedSegments
+					}
 				}
 				if len(rewritePlan.SelectedSegments) > 0 {
-					stageLedger := reason == vlogGenerationReasonStaleRatio && len(plannedLedgerForExec) == 0
+					stageBootstrapExec = stageBootstrap
 					stageObservedAt := int64(0)
 					if stageLedger {
 						stageObservedAt = now.UnixNano()
@@ -15619,7 +15641,7 @@ planned:
 					return nil
 				}
 				if len(rewritePlan.SelectedSegments) > 0 {
-					if reason == vlogGenerationReasonStaleRatio && len(plannedLedgerForExec) == 0 {
+					if stageLedger && !stageBootstrap {
 						db.debugVlogMaintf(
 							"rewrite_plan staged reason=%s selected=%d observed_once_only=1 queue_len=%d",
 							vlogGenerationReasonString(reason),
@@ -15637,6 +15659,16 @@ planned:
 						// multi-pass draining across staged segments instead of
 						// pre-shrinking the queue back to a budget-fit subset here.
 						chunkBudgetTokens = 0
+					}
+					if stageBootstrap {
+						rewriteMaxSegments = 1
+						db.debugVlogMaintf(
+							"rewrite_plan stage_bootstrap reason=%s selected=%d bootstrap_segments=%d queue_len=%d",
+							vlogGenerationReasonString(reason),
+							len(rewritePlan.SelectedSegments),
+							rewriteMaxSegments,
+							len(rewriteQueue),
+						)
 					}
 					processedRewriteIDs = vlogGenerationRewriteLedgerChunk(plannedLedgerForExec, rewriteMaxSegments, chunkBudgetTokens)
 					if len(processedRewriteIDs) == 0 {
@@ -15703,7 +15735,7 @@ planned:
 				ledger, _ := db.currentVlogGenerationRewriteLedger()
 				processedLedgerTotalBytes, processedLedgerLiveBytes, processedLedgerStaleBytes, processedLedgerOK = sumVlogRewritePlanBytes(ledger, processedRewriteIDs)
 				rewriteOpts.SourceFileIDs = processedRewriteIDs
-				if hadRewriteQueue && processedLedgerOK && budgetTokens > 0 && processedLedgerLiveBytes > budgetTokens {
+				if (hadRewriteQueue || stageBootstrapExec) && processedLedgerOK && budgetTokens > 0 && processedLedgerLiveBytes > budgetTokens {
 					rewriteOpts.MaxCopiedBytes = budgetTokens
 				}
 			} else {
