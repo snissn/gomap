@@ -141,6 +141,10 @@ Interpretation notes:
 - `outer_leaf` reports outer-leaf payload records kept live by leafrefs
 - `nested_outer_leaf_pointer` reports value-log payloads reachable through
   outer-leaf blob refs
+- `leaf_pages`, `leaf_avg_entries`, `leaf_avg_free_bytes`, and
+  `leaf_avg_fill_ppm` summarize the referenced outer-leaf pages themselves, so
+  the command can distinguish "too many bytes because pages are underfilled"
+  from "too many bytes despite dense pages"
 - grouped frame `stored_bytes` are apportioned across live classes by payload
   share within that frame, so the command is intended for directional source
   attribution rather than exact reclaim accounting

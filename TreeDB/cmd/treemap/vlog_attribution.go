@@ -46,6 +46,12 @@ type valueLogAttributionReport struct {
 	ReferencedFiles        int                              `json:"referenced_files"`
 	ReferencedStoredBytes  int64                            `json:"referenced_stored_bytes"`
 	ReferencedPayloadBytes int64                            `json:"referenced_payload_bytes"`
+	LeafPages              int64                            `json:"leaf_pages"`
+	LeafEntries            int64                            `json:"leaf_entries"`
+	LeafFreeBytes          int64                            `json:"leaf_free_bytes"`
+	LeafAvgEntries         float64                          `json:"leaf_avg_entries"`
+	LeafAvgFreeBytes       float64                          `json:"leaf_avg_free_bytes"`
+	LeafAvgFillPPM         float64                          `json:"leaf_avg_fill_ppm"`
 	Classes                []valueLogAttributionClassReport `json:"classes"`
 	Files                  []valueLogAttributionFileReport  `json:"files,omitempty"`
 	Notes                  []string                         `json:"notes,omitempty"`
@@ -109,6 +115,11 @@ type valueLogAttributionFileAggregate struct {
 	classes       map[valueLogAttributionSource]*valueLogAttributionAggregate
 }
 
+type valueLogLeafPageStats struct {
+	entries int64
+	free    int64
+}
+
 type readUnsafeToCapability interface {
 	ReadUnsafeTo(ptr page.ValuePtr, dst []byte) ([]byte, bool, error)
 }
@@ -148,6 +159,15 @@ func runVlogAttribution(dir string, args []string) {
 		report.ReferencedPayloadBytes,
 		floatRatio(report.ReferencedStoredBytes, report.ReferencedPayloadBytes),
 	)
+	if report.LeafPages > 0 {
+		fmt.Printf("leaf_pages=%d leaf_entries=%d leaf_avg_entries=%.2f leaf_avg_free_bytes=%.2f leaf_avg_fill_ppm=%.2f\n",
+			report.LeafPages,
+			report.LeafEntries,
+			report.LeafAvgEntries,
+			report.LeafAvgFreeBytes,
+			report.LeafAvgFillPPM,
+		)
+	}
 	if len(report.Notes) > 0 {
 		fmt.Println("notes:")
 		for _, note := range report.Notes {
@@ -234,6 +254,7 @@ func collectValueLogAttribution(dir string, byFileTop int) (valueLogAttributionR
 
 	reader := treedbdb.ValueReaderForState(state)
 	records := make(map[valueLogAttributionRecordKey]*valueLogAttributionRecord, 1024)
+	leafPages := make(map[valueLogAttributionRecordKey]valueLogLeafPageStats, 1024)
 	ctx := context.Background()
 
 	if err := collectPagerLeafPointerAttribution(ctx, backend.Pager(), state.RootPageID, reader, state.ValueLogSet, records, valueLogAttributionDirectPointer); err != nil {
@@ -243,10 +264,10 @@ func collectValueLogAttribution(dir string, byFileTop int) (valueLogAttributionR
 		return report, err
 	}
 
-	if err := collectLeafRefAttribution(ctx, backend.Pager(), state.RootPageID, reader, state.ValueLogSet, records); err != nil {
+	if err := collectLeafRefAttribution(ctx, backend.Pager(), state.RootPageID, reader, state.ValueLogSet, records, leafPages); err != nil {
 		return report, err
 	}
-	if err := collectLeafRefAttribution(ctx, backend.Pager(), state.SystemRootPageID, reader, state.ValueLogSet, records); err != nil {
+	if err := collectLeafRefAttribution(ctx, backend.Pager(), state.SystemRootPageID, reader, state.ValueLogSet, records, leafPages); err != nil {
 		return report, err
 	}
 
@@ -312,6 +333,16 @@ func collectValueLogAttribution(dir string, byFileTop int) (valueLogAttributionR
 	}
 
 	report.ReferencedFiles = len(fileAggs)
+	for _, stats := range leafPages {
+		report.LeafPages++
+		report.LeafEntries += stats.entries
+		report.LeafFreeBytes += stats.free
+	}
+	if report.LeafPages > 0 {
+		report.LeafAvgEntries = float64(report.LeafEntries) / float64(report.LeafPages)
+		report.LeafAvgFreeBytes = float64(report.LeafFreeBytes) / float64(report.LeafPages)
+		report.LeafAvgFillPPM = (1 - (float64(report.LeafFreeBytes) / float64(report.LeafPages*int64(page.PageSize)))) * 1_000_000
+	}
 	for _, source := range valueLogAttributionSourceOrder {
 		agg := classAggs[source]
 		if agg == nil || (agg.refs == 0 && agg.uniqueRecords == 0 && agg.payloadBytes == 0 && agg.storedBytes == 0) {
@@ -453,7 +484,7 @@ func collectPagerLeafPointerAttribution(ctx context.Context, p *pager.Pager, roo
 	return nil
 }
 
-func collectLeafRefAttribution(ctx context.Context, p *pager.Pager, rootID uint64, reader tree.SlabReader, set *valuelog.Set, records map[valueLogAttributionRecordKey]*valueLogAttributionRecord) error {
+func collectLeafRefAttribution(ctx context.Context, p *pager.Pager, rootID uint64, reader tree.SlabReader, set *valuelog.Set, records map[valueLogAttributionRecordKey]*valueLogAttributionRecord, leafPages map[valueLogAttributionRecordKey]valueLogLeafPageStats) error {
 	if p == nil || rootID == 0 {
 		return nil
 	}
@@ -479,6 +510,9 @@ func collectLeafRefAttribution(ctx context.Context, p *pager.Pager, rootID uint6
 			return err
 		}
 		if err := addValueLogAttributionRecord(records, ptr, valueLogAttributionOuterLeaf, int64(len(payload)), set); err != nil {
+			return err
+		}
+		if err := recordLeafPageStats(leafPages, ptr, payload); err != nil {
 			return err
 		}
 		return collectNestedOuterLeafPointerAttribution(records, reader, payload, &nestedScratch, set)
@@ -582,6 +616,34 @@ func addValueLogAttributionRecord(records map[valueLogAttributionRecordKey]*valu
 	}
 	classStats.refs++
 	classStats.payloadBytes += payloadBytes
+	return nil
+}
+
+func recordLeafPageStats(leafPages map[valueLogAttributionRecordKey]valueLogLeafPageStats, ptr page.ValuePtr, payload []byte) error {
+	if leafPages == nil {
+		return nil
+	}
+	key, err := valueLogAttributionRecordKeyForPtr(ptr)
+	if err != nil {
+		return err
+	}
+	if _, ok := leafPages[key]; ok {
+		return nil
+	}
+	if len(payload) != page.PageSize {
+		return nil
+	}
+	n := node.NewNodeView(payload)
+	if n.Type() != page.PageTypeLeaf {
+		return nil
+	}
+	if !n.VerifyChecksum() {
+		return fmt.Errorf("checksum mismatch for value-log leaf page file=%d offset=%d", ptr.FileID, ptr.Offset)
+	}
+	leafPages[key] = valueLogLeafPageStats{
+		entries: int64(n.Count()),
+		free:    int64(n.FreeSpace()),
+	}
 	return nil
 }
 
