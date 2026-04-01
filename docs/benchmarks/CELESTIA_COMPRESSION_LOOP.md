@@ -362,6 +362,11 @@ Notes:
   - source URL: `AB_LIVE_DEBUG_VARS_URL` (default `http://127.0.0.1:6062/debug/vars`)
   - latest successful sample is stored as `live_debug_vars_latest.json` in each run directory
   - if a successful run lacks on-disk diagnostics JSON, the harness retries maintenance analysis against that sampled payload so `run.json.maintenance_summary` can still reflect live runtime counters
+- `analyze_vlog_maintenance_capacity.py --json` now also emits `write_path_summary` from the same live stats payload when available:
+  - this captures compact write-path diagnostics for `vlog_write_mode`, `vlog_payload_split`, `vlog_outer_leaf_codec`, `vlog_auto`, and `vlog_dict`
+  - `run.json` preserves that object as `write_path_summary`
+  - `runs.csv` includes a compact slice for the most useful fields during outer-leaf work: block vs dict stored bytes, outer-leaf split bytes, legacy-page bytes, auto dict/snappy bytes+frame fractions, and the outer-leaf dict id/K
+  - `summary.md` now shows the same write-path slice for the last pair so block-to-dict and outer-leaf routing shifts are visible without opening raw debug vars
 - maintenance summaries also export exact-source counters for `rewrite_stage_confirm` vs `rewrite_stage_confirm_exit`, so restart loops can be separated from the initial stage-confirm pass in `run.json`, `runs.csv`, and `analyze_vlog_maintenance_capacity.py`
 - retained-prune accounting needs two views:
   - `retained_prune_zombie_marked_bytes` / `retained_prune_removed_bytes` report work done inline by the prune pass itself

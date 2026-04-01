@@ -1725,6 +1725,8 @@ node_log_path = run_home / "sync" / "node.log" if run_home is not None else None
 sync_probe = probe_sync_progress(node_log_path)
 maintenance = {}
 maintenance_source = "none"
+write_path_summary = {}
+write_path_summary_source = "none"
 if analyze_json_path.is_file():
     try:
         payload = json.loads(analyze_json_path.read_text(encoding="utf-8"))
@@ -1733,9 +1735,15 @@ if analyze_json_path.is_file():
             if isinstance(summary, dict):
                 maintenance = summary
                 maintenance_source = "diagnostics_json"
+            maybe_write_path_summary = payload.get("write_path_summary")
+            if isinstance(maybe_write_path_summary, dict):
+                write_path_summary = maybe_write_path_summary
+                write_path_summary_source = maintenance_source
     except Exception:
         maintenance = {}
         maintenance_source = "none"
+        write_path_summary = {}
+        write_path_summary_source = "none"
 
 light_pre_stats = parse_treemap_stats(light_stats_pre_path) if light_stats_pre_rc == 0 else {}
 light_post_stats = parse_treemap_stats(light_stats_post_path) if light_stats_post_rc == 0 else {}
@@ -1836,6 +1844,9 @@ result = {
     "maintenance_summary_source": maintenance_source,
     "maintenance_summary_is_live_runtime": maintenance_source == "diagnostics_json",
     "maintenance_summary": maintenance,
+    "write_path_summary_source": write_path_summary_source,
+    "write_path_summary_is_live_runtime": write_path_summary_source == "diagnostics_json",
+    "write_path_summary": write_path_summary,
     "maintenance_light": {
         "capture": {
             "pre_exit_code": light_stats_pre_rc,
@@ -1911,6 +1922,15 @@ def as_float(value):
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def nested_get(obj, *path):
+    cur = obj
+    for key in path:
+        if not isinstance(cur, dict):
+            return None
+        cur = cur.get(key)
+    return cur
 
 def median(values):
     xs = sorted(v for v in values if v is not None)
@@ -2180,6 +2200,18 @@ with runs_csv.open("w", newline="", encoding="utf-8") as fh:
         "observed_gc_retry_queued",
         "observed_gc_retry_dropped",
         "maintenance_summary_source",
+        "write_path_summary_source",
+        "write_path_mode",
+        "write_mode_stored_bytes_block",
+        "write_mode_stored_bytes_dict",
+        "payload_split_stored_bytes_outer_leaf",
+        "outer_leaf_codec_stored_bytes_legacy_page",
+        "auto_bytes_dict",
+        "auto_frames_frac_dict",
+        "auto_bytes_block_snappy",
+        "auto_frames_frac_block_snappy",
+        "dict_outer_leaf_last_applied_dict_id",
+        "dict_outer_leaf_current_k",
         "light_pre_bytes_total",
         "light_pre_bytes_stale",
         "light_pre_segments_total",
@@ -2212,6 +2244,7 @@ with runs_csv.open("w", newline="", encoding="utf-8") as fh:
             if isinstance(maybe_delta, dict):
                 light_delta = maybe_delta
         sync = r.get("sync", {}) or {}
+        write_path_summary = r.get("write_path_summary", {}) or {}
         valid = run_is_valid(r)
         w.writerow([
             int(r.get("pair_index", 0)),
@@ -2429,6 +2462,18 @@ with runs_csv.open("w", newline="", encoding="utf-8") as fh:
             summary.get("observed_gc_retry_queued", 0),
             summary.get("observed_gc_retry_dropped", 0),
             r.get("maintenance_summary_source", ""),
+            r.get("write_path_summary_source", ""),
+            nested_get(write_path_summary, "write_path", "mode"),
+            nested_get(write_path_summary, "write_mode", "block", "stored_bytes"),
+            nested_get(write_path_summary, "write_mode", "dict", "stored_bytes"),
+            nested_get(write_path_summary, "payload_split", "outer_leaf", "stored_bytes"),
+            nested_get(write_path_summary, "outer_leaf_codec", "legacy_page", "stored_bytes"),
+            nested_get(write_path_summary, "auto", "bytes", "dict"),
+            nested_get(write_path_summary, "auto", "frames_frac", "dict"),
+            nested_get(write_path_summary, "auto", "bytes", "block_snappy"),
+            nested_get(write_path_summary, "auto", "frames_frac", "block_snappy"),
+            nested_get(write_path_summary, "dict", "classes", "outer_leaf", "last_applied_dict_id"),
+            nested_get(write_path_summary, "dict", "classes", "outer_leaf", "current_k"),
             light_pre.get("bytes_total_total"),
             light_pre.get("bytes_stale_total"),
             light_pre.get("segments_total"),
@@ -2466,6 +2511,8 @@ for pair in sorted(by_pair):
     cand_reason = run_invalid_reason(cand)
     ctrl_summary = ctrl.get("maintenance_summary", {}) or {}
     cand_summary = cand.get("maintenance_summary", {}) or {}
+    ctrl_write_summary = ctrl.get("write_path_summary", {}) or {}
+    cand_write_summary = cand.get("write_path_summary", {}) or {}
     if not ctrl_valid or not cand_valid:
         outcome = "invalid"
         if ctrl_valid and (not cand_valid) and cand_reason == "rewrite_failed":
@@ -2555,6 +2602,34 @@ for pair in sorted(by_pair):
             "control_vlog_zombie_pinned_bytes": None,
             "candidate_vlog_zombie_pinned_bytes": None,
             "delta_vlog_zombie_pinned_bytes": None,
+            "control_write_mode_stored_bytes_block": None,
+            "candidate_write_mode_stored_bytes_block": None,
+            "delta_write_mode_stored_bytes_block": None,
+            "control_write_mode_stored_bytes_dict": None,
+            "candidate_write_mode_stored_bytes_dict": None,
+            "delta_write_mode_stored_bytes_dict": None,
+            "control_payload_split_stored_bytes_outer_leaf": None,
+            "candidate_payload_split_stored_bytes_outer_leaf": None,
+            "delta_payload_split_stored_bytes_outer_leaf": None,
+            "control_outer_leaf_codec_stored_bytes_legacy_page": None,
+            "candidate_outer_leaf_codec_stored_bytes_legacy_page": None,
+            "delta_outer_leaf_codec_stored_bytes_legacy_page": None,
+            "control_auto_bytes_dict": None,
+            "candidate_auto_bytes_dict": None,
+            "delta_auto_bytes_dict": None,
+            "control_auto_frames_frac_dict": None,
+            "candidate_auto_frames_frac_dict": None,
+            "delta_auto_frames_frac_dict": None,
+            "control_auto_bytes_block_snappy": None,
+            "candidate_auto_bytes_block_snappy": None,
+            "delta_auto_bytes_block_snappy": None,
+            "control_auto_frames_frac_block_snappy": None,
+            "candidate_auto_frames_frac_block_snappy": None,
+            "delta_auto_frames_frac_block_snappy": None,
+            "control_dict_outer_leaf_last_applied_dict_id": None,
+            "candidate_dict_outer_leaf_last_applied_dict_id": None,
+            "control_dict_outer_leaf_current_k": None,
+            "candidate_dict_outer_leaf_current_k": None,
             "control_valid": ctrl_valid,
             "candidate_valid": cand_valid,
             "control_invalid_reason": ctrl_reason,
@@ -2584,6 +2659,80 @@ for pair in sorted(by_pair):
     base_sync_app_per_block = bm.get("s_du_sync_app_bytes_per_block")
     cand_total_per_block = cm.get("t_total_seconds_per_block")
     base_total_per_block = bm.get("t_total_seconds_per_block")
+    cand_write_mode_stored_bytes_block = nested_get(cand_write_summary, "write_mode", "block", "stored_bytes")
+    base_write_mode_stored_bytes_block = nested_get(ctrl_write_summary, "write_mode", "block", "stored_bytes")
+    cand_write_mode_stored_bytes_dict = nested_get(cand_write_summary, "write_mode", "dict", "stored_bytes")
+    base_write_mode_stored_bytes_dict = nested_get(ctrl_write_summary, "write_mode", "dict", "stored_bytes")
+    cand_payload_split_stored_bytes_outer_leaf = nested_get(
+        cand_write_summary,
+        "payload_split",
+        "outer_leaf",
+        "stored_bytes",
+    )
+    base_payload_split_stored_bytes_outer_leaf = nested_get(
+        ctrl_write_summary,
+        "payload_split",
+        "outer_leaf",
+        "stored_bytes",
+    )
+    cand_outer_leaf_codec_stored_bytes_legacy_page = nested_get(
+        cand_write_summary,
+        "outer_leaf_codec",
+        "legacy_page",
+        "stored_bytes",
+    )
+    base_outer_leaf_codec_stored_bytes_legacy_page = nested_get(
+        ctrl_write_summary,
+        "outer_leaf_codec",
+        "legacy_page",
+        "stored_bytes",
+    )
+    cand_auto_bytes_dict = nested_get(cand_write_summary, "auto", "bytes", "dict")
+    base_auto_bytes_dict = nested_get(ctrl_write_summary, "auto", "bytes", "dict")
+    cand_auto_frames_frac_dict = nested_get(cand_write_summary, "auto", "frames_frac", "dict")
+    base_auto_frames_frac_dict = nested_get(ctrl_write_summary, "auto", "frames_frac", "dict")
+    cand_auto_bytes_block_snappy = nested_get(cand_write_summary, "auto", "bytes", "block_snappy")
+    base_auto_bytes_block_snappy = nested_get(ctrl_write_summary, "auto", "bytes", "block_snappy")
+    cand_auto_frames_frac_block_snappy = nested_get(
+        cand_write_summary,
+        "auto",
+        "frames_frac",
+        "block_snappy",
+    )
+    base_auto_frames_frac_block_snappy = nested_get(
+        ctrl_write_summary,
+        "auto",
+        "frames_frac",
+        "block_snappy",
+    )
+    cand_dict_outer_leaf_last_applied_dict_id = nested_get(
+        cand_write_summary,
+        "dict",
+        "classes",
+        "outer_leaf",
+        "last_applied_dict_id",
+    )
+    base_dict_outer_leaf_last_applied_dict_id = nested_get(
+        ctrl_write_summary,
+        "dict",
+        "classes",
+        "outer_leaf",
+        "last_applied_dict_id",
+    )
+    cand_dict_outer_leaf_current_k = nested_get(
+        cand_write_summary,
+        "dict",
+        "classes",
+        "outer_leaf",
+        "current_k",
+    )
+    base_dict_outer_leaf_current_k = nested_get(
+        ctrl_write_summary,
+        "dict",
+        "classes",
+        "outer_leaf",
+        "current_k",
+    )
 
     def delta(a, b):
         if a is None or b is None:
@@ -2602,6 +2751,23 @@ for pair in sorted(by_pair):
     )
     d_sync_app_per_block = delta(cand_sync_app_per_block, base_sync_app_per_block)
     d_total_per_block = delta(cand_total_per_block, base_total_per_block)
+    d_write_mode_stored_bytes_block = delta(cand_write_mode_stored_bytes_block, base_write_mode_stored_bytes_block)
+    d_write_mode_stored_bytes_dict = delta(cand_write_mode_stored_bytes_dict, base_write_mode_stored_bytes_dict)
+    d_payload_split_stored_bytes_outer_leaf = delta(
+        cand_payload_split_stored_bytes_outer_leaf,
+        base_payload_split_stored_bytes_outer_leaf,
+    )
+    d_outer_leaf_codec_stored_bytes_legacy_page = delta(
+        cand_outer_leaf_codec_stored_bytes_legacy_page,
+        base_outer_leaf_codec_stored_bytes_legacy_page,
+    )
+    d_auto_bytes_dict = delta(cand_auto_bytes_dict, base_auto_bytes_dict)
+    d_auto_frames_frac_dict = delta(cand_auto_frames_frac_dict, base_auto_frames_frac_dict)
+    d_auto_bytes_block_snappy = delta(cand_auto_bytes_block_snappy, base_auto_bytes_block_snappy)
+    d_auto_frames_frac_block_snappy = delta(
+        cand_auto_frames_frac_block_snappy,
+        base_auto_frames_frac_block_snappy,
+    )
     cand_reclaimed_vs_churn = cand_summary.get("rewrite_exec_reclaimed_vs_churn_ratio")
     base_reclaimed_vs_churn = ctrl_summary.get("rewrite_exec_reclaimed_vs_churn_ratio")
     d_reclaimed_vs_churn = delta(cand_reclaimed_vs_churn, base_reclaimed_vs_churn)
@@ -2885,6 +3051,34 @@ for pair in sorted(by_pair):
         "control_vlog_zombie_pinned_bytes": base_vlog_zombie_pinned_bytes,
         "candidate_vlog_zombie_pinned_bytes": cand_vlog_zombie_pinned_bytes,
         "delta_vlog_zombie_pinned_bytes": d_vlog_zombie_pinned_bytes,
+        "control_write_mode_stored_bytes_block": base_write_mode_stored_bytes_block,
+        "candidate_write_mode_stored_bytes_block": cand_write_mode_stored_bytes_block,
+        "delta_write_mode_stored_bytes_block": d_write_mode_stored_bytes_block,
+        "control_write_mode_stored_bytes_dict": base_write_mode_stored_bytes_dict,
+        "candidate_write_mode_stored_bytes_dict": cand_write_mode_stored_bytes_dict,
+        "delta_write_mode_stored_bytes_dict": d_write_mode_stored_bytes_dict,
+        "control_payload_split_stored_bytes_outer_leaf": base_payload_split_stored_bytes_outer_leaf,
+        "candidate_payload_split_stored_bytes_outer_leaf": cand_payload_split_stored_bytes_outer_leaf,
+        "delta_payload_split_stored_bytes_outer_leaf": d_payload_split_stored_bytes_outer_leaf,
+        "control_outer_leaf_codec_stored_bytes_legacy_page": base_outer_leaf_codec_stored_bytes_legacy_page,
+        "candidate_outer_leaf_codec_stored_bytes_legacy_page": cand_outer_leaf_codec_stored_bytes_legacy_page,
+        "delta_outer_leaf_codec_stored_bytes_legacy_page": d_outer_leaf_codec_stored_bytes_legacy_page,
+        "control_auto_bytes_dict": base_auto_bytes_dict,
+        "candidate_auto_bytes_dict": cand_auto_bytes_dict,
+        "delta_auto_bytes_dict": d_auto_bytes_dict,
+        "control_auto_frames_frac_dict": base_auto_frames_frac_dict,
+        "candidate_auto_frames_frac_dict": cand_auto_frames_frac_dict,
+        "delta_auto_frames_frac_dict": d_auto_frames_frac_dict,
+        "control_auto_bytes_block_snappy": base_auto_bytes_block_snappy,
+        "candidate_auto_bytes_block_snappy": cand_auto_bytes_block_snappy,
+        "delta_auto_bytes_block_snappy": d_auto_bytes_block_snappy,
+        "control_auto_frames_frac_block_snappy": base_auto_frames_frac_block_snappy,
+        "candidate_auto_frames_frac_block_snappy": cand_auto_frames_frac_block_snappy,
+        "delta_auto_frames_frac_block_snappy": d_auto_frames_frac_block_snappy,
+        "control_dict_outer_leaf_last_applied_dict_id": base_dict_outer_leaf_last_applied_dict_id,
+        "candidate_dict_outer_leaf_last_applied_dict_id": cand_dict_outer_leaf_last_applied_dict_id,
+        "control_dict_outer_leaf_current_k": base_dict_outer_leaf_current_k,
+        "candidate_dict_outer_leaf_current_k": cand_dict_outer_leaf_current_k,
         "control_valid": ctrl_valid,
         "candidate_valid": cand_valid,
         "control_invalid_reason": ctrl_reason,
@@ -2984,6 +3178,34 @@ with pairs_csv.open("w", newline="", encoding="utf-8") as fh:
         "control_vlog_zombie_pinned_bytes",
         "candidate_vlog_zombie_pinned_bytes",
         "delta_vlog_zombie_pinned_bytes",
+        "control_write_mode_stored_bytes_block",
+        "candidate_write_mode_stored_bytes_block",
+        "delta_write_mode_stored_bytes_block",
+        "control_write_mode_stored_bytes_dict",
+        "candidate_write_mode_stored_bytes_dict",
+        "delta_write_mode_stored_bytes_dict",
+        "control_payload_split_stored_bytes_outer_leaf",
+        "candidate_payload_split_stored_bytes_outer_leaf",
+        "delta_payload_split_stored_bytes_outer_leaf",
+        "control_outer_leaf_codec_stored_bytes_legacy_page",
+        "candidate_outer_leaf_codec_stored_bytes_legacy_page",
+        "delta_outer_leaf_codec_stored_bytes_legacy_page",
+        "control_auto_bytes_dict",
+        "candidate_auto_bytes_dict",
+        "delta_auto_bytes_dict",
+        "control_auto_frames_frac_dict",
+        "candidate_auto_frames_frac_dict",
+        "delta_auto_frames_frac_dict",
+        "control_auto_bytes_block_snappy",
+        "candidate_auto_bytes_block_snappy",
+        "delta_auto_bytes_block_snappy",
+        "control_auto_frames_frac_block_snappy",
+        "candidate_auto_frames_frac_block_snappy",
+        "delta_auto_frames_frac_block_snappy",
+        "control_dict_outer_leaf_last_applied_dict_id",
+        "candidate_dict_outer_leaf_last_applied_dict_id",
+        "control_dict_outer_leaf_current_k",
+        "candidate_dict_outer_leaf_current_k",
         "control_valid",
         "candidate_valid",
         "control_invalid_reason",
@@ -3080,6 +3302,34 @@ with pairs_csv.open("w", newline="", encoding="utf-8") as fh:
             r["control_vlog_zombie_pinned_bytes"],
             r["candidate_vlog_zombie_pinned_bytes"],
             r["delta_vlog_zombie_pinned_bytes"],
+            r["control_write_mode_stored_bytes_block"],
+            r["candidate_write_mode_stored_bytes_block"],
+            r["delta_write_mode_stored_bytes_block"],
+            r["control_write_mode_stored_bytes_dict"],
+            r["candidate_write_mode_stored_bytes_dict"],
+            r["delta_write_mode_stored_bytes_dict"],
+            r["control_payload_split_stored_bytes_outer_leaf"],
+            r["candidate_payload_split_stored_bytes_outer_leaf"],
+            r["delta_payload_split_stored_bytes_outer_leaf"],
+            r["control_outer_leaf_codec_stored_bytes_legacy_page"],
+            r["candidate_outer_leaf_codec_stored_bytes_legacy_page"],
+            r["delta_outer_leaf_codec_stored_bytes_legacy_page"],
+            r["control_auto_bytes_dict"],
+            r["candidate_auto_bytes_dict"],
+            r["delta_auto_bytes_dict"],
+            r["control_auto_frames_frac_dict"],
+            r["candidate_auto_frames_frac_dict"],
+            r["delta_auto_frames_frac_dict"],
+            r["control_auto_bytes_block_snappy"],
+            r["candidate_auto_bytes_block_snappy"],
+            r["delta_auto_bytes_block_snappy"],
+            r["control_auto_frames_frac_block_snappy"],
+            r["candidate_auto_frames_frac_block_snappy"],
+            r["delta_auto_frames_frac_block_snappy"],
+            r["control_dict_outer_leaf_last_applied_dict_id"],
+            r["candidate_dict_outer_leaf_last_applied_dict_id"],
+            r["control_dict_outer_leaf_current_k"],
+            r["candidate_dict_outer_leaf_current_k"],
             r["control_valid"],
             r["candidate_valid"],
             r["control_invalid_reason"],
@@ -3562,6 +3812,64 @@ if pair_rows:
         f"`{last['control_vlog_zombie_pinned_bytes']}` / "
         f"`{last['candidate_vlog_zombie_pinned_bytes']}` / "
         f"`{last['delta_vlog_zombie_pinned_bytes']}`"
+    )
+    lines.append(
+        f"- write_mode.stored_bytes.block (control/candidate/delta): "
+        f"`{last['control_write_mode_stored_bytes_block']}` / "
+        f"`{last['candidate_write_mode_stored_bytes_block']}` / "
+        f"`{last['delta_write_mode_stored_bytes_block']}`"
+    )
+    lines.append(
+        f"- write_mode.stored_bytes.dict (control/candidate/delta): "
+        f"`{last['control_write_mode_stored_bytes_dict']}` / "
+        f"`{last['candidate_write_mode_stored_bytes_dict']}` / "
+        f"`{last['delta_write_mode_stored_bytes_dict']}`"
+    )
+    lines.append(
+        f"- payload_split.stored_bytes.outer_leaf (control/candidate/delta): "
+        f"`{last['control_payload_split_stored_bytes_outer_leaf']}` / "
+        f"`{last['candidate_payload_split_stored_bytes_outer_leaf']}` / "
+        f"`{last['delta_payload_split_stored_bytes_outer_leaf']}`"
+    )
+    lines.append(
+        f"- outer_leaf_codec.stored_bytes.legacy_page (control/candidate/delta): "
+        f"`{last['control_outer_leaf_codec_stored_bytes_legacy_page']}` / "
+        f"`{last['candidate_outer_leaf_codec_stored_bytes_legacy_page']}` / "
+        f"`{last['delta_outer_leaf_codec_stored_bytes_legacy_page']}`"
+    )
+    lines.append(
+        f"- auto.bytes.dict (control/candidate/delta): "
+        f"`{last['control_auto_bytes_dict']}` / "
+        f"`{last['candidate_auto_bytes_dict']}` / "
+        f"`{last['delta_auto_bytes_dict']}`"
+    )
+    lines.append(
+        f"- auto.frames_frac.dict (control/candidate/delta): "
+        f"`{last['control_auto_frames_frac_dict']}` / "
+        f"`{last['candidate_auto_frames_frac_dict']}` / "
+        f"`{last['delta_auto_frames_frac_dict']}`"
+    )
+    lines.append(
+        f"- auto.bytes.block_snappy (control/candidate/delta): "
+        f"`{last['control_auto_bytes_block_snappy']}` / "
+        f"`{last['candidate_auto_bytes_block_snappy']}` / "
+        f"`{last['delta_auto_bytes_block_snappy']}`"
+    )
+    lines.append(
+        f"- auto.frames_frac.block_snappy (control/candidate/delta): "
+        f"`{last['control_auto_frames_frac_block_snappy']}` / "
+        f"`{last['candidate_auto_frames_frac_block_snappy']}` / "
+        f"`{last['delta_auto_frames_frac_block_snappy']}`"
+    )
+    lines.append(
+        f"- dict.classes.outer_leaf.last_applied_dict_id (control/candidate): "
+        f"`{last['control_dict_outer_leaf_last_applied_dict_id']}` / "
+        f"`{last['candidate_dict_outer_leaf_last_applied_dict_id']}`"
+    )
+    lines.append(
+        f"- dict.classes.outer_leaf.current_k (control/candidate): "
+        f"`{last['control_dict_outer_leaf_current_k']}` / "
+        f"`{last['candidate_dict_outer_leaf_current_k']}`"
     )
 summary_md.write_text("\n".join(lines) + "\n", encoding="utf-8")
 

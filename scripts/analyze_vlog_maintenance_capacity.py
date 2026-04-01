@@ -222,6 +222,156 @@ def metric_str(stats: dict[str, Any], key: str, default: str = "") -> str:
     return str(raw)
 
 
+VLOG_WRITE_MODE_SUFFIXES = ("off", "block", "dict")
+VLOG_PAYLOAD_KIND_SUFFIXES = ("single_value", "outer_leaf", "mixed")
+VLOG_PAYLOAD_SPLIT_SUFFIXES = ("single_value", "outer_leaf")
+VLOG_OUTER_LEAF_CODEC_SUFFIXES = ("none", "snappy", "lz4", "legacy_page", "unknown", "mixed")
+VLOG_AUTO_CANDIDATE_SUFFIXES = ("off", "dict", "block_snappy", "block_lz4")
+VLOG_DICT_CLASS_SUFFIXES = ("single_value", "outer_leaf")
+
+
+def has_write_path_stats(stats: dict[str, Any]) -> bool:
+    prefixes = (
+        "treedb.write_path.",
+        "treedb.cache.vlog_auto.",
+        "treedb.cache.vlog_write_mode.",
+        "treedb.cache.vlog_payload_kind.",
+        "treedb.cache.vlog_payload_split.",
+        "treedb.cache.vlog_outer_leaf_codec.",
+        "treedb.cache.vlog_dict.",
+    )
+    for key in stats.keys():
+        s = str(key)
+        for prefix in prefixes:
+            if s.startswith(prefix):
+                return True
+    return False
+
+
+def build_storage_breakdown(
+    stats: dict[str, Any],
+    prefix: str,
+    suffixes: tuple[str, ...],
+    count_field: str,
+) -> dict[str, dict[str, Any]]:
+    out: dict[str, dict[str, Any]] = {}
+    for suffix in suffixes:
+        raw = metric_int(stats, f"{prefix}.raw_bytes.{suffix}")
+        stored = metric_int(stats, f"{prefix}.stored_bytes.{suffix}")
+        count = metric_int(stats, f"{prefix}.{count_field}.{suffix}")
+        ratio = (float(stored) / float(raw)) if raw > 0 else 0.0
+        out[suffix] = {
+            "raw_bytes": raw,
+            "stored_bytes": stored,
+            count_field: count,
+            "stored_ratio": ratio,
+        }
+    return out
+
+
+def build_auto_summary(stats: dict[str, Any]) -> dict[str, Any]:
+    bytes_by_candidate = {
+        suffix: metric_int(stats, f"treedb.cache.vlog_auto.bytes.{suffix}")
+        for suffix in VLOG_AUTO_CANDIDATE_SUFFIXES
+    }
+    frames_by_candidate = {
+        suffix: metric_int(stats, f"treedb.cache.vlog_auto.frames.{suffix}")
+        for suffix in VLOG_AUTO_CANDIDATE_SUFFIXES
+    }
+    frames_frac_by_candidate = {
+        suffix: metric_float(stats, f"treedb.cache.vlog_auto.frames_frac.{suffix}")
+        for suffix in VLOG_AUTO_CANDIDATE_SUFFIXES
+    }
+    switches: dict[str, int] = {}
+    for from_suffix in VLOG_AUTO_CANDIDATE_SUFFIXES:
+        for to_suffix in VLOG_AUTO_CANDIDATE_SUFFIXES:
+            if from_suffix == to_suffix:
+                continue
+            key = f"treedb.cache.vlog_auto.switches.{from_suffix}_to_{to_suffix}"
+            if key in stats:
+                switches[f"{from_suffix}_to_{to_suffix}"] = metric_int(stats, key)
+    return {
+        "bytes": bytes_by_candidate,
+        "frames": frames_by_candidate,
+        "frames_frac": frames_frac_by_candidate,
+        "probe_attempts": metric_int(stats, "treedb.cache.vlog_auto.probe_attempts"),
+        "probe_successes": metric_int(stats, "treedb.cache.vlog_auto.probe_successes"),
+        "probe_success_frac": metric_float(stats, "treedb.cache.vlog_auto.probe_success_frac"),
+        "hold_enters": metric_int(stats, "treedb.cache.vlog_auto.hold_enters"),
+        "hold_exits": metric_int(stats, "treedb.cache.vlog_auto.hold_exits"),
+        "bypass_bytes": metric_int(stats, "treedb.cache.vlog_auto.bypass_bytes"),
+        "switches": switches,
+    }
+
+
+def build_dict_summary(stats: dict[str, Any]) -> dict[str, Any]:
+    classes: dict[str, dict[str, Any]] = {}
+    for suffix in VLOG_DICT_CLASS_SUFFIXES:
+        classes[suffix] = {
+            "last_applied_dict_id": metric_int(stats, f"treedb.cache.vlog_dict.last_applied_dict_id.{suffix}"),
+            "current_k": metric_int(stats, f"treedb.cache.vlog_dict.current_k.{suffix}"),
+        }
+    return {
+        "frames_total": metric_int(stats, "treedb.cache.vlog_dict.frames_total"),
+        "frames_attempted": metric_int(stats, "treedb.cache.vlog_dict.frames_attempted"),
+        "frames_kept": metric_int(stats, "treedb.cache.vlog_dict.frames_kept"),
+        "attempted_frac": metric_float(stats, "treedb.cache.vlog_dict.attempted_frac"),
+        "kept_frac": metric_float(stats, "treedb.cache.vlog_dict.kept_frac"),
+        "last_applied_dict_id": metric_int(stats, "treedb.cache.vlog_dict.last_applied_dict_id"),
+        "current_k": metric_int(stats, "treedb.cache.vlog_dict.current_k"),
+        "cached_dict_id": metric_int(stats, "treedb.cache.vlog_dict.cached_dict_id"),
+        "cached_dict_bytes": metric_int(stats, "treedb.cache.vlog_dict.cached_dict_bytes"),
+        "classifier_sampled": metric_int(stats, "treedb.cache.vlog_dict.classifier.sampled"),
+        "classifier_skipped": metric_int(stats, "treedb.cache.vlog_dict.classifier.skipped"),
+        "classifier_skip_frac": metric_float(stats, "treedb.cache.vlog_dict.classifier.skip_frac"),
+        "trainer": {
+            "profile_attempts": metric_int(stats, "treedb.cache.vlog_dict.trainer.profile_attempts"),
+            "profile_accepts": metric_int(stats, "treedb.cache.vlog_dict.trainer.profile_accepts"),
+            "profile_rejects": metric_int(stats, "treedb.cache.vlog_dict.trainer.profile_rejects"),
+            "profile_reject_reason": metric_str(stats, "treedb.cache.vlog_dict.trainer.profile_reject_reason"),
+        },
+        "classes": classes,
+    }
+
+
+def build_write_path_summary(stats: dict[str, Any]) -> dict[str, Any]:
+    if not has_write_path_stats(stats):
+        return {}
+    return {
+        "write_path": {
+            "mode": metric_str(stats, "treedb.write_path.mode"),
+            "value_store": metric_str(stats, "treedb.write_path.value_store"),
+            "redo_log": metric_str(stats, "treedb.write_path.redo_log"),
+        },
+        "write_mode": build_storage_breakdown(
+            stats,
+            "treedb.cache.vlog_write_mode",
+            VLOG_WRITE_MODE_SUFFIXES,
+            "frames",
+        ),
+        "payload_kind": build_storage_breakdown(
+            stats,
+            "treedb.cache.vlog_payload_kind",
+            VLOG_PAYLOAD_KIND_SUFFIXES,
+            "frames",
+        ),
+        "payload_split": build_storage_breakdown(
+            stats,
+            "treedb.cache.vlog_payload_split",
+            VLOG_PAYLOAD_SPLIT_SUFFIXES,
+            "records",
+        ),
+        "outer_leaf_codec": build_storage_breakdown(
+            stats,
+            "treedb.cache.vlog_outer_leaf_codec",
+            VLOG_OUTER_LEAF_CODEC_SUFFIXES,
+            "frames",
+        ),
+        "auto": build_auto_summary(stats),
+        "dict": build_dict_summary(stats),
+    }
+
+
 def build_summary(stats: dict[str, Any]) -> dict[str, Any]:
     m = {
         "maintenance_attempts": metric_int(stats, "treedb.cache.vlog_generation.maintenance.attempts"),
@@ -852,7 +1002,13 @@ def build_summary(stats: dict[str, Any]) -> dict[str, Any]:
     return m
 
 
-def print_report(summary: dict[str, Any], source_file: Path, run_home: str, instance_name: str) -> None:
+def print_report(
+    summary: dict[str, Any],
+    write_path_summary: dict[str, Any],
+    source_file: Path,
+    run_home: str,
+    instance_name: str,
+) -> None:
     print(f"Source file: {source_file}")
     if run_home:
         print(f"Run home:    {run_home}")
@@ -1197,6 +1353,66 @@ def print_report(summary: dict[str, Any], source_file: Path, run_home: str, inst
     for note in notes:
         print(f"  - {note}")
 
+    if write_path_summary:
+        write_path = write_path_summary.get("write_path", {}) or {}
+        write_mode = write_path_summary.get("write_mode", {}) or {}
+        payload_kind = write_path_summary.get("payload_kind", {}) or {}
+        payload_split = write_path_summary.get("payload_split", {}) or {}
+        outer_leaf_codec = write_path_summary.get("outer_leaf_codec", {}) or {}
+        auto = write_path_summary.get("auto", {}) or {}
+        dict_summary = write_path_summary.get("dict", {}) or {}
+        dict_classes = dict_summary.get("classes", {}) or {}
+        auto_bytes = auto.get("bytes", {}) or {}
+        auto_frames_frac = auto.get("frames_frac", {}) or {}
+
+        print("")
+        print("Write path")
+        print(
+            "  config: "
+            f"mode={write_path.get('mode', '')} "
+            f"value_store={write_path.get('value_store', '')} "
+            f"redo_log={write_path.get('redo_log', '')}"
+        )
+        print(
+            "  write-mode stored bytes: "
+            f"off={human_bytes((write_mode.get('off', {}) or {}).get('stored_bytes'))} "
+            f"block={human_bytes((write_mode.get('block', {}) or {}).get('stored_bytes'))} "
+            f"dict={human_bytes((write_mode.get('dict', {}) or {}).get('stored_bytes'))}"
+        )
+        print(
+            "  payload-kind stored bytes: "
+            f"outer_leaf={human_bytes((payload_kind.get('outer_leaf', {}) or {}).get('stored_bytes'))} "
+            f"single_value={human_bytes((payload_kind.get('single_value', {}) or {}).get('stored_bytes'))} "
+            f"mixed={human_bytes((payload_kind.get('mixed', {}) or {}).get('stored_bytes'))}"
+        )
+        print(
+            "  payload-split stored bytes: "
+            f"outer_leaf={human_bytes((payload_split.get('outer_leaf', {}) or {}).get('stored_bytes'))} "
+            f"single_value={human_bytes((payload_split.get('single_value', {}) or {}).get('stored_bytes'))}"
+        )
+        print(
+            "  outer-leaf codec stored bytes: "
+            f"legacy_page={human_bytes((outer_leaf_codec.get('legacy_page', {}) or {}).get('stored_bytes'))} "
+            f"snappy={human_bytes((outer_leaf_codec.get('snappy', {}) or {}).get('stored_bytes'))} "
+            f"lz4={human_bytes((outer_leaf_codec.get('lz4', {}) or {}).get('stored_bytes'))}"
+        )
+        print(
+            "  auto bytes/frames_frac: "
+            f"dict={human_bytes(auto_bytes.get('dict'))}/{auto_frames_frac.get('dict', 0.0):.3f} "
+            f"block_snappy={human_bytes(auto_bytes.get('block_snappy'))}/{auto_frames_frac.get('block_snappy', 0.0):.3f} "
+            f"block_lz4={human_bytes(auto_bytes.get('block_lz4'))}/{auto_frames_frac.get('block_lz4', 0.0):.3f} "
+            f"off={human_bytes(auto_bytes.get('off'))}/{auto_frames_frac.get('off', 0.0):.3f}"
+        )
+        print(
+            "  dict: "
+            f"dict_id={dict_summary.get('last_applied_dict_id', 0)} "
+            f"current_k={dict_summary.get('current_k', 0)} "
+            f"frames_kept={dict_summary.get('frames_kept', 0)} "
+            f"kept_frac={dict_summary.get('kept_frac', 0.0):.3f} "
+            f"outer_leaf_dict_id={(dict_classes.get('outer_leaf', {}) or {}).get('last_applied_dict_id', 0)} "
+            f"outer_leaf_k={(dict_classes.get('outer_leaf', {}) or {}).get('current_k', 0)}"
+        )
+
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Analyze TreeDB live vlog maintenance capacity from run_celestia diagnostics")
@@ -1250,18 +1466,25 @@ def main() -> int:
         return 2
 
     prebuilt_summary: dict[str, Any] | None = None
+    prebuilt_write_path_summary: dict[str, Any] | None = None
     prebuilt_instance = ""
     prebuilt_run_home = ""
     if isinstance(payload, dict):
         maybe_summary = payload.get("summary")
         if isinstance(maybe_summary, dict) and "maintenance_attempts" in maybe_summary:
             prebuilt_summary = maybe_summary
+            maybe_write_path_summary = payload.get("write_path_summary")
+            if isinstance(maybe_write_path_summary, dict):
+                prebuilt_write_path_summary = maybe_write_path_summary
             prebuilt_instance = str(payload.get("instance", ""))
             prebuilt_run_home = str(payload.get("run_home", ""))
 
     if prebuilt_summary is not None:
         summary = build_summary({})
         summary.update(prebuilt_summary)
+        write_path_summary = {}
+        if prebuilt_write_path_summary is not None:
+            write_path_summary = prebuilt_write_path_summary
         instance_name = prebuilt_instance
         run_home = prebuilt_run_home or find_home_from_path(source)
     else:
@@ -1273,6 +1496,7 @@ def main() -> int:
             )
             return 2
         summary = build_summary(stats)
+        write_path_summary = build_write_path_summary(stats)
         run_home = find_home_from_path(source)
 
     if args.json:
@@ -1281,10 +1505,11 @@ def main() -> int:
             "run_home": run_home,
             "instance": instance_name,
             "summary": summary,
+            "write_path_summary": write_path_summary,
         }
         print(json.dumps(out, indent=2, sort_keys=True))
     else:
-        print_report(summary, source, run_home, instance_name)
+        print_report(summary, write_path_summary, source, run_home, instance_name)
 
     return 0
 
