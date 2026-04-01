@@ -15974,11 +15974,6 @@ planned:
 				if gcBytesDeleted > 0 {
 					db.vlogGenerationRewriteQueuedDebtExecGCBytesDeleted.Add(uint64(gcBytesDeleted))
 				}
-				if effectiveBytesBefore > effectiveBytesAfter {
-					db.vlogGenerationRewriteQueuedDebtExecReclaimedBytes.Add(uint64(effectiveBytesBefore - effectiveBytesAfter))
-				} else if effectiveBytesBefore > 0 {
-					db.vlogGenerationRewriteQueuedDebtExecNoReclaimRuns.Add(1)
-				}
 				if stats.SourceBytesRequested > 0 {
 					db.vlogGenerationRewriteQueuedDebtExecSourceBytesRequested.Add(uint64(stats.SourceBytesRequested))
 				}
@@ -15986,7 +15981,17 @@ planned:
 					db.vlogGenerationRewriteQueuedDebtExecSourceBytesUnreferenced.Add(uint64(stats.SourceBytesUnreferenced))
 				}
 			}
+			locallyReleasedProcessedDebt := len(processedRewriteIDs) > 0 &&
+				(stats.SourceSegmentsUnreferenced > 0 || stats.SourceBytesUnreferenced > 0)
 			locallyEffectiveProcessedDebt := len(processedRewriteIDs) > 0 && processedLedgerOK && processedLedgerStaleBytes > 0 && stats.RecordsCopied > 0
+			locallyUsefulProcessedDebt := locallyEffectiveProcessedDebt || locallyReleasedProcessedDebt
+			if queuedDebtExecuted {
+				if effectiveBytesBefore > effectiveBytesAfter {
+					db.vlogGenerationRewriteQueuedDebtExecReclaimedBytes.Add(uint64(effectiveBytesBefore - effectiveBytesAfter))
+				} else if effectiveBytesBefore > 0 && !locallyUsefulProcessedDebt {
+					db.vlogGenerationRewriteQueuedDebtExecNoReclaimRuns.Add(1)
+				}
+			}
 			if processedLedgerOK {
 				if processedLedgerLiveBytes > 0 {
 					db.vlogGenerationRewriteProcessedLiveBytes.Add(uint64(processedLedgerLiveBytes))
@@ -15995,7 +16000,7 @@ planned:
 					db.vlogGenerationRewriteProcessedStaleBytes.Add(uint64(processedLedgerStaleBytes))
 				}
 			}
-			if effectiveBytesBefore > 0 && effectiveBytesAfter >= effectiveBytesBefore && !locallyEffectiveProcessedDebt {
+			if effectiveBytesBefore > 0 && effectiveBytesAfter >= effectiveBytesBefore && !locallyUsefulProcessedDebt {
 				db.vlogGenerationRewriteIneffectiveRuns.Add(1)
 				db.vlogGenerationRewriteIneffectiveBytesIn.Add(uint64(effectiveBytesBefore))
 				db.vlogGenerationRewriteIneffectiveBytesOut.Add(uint64(effectiveBytesAfter))
@@ -16011,7 +16016,7 @@ planned:
 			}
 			penalizeProcessedRewriteDebt := false
 			penaltyReason := ""
-			if len(processedRewriteIDs) > 0 && effectiveBytesAfter >= effectiveBytesBefore && !locallyEffectiveProcessedDebt {
+			if len(processedRewriteIDs) > 0 && effectiveBytesAfter >= effectiveBytesBefore && !locallyUsefulProcessedDebt {
 				growth := effectiveBytesAfter - effectiveBytesBefore
 				if growth >= vlogGenerationRewriteIneffectiveGrowthMinBytes {
 					penalizeProcessedRewriteDebt = true
@@ -16024,16 +16029,9 @@ planned:
 					penaltyReason = "no_progress"
 				}
 			}
-			if locallyEffectiveProcessedDebt {
-				if effectiveBytesAfter >= effectiveBytesBefore {
-					db.vlogGenerationRewriteNoReclaimRuns.Add(1)
-					db.vlogGenerationRewriteIneffectiveLastNS.Store(time.Now().UnixNano())
-					if processedLedgerStaleBytes > 0 {
-						db.vlogGenerationRewriteNoReclaimStaleBytes.Add(uint64(processedLedgerStaleBytes))
-					}
-				}
+			if locallyUsefulProcessedDebt {
 				db.debugVlogMaintf(
-					"rewrite_effective_local reason=%s processed_ids=%d planned_total=%d planned_live=%d planned_stale=%d global_bytes_before=%d global_bytes_after=%d gc_bytes_deleted=%d records=%d",
+					"rewrite_effective_local reason=%s processed_ids=%d planned_total=%d planned_live=%d planned_stale=%d global_bytes_before=%d global_bytes_after=%d gc_bytes_deleted=%d records=%d source_unreferenced_segments=%d source_unreferenced_bytes=%d",
 					vlogGenerationReasonString(reason),
 					len(processedRewriteIDs),
 					processedLedgerTotalBytes,
@@ -16043,6 +16041,8 @@ planned:
 					effectiveBytesAfter,
 					gcBytesDeleted,
 					stats.RecordsCopied,
+					stats.SourceSegmentsUnreferenced,
+					stats.SourceBytesUnreferenced,
 				)
 			}
 			if penalizeProcessedRewriteDebt {

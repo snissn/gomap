@@ -3531,6 +3531,64 @@ func TestVlogGenerationRewrite_DoesNotCoolProcessedDebtWhenLocalStaleWasRewritte
 	if got := stats["treedb.cache.vlog_generation.rewrite.ineffective_runs"]; got != "0" {
 		t.Fatalf("ineffective runs=%q want 0 for locally effective rewrite", got)
 	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.no_reclaim_runs"]; got != "0" {
+		t.Fatalf("no reclaim runs=%q want 0 for locally effective rewrite", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.ineffective_last_unix_nano"]; got != "0" {
+		t.Fatalf("ineffective last ts=%q want 0 for locally effective rewrite", got)
+	}
+}
+
+func TestVlogGenerationRewrite_DoesNotCoolProcessedDebtWhenSourceBecomesUnreferenced(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+
+	dir := t.TempDir()
+
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	recorder := &rewriteBudgetRecordingBackend{
+		DB: backend,
+		planResponse: backenddb.ValueLogRewritePlan{
+			SourceFileIDs:     []uint32{11, 22},
+			SelectedBytesLive: 128,
+		},
+		rewriteResponse: backenddb.ValueLogRewriteStats{
+			BytesBefore:                64 << 20,
+			BytesAfter:                 (64 << 20) + vlogGenerationRewriteIneffectiveGrowthMinBytes + 1,
+			RecordsCopied:              1,
+			SourceSegmentsRequested:    1,
+			SourceSegmentsUnreferenced: 1,
+			SourceBytesRequested:       64 << 20,
+			SourceBytesUnreferenced:    64 << 20,
+		},
+	}
+
+	db, cleanup := openRewriteQueueTestDB(t, dir, recorder)
+	t.Cleanup(cleanup)
+	db.maybeRunVlogGenerationMaintenance(false)
+
+	if _, calls := recorder.recordedRewrite(); calls != 1 {
+		t.Fatalf("rewrite calls=%d want=1", calls)
+	}
+	queue, err := db.currentVlogGenerationRewriteQueue()
+	if err != nil {
+		t.Fatalf("current queue: %v", err)
+	}
+	if got, want := queue, []uint32{22}; len(got) != len(want) || got[0] != want[0] {
+		t.Fatalf("queue after source release=%v want=%v", got, want)
+	}
+	stats := db.Stats()
+	if got := stats["treedb.cache.vlog_generation.rewrite.ineffective_runs"]; got != "0" {
+		t.Fatalf("ineffective runs=%q want 0 when source becomes unreferenced", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.no_reclaim_runs"]; got != "0" {
+		t.Fatalf("no reclaim runs=%q want 0 when source becomes unreferenced", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.ineffective_last_unix_nano"]; got != "0" {
+		t.Fatalf("ineffective last ts=%q want 0 when source becomes unreferenced", got)
+	}
 }
 
 func TestVlogGenerationRewrite_KeepsDebtWhenGCOffsetsMaterialGrowth(t *testing.T) {
