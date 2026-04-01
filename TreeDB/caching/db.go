@@ -15629,7 +15629,16 @@ planned:
 						db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
 						return nil
 					}
-					processedRewriteIDs = vlogGenerationRewriteLedgerChunk(plannedLedgerForExec, rewriteMaxSegments, budgetTokens)
+					chunkBudgetTokens := budgetTokens
+					if hadRewriteQueue {
+						// Once rewrite debt is already queued, keep selection bounded
+						// by segment count and let backend MaxCopiedBytes enforce the
+						// actual execution budget. This preserves incremental
+						// multi-pass draining across staged segments instead of
+						// pre-shrinking the queue back to a budget-fit subset here.
+						chunkBudgetTokens = 0
+					}
+					processedRewriteIDs = vlogGenerationRewriteLedgerChunk(plannedLedgerForExec, rewriteMaxSegments, chunkBudgetTokens)
 					if len(processedRewriteIDs) == 0 {
 						if hadRewriteQueue {
 							db.vlogGenerationRewriteQueuedDebtSkipNoChunk.Add(1)
@@ -15669,7 +15678,7 @@ planned:
 							vlogGenerationRewriteMinSegmentStaleBytes,
 						)
 					}
-					processedRewriteIDs = vlogGenerationRewriteLedgerChunk(ledger, rewriteMaxSegments, budgetTokens)
+					processedRewriteIDs = vlogGenerationRewriteLedgerChunk(ledger, rewriteMaxSegments, 0)
 					if len(processedRewriteIDs) == 0 {
 						if hadRewriteQueue {
 							db.vlogGenerationRewriteQueuedDebtSkipNoChunk.Add(1)
