@@ -49,7 +49,7 @@ func forceRewriteStageConfirmDue(t *testing.T, db *DB) {
 	if db == nil {
 		return
 	}
-	observedAt := time.Now().Add(-vlogGenerationRewriteMinInterval - time.Second).UnixNano()
+	observedAt := time.Now().Add(-vlogGenerationRewriteStageConfirmDelay - time.Second).UnixNano()
 	db.vlogGenerationRewriteQueueMu.Lock()
 	db.vlogGenerationRewriteStageObservedUnixNano = observedAt
 	db.vlogGenerationRewriteQueueMu.Unlock()
@@ -2360,6 +2360,75 @@ func TestVlogGenerationMaintenance_SchedulesDueStageConfirmationOnExit(t *testin
 			t.Fatalf("due staged confirmation did not run in time: planCalls=%d rewriteCalls=%d", planCalls, rewriteCalls)
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestVlogGenerationMaintenance_StageConfirmationNoOverlapBacksOffExitRequeue(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+
+	dir := t.TempDir()
+
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	recorder := &rewriteBudgetRecordingBackend{
+		DB: backend,
+		planResponse: backenddb.ValueLogRewritePlan{
+			SourceFileIDs: []uint32{22},
+			SelectedSegments: []backenddb.ValueLogRewritePlanSegment{{
+				FileID:     22,
+				BytesTotal: 128,
+				BytesLive:  64,
+				BytesStale: 64,
+				StaleRatio: 0.5,
+			}},
+			SelectedBytesLive:  64,
+			SelectedBytesStale: 64,
+		},
+	}
+
+	db, cleanup := openRewriteQueueTestDB(t, dir, recorder)
+	t.Cleanup(cleanup)
+	forceVlogMaintenanceIdle(db)
+	db.vlogGenerationRewriteBudgetTokensBytes.Store(1024)
+	db.valueLogGenerationHotTarget = 0
+
+	stageObservedAt := time.Now().Add(-vlogGenerationRewriteStageConfirmDelay - time.Second).UnixNano()
+	if err := db.setVlogGenerationRewriteLedgerWithStage([]backenddb.ValueLogRewritePlanSegment{{
+		FileID:     11,
+		BytesTotal: 128,
+		BytesLive:  64,
+		BytesStale: 64,
+		StaleRatio: 0.5,
+	}}, true, stageObservedAt); err != nil {
+		t.Fatalf("seed staged rewrite ledger: %v", err)
+	}
+
+	db.maybeRunVlogGenerationMaintenanceWithOptions(false, vlogGenerationMaintenanceOptions{
+		bypassQuiet:           true,
+		skipRetainedPruneWait: true,
+		skipCheckpoint:        false,
+		rewriteDebtDrain:      true,
+		debugSource:           "rewrite_stage_confirm",
+	})
+
+	if _, calls := recorder.recordedPlan(); calls != 1 {
+		t.Fatalf("stage-confirm plan calls=%d want 1", calls)
+	}
+	if _, calls := recorder.recordedRewrite(); calls != 0 {
+		t.Fatalf("stage-confirm rewrite calls=%d want 0 with no confirmed overlap", calls)
+	}
+	if db.vlogGenerationRewriteStageConfirmDue(time.Now()) {
+		t.Fatal("stage confirmation unexpectedly due immediately after acquired no-overlap pass")
+	}
+
+	time.Sleep(50 * time.Millisecond)
+	if _, calls := recorder.recordedPlan(); calls != 1 {
+		t.Fatalf("stage-confirm plan calls after exit wait=%d want 1", calls)
+	}
+	if got := db.vlogGenerationMaintenanceAcquired.Load(); got > 2 {
+		t.Fatalf("maintenance acquired=%d want no rapid stage-confirm reacquire loop", got)
 	}
 }
 
