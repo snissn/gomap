@@ -12103,8 +12103,8 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 
 	mode := normalizeVlogCompressionMode(db.valueLogCompressionMode)
 	allowDictFallback := mode == vlogCompressionAuto || (mode == vlogCompressionDict && db.vlogSelectorEnabled(mode))
-	payloadKindForFallback := db.classifyVlogPayloadKindForRecords(records)
-	outerLeafPayloadsOnly := payloadKindForFallback == vlogPayloadKindOuterLeaf
+	payloadSplitForFallback := db.classifyVlogPayloadSplitForRecords(records)
+	outerLeafPayloadsOnly := payloadSplitForFallback.Kind == vlogPayloadKindOuterLeaf
 	dictFallbackWriteMode := func(current vlogCompressionWriteMode) vlogCompressionWriteMode {
 		next := fallbackAutoVlogWriteMode(mode, current, allowDictFallback)
 		if mode == vlogCompressionDict && next == vlogWriteDict && outerLeafPayloadsOnly {
@@ -12119,7 +12119,7 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	if n := len(records); n > 0 {
 		selectorUnitPayloadBytes = rawPayloadBytes / n
 	}
-	dictClass := db.valueLogDictClassForRecordSplit(db.classifyVlogPayloadSplitForRecords(records))
+	dictClass := db.valueLogDictClassForRecordSplit(payloadSplitForFallback)
 	dictID = db.refreshValueLogDictIDFromCachedCurrent(dictID, dictClass)
 	writeMode, blockCodec, selectorProbe := db.resolveVlogWriteMode(l, dictID, selectorPayloadBytes, selectorUnitPayloadBytes, outerLeafPayloadsOnly)
 	normalizeNoDictBlockCodec := func() {
@@ -12789,6 +12789,10 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 	mode := normalizeVlogCompressionMode(db.valueLogCompressionMode)
 	allowDictFallback := mode == vlogCompressionAuto || (mode == vlogCompressionDict && db.vlogSelectorEnabled(mode))
 	outerLeafPayload := db.isOuterLeafValueLogPayload(value)
+	dictClass := vlogDictClassSingleValue
+	if outerLeafPayload {
+		dictClass = vlogDictClassOuterLeaf
+	}
 	dictFallbackWriteMode := func(current vlogCompressionWriteMode) vlogCompressionWriteMode {
 		next := fallbackAutoVlogWriteMode(mode, current, allowDictFallback)
 		if mode == vlogCompressionDict && next == vlogWriteDict && outerLeafPayload {
@@ -12798,7 +12802,6 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 		}
 		return next
 	}
-	dictClass := db.valueLogDictClassForValue(value)
 	dictID = db.refreshValueLogDictIDFromCachedCurrent(dictID, dictClass)
 	writeMode, blockCodec, selectorProbe := db.resolveVlogWriteMode(l, dictID, len(value), len(value), outerLeafPayload)
 	normalizeNoDictBlockCodec := func() {
