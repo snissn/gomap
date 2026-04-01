@@ -187,6 +187,10 @@ Notes:
   - latest successful sample is stored as `live_debug_vars_latest.json` in each run directory
   - if a successful run lacks on-disk diagnostics JSON, the harness retries maintenance analysis against that sampled payload so `run.json.maintenance_summary` can still reflect live runtime counters
 - maintenance summaries also export exact-source counters for `rewrite_stage_confirm` vs `rewrite_stage_confirm_exit`, so restart loops can be separated from the initial stage-confirm pass in `run.json`, `runs.csv`, and `analyze_vlog_maintenance_capacity.py`
+- retained-prune accounting needs two views:
+  - `retained_prune_zombie_marked_bytes` / `retained_prune_removed_bytes` report work done inline by the prune pass itself
+  - `vlog_zombie_bytes` / `vlog_zombie_pinned_bytes` report end-of-capture zombie state in the value-log manager
+  - a live run can therefore show `retained_prune_removed_bytes=0` even when zombie-marked segments have already drained by the final summary capture; use the end-of-capture `vlog_zombie_*` fields to tell whether zombie bytes are still present
 - `runs.csv` now also includes rewrite-capacity counters from diagnostics summaries (plan runs/selection, source segment+byte outcomes, ledger bytes, budget utilization, observed-GC drain pct) so candidate/control behavior can be compared without opening each `run.json`.
 - `pairs.csv` now includes absolute per-pair control/candidate values (`t_sync`, `t_total`, `s_sync_app`, `s_post_wal`, `max_rss_kb`) plus `composite_score_pct` (negative is better).
 - `summary.md` now includes `Absolute Medians` (control vs candidate) in addition to pair deltas.

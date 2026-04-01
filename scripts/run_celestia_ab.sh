@@ -2540,6 +2540,18 @@ for pair in sorted(by_pair):
             "control_rewrite_queued_debt_skip_no_chunk": None,
             "candidate_rewrite_queued_debt_skip_no_chunk": None,
             "delta_rewrite_queued_debt_skip_no_chunk": None,
+            "control_retained_prune_zombie_marked_bytes": None,
+            "candidate_retained_prune_zombie_marked_bytes": None,
+            "delta_retained_prune_zombie_marked_bytes": None,
+            "control_retained_prune_removed_bytes": None,
+            "candidate_retained_prune_removed_bytes": None,
+            "delta_retained_prune_removed_bytes": None,
+            "control_vlog_zombie_bytes": None,
+            "candidate_vlog_zombie_bytes": None,
+            "delta_vlog_zombie_bytes": None,
+            "control_vlog_zombie_pinned_bytes": None,
+            "candidate_vlog_zombie_pinned_bytes": None,
+            "delta_vlog_zombie_pinned_bytes": None,
             "control_valid": ctrl_valid,
             "candidate_valid": cand_valid,
             "control_invalid_reason": ctrl_reason,
@@ -2685,6 +2697,27 @@ for pair in sorted(by_pair):
     d_rewrite_queued_debt_skip_no_chunk = delta(
         cand_rewrite_queued_debt_skip_no_chunk,
         base_rewrite_queued_debt_skip_no_chunk,
+    )
+    cand_retained_prune_zombie_marked_bytes = cand_summary.get("retained_prune_zombie_marked_bytes")
+    base_retained_prune_zombie_marked_bytes = ctrl_summary.get("retained_prune_zombie_marked_bytes")
+    d_retained_prune_zombie_marked_bytes = delta(
+        cand_retained_prune_zombie_marked_bytes,
+        base_retained_prune_zombie_marked_bytes,
+    )
+    cand_retained_prune_removed_bytes = cand_summary.get("retained_prune_removed_bytes")
+    base_retained_prune_removed_bytes = ctrl_summary.get("retained_prune_removed_bytes")
+    d_retained_prune_removed_bytes = delta(
+        cand_retained_prune_removed_bytes,
+        base_retained_prune_removed_bytes,
+    )
+    cand_vlog_zombie_bytes = cand_summary.get("vlog_zombie_bytes")
+    base_vlog_zombie_bytes = ctrl_summary.get("vlog_zombie_bytes")
+    d_vlog_zombie_bytes = delta(cand_vlog_zombie_bytes, base_vlog_zombie_bytes)
+    cand_vlog_zombie_pinned_bytes = cand_summary.get("vlog_zombie_pinned_bytes")
+    base_vlog_zombie_pinned_bytes = ctrl_summary.get("vlog_zombie_pinned_bytes")
+    d_vlog_zombie_pinned_bytes = delta(
+        cand_vlog_zombie_pinned_bytes,
+        base_vlog_zombie_pinned_bytes,
     )
 
     def ratio(candidate, control):
@@ -2837,6 +2870,18 @@ for pair in sorted(by_pair):
         "control_rewrite_queued_debt_skip_no_chunk": base_rewrite_queued_debt_skip_no_chunk,
         "candidate_rewrite_queued_debt_skip_no_chunk": cand_rewrite_queued_debt_skip_no_chunk,
         "delta_rewrite_queued_debt_skip_no_chunk": d_rewrite_queued_debt_skip_no_chunk,
+        "control_retained_prune_zombie_marked_bytes": base_retained_prune_zombie_marked_bytes,
+        "candidate_retained_prune_zombie_marked_bytes": cand_retained_prune_zombie_marked_bytes,
+        "delta_retained_prune_zombie_marked_bytes": d_retained_prune_zombie_marked_bytes,
+        "control_retained_prune_removed_bytes": base_retained_prune_removed_bytes,
+        "candidate_retained_prune_removed_bytes": cand_retained_prune_removed_bytes,
+        "delta_retained_prune_removed_bytes": d_retained_prune_removed_bytes,
+        "control_vlog_zombie_bytes": base_vlog_zombie_bytes,
+        "candidate_vlog_zombie_bytes": cand_vlog_zombie_bytes,
+        "delta_vlog_zombie_bytes": d_vlog_zombie_bytes,
+        "control_vlog_zombie_pinned_bytes": base_vlog_zombie_pinned_bytes,
+        "candidate_vlog_zombie_pinned_bytes": cand_vlog_zombie_pinned_bytes,
+        "delta_vlog_zombie_pinned_bytes": d_vlog_zombie_pinned_bytes,
         "control_valid": ctrl_valid,
         "candidate_valid": cand_valid,
         "control_invalid_reason": ctrl_reason,
@@ -2924,6 +2969,18 @@ with pairs_csv.open("w", newline="", encoding="utf-8") as fh:
         "control_rewrite_queued_debt_skip_no_chunk",
         "candidate_rewrite_queued_debt_skip_no_chunk",
         "delta_rewrite_queued_debt_skip_no_chunk",
+        "control_retained_prune_zombie_marked_bytes",
+        "candidate_retained_prune_zombie_marked_bytes",
+        "delta_retained_prune_zombie_marked_bytes",
+        "control_retained_prune_removed_bytes",
+        "candidate_retained_prune_removed_bytes",
+        "delta_retained_prune_removed_bytes",
+        "control_vlog_zombie_bytes",
+        "candidate_vlog_zombie_bytes",
+        "delta_vlog_zombie_bytes",
+        "control_vlog_zombie_pinned_bytes",
+        "candidate_vlog_zombie_pinned_bytes",
+        "delta_vlog_zombie_pinned_bytes",
         "control_valid",
         "candidate_valid",
         "control_invalid_reason",
@@ -3008,6 +3065,18 @@ with pairs_csv.open("w", newline="", encoding="utf-8") as fh:
             r["control_rewrite_queued_debt_skip_no_chunk"],
             r["candidate_rewrite_queued_debt_skip_no_chunk"],
             r["delta_rewrite_queued_debt_skip_no_chunk"],
+            r["control_retained_prune_zombie_marked_bytes"],
+            r["candidate_retained_prune_zombie_marked_bytes"],
+            r["delta_retained_prune_zombie_marked_bytes"],
+            r["control_retained_prune_removed_bytes"],
+            r["candidate_retained_prune_removed_bytes"],
+            r["delta_retained_prune_removed_bytes"],
+            r["control_vlog_zombie_bytes"],
+            r["candidate_vlog_zombie_bytes"],
+            r["delta_vlog_zombie_bytes"],
+            r["control_vlog_zombie_pinned_bytes"],
+            r["candidate_vlog_zombie_pinned_bytes"],
+            r["delta_vlog_zombie_pinned_bytes"],
             r["control_valid"],
             r["candidate_valid"],
             r["control_invalid_reason"],
@@ -3466,6 +3535,30 @@ if pair_rows:
         f"`{last['control_rewrite_queued_debt_skip_no_chunk']}` / "
         f"`{last['candidate_rewrite_queued_debt_skip_no_chunk']}` / "
         f"`{last['delta_rewrite_queued_debt_skip_no_chunk']}`"
+    )
+    lines.append(
+        f"- retained_prune_zombie_marked_bytes (control/candidate/delta): "
+        f"`{last['control_retained_prune_zombie_marked_bytes']}` / "
+        f"`{last['candidate_retained_prune_zombie_marked_bytes']}` / "
+        f"`{last['delta_retained_prune_zombie_marked_bytes']}`"
+    )
+    lines.append(
+        f"- retained_prune_removed_bytes (control/candidate/delta): "
+        f"`{last['control_retained_prune_removed_bytes']}` / "
+        f"`{last['candidate_retained_prune_removed_bytes']}` / "
+        f"`{last['delta_retained_prune_removed_bytes']}`"
+    )
+    lines.append(
+        f"- vlog_zombie_bytes at summary capture (control/candidate/delta): "
+        f"`{last['control_vlog_zombie_bytes']}` / "
+        f"`{last['candidate_vlog_zombie_bytes']}` / "
+        f"`{last['delta_vlog_zombie_bytes']}`"
+    )
+    lines.append(
+        f"- vlog_zombie_pinned_bytes at summary capture (control/candidate/delta): "
+        f"`{last['control_vlog_zombie_pinned_bytes']}` / "
+        f"`{last['candidate_vlog_zombie_pinned_bytes']}` / "
+        f"`{last['delta_vlog_zombie_pinned_bytes']}`"
     )
 summary_md.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
