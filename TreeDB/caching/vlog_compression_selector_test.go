@@ -104,7 +104,7 @@ func TestVlogCompressionSelector_SeedDictCandidate_PromotesThroughputChoice(t *t
 	}
 }
 
-func TestDBSeedVlogCompressionSelectorsDictRatio(t *testing.T) {
+func TestDBSeedVlogCompressionSelectorsDictRatioForClass(t *testing.T) {
 	db := &DB{
 		lanes: []lane{
 			{vlogCompressionSelector: newVlogCompressionSelector(vlogAutoThroughput, 0, 0)},
@@ -112,7 +112,7 @@ func TestDBSeedVlogCompressionSelectorsDictRatio(t *testing.T) {
 		},
 	}
 
-	db.seedVlogCompressionSelectorsDictRatio(0.08, 0.12)
+	db.seedVlogCompressionSelectorsDictRatioForClass(vlogDictClassSingleValue, 0.08, 0.12)
 
 	for i := range db.lanes {
 		s := db.lanes[i].vlogCompressionSelector
@@ -123,6 +123,40 @@ func TestDBSeedVlogCompressionSelectorsDictRatio(t *testing.T) {
 		if m.ratio > 0.12 {
 			t.Fatalf("lane %d: expected conservative seeded ratio <= 0.12, got %.3f", i, m.ratio)
 		}
+	}
+}
+
+func TestDBSeedVlogCompressionSelectorsDictRatioForClass_SkipsOuterLeafAutoSizeSplitMode(t *testing.T) {
+	db := &DB{
+		indexOuterLeavesInValueLog: true,
+		valueLogCompressionMode:    uint8(vlogCompressionAuto),
+		valueLogAutoPolicy:         uint8(vlogAutoSize),
+		valueLogDictClassMode:      uint8(vlogDictClassModeSplitOuterLeaf),
+		lanes: []lane{
+			{vlogCompressionSelector: newVlogCompressionSelector(vlogAutoSize, 0, 0)},
+		},
+	}
+
+	db.seedVlogCompressionSelectorsDictRatioForClass(vlogDictClassOuterLeaf, 0.08, 0.12)
+
+	m := db.lanes[0].vlogCompressionSelector.metric(vlogAutoCandidateDict)
+	if m.samples != 0 {
+		t.Fatalf("expected outer-leaf auto-size split mode to skip selector seeding, got samples=%d ratio=%.3f", m.samples, m.ratio)
+	}
+}
+
+func TestDBShouldResetVlogCompressionSelectorsForPublishedDict_SkipsOuterLeafAutoSizeSplitMode(t *testing.T) {
+	db := &DB{
+		indexOuterLeavesInValueLog: true,
+		valueLogCompressionMode:    uint8(vlogCompressionAuto),
+		valueLogAutoPolicy:         uint8(vlogAutoSize),
+		valueLogDictClassMode:      uint8(vlogDictClassModeSplitOuterLeaf),
+	}
+	if db.shouldResetVlogCompressionSelectorsForPublishedDict(vlogDictClassOuterLeaf) {
+		t.Fatalf("expected outer-leaf auto-size split mode to skip publish reset")
+	}
+	if !db.shouldResetVlogCompressionSelectorsForPublishedDict(vlogDictClassSingleValue) {
+		t.Fatalf("expected single_value to keep publish reset behavior")
 	}
 }
 

@@ -463,7 +463,30 @@ func (db *DB) valueLogDictIgnoreValueForSignal(value []byte) bool {
 	return false
 }
 
-func (db *DB) seedVlogCompressionSelectorsDictRatio(payloadRatio, totalRatio float64) {
+func (db *DB) shouldSeedVlogCompressionSelectorsForClass(class vlogDictClass) bool {
+	if db == nil {
+		return true
+	}
+	if class != vlogDictClassOuterLeaf {
+		return true
+	}
+	if db.dictClassMode() != vlogDictClassModeSplitOuterLeaf || !db.indexOuterLeavesInValueLog {
+		return true
+	}
+	if normalizeVlogCompressionMode(db.valueLogCompressionMode) != vlogCompressionAuto {
+		return true
+	}
+	if normalizeVlogAutoPolicy(db.valueLogAutoPolicy) != vlogAutoSize {
+		return true
+	}
+	return false
+}
+
+func (db *DB) shouldResetVlogCompressionSelectorsForPublishedDict(class vlogDictClass) bool {
+	return db.shouldSeedVlogCompressionSelectorsForClass(class)
+}
+
+func (db *DB) seedVlogCompressionSelectorsDictRatioForClass(class vlogDictClass, payloadRatio, totalRatio float64) {
 	if db == nil {
 		return
 	}
@@ -485,6 +508,9 @@ func (db *DB) seedVlogCompressionSelectorsDictRatio(payloadRatio, totalRatio flo
 	// Keep selector seeding conservative: if the active profile ratio is close
 	// to raw, defer to normal per-frame selector learning.
 	if seedRatio >= 0.98 {
+		return
+	}
+	if !db.shouldSeedVlogCompressionSelectorsForClass(class) {
 		return
 	}
 	for i := range db.lanes {
@@ -1040,10 +1066,11 @@ func (db *DB) applyValueLogDictProfileForClass(class vlogDictClass) {
 	if !ok || profile == nil || len(profile.Dict) == 0 {
 		return
 	}
-	db.seedVlogCompressionSelectorsDictRatio(profile.PayloadRatio, profile.TotalRatio)
+	db.seedVlogCompressionSelectorsDictRatioForClass(class, profile.PayloadRatio, profile.TotalRatio)
 	if class == vlogDictClassOuterLeaf &&
 		normalizeVlogCompressionMode(db.valueLogCompressionMode) == vlogCompressionAuto &&
-		normalizeVlogAutoPolicy(db.valueLogAutoPolicy) == vlogAutoSize {
+		normalizeVlogAutoPolicy(db.valueLogAutoPolicy) == vlogAutoSize &&
+		db.shouldResetVlogCompressionSelectorsForPublishedDict(class) {
 		seedRatio := profile.PayloadRatio
 		if profile.TotalRatio > seedRatio {
 			seedRatio = profile.TotalRatio
