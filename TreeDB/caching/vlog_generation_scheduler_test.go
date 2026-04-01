@@ -3128,7 +3128,6 @@ func TestVlogGenerationRewriteQueue_DebtDrainSelectsMultipleSegmentsAndBoundsExe
 		t.Fatalf("queue after bounded debt-drain rewrite=%v want=%v", got, want)
 	}
 }
-
 func TestVlogGenerationRewriteQueue_ConsumesMissingBoundedSourceIDs(t *testing.T) {
 	prepareDirectSchedulerTest(t)
 
@@ -3142,7 +3141,7 @@ func TestVlogGenerationRewriteQueue_ConsumesMissingBoundedSourceIDs(t *testing.T
 		DB: backend,
 		// Simulate a queued ID that disappeared from the current value-log set
 		// before execution. The backend returns a no-op stats result with zero
-		// requested or classified source segments.
+		// requested source segments.
 		rewriteResponse: backenddb.ValueLogRewriteStats{},
 	}
 
