@@ -7,40 +7,7 @@ import (
 )
 
 // ValueLogRewriteStats summarizes value-log rewrite compaction results.
-type ValueLogRewriteStats struct {
-	SegmentsBefore                int
-	SegmentsAfter                 int
-	BytesBefore                   int64
-	BytesAfter                    int64
-	RecordsCopied                 int
-	ValueRecordsCopied            int
-	ValueBytesCopied              int64
-	LeafRefRecordsCopied          int
-	LeafRefBytesCopied            int64
-	SourceSegmentsRequested       int
-	SourceSegmentsStillReferenced int
-	SourceSegmentsUnreferenced    int
-	SourceBytesRequested          int64
-	SourceBytesStillReferenced    int64
-	SourceBytesUnreferenced       int64
-
-	TemplateRecordsAttempted int
-	TemplateRecordsKept      int
-	TemplateInputBytes       int64
-	TemplateOutputBytes      int64
-
-	TemplatePointerRecordsAttempted int
-	TemplatePointerRecordsKept      int
-	TemplatePointerInputBytes       int64
-	TemplatePointerOutputBytes      int64
-	TemplatePointerReasons          map[string]uint64
-
-	TemplateOuterLeafRecordsAttempted int
-	TemplateOuterLeafRecordsKept      int
-	TemplateOuterLeafInputBytes       int64
-	TemplateOuterLeafOutputBytes      int64
-	TemplateOuterLeafReasons          map[string]uint64
-}
+type ValueLogRewriteStats = treedbdb.ValueLogRewriteStats
 
 // ValueLogRewriteOnlineOptions controls online rewrite batching behavior.
 type ValueLogRewriteOnlineOptions = treedbdb.ValueLogRewriteOnlineOptions
