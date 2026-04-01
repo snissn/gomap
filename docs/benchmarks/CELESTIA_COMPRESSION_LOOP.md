@@ -117,6 +117,48 @@ For full `run_celestia` proof runs, set `TREEMAP_BIN` explicitly so rewrite is n
 TREEMAP_BIN=/home/mikers/dev/snissn/celestia-app-p4/build/treemap-local
 ```
 
+To build a mixed replay corpus from finished value-log segments in logical
+record order, use:
+
+```bash
+GOWORK=off go run ./TreeDB/cmd/treemap vlog-replay-export \
+  ~/.celestia-app-mainnet-treedb-<run-id>/data/application.db \
+  -rw \
+  -out /tmp/vlog_replay_<run-id>.jsonl \
+  -limit 20000
+```
+
+Notes:
+- this exports decoded logical records from `maindb/wal` in segment order
+- grouped, dict-compressed, and template-encoded frames are decoded through the
+  same read path used by TreeDB value-log readers
+- output records are JSONL with `{key,val,encoding}` plus replay metadata; both
+  `key` and `val` are base64 so the file can be consumed directly by
+  `vlog_dict_realdata`
+- use this mixed replay loop before narrower outer-leaf-only sweeps when the
+  question is overall write-path behavior rather than isolated leaf-page codec
+
+Example mixed write-path bench:
+
+```bash
+GOWORK=off go run ./TreeDB/cmd/vlog_dict_realdata \
+  -input /tmp/vlog_replay_<run-id>.jsonl \
+  -input-encoding auto \
+  -train 15000 \
+  -eval 5000 \
+  -cap 0 \
+  -bench-kv \
+  -bench-mode wal_off \
+  -bench-compression-mode auto \
+  -bench-auto-policy size \
+  -bench-dict-class-mode split_outer_leaf \
+  -bench-block-codec snappy \
+  -bench-raw-mib 64 \
+  -bench-batch 1024 \
+  -bench-workers 1 \
+  -bench-key-mode dataset \
+  -bench-pointer-threshold 1
+```
 ## Stage 3: Full `run_celestia` A/B Confirmation
 
 Only promote candidates that pass Stage 1 and Stage 2.
