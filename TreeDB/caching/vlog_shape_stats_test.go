@@ -99,11 +99,17 @@ func TestStats_ExportsValueLogDictClassKeys(t *testing.T) {
 	t.Cleanup(func() { _ = cdb.Close() })
 
 	cdb.valueLogDictLastAppliedDictIDByClass[vlogDictClassSingleValue].Store(11)
+	cdb.valueLogDictLastPublishUnixNanoByClass[vlogDictClassSingleValue].Store(101)
+	cdb.valueLogDictLastPublishFramesTotalByClass[vlogDictClassSingleValue].Store(29)
+	cdb.valueLogDictPublishCountByClass[vlogDictClassSingleValue].Store(1)
 	cdb.valueLogDictCurrentKByClass[vlogDictClassSingleValue].Store(7)
 	cdb.dictCurrentCachedByClass[vlogDictClassSingleValue].Store(17)
 	cdb.valueLogDictWriteSelectedByClass[vlogDictClassSingleValue].Store(3)
 	cdb.valueLogDictWriteFinalByClass[vlogDictClassSingleValue].Store(2)
 	cdb.valueLogDictLastAppliedDictIDByClass[vlogDictClassOuterLeaf].Store(22)
+	cdb.valueLogDictLastPublishUnixNanoByClass[vlogDictClassOuterLeaf].Store(202)
+	cdb.valueLogDictLastPublishFramesTotalByClass[vlogDictClassOuterLeaf].Store(57)
+	cdb.valueLogDictPublishCountByClass[vlogDictClassOuterLeaf].Store(4)
 	cdb.valueLogDictCurrentKByClass[vlogDictClassOuterLeaf].Store(13)
 	cdb.dictCurrentCachedByClass[vlogDictClassOuterLeaf].Store(27)
 	cdb.valueLogDictWriteSelectedByClass[vlogDictClassOuterLeaf].Store(11)
@@ -122,6 +128,24 @@ func TestStats_ExportsValueLogDictClassKeys(t *testing.T) {
 	}
 	if got := stats["treedb.cache.vlog_dict.last_applied_dict_id.outer_leaf"]; got != "22" {
 		t.Fatalf("outer_leaf dict id=%q want 22", got)
+	}
+	if got := stats["treedb.cache.vlog_dict.last_publish_unix_nano.single_value"]; got != "101" {
+		t.Fatalf("single_value publish unix nano=%q want 101", got)
+	}
+	if got := stats["treedb.cache.vlog_dict.last_publish_frames_total.single_value"]; got != "29" {
+		t.Fatalf("single_value publish frames total=%q want 29", got)
+	}
+	if got := stats["treedb.cache.vlog_dict.publish_count.single_value"]; got != "1" {
+		t.Fatalf("single_value publish count=%q want 1", got)
+	}
+	if got := stats["treedb.cache.vlog_dict.last_publish_unix_nano.outer_leaf"]; got != "202" {
+		t.Fatalf("outer_leaf publish unix nano=%q want 202", got)
+	}
+	if got := stats["treedb.cache.vlog_dict.last_publish_frames_total.outer_leaf"]; got != "57" {
+		t.Fatalf("outer_leaf publish frames total=%q want 57", got)
+	}
+	if got := stats["treedb.cache.vlog_dict.publish_count.outer_leaf"]; got != "4" {
+		t.Fatalf("outer_leaf publish count=%q want 4", got)
 	}
 	if got := stats["treedb.cache.vlog_dict.current_k.outer_leaf"]; got != "13" {
 		t.Fatalf("outer_leaf current k=%q want 13", got)

@@ -309,6 +309,9 @@ def build_dict_summary(stats: dict[str, Any]) -> dict[str, Any]:
     for suffix in VLOG_DICT_CLASS_SUFFIXES:
         classes[suffix] = {
             "last_applied_dict_id": metric_int(stats, f"treedb.cache.vlog_dict.last_applied_dict_id.{suffix}"),
+            "last_publish_unix_nano": metric_int(stats, f"treedb.cache.vlog_dict.last_publish_unix_nano.{suffix}"),
+            "last_publish_frames_total": metric_int(stats, f"treedb.cache.vlog_dict.last_publish_frames_total.{suffix}"),
+            "publish_count": metric_int(stats, f"treedb.cache.vlog_dict.publish_count.{suffix}"),
             "current_k": metric_int(stats, f"treedb.cache.vlog_dict.current_k.{suffix}"),
             "current_cached_id": metric_int(stats, f"treedb.cache.vlog_dict.current_cached_id.{suffix}"),
             "write_selected": metric_int(stats, f"treedb.cache.vlog_dict.write_selected.{suffix}"),

@@ -5993,6 +5993,9 @@ type DB struct {
 	valueLogDictLastAppliedDictHashByClass    [vlogDictClassCount]atomic.Uint64
 	valueLogDictLastAppliedDictID             atomic.Uint64
 	valueLogDictLastPublishUnixNano           atomic.Int64
+	valueLogDictLastPublishUnixNanoByClass    [vlogDictClassCount]atomic.Int64
+	valueLogDictLastPublishFramesTotalByClass [vlogDictClassCount]atomic.Uint64
+	valueLogDictPublishCountByClass           [vlogDictClassCount]atomic.Uint64
 	valueLogDictLastKUpdateUnixNano           atomic.Int64
 	valueLogDictCurrentK                      atomic.Uint32
 	valueLogDictLastAppliedDictIDByClass      [vlogDictClassCount]atomic.Uint64
@@ -23117,6 +23120,9 @@ func (db *DB) Stats() map[string]string {
 	for class := vlogDictClass(0); class < vlogDictClass(vlogDictClassCount); class++ {
 		suffix := vlogDictClassSuffix(class)
 		stats["treedb.cache.vlog_dict.last_applied_dict_id."+suffix] = fmt.Sprintf("%d", db.valueLogDictLastAppliedDictIDByClass[class].Load())
+		stats["treedb.cache.vlog_dict.last_publish_unix_nano."+suffix] = fmt.Sprintf("%d", db.valueLogDictLastPublishUnixNanoByClass[class].Load())
+		stats["treedb.cache.vlog_dict.last_publish_frames_total."+suffix] = fmt.Sprintf("%d", db.valueLogDictLastPublishFramesTotalByClass[class].Load())
+		stats["treedb.cache.vlog_dict.publish_count."+suffix] = fmt.Sprintf("%d", db.valueLogDictPublishCountByClass[class].Load())
 		stats["treedb.cache.vlog_dict.current_k."+suffix] = fmt.Sprintf("%d", db.valueLogDictCurrentKByClass[class].Load())
 		stats["treedb.cache.vlog_dict.current_cached_id."+suffix] = fmt.Sprintf("%d", db.dictCurrentCachedByClass[class].Load())
 		stats["treedb.cache.vlog_dict.write_selected."+suffix] = fmt.Sprintf("%d", db.valueLogDictWriteSelectedByClass[class].Load())

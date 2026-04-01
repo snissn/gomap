@@ -1188,7 +1188,11 @@ func (db *DB) applyValueLogDictProfileForClass(class vlogDictClass) {
 		db.valueLogDictLastAppliedDictID.Store(dictID)
 		db.valueLogDictCurrentK.Store(uint32(profileK))
 	}
-	db.valueLogDictLastPublishUnixNano.Store(time.Now().UnixNano())
+	publishNow := time.Now().UnixNano()
+	db.valueLogDictLastPublishUnixNano.Store(publishNow)
+	db.valueLogDictLastPublishUnixNanoByClass[class].Store(publishNow)
+	db.valueLogDictLastPublishFramesTotalByClass[class].Store(db.valueLogDictFrames.total.Load())
+	db.valueLogDictPublishCountByClass[class].Add(1)
 
 	// Reset shared ratio tracking only when the publish updates the global current.
 	// In split mode, a class-specific publish should not wipe the shared window.
