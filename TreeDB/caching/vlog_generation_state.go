@@ -712,14 +712,63 @@ func prioritizeVlogGenerationRewriteLedger(ledger []backenddb.ValueLogRewritePla
 	return ordered
 }
 
-func vlogGenerationRewriteQueueChunk(ids []uint32, maxSegments int) []uint32 {
+func admitVlogGenerationRewriteIDs(ids []uint32, penalties map[uint32]valueLogGenerationRewritePenalty, maxRetried int) []uint32 {
+	if len(ids) == 0 || len(penalties) == 0 || maxRetried < 0 {
+		return append([]uint32(nil), ids...)
+	}
+	admitted := make([]uint32, 0, len(ids))
+	retried := 0
+	for _, id := range ids {
+		attempts, _ := vlogGenerationRewritePenaltySortKey(id, penalties)
+		if attempts <= 0 {
+			admitted = append(admitted, id)
+			continue
+		}
+		if retried >= maxRetried {
+			continue
+		}
+		retried++
+		admitted = append(admitted, id)
+	}
+	return admitted
+}
+
+func admitVlogGenerationRewriteLedger(ledger []backenddb.ValueLogRewritePlanSegment, penalties map[uint32]valueLogGenerationRewritePenalty, maxRetried int) []backenddb.ValueLogRewritePlanSegment {
+	if len(ledger) == 0 || len(penalties) == 0 || maxRetried < 0 {
+		return append([]backenddb.ValueLogRewritePlanSegment(nil), ledger...)
+	}
+	admitted := make([]backenddb.ValueLogRewritePlanSegment, 0, len(ledger))
+	retried := 0
+	for _, seg := range ledger {
+		attempts, _ := vlogGenerationRewritePenaltySortKey(seg.FileID, penalties)
+		if attempts <= 0 {
+			admitted = append(admitted, seg)
+			continue
+		}
+		if retried >= maxRetried {
+			continue
+		}
+		retried++
+		admitted = append(admitted, seg)
+	}
+	return admitted
+}
+
+func vlogGenerationRewriteQueueChunkWithPenalty(ids []uint32, penalties map[uint32]valueLogGenerationRewritePenalty, maxSegments int) []uint32 {
 	if len(ids) == 0 || maxSegments <= 0 {
 		return nil
+	}
+	if len(penalties) > 0 {
+		ids = admitVlogGenerationRewriteIDs(ids, penalties, vlogGenerationRewriteRetriedSelectionLimit)
 	}
 	if len(ids) > maxSegments {
 		ids = ids[:maxSegments]
 	}
 	return append([]uint32(nil), ids...)
+}
+
+func vlogGenerationRewriteQueueChunk(ids []uint32, maxSegments int) []uint32 {
+	return vlogGenerationRewriteQueueChunkWithPenalty(ids, nil, maxSegments)
 }
 
 func vlogGenerationRewriteLedgerChunkWithPenalty(ledger []backenddb.ValueLogRewritePlanSegment, penalties map[uint32]valueLogGenerationRewritePenalty, maxSegments int, budgetLiveBytes int64) []uint32 {
@@ -761,6 +810,9 @@ func vlogGenerationRewriteLedgerChunkWithPenalty(ledger []backenddb.ValueLogRewr
 		}
 		return a.FileID < b.FileID
 	})
+	if len(penalties) > 0 {
+		candidates = admitVlogGenerationRewriteLedger(candidates, penalties, vlogGenerationRewriteRetriedSelectionLimit)
+	}
 
 	ids := make([]uint32, 0, maxSegments)
 	remaining := budgetLiveBytes
