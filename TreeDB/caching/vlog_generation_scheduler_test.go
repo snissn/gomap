@@ -3560,6 +3560,65 @@ func TestVlogGenerationRewriteQueue_ChunkDebtCarriesPartialFileRemainder(t *test
 	}
 }
 
+func TestVlogGenerationRewriteQueue_ChunkDebtUsesChunkUnitsForDebtDrain(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+
+	dir := t.TempDir()
+
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	recorder := &rewriteBudgetRecordingBackend{
+		DB: backend,
+		rewriteResponse: backenddb.ValueLogRewriteStats{
+			BytesBefore:             512,
+			BytesAfter:              256,
+			RecordsCopied:           2,
+			SourceBytesProcessed:    256,
+			SourceSegmentsRequested: 1,
+			SourceChunksRequested:   2,
+		},
+	}
+
+	db, cleanup := openRewriteQueueTestDB(t, dir, recorder)
+	t.Cleanup(cleanup)
+
+	if err := db.setVlogGenerationRewriteChunkLedger([]backenddb.ValueLogRewritePlanChunk{
+		{FileID: 22, ChunkOffset: 0, BytesLive: 128, BytesTotal: 256, BytesStale: 128, StaleRatio: 0.5},
+		{FileID: 22, ChunkOffset: 16 << 20, BytesLive: 128, BytesTotal: 256, BytesStale: 128, StaleRatio: 0.5},
+	}, 16<<20); err != nil {
+		t.Fatalf("set chunk ledger: %v", err)
+	}
+
+	db.vlogGenerationRewriteBudgetTokensBytes.Store(1024)
+	db.vlogGenerationLastRewriteUnixNano.Store(time.Now().Add(-2 * vlogGenerationRewriteResumeMinInterval).UnixNano())
+	forceVlogMaintenanceIdle(db)
+	db.maybeRunVlogGenerationMaintenanceWithOptions(true, vlogGenerationMaintenanceOptions{
+		bypassQuiet:           true,
+		skipRetainedPruneWait: true,
+		skipCheckpoint:        true,
+		rewriteDebtDrain:      true,
+	})
+
+	opts, calls := recorder.recordedRewrite()
+	if calls != 1 {
+		t.Fatalf("rewrite calls=%d want=1", calls)
+	}
+	if got, want := opts.SourceFileIDs, []uint32{22}; len(got) != len(want) || got[0] != want[0] {
+		t.Fatalf("rewrite SourceFileIDs=%v want=%v", got, want)
+	}
+	if len(opts.SourceChunks) != 2 {
+		t.Fatalf("rewrite SourceChunks=%v want two chunks from one queued file", opts.SourceChunks)
+	}
+	if got := opts.SourceChunks[0].ChunkOffset; got != 0 {
+		t.Fatalf("rewrite SourceChunks[0].ChunkOffset=%d want 0", got)
+	}
+	if got := opts.SourceChunks[1].ChunkOffset; got != 16<<20 {
+		t.Fatalf("rewrite SourceChunks[1].ChunkOffset=%d want %d", got, 16<<20)
+	}
+}
+
 func TestVlogGenerationRewriteQueue_ConsumesMissingBoundedSourceIDs(t *testing.T) {
 	prepareDirectSchedulerTest(t)
 
@@ -8794,6 +8853,54 @@ func TestVlogGenerationStats_QueueCapHintRequiresFullCoverage(t *testing.T) {
 	}
 	if got := stats["treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.per_segment_budget_bytes"]; got != "256" {
 		t.Fatalf("rewrite queue run segment cap per-segment budget bytes=%q want 256", got)
+	}
+}
+
+func TestVlogGenerationStats_ChunkQueueUnitsDriveCapPreview(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	recorder := &rewriteBudgetRecordingBackend{DB: backend}
+	db, cleanup := openRewriteQueueTestDB(t, dir, recorder)
+	defer cleanup()
+
+	chunks := []backenddb.ValueLogRewritePlanChunk{
+		{FileID: 11, ChunkOffset: 0, BytesTotal: 512, BytesLive: 300, BytesStale: 212, StaleRatio: 212.0 / 512.0},
+		{FileID: 11, ChunkOffset: 16 << 20, BytesTotal: 512, BytesLive: 300, BytesStale: 212, StaleRatio: 212.0 / 512.0},
+	}
+	db.valueLogGenerationWarmTarget = 256
+	db.vlogGenerationRewriteBudgetTokensBytes.Store(600)
+	db.vlogGenerationRewriteQueueMu.Lock()
+	db.vlogGenerationRewriteQueueLoaded = true
+	db.vlogGenerationRewriteQueue = []uint32{11}
+	db.vlogGenerationRewriteLedger = nil
+	db.vlogGenerationRewriteChunkLedger = chunks
+	db.vlogGenerationRewriteChunkBytes = 16 << 20
+	db.vlogGenerationRewriteLedgerByFileID = buildVlogGenerationRewriteChunkLedgerByFileID(chunks)
+	db.vlogGenerationRewriteQueueMu.Unlock()
+
+	stats := db.Stats()
+	if got := stats["treedb.cache.vlog_generation.rewrite.queue_len"]; got != "1" {
+		t.Fatalf("rewrite queue len=%q want 1", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.queue_units"]; got != "2" {
+		t.Fatalf("rewrite queue units=%q want 2", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.queue_live_hint.bytes"]; got != "600" {
+		t.Fatalf("rewrite queue live hint bytes=%q want 600", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.queue_run_segment_cap"]; got != "2" {
+		t.Fatalf("rewrite queue run segment cap=%q want 2", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.limiter"]; got != "queue_len" {
+		t.Fatalf("rewrite queue run segment cap limiter=%q want queue_len", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.per_segment_budget_bytes"]; got != "300" {
+		t.Fatalf("rewrite queue run segment cap per-segment budget bytes=%q want 300", got)
 	}
 }
 

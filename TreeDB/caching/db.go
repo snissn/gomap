@@ -15916,11 +15916,26 @@ planned:
 					return nil
 				}
 			}
+			queuedChunkLedger := []backenddb.ValueLogRewritePlanChunk(nil)
+			queuedChunkBytes := int64(0)
+			queuedSegmentLedger := []backenddb.ValueLogRewritePlanSegment(nil)
 			hadRewriteQueue := len(rewriteQueue) > 0
+			rewriteQueueUnits := len(rewriteQueue)
 			rewriteMaxSegments := vlogGenerationRewriteResumeMaxSegments
 			if hadRewriteQueue {
+				queuedChunkLedger, queuedChunkBytes, err = db.currentVlogGenerationRewriteChunkLedger()
+				if err != nil {
+					return fmt.Errorf("load generational rewrite chunk ledger: %w", err)
+				}
+				if len(queuedChunkLedger) == 0 {
+					queuedSegmentLedger, err = db.currentVlogGenerationRewriteLedger()
+					if err != nil {
+						return fmt.Errorf("load generational rewrite ledger: %w", err)
+					}
+				}
+				rewriteQueueUnits = vlogGenerationRewriteQueueUnits(rewriteQueue, queuedSegmentLedger, queuedChunkLedger)
 				runDecision := db.vlogGenerationRewriteSegmentCapForRunWithHint(
-					len(rewriteQueue),
+					rewriteQueueUnits,
 					budgetTokens,
 					rewriteQueueBeforeLiveBytes,
 					rewriteQueueBeforeLiveKnown,
@@ -15954,6 +15969,7 @@ planned:
 					}
 				}
 				rewriteQueue = append([]uint32(nil), vlogGenerationRewriteChunkLedgerIDs(rewriteChunkPlan.SourceChunks)...)
+				rewriteQueueUnits = vlogGenerationRewriteQueueUnits(rewriteQueue, nil, rewriteChunkPlan.SourceChunks)
 				plannedQueueLiveBytes := rewriteChunkPlan.SelectedBytesLive
 				plannedQueueLiveKnown := len(rewriteChunkPlan.SourceChunks) > 0
 				if plannedQueueLiveBytes <= 0 && len(rewriteChunkPlan.SourceChunks) > 0 {
@@ -15967,7 +15983,7 @@ planned:
 				allowPlanDebtDrain := reason == vlogGenerationReasonRewriteResume && opts.rewriteDebtDrain
 				if allowPlanDebtDrain {
 					runDecision := db.vlogGenerationRewriteSegmentCapForRunWithHint(
-						len(rewriteQueue),
+						rewriteQueueUnits,
 						budgetTokens,
 						plannedQueueLiveBytes,
 						plannedQueueLiveKnown,
@@ -15977,7 +15993,7 @@ planned:
 					db.observeVlogGenerationRewriteSegmentCapDecision(runDecision, false)
 				} else {
 					freshDecision := db.vlogGenerationRewriteSegmentCapForFreshPlanWithHint(
-						len(rewriteQueue),
+						rewriteQueueUnits,
 						budgetTokens,
 						plannedQueueLiveBytes,
 						plannedQueueLiveKnown,
@@ -16044,6 +16060,7 @@ planned:
 					}
 				}
 				rewriteQueue = append([]uint32(nil), rewritePlan.SourceFileIDs...)
+				rewriteQueueUnits = vlogGenerationRewriteQueueUnits(rewriteQueue, rewritePlan.SelectedSegments, nil)
 				plannedQueueLiveBytes := int64(0)
 				plannedQueueLiveKnown := false
 				if len(rewritePlan.SelectedSegments) > 0 {
@@ -16061,7 +16078,7 @@ planned:
 				allowPlanDebtDrain := reason == vlogGenerationReasonRewriteResume && opts.rewriteDebtDrain
 				if allowPlanDebtDrain {
 					runDecision := db.vlogGenerationRewriteSegmentCapForRunWithHint(
-						len(rewriteQueue),
+						rewriteQueueUnits,
 						budgetTokens,
 						plannedQueueLiveBytes,
 						plannedQueueLiveKnown,
@@ -16071,7 +16088,7 @@ planned:
 					db.observeVlogGenerationRewriteSegmentCapDecision(runDecision, false)
 				} else {
 					freshDecision := db.vlogGenerationRewriteSegmentCapForFreshPlanWithHint(
-						len(rewriteQueue),
+						rewriteQueueUnits,
 						budgetTokens,
 						plannedQueueLiveBytes,
 						plannedQueueLiveKnown,
@@ -16120,7 +16137,7 @@ planned:
 					processedRewriteIDs = vlogGenerationRewriteQueueChunk(rewriteQueue, rewriteMaxSegments)
 				}
 			} else if len(rewriteQueue) > 0 {
-				chunkLedger, chunkBytes, _ := db.currentVlogGenerationRewriteChunkLedger()
+				chunkLedger, chunkBytes := queuedChunkLedger, queuedChunkBytes
 				if len(chunkLedger) > 0 {
 					queueMinStaleRatio := db.vlogGenerationRewriteMinStaleRatioForQueuedDebt(totalBytes, reason)
 					filteredChunks := filterVlogGenerationRewriteChunkLedgerByQuality(chunkLedger, queueMinStaleRatio, vlogGenerationRewriteMinSegmentStaleBytes)
@@ -16159,7 +16176,7 @@ planned:
 					processedRewriteIDs = vlogGenerationRewriteChunkLedgerIDs(processedRewriteChunks)
 					processedChunkBytes = chunkBytes
 				} else {
-					ledger, _ := db.currentVlogGenerationRewriteLedger()
+					ledger := queuedSegmentLedger
 					if len(ledger) > 0 {
 						queueMinStaleRatio := db.vlogGenerationRewriteMinStaleRatioForQueuedDebt(totalBytes, reason)
 						filteredLedger := filterVlogGenerationRewriteLedgerByQuality(ledger, queueMinStaleRatio, vlogGenerationRewriteMinSegmentStaleBytes)
@@ -22530,6 +22547,7 @@ func (db *DB) Stats() map[string]string {
 	rewriteQueueLiveHintIDsKnown := 0
 	db.vlogGenerationRewriteQueueMu.Lock()
 	rewriteQueueLen := len(db.vlogGenerationRewriteQueue)
+	rewriteQueueUnits := vlogGenerationRewriteQueueUnits(db.vlogGenerationRewriteQueue, db.vlogGenerationRewriteLedger, db.vlogGenerationRewriteChunkLedger)
 	rewriteQueueLoaded := db.vlogGenerationRewriteQueueLoaded
 	rewriteLedgerSegments := len(db.vlogGenerationRewriteLedger)
 	rewriteLedgerChunks := len(db.vlogGenerationRewriteChunkLedger)
@@ -22707,9 +22725,9 @@ func (db *DB) Stats() map[string]string {
 	rewriteQueueFreshPlanSegmentCapLimiter := vlogGenerationRewriteSegmentCapLimiterNone
 	rewriteQueueFreshPlanSegmentCapByBudget := 0
 	rewriteQueueFreshPlanSegmentCapPerSegmentBudgetBytes := int64(0)
-	if rewriteQueueLen > 0 {
+	if rewriteQueueUnits > 0 {
 		rewriteQueueRunDecision := db.vlogGenerationRewriteSegmentCapForRunWithHint(
-			rewriteQueueLen,
+			rewriteQueueUnits,
 			rewriteBudgetTokens,
 			rewriteQueueLiveBytesHint,
 			rewriteQueueLiveBytesHintKnown,
@@ -22720,7 +22738,7 @@ func (db *DB) Stats() map[string]string {
 		rewriteQueueRunSegmentCapByBudget = rewriteQueueRunDecision.byBudgetSegments
 		rewriteQueueRunSegmentCapPerSegmentBudgetBytes = rewriteQueueRunDecision.perSegmentBudget
 		rewriteQueueRunCheckpointDecision := db.vlogGenerationRewriteSegmentCapForRunWithHint(
-			rewriteQueueLen,
+			rewriteQueueUnits,
 			rewriteBudgetTokens,
 			rewriteQueueLiveBytesHint,
 			rewriteQueueLiveBytesHintKnown,
@@ -22731,7 +22749,7 @@ func (db *DB) Stats() map[string]string {
 		rewriteQueueRunSegmentCapByBudgetCheckpointKick = rewriteQueueRunCheckpointDecision.byBudgetSegments
 		rewriteQueueRunSegmentCapPerSegmentBudgetBytesCheckpointKick = rewriteQueueRunCheckpointDecision.perSegmentBudget
 		rewriteQueueFreshPlanDecision := db.vlogGenerationRewriteSegmentCapForFreshPlanWithHint(
-			rewriteQueueLen,
+			rewriteQueueUnits,
 			rewriteBudgetTokens,
 			rewriteQueueLiveBytesHint,
 			rewriteQueueLiveBytesHintKnown,
@@ -22975,6 +22993,7 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_generation.churn_bytes_total"] = fmt.Sprintf("%d", db.vlogGenerationChurnBytes.Load())
 	stats["treedb.cache.vlog_generation.churn_bytes_per_sec"] = fmt.Sprintf("%d", rewriteChurnBps)
 	stats["treedb.cache.vlog_generation.rewrite.queue_len"] = fmt.Sprintf("%d", rewriteQueueLen)
+	stats["treedb.cache.vlog_generation.rewrite.queue_units"] = fmt.Sprintf("%d", rewriteQueueUnits)
 	stats["treedb.cache.vlog_generation.rewrite.queue_loaded"] = fmt.Sprintf("%t", rewriteQueueLoaded)
 	stats["treedb.cache.vlog_generation.rewrite.queue_live_hint.known"] = fmt.Sprintf("%t", rewriteQueueLiveBytesHintKnown)
 	stats["treedb.cache.vlog_generation.rewrite.queue_live_hint.ids_present"] = fmt.Sprintf("%d", rewriteQueueLiveHintIDsPresent)

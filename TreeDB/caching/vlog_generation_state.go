@@ -145,6 +145,23 @@ func vlogGenerationRewriteChunkLedgerIDs(chunks []backenddb.ValueLogRewritePlanC
 	return ids
 }
 
+// Queue units represent the actual incremental rewrite work available to the
+// scheduler. For chunk debt, that is the number of chunks, not the deduped
+// source-file queue length.
+func vlogGenerationRewriteQueueUnits(queue []uint32, ledger []backenddb.ValueLogRewritePlanSegment, chunkLedger []backenddb.ValueLogRewritePlanChunk) int {
+	units := len(queue)
+	if units == 0 {
+		return 0
+	}
+	if len(ledger) > units {
+		units = len(ledger)
+	}
+	if len(chunkLedger) > units {
+		units = len(chunkLedger)
+	}
+	return units
+}
+
 func (db *DB) valueLogGenerationStateRootDir() string {
 	if db == nil || db.dir == "" {
 		return ""
