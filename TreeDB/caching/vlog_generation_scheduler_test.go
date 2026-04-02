@@ -3090,10 +3090,11 @@ func TestVlogGenerationRewriteQueue_PrefersUnpenalizedLedgerBeforeExpiredPenalty
 	if err := db.setVlogGenerationRewriteLedger([]backenddb.ValueLogRewritePlanSegment{
 		{FileID: 11, BytesLive: 64, BytesTotal: 128, BytesStale: 64, StaleRatio: 0.90},
 		{FileID: 22, BytesLive: 64, BytesTotal: 128, BytesStale: 64, StaleRatio: 0.50},
+		{FileID: 33, BytesLive: 64, BytesTotal: 128, BytesStale: 64, StaleRatio: 0.80},
 	}); err != nil {
 		t.Fatalf("set ledger: %v", err)
 	}
-	if err := db.recordVlogGenerationRewritePenalty([]uint32{11}, time.Now().Add(-time.Second), 64); err != nil {
+	if err := db.recordVlogGenerationRewritePenalty([]uint32{11, 33}, time.Now().Add(-time.Second), 64); err != nil {
 		t.Fatalf("record penalty: %v", err)
 	}
 
@@ -3106,8 +3107,49 @@ func TestVlogGenerationRewriteQueue_PrefersUnpenalizedLedgerBeforeExpiredPenalty
 	if calls != 1 {
 		t.Fatalf("rewrite calls=%d want=1", calls)
 	}
-	if len(opts.SourceFileIDs) == 0 || opts.SourceFileIDs[0] != 22 {
-		t.Fatalf("rewrite SourceFileIDs=%v want first=22", opts.SourceFileIDs)
+	if got, want := opts.SourceFileIDs, []uint32{22, 11}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("rewrite SourceFileIDs=%v want=%v", got, want)
+	}
+}
+
+func TestVlogGenerationRewriteQueue_AdmitsSingleExpiredPenaltyWhenAllDebtRetried(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+
+	dir := t.TempDir()
+
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	recorder := &rewriteBudgetRecordingBackend{
+		DB:              backend,
+		rewriteResponse: backenddb.ValueLogRewriteStats{BytesBefore: 64, BytesAfter: 32, RecordsCopied: 1},
+	}
+
+	db, cleanup := openRewriteQueueTestDB(t, dir, recorder)
+	t.Cleanup(cleanup)
+
+	if err := db.setVlogGenerationRewriteLedger([]backenddb.ValueLogRewritePlanSegment{
+		{FileID: 11, BytesLive: 64, BytesTotal: 128, BytesStale: 64, StaleRatio: 0.90},
+		{FileID: 22, BytesLive: 64, BytesTotal: 128, BytesStale: 64, StaleRatio: 0.80},
+	}); err != nil {
+		t.Fatalf("set ledger: %v", err)
+	}
+	if err := db.recordVlogGenerationRewritePenalty([]uint32{11, 22}, time.Now().Add(-time.Second), 64); err != nil {
+		t.Fatalf("record penalty: %v", err)
+	}
+
+	db.vlogGenerationRewriteBudgetTokensBytes.Store(1024)
+	db.vlogGenerationLastRewriteUnixNano.Store(time.Now().Add(-2 * vlogGenerationRewriteResumeMinInterval).UnixNano())
+	forceVlogMaintenanceIdle(db)
+	runRewriteQueueMaintenanceForTest(db)
+
+	opts, calls := recorder.recordedRewrite()
+	if calls != 1 {
+		t.Fatalf("rewrite calls=%d want=1", calls)
+	}
+	if got, want := opts.SourceFileIDs, []uint32{11}; len(got) != len(want) || got[0] != want[0] {
+		t.Fatalf("rewrite SourceFileIDs=%v want=%v", got, want)
 	}
 }
 
