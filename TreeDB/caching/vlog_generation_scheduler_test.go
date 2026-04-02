@@ -27,6 +27,101 @@ type blockingRewritePlannerBackend struct {
 	planCanceled  int
 }
 
+func rewriteChunkPlanForTest(plan backenddb.ValueLogRewritePlan, chunkBytes int64) backenddb.ValueLogRewriteChunkPlan {
+	if chunkBytes <= 0 {
+		chunkBytes = 16 << 20
+	}
+	chunkPlan := backenddb.ValueLogRewriteChunkPlan{
+		ChunkBytes:                chunkBytes,
+		BytesTotal:                plan.BytesTotal,
+		BytesLive:                 plan.BytesLive,
+		BytesStale:                plan.BytesStale,
+		AgeBlockedChunks:          plan.AgeBlockedSegments,
+		AgeBlockedBytesTotal:      plan.AgeBlockedBytesTotal,
+		AgeBlockedBytesLive:       plan.AgeBlockedBytesLive,
+		AgeBlockedBytesStale:      plan.AgeBlockedBytesStale,
+		AgeBlockedMinRemainingAge: plan.AgeBlockedMinRemainingAge,
+	}
+	if len(plan.SelectedSegments) > 0 {
+		chunkPlan.SourceChunks = make([]backenddb.ValueLogRewritePlanChunk, 0, len(plan.SelectedSegments))
+		for _, seg := range plan.SelectedSegments {
+			if seg.FileID == 0 {
+				continue
+			}
+			chunkPlan.SourceChunks = append(chunkPlan.SourceChunks, backenddb.ValueLogRewritePlanChunk{
+				FileID:     seg.FileID,
+				BytesTotal: seg.BytesTotal,
+				BytesLive:  seg.BytesLive,
+				BytesStale: seg.BytesStale,
+				StaleRatio: seg.StaleRatio,
+			})
+			chunkPlan.SelectedBytesTotal += seg.BytesTotal
+			chunkPlan.SelectedBytesLive += seg.BytesLive
+			chunkPlan.SelectedBytesStale += seg.BytesStale
+		}
+		chunkPlan.ChunksSelected = len(chunkPlan.SourceChunks)
+		chunkPlan.ChunksTotal = chunkPlan.ChunksSelected
+		return chunkPlan
+	}
+	if len(plan.SourceFileIDs) == 0 {
+		return chunkPlan
+	}
+	shareBytes := func(total int64, idx, count int) int64 {
+		if total <= 0 || count <= 0 {
+			return 0
+		}
+		base := total / int64(count)
+		rem := total % int64(count)
+		if int64(idx) < rem {
+			base++
+		}
+		return base
+	}
+	selectedTotal := plan.SelectedBytesTotal
+	selectedLive := plan.SelectedBytesLive
+	selectedStale := plan.SelectedBytesStale
+	if selectedTotal <= 0 {
+		selectedTotal = selectedLive + selectedStale
+	}
+	if selectedTotal <= 0 {
+		selectedTotal = int64(len(plan.SourceFileIDs))
+	}
+	if selectedLive <= 0 {
+		selectedLive = selectedTotal
+	}
+	chunkPlan.SourceChunks = make([]backenddb.ValueLogRewritePlanChunk, 0, len(plan.SourceFileIDs))
+	for i, id := range plan.SourceFileIDs {
+		if id == 0 {
+			continue
+		}
+		live := shareBytes(selectedLive, i, len(plan.SourceFileIDs))
+		stale := shareBytes(selectedStale, i, len(plan.SourceFileIDs))
+		total := shareBytes(selectedTotal, i, len(plan.SourceFileIDs))
+		if total < live+stale {
+			total = live + stale
+		}
+		if total <= 0 {
+			total = 1
+		}
+		chunk := backenddb.ValueLogRewritePlanChunk{
+			FileID:     id,
+			BytesTotal: total,
+			BytesLive:  live,
+			BytesStale: stale,
+		}
+		if total > 0 && stale > 0 {
+			chunk.StaleRatio = float64(stale) / float64(total)
+		}
+		chunkPlan.SourceChunks = append(chunkPlan.SourceChunks, chunk)
+		chunkPlan.SelectedBytesTotal += total
+		chunkPlan.SelectedBytesLive += live
+		chunkPlan.SelectedBytesStale += stale
+	}
+	chunkPlan.ChunksSelected = len(chunkPlan.SourceChunks)
+	chunkPlan.ChunksTotal = chunkPlan.ChunksSelected
+	return chunkPlan
+}
+
 func forceVlogMaintenanceIdle(db *DB) {
 	if db != nil {
 		idleAt := time.Now().Add(-2 * vlogGenerationMaintenanceQuietWindow)
@@ -117,6 +212,14 @@ func (b *blockingRewritePlannerBackend) ValueLogRewritePlan(ctx context.Context,
 	}
 }
 
+func (b *blockingRewritePlannerBackend) ValueLogRewriteChunkPlan(ctx context.Context, opts backenddb.ValueLogRewriteOnlineOptions, chunkBytes int64) (backenddb.ValueLogRewriteChunkPlan, error) {
+	plan, err := b.ValueLogRewritePlan(ctx, opts)
+	if err != nil {
+		return backenddb.ValueLogRewriteChunkPlan{}, err
+	}
+	return rewriteChunkPlanForTest(plan, chunkBytes), nil
+}
+
 func (b *blockingRewritePlannerBackend) ValueLogRewriteOnline(ctx context.Context, opts backenddb.ValueLogRewriteOnlineOptions) (backenddb.ValueLogRewriteStats, error) {
 	b.mu.Lock()
 	b.rewriteCalls++
@@ -168,6 +271,14 @@ func (b *timedRewritePlannerBackend) ValueLogRewritePlan(ctx context.Context, op
 	return backenddb.ValueLogRewritePlan{}, nil
 }
 
+func (b *timedRewritePlannerBackend) ValueLogRewriteChunkPlan(ctx context.Context, opts backenddb.ValueLogRewriteOnlineOptions, chunkBytes int64) (backenddb.ValueLogRewriteChunkPlan, error) {
+	plan, err := b.ValueLogRewritePlan(ctx, opts)
+	if err != nil {
+		return backenddb.ValueLogRewriteChunkPlan{}, err
+	}
+	return rewriteChunkPlanForTest(plan, chunkBytes), nil
+}
+
 func (b *timedRewritePlannerBackend) ValueLogRewriteOnline(ctx context.Context, opts backenddb.ValueLogRewriteOnlineOptions) (backenddb.ValueLogRewriteStats, error) {
 	return backenddb.ValueLogRewriteStats{}, nil
 }
@@ -192,6 +303,10 @@ type blockingRewriteOnlineBackend struct {
 
 func (b *blockingRewriteOnlineBackend) ValueLogRewritePlan(ctx context.Context, opts backenddb.ValueLogRewriteOnlineOptions) (backenddb.ValueLogRewritePlan, error) {
 	return b.planResponse, nil
+}
+
+func (b *blockingRewriteOnlineBackend) ValueLogRewriteChunkPlan(ctx context.Context, opts backenddb.ValueLogRewriteOnlineOptions, chunkBytes int64) (backenddb.ValueLogRewriteChunkPlan, error) {
+	return rewriteChunkPlanForTest(b.planResponse, chunkBytes), nil
 }
 
 func (b *blockingRewriteOnlineBackend) ValueLogRewriteOnline(ctx context.Context, opts backenddb.ValueLogRewriteOnlineOptions) (backenddb.ValueLogRewriteStats, error) {
@@ -1244,6 +1359,23 @@ func (b *rewriteBudgetRecordingBackend) ValueLogRewritePlan(ctx context.Context,
 	return plan, err
 }
 
+func (b *rewriteBudgetRecordingBackend) ValueLogRewriteChunkPlan(ctx context.Context, opts backenddb.ValueLogRewriteOnlineOptions, chunkBytes int64) (backenddb.ValueLogRewriteChunkPlan, error) {
+	b.mu.Lock()
+	b.planOpts = cloneRewriteOptsForTest(opts)
+	b.planCalls++
+	plan := b.planResponse
+	err := b.planErr
+	planFn := b.planFn
+	b.mu.Unlock()
+	if planFn != nil {
+		plan, err = planFn(opts)
+	}
+	if err != nil {
+		return backenddb.ValueLogRewriteChunkPlan{}, err
+	}
+	return rewriteChunkPlanForTest(plan, chunkBytes), nil
+}
+
 func (b *rewriteBudgetRecordingBackend) ValueLogRewriteOnline(ctx context.Context, opts backenddb.ValueLogRewriteOnlineOptions) (backenddb.ValueLogRewriteStats, error) {
 	b.mu.Lock()
 	b.rewriteOpts = cloneRewriteOptsForTest(opts)
@@ -1291,6 +1423,7 @@ func (b *rewriteBudgetRecordingBackend) recordedRewrite() (backenddb.ValueLogRew
 func cloneRewriteOptsForTest(opts backenddb.ValueLogRewriteOnlineOptions) backenddb.ValueLogRewriteOnlineOptions {
 	cloned := opts
 	cloned.SourceFileIDs = append([]uint32(nil), opts.SourceFileIDs...)
+	cloned.SourceChunks = append([]backenddb.ValueLogRewritePlanChunk(nil), opts.SourceChunks...)
 	cloned.ProtectedPaths = append([]string(nil), opts.ProtectedPaths...)
 	return cloned
 }
@@ -3128,6 +3261,85 @@ func TestVlogGenerationRewriteQueue_DebtDrainSelectsMultipleSegmentsAndBoundsExe
 		t.Fatalf("queue after bounded debt-drain rewrite=%v want=%v", got, want)
 	}
 }
+func TestVlogGenerationRewriteQueue_ChunkDebtCarriesPartialFileRemainder(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+
+	dir := t.TempDir()
+
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	recorder := &rewriteBudgetRecordingBackend{
+		DB: backend,
+		rewriteResponse: backenddb.ValueLogRewriteStats{
+			BytesBefore:                   256,
+			BytesAfter:                    129,
+			RecordsCopied:                 1,
+			SourceBytesProcessed:          128,
+			SourceSegmentsRequested:       1,
+			SourceChunksRequested:         1,
+			SourceSegmentsStillReferenced: 1,
+			SourceFileIDsStillReferenced:  []uint32{22},
+		},
+	}
+
+	db, cleanup := openRewriteQueueTestDB(t, dir, recorder)
+	t.Cleanup(cleanup)
+
+	if err := db.setVlogGenerationRewriteChunkLedger([]backenddb.ValueLogRewritePlanChunk{
+		{FileID: 22, ChunkOffset: 0, BytesLive: 128, BytesTotal: 256, BytesStale: 128, StaleRatio: 0.5},
+		{FileID: 22, ChunkOffset: 16 << 20, BytesLive: 128, BytesTotal: 256, BytesStale: 128, StaleRatio: 0.5},
+	}, 16<<20); err != nil {
+		t.Fatalf("set chunk ledger: %v", err)
+	}
+
+	db.vlogGenerationRewriteBudgetTokensBytes.Store(172)
+	db.vlogGenerationLastRewriteUnixNano.Store(time.Now().Add(-2 * vlogGenerationRewriteResumeMinInterval).UnixNano())
+	forceVlogMaintenanceIdle(db)
+	db.maybeRunVlogGenerationMaintenanceWithOptions(true, vlogGenerationMaintenanceOptions{
+		bypassQuiet:           true,
+		skipRetainedPruneWait: true,
+		skipCheckpoint:        true,
+		rewriteDebtDrain:      true,
+	})
+
+	opts, calls := recorder.recordedRewrite()
+	if calls != 1 {
+		t.Fatalf("rewrite calls=%d want=1", calls)
+	}
+	if got, want := opts.SourceFileIDs, []uint32{22}; len(got) != len(want) || got[0] != want[0] {
+		t.Fatalf("rewrite SourceFileIDs=%v want=%v", got, want)
+	}
+	if len(opts.SourceChunks) != 1 {
+		t.Fatalf("rewrite SourceChunks=%v want one chunk", opts.SourceChunks)
+	}
+	if got := opts.SourceChunks[0].ChunkOffset; got != 0 {
+		t.Fatalf("rewrite SourceChunks[0].ChunkOffset=%d want 0", got)
+	}
+	if got, want := opts.SourceChunkBytes, int64(16<<20); got != want {
+		t.Fatalf("rewrite SourceChunkBytes=%d want %d", got, want)
+	}
+
+	queue, err := db.currentVlogGenerationRewriteQueue()
+	if err != nil {
+		t.Fatalf("current queue: %v", err)
+	}
+	if got, want := queue, []uint32{22}; len(got) != len(want) || got[0] != want[0] {
+		t.Fatalf("queue after chunk rewrite=%v want=%v", got, want)
+	}
+	remainingChunks, chunkBytes, err := db.currentVlogGenerationRewriteChunkLedger()
+	if err != nil {
+		t.Fatalf("current chunk ledger: %v", err)
+	}
+	if chunkBytes != 16<<20 {
+		t.Fatalf("remaining chunkBytes=%d want %d", chunkBytes, 16<<20)
+	}
+	if len(remainingChunks) != 1 || remainingChunks[0].FileID != 22 || remainingChunks[0].ChunkOffset != 16<<20 {
+		t.Fatalf("remaining chunk ledger=%v want single chunk file=22 offset=%d", remainingChunks, 16<<20)
+	}
+}
+
 func TestVlogGenerationRewriteQueue_ConsumesMissingBoundedSourceIDs(t *testing.T) {
 	prepareDirectSchedulerTest(t)
 
