@@ -654,6 +654,48 @@ func stableVlogGenerationRewriteLedgerSegments(prev, planned []backenddb.ValueLo
 	return out
 }
 
+func mergeVlogGenerationRewriteIDs(primary, secondary []uint32) []uint32 {
+	if len(primary) == 0 && len(secondary) == 0 {
+		return nil
+	}
+	out := make([]uint32, 0, len(primary)+len(secondary))
+	seen := make(map[uint32]struct{}, len(primary)+len(secondary))
+	for _, ids := range [][]uint32{primary, secondary} {
+		for _, id := range ids {
+			if id == 0 {
+				continue
+			}
+			if _, ok := seen[id]; ok {
+				continue
+			}
+			seen[id] = struct{}{}
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
+func mergeVlogGenerationRewriteLedgerSegments(primary, secondary []backenddb.ValueLogRewritePlanSegment) []backenddb.ValueLogRewritePlanSegment {
+	if len(primary) == 0 && len(secondary) == 0 {
+		return nil
+	}
+	out := make([]backenddb.ValueLogRewritePlanSegment, 0, len(primary)+len(secondary))
+	seen := make(map[uint32]struct{}, len(primary)+len(secondary))
+	for _, ledger := range [][]backenddb.ValueLogRewritePlanSegment{primary, secondary} {
+		for _, seg := range ledger {
+			if seg.FileID == 0 || seg.BytesLive <= 0 {
+				continue
+			}
+			if _, ok := seen[seg.FileID]; ok {
+				continue
+			}
+			seen[seg.FileID] = struct{}{}
+			out = append(out, seg)
+		}
+	}
+	return out
+}
+
 func (db *DB) consumeVlogGenerationRewriteQueueChunk(processed []uint32) error {
 	if db == nil || len(processed) == 0 {
 		return nil

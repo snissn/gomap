@@ -15173,6 +15173,7 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 	rewriteQueueFollowupBlocked := len(rewriteQueue) > 0 && !stagePending && db.vlogGenerationRewriteQueueFollowupBlockedActive(now)
 	ageBlockedDue := db.vlogGenerationRewriteAgeBlockedDue(now)
 	stageConfirmDue := db.vlogGenerationRewriteStageConfirmDue(now)
+	freshPlanAllowed := len(rewriteQueue) == 0 || stagePending
 	if stagePending {
 		if !stageConfirmDue {
 			// Once debt is staged, do not let generic periodic or checkpoint-kick
@@ -15197,6 +15198,9 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 		return
 	}
 	hasExecutableRewriteQueue := len(rewriteQueueEligible) > 0 && !stagePending && !rewriteQueueFollowupBlocked
+	if !hasExecutableRewriteQueue {
+		freshPlanAllowed = true
+	}
 	if hasExecutableRewriteQueue && !vlogGenerationIsQueueSource(opts) && !vlogGenerationIsStageConfirmSource(opts) {
 		db.vlogGenerationRewriteQueuePending.Store(true)
 		db.vlogGenerationMaintenanceSkipPriority.Add(1)
@@ -15289,9 +15293,6 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 	if hasExecutableRewriteQueue {
 		shouldRewrite = true
 		reason = vlogGenerationReasonRewriteResume
-	} else if len(rewriteQueue) > 0 && !stagePending {
-		shouldRewrite = false
-		reason = vlogGenerationReasonNone
 	}
 	rewriteCancelBackoff := hasExecutableRewriteQueue && db.vlogGenerationRewriteCancelBackoffActive(now) && !allowCheckpointKickRetry
 	if rewriteCancelBackoff {
@@ -15329,7 +15330,7 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 	// Stale-ratio trigger: use a sparse rewrite plan (live-byte estimate) to
 	// detect when any segments are meaningfully stale. This avoids relying on
 	// reclaimable-WAL heuristics (which can be 0 in split-value-log mode).
-	if (len(rewriteQueue) == 0 || stagePending) && (!shouldRewrite || stagePending) && hasPlanner && db.valueLogRewriteTriggerRatioPPM > 0 {
+	if freshPlanAllowed && (!shouldRewrite || stagePending) && hasPlanner && db.valueLogRewriteTriggerRatioPPM > 0 {
 		if planBackoff {
 			goto planned
 		}
@@ -15518,7 +15519,7 @@ planned:
 			}
 		}
 	}
-	if len(rewriteQueue) == 0 && shouldRewrite && hasRewriter && !haveRewritePlan && hasPlanner {
+	if freshPlanAllowed && shouldRewrite && hasRewriter && !haveRewritePlan && hasPlanner {
 		maxSourceBytes := db.vlogGenerationRewriteBudgetTokensBytes.Load()
 		if maxSourceBytes < 0 {
 			maxSourceBytes = 0
@@ -15694,6 +15695,7 @@ planned:
 					return nil
 				}
 			}
+			hadAnyRewriteQueue := len(rewriteQueue) > 0
 			hadRewriteQueue := len(rewriteQueueEligible) > 0
 			rewriteMaxSegments := vlogGenerationRewriteResumeMaxSegments
 			if hadRewriteQueue {
@@ -15713,22 +15715,32 @@ planned:
 					prevLedger, _ := db.currentVlogGenerationRewriteLedger()
 					plannedLedgerForExec = stableVlogGenerationRewriteLedgerSegments(prevLedger, rewritePlan.SelectedSegments)
 				}
+				persistQueue := append([]uint32(nil), rewritePlan.SourceFileIDs...)
+				persistLedger := append([]backenddb.ValueLogRewritePlanSegment(nil), rewritePlan.SelectedSegments...)
+				if hadAnyRewriteQueue && !hadRewriteQueue {
+					if len(persistLedger) > 0 {
+						persistLedger = mergeVlogGenerationRewriteLedgerSegments(persistLedger, rewriteLedger)
+						persistQueue = vlogGenerationRewriteLedgerIDs(persistLedger)
+					} else {
+						persistQueue = mergeVlogGenerationRewriteIDs(persistQueue, rewriteQueue)
+					}
+				}
 				if len(rewritePlan.SelectedSegments) > 0 {
 					stageLedger := reason == vlogGenerationReasonStaleRatio && len(plannedLedgerForExec) == 0
 					stageObservedAt := int64(0)
 					if stageLedger {
 						stageObservedAt = now.UnixNano()
 					}
-					if err := db.setVlogGenerationRewriteLedgerWithStage(rewritePlan.SelectedSegments, stageLedger, stageObservedAt); err != nil {
+					if err := db.setVlogGenerationRewriteLedgerWithStage(persistLedger, stageLedger, stageObservedAt); err != nil {
 						return fmt.Errorf("persist generational rewrite ledger: %w", err)
 					}
 				} else {
-					if err := db.setVlogGenerationRewriteQueue(rewritePlan.SourceFileIDs); err != nil {
+					if err := db.setVlogGenerationRewriteQueue(persistQueue); err != nil {
 						return fmt.Errorf("persist generational rewrite queue: %w", err)
 					}
 				}
-				rewriteQueue = append([]uint32(nil), rewritePlan.SourceFileIDs...)
-				rewriteQueueEligible = append([]uint32(nil), rewriteQueue...)
+				rewriteQueue = append([]uint32(nil), persistQueue...)
+				rewriteQueueEligible = append([]uint32(nil), rewritePlan.SourceFileIDs...)
 				rewriteLedgerEligible = append([]backenddb.ValueLogRewritePlanSegment(nil), plannedLedgerForExec...)
 				plannedQueueLiveBytes := int64(0)
 				plannedQueueLiveKnown := false
