@@ -6571,6 +6571,9 @@ const (
 	// A bounded queued rewrite pass that copied data but produced no reclaim
 	// signal should cool down briefly before the dedicated queue runner resumes.
 	vlogGenerationRewriteQueuedFollowupCooldown = 30 * time.Second
+	// Even after cooldown expires, admit only a small amount of prior failed
+	// queue debt per pass so fresh debt keeps priority.
+	vlogGenerationRewriteRetriedSelectionLimit = 1
 	// Resumable queued rewrites are already segment-limited; let them finish
 	// under foreground activity with a bounded timeout instead of immediate
 	// foreground-cancel semantics.
@@ -15814,7 +15817,7 @@ planned:
 						return nil
 					}
 				} else {
-					processedRewriteIDs = vlogGenerationRewriteQueueChunk(rewriteQueueEligible, rewriteMaxSegments)
+					processedRewriteIDs = vlogGenerationRewriteQueueChunkWithPenalty(rewriteQueueEligible, rewritePenalties, rewriteMaxSegments)
 				}
 			} else if len(rewriteQueueEligible) > 0 {
 				ledger := append([]backenddb.ValueLogRewritePlanSegment(nil), rewriteLedger...)
@@ -15859,7 +15862,7 @@ planned:
 						return nil
 					}
 				} else {
-					processedRewriteIDs = vlogGenerationRewriteQueueChunk(rewriteQueueEligible, rewriteMaxSegments)
+					processedRewriteIDs = vlogGenerationRewriteQueueChunkWithPenalty(rewriteQueueEligible, rewritePenalties, rewriteMaxSegments)
 				}
 			}
 			if len(processedRewriteIDs) > 0 {
