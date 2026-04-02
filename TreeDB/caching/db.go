@@ -6339,6 +6339,7 @@ type DB struct {
 	vlogGenerationRewriteChunkLedger                             []backenddb.ValueLogRewritePlanChunk
 	vlogGenerationRewriteChunkBytes                              int64
 	vlogGenerationRewriteLedgerByFileID                          map[uint32]backenddb.ValueLogRewritePlanSegment
+	vlogGenerationRewriteHistory                                 map[uint32]valueLogGenerationRewriteHistory
 	vlogGenerationRewritePenalties                               map[uint32]valueLogGenerationRewritePenalty
 	vlogGenerationRewriteStagePending                            bool
 	vlogGenerationRewriteStageObservedUnixNano                   int64
@@ -14577,7 +14578,7 @@ func (db *DB) filterVlogGenerationRewritePlanPenalties(plan backenddb.ValueLogRe
 	if !changed {
 		return filtered, nil
 	}
-	if err := saveValueLogGenerationRewriteState(db.valueLogGenerationStatePath(), db.vlogGenerationRewriteQueue, db.vlogGenerationRewriteLedger, db.vlogGenerationRewriteChunkLedger, db.vlogGenerationRewriteChunkBytes, db.vlogGenerationRewritePenalties, db.vlogGenerationRewriteStagePending, db.vlogGenerationRewriteStageObservedUnixNano); err != nil {
+	if err := saveValueLogGenerationRewriteState(db.valueLogGenerationStatePath(), db.vlogGenerationRewriteQueue, db.vlogGenerationRewriteLedger, db.vlogGenerationRewriteChunkLedger, db.vlogGenerationRewriteChunkBytes, db.vlogGenerationRewriteHistory, db.vlogGenerationRewritePenalties, db.vlogGenerationRewriteStagePending, db.vlogGenerationRewriteStageObservedUnixNano); err != nil {
 		return backenddb.ValueLogRewritePlan{}, err
 	}
 	return filtered, nil
@@ -15371,8 +15372,8 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 	if len(rewriteQueue) > 0 && !stagePending && len(rewritePenalties) > 0 {
 		rewriteQueueEligible = filterVlogGenerationRewriteIDsByPenalty(rewriteQueue, rewritePenalties, now)
 		rewriteLedgerEligible = filterVlogGenerationRewriteLedgerByPenalty(rewriteLedger, rewritePenalties, now)
-		rewriteQueueEligible = prioritizeVlogGenerationRewriteIDs(rewriteQueueEligible, rewritePenalties)
-		rewriteLedgerEligible = prioritizeVlogGenerationRewriteLedger(rewriteLedgerEligible, rewritePenalties)
+		rewriteQueueEligible = prioritizeVlogGenerationRewriteIDs(rewriteQueueEligible, db.vlogGenerationRewriteHistory, rewritePenalties)
+		rewriteLedgerEligible = prioritizeVlogGenerationRewriteLedger(rewriteLedgerEligible, db.vlogGenerationRewriteHistory, rewritePenalties)
 	}
 	rewriteQueueFollowupBlocked := len(rewriteQueue) > 0 && !stagePending && db.vlogGenerationRewriteQueueFollowupBlockedActive(now)
 	ageBlockedDue := db.vlogGenerationRewriteAgeBlockedDue(now)
@@ -16212,7 +16213,7 @@ planned:
 						chunkBudgetTokens = 0
 					}
 					if hadRewriteQueue {
-						processedRewriteIDs = vlogGenerationRewriteLedgerChunkWithPenalty(plannedLedgerForExec, rewritePenalties, rewriteMaxSegments, chunkBudgetTokens)
+						processedRewriteIDs = vlogGenerationRewriteLedgerChunkWithPenalty(plannedLedgerForExec, db.vlogGenerationRewriteHistory, rewritePenalties, rewriteMaxSegments, chunkBudgetTokens)
 					} else {
 						processedRewriteIDs = vlogGenerationRewriteLedgerChunk(plannedLedgerForExec, rewriteMaxSegments, chunkBudgetTokens)
 					}
@@ -16250,8 +16251,8 @@ planned:
 						rewriteLedger = synthesizeVlogGenerationRewriteLedgerFromChunks(filteredChunks)
 						rewriteQueueEligible = filterVlogGenerationRewriteIDsByPenalty(rewriteQueue, rewritePenalties, now)
 						rewriteLedgerEligible = filterVlogGenerationRewriteLedgerByPenalty(rewriteLedger, rewritePenalties, now)
-						rewriteQueueEligible = prioritizeVlogGenerationRewriteIDs(rewriteQueueEligible, rewritePenalties)
-						rewriteLedgerEligible = prioritizeVlogGenerationRewriteLedger(rewriteLedgerEligible, rewritePenalties)
+						rewriteQueueEligible = prioritizeVlogGenerationRewriteIDs(rewriteQueueEligible, db.vlogGenerationRewriteHistory, rewritePenalties)
+						rewriteLedgerEligible = prioritizeVlogGenerationRewriteLedger(rewriteLedgerEligible, db.vlogGenerationRewriteHistory, rewritePenalties)
 						db.debugVlogMaintf(
 							"rewrite_chunk_queue_quality_prune dropped=%d remaining=%d min_ratio=%.6f min_stale_bytes=%d",
 							dropped,
@@ -16299,8 +16300,8 @@ planned:
 							ledger = filteredLedger
 							rewriteQueueEligible = filterVlogGenerationRewriteIDsByPenalty(rewriteQueue, rewritePenalties, now)
 							rewriteLedgerEligible = filterVlogGenerationRewriteLedgerByPenalty(filteredLedger, rewritePenalties, now)
-							rewriteQueueEligible = prioritizeVlogGenerationRewriteIDs(rewriteQueueEligible, rewritePenalties)
-							rewriteLedgerEligible = prioritizeVlogGenerationRewriteLedger(rewriteLedgerEligible, rewritePenalties)
+							rewriteQueueEligible = prioritizeVlogGenerationRewriteIDs(rewriteQueueEligible, db.vlogGenerationRewriteHistory, rewritePenalties)
+							rewriteLedgerEligible = prioritizeVlogGenerationRewriteLedger(rewriteLedgerEligible, db.vlogGenerationRewriteHistory, rewritePenalties)
 							db.debugVlogMaintf(
 								"rewrite_queue_quality_prune dropped=%d remaining=%d min_ratio=%.6f min_stale_bytes=%d",
 								dropped,
@@ -16309,7 +16310,7 @@ planned:
 								vlogGenerationRewriteMinSegmentStaleBytes,
 							)
 						}
-						processedRewriteIDs = vlogGenerationRewriteLedgerChunkWithPenalty(rewriteLedgerEligible, rewritePenalties, rewriteMaxSegments, 0)
+						processedRewriteIDs = vlogGenerationRewriteLedgerChunkWithPenalty(rewriteLedgerEligible, db.vlogGenerationRewriteHistory, rewritePenalties, rewriteMaxSegments, 0)
 						if len(processedRewriteIDs) == 0 {
 							if hadRewriteQueue {
 								db.vlogGenerationRewriteQueuedDebtSkipNoChunk.Add(1)
@@ -16616,6 +16617,15 @@ planned:
 				}
 				if processedLedgerStaleBytes > 0 {
 					db.vlogGenerationRewriteProcessedStaleBytes.Add(uint64(processedLedgerStaleBytes))
+				}
+			}
+			if queuedDebtExecuted {
+				reclaimedBytes := int64(0)
+				if effectiveBytesBefore > effectiveBytesAfter {
+					reclaimedBytes = effectiveBytesBefore - effectiveBytesAfter
+				}
+				if err := db.recordVlogGenerationRewriteHistoryWithLedger(processedRewriteIDs, rewriteLedgerEligible, int64(stats.SourceBytesUnreferenced), reclaimedBytes, time.Now()); err != nil {
+					return fmt.Errorf("record queued rewrite history: %w", err)
 				}
 			}
 			if effectiveBytesBefore > 0 && effectiveBytesAfter >= effectiveBytesBefore && !locallyEffectiveProcessedDebt {
