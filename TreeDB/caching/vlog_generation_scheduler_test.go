@@ -3209,6 +3209,29 @@ func TestVlogGenerationRewriteQueue_PrefersHistoricallyUsefulExpiredRetry(t *tes
 	}
 }
 
+func TestAdmitVlogGenerationRewriteLedger_DoesNotCountHistoricallyUsefulRetriesAgainstCap(t *testing.T) {
+	ledger := []backenddb.ValueLogRewritePlanSegment{
+		{FileID: 11, BytesLive: 64, BytesTotal: 128, BytesStale: 64, StaleRatio: 0.5},
+		{FileID: 22, BytesLive: 64, BytesTotal: 128, BytesStale: 64, StaleRatio: 0.5},
+		{FileID: 33, BytesLive: 64, BytesTotal: 128, BytesStale: 64, StaleRatio: 0.5},
+	}
+	history := map[uint32]valueLogGenerationRewriteHistory{
+		11: {LastProcessedLiveBytes: 64, LastSourceBytesUnreferenced: 32, LastReclaimedBytes: 16, LastStaleBytes: 64},
+		22: {LastProcessedLiveBytes: 64, LastSourceBytesUnreferenced: 16, LastReclaimedBytes: 8, LastStaleBytes: 64},
+	}
+	penalties := map[uint32]valueLogGenerationRewritePenalty{
+		11: {Attempts: 1, LastStaleBytes: 64},
+		22: {Attempts: 1, LastStaleBytes: 64},
+		33: {Attempts: 1, LastStaleBytes: 64},
+	}
+
+	ordered := prioritizeVlogGenerationRewriteLedger(ledger, history, penalties)
+	admitted := admitVlogGenerationRewriteLedger(ordered, history, penalties, 1)
+	if got, want := vlogGenerationRewriteLedgerIDs(admitted), []uint32{11, 22}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("admitted ids=%v want=%v", got, want)
+	}
+}
+
 func TestVlogGenerationRewriteQueue_AdmitsSingleExpiredPenaltyWhenAllDebtRetried(t *testing.T) {
 	prepareDirectSchedulerTest(t)
 

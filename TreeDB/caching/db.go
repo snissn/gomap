@@ -16234,7 +16234,7 @@ planned:
 						return nil
 					}
 				} else {
-					processedRewriteIDs = vlogGenerationRewriteQueueChunk(rewriteQueueEligible, rewriteMaxSegments)
+					processedRewriteIDs = vlogGenerationRewriteQueueChunkWithPenalty(rewriteQueueEligible, db.vlogGenerationRewriteHistory, rewritePenalties, rewriteMaxSegments)
 				}
 			} else if len(rewriteQueueEligible) > 0 {
 				chunkLedger, chunkBytes, _ := db.currentVlogGenerationRewriteChunkLedger()
@@ -16328,7 +16328,7 @@ planned:
 							return nil
 						}
 					} else {
-						processedRewriteIDs = vlogGenerationRewriteQueueChunk(rewriteQueueEligible, rewriteMaxSegments)
+						processedRewriteIDs = vlogGenerationRewriteQueueChunkWithPenalty(rewriteQueueEligible, db.vlogGenerationRewriteHistory, rewritePenalties, rewriteMaxSegments)
 					}
 				}
 			}
