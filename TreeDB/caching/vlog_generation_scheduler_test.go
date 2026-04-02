@@ -2842,6 +2842,7 @@ func TestVlogGenerationRewriteQueue_TracksQueuedDebtNoChunkSkips(t *testing.T) {
 		t.Fatalf("set ledger: %v", err)
 	}
 	db.vlogGenerationRewriteBudgetTokensBytes.Store(1024)
+	db.vlogGenerationRewriteBudgetLastUnixNano.Store(0)
 	db.vlogGenerationLastRewriteUnixNano.Store(time.Now().Add(-2 * vlogGenerationRewriteResumeMinInterval).UnixNano())
 	forceVlogMaintenanceIdle(db)
 	runRewriteQueueMaintenanceForTest(db)
@@ -2894,6 +2895,7 @@ func TestVlogGenerationRewriteQueue_LedgerOrdersByStaleRatio(t *testing.T) {
 	}
 
 	db.vlogGenerationRewriteBudgetTokensBytes.Store(1024)
+	db.vlogGenerationRewriteBudgetLastUnixNano.Store(0)
 	db.vlogGenerationLastRewriteUnixNano.Store(time.Now().Add(-2 * vlogGenerationRewriteResumeMinInterval).UnixNano())
 	forceVlogMaintenanceIdle(db)
 	runRewriteQueueMaintenanceForTest(db)
@@ -2964,6 +2966,7 @@ func TestVlogGenerationRewriteQueue_PrefersUnpenalizedLedgerBeforeExpiredPenalty
 	}
 
 	db.vlogGenerationRewriteBudgetTokensBytes.Store(1024)
+	db.vlogGenerationRewriteBudgetLastUnixNano.Store(0)
 	db.vlogGenerationLastRewriteUnixNano.Store(time.Now().Add(-2 * vlogGenerationRewriteResumeMinInterval).UnixNano())
 	forceVlogMaintenanceIdle(db)
 	runRewriteQueueMaintenanceForTest(db)
@@ -3013,6 +3016,7 @@ func TestVlogGenerationRewriteQueue_PrefersGreaterStaleImprovementAmongExpiredRe
 	}
 
 	db.vlogGenerationRewriteBudgetTokensBytes.Store(1024)
+	db.vlogGenerationRewriteBudgetLastUnixNano.Store(0)
 	db.vlogGenerationLastRewriteUnixNano.Store(time.Now().Add(-2 * vlogGenerationRewriteResumeMinInterval).UnixNano())
 	forceVlogMaintenanceIdle(db)
 	runRewriteQueueMaintenanceForTest(db)
@@ -3061,6 +3065,7 @@ func TestVlogGenerationRewriteQueue_PrefersHistoricallyUsefulExpiredRetry(t *tes
 	}
 
 	db.vlogGenerationRewriteBudgetTokensBytes.Store(1024)
+	db.vlogGenerationRewriteBudgetLastUnixNano.Store(0)
 	db.vlogGenerationLastRewriteUnixNano.Store(time.Now().Add(-2 * vlogGenerationRewriteResumeMinInterval).UnixNano())
 	forceVlogMaintenanceIdle(db)
 	runRewriteQueueMaintenanceForTest(db)
@@ -3125,6 +3130,7 @@ func TestVlogGenerationRewriteQueue_AdmitsSingleExpiredPenaltyWhenAllDebtRetried
 	}
 
 	db.vlogGenerationRewriteBudgetTokensBytes.Store(1024)
+	db.vlogGenerationRewriteBudgetLastUnixNano.Store(0)
 	db.vlogGenerationLastRewriteUnixNano.Store(time.Now().Add(-2 * vlogGenerationRewriteResumeMinInterval).UnixNano())
 	forceVlogMaintenanceIdle(db)
 	runRewriteQueueMaintenanceForTest(db)
@@ -3249,6 +3255,7 @@ func TestVlogGenerationRewriteQueue_CooledDebtDoesNotBlockFreshPlan(t *testing.T
 	}
 
 	db.vlogGenerationRewriteBudgetTokensBytes.Store(1024)
+	db.vlogGenerationRewriteBudgetLastUnixNano.Store(0)
 	db.vlogGenerationLastRewriteUnixNano.Store(time.Now().Add(-2 * vlogGenerationRewriteResumeMinInterval).UnixNano())
 	forceVlogMaintenanceIdle(db)
 	db.maybeRunVlogGenerationMaintenance(false)
@@ -3356,6 +3363,7 @@ func TestVlogGenerationRewriteQueue_AggressiveFlowBypassesCooledDebtAndReadmitsI
 	recorder.mu.Unlock()
 
 	db.vlogGenerationRewriteBudgetTokensBytes.Store(1024)
+	db.vlogGenerationRewriteBudgetLastUnixNano.Store(0)
 	db.vlogGenerationLastRewriteUnixNano.Store(time.Now().Add(-2 * vlogGenerationRewriteResumeMinInterval).UnixNano())
 	forceVlogMaintenanceIdle(db)
 	db.maybeRunVlogGenerationMaintenance(false)
@@ -3501,6 +3509,7 @@ func TestVlogGenerationRewriteQueue_FreshBypassThenExpiredRetryPrefersImprovedSt
 	}
 
 	db.vlogGenerationRewriteBudgetTokensBytes.Store(1024)
+	db.vlogGenerationRewriteBudgetLastUnixNano.Store(0)
 	db.vlogGenerationLastRewriteUnixNano.Store(time.Now().Add(-2 * vlogGenerationRewriteResumeMinInterval).UnixNano())
 	forceVlogMaintenanceIdle(db)
 	db.maybeRunVlogGenerationMaintenance(false)
@@ -3627,6 +3636,7 @@ func TestVlogGenerationRewriteQueue_CooledDebtFreshLedgerMergesWithoutOverwrite(
 	}
 
 	db.vlogGenerationRewriteBudgetTokensBytes.Store(1024)
+	db.vlogGenerationRewriteBudgetLastUnixNano.Store(0)
 	db.vlogGenerationLastRewriteUnixNano.Store(time.Now().Add(-2 * vlogGenerationRewriteResumeMinInterval).UnixNano())
 	forceVlogMaintenanceIdle(db)
 	db.maybeRunVlogGenerationMaintenance(false)
@@ -3682,6 +3692,7 @@ func TestVlogGenerationRewriteQueue_PrunesZeroLiveLedgerBeforeResume(t *testing.
 	}
 
 	db.vlogGenerationRewriteBudgetTokensBytes.Store(1024)
+	db.vlogGenerationRewriteBudgetLastUnixNano.Store(0)
 	db.vlogGenerationLastRewriteUnixNano.Store(time.Now().Add(-2 * vlogGenerationRewriteResumeMinInterval).UnixNano())
 	forceVlogMaintenanceIdle(db)
 	runRewriteQueueMaintenanceForTest(db)
@@ -3731,6 +3742,7 @@ func TestVlogGenerationRewriteQueue_PrunesLowQualityLedgerBeforeResume(t *testin
 	}
 
 	db.vlogGenerationRewriteBudgetTokensBytes.Store(1024)
+	db.vlogGenerationRewriteBudgetLastUnixNano.Store(0)
 	db.vlogGenerationLastRewriteUnixNano.Store(time.Now().Add(-2 * vlogGenerationRewriteResumeMinInterval).UnixNano())
 	forceVlogMaintenanceIdle(db)
 	runRewriteQueueMaintenanceForTest(db)
@@ -3851,6 +3863,7 @@ func TestVlogGenerationRewriteQueue_KeepsStillReferencedSegmentQueuedWhenBounded
 	}
 
 	db.vlogGenerationRewriteBudgetTokensBytes.Store(1024)
+	db.vlogGenerationRewriteBudgetLastUnixNano.Store(0)
 	db.vlogGenerationLastRewriteUnixNano.Store(time.Now().Add(-2 * vlogGenerationRewriteResumeMinInterval).UnixNano())
 	forceVlogMaintenanceIdle(db)
 	runRewriteQueueMaintenanceForTest(db)
@@ -3960,6 +3973,7 @@ func TestVlogGenerationRewriteQueue_ConsumesMissingBoundedSourceIDs(t *testing.T
 	}
 
 	db.vlogGenerationRewriteBudgetTokensBytes.Store(1024)
+	db.vlogGenerationRewriteBudgetLastUnixNano.Store(0)
 	db.vlogGenerationLastRewriteUnixNano.Store(time.Now().Add(-2 * vlogGenerationRewriteResumeMinInterval).UnixNano())
 	forceVlogMaintenanceIdle(db)
 	runRewriteQueueMaintenanceForTest(db)
@@ -4028,6 +4042,7 @@ func TestVlogGenerationRewriteQueue_BoundedSegmentEventuallyDrainsWithoutReplann
 	}
 
 	db.vlogGenerationRewriteBudgetTokensBytes.Store(1024)
+	db.vlogGenerationRewriteBudgetLastUnixNano.Store(0)
 	db.vlogGenerationLastRewriteUnixNano.Store(time.Now().Add(-2 * vlogGenerationRewriteResumeMinInterval).UnixNano())
 	forceVlogMaintenanceIdle(db)
 	runRewriteQueueMaintenanceForTest(db)
@@ -4054,6 +4069,7 @@ func TestVlogGenerationRewriteQueue_BoundedSegmentEventuallyDrainsWithoutReplann
 	}
 
 	db.vlogGenerationRewriteBudgetTokensBytes.Store(1024)
+	db.vlogGenerationRewriteBudgetLastUnixNano.Store(0)
 	db.vlogGenerationLastRewriteUnixNano.Store(time.Now().Add(-2 * vlogGenerationRewriteResumeMinInterval).UnixNano())
 	forceVlogMaintenanceIdle(db)
 	runRewriteQueueMaintenanceForTest(db)
