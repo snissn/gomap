@@ -577,3 +577,71 @@ func selectRewriteSourceChunksWithStats(opts ValueLogRewriteOnlineOptions, files
 	}
 	return selected, stats
 }
+
+func hasExplicitRewriteChunks(opts ValueLogRewriteOnlineOptions) bool {
+	return len(opts.SourceChunks) > 0
+}
+
+func buildExplicitRewriteSourceChunkSet(chunks []ValueLogRewritePlanChunk, files map[uint32]*valuelog.File, chunkBytes int64) (map[valueLogChunkKey]ValueLogRewritePlanChunk, map[uint32]struct{}, int64) {
+	if len(chunks) == 0 || len(files) == 0 {
+		return nil, nil, 0
+	}
+	chunkBytes = normalizeValueLogRewriteChunkBytes(chunkBytes)
+	chunkSet := make(map[valueLogChunkKey]ValueLogRewritePlanChunk, len(chunks))
+	sourceIDs := make(map[uint32]struct{}, len(chunks))
+	requestedBytes := int64(0)
+	for _, chunk := range chunks {
+		if chunk.FileID == 0 {
+			continue
+		}
+		f := files[chunk.FileID]
+		if f == nil {
+			continue
+		}
+		totalBytes := chunk.BytesTotal
+		if totalBytes <= 0 {
+			size := fileSize(f)
+			if chunk.ChunkOffset < 0 || chunk.ChunkOffset >= size {
+				continue
+			}
+			totalBytes = chunkBytes
+			if remaining := size - chunk.ChunkOffset; remaining < totalBytes {
+				totalBytes = remaining
+			}
+		}
+		if totalBytes <= 0 {
+			continue
+		}
+		normalized := ValueLogRewritePlanChunk{
+			FileID:      chunk.FileID,
+			ChunkOffset: chunk.ChunkOffset,
+			BytesTotal:  totalBytes,
+			BytesLive:   chunk.BytesLive,
+			BytesStale:  chunk.BytesStale,
+			StaleRatio:  chunk.StaleRatio,
+		}
+		key := valueLogChunkKey{fileID: normalized.FileID, chunkOffset: normalized.ChunkOffset}
+		if _, dup := chunkSet[key]; dup {
+			continue
+		}
+		chunkSet[key] = normalized
+		sourceIDs[normalized.FileID] = struct{}{}
+		requestedBytes += totalBytes
+	}
+	if len(chunkSet) == 0 {
+		return nil, nil, 0
+	}
+	return chunkSet, sourceIDs, requestedBytes
+}
+
+func rewriteSourceChunkSelected(ptr page.ValuePtr, chunkSet map[valueLogChunkKey]ValueLogRewritePlanChunk, chunkBytes int64) (bool, error) {
+	if len(chunkSet) == 0 {
+		return true, nil
+	}
+	chunkOffset, err := valueLogChunkOffsetForPtr(ptr, chunkBytes)
+	if err != nil {
+		return false, err
+	}
+	_, ok := chunkSet[valueLogChunkKey{fileID: ptr.FileID, chunkOffset: chunkOffset}]
+	return ok, nil
+}
