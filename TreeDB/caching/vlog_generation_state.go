@@ -802,6 +802,41 @@ func vlogGenerationRewriteHistoryUsefulness(id uint32, history map[uint32]valueL
 	return ratioPPM, usefulBytes
 }
 
+func vlogGenerationRewriteHistoryClass(id uint32, history map[uint32]valueLogGenerationRewriteHistory) int {
+	if id == 0 || len(history) == 0 {
+		return 1
+	}
+	entry, ok := history[id]
+	if !ok {
+		return 1
+	}
+	usefulRatio, usefulBytes := vlogGenerationRewriteHistoryUsefulness(id, history)
+	if usefulRatio > 0 || usefulBytes > 0 {
+		return 0
+	}
+	if entry.LastAttemptUnixNano > 0 || entry.LastProcessedLiveBytes > 0 || entry.LastStaleBytes > 0 {
+		return 2
+	}
+	return 1
+}
+
+func vlogGenerationRewriteLedgerHistoryClass(seg backenddb.ValueLogRewritePlanSegment, history map[uint32]valueLogGenerationRewriteHistory, penalties map[uint32]valueLogGenerationRewritePenalty) int {
+	if seg.FileID == 0 {
+		return 1
+	}
+	usefulRatio, usefulBytes := vlogGenerationRewriteHistoryUsefulness(seg.FileID, history)
+	if usefulRatio > 0 || usefulBytes > 0 {
+		return 0
+	}
+	if vlogGenerationRewriteStaleDelta(seg, history, penalties) > 0 {
+		return 1
+	}
+	if _, ok := history[seg.FileID]; ok {
+		return 3
+	}
+	return 2
+}
+
 func vlogGenerationRewriteStaleDelta(seg backenddb.ValueLogRewritePlanSegment, history map[uint32]valueLogGenerationRewriteHistory, penalties map[uint32]valueLogGenerationRewritePenalty) int64 {
 	if seg.FileID == 0 {
 		return 0
@@ -837,15 +872,18 @@ func prioritizeVlogGenerationRewriteIDs(ids []uint32, history map[uint32]valueLo
 		if ai != bj {
 			return ai < bj
 		}
-		if ai > 0 && bj > 0 {
-			ar, au := vlogGenerationRewriteHistoryUsefulness(ordered[i], history)
-			br, bu := vlogGenerationRewriteHistoryUsefulness(ordered[j], history)
-			if ar != br {
-				return ar > br
-			}
-			if au != bu {
-				return au > bu
-			}
+		ac := vlogGenerationRewriteHistoryClass(ordered[i], history)
+		bc := vlogGenerationRewriteHistoryClass(ordered[j], history)
+		if ac != bc {
+			return ac < bc
+		}
+		ar, au := vlogGenerationRewriteHistoryUsefulness(ordered[i], history)
+		br, bu := vlogGenerationRewriteHistoryUsefulness(ordered[j], history)
+		if ar != br {
+			return ar > br
+		}
+		if au != bu {
+			return au > bu
 		}
 		if ag != bg {
 			return ag < bg
@@ -866,15 +904,18 @@ func prioritizeVlogGenerationRewriteLedger(ledger []backenddb.ValueLogRewritePla
 		if ai != bj {
 			return ai < bj
 		}
-		if ai > 0 && bj > 0 {
-			ar, au := vlogGenerationRewriteHistoryUsefulness(ordered[i].FileID, history)
-			br, bu := vlogGenerationRewriteHistoryUsefulness(ordered[j].FileID, history)
-			if ar != br {
-				return ar > br
-			}
-			if au != bu {
-				return au > bu
-			}
+		ac := vlogGenerationRewriteLedgerHistoryClass(ordered[i], history, penalties)
+		bc := vlogGenerationRewriteLedgerHistoryClass(ordered[j], history, penalties)
+		if ac != bc {
+			return ac < bc
+		}
+		ar, au := vlogGenerationRewriteHistoryUsefulness(ordered[i].FileID, history)
+		br, bu := vlogGenerationRewriteHistoryUsefulness(ordered[j].FileID, history)
+		if ar != br {
+			return ar > br
+		}
+		if au != bu {
+			return au > bu
 		}
 		ad := vlogGenerationRewriteStaleDelta(ordered[i], history, penalties)
 		bd := vlogGenerationRewriteStaleDelta(ordered[j], history, penalties)
@@ -1010,43 +1051,7 @@ func vlogGenerationRewriteLedgerChunkWithPenalty(ledger []backenddb.ValueLogRewr
 	if len(candidates) == 0 {
 		return nil
 	}
-	sort.SliceStable(candidates, func(i, j int) bool {
-		ai, ag := vlogGenerationRewritePenaltySortKey(candidates[i].FileID, penalties)
-		bj, bg := vlogGenerationRewritePenaltySortKey(candidates[j].FileID, penalties)
-		if ai != bj {
-			return ai < bj
-		}
-		if ai > 0 && bj > 0 {
-			ar, au := vlogGenerationRewriteHistoryUsefulness(candidates[i].FileID, history)
-			br, bu := vlogGenerationRewriteHistoryUsefulness(candidates[j].FileID, history)
-			if ar != br {
-				return ar > br
-			}
-			if au != bu {
-				return au > bu
-			}
-		}
-		ad := vlogGenerationRewriteStaleDelta(candidates[i], history, penalties)
-		bd := vlogGenerationRewriteStaleDelta(candidates[j], history, penalties)
-		if ad != bd {
-			return ad > bd
-		}
-		if ag != bg {
-			return ag < bg
-		}
-		a := candidates[i]
-		b := candidates[j]
-		if a.StaleRatio != b.StaleRatio {
-			return a.StaleRatio > b.StaleRatio
-		}
-		if a.BytesStale != b.BytesStale {
-			return a.BytesStale > b.BytesStale
-		}
-		if a.BytesTotal != b.BytesTotal {
-			return a.BytesTotal > b.BytesTotal
-		}
-		return a.FileID < b.FileID
-	})
+	candidates = prioritizeVlogGenerationRewriteLedger(candidates, history, penalties)
 	if len(penalties) > 0 {
 		candidates = admitVlogGenerationRewriteLedger(candidates, history, penalties, vlogGenerationRewriteRetriedSelectionLimit)
 	}

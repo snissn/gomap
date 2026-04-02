@@ -15369,9 +15369,11 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 	}
 	rewriteQueueEligible := append([]uint32(nil), rewriteQueue...)
 	rewriteLedgerEligible := append([]backenddb.ValueLogRewritePlanSegment(nil), rewriteLedger...)
-	if len(rewriteQueue) > 0 && !stagePending && len(rewritePenalties) > 0 {
-		rewriteQueueEligible = filterVlogGenerationRewriteIDsByPenalty(rewriteQueue, rewritePenalties, now)
-		rewriteLedgerEligible = filterVlogGenerationRewriteLedgerByPenalty(rewriteLedger, rewritePenalties, now)
+	if len(rewriteQueue) > 0 && !stagePending {
+		if len(rewritePenalties) > 0 {
+			rewriteQueueEligible = filterVlogGenerationRewriteIDsByPenalty(rewriteQueue, rewritePenalties, now)
+			rewriteLedgerEligible = filterVlogGenerationRewriteLedgerByPenalty(rewriteLedger, rewritePenalties, now)
+		}
 		rewriteQueueEligible = prioritizeVlogGenerationRewriteIDs(rewriteQueueEligible, db.vlogGenerationRewriteHistory, rewritePenalties)
 		rewriteLedgerEligible = prioritizeVlogGenerationRewriteLedger(rewriteLedgerEligible, db.vlogGenerationRewriteHistory, rewritePenalties)
 	}

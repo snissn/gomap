@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
 
 func TestLoadValueLogGenerationRewriteState_SkipsZeroFileID(t *testing.T) {
@@ -179,5 +181,40 @@ func TestLoadValueLogGenerationRewriteState_LoadsChunkLedger(t *testing.T) {
 	}
 	if !stagePending || stageObservedAt != 12345 {
 		t.Fatalf("stagePending=%t stageObservedAt=%d want true/12345", stagePending, stageObservedAt)
+	}
+}
+
+func TestPrioritizeVlogGenerationRewriteIDs_PrefersUsefulThenUnknownThenZeroYield(t *testing.T) {
+	ids := []uint32{11, 22, 33}
+	history := map[uint32]valueLogGenerationRewriteHistory{
+		11: {LastAttemptUnixNano: 1, LastProcessedLiveBytes: 64, LastStaleBytes: 64},
+		22: {LastAttemptUnixNano: 2, LastProcessedLiveBytes: 64, LastSourceBytesUnreferenced: 32, LastReclaimedBytes: 16, LastStaleBytes: 64},
+	}
+
+	got := prioritizeVlogGenerationRewriteIDs(ids, history, nil)
+	want := []uint32{22, 33, 11}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] || got[2] != want[2] {
+		t.Fatalf("prioritized ids=%v want=%v", got, want)
+	}
+}
+
+func TestPrioritizeVlogGenerationRewriteLedger_PrefersUsefulThenImprovedThenUnknownThenZeroYield(t *testing.T) {
+	ledger := []backenddb.ValueLogRewritePlanSegment{
+		{FileID: 11, BytesLive: 64, BytesTotal: 128, BytesStale: 64, StaleRatio: 0.5},
+		{FileID: 22, BytesLive: 64, BytesTotal: 128, BytesStale: 64, StaleRatio: 0.5},
+		{FileID: 33, BytesLive: 64, BytesTotal: 128, BytesStale: 96, StaleRatio: 0.75},
+		{FileID: 44, BytesLive: 64, BytesTotal: 128, BytesStale: 80, StaleRatio: 0.625},
+	}
+	history := map[uint32]valueLogGenerationRewriteHistory{
+		11: {LastAttemptUnixNano: 1, LastProcessedLiveBytes: 64, LastStaleBytes: 64},
+		22: {LastAttemptUnixNano: 2, LastProcessedLiveBytes: 64, LastSourceBytesUnreferenced: 32, LastReclaimedBytes: 16, LastStaleBytes: 64},
+		33: {LastAttemptUnixNano: 3, LastProcessedLiveBytes: 64, LastStaleBytes: 48},
+	}
+
+	got := prioritizeVlogGenerationRewriteLedger(ledger, history, nil)
+	gotIDs := vlogGenerationRewriteLedgerIDs(got)
+	want := []uint32{22, 33, 44, 11}
+	if len(gotIDs) != len(want) || gotIDs[0] != want[0] || gotIDs[1] != want[1] || gotIDs[2] != want[2] || gotIDs[3] != want[3] {
+		t.Fatalf("prioritized ledger ids=%v want=%v", gotIDs, want)
 	}
 }
