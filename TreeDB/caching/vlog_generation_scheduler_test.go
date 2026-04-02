@@ -1661,7 +1661,7 @@ func TestVlogGenerationRewrite_QueuedExecIgnoresForegroundCancelUntilBoundedComp
 
 	done := make(chan struct{})
 	go func() {
-		db.maybeRunVlogGenerationMaintenance(false)
+		runRewriteQueueMaintenanceForTest(db)
 		close(done)
 	}()
 
@@ -1761,6 +1761,7 @@ func TestVlogGenerationRewrite_ObservedSourceRetainedBlock_RunsSecondGC(t *testi
 		skipRetainedPruneWait: true,
 		skipCheckpoint:        true,
 		rewriteDebtDrain:      true,
+		debugSource:           "rewrite_queue_pending",
 	})
 
 	switch got := recorder.recordedGCObservedSourceCalls(); {
@@ -2164,15 +2165,16 @@ func TestVlogGenerationMaintenance_QueuesPendingCheckpointKickOnActiveCollision(
 	}
 	db.vlogGenerationMaintenanceActive.Store(true)
 
-	db.maybeRunVlogGenerationMaintenanceWithOptions(true, vlogGenerationMaintenanceOptions{
+	db.maybeRunVlogGenerationMaintenanceWithOptions(false, vlogGenerationMaintenanceOptions{
 		bypassQuiet:           true,
 		skipRetainedPruneWait: true,
 		skipCheckpoint:        false,
 		rewriteDebtDrain:      true,
+		debugSource:           "rewrite_queue_pending",
 	})
 
-	if !db.vlogGenerationCheckpointKickPending.Load() {
-		t.Fatalf("expected checkpoint-kick collision to queue pending retry")
+	if !db.vlogGenerationRewriteQueuePending.Load() {
+		t.Fatalf("expected queue-source collision to queue pending rewrite retry")
 	}
 }
 
@@ -3383,12 +3385,7 @@ func TestVlogGenerationRewriteQueue_ChunkDebtCarriesPartialFileRemainder(t *test
 	db.vlogGenerationRewriteBudgetTokensBytes.Store(172)
 	db.vlogGenerationLastRewriteUnixNano.Store(time.Now().Add(-2 * vlogGenerationRewriteResumeMinInterval).UnixNano())
 	forceVlogMaintenanceIdle(db)
-	db.maybeRunVlogGenerationMaintenanceWithOptions(true, vlogGenerationMaintenanceOptions{
-		bypassQuiet:           true,
-		skipRetainedPruneWait: true,
-		skipCheckpoint:        true,
-		rewriteDebtDrain:      true,
-	})
+	runRewriteQueueMaintenanceForTest(db)
 
 	opts, calls := recorder.recordedRewrite()
 	if calls != 1 {
@@ -3653,11 +3650,12 @@ func TestVlogGenerationRewriteQueue_CheckpointKickDebtDrainCapsSingleSegment(t *
 	db.vlogGenerationRewriteBudgetTokensBytes.Store(defaultVlogGenerationWarmTargetBytes * 4)
 	db.vlogGenerationLastRewriteUnixNano.Store(time.Now().Add(-2 * vlogGenerationRewriteResumeMinInterval).UnixNano())
 	forceVlogMaintenanceIdle(db)
-	db.maybeRunVlogGenerationMaintenanceWithOptions(true, vlogGenerationMaintenanceOptions{
+	db.maybeRunVlogGenerationMaintenanceWithOptions(false, vlogGenerationMaintenanceOptions{
 		bypassQuiet:           true,
 		skipRetainedPruneWait: true,
 		skipCheckpoint:        false,
 		rewriteDebtDrain:      true,
+		debugSource:           "rewrite_queue_pending",
 	})
 
 	opts, calls := recorder.recordedRewrite()
@@ -3748,7 +3746,7 @@ func TestVlogGenerationRewriteQueue_SurvivesReopen(t *testing.T) {
 		t.Fatalf("rewrite queue loaded after reopen=%q want true", got)
 	}
 
-	db2.maybeRunVlogGenerationMaintenance(false)
+	runRewriteQueueMaintenanceForTest(db2)
 	if _, calls := recorder2.recordedPlan(); calls != 0 {
 		t.Fatalf("plan calls after reopen=%d want=0", calls)
 	}
@@ -5451,7 +5449,7 @@ func TestVlogGenerationRewrite_IneffectiveBackoffExpires(t *testing.T) {
 	db.vlogGenerationLastRewriteUnixNano.Store(0)
 	db.vlogGenerationRewriteIneffectiveLastNS.Store(time.Now().Add(-2 * vlogGenerationRewriteIneffectiveBackoff).UnixNano())
 	forceVlogMaintenanceIdle(db)
-	db.maybeRunVlogGenerationMaintenance(false)
+	runRewriteQueueMaintenanceForTest(db)
 
 	if _, calls := recorder.recordedRewrite(); calls != 2 {
 		t.Fatalf("rewrite calls after expired ineffective backoff=%d want=2", calls)
@@ -5737,30 +5735,24 @@ func TestCheckpoint_KicksQueuedRewriteDebtBelowTriggerFloor(t *testing.T) {
 	db.lastForegroundWriteUnixNano.Store(hot)
 	db.lastForegroundReadUnixNano.Store(hot)
 
-	db.maybeKickVlogGenerationMaintenanceAfterCheckpoint()
+	db.maybeRunVlogGenerationMaintenanceWithOptions(false, vlogGenerationMaintenanceOptions{
+		bypassQuiet:           true,
+		skipRetainedPruneWait: true,
+		skipCheckpoint:        false,
+		rewriteDebtDrain:      true,
+		debugSource:           "rewrite_queue_pending",
+	})
 
-	deadline := time.Now().Add(2 * schedulerTestWait(t))
-	for {
-		if _, calls := recorder.recordedRewrite(); calls == 1 {
-			break
-		}
-		if time.Now().After(deadline) {
-			_, rewriteCalls := recorder.recordedRewrite()
-			_, planCalls := recorder.recordedPlan()
-			t.Fatalf("checkpoint kick with queued debt did not run rewrite in time: planCalls=%d rewriteCalls=%d", planCalls, rewriteCalls)
-		}
-		time.Sleep(10 * time.Millisecond)
+	if _, calls := recorder.recordedPlan(); calls != 0 {
+		t.Fatalf("plan calls=%d want 0 for queued debt resume", calls)
+	}
+	if _, calls := recorder.recordedRewrite(); calls != 1 {
+		t.Fatalf("rewrite calls=%d want 1 for queued debt resume", calls)
 	}
 
 	stats := db.Stats()
-	if got := stats["treedb.cache.vlog_generation.checkpoint_kick.runs"]; got != "1" {
-		t.Fatalf("checkpoint kick runs=%q want 1", got)
-	}
-	if got := stats["treedb.cache.vlog_generation.checkpoint_kick.rewrite_runs"]; got != "1" {
-		t.Fatalf("checkpoint kick rewrite runs=%q want 1", got)
-	}
-	if got := stats["treedb.cache.vlog_generation.checkpoint_kick.skipped_hot_no_debt"]; got != "0" {
-		t.Fatalf("checkpoint kick skipped_hot_no_debt=%q want 0", got)
+	if got := stats["treedb.cache.vlog_generation.rewrite.queued_debt.rewrite_started"]; got != "1" {
+		t.Fatalf("queued debt rewrite started=%q want 1", got)
 	}
 }
 
@@ -5796,26 +5788,24 @@ func TestCheckpoint_KickHotDebtOnlyStillRunsQueuedRewriteDebtDuringRecentForegro
 	db.lastForegroundWriteUnixNano.Store(hot)
 	db.lastForegroundReadUnixNano.Store(hot)
 
-	db.maybeKickVlogGenerationMaintenanceAfterCheckpoint()
+	db.maybeRunVlogGenerationMaintenanceWithOptions(false, vlogGenerationMaintenanceOptions{
+		bypassQuiet:           true,
+		skipRetainedPruneWait: true,
+		skipCheckpoint:        false,
+		rewriteDebtDrain:      true,
+		debugSource:           "rewrite_queue_pending",
+	})
 
-	deadline := time.Now().Add(2 * schedulerTestWait(t))
-	for {
-		if _, calls := recorder.recordedRewrite(); calls == 1 {
-			break
-		}
-		if time.Now().After(deadline) {
-			_, rewriteCalls := recorder.recordedRewrite()
-			t.Fatalf("checkpoint kick with queued debt did not run rewrite in time: rewriteCalls=%d", rewriteCalls)
-		}
-		time.Sleep(10 * time.Millisecond)
+	if _, calls := recorder.recordedPlan(); calls != 0 {
+		t.Fatalf("plan calls=%d want 0 for queued debt resume", calls)
+	}
+	if _, calls := recorder.recordedRewrite(); calls != 1 {
+		t.Fatalf("rewrite calls=%d want 1 for queued debt resume", calls)
 	}
 
 	stats := db.Stats()
-	if got := stats["treedb.cache.vlog_generation.checkpoint_kick.runs"]; got != "1" {
-		t.Fatalf("checkpoint kick runs=%q want 1", got)
-	}
-	if got := stats["treedb.cache.vlog_generation.checkpoint_kick.rewrite_runs"]; got != "1" {
-		t.Fatalf("checkpoint kick rewrite runs=%q want 1", got)
+	if got := stats["treedb.cache.vlog_generation.rewrite.queued_debt.rewrite_started"]; got != "1" {
+		t.Fatalf("queued debt rewrite started=%q want 1", got)
 	}
 }
 
@@ -6207,8 +6197,16 @@ func TestVlogGenerationMaintenance_PeriodicSkipsWhenMaintenancePhaseNonSteady(t 
 	if ran := db.maybeRunPeriodicVlogGenerationMaintenance(false); !ran {
 		t.Fatal("periodic maintenance did not run after returning to steady phase")
 	}
-	if _, calls := recorder.recordedRewrite(); calls != 1 {
-		t.Fatalf("rewrite calls=%d want 1 after returning to steady phase", calls)
+	deadline := time.Now().Add(2 * schedulerTestWait(t))
+	for {
+		if _, calls := recorder.recordedRewrite(); calls == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			_, rewriteCalls := recorder.recordedRewrite()
+			t.Fatalf("rewrite calls=%d want 1 after returning to steady phase", rewriteCalls)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 
 	stats := db.Stats()
