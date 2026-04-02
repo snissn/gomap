@@ -6329,6 +6329,8 @@ type DB struct {
 	vlogGenerationCheckpointKickHotNoDebtWakeRunning             atomic.Bool
 	vlogGenerationDeferredMaintenancePending                     atomic.Bool
 	vlogGenerationDeferredMaintenanceRunning                     atomic.Bool
+	vlogGenerationRewriteQueuePending                            atomic.Bool
+	vlogGenerationRewriteQueueRunning                            atomic.Bool
 	vlogGenerationRewriteStageWakeObservedNS                     atomic.Int64
 	vlogGenerationRewriteQueueMu                                 sync.Mutex
 	vlogGenerationCheckpointKickActive                           atomic.Bool
@@ -9273,6 +9275,7 @@ const (
 	vlogGenerationMaintenanceSourcePeriodic = iota
 	vlogGenerationMaintenanceSourceBypass
 	vlogGenerationMaintenanceSourceCheckpointPending
+	vlogGenerationMaintenanceSourceRewriteQueuePending
 	vlogGenerationMaintenanceSourceRewriteAgeBlocked
 	vlogGenerationMaintenanceSourceRewriteStageConfirm
 	vlogGenerationMaintenanceSourceOther
@@ -9288,6 +9291,8 @@ func vlogGenerationMaintenanceSourceIndex(source string) int {
 		return vlogGenerationMaintenanceSourceBypass
 	case "checkpoint_pending":
 		return vlogGenerationMaintenanceSourceCheckpointPending
+	case "rewrite_queue_pending":
+		return vlogGenerationMaintenanceSourceRewriteQueuePending
 	case "rewrite_age_blocked", "rewrite_age_blocked_exit":
 		return vlogGenerationMaintenanceSourceRewriteAgeBlocked
 	case "rewrite_stage_confirm", "rewrite_stage_confirm_exit":
@@ -9305,6 +9310,8 @@ func vlogGenerationMaintenanceSourceLabel(idx int) string {
 		return "bypass"
 	case vlogGenerationMaintenanceSourceCheckpointPending:
 		return "checkpoint_pending"
+	case vlogGenerationMaintenanceSourceRewriteQueuePending:
+		return "rewrite_queue_pending"
 	case vlogGenerationMaintenanceSourceRewriteAgeBlocked:
 		return "rewrite_age_blocked"
 	case vlogGenerationMaintenanceSourceRewriteStageConfirm:
@@ -14755,6 +14762,10 @@ func vlogGenerationIsStageConfirmSource(opts vlogGenerationMaintenanceOptions) b
 	return opts.debugSource == "rewrite_stage_confirm" || opts.debugSource == "rewrite_stage_confirm_exit"
 }
 
+func vlogGenerationIsQueueSource(opts vlogGenerationMaintenanceOptions) bool {
+	return opts.debugSource == "rewrite_queue_pending"
+}
+
 func vlogGenerationIsAgeBlockedSource(opts vlogGenerationMaintenanceOptions) bool {
 	return opts.debugSource == "rewrite_age_blocked" || opts.debugSource == "rewrite_age_blocked_exit"
 }
@@ -14811,6 +14822,55 @@ func (db *DB) schedulePendingVlogGenerationCheckpointKick() {
 			debugSource:      "checkpoint_pending",
 		})
 	}()
+}
+
+func (db *DB) startVlogGenerationRewriteQueueMaintenance(opts vlogGenerationMaintenanceOptions) {
+	if db == nil || db.closing.Load() {
+		return
+	}
+	db.vlogGenerationRewriteQueuePending.Store(true)
+	if !db.vlogGenerationRewriteQueueRunning.CompareAndSwap(false, true) {
+		return
+	}
+	db.wg.Add(1)
+	go func() {
+		defer db.wg.Done()
+		defer db.vlogGenerationRewriteQueueRunning.Store(false)
+		if db.closing.Load() {
+			return
+		}
+		for !db.closing.Load() {
+			if !db.vlogGenerationRewriteQueuePending.CompareAndSwap(true, false) {
+				return
+			}
+			rewriteQueue, qerr := db.currentVlogGenerationRewriteQueue()
+			stagePending, _, serr := db.currentVlogGenerationRewriteStage()
+			if qerr == nil && serr == nil && (len(rewriteQueue) == 0 || stagePending) {
+				continue
+			}
+			db.runVlogGenerationMaintenanceRetries(opts, vlogGenerationDeferredRetryWindow, true)
+		}
+	}()
+}
+
+func (db *DB) schedulePendingVlogGenerationRewriteQueue() {
+	if db == nil || db.closing.Load() {
+		return
+	}
+	if db.vlogGenerationDeferredMaintenanceDue(time.Now()) {
+		db.scheduleDueVlogGenerationDeferredMaintenance()
+		return
+	}
+	if !db.vlogGenerationRewriteQueuePending.Load() {
+		return
+	}
+	db.startVlogGenerationRewriteQueueMaintenance(vlogGenerationMaintenanceOptions{
+		bypassQuiet:           true,
+		skipRetainedPruneWait: true,
+		skipCheckpoint:        false,
+		rewriteDebtDrain:      true,
+		debugSource:           "rewrite_queue_pending",
+	})
 }
 
 func (db *DB) startVlogGenerationDeferredMaintenance(opts vlogGenerationMaintenanceOptions) {
@@ -14918,6 +14978,10 @@ func (db *DB) runVlogGenerationMaintenanceRetries(opts vlogGenerationMaintenance
 	deadline := time.Now().Add(retryWindow)
 	sleepDelay := 10 * time.Millisecond
 	preservePendingIntent := func() {
+		if vlogGenerationIsQueueSource(opts) {
+			db.vlogGenerationRewriteQueuePending.Store(true)
+			return
+		}
 		if !stopWhenAcquired || !opts.bypassQuiet || opts.skipCheckpoint {
 			return
 		}
@@ -15046,7 +15110,9 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 		// Checkpoint-kick retries are high-priority and quiet-window-bypassed by
 		// design. If they collide with an active pass, queue exactly one retry to
 		// run right after the active pass exits.
-		if opts.bypassQuiet && !opts.skipCheckpoint {
+		if vlogGenerationIsQueueSource(opts) {
+			db.vlogGenerationRewriteQueuePending.Store(true)
+		} else if opts.bypassQuiet && !opts.skipCheckpoint {
 			db.vlogGenerationCheckpointKickPending.Store(true)
 		}
 		if opts.debugSource != "" {
@@ -15144,6 +15210,7 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 		// scheduler active, requeue it immediately on exit instead of relying on
 		// the original retry goroutine to still be alive.
 		db.scheduleDueVlogGenerationDeferredMaintenance()
+		db.schedulePendingVlogGenerationRewriteQueue()
 		db.schedulePendingVlogGenerationCheckpointKick()
 	}()
 	now := time.Now()
@@ -15216,11 +15283,17 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 		db.vlogGenerationMaintenanceSkipAgeBlocked.Add(1)
 		return
 	}
+	hasExecutableRewriteQueue := len(rewriteQueue) > 0 && !stagePending
+	if hasExecutableRewriteQueue && !vlogGenerationIsQueueSource(opts) && !vlogGenerationIsStageConfirmSource(opts) {
+		db.vlogGenerationRewriteQueuePending.Store(true)
+		db.vlogGenerationMaintenanceSkipPriority.Add(1)
+		return
+	}
 	// Checkpoint-collision retries and timer-driven confirmation wakes should run
 	// ahead of generic periodic passes. This avoids repeated active-pass
 	// collisions where periodic maintenance keeps reacquiring the scheduler while
 	// the higher-priority retry is still trying to run.
-	if !opts.bypassQuiet && (db.vlogGenerationCheckpointKickPending.Load() || db.vlogGenerationDeferredMaintenancePending.Load()) {
+	if !opts.bypassQuiet && (db.vlogGenerationCheckpointKickPending.Load() || db.vlogGenerationDeferredMaintenancePending.Load() || db.vlogGenerationRewriteQueuePending.Load() || db.vlogGenerationRewriteQueueRunning.Load()) {
 		db.vlogGenerationMaintenanceSkipPriority.Add(1)
 		return
 	}
@@ -15298,7 +15371,6 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 	planner, hasPlanner := db.backend.(backendValueLogRewritePlanner)
 	chunkPlanner, hasChunkPlanner := db.backend.(backendValueLogRewriteChunkPlanner)
 	allowCheckpointKickBypass := opts.bypassQuiet && !opts.skipCheckpoint
-	hasExecutableRewriteQueue := len(rewriteQueue) > 0 && !stagePending
 	if hasExecutableRewriteQueue {
 		db.vlogGenerationRewriteQueuedDebtPasses.Add(1)
 	}
@@ -16159,6 +16231,9 @@ planned:
 			if err != nil {
 				db.debugVlogMaintf("rewrite_err reason=%s err=%v dur_ms=%.3f", vlogGenerationReasonString(reason), err, float64(rewriteDur.Microseconds())/1000)
 				queuedDebt := hadRewriteQueue && len(processedRewriteIDs) > 0
+				if queuedDebt {
+					db.vlogGenerationRewriteQueuePending.Store(true)
+				}
 				if errors.Is(err, context.Canceled) {
 					db.observeVlogGenerationRewriteCanceled(queuedDebt)
 					if len(processedRewriteIDs) > 0 {
@@ -16211,6 +16286,13 @@ planned:
 					if err := db.consumeVlogGenerationRewriteQueueChunk(removeRewriteIDs); err != nil {
 						return fmt.Errorf("consume generational rewrite queue: %w", err)
 					}
+				}
+				remainingQueue, queueErr := db.currentVlogGenerationRewriteQueue()
+				if queueErr != nil {
+					return fmt.Errorf("load generational rewrite queue after consume: %w", queueErr)
+				}
+				if len(remainingQueue) > 0 {
+					db.vlogGenerationRewriteQueuePending.Store(true)
 				}
 			}
 			if gcer, ok := db.backend.(backendValueLogGCer); ok {
@@ -22797,6 +22879,8 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_generation.scheduler_last_reason"] = vlogGenerationReasonString(db.vlogGenerationLastReason.Load())
 	stats["treedb.cache.vlog_generation.checkpoint_kick.active"] = fmt.Sprintf("%t", db.vlogGenerationCheckpointKickActive.Load())
 	stats["treedb.cache.vlog_generation.checkpoint_kick.pending"] = fmt.Sprintf("%t", db.vlogGenerationCheckpointKickPending.Load())
+	stats["treedb.cache.vlog_generation.rewrite.queue.pending"] = fmt.Sprintf("%t", db.vlogGenerationRewriteQueuePending.Load())
+	stats["treedb.cache.vlog_generation.rewrite.queue.running"] = fmt.Sprintf("%t", db.vlogGenerationRewriteQueueRunning.Load())
 	stats["treedb.cache.vlog_generation.checkpoint_kick.last_unix_nano"] = fmt.Sprintf("%d", db.vlogGenerationLastCheckpointKickUnixNano.Load())
 	stats["treedb.cache.vlog_generation.checkpoint_kick.runs"] = fmt.Sprintf("%d", db.vlogGenerationCheckpointKickRuns.Load())
 	stats["treedb.cache.vlog_generation.checkpoint_kick.rewrite_runs"] = fmt.Sprintf("%d", db.vlogGenerationCheckpointKickRewriteRuns.Load())
