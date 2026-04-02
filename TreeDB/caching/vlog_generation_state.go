@@ -844,7 +844,7 @@ func stableVlogGenerationRewriteLedgerChunksWithSegmentFallback(prevChunks []bac
 	return out
 }
 
-func (db *DB) consumeVlogGenerationRewriteChunkLedger(processed []backenddb.ValueLogRewritePlanChunk) error {
+func (db *DB) consumeVlogGenerationRewriteChunkLedger(processed []backenddb.ValueLogRewritePlanChunk, stats backenddb.ValueLogRewriteStats) error {
 	if db == nil || len(processed) == 0 {
 		return nil
 	}
@@ -866,10 +866,51 @@ func (db *DB) consumeVlogGenerationRewriteChunkLedger(processed []backenddb.Valu
 	if len(processedSet) == 0 {
 		return nil
 	}
+	useExplicitProgress := len(stats.SourceChunkProgress) > 0
+	progressByChunk := make(map[valueLogGenerationRewriteChunkKey]int64, len(stats.SourceChunkProgress))
+	for _, progress := range stats.SourceChunkProgress {
+		if progress.FileID == 0 || progress.BytesProcessed <= 0 {
+			continue
+		}
+		key := valueLogGenerationRewriteChunkKey{FileID: progress.FileID, ChunkOffset: progress.ChunkOffset}
+		progressByChunk[key] += progress.BytesProcessed
+	}
+	unreferencedIDs := make(map[uint32]struct{}, len(stats.SourceFileIDsUnreferenced))
+	for _, id := range stats.SourceFileIDsUnreferenced {
+		if id == 0 {
+			continue
+		}
+		unreferencedIDs[id] = struct{}{}
+	}
 	remainingChunks := make([]backenddb.ValueLogRewritePlanChunk, 0, len(db.vlogGenerationRewriteChunkLedger))
 	for _, chunk := range db.vlogGenerationRewriteChunkLedger {
-		if _, ok := processedSet[valueLogGenerationRewriteChunkKey{FileID: chunk.FileID, ChunkOffset: chunk.ChunkOffset}]; ok {
+		if _, ok := unreferencedIDs[chunk.FileID]; ok {
 			continue
+		}
+		key := valueLogGenerationRewriteChunkKey{FileID: chunk.FileID, ChunkOffset: chunk.ChunkOffset}
+		if processedBytes, ok := progressByChunk[key]; ok {
+			if processedBytes >= chunk.BytesLive {
+				continue
+			}
+			if processedBytes > 0 {
+				chunk.BytesLive -= processedBytes
+				chunk.BytesStale += processedBytes
+				if chunk.BytesTotal < chunk.BytesLive+chunk.BytesStale {
+					chunk.BytesTotal = chunk.BytesLive + chunk.BytesStale
+				}
+				if chunk.BytesTotal > 0 && chunk.BytesStale > 0 {
+					chunk.StaleRatio = float64(chunk.BytesStale) / float64(chunk.BytesTotal)
+				} else {
+					chunk.StaleRatio = 0
+				}
+			}
+			remainingChunks = append(remainingChunks, chunk)
+			continue
+		}
+		if !useExplicitProgress {
+			if _, ok := processedSet[key]; ok {
+				continue
+			}
 		}
 		remainingChunks = append(remainingChunks, chunk)
 	}

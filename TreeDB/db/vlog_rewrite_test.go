@@ -2684,6 +2684,71 @@ func TestValueLogRewriteOnline_MaxCopiedBytes_ProcessesExplicitSourceIncremental
 	}
 }
 
+func TestValueLogRewriteOnline_MaxCopiedBytes_TracksExplicitChunkProgress(t *testing.T) {
+	dir := t.TempDir()
+
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer closeNoErr(t, db)
+
+	ptrs := appendPointersInNewSegment(t, dir, 0, 1, 205_000, 2, func(i int) []byte {
+		return bytes.Repeat([]byte{byte('a' + i)}, 256)
+	})
+
+	b := db.NewBatch().(*Batch)
+	if err := b.SetPointer([]byte("k1"), ptrs[0]); err != nil {
+		t.Fatalf("set k1: %v", err)
+	}
+	if err := b.SetPointer([]byte("k2"), ptrs[1]); err != nil {
+		t.Fatalf("set k2: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("seed write: %v", err)
+	}
+	closeNoErr(t, b)
+
+	recordLen, err := db.valueLogRecordLengthForRewrite(ptrs[0])
+	if err != nil {
+		t.Fatalf("record length: %v", err)
+	}
+
+	stats, err := db.ValueLogRewriteOnline(context.Background(), ValueLogRewriteOnlineOptions{
+		SourceChunks: []ValueLogRewritePlanChunk{{
+			FileID:      ptrs[0].FileID,
+			ChunkOffset: 0,
+			BytesTotal:  1 << 20,
+		}},
+		SourceChunkBytes: 1 << 20,
+		BatchSize:        8,
+		MaxCopiedBytes:   int64(recordLen),
+	})
+	if err != nil {
+		t.Fatalf("ValueLogRewriteOnline: %v", err)
+	}
+	if stats.SourceChunksRequested != 1 {
+		t.Fatalf("source chunks requested=%d want 1", stats.SourceChunksRequested)
+	}
+	if stats.SourceBytesProcessed != int64(recordLen) {
+		t.Fatalf("source bytes processed=%d want %d", stats.SourceBytesProcessed, recordLen)
+	}
+	wantProgress := []ValueLogRewriteChunkProgress{{
+		FileID:         ptrs[0].FileID,
+		ChunkOffset:    0,
+		BytesProcessed: int64(recordLen),
+	}}
+	if !slices.Equal(stats.SourceChunkProgress, wantProgress) {
+		t.Fatalf("source chunk progress=%v want=%v", stats.SourceChunkProgress, wantProgress)
+	}
+	if !slices.Equal(stats.SourceFileIDsStillReferenced, []uint32{ptrs[0].FileID}) {
+		t.Fatalf("still referenced ids=%v want [%d]", stats.SourceFileIDsStillReferenced, ptrs[0].FileID)
+	}
+	if len(stats.SourceFileIDsUnreferenced) != 0 {
+		t.Fatalf("unreferenced ids=%v want empty", stats.SourceFileIDsUnreferenced)
+	}
+}
+
 func TestValueLogRewriteOnline_MaxCopiedBytes_DoesNotRunLeafRefRewriteWhenBudgetExhausted(t *testing.T) {
 	db, leafSourceIDs, cleanup := setupLeafRefRewriteBench(t, 768)
 	defer cleanup()

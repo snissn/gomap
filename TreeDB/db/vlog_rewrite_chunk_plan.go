@@ -30,6 +30,15 @@ type ValueLogRewritePlanChunk struct {
 	StaleRatio  float64
 }
 
+// ValueLogRewriteChunkProgress summarizes how much live payload from one
+// explicitly-selected source chunk was actually processed in a bounded rewrite
+// pass.
+type ValueLogRewriteChunkProgress struct {
+	FileID         uint32
+	ChunkOffset    int64
+	BytesProcessed int64
+}
+
 // ValueLogRewriteChunkPlan mirrors ValueLogRewritePlan, but at chunk granularity.
 // It is intended for future incremental rewrite scheduling work.
 type ValueLogRewriteChunkPlan struct {

@@ -3308,6 +3308,93 @@ func TestVlogGenerationRewriteQueue_DebtDrainSelectsMultipleSegmentsAndBoundsExe
 		t.Fatalf("queue after bounded debt-drain rewrite=%v want=%v", got, want)
 	}
 }
+func TestVlogGenerationRewriteQueue_ChunkDebtShrinksPartialChunkProgress(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+
+	dir := t.TempDir()
+
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	recorder := &rewriteBudgetRecordingBackend{
+		DB: backend,
+		rewriteResponse: backenddb.ValueLogRewriteStats{
+			BytesBefore:                   512,
+			BytesAfter:                    385,
+			RecordsCopied:                 1,
+			SourceBytesProcessed:          128,
+			SourceSegmentsRequested:       1,
+			SourceChunksRequested:         1,
+			SourceSegmentsStillReferenced: 1,
+			SourceFileIDsStillReferenced:  []uint32{22},
+			SourceChunkProgress: []backenddb.ValueLogRewriteChunkProgress{{
+				FileID:         22,
+				ChunkOffset:    0,
+				BytesProcessed: 128,
+			}},
+		},
+	}
+
+	db, cleanup := openRewriteQueueTestDB(t, dir, recorder)
+	t.Cleanup(cleanup)
+
+	if err := db.setVlogGenerationRewriteChunkLedger([]backenddb.ValueLogRewritePlanChunk{{
+		FileID:      22,
+		ChunkOffset: 0,
+		BytesLive:   256,
+		BytesTotal:  512,
+		BytesStale:  256,
+		StaleRatio:  0.5,
+	}}, 16<<20); err != nil {
+		t.Fatalf("set chunk ledger: %v", err)
+	}
+
+	db.vlogGenerationRewriteBudgetTokensBytes.Store(172)
+	db.vlogGenerationLastRewriteUnixNano.Store(time.Now().Add(-2 * vlogGenerationRewriteResumeMinInterval).UnixNano())
+	forceVlogMaintenanceIdle(db)
+	db.maybeRunVlogGenerationMaintenanceWithOptions(true, vlogGenerationMaintenanceOptions{
+		bypassQuiet:           true,
+		skipRetainedPruneWait: true,
+		skipCheckpoint:        true,
+		rewriteDebtDrain:      true,
+	})
+
+	if _, calls := recorder.recordedRewrite(); calls != 1 {
+		t.Fatalf("rewrite calls=%d want=1", calls)
+	}
+	queue, err := db.currentVlogGenerationRewriteQueue()
+	if err != nil {
+		t.Fatalf("current queue: %v", err)
+	}
+	if got, want := queue, []uint32{22}; len(got) != len(want) || got[0] != want[0] {
+		t.Fatalf("queue after chunk rewrite=%v want=%v", got, want)
+	}
+	remainingChunks, chunkBytes, err := db.currentVlogGenerationRewriteChunkLedger()
+	if err != nil {
+		t.Fatalf("current chunk ledger: %v", err)
+	}
+	if chunkBytes != 16<<20 {
+		t.Fatalf("remaining chunkBytes=%d want %d", chunkBytes, 16<<20)
+	}
+	if len(remainingChunks) != 1 {
+		t.Fatalf("remaining chunk ledger=%v want single chunk", remainingChunks)
+	}
+	remaining := remainingChunks[0]
+	if remaining.FileID != 22 || remaining.ChunkOffset != 0 {
+		t.Fatalf("remaining chunk=%v want file=22 offset=0", remaining)
+	}
+	if got, want := remaining.BytesLive, int64(128); got != want {
+		t.Fatalf("remaining chunk live=%d want %d", got, want)
+	}
+	if got, want := remaining.BytesStale, int64(384); got != want {
+		t.Fatalf("remaining chunk stale=%d want %d", got, want)
+	}
+	if got, want := remaining.StaleRatio, 0.75; got != want {
+		t.Fatalf("remaining chunk stale ratio=%f want %f", got, want)
+	}
+}
+
 func TestVlogGenerationRewriteQueue_ChunkDebtCarriesPartialFileRemainder(t *testing.T) {
 	prepareDirectSchedulerTest(t)
 
@@ -3328,6 +3415,11 @@ func TestVlogGenerationRewriteQueue_ChunkDebtCarriesPartialFileRemainder(t *test
 			SourceChunksRequested:         1,
 			SourceSegmentsStillReferenced: 1,
 			SourceFileIDsStillReferenced:  []uint32{22},
+			SourceChunkProgress: []backenddb.ValueLogRewriteChunkProgress{{
+				FileID:         22,
+				ChunkOffset:    0,
+				BytesProcessed: 128,
+			}},
 		},
 	}
 

@@ -92,6 +92,9 @@ type ValueLogRewriteStats struct {
 	// actually rewritten in this pass. When zero, the rewrite either copied
 	// nothing or ran without a per-pass source-byte bound.
 	SourceBytesProcessed int64
+	// SourceChunkProgress records how much live payload from each explicitly
+	// selected source chunk was actually processed in this pass.
+	SourceChunkProgress []ValueLogRewriteChunkProgress
 	// SourceFileIDsStillReferenced records which selected source segments
 	// remained referenced after cleanup.
 	SourceFileIDsStillReferenced []uint32
@@ -221,9 +224,11 @@ type rewriteSwap struct {
 }
 
 type rewriteCandidate struct {
-	key         []byte
-	oldPtr      page.ValuePtr
-	sourceBytes int64
+	key            []byte
+	oldPtr         page.ValuePtr
+	sourceBytes    int64
+	sourceChunkKey valueLogChunkKey
+	hasSourceChunk bool
 }
 
 type rewriteSourceSelectionStats struct {
@@ -232,6 +237,36 @@ type rewriteSourceSelectionStats struct {
 	ageBlockedBytesLive       int64
 	ageBlockedBytesStale      int64
 	ageBlockedMinRemainingAge time.Duration
+}
+
+func addValueLogRewriteChunkProgress(progress map[valueLogChunkKey]int64, key valueLogChunkKey, bytes int64) {
+	if progress == nil || key.fileID == 0 || bytes <= 0 {
+		return
+	}
+	progress[key] += bytes
+}
+
+func buildValueLogRewriteChunkProgress(progress map[valueLogChunkKey]int64) []ValueLogRewriteChunkProgress {
+	if len(progress) == 0 {
+		return nil
+	}
+	out := make([]ValueLogRewriteChunkProgress, 0, len(progress))
+	for key, bytes := range progress {
+		if key.fileID == 0 || bytes <= 0 {
+			continue
+		}
+		out = append(out, ValueLogRewriteChunkProgress{FileID: key.fileID, ChunkOffset: key.chunkOffset, BytesProcessed: bytes})
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].FileID != out[j].FileID {
+			return out[i].FileID < out[j].FileID
+		}
+		return out[i].ChunkOffset < out[j].ChunkOffset
+	})
+	return out
 }
 
 type rewriteRIDAllocator struct {
@@ -1308,18 +1343,22 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		stats.BytesBefore += fileSize(set.Files[id])
 	}
 	var (
-		sourceIDs          map[uint32]struct{}
-		sourceChunkSet     map[valueLogChunkKey]ValueLogRewritePlanChunk
-		sourceChunkBytes   int64
-		singleSourceID     uint32
-		restrictSource     bool
-		restrictSingleID   bool
-		sourceSegmentCount int
-		sourceSegmentBytes map[uint32]int64
+		sourceIDs           map[uint32]struct{}
+		sourceChunkSet      map[valueLogChunkKey]ValueLogRewritePlanChunk
+		sourceChunkBytes    int64
+		sourceChunkProgress map[valueLogChunkKey]int64
+		singleSourceID      uint32
+		restrictSource      bool
+		restrictSingleID    bool
+		sourceSegmentCount  int
+		sourceSegmentBytes  map[uint32]int64
 	)
 	if hasExplicitRewriteChunks(opts) {
 		sourceChunkBytes = normalizeValueLogRewriteChunkBytes(opts.SourceChunkBytes)
 		sourceChunkSet, sourceIDs, stats.SourceBytesRequested = buildExplicitRewriteSourceChunkSet(opts.SourceChunks, set.Files, sourceChunkBytes)
+		if len(sourceChunkSet) > 0 {
+			sourceChunkProgress = make(map[valueLogChunkKey]int64, len(sourceChunkSet))
+		}
 		restrictSource = true
 		sourceSegmentCount = len(sourceIDs)
 		stats.SourceSegmentsRequested = sourceSegmentCount
@@ -1522,6 +1561,9 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 			stats.ValueBytesCopied += int64(len(val))
 			if candidate.sourceBytes > 0 {
 				stats.SourceBytesProcessed += candidate.sourceBytes
+				if candidate.hasSourceChunk {
+					addValueLogRewriteChunkProgress(sourceChunkProgress, candidate.sourceChunkKey, candidate.sourceBytes)
+				}
 			}
 			// rewriteWriter appends monotonically by segment; IDs only change on
 			// rotate and never return to a prior segment.
@@ -1622,13 +1664,27 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 				break
 			}
 		}
+		sourceChunkKey := valueLogChunkKey{}
+		hasSourceChunk := false
+		if sourceChunkSet != nil {
+			chunkOffset, err := valueLogChunkOffsetForPtr(oldPtr, sourceChunkBytes)
+			if err != nil {
+				_ = it.Close()
+				closeRewriteSnapshot(&err, snap)
+				return stats, err
+			}
+			sourceChunkKey = valueLogChunkKey{fileID: oldPtr.FileID, chunkOffset: chunkOffset}
+			hasSourceChunk = true
+		}
 		keyStart := len(candidateKeyArena)
 		candidateKeyArena = append(candidateKeyArena, unsafeKey...)
 		key := candidateKeyArena[keyStart:len(candidateKeyArena):len(candidateKeyArena)]
 		candidates = append(candidates, rewriteCandidate{
-			key:         key,
-			oldPtr:      oldPtr,
-			sourceBytes: sourceBytes,
+			key:            key,
+			oldPtr:         oldPtr,
+			sourceBytes:    sourceBytes,
+			sourceChunkKey: sourceChunkKey,
+			hasSourceChunk: hasSourceChunk,
 		})
 		selectedSourceBytes += sourceBytes
 		if len(candidates) >= batchSize {
@@ -1665,7 +1721,7 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 				}
 			}
 			if maxCopiedBytes <= 0 || leafRefMaxCopiedBytes > 0 {
-				copied, copiedBytes, err := db.rewriteLeafRefsOnline(ctx, writer, ridAlloc, sourceIDs, sourceChunkSet, sourceChunkBytes, singleSourceID, restrictSingleID, leafRefMaxCopiedBytes, opts.SyncEachBatch)
+				copied, copiedBytes, err := db.rewriteLeafRefsOnline(ctx, writer, ridAlloc, sourceIDs, sourceChunkSet, sourceChunkBytes, sourceChunkProgress, singleSourceID, restrictSingleID, leafRefMaxCopiedBytes, opts.SyncEachBatch)
 				if err != nil {
 					return stats, err
 				}
@@ -1846,6 +1902,7 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		stats.SegmentsAfter = afterSegs
 		stats.BytesAfter = afterBytes
 	}
+	stats.SourceChunkProgress = buildValueLogRewriteChunkProgress(sourceChunkProgress)
 	if canceledErr != nil {
 		return stats, canceledErr
 	}
@@ -1867,11 +1924,12 @@ type leafRefRewriteCtx struct {
 	writer   *rewriteWriter
 	ridAlloc *rewriteRIDAllocator
 
-	sourceIDs        map[uint32]struct{}
-	sourceChunks     map[valueLogChunkKey]ValueLogRewritePlanChunk
-	sourceChunkBytes int64
-	singleSourceID   uint32
-	hasSingleID      bool
+	sourceIDs           map[uint32]struct{}
+	sourceChunks        map[valueLogChunkKey]ValueLogRewritePlanChunk
+	sourceChunkBytes    int64
+	sourceChunkProgress map[valueLogChunkKey]int64
+	singleSourceID      uint32
+	hasSingleID         bool
 
 	leafMap            map[uint64]uint64 // old leafref id -> new leafref id
 	leafRemapInline    [leafRefRewriteInlineRemapCap]leafRefRewriteRemap
@@ -2072,6 +2130,13 @@ func (c *leafRefRewriteCtx) rewriteNode(id uint64) (uint64, bool, error) {
 		c.storeLeafRemap(id, leafID)
 		c.copied++
 		c.copiedBytes += int64(len(leafPage))
+		if len(c.sourceChunkProgress) > 0 {
+			chunkOffset, err := valueLogChunkOffsetForPtr(ptr, c.sourceChunkBytes)
+			if err != nil {
+				return id, false, err
+			}
+			addValueLogRewriteChunkProgress(c.sourceChunkProgress, valueLogChunkKey{fileID: ptr.FileID, chunkOffset: chunkOffset}, int64(len(leafPage)))
+		}
 		return leafID, true, nil
 	}
 
@@ -2179,7 +2244,7 @@ func (c *leafRefRewriteCtx) rewriteNode(id uint64) (uint64, bool, error) {
 	}
 }
 
-func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, ridAlloc *rewriteRIDAllocator, sourceIDs map[uint32]struct{}, sourceChunks map[valueLogChunkKey]ValueLogRewritePlanChunk, sourceChunkBytes int64, singleSourceID uint32, hasSingleSourceID bool, maxCopiedBytes int64, sync bool) (copied int, copiedBytes int64, err error) {
+func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, ridAlloc *rewriteRIDAllocator, sourceIDs map[uint32]struct{}, sourceChunks map[valueLogChunkKey]ValueLogRewritePlanChunk, sourceChunkBytes int64, sourceChunkProgress map[valueLogChunkKey]int64, singleSourceID uint32, hasSingleSourceID bool, maxCopiedBytes int64, sync bool) (copied int, copiedBytes int64, err error) {
 	if db == nil {
 		return 0, 0, fmt.Errorf("missing db")
 	}
@@ -2238,19 +2303,20 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 	}()
 
 	leafCtx := &leafRefRewriteCtx{
-		ctx:              ctx,
-		db:               db,
-		pager:            idx.pager,
-		leafReader:       &snap.reader,
-		alloc:            tracker,
-		writer:           writer,
-		ridAlloc:         ridAlloc,
-		sourceIDs:        sourceIDs,
-		sourceChunks:     sourceChunks,
-		sourceChunkBytes: normalizeValueLogRewriteChunkBytes(sourceChunkBytes),
-		singleSourceID:   singleSourceID,
-		hasSingleID:      hasSingleSourceID,
-		maxCopiedBytes:   maxCopiedBytes,
+		ctx:                 ctx,
+		db:                  db,
+		pager:               idx.pager,
+		leafReader:          &snap.reader,
+		alloc:               tracker,
+		writer:              writer,
+		ridAlloc:            ridAlloc,
+		sourceIDs:           sourceIDs,
+		sourceChunks:        sourceChunks,
+		sourceChunkBytes:    normalizeValueLogRewriteChunkBytes(sourceChunkBytes),
+		sourceChunkProgress: sourceChunkProgress,
+		singleSourceID:      singleSourceID,
+		hasSingleID:         hasSingleSourceID,
+		maxCopiedBytes:      maxCopiedBytes,
 	}
 	if toer, ok := leafCtx.leafReader.(unsafeToReader); ok {
 		leafCtx.leafToer = toer

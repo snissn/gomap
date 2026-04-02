@@ -16278,7 +16278,7 @@ planned:
 			effectiveBytesAfter := int64(stats.BytesAfter)
 			gcBytesDeleted := int64(0)
 			if len(processedRewriteChunks) > 0 {
-				if err := db.consumeVlogGenerationRewriteChunkLedger(processedRewriteChunks); err != nil {
+				if err := db.consumeVlogGenerationRewriteChunkLedger(processedRewriteChunks, stats); err != nil {
 					return fmt.Errorf("consume generational rewrite chunk ledger: %w", err)
 				}
 			} else if len(processedRewriteIDs) > 0 {

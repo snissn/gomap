@@ -9,6 +9,10 @@ import (
 // ValueLogRewriteStats summarizes value-log rewrite compaction results.
 type ValueLogRewriteStats = treedbdb.ValueLogRewriteStats
 
+// ValueLogRewriteChunkProgress summarizes processed live bytes for one selected
+// source chunk during a bounded rewrite pass.
+type ValueLogRewriteChunkProgress = treedbdb.ValueLogRewriteChunkProgress
+
 // ValueLogRewriteOnlineOptions controls online rewrite batching behavior.
 type ValueLogRewriteOnlineOptions = treedbdb.ValueLogRewriteOnlineOptions
 
