@@ -14492,25 +14492,44 @@ func filterVlogGenerationRewriteLedgerByPenalty(segments []backenddb.ValueLogRew
 	return filtered
 }
 
-func filterVlogGenerationRewritePlanByPenalty(plan backenddb.ValueLogRewritePlan, penalties map[uint32]valueLogGenerationRewritePenalty, now time.Time) backenddb.ValueLogRewritePlan {
-	if len(plan.SourceFileIDs) == 0 || len(penalties) == 0 {
-		return plan
+func shouldReadmitPenalizedRewriteSegment(seg backenddb.ValueLogRewritePlanSegment, penalty valueLogGenerationRewritePenalty, now time.Time) bool {
+	if seg.FileID == 0 {
+		return false
 	}
+	if penalty.CooldownUntilUnixNano <= now.UnixNano() {
+		return true
+	}
+	if penalty.LastStaleBytes <= 0 {
+		return false
+	}
+	return seg.BytesStale > penalty.LastStaleBytes
+}
+
+func filterVlogGenerationRewritePlanByPenalty(plan backenddb.ValueLogRewritePlan, penalties map[uint32]valueLogGenerationRewritePenalty, now time.Time) (backenddb.ValueLogRewritePlan, []uint32) {
+	if len(plan.SourceFileIDs) == 0 || len(penalties) == 0 {
+		return plan, nil
+	}
+	selectedByID := buildVlogGenerationRewriteLedgerByFileID(plan.SelectedSegments)
 	allowed := make(map[uint32]struct{}, len(plan.SourceFileIDs))
 	filteredIDs := make([]uint32, 0, len(plan.SourceFileIDs))
+	readmitted := make([]uint32, 0, len(plan.SourceFileIDs))
 	for _, id := range plan.SourceFileIDs {
 		if id == 0 {
 			continue
 		}
 		penalty, ok := penalties[id]
 		if ok && penalty.CooldownUntilUnixNano > now.UnixNano() {
-			continue
+			seg, hasSeg := selectedByID[id]
+			if !hasSeg || !shouldReadmitPenalizedRewriteSegment(seg, penalty, now) {
+				continue
+			}
+			readmitted = append(readmitted, id)
 		}
 		allowed[id] = struct{}{}
 		filteredIDs = append(filteredIDs, id)
 	}
 	if len(filteredIDs) == len(plan.SourceFileIDs) {
-		return plan
+		return plan, readmitted
 	}
 	plan.SourceFileIDs = filteredIDs
 	plan.SegmentsSelected = len(filteredIDs)
@@ -14518,7 +14537,7 @@ func filterVlogGenerationRewritePlanByPenalty(plan backenddb.ValueLogRewritePlan
 	plan.SelectedBytesLive = 0
 	plan.SelectedBytesStale = 0
 	if len(plan.SelectedSegments) == 0 {
-		return plan
+		return plan, readmitted
 	}
 	filteredSegments := make([]backenddb.ValueLogRewritePlanSegment, 0, len(plan.SelectedSegments))
 	for _, seg := range plan.SelectedSegments {
@@ -14532,18 +14551,36 @@ func filterVlogGenerationRewritePlanByPenalty(plan backenddb.ValueLogRewritePlan
 	}
 	plan.SelectedSegments = filteredSegments
 	plan.SegmentsSelected = len(filteredSegments)
-	return plan
+	return plan, readmitted
 }
 
 func (db *DB) filterVlogGenerationRewritePlanPenalties(plan backenddb.ValueLogRewritePlan, now time.Time) (backenddb.ValueLogRewritePlan, error) {
 	if db == nil || len(plan.SourceFileIDs) == 0 {
 		return plan, nil
 	}
-	penalties, err := db.currentVlogGenerationRewritePenalties()
-	if err != nil {
+	db.vlogGenerationRewriteQueueMu.Lock()
+	defer db.vlogGenerationRewriteQueueMu.Unlock()
+	if err := db.loadVlogGenerationRewriteQueueLocked(); err != nil {
 		return backenddb.ValueLogRewritePlan{}, err
 	}
-	return filterVlogGenerationRewritePlanByPenalty(plan, penalties, now), nil
+	filtered, readmitted := filterVlogGenerationRewritePlanByPenalty(plan, db.vlogGenerationRewritePenalties, now)
+	if len(readmitted) == 0 {
+		return filtered, nil
+	}
+	changed := false
+	for _, id := range readmitted {
+		if _, ok := db.vlogGenerationRewritePenalties[id]; ok {
+			delete(db.vlogGenerationRewritePenalties, id)
+			changed = true
+		}
+	}
+	if !changed {
+		return filtered, nil
+	}
+	if err := saveValueLogGenerationRewriteState(db.valueLogGenerationStatePath(), db.vlogGenerationRewriteQueue, db.vlogGenerationRewriteLedger, db.vlogGenerationRewriteChunkLedger, db.vlogGenerationRewriteChunkBytes, db.vlogGenerationRewritePenalties, db.vlogGenerationRewriteStagePending, db.vlogGenerationRewriteStageObservedUnixNano); err != nil {
+		return backenddb.ValueLogRewritePlan{}, err
+	}
+	return filtered, nil
 }
 
 func (db *DB) filterVlogGenerationRewriteChunkPlanPenalties(plan backenddb.ValueLogRewriteChunkPlan, now time.Time) (backenddb.ValueLogRewriteChunkPlan, error) {
@@ -16642,8 +16679,9 @@ planned:
 				queuedUsefulSignal := stats.SourceBytesUnreferenced > 0 || effectiveBytesAfter < effectiveBytesBefore || gcBytesDeleted > 0
 				if len(remainingQueue) > 0 && !queuedUsefulSignal && !penalizeProcessedRewriteDebt {
 					cooldownUntil := time.Now().Add(vlogGenerationRewriteQueuedFollowupCooldown)
-					if err := db.recordVlogGenerationRewritePenalty(
+					if err := db.recordVlogGenerationRewritePenaltyWithLedger(
 						processedRewriteIDs,
+						rewriteLedgerEligible,
 						cooldownUntil,
 						effectiveBytesAfter-effectiveBytesBefore,
 					); err != nil {
@@ -16667,8 +16705,9 @@ planned:
 			}
 			if penalizeProcessedRewriteDebt {
 				db.vlogGenerationRewriteIneffectiveLastNS.Store(time.Now().UnixNano())
-				if err := db.recordVlogGenerationRewritePenalty(
+				if err := db.recordVlogGenerationRewritePenaltyWithLedger(
 					processedRewriteIDs,
+					rewriteLedgerEligible,
 					time.Now().Add(vlogGenerationRewriteIneffectiveCooldown),
 					effectiveBytesAfter-effectiveBytesBefore,
 				); err != nil {

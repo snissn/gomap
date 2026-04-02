@@ -50,12 +50,14 @@ type valueLogGenerationRewritePenaltyEntry struct {
 	Attempts              int    `json:"attempts,omitempty"`
 	CooldownUntilUnixNano int64  `json:"cooldown_until_unix_nano,omitempty"`
 	LastGrowthBytes       int64  `json:"last_growth_bytes,omitempty"`
+	LastStaleBytes        int64  `json:"last_stale_bytes,omitempty"`
 }
 
 type valueLogGenerationRewritePenalty struct {
 	Attempts              int
 	CooldownUntilUnixNano int64
 	LastGrowthBytes       int64
+	LastStaleBytes        int64
 }
 
 func buildVlogGenerationRewriteLedgerByFileID(ledger []backenddb.ValueLogRewritePlanSegment) map[uint32]backenddb.ValueLogRewritePlanSegment {
@@ -214,13 +216,14 @@ func loadValueLogGenerationRewriteState(path string) ([]uint32, []backenddb.Valu
 		if err != nil || id64 == 0 {
 			continue
 		}
-		if e.Attempts <= 0 && e.CooldownUntilUnixNano <= 0 && e.LastGrowthBytes == 0 {
+		if e.Attempts <= 0 && e.CooldownUntilUnixNano <= 0 && e.LastGrowthBytes == 0 && e.LastStaleBytes == 0 {
 			continue
 		}
 		penalties[uint32(id64)] = valueLogGenerationRewritePenalty{
 			Attempts:              e.Attempts,
 			CooldownUntilUnixNano: e.CooldownUntilUnixNano,
 			LastGrowthBytes:       e.LastGrowthBytes,
+			LastStaleBytes:        e.LastStaleBytes,
 		}
 	}
 
@@ -349,7 +352,7 @@ func saveValueLogGenerationRewriteState(path string, ids []uint32, ledger []back
 			if id == 0 {
 				continue
 			}
-			if penalty.Attempts <= 0 && penalty.CooldownUntilUnixNano <= 0 && penalty.LastGrowthBytes == 0 {
+			if penalty.Attempts <= 0 && penalty.CooldownUntilUnixNano <= 0 && penalty.LastGrowthBytes == 0 && penalty.LastStaleBytes == 0 {
 				continue
 			}
 			keys = append(keys, id)
@@ -363,6 +366,7 @@ func saveValueLogGenerationRewriteState(path string, ids []uint32, ledger []back
 				Attempts:              penalty.Attempts,
 				CooldownUntilUnixNano: penalty.CooldownUntilUnixNano,
 				LastGrowthBytes:       penalty.LastGrowthBytes,
+				LastStaleBytes:        penalty.LastStaleBytes,
 			})
 		}
 	}
@@ -1235,6 +1239,10 @@ func (db *DB) restageVlogGenerationRewriteQueueRemaining(observedAt int64) (int,
 }
 
 func (db *DB) recordVlogGenerationRewritePenalty(ids []uint32, cooldownUntil time.Time, growth int64) error {
+	return db.recordVlogGenerationRewritePenaltyWithLedger(ids, nil, cooldownUntil, growth)
+}
+
+func (db *DB) recordVlogGenerationRewritePenaltyWithLedger(ids []uint32, ledger []backenddb.ValueLogRewritePlanSegment, cooldownUntil time.Time, growth int64) error {
 	if db == nil || len(ids) == 0 {
 		return nil
 	}
@@ -1246,6 +1254,7 @@ func (db *DB) recordVlogGenerationRewritePenalty(ids []uint32, cooldownUntil tim
 	if db.vlogGenerationRewritePenalties == nil {
 		db.vlogGenerationRewritePenalties = make(map[uint32]valueLogGenerationRewritePenalty, len(ids))
 	}
+	ledgerByFileID := buildVlogGenerationRewriteLedgerByFileID(ledger)
 	untilNS := cooldownUntil.UnixNano()
 	for _, id := range ids {
 		if id == 0 {
@@ -1257,7 +1266,38 @@ func (db *DB) recordVlogGenerationRewritePenalty(ids []uint32, cooldownUntil tim
 			penalty.CooldownUntilUnixNano = untilNS
 		}
 		penalty.LastGrowthBytes = growth
+		if seg, ok := ledgerByFileID[id]; ok && seg.BytesStale > 0 {
+			penalty.LastStaleBytes = seg.BytesStale
+		}
 		db.vlogGenerationRewritePenalties[id] = penalty
+	}
+	return saveValueLogGenerationRewriteState(db.valueLogGenerationStatePath(), db.vlogGenerationRewriteQueue, db.vlogGenerationRewriteLedger, db.vlogGenerationRewriteChunkLedger, db.vlogGenerationRewriteChunkBytes, db.vlogGenerationRewritePenalties, db.vlogGenerationRewriteStagePending, db.vlogGenerationRewriteStageObservedUnixNano)
+}
+
+func (db *DB) clearVlogGenerationRewritePenalty(ids []uint32) error {
+	if db == nil || len(ids) == 0 {
+		return nil
+	}
+	db.vlogGenerationRewriteQueueMu.Lock()
+	defer db.vlogGenerationRewriteQueueMu.Unlock()
+	if err := db.loadVlogGenerationRewriteQueueLocked(); err != nil {
+		return err
+	}
+	if len(db.vlogGenerationRewritePenalties) == 0 {
+		return nil
+	}
+	changed := false
+	for _, id := range ids {
+		if id == 0 {
+			continue
+		}
+		if _, ok := db.vlogGenerationRewritePenalties[id]; ok {
+			delete(db.vlogGenerationRewritePenalties, id)
+			changed = true
+		}
+	}
+	if !changed {
+		return nil
 	}
 	return saveValueLogGenerationRewriteState(db.valueLogGenerationStatePath(), db.vlogGenerationRewriteQueue, db.vlogGenerationRewriteLedger, db.vlogGenerationRewriteChunkLedger, db.vlogGenerationRewriteChunkBytes, db.vlogGenerationRewritePenalties, db.vlogGenerationRewriteStagePending, db.vlogGenerationRewriteStageObservedUnixNano)
 }
