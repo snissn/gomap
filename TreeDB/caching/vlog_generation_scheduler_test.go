@@ -213,11 +213,7 @@ func (b *blockingRewritePlannerBackend) ValueLogRewritePlan(ctx context.Context,
 }
 
 func (b *blockingRewritePlannerBackend) ValueLogRewriteChunkPlan(ctx context.Context, opts backenddb.ValueLogRewriteOnlineOptions, chunkBytes int64) (backenddb.ValueLogRewriteChunkPlan, error) {
-	plan, err := b.ValueLogRewritePlan(ctx, opts)
-	if err != nil {
-		return backenddb.ValueLogRewriteChunkPlan{}, err
-	}
-	return rewriteChunkPlanForTest(plan, chunkBytes), nil
+	return backenddb.ValueLogRewriteChunkPlan{}, nil
 }
 
 func (b *blockingRewritePlannerBackend) ValueLogRewriteOnline(ctx context.Context, opts backenddb.ValueLogRewriteOnlineOptions) (backenddb.ValueLogRewriteStats, error) {
@@ -272,11 +268,7 @@ func (b *timedRewritePlannerBackend) ValueLogRewritePlan(ctx context.Context, op
 }
 
 func (b *timedRewritePlannerBackend) ValueLogRewriteChunkPlan(ctx context.Context, opts backenddb.ValueLogRewriteOnlineOptions, chunkBytes int64) (backenddb.ValueLogRewriteChunkPlan, error) {
-	plan, err := b.ValueLogRewritePlan(ctx, opts)
-	if err != nil {
-		return backenddb.ValueLogRewriteChunkPlan{}, err
-	}
-	return rewriteChunkPlanForTest(plan, chunkBytes), nil
+	return backenddb.ValueLogRewriteChunkPlan{}, nil
 }
 
 func (b *timedRewritePlannerBackend) ValueLogRewriteOnline(ctx context.Context, opts backenddb.ValueLogRewriteOnlineOptions) (backenddb.ValueLogRewriteStats, error) {
@@ -1419,6 +1411,9 @@ func (b *rewriteBudgetRecordingBackend) ValueLogRewriteChunkPlan(ctx context.Con
 	if err != nil {
 		return backenddb.ValueLogRewriteChunkPlan{}, err
 	}
+	if len(plan.SelectedSegments) == 0 && plan.AgeBlockedSegments == 0 && plan.AgeBlockedMinRemainingAge == 0 {
+		return backenddb.ValueLogRewriteChunkPlan{}, nil
+	}
 	return rewriteChunkPlanForTest(plan, chunkBytes), nil
 }
 
@@ -2532,8 +2527,8 @@ func TestVlogGenerationMaintenance_CheckpointKickWaitsForCheckpointing(t *testin
 	})
 	<-done
 
-	if _, calls := recorder.recordedPlan(); calls != 1 {
-		t.Fatalf("plan calls after checkpoint-kick wait=%d want=1", calls)
+	if _, calls := recorder.recordedPlan(); calls != 2 {
+		t.Fatalf("plan calls after checkpoint-kick wait=%d want=2", calls)
 	}
 	if _, calls := recorder.recordedRewrite(); calls != 1 {
 		t.Fatalf("rewrite calls after checkpoint-kick wait=%d want=1", calls)
@@ -2672,8 +2667,8 @@ func TestVlogGenerationRewrite_UsesAndConsumesBudgetedBytes(t *testing.T) {
 	db.maybeRunVlogGenerationMaintenance(false)
 
 	planOpts, planCalls := recorder.recordedPlan()
-	if planCalls != 1 {
-		t.Fatalf("plan calls=%d want=1", planCalls)
+	if planCalls != 2 {
+		t.Fatalf("plan calls=%d want=2", planCalls)
 	}
 	if planOpts.MaxSourceBytes <= 0 {
 		t.Fatalf("plan MaxSourceBytes=%d want > 0", planOpts.MaxSourceBytes)
@@ -3152,8 +3147,8 @@ func TestVlogGenerationRewriteQueue_ResumesWithoutReplanning(t *testing.T) {
 	t.Cleanup(cleanup)
 	db.maybeRunVlogGenerationMaintenance(false)
 
-	if _, calls := recorder.recordedPlan(); calls != 1 {
-		t.Fatalf("plan calls after first run=%d want=1", calls)
+	if _, calls := recorder.recordedPlan(); calls != 2 {
+		t.Fatalf("plan calls after first run=%d want=2", calls)
 	}
 	opts, calls := recorder.recordedRewrite()
 	if calls != 1 {
@@ -3174,8 +3169,8 @@ func TestVlogGenerationRewriteQueue_ResumesWithoutReplanning(t *testing.T) {
 	forceVlogMaintenanceIdle(db)
 	db.maybeRunVlogGenerationMaintenance(false)
 
-	if _, calls := recorder.recordedPlan(); calls != 1 {
-		t.Fatalf("plan calls after second run=%d want=1", calls)
+	if _, calls := recorder.recordedPlan(); calls != 2 {
+		t.Fatalf("plan calls after second run=%d want=2", calls)
 	}
 	opts, calls = recorder.recordedRewrite()
 	if calls != 2 {
@@ -4190,8 +4185,8 @@ func TestVlogGenerationRewritePlan_FiltersPenalizedSegments(t *testing.T) {
 	db.maybeRunVlogGenerationMaintenance(false)
 
 	planOpts, planCalls := recorder.recordedPlan()
-	if planCalls != 2 {
-		t.Fatalf("plan calls after second run=%d want=2", planCalls)
+	if planCalls != 3 {
+		t.Fatalf("plan calls after second run=%d want=3", planCalls)
 	}
 	if planOpts.MinSegmentAge != vlogGenerationRewriteMinSegmentAge {
 		t.Fatalf("plan MinSegmentAge=%s want %s", planOpts.MinSegmentAge, vlogGenerationRewriteMinSegmentAge)
@@ -5480,8 +5475,8 @@ func TestCheckpoint_KicksVlogGenerationRewriteDespiteRecentForegroundActivity(t 
 		time.Sleep(10 * time.Millisecond)
 	}
 
-	if _, calls := recorder.recordedPlan(); calls != 1 {
-		t.Fatalf("plan calls=%d want=1", calls)
+	if _, calls := recorder.recordedPlan(); calls != 2 {
+		t.Fatalf("plan calls=%d want=2", calls)
 	}
 	if got := db.checkpointRuns.Load(); got < 1 {
 		t.Fatalf("checkpoint runs=%d want >=1", got)
@@ -6343,9 +6338,20 @@ func TestVlogGenerationRewrite_ConsumesBudgetToZeroWhenRewriteExceedsBudgetCap(t
 
 	recorder := &rewriteBudgetRecordingBackend{
 		DB: backend,
-		planResponse: backenddb.ValueLogRewritePlan{
-			SourceFileIDs:     []uint32{1},
-			SelectedBytesLive: 128,
+		chunkPlanResponse: backenddb.ValueLogRewriteChunkPlan{
+			ChunkBytes: 128,
+			SourceChunks: []backenddb.ValueLogRewritePlanChunk{{
+				FileID:     1,
+				BytesTotal: 512,
+				BytesLive:  128,
+				BytesStale: 384,
+				StaleRatio: 0.75,
+			}},
+			ChunksSelected:     1,
+			ChunksTotal:        1,
+			SelectedBytesTotal: 512,
+			SelectedBytesLive:  128,
+			SelectedBytesStale: 384,
 		},
 		rewriteResponse: backenddb.ValueLogRewriteStats{BytesBefore: 512, BytesAfter: 128, RecordsCopied: 1},
 	}
@@ -6621,25 +6627,25 @@ func TestVlogGenerationRewritePlan_TracksEmptyPlanOutcome(t *testing.T) {
 	t.Cleanup(cleanup)
 	db.maybeRunVlogGenerationMaintenance(false)
 
-	if _, calls := recorder.recordedPlan(); calls != 1 {
-		t.Fatalf("plan calls=%d want=1", calls)
+	if _, calls := recorder.recordedPlan(); calls != 2 {
+		t.Fatalf("plan calls=%d want=2", calls)
 	}
 	if _, calls := recorder.recordedRewrite(); calls != 0 {
 		t.Fatalf("rewrite calls=%d want=0", calls)
 	}
 
 	stats := db.Stats()
-	if got := stats["treedb.cache.vlog_generation.rewrite.plan_runs"]; got != "1" {
-		t.Fatalf("plan runs=%q want 1", got)
+	if got := stats["treedb.cache.vlog_generation.rewrite.plan_runs"]; got != "2" {
+		t.Fatalf("plan runs=%q want 2", got)
 	}
-	if got := stats["treedb.cache.vlog_generation.rewrite.plan_empty"]; got != "1" {
-		t.Fatalf("plan empty=%q want 1", got)
+	if got := stats["treedb.cache.vlog_generation.rewrite.plan_empty"]; got != "2" {
+		t.Fatalf("plan empty=%q want 2", got)
 	}
 	if got := stats["treedb.cache.vlog_generation.rewrite.plan_empty.age_blocked"]; got != "0" {
 		t.Fatalf("plan empty age-blocked=%q want 0", got)
 	}
-	if got := stats["treedb.cache.vlog_generation.rewrite.plan_empty.no_selection"]; got != "1" {
-		t.Fatalf("plan empty no-selection=%q want 1", got)
+	if got := stats["treedb.cache.vlog_generation.rewrite.plan_empty.no_selection"]; got != "2" {
+		t.Fatalf("plan empty no-selection=%q want 2", got)
 	}
 	if got := stats["treedb.cache.vlog_generation.rewrite.plan_selected"]; got != "0" {
 		t.Fatalf("plan selected=%q want 0", got)
@@ -7177,8 +7183,8 @@ func TestVlogGenerationRewritePlan_CancelsWhenForegroundWritesResume(t *testing.
 		t.Fatalf("scheduler state=%d want=%d", got, vlogGenerationSchedulerIdle)
 	}
 	stats := db.Stats()
-	if got := stats["treedb.cache.vlog_generation.rewrite.plan_runs"]; got != "1" {
-		t.Fatalf("plan runs=%q want 1", got)
+	if got := stats["treedb.cache.vlog_generation.rewrite.plan_runs"]; got != "2" {
+		t.Fatalf("plan runs=%q want 2", got)
 	}
 	if got := stats["treedb.cache.vlog_generation.rewrite.plan_canceled"]; got != "1" {
 		t.Fatalf("plan canceled=%q want 1", got)
@@ -7186,8 +7192,8 @@ func TestVlogGenerationRewritePlan_CancelsWhenForegroundWritesResume(t *testing.
 	if got := stats["treedb.cache.vlog_generation.rewrite.plan_errors"]; got != "0" {
 		t.Fatalf("plan errors=%q want 0", got)
 	}
-	if got := stats["treedb.cache.vlog_generation.rewrite.plan_empty"]; got != "0" {
-		t.Fatalf("plan empty=%q want 0", got)
+	if got := stats["treedb.cache.vlog_generation.rewrite.plan_empty"]; got != "1" {
+		t.Fatalf("plan empty=%q want 1", got)
 	}
 	if got := stats["treedb.cache.vlog_generation.rewrite.plan_selected"]; got != "0" {
 		t.Fatalf("plan selected=%q want 0", got)
@@ -7266,14 +7272,14 @@ func TestVlogGenerationRewritePlan_GraceAllowsShortPlanDuringForegroundResume(t 
 		t.Fatalf("plan outcomes completed=%d canceled=%d want completed=1 canceled=0", completed, canceled)
 	}
 	stats := db.Stats()
-	if got := stats["treedb.cache.vlog_generation.rewrite.plan_runs"]; got != "1" {
-		t.Fatalf("plan runs=%q want 1", got)
+	if got := stats["treedb.cache.vlog_generation.rewrite.plan_runs"]; got != "2" {
+		t.Fatalf("plan runs=%q want 2", got)
 	}
 	if got := stats["treedb.cache.vlog_generation.rewrite.plan_canceled"]; got != "0" {
 		t.Fatalf("plan canceled=%q want 0", got)
 	}
-	if got := stats["treedb.cache.vlog_generation.rewrite.plan_empty"]; got != "1" {
-		t.Fatalf("plan empty=%q want 1", got)
+	if got := stats["treedb.cache.vlog_generation.rewrite.plan_empty"]; got != "2" {
+		t.Fatalf("plan empty=%q want 2", got)
 	}
 }
 
@@ -7400,8 +7406,8 @@ func TestVlogGenerationRewritePlan_CancelBackoffCheckpointKickBypasses(t *testin
 		rewriteDebtDrain:      true,
 	})
 
-	if _, calls := recorder.recordedPlan(); calls != 2 {
-		t.Fatalf("plan calls after checkpoint-kick bypass=%d want=2", calls)
+	if _, calls := recorder.recordedPlan(); calls != 3 {
+		t.Fatalf("plan calls after checkpoint-kick bypass=%d want=3", calls)
 	}
 	if _, calls := recorder.recordedRewrite(); calls != 1 {
 		t.Fatalf("rewrite calls after checkpoint-kick bypass=%d want=1", calls)
