@@ -15331,6 +15331,8 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 	if len(rewriteQueue) > 0 && !stagePending && len(rewritePenalties) > 0 {
 		rewriteQueueEligible = filterVlogGenerationRewriteIDsByPenalty(rewriteQueue, rewritePenalties, now)
 		rewriteLedgerEligible = filterVlogGenerationRewriteLedgerByPenalty(rewriteLedger, rewritePenalties, now)
+		rewriteQueueEligible = prioritizeVlogGenerationRewriteIDs(rewriteQueueEligible, rewritePenalties)
+		rewriteLedgerEligible = prioritizeVlogGenerationRewriteLedger(rewriteLedgerEligible, rewritePenalties)
 	}
 	rewriteQueueFollowupBlocked := len(rewriteQueue) > 0 && !stagePending && db.vlogGenerationRewriteQueueFollowupBlockedActive(now)
 	ageBlockedDue := db.vlogGenerationRewriteAgeBlockedDue(now)
@@ -16160,7 +16162,11 @@ planned:
 					if hadRewriteQueue {
 						chunkBudgetTokens = 0
 					}
-					processedRewriteIDs = vlogGenerationRewriteLedgerChunk(plannedLedgerForExec, rewriteMaxSegments, chunkBudgetTokens)
+					if hadRewriteQueue {
+						processedRewriteIDs = vlogGenerationRewriteLedgerChunkWithPenalty(plannedLedgerForExec, rewritePenalties, rewriteMaxSegments, chunkBudgetTokens)
+					} else {
+						processedRewriteIDs = vlogGenerationRewriteLedgerChunk(plannedLedgerForExec, rewriteMaxSegments, chunkBudgetTokens)
+					}
 					if len(processedRewriteIDs) == 0 {
 						if hadRewriteQueue {
 							db.vlogGenerationRewriteQueuedDebtSkipNoChunk.Add(1)
@@ -16195,6 +16201,8 @@ planned:
 						rewriteLedger = synthesizeVlogGenerationRewriteLedgerFromChunks(filteredChunks)
 						rewriteQueueEligible = filterVlogGenerationRewriteIDsByPenalty(rewriteQueue, rewritePenalties, now)
 						rewriteLedgerEligible = filterVlogGenerationRewriteLedgerByPenalty(rewriteLedger, rewritePenalties, now)
+						rewriteQueueEligible = prioritizeVlogGenerationRewriteIDs(rewriteQueueEligible, rewritePenalties)
+						rewriteLedgerEligible = prioritizeVlogGenerationRewriteLedger(rewriteLedgerEligible, rewritePenalties)
 						db.debugVlogMaintf(
 							"rewrite_chunk_queue_quality_prune dropped=%d remaining=%d min_ratio=%.6f min_stale_bytes=%d",
 							dropped,
@@ -16242,6 +16250,8 @@ planned:
 							ledger = filteredLedger
 							rewriteQueueEligible = filterVlogGenerationRewriteIDsByPenalty(rewriteQueue, rewritePenalties, now)
 							rewriteLedgerEligible = filterVlogGenerationRewriteLedgerByPenalty(filteredLedger, rewritePenalties, now)
+							rewriteQueueEligible = prioritizeVlogGenerationRewriteIDs(rewriteQueueEligible, rewritePenalties)
+							rewriteLedgerEligible = prioritizeVlogGenerationRewriteLedger(rewriteLedgerEligible, rewritePenalties)
 							db.debugVlogMaintf(
 								"rewrite_queue_quality_prune dropped=%d remaining=%d min_ratio=%.6f min_stale_bytes=%d",
 								dropped,
@@ -16250,7 +16260,7 @@ planned:
 								vlogGenerationRewriteMinSegmentStaleBytes,
 							)
 						}
-						processedRewriteIDs = vlogGenerationRewriteLedgerChunk(rewriteLedgerEligible, rewriteMaxSegments, 0)
+						processedRewriteIDs = vlogGenerationRewriteLedgerChunkWithPenalty(rewriteLedgerEligible, rewritePenalties, rewriteMaxSegments, 0)
 						if len(processedRewriteIDs) == 0 {
 							if hadRewriteQueue {
 								db.vlogGenerationRewriteQueuedDebtSkipNoChunk.Add(1)
