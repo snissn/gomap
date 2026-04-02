@@ -868,6 +868,34 @@ func TestVlogGenerationRewriteMinStaleRatioForGenericPass_DefaultWithoutConfigur
 	}
 }
 
+func TestVlogGenerationRewriteMinStaleRatioForGenericChunkPass_UsesQualityFloor(t *testing.T) {
+	db := &DB{valueLogRewriteTriggerRatioPPM: 200000}
+	if got, want := db.vlogGenerationRewriteMinStaleRatioForGenericChunkPass(8<<30), vlogGenerationRewriteMinSegmentStaleRatio; got != want {
+		t.Fatalf("generic chunk min stale ratio=%f want=%f", got, want)
+	}
+}
+
+func TestVlogGenerationRewriteMinStaleRatioForGenericChunkPass_PreservesHigherConfiguredRatio(t *testing.T) {
+	db := &DB{valueLogRewriteTriggerRatioPPM: 900000}
+	if got, want := db.vlogGenerationRewriteMinStaleRatioForGenericChunkPass(8<<30), 0.90; got != want {
+		t.Fatalf("generic chunk min stale ratio=%f want=%f", got, want)
+	}
+}
+
+func TestVlogGenerationRewriteMinStaleRatioForGenericChunkPass_DisabledBelowEfficacyFloor(t *testing.T) {
+	db := &DB{valueLogRewriteTriggerRatioPPM: 800000}
+	if got := db.vlogGenerationRewriteMinStaleRatioForGenericChunkPass(vlogGenerationRewriteEfficacyMinTotalBytes - 1); got != 0 {
+		t.Fatalf("generic chunk min stale ratio below efficacy floor=%f want=0", got)
+	}
+}
+
+func TestVlogGenerationRewriteMinStaleRatioForGenericChunkPass_DefaultWithoutConfiguredTrigger(t *testing.T) {
+	db := &DB{valueLogRewriteTriggerRatioPPM: 0}
+	if got, want := db.vlogGenerationRewriteMinStaleRatioForGenericChunkPass(8<<30), vlogGenerationRewriteMinSegmentStaleRatio; got != want {
+		t.Fatalf("generic chunk min stale ratio=%f want=%f", got, want)
+	}
+}
+
 func TestVlogGenerationRewriteMinStaleRatioForQueuedDebt_UsesGenericFloorForTotalBytes(t *testing.T) {
 	db := &DB{valueLogRewriteTriggerRatioPPM: 200000}
 	if got, want := db.vlogGenerationRewriteMinStaleRatioForQueuedDebt(8<<30, vlogGenerationReasonTotalBytes), 0.85; got != want {

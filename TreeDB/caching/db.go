@@ -15662,7 +15662,8 @@ planned:
 				maxSourceBytes = totalBytes
 			}
 			if maxSourceBytes > 0 {
-				minStaleRatio := db.vlogGenerationRewriteMinStaleRatioForGenericPass(totalBytes)
+				segmentMinStaleRatio := db.vlogGenerationRewriteMinStaleRatioForGenericPass(totalBytes)
+				chunkMinStaleRatio := db.vlogGenerationRewriteMinStaleRatioForGenericChunkPass(totalBytes)
 				allowSegmentFallback := hasPlanner
 				if hasChunkPlanner {
 					ctx, cancel := db.vlogGenerationRewritePlanContext(30*time.Second, opts)
@@ -15670,7 +15671,7 @@ planned:
 					chunkPlan, err := chunkPlanner.ValueLogRewriteChunkPlan(ctx, backenddb.ValueLogRewriteOnlineOptions{
 						MaxSourceSegments:    0,
 						MaxSourceBytes:       maxSourceBytes,
-						MinSegmentStaleRatio: minStaleRatio,
+						MinSegmentStaleRatio: chunkMinStaleRatio,
 						MinSegmentStaleBytes: vlogGenerationRewriteMinSegmentStaleBytes,
 						MinSegmentAge:        db.valueLogRewriteMinSegmentAge,
 					}, vlogGenerationRewriteChunkBytesForPlan(maxSourceBytes))
@@ -15679,7 +15680,7 @@ planned:
 					db.debugVlogMaintf(
 						"rewrite_chunk_plan pre_rewrite max_source_bytes=%d min_ratio=%.6f min_stale_bytes=%d chunk_bytes=%d selected=%d/%d selected_bytes_total=%d selected_bytes_live=%d selected_bytes_stale=%d total_bytes=%d live_bytes=%d stale_bytes=%d dur_ms=%.3f err=%v",
 						maxSourceBytes,
-						minStaleRatio,
+						chunkMinStaleRatio,
 						vlogGenerationRewriteMinSegmentStaleBytes,
 						chunkPlan.ChunkBytes,
 						chunkPlan.ChunksSelected,
@@ -15757,7 +15758,7 @@ planned:
 					plan, err := planner.ValueLogRewritePlan(ctx, backenddb.ValueLogRewriteOnlineOptions{
 						MaxSourceSegments:    0,
 						MaxSourceBytes:       maxSourceBytes,
-						MinSegmentStaleRatio: minStaleRatio,
+						MinSegmentStaleRatio: segmentMinStaleRatio,
 						MinSegmentStaleBytes: vlogGenerationRewriteMinSegmentStaleBytes,
 						MinSegmentAge:        db.valueLogRewriteMinSegmentAge,
 					})
@@ -15766,7 +15767,7 @@ planned:
 					db.debugVlogMaintf(
 						"rewrite_plan pre_rewrite max_source_bytes=%d min_ratio=%.6f min_stale_bytes=%d selected=%d/%d selected_bytes_total=%d selected_bytes_live=%d selected_bytes_stale=%d total_bytes=%d live_bytes=%d stale_bytes=%d dur_ms=%.3f err=%v",
 						maxSourceBytes,
-						minStaleRatio,
+						segmentMinStaleRatio,
 						vlogGenerationRewriteMinSegmentStaleBytes,
 						plan.SegmentsSelected,
 						plan.SegmentsTotal,
@@ -17296,6 +17297,19 @@ func (db *DB) vlogGenerationRewriteMinStaleRatioForGenericPass(totalBytes int64)
 		return configured
 	}
 	return vlogGenerationRewriteGenericMinSegmentStaleRatio
+}
+
+func (db *DB) vlogGenerationRewriteMinStaleRatioForGenericChunkPass(totalBytes int64) float64 {
+	if totalBytes < vlogGenerationRewriteEfficacyMinTotalBytes {
+		return 0
+	}
+	if configured := db.vlogGenerationRewriteMinStaleRatioForStaleRatioTrigger(totalBytes); configured > 0 {
+		if configured < vlogGenerationRewriteMinSegmentStaleRatio {
+			return vlogGenerationRewriteMinSegmentStaleRatio
+		}
+		return configured
+	}
+	return vlogGenerationRewriteMinSegmentStaleRatio
 }
 
 func (db *DB) vlogGenerationRewriteMinStaleRatioForQueuedDebt(totalBytes int64, reason uint32) float64 {
