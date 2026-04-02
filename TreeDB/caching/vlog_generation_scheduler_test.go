@@ -4281,6 +4281,10 @@ func TestVlogGenerationRewritePlan_FiltersPenalizedSegments(t *testing.T) {
 	recorder.mu.Unlock()
 	db.vlogGenerationLastRewriteUnixNano.Store(0)
 	db.vlogGenerationRewriteIneffectiveLastNS.Store(time.Now().Add(-2 * vlogGenerationRewriteIneffectiveBackoff).UnixNano())
+	db.vlogGenerationCheckpointKickPending.Store(false)
+	db.vlogGenerationDeferredMaintenancePending.Store(false)
+	db.vlogGenerationRewriteQueuePending.Store(false)
+	db.vlogGenerationRewriteQueueRunning.Store(false)
 	forceVlogMaintenanceIdle(db)
 	db.maybeRunVlogGenerationMaintenance(false)
 
