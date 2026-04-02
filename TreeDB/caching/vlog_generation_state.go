@@ -869,6 +869,70 @@ func stableVlogGenerationRewriteLedgerSegments(prev, planned []backenddb.ValueLo
 	return out
 }
 
+func mergeVlogGenerationRewriteIDs(primary, secondary []uint32) []uint32 {
+	if len(primary) == 0 && len(secondary) == 0 {
+		return nil
+	}
+	seen := make(map[uint32]struct{}, len(primary)+len(secondary))
+	out := make([]uint32, 0, len(primary)+len(secondary))
+	for _, id := range primary {
+		if id == 0 {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	for _, id := range secondary {
+		if id == 0 {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func mergeVlogGenerationRewriteLedgerSegments(primary, secondary []backenddb.ValueLogRewritePlanSegment) []backenddb.ValueLogRewritePlanSegment {
+	if len(primary) == 0 && len(secondary) == 0 {
+		return nil
+	}
+	seen := make(map[uint32]struct{}, len(primary)+len(secondary))
+	out := make([]backenddb.ValueLogRewritePlanSegment, 0, len(primary)+len(secondary))
+	for _, seg := range primary {
+		if seg.FileID == 0 {
+			continue
+		}
+		if _, ok := seen[seg.FileID]; ok {
+			continue
+		}
+		seen[seg.FileID] = struct{}{}
+		out = append(out, seg)
+	}
+	for _, seg := range secondary {
+		if seg.FileID == 0 {
+			continue
+		}
+		if _, ok := seen[seg.FileID]; ok {
+			continue
+		}
+		seen[seg.FileID] = struct{}{}
+		out = append(out, seg)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
 type valueLogGenerationRewriteChunkKey struct {
 	FileID      uint32
 	ChunkOffset int64
