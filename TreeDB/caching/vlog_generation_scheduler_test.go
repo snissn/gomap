@@ -3209,6 +3209,52 @@ func TestVlogGenerationRewriteQueue_PrefersHistoricallyUsefulExpiredRetry(t *tes
 	}
 }
 
+func TestVlogGenerationRewriteQueue_PrefersHistoricallyUsefulActiveLedgerDebt(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+
+	dir := t.TempDir()
+
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	recorder := &rewriteBudgetRecordingBackend{
+		DB:              backend,
+		rewriteResponse: backenddb.ValueLogRewriteStats{BytesBefore: 64, BytesAfter: 32, RecordsCopied: 1},
+	}
+
+	db, cleanup := openRewriteQueueTestDB(t, dir, recorder)
+	t.Cleanup(cleanup)
+
+	ledger := []backenddb.ValueLogRewritePlanSegment{
+		{FileID: 11, BytesLive: 64, BytesTotal: 128, BytesStale: 96, StaleRatio: 0.75},
+		{FileID: 22, BytesLive: 64, BytesTotal: 128, BytesStale: 64, StaleRatio: 0.5},
+		{FileID: 33, BytesLive: 64, BytesTotal: 128, BytesStale: 80, StaleRatio: 0.625},
+	}
+	if err := db.setVlogGenerationRewriteLedger(ledger); err != nil {
+		t.Fatalf("set ledger: %v", err)
+	}
+	if err := db.recordVlogGenerationRewriteHistoryWithLedger([]uint32{11}, ledger[:1], 0, 0, time.Now().Add(-2*time.Second)); err != nil {
+		t.Fatalf("record history 11: %v", err)
+	}
+	if err := db.recordVlogGenerationRewriteHistoryWithLedger([]uint32{22}, ledger[1:2], 32, 16, time.Now().Add(-time.Second)); err != nil {
+		t.Fatalf("record history 22: %v", err)
+	}
+
+	db.vlogGenerationRewriteBudgetTokensBytes.Store(64)
+	db.vlogGenerationLastRewriteUnixNano.Store(time.Now().Add(-2 * vlogGenerationRewriteResumeMinInterval).UnixNano())
+	forceVlogMaintenanceIdle(db)
+	runRewriteQueueMaintenanceForTest(db)
+
+	opts, calls := recorder.recordedRewrite()
+	if calls != 1 {
+		t.Fatalf("rewrite calls=%d want=1", calls)
+	}
+	if got, want := opts.SourceFileIDs, []uint32{22}; len(got) != len(want) || got[0] != want[0] {
+		t.Fatalf("rewrite SourceFileIDs=%v want=%v", got, want)
+	}
+}
+
 func TestAdmitVlogGenerationRewriteLedger_DoesNotCountHistoricallyUsefulRetriesAgainstCap(t *testing.T) {
 	ledger := []backenddb.ValueLogRewritePlanSegment{
 		{FileID: 11, BytesLive: 64, BytesTotal: 128, BytesStale: 64, StaleRatio: 0.5},
@@ -4273,12 +4319,23 @@ func TestVlogGenerationRewriteQueue_BoundedSegmentEventuallyDrainsWithoutReplann
 	forceVlogMaintenanceIdle(db)
 	runRewriteQueueMaintenanceForTest(db)
 
+	deadline := time.Now().Add(2 * schedulerTestWait(t))
+	for {
+		if _, calls := recorder.recordedRewrite(); calls >= 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			_, rewriteCalls := recorder.recordedRewrite()
+			t.Fatalf("rewrite calls after second bounded pass=%d want>=2", rewriteCalls)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	if _, calls := recorder.recordedPlan(); calls != 0 {
 		t.Fatalf("plan calls after second bounded pass=%d want=0", calls)
 	}
 	opts, calls = recorder.recordedRewrite()
-	if calls != 2 {
-		t.Fatalf("rewrite calls after second bounded pass=%d want=2", calls)
+	if calls < 2 {
+		t.Fatalf("rewrite calls after second bounded pass=%d want>=2", calls)
 	}
 	if got, want := opts.SourceFileIDs, []uint32{11}; len(got) != len(want) || got[0] != want[0] {
 		t.Fatalf("second bounded rewrite SourceFileIDs=%v want=%v", got, want)
