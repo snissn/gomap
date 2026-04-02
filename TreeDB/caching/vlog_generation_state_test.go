@@ -23,7 +23,7 @@ func TestLoadValueLogGenerationRewriteState_SkipsZeroFileID(t *testing.T) {
 		t.Fatalf("write state: %v", err)
 	}
 
-	ids, ledger, chunkLedger, chunkBytes, penalties, stagePending, stageObservedAt, err := loadValueLogGenerationRewriteState(path)
+	ids, ledger, chunkLedger, chunkBytes, history, penalties, stagePending, stageObservedAt, err := loadValueLogGenerationRewriteState(path)
 	if err != nil {
 		t.Fatalf("load state: %v", err)
 	}
@@ -35,6 +35,54 @@ func TestLoadValueLogGenerationRewriteState_SkipsZeroFileID(t *testing.T) {
 	}
 	if len(chunkLedger) != 0 || chunkBytes != 0 {
 		t.Fatalf("chunkLedger=%v chunkBytes=%d want empty/zero", chunkLedger, chunkBytes)
+	}
+	if len(history) != 0 {
+		t.Fatalf("history=%v want empty", history)
+	}
+	if len(penalties) != 0 {
+		t.Fatalf("penalties=%v want empty", penalties)
+	}
+	if stagePending || stageObservedAt != 0 {
+		t.Fatalf("stagePending=%t stageObservedAt=%d want zero values", stagePending, stageObservedAt)
+	}
+}
+
+func TestLoadValueLogGenerationRewriteState_PreservesHistoryWithoutQueue(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "vlog_generation_state.json")
+
+	data := []byte(`{
+  "rewrite_history": [
+    {"file_id": "0", "last_attempt_unix_nano": 1, "last_processed_live_bytes": 1},
+    {"file_id": "7", "last_attempt_unix_nano": 1234, "last_processed_live_bytes": 64, "last_source_bytes_unreferenced": 32, "last_reclaimed_bytes": 16, "last_stale_bytes": 48}
+  ]
+}`)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatalf("write state: %v", err)
+	}
+
+	ids, ledger, chunkLedger, chunkBytes, history, penalties, stagePending, stageObservedAt, err := loadValueLogGenerationRewriteState(path)
+	if err != nil {
+		t.Fatalf("load state: %v", err)
+	}
+	if len(ids) != 0 {
+		t.Fatalf("ids=%v want empty", ids)
+	}
+	if len(ledger) != 0 {
+		t.Fatalf("ledger=%v want empty", ledger)
+	}
+	if len(chunkLedger) != 0 || chunkBytes != 0 {
+		t.Fatalf("chunkLedger=%v chunkBytes=%d want empty/zero", chunkLedger, chunkBytes)
+	}
+	if len(history) != 1 {
+		t.Fatalf("history=%v want one valid entry", history)
+	}
+	entry, ok := history[7]
+	if !ok {
+		t.Fatalf("history=%v want file 7", history)
+	}
+	if entry.LastAttemptUnixNano != 1234 || entry.LastProcessedLiveBytes != 64 || entry.LastSourceBytesUnreferenced != 32 || entry.LastReclaimedBytes != 16 || entry.LastStaleBytes != 48 {
+		t.Fatalf("history entry=%+v want attempt=1234 processed=64 useful=32 reclaimed=16 stale=48", entry)
 	}
 	if len(penalties) != 0 {
 		t.Fatalf("penalties=%v want empty", penalties)
@@ -58,7 +106,7 @@ func TestLoadValueLogGenerationRewriteState_PreservesPenaltiesWithoutQueue(t *te
 		t.Fatalf("write state: %v", err)
 	}
 
-	ids, ledger, chunkLedger, chunkBytes, penalties, stagePending, stageObservedAt, err := loadValueLogGenerationRewriteState(path)
+	ids, ledger, chunkLedger, chunkBytes, history, penalties, stagePending, stageObservedAt, err := loadValueLogGenerationRewriteState(path)
 	if err != nil {
 		t.Fatalf("load state: %v", err)
 	}
@@ -70,6 +118,9 @@ func TestLoadValueLogGenerationRewriteState_PreservesPenaltiesWithoutQueue(t *te
 	}
 	if len(chunkLedger) != 0 || chunkBytes != 0 {
 		t.Fatalf("chunkLedger=%v chunkBytes=%d want empty/zero", chunkLedger, chunkBytes)
+	}
+	if len(history) != 0 {
+		t.Fatalf("history=%v want empty", history)
 	}
 	if len(penalties) != 1 {
 		t.Fatalf("penalties=%v want one valid entry", penalties)
@@ -104,7 +155,7 @@ func TestLoadValueLogGenerationRewriteState_LoadsChunkLedger(t *testing.T) {
 		t.Fatalf("write state: %v", err)
 	}
 
-	ids, ledger, chunkLedger, chunkBytes, penalties, stagePending, stageObservedAt, err := loadValueLogGenerationRewriteState(path)
+	ids, ledger, chunkLedger, chunkBytes, history, penalties, stagePending, stageObservedAt, err := loadValueLogGenerationRewriteState(path)
 	if err != nil {
 		t.Fatalf("load state: %v", err)
 	}
@@ -119,6 +170,9 @@ func TestLoadValueLogGenerationRewriteState_LoadsChunkLedger(t *testing.T) {
 	}
 	if chunkBytes != 16777216 {
 		t.Fatalf("chunkBytes=%d want 16777216", chunkBytes)
+	}
+	if len(history) != 0 {
+		t.Fatalf("history=%v want empty", history)
 	}
 	if len(penalties) != 0 {
 		t.Fatalf("penalties=%v want empty", penalties)
