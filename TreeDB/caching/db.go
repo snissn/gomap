@@ -15867,7 +15867,7 @@ planned:
 						return nil
 					}
 				} else {
-					processedRewriteIDs = vlogGenerationRewriteQueueChunkWithPenalty(rewriteQueueEligible, rewritePenalties, rewriteMaxSegments)
+					processedRewriteIDs = vlogGenerationRewriteQueueChunkWithPenalty(rewriteQueueEligible, db.vlogGenerationRewriteHistory, rewritePenalties, rewriteMaxSegments)
 				}
 			} else if len(rewriteQueueEligible) > 0 {
 				ledger := append([]backenddb.ValueLogRewritePlanSegment(nil), rewriteLedger...)
@@ -15912,7 +15912,7 @@ planned:
 						return nil
 					}
 				} else {
-					processedRewriteIDs = vlogGenerationRewriteQueueChunkWithPenalty(rewriteQueueEligible, rewritePenalties, rewriteMaxSegments)
+					processedRewriteIDs = vlogGenerationRewriteQueueChunkWithPenalty(rewriteQueueEligible, db.vlogGenerationRewriteHistory, rewritePenalties, rewriteMaxSegments)
 				}
 			}
 			if len(processedRewriteIDs) > 0 {

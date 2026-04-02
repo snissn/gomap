@@ -685,9 +685,21 @@ func prioritizeVlogGenerationRewriteLedger(ledger []backenddb.ValueLogRewritePla
 	return ordered
 }
 
-func admitVlogGenerationRewriteIDs(ids []uint32, penalties map[uint32]valueLogGenerationRewritePenalty, maxRetried int) []uint32 {
+func admitVlogGenerationRewriteIDs(ids []uint32, history map[uint32]valueLogGenerationRewriteHistory, penalties map[uint32]valueLogGenerationRewritePenalty, maxRetried int) []uint32 {
 	if len(ids) == 0 || len(penalties) == 0 || maxRetried < 0 {
 		return append([]uint32(nil), ids...)
+	}
+	haveUsefulRetry := false
+	for _, id := range ids {
+		attempts, _ := vlogGenerationRewritePenaltySortKey(id, penalties)
+		if attempts <= 0 {
+			continue
+		}
+		_, usefulBytes := vlogGenerationRewriteHistoryUsefulness(id, history)
+		if usefulBytes > 0 {
+			haveUsefulRetry = true
+			break
+		}
 	}
 	admitted := make([]uint32, 0, len(ids))
 	retried := 0
@@ -697,7 +709,12 @@ func admitVlogGenerationRewriteIDs(ids []uint32, penalties map[uint32]valueLogGe
 			admitted = append(admitted, id)
 			continue
 		}
-		if retried >= maxRetried {
+		_, usefulBytes := vlogGenerationRewriteHistoryUsefulness(id, history)
+		if usefulBytes > 0 {
+			admitted = append(admitted, id)
+			continue
+		}
+		if haveUsefulRetry || retried >= maxRetried {
 			continue
 		}
 		retried++
@@ -706,9 +723,21 @@ func admitVlogGenerationRewriteIDs(ids []uint32, penalties map[uint32]valueLogGe
 	return admitted
 }
 
-func admitVlogGenerationRewriteLedger(ledger []backenddb.ValueLogRewritePlanSegment, penalties map[uint32]valueLogGenerationRewritePenalty, maxRetried int) []backenddb.ValueLogRewritePlanSegment {
+func admitVlogGenerationRewriteLedger(ledger []backenddb.ValueLogRewritePlanSegment, history map[uint32]valueLogGenerationRewriteHistory, penalties map[uint32]valueLogGenerationRewritePenalty, maxRetried int) []backenddb.ValueLogRewritePlanSegment {
 	if len(ledger) == 0 || len(penalties) == 0 || maxRetried < 0 {
 		return append([]backenddb.ValueLogRewritePlanSegment(nil), ledger...)
+	}
+	haveUsefulRetry := false
+	for _, seg := range ledger {
+		attempts, _ := vlogGenerationRewritePenaltySortKey(seg.FileID, penalties)
+		if attempts <= 0 {
+			continue
+		}
+		_, usefulBytes := vlogGenerationRewriteHistoryUsefulness(seg.FileID, history)
+		if usefulBytes > 0 {
+			haveUsefulRetry = true
+			break
+		}
 	}
 	admitted := make([]backenddb.ValueLogRewritePlanSegment, 0, len(ledger))
 	retried := 0
@@ -718,7 +747,12 @@ func admitVlogGenerationRewriteLedger(ledger []backenddb.ValueLogRewritePlanSegm
 			admitted = append(admitted, seg)
 			continue
 		}
-		if retried >= maxRetried {
+		_, usefulBytes := vlogGenerationRewriteHistoryUsefulness(seg.FileID, history)
+		if usefulBytes > 0 {
+			admitted = append(admitted, seg)
+			continue
+		}
+		if haveUsefulRetry || retried >= maxRetried {
 			continue
 		}
 		retried++
@@ -727,12 +761,12 @@ func admitVlogGenerationRewriteLedger(ledger []backenddb.ValueLogRewritePlanSegm
 	return admitted
 }
 
-func vlogGenerationRewriteQueueChunkWithPenalty(ids []uint32, penalties map[uint32]valueLogGenerationRewritePenalty, maxSegments int) []uint32 {
+func vlogGenerationRewriteQueueChunkWithPenalty(ids []uint32, history map[uint32]valueLogGenerationRewriteHistory, penalties map[uint32]valueLogGenerationRewritePenalty, maxSegments int) []uint32 {
 	if len(ids) == 0 || maxSegments <= 0 {
 		return nil
 	}
 	if len(penalties) > 0 {
-		ids = admitVlogGenerationRewriteIDs(ids, penalties, vlogGenerationRewriteRetriedSelectionLimit)
+		ids = admitVlogGenerationRewriteIDs(ids, history, penalties, vlogGenerationRewriteRetriedSelectionLimit)
 	}
 	if len(ids) > maxSegments {
 		ids = ids[:maxSegments]
@@ -741,7 +775,7 @@ func vlogGenerationRewriteQueueChunkWithPenalty(ids []uint32, penalties map[uint
 }
 
 func vlogGenerationRewriteQueueChunk(ids []uint32, maxSegments int) []uint32 {
-	return vlogGenerationRewriteQueueChunkWithPenalty(ids, nil, maxSegments)
+	return vlogGenerationRewriteQueueChunkWithPenalty(ids, nil, nil, maxSegments)
 }
 
 func vlogGenerationRewriteLedgerChunkWithPenalty(ledger []backenddb.ValueLogRewritePlanSegment, history map[uint32]valueLogGenerationRewriteHistory, penalties map[uint32]valueLogGenerationRewritePenalty, maxSegments int, budgetLiveBytes int64) []uint32 {
@@ -799,7 +833,7 @@ func vlogGenerationRewriteLedgerChunkWithPenalty(ledger []backenddb.ValueLogRewr
 		return a.FileID < b.FileID
 	})
 	if len(penalties) > 0 {
-		candidates = admitVlogGenerationRewriteLedger(candidates, penalties, vlogGenerationRewriteRetriedSelectionLimit)
+		candidates = admitVlogGenerationRewriteLedger(candidates, history, penalties, vlogGenerationRewriteRetriedSelectionLimit)
 	}
 
 	ids := make([]uint32, 0, maxSegments)
