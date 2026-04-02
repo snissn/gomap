@@ -667,6 +667,21 @@ func vlogGenerationRewritePenaltySortKey(id uint32, penalties map[uint32]valueLo
 	return penalty.Attempts, penalty.LastGrowthBytes
 }
 
+func vlogGenerationRewritePenaltyStaleDelta(seg backenddb.ValueLogRewritePlanSegment, penalties map[uint32]valueLogGenerationRewritePenalty) int64 {
+	if seg.FileID == 0 || len(penalties) == 0 {
+		return 0
+	}
+	penalty, ok := penalties[seg.FileID]
+	if !ok || penalty.LastStaleBytes <= 0 {
+		return 0
+	}
+	delta := seg.BytesStale - penalty.LastStaleBytes
+	if delta <= 0 {
+		return 0
+	}
+	return delta
+}
+
 func prioritizeVlogGenerationRewriteIDs(ids []uint32, penalties map[uint32]valueLogGenerationRewritePenalty) []uint32 {
 	if len(ids) <= 1 || len(penalties) == 0 {
 		return append([]uint32(nil), ids...)
@@ -696,6 +711,11 @@ func prioritizeVlogGenerationRewriteLedger(ledger []backenddb.ValueLogRewritePla
 		bj, bg := vlogGenerationRewritePenaltySortKey(ordered[j].FileID, penalties)
 		if ai != bj {
 			return ai < bj
+		}
+		ad := vlogGenerationRewritePenaltyStaleDelta(ordered[i], penalties)
+		bd := vlogGenerationRewritePenaltyStaleDelta(ordered[j], penalties)
+		if ad != bd {
+			return ad > bd
 		}
 		if ag != bg {
 			return ag < bg
@@ -797,6 +817,11 @@ func vlogGenerationRewriteLedgerChunkWithPenalty(ledger []backenddb.ValueLogRewr
 		bj, bg := vlogGenerationRewritePenaltySortKey(candidates[j].FileID, penalties)
 		if ai != bj {
 			return ai < bj
+		}
+		ad := vlogGenerationRewritePenaltyStaleDelta(candidates[i], penalties)
+		bd := vlogGenerationRewritePenaltyStaleDelta(candidates[j], penalties)
+		if ad != bd {
+			return ad > bd
 		}
 		if ag != bg {
 			return ag < bg
