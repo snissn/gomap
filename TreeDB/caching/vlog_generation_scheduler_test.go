@@ -3070,6 +3070,71 @@ func TestVlogGenerationRewriteQueue_LedgerOrdersByStaleRatio(t *testing.T) {
 	}
 }
 
+func TestVlogGenerationRewriteQueue_SuppressesImmediateFollowupWithoutUnreferencedBytes(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+
+	dir := t.TempDir()
+
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	recorder := &rewriteBudgetRecordingBackend{
+		DB: backend,
+		rewriteResponse: backenddb.ValueLogRewriteStats{
+			BytesBefore:                   64,
+			BytesAfter:                    64,
+			RecordsCopied:                 1,
+			SourceSegmentsRequested:       1,
+			SourceSegmentsStillReferenced: 1,
+			SourceBytesRequested:          128,
+			SourceBytesUnreferenced:       0,
+			SourceFileIDsStillReferenced:  []uint32{11},
+		},
+	}
+
+	db, cleanup := openRewriteQueueTestDB(t, dir, recorder)
+	t.Cleanup(cleanup)
+
+	if err := db.setVlogGenerationRewriteLedger([]backenddb.ValueLogRewritePlanSegment{
+		{FileID: 11, BytesLive: 128, BytesTotal: 256, BytesStale: 128, StaleRatio: 0.5},
+	}); err != nil {
+		t.Fatalf("set ledger: %v", err)
+	}
+
+	db.vlogGenerationRewriteBudgetTokensBytes.Store(64)
+	db.vlogGenerationLastRewriteUnixNano.Store(time.Now().Add(-2 * vlogGenerationRewriteResumeMinInterval).UnixNano())
+	forceVlogMaintenanceIdle(db)
+	runRewriteQueueMaintenanceForTest(db)
+
+	if _, calls := recorder.recordedRewrite(); calls != 1 {
+		t.Fatalf("rewrite calls after first pass=%d want=1", calls)
+	}
+	if db.vlogGenerationRewriteQueuePending.Load() {
+		t.Fatalf("rewrite queue pending should stay clear after suppressed follow-up")
+	}
+	if got := db.vlogGenerationRewriteIneffectiveLastNS.Load(); got != 0 {
+		t.Fatalf("global ineffective backoff unexpectedly armed for queued follow-up suppression: %d", got)
+	}
+	penalties, err := db.currentVlogGenerationRewritePenalties()
+	if err != nil {
+		t.Fatalf("current penalties: %v", err)
+	}
+	penalty, ok := penalties[11]
+	if !ok || penalty.CooldownUntilUnixNano == 0 {
+		t.Fatalf("expected follow-up penalty for queued segment, got=%v", penalties)
+	}
+
+	runRewriteQueueMaintenanceForTest(db)
+	if _, calls := recorder.recordedRewrite(); calls != 1 {
+		t.Fatalf("rewrite calls after immediate retry=%d want still=1", calls)
+	}
+	stats := db.Stats()
+	if got := stats["treedb.cache.vlog_generation.rewrite.queued_debt.followup_suppressed"]; got != "1" {
+		t.Fatalf("queued debt followup_suppressed=%q want 1", got)
+	}
+}
+
 func TestVlogGenerationRewriteQueue_PrunesZeroLiveLedgerBeforeResume(t *testing.T) {
 	prepareDirectSchedulerTest(t)
 

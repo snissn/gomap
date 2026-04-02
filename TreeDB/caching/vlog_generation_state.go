@@ -537,6 +537,25 @@ func (db *DB) currentVlogGenerationRewriteChunkLedger() ([]backenddb.ValueLogRew
 	return append([]backenddb.ValueLogRewritePlanChunk(nil), db.vlogGenerationRewriteChunkLedger...), db.vlogGenerationRewriteChunkBytes, nil
 }
 
+func (db *DB) currentVlogGenerationRewriteEligible(now time.Time) ([]uint32, []backenddb.ValueLogRewritePlanSegment, error) {
+	if db == nil {
+		return nil, nil, nil
+	}
+	db.vlogGenerationRewriteQueueMu.Lock()
+	defer db.vlogGenerationRewriteQueueMu.Unlock()
+	if err := db.loadVlogGenerationRewriteQueueLocked(); err != nil {
+		return nil, nil, err
+	}
+	queue := append([]uint32(nil), db.vlogGenerationRewriteQueue...)
+	ledger := append([]backenddb.ValueLogRewritePlanSegment(nil), db.vlogGenerationRewriteLedger...)
+	if len(queue) == 0 || len(db.vlogGenerationRewritePenalties) == 0 {
+		return queue, ledger, nil
+	}
+	return filterVlogGenerationRewriteIDsByPenalty(queue, db.vlogGenerationRewritePenalties, now),
+		filterVlogGenerationRewriteLedgerByPenalty(ledger, db.vlogGenerationRewritePenalties, now),
+		nil
+}
+
 func (db *DB) currentVlogGenerationRewriteStage() (bool, int64, error) {
 	if db == nil {
 		return false, 0, nil
