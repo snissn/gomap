@@ -551,9 +551,11 @@ func (db *DB) currentVlogGenerationRewriteEligible(now time.Time) ([]uint32, []b
 	if len(queue) == 0 || len(db.vlogGenerationRewritePenalties) == 0 {
 		return queue, ledger, nil
 	}
-	return filterVlogGenerationRewriteIDsByPenalty(queue, db.vlogGenerationRewritePenalties, now),
-		filterVlogGenerationRewriteLedgerByPenalty(ledger, db.vlogGenerationRewritePenalties, now),
-		nil
+	queue = filterVlogGenerationRewriteIDsByPenalty(queue, db.vlogGenerationRewritePenalties, now)
+	ledger = filterVlogGenerationRewriteLedgerByPenalty(ledger, db.vlogGenerationRewritePenalties, now)
+	queue = prioritizeVlogGenerationRewriteIDs(queue, db.vlogGenerationRewritePenalties)
+	ledger = prioritizeVlogGenerationRewriteLedger(ledger, db.vlogGenerationRewritePenalties)
+	return queue, ledger, nil
 }
 
 func (db *DB) currentVlogGenerationRewriteStage() (bool, int64, error) {
@@ -650,6 +652,66 @@ func (db *DB) pruneVlogGenerationRewriteLedgerNonPositiveLive() ([]uint32, int, 
 	return append([]uint32(nil), filteredIDs...), dropped, nil
 }
 
+func vlogGenerationRewritePenaltySortKey(id uint32, penalties map[uint32]valueLogGenerationRewritePenalty) (attempts int, growth int64) {
+	if id == 0 || len(penalties) == 0 {
+		return 0, 0
+	}
+	penalty, ok := penalties[id]
+	if !ok {
+		return 0, 0
+	}
+	return penalty.Attempts, penalty.LastGrowthBytes
+}
+
+func prioritizeVlogGenerationRewriteIDs(ids []uint32, penalties map[uint32]valueLogGenerationRewritePenalty) []uint32 {
+	if len(ids) <= 1 || len(penalties) == 0 {
+		return append([]uint32(nil), ids...)
+	}
+	ordered := append([]uint32(nil), ids...)
+	sort.SliceStable(ordered, func(i, j int) bool {
+		ai, ag := vlogGenerationRewritePenaltySortKey(ordered[i], penalties)
+		bj, bg := vlogGenerationRewritePenaltySortKey(ordered[j], penalties)
+		if ai != bj {
+			return ai < bj
+		}
+		if ag != bg {
+			return ag < bg
+		}
+		return ordered[i] < ordered[j]
+	})
+	return ordered
+}
+
+func prioritizeVlogGenerationRewriteLedger(ledger []backenddb.ValueLogRewritePlanSegment, penalties map[uint32]valueLogGenerationRewritePenalty) []backenddb.ValueLogRewritePlanSegment {
+	if len(ledger) <= 1 || len(penalties) == 0 {
+		return append([]backenddb.ValueLogRewritePlanSegment(nil), ledger...)
+	}
+	ordered := append([]backenddb.ValueLogRewritePlanSegment(nil), ledger...)
+	sort.SliceStable(ordered, func(i, j int) bool {
+		ai, ag := vlogGenerationRewritePenaltySortKey(ordered[i].FileID, penalties)
+		bj, bg := vlogGenerationRewritePenaltySortKey(ordered[j].FileID, penalties)
+		if ai != bj {
+			return ai < bj
+		}
+		if ag != bg {
+			return ag < bg
+		}
+		a := ordered[i]
+		b := ordered[j]
+		if a.StaleRatio != b.StaleRatio {
+			return a.StaleRatio > b.StaleRatio
+		}
+		if a.BytesStale != b.BytesStale {
+			return a.BytesStale > b.BytesStale
+		}
+		if a.BytesTotal != b.BytesTotal {
+			return a.BytesTotal > b.BytesTotal
+		}
+		return a.FileID < b.FileID
+	})
+	return ordered
+}
+
 func vlogGenerationRewriteQueueChunk(ids []uint32, maxSegments int) []uint32 {
 	if len(ids) == 0 || maxSegments <= 0 {
 		return nil
@@ -660,7 +722,7 @@ func vlogGenerationRewriteQueueChunk(ids []uint32, maxSegments int) []uint32 {
 	return append([]uint32(nil), ids...)
 }
 
-func vlogGenerationRewriteLedgerChunk(ledger []backenddb.ValueLogRewritePlanSegment, maxSegments int, budgetLiveBytes int64) []uint32 {
+func vlogGenerationRewriteLedgerChunkWithPenalty(ledger []backenddb.ValueLogRewritePlanSegment, penalties map[uint32]valueLogGenerationRewritePenalty, maxSegments int, budgetLiveBytes int64) []uint32 {
 	if len(ledger) == 0 || maxSegments <= 0 {
 		return nil
 	}
@@ -678,6 +740,14 @@ func vlogGenerationRewriteLedgerChunk(ledger []backenddb.ValueLogRewritePlanSegm
 		return nil
 	}
 	sort.SliceStable(candidates, func(i, j int) bool {
+		ai, ag := vlogGenerationRewritePenaltySortKey(candidates[i].FileID, penalties)
+		bj, bg := vlogGenerationRewritePenaltySortKey(candidates[j].FileID, penalties)
+		if ai != bj {
+			return ai < bj
+		}
+		if ag != bg {
+			return ag < bg
+		}
 		a := candidates[i]
 		b := candidates[j]
 		if a.StaleRatio != b.StaleRatio {
@@ -714,6 +784,10 @@ func vlogGenerationRewriteLedgerChunk(ledger []backenddb.ValueLogRewritePlanSegm
 		}
 	}
 	return ids
+}
+
+func vlogGenerationRewriteLedgerChunk(ledger []backenddb.ValueLogRewritePlanSegment, maxSegments int, budgetLiveBytes int64) []uint32 {
+	return vlogGenerationRewriteLedgerChunkWithPenalty(ledger, nil, maxSegments, budgetLiveBytes)
 }
 
 func stableVlogGenerationRewriteLedgerSegments(prev, planned []backenddb.ValueLogRewritePlanSegment) []backenddb.ValueLogRewritePlanSegment {
