@@ -1507,6 +1507,16 @@ func openRewriteQueueTestDB(t *testing.T, dir string, recorder *rewriteBudgetRec
 	return db, func() { _ = db.Close() }
 }
 
+func runRewriteQueueMaintenanceForTest(db *DB) {
+	db.maybeRunVlogGenerationMaintenanceWithOptions(false, vlogGenerationMaintenanceOptions{
+		bypassQuiet:           true,
+		skipRetainedPruneWait: true,
+		skipCheckpoint:        true,
+		rewriteDebtDrain:      true,
+		debugSource:           "rewrite_queue_pending",
+	})
+}
+
 func TestVlogGenerationMaintenance_SerializesConcurrentRuns(t *testing.T) {
 	prepareDirectSchedulerTest(t)
 
@@ -2311,6 +2321,64 @@ func TestVlogGenerationMaintenance_PrioritizesDeferredWakeOverPeriodicPass(t *te
 	}
 }
 
+func TestVlogGenerationMaintenance_ArmsDedicatedRewriteQueueSourceForExecutableDebt(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+
+	dir := t.TempDir()
+
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	recorder := &rewriteBudgetRecordingBackend{
+		DB: backend,
+		rewriteResponse: backenddb.ValueLogRewriteStats{
+			BytesBefore:   64,
+			BytesAfter:    32,
+			RecordsCopied: 1,
+		},
+	}
+
+	db, cleanup := openRewriteQueueTestDB(t, dir, recorder)
+	t.Cleanup(cleanup)
+	forceVlogMaintenanceIdle(db)
+	if err := db.setVlogGenerationRewriteQueue([]uint32{11}); err != nil {
+		t.Fatalf("seed rewrite queue: %v", err)
+	}
+
+	db.vlogGenerationRewriteQueueRunning.Store(true)
+	db.maybeRunVlogGenerationMaintenanceWithOptions(false, vlogGenerationMaintenanceOptions{})
+	if _, calls := recorder.recordedPlan(); calls != 0 {
+		t.Fatalf("periodic pass should hand off executable queue debt; plan calls=%d", calls)
+	}
+	if _, calls := recorder.recordedRewrite(); calls != 0 {
+		t.Fatalf("periodic pass should hand off executable queue debt; rewrite calls=%d", calls)
+	}
+	if !db.vlogGenerationRewriteQueuePending.Load() {
+		t.Fatalf("rewrite queue pending was not armed")
+	}
+
+	db.vlogGenerationRewriteQueueRunning.Store(false)
+	db.schedulePendingVlogGenerationRewriteQueue()
+	deadline := time.Now().Add(2 * schedulerTestWait(t))
+	for {
+		if _, calls := recorder.recordedRewrite(); calls >= 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("pending rewrite queue did not run rewrite")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if db.vlogGenerationRewriteQueuePending.Load() {
+		t.Fatalf("rewrite queue pending was not cleared after drain")
+	}
+	stats := db.Stats()
+	if got := stats["treedb.cache.vlog_generation.maintenance.acquired.source.rewrite_queue_pending"]; got != "1" {
+		t.Fatalf("maintenance acquired source rewrite_queue_pending=%q want 1", got)
+	}
+}
+
 func TestStartVlogGenerationDeferredMaintenance_PreservesPendingWhenRunnerActive(t *testing.T) {
 	db := &DB{}
 	db.vlogGenerationDeferredMaintenanceRunning.Store(true)
@@ -2326,6 +2394,24 @@ func TestStartVlogGenerationDeferredMaintenance_PreservesPendingWhenRunnerActive
 
 	if !db.vlogGenerationDeferredMaintenancePending.Load() {
 		t.Fatalf("deferred maintenance request was not preserved while runner active")
+	}
+}
+
+func TestStartVlogGenerationRewriteQueueMaintenance_PreservesPendingWhenRunnerActive(t *testing.T) {
+	db := &DB{}
+	db.vlogGenerationRewriteQueueRunning.Store(true)
+	db.vlogGenerationRewriteQueuePending.Store(false)
+
+	db.startVlogGenerationRewriteQueueMaintenance(vlogGenerationMaintenanceOptions{
+		bypassQuiet:           true,
+		skipRetainedPruneWait: true,
+		skipCheckpoint:        false,
+		rewriteDebtDrain:      true,
+		debugSource:           "rewrite_queue_pending",
+	})
+
+	if !db.vlogGenerationRewriteQueuePending.Load() {
+		t.Fatalf("rewrite queue request was not preserved while runner active")
 	}
 }
 
@@ -2843,12 +2929,12 @@ func TestVlogGenerationRewriteQueue_DoesNotRunWhenBudgetEmpty(t *testing.T) {
 	}
 	db.vlogGenerationRewriteBudgetTokensBytes.Store(0)
 	// Prevent budget accrual from re-filling the token bucket between the Store(0)
-	// above and maybeRunVlogGenerationMaintenance(), which would defeat this
+	// above and the queued rewrite pass, which would defeat this
 	// "empty budget" assertion on slow/loaded CI runners.
 	db.vlogGenerationRewriteBudgetLastUnixNano.Store(time.Now().Add(10 * time.Second).UnixNano())
 	db.vlogGenerationLastRewriteUnixNano.Store(time.Now().Add(-2 * vlogGenerationRewriteResumeMinInterval).UnixNano())
 	forceVlogMaintenanceIdle(db)
-	db.maybeRunVlogGenerationMaintenance(false)
+	runRewriteQueueMaintenanceForTest(db)
 
 	if _, calls := recorder.recordedRewrite(); calls != 1 {
 		t.Fatalf("rewrite calls with empty budget=%d want still=1", calls)
@@ -2887,9 +2973,10 @@ func TestVlogGenerationRewriteQueue_TracksQueuedDebtNoChunkSkips(t *testing.T) {
 		t.Fatalf("set ledger: %v", err)
 	}
 	db.vlogGenerationRewriteBudgetTokensBytes.Store(1024)
+	db.vlogGenerationRewriteBudgetLastUnixNano.Store(0)
 	db.vlogGenerationLastRewriteUnixNano.Store(time.Now().Add(-2 * vlogGenerationRewriteResumeMinInterval).UnixNano())
 	forceVlogMaintenanceIdle(db)
-	db.maybeRunVlogGenerationMaintenance(false)
+	runRewriteQueueMaintenanceForTest(db)
 
 	if _, calls := recorder.recordedRewrite(); calls != 0 {
 		t.Fatalf("rewrite calls=%d want=0 (no executable queued chunk)", calls)
@@ -2939,9 +3026,10 @@ func TestVlogGenerationRewriteQueue_LedgerOrdersByStaleRatio(t *testing.T) {
 	}
 
 	db.vlogGenerationRewriteBudgetTokensBytes.Store(1024)
+	db.vlogGenerationRewriteBudgetLastUnixNano.Store(0)
 	db.vlogGenerationLastRewriteUnixNano.Store(time.Now().Add(-2 * vlogGenerationRewriteResumeMinInterval).UnixNano())
 	forceVlogMaintenanceIdle(db)
-	db.maybeRunVlogGenerationMaintenance(false)
+	runRewriteQueueMaintenanceForTest(db)
 
 	opts, calls := recorder.recordedRewrite()
 	if calls != 1 {
@@ -3005,9 +3093,10 @@ func TestVlogGenerationRewriteQueue_PrunesZeroLiveLedgerBeforeResume(t *testing.
 	}
 
 	db.vlogGenerationRewriteBudgetTokensBytes.Store(1024)
+	db.vlogGenerationRewriteBudgetLastUnixNano.Store(0)
 	db.vlogGenerationLastRewriteUnixNano.Store(time.Now().Add(-2 * vlogGenerationRewriteResumeMinInterval).UnixNano())
 	forceVlogMaintenanceIdle(db)
-	db.maybeRunVlogGenerationMaintenance(false)
+	runRewriteQueueMaintenanceForTest(db)
 
 	opts, calls := recorder.recordedRewrite()
 	if calls != 1 {
@@ -3054,9 +3143,10 @@ func TestVlogGenerationRewriteQueue_PrunesLowQualityLedgerBeforeResume(t *testin
 	}
 
 	db.vlogGenerationRewriteBudgetTokensBytes.Store(1024)
+	db.vlogGenerationRewriteBudgetLastUnixNano.Store(0)
 	db.vlogGenerationLastRewriteUnixNano.Store(time.Now().Add(-2 * vlogGenerationRewriteResumeMinInterval).UnixNano())
 	forceVlogMaintenanceIdle(db)
-	db.maybeRunVlogGenerationMaintenance(false)
+	runRewriteQueueMaintenanceForTest(db)
 
 	opts, calls := recorder.recordedRewrite()
 	if calls != 1 {
@@ -3120,7 +3210,7 @@ func TestVlogGenerationRewriteQueue_ResumesWithoutReplanning(t *testing.T) {
 
 	db.vlogGenerationLastRewriteUnixNano.Store(time.Now().Add(-2 * vlogGenerationRewriteResumeMinInterval).UnixNano())
 	forceVlogMaintenanceIdle(db)
-	db.maybeRunVlogGenerationMaintenance(false)
+	runRewriteQueueMaintenanceForTest(db)
 
 	if _, calls := recorder.recordedPlan(); calls != 1 {
 		t.Fatalf("plan calls after second run=%d want=1", calls)
@@ -3174,9 +3264,10 @@ func TestVlogGenerationRewriteQueue_KeepsStillReferencedSegmentQueuedWhenBounded
 	}
 
 	db.vlogGenerationRewriteBudgetTokensBytes.Store(1024)
+	db.vlogGenerationRewriteBudgetLastUnixNano.Store(0)
 	db.vlogGenerationLastRewriteUnixNano.Store(time.Now().Add(-2 * vlogGenerationRewriteResumeMinInterval).UnixNano())
 	forceVlogMaintenanceIdle(db)
-	db.maybeRunVlogGenerationMaintenance(false)
+	runRewriteQueueMaintenanceForTest(db)
 
 	opts, calls := recorder.recordedRewrite()
 	if calls != 1 {
@@ -3235,12 +3326,7 @@ func TestVlogGenerationRewriteQueue_DebtDrainSelectsMultipleSegmentsAndBoundsExe
 	db.vlogGenerationRewriteBudgetTokensBytes.Store(172)
 	db.vlogGenerationLastRewriteUnixNano.Store(time.Now().Add(-2 * vlogGenerationRewriteResumeMinInterval).UnixNano())
 	forceVlogMaintenanceIdle(db)
-	db.maybeRunVlogGenerationMaintenanceWithOptions(true, vlogGenerationMaintenanceOptions{
-		bypassQuiet:           true,
-		skipRetainedPruneWait: true,
-		skipCheckpoint:        true,
-		rewriteDebtDrain:      true,
-	})
+	runRewriteQueueMaintenanceForTest(db)
 
 	opts, calls := recorder.recordedRewrite()
 	if calls != 1 {
@@ -3367,9 +3453,10 @@ func TestVlogGenerationRewriteQueue_ConsumesMissingBoundedSourceIDs(t *testing.T
 	}
 
 	db.vlogGenerationRewriteBudgetTokensBytes.Store(1024)
+	db.vlogGenerationRewriteBudgetLastUnixNano.Store(0)
 	db.vlogGenerationLastRewriteUnixNano.Store(time.Now().Add(-2 * vlogGenerationRewriteResumeMinInterval).UnixNano())
 	forceVlogMaintenanceIdle(db)
-	db.maybeRunVlogGenerationMaintenance(false)
+	runRewriteQueueMaintenanceForTest(db)
 
 	opts, calls := recorder.recordedRewrite()
 	if calls != 1 {
@@ -3435,9 +3522,10 @@ func TestVlogGenerationRewriteQueue_BoundedSegmentEventuallyDrainsWithoutReplann
 	}
 
 	db.vlogGenerationRewriteBudgetTokensBytes.Store(1024)
+	db.vlogGenerationRewriteBudgetLastUnixNano.Store(0)
 	db.vlogGenerationLastRewriteUnixNano.Store(time.Now().Add(-2 * vlogGenerationRewriteResumeMinInterval).UnixNano())
 	forceVlogMaintenanceIdle(db)
-	db.maybeRunVlogGenerationMaintenance(false)
+	runRewriteQueueMaintenanceForTest(db)
 
 	if _, calls := recorder.recordedPlan(); calls != 0 {
 		t.Fatalf("plan calls after first bounded pass=%d want=0", calls)
@@ -3461,9 +3549,10 @@ func TestVlogGenerationRewriteQueue_BoundedSegmentEventuallyDrainsWithoutReplann
 	}
 
 	db.vlogGenerationRewriteBudgetTokensBytes.Store(1024)
+	db.vlogGenerationRewriteBudgetLastUnixNano.Store(0)
 	db.vlogGenerationLastRewriteUnixNano.Store(time.Now().Add(-2 * vlogGenerationRewriteResumeMinInterval).UnixNano())
 	forceVlogMaintenanceIdle(db)
-	db.maybeRunVlogGenerationMaintenance(false)
+	runRewriteQueueMaintenanceForTest(db)
 
 	if _, calls := recorder.recordedPlan(); calls != 0 {
 		t.Fatalf("plan calls after second bounded pass=%d want=0", calls)
@@ -3515,12 +3604,7 @@ func TestVlogGenerationRewriteQueue_DebtDrainProcessesMultipleSegments(t *testin
 	db.vlogGenerationRewriteBudgetTokensBytes.Store(defaultVlogGenerationWarmTargetBytes * 4)
 	db.vlogGenerationLastRewriteUnixNano.Store(time.Now().Add(-2 * vlogGenerationRewriteResumeMinInterval).UnixNano())
 	forceVlogMaintenanceIdle(db)
-	db.maybeRunVlogGenerationMaintenanceWithOptions(true, vlogGenerationMaintenanceOptions{
-		bypassQuiet:           true,
-		skipRetainedPruneWait: true,
-		skipCheckpoint:        true,
-		rewriteDebtDrain:      true,
-	})
+	runRewriteQueueMaintenanceForTest(db)
 
 	opts, calls := recorder.recordedRewrite()
 	if calls != 1 {
@@ -7722,6 +7806,7 @@ func TestVlogGenerationStats_ReportRewriteBacklogAndDurations(t *testing.T) {
 	db.vlogGenerationMaintenanceAcquiredBySource[vlogGenerationMaintenanceSourcePeriodic].Store(5)
 	db.vlogGenerationMaintenanceAcquiredBySource[vlogGenerationMaintenanceSourceBypass].Store(2)
 	db.vlogGenerationMaintenanceAcquiredBySource[vlogGenerationMaintenanceSourceCheckpointPending].Store(3)
+	db.vlogGenerationMaintenanceAcquiredBySource[vlogGenerationMaintenanceSourceRewriteQueuePending].Store(6)
 	db.vlogGenerationMaintenanceAcquiredBySource[vlogGenerationMaintenanceSourceRewriteAgeBlocked].Store(1)
 	db.vlogGenerationMaintenanceAcquiredBySource[vlogGenerationMaintenanceSourceRewriteStageConfirm].Store(4)
 	db.vlogGenerationMaintenanceAcquiredBySource[vlogGenerationMaintenanceSourceOther].Store(7)
@@ -7824,6 +7909,8 @@ func TestVlogGenerationStats_ReportRewriteBacklogAndDurations(t *testing.T) {
 		102: 1,
 	}
 	db.vlogGenerationObservedGCMu.Unlock()
+	db.vlogGenerationRewriteQueuePending.Store(true)
+	db.vlogGenerationRewriteQueueRunning.Store(false)
 
 	stats := db.Stats()
 	if got := stats["treedb.cache.vlog_generation.maintenance.pass.total_ms"]; got != "40.000" {
@@ -7835,6 +7922,12 @@ func TestVlogGenerationStats_ReportRewriteBacklogAndDurations(t *testing.T) {
 	if got := stats["treedb.cache.vlog_generation.maintenance.pass.avg_ms"]; got != "20.000" {
 		t.Fatalf("maintenance pass avg ms=%q want 20.000", got)
 	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.queue.pending"]; got != "true" {
+		t.Fatalf("rewrite queue pending=%q want true", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.queue.running"]; got != "false" {
+		t.Fatalf("rewrite queue running=%q want false", got)
+	}
 	if got := stats["treedb.cache.vlog_generation.maintenance.acquired.source.periodic"]; got != "5" {
 		t.Fatalf("maintenance acquired source periodic=%q want 5", got)
 	}
@@ -7843,6 +7936,9 @@ func TestVlogGenerationStats_ReportRewriteBacklogAndDurations(t *testing.T) {
 	}
 	if got := stats["treedb.cache.vlog_generation.maintenance.acquired.source.checkpoint_pending"]; got != "3" {
 		t.Fatalf("maintenance acquired source checkpoint_pending=%q want 3", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.maintenance.acquired.source.rewrite_queue_pending"]; got != "6" {
+		t.Fatalf("maintenance acquired source rewrite_queue_pending=%q want 6", got)
 	}
 	if got := stats["treedb.cache.vlog_generation.maintenance.acquired.source.rewrite_age_blocked"]; got != "1" {
 		t.Fatalf("maintenance acquired source rewrite_age_blocked=%q want 1", got)
