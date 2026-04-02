@@ -11,7 +11,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/snissn/gomap/TreeDB/batch"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
 )
 
 type blockingRewritePlannerBackend struct {
@@ -1344,6 +1346,38 @@ func TestVlogGenerationRewriteMaxSegments_UsesOverrideLimits(t *testing.T) {
 	}
 }
 
+type plannerOnlyRecordingBackend struct {
+	inner *rewriteBudgetRecordingBackend
+}
+
+func (b *plannerOnlyRecordingBackend) Get(key []byte) ([]byte, error) { return b.inner.Get(key) }
+func (b *plannerOnlyRecordingBackend) GetUnsafe(key []byte) ([]byte, error) {
+	return b.inner.GetUnsafe(key)
+}
+func (b *plannerOnlyRecordingBackend) GetAppend(key, dst []byte) ([]byte, error) {
+	return b.inner.GetAppend(key, dst)
+}
+func (b *plannerOnlyRecordingBackend) Has(key []byte) (bool, error) { return b.inner.Has(key) }
+func (b *plannerOnlyRecordingBackend) Iterator(start, end []byte) (iterator.UnsafeIterator, error) {
+	return b.inner.Iterator(start, end)
+}
+func (b *plannerOnlyRecordingBackend) ReverseIterator(start, end []byte) (iterator.UnsafeIterator, error) {
+	return b.inner.ReverseIterator(start, end)
+}
+func (b *plannerOnlyRecordingBackend) NewBatch() batch.Interface { return b.inner.NewBatch() }
+func (b *plannerOnlyRecordingBackend) Close() error              { return b.inner.Close() }
+func (b *plannerOnlyRecordingBackend) Print() error              { return b.inner.Print() }
+func (b *plannerOnlyRecordingBackend) Stats() map[string]string  { return b.inner.Stats() }
+func (b *plannerOnlyRecordingBackend) ValueLogRewritePlan(ctx context.Context, opts backenddb.ValueLogRewriteOnlineOptions) (backenddb.ValueLogRewritePlan, error) {
+	return b.inner.ValueLogRewritePlan(ctx, opts)
+}
+func (b *plannerOnlyRecordingBackend) ValueLogRewriteOnline(ctx context.Context, opts backenddb.ValueLogRewriteOnlineOptions) (backenddb.ValueLogRewriteStats, error) {
+	return b.inner.ValueLogRewriteOnline(ctx, opts)
+}
+func (b *plannerOnlyRecordingBackend) ValueLogGC(ctx context.Context, opts backenddb.ValueLogGCOptions) (backenddb.ValueLogGCStats, error) {
+	return b.inner.ValueLogGC(ctx, opts)
+}
+
 type rewriteBudgetRecordingBackend struct {
 	*backenddb.DB
 
@@ -1518,6 +1552,41 @@ func (b *rewriteBudgetRecordingBackend) recordedGCObservedSourceCalls() int {
 		count++
 	}
 	return count
+}
+
+func openRewriteQueuePlannerOnlyTestDB(t *testing.T, dir string, recorder *rewriteBudgetRecordingBackend) (*DB, func()) {
+	t.Helper()
+	backend := &plannerOnlyRecordingBackend{inner: recorder}
+	db, err := Open(dir, backend, Options{
+		AllowUnsafe:                      true,
+		DisableWAL:                       true,
+		JournalLanes:                     1,
+		ValueLogGenerationPolicy:         uint8(backenddb.ValueLogGenerationHotWarmCold),
+		ValueLogRewriteTriggerTotalBytes: 1,
+		ValueLogRewriteBudgetBytesPerSec: 1024,
+		ForceValueLogPointers:            true,
+	})
+	if err != nil {
+		t.Fatalf("open cachingdb: %v", err)
+	}
+	db.testSkipVlogCheckpointKick = true
+	value := make([]byte, 2048)
+	b := db.NewBatch()
+	if err := b.Set([]byte("k"), value); err != nil {
+		_ = b.Close()
+		t.Fatalf("set: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		_ = b.Close()
+		t.Fatalf("write: %v", err)
+	}
+	_ = b.Close()
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
+	db.vlogGenerationRewriteBudgetTokensBytes.Store(1024)
+	forceVlogMaintenanceIdle(db)
+	return db, func() { _ = db.Close() }
 }
 
 func openRewriteQueueTestDB(t *testing.T, dir string, recorder *rewriteBudgetRecordingBackend) (*DB, func()) {
@@ -4463,7 +4532,7 @@ func TestVlogGenerationRewritePlan_StagesFreshStaleRatioDebtBeforeRewrite(t *tes
 		},
 	}
 
-	db, cleanup := openRewriteQueueTestDB(t, dir, recorder)
+	db, cleanup := openRewriteQueuePlannerOnlyTestDB(t, dir, recorder)
 	t.Cleanup(cleanup)
 	db.valueLogRewriteTriggerBytes = 0
 	db.valueLogRewriteTriggerRatioPPM = 1
@@ -4502,6 +4571,86 @@ func TestVlogGenerationRewritePlan_StagesFreshStaleRatioDebtBeforeRewrite(t *tes
 	}
 	if rewriteCalls != 1 {
 		t.Fatalf("rewrite calls after second stale-ratio pass=%d want=1", rewriteCalls)
+	}
+}
+
+func TestVlogGenerationRewriteChunkPlan_BootstrapsFreshStaleRatioDebt(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	recorder := &rewriteBudgetRecordingBackend{
+		DB: backend,
+		chunkPlanResponse: backenddb.ValueLogRewriteChunkPlan{
+			ChunkBytes: 16 << 20,
+			SourceChunks: []backenddb.ValueLogRewritePlanChunk{
+				{FileID: 11, ChunkOffset: 0, BytesTotal: 64 << 20, BytesLive: 8 << 20, BytesStale: 56 << 20, StaleRatio: 0.875},
+				{FileID: 11, ChunkOffset: 16 << 20, BytesTotal: 64 << 20, BytesLive: 8 << 20, BytesStale: 56 << 20, StaleRatio: 0.875},
+			},
+			ChunksTotal:        4,
+			ChunksSelected:     2,
+			BytesTotal:         256 << 20,
+			BytesLive:          192 << 20,
+			BytesStale:         64 << 20,
+			SelectedBytesTotal: 128 << 20,
+			SelectedBytesLive:  16 << 20,
+			SelectedBytesStale: 112 << 20,
+		},
+		rewriteResponse: backenddb.ValueLogRewriteStats{
+			BytesBefore:             64 << 20,
+			BytesAfter:              8 << 20,
+			RecordsCopied:           1,
+			SourceChunksRequested:   1,
+			SourceSegmentsRequested: 1,
+			SourceBytesProcessed:    8 << 20,
+			SourceChunkProgress: []backenddb.ValueLogRewriteChunkProgress{{
+				FileID:         11,
+				ChunkOffset:    0,
+				BytesProcessed: 8 << 20,
+			}},
+		},
+	}
+
+	db, cleanup := openRewriteQueueTestDB(t, dir, recorder)
+	t.Cleanup(cleanup)
+	db.valueLogRewriteTriggerBytes = 0
+	db.valueLogRewriteTriggerRatioPPM = 1
+	db.valueLogGenerationHotTarget = 0
+	forceVlogMaintenanceIdle(db)
+
+	db.maybeRunVlogGenerationMaintenance(false)
+	if _, _, calls := recorder.recordedChunkPlan(); calls != 1 {
+		t.Fatalf("chunk plan calls after first stale-ratio pass=%d want=1", calls)
+	}
+	rewriteOpts, rewriteCalls := recorder.recordedRewrite()
+	if rewriteCalls != 1 {
+		t.Fatalf("rewrite calls after first stale-ratio chunk pass=%d want=1", rewriteCalls)
+	}
+	if got, want := rewriteOpts.SourceFileIDs, []uint32{11}; len(got) != len(want) || got[0] != want[0] {
+		t.Fatalf("rewrite SourceFileIDs after stale-ratio chunk pass=%v want=%v", got, want)
+	}
+	if len(rewriteOpts.SourceChunks) != 1 || rewriteOpts.SourceChunks[0].ChunkOffset != 0 {
+		t.Fatalf("rewrite SourceChunks after stale-ratio chunk pass=%v want one chunk offset 0", rewriteOpts.SourceChunks)
+	}
+	stagePending, _, err := db.currentVlogGenerationRewriteStage()
+	if err != nil {
+		t.Fatalf("current rewrite stage: %v", err)
+	}
+	if stagePending {
+		t.Fatalf("expected stale-ratio chunk pass to leave executable queue debt, not staged debt")
+	}
+	chunks, chunkBytes, err := db.currentVlogGenerationRewriteChunkLedger()
+	if err != nil {
+		t.Fatalf("current rewrite chunk ledger: %v", err)
+	}
+	if chunkBytes != 16<<20 {
+		t.Fatalf("chunk bytes after stale-ratio chunk pass=%d want %d", chunkBytes, 16<<20)
+	}
+	if len(chunks) != 1 || chunks[0].FileID != 11 || chunks[0].ChunkOffset != 16<<20 {
+		t.Fatalf("chunk ledger after stale-ratio chunk pass=%v want remaining chunk at 16MiB", chunks)
 	}
 }
 
@@ -4879,7 +5028,7 @@ func TestVlogGenerationRewritePlan_StagePendingStillConfirmsWhenBudgetEmpty(t *t
 		},
 	}
 
-	db, cleanup := openRewriteQueueTestDB(t, dir, recorder)
+	db, cleanup := openRewriteQueuePlannerOnlyTestDB(t, dir, recorder)
 	t.Cleanup(cleanup)
 	db.valueLogRewriteTriggerBytes = 0
 	db.valueLogRewriteTriggerRatioPPM = 1

@@ -15952,7 +15952,11 @@ planned:
 					if len(prevChunks) == 0 {
 						prevLedger, _ = db.currentVlogGenerationRewriteLedger()
 					}
-					if prevChunkBytes == 0 || prevChunkBytes == rewriteChunkPlan.ChunkBytes {
+					if len(prevChunks) == 0 && len(prevLedger) == 0 {
+						// Fresh chunk plans are already bounded and resumable; bootstrap one
+						// chunk pass immediately instead of idling the first stale-ratio pass.
+						plannedChunksForExec = rewriteChunkPlan.SourceChunks
+					} else if prevChunkBytes == 0 || prevChunkBytes == rewriteChunkPlan.ChunkBytes {
 						plannedChunksForExec = stableVlogGenerationRewriteLedgerChunksWithSegmentFallback(prevChunks, prevLedger, rewriteChunkPlan.SourceChunks)
 					} else {
 						plannedChunksForExec = nil

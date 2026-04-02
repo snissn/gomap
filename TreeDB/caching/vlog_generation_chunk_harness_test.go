@@ -8,7 +8,7 @@ import (
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
 
-func TestVlogGenerationChunkHarness_StagesAndExecutesRealChunkDebt(t *testing.T) {
+func TestVlogGenerationChunkHarness_StaleRatioPassLeavesExecutableChunkDebt(t *testing.T) {
 	prepareDirectSchedulerTest(t)
 
 	dir := t.TempDir()
@@ -82,81 +82,38 @@ func TestVlogGenerationChunkHarness_StagesAndExecutesRealChunkDebt(t *testing.T)
 	forceVlogMaintenanceIdle(db)
 	db.maybeRunVlogGenerationMaintenance(false)
 
-	initialChunks, chunkBytes, err := db.currentVlogGenerationRewriteChunkLedger()
+	remainingChunks, chunkBytes, err := db.currentVlogGenerationRewriteChunkLedger()
 	if err != nil {
-		t.Fatalf("load chunk ledger after stage: %v", err)
+		t.Fatalf("load chunk ledger after stale-ratio pass: %v", err)
 	}
-	if len(initialChunks) == 0 {
+	if len(remainingChunks) == 0 || chunkBytes == 0 {
 		stats := db.Stats()
-		t.Fatalf("expected staged chunk debt after first maintenance pass; plan_runs=%s plan_empty=%s plan_empty_no_selection=%s plan_selected=%s plan_selected_chunks=%s ledger_chunks=%s stage_pending=%s age_blocked_remaining_ms=%s total_bytes=%s stale_total=%s live_total=%s",
-			stats["treedb.cache.vlog_generation.rewrite.plan_runs"],
-			stats["treedb.cache.vlog_generation.rewrite.plan_empty"],
-			stats["treedb.cache.vlog_generation.rewrite.plan_empty.no_selection"],
-			stats["treedb.cache.vlog_generation.rewrite.plan_selected"],
-			stats["treedb.cache.vlog_generation.rewrite.plan_selected_chunks_total"],
+		t.Fatalf("expected remaining chunk debt after bounded stale-ratio pass; ledger_chunks=%s stage_pending=%s runs=%s source_chunks_total=%s queued_rewrite_started=%s",
 			stats["treedb.cache.vlog_generation.rewrite.ledger_chunks"],
 			stats["treedb.cache.vlog_generation.rewrite.stage_pending"],
-			stats["treedb.cache.vlog_generation.rewrite.age_blocked_remaining_ms"],
-			stats["treedb.cache.vlog_generation.bytes.total.total"],
-			stats["treedb.cache.vlog_generation.bytes.stale.total"],
-			stats["treedb.cache.vlog_generation.bytes.live.total"],
+			stats["treedb.cache.vlog_generation.rewrite.runs"],
+			stats["treedb.cache.vlog_generation.rewrite.exec.source_chunks_total"],
+			stats["treedb.cache.vlog_generation.rewrite.queued_debt.rewrite_started"],
 		)
 	}
-	if chunkBytes == 0 {
-		t.Fatalf("expected non-zero chunk bytes after first maintenance pass")
+	queue, err := db.currentVlogGenerationRewriteQueue()
+	if err != nil {
+		t.Fatalf("load rewrite queue after stale-ratio pass: %v", err)
+	}
+	if len(queue) == 0 {
+		t.Fatalf("rewrite queue after stale-ratio pass=%v want remaining executable debt", queue)
+	}
+	stagePending, stageObservedAt, err := db.currentVlogGenerationRewriteStage()
+	if err != nil {
+		t.Fatalf("load rewrite stage after stale-ratio pass: %v", err)
+	}
+	if stagePending || stageObservedAt != 0 {
+		t.Fatalf("rewrite stage after stale-ratio pass pending=%t observed_at=%d want false/0", stagePending, stageObservedAt)
 	}
 
 	stats := db.Stats()
-	if got := stats["treedb.cache.vlog_generation.rewrite.stage_pending"]; got != "true" {
-		t.Fatalf("rewrite stage pending=%q want true", got)
-	}
-	if got := stats["treedb.cache.vlog_generation.rewrite.plan_selected"]; got == "0" {
-		t.Fatalf("rewrite plan selected=%q want >0", got)
-	}
 	if got := stats["treedb.cache.vlog_generation.rewrite.plan_selected_chunks_total"]; got == "0" {
 		t.Fatalf("rewrite plan selected chunks total=%q want >0", got)
-	}
-	if got := stats["treedb.cache.vlog_generation.rewrite.ledger_chunks"]; got == "0" {
-		t.Fatalf("rewrite ledger chunks=%q want >0", got)
-	}
-	if got := stats["treedb.cache.vlog_generation.rewrite.runs"]; got != "0" {
-		t.Fatalf("rewrite runs after staging=%q want 0", got)
-	}
-
-	db.vlogGenerationLastRewritePlanUnixNano.Store(0)
-	db.vlogGenerationLastRewriteUnixNano.Store(0)
-	forceRewriteStageConfirmDue(t, db)
-	db.vlogGenerationRewriteBudgetTokensBytes.Store(16 << 10)
-	forceVlogMaintenanceIdle(db)
-	db.maybeRunVlogGenerationMaintenanceWithOptions(false, vlogGenerationMaintenanceOptions{
-		bypassQuiet:           true,
-		skipRetainedPruneWait: true,
-		skipCheckpoint:        false,
-		rewriteDebtDrain:      true,
-		debugSource:           "rewrite_stage_confirm",
-	})
-
-	remainingChunks, _, err := db.currentVlogGenerationRewriteChunkLedger()
-	if err != nil {
-		t.Fatalf("load chunk ledger after confirm: %v", err)
-	}
-	initialLive := int64(0)
-	for i := range initialChunks {
-		initialLive += initialChunks[i].BytesLive
-	}
-	if len(remainingChunks) > 0 {
-		remainingLive := int64(0)
-		for i := range remainingChunks {
-			remainingLive += remainingChunks[i].BytesLive
-		}
-		if remainingLive >= initialLive {
-			t.Fatalf("remaining chunk live bytes=%d want < initial %d (chunks before=%d after=%d)", remainingLive, initialLive, len(initialChunks), len(remainingChunks))
-		}
-	}
-
-	stats = db.Stats()
-	if got := stats["treedb.cache.vlog_generation.maintenance.acquired.source.rewrite_stage_confirm"]; got == "0" {
-		t.Fatalf("maintenance acquired source rewrite_stage_confirm=%q want >0", got)
 	}
 	if got := stats["treedb.cache.vlog_generation.rewrite.runs"]; got == "0" {
 		t.Fatalf("rewrite runs=%q want >0", got)
@@ -164,8 +121,8 @@ func TestVlogGenerationChunkHarness_StagesAndExecutesRealChunkDebt(t *testing.T)
 	if got := stats["treedb.cache.vlog_generation.rewrite.exec.source_chunks_total"]; got == "0" {
 		t.Fatalf("rewrite exec source chunks total=%q want >0", got)
 	}
-	if got := stats["treedb.cache.vlog_generation.rewrite.queued_debt.rewrite_started"]; got == "0" {
-		t.Fatalf("rewrite queued debt rewrite started=%q want >0", got)
+	if got := stats["treedb.cache.vlog_generation.rewrite.stage_pending"]; got != "false" {
+		t.Fatalf("rewrite stage pending=%q want false", got)
 	}
 }
 
