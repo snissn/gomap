@@ -14555,6 +14555,16 @@ func filterVlogGenerationRewritePlanByPenalty(plan backenddb.ValueLogRewritePlan
 	return plan, readmitted
 }
 
+func prioritizeVlogGenerationRewritePlanForFreshPass(plan backenddb.ValueLogRewritePlan, history map[uint32]valueLogGenerationRewriteHistory, penalties map[uint32]valueLogGenerationRewritePenalty) backenddb.ValueLogRewritePlan {
+	if len(plan.SelectedSegments) <= 1 {
+		return plan
+	}
+	ordered := prioritizeVlogGenerationRewriteFreshPlanLedger(plan.SelectedSegments, history, penalties)
+	plan.SelectedSegments = ordered
+	plan.SourceFileIDs = vlogGenerationRewriteLedgerIDs(ordered)
+	return plan
+}
+
 func (db *DB) filterVlogGenerationRewritePlanPenalties(plan backenddb.ValueLogRewritePlan, now time.Time) (backenddb.ValueLogRewritePlan, error) {
 	if db == nil || len(plan.SourceFileIDs) == 0 {
 		return plan, nil
@@ -14565,6 +14575,7 @@ func (db *DB) filterVlogGenerationRewritePlanPenalties(plan backenddb.ValueLogRe
 		return backenddb.ValueLogRewritePlan{}, err
 	}
 	filtered, readmitted := filterVlogGenerationRewritePlanByPenalty(plan, db.vlogGenerationRewritePenalties, now)
+	filtered = prioritizeVlogGenerationRewritePlanForFreshPass(filtered, db.vlogGenerationRewriteHistory, db.vlogGenerationRewritePenalties)
 	if len(readmitted) == 0 {
 		return filtered, nil
 	}
@@ -16215,7 +16226,7 @@ planned:
 					if hadRewriteQueue {
 						processedRewriteIDs = vlogGenerationRewriteLedgerChunkWithPenalty(plannedLedgerForExec, db.vlogGenerationRewriteHistory, rewritePenalties, rewriteMaxSegments, chunkBudgetTokens)
 					} else {
-						processedRewriteIDs = vlogGenerationRewriteLedgerChunk(plannedLedgerForExec, rewriteMaxSegments, chunkBudgetTokens)
+						processedRewriteIDs = vlogGenerationRewriteFreshPlanLedgerChunk(plannedLedgerForExec, db.vlogGenerationRewriteHistory, db.vlogGenerationRewritePenalties, rewriteMaxSegments, chunkBudgetTokens)
 					}
 					if len(processedRewriteIDs) == 0 {
 						if hadRewriteQueue {

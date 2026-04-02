@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
 
 func TestLoadValueLogGenerationRewriteState_SkipsZeroFileID(t *testing.T) {
@@ -134,6 +136,22 @@ func TestLoadValueLogGenerationRewriteState_PreservesPenaltiesWithoutQueue(t *te
 	}
 	if stagePending || stageObservedAt != 0 {
 		t.Fatalf("stagePending=%t stageObservedAt=%d want zero values", stagePending, stageObservedAt)
+	}
+}
+
+func TestPrioritizeVlogGenerationRewriteFreshPlanLedger_PrefersUsefulThenUnknownThenZeroYield(t *testing.T) {
+	ledger := []backenddb.ValueLogRewritePlanSegment{
+		{FileID: 11, BytesTotal: 128, BytesLive: 64, BytesStale: 64, StaleRatio: 0.50},
+		{FileID: 22, BytesTotal: 128, BytesLive: 64, BytesStale: 64, StaleRatio: 0.60},
+		{FileID: 33, BytesTotal: 128, BytesLive: 64, BytesStale: 64, StaleRatio: 0.70},
+	}
+	history := map[uint32]valueLogGenerationRewriteHistory{
+		11: {LastProcessedLiveBytes: 64, LastSourceBytesUnreferenced: 32, LastReclaimedBytes: 16, LastStaleBytes: 64},
+		22: {LastProcessedLiveBytes: 64, LastSourceBytesUnreferenced: 0, LastReclaimedBytes: 0, LastStaleBytes: 64},
+	}
+	ordered := prioritizeVlogGenerationRewriteFreshPlanLedger(ledger, history, nil)
+	if got, want := vlogGenerationRewriteLedgerIDs(ordered), []uint32{11, 33, 22}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] || got[2] != want[2] {
+		t.Fatalf("ordered ids=%v want=%v", got, want)
 	}
 }
 

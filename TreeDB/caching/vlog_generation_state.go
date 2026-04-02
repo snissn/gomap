@@ -900,6 +900,105 @@ func prioritizeVlogGenerationRewriteLedger(ledger []backenddb.ValueLogRewritePla
 	return ordered
 }
 
+func vlogGenerationRewriteFreshPlanSortClass(seg backenddb.ValueLogRewritePlanSegment, history map[uint32]valueLogGenerationRewriteHistory, penalties map[uint32]valueLogGenerationRewritePenalty) int {
+	if seg.FileID == 0 {
+		return 4
+	}
+	_, usefulBytes := vlogGenerationRewriteHistoryUsefulness(seg.FileID, history)
+	if usefulBytes > 0 {
+		return 0
+	}
+	if vlogGenerationRewriteStaleDelta(seg, history, penalties) > 0 {
+		return 1
+	}
+	if entry, ok := history[seg.FileID]; ok && entry.LastProcessedLiveBytes > 0 {
+		return 3
+	}
+	return 2
+}
+
+func prioritizeVlogGenerationRewriteFreshPlanLedger(ledger []backenddb.ValueLogRewritePlanSegment, history map[uint32]valueLogGenerationRewriteHistory, penalties map[uint32]valueLogGenerationRewritePenalty) []backenddb.ValueLogRewritePlanSegment {
+	if len(ledger) <= 1 {
+		return append([]backenddb.ValueLogRewritePlanSegment(nil), ledger...)
+	}
+	ordered := append([]backenddb.ValueLogRewritePlanSegment(nil), ledger...)
+	sort.SliceStable(ordered, func(i, j int) bool {
+		ac := vlogGenerationRewriteFreshPlanSortClass(ordered[i], history, penalties)
+		bc := vlogGenerationRewriteFreshPlanSortClass(ordered[j], history, penalties)
+		if ac != bc {
+			return ac < bc
+		}
+		ar, au := vlogGenerationRewriteHistoryUsefulness(ordered[i].FileID, history)
+		br, bu := vlogGenerationRewriteHistoryUsefulness(ordered[j].FileID, history)
+		if ac == 0 {
+			if ar != br {
+				return ar > br
+			}
+			if au != bu {
+				return au > bu
+			}
+		}
+		ad := vlogGenerationRewriteStaleDelta(ordered[i], history, penalties)
+		bd := vlogGenerationRewriteStaleDelta(ordered[j], history, penalties)
+		if ac == 1 && ad != bd {
+			return ad > bd
+		}
+		a := ordered[i]
+		b := ordered[j]
+		if a.StaleRatio != b.StaleRatio {
+			return a.StaleRatio > b.StaleRatio
+		}
+		if a.BytesStale != b.BytesStale {
+			return a.BytesStale > b.BytesStale
+		}
+		if a.BytesTotal != b.BytesTotal {
+			return a.BytesTotal > b.BytesTotal
+		}
+		return a.FileID < b.FileID
+	})
+	return ordered
+}
+
+func vlogGenerationRewriteFreshPlanLedgerChunk(ledger []backenddb.ValueLogRewritePlanSegment, history map[uint32]valueLogGenerationRewriteHistory, penalties map[uint32]valueLogGenerationRewritePenalty, maxSegments int, budgetLiveBytes int64) []uint32 {
+	if len(ledger) == 0 || maxSegments <= 0 {
+		return nil
+	}
+	candidates := make([]backenddb.ValueLogRewritePlanSegment, 0, len(ledger))
+	for _, seg := range ledger {
+		if seg.FileID == 0 || seg.BytesLive <= 0 {
+			continue
+		}
+		candidates = append(candidates, seg)
+	}
+	if len(candidates) == 0 {
+		return nil
+	}
+	candidates = prioritizeVlogGenerationRewriteFreshPlanLedger(candidates, history, penalties)
+
+	ids := make([]uint32, 0, maxSegments)
+	remaining := budgetLiveBytes
+	for _, seg := range candidates {
+		if len(ids) >= maxSegments {
+			break
+		}
+		if budgetLiveBytes > 0 && remaining <= 0 && len(ids) > 0 {
+			break
+		}
+		live := seg.BytesLive
+		if live <= 0 {
+			live = 0
+		}
+		if budgetLiveBytes > 0 && remaining > 0 && live > remaining && len(ids) > 0 {
+			continue
+		}
+		ids = append(ids, seg.FileID)
+		if budgetLiveBytes > 0 && remaining > 0 {
+			remaining -= live
+		}
+	}
+	return ids
+}
+
 func admitVlogGenerationRewriteIDs(ids []uint32, history map[uint32]valueLogGenerationRewriteHistory, penalties map[uint32]valueLogGenerationRewritePenalty, maxRetried int) []uint32 {
 	if len(ids) == 0 || len(penalties) == 0 || maxRetried < 0 {
 		return append([]uint32(nil), ids...)
