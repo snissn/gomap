@@ -915,11 +915,8 @@ func (db *DB) consumeVlogGenerationRewriteChunkLedger(processed []backenddb.Valu
 		remainingChunks = append(remainingChunks, chunk)
 	}
 	remainingIDs := vlogGenerationRewriteChunkLedgerIDs(remainingChunks)
-	stagePending := db.vlogGenerationRewriteStagePending && len(remainingChunks) > 0
-	stageObservedAt := db.vlogGenerationRewriteStageObservedUnixNano
-	if !stagePending {
-		stageObservedAt = 0
-	}
+	stagePending := false
+	stageObservedAt := int64(0)
 	if err := saveValueLogGenerationRewriteState(db.valueLogGenerationStatePath(), remainingIDs, nil, remainingChunks, db.vlogGenerationRewriteChunkBytes, db.vlogGenerationRewritePenalties, stagePending, stageObservedAt); err != nil {
 		return err
 	}

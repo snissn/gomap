@@ -16281,6 +16281,20 @@ planned:
 				if err := db.consumeVlogGenerationRewriteChunkLedger(processedRewriteChunks, stats); err != nil {
 					return fmt.Errorf("consume generational rewrite chunk ledger: %w", err)
 				}
+				if stats.SourceBytesProcessed > 0 || len(stats.SourceChunkProgress) > 0 || stats.RecordsCopied > 0 {
+					remainingQueue, err := db.currentVlogGenerationRewriteQueue()
+					if err != nil {
+						return fmt.Errorf("load generational rewrite chunk queue: %w", err)
+					}
+					if len(remainingQueue) > 0 {
+						db.vlogGenerationCheckpointKickPending.Store(true)
+						db.debugVlogMaintf(
+							"rewrite_chunk_followup_pending reason=%s remaining_ids=%d",
+							vlogGenerationReasonString(reason),
+							len(remainingQueue),
+						)
+					}
+				}
 			} else if len(processedRewriteIDs) > 0 {
 				removeRewriteIDs := processedRewriteIDs
 				if rewriteOpts.MaxCopiedBytes > 0 {
