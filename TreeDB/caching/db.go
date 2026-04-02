@@ -6396,6 +6396,7 @@ type DB struct {
 	vlogGenerationRewriteQueuedDebtSkipMinInterval             atomic.Uint64
 	vlogGenerationRewriteQueuedDebtSkipBudgetEmpty             atomic.Uint64
 	vlogGenerationRewriteQueuedDebtSkipNoChunk                 atomic.Uint64
+	vlogGenerationRewriteQueuedDebtFollowupSuppressed          atomic.Uint64
 	vlogGenerationRewriteQueuedDebtExecRuns                    atomic.Uint64
 	vlogGenerationRewriteQueuedDebtExecSegments                atomic.Uint64
 	vlogGenerationRewriteQueuedDebtExecPlanBytesTotal          atomic.Uint64
@@ -6412,6 +6413,7 @@ type DB struct {
 	vlogGenerationGCExecMaxNanos                               atomic.Uint64
 	vlogGenerationVacuumExecTotalNanos                         atomic.Uint64
 	vlogGenerationVacuumExecMaxNanos                           atomic.Uint64
+	vlogGenerationRewriteQueueFollowupBlockedUntilNS           atomic.Int64
 	bgErrMu                                                    sync.Mutex
 	bgErr                                                      error
 
@@ -6566,6 +6568,9 @@ const (
 	// the remaining queued plan in the same debt cycle.
 	vlogGenerationRewriteIneffectiveGrowthMinBytes = int64(4 << 20)
 	vlogGenerationRewriteIneffectiveCooldown       = 10 * time.Minute
+	// A bounded queued rewrite pass that copied data but produced no reclaim
+	// signal should cool down briefly before the dedicated queue runner resumes.
+	vlogGenerationRewriteQueuedFollowupCooldown = 30 * time.Second
 	// Resumable queued rewrites are already segment-limited; let them finish
 	// under foreground activity with a bounded timeout instead of immediate
 	// foreground-cancel semantics.
@@ -14312,6 +14317,53 @@ func (db *DB) vlogGenerationRewriteIneffectiveBackoffActive(now time.Time) bool 
 	return now.Sub(time.Unix(0, lastIneffective)) < vlogGenerationRewriteIneffectiveBackoff
 }
 
+func (db *DB) vlogGenerationRewriteQueueFollowupBlockedActive(now time.Time) bool {
+	if db == nil {
+		return false
+	}
+	blockedUntil := db.vlogGenerationRewriteQueueFollowupBlockedUntilNS.Load()
+	if blockedUntil <= 0 {
+		return false
+	}
+	return now.UnixNano() < blockedUntil
+}
+
+func filterVlogGenerationRewriteIDsByPenalty(ids []uint32, penalties map[uint32]valueLogGenerationRewritePenalty, now time.Time) []uint32 {
+	if len(ids) == 0 || len(penalties) == 0 {
+		return append([]uint32(nil), ids...)
+	}
+	filtered := make([]uint32, 0, len(ids))
+	for _, id := range ids {
+		if id == 0 {
+			continue
+		}
+		penalty, ok := penalties[id]
+		if ok && penalty.CooldownUntilUnixNano > now.UnixNano() {
+			continue
+		}
+		filtered = append(filtered, id)
+	}
+	return filtered
+}
+
+func filterVlogGenerationRewriteLedgerByPenalty(segments []backenddb.ValueLogRewritePlanSegment, penalties map[uint32]valueLogGenerationRewritePenalty, now time.Time) []backenddb.ValueLogRewritePlanSegment {
+	if len(segments) == 0 || len(penalties) == 0 {
+		return append([]backenddb.ValueLogRewritePlanSegment(nil), segments...)
+	}
+	filtered := make([]backenddb.ValueLogRewritePlanSegment, 0, len(segments))
+	for _, seg := range segments {
+		if seg.FileID == 0 {
+			continue
+		}
+		penalty, ok := penalties[seg.FileID]
+		if ok && penalty.CooldownUntilUnixNano > now.UnixNano() {
+			continue
+		}
+		filtered = append(filtered, seg)
+	}
+	return filtered
+}
+
 func filterVlogGenerationRewritePlanByPenalty(plan backenddb.ValueLogRewritePlan, penalties map[uint32]valueLogGenerationRewritePenalty, now time.Time) backenddb.ValueLogRewritePlan {
 	if len(plan.SourceFileIDs) == 0 || len(penalties) == 0 {
 		return plan
@@ -14676,7 +14728,7 @@ func (db *DB) startVlogGenerationRewriteQueueMaintenance(opts vlogGenerationMain
 			if !db.vlogGenerationRewriteQueuePending.CompareAndSwap(true, false) {
 				return
 			}
-			rewriteQueue, qerr := db.currentVlogGenerationRewriteQueue()
+			rewriteQueue, _, qerr := db.currentVlogGenerationRewriteEligible(time.Now())
 			stagePending, _, serr := db.currentVlogGenerationRewriteStage()
 			if qerr == nil && serr == nil && (len(rewriteQueue) == 0 || stagePending) {
 				continue
@@ -15071,6 +15123,14 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 			db.debugVlogMaintf("rewrite_queue_prune dropped=%d remaining=%d", dropped, len(rewriteQueue))
 		}
 	}
+	rewriteLedger, ledgerErr := db.currentVlogGenerationRewriteLedger()
+	if ledgerErr != nil {
+		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
+		if db.notifyError != nil {
+			db.notifyError(fmt.Errorf("cachingdb: load generational rewrite ledger: %w", ledgerErr))
+		}
+		return
+	}
 	rewriteQueueBeforeSegments = len(rewriteQueue)
 	rewriteQueueBeforeLiveBytes = 0
 	rewriteQueueBeforeLiveKnown = rewriteQueueBeforeSegments == 0
@@ -15091,6 +15151,21 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 		}
 		return
 	}
+	rewritePenalties, penaltyErr := db.currentVlogGenerationRewritePenalties()
+	if penaltyErr != nil {
+		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
+		if db.notifyError != nil {
+			db.notifyError(fmt.Errorf("cachingdb: load generational rewrite penalties: %w", penaltyErr))
+		}
+		return
+	}
+	rewriteQueueEligible := append([]uint32(nil), rewriteQueue...)
+	rewriteLedgerEligible := append([]backenddb.ValueLogRewritePlanSegment(nil), rewriteLedger...)
+	if len(rewriteQueue) > 0 && !stagePending && len(rewritePenalties) > 0 {
+		rewriteQueueEligible = filterVlogGenerationRewriteIDsByPenalty(rewriteQueue, rewritePenalties, now)
+		rewriteLedgerEligible = filterVlogGenerationRewriteLedgerByPenalty(rewriteLedger, rewritePenalties, now)
+	}
+	rewriteQueueFollowupBlocked := len(rewriteQueue) > 0 && !stagePending && db.vlogGenerationRewriteQueueFollowupBlockedActive(now)
 	ageBlockedDue := db.vlogGenerationRewriteAgeBlockedDue(now)
 	stageConfirmDue := db.vlogGenerationRewriteStageConfirmDue(now)
 	if stagePending {
@@ -15116,7 +15191,7 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 		db.vlogGenerationMaintenanceSkipAgeBlocked.Add(1)
 		return
 	}
-	hasExecutableRewriteQueue := len(rewriteQueue) > 0 && !stagePending
+	hasExecutableRewriteQueue := len(rewriteQueueEligible) > 0 && !stagePending && !rewriteQueueFollowupBlocked
 	if hasExecutableRewriteQueue && !vlogGenerationIsQueueSource(opts) && !vlogGenerationIsStageConfirmSource(opts) {
 		db.vlogGenerationRewriteQueuePending.Store(true)
 		db.vlogGenerationMaintenanceSkipPriority.Add(1)
@@ -15209,6 +15284,9 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 	if hasExecutableRewriteQueue {
 		shouldRewrite = true
 		reason = vlogGenerationReasonRewriteResume
+	} else if len(rewriteQueue) > 0 && !stagePending {
+		shouldRewrite = false
+		reason = vlogGenerationReasonNone
 	}
 	rewriteCancelBackoff := hasExecutableRewriteQueue && db.vlogGenerationRewriteCancelBackoffActive(now) && !allowCheckpointKickRetry
 	if rewriteCancelBackoff {
@@ -15605,17 +15683,17 @@ planned:
 				budgetTokens = db.vlogGenerationRewriteBudgetTokensBytes.Load()
 				// If a queued rewrite is pending, do not run it while the bucket is
 				// empty; that defeats the whole point of a bounded executor.
-				if budgetTokens <= 0 && len(rewriteQueue) > 0 {
+				if budgetTokens <= 0 && len(rewriteQueueEligible) > 0 {
 					db.vlogGenerationRewriteQueuedDebtSkipBudgetEmpty.Add(1)
 					db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
 					return nil
 				}
 			}
-			hadRewriteQueue := len(rewriteQueue) > 0
+			hadRewriteQueue := len(rewriteQueueEligible) > 0
 			rewriteMaxSegments := vlogGenerationRewriteResumeMaxSegments
 			if hadRewriteQueue {
 				runDecision := db.vlogGenerationRewriteSegmentCapForRunWithHint(
-					len(rewriteQueue),
+					len(rewriteQueueEligible),
 					budgetTokens,
 					rewriteQueueBeforeLiveBytes,
 					rewriteQueueBeforeLiveKnown,
@@ -15645,6 +15723,8 @@ planned:
 					}
 				}
 				rewriteQueue = append([]uint32(nil), rewritePlan.SourceFileIDs...)
+				rewriteQueueEligible = append([]uint32(nil), rewriteQueue...)
+				rewriteLedgerEligible = append([]backenddb.ValueLogRewritePlanSegment(nil), plannedLedgerForExec...)
 				plannedQueueLiveBytes := int64(0)
 				plannedQueueLiveKnown := false
 				if len(rewritePlan.SelectedSegments) > 0 {
@@ -15728,10 +15808,10 @@ planned:
 						return nil
 					}
 				} else {
-					processedRewriteIDs = vlogGenerationRewriteQueueChunk(rewriteQueue, rewriteMaxSegments)
+					processedRewriteIDs = vlogGenerationRewriteQueueChunk(rewriteQueueEligible, rewriteMaxSegments)
 				}
-			} else if len(rewriteQueue) > 0 {
-				ledger, _ := db.currentVlogGenerationRewriteLedger()
+			} else if len(rewriteQueueEligible) > 0 {
+				ledger := append([]backenddb.ValueLogRewritePlanSegment(nil), rewriteLedger...)
 				if len(ledger) > 0 {
 					queueMinStaleRatio := db.vlogGenerationRewriteMinStaleRatioForQueuedDebt(totalBytes, reason)
 					filteredLedger := filterVlogGenerationRewriteLedgerByQuality(ledger, queueMinStaleRatio, vlogGenerationRewriteMinSegmentStaleBytes)
@@ -15741,6 +15821,9 @@ planned:
 						}
 						db.observeVlogGenerationRewriteQueuePrune(dropped)
 						rewriteQueue = append(rewriteQueue[:0], vlogGenerationRewriteLedgerIDs(filteredLedger)...)
+						rewriteLedger = filteredLedger
+						rewriteQueueEligible = filterVlogGenerationRewriteIDsByPenalty(rewriteQueue, rewritePenalties, now)
+						rewriteLedgerEligible = filterVlogGenerationRewriteLedgerByPenalty(filteredLedger, rewritePenalties, now)
 						ledger = filteredLedger
 						db.debugVlogMaintf(
 							"rewrite_queue_quality_prune dropped=%d remaining=%d min_ratio=%.6f min_stale_bytes=%d",
@@ -15750,7 +15833,7 @@ planned:
 							vlogGenerationRewriteMinSegmentStaleBytes,
 						)
 					}
-					processedRewriteIDs = vlogGenerationRewriteLedgerChunk(ledger, rewriteMaxSegments, 0)
+					processedRewriteIDs = vlogGenerationRewriteLedgerChunk(rewriteLedgerEligible, rewriteMaxSegments, 0)
 					if len(processedRewriteIDs) == 0 {
 						if hadRewriteQueue {
 							db.vlogGenerationRewriteQueuedDebtSkipNoChunk.Add(1)
@@ -15768,11 +15851,11 @@ planned:
 						return nil
 					}
 				} else {
-					processedRewriteIDs = vlogGenerationRewriteQueueChunk(rewriteQueue, rewriteMaxSegments)
+					processedRewriteIDs = vlogGenerationRewriteQueueChunk(rewriteQueueEligible, rewriteMaxSegments)
 				}
 			}
 			if len(processedRewriteIDs) > 0 {
-				ledger, _ := db.currentVlogGenerationRewriteLedger()
+				ledger := rewriteLedgerEligible
 				processedLedgerTotalBytes, processedLedgerLiveBytes, processedLedgerStaleBytes, processedLedgerOK = sumVlogRewritePlanBytes(ledger, processedRewriteIDs)
 				rewriteOpts.SourceFileIDs = processedRewriteIDs
 				if hadRewriteQueue && processedLedgerOK && budgetTokens > 0 && processedLedgerLiveBytes > budgetTokens {
@@ -15866,13 +15949,6 @@ planned:
 					if err := db.consumeVlogGenerationRewriteQueueChunk(removeRewriteIDs); err != nil {
 						return fmt.Errorf("consume generational rewrite queue: %w", err)
 					}
-				}
-				remainingQueue, queueErr := db.currentVlogGenerationRewriteQueue()
-				if queueErr != nil {
-					return fmt.Errorf("load generational rewrite queue after consume: %w", queueErr)
-				}
-				if len(remainingQueue) > 0 {
-					db.vlogGenerationRewriteQueuePending.Store(true)
 				}
 			}
 			if gcer, ok := db.backend.(backendValueLogGCer); ok {
@@ -16084,7 +16160,9 @@ planned:
 			if locallyEffectiveProcessedDebt {
 				if effectiveBytesAfter >= effectiveBytesBefore {
 					db.vlogGenerationRewriteNoReclaimRuns.Add(1)
-					db.vlogGenerationRewriteIneffectiveLastNS.Store(time.Now().UnixNano())
+					if !queuedDebtExecuted {
+						db.vlogGenerationRewriteIneffectiveLastNS.Store(time.Now().UnixNano())
+					}
 					if processedLedgerStaleBytes > 0 {
 						db.vlogGenerationRewriteNoReclaimStaleBytes.Add(uint64(processedLedgerStaleBytes))
 					}
@@ -16101,6 +16179,38 @@ planned:
 					gcBytesDeleted,
 					stats.RecordsCopied,
 				)
+			}
+			suppressQueuedFollowup := false
+			if queuedDebtExecuted {
+				remainingQueue, queueErr := db.currentVlogGenerationRewriteQueue()
+				if queueErr != nil {
+					return fmt.Errorf("load generational rewrite queue after queued execution: %w", queueErr)
+				}
+				queuedUsefulSignal := stats.SourceBytesUnreferenced > 0 || effectiveBytesAfter < effectiveBytesBefore || gcBytesDeleted > 0
+				if len(remainingQueue) > 0 && !queuedUsefulSignal && !penalizeProcessedRewriteDebt {
+					cooldownUntil := time.Now().Add(vlogGenerationRewriteQueuedFollowupCooldown)
+					if err := db.recordVlogGenerationRewritePenalty(
+						processedRewriteIDs,
+						cooldownUntil,
+						effectiveBytesAfter-effectiveBytesBefore,
+					); err != nil {
+						return fmt.Errorf("record queued rewrite follow-up penalty: %w", err)
+					}
+					db.vlogGenerationRewriteQueueFollowupBlockedUntilNS.Store(cooldownUntil.UnixNano())
+					db.vlogGenerationRewriteQueuedDebtFollowupSuppressed.Add(1)
+					suppressQueuedFollowup = true
+					db.debugVlogMaintf(
+						"rewrite_queue_followup_suppressed reason=%s processed_ids=%d remaining_ids=%d source_bytes_unreferenced=%d bytes_before=%d bytes_after=%d gc_bytes_deleted=%d cooldown_ms=%d",
+						vlogGenerationReasonString(reason),
+						len(processedRewriteIDs),
+						len(remainingQueue),
+						stats.SourceBytesUnreferenced,
+						effectiveBytesBefore,
+						effectiveBytesAfter,
+						gcBytesDeleted,
+						vlogGenerationRewriteQueuedFollowupCooldown.Milliseconds(),
+					)
+				}
 			}
 			if penalizeProcessedRewriteDebt {
 				db.vlogGenerationRewriteIneffectiveLastNS.Store(time.Now().UnixNano())
@@ -16126,6 +16236,15 @@ planned:
 					vlogGenerationRewriteIneffectiveCooldown.Milliseconds(),
 					gcBytesDeleted,
 				)
+			}
+			if queuedDebtExecuted && !suppressQueuedFollowup {
+				remainingQueue, _, queueErr := db.currentVlogGenerationRewriteEligible(time.Now())
+				if queueErr != nil {
+					return fmt.Errorf("load eligible generational rewrite queue after queued execution: %w", queueErr)
+				}
+				if len(remainingQueue) > 0 && !db.vlogGenerationRewriteQueueFollowupBlockedActive(time.Now()) {
+					db.vlogGenerationRewriteQueuePending.Store(true)
+				}
 			}
 			db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
 			db.vlogGenerationRewriteRuns.Add(1)
@@ -22529,6 +22648,7 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_generation.rewrite.queued_debt.skip.min_interval"] = fmt.Sprintf("%d", db.vlogGenerationRewriteQueuedDebtSkipMinInterval.Load())
 	stats["treedb.cache.vlog_generation.rewrite.queued_debt.skip.budget_empty"] = fmt.Sprintf("%d", db.vlogGenerationRewriteQueuedDebtSkipBudgetEmpty.Load())
 	stats["treedb.cache.vlog_generation.rewrite.queued_debt.skip.no_chunk"] = fmt.Sprintf("%d", db.vlogGenerationRewriteQueuedDebtSkipNoChunk.Load())
+	stats["treedb.cache.vlog_generation.rewrite.queued_debt.followup_suppressed"] = fmt.Sprintf("%d", db.vlogGenerationRewriteQueuedDebtFollowupSuppressed.Load())
 	stats["treedb.cache.vlog_generation.rewrite.queued_debt.exec.runs"] = fmt.Sprintf("%d", db.vlogGenerationRewriteQueuedDebtExecRuns.Load())
 	stats["treedb.cache.vlog_generation.rewrite.queued_debt.exec.segments"] = fmt.Sprintf("%d", db.vlogGenerationRewriteQueuedDebtExecSegments.Load())
 	stats["treedb.cache.vlog_generation.rewrite.queued_debt.exec.plan_bytes_total"] = fmt.Sprintf("%d", db.vlogGenerationRewriteQueuedDebtExecPlanBytesTotal.Load())
