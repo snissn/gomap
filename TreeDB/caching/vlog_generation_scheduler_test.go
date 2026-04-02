@@ -3026,6 +3026,54 @@ func TestVlogGenerationRewriteQueue_PrefersGreaterStaleImprovementAmongExpiredRe
 	}
 }
 
+func TestVlogGenerationRewriteQueue_PrefersHistoricallyUsefulExpiredRetry(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+
+	dir := t.TempDir()
+
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	recorder := &rewriteBudgetRecordingBackend{
+		DB:              backend,
+		rewriteResponse: backenddb.ValueLogRewriteStats{BytesBefore: 64, BytesAfter: 32, RecordsCopied: 1},
+	}
+
+	db, cleanup := openRewriteQueueTestDB(t, dir, recorder)
+	t.Cleanup(cleanup)
+
+	ledger := []backenddb.ValueLogRewritePlanSegment{
+		{FileID: 11, BytesLive: 64, BytesTotal: 128, BytesStale: 64, StaleRatio: 0.5},
+		{FileID: 22, BytesLive: 64, BytesTotal: 128, BytesStale: 64, StaleRatio: 0.5},
+	}
+	if err := db.setVlogGenerationRewriteLedger(ledger); err != nil {
+		t.Fatalf("set ledger: %v", err)
+	}
+	if err := db.recordVlogGenerationRewritePenaltyWithLedger([]uint32{11, 22}, ledger, time.Now().Add(-time.Second), 0); err != nil {
+		t.Fatalf("record penalty: %v", err)
+	}
+	if err := db.recordVlogGenerationRewriteHistoryWithLedger([]uint32{11}, ledger[:1], 0, 0, time.Now().Add(-2*time.Second)); err != nil {
+		t.Fatalf("record history 11: %v", err)
+	}
+	if err := db.recordVlogGenerationRewriteHistoryWithLedger([]uint32{22}, ledger[1:], 32, 16, time.Now().Add(-time.Second)); err != nil {
+		t.Fatalf("record history 22: %v", err)
+	}
+
+	db.vlogGenerationRewriteBudgetTokensBytes.Store(1024)
+	db.vlogGenerationLastRewriteUnixNano.Store(time.Now().Add(-2 * vlogGenerationRewriteResumeMinInterval).UnixNano())
+	forceVlogMaintenanceIdle(db)
+	runRewriteQueueMaintenanceForTest(db)
+
+	opts, calls := recorder.recordedRewrite()
+	if calls != 1 {
+		t.Fatalf("rewrite calls=%d want=1", calls)
+	}
+	if got, want := opts.SourceFileIDs, []uint32{22}; len(got) != len(want) || got[0] != want[0] {
+		t.Fatalf("rewrite SourceFileIDs=%v want=%v", got, want)
+	}
+}
+
 func TestVlogGenerationRewriteQueue_AdmitsSingleExpiredPenaltyWhenAllDebtRetried(t *testing.T) {
 	prepareDirectSchedulerTest(t)
 
@@ -5987,6 +6035,7 @@ func TestVlogGenerationRewrite_IneffectiveBackoffExpires(t *testing.T) {
 		db.valueLogGenerationStatePath(),
 		append([]uint32(nil), db.vlogGenerationRewriteQueue...),
 		append([]backenddb.ValueLogRewritePlanSegment(nil), db.vlogGenerationRewriteLedger...),
+		db.vlogGenerationRewriteHistory,
 		db.vlogGenerationRewritePenalties,
 		db.vlogGenerationRewriteStagePending,
 		db.vlogGenerationRewriteStageObservedUnixNano,
