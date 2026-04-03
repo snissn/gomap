@@ -6527,7 +6527,7 @@ const (
 	// actually exercise rewrite execution, but long enough to filter transient
 	// stale-ratio spikes.
 	vlogGenerationRewriteStageConfirmDelay  = 15 * time.Second
-	vlogGenerationGCMinInterval             = 45 * time.Second
+	vlogGenerationGCMinInterval             = 90 * time.Second
 	vlogGenerationGCNoopMinInterval         = 3 * time.Minute
 	vlogGenerationCheckpointKickMinInterval = 5 * time.Second
 	vlogGenerationCheckpointKickRetryWindow = 5 * time.Second
@@ -6589,6 +6589,13 @@ const (
 	// A bounded queued rewrite pass that copied data but produced no reclaim
 	// signal should cool down briefly before the dedicated queue runner resumes.
 	vlogGenerationRewriteQueuedFollowupCooldown = 30 * time.Second
+	// When chunk-based queued debt drains make local progress but don't yet
+	// unreference segments, allow a bounded follow-up only when we are close to
+	// finishing the chunk debt for the processed IDs.
+	vlogGenerationRewriteQueuedFollowupChunkDebtMaxRemainingChunks = 2
+	// Bound queued follow-ups for chunk debt by remaining live bytes so we avoid
+	// tight resume loops that burn wall time without immediate reclaim signal.
+	vlogGenerationRewriteQueuedFollowupChunkDebtMaxRemainingLiveBytes = int64(32 << 20)
 	// Even after cooldown expires, admit only a small amount of prior failed
 	// queue debt per pass so fresh debt keeps priority.
 	vlogGenerationRewriteRetriedSelectionLimit = 1
@@ -16014,8 +16021,12 @@ planned:
 				BatchSize:       db.valueLogRewriteBatchSize(),
 				SyncEachBatch:   false,
 				MaxSegmentBytes: db.valueLogGenerationWarmTarget,
-				ProtectedPaths:  db.valueLogProtectedPaths(),
-				ReserveRIDs:     db.ReserveValueLogRIDs,
+				// Maintenance rewrites are throughput-sensitive and operate on large
+				// source segments; group rewrite candidates by old segment+offset to
+				// improve value-log read locality and reduce wall-time.
+				LocalityPolicy: backenddb.ValueLogRewriteLocalityGrouped,
+				ProtectedPaths: db.valueLogProtectedPaths(),
+				ReserveRIDs:    db.ReserveValueLogRIDs,
 			}
 			processedRewriteIDs := []uint32(nil)
 			processedRewriteChunks := []backenddb.ValueLogRewritePlanChunk(nil)
@@ -16706,7 +16717,54 @@ planned:
 					return fmt.Errorf("load generational rewrite queue after queued execution: %w", queueErr)
 				}
 				queuedUsefulSignal := stats.SourceBytesUnreferenced > 0 || effectiveBytesAfter < effectiveBytesBefore || gcBytesDeleted > 0
-				if len(remainingQueue) > 0 && !queuedUsefulSignal && !penalizeProcessedRewriteDebt {
+				// Chunk-debt drains are incremental: if a processed ID remains queued, we
+				// intentionally executed a partial drain. In that case, "no immediate
+				// reclaim" is expected; allow a bounded follow-up only when the remaining
+				// chunk debt is small enough to finish quickly.
+				allowChunkDebtFollowup := false
+				if len(processedRewriteChunks) > 0 && len(remainingQueue) > 0 && len(processedRewriteIDs) > 0 {
+					processedIDsStillQueued := false
+					for _, processedID := range processedRewriteIDs {
+						if processedID == 0 {
+							continue
+						}
+						for _, queuedID := range remainingQueue {
+							if queuedID == processedID {
+								processedIDsStillQueued = true
+								break
+							}
+						}
+						if processedIDsStillQueued {
+							break
+						}
+					}
+					if processedIDsStillQueued {
+						remainingLedger, _, ledgerErr := db.currentVlogGenerationRewriteChunkLedger()
+						if ledgerErr == nil && len(remainingLedger) > 0 {
+							remainingChunks := 0
+							remainingLiveBytes := int64(0)
+							for _, chunk := range remainingLedger {
+								if chunk.FileID == 0 || chunk.BytesLive <= 0 {
+									continue
+								}
+								for _, processedID := range processedRewriteIDs {
+									if chunk.FileID == processedID {
+										remainingChunks++
+										remainingLiveBytes += chunk.BytesLive
+										break
+									}
+								}
+							}
+							if remainingLiveBytes > 0 && remainingLiveBytes <= vlogGenerationRewriteQueuedFollowupChunkDebtMaxRemainingLiveBytes {
+								allowChunkDebtFollowup = true
+							} else if remainingLiveBytes <= 0 && remainingChunks > 0 && remainingChunks <= vlogGenerationRewriteQueuedFollowupChunkDebtMaxRemainingChunks {
+								allowChunkDebtFollowup = true
+							}
+						}
+
+					}
+				}
+				if len(remainingQueue) > 0 && !queuedUsefulSignal && !penalizeProcessedRewriteDebt && !allowChunkDebtFollowup {
 					cooldownUntil := time.Now().Add(vlogGenerationRewriteQueuedFollowupCooldown)
 					if err := db.recordVlogGenerationRewritePenaltyWithLedger(
 						processedRewriteIDs,
