@@ -16487,8 +16487,17 @@ planned:
 			}
 			if gcer, ok := db.backend.(backendValueLogGCer); ok {
 				gcOpts := db.valueLogGCOptions(false)
-				if len(processedRewriteIDs) > 0 {
-					gcOpts.ObservedSourceFileIDs = append([]uint32(nil), processedRewriteIDs...)
+				observedRewriteSourceIDs := processedRewriteIDs
+				assumeUnreferencedObserved := false
+				if len(stats.SourceFileIDsUnreferenced) > 0 {
+					observedRewriteSourceIDs = stats.SourceFileIDsUnreferenced
+					assumeUnreferencedObserved = true
+				}
+				if len(observedRewriteSourceIDs) > 0 {
+					gcOpts.ObservedSourceFileIDs = append([]uint32(nil), observedRewriteSourceIDs...)
+					if assumeUnreferencedObserved {
+						gcOpts.ObservedSourceAssumeUnreferenced = true
+					}
 				}
 				runGC := func(phase string) (backenddb.ValueLogGCStats, error) {
 					gcCtx, gcCancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -16541,8 +16550,8 @@ planned:
 					gcStats.ObservedSourceSegmentsEligible == 0 &&
 					gcStats.ObservedSourceSegmentsProtectedRetained > 0
 				if rewriteBlockedByRetained {
-					observedSourceIDSet := make(map[uint32]struct{}, len(processedRewriteIDs))
-					for _, id := range processedRewriteIDs {
+					observedSourceIDSet := make(map[uint32]struct{}, len(observedRewriteSourceIDs))
+					for _, id := range observedRewriteSourceIDs {
 						if id == 0 {
 							continue
 						}
@@ -16580,8 +16589,11 @@ planned:
 						// Refresh protected path sets after inline retained prune so
 						// the follow-up GC pass evaluates updated retention state.
 						gcOpts = db.valueLogGCOptions(false)
-						if len(processedRewriteIDs) > 0 {
-							gcOpts.ObservedSourceFileIDs = append([]uint32(nil), processedRewriteIDs...)
+						if len(observedRewriteSourceIDs) > 0 {
+							gcOpts.ObservedSourceFileIDs = append([]uint32(nil), observedRewriteSourceIDs...)
+							if assumeUnreferencedObserved {
+								gcOpts.ObservedSourceAssumeUnreferenced = true
+							}
 						}
 						gcStatsAfterPrune, gcErr := runGC("post_retained_prune")
 						if gcErr != nil {
@@ -16589,7 +16601,9 @@ planned:
 						}
 						gcStats = gcStatsAfterPrune
 					} else {
-						db.queueRetainedPruneObservedSourceIDs(processedRewriteIDs)
+						if assumeUnreferencedObserved && len(observedRewriteSourceIDs) > 0 {
+							db.queueRetainedPruneObservedSourceIDs(observedRewriteSourceIDs)
+						}
 						// A prune is already in flight. Ensure a follow-up attempt stays queued.
 						db.scheduleRetainedValueLogPruneForce()
 					}
@@ -16603,15 +16617,17 @@ planned:
 					// Rewrite-selected source segments can remain temporarily active when
 					// the writer is still appending. Queue observed-source replay and a
 					// checkpoint-kick so follow-up maintenance can rotate/re-check quickly.
-					db.queueVlogGenerationObservedSourceGCList(processedRewriteIDs)
+					if assumeUnreferencedObserved && len(observedRewriteSourceIDs) > 0 {
+						db.queueVlogGenerationObservedSourceGCList(observedRewriteSourceIDs)
+					}
 					db.vlogGenerationCheckpointKickPending.Store(true)
 				}
 				if gcStats.BytesProtectedRetained > 0 && gcStats.BytesEligible == 0 && db.valueLogRetainedClosedBytes.Load() > 0 {
 					// Retained-path protection can starve live reclaim even when rewrite
 					// processed stale payload in-pass. Kick an eager retained prune so
 					// lifecycle pins can drain without waiting for byte-pressure gates.
-					if len(processedRewriteIDs) > 0 {
-						db.queueRetainedPruneObservedSourceIDs(processedRewriteIDs)
+					if assumeUnreferencedObserved && len(observedRewriteSourceIDs) > 0 {
+						db.queueRetainedPruneObservedSourceIDs(observedRewriteSourceIDs)
 					}
 					db.scheduleRetainedValueLogPruneForce()
 				}
@@ -17113,6 +17129,7 @@ planned:
 		gcOpts := db.valueLogGCOptions(false)
 		if forceObservedSourceGC {
 			gcOpts.ObservedSourceFileIDs = append([]uint32(nil), observedSourceGCIDs...)
+			gcOpts.ObservedSourceAssumeUnreferenced = true
 		}
 		db.debugVlogMaintf(
 			"gc_run start run_gc=%t force_observed=%t observed_ids=%d need_estimate=%t",

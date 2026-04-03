@@ -31,6 +31,11 @@ type ValueLogGCOptions struct {
 	// caller-provided subset of segment IDs (for example, rewrite-selected
 	// source segments). IDs not present in the current set are ignored.
 	ObservedSourceFileIDs []uint32
+	// ObservedSourceAssumeUnreferenced indicates ObservedSourceFileIDs are
+	// already known to be unreferenced. When true, ValueLogGC skips the
+	// reachability scan and only classifies (and, if !DryRun, zombifies) the
+	// observed IDs; it does not attempt to reclaim other segments.
+	ObservedSourceAssumeUnreferenced bool
 }
 
 // ValueLogGCStats summarizes value-log GC work.
@@ -106,9 +111,14 @@ func (db *DB) ValueLogGC(ctx context.Context, opts ValueLogGCOptions) (ValueLogG
 		return stats, fmt.Errorf("value log manager unavailable")
 	}
 
-	referenced, err := db.referencedValueLogSegments(ctx)
-	if err != nil {
-		return stats, err
+	observedOnly := len(opts.ObservedSourceFileIDs) > 0 && opts.ObservedSourceAssumeUnreferenced
+	var referenced map[uint32]struct{}
+	if !observedOnly {
+		var err error
+		referenced, err = db.referencedValueLogSegments(ctx)
+		if err != nil {
+			return stats, err
+		}
 	}
 
 	// Prefer no-refresh snapshots to avoid repeated filesystem scans on the hot
@@ -175,106 +185,185 @@ func (db *DB) ValueLogGC(ctx context.Context, opts ValueLogGCOptions) (ValueLogG
 		observedSourceIDs[id] = struct{}{}
 	}
 
-	for id, f := range set.Files {
-		if err := ctx.Err(); err != nil {
-			return stats, err
-		}
-		size := fileSize(f)
-		observed := false
-		if _, ok := observedSourceIDs[id]; ok {
-			observed = true
+	if observedOnly {
+		for id := range observedSourceIDs {
+			if err := ctx.Err(); err != nil {
+				return stats, err
+			}
+			f, ok := set.Files[id]
+			if !ok {
+				continue
+			}
+			size := fileSize(f)
 			stats.ObservedSourceSegments++
 			stats.ObservedSourceBytes += size
-		}
-		stats.SegmentsTotal++
-		stats.BytesTotal += size
+			stats.SegmentsTotal++
+			stats.BytesTotal += size
 
-		if _, ok := referenced[id]; ok {
-			stats.SegmentsReferenced++
-			stats.BytesReferenced += size
-			if observed {
-				stats.ObservedSourceSegmentsReferenced++
-				stats.ObservedSourceBytesReferenced += size
-			}
-			continue
-		}
-		if _, ok := keptIDs[id]; ok {
-			stats.SegmentsActive++
-			stats.BytesActive += size
-			if observed {
+			if _, ok := keptIDs[id]; ok {
+				stats.SegmentsActive++
+				stats.BytesActive += size
 				stats.ObservedSourceSegmentsActive++
 				stats.ObservedSourceBytesActive += size
+				continue
 			}
-			continue
-		}
-		_, inUseProtected := protectedInUsePaths[f.Path]
-		_, retainedProtected := protectedRetainedPaths[f.Path]
-		if inUseProtected || retainedProtected {
-			stats.SegmentsProtected++
-			stats.BytesProtected += size
-			if observed {
+			_, inUseProtected := protectedInUsePaths[f.Path]
+			_, retainedProtected := protectedRetainedPaths[f.Path]
+			if inUseProtected || retainedProtected {
+				stats.SegmentsProtected++
+				stats.BytesProtected += size
 				stats.ObservedSourceSegmentsProtected++
 				stats.ObservedSourceBytesProtected += size
-			}
-			switch {
-			case inUseProtected && retainedProtected:
-				stats.SegmentsProtectedOverlap++
-				stats.BytesProtectedOverlap += size
-				if observed {
+				switch {
+				case inUseProtected && retainedProtected:
+					stats.SegmentsProtectedOverlap++
+					stats.BytesProtectedOverlap += size
 					stats.ObservedSourceSegmentsProtectedOverlap++
 					stats.ObservedSourceBytesProtectedOverlap += size
-				}
-			case inUseProtected:
-				stats.SegmentsProtectedInUse++
-				stats.BytesProtectedInUse += size
-				if observed {
+				case inUseProtected:
+					stats.SegmentsProtectedInUse++
+					stats.BytesProtectedInUse += size
 					stats.ObservedSourceSegmentsProtectedInUse++
 					stats.ObservedSourceBytesProtectedInUse += size
-				}
-			default:
-				stats.SegmentsProtectedRetained++
-				stats.BytesProtectedRetained += size
-				if observed {
+				default:
+					stats.SegmentsProtectedRetained++
+					stats.BytesProtectedRetained += size
 					stats.ObservedSourceSegmentsProtectedRetained++
 					stats.ObservedSourceBytesProtectedRetained += size
 				}
+				continue
 			}
-			continue
-		}
-		if _, ok := protectedPaths[f.Path]; ok {
-			stats.SegmentsProtected++
-			stats.BytesProtected += size
-			stats.SegmentsProtectedOther++
-			stats.BytesProtectedOther += size
-			if observed {
+			if _, ok := protectedPaths[f.Path]; ok {
+				stats.SegmentsProtected++
+				stats.BytesProtected += size
+				stats.SegmentsProtectedOther++
+				stats.BytesProtectedOther += size
 				stats.ObservedSourceSegmentsProtected++
 				stats.ObservedSourceBytesProtected += size
 				stats.ObservedSourceSegmentsProtectedOther++
 				stats.ObservedSourceBytesProtectedOther += size
+				continue
 			}
-			continue
-		}
 
-		stats.SegmentsEligible++
-		stats.BytesEligible += size
-		if observed {
+			stats.SegmentsEligible++
+			stats.BytesEligible += size
 			stats.ObservedSourceSegmentsEligible++
 			stats.ObservedSourceBytesEligible += size
-		}
 
-		if opts.DryRun {
-			stats.SegmentsPending++
-			stats.BytesPending += size
-			if observed {
+			if opts.DryRun {
+				stats.SegmentsPending++
+				stats.BytesPending += size
 				stats.ObservedSourceSegmentsPending++
 				stats.ObservedSourceBytesPending += size
+				continue
 			}
-			continue
+			if err := vm.MarkZombie(id); err != nil {
+				return stats, err
+			}
+			candidates[id] = candidate{path: f.Path, size: size, observed: true}
 		}
-		if err := vm.MarkZombie(id); err != nil {
-			return stats, err
+	} else {
+		for id, f := range set.Files {
+			if err := ctx.Err(); err != nil {
+				return stats, err
+			}
+			size := fileSize(f)
+			observed := false
+			if _, ok := observedSourceIDs[id]; ok {
+				observed = true
+				stats.ObservedSourceSegments++
+				stats.ObservedSourceBytes += size
+			}
+			stats.SegmentsTotal++
+			stats.BytesTotal += size
+
+			if _, ok := referenced[id]; ok {
+				stats.SegmentsReferenced++
+				stats.BytesReferenced += size
+				if observed {
+					stats.ObservedSourceSegmentsReferenced++
+					stats.ObservedSourceBytesReferenced += size
+				}
+				continue
+			}
+			if _, ok := keptIDs[id]; ok {
+				stats.SegmentsActive++
+				stats.BytesActive += size
+				if observed {
+					stats.ObservedSourceSegmentsActive++
+					stats.ObservedSourceBytesActive += size
+				}
+				continue
+			}
+			_, inUseProtected := protectedInUsePaths[f.Path]
+			_, retainedProtected := protectedRetainedPaths[f.Path]
+			if inUseProtected || retainedProtected {
+				stats.SegmentsProtected++
+				stats.BytesProtected += size
+				if observed {
+					stats.ObservedSourceSegmentsProtected++
+					stats.ObservedSourceBytesProtected += size
+				}
+				switch {
+				case inUseProtected && retainedProtected:
+					stats.SegmentsProtectedOverlap++
+					stats.BytesProtectedOverlap += size
+					if observed {
+						stats.ObservedSourceSegmentsProtectedOverlap++
+						stats.ObservedSourceBytesProtectedOverlap += size
+					}
+				case inUseProtected:
+					stats.SegmentsProtectedInUse++
+					stats.BytesProtectedInUse += size
+					if observed {
+						stats.ObservedSourceSegmentsProtectedInUse++
+						stats.ObservedSourceBytesProtectedInUse += size
+					}
+				default:
+					stats.SegmentsProtectedRetained++
+					stats.BytesProtectedRetained += size
+					if observed {
+						stats.ObservedSourceSegmentsProtectedRetained++
+						stats.ObservedSourceBytesProtectedRetained += size
+					}
+				}
+				continue
+			}
+			if _, ok := protectedPaths[f.Path]; ok {
+				stats.SegmentsProtected++
+				stats.BytesProtected += size
+				stats.SegmentsProtectedOther++
+				stats.BytesProtectedOther += size
+				if observed {
+					stats.ObservedSourceSegmentsProtected++
+					stats.ObservedSourceBytesProtected += size
+					stats.ObservedSourceSegmentsProtectedOther++
+					stats.ObservedSourceBytesProtectedOther += size
+				}
+				continue
+			}
+
+			stats.SegmentsEligible++
+			stats.BytesEligible += size
+			if observed {
+				stats.ObservedSourceSegmentsEligible++
+				stats.ObservedSourceBytesEligible += size
+			}
+
+			if opts.DryRun {
+				stats.SegmentsPending++
+				stats.BytesPending += size
+				if observed {
+					stats.ObservedSourceSegmentsPending++
+					stats.ObservedSourceBytesPending += size
+				}
+				continue
+			}
+			if err := vm.MarkZombie(id); err != nil {
+				return stats, err
+			}
+			candidates[id] = candidate{path: f.Path, size: size, observed: observed}
 		}
-		candidates[id] = candidate{path: f.Path, size: size, observed: observed}
 	}
 
 	if opts.DryRun {
@@ -323,14 +412,16 @@ func (db *DB) ValueLogGC(ctx context.Context, opts ValueLogGCOptions) (ValueLogG
 		stats.ObservedSourceBytesPending = stats.ObservedSourceBytesEligible - stats.ObservedSourceBytesDeleted
 	}
 
-	currentSet := vm.CurrentSetNoRefresh()
-	if currentSet != nil {
-		if err := updateValueLogHealthAfterGC(db.dir, currentSet, referenced); err != nil {
-			if db.notifyError != nil {
-				db.notifyError(fmt.Errorf("value-log health update after gc: %w", err))
+	if !observedOnly {
+		currentSet := vm.CurrentSetNoRefresh()
+		if currentSet != nil {
+			if err := updateValueLogHealthAfterGC(db.dir, currentSet, referenced); err != nil {
+				if db.notifyError != nil {
+					db.notifyError(fmt.Errorf("value-log health update after gc: %w", err))
+				}
 			}
+			_ = vm.Release(currentSet)
 		}
-		_ = vm.Release(currentSet)
 	}
 
 	db.persistValueLogRefTrackerBestEffort()
