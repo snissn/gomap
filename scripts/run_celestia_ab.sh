@@ -67,6 +67,13 @@ AB_CAPTURE_LIVE_DEBUG_VARS="${AB_CAPTURE_LIVE_DEBUG_VARS:-1}"
 AB_LIVE_DEBUG_VARS_INTERVAL_SECONDS="${AB_LIVE_DEBUG_VARS_INTERVAL_SECONDS:-30}"
 AB_LIVE_DEBUG_VARS_TIMEOUT_SECONDS="${AB_LIVE_DEBUG_VARS_TIMEOUT_SECONDS:-5}"
 AB_LIVE_DEBUG_VARS_URL="${AB_LIVE_DEBUG_VARS_URL:-http://127.0.0.1:6062/debug/vars}"
+
+# Optional: require that the run exercised the maintenance rewrite lane before we
+# accept it as a valid attempt. This helps avoid low-signal runs that spend most
+# of their time in bootstrap/restore/catch-up where queued rewrite debt is not
+# executed.
+AB_REQUIRE_MAINTENANCE_WITH_REWRITE="${AB_REQUIRE_MAINTENANCE_WITH_REWRITE:-0}"
+AB_REQUIRE_REWRITE_QUEUED_DEBT_EXEC="${AB_REQUIRE_REWRITE_QUEUED_DEBT_EXEC:-0}"
 PAIR_ALIGN_TRUST_FROM_FIRST="${PAIR_ALIGN_TRUST_FROM_FIRST:-0}"
 PAIR_ALIGN_STOP_HEIGHT_FROM_FIRST="${PAIR_ALIGN_STOP_HEIGHT_FROM_FIRST:-0}"
 PAIR_ALIGN_STOP_MARGIN="${PAIR_ALIGN_STOP_MARGIN:-0}"
@@ -149,6 +156,14 @@ if [[ "$AB_CAPTURE_LIGHT_VLOG_STATS" != "0" && "$AB_CAPTURE_LIGHT_VLOG_STATS" !=
 fi
 if [[ "$AB_CAPTURE_LIVE_DEBUG_VARS" != "0" && "$AB_CAPTURE_LIVE_DEBUG_VARS" != "1" ]]; then
   echo "AB_CAPTURE_LIVE_DEBUG_VARS must be 0 or 1" >&2
+  exit 1
+fi
+if [[ "$AB_REQUIRE_MAINTENANCE_WITH_REWRITE" != "0" && "$AB_REQUIRE_MAINTENANCE_WITH_REWRITE" != "1" ]]; then
+  echo "AB_REQUIRE_MAINTENANCE_WITH_REWRITE must be 0 or 1" >&2
+  exit 1
+fi
+if [[ "$AB_REQUIRE_REWRITE_QUEUED_DEBT_EXEC" != "0" && "$AB_REQUIRE_REWRITE_QUEUED_DEBT_EXEC" != "1" ]]; then
+  echo "AB_REQUIRE_REWRITE_QUEUED_DEBT_EXEC must be 0 or 1" >&2
   exit 1
 fi
 if [[ "$PAIR_ALIGN_TRUST_FROM_FIRST" != "0" && "$PAIR_ALIGN_TRUST_FROM_FIRST" != "1" ]]; then
@@ -242,6 +257,8 @@ ab_capture_live_debug_vars=$AB_CAPTURE_LIVE_DEBUG_VARS
 ab_live_debug_vars_interval_seconds=$AB_LIVE_DEBUG_VARS_INTERVAL_SECONDS
 ab_live_debug_vars_timeout_seconds=$AB_LIVE_DEBUG_VARS_TIMEOUT_SECONDS
 ab_live_debug_vars_url=$AB_LIVE_DEBUG_VARS_URL
+ab_require_maintenance_with_rewrite=$AB_REQUIRE_MAINTENANCE_WITH_REWRITE
+ab_require_rewrite_queued_debt_exec=$AB_REQUIRE_REWRITE_QUEUED_DEBT_EXEC
 pair_align_trust_from_first=$PAIR_ALIGN_TRUST_FROM_FIRST
 pair_align_stop_height_from_first=$PAIR_ALIGN_STOP_HEIGHT_FROM_FIRST
 pair_align_stop_margin=$PAIR_ALIGN_STOP_MARGIN
@@ -507,6 +524,11 @@ run_variant() {
   local live_debug_vars="$run_dir/live_debug_vars_latest.json"
   local light_stats_pre_rc=2
   local light_stats_post_rc=2
+  local maintenance_captured=0
+  local require_maintenance_metrics="0"
+  if [[ "$AB_REQUIRE_MAINTENANCE_WITH_REWRITE" == "1" || "$AB_REQUIRE_REWRITE_QUEUED_DEBT_EXEC" == "1" ]]; then
+    require_maintenance_metrics="1"
+  fi
   rm -f "$analyze_json"
   rm -f "$maintenance_source_file"
   rm -f "$light_stats_pre" "$light_stats_pre_err" "$light_stats_post" "$light_stats_post_err"
@@ -516,8 +538,13 @@ run_variant() {
   local attempt
   for ((attempt = 1; attempt <= RUN_MAX_ATTEMPTS_PER_VARIANT; attempt++)); do
     attempt_used="$attempt"
+    maintenance_captured=0
     local attempt_dir="$run_dir/attempt_${attempt}"
     mkdir -p "$attempt_dir"
+
+    # Clear per-attempt artifacts in $run_dir so a failed attempt cannot accidentally
+    # reuse maintenance.json/live debug vars from an earlier attempt.
+    rm -f "$analyze_json" "$maintenance_source_file" "$run_dir/analyze.stderr.log" "$live_debug_vars"
 
     local before_file="$attempt_dir/before_homes.txt"
     local attempt_live_debug_vars="$attempt_dir/live_debug_vars_latest.json"
@@ -585,7 +612,125 @@ run_variant() {
       invalid_reason="run_home_missing"
     fi
 
-    echo "attempt=$attempt run_exit_code=$run_rc invalid_reason=${invalid_reason:-none} run_home=${run_home:-<none>}" >>"$run_dir/attempts.log"
+
+    local maintenance_with_rewrite=-1
+    local rewrite_queued_debt_exec_runs=-1
+    local maintenance_source="none"
+
+    # If enabled, require that this attempt actually exercised the rewrite lane
+    # we are optimizing (avoid accepting bootstrap/catch-up attempts where rewrite
+    # does not run or does not execute queued debt).
+    if [[ -z "$invalid_reason" && "$require_maintenance_metrics" == "1" ]]; then
+      rm -f "$analyze_json" "$maintenance_source_file"
+      if ! (
+        set -euo pipefail
+        if [[ -n "$env_file" ]]; then
+          set -a
+          # shellcheck source=/dev/null
+          source "$env_file"
+          set +a
+        fi
+        if [[ -n "$overlay_env_file" && -f "$overlay_env_file" ]]; then
+          set -a
+          # shellcheck source=/dev/null
+          source "$overlay_env_file"
+          set +a
+        fi
+        "$ANALYZER" --json "$run_home"
+      ) >"$analyze_json" 2>"$run_dir/analyze.stderr.log"; then
+        rm -f "$analyze_json"
+        if [[ -s "$live_debug_vars" ]]; then
+          if ! (
+            set -euo pipefail
+            "$ANALYZER" --json "$live_debug_vars"
+          ) >"$analyze_json" 2>>"$run_dir/analyze.stderr.log"; then
+            rm -f "$analyze_json"
+          else
+            printf "%s\n" "live_debug_vars" >"$maintenance_source_file"
+          fi
+        fi
+      else
+        printf "%s\n" "diagnostics_json" >"$maintenance_source_file"
+      fi
+
+      if [[ -s "$analyze_json" ]]; then
+        maintenance_captured=1
+        if read -r maintenance_with_rewrite rewrite_queued_debt_exec_runs < <(
+          python3 - "$analyze_json" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+p = Path(sys.argv[1])
+try:
+    payload = json.loads(p.read_text(encoding="utf-8"))
+except Exception:
+    raise SystemExit(2)
+
+summary = payload.get("summary") if isinstance(payload, dict) else None
+summary = summary if isinstance(summary, dict) else {}
+
+def safe_int(value) -> int:
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        s = value.strip().lower()
+        if not s:
+            return 0
+        if s == "true":
+            return 1
+        if s == "false":
+            return 0
+        try:
+            return int(s)
+        except ValueError:
+            try:
+                return int(float(s))
+            except ValueError:
+                return 0
+    return 0
+
+maint_with_rewrite = safe_int(summary.get("maintenance_with_rewrite", 0))
+queued_exec_runs = safe_int(summary.get("rewrite_queued_debt_exec_runs", 0))
+print(f"{maint_with_rewrite} {queued_exec_runs}")
+PY
+        ); then
+          :
+        else
+          maintenance_with_rewrite=-1
+          rewrite_queued_debt_exec_runs=-1
+        fi
+      fi
+
+      if [[ -s "$maintenance_source_file" ]]; then
+        maintenance_source="$(head -n 1 "$maintenance_source_file" | tr -d "\r")"
+      fi
+
+      if [[ "$AB_REQUIRE_MAINTENANCE_WITH_REWRITE" == "1" ]]; then
+        if [[ "$maintenance_captured" != "1" ]]; then
+          invalid_reason="maintenance_summary_missing"
+        elif [[ "$maintenance_with_rewrite" -le 0 ]]; then
+          invalid_reason="maintenance_rewrite_not_engaged"
+        fi
+      fi
+      if [[ -z "$invalid_reason" && "$AB_REQUIRE_REWRITE_QUEUED_DEBT_EXEC" == "1" ]]; then
+        if [[ "$maintenance_captured" != "1" ]]; then
+          invalid_reason="maintenance_summary_missing"
+        elif [[ "$rewrite_queued_debt_exec_runs" -le 0 ]]; then
+          invalid_reason="rewrite_queued_debt_exec_not_engaged"
+        fi
+      fi
+    fi
+
+    if [[ "$require_maintenance_metrics" == "1" ]]; then
+      echo "attempt=$attempt run_exit_code=$run_rc invalid_reason=${invalid_reason:-none} run_home=${run_home:-<none>} maintenance_with_rewrite=$maintenance_with_rewrite rewrite_queued_debt_exec_runs=$rewrite_queued_debt_exec_runs maintenance_source=$maintenance_source" >>"$run_dir/attempts.log"
+    else
+      echo "attempt=$attempt run_exit_code=$run_rc invalid_reason=${invalid_reason:-none} run_home=${run_home:-<none>}" >>"$run_dir/attempts.log"
+    fi
     if [[ -z "$invalid_reason" ]]; then
       break
     fi
@@ -599,37 +744,38 @@ run_variant() {
     pre_app_bytes="$(du_bytes "$app_db")"
     pre_wal_bytes="$(du_bytes "$app_db/maindb/wal")"
 
-    if ! (
-      set -euo pipefail
-      if [[ -n "$env_file" ]]; then
-        set -a
-        # shellcheck source=/dev/null
-        source "$env_file"
-        set +a
-      fi
-      if [[ -n "$overlay_env_file" && -f "$overlay_env_file" ]]; then
-        set -a
-        # shellcheck source=/dev/null
-        source "$overlay_env_file"
-        set +a
-      fi
-      "$ANALYZER" --json "$run_home"
-    ) >"$analyze_json" 2>"$run_dir/analyze.stderr.log"; then
-      rm -f "$analyze_json"
-      if [[ -s "$live_debug_vars" ]]; then
-        if ! (
-          set -euo pipefail
-          "$ANALYZER" --json "$live_debug_vars"
-        ) >"$analyze_json" 2>>"$run_dir/analyze.stderr.log"; then
-          rm -f "$analyze_json"
-        else
-          printf '%s
-' "live_debug_vars" >"$maintenance_source_file"
+    if [[ "$maintenance_captured" != "1" || ! -s "$analyze_json" ]]; then
+      rm -f "$analyze_json" "$maintenance_source_file"
+      if ! (
+        set -euo pipefail
+        if [[ -n "$env_file" ]]; then
+          set -a
+          # shellcheck source=/dev/null
+          source "$env_file"
+          set +a
         fi
+        if [[ -n "$overlay_env_file" && -f "$overlay_env_file" ]]; then
+          set -a
+          # shellcheck source=/dev/null
+          source "$overlay_env_file"
+          set +a
+        fi
+        "$ANALYZER" --json "$run_home"
+      ) >"$analyze_json" 2>"$run_dir/analyze.stderr.log"; then
+        rm -f "$analyze_json"
+        if [[ -s "$live_debug_vars" ]]; then
+          if ! (
+            set -euo pipefail
+            "$ANALYZER" --json "$live_debug_vars"
+          ) >"$analyze_json" 2>>"$run_dir/analyze.stderr.log"; then
+            rm -f "$analyze_json"
+          else
+            printf "%s\n" "live_debug_vars" >"$maintenance_source_file"
+          fi
+        fi
+      else
+        printf "%s\n" "diagnostics_json" >"$maintenance_source_file"
       fi
-    else
-      printf '%s
-' "diagnostics_json" >"$maintenance_source_file"
     fi
 
     if capture_light_vlog_stats "$app_db" "$light_stats_pre" "$light_stats_pre_err" "$env_file" "$overlay_env_file"; then
