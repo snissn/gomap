@@ -464,7 +464,7 @@ func selectRewriteSourceChunksWithStats(opts ValueLogRewriteOnlineOptions, files
 			continue
 		}
 
-		var tooYoung bool
+		tooYoung := false
 		if minSegmentAge > 0 && f.Path != "" {
 			if info, err := os.Stat(f.Path); err == nil {
 				if age := now.Sub(info.ModTime()); age < minSegmentAge {
@@ -553,14 +553,17 @@ func selectRewriteSourceChunksWithStats(opts ValueLogRewriteOnlineOptions, files
 
 	selected := make([]ValueLogRewritePlanChunk, 0, len(candidates))
 	selectedBytes := int64(0)
+	selectedIDs := make(map[uint32]struct{}, maxSourceSegments)
 	for _, candidate := range candidates {
 		if !explicitSources {
-			if maxSourceSegments > 0 && len(selected) >= maxSourceSegments {
-				break
-			}
 			if maxSourceBytes > 0 {
 				next := selectedBytes + candidate.liveBytes
 				if next > maxSourceBytes && len(selected) > 0 {
+					continue
+				}
+			}
+			if maxSourceSegments > 0 {
+				if _, ok := selectedIDs[candidate.fileID]; !ok && len(selectedIDs) >= maxSourceSegments {
 					continue
 				}
 			}
@@ -574,6 +577,7 @@ func selectRewriteSourceChunksWithStats(opts ValueLogRewriteOnlineOptions, files
 			StaleRatio:  candidate.staleRatio,
 		})
 		selectedBytes += candidate.liveBytes
+		selectedIDs[candidate.fileID] = struct{}{}
 	}
 	return selected, stats
 }
@@ -589,7 +593,6 @@ func buildExplicitRewriteSourceChunkSet(chunks []ValueLogRewritePlanChunk, files
 	chunkBytes = normalizeValueLogRewriteChunkBytes(chunkBytes)
 	chunkSet := make(map[valueLogChunkKey]ValueLogRewritePlanChunk, len(chunks))
 	sourceIDs := make(map[uint32]struct{}, len(chunks))
-	requestedBytes := int64(0)
 	for _, chunk := range chunks {
 		if chunk.FileID == 0 {
 			continue
@@ -626,10 +629,19 @@ func buildExplicitRewriteSourceChunkSet(chunks []ValueLogRewritePlanChunk, files
 		}
 		chunkSet[key] = normalized
 		sourceIDs[normalized.FileID] = struct{}{}
-		requestedBytes += totalBytes
 	}
 	if len(chunkSet) == 0 {
 		return nil, nil, 0
+	}
+	requestedBytes := int64(0)
+	for id := range sourceIDs {
+		f := files[id]
+		if f == nil {
+			continue
+		}
+		if size := fileSize(f); size > 0 {
+			requestedBytes += size
+		}
 	}
 	return chunkSet, sourceIDs, requestedBytes
 }

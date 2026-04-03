@@ -4699,6 +4699,105 @@ func (db *DB) pruneRetainedValueLogsWithObserved(force bool, observedSourceIDs m
 		return out
 	}
 
+	// When a queued rewrite explicitly observed source segment IDs that are
+	// currently pinned by retention, we already know those segments are
+	// unreachable in the backend index (otherwise rewrite+GC would not have
+	// classified them as retained-protected blockers). In that case, prune only
+	// the observed IDs and avoid an expensive full pointer scan.
+	if force && len(observedSourceIDs) > 0 {
+		removed := false
+		marked := false
+		for _, candidate := range candidatePaths {
+			if !candidate.observed {
+				continue
+			}
+			path := candidate.path
+			size := candidate.size
+			id := candidate.id
+			if !candidate.hasID {
+				out.ParseSkippedSegments++
+				if size > 0 {
+					out.ParseSkippedBytes += size
+				}
+				out.ObservedSourceParseSkippedSegments++
+				if size > 0 {
+					out.ObservedSourceParseSkippedBytes += size
+				}
+				continue
+			}
+
+			if marker, ok := db.backend.(valueLogZombieMarker); ok {
+				if db.valueLogReader != nil {
+					_ = db.valueLogReader.EvictSegment(id)
+				}
+				if err := marker.MarkValueLogZombie(id); err != nil {
+					if errors.Is(err, valuelog.ErrFileNotFound) && db.cleanupOrphanedRetainedValueLog(path) {
+						removed = true
+						out.RemovedSegments++
+						if size > 0 {
+							out.RemovedBytes += size
+						}
+						out.ObservedSourceRemovedSegments++
+						if size > 0 {
+							out.ObservedSourceRemovedBytes += size
+						}
+						continue
+					}
+					if db.cleanupMissingRetainedValueLog(path) {
+						out.RemovedSegments++
+						if size > 0 {
+							out.RemovedBytes += size
+						}
+						out.ObservedSourceRemovedSegments++
+						if size > 0 {
+							out.ObservedSourceRemovedBytes += size
+						}
+						continue
+					}
+					db.reportError(fmt.Errorf("cachingdb: failed to mark value-log %d zombie: %w", id, err))
+					continue
+				}
+				out.ZombieMarkedSegments++
+				if size > 0 {
+					out.ZombieMarkedBytes += size
+				}
+				out.ObservedSourceZombieMarkedSegments++
+				if size > 0 {
+					out.ObservedSourceZombieMarkedBytes += size
+				}
+				marked = true
+			} else {
+				db.dropValueLogSegment(path)
+				_ = db.removeFileRetry(path)
+				db.mu.Lock()
+				db.untrackValueLogSegmentLocked(path)
+				db.mu.Unlock()
+				removed = true
+				out.RemovedSegments++
+				if size > 0 {
+					out.RemovedBytes += size
+				}
+				out.ObservedSourceRemovedSegments++
+				if size > 0 {
+					out.ObservedSourceRemovedBytes += size
+				}
+			}
+			db.forgetValueLogRetain(path)
+		}
+
+		if marked {
+			if refresher, ok := db.backend.(valueLogSetRefresher); ok {
+				if err := refresher.RefreshValueLogSet(); err != nil {
+					db.reportError(fmt.Errorf("cachingdb: failed to refresh value-log set: %w", err))
+				}
+			}
+		}
+		if removed {
+			db.syncDirBestEffort(db.dir)
+		}
+		return out
+	}
+
 	live, err := db.collectValueLogLiveIDsUntil(db.lastForegroundWriteUnixNano.Load())
 	if err != nil && force && errors.Is(err, errForegroundWritesResumed) {
 		out.RetriedWithoutWriteGate = true
@@ -6516,11 +6615,18 @@ const (
 )
 
 const (
-	vlogGenerationLoopInterval              = 1 * time.Second
-	vlogGenerationGCEvery                   = 5
-	vlogGenerationGCMinBytes                = int64(1 << 20)
-	vlogGenerationRewriteMinInterval        = 30 * time.Second
-	vlogGenerationGCMinInterval             = 45 * time.Second
+	vlogGenerationLoopInterval       = 1 * time.Second
+	vlogGenerationGCEvery            = 5
+	vlogGenerationGCMinBytes         = int64(1 << 20)
+	vlogGenerationRewriteMinInterval = 30 * time.Second
+	// Rewrite staging uses a two-pass confirm flow: the first pass stages a plan,
+	// then a later pass re-plans and executes only if a stable subset persists.
+	//
+	// The confirmation wake must be short enough that end-to-end benchmarks can
+	// actually exercise rewrite execution, but long enough to filter transient
+	// stale-ratio spikes.
+	vlogGenerationRewriteStageConfirmDelay  = 15 * time.Second
+	vlogGenerationGCMinInterval             = 90 * time.Second
 	vlogGenerationGCNoopMinInterval         = 3 * time.Minute
 	vlogGenerationCheckpointKickMinInterval = 5 * time.Second
 	vlogGenerationCheckpointKickRetryWindow = 5 * time.Second
@@ -6582,6 +6688,13 @@ const (
 	// A bounded queued rewrite pass that copied data but produced no reclaim
 	// signal should cool down briefly before the dedicated queue runner resumes.
 	vlogGenerationRewriteQueuedFollowupCooldown = 30 * time.Second
+	// When chunk-based queued debt drains make local progress but don't yet
+	// unreference segments, allow a bounded follow-up only when we are close to
+	// finishing the chunk debt for the processed IDs.
+	vlogGenerationRewriteQueuedFollowupChunkDebtMaxRemainingChunks = 2
+	// Bound queued follow-ups for chunk debt by remaining live bytes so we avoid
+	// tight resume loops that burn wall time without immediate reclaim signal.
+	vlogGenerationRewriteQueuedFollowupChunkDebtMaxRemainingLiveBytes = int64(32 << 20)
 	// Even after cooldown expires, admit only a small amount of prior failed
 	// queue debt per pass so fresh debt keeps priority.
 	vlogGenerationRewriteRetriedSelectionLimit = 1
@@ -13697,11 +13810,17 @@ func (db *DB) vlogGenerationRewriteSegmentCapForRunWithHint(queueLen int, budget
 	}
 	// Checkpoint-kick retries should keep each debt-drain run small to reduce
 	// write amplification when foreground ingest is still active.
-	if opts.bypassQuiet && !opts.skipCheckpoint && !vlogGenerationIsStageConfirmSource(opts) && !vlogGenerationIsAgeBlockedSource(opts) {
+	if opts.bypassQuiet && !opts.skipCheckpoint {
 		decision.maxSegments = 1
 		decision.limiter = vlogGenerationRewriteSegmentCapLimiterCheckpointKickSafety
+
+		burstMinQueueSegments := vlogGenerationRewriteCheckpointKickBurstMinQueueSegments
+		if vlogGenerationIsStageConfirmSource(opts) || vlogGenerationIsAgeBlockedSource(opts) {
+			burstMinQueueSegments = 2
+		}
+
 		if decision.budgetEnabled &&
-			queueLen >= vlogGenerationRewriteCheckpointKickBurstMinQueueSegments &&
+			queueLen >= burstMinQueueSegments &&
 			budgetTokens > 0 {
 			perSegmentBudget := db.vlogGenerationRewritePerSegmentBudgetBytes(queueLen, queueLiveBytes, queueLiveKnown)
 			if perSegmentBudget > 0 {
@@ -14781,7 +14900,7 @@ func (db *DB) scheduleVlogGenerationRewriteStageConfirmation(observedAt int64) {
 		return
 	}
 	db.vlogGenerationRewriteStageWakeObservedNS.Store(observedAt)
-	dueAt := time.Unix(0, observedAt).Add(vlogGenerationRewriteMinInterval)
+	dueAt := time.Unix(0, observedAt).Add(vlogGenerationRewriteStageConfirmDelay)
 	delay := time.Until(dueAt)
 	if delay < 0 {
 		delay = 0
@@ -14875,7 +14994,7 @@ func (db *DB) vlogGenerationRewriteStageConfirmDue(now time.Time) bool {
 	if err != nil || !stagePending || stageObservedAt <= 0 {
 		return false
 	}
-	return !now.Before(time.Unix(0, stageObservedAt).Add(vlogGenerationRewriteMinInterval))
+	return !now.Before(time.Unix(0, stageObservedAt).Add(vlogGenerationRewriteStageConfirmDelay))
 }
 
 func (db *DB) vlogGenerationDeferredMaintenanceDue(now time.Time) bool {
@@ -15009,7 +15128,7 @@ func (db *DB) scheduleDueVlogGenerationDeferredMaintenance() {
 	if err != nil || !stagePending || stageObservedAt <= 0 {
 		return
 	}
-	if now.Before(time.Unix(0, stageObservedAt).Add(vlogGenerationRewriteMinInterval)) {
+	if now.Before(time.Unix(0, stageObservedAt).Add(vlogGenerationRewriteStageConfirmDelay)) {
 		return
 	}
 	db.startVlogGenerationDeferredMaintenance(vlogGenerationMaintenanceOptions{
@@ -15359,6 +15478,14 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 		}
 		return
 	}
+	if vlogGenerationIsStageConfirmSource(opts) && !stagePending {
+		// Stage-confirm wakes should only run while staged debt is still pending.
+		// If another maintenance pass cleared the stage before this wake acquired
+		// the maintenance slot, treat it as a no-op instead of accidentally
+		// draining rewrite-queue debt under the stage-confirm debugSource.
+		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
+		return
+	}
 	rewritePenalties, penaltyErr := db.currentVlogGenerationRewritePenalties()
 	if penaltyErr != nil {
 		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
@@ -15550,7 +15677,11 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 		lastPlan := db.vlogGenerationLastRewritePlanUnixNano.Load()
 		if lastPlan > 0 && !ageBlockedRetryDue {
 			lastAt := time.Unix(0, lastPlan)
-			if now.Sub(lastAt) < vlogGenerationRewriteMinInterval {
+			// Stage confirmation is explicitly retry-driven; do not let the generic
+			// planning min-interval prevent the confirm pass from re-planning soon
+			// enough to execute rewrite within short end-to-end runs.
+			if now.Sub(lastAt) < vlogGenerationRewriteMinInterval &&
+				!vlogGenerationIsStageConfirmSource(opts) {
 				goto planned
 			}
 		}
@@ -15828,6 +15959,14 @@ planned:
 		minInterval := vlogGenerationRewriteMinInterval
 		if len(rewriteQueue) > 0 {
 			minInterval = vlogGenerationRewriteResumeMinInterval
+			// Stage confirmation is already a retry/wake-driven path. Keeping the
+			// generic queued-debt resume interval (1s) here can create repeated
+			// back-to-back stage-confirm rewrite passes during restore-heavy runs,
+			// inflating wall time without improving reclaim. Use the regular
+			// min-interval to keep stage-confirm execution bounded.
+			if vlogGenerationIsStageConfirmSource(opts) {
+				minInterval = vlogGenerationRewriteMinInterval
+			}
 		}
 		if last > 0 {
 			lastAt := time.Unix(0, last)
@@ -15997,8 +16136,12 @@ planned:
 				BatchSize:       db.valueLogRewriteBatchSize(),
 				SyncEachBatch:   false,
 				MaxSegmentBytes: db.valueLogGenerationWarmTarget,
-				ProtectedPaths:  db.valueLogProtectedPaths(),
-				ReserveRIDs:     db.ReserveValueLogRIDs,
+				// Maintenance rewrites are throughput-sensitive and operate on large
+				// source segments; group rewrite candidates by old segment+offset to
+				// improve value-log read locality and reduce wall-time.
+				LocalityPolicy: backenddb.ValueLogRewriteLocalityGrouped,
+				ProtectedPaths: db.valueLogProtectedPaths(),
+				ReserveRIDs:    db.ReserveValueLogRIDs,
 			}
 			processedRewriteIDs := []uint32(nil)
 			processedRewriteChunks := []backenddb.ValueLogRewritePlanChunk(nil)
@@ -16444,10 +16587,24 @@ planned:
 					}
 				}
 			}
+			if stagePending && vlogGenerationIsStageConfirmSource(opts) {
+				if err := db.clearVlogGenerationRewriteStage(); err != nil {
+					return fmt.Errorf("clear generational rewrite stage: %w", err)
+				}
+			}
 			if gcer, ok := db.backend.(backendValueLogGCer); ok {
 				gcOpts := db.valueLogGCOptions(false)
-				if len(processedRewriteIDs) > 0 {
-					gcOpts.ObservedSourceFileIDs = append([]uint32(nil), processedRewriteIDs...)
+				observedRewriteSourceIDs := processedRewriteIDs
+				assumeUnreferencedObserved := false
+				if len(stats.SourceFileIDsUnreferenced) > 0 {
+					observedRewriteSourceIDs = stats.SourceFileIDsUnreferenced
+					assumeUnreferencedObserved = true
+				}
+				if len(observedRewriteSourceIDs) > 0 {
+					gcOpts.ObservedSourceFileIDs = append([]uint32(nil), observedRewriteSourceIDs...)
+					if assumeUnreferencedObserved {
+						gcOpts.ObservedSourceAssumeUnreferenced = true
+					}
 				}
 				runGC := func(phase string) (backenddb.ValueLogGCStats, error) {
 					gcCtx, gcCancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -16500,8 +16657,8 @@ planned:
 					gcStats.ObservedSourceSegmentsEligible == 0 &&
 					gcStats.ObservedSourceSegmentsProtectedRetained > 0
 				if rewriteBlockedByRetained {
-					observedSourceIDSet := make(map[uint32]struct{}, len(processedRewriteIDs))
-					for _, id := range processedRewriteIDs {
+					observedSourceIDSet := make(map[uint32]struct{}, len(observedRewriteSourceIDs))
+					for _, id := range observedRewriteSourceIDs {
 						if id == 0 {
 							continue
 						}
@@ -16539,8 +16696,11 @@ planned:
 						// Refresh protected path sets after inline retained prune so
 						// the follow-up GC pass evaluates updated retention state.
 						gcOpts = db.valueLogGCOptions(false)
-						if len(processedRewriteIDs) > 0 {
-							gcOpts.ObservedSourceFileIDs = append([]uint32(nil), processedRewriteIDs...)
+						if len(observedRewriteSourceIDs) > 0 {
+							gcOpts.ObservedSourceFileIDs = append([]uint32(nil), observedRewriteSourceIDs...)
+							if assumeUnreferencedObserved {
+								gcOpts.ObservedSourceAssumeUnreferenced = true
+							}
 						}
 						gcStatsAfterPrune, gcErr := runGC("post_retained_prune")
 						if gcErr != nil {
@@ -16548,7 +16708,9 @@ planned:
 						}
 						gcStats = gcStatsAfterPrune
 					} else {
-						db.queueRetainedPruneObservedSourceIDs(processedRewriteIDs)
+						if assumeUnreferencedObserved && len(observedRewriteSourceIDs) > 0 {
+							db.queueRetainedPruneObservedSourceIDs(observedRewriteSourceIDs)
+						}
 						// A prune is already in flight. Ensure a follow-up attempt stays queued.
 						db.scheduleRetainedValueLogPruneForce()
 					}
@@ -16562,15 +16724,17 @@ planned:
 					// Rewrite-selected source segments can remain temporarily active when
 					// the writer is still appending. Queue observed-source replay and a
 					// checkpoint-kick so follow-up maintenance can rotate/re-check quickly.
-					db.queueVlogGenerationObservedSourceGCList(processedRewriteIDs)
+					if assumeUnreferencedObserved && len(observedRewriteSourceIDs) > 0 {
+						db.queueVlogGenerationObservedSourceGCList(observedRewriteSourceIDs)
+					}
 					db.vlogGenerationCheckpointKickPending.Store(true)
 				}
 				if gcStats.BytesProtectedRetained > 0 && gcStats.BytesEligible == 0 && db.valueLogRetainedClosedBytes.Load() > 0 {
 					// Retained-path protection can starve live reclaim even when rewrite
 					// processed stale payload in-pass. Kick an eager retained prune so
 					// lifecycle pins can drain without waiting for byte-pressure gates.
-					if len(processedRewriteIDs) > 0 {
-						db.queueRetainedPruneObservedSourceIDs(processedRewriteIDs)
+					if assumeUnreferencedObserved && len(observedRewriteSourceIDs) > 0 {
+						db.queueRetainedPruneObservedSourceIDs(observedRewriteSourceIDs)
 					}
 					db.scheduleRetainedValueLogPruneForce()
 				}
@@ -16689,7 +16853,54 @@ planned:
 					return fmt.Errorf("load generational rewrite queue after queued execution: %w", queueErr)
 				}
 				queuedUsefulSignal := stats.SourceBytesUnreferenced > 0 || effectiveBytesAfter < effectiveBytesBefore || gcBytesDeleted > 0
-				if len(remainingQueue) > 0 && !queuedUsefulSignal && !penalizeProcessedRewriteDebt {
+				// Chunk-debt drains are incremental: if a processed ID remains queued, we
+				// intentionally executed a partial drain. In that case, "no immediate
+				// reclaim" is expected; allow a bounded follow-up only when the remaining
+				// chunk debt is small enough to finish quickly.
+				allowChunkDebtFollowup := false
+				if len(processedRewriteChunks) > 0 && len(remainingQueue) > 0 && len(processedRewriteIDs) > 0 {
+					processedIDsStillQueued := false
+					for _, processedID := range processedRewriteIDs {
+						if processedID == 0 {
+							continue
+						}
+						for _, queuedID := range remainingQueue {
+							if queuedID == processedID {
+								processedIDsStillQueued = true
+								break
+							}
+						}
+						if processedIDsStillQueued {
+							break
+						}
+					}
+					if processedIDsStillQueued {
+						remainingLedger, _, ledgerErr := db.currentVlogGenerationRewriteChunkLedger()
+						if ledgerErr == nil && len(remainingLedger) > 0 {
+							remainingChunks := 0
+							remainingLiveBytes := int64(0)
+							for _, chunk := range remainingLedger {
+								if chunk.FileID == 0 || chunk.BytesLive <= 0 {
+									continue
+								}
+								for _, processedID := range processedRewriteIDs {
+									if chunk.FileID == processedID {
+										remainingChunks++
+										remainingLiveBytes += chunk.BytesLive
+										break
+									}
+								}
+							}
+							if remainingLiveBytes > 0 && remainingLiveBytes <= vlogGenerationRewriteQueuedFollowupChunkDebtMaxRemainingLiveBytes {
+								allowChunkDebtFollowup = true
+							} else if remainingLiveBytes <= 0 && remainingChunks > 0 && remainingChunks <= vlogGenerationRewriteQueuedFollowupChunkDebtMaxRemainingChunks {
+								allowChunkDebtFollowup = true
+							}
+						}
+
+					}
+				}
+				if len(remainingQueue) > 0 && !queuedUsefulSignal && !penalizeProcessedRewriteDebt && !allowChunkDebtFollowup {
 					cooldownUntil := time.Now().Add(vlogGenerationRewriteQueuedFollowupCooldown)
 					if err := db.recordVlogGenerationRewritePenaltyWithLedger(
 						processedRewriteIDs,
@@ -16741,7 +16952,7 @@ planned:
 					gcBytesDeleted,
 				)
 			}
-			if queuedDebtExecuted && !suppressQueuedFollowup {
+			if queuedDebtExecuted && !suppressQueuedFollowup && !vlogGenerationIsStageConfirmSource(opts) {
 				remainingQueue, _, queueErr := db.currentVlogGenerationRewriteEligible(time.Now())
 				if queueErr != nil {
 					return fmt.Errorf("load eligible generational rewrite queue after queued execution: %w", queueErr)
@@ -17025,6 +17236,7 @@ planned:
 		gcOpts := db.valueLogGCOptions(false)
 		if forceObservedSourceGC {
 			gcOpts.ObservedSourceFileIDs = append([]uint32(nil), observedSourceGCIDs...)
+			gcOpts.ObservedSourceAssumeUnreferenced = true
 		}
 		db.debugVlogMaintf(
 			"gc_run start run_gc=%t force_observed=%t observed_ids=%d need_estimate=%t",
@@ -22828,7 +23040,7 @@ func (db *DB) Stats() map[string]string {
 			rewriteStageObservedAgeMS = time.Duration(statsNow.UnixNano() - rewriteStageObservedNS).Milliseconds()
 		}
 		if rewriteStagePending {
-			dueAt := time.Unix(0, rewriteStageObservedNS).Add(vlogGenerationRewriteMinInterval)
+			dueAt := time.Unix(0, rewriteStageObservedNS).Add(vlogGenerationRewriteStageConfirmDelay)
 			if !statsNow.Before(dueAt) {
 				rewriteStageDue = true
 			} else {

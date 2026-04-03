@@ -682,6 +682,27 @@ func (db *DB) currentVlogGenerationRewriteStage() (bool, int64, error) {
 	return db.vlogGenerationRewriteStagePending, db.vlogGenerationRewriteStageObservedUnixNano, nil
 }
 
+func (db *DB) clearVlogGenerationRewriteStage() error {
+	if db == nil {
+		return nil
+	}
+	db.vlogGenerationRewriteQueueMu.Lock()
+	defer db.vlogGenerationRewriteQueueMu.Unlock()
+	if err := db.loadVlogGenerationRewriteQueueLocked(); err != nil {
+		return err
+	}
+	if !db.vlogGenerationRewriteStagePending {
+		return nil
+	}
+	if err := saveValueLogGenerationRewriteState(db.valueLogGenerationStatePath(), db.vlogGenerationRewriteQueue, db.vlogGenerationRewriteLedger, db.vlogGenerationRewriteChunkLedger, db.vlogGenerationRewriteChunkBytes, db.vlogGenerationRewriteHistory, db.vlogGenerationRewritePenalties, false, 0); err != nil {
+		return err
+	}
+	db.vlogGenerationRewriteStagePending = false
+	db.vlogGenerationRewriteStageObservedUnixNano = 0
+	db.clearVlogGenerationRewriteStageConfirmation()
+	return nil
+}
+
 func (db *DB) pruneVlogGenerationRewriteLedgerNonPositiveLive() ([]uint32, int, error) {
 	if db == nil {
 		return nil, 0, nil
@@ -1180,10 +1201,11 @@ type valueLogGenerationRewriteChunkKey struct {
 	ChunkOffset int64
 }
 
-func vlogGenerationRewriteChunkLedgerChunk(chunks []backenddb.ValueLogRewritePlanChunk, maxChunks int, budgetLiveBytes int64) []backenddb.ValueLogRewritePlanChunk {
-	if len(chunks) == 0 || maxChunks <= 0 {
+func vlogGenerationRewriteChunkLedgerChunk(chunks []backenddb.ValueLogRewritePlanChunk, maxSegments int, budgetLiveBytes int64) []backenddb.ValueLogRewritePlanChunk {
+	if len(chunks) == 0 || maxSegments <= 0 {
 		return nil
 	}
+
 	candidates := make([]backenddb.ValueLogRewritePlanChunk, 0, len(chunks))
 	for _, chunk := range chunks {
 		if chunk.FileID == 0 || chunk.BytesLive <= 0 {
@@ -1194,6 +1216,7 @@ func vlogGenerationRewriteChunkLedgerChunk(chunks []backenddb.ValueLogRewritePla
 	if len(candidates) == 0 {
 		return nil
 	}
+
 	sort.SliceStable(candidates, func(i, j int) bool {
 		a := candidates[i]
 		b := candidates[j]
@@ -1211,11 +1234,16 @@ func vlogGenerationRewriteChunkLedgerChunk(chunks []backenddb.ValueLogRewritePla
 		}
 		return a.ChunkOffset < b.ChunkOffset
 	})
-	selected := make([]backenddb.ValueLogRewritePlanChunk, 0, maxChunks)
+
+	selected := make([]backenddb.ValueLogRewritePlanChunk, 0, len(candidates))
+	selectedIDs := make(map[uint32]struct{}, maxSegments)
 	remaining := budgetLiveBytes
 	for _, chunk := range candidates {
-		if len(selected) >= maxChunks {
-			break
+		if chunk.FileID == 0 {
+			continue
+		}
+		if _, ok := selectedIDs[chunk.FileID]; !ok && len(selectedIDs) >= maxSegments {
+			continue
 		}
 		if budgetLiveBytes > 0 && remaining <= 0 && len(selected) > 0 {
 			break
@@ -1228,9 +1256,13 @@ func vlogGenerationRewriteChunkLedgerChunk(chunks []backenddb.ValueLogRewritePla
 			continue
 		}
 		selected = append(selected, chunk)
+		selectedIDs[chunk.FileID] = struct{}{}
 		if budgetLiveBytes > 0 && remaining > 0 {
 			remaining -= live
 		}
+	}
+	if len(selected) == 0 {
+		return nil
 	}
 	return selected
 }

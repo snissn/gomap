@@ -490,6 +490,54 @@ capture_live_debug_vars_periodic() {
   fi
 }
 
+
+capture_build_meta() {
+  local env_file="$1"
+  local overlay_env_file="$2"
+  local out_file="$3"
+  local err_file="$4"
+
+  rm -f "$out_file" "$err_file"
+  (
+    set -euo pipefail
+    if [[ -n "$env_file" ]]; then
+      set -a
+      # shellcheck source=/dev/null
+      source "$env_file"
+      set +a
+    fi
+    if [[ -n "$overlay_env_file" && -f "$overlay_env_file" ]]; then
+      set -a
+      # shellcheck source=/dev/null
+      source "$overlay_env_file"
+      set +a
+    fi
+
+    echo "treedb_open_profile=${TREEDB_OPEN_PROFILE:-}"
+    echo "use_local_tree_stack=${USE_LOCAL_TREE_STACK:-}"
+    echo "local_gomap_dir=${LOCAL_GOMAP_DIR:-}"
+
+    local gomap_dir="${LOCAL_GOMAP_DIR:-}"
+    if [[ -n "$gomap_dir" && -d "$gomap_dir" ]] && command -v git >/dev/null 2>&1; then
+      local head=""
+      head="$(git -C "$gomap_dir" rev-parse HEAD 2>/dev/null || true)"
+      if [[ -n "$head" ]]; then
+        echo "gomap_git_head=$head"
+        local desc=""
+        desc="$(git -C "$gomap_dir" describe --always --dirty 2>/dev/null || true)"
+        echo "gomap_git_describe=$desc"
+        local dirty=0
+        if [[ -n "$(git -C "$gomap_dir" status --porcelain=v1 --untracked-files=no 2>/dev/null)" ]]; then
+          dirty=1
+        fi
+        echo "gomap_git_dirty=$dirty"
+      fi
+    fi
+  ) >"$out_file" 2>"$err_file" || {
+    printf "%s\n" "build_meta_error=1" >"$out_file"
+  }
+}
+
 run_variant() {
   local pair_index="$1"
   local variant="$2"
@@ -812,7 +860,10 @@ PY
   fi
 
   local run_json="$run_dir/run.json"
-  python3 - "$run_home" "$run_json" "$variant" "$pair_index" "$run_start" "$run_end" "$rewrite_attempted" "$rewrite_seconds" "$rewrite_rc" "$pre_app_bytes" "$pre_wal_bytes" "$post_app_bytes" "$post_wal_bytes" "$analyze_json" "$maintenance_source_file" "$light_stats_pre" "$light_stats_pre_rc" "$light_stats_post" "$light_stats_post_rc" "$invalid_reason" "$run_rc" "$attempt_used" "$RUN_MAX_ATTEMPTS_PER_VARIANT" "$RUN_TIMEOUT_SECONDS" <<'PY'
+  local build_meta="$run_dir/build_meta.env"
+  local build_meta_err="$run_dir/build_meta.stderr.log"
+  capture_build_meta "$env_file" "$overlay_env_file" "$build_meta" "$build_meta_err"
+  python3 - "$run_home" "$run_json" "$variant" "$pair_index" "$run_start" "$run_end" "$rewrite_attempted" "$rewrite_seconds" "$rewrite_rc" "$pre_app_bytes" "$pre_wal_bytes" "$post_app_bytes" "$post_wal_bytes" "$analyze_json" "$maintenance_source_file" "$light_stats_pre" "$light_stats_pre_rc" "$light_stats_post" "$light_stats_post_rc" "$invalid_reason" "$run_rc" "$attempt_used" "$RUN_MAX_ATTEMPTS_PER_VARIANT" "$RUN_TIMEOUT_SECONDS" "$build_meta" <<'PY'
 import json
 import re
 import sys
@@ -842,7 +893,22 @@ run_exit_code = int(sys.argv[21])
 attempt = int(sys.argv[22])
 max_attempts = int(sys.argv[23])
 run_timeout_seconds = int(sys.argv[24])
+build_meta_path = Path(sys.argv[25])
 run_home = Path(run_home_raw) if run_home_raw else None
+
+def parse_kv_file(path: Path) -> dict[str, str]:
+    out: dict[str, str] = {}
+    if not path.is_file():
+        return out
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = line.strip()
+        if not line or "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        out[k.strip()] = v.strip()
+    return out
+
+build_meta = parse_kv_file(build_meta_path)
 
 def parse_sync_time(path: Path) -> dict[str, str]:
     out: dict[str, str] = {}
@@ -1839,6 +1905,7 @@ result = {
     "pair_index": pair_index,
     "variant": variant,
     "run_home": run_home_raw,
+    "build": build_meta,
     "status": {
         "valid": valid,
         "invalid_reason": resolved_invalid_reason,
@@ -2231,11 +2298,18 @@ with runs_csv.open("w", newline="", encoding="utf-8") as fh:
         "light_delta_bytes_total",
         "light_delta_bytes_stale",
         "light_delta_segments_total",
+        "treedb_open_profile",
+        "use_local_tree_stack",
+        "local_gomap_dir",
+        "gomap_git_head",
+        "gomap_git_describe",
+        "gomap_git_dirty",
     ])
     for r in runs:
         m = r.get("metrics", {}) or {}
         s = r.get("sizes", {}) or {}
         rw = r.get("rewrite", {}) or {}
+        build = r.get("build", {}) or {}
         summary = r.get("maintenance_summary", {}) or {}
         light = r.get("maintenance_light", {}) or {}
         light_pre = {}
@@ -2460,6 +2534,12 @@ with runs_csv.open("w", newline="", encoding="utf-8") as fh:
             light_delta.get("bytes_total_total"),
             light_delta.get("bytes_stale_total"),
             light_delta.get("segments_total"),
+            build.get("treedb_open_profile", ""),
+            build.get("use_local_tree_stack", ""),
+            build.get("local_gomap_dir", ""),
+            build.get("gomap_git_head", ""),
+            build.get("gomap_git_describe", ""),
+            build.get("gomap_git_dirty", ""),
         ])
 
 by_pair: dict[int, dict[str, dict]] = {}

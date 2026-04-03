@@ -144,7 +144,7 @@ func forceRewriteStageConfirmDue(t *testing.T, db *DB) {
 	if db == nil {
 		return
 	}
-	observedAt := time.Now().Add(-vlogGenerationRewriteMinInterval - time.Second).UnixNano()
+	observedAt := time.Now().Add(-vlogGenerationRewriteStageConfirmDelay - time.Second).UnixNano()
 	db.vlogGenerationRewriteQueueMu.Lock()
 	db.vlogGenerationRewriteStageObservedUnixNano = observedAt
 	db.vlogGenerationRewriteQueueMu.Unlock()
@@ -2432,7 +2432,7 @@ func TestSchedulePendingVlogGenerationCheckpointKick_PrioritizesDueDeferredWake(
 	t.Cleanup(cleanup)
 	forceVlogMaintenanceIdle(db)
 
-	stageObservedAt := time.Now().Add(-2 * vlogGenerationRewriteMinInterval).UnixNano()
+	stageObservedAt := time.Now().Add(-2 * vlogGenerationRewriteStageConfirmDelay).UnixNano()
 	if err := db.setVlogGenerationRewriteLedgerWithStage([]backenddb.ValueLogRewritePlanSegment{{
 		FileID:     11,
 		BytesTotal: 128,
@@ -2496,7 +2496,7 @@ func TestVlogGenerationMaintenance_SchedulesDueStageConfirmationOnExit(t *testin
 	forceVlogMaintenanceIdle(db)
 	db.vlogGenerationRewriteBudgetTokensBytes.Store(1024)
 
-	stageObservedAt := time.Now().Add(-2 * vlogGenerationRewriteMinInterval).UnixNano()
+	stageObservedAt := time.Now().Add(-2 * vlogGenerationRewriteStageConfirmDelay).UnixNano()
 	if err := db.setVlogGenerationRewriteLedgerWithStage([]backenddb.ValueLogRewritePlanSegment{{
 		FileID:     11,
 		BytesTotal: 128,
@@ -2564,7 +2564,7 @@ func TestVlogGenerationMaintenance_CheckpointKickWaitsForCheckpointing(t *testin
 		skipRetainedPruneWait: true,
 		skipCheckpoint:        false,
 		rewriteDebtDrain:      true,
-		debugSource:           "rewrite_stage_confirm",
+		debugSource:           "rewrite_queue_pending",
 	})
 	<-done
 
@@ -5223,7 +5223,7 @@ func TestVlogGenerationRewritePlan_StageConfirmationExecutesConfirmedSubset(t *t
 	if err := db.setVlogGenerationRewriteLedgerWithStage([]backenddb.ValueLogRewritePlanSegment{
 		{FileID: 11, BytesTotal: 64 << 20, BytesLive: 20 << 20, BytesStale: 44 << 20, StaleRatio: 0.6875},
 		{FileID: 22, BytesTotal: 64 << 20, BytesLive: 8 << 20, BytesStale: 56 << 20, StaleRatio: 0.875},
-	}, true, time.Now().Add(-vlogGenerationRewriteMinInterval-time.Second).UnixNano()); err != nil {
+	}, true, time.Now().Add(-vlogGenerationRewriteStageConfirmDelay-time.Second).UnixNano()); err != nil {
 		t.Fatalf("seed staged rewrite ledger: %v", err)
 	}
 	forceRewriteStageConfirmDue(t, db)
@@ -5314,7 +5314,7 @@ func TestVlogGenerationRewritePlan_StageConfirmationDebtDrainProcessesMultipleSe
 		{FileID: 11, BytesTotal: 64 << 20, BytesLive: 8 << 20, BytesStale: 56 << 20, StaleRatio: 0.875},
 		{FileID: 22, BytesTotal: 64 << 20, BytesLive: 16 << 20, BytesStale: 48 << 20, StaleRatio: 0.75},
 		{FileID: 33, BytesTotal: 64 << 20, BytesLive: 24 << 20, BytesStale: 40 << 20, StaleRatio: 0.625},
-	}, true, time.Now().Add(-vlogGenerationRewriteMinInterval-time.Second).UnixNano()); err != nil {
+	}, true, time.Now().Add(-vlogGenerationRewriteStageConfirmDelay-time.Second).UnixNano()); err != nil {
 		t.Fatalf("seed staged rewrite ledger: %v", err)
 	}
 	forceRewriteStageConfirmDue(t, db)
@@ -5396,7 +5396,7 @@ func TestVlogGenerationRewritePlan_StageConfirmationReplansEvenWhenOtherTriggers
 	if err := db.setVlogGenerationRewriteLedgerWithStage([]backenddb.ValueLogRewritePlanSegment{
 		{FileID: 11, BytesTotal: 64 << 20, BytesLive: 20 << 20, BytesStale: 44 << 20, StaleRatio: 0.6875},
 		{FileID: 22, BytesTotal: 64 << 20, BytesLive: 8 << 20, BytesStale: 56 << 20, StaleRatio: 0.875},
-	}, true, time.Now().Add(-vlogGenerationRewriteMinInterval-time.Second).UnixNano()); err != nil {
+	}, true, time.Now().Add(-vlogGenerationRewriteStageConfirmDelay-time.Second).UnixNano()); err != nil {
 		t.Fatalf("seed staged rewrite ledger: %v", err)
 	}
 	forceRewriteStageConfirmDue(t, db)
@@ -5478,7 +5478,7 @@ func TestVlogGenerationRewritePlan_StageConfirmationClearsStagedDebtWhenPlanEmpt
 		{FileID: 11, BytesTotal: 64 << 20, BytesLive: 8 << 20, BytesStale: 56 << 20, StaleRatio: 0.875},
 		{FileID: 12, BytesTotal: 64 << 20, BytesLive: 16 << 20, BytesStale: 48 << 20, StaleRatio: 0.75},
 	}
-	observedAt := time.Now().Add(-2 * vlogGenerationRewriteMinInterval).UnixNano()
+	observedAt := time.Now().Add(-2 * vlogGenerationRewriteStageConfirmDelay).UnixNano()
 	if err := db.setVlogGenerationRewriteLedgerWithStage(stagedLedger, true, observedAt); err != nil {
 		t.Fatalf("seed staged rewrite ledger: %v", err)
 	}
@@ -5742,7 +5742,7 @@ func TestVlogGenerationMaintenance_CheckpointPendingYieldsToDueStageConfirm(t *t
 	forceVlogMaintenanceIdle(db)
 	db.vlogGenerationRewriteBudgetTokensBytes.Store(1024)
 
-	stageObservedAt := time.Now().Add(-2 * vlogGenerationRewriteMinInterval).UnixNano()
+	stageObservedAt := time.Now().Add(-2 * vlogGenerationRewriteStageConfirmDelay).UnixNano()
 	if err := db.setVlogGenerationRewriteLedgerWithStage([]backenddb.ValueLogRewritePlanSegment{{
 		FileID:     11,
 		BytesTotal: 128,
@@ -5938,7 +5938,7 @@ func TestDeferredMaintenanceRetry_RetriesWithoutCheckpointPendingUntilAcquired(t
 		skipRetainedPruneWait: true,
 		skipCheckpoint:        false,
 		rewriteDebtDrain:      true,
-		debugSource:           "rewrite_stage_confirm",
+		debugSource:           "rewrite_queue_pending",
 	})
 
 	deadline := time.Now().Add(2 * schedulerTestWait(t))
