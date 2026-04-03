@@ -172,6 +172,11 @@ Notes:
   - `run.json.maintenance_summary_source` distinguishes `diagnostics_json`, `live_debug_vars`, and `light_stats_post`
   - `run.json.maintenance_summary_is_live_runtime` is `true` for `diagnostics_json` and `live_debug_vars`, `false` for offline light-stats fallback
 
+- Optional engagement gating (use when optimizing queued rewrite-debt behavior):
+  - `AB_REQUIRE_MAINTENANCE_WITH_REWRITE=1` rejects attempts that never execute the maintenance rewrite lane.
+  - `AB_REQUIRE_REWRITE_QUEUED_DEBT_EXEC=1` rejects attempts where the queued rewrite-debt executor never runs.
+  - Each variant retries up to `RUN_MAX_ATTEMPTS_PER_VARIANT`; see `attempts.log` under the run dir.
+
 - `runs.csv` now also includes rewrite-capacity counters from diagnostics summaries (plan runs/selection, source segment+byte outcomes, ledger bytes, budget utilization, observed-GC drain pct) so candidate/control behavior can be compared without opening each `run.json`.
 - `pairs.csv` now includes absolute per-pair control/candidate values (`t_sync`, `t_total`, `s_sync_app`, `s_post_wal`, `max_rss_kb`) plus `composite_score_pct` (negative is better).
 - `summary.md` now includes `Absolute Medians` (control vs candidate) in addition to pair deltas.

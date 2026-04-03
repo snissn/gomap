@@ -121,6 +121,14 @@ Recommended for probe loops (faster fail on low-signal state-sync stalls):
 - Keep `NO_PROGRESS_FAIL_SECONDS`/`NO_PROGRESS_HARD_FAIL_SECONDS` as a secondary
   backstop for non-zero-local stalls.
 
+Optional engagement gating (use when optimizing queued rewrite-debt behavior):
+- `AB_REQUIRE_MAINTENANCE_WITH_REWRITE=1` rejects attempts that never execute the
+  maintenance rewrite lane (common in bootstrap/restore/catch-up dominated runs).
+- `AB_REQUIRE_REWRITE_QUEUED_DEBT_EXEC=1` rejects attempts where the queued
+  rewrite-debt executor never runs (more specific than `*_WITH_REWRITE`).
+- When enabled, each variant will retry up to `RUN_MAX_ATTEMPTS_PER_VARIANT` and
+  log attempt outcomes to `artifacts/celestia_ab/<ts>/runs/<pair>_<variant>/attempts.log`.
+
 Default pair metric focus:
 - `T_sync`: sync duration (seconds)
 - `S_sync_app`: app dir bytes at sync end
