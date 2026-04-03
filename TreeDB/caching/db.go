@@ -15852,6 +15852,14 @@ planned:
 		minInterval := vlogGenerationRewriteMinInterval
 		if len(rewriteQueue) > 0 {
 			minInterval = vlogGenerationRewriteResumeMinInterval
+			// Stage confirmation is already a retry/wake-driven path. Keeping the
+			// generic queued-debt resume interval (1s) here can create repeated
+			// back-to-back stage-confirm rewrite passes during restore-heavy runs,
+			// inflating wall time without improving reclaim. Use the regular
+			// min-interval to keep stage-confirm execution bounded.
+			if vlogGenerationIsStageConfirmSource(opts) {
+				minInterval = vlogGenerationRewriteMinInterval
+			}
 		}
 		if last > 0 {
 			lastAt := time.Unix(0, last)
@@ -16472,6 +16480,11 @@ planned:
 					}
 				}
 			}
+			if stagePending && vlogGenerationIsStageConfirmSource(opts) {
+				if err := db.clearVlogGenerationRewriteStage(); err != nil {
+					return fmt.Errorf("clear generational rewrite stage: %w", err)
+				}
+			}
 			if gcer, ok := db.backend.(backendValueLogGCer); ok {
 				gcOpts := db.valueLogGCOptions(false)
 				if len(processedRewriteIDs) > 0 {
@@ -16816,7 +16829,7 @@ planned:
 					gcBytesDeleted,
 				)
 			}
-			if queuedDebtExecuted && !suppressQueuedFollowup {
+			if queuedDebtExecuted && !suppressQueuedFollowup && !vlogGenerationIsStageConfirmSource(opts) {
 				remainingQueue, _, queueErr := db.currentVlogGenerationRewriteEligible(time.Now())
 				if queueErr != nil {
 					return fmt.Errorf("load eligible generational rewrite queue after queued execution: %w", queueErr)

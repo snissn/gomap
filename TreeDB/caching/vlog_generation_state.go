@@ -682,6 +682,27 @@ func (db *DB) currentVlogGenerationRewriteStage() (bool, int64, error) {
 	return db.vlogGenerationRewriteStagePending, db.vlogGenerationRewriteStageObservedUnixNano, nil
 }
 
+func (db *DB) clearVlogGenerationRewriteStage() error {
+	if db == nil {
+		return nil
+	}
+	db.vlogGenerationRewriteQueueMu.Lock()
+	defer db.vlogGenerationRewriteQueueMu.Unlock()
+	if err := db.loadVlogGenerationRewriteQueueLocked(); err != nil {
+		return err
+	}
+	if !db.vlogGenerationRewriteStagePending {
+		return nil
+	}
+	if err := saveValueLogGenerationRewriteState(db.valueLogGenerationStatePath(), db.vlogGenerationRewriteQueue, db.vlogGenerationRewriteLedger, db.vlogGenerationRewriteChunkLedger, db.vlogGenerationRewriteChunkBytes, db.vlogGenerationRewriteHistory, db.vlogGenerationRewritePenalties, false, 0); err != nil {
+		return err
+	}
+	db.vlogGenerationRewriteStagePending = false
+	db.vlogGenerationRewriteStageObservedUnixNano = 0
+	db.clearVlogGenerationRewriteStageConfirmation()
+	return nil
+}
+
 func (db *DB) pruneVlogGenerationRewriteLedgerNonPositiveLive() ([]uint32, int, error) {
 	if db == nil {
 		return nil, 0, nil
