@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -358,12 +359,30 @@ func Open(opts Options) (*DB, error) {
 	// This is intentionally limited to index encoding flags; runtime policies
 	// (like value-log compression) remain controlled by opts/env unless the
 	// caller opts out via IgnoreFormatConfig.
+	var persistedFormat *db.FormatConfig
 	if !opts.IgnoreFormatConfig {
 		if cfg, ok, err := db.LoadFormatConfig(maindbDir); err != nil {
 			return nil, err
 		} else if ok {
 			cfg.ApplyIndexFormatToOptions(&opts)
+			persistedFormat = &cfg
 		}
+	}
+
+	// Apply runtime-only index/cache overrides after loading persisted format.json
+	// so downstream apps can toggle safe behavior without plumbing new CLI flags.
+	//
+	// Index format knobs (leaf encoding, outer leaf refs, etc) are persisted per-DB
+	// in format.json; allowing env overrides to conflict with on-disk format can
+	// corrupt format.json and/or make existing pages unreadable. For safety, reject
+	// conflicting format overrides when format.json is present.
+	applyEnvIndexRuntimeOverrides(&opts)
+	if persistedFormat != nil {
+		if err := validateEnvIndexFormatOverrides(*persistedFormat, maindbDir); err != nil {
+			return nil, err
+		}
+	} else {
+		applyEnvIndexFormatOverrides(&opts)
 	}
 
 	// Keep opts.DisableSideStores consistent with the resolved layout.
@@ -720,6 +739,22 @@ const (
 	envVlogRewriteTriggerChurnPerSec   = "TREEDB_VLOG_REWRITE_TRIGGER_CHURN_PER_SEC"   // int64
 )
 
+// Index/cache override knobs (applied on top of Options + profile defaults).
+//
+// These are intentionally env-driven to allow isolating correctness/perf issues
+// in real workloads without plumbing new CLI flags through multiple repos.
+const (
+	envVerifyOnRead               = "TREEDB_VERIFY_ON_READ"                  // bool
+	envPreferAppendAlloc          = "TREEDB_PREFER_APPEND_ALLOC"             // bool
+	envDisablePiggybackCompaction = "TREEDB_DISABLE_PIGGYBACK_COMPACTION"    // bool
+	envLeafPrefixCompression      = "TREEDB_LEAF_PREFIX_COMPRESSION"         // bool
+	envIndexColumnarLeaves        = "TREEDB_INDEX_COLUMNAR_LEAVES"           // bool
+	envIndexPackedValuePtr        = "TREEDB_INDEX_PACKED_VALUE_PTR"          // bool
+	envIndexInternalBaseDelta     = "TREEDB_INDEX_INTERNAL_BASE_DELTA"       // bool
+	envIndexOuterLeavesInValueLog = "TREEDB_INDEX_OUTER_LEAVES_IN_VALUE_LOG" // bool
+	envIndexAdaptiveLeafEncoding  = "TREEDB_INDEX_ADAPTIVE_LEAF_ENCODING"    // bool
+)
+
 func applyEnvMaintenanceOverrides(opts *Options) {
 	if opts == nil {
 		return
@@ -863,6 +898,70 @@ func applyEnvMaintenanceOverrides(opts *Options) {
 	}
 	if v, ok := envInt64(envVlogRewriteTriggerChurnPerSec); ok {
 		opts.ValueLog.Generational.RewriteTriggerChurnPerSec = v
+	}
+}
+
+func applyEnvIndexRuntimeOverrides(opts *Options) {
+	if opts == nil {
+		return
+	}
+
+	if v, ok := envBoolSet(envVerifyOnRead); ok {
+		opts.VerifyOnRead = v
+	}
+	if v, ok := envBoolSet(envPreferAppendAlloc); ok {
+		opts.PreferAppendAlloc = v
+	}
+	if v, ok := envBoolSet(envDisablePiggybackCompaction); ok {
+		opts.DisablePiggybackCompaction = v
+	}
+}
+
+func validateEnvIndexFormatOverrides(cfg db.FormatConfig, mainDir string) error {
+	formatPath := filepath.Join(mainDir, "format.json")
+	if v, ok := envBoolSet(envLeafPrefixCompression); ok && v != cfg.LeafPrefixCompression {
+		return fmt.Errorf("treedb: %s=%t conflicts with %s (leaf_prefix_compression=%t); rebuild the DB directory to change index format", envLeafPrefixCompression, v, formatPath, cfg.LeafPrefixCompression)
+	}
+	if v, ok := envBoolSet(envIndexColumnarLeaves); ok && v != cfg.IndexColumnarLeaves {
+		return fmt.Errorf("treedb: %s=%t conflicts with %s (index_columnar_leaves=%t); rebuild the DB directory to change index format", envIndexColumnarLeaves, v, formatPath, cfg.IndexColumnarLeaves)
+	}
+	if v, ok := envBoolSet(envIndexPackedValuePtr); ok && v != cfg.IndexPackedValuePtr {
+		return fmt.Errorf("treedb: %s=%t conflicts with %s (index_packed_valueptr=%t); rebuild the DB directory to change index format", envIndexPackedValuePtr, v, formatPath, cfg.IndexPackedValuePtr)
+	}
+	if v, ok := envBoolSet(envIndexInternalBaseDelta); ok && v != cfg.IndexInternalBaseDelta {
+		return fmt.Errorf("treedb: %s=%t conflicts with %s (index_internal_base_delta=%t); rebuild the DB directory to change index format", envIndexInternalBaseDelta, v, formatPath, cfg.IndexInternalBaseDelta)
+	}
+	if v, ok := envBoolSet(envIndexOuterLeavesInValueLog); ok && v != cfg.IndexOuterLeavesInValueLog {
+		return fmt.Errorf("treedb: %s=%t conflicts with %s (index_outer_leaves_in_vlog=%t); rebuild the DB directory to change index format", envIndexOuterLeavesInValueLog, v, formatPath, cfg.IndexOuterLeavesInValueLog)
+	}
+	if v, ok := envBoolSet(envIndexAdaptiveLeafEncoding); ok && v != cfg.IndexAdaptiveLeafEncoding {
+		return fmt.Errorf("treedb: %s=%t conflicts with %s (index_adaptive_leaf_encoding=%t); rebuild the DB directory to change index format", envIndexAdaptiveLeafEncoding, v, formatPath, cfg.IndexAdaptiveLeafEncoding)
+	}
+	return nil
+}
+
+func applyEnvIndexFormatOverrides(opts *Options) {
+	if opts == nil {
+		return
+	}
+
+	if v, ok := envBoolSet(envLeafPrefixCompression); ok {
+		opts.LeafPrefixCompression = v
+	}
+	if v, ok := envBoolSet(envIndexColumnarLeaves); ok {
+		opts.IndexColumnarLeaves = v
+	}
+	if v, ok := envBoolSet(envIndexPackedValuePtr); ok {
+		opts.IndexPackedValuePtr = v
+	}
+	if v, ok := envBoolSet(envIndexInternalBaseDelta); ok {
+		opts.IndexInternalBaseDelta = v
+	}
+	if v, ok := envBoolSet(envIndexOuterLeavesInValueLog); ok {
+		opts.IndexOuterLeavesInValueLog = v
+	}
+	if v, ok := envBoolSet(envIndexAdaptiveLeafEncoding); ok {
+		opts.IndexAdaptiveLeafEncoding = v
 	}
 }
 
