@@ -4699,6 +4699,105 @@ func (db *DB) pruneRetainedValueLogsWithObserved(force bool, observedSourceIDs m
 		return out
 	}
 
+	// When a queued rewrite explicitly observed source segment IDs that are
+	// currently pinned by retention, we already know those segments are
+	// unreachable in the backend index (otherwise rewrite+GC would not have
+	// classified them as retained-protected blockers). In that case, prune only
+	// the observed IDs and avoid an expensive full pointer scan.
+	if force && len(observedSourceIDs) > 0 {
+		removed := false
+		marked := false
+		for _, candidate := range candidatePaths {
+			if !candidate.observed {
+				continue
+			}
+			path := candidate.path
+			size := candidate.size
+			id := candidate.id
+			if !candidate.hasID {
+				out.ParseSkippedSegments++
+				if size > 0 {
+					out.ParseSkippedBytes += size
+				}
+				out.ObservedSourceParseSkippedSegments++
+				if size > 0 {
+					out.ObservedSourceParseSkippedBytes += size
+				}
+				continue
+			}
+
+			if marker, ok := db.backend.(valueLogZombieMarker); ok {
+				if db.valueLogReader != nil {
+					_ = db.valueLogReader.EvictSegment(id)
+				}
+				if err := marker.MarkValueLogZombie(id); err != nil {
+					if errors.Is(err, valuelog.ErrFileNotFound) && db.cleanupOrphanedRetainedValueLog(path) {
+						removed = true
+						out.RemovedSegments++
+						if size > 0 {
+							out.RemovedBytes += size
+						}
+						out.ObservedSourceRemovedSegments++
+						if size > 0 {
+							out.ObservedSourceRemovedBytes += size
+						}
+						continue
+					}
+					if db.cleanupMissingRetainedValueLog(path) {
+						out.RemovedSegments++
+						if size > 0 {
+							out.RemovedBytes += size
+						}
+						out.ObservedSourceRemovedSegments++
+						if size > 0 {
+							out.ObservedSourceRemovedBytes += size
+						}
+						continue
+					}
+					db.reportError(fmt.Errorf("cachingdb: failed to mark value-log %d zombie: %w", id, err))
+					continue
+				}
+				out.ZombieMarkedSegments++
+				if size > 0 {
+					out.ZombieMarkedBytes += size
+				}
+				out.ObservedSourceZombieMarkedSegments++
+				if size > 0 {
+					out.ObservedSourceZombieMarkedBytes += size
+				}
+				marked = true
+			} else {
+				db.dropValueLogSegment(path)
+				_ = db.removeFileRetry(path)
+				db.mu.Lock()
+				db.untrackValueLogSegmentLocked(path)
+				db.mu.Unlock()
+				removed = true
+				out.RemovedSegments++
+				if size > 0 {
+					out.RemovedBytes += size
+				}
+				out.ObservedSourceRemovedSegments++
+				if size > 0 {
+					out.ObservedSourceRemovedBytes += size
+				}
+			}
+			db.forgetValueLogRetain(path)
+		}
+
+		if marked {
+			if refresher, ok := db.backend.(valueLogSetRefresher); ok {
+				if err := refresher.RefreshValueLogSet(); err != nil {
+					db.reportError(fmt.Errorf("cachingdb: failed to refresh value-log set: %w", err))
+				}
+			}
+		}
+		if removed {
+			db.syncDirBestEffort(db.dir)
+		}
+		return out
+	}
+
 	live, err := db.collectValueLogLiveIDsUntil(db.lastForegroundWriteUnixNano.Load())
 	if err != nil && force && errors.Is(err, errForegroundWritesResumed) {
 		out.RetriedWithoutWriteGate = true
