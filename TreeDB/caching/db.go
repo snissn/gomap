@@ -15478,6 +15478,14 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 		}
 		return
 	}
+	if vlogGenerationIsStageConfirmSource(opts) && !stagePending {
+		// Stage-confirm wakes should only run while staged debt is still pending.
+		// If another maintenance pass cleared the stage before this wake acquired
+		// the maintenance slot, treat it as a no-op instead of accidentally
+		// draining rewrite-queue debt under the stage-confirm debugSource.
+		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
+		return
+	}
 	rewritePenalties, penaltyErr := db.currentVlogGenerationRewritePenalties()
 	if penaltyErr != nil {
 		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)

@@ -2564,7 +2564,7 @@ func TestVlogGenerationMaintenance_CheckpointKickWaitsForCheckpointing(t *testin
 		skipRetainedPruneWait: true,
 		skipCheckpoint:        false,
 		rewriteDebtDrain:      true,
-		debugSource:           "rewrite_stage_confirm",
+		debugSource:           "rewrite_queue_pending",
 	})
 	<-done
 
@@ -5938,7 +5938,7 @@ func TestDeferredMaintenanceRetry_RetriesWithoutCheckpointPendingUntilAcquired(t
 		skipRetainedPruneWait: true,
 		skipCheckpoint:        false,
 		rewriteDebtDrain:      true,
-		debugSource:           "rewrite_stage_confirm",
+		debugSource:           "rewrite_queue_pending",
 	})
 
 	deadline := time.Now().Add(2 * schedulerTestWait(t))
