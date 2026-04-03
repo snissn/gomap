@@ -6516,10 +6516,17 @@ const (
 )
 
 const (
-	vlogGenerationLoopInterval              = 1 * time.Second
-	vlogGenerationGCEvery                   = 5
-	vlogGenerationGCMinBytes                = int64(1 << 20)
-	vlogGenerationRewriteMinInterval        = 30 * time.Second
+	vlogGenerationLoopInterval       = 1 * time.Second
+	vlogGenerationGCEvery            = 5
+	vlogGenerationGCMinBytes         = int64(1 << 20)
+	vlogGenerationRewriteMinInterval = 30 * time.Second
+	// Rewrite staging uses a two-pass confirm flow: the first pass stages a plan,
+	// then a later pass re-plans and executes only if a stable subset persists.
+	//
+	// The confirmation wake must be short enough that end-to-end benchmarks can
+	// actually exercise rewrite execution, but long enough to filter transient
+	// stale-ratio spikes.
+	vlogGenerationRewriteStageConfirmDelay  = 15 * time.Second
 	vlogGenerationGCMinInterval             = 45 * time.Second
 	vlogGenerationGCNoopMinInterval         = 3 * time.Minute
 	vlogGenerationCheckpointKickMinInterval = 5 * time.Second
@@ -13697,11 +13704,17 @@ func (db *DB) vlogGenerationRewriteSegmentCapForRunWithHint(queueLen int, budget
 	}
 	// Checkpoint-kick retries should keep each debt-drain run small to reduce
 	// write amplification when foreground ingest is still active.
-	if opts.bypassQuiet && !opts.skipCheckpoint && !vlogGenerationIsStageConfirmSource(opts) && !vlogGenerationIsAgeBlockedSource(opts) {
+	if opts.bypassQuiet && !opts.skipCheckpoint {
 		decision.maxSegments = 1
 		decision.limiter = vlogGenerationRewriteSegmentCapLimiterCheckpointKickSafety
+
+		burstMinQueueSegments := vlogGenerationRewriteCheckpointKickBurstMinQueueSegments
+		if vlogGenerationIsStageConfirmSource(opts) || vlogGenerationIsAgeBlockedSource(opts) {
+			burstMinQueueSegments = 2
+		}
+
 		if decision.budgetEnabled &&
-			queueLen >= vlogGenerationRewriteCheckpointKickBurstMinQueueSegments &&
+			queueLen >= burstMinQueueSegments &&
 			budgetTokens > 0 {
 			perSegmentBudget := db.vlogGenerationRewritePerSegmentBudgetBytes(queueLen, queueLiveBytes, queueLiveKnown)
 			if perSegmentBudget > 0 {
@@ -14781,7 +14794,7 @@ func (db *DB) scheduleVlogGenerationRewriteStageConfirmation(observedAt int64) {
 		return
 	}
 	db.vlogGenerationRewriteStageWakeObservedNS.Store(observedAt)
-	dueAt := time.Unix(0, observedAt).Add(vlogGenerationRewriteMinInterval)
+	dueAt := time.Unix(0, observedAt).Add(vlogGenerationRewriteStageConfirmDelay)
 	delay := time.Until(dueAt)
 	if delay < 0 {
 		delay = 0
@@ -14875,7 +14888,7 @@ func (db *DB) vlogGenerationRewriteStageConfirmDue(now time.Time) bool {
 	if err != nil || !stagePending || stageObservedAt <= 0 {
 		return false
 	}
-	return !now.Before(time.Unix(0, stageObservedAt).Add(vlogGenerationRewriteMinInterval))
+	return !now.Before(time.Unix(0, stageObservedAt).Add(vlogGenerationRewriteStageConfirmDelay))
 }
 
 func (db *DB) vlogGenerationDeferredMaintenanceDue(now time.Time) bool {
@@ -15009,7 +15022,7 @@ func (db *DB) scheduleDueVlogGenerationDeferredMaintenance() {
 	if err != nil || !stagePending || stageObservedAt <= 0 {
 		return
 	}
-	if now.Before(time.Unix(0, stageObservedAt).Add(vlogGenerationRewriteMinInterval)) {
+	if now.Before(time.Unix(0, stageObservedAt).Add(vlogGenerationRewriteStageConfirmDelay)) {
 		return
 	}
 	db.startVlogGenerationDeferredMaintenance(vlogGenerationMaintenanceOptions{
@@ -15550,7 +15563,11 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 		lastPlan := db.vlogGenerationLastRewritePlanUnixNano.Load()
 		if lastPlan > 0 && !ageBlockedRetryDue {
 			lastAt := time.Unix(0, lastPlan)
-			if now.Sub(lastAt) < vlogGenerationRewriteMinInterval {
+			// Stage confirmation is explicitly retry-driven; do not let the generic
+			// planning min-interval prevent the confirm pass from re-planning soon
+			// enough to execute rewrite within short end-to-end runs.
+			if now.Sub(lastAt) < vlogGenerationRewriteMinInterval &&
+				!vlogGenerationIsStageConfirmSource(opts) {
 				goto planned
 			}
 		}
@@ -22828,7 +22845,7 @@ func (db *DB) Stats() map[string]string {
 			rewriteStageObservedAgeMS = time.Duration(statsNow.UnixNano() - rewriteStageObservedNS).Milliseconds()
 		}
 		if rewriteStagePending {
-			dueAt := time.Unix(0, rewriteStageObservedNS).Add(vlogGenerationRewriteMinInterval)
+			dueAt := time.Unix(0, rewriteStageObservedNS).Add(vlogGenerationRewriteStageConfirmDelay)
 			if !statsNow.Before(dueAt) {
 				rewriteStageDue = true
 			} else {
