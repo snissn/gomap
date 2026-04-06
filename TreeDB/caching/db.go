@@ -6424,13 +6424,17 @@ type DB struct {
 	vlogGenerationCheckpointKickGCRuns                           atomic.Uint64
 	vlogGenerationCheckpointKickSkippedHotNoDebt                 atomic.Uint64
 	vlogGenerationCheckpointKickHotNoDebtWakeRuns                atomic.Uint64
+	vlogGenerationWALOnSteadyResumeAttempts                      atomic.Uint64
+	vlogGenerationWALOnSteadyResumeRewriteRuns                   atomic.Uint64
 	vlogGenerationCheckpointKickPending                          atomic.Bool
 	vlogGenerationCheckpointKickHotNoDebtWakeRunning             atomic.Bool
+	vlogGenerationWALOnSteadyResumeActive                        atomic.Bool
 	vlogGenerationDeferredMaintenancePending                     atomic.Bool
 	vlogGenerationDeferredMaintenanceRunning                     atomic.Bool
 	vlogGenerationRewriteQueuePending                            atomic.Bool
 	vlogGenerationRewriteQueueRunning                            atomic.Bool
 	vlogGenerationRewriteStageWakeObservedNS                     atomic.Int64
+	vlogGenerationWALOnSteadyResumeRemainingAttempts             atomic.Uint32
 	vlogGenerationRewriteQueueMu                                 sync.Mutex
 	vlogGenerationCheckpointKickActive                           atomic.Bool
 	vlogGenerationRewriteQueue                                   []uint32
@@ -6664,6 +6668,7 @@ const (
 	// Coordinate index vacuum with major rewrite windows; do not run on every GC.
 	vlogGenerationVacuumTriggerRewriteBytes = int64(64 << 20)
 	vlogGenerationVacuumMinInterval         = 5 * time.Minute
+	vlogGenerationWALOnSteadyResumeAttempts = uint32(2)
 )
 
 const (
@@ -9397,6 +9402,7 @@ const (
 	vlogGenerationMaintenanceSourcePeriodic = iota
 	vlogGenerationMaintenanceSourceBypass
 	vlogGenerationMaintenanceSourceCheckpointPending
+	vlogGenerationMaintenanceSourceWALOnSteadyResume
 	vlogGenerationMaintenanceSourceRewriteQueuePending
 	vlogGenerationMaintenanceSourceRewriteAgeBlocked
 	vlogGenerationMaintenanceSourceRewriteStageConfirm
@@ -9413,6 +9419,8 @@ func vlogGenerationMaintenanceSourceIndex(source string) int {
 		return vlogGenerationMaintenanceSourceBypass
 	case "checkpoint_pending":
 		return vlogGenerationMaintenanceSourceCheckpointPending
+	case "wal_on_steady_resume":
+		return vlogGenerationMaintenanceSourceWALOnSteadyResume
 	case "rewrite_queue_pending":
 		return vlogGenerationMaintenanceSourceRewriteQueuePending
 	case "rewrite_age_blocked", "rewrite_age_blocked_exit":
@@ -9432,6 +9440,8 @@ func vlogGenerationMaintenanceSourceLabel(idx int) string {
 		return "bypass"
 	case vlogGenerationMaintenanceSourceCheckpointPending:
 		return "checkpoint_pending"
+	case vlogGenerationMaintenanceSourceWALOnSteadyResume:
+		return "wal_on_steady_resume"
 	case vlogGenerationMaintenanceSourceRewriteQueuePending:
 		return "rewrite_queue_pending"
 	case vlogGenerationMaintenanceSourceRewriteAgeBlocked:
@@ -13916,6 +13926,23 @@ func (db *DB) vlogGenerationRewriteSegmentCapForFreshPlanWithHint(queueLen int, 
 		return decision
 	}
 	decision = db.vlogGenerationRewriteSegmentCapForRunWithHint(queueLen, budgetTokens, queueLiveBytes, queueLiveKnown, opts)
+	if opts.bypassQuiet && !opts.skipCheckpoint && decision.maxSegments < freshPlanMax {
+		lifted := queueLen
+		if decision.byBudgetSegments > 0 && decision.byBudgetSegments < lifted {
+			lifted = decision.byBudgetSegments
+		}
+		if freshPlanMax < lifted {
+			lifted = freshPlanMax
+		}
+		if lifted > decision.maxSegments {
+			decision.maxSegments = lifted
+			if decision.byBudgetSegments > 0 && decision.byBudgetSegments < freshPlanMax {
+				decision.limiter = vlogGenerationRewriteSegmentCapLimiterBudgetTokens
+			} else {
+				decision.limiter = vlogGenerationRewriteSegmentCapLimiterFreshPlanCap
+			}
+		}
+	}
 	if decision.maxSegments > freshPlanMax {
 		decision.maxSegments = freshPlanMax
 		decision.limiter = vlogGenerationRewriteSegmentCapLimiterFreshPlanCap
@@ -17403,6 +17430,11 @@ func (db *DB) SetMaintenancePhase(phase MaintenancePhase) {
 		return
 	}
 	db.debugVlogMaintf("maintenance_phase_change from=%s to=%s", maintenancePhaseString(uint32(prev)), maintenancePhaseString(uint32(phase)))
+	if phase != MaintenancePhaseSteady {
+		db.clearVlogGenerationWALOnSteadyResume()
+		return
+	}
+	db.armVlogGenerationWALOnSteadyResume(prev)
 	if phase == MaintenancePhaseSteady {
 		db.scheduleDueVlogGenerationDeferredMaintenance()
 		db.schedulePendingVlogGenerationCheckpointKick()
@@ -17416,6 +17448,71 @@ func (db *DB) suppressBackgroundVlogGenerationForMaintenancePhase() bool {
 	default:
 		return false
 	}
+}
+
+func (db *DB) clearVlogGenerationWALOnSteadyResume() {
+	if db == nil {
+		return
+	}
+	db.vlogGenerationWALOnSteadyResumeRemainingAttempts.Store(0)
+}
+
+func (db *DB) armVlogGenerationWALOnSteadyResume(prev MaintenancePhase) {
+	if db == nil || db.disableJournal || db.closing.Load() {
+		return
+	}
+	if db.valueLogGenerationPolicy != uint8(backenddb.ValueLogGenerationHotWarmCold) {
+		return
+	}
+	if prev != MaintenancePhaseRestore && prev != MaintenancePhaseCatchUp {
+		return
+	}
+	db.vlogGenerationWALOnSteadyResumeRemainingAttempts.Store(vlogGenerationWALOnSteadyResumeAttempts)
+}
+
+func (db *DB) scheduleVlogGenerationWALOnSteadyResume() bool {
+	if db == nil || db.disableJournal || db.closing.Load() {
+		return false
+	}
+	if db.MaintenancePhase() != MaintenancePhaseSteady {
+		return false
+	}
+	if !db.vlogGenerationWALOnSteadyResumeActive.CompareAndSwap(false, true) {
+		return false
+	}
+	remaining := db.vlogGenerationWALOnSteadyResumeRemainingAttempts.Load()
+	if remaining == 0 {
+		db.vlogGenerationWALOnSteadyResumeActive.Store(false)
+		return false
+	}
+	db.vlogGenerationWALOnSteadyResumeRemainingAttempts.Store(remaining - 1)
+	db.vlogGenerationWALOnSteadyResumeAttempts.Add(1)
+	db.wg.Add(1)
+	go func() {
+		defer db.wg.Done()
+		defer db.vlogGenerationWALOnSteadyResumeActive.Store(false)
+		if db.closing.Load() {
+			return
+		}
+		planRunsBefore := db.vlogGenerationRewritePlanRuns.Load()
+		rewriteRunsBefore := db.vlogGenerationRewriteRuns.Load()
+		db.runVlogGenerationCheckpointKickRetries(vlogGenerationMaintenanceOptions{
+			bypassQuiet:           true,
+			skipRetainedPruneWait: true,
+			skipCheckpoint:        false,
+			rewriteDebtDrain:      true,
+			debugSource:           "wal_on_steady_resume",
+		})
+		if db.vlogGenerationRewriteRuns.Load() > rewriteRunsBefore {
+			db.vlogGenerationWALOnSteadyResumeRewriteRuns.Add(1)
+			db.clearVlogGenerationWALOnSteadyResume()
+			return
+		}
+		if db.vlogGenerationRewritePlanRuns.Load() > planRunsBefore {
+			db.clearVlogGenerationWALOnSteadyResume()
+		}
+	}()
+	return true
 }
 
 func (db *DB) maybeKickVlogGenerationMaintenanceAfterCheckpoint() {
@@ -17442,6 +17539,13 @@ func (db *DB) maybeKickVlogGenerationMaintenanceAfterCheckpoint() {
 		return
 	}
 	if !db.disableJournal {
+		if db.scheduleVlogGenerationWALOnSteadyResume() {
+			db.debugVlogMaintf(
+				"checkpoint_kick_wal_on_steady_resume remaining_attempts=%d",
+				db.vlogGenerationWALOnSteadyResumeRemainingAttempts.Load(),
+			)
+			return
+		}
 		// In WAL-on profiles, checkpoint-kick maintenance races with restore/catch-up
 		// work and has produced real post-snapshot state divergence. Keep WAL-on
 		// generation maintenance off the checkpoint-triggered fast path.
@@ -23303,6 +23407,10 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_generation.checkpoint_kick.skipped_hot_no_debt"] = fmt.Sprintf("%d", db.vlogGenerationCheckpointKickSkippedHotNoDebt.Load())
 	stats["treedb.cache.vlog_generation.checkpoint_kick.hot_no_debt_wake.running"] = fmt.Sprintf("%t", db.vlogGenerationCheckpointKickHotNoDebtWakeRunning.Load())
 	stats["treedb.cache.vlog_generation.checkpoint_kick.hot_no_debt_wake.runs"] = fmt.Sprintf("%d", db.vlogGenerationCheckpointKickHotNoDebtWakeRuns.Load())
+	stats["treedb.cache.vlog_generation.wal_on_steady_resume.active"] = fmt.Sprintf("%t", db.vlogGenerationWALOnSteadyResumeActive.Load())
+	stats["treedb.cache.vlog_generation.wal_on_steady_resume.remaining_attempts"] = fmt.Sprintf("%d", db.vlogGenerationWALOnSteadyResumeRemainingAttempts.Load())
+	stats["treedb.cache.vlog_generation.wal_on_steady_resume.attempts"] = fmt.Sprintf("%d", db.vlogGenerationWALOnSteadyResumeAttempts.Load())
+	stats["treedb.cache.vlog_generation.wal_on_steady_resume.rewrite_runs"] = fmt.Sprintf("%d", db.vlogGenerationWALOnSteadyResumeRewriteRuns.Load())
 	stats["treedb.cache.vlog_generation.maintenance.attempts"] = fmt.Sprintf("%d", db.vlogGenerationMaintenanceAttempts.Load())
 	stats["treedb.cache.vlog_generation.maintenance.acquired"] = fmt.Sprintf("%d", db.vlogGenerationMaintenanceAcquired.Load())
 	stats["treedb.cache.vlog_generation.maintenance.collisions"] = fmt.Sprintf("%d", db.vlogGenerationMaintenanceCollisions.Load())
