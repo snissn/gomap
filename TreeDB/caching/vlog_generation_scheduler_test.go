@@ -1189,6 +1189,30 @@ func TestVlogGenerationRewriteSegmentCapForFreshPlan_UsesQueueLiveHint(t *testin
 	}
 }
 
+func TestVlogGenerationRewriteSegmentCapForFreshPlan_CheckpointKickUsesFreshPlanCap(t *testing.T) {
+	db := &DB{
+		valueLogRewriteBudgetBytes:   1 << 20,
+		valueLogGenerationWarmTarget: 64,
+	}
+	decision := db.vlogGenerationRewriteSegmentCapForFreshPlanWithHint(
+		vlogGenerationRewriteFreshPlanDebtDrainMinSegments+5,
+		1<<20,
+		256,
+		true,
+		vlogGenerationMaintenanceOptions{
+			rewriteDebtDrain: true,
+			bypassQuiet:      true,
+			skipCheckpoint:   false,
+		},
+	)
+	if decision.maxSegments != vlogGenerationRewriteFreshPlanDebtDrainMaxSegments {
+		t.Fatalf("fresh-plan checkpoint kick maxSegments=%d want=%d", decision.maxSegments, vlogGenerationRewriteFreshPlanDebtDrainMaxSegments)
+	}
+	if decision.limiter != vlogGenerationRewriteSegmentCapLimiterFreshPlanCap {
+		t.Fatalf("fresh-plan checkpoint kick limiter=%s want=fresh_plan_cap", vlogGenerationRewriteSegmentCapLimiterString(decision.limiter))
+	}
+}
+
 func TestVlogGenerationObserveRewriteSegmentCapDecision(t *testing.T) {
 	db := &DB{}
 	runDecision := vlogGenerationRewriteSegmentCapDecision{limiter: vlogGenerationRewriteSegmentCapLimiterBudgetTokens}
