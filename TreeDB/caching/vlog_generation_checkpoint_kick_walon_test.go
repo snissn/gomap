@@ -102,11 +102,6 @@ func TestVlogGenerationCheckpointKick_WALOnSteadyResumeRunsBoundedMaintenance(t 
 
 	db.SetMaintenancePhase(MaintenancePhaseRestore)
 	db.SetMaintenancePhase(MaintenancePhaseSteady)
-	if got := db.vlogGenerationWALOnSteadyResumeRemainingAttempts.Load(); got != vlogGenerationWALOnSteadyResumeAttempts {
-		t.Fatalf("steady resume remaining=%d want %d", got, vlogGenerationWALOnSteadyResumeAttempts)
-	}
-
-	db.maybeKickVlogGenerationMaintenanceAfterCheckpoint()
 
 	deadline := time.Now().Add(2 * schedulerTestWait(t))
 	for {
@@ -201,7 +196,6 @@ func TestVlogGenerationCheckpointKick_WALOnSteadyResumeIsBounded(t *testing.T) {
 	db.SetMaintenancePhase(MaintenancePhaseCatchUp)
 	db.SetMaintenancePhase(MaintenancePhaseSteady)
 
-	db.maybeKickVlogGenerationMaintenanceAfterCheckpoint()
 	deadline := time.Now().Add(2 * schedulerTestWait(t))
 	for {
 		if got := db.vlogGenerationWALOnSteadyResumeAttempts.Load(); got >= 1 {

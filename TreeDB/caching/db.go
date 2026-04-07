@@ -17633,6 +17633,12 @@ func (db *DB) SetMaintenancePhase(phase MaintenancePhase) {
 	}
 	db.armVlogGenerationWALOnSteadyResume(prev)
 	if phase == MaintenancePhaseSteady {
+		if !envBool(envDisableVlogGenerationCheckpointKick) && db.scheduleVlogGenerationWALOnSteadyResume() {
+			db.debugVlogMaintf(
+				"steady_resume_schedule remaining_attempts=%d",
+				db.vlogGenerationWALOnSteadyResumeRemainingAttempts.Load(),
+			)
+		}
 		db.scheduleDueVlogGenerationDeferredMaintenance()
 		db.schedulePendingVlogGenerationCheckpointKick()
 		db.schedulePendingVlogGenerationGCFollowup()

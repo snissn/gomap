@@ -179,7 +179,8 @@ Notes:
 
 - `runs.csv` now also includes rewrite-capacity counters from diagnostics summaries (plan runs/selection, source segment+byte outcomes, ledger bytes, budget utilization, observed-GC drain pct) so candidate/control behavior can be compared without opening each `run.json`.
 - `pairs.csv` now includes absolute per-pair control/candidate values (`t_sync`, `t_total`, `s_sync_app`, `s_post_wal`, `max_rss_kb`) plus `composite_score_pct` (negative is better).
-- `summary.md` now includes `Absolute Medians` (control vs candidate) in addition to pair deltas.
+- `pairs.csv` now also includes pre-offline storage deltas and absolute values for `s_sync_wal_bytes`, `s_sync_data_bytes`, and `s_sync_home_bytes`.
+- `summary.md` now includes `Absolute Medians` (control vs candidate) in addition to pair deltas, including the pre-offline `data/home/wal` size trio.
 - `decision.json` now includes:
   - `absolute_aggregates` (control/candidate median+mean totals for time, size, and RSS)
   - `composite` configuration echo and aggregate composite score fields
@@ -189,6 +190,7 @@ Notes:
 - `pairs.csv` includes per-pair deltas for those KPIs so control/candidate capacity behavior can be compared without post-processing scripts.
 - `pairs.csv` includes `delta_rewrite_queue_run_segment_cap_limiter_count_checkpoint_kick_burst` so checkpoint-kick burst usage changes are visible at pair level.
 - `runs.csv` now includes checkpoint-like (`bypass` + `checkpoint_pending`) vs non-checkpoint rewrite split metrics, and `pairs.csv` includes deltas for source-efficiency fields such as `delta_rewrite_checkpoint_like_budget_share_pct`.
+- When the launcher is run with `POST_SYNC_DWELL_SECONDS>0`, `t_sync_seconds` remains the true sync duration, `t_total_seconds` includes the post-sync dwell and any offline rewrite time, and the `s_sync_*` size trio is captured after that dwell but before any offline rewrite.
 - To use pre-policy behavior, set `AB_POLICY=legacy`.
 
 ### Segment Granularity Sweep Harness
