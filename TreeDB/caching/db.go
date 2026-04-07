@@ -4977,6 +4977,9 @@ func (db *DB) shouldScheduleRetainedValueLogPruneWithForce(force bool) bool {
 		return false
 	}
 	closed := db.valueLogRetainedClosedBytes.Load()
+	if force && db.retainedPruneObservedSourcePending() {
+		return true
+	}
 	if closed <= 0 {
 		return false
 	}
@@ -5385,6 +5388,19 @@ func (db *DB) waitForRetainedValueLogPrune() {
 	if done != nil {
 		<-done
 	}
+}
+
+func (db *DB) retainedPruneObservedSourceInFlight() bool {
+	if db == nil {
+		return false
+	}
+	db.retainedPruneMu.Lock()
+	active := db.retainedPruneDone != nil
+	db.retainedPruneMu.Unlock()
+	if !active {
+		return false
+	}
+	return db.retainedPruneForceRequested.Load() || db.retainedPruneObservedSourcePending()
 }
 
 func (db *DB) runRetainedValueLogPruneInline(force bool, observedSourceIDs map[uint32]struct{}) (retainedValueLogPruneStats, bool) {
@@ -15260,11 +15276,20 @@ func (db *DB) runVlogGenerationMaintenanceRetries(opts vlogGenerationMaintenance
 				db.vlogGenerationMaintenanceActive.Load(),
 			)
 		}
+		attemptOpts := opts
+		if attemptOpts.skipRetainedPruneWait && db.retainedPruneObservedSourceInFlight() {
+			// Once a targeted retained prune for rewrite-observed source IDs is in
+			// flight, let it drain before the next retry-driven rewrite/GC pass
+			// reacquires maintenance. Generic checkpoint-end prune probes should not
+			// block retry progress here; only the observed-source retained path fixes
+			// the retained-protected GC stalemate.
+			attemptOpts.skipRetainedPruneWait = false
+		}
 		// Retry-driven maintenance (checkpoint kick / deferred stage confirmation)
 		// prioritizes rewrite debt progress. Keep periodic/full-scan GC on the
 		// normal scheduler path to avoid introducing long full-scan stalls on hot
 		// checkpoint-triggered retries.
-		ran := db.maybeRunVlogGenerationMaintenanceWithOptions(false, opts)
+		ran := db.maybeRunVlogGenerationMaintenanceWithOptions(false, attemptOpts)
 		if stopWhenAcquired && ran {
 			if opts.debugSource != "" {
 				db.debugVlogMaintf(
@@ -23336,6 +23361,7 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_retained_bytes_estimate"] = fmt.Sprintf("%d", vlogBytes)
 	stats["treedb.process.memory.vlog_retained_bytes_estimate"] = fmt.Sprintf("%d", vlogBytes)
 	stats["treedb.cache.vlog_retained_prune.closed_bytes"] = fmt.Sprintf("%d", db.valueLogRetainedClosedBytes.Load())
+	stats["treedb.cache.vlog_retained_prune.active"] = fmt.Sprintf("%t", db.retainedPruneActive())
 	stats["treedb.cache.vlog_retained_prune.last_unix_nano"] = fmt.Sprintf("%d", db.retainedValueLogPruneLastUnixNano.Load())
 	stats["treedb.cache.vlog_retained_prune.runs"] = fmt.Sprintf("%d", db.retainedValueLogPruneRuns.Load())
 	stats["treedb.cache.vlog_retained_prune.forced_runs"] = fmt.Sprintf("%d", db.retainedValueLogPruneForcedRuns.Load())
@@ -23366,6 +23392,7 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_retained_prune.last_observed_source.bytes_parse_skipped"] = fmt.Sprintf("%d", db.retainedValueLogPruneLastObservedSourceParseSkippedBytes.Load())
 	stats["treedb.cache.vlog_retained_prune.last_observed_source.segments_zombie_marked"] = fmt.Sprintf("%d", db.retainedValueLogPruneLastObservedSourceZombieMarkedSegments.Load())
 	stats["treedb.cache.vlog_retained_prune.last_observed_source.bytes_zombie_marked"] = fmt.Sprintf("%d", db.retainedValueLogPruneLastObservedSourceZombieMarkedBytes.Load())
+	stats["treedb.cache.vlog_retained_prune.observed_source.pending"] = fmt.Sprintf("%t", db.retainedPruneObservedSourcePending())
 	stats["treedb.cache.vlog_retained_prune.observed_source.segments_total"] = fmt.Sprintf("%d", db.retainedValueLogPruneObservedSourceSegmentsTotal.Load())
 	stats["treedb.cache.vlog_retained_prune.observed_source.bytes_total"] = fmt.Sprintf("%d", db.retainedValueLogPruneObservedSourceBytesTotal.Load())
 	stats["treedb.cache.vlog_retained_prune.observed_source.segments_candidate_total"] = fmt.Sprintf("%d", db.retainedValueLogPruneObservedSourceCandidateSegmentsTotal.Load())
