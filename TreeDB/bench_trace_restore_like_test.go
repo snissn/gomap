@@ -194,6 +194,32 @@ func TestUnmarshalTraceSummarySnakeCaseFields(t *testing.T) {
 	}
 }
 
+func TestTraceWriteDistFallsBackToReadShapeWhenSetDistMissing(t *testing.T) {
+	restore := tracePhaseSummary{
+		GetKeyLens:   traceDistSummary{Count: 1, P50: 97},
+		GetValueLens: traceDistSummary{Count: 1, P50: 4096},
+	}
+	if got := traceWriteKeyDist(restore); got.P50 != 97 || got.Count != 1 {
+		t.Fatalf("restore key dist = %+v, want get-key fallback", got)
+	}
+	if got := traceWriteValueDist(restore); got.P50 != 4096 || got.Count != 1 {
+		t.Fatalf("restore value dist = %+v, want get-value fallback", got)
+	}
+
+	catchup := tracePhaseSummary{
+		GetKeyLens:   traceDistSummary{Count: 1, P50: 33},
+		GetValueLens: traceDistSummary{Count: 1, P50: 128},
+		SetKeyLens:   traceDistSummary{Count: 1, P50: 65},
+		SetValueLens: traceDistSummary{Count: 1, P50: 8192},
+	}
+	if got := traceWriteKeyDist(catchup); got.P50 != 65 || got.Count != 1 {
+		t.Fatalf("catchup key dist = %+v, want set-key dist", got)
+	}
+	if got := traceWriteValueDist(catchup); got.P50 != 8192 || got.Count != 1 {
+		t.Fatalf("catchup value dist = %+v, want set-value dist", got)
+	}
+}
+
 func restoreLikeTraceSummary(s traceSummary) traceSummary {
 	phases := make(map[string]tracePhaseSummary, 2)
 	for _, phase := range []string{"restore", "catchup"} {
@@ -305,10 +331,7 @@ func runTraceSteadyChurn(db *DB, rng *rand.Rand, summary traceSummary, cfg resto
 		return nil
 	}
 	phase := summary.Phases["catchup"]
-	valueDist := phase.SetValueLens
-	if valueDist.Count == 0 {
-		valueDist = phase.GetValueLens
-	}
+	valueDist := traceWriteValueDist(phase)
 	if valueDist.Count == 0 {
 		valueDist = traceDistSummary{Count: 1, P50: 256, P90: 1024, P99: 4096, Max: 8192}
 	}
