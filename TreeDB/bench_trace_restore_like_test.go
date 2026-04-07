@@ -84,10 +84,10 @@ func BenchmarkRestoreLikeTraceReplay(b *testing.B) {
 		rewriteMinAge:            time.Duration(parseIntEnv("TREEDB_TRACE_REPLAY_REWRITE_MIN_AGE_MS", 1)) * time.Millisecond,
 		sourceAgeWait:            time.Duration(parseIntEnv("TREEDB_TRACE_REPLAY_SOURCE_AGE_WAIT_MS", 3)) * time.Millisecond,
 		checkpointGap:            time.Duration(parseIntEnv("TREEDB_TRACE_REPLAY_CHECKPOINT_GAP_MS", 5200)) * time.Millisecond,
-		maintenanceWait:          time.Duration(parseIntEnv("TREEDB_TRACE_REPLAY_MAINTENANCE_WAIT_MS", 1500)) * time.Millisecond,
+		maintenanceWait:          time.Duration(parseIntEnv("TREEDB_TRACE_REPLAY_MAINTENANCE_WAIT_MS", 5000)) * time.Millisecond,
 		steadyChurnBytes:         parseInt64Env("TREEDB_TRACE_REPLAY_STEADY_CHURN_BYTES", 8<<20),
 		followupChurnBytes:       parseInt64Env("TREEDB_TRACE_REPLAY_FOLLOWUP_CHURN_BYTES", 256<<10),
-		steadyHotKeyCount:        parseIntEnv("TREEDB_TRACE_REPLAY_STEADY_HOT_KEYS", 4096),
+		steadyHotKeyCount:        parseIntEnv("TREEDB_TRACE_REPLAY_STEADY_HOT_KEYS", 128),
 		steadyBatchOps:           parseIntEnv("TREEDB_TRACE_REPLAY_STEADY_BATCH_OPS", 32),
 	}
 
@@ -181,6 +181,29 @@ func unmarshalTraceSummary(data []byte) (traceSummary, error) {
 		return traceSummary{}, err
 	}
 	return s, nil
+}
+
+func TestUnmarshalTraceSummarySnakeCaseFields(t *testing.T) {
+	s, err := unmarshalTraceSummary(defaultRestoreLikeTraceSummaryJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	restore, ok := s.Phases["restore"]
+	if !ok {
+		t.Fatal("missing restore phase")
+	}
+	if restore.BatchOps.Count == 0 || restore.BatchBytes.Count == 0 || restore.GetValueLens.Count == 0 {
+		t.Fatalf("restore phase distributions did not decode: %+v", restore)
+	}
+
+	catchup, ok := s.Phases["catchup"]
+	if !ok {
+		t.Fatal("missing catchup phase")
+	}
+	if catchup.BatchOps.Count == 0 || catchup.BatchBytes.Count == 0 || catchup.GetValueLens.Count == 0 {
+		t.Fatalf("catchup phase distributions did not decode: %+v", catchup)
+	}
 }
 
 func restoreLikeTraceSummary(s traceSummary) traceSummary {
