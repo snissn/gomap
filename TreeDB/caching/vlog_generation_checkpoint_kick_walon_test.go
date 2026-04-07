@@ -260,7 +260,6 @@ func TestVlogGenerationCheckpointKick_WALOnSteadyResumeIsBounded(t *testing.T) {
 		t.Fatalf("rewrite plan empty=%q want 1 after second attempt", got)
 	}
 }
-
 func TestVlogGenerationCheckpointKick_WALOnSteadyResumeExhaustedStillReachesStageConfirm(t *testing.T) {
 	prepareDirectSchedulerTest(t)
 	t.Setenv(envDisableVlogGenerationCheckpointKick, "0")
