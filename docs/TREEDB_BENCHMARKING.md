@@ -187,6 +187,12 @@ Uses an embedded restore/catch-up trace summary by default
 (`TreeDB/testdata/trace_replay/restore_like.summary.json`) and adds a bounded
 steady-state overwrite tail so online rewrite has measurable stale debt.
 
+The default steady tail intentionally rewrites a narrow hot-key window and
+waits longer for maintenance than the generic summary replay. The embedded
+restore/catch-up fixture carries much larger value sizes than the old synthetic
+fallback path, so a broader hot set under-stresses rewrite and can make the
+benchmark look restore-heavy but rewrite-irrelevant.
+
 It reports throughput plus:
 - maintenance attempts / maintenance passes with rewrite
 - rewrite planning and rewrite execution counts
