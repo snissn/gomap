@@ -5053,6 +5053,22 @@ func (db *DB) takeRetainedPruneObservedSourceIDs() map[uint32]struct{} {
 	return out
 }
 
+func (db *DB) takeRetainedPruneObservedSourceIDsAndMarkActive() map[uint32]struct{} {
+	if db == nil {
+		return nil
+	}
+	db.retainedPruneObservedMu.Lock()
+	if len(db.retainedPruneObservedSourceIDs) == 0 {
+		db.retainedPruneObservedMu.Unlock()
+		return nil
+	}
+	db.retainedPruneObservedSourceActive.Store(true)
+	out := db.retainedPruneObservedSourceIDs
+	db.retainedPruneObservedSourceIDs = nil
+	db.retainedPruneObservedMu.Unlock()
+	return out
+}
+
 func (db *DB) retainedPruneObservedSourcePending() bool {
 	if db == nil {
 		return false
@@ -5357,7 +5373,10 @@ func (db *DB) scheduleRetainedValueLogPruneWithForce(force bool) {
 			db.retainedValueLogPruneForcedRuns.Add(1)
 		}
 		db.retainedValueLogPruneLastUnixNano.Store(now.UnixNano())
-		observedSourceIDs := db.takeRetainedPruneObservedSourceIDs()
+		observedSourceIDs := db.takeRetainedPruneObservedSourceIDsAndMarkActive()
+		if len(observedSourceIDs) > 0 {
+			defer db.retainedPruneObservedSourceActive.Store(false)
+		}
 		pruneStats := db.pruneRetainedValueLogsWithObserved(effectiveForce, observedSourceIDs)
 		db.observeRetainedValueLogPruneStats(pruneStats)
 		if len(observedSourceIDs) > 0 && (pruneStats.ObservedSourceZombieMarkedSegments > 0 || pruneStats.ObservedSourceRemovedSegments > 0) {
@@ -5400,7 +5419,10 @@ func (db *DB) retainedPruneObservedSourceInFlight() bool {
 	if !active {
 		return false
 	}
-	return db.retainedPruneForceRequested.Load() || db.retainedPruneObservedSourcePending()
+	if db.retainedPruneObservedSourceActive.Load() {
+		return true
+	}
+	return db.retainedPruneObservedSourcePending()
 }
 
 func (db *DB) runRetainedValueLogPruneInline(force bool, observedSourceIDs map[uint32]struct{}) (retainedValueLogPruneStats, bool) {
@@ -5430,6 +5452,10 @@ func (db *DB) runRetainedValueLogPruneInline(force bool, observedSourceIDs map[u
 		db.retainedValueLogPruneForcedRuns.Add(1)
 	}
 	db.retainedValueLogPruneLastUnixNano.Store(nowPrune.UnixNano())
+	if len(observedSourceIDs) > 0 {
+		db.retainedPruneObservedSourceActive.Store(true)
+		defer db.retainedPruneObservedSourceActive.Store(false)
+	}
 	out = db.pruneRetainedValueLogsWithObserved(force, observedSourceIDs)
 	db.observeRetainedValueLogPruneStats(out)
 	return out, true
@@ -6267,6 +6293,7 @@ type DB struct {
 	retainedValueLogPruneWriteGateRetries                        atomic.Uint64
 	retainedValueLogPruneWriteGateRetrySuccesses                 atomic.Uint64
 	retainedPruneForceRequested                                  atomic.Bool
+	retainedPruneObservedSourceActive                            atomic.Bool
 	retainedPruneObservedMu                                      sync.Mutex
 	retainedPruneObservedSourceIDs                               map[uint32]struct{}
 	vlogGenerationObservedGCMu                                   sync.Mutex

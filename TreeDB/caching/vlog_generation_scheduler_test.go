@@ -1974,6 +1974,12 @@ func TestVlogGenerationCheckpointKickRetries_WaitsForActiveRetainedPrune(t *test
 	if !db.retainedPruneObservedSourceInFlight() {
 		t.Fatalf("expected retained prune observed-source path to be marked in flight")
 	}
+	db.retainedPruneObservedSourceActive.Store(true)
+	db.retainedPruneForceRequested.Swap(false)
+	db.takeRetainedPruneObservedSourceIDs()
+	if !db.retainedPruneObservedSourceInFlight() {
+		t.Fatalf("expected retained prune observed-source path to remain in flight after prune start")
+	}
 
 	retriesDone := make(chan struct{})
 	go func() {
@@ -1997,6 +2003,7 @@ func TestVlogGenerationCheckpointKickRetries_WaitsForActiveRetainedPrune(t *test
 	close(retainedDone)
 	db.retainedPruneDone = nil
 	db.retainedPruneMu.Unlock()
+	db.retainedPruneObservedSourceActive.Store(false)
 
 	select {
 	case <-gcStarted:
