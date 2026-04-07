@@ -833,6 +833,26 @@ func TestRunVlogGenerationMaintenanceRetries_CoalescesPendingCollisionRetries(t 
 	}
 }
 
+func TestRunVlogGenerationMaintenanceRetries_PreservesGCFollowupIntentAtDeadline(t *testing.T) {
+	db := &DB{valueLogGenerationPolicy: uint8(backenddb.ValueLogGenerationHotWarmCold)}
+	db.vlogGenerationMaintenanceActive.Store(true)
+
+	db.runVlogGenerationMaintenanceRetries(true, vlogGenerationMaintenanceOptions{
+		bypassQuiet:           true,
+		skipRetainedPruneWait: true,
+		skipCheckpoint:        false,
+		rewriteDebtDrain:      true,
+		debugSource:           "rewrite_gc_followup",
+	}, 30*time.Millisecond, true)
+
+	if !db.vlogGenerationGCFollowupPending.Load() {
+		t.Fatalf("gc followup intent was not preserved at retry deadline")
+	}
+	if db.vlogGenerationRewriteQueuePending.Load() {
+		t.Fatalf("gc followup retry incorrectly downgraded to rewrite-queue pending")
+	}
+}
+
 func TestVlogGenerationRewriteMinStaleRatioForGenericPass_UsesConfiguredTriggerRatio(t *testing.T) {
 	db := &DB{valueLogRewriteTriggerRatioPPM: 200000}
 	if got, want := db.vlogGenerationRewriteMinStaleRatioForGenericPass(8<<30), 0.85; got != want {

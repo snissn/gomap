@@ -4099,6 +4099,16 @@ func (db *DB) valueLogRetainedPaths() []string {
 	return paths
 }
 
+func (db *DB) hasRetainedValueLogPaths() bool {
+	if db == nil {
+		return false
+	}
+	db.valueLogMu.Lock()
+	hasRetained := len(db.valueLogRetain) > 0
+	db.valueLogMu.Unlock()
+	return hasRetained
+}
+
 // ValueLogRetainedPaths returns a best-effort snapshot of retained value-log
 // segment paths currently pinned by cached-mode pointer lifecycle tracking.
 func (db *DB) ValueLogRetainedPaths() []string {
@@ -4322,6 +4332,7 @@ func (db *DB) collectIteratorValueLogLiveIDsUntil(it iterator.UnsafeIterator, re
 	}
 	defer it.Close()
 	seen := 0
+	var outerLeafScratch []byte
 	for it.Valid() {
 		if seen > 0 && seen&foregroundWriteResumeCheckMask == 0 && db.foregroundWritesResumedSince(lastWrite) {
 			return errForegroundWritesResumed
@@ -4329,7 +4340,7 @@ func (db *DB) collectIteratorValueLogLiveIDsUntil(it iterator.UnsafeIterator, re
 		_, ptr, flags := it.UnsafeEntry()
 		if flags&node.FlagPointer != 0 && page.IsValueLogFileID(ptr.FileID) {
 			live[ptr.FileID] = struct{}{}
-			if err := collectNestedValueLogLiveIDsFromOuterLeaf(ptr, reader, live); err != nil {
+			if err := collectNestedValueLogLiveIDsFromOuterLeaf(ptr, reader, live, &outerLeafScratch); err != nil {
 				return err
 			}
 		}
@@ -4345,26 +4356,45 @@ func (db *DB) collectIteratorValueLogLiveIDsUntil(it iterator.UnsafeIterator, re
 	return nil
 }
 
-func collectNestedValueLogLiveIDsFromOuterLeaf(ptr page.ValuePtr, reader tree.SlabReader, live map[uint32]struct{}) error {
+type slabUnsafeToReader interface {
+	ReadUnsafeTo(ptr page.ValuePtr, dst []byte) ([]byte, bool, error)
+}
+
+func collectNestedValueLogLiveIDsFromOuterLeaf(ptr page.ValuePtr, reader tree.SlabReader, live map[uint32]struct{}, scratch *[]byte) error {
 	if len(live) == 0 || reader == nil {
 		return nil
 	}
-	raw, err := reader.ReadUnsafe(ptr)
-	if err != nil {
-		return err
+	var (
+		raw []byte
+		err error
+	)
+	if toReader, ok := reader.(slabUnsafeToReader); ok && scratch != nil {
+		var usedDst bool
+		raw, usedDst, err = toReader.ReadUnsafeTo(ptr, *scratch)
+		if err != nil {
+			return err
+		}
+		if usedDst {
+			*scratch = raw[:0]
+		}
+	} else {
+		raw, err = reader.ReadUnsafe(ptr)
+		if err != nil {
+			return err
+		}
 	}
 	if !outerleaf.HasMagic(raw) {
 		return nil
 	}
 	block, err := outerleaf.DecodeBlockLeaseWithVerify(raw, false)
 	if err != nil {
-		return nil
+		return fmt.Errorf("cachingdb: decode nested outer-leaf block: %w", err)
 	}
 	defer block.Release()
 
 	typed, err := block.TypedEntries(nil)
 	if err != nil {
-		return nil
+		return fmt.Errorf("cachingdb: parse nested outer-leaf entries: %w", err)
 	}
 	for i := range typed {
 		if typed[i].Kind != outerleaf.EntryKindBlobRef {
@@ -4964,7 +4994,7 @@ func (db *DB) shouldScheduleRetainedValueLogPruneWithForce(force bool) bool {
 		return true
 	}
 	if force {
-		return len(db.valueLogRetainedPaths()) > 0
+		return db.hasRetainedValueLogPaths()
 	}
 	closed := db.valueLogRetainedClosedBytes.Load()
 	if closed <= 0 {
@@ -6505,6 +6535,7 @@ type DB struct {
 	vlogGenerationCheckpointKickPending                          atomic.Bool
 	vlogGenerationCheckpointKickHotNoDebtWakeRunning             atomic.Bool
 	vlogGenerationWALOnSteadyResumeActive                        atomic.Bool
+	vlogGenerationGCFollowupPending                              atomic.Bool
 	vlogGenerationGCFollowupRunning                              atomic.Bool
 	vlogGenerationDeferredMaintenancePending                     atomic.Bool
 	vlogGenerationDeferredMaintenanceRunning                     atomic.Bool
@@ -15307,8 +15338,12 @@ func (db *DB) runVlogGenerationMaintenanceRetries(runGC bool, opts vlogGeneratio
 	deadline := time.Now().Add(retryWindow)
 	sleepDelay := 10 * time.Millisecond
 	preservePendingIntent := func() {
-		if vlogGenerationIsQueueSource(opts) || vlogGenerationIsGCFollowupSource(opts) {
+		if vlogGenerationIsQueueSource(opts) {
 			db.vlogGenerationRewriteQueuePending.Store(true)
+			return
+		}
+		if vlogGenerationIsGCFollowupSource(opts) {
+			db.vlogGenerationGCFollowupPending.Store(true)
 			return
 		}
 		if !stopWhenAcquired || !opts.bypassQuiet || opts.skipCheckpoint {
@@ -17600,6 +17635,7 @@ func (db *DB) scheduleVlogGenerationGCFollowup() bool {
 	if db == nil || db.closing.Load() {
 		return false
 	}
+	db.vlogGenerationGCFollowupPending.Store(true)
 	if !db.vlogGenerationGCFollowupRunning.CompareAndSwap(false, true) {
 		return false
 	}
@@ -17607,16 +17643,18 @@ func (db *DB) scheduleVlogGenerationGCFollowup() bool {
 	go func() {
 		defer db.wg.Done()
 		defer db.vlogGenerationGCFollowupRunning.Store(false)
-		if db.closing.Load() {
-			return
+		for !db.closing.Load() {
+			if !db.vlogGenerationGCFollowupPending.CompareAndSwap(true, false) {
+				return
+			}
+			db.runVlogGenerationGCFollowupRetries(vlogGenerationMaintenanceOptions{
+				bypassQuiet:           true,
+				skipRetainedPruneWait: true,
+				skipCheckpoint:        false,
+				rewriteDebtDrain:      true,
+				debugSource:           "rewrite_gc_followup",
+			})
 		}
-		db.runVlogGenerationGCFollowupRetries(vlogGenerationMaintenanceOptions{
-			bypassQuiet:           true,
-			skipRetainedPruneWait: true,
-			skipCheckpoint:        false,
-			rewriteDebtDrain:      true,
-			debugSource:           "rewrite_gc_followup",
-		})
 	}()
 	return true
 }

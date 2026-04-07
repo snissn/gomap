@@ -5,6 +5,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math/rand"
 	"os"
 	"path/filepath"
@@ -523,10 +524,12 @@ func collectRestoreLikeTraceReplayMetrics(stats map[string]string, dir string) (
 	if err != nil {
 		return restoreLikeTraceReplayMetrics{}, err
 	}
-	gcStats, gcErr := backend.ValueLogGC(context.Background(), treedbdb.ValueLogGCOptions{})
+	gcCtx, gcCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	gcStats, gcErr := backend.ValueLogGC(gcCtx, treedbdb.ValueLogGCOptions{})
+	gcCancel()
 	cleanupErr := cleanup()
 	if gcErr != nil {
-		return restoreLikeTraceReplayMetrics{}, gcErr
+		return restoreLikeTraceReplayMetrics{}, fmt.Errorf("strict value-log gc: %w", gcErr)
 	}
 	if cleanupErr != nil {
 		return restoreLikeTraceReplayMetrics{}, cleanupErr
