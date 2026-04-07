@@ -23,17 +23,17 @@ type traceDistSummary struct {
 }
 
 type tracePhaseSummary struct {
-	Ops          map[string]int `json:"ops"`
-	BatchOps     traceDistSummary
-	BatchBytes   traceDistSummary
-	IterNexts    traceDistSummary
-	GetKeyLens   traceDistSummary
-	GetValueLens traceDistSummary
-	SetKeyLens   traceDistSummary
-	SetValueLens traceDistSummary
-	IterStartLen traceDistSummary
-	IterEndLen   traceDistSummary
-	IterKinds    map[string]int `json:"iter_create_kind"`
+	Ops          map[string]int   `json:"ops"`
+	BatchOps     traceDistSummary `json:"batch_ops"`
+	BatchBytes   traceDistSummary `json:"batch_bytes"`
+	IterNexts    traceDistSummary `json:"iter_nexts"`
+	GetKeyLens   traceDistSummary `json:"get_key_lens"`
+	GetValueLens traceDistSummary `json:"get_value_lens"`
+	SetKeyLens   traceDistSummary `json:"set_key_lens"`
+	SetValueLens traceDistSummary `json:"set_value_lens"`
+	IterStartLen traceDistSummary `json:"iter_start_lens"`
+	IterEndLen   traceDistSummary `json:"iter_end_lens"`
+	IterKinds    map[string]int   `json:"iter_create_kind"`
 }
 
 type traceSummary struct {
