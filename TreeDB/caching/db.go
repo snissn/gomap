@@ -4099,6 +4099,16 @@ func (db *DB) valueLogRetainedPaths() []string {
 	return paths
 }
 
+func (db *DB) retainedValueLogPathCount() int {
+	if db == nil {
+		return 0
+	}
+	db.valueLogMu.Lock()
+	count := len(db.valueLogRetain)
+	db.valueLogMu.Unlock()
+	return count
+}
+
 func (db *DB) hasRetainedValueLogPaths() bool {
 	if db == nil {
 		return false
@@ -4395,7 +4405,8 @@ func collectNestedValueLogLiveIDsFromOuterLeaf(ptr page.ValuePtr, reader tree.Sl
 	)
 	if toReader, ok := reader.(slabUnsafeToReader); ok && scratch != nil {
 		var usedDst bool
-		raw, usedDst, err = toReader.ReadUnsafeTo(ptr, *scratch)
+		dst := (*scratch)[:0]
+		raw, usedDst, err = toReader.ReadUnsafeTo(ptr, dst)
 		if err != nil {
 			return err
 		}
@@ -4413,13 +4424,13 @@ func collectNestedValueLogLiveIDsFromOuterLeaf(ptr page.ValuePtr, reader tree.Sl
 	}
 	block, err := outerleaf.DecodeBlockLeaseWithVerify(raw, false)
 	if err != nil {
-		return fmt.Errorf("cachingdb: decode nested outer-leaf block: %w", err)
+		return fmt.Errorf("cachingdb: decode nested outer-leaf block ptr=%+v: %w", ptr, err)
 	}
 	defer block.Release()
 
 	typed, err := block.TypedEntries(nil)
 	if err != nil {
-		return fmt.Errorf("cachingdb: parse nested outer-leaf entries: %w", err)
+		return fmt.Errorf("cachingdb: parse nested outer-leaf entries ptr=%+v: %w", ptr, err)
 	}
 	for i := range typed {
 		if typed[i].Kind != outerleaf.EntryKindBlobRef {
@@ -5335,7 +5346,7 @@ func (db *DB) scheduleRetainedValueLogPruneWithForce(force bool) {
 		db.retainedPruneActive(),
 		db.retainedPruneObservedSourcePending(),
 		db.valueLogRetainedClosedBytes.Load(),
-		len(db.valueLogRetainedPaths()),
+		db.retainedValueLogPathCount(),
 	)
 	if db.testSkipRetainedPrune {
 		return
@@ -5403,7 +5414,7 @@ func (db *DB) scheduleRetainedValueLogPruneWithForce(force bool) {
 				effectiveForce,
 				db.retainedPruneObservedSourcePending(),
 				closed,
-				len(db.valueLogRetainedPaths()),
+				db.retainedValueLogPathCount(),
 				db.retainedPrunePressureBytes(),
 			)
 			return
@@ -5451,7 +5462,7 @@ func (db *DB) scheduleRetainedValueLogPruneWithForce(force bool) {
 			force,
 			effectiveForce,
 			len(observedSourceIDs),
-			len(db.valueLogRetainedPaths()),
+			db.retainedValueLogPathCount(),
 		)
 		pruneStats := db.pruneRetainedValueLogsWithObserved(effectiveForce, observedSourceIDs)
 		db.observeRetainedValueLogPruneStats(pruneStats)
@@ -17624,6 +17635,7 @@ func (db *DB) SetMaintenancePhase(phase MaintenancePhase) {
 	if phase == MaintenancePhaseSteady {
 		db.scheduleDueVlogGenerationDeferredMaintenance()
 		db.schedulePendingVlogGenerationCheckpointKick()
+		db.schedulePendingVlogGenerationGCFollowup()
 	}
 }
 
@@ -17661,6 +17673,9 @@ func (db *DB) scheduleVlogGenerationGCFollowup() bool {
 		return false
 	}
 	db.vlogGenerationGCFollowupPending.Store(true)
+	if db.suppressBackgroundVlogGenerationForMaintenancePhase() {
+		return false
+	}
 	if !db.vlogGenerationGCFollowupRunning.CompareAndSwap(false, true) {
 		return false
 	}
@@ -17682,6 +17697,16 @@ func (db *DB) scheduleVlogGenerationGCFollowup() bool {
 		}
 	}()
 	return true
+}
+
+func (db *DB) schedulePendingVlogGenerationGCFollowup() {
+	if db == nil || db.closing.Load() {
+		return
+	}
+	if !db.vlogGenerationGCFollowupPending.Load() {
+		return
+	}
+	db.scheduleVlogGenerationGCFollowup()
 }
 
 func (db *DB) scheduleVlogGenerationWALOnSteadyResume() bool {

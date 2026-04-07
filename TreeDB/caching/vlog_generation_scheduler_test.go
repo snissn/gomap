@@ -867,6 +867,52 @@ func TestScheduleVlogGenerationGCFollowup_SkipsWhenGenerationPolicyOff(t *testin
 	}
 }
 
+func TestScheduleVlogGenerationGCFollowup_DefersUntilMaintenancePhaseSteady(t *testing.T) {
+	disableVlogGenerationLoop(t)
+
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	recorder := &rewriteBudgetRecordingBackend{
+		DB:         backend,
+		gcResponse: backenddb.ValueLogGCStats{BytesDeleted: 64, SegmentsDeleted: 1},
+	}
+
+	db, cleanup := openRewriteQueueTestDB(t, dir, recorder)
+	t.Cleanup(cleanup)
+	skipRetainedPrune(db)
+	forceVlogMaintenanceIdle(db)
+
+	db.SetMaintenancePhase(MaintenancePhaseCatchUp)
+	if db.scheduleVlogGenerationGCFollowup() {
+		t.Fatal("scheduleVlogGenerationGCFollowup unexpectedly started during catchup phase")
+	}
+	if !db.vlogGenerationGCFollowupPending.Load() {
+		t.Fatal("gc followup intent not preserved during catchup phase")
+	}
+	if db.vlogGenerationGCFollowupRunning.Load() {
+		t.Fatal("gc followup worker should not run while maintenance phase is non-steady")
+	}
+	if _, calls := recorder.recordedGC(); calls != 0 {
+		t.Fatalf("gc calls=%d want 0 while maintenance phase is non-steady", calls)
+	}
+
+	db.SetMaintenancePhase(MaintenancePhaseSteady)
+	deadline := time.Now().Add(2 * schedulerTestWait(t))
+	for {
+		if _, calls := recorder.recordedGC(); calls >= 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			_, gcCalls := recorder.recordedGC()
+			t.Fatalf("queued gc followup did not run after returning to steady phase: gcCalls=%d", gcCalls)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 func TestVlogGenerationRewriteMinStaleRatioForGenericPass_UsesConfiguredTriggerRatio(t *testing.T) {
 	db := &DB{valueLogRewriteTriggerRatioPPM: 200000}
 	if got, want := db.vlogGenerationRewriteMinStaleRatioForGenericPass(8<<30), 0.85; got != want {
