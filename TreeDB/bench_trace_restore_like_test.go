@@ -48,6 +48,10 @@ type restoreLikeTraceReplayMetrics struct {
 	queuedDebtExecRuns          int64
 	queuedDebtReclaimedBytes    int64
 	rewriteQueueLen             int64
+	retainedPruneRuns           int64
+	retainedPruneRemovedBytes   int64
+	retainedPruneObservedBytes  int64
+	observedGCDeletedBytes      int64
 	retainedBytes               int64
 	indexBytes                  int64
 	walBytes                    int64
@@ -122,6 +126,10 @@ func BenchmarkRestoreLikeTraceReplay(b *testing.B) {
 			b.ReportMetric(float64(totals.queuedDebtExecRuns)/n, "queued_exec_runs/op")
 			b.ReportMetric(float64(totals.queuedDebtReclaimedBytes)/n, "queued_reclaimed_B/op")
 			b.ReportMetric(float64(totals.rewriteQueueLen)/n, "rewrite_queue_len/op")
+			b.ReportMetric(float64(totals.retainedPruneRuns)/n, "retained_prune_runs/op")
+			b.ReportMetric(float64(totals.retainedPruneRemovedBytes)/n, "retained_prune_removed_B/op")
+			b.ReportMetric(float64(totals.retainedPruneObservedBytes)/n, "retained_prune_observed_removed_B/op")
+			b.ReportMetric(float64(totals.observedGCDeletedBytes)/n, "observed_gc_deleted_B/op")
 			b.ReportMetric(float64(totals.retainedBytes)/n, "retained_B/op")
 			b.ReportMetric(float64(totals.indexBytes)/n, "index_B/op")
 			b.ReportMetric(float64(totals.walBytes)/n, "wal_B/op")
@@ -143,6 +151,10 @@ func (m *restoreLikeTraceReplayMetrics) add(other restoreLikeTraceReplayMetrics)
 	m.queuedDebtExecRuns += other.queuedDebtExecRuns
 	m.queuedDebtReclaimedBytes += other.queuedDebtReclaimedBytes
 	m.rewriteQueueLen += other.rewriteQueueLen
+	m.retainedPruneRuns += other.retainedPruneRuns
+	m.retainedPruneRemovedBytes += other.retainedPruneRemovedBytes
+	m.retainedPruneObservedBytes += other.retainedPruneObservedBytes
+	m.observedGCDeletedBytes += other.observedGCDeletedBytes
 	m.retainedBytes += other.retainedBytes
 	m.indexBytes += other.indexBytes
 	m.walBytes += other.walBytes
@@ -336,7 +348,7 @@ func waitForRestoreLikeMaintenance(db *DB, timeout time.Duration) time.Duration 
 	var stableSince time.Time
 	last := restoreLikeMaintenanceState{}
 	for time.Now().Before(deadline) {
-		cur := restoreLikeMaintenanceStateFromStats(db.Stats())
+		cur := restoreLikeMaintenanceStateFromDB(db)
 		if cur != last {
 			last = cur
 			stableSince = time.Time{}
@@ -355,17 +367,23 @@ func waitForRestoreLikeMaintenance(db *DB, timeout time.Duration) time.Duration 
 }
 
 type restoreLikeMaintenanceState struct {
-	schedulerState        string
-	checkpointKickActive  bool
-	checkpointKickPending bool
-	rewriteQueuePending   bool
-	rewriteQueueRunning   bool
-	maintenanceAttempts   int64
-	rewriteRuns           int64
+	schedulerState             string
+	checkpointKickActive       bool
+	checkpointKickPending      bool
+	rewriteQueuePending        bool
+	rewriteQueueRunning        bool
+	retainedPruneActive        bool
+	retainedPruneForcePending  bool
+	retainedPruneObservedQueue bool
+	maintenanceAttempts        int64
+	rewriteRuns                int64
 }
 
 func (s restoreLikeMaintenanceState) activeOrPending() bool {
 	if s.checkpointKickActive || s.checkpointKickPending || s.rewriteQueuePending || s.rewriteQueueRunning {
+		return true
+	}
+	if s.retainedPruneActive || s.retainedPruneForcePending || s.retainedPruneObservedQueue {
 		return true
 	}
 	switch s.schedulerState {
@@ -376,35 +394,43 @@ func (s restoreLikeMaintenanceState) activeOrPending() bool {
 	}
 }
 
-func restoreLikeMaintenanceStateFromStats(stats map[string]string) restoreLikeMaintenanceState {
+func restoreLikeMaintenanceStateFromDB(db *DB) restoreLikeMaintenanceState {
+	stats := db.Stats()
 	return restoreLikeMaintenanceState{
-		schedulerState:        stats["treedb.cache.vlog_generation.scheduler_state"],
-		checkpointKickActive:  parseBoolStat(stats, "treedb.cache.vlog_generation.checkpoint_kick.active"),
-		checkpointKickPending: parseBoolStat(stats, "treedb.cache.vlog_generation.checkpoint_kick.pending"),
-		rewriteQueuePending:   parseBoolStat(stats, "treedb.cache.vlog_generation.rewrite.queue.pending"),
-		rewriteQueueRunning:   parseBoolStat(stats, "treedb.cache.vlog_generation.rewrite.queue.running"),
-		maintenanceAttempts:   parseInt64Stat(stats, "treedb.cache.vlog_generation.maintenance.attempts"),
-		rewriteRuns:           parseInt64Stat(stats, "treedb.cache.vlog_generation.rewrite.runs"),
+		schedulerState:             stats["treedb.cache.vlog_generation.scheduler_state"],
+		checkpointKickActive:       parseBoolStat(stats, "treedb.cache.vlog_generation.checkpoint_kick.active"),
+		checkpointKickPending:      parseBoolStat(stats, "treedb.cache.vlog_generation.checkpoint_kick.pending"),
+		rewriteQueuePending:        parseBoolStat(stats, "treedb.cache.vlog_generation.rewrite.queue.pending"),
+		rewriteQueueRunning:        parseBoolStat(stats, "treedb.cache.vlog_generation.rewrite.queue.running"),
+		retainedPruneActive:        parseBoolStat(stats, "treedb.cache.vlog_retained_prune.active"),
+		retainedPruneForcePending:  parseBoolStat(stats, "treedb.cache.vlog_retained_prune.force_pending"),
+		retainedPruneObservedQueue: parseBoolStat(stats, "treedb.cache.vlog_retained_prune.observed_source.pending"),
+		maintenanceAttempts:        parseInt64Stat(stats, "treedb.cache.vlog_generation.maintenance.attempts"),
+		rewriteRuns:                parseInt64Stat(stats, "treedb.cache.vlog_generation.rewrite.runs"),
 	}
 }
 
 func collectRestoreLikeTraceReplayMetrics(stats map[string]string, dir string) restoreLikeTraceReplayMetrics {
 	return restoreLikeTraceReplayMetrics{
-		maintenanceAttempts:      parseInt64Stat(stats, "treedb.cache.vlog_generation.maintenance.attempts"),
-		maintenanceWithRewrite:   parseInt64Stat(stats, "treedb.cache.vlog_generation.maintenance.passes.with_rewrite"),
-		checkpointKickRuns:       parseInt64Stat(stats, "treedb.cache.vlog_generation.checkpoint_kick.runs"),
-		rewritePlanRuns:          parseInt64Stat(stats, "treedb.cache.vlog_generation.rewrite.plan_runs"),
-		rewritePlanEmpty:         parseInt64Stat(stats, "treedb.cache.vlog_generation.rewrite.plan_empty"),
-		rewritePlanSelected:      parseInt64Stat(stats, "treedb.cache.vlog_generation.rewrite.plan_selected"),
-		rewriteRuns:              parseInt64Stat(stats, "treedb.cache.vlog_generation.rewrite.runs"),
-		rewriteReclaimedBytes:    parseInt64Stat(stats, "treedb.cache.vlog_generation.rewrite.reclaimed_bytes"),
-		queuedDebtExecRuns:       parseInt64Stat(stats, "treedb.cache.vlog_generation.rewrite.queued_debt.exec.runs"),
-		queuedDebtReclaimedBytes: parseInt64Stat(stats, "treedb.cache.vlog_generation.rewrite.queued_debt.exec.reclaimed_bytes"),
-		rewriteQueueLen:          parseInt64Stat(stats, "treedb.cache.vlog_generation.rewrite.queue_len"),
-		retainedBytes:            parseInt64Stat(stats, "treedb.cache.vlog_retained_bytes_estimate"),
-		indexBytes:               fileSizeBytes(filepath.Join(dir, "maindb", "index.db")),
-		walBytes:                 dirSizeBytes(filepath.Join(dir, "maindb", "wal")),
-		homeBytes:                dirSizeBytes(dir),
+		maintenanceAttempts:        parseInt64Stat(stats, "treedb.cache.vlog_generation.maintenance.attempts"),
+		maintenanceWithRewrite:     parseInt64Stat(stats, "treedb.cache.vlog_generation.maintenance.passes.with_rewrite"),
+		checkpointKickRuns:         parseInt64Stat(stats, "treedb.cache.vlog_generation.checkpoint_kick.runs"),
+		rewritePlanRuns:            parseInt64Stat(stats, "treedb.cache.vlog_generation.rewrite.plan_runs"),
+		rewritePlanEmpty:           parseInt64Stat(stats, "treedb.cache.vlog_generation.rewrite.plan_empty"),
+		rewritePlanSelected:        parseInt64Stat(stats, "treedb.cache.vlog_generation.rewrite.plan_selected"),
+		rewriteRuns:                parseInt64Stat(stats, "treedb.cache.vlog_generation.rewrite.runs"),
+		rewriteReclaimedBytes:      parseInt64Stat(stats, "treedb.cache.vlog_generation.rewrite.reclaimed_bytes"),
+		queuedDebtExecRuns:         parseInt64Stat(stats, "treedb.cache.vlog_generation.rewrite.queued_debt.exec.runs"),
+		queuedDebtReclaimedBytes:   parseInt64Stat(stats, "treedb.cache.vlog_generation.rewrite.queued_debt.exec.reclaimed_bytes"),
+		rewriteQueueLen:            parseInt64Stat(stats, "treedb.cache.vlog_generation.rewrite.queue_len"),
+		retainedPruneRuns:          parseInt64Stat(stats, "treedb.cache.vlog_retained_prune.runs"),
+		retainedPruneRemovedBytes:  parseInt64Stat(stats, "treedb.cache.vlog_retained_prune.removed_bytes"),
+		retainedPruneObservedBytes: parseInt64Stat(stats, "treedb.cache.vlog_retained_prune.observed_source.bytes_removed_total"),
+		observedGCDeletedBytes:     parseInt64Stat(stats, "treedb.cache.vlog_generation.observed_gc.source_bytes_deleted_total"),
+		retainedBytes:              parseInt64Stat(stats, "treedb.cache.vlog_retained_bytes_estimate"),
+		indexBytes:                 fileSizeBytes(filepath.Join(dir, "maindb", "index.db")),
+		walBytes:                   dirSizeBytes(filepath.Join(dir, "maindb", "wal")),
+		homeBytes:                  dirSizeBytes(dir),
 	}
 }
 

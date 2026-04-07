@@ -1213,6 +1213,20 @@ func TestVlogGenerationRewriteSegmentCapForFreshPlan_CheckpointKickUsesFreshPlan
 	}
 }
 
+func TestShouldScheduleRetainedValueLogPruneWithForce_ObservedSourcePendingBypassesClosedBytesGate(t *testing.T) {
+	db := &DB{}
+	if db.shouldScheduleRetainedValueLogPruneWithForce(true) {
+		t.Fatalf("force schedule without closed bytes or observed source pending should be false")
+	}
+	db.queueRetainedPruneObservedSourceIDs([]uint32{7})
+	if !db.shouldScheduleRetainedValueLogPruneWithForce(true) {
+		t.Fatalf("force schedule with observed source pending should bypass closed-bytes gate")
+	}
+	if db.shouldScheduleRetainedValueLogPruneWithForce(false) {
+		t.Fatalf("non-force schedule should still respect closed-bytes gate")
+	}
+}
+
 func TestVlogGenerationObserveRewriteSegmentCapDecision(t *testing.T) {
 	db := &DB{}
 	runDecision := vlogGenerationRewriteSegmentCapDecision{limiter: vlogGenerationRewriteSegmentCapLimiterBudgetTokens}
@@ -1877,8 +1891,11 @@ func TestVlogGenerationMaintenance_ObservedSourceGCBypassQuietIgnoresForegroundR
 	db, cleanup := openRewriteQueueTestDB(t, dir, recorder)
 	defer cleanup()
 	skipRetainedPrune(db)
+	db.waitForRetainedValueLogPrune()
 
 	db.queueVlogGenerationObservedSourceGCList([]uint32{11})
+	db.queueRetainedPruneObservedSourceIDs([]uint32{11})
+	db.retainedPruneForceRequested.Store(true)
 	db.vlogGenerationLastGCUnixNano.Store(time.Now().Add(-time.Minute).UnixNano())
 	forceVlogMaintenanceIdle(db)
 
@@ -1907,6 +1924,92 @@ func TestVlogGenerationMaintenance_ObservedSourceGCBypassQuietIgnoresForegroundR
 	}
 	if pending := len(db.takeVlogGenerationObservedSourceGCList()); pending != 0 {
 		t.Fatalf("observed-source gc pending ids=%d want 0", pending)
+	}
+}
+
+func TestVlogGenerationCheckpointKickRetries_WaitsForActiveRetainedPrune(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+	t.Setenv(envDisableVlogGenerationRewrite, "1")
+
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	gcStarted := make(chan struct{}, 1)
+	recorder := &rewriteBudgetRecordingBackend{
+		DB: backend,
+		gcFn: func(ctx context.Context, opts backenddb.ValueLogGCOptions) (backenddb.ValueLogGCStats, error) {
+			select {
+			case gcStarted <- struct{}{}:
+			default:
+			}
+			return backenddb.ValueLogGCStats{
+				ObservedSourceSegments:         len(opts.ObservedSourceFileIDs),
+				ObservedSourceSegmentsEligible: len(opts.ObservedSourceFileIDs),
+				ObservedSourceSegmentsDeleted:  len(opts.ObservedSourceFileIDs),
+				ObservedSourceBytesEligible:    int64(len(opts.ObservedSourceFileIDs)) * 64,
+				ObservedSourceBytesDeleted:     int64(len(opts.ObservedSourceFileIDs)) * 64,
+				BytesEligible:                  int64(len(opts.ObservedSourceFileIDs)) * 64,
+				BytesDeleted:                   int64(len(opts.ObservedSourceFileIDs)) * 64,
+			}, nil
+		},
+	}
+
+	db, cleanup := openRewriteQueueTestDB(t, dir, recorder)
+	defer cleanup()
+	skipRetainedPrune(db)
+	db.waitForRetainedValueLogPrune()
+
+	db.queueVlogGenerationObservedSourceGCList([]uint32{11})
+	db.queueRetainedPruneObservedSourceIDs([]uint32{11})
+	db.retainedPruneForceRequested.Store(true)
+	db.vlogGenerationLastGCUnixNano.Store(time.Now().Add(-time.Minute).UnixNano())
+	forceVlogMaintenanceIdle(db)
+
+	retainedDone := make(chan struct{})
+	db.retainedPruneMu.Lock()
+	db.retainedPruneDone = retainedDone
+	db.retainedPruneMu.Unlock()
+	if !db.retainedPruneObservedSourceInFlight() {
+		t.Fatalf("expected retained prune observed-source path to be marked in flight")
+	}
+
+	retriesDone := make(chan struct{})
+	go func() {
+		defer close(retriesDone)
+		db.runVlogGenerationCheckpointKickRetries(vlogGenerationMaintenanceOptions{
+			bypassQuiet:           true,
+			skipRetainedPruneWait: true,
+			skipCheckpoint:        true,
+			rewriteDebtDrain:      true,
+			debugSource:           "checkpoint_pending",
+		})
+	}()
+
+	select {
+	case <-gcStarted:
+		t.Fatalf("observed-source gc started before active retained prune finished")
+	case <-time.After(250 * time.Millisecond):
+	}
+
+	db.retainedPruneMu.Lock()
+	close(retainedDone)
+	db.retainedPruneDone = nil
+	db.retainedPruneMu.Unlock()
+
+	select {
+	case <-gcStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("observed-source gc did not start after retained prune finished")
+	}
+	select {
+	case <-retriesDone:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("checkpoint-kick retries did not finish after retained prune finished")
+	}
+	if got := recorder.recordedGCObservedSourceCalls(); got != 1 {
+		t.Fatalf("observed-source gc calls=%d want 1", got)
 	}
 }
 
