@@ -3,6 +3,7 @@ package treedb
 import (
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"math/rand"
 	"os"
 	"path/filepath"
@@ -219,9 +220,15 @@ func runRestoreLikeTraceReplayIteration(summary traceSummary, cfg restoreLikeTra
 	if err != nil {
 		return restoreLikeTraceReplayMetrics{}, err
 	}
+	closed := false
+	defer func() {
+		if !closed {
+			_ = db.Close()
+		}
+	}()
 
 	rng := rand.New(rand.NewSource(cfg.seed + iter))
-	keyspace := make([][]byte, 0, 1<<20)
+	keyspace := make([][]byte, 0, 1024)
 	keyIndex := make(map[string]struct{})
 
 	for _, phaseName := range orderedTracePhases(summary.Phases) {
@@ -264,6 +271,7 @@ func runRestoreLikeTraceReplayIteration(summary traceSummary, cfg restoreLikeTra
 	if err := db.Close(); err != nil {
 		return restoreLikeTraceReplayMetrics{}, err
 	}
+	closed = true
 	metrics := collectRestoreLikeTraceReplayMetrics(stats, dir)
 	metrics.maintenanceWaitMilliseconds = waited.Milliseconds()
 	return metrics, nil
@@ -294,7 +302,7 @@ func runTraceSteadyChurn(db *DB, rng *rand.Rand, summary traceSummary, cfg resto
 	for churned < cfg.steadyChurnBytes {
 		batch := db.NewBatch()
 		if batch == nil {
-			return nil
+			return errors.New("treedb: batch unsupported")
 		}
 		for i := 0; i < batchOps && churned < cfg.steadyChurnBytes; i++ {
 			key := hotKeys[rng.Intn(len(hotKeys))]

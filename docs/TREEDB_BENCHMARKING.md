@@ -191,7 +191,7 @@ It reports throughput plus:
 - maintenance attempts / maintenance passes with rewrite
 - rewrite planning and rewrite execution counts
 - retained bytes
-- on-disk home / index / value-log bytes
+- on-disk home / index / WAL dir bytes
 
 Benchmark:
 ```bash
