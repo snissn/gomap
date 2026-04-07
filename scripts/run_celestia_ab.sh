@@ -1876,13 +1876,15 @@ if not maintenance:
         maintenance = maintenance_light_fallback
         maintenance_source = "light_stats_post"
 
-t_sync = safe_int(sync.get("duration_seconds"), max(0, run_end - run_start))
+t_sync = safe_int(sync.get("sync_duration_seconds"), safe_int(sync.get("duration_seconds"), max(0, run_end - run_start)))
+t_run = safe_int(sync.get("total_duration_seconds"), t_sync)
+post_sync_dwell_seconds = safe_int(sync.get("post_sync_dwell_elapsed_seconds"), max(0, t_run - t_sync))
 t_rw = rewrite_seconds if rewrite_attempted == 1 else 0
 resolved_invalid_reason = invalid_reason
 if not resolved_invalid_reason and rewrite_attempted == 1 and rewrite_rc != 0:
     resolved_invalid_reason = "rewrite_failed"
 valid = resolved_invalid_reason == ""
-t_total = (t_sync + t_rw) if valid else None
+t_total = (t_run + t_rw) if valid else None
 trust_height = safe_int(sync.get("trust_height"), 0)
 stop_at_local_height = safe_int(sync.get("stop_at_local_height"), 0)
 final_local_height = safe_int(sync.get("final_local_height"), 0)
@@ -1918,6 +1920,8 @@ result = {
     },
     "sync": {
         "duration_seconds": t_sync,
+        "total_duration_seconds": t_run,
+        "post_sync_dwell_elapsed_seconds": post_sync_dwell_seconds,
         "max_rss_kb": safe_int(sync.get("max_rss_kb"), 0),
         "max_hwm_kb": safe_int(sync.get("max_hwm_kb"), 0),
         "freeze_remote_height_at_start": freeze_remote_height_at_start,
@@ -1939,6 +1943,8 @@ result = {
     },
     "sizes": {
         "sync_app_bytes": sync_end_app_bytes,
+        "sync_data_bytes": safe_int(sync.get("end_data_bytes"), 0),
+        "sync_home_bytes": safe_int(sync.get("end_home_bytes"), 0),
         "du_sync_app_bytes": pre_app_bytes,
         "sync_wal_bytes": pre_wal_bytes,
         "post_app_bytes": post_app_bytes,
@@ -1948,7 +1954,10 @@ result = {
         "t_sync_seconds": t_sync,
         "t_rewrite_seconds": t_rw,
         "t_total_seconds": t_total,
+        "t_post_sync_dwell_seconds": post_sync_dwell_seconds,
         "s_sync_app_bytes": sync_end_app_bytes,
+        "s_sync_data_bytes": safe_int(sync.get("end_data_bytes"), 0),
+        "s_sync_home_bytes": safe_int(sync.get("end_home_bytes"), 0),
         "s_du_sync_app_bytes": pre_app_bytes,
         "s_sync_wal_bytes": pre_wal_bytes,
         "s_post_app_bytes": post_app_bytes,
@@ -2098,7 +2107,10 @@ with runs_csv.open("w", newline="", encoding="utf-8") as fh:
         "t_sync_seconds",
         "t_rewrite_seconds",
         "t_total_seconds",
+        "t_post_sync_dwell_seconds",
         "s_sync_app_bytes",
+        "s_sync_data_bytes",
+        "s_sync_home_bytes",
         "s_sync_wal_bytes",
         "s_post_app_bytes",
         "s_post_wal_bytes",
@@ -2334,7 +2346,10 @@ with runs_csv.open("w", newline="", encoding="utf-8") as fh:
             m.get("t_sync_seconds"),
             m.get("t_rewrite_seconds"),
             m.get("t_total_seconds"),
+            m.get("t_post_sync_dwell_seconds"),
             s.get("sync_app_bytes"),
+            s.get("sync_data_bytes"),
+            s.get("sync_home_bytes"),
             s.get("sync_wal_bytes"),
             s.get("post_app_bytes"),
             s.get("post_wal_bytes"),
@@ -2577,6 +2592,9 @@ for pair in sorted(by_pair):
             "delta_t_sync_seconds": None,
             "delta_t_total_seconds": None,
             "delta_s_sync_app_bytes": None,
+            "delta_s_sync_data_bytes": None,
+            "delta_s_sync_home_bytes": None,
+            "delta_s_sync_wal_bytes": None,
             "delta_s_post_wal_bytes": None,
             "delta_blocks_synced": None,
             "delta_s_sync_app_bytes_per_block": None,
@@ -2587,6 +2605,12 @@ for pair in sorted(by_pair):
             "candidate_t_total_seconds": None,
             "control_s_sync_app_bytes": None,
             "candidate_s_sync_app_bytes": None,
+            "control_s_sync_data_bytes": None,
+            "candidate_s_sync_data_bytes": None,
+            "control_s_sync_home_bytes": None,
+            "candidate_s_sync_home_bytes": None,
+            "control_s_sync_wal_bytes": None,
+            "candidate_s_sync_wal_bytes": None,
             "control_s_post_wal_bytes": None,
             "candidate_s_post_wal_bytes": None,
             "control_max_rss_kb": None,
@@ -2662,6 +2686,12 @@ for pair in sorted(by_pair):
     base_sync = bm.get("t_sync_seconds")
     cand_sync_app = cm.get("s_sync_app_bytes")
     base_sync_app = bm.get("s_sync_app_bytes")
+    cand_sync_data = cm.get("s_sync_data_bytes")
+    base_sync_data = bm.get("s_sync_data_bytes")
+    cand_sync_home = cm.get("s_sync_home_bytes")
+    base_sync_home = bm.get("s_sync_home_bytes")
+    cand_sync_wal = cm.get("s_sync_wal_bytes")
+    base_sync_wal = bm.get("s_sync_wal_bytes")
     cand_blocks = cm.get("blocks_synced")
     base_blocks = bm.get("blocks_synced")
     cand_sync_app_per_block = cm.get("s_sync_app_bytes_per_block")
@@ -2678,6 +2708,9 @@ for pair in sorted(by_pair):
     d_sync = delta(cand_sync, base_sync)
     d_post_wal = delta(cand_post_wal, base_post_wal)
     d_sync_app = delta(cand_sync_app, base_sync_app)
+    d_sync_data = delta(cand_sync_data, base_sync_data)
+    d_sync_home = delta(cand_sync_home, base_sync_home)
+    d_sync_wal = delta(cand_sync_wal, base_sync_wal)
     d_blocks = delta(cand_blocks, base_blocks)
     d_sync_app_per_block = delta(cand_sync_app_per_block, base_sync_app_per_block)
     d_total_per_block = delta(cand_total_per_block, base_total_per_block)
@@ -2861,6 +2894,9 @@ for pair in sorted(by_pair):
         "delta_t_sync_seconds": d_sync,
         "delta_t_total_seconds": d_total,
         "delta_s_sync_app_bytes": d_sync_app,
+        "delta_s_sync_data_bytes": d_sync_data,
+        "delta_s_sync_home_bytes": d_sync_home,
+        "delta_s_sync_wal_bytes": d_sync_wal,
         "delta_s_post_wal_bytes": d_post_wal,
         "delta_blocks_synced": d_blocks,
         "delta_s_sync_app_bytes_per_block": d_sync_app_per_block,
@@ -2871,6 +2907,12 @@ for pair in sorted(by_pair):
         "candidate_t_total_seconds": cand_total,
         "control_s_sync_app_bytes": base_sync_app,
         "candidate_s_sync_app_bytes": cand_sync_app,
+        "control_s_sync_data_bytes": base_sync_data,
+        "candidate_s_sync_data_bytes": cand_sync_data,
+        "control_s_sync_home_bytes": base_sync_home,
+        "candidate_s_sync_home_bytes": cand_sync_home,
+        "control_s_sync_wal_bytes": base_sync_wal,
+        "candidate_s_sync_wal_bytes": cand_sync_wal,
         "control_s_post_wal_bytes": base_post_wal,
         "candidate_s_post_wal_bytes": cand_post_wal,
         "control_max_rss_kb": bm.get("max_rss_kb"),
@@ -2944,6 +2986,9 @@ with pairs_csv.open("w", newline="", encoding="utf-8") as fh:
         "delta_t_sync_seconds",
         "delta_t_total_seconds",
         "delta_s_sync_app_bytes",
+        "delta_s_sync_data_bytes",
+        "delta_s_sync_home_bytes",
+        "delta_s_sync_wal_bytes",
         "delta_s_post_wal_bytes",
         "delta_blocks_synced",
         "delta_s_sync_app_bytes_per_block",
@@ -2954,6 +2999,12 @@ with pairs_csv.open("w", newline="", encoding="utf-8") as fh:
         "candidate_t_total_seconds",
         "control_s_sync_app_bytes",
         "candidate_s_sync_app_bytes",
+        "control_s_sync_data_bytes",
+        "candidate_s_sync_data_bytes",
+        "control_s_sync_home_bytes",
+        "candidate_s_sync_home_bytes",
+        "control_s_sync_wal_bytes",
+        "candidate_s_sync_wal_bytes",
         "control_s_post_wal_bytes",
         "candidate_s_post_wal_bytes",
         "control_max_rss_kb",
@@ -3024,6 +3075,9 @@ with pairs_csv.open("w", newline="", encoding="utf-8") as fh:
             r["delta_t_sync_seconds"],
             r["delta_t_total_seconds"],
             r["delta_s_sync_app_bytes"],
+            r["delta_s_sync_data_bytes"],
+            r["delta_s_sync_home_bytes"],
+            r["delta_s_sync_wal_bytes"],
             r["delta_s_post_wal_bytes"],
             r["delta_blocks_synced"],
             r["delta_s_sync_app_bytes_per_block"],
@@ -3034,6 +3088,12 @@ with pairs_csv.open("w", newline="", encoding="utf-8") as fh:
             r["candidate_t_total_seconds"],
             r["control_s_sync_app_bytes"],
             r["candidate_s_sync_app_bytes"],
+            r["control_s_sync_data_bytes"],
+            r["candidate_s_sync_data_bytes"],
+            r["control_s_sync_home_bytes"],
+            r["candidate_s_sync_home_bytes"],
+            r["control_s_sync_wal_bytes"],
+            r["candidate_s_sync_wal_bytes"],
             r["control_s_post_wal_bytes"],
             r["candidate_s_post_wal_bytes"],
             r["control_max_rss_kb"],
@@ -3221,6 +3281,12 @@ control_t_total_vals = collect_float(comparable_rows, "control_t_total_seconds")
 candidate_t_total_vals = collect_float(comparable_rows, "candidate_t_total_seconds")
 control_s_sync_app_vals = collect_float(comparable_rows, "control_s_sync_app_bytes")
 candidate_s_sync_app_vals = collect_float(comparable_rows, "candidate_s_sync_app_bytes")
+control_s_sync_data_vals = collect_float(comparable_rows, "control_s_sync_data_bytes")
+candidate_s_sync_data_vals = collect_float(comparable_rows, "candidate_s_sync_data_bytes")
+control_s_sync_home_vals = collect_float(comparable_rows, "control_s_sync_home_bytes")
+candidate_s_sync_home_vals = collect_float(comparable_rows, "candidate_s_sync_home_bytes")
+control_s_sync_wal_vals = collect_float(comparable_rows, "control_s_sync_wal_bytes")
+candidate_s_sync_wal_vals = collect_float(comparable_rows, "candidate_s_sync_wal_bytes")
 control_s_post_wal_vals = collect_float(comparable_rows, "control_s_post_wal_bytes")
 candidate_s_post_wal_vals = collect_float(comparable_rows, "candidate_s_post_wal_bytes")
 control_max_rss_vals = collect_float(comparable_rows, "control_max_rss_kb")
@@ -3241,6 +3307,18 @@ absolute_aggregates = {
     "median_candidate_s_sync_app_bytes": median(candidate_s_sync_app_vals),
     "mean_control_s_sync_app_bytes": mean(control_s_sync_app_vals),
     "mean_candidate_s_sync_app_bytes": mean(candidate_s_sync_app_vals),
+    "median_control_s_sync_data_bytes": median(control_s_sync_data_vals),
+    "median_candidate_s_sync_data_bytes": median(candidate_s_sync_data_vals),
+    "mean_control_s_sync_data_bytes": mean(control_s_sync_data_vals),
+    "mean_candidate_s_sync_data_bytes": mean(candidate_s_sync_data_vals),
+    "median_control_s_sync_home_bytes": median(control_s_sync_home_vals),
+    "median_candidate_s_sync_home_bytes": median(candidate_s_sync_home_vals),
+    "mean_control_s_sync_home_bytes": mean(control_s_sync_home_vals),
+    "mean_candidate_s_sync_home_bytes": mean(candidate_s_sync_home_vals),
+    "median_control_s_sync_wal_bytes": median(control_s_sync_wal_vals),
+    "median_candidate_s_sync_wal_bytes": median(candidate_s_sync_wal_vals),
+    "mean_control_s_sync_wal_bytes": mean(control_s_sync_wal_vals),
+    "mean_candidate_s_sync_wal_bytes": mean(candidate_s_sync_wal_vals),
     "median_control_s_post_wal_bytes": median(control_s_post_wal_vals),
     "median_candidate_s_post_wal_bytes": median(candidate_s_post_wal_vals),
     "mean_control_s_post_wal_bytes": mean(control_s_post_wal_vals),
@@ -3385,6 +3463,15 @@ lines.append(
     f"- s_sync_app bytes (control/candidate): `{absolute_aggregates.get('median_control_s_sync_app_bytes')}` / `{absolute_aggregates.get('median_candidate_s_sync_app_bytes')}`"
 )
 lines.append(
+    f"- s_sync_data bytes (control/candidate): `{absolute_aggregates.get('median_control_s_sync_data_bytes')}` / `{absolute_aggregates.get('median_candidate_s_sync_data_bytes')}`"
+)
+lines.append(
+    f"- s_sync_home bytes (control/candidate): `{absolute_aggregates.get('median_control_s_sync_home_bytes')}` / `{absolute_aggregates.get('median_candidate_s_sync_home_bytes')}`"
+)
+lines.append(
+    f"- s_sync_wal bytes (control/candidate): `{absolute_aggregates.get('median_control_s_sync_wal_bytes')}` / `{absolute_aggregates.get('median_candidate_s_sync_wal_bytes')}`"
+)
+lines.append(
     f"- s_post_wal bytes (control/candidate): `{absolute_aggregates.get('median_control_s_post_wal_bytes')}` / `{absolute_aggregates.get('median_candidate_s_post_wal_bytes')}`"
 )
 lines.append(
@@ -3412,6 +3499,9 @@ if pair_rows:
     lines.append(f"- delta_t_sync_seconds: `{last['delta_t_sync_seconds']}`")
     lines.append(f"- delta_t_total_seconds: `{last['delta_t_total_seconds']}`")
     lines.append(f"- delta_s_sync_app_bytes: `{last['delta_s_sync_app_bytes']}`")
+    lines.append(f"- delta_s_sync_data_bytes: `{last['delta_s_sync_data_bytes']}`")
+    lines.append(f"- delta_s_sync_home_bytes: `{last['delta_s_sync_home_bytes']}`")
+    lines.append(f"- delta_s_sync_wal_bytes: `{last['delta_s_sync_wal_bytes']}`")
     lines.append(f"- delta_s_post_wal_bytes: `{last['delta_s_post_wal_bytes']}`")
     lines.append(f"- delta_blocks_synced: `{last['delta_blocks_synced']}`")
     lines.append(f"- delta_s_sync_app_bytes_per_block: `{last['delta_s_sync_app_bytes_per_block']}`")
@@ -3420,6 +3510,12 @@ if pair_rows:
     lines.append(f"- candidate_t_sync_seconds: `{last['candidate_t_sync_seconds']}`")
     lines.append(f"- control_t_total_seconds: `{last['control_t_total_seconds']}`")
     lines.append(f"- candidate_t_total_seconds: `{last['candidate_t_total_seconds']}`")
+    lines.append(f"- control_s_sync_data_bytes: `{last['control_s_sync_data_bytes']}`")
+    lines.append(f"- candidate_s_sync_data_bytes: `{last['candidate_s_sync_data_bytes']}`")
+    lines.append(f"- control_s_sync_home_bytes: `{last['control_s_sync_home_bytes']}`")
+    lines.append(f"- candidate_s_sync_home_bytes: `{last['candidate_s_sync_home_bytes']}`")
+    lines.append(f"- control_s_sync_wal_bytes: `{last['control_s_sync_wal_bytes']}`")
+    lines.append(f"- candidate_s_sync_wal_bytes: `{last['candidate_s_sync_wal_bytes']}`")
     lines.append(f"- control_s_post_wal_bytes: `{last['control_s_post_wal_bytes']}`")
     lines.append(f"- candidate_s_post_wal_bytes: `{last['candidate_s_post_wal_bytes']}`")
     lines.append(f"- control_max_rss_kb: `{last['control_max_rss_kb']}`")
