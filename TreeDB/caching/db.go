@@ -4360,6 +4360,31 @@ type slabUnsafeToReader interface {
 	ReadUnsafeTo(ptr page.ValuePtr, dst []byte) ([]byte, bool, error)
 }
 
+const (
+	outerLeafVersionHeaderOffset      = 4
+	outerLeafNestedMinHeaderBytes     = 22
+	outerLeafVersionV1         uint8  = 1
+	outerLeafVersionV2         uint8  = 2
+	outerLeafVersionV3         uint8  = 3
+)
+
+func likelyNestedOuterLeafPayload(raw []byte) bool {
+	if !outerleaf.HasMagic(raw) || len(raw) < outerLeafNestedMinHeaderBytes {
+		return false
+	}
+	switch raw[outerLeafVersionHeaderOffset] {
+	case outerLeafVersionV1, outerLeafVersionV2, outerLeafVersionV3:
+	default:
+		return false
+	}
+	switch raw[outerLeafCodecHeaderOffset] {
+	case outerLeafCodecNoneID, outerLeafCodecSnappyID, outerLeafCodecLZ4ID:
+		return true
+	default:
+		return false
+	}
+}
+
 func collectNestedValueLogLiveIDsFromOuterLeaf(ptr page.ValuePtr, reader tree.SlabReader, live map[uint32]struct{}, scratch *[]byte) error {
 	if len(live) == 0 || reader == nil {
 		return nil
@@ -4383,7 +4408,7 @@ func collectNestedValueLogLiveIDsFromOuterLeaf(ptr page.ValuePtr, reader tree.Sl
 			return err
 		}
 	}
-	if !outerleaf.HasMagic(raw) {
+	if !likelyNestedOuterLeafPayload(raw) {
 		return nil
 	}
 	block, err := outerleaf.DecodeBlockLeaseWithVerify(raw, false)
@@ -17632,7 +17657,7 @@ func (db *DB) armVlogGenerationWALOnSteadyResume(prev MaintenancePhase) {
 }
 
 func (db *DB) scheduleVlogGenerationGCFollowup() bool {
-	if db == nil || db.closing.Load() {
+	if db == nil || db.closing.Load() || db.valueLogGenerationPolicy != uint8(backenddb.ValueLogGenerationHotWarmCold) {
 		return false
 	}
 	db.vlogGenerationGCFollowupPending.Store(true)

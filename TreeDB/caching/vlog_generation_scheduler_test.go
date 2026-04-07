@@ -853,6 +853,20 @@ func TestRunVlogGenerationMaintenanceRetries_PreservesGCFollowupIntentAtDeadline
 	}
 }
 
+func TestScheduleVlogGenerationGCFollowup_SkipsWhenGenerationPolicyOff(t *testing.T) {
+	db := &DB{valueLogGenerationPolicy: uint8(backenddb.ValueLogGenerationOff)}
+
+	if db.scheduleVlogGenerationGCFollowup() {
+		t.Fatal("scheduleVlogGenerationGCFollowup returned true with generation policy off")
+	}
+	if db.vlogGenerationGCFollowupPending.Load() {
+		t.Fatal("gc followup pending set with generation policy off")
+	}
+	if db.vlogGenerationGCFollowupRunning.Load() {
+		t.Fatal("gc followup running set with generation policy off")
+	}
+}
+
 func TestVlogGenerationRewriteMinStaleRatioForGenericPass_UsesConfiguredTriggerRatio(t *testing.T) {
 	db := &DB{valueLogRewriteTriggerRatioPPM: 200000}
 	if got, want := db.vlogGenerationRewriteMinStaleRatioForGenericPass(8<<30), 0.85; got != want {

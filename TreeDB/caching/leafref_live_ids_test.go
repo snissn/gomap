@@ -137,3 +137,18 @@ func TestCollectNestedValueLogLiveIDsFromOuterLeaf_PropagatesDecodeError(t *test
 		t.Fatal("expected decode error for truncated outer-leaf payload")
 	}
 }
+
+func TestCollectNestedValueLogLiveIDsFromOuterLeaf_IgnoresMagicPrefixNonOuterLeafPayload(t *testing.T) {
+	reader := &trackedOuterLeafReader{raw: append([]byte("TOL2"), []byte("not-an-outer-leaf-payload")...)}
+	live := map[uint32]struct{}{
+		page.ValueLogFileID(1): {},
+	}
+	var scratch []byte
+
+	if err := collectNestedValueLogLiveIDsFromOuterLeaf(page.ValuePtr{FileID: page.ValueLogFileID(1)}, reader, live, &scratch); err != nil {
+		t.Fatalf("collectNestedValueLogLiveIDsFromOuterLeaf err=%v want nil", err)
+	}
+	if len(live) != 1 {
+		t.Fatalf("live=%v want unchanged", live)
+	}
+}
