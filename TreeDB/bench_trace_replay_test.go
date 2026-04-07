@@ -307,9 +307,11 @@ func runTraceBatch(db *DB, rng *rand.Rand, p tracePhaseSummary, ops int, targetB
 		return fmt.Errorf("batch unsupported")
 	}
 	usedBytes := 0
+	keyDist := traceWriteKeyDist(p)
+	valueDist := traceWriteValueDist(p)
 	for i := 0; i < ops; i++ {
-		key := randomKey(rng, p.SetKeyLens)
-		value := randomValue(rng, p.SetValueLens)
+		key := randomKey(rng, keyDist)
+		value := randomValue(rng, valueDist)
 		usedBytes += len(key) + len(value)
 
 		if _, ok := keyIndex[string(key)]; !ok {
@@ -330,6 +332,26 @@ func runTraceBatch(db *DB, rng *rand.Rand, p tracePhaseSummary, ops int, targetB
 		return err
 	}
 	return nil
+}
+
+func traceWriteKeyDist(p tracePhaseSummary) traceDistSummary {
+	if p.SetKeyLens.Count > 0 {
+		return p.SetKeyLens
+	}
+	if p.GetKeyLens.Count > 0 {
+		return p.GetKeyLens
+	}
+	return traceDistSummary{}
+}
+
+func traceWriteValueDist(p tracePhaseSummary) traceDistSummary {
+	if p.SetValueLens.Count > 0 {
+		return p.SetValueLens
+	}
+	if p.GetValueLens.Count > 0 {
+		return p.GetValueLens
+	}
+	return traceDistSummary{}
 }
 
 func randomKey(rng *rand.Rand, dist traceDistSummary) []byte {
