@@ -1161,7 +1161,7 @@ func (m *Manager) Refresh() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, seg := range segments {
-		if err := m.registerSegmentLocked(seg.path, seg.id); err != nil {
+		if err := m.refreshSegmentLocked(seg.path, seg.id); err != nil {
 			if errors.Is(err, os.ErrNotExist) {
 				// Online rewrite/GC can delete a segment after listSegments() sees it
 				// but before we open it. Treat that as a benign refresh race and
@@ -1172,6 +1172,35 @@ func (m *Manager) Refresh() error {
 		}
 	}
 	return nil
+}
+
+func (m *Manager) refreshSegmentLocked(path string, id uint32) error {
+	if m.files != nil {
+		if existing, ok := m.files[id]; ok && existing != nil {
+			if path != "" && existing.Path == "" {
+				existing.Path = path
+			}
+			if path != "" {
+				info, err := os.Stat(path)
+				if err != nil {
+					return err
+				}
+				if sz := info.Size(); sz > 0 {
+					for {
+						cur := existing.fileSize.Load()
+						if cur >= sz {
+							break
+						}
+						if existing.fileSize.CompareAndSwap(cur, sz) {
+							break
+						}
+					}
+				}
+			}
+			return nil
+		}
+	}
+	return m.registerSegmentLocked(path, id)
 }
 
 // RegisterSegment registers a newly created segment without scanning the
