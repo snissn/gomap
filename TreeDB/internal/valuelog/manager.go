@@ -1075,6 +1075,15 @@ func (m *Manager) SetDictLookup(lookup DictLookup) {
 	}
 }
 
+func (m *Manager) DictLookup() DictLookup {
+	if m == nil {
+		return nil
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.dictLookup
+}
+
 func (m *Manager) SetTemplateLookup(lookup TemplateLookup, opts templ.DecodeOptions) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

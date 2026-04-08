@@ -115,6 +115,21 @@ type ValueLogRewriteStats struct {
 	TemplateOuterLeafInputBytes       int64
 	TemplateOuterLeafOutputBytes      int64
 	TemplateOuterLeafReasons          map[string]uint64
+
+	// Rewrite stage timings are coarse wall-clock timings for the main online
+	// rewrite phases. ReadDecodeNanos includes both source reads and value-log
+	// decode because the current ReadUnsafeTo API does not separate them.
+	PlanNanos         int64
+	SourceScanNanos   int64
+	ReadDecodeNanos   int64
+	EncodeAppendNanos int64
+	SwapCommitNanos   int64
+	BookkeepingNanos  int64
+	LeafRefNanos      int64
+
+	ReadCalls   int
+	AppendCalls int
+	SwapBatches int
 }
 
 // ValueLogRewritePlan summarizes which segments a sparse online rewrite would
@@ -1315,6 +1330,7 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	planStart := time.Now()
 	if err := db.publishValueLogSetNoRefresh(); err != nil {
 		return stats, err
 	}
@@ -1426,7 +1442,18 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		set = nil
 		stats.SegmentsAfter = stats.SegmentsBefore
 		stats.BytesAfter = stats.BytesBefore
+		stats.PlanNanos += time.Since(planStart).Nanoseconds()
 		return stats, nil
+	}
+	stats.PlanNanos += time.Since(planStart).Nanoseconds()
+	var preferredLeafDictID uint64
+	if db.indexOuterLeavesInValueLog && set != nil && db.valueLogManager != nil && db.valueLogManager.DictLookup() != nil {
+		preferredLeafDictID, err = scanValueLogSetPreferredDictID(set)
+		if err != nil {
+			_ = db.valueLogManager.Release(set)
+			set = nil
+			return stats, err
+		}
 	}
 
 	nextRID := uint64(0)
@@ -1490,6 +1517,13 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 	writer := newRewriteWriter(filepath.Join(db.dir, "wal"), lane, startSeq, maxBytes)
 	writer.blockCompression = db.valueLogCompression != ValueLogCompressionOff
 	writer.blockCodec = valuelogBlockCodecFromDB(db.valueLogBlockCodec)
+	if writer.blockCompression && preferredLeafDictID != 0 {
+		if dictLookup := db.valueLogManager.DictLookup(); dictLookup != nil {
+			if dictBytes, dictErr := dictLookup(preferredLeafDictID); dictErr == nil && len(dictBytes) > 0 {
+				writer.SetLeafDict(preferredLeafDictID, dictBytes)
+			}
+		}
+	}
 	defer func() { _ = writer.Close() }()
 
 	batchSize := normalizeValueLogRewriteBatchSize(opts.BatchSize)
@@ -1529,6 +1563,7 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 			if rewriteReadScratch == nil {
 				rewriteReadScratch = make([]byte, 0, rewriteReadScratchInitCap)
 			}
+			readStart := time.Now()
 			val, usedScratch, err := db.valueLogManager.ReadUnsafeTo(candidate.oldPtr, rewriteReadScratch)
 			if err != nil && errors.Is(err, valuelog.ErrFileNotFound) && !readRefreshRetried {
 				if refreshErr := db.RefreshValueLogSet(); refreshErr != nil {
@@ -1537,10 +1572,15 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 				readRefreshRetried = true
 				val, usedScratch, err = db.valueLogManager.ReadUnsafeTo(candidate.oldPtr, rewriteReadScratch)
 			}
+			stats.ReadDecodeNanos += time.Since(readStart).Nanoseconds()
+			stats.ReadCalls++
 			if err != nil {
 				return err
 			}
+			appendStart := time.Now()
 			newPtr, err := writer.appendValue(startRID, val)
+			stats.EncodeAppendNanos += time.Since(appendStart).Nanoseconds()
+			stats.AppendCalls++
 			if err != nil {
 				return err
 			}
@@ -1571,6 +1611,7 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 				newPtr: newPtr,
 			})
 		}
+		bookkeepingStart := time.Now()
 		if opts.SyncEachBatch {
 			if err := writer.Sync(); err != nil {
 				return err
@@ -1596,9 +1637,13 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 			lastRegisteredCreatedID = id
 			hasLastRegisteredID = true
 		}
+		stats.BookkeepingNanos += time.Since(bookkeepingStart).Nanoseconds()
+		swapStart := time.Now()
 		if err := db.applyRewriteSwapBatch(swaps, opts.SyncEachBatch); err != nil {
 			return err
 		}
+		stats.SwapCommitNanos += time.Since(swapStart).Nanoseconds()
+		stats.SwapBatches++
 		candidates = candidates[:0]
 		if cap(candidateKeyArena) > rewriteKeyArenaMaxCap {
 			candidateKeyArena = nil
@@ -1614,6 +1659,7 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		return stats, fmt.Errorf("missing snapshot state")
 	}
 	it := snap.tree.IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
+	scanStart := time.Now()
 	for ; it.Valid(); it.Next() {
 		if err := ctx.Err(); err != nil {
 			canceledErr = err
@@ -1669,16 +1715,19 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		})
 		selectedSourceBytes += sourceBytes
 		if len(candidates) >= batchSize {
+			stats.SourceScanNanos += time.Since(scanStart).Nanoseconds()
 			if err := flushBatch(); err != nil {
 				_ = it.Close()
 				closeRewriteSnapshot(&err, snap)
 				return stats, err
 			}
+			scanStart = time.Now()
 		}
 		if maxCopiedBytes > 0 && selectedSourceBytes >= maxCopiedBytes {
 			break
 		}
 	}
+	stats.SourceScanNanos += time.Since(scanStart).Nanoseconds()
 	iterErr := it.Error()
 	_ = it.Close()
 	closeRewriteSnapshot(&err, snap)
@@ -1702,7 +1751,9 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 				}
 			}
 			if maxCopiedBytes <= 0 || leafRefMaxCopiedBytes > 0 {
+				leafRefStart := time.Now()
 				copied, copiedBytes, err := db.rewriteLeafRefsOnline(ctx, writer, ridAlloc, sourceIDs, sourceChunkSet, sourceChunkBytes, singleSourceID, restrictSingleID, leafRefMaxCopiedBytes, opts.SyncEachBatch)
+				stats.LeafRefNanos += time.Since(leafRefStart).Nanoseconds()
 				if err != nil {
 					return stats, err
 				}
@@ -1720,6 +1771,7 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 	if err := writer.Sync(); err != nil {
 		return stats, err
 	}
+	finalBookkeepingStart := time.Now()
 	newValueIDs, err := writer.createdFileIDs()
 	if err != nil {
 		return stats, err
@@ -1883,6 +1935,7 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		stats.SegmentsAfter = afterSegs
 		stats.BytesAfter = afterBytes
 	}
+	stats.BookkeepingNanos += time.Since(finalBookkeepingStart).Nanoseconds()
 	if canceledErr != nil {
 		return stats, canceledErr
 	}
@@ -2098,7 +2151,7 @@ func (c *leafRefRewriteCtx) rewriteNode(id uint64) (uint64, bool, error) {
 		if err != nil {
 			return id, false, err
 		}
-		newPtr, err := c.writer.appendValue(rid, leafPage)
+		newPtr, err := c.writer.appendLeafPageWithRID(rid, leafPage)
 		if err != nil {
 			return id, false, err
 		}
@@ -3205,6 +3258,16 @@ func (w *rewriteWriter) AppendLeafPage(leafPage []byte) (page.ValuePtr, error) {
 	if w.nextRID == 0 {
 		return page.ValuePtr{}, fmt.Errorf("value-log rid space exhausted")
 	}
+	return w.appendLeafPageWithRID(rid, leafPage)
+}
+
+func (w *rewriteWriter) appendLeafPageWithRID(rid uint64, leafPage []byte) (page.ValuePtr, error) {
+	if w == nil {
+		return page.ValuePtr{}, errors.New("vlog-rewrite: nil writer")
+	}
+	if rid == 0 {
+		return page.ValuePtr{}, errors.New("vlog-rewrite: missing rid")
+	}
 	if w.blockCompression && w.leafDictID != 0 && len(w.leafDict) > 0 && rewriteAllowDictForSmallPayload(leafPage) {
 		// LeafRef IDs intentionally omit grouped sub-index bits and therefore
 		// require K=1 frames. Use single-record append so decoded LeafRef pointers
@@ -3253,6 +3316,7 @@ func (w *rewriteWriter) rotate() error {
 		if err != nil {
 			return err
 		}
+		writer.SetDeferSealedSync(true)
 		writer.SetBlockCompression(w.blockCodec, w.blockCompression)
 		writer.SetKeepPolicy(w.keepIoNsPerByte, w.keepEncodeNsRaw, w.keepSafetyMargin)
 		w.w = writer
@@ -3265,6 +3329,7 @@ func (w *rewriteWriter) rotate() error {
 	if err := w.w.RotateTo(path, fileID); err != nil {
 		return err
 	}
+	w.w.SetDeferSealedSync(true)
 	w.w.SetBlockCompression(w.blockCodec, w.blockCompression)
 	w.w.SetKeepPolicy(w.keepIoNsPerByte, w.keepEncodeNsRaw, w.keepSafetyMargin)
 	w.seq = nextSeq

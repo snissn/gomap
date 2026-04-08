@@ -15,6 +15,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/pager"
+	"github.com/snissn/gomap/TreeDB/tree"
 )
 
 func BenchmarkValueLogRewriteOnline_ValuePointers(b *testing.B) {
@@ -27,6 +28,16 @@ func BenchmarkValueLogRewriteOnline_ValuePointers(b *testing.B) {
 	var totalBytes int64
 	var totalRefreshScans uint64
 	var totalRewriteAllocs uint64
+	var totalPlanNs int64
+	var totalScanNs int64
+	var totalReadDecodeNs int64
+	var totalAppendNs int64
+	var totalSwapCommitNs int64
+	var totalBookkeepingNs int64
+	var totalLeafRefNs int64
+	var totalReadCalls int64
+	var totalAppendCalls int64
+	var totalSwapBatches int64
 
 	for i := 0; i < b.N; i++ {
 		b.StopTimer()
@@ -48,6 +59,16 @@ func BenchmarkValueLogRewriteOnline_ValuePointers(b *testing.B) {
 		totalCopied += int64(stats.ValueRecordsCopied)
 		totalBytes += stats.ValueBytesCopied
 		totalRefreshScans += db.valueLogManager.RefreshScanCount() - refreshBefore
+		totalPlanNs += stats.PlanNanos
+		totalScanNs += stats.SourceScanNanos
+		totalReadDecodeNs += stats.ReadDecodeNanos
+		totalAppendNs += stats.EncodeAppendNanos
+		totalSwapCommitNs += stats.SwapCommitNanos
+		totalBookkeepingNs += stats.BookkeepingNanos
+		totalLeafRefNs += stats.LeafRefNanos
+		totalReadCalls += int64(stats.ReadCalls)
+		totalAppendCalls += int64(stats.AppendCalls)
+		totalSwapBatches += int64(stats.SwapBatches)
 		var memAfter runtime.MemStats
 		runtime.ReadMemStats(&memAfter)
 		if memAfter.Mallocs > memBefore.Mallocs {
@@ -61,6 +82,7 @@ func BenchmarkValueLogRewriteOnline_ValuePointers(b *testing.B) {
 		b.ReportMetric(float64(totalBytes)/float64(b.N), "value_bytes/op")
 		b.ReportMetric(float64(totalRefreshScans)/float64(b.N), "refresh_scans/op")
 		b.ReportMetric(float64(totalRewriteAllocs)/float64(b.N), "rewrite_allocs/op")
+		reportRewriteStageMetrics(b, b.N, totalPlanNs, totalScanNs, totalReadDecodeNs, totalAppendNs, totalSwapCommitNs, totalBookkeepingNs, totalLeafRefNs, totalReadCalls, totalAppendCalls, totalSwapBatches)
 	}
 }
 
@@ -71,6 +93,16 @@ func BenchmarkValueLogRewriteOnline_LeafRefs(b *testing.B) {
 	var totalBytes int64
 	var totalRefreshScans uint64
 	var totalRewriteAllocs uint64
+	var totalPlanNs int64
+	var totalScanNs int64
+	var totalReadDecodeNs int64
+	var totalAppendNs int64
+	var totalSwapCommitNs int64
+	var totalBookkeepingNs int64
+	var totalLeafRefNs int64
+	var totalReadCalls int64
+	var totalAppendCalls int64
+	var totalSwapBatches int64
 
 	for i := 0; i < b.N; i++ {
 		b.StopTimer()
@@ -92,6 +124,16 @@ func BenchmarkValueLogRewriteOnline_LeafRefs(b *testing.B) {
 		totalCopied += int64(stats.LeafRefRecordsCopied)
 		totalBytes += stats.LeafRefBytesCopied
 		totalRefreshScans += db.valueLogManager.RefreshScanCount() - refreshBefore
+		totalPlanNs += stats.PlanNanos
+		totalScanNs += stats.SourceScanNanos
+		totalReadDecodeNs += stats.ReadDecodeNanos
+		totalAppendNs += stats.EncodeAppendNanos
+		totalSwapCommitNs += stats.SwapCommitNanos
+		totalBookkeepingNs += stats.BookkeepingNanos
+		totalLeafRefNs += stats.LeafRefNanos
+		totalReadCalls += int64(stats.ReadCalls)
+		totalAppendCalls += int64(stats.AppendCalls)
+		totalSwapBatches += int64(stats.SwapBatches)
 		var memAfter runtime.MemStats
 		runtime.ReadMemStats(&memAfter)
 		if memAfter.Mallocs > memBefore.Mallocs {
@@ -105,6 +147,7 @@ func BenchmarkValueLogRewriteOnline_LeafRefs(b *testing.B) {
 		b.ReportMetric(float64(totalBytes)/float64(b.N), "leafref_bytes/op")
 		b.ReportMetric(float64(totalRefreshScans)/float64(b.N), "refresh_scans/op")
 		b.ReportMetric(float64(totalRewriteAllocs)/float64(b.N), "rewrite_allocs/op")
+		reportRewriteStageMetrics(b, b.N, totalPlanNs, totalScanNs, totalReadDecodeNs, totalAppendNs, totalSwapCommitNs, totalBookkeepingNs, totalLeafRefNs, totalReadCalls, totalAppendCalls, totalSwapBatches)
 	}
 }
 
@@ -115,6 +158,16 @@ func BenchmarkValueLogRewriteOnline_LeafRefs_ReserveRIDs(b *testing.B) {
 	var totalBytes int64
 	var totalRefreshScans uint64
 	var totalRewriteAllocs uint64
+	var totalPlanNs int64
+	var totalScanNs int64
+	var totalReadDecodeNs int64
+	var totalAppendNs int64
+	var totalSwapCommitNs int64
+	var totalBookkeepingNs int64
+	var totalLeafRefNs int64
+	var totalReadCalls int64
+	var totalAppendCalls int64
+	var totalSwapBatches int64
 
 	for i := 0; i < b.N; i++ {
 		b.StopTimer()
@@ -145,6 +198,16 @@ func BenchmarkValueLogRewriteOnline_LeafRefs_ReserveRIDs(b *testing.B) {
 		totalCopied += int64(stats.LeafRefRecordsCopied)
 		totalBytes += stats.LeafRefBytesCopied
 		totalRefreshScans += db.valueLogManager.RefreshScanCount() - refreshBefore
+		totalPlanNs += stats.PlanNanos
+		totalScanNs += stats.SourceScanNanos
+		totalReadDecodeNs += stats.ReadDecodeNanos
+		totalAppendNs += stats.EncodeAppendNanos
+		totalSwapCommitNs += stats.SwapCommitNanos
+		totalBookkeepingNs += stats.BookkeepingNanos
+		totalLeafRefNs += stats.LeafRefNanos
+		totalReadCalls += int64(stats.ReadCalls)
+		totalAppendCalls += int64(stats.AppendCalls)
+		totalSwapBatches += int64(stats.SwapBatches)
 		var memAfter runtime.MemStats
 		runtime.ReadMemStats(&memAfter)
 		if memAfter.Mallocs > memBefore.Mallocs {
@@ -158,7 +221,142 @@ func BenchmarkValueLogRewriteOnline_LeafRefs_ReserveRIDs(b *testing.B) {
 		b.ReportMetric(float64(totalBytes)/float64(b.N), "leafref_bytes/op")
 		b.ReportMetric(float64(totalRefreshScans)/float64(b.N), "refresh_scans/op")
 		b.ReportMetric(float64(totalRewriteAllocs)/float64(b.N), "rewrite_allocs/op")
+		reportRewriteStageMetrics(b, b.N, totalPlanNs, totalScanNs, totalReadDecodeNs, totalAppendNs, totalSwapCommitNs, totalBookkeepingNs, totalLeafRefNs, totalReadCalls, totalAppendCalls, totalSwapBatches)
 	}
+}
+
+func BenchmarkValueLogReadUnsafeTo_ValuePointers(b *testing.B) {
+	db, sourceIDs, cleanup := setupValuePointerRewriteBench(b, 2048, 1024)
+	defer cleanup()
+	if len(sourceIDs) == 0 {
+		b.Fatalf("missing source ids")
+	}
+	sourceID := sourceIDs[0]
+	state := db.State()
+	if state == nil || state.ValueLogSet == nil {
+		b.Fatalf("missing value log set")
+	}
+	ptrs := collectValuePointersForFileBench(b, db, sourceID, 64)
+	if len(ptrs) == 0 {
+		b.Fatalf("no pointers found for source file %d", sourceID)
+	}
+	scratch := make([]byte, 0, 1024)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		ptr := ptrs[i%len(ptrs)]
+		buf, usedScratch, err := db.valueLogManager.ReadUnsafeTo(ptr, scratch[:0])
+		if err != nil {
+			b.Fatalf("ReadUnsafeTo: %v", err)
+		}
+		if usedScratch {
+			scratch = buf[:0]
+		}
+	}
+}
+
+func BenchmarkValueLogReadUnsafeTo_LeafRefs(b *testing.B) {
+	db, sourceIDs, cleanup := setupLeafRefRewriteBench(b, 1536)
+	defer cleanup()
+	if len(sourceIDs) == 0 {
+		b.Fatalf("missing source ids")
+	}
+	ptrs := collectLeafRefPointersForFileBench(b, db.Pager(), db.State(), sourceIDs[0], 64)
+	if len(ptrs) == 0 {
+		b.Fatalf("no leaf refs found for source file %d", sourceIDs[0])
+	}
+	scratch := make([]byte, 0, page.PageSize)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		ptr := ptrs[i%len(ptrs)]
+		buf, usedScratch, err := db.valueLogManager.ReadUnsafeTo(ptr, scratch[:0])
+		if err != nil {
+			b.Fatalf("ReadUnsafeTo: %v", err)
+		}
+		if usedScratch {
+			scratch = buf[:0]
+		}
+	}
+}
+
+func BenchmarkRewriteWriterAppendValue(b *testing.B) {
+	value := bytes.Repeat([]byte("value-payload-"), 64)
+	benchRewriteWriterAppendValue(b, "NoRotate", 1<<62, value)
+	benchRewriteWriterAppendValue(b, "Rotate64KiB", 64<<10, value)
+}
+
+func BenchmarkRewriteWriterAppendLeafPage(b *testing.B) {
+	leafPage := bytes.Repeat([]byte("leaf-page-"), page.PageSize/10)
+	if len(leafPage) < page.PageSize {
+		leafPage = append(leafPage, bytes.Repeat([]byte{0}, page.PageSize-len(leafPage))...)
+	}
+	leafPage = leafPage[:page.PageSize]
+	benchRewriteWriterAppendLeafPage(b, "NoRotate", 1<<62, leafPage)
+	benchRewriteWriterAppendLeafPage(b, "Rotate64KiB", 64<<10, leafPage)
+}
+
+func benchRewriteWriterAppendValue(b *testing.B, name string, maxSize int64, value []byte) {
+	b.Helper()
+	b.Run(name, func(b *testing.B) {
+		dir := b.TempDir()
+		walDir := filepath.Join(dir, "wal")
+		if err := os.MkdirAll(walDir, 0o755); err != nil {
+			b.Fatalf("MkdirAll(wal): %v", err)
+		}
+		writer := newRewriteWriter(walDir, 0, 0, maxSize)
+		writer.blockCompression = true
+		writer.blockCodec = valuelog.BlockCodecSnappy
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			if _, err := writer.appendValue(uint64(i+1), value); err != nil {
+				b.Fatalf("appendValue: %v", err)
+			}
+		}
+		b.StopTimer()
+		if err := writer.Close(); err != nil {
+			b.Fatalf("writer.Close: %v", err)
+		}
+	})
+}
+
+func benchRewriteWriterAppendLeafPage(b *testing.B, name string, maxSize int64, leafPage []byte) {
+	b.Helper()
+	b.Run(name, func(b *testing.B) {
+		dir := b.TempDir()
+		walDir := filepath.Join(dir, "wal")
+		if err := os.MkdirAll(walDir, 0o755); err != nil {
+			b.Fatalf("MkdirAll(wal): %v", err)
+		}
+		writer := newRewriteWriter(walDir, 0, 0, maxSize)
+		writer.blockCompression = true
+		writer.blockCodec = valuelog.BlockCodecSnappy
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			if _, err := writer.AppendLeafPage(leafPage); err != nil {
+				b.Fatalf("AppendLeafPage: %v", err)
+			}
+		}
+		b.StopTimer()
+		if err := writer.Close(); err != nil {
+			b.Fatalf("writer.Close: %v", err)
+		}
+	})
+}
+
+func reportRewriteStageMetrics(b *testing.B, n int, planNs, scanNs, readDecodeNs, appendNs, swapCommitNs, bookkeepingNs, leafRefNs, readCalls, appendCalls, swapBatches int64) {
+	if b == nil || n <= 0 {
+		return
+	}
+	div := float64(n)
+	b.ReportMetric(float64(planNs)/div, "plan_ns/op")
+	b.ReportMetric(float64(scanNs)/div, "scan_ns/op")
+	b.ReportMetric(float64(readDecodeNs)/div, "read_decode_ns/op")
+	b.ReportMetric(float64(appendNs)/div, "append_ns/op")
+	b.ReportMetric(float64(swapCommitNs)/div, "swap_commit_ns/op")
+	b.ReportMetric(float64(bookkeepingNs)/div, "bookkeeping_ns/op")
+	b.ReportMetric(float64(leafRefNs)/div, "leafref_ns/op")
+	b.ReportMetric(float64(readCalls)/div, "read_calls/op")
+	b.ReportMetric(float64(appendCalls)/div, "append_calls/op")
+	b.ReportMetric(float64(swapBatches)/div, "swap_batches/op")
 }
 
 func setupValuePointerRewriteBench(tb testing.TB, seg1Records, seg2Records int) (*DB, []uint32, func()) {
@@ -341,6 +539,41 @@ func setupLeafRefRewriteBench(tb testing.TB, keyCount int) (*DB, []uint32, func(
 	return db, sourceIDs, cleanup
 }
 
+func collectValuePointersForFileBench(tb testing.TB, db *DB, fileID uint32, limit int) []page.ValuePtr {
+	tb.Helper()
+	if db == nil || fileID == 0 {
+		return nil
+	}
+	snap := db.AcquireSnapshot()
+	if snap == nil || snap.state == nil {
+		if snap != nil {
+			_ = snap.Close()
+		}
+		tb.Fatalf("missing snapshot state")
+	}
+	defer func() { _ = snap.Close() }()
+	it := snap.tree.IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
+	defer func() { _ = it.Close() }()
+	ptrs := make([]page.ValuePtr, 0, limit)
+	for ; it.Valid(); it.Next() {
+		_, ptr, flags := it.UnsafeEntry()
+		if flags&node.FlagPointer == 0 {
+			continue
+		}
+		if ptr.FileID != fileID {
+			continue
+		}
+		ptrs = append(ptrs, ptr)
+		if limit > 0 && len(ptrs) >= limit {
+			break
+		}
+	}
+	if err := it.Error(); err != nil {
+		tb.Fatalf("iterator error: %v", err)
+	}
+	return ptrs
+}
+
 func collectLeafRefFileCountsBench(tb testing.TB, p *pager.Pager, rootID uint64, counts map[uint32]int) {
 	tb.Helper()
 	if p == nil || rootID == 0 || counts == nil {
@@ -393,6 +626,48 @@ func collectLeafRefFileCountsBench(tb testing.TB, p *pager.Pager, rootID uint64,
 			tb.Fatalf("unexpected page type %d at page %d", n.Type(), pageID)
 		}
 	}
+}
+
+func collectLeafRefPointersForFileBench(tb testing.TB, p *pager.Pager, state *DBState, fileID uint32, limit int) []page.ValuePtr {
+	tb.Helper()
+	if p == nil || state == nil || fileID == 0 {
+		return nil
+	}
+	ptrs := make([]page.ValuePtr, 0, limit)
+	var visit func(uint64)
+	visit = func(pageID uint64) {
+		if limit > 0 && len(ptrs) >= limit {
+			return
+		}
+		if ptr, ok := page.DecodeLeafRef(pageID); ok {
+			if ptr.FileID == fileID {
+				ptrs = append(ptrs, ptr)
+			}
+			return
+		}
+		data, err := p.Get(pageID)
+		if err != nil {
+			tb.Fatalf("pager.Get(%d): %v", pageID, err)
+		}
+		n := node.NewNodeView(data)
+		if !n.VerifyChecksum() {
+			tb.Fatalf("checksum mismatch on page %d", pageID)
+		}
+		if n.Type() != page.PageTypeInternal {
+			return
+		}
+		count := n.Count()
+		for i := uint16(0); i < count; i++ {
+			_, childID, err := n.GetInternalEntryView(i)
+			if err != nil {
+				tb.Fatalf("GetInternalEntryView(%d,%d): %v", pageID, i, err)
+			}
+			visit(childID)
+		}
+	}
+	visit(state.SystemRootPageID)
+	visit(state.RootPageID)
+	return ptrs
 }
 
 func appendPointersInNewSegmentBench(tb testing.TB, dir string, lane, seq uint32, ridBase uint64, n int, valueAt func(i int) []byte) []page.ValuePtr {

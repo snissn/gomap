@@ -48,6 +48,11 @@ type Writer struct {
 	bw                     *bufio.Writer
 	size                   int64
 	fileID                 uint32
+	dirSyncPath            string
+	dirSyncPending         bool
+	dirty                  bool
+	deferSealedSync        bool
+	sealedFiles            []*os.File
 	appendBuf              []byte
 	appendMax              int
 	rawWritevMinAvgBytes   int
@@ -127,6 +132,7 @@ func (w *Writer) writeAllToFile(buf []byte) error {
 			return errors.New("valuelog: short write")
 		}
 	}
+	w.dirty = true
 	return nil
 }
 
@@ -139,6 +145,9 @@ func (w *Writer) flushAppendBuf() error {
 	}
 	if w.f == nil {
 		_, err := w.bw.Write(w.appendBuf)
+		if err == nil {
+			w.dirty = true
+		}
 		w.appendBuf = w.appendBuf[:0]
 		return err
 	}
@@ -160,6 +169,7 @@ func (w *Writer) flushNoTrim() error {
 		if err := w.bw.Flush(); err != nil {
 			return err
 		}
+		w.dirty = true
 	}
 	return nil
 }
@@ -207,6 +217,9 @@ func (w *Writer) writeBytes(buf []byte) error {
 	}
 	if w.f == nil {
 		_, err := w.bw.Write(buf)
+		if err == nil {
+			w.dirty = true
+		}
 		return err
 	}
 
@@ -257,6 +270,9 @@ func (w *Writer) writeBytesBuffered(buf []byte) error {
 	}
 	if w.f == nil {
 		_, err := w.bw.Write(buf)
+		if err == nil {
+			w.dirty = true
+		}
 		return err
 	}
 
@@ -402,10 +418,6 @@ func NewWriter(path string, fileID uint32) (*Writer, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := syncDirFn(path); err != nil {
-		_ = f.Close()
-		return nil, err
-	}
 	info, err := f.Stat()
 	if err != nil {
 		_ = f.Close()
@@ -418,6 +430,8 @@ func NewWriter(path string, fileID uint32) (*Writer, error) {
 		bw:                    nil,
 		size:                  info.Size(),
 		fileID:                fileID,
+		dirSyncPath:           path,
+		dirSyncPending:        true,
 		appendMax:             defaultBufferSize,
 		rawWritevMinAvgBytes:  defaultRawWritevMinAvgBytes,
 		rawWritevMinBatchRecs: defaultRawWritevMinBatchRecords,
@@ -444,6 +458,75 @@ func newWriterWithSink(sink io.Writer, fileID uint32) *Writer {
 		clock:                 RealClock{},
 		keepSafetyMargin:      DefaultKeepSafetyMargin,
 	}
+}
+
+func (w *Writer) markDirSyncPending(path string) {
+	if w == nil {
+		return
+	}
+	w.dirSyncPath = path
+	w.dirSyncPending = path != ""
+}
+
+func (w *Writer) syncPendingDir() error {
+	if w == nil || !w.dirSyncPending || w.dirSyncPath == "" {
+		return nil
+	}
+	if err := syncDirFn(w.dirSyncPath); err != nil {
+		return err
+	}
+	w.dirSyncPending = false
+	return nil
+}
+
+func (w *Writer) SetDeferSealedSync(enabled bool) {
+	if w == nil {
+		return
+	}
+	w.deferSealedSync = enabled
+}
+
+func (w *Writer) syncAndCloseSealedFiles() error {
+	if w == nil || len(w.sealedFiles) == 0 {
+		return nil
+	}
+	for i, f := range w.sealedFiles {
+		if f == nil {
+			continue
+		}
+		if w.syncFn != nil {
+			if err := w.syncFn(f); err != nil {
+				return err
+			}
+		} else {
+			if err := f.Sync(); err != nil {
+				return err
+			}
+		}
+		if err := f.Close(); err != nil {
+			return err
+		}
+		w.sealedFiles[i] = nil
+	}
+	w.sealedFiles = w.sealedFiles[:0]
+	return nil
+}
+
+func (w *Writer) closeSealedFiles() error {
+	if w == nil || len(w.sealedFiles) == 0 {
+		return nil
+	}
+	for i, f := range w.sealedFiles {
+		if f == nil {
+			continue
+		}
+		if err := f.Close(); err != nil {
+			return err
+		}
+		w.sealedFiles[i] = nil
+	}
+	w.sealedFiles = w.sealedFiles[:0]
+	return nil
 }
 
 // NewWriterWithSink creates a value-log writer that writes to the provided sink.
@@ -675,10 +758,6 @@ func (w *Writer) RotateTo(path string, fileID uint32) error {
 		if err != nil {
 			return err
 		}
-		if err := syncDirFn(path); err != nil {
-			_ = f.Close()
-			return err
-		}
 		info, err := f.Stat()
 		if err != nil {
 			_ = f.Close()
@@ -689,6 +768,7 @@ func (w *Writer) RotateTo(path string, fileID uint32) error {
 		w.bw = nil
 		w.size = info.Size()
 		w.fileID = fileID
+		w.markDirSyncPending(path)
 		w.appendMax = defaultBufferSize
 		if cap(w.appendBuf) < defaultBufferSize {
 			w.appendBuf = make([]byte, 0, defaultBufferSize)
@@ -702,11 +782,6 @@ func (w *Writer) RotateTo(path string, fileID uint32) error {
 	if err := w.flushNoTrim(); err != nil {
 		return err
 	}
-	if w.syncFn != nil {
-		if err := w.syncFn(w.f); err != nil {
-			return err
-		}
-	}
 
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
 	if err != nil {
@@ -714,10 +789,6 @@ func (w *Writer) RotateTo(path string, fileID uint32) error {
 	}
 	info, err := f.Stat()
 	if err != nil {
-		_ = f.Close()
-		return err
-	}
-	if err := syncDirFn(path); err != nil {
 		_ = f.Close()
 		return err
 	}
@@ -735,9 +806,20 @@ func (w *Writer) RotateTo(path string, fileID uint32) error {
 	w.bw = nil
 	w.size = info.Size()
 	w.fileID = fileID
+	w.markDirSyncPending(path)
 	w.appendBuf = w.appendBuf[:0]
-	if err := old.Close(); err != nil {
-		return err
+	if w.deferSealedSync {
+		w.sealedFiles = append(w.sealedFiles, old)
+	} else {
+		if w.syncFn != nil {
+			if err := w.syncFn(old); err != nil {
+				_ = old.Close()
+				return err
+			}
+		}
+		if err := old.Close(); err != nil {
+			return err
+		}
 	}
 	w.trimTransientScratchBuffers()
 	return nil
@@ -2134,16 +2216,34 @@ func (w *Writer) Sync() error {
 	if err := w.flushNoTrim(); err != nil {
 		return err
 	}
+	if !w.dirty && len(w.sealedFiles) == 0 && !w.dirSyncPending {
+		w.trimTransientScratchBuffers()
+		return nil
+	}
 	if w.syncFn != nil {
+		if err := w.syncAndCloseSealedFiles(); err != nil {
+			return err
+		}
 		if err := w.syncFn(w.f); err != nil {
 			return err
 		}
+		if err := w.syncPendingDir(); err != nil {
+			return err
+		}
+		w.dirty = false
 		w.trimTransientScratchBuffers()
 		return nil
+	}
+	if err := w.syncAndCloseSealedFiles(); err != nil {
+		return err
 	}
 	if err := w.f.Sync(); err != nil {
 		return err
 	}
+	if err := w.syncPendingDir(); err != nil {
+		return err
+	}
+	w.dirty = false
 	w.trimTransientScratchBuffers()
 	return nil
 }
@@ -2154,8 +2254,23 @@ func (w *Writer) Close() error {
 	}
 	if err := w.flushNoTrim(); err != nil {
 		_ = w.f.Close()
+		_ = w.closeSealedFiles()
 		return err
 	}
+	if w.deferSealedSync {
+		if err := w.syncAndCloseSealedFiles(); err != nil {
+			_ = w.f.Close()
+			return err
+		}
+	} else if err := w.closeSealedFiles(); err != nil {
+		_ = w.f.Close()
+		return err
+	}
+	if err := w.syncPendingDir(); err != nil {
+		_ = w.f.Close()
+		return err
+	}
+	w.dirty = false
 	if err := w.f.Close(); err != nil {
 		return err
 	}
