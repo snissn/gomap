@@ -3719,6 +3719,43 @@ func TestSelectRewriteSourceSegments_MinSegmentAgeOnlyWithoutLiveEstimateSelects
 	}
 }
 
+func TestSelectRewriteSourceSegments_AllowLiveOnlySelection_SelectsLargestEligibleSegments(t *testing.T) {
+	dir := t.TempDir()
+
+	path1 := filepath.Join(dir, "value-l0-000001.log")
+	path2 := filepath.Join(dir, "value-l0-000002.log")
+	path3 := filepath.Join(dir, "value-l0-000003.log")
+	for _, tc := range []struct {
+		path string
+		size int
+	}{
+		{path: path1, size: 64},
+		{path: path2, size: 128},
+		{path: path3, size: 96},
+	} {
+		if err := os.WriteFile(tc.path, bytes.Repeat([]byte("x"), tc.size), 0o600); err != nil {
+			t.Fatalf("write %s: %v", tc.path, err)
+		}
+	}
+
+	files := map[uint32]*valuelog.File{
+		1: {Path: path1},
+		2: {Path: path2},
+		3: {Path: path3},
+	}
+	selected, _ := selectRewriteSourceSegmentsWithStats(ValueLogRewriteOnlineOptions{
+		AllowLiveOnlySelection: true,
+		MaxSourceSegments:      1,
+	}, files, map[uint32]struct{}{}, nil)
+
+	if len(selected) != 1 {
+		t.Fatalf("expected one selected live-only segment, got=%v", selected)
+	}
+	if _, ok := selected[2]; !ok {
+		t.Fatalf("expected largest live-only segment selected, got=%v", selected)
+	}
+}
+
 func TestSelectRewriteSourceSegments_SourceFileIDsDeduplicatesBeforeBudgeting(t *testing.T) {
 	dir := t.TempDir()
 	path1 := filepath.Join(dir, "value-l0-000001.log")
@@ -3784,6 +3821,9 @@ func TestSelectRewriteSourceSegments_SourceFileIDsIgnoreSparseCaps(t *testing.T)
 func TestRewritePlanNeedsLiveEstimate_MinSegmentAgeOnly(t *testing.T) {
 	if rewritePlanNeedsLiveEstimate(ValueLogRewriteOnlineOptions{MinSegmentAge: time.Minute}) {
 		t.Fatalf("expected MinSegmentAge-only selection to avoid live-byte estimation")
+	}
+	if rewritePlanNeedsLiveEstimate(ValueLogRewriteOnlineOptions{MaxSourceSegments: 1, AllowLiveOnlySelection: true}) {
+		t.Fatalf("expected live-only selection with segment cap to avoid live-byte estimation")
 	}
 	if !rewritePlanNeedsLiveEstimate(ValueLogRewriteOnlineOptions{MinSegmentAge: time.Minute, MaxSourceBytes: 1}) {
 		t.Fatalf("expected MinSegmentAge+MaxSourceBytes to require live-byte estimation")

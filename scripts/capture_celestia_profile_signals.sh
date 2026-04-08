@@ -214,7 +214,7 @@ collect_live_sample_row() {
         $datab,
         $appb,
         $walb,
-        ($inst."treedb.cache.vlog_generation.enabled" // ""),
+        (($inst."treedb.cache.vlog_generation.enabled" // "") | tostring),
         ($inst."treedb.cache.vlog_generation.scheduler_state" // ""),
         ($inst."treedb.cache.vlog_generation.scheduler_last_reason" // ""),
         ($inst."treedb.cache.vlog_generation.maintenance_phase" // ""),
@@ -227,9 +227,17 @@ collect_live_sample_row() {
         ($inst."treedb.cache.vlog_generation.rewrite.plan_last_result" // ""),
         ($inst."treedb.cache.vlog_generation.rewrite.plan_last_selected_segments" // ""),
         ($inst."treedb.cache.vlog_generation.rewrite.plan_last_selected_bytes_stale" // ""),
+        (($inst."treedb.cache.vlog_generation.steady_probe.pending" // "") | tostring),
+        ($inst."treedb.cache.vlog_generation.rewrite.planner_refresh.attempts" // ""),
+        ($inst."treedb.cache.vlog_generation.rewrite.planner_refresh.successes" // ""),
+        ($inst."treedb.cache.vlog_generation.rewrite.planner_refresh.last_retained_bytes" // ""),
+        ($inst."treedb.cache.vlog_generation.rewrite.planner_refresh.last_plan_bytes_total" // ""),
+        ($inst."treedb.cache.vlog_generation.rewrite.current_set_segments" // ""),
+        ($inst."treedb.cache.vlog_generation.rewrite.current_set_bytes_total" // ""),
+        ($inst."treedb.cache.vlog_generation.rewrite.current_set_refresh_scans" // ""),
         ($inst."treedb.cache.vlog_generation.rewrite.queue_len" // ""),
         ($inst."treedb.cache.vlog_generation.bytes.stale.total" // ""),
-        ($inst."treedb.cache.vlog_generation.rewrite.debt_visible" // ""),
+        (($inst."treedb.cache.vlog_generation.rewrite.debt_visible" // "") | tostring),
         ($inst."treedb.cache.vlog_generation.rewrite.debt_visible_source" // ""),
         ($inst."treedb.cache.vlog_generation.rewrite.debt_visible_bytes_stale" // ""),
         ($inst."treedb.cache.vlog_generation.rewrite.debt_last_deferral_reason" // ""),
@@ -241,9 +249,9 @@ collect_live_sample_row() {
         ($inst."treedb.cache.vlog_generation.observed_gc.runs" // ""),
         ($inst."treedb.cache.vlog_generation.gc.last_eligible_bytes" // ""),
         ($inst."treedb.cache.vlog_generation.checkpoint_kick.runs" // ""),
-        ($inst."treedb.cache.vlog_generation.maintenance.foreground_quiet" // ""),
-        ($inst."treedb.cache.vlog_generation.maintenance.foreground_full_quiet" // ""),
-        ($inst."treedb.cache.vlog_generation.maintenance.foreground_low_pressure" // "")
+        (($inst."treedb.cache.vlog_generation.maintenance.foreground_quiet" // "") | tostring),
+        (($inst."treedb.cache.vlog_generation.maintenance.foreground_full_quiet" // "") | tostring),
+        (($inst."treedb.cache.vlog_generation.maintenance.foreground_low_pressure" // "") | tostring)
       ] | @tsv'
 }
 
@@ -416,7 +424,7 @@ run_case() {
       sync_complete_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     fi
     sync_complete_epoch="$(date -u -d "$sync_complete_utc" +%s 2>/dev/null || date +%s)"
-    printf 'minute_index\tts_utc\tepoch\telapsed_since_sync_seconds\trss_kb\thwm_kb\tmax_rss_kb_so_far\tmax_hwm_kb_so_far\thome_bytes\tdata_bytes\tapp_bytes\twal_bytes\tsched_enabled\tsched_state\tsched_reason\tmaint_phase\tmaint_attempts\tmaint_acquired\tmaint_with_rewrite\trewrite_runs\tqueued_exec_runs\tplan_runs\tplan_last_result\tplan_last_selected_segments\tplan_last_selected_bytes_stale\trewrite_queue_len\tbytes_stale_total\tdebt_visible\tdebt_visible_source\tdebt_visible_bytes_stale\tdebt_last_deferral_reason\tdebt_last_deferral_age_ms\trewrite_ledger_bytes_total\trewrite_ledger_bytes_stale\tretained_prune_runs\tretained_prune_candidate_bytes\tobserved_gc_runs\tgc_last_eligible_bytes\tcheckpoint_kick_runs\tforeground_quiet\tforeground_full_quiet\tforeground_low_pressure\n' >"$dwell_samples"
+    printf 'minute_index\tts_utc\tepoch\telapsed_since_sync_seconds\trss_kb\thwm_kb\tmax_rss_kb_so_far\tmax_hwm_kb_so_far\thome_bytes\tdata_bytes\tapp_bytes\twal_bytes\tsched_enabled\tsched_state\tsched_reason\tmaint_phase\tmaint_attempts\tmaint_acquired\tmaint_with_rewrite\trewrite_runs\tqueued_exec_runs\tplan_runs\tplan_last_result\tplan_last_selected_segments\tplan_last_selected_bytes_stale\tsteady_probe_pending\tplanner_refresh_attempts\tplanner_refresh_successes\tplanner_refresh_last_retained_bytes\tplanner_refresh_last_plan_bytes_total\tcurrent_set_segments\tcurrent_set_bytes_total\tcurrent_set_refresh_scans\trewrite_queue_len\tbytes_stale_total\tdebt_visible\tdebt_visible_source\tdebt_visible_bytes_stale\tdebt_last_deferral_reason\tdebt_last_deferral_age_ms\trewrite_ledger_bytes_total\trewrite_ledger_bytes_stale\tretained_prune_runs\tretained_prune_candidate_bytes\tobserved_gc_runs\tgc_last_eligible_bytes\tcheckpoint_kick_runs\tforeground_quiet\tforeground_full_quiet\tforeground_low_pressure\n' >"$dwell_samples"
     local i
     for (( i=1; i<= dwell / DWELL_SAMPLE_INTERVAL_SECONDS; i++ )); do
       if ! kill -0 "$run_pid" >/dev/null 2>&1 || ! kill -0 "$node_pid" >/dev/null 2>&1; then

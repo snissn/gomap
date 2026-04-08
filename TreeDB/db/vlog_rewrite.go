@@ -208,6 +208,11 @@ type ValueLogRewriteOnlineOptions struct {
 	// This is useful for cached maintenance so freshly-written segments are not
 	// immediately churned by rewrite during sustained ingest.
 	MinSegmentAge time.Duration
+	// AllowLiveOnlySelection lets sparse selection admit fully-live, non-active
+	// segments. This is intended for bounded steady-state tail compaction, where
+	// rewriting stable live-only segments can still materially reduce stored
+	// bytes via denser re-encoding.
+	AllowLiveOnlySelection bool
 	// ReserveRIDs allocates a contiguous RID range for rewrite-created records.
 	// Cached-mode callers should provide the live runtime allocator here so
 	// online rewrite and foreground writes share one RID namespace.
@@ -526,7 +531,13 @@ func rewritePlanNeedsLiveEstimate(opts ValueLogRewriteOnlineOptions) bool {
 		return false
 	}
 	if len(opts.SourceFileIDs) == 0 {
-		return opts.MinSegmentStaleRatio > 0 || opts.MinSegmentStaleBytes > 0 || opts.MaxSourceSegments > 0 || opts.MaxSourceBytes > 0
+		if opts.MinSegmentStaleRatio > 0 || opts.MinSegmentStaleBytes > 0 || opts.MaxSourceBytes > 0 {
+			return true
+		}
+		if opts.MaxSourceSegments > 0 && !opts.AllowLiveOnlySelection {
+			return true
+		}
+		return false
 	}
 	return opts.MinSegmentStaleRatio > 0 || opts.MinSegmentStaleBytes > 0
 }
@@ -1065,6 +1076,7 @@ type rewriteSourceSegment struct {
 	liveBytes  int64
 	staleBytes int64
 	staleRatio float64
+	liveOnly   bool
 }
 
 func selectRewriteSourceSegments(opts ValueLogRewriteOnlineOptions, files map[uint32]*valuelog.File, active map[uint32]struct{}, liveByID map[uint32]int64) map[uint32]struct{} {
@@ -1080,6 +1092,7 @@ func selectRewriteSourceSegmentsWithStats(opts ValueLogRewriteOnlineOptions, fil
 	maxSourceSegments := opts.MaxSourceSegments
 	maxSourceBytes := opts.MaxSourceBytes
 	minSegmentAge := opts.MinSegmentAge
+	allowLiveOnlySelection := opts.AllowLiveOnlySelection
 	now := time.Now()
 	protectedIDs := make(map[uint32]struct{})
 	if len(opts.ProtectedPaths) > 0 && len(files) > 0 {
@@ -1182,6 +1195,14 @@ func selectRewriteSourceSegmentsWithStats(opts ValueLogRewriteOnlineOptions, fil
 			continue
 		}
 		if liveByID == nil {
+			if allowLiveOnlySelection {
+				candidates = append(candidates, rewriteSourceSegment{
+					fileID:    id,
+					liveBytes: size,
+					liveOnly:  true,
+				})
+				continue
+			}
 			candidates = append(candidates, rewriteSourceSegment{
 				fileID:    id,
 				liveBytes: size,
@@ -1202,6 +1223,13 @@ func selectRewriteSourceSegmentsWithStats(opts ValueLogRewriteOnlineOptions, fil
 		}
 		staleBytes := size - liveBytes
 		if staleBytes <= 0 {
+			if allowLiveOnlySelection {
+				candidates = append(candidates, rewriteSourceSegment{
+					fileID:    id,
+					liveBytes: liveBytes,
+					liveOnly:  true,
+				})
+			}
 			continue
 		}
 		staleRatio := float64(staleBytes) / float64(size)
@@ -1226,6 +1254,15 @@ func selectRewriteSourceSegmentsWithStats(opts ValueLogRewriteOnlineOptions, fil
 	sort.SliceStable(candidates, func(i, j int) bool {
 		a := candidates[i]
 		b := candidates[j]
+		if a.liveOnly != b.liveOnly {
+			return !a.liveOnly
+		}
+		if a.liveOnly && b.liveOnly {
+			if a.liveBytes != b.liveBytes {
+				return a.liveBytes > b.liveBytes
+			}
+			return a.fileID < b.fileID
+		}
 		if a.staleRatio != b.staleRatio {
 			return a.staleRatio > b.staleRatio
 		}

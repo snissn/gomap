@@ -882,6 +882,81 @@ func TestManagerRefresh_IgnoresSegmentRemovedAfterScan(t *testing.T) {
 	}
 }
 
+func TestManagerRefresh_UpdatesTrackedSegmentSize(t *testing.T) {
+	dir := t.TempDir()
+	fileID, err := EncodeFileID(0, 1)
+	if err != nil {
+		t.Fatalf("EncodeFileID: %v", err)
+	}
+	path := filepath.Join(dir, "value-l0-000001.log")
+	w, err := NewWriter(path, fileID)
+	if err != nil {
+		t.Fatalf("NewWriter(%s): %v", path, err)
+	}
+	defer func() { _ = w.Close() }()
+
+	if _, err := w.Append(0, nil, 1, bytes.Repeat([]byte("a"), 64)); err != nil {
+		t.Fatalf("Append initial: %v", err)
+	}
+	if err := w.Flush(); err != nil {
+		t.Fatalf("Flush initial: %v", err)
+	}
+
+	mgr, err := NewManager(dir)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	defer func() {
+		if mgr != nil {
+			_ = mgr.Close()
+		}
+	}()
+
+	set1 := mgr.CurrentSetNoRefresh()
+	file1, ok := set1.Files[fileID]
+	if !ok || file1 == nil {
+		_ = mgr.Release(set1)
+		t.Fatalf("CurrentSetNoRefresh missing segment %d", fileID)
+	}
+	size1 := file1.SizeBestEffort()
+	if err := mgr.Release(set1); err != nil {
+		t.Fatalf("Release(set1): %v", err)
+	}
+
+	if _, err := w.Append(0, nil, 2, bytes.Repeat([]byte("b"), 4096)); err != nil {
+		t.Fatalf("Append grown: %v", err)
+	}
+	if err := w.Flush(); err != nil {
+		t.Fatalf("Flush grown: %v", err)
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("Stat(%s): %v", path, err)
+	}
+	if info.Size() <= size1 {
+		t.Fatalf("segment size did not grow: initial=%d current=%d", size1, info.Size())
+	}
+
+	if err := mgr.Refresh(); err != nil {
+		t.Fatalf("Refresh: %v", err)
+	}
+
+	set2 := mgr.CurrentSetNoRefresh()
+	file2, ok := set2.Files[fileID]
+	if !ok || file2 == nil {
+		_ = mgr.Release(set2)
+		t.Fatalf("CurrentSetNoRefresh missing segment %d after refresh", fileID)
+	}
+	size2 := file2.SizeBestEffort()
+	if err := mgr.Release(set2); err != nil {
+		t.Fatalf("Release(set2): %v", err)
+	}
+	if size2 != info.Size() {
+		t.Fatalf("refreshed segment size=%d want %d", size2, info.Size())
+	}
+}
+
 func TestListSegments_ParsesLaneAndLegacyNames(t *testing.T) {
 	dir := t.TempDir()
 	names := []string{
