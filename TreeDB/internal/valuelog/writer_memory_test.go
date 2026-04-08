@@ -2,6 +2,7 @@ package valuelog
 
 import (
 	"io"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -172,5 +173,167 @@ func TestWriterClose_ReleasesScratchBuffers(t *testing.T) {
 	}
 	if writer.encLimiter.buf != nil || writer.encLimiter.limit != 0 {
 		t.Fatalf("encLimiter not cleared on Close: buf=%v limit=%d", writer.encLimiter.buf != nil, writer.encLimiter.limit)
+	}
+}
+
+func TestNewWriter_DefersDirSyncUntilSync(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "value-000001.log")
+
+	origSyncDir := syncDirFn
+	var syncDirCalls int
+	syncDirFn = func(path string) error {
+		syncDirCalls++
+		return nil
+	}
+	defer func() { syncDirFn = origSyncDir }()
+
+	writer, err := NewWriter(path, page.ValueLogFileID(1))
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	defer func() { _ = writer.Close() }()
+
+	if syncDirCalls != 0 {
+		t.Fatalf("syncDir calls after NewWriter = %d want 0", syncDirCalls)
+	}
+	if _, err := writer.Append(0, nil, 1, []byte("value")); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	if err := writer.Sync(); err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+	if syncDirCalls != 1 {
+		t.Fatalf("syncDir calls after first Sync = %d want 1", syncDirCalls)
+	}
+	if err := writer.Sync(); err != nil {
+		t.Fatalf("second Sync: %v", err)
+	}
+	if syncDirCalls != 1 {
+		t.Fatalf("syncDir calls after second Sync = %d want 1", syncDirCalls)
+	}
+}
+
+func TestWriterRotateTo_DefersDirSyncUntilSync(t *testing.T) {
+	origSyncDir := syncDirFn
+	var syncDirCalls int
+	syncDirFn = func(path string) error {
+		syncDirCalls++
+		return nil
+	}
+	defer func() { syncDirFn = origSyncDir }()
+
+	writer := NewWriterWithSink(io.Discard, page.ValueLogFileID(1))
+	dir := t.TempDir()
+	path1 := filepath.Join(dir, "value-000001.log")
+	path2 := filepath.Join(dir, "value-000002.log")
+	if err := writer.RotateTo(path1, page.ValueLogFileID(1)); err != nil {
+		t.Fatalf("RotateTo(path1): %v", err)
+	}
+	if syncDirCalls != 0 {
+		t.Fatalf("syncDir calls after RotateTo(path1) = %d want 0", syncDirCalls)
+	}
+	if _, err := writer.Append(0, nil, 1, []byte("value")); err != nil {
+		t.Fatalf("Append(path1): %v", err)
+	}
+	if err := writer.Sync(); err != nil {
+		t.Fatalf("Sync(path1): %v", err)
+	}
+	if syncDirCalls != 1 {
+		t.Fatalf("syncDir calls after Sync(path1) = %d want 1", syncDirCalls)
+	}
+	if err := writer.RotateTo(path2, page.ValueLogFileID(2)); err != nil {
+		t.Fatalf("RotateTo(path2): %v", err)
+	}
+	if syncDirCalls != 1 {
+		t.Fatalf("syncDir calls after RotateTo(path2) = %d want 1", syncDirCalls)
+	}
+	if _, err := writer.Append(0, nil, 2, []byte("value")); err != nil {
+		t.Fatalf("Append(path2): %v", err)
+	}
+	if err := writer.Sync(); err != nil {
+		t.Fatalf("Sync(path2): %v", err)
+	}
+	if syncDirCalls != 2 {
+		t.Fatalf("syncDir calls after Sync(path2) = %d want 2", syncDirCalls)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+}
+
+func TestWriterRotateTo_DeferSealedSyncSyncsSealedFilesAtSync(t *testing.T) {
+	dir := t.TempDir()
+	path1 := filepath.Join(dir, "value-000001.log")
+	path2 := filepath.Join(dir, "value-000002.log")
+
+	writer, err := NewWriter(path1, page.ValueLogFileID(1))
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	defer func() { _ = writer.Close() }()
+
+	var syncCalls int
+	writer.syncFn = func(file *os.File) error {
+		syncCalls++
+		return nil
+	}
+	writer.SetDeferSealedSync(true)
+
+	if _, err := writer.Append(0, nil, 1, []byte("value-1")); err != nil {
+		t.Fatalf("Append(path1): %v", err)
+	}
+	if err := writer.RotateTo(path2, page.ValueLogFileID(2)); err != nil {
+		t.Fatalf("RotateTo(path2): %v", err)
+	}
+	if syncCalls != 0 {
+		t.Fatalf("sync calls after RotateTo = %d want 0", syncCalls)
+	}
+	if len(writer.sealedFiles) != 1 {
+		t.Fatalf("sealed files after RotateTo = %d want 1", len(writer.sealedFiles))
+	}
+	if _, err := writer.Append(0, nil, 2, []byte("value-2")); err != nil {
+		t.Fatalf("Append(path2): %v", err)
+	}
+	if err := writer.Sync(); err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+	if syncCalls != 2 {
+		t.Fatalf("sync calls after Sync = %d want 2 (sealed + current)", syncCalls)
+	}
+	if len(writer.sealedFiles) != 0 {
+		t.Fatalf("sealed files after Sync = %d want 0", len(writer.sealedFiles))
+	}
+}
+
+func TestWriterSync_SkipsRedundantSyncWhenClean(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "value-000001.log")
+
+	writer, err := NewWriter(path, page.ValueLogFileID(1))
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	defer func() { _ = writer.Close() }()
+
+	var syncCalls int
+	writer.syncFn = func(file *os.File) error {
+		syncCalls++
+		return nil
+	}
+	if _, err := writer.Append(0, nil, 1, []byte("value")); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	if err := writer.Sync(); err != nil {
+		t.Fatalf("first Sync: %v", err)
+	}
+	if syncCalls != 1 {
+		t.Fatalf("sync calls after first Sync = %d want 1", syncCalls)
+	}
+	if err := writer.Sync(); err != nil {
+		t.Fatalf("second Sync: %v", err)
+	}
+	if syncCalls != 1 {
+		t.Fatalf("sync calls after second Sync = %d want 1", syncCalls)
 	}
 }
