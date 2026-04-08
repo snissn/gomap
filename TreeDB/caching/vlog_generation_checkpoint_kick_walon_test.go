@@ -206,12 +206,6 @@ func TestVlogGenerationCheckpointKick_WALOnSteadyResumeIsBounded(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if _, calls := recorder.recordedPlan(); calls != 0 {
-		t.Fatalf("plan calls=%d want 0 on budget-seeding attempt", calls)
-	}
-	if got := db.vlogGenerationWALOnSteadyResumeRemainingAttempts.Load(); got != 1 {
-		t.Fatalf("steady resume remaining=%d want 1 after budget-seeding attempt", got)
-	}
 	deadline = time.Now().Add(2 * schedulerTestWait(t))
 	for db.vlogGenerationWALOnSteadyResumeActive.Load() {
 		if time.Now().After(deadline) {
@@ -219,26 +213,21 @@ func TestVlogGenerationCheckpointKick_WALOnSteadyResumeIsBounded(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
+	if _, calls := recorder.recordedPlan(); calls != 1 {
+		t.Fatalf("plan calls=%d want 1 on zero-budget bounded attempt", calls)
+	}
+	if got := db.vlogGenerationWALOnSteadyResumeRemainingAttempts.Load(); got != 0 {
+		t.Fatalf("steady resume remaining=%d want 0 after bounded planner attempt", got)
+	}
 
 	db.vlogGenerationRewriteBudgetTokensBytes.Store(1024)
 	db.vlogGenerationRewriteBudgetLastUnixNano.Store(time.Now().Add(-time.Second).UnixNano())
 	db.maybeKickVlogGenerationMaintenanceAfterCheckpoint()
-	deadline = time.Now().Add(2 * schedulerTestWait(t))
-	for {
-		if got := db.vlogGenerationWALOnSteadyResumeAttempts.Load(); got >= 2 {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("steady resume attempt 2 did not run")
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-
 	db.maybeKickVlogGenerationMaintenanceAfterCheckpoint()
 	time.Sleep(50 * time.Millisecond)
 
-	if got := db.vlogGenerationWALOnSteadyResumeAttempts.Load(); got != uint64(vlogGenerationWALOnSteadyResumeAttempts) {
-		t.Fatalf("steady resume attempts=%d want %d", got, vlogGenerationWALOnSteadyResumeAttempts)
+	if got := db.vlogGenerationWALOnSteadyResumeAttempts.Load(); got != 1 {
+		t.Fatalf("steady resume attempts=%d want 1 after bounded planner attempt", got)
 	}
 	if got := db.vlogGenerationWALOnSteadyResumeRemainingAttempts.Load(); got != 0 {
 		t.Fatalf("steady resume remaining=%d want 0 after bounded attempts", got)
@@ -247,8 +236,8 @@ func TestVlogGenerationCheckpointKick_WALOnSteadyResumeIsBounded(t *testing.T) {
 		t.Fatalf("rewrite calls=%d want 0 for empty-plan bounded test", calls)
 	}
 	stats := db.Stats()
-	if got := stats["treedb.cache.vlog_generation.maintenance.acquired.source.wal_on_steady_resume"]; got != "2" {
-		t.Fatalf("maintenance acquired source wal_on_steady_resume=%q want 2", got)
+	if got := stats["treedb.cache.vlog_generation.maintenance.acquired.source.wal_on_steady_resume"]; got != "1" {
+		t.Fatalf("maintenance acquired source wal_on_steady_resume=%q want 1", got)
 	}
 	if got := stats["treedb.cache.vlog_generation.rewrite.plan_empty"]; got != "1" {
 		t.Fatalf("rewrite plan empty=%q want 1 after second attempt", got)
