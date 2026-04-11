@@ -54,15 +54,16 @@ type snapshotView struct {
 }
 
 type DB struct {
-	valueLogManager    *valuelog.Manager
-	snapshotViewRO     atomic.Pointer[snapshotView]
-	snapshotAcquireRO  [snapshotAcquireShardCount]atomic.Int32
-	valueLogRefTracker *valueLogRefTracker
-	valueLogDebtLedger *valueLogDebtLedger
-	leafPageLog        LeafPageLog
-	lock               *lockfile.Lock
-	adaptive           *adaptive.Controller
-	pruner             pruneWorker
+	valueLogManager        *valuelog.Manager
+	snapshotViewRO         atomic.Pointer[snapshotView]
+	snapshotAcquireRO      [snapshotAcquireShardCount]atomic.Int32
+	valueLogRefTracker     *valueLogRefTracker
+	valueLogDebtLedger     *valueLogDebtLedger
+	valueLogLocatorCatalog *valueLogLocatorCatalog
+	leafPageLog            LeafPageLog
+	lock                   *lockfile.Lock
+	adaptive               *adaptive.Controller
+	pruner                 pruneWorker
 
 	// idx is the current index generation (pager + MVCC lifecycle state).
 	idx atomic.Pointer[indexGen]
@@ -1065,6 +1066,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		valueLogManager:            vm,
 		valueLogRefTracker:         newValueLogRefTracker(),
 		valueLogDebtLedger:         newValueLogDebtLedger(),
+		valueLogLocatorCatalog:     newValueLogLocatorCatalog(),
 		lock:                       lock,
 		adaptive:                   adaptiveCtrl,
 		keepRecent:                 opts.KeepRecent,
@@ -1154,6 +1156,10 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		return nil, err
 	}
 	if err := db.initValueLogDebtLedger(); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := db.initValueLogLocatorCatalog(); err != nil {
 		db.Close()
 		return nil, err
 	}
