@@ -412,10 +412,89 @@ func (db *DB) persistValueLogRefTrackerBestEffort() {
 	}
 }
 
+var referencedValueLogSegmentsLegacyHook struct {
+	mu sync.Mutex
+	fn func()
+}
+
+func registerReferencedValueLogSegmentsLegacyHook(hook func()) func() {
+	referencedValueLogSegmentsLegacyHook.mu.Lock()
+	prev := referencedValueLogSegmentsLegacyHook.fn
+	referencedValueLogSegmentsLegacyHook.fn = hook
+	referencedValueLogSegmentsLegacyHook.mu.Unlock()
+	return func() {
+		referencedValueLogSegmentsLegacyHook.mu.Lock()
+		referencedValueLogSegmentsLegacyHook.fn = prev
+		referencedValueLogSegmentsLegacyHook.mu.Unlock()
+	}
+}
+
+func invokeReferencedValueLogSegmentsLegacyHook() {
+	referencedValueLogSegmentsLegacyHook.mu.Lock()
+	hook := referencedValueLogSegmentsLegacyHook.fn
+	referencedValueLogSegmentsLegacyHook.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
+}
+
+func refsFromValueLogLiveBytesBySegment(liveByID map[uint32]int64) map[uint32]struct{} {
+	if len(liveByID) == 0 {
+		return nil
+	}
+	refs := make(map[uint32]struct{}, len(liveByID))
+	for fileID, live := range liveByID {
+		if live <= 0 {
+			continue
+		}
+		refs[fileID] = struct{}{}
+	}
+	return refs
+}
+
+func sameValueLogRefSets(a, b map[uint32]struct{}) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for fileID := range a {
+		if _, ok := b[fileID]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
 func (db *DB) referencedValueLogSegments(ctx context.Context) (map[uint32]struct{}, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if valueLogDebtLedgerEnabled() && db.valueLogDebtLedger != nil {
+		liveByID, ok, err := db.liveBytesBySegmentFromDebtLedger(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			refs := refsFromValueLogLiveBytesBySegment(liveByID)
+			if valueLogDebtLedgerShadowCompareEnabled() {
+				legacyRefs, err := db.referencedValueLogSegmentsLegacy(ctx)
+				if err != nil {
+					return nil, err
+				}
+				if !sameValueLogRefSets(refs, legacyRefs) {
+					if rebuildErr := db.rebuildValueLogDebtLedger(ctx); rebuildErr != nil {
+						db.reportError(rebuildErr)
+					}
+					return legacyRefs, nil
+				}
+			}
+			return refs, nil
+		}
+	}
+	return db.referencedValueLogSegmentsLegacy(ctx)
+}
+
+func (db *DB) referencedValueLogSegmentsLegacy(ctx context.Context) (map[uint32]struct{}, error) {
+	invokeReferencedValueLogSegmentsLegacyHook()
 	seq := db.currentCommitSeq()
 	if db.valueLogRefTracker != nil {
 		if refs, ok := db.valueLogRefTracker.referencedSet(seq); ok {
