@@ -9,6 +9,7 @@ import (
 	"sort"
 	"sync"
 
+	batchpkg "github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/atomicfile"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/node"
@@ -33,6 +34,11 @@ type valueLogLocatorCatalogDisk struct {
 	Segments  []valueLogLocatorCatalogSegment `json:"segments,omitempty"`
 }
 
+type valueLogLocatorDelta struct {
+	adds    map[uint32][][]byte
+	removes map[uint32][][]byte
+}
+
 type valueLogLocatorCatalog struct {
 	mu        sync.RWMutex
 	commitSeq uint64
@@ -47,6 +53,27 @@ func newValueLogLocatorCatalog() *valueLogLocatorCatalog {
 
 func valueLogLocatorCatalogEnabled() bool {
 	return envDebtLedgerBool(envEnableVlogLocatorCatalog)
+}
+
+func newValueLogLocatorDelta() *valueLogLocatorDelta {
+	return &valueLogLocatorDelta{
+		adds:    make(map[uint32][][]byte),
+		removes: make(map[uint32][][]byte),
+	}
+}
+
+func (d *valueLogLocatorDelta) add(fileID uint32, key []byte) {
+	if d == nil || fileID == 0 || len(key) == 0 {
+		return
+	}
+	d.adds[fileID] = append(d.adds[fileID], append([]byte(nil), key...))
+}
+
+func (d *valueLogLocatorDelta) remove(fileID uint32, key []byte) {
+	if d == nil || fileID == 0 || len(key) == 0 {
+		return
+	}
+	d.removes[fileID] = append(d.removes[fileID], append([]byte(nil), key...))
 }
 
 func normalizeLocatorSegments(segments []valueLogLocatorCatalogSegment) []valueLogLocatorCatalogSegment {
@@ -137,6 +164,15 @@ func (c *valueLogLocatorCatalog) replace(commitSeq uint64, segments map[uint32]m
 	c.mu.Unlock()
 }
 
+func (c *valueLogLocatorCatalog) canTrack(baseSeq uint64) bool {
+	if c == nil {
+		return false
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.valid && c.commitSeq == baseSeq
+}
+
 func (c *valueLogLocatorCatalog) invalidate() {
 	if c == nil {
 		return
@@ -169,6 +205,47 @@ func (c *valueLogLocatorCatalog) keysForSegments(commitSeq uint64, fileIDs []uin
 	}
 	sort.Slice(out, func(i, j int) bool { return string(out[i]) < string(out[j]) })
 	return out, true
+}
+
+func (c *valueLogLocatorCatalog) applyDelta(nextCommitSeq uint64, delta *valueLogLocatorDelta) error {
+	if c == nil {
+		return nil
+	}
+	if delta == nil {
+		return errors.New("treedb: missing value-log locator delta")
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.valid {
+		return errors.New("treedb: value-log locator catalog invalid")
+	}
+	if nextCommitSeq != c.commitSeq+1 {
+		return errors.New("treedb: value-log locator catalog sequence mismatch")
+	}
+	for fileID, keys := range delta.removes {
+		seg := c.segments[fileID]
+		for _, key := range keys {
+			delete(seg, string(key))
+		}
+		if len(seg) == 0 {
+			delete(c.segments, fileID)
+		} else {
+			c.segments[fileID] = seg
+		}
+	}
+	for fileID, keys := range delta.adds {
+		seg := c.segments[fileID]
+		if seg == nil {
+			seg = make(map[string][]byte, len(keys))
+		}
+		for _, key := range keys {
+			seg[string(key)] = append([]byte(nil), key...)
+		}
+		c.segments[fileID] = seg
+	}
+	c.commitSeq = nextCommitSeq
+	c.dirty = true
+	return nil
 }
 
 func (c *valueLogLocatorCatalog) dirtySnapshot() (uint64, []valueLogLocatorCatalogSegment, bool) {
@@ -347,4 +424,24 @@ func (db *DB) locatorKeysForSegments(ctx context.Context, fileIDs []uint32) ([][
 	}
 	keys, ok := db.valueLogLocatorCatalog.keysForSegments(db.currentCommitSeq(), fileIDs)
 	return keys, ok, nil
+}
+
+func buildValueLogLocatorDelta(tr *tree.Tree, entries []batchpkg.Entry) (*valueLogLocatorDelta, error) {
+	if tr == nil {
+		return nil, nil
+	}
+	delta := newValueLogLocatorDelta()
+	for i := range entries {
+		oldFileID, oldRef, err := lookupValueLogRefAtKey(tr, entries[i].Key)
+		if err != nil {
+			return nil, err
+		}
+		if oldRef {
+			delta.remove(oldFileID, entries[i].Key)
+		}
+		if entries[i].Type == batchpkg.OpPut && entries[i].IsPtr && page.IsValueLogFileID(entries[i].ValuePtr.FileID) {
+			delta.add(entries[i].ValuePtr.FileID, entries[i].Key)
+		}
+	}
+	return delta, nil
 }

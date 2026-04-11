@@ -1494,24 +1494,25 @@ func (db *DB) writeMeta(pageID uint64, meta page.MetaPageBody) error {
 }
 
 type finalizeCommitPost struct {
-	oldState     *DBState
-	metrics      adaptive.Metrics
-	vlogRefDelta *valueLogRefDelta
-	commitSeq    uint64
-	kickPrune    bool
-	doPrune      bool
-	debug        bool
-	sync         bool
-	start        time.Time
-	durSync1     time.Duration
-	durMeta      time.Duration
-	durSync2     time.Duration
+	oldState         *DBState
+	metrics          adaptive.Metrics
+	vlogRefDelta     *valueLogRefDelta
+	vlogLocatorDelta *valueLogLocatorDelta
+	commitSeq        uint64
+	kickPrune        bool
+	doPrune          bool
+	debug            bool
+	sync             bool
+	start            time.Time
+	durSync1         time.Duration
+	durMeta          time.Duration
+	durSync2         time.Duration
 }
 
 // finalizeCommitLocked performs the durability-critical publish path.
 // Callers that already hold commit serialization may run post work after
 // releasing the serialization lock.
-func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired []uint64, sync bool, metrics adaptive.Metrics, touchedValueLogSegments []uint32, forceValueLogRefresh bool, vlogRefDelta *valueLogRefDelta) (finalizeCommitPost, error) {
+func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired []uint64, sync bool, metrics adaptive.Metrics, touchedValueLogSegments []uint32, forceValueLogRefresh bool, vlogRefDelta *valueLogRefDelta, vlogLocatorDelta *valueLogLocatorDelta) (finalizeCommitPost, error) {
 	post := finalizeCommitPost{
 		metrics: metrics,
 	}
@@ -1662,6 +1663,7 @@ func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired [
 	db.publishSnapshotView(idx, newState, db.valueLogManager)
 	post.commitSeq = nextMeta.CommitSeq
 	post.vlogRefDelta = vlogRefDelta
+	post.vlogLocatorDelta = vlogLocatorDelta
 	db.mu.Unlock()
 	watermarkHold += time.Since(holdStart)
 	db.observePublishWatermark(watermarkWait, watermarkHold, watermarkWait+watermarkHold)
@@ -1694,6 +1696,18 @@ func (db *DB) finalizeCommitPostWork(post finalizeCommitPost) {
 			}
 		} else {
 			db.valueLogRefTracker.invalidate()
+		}
+	}
+	if db.valueLogLocatorCatalog != nil && valueLogLocatorCatalogEnabled() {
+		if post.vlogLocatorDelta != nil {
+			if err := db.valueLogLocatorCatalog.applyDelta(post.commitSeq, post.vlogLocatorDelta); err != nil {
+				db.valueLogLocatorCatalog.invalidate()
+				db.reportError(err)
+			} else {
+				db.persistValueLogLocatorCatalogBestEffort()
+			}
+		} else {
+			db.valueLogLocatorCatalog.invalidate()
 		}
 	}
 
@@ -1730,8 +1744,8 @@ func (db *DB) finalizeCommitPostWork(post finalizeCommitPost) {
 }
 
 // finalizeCommit handles durability and state updates.
-func (db *DB) finalizeCommit(newRootID uint64, sysRootID uint64, retired []uint64, sync bool, metrics adaptive.Metrics, touchedValueLogSegments []uint32, forceValueLogRefresh bool, vlogRefDelta *valueLogRefDelta) error {
-	post, err := db.finalizeCommitLocked(newRootID, sysRootID, retired, sync, metrics, touchedValueLogSegments, forceValueLogRefresh, vlogRefDelta)
+func (db *DB) finalizeCommit(newRootID uint64, sysRootID uint64, retired []uint64, sync bool, metrics adaptive.Metrics, touchedValueLogSegments []uint32, forceValueLogRefresh bool, vlogRefDelta *valueLogRefDelta, vlogLocatorDelta *valueLogLocatorDelta) error {
+	post, err := db.finalizeCommitLocked(newRootID, sysRootID, retired, sync, metrics, touchedValueLogSegments, forceValueLogRefresh, vlogRefDelta, vlogLocatorDelta)
 	if err != nil {
 		return err
 	}
@@ -1763,7 +1777,7 @@ func (db *DB) Commit(newRootID uint64) error {
 	sysRoot := db.meta.SystemRootPageID
 	db.mu.RUnlock()
 
-	return db.finalizeCommit(newRootID, sysRoot, nil, true, adaptive.Metrics{}, nil, true, nil)
+	return db.finalizeCommit(newRootID, sysRoot, nil, true, adaptive.Metrics{}, nil, true, nil, nil)
 }
 
 // Prune reclaims pages from the graveyard.
@@ -2034,7 +2048,7 @@ func (db *DB) CompactIndex() error {
 	db.mu.Unlock()
 
 	// Commit new root and retire the old tree pages.
-	return db.finalizeCommit(newRoot, sysRoot, retired, true, adaptive.Metrics{}, nil, true, nil)
+	return db.finalizeCommit(newRoot, sysRoot, retired, true, adaptive.Metrics{}, nil, true, nil, nil)
 }
 
 type pagerAllocator struct {
