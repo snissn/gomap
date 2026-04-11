@@ -3024,6 +3024,12 @@ func TestValueLogRewriteOnline_LeafRefsReserveRIDs_DoesNotRefreshManager(t *test
 	if stats.LeafRefRecordsCopied == 0 {
 		t.Fatalf("expected leafref rewrite to copy records")
 	}
+	if stats.LeafRefTreeNodesVisited == 0 || stats.LeafRefInternalNodesVisited == 0 {
+		t.Fatalf("expected leafref rewrite traversal stats, stats=%+v", stats)
+	}
+	if stats.LeafRefRefsVisited == 0 || stats.LeafRefRefsSelected == 0 {
+		t.Fatalf("expected leafref rewrite to report visited and selected refs, stats=%+v", stats)
+	}
 	if delta := db.valueLogManager.RefreshScanCount() - refreshBefore; delta != 0 {
 		t.Fatalf("expected reserve leafref rewrite to avoid manager refresh scans, got %d", delta)
 	}

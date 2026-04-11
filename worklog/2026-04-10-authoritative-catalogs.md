@@ -164,3 +164,36 @@
 
 - `GOWORK=off go test ./TreeDB/caching -run 'Test(VlogGenerationRewriteQueue_KeepsStillReferencedSegmentQueuedWhenBounded|VlogGenerationRewriteQueue_DebtDrainSelectsMultipleSegmentsAndBoundsExecution|VlogGenerationRewritePlan_FiltersPenalizedSegments|VlogGenerationRewritePlan_ReadmitsPenalizedSegmentWhenStaleBytesImprove)$' -count=1`
 - `GOWORK=off go test ./TreeDB/zipper ./TreeDB/db ./TreeDB/caching -count=1`
+
+### Second-Sprint Slice 4
+
+- status:
+  - complete locally on top of `ad3d58e2`
+- goal:
+  - expose the remaining common-path execution cost in online rewrite after the locator catalog and debt ledger cutovers
+
+#### Landed locally
+
+- extended `TreeDB/db/vlog_rewrite.go` rewrite stats with leafref traversal counters:
+  - `LeafRefTreeNodesVisited`
+  - `LeafRefInternalNodesVisited`
+  - `LeafRefPagerLeafNodesVisited`
+  - `LeafRefRefsVisited`
+  - `LeafRefRefsSelected`
+  - `LeafRefRefsSkipped`
+- threaded a dedicated traversal stats struct through `rewriteLeafRefsOnline`
+  - direct pointer-candidate rewrite already reports `CandidateScanMode=locator_catalog` for selected-source execution
+  - leafref rewrite still recursively walks the pager tree and now returns the amount of traversal paid to find eligible leafrefs
+- tightened existing leafref rewrite tests so this observability is part of the normal regression surface
+
+#### Validation
+
+- `GOWORK=off go test ./TreeDB/db -run 'Test(ValueLogLocatorCatalog_TracksLeafRefRewriteCommits|ValueLogDebtLedger_TracksLeafRefRewriteCommits|ValueLogRewriteOnline_LeafRefsReserveRIDs_DoesNotRefreshManager|ValueLogRewriteOnline_MaxCopiedBytes_DoesNotRunLeafRefRewriteWhenBudgetExhausted)$' -count=1`
+- `GOWORK=off go test ./TreeDB/db -count=1`
+
+#### Remaining gap after this slice
+
+- selected-source direct value-pointer rewrite is already locator-driven
+- the remaining execution rediscovery gap is now explicit and measurable:
+  - leafref rewrite still traverses the tree recursively to rediscover eligible outer-leaf pages
+  - a true next structural slice requires a stronger leafref locator form, not just more point optimizations inside the current walk
