@@ -147,3 +147,20 @@
 - the next structural gap is executor/cleanup quality, not ledger survival:
   - reduce remaining rediscovery around locators and cleanup/GC eligibility
   - move more of the common reclaim lifecycle onto the same maintained catalog truth
+
+### Validation Follow-up
+
+- status:
+  - complete locally on top of `46b4a6e1`
+- trigger:
+  - the broad touched-package sweep (`./TreeDB/zipper ./TreeDB/db ./TreeDB/caching`) exposed four caching scheduler failures after the selected-source accounting and durable debt-ledger slices
+
+#### Landed locally
+
+- fixed the scheduler test backend so synthesized `DrainedSourceFileIDs` matches real backend semantics when some requested source IDs remain referenced
+- kept chunk-plan penalty filtering behavior aligned with segment-plan penalty filtering in tests by refilling budget tokens before the second pass where the assertion is about penalty behavior, not budget starvation
+
+#### Validation
+
+- `GOWORK=off go test ./TreeDB/caching -run 'Test(VlogGenerationRewriteQueue_KeepsStillReferencedSegmentQueuedWhenBounded|VlogGenerationRewriteQueue_DebtDrainSelectsMultipleSegmentsAndBoundsExecution|VlogGenerationRewritePlan_FiltersPenalizedSegments|VlogGenerationRewritePlan_ReadmitsPenalizedSegmentWhenStaleBytesImprove)$' -count=1`
+- `GOWORK=off go test ./TreeDB/zipper ./TreeDB/db ./TreeDB/caching -count=1`

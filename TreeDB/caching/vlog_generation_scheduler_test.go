@@ -1621,11 +1621,27 @@ func (b *rewriteBudgetRecordingBackend) ValueLogRewriteOnline(ctx context.Contex
 	if len(stats.RequestedSourceFileIDs) == 0 && len(opts.SourceFileIDs) > 0 {
 		stats.RequestedSourceFileIDs = append([]uint32(nil), opts.SourceFileIDs...)
 	}
-	if err == nil &&
-		len(stats.DrainedSourceFileIDs) == 0 &&
-		len(opts.SourceFileIDs) > 0 &&
-		(stats.SourceBytesUnreferenced > 0 || stats.BytesAfter == 0 || stats.BytesAfter < stats.BytesBefore) {
-		stats.DrainedSourceFileIDs = append([]uint32(nil), opts.SourceFileIDs...)
+	if err == nil && len(stats.DrainedSourceFileIDs) == 0 && len(opts.SourceFileIDs) > 0 {
+		if len(stats.SourceFileIDsUnreferenced) > 0 || len(stats.SourceFileIDsStillReferenced) > 0 {
+			stillReferenced := make(map[uint32]struct{}, len(stats.SourceFileIDsStillReferenced))
+			for _, id := range stats.SourceFileIDsStillReferenced {
+				if id != 0 {
+					stillReferenced[id] = struct{}{}
+				}
+			}
+			if len(stats.SourceFileIDsUnreferenced) > 0 {
+				stats.DrainedSourceFileIDs = append([]uint32(nil), stats.SourceFileIDsUnreferenced...)
+			} else {
+				for _, id := range opts.SourceFileIDs {
+					if _, ok := stillReferenced[id]; ok {
+						continue
+					}
+					stats.DrainedSourceFileIDs = append(stats.DrainedSourceFileIDs, id)
+				}
+			}
+		} else if stats.SourceBytesUnreferenced > 0 || stats.BytesAfter == 0 || stats.BytesAfter < stats.BytesBefore {
+			stats.DrainedSourceFileIDs = append([]uint32(nil), opts.SourceFileIDs...)
+		}
 	}
 	if len(opts.SourceFileIDs) > 0 {
 		exactPlannedSelection := false
@@ -5605,6 +5621,10 @@ func TestVlogGenerationRewritePlan_FiltersPenalizedSegments(t *testing.T) {
 	recorder.mu.Unlock()
 	db.vlogGenerationLastRewriteUnixNano.Store(0)
 	db.vlogGenerationRewriteIneffectiveLastNS.Store(time.Now().Add(-2 * vlogGenerationRewriteIneffectiveBackoff).UnixNano())
+	// The first rewrite now consumes budget from selected-source live bytes, so
+	// refill tokens here to keep this test focused on penalty filtering rather
+	// than token-bucket starvation.
+	db.vlogGenerationRewriteBudgetTokensBytes.Store(1024)
 	db.vlogGenerationCheckpointKickPending.Store(false)
 	db.vlogGenerationDeferredMaintenancePending.Store(false)
 	db.vlogGenerationRewriteQueuePending.Store(false)
@@ -5696,6 +5716,9 @@ func TestVlogGenerationRewritePlan_ReadmitsPenalizedSegmentWhenStaleBytesImprove
 	forceVlogMaintenanceIdle(db)
 	db.vlogGenerationLastRewriteUnixNano.Store(0)
 	db.vlogGenerationRewriteIneffectiveLastNS.Store(time.Now().Add(-2 * vlogGenerationRewriteIneffectiveBackoff).UnixNano())
+	// Keep the second pass focused on stale-byte readmission. The first run now
+	// legitimately drains budget based on selected-source live bytes.
+	db.vlogGenerationRewriteBudgetTokensBytes.Store(1024)
 	db.maybeRunVlogGenerationMaintenance(false)
 
 	if _, calls := recorder.recordedPlan(); calls != 2 {
