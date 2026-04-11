@@ -187,6 +187,11 @@ func (b *Batch) writeOptimistic(sync bool) (bool, error) {
 
 	tracker := newAllocTracker(idx.allocator)
 	z := idx.zipper.CloneWithAllocator(tracker)
+	var outerLeafChanges *valueLogOuterLeafChangeCollector
+	if b.db.valueLogDebtLedger != nil && valueLogDebtLedgerEnabled() && b.db.valueLogDebtLedger.canTrack(baseSeq) {
+		outerLeafChanges = &valueLogOuterLeafChangeCollector{}
+		z.SetOuterLeafRecordObserver(outerLeafChanges.Observe)
+	}
 	newRoot, retired, metrics, err := z.Apply(rootID, b.batch)
 	if err != nil {
 		freeErr := tracker.FreeAll()
@@ -198,6 +203,15 @@ func (b *Batch) writeOptimistic(sync bool) (bool, error) {
 	}
 	entries := b.batch.SortedEntries()
 	vlogRefDelta, err := b.db.buildValueLogRefDelta(idx.pager, rootID, baseSeq, entries)
+	if err != nil {
+		freeErr := tracker.FreeAll()
+		b.db.writeMu.RUnlock()
+		if freeErr != nil {
+			return false, freeErr
+		}
+		return false, err
+	}
+	vlogDebtDelta, err := b.db.buildValueLogDebtDelta(idx.pager, rootID, baseSeq, entries, outerLeafChanges)
 	if err != nil {
 		freeErr := tracker.FreeAll()
 		b.db.writeMu.RUnlock()
@@ -238,7 +252,7 @@ func (b *Batch) writeOptimistic(sync bool) (bool, error) {
 		return false, nil
 	}
 
-	post, err := b.db.finalizeCommitLocked(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, vlogLocatorDelta)
+	post, err := b.db.finalizeCommitLocked(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, vlogDebtDelta, vlogLocatorDelta)
 	b.db.commitMu.Unlock()
 	if err != nil {
 		b.db.writeMu.RUnlock()
@@ -272,12 +286,22 @@ func (b *Batch) writeSerialized(sync bool) error {
 
 	defer idx.registry.Unregister(regID)
 
+	var outerLeafChanges *valueLogOuterLeafChangeCollector
+	if b.db.valueLogDebtLedger != nil && valueLogDebtLedgerEnabled() && b.db.valueLogDebtLedger.canTrack(baseSeq) {
+		outerLeafChanges = &valueLogOuterLeafChangeCollector{}
+		idx.zipper.SetOuterLeafRecordObserver(outerLeafChanges.Observe)
+		defer idx.zipper.SetOuterLeafRecordObserver(nil)
+	}
 	newRoot, retired, metrics, err := idx.zipper.Apply(rootID, b.batch)
 	if err != nil {
 		return err
 	}
 	entries := b.batch.SortedEntries()
 	vlogRefDelta, err := b.db.buildValueLogRefDelta(idx.pager, rootID, baseSeq, entries)
+	if err != nil {
+		return err
+	}
+	vlogDebtDelta, err := b.db.buildValueLogDebtDelta(idx.pager, rootID, baseSeq, entries, outerLeafChanges)
 	if err != nil {
 		return err
 	}
@@ -303,7 +327,7 @@ func (b *Batch) writeSerialized(sync bool) error {
 	sysRoot := b.db.meta.SystemRootPageID
 	b.db.mu.Unlock()
 
-	if err := b.db.finalizeCommit(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, vlogLocatorDelta); err != nil {
+	if err := b.db.finalizeCommit(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, vlogDebtDelta, vlogLocatorDelta); err != nil {
 		return err
 	}
 	vlogRefDelta = nil

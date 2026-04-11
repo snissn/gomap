@@ -263,3 +263,32 @@ func TestValueLogLocatorCatalog_TracksRewriteSwapCommits(t *testing.T) {
 		t.Fatalf("new segment keys=%q want [k1]", newKeys)
 	}
 }
+
+func TestValueLogLocatorCatalog_TracksLeafRefRewriteCommits(t *testing.T) {
+	t.Setenv(envEnableVlogLocatorCatalog, "1")
+	db, sourceIDs, cleanup := setupLeafRefRewriteBench(t, 768)
+	defer cleanup()
+
+	if err := db.rebuildValueLogLocatorCatalog(context.Background()); err != nil {
+		t.Fatalf("rebuild locator catalog: %v", err)
+	}
+	if !db.valueLogLocatorCatalog.canTrack(db.currentCommitSeq()) {
+		t.Fatalf("expected locator catalog to become trackable before leafref rewrite")
+	}
+
+	stats, err := db.ValueLogRewriteOnline(context.Background(), ValueLogRewriteOnlineOptions{
+		SourceFileIDs:     sourceIDs,
+		MaxSourceSegments: len(sourceIDs),
+		BatchSize:         64,
+		SyncEachBatch:     true,
+	})
+	if err != nil {
+		t.Fatalf("ValueLogRewriteOnline: %v", err)
+	}
+	if stats.LeafRefRecordsCopied == 0 {
+		t.Fatalf("expected leafref rewrite to copy leaf pages, stats=%+v", stats)
+	}
+	if !db.valueLogLocatorCatalog.canTrack(db.currentCommitSeq()) {
+		t.Fatalf("expected locator catalog to stay trackable after leafref rewrite")
+	}
+}

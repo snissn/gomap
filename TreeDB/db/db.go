@@ -1497,6 +1497,7 @@ type finalizeCommitPost struct {
 	oldState         *DBState
 	metrics          adaptive.Metrics
 	vlogRefDelta     *valueLogRefDelta
+	vlogDebtDelta    *valueLogDebtDelta
 	vlogLocatorDelta *valueLogLocatorDelta
 	commitSeq        uint64
 	kickPrune        bool
@@ -1512,7 +1513,7 @@ type finalizeCommitPost struct {
 // finalizeCommitLocked performs the durability-critical publish path.
 // Callers that already hold commit serialization may run post work after
 // releasing the serialization lock.
-func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired []uint64, sync bool, metrics adaptive.Metrics, touchedValueLogSegments []uint32, forceValueLogRefresh bool, vlogRefDelta *valueLogRefDelta, vlogLocatorDelta *valueLogLocatorDelta) (finalizeCommitPost, error) {
+func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired []uint64, sync bool, metrics adaptive.Metrics, touchedValueLogSegments []uint32, forceValueLogRefresh bool, vlogRefDelta *valueLogRefDelta, vlogDebtDelta *valueLogDebtDelta, vlogLocatorDelta *valueLogLocatorDelta) (finalizeCommitPost, error) {
 	post := finalizeCommitPost{
 		metrics: metrics,
 	}
@@ -1663,6 +1664,7 @@ func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired [
 	db.publishSnapshotView(idx, newState, db.valueLogManager)
 	post.commitSeq = nextMeta.CommitSeq
 	post.vlogRefDelta = vlogRefDelta
+	post.vlogDebtDelta = vlogDebtDelta
 	post.vlogLocatorDelta = vlogLocatorDelta
 	db.mu.Unlock()
 	watermarkHold += time.Since(holdStart)
@@ -1696,6 +1698,20 @@ func (db *DB) finalizeCommitPostWork(post finalizeCommitPost) {
 			}
 		} else {
 			db.valueLogRefTracker.invalidate()
+		}
+	}
+	if db.valueLogDebtLedger != nil && valueLogDebtLedgerEnabled() {
+		if post.vlogDebtDelta != nil {
+			totals, err := db.currentValueLogSegmentTotals(post.vlogDebtDelta.fileIDs())
+			if err != nil {
+				db.valueLogDebtLedger.invalidate()
+				db.reportError(err)
+			} else if err := db.valueLogDebtLedger.applyDelta(post.commitSeq, post.vlogDebtDelta, totals); err != nil {
+				db.valueLogDebtLedger.invalidate()
+				db.reportError(err)
+			}
+		} else {
+			db.valueLogDebtLedger.invalidate()
 		}
 	}
 	if db.valueLogLocatorCatalog != nil && valueLogLocatorCatalogEnabled() {
@@ -1744,8 +1760,8 @@ func (db *DB) finalizeCommitPostWork(post finalizeCommitPost) {
 }
 
 // finalizeCommit handles durability and state updates.
-func (db *DB) finalizeCommit(newRootID uint64, sysRootID uint64, retired []uint64, sync bool, metrics adaptive.Metrics, touchedValueLogSegments []uint32, forceValueLogRefresh bool, vlogRefDelta *valueLogRefDelta, vlogLocatorDelta *valueLogLocatorDelta) error {
-	post, err := db.finalizeCommitLocked(newRootID, sysRootID, retired, sync, metrics, touchedValueLogSegments, forceValueLogRefresh, vlogRefDelta, vlogLocatorDelta)
+func (db *DB) finalizeCommit(newRootID uint64, sysRootID uint64, retired []uint64, sync bool, metrics adaptive.Metrics, touchedValueLogSegments []uint32, forceValueLogRefresh bool, vlogRefDelta *valueLogRefDelta, vlogDebtDelta *valueLogDebtDelta, vlogLocatorDelta *valueLogLocatorDelta) error {
+	post, err := db.finalizeCommitLocked(newRootID, sysRootID, retired, sync, metrics, touchedValueLogSegments, forceValueLogRefresh, vlogRefDelta, vlogDebtDelta, vlogLocatorDelta)
 	if err != nil {
 		return err
 	}
@@ -1777,7 +1793,7 @@ func (db *DB) Commit(newRootID uint64) error {
 	sysRoot := db.meta.SystemRootPageID
 	db.mu.RUnlock()
 
-	return db.finalizeCommit(newRootID, sysRoot, nil, true, adaptive.Metrics{}, nil, true, nil, nil)
+	return db.finalizeCommit(newRootID, sysRoot, nil, true, adaptive.Metrics{}, nil, true, nil, nil, nil)
 }
 
 // Prune reclaims pages from the graveyard.
@@ -2048,7 +2064,7 @@ func (db *DB) CompactIndex() error {
 	db.mu.Unlock()
 
 	// Commit new root and retire the old tree pages.
-	return db.finalizeCommit(newRoot, sysRoot, retired, true, adaptive.Metrics{}, nil, true, nil, nil)
+	return db.finalizeCommit(newRoot, sysRoot, retired, true, adaptive.Metrics{}, nil, true, nil, nil, nil)
 }
 
 type pagerAllocator struct {

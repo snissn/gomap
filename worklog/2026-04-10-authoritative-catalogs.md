@@ -84,3 +84,41 @@
   - make the locator catalog commit-path maintained for normal writes and rewrite swap commits
 - follow-on required for true end state:
   - replace count-only ref deltas with physical-record debt deltas that cover grouped values and outer-leaf value-log records
+
+### Second-Sprint Slice 2
+
+- status:
+  - complete locally on top of `8b6972ae`
+- goal:
+  - make the debt ledger commit-path authoritative for the same write shapes that still left live minute-15 size above the offline rewrite floor
+
+#### Landed locally
+
+- added a physical-record debt delta path in `TreeDB/db/vlog_debt_ledger.go`
+  - tracks `(file_id, record_start)` refcounts with exact record lengths
+  - rebuilds the transient record catalog from the live tree and leafref-backed outer leaves
+  - updates segment live/stale bytes from commit deltas instead of forcing planner-time rediscovery
+- wired commit publication to apply debt deltas in `TreeDB/db/db.go`
+  - normal batch commits now build and publish `vlogDebtDelta`
+  - rewrite swap commits now build and publish `vlogDebtDelta`
+  - leafref rewrite commits now publish debt deltas instead of invalidating the ledger
+- added outer-leaf observation support in `TreeDB/zipper/zipper.go`
+  - leaf page persistence now exposes the new value-log pointer
+  - merge/copy/rebalance paths report old/new outer-leaf record pointers so commit deltas can stay exact
+- kept locator-catalog authority intact for the same leafref rewrite path
+  - leafref rewrite commits now send an explicit empty locator delta instead of forcing invalidation
+- adjusted planner expectation tests
+  - with commit-path-authoritative debt tracking, `ValueLogRewritePlan` no longer needs a fallback live-byte estimate on first plan after reopen
+
+#### Validation
+
+- `GOWORK=off go test ./TreeDB/zipper ./TreeDB/db -run 'Test(ValueLogDebtLedger_(RebuildAndLoad|TracksCommitDeltaAcrossPointerWrites|TracksOuterLeafCommitDeltaAcrossWrites|TracksLeafRefRewriteCommits)|ValueLogOuterLeafChangeCollector_CapturesLeafSplit|ValueLogLocatorCatalog_TracksLeafRefRewriteCommits|ZipperLeafRefCacheAvoidsUnflushedReads|MergeLeaf_SplitKeysDoNotAliasBatchKeys)$' -count=1`
+- `GOWORK=off go test ./TreeDB/db -run 'Test(ValueLogLocatorCatalog_RebuildAndLoad|ValueLogRewriteOnline_SourceFileIDs_UsesLocatorCatalogWhenEnabled|ValueLogLocatorCatalog_AppliesCommitDeltaAcrossWrites|ValueLogLocatorCatalog_TracksRewriteSwapCommits|ValueLogRewriteOnline_SourceFileIDs_RestrictsRewriteSet|ValueLogDebtLedger_RebuildAndLoad|ReferencedValueLogSegments_UsesPersistedDebtLedgerAcrossReopen|ValueLogRewritePlan_UsesPersistedDebtLedgerAcrossReopen|ValueLogRewritePlan_ShadowCompareRepairsDebtLedgerMismatch|ValueLogDebtLedger_TracksCommitDeltaAcrossPointerWrites|ValueLogDebtLedger_TracksOuterLeafCommitDeltaAcrossWrites|ValueLogDebtLedger_TracksLeafRefRewriteCommits|ValueLogOuterLeafChangeCollector_CapturesLeafSplit|ValueLogLocatorCatalog_TracksLeafRefRewriteCommits)' -count=1`
+- `GOWORK=off go test ./TreeDB/caching -run 'Test(VlogGenerationRewrite_|Checkpoint_KicksVlogGenerationRewriteDespiteRecentForegroundActivity)' -count=1`
+
+#### Remaining gap after this slice
+
+- the debt ledger is now authoritative in-memory once rebuilt and then maintained on the commit path for the covered shapes
+- the remaining world-class gap is durability of the richer catalogs themselves:
+  - persist enough authoritative record/locator state to avoid rebuild hydration on reopen
+  - converge cleanup and GC fully onto the same catalog truth
