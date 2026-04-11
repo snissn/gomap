@@ -334,6 +334,14 @@ func TestValueLogDebtLedger_TracksOuterLeafCommitDeltaAcrossWrites(t *testing.T)
 	stateBefore := db.State()
 	collectLeafRefFileCountsBench(t, db.Pager(), stateBefore.RootPageID, beforeLeafCounts)
 	collectLeafRefFileCountsBench(t, db.Pager(), stateBefore.SystemRootPageID, beforeLeafCounts)
+	db.valueLogDebtLedger.mu.RLock()
+	for fileID := range beforeLeafCounts {
+		if db.valueLogDebtLedger.segments[fileID].OuterLeafLiveBytes == 0 {
+			db.valueLogDebtLedger.mu.RUnlock()
+			t.Fatalf("expected tracked outer-leaf live bytes for file %d after rebuild", fileID)
+		}
+	}
+	db.valueLogDebtLedger.mu.RUnlock()
 
 	b = db.NewBatch().(*Batch)
 	for i := 0; i < 64; i++ {
@@ -374,6 +382,17 @@ func TestValueLogDebtLedger_TracksOuterLeafCommitDeltaAcrossWrites(t *testing.T)
 		}
 		t.Fatalf("debt ledger live bytes mismatch after outer-leaf delta: ledger=%+v scan=%+v before_leaf_counts=%+v after_leaf_counts=%+v ledger_record_counts=%+v", ledgerLive, scanLive, beforeLeafCounts, afterLeafCounts, ledgerRecordCounts)
 	}
+	db.valueLogDebtLedger.mu.RLock()
+	for fileID, n := range beforeLeafCounts {
+		if n == 0 {
+			continue
+		}
+		if db.valueLogDebtLedger.segments[fileID].OuterLeafLiveBytes == 0 {
+			db.valueLogDebtLedger.mu.RUnlock()
+			t.Fatalf("expected tracked outer-leaf live bytes for file %d after delta commit", fileID)
+		}
+	}
+	db.valueLogDebtLedger.mu.RUnlock()
 }
 
 func TestValueLogDebtLedger_TracksLeafRefRewriteCommits(t *testing.T) {

@@ -2756,6 +2756,124 @@ func TestValueLogRewriteOnline_MaxCopiedBytes_DoesNotRunLeafRefRewriteWhenBudget
 	}
 }
 
+func setupValuePointerRewriteWithLeafRefsBench(tb testing.TB, seg1Records, seg2Records int) (*DB, []uint32, func()) {
+	tb.Helper()
+	dir, err := os.MkdirTemp("", "treedb-vlog-rewrite-value-leaf-bench-*")
+	if err != nil {
+		tb.Fatalf("MkdirTemp: %v", err)
+	}
+
+	db, err := Open(Options{
+		Dir:                        dir,
+		Durability:                 DurabilityWALOffRelaxed,
+		DisableBackgroundPrune:     true,
+		IndexOuterLeavesInValueLog: true,
+		LeafPrefixCompression:      true,
+		IndexColumnarLeaves:        true,
+		IndexPackedValuePtr:        true,
+		ValueLog: ValueLogOptions{
+			ForcePointers: true,
+		},
+	})
+	if err != nil {
+		_ = os.RemoveAll(dir)
+		tb.Fatalf("Open: %v", err)
+	}
+
+	leafLog := &registeredLeafPageLog{db: db, dir: dir}
+	db.SetLeafPageLog(leafLog)
+	db.idx.Load().zipper.SetLeafPageReader(db.valueLogManager)
+
+	ptrs1 := appendPointersInNewSegmentBench(tb, dir, 253, 1, 1_000_000, seg1Records, func(i int) []byte {
+		return bytes.Repeat([]byte{byte(i % 251)}, 768)
+	})
+	ptrs2 := appendPointersInNewSegmentBench(tb, dir, 254, 1, 2_000_000, seg2Records, func(i int) []byte {
+		return bytes.Repeat([]byte{byte((i + 7) % 251)}, 768)
+	})
+
+	bt, ok := db.NewBatch().(*Batch)
+	if !ok {
+		_ = db.Close()
+		_ = os.RemoveAll(dir)
+		tb.Fatalf("NewBatch type assertion failed")
+	}
+	for i := range ptrs1 {
+		if i%4 != 0 {
+			continue
+		}
+		if err := bt.SetPointer([]byte(fmt.Sprintf("s1-live-%06d", i)), ptrs1[i]); err != nil {
+			_ = bt.Close()
+			_ = db.Close()
+			_ = os.RemoveAll(dir)
+			tb.Fatalf("SetPointer(s1): %v", err)
+		}
+	}
+	for i := range ptrs2 {
+		if err := bt.SetPointer([]byte(fmt.Sprintf("s2-live-%06d", i)), ptrs2[i]); err != nil {
+			_ = bt.Close()
+			_ = db.Close()
+			_ = os.RemoveAll(dir)
+			tb.Fatalf("SetPointer(s2): %v", err)
+		}
+	}
+	if err := bt.Write(); err != nil {
+		_ = bt.Close()
+		_ = db.Close()
+		_ = os.RemoveAll(dir)
+		tb.Fatalf("seed Write: %v", err)
+	}
+	_ = bt.Close()
+
+	if err := db.RefreshValueLogSet(); err != nil {
+		_ = db.Close()
+		_ = os.RemoveAll(dir)
+		tb.Fatalf("RefreshValueLogSet: %v", err)
+	}
+
+	sourceIDs := []uint32{ptrs1[0].FileID}
+	cleanup := func() {
+		_ = db.Close()
+		_ = os.RemoveAll(dir)
+	}
+	return db, sourceIDs, cleanup
+}
+
+func TestValueLogRewriteOnline_SkipsLeafRefTraversalWhenSelectedSourcesHaveNoOuterLeaves(t *testing.T) {
+	t.Setenv(envEnableVlogDebtLedger, "1")
+	db, sourceIDs, cleanup := setupValuePointerRewriteWithLeafRefsBench(t, 512, 256)
+	defer cleanup()
+
+	if err := db.rebuildValueLogDebtLedger(context.Background()); err != nil {
+		t.Fatalf("rebuild debt ledger: %v", err)
+	}
+	if !db.valueLogDebtLedger.canTrack(db.currentCommitSeq()) {
+		t.Fatalf("expected debt ledger to become trackable")
+	}
+	hasOuterLeafLiveBytes, ok := db.valueLogDebtLedger.hasOuterLeafLiveBytes(db.currentCommitSeq(), sourceIDs)
+	if !ok {
+		t.Fatalf("expected outer-leaf live-byte query to be trackable")
+	}
+	if hasOuterLeafLiveBytes {
+		t.Fatalf("expected selected value-pointer source to have no tracked outer-leaf live bytes")
+	}
+
+	stats, err := db.ValueLogRewriteOnline(context.Background(), ValueLogRewriteOnlineOptions{
+		SourceFileIDs:     sourceIDs,
+		MaxSourceSegments: len(sourceIDs),
+		BatchSize:         64,
+		SyncEachBatch:     true,
+	})
+	if err != nil {
+		t.Fatalf("ValueLogRewriteOnline: %v", err)
+	}
+	if stats.ValueRecordsCopied == 0 {
+		t.Fatalf("expected value-pointer rewrite to copy records, stats=%+v", stats)
+	}
+	if stats.LeafRefRecordsCopied != 0 || stats.LeafRefTreeNodesVisited != 0 || stats.LeafRefRefsVisited != 0 {
+		t.Fatalf("expected leafref traversal to be skipped for non-leaf sources, stats=%+v", stats)
+	}
+}
+
 func TestValueLogRewriteOnline_ReserveRIDsUsesExternalAllocator(t *testing.T) {
 	dir := t.TempDir()
 

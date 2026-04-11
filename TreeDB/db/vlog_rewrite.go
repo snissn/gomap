@@ -1936,7 +1936,13 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 					leafRefMaxCopiedBytes = 0
 				}
 			}
-			if maxCopiedBytes <= 0 || leafRefMaxCopiedBytes > 0 {
+			shouldRewriteLeafRefs := true
+			if len(stats.RequestedSourceFileIDs) > 0 && db.valueLogDebtLedger != nil && valueLogDebtLedgerEnabled() {
+				if hasOuterLeafLiveBytes, ok := db.valueLogDebtLedger.hasOuterLeafLiveBytes(db.currentCommitSeq(), stats.RequestedSourceFileIDs); ok && !hasOuterLeafLiveBytes {
+					shouldRewriteLeafRefs = false
+				}
+			}
+			if shouldRewriteLeafRefs && (maxCopiedBytes <= 0 || leafRefMaxCopiedBytes > 0) {
 				leafRefStart := time.Now()
 				copied, copiedBytes, leafRefTraversal, err := db.rewriteLeafRefsOnline(ctx, writer, ridAlloc, sourceIDs, sourceChunkSet, sourceChunkBytes, singleSourceID, restrictSingleID, leafRefMaxCopiedBytes, opts.SyncEachBatch)
 				stats.LeafRefNanos += time.Since(leafRefStart).Nanoseconds()

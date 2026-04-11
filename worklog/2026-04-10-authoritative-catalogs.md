@@ -197,3 +197,38 @@
 - the remaining execution rediscovery gap is now explicit and measurable:
   - leafref rewrite still traverses the tree recursively to rediscover eligible outer-leaf pages
   - a true next structural slice requires a stronger leafref locator form, not just more point optimizations inside the current walk
+
+### Second-Sprint Slice 5
+
+- status:
+  - complete locally on top of `40b061cd`
+- goal:
+  - skip the leafref rewrite walk entirely when the selected source segments have no live outer-leaf pages, using the commit-path-authoritative debt ledger
+
+#### Landed locally
+
+- extended the persisted debt-ledger record catalog to distinguish normal value records from outer-leaf records
+  - bumped `vlog_debt_ledger.meta` version to `2`
+  - tracked `Kind` on physical record refs
+  - added `OuterLeafLiveBytes` to per-segment debt summaries
+- updated debt-ledger rebuild and commit-path delta application to maintain outer-leaf live bytes per segment
+- added a ledger query path that answers whether a selected source set contains any live outer-leaf bytes
+- gated `ValueLogRewriteOnline` so `rewriteLeafRefsOnline` is skipped when the selected source IDs have no tracked outer-leaf bytes
+- added a focused rewrite test that proves:
+  - the selected value-pointer source is tracked as having no outer-leaf live bytes
+  - value-pointer rewrite still runs
+  - leafref traversal counters remain zero because the leafref pass is skipped
+- tightened outer-leaf debt-ledger tests to assert that rebuild/delta tracking preserves non-zero `OuterLeafLiveBytes` for actual leafref segments
+
+#### Validation
+
+- `GOWORK=off go test ./TreeDB/db -run 'Test(ValueLogRewriteOnline_SkipsLeafRefTraversalWhenSelectedSourcesHaveNoOuterLeaves|ValueLogRewriteOnline_LeafRefsReserveRIDs_DoesNotRefreshManager|ValueLogRewriteOnline_MaxCopiedBytes_DoesNotRunLeafRefRewriteWhenBudgetExhausted|ValueLogDebtLedger_TracksOuterLeafCommitDeltaAcrossWrites)$' -count=1`
+- `GOWORK=off go test ./TreeDB/caching -run 'Test(VlogGenerationRewrite_|Checkpoint_KicksVlogGenerationRewriteDespiteRecentForegroundActivity)' -count=1`
+- `GOWORK=off go test ./TreeDB/db -count=1`
+
+#### Remaining gap after this slice
+
+- online rewrite no longer pays a leafref tree walk for selected source segments that only contain direct value-pointer debt
+- the remaining structural gap is narrower and more explicit:
+  - when selected source segments do contain live outer-leaf pages, execution still rediscover those pages by recursively traversing the tree
+  - removing that cost still requires a stronger leafref locator form than the current key-only locator catalog

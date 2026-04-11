@@ -24,15 +24,24 @@ import (
 
 const (
 	valueLogDebtLedgerFileName = "vlog_debt_ledger.meta"
-	valueLogDebtLedgerVersion  = 1
+	valueLogDebtLedgerVersion  = 2
 	envEnableVlogDebtLedger    = "TREEDB_VLOG_DEBT_LEDGER"
 	envEnableVlogShadowCompare = "TREEDB_VLOG_SHADOW_COMPARE"
+)
+
+type valueLogDebtRecordKind uint8
+
+const (
+	valueLogDebtRecordKindUnknown valueLogDebtRecordKind = iota
+	valueLogDebtRecordKindValue
+	valueLogDebtRecordKindOuterLeaf
 )
 
 type valueLogDebtSegmentSummary struct {
 	FileID               uint32 `json:"file_id"`
 	TotalBytes           uint64 `json:"total_bytes"`
 	LiveBytes            uint64 `json:"live_bytes"`
+	OuterLeafLiveBytes   uint64 `json:"outer_leaf_live_bytes,omitempty"`
 	StaleBytes           uint64 `json:"stale_bytes"`
 	LastUpdatedCommitSeq uint64 `json:"last_updated_commit_seq"`
 }
@@ -47,6 +56,7 @@ type valueLogDebtLedgerDisk struct {
 type valueLogDebtRecordDisk struct {
 	FileID    uint32 `json:"file_id"`
 	Start     uint64 `json:"start"`
+	Kind      uint8  `json:"kind,omitempty"`
 	RecordLen uint32 `json:"record_len"`
 	RefCount  uint32 `json:"ref_count"`
 }
@@ -54,6 +64,7 @@ type valueLogDebtRecordDisk struct {
 type valueLogDebtRecordKey struct {
 	FileID uint32
 	Start  uint64
+	Kind   valueLogDebtRecordKind
 }
 
 type valueLogDebtRecordRef struct {
@@ -125,14 +136,17 @@ func valueLogDebtLedgerShadowCompareEnabled() bool {
 	return envDebtLedgerBool(envEnableVlogShadowCompare)
 }
 
-func valueLogDebtRecordKeyForPtr(ptr page.ValuePtr) (valueLogDebtRecordKey, error) {
+func valueLogDebtRecordKeyForPtr(ptr page.ValuePtr, kind valueLogDebtRecordKind) (valueLogDebtRecordKey, error) {
 	if !page.IsValueLogFileID(ptr.FileID) {
 		return valueLogDebtRecordKey{}, fmt.Errorf("treedb: non-vlog pointer for debt key: file=%d", ptr.FileID)
 	}
 	if ptr.Offset < 4 {
 		return valueLogDebtRecordKey{}, fmt.Errorf("treedb: invalid value-log pointer offset %d", ptr.Offset)
 	}
-	return valueLogDebtRecordKey{FileID: ptr.FileID, Start: uint64(ptr.Offset - 4)}, nil
+	if kind == valueLogDebtRecordKindUnknown {
+		kind = valueLogDebtRecordKindValue
+	}
+	return valueLogDebtRecordKey{FileID: ptr.FileID, Start: uint64(ptr.Offset - 4), Kind: kind}, nil
 }
 
 func (d *valueLogDebtDelta) addRecord(key valueLogDebtRecordKey, recordLen uint32, refDelta int32) {
@@ -154,11 +168,11 @@ func (d *valueLogDebtDelta) addRecord(key valueLogDebtRecordKey, recordLen uint3
 	d.changes[key] = change
 }
 
-func (d *valueLogDebtDelta) addPtr(ptr page.ValuePtr, recordLen uint32, refDelta int32) error {
+func (d *valueLogDebtDelta) addPtr(ptr page.ValuePtr, kind valueLogDebtRecordKind, recordLen uint32, refDelta int32) error {
 	if d == nil || refDelta == 0 || !page.IsValueLogFileID(ptr.FileID) {
 		return nil
 	}
-	key, err := valueLogDebtRecordKeyForPtr(ptr)
+	key, err := valueLogDebtRecordKeyForPtr(ptr, kind)
 	if err != nil {
 		return err
 	}
@@ -204,7 +218,7 @@ func (c *valueLogOuterLeafChangeCollector) appendToDebtDelta(db *DB, delta *valu
 		if err != nil {
 			return err
 		}
-		if err := delta.addPtr(ptr, recordLen, -1); err != nil {
+		if err := delta.addPtr(ptr, valueLogDebtRecordKindOuterLeaf, recordLen, -1); err != nil {
 			return err
 		}
 	}
@@ -213,7 +227,7 @@ func (c *valueLogOuterLeafChangeCollector) appendToDebtDelta(db *DB, delta *valu
 		if err != nil {
 			return err
 		}
-		if err := delta.addPtr(ptr, recordLen, 1); err != nil {
+		if err := delta.addPtr(ptr, valueLogDebtRecordKindOuterLeaf, recordLen, 1); err != nil {
 			return err
 		}
 	}
@@ -234,6 +248,9 @@ func (l *valueLogDebtLedger) replace(commitSeq uint64, segments map[uint32]value
 		}
 		if seg.StaleBytes > seg.TotalBytes {
 			seg.StaleBytes = seg.TotalBytes
+		}
+		if seg.OuterLeafLiveBytes > seg.LiveBytes {
+			seg.OuterLeafLiveBytes = seg.LiveBytes
 		}
 		nextSegments[seg.FileID] = seg
 	}
@@ -293,6 +310,23 @@ func (l *valueLogDebtLedger) liveBytesBySegment(commitSeq uint64) (map[uint32]in
 	return out, true
 }
 
+func (l *valueLogDebtLedger) hasOuterLeafLiveBytes(commitSeq uint64, fileIDs []uint32) (bool, bool) {
+	if l == nil {
+		return false, false
+	}
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	if !l.valid || l.commitSeq != commitSeq {
+		return false, false
+	}
+	for _, fileID := range fileIDs {
+		if l.segments[fileID].OuterLeafLiveBytes > 0 {
+			return true, true
+		}
+	}
+	return false, true
+}
+
 func (l *valueLogDebtLedger) dirtySnapshot() (uint64, []valueLogDebtSegmentSummary, []valueLogDebtRecordDisk, bool) {
 	if l == nil {
 		return 0, nil, nil, false
@@ -315,6 +349,7 @@ func (l *valueLogDebtLedger) dirtySnapshot() (uint64, []valueLogDebtSegmentSumma
 		records = append(records, valueLogDebtRecordDisk{
 			FileID:    rec.Key.FileID,
 			Start:     rec.Key.Start,
+			Kind:      uint8(rec.Key.Kind),
 			RecordLen: rec.RecordLen,
 			RefCount:  rec.RefCount,
 		})
@@ -383,11 +418,20 @@ func (l *valueLogDebtLedger) applyDelta(nextCommitSeq uint64, delta *valueLogDeb
 		switch {
 		case curRefCount == 0 && nextRefCount > 0:
 			seg.LiveBytes += uint64(recordLen)
+			if key.Kind == valueLogDebtRecordKindOuterLeaf {
+				seg.OuterLeafLiveBytes += uint64(recordLen)
+			}
 		case curRefCount > 0 && nextRefCount == 0:
 			if uint64(recordLen) > seg.LiveBytes {
 				return fmt.Errorf("treedb: value-log debt live-byte underflow: file=%d have=%d dec=%d", key.FileID, seg.LiveBytes, recordLen)
 			}
 			seg.LiveBytes -= uint64(recordLen)
+			if key.Kind == valueLogDebtRecordKindOuterLeaf {
+				if uint64(recordLen) > seg.OuterLeafLiveBytes {
+					return fmt.Errorf("treedb: value-log debt outer-leaf live-byte underflow: file=%d have=%d dec=%d", key.FileID, seg.OuterLeafLiveBytes, recordLen)
+				}
+				seg.OuterLeafLiveBytes -= uint64(recordLen)
+			}
 		}
 		seg.LastUpdatedCommitSeq = nextCommitSeq
 		l.segments[key.FileID] = seg
@@ -410,6 +454,9 @@ func (l *valueLogDebtLedger) applyDelta(nextCommitSeq uint64, delta *valueLogDeb
 		if seg.LiveBytes > seg.TotalBytes {
 			seg.LiveBytes = seg.TotalBytes
 		}
+		if seg.OuterLeafLiveBytes > seg.LiveBytes {
+			seg.OuterLeafLiveBytes = seg.LiveBytes
+		}
 		seg.StaleBytes = seg.TotalBytes - seg.LiveBytes
 		seg.LastUpdatedCommitSeq = nextCommitSeq
 		l.segments[fileID] = seg
@@ -419,6 +466,9 @@ func (l *valueLogDebtLedger) applyDelta(nextCommitSeq uint64, delta *valueLogDeb
 		seg := l.segments[fileID]
 		if seg.LiveBytes > seg.TotalBytes {
 			seg.LiveBytes = seg.TotalBytes
+		}
+		if seg.OuterLeafLiveBytes > seg.LiveBytes {
+			seg.OuterLeafLiveBytes = seg.LiveBytes
 		}
 		if seg.TotalBytes >= seg.LiveBytes {
 			seg.StaleBytes = seg.TotalBytes - seg.LiveBytes
@@ -493,7 +543,10 @@ func (db *DB) loadValueLogDebtLedger(commitSeq uint64) (bool, error) {
 		if rec.FileID == 0 || rec.RecordLen == 0 || rec.RefCount == 0 {
 			continue
 		}
-		key := valueLogDebtRecordKey{FileID: rec.FileID, Start: rec.Start}
+		key := valueLogDebtRecordKey{FileID: rec.FileID, Start: rec.Start, Kind: valueLogDebtRecordKind(rec.Kind)}
+		if key.Kind == valueLogDebtRecordKindUnknown {
+			key.Kind = valueLogDebtRecordKindValue
+		}
 		records[key] = valueLogDebtRecordRef{
 			Key:       key,
 			RecordLen: rec.RecordLen,
@@ -573,11 +626,11 @@ func (db *DB) storeValueLogDebtLedgerFromLiveBytes(liveByID map[uint32]int64) er
 	return db.persistValueLogDebtLedger()
 }
 
-func observeValueLogDebtRecord(db *DB, ptr page.ValuePtr, records map[valueLogDebtRecordKey]valueLogDebtRecordRef, set *valuelog.Set) error {
+func observeValueLogDebtRecord(db *DB, ptr page.ValuePtr, kind valueLogDebtRecordKind, records map[valueLogDebtRecordKey]valueLogDebtRecordRef, set *valuelog.Set) error {
 	if db == nil || records == nil || !page.IsValueLogFileID(ptr.FileID) {
 		return nil
 	}
-	key, err := valueLogDebtRecordKeyForPtr(ptr)
+	key, err := valueLogDebtRecordKeyForPtr(ptr, kind)
 	if err != nil {
 		return err
 	}
@@ -603,7 +656,7 @@ func (db *DB) collectValueLogRecordRefs(ctx context.Context, it iterator.UnsafeI
 			it.Next()
 			continue
 		}
-		if err := observeValueLogDebtRecord(db, ptr, records, set); err != nil {
+		if err := observeValueLogDebtRecord(db, ptr, valueLogDebtRecordKindValue, records, set); err != nil {
 			return err
 		}
 		it.Next()
@@ -619,7 +672,7 @@ func (db *DB) collectLeafRefValueLogRecordRefs(ctx context.Context, p *pager.Pag
 		return nil
 	}
 	if ptr, ok := page.DecodeLeafRef(rootID); ok {
-		return observeValueLogDebtRecord(db, ptr, records, set)
+		return observeValueLogDebtRecord(db, ptr, valueLogDebtRecordKindOuterLeaf, records, set)
 	}
 	stack := make([]uint64, 0, 128)
 	stack = append(stack, rootID)
@@ -660,7 +713,7 @@ func (db *DB) collectLeafRefValueLogRecordRefs(ctx context.Context, p *pager.Pag
 					return err
 				}
 				if ptr, ok := page.DecodeLeafRef(childID); ok {
-					if err := observeValueLogDebtRecord(db, ptr, records, set); err != nil {
+					if err := observeValueLogDebtRecord(db, ptr, valueLogDebtRecordKindOuterLeaf, records, set); err != nil {
 						return err
 					}
 					continue
@@ -696,12 +749,18 @@ func buildValueLogDebtSegmentsFromRecords(set *valuelog.Set, records map[valueLo
 		seg := segments[rec.Key.FileID]
 		seg.FileID = rec.Key.FileID
 		seg.LiveBytes += uint64(rec.RecordLen)
+		if rec.Key.Kind == valueLogDebtRecordKindOuterLeaf {
+			seg.OuterLeafLiveBytes += uint64(rec.RecordLen)
+		}
 		seg.LastUpdatedCommitSeq = commitSeq
 		segments[rec.Key.FileID] = seg
 	}
 	for fileID, seg := range segments {
 		if seg.LiveBytes > seg.TotalBytes {
 			seg.LiveBytes = seg.TotalBytes
+		}
+		if seg.OuterLeafLiveBytes > seg.LiveBytes {
+			seg.OuterLeafLiveBytes = seg.LiveBytes
 		}
 		if seg.TotalBytes >= seg.LiveBytes {
 			seg.StaleBytes = seg.TotalBytes - seg.LiveBytes
@@ -873,7 +932,7 @@ func (db *DB) buildValueLogDebtDelta(p *pager.Pager, rootID uint64, baseSeq uint
 				if err != nil {
 					return nil, err
 				}
-				if err := delta.addPtr(oldPtr, recordLen, -1); err != nil {
+				if err := delta.addPtr(oldPtr, valueLogDebtRecordKindValue, recordLen, -1); err != nil {
 					return nil, err
 				}
 			}
@@ -882,7 +941,7 @@ func (db *DB) buildValueLogDebtDelta(p *pager.Pager, rootID uint64, baseSeq uint
 				if err != nil {
 					return nil, err
 				}
-				if err := delta.addPtr(entries[i].ValuePtr, recordLen, 1); err != nil {
+				if err := delta.addPtr(entries[i].ValuePtr, valueLogDebtRecordKindValue, recordLen, 1); err != nil {
 					return nil, err
 				}
 			}
