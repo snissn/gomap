@@ -68,6 +68,15 @@ type ValueLogRewriteStats struct {
 	// rewrite path (indexOuterLeavesInValueLog mode).
 	LeafRefRecordsCopied int
 	LeafRefBytesCopied   int64
+	// LeafRef*Visited counters describe the traversal work paid by the leaf-ref
+	// rewrite path while walking the pager tree to find eligible outer-leaf
+	// pages. These are encounter counts, not unique object counts.
+	LeafRefTreeNodesVisited      int
+	LeafRefInternalNodesVisited  int
+	LeafRefPagerLeafNodesVisited int
+	LeafRefRefsVisited           int
+	LeafRefRefsSelected          int
+	LeafRefRefsSkipped           int
 	// SourceSegmentsRequested is the number of source segments selected for this
 	// rewrite run after applying selection filters.
 	SourceSegmentsRequested int
@@ -1929,7 +1938,7 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 			}
 			if maxCopiedBytes <= 0 || leafRefMaxCopiedBytes > 0 {
 				leafRefStart := time.Now()
-				copied, copiedBytes, err := db.rewriteLeafRefsOnline(ctx, writer, ridAlloc, sourceIDs, sourceChunkSet, sourceChunkBytes, singleSourceID, restrictSingleID, leafRefMaxCopiedBytes, opts.SyncEachBatch)
+				copied, copiedBytes, leafRefTraversal, err := db.rewriteLeafRefsOnline(ctx, writer, ridAlloc, sourceIDs, sourceChunkSet, sourceChunkBytes, singleSourceID, restrictSingleID, leafRefMaxCopiedBytes, opts.SyncEachBatch)
 				stats.LeafRefNanos += time.Since(leafRefStart).Nanoseconds()
 				if err != nil {
 					return stats, err
@@ -1937,6 +1946,12 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 				stats.RecordsCopied += copied
 				stats.LeafRefRecordsCopied += copied
 				stats.LeafRefBytesCopied += copiedBytes
+				stats.LeafRefTreeNodesVisited += leafRefTraversal.treeNodesVisited
+				stats.LeafRefInternalNodesVisited += leafRefTraversal.internalNodesVisited
+				stats.LeafRefPagerLeafNodesVisited += leafRefTraversal.pagerLeafNodesVisited
+				stats.LeafRefRefsVisited += leafRefTraversal.refsVisited
+				stats.LeafRefRefsSelected += leafRefTraversal.refsSelected
+				stats.LeafRefRefsSkipped += leafRefTraversal.refsSkipped
 				stats.SourceBytesProcessed += copiedBytes
 			}
 		}
@@ -2164,6 +2179,7 @@ type leafRefRewriteCtx struct {
 	copiedBytes      int64
 	maxCopiedBytes   int64
 	outerLeafChanges *valueLogOuterLeafChangeCollector
+	stats            leafRefRewriteTraversalStats
 
 	readRefreshRetried bool
 }
@@ -2171,6 +2187,15 @@ type leafRefRewriteCtx struct {
 type leafRefRewriteRemap struct {
 	oldID uint64
 	newID uint64
+}
+
+type leafRefRewriteTraversalStats struct {
+	treeNodesVisited      int
+	internalNodesVisited  int
+	pagerLeafNodesVisited int
+	refsVisited           int
+	refsSelected          int
+	refsSkipped           int
 }
 
 func (c *leafRefRewriteCtx) readLeafPage(ptr page.ValuePtr) ([]byte, error) {
@@ -2302,15 +2327,19 @@ func (c *leafRefRewriteCtx) rewriteNode(id uint64) (uint64, bool, error) {
 	}
 
 	if ptr, ok := page.DecodeLeafRef(id); ok {
+		c.stats.refsVisited++
 		if mapped, ok := c.lookupLeafRemap(id); ok {
+			c.stats.refsSelected++
 			return mapped, mapped != id, nil
 		}
 		if c.hasSingleID {
 			if ptr.FileID != c.singleSourceID {
+				c.stats.refsSkipped++
 				return id, false, nil
 			}
 		} else if c.sourceIDs != nil {
 			if _, ok := c.sourceIDs[ptr.FileID]; !ok {
+				c.stats.refsSkipped++
 				return id, false, nil
 			}
 		}
@@ -2320,9 +2349,11 @@ func (c *leafRefRewriteCtx) rewriteNode(id uint64) (uint64, bool, error) {
 				return id, false, err
 			}
 			if !ok {
+				c.stats.refsSkipped++
 				return id, false, nil
 			}
 		}
+		c.stats.refsSelected++
 		if c.leafReader == nil {
 			return id, false, fmt.Errorf("vlog-rewrite: value-log snapshot reader unavailable")
 		}
@@ -2377,8 +2408,10 @@ func (c *leafRefRewriteCtx) rewriteNode(id uint64) (uint64, bool, error) {
 			c.pager.MarkVerified(id)
 		}
 	}
+	c.stats.treeNodesVisited++
 	switch n.Type() {
 	case page.PageTypeInternal:
+		c.stats.internalNodesVisited++
 		count := n.Count()
 		if count == 0 {
 			return id, false, nil
@@ -2452,6 +2485,7 @@ func (c *leafRefRewriteCtx) rewriteNode(id uint64) (uint64, bool, error) {
 		return newID, true, nil
 
 	case page.PageTypeLeaf:
+		c.stats.pagerLeafNodesVisited++
 		// Pager-backed leaf pages are not expected in outer-leaves-in-vlog mode.
 		// Keep them intact.
 		return id, false, nil
@@ -2461,32 +2495,32 @@ func (c *leafRefRewriteCtx) rewriteNode(id uint64) (uint64, bool, error) {
 	}
 }
 
-func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, ridAlloc *rewriteRIDAllocator, sourceIDs map[uint32]struct{}, sourceChunks map[valueLogChunkKey]ValueLogRewritePlanChunk, sourceChunkBytes int64, singleSourceID uint32, hasSingleSourceID bool, maxCopiedBytes int64, sync bool) (copied int, copiedBytes int64, err error) {
+func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, ridAlloc *rewriteRIDAllocator, sourceIDs map[uint32]struct{}, sourceChunks map[valueLogChunkKey]ValueLogRewritePlanChunk, sourceChunkBytes int64, singleSourceID uint32, hasSingleSourceID bool, maxCopiedBytes int64, sync bool) (copied int, copiedBytes int64, traversal leafRefRewriteTraversalStats, err error) {
 	if db == nil {
-		return 0, 0, fmt.Errorf("missing db")
+		return 0, 0, leafRefRewriteTraversalStats{}, fmt.Errorf("missing db")
 	}
 	if !db.indexOuterLeavesInValueLog {
-		return 0, 0, nil
+		return 0, 0, leafRefRewriteTraversalStats{}, nil
 	}
 	if db.readOnly {
-		return 0, 0, ErrReadOnly
+		return 0, 0, leafRefRewriteTraversalStats{}, ErrReadOnly
 	}
 	if db.valueLogManager == nil {
-		return 0, 0, fmt.Errorf("value log manager unavailable")
+		return 0, 0, leafRefRewriteTraversalStats{}, fmt.Errorf("value log manager unavailable")
 	}
 	if writer == nil || ridAlloc == nil {
-		return 0, 0, fmt.Errorf("vlog-rewrite: missing writer/rid state")
+		return 0, 0, leafRefRewriteTraversalStats{}, fmt.Errorf("vlog-rewrite: missing writer/rid state")
 	}
 	// Treat nil sourceIDs (with no single-source constraint) as "all sources"
 	// and an empty, non-nil map as "no sources".
 	if !hasSingleSourceID && sourceIDs != nil && len(sourceIDs) == 0 {
-		return 0, 0, nil
+		return 0, 0, leafRefRewriteTraversalStats{}, nil
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if err := ctx.Err(); err != nil {
-		return 0, 0, err
+		return 0, 0, leafRefRewriteTraversalStats{}, err
 	}
 
 	db.writeMu.Lock()
@@ -2495,7 +2529,7 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 	snap := db.AcquireSnapshot()
 	if snap == nil || snap.idx == nil || snap.state == nil {
 		closeRewriteSnapshot(&err, snap)
-		return 0, 0, fmt.Errorf("missing snapshot state")
+		return 0, 0, leafRefRewriteTraversalStats{}, fmt.Errorf("missing snapshot state")
 	}
 	defer closeRewriteSnapshot(&err, snap)
 
@@ -2544,30 +2578,30 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 
 	newSysRoot, sysChanged, err := leafCtx.rewriteNode(sysRoot)
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, leafCtx.stats, err
 	}
 	newRoot, userChanged, err := leafCtx.rewriteNode(rootID)
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, leafCtx.stats, err
 	}
 	if !sysChanged && !userChanged {
-		return 0, 0, nil
+		return 0, 0, leafCtx.stats, nil
 	}
 
 	// Ensure the copied leaf-page records are visible before publishing new leaf
 	// refs that point at them.
 	if sync {
 		if err := writer.Sync(); err != nil {
-			return 0, 0, err
+			return 0, 0, leafCtx.stats, err
 		}
 	} else {
 		if err := writer.Flush(); err != nil {
-			return 0, 0, err
+			return 0, 0, leafCtx.stats, err
 		}
 	}
 	createdIDs, err := writer.createdFileIDs()
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, leafCtx.stats, err
 	}
 	if len(createdIDs) > 0 {
 		// Register rewrite-created segments before commit publication so
@@ -2576,23 +2610,23 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 		for _, id := range createdIDs {
 			path := db.valueLogManager.SegmentPath(id)
 			if err := db.valueLogManager.RegisterSegment(path, id); err != nil {
-				return 0, 0, err
+				return 0, 0, leafCtx.stats, err
 			}
 		}
 	}
 	vlogDebtDelta, err := db.buildValueLogDebtDelta(nil, 0, snap.state.CommitSeq, nil, leafCtx.outerLeafChanges)
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, leafCtx.stats, err
 	}
 	var vlogLocatorDelta *valueLogLocatorDelta
 	if db.valueLogLocatorCatalog != nil && valueLogLocatorCatalogEnabled() && db.valueLogLocatorCatalog.canTrack(snap.state.CommitSeq) {
 		vlogLocatorDelta = newValueLogLocatorDelta()
 	}
 	if err := db.finalizeCommit(newRoot, newSysRoot, leafCtx.retired, sync, adaptive.Metrics{}, createdIDs, false, nil, vlogDebtDelta, vlogLocatorDelta); err != nil {
-		return 0, 0, err
+		return 0, 0, leafCtx.stats, err
 	}
 	tracker = nil
-	return leafCtx.copied, leafCtx.copiedBytes, nil
+	return leafCtx.copied, leafCtx.copiedBytes, leafCtx.stats, nil
 }
 
 func nextRewriteRIDStart(segments []logSegment) (uint64, error) {

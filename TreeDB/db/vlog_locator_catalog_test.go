@@ -288,6 +288,12 @@ func TestValueLogLocatorCatalog_TracksLeafRefRewriteCommits(t *testing.T) {
 	if stats.LeafRefRecordsCopied == 0 {
 		t.Fatalf("expected leafref rewrite to copy leaf pages, stats=%+v", stats)
 	}
+	if stats.LeafRefTreeNodesVisited == 0 || stats.LeafRefInternalNodesVisited == 0 {
+		t.Fatalf("expected leafref rewrite traversal stats, stats=%+v", stats)
+	}
+	if stats.LeafRefRefsVisited == 0 || stats.LeafRefRefsSelected == 0 {
+		t.Fatalf("expected leafref rewrite to report visited and selected refs, stats=%+v", stats)
+	}
 	if !db.valueLogLocatorCatalog.canTrack(db.currentCommitSeq()) {
 		t.Fatalf("expected locator catalog to stay trackable after leafref rewrite")
 	}
