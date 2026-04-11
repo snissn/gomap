@@ -122,3 +122,28 @@
 - the remaining world-class gap is durability of the richer catalogs themselves:
   - persist enough authoritative record/locator state to avoid rebuild hydration on reopen
   - converge cleanup and GC fully onto the same catalog truth
+
+### Second-Sprint Slice 3
+
+- status:
+  - complete locally on top of `ac41fed8`
+- goal:
+  - keep the debt ledger trackable across close/reopen after commit-path deltas, instead of dropping back to a segment-only sidecar that forces rebuild hydration
+
+#### Landed locally
+
+- extended `vlog_debt_ledger.meta` to persist physical record refs alongside segment summaries
+- persisted debt-ledger state after successful commit-path delta application in `finalizeCommitPostWork`
+- kept segment-only debt snapshots valid as a compatibility fallback when records are absent, but made the normal rebuild-and-delta path durable
+
+#### Validation
+
+- `GOWORK=off go test ./TreeDB/db -run 'Test(ValueLogDebtLedger_(RebuildAndLoad|TracksCommitDeltaAcrossPointerWrites|PersistsTrackableStateAcrossReopen|TracksOuterLeafCommitDeltaAcrossWrites|TracksLeafRefRewriteCommits)|ReferencedValueLogSegments_UsesPersistedDebtLedgerAcrossReopen|ValueLogRewritePlan_UsesPersistedDebtLedgerAcrossReopen)$' -count=1`
+- `GOWORK=off go test ./TreeDB/zipper ./TreeDB/db ./TreeDB/caching -run 'Test(ValueLogDebtLedger_(RebuildAndLoad|TracksCommitDeltaAcrossPointerWrites|PersistsTrackableStateAcrossReopen|TracksOuterLeafCommitDeltaAcrossWrites|TracksLeafRefRewriteCommits)|ReferencedValueLogSegments_UsesPersistedDebtLedgerAcrossReopen|ValueLogRewritePlan_UsesPersistedDebtLedgerAcrossReopen|ValueLogLocatorCatalog_TracksLeafRefRewriteCommits|VlogGenerationRewrite_|Checkpoint_KicksVlogGenerationRewriteDespiteRecentForegroundActivity)' -count=1`
+
+#### Remaining gap after this slice
+
+- commit-path authority now survives reopen for the debt ledger
+- the next structural gap is executor/cleanup quality, not ledger survival:
+  - reduce remaining rediscovery around locators and cleanup/GC eligibility
+  - move more of the common reclaim lifecycle onto the same maintained catalog truth

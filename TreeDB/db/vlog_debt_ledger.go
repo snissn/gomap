@@ -41,6 +41,14 @@ type valueLogDebtLedgerDisk struct {
 	Version   uint32                       `json:"version"`
 	CommitSeq uint64                       `json:"commit_seq"`
 	Segments  []valueLogDebtSegmentSummary `json:"segments,omitempty"`
+	Records   []valueLogDebtRecordDisk     `json:"records,omitempty"`
+}
+
+type valueLogDebtRecordDisk struct {
+	FileID    uint32 `json:"file_id"`
+	Start     uint64 `json:"start"`
+	RecordLen uint32 `json:"record_len"`
+	RefCount  uint32 `json:"ref_count"`
 }
 
 type valueLogDebtRecordKey struct {
@@ -285,21 +293,39 @@ func (l *valueLogDebtLedger) liveBytesBySegment(commitSeq uint64) (map[uint32]in
 	return out, true
 }
 
-func (l *valueLogDebtLedger) dirtySnapshot() (uint64, []valueLogDebtSegmentSummary, bool) {
+func (l *valueLogDebtLedger) dirtySnapshot() (uint64, []valueLogDebtSegmentSummary, []valueLogDebtRecordDisk, bool) {
 	if l == nil {
-		return 0, nil, false
+		return 0, nil, nil, false
 	}
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 	if !l.valid || !l.dirty {
-		return 0, nil, false
+		return 0, nil, nil, false
 	}
 	segments := make([]valueLogDebtSegmentSummary, 0, len(l.segments))
 	for _, seg := range l.segments {
 		segments = append(segments, seg)
 	}
 	sort.Slice(segments, func(i, j int) bool { return segments[i].FileID < segments[j].FileID })
-	return l.commitSeq, segments, true
+	records := make([]valueLogDebtRecordDisk, 0, len(l.records))
+	for _, rec := range l.records {
+		if rec.Key.FileID == 0 || rec.RecordLen == 0 || rec.RefCount == 0 {
+			continue
+		}
+		records = append(records, valueLogDebtRecordDisk{
+			FileID:    rec.Key.FileID,
+			Start:     rec.Key.Start,
+			RecordLen: rec.RecordLen,
+			RefCount:  rec.RefCount,
+		})
+	}
+	sort.Slice(records, func(i, j int) bool {
+		if records[i].FileID != records[j].FileID {
+			return records[i].FileID < records[j].FileID
+		}
+		return records[i].Start < records[j].Start
+	})
+	return l.commitSeq, segments, records, true
 }
 
 func (l *valueLogDebtLedger) markClean(commitSeq uint64) {
@@ -462,7 +488,19 @@ func (db *DB) loadValueLogDebtLedger(commitSeq uint64) (bool, error) {
 	for _, seg := range disk.Segments {
 		segments[seg.FileID] = seg
 	}
-	db.valueLogDebtLedger.replace(disk.CommitSeq, segments, nil, false)
+	records := make(map[valueLogDebtRecordKey]valueLogDebtRecordRef, len(disk.Records))
+	for _, rec := range disk.Records {
+		if rec.FileID == 0 || rec.RecordLen == 0 || rec.RefCount == 0 {
+			continue
+		}
+		key := valueLogDebtRecordKey{FileID: rec.FileID, Start: rec.Start}
+		records[key] = valueLogDebtRecordRef{
+			Key:       key,
+			RecordLen: rec.RecordLen,
+			RefCount:  rec.RefCount,
+		}
+	}
+	db.valueLogDebtLedger.replace(disk.CommitSeq, segments, records, false)
 	return true, nil
 }
 
@@ -474,7 +512,7 @@ func (db *DB) persistValueLogDebtLedger() error {
 	if path == "" {
 		return nil
 	}
-	commitSeq, segments, ok := db.valueLogDebtLedger.dirtySnapshot()
+	commitSeq, segments, records, ok := db.valueLogDebtLedger.dirtySnapshot()
 	if !ok {
 		return nil
 	}
@@ -482,6 +520,7 @@ func (db *DB) persistValueLogDebtLedger() error {
 		Version:   valueLogDebtLedgerVersion,
 		CommitSeq: commitSeq,
 		Segments:  segments,
+		Records:   records,
 	})
 	if err != nil {
 		return err
