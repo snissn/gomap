@@ -347,3 +347,47 @@
 
 - `fast` should no longer stage a single tiny stale segment and then confirm only that one segment when low-pressure tail fill can safely widen the same debt set
 - the bounded executor still limits each confirm pass, but the queue now retains the widened tail-packed debt instead of repeatedly rediscovering only the initial tiny stale segment
+
+#### Celestia result
+
+- artifact root:
+  - `artifacts/celestia_profile_signals/tail_fill_staged_plans_20260411051500`
+- outcome:
+  - discard this slice
+
+##### `wal_on_fast`
+
+- compared with the prior `#962` baseline (`skip_leafref_nonleaf_20260410181120`):
+  - `t_sync`: `260s -> 260s` (flat)
+  - `max_rss_kb`: `10785428 -> 13523620` (`+25.39%`)
+  - minute-15 `app_bytes`: `3034120332 -> 3264884377` (`+230764045`, `+7.61%`)
+  - minute-15 `wal_bytes`: `2968366016 -> 3199393280` (`+231027264`, `+7.78%`)
+  - minute-15 `rewrite_runs`: `11 -> 7`
+  - minute-15 `queued_exec_runs`: `10 -> 6`
+- interpretation:
+  - widening the plan did not produce more effective reclaim
+  - it reduced steady-state rewrite throughput and materially increased live size and memory
+
+##### `fast`
+
+- compared with the prior `#962` baseline (`skip_leafref_nonleaf_20260410181120`):
+  - `t_sync`: `314s -> 423s` (`+109s`, `+34.71%`)
+  - `max_rss_kb`: `12242324 -> 12165088` (`-0.63%`, effectively flat)
+  - minute-15 `app_bytes`: `3238457902 -> 3463660421` (`+225202519`, `+6.95%`)
+  - minute-15 `wal_bytes`: `3179812963 -> 3407670399` (`+227857436`, `+7.17%`)
+  - minute-15 `rewrite_runs`: `10 -> 10` (flat)
+  - minute-15 `plan_last_selected_segments`: `1 -> 2`
+  - minute-15 `plan_last_selected_bytes_stale`: `2669693 -> 176209445`
+  - minute-15 visible stale debt dropped from about `373 MB` to about `188 MB`
+- interpretation:
+  - the slice widened the staged plan exactly as intended
+  - but it spent the rewrite budget on larger staged work without converting that into better minute-15 size
+  - sync time regressed materially, so this is not an acceptable trade
+
+##### Conclusion
+
+- the local architectural idea was real:
+  - the scheduler did stop collapsing to a single-segment stage-confirm plan
+- but the system result was wrong:
+  - wider staged debt increased work-in-flight and write amplification without improving minute-15 live size
+- `#963` should stay open only as a failed experiment record and should not be merged in its current form
