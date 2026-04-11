@@ -15612,6 +15612,72 @@ func mergeVlogGenerationRewritePlans(base backenddb.ValueLogRewritePlan, fill ba
 	return merged
 }
 
+func mergeVlogGenerationRewriteChunkPlans(base backenddb.ValueLogRewriteChunkPlan, fill backenddb.ValueLogRewriteChunkPlan) backenddb.ValueLogRewriteChunkPlan {
+	if len(fill.SourceChunks) == 0 {
+		return base
+	}
+	if len(base.SourceChunks) == 0 {
+		return fill
+	}
+	type chunkKey struct {
+		fileID      uint32
+		chunkOffset int64
+	}
+	mergedChunks := make([]backenddb.ValueLogRewritePlanChunk, 0, len(base.SourceChunks)+len(fill.SourceChunks))
+	seen := make(map[chunkKey]struct{}, len(base.SourceChunks)+len(fill.SourceChunks))
+	add := func(chunk backenddb.ValueLogRewritePlanChunk) {
+		if chunk.FileID == 0 {
+			return
+		}
+		key := chunkKey{fileID: chunk.FileID, chunkOffset: chunk.ChunkOffset}
+		if _, dup := seen[key]; dup {
+			return
+		}
+		seen[key] = struct{}{}
+		mergedChunks = append(mergedChunks, chunk)
+	}
+	for _, chunk := range base.SourceChunks {
+		add(chunk)
+	}
+	for _, chunk := range fill.SourceChunks {
+		add(chunk)
+	}
+	merged := base
+	merged.SourceChunks = mergedChunks
+	merged.ChunksSelected = len(mergedChunks)
+	merged.SelectedBytesTotal = 0
+	merged.SelectedBytesLive = 0
+	merged.SelectedBytesStale = 0
+	for _, chunk := range mergedChunks {
+		merged.SelectedBytesTotal += chunk.BytesTotal
+		merged.SelectedBytesLive += chunk.BytesLive
+		merged.SelectedBytesStale += chunk.BytesStale
+	}
+	if fill.ChunkBytes > 0 {
+		merged.ChunkBytes = fill.ChunkBytes
+	}
+	if fill.ChunksTotal > 0 {
+		merged.ChunksTotal = fill.ChunksTotal
+	}
+	if fill.BytesTotal > 0 {
+		merged.BytesTotal = fill.BytesTotal
+	}
+	if fill.BytesLive > 0 {
+		merged.BytesLive = fill.BytesLive
+	}
+	if fill.BytesStale > 0 {
+		merged.BytesStale = fill.BytesStale
+	}
+	if fill.AgeBlockedChunks > 0 {
+		merged.AgeBlockedChunks = fill.AgeBlockedChunks
+		merged.AgeBlockedBytesTotal = fill.AgeBlockedBytesTotal
+		merged.AgeBlockedBytesLive = fill.AgeBlockedBytesLive
+		merged.AgeBlockedBytesStale = fill.AgeBlockedBytesStale
+		merged.AgeBlockedMinRemainingAge = fill.AgeBlockedMinRemainingAge
+	}
+	return merged
+}
+
 func filterVlogGenerationRewriteChunkLedgerByQuality(chunks []backenddb.ValueLogRewritePlanChunk, minStaleRatio float64, minStaleBytes int64) []backenddb.ValueLogRewritePlanChunk {
 	if len(chunks) == 0 {
 		return nil
@@ -16721,12 +16787,15 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 			MinSegmentAge:        db.valueLogRewriteMinSegmentAge,
 		}
 		if hasChunkPlanner && !(plannerRefreshWithQueuedDebt && hasPlanner) {
-			runChunkPlan := func() (backenddb.ValueLogRewriteChunkPlan, error, time.Duration) {
+			runChunkPlanWithOpts := func(runOpts backenddb.ValueLogRewriteOnlineOptions) (backenddb.ValueLogRewriteChunkPlan, error, time.Duration) {
 				ctx, cancel := db.vlogGenerationRewritePlanContext(30*time.Second, opts)
 				planStart := time.Now()
-				plan, err := chunkPlanner.ValueLogRewriteChunkPlan(ctx, planOpts, vlogGenerationRewriteChunkBytesForPlan(maxSourceBytes))
+				plan, err := chunkPlanner.ValueLogRewriteChunkPlan(ctx, runOpts, vlogGenerationRewriteChunkBytesForPlan(maxSourceBytes))
 				cancel()
 				return plan, err, time.Since(planStart)
+			}
+			runChunkPlan := func() (backenddb.ValueLogRewriteChunkPlan, error, time.Duration) {
+				return runChunkPlanWithOpts(planOpts)
 			}
 			chunkPlan, err := func() (backenddb.ValueLogRewriteChunkPlan, error) {
 				plan, err, planDur := runChunkPlan()
@@ -16793,6 +16862,53 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 					return
 				}
 				db.observeVlogGenerationRewritePlanPenaltyFilter(beforePenaltyFilter, len(chunkPlan.SourceChunks))
+				tailFillMinStaleRatio := db.vlogGenerationRewriteMinStaleRatioForTailPass(totalBytes)
+				if len(chunkPlan.SourceChunks) > 0 &&
+					!plannerRefreshWithQueuedDebt &&
+					tailFillMinStaleRatio > 0 &&
+					db.foregroundVlogGenerationLowPressureFor(now) &&
+					len(chunkPlan.SourceChunks) < vlogGenerationRewriteTailPackingMaxSegments {
+					fillOpts := planOpts
+					if fillOpts.MinSegmentStaleRatio == 0 || tailFillMinStaleRatio < fillOpts.MinSegmentStaleRatio {
+						fillOpts.MinSegmentStaleRatio = tailFillMinStaleRatio
+					}
+					fillOpts.MaxSourceSegments = vlogGenerationRewriteTailPackingMaxSegments
+					fillOpts.AllowLiveOnlySelection = true
+					fillPlan, fillErr, fillDur := runChunkPlanWithOpts(fillOpts)
+					db.debugVlogMaintf(
+						"rewrite_chunk_plan stale_ratio_fill max_segments=%d min_ratio=%.6f chunk_bytes=%d selected=%d/%d selected_bytes_total=%d selected_bytes_live=%d selected_bytes_stale=%d total_bytes=%d live_bytes=%d stale_bytes=%d dur_ms=%.3f err=%v",
+						fillOpts.MaxSourceSegments,
+						fillOpts.MinSegmentStaleRatio,
+						fillPlan.ChunkBytes,
+						fillPlan.ChunksSelected,
+						fillPlan.ChunksTotal,
+						fillPlan.SelectedBytesTotal,
+						fillPlan.SelectedBytesLive,
+						fillPlan.SelectedBytesStale,
+						fillPlan.BytesTotal,
+						fillPlan.BytesLive,
+						fillPlan.BytesStale,
+						float64(fillDur.Microseconds())/1000,
+						fillErr,
+					)
+					db.observeVlogGenerationRewriteChunkPlanOutcomeWithDuration(fillPlan, fillErr, fillDur)
+					if fillErr != nil {
+						db.observeVlogGenerationRewriteChunkPlanSnapshot(fillPlan, fillErr)
+						db.clearVlogGenerationRewriteAgeBlockedUntil()
+						if isVlogGenerationPlannerCanceled(fillErr) {
+							db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
+							return
+						}
+						db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
+						if db.notifyError != nil {
+							db.notifyError(fmt.Errorf("cachingdb: generational stale-ratio chunk fill plan: %w", fillErr))
+						}
+						return
+					}
+					if len(fillPlan.SourceChunks) > 0 {
+						chunkPlan = mergeVlogGenerationRewriteChunkPlans(chunkPlan, fillPlan)
+					}
+				}
 				db.observeVlogGenerationRewriteChunkPlanSnapshot(chunkPlan, nil)
 				updatePlanTimestamp = true
 				if len(chunkPlan.SourceChunks) > 0 {
@@ -16944,6 +17060,52 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 					return
 				}
 				db.observeVlogGenerationRewritePlanPenaltyFilter(beforePenaltyFilter, len(plan.SourceFileIDs))
+				tailFillMinStaleRatio := db.vlogGenerationRewriteMinStaleRatioForTailPass(totalBytes)
+				if len(plan.SourceFileIDs) > 0 &&
+					!plannerRefreshWithQueuedDebt &&
+					tailFillMinStaleRatio > 0 &&
+					db.foregroundVlogGenerationLowPressureFor(now) &&
+					len(plan.SourceFileIDs) < vlogGenerationRewriteTailPackingMaxSegments {
+					fillOpts := planOpts
+					if fillOpts.MinSegmentStaleRatio == 0 || tailFillMinStaleRatio < fillOpts.MinSegmentStaleRatio {
+						fillOpts.MinSegmentStaleRatio = tailFillMinStaleRatio
+					}
+					fillOpts.MaxSourceSegments = vlogGenerationRewriteTailPackingMaxSegments
+					fillOpts.AllowLiveOnlySelection = true
+					fillPlan, fillErr, fillDur := runPlanWithOpts(fillOpts)
+					db.debugVlogMaintf(
+						"rewrite_plan stale_ratio_fill max_segments=%d min_ratio=%.6f selected=%d/%d selected_bytes_total=%d selected_bytes_live=%d selected_bytes_stale=%d total_bytes=%d live_bytes=%d stale_bytes=%d dur_ms=%.3f err=%v",
+						fillOpts.MaxSourceSegments,
+						fillOpts.MinSegmentStaleRatio,
+						fillPlan.SegmentsSelected,
+						fillPlan.SegmentsTotal,
+						fillPlan.SelectedBytesTotal,
+						fillPlan.SelectedBytesLive,
+						fillPlan.SelectedBytesStale,
+						fillPlan.BytesTotal,
+						fillPlan.BytesLive,
+						fillPlan.BytesStale,
+						float64(fillDur.Microseconds())/1000,
+						fillErr,
+					)
+					db.observeVlogGenerationRewritePlanOutcomeWithDuration(fillPlan, fillErr, fillDur)
+					if fillErr != nil {
+						db.observeVlogGenerationRewritePlanSnapshot(fillPlan, fillErr)
+						db.clearVlogGenerationRewriteAgeBlockedUntil()
+						if isVlogGenerationPlannerCanceled(fillErr) {
+							db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
+							return
+						}
+						db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
+						if db.notifyError != nil {
+							db.notifyError(fmt.Errorf("cachingdb: generational stale-ratio fill plan: %w", fillErr))
+						}
+						return
+					}
+					if len(fillPlan.SourceFileIDs) > 0 {
+						plan = mergeVlogGenerationRewritePlans(plan, fillPlan)
+					}
+				}
 				db.observeVlogGenerationRewritePlanSnapshot(plan, nil)
 				updatePlanTimestamp = true
 				if len(plan.SourceFileIDs) > 0 {
@@ -17143,6 +17305,52 @@ planned:
 				return
 			}
 			db.observeVlogGenerationRewritePlanPenaltyFilter(beforePenaltyFilter, len(plan.SourceFileIDs))
+			tailFillMinStaleRatio := db.vlogGenerationRewriteMinStaleRatioForTailPass(totalBytes)
+			if len(plan.SourceFileIDs) > 0 &&
+				tailFillMinStaleRatio > 0 &&
+				db.foregroundVlogGenerationLowPressureFor(now) &&
+				len(plan.SourceFileIDs) < vlogGenerationRewriteTailPackingMaxSegments {
+				fillOpts := planOpts
+				if fillOpts.MinSegmentStaleRatio == 0 || tailFillMinStaleRatio < fillOpts.MinSegmentStaleRatio {
+					fillOpts.MinSegmentStaleRatio = tailFillMinStaleRatio
+				}
+				fillOpts.MaxSourceSegments = vlogGenerationRewriteTailPackingMaxSegments
+				fillOpts.AllowLiveOnlySelection = true
+				fillPlan, fillErr, fillDur := runPlanWithOpts(fillOpts)
+				db.debugVlogMaintf(
+					"rewrite_plan pre_rewrite_fill max_segments=%d min_ratio=%.6f selected=%d/%d selected_bytes_total=%d selected_bytes_live=%d selected_bytes_stale=%d total_bytes=%d live_bytes=%d stale_bytes=%d dur_ms=%.3f err=%v",
+					fillOpts.MaxSourceSegments,
+					fillOpts.MinSegmentStaleRatio,
+					fillPlan.SegmentsSelected,
+					fillPlan.SegmentsTotal,
+					fillPlan.SelectedBytesTotal,
+					fillPlan.SelectedBytesLive,
+					fillPlan.SelectedBytesStale,
+					fillPlan.BytesTotal,
+					fillPlan.BytesLive,
+					fillPlan.BytesStale,
+					float64(fillDur.Microseconds())/1000,
+					fillErr,
+				)
+				db.observeVlogGenerationRewritePlanOutcomeWithDuration(fillPlan, fillErr, fillDur)
+				if fillErr != nil {
+					db.observeVlogGenerationRewritePlanSnapshot(fillPlan, fillErr)
+					db.clearVlogGenerationRewriteAgeBlockedUntil()
+					if isVlogGenerationPlannerCanceled(fillErr) {
+						db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
+						return
+					}
+					db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
+					db.vlogGenerationRemapFailures.Add(1)
+					if db.notifyError != nil {
+						db.notifyError(fmt.Errorf("cachingdb: generational pre-rewrite fill plan: %w", fillErr))
+					}
+					return
+				}
+				if len(fillPlan.SourceFileIDs) > 0 {
+					plan = mergeVlogGenerationRewritePlans(plan, fillPlan)
+				}
+			}
 			db.observeVlogGenerationRewritePlanSnapshot(plan, nil)
 		}
 		if len(plan.SourceFileIDs) == 0 {
