@@ -5,6 +5,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/page"
+	"github.com/snissn/gomap/TreeDB/tree"
 )
 
 // Batch implements the cosmos-db Batch interface.
@@ -205,6 +206,18 @@ func (b *Batch) writeOptimistic(sync bool) (bool, error) {
 		}
 		return false, err
 	}
+	var vlogLocatorDelta *valueLogLocatorDelta
+	if b.db.valueLogLocatorCatalog != nil && valueLogLocatorCatalogEnabled() && b.db.valueLogLocatorCatalog.canTrack(baseSeq) {
+		vlogLocatorDelta, err = buildValueLogLocatorDelta(tree.New(idx.pager, nil, rootID), entries)
+		if err != nil {
+			freeErr := tracker.FreeAll()
+			b.db.writeMu.RUnlock()
+			if freeErr != nil {
+				return false, freeErr
+			}
+			return false, err
+		}
+	}
 	defer func() {
 		if vlogRefDelta != nil {
 			releaseValueLogRefDelta(vlogRefDelta)
@@ -225,7 +238,7 @@ func (b *Batch) writeOptimistic(sync bool) (bool, error) {
 		return false, nil
 	}
 
-	post, err := b.db.finalizeCommitLocked(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta)
+	post, err := b.db.finalizeCommitLocked(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, vlogLocatorDelta)
 	b.db.commitMu.Unlock()
 	if err != nil {
 		b.db.writeMu.RUnlock()
@@ -268,6 +281,13 @@ func (b *Batch) writeSerialized(sync bool) error {
 	if err != nil {
 		return err
 	}
+	var vlogLocatorDelta *valueLogLocatorDelta
+	if b.db.valueLogLocatorCatalog != nil && valueLogLocatorCatalogEnabled() && b.db.valueLogLocatorCatalog.canTrack(baseSeq) {
+		vlogLocatorDelta, err = buildValueLogLocatorDelta(tree.New(idx.pager, nil, rootID), entries)
+		if err != nil {
+			return err
+		}
+	}
 	defer func() {
 		if vlogRefDelta != nil {
 			releaseValueLogRefDelta(vlogRefDelta)
@@ -283,7 +303,7 @@ func (b *Batch) writeSerialized(sync bool) error {
 	sysRoot := b.db.meta.SystemRootPageID
 	b.db.mu.Unlock()
 
-	if err := b.db.finalizeCommit(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta); err != nil {
+	if err := b.db.finalizeCommit(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, vlogLocatorDelta); err != nil {
 		return err
 	}
 	vlogRefDelta = nil

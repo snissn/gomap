@@ -2573,7 +2573,7 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 		}
 	}
 
-	if err := db.finalizeCommit(newRoot, newSysRoot, leafCtx.retired, sync, adaptive.Metrics{}, createdIDs, false, nil); err != nil {
+	if err := db.finalizeCommit(newRoot, newSysRoot, leafCtx.retired, sync, adaptive.Metrics{}, createdIDs, false, nil, nil); err != nil {
 		return 0, 0, err
 	}
 	tracker = nil
@@ -2837,7 +2837,15 @@ func (db *DB) applyRewriteSwapBatchOptimistic(swaps []rewriteSwap, sync bool) (b
 		return false, nil
 	}
 
-	post, err := db.finalizeCommitLocked(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, db.indexOuterLeavesInValueLog, vlogRefDelta)
+	var vlogLocatorDelta *valueLogLocatorDelta
+	if db.valueLogLocatorCatalog != nil && valueLogLocatorCatalogEnabled() && db.valueLogLocatorCatalog.canTrack(baseSeq) {
+		vlogLocatorDelta, err = buildValueLogLocatorDelta(tree.New(idx.pager, vlogSet, rootID), entries)
+		if err != nil {
+			return false, err
+		}
+	}
+
+	post, err := db.finalizeCommitLocked(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, db.indexOuterLeavesInValueLog, vlogRefDelta, vlogLocatorDelta)
 	db.commitMu.Unlock()
 	if err != nil {
 		return false, err
@@ -2907,7 +2915,14 @@ func (db *DB) applyRewriteSwapBatchSerialized(swaps []rewriteSwap, sync bool) er
 			releaseValueLogRefDelta(vlogRefDelta)
 		}
 	}()
-	if err := db.finalizeCommit(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, db.indexOuterLeavesInValueLog, vlogRefDelta); err != nil {
+	var vlogLocatorDelta *valueLogLocatorDelta
+	if db.valueLogLocatorCatalog != nil && valueLogLocatorCatalogEnabled() && db.valueLogLocatorCatalog.canTrack(baseSeq) {
+		vlogLocatorDelta, err = buildValueLogLocatorDelta(tree.New(idx.pager, vlogSet, rootID), entries)
+		if err != nil {
+			return err
+		}
+	}
+	if err := db.finalizeCommit(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, db.indexOuterLeavesInValueLog, vlogRefDelta, vlogLocatorDelta); err != nil {
 		return err
 	}
 	vlogRefDelta = nil
