@@ -58,6 +58,7 @@ type DB struct {
 	snapshotViewRO     atomic.Pointer[snapshotView]
 	snapshotAcquireRO  [snapshotAcquireShardCount]atomic.Int32
 	valueLogRefTracker *valueLogRefTracker
+	valueLogDebtLedger *valueLogDebtLedger
 	leafPageLog        LeafPageLog
 	lock               *lockfile.Lock
 	adaptive           *adaptive.Controller
@@ -1063,6 +1064,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	db := &DB{
 		valueLogManager:            vm,
 		valueLogRefTracker:         newValueLogRefTracker(),
+		valueLogDebtLedger:         newValueLogDebtLedger(),
 		lock:                       lock,
 		adaptive:                   adaptiveCtrl,
 		keepRecent:                 opts.KeepRecent,
@@ -1148,6 +1150,10 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	db.state.Store(initialState)
 	db.publishSnapshotView(gen, initialState, vm)
 	if err := db.initValueLogRefTracker(); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := db.initValueLogDebtLedger(); err != nil {
 		db.Close()
 		return nil, err
 	}
