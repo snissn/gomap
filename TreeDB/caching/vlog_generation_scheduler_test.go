@@ -1611,9 +1611,77 @@ func (b *rewriteBudgetRecordingBackend) ValueLogRewriteOnline(ctx context.Contex
 	stats := b.rewriteResponse
 	err := b.rewriteErr
 	customFn := b.rewriteFn
+	plan := b.planResponse
 	b.mu.Unlock()
 	if customFn != nil {
 		return customFn(ctx, opts)
+	}
+	stats.RequestedSourceFileIDs = append([]uint32(nil), stats.RequestedSourceFileIDs...)
+	stats.DrainedSourceFileIDs = append([]uint32(nil), stats.DrainedSourceFileIDs...)
+	if len(stats.RequestedSourceFileIDs) == 0 && len(opts.SourceFileIDs) > 0 {
+		stats.RequestedSourceFileIDs = append([]uint32(nil), opts.SourceFileIDs...)
+	}
+	if err == nil &&
+		len(stats.DrainedSourceFileIDs) == 0 &&
+		len(opts.SourceFileIDs) > 0 &&
+		(stats.SourceBytesUnreferenced > 0 || stats.BytesAfter == 0 || stats.BytesAfter < stats.BytesBefore) {
+		stats.DrainedSourceFileIDs = append([]uint32(nil), opts.SourceFileIDs...)
+	}
+	if len(opts.SourceFileIDs) > 0 {
+		exactPlannedSelection := false
+		if len(plan.SourceFileIDs) == len(opts.SourceFileIDs) {
+			exactPlannedSelection = true
+			for _, requestedID := range opts.SourceFileIDs {
+				found := false
+				for _, plannedID := range plan.SourceFileIDs {
+					if plannedID == requestedID {
+						found = true
+						break
+					}
+				}
+				if !found {
+					exactPlannedSelection = false
+					break
+				}
+			}
+		}
+		allowPlannedSelectionBytes := opts.MaxCopiedBytes == 0 && exactPlannedSelection
+		if stats.SelectedSourceBytesBefore == 0 && allowPlannedSelectionBytes {
+			var selectedTotal int64
+			var matched bool
+			for _, seg := range plan.SelectedSegments {
+				for _, id := range opts.SourceFileIDs {
+					if seg.FileID == id {
+						selectedTotal += seg.BytesTotal
+						matched = true
+						break
+					}
+				}
+			}
+			if matched {
+				stats.SelectedSourceBytesBefore = selectedTotal
+			} else if plan.SelectedBytesTotal > 0 {
+				stats.SelectedSourceBytesBefore = plan.SelectedBytesTotal
+			}
+		}
+		if stats.SelectedSourceLiveBytesBefore == 0 && allowPlannedSelectionBytes {
+			var selectedLive int64
+			var matched bool
+			for _, seg := range plan.SelectedSegments {
+				for _, id := range opts.SourceFileIDs {
+					if seg.FileID == id {
+						selectedLive += seg.BytesLive
+						matched = true
+						break
+					}
+				}
+			}
+			if matched {
+				stats.SelectedSourceLiveBytesBefore = selectedLive
+			} else if plan.SelectedBytesLive > 0 {
+				stats.SelectedSourceLiveBytesBefore = plan.SelectedBytesLive
+			}
+		}
 	}
 	return stats, err
 }
@@ -5325,7 +5393,6 @@ func TestVlogGenerationRewrite_QueuedFollowupRunsAfterLocallyEffectiveFreshPlan(
 	if got := db.vlogGenerationRewriteIneffectiveLastNS.Load(); got != 0 {
 		t.Fatalf("ineffective last ts=%d want 0 before queued follow-up", got)
 	}
-
 	db.vlogGenerationLastRewriteUnixNano.Store(0)
 	forceVlogMaintenanceIdle(db)
 	db.maybeRunVlogGenerationMaintenanceWithOptions(false, vlogGenerationMaintenanceOptions{
