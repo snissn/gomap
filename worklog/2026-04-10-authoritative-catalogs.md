@@ -232,3 +232,118 @@
 - the remaining structural gap is narrower and more explicit:
   - when selected source segments do contain live outer-leaf pages, execution still rediscover those pages by recursively traversing the tree
   - removing that cost still requires a stronger leafref locator form than the current key-only locator catalog
+
+### Post-`#962` Celestia Validation
+
+- artifact root:
+  - `artifacts/celestia_profile_signals/skip_leafref_nonleaf_20260410181120`
+- fixed sync stop height:
+  - `10611331`
+- candidate head:
+  - `9f0476d9` `treedb: skip leafref rewrite on non-leaf sources`
+
+#### `wal_on_fast`
+
+- `dwell15m`
+  - `t_sync = 260s`
+  - `t_total = 1160s`
+  - `max_rss_kb = 10785428`
+  - `max_hwm_kb = 10816860`
+  - minute 15:
+    - `app_bytes = 3034120332`
+    - `wal_bytes = 2968366016`
+    - `maintenance_attempts = 36`
+    - `maintenance_acquired = 33`
+    - `maintenance_with_rewrite = 11`
+    - `rewrite_runs = 11`
+    - `queued_exec_runs = 10`
+    - `plan_runs = 26`
+    - `plan_last_result = empty`
+    - `debt_visible_bytes_stale = 0`
+- post-dwell offline maintenance:
+  - `post_dwell_app_bytes = 3030649985`
+  - `post_dwell_post_rewrite_app_bytes = 2082847549`
+  - remaining offline gap:
+    - `947802436 bytes`
+    - `31.27%`
+
+#### `fast`
+
+- `dwell15m`
+  - `t_sync = 314s`
+  - `t_total = 1214s`
+  - `max_rss_kb = 12242324`
+  - `max_hwm_kb = 12833272`
+  - minute 15:
+    - `app_bytes = 3238457902`
+    - `wal_bytes = 3179812963`
+    - `maintenance_attempts = 109`
+    - `maintenance_acquired = 109`
+    - `maintenance_with_rewrite = 10`
+    - `rewrite_runs = 10`
+    - `queued_exec_runs = 10`
+    - `plan_runs = 64`
+    - `plan_last_result = selected`
+    - `plan_last_selected_segments = 1`
+    - `plan_last_selected_bytes_stale = 2669693`
+    - `debt_visible_source = ledger`
+    - `debt_visible_bytes_stale = 373434549`
+    - `debt_last_deferral_reason = stage_confirm`
+    - `rewrite_ledger_bytes_total = 1073746546`
+    - `rewrite_ledger_bytes_stale = 373434549`
+- post-dwell offline maintenance:
+  - `post_dwell_app_bytes = 3246018511`
+  - `post_dwell_post_rewrite_app_bytes = 2116498171`
+  - remaining offline gap:
+    - `1129520340 bytes`
+    - `34.80%`
+
+#### Conclusion
+
+- `#962` materially improved `wal_on_fast`:
+  - minute-15 size and max RSS both dropped
+  - rewrite activity increased from `9` to `11` runs
+- `#962` did not close the `fast` planner gap:
+  - the scheduler still saw about `373 MB` of stale debt at minute 15
+  - the last staged plan only selected about `2.7 MB` of stale bytes in one segment
+  - that left a large offline rewrite delta even though runtime rewrite was active
+
+### Next Slice
+
+- target:
+  - let a small non-empty stale-ratio plan piggyback the existing low-pressure tail-fill path instead of blocking it
+- reason:
+  - the current scheduler only tail-fills after the dedicated tail-compaction probe when the generic stale-ratio plan is empty
+  - in `fast`, the generic path can select a tiny stale segment, set `haveRewritePlan = true`, and skip the fill opportunity that would pack adjacent live-only tail segments into the same staged debt set
+
+### Second-Sprint Slice 6
+
+- status:
+  - complete locally on top of `9f0476d9`
+- goal:
+  - stop a small non-empty stale-ratio / pre-rewrite plan from collapsing stage-confirm execution back to a single segment when low-pressure tail packing could safely widen the staged debt set
+
+#### Landed locally
+
+- added plan-merging support for both segment and chunk rewrite plans in `TreeDB/caching/db.go`
+- extended the scheduler so low-pressure tail-fill can piggyback onto:
+  - sparse stale-ratio trigger plans
+  - ordinary pre-rewrite plans once rewrite is already justified
+- kept stale-ratio stage semantics intact:
+  - the widened plan is still staged/confirmed as stale-ratio debt
+  - the first stage-confirm execution remains bounded by the normal queued rewrite cap instead of turning into an unbounded tail-packing burst
+- added a focused cross-profile scheduler regression test:
+  - `TestVlogGenerationRewritePlan_StagesTailFilledFreshStaleRatioDebt_FastModes`
+  - proves `fast` and `wal_on_fast` both stage the widened debt set
+  - proves the first stage-confirm rewrite executes more than the single stale segment and preserves the remaining widened queue instead of collapsing back to one-segment debt
+
+#### Validation
+
+- `GOWORK=off go test ./TreeDB/caching -run 'Test(VlogGenerationRewritePlan_StagesTailFilledFreshStaleRatioDebt_FastModes|VlogGenerationRewritePlan_StagesFreshStaleRatioDebtBeforeRewrite|VlogGenerationMaintenance_PeriodicTailPlanFillAddsLiveOnlySegments_FastModes|VlogGenerationMaintenance_PeriodicTailPackingRunsAfterEmptyTailPlan_FastModes)$' -count=1`
+- `GOWORK=off go test ./TreeDB/caching -run 'Test(VlogGenerationRewrite_|Checkpoint_KicksVlogGenerationRewriteDespiteRecentForegroundActivity)' -count=1`
+- `GOWORK=off go test ./TreeDB/caching -count=1`
+
+#### Expected effect
+
+- `fast` should no longer stage a single tiny stale segment and then confirm only that one segment when low-pressure tail fill can safely widen the same debt set
+- the bounded executor still limits each confirm pass, but the queue now retains the widened tail-packed debt instead of repeatedly rediscovering only the initial tiny stale segment
