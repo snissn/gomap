@@ -138,13 +138,13 @@ type ValueLogRewriteStats struct {
 	CopyNanos          int64
 	SwapNanos          int64
 	CleanupNanos       int64
-	PlanNanos         int64
-	SourceScanNanos   int64
-	ReadDecodeNanos   int64
-	EncodeAppendNanos int64
-	SwapCommitNanos   int64
-	BookkeepingNanos  int64
-	LeafRefNanos      int64
+	PlanNanos          int64
+	SourceScanNanos    int64
+	ReadDecodeNanos    int64
+	EncodeAppendNanos  int64
+	SwapCommitNanos    int64
+	BookkeepingNanos   int64
+	LeafRefNanos       int64
 
 	ReadCalls   int
 	AppendCalls int
@@ -1742,83 +1742,170 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		closeRewriteSnapshot(&err, snap)
 		return stats, fmt.Errorf("missing snapshot state")
 	}
-	it := snap.tree.IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
-	stats.CandidateScanMode = "tree"
 	stats.CandidateScanCount = 1
 	candidateScanStart := time.Now()
-	scanStart := time.Now()
-	for ; it.Valid(); it.Next() {
-		if err := ctx.Err(); err != nil {
-			canceledErr = err
-			break
+	usedLocatorCatalog := false
+	if restrictSource && len(stats.RequestedSourceFileIDs) > 0 && valueLogLocatorCatalogEnabled() {
+		locatorKeys, ok, locatorErr := db.locatorKeysForSegments(ctx, stats.RequestedSourceFileIDs)
+		if locatorErr != nil {
+			closeRewriteSnapshot(&err, snap)
+			return stats, locatorErr
 		}
-		_, oldPtr, flags := it.UnsafeEntry()
-		if flags&node.FlagPointer == 0 || !page.IsValueLogFileID(oldPtr.FileID) {
-			continue
-		}
-		if restrictSource {
-			if restrictSingleID {
-				if oldPtr.FileID != singleSourceID {
+		if ok {
+			usedLocatorCatalog = true
+			stats.CandidateScanMode = "locator_catalog"
+			scanStart := time.Now()
+			for _, locatorKey := range locatorKeys {
+				if err := ctx.Err(); err != nil {
+					canceledErr = err
+					break
+				}
+				entry, getErr := snap.tree.GetEntry(locatorKey)
+				if getErr != nil {
+					if errors.Is(getErr, tree.ErrKeyNotFound) {
+						continue
+					}
+					closeRewriteSnapshot(&err, snap)
+					return stats, getErr
+				}
+				oldPtr := entry.ValuePtr
+				if entry.Flags&node.FlagPointer == 0 || !page.IsValueLogFileID(oldPtr.FileID) {
 					continue
 				}
-			} else {
-				if _, ok := sourceIDs[oldPtr.FileID]; !ok {
-					continue
+				if restrictSingleID {
+					if oldPtr.FileID != singleSourceID {
+						continue
+					}
+				} else {
+					if _, present := sourceIDs[oldPtr.FileID]; !present {
+						continue
+					}
+				}
+				if sourceChunkSet != nil {
+					selected, chunkErr := rewriteSourceChunkSelected(oldPtr, sourceChunkSet, sourceChunkBytes)
+					if chunkErr != nil {
+						closeRewriteSnapshot(&err, snap)
+						return stats, chunkErr
+					}
+					if !selected {
+						continue
+					}
+				}
+				sourceBytes := int64(0)
+				if maxCopiedBytes > 0 {
+					recordLen, recordErr := db.valueLogRecordLengthForRewrite(oldPtr)
+					if recordErr != nil {
+						closeRewriteSnapshot(&err, snap)
+						return stats, recordErr
+					}
+					sourceBytes = int64(recordLen)
+					if selectedSourceBytes > 0 && selectedSourceBytes+sourceBytes > maxCopiedBytes {
+						break
+					}
+				}
+				keyStart := len(candidateKeyArena)
+				candidateKeyArena = append(candidateKeyArena, locatorKey...)
+				key := candidateKeyArena[keyStart:len(candidateKeyArena):len(candidateKeyArena)]
+				stats.CandidateCount++
+				candidates = append(candidates, rewriteCandidate{
+					key:         key,
+					oldPtr:      oldPtr,
+					sourceBytes: sourceBytes,
+				})
+				selectedSourceBytes += sourceBytes
+				if len(candidates) >= batchSize {
+					stats.SourceScanNanos += time.Since(scanStart).Nanoseconds()
+					if err := flushBatch(); err != nil {
+						closeRewriteSnapshot(&err, snap)
+						return stats, err
+					}
+					scanStart = time.Now()
+				}
+				if maxCopiedBytes > 0 && selectedSourceBytes >= maxCopiedBytes {
+					break
 				}
 			}
-			if sourceChunkSet != nil {
-				ok, chunkErr := rewriteSourceChunkSelected(oldPtr, sourceChunkSet, sourceChunkBytes)
-				if chunkErr != nil {
+			stats.SourceScanNanos += time.Since(scanStart).Nanoseconds()
+		}
+	}
+	iterErr := error(nil)
+	if !usedLocatorCatalog {
+		it := snap.tree.IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
+		stats.CandidateScanMode = "tree"
+		scanStart := time.Now()
+		for ; it.Valid(); it.Next() {
+			if err := ctx.Err(); err != nil {
+				canceledErr = err
+				break
+			}
+			_, oldPtr, flags := it.UnsafeEntry()
+			if flags&node.FlagPointer == 0 || !page.IsValueLogFileID(oldPtr.FileID) {
+				continue
+			}
+			if restrictSource {
+				if restrictSingleID {
+					if oldPtr.FileID != singleSourceID {
+						continue
+					}
+				} else {
+					if _, ok := sourceIDs[oldPtr.FileID]; !ok {
+						continue
+					}
+				}
+				if sourceChunkSet != nil {
+					ok, chunkErr := rewriteSourceChunkSelected(oldPtr, sourceChunkSet, sourceChunkBytes)
+					if chunkErr != nil {
+						_ = it.Close()
+						closeRewriteSnapshot(&err, snap)
+						return stats, chunkErr
+					}
+					if !ok {
+						continue
+					}
+				}
+			}
+			unsafeKey := it.UnsafeKey()
+			sourceBytes := int64(0)
+			if maxCopiedBytes > 0 {
+				recordLen, err := db.valueLogRecordLengthForRewrite(oldPtr)
+				if err != nil {
 					_ = it.Close()
 					closeRewriteSnapshot(&err, snap)
-					return stats, chunkErr
+					return stats, err
 				}
-				if !ok {
-					continue
+				sourceBytes = int64(recordLen)
+				if selectedSourceBytes > 0 && selectedSourceBytes+sourceBytes > maxCopiedBytes {
+					break
 				}
 			}
-		}
-		unsafeKey := it.UnsafeKey()
-		sourceBytes := int64(0)
-		if maxCopiedBytes > 0 {
-			recordLen, err := db.valueLogRecordLengthForRewrite(oldPtr)
-			if err != nil {
-				_ = it.Close()
-				closeRewriteSnapshot(&err, snap)
-				return stats, err
+			keyStart := len(candidateKeyArena)
+			candidateKeyArena = append(candidateKeyArena, unsafeKey...)
+			key := candidateKeyArena[keyStart:len(candidateKeyArena):len(candidateKeyArena)]
+			stats.CandidateCount++
+			candidates = append(candidates, rewriteCandidate{
+				key:         key,
+				oldPtr:      oldPtr,
+				sourceBytes: sourceBytes,
+			})
+			selectedSourceBytes += sourceBytes
+			if len(candidates) >= batchSize {
+				stats.SourceScanNanos += time.Since(scanStart).Nanoseconds()
+				if err := flushBatch(); err != nil {
+					_ = it.Close()
+					closeRewriteSnapshot(&err, snap)
+					return stats, err
+				}
+				scanStart = time.Now()
 			}
-			sourceBytes = int64(recordLen)
-			if selectedSourceBytes > 0 && selectedSourceBytes+sourceBytes > maxCopiedBytes {
+			if maxCopiedBytes > 0 && selectedSourceBytes >= maxCopiedBytes {
 				break
 			}
 		}
-		keyStart := len(candidateKeyArena)
-		candidateKeyArena = append(candidateKeyArena, unsafeKey...)
-		key := candidateKeyArena[keyStart:len(candidateKeyArena):len(candidateKeyArena)]
-		stats.CandidateCount++
-		candidates = append(candidates, rewriteCandidate{
-			key:         key,
-			oldPtr:      oldPtr,
-			sourceBytes: sourceBytes,
-		})
-		selectedSourceBytes += sourceBytes
-		if len(candidates) >= batchSize {
-			stats.SourceScanNanos += time.Since(scanStart).Nanoseconds()
-			if err := flushBatch(); err != nil {
-				_ = it.Close()
-				closeRewriteSnapshot(&err, snap)
-				return stats, err
-			}
-			scanStart = time.Now()
-		}
-		if maxCopiedBytes > 0 && selectedSourceBytes >= maxCopiedBytes {
-			break
-		}
+		stats.SourceScanNanos += time.Since(scanStart).Nanoseconds()
+		iterErr = it.Error()
+		_ = it.Close()
 	}
-	stats.SourceScanNanos += time.Since(scanStart).Nanoseconds()
 	stats.CandidateScanNanos += time.Since(candidateScanStart).Nanoseconds()
-	iterErr := it.Error()
-	_ = it.Close()
 	closeRewriteSnapshot(&err, snap)
 	if iterErr != nil {
 		return stats, iterErr
