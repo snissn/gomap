@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"hash/crc32"
@@ -3440,6 +3441,142 @@ func TestValueLogRewritePlan_InvalidatesCachedLiveBytesAfterCommit(t *testing.T)
 	}
 	if got := counter.Load(); got != 2 {
 		t.Fatalf("live-byte estimate runs=%d want 2 after commit", got)
+	}
+}
+
+func TestValueLogRewritePlan_UsesPersistedDebtLedgerAcrossReopen(t *testing.T) {
+	t.Setenv(envEnableVlogDebtLedger, "1")
+	dir := t.TempDir()
+	counter := withRewritePlanEstimateCounter(t)
+
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	ptrs1 := appendPointersInNewSegment(t, dir, 0, 1, 248_000, 2, func(i int) []byte {
+		return bytes.Repeat([]byte("x"), 256)
+	})
+	ptrs2 := appendPointersInNewSegment(t, dir, 0, 2, 248_100, 1, func(i int) []byte {
+		return bytes.Repeat([]byte("y"), 256)
+	})
+	b := db.NewBatch().(*Batch)
+	if err := b.SetPointer([]byte("k1"), ptrs1[0]); err != nil {
+		t.Fatalf("set k1: %v", err)
+	}
+	if err := b.SetPointer([]byte("k2"), ptrs2[0]); err != nil {
+		t.Fatalf("set k2: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("seed write: %v", err)
+	}
+	closeNoErr(t, b)
+
+	opts := ValueLogRewriteOnlineOptions{MaxSourceSegments: 1, MaxSourceBytes: 4 << 20, MinSegmentStaleRatio: 0.10, MinSegmentStaleBytes: 1}
+	plan1, err := db.ValueLogRewritePlan(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("first plan: %v", err)
+	}
+	if got := counter.Load(); got != 1 {
+		t.Fatalf("estimate runs after first plan=%d want 1", got)
+	}
+	closeNoErr(t, db)
+
+	db2, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer closeNoErr(t, db2)
+	plan2, err := db2.ValueLogRewritePlan(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("reopen plan: %v", err)
+	}
+	assertRewritePlanStableFieldsEqual(t, plan2, plan1)
+	if got := counter.Load(); got != 1 {
+		t.Fatalf("estimate runs after reopen plan=%d want 1", got)
+	}
+}
+
+func TestValueLogRewritePlan_ShadowCompareRepairsDebtLedgerMismatch(t *testing.T) {
+	t.Setenv(envEnableVlogDebtLedger, "1")
+	dir := t.TempDir()
+	counter := withRewritePlanEstimateCounter(t)
+
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	ptrs1 := appendPointersInNewSegment(t, dir, 0, 1, 249_000, 2, func(i int) []byte {
+		return bytes.Repeat([]byte("x"), 256)
+	})
+	ptrs2 := appendPointersInNewSegment(t, dir, 0, 2, 249_100, 1, func(i int) []byte {
+		return bytes.Repeat([]byte("y"), 256)
+	})
+	b := db.NewBatch().(*Batch)
+	if err := b.SetPointer([]byte("k1"), ptrs1[0]); err != nil {
+		t.Fatalf("set k1: %v", err)
+	}
+	if err := b.SetPointer([]byte("k2"), ptrs2[0]); err != nil {
+		t.Fatalf("set k2: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("seed write: %v", err)
+	}
+	closeNoErr(t, b)
+
+	opts := ValueLogRewriteOnlineOptions{MaxSourceSegments: 1, MaxSourceBytes: 4 << 20, MinSegmentStaleRatio: 0.10, MinSegmentStaleBytes: 1}
+	plan1, err := db.ValueLogRewritePlan(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("first plan: %v", err)
+	}
+	ledgerPath := db.valueLogDebtLedgerPath()
+	disk, ok, err := loadValueLogDebtLedgerFromPath(ledgerPath, db.currentCommitSeq())
+	if err != nil {
+		t.Fatalf("load debt ledger: %v", err)
+	}
+	if !ok {
+		t.Fatalf("expected debt ledger to load before corruption")
+	}
+	for i := range disk.Segments {
+		disk.Segments[i].LiveBytes = 1
+		if disk.Segments[i].TotalBytes > 0 {
+			disk.Segments[i].StaleBytes = disk.Segments[i].TotalBytes - 1
+		}
+	}
+	blob, err := json.Marshal(disk)
+	if err != nil {
+		t.Fatalf("marshal corrupt debt ledger: %v", err)
+	}
+	if err := os.WriteFile(ledgerPath, blob, 0o600); err != nil {
+		t.Fatalf("write corrupt debt ledger: %v", err)
+	}
+	closeNoErr(t, db)
+
+	t.Setenv(envEnableVlogShadowCompare, "1")
+	db2, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer closeNoErr(t, db2)
+	before := counter.Load()
+	plan2, err := db2.ValueLogRewritePlan(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("shadow-compare plan: %v", err)
+	}
+	assertRewritePlanStableFieldsEqual(t, plan2, plan1)
+	if got := counter.Load() - before; got != 1 {
+		t.Fatalf("estimate runs during shadow compare=%d want 1", got)
+	}
+	corrected, ok, err := loadValueLogDebtLedgerFromPath(ledgerPath, db2.currentCommitSeq())
+	if err != nil {
+		t.Fatalf("reload corrected debt ledger: %v", err)
+	}
+	if !ok {
+		t.Fatalf("expected corrected debt ledger to load")
+	}
+	for _, seg := range corrected.Segments {
+		if seg.LiveBytes <= 1 && seg.TotalBytes > 1 {
+			t.Fatalf("expected corrected live bytes to exceed corrupted value: %+v", corrected.Segments)
+		}
 	}
 }
 
