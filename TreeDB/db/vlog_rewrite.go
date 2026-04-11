@@ -648,9 +648,36 @@ func (db *DB) ValueLogRewritePlan(ctx context.Context, opts ValueLogRewriteOnlin
 	// skip estimation, except when callers provide stale-byte/ratio filters and
 	// need current live-byte economics for those exact IDs.
 	if rewritePlanNeedsLiveEstimate(opts) {
-		liveByID, err = db.estimateValueLogLiveBytesBySegment(ctx)
-		if err != nil {
-			return plan, err
+		if valueLogDebtLedgerEnabled() && len(opts.SourceFileIDs) == 0 {
+			ledgerLiveByID, ok, err := db.liveBytesBySegmentFromDebtLedger(ctx)
+			if err != nil {
+				return plan, err
+			}
+			if ok {
+				liveByID = ledgerLiveByID
+				if valueLogDebtLedgerShadowCompareEnabled() {
+					scanLiveByID, scanErr := db.estimateValueLogLiveBytesBySegment(ctx)
+					if scanErr != nil {
+						return plan, scanErr
+					}
+					if !sameValueLogLiveBytesBySegment(liveByID, scanLiveByID) {
+						liveByID = scanLiveByID
+						if err := db.storeValueLogDebtLedgerFromLiveBytes(scanLiveByID); err != nil {
+							db.reportError(err)
+						}
+					}
+				}
+			} else {
+				liveByID, err = db.estimateValueLogLiveBytesBySegment(ctx)
+				if err != nil {
+					return plan, err
+				}
+			}
+		} else {
+			liveByID, err = db.estimateValueLogLiveBytesBySegment(ctx)
+			if err != nil {
+				return plan, err
+			}
 		}
 	}
 
