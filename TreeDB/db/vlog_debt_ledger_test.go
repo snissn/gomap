@@ -52,10 +52,12 @@ func TestValueLogDebtLedger_RebuildAndLoad(t *testing.T) {
 	}
 
 	path := filepath.Join(dir, valueLogDebtLedgerFileName)
-	if _, ok, err := loadValueLogDebtLedgerFromPath(path, db.currentCommitSeq()); err != nil {
+	if disk, ok, err := loadValueLogDebtLedgerFromPath(path, db.currentCommitSeq()); err != nil {
 		t.Fatalf("load persisted debt ledger: %v", err)
 	} else if !ok {
 		t.Fatalf("expected persisted debt ledger to load")
+	} else if len(disk.Records) == 0 {
+		t.Fatalf("expected persisted debt ledger to include record refs")
 	}
 }
 
@@ -181,6 +183,107 @@ func TestValueLogDebtLedger_TracksCommitDeltaAcrossPointerWrites(t *testing.T) {
 	}
 	if !sameValueLogLiveBytesBySegment(ledgerLive, scanLive) {
 		t.Fatalf("debt ledger live bytes mismatch after pointer delta: ledger=%+v scan=%+v", ledgerLive, scanLive)
+	}
+}
+
+func TestValueLogDebtLedger_PersistsTrackableStateAcrossReopen(t *testing.T) {
+	t.Setenv(envEnableVlogDebtLedger, "1")
+	dir := t.TempDir()
+
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	ptrs1 := appendPointersInNewSegment(t, dir, 0, 20, 363_000, 1, func(i int) []byte {
+		return bytes.Repeat([]byte("a"), 256)
+	})
+	ptrs2 := appendPointersInNewSegment(t, dir, 0, 21, 364_000, 1, func(i int) []byte {
+		return bytes.Repeat([]byte("b"), 256)
+	})
+	b := db.NewBatch().(*Batch)
+	if err := b.SetPointer([]byte("k1"), ptrs1[0]); err != nil {
+		t.Fatalf("set k1: %v", err)
+	}
+	if err := b.SetPointer([]byte("k2"), ptrs2[0]); err != nil {
+		t.Fatalf("set k2: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("seed write: %v", err)
+	}
+	closeNoErr(t, b)
+
+	if err := db.rebuildValueLogDebtLedger(context.Background()); err != nil {
+		t.Fatalf("rebuild debt ledger: %v", err)
+	}
+	ptrs3 := appendPointersInNewSegment(t, dir, 0, 22, 365_000, 1, func(i int) []byte {
+		return bytes.Repeat([]byte("c"), 256)
+	})
+	b = db.NewBatch().(*Batch)
+	if err := b.SetPointer([]byte("k1"), ptrs3[0]); err != nil {
+		t.Fatalf("update k1: %v", err)
+	}
+	if err := b.Delete([]byte("k2")); err != nil {
+		t.Fatalf("delete k2: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("delta write: %v", err)
+	}
+	closeNoErr(t, b)
+	closeNoErr(t, db)
+
+	db2, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer closeNoErr(t, db2)
+
+	if !db2.valueLogDebtLedger.canTrack(db2.currentCommitSeq()) {
+		t.Fatalf("expected reopened debt ledger to stay trackable without rebuild")
+	}
+	ledgerLive, ok, err := db2.liveBytesBySegmentFromDebtLedger(context.Background())
+	if err != nil {
+		t.Fatalf("live bytes from debt ledger: %v", err)
+	}
+	if !ok {
+		t.Fatalf("expected reopened debt ledger live bytes")
+	}
+	scanLive, err := db2.estimateValueLogLiveBytesBySegment(context.Background())
+	if err != nil {
+		t.Fatalf("estimate live bytes: %v", err)
+	}
+	if !sameValueLogLiveBytesBySegment(ledgerLive, scanLive) {
+		t.Fatalf("reopened debt ledger live bytes mismatch: ledger=%+v scan=%+v", ledgerLive, scanLive)
+	}
+
+	ptrs4 := appendPointersInNewSegment(t, dir, 0, 23, 366_000, 1, func(i int) []byte {
+		return bytes.Repeat([]byte("d"), 256)
+	})
+	b = db2.NewBatch().(*Batch)
+	if err := b.SetPointer([]byte("k1"), ptrs4[0]); err != nil {
+		t.Fatalf("second update k1: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("second delta write: %v", err)
+	}
+	closeNoErr(t, b)
+
+	if !db2.valueLogDebtLedger.canTrack(db2.currentCommitSeq()) {
+		t.Fatalf("expected reopened debt ledger to remain trackable after new commit")
+	}
+	ledgerLive, ok, err = db2.liveBytesBySegmentFromDebtLedger(context.Background())
+	if err != nil {
+		t.Fatalf("post-reopen live bytes from debt ledger: %v", err)
+	}
+	if !ok {
+		t.Fatalf("expected post-reopen debt ledger live bytes")
+	}
+	scanLive, err = db2.estimateValueLogLiveBytesBySegment(context.Background())
+	if err != nil {
+		t.Fatalf("post-reopen estimate live bytes: %v", err)
+	}
+	if !sameValueLogLiveBytesBySegment(ledgerLive, scanLive) {
+		t.Fatalf("post-reopen debt ledger live bytes mismatch: ledger=%+v scan=%+v", ledgerLive, scanLive)
 	}
 }
 

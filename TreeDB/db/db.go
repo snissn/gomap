@@ -1709,6 +1709,8 @@ func (db *DB) finalizeCommitPostWork(post finalizeCommitPost) {
 			} else if err := db.valueLogDebtLedger.applyDelta(post.commitSeq, post.vlogDebtDelta, totals); err != nil {
 				db.valueLogDebtLedger.invalidate()
 				db.reportError(err)
+			} else {
+				db.persistValueLogDebtLedgerBestEffort()
 			}
 		} else {
 			db.valueLogDebtLedger.invalidate()
