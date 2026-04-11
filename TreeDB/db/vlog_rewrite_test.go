@@ -2582,6 +2582,27 @@ func TestValueLogRewriteOnline_SourceFileIDs_RestrictsRewriteSet(t *testing.T) {
 	if stats.RecordsCopied != 1 {
 		t.Fatalf("expected one rewritten record, got %d", stats.RecordsCopied)
 	}
+	if got, want := stats.RequestedSourceFileIDs, []uint32{ptrs1[0].FileID}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("requested source ids=%v want=%v", got, want)
+	}
+	if got, want := stats.DrainedSourceFileIDs, []uint32{ptrs1[0].FileID}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("drained source ids=%v want=%v", got, want)
+	}
+	if stats.SelectedSourceBytesBefore <= 0 {
+		t.Fatalf("expected non-zero selected source bytes before, got %d", stats.SelectedSourceBytesBefore)
+	}
+	if stats.SelectedSourceLiveBytesBefore <= 0 {
+		t.Fatalf("expected non-zero selected source live bytes before, got %d", stats.SelectedSourceLiveBytesBefore)
+	}
+	if stats.CandidateScanCount != 1 {
+		t.Fatalf("candidate scan count=%d want=1", stats.CandidateScanCount)
+	}
+	if stats.CandidateCount != 1 {
+		t.Fatalf("candidate count=%d want=1", stats.CandidateCount)
+	}
+	if stats.CandidateScanNanos <= 0 {
+		t.Fatalf("expected candidate scan nanos > 0, got %d", stats.CandidateScanNanos)
+	}
 
 	ptrK1, flagsK1 := readProjectedPointerByKey(t, db, []byte("k1"))
 	ptrK2, flagsK2 := readProjectedPointerByKey(t, db, []byte("k2"))

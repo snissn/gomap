@@ -1889,6 +1889,12 @@ const (
 	envDisableVlogGenerationVacuum         = "TREEDB_DISABLE_VLOG_GENERATION_VACUUM"
 	envDisableVlogGenerationLoop           = "TREEDB_DISABLE_VLOG_GENERATION_LOOP"
 	envDisableVlogGenerationCheckpointKick = "TREEDB_DISABLE_VLOG_GENERATION_CHECKPOINT_KICK"
+	envEnableVlogQueueWorkItems            = "TREEDB_VLOG_QUEUE_WORKITEMS"
+	envEnableVlogDebtLedger                = "TREEDB_VLOG_DEBT_LEDGER"
+	envEnableVlogLocatorCatalog            = "TREEDB_VLOG_LOCATOR_CATALOG"
+	envEnableVlogCatalogGC                 = "TREEDB_VLOG_CATALOG_GC"
+	envEnableVlogShadowCompare             = "TREEDB_VLOG_SHADOW_COMPARE"
+	envEnableVlogReconcileOnly             = "TREEDB_VLOG_RECONCILE_ONLY"
 	// Optional rewrite debt-drain caps for controlled online experiments.
 	envVlogGenerationRewriteResumeMaxSegments         = "TREEDB_VLOG_GENERATION_REWRITE_RESUME_MAX_SEGMENTS"
 	envVlogGenerationRewriteDebtDrainMaxSegments      = "TREEDB_VLOG_GENERATION_REWRITE_DEBT_DRAIN_MAX_SEGMENTS"
@@ -17860,7 +17866,10 @@ planned:
 				}
 			} else if len(processedRewriteIDs) > 0 {
 				removeRewriteIDs := processedRewriteIDs
-				if rewriteOpts.MaxCopiedBytes > 0 {
+				if len(stats.DrainedSourceFileIDs) > 0 {
+					removeRewriteIDs = append([]uint32(nil), stats.DrainedSourceFileIDs...)
+				}
+				if rewriteOpts.MaxCopiedBytes > 0 && len(stats.DrainedSourceFileIDs) == 0 {
 					removeRewriteIDs = append([]uint32(nil), stats.SourceFileIDsUnreferenced...)
 					if len(removeRewriteIDs) == 0 &&
 						stats.SourceSegmentsRequested == 0 &&
@@ -18345,22 +18354,7 @@ planned:
 				db.vlogGenerationRewriteSourceBytesUnreferencedTotal.Add(sourceBytesUnreferenced)
 				db.vlogGenerationRewriteSourceBytesUnreferencedBySource[activeSourceIdx].Add(sourceBytesUnreferenced)
 			}
-			rewriteBytesIn := int64(0)
-			if stats.SourceBytesProcessed > 0 {
-				rewriteBytesIn = stats.SourceBytesProcessed
-			} else if processedLedgerOK {
-				rewriteBytesIn = processedLedgerLiveBytes
-			} else if len(processedRewriteIDs) > 0 && stats.BytesBefore > 0 {
-				rewriteBytesIn = int64(stats.BytesBefore)
-			} else if haveRewriteChunkPlan && rewriteChunkPlan.SelectedBytesLive > 0 {
-				rewriteBytesIn = rewriteChunkPlan.SelectedBytesLive
-			} else if haveRewritePlan && rewritePlan.SelectedBytesLive > 0 {
-				rewriteBytesIn = rewritePlan.SelectedBytesLive
-			} else if maxSourceBytes > 0 {
-				rewriteBytesIn = maxSourceBytes
-			} else if stats.BytesBefore > 0 {
-				rewriteBytesIn = int64(stats.BytesBefore)
-			}
+			rewriteBytesIn := valueLogRewriteAccountingBytes(stats, processedLedgerOK, processedLedgerLiveBytes, haveRewriteChunkPlan, rewriteChunkPlan, haveRewritePlan, rewritePlan, maxSourceBytes)
 			if rewriteBytesIn > 0 {
 				db.vlogGenerationRewriteBytesIn.Add(uint64(rewriteBytesIn))
 			}
@@ -18375,22 +18369,7 @@ planned:
 			db.vlogGenerationRewriteExecLastBytesOut.Store(rewriteBytesOut)
 			db.vlogGenerationRewriteExecLastDurationNanos.Store(uint64(rewriteDur))
 			db.vlogGenerationRewriteExecLastUnixNano.Store(time.Now().UnixNano())
-			consumed := int64(0)
-			if stats.SourceBytesProcessed > 0 {
-				consumed = stats.SourceBytesProcessed
-			} else if processedLedgerOK {
-				consumed = processedLedgerLiveBytes
-			} else if len(processedRewriteIDs) > 0 && stats.BytesBefore > 0 {
-				consumed = int64(stats.BytesBefore)
-			} else if haveRewriteChunkPlan && rewriteChunkPlan.SelectedBytesLive > 0 {
-				consumed = rewriteChunkPlan.SelectedBytesLive
-			} else if haveRewritePlan && rewritePlan.SelectedBytesLive > 0 {
-				consumed = rewritePlan.SelectedBytesLive
-			} else if maxSourceBytes > 0 {
-				consumed = maxSourceBytes
-			} else if stats.BytesBefore > 0 {
-				consumed = int64(stats.BytesBefore)
-			}
+			consumed := rewriteBytesIn
 			if stats.RecordsCopied > 0 {
 				db.vlogGenerationRemapSuccesses.Add(uint64(stats.RecordsCopied))
 			}
@@ -18409,7 +18388,7 @@ planned:
 			if consumed > 0 {
 				db.vlogGenerationConsumeRewriteBudgetBytes(consumed, activeSourceIdx)
 			}
-			db.maybeRunVlogGenerationIndexVacuum(int64(stats.BytesBefore))
+			db.maybeRunVlogGenerationIndexVacuum(rewriteBytesIn)
 			return nil
 		})
 		if err != nil {
@@ -19067,6 +19046,35 @@ func (db *DB) maybeKickVlogGenerationMaintenanceAfterCheckpoint() {
 			db.vlogGenerationCheckpointKickPending.Load(),
 		)
 	}()
+}
+
+func valueLogRewriteAccountingBytes(
+	stats backenddb.ValueLogRewriteStats,
+	processedLedgerOK bool,
+	processedLedgerLiveBytes int64,
+	haveRewriteChunkPlan bool,
+	rewriteChunkPlan backenddb.ValueLogRewriteChunkPlan,
+	haveRewritePlan bool,
+	rewritePlan backenddb.ValueLogRewritePlan,
+	maxSourceBytes int64,
+) int64 {
+	if stats.SourceBytesProcessed > 0 {
+		return stats.SourceBytesProcessed
+	}
+	if stats.SelectedSourceLiveBytesBefore > 0 {
+		return stats.SelectedSourceLiveBytesBefore
+	}
+	if stats.SelectedSourceBytesBefore > 0 {
+		return stats.SelectedSourceBytesBefore
+	}
+	_ = processedLedgerOK
+	_ = processedLedgerLiveBytes
+	_ = haveRewriteChunkPlan
+	_ = rewriteChunkPlan
+	_ = haveRewritePlan
+	_ = rewritePlan
+	_ = maxSourceBytes
+	return 0
 }
 
 func (db *DB) maybeRunVlogGenerationIndexVacuum(rewriteBytesIn int64) {
@@ -25132,6 +25140,12 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_generation.segments.hot"] = fmt.Sprintf("%d", retained.SegmentsHot)
 	stats["treedb.cache.vlog_generation.segments.warm"] = fmt.Sprintf("%d", retained.SegmentsWarm)
 	stats["treedb.cache.vlog_generation.segments.cold"] = fmt.Sprintf("%d", retained.SegmentsCold)
+	stats["treedb.cache.vlog_generation.flags.queue_workitems"] = fmt.Sprintf("%t", envBool(envEnableVlogQueueWorkItems))
+	stats["treedb.cache.vlog_generation.flags.debt_ledger"] = fmt.Sprintf("%t", envBool(envEnableVlogDebtLedger))
+	stats["treedb.cache.vlog_generation.flags.locator_catalog"] = fmt.Sprintf("%t", envBool(envEnableVlogLocatorCatalog))
+	stats["treedb.cache.vlog_generation.flags.catalog_gc"] = fmt.Sprintf("%t", envBool(envEnableVlogCatalogGC))
+	stats["treedb.cache.vlog_generation.flags.shadow_compare"] = fmt.Sprintf("%t", envBool(envEnableVlogShadowCompare))
+	stats["treedb.cache.vlog_generation.flags.reconcile_only"] = fmt.Sprintf("%t", envBool(envEnableVlogReconcileOnly))
 	stats["treedb.cache.vlog_generation.rewrite.bytes_in"] = fmt.Sprintf("%d", rewriteBytesInTotal)
 	stats["treedb.cache.vlog_generation.rewrite.bytes_out"] = fmt.Sprintf("%d", rewriteBytesOutTotal)
 	stats["treedb.cache.vlog_generation.rewrite.value_records_copied"] = fmt.Sprintf("%d", rewriteValueRecordsCopiedTotal)

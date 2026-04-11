@@ -88,6 +88,18 @@ type ValueLogRewriteStats struct {
 	// SourceBytesUnreferenced is the bytes of selected source segments that
 	// became unreferenced after rewrite pointer swaps and cleanup.
 	SourceBytesUnreferenced int64
+	// SelectedSourceBytesBefore is the total bytes across the specific source
+	// segments requested for this rewrite run.
+	SelectedSourceBytesBefore int64
+	// SelectedSourceLiveBytesBefore is the estimated live-byte total across the
+	// specific source segments requested for this rewrite run.
+	SelectedSourceLiveBytesBefore int64
+	// RequestedSourceFileIDs records the sorted source segment IDs requested for
+	// this rewrite run.
+	RequestedSourceFileIDs []uint32
+	// DrainedSourceFileIDs records the requested source segment IDs that were no
+	// longer referenced after rewrite cleanup completed.
+	DrainedSourceFileIDs []uint32
 	// SourceBytesProcessed is the bounded subset of selected source bytes
 	// actually rewritten in this pass. When zero, the rewrite either copied
 	// nothing or ran without a per-pass source-byte bound.
@@ -119,6 +131,13 @@ type ValueLogRewriteStats struct {
 	// Rewrite stage timings are coarse wall-clock timings for the main online
 	// rewrite phases. ReadDecodeNanos includes both source reads and value-log
 	// decode because the current ReadUnsafeTo API does not separate them.
+	CandidateScanMode  string
+	CandidateScanCount int
+	CandidateCount     int
+	CandidateScanNanos int64
+	CopyNanos          int64
+	SwapNanos          int64
+	CleanupNanos       int64
 	PlanNanos         int64
 	SourceScanNanos   int64
 	ReadDecodeNanos   int64
@@ -175,6 +194,18 @@ type ValueLogRewritePlan struct {
 	AgeBlockedBytesLive       int64
 	AgeBlockedBytesStale      int64
 	AgeBlockedMinRemainingAge time.Duration
+}
+
+func sortedValueLogFileIDs(ids map[uint32]struct{}) []uint32 {
+	if len(ids) == 0 {
+		return nil
+	}
+	out := make([]uint32, 0, len(ids))
+	for id := range ids {
+		out = append(out, id)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
 }
 
 // ValueLogRewriteOnlineOptions controls online rewrite behavior.
@@ -1369,6 +1400,7 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		restrictSingleID   bool
 		sourceSegmentCount int
 		sourceSegmentBytes map[uint32]int64
+		liveByID           map[uint32]int64
 	)
 	if hasExplicitRewriteChunks(opts) {
 		sourceChunkBytes = normalizeValueLogRewriteChunkBytes(opts.SourceChunkBytes)
@@ -1404,7 +1436,6 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		stats.SourceSegmentsRequested = sourceSegmentCount
 	} else if hasRewriteSourceSelection(opts) {
 		active := currentValueLogIDs(set)
-		var liveByID map[uint32]int64
 		if rewritePlanNeedsLiveEstimate(opts) {
 			liveByID, err = db.estimateValueLogLiveBytesBySegment(ctx)
 			if err != nil {
@@ -1434,6 +1465,28 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 				}
 			}
 			stats.SourceBytesRequested = requestedBytes
+		}
+	}
+	if sourceSegmentCount > 0 {
+		if restrictSingleID {
+			stats.RequestedSourceFileIDs = []uint32{singleSourceID}
+		} else {
+			stats.RequestedSourceFileIDs = sortedValueLogFileIDs(sourceIDs)
+		}
+		stats.SelectedSourceBytesBefore = stats.SourceBytesRequested
+		if stats.SelectedSourceBytesBefore == 0 {
+			for _, size := range sourceSegmentBytes {
+				if size > 0 {
+					stats.SelectedSourceBytesBefore += size
+				}
+			}
+		}
+		if liveByID != nil {
+			for _, id := range stats.RequestedSourceFileIDs {
+				stats.SelectedSourceLiveBytesBefore += liveByID[id]
+			}
+		} else {
+			stats.SelectedSourceLiveBytesBefore = stats.SelectedSourceBytesBefore
 		}
 	}
 	if restrictSource && sourceSegmentCount == 0 {
@@ -1559,6 +1612,7 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		if err != nil {
 			return err
 		}
+		copyStart := time.Now()
 		for _, candidate := range candidates {
 			if rewriteReadScratch == nil {
 				rewriteReadScratch = make([]byte, 0, rewriteReadScratchInitCap)
@@ -1611,6 +1665,7 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 				newPtr: newPtr,
 			})
 		}
+		stats.CopyNanos += time.Since(copyStart).Nanoseconds()
 		bookkeepingStart := time.Now()
 		if opts.SyncEachBatch {
 			if err := writer.Sync(); err != nil {
@@ -1642,7 +1697,9 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		if err := db.applyRewriteSwapBatch(swaps, opts.SyncEachBatch); err != nil {
 			return err
 		}
-		stats.SwapCommitNanos += time.Since(swapStart).Nanoseconds()
+		swapElapsed := time.Since(swapStart).Nanoseconds()
+		stats.SwapCommitNanos += swapElapsed
+		stats.SwapNanos += swapElapsed
 		stats.SwapBatches++
 		candidates = candidates[:0]
 		if cap(candidateKeyArena) > rewriteKeyArenaMaxCap {
@@ -1659,6 +1716,9 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		return stats, fmt.Errorf("missing snapshot state")
 	}
 	it := snap.tree.IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
+	stats.CandidateScanMode = "tree"
+	stats.CandidateScanCount = 1
+	candidateScanStart := time.Now()
 	scanStart := time.Now()
 	for ; it.Valid(); it.Next() {
 		if err := ctx.Err(); err != nil {
@@ -1708,6 +1768,7 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		keyStart := len(candidateKeyArena)
 		candidateKeyArena = append(candidateKeyArena, unsafeKey...)
 		key := candidateKeyArena[keyStart:len(candidateKeyArena):len(candidateKeyArena)]
+		stats.CandidateCount++
 		candidates = append(candidates, rewriteCandidate{
 			key:         key,
 			oldPtr:      oldPtr,
@@ -1728,6 +1789,7 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		}
 	}
 	stats.SourceScanNanos += time.Since(scanStart).Nanoseconds()
+	stats.CandidateScanNanos += time.Since(candidateScanStart).Nanoseconds()
 	iterErr := it.Error()
 	_ = it.Close()
 	closeRewriteSnapshot(&err, snap)
@@ -1792,6 +1854,7 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 	// rewrite is logically committed, so value-log segment bookkeeping must always
 	// complete to keep the value-log set and on-disk metadata consistent with the
 	// already-committed pointer swaps, even if the caller's context is canceled.
+	cleanupStart := time.Now()
 	referencedAfter, err := db.referencedValueLogSegments(context.Background())
 	if err != nil {
 		return stats, err
@@ -1935,6 +1998,16 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		stats.SegmentsAfter = afterSegs
 		stats.BytesAfter = afterBytes
 	}
+	if len(stats.RequestedSourceFileIDs) > 0 {
+		stats.DrainedSourceFileIDs = make([]uint32, 0, len(stats.RequestedSourceFileIDs))
+		for _, id := range stats.RequestedSourceFileIDs {
+			if _, ok := referencedAfter[id]; ok {
+				continue
+			}
+			stats.DrainedSourceFileIDs = append(stats.DrainedSourceFileIDs, id)
+		}
+	}
+	stats.CleanupNanos += time.Since(cleanupStart).Nanoseconds()
 	stats.BookkeepingNanos += time.Since(finalBookkeepingStart).Nanoseconds()
 	if canceledErr != nil {
 		return stats, canceledErr
