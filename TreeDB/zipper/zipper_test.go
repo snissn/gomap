@@ -192,7 +192,7 @@ func TestZipperLeafRefCacheAvoidsUnflushedReads(t *testing.T) {
 	}
 	b.FinishNoNode()
 
-	leafID, err := z.persistLeafPage(b)
+	leafID, _, err := z.persistLeafPage(b)
 	if err != nil {
 		t.Fatalf("persistLeafPage: %v", err)
 	}
@@ -586,7 +586,7 @@ func TestMergeLeaf_SplitKeysDoNotAliasBatchKeys(t *testing.T) {
 	scratch := newMergeScratch()
 
 	var metrics adaptive.Metrics
-	_, splits, err := z.mergeLeaf(oldNode, builder, ops, &metrics, scratch, false)
+	_, splits, err := z.mergeLeaf(0, oldNode, builder, ops, &metrics, scratch, false)
 	if err != nil {
 		t.Fatalf("mergeLeaf failed: %v", err)
 	}

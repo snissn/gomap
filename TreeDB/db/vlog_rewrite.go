@@ -662,7 +662,8 @@ func (db *DB) ValueLogRewritePlan(ctx context.Context, opts ValueLogRewriteOnlin
 					}
 					if !sameValueLogLiveBytesBySegment(liveByID, scanLiveByID) {
 						liveByID = scanLiveByID
-						if err := db.storeValueLogDebtLedgerFromLiveBytes(scanLiveByID); err != nil {
+						db.valueLogDebtLedger.invalidate()
+						if err := db.rebuildValueLogDebtLedger(ctx); err != nil {
 							db.reportError(err)
 						}
 					}
@@ -2158,10 +2159,11 @@ type leafRefRewriteCtx struct {
 	internalRemapInline    [leafRefRewriteInlineRemapCap]leafRefRewriteRemap
 	internalRemapInlineLen int
 
-	retired        []uint64
-	copied         int
-	copiedBytes    int64
-	maxCopiedBytes int64
+	retired          []uint64
+	copied           int
+	copiedBytes      int64
+	maxCopiedBytes   int64
+	outerLeafChanges *valueLogOuterLeafChangeCollector
 
 	readRefreshRetried bool
 }
@@ -2347,6 +2349,9 @@ func (c *leafRefRewriteCtx) rewriteNode(id uint64) (uint64, bool, error) {
 			return id, false, err
 		}
 		c.storeLeafRemap(id, leafID)
+		if c.outerLeafChanges != nil {
+			c.outerLeafChanges.Observe([]page.ValuePtr{ptr}, []page.ValuePtr{newPtr})
+		}
 		c.copied++
 		c.copiedBytes += int64(len(leafPage))
 		return leafID, true, nil
@@ -2529,6 +2534,9 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 		hasSingleID:      hasSingleSourceID,
 		maxCopiedBytes:   maxCopiedBytes,
 	}
+	if db.valueLogDebtLedger != nil && valueLogDebtLedgerEnabled() && db.valueLogDebtLedger.canTrack(snap.state.CommitSeq) {
+		leafCtx.outerLeafChanges = &valueLogOuterLeafChangeCollector{}
+	}
 	if toer, ok := leafCtx.leafReader.(unsafeToReader); ok {
 		leafCtx.leafToer = toer
 		leafCtx.leafScratch = make([]byte, 0, page.PageSize)
@@ -2572,8 +2580,15 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 			}
 		}
 	}
-
-	if err := db.finalizeCommit(newRoot, newSysRoot, leafCtx.retired, sync, adaptive.Metrics{}, createdIDs, false, nil, nil); err != nil {
+	vlogDebtDelta, err := db.buildValueLogDebtDelta(nil, 0, snap.state.CommitSeq, nil, leafCtx.outerLeafChanges)
+	if err != nil {
+		return 0, 0, err
+	}
+	var vlogLocatorDelta *valueLogLocatorDelta
+	if db.valueLogLocatorCatalog != nil && valueLogLocatorCatalogEnabled() && db.valueLogLocatorCatalog.canTrack(snap.state.CommitSeq) {
+		vlogLocatorDelta = newValueLogLocatorDelta()
+	}
+	if err := db.finalizeCommit(newRoot, newSysRoot, leafCtx.retired, sync, adaptive.Metrics{}, createdIDs, false, nil, vlogDebtDelta, vlogLocatorDelta); err != nil {
 		return 0, 0, err
 	}
 	tracker = nil
@@ -2805,6 +2820,11 @@ func (db *DB) applyRewriteSwapBatchOptimistic(swaps []rewriteSwap, sync bool) (b
 
 	tracker := newAllocTracker(idx.allocator)
 	z := idx.zipper.CloneWithAllocator(tracker)
+	var outerLeafChanges *valueLogOuterLeafChangeCollector
+	if db.valueLogDebtLedger != nil && valueLogDebtLedgerEnabled() && db.valueLogDebtLedger.canTrack(baseSeq) {
+		outerLeafChanges = &valueLogOuterLeafChangeCollector{}
+		z.SetOuterLeafRecordObserver(outerLeafChanges.Observe)
+	}
 	newRoot, retired, metrics, err := z.Apply(rootID, b)
 	if err != nil {
 		freeErr := tracker.FreeAll()
@@ -2816,6 +2836,14 @@ func (db *DB) applyRewriteSwapBatchOptimistic(swaps []rewriteSwap, sync bool) (b
 	var vlogRefDelta *valueLogRefDelta
 	if trackValueLogRefDelta {
 		vlogRefDelta = rewriteDelta
+	}
+	vlogDebtDelta, err := db.buildValueLogDebtDelta(idx.pager, rootID, baseSeq, entries, outerLeafChanges)
+	if err != nil {
+		freeErr := tracker.FreeAll()
+		if freeErr != nil {
+			return false, errors.Join(err, freeErr)
+		}
+		return false, err
 	}
 	defer func() {
 		if vlogRefDelta != nil {
@@ -2845,7 +2873,7 @@ func (db *DB) applyRewriteSwapBatchOptimistic(swaps []rewriteSwap, sync bool) (b
 		}
 	}
 
-	post, err := db.finalizeCommitLocked(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, db.indexOuterLeavesInValueLog, vlogRefDelta, vlogLocatorDelta)
+	post, err := db.finalizeCommitLocked(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, db.indexOuterLeavesInValueLog, vlogRefDelta, vlogDebtDelta, vlogLocatorDelta)
 	db.commitMu.Unlock()
 	if err != nil {
 		return false, err
@@ -2902,6 +2930,12 @@ func (db *DB) applyRewriteSwapBatchSerialized(swaps []rewriteSwap, sync bool) er
 	noteRewriteSwapTouchedSegments(b, swaps)
 	touchedValueLogSegments := b.TouchedValueLogSegments()
 
+	var outerLeafChanges *valueLogOuterLeafChangeCollector
+	if db.valueLogDebtLedger != nil && valueLogDebtLedgerEnabled() && db.valueLogDebtLedger.canTrack(baseSeq) {
+		outerLeafChanges = &valueLogOuterLeafChangeCollector{}
+		idx.zipper.SetOuterLeafRecordObserver(outerLeafChanges.Observe)
+		defer idx.zipper.SetOuterLeafRecordObserver(nil)
+	}
 	newRoot, retired, metrics, err := idx.zipper.Apply(rootID, b)
 	if err != nil {
 		return err
@@ -2909,6 +2943,10 @@ func (db *DB) applyRewriteSwapBatchSerialized(swaps []rewriteSwap, sync bool) er
 	var vlogRefDelta *valueLogRefDelta
 	if trackValueLogRefDelta {
 		vlogRefDelta = rewriteDelta
+	}
+	vlogDebtDelta, err := db.buildValueLogDebtDelta(idx.pager, rootID, baseSeq, entries, outerLeafChanges)
+	if err != nil {
+		return err
 	}
 	defer func() {
 		if vlogRefDelta != nil {
@@ -2922,7 +2960,7 @@ func (db *DB) applyRewriteSwapBatchSerialized(swaps []rewriteSwap, sync bool) er
 			return err
 		}
 	}
-	if err := db.finalizeCommit(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, db.indexOuterLeavesInValueLog, vlogRefDelta, vlogLocatorDelta); err != nil {
+	if err := db.finalizeCommit(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, db.indexOuterLeavesInValueLog, vlogRefDelta, vlogDebtDelta, vlogLocatorDelta); err != nil {
 		return err
 	}
 	vlogRefDelta = nil

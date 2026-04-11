@@ -3476,8 +3476,8 @@ func TestValueLogRewritePlan_UsesPersistedDebtLedgerAcrossReopen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first plan: %v", err)
 	}
-	if got := counter.Load(); got != 1 {
-		t.Fatalf("estimate runs after first plan=%d want 1", got)
+	if got := counter.Load(); got != 0 {
+		t.Fatalf("estimate runs after first plan=%d want 0 with commit-path debt ledger", got)
 	}
 	closeNoErr(t, db)
 
@@ -3491,8 +3491,8 @@ func TestValueLogRewritePlan_UsesPersistedDebtLedgerAcrossReopen(t *testing.T) {
 		t.Fatalf("reopen plan: %v", err)
 	}
 	assertRewritePlanStableFieldsEqual(t, plan2, plan1)
-	if got := counter.Load(); got != 1 {
-		t.Fatalf("estimate runs after reopen plan=%d want 1", got)
+	if got := counter.Load(); got != 0 {
+		t.Fatalf("estimate runs after reopen plan=%d want 0 with persisted debt ledger", got)
 	}
 }
 
