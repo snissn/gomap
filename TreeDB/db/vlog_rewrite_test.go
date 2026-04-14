@@ -195,6 +195,92 @@ func TestLeafRefRewriteCtx_InternalRemapInlinePromotion(t *testing.T) {
 	}
 }
 
+type rewriteTestLeafReader struct {
+	values map[page.ValuePtr][]byte
+}
+
+func (r *rewriteTestLeafReader) Read(ptr page.ValuePtr) ([]byte, error) {
+	val, ok := r.values[ptr]
+	if !ok {
+		return nil, fmt.Errorf("leaf pointer not found")
+	}
+	return append([]byte(nil), val...), nil
+}
+
+func (r *rewriteTestLeafReader) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
+	val, ok := r.values[ptr]
+	if !ok {
+		return nil, fmt.Errorf("leaf pointer not found")
+	}
+	return val, nil
+}
+
+func TestLeafRefRewriteCtx_RewriteNodeUsesConfiguredLeafLog(t *testing.T) {
+	root := t.TempDir()
+	valueDir := filepath.Join(root, "value_vlog")
+	leafDir := filepath.Join(root, "leaf_vlog")
+	if err := os.MkdirAll(valueDir, 0o755); err != nil {
+		t.Fatalf("mkdir value dir: %v", err)
+	}
+	if err := os.MkdirAll(leafDir, 0o755); err != nil {
+		t.Fatalf("mkdir leaf dir: %v", err)
+	}
+
+	writer := newRewriteWriter(valueDir, 254, 0, 64<<20)
+	writer.ConfigureLeafLog(leafDir, rewriteLeafLogLaneID, 0)
+	leafPage := bytes.Repeat([]byte("r"), page.PageSize)
+	sourceFileID, err := valuelog.EncodeFileID(3, 9)
+	if err != nil {
+		t.Fatalf("EncodeFileID: %v", err)
+	}
+	oldPtr := page.ValuePtr{FileID: sourceFileID, Offset: 128, Length: page.ValuePtrMarkGrouped(0, 0)}
+	oldLeafPtr, err := page.LeafLogPtrFromValuePtr(oldPtr)
+	if err != nil {
+		t.Fatalf("LeafLogPtrFromValuePtr: %v", err)
+	}
+	oldID, err := page.EncodeLeafRef(oldLeafPtr)
+	if err != nil {
+		t.Fatalf("EncodeLeafRef: %v", err)
+	}
+
+	ctx := leafRefRewriteCtx{
+		ctx:        context.Background(),
+		leafReader: &rewriteTestLeafReader{values: map[page.ValuePtr][]byte{oldPtr: leafPage}},
+		writer:     writer,
+		ridAlloc:   newRewriteRIDAllocator(1000, nil),
+		sourceIDs:  map[uint32]struct{}{sourceFileID: {}},
+	}
+
+	newID, changed, err := ctx.rewriteNode(oldID)
+	if err != nil {
+		t.Fatalf("rewriteNode: %v", err)
+	}
+	if !changed {
+		t.Fatalf("expected leaf ref rewrite to change node")
+	}
+	newLeafPtr, ok := page.DecodeLeafRef(newID)
+	if !ok {
+		t.Fatalf("expected rewritten leaf ref")
+	}
+	lane, _ := valuelog.DecodeFileID(newLeafPtr.ValueLogFileID())
+	if lane != rewriteLeafLogLaneID {
+		t.Fatalf("rewritten leaf lane=%d want=%d", lane, rewriteLeafLogLaneID)
+	}
+	createdSegments, err := writer.createdSegmentsSnapshot()
+	if err != nil {
+		t.Fatalf("createdSegmentsSnapshot: %v", err)
+	}
+	if len(createdSegments) != 1 {
+		t.Fatalf("expected 1 created segment, got %d", len(createdSegments))
+	}
+	if !strings.HasPrefix(createdSegments[0].path, leafDir+string(os.PathSeparator)) {
+		t.Fatalf("rewritten leaf segment path=%q want prefix %q", createdSegments[0].path, leafDir)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+}
+
 func TestValueLogRewriteOffline_RewritesAndShrinks(t *testing.T) {
 	dir := t.TempDir()
 
@@ -2115,6 +2201,32 @@ func TestRewriteWriter_LeafPagesUseConfiguredLeafLogDir(t *testing.T) {
 	}
 	if !sawValue || !sawLeaf {
 		t.Fatalf("expected created IDs to include value and leaf lanes, ids=%v", ids)
+	}
+	createdSegments, err := w.createdSegmentsSnapshot()
+	if err != nil {
+		t.Fatalf("createdSegmentsSnapshot: %v", err)
+	}
+	if len(createdSegments) != 2 {
+		t.Fatalf("expected 2 created segments, got %d", len(createdSegments))
+	}
+	var sawValuePath, sawLeafPath bool
+	for _, seg := range createdSegments {
+		lane, _ := valuelog.DecodeFileID(seg.fileID)
+		switch lane {
+		case 254:
+			if !strings.HasPrefix(seg.path, valueDir+string(os.PathSeparator)) {
+				t.Fatalf("value segment path=%q want prefix %q", seg.path, valueDir)
+			}
+			sawValuePath = true
+		case rewriteLeafLogLaneID:
+			if !strings.HasPrefix(seg.path, leafDir+string(os.PathSeparator)) {
+				t.Fatalf("leaf segment path=%q want prefix %q", seg.path, leafDir)
+			}
+			sawLeafPath = true
+		}
+	}
+	if !sawValuePath || !sawLeafPath {
+		t.Fatalf("expected created segments to preserve value and leaf paths, got=%v", createdSegments)
 	}
 }
 

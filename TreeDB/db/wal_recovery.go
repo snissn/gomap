@@ -465,15 +465,11 @@ func (a *replayInlineAppender) AppendLeafPage(leafPage []byte) (page.LeafLogPtr,
 	}
 	rid := a.nextRID
 	a.nextRID++
-	ptr, err := a.writer.appendValue(rid, leafPage)
+	leafPtr, err := a.writer.appendLeafPageWithRID(rid, leafPage)
 	if err != nil {
 		return page.LeafLogPtr{}, err
 	}
 	a.dirty = true
-	leafPtr, convErr := page.LeafLogPtrFromValuePtr(ptr)
-	if convErr != nil {
-		return page.LeafLogPtr{}, convErr
-	}
 	return leafPtr, nil
 }
 

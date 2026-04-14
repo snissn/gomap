@@ -1696,12 +1696,15 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 	if err != nil {
 		return stats, err
 	}
-	if len(newValueIDs) > 0 {
+	createdSegments, err := writer.createdSegmentsSnapshot()
+	if err != nil {
+		return stats, err
+	}
+	if len(createdSegments) > 0 {
 		// Avoid scanning the filesystem after rewrite creates new segments; we
 		// already know their IDs and paths deterministically.
-		for _, id := range newValueIDs {
-			path := db.valueLogManager.SegmentPath(id)
-			if err := db.valueLogManager.RegisterSegment(path, id); err != nil {
+		for _, seg := range createdSegments {
+			if err := db.valueLogManager.RegisterSegment(seg.path, seg.fileID); err != nil {
 				return stats, err
 			}
 		}
@@ -2070,11 +2073,7 @@ func (c *leafRefRewriteCtx) rewriteNode(id uint64) (uint64, bool, error) {
 		if err != nil {
 			return id, false, err
 		}
-		newPtr, err := c.writer.appendValue(rid, leafPage)
-		if err != nil {
-			return id, false, err
-		}
-		leafLogPtr, err := page.LeafLogPtrFromValuePtr(newPtr)
+		leafLogPtr, err := c.writer.appendLeafPageWithRID(rid, leafPage)
 		if err != nil {
 			return id, false, err
 		}
@@ -2297,13 +2296,16 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 	if err != nil {
 		return 0, 0, err
 	}
-	if len(createdIDs) > 0 {
+	createdSegments, err := writer.createdSegmentsSnapshot()
+	if err != nil {
+		return 0, 0, err
+	}
+	if len(createdSegments) > 0 {
 		// Register rewrite-created segments before commit publication so
 		// finalizeCommit can publish CurrentSetNoRefresh without forcing a
 		// filesystem rescan in leafref-heavy rewrite paths.
-		for _, id := range createdIDs {
-			path := db.valueLogManager.SegmentPath(id)
-			if err := db.valueLogManager.RegisterSegment(path, id); err != nil {
+		for _, seg := range createdSegments {
+			if err := db.valueLogManager.RegisterSegment(seg.path, seg.fileID); err != nil {
 				return 0, 0, err
 			}
 		}
@@ -3035,6 +3037,11 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 	return stats, nil
 }
 
+type rewriteCreatedSegment struct {
+	path   string
+	fileID uint32
+}
+
 type rewriteWriter struct {
 	walDir   string
 	lane     uint32
@@ -3083,6 +3090,7 @@ type rewriteWriter struct {
 	leafW                     *valuelog.Writer
 	records                   int
 	createdIDs                []uint32
+	createdSegments           []rewriteCreatedSegment
 
 	pendingDictID      uint64
 	pendingDict        []byte
@@ -3113,6 +3121,14 @@ func (w *rewriteWriter) ConfigureLeafLog(leafDir string, lane, startSeq uint32) 
 	w.leafDir = leafDir
 	w.leafLane = lane
 	w.leafSeq = startSeq
+}
+
+func (w *rewriteWriter) noteCreatedSegment(path string, fileID uint32) {
+	if w == nil || path == "" || fileID == 0 {
+		return
+	}
+	w.createdIDs = append(w.createdIDs, fileID)
+	w.createdSegments = append(w.createdSegments, rewriteCreatedSegment{path: path, fileID: fileID})
 }
 
 func rewriteDictFrameRecordLen(rawPayloadBytes, k int) int64 {
@@ -3212,6 +3228,16 @@ func (w *rewriteWriter) AppendLeafPage(leafPage []byte) (page.LeafLogPtr, error)
 	rid := w.nextRID
 	w.nextRID++
 	if w.nextRID == 0 {
+		return page.LeafLogPtr{}, fmt.Errorf("value-log rid space exhausted")
+	}
+	return w.appendLeafPageWithRID(rid, leafPage)
+}
+
+func (w *rewriteWriter) appendLeafPageWithRID(rid uint64, leafPage []byte) (page.LeafLogPtr, error) {
+	if w == nil {
+		return page.LeafLogPtr{}, errors.New("vlog-rewrite: nil writer")
+	}
+	if rid == 0 {
 		return page.LeafLogPtr{}, fmt.Errorf("value-log rid space exhausted")
 	}
 	if w.leafDir != "" {
@@ -3323,7 +3349,7 @@ func (w *rewriteWriter) rotate() error {
 		writer.SetKeepPolicy(w.keepIoNsPerByte, w.keepEncodeNsRaw, w.keepSafetyMargin)
 		w.w = writer
 		w.seq = nextSeq
-		w.createdIDs = append(w.createdIDs, fileID)
+		w.noteCreatedSegment(path, fileID)
 		w.currentPath = path
 		w.currentFileID = fileID
 		return nil
@@ -3334,7 +3360,7 @@ func (w *rewriteWriter) rotate() error {
 	w.w.SetBlockCompression(w.blockCodec, w.blockCompression)
 	w.w.SetKeepPolicy(w.keepIoNsPerByte, w.keepEncodeNsRaw, w.keepSafetyMargin)
 	w.seq = nextSeq
-	w.createdIDs = append(w.createdIDs, fileID)
+	w.noteCreatedSegment(path, fileID)
 	w.currentPath = path
 	w.currentFileID = fileID
 	return nil
@@ -3388,7 +3414,7 @@ func (w *rewriteWriter) rotateLeaf() error {
 		writer.SetKeepPolicy(w.keepIoNsPerByte, w.keepEncodeNsRaw, w.keepSafetyMargin)
 		w.leafW = writer
 		w.leafSeq = nextSeq
-		w.createdIDs = append(w.createdIDs, fileID)
+		w.noteCreatedSegment(path, fileID)
 		w.leafCurrentPath = path
 		w.leafCurrentFileID = fileID
 		return nil
@@ -3399,7 +3425,7 @@ func (w *rewriteWriter) rotateLeaf() error {
 	w.leafW.SetBlockCompression(w.blockCodec, w.blockCompression)
 	w.leafW.SetKeepPolicy(w.keepIoNsPerByte, w.keepEncodeNsRaw, w.keepSafetyMargin)
 	w.leafSeq = nextSeq
-	w.createdIDs = append(w.createdIDs, fileID)
+	w.noteCreatedSegment(path, fileID)
 	w.leafCurrentPath = path
 	w.leafCurrentFileID = fileID
 	return nil
@@ -3795,6 +3821,18 @@ func (w *rewriteWriter) createdFileIDs() ([]uint32, error) {
 		return nil, nil
 	}
 	return w.createdIDs[:len(w.createdIDs):len(w.createdIDs)], nil
+}
+
+func (w *rewriteWriter) createdSegmentsSnapshot() ([]rewriteCreatedSegment, error) {
+	if w != nil {
+		if err := w.flushPendingDictBatch(); err != nil {
+			return nil, err
+		}
+	}
+	if w == nil || len(w.createdSegments) == 0 {
+		return nil, nil
+	}
+	return append([]rewriteCreatedSegment(nil), w.createdSegments...), nil
 }
 
 type rewriteIterator struct {
