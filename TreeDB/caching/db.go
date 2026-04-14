@@ -2530,6 +2530,29 @@ func (db *DB) releaseLaneSync(l *lane) {
 	db.laneMu.Unlock()
 }
 
+func (db *DB) valueLogDirForLane(l *lane) string {
+	if db == nil {
+		return ""
+	}
+	if l != nil && l.id == leafLogLaneID && db.leafLogDir != "" {
+		return db.leafLogDir
+	}
+	return db.valueLogDir
+}
+
+func (db *DB) valueLogLaneByID(laneID int) *lane {
+	if db == nil || laneID < 0 {
+		return nil
+	}
+	if laneID < len(db.lanes) {
+		return &db.lanes[laneID]
+	}
+	if laneID == leafLogLaneID && db.indexOuterLeavesInValueLog {
+		return &db.leafLog
+	}
+	return nil
+}
+
 func (db *DB) currentValueLogPath(l *lane) string {
 	if l == nil {
 		return ""
@@ -2582,7 +2605,7 @@ func (db *DB) currentValueLogPaths() []string {
 	if db == nil || !db.valueLogEnabled() {
 		return nil
 	}
-	paths := make([]string, 0, len(db.lanes))
+	paths := make([]string, 0, len(db.lanes)+1)
 	for i := range db.lanes {
 		l := &db.lanes[i]
 		if db.splitValueLogEnabled() {
@@ -2598,6 +2621,13 @@ func (db *DB) currentValueLogPaths() []string {
 			paths = append(paths, l.walPath)
 		}
 		l.walMu.Unlock()
+	}
+	if db.indexOuterLeavesInValueLog && db.splitValueLogEnabled() {
+		db.leafLog.vlogMu.Lock()
+		if db.leafLog.vlogPath != "" {
+			paths = append(paths, db.leafLog.vlogPath)
+		}
+		db.leafLog.vlogMu.Unlock()
 	}
 	return paths
 }
@@ -3522,10 +3552,10 @@ func (db *DB) flushValueLogForPtr(ptr page.ValuePtr) error {
 		return nil
 	}
 	laneID, seq := valuelog.DecodeFileID(ptr.FileID)
-	if laneID >= uint32(len(db.lanes)) {
+	l := db.valueLogLaneByID(int(laneID))
+	if l == nil {
 		return nil
 	}
-	l := &db.lanes[laneID]
 	currentSeq := db.currentValueLogSeq(l)
 	if currentSeq == int(seq) {
 		return db.flushValueLogLane(l)
@@ -3681,10 +3711,10 @@ func dispatchBackendValueLogReadBarrier(key uintptr, fileID uint32) error {
 		if db == nil || db.closing.Load() {
 			continue
 		}
-		if int(laneID) >= len(db.lanes) {
+		l := db.valueLogLaneByID(int(laneID))
+		if l == nil {
 			continue
 		}
-		l := &db.lanes[laneID]
 		// Reads against sealed segments do not need a lane flush barrier.
 		if db.currentValueLogSeq(l) != int(seq) {
 			continue
@@ -3721,10 +3751,11 @@ func (db *DB) installBackendValueLogReadBarrier() {
 	if key == 0 {
 		barrierSetter.SetCurrentValueLogReadBarrier(func(fileID uint32) error {
 			laneID, _ := valuelog.DecodeFileID(fileID)
-			if int(laneID) >= len(db.lanes) {
+			l := db.valueLogLaneByID(int(laneID))
+			if l == nil {
 				return nil
 			}
-			return db.flushValueLogLane(&db.lanes[laneID])
+			return db.flushValueLogLane(l)
 		})
 		return
 	}
@@ -3963,7 +3994,7 @@ func (db *DB) cleanupOrphanedRetainedValueLog(path string) bool {
 	db.untrackValueLogSegmentLocked(path)
 	db.mu.Unlock()
 	db.forgetValueLogRetain(path)
-	db.syncDirBestEffort(db.valueLogDir)
+	db.syncDirBestEffort(filepath.Dir(path))
 	return true
 }
 
@@ -4040,6 +4071,18 @@ func (db *DB) valueLogRetainedStatsDetailed() valueLogRetainedGenerationStats {
 				pathClasses[l.vlogPath] = l.vlogGenerationClass
 			}
 			l.vlogMu.Unlock()
+		}
+		if db.indexOuterLeavesInValueLog {
+			db.leafLog.vlogMu.Lock()
+			for path, size := range db.leafLog.vlogClosedSizes {
+				pathSizes[path] = size
+				pathClasses[path] = db.leafLog.vlogGenerationClass
+			}
+			if db.leafLog.vlogPath != "" {
+				currentSizes[db.leafLog.vlogPath] = db.leafLog.vlogLiveBytes.Load()
+				pathClasses[db.leafLog.vlogPath] = db.leafLog.vlogGenerationClass
+			}
+			db.leafLog.vlogMu.Unlock()
 		}
 	} else {
 		for i := range db.lanes {
@@ -4436,6 +4479,9 @@ func (db *DB) allowValueLogPointers() bool {
 				bytes += l.vlogLiveBytes.Load()
 			}
 		}
+		if db.indexOuterLeavesInValueLog && db.leafLog.vlogPath != "" && db.leafLog.vlogPath == db.leafLog.vlogRetainedPath {
+			bytes += db.leafLog.vlogLiveBytes.Load()
+		}
 	}
 	if bytes >= limit {
 		if db.valueLogHardCapWarned.CompareAndSwap(false, true) {
@@ -4602,10 +4648,13 @@ func (db *DB) valueLogClosedSegmentSize(path string) int64 {
 		return 0
 	}
 	laneID, _, _, ok := parseLogSeq(filepath.Base(path))
-	if !ok || laneID < 0 || laneID >= len(db.lanes) {
+	if !ok {
 		return 0
 	}
-	l := &db.lanes[laneID]
+	l := db.valueLogLaneByID(laneID)
+	if l == nil {
+		return 0
+	}
 	l.vlogMu.Lock()
 	defer l.vlogMu.Unlock()
 	if l.vlogClosedSizes == nil {
@@ -4924,6 +4973,9 @@ func (db *DB) pruneRetainedValueLogsWithObserved(force bool, observedSourceIDs m
 	}
 	if removed {
 		db.syncDirBestEffort(db.valueLogDir)
+		if db.leafLogDir != "" {
+			db.syncDirBestEffort(db.leafLogDir)
+		}
 	}
 	return out
 }
@@ -5986,6 +6038,7 @@ type DB struct {
 
 	// Durability
 	lanes         []lane
+	leafLog       lane
 	laneMu        sync.Mutex
 	laneCond      *sync.Cond
 	nextLane      int
@@ -6124,6 +6177,7 @@ type DB struct {
 	// Config
 	dir                                               string
 	valueLogDir                                       string
+	leafLogDir                                        string
 	flushThreshold                                    int64
 	memtableCap                                       int
 	memtableMode                                      atomic.Uint32
@@ -8135,10 +8189,11 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	}
 	warnInsecureDir(walDir, opts.NotifyError)
 	warnInsecureDir(valueLogDir, opts.NotifyError)
+	warnInsecureDir(leafLogDir, opts.NotifyError)
 	if err := ensureNoLegacyMixedWALValueSegments(walDir); err != nil {
 		return nil, err
 	}
-	segments, _ := listNonEmptySplitLogSegments(walDir, valueLogDir)
+	segments, _ := listNonEmptySplitLogSegments(walDir, valueLogDir, leafLogDir)
 	// Cached value-log RIDs remain globally unique across reopen/rewrite cycles.
 	// Until we persist nextRID separately, opening must recover the max on-disk
 	// RID here rather than risk reusing low RIDs after a clean reopen.
@@ -8147,17 +8202,29 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		return nil, err
 	}
 	maxLaneID := -1
+	maxLeafVlogSeq := 0
 	maxWALSeq := make(map[int]int)
 	maxVlogSeq := make(map[int]int)
 	for _, seg := range segments {
-		if seg.lane > maxLaneID {
-			maxLaneID = seg.lane
-		}
 		if seg.valueLog {
+			if seg.lane == leafLogLaneID {
+				if seg.seq > maxLeafVlogSeq {
+					maxLeafVlogSeq = seg.seq
+				}
+				continue
+			}
+			if seg.lane > maxLaneID {
+				maxLaneID = seg.lane
+			}
 			if seg.seq > maxVlogSeq[seg.lane] {
 				maxVlogSeq[seg.lane] = seg.seq
 			}
-		} else if seg.seq > maxWALSeq[seg.lane] {
+			continue
+		}
+		if seg.lane > maxLaneID {
+			maxLaneID = seg.lane
+		}
+		if seg.seq > maxWALSeq[seg.lane] {
 			maxWALSeq[seg.lane] = seg.seq
 		}
 	}
@@ -8304,6 +8371,10 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	}
 	reader, err := valuelog.NewManager(valueLogDir)
 	if err != nil {
+		return nil, err
+	}
+	if err := reader.AddScanDir(leafLogDir); err != nil {
+		_ = reader.Close()
 		return nil, err
 	}
 	reader.SetDisableReadChecksum(opts.DisableReadChecksum)
@@ -8504,6 +8575,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	db := &DB{
 		dir:                                  walDir,
 		valueLogDir:                          valueLogDir,
+		leafLogDir:                           leafLogDir,
 		backend:                              backend,
 		flushThreshold:                       opts.FlushThreshold,
 		memtableCap:                          memCap,
@@ -8601,6 +8673,17 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		flushLaneMu:                          make([]sync.Mutex, len(lanes)),
 	}
 	db.storeMemtableMode(mode)
+	if opts.IndexOuterLeavesInValueLog {
+		db.leafLog.id = leafLogLaneID
+		db.leafLog.vlogSeq = maxLeafVlogSeq
+		db.leafLog.vlogGenerationClass = vlogGenerationClassHot
+		db.leafLog.vlogCompressionSelector = newVlogCompressionSelectorWithSeed(
+			valueLogAutoPolicy,
+			uint64(valueLogIncompressibleHold),
+			uint64(valueLogIncompressibleProbe),
+			selectorSeedCodec,
+		)
+	}
 	if maxExistingRID > 0 {
 		db.nextRID.Store(maxExistingRID)
 	}
@@ -8639,6 +8722,20 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 				for j := 0; j <= i && j < len(db.lanes); j++ {
 					db.cleanupLaneWALWriters(&db.lanes[j])
 				}
+				db.cleanupLaneWALWriters(&db.leafLog)
+				return nil, err
+			}
+		}
+		if opts.IndexOuterLeavesInValueLog {
+			if err := db.rotateValueLogLocked(&db.leafLog); err != nil {
+				if db.valueLogReader != nil {
+					_ = db.valueLogReader.Close()
+					db.valueLogReader = nil
+				}
+				for i := range db.lanes {
+					db.cleanupLaneWALWriters(&db.lanes[i])
+				}
+				db.cleanupLaneWALWriters(&db.leafLog)
 				return nil, err
 			}
 		}
@@ -8659,10 +8756,16 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	}
 	if len(segments) > 0 {
 		for _, seg := range segments {
-			if seg.lane < 0 || seg.lane >= len(db.lanes) {
-				continue
+			l := db.valueLogLaneByID(seg.lane)
+			if l == nil {
+				if seg.valueLog {
+					continue
+				}
+				if seg.lane < 0 || seg.lane >= len(db.lanes) {
+					continue
+				}
+				l = &db.lanes[seg.lane]
 			}
-			l := &db.lanes[seg.lane]
 			if db.splitValueLog {
 				if seg.valueLog {
 					if seg.path == l.vlogPath {
@@ -8710,10 +8813,13 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		for i := range db.lanes {
 			db.startVlogWriter(&db.lanes[i])
 		}
+		if opts.IndexOuterLeavesInValueLog {
+			db.startVlogWriter(&db.leafLog)
+		}
 	}
 
 	if outerLeafPageLogSetter != nil {
-		outerLeafPageLogSetter.SetLeafPageLog(newCachingLeafPageLog(db, 0))
+		outerLeafPageLogSetter.SetLeafPageLog(newCachingLeafPageLog(db, &db.leafLog))
 	}
 	if opts.DisableWAL {
 		// Stage the adaptive gate on the fastest cached profile first. WAL-on
@@ -18565,6 +18671,18 @@ func (db *DB) Close() error {
 		l.vlogModeWriter = nil
 		l.vlogMu.Unlock()
 	}
+	if db.indexOuterLeavesInValueLog {
+		db.leafLog.vlogMu.Lock()
+		if db.leafLog.vlog != nil {
+			_ = db.leafLog.vlog.Close()
+			db.leafLog.vlog = nil
+			db.leafLog.vlogCaps = vlogWriterCaps{}
+			db.leafLog.vlogLiveBytes.Store(0)
+		}
+		db.leafLog.vlogModeSet = false
+		db.leafLog.vlogModeWriter = nil
+		db.leafLog.vlogMu.Unlock()
+	}
 
 	if walBytes > 0 && !hadMemtables {
 		backendBatch := db.backend.NewBatch()
@@ -20040,7 +20158,7 @@ func (db *DB) rotateValueLogMuHeld(l *lane) error {
 		hadClosedPrev bool
 	)
 	name := valueLogName(l.id, nextSeq)
-	path := filepath.Join(db.valueLogDir, name)
+	path := filepath.Join(db.valueLogDirForLane(l), name)
 	fileID, err := valuelog.EncodeFileID(uint32(l.id), uint32(nextSeq))
 	if err != nil {
 		return err
@@ -20234,10 +20352,13 @@ func (db *DB) untrackWALSegmentLocked(path string) {
 
 func (db *DB) untrackValueLogSegmentLocked(path string) {
 	laneID, _, _, ok := parseLogSeq(filepath.Base(path))
-	if !ok || laneID < 0 || laneID >= len(db.lanes) {
+	if !ok {
 		return
 	}
-	l := &db.lanes[laneID]
+	l := db.valueLogLaneByID(laneID)
+	if l == nil {
+		return
+	}
 	l.vlogMu.Lock()
 	defer l.vlogMu.Unlock()
 	if l.vlogClosedSizes == nil || path == "" {
@@ -26858,7 +26979,7 @@ func ensureNoLegacyMixedWALValueSegments(walDir string) error {
 	return nil
 }
 
-func listNonEmptySplitLogSegments(walDir, valueLogDir string) (segments []logSegmentInfo, nonEmptyBytes int64) {
+func listNonEmptySplitLogSegments(walDir, valueLogDir, leafLogDir string) (segments []logSegmentInfo, nonEmptyBytes int64) {
 	walSegments, walBytes := listNonEmptyLogSegments(walDir)
 	for _, seg := range walSegments {
 		if seg.valueLog {
@@ -26867,14 +26988,16 @@ func listNonEmptySplitLogSegments(walDir, valueLogDir string) (segments []logSeg
 		segments = append(segments, seg)
 	}
 	nonEmptyBytes += walBytes
-	vlogSegments, vlogBytes := listNonEmptyLogSegments(valueLogDir)
-	for _, seg := range vlogSegments {
-		if !seg.valueLog {
-			continue
+	for _, dir := range []string{valueLogDir, leafLogDir} {
+		vlogSegments, vlogBytes := listNonEmptyLogSegments(dir)
+		for _, seg := range vlogSegments {
+			if !seg.valueLog {
+				continue
+			}
+			segments = append(segments, seg)
 		}
-		segments = append(segments, seg)
+		nonEmptyBytes += vlogBytes
 	}
-	nonEmptyBytes += vlogBytes
 	sort.Slice(segments, func(i, j int) bool {
 		if segments[i].lane != segments[j].lane {
 			return segments[i].lane < segments[j].lane

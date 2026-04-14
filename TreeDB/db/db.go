@@ -1053,6 +1053,11 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		p.Close()
 		return nil, err
 	}
+	if err := vm.AddScanDir(layout.leafVLogDir); err != nil {
+		_ = vm.Close()
+		p.Close()
+		return nil, err
+	}
 	vm.SetDisableReadChecksum(opts.ValueLog.ReadIntegrity == IntegritySkipChecksums)
 	vm.SetDictLookup(opts.ValueLog.DictLookup)
 	vm.SetTemplateLookup(opts.ValueLog.TemplateLookup, opts.ValueLog.TemplateDecodeOptions)

@@ -81,18 +81,27 @@ func listWALSegments(dir string) ([]logSegment, error) {
 }
 
 func listValueLogSegments(dir string) ([]logSegment, error) {
-	segments, err := listSegmentsInDir(resolveStorageLayout(dir).valueVLogDir)
-	if err != nil {
-		return nil, err
-	}
-	out := segments[:0]
-	for _, seg := range segments {
-		if !seg.valueLog {
-			continue
+	layout := resolveStorageLayout(dir)
+	all := make([]logSegment, 0)
+	for _, segDir := range []string{layout.valueVLogDir, layout.leafVLogDir} {
+		segments, err := listSegmentsInDir(segDir)
+		if err != nil {
+			return nil, err
 		}
-		out = append(out, seg)
+		for _, seg := range segments {
+			if !seg.valueLog {
+				continue
+			}
+			all = append(all, seg)
+		}
 	}
-	return out, nil
+	sort.Slice(all, func(i, j int) bool {
+		if all[i].lane != all[j].lane {
+			return all[i].lane < all[j].lane
+		}
+		return all[i].seq < all[j].seq
+	})
+	return all, nil
 }
 
 func listRecoverySegments(dir string) ([]logSegment, error) {

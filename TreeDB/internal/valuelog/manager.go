@@ -979,7 +979,8 @@ func (s *Set) ReadUnsafeAppendBatch(ptrs []page.ValuePtr, dst [][]byte) ([][]byt
 }
 
 type Manager struct {
-	dir string
+	dir           string
+	extraScanDirs []string
 
 	mu    sync.RWMutex
 	files map[uint32]*File
@@ -1154,24 +1155,49 @@ func (m *Manager) RefreshScanCount() uint64 {
 // Refresh scans the directory and registers any new segments.
 func (m *Manager) Refresh() error {
 	m.refreshScans.Add(1)
-	segments, err := currentScanSegmentPaths()(m.dir)
-	if err != nil {
-		return err
+	dirs := []string{m.dir}
+	m.mu.RLock()
+	if len(m.extraScanDirs) > 0 {
+		dirs = append(dirs, m.extraScanDirs...)
 	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	for _, seg := range segments {
-		if err := m.registerSegmentLocked(seg.path, seg.id); err != nil {
-			if errors.Is(err, os.ErrNotExist) {
-				// Online rewrite/GC can delete a segment after listSegments() sees it
-				// but before we open it. Treat that as a benign refresh race and
-				// keep scanning the remaining segments.
-				continue
-			}
+	m.mu.RUnlock()
+	for _, dir := range dirs {
+		segments, err := currentScanSegmentPaths()(dir)
+		if err != nil {
 			return err
 		}
+		m.mu.Lock()
+		for _, seg := range segments {
+			if err := m.registerSegmentLocked(seg.path, seg.id); err != nil {
+				if errors.Is(err, os.ErrNotExist) {
+					// Online rewrite/GC can delete a segment after listSegments() sees it
+					// but before we open it. Treat that as a benign refresh race and
+					// keep scanning the remaining segments.
+					continue
+				}
+				m.mu.Unlock()
+				return err
+			}
+		}
+		m.mu.Unlock()
 	}
 	return nil
+}
+
+func (m *Manager) AddScanDir(dir string) error {
+	if m == nil || dir == "" || dir == m.dir {
+		return nil
+	}
+	m.mu.Lock()
+	for _, existing := range m.extraScanDirs {
+		if existing == dir {
+			m.mu.Unlock()
+			return nil
+		}
+	}
+	m.extraScanDirs = append(m.extraScanDirs, dir)
+	m.mu.Unlock()
+	return m.Refresh()
 }
 
 // RegisterSegment registers a newly created segment without scanning the

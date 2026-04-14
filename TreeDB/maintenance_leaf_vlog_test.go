@@ -176,6 +176,56 @@ func TestVacuumIndexOffline_LeafPagesInValueLog_ReopenParity(t *testing.T) {
 	}
 }
 
+func TestOuterLeafPagesUseLeafVLogDir(t *testing.T) {
+	dir := t.TempDir()
+	opts := treedb.Options{
+		Dir:                        dir,
+		Durability:                 treedb.DurabilityWALOffRelaxed,
+		IndexOuterLeavesInValueLog: true,
+		ValueLog: treedb.ValueLogOptions{
+			PointerThreshold: 1,
+		},
+	}
+	db, err := treedb.Open(opts)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+
+	for i := 0; i < 512; i++ {
+		key := []byte(fmt.Sprintf("leaf-vlog-%04d", i))
+		val := bytes.Repeat([]byte{byte(i % 251)}, 96)
+		if err := db.Set(key, val); err != nil {
+			t.Fatalf("set %q: %v", string(key), err)
+		}
+	}
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
+
+	leafPaths, err := filepath.Glob(filepath.Join(filepath.Dir(mainIndexPath(dir)), "leaf_vlog", "value-l*.log"))
+	if err != nil {
+		t.Fatalf("glob leaf_vlog: %v", err)
+	}
+	if len(leafPaths) == 0 {
+		t.Fatalf("expected leaf_vlog segments")
+	}
+	nonEmpty := false
+	for _, p := range leafPaths {
+		info, err := os.Stat(p)
+		if err != nil {
+			t.Fatalf("stat %s: %v", p, err)
+		}
+		if info.Size() > 0 {
+			nonEmpty = true
+			break
+		}
+	}
+	if !nonEmpty {
+		t.Fatalf("expected non-empty leaf_vlog segment, paths=%v", leafPaths)
+	}
+}
+
 func TestValueLogRewriteOnline_LeafPagesInValueLog_ReopenParity(t *testing.T) {
 	dir := t.TempDir()
 	opts := treedb.Options{

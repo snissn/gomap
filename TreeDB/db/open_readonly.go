@@ -47,6 +47,12 @@ func openReadOnly(opts Options) (*DB, error) {
 		_ = lock.Close()
 		return nil, err
 	}
+	if err := vm.AddScanDir(layout.leafVLogDir); err != nil {
+		_ = vm.Close()
+		_ = p.Close()
+		_ = lock.Close()
+		return nil, err
+	}
 	vm.SetDisableReadChecksum(opts.ValueLog.ReadIntegrity == IntegritySkipChecksums)
 	vm.SetDictLookup(opts.ValueLog.DictLookup)
 	vm.SetTemplateLookup(opts.ValueLog.TemplateLookup, opts.ValueLog.TemplateDecodeOptions)
@@ -138,6 +144,11 @@ func openReadOnlyNoLock(opts Options) (*DB, error) {
 	layout := resolveStorageLayout(opts.Dir)
 	vm, err := valuelog.NewManager(layout.valueVLogDir)
 	if err != nil {
+		_ = p.Close()
+		return nil, err
+	}
+	if err := vm.AddScanDir(layout.leafVLogDir); err != nil {
+		_ = vm.Close()
 		_ = p.Close()
 		return nil, err
 	}
