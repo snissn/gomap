@@ -1112,7 +1112,7 @@ func TestRotateValueLogMuHeld_RestoresUsableWriterAfterRegisterFailure(t *testin
 		vlogSeq:  oldSeq,
 		vlogPath: oldPath,
 	}
-	db := &DB{dir: dir, backend: backend}
+	db := &DB{dir: dir, valueLogDir: dir, backend: backend}
 	t.Cleanup(func() {
 		if l.vlog != nil {
 			_ = l.vlog.Close()
@@ -2831,4 +2831,63 @@ func TestBackendMaintenance_DoesNotBlockOnRetainedValueLogPruneQuietWindow(t *te
 	cache.lastForegroundWriteUnixNano.Store(time.Now().Add(-2 * retainedPruneQuietWindow).UnixNano())
 	cache.lastForegroundReadUnixNano.Store(time.Now().Add(-2 * retainedPruneQuietWindow).UnixNano())
 	cache.waitForRetainedValueLogPrune()
+}
+
+func TestAdvanceValueLogWriterPastObservedSeq_RollsBackToOriginalSeqOnRegisterFailure(t *testing.T) {
+	dir := t.TempDir()
+	backend := NewMockBackend()
+
+	oldSeq := 59
+	oldPath := filepath.Join(dir, valueLogName(0, oldSeq))
+	oldFileID, err := valuelog.EncodeFileID(0, uint32(oldSeq))
+	if err != nil {
+		t.Fatalf("EncodeFileID: %v", err)
+	}
+	writer, err := valuelog.NewWriter(oldPath, oldFileID)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+
+	l := &lane{
+		id:       0,
+		vlog:     writer,
+		vlogSeq:  oldSeq,
+		vlogPath: oldPath,
+	}
+	db := &DB{dir: dir, valueLogDir: dir, backend: backend}
+	t.Cleanup(func() {
+		if l.vlog != nil {
+			_ = l.vlog.Close()
+			l.vlog = nil
+		}
+		_ = db.removeFileRetry(oldPath)
+		_ = db.removeFileRetry(filepath.Join(dir, valueLogName(0, oldSeq+1)))
+		_ = db.removeFileRetry(filepath.Join(dir, valueLogName(0, oldSeq+2)))
+	})
+
+	backend.registerValueLogErr = errors.New("test: register failed")
+	err = db.advanceValueLogWriterPastObservedSeq(l, oldSeq+1)
+	if err == nil || !strings.Contains(err.Error(), "register failed") {
+		t.Fatalf("advanceValueLogWriterPastObservedSeq err=%v want register failure", err)
+	}
+	if got := l.vlogSeq; got != oldSeq {
+		t.Fatalf("vlogSeq=%d want %d", got, oldSeq)
+	}
+	if got := l.vlogPath; got != oldPath {
+		t.Fatalf("vlogPath=%q want %q", got, oldPath)
+	}
+	if l.vlog == nil {
+		t.Fatalf("expected usable writer restored after register failure")
+	}
+	ptrs, err := db.appendValueLog(l, 0, nil, []valuelog.Record{{RID: 1, Value: []byte("value")}}, journalDurabilityNone)
+	if err != nil {
+		t.Fatalf("appendValueLog after rollback: %v", err)
+	}
+	if len(ptrs) != 1 {
+		t.Fatalf("ptrs len=%d want 1", len(ptrs))
+	}
+	if got := ptrs[0].FileID; got != page.ValueLogFileID(oldFileID) {
+		t.Fatalf("ptr fileID=%d want %d", got, oldFileID)
+	}
+	putValueLogPtrs(ptrs)
 }

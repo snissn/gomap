@@ -5544,7 +5544,9 @@ func (db *DB) reconcileSplitValueLogWritersAfterBackendMaintenance() error {
 	if !db.splitValueLogEnabled() || !db.valueLogEnabled() {
 		return nil
 	}
-	segments, _ := listNonEmptySplitLogSegments(db.dir, db.valueLogDir, db.leafLogDir)
+	// In cached mode DB.dir is the wal/ directory, not the DB root.
+	walDir := db.dir
+	segments, _ := listNonEmptySplitLogSegments(walDir, db.valueLogDir, db.leafLogDir)
 	maxSeqByLane := make(map[int]int, len(db.lanes)+1)
 	for _, seg := range segments {
 		if !seg.valueLog {
@@ -5584,13 +5586,7 @@ func (db *DB) advanceValueLogWriterPastObservedSeq(l *lane, observedMaxSeq int) 
 		l.vlogModeWriter = nil
 		return nil
 	}
-	origSeq := l.vlogSeq
-	l.vlogSeq = observedMaxSeq
-	if err := db.rotateValueLogMuHeld(l); err != nil {
-		l.vlogSeq = origSeq
-		return err
-	}
-	return nil
+	return db.rotateValueLogMuHeldToSeq(l, observedMaxSeq+1)
 }
 
 func hashKey(key []byte) uint64 {
@@ -20231,7 +20227,16 @@ func (db *DB) rotateValueLogLocked(l *lane) error {
 }
 
 func (db *DB) rotateValueLogMuHeld(l *lane) error {
-	nextSeq := l.vlogSeq + 1
+	return db.rotateValueLogMuHeldToSeq(l, l.vlogSeq+1)
+}
+
+func (db *DB) rotateValueLogMuHeldToSeq(l *lane, nextSeq int) error {
+	if l == nil {
+		return errWALUnavailable
+	}
+	if nextSeq <= l.vlogSeq {
+		return nil
+	}
 	oldSeq := l.vlogSeq
 	oldPath := l.vlogPath
 	oldLiveBytes := l.vlogLiveBytes.Load()

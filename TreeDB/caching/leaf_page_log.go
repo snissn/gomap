@@ -47,6 +47,12 @@ func (l *cachingLeafPageLog) Sync() error {
 	if l == nil || l.db == nil || l.lane == nil {
 		return errWALUnavailable
 	}
+	if err := l.db.flushValueLogLane(l.lane); err != nil {
+		return err
+	}
+	if l.db.relaxedSync {
+		return nil
+	}
 	return l.db.syncValueLogLane(l.lane)
 }
 
