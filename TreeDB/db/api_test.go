@@ -144,7 +144,7 @@ func TestSnapshotGet_ReturnsSafeCopyForValueLogPointer(t *testing.T) {
 
 	key := []byte("k")
 	val := bytes.Repeat([]byte("v"), 4096)
-	walDir := filepath.Join(dir, "wal")
+	walDir := filepath.Join(dir, "value_vlog")
 	if err := os.MkdirAll(walDir, 0o755); err != nil {
 		t.Fatalf("mkdir wal: %v", err)
 	}
@@ -302,7 +302,7 @@ func TestIteratorOptions_SnapshotCompatibility(t *testing.T) {
 	if err := db.Set([]byte("k-inline"), []byte("inline")); err != nil {
 		t.Fatalf("Set inline: %v", err)
 	}
-	walDir := filepath.Join(dir, "wal")
+	walDir := filepath.Join(dir, "value_vlog")
 	if err := os.MkdirAll(walDir, 0o755); err != nil {
 		t.Fatalf("mkdir wal: %v", err)
 	}
@@ -564,7 +564,7 @@ func TestGet_RetriesAfterRefreshingStaleValueLogSet(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EncodeFileID: %v", err)
 	}
-	walDir := filepath.Join(dir, "wal")
+	walDir := filepath.Join(dir, "value_vlog")
 	if err := os.MkdirAll(walDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll(wal): %v", err)
 	}
@@ -625,7 +625,7 @@ func TestGetMany_RetriesAfterRefreshingStaleValueLogSet(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EncodeFileID: %v", err)
 	}
-	walDir := filepath.Join(dir, "wal")
+	walDir := filepath.Join(dir, "value_vlog")
 	if err := os.MkdirAll(walDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll(wal): %v", err)
 	}
@@ -694,7 +694,7 @@ func TestGet_ConcurrentStaleReadRetry_DedupesRefresh(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EncodeFileID: %v", err)
 	}
-	walDir := filepath.Join(dir, "wal")
+	walDir := filepath.Join(dir, "value_vlog")
 	if err := os.MkdirAll(walDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll(wal): %v", err)
 	}

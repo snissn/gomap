@@ -270,8 +270,8 @@ func TestTreeGetAppend_UsesAppendReaderForLeafRefPages(t *testing.T) {
 	leaf.AddLeafEntry([]byte("k"), []byte("v"), node.FlagInline, page.ValuePtr{})
 	leaf.UpdateChecksum()
 
-	leafRefID, err := page.EncodeLeafRef(page.ValuePtr{
-		FileID: page.ValueLogFileID(1),
+	leafRefID, err := page.EncodeLeafRef(page.LeafLogPtr{
+		FileID: 1,
 		Offset: 8,
 	})
 	if err != nil {
@@ -281,7 +281,7 @@ func TestTreeGetAppend_UsesAppendReaderForLeafRefPages(t *testing.T) {
 	if !ok {
 		t.Fatalf("DecodeLeafRef failed")
 	}
-	tracked.values[ptr] = append([]byte(nil), leafData...)
+	tracked.values[ptr.ValuePtr()] = append([]byte(nil), leafData...)
 
 	tr := New(nil, tracked, leafRefID)
 	got, err := tr.GetAppend([]byte("k"), nil)
@@ -317,8 +317,8 @@ func TestTreeGetAppend_LeafRefChecksumPolicyHonored(t *testing.T) {
 			trackedValueReader:  &trackedValueReader{mapValueReader: newMapValueReader()},
 			readChecksumEnabled: checksumEnabled,
 		}
-		leafRefID, err := page.EncodeLeafRef(page.ValuePtr{
-			FileID: page.ValueLogFileID(1),
+		leafRefID, err := page.EncodeLeafRef(page.LeafLogPtr{
+			FileID: 1,
 			Offset: 8,
 		})
 		if err != nil {
@@ -328,7 +328,7 @@ func TestTreeGetAppend_LeafRefChecksumPolicyHonored(t *testing.T) {
 		if !ok {
 			t.Fatalf("DecodeLeafRef failed")
 		}
-		tracked.values[ptr] = makeCorruptLeaf()
+		tracked.values[ptr.ValuePtr()] = makeCorruptLeaf()
 		return New(nil, tracked, leafRefID)
 	}
 

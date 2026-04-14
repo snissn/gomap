@@ -1013,7 +1013,7 @@ func (it *Iterator) loadNode(pageID uint64) (node.Node, error) {
 		if cap(it.leafRefScratch) != page.PageSize {
 			it.leafRefScratch = make([]byte, 0, page.PageSize)
 		}
-		data, err := it.slabAppender.ReadUnsafeAppend(ptr, it.leafRefScratch[:0])
+		data, err := it.slabAppender.ReadUnsafeAppend(ptr.ValuePtr(), it.leafRefScratch[:0])
 		if err != nil {
 			return node.Node{}, err
 		}

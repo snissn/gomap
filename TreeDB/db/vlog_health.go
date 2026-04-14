@@ -150,7 +150,7 @@ func updateValueLogHealthAfterGC(dbDir string, set *valuelog.Set, referenced map
 		}
 	}
 
-	segments, err := listWALSegments(dbDir)
+	segments, err := listValueLogSegments(dbDir)
 	if err != nil {
 		return err
 	}
@@ -232,7 +232,7 @@ func updateValueLogHealthAfterRewrite(dbDir string, oldValueIDs map[uint32]struc
 		return saveValueLogHealth(path, out)
 	}
 
-	segments, err := listWALSegments(dbDir)
+	segments, err := listValueLogSegments(dbDir)
 	if err != nil {
 		return err
 	}

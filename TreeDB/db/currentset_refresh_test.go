@@ -17,7 +17,7 @@ func writeValueLogRecord(t *testing.T, dir string, lane, seq uint32, value []byt
 	if err != nil {
 		t.Fatalf("EncodeFileID: %v", err)
 	}
-	path := filepath.Join(dir, "wal", fmt.Sprintf("value-l%d-%06d.log", lane, seq))
+	path := filepath.Join(dir, "value_vlog", fmt.Sprintf("value-l%d-%06d.log", lane, seq))
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatalf("MkdirAll(wal): %v", err)
 	}
@@ -54,7 +54,7 @@ func (l *registeredLeafPageLog) ensureWriter() error {
 	if err != nil {
 		return err
 	}
-	path := filepath.Join(l.dir, "wal", "value-l0-000001.log")
+	path := filepath.Join(l.dir, "value_vlog", "value-l0-000001.log")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
@@ -76,12 +76,16 @@ func (l *registeredLeafPageLog) ensureWriter() error {
 	return nil
 }
 
-func (l *registeredLeafPageLog) AppendLeafPage(leafPage []byte) (page.ValuePtr, error) {
+func (l *registeredLeafPageLog) AppendLeafPage(leafPage []byte) (page.LeafLogPtr, error) {
 	if err := l.ensureWriter(); err != nil {
-		return page.ValuePtr{}, err
+		return page.LeafLogPtr{}, err
 	}
 	l.nextRID++
-	return l.w.Append(0, nil, l.nextRID, leafPage)
+	ptr, err := l.w.Append(0, nil, l.nextRID, leafPage)
+	if err != nil {
+		return page.LeafLogPtr{}, err
+	}
+	return page.LeafLogPtrFromValuePtr(ptr)
 }
 
 func (l *registeredLeafPageLog) Flush() error {
@@ -133,7 +137,7 @@ func (l *unregisteredLeafPageLog) ensureWriter() error {
 	if err != nil {
 		return err
 	}
-	path := filepath.Join(l.dir, "wal", "value-l11-000001.log")
+	path := filepath.Join(l.dir, "value_vlog", "value-l11-000001.log")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
@@ -147,12 +151,16 @@ func (l *unregisteredLeafPageLog) ensureWriter() error {
 	return nil
 }
 
-func (l *unregisteredLeafPageLog) AppendLeafPage(leafPage []byte) (page.ValuePtr, error) {
+func (l *unregisteredLeafPageLog) AppendLeafPage(leafPage []byte) (page.LeafLogPtr, error) {
 	if err := l.ensureWriter(); err != nil {
-		return page.ValuePtr{}, err
+		return page.LeafLogPtr{}, err
 	}
 	l.nextRID++
-	return l.w.Append(0, nil, l.nextRID, leafPage)
+	ptr, err := l.w.Append(0, nil, l.nextRID, leafPage)
+	if err != nil {
+		return page.LeafLogPtr{}, err
+	}
+	return page.LeafLogPtrFromValuePtr(ptr)
 }
 
 func (l *unregisteredLeafPageLog) Flush() error {
@@ -190,7 +198,7 @@ func TestInlineCommitSkipsValueLogRefresh(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EncodeFileID: %v", err)
 	}
-	path := filepath.Join(dir, "wal", "value-l0-000001.log")
+	path := filepath.Join(dir, "value_vlog", "value-l0-000001.log")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatalf("MkdirAll(wal): %v", err)
 	}
@@ -243,7 +251,7 @@ func TestPointerCommitRefreshesValueLogSet(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EncodeFileID: %v", err)
 	}
-	path := filepath.Join(dir, "wal", "value-l0-000001.log")
+	path := filepath.Join(dir, "value_vlog", "value-l0-000001.log")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatalf("MkdirAll(wal): %v", err)
 	}
@@ -429,7 +437,7 @@ func TestOuterLeafPointerCommitRefreshesWhenLeafSegmentUnreported(t *testing.T) 
 	// Keep touched pointer segments known so this commit would previously skip
 	// refresh and publish an incomplete ValueLogSet when the leaf segment is not
 	// reportable/registered.
-	pointerPath := filepath.Join(dir, "wal", "value-l0-000001.log")
+	pointerPath := filepath.Join(dir, "value_vlog", "value-l0-000001.log")
 	if err := d.RegisterValueLogSegment(pointerPath, fileID); err != nil {
 		t.Fatalf("RegisterValueLogSegment(pointer): %v", err)
 	}
@@ -538,7 +546,7 @@ func TestRegisterValueLogSegment_DoesNotPublishCurrentSetWithoutExplicitRefresh(
 	if err != nil {
 		t.Fatalf("EncodeFileID: %v", err)
 	}
-	path := filepath.Join(dir, "wal", "value-l7-000001.log")
+	path := filepath.Join(dir, "value_vlog", "value-l7-000001.log")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatalf("MkdirAll(wal): %v", err)
 	}

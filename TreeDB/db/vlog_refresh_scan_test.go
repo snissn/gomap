@@ -13,7 +13,7 @@ import (
 
 func writeValueLogSegment(t *testing.T, dir string, lane, seq uint32) (path string, fileID uint32) {
 	t.Helper()
-	walDir := filepath.Join(dir, "wal")
+	walDir := filepath.Join(dir, "value_vlog")
 	if err := os.MkdirAll(walDir, 0o755); err != nil {
 		t.Fatalf("mkdir wal: %v", err)
 	}

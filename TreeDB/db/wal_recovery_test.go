@@ -1,11 +1,13 @@
 package db
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
+	"github.com/snissn/gomap/TreeDB/page"
 )
 
 func TestNewReplayInlineAppender_PackedValuePtrCapsSegmentSize(t *testing.T) {
@@ -81,6 +83,50 @@ func TestNewReplayInlineAppender_ValueLogCompressionOff_DisablesBlockCompression
 
 	if app.writer.blockCompression {
 		t.Fatalf("expected replay writer block compression disabled")
+	}
+}
+
+func TestReplayInlineAppender_LeafPagesUseConfiguredLeafLogDir(t *testing.T) {
+	dir := t.TempDir()
+	if err := ensureStorageLayoutDirs(dir); err != nil {
+		t.Fatalf("ensureStorageLayoutDirs: %v", err)
+	}
+	db := &DB{
+		dir:                        dir,
+		indexOuterLeavesInValueLog: true,
+		valueLogCompression:        ValueLogCompressionBlock,
+		valueLogBlockCodec:         ValueLogBlockSnappy,
+	}
+	app, err := newReplayInlineAppender(db, nil, nil)
+	if err != nil {
+		t.Fatalf("newReplayInlineAppender: %v", err)
+	}
+	leafPtr, err := app.AppendLeafPage(bytes.Repeat([]byte("l"), page.PageSize))
+	if err != nil {
+		_ = app.close()
+		t.Fatalf("AppendLeafPage: %v", err)
+	}
+	if err := app.close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	lane, _ := valuelog.DecodeFileID(leafPtr.ValueLogFileID())
+	if lane != rewriteLeafLogLaneID {
+		t.Fatalf("leaf ptr lane=%d want=%d", lane, rewriteLeafLogLaneID)
+	}
+	valuePaths, err := filepath.Glob(filepath.Join(dir, "value_vlog", "value-l*.log"))
+	if err != nil {
+		t.Fatalf("glob value_vlog: %v", err)
+	}
+	if len(valuePaths) != 0 {
+		t.Fatalf("expected no value_vlog files for replayed leaf page, got %v", valuePaths)
+	}
+	leafPaths, err := filepath.Glob(filepath.Join(dir, "leaf_vlog", "value-l*.log"))
+	if err != nil {
+		t.Fatalf("glob leaf_vlog: %v", err)
+	}
+	if len(leafPaths) != 1 {
+		t.Fatalf("expected one leaf_vlog file, got %v", leafPaths)
 	}
 }
 

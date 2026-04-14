@@ -893,9 +893,16 @@ func Open(opts Options) (*DB, error) {
 		return nil, err
 	}
 	warnInsecureDir(opts.Dir, opts.NotifyError)
+	if err := ensureNoLegacyMixedWALValueSegments(opts.Dir); err != nil {
+		return nil, err
+	}
 
 	if opts.ReadOnly {
 		return openReadOnly(opts)
+	}
+
+	if err := ensureStorageLayoutDirs(opts.Dir); err != nil {
+		return nil, err
 	}
 
 	lock, err := lockfile.Acquire(filepath.Join(opts.Dir, "LOCK"))
@@ -1040,9 +1047,14 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	}
 	p.SetVerifyOnRead(opts.VerifyOnRead)
 
-	valueLogDir := filepath.Join(opts.Dir, "wal")
-	vm, err := valuelog.NewManager(valueLogDir)
+	layout := resolveStorageLayout(opts.Dir)
+	vm, err := valuelog.NewManager(layout.valueVLogDir)
 	if err != nil {
+		p.Close()
+		return nil, err
+	}
+	if err := vm.AddScanDir(layout.leafVLogDir); err != nil {
+		_ = vm.Close()
 		p.Close()
 		return nil, err
 	}
@@ -1116,7 +1128,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	}
 
 	if opts.Durability != DurabilityWALOffRelaxed {
-		segments, err := listWALSegments(opts.Dir)
+		segments, err := listRecoverySegments(opts.Dir)
 		if err != nil {
 			db.Close()
 			return nil, err
@@ -1378,7 +1390,7 @@ func (db *DB) rootPageValid(p *pager.Pager, pageID uint64) bool {
 		if db == nil || db.valueLogManager == nil {
 			return false
 		}
-		data, err := db.valueLogManager.ReadUnsafe(ptr)
+		data, err := db.valueLogManager.ReadUnsafe(ptr.ValuePtr())
 		if err != nil {
 			return false
 		}

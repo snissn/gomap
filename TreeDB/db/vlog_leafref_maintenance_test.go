@@ -52,7 +52,7 @@ func TestValueLogGC_WithLeafPagesInValueLog_KeepsReferencedLeafSegments(t *testi
 		t.Fatalf("open: %v", err)
 	}
 
-	walDir := filepath.Join(dir, "wal")
+	walDir := filepath.Join(dir, "value_vlog")
 	if err := os.MkdirAll(walDir, 0o755); err != nil {
 		_ = db.Close()
 		t.Fatalf("mkdir wal: %v", err)
@@ -120,7 +120,7 @@ func TestValueLogRewriteOffline_PreservesLeafPagesInValueLogFormatConfig(t *test
 		t.Fatalf("open: %v", err)
 	}
 
-	walDir := filepath.Join(dir, "wal")
+	walDir := filepath.Join(dir, "value_vlog")
 	if err := os.MkdirAll(walDir, 0o755); err != nil {
 		_ = db.Close()
 		t.Fatalf("mkdir wal: %v", err)
@@ -207,7 +207,7 @@ func TestValueLogRewriteOnline_WithLeafPagesInValueLog_ReopenPreservesData(t *te
 		t.Fatalf("open: %v", err)
 	}
 
-	leafLog := newRewriteWriter(filepath.Join(dir, "wal"), 0, 0, 64<<10)
+	leafLog := newRewriteWriter(filepath.Join(dir, "value_vlog"), 0, 0, 64<<10)
 	leafLog.blockCompression = false
 	leafLog.blockCodec = valuelog.BlockCodecSnappy
 	db.SetLeafPageLog(leafLog)
@@ -338,11 +338,11 @@ func collectNestedLeafValueLogFileCounts(t *testing.T, reader interface {
 			continue
 		}
 		if len(sourceSet) > 0 {
-			if _, ok := sourceSet[ptr.FileID]; !ok {
+			if _, ok := sourceSet[ptr.ValueLogFileID()]; !ok {
 				continue
 			}
 		}
-		leafPage, err := reader.ReadUnsafe(ptr)
+		leafPage, err := reader.ReadUnsafe(ptr.ValuePtr())
 		if err != nil {
 			t.Fatalf("read leaf page file=%d offset=%d: %v", ptr.FileID, ptr.Offset, err)
 		}
@@ -392,7 +392,7 @@ func TestValueLogRewriteOnline_RewritesLeafRefsAndReclaimsSegments(t *testing.T)
 		}
 	}()
 
-	walDir := filepath.Join(dir, "wal")
+	walDir := filepath.Join(dir, "value_vlog")
 	if err := os.MkdirAll(walDir, 0o755); err != nil {
 		t.Fatalf("mkdir wal: %v", err)
 	}
@@ -434,7 +434,7 @@ func TestValueLogRewriteOnline_RewritesLeafRefsAndReclaimsSegments(t *testing.T)
 		if !ok {
 			continue
 		}
-		refsByFile[ptr.FileID] = append(refsByFile[ptr.FileID], id)
+		refsByFile[ptr.ValueLogFileID()] = append(refsByFile[ptr.ValueLogFileID()], id)
 	}
 
 	active := map[uint32]struct{}{}
@@ -478,7 +478,7 @@ func TestValueLogRewriteOnline_RewritesLeafRefsAndReclaimsSegments(t *testing.T)
 	if !ok {
 		t.Fatalf("expected leafref id, got %d", moveID)
 	}
-	leafPage, err := db.valueLogManager.ReadUnsafe(movePtr)
+	leafPage, err := db.valueLogManager.ReadUnsafe(movePtr.ValuePtr())
 	if err != nil {
 		t.Fatalf("read leaf page: %v", err)
 	}
@@ -508,7 +508,7 @@ func TestValueLogRewriteOnline_RewritesLeafRefsAndReclaimsSegments(t *testing.T)
 	inTarget := 0
 	for _, id := range refs2 {
 		ptr, ok := page.DecodeLeafRef(id)
-		if ok && ptr.FileID == targetID {
+		if ok && ptr.ValueLogFileID() == targetID {
 			inTarget++
 		}
 	}
@@ -538,7 +538,7 @@ func TestValueLogRewriteOnline_RewritesLeafRefsAndReclaimsSegments(t *testing.T)
 	refs3 := collectLeafRefs(t, db.Pager(), state3.RootPageID)
 	for _, id := range refs3 {
 		ptr, ok := page.DecodeLeafRef(id)
-		if ok && ptr.FileID == targetID {
+		if ok && ptr.ValueLogFileID() == targetID {
 			t.Fatalf("leaf ref still points at source segment %d after rewrite", targetID)
 		}
 	}
@@ -604,7 +604,7 @@ func TestValueLogRewriteOnline_RewritesMultipleLeafRefSourceSegmentsAndReopensRW
 		}
 	}()
 
-	walDir := filepath.Join(dir, "wal")
+	walDir := filepath.Join(dir, "value_vlog")
 	if err := os.MkdirAll(walDir, 0o755); err != nil {
 		t.Fatalf("mkdir wal: %v", err)
 	}
@@ -644,7 +644,7 @@ func TestValueLogRewriteOnline_RewritesMultipleLeafRefSourceSegmentsAndReopensRW
 		if !ok {
 			continue
 		}
-		refsByFile[ptr.FileID]++
+		refsByFile[ptr.ValueLogFileID()]++
 	}
 
 	set := db.valueLogManager.CurrentSet()
@@ -697,8 +697,8 @@ func TestValueLogRewriteOnline_RewritesMultipleLeafRefSourceSegmentsAndReopensRW
 		if !ok {
 			continue
 		}
-		if _, ok := sourceSet[ptr.FileID]; ok {
-			t.Fatalf("leaf ref still points at rewritten source segment %d", ptr.FileID)
+		if _, ok := sourceSet[ptr.ValueLogFileID()]; ok {
+			t.Fatalf("leaf ref still points at rewritten source segment %d", ptr.ValueLogFileID())
 		}
 	}
 
@@ -760,7 +760,7 @@ func TestValueLogRewriteOnline_PostRewriteWritesDoNotReintroduceLeafRefSources(t
 		}
 	}()
 
-	walDir := filepath.Join(dir, "wal")
+	walDir := filepath.Join(dir, "value_vlog")
 	if err := os.MkdirAll(walDir, 0o755); err != nil {
 		t.Fatalf("mkdir wal: %v", err)
 	}
@@ -797,7 +797,7 @@ func TestValueLogRewriteOnline_PostRewriteWritesDoNotReintroduceLeafRefSources(t
 		if !ok {
 			continue
 		}
-		refsByFile[ptr.FileID]++
+		refsByFile[ptr.ValueLogFileID()]++
 	}
 
 	set := db.valueLogManager.CurrentSet()
@@ -842,8 +842,8 @@ func TestValueLogRewriteOnline_PostRewriteWritesDoNotReintroduceLeafRefSources(t
 		if !ok {
 			continue
 		}
-		if _, ok := sourceSet[ptr.FileID]; ok {
-			t.Fatalf("leaf ref still points at rewritten source segment %d after rewrite", ptr.FileID)
+		if _, ok := sourceSet[ptr.ValueLogFileID()]; ok {
+			t.Fatalf("leaf ref still points at rewritten source segment %d after rewrite", ptr.ValueLogFileID())
 		}
 	}
 
@@ -866,8 +866,8 @@ func TestValueLogRewriteOnline_PostRewriteWritesDoNotReintroduceLeafRefSources(t
 		if !ok {
 			continue
 		}
-		if _, ok := sourceSet[ptr.FileID]; ok {
-			t.Fatalf("post-rewrite write reintroduced source segment %d", ptr.FileID)
+		if _, ok := sourceSet[ptr.ValueLogFileID()]; ok {
+			t.Fatalf("post-rewrite write reintroduced source segment %d", ptr.ValueLogFileID())
 		}
 	}
 
@@ -929,7 +929,7 @@ func TestValueLogRewriteOnline_UnsyncedLeafRefRewriteRemainsReopenable(t *testin
 		}
 	}()
 
-	walDir := filepath.Join(dir, "wal")
+	walDir := filepath.Join(dir, "value_vlog")
 	if err := os.MkdirAll(walDir, 0o755); err != nil {
 		t.Fatalf("mkdir wal: %v", err)
 	}
@@ -962,7 +962,7 @@ func TestValueLogRewriteOnline_UnsyncedLeafRefRewriteRemainsReopenable(t *testin
 		if !ok {
 			continue
 		}
-		refsByFile[ptr.FileID]++
+		refsByFile[ptr.ValueLogFileID()]++
 	}
 
 	set := db.valueLogManager.CurrentSet()
@@ -1054,7 +1054,7 @@ func TestValueLogRewriteOnline_UnsyncedRewriteThenVacuumRemainsReopenable(t *tes
 		}
 	}()
 
-	walDir := filepath.Join(dir, "wal")
+	walDir := filepath.Join(dir, "value_vlog")
 	if err := os.MkdirAll(walDir, 0o755); err != nil {
 		t.Fatalf("mkdir wal: %v", err)
 	}
@@ -1087,7 +1087,7 @@ func TestValueLogRewriteOnline_UnsyncedRewriteThenVacuumRemainsReopenable(t *tes
 		if !ok {
 			continue
 		}
-		refsByFile[ptr.FileID]++
+		refsByFile[ptr.ValueLogFileID()]++
 	}
 
 	set := db.valueLogManager.CurrentSet()
@@ -1192,7 +1192,7 @@ func TestValueLogRewriteOnline_WALOnLeafRefsPreserveNestedValueSegments(t *testi
 		}
 	}()
 
-	walDir := filepath.Join(dir, "wal")
+	walDir := filepath.Join(dir, "value_vlog")
 	if err := os.MkdirAll(walDir, 0o755); err != nil {
 		t.Fatalf("mkdir wal: %v", err)
 	}
@@ -1238,7 +1238,7 @@ func TestValueLogRewriteOnline_WALOnLeafRefsPreserveNestedValueSegments(t *testi
 		if !ok {
 			continue
 		}
-		refsByFile[ptr.FileID]++
+		refsByFile[ptr.ValueLogFileID()]++
 	}
 
 	set := db.valueLogManager.CurrentSet()

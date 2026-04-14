@@ -1357,3 +1357,107 @@ func TestRunBenchmark_ContentionAfterSnapshotsBeforeAllocsPostProcessing(t *test
 		t.Fatalf("expected mutex_after before allocs_after, events=%v", events)
 	}
 }
+
+func TestRenderTreeDBDiskUsageString_EmitsValueLogWithoutWAL(t *testing.T) {
+	out := renderTreeDBDiskUsageString(map[string]treeDBDiskUsage{
+		"treedb": {
+			MainValueLog: walDiskUsage{
+				TotalFiles: 1,
+				TotalBytes: 2048,
+				ValueBytes: 1536,
+			},
+		},
+	})
+	if !strings.Contains(out, "maindb/value_vlog:") {
+		t.Fatalf("expected value_vlog line, got:\n%s", out)
+	}
+	if strings.Contains(out, "maindb/wal:") {
+		t.Fatalf("did not expect wal line when wal usage is empty, got:\n%s", out)
+	}
+}
+
+func TestComputeTreeDBDiskUsage_IncludesLeafVLog(t *testing.T) {
+	dir := t.TempDir()
+	mainDir := filepath.Join(dir, "maindb")
+	if err := os.MkdirAll(filepath.Join(mainDir, "leaf_vlog"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(leaf_vlog): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(mainDir, "leaf_vlog", "value-l255-000001.log"), bytes.Repeat([]byte("x"), 321), 0o644); err != nil {
+		t.Fatalf("WriteFile(leaf_vlog): %v", err)
+	}
+
+	usage, err := computeTreeDBDiskUsage(dir)
+	if err != nil {
+		t.Fatalf("computeTreeDBDiskUsage: %v", err)
+	}
+	if usage.MainLeafLog.TotalFiles != 1 {
+		t.Fatalf("MainLeafLog.TotalFiles=%d want 1", usage.MainLeafLog.TotalFiles)
+	}
+	if usage.MainLeafLog.TotalBytes != 321 {
+		t.Fatalf("MainLeafLog.TotalBytes=%d want 321", usage.MainLeafLog.TotalBytes)
+	}
+}
+
+func TestRenderTreeDBDiskUsageString_EmitsLeafLog(t *testing.T) {
+	out := renderTreeDBDiskUsageString(map[string]treeDBDiskUsage{
+		"treedb": {
+			MainLeafLog: walDiskUsage{
+				TotalFiles: 1,
+				TotalBytes: 3072,
+				ValueBytes: 3072,
+			},
+		},
+	})
+	if !strings.Contains(out, "maindb/leaf_vlog:") {
+		t.Fatalf("expected leaf_vlog line, got:\n%s", out)
+	}
+}
+
+func TestRenderTreeDBVlogRewriteString_EmitsValueLogWithoutWAL(t *testing.T) {
+	out := renderTreeDBVlogRewriteString(map[string]treeDBVlogRewriteReport{
+		"treedb": {
+			BeforeUsage: dirDiskUsage{TotalBytes: 4096},
+			AfterUsage:  dirDiskUsage{TotalBytes: 2048},
+			BeforeTree: treeDBDiskUsage{
+				MainValueLog: walDiskUsage{TotalBytes: 4096},
+			},
+			AfterTree: treeDBDiskUsage{
+				MainValueLog: walDiskUsage{TotalBytes: 2048},
+			},
+			SegmentsBefore: 2,
+			SegmentsAfter:  1,
+			BytesBefore:    4096,
+			BytesAfter:     2048,
+			RecordsCopied:  7,
+		},
+	})
+	if !strings.Contains(out, "maindb/value_vlog: 4 KiB -> 2 KiB") {
+		t.Fatalf("expected value_vlog rewrite line, got:\n%s", out)
+	}
+	if strings.Contains(out, "maindb/wal:") {
+		t.Fatalf("did not expect wal line when wal usage is empty, got:\n%s", out)
+	}
+}
+
+func TestRenderTreeDBVlogRewriteString_EmitsLeafLog(t *testing.T) {
+	out := renderTreeDBVlogRewriteString(map[string]treeDBVlogRewriteReport{
+		"treedb": {
+			BeforeUsage: dirDiskUsage{TotalBytes: 8192},
+			AfterUsage:  dirDiskUsage{TotalBytes: 4096},
+			BeforeTree: treeDBDiskUsage{
+				MainLeafLog: walDiskUsage{TotalBytes: 6144},
+			},
+			AfterTree: treeDBDiskUsage{
+				MainLeafLog: walDiskUsage{TotalBytes: 2048},
+			},
+			SegmentsBefore: 3,
+			SegmentsAfter:  1,
+			BytesBefore:    6144,
+			BytesAfter:     2048,
+			RecordsCopied:  5,
+		},
+	})
+	if !strings.Contains(out, "maindb/leaf_vlog: 6 KiB -> 2 KiB") {
+		t.Fatalf("expected leaf_vlog rewrite line, got:\n%s", out)
+	}
+}

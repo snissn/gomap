@@ -46,9 +46,9 @@ func (r *trackedLeafRefReader) ReadUnsafeTo(ptr page.ValuePtr, dst []byte) ([]by
 }
 
 func TestTreeGetAppend_LeafRefPrefersReadUnsafeTo(t *testing.T) {
-	leafPtr := page.ValuePtr{
+	leafPtr := page.LeafLogPtr{
 		Offset: 4,
-		FileID: page.ValueLogFileID(1),
+		FileID: 1,
 	}
 	leafID, err := page.EncodeLeafRef(leafPtr)
 	if err != nil {

@@ -49,14 +49,13 @@ type stubLeafPageLog struct {
 	next uint32
 }
 
-func (l *stubLeafPageLog) AppendLeafPage(_ []byte) (page.ValuePtr, error) {
+func (l *stubLeafPageLog) AppendLeafPage(_ []byte) (page.LeafLogPtr, error) {
 	if l.next == 0 {
 		l.next = 4
 	}
-	ptr := page.ValuePtr{
-		FileID: page.ValueLogFileID(1),
+	ptr := page.LeafLogPtr{
+		FileID: 1,
 		Offset: uint64(l.next),
-		Length: 0,
 	}
 	l.next += 4096 + 32
 	return ptr, nil
@@ -80,7 +79,7 @@ func newMemoryLeafPageStore(z *Zipper) *memoryLeafPageStore {
 	}
 }
 
-func (s *memoryLeafPageStore) AppendLeafPage(leafPage []byte) (page.ValuePtr, error) {
+func (s *memoryLeafPageStore) AppendLeafPage(leafPage []byte) (page.LeafLogPtr, error) {
 	if s.z != nil {
 		s.z.leafRefCacheMu.RLock()
 		if s.z.leafRefCache != nil {
@@ -93,15 +92,14 @@ func (s *memoryLeafPageStore) AppendLeafPage(leafPage []byte) (page.ValuePtr, er
 	if s.next == 0 {
 		s.next = 4
 	}
-	ptr := page.ValuePtr{
-		FileID: page.ValueLogFileID(1),
+	ptr := page.LeafLogPtr{
+		FileID: 1,
 		Offset: uint64(s.next),
-		Length: uint32(len(leafPage)),
 	}
 	s.next += 4096 + 32
 	key, err := page.EncodeLeafRef(ptr)
 	if err != nil {
-		return page.ValuePtr{}, err
+		return page.LeafLogPtr{}, err
 	}
 	s.pages[key] = append([]byte(nil), leafPage...)
 	return ptr, nil
@@ -109,7 +107,11 @@ func (s *memoryLeafPageStore) AppendLeafPage(leafPage []byte) (page.ValuePtr, er
 
 func (s *memoryLeafPageStore) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
 	s.readCalls++
-	key, err := page.EncodeLeafRef(ptr)
+	leafPtr, err := page.LeafLogPtrFromValuePtr(ptr)
+	if err != nil {
+		return nil, err
+	}
+	key, err := page.EncodeLeafRef(leafPtr)
 	if err != nil {
 		return nil, err
 	}
@@ -430,11 +432,11 @@ func TestCoalesceInternalChildren_SkipsLeafRefsWhenOuterLeavesInValueLog(t *test
 	z := New(p, alloc)
 	z.SetOuterLeavesInValueLog(true)
 
-	leftID, err := page.EncodeLeafRef(page.ValuePtr{FileID: page.ValueLogFileID(1), Offset: 4})
+	leftID, err := page.EncodeLeafRef(page.LeafLogPtr{FileID: 1, Offset: 4})
 	if err != nil {
 		t.Fatalf("EncodeLeafRef left: %v", err)
 	}
-	rightID, err := page.EncodeLeafRef(page.ValuePtr{FileID: page.ValueLogFileID(1), Offset: 4096})
+	rightID, err := page.EncodeLeafRef(page.LeafLogPtr{FileID: 1, Offset: 4096})
 	if err != nil {
 		t.Fatalf("EncodeLeafRef right: %v", err)
 	}

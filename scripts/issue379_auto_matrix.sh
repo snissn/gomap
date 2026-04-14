@@ -170,9 +170,12 @@ def parse_run(log_path: Path, time_path: Path, wrapper: str, engine: str):
     size_bytes = 0
     vlog_bytes = None
     if engine == "treedb":
+        m_value_vlog = re.search(r"maindb/value_vlog:[^\n]*\bvalue=([0-9]+(?:\.[0-9]+)?\s*[A-Za-z]+)", txt)
         m_vlog = re.search(r"maindb/wal:[^\n]*\bvlog=([0-9]+(?:\.[0-9]+)?\s*[A-Za-z]+)", txt)
         m_value = re.search(r"maindb/wal:[^\n]*\bvalue=([0-9]+(?:\.[0-9]+)?\s*[A-Za-z]+)", txt)
-        if m_vlog:
+        if m_value_vlog:
+            vlog_bytes = parse_bytes(m_value_vlog.group(1))
+        elif m_vlog:
             vlog_bytes = parse_bytes(m_vlog.group(1))
         elif m_value:
             vlog_bytes = parse_bytes(m_value.group(1))

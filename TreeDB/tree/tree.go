@@ -247,7 +247,7 @@ func (t *Tree) loadNodeView(pageID uint64, verifyAlways bool) (node.Node, error)
 		if t.slabReader == nil {
 			return node.Node{}, errors.New("missing slab reader")
 		}
-		data, err := t.slabReader.ReadUnsafe(ptr)
+		data, err := t.slabReader.ReadUnsafe(ptr.ValuePtr())
 		if err != nil {
 			return node.Node{}, err
 		}
@@ -379,7 +379,7 @@ func (t *Tree) lookupLeafValueView(key []byte, dst []byte, appendMode bool) ([]b
 				)
 				if t.slabToReader != nil {
 					var usedDst bool
-					data, usedDst, err = t.slabToReader.ReadUnsafeTo(ptr, leafScratch.buf)
+					data, usedDst, err = t.slabToReader.ReadUnsafeTo(ptr.ValuePtr(), leafScratch.buf)
 					if err != nil {
 						putLeafRefPageScratch(leafScratch)
 						return nil, page.ValuePtr{}, 0, false, err
@@ -391,7 +391,7 @@ func (t *Tree) lookupLeafValueView(key []byte, dst []byte, appendMode bool) ([]b
 						leafScratch = nil
 					}
 				} else if t.slabAppender != nil {
-					data, err = t.slabAppender.ReadUnsafeAppend(ptr, leafScratch.buf[:0])
+					data, err = t.slabAppender.ReadUnsafeAppend(ptr.ValuePtr(), leafScratch.buf[:0])
 					if err != nil {
 						putLeafRefPageScratch(leafScratch)
 						return nil, page.ValuePtr{}, 0, false, err
