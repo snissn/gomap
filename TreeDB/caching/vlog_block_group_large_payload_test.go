@@ -29,7 +29,7 @@ func scanGroupedFrameCounts(t *testing.T, path string) (groupedFrames, groupedSu
 	for {
 		var header [valuelog.HeaderSize]byte
 		if _, err := io.ReadFull(r, header[:]); err != nil {
-			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+			if errors.Is(err, io.EOF) {
 				break
 			}
 			t.Fatalf("read header: %v", err)
