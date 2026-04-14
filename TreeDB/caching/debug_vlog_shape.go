@@ -85,10 +85,11 @@ func (db *DB) emitVlogShapeLog() {
 	}
 	if !db.valueLogEnabled() || !db.splitValueLogEnabled() {
 		ts := time.Now().UTC().Format(time.RFC3339Nano)
-		fmt.Fprintf(os.Stderr, "ts=%s treedb debug vlog_shape db=%s wal_dir=%s splitValueLog=%t valueLog=%t\n",
+		fmt.Fprintf(os.Stderr, "ts=%s treedb debug vlog_shape db=%s wal_dir=%s value_vlog_dir=%s splitValueLog=%t valueLog=%t\n",
 			ts,
 			filepath.Base(filepath.Dir(db.dir)),
 			db.dir,
+			db.valueLogDir,
 			db.splitValueLogEnabled(),
 			db.valueLogEnabled(),
 		)
@@ -126,16 +127,17 @@ func (db *DB) emitVlogShapeLog() {
 		diskBytes     int64
 		diskErr       error
 	)
-	if debugVlogShapeDisk.Load() && db.dir != "" {
+	if debugVlogShapeDisk.Load() && db.valueLogDir != "" {
 		diskL0Segs, diskL0Bytes, diskL255Segs, diskL255Bytes, diskSegsTotal, diskBytes, diskErr = scanVlogSegmentsOnDisk(db.valueLogDir)
 	}
 
 	ts := time.Now().UTC().Format(time.RFC3339Nano)
 	fmt.Fprintf(os.Stderr,
-		"ts=%s treedb debug vlog_shape db=%s wal_dir=%s l0_segments=%d l0_bytes=%d l0_rotations=%d l0_rotations_idle=%d segments_total=%d bytes_total=%d disk_l0_segments=%d disk_l0_bytes=%d disk_l255_segments=%d disk_l255_bytes=%d disk_segments_total=%d disk_bytes_total=%d disk_err=%v\n",
+		"ts=%s treedb debug vlog_shape db=%s wal_dir=%s value_vlog_dir=%s l0_segments=%d l0_bytes=%d l0_rotations=%d l0_rotations_idle=%d segments_total=%d bytes_total=%d disk_l0_segments=%d disk_l0_bytes=%d disk_l255_segments=%d disk_l255_bytes=%d disk_segments_total=%d disk_bytes_total=%d disk_err=%v\n",
 		ts,
 		filepath.Base(filepath.Dir(db.dir)),
 		db.dir,
+		db.valueLogDir,
 		l0Segs,
 		l0Bytes,
 		l0Rot,
