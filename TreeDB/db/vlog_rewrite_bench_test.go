@@ -347,7 +347,7 @@ func collectLeafRefFileCountsBench(tb testing.TB, p *pager.Pager, rootID uint64,
 		return
 	}
 	if ptr, ok := page.DecodeLeafRef(rootID); ok {
-		counts[ptr.FileID]++
+		counts[ptr.ValueLogFileID()]++
 		return
 	}
 
@@ -364,7 +364,7 @@ func collectLeafRefFileCountsBench(tb testing.TB, p *pager.Pager, rootID uint64,
 		visited[pageID] = struct{}{}
 
 		if ptr, ok := page.DecodeLeafRef(pageID); ok {
-			counts[ptr.FileID]++
+			counts[ptr.ValueLogFileID()]++
 			continue
 		}
 

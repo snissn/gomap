@@ -76,12 +76,16 @@ func (l *registeredLeafPageLog) ensureWriter() error {
 	return nil
 }
 
-func (l *registeredLeafPageLog) AppendLeafPage(leafPage []byte) (page.ValuePtr, error) {
+func (l *registeredLeafPageLog) AppendLeafPage(leafPage []byte) (page.LeafLogPtr, error) {
 	if err := l.ensureWriter(); err != nil {
-		return page.ValuePtr{}, err
+		return page.LeafLogPtr{}, err
 	}
 	l.nextRID++
-	return l.w.Append(0, nil, l.nextRID, leafPage)
+	ptr, err := l.w.Append(0, nil, l.nextRID, leafPage)
+	if err != nil {
+		return page.LeafLogPtr{}, err
+	}
+	return page.LeafLogPtrFromValuePtr(ptr)
 }
 
 func (l *registeredLeafPageLog) Flush() error {
@@ -147,12 +151,16 @@ func (l *unregisteredLeafPageLog) ensureWriter() error {
 	return nil
 }
 
-func (l *unregisteredLeafPageLog) AppendLeafPage(leafPage []byte) (page.ValuePtr, error) {
+func (l *unregisteredLeafPageLog) AppendLeafPage(leafPage []byte) (page.LeafLogPtr, error) {
 	if err := l.ensureWriter(); err != nil {
-		return page.ValuePtr{}, err
+		return page.LeafLogPtr{}, err
 	}
 	l.nextRID++
-	return l.w.Append(0, nil, l.nextRID, leafPage)
+	ptr, err := l.w.Append(0, nil, l.nextRID, leafPage)
+	if err != nil {
+		return page.LeafLogPtr{}, err
+	}
+	return page.LeafLogPtrFromValuePtr(ptr)
 }
 
 func (l *unregisteredLeafPageLog) Flush() error {

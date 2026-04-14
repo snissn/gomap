@@ -1382,7 +1382,7 @@ func (db *DB) rootPageValid(p *pager.Pager, pageID uint64) bool {
 		if db == nil || db.valueLogManager == nil {
 			return false
 		}
-		data, err := db.valueLogManager.ReadUnsafe(ptr)
+		data, err := db.valueLogManager.ReadUnsafe(ptr.ValuePtr())
 		if err != nil {
 			return false
 		}

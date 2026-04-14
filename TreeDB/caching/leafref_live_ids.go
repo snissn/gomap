@@ -83,9 +83,9 @@ func collectLeafRefValueLogLiveIDs(ctx context.Context, p pageGetter, rootID uin
 			return fmt.Errorf("checksum mismatch on page %d", pageID)
 		}
 		return nil
-	}, func(ptr page.ValuePtr) error {
-		live[ptr.FileID] = struct{}{}
-		return collectNestedLeafPageValueLogLiveIDs(ctx, ptr, reader, live)
+	}, func(ptr page.LeafLogPtr) error {
+		live[ptr.ValueLogFileID()] = struct{}{}
+		return collectNestedLeafPageValueLogLiveIDs(ctx, ptr.ValuePtr(), reader, live)
 	})
 }
 

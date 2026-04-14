@@ -17,12 +17,12 @@ func newCachingLeafPageLog(db *DB, laneID int) backenddb.LeafPageLog {
 	return &cachingLeafPageLog{db: db, laneID: laneID}
 }
 
-func (l *cachingLeafPageLog) AppendLeafPage(leafPage []byte) (page.ValuePtr, error) {
+func (l *cachingLeafPageLog) AppendLeafPage(leafPage []byte) (page.LeafLogPtr, error) {
 	if l == nil || l.db == nil {
-		return page.ValuePtr{}, errWALUnavailable
+		return page.LeafLogPtr{}, errWALUnavailable
 	}
 	if l.laneID < 0 || l.laneID >= len(l.db.lanes) {
-		return page.ValuePtr{}, errWALUnavailable
+		return page.LeafLogPtr{}, errWALUnavailable
 	}
 	lane := &l.db.lanes[l.laneID]
 	rid := l.db.nextRID.Add(1)
@@ -30,7 +30,11 @@ func (l *cachingLeafPageLog) AppendLeafPage(leafPage []byte) (page.ValuePtr, err
 	if retainPath != "" {
 		l.db.markValueLogRetain(retainPath)
 	}
-	return ptr, err
+	leafPtr, convErr := page.LeafLogPtrFromValuePtr(ptr)
+	if convErr != nil {
+		return page.LeafLogPtr{}, convErr
+	}
+	return leafPtr, err
 }
 
 func (l *cachingLeafPageLog) Flush() error {

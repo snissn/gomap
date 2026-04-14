@@ -2268,9 +2268,9 @@ func TestRewriteWriter_AppendLeafPageUsesLeafDictWhenConfigured(t *testing.T) {
 	if err != nil {
 		t.Fatalf("append leaf C: %v", err)
 	}
-	if page.ValuePtrSubIndex(ptrA) != 0 || page.ValuePtrSubIndex(ptrB) != 0 || page.ValuePtrSubIndex(ptrC) != 0 {
+	if page.ValuePtrSubIndex(ptrA.ValuePtr()) != 0 || page.ValuePtrSubIndex(ptrB.ValuePtr()) != 0 || page.ValuePtrSubIndex(ptrC.ValuePtr()) != 0 {
 		t.Fatalf("leaf pointers must keep grouped sub-index 0 for leafref encoding: A=%d B=%d C=%d",
-			page.ValuePtrSubIndex(ptrA), page.ValuePtrSubIndex(ptrB), page.ValuePtrSubIndex(ptrC))
+			page.ValuePtrSubIndex(ptrA.ValuePtr()), page.ValuePtrSubIndex(ptrB.ValuePtr()), page.ValuePtrSubIndex(ptrC.ValuePtr()))
 	}
 	if err := w.Close(); err != nil {
 		t.Fatalf("close rewrite writer: %v", err)

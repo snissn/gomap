@@ -243,7 +243,7 @@ func collectLeafRefFileCounts(t *testing.T, p *pager.Pager, rootID uint64) map[u
 		}
 		seen[pageID] = struct{}{}
 		if ptr, ok := page.DecodeLeafRef(pageID); ok {
-			out[ptr.FileID]++
+			out[ptr.ValueLogFileID()]++
 			continue
 		}
 		data, err := p.Get(pageID)
@@ -324,11 +324,11 @@ func collectNestedLeafValueLogFileCounts(t *testing.T, reader interface {
 			continue
 		}
 		if len(sourceSet) > 0 {
-			if _, ok := sourceSet[ptr.FileID]; !ok {
+			if _, ok := sourceSet[ptr.ValueLogFileID()]; !ok {
 				continue
 			}
 		}
-		leafPage, err := reader.ReadUnsafe(ptr)
+		leafPage, err := reader.ReadUnsafe(ptr.ValuePtr())
 		if err != nil {
 			t.Fatalf("read leaf page file=%d offset=%d: %v", ptr.FileID, ptr.Offset, err)
 		}

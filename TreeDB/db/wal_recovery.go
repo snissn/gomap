@@ -400,21 +400,25 @@ func (a *replayInlineAppender) append(value []byte) (page.ValuePtr, error) {
 	return ptr, nil
 }
 
-func (a *replayInlineAppender) AppendLeafPage(leafPage []byte) (page.ValuePtr, error) {
+func (a *replayInlineAppender) AppendLeafPage(leafPage []byte) (page.LeafLogPtr, error) {
 	if a == nil || a.writer == nil {
-		return page.ValuePtr{}, fmt.Errorf("commitlog: replay value-log appender unavailable")
+		return page.LeafLogPtr{}, fmt.Errorf("commitlog: replay value-log appender unavailable")
 	}
 	if a.nextRID == 0 {
-		return page.ValuePtr{}, fmt.Errorf("value-log rid space exhausted")
+		return page.LeafLogPtr{}, fmt.Errorf("value-log rid space exhausted")
 	}
 	rid := a.nextRID
 	a.nextRID++
 	ptr, err := a.writer.appendValue(rid, leafPage)
 	if err != nil {
-		return page.ValuePtr{}, err
+		return page.LeafLogPtr{}, err
 	}
 	a.dirty = true
-	return ptr, nil
+	leafPtr, convErr := page.LeafLogPtrFromValuePtr(ptr)
+	if convErr != nil {
+		return page.LeafLogPtr{}, convErr
+	}
+	return leafPtr, nil
 }
 
 func (a *replayInlineAppender) Flush() error {

@@ -17,7 +17,7 @@ func TestWalk_ZeroRootIsNoOp(t *testing.T) {
 }
 
 func TestWalk_NilGetReturnsError(t *testing.T) {
-	err := Walk(context.Background(), 1, nil, nil, func(page.ValuePtr) error { return nil })
+	err := Walk(context.Background(), 1, nil, nil, func(page.LeafLogPtr) error { return nil })
 	if err == nil || !strings.Contains(err.Error(), "get function is nil") {
 		t.Fatalf("Walk(nil get) err=%v, want nil-get error", err)
 	}
@@ -31,17 +31,17 @@ func TestWalk_NilVisitReturnsError(t *testing.T) {
 }
 
 func TestWalk_RootLeafRefVisitsPointer(t *testing.T) {
-	want := page.ValuePtr{FileID: page.ValueLogFileID(7), Offset: 42}
+	want := page.LeafLogPtr{FileID: 7, Offset: 42}
 	rootID, err := page.EncodeLeafRef(want)
 	if err != nil {
 		t.Fatalf("EncodeLeafRef: %v", err)
 	}
 
-	var got []page.ValuePtr
+	var got []page.LeafLogPtr
 	err = Walk(context.Background(), rootID, func(uint64) ([]byte, error) {
 		t.Fatal("get should not be called for root leafref")
 		return nil, nil
-	}, nil, func(ptr page.ValuePtr) error {
+	}, nil, func(ptr page.LeafLogPtr) error {
 		got = append(got, ptr)
 		return nil
 	})
@@ -67,7 +67,7 @@ func TestWalk_InternalMixedChildrenVisitsOnlyLeafRefs(t *testing.T) {
 	rootNode.SetType(page.PageTypeInternal)
 	rootNode.SetPageID(1)
 
-	wantPtr := page.ValuePtr{FileID: page.ValueLogFileID(9), Offset: 77}
+	wantPtr := page.LeafLogPtr{FileID: 9, Offset: 77}
 	leafRefID, err := page.EncodeLeafRef(wantPtr)
 	if err != nil {
 		t.Fatalf("EncodeLeafRef: %v", err)
@@ -83,14 +83,14 @@ func TestWalk_InternalMixedChildrenVisitsOnlyLeafRefs(t *testing.T) {
 		1:  rootPage,
 		10: childLeaf,
 	}
-	var visited []page.ValuePtr
+	var visited []page.LeafLogPtr
 	err = Walk(context.Background(), 1, func(pageID uint64) ([]byte, error) {
 		data, ok := pages[pageID]
 		if !ok {
 			return nil, errors.New("missing page")
 		}
 		return data, nil
-	}, nil, func(ptr page.ValuePtr) error {
+	}, nil, func(ptr page.LeafLogPtr) error {
 		visited = append(visited, ptr)
 		return nil
 	})
@@ -116,7 +116,7 @@ func TestWalk_InvalidPageTypeReturnsError(t *testing.T) {
 			t.Fatalf("unexpected pageID %d", pageID)
 		}
 		return rootPage, nil
-	}, nil, func(page.ValuePtr) error { return nil })
+	}, nil, func(page.LeafLogPtr) error { return nil })
 	if err == nil || !strings.Contains(err.Error(), "invalid page type") {
 		t.Fatalf("Walk(invalid type) err=%v want invalid page type", err)
 	}

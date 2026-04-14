@@ -963,16 +963,17 @@ func (db *DB) collectLeafRefValueLogLiveBytes(ctx context.Context, p *pager.Page
 	return nil
 }
 
-func (db *DB) collectLeafRefPtrLiveBytes(ptr page.ValuePtr, liveByID map[uint32]int64, seenGroupedRecords *map[groupedRecordKey]struct{}, set *valuelog.Set) error {
+func (db *DB) collectLeafRefPtrLiveBytes(ptr page.LeafLogPtr, liveByID map[uint32]int64, seenGroupedRecords *map[groupedRecordKey]struct{}, set *valuelog.Set) error {
 	if liveByID == nil {
 		return nil
 	}
-	if !page.IsValueLogFileID(ptr.FileID) {
+	vptr := ptr.ValuePtr()
+	if !page.IsValueLogFileID(vptr.FileID) {
 		return nil
 	}
 	// Dedup grouped-record live-byte accounting (LeafRef pointers are grouped).
-	if page.ValuePtrIsGrouped(ptr) {
-		k, err := groupedRecordKeyForPtr(ptr)
+	if page.ValuePtrIsGrouped(vptr) {
+		k, err := groupedRecordKeyForPtr(vptr)
 		if err != nil {
 			return err
 		}
@@ -992,11 +993,11 @@ func (db *DB) collectLeafRefPtrLiveBytes(ptr page.ValuePtr, liveByID map[uint32]
 		seen[k] = struct{}{}
 	}
 
-	recordLen, err := db.valueLogRecordLengthForRewriteInSet(ptr, set)
+	recordLen, err := db.valueLogRecordLengthForRewriteInSet(vptr, set)
 	if err != nil {
 		return err
 	}
-	liveByID[ptr.FileID] += int64(recordLen)
+	liveByID[vptr.FileID] += int64(recordLen)
 	return nil
 }
 
@@ -2027,16 +2028,16 @@ func (c *leafRefRewriteCtx) rewriteNode(id uint64) (uint64, bool, error) {
 			return mapped, mapped != id, nil
 		}
 		if c.hasSingleID {
-			if ptr.FileID != c.singleSourceID {
+			if ptr.ValueLogFileID() != c.singleSourceID {
 				return id, false, nil
 			}
 		} else if c.sourceIDs != nil {
-			if _, ok := c.sourceIDs[ptr.FileID]; !ok {
+			if _, ok := c.sourceIDs[ptr.ValueLogFileID()]; !ok {
 				return id, false, nil
 			}
 		}
 		if c.sourceChunks != nil {
-			ok, err := rewriteSourceChunkSelected(ptr, c.sourceChunks, c.sourceChunkBytes)
+			ok, err := rewriteSourceChunkSelected(ptr.ValuePtr(), c.sourceChunks, c.sourceChunkBytes)
 			if err != nil {
 				return id, false, err
 			}
@@ -2050,7 +2051,7 @@ func (c *leafRefRewriteCtx) rewriteNode(id uint64) (uint64, bool, error) {
 		if c.writer == nil || c.ridAlloc == nil {
 			return id, false, fmt.Errorf("vlog-rewrite: rewrite writer unavailable")
 		}
-		leafPage, err := c.readLeafPage(ptr)
+		leafPage, err := c.readLeafPage(ptr.ValuePtr())
 		if err != nil {
 			return id, false, err
 		}
@@ -2065,7 +2066,11 @@ func (c *leafRefRewriteCtx) rewriteNode(id uint64) (uint64, bool, error) {
 		if err != nil {
 			return id, false, err
 		}
-		leafID, err := page.EncodeLeafRef(newPtr)
+		leafLogPtr, err := page.LeafLogPtrFromValuePtr(newPtr)
+		if err != nil {
+			return id, false, err
+		}
+		leafID, err := page.EncodeLeafRef(leafLogPtr)
 		if err != nil {
 			return id, false, err
 		}
@@ -3156,9 +3161,9 @@ func (w *rewriteWriter) flushPendingDictBatch() error {
 	return nil
 }
 
-func (w *rewriteWriter) AppendLeafPage(leafPage []byte) (page.ValuePtr, error) {
+func (w *rewriteWriter) AppendLeafPage(leafPage []byte) (page.LeafLogPtr, error) {
 	if w == nil {
-		return page.ValuePtr{}, errors.New("vlog-rewrite: nil writer")
+		return page.LeafLogPtr{}, errors.New("vlog-rewrite: nil writer")
 	}
 	if w.nextRID == 0 {
 		w.nextRID = 1
@@ -3166,7 +3171,7 @@ func (w *rewriteWriter) AppendLeafPage(leafPage []byte) (page.ValuePtr, error) {
 	rid := w.nextRID
 	w.nextRID++
 	if w.nextRID == 0 {
-		return page.ValuePtr{}, fmt.Errorf("value-log rid space exhausted")
+		return page.LeafLogPtr{}, fmt.Errorf("value-log rid space exhausted")
 	}
 	if w.blockCompression && w.leafDictID != 0 && len(w.leafDict) > 0 && rewriteAllowDictForSmallPayload(leafPage) {
 		// LeafRef IDs intentionally omit grouped sub-index bits and therefore
@@ -3174,13 +3179,25 @@ func (w *rewriteWriter) AppendLeafPage(leafPage []byte) (page.ValuePtr, error) {
 		// remain stable and do not alias another subrecord in a grouped batch.
 		ptr, err := w.appendSingleValueWithDictClass(rewriteTemplateClassOuterLeaf, w.leafDictID, w.leafDict, rid, leafPage)
 		if err == nil {
-			return ptr, nil
+			leafPtr, convErr := page.LeafLogPtrFromValuePtr(ptr)
+			if convErr != nil {
+				return page.LeafLogPtr{}, convErr
+			}
+			return leafPtr, nil
 		}
 		if !errors.Is(err, valuelog.ErrMissingDict) {
-			return page.ValuePtr{}, err
+			return page.LeafLogPtr{}, err
 		}
 	}
-	return w.appendValueWithDictClass(rewriteTemplateClassOuterLeaf, 0, nil, rid, leafPage)
+	ptr, err := w.appendValueWithDictClass(rewriteTemplateClassOuterLeaf, 0, nil, rid, leafPage)
+	if err != nil {
+		return page.LeafLogPtr{}, err
+	}
+	leafPtr, convErr := page.LeafLogPtrFromValuePtr(ptr)
+	if convErr != nil {
+		return page.LeafLogPtr{}, convErr
+	}
+	return leafPtr, nil
 }
 
 // CurrentValueLogSegment reports the writer's current segment identity.

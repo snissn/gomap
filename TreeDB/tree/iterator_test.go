@@ -50,8 +50,8 @@ func TestIterator_LeafRefChecksumPolicyHonored(t *testing.T) {
 		leaf.UpdateChecksum()
 		leafData[8] ^= 0x01 // checksum field
 
-		leafRefID, err := page.EncodeLeafRef(page.ValuePtr{
-			FileID: page.ValueLogFileID(1),
+		leafRefID, err := page.EncodeLeafRef(page.LeafLogPtr{
+			FileID: 1,
 			Offset: 8,
 		})
 		if err != nil {
@@ -61,7 +61,7 @@ func TestIterator_LeafRefChecksumPolicyHonored(t *testing.T) {
 		if !ok {
 			t.Fatalf("DecodeLeafRef failed")
 		}
-		tracked.values[ptr] = leafData
+		tracked.values[ptr.ValuePtr()] = leafData
 		return New(nil, tracked, leafRefID)
 	}
 

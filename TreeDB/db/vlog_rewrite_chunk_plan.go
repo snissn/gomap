@@ -280,11 +280,11 @@ func (db *DB) collectLeafRefValueLogLiveBytesByChunk(ctx context.Context, p *pag
 	return nil
 }
 
-func (db *DB) collectLeafRefPtrLiveBytesByChunk(ptr page.ValuePtr, liveByChunk map[valueLogChunkKey]int64, seenGroupedRecords *map[groupedRecordKey]struct{}, set *valuelog.Set, chunkBytes int64) error {
+func (db *DB) collectLeafRefPtrLiveBytesByChunk(ptr page.LeafLogPtr, liveByChunk map[valueLogChunkKey]int64, seenGroupedRecords *map[groupedRecordKey]struct{}, set *valuelog.Set, chunkBytes int64) error {
 	if liveByChunk == nil {
 		return nil
 	}
-	return db.collectValueLogPtrLiveBytes(ptr, seenGroupedRecords, set, func(ptr page.ValuePtr, recordLen uint32) error {
+	return db.collectValueLogPtrLiveBytes(ptr.ValuePtr(), seenGroupedRecords, set, func(ptr page.ValuePtr, recordLen uint32) error {
 		chunkOffset, err := valueLogChunkOffsetForPtr(ptr, chunkBytes)
 		if err != nil {
 			return err

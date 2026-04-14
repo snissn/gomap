@@ -28,7 +28,7 @@ func collectLeafRefIDsFromRoot(t *testing.T, d *DB, rootID uint64) map[uint64]st
 			return fmt.Errorf("checksum mismatch on page %d", pageID)
 		}
 		return nil
-	}, func(ptr page.ValuePtr) error {
+	}, func(ptr page.LeafLogPtr) error {
 		id, err := page.EncodeLeafRef(ptr)
 		if err != nil {
 			return err
@@ -47,7 +47,7 @@ type countingLeafPageLog struct {
 	appends atomic.Uint64
 }
 
-func (l *countingLeafPageLog) AppendLeafPage(leafPage []byte) (page.ValuePtr, error) {
+func (l *countingLeafPageLog) AppendLeafPage(leafPage []byte) (page.LeafLogPtr, error) {
 	l.appends.Add(1)
 	return l.inner.AppendLeafPage(leafPage)
 }

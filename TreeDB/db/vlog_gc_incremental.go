@@ -574,13 +574,10 @@ func collectLeafRefValueLogRefCounts(ctx context.Context, p *pager.Pager, rootID
 			}
 		}
 		return nil
-	}, func(ptr page.ValuePtr) error {
-		if !page.IsValueLogFileID(ptr.FileID) {
-			return nil
-		}
-		refs[ptr.FileID]++
+	}, func(ptr page.LeafLogPtr) error {
+		refs[ptr.ValueLogFileID()]++
 		found = true
-		return collectNestedLeafPageValueLogRefCounts(ptr, reader, refs, &leafScratch)
+		return collectNestedLeafPageValueLogRefCounts(ptr.ValuePtr(), reader, refs, &leafScratch)
 	})
 	return found, err
 }
