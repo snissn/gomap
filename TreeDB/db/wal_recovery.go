@@ -426,7 +426,11 @@ func newReplayInlineAppender(db *DB, segments []logSegment, ridMap map[uint64]pa
 		// segments within the same cap used by the write path.
 		maxSegmentBytes = int64(^uint32(0)) - 4
 	}
-	writer := newRewriteWriter(resolveStorageLayout(db.dir).valueVLogDir, 0, maxLane0Seq, maxSegmentBytes)
+	layout := resolveStorageLayout(db.dir)
+	writer := newRewriteWriter(layout.valueVLogDir, 0, maxLane0Seq, maxSegmentBytes)
+	if db.indexOuterLeavesInValueLog {
+		writer.ConfigureLeafLog(layout.leafVLogDir, rewriteLeafLogLaneID, maxRewriteLaneSeq(segments, rewriteLeafLogLaneID))
+	}
 	writer.blockCompression = db.valueLogCompression != ValueLogCompressionOff
 	writer.blockCodec = valuelogBlockCodecFromDB(db.valueLogBlockCodec)
 	return &replayInlineAppender{

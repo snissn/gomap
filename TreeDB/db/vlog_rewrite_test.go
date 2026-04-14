@@ -2055,6 +2055,69 @@ func TestRewriteWriter_CreatedFileIDs_StableAcrossCalls(t *testing.T) {
 	}
 }
 
+func TestRewriteWriter_LeafPagesUseConfiguredLeafLogDir(t *testing.T) {
+	root := t.TempDir()
+	valueDir := filepath.Join(root, "value_vlog")
+	leafDir := filepath.Join(root, "leaf_vlog")
+	if err := os.MkdirAll(valueDir, 0o755); err != nil {
+		t.Fatalf("mkdir value dir: %v", err)
+	}
+	if err := os.MkdirAll(leafDir, 0o755); err != nil {
+		t.Fatalf("mkdir leaf dir: %v", err)
+	}
+
+	w := newRewriteWriter(valueDir, 254, 0, 64<<20)
+	w.ConfigureLeafLog(leafDir, rewriteLeafLogLaneID, 0)
+	if _, err := w.appendValue(1, []byte("value-payload")); err != nil {
+		t.Fatalf("appendValue: %v", err)
+	}
+	leafPtr, err := w.AppendLeafPage(bytes.Repeat([]byte("l"), 4096))
+	if err != nil {
+		t.Fatalf("AppendLeafPage: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	valuePaths, err := filepath.Glob(filepath.Join(valueDir, "value-l*.log"))
+	if err != nil {
+		t.Fatalf("glob value_vlog: %v", err)
+	}
+	if len(valuePaths) == 0 {
+		t.Fatalf("expected value_vlog file after append")
+	}
+	leafPaths, err := filepath.Glob(filepath.Join(leafDir, "value-l*.log"))
+	if err != nil {
+		t.Fatalf("glob leaf_vlog: %v", err)
+	}
+	if len(leafPaths) == 0 {
+		t.Fatalf("expected leaf_vlog file after leaf append")
+	}
+
+	lane, _ := valuelog.DecodeFileID(leafPtr.FileID)
+	if lane != rewriteLeafLogLaneID {
+		t.Fatalf("leaf ptr lane=%d want=%d", lane, rewriteLeafLogLaneID)
+	}
+
+	ids, err := w.createdFileIDs()
+	if err != nil {
+		t.Fatalf("createdFileIDs: %v", err)
+	}
+	var sawValue, sawLeaf bool
+	for _, id := range ids {
+		lane, _ := valuelog.DecodeFileID(id)
+		if lane == 254 {
+			sawValue = true
+		}
+		if lane == rewriteLeafLogLaneID {
+			sawLeaf = true
+		}
+	}
+	if !sawValue || !sawLeaf {
+		t.Fatalf("expected created IDs to include value and leaf lanes, ids=%v", ids)
+	}
+}
+
 func TestRewriteWriter_TemplatePrepassEncodesBeforeDict(t *testing.T) {
 	walDir := t.TempDir()
 	cfg, store, lookup, value := buildRewriteTemplateFixture(t)

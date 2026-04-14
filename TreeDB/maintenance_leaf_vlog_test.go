@@ -321,12 +321,29 @@ func TestValueLogRewriteOffline_LeafPagesInValueLog_ReopenParity(t *testing.T) {
 		t.Fatalf("close: %v", err)
 	}
 
+	mainDir := filepath.Dir(mainIndexPath(dir))
+	leafPathsBefore, err := filepath.Glob(filepath.Join(mainDir, "leaf_vlog", "value-l*.log"))
+	if err != nil {
+		t.Fatalf("glob leaf_vlog before rewrite: %v", err)
+	}
+	if len(leafPathsBefore) == 0 {
+		t.Fatalf("expected leaf_vlog files before rewrite")
+	}
+
 	stats, err := treedb.ValueLogRewriteOffline(treedb.Options{Dir: dir})
 	if err != nil {
 		t.Fatalf("ValueLogRewriteOffline: %v", err)
 	}
 	if stats.RecordsCopied == 0 {
 		t.Fatalf("expected offline rewrite to copy records, stats=%+v", stats)
+	}
+
+	leafPathsAfter, err := filepath.Glob(filepath.Join(mainDir, "leaf_vlog", "value-l*.log"))
+	if err != nil {
+		t.Fatalf("glob leaf_vlog after rewrite: %v", err)
+	}
+	if len(leafPathsAfter) == 0 {
+		t.Fatalf("expected leaf_vlog files after rewrite")
 	}
 
 	reopen, err := treedb.Open(opts)
