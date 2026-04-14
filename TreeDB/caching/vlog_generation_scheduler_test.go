@@ -5262,12 +5262,9 @@ func TestVlogGenerationRewritePlan_StageConfirmationExecutesConfirmedSubset(t *t
 		time.Sleep(10 * time.Millisecond)
 	}
 	rewriteDeadline := time.Now().Add(2 * schedulerTestWait(t))
-	var (
-		rewriteOpts  backenddb.ValueLogRewriteOnlineOptions
-		rewriteCalls int
-	)
+	var rewriteCalls int
 	for {
-		rewriteOpts, rewriteCalls = recorder.recordedRewrite()
+		_, rewriteCalls = recorder.recordedRewrite()
 		if rewriteCalls >= 1 {
 			break
 		}
@@ -5280,9 +5277,10 @@ func TestVlogGenerationRewritePlan_StageConfirmationExecutesConfirmedSubset(t *t
 	if len(rewriteHistory) == 0 {
 		t.Fatalf("rewrite history after staged confirmation empty")
 	}
-	rewriteOpts = rewriteHistory[0]
-	if got, want := rewriteOpts.SourceFileIDs, []uint32{22}; len(got) != len(want) || got[0] != want[0] {
-		t.Fatalf("rewrite SourceFileIDs after staged confirmation=%v want=%v", got, want)
+	for i, rewriteOpts := range rewriteHistory {
+		if got, want := rewriteOpts.SourceFileIDs, []uint32{22}; len(got) != len(want) || got[0] != want[0] {
+			t.Fatalf("rewrite[%d] SourceFileIDs after staged confirmation=%v want=%v", i, got, want)
+		}
 	}
 }
 
@@ -5439,12 +5437,9 @@ func TestVlogGenerationRewritePlan_StageConfirmationReplansEvenWhenOtherTriggers
 		t.Fatalf("plan calls after staged confirmation=%d want 1", planCalls)
 	}
 	rewriteDeadline := time.Now().Add(2 * schedulerTestWait(t))
-	var (
-		rewriteOpts  backenddb.ValueLogRewriteOnlineOptions
-		rewriteCalls int
-	)
+	var rewriteCalls int
 	for {
-		rewriteOpts, rewriteCalls = recorder.recordedRewrite()
+		_, rewriteCalls = recorder.recordedRewrite()
 		if rewriteCalls >= 1 {
 			break
 		}
@@ -5457,9 +5452,10 @@ func TestVlogGenerationRewritePlan_StageConfirmationReplansEvenWhenOtherTriggers
 	if len(rewriteHistory) == 0 {
 		t.Fatalf("rewrite history after staged confirmation empty")
 	}
-	rewriteOpts = rewriteHistory[0]
-	if got, want := rewriteOpts.SourceFileIDs, []uint32{22}; len(got) != len(want) || got[0] != want[0] {
-		t.Fatalf("rewrite SourceFileIDs after staged confirmation=%v want=%v", got, want)
+	for i, rewriteOpts := range rewriteHistory {
+		if got, want := rewriteOpts.SourceFileIDs, []uint32{22}; len(got) != len(want) || got[0] != want[0] {
+			t.Fatalf("rewrite[%d] SourceFileIDs after staged confirmation=%v want=%v", i, got, want)
+		}
 	}
 }
 

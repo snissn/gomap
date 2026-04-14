@@ -4842,7 +4842,10 @@ func (db *DB) pruneRetainedValueLogsWithObserved(force bool, observedSourceIDs m
 			}
 		}
 		if removed {
-			db.syncDirBestEffort(db.dir)
+			db.syncDirBestEffort(db.valueLogDir)
+			if db.leafLogDir != "" {
+				db.syncDirBestEffort(db.leafLogDir)
+			}
 		}
 		return out
 	}

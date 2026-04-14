@@ -226,6 +226,12 @@ def parse_run(text):
                     out["disk"]["maindb_value_vlog_total"] = total
                 if value is not None:
                     out["disk"]["maindb_value_vlog_value"] = value
+            elif line.startswith("maindb/leaf_vlog:"):
+                total, value = parse_dir_usage(line, "maindb/leaf_vlog:")
+                if total is not None:
+                    out["disk"]["maindb_leaf_vlog_total"] = total
+                if value is not None:
+                    out["disk"]["maindb_leaf_vlog_value"] = value
             elif line.startswith("dictdb/wal:"):
                 total, value = parse_dir_usage(line, "dictdb/wal:")
                 if total is not None:
@@ -264,7 +270,7 @@ lines.append("")
 for profile in profiles:
     lines.append(f"## Profile: {profile}")
     lines.append("")
-    header = ["variant"] + tests + ["index.db", "wal(total)", "dict/index.db"]
+    header = ["variant"] + tests + ["index.db", "external(total)", "dict/index.db"]
     lines.append("| " + " | ".join(header) + " |")
     lines.append("|" + "|".join(["---"] + ["---:"] * (len(header) - 1)) + "|")
     for variant in variants:
@@ -278,7 +284,8 @@ for profile in profiles:
             v = ops.get(t)
             row.append(f"{v:,}" if isinstance(v, int) else "-")
         row.append(fmt_bytes(disk.get("maindb_index")))
-        row.append(fmt_bytes(disk.get("maindb_wal_total")))
+        external_total = sum(int(disk.get(k, 0) or 0) for k in ("maindb_wal_total", "maindb_value_vlog_total", "maindb_leaf_vlog_total"))
+        row.append(fmt_bytes(external_total if external_total > 0 else None))
         row.append(fmt_bytes(disk.get("dictdb_index")))
         lines.append("| " + " | ".join(row) + " |")
     lines.append("")
