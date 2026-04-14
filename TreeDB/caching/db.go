@@ -5515,8 +5515,77 @@ func (db *DB) runWithBackendMaintenanceOptions(opts backendMaintenanceOptions, f
 			return err
 		}
 	}
+	var fnErr error
 	if fn != nil {
-		return fn()
+		fnErr = fn()
+	}
+	reconcileErr := db.reconcileSplitValueLogWritersAfterBackendMaintenance()
+	if fnErr != nil {
+		if reconcileErr != nil {
+			return errors.Join(fnErr, reconcileErr)
+		}
+		return fnErr
+	}
+	return reconcileErr
+}
+
+func (db *DB) reconcileSplitValueLogWritersAfterBackendMaintenance() error {
+	if db == nil {
+		return nil
+	}
+	if db.valueLogReader != nil {
+		if err := db.valueLogReader.Refresh(); err != nil {
+			return err
+		}
+	}
+	if !db.splitValueLogEnabled() || !db.valueLogEnabled() {
+		return nil
+	}
+	segments, _ := listNonEmptySplitLogSegments(db.dir, db.valueLogDir, db.leafLogDir)
+	maxSeqByLane := make(map[int]int, len(db.lanes)+1)
+	for _, seg := range segments {
+		if !seg.valueLog {
+			continue
+		}
+		if seg.seq > maxSeqByLane[seg.lane] {
+			maxSeqByLane[seg.lane] = seg.seq
+		}
+	}
+	for i := range db.lanes {
+		if err := db.advanceValueLogWriterPastObservedSeq(&db.lanes[i], maxSeqByLane[db.lanes[i].id]); err != nil {
+			return err
+		}
+	}
+	if db.indexOuterLeavesInValueLog {
+		if err := db.advanceValueLogWriterPastObservedSeq(&db.leafLog, maxSeqByLane[leafLogLaneID]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (db *DB) advanceValueLogWriterPastObservedSeq(l *lane, observedMaxSeq int) error {
+	if db == nil || l == nil || observedMaxSeq <= 0 {
+		return nil
+	}
+	l.vlogMu.Lock()
+	defer l.vlogMu.Unlock()
+	if observedMaxSeq <= l.vlogSeq {
+		return nil
+	}
+	if l.vlog == nil {
+		l.vlogSeq = observedMaxSeq
+		l.vlogPath = ""
+		l.vlogCaps = vlogWriterCaps{}
+		l.vlogModeSet = false
+		l.vlogModeWriter = nil
+		return nil
+	}
+	origSeq := l.vlogSeq
+	l.vlogSeq = observedMaxSeq
+	if err := db.rotateValueLogMuHeld(l); err != nil {
+		l.vlogSeq = origSeq
+		return err
 	}
 	return nil
 }
