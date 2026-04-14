@@ -1357,3 +1357,47 @@ func TestRunBenchmark_ContentionAfterSnapshotsBeforeAllocsPostProcessing(t *test
 		t.Fatalf("expected mutex_after before allocs_after, events=%v", events)
 	}
 }
+
+func TestRenderTreeDBDiskUsageString_EmitsValueLogWithoutWAL(t *testing.T) {
+	out := renderTreeDBDiskUsageString(map[string]treeDBDiskUsage{
+		"treedb": {
+			MainValueLog: walDiskUsage{
+				TotalFiles: 1,
+				TotalBytes: 2048,
+				ValueBytes: 1536,
+			},
+		},
+	})
+	if !strings.Contains(out, "maindb/value_vlog:") {
+		t.Fatalf("expected value_vlog line, got:\n%s", out)
+	}
+	if strings.Contains(out, "maindb/wal:") {
+		t.Fatalf("did not expect wal line when wal usage is empty, got:\n%s", out)
+	}
+}
+
+func TestRenderTreeDBVlogRewriteString_EmitsValueLogWithoutWAL(t *testing.T) {
+	out := renderTreeDBVlogRewriteString(map[string]treeDBVlogRewriteReport{
+		"treedb": {
+			BeforeUsage: dirDiskUsage{TotalBytes: 4096},
+			AfterUsage:  dirDiskUsage{TotalBytes: 2048},
+			BeforeTree: treeDBDiskUsage{
+				MainValueLog: walDiskUsage{TotalBytes: 4096},
+			},
+			AfterTree: treeDBDiskUsage{
+				MainValueLog: walDiskUsage{TotalBytes: 2048},
+			},
+			SegmentsBefore: 2,
+			SegmentsAfter:  1,
+			BytesBefore:    4096,
+			BytesAfter:     2048,
+			RecordsCopied:  7,
+		},
+	})
+	if !strings.Contains(out, "maindb/value_vlog: 4 KiB -> 2 KiB") {
+		t.Fatalf("expected value_vlog rewrite line, got:\n%s", out)
+	}
+	if strings.Contains(out, "maindb/wal:") {
+		t.Fatalf("did not expect wal line when wal usage is empty, got:\n%s", out)
+	}
+}

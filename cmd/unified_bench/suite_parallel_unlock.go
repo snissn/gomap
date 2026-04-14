@@ -101,7 +101,7 @@ func runSingleTreeDBWriteSuite(baseCfg BenchConfig, testName string) (writeSuite
 	if usage, ok := run.TreeDBDiskUsage[dbName]; ok {
 		out.mainIndexBytes = usage.MainIndexBytes
 		out.mainWALBytes = usage.MainWAL.TotalBytes
-		out.mainValueBytes = usage.MainWAL.ValueBytes
+		out.mainValueBytes = usage.MainValueLog.ValueBytes
 		out.mainFiles = usage.MainWAL.TotalFiles
 	}
 	if snap, ok := run.TreeDBStats[dbName]; ok {
@@ -407,7 +407,7 @@ func runVlogQueueLagSuite(baseCfg BenchConfig) (string, error) {
 	sb.WriteString(fmt.Sprintf("- wall time: %s\n", s.wall.Truncate(time.Millisecond)))
 	sb.WriteString(fmt.Sprintf("- maindb index bytes: %s\n", formatBytes(s.mainIndexBytes)))
 	sb.WriteString(fmt.Sprintf("- maindb wal bytes (total): %s\n", formatBytes(s.mainWALBytes)))
-	sb.WriteString(fmt.Sprintf("- maindb value-log bytes (wal dir): %s\n", formatBytes(s.mainValueBytes)))
+	sb.WriteString(fmt.Sprintf("- maindb value-log bytes (value_vlog dir): %s\n", formatBytes(s.mainValueBytes)))
 	sb.WriteString(fmt.Sprintf("- maindb wal files: %d\n", s.mainFiles))
 	sb.WriteString(fmt.Sprintf("- queue lag samples: %s\n", formatInt(int(lagSamples))))
 	sb.WriteString(fmt.Sprintf("- queue enqueued total: %s\n", formatInt(int(queuedTotal))))

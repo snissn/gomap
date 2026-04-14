@@ -202,11 +202,15 @@ def parse_run(text):
                 sz = line.split(":", 1)[1].strip()
                 out["disk"]["dictdb_index"] = parse_size(sz)
             elif line.startswith("maindb/wal:"):
-                # maindb/wal: total=1.2 GiB files=1 value=1.2 GiB
                 m2 = re.search(r"total=([0-9.]+)\s*([KMG]iB).*value=([0-9.]+)\s*([KMG]iB)", line)
                 if m2:
                     out["disk"]["maindb_wal_total"] = parse_size(f"{m2.group(1)} {m2.group(2)}")
                     out["disk"]["maindb_wal_value"] = parse_size(f"{m2.group(3)} {m2.group(4)}")
+            elif line.startswith("maindb/value_vlog:"):
+                m2 = re.search(r"total=([0-9.]+)\s*([KMG]iB).*value=([0-9.]+)\s*([KMG]iB)", line)
+                if m2:
+                    out["disk"]["maindb_value_vlog_total"] = parse_size(f"{m2.group(1)} {m2.group(2)}")
+                    out["disk"]["maindb_value_vlog_value"] = parse_size(f"{m2.group(3)} {m2.group(4)}")
             elif line.startswith("dictdb/wal:"):
                 m2 = re.search(r"total=([0-9.]+)\s*([KMG]iB).*value=([0-9.]+)\s*([KMG]iB)", line)
                 if m2:
