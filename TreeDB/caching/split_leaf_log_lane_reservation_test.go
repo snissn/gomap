@@ -56,6 +56,26 @@ func TestOpen_RejectsLeafLogLaneConflictWithJournalLanes(t *testing.T) {
 	}
 }
 
+func TestValueLogDirForLane_UsesLeafDirOnlyForReservedLeafLog(t *testing.T) {
+	db := &DB{
+		valueLogDir: "value_vlog",
+		leafLogDir:  "leaf_vlog",
+	}
+	regularLane255 := &lane{id: leafLogLaneID}
+	if got := db.valueLogDirForLane(regularLane255); got != db.valueLogDir {
+		t.Fatalf("valueLogDirForLane regular lane255=%q want %q when leaf-log mode disabled", got, db.valueLogDir)
+	}
+
+	db.indexOuterLeavesInValueLog = true
+	if got := db.valueLogDirForLane(regularLane255); got != db.valueLogDir {
+		t.Fatalf("valueLogDirForLane regular lane255=%q want %q", got, db.valueLogDir)
+	}
+	db.leafLog.id = leafLogLaneID
+	if got := db.valueLogDirForLane(&db.leafLog); got != db.leafLogDir {
+		t.Fatalf("valueLogDirForLane leaf log=%q want %q", got, db.leafLogDir)
+	}
+}
+
 func TestOpen_RejectsValueLogLane255ConflictWhenLeafLogEnabled(t *testing.T) {
 	dir := t.TempDir()
 	valueDir := filepath.Join(dir, "value_vlog")
