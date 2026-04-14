@@ -187,11 +187,9 @@ func extractOuterLeafCorpus(backend *treedbdb.DB, writer *corpusWriter, limit, s
 		}
 	}
 	seen := make(map[outerLeafKey]struct{}, initialCap)
-	visit := func(ptr page.ValuePtr) error {
-		if !page.IsValueLogFileID(ptr.FileID) {
-			return nil
-		}
-		key := outerLeafKey{fileID: ptr.FileID, offset: ptr.Offset}
+	visit := func(ptr page.LeafLogPtr) error {
+
+		key := outerLeafKey{fileID: ptr.ValueLogFileID(), offset: ptr.Offset}
 		if _, ok := seen[key]; ok {
 			return nil
 		}
@@ -200,7 +198,7 @@ func extractOuterLeafCorpus(backend *treedbdb.DB, writer *corpusWriter, limit, s
 			return errStopScan
 		}
 		if shouldSample(scanned, stride) {
-			payload, err := reader.ReadUnsafe(ptr)
+			payload, err := reader.ReadUnsafe(ptr.ValuePtr())
 			if err != nil {
 				return err
 			}

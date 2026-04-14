@@ -753,6 +753,33 @@ func TestManagerRegisterSegment_CurrentSetNoRefresh(t *testing.T) {
 	}
 }
 
+func TestManagerSegmentPath_UsesRegisteredPathFromExtraScanDir(t *testing.T) {
+	dir := t.TempDir()
+	leafDir := filepath.Join(dir, "leaf_vlog")
+	if err := os.MkdirAll(leafDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(leaf_vlog): %v", err)
+	}
+	segID := writeTestSegment(t, leafDir, 255, 1, 1, bytes.Repeat([]byte("l"), 64))
+	wantPath := filepath.Join(leafDir, "value-l255-000001.log")
+
+	mgr, err := NewManager(dir)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	defer func() {
+		if mgr != nil {
+			_ = mgr.Close()
+		}
+	}()
+	if err := mgr.AddScanDir(leafDir); err != nil {
+		t.Fatalf("AddScanDir: %v", err)
+	}
+
+	if got := mgr.SegmentPath(segID); got != wantPath {
+		t.Fatalf("SegmentPath(%d)=%q want %q", segID, got, wantPath)
+	}
+}
+
 func TestManagerReleaseZombieDeletesSegmentOnSuccess(t *testing.T) {
 	dir := t.TempDir()
 	segID := writeTestSegment(t, dir, 0, 1, 1, bytes.Repeat([]byte("x"), 64))

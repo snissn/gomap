@@ -23,7 +23,7 @@ type PageAllocator interface {
 }
 
 type LeafPageLog interface {
-	AppendLeafPage(leafPage []byte) (page.ValuePtr, error)
+	AppendLeafPage(leafPage []byte) (page.LeafLogPtr, error)
 }
 
 type LeafPageReader interface {
@@ -1073,7 +1073,7 @@ func (z *Zipper) loadNode(id uint64, scratchCtx *mergeScratch) (node.Node, bool,
 		}
 		if r, ok := z.leafPageReader.(leafPageUnsafeToReader); ok {
 			scratch := acquireLeafPageScratch(scratchCtx)
-			data, usedScratch, err := r.ReadUnsafeTo(ptr, scratch[:0])
+			data, usedScratch, err := r.ReadUnsafeTo(ptr.ValuePtr(), scratch[:0])
 			if err != nil {
 				releaseLeafPageScratch(scratchCtx, scratch)
 				return node.Node{}, false, nil, false, err
@@ -1101,7 +1101,7 @@ func (z *Zipper) loadNode(id uint64, scratchCtx *mergeScratch) (node.Node, bool,
 			return n, false, nil, false, nil
 		}
 
-		data, err := z.leafPageReader.ReadUnsafe(ptr)
+		data, err := z.leafPageReader.ReadUnsafe(ptr.ValuePtr())
 		if err != nil {
 			return node.Node{}, false, nil, false, err
 		}

@@ -13,9 +13,9 @@ import (
 // This is used when Options.IndexOuterLeavesInValueLog is enabled.
 // Implementations are expected to reuse the existing value-log record encoding
 // and compression semantics (i.e. they should append normal value-log records
-// and return ValuePtr references).
+// and return LeafLogPtr references).
 type LeafPageLog interface {
-	AppendLeafPage(leafPage []byte) (page.ValuePtr, error)
+	AppendLeafPage(leafPage []byte) (page.LeafLogPtr, error)
 	Flush() error
 	Sync() error
 }

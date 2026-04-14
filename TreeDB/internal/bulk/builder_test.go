@@ -93,19 +93,18 @@ func TestBuild(t *testing.T) {
 }
 
 type mockLeafPageLog struct {
-	ptrs      []page.ValuePtr
+	ptrs      []page.LeafLogPtr
 	pages     [][]byte
 	appendErr error
 }
 
-func (m *mockLeafPageLog) AppendLeafPage(leafPage []byte) (page.ValuePtr, error) {
+func (m *mockLeafPageLog) AppendLeafPage(leafPage []byte) (page.LeafLogPtr, error) {
 	if m.appendErr != nil {
-		return page.ValuePtr{}, m.appendErr
+		return page.LeafLogPtr{}, m.appendErr
 	}
-	ptr := page.ValuePtr{
-		FileID: page.ValueLogFileID(uint32(len(m.ptrs) + 1)),
+	ptr := page.LeafLogPtr{
+		FileID: uint32(len(m.ptrs) + 1),
 		Offset: uint64(len(m.pages) + 1),
-		Length: uint32(len(leafPage)),
 	}
 	m.ptrs = append(m.ptrs, ptr)
 	m.pages = append(m.pages, append([]byte(nil), leafPage...))

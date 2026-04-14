@@ -12,12 +12,14 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/snissn/compress/zstd"
 	batchpkg "github.com/snissn/gomap/TreeDB/batch"
+	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -193,6 +195,92 @@ func TestLeafRefRewriteCtx_InternalRemapInlinePromotion(t *testing.T) {
 	}
 }
 
+type rewriteTestLeafReader struct {
+	values map[page.ValuePtr][]byte
+}
+
+func (r *rewriteTestLeafReader) Read(ptr page.ValuePtr) ([]byte, error) {
+	val, ok := r.values[ptr]
+	if !ok {
+		return nil, fmt.Errorf("leaf pointer not found")
+	}
+	return append([]byte(nil), val...), nil
+}
+
+func (r *rewriteTestLeafReader) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
+	val, ok := r.values[ptr]
+	if !ok {
+		return nil, fmt.Errorf("leaf pointer not found")
+	}
+	return val, nil
+}
+
+func TestLeafRefRewriteCtx_RewriteNodeUsesConfiguredLeafLog(t *testing.T) {
+	root := t.TempDir()
+	valueDir := filepath.Join(root, "value_vlog")
+	leafDir := filepath.Join(root, "leaf_vlog")
+	if err := os.MkdirAll(valueDir, 0o755); err != nil {
+		t.Fatalf("mkdir value dir: %v", err)
+	}
+	if err := os.MkdirAll(leafDir, 0o755); err != nil {
+		t.Fatalf("mkdir leaf dir: %v", err)
+	}
+
+	writer := newRewriteWriter(valueDir, 254, 0, 64<<20)
+	writer.ConfigureLeafLog(leafDir, rewriteLeafLogLaneID, 0)
+	leafPage := bytes.Repeat([]byte("r"), page.PageSize)
+	sourceFileID, err := valuelog.EncodeFileID(3, 9)
+	if err != nil {
+		t.Fatalf("EncodeFileID: %v", err)
+	}
+	oldPtr := page.ValuePtr{FileID: sourceFileID, Offset: 128, Length: page.ValuePtrMarkGrouped(0, 0)}
+	oldLeafPtr, err := page.LeafLogPtrFromValuePtr(oldPtr)
+	if err != nil {
+		t.Fatalf("LeafLogPtrFromValuePtr: %v", err)
+	}
+	oldID, err := page.EncodeLeafRef(oldLeafPtr)
+	if err != nil {
+		t.Fatalf("EncodeLeafRef: %v", err)
+	}
+
+	ctx := leafRefRewriteCtx{
+		ctx:        context.Background(),
+		leafReader: &rewriteTestLeafReader{values: map[page.ValuePtr][]byte{oldPtr: leafPage}},
+		writer:     writer,
+		ridAlloc:   newRewriteRIDAllocator(1000, nil),
+		sourceIDs:  map[uint32]struct{}{sourceFileID: {}},
+	}
+
+	newID, changed, err := ctx.rewriteNode(oldID)
+	if err != nil {
+		t.Fatalf("rewriteNode: %v", err)
+	}
+	if !changed {
+		t.Fatalf("expected leaf ref rewrite to change node")
+	}
+	newLeafPtr, ok := page.DecodeLeafRef(newID)
+	if !ok {
+		t.Fatalf("expected rewritten leaf ref")
+	}
+	lane, _ := valuelog.DecodeFileID(newLeafPtr.ValueLogFileID())
+	if lane != rewriteLeafLogLaneID {
+		t.Fatalf("rewritten leaf lane=%d want=%d", lane, rewriteLeafLogLaneID)
+	}
+	createdSegments, err := writer.createdSegmentsSnapshot()
+	if err != nil {
+		t.Fatalf("createdSegmentsSnapshot: %v", err)
+	}
+	if len(createdSegments) != 1 {
+		t.Fatalf("expected 1 created segment, got %d", len(createdSegments))
+	}
+	if !strings.HasPrefix(createdSegments[0].path, leafDir+string(os.PathSeparator)) {
+		t.Fatalf("rewritten leaf segment path=%q want prefix %q", createdSegments[0].path, leafDir)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+}
+
 func TestValueLogRewriteOffline_RewritesAndShrinks(t *testing.T) {
 	dir := t.TempDir()
 
@@ -206,7 +294,7 @@ func TestValueLogRewriteOffline_RewritesAndShrinks(t *testing.T) {
 		t.Fatalf("open: %v", err)
 	}
 
-	walDir := filepath.Join(dir, "wal")
+	walDir := filepath.Join(dir, "value_vlog")
 	if err := os.MkdirAll(walDir, 0o755); err != nil {
 		t.Fatalf("mkdir wal: %v", err)
 	}
@@ -310,6 +398,80 @@ func TestValueLogRewriteOffline_RewritesAndShrinks(t *testing.T) {
 	}
 	if !bytes.Equal(val, bytes.Repeat([]byte{0x03}, 128)) {
 		t.Fatalf("k2 mismatch")
+	}
+}
+
+func TestValueLogRewriteOffline_RejectsPendingCommitLog(t *testing.T) {
+	dir := t.TempDir()
+
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	valueLogDir := ValueLogDirPath(dir)
+	if err := os.MkdirAll(valueLogDir, 0o755); err != nil {
+		t.Fatalf("mkdir value_vlog: %v", err)
+	}
+	path1 := filepath.Join(valueLogDir, "value-l0-000001.log")
+	id1, err := valuelog.EncodeFileID(0, 1)
+	if err != nil {
+		t.Fatalf("fileid1: %v", err)
+	}
+	w1, err := valuelog.NewWriter(path1, id1)
+	if err != nil {
+		t.Fatalf("writer1: %v", err)
+	}
+	ptr, err := w1.Append(0, nil, 1, bytes.Repeat([]byte{0x01}, 128))
+	if err != nil {
+		t.Fatalf("append1: %v", err)
+	}
+	if err := w1.Close(); err != nil {
+		t.Fatalf("close1: %v", err)
+	}
+
+	b := db.NewBatch()
+	ptrBatch, ok := b.(interface {
+		SetPointer(key []byte, ptr page.ValuePtr) error
+	})
+	if !ok {
+		t.Fatalf("missing SetPointer on batch")
+	}
+	if err := ptrBatch.SetPointer([]byte("k"), ptr); err != nil {
+		t.Fatalf("set pointer: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	closeNoErr(t, b)
+	if err := db.Close(); err != nil {
+		t.Fatalf("close db: %v", err)
+	}
+
+	commitPath := filepath.Join(WALDirPath(dir), "commit-l0-999999.log")
+	ww, err := commitlog.NewWriter(commitPath)
+	if err != nil {
+		t.Fatalf("commitlog.NewWriter: %v", err)
+	}
+	if err := ww.AppendBatch([]commitlog.Record{{
+		Op:    commitlog.OpSetInline,
+		Key:   []byte("pending"),
+		Value: []byte("v"),
+		Seq:   1,
+	}}); err != nil {
+		_ = ww.Close()
+		t.Fatalf("commitlog.AppendBatch: %v", err)
+	}
+	if err := ww.Close(); err != nil {
+		t.Fatalf("commitlog.Close: %v", err)
+	}
+
+	_, err = ValueLogRewriteOffline(Options{Dir: dir})
+	if err == nil {
+		t.Fatalf("expected clean commitlog error")
+	}
+	if got := err.Error(); !strings.Contains(got, "vlog-rewrite requires a clean commitlog") || !strings.Contains(got, filepath.Base(commitPath)) {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
@@ -711,7 +873,7 @@ func TestValueLogRewriteOnline_NoPointerKeys_DoesNotCreateNewSegment(t *testing.
 		t.Fatalf("delete pointer key: %v", err)
 	}
 
-	segmentsBefore, err := listWALSegments(dir)
+	segmentsBefore, err := listValueLogSegments(dir)
 	if err != nil {
 		t.Fatalf("list segments before rewrite: %v", err)
 	}
@@ -733,7 +895,7 @@ func TestValueLogRewriteOnline_NoPointerKeys_DoesNotCreateNewSegment(t *testing.
 		t.Fatalf("expected no copied records, got %+v", stats)
 	}
 
-	segmentsAfter, err := listWALSegments(dir)
+	segmentsAfter, err := listValueLogSegments(dir)
 	if err != nil {
 		t.Fatalf("list segments after rewrite: %v", err)
 	}
@@ -786,7 +948,7 @@ func TestValueLogRewriteOnline_ProtectedPathsDoNotKeepHistoricalRewriteLanes(t *
 	closeNoErr(t, b)
 
 	protected := []string{
-		filepath.Join(dir, "wal", "value-l0-000002.log"),
+		filepath.Join(dir, "value_vlog", "value-l0-000002.log"),
 	}
 	stats, err := db.ValueLogRewriteOnline(context.Background(), ValueLogRewriteOnlineOptions{
 		ProtectedPaths: protected,
@@ -799,8 +961,8 @@ func TestValueLogRewriteOnline_ProtectedPathsDoNotKeepHistoricalRewriteLanes(t *
 	}
 
 	for _, path := range []string{
-		filepath.Join(dir, "wal", "value-l250-000001.log"),
-		filepath.Join(dir, "wal", "value-l250-000002.log"),
+		filepath.Join(dir, "value_vlog", "value-l250-000001.log"),
+		filepath.Join(dir, "value_vlog", "value-l250-000002.log"),
 	} {
 		if _, err := os.Stat(path); !os.IsNotExist(err) {
 			t.Fatalf("expected %s to be deleted after rewrite cleanup, err=%v", filepath.Base(path), err)
@@ -852,7 +1014,7 @@ func TestValueLogRewriteOnline_UsesBlockCompressionWhenEnabled(t *testing.T) {
 	}
 	closeNoErr(t, b)
 
-	segmentsBefore, err := listWALSegments(dir)
+	segmentsBefore, err := listValueLogSegments(dir)
 	if err != nil {
 		t.Fatalf("list segments before rewrite: %v", err)
 	}
@@ -872,7 +1034,7 @@ func TestValueLogRewriteOnline_UsesBlockCompressionWhenEnabled(t *testing.T) {
 		t.Fatalf("expected copied records, got %+v", stats)
 	}
 
-	segmentsAfter, err := listWALSegments(dir)
+	segmentsAfter, err := listValueLogSegments(dir)
 	if err != nil {
 		t.Fatalf("list segments after rewrite: %v", err)
 	}
@@ -962,7 +1124,7 @@ func TestValueLogRewriteOffline_ReencodesSingleUncompressedFramesWhenCompression
 	}
 	closeNoErr(t, b)
 
-	segmentsBefore, err := listWALSegments(dir)
+	segmentsBefore, err := listValueLogSegments(dir)
 	if err != nil {
 		t.Fatalf("list segments before rewrite: %v", err)
 	}
@@ -982,7 +1144,7 @@ func TestValueLogRewriteOffline_ReencodesSingleUncompressedFramesWhenCompression
 		t.Fatalf("expected copied records, got %+v", stats)
 	}
 
-	segmentsAfter, err := listWALSegments(dir)
+	segmentsAfter, err := listValueLogSegments(dir)
 	if err != nil {
 		t.Fatalf("list segments after rewrite: %v", err)
 	}
@@ -1078,7 +1240,7 @@ func TestValueLogRewriteOffline_ReencodesLargeBlockFramesWithObservedDict(t *tes
 		t.Fatalf("open: %v", err)
 	}
 
-	walDir := filepath.Join(dir, "wal")
+	walDir := filepath.Join(dir, "value_vlog")
 	if err := os.MkdirAll(walDir, 0o755); err != nil {
 		t.Fatalf("mkdir wal: %v", err)
 	}
@@ -1135,7 +1297,7 @@ func TestValueLogRewriteOffline_ReencodesLargeBlockFramesWithObservedDict(t *tes
 	dictFrames := 0
 	blockFrames := 0
 	maxDictK := 0
-	segments, err := listWALSegments(dir)
+	segments, err := listValueLogSegments(dir)
 	if err != nil {
 		t.Fatalf("list segments: %v", err)
 	}
@@ -1260,7 +1422,7 @@ func TestValueLogRewriteOffline_ReencodesGroupedBlockFramesWithObservedDict(t *t
 		t.Fatalf("open: %v", err)
 	}
 
-	walDir := filepath.Join(dir, "wal")
+	walDir := filepath.Join(dir, "value_vlog")
 	if err := os.MkdirAll(walDir, 0o755); err != nil {
 		t.Fatalf("mkdir wal: %v", err)
 	}
@@ -1327,7 +1489,7 @@ func TestValueLogRewriteOffline_ReencodesGroupedBlockFramesWithObservedDict(t *t
 	dictFrames := 0
 	blockFrames := 0
 	maxDictK := 0
-	segments, err := listWALSegments(dir)
+	segments, err := listValueLogSegments(dir)
 	if err != nil {
 		t.Fatalf("list segments: %v", err)
 	}
@@ -1671,7 +1833,7 @@ func TestValueLogRewriteOffline_ReencodesGroupedBlockOuterLeafPagesWithObservedD
 		t.Fatalf("open: %v", err)
 	}
 
-	walDir := filepath.Join(dir, "wal")
+	walDir := filepath.Join(dir, "value_vlog")
 	if err := os.MkdirAll(walDir, 0o755); err != nil {
 		t.Fatalf("mkdir wal: %v", err)
 	}
@@ -1735,7 +1897,7 @@ func TestValueLogRewriteOffline_ReencodesGroupedBlockOuterLeafPagesWithObservedD
 	dictFrames := 0
 	blockFrames := 0
 	maxDictK := 0
-	segments, err := listWALSegments(dir)
+	segments, err := listValueLogSegments(dir)
 	if err != nil {
 		t.Fatalf("list segments: %v", err)
 	}
@@ -1976,6 +2138,95 @@ func TestRewriteWriter_CreatedFileIDs_StableAcrossCalls(t *testing.T) {
 	}
 	if err := w.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
+	}
+}
+
+func TestRewriteWriter_LeafPagesUseConfiguredLeafLogDir(t *testing.T) {
+	root := t.TempDir()
+	valueDir := filepath.Join(root, "value_vlog")
+	leafDir := filepath.Join(root, "leaf_vlog")
+	if err := os.MkdirAll(valueDir, 0o755); err != nil {
+		t.Fatalf("mkdir value dir: %v", err)
+	}
+	if err := os.MkdirAll(leafDir, 0o755); err != nil {
+		t.Fatalf("mkdir leaf dir: %v", err)
+	}
+
+	w := newRewriteWriter(valueDir, 254, 0, 64<<20)
+	w.ConfigureLeafLog(leafDir, rewriteLeafLogLaneID, 0)
+	if _, err := w.appendValue(1, []byte("value-payload")); err != nil {
+		t.Fatalf("appendValue: %v", err)
+	}
+	leafPtr, err := w.AppendLeafPage(bytes.Repeat([]byte("l"), 4096))
+	if err != nil {
+		t.Fatalf("AppendLeafPage: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	valuePaths, err := filepath.Glob(filepath.Join(valueDir, "value-l*.log"))
+	if err != nil {
+		t.Fatalf("glob value_vlog: %v", err)
+	}
+	if len(valuePaths) == 0 {
+		t.Fatalf("expected value_vlog file after append")
+	}
+	leafPaths, err := filepath.Glob(filepath.Join(leafDir, "value-l*.log"))
+	if err != nil {
+		t.Fatalf("glob leaf_vlog: %v", err)
+	}
+	if len(leafPaths) == 0 {
+		t.Fatalf("expected leaf_vlog file after leaf append")
+	}
+
+	lane, _ := valuelog.DecodeFileID(leafPtr.FileID)
+	if lane != rewriteLeafLogLaneID {
+		t.Fatalf("leaf ptr lane=%d want=%d", lane, rewriteLeafLogLaneID)
+	}
+
+	ids, err := w.createdFileIDs()
+	if err != nil {
+		t.Fatalf("createdFileIDs: %v", err)
+	}
+	var sawValue, sawLeaf bool
+	for _, id := range ids {
+		lane, _ := valuelog.DecodeFileID(id)
+		if lane == 254 {
+			sawValue = true
+		}
+		if lane == rewriteLeafLogLaneID {
+			sawLeaf = true
+		}
+	}
+	if !sawValue || !sawLeaf {
+		t.Fatalf("expected created IDs to include value and leaf lanes, ids=%v", ids)
+	}
+	createdSegments, err := w.createdSegmentsSnapshot()
+	if err != nil {
+		t.Fatalf("createdSegmentsSnapshot: %v", err)
+	}
+	if len(createdSegments) != 2 {
+		t.Fatalf("expected 2 created segments, got %d", len(createdSegments))
+	}
+	var sawValuePath, sawLeafPath bool
+	for _, seg := range createdSegments {
+		lane, _ := valuelog.DecodeFileID(seg.fileID)
+		switch lane {
+		case 254:
+			if !strings.HasPrefix(seg.path, valueDir+string(os.PathSeparator)) {
+				t.Fatalf("value segment path=%q want prefix %q", seg.path, valueDir)
+			}
+			sawValuePath = true
+		case rewriteLeafLogLaneID:
+			if !strings.HasPrefix(seg.path, leafDir+string(os.PathSeparator)) {
+				t.Fatalf("leaf segment path=%q want prefix %q", seg.path, leafDir)
+			}
+			sawLeafPath = true
+		}
+	}
+	if !sawValuePath || !sawLeafPath {
+		t.Fatalf("expected created segments to preserve value and leaf paths, got=%v", createdSegments)
 	}
 }
 
@@ -2268,9 +2519,9 @@ func TestRewriteWriter_AppendLeafPageUsesLeafDictWhenConfigured(t *testing.T) {
 	if err != nil {
 		t.Fatalf("append leaf C: %v", err)
 	}
-	if page.ValuePtrSubIndex(ptrA) != 0 || page.ValuePtrSubIndex(ptrB) != 0 || page.ValuePtrSubIndex(ptrC) != 0 {
+	if page.ValuePtrSubIndex(ptrA.ValuePtr()) != 0 || page.ValuePtrSubIndex(ptrB.ValuePtr()) != 0 || page.ValuePtrSubIndex(ptrC.ValuePtr()) != 0 {
 		t.Fatalf("leaf pointers must keep grouped sub-index 0 for leafref encoding: A=%d B=%d C=%d",
-			page.ValuePtrSubIndex(ptrA), page.ValuePtrSubIndex(ptrB), page.ValuePtrSubIndex(ptrC))
+			page.ValuePtrSubIndex(ptrA.ValuePtr()), page.ValuePtrSubIndex(ptrB.ValuePtr()), page.ValuePtrSubIndex(ptrC.ValuePtr()))
 	}
 	if err := w.Close(); err != nil {
 		t.Fatalf("close rewrite writer: %v", err)
@@ -2757,7 +3008,7 @@ func TestValueLogRewriteOnline_ReserveRIDsUsesExternalAllocator(t *testing.T) {
 	}
 	closeNoErr(t, b)
 
-	segmentsBefore, err := listWALSegments(dir)
+	segmentsBefore, err := listValueLogSegments(dir)
 	if err != nil {
 		t.Fatalf("listWALSegments before: %v", err)
 	}
@@ -2812,7 +3063,7 @@ func TestValueLogRewriteOnline_ReserveRIDsUsesExternalAllocator(t *testing.T) {
 		t.Fatalf("expected ReserveRIDs mode to skip wal segment scan, calls=%d", walScanCalls)
 	}
 
-	segmentsAfter, err := listWALSegments(dir)
+	segmentsAfter, err := listValueLogSegments(dir)
 	if err != nil {
 		t.Fatalf("listWALSegments after: %v", err)
 	}
@@ -2896,14 +3147,14 @@ func TestValueLogRewriteOnline_WithoutReserveRIDs_UsesRIDStartScanner(t *testing
 	walScanCalls := 0
 	rewriteWALSegmentsLister = func(dir string) ([]logSegment, error) {
 		walScanCalls++
-		return listWALSegments(dir)
+		return listValueLogSegments(dir)
 	}
 	t.Cleanup(func() { rewriteWALSegmentsLister = origWALLister })
 	lane, seq, ok := db.valueLogManager.RewriteLaneHint()
 	if !ok {
 		t.Fatalf("RewriteLaneHint: ok=false")
 	}
-	probePath := filepath.Join(dir, "wal", fmt.Sprintf("value-l%d-%06d.log", lane, seq+1))
+	probePath := filepath.Join(dir, "value_vlog", fmt.Sprintf("value-l%d-%06d.log", lane, seq+1))
 	if err := os.WriteFile(probePath, nil, 0o644); err != nil {
 		t.Fatalf("write probe file: %v", err)
 	}
@@ -2975,6 +3226,71 @@ func TestValueLogRewriteOnline_WithoutReserveRIDs_UsesSetRIDFastPathWhenLaneHint
 	}
 	if walScanCalls != 0 {
 		t.Fatalf("expected no wal segment scan calls, got %d", walScanCalls)
+	}
+}
+
+func TestValueLogRewriteOnline_LeafLogReservedLaneHintFallsBackToScan(t *testing.T) {
+	dir := t.TempDir()
+
+	db, err := Open(Options{Dir: dir, IndexOuterLeavesInValueLog: true})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	leafLog := &registeredLeafPageLog{db: db, dir: dir}
+	db.SetLeafPageLog(leafLog)
+	defer func() {
+		_ = leafLog.Close()
+		_ = db.Close()
+	}()
+
+	ptrs := appendPointersInNewSegment(t, dir, 0, 1, 316_000, 1, func(i int) []byte {
+		return bytes.Repeat([]byte{byte(i + 1)}, 256)
+	})
+	b := db.NewBatch().(*Batch)
+	if err := b.SetPointer([]byte("k"), ptrs[0]); err != nil {
+		t.Fatalf("set pointer: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("seed write: %v", err)
+	}
+	closeNoErr(t, b)
+
+	lane, _, ok := db.valueLogManager.RewriteLaneHint()
+	if !ok {
+		t.Fatalf("RewriteLaneHint: ok=false")
+	}
+	if lane != rewriteLeafLogLaneID {
+		t.Fatalf("RewriteLaneHint lane=%d want reserved leaf lane %d", lane, rewriteLeafLogLaneID)
+	}
+
+	sentinel := errors.New("rid-start scan invoked")
+	origRIDStartScanner := rewriteRIDStartScanner
+	ridStartScanCalls := 0
+	rewriteRIDStartScanner = func([]logSegment) (uint64, error) {
+		ridStartScanCalls++
+		return 0, sentinel
+	}
+	t.Cleanup(func() { rewriteRIDStartScanner = origRIDStartScanner })
+	origWALLister := rewriteWALSegmentsLister
+	walScanCalls := 0
+	rewriteWALSegmentsLister = func(dir string) ([]logSegment, error) {
+		walScanCalls++
+		return listValueLogSegments(dir)
+	}
+	t.Cleanup(func() { rewriteWALSegmentsLister = origWALLister })
+
+	_, err = db.ValueLogRewriteOnline(context.Background(), ValueLogRewriteOnlineOptions{
+		SourceFileIDs: []uint32{ptrs[0].FileID},
+		BatchSize:     1,
+	})
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("expected rid-start scanner error %v, got %v", sentinel, err)
+	}
+	if ridStartScanCalls != 1 {
+		t.Fatalf("expected one rid-start scan call, got %d", ridStartScanCalls)
+	}
+	if walScanCalls != 1 {
+		t.Fatalf("expected one wal segment scan call, got %d", walScanCalls)
 	}
 }
 

@@ -41,7 +41,7 @@ func TestValueLogGC_RemovesUnreferencedSegment(t *testing.T) {
 	}
 	defer func() { _ = db.Close() }()
 
-	walDir := filepath.Join(dir, "wal")
+	walDir := filepath.Join(dir, "value_vlog")
 	if err := os.MkdirAll(walDir, 0o755); err != nil {
 		t.Fatalf("mkdir wal: %v", err)
 	}
@@ -146,7 +146,7 @@ func TestValueLogGC_ProtectedPathsDoNotKeepHistoricalRewriteLanes(t *testing.T) 
 	}
 
 	protected := []string{
-		filepath.Join(dir, "wal", "value-l0-000002.log"),
+		filepath.Join(dir, "value_vlog", "value-l0-000002.log"),
 	}
 
 	stats, err := db.ValueLogGC(context.Background(), ValueLogGCOptions{ProtectedPaths: protected})
@@ -158,8 +158,8 @@ func TestValueLogGC_ProtectedPathsDoNotKeepHistoricalRewriteLanes(t *testing.T) 
 	}
 
 	for _, path := range []string{
-		filepath.Join(dir, "wal", "value-l250-000001.log"),
-		filepath.Join(dir, "wal", "value-l250-000002.log"),
+		filepath.Join(dir, "value_vlog", "value-l250-000001.log"),
+		filepath.Join(dir, "value_vlog", "value-l250-000002.log"),
 	} {
 		if _, err := os.Stat(path); !os.IsNotExist(err) {
 			t.Fatalf("expected %s to be deleted, err=%v", filepath.Base(path), err)
@@ -167,8 +167,8 @@ func TestValueLogGC_ProtectedPathsDoNotKeepHistoricalRewriteLanes(t *testing.T) 
 	}
 
 	for _, path := range []string{
-		filepath.Join(dir, "wal", "value-l0-000001.log"),
-		filepath.Join(dir, "wal", "value-l0-000002.log"),
+		filepath.Join(dir, "value_vlog", "value-l0-000001.log"),
+		filepath.Join(dir, "value_vlog", "value-l0-000002.log"),
 	} {
 		if _, err := os.Stat(path); err != nil {
 			t.Fatalf("expected protected-lane window to retain %s, err=%v", filepath.Base(path), err)
@@ -196,9 +196,9 @@ func TestValueLogGC_ProtectedPathBreakdownStats(t *testing.T) {
 		t.Fatalf("RefreshValueLogSet: %v", err)
 	}
 
-	inUseOnlyPath := filepath.Join(dir, "wal", "value-l0-000001.log")
-	retainedOnlyPath := filepath.Join(dir, "wal", "value-l0-000002.log")
-	overlapPath := filepath.Join(dir, "wal", "value-l0-000003.log")
+	inUseOnlyPath := filepath.Join(dir, "value_vlog", "value-l0-000001.log")
+	retainedOnlyPath := filepath.Join(dir, "value_vlog", "value-l0-000002.log")
+	overlapPath := filepath.Join(dir, "value_vlog", "value-l0-000003.log")
 	observedInUseID, err := valuelog.EncodeFileID(0, 1)
 	if err != nil {
 		t.Fatalf("observed in-use fileid: %v", err)
@@ -319,7 +319,7 @@ func TestValueLogGC_ProtectedPathBreakdownStats(t *testing.T) {
 func TestValueLogGC_KeepsReferencedPointerSegments_WithOuterLeavesInValueLog(t *testing.T) {
 	dir := t.TempDir()
 
-	walDir := filepath.Join(dir, "wal")
+	walDir := filepath.Join(dir, "value_vlog")
 	if err := os.MkdirAll(walDir, 0o755); err != nil {
 		t.Fatalf("mkdir wal: %v", err)
 	}
@@ -373,7 +373,7 @@ func TestValueLogGC_KeepsReferencedPointerSegments_WithOuterLeavesInValueLog(t *
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	leafLog := newRewriteWriter(filepath.Join(dir, "wal"), 0, 0, 0)
+	leafLog := newRewriteWriter(filepath.Join(dir, "value_vlog"), 0, 0, 0)
 	leafLog.blockCompression = false
 	leafLog.blockCodec = valuelog.BlockCodecSnappy
 	db.SetLeafPageLog(leafLog)
@@ -786,7 +786,7 @@ func valueLogRefSetFromCounts(counts map[uint32]uint64) map[uint32]struct{} {
 
 func appendPointersInNewSegment(t *testing.T, dir string, lane, seq uint32, ridBase uint64, n int, valueAt func(i int) []byte) []page.ValuePtr {
 	t.Helper()
-	walDir := filepath.Join(dir, "wal")
+	walDir := filepath.Join(dir, "value_vlog")
 	if err := os.MkdirAll(walDir, 0o755); err != nil {
 		t.Fatalf("mkdir wal: %v", err)
 	}

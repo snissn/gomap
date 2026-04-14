@@ -247,9 +247,12 @@ type walDiskUsage struct {
 type treeDBDiskUsage struct {
 	MainIndexBytes uint64
 	MainWAL        walDiskUsage
+	MainValueLog   walDiskUsage
+	MainLeafLog    walDiskUsage
 
 	DictIndexBytes uint64
 	DictWAL        walDiskUsage
+	DictValueLog   walDiskUsage
 }
 
 type treeDBVlogRewriteReport struct {
@@ -3898,7 +3901,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 		}
 		if isTreeDBInstance(inst) {
 			if usage, err := computeTreeDBDiskUsage(inst.Dir); err == nil {
-				if usage.MainIndexBytes > 0 || usage.MainWAL.TotalBytes > 0 || usage.DictIndexBytes > 0 || usage.DictWAL.TotalBytes > 0 {
+				if usage.MainIndexBytes > 0 || usage.MainWAL.TotalBytes > 0 || usage.MainValueLog.TotalBytes > 0 || usage.MainLeafLog.TotalBytes > 0 || usage.DictIndexBytes > 0 || usage.DictWAL.TotalBytes > 0 || usage.DictValueLog.TotalBytes > 0 {
 					treedbDisk[inst.Wrapper.Name()] = usage
 				}
 			}
@@ -4059,6 +4062,14 @@ func computeTreeDBDiskUsage(rootDir string) (treeDBDiskUsage, error) {
 	if u, err := computeWalDiskUsage(mainWAL); err == nil {
 		out.MainWAL = u
 	}
+	mainValueLog := filepath.Join(rootDir, "maindb", "value_vlog")
+	if u, err := computeWalDiskUsage(mainValueLog); err == nil {
+		out.MainValueLog = u
+	}
+	mainLeafLog := filepath.Join(rootDir, "maindb", "leaf_vlog")
+	if u, err := computeWalDiskUsage(mainLeafLog); err == nil {
+		out.MainLeafLog = u
+	}
 
 	dictIndex := filepath.Join(rootDir, "dictdb", "index.db")
 	if st, err := os.Stat(dictIndex); err == nil {
@@ -4069,6 +4080,10 @@ func computeTreeDBDiskUsage(rootDir string) (treeDBDiskUsage, error) {
 	dictWAL := filepath.Join(rootDir, "dictdb", "wal")
 	if u, err := computeWalDiskUsage(dictWAL); err == nil {
 		out.DictWAL = u
+	}
+	dictValueLog := filepath.Join(rootDir, "dictdb", "value_vlog")
+	if u, err := computeWalDiskUsage(dictValueLog); err == nil {
+		out.DictValueLog = u
 	}
 
 	return out, nil
@@ -4123,11 +4138,23 @@ func renderTreeDBDiskUsageString(usage map[string]treeDBDiskUsage) string {
 			sb.WriteString(walLine("  maindb/wal: ", u.MainWAL))
 			sb.WriteByte('\n')
 		}
+		if u.MainValueLog.TotalFiles > 0 || u.MainValueLog.TotalBytes > 0 {
+			sb.WriteString(walLine("  maindb/value_vlog: ", u.MainValueLog))
+			sb.WriteByte('\n')
+		}
+		if u.MainLeafLog.TotalFiles > 0 || u.MainLeafLog.TotalBytes > 0 {
+			sb.WriteString(walLine("  maindb/leaf_vlog: ", u.MainLeafLog))
+			sb.WriteByte('\n')
+		}
 		if u.DictIndexBytes > 0 {
 			sb.WriteString(fmt.Sprintf("  dictdb/index.db: %s\n", formatBytes(u.DictIndexBytes)))
 		}
 		if u.DictWAL.TotalFiles > 0 || u.DictWAL.TotalBytes > 0 {
 			sb.WriteString(walLine("  dictdb/wal: ", u.DictWAL))
+			sb.WriteByte('\n')
+		}
+		if u.DictValueLog.TotalFiles > 0 || u.DictValueLog.TotalBytes > 0 {
+			sb.WriteString(walLine("  dictdb/value_vlog: ", u.DictValueLog))
 			sb.WriteByte('\n')
 		}
 	}
@@ -4169,6 +4196,12 @@ func renderTreeDBVlogRewriteString(reports map[string]treeDBVlogRewriteReport) s
 		}
 		if rep.BeforeTree.MainWAL.TotalBytes > 0 || rep.AfterTree.MainWAL.TotalBytes > 0 {
 			sb.WriteString(fmt.Sprintf("  maindb/wal: %s -> %s\n", formatBytes(rep.BeforeTree.MainWAL.TotalBytes), formatBytes(rep.AfterTree.MainWAL.TotalBytes)))
+		}
+		if rep.BeforeTree.MainValueLog.TotalBytes > 0 || rep.AfterTree.MainValueLog.TotalBytes > 0 {
+			sb.WriteString(fmt.Sprintf("  maindb/value_vlog: %s -> %s\n", formatBytes(rep.BeforeTree.MainValueLog.TotalBytes), formatBytes(rep.AfterTree.MainValueLog.TotalBytes)))
+		}
+		if rep.BeforeTree.MainLeafLog.TotalBytes > 0 || rep.AfterTree.MainLeafLog.TotalBytes > 0 {
+			sb.WriteString(fmt.Sprintf("  maindb/leaf_vlog: %s -> %s\n", formatBytes(rep.BeforeTree.MainLeafLog.TotalBytes), formatBytes(rep.AfterTree.MainLeafLog.TotalBytes)))
 		}
 		sb.WriteString(fmt.Sprintf("  vlog-rewrite: segments %d -> %d bytes %s -> %s records=%d\n",
 			rep.SegmentsBefore, rep.SegmentsAfter,

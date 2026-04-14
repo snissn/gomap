@@ -41,7 +41,7 @@ const leafRefRewriteInlineChildCap = 64  // stack-backed child-id scratch for co
 const leafRefRewriteInlineRemapCap = 8   // inline remap cache before promoting to map
 
 var rewriteRIDStartScanner = nextRewriteRIDStart
-var rewriteWALSegmentsLister = listWALSegments
+var rewriteWALSegmentsLister = listValueLogSegments
 
 func rewriteAllowDictForSmallPayload(value []byte) bool {
 	if len(value) < page.PageSize {
@@ -963,16 +963,17 @@ func (db *DB) collectLeafRefValueLogLiveBytes(ctx context.Context, p *pager.Page
 	return nil
 }
 
-func (db *DB) collectLeafRefPtrLiveBytes(ptr page.ValuePtr, liveByID map[uint32]int64, seenGroupedRecords *map[groupedRecordKey]struct{}, set *valuelog.Set) error {
+func (db *DB) collectLeafRefPtrLiveBytes(ptr page.LeafLogPtr, liveByID map[uint32]int64, seenGroupedRecords *map[groupedRecordKey]struct{}, set *valuelog.Set) error {
 	if liveByID == nil {
 		return nil
 	}
-	if !page.IsValueLogFileID(ptr.FileID) {
+	vptr := ptr.ValuePtr()
+	if !page.IsValueLogFileID(vptr.FileID) {
 		return nil
 	}
 	// Dedup grouped-record live-byte accounting (LeafRef pointers are grouped).
-	if page.ValuePtrIsGrouped(ptr) {
-		k, err := groupedRecordKeyForPtr(ptr)
+	if page.ValuePtrIsGrouped(vptr) {
+		k, err := groupedRecordKeyForPtr(vptr)
 		if err != nil {
 			return err
 		}
@@ -992,11 +993,11 @@ func (db *DB) collectLeafRefPtrLiveBytes(ptr page.ValuePtr, liveByID map[uint32]
 		seen[k] = struct{}{}
 	}
 
-	recordLen, err := db.valueLogRecordLengthForRewriteInSet(ptr, set)
+	recordLen, err := db.valueLogRecordLengthForRewriteInSet(vptr, set)
 	if err != nil {
 		return err
 	}
-	liveByID[ptr.FileID] += int64(recordLen)
+	liveByID[vptr.FileID] += int64(recordLen)
 	return nil
 }
 
@@ -1394,23 +1395,29 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 
 	nextRID := uint64(0)
 	var (
-		segments    []logSegment
-		lane        uint32
-		startSeq    uint32
-		needSegScan = true
+		segments     []logSegment
+		lane         uint32
+		startSeq     uint32
+		leafStartSeq uint32
+		needSegScan  = true
 	)
 	if db.valueLogManager != nil {
 		if hintLane, hintSeq, ok := db.valueLogManager.RewriteLaneHint(); ok {
-			probePath := filepath.Join(db.dir, "wal", fmt.Sprintf("value-l%d-%06d.log", hintLane, hintSeq+1))
-			if _, statErr := os.Stat(probePath); statErr == nil {
-				needSegScan = true
-			} else if os.IsNotExist(statErr) {
-				lane, startSeq = hintLane, hintSeq
-				needSegScan = false
-			} else {
-				_ = db.valueLogManager.Release(set)
-				set = nil
-				return stats, statErr
+			if !(db.indexOuterLeavesInValueLog && hintLane == rewriteLeafLogLaneID) {
+				probePath := filepath.Join(resolveStorageLayout(db.dir).valueVLogDir, fmt.Sprintf("value-l%d-%06d.log", hintLane, hintSeq+1))
+				if _, statErr := os.Stat(probePath); statErr == nil {
+					needSegScan = true
+				} else if os.IsNotExist(statErr) {
+					lane, startSeq = hintLane, hintSeq
+					if db.indexOuterLeavesInValueLog {
+						leafStartSeq = maxRewriteLaneSeqFromSet(set, rewriteLeafLogLaneID)
+					}
+					needSegScan = false
+				} else {
+					_ = db.valueLogManager.Release(set)
+					set = nil
+					return stats, statErr
+				}
 			}
 		}
 	}
@@ -1429,7 +1436,12 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		if err != nil {
 			return stats, err
 		}
-		lane, startSeq = chooseRewriteLane(segments)
+		if db.indexOuterLeavesInValueLog {
+			lane, startSeq = chooseRewriteLane(segments, rewriteLeafLogLaneID)
+			leafStartSeq = maxRewriteLaneSeq(segments, rewriteLeafLogLaneID)
+		} else {
+			lane, startSeq = chooseRewriteLane(segments)
+		}
 	}
 	if opts.ReserveRIDs == nil && nextRID == 0 {
 		nextRID, err = rewriteRIDStartScanner(segments)
@@ -1450,7 +1462,11 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 			maxBytes = packedMax
 		}
 	}
-	writer := newRewriteWriter(filepath.Join(db.dir, "wal"), lane, startSeq, maxBytes)
+	layout := resolveStorageLayout(db.dir)
+	writer := newRewriteWriter(layout.valueVLogDir, lane, startSeq, maxBytes)
+	if db.indexOuterLeavesInValueLog {
+		writer.ConfigureLeafLog(layout.leafVLogDir, rewriteLeafLogLaneID, leafStartSeq)
+	}
 	writer.blockCompression = db.valueLogCompression != ValueLogCompressionOff
 	writer.blockCodec = valuelogBlockCodecFromDB(db.valueLogBlockCodec)
 	defer func() { _ = writer.Close() }()
@@ -1687,12 +1703,15 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 	if err != nil {
 		return stats, err
 	}
-	if len(newValueIDs) > 0 {
+	createdSegments, err := writer.createdSegmentsSnapshot()
+	if err != nil {
+		return stats, err
+	}
+	if len(createdSegments) > 0 {
 		// Avoid scanning the filesystem after rewrite creates new segments; we
 		// already know their IDs and paths deterministically.
-		for _, id := range newValueIDs {
-			path := db.valueLogManager.SegmentPath(id)
-			if err := db.valueLogManager.RegisterSegment(path, id); err != nil {
+		for _, seg := range createdSegments {
+			if err := db.valueLogManager.RegisterSegment(seg.path, seg.fileID); err != nil {
 				return stats, err
 			}
 		}
@@ -2027,16 +2046,16 @@ func (c *leafRefRewriteCtx) rewriteNode(id uint64) (uint64, bool, error) {
 			return mapped, mapped != id, nil
 		}
 		if c.hasSingleID {
-			if ptr.FileID != c.singleSourceID {
+			if ptr.ValueLogFileID() != c.singleSourceID {
 				return id, false, nil
 			}
 		} else if c.sourceIDs != nil {
-			if _, ok := c.sourceIDs[ptr.FileID]; !ok {
+			if _, ok := c.sourceIDs[ptr.ValueLogFileID()]; !ok {
 				return id, false, nil
 			}
 		}
 		if c.sourceChunks != nil {
-			ok, err := rewriteSourceChunkSelected(ptr, c.sourceChunks, c.sourceChunkBytes)
+			ok, err := rewriteSourceChunkSelected(ptr.ValuePtr(), c.sourceChunks, c.sourceChunkBytes)
 			if err != nil {
 				return id, false, err
 			}
@@ -2050,7 +2069,7 @@ func (c *leafRefRewriteCtx) rewriteNode(id uint64) (uint64, bool, error) {
 		if c.writer == nil || c.ridAlloc == nil {
 			return id, false, fmt.Errorf("vlog-rewrite: rewrite writer unavailable")
 		}
-		leafPage, err := c.readLeafPage(ptr)
+		leafPage, err := c.readLeafPage(ptr.ValuePtr())
 		if err != nil {
 			return id, false, err
 		}
@@ -2061,11 +2080,11 @@ func (c *leafRefRewriteCtx) rewriteNode(id uint64) (uint64, bool, error) {
 		if err != nil {
 			return id, false, err
 		}
-		newPtr, err := c.writer.appendValue(rid, leafPage)
+		leafLogPtr, err := c.writer.appendLeafPageWithRID(rid, leafPage)
 		if err != nil {
 			return id, false, err
 		}
-		leafID, err := page.EncodeLeafRef(newPtr)
+		leafID, err := page.EncodeLeafRef(leafLogPtr)
 		if err != nil {
 			return id, false, err
 		}
@@ -2284,13 +2303,16 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 	if err != nil {
 		return 0, 0, err
 	}
-	if len(createdIDs) > 0 {
+	createdSegments, err := writer.createdSegmentsSnapshot()
+	if err != nil {
+		return 0, 0, err
+	}
+	if len(createdSegments) > 0 {
 		// Register rewrite-created segments before commit publication so
 		// finalizeCommit can publish CurrentSetNoRefresh without forcing a
 		// filesystem rescan in leafref-heavy rewrite paths.
-		for _, id := range createdIDs {
-			path := db.valueLogManager.SegmentPath(id)
-			if err := db.valueLogManager.RegisterSegment(path, id); err != nil {
+		for _, seg := range createdSegments {
+			if err := db.valueLogManager.RegisterSegment(seg.path, seg.fileID); err != nil {
 				return 0, 0, err
 			}
 		}
@@ -2744,15 +2766,23 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 		return stats, err
 	}
 
-	segments, err := listWALSegments(opts.Dir)
+	walSegments, err := listWALSegments(opts.Dir)
 	if err != nil {
 		return stats, err
 	}
-	oldValueIDs := make(map[uint32]struct{})
-	for _, seg := range segments {
-		if !seg.valueLog {
-			return stats, fmt.Errorf("vlog-rewrite requires a clean commitlog; found %s", filepath.Base(seg.path))
+	for _, seg := range walSegments {
+		if seg.valueLog {
+			continue
 		}
+		return stats, fmt.Errorf("vlog-rewrite requires a clean commitlog; found %s", filepath.Base(seg.path))
+	}
+
+	segments, err := listValueLogSegments(opts.Dir)
+	if err != nil {
+		return stats, err
+	}
+	oldValueIDs := make(map[uint32]struct{}, len(segments))
+	for _, seg := range segments {
 		oldValueIDs[seg.fileID] = struct{}{}
 	}
 
@@ -2775,7 +2805,6 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 		return stats, fmt.Errorf("vlog-rewrite: no value-log segments found")
 	}
 
-	walDir := filepath.Join(opts.Dir, "wal")
 	beforeSegs, beforeBytes, err := valueLogSegmentStats(opts.Dir)
 	if err != nil {
 		_ = d.Close()
@@ -2784,7 +2813,12 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 	stats.SegmentsBefore = beforeSegs
 	stats.BytesBefore = beforeBytes
 
-	lane, startSeq := chooseRewriteLane(segments)
+	var lane, startSeq uint32
+	if opts.IndexOuterLeavesInValueLog {
+		lane, startSeq = chooseRewriteLane(segments, rewriteLeafLogLaneID)
+	} else {
+		lane, startSeq = chooseRewriteLane(segments)
+	}
 	nextRID, err := rewriteRIDStartScanner(segments)
 	if err != nil {
 		_ = d.Close()
@@ -2803,7 +2837,11 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 			maxBytes = packedMax
 		}
 	}
-	writer := newRewriteWriter(walDir, lane, startSeq, maxBytes)
+	layout := resolveStorageLayout(opts.Dir)
+	writer := newRewriteWriter(layout.valueVLogDir, lane, startSeq, maxBytes)
+	if opts.IndexOuterLeavesInValueLog {
+		writer.ConfigureLeafLog(layout.leafVLogDir, rewriteLeafLogLaneID, maxRewriteLaneSeq(segments, rewriteLeafLogLaneID))
+	}
 	writer.nextRID = nextRID
 	// Offline rewrite prioritizes final bytes on disk over encode CPU, so keep
 	// compressed output whenever it reduces stored bytes.
@@ -3006,16 +3044,26 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 	return stats, nil
 }
 
+type rewriteCreatedSegment struct {
+	path   string
+	fileID uint32
+}
+
 type rewriteWriter struct {
-	walDir  string
-	lane    uint32
-	seq     uint32
-	maxSize int64
-	nextRID uint64
+	walDir   string
+	lane     uint32
+	seq      uint32
+	maxSize  int64
+	leafDir  string
+	leafLane uint32
+	leafSeq  uint32
+	nextRID  uint64
 	// currentPath/currentFileID cache the active writer segment identity so
 	// CurrentValueLogSegment can avoid per-call path/fileID recomputation.
-	currentPath   string
-	currentFileID uint32
+	currentPath       string
+	currentFileID     uint32
+	leafCurrentPath   string
+	leafCurrentFileID uint32
 	// blockCompression enables per-frame block compression for dictID=0 append
 	// paths (used by online rewrite). Offline rewrites use AppendRawRecord and do
 	// not consult this setting.
@@ -3046,8 +3094,10 @@ type rewriteWriter struct {
 	templateOuterLeafInBytes  int64
 	templateOuterLeafOutBytes int64
 	w                         *valuelog.Writer
+	leafW                     *valuelog.Writer
 	records                   int
 	createdIDs                []uint32
+	createdSegments           []rewriteCreatedSegment
 
 	pendingDictID      uint64
 	pendingDict        []byte
@@ -3067,6 +3117,25 @@ const (
 
 func newRewriteWriter(walDir string, lane, startSeq uint32, maxSize int64) *rewriteWriter {
 	return &rewriteWriter{walDir: walDir, lane: lane, seq: startSeq, maxSize: maxSize}
+}
+
+const rewriteLeafLogLaneID uint32 = 255
+
+func (w *rewriteWriter) ConfigureLeafLog(leafDir string, lane, startSeq uint32) {
+	if w == nil {
+		return
+	}
+	w.leafDir = leafDir
+	w.leafLane = lane
+	w.leafSeq = startSeq
+}
+
+func (w *rewriteWriter) noteCreatedSegment(path string, fileID uint32) {
+	if w == nil || path == "" || fileID == 0 {
+		return
+	}
+	w.createdIDs = append(w.createdIDs, fileID)
+	w.createdSegments = append(w.createdSegments, rewriteCreatedSegment{path: path, fileID: fileID})
 }
 
 func rewriteDictFrameRecordLen(rawPayloadBytes, k int) int64 {
@@ -3156,9 +3225,9 @@ func (w *rewriteWriter) flushPendingDictBatch() error {
 	return nil
 }
 
-func (w *rewriteWriter) AppendLeafPage(leafPage []byte) (page.ValuePtr, error) {
+func (w *rewriteWriter) AppendLeafPage(leafPage []byte) (page.LeafLogPtr, error) {
 	if w == nil {
-		return page.ValuePtr{}, errors.New("vlog-rewrite: nil writer")
+		return page.LeafLogPtr{}, errors.New("vlog-rewrite: nil writer")
 	}
 	if w.nextRID == 0 {
 		w.nextRID = 1
@@ -3166,7 +3235,20 @@ func (w *rewriteWriter) AppendLeafPage(leafPage []byte) (page.ValuePtr, error) {
 	rid := w.nextRID
 	w.nextRID++
 	if w.nextRID == 0 {
-		return page.ValuePtr{}, fmt.Errorf("value-log rid space exhausted")
+		return page.LeafLogPtr{}, fmt.Errorf("value-log rid space exhausted")
+	}
+	return w.appendLeafPageWithRID(rid, leafPage)
+}
+
+func (w *rewriteWriter) appendLeafPageWithRID(rid uint64, leafPage []byte) (page.LeafLogPtr, error) {
+	if w == nil {
+		return page.LeafLogPtr{}, errors.New("vlog-rewrite: nil writer")
+	}
+	if rid == 0 {
+		return page.LeafLogPtr{}, fmt.Errorf("value-log rid space exhausted")
+	}
+	if w.leafDir != "" {
+		return w.appendLeafPageSplit(rid, leafPage)
 	}
 	if w.blockCompression && w.leafDictID != 0 && len(w.leafDict) > 0 && rewriteAllowDictForSmallPayload(leafPage) {
 		// LeafRef IDs intentionally omit grouped sub-index bits and therefore
@@ -3174,19 +3256,73 @@ func (w *rewriteWriter) AppendLeafPage(leafPage []byte) (page.ValuePtr, error) {
 		// remain stable and do not alias another subrecord in a grouped batch.
 		ptr, err := w.appendSingleValueWithDictClass(rewriteTemplateClassOuterLeaf, w.leafDictID, w.leafDict, rid, leafPage)
 		if err == nil {
-			return ptr, nil
+			leafPtr, convErr := page.LeafLogPtrFromValuePtr(ptr)
+			if convErr != nil {
+				return page.LeafLogPtr{}, convErr
+			}
+			return leafPtr, nil
 		}
 		if !errors.Is(err, valuelog.ErrMissingDict) {
-			return page.ValuePtr{}, err
+			return page.LeafLogPtr{}, err
 		}
 	}
-	return w.appendValueWithDictClass(rewriteTemplateClassOuterLeaf, 0, nil, rid, leafPage)
+	ptr, err := w.appendValueWithDictClass(rewriteTemplateClassOuterLeaf, 0, nil, rid, leafPage)
+	if err != nil {
+		return page.LeafLogPtr{}, err
+	}
+	leafPtr, convErr := page.LeafLogPtrFromValuePtr(ptr)
+	if convErr != nil {
+		return page.LeafLogPtr{}, convErr
+	}
+	return leafPtr, nil
+}
+
+func (w *rewriteWriter) appendLeafPageSplit(rid uint64, leafPage []byte) (page.LeafLogPtr, error) {
+	if err := w.ensureLeafWriter(); err != nil {
+		return page.LeafLogPtr{}, err
+	}
+	dictID := w.leafDictID
+	dict := w.leafDict
+	if w.blockCompression && dictID != 0 && len(dict) > 0 && rewriteAllowDictForSmallPayload(leafPage) {
+		dictID, dict, leafPage = w.applyTemplateCompression(rewriteTemplateClassOuterLeaf, dictID, dict, leafPage)
+		if err := w.maybeRotateLeafForEstimate(rewriteDictFrameRecordLen(len(leafPage), 1)); err != nil {
+			return page.LeafLogPtr{}, err
+		}
+		ptr, err := w.leafW.Append(dictID, dict, rid, leafPage)
+		if err != nil {
+			return page.LeafLogPtr{}, err
+		}
+		w.records++
+		return page.LeafLogPtrFromValuePtr(ptr)
+	}
+	dictID, dict, leafPage = w.applyTemplateCompression(rewriteTemplateClassOuterLeaf, 0, nil, leafPage)
+	if dictID != 0 || len(dict) != 0 {
+		return page.LeafLogPtr{}, fmt.Errorf("vlog-rewrite: unexpected outer-leaf dict/template state")
+	}
+	if err := w.maybeRotateLeafForEstimate(int64(valuelog.HeaderSize + len(leafPage))); err != nil {
+		return page.LeafLogPtr{}, err
+	}
+	ptr, err := w.leafW.Append(0, nil, rid, leafPage)
+	if err != nil {
+		return page.LeafLogPtr{}, err
+	}
+	w.records++
+	return page.LeafLogPtrFromValuePtr(ptr)
 }
 
 // CurrentValueLogSegment reports the writer's current segment identity.
 // This lets commit publication register the segment without directory scans.
 func (w *rewriteWriter) CurrentValueLogSegment() (string, uint32, bool) {
-	if w == nil || w.currentPath == "" || w.currentFileID == 0 {
+	if w == nil {
+		return "", 0, false
+	}
+	if w.leafDir != "" {
+		if w.leafCurrentPath == "" || w.leafCurrentFileID == 0 {
+			return "", 0, false
+		}
+		return w.leafCurrentPath, w.leafCurrentFileID, true
+	}
+	if w.currentPath == "" || w.currentFileID == 0 {
 		return "", 0, false
 	}
 	return w.currentPath, w.currentFileID, true
@@ -3220,7 +3356,7 @@ func (w *rewriteWriter) rotate() error {
 		writer.SetKeepPolicy(w.keepIoNsPerByte, w.keepEncodeNsRaw, w.keepSafetyMargin)
 		w.w = writer
 		w.seq = nextSeq
-		w.createdIDs = append(w.createdIDs, fileID)
+		w.noteCreatedSegment(path, fileID)
 		w.currentPath = path
 		w.currentFileID = fileID
 		return nil
@@ -3231,9 +3367,74 @@ func (w *rewriteWriter) rotate() error {
 	w.w.SetBlockCompression(w.blockCodec, w.blockCompression)
 	w.w.SetKeepPolicy(w.keepIoNsPerByte, w.keepEncodeNsRaw, w.keepSafetyMargin)
 	w.seq = nextSeq
-	w.createdIDs = append(w.createdIDs, fileID)
+	w.noteCreatedSegment(path, fileID)
 	w.currentPath = path
 	w.currentFileID = fileID
+	return nil
+}
+
+func (w *rewriteWriter) ensureLeafWriter() error {
+	if w == nil {
+		return errors.New("vlog-rewrite: nil writer")
+	}
+	if w.leafDir == "" {
+		return w.ensureWriter()
+	}
+	if w.leafW != nil {
+		return nil
+	}
+	return w.rotateLeaf()
+}
+
+func (w *rewriteWriter) maybeRotateLeafForEstimate(estimate int64) error {
+	if w == nil || w.leafW == nil {
+		return nil
+	}
+	if w.maxSize <= 0 {
+		return nil
+	}
+	if estimate < 0 {
+		estimate = 0
+	}
+	if w.leafW.Size() == 0 {
+		return nil
+	}
+	if w.leafW.Size()+estimate <= w.maxSize {
+		return nil
+	}
+	return w.rotateLeaf()
+}
+
+func (w *rewriteWriter) rotateLeaf() error {
+	nextSeq := w.leafSeq + 1
+	fileID, err := valuelog.EncodeFileID(w.leafLane, nextSeq)
+	if err != nil {
+		return err
+	}
+	path := filepath.Join(w.leafDir, fmt.Sprintf("value-l%d-%06d.log", w.leafLane, nextSeq))
+	if w.leafW == nil {
+		writer, err := valuelog.NewWriter(path, fileID)
+		if err != nil {
+			return err
+		}
+		writer.SetBlockCompression(w.blockCodec, w.blockCompression)
+		writer.SetKeepPolicy(w.keepIoNsPerByte, w.keepEncodeNsRaw, w.keepSafetyMargin)
+		w.leafW = writer
+		w.leafSeq = nextSeq
+		w.noteCreatedSegment(path, fileID)
+		w.leafCurrentPath = path
+		w.leafCurrentFileID = fileID
+		return nil
+	}
+	if err := w.leafW.RotateTo(path, fileID); err != nil {
+		return err
+	}
+	w.leafW.SetBlockCompression(w.blockCodec, w.blockCompression)
+	w.leafW.SetKeepPolicy(w.keepIoNsPerByte, w.keepEncodeNsRaw, w.keepSafetyMargin)
+	w.leafSeq = nextSeq
+	w.noteCreatedSegment(path, fileID)
+	w.leafCurrentPath = path
+	w.leafCurrentFileID = fileID
 	return nil
 }
 
@@ -3246,6 +3447,9 @@ func (w *rewriteWriter) SetKeepPolicy(ioNsPerStoredByte, encodeNsPerRawByte, saf
 	w.keepSafetyMargin = safetyMargin
 	if w.w != nil {
 		w.w.SetKeepPolicy(ioNsPerStoredByte, encodeNsPerRawByte, safetyMargin)
+	}
+	if w.leafW != nil {
+		w.leafW.SetKeepPolicy(ioNsPerStoredByte, encodeNsPerRawByte, safetyMargin)
 	}
 }
 
@@ -3559,9 +3763,18 @@ func (w *rewriteWriter) Sync() error {
 		return err
 	}
 	if w.w == nil {
-		return nil
+		if w.leafW == nil {
+			return nil
+		}
+		return w.leafW.Sync()
 	}
-	return w.w.Sync()
+	if err := w.w.Sync(); err != nil {
+		return err
+	}
+	if w.leafW != nil {
+		return w.leafW.Sync()
+	}
+	return nil
 }
 
 func (w *rewriteWriter) Flush() error {
@@ -3572,9 +3785,18 @@ func (w *rewriteWriter) Flush() error {
 		return err
 	}
 	if w.w == nil {
-		return nil
+		if w.leafW == nil {
+			return nil
+		}
+		return w.leafW.Flush()
 	}
-	return w.w.Flush()
+	if err := w.w.Flush(); err != nil {
+		return err
+	}
+	if w.leafW != nil {
+		return w.leafW.Flush()
+	}
+	return nil
 }
 
 func (w *rewriteWriter) Close() error {
@@ -3585,10 +3807,14 @@ func (w *rewriteWriter) Close() error {
 	if err := w.flushPendingDictBatch(); err != nil {
 		return err
 	}
-	if w.w == nil {
-		return nil
+	var err error
+	if w.w != nil {
+		err = errors.Join(err, w.w.Close())
 	}
-	return w.w.Close()
+	if w.leafW != nil {
+		err = errors.Join(err, w.leafW.Close())
+	}
+	return err
 }
 
 func (w *rewriteWriter) createdFileIDs() ([]uint32, error) {
@@ -3601,6 +3827,18 @@ func (w *rewriteWriter) createdFileIDs() ([]uint32, error) {
 		return nil, nil
 	}
 	return w.createdIDs[:len(w.createdIDs):len(w.createdIDs)], nil
+}
+
+func (w *rewriteWriter) createdSegmentsSnapshot() ([]rewriteCreatedSegment, error) {
+	if w != nil {
+		if err := w.flushPendingDictBatch(); err != nil {
+			return nil, err
+		}
+	}
+	if w == nil || len(w.createdSegments) == 0 {
+		return nil, nil
+	}
+	return append([]rewriteCreatedSegment(nil), w.createdSegments...), nil
 }
 
 type rewriteIterator struct {
@@ -4180,9 +4418,13 @@ func readRawRecord(r io.ReaderAt, ptr page.ValuePtr) ([]byte, error) {
 	return buf, nil
 }
 
-func chooseRewriteLane(segments []logSegment) (uint32, uint32) {
+func chooseRewriteLane(segments []logSegment, reserved ...uint32) (uint32, uint32) {
 	used := make(map[uint32]struct{})
 	maxSeq := make(map[uint32]uint32)
+	reservedSet := make(map[uint32]struct{}, len(reserved))
+	for _, lane := range reserved {
+		reservedSet[lane] = struct{}{}
+	}
 	for _, seg := range segments {
 		if !seg.valueLog {
 			continue
@@ -4194,6 +4436,9 @@ func chooseRewriteLane(segments []logSegment) (uint32, uint32) {
 		}
 	}
 	for lane := uint32(255); lane > 0; lane-- {
+		if _, skip := reservedSet[lane]; skip {
+			continue
+		}
 		if _, ok := used[lane]; !ok {
 			return lane, 0
 		}
@@ -4201,8 +4446,42 @@ func chooseRewriteLane(segments []logSegment) (uint32, uint32) {
 	return 0, maxSeq[0]
 }
 
+func maxRewriteLaneSeq(segments []logSegment, want uint32) uint32 {
+	var maxSeq uint32
+	for _, seg := range segments {
+		if !seg.valueLog {
+			continue
+		}
+		lane, _ := valuelog.DecodeFileID(seg.fileID)
+		if lane != want {
+			continue
+		}
+		if uint32(seg.seq) > maxSeq {
+			maxSeq = uint32(seg.seq)
+		}
+	}
+	return maxSeq
+}
+
+func maxRewriteLaneSeqFromSet(set *valuelog.Set, want uint32) uint32 {
+	if set == nil || len(set.Files) == 0 {
+		return 0
+	}
+	var maxSeq uint32
+	for id := range set.Files {
+		lane, seq := valuelog.DecodeFileID(id)
+		if lane != want {
+			continue
+		}
+		if seq > maxSeq {
+			maxSeq = seq
+		}
+	}
+	return maxSeq
+}
+
 func valueLogSegmentStats(dir string) (count int, bytes int64, err error) {
-	segments, err := listWALSegments(dir)
+	segments, err := listValueLogSegments(dir)
 	if err != nil {
 		return 0, 0, err
 	}

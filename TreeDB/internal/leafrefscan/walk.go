@@ -11,7 +11,7 @@ import (
 
 type GetFunc func(pageID uint64) ([]byte, error)
 type VerifyFunc func(pageID uint64, n node.Node) error
-type VisitFunc func(ptr page.ValuePtr) error
+type VisitFunc func(ptr page.LeafLogPtr) error
 
 type walkState struct {
 	stack   []uint64
