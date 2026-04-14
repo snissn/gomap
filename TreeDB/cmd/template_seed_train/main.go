@@ -271,8 +271,8 @@ func trainOuterLeafValues(engine *template.Engine, store *templatedb.Store, back
 		}
 	}
 	seen := make(map[outerLeafKey]struct{}, seenCap)
-	visit := func(ptr page.ValuePtr) error {
-		key := outerLeafKey{fileID: ptr.FileID, offset: ptr.Offset}
+	visit := func(ptr page.LeafLogPtr) error {
+		key := outerLeafKey{fileID: ptr.ValueLogFileID(), offset: ptr.Offset}
 		if _, ok := seen[key]; ok {
 			return nil
 		}
@@ -282,7 +282,7 @@ func trainOuterLeafValues(engine *template.Engine, store *templatedb.Store, back
 			return errStopScan
 		}
 		if shouldSample(stats.scanned, stride) {
-			payload, err := reader.ReadUnsafe(ptr)
+			payload, err := reader.ReadUnsafe(ptr.ValuePtr())
 			if err != nil {
 				return err
 			}
@@ -396,8 +396,8 @@ func probeOuterLeaf(engine *template.Engine, store template.Store, backend *tree
 		}
 	}
 	seen := make(map[outerLeafKey]struct{}, seenCap)
-	visit := func(ptr page.ValuePtr) error {
-		key := outerLeafKey{fileID: ptr.FileID, offset: ptr.Offset}
+	visit := func(ptr page.LeafLogPtr) error {
+		key := outerLeafKey{fileID: ptr.ValueLogFileID(), offset: ptr.Offset}
 		if _, ok := seen[key]; ok {
 			return nil
 		}
@@ -405,7 +405,7 @@ func probeOuterLeaf(engine *template.Engine, store template.Store, backend *tree
 		if limit > 0 && attempted >= limit {
 			return errStopScan
 		}
-		payload, err := reader.ReadUnsafe(ptr)
+		payload, err := reader.ReadUnsafe(ptr.ValuePtr())
 		if err != nil {
 			return err
 		}
