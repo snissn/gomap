@@ -474,14 +474,18 @@ func TestCachedRewriteLeafRefs_RemainReopenableAfterLaterCheckpoint(t *testing.T
 	}
 	sourceIDs = sourceIDs[:4]
 
-	stats, err := backend.ValueLogRewriteOnline(context.Background(), backenddb.ValueLogRewriteOnlineOptions{
-		BatchSize:      32,
-		SyncEachBatch:  true,
-		ProtectedPaths: db.valueLogProtectedPaths(),
-		SourceFileIDs:  sourceIDs,
-	})
-	if err != nil {
-		t.Fatalf("ValueLogRewriteOnline: %v", err)
+	var stats backenddb.ValueLogRewriteStats
+	if err := db.runWithBackendMaintenance(func() error {
+		var err error
+		stats, err = backend.ValueLogRewriteOnline(context.Background(), backenddb.ValueLogRewriteOnlineOptions{
+			BatchSize:      32,
+			SyncEachBatch:  true,
+			ProtectedPaths: db.valueLogProtectedPaths(),
+			SourceFileIDs:  sourceIDs,
+		})
+		return err
+	}); err != nil {
+		t.Fatalf("backend maintenance rewrite: %v", err)
 	}
 	postRewriteCounts := collectLeafRefFileCounts(t, backend.Pager(), backend.State().RootPageID)
 	if hits := countLeafRefHits(postRewriteCounts, sourceIDs); hits != 0 {

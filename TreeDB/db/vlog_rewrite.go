@@ -1395,10 +1395,11 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 
 	nextRID := uint64(0)
 	var (
-		segments    []logSegment
-		lane        uint32
-		startSeq    uint32
-		needSegScan = true
+		segments     []logSegment
+		lane         uint32
+		startSeq     uint32
+		leafStartSeq uint32
+		needSegScan  = true
 	)
 	if db.valueLogManager != nil {
 		if hintLane, hintSeq, ok := db.valueLogManager.RewriteLaneHint(); ok {
@@ -1407,6 +1408,9 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 				needSegScan = true
 			} else if os.IsNotExist(statErr) {
 				lane, startSeq = hintLane, hintSeq
+				if db.indexOuterLeavesInValueLog {
+					leafStartSeq = maxRewriteLaneSeqFromSet(set, rewriteLeafLogLaneID)
+				}
 				needSegScan = false
 			} else {
 				_ = db.valueLogManager.Release(set)
@@ -1432,6 +1436,7 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		}
 		if db.indexOuterLeavesInValueLog {
 			lane, startSeq = chooseRewriteLane(segments, rewriteLeafLogLaneID)
+			leafStartSeq = maxRewriteLaneSeq(segments, rewriteLeafLogLaneID)
 		} else {
 			lane, startSeq = chooseRewriteLane(segments)
 		}
@@ -1458,7 +1463,7 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 	layout := resolveStorageLayout(db.dir)
 	writer := newRewriteWriter(layout.valueVLogDir, lane, startSeq, maxBytes)
 	if db.indexOuterLeavesInValueLog {
-		writer.ConfigureLeafLog(layout.leafVLogDir, rewriteLeafLogLaneID, maxRewriteLaneSeq(segments, rewriteLeafLogLaneID))
+		writer.ConfigureLeafLog(layout.leafVLogDir, rewriteLeafLogLaneID, leafStartSeq)
 	}
 	writer.blockCompression = db.valueLogCompression != ValueLogCompressionOff
 	writer.blockCodec = valuelogBlockCodecFromDB(db.valueLogBlockCodec)
@@ -4452,6 +4457,23 @@ func maxRewriteLaneSeq(segments []logSegment, want uint32) uint32 {
 		}
 		if uint32(seg.seq) > maxSeq {
 			maxSeq = uint32(seg.seq)
+		}
+	}
+	return maxSeq
+}
+
+func maxRewriteLaneSeqFromSet(set *valuelog.Set, want uint32) uint32 {
+	if set == nil || len(set.Files) == 0 {
+		return 0
+	}
+	var maxSeq uint32
+	for id := range set.Files {
+		lane, seq := valuelog.DecodeFileID(id)
+		if lane != want {
+			continue
+		}
+		if seq > maxSeq {
+			maxSeq = seq
 		}
 	}
 	return maxSeq
