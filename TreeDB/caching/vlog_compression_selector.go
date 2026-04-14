@@ -1217,26 +1217,31 @@ func (s *vlogCompressionSelector) observe(mode vlogCompressionWriteMode, blockCo
 }
 
 func (s *vlogCompressionSelector) blockObservedRatio(codec valuelog.BlockCodec) float64 {
+	ratio, _ := s.blockObservedRatioWithSamples(codec)
+	return ratio
+}
+
+func (s *vlogCompressionSelector) blockObservedRatioWithSamples(codec valuelog.BlockCodec) (float64, uint64) {
 	if s == nil {
-		return 1.0
+		return 1.0, 0
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	candidate := blockCandidateFromCodec(codec)
 	m := s.metric(candidate)
 	if m.samples > 0 {
-		return m.ratio
+		return m.ratio, m.samples
 	}
 	// Fall back to whichever block codec has the stronger signal.
 	snappy := s.metric(vlogAutoCandidateBlockSnappy)
 	lz4 := s.metric(vlogAutoCandidateBlockLZ4)
 	if snappy.samples == 0 && lz4.samples == 0 {
-		return 0.92
+		return 0.92, 0
 	}
 	if snappy.samples >= lz4.samples {
-		return snappy.ratio
+		return snappy.ratio, snappy.samples
 	}
-	return lz4.ratio
+	return lz4.ratio, lz4.samples
 }
 
 func (s *vlogCompressionSelector) snapshot() vlogCompressionSelectorStats {
@@ -1603,7 +1608,7 @@ func (db *DB) chooseValueLogBlockWriteK(l *lane, records, rawPayloadBytes int, c
 		((db.forceValueLogPointers && avgPayloadBytes >= forcePointerAutoBlockMinPayloadBytes) ||
 			(normalizeVlogAutoPolicy(db.valueLogAutoPolicy) == vlogAutoThroughput && avgPayloadBytes >= throughputAutoBlockMinPayloadBytes))
 	if useSelectorRatio && !stableFastPath {
-		ratio = l.vlogCompressionSelector.blockObservedRatio(codec)
+		ratio, ratioSamples = l.vlogCompressionSelector.blockObservedRatioWithSamples(codec)
 	}
 	if ratio <= 0 || stableFastPath || !useSelectorRatio {
 		ratio, ratioSamples = laneVlogBlockObservedRatioWithSamples(l, codec)

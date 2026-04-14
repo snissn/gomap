@@ -134,3 +134,20 @@ func TestAppendValueLogForRecords_LargePayloadBatchGroupsFrames(t *testing.T) {
 		t.Fatalf("expected max grouped frame >= 8 subrecords, got %d", maxGrouped)
 	}
 }
+
+func TestChooseValueLogBlockWriteK_LargePayloadBootstrapKeepsSelectorIncompressibleSignal(t *testing.T) {
+	db := &DB{
+		valueLogCompressionMode:  uint8(vlogCompressionAuto),
+		valueLogAutoPolicy:       uint8(vlogAutoBalanced),
+		valueLogBlockTargetBytes: 4096,
+	}
+	selector := newVlogCompressionSelector(vlogAutoBalanced, 0, 0)
+	selector.dwellBytes = 0
+	selector.observe(vlogWriteBlock, valuelog.BlockCodecSnappy, 42<<10, 42<<10, 1000, false)
+	l := &lane{vlogCompressionSelector: selector}
+
+	got := db.chooseValueLogBlockWriteK(l, 16, 16*(42<<10), valuelog.BlockCodecSnappy)
+	if got != 1 {
+		t.Fatalf("expected incompressible selector signal to keep k=1, got %d", got)
+	}
+}
