@@ -3236,9 +3236,12 @@ func TestValueLogRewriteOnline_LeafLogReservedLaneHintFallsBackToScan(t *testing
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	defer func() { _ = db.Close() }()
 	leafLog := &registeredLeafPageLog{db: db, dir: dir}
 	db.SetLeafPageLog(leafLog)
+	defer func() {
+		_ = leafLog.Close()
+		_ = db.Close()
+	}()
 
 	ptrs := appendPointersInNewSegment(t, dir, 0, 1, 316_000, 1, func(i int) []byte {
 		return bytes.Repeat([]byte{byte(i + 1)}, 256)

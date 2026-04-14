@@ -1,7 +1,9 @@
 package caching
 
 import (
+	"runtime"
 	"testing"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/zipper"
 )
@@ -20,7 +22,25 @@ func TestOpen_DisableWALWiresZipperParallelMergePressure(t *testing.T) {
 	defer poolPressureTestMu.Unlock()
 
 	resetPoolPressureStateForTest()
-	t.Cleanup(resetPoolPressureStateForTest)
+	savedNow := poolPressureNow
+	savedReadMemStats := poolPressureReadMemStats
+	savedMemLimit := poolPressureMemoryLimit
+	t.Cleanup(func() {
+		poolPressureNow = savedNow
+		poolPressureReadMemStats = savedReadMemStats
+		poolPressureMemoryLimit = savedMemLimit
+		resetPoolPressureStateForTest()
+	})
+	now := time.Unix(1, 0)
+	poolPressureNow = func() time.Time { return now }
+	fake := runtime.MemStats{
+		HeapAlloc: 1 << 20,
+		HeapInuse: 1 << 20,
+		HeapSys:   2 << 20,
+		Sys:       4 << 20,
+	}
+	poolPressureReadMemStats = func(ms *runtime.MemStats) { *ms = fake }
+	poolPressureMemoryLimit = func() int64 { return 1 << 30 }
 
 	dir := t.TempDir()
 	backend := &zipperPressureRecordingBackend{MockBackend: NewMockBackend()}
