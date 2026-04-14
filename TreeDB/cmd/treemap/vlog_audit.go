@@ -33,6 +33,7 @@ type valueLogAuditReport struct {
 	Dir            string                       `json:"dir"`
 	MainDir        string                       `json:"main_dir"`
 	ValueLogDir    string                       `json:"value_log_dir"`
+	LeafLogDir     string                       `json:"leaf_log_dir,omitempty"`
 	Segments       []valueLogSegmentAudit       `json:"segments"`
 	SegmentsOnDisk int                          `json:"segments_on_disk"`
 	BytesOnDisk    int64                        `json:"bytes_on_disk"`
@@ -151,6 +152,9 @@ func runVlogAudit(dir string, args []string) {
 	fmt.Printf("dir=%s\n", report.Dir)
 	fmt.Printf("main_dir=%s\n", report.MainDir)
 	fmt.Printf("value_log_dir=%s\n", report.ValueLogDir)
+	if strings.TrimSpace(report.LeafLogDir) != "" {
+		fmt.Printf("leaf_log_dir=%s\n", report.LeafLogDir)
+	}
 	fmt.Printf("segments_on_disk=%d bytes_on_disk=%d\n", report.SegmentsOnDisk, report.BytesOnDisk)
 	fmt.Printf("rid_scan: records=%d distinct=%d duplicates=%d first_duplicate_rid=%d max_rid=%d\n",
 		report.RIDScan.Records,
@@ -283,8 +287,9 @@ func collectValueLogAudit(dir string, rewriteOpts treedbdb.ValueLogRewriteOnline
 	rootDir := resolveTreemapRootDir(filepath.Clean(dir), mainDir)
 	report.MainDir = mainDir
 	report.ValueLogDir = treedbdb.ValueLogDirPath(mainDir)
+	report.LeafLogDir = treedbdb.LeafLogDirPath(mainDir)
 
-	segs, bytesOnDisk, err := listValueLogSegments(report.ValueLogDir)
+	segs, bytesOnDisk, err := listValueLogSegments(report.ValueLogDir, report.LeafLogDir)
 	if err != nil {
 		return report, err
 	}
@@ -652,45 +657,57 @@ func resolveTreemapRootDir(inputDir, mainDir string) string {
 	return clean
 }
 
-func listValueLogSegments(dir string) ([]valueLogSegmentAudit, int64, error) {
-	info, err := os.Stat(dir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, 0, nil
+func listValueLogSegments(dirs ...string) ([]valueLogSegmentAudit, int64, error) {
+	var (
+		segs  []valueLogSegmentAudit
+		total int64
+	)
+	for _, dir := range dirs {
+		if strings.TrimSpace(dir) == "" {
+			continue
 		}
-		return nil, 0, err
-	}
-	if !info.IsDir() {
-		return nil, 0, fmt.Errorf("value-log dir is not a directory: %s", dir)
-	}
+		info, err := os.Stat(dir)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, 0, err
+		}
+		if !info.IsDir() {
+			return nil, 0, fmt.Errorf("value-log dir is not a directory: %s", dir)
+		}
 
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil, 0, err
-	}
-	segs := make([]valueLogSegmentAudit, 0, len(entries))
-	var total int64
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		name := entry.Name()
-		if !strings.HasPrefix(name, "value-") || !strings.HasSuffix(name, ".log") {
-			continue
-		}
-		path := filepath.Join(dir, name)
-		stat, err := entry.Info()
+		entries, err := os.ReadDir(dir)
 		if err != nil {
 			return nil, 0, err
 		}
-		segs = append(segs, valueLogSegmentAudit{
-			Name:  name,
-			Path:  path,
-			Bytes: stat.Size(),
-		})
-		total += stat.Size()
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+			name := entry.Name()
+			if !strings.HasPrefix(name, "value-") || !strings.HasSuffix(name, ".log") {
+				continue
+			}
+			path := filepath.Join(dir, name)
+			stat, err := entry.Info()
+			if err != nil {
+				return nil, 0, err
+			}
+			segs = append(segs, valueLogSegmentAudit{
+				Name:  name,
+				Path:  path,
+				Bytes: stat.Size(),
+			})
+			total += stat.Size()
+		}
 	}
-	sort.Slice(segs, func(i, j int) bool { return segs[i].Name < segs[j].Name })
+	sort.Slice(segs, func(i, j int) bool {
+		if segs[i].Name == segs[j].Name {
+			return segs[i].Path < segs[j].Path
+		}
+		return segs[i].Name < segs[j].Name
+	})
 	return segs, total, nil
 }
 

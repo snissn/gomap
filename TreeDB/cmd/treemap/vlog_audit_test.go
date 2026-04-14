@@ -70,6 +70,42 @@ func TestCollectValueLogAudit_AcceptsMainDBDir(t *testing.T) {
 	}
 }
 
+func TestCollectValueLogAudit_IncludesLeafLogSegments(t *testing.T) {
+	dir := t.TempDir()
+	buildDictCompressedDBForAudit(t, dir)
+
+	leafDir := treedbdb.LeafLogDirPath(filepath.Join(dir, "maindb"))
+	if err := os.MkdirAll(leafDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(leaf log): %v", err)
+	}
+	fileID := mustEncodeAuditFileID(t, 255, 1)
+	w, err := valuelog.NewWriter(filepath.Join(leafDir, "value-l255-000001.log"), fileID)
+	if err != nil {
+		t.Fatalf("NewWriter(leaf log): %v", err)
+	}
+	if _, err := w.Append(0, nil, 9001, bytes.Repeat([]byte("leaf"), 1024)); err != nil {
+		_ = w.Close()
+		t.Fatalf("Append(leaf log): %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close(leaf log): %v", err)
+	}
+
+	report, err := collectValueLogAudit(dir, treedbdb.ValueLogRewriteOnlineOptions{}, valueLogRIDAuditOptions{}, valueLogFrameScanAuditOptions{})
+	if err != nil {
+		t.Fatalf("collectValueLogAudit(with leaf_vlog): %v", err)
+	}
+	if report.LeafLogDir != leafDir {
+		t.Fatalf("LeafLogDir=%q want %q", report.LeafLogDir, leafDir)
+	}
+	if report.SegmentsOnDisk < 2 {
+		t.Fatalf("expected combined value+leaf segments, got segments=%d", report.SegmentsOnDisk)
+	}
+	if report.RIDScan.MaxRID < 9001 {
+		t.Fatalf("expected RID scan to include leaf_vlog record, got %+v", report.RIDScan)
+	}
+}
+
 func TestParseValueLogAuditFileID_AcceptsLegacyAndLaneNames(t *testing.T) {
 	tests := []struct {
 		name   string
