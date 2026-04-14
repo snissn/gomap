@@ -148,7 +148,11 @@ func forceRewriteStageConfirmDue(t *testing.T, db *DB) {
 	db.vlogGenerationRewriteQueueMu.Lock()
 	db.vlogGenerationRewriteStageObservedUnixNano = observedAt
 	db.vlogGenerationRewriteQueueMu.Unlock()
-	db.scheduleVlogGenerationRewriteStageConfirmation(observedAt)
+	// Synchronous scheduler tests drive the confirmation pass explicitly. Do not
+	// arm the background confirmation wake here; that introduces a race where the
+	// goroutine can consume staged debt before the test's direct maintenance call,
+	// which has been flaky on slower Windows runners.
+	db.clearVlogGenerationRewriteStageConfirmation()
 }
 
 func disableVlogGenerationLoop(t *testing.T) {
