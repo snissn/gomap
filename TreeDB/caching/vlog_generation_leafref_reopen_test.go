@@ -26,9 +26,9 @@ var missingValueLogIDPattern = regexp.MustCompile(`valuelog file ([0-9]+) not fo
 
 func ageValueLogFilesForTest(t *testing.T, dir string, age time.Duration) {
 	t.Helper()
-	paths, err := filepath.Glob(filepath.Join(dir, "wal", "value-l*.log"))
+	paths, err := filepath.Glob(filepath.Join(dir, "value_vlog", "value-l*.log"))
 	if err != nil {
-		t.Fatalf("glob wal files: %v", err)
+		t.Fatalf("glob value_vlog files: %v", err)
 	}
 	old := time.Now().Add(-age)
 	for _, path := range paths {
@@ -71,7 +71,7 @@ func missingLeafRefPaths(root string, counts map[uint32]int) []string {
 			continue
 		}
 		lane, seq := valuelog.DecodeFileID(fileID)
-		path := filepath.Join(root, "wal", fmt.Sprintf("value-l%d-%06d.log", lane, seq))
+		path := filepath.Join(root, "value_vlog", fmt.Sprintf("value-l%d-%06d.log", lane, seq))
 		if _, err := os.Stat(path); err == nil {
 			continue
 		} else if os.IsNotExist(err) {
@@ -1112,7 +1112,7 @@ func TestCachedGenerationalMaintenance_DirectPointersSeedPhaseLarge_WALOn(t *tes
 			seg := page.ValueLogSegmentID(id)
 			laneID := seg >> 23
 			seq := seg & ((1 << 23) - 1)
-			path := filepath.Join(dir, "wal", fmt.Sprintf("value-l%d-%06d.log", laneID, seq))
+			path := filepath.Join(dir, "value_vlog", fmt.Sprintf("value-l%d-%06d.log", laneID, seq))
 			_, statErr := os.Stat(path)
 			inRefreshed := false
 			if refreshedState != nil && refreshedState.ValueLogSet != nil {
@@ -1412,7 +1412,7 @@ func testCachedRepeatedRewriteVacuumLeafRefsRemainReopenable(t *testing.T, disab
 					seg := page.ValueLogSegmentID(missingID)
 					lane := seg >> 23
 					seq := seg & ((1 << 23) - 1)
-					path := filepath.Join(dir, "wal", fmt.Sprintf("value-l%d-%06d.log", lane, seq))
+					path := filepath.Join(dir, "value_vlog", fmt.Sprintf("value-l%d-%06d.log", lane, seq))
 					_, statErr := os.Stat(path)
 					t.Fatalf("rewrite round %d: %v (missing_id=%d in_leaf_counts=%d in_live_counts=%d in_current_set=%v path=%s stat_err=%v sources=%v)",
 						round, err, missingID, leafCounts[missingID], preRoundCounts[missingID], currentSet.Files[missingID] != nil, path, statErr, sourceIDs[:min(8, len(sourceIDs))])
@@ -1451,7 +1451,7 @@ func testCachedRepeatedRewriteVacuumLeafRefsRemainReopenable(t *testing.T, disab
 				seg := page.ValueLogSegmentID(missingID)
 				laneID := int(seg >> 23)
 				seq := seg & ((1 << 23) - 1)
-				path := filepath.Join(dir, "wal", fmt.Sprintf("value-l%d-%06d.log", laneID, seq))
+				path := filepath.Join(dir, "value_vlog", fmt.Sprintf("value-l%d-%06d.log", laneID, seq))
 				_, statErr := os.Stat(path)
 				currentPath := ""
 				currentSeq := 0
@@ -1703,7 +1703,7 @@ func TestCachedManualMaintenanceDirectPointersRemainReopenable_WALOn(t *testing.
 					seg := page.ValueLogSegmentID(missingID)
 					laneID := seg >> 23
 					seq := seg & ((1 << 23) - 1)
-					path := filepath.Join(dir, "wal", fmt.Sprintf("value-l%d-%06d.log", laneID, seq))
+					path := filepath.Join(dir, "value_vlog", fmt.Sprintf("value-l%d-%06d.log", laneID, seq))
 					_, statErr := os.Stat(path)
 					t.Fatalf("rewrite round %d: %v (missing_id=%d in_set=%v path=%s stat_err=%v sources=%v)",
 						round, err, missingID, inSet, path, statErr, sourceIDs[:min(8, len(sourceIDs))])
@@ -1732,7 +1732,7 @@ func TestCachedManualMaintenanceDirectPointersRemainReopenable_WALOn(t *testing.
 				seg := page.ValueLogSegmentID(missingID)
 				laneID := seg >> 23
 				seq := seg & ((1 << 23) - 1)
-				path := filepath.Join(dir, "wal", fmt.Sprintf("value-l%d-%06d.log", laneID, seq))
+				path := filepath.Join(dir, "value_vlog", fmt.Sprintf("value-l%d-%06d.log", laneID, seq))
 				_, statErr := os.Stat(path)
 				t.Fatalf("round %d post-write iterator error: %v (missing_id=%d in_set=%v path=%s stat_err=%v)", round, err, missingID, inSet, path, statErr)
 			}

@@ -261,7 +261,7 @@ func setupLeafRefRewriteBench(tb testing.TB, keyCount int) (*DB, []uint32, func(
 		tb.Fatalf("Open: %v", err)
 	}
 
-	walDir := filepath.Join(dir, "wal")
+	walDir := filepath.Join(dir, "value_vlog")
 	if err := os.MkdirAll(walDir, 0o755); err != nil {
 		_ = db.Close()
 		_ = os.RemoveAll(dir)
@@ -397,7 +397,7 @@ func collectLeafRefFileCountsBench(tb testing.TB, p *pager.Pager, rootID uint64,
 
 func appendPointersInNewSegmentBench(tb testing.TB, dir string, lane, seq uint32, ridBase uint64, n int, valueAt func(i int) []byte) []page.ValuePtr {
 	tb.Helper()
-	walDir := filepath.Join(dir, "wal")
+	walDir := filepath.Join(dir, "value_vlog")
 	if err := os.MkdirAll(walDir, 0o755); err != nil {
 		tb.Fatalf("mkdir wal: %v", err)
 	}

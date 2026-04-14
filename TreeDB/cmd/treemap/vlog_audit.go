@@ -282,7 +282,7 @@ func collectValueLogAudit(dir string, rewriteOpts treedbdb.ValueLogRewriteOnline
 	}
 	rootDir := resolveTreemapRootDir(filepath.Clean(dir), mainDir)
 	report.MainDir = mainDir
-	report.ValueLogDir = filepath.Join(mainDir, "wal")
+	report.ValueLogDir = treedbdb.ValueLogDirPath(mainDir)
 
 	segs, bytesOnDisk, err := listValueLogSegments(report.ValueLogDir)
 	if err != nil {

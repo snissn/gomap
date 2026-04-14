@@ -2081,7 +2081,7 @@ func TestCheckpoint_SchedulesRetainedValueLogPruneAsynchronously(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EncodeFileID: %v", err)
 	}
-	retainedPath := filepath.Join(dir, "wal", "value-l0-000099.log")
+	retainedPath := filepath.Join(dir, "value_vlog", "value-l0-000099.log")
 	if err := os.MkdirAll(filepath.Dir(retainedPath), 0o755); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}
@@ -2154,7 +2154,7 @@ func TestCheckpoint_DefersRetainedValueLogPruneUntilForegroundQuiet(t *testing.T
 	if err != nil {
 		t.Fatalf("EncodeFileID: %v", err)
 	}
-	retainedPath := filepath.Join(dir, "wal", "value-l0-000199.log")
+	retainedPath := filepath.Join(dir, "value_vlog", "value-l0-000199.log")
 	if err := os.MkdirAll(filepath.Dir(retainedPath), 0o755); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}
@@ -2227,7 +2227,7 @@ func TestRetainedValueLogPrune_AbortsWhenForegroundWritesResume(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EncodeFileID: %v", err)
 	}
-	retainedPath := filepath.Join(dir, "wal", "value-l0-000211.log")
+	retainedPath := filepath.Join(dir, "value_vlog", "value-l0-000211.log")
 	if err := os.MkdirAll(filepath.Dir(retainedPath), 0o755); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}
@@ -2307,7 +2307,7 @@ func TestRetainedValueLogPruneForce_RetriesAfterForegroundWritesResume(t *testin
 	if err != nil {
 		t.Fatalf("EncodeFileID: %v", err)
 	}
-	retainedPath := filepath.Join(dir, "wal", "value-l0-000212.log")
+	retainedPath := filepath.Join(dir, "value_vlog", "value-l0-000212.log")
 	if err := os.MkdirAll(filepath.Dir(retainedPath), 0o755); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}
@@ -2422,7 +2422,7 @@ func TestCheckpoint_RateLimitsRetainedValueLogPrune(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EncodeFileID: %v", err)
 	}
-	retainedPath := filepath.Join(dir, "wal", "value-l0-000233.log")
+	retainedPath := filepath.Join(dir, "value_vlog", "value-l0-000233.log")
 	if err := os.MkdirAll(filepath.Dir(retainedPath), 0o755); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}
@@ -2504,7 +2504,7 @@ func TestCheckpoint_SkipsRetainedValueLogPruneBelowPressureThreshold(t *testing.
 	if err != nil {
 		t.Fatalf("EncodeFileID: %v", err)
 	}
-	retainedPath := filepath.Join(dir, "wal", "value-l0-000244.log")
+	retainedPath := filepath.Join(dir, "value_vlog", "value-l0-000244.log")
 	if err := os.MkdirAll(filepath.Dir(retainedPath), 0o755); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}
@@ -2571,7 +2571,7 @@ func TestRetainedValueLogPruneForce_BypassesPressureThreshold(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EncodeFileID: %v", err)
 	}
-	retainedPath := filepath.Join(dir, "wal", "value-l0-000245.log")
+	retainedPath := filepath.Join(dir, "value_vlog", "value-l0-000245.log")
 	if err := os.MkdirAll(filepath.Dir(retainedPath), 0o755); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}
@@ -2630,7 +2630,7 @@ func TestRetainedValueLogPruneForce_PreemptsQuietWait(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EncodeFileID: %v", err)
 	}
-	retainedPath := filepath.Join(dir, "wal", "value-l0-000246.log")
+	retainedPath := filepath.Join(dir, "value_vlog", "value-l0-000246.log")
 	if err := os.MkdirAll(filepath.Dir(retainedPath), 0o755); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}
@@ -2696,7 +2696,7 @@ func TestCheckpoint_DoesNotWaitForPriorRetainedValueLogPrune(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EncodeFileID: %v", err)
 	}
-	retainedPath := filepath.Join(dir, "wal", "value-l0-000100.log")
+	retainedPath := filepath.Join(dir, "value_vlog", "value-l0-000100.log")
 	if err := os.MkdirAll(filepath.Dir(retainedPath), 0o755); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}
@@ -2772,7 +2772,7 @@ func TestBackendMaintenance_DoesNotBlockOnRetainedValueLogPruneQuietWindow(t *te
 	if err != nil {
 		t.Fatalf("EncodeFileID: %v", err)
 	}
-	retainedPath := filepath.Join(dir, "wal", "value-l0-000321.log")
+	retainedPath := filepath.Join(dir, "value_vlog", "value-l0-000321.log")
 	if err := os.MkdirAll(filepath.Dir(retainedPath), 0o755); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}

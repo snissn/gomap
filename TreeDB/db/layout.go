@@ -1,6 +1,7 @@
 package db
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 )
@@ -25,6 +26,18 @@ func resolveStorageLayout(dir string) storageLayout {
 		valueVLogDir: filepath.Join(dir, valueVLogDirName),
 		leafVLogDir:  filepath.Join(dir, leafVLogDirName),
 	}
+}
+
+func WALDirPath(dir string) string {
+	return resolveStorageLayout(dir).walDir
+}
+
+func ValueLogDirPath(dir string) string {
+	return resolveStorageLayout(dir).valueVLogDir
+}
+
+func LeafLogDirPath(dir string) string {
+	return resolveStorageLayout(dir).leafVLogDir
 }
 
 func ensureStorageLayoutDirs(dir string) error {
@@ -59,4 +72,15 @@ func hasLegacyMixedWALValueSegments(dir string) (bool, error) {
 		}
 	}
 	return false, nil
+}
+
+func ensureNoLegacyMixedWALValueSegments(dir string) error {
+	legacy, err := hasLegacyMixedWALValueSegments(dir)
+	if err != nil {
+		return err
+	}
+	if !legacy {
+		return nil
+	}
+	return fmt.Errorf("treedb: legacy value-log segments found in %s; rebuild required for split wal/value_vlog layout", resolveStorageLayout(dir).walDir)
 }

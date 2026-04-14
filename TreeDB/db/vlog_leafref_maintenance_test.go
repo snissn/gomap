@@ -52,7 +52,7 @@ func TestValueLogGC_WithLeafPagesInValueLog_KeepsReferencedLeafSegments(t *testi
 		t.Fatalf("open: %v", err)
 	}
 
-	walDir := filepath.Join(dir, "wal")
+	walDir := filepath.Join(dir, "value_vlog")
 	if err := os.MkdirAll(walDir, 0o755); err != nil {
 		_ = db.Close()
 		t.Fatalf("mkdir wal: %v", err)
@@ -120,7 +120,7 @@ func TestValueLogRewriteOffline_PreservesLeafPagesInValueLogFormatConfig(t *test
 		t.Fatalf("open: %v", err)
 	}
 
-	walDir := filepath.Join(dir, "wal")
+	walDir := filepath.Join(dir, "value_vlog")
 	if err := os.MkdirAll(walDir, 0o755); err != nil {
 		_ = db.Close()
 		t.Fatalf("mkdir wal: %v", err)
@@ -207,7 +207,7 @@ func TestValueLogRewriteOnline_WithLeafPagesInValueLog_ReopenPreservesData(t *te
 		t.Fatalf("open: %v", err)
 	}
 
-	leafLog := newRewriteWriter(filepath.Join(dir, "wal"), 0, 0, 64<<10)
+	leafLog := newRewriteWriter(filepath.Join(dir, "value_vlog"), 0, 0, 64<<10)
 	leafLog.blockCompression = false
 	leafLog.blockCodec = valuelog.BlockCodecSnappy
 	db.SetLeafPageLog(leafLog)
@@ -392,7 +392,7 @@ func TestValueLogRewriteOnline_RewritesLeafRefsAndReclaimsSegments(t *testing.T)
 		}
 	}()
 
-	walDir := filepath.Join(dir, "wal")
+	walDir := filepath.Join(dir, "value_vlog")
 	if err := os.MkdirAll(walDir, 0o755); err != nil {
 		t.Fatalf("mkdir wal: %v", err)
 	}
@@ -604,7 +604,7 @@ func TestValueLogRewriteOnline_RewritesMultipleLeafRefSourceSegmentsAndReopensRW
 		}
 	}()
 
-	walDir := filepath.Join(dir, "wal")
+	walDir := filepath.Join(dir, "value_vlog")
 	if err := os.MkdirAll(walDir, 0o755); err != nil {
 		t.Fatalf("mkdir wal: %v", err)
 	}
@@ -760,7 +760,7 @@ func TestValueLogRewriteOnline_PostRewriteWritesDoNotReintroduceLeafRefSources(t
 		}
 	}()
 
-	walDir := filepath.Join(dir, "wal")
+	walDir := filepath.Join(dir, "value_vlog")
 	if err := os.MkdirAll(walDir, 0o755); err != nil {
 		t.Fatalf("mkdir wal: %v", err)
 	}
@@ -929,7 +929,7 @@ func TestValueLogRewriteOnline_UnsyncedLeafRefRewriteRemainsReopenable(t *testin
 		}
 	}()
 
-	walDir := filepath.Join(dir, "wal")
+	walDir := filepath.Join(dir, "value_vlog")
 	if err := os.MkdirAll(walDir, 0o755); err != nil {
 		t.Fatalf("mkdir wal: %v", err)
 	}
@@ -1054,7 +1054,7 @@ func TestValueLogRewriteOnline_UnsyncedRewriteThenVacuumRemainsReopenable(t *tes
 		}
 	}()
 
-	walDir := filepath.Join(dir, "wal")
+	walDir := filepath.Join(dir, "value_vlog")
 	if err := os.MkdirAll(walDir, 0o755); err != nil {
 		t.Fatalf("mkdir wal: %v", err)
 	}
@@ -1192,7 +1192,7 @@ func TestValueLogRewriteOnline_WALOnLeafRefsPreserveNestedValueSegments(t *testi
 		}
 	}()
 
-	walDir := filepath.Join(dir, "wal")
+	walDir := filepath.Join(dir, "value_vlog")
 	if err := os.MkdirAll(walDir, 0o755); err != nil {
 		t.Fatalf("mkdir wal: %v", err)
 	}

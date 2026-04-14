@@ -41,7 +41,7 @@ const leafRefRewriteInlineChildCap = 64  // stack-backed child-id scratch for co
 const leafRefRewriteInlineRemapCap = 8   // inline remap cache before promoting to map
 
 var rewriteRIDStartScanner = nextRewriteRIDStart
-var rewriteWALSegmentsLister = listWALSegments
+var rewriteWALSegmentsLister = listValueLogSegments
 
 func rewriteAllowDictForSmallPayload(value []byte) bool {
 	if len(value) < page.PageSize {
@@ -1402,7 +1402,7 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 	)
 	if db.valueLogManager != nil {
 		if hintLane, hintSeq, ok := db.valueLogManager.RewriteLaneHint(); ok {
-			probePath := filepath.Join(db.dir, "wal", fmt.Sprintf("value-l%d-%06d.log", hintLane, hintSeq+1))
+			probePath := filepath.Join(resolveStorageLayout(db.dir).valueVLogDir, fmt.Sprintf("value-l%d-%06d.log", hintLane, hintSeq+1))
 			if _, statErr := os.Stat(probePath); statErr == nil {
 				needSegScan = true
 			} else if os.IsNotExist(statErr) {
@@ -1451,7 +1451,7 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 			maxBytes = packedMax
 		}
 	}
-	writer := newRewriteWriter(filepath.Join(db.dir, "wal"), lane, startSeq, maxBytes)
+	writer := newRewriteWriter(resolveStorageLayout(db.dir).valueVLogDir, lane, startSeq, maxBytes)
 	writer.blockCompression = db.valueLogCompression != ValueLogCompressionOff
 	writer.blockCodec = valuelogBlockCodecFromDB(db.valueLogBlockCodec)
 	defer func() { _ = writer.Close() }()
@@ -2749,7 +2749,7 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 		return stats, err
 	}
 
-	segments, err := listWALSegments(opts.Dir)
+	segments, err := listValueLogSegments(opts.Dir)
 	if err != nil {
 		return stats, err
 	}
@@ -2780,7 +2780,6 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 		return stats, fmt.Errorf("vlog-rewrite: no value-log segments found")
 	}
 
-	walDir := filepath.Join(opts.Dir, "wal")
 	beforeSegs, beforeBytes, err := valueLogSegmentStats(opts.Dir)
 	if err != nil {
 		_ = d.Close()
@@ -2808,7 +2807,7 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 			maxBytes = packedMax
 		}
 	}
-	writer := newRewriteWriter(walDir, lane, startSeq, maxBytes)
+	writer := newRewriteWriter(resolveStorageLayout(opts.Dir).valueVLogDir, lane, startSeq, maxBytes)
 	writer.nextRID = nextRID
 	// Offline rewrite prioritizes final bytes on disk over encode CPU, so keep
 	// compressed output whenever it reduces stored bytes.
@@ -4219,7 +4218,7 @@ func chooseRewriteLane(segments []logSegment) (uint32, uint32) {
 }
 
 func valueLogSegmentStats(dir string) (count int, bytes int64, err error) {
-	segments, err := listWALSegments(dir)
+	segments, err := listValueLogSegments(dir)
 	if err != nil {
 		return 0, 0, err
 	}

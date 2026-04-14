@@ -73,12 +73,12 @@ func TestDefaultPermissions_AreNotWorldReadable(t *testing.T) {
 	checkDirPerms(filepath.Join(dir, "maindb", "wal"))
 	checkDirPerms(filepath.Join(dir, "maindb", "value_vlog"))
 	checkDirPerms(filepath.Join(dir, "maindb", "leaf_vlog"))
-	valueFiles, err := filepath.Glob(filepath.Join(dir, "maindb", "wal", "value-*.log"))
+	valueFiles, err := filepath.Glob(filepath.Join(dir, "maindb", "value_vlog", "value-*.log"))
 	if err != nil {
-		t.Fatalf("Glob wal value logs: %v", err)
+		t.Fatalf("Glob value_vlog value logs: %v", err)
 	}
 	if len(valueFiles) == 0 {
-		t.Fatalf("expected value-log segment in wal dir")
+		t.Fatalf("expected value-log segment in value_vlog dir")
 	}
 	for _, path := range valueFiles {
 		checkFilePerms(path)

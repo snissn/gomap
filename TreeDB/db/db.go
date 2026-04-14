@@ -893,6 +893,9 @@ func Open(opts Options) (*DB, error) {
 		return nil, err
 	}
 	warnInsecureDir(opts.Dir, opts.NotifyError)
+	if err := ensureNoLegacyMixedWALValueSegments(opts.Dir); err != nil {
+		return nil, err
+	}
 
 	if opts.ReadOnly {
 		return openReadOnly(opts)
@@ -1044,8 +1047,8 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	}
 	p.SetVerifyOnRead(opts.VerifyOnRead)
 
-	valueLogDir := filepath.Join(opts.Dir, "wal")
-	vm, err := valuelog.NewManager(valueLogDir)
+	layout := resolveStorageLayout(opts.Dir)
+	vm, err := valuelog.NewManager(layout.valueVLogDir)
 	if err != nil {
 		p.Close()
 		return nil, err
@@ -1120,7 +1123,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	}
 
 	if opts.Durability != DurabilityWALOffRelaxed {
-		segments, err := listWALSegments(opts.Dir)
+		segments, err := listRecoverySegments(opts.Dir)
 		if err != nil {
 			db.Close()
 			return nil, err

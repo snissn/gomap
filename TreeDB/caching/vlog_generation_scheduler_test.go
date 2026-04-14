@@ -7548,7 +7548,7 @@ func TestVlogGenerationRewritePlan_RunsOutsideMaintenanceBarrier(t *testing.T) {
 	if err := db.Checkpoint(); err != nil {
 		t.Fatalf("checkpoint: %v", err)
 	}
-	paths, err := filepath.Glob(filepath.Join(dir, "wal", "value-l*.log"))
+	paths, err := filepath.Glob(filepath.Join(dir, "value_vlog", "value-l*.log"))
 	if err != nil {
 		t.Fatalf("glob wal files: %v", err)
 	}

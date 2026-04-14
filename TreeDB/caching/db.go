@@ -3963,7 +3963,7 @@ func (db *DB) cleanupOrphanedRetainedValueLog(path string) bool {
 	db.untrackValueLogSegmentLocked(path)
 	db.mu.Unlock()
 	db.forgetValueLogRetain(path)
-	db.syncDirBestEffort(db.dir)
+	db.syncDirBestEffort(db.valueLogDir)
 	return true
 }
 
@@ -4923,7 +4923,7 @@ func (db *DB) pruneRetainedValueLogsWithObserved(force bool, observedSourceIDs m
 		}
 	}
 	if removed {
-		db.syncDirBestEffort(db.dir)
+		db.syncDirBestEffort(db.valueLogDir)
 	}
 	return out
 }
@@ -6123,6 +6123,7 @@ type DB struct {
 
 	// Config
 	dir                                               string
+	valueLogDir                                       string
 	flushThreshold                                    int64
 	memtableCap                                       int
 	memtableMode                                      atomic.Uint32
@@ -8123,13 +8124,18 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		return nil, err
 	}
 
-	// Ensure wal dir exists
+	// Ensure split log dirs exist.
 	walDir := filepath.Join(dir, "wal")
-	if err := os.MkdirAll(walDir, 0700); err != nil {
-		return nil, err
+	valueLogDir := filepath.Join(dir, "value_vlog")
+	leafLogDir := filepath.Join(dir, "leaf_vlog")
+	for _, path := range []string{walDir, valueLogDir, leafLogDir} {
+		if err := os.MkdirAll(path, 0o700); err != nil {
+			return nil, err
+		}
 	}
 	warnInsecureDir(walDir, opts.NotifyError)
-	segments, _ := listNonEmptyLogSegments(walDir)
+	warnInsecureDir(valueLogDir, opts.NotifyError)
+	segments, _ := listNonEmptySplitLogSegments(walDir, valueLogDir)
 	// Cached value-log RIDs remain globally unique across reopen/rewrite cycles.
 	// Until we persist nextRID separately, opening must recover the max on-disk
 	// RID here rather than risk reusing low RIDs after a clean reopen.
@@ -8293,7 +8299,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		}
 		mutableShards[i] = memShard{mem: mt}
 	}
-	reader, err := valuelog.NewManager(walDir)
+	reader, err := valuelog.NewManager(valueLogDir)
 	if err != nil {
 		return nil, err
 	}
@@ -8494,6 +8500,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	}
 	db := &DB{
 		dir:                                  walDir,
+		valueLogDir:                          valueLogDir,
 		backend:                              backend,
 		flushThreshold:                       opts.FlushThreshold,
 		memtableCap:                          memCap,
@@ -20030,7 +20037,7 @@ func (db *DB) rotateValueLogMuHeld(l *lane) error {
 		hadClosedPrev bool
 	)
 	name := valueLogName(l.id, nextSeq)
-	path := filepath.Join(db.dir, name)
+	path := filepath.Join(db.valueLogDir, name)
 	fileID, err := valuelog.EncodeFileID(uint32(l.id), uint32(nextSeq))
 	if err != nil {
 		return err
@@ -26820,6 +26827,38 @@ func listNonEmptyLogSegments(walDir string) (segments []logSegmentInfo, nonEmpty
 			nonEmptyBytes += info.Size()
 		}
 	}
+	return segments, nonEmptyBytes
+}
+
+func listNonEmptySplitLogSegments(walDir, valueLogDir string) (segments []logSegmentInfo, nonEmptyBytes int64) {
+	walSegments, walBytes := listNonEmptyLogSegments(walDir)
+	for _, seg := range walSegments {
+		if seg.valueLog {
+			continue
+		}
+		segments = append(segments, seg)
+	}
+	nonEmptyBytes += walBytes
+	vlogSegments, vlogBytes := listNonEmptyLogSegments(valueLogDir)
+	for _, seg := range vlogSegments {
+		if !seg.valueLog {
+			continue
+		}
+		segments = append(segments, seg)
+	}
+	nonEmptyBytes += vlogBytes
+	sort.Slice(segments, func(i, j int) bool {
+		if segments[i].lane != segments[j].lane {
+			return segments[i].lane < segments[j].lane
+		}
+		if segments[i].seq != segments[j].seq {
+			return segments[i].seq < segments[j].seq
+		}
+		if segments[i].valueLog != segments[j].valueLog {
+			return !segments[i].valueLog && segments[j].valueLog
+		}
+		return segments[i].path < segments[j].path
+	})
 	return segments, nonEmptyBytes
 }
 

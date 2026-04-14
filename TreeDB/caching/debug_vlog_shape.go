@@ -127,7 +127,7 @@ func (db *DB) emitVlogShapeLog() {
 		diskErr       error
 	)
 	if debugVlogShapeDisk.Load() && db.dir != "" {
-		diskL0Segs, diskL0Bytes, diskL255Segs, diskL255Bytes, diskSegsTotal, diskBytes, diskErr = scanVlogSegmentsOnDisk(db.dir)
+		diskL0Segs, diskL0Bytes, diskL255Segs, diskL255Bytes, diskSegsTotal, diskBytes, diskErr = scanVlogSegmentsOnDisk(db.valueLogDir)
 	}
 
 	ts := time.Now().UTC().Format(time.RFC3339Nano)

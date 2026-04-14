@@ -98,9 +98,9 @@ func TestVlogGenerationRewrite_ProtectedPathsIncludeCurrentValueLogPaths(t *test
 	if err := db.Checkpoint(); err != nil {
 		t.Fatalf("checkpoint: %v", err)
 	}
-	paths, err := filepath.Glob(filepath.Join(dir, "wal", "value-l*.log"))
+	paths, err := filepath.Glob(filepath.Join(dir, "value_vlog", "value-l*.log"))
 	if err != nil {
-		t.Fatalf("glob wal files: %v", err)
+		t.Fatalf("glob value_vlog files: %v", err)
 	}
 	old := time.Now().Add(-5 * time.Minute)
 	for _, path := range paths {
@@ -177,9 +177,9 @@ func TestValueLogProtectedPaths_IncludeRetainedPaths(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = db.Close() })
 
-	retainedPath := filepath.Join(dir, "wal", "value-l0-000999.log")
+	retainedPath := filepath.Join(dir, "value_vlog", "value-l0-000999.log")
 	if err := os.MkdirAll(filepath.Dir(retainedPath), 0o755); err != nil {
-		t.Fatalf("mkdir wal dir: %v", err)
+		t.Fatalf("mkdir value_vlog dir: %v", err)
 	}
 	if err := os.WriteFile(retainedPath, []byte("retained"), 0o644); err != nil {
 		t.Fatalf("write retained path: %v", err)
@@ -248,9 +248,9 @@ func TestVlogGenerationRewrite_UsesSharedRIDAllocator(t *testing.T) {
 	if err := db.Checkpoint(); err != nil {
 		t.Fatalf("checkpoint: %v", err)
 	}
-	paths, err := filepath.Glob(filepath.Join(dir, "wal", "value-l*.log"))
+	paths, err := filepath.Glob(filepath.Join(dir, "value_vlog", "value-l*.log"))
 	if err != nil {
-		t.Fatalf("glob wal files: %v", err)
+		t.Fatalf("glob value_vlog files: %v", err)
 	}
 	old := time.Now().Add(-5 * time.Minute)
 	for _, path := range paths {

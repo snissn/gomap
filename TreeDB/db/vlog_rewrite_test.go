@@ -206,7 +206,7 @@ func TestValueLogRewriteOffline_RewritesAndShrinks(t *testing.T) {
 		t.Fatalf("open: %v", err)
 	}
 
-	walDir := filepath.Join(dir, "wal")
+	walDir := filepath.Join(dir, "value_vlog")
 	if err := os.MkdirAll(walDir, 0o755); err != nil {
 		t.Fatalf("mkdir wal: %v", err)
 	}
@@ -711,7 +711,7 @@ func TestValueLogRewriteOnline_NoPointerKeys_DoesNotCreateNewSegment(t *testing.
 		t.Fatalf("delete pointer key: %v", err)
 	}
 
-	segmentsBefore, err := listWALSegments(dir)
+	segmentsBefore, err := listValueLogSegments(dir)
 	if err != nil {
 		t.Fatalf("list segments before rewrite: %v", err)
 	}
@@ -733,7 +733,7 @@ func TestValueLogRewriteOnline_NoPointerKeys_DoesNotCreateNewSegment(t *testing.
 		t.Fatalf("expected no copied records, got %+v", stats)
 	}
 
-	segmentsAfter, err := listWALSegments(dir)
+	segmentsAfter, err := listValueLogSegments(dir)
 	if err != nil {
 		t.Fatalf("list segments after rewrite: %v", err)
 	}
@@ -786,7 +786,7 @@ func TestValueLogRewriteOnline_ProtectedPathsDoNotKeepHistoricalRewriteLanes(t *
 	closeNoErr(t, b)
 
 	protected := []string{
-		filepath.Join(dir, "wal", "value-l0-000002.log"),
+		filepath.Join(dir, "value_vlog", "value-l0-000002.log"),
 	}
 	stats, err := db.ValueLogRewriteOnline(context.Background(), ValueLogRewriteOnlineOptions{
 		ProtectedPaths: protected,
@@ -799,8 +799,8 @@ func TestValueLogRewriteOnline_ProtectedPathsDoNotKeepHistoricalRewriteLanes(t *
 	}
 
 	for _, path := range []string{
-		filepath.Join(dir, "wal", "value-l250-000001.log"),
-		filepath.Join(dir, "wal", "value-l250-000002.log"),
+		filepath.Join(dir, "value_vlog", "value-l250-000001.log"),
+		filepath.Join(dir, "value_vlog", "value-l250-000002.log"),
 	} {
 		if _, err := os.Stat(path); !os.IsNotExist(err) {
 			t.Fatalf("expected %s to be deleted after rewrite cleanup, err=%v", filepath.Base(path), err)
@@ -852,7 +852,7 @@ func TestValueLogRewriteOnline_UsesBlockCompressionWhenEnabled(t *testing.T) {
 	}
 	closeNoErr(t, b)
 
-	segmentsBefore, err := listWALSegments(dir)
+	segmentsBefore, err := listValueLogSegments(dir)
 	if err != nil {
 		t.Fatalf("list segments before rewrite: %v", err)
 	}
@@ -872,7 +872,7 @@ func TestValueLogRewriteOnline_UsesBlockCompressionWhenEnabled(t *testing.T) {
 		t.Fatalf("expected copied records, got %+v", stats)
 	}
 
-	segmentsAfter, err := listWALSegments(dir)
+	segmentsAfter, err := listValueLogSegments(dir)
 	if err != nil {
 		t.Fatalf("list segments after rewrite: %v", err)
 	}
@@ -962,7 +962,7 @@ func TestValueLogRewriteOffline_ReencodesSingleUncompressedFramesWhenCompression
 	}
 	closeNoErr(t, b)
 
-	segmentsBefore, err := listWALSegments(dir)
+	segmentsBefore, err := listValueLogSegments(dir)
 	if err != nil {
 		t.Fatalf("list segments before rewrite: %v", err)
 	}
@@ -982,7 +982,7 @@ func TestValueLogRewriteOffline_ReencodesSingleUncompressedFramesWhenCompression
 		t.Fatalf("expected copied records, got %+v", stats)
 	}
 
-	segmentsAfter, err := listWALSegments(dir)
+	segmentsAfter, err := listValueLogSegments(dir)
 	if err != nil {
 		t.Fatalf("list segments after rewrite: %v", err)
 	}
@@ -1078,7 +1078,7 @@ func TestValueLogRewriteOffline_ReencodesLargeBlockFramesWithObservedDict(t *tes
 		t.Fatalf("open: %v", err)
 	}
 
-	walDir := filepath.Join(dir, "wal")
+	walDir := filepath.Join(dir, "value_vlog")
 	if err := os.MkdirAll(walDir, 0o755); err != nil {
 		t.Fatalf("mkdir wal: %v", err)
 	}
@@ -1135,7 +1135,7 @@ func TestValueLogRewriteOffline_ReencodesLargeBlockFramesWithObservedDict(t *tes
 	dictFrames := 0
 	blockFrames := 0
 	maxDictK := 0
-	segments, err := listWALSegments(dir)
+	segments, err := listValueLogSegments(dir)
 	if err != nil {
 		t.Fatalf("list segments: %v", err)
 	}
@@ -1260,7 +1260,7 @@ func TestValueLogRewriteOffline_ReencodesGroupedBlockFramesWithObservedDict(t *t
 		t.Fatalf("open: %v", err)
 	}
 
-	walDir := filepath.Join(dir, "wal")
+	walDir := filepath.Join(dir, "value_vlog")
 	if err := os.MkdirAll(walDir, 0o755); err != nil {
 		t.Fatalf("mkdir wal: %v", err)
 	}
@@ -1327,7 +1327,7 @@ func TestValueLogRewriteOffline_ReencodesGroupedBlockFramesWithObservedDict(t *t
 	dictFrames := 0
 	blockFrames := 0
 	maxDictK := 0
-	segments, err := listWALSegments(dir)
+	segments, err := listValueLogSegments(dir)
 	if err != nil {
 		t.Fatalf("list segments: %v", err)
 	}
@@ -1671,7 +1671,7 @@ func TestValueLogRewriteOffline_ReencodesGroupedBlockOuterLeafPagesWithObservedD
 		t.Fatalf("open: %v", err)
 	}
 
-	walDir := filepath.Join(dir, "wal")
+	walDir := filepath.Join(dir, "value_vlog")
 	if err := os.MkdirAll(walDir, 0o755); err != nil {
 		t.Fatalf("mkdir wal: %v", err)
 	}
@@ -1735,7 +1735,7 @@ func TestValueLogRewriteOffline_ReencodesGroupedBlockOuterLeafPagesWithObservedD
 	dictFrames := 0
 	blockFrames := 0
 	maxDictK := 0
-	segments, err := listWALSegments(dir)
+	segments, err := listValueLogSegments(dir)
 	if err != nil {
 		t.Fatalf("list segments: %v", err)
 	}
@@ -2757,7 +2757,7 @@ func TestValueLogRewriteOnline_ReserveRIDsUsesExternalAllocator(t *testing.T) {
 	}
 	closeNoErr(t, b)
 
-	segmentsBefore, err := listWALSegments(dir)
+	segmentsBefore, err := listValueLogSegments(dir)
 	if err != nil {
 		t.Fatalf("listWALSegments before: %v", err)
 	}
@@ -2812,7 +2812,7 @@ func TestValueLogRewriteOnline_ReserveRIDsUsesExternalAllocator(t *testing.T) {
 		t.Fatalf("expected ReserveRIDs mode to skip wal segment scan, calls=%d", walScanCalls)
 	}
 
-	segmentsAfter, err := listWALSegments(dir)
+	segmentsAfter, err := listValueLogSegments(dir)
 	if err != nil {
 		t.Fatalf("listWALSegments after: %v", err)
 	}
@@ -2896,14 +2896,14 @@ func TestValueLogRewriteOnline_WithoutReserveRIDs_UsesRIDStartScanner(t *testing
 	walScanCalls := 0
 	rewriteWALSegmentsLister = func(dir string) ([]logSegment, error) {
 		walScanCalls++
-		return listWALSegments(dir)
+		return listValueLogSegments(dir)
 	}
 	t.Cleanup(func() { rewriteWALSegmentsLister = origWALLister })
 	lane, seq, ok := db.valueLogManager.RewriteLaneHint()
 	if !ok {
 		t.Fatalf("RewriteLaneHint: ok=false")
 	}
-	probePath := filepath.Join(dir, "wal", fmt.Sprintf("value-l%d-%06d.log", lane, seq+1))
+	probePath := filepath.Join(dir, "value_vlog", fmt.Sprintf("value-l%d-%06d.log", lane, seq+1))
 	if err := os.WriteFile(probePath, nil, 0o644); err != nil {
 		t.Fatalf("write probe file: %v", err)
 	}

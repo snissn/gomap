@@ -361,11 +361,11 @@ func (s *Store) ensureValueLogWriterLocked() (*valuelog.Writer, error) {
 	if s.dir == "" {
 		return nil, fmt.Errorf("dictdb: missing backend dir")
 	}
-	walDir := filepath.Join(s.dir, "wal")
-	if err := os.MkdirAll(walDir, 0700); err != nil {
+	valueLogDir := db.ValueLogDirPath(s.dir)
+	if err := os.MkdirAll(valueLogDir, 0700); err != nil {
 		return nil, err
 	}
-	seq, err := nextValueLogSeq(walDir, 0)
+	seq, err := nextValueLogSeq(valueLogDir, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -373,7 +373,7 @@ func (s *Store) ensureValueLogWriterLocked() (*valuelog.Writer, error) {
 	if err != nil {
 		return nil, err
 	}
-	path := filepath.Join(walDir, fmt.Sprintf("value-l%d-%06d.log", 0, seq))
+	path := filepath.Join(valueLogDir, fmt.Sprintf("value-l%d-%06d.log", 0, seq))
 	writer, err := valuelog.NewWriter(path, fileID)
 	if err != nil {
 		return nil, err

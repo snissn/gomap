@@ -13,6 +13,9 @@ import (
 )
 
 func openReadOnly(opts Options) (*DB, error) {
+	if err := ensureNoLegacyMixedWALValueSegments(opts.Dir); err != nil {
+		return nil, err
+	}
 	var lock *lockfile.Lock
 	lockPath := filepath.Join(opts.Dir, "LOCK")
 	if l, err := lockfile.AcquireShared(lockPath); err == nil {
@@ -37,8 +40,8 @@ func openReadOnly(opts Options) (*DB, error) {
 	}
 	p.SetVerifyOnRead(opts.VerifyOnRead)
 
-	valueLogDir := filepath.Join(opts.Dir, "wal")
-	vm, err := valuelog.NewManager(valueLogDir)
+	layout := resolveStorageLayout(opts.Dir)
+	vm, err := valuelog.NewManager(layout.valueVLogDir)
 	if err != nil {
 		_ = p.Close()
 		_ = lock.Close()
@@ -115,6 +118,9 @@ func openReadOnly(opts Options) (*DB, error) {
 }
 
 func openReadOnlyNoLock(opts Options) (*DB, error) {
+	if err := ensureNoLegacyMixedWALValueSegments(opts.Dir); err != nil {
+		return nil, err
+	}
 	idxPath := filepath.Join(opts.Dir, indexFileName)
 	if _, err := os.Stat(idxPath); err != nil {
 		return nil, err
@@ -129,8 +135,8 @@ func openReadOnlyNoLock(opts Options) (*DB, error) {
 	}
 	p.SetVerifyOnRead(opts.VerifyOnRead)
 
-	valueLogDir := filepath.Join(opts.Dir, "wal")
-	vm, err := valuelog.NewManager(valueLogDir)
+	layout := resolveStorageLayout(opts.Dir)
+	vm, err := valuelog.NewManager(layout.valueVLogDir)
 	if err != nil {
 		_ = p.Close()
 		return nil, err

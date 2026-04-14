@@ -25,9 +25,8 @@ type logSegment struct {
 	fileID   uint32
 }
 
-func listWALSegments(dir string) ([]logSegment, error) {
-	walDir := filepath.Join(dir, "wal")
-	entries, err := os.ReadDir(walDir)
+func listSegmentsInDir(segDir string) ([]logSegment, error) {
+	entries, err := os.ReadDir(segDir)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
@@ -49,7 +48,7 @@ func listWALSegments(dir string) ([]logSegment, error) {
 		seg := logSegment{
 			seq:      seq,
 			lane:     lane,
-			path:     filepath.Join(walDir, name),
+			path:     filepath.Join(segDir, name),
 			valueLog: valueLog,
 		}
 		if info, err := entry.Info(); err == nil {
@@ -73,6 +72,50 @@ func listWALSegments(dir string) ([]logSegment, error) {
 			return segments[i].lane < segments[j].lane
 		}
 		return segments[i].seq < segments[j].seq
+	})
+	return segments, nil
+}
+
+func listWALSegments(dir string) ([]logSegment, error) {
+	return listSegmentsInDir(resolveStorageLayout(dir).walDir)
+}
+
+func listValueLogSegments(dir string) ([]logSegment, error) {
+	segments, err := listSegmentsInDir(resolveStorageLayout(dir).valueVLogDir)
+	if err != nil {
+		return nil, err
+	}
+	out := segments[:0]
+	for _, seg := range segments {
+		if !seg.valueLog {
+			continue
+		}
+		out = append(out, seg)
+	}
+	return out, nil
+}
+
+func listRecoverySegments(dir string) ([]logSegment, error) {
+	walSegments, err := listWALSegments(dir)
+	if err != nil {
+		return nil, err
+	}
+	vlogSegments, err := listValueLogSegments(dir)
+	if err != nil {
+		return nil, err
+	}
+	segments := append(walSegments, vlogSegments...)
+	sort.Slice(segments, func(i, j int) bool {
+		if segments[i].lane != segments[j].lane {
+			return segments[i].lane < segments[j].lane
+		}
+		if segments[i].seq != segments[j].seq {
+			return segments[i].seq < segments[j].seq
+		}
+		if segments[i].valueLog != segments[j].valueLog {
+			return !segments[i].valueLog && segments[j].valueLog
+		}
+		return segments[i].path < segments[j].path
 	})
 	return segments, nil
 }
@@ -374,7 +417,7 @@ func newReplayInlineAppender(db *DB, segments []logSegment, ridMap map[uint64]pa
 		// segments within the same cap used by the write path.
 		maxSegmentBytes = int64(^uint32(0)) - 4
 	}
-	writer := newRewriteWriter(filepath.Join(db.dir, "wal"), 0, maxLane0Seq, maxSegmentBytes)
+	writer := newRewriteWriter(resolveStorageLayout(db.dir).valueVLogDir, 0, maxLane0Seq, maxSegmentBytes)
 	writer.blockCompression = db.valueLogCompression != ValueLogCompressionOff
 	writer.blockCodec = valuelogBlockCodecFromDB(db.valueLogBlockCodec)
 	return &replayInlineAppender{
