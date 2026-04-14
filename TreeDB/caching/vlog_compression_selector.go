@@ -62,6 +62,12 @@ const (
 	// block codec defaults for large no-dict payload streams.
 	largePayloadBlockCodecMinSamples = 4
 	largePayloadBlockCodecTieMargin  = 0.01
+	// Large value-log payloads need a materially larger grouped-frame target than
+	// the generic 4 KiB block target. Otherwise K collapses to 1 on 40+ KiB
+	// records before the selector has any chance to observe cross-record wins.
+	largePayloadBlockTargetMinPayloadBytes = 16 << 10
+	largePayloadBlockTargetMultiplier      = 8
+	largePayloadBlockBootstrapRatio        = 0.92
 )
 
 var (
@@ -1587,6 +1593,7 @@ func (db *DB) chooseValueLogBlockWriteK(l *lane, records, rawPayloadBytes int, c
 	}
 	avgPayloadBytes := rawPayloadBytes / records
 	ratio := 1.0
+	ratioSamples := uint64(0)
 	// K sizing should stay on the lane-observed block ratio in explicit dict
 	// mode. The selector remains responsible for dict-vs-block mode choice, but
 	// feeding selector candidate ratios back into frame grouping in dict mode can
@@ -1599,12 +1606,21 @@ func (db *DB) chooseValueLogBlockWriteK(l *lane, records, rawPayloadBytes int, c
 		ratio = l.vlogCompressionSelector.blockObservedRatio(codec)
 	}
 	if ratio <= 0 || stableFastPath || !useSelectorRatio {
-		ratio = laneVlogBlockObservedRatio(l, codec)
+		ratio, ratioSamples = laneVlogBlockObservedRatioWithSamples(l, codec)
+	}
+	if avgPayloadBytes >= largePayloadBlockTargetMinPayloadBytes && ratioSamples == 0 && ratio >= 0.98 {
+		ratio = largePayloadBlockBootstrapRatio
 	}
 	targetCompressedBytes := db.valueLogBlockTargetBytes
 	if db.forceValueLogPointers && targetCompressedBytes < forcePointerBlockTargetCompressedBytes {
 		if avgPayloadBytes >= forcePointerAutoBlockMinPayloadBytes {
 			targetCompressedBytes = forcePointerBlockTargetCompressedBytes
+		}
+	}
+	if avgPayloadBytes >= largePayloadBlockTargetMinPayloadBytes {
+		largePayloadTargetBytes := valuelog.NormalizeBlockTargetCompressedBytes(avgPayloadBytes * largePayloadBlockTargetMultiplier)
+		if targetCompressedBytes < largePayloadTargetBytes {
+			targetCompressedBytes = largePayloadTargetBytes
 		}
 	}
 	k := valuelog.ChooseBlockGroupK(records, rawPayloadBytes, targetCompressedBytes, ratio)
