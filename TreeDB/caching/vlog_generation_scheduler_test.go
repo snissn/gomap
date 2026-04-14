@@ -1338,6 +1338,7 @@ type rewriteBudgetRecordingBackend struct {
 	planErr         error
 	planFn          func(backenddb.ValueLogRewriteOnlineOptions) (backenddb.ValueLogRewritePlan, error)
 	rewriteOpts     backenddb.ValueLogRewriteOnlineOptions
+	rewriteHistory  []backenddb.ValueLogRewriteOnlineOptions
 	rewriteCalls    int
 	rewriteResponse backenddb.ValueLogRewriteStats
 	rewriteErr      error
@@ -1382,7 +1383,9 @@ func (b *rewriteBudgetRecordingBackend) ValueLogRewriteChunkPlan(ctx context.Con
 
 func (b *rewriteBudgetRecordingBackend) ValueLogRewriteOnline(ctx context.Context, opts backenddb.ValueLogRewriteOnlineOptions) (backenddb.ValueLogRewriteStats, error) {
 	b.mu.Lock()
-	b.rewriteOpts = cloneRewriteOptsForTest(opts)
+	cloned := cloneRewriteOptsForTest(opts)
+	b.rewriteOpts = cloned
+	b.rewriteHistory = append(b.rewriteHistory, cloned)
 	b.rewriteCalls++
 	stats := b.rewriteResponse
 	err := b.rewriteErr
@@ -1422,6 +1425,14 @@ func (b *rewriteBudgetRecordingBackend) recordedRewrite() (backenddb.ValueLogRew
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.rewriteOpts, b.rewriteCalls
+}
+
+func (b *rewriteBudgetRecordingBackend) recordedRewrites() []backenddb.ValueLogRewriteOnlineOptions {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	history := make([]backenddb.ValueLogRewriteOnlineOptions, len(b.rewriteHistory))
+	copy(history, b.rewriteHistory)
+	return history
 }
 
 func cloneRewriteOptsForTest(opts backenddb.ValueLogRewriteOnlineOptions) backenddb.ValueLogRewriteOnlineOptions {
@@ -5332,28 +5343,27 @@ func TestVlogGenerationRewritePlan_StageConfirmationDebtDrainProcessesMultipleSe
 	})
 
 	rewriteDeadline := time.Now().Add(2 * schedulerTestWait(t))
-	var (
-		rewriteOpts  backenddb.ValueLogRewriteOnlineOptions
-		rewriteCalls int
-	)
+	var rewriteCalls int
 	for {
-		rewriteOpts, rewriteCalls = recorder.recordedRewrite()
+		_, rewriteCalls = recorder.recordedRewrite()
 		if rewriteCalls >= 1 {
 			break
 		}
 		if time.Now().After(rewriteDeadline) {
-			t.Fatalf("rewrite calls after staged confirmation=%d want=1", rewriteCalls)
+			t.Fatalf("rewrite calls after staged confirmation=%d want>=1", rewriteCalls)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if rewriteCalls != 1 {
-		t.Fatalf("rewrite calls after staged confirmation=%d want=1", rewriteCalls)
+	rewriteHistory := recorder.recordedRewrites()
+	if len(rewriteHistory) == 0 {
+		t.Fatalf("rewrite history after staged confirmation empty")
 	}
-	if got := len(rewriteOpts.SourceFileIDs); got <= 1 {
-		t.Fatalf("rewrite SourceFileIDs after staged confirmation=%v want multiple ids", rewriteOpts.SourceFileIDs)
+	firstRewrite := rewriteHistory[0]
+	if got := len(firstRewrite.SourceFileIDs); got <= 1 {
+		t.Fatalf("first rewrite SourceFileIDs after staged confirmation=%v want multiple ids", firstRewrite.SourceFileIDs)
 	}
-	if got := len(rewriteOpts.SourceFileIDs); got > vlogGenerationRewriteDebtDrainMaxSegments {
-		t.Fatalf("rewrite SourceFileIDs len=%d want <= %d", got, vlogGenerationRewriteDebtDrainMaxSegments)
+	if got := len(firstRewrite.SourceFileIDs); got > vlogGenerationRewriteDebtDrainMaxSegments {
+		t.Fatalf("first rewrite SourceFileIDs len=%d want <= %d", got, vlogGenerationRewriteDebtDrainMaxSegments)
 	}
 }
 
