@@ -12,12 +12,14 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/snissn/compress/zstd"
 	batchpkg "github.com/snissn/gomap/TreeDB/batch"
+	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -310,6 +312,80 @@ func TestValueLogRewriteOffline_RewritesAndShrinks(t *testing.T) {
 	}
 	if !bytes.Equal(val, bytes.Repeat([]byte{0x03}, 128)) {
 		t.Fatalf("k2 mismatch")
+	}
+}
+
+func TestValueLogRewriteOffline_RejectsPendingCommitLog(t *testing.T) {
+	dir := t.TempDir()
+
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	valueLogDir := ValueLogDirPath(dir)
+	if err := os.MkdirAll(valueLogDir, 0o755); err != nil {
+		t.Fatalf("mkdir value_vlog: %v", err)
+	}
+	path1 := filepath.Join(valueLogDir, "value-l0-000001.log")
+	id1, err := valuelog.EncodeFileID(0, 1)
+	if err != nil {
+		t.Fatalf("fileid1: %v", err)
+	}
+	w1, err := valuelog.NewWriter(path1, id1)
+	if err != nil {
+		t.Fatalf("writer1: %v", err)
+	}
+	ptr, err := w1.Append(0, nil, 1, bytes.Repeat([]byte{0x01}, 128))
+	if err != nil {
+		t.Fatalf("append1: %v", err)
+	}
+	if err := w1.Close(); err != nil {
+		t.Fatalf("close1: %v", err)
+	}
+
+	b := db.NewBatch()
+	ptrBatch, ok := b.(interface {
+		SetPointer(key []byte, ptr page.ValuePtr) error
+	})
+	if !ok {
+		t.Fatalf("missing SetPointer on batch")
+	}
+	if err := ptrBatch.SetPointer([]byte("k"), ptr); err != nil {
+		t.Fatalf("set pointer: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	closeNoErr(t, b)
+	if err := db.Close(); err != nil {
+		t.Fatalf("close db: %v", err)
+	}
+
+	commitPath := filepath.Join(WALDirPath(dir), "commit-l0-999999.log")
+	ww, err := commitlog.NewWriter(commitPath)
+	if err != nil {
+		t.Fatalf("commitlog.NewWriter: %v", err)
+	}
+	if err := ww.AppendBatch([]commitlog.Record{{
+		Op:    commitlog.OpSetInline,
+		Key:   []byte("pending"),
+		Value: []byte("v"),
+		Seq:   1,
+	}}); err != nil {
+		_ = ww.Close()
+		t.Fatalf("commitlog.AppendBatch: %v", err)
+	}
+	if err := ww.Close(); err != nil {
+		t.Fatalf("commitlog.Close: %v", err)
+	}
+
+	_, err = ValueLogRewriteOffline(Options{Dir: dir})
+	if err == nil {
+		t.Fatalf("expected clean commitlog error")
+	}
+	if got := err.Error(); !strings.Contains(got, "vlog-rewrite requires a clean commitlog") || !strings.Contains(got, filepath.Base(commitPath)) {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

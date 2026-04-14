@@ -2749,15 +2749,23 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 		return stats, err
 	}
 
+	walSegments, err := listWALSegments(opts.Dir)
+	if err != nil {
+		return stats, err
+	}
+	for _, seg := range walSegments {
+		if seg.valueLog {
+			continue
+		}
+		return stats, fmt.Errorf("vlog-rewrite requires a clean commitlog; found %s", filepath.Base(seg.path))
+	}
+
 	segments, err := listValueLogSegments(opts.Dir)
 	if err != nil {
 		return stats, err
 	}
-	oldValueIDs := make(map[uint32]struct{})
+	oldValueIDs := make(map[uint32]struct{}, len(segments))
 	for _, seg := range segments {
-		if !seg.valueLog {
-			return stats, fmt.Errorf("vlog-rewrite requires a clean commitlog; found %s", filepath.Base(seg.path))
-		}
 		oldValueIDs[seg.fileID] = struct{}{}
 	}
 
