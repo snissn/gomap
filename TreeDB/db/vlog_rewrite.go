@@ -3805,15 +3805,14 @@ func (w *rewriteWriter) Close() error {
 	if err := w.flushPendingDictBatch(); err != nil {
 		return err
 	}
+	var err error
 	if w.w != nil {
-		if err := w.w.Close(); err != nil {
-			return err
-		}
+		err = errors.Join(err, w.w.Close())
 	}
 	if w.leafW != nil {
-		return w.leafW.Close()
+		err = errors.Join(err, w.leafW.Close())
 	}
-	return nil
+	return err
 }
 
 func (w *rewriteWriter) createdFileIDs() ([]uint32, error) {

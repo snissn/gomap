@@ -8263,6 +8263,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		return nil, err
 	}
 	segments, _ := listNonEmptySplitLogSegments(walDir, valueLogDir, leafLogDir)
+	reserveLeafLogLane := opts.IndexOuterLeavesInValueLog
 	// Cached value-log RIDs remain globally unique across reopen/rewrite cycles.
 	// Until we persist nextRID separately, opening must recover the max on-disk
 	// RID here rather than risk reusing low RIDs after a clean reopen.
@@ -8276,7 +8277,10 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	maxVlogSeq := make(map[int]int)
 	for _, seg := range segments {
 		if seg.valueLog {
-			if seg.lane == leafLogLaneID {
+			if reserveLeafLogLane && seg.lane == leafLogLaneID {
+				if filepath.Clean(filepath.Dir(seg.path)) != filepath.Clean(leafLogDir) {
+					return nil, fmt.Errorf("cachingdb: value_vlog lane %d conflicts with reserved leaf_vlog lane; rebuild required", leafLogLaneID)
+				}
 				if seg.seq > maxLeafVlogSeq {
 					maxLeafVlogSeq = seg.seq
 				}
@@ -8301,6 +8305,9 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	laneCountDefaulted := laneCount <= 0
 	if laneCountDefaulted {
 		laneCount = defaultJournalLaneCount(runtime.GOMAXPROCS(0))
+	}
+	if reserveLeafLogLane && laneCount > leafLogLaneID {
+		return nil, fmt.Errorf("cachingdb: IndexOuterLeavesInValueLog reserves lane %d; JournalLanes must be <= %d", leafLogLaneID, leafLogLaneID)
 	}
 	valueLogGenerationPolicy := backenddb.ValueLogGenerationPolicy(opts.ValueLogGenerationPolicy)
 	switch valueLogGenerationPolicy {
