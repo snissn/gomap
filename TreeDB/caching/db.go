@@ -8135,6 +8135,9 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	}
 	warnInsecureDir(walDir, opts.NotifyError)
 	warnInsecureDir(valueLogDir, opts.NotifyError)
+	if err := ensureNoLegacyMixedWALValueSegments(walDir); err != nil {
+		return nil, err
+	}
 	segments, _ := listNonEmptySplitLogSegments(walDir, valueLogDir)
 	// Cached value-log RIDs remain globally unique across reopen/rewrite cycles.
 	// Until we persist nextRID separately, opening must recover the max on-disk
@@ -26828,6 +26831,29 @@ func listNonEmptyLogSegments(walDir string) (segments []logSegmentInfo, nonEmpty
 		}
 	}
 	return segments, nonEmptyBytes
+}
+
+func ensureNoLegacyMixedWALValueSegments(walDir string) error {
+	entries, err := os.ReadDir(walDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		matched, err := filepath.Match("value-*.log", entry.Name())
+		if err != nil {
+			return err
+		}
+		if matched {
+			return fmt.Errorf("cachingdb: legacy value-log segments found in %s; rebuild required for split wal/value_vlog layout", walDir)
+		}
+	}
+	return nil
 }
 
 func listNonEmptySplitLogSegments(walDir, valueLogDir string) (segments []logSegmentInfo, nonEmptyBytes int64) {
