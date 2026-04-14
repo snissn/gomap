@@ -71,6 +71,8 @@ func TestDefaultPermissions_AreNotWorldReadable(t *testing.T) {
 	checkFilePerms(filepath.Join(dir, "maindb", "index.db"))
 	checkFilePerms(filepath.Join(dir, "maindb", "LOCK"))
 	checkDirPerms(filepath.Join(dir, "maindb", "wal"))
+	checkDirPerms(filepath.Join(dir, "maindb", "value_vlog"))
+	checkDirPerms(filepath.Join(dir, "maindb", "leaf_vlog"))
 	valueFiles, err := filepath.Glob(filepath.Join(dir, "maindb", "wal", "value-*.log"))
 	if err != nil {
 		t.Fatalf("Glob wal value logs: %v", err)

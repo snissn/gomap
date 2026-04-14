@@ -898,6 +898,10 @@ func Open(opts Options) (*DB, error) {
 		return openReadOnly(opts)
 	}
 
+	if err := ensureStorageLayoutDirs(opts.Dir); err != nil {
+		return nil, err
+	}
+
 	lock, err := lockfile.Acquire(filepath.Join(opts.Dir, "LOCK"))
 	if err != nil {
 		return nil, err
