@@ -2534,7 +2534,7 @@ func (db *DB) valueLogDirForLane(l *lane) string {
 	if db == nil {
 		return ""
 	}
-	if l != nil && l.id == leafLogLaneID && db.leafLogDir != "" {
+	if l != nil && db.indexOuterLeavesInValueLog && l == &db.leafLog && l.id == leafLogLaneID && db.leafLogDir != "" {
 		return db.leafLogDir
 	}
 	return db.valueLogDir
