@@ -1129,7 +1129,19 @@ func (m *Manager) Close() error {
 func (m *Manager) SegmentPath(id uint32) string {
 	seg := page.ValueLogSegmentID(id)
 	lane, seq := DecodeSegmentID(seg)
-	return filepath.Join(m.dir, fmt.Sprintf("value-l%d-%06d.log", lane, seq))
+	name := fmt.Sprintf("value-l%d-%06d.log", lane, seq)
+	if m == nil {
+		return name
+	}
+	m.mu.RLock()
+	if f := m.files[id]; f != nil && strings.TrimSpace(f.Path) != "" {
+		path := f.Path
+		m.mu.RUnlock()
+		return path
+	}
+	rootDir := m.dir
+	m.mu.RUnlock()
+	return filepath.Join(rootDir, name)
 }
 
 // HasSegment reports whether id is already registered and not marked zombie.
