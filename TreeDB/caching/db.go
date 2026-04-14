@@ -8330,6 +8330,9 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	if maxLaneID+1 > laneCount {
 		laneCount = maxLaneID + 1
 	}
+	if reserveLeafLogLane && laneCount > leafLogLaneID {
+		return nil, fmt.Errorf("cachingdb: IndexOuterLeavesInValueLog reserves lane %d; recovered WAL/value lanes require rebuild before reopen", leafLogLaneID)
+	}
 
 	inlineThreshold := page.DefaultInlineThreshold
 	if provider, ok := backend.(interface{ InlineThreshold() int }); ok {

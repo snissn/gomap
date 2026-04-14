@@ -3229,6 +3229,68 @@ func TestValueLogRewriteOnline_WithoutReserveRIDs_UsesSetRIDFastPathWhenLaneHint
 	}
 }
 
+func TestValueLogRewriteOnline_LeafLogReservedLaneHintFallsBackToScan(t *testing.T) {
+	dir := t.TempDir()
+
+	db, err := Open(Options{Dir: dir, IndexOuterLeavesInValueLog: true})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	leafLog := &registeredLeafPageLog{db: db, dir: dir}
+	db.SetLeafPageLog(leafLog)
+
+	ptrs := appendPointersInNewSegment(t, dir, 0, 1, 316_000, 1, func(i int) []byte {
+		return bytes.Repeat([]byte{byte(i + 1)}, 256)
+	})
+	b := db.NewBatch().(*Batch)
+	if err := b.SetPointer([]byte("k"), ptrs[0]); err != nil {
+		t.Fatalf("set pointer: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("seed write: %v", err)
+	}
+	closeNoErr(t, b)
+
+	lane, _, ok := db.valueLogManager.RewriteLaneHint()
+	if !ok {
+		t.Fatalf("RewriteLaneHint: ok=false")
+	}
+	if lane != rewriteLeafLogLaneID {
+		t.Fatalf("RewriteLaneHint lane=%d want reserved leaf lane %d", lane, rewriteLeafLogLaneID)
+	}
+
+	sentinel := errors.New("rid-start scan invoked")
+	origRIDStartScanner := rewriteRIDStartScanner
+	ridStartScanCalls := 0
+	rewriteRIDStartScanner = func([]logSegment) (uint64, error) {
+		ridStartScanCalls++
+		return 0, sentinel
+	}
+	t.Cleanup(func() { rewriteRIDStartScanner = origRIDStartScanner })
+	origWALLister := rewriteWALSegmentsLister
+	walScanCalls := 0
+	rewriteWALSegmentsLister = func(dir string) ([]logSegment, error) {
+		walScanCalls++
+		return listValueLogSegments(dir)
+	}
+	t.Cleanup(func() { rewriteWALSegmentsLister = origWALLister })
+
+	_, err = db.ValueLogRewriteOnline(context.Background(), ValueLogRewriteOnlineOptions{
+		SourceFileIDs: []uint32{ptrs[0].FileID},
+		BatchSize:     1,
+	})
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("expected rid-start scanner error %v, got %v", sentinel, err)
+	}
+	if ridStartScanCalls != 1 {
+		t.Fatalf("expected one rid-start scan call, got %d", ridStartScanCalls)
+	}
+	if walScanCalls != 1 {
+		t.Fatalf("expected one wal segment scan call, got %d", walScanCalls)
+	}
+}
+
 func TestValueLogRewriteOnline_LeafRefsReserveRIDs_DoesNotRefreshManager(t *testing.T) {
 	db, sourceIDs, cleanup := setupLeafRefRewriteBench(t, 768)
 	defer cleanup()

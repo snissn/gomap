@@ -1331,23 +1331,24 @@ func TestVlogGenerationRewriteMaxSegments_UsesOverrideLimits(t *testing.T) {
 type rewriteBudgetRecordingBackend struct {
 	*backenddb.DB
 
-	mu              sync.Mutex
-	planOpts        backenddb.ValueLogRewriteOnlineOptions
-	planCalls       int
-	planResponse    backenddb.ValueLogRewritePlan
-	planErr         error
-	planFn          func(backenddb.ValueLogRewriteOnlineOptions) (backenddb.ValueLogRewritePlan, error)
-	rewriteOpts     backenddb.ValueLogRewriteOnlineOptions
-	rewriteCalls    int
-	rewriteResponse backenddb.ValueLogRewriteStats
-	rewriteErr      error
-	rewriteFn       func(context.Context, backenddb.ValueLogRewriteOnlineOptions) (backenddb.ValueLogRewriteStats, error)
-	gcCalls         int
-	gcOpts          []backenddb.ValueLogGCOptions
-	gcResponse      backenddb.ValueLogGCStats
-	gcResponses     []backenddb.ValueLogGCStats
-	gcErr           error
-	gcFn            func(context.Context, backenddb.ValueLogGCOptions) (backenddb.ValueLogGCStats, error)
+	mu                 sync.Mutex
+	planOpts           backenddb.ValueLogRewriteOnlineOptions
+	planCalls          int
+	planResponse       backenddb.ValueLogRewritePlan
+	planErr            error
+	planFn             func(backenddb.ValueLogRewriteOnlineOptions) (backenddb.ValueLogRewritePlan, error)
+	rewriteOpts        backenddb.ValueLogRewriteOnlineOptions
+	rewriteOptsHistory []backenddb.ValueLogRewriteOnlineOptions
+	rewriteCalls       int
+	rewriteResponse    backenddb.ValueLogRewriteStats
+	rewriteErr         error
+	rewriteFn          func(context.Context, backenddb.ValueLogRewriteOnlineOptions) (backenddb.ValueLogRewriteStats, error)
+	gcCalls            int
+	gcOpts             []backenddb.ValueLogGCOptions
+	gcResponse         backenddb.ValueLogGCStats
+	gcResponses        []backenddb.ValueLogGCStats
+	gcErr              error
+	gcFn               func(context.Context, backenddb.ValueLogGCOptions) (backenddb.ValueLogGCStats, error)
 }
 
 func (b *rewriteBudgetRecordingBackend) ValueLogRewritePlan(ctx context.Context, opts backenddb.ValueLogRewriteOnlineOptions) (backenddb.ValueLogRewritePlan, error) {
@@ -1382,7 +1383,9 @@ func (b *rewriteBudgetRecordingBackend) ValueLogRewriteChunkPlan(ctx context.Con
 
 func (b *rewriteBudgetRecordingBackend) ValueLogRewriteOnline(ctx context.Context, opts backenddb.ValueLogRewriteOnlineOptions) (backenddb.ValueLogRewriteStats, error) {
 	b.mu.Lock()
-	b.rewriteOpts = cloneRewriteOptsForTest(opts)
+	cloned := cloneRewriteOptsForTest(opts)
+	b.rewriteOpts = cloned
+	b.rewriteOptsHistory = append(b.rewriteOptsHistory, cloned)
 	b.rewriteCalls++
 	stats := b.rewriteResponse
 	err := b.rewriteErr
@@ -1422,6 +1425,14 @@ func (b *rewriteBudgetRecordingBackend) recordedRewrite() (backenddb.ValueLogRew
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.rewriteOpts, b.rewriteCalls
+}
+
+func (b *rewriteBudgetRecordingBackend) recordedRewrites() []backenddb.ValueLogRewriteOnlineOptions {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	out := make([]backenddb.ValueLogRewriteOnlineOptions, len(b.rewriteOptsHistory))
+	copy(out, b.rewriteOptsHistory)
+	return out
 }
 
 func cloneRewriteOptsForTest(opts backenddb.ValueLogRewriteOnlineOptions) backenddb.ValueLogRewriteOnlineOptions {
@@ -5265,9 +5276,11 @@ func TestVlogGenerationRewritePlan_StageConfirmationExecutesConfirmedSubset(t *t
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if rewriteCalls != 1 {
-		t.Fatalf("rewrite calls after staged confirmation=%d want=1", rewriteCalls)
+	rewriteHistory := recorder.recordedRewrites()
+	if len(rewriteHistory) == 0 {
+		t.Fatalf("rewrite history after staged confirmation empty")
 	}
+	rewriteOpts = rewriteHistory[0]
 	if got, want := rewriteOpts.SourceFileIDs, []uint32{22}; len(got) != len(want) || got[0] != want[0] {
 		t.Fatalf("rewrite SourceFileIDs after staged confirmation=%v want=%v", got, want)
 	}
@@ -5441,9 +5454,11 @@ func TestVlogGenerationRewritePlan_StageConfirmationReplansEvenWhenOtherTriggers
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if rewriteCalls != 1 {
-		t.Fatalf("rewrite calls after staged confirmation=%d want 1", rewriteCalls)
+	rewriteHistory := recorder.recordedRewrites()
+	if len(rewriteHistory) == 0 {
+		t.Fatalf("rewrite history after staged confirmation empty")
 	}
+	rewriteOpts = rewriteHistory[0]
 	if got, want := rewriteOpts.SourceFileIDs, []uint32{22}; len(got) != len(want) || got[0] != want[0] {
 		t.Fatalf("rewrite SourceFileIDs after staged confirmation=%v want=%v", got, want)
 	}

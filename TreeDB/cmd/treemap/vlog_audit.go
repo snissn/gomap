@@ -33,7 +33,7 @@ type valueLogAuditReport struct {
 	Dir            string                       `json:"dir"`
 	MainDir        string                       `json:"main_dir"`
 	ValueLogDir    string                       `json:"value_log_dir"`
-	LeafLogDir     string                       `json:"leaf_log_dir,omitempty"`
+	LeafLogDir     string                       `json:"leaf_log_dir"`
 	Segments       []valueLogSegmentAudit       `json:"segments"`
 	SegmentsOnDisk int                          `json:"segments_on_disk"`
 	BytesOnDisk    int64                        `json:"bytes_on_disk"`
