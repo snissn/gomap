@@ -1403,19 +1403,21 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 	)
 	if db.valueLogManager != nil {
 		if hintLane, hintSeq, ok := db.valueLogManager.RewriteLaneHint(); ok {
-			probePath := filepath.Join(resolveStorageLayout(db.dir).valueVLogDir, fmt.Sprintf("value-l%d-%06d.log", hintLane, hintSeq+1))
-			if _, statErr := os.Stat(probePath); statErr == nil {
-				needSegScan = true
-			} else if os.IsNotExist(statErr) {
-				lane, startSeq = hintLane, hintSeq
-				if db.indexOuterLeavesInValueLog {
-					leafStartSeq = maxRewriteLaneSeqFromSet(set, rewriteLeafLogLaneID)
+			if !(db.indexOuterLeavesInValueLog && hintLane == rewriteLeafLogLaneID) {
+				probePath := filepath.Join(resolveStorageLayout(db.dir).valueVLogDir, fmt.Sprintf("value-l%d-%06d.log", hintLane, hintSeq+1))
+				if _, statErr := os.Stat(probePath); statErr == nil {
+					needSegScan = true
+				} else if os.IsNotExist(statErr) {
+					lane, startSeq = hintLane, hintSeq
+					if db.indexOuterLeavesInValueLog {
+						leafStartSeq = maxRewriteLaneSeqFromSet(set, rewriteLeafLogLaneID)
+					}
+					needSegScan = false
+				} else {
+					_ = db.valueLogManager.Release(set)
+					set = nil
+					return stats, statErr
 				}
-				needSegScan = false
-			} else {
-				_ = db.valueLogManager.Release(set)
-				set = nil
-				return stats, statErr
 			}
 		}
 	}

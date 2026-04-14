@@ -86,3 +86,22 @@ func TestOpen_RejectsValueLogLane255ConflictWhenLeafLogEnabled(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+func TestOpen_RejectsRecoveredWALLane255ConflictWhenLeafLogEnabled(t *testing.T) {
+	dir := t.TempDir()
+	walDir := filepath.Join(dir, "wal")
+	if err := os.MkdirAll(walDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(wal): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(walDir, "commit-l255-000001.log"), bytes.Repeat([]byte("w"), 64), 0o600); err != nil {
+		t.Fatalf("WriteFile(wal): %v", err)
+	}
+
+	_, err := Open(dir, NewMockBackend(), Options{JournalLanes: 4, IndexOuterLeavesInValueLog: true})
+	if err == nil {
+		t.Fatal("expected recovered lane-255 WAL conflict error")
+	}
+	if !strings.Contains(err.Error(), "recovered WAL/value lanes require rebuild before reopen") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}

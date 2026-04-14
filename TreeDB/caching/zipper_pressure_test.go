@@ -16,6 +16,12 @@ func (b *zipperPressureRecordingBackend) SetZipperParallelMergePressureSource(sr
 }
 
 func TestOpen_DisableWALWiresZipperParallelMergePressure(t *testing.T) {
+	poolPressureTestMu.Lock()
+	defer poolPressureTestMu.Unlock()
+
+	resetPoolPressureStateForTest()
+	t.Cleanup(resetPoolPressureStateForTest)
+
 	dir := t.TempDir()
 	backend := &zipperPressureRecordingBackend{MockBackend: NewMockBackend()}
 

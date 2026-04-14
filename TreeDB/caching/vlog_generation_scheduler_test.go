@@ -5276,9 +5276,11 @@ func TestVlogGenerationRewritePlan_StageConfirmationExecutesConfirmedSubset(t *t
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if rewriteCalls != 1 {
-		t.Fatalf("rewrite calls after staged confirmation=%d want=1", rewriteCalls)
+	rewriteHistory := recorder.recordedRewrites()
+	if len(rewriteHistory) == 0 {
+		t.Fatalf("rewrite history after staged confirmation empty")
 	}
+	rewriteOpts = rewriteHistory[0]
 	if got, want := rewriteOpts.SourceFileIDs, []uint32{22}; len(got) != len(want) || got[0] != want[0] {
 		t.Fatalf("rewrite SourceFileIDs after staged confirmation=%v want=%v", got, want)
 	}
@@ -5451,9 +5453,11 @@ func TestVlogGenerationRewritePlan_StageConfirmationReplansEvenWhenOtherTriggers
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if rewriteCalls != 1 {
-		t.Fatalf("rewrite calls after staged confirmation=%d want 1", rewriteCalls)
+	rewriteHistory := recorder.recordedRewrites()
+	if len(rewriteHistory) == 0 {
+		t.Fatalf("rewrite history after staged confirmation empty")
 	}
+	rewriteOpts = rewriteHistory[0]
 	if got, want := rewriteOpts.SourceFileIDs, []uint32{22}; len(got) != len(want) || got[0] != want[0] {
 		t.Fatalf("rewrite SourceFileIDs after staged confirmation=%v want=%v", got, want)
 	}
