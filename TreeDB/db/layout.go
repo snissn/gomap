@@ -63,12 +63,14 @@ func hasLegacyMixedWALValueSegments(dir string) (bool, error) {
 		if entry.IsDir() {
 			continue
 		}
-		matched, err := filepath.Match("value-*.log", entry.Name())
-		if err != nil {
-			return false, err
-		}
-		if matched {
-			return true, nil
+		for _, pattern := range []string{"value-*.log", "vlog-*.log"} {
+			matched, err := filepath.Match(pattern, entry.Name())
+			if err != nil {
+				return false, err
+			}
+			if matched {
+				return true, nil
+			}
 		}
 	}
 	return false, nil

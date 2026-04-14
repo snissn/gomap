@@ -48,21 +48,25 @@ func TestOpen_FreshDBCreatesSplitStorageDirs(t *testing.T) {
 }
 
 func TestHasLegacyMixedWALValueSegments_DetectsValueLogsInWAL(t *testing.T) {
-	dir := t.TempDir()
-	layout := resolveStorageLayout(dir)
-	if err := os.MkdirAll(layout.walDir, 0o700); err != nil {
-		t.Fatalf("MkdirAll(wal): %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(layout.walDir, "value-l0-000001.log"), []byte("x"), 0o600); err != nil {
-		t.Fatalf("WriteFile(value log): %v", err)
-	}
+	for _, name := range []string{"value-l0-000001.log", "vlog-l0-000001.log"} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			layout := resolveStorageLayout(dir)
+			if err := os.MkdirAll(layout.walDir, 0o700); err != nil {
+				t.Fatalf("MkdirAll(wal): %v", err)
+			}
+			if err := os.WriteFile(filepath.Join(layout.walDir, name), []byte("x"), 0o600); err != nil {
+				t.Fatalf("WriteFile(value log): %v", err)
+			}
 
-	ok, err := hasLegacyMixedWALValueSegments(dir)
-	if err != nil {
-		t.Fatalf("hasLegacyMixedWALValueSegments: %v", err)
-	}
-	if !ok {
-		t.Fatalf("expected legacy mixed WAL/value layout to be detected")
+			ok, err := hasLegacyMixedWALValueSegments(dir)
+			if err != nil {
+				t.Fatalf("hasLegacyMixedWALValueSegments: %v", err)
+			}
+			if !ok {
+				t.Fatalf("expected legacy mixed WAL/value layout to be detected")
+			}
+		})
 	}
 }
 

@@ -26845,12 +26845,14 @@ func ensureNoLegacyMixedWALValueSegments(walDir string) error {
 		if entry.IsDir() {
 			continue
 		}
-		matched, err := filepath.Match("value-*.log", entry.Name())
-		if err != nil {
-			return err
-		}
-		if matched {
-			return fmt.Errorf("cachingdb: legacy value-log segments found in %s; rebuild required for split wal/value_vlog layout", walDir)
+		for _, pattern := range []string{"value-*.log", "vlog-*.log"} {
+			matched, err := filepath.Match(pattern, entry.Name())
+			if err != nil {
+				return err
+			}
+			if matched {
+				return fmt.Errorf("cachingdb: legacy value-log segments found in %s; rebuild required for split wal/value_vlog layout", walDir)
+			}
 		}
 	}
 	return nil

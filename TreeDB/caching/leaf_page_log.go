@@ -30,11 +30,14 @@ func (l *cachingLeafPageLog) AppendLeafPage(leafPage []byte) (page.LeafLogPtr, e
 	if retainPath != "" {
 		l.db.markValueLogRetain(retainPath)
 	}
+	if err != nil {
+		return page.LeafLogPtr{}, err
+	}
 	leafPtr, convErr := page.LeafLogPtrFromValuePtr(ptr)
 	if convErr != nil {
 		return page.LeafLogPtr{}, convErr
 	}
-	return leafPtr, err
+	return leafPtr, nil
 }
 
 func (l *cachingLeafPageLog) Flush() error {

@@ -20,21 +20,25 @@ func (b *readBarrierTrackingBackend) SetCurrentValueLogReadBarrier(fn func(fileI
 }
 
 func TestOpen_FailsOnLegacyMixedWALValueLayout(t *testing.T) {
-	dir := t.TempDir()
-	walDir := filepath.Join(dir, "wal")
-	if err := os.MkdirAll(walDir, 0o700); err != nil {
-		t.Fatalf("MkdirAll(wal): %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(walDir, "value-l0-000001.log"), []byte("legacy"), 0o600); err != nil {
-		t.Fatalf("WriteFile(value log): %v", err)
-	}
+	for _, name := range []string{"value-l0-000001.log", "vlog-l0-000001.log"} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			walDir := filepath.Join(dir, "wal")
+			if err := os.MkdirAll(walDir, 0o700); err != nil {
+				t.Fatalf("MkdirAll(wal): %v", err)
+			}
+			if err := os.WriteFile(filepath.Join(walDir, name), []byte("legacy"), 0o600); err != nil {
+				t.Fatalf("WriteFile(value log): %v", err)
+			}
 
-	_, err := Open(dir, NewMockBackend(), Options{DisableWAL: true, AllowUnsafe: true})
-	if err == nil {
-		t.Fatalf("expected open failure")
-	}
-	if !strings.Contains(err.Error(), "split wal/value_vlog layout") {
-		t.Fatalf("open error=%v want legacy mixed WAL/value-log layout", err)
+			_, err := Open(dir, NewMockBackend(), Options{DisableWAL: true, AllowUnsafe: true})
+			if err == nil {
+				t.Fatalf("expected open failure")
+			}
+			if !strings.Contains(err.Error(), "split wal/value_vlog layout") {
+				t.Fatalf("open error=%v want legacy mixed WAL/value-log layout", err)
+			}
+		})
 	}
 }
 
