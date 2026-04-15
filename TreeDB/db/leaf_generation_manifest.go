@@ -304,9 +304,30 @@ func (db *DB) noteLeafGenerationWritableFileIDs(fileIDs []uint32, commitSeq uint
 		return nil
 	}
 	changedAny := false
+	sealedFileIDs := make(map[uint32]struct{}, len(fileIDs))
 	for _, rawFileID := range fileIDs {
 		if rawFileID == 0 {
 			continue
+		}
+		idx := db.leafGenerationManifest.currentGenerationIndex()
+		if idx >= 0 {
+			current := db.leafGenerationManifest.Generations[idx]
+			if current.State == leafGenerationStateWritable && len(current.FileIDs) > 0 {
+				duplicate := false
+				for _, existing := range current.FileIDs {
+					if existing == rawFileID {
+						duplicate = true
+						break
+					}
+				}
+				if !duplicate {
+					for _, sealedRawFileID := range current.FileIDs {
+						if sealedRawFileID != 0 {
+							sealedFileIDs[sealedRawFileID] = struct{}{}
+						}
+					}
+				}
+			}
 		}
 		changed, err := db.leafGenerationManifest.registerCurrentGenerationFileID(rawFileID, commitSeq)
 		if err != nil {
@@ -319,7 +340,17 @@ func (db *DB) noteLeafGenerationWritableFileIDs(fileIDs []uint32, commitSeq uint
 	if !changedAny {
 		return nil
 	}
-	return saveLeafGenerationManifest(LeafLogDirPath(db.dir), db.leafGenerationManifest)
+	if err := saveLeafGenerationManifest(LeafLogDirPath(db.dir), db.leafGenerationManifest); err != nil {
+		return err
+	}
+	for rawFileID := range sealedFileIDs {
+		if err := db.persistLeafGenerationRecordLengthIndex(rawFileID); err != nil {
+			// Record-length sidecars are rebuildable optimization metadata. Keep
+			// manifest publication authoritative even if the sidecar write fails.
+			continue
+		}
+	}
+	return nil
 }
 
 func (db *DB) noteLeafGenerationWritableFileID(fileID uint32, commitSeq uint64) error {

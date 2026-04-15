@@ -1,19 +1,61 @@
 package db
 
 import (
+	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
+	"os"
 	"sort"
+	"sync"
 
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
-const leafGenerationRecordLengthIndexChunkBytes = 256 << 10
+const (
+	leafGenerationRecordLengthIndexChunkBytes = 256 << 10
+	leafGenerationRecordLengthIndexMagic      = "TLGI"
+	leafGenerationRecordLengthIndexVersion    = 1
+	leafGenerationRecordLengthIndexSuffix     = ".lenidx"
+)
 
 type leafGenerationRecordLengthIndex struct {
 	offsets []uint32
 	lengths []uint32
+}
+
+var leafGenerationRecordLengthIndexScanHook struct {
+	mu sync.Mutex
+	fn func(rawFileID uint32)
+}
+
+func registerLeafGenerationRecordLengthIndexScanHook(hook func(rawFileID uint32)) func() {
+	leafGenerationRecordLengthIndexScanHook.mu.Lock()
+	prev := leafGenerationRecordLengthIndexScanHook.fn
+	leafGenerationRecordLengthIndexScanHook.fn = hook
+	leafGenerationRecordLengthIndexScanHook.mu.Unlock()
+	return func() {
+		leafGenerationRecordLengthIndexScanHook.mu.Lock()
+		leafGenerationRecordLengthIndexScanHook.fn = prev
+		leafGenerationRecordLengthIndexScanHook.mu.Unlock()
+	}
+}
+
+func runLeafGenerationRecordLengthIndexScanHook(rawFileID uint32) {
+	leafGenerationRecordLengthIndexScanHook.mu.Lock()
+	hook := leafGenerationRecordLengthIndexScanHook.fn
+	leafGenerationRecordLengthIndexScanHook.mu.Unlock()
+	if hook != nil {
+		hook(rawFileID)
+	}
+}
+
+func (idx *leafGenerationRecordLengthIndex) len() int {
+	if idx == nil {
+		return 0
+	}
+	return len(idx.offsets)
 }
 
 func (idx *leafGenerationRecordLengthIndex) lookup(offset uint64) (uint32, bool) {
@@ -28,6 +70,131 @@ func (idx *leafGenerationRecordLengthIndex) lookup(offset uint64) (uint32, bool)
 		return 0, false
 	}
 	return idx.lengths[i], true
+}
+
+func (idx *leafGenerationRecordLengthIndex) add(offset uint64, length uint32) bool {
+	if idx == nil || length == 0 || offset > uint64(^uint32(0)) {
+		return false
+	}
+	off32 := uint32(offset)
+	n := len(idx.offsets)
+	if n == 0 || idx.offsets[n-1] < off32 {
+		idx.offsets = append(idx.offsets, off32)
+		idx.lengths = append(idx.lengths, length)
+		return true
+	}
+	i := sort.Search(n, func(i int) bool {
+		return idx.offsets[i] >= off32
+	})
+	if i < n && idx.offsets[i] == off32 {
+		if idx.lengths[i] == length {
+			return false
+		}
+		idx.lengths[i] = length
+		return true
+	}
+	idx.offsets = append(idx.offsets, 0)
+	copy(idx.offsets[i+1:], idx.offsets[i:])
+	idx.offsets[i] = off32
+	idx.lengths = append(idx.lengths, 0)
+	copy(idx.lengths[i+1:], idx.lengths[i:])
+	idx.lengths[i] = length
+	return true
+}
+
+func leafGenerationRecordLengthIndexPath(rootDir string, rawFileID uint32) string {
+	if rootDir == "" || rawFileID == 0 {
+		return ""
+	}
+	return leafGenerationFallbackPath(rootDir, rawFileID) + leafGenerationRecordLengthIndexSuffix
+}
+
+func loadLeafGenerationRecordLengthIndexFile(path string, rawFileID uint32) (*leafGenerationRecordLengthIndex, bool, error) {
+	if path == "" || rawFileID == 0 {
+		return nil, false, nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+	const headerSize = 16
+	if len(data) < headerSize {
+		return nil, false, fmt.Errorf("leaf generation record-length index: decode %q: short header", path)
+	}
+	if string(data[:4]) != leafGenerationRecordLengthIndexMagic {
+		return nil, false, fmt.Errorf("leaf generation record-length index: decode %q: bad magic", path)
+	}
+	version := binary.LittleEndian.Uint32(data[4:8])
+	if version != leafGenerationRecordLengthIndexVersion {
+		return nil, false, fmt.Errorf("leaf generation record-length index: decode %q: unsupported version %d", path, version)
+	}
+	gotRawFileID := binary.LittleEndian.Uint32(data[8:12])
+	if gotRawFileID != rawFileID {
+		return nil, false, fmt.Errorf("leaf generation record-length index: decode %q: raw file id %d != %d", path, gotRawFileID, rawFileID)
+	}
+	count := int(binary.LittleEndian.Uint32(data[12:16]))
+	if count < 0 {
+		return nil, false, fmt.Errorf("leaf generation record-length index: decode %q: invalid count %d", path, count)
+	}
+	if len(data) != headerSize+count*8 {
+		return nil, false, fmt.Errorf("leaf generation record-length index: decode %q: size mismatch", path)
+	}
+	idx := &leafGenerationRecordLengthIndex{
+		offsets: make([]uint32, 0, count),
+		lengths: make([]uint32, 0, count),
+	}
+	prev := uint32(0)
+	for i := 0; i < count; i++ {
+		base := headerSize + i*8
+		offset := binary.LittleEndian.Uint32(data[base : base+4])
+		length := binary.LittleEndian.Uint32(data[base+4 : base+8])
+		if length == 0 {
+			return nil, false, fmt.Errorf("leaf generation record-length index: decode %q: zero length at entry %d", path, i)
+		}
+		if i > 0 && offset <= prev {
+			return nil, false, fmt.Errorf("leaf generation record-length index: decode %q: offsets not strictly increasing", path)
+		}
+		prev = offset
+		idx.offsets = append(idx.offsets, offset)
+		idx.lengths = append(idx.lengths, length)
+	}
+	return idx, true, nil
+}
+
+func saveLeafGenerationRecordLengthIndexFile(path string, rawFileID uint32, idx *leafGenerationRecordLengthIndex) error {
+	if path == "" || rawFileID == 0 {
+		return nil
+	}
+	count := 0
+	if idx != nil {
+		count = len(idx.offsets)
+		if len(idx.lengths) != count {
+			return fmt.Errorf("leaf generation record-length index: encode %q: offset/length mismatch", path)
+		}
+	}
+	const headerSize = 16
+	buf := bytes.NewBuffer(make([]byte, 0, headerSize+count*8))
+	buf.WriteString(leafGenerationRecordLengthIndexMagic)
+	var hdr [12]byte
+	binary.LittleEndian.PutUint32(hdr[0:4], leafGenerationRecordLengthIndexVersion)
+	binary.LittleEndian.PutUint32(hdr[4:8], rawFileID)
+	binary.LittleEndian.PutUint32(hdr[8:12], uint32(count))
+	buf.Write(hdr[:])
+	if idx != nil {
+		for i := 0; i < count; i++ {
+			if idx.lengths[i] == 0 {
+				return fmt.Errorf("leaf generation record-length index: encode %q: zero length at entry %d", path, i)
+			}
+			var entry [8]byte
+			binary.LittleEndian.PutUint32(entry[0:4], idx.offsets[i])
+			binary.LittleEndian.PutUint32(entry[4:8], idx.lengths[i])
+			buf.Write(entry[:])
+		}
+	}
+	return writeFileAtomic(path, buf.Bytes(), 0o600)
 }
 
 func (db *DB) loadLeafGenerationRecordLengthIndex(rawFileID uint32) (*leafGenerationRecordLengthIndex, bool) {
@@ -55,8 +222,105 @@ func (db *DB) storeLeafGenerationRecordLengthIndex(rawFileID uint32, idx *leafGe
 	db.leafGenerationRecordLengthMu.Unlock()
 }
 
+func (db *DB) NoteLeafGenerationRecordLength(ptr page.ValuePtr) {
+	if db == nil || ptr.FileID == 0 || ptr.Offset == 0 {
+		return
+	}
+	recordLen := page.ValuePtrRecordLength(ptr)
+	if recordLen == 0 {
+		return
+	}
+	rawFileID, ok := rawLeafGenerationFileID(ptr.FileID)
+	if !ok {
+		return
+	}
+	db.leafGenerationRecordLengthMu.Lock()
+	if db.leafGenerationRecordLengthByFile == nil {
+		db.leafGenerationRecordLengthByFile = make(map[uint32]*leafGenerationRecordLengthIndex)
+	}
+	idx := db.leafGenerationRecordLengthByFile[rawFileID]
+	if idx == nil {
+		idx = &leafGenerationRecordLengthIndex{}
+		db.leafGenerationRecordLengthByFile[rawFileID] = idx
+	}
+	idx.add(ptr.Offset, recordLen)
+	db.leafGenerationRecordLengthMu.Unlock()
+}
+
+func (db *DB) loadLeafGenerationRecordLengthIndexFromDisk(rawFileID uint32) (*leafGenerationRecordLengthIndex, bool, error) {
+	if db == nil || rawFileID == 0 {
+		return nil, false, nil
+	}
+	path := leafGenerationRecordLengthIndexPath(db.dir, rawFileID)
+	return loadLeafGenerationRecordLengthIndexFile(path, rawFileID)
+}
+
+func (db *DB) persistLeafGenerationRecordLengthIndex(rawFileID uint32) error {
+	if db == nil || db.readOnly || rawFileID == 0 {
+		return nil
+	}
+	idx, ok := db.loadLeafGenerationRecordLengthIndex(rawFileID)
+	if !ok {
+		var err error
+		idx, err = db.scanLeafGenerationRecordLengthIndexFromDisk(rawFileID)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return nil
+			}
+			return err
+		}
+		db.storeLeafGenerationRecordLengthIndex(rawFileID, idx)
+	}
+	return saveLeafGenerationRecordLengthIndexFile(leafGenerationRecordLengthIndexPath(db.dir, rawFileID), rawFileID, idx)
+}
+
+func (db *DB) scanLeafGenerationRecordLengthIndexFromDisk(rawFileID uint32) (*leafGenerationRecordLengthIndex, error) {
+	if db == nil || rawFileID == 0 {
+		return &leafGenerationRecordLengthIndex{}, nil
+	}
+	path := leafGenerationFallbackPath(db.dir, rawFileID)
+	return scanLeafGenerationRecordLengthIndexPath(path, page.ValueLogFileID(rawFileID))
+}
+
+func (db *DB) loadOrBuildLeafGenerationRecordLengthIndex(rawFileID uint32, set *valuelog.Set) (*leafGenerationRecordLengthIndex, error) {
+	if db == nil || rawFileID == 0 {
+		return &leafGenerationRecordLengthIndex{}, nil
+	}
+	if idx, ok := db.loadLeafGenerationRecordLengthIndex(rawFileID); ok {
+		return idx, nil
+	}
+	if idx, ok, err := db.loadLeafGenerationRecordLengthIndexFromDisk(rawFileID); err != nil {
+		return nil, err
+	} else if ok {
+		db.storeLeafGenerationRecordLengthIndex(rawFileID, idx)
+		return idx, nil
+	}
+	if set != nil {
+		if seg := set.Files[page.ValueLogFileID(rawFileID)]; seg != nil && seg.File != nil {
+			idx, err := scanLeafGenerationRecordLengthIndex(seg)
+			if err != nil {
+				return nil, err
+			}
+			db.storeLeafGenerationRecordLengthIndex(rawFileID, idx)
+			if !db.readOnly {
+				_ = saveLeafGenerationRecordLengthIndexFile(leafGenerationRecordLengthIndexPath(db.dir, rawFileID), rawFileID, idx)
+			}
+			return idx, nil
+		}
+	}
+	idx, err := db.scanLeafGenerationRecordLengthIndexFromDisk(rawFileID)
+	if err != nil {
+		return nil, err
+	}
+	db.storeLeafGenerationRecordLengthIndex(rawFileID, idx)
+	if !db.readOnly {
+		_ = saveLeafGenerationRecordLengthIndexFile(leafGenerationRecordLengthIndexPath(db.dir, rawFileID), rawFileID, idx)
+	}
+	return idx, nil
+}
+
 func (db *DB) leafGenerationRecordLengthForPlan(ptr page.LeafLogPtr, set *valuelog.Set, view *leafGenerationView) (uint32, bool, error) {
-	if db == nil || set == nil || view == nil || ptr.FileID == 0 || ptr.Offset == 0 {
+	if db == nil || view == nil || ptr.FileID == 0 || ptr.Offset == 0 {
 		return 0, false, nil
 	}
 	genID, ok := view.FileToGeneration[ptr.FileID]
@@ -67,20 +331,10 @@ func (db *DB) leafGenerationRecordLengthForPlan(ptr page.LeafLogPtr, set *valuel
 	if !ok || gen.State != leafGenerationStateSealed {
 		return 0, false, nil
 	}
-	if idx, ok := db.loadLeafGenerationRecordLengthIndex(ptr.FileID); ok {
-		if length, ok := idx.lookup(ptr.Offset); ok {
-			return length, true, nil
-		}
-	}
-	seg := set.Files[page.ValueLogFileID(ptr.FileID)]
-	if seg == nil || seg.File == nil {
-		return 0, false, nil
-	}
-	idx, err := scanLeafGenerationRecordLengthIndex(seg)
+	idx, err := db.loadOrBuildLeafGenerationRecordLengthIndex(ptr.FileID, set)
 	if err != nil {
 		return 0, false, err
 	}
-	db.storeLeafGenerationRecordLengthIndex(ptr.FileID, idx)
 	length, ok := idx.lookup(ptr.Offset)
 	if !ok {
 		return 0, false, fmt.Errorf("leaf generation plan: missing record length for file=%d offset=%d", ptr.FileID, ptr.Offset)
@@ -88,9 +342,24 @@ func (db *DB) leafGenerationRecordLengthForPlan(ptr page.LeafLogPtr, set *valuel
 	return length, true, nil
 }
 
+func scanLeafGenerationRecordLengthIndexPath(path string, fileID uint32) (*leafGenerationRecordLengthIndex, error) {
+	if path == "" {
+		return &leafGenerationRecordLengthIndex{}, nil
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+	return scanLeafGenerationRecordLengthIndex(&valuelog.File{ID: fileID, Path: path, File: f})
+}
+
 func scanLeafGenerationRecordLengthIndex(seg *valuelog.File) (*leafGenerationRecordLengthIndex, error) {
 	if seg == nil || seg.File == nil {
 		return &leafGenerationRecordLengthIndex{}, nil
+	}
+	if seg.ID != 0 {
+		runLeafGenerationRecordLengthIndexScanHook(page.ValueLogSegmentID(seg.ID))
 	}
 	size := fileSize(seg)
 	if seg.File != nil {

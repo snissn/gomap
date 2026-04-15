@@ -263,6 +263,7 @@ func (db *DB) noteCreatedLeafGenerationFileIDs(commitSeq uint64, fileIDs []uint3
 		return nil
 	}
 	changed := false
+	rawFileIDs := make([]uint32, 0, len(fileIDs))
 	for _, fileID := range fileIDs {
 		if !page.IsValueLogFileID(fileID) {
 			continue
@@ -271,18 +272,28 @@ func (db *DB) noteCreatedLeafGenerationFileIDs(commitSeq uint64, fileIDs []uint3
 		if lane != rewriteLeafLogLaneID {
 			continue
 		}
-		registered, err := db.leafGenerationManifest.registerCurrentGenerationFileID(page.ValueLogSegmentID(fileID), commitSeq)
+		rawFileID := page.ValueLogSegmentID(fileID)
+		registered, err := db.leafGenerationManifest.registerCurrentGenerationFileID(rawFileID, commitSeq)
 		if err != nil {
 			return err
 		}
 		if registered {
 			changed = true
 		}
+		rawFileIDs = append(rawFileIDs, rawFileID)
 	}
 	if !changed {
 		return nil
 	}
-	return saveLeafGenerationManifest(LeafLogDirPath(db.dir), db.leafGenerationManifest)
+	if err := saveLeafGenerationManifest(LeafLogDirPath(db.dir), db.leafGenerationManifest); err != nil {
+		return err
+	}
+	for _, rawFileID := range rawFileIDs {
+		if err := db.persistLeafGenerationRecordLengthIndex(rawFileID); err != nil {
+			continue
+		}
+	}
+	return nil
 }
 
 func filterLeafGenerationRawFileIDs(fileIDs []uint32) []uint32 {

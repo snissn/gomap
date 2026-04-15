@@ -9,11 +9,11 @@ import (
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
-func benchmarkLeafGenerationPlanFixture(b *testing.B) string {
+func benchmarkLeafGenerationPlanFixtureDir(b *testing.B, envName string) string {
 	b.Helper()
-	fixture := os.Getenv("TREEDB_LEAFGEN_PLAN_FIXTURE")
+	fixture := os.Getenv(envName)
 	if fixture == "" {
-		b.Skip("set TREEDB_LEAFGEN_PLAN_FIXTURE to a saved application.db or maindb fixture")
+		b.Skipf("set %s to a saved application.db or maindb fixture", envName)
 	}
 	if _, err := os.Stat(fixture); err != nil {
 		b.Fatalf("stat fixture %q: %v", fixture, err)
@@ -28,17 +28,32 @@ func benchmarkLeafGenerationPlanFixture(b *testing.B) string {
 	return ""
 }
 
-func openLeafGenerationPlanFixtureDB(b *testing.B) *DB {
+func benchmarkLeafGenerationPlanFixture(b *testing.B) string {
 	b.Helper()
-	fixture := benchmarkLeafGenerationPlanFixture(b)
+	return benchmarkLeafGenerationPlanFixtureDir(b, "TREEDB_LEAFGEN_PLAN_FIXTURE")
+}
+
+func benchmarkLeafGenerationPlanWorkFixture(b *testing.B) string {
+	b.Helper()
+	return benchmarkLeafGenerationPlanFixtureDir(b, "TREEDB_LEAFGEN_PLAN_WORK_FIXTURE")
+}
+
+func openLeafGenerationPlanDB(b *testing.B, fixture string, readOnly bool) *DB {
+	b.Helper()
 	db, err := Open(Options{
 		Dir:                        fixture,
-		ReadOnly:                   true,
+		ReadOnly:                   readOnly,
 		IndexOuterLeavesInValueLog: true,
 	})
 	if err != nil {
 		b.Fatalf("open fixture: %v", err)
 	}
+	return db
+}
+
+func openLeafGenerationPlanFixtureDB(b *testing.B) *DB {
+	b.Helper()
+	db := openLeafGenerationPlanDB(b, benchmarkLeafGenerationPlanFixture(b), true)
 	b.Cleanup(func() { _ = db.Close() })
 	return db
 }
@@ -58,7 +73,37 @@ func BenchmarkLeafGenerationPlan_SavedHome(b *testing.B) {
 	}
 }
 
+func BenchmarkLeafGenerationPlanPersistedIndexReopen_SavedHome(b *testing.B) {
+	fixture := benchmarkLeafGenerationPlanWorkFixture(b)
+	materialize := openLeafGenerationPlanDB(b, fixture, false)
+	if _, err := materialize.LeafGenerationPlan(context.Background(), LeafGenerationPlanOptions{}); err != nil {
+		_ = materialize.Close()
+		b.Fatalf("materialize LeafGenerationPlan: %v", err)
+	}
+	if err := materialize.Close(); err != nil {
+		b.Fatalf("close materialize db: %v", err)
+	}
+
+	db := openLeafGenerationPlanDB(b, fixture, true)
+	b.Cleanup(func() { _ = db.Close() })
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		db.leafGenerationLiveStatsMu.Lock()
+		db.leafGenerationLiveStatsCache = leafGenerationLiveStatsCache{}
+		db.leafGenerationLiveStatsMu.Unlock()
+		db.leafGenerationRecordLengthMu.Lock()
+		db.leafGenerationRecordLengthByFile = nil
+		db.leafGenerationRecordLengthMu.Unlock()
+		if _, err := db.LeafGenerationPlan(context.Background(), LeafGenerationPlanOptions{}); err != nil {
+			b.Fatalf("LeafGenerationPlan persisted reopen: %v", err)
+		}
+	}
+}
+
 func BenchmarkLeafGenerationPlanCached_SavedHome(b *testing.B) {
+
 	db := openLeafGenerationPlanFixtureDB(b)
 
 	if _, err := db.LeafGenerationPlan(context.Background(), LeafGenerationPlanOptions{}); err != nil {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -48,6 +49,46 @@ func openLeafGenerationPackTestDB(t *testing.T) (*DB, *rewriteWriter, string) {
 	t.Cleanup(func() { closeNoErr(t, leafLog) })
 	t.Cleanup(func() { closeNoErr(t, db) })
 	return db, leafLog, dir
+}
+
+func TestNoteCreatedLeafGenerationFileIDs_PersistsRecordLengthIndex(t *testing.T) {
+	db, _, dir := openLeafGenerationPackTestDB(t)
+
+	writer := newRewriteWriter(ValueLogDirPath(dir), 0, 0, 64<<20)
+	writer.ConfigureLeafLog(LeafLogDirPath(dir), rewriteLeafLogLaneID, 0)
+	defer func() { _ = writer.Close() }()
+	for i := 0; i < 4; i++ {
+		if _, err := writer.AppendLeafPage(bytes.Repeat([]byte{byte('a' + i)}, page.PageSize)); err != nil {
+			t.Fatalf("AppendLeafPage(%d): %v", i, err)
+		}
+	}
+	if err := writer.Sync(); err != nil {
+		t.Fatalf("writer.Sync: %v", err)
+	}
+	createdIDs, err := writer.createdFileIDs()
+	if err != nil {
+		t.Fatalf("createdFileIDs: %v", err)
+	}
+	if err := db.noteCreatedLeafGenerationFileIDs(55, createdIDs); err != nil {
+		t.Fatalf("noteCreatedLeafGenerationFileIDs: %v", err)
+	}
+
+	for _, rawFileID := range filterLeafGenerationRawFileIDs(createdIDs) {
+		indexPath := leafGenerationRecordLengthIndexPath(dir, rawFileID)
+		if _, err := os.Stat(indexPath); err != nil {
+			t.Fatalf("Stat(%q): %v", indexPath, err)
+		}
+		idx, ok, err := loadLeafGenerationRecordLengthIndexFile(indexPath, rawFileID)
+		if err != nil {
+			t.Fatalf("loadLeafGenerationRecordLengthIndexFile(%d): %v", rawFileID, err)
+		}
+		if !ok {
+			t.Fatalf("expected persisted record-length index for raw file %d", rawFileID)
+		}
+		if idx == nil || idx.len() == 0 {
+			t.Fatalf("expected non-empty record-length index for raw file %d", rawFileID)
+		}
+	}
 }
 
 func TestLeafGenerationPack_MovesSparseSealedGeneration(t *testing.T) {
