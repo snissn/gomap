@@ -232,6 +232,7 @@ func (b *Batch) writeOptimistic(sync bool) (bool, error) {
 		return false, err
 	}
 	vlogRefDelta = nil
+	b.db.invalidateLeafGenerationSubtreeStats(tracker.Pages())
 	b.db.finalizeCommitPostWork(post)
 	if b.db.vacuum.Active() {
 		b.db.vacuum.RecordEntries(entries)
@@ -287,6 +288,7 @@ func (b *Batch) writeSerialized(sync bool) error {
 		return err
 	}
 	vlogRefDelta = nil
+	b.db.clearLeafGenerationReachabilityCaches()
 	if b.db.vacuum.Active() {
 		b.db.vacuum.RecordEntries(entries)
 	}

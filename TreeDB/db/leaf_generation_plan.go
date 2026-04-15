@@ -419,6 +419,30 @@ func (db *DB) storeLeafGenerationSubtreeStats(pageID uint64, stats leafGeneratio
 	db.leafGenerationSubtreeStatsMu.Unlock()
 }
 
+func (db *DB) invalidateLeafGenerationSubtreeStats(pageIDs []uint64) {
+	if db == nil || len(pageIDs) == 0 {
+		return
+	}
+	db.leafGenerationSubtreeStatsMu.Lock()
+	for _, pageID := range pageIDs {
+		delete(db.leafGenerationSubtreeStatsByPage, pageID)
+	}
+	db.leafGenerationSubtreeStatsMu.Unlock()
+}
+
+func (db *DB) clearLeafGenerationReachabilityCaches() {
+	if db == nil {
+		return
+	}
+	db.leafGenerationLiveStatsMu.Lock()
+	db.leafGenerationLiveStatsCache = leafGenerationLiveStatsCache{}
+	db.leafGenerationLiveStatsMu.Unlock()
+
+	db.leafGenerationSubtreeStatsMu.Lock()
+	clear(db.leafGenerationSubtreeStatsByPage)
+	db.leafGenerationSubtreeStatsMu.Unlock()
+}
+
 func leafGenerationLiveStatsKeyForState(state *DBState) (treeReachabilityCacheKey, bool) {
 	if state == nil {
 		return treeReachabilityCacheKey{}, false

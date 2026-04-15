@@ -29,6 +29,15 @@ func (t *allocTracker) Alloc(hint uint64) (uint64, error) {
 	return id, nil
 }
 
+func (t *allocTracker) Pages() []uint64 {
+	if t == nil {
+		return nil
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return append([]uint64(nil), t.pages...)
+}
+
 func (t *allocTracker) FreeAll() error {
 	if t == nil {
 		return nil

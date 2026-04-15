@@ -470,6 +470,7 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 	if err := db.finalizeCommit(newRoot, newSysRoot, leafCtx.retired, sync, adaptive.Metrics{}, createdIDs, false, nil); err != nil {
 		return 0, 0, err
 	}
+	db.invalidateLeafGenerationSubtreeStats(tracker.Pages())
 	tracker = nil
 	return leafCtx.copied, leafCtx.copiedBytes, nil
 }

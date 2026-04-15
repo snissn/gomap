@@ -2047,6 +2047,7 @@ func (db *DB) applyRewriteSwapBatchOptimistic(swaps []rewriteSwap, sync bool) (b
 		return false, err
 	}
 	vlogRefDelta = nil
+	db.invalidateLeafGenerationSubtreeStats(tracker.Pages())
 	db.finalizeCommitPostWork(post)
 	if db.vacuum.Active() {
 		db.vacuum.RecordEntries(entries)
@@ -2115,6 +2116,7 @@ func (db *DB) applyRewriteSwapBatchSerialized(swaps []rewriteSwap, sync bool) er
 		return err
 	}
 	vlogRefDelta = nil
+	db.clearLeafGenerationReachabilityCaches()
 	if db.vacuum.Active() {
 		db.vacuum.RecordEntries(entries)
 	}
