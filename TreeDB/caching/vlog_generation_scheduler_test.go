@@ -752,6 +752,42 @@ func TestMaybeRunVlogGenerationMaintenanceWithOptions_TracksWalOnPeriodicSkip(t 
 	}
 }
 
+func TestStartVlogGenerationLoop_WALOnStartsIdle(t *testing.T) {
+	t.Setenv(envDisableVlogGenerationCheckpointKick, "1")
+
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+
+	db, err := Open(dir, backend, Options{
+		AllowUnsafe:                      true,
+		DisableWAL:                       false,
+		JournalLanes:                     1,
+		ValueLogGenerationPolicy:         uint8(backenddb.ValueLogGenerationHotWarmCold),
+		ValueLogRewriteTriggerTotalBytes: 1,
+		ForceValueLogPointers:            true,
+	})
+	if err != nil {
+		t.Fatalf("open cachingdb: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	if got := db.vlogGenerationSchedulerState.Load(); got != vlogGenerationSchedulerIdle {
+		t.Fatalf("scheduler state=%d want=%d", got, vlogGenerationSchedulerIdle)
+	}
+
+	db.SetMaintenancePhase(MaintenancePhaseRestore)
+	if ran := db.maybeRunPeriodicVlogGenerationMaintenance(false); ran {
+		t.Fatal("periodic maintenance unexpectedly ran during restore in WAL-on profile")
+	}
+	db.maybeRunVlogGenerationMaintenanceWithOptions(false, vlogGenerationMaintenanceOptions{})
+	if got := db.vlogGenerationMaintenanceSkipPhase.Load(); got == 0 {
+		t.Fatal("expected maintenance phase skip to be recorded for WAL-on profile")
+	}
+}
+
 func TestMaybeRunVlogGenerationMaintenanceWithOptions_TracksCollision(t *testing.T) {
 	db := &DB{valueLogGenerationPolicy: uint8(backenddb.ValueLogGenerationHotWarmCold)}
 	db.vlogGenerationMaintenanceActive.Store(true)

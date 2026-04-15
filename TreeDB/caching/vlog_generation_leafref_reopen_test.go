@@ -795,7 +795,7 @@ func TestCachedGenerationalMaintenance_DirectPointersRemainInCurrentSet_WALOn(t 
 	closed = true
 }
 
-func TestCachedGenerationalMaintenance_BackgroundSchedulerDisabled_WALOn(t *testing.T) {
+func TestCachedGenerationalMaintenance_BackgroundSchedulerIdle_WALOn(t *testing.T) {
 	dir := t.TempDir()
 
 	backend, err := backenddb.Open(backenddb.Options{
@@ -865,8 +865,8 @@ func TestCachedGenerationalMaintenance_BackgroundSchedulerDisabled_WALOn(t *test
 		writeBatch(fmt.Sprintf("seed-%02d", i), 384)
 	}
 
-	if got := db.vlogGenerationSchedulerState.Load(); got != vlogGenerationSchedulerDisabled {
-		t.Fatalf("scheduler state=%d want disabled", got)
+	if got := db.vlogGenerationSchedulerState.Load(); got != vlogGenerationSchedulerIdle {
+		t.Fatalf("scheduler state=%d want idle", got)
 	}
 
 	if err := db.checkpointForBackendMaintenance(); err != nil {

@@ -9,6 +9,7 @@ TREEMAP=(go run ./TreeDB/cmd/treemap)
 PROFILE=${TREEDB_PROFILE:-fast}
 DWELL_SECONDS=${LEAFGEN_DWELL_SECONDS:-180}
 SAMPLE_INTERVAL_SECONDS=${LEAFGEN_SAMPLE_INTERVAL_SECONDS:-15}
+PACK_ENABLED=${TREEDB_ENABLE_LEAF_GENERATION_PACK_MAINTENANCE:-1}
 PACK_MAX_BYTES=${TREEDB_LEAF_GENERATION_PACK_MAINTENANCE_MAX_BYTES_TO_COPY:-67108864}
 PACK_MAX_GENERATIONS=${TREEDB_LEAF_GENERATION_PACK_MAINTENANCE_MAX_GENERATIONS:-1}
 PACK_MIN_AGE_COMMITS=${TREEDB_LEAF_GENERATION_PACK_MAINTENANCE_MIN_PUBLISHED_AGE_COMMITS:-1}
@@ -52,6 +53,7 @@ capture_sizes() {
   echo "profile=$PROFILE"
   echo "dwell_seconds=$DWELL_SECONDS"
   echo "sample_interval_seconds=$SAMPLE_INTERVAL_SECONDS"
+  echo "pack_enabled=$PACK_ENABLED"
   echo "pack_max_bytes=$PACK_MAX_BYTES"
   echo "pack_max_generations=$PACK_MAX_GENERATIONS"
   echo "pack_min_age_commits=$PACK_MIN_AGE_COMMITS"
@@ -284,7 +286,7 @@ func fatalf(format string, args ...any) {
 }
 EOF
 
-TREEDB_ENABLE_LEAF_GENERATION_PACK_MAINTENANCE=1 \
+TREEDB_ENABLE_LEAF_GENERATION_PACK_MAINTENANCE="$PACK_ENABLED" \
 TREEDB_LEAF_GENERATION_PACK_MAINTENANCE_MAX_BYTES_TO_COPY="$PACK_MAX_BYTES" \
 TREEDB_LEAF_GENERATION_PACK_MAINTENANCE_MAX_GENERATIONS="$PACK_MAX_GENERATIONS" \
 TREEDB_LEAF_GENERATION_PACK_MAINTENANCE_MIN_PUBLISHED_AGE_COMMITS="$PACK_MIN_AGE_COMMITS" \
@@ -307,6 +309,7 @@ jq -n \
   --arg profile "$PROFILE" \
   --argjson dwell_seconds "$DWELL_SECONDS" \
   --argjson sample_interval_seconds "$SAMPLE_INTERVAL_SECONDS" \
+  --argjson pack_enabled "$PACK_ENABLED" \
   --argjson pack_max_bytes "$PACK_MAX_BYTES" \
   --argjson pack_max_generations "$PACK_MAX_GENERATIONS" \
   --argjson pack_min_age_commits "$PACK_MIN_AGE_COMMITS" \
@@ -324,6 +327,7 @@ jq -n \
     dwell_seconds: $dwell_seconds,
     sample_interval_seconds: $sample_interval_seconds,
     pack_maintenance: {
+      enabled: ($pack_enabled != 0),
       max_bytes_to_copy: $pack_max_bytes,
       max_generations: $pack_max_generations,
       min_published_age_commits: $pack_min_age_commits

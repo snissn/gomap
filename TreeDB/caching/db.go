@@ -13848,13 +13848,6 @@ func (db *DB) startVlogGenerationLoop() {
 		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerDisabled)
 		return
 	}
-	if !db.disableJournal {
-		// WAL-on catch-up has shown real state divergence when the generic
-		// periodic generation loop runs in the background. Keep WAL-on
-		// generation maintenance on explicit/manual paths only.
-		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerDisabled)
-		return
-	}
 	if db.valueLogGenerationPolicy != uint8(backenddb.ValueLogGenerationHotWarmCold) {
 		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerDisabled)
 		return
@@ -13863,7 +13856,10 @@ func (db *DB) startVlogGenerationLoop() {
 		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerDisabled)
 		return
 	}
-	// GC integration is optional in this phase; rewrite is required.
+	// Keep the scheduler alive in both WAL-off and WAL-on cached profiles. The
+	// restore/catch-up phase gate, WAL-on checkpoint-kick suppression, WAL-on
+	// periodic runGC suppression, and the quiet/economics checks decide whether
+	// any actual maintenance work is safe to do.
 	db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
 	db.wg.Add(1)
 	go db.vlogGenerationLoop()
