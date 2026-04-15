@@ -411,42 +411,113 @@ func (db *DB) scanLeafGenerationLiveStats(ctx context.Context, snap *Snapshot) (
 		ctx = context.Background()
 	}
 	view := snap.state.LeafGenerations
+	type leafGenerationScanFileState struct {
+		fileID   uint32
+		genIndex int
+		persist  bool
+		idx      *leafGenerationRecordLengthIndex
+	}
+	genStates := make([]uint64, 0, len(view.GenerationOrder))
+	genIndexByID := make(map[uint64]int, len(view.GenerationOrder))
+	for _, genID := range view.GenerationOrder {
+		if _, ok := view.Generations[genID]; !ok {
+			continue
+		}
+		genIndexByID[genID] = len(genStates)
+		genStates = append(genStates, genID)
+	}
+	fileStates := make([]leafGenerationScanFileState, 0, len(view.FileToGeneration))
+	fileIndexByID := make(map[uint32]int, len(view.FileToGeneration))
+	for fileID, genID := range view.FileToGeneration {
+		gen, ok := view.Generations[genID]
+		if !ok {
+			return leafGenerationLiveScanStats{}, fmt.Errorf("leaf generation plan: missing generation for leaf file %d", fileID)
+		}
+		genIndex, ok := genIndexByID[genID]
+		if !ok {
+			return leafGenerationLiveScanStats{}, fmt.Errorf("leaf generation plan: missing generation order entry for leaf generation %d", genID)
+		}
+		persist := gen.State == leafGenerationStateSealed
+		idx, err := db.loadOrBuildLeafGenerationRecordLengthIndex(fileID, snap.state.ValueLogSet, persist)
+		if err != nil {
+			return leafGenerationLiveScanStats{}, err
+		}
+		fileIndexByID[fileID] = len(fileStates)
+		fileStates = append(fileStates, leafGenerationScanFileState{
+			fileID:   fileID,
+			genIndex: genIndex,
+			persist:  persist,
+			idx:      idx,
+		})
+	}
+	fileTotals := make([]leafGenerationLiveTotals, len(fileStates))
+	genTotals := make([]leafGenerationLiveTotals, len(genStates))
 	verify := func(pageID uint64, n node.Node) error {
 		if !n.VerifyChecksum() {
 			return fmt.Errorf("leaf generation plan: checksum mismatch on page %d", pageID)
 		}
 		return nil
 	}
+	lastFileID := uint32(0)
+	lastFileIndex := -1
 	visit := func(ptr page.LeafLogPtr) error {
 		// Published B-tree state should not reference the same external leaf page
 		// from multiple parents; leafrefscan.Walk already deduplicates pager page
-		// IDs. Avoid retaining a per-LeafLogPtr seen map on this hot planner path.
-		genID, ok := view.FileToGeneration[ptr.FileID]
+		// IDs. Keep per-file planner state local to the scan so the hot path only
+		// resolves file identity once per contiguous run.
+		fileIndex := lastFileIndex
+		if fileIndex < 0 || lastFileID != ptr.FileID {
+			var ok bool
+			fileIndex, ok = fileIndexByID[ptr.FileID]
+			if !ok {
+				return fmt.Errorf("leaf generation plan: missing generation for leaf file %d", ptr.FileID)
+			}
+			lastFileID = ptr.FileID
+			lastFileIndex = fileIndex
+		}
+		fileState := &fileStates[fileIndex]
+		recordLen, ok := fileState.idx.lookup(ptr.Offset)
 		if !ok {
-			return fmt.Errorf("leaf generation plan: missing generation for leaf file %d", ptr.FileID)
-		}
-		recordLen, _, err := db.leafGenerationRecordLengthForPlan(ptr, snap.state.ValueLogSet, view)
-		if err != nil {
-			return err
-		}
-		if recordLen == 0 {
-			recordLen, err = db.valueLogRecordLengthForRewriteInSet(ptr.ValuePtr(), snap.state.ValueLogSet)
-			if err != nil {
-				return err
+			if !fileState.persist {
+				idx, err := db.buildLeafGenerationRecordLengthIndex(ptr.FileID, snap.state.ValueLogSet)
+				if err != nil {
+					return err
+				}
+				db.storeLeafGenerationRecordLengthIndex(ptr.FileID, idx)
+				fileState.idx = idx
+				recordLen, ok = idx.lookup(ptr.Offset)
+			}
+			if !ok {
+				if fileState.persist {
+					return fmt.Errorf("leaf generation plan: missing record length for file=%d offset=%d", ptr.FileID, ptr.Offset)
+				}
+				var err error
+				recordLen, err = db.valueLogRecordLengthForRewriteInSet(ptr.ValuePtr(), snap.state.ValueLogSet)
+				if err != nil {
+					return err
+				}
 			}
 		}
-		fileTotals := stats.Files[ptr.FileID]
-		fileTotals.LivePages++
-		fileTotals.LiveBytes += int64(recordLen)
-		stats.Files[ptr.FileID] = fileTotals
-		genTotals := stats.Generations[genID]
-		genTotals.LivePages++
-		genTotals.LiveBytes += int64(recordLen)
-		stats.Generations[genID] = genTotals
+		fileTotals[fileIndex].LivePages++
+		fileTotals[fileIndex].LiveBytes += int64(recordLen)
+		genTotals[fileState.genIndex].LivePages++
+		genTotals[fileState.genIndex].LiveBytes += int64(recordLen)
 		return nil
 	}
 	if err := leafrefscan.WalkRoots(ctx, []uint64{snap.state.RootPageID, snap.state.SystemRootPageID}, snap.idx.pager.Get, verify, visit); err != nil {
 		return leafGenerationLiveScanStats{}, err
+	}
+	for i, totals := range fileTotals {
+		if totals.LivePages == 0 && totals.LiveBytes == 0 {
+			continue
+		}
+		stats.Files[fileStates[i].fileID] = totals
+	}
+	for i, totals := range genTotals {
+		if totals.LivePages == 0 && totals.LiveBytes == 0 {
+			continue
+		}
+		stats.Generations[genStates[i]] = totals
 	}
 	return stats, nil
 }
