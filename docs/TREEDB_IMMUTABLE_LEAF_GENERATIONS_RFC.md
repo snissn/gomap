@@ -1096,6 +1096,13 @@ Sprint 2 goal:
 - `leafgen/s2-offline-pack-executor`
 - `leafgen/s2-pack-publish-and-metrics`
 
+### Sprint 2 Current Local Status
+
+- landed backend `LeafGenerationPlan` with exact live-byte accounting by generation
+- planner now reuses the same `LeafRef` reachability scan shape as whole-generation GC
+- planner exposes per-generation total/live/dead bytes, live-page counts, age, pin counts, ranking, and admission
+- unit coverage now includes ranking, dead-vs-live geometry, age-gate force override, and snapshot-pin non-interference
+
 ### Sprint 2 Code Work
 
 - add reusable planner helpers that consume the leaf-generation state plus live

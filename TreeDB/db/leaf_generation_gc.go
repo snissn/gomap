@@ -7,9 +7,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/snissn/gomap/TreeDB/internal/leafrefscan"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
-	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -165,31 +163,18 @@ func (db *DB) LeafGenerationGC(ctx context.Context, opts LeafGenerationGCOptions
 
 func collectLiveLeafGenerationIDs(ctx context.Context, snap *Snapshot) (map[uint64]struct{}, error) {
 	live := make(map[uint64]struct{})
-	if snap == nil || snap.state == nil || snap.state.LeafGenerations == nil || snap.idx == nil || snap.idx.pager == nil {
+	if snap == nil || snap.db == nil {
 		return live, nil
 	}
-	view := snap.state.LeafGenerations
-	visit := func(ptr page.LeafLogPtr) error {
-		genID, ok := view.FileToGeneration[ptr.FileID]
-		if !ok {
-			return fmt.Errorf("leaf generation view missing file %d", ptr.FileID)
-		}
-		live[genID] = struct{}{}
-		return nil
+	scan, err := snap.db.scanLeafGenerationLiveStats(ctx, snap)
+	if err != nil {
+		return nil, err
 	}
-	verify := func(pageID uint64, n node.Node) error {
-		if !n.VerifyChecksum() {
-			return fmt.Errorf("leaf generation gc: checksum mismatch on page %d", pageID)
-		}
-		return nil
-	}
-	for _, rootID := range []uint64{snap.state.RootPageID, snap.state.SystemRootPageID} {
-		if rootID == 0 {
+	for generationID, totals := range scan.Generations {
+		if generationID == 0 || (totals.LiveBytes <= 0 && totals.LivePages <= 0) {
 			continue
 		}
-		if err := leafrefscan.Walk(ctx, rootID, snap.idx.pager.Get, verify, visit); err != nil {
-			return nil, err
-		}
+		live[generationID] = struct{}{}
 	}
 	return live, nil
 }
