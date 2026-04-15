@@ -28,12 +28,20 @@ func EncodeLeafRef(ptr LeafLogPtr) (uint64, error) {
 	return leafRefMarker | (uint64(ptr.FileID) << 32) | uint64(uint32(ptr.Offset)), nil
 }
 
-func DecodeLeafRef(id uint64) (LeafLogPtr, bool) {
-	if id&leafRefMarker == 0 {
-		return LeafLogPtr{}, false
-	}
+func IsLeafRefID(id uint64) bool {
+	return id&leafRefMarker != 0
+}
+
+func DecodeLeafRefID(id uint64) LeafLogPtr {
 	return LeafLogPtr{
 		Offset: uint64(uint32(id)),
 		FileID: uint32((id >> 32) & ((uint64(1) << 31) - 1)),
-	}, true
+	}
+}
+
+func DecodeLeafRef(id uint64) (LeafLogPtr, bool) {
+	if !IsLeafRefID(id) {
+		return LeafLogPtr{}, false
+	}
+	return DecodeLeafRefID(id), true
 }

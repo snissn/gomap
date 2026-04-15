@@ -259,9 +259,9 @@ func (n *Node) WalkInternalChildren(stack *[]uint64, visit func(page.LeafLogPtr)
 			} else {
 				childID = meta.baseChildID + uint64(binary.LittleEndian.Uint32(n.data[deltaStart:deltaStart+4]))
 			}
-			if ptr, ok := page.DecodeLeafRef(childID); ok {
+			if page.IsLeafRefID(childID) {
 				if visit != nil {
-					if err := visit(ptr); err != nil {
+					if err := visit(page.DecodeLeafRefID(childID)); err != nil {
 						return err
 					}
 				}
@@ -284,9 +284,9 @@ func (n *Node) WalkInternalChildren(stack *[]uint64, visit func(page.LeafLogPtr)
 			return ErrCorruptedNode
 		}
 		childID := binary.LittleEndian.Uint64(n.data[ptr+2 : ptr+10])
-		if ptr, ok := page.DecodeLeafRef(childID); ok {
+		if page.IsLeafRefID(childID) {
 			if visit != nil {
-				if err := visit(ptr); err != nil {
+				if err := visit(page.DecodeLeafRefID(childID)); err != nil {
 					return err
 				}
 			}

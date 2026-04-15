@@ -599,8 +599,8 @@ func (db *DB) scanLeafGenerationLiveStats(ctx context.Context, snap *Snapshot) (
 		if rootID == 0 {
 			continue
 		}
-		if ptr, ok := page.DecodeLeafRef(rootID); ok {
-			if err := visit(ptr); err != nil {
+		if page.IsLeafRefID(rootID) {
+			if err := visit(page.DecodeLeafRefID(rootID)); err != nil {
 				return leafGenerationLiveScanStats{}, err
 			}
 			continue
