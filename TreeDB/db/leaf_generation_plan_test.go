@@ -35,7 +35,7 @@ func TestRankLeafGenerationPlanCandidates(t *testing.T) {
 	}
 }
 
-func TestLeafGenerationPlan_ReportsDeadAndWritableGenerations(t *testing.T) {
+func TestLeafGenerationPlan_SeparatesWholeGenerationGCFromPack(t *testing.T) {
 	db, leafLog := openLeafGenerationGCTestDB(t)
 
 	writeLeafGenerationKeys(t, db, "k", 64, 'a')
@@ -57,22 +57,34 @@ func TestLeafGenerationPlan_ReportsDeadAndWritableGenerations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LeafGenerationPlan: %v", err)
 	}
-	if got, want := plan.Admission, leafGenerationPlanAdmissionEligible; got != want {
+	if got, want := plan.Admission, leafGenerationPlanAdmissionNoCandidates; got != want {
 		t.Fatalf("Admission=%q, want %q", got, want)
 	}
 	if got, want := len(plan.Generations), 2; got != want {
 		t.Fatalf("len(Generations)=%d, want %d", got, want)
 	}
-	if got, want := len(plan.Candidates), 1; got != want {
+	if got, want := len(plan.Candidates), 0; got != want {
 		t.Fatalf("len(Candidates)=%d, want %d", got, want)
 	}
-	if got, want := plan.CandidateGenerationIDs[0], gen1.GenerationID; got != want {
-		t.Fatalf("CandidateGenerationIDs[0]=%d, want %d", got, want)
+	if got := len(plan.CandidateGenerationIDs); got != 0 {
+		t.Fatalf("len(CandidateGenerationIDs)=%d, want 0 (%v)", got, plan.CandidateGenerationIDs)
+	}
+	if got := plan.ExpectedReclaimBytes; got != 0 {
+		t.Fatalf("ExpectedReclaimBytes=%d, want 0", got)
+	}
+	if got := plan.CandidateBytesToCopy; got != 0 {
+		t.Fatalf("CandidateBytesToCopy=%d, want 0", got)
 	}
 
 	entry1 := findLeafGenerationPlanEntry(t, plan, gen1.GenerationID)
-	if !entry1.Eligible {
-		t.Fatalf("generation %d should be eligible: %+v", gen1.GenerationID, entry1)
+	if entry1.Eligible {
+		t.Fatalf("generation %d should not be a pack candidate: %+v", gen1.GenerationID, entry1)
+	}
+	if !entry1.WholeGenerationGCEligible {
+		t.Fatalf("generation %d should be a whole-generation GC candidate: %+v", gen1.GenerationID, entry1)
+	}
+	if got, want := entry1.SkipReason, leafGenerationPlanSkipWholeGenerationGC; got != want {
+		t.Fatalf("generation %d SkipReason=%q, want %q", gen1.GenerationID, got, want)
 	}
 	if got := entry1.BytesTotal; got <= 0 {
 		t.Fatalf("generation %d BytesTotal=%d, want > 0", gen1.GenerationID, got)
@@ -82,6 +94,9 @@ func TestLeafGenerationPlan_ReportsDeadAndWritableGenerations(t *testing.T) {
 	}
 	if got, want := entry1.BytesDead, entry1.BytesTotal; got != want {
 		t.Fatalf("generation %d BytesDead=%d, want %d", gen1.GenerationID, got, want)
+	}
+	if got := entry1.BytesToCopy; got != 0 {
+		t.Fatalf("generation %d BytesToCopy=%d, want 0", gen1.GenerationID, got)
 	}
 	if got := entry1.LivePages; got != 0 {
 		t.Fatalf("generation %d LivePages=%d, want 0", gen1.GenerationID, got)
@@ -97,22 +112,19 @@ func TestLeafGenerationPlan_ReportsDeadAndWritableGenerations(t *testing.T) {
 	if got := entry2.BytesLive; got <= 0 {
 		t.Fatalf("generation %d BytesLive=%d, want > 0", gen2.GenerationID, got)
 	}
-	if got := plan.ExpectedReclaimBytes; got != entry1.BytesDead {
-		t.Fatalf("ExpectedReclaimBytes=%d, want %d", got, entry1.BytesDead)
-	}
 }
 
-func TestLeafGenerationPlan_AgeGateAndForce(t *testing.T) {
+func TestLeafGenerationPlan_AgeGateAndForceOnSparseGeneration(t *testing.T) {
 	db, leafLog := openLeafGenerationGCTestDB(t)
 
-	writeLeafGenerationKeys(t, db, "k", 64, 'a')
+	writeLeafGenerationKeys(t, db, "k", 2048, 'a')
 	_, fileID1 := currentLeafSegmentOrFatal(t, leafLog)
 	rawFileID1 := page.ValueLogSegmentID(fileID1)
 
 	if err := leafLog.rotateLeaf(); err != nil {
 		t.Fatalf("rotateLeaf: %v", err)
 	}
-	writeLeafGenerationKeys(t, db, "k", 64, 'b')
+	writeLeafGenerationKeyRange(t, db, "k", 0, 64, 'b')
 
 	manifest := loadLeafGenerationManifestOrFatal(t, db.dir)
 	gen1 := findLeafGenerationByFileID(t, manifest, rawFileID1)
@@ -126,10 +138,13 @@ func TestLeafGenerationPlan_AgeGateAndForce(t *testing.T) {
 	}
 	entryBlocked := findLeafGenerationPlanEntry(t, blocked, gen1.GenerationID)
 	if entryBlocked.Eligible {
-		t.Fatalf("fresh generation should be blocked: %+v", entryBlocked)
+		t.Fatalf("fresh sparse generation should be blocked: %+v", entryBlocked)
 	}
 	if got, want := entryBlocked.SkipReason, leafGenerationPlanSkipFreshGeneration; got != want {
 		t.Fatalf("blocked SkipReason=%q, want %q", got, want)
+	}
+	if entryBlocked.WholeGenerationGCEligible {
+		t.Fatalf("sparse generation should not be a whole-generation GC candidate: %+v", entryBlocked)
 	}
 
 	forced, err := db.LeafGenerationPlan(context.Background(), LeafGenerationPlanOptions{MinPublishedAgeCommits: 1 << 60, Force: true})
@@ -139,9 +154,77 @@ func TestLeafGenerationPlan_AgeGateAndForce(t *testing.T) {
 	if got, want := forced.Admission, leafGenerationPlanAdmissionEligible; got != want {
 		t.Fatalf("forced Admission=%q, want %q", got, want)
 	}
+	if got, want := len(forced.Candidates), 1; got != want {
+		t.Fatalf("len(forced.Candidates)=%d, want %d", got, want)
+	}
+	if got, want := forced.CandidateGenerationIDs[0], gen1.GenerationID; got != want {
+		t.Fatalf("forced CandidateGenerationIDs[0]=%d, want %d", got, want)
+	}
 	entryForced := findLeafGenerationPlanEntry(t, forced, gen1.GenerationID)
 	if !entryForced.Eligible {
 		t.Fatalf("forced generation should be eligible: %+v", entryForced)
+	}
+	if entryForced.WholeGenerationGCEligible {
+		t.Fatalf("forced sparse generation should not be whole-generation GC eligible: %+v", entryForced)
+	}
+	if got := entryForced.BytesDead; got <= 0 {
+		t.Fatalf("forced BytesDead=%d, want > 0", got)
+	}
+	if got := entryForced.BytesLive; got <= 0 {
+		t.Fatalf("forced BytesLive=%d, want > 0", got)
+	}
+	if got, want := entryForced.BytesToCopy, entryForced.BytesLive; got != want {
+		t.Fatalf("forced BytesToCopy=%d, want %d", got, want)
+	}
+	if got, want := forced.CandidateBytesToCopy, entryForced.BytesToCopy; got != want {
+		t.Fatalf("CandidateBytesToCopy=%d, want %d", got, want)
+	}
+	if got, want := forced.ExpectedReclaimBytes, entryForced.BytesDead; got != want {
+		t.Fatalf("ExpectedReclaimBytes=%d, want %d", got, want)
+	}
+	if got, want := forced.ExpectedReclaimPerByteCopiedPPM, ratioPPM(entryForced.BytesDead, entryForced.BytesToCopy); got != want {
+		t.Fatalf("ExpectedReclaimPerByteCopiedPPM=%d, want %d", got, want)
+	}
+}
+
+func TestLeafGenerationPlan_MinReclaimPerByteCopiedAdmission(t *testing.T) {
+	db, leafLog := openLeafGenerationGCTestDB(t)
+
+	writeLeafGenerationKeys(t, db, "k", 2048, 'a')
+	if err := leafLog.rotateLeaf(); err != nil {
+		t.Fatalf("rotateLeaf: %v", err)
+	}
+	writeLeafGenerationKeyRange(t, db, "k", 0, 64, 'b')
+
+	base, err := db.LeafGenerationPlan(context.Background(), LeafGenerationPlanOptions{})
+	if err != nil {
+		t.Fatalf("LeafGenerationPlan base: %v", err)
+	}
+	if got, want := base.Admission, leafGenerationPlanAdmissionEligible; got != want {
+		t.Fatalf("base Admission=%q, want %q", got, want)
+	}
+	if got := base.ExpectedReclaimPerByteCopiedPPM; got <= 0 {
+		t.Fatalf("ExpectedReclaimPerByteCopiedPPM=%d, want > 0", got)
+	}
+
+	blocked, err := db.LeafGenerationPlan(context.Background(), LeafGenerationPlanOptions{
+		MinReclaimPerByteCopiedPPM: base.ExpectedReclaimPerByteCopiedPPM + 1,
+	})
+	if err != nil {
+		t.Fatalf("LeafGenerationPlan blocked: %v", err)
+	}
+	if got, want := blocked.Admission, leafGenerationPlanAdmissionReclaimPerCopyTooLow; got != want {
+		t.Fatalf("blocked Admission=%q, want %q", got, want)
+	}
+
+	allowed, err := db.LeafGenerationPlan(context.Background(), LeafGenerationPlanOptions{
+		MinReclaimPerByteCopiedPPM: base.ExpectedReclaimPerByteCopiedPPM,
+	})
+	if err != nil {
+		t.Fatalf("LeafGenerationPlan allowed: %v", err)
+	}
+	if got, want := allowed.Admission, leafGenerationPlanAdmissionEligible; got != want {
+		t.Fatalf("allowed Admission=%q, want %q", got, want)
 	}
 }
 

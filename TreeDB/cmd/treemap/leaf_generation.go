@@ -22,6 +22,7 @@ func runLeafGenerationPlan(dir string, args []string) {
 	minCandidateGenerations := fs.Int("min-candidate-generations", 0, "Require at least this many candidate generations unless -force")
 	minExpectedReclaimBytes := fs.Int64("min-expected-reclaim-bytes", 0, "Require at least this many reclaimable bytes unless -force")
 	minExpectedReclaimRatioPPM := fs.Int("min-expected-reclaim-ratio-ppm", 0, "Require at least this reclaim ratio in ppm unless -force")
+	minReclaimPerByteCopiedPPM := fs.Int("min-reclaim-per-byte-copied-ppm", 10000, "Require at least this many reclaimable bytes per byte copied, in ppm, unless -force")
 	_ = fs.Parse(args)
 
 	db := openTreeDB(dir, *rw)
@@ -32,6 +33,7 @@ func runLeafGenerationPlan(dir string, args []string) {
 		MinCandidateGenerations:    *minCandidateGenerations,
 		MinExpectedReclaimBytes:    *minExpectedReclaimBytes,
 		MinExpectedReclaimRatioPPM: *minExpectedReclaimRatioPPM,
+		MinReclaimPerByteCopiedPPM: *minReclaimPerByteCopiedPPM,
 		Force:                      *force,
 	})
 	if err != nil {
@@ -47,13 +49,15 @@ func runLeafGenerationPlan(dir string, args []string) {
 	}
 
 	fmt.Printf(
-		"leafgen-plan: admission=%s current_commit=%d current_generation=%d candidates=%d expected_reclaim_bytes=%d expected_reclaim_ratio_ppm=%d\n",
+		"leafgen-plan: admission=%s current_commit=%d current_generation=%d candidates=%d expected_reclaim_bytes=%d candidate_bytes_to_copy=%d expected_reclaim_ratio_ppm=%d expected_reclaim_per_copy_ppm=%d\n",
 		plan.Admission,
 		plan.CurrentCommitSeq,
 		plan.CurrentGenerationID,
 		len(plan.Candidates),
 		plan.ExpectedReclaimBytes,
+		plan.CandidateBytesToCopy,
 		plan.ExpectedReclaimRatioPPM,
+		plan.ExpectedReclaimPerByteCopiedPPM,
 	)
 	for _, gen := range plan.Generations {
 		skip := gen.SkipReason
@@ -61,18 +65,20 @@ func runLeafGenerationPlan(dir string, args []string) {
 			skip = "-"
 		}
 		fmt.Printf(
-			"leafgen-generation: id=%d state=%s files=%d bytes_total=%d bytes_live=%d bytes_dead=%d live_pages=%d age_commits=%d pinned=%d dead_ratio_ppm=%d live_ratio_ppm=%d eligible=%t skip=%s\n",
+			"leafgen-generation: id=%d state=%s files=%d bytes_total=%d bytes_live=%d bytes_dead=%d bytes_to_copy=%d live_pages=%d age_commits=%d pinned=%d dead_ratio_ppm=%d live_ratio_ppm=%d gc_eligible=%t eligible=%t skip=%s\n",
 			gen.GenerationID,
 			gen.State,
 			gen.FileCount,
 			gen.BytesTotal,
 			gen.BytesLive,
 			gen.BytesDead,
+			gen.BytesToCopy,
 			gen.LivePages,
 			gen.AgeCommits,
 			gen.PinnedCount,
 			gen.DeadRatioPPM,
 			gen.LiveRatioPPM,
+			gen.WholeGenerationGCEligible,
 			gen.Eligible,
 			skip,
 		)

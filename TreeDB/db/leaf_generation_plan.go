@@ -11,16 +11,18 @@ import (
 )
 
 const (
-	leafGenerationPlanAdmissionDisabled          = "disabled"
-	leafGenerationPlanAdmissionNoCandidates      = "no_candidates"
-	leafGenerationPlanAdmissionTooFewGenerations = "too_few_generations"
-	leafGenerationPlanAdmissionReclaimTooSmall   = "reclaim_too_small"
-	leafGenerationPlanAdmissionReclaimTooLow     = "reclaim_ratio_too_low"
-	leafGenerationPlanAdmissionEligible          = "eligible"
+	leafGenerationPlanAdmissionDisabled             = "disabled"
+	leafGenerationPlanAdmissionNoCandidates         = "no_candidates"
+	leafGenerationPlanAdmissionTooFewGenerations    = "too_few_generations"
+	leafGenerationPlanAdmissionReclaimTooSmall      = "reclaim_too_small"
+	leafGenerationPlanAdmissionReclaimTooLow        = "reclaim_ratio_too_low"
+	leafGenerationPlanAdmissionReclaimPerCopyTooLow = "reclaim_per_copy_too_low"
+	leafGenerationPlanAdmissionEligible             = "eligible"
 
 	leafGenerationPlanSkipWritableGeneration = "writable_generation"
 	leafGenerationPlanSkipRetiringGeneration = "retiring_generation"
 	leafGenerationPlanSkipDeletedGeneration  = "deleted_generation"
+	leafGenerationPlanSkipWholeGenerationGC  = "whole_generation_gc_candidate"
 	leafGenerationPlanSkipFreshGeneration    = "fresh_generation"
 	leafGenerationPlanSkipNoDeadBytes        = "no_dead_bytes"
 )
@@ -30,6 +32,7 @@ type LeafGenerationPlanOptions struct {
 	MinCandidateGenerations    int
 	MinExpectedReclaimBytes    int64
 	MinExpectedReclaimRatioPPM int
+	MinReclaimPerByteCopiedPPM int
 	Force                      bool
 }
 
@@ -39,17 +42,19 @@ type LeafGenerationPlanGeneration struct {
 	FileIDs      []uint32
 	FileCount    int
 
-	BytesTotal int64
-	BytesLive  int64
-	BytesDead  int64
-	LivePages  int
+	BytesTotal  int64
+	BytesLive   int64
+	BytesDead   int64
+	BytesToCopy int64
+	LivePages   int
 
-	AgeCommits   uint64
-	PinnedCount  uint64
-	DeadRatioPPM int
-	LiveRatioPPM int
-	Eligible     bool
-	SkipReason   string
+	AgeCommits                uint64
+	PinnedCount               uint64
+	DeadRatioPPM              int
+	LiveRatioPPM              int
+	WholeGenerationGCEligible bool
+	Eligible                  bool
+	SkipReason                string
 }
 
 type LeafGenerationPlan struct {
@@ -59,14 +64,16 @@ type LeafGenerationPlan struct {
 	Candidates             []LeafGenerationPlanGeneration
 	CandidateGenerationIDs []uint64
 
-	CandidateBytesTotal int64
-	CandidateBytesLive  int64
-	CandidateBytesDead  int64
-	CandidateLivePages  int
+	CandidateBytesTotal  int64
+	CandidateBytesLive   int64
+	CandidateBytesDead   int64
+	CandidateBytesToCopy int64
+	CandidateLivePages   int
 
-	ExpectedReclaimBytes    int64
-	ExpectedReclaimRatioPPM int
-	Admission               string
+	ExpectedReclaimBytes            int64
+	ExpectedReclaimRatioPPM         int
+	ExpectedReclaimPerByteCopiedPPM int
+	Admission                       string
 }
 
 type leafGenerationLiveScanStats struct {
@@ -145,11 +152,13 @@ func (db *DB) LeafGenerationPlan(ctx context.Context, opts LeafGenerationPlanOpt
 		if entry.BytesDead < 0 {
 			entry.BytesDead = 0
 		}
+		entry.BytesToCopy = entry.BytesLive
 		if plan.CurrentCommitSeq > gen.PublishedCommitSeq {
 			entry.AgeCommits = plan.CurrentCommitSeq - gen.PublishedCommitSeq
 		}
 		entry.DeadRatioPPM = ratioPPM(entry.BytesDead, entry.BytesTotal)
 		entry.LiveRatioPPM = ratioPPM(entry.BytesLive, entry.BytesTotal)
+		entry.WholeGenerationGCEligible = leafGenerationWholeGenerationGCEligible(entry)
 		entry.Eligible, entry.SkipReason = leafGenerationPlanEligibility(entry, opts)
 		plan.Generations = append(plan.Generations, entry)
 		if entry.Eligible {
@@ -164,10 +173,12 @@ func (db *DB) LeafGenerationPlan(ctx context.Context, opts LeafGenerationPlanOpt
 		plan.CandidateBytesTotal += gen.BytesTotal
 		plan.CandidateBytesLive += gen.BytesLive
 		plan.CandidateBytesDead += gen.BytesDead
+		plan.CandidateBytesToCopy += gen.BytesToCopy
 		plan.CandidateLivePages += gen.LivePages
 	}
 	plan.ExpectedReclaimBytes = plan.CandidateBytesDead
 	plan.ExpectedReclaimRatioPPM = ratioPPM(plan.CandidateBytesDead, plan.CandidateBytesTotal)
+	plan.ExpectedReclaimPerByteCopiedPPM = ratioPPM(plan.CandidateBytesDead, plan.CandidateBytesToCopy)
 	plan.Admission = leafGenerationPlanAdmission(opts, plan)
 	return plan, nil
 }
@@ -188,7 +199,21 @@ func leafGenerationPlanAdmission(opts LeafGenerationPlanOptions, plan LeafGenera
 	if opts.MinExpectedReclaimRatioPPM > 0 && plan.ExpectedReclaimRatioPPM < opts.MinExpectedReclaimRatioPPM {
 		return leafGenerationPlanAdmissionReclaimTooLow
 	}
+	if opts.MinReclaimPerByteCopiedPPM > 0 && plan.ExpectedReclaimPerByteCopiedPPM < opts.MinReclaimPerByteCopiedPPM {
+		return leafGenerationPlanAdmissionReclaimPerCopyTooLow
+	}
 	return leafGenerationPlanAdmissionEligible
+}
+
+func leafGenerationWholeGenerationGCEligible(gen LeafGenerationPlanGeneration) bool {
+	if gen.PinnedCount > 0 {
+		return false
+	}
+	switch gen.State {
+	case leafGenerationStateWritable, leafGenerationStateRetiring, leafGenerationStateDeleted:
+		return false
+	}
+	return gen.BytesDead > 0 && gen.BytesLive <= 0
 }
 
 func leafGenerationPlanEligibility(gen LeafGenerationPlanGeneration, opts LeafGenerationPlanOptions) (bool, string) {
@@ -200,11 +225,14 @@ func leafGenerationPlanEligibility(gen LeafGenerationPlanGeneration, opts LeafGe
 	case leafGenerationStateDeleted:
 		return false, leafGenerationPlanSkipDeletedGeneration
 	}
+	if gen.BytesDead <= 0 {
+		return false, leafGenerationPlanSkipNoDeadBytes
+	}
+	if gen.BytesLive <= 0 {
+		return false, leafGenerationPlanSkipWholeGenerationGC
+	}
 	if !opts.Force && opts.MinPublishedAgeCommits > 0 && gen.AgeCommits < opts.MinPublishedAgeCommits {
 		return false, leafGenerationPlanSkipFreshGeneration
-	}
-	if !opts.Force && gen.BytesDead <= 0 {
-		return false, leafGenerationPlanSkipNoDeadBytes
 	}
 	return true, ""
 }

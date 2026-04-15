@@ -36,6 +36,11 @@ func openLeafGenerationGCTestDB(t *testing.T) (*DB, *rewriteWriter) {
 
 func writeLeafGenerationKeys(t *testing.T, db *DB, prefix string, count int, fill byte) {
 	t.Helper()
+	writeLeafGenerationKeyRange(t, db, prefix, 0, count, fill)
+}
+
+func writeLeafGenerationKeyRange(t *testing.T, db *DB, prefix string, start, count int, fill byte) {
+	t.Helper()
 	raw := db.NewBatch()
 	b, ok := raw.(*Batch)
 	if !ok {
@@ -43,7 +48,7 @@ func writeLeafGenerationKeys(t *testing.T, db *DB, prefix string, count int, fil
 		t.Fatalf("NewBatch type=%T, want *Batch", raw)
 	}
 	for i := 0; i < count; i++ {
-		key := []byte(fmt.Sprintf("%s-%04d", prefix, i))
+		key := []byte(fmt.Sprintf("%s-%04d", prefix, start+i))
 		value := bytes.Repeat([]byte{fill}, 32)
 		if err := b.Set(key, value); err != nil {
 			closeNoErr(t, b)
