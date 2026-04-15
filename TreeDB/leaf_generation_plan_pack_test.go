@@ -138,3 +138,50 @@ func TestLeafGenerationPackFromPlan_CachedModeCheckpointsBeforeSelectionError(t 
 		t.Fatalf("expected LeafGenerationPackFromPlan to checkpoint cached state, got before=%d after=%d", metaBefore.CommitSeq, metaAfter.CommitSeq)
 	}
 }
+
+func TestLeafGenerationPackRunOnce_CachedModeCheckpointsBeforeSkip(t *testing.T) {
+	dir := t.TempDir()
+	db, err := treedb.Open(treedb.Options{
+		Dir:                        dir,
+		Durability:                 treedb.DurabilityWALOffRelaxed,
+		IndexOuterLeavesInValueLog: true,
+		ValueLog: treedb.ValueLogOptions{
+			PointerThreshold: 1,
+		},
+	})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+
+	metaBeforeWrites := readMainMeta(t, dir)
+	for i := 0; i < 64; i++ {
+		key := []byte(fmt.Sprintf("leaf-pack-run-once-%04d", i))
+		val := bytes.Repeat([]byte{byte((i + 23) % 251)}, 32)
+		if err := db.Set(key, val); err != nil {
+			t.Fatalf("set %q: %v", key, err)
+		}
+	}
+	metaBefore := readMainMeta(t, dir)
+	if metaBefore.CommitSeq != metaBeforeWrites.CommitSeq {
+		t.Fatalf("expected cached writes to remain uncheckpointed before LeafGenerationPackRunOnce, got before=%d after writes=%d", metaBeforeWrites.CommitSeq, metaBefore.CommitSeq)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	stats, err := db.LeafGenerationPackRunOnce(ctx, treedb.LeafGenerationPackFromPlanOptions{MaxBytesToCopy: 1})
+	if err != nil {
+		t.Fatalf("LeafGenerationPackRunOnce: %v", err)
+	}
+	if stats.Ran {
+		t.Fatalf("expected LeafGenerationPackRunOnce to skip, got pack=%+v", stats.Pack)
+	}
+	if stats.SkipReason == "" {
+		t.Fatalf("expected non-empty skip reason")
+	}
+
+	metaAfter := readMainMeta(t, dir)
+	if metaAfter.CommitSeq <= metaBefore.CommitSeq {
+		t.Fatalf("expected LeafGenerationPackRunOnce to checkpoint cached state, got before=%d after=%d", metaBefore.CommitSeq, metaAfter.CommitSeq)
+	}
+}
