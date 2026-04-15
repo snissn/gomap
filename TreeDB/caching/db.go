@@ -4180,9 +4180,33 @@ func mergeUniqueNonEmptyStrings(pathSets ...[]string) []string {
 	return out
 }
 
+func (db *DB) isLeafValueLogPath(path string) bool {
+	if db == nil || !db.indexOuterLeavesInValueLog || db.leafLogDir == "" || path == "" {
+		return false
+	}
+	return filepath.Clean(filepath.Dir(path)) == filepath.Clean(db.leafLogDir)
+}
+
+func (db *DB) valueOnlyLogPaths(paths []string) []string {
+	if len(paths) == 0 {
+		return nil
+	}
+	if db == nil || !db.indexOuterLeavesInValueLog {
+		return append([]string(nil), paths...)
+	}
+	out := make([]string, 0, len(paths))
+	for _, path := range paths {
+		if path == "" || db.isLeafValueLogPath(path) {
+			continue
+		}
+		out = append(out, path)
+	}
+	return out
+}
+
 func (db *DB) valueLogGCProtectedPathSets() (retained []string, inUse []string, merged []string) {
-	retained = db.valueLogRetainedPaths()
-	inUse = db.valueLogInUsePaths()
+	retained = db.valueOnlyLogPaths(db.valueLogRetainedPaths())
+	inUse = db.valueOnlyLogPaths(db.valueLogInUsePaths())
 	merged = mergeUniqueNonEmptyStrings(retained, inUse)
 	return retained, inUse, merged
 }
@@ -4324,7 +4348,7 @@ func (db *DB) collectValueLogLiveIDsUntil(lastWrite int64) (map[uint32]struct{},
 					_ = snap.Close()
 					return nil, errForegroundWritesResumed
 				}
-				if err := collectLeafRefValueLogLiveIDs(leafCtx, p, state.RootPageID, reader, live); err != nil {
+				if err := collectLeafRefNestedValueLogLiveIDs(leafCtx, p, state.RootPageID, reader, live); err != nil {
 					if errors.Is(err, context.Canceled) {
 						err = errForegroundWritesResumed
 					}
@@ -4335,7 +4359,7 @@ func (db *DB) collectValueLogLiveIDsUntil(lastWrite int64) (map[uint32]struct{},
 					_ = snap.Close()
 					return nil, errForegroundWritesResumed
 				}
-				if err := collectLeafRefValueLogLiveIDs(leafCtx, p, state.SystemRootPageID, reader, live); err != nil {
+				if err := collectLeafRefNestedValueLogLiveIDs(leafCtx, p, state.SystemRootPageID, reader, live); err != nil {
 					if errors.Is(err, context.Canceled) {
 						err = errForegroundWritesResumed
 					}
@@ -4686,13 +4710,13 @@ func (db *DB) pruneRetainedValueLogsWithObserved(force bool, observedSourceIDs m
 	if !db.valueLogEnabled() {
 		return out
 	}
-	paths := db.valueLogRetainedPaths()
+	paths := db.valueOnlyLogPaths(db.valueLogRetainedPaths())
 	if len(paths) == 0 {
 		return out
 	}
 
 	inUse := make(map[string]struct{})
-	for _, path := range db.valueLogInUsePaths() {
+	for _, path := range db.valueOnlyLogPaths(db.valueLogInUsePaths()) {
 		inUse[path] = struct{}{}
 	}
 

@@ -2,6 +2,7 @@ package caching
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 )
 
 type rewriteRecordingBackend struct {
@@ -291,5 +293,173 @@ func TestVlogGenerationRewrite_UsesSharedRIDAllocator(t *testing.T) {
 	}
 	if after := db.nextRID.Load(); after != before+3 {
 		t.Fatalf("expected nextRID advanced to %d after reserve, got %d", before+3, after)
+	}
+}
+
+func openSplitValueLogOwnershipTestDB(t *testing.T) *DB {
+	t.Helper()
+	dir := t.TempDir()
+
+	backend, err := backenddb.Open(backenddb.Options{
+		Dir:                        dir,
+		DisableBackgroundPrune:     true,
+		IndexOuterLeavesInValueLog: true,
+		ValueLog: backenddb.ValueLogOptions{
+			PointerThreshold: 1,
+			Generational: backenddb.ValueLogGenerationConfig{
+				HotSegmentTargetBytes: 64 << 10,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	t.Cleanup(func() { _ = backend.Close() })
+
+	db, err := Open(dir, backend, Options{
+		AllowUnsafe:                              true,
+		DisableWAL:                               true,
+		JournalLanes:                             1,
+		IndexOuterLeavesInValueLog:               true,
+		ForceValueLogPointers:                    true,
+		ValueLogPointerThreshold:                 1,
+		ValueLogGenerationPolicy:                 uint8(backenddb.ValueLogGenerationHotWarmCold),
+		ValueLogMaxSegmentBytes:                  64 << 10,
+		ValueLogGenerationHotSegmentTargetBytes:  64 << 10,
+		ValueLogGenerationWarmSegmentTargetBytes: 64 << 10,
+		ValueLogGenerationColdSegmentTargetBytes: 64 << 10,
+		ValueLogRewriteTriggerTotalBytes:         1,
+	})
+	if err != nil {
+		t.Fatalf("open cachingdb: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	skipRetainedPrune(db)
+	payload := make([]byte, 32<<10)
+	for i := 0; i < 4; i++ {
+		if err := db.Set([]byte(fmt.Sprintf("k-%d", i)), payload); err != nil {
+			t.Fatalf("set %d: %v", i, err)
+		}
+	}
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
+	return db
+}
+
+func mustCurrentValueLogPathsForOwnershipTest(t *testing.T, db *DB) (valuePath string, leafPath string) {
+	t.Helper()
+	if db == nil {
+		t.Fatal("missing db")
+	}
+	if len(db.lanes) == 0 {
+		t.Fatal("missing value-log lanes")
+	}
+	db.lanes[0].vlogMu.Lock()
+	valuePath = db.lanes[0].vlogPath
+	db.lanes[0].vlogMu.Unlock()
+	db.leafLog.vlogMu.Lock()
+	leafPath = db.leafLog.vlogPath
+	db.leafLog.vlogMu.Unlock()
+	if valuePath == "" {
+		t.Fatal("missing current value_vlog path")
+	}
+	if leafPath == "" {
+		t.Fatal("missing current leaf_vlog path")
+	}
+	return valuePath, leafPath
+}
+
+func mustValueLogIDForPath(t *testing.T, path string) uint32 {
+	t.Helper()
+	laneID, seq, valueLog, ok := parseLogSeq(filepath.Base(path))
+	if !ok || !valueLog || laneID < 0 {
+		t.Fatalf("parseLogSeq(%q) failed", path)
+	}
+	id, err := valuelog.EncodeFileID(uint32(laneID), uint32(seq))
+	if err != nil {
+		t.Fatalf("EncodeFileID(%q): %v", path, err)
+	}
+	return id
+}
+
+func TestValueLogProtectedPaths_ExcludeLeafPathsInSplitMode(t *testing.T) {
+	db := openSplitValueLogOwnershipTestDB(t)
+	valuePath, leafPath := mustCurrentValueLogPathsForOwnershipTest(t, db)
+	retainedValuePath := filepath.Join(filepath.Dir(valuePath), "value-l0-000777.log")
+	retainedLeafPath := filepath.Join(filepath.Dir(leafPath), "value-l248-000777.log")
+	if err := os.WriteFile(retainedValuePath, []byte("retained-value"), 0o644); err != nil {
+		t.Fatalf("write retained value path: %v", err)
+	}
+	if err := os.WriteFile(retainedLeafPath, []byte("retained-leaf"), 0o644); err != nil {
+		t.Fatalf("write retained leaf path: %v", err)
+	}
+	db.valueLogMu.Lock()
+	db.valueLogRetain[retainedValuePath] = struct{}{}
+	db.valueLogRetain[retainedLeafPath] = struct{}{}
+	db.valueLogMu.Unlock()
+
+	got := db.valueLogProtectedPaths()
+	gotSet := make(map[string]struct{}, len(got))
+	for _, path := range got {
+		gotSet[path] = struct{}{}
+	}
+	if _, ok := gotSet[valuePath]; !ok {
+		t.Fatalf("protected paths missing current value_vlog path: %s", valuePath)
+	}
+	if _, ok := gotSet[retainedValuePath]; !ok {
+		t.Fatalf("protected paths missing retained value_vlog path: %s", retainedValuePath)
+	}
+	if _, ok := gotSet[leafPath]; ok {
+		t.Fatalf("protected paths unexpectedly include current leaf_vlog path: %s", leafPath)
+	}
+	if _, ok := gotSet[retainedLeafPath]; ok {
+		t.Fatalf("protected paths unexpectedly include retained leaf_vlog path: %s", retainedLeafPath)
+	}
+}
+
+func TestCollectValueLogLiveIDs_ExcludesLeafLogIDsInSplitMode(t *testing.T) {
+	db := openSplitValueLogOwnershipTestDB(t)
+	valuePath, leafPath := mustCurrentValueLogPathsForOwnershipTest(t, db)
+	valueID := mustValueLogIDForPath(t, valuePath)
+	leafID := mustValueLogIDForPath(t, leafPath)
+
+	live, err := db.collectValueLogLiveIDs()
+	if err != nil {
+		t.Fatalf("collectValueLogLiveIDs: %v", err)
+	}
+	if _, ok := live[valueID]; !ok {
+		t.Fatalf("live IDs missing current value_vlog file id %d", valueID)
+	}
+	if _, ok := live[leafID]; ok {
+		t.Fatalf("live IDs unexpectedly include current leaf_vlog file id %d", leafID)
+	}
+}
+
+func TestPruneRetainedValueLogs_IgnoresLeafPathsInSplitMode(t *testing.T) {
+	db := openSplitValueLogOwnershipTestDB(t)
+	valuePath, leafPath := mustCurrentValueLogPathsForOwnershipTest(t, db)
+	retainedValuePath := filepath.Join(filepath.Dir(valuePath), "value-l0-000778.log")
+	retainedLeafPath := filepath.Join(filepath.Dir(leafPath), "value-l248-000778.log")
+	if err := os.WriteFile(retainedValuePath, []byte("retained-value"), 0o644); err != nil {
+		t.Fatalf("write retained value path: %v", err)
+	}
+	if err := os.WriteFile(retainedLeafPath, []byte("retained-leaf"), 0o644); err != nil {
+		t.Fatalf("write retained leaf path: %v", err)
+	}
+	db.valueLogMu.Lock()
+	db.valueLogRetain[retainedValuePath] = struct{}{}
+	db.valueLogRetain[retainedLeafPath] = struct{}{}
+	db.valueLogMu.Unlock()
+
+	stats := db.pruneRetainedValueLogs(true)
+	if _, err := os.Stat(retainedLeafPath); err != nil {
+		t.Fatalf("expected retained leaf_vlog path to remain, stat err=%v", err)
+	}
+	if stats.CandidateSegments != 1 {
+		t.Fatalf("candidate segments=%d want 1", stats.CandidateSegments)
+	}
+	if stats.RemovedSegments+stats.ZombieMarkedSegments != 1 {
+		t.Fatalf("value action count=%d want 1 (removed=%d zombie_marked=%d)", stats.RemovedSegments+stats.ZombieMarkedSegments, stats.RemovedSegments, stats.ZombieMarkedSegments)
 	}
 }
