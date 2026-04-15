@@ -910,7 +910,34 @@ func valueLogRecordLengthNeedsHeader(ptr page.ValuePtr, hint uint32) bool {
 	return hint == 0
 }
 
+var valueLogRecordLengthHeaderReadHook struct {
+	mu sync.Mutex
+	fn func()
+}
+
+func registerValueLogRecordLengthHeaderReadHook(hook func()) func() {
+	valueLogRecordLengthHeaderReadHook.mu.Lock()
+	prev := valueLogRecordLengthHeaderReadHook.fn
+	valueLogRecordLengthHeaderReadHook.fn = hook
+	valueLogRecordLengthHeaderReadHook.mu.Unlock()
+	return func() {
+		valueLogRecordLengthHeaderReadHook.mu.Lock()
+		valueLogRecordLengthHeaderReadHook.fn = prev
+		valueLogRecordLengthHeaderReadHook.mu.Unlock()
+	}
+}
+
+func runValueLogRecordLengthHeaderReadHook() {
+	valueLogRecordLengthHeaderReadHook.mu.Lock()
+	hook := valueLogRecordLengthHeaderReadHook.fn
+	valueLogRecordLengthHeaderReadHook.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
+}
+
 func readValueLogRecordLengthFromHeader(r io.ReaderAt, start int64) (uint32, error) {
+	runValueLogRecordLengthHeaderReadHook()
 	var header [valuelog.HeaderSize]byte
 	if _, err := r.ReadAt(header[:], start); err != nil {
 		return 0, err

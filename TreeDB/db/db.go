@@ -134,8 +134,10 @@ type DB struct {
 	bgErrMu     sync.Mutex
 	bgErr       error
 
-	leafGenerationLiveStatsMu    sync.RWMutex
-	leafGenerationLiveStatsCache leafGenerationLiveStatsCache
+	leafGenerationLiveStatsMu        sync.RWMutex
+	leafGenerationLiveStatsCache     leafGenerationLiveStatsCache
+	leafGenerationRecordLengthMu     sync.RWMutex
+	leafGenerationRecordLengthByFile map[uint32]*leafGenerationRecordLengthIndex
 
 	rewritePlanLiveBytesMu    sync.RWMutex
 	rewritePlanLiveBytesCache valueLogRewriteLiveBytesCache

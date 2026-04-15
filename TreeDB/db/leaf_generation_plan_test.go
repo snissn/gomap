@@ -5,6 +5,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/snissn/gomap/TreeDB/internal/leafrefscan"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -23,6 +24,18 @@ func withLeafGenerationLiveScanCounter(t *testing.T) *atomic.Uint64 {
 	t.Helper()
 	var counter atomic.Uint64
 	unregister := registerLeafGenerationLiveScanHook(func() {
+		counter.Add(1)
+	})
+	t.Cleanup(func() {
+		unregister()
+	})
+	return &counter
+}
+
+func withValueLogRecordLengthHeaderReadCounter(t *testing.T) *atomic.Uint64 {
+	t.Helper()
+	var counter atomic.Uint64
+	unregister := registerValueLogRecordLengthHeaderReadHook(func() {
 		counter.Add(1)
 	})
 	t.Cleanup(func() {
@@ -238,6 +251,77 @@ func TestLeafGenerationPlan_MinReclaimPerByteCopiedAdmission(t *testing.T) {
 	}
 	if got, want := allowed.Admission, leafGenerationPlanAdmissionEligible; got != want {
 		t.Fatalf("allowed Admission=%q, want %q", got, want)
+	}
+}
+
+func TestLeafGenerationRecordLengthForPlan_UsesSealedIndex(t *testing.T) {
+	db, leafLog := openLeafGenerationGCTestDB(t)
+
+	writeLeafGenerationKeys(t, db, "k", 2048, 'a')
+	_, fileID1 := currentLeafSegmentOrFatal(t, leafLog)
+	rawFileID1 := page.ValueLogSegmentID(fileID1)
+	if err := leafLog.rotateLeaf(); err != nil {
+		t.Fatalf("rotateLeaf: %v", err)
+	}
+	writeLeafGenerationKeyRange(t, db, "k", 0, 64, 'b')
+
+	manifest := loadLeafGenerationManifestOrFatal(t, db.dir)
+	gen1 := findLeafGenerationByFileID(t, manifest, rawFileID1)
+
+	db.writeMu.RLock()
+	snap := db.AcquireSnapshot()
+	db.writeMu.RUnlock()
+	if snap == nil {
+		t.Fatal("expected snapshot")
+	}
+	defer func() { _ = snap.Close() }()
+	if len(snap.leafGenerationIDs) > 0 {
+		db.unpinLeafGenerationIDs(snap.leafGenerationIDs)
+		snap.leafGenerationIDs = snap.leafGenerationIDs[:0]
+	}
+	view := snap.state.LeafGenerations
+	if view == nil {
+		t.Fatal("expected leaf generation view")
+	}
+	var sealedPtr page.LeafLogPtr
+	visit := func(ptr page.LeafLogPtr) error {
+		if view.FileToGeneration[ptr.FileID] == gen1.GenerationID && sealedPtr.FileID == 0 {
+			sealedPtr = ptr
+		}
+		return nil
+	}
+	for _, rootID := range []uint64{snap.state.RootPageID, snap.state.SystemRootPageID} {
+		if rootID == 0 || sealedPtr.FileID != 0 {
+			continue
+		}
+		if err := leafrefscan.Walk(context.Background(), rootID, snap.idx.pager.Get, nil, visit); err != nil {
+			t.Fatalf("leafref walk: %v", err)
+		}
+	}
+	if sealedPtr.FileID == 0 {
+		t.Fatal("expected sealed leafref pointer")
+	}
+
+	want, err := db.valueLogRecordLengthForRewriteInSet(sealedPtr.ValuePtr(), snap.state.ValueLogSet)
+	if err != nil {
+		t.Fatalf("valueLogRecordLengthForRewriteInSet: %v", err)
+	}
+	counter := withValueLogRecordLengthHeaderReadCounter(t)
+	got, usedIndex, err := db.leafGenerationRecordLengthForPlan(sealedPtr, snap.state.ValueLogSet, view)
+	if err != nil {
+		t.Fatalf("leafGenerationRecordLengthForPlan: %v", err)
+	}
+	if !usedIndex {
+		t.Fatal("expected sealed leaf length lookup to use index")
+	}
+	if got != want {
+		t.Fatalf("record length=%d, want %d", got, want)
+	}
+	if got := counter.Load(); got != 0 {
+		t.Fatalf("sealed index path unexpectedly read %d headers", got)
+	}
+	if idx, ok := db.loadLeafGenerationRecordLengthIndex(sealedPtr.FileID); !ok || idx == nil {
+		t.Fatalf("expected cached record-length index for file %d", sealedPtr.FileID)
 	}
 }
 

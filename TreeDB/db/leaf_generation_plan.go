@@ -425,9 +425,15 @@ func (db *DB) scanLeafGenerationLiveStats(ctx context.Context, snap *Snapshot) (
 		if !ok {
 			return fmt.Errorf("leaf generation plan: missing generation for leaf file %d", ptr.FileID)
 		}
-		recordLen, err := db.valueLogRecordLengthForRewriteInSet(ptr.ValuePtr(), snap.state.ValueLogSet)
+		recordLen, _, err := db.leafGenerationRecordLengthForPlan(ptr, snap.state.ValueLogSet, view)
 		if err != nil {
 			return err
+		}
+		if recordLen == 0 {
+			recordLen, err = db.valueLogRecordLengthForRewriteInSet(ptr.ValuePtr(), snap.state.ValueLogSet)
+			if err != nil {
+				return err
+			}
 		}
 		fileTotals := stats.Files[ptr.FileID]
 		fileTotals.LivePages++
