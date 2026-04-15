@@ -1349,6 +1349,10 @@ type rewriteBudgetRecordingBackend struct {
 	gcResponses     []backenddb.ValueLogGCStats
 	gcErr           error
 	gcFn            func(context.Context, backenddb.ValueLogGCOptions) (backenddb.ValueLogGCStats, error)
+	leafPackCalls   int
+	leafPackOpts    backenddb.LeafGenerationPackFromPlanOptions
+	leafPackResp    backenddb.LeafGenerationPackRunOnceStats
+	leafPackErr     error
 }
 
 func (b *rewriteBudgetRecordingBackend) ValueLogRewritePlan(ctx context.Context, opts backenddb.ValueLogRewriteOnlineOptions) (backenddb.ValueLogRewritePlan, error) {
@@ -1421,6 +1425,14 @@ func (b *rewriteBudgetRecordingBackend) ValueLogGC(ctx context.Context, opts bac
 	return stats, err
 }
 
+func (b *rewriteBudgetRecordingBackend) LeafGenerationPackRunOnce(ctx context.Context, opts backenddb.LeafGenerationPackFromPlanOptions) (backenddb.LeafGenerationPackRunOnceStats, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.leafPackCalls++
+	b.leafPackOpts = opts
+	return b.leafPackResp, b.leafPackErr
+}
+
 func (b *rewriteBudgetRecordingBackend) recordedRewrite() (backenddb.ValueLogRewriteOnlineOptions, int) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -1488,6 +1500,12 @@ func (b *rewriteBudgetRecordingBackend) recordedGCObservedSourceCalls() int {
 	return count
 }
 
+func (b *rewriteBudgetRecordingBackend) recordedLeafPack() (backenddb.LeafGenerationPackFromPlanOptions, int) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.leafPackOpts, b.leafPackCalls
+}
+
 func openRewriteQueueTestDB(t *testing.T, dir string, recorder *rewriteBudgetRecordingBackend) (*DB, func()) {
 	t.Helper()
 	db, err := Open(dir, recorder, Options{
@@ -1530,6 +1548,88 @@ func runRewriteQueueMaintenanceForTest(db *DB) {
 		rewriteDebtDrain:      true,
 		debugSource:           "rewrite_queue_pending",
 	})
+}
+
+func TestLeafGenerationPackMaintenance_RequiresExplicitEnv(t *testing.T) {
+	backend, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	recorder := &rewriteBudgetRecordingBackend{DB: backend, leafPackResp: backenddb.LeafGenerationPackRunOnceStats{Ran: true}}
+	defer recorder.Close()
+	db := &DB{
+		backend:                    recorder,
+		indexOuterLeavesInValueLog: true,
+		valueLogGenerationPolicy:   uint8(backenddb.ValueLogGenerationHotWarmCold),
+		closeCh:                    make(chan struct{}),
+	}
+	db.checkpointCond = sync.NewCond(&db.checkpointMu)
+	attempted, ran, err := db.maybeRunLeafGenerationPackMaintenance(false, true, vlogGenerationMaintenanceOptions{skipCheckpoint: true})
+	if err != nil {
+		t.Fatalf("maybeRunLeafGenerationPackMaintenance: %v", err)
+	}
+	if attempted || ran {
+		t.Fatalf("attempted=%t ran=%t want false/false", attempted, ran)
+	}
+}
+
+func TestLeafGenerationPackMaintenance_RunsWithDefaultBounds(t *testing.T) {
+	t.Setenv(envEnableLeafGenerationPackMaintenance, "1")
+	backend, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	recorder := &rewriteBudgetRecordingBackend{
+		DB: backend,
+		leafPackResp: backenddb.LeafGenerationPackRunOnceStats{
+			Ran: true,
+			Selection: backenddb.LeafGenerationPackSelection{
+				GenerationIDs:                   []uint64{7},
+				BytesToCopy:                     1234,
+				BytesDead:                       2345,
+				ExpectedReclaimBytes:            2345,
+				ExpectedReclaimPerByteCopiedPPM: 900000,
+			},
+			Pack: backenddb.LeafGenerationPackStats{
+				BytesCopied:   1200,
+				WallTimeNanos: (12 * time.Millisecond).Nanoseconds(),
+			},
+		},
+	}
+	defer recorder.Close()
+	db := &DB{
+		backend:                    recorder,
+		indexOuterLeavesInValueLog: true,
+		valueLogGenerationPolicy:   uint8(backenddb.ValueLogGenerationHotWarmCold),
+		closeCh:                    make(chan struct{}),
+	}
+	db.checkpointCond = sync.NewCond(&db.checkpointMu)
+	attempted, ran, err := db.maybeRunLeafGenerationPackMaintenance(false, true, vlogGenerationMaintenanceOptions{skipCheckpoint: true})
+	if err != nil {
+		t.Fatalf("maybeRunLeafGenerationPackMaintenance: %v", err)
+	}
+	if !attempted || !ran {
+		t.Fatalf("attempted=%t ran=%t want true/true", attempted, ran)
+	}
+	opts, calls := recorder.recordedLeafPack()
+	if calls != 1 {
+		t.Fatalf("leaf pack calls=%d want 1", calls)
+	}
+	if opts.MaxGenerations != leafGenerationPackMaintenanceDefaultMaxGenerations {
+		t.Fatalf("MaxGenerations=%d want %d", opts.MaxGenerations, leafGenerationPackMaintenanceDefaultMaxGenerations)
+	}
+	if opts.MaxBytesToCopy != leafGenerationPackMaintenanceDefaultMaxBytesToCopy {
+		t.Fatalf("MaxBytesToCopy=%d want %d", opts.MaxBytesToCopy, leafGenerationPackMaintenanceDefaultMaxBytesToCopy)
+	}
+	if opts.MinPublishedAgeCommits != leafGenerationPackMaintenanceDefaultMinPublishedAgeSeq {
+		t.Fatalf("MinPublishedAgeCommits=%d want %d", opts.MinPublishedAgeCommits, leafGenerationPackMaintenanceDefaultMinPublishedAgeSeq)
+	}
+	if got := db.vlogGenerationLeafPackRuns.Load(); got != 1 {
+		t.Fatalf("leaf pack runs=%d want 1", got)
+	}
+	if got := db.vlogGenerationLeafPackBytesCopied.Load(); got != 1200 {
+		t.Fatalf("leaf pack bytes copied=%d want 1200", got)
+	}
 }
 
 func TestVlogGenerationMaintenance_SerializesConcurrentRuns(t *testing.T) {
@@ -8728,7 +8828,27 @@ func TestVlogGenerationStats_ReportRewriteBacklogAndDurations(t *testing.T) {
 	db.vlogGenerationMaintenancePassWithRewriteBySource[vlogGenerationMaintenanceSourcePeriodic].Store(2)
 	db.vlogGenerationMaintenancePassWithRewriteBySource[vlogGenerationMaintenanceSourceCheckpointPending].Store(1)
 	db.vlogGenerationMaintenancePassWithGCBySource[vlogGenerationMaintenanceSourceBypass].Store(2)
+	db.vlogGenerationMaintenancePassWithLeafPack.Store(4)
+	db.vlogGenerationMaintenancePassWithLeafPackBySource[vlogGenerationMaintenanceSourcePeriodic].Store(3)
 	db.vlogGenerationMaintenancePassNoopBySource[vlogGenerationMaintenanceSourceOther].Store(3)
+	db.vlogGenerationLeafPackAttempts.Store(5)
+	db.vlogGenerationLeafPackRuns.Store(2)
+	db.vlogGenerationLeafPackSkips.Store(3)
+	db.vlogGenerationLeafPackErrors.Store(1)
+	db.vlogGenerationLeafPackBytesCopied.Store(4096)
+	db.vlogGenerationLeafPackExpectedReclaimBytes.Store(2048)
+	db.vlogGenerationLeafPackExpectedReclaimPerByteCopiedPPM.Store(500000)
+	db.vlogGenerationLeafPackSelectionBytesToCopy.Store(1024)
+	db.vlogGenerationLeafPackSelectionBytesDead.Store(2048)
+	db.vlogGenerationLeafPackSelectionGenerations.Store(3)
+	db.vlogGenerationLeafPackLastWallNanos.Store(uint64((55 * time.Millisecond).Nanoseconds()))
+	db.vlogGenerationLeafPackLastExpectedReclaimBytes.Store(900)
+	db.vlogGenerationLeafPackLastExpectedReclaimPerByteCopiedPPM.Store(450000)
+	db.vlogGenerationLeafPackLastSelectionBytesToCopy.Store(700)
+	db.vlogGenerationLeafPackLastSelectionBytesDead.Store(900)
+	db.vlogGenerationLeafPackLastSelectionGenerations.Store(2)
+	db.vlogGenerationLeafPackLastBytesCopied.Store(650)
+	db.vlogGenerationLeafPackLastUnixNano.Store(8888)
 	db.vlogGenerationRewritePlanSelectedSegments.Store(6)
 	db.vlogGenerationRewriteExecSourceSegments.Store(3)
 	db.vlogGenerationRewriteSourceSegmentsRequestedTotal.Store(5)
@@ -8873,8 +8993,23 @@ func TestVlogGenerationStats_ReportRewriteBacklogAndDurations(t *testing.T) {
 	if got := stats["treedb.cache.vlog_generation.maintenance.passes.with_gc.source.bypass"]; got != "2" {
 		t.Fatalf("maintenance gc passes source bypass=%q want 2", got)
 	}
+	if got := stats["treedb.cache.vlog_generation.maintenance.passes.with_leaf_pack"]; got != "4" {
+		t.Fatalf("maintenance leaf pack passes=%q want 4", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.maintenance.passes.with_leaf_pack.source.periodic"]; got != "3" {
+		t.Fatalf("maintenance leaf pack passes source periodic=%q want 3", got)
+	}
 	if got := stats["treedb.cache.vlog_generation.maintenance.passes.noop.source.other"]; got != "3" {
 		t.Fatalf("maintenance noop passes source other=%q want 3", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.leaf_pack.runs"]; got != "2" {
+		t.Fatalf("leaf pack runs=%q want 2", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.leaf_pack.last_selection.generations"]; got != "2" {
+		t.Fatalf("leaf pack last selection generations=%q want 2", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.leaf_pack.last_unix_nano"]; got != "8888" {
+		t.Fatalf("leaf pack last unix nano=%q want 8888", got)
 	}
 	if got := stats["treedb.cache.vlog_generation.rewrite.plan.total_ms"]; got != "80.000" {
 		t.Fatalf("rewrite plan total ms=%q want 80.000", got)

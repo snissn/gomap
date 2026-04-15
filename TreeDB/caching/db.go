@@ -1889,6 +1889,12 @@ const (
 	envDisableVlogGenerationVacuum         = "TREEDB_DISABLE_VLOG_GENERATION_VACUUM"
 	envDisableVlogGenerationLoop           = "TREEDB_DISABLE_VLOG_GENERATION_LOOP"
 	envDisableVlogGenerationCheckpointKick = "TREEDB_DISABLE_VLOG_GENERATION_CHECKPOINT_KICK"
+	// Experimental immutable-leaf maintenance hook. Disabled by default until
+	// the cached scheduler policy and dwell behavior are validated.
+	envEnableLeafGenerationPackMaintenance             = "TREEDB_ENABLE_LEAF_GENERATION_PACK_MAINTENANCE"
+	envLeafGenerationPackMaintenanceMaxBytesToCopy     = "TREEDB_LEAF_GENERATION_PACK_MAINTENANCE_MAX_BYTES_TO_COPY"
+	envLeafGenerationPackMaintenanceMaxGenerations     = "TREEDB_LEAF_GENERATION_PACK_MAINTENANCE_MAX_GENERATIONS"
+	envLeafGenerationPackMaintenanceMinPublishedAgeSeq = "TREEDB_LEAF_GENERATION_PACK_MAINTENANCE_MIN_PUBLISHED_AGE_COMMITS"
 	// Optional rewrite debt-drain caps for controlled online experiments.
 	envVlogGenerationRewriteResumeMaxSegments         = "TREEDB_VLOG_GENERATION_REWRITE_RESUME_MAX_SEGMENTS"
 	envVlogGenerationRewriteDebtDrainMaxSegments      = "TREEDB_VLOG_GENERATION_REWRITE_DEBT_DRAIN_MAX_SEGMENTS"
@@ -1908,26 +1914,29 @@ const (
 	// contention during early state-sync.
 	envEnableVlogGenerationPreCheckpointRewrite = "TREEDB_ENABLE_VLOG_GENERATION_PRECHECKPOINT_REWRITE"
 	// Diagnostic toggle for WAL-off checkpoint-time sparse-index vacuum.
-	envDisableCheckpointAutoVacuum         = "TREEDB_DISABLE_CHECKPOINT_AUTO_VACUUM"
-	minMemtablePrealloc                    = 64 * 1024
-	maxMemtablePrealloc                    = 256 << 20
-	appendOnlyEntryHintMinEntries          = 128
-	appendOnlyEntryHintMaxEntries          = 1 << 20
-	adaptiveMinWrites                      = 1024
-	adaptiveSequentialWritePct             = 0.85
-	adaptiveRangeIteratorPct               = 0.40
-	adaptiveOverwriteWritePct              = 0.25
-	adaptiveBTreeMinIteratorSamplesDefault = 0
-	adaptiveWarmupBytes                    = 16 * 1024 * 1024
-	maxMemtableBytesPerShard               = int64(3 << 30)
-	maxOuterLeafArenaPoolCap               = 16 << 20
-	outerLeafBlobRefStackScratchCap        = 256
-	maxOuterLeafEncoderRawScratchCap       = 2 << 20
-	maxOuterLeafEncoderEncScratchCap       = 2 << 20
-	maxOuterLeafEncoderRestartsCap         = 1 << 15
-	maxVlogPreparedBodyPoolCap             = 8 << 20
-	maxVlogPreparedFramesPoolCap           = 1 << 14
-	maxVlogDictPrepareResultsPoolCap       = 1 << 14
+	envDisableCheckpointAutoVacuum                         = "TREEDB_DISABLE_CHECKPOINT_AUTO_VACUUM"
+	minMemtablePrealloc                                    = 64 * 1024
+	leafGenerationPackMaintenanceDefaultMaxBytesToCopy     = 64 << 20
+	leafGenerationPackMaintenanceDefaultMaxGenerations     = 1
+	leafGenerationPackMaintenanceDefaultMinPublishedAgeSeq = 1
+	maxMemtablePrealloc                                    = 256 << 20
+	appendOnlyEntryHintMinEntries                          = 128
+	appendOnlyEntryHintMaxEntries                          = 1 << 20
+	adaptiveMinWrites                                      = 1024
+	adaptiveSequentialWritePct                             = 0.85
+	adaptiveRangeIteratorPct                               = 0.40
+	adaptiveOverwriteWritePct                              = 0.25
+	adaptiveBTreeMinIteratorSamplesDefault                 = 0
+	adaptiveWarmupBytes                                    = 16 * 1024 * 1024
+	maxMemtableBytesPerShard                               = int64(3 << 30)
+	maxOuterLeafArenaPoolCap                               = 16 << 20
+	outerLeafBlobRefStackScratchCap                        = 256
+	maxOuterLeafEncoderRawScratchCap                       = 2 << 20
+	maxOuterLeafEncoderEncScratchCap                       = 2 << 20
+	maxOuterLeafEncoderRestartsCap                         = 1 << 15
+	maxVlogPreparedBodyPoolCap                             = 8 << 20
+	maxVlogPreparedFramesPoolCap                           = 1 << 14
+	maxVlogDictPrepareResultsPoolCap                       = 1 << 14
 )
 
 // SetIteratorDebug toggles attaching debug metadata to iterators returned by
@@ -5726,6 +5735,10 @@ type backendValueLogGCer interface {
 	ValueLogGC(ctx context.Context, opts backenddb.ValueLogGCOptions) (backenddb.ValueLogGCStats, error)
 }
 
+type backendLeafGenerationPackRunner interface {
+	LeafGenerationPackRunOnce(ctx context.Context, opts backenddb.LeafGenerationPackFromPlanOptions) (backenddb.LeafGenerationPackRunOnceStats, error)
+}
+
 type backendIndexVacuumer interface {
 	VacuumIndexOnline(ctx context.Context) error
 }
@@ -6531,10 +6544,30 @@ type DB struct {
 	vlogGenerationMaintenancePassNoop                            atomic.Uint64
 	vlogGenerationMaintenancePassWithRewrite                     atomic.Uint64
 	vlogGenerationMaintenancePassWithGC                          atomic.Uint64
+	vlogGenerationMaintenancePassWithLeafPack                    atomic.Uint64
 	vlogGenerationMaintenanceAcquiredBySource                    [vlogGenerationMaintenanceSourceCount]atomic.Uint64
 	vlogGenerationMaintenancePassNoopBySource                    [vlogGenerationMaintenanceSourceCount]atomic.Uint64
 	vlogGenerationMaintenancePassWithRewriteBySource             [vlogGenerationMaintenanceSourceCount]atomic.Uint64
 	vlogGenerationMaintenancePassWithGCBySource                  [vlogGenerationMaintenanceSourceCount]atomic.Uint64
+	vlogGenerationMaintenancePassWithLeafPackBySource            [vlogGenerationMaintenanceSourceCount]atomic.Uint64
+	vlogGenerationLeafPackAttempts                               atomic.Uint64
+	vlogGenerationLeafPackRuns                                   atomic.Uint64
+	vlogGenerationLeafPackSkips                                  atomic.Uint64
+	vlogGenerationLeafPackErrors                                 atomic.Uint64
+	vlogGenerationLeafPackBytesCopied                            atomic.Uint64
+	vlogGenerationLeafPackExpectedReclaimBytes                   atomic.Uint64
+	vlogGenerationLeafPackExpectedReclaimPerByteCopiedPPM        atomic.Uint64
+	vlogGenerationLeafPackSelectionBytesToCopy                   atomic.Uint64
+	vlogGenerationLeafPackSelectionBytesDead                     atomic.Uint64
+	vlogGenerationLeafPackSelectionGenerations                   atomic.Uint64
+	vlogGenerationLeafPackLastWallNanos                          atomic.Uint64
+	vlogGenerationLeafPackLastExpectedReclaimBytes               atomic.Int64
+	vlogGenerationLeafPackLastExpectedReclaimPerByteCopiedPPM    atomic.Int64
+	vlogGenerationLeafPackLastSelectionBytesToCopy               atomic.Int64
+	vlogGenerationLeafPackLastSelectionBytesDead                 atomic.Int64
+	vlogGenerationLeafPackLastSelectionGenerations               atomic.Int64
+	vlogGenerationLeafPackLastBytesCopied                        atomic.Int64
+	vlogGenerationLeafPackLastUnixNano                           atomic.Int64
 	vlogGenerationRewriteRunsBySource                            [vlogGenerationMaintenanceSourceCount]atomic.Uint64
 	vlogGenerationRewriteBudgetConsumedBySource                  [vlogGenerationMaintenanceSourceCount]atomic.Uint64
 	vlogGenerationRewriteSourceBytesRequestedBySource            [vlogGenerationMaintenanceSourceCount]atomic.Uint64
@@ -6735,6 +6768,7 @@ const (
 	vlogGenerationReasonPeriodicGC
 	vlogGenerationReasonPostRewriteVacuum
 	vlogGenerationReasonRewriteResume
+	vlogGenerationReasonLeafPack
 )
 
 const (
@@ -9582,6 +9616,8 @@ func vlogGenerationReasonString(v uint32) string {
 		return "post_rewrite_vacuum"
 	case vlogGenerationReasonRewriteResume:
 		return "rewrite_resume"
+	case vlogGenerationReasonLeafPack:
+		return "leaf_pack"
 	default:
 		return "unknown"
 	}
@@ -15536,8 +15572,10 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 	db.vlogGenerationMaintenanceAcquired.Add(1)
 	rewriteRunsBefore := db.vlogGenerationRewriteRuns.Load()
 	gcRunsBefore := db.vlogGenerationGCRuns.Load()
+	leafPackRunsBefore := db.vlogGenerationLeafPackRuns.Load()
 	rewriteAttempted := false
 	gcAttempted := false
+	leafPackAttempted := false
 	activeSource := vlogGenerationMaintenanceDebugSource(opts)
 	activeSourceIdx := vlogGenerationMaintenanceSourceIndex(activeSource)
 	db.vlogGenerationMaintenanceAcquiredBySource[activeSourceIdx].Add(1)
@@ -15567,8 +15605,10 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 		db.observeVlogGenerationMaintenancePassDuration(passDur)
 		rewriteRan := db.vlogGenerationRewriteRuns.Load() > rewriteRunsBefore
 		gcRan := db.vlogGenerationGCRuns.Load() > gcRunsBefore
+		leafPackRan := db.vlogGenerationLeafPackRuns.Load() > leafPackRunsBefore
 		rewritePass := rewriteRan || rewriteAttempted
 		gcPass := gcRan || gcAttempted
+		leafPackPass := leafPackRan || leafPackAttempted
 		if rewritePass {
 			db.vlogGenerationMaintenancePassWithRewrite.Add(1)
 			db.vlogGenerationMaintenancePassWithRewriteBySource[activeSourceIdx].Add(1)
@@ -15577,7 +15617,11 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 			db.vlogGenerationMaintenancePassWithGC.Add(1)
 			db.vlogGenerationMaintenancePassWithGCBySource[activeSourceIdx].Add(1)
 		}
-		if !rewritePass && !gcPass {
+		if leafPackPass {
+			db.vlogGenerationMaintenancePassWithLeafPack.Add(1)
+			db.vlogGenerationMaintenancePassWithLeafPackBySource[activeSourceIdx].Add(1)
+		}
+		if !rewritePass && !gcPass && !leafPackPass {
 			db.vlogGenerationMaintenancePassNoop.Add(1)
 			db.vlogGenerationMaintenancePassNoopBySource[activeSourceIdx].Add(1)
 		}
@@ -17306,6 +17350,24 @@ planned:
 	// the active maintenance slot on generic periodic GC. Let the deferred
 	// rewrite confirmation/age retry get the next opportunity instead.
 	if !opts.bypassQuiet && !shouldRewrite && (stagePending || db.vlogGenerationRewriteAgeBlockedUntilNS.Load() > 0) {
+		return
+	}
+
+	leafPackAttempted, leafPackRan, err := db.maybeRunLeafGenerationPackMaintenance(runGC, quiet, opts)
+	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
+			return
+		}
+		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
+		db.vlogGenerationLeafPackErrors.Add(1)
+		if db.notifyError != nil {
+			db.notifyError(fmt.Errorf("cachingdb: %w", err))
+		}
+		return
+	}
+	if leafPackRan {
+		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
 		return
 	}
 
@@ -22430,6 +22492,117 @@ func (db *DB) Has(key []byte) (bool, error) {
 	return db.backend.Has(key)
 }
 
+func (db *DB) maybeRunLeafGenerationPackMaintenance(runGC bool, quiet bool, opts vlogGenerationMaintenanceOptions) (attempted bool, ran bool, err error) {
+	if db == nil || db.closing.Load() {
+		return false, false, nil
+	}
+	if !envBool(envEnableLeafGenerationPackMaintenance) {
+		return false, false, nil
+	}
+	if !db.indexOuterLeavesInValueLog {
+		return false, false, nil
+	}
+	if runGC || opts.bypassQuiet || !quiet {
+		return false, false, nil
+	}
+	runner, ok := db.backend.(backendLeafGenerationPackRunner)
+	if !ok {
+		return false, false, nil
+	}
+
+	maxGenerations := int(envUint64(envLeafGenerationPackMaintenanceMaxGenerations, leafGenerationPackMaintenanceDefaultMaxGenerations))
+	if maxGenerations <= 0 {
+		maxGenerations = leafGenerationPackMaintenanceDefaultMaxGenerations
+	}
+	maxBytesToCopy := int64(envUint64(envLeafGenerationPackMaintenanceMaxBytesToCopy, leafGenerationPackMaintenanceDefaultMaxBytesToCopy))
+	if maxBytesToCopy <= 0 {
+		maxBytesToCopy = leafGenerationPackMaintenanceDefaultMaxBytesToCopy
+	}
+	minPublishedAgeCommits := envUint64(envLeafGenerationPackMaintenanceMinPublishedAgeSeq, leafGenerationPackMaintenanceDefaultMinPublishedAgeSeq)
+
+	db.vlogGenerationLeafPackAttempts.Add(1)
+	attempted = true
+	db.vlogGenerationLastReason.Store(vlogGenerationReasonLeafPack)
+	db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerRunning)
+
+	var stats backenddb.LeafGenerationPackRunOnceStats
+	err = db.runWithBackendMaintenanceOptions(backendMaintenanceOptions{
+		skipCheckpoint:        opts.skipCheckpoint,
+		skipRetainedPruneWait: opts.skipRetainedPruneWait,
+	}, func() error {
+		ctx, cancel := db.vlogGenerationMaintenanceContext(30*time.Second, opts)
+		defer cancel()
+		var runErr error
+		stats, runErr = runner.LeafGenerationPackRunOnce(ctx, backenddb.LeafGenerationPackFromPlanOptions{
+			Sync:                   false,
+			MinPublishedAgeCommits: minPublishedAgeCommits,
+			MaxGenerations:         maxGenerations,
+			MaxBytesToCopy:         maxBytesToCopy,
+		})
+		return runErr
+	})
+	if err != nil {
+		return attempted, false, fmt.Errorf("leaf generation pack maintenance: %w", err)
+	}
+
+	lastWallNanos := stats.Pack.WallTimeNanos
+	if lastWallNanos < 0 {
+		lastWallNanos = 0
+	}
+	db.vlogGenerationLeafPackLastWallNanos.Store(uint64(lastWallNanos))
+	db.vlogGenerationLeafPackLastExpectedReclaimBytes.Store(stats.Selection.ExpectedReclaimBytes)
+	db.vlogGenerationLeafPackLastExpectedReclaimPerByteCopiedPPM.Store(int64(stats.Selection.ExpectedReclaimPerByteCopiedPPM))
+	db.vlogGenerationLeafPackLastSelectionBytesToCopy.Store(stats.Selection.BytesToCopy)
+	db.vlogGenerationLeafPackLastSelectionBytesDead.Store(stats.Selection.BytesDead)
+	db.vlogGenerationLeafPackLastSelectionGenerations.Store(int64(len(stats.Selection.GenerationIDs)))
+	db.vlogGenerationLeafPackLastBytesCopied.Store(stats.Pack.BytesCopied)
+	db.vlogGenerationLeafPackLastUnixNano.Store(time.Now().UnixNano())
+
+	if stats.Selection.ExpectedReclaimBytes > 0 {
+		db.vlogGenerationLeafPackExpectedReclaimBytes.Add(uint64(stats.Selection.ExpectedReclaimBytes))
+	}
+	if stats.Selection.ExpectedReclaimPerByteCopiedPPM > 0 {
+		db.vlogGenerationLeafPackExpectedReclaimPerByteCopiedPPM.Add(uint64(stats.Selection.ExpectedReclaimPerByteCopiedPPM))
+	}
+	if stats.Selection.BytesToCopy > 0 {
+		db.vlogGenerationLeafPackSelectionBytesToCopy.Add(uint64(stats.Selection.BytesToCopy))
+	}
+	if stats.Selection.BytesDead > 0 {
+		db.vlogGenerationLeafPackSelectionBytesDead.Add(uint64(stats.Selection.BytesDead))
+	}
+	if len(stats.Selection.GenerationIDs) > 0 {
+		db.vlogGenerationLeafPackSelectionGenerations.Add(uint64(len(stats.Selection.GenerationIDs)))
+	}
+	if stats.Ran {
+		db.vlogGenerationLeafPackRuns.Add(1)
+		ran = true
+		if stats.Pack.BytesCopied > 0 {
+			db.vlogGenerationLeafPackBytesCopied.Add(uint64(stats.Pack.BytesCopied))
+		}
+		db.debugVlogMaintf(
+			"leaf_pack_done generations=%d bytes_to_copy=%d expected_reclaim_bytes=%d bytes_copied=%d wall_ms=%.3f",
+			len(stats.Selection.GenerationIDs),
+			stats.Selection.BytesToCopy,
+			stats.Selection.ExpectedReclaimBytes,
+			stats.Pack.BytesCopied,
+			float64(lastWallNanos)/float64(time.Millisecond),
+		)
+		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
+		return attempted, true, nil
+	}
+
+	db.vlogGenerationLeafPackSkips.Add(1)
+	db.debugVlogMaintf(
+		"leaf_pack_skip reason=%s generations=%d bytes_to_copy=%d expected_reclaim_bytes=%d",
+		stats.SkipReason,
+		len(stats.Selection.GenerationIDs),
+		stats.Selection.BytesToCopy,
+		stats.Selection.ExpectedReclaimBytes,
+	)
+	db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
+	return attempted, false, nil
+}
+
 func (db *DB) Stats() map[string]string {
 	stats := db.backend.Stats()
 	if stats == nil {
@@ -23545,6 +23718,7 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_generation.maintenance.passes.noop"] = fmt.Sprintf("%d", db.vlogGenerationMaintenancePassNoop.Load())
 	stats["treedb.cache.vlog_generation.maintenance.passes.with_rewrite"] = fmt.Sprintf("%d", db.vlogGenerationMaintenancePassWithRewrite.Load())
 	stats["treedb.cache.vlog_generation.maintenance.passes.with_gc"] = fmt.Sprintf("%d", db.vlogGenerationMaintenancePassWithGC.Load())
+	stats["treedb.cache.vlog_generation.maintenance.passes.with_leaf_pack"] = fmt.Sprintf("%d", db.vlogGenerationMaintenancePassWithLeafPack.Load())
 	for sourceIdx := 0; sourceIdx < vlogGenerationMaintenanceSourceCount; sourceIdx++ {
 		source := vlogGenerationMaintenanceSourceLabel(sourceIdx)
 		stats["treedb.cache.vlog_generation.maintenance.acquired.source."+source] = fmt.Sprintf(
@@ -23563,7 +23737,29 @@ func (db *DB) Stats() map[string]string {
 			"%d",
 			db.vlogGenerationMaintenancePassWithGCBySource[sourceIdx].Load(),
 		)
+		stats["treedb.cache.vlog_generation.maintenance.passes.with_leaf_pack.source."+source] = fmt.Sprintf(
+			"%d",
+			db.vlogGenerationMaintenancePassWithLeafPackBySource[sourceIdx].Load(),
+		)
 	}
+	stats["treedb.cache.vlog_generation.leaf_pack.attempts"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackAttempts.Load())
+	stats["treedb.cache.vlog_generation.leaf_pack.runs"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackRuns.Load())
+	stats["treedb.cache.vlog_generation.leaf_pack.skips"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackSkips.Load())
+	stats["treedb.cache.vlog_generation.leaf_pack.errors"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackErrors.Load())
+	stats["treedb.cache.vlog_generation.leaf_pack.bytes_copied"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackBytesCopied.Load())
+	stats["treedb.cache.vlog_generation.leaf_pack.expected_reclaim_bytes"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackExpectedReclaimBytes.Load())
+	stats["treedb.cache.vlog_generation.leaf_pack.expected_reclaim_per_byte_copied_ppm"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackExpectedReclaimPerByteCopiedPPM.Load())
+	stats["treedb.cache.vlog_generation.leaf_pack.selection.bytes_to_copy"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackSelectionBytesToCopy.Load())
+	stats["treedb.cache.vlog_generation.leaf_pack.selection.bytes_dead"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackSelectionBytesDead.Load())
+	stats["treedb.cache.vlog_generation.leaf_pack.selection.generations"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackSelectionGenerations.Load())
+	stats["treedb.cache.vlog_generation.leaf_pack.last_wall_ms"] = fmt.Sprintf("%.3f", float64(db.vlogGenerationLeafPackLastWallNanos.Load())/float64(time.Millisecond))
+	stats["treedb.cache.vlog_generation.leaf_pack.last_expected_reclaim_bytes"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackLastExpectedReclaimBytes.Load())
+	stats["treedb.cache.vlog_generation.leaf_pack.last_expected_reclaim_per_byte_copied_ppm"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackLastExpectedReclaimPerByteCopiedPPM.Load())
+	stats["treedb.cache.vlog_generation.leaf_pack.last_selection.bytes_to_copy"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackLastSelectionBytesToCopy.Load())
+	stats["treedb.cache.vlog_generation.leaf_pack.last_selection.bytes_dead"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackLastSelectionBytesDead.Load())
+	stats["treedb.cache.vlog_generation.leaf_pack.last_selection.generations"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackLastSelectionGenerations.Load())
+	stats["treedb.cache.vlog_generation.leaf_pack.last_bytes_copied"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackLastBytesCopied.Load())
+	stats["treedb.cache.vlog_generation.leaf_pack.last_unix_nano"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackLastUnixNano.Load())
 	stats["treedb.cache.vlog_generation.maintenance.pass.total_ms"] = fmt.Sprintf("%.3f", float64(maintenancePassTotalNS)/float64(time.Millisecond))
 	stats["treedb.cache.vlog_generation.maintenance.pass.max_ms"] = fmt.Sprintf("%.3f", float64(maintenancePassMaxNS)/float64(time.Millisecond))
 	if maintenancePasses > 0 {
