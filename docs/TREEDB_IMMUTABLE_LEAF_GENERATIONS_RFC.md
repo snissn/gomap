@@ -1136,9 +1136,12 @@ Sprint 2 goal:
 - compare bytes copied versus bytes reclaimed
 - confirm reclaim on homes where whole-generation delete alone produced zero or
   near-zero reclaim
+- repeatable saved-home validation harness now lives at [scripts/leafgen_saved_home_validate.sh](/home/mikers/dev/snissn/gomap/scripts/leafgen_saved_home_validate.sh)
 - first real saved-home result on `/home/mikers/.application-db-engine-matrix-splitouterleaf-20260414090917/treedb/application.db`:
   planner reconstructs 9 generations, selects 8 sealed generations, and estimates only `4,585,857` reclaimable bytes across about `2.1 GiB` of `leaf_vlog`
-- same saved-home `leafgen-pack` validation copied about `3,878,699,008` live bytes into one new generation; after two GC passes the copied home returned to about `2.3 GiB` total / `2.1 GiB` `leaf_vlog`, confirming correctness but also confirming that whole-generation delete plus naive pack will not materially shrink this Celestia snapshot because the sealed generations are almost entirely live
+- the harness measured `2,425,593,709` bytes total / `2,237,194,549` bytes `leaf_vlog` before pack, `4,602,701,328` / `4,383,893,448` after pack, `2,455,206,733` / `2,236,398,937` after GC pass 1, and `2,455,204,773` / `2,236,396,977` after GC pass 2
+- same saved-home `leafgen-pack` validation copied about `3,878,699,008` live bytes into one new generation; after two GC passes the copied home returned to essentially its starting size, confirming correctness but also confirming that whole-generation delete plus naive pack will not materially shrink this Celestia snapshot because the sealed generations are almost entirely live
+- operationally, GC currently needs two passes in this flow: the first pass marks old generations deleted and zombies their files, and the second pass prunes the already-removed file records from the manifest
 
 ### Sprint 2 Exit Criteria
 
