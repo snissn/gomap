@@ -628,13 +628,7 @@ func (db *DB) scanLeafGenerationLiveStats(ctx context.Context, snap *Snapshot) (
 		case page.PageTypeLeaf:
 			continue
 		case page.PageTypeInternal:
-			if err := n.ForEachInternalChildID(func(childID uint64) error {
-				if ptr, ok := page.DecodeLeafRef(childID); ok {
-					return visit(ptr)
-				}
-				walkState.stack = append(walkState.stack, childID)
-				return nil
-			}); err != nil {
+			if err := n.WalkInternalChildren(&walkState.stack, visit); err != nil {
 				return leafGenerationLiveScanStats{}, err
 			}
 		default:

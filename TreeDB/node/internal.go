@@ -228,6 +228,76 @@ func (n *Node) GetInternalChildID(index uint16) (uint64, error) {
 	return binary.LittleEndian.Uint64(n.data[ptr+2 : ptr+10]), nil
 }
 
+func (n *Node) WalkInternalChildren(stack *[]uint64, visit func(page.LeafLogPtr) error) error {
+	if stack == nil {
+		return nil
+	}
+	if n.Type() != page.PageTypeInternal {
+		return ErrInvalidType
+	}
+	children := *stack
+	if n.internalBaseDelta() {
+		meta, err := n.internalBaseDeltaMeta()
+		if err != nil {
+			return err
+		}
+		deltaWidth, entryHeader := n.internalBaseDeltaEntryWidths()
+		dirOff := NodeHeaderSize
+		for i := uint16(0); i < n.count; i++ {
+			if dirOff+2 > len(n.data) {
+				return ErrCorruptedNode
+			}
+			ptr := int(getUint16At(n.data, dirOff))
+			dirOff += DirectoryEntrySize
+			if ptr < NodeHeaderSize || ptr+entryHeader > meta.footerStart {
+				return ErrCorruptedNode
+			}
+			deltaStart := ptr + 2
+			var childID uint64
+			if deltaWidth == 2 {
+				childID = meta.baseChildID + uint64(getUint16At(n.data, deltaStart))
+			} else {
+				childID = meta.baseChildID + uint64(binary.LittleEndian.Uint32(n.data[deltaStart:deltaStart+4]))
+			}
+			if ptr, ok := page.DecodeLeafRef(childID); ok {
+				if visit != nil {
+					if err := visit(ptr); err != nil {
+						return err
+					}
+				}
+				continue
+			}
+			children = append(children, childID)
+		}
+		*stack = children
+		return nil
+	}
+
+	dirOff := NodeHeaderSize
+	for i := uint16(0); i < n.count; i++ {
+		if dirOff+2 > len(n.data) {
+			return ErrCorruptedNode
+		}
+		ptr := int(getUint16At(n.data, dirOff))
+		dirOff += DirectoryEntrySize
+		if ptr+10 > len(n.data) {
+			return ErrCorruptedNode
+		}
+		childID := binary.LittleEndian.Uint64(n.data[ptr+2 : ptr+10])
+		if ptr, ok := page.DecodeLeafRef(childID); ok {
+			if visit != nil {
+				if err := visit(ptr); err != nil {
+					return err
+				}
+			}
+			continue
+		}
+		children = append(children, childID)
+	}
+	*stack = children
+	return nil
+}
+
 func (n *Node) ForEachInternalChildID(fn func(uint64) error) error {
 	if fn == nil {
 		return nil
