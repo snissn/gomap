@@ -171,18 +171,14 @@ func TestLeafGenerationGC_DeletesFullyDeadGeneration(t *testing.T) {
 	if got := stats1.GenerationsEligible; got < 1 {
 		t.Fatalf("expected at least one eligible generation, got %d", got)
 	}
+	if got, want := stats1.GenerationsDeleted, 1; got != want {
+		t.Fatalf("GenerationsDeleted=%d, want %d (stats=%+v)", got, want, stats1)
+	}
+	if got, want := stats1.FilesDeleted, 1; got != want {
+		t.Fatalf("FilesDeleted=%d, want %d (stats=%+v)", got, want, stats1)
+	}
 	if err := waitForPathRemoval(path1, 5*time.Second); err != nil {
 		t.Fatalf("waitForPathRemoval(%s): %v", path1, err)
-	}
-	stats2, err := db.LeafGenerationGC(context.Background(), LeafGenerationGCOptions{})
-	if err != nil {
-		t.Fatalf("LeafGenerationGC second: %v", err)
-	}
-	if got, want := stats1.GenerationsDeleted+stats2.GenerationsDeleted, 1; got != want {
-		t.Fatalf("total deleted generations=%d, want %d (stats1=%+v stats2=%+v)", got, want, stats1, stats2)
-	}
-	if got, want := stats1.FilesDeleted+stats2.FilesDeleted, 1; got != want {
-		t.Fatalf("total deleted files=%d, want %d (stats1=%+v stats2=%+v)", got, want, stats1, stats2)
 	}
 	if _, err := os.Stat(path1); !os.IsNotExist(err) {
 		t.Fatalf("expected first leaf segment removed, stat err=%v", err)
@@ -262,15 +258,11 @@ func TestLeafGenerationGC_RetiresPinnedGenerationUntilSnapshotCloses(t *testing.
 	if got := stats2.GenerationsEligible; got < 1 {
 		t.Fatalf("expected eligible generation after snapshot close, got %d", got)
 	}
+	if got, want := stats2.GenerationsDeleted, 1; got != want {
+		t.Fatalf("GenerationsDeleted=%d, want %d (stats=%+v)", got, want, stats2)
+	}
 	if err := waitForPathRemoval(path1, 5*time.Second); err != nil {
 		t.Fatalf("waitForPathRemoval(%s): %v", path1, err)
-	}
-	stats3, err := db.LeafGenerationGC(context.Background(), LeafGenerationGCOptions{})
-	if err != nil {
-		t.Fatalf("LeafGenerationGC final prune: %v", err)
-	}
-	if got, want := stats2.GenerationsDeleted+stats3.GenerationsDeleted, 1; got != want {
-		t.Fatalf("total deleted generations=%d, want %d (stats2=%+v stats3=%+v)", got, want, stats2, stats3)
 	}
 	if _, err := os.Stat(path1); !os.IsNotExist(err) {
 		t.Fatalf("expected retired segment removed, stat err=%v", err)

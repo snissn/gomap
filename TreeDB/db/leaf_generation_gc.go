@@ -66,17 +66,22 @@ func (db *DB) LeafGenerationGC(ctx context.Context, opts LeafGenerationGCOptions
 		db.unpinLeafGenerationIDs(snap.leafGenerationIDs)
 		snap.leafGenerationIDs = snap.leafGenerationIDs[:0]
 	}
-	defer func() { _ = snap.Close() }()
 	if snap.state == nil || snap.state.LeafGenerations == nil {
+		_ = snap.Close()
 		return stats, nil
 	}
 
 	liveGenerations, err := collectLiveLeafGenerationIDs(ctx, snap)
 	if err != nil {
+		_ = snap.Close()
 		return stats, err
 	}
 
 	currentCommitSeq := snap.state.CommitSeq
+	if err := snap.Close(); err != nil {
+		return stats, err
+	}
+	snap = nil
 	intermediateChanged := false
 	zombieFileIDs := make(map[uint32]struct{})
 	for i := range manifest.Generations {

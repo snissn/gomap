@@ -108,9 +108,6 @@ func TestStats_LeafGenerationLifecycle(t *testing.T) {
 	if err := waitForPathRemoval(path1, 5*time.Second); err != nil {
 		t.Fatalf("waitForPathRemoval(%s): %v", path1, err)
 	}
-	if _, err := db.LeafGenerationGC(context.Background(), LeafGenerationGCOptions{}); err != nil {
-		t.Fatalf("LeafGenerationGC final prune: %v", err)
-	}
 	stats = db.Stats()
 	if got, want := leafGenerationStatInt64(t, stats, "treedb.leaf_generation.generations.total"), int64(1); got != want {
 		t.Fatalf("generations.total=%d, want %d", got, want)
