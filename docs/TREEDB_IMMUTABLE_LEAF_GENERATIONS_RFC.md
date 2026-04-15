@@ -1182,6 +1182,10 @@ Sprint 3 goal:
 - `LeafGenerationPackRunOnce` now exists as a bounded skip-or-run backend surface: it returns the computed plan, selected prefix, pack stats when it runs, and an explicit skip reason when it declines work
 - the cached maintenance layer now has an env-gated, periodic-only `LeafGenerationPackRunOnce` hook that inherits the existing quiet-window, maintenance-phase suppression, and backend-maintenance barrier instead of introducing a parallel scheduler path
 - the first cached maintenance hook is intentionally conservative: it only runs for `IndexOuterLeavesInValueLog`, only on non-GC periodic passes, only when the quiet window is satisfied, and it defaults to a one-generation / 64 MiB copy cap plus a conservative min-interval guard until dwell validation proves the policy
+- repeatable cached dwell validation now lives at [scripts/leafgen_cached_dwell_validate.sh](/home/mikers/dev/snissn/gomap/scripts/leafgen_cached_dwell_validate.sh); it copies a saved home, opens it through `treedb.Open` with a real profile, emits periodic JSONL stats, records RSS/HWM and on-disk sizes, and captures pre/post `leafgen-plan`
+- first real cached dwell result on `/home/mikers/.application-db-engine-matrix-splitouterleaf-20260414090917/treedb/application.db` with `TREEDB_PROFILE=fast`: over a 95-second dwell the background loop reached the hook three times (`leaf_pack_attempts=3`, `leaf_pack_passes_periodic=3`) and skipped all three runs with zero bytes copied because the planner still rejected the home as `reclaim_per_copy_too_low`; the forced plan remained roughly `4,585,857` reclaimable bytes against `2,142,908,926` bytes to copy, so the hook is bounded and explainable on this home but not yet useful
+- the same `fast` dwell stayed bounded in memory and disk behavior: process HWM peaked at about `209,692 KiB`, `leaf_vlog` bytes stayed effectively flat, and the copied home grew only by small metadata noise rather than by pack churn
+- control run with `TREEDB_PROFILE=wal_on_fast` currently reports `scheduler_state=disabled` for the full dwell and records zero leaf-pack attempts, so `wal_on_fast` still has no background online leaf-pack behavior at all on this branch
 - the bounded manual path is intentionally fail-closed when the top-ranked candidate alone exceeds `-max-bytes-to-copy`; it does not silently blow the requested copy budget
 
 ### Sprint 3 Code Work
@@ -1206,7 +1210,7 @@ Sprint 3 goal:
 
 ### Sprint 3 Integration / Large-Home Validation
 
-- bounded dwell-style runs against saved homes or local replay proxies
+- bounded dwell-style runs against saved homes or local replay proxies; current harness coverage now includes `fast` and `wal_on_fast` opens against the large split-outer-leaf Celestia home, with periodic stats, RSS/HWM, and size snapshots
 - if safe and practical, controlled Celestia dwell validation with pack enabled
   behind explicit limits
 - verify no obvious sync-path regression from pack guards alone
