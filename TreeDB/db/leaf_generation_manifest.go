@@ -57,6 +57,45 @@ func newLeafGenerationManifest(commitSeq uint64) *leafGenerationManifest {
 	}
 }
 
+func (m *leafGenerationManifest) currentGenerationIndex() int {
+	if m == nil {
+		return -1
+	}
+	for i := range m.Generations {
+		if m.Generations[i].GenerationID == m.CurrentGenerationID {
+			return i
+		}
+	}
+	return -1
+}
+
+func (m *leafGenerationManifest) registerCurrentGenerationFileID(fileID uint32, commitSeq uint64) (bool, error) {
+	if m == nil {
+		return false, errors.New("treedb: leaf generation manifest is nil")
+	}
+	if fileID == 0 {
+		return false, errors.New("treedb: leaf generation file_id must be non-zero")
+	}
+	idx := m.currentGenerationIndex()
+	if idx < 0 {
+		return false, fmt.Errorf("treedb: %s current_generation_id %d not found in generations", leafGenerationManifestFileName, m.CurrentGenerationID)
+	}
+	gen := &m.Generations[idx]
+	if gen.State != leafGenerationStateWritable {
+		return false, fmt.Errorf("treedb: current generation %d is not writable (state=%q)", gen.GenerationID, gen.State)
+	}
+	for _, existing := range gen.FileIDs {
+		if existing == fileID {
+			return false, nil
+		}
+	}
+	gen.FileIDs = append(gen.FileIDs, fileID)
+	if commitSeq > gen.PublishedCommitSeq {
+		gen.PublishedCommitSeq = commitSeq
+	}
+	return true, nil
+}
+
 func (m *leafGenerationManifest) clone() *leafGenerationManifest {
 	if m == nil {
 		return nil
@@ -96,6 +135,7 @@ func validateLeafGenerationManifest(m *leafGenerationManifest) error {
 
 	seen := make(map[uint64]struct{}, len(m.Generations))
 	currentFound := false
+	writableCount := 0
 	for i := range m.Generations {
 		gen := m.Generations[i]
 		if gen.GenerationID == 0 {
@@ -110,14 +150,37 @@ func validateLeafGenerationManifest(m *leafGenerationManifest) error {
 		default:
 			return fmt.Errorf("treedb: %s generation[%d] has unsupported state %q", leafGenerationManifestFileName, i, gen.State)
 		}
+		if gen.State == leafGenerationStateWritable {
+			writableCount++
+		}
 		if gen.GenerationID == m.CurrentGenerationID {
 			currentFound = true
+			if gen.State != leafGenerationStateWritable {
+				return fmt.Errorf("treedb: %s current_generation_id %d must be writable, got %q", leafGenerationManifestFileName, m.CurrentGenerationID, gen.State)
+			}
 		}
 	}
 	if !currentFound {
 		return fmt.Errorf("treedb: %s current_generation_id %d not found in generations", leafGenerationManifestFileName, m.CurrentGenerationID)
 	}
+	if writableCount != 1 {
+		return fmt.Errorf("treedb: %s must contain exactly one writable generation, got %d", leafGenerationManifestFileName, writableCount)
+	}
 	return nil
+}
+
+func (db *DB) noteLeafGenerationWritableFileID(fileID uint32, commitSeq uint64) error {
+	if db == nil || db.leafGenerationManifest == nil {
+		return nil
+	}
+	changed, err := db.leafGenerationManifest.registerCurrentGenerationFileID(fileID, commitSeq)
+	if err != nil {
+		return err
+	}
+	if !changed {
+		return nil
+	}
+	return saveLeafGenerationManifest(LeafLogDirPath(db.dir), db.leafGenerationManifest)
 }
 
 func loadLeafGenerationManifest(leafDir string) (*leafGenerationManifest, bool, error) {

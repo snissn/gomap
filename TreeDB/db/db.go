@@ -1640,7 +1640,7 @@ func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired [
 			// publishing outer-leaf pages through a leaf log that cannot report
 			// or register its current segment. In that case we must fall back to
 			// one manager refresh to avoid publishing an incomplete ValueLogSet.
-			registered, err := db.ensureLeafPageLogSegmentRegistered()
+			registered, err := db.ensureLeafPageLogSegmentRegistered(nextMeta.CommitSeq)
 			if err != nil {
 				db.mu.Unlock()
 				return post, err

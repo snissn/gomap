@@ -67,7 +67,7 @@ func (db *DB) RegisterValueLogSegment(path string, fileID uint32) error {
 // writable segment visible in the value-log manager without a full directory
 // scan. Returns (true, nil) when registration is confirmed on the no-refresh
 // path; callers should fall back to manager.Refresh() when it returns false.
-func (db *DB) ensureLeafPageLogSegmentRegistered() (bool, error) {
+func (db *DB) ensureLeafPageLogSegmentRegistered(commitSeq uint64) (bool, error) {
 	if db == nil || db.valueLogManager == nil || db.leafPageLog == nil {
 		return false, nil
 	}
@@ -83,6 +83,9 @@ func (db *DB) ensureLeafPageLogSegmentRegistered() (bool, error) {
 		if err := db.valueLogManager.PromoteCurrentWritable(fileID); err != nil {
 			return false, err
 		}
+		if err := db.noteLeafGenerationWritableFileID(fileID, commitSeq); err != nil {
+			return false, err
+		}
 		return true, nil
 	}
 	if err := db.valueLogManager.RegisterSegment(path, fileID); err != nil {
@@ -94,6 +97,9 @@ func (db *DB) ensureLeafPageLogSegmentRegistered() (bool, error) {
 		return false, err
 	}
 	if err := db.valueLogManager.PromoteCurrentWritable(fileID); err != nil {
+		return false, err
+	}
+	if err := db.noteLeafGenerationWritableFileID(fileID, commitSeq); err != nil {
 		return false, err
 	}
 	return true, nil
