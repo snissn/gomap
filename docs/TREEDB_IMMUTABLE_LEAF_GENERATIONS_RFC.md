@@ -1032,7 +1032,8 @@ Sprint 1 goal:
 - writable generation routing: landed locally
 - rollover and sealing: landed locally
 - snapshot pins and backend whole-generation GC: landed locally
-- initial backend `treedb.leaf_generation.*` stats: current slice
+- initial backend `treedb.leaf_generation.*` stats: landed locally
+- public strict `LeafGenerationGC` wrapper: current slice
 
 ### Sprint 1 Code Work
 
