@@ -42,6 +42,7 @@ type DBState struct {
 	RootPageID       uint64
 	SystemRootPageID uint64
 	ValueLogSet      *valuelog.Set
+	LeafGenerations  *leafGenerationView
 }
 
 // snapshotView is the coherent publication unit for snapshot acquisition.
@@ -63,6 +64,7 @@ type DB struct {
 	lock                   *lockfile.Lock
 	adaptive               *adaptive.Controller
 	pruner                 pruneWorker
+	leafGenerationPins     leafGenerationPinTracker
 
 	// idx is the current index generation (pager + MVCC lifecycle state).
 	idx atomic.Pointer[indexGen]
@@ -686,17 +688,18 @@ type Options struct {
 }
 
 type Snapshot struct {
-	db          *DB
-	idx         *indexGen
-	state       *DBState
-	vlogManager *valuelog.Manager
-	vlogPinned  bool
-	registryID  int64
-	reader      valueReader
-	tree        tree.Tree
-	closed      atomic.Bool
-	treePager   *pager.Pager
-	treeRoot    uint64
+	db                *DB
+	idx               *indexGen
+	state             *DBState
+	vlogManager       *valuelog.Manager
+	vlogPinned        bool
+	leafGenerationIDs []uint64
+	registryID        int64
+	reader            valueReader
+	tree              tree.Tree
+	closed            atomic.Bool
+	treePager         *pager.Pager
+	treeRoot          uint64
 	// registryShardHint is used to route reader registrations to a stable fast
 	// registry shard for this snapshot object across operations.
 	registryShardHint int
@@ -776,6 +779,12 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 		}
 		registryID, snap.registryShardHint = idx.registry.RegisterWithHint(state.CommitSeq, snap.registryShardHint)
 	}
+	if state.LeafGenerations != nil {
+		snap.leafGenerationIDs = append(snap.leafGenerationIDs[:0], state.LeafGenerations.GenerationOrder...)
+		db.pinLeafGenerationIDs(snap.leafGenerationIDs)
+	} else {
+		snap.leafGenerationIDs = snap.leafGenerationIDs[:0]
+	}
 
 	snap.db = db
 	snap.idx = idx
@@ -827,6 +836,9 @@ func (s *Snapshot) Close() error {
 				s.db.maybeReleaseRetiredIndex(s.idx)
 			}
 		}
+	}
+	if s.db != nil && len(s.leafGenerationIDs) > 0 {
+		s.db.unpinLeafGenerationIDs(s.leafGenerationIDs)
 	}
 	if s.db != nil {
 		s.db.snapPool.Put(s)
@@ -1165,6 +1177,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		RootPageID:       db.meta.UserRootPageID,
 		SystemRootPageID: db.meta.SystemRootPageID,
 		ValueLogSet:      vm.CurrentSet(),
+		LeafGenerations:  db.currentLeafGenerationView(),
 	}
 	db.state.Store(initialState)
 	db.publishSnapshotView(gen, initialState, vm)
@@ -1666,6 +1679,7 @@ func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired [
 		RootPageID:       nextMeta.UserRootPageID,
 		SystemRootPageID: nextMeta.SystemRootPageID,
 		ValueLogSet:      valueLogSet,
+		LeafGenerations:  db.currentLeafGenerationView(),
 	}
 	db.state.Store(newState)
 	db.publishSnapshotView(idx, newState, db.valueLogManager)
@@ -1930,6 +1944,7 @@ func (db *DB) RefreshValueLogSet() error {
 		RootPageID:       oldState.RootPageID,
 		SystemRootPageID: oldState.SystemRootPageID,
 		ValueLogSet:      db.valueLogManager.CurrentSetNoRefresh(),
+		LeafGenerations:  oldState.LeafGenerations,
 	}
 	db.state.Store(newState)
 	db.publishSnapshotView(db.idx.Load(), newState, db.valueLogManager)
@@ -1971,6 +1986,7 @@ func (db *DB) publishValueLogSetNoRefresh() error {
 		RootPageID:       oldState.RootPageID,
 		SystemRootPageID: oldState.SystemRootPageID,
 		ValueLogSet:      valueLogSet,
+		LeafGenerations:  oldState.LeafGenerations,
 	}
 	db.state.Store(newState)
 	db.publishSnapshotView(db.idx.Load(), newState, db.valueLogManager)

@@ -123,6 +123,7 @@ func openReadOnly(opts Options) (*DB, error) {
 		RootPageID:       db.meta.UserRootPageID,
 		SystemRootPageID: db.meta.SystemRootPageID,
 		ValueLogSet:      vm.CurrentSet(),
+		LeafGenerations:  db.currentLeafGenerationView(),
 	}
 	db.state.Store(initialState)
 	db.publishSnapshotView(gen, initialState, vm)
@@ -229,6 +230,7 @@ func openReadOnlyNoLock(opts Options) (*DB, error) {
 		RootPageID:       db.meta.UserRootPageID,
 		SystemRootPageID: db.meta.SystemRootPageID,
 		ValueLogSet:      vm.CurrentSet(),
+		LeafGenerations:  db.currentLeafGenerationView(),
 	}
 	db.state.Store(initialState)
 	db.publishSnapshotView(gen, initialState, vm)

@@ -505,6 +505,27 @@ Important consequence:
 
 This is correct behavior and must be observable.
 
+### 10.1 First-Rollout Pin Implementation
+
+The first implementation should pin leaf generations in the same phase where
+`Snapshot` already pins the published `ValueLogSet` and index generation.
+
+Preferred first-rollout shape:
+
+- add an immutable in-memory leaf-generation view to published DB state
+- on `AcquireSnapshot`, increment pin counts for the generation IDs present in
+  that published view
+- on `Snapshot.Close`, decrement those pin counts
+- treat the pin set as generation-granular, not page-granular
+
+The implementation should not try to infer pins from filesystem activity or from
+ generic value-log current-set metadata. Pinning must be explicit and tied to
+ snapshot lifetime.
+
+For the first rollout, pin accounting may be process-local and rebuilt on open.
+That is sufficient because pinned snapshots are process-local runtime objects,
+not durable state.
+
 ## 11. GC Model
 
 ### 11.1 Regular GC
@@ -545,6 +566,31 @@ retained until a pack operation occurs.
 
 That is acceptable because pack is a separate maintenance operation, not the
 default reclaim path.
+
+### 11.4 First-Rollout Whole-Generation GC Implementation
+
+The first whole-generation GC implementation should be explicit and boring.
+
+Preferred first-rollout algorithm:
+
+1. acquire one stable snapshot of the current published root
+2. walk only outer-leaf references and collect the live leaf-log file IDs they
+   reference
+3. map those file IDs to generation IDs through the manifest
+4. classify each sealed generation as:
+   - `live`: at least one referenced file is still reachable from the current
+     root
+   - `retiring`: not live from the current root, but still snapshot-pinned
+   - `delete-eligible`: not live and pin count is zero
+5. durably update the manifest before and after deletion so recovery never sees
+   a root that references an unknown generation
+
+The root walk should use the existing outer-leaf traversal machinery already in
+ the backend, not the generic value-log rewrite planner. The point of this RFC
+ is to stop treating `leaf_vlog` cleanup as a rewrite-discovery problem.
+
+For the first rollout, generation GC should run only on sealed generations and
+ should never touch the writable generation.
 
 ## 12. Leaf-Pack Compaction
 
