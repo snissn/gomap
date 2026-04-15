@@ -18,6 +18,7 @@ func TestLeafGenerationPlan_FastProfileTracksLeafFileRollsAcrossCheckpoints(t *t
 	opts.MaxWALBytes = -1
 	opts.BackgroundIndexVacuumInterval = -1
 	opts.ValueLog.Generational.Policy = treedb.ValueLogGenerationHotWarmCold
+	opts.ValueLog.Generational.LeafSegmentTargetBytes = 64 << 10
 	opts.ValueLog.Generational.HotSegmentTargetBytes = 64 << 10
 	opts.ValueLog.Generational.WarmSegmentTargetBytes = 64 << 10
 	opts.ValueLog.Generational.ColdSegmentTargetBytes = 64 << 10
@@ -112,6 +113,34 @@ func TestLeafGenerationPlan_FastProfileLeafTargetSeparatesFromHotTarget(t *testi
 	}
 	if got := stats["treedb.cache.vlog_generation.cold.segment_target_bytes"]; got != "1048576" {
 		t.Fatalf("cold segment target stats=%q want 1048576", got)
+	}
+}
+
+func TestLeafGenerationPlan_FastProfileDefaultLeafTargetIsSeparateFromHotTarget(t *testing.T) {
+	dir := t.TempDir()
+	opts := treedb.OptionsFor(treedb.ProfileFast, dir)
+	opts.BackgroundCheckpointInterval = -1
+	opts.BackgroundCheckpointIdleDuration = -1
+	opts.MaxWALBytes = -1
+	opts.BackgroundIndexVacuumInterval = -1
+	opts.ValueLog.Generational.Policy = treedb.ValueLogGenerationHotWarmCold
+
+	db, err := treedb.Open(opts)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() {
+		if err := db.Close(); err != nil {
+			t.Fatalf("close: %v", err)
+		}
+	}()
+
+	stats := db.Stats()
+	if got := stats["treedb.cache.vlog_generation.leaf.segment_target_bytes"]; got != "33554432" {
+		t.Fatalf("leaf segment target stats=%q want 33554432", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.hot.segment_target_bytes"]; got != "268435456" {
+		t.Fatalf("hot segment target stats=%q want 268435456", got)
 	}
 }
 

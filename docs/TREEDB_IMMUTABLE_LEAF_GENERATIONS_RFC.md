@@ -1146,6 +1146,8 @@ Sprint 2 goal:
 - the updated harness measured `2,425,593,709` bytes total / `46,923,776` bytes `index.db` / `2,237,194,549` bytes `leaf_vlog` / `141,249,172` bytes `value_vlog` before pack, `4,602,701,220` / `77,332,480` / `4,383,893,448` / `141,249,172` after pack, and `2,455,204,749` / `77,332,480` / `2,236,396,977` / `141,249,172` after GC pass 1; the second GC pass is now an idempotent no-op on the same home
 - same saved-home `leafgen-pack` validation copied about `3,878,699,008` live bytes into one new generation; after GC pass 1 the copied home returned to essentially its starting size, `value_vlog` stayed flat across the whole run, and a second immediate GC pass stayed flat, confirming correctness but also confirming that whole-generation delete plus naive pack will not materially shrink this Celestia snapshot because the sealed generations are almost entirely live
 - operationally, the saved-home flow no longer needs a second pruning pass: once no external snapshot is pinning the old generations, a single GC call now marks, deletes, and prunes them; an immediate second call reports no further work
+- target-geometry sweeps now justify a real default instead of leaving `leaf_vlog` on the generic hot target: the small sweep in [/tmp/leafgen_target_sweep_20260415_smalltargets](/tmp/leafgen_target_sweep_20260415_smalltargets) shows the first reclaim cliff below `8 MiB`, while the larger sweep in [/tmp/leafgen_target_sweep_20260415_large](/tmp/leafgen_target_sweep_20260415_large) shows `64 MiB` already collapsing to one generation (`0` reclaim), `16 MiB` yielding `3` generations with about `20.8 MiB` reclaimable for about `12.8 MiB` copied, and `32 MiB` yielding essentially the same reclaim/copy economics with only `2` generations
+- offline validation on the large synthetic rebuilds in [/tmp/leafgen_validate_16m_20260415](/tmp/leafgen_validate_16m_20260415) and [/tmp/leafgen_validate_32m_20260415](/tmp/leafgen_validate_32m_20260415) then confirms both targets shrink from about `47.1 MB` to about `26.8 MB` after `leafgen-pack` plus one GC pass, but `32 MiB` does it with one source generation instead of two; that is the current rationale for making `32 MiB` the runtime default `leaf_vlog` target while keeping the explicit override knob for further Celestia-scale tuning
 
 ### Sprint 2 Exit Criteria
 
@@ -1255,29 +1257,20 @@ sealed generations are too dense for bounded online pack to matter. The next
 experiment should therefore focus on generation creation, not more scheduler
 policy.
 
-Required follow-on:
+Completed follow-on:
 
-- choose and validate the default leaf generation target / seal policy now that
-  `LeafSegmentTargetBytes` exists as a leaf-only override
-- run a controlled sweep across leaf generation targets (for example `16 MiB`,
-  `32 MiB`, `64 MiB`, `128 MiB`, `256 MiB`) on a repeatable churn workload
-- record for each target: generation count, bytes per generation, whole-generation
-  GC eligibility, forced-plan reclaim bytes, reclaim-per-copy ppm, and bounded
-  online-pack outcomes
-- prefer designs that increase whole-generation delete opportunities rather than
-  relying on pack to clean up dense generations after the fact
-- only after synthetic or replay-proxy sweeps identify a promising geometry,
-  repeat dwell validation on large saved homes or Celestia
+- ran controlled sweeps across the leaf-only target knob using [scripts/leafgen_target_sweep.sh](/home/mikers/dev/snissn/gomap/scripts/leafgen_target_sweep.sh)
+- recorded generation count, forced-plan reclaim bytes, candidate bytes to copy, and reclaim-per-copy ppm
+- validated the best candidates with offline `leafgen-pack` plus GC on copied rebuild outputs
 
-Synthetic sweeps using [scripts/leafgen_target_sweep.sh](/home/mikers/dev/snissn/gomap/scripts/leafgen_target_sweep.sh) on a small churn workload (`20k` keys, `5k` hot keys, `4` rewrite rounds, `96`-byte values) already show the expected cliff:
+Current readout:
 
-- `64 KiB` leaf target: `10` generations, eligible plan, about `66,810` reclaim bytes for `261,921` bytes copied (`255,076` ppm reclaim/copy)
-- `256 KiB` leaf target: `3` generations, pack admitted, about `282,083` reclaim bytes for `242,729` bytes copied (`1,000,000` ppm reclaim/copy)
-- `512 KiB` leaf target: `2` generations, pack admitted, essentially the same reclaim/copy economics as `256 KiB`
-- `1 MiB` and `2 MiB` leaf targets: `1` generation, no pack candidates at all
-- these results now come from the dedicated leaf-only target knob, so generic `value_vlog` hot/warm/cold sizing stayed untouched during the sweep
+- the small sweep in [/tmp/leafgen_target_sweep_20260415_smalltargets](/tmp/leafgen_target_sweep_20260415_smalltargets) shows the structural cliff directly: below `8 MiB` the workload starts to create multiple sealed generations and non-zero reclaim structure, while `8 MiB` already collapses back to one generation and zero candidates
+- the larger sweep in [/tmp/leafgen_target_sweep_20260415_large](/tmp/leafgen_target_sweep_20260415_large) is the more useful default-setting signal: `4 MiB` yields `11` generations and only about `327k` ppm reclaim/copy, `8 MiB` yields `6` generations and pack-friendly economics, `16 MiB` yields `3` generations with about `20.8 MiB` reclaimable for about `12.8 MiB` copied, `32 MiB` yields `2` generations with essentially the same reclaim/copy economics, and `64 MiB` already collapses to one generation with zero reclaim candidates
+- offline validation on [/tmp/leafgen_validate_16m_20260415](/tmp/leafgen_validate_16m_20260415) and [/tmp/leafgen_validate_32m_20260415](/tmp/leafgen_validate_32m_20260415) shows both `16 MiB` and `32 MiB` shrinking the rebuilt synthetic DB from about `47.1 MB` to about `26.8 MB` after `leafgen-pack` plus one GC pass, but `32 MiB` achieves the same shrink while packing one source generation instead of two
+- current conclusion: `32 MiB` is the best default candidate so far because it preserves reclaim structure while avoiding the generation-count inflation of smaller targets; the override knob remains important for further Celestia-scale tuning
 
-That pass is still synthetic rather than Celestia-like, but it is already enough to prove the design direction: generation size/seal policy directly controls whether `leaf_vlog` maintenance has any reclaimable structure to work with, and the leaf-only target knob is sufficient to drive that geometry independently of generic `value_vlog` settings.
+This remains synthetic evidence rather than full Celestia replay, but it is now strong enough to set a leaf-specific default and move the next validation step to larger replay-proxy or dwell-style runs instead of continuing blind planner work.
 
 ## 24. Sprint 4 Punch List
 

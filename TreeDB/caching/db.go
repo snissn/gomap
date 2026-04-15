@@ -6832,6 +6832,7 @@ const (
 )
 
 const (
+	defaultVlogGenerationLeafTargetBytes int64  = 32 << 20
 	defaultVlogGenerationHotTargetBytes  int64  = 256 << 20
 	defaultVlogGenerationWarmTargetBytes int64  = 256 << 20
 	defaultVlogGenerationColdTargetBytes int64  = 512 << 20
@@ -8436,7 +8437,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 			valueLogGenerationHotTarget = defaultVlogGenerationHotTargetBytes
 		}
 		if valueLogGenerationLeafTarget == 0 {
-			valueLogGenerationLeafTarget = valueLogGenerationHotTarget
+			valueLogGenerationLeafTarget = defaultVlogGenerationLeafTargetBytes
 		}
 		if valueLogGenerationWarmTarget == 0 {
 			valueLogGenerationWarmTarget = defaultVlogGenerationWarmTargetBytes

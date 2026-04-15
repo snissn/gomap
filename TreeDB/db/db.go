@@ -293,7 +293,7 @@ type ValueLogGenerationConfig struct {
 	// LeafSegmentTargetBytes configures target segment size for leaf_vlog
 	// generations when outer leaves are stored out-of-line.
 	//
-	// 0 falls back to HotSegmentTargetBytes.
+	// 0 uses the implementation default leaf-generation target.
 	LeafSegmentTargetBytes int64
 	// HotSegmentTargetBytes configures target segment size for hot generation.
 	// 0 uses implementation default.
