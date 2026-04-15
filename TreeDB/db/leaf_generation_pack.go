@@ -9,9 +9,16 @@ import (
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
+const leafGenerationPackDefaultMinReclaimPerByteCopiedPPM = 10000
+
 type LeafGenerationPackOptions struct {
-	GenerationIDs []uint64
-	Sync          bool
+	GenerationIDs              []uint64
+	Sync                       bool
+	MinPublishedAgeCommits     uint64
+	MinExpectedReclaimBytes    int64
+	MinExpectedReclaimRatioPPM int
+	MinReclaimPerByteCopiedPPM int
+	Force                      bool
 }
 
 type LeafGenerationPackStats struct {
@@ -42,9 +49,13 @@ func (db *DB) LeafGenerationPack(ctx context.Context, opts LeafGenerationPackOpt
 		ctx = context.Background()
 	}
 	stats.GenerationsRequested = len(opts.GenerationIDs)
+	opts = normalizeLeafGenerationPackOptions(opts)
 
 	db.maintenanceMu.Lock()
 	defer db.maintenanceMu.Unlock()
+	if err := db.validateLeafGenerationPackSelection(ctx, opts); err != nil {
+		return stats, err
+	}
 	rawSourceIDs, matchedGenerations, err := db.resolveLeafGenerationPackSourceFileIDs(opts.GenerationIDs)
 	if err != nil {
 		return stats, err
@@ -100,6 +111,76 @@ func (db *DB) LeafGenerationPack(ctx context.Context, opts LeafGenerationPackOpt
 	}
 	stats.CreatedFileIDs = filterLeafGenerationRawFileIDs(createdIDs)
 	return stats, nil
+}
+
+func normalizeLeafGenerationPackOptions(opts LeafGenerationPackOptions) LeafGenerationPackOptions {
+	if opts.Force {
+		return opts
+	}
+	if opts.MinExpectedReclaimBytes == 0 && opts.MinExpectedReclaimRatioPPM == 0 && opts.MinReclaimPerByteCopiedPPM == 0 {
+		opts.MinReclaimPerByteCopiedPPM = leafGenerationPackDefaultMinReclaimPerByteCopiedPPM
+	}
+	return opts
+}
+
+func leafGenerationPackPlanOptions(opts LeafGenerationPackOptions) LeafGenerationPlanOptions {
+	return LeafGenerationPlanOptions{
+		MinPublishedAgeCommits:     opts.MinPublishedAgeCommits,
+		MinExpectedReclaimBytes:    opts.MinExpectedReclaimBytes,
+		MinExpectedReclaimRatioPPM: opts.MinExpectedReclaimRatioPPM,
+		MinReclaimPerByteCopiedPPM: opts.MinReclaimPerByteCopiedPPM,
+		Force:                      opts.Force,
+	}
+}
+
+func (db *DB) validateLeafGenerationPackSelection(ctx context.Context, opts LeafGenerationPackOptions) error {
+	if len(opts.GenerationIDs) == 0 {
+		return nil
+	}
+	plan, err := db.LeafGenerationPlan(ctx, leafGenerationPackPlanOptions(opts))
+	if err != nil {
+		return err
+	}
+	byGenerationID := make(map[uint64]LeafGenerationPlanGeneration, len(plan.Generations))
+	for _, gen := range plan.Generations {
+		byGenerationID[gen.GenerationID] = gen
+	}
+	seen := make(map[uint64]struct{}, len(opts.GenerationIDs))
+	selected := LeafGenerationPlan{Candidates: make([]LeafGenerationPlanGeneration, 0, len(opts.GenerationIDs))}
+	for _, generationID := range opts.GenerationIDs {
+		if generationID == 0 {
+			continue
+		}
+		if _, ok := seen[generationID]; ok {
+			continue
+		}
+		seen[generationID] = struct{}{}
+		gen, ok := byGenerationID[generationID]
+		if !ok {
+			return fmt.Errorf("leaf generation pack: generation %d not found", generationID)
+		}
+		if gen.WholeGenerationGCEligible {
+			return fmt.Errorf("leaf generation pack: generation %d is a whole-generation GC candidate; use leafgen-gc", generationID)
+		}
+		if !gen.Eligible {
+			return fmt.Errorf("leaf generation pack: generation %d ineligible: %s", generationID, gen.SkipReason)
+		}
+		selected.Candidates = append(selected.Candidates, gen)
+		selected.CandidateGenerationIDs = append(selected.CandidateGenerationIDs, generationID)
+		selected.CandidateBytesTotal += gen.BytesTotal
+		selected.CandidateBytesLive += gen.BytesLive
+		selected.CandidateBytesDead += gen.BytesDead
+		selected.CandidateBytesToCopy += gen.BytesToCopy
+		selected.CandidateLivePages += gen.LivePages
+	}
+	selected.ExpectedReclaimBytes = selected.CandidateBytesDead
+	selected.ExpectedReclaimRatioPPM = ratioPPM(selected.CandidateBytesDead, selected.CandidateBytesTotal)
+	selected.ExpectedReclaimPerByteCopiedPPM = ratioPPM(selected.CandidateBytesDead, selected.CandidateBytesToCopy)
+	selected.Admission = leafGenerationPlanAdmission(leafGenerationPackPlanOptions(opts), selected)
+	if selected.Admission != leafGenerationPlanAdmissionEligible {
+		return fmt.Errorf("leaf generation pack: selection admission=%s", selected.Admission)
+	}
+	return nil
 }
 
 func (db *DB) resolveLeafGenerationPackSourceFileIDs(generationIDs []uint64) ([]uint32, int, error) {

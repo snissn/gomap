@@ -154,8 +154,13 @@ func runLeafGenerationPack(dir string, args []string) {
 	}
 
 	stats, err := db.LeafGenerationPack(context.Background(), treedb.LeafGenerationPackOptions{
-		GenerationIDs: generationIDs,
-		Sync:          *sync,
+		GenerationIDs:              generationIDs,
+		Sync:                       *sync,
+		MinPublishedAgeCommits:     *minAgeCommits,
+		MinExpectedReclaimBytes:    *minExpectedReclaimBytes,
+		MinExpectedReclaimRatioPPM: *minExpectedReclaimRatioPPM,
+		MinReclaimPerByteCopiedPPM: *minReclaimPerByteCopiedPPM,
+		Force:                      *force,
 	})
 	if err != nil {
 		fatalf("LeafGenerationPack error: %v", err)
