@@ -1223,6 +1223,28 @@ Sprint 3 goal:
 - online maintenance no longer depends on generic leaf rewrite activity
 - pack activity is explainable, budgeted, and non-pathological
 
+### Sprint 3 Follow-On Experiment: Leaf Generation Target Sweep
+
+The first saved-home dwell result shows that current Celestia generation geometry
+is dominated by the default `256 MiB` hot segment target, and that the resulting
+sealed generations are too dense for bounded online pack to matter. The next
+experiment should therefore focus on generation creation, not more scheduler
+policy.
+
+Required follow-on:
+
+- introduce a leaf-specific generation target / seal policy instead of reusing
+  the generic hot `value_vlog` segment target implicitly
+- run a controlled sweep across leaf generation targets (for example `16 MiB`,
+  `32 MiB`, `64 MiB`, `128 MiB`, `256 MiB`) on a repeatable churn workload
+- record for each target: generation count, bytes per generation, whole-generation
+  GC eligibility, forced-plan reclaim bytes, reclaim-per-copy ppm, and bounded
+  online-pack outcomes
+- prefer designs that increase whole-generation delete opportunities rather than
+  relying on pack to clean up dense generations after the fact
+- only after synthetic or replay-proxy sweeps identify a promising geometry,
+  repeat dwell validation on large saved homes or Celestia
+
 ## 24. Sprint 4 Punch List
 
 Sprint 4 goal:
