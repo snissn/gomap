@@ -89,10 +89,40 @@ func (m *leafGenerationManifest) registerCurrentGenerationFileID(fileID uint32, 
 			return false, nil
 		}
 	}
-	gen.FileIDs = append(gen.FileIDs, fileID)
+	if len(gen.FileIDs) == 0 {
+		gen.FileIDs = append(gen.FileIDs, fileID)
+		if commitSeq > gen.PublishedCommitSeq {
+			gen.PublishedCommitSeq = commitSeq
+		}
+		return true, nil
+	}
+
+	maxID := uint64(0)
+	for i := range m.Generations {
+		if m.Generations[i].GenerationID > maxID {
+			maxID = m.Generations[i].GenerationID
+		}
+	}
+	if m.NextGenerationID <= maxID {
+		m.NextGenerationID = maxID + 1
+	}
+	newID := m.NextGenerationID
+	m.NextGenerationID++
+	gen.State = leafGenerationStateSealed
+	if commitSeq > gen.SealedCommitSeq {
+		gen.SealedCommitSeq = commitSeq
+	}
 	if commitSeq > gen.PublishedCommitSeq {
 		gen.PublishedCommitSeq = commitSeq
 	}
+	m.CurrentGenerationID = newID
+	m.Generations = append(m.Generations, leafGenerationRecord{
+		GenerationID:       newID,
+		State:              leafGenerationStateWritable,
+		FileIDs:            []uint32{fileID},
+		CreatedCommitSeq:   commitSeq,
+		PublishedCommitSeq: commitSeq,
+	})
 	return true, nil
 }
 
@@ -136,6 +166,7 @@ func validateLeafGenerationManifest(m *leafGenerationManifest) error {
 	seen := make(map[uint64]struct{}, len(m.Generations))
 	currentFound := false
 	writableCount := 0
+	maxID := uint64(0)
 	for i := range m.Generations {
 		gen := m.Generations[i]
 		if gen.GenerationID == 0 {
@@ -145,6 +176,9 @@ func validateLeafGenerationManifest(m *leafGenerationManifest) error {
 			return fmt.Errorf("treedb: %s generation_id %d appears more than once", leafGenerationManifestFileName, gen.GenerationID)
 		}
 		seen[gen.GenerationID] = struct{}{}
+		if gen.GenerationID > maxID {
+			maxID = gen.GenerationID
+		}
 		switch gen.State {
 		case leafGenerationStateWritable, leafGenerationStateSealed, leafGenerationStateRetiring, leafGenerationStateDeleted:
 		default:
@@ -165,6 +199,9 @@ func validateLeafGenerationManifest(m *leafGenerationManifest) error {
 	}
 	if writableCount != 1 {
 		return fmt.Errorf("treedb: %s must contain exactly one writable generation, got %d", leafGenerationManifestFileName, writableCount)
+	}
+	if m.NextGenerationID <= maxID {
+		return fmt.Errorf("treedb: %s next_generation_id %d must be greater than existing generation ids (max=%d)", leafGenerationManifestFileName, m.NextGenerationID, maxID)
 	}
 	return nil
 }

@@ -266,6 +266,24 @@ So the preferred first-rollout shape is:
 - many sealed generations
 - no leaf-lane fanout policy initially
 
+### 7.1.2 First Code Rollout: One Segment Per Generation
+
+To keep the first implementation slice small and mechanically obvious, the first
+code rollout may map one writable leaf generation to one active leaf-log
+segment.
+
+That means:
+
+- when the leaf writer rotates to a new leaf-log segment, the previous writable
+  generation seals
+- the new segment becomes the first and only file in a new writable generation
+- a generation may contain more than one file in the long-term design, but that
+  is not required for the first rollout
+
+This is an implementation simplification, not a change in the architectural
+model. It preserves the core invariant that generation rollover is a lifecycle
+transition with no page-copy movement.
+
 ### 7.2 When The Manifest Changes
 
 The manifest should not churn on every commit.

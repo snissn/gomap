@@ -121,6 +121,9 @@ func TestLeafGenerationManifest_RegisterCurrentGenerationFileID(t *testing.T) {
 	if !changed {
 		t.Fatalf("expected first file registration to change manifest")
 	}
+	if got, want := len(manifest.Generations), 1; got != want {
+		t.Fatalf("len(Generations)=%d, want %d", got, want)
+	}
 	if got, want := len(manifest.Generations[0].FileIDs), 1; got != want {
 		t.Fatalf("len(FileIDs)=%d, want %d", got, want)
 	}
@@ -139,6 +142,46 @@ func TestLeafGenerationManifest_RegisterCurrentGenerationFileID(t *testing.T) {
 	}
 	if got, want := manifest.Generations[0].PublishedCommitSeq, uint64(44); got != want {
 		t.Fatalf("PublishedCommitSeq after duplicate=%d, want %d", got, want)
+	}
+}
+
+func TestLeafGenerationManifest_RegisterCurrentGenerationFileID_RollsGenerationOnNewFile(t *testing.T) {
+	manifest := newLeafGenerationManifest(10)
+	if _, err := manifest.registerCurrentGenerationFileID(77, 44); err != nil {
+		t.Fatalf("registerCurrentGenerationFileID first: %v", err)
+	}
+	changed, err := manifest.registerCurrentGenerationFileID(88, 55)
+	if err != nil {
+		t.Fatalf("registerCurrentGenerationFileID rollover: %v", err)
+	}
+	if !changed {
+		t.Fatalf("expected rollover registration to change manifest")
+	}
+	if got, want := manifest.CurrentGenerationID, uint64(2); got != want {
+		t.Fatalf("CurrentGenerationID=%d, want %d", got, want)
+	}
+	if got, want := manifest.NextGenerationID, uint64(3); got != want {
+		t.Fatalf("NextGenerationID=%d, want %d", got, want)
+	}
+	if got, want := len(manifest.Generations), 2; got != want {
+		t.Fatalf("len(Generations)=%d, want %d", got, want)
+	}
+	sealed := manifest.Generations[0]
+	if got, want := sealed.State, leafGenerationStateSealed; got != want {
+		t.Fatalf("sealed.State=%q, want %q", got, want)
+	}
+	if got, want := sealed.SealedCommitSeq, uint64(55); got != want {
+		t.Fatalf("sealed.SealedCommitSeq=%d, want %d", got, want)
+	}
+	current := manifest.Generations[1]
+	if got, want := current.State, leafGenerationStateWritable; got != want {
+		t.Fatalf("current.State=%q, want %q", got, want)
+	}
+	if got, want := current.FileIDs[0], uint32(88); got != want {
+		t.Fatalf("current.FileIDs[0]=%d, want %d", got, want)
+	}
+	if got, want := current.CreatedCommitSeq, uint64(55); got != want {
+		t.Fatalf("current.CreatedCommitSeq=%d, want %d", got, want)
 	}
 }
 
@@ -208,6 +251,16 @@ func TestEnsureLeafPageLogSegmentRegistered_AddsWritableFileToManifest(t *testin
 		t.Fatalf("expected second registration call to confirm current segment")
 	}
 
+	path2, fileID2 := createLeafGenerationTestSegment(t, LeafLogDirPath(dir), 255, 2)
+	db.SetLeafPageLog(&manifestTestLeafPageLog{path: path2, fileID: fileID2})
+	registered, err = db.ensureLeafPageLogSegmentRegistered(144)
+	if err != nil {
+		t.Fatalf("ensureLeafPageLogSegmentRegistered rollover: %v", err)
+	}
+	if !registered {
+		t.Fatalf("expected rollover registration to succeed")
+	}
+
 	loaded, ok, err := loadLeafGenerationManifest(LeafLogDirPath(dir))
 	if err != nil {
 		t.Fatalf("loadLeafGenerationManifest: %v", err)
@@ -215,15 +268,34 @@ func TestEnsureLeafPageLogSegmentRegistered_AddsWritableFileToManifest(t *testin
 	if !ok {
 		t.Fatalf("expected manifest file to exist")
 	}
+	if got, want := len(loaded.Generations), 2; got != want {
+		t.Fatalf("len(Generations)=%d, want %d", got, want)
+	}
+	sealed := loaded.Generations[0]
+	if got, want := sealed.State, leafGenerationStateSealed; got != want {
+		t.Fatalf("sealed.State=%q, want %q", got, want)
+	}
+	if got, want := len(sealed.FileIDs), 1; got != want {
+		t.Fatalf("len(sealed.FileIDs)=%d, want %d", got, want)
+	}
+	if got, want := sealed.FileIDs[0], fileID; got != want {
+		t.Fatalf("sealed.FileIDs[0]=%d, want %d", got, want)
+	}
+	if got, want := sealed.SealedCommitSeq, uint64(144); got != want {
+		t.Fatalf("sealed.SealedCommitSeq=%d, want %d", got, want)
+	}
 	current := loaded.Generations[loaded.currentGenerationIndex()]
+	if got, want := current.GenerationID, uint64(2); got != want {
+		t.Fatalf("current.GenerationID=%d, want %d", got, want)
+	}
 	if got, want := len(current.FileIDs), 1; got != want {
-		t.Fatalf("len(FileIDs)=%d, want %d", got, want)
+		t.Fatalf("len(current.FileIDs)=%d, want %d", got, want)
 	}
-	if got, want := current.FileIDs[0], fileID; got != want {
-		t.Fatalf("FileIDs[0]=%d, want %d", got, want)
+	if got, want := current.FileIDs[0], fileID2; got != want {
+		t.Fatalf("current.FileIDs[0]=%d, want %d", got, want)
 	}
-	if got, want := current.PublishedCommitSeq, uint64(55); got != want {
-		t.Fatalf("PublishedCommitSeq=%d, want %d", got, want)
+	if got, want := current.CreatedCommitSeq, uint64(144); got != want {
+		t.Fatalf("current.CreatedCommitSeq=%d, want %d", got, want)
 	}
 }
 
