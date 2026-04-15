@@ -513,9 +513,13 @@ The first implementation should pin leaf generations in the same phase where
 Preferred first-rollout shape:
 
 - add an immutable in-memory leaf-generation view to published DB state
+- store manifest file IDs in the raw leaf-log segment namespace used by `LeafRef`
+  payloads, not the high-bit-marked `ValuePtr.FileID` namespace
 - on `AcquireSnapshot`, increment pin counts for the generation IDs present in
   that published view
 - on `Snapshot.Close`, decrement those pin counts
+- omit `deleted` generations from newly published views so a generation already
+  scheduled for removal cannot repin itself
 - treat the pin set as generation-granular, not page-granular
 
 The implementation should not try to infer pins from filesystem activity or from
@@ -582,8 +586,10 @@ Preferred first-rollout algorithm:
      root
    - `retiring`: not live from the current root, but still snapshot-pinned
    - `delete-eligible`: not live and pin count is zero
-5. durably update the manifest before and after deletion so recovery never sees
-   a root that references an unknown generation
+5. durably update the manifest before deletion, then mark deleted files zombie in
+   the read manager and republish state so new snapshots cannot acquire them
+6. prune `deleted` manifest records only after their files are actually gone so
+   recovery never needs to infer whether a half-finished delete completed
 
 The root walk should use the existing outer-leaf traversal machinery already in
  the backend, not the generic value-log rewrite planner. The point of this RFC
@@ -1010,6 +1016,13 @@ Sprint 1 goal:
 - `leafgen/s1-rollover-and-sealing`
 - `leafgen/s1-snapshot-pins-and-whole-generation-gc`
 
+### Sprint 1 Current Local Status
+
+- manifest skeleton: landed locally
+- writable generation routing: landed locally
+- rollover and sealing: landed locally
+- snapshot pins and backend whole-generation GC: current slice
+
 ### Sprint 1 Code Work
 
 - add manifest/state files under [TreeDB/db](/home/mikers/dev/snissn/gomap/TreeDB/db)
@@ -1021,8 +1034,9 @@ Sprint 1 goal:
 - introduce generation rollover thresholds and sealing logic
 - add generation liveness tracking from live roots and pinned snapshots
 - add whole-generation deletion logic for fully dead sealed generations
-- expose generation-oriented stats in [TreeDB/db/api.go](/home/mikers/dev/snissn/gomap/TreeDB/db/api.go)
-  and [TreeDB/caching/db.go](/home/mikers/dev/snissn/gomap/TreeDB/caching/db.go)
+- land backend generation-state and GC semantics first in [TreeDB/db](/home/mikers/dev/snissn/gomap/TreeDB/db)
+- wire public and cached-mode generation stats only after the backend semantics
+  and file-ID namespace are settled
 
 ### Sprint 1 Unit Tests
 

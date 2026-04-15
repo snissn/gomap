@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/snissn/gomap/TreeDB/page"
 )
 
 const (
@@ -210,7 +212,11 @@ func (db *DB) noteLeafGenerationWritableFileID(fileID uint32, commitSeq uint64) 
 	if db == nil || db.leafGenerationManifest == nil {
 		return nil
 	}
-	changed, err := db.leafGenerationManifest.registerCurrentGenerationFileID(fileID, commitSeq)
+	rawFileID := page.ValueLogSegmentID(fileID)
+	if rawFileID == 0 {
+		return errors.New("treedb: leaf generation file_id must be non-zero")
+	}
+	changed, err := db.leafGenerationManifest.registerCurrentGenerationFileID(rawFileID, commitSeq)
 	if err != nil {
 		return err
 	}

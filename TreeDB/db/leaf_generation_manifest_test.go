@@ -278,7 +278,7 @@ func TestEnsureLeafPageLogSegmentRegistered_AddsWritableFileToManifest(t *testin
 	if got, want := len(sealed.FileIDs), 1; got != want {
 		t.Fatalf("len(sealed.FileIDs)=%d, want %d", got, want)
 	}
-	if got, want := sealed.FileIDs[0], fileID; got != want {
+	if got, want := sealed.FileIDs[0], page.ValueLogSegmentID(fileID); got != want {
 		t.Fatalf("sealed.FileIDs[0]=%d, want %d", got, want)
 	}
 	if got, want := sealed.SealedCommitSeq, uint64(144); got != want {
@@ -291,7 +291,7 @@ func TestEnsureLeafPageLogSegmentRegistered_AddsWritableFileToManifest(t *testin
 	if got, want := len(current.FileIDs), 1; got != want {
 		t.Fatalf("len(current.FileIDs)=%d, want %d", got, want)
 	}
-	if got, want := current.FileIDs[0], fileID2; got != want {
+	if got, want := current.FileIDs[0], page.ValueLogSegmentID(fileID2); got != want {
 		t.Fatalf("current.FileIDs[0]=%d, want %d", got, want)
 	}
 	if got, want := current.CreatedCommitSeq, uint64(144); got != want {
