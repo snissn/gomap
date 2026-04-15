@@ -107,10 +107,13 @@ type sample struct {
     LeafPackSkips         uint64            `json:"leaf_pack_skips"`
     LeafPackSkipMinInt    uint64            `json:"leaf_pack_skip_min_interval"`
     LeafPackErrors        uint64            `json:"leaf_pack_errors"`
+    LeafPackCanceled      uint64            `json:"leaf_pack_canceled"`
+    LeafPackDeadline      uint64            `json:"leaf_pack_deadline"`
     LeafPackBytesCopied   uint64            `json:"leaf_pack_bytes_copied"`
     LeafPackExpectedBytes uint64            `json:"leaf_pack_expected_reclaim_bytes"`
     LeafPackPassesPeriodic uint64           `json:"leaf_pack_passes_periodic"`
     LeafPackLastWallMS    string            `json:"leaf_pack_last_wall_ms,omitempty"`
+    LeafPackLastSkipReason string           `json:"leaf_pack_last_skip_reason,omitempty"`
     LeafPackLastGenCount  uint64            `json:"leaf_pack_last_selection_generations"`
     LeafPackLastCopyBytes uint64            `json:"leaf_pack_last_bytes_copied"`
     Stats                 map[string]string `json:"stats,omitempty"`
@@ -173,10 +176,13 @@ func main() {
             LeafPackSkips:         parseUint(stats["treedb.cache.vlog_generation.leaf_pack.skips"]),
             LeafPackSkipMinInt:    parseUint(stats["treedb.cache.vlog_generation.leaf_pack.skip.min_interval"]),
             LeafPackErrors:        parseUint(stats["treedb.cache.vlog_generation.leaf_pack.errors"]),
+            LeafPackCanceled:      parseUint(stats["treedb.cache.vlog_generation.leaf_pack.canceled"]),
+            LeafPackDeadline:      parseUint(stats["treedb.cache.vlog_generation.leaf_pack.deadline"]),
             LeafPackBytesCopied:   parseUint(stats["treedb.cache.vlog_generation.leaf_pack.bytes_copied"]),
             LeafPackExpectedBytes: parseUint(stats["treedb.cache.vlog_generation.leaf_pack.expected_reclaim_bytes"]),
             LeafPackPassesPeriodic: parseUint(stats["treedb.cache.vlog_generation.maintenance.passes.with_leaf_pack.source.periodic"]),
             LeafPackLastWallMS:    stats["treedb.cache.vlog_generation.leaf_pack.last_wall_ms"],
+            LeafPackLastSkipReason: stats["treedb.cache.vlog_generation.leaf_pack.last_skip_reason"],
             LeafPackLastGenCount:  parseUint(stats["treedb.cache.vlog_generation.leaf_pack.last_selection.generations"]),
             LeafPackLastCopyBytes: parseUint(stats["treedb.cache.vlog_generation.leaf_pack.last_bytes_copied"]),
         }

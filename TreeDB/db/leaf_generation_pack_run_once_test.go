@@ -53,6 +53,28 @@ func TestLeafGenerationPackRunOnce_MovesSparseGeneration(t *testing.T) {
 	}
 }
 
+func TestLeafGenerationPackRunOnce_SkipsTooFewCandidateGenerations(t *testing.T) {
+	db, leafLog, _ := openLeafGenerationPackTestDB(t)
+
+	writeLeafGenerationKeys(t, db, "k", 2048, 'a')
+	if err := leafLog.rotateLeaf(); err != nil {
+		t.Fatalf("rotateLeaf: %v", err)
+	}
+	writeLeafGenerationKeyRange(t, db, "k", 0, 1024, 'b')
+	writeLeafGenerationKeys(t, db, "z", 32, 'z')
+
+	stats, err := db.LeafGenerationPackRunOnce(context.Background(), LeafGenerationPackFromPlanOptions{MinCandidateGenerations: 2})
+	if err != nil {
+		t.Fatalf("LeafGenerationPackRunOnce: %v", err)
+	}
+	if stats.Ran {
+		t.Fatalf("expected single sparse generation to skip, got pack=%+v", stats.Pack)
+	}
+	if got, want := stats.SkipReason, "plan_admission:too_few_generations"; got != want {
+		t.Fatalf("SkipReason=%q, want %q", got, want)
+	}
+}
+
 func TestLeafGenerationPackRunOnce_SkipsDensePlan(t *testing.T) {
 	db, leafLog, _ := openLeafGenerationPackTestDB(t)
 
