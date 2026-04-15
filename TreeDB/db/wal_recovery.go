@@ -473,6 +473,13 @@ func (a *replayInlineAppender) AppendLeafPage(leafPage []byte) (page.LeafLogPtr,
 	return leafPtr, nil
 }
 
+func (a *replayInlineAppender) LastLeafPageRecordLength() uint32 {
+	if a == nil || a.writer == nil {
+		return 0
+	}
+	return a.writer.LastLeafPageRecordLength()
+}
+
 func (a *replayInlineAppender) Flush() error {
 	if a == nil || a.writer == nil || !a.dirty {
 		return nil

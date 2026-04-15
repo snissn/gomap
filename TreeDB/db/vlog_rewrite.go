@@ -2525,6 +2525,7 @@ type rewriteWriter struct {
 	currentFileID     uint32
 	leafCurrentPath   string
 	leafCurrentFileID uint32
+	lastLeafRecordLen uint32
 	// blockCompression enables per-frame block compression for dictID=0 append
 	// paths (used by online rewrite). Offline rewrites use AppendRawRecord and do
 	// not consult this setting.
@@ -2701,6 +2702,13 @@ func (w *rewriteWriter) AppendLeafPage(leafPage []byte) (page.LeafLogPtr, error)
 	return w.appendLeafPageWithRID(rid, leafPage)
 }
 
+func (w *rewriteWriter) LastLeafPageRecordLength() uint32 {
+	if w == nil {
+		return 0
+	}
+	return w.lastLeafRecordLen
+}
+
 func (w *rewriteWriter) appendLeafPageWithRID(rid uint64, leafPage []byte) (page.LeafLogPtr, error) {
 	if w == nil {
 		return page.LeafLogPtr{}, errors.New("vlog-rewrite: nil writer")
@@ -2717,6 +2725,7 @@ func (w *rewriteWriter) appendLeafPageWithRID(rid uint64, leafPage []byte) (page
 		// remain stable and do not alias another subrecord in a grouped batch.
 		ptr, err := w.appendSingleValueWithDictClass(rewriteTemplateClassOuterLeaf, w.leafDictID, w.leafDict, rid, leafPage)
 		if err == nil {
+			w.lastLeafRecordLen = page.ValuePtrRecordLength(ptr)
 			leafPtr, convErr := page.LeafLogPtrFromValuePtr(ptr)
 			if convErr != nil {
 				return page.LeafLogPtr{}, convErr
@@ -2731,6 +2740,7 @@ func (w *rewriteWriter) appendLeafPageWithRID(rid uint64, leafPage []byte) (page
 	if err != nil {
 		return page.LeafLogPtr{}, err
 	}
+	w.lastLeafRecordLen = page.ValuePtrRecordLength(ptr)
 	leafPtr, convErr := page.LeafLogPtrFromValuePtr(ptr)
 	if convErr != nil {
 		return page.LeafLogPtr{}, convErr
@@ -2754,6 +2764,7 @@ func (w *rewriteWriter) appendLeafPageSplit(rid uint64, leafPage []byte) (page.L
 			return page.LeafLogPtr{}, err
 		}
 		w.records++
+		w.lastLeafRecordLen = page.ValuePtrRecordLength(ptr)
 		return page.LeafLogPtrFromValuePtr(ptr)
 	}
 	dictID, dict, leafPage = w.applyTemplateCompression(rewriteTemplateClassOuterLeaf, 0, nil, leafPage)
@@ -2768,6 +2779,7 @@ func (w *rewriteWriter) appendLeafPageSplit(rid uint64, leafPage []byte) (page.L
 		return page.LeafLogPtr{}, err
 	}
 	w.records++
+	w.lastLeafRecordLen = page.ValuePtrRecordLength(ptr)
 	return page.LeafLogPtrFromValuePtr(ptr)
 }
 

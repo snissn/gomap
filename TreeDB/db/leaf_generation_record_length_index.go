@@ -293,6 +293,23 @@ func (db *DB) storeLeafGenerationRecordLengthIndex(rawFileID uint32, idx *leafGe
 	db.leafGenerationRecordLengthMu.Unlock()
 }
 
+func (db *DB) noteLeafGenerationRecordLengthRaw(rawFileID uint32, offset uint64, recordLen uint32) {
+	if db == nil || rawFileID == 0 || offset == 0 || recordLen == 0 {
+		return
+	}
+	db.leafGenerationRecordLengthMu.Lock()
+	if db.leafGenerationRecordLengthByFile == nil {
+		db.leafGenerationRecordLengthByFile = make(map[uint32]*leafGenerationRecordLengthIndex)
+	}
+	idx := db.leafGenerationRecordLengthByFile[rawFileID]
+	if idx == nil {
+		idx = &leafGenerationRecordLengthIndex{}
+		db.leafGenerationRecordLengthByFile[rawFileID] = idx
+	}
+	idx.add(offset, recordLen)
+	db.leafGenerationRecordLengthMu.Unlock()
+}
+
 func (db *DB) NoteLeafGenerationRecordLength(ptr page.ValuePtr) {
 	if db == nil || ptr.FileID == 0 || ptr.Offset == 0 {
 		return
@@ -305,17 +322,7 @@ func (db *DB) NoteLeafGenerationRecordLength(ptr page.ValuePtr) {
 	if !ok {
 		return
 	}
-	db.leafGenerationRecordLengthMu.Lock()
-	if db.leafGenerationRecordLengthByFile == nil {
-		db.leafGenerationRecordLengthByFile = make(map[uint32]*leafGenerationRecordLengthIndex)
-	}
-	idx := db.leafGenerationRecordLengthByFile[rawFileID]
-	if idx == nil {
-		idx = &leafGenerationRecordLengthIndex{}
-		db.leafGenerationRecordLengthByFile[rawFileID] = idx
-	}
-	idx.add(ptr.Offset, recordLen)
-	db.leafGenerationRecordLengthMu.Unlock()
+	db.noteLeafGenerationRecordLengthRaw(rawFileID, ptr.Offset, recordLen)
 }
 
 func (db *DB) loadLeafGenerationRecordLengthIndexFromDisk(rawFileID uint32) (*leafGenerationRecordLengthIndex, bool, error) {

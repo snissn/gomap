@@ -428,6 +428,24 @@ func TestLeafGenerationRecordLengthForPlan_UsesWritableIndex(t *testing.T) {
 	}
 }
 
+func TestLeafGenerationPlan_SmallWriteKeepsWritableRecordLengthIndexWarm(t *testing.T) {
+	db, _ := openLeafGenerationGCTestDB(t)
+
+	writeLeafGenerationKeys(t, db, "k", 256, 'a')
+	if _, err := db.LeafGenerationPlan(context.Background(), LeafGenerationPlanOptions{}); err != nil {
+		t.Fatalf("warmup LeafGenerationPlan: %v", err)
+	}
+
+	scanCounter := withLeafGenerationRecordLengthIndexScanCounter(t)
+	writeLeafGenerationKeyRange(t, db, "k", 0, 1, 'b')
+	if _, err := db.LeafGenerationPlan(context.Background(), LeafGenerationPlanOptions{}); err != nil {
+		t.Fatalf("LeafGenerationPlan after small write: %v", err)
+	}
+	if got := scanCounter.Load(); got != 0 {
+		t.Fatalf("small write planner path rescanned %d writable files, want 0", got)
+	}
+}
+
 func TestLeafGenerationLiveStats_MarksPagerPagesVerified(t *testing.T) {
 	db, _ := openLeafGenerationGCTestDB(t)
 	writeLeafGenerationKeys(t, db, "k", 256, 'a')
