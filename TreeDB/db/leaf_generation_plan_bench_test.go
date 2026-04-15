@@ -182,6 +182,44 @@ func BenchmarkLeafGenerationLiveStatsVerifiedPagesPersistedIndex_SavedHome(b *te
 	}
 }
 
+func BenchmarkLeafGenerationLiveStatsWarmIndexesVerifiedPages_SavedHome(b *testing.B) {
+	fixture := benchmarkLeafGenerationPlanWorkFixture(b)
+	materialize := openLeafGenerationPlanDB(b, fixture, false)
+	if _, err := materialize.LeafGenerationPlan(context.Background(), LeafGenerationPlanOptions{}); err != nil {
+		_ = materialize.Close()
+		b.Fatalf("materialize LeafGenerationPlan: %v", err)
+	}
+	if err := materialize.Close(); err != nil {
+		b.Fatalf("close materialize db: %v", err)
+	}
+
+	db := openLeafGenerationPlanDB(b, fixture, true)
+	b.Cleanup(func() { _ = db.Close() })
+
+	db.writeMu.RLock()
+	snap := db.AcquireSnapshot()
+	db.writeMu.RUnlock()
+	if snap == nil {
+		b.Fatal(ErrClosed)
+	}
+	b.Cleanup(func() { _ = snap.Close() })
+	if len(snap.leafGenerationIDs) > 0 {
+		db.unpinLeafGenerationIDs(snap.leafGenerationIDs)
+		snap.leafGenerationIDs = snap.leafGenerationIDs[:0]
+	}
+	if _, err := db.scanLeafGenerationLiveStats(context.Background(), snap); err != nil {
+		b.Fatalf("warm scanLeafGenerationLiveStats: %v", err)
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := db.scanLeafGenerationLiveStats(context.Background(), snap); err != nil {
+			b.Fatalf("scanLeafGenerationLiveStats warm indexes: %v", err)
+		}
+	}
+}
+
 func BenchmarkLeafGenerationPlanCached_SavedHome(b *testing.B) {
 
 	db := openLeafGenerationPlanFixtureDB(b)
