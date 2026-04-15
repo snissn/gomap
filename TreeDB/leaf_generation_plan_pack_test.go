@@ -1,0 +1,99 @@
+package treedb_test
+
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"testing"
+	"time"
+
+	treedb "github.com/snissn/gomap/TreeDB"
+)
+
+func TestLeafGenerationPlan_CachedModeCheckpointsBeforePlan(t *testing.T) {
+	dir := t.TempDir()
+	db, err := treedb.Open(treedb.Options{
+		Dir:                        dir,
+		Durability:                 treedb.DurabilityWALOffRelaxed,
+		IndexOuterLeavesInValueLog: true,
+		ValueLog: treedb.ValueLogOptions{
+			PointerThreshold: 1,
+		},
+	})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+
+	metaBeforeWrites := readMainMeta(t, dir)
+	for i := 0; i < 64; i++ {
+		key := []byte(fmt.Sprintf("leaf-plan-%04d", i))
+		val := bytes.Repeat([]byte{byte(i % 251)}, 32)
+		if err := db.Set(key, val); err != nil {
+			t.Fatalf("set %q: %v", key, err)
+		}
+	}
+	metaBeforePlan := readMainMeta(t, dir)
+	if metaBeforePlan.CommitSeq != metaBeforeWrites.CommitSeq {
+		t.Fatalf("expected cached writes to remain uncheckpointed before LeafGenerationPlan, got before=%d after writes=%d", metaBeforeWrites.CommitSeq, metaBeforePlan.CommitSeq)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	plan, err := db.LeafGenerationPlan(ctx, treedb.LeafGenerationPlanOptions{Force: true})
+	if err != nil {
+		t.Fatalf("LeafGenerationPlan: %v", err)
+	}
+	if len(plan.Generations) < 1 {
+		t.Fatalf("len(Generations)=%d, want >= 1", len(plan.Generations))
+	}
+
+	metaAfterPlan := readMainMeta(t, dir)
+	if metaAfterPlan.CommitSeq <= metaBeforePlan.CommitSeq {
+		t.Fatalf("expected LeafGenerationPlan to checkpoint cached state, got before=%d after=%d", metaBeforePlan.CommitSeq, metaAfterPlan.CommitSeq)
+	}
+}
+
+func TestLeafGenerationPack_CachedModeCheckpointsBeforeNoOpPack(t *testing.T) {
+	dir := t.TempDir()
+	db, err := treedb.Open(treedb.Options{
+		Dir:                        dir,
+		Durability:                 treedb.DurabilityWALOffRelaxed,
+		IndexOuterLeavesInValueLog: true,
+		ValueLog: treedb.ValueLogOptions{
+			PointerThreshold: 1,
+		},
+	})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+
+	metaBeforeWrites := readMainMeta(t, dir)
+	for i := 0; i < 64; i++ {
+		key := []byte(fmt.Sprintf("leaf-pack-%04d", i))
+		val := bytes.Repeat([]byte{byte((i + 7) % 251)}, 32)
+		if err := db.Set(key, val); err != nil {
+			t.Fatalf("set %q: %v", key, err)
+		}
+	}
+	metaBeforePack := readMainMeta(t, dir)
+	if metaBeforePack.CommitSeq != metaBeforeWrites.CommitSeq {
+		t.Fatalf("expected cached writes to remain uncheckpointed before LeafGenerationPack, got before=%d after writes=%d", metaBeforeWrites.CommitSeq, metaBeforePack.CommitSeq)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	stats, err := db.LeafGenerationPack(ctx, treedb.LeafGenerationPackOptions{})
+	if err != nil {
+		t.Fatalf("LeafGenerationPack: %v", err)
+	}
+	if stats.GenerationsRequested != 0 {
+		t.Fatalf("GenerationsRequested=%d, want 0", stats.GenerationsRequested)
+	}
+
+	metaAfterPack := readMainMeta(t, dir)
+	if metaAfterPack.CommitSeq <= metaBeforePack.CommitSeq {
+		t.Fatalf("expected LeafGenerationPack to checkpoint cached state, got before=%d after=%d", metaBeforePack.CommitSeq, metaAfterPack.CommitSeq)
+	}
+}

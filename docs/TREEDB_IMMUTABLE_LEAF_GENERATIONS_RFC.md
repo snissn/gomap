@@ -1100,9 +1100,11 @@ Sprint 2 goal:
 
 - landed backend `LeafGenerationPlan` with exact live-byte accounting by generation
 - landed backend `LeafGenerationPack` for explicit sealed-generation leaf compaction
+- public `DB.LeafGenerationPlan` and `DB.LeafGenerationPack` now checkpoint cached state before backend execution
+- `treemap` now exposes `leafgen-plan` and `leafgen-pack` operator entrypoints
 - planner and GC now share the same `LeafRef` reachability scan shape
 - rewrite-created leaf files are now registered into the leaf-generation manifest before publish
-- unit coverage now includes ranking, dead-vs-live geometry, age-gate force override, snapshot-pin non-interference, explicit pack, reopen, and post-pack GC
+- unit coverage now includes ranking, dead-vs-live geometry, age-gate force override, snapshot-pin non-interference, explicit pack, reopen, post-pack GC, and operator-surface parsing/checkpoint tests
 
 ### Sprint 2 Code Work
 
