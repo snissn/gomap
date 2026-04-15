@@ -55,16 +55,19 @@ type snapshotView struct {
 }
 
 type DB struct {
-	valueLogManager        *valuelog.Manager
-	snapshotViewRO         atomic.Pointer[snapshotView]
-	snapshotAcquireRO      [snapshotAcquireShardCount]atomic.Int32
-	valueLogRefTracker     *valueLogRefTracker
-	leafPageLog            LeafPageLog
-	leafGenerationManifest *leafGenerationManifest
-	lock                   *lockfile.Lock
-	adaptive               *adaptive.Controller
-	pruner                 pruneWorker
-	leafGenerationPins     leafGenerationPinTracker
+	valueLogManager              *valuelog.Manager
+	snapshotViewRO               atomic.Pointer[snapshotView]
+	snapshotAcquireRO            [snapshotAcquireShardCount]atomic.Int32
+	valueLogRefTracker           *valueLogRefTracker
+	leafPageLog                  LeafPageLog
+	leafGenerationManifest       *leafGenerationManifest
+	leafGenerationPendingMu      sync.Mutex
+	leafGenerationPendingFileIDs []uint32
+	leafGenerationPendingSet     map[uint32]struct{}
+	lock                         *lockfile.Lock
+	adaptive                     *adaptive.Controller
+	pruner                       pruneWorker
+	leafGenerationPins           leafGenerationPinTracker
 
 	// idx is the current index generation (pager + MVCC lifecycle state).
 	idx atomic.Pointer[indexGen]

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -60,7 +61,13 @@ func (db *DB) RegisterValueLogSegment(path string, fileID uint32) error {
 	if err := db.valueLogManager.RegisterSegment(path, fileID); err != nil {
 		return err
 	}
-	return db.valueLogManager.PromoteCurrentWritable(fileID)
+	if err := db.valueLogManager.PromoteCurrentWritable(fileID); err != nil {
+		return err
+	}
+	if db.isLeafGenerationSegmentPath(path) {
+		db.queueLeafGenerationWritableFileID(fileID)
+	}
+	return nil
 }
 
 // ensureLeafPageLogSegmentRegistered tries to keep the leaf-page log's current
@@ -83,7 +90,7 @@ func (db *DB) ensureLeafPageLogSegmentRegistered(commitSeq uint64) (bool, error)
 		if err := db.valueLogManager.PromoteCurrentWritable(fileID); err != nil {
 			return false, err
 		}
-		if err := db.noteLeafGenerationWritableFileID(fileID, commitSeq); err != nil {
+		if err := db.noteLeafGenerationPendingFileIDs(fileID, commitSeq); err != nil {
 			return false, err
 		}
 		return true, nil
@@ -99,10 +106,21 @@ func (db *DB) ensureLeafPageLogSegmentRegistered(commitSeq uint64) (bool, error)
 	if err := db.valueLogManager.PromoteCurrentWritable(fileID); err != nil {
 		return false, err
 	}
-	if err := db.noteLeafGenerationWritableFileID(fileID, commitSeq); err != nil {
+	if err := db.noteLeafGenerationPendingFileIDs(fileID, commitSeq); err != nil {
 		return false, err
 	}
 	return true, nil
+}
+
+func (db *DB) isLeafGenerationSegmentPath(path string) bool {
+	if db == nil || path == "" || db.leafGenerationManifest == nil {
+		return false
+	}
+	leafDir := LeafLogDirPath(db.dir)
+	if leafDir == "" {
+		return false
+	}
+	return filepath.Clean(filepath.Dir(path)) == filepath.Clean(leafDir)
 }
 
 // SetCurrentValueLogReadBarrier installs a callback that will be invoked before

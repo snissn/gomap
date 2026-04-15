@@ -210,22 +210,127 @@ func validateLeafGenerationManifest(m *leafGenerationManifest) error {
 	return nil
 }
 
+func rawLeafGenerationFileID(fileID uint32) (uint32, bool) {
+	rawFileID := page.ValueLogSegmentID(fileID)
+	if rawFileID == 0 {
+		return 0, false
+	}
+	return rawFileID, true
+}
+
+func (db *DB) queueLeafGenerationWritableFileID(fileID uint32) {
+	if db == nil || db.leafGenerationManifest == nil {
+		return
+	}
+	rawFileID, ok := rawLeafGenerationFileID(fileID)
+	if !ok {
+		return
+	}
+	db.leafGenerationPendingMu.Lock()
+	if db.leafGenerationPendingSet == nil {
+		db.leafGenerationPendingSet = make(map[uint32]struct{})
+	}
+	if _, exists := db.leafGenerationPendingSet[rawFileID]; !exists {
+		db.leafGenerationPendingSet[rawFileID] = struct{}{}
+		db.leafGenerationPendingFileIDs = append(db.leafGenerationPendingFileIDs, rawFileID)
+	}
+	db.leafGenerationPendingMu.Unlock()
+}
+
+func (db *DB) snapshotLeafGenerationPendingFileIDs(currentFileID uint32) []uint32 {
+	if db == nil || db.leafGenerationManifest == nil {
+		return nil
+	}
+	currentRawFileID, _ := rawLeafGenerationFileID(currentFileID)
+	db.leafGenerationPendingMu.Lock()
+	defer db.leafGenerationPendingMu.Unlock()
+	if len(db.leafGenerationPendingFileIDs) == 0 && currentRawFileID == 0 {
+		return nil
+	}
+	out := make([]uint32, 0, len(db.leafGenerationPendingFileIDs)+1)
+	out = append(out, db.leafGenerationPendingFileIDs...)
+	if currentRawFileID != 0 {
+		if _, exists := db.leafGenerationPendingSet[currentRawFileID]; !exists {
+			out = append(out, currentRawFileID)
+		}
+	}
+	return out
+}
+
+func (db *DB) clearLeafGenerationPendingFileIDs(fileIDs []uint32) {
+	if db == nil || len(fileIDs) == 0 {
+		return
+	}
+	db.leafGenerationPendingMu.Lock()
+	defer db.leafGenerationPendingMu.Unlock()
+	if len(db.leafGenerationPendingFileIDs) == 0 || len(db.leafGenerationPendingSet) == 0 {
+		return
+	}
+	remove := make(map[uint32]struct{}, len(fileIDs))
+	for _, fileID := range fileIDs {
+		if fileID == 0 {
+			continue
+		}
+		remove[fileID] = struct{}{}
+		delete(db.leafGenerationPendingSet, fileID)
+	}
+	dst := db.leafGenerationPendingFileIDs[:0]
+	for _, fileID := range db.leafGenerationPendingFileIDs {
+		if _, drop := remove[fileID]; drop {
+			continue
+		}
+		if _, keep := db.leafGenerationPendingSet[fileID]; !keep {
+			continue
+		}
+		dst = append(dst, fileID)
+	}
+	db.leafGenerationPendingFileIDs = dst
+}
+
+func (db *DB) noteLeafGenerationPendingFileIDs(currentFileID uint32, commitSeq uint64) error {
+	fileIDs := db.snapshotLeafGenerationPendingFileIDs(currentFileID)
+	if len(fileIDs) == 0 {
+		return nil
+	}
+	if err := db.noteLeafGenerationWritableFileIDs(fileIDs, commitSeq); err != nil {
+		return err
+	}
+	db.clearLeafGenerationPendingFileIDs(fileIDs)
+	return nil
+}
+
+func (db *DB) noteLeafGenerationWritableFileIDs(fileIDs []uint32, commitSeq uint64) error {
+	if db == nil || db.leafGenerationManifest == nil || commitSeq == 0 || len(fileIDs) == 0 {
+		return nil
+	}
+	changedAny := false
+	for _, rawFileID := range fileIDs {
+		if rawFileID == 0 {
+			continue
+		}
+		changed, err := db.leafGenerationManifest.registerCurrentGenerationFileID(rawFileID, commitSeq)
+		if err != nil {
+			return err
+		}
+		if changed {
+			changedAny = true
+		}
+	}
+	if !changedAny {
+		return nil
+	}
+	return saveLeafGenerationManifest(LeafLogDirPath(db.dir), db.leafGenerationManifest)
+}
+
 func (db *DB) noteLeafGenerationWritableFileID(fileID uint32, commitSeq uint64) error {
 	if db == nil || db.leafGenerationManifest == nil {
 		return nil
 	}
-	rawFileID := page.ValueLogSegmentID(fileID)
-	if rawFileID == 0 {
+	rawFileID, ok := rawLeafGenerationFileID(fileID)
+	if !ok {
 		return errors.New("treedb: leaf generation file_id must be non-zero")
 	}
-	changed, err := db.leafGenerationManifest.registerCurrentGenerationFileID(rawFileID, commitSeq)
-	if err != nil {
-		return err
-	}
-	if !changed {
-		return nil
-	}
-	return saveLeafGenerationManifest(LeafLogDirPath(db.dir), db.leafGenerationManifest)
+	return db.noteLeafGenerationWritableFileIDs([]uint32{rawFileID}, commitSeq)
 }
 
 func loadLeafGenerationManifest(leafDir string) (*leafGenerationManifest, bool, error) {
