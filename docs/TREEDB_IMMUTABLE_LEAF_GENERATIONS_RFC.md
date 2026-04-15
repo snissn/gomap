@@ -825,6 +825,16 @@ Needed metrics:
 - retired generation count
 - bytes by generation state
 - generations pinned by snapshots
+
+First-rollout implementation note:
+
+- export initial backend metrics through existing `Stats()` output under the
+  `treedb.leaf_generation.*` prefix
+- include current generation ID, generation counts by state, file counts by
+  state, bytes by state, and snapshot pin counts
+
+Longer-term metrics still needed:
+
 - leaf-pack runs
 - leaf-pack bytes in/out
 - leaf-pack wall time
@@ -1021,7 +1031,8 @@ Sprint 1 goal:
 - manifest skeleton: landed locally
 - writable generation routing: landed locally
 - rollover and sealing: landed locally
-- snapshot pins and backend whole-generation GC: current slice
+- snapshot pins and backend whole-generation GC: landed locally
+- initial backend `treedb.leaf_generation.*` stats: current slice
 
 ### Sprint 1 Code Work
 
