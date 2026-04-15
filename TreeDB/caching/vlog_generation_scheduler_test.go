@@ -1795,6 +1795,36 @@ func TestVlogGenerationMaintenance_RestorePhaseSkipsLeafPack(t *testing.T) {
 	}
 }
 
+func TestVlogGenerationMaintenance_RunGCPassSkipsLeafPack(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+	t.Setenv(envEnableLeafGenerationPackMaintenance, "1")
+	recorder := &leafPackMaintenanceRecordingBackend{DB: mustOpenLeafPackBackend(t), resp: backenddb.LeafGenerationPackRunOnceStats{Ran: true}}
+	db, cleanup := openLeafPackMaintenanceTestDB(t, recorder)
+	defer cleanup()
+
+	db.maybeRunVlogGenerationMaintenanceWithOptions(true, vlogGenerationMaintenanceOptions{})
+
+	_, calls := recorder.recordedLeafPack()
+	if calls != 0 {
+		t.Fatalf("leaf pack calls=%d want 0 on runGC pass", calls)
+	}
+}
+
+func TestVlogGenerationMaintenance_BypassQuietSkipsLeafPack(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+	t.Setenv(envEnableLeafGenerationPackMaintenance, "1")
+	recorder := &leafPackMaintenanceRecordingBackend{DB: mustOpenLeafPackBackend(t), resp: backenddb.LeafGenerationPackRunOnceStats{Ran: true}}
+	db, cleanup := openLeafPackMaintenanceTestDB(t, recorder)
+	defer cleanup()
+
+	db.maybeRunVlogGenerationMaintenanceWithOptions(false, vlogGenerationMaintenanceOptions{bypassQuiet: true, skipCheckpoint: true})
+
+	_, calls := recorder.recordedLeafPack()
+	if calls != 0 {
+		t.Fatalf("leaf pack calls=%d want 0 on bypass-quiet pass", calls)
+	}
+}
+
 func TestVlogGenerationMaintenance_SerializesConcurrentRuns(t *testing.T) {
 	prepareDirectSchedulerTest(t)
 
