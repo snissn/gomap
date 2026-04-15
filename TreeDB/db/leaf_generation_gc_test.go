@@ -94,15 +94,16 @@ func loadLeafGenerationManifestOrFatal(t *testing.T, dir string) *leafGeneration
 	return manifest
 }
 
-func TestLeafGenerationView_SkipsDeletedGenerations(t *testing.T) {
+func TestLeafGenerationView_SkipsRetiringAndDeletedGenerations(t *testing.T) {
 	manifest := &leafGenerationManifest{
 		Version:             leafGenerationManifestVersion,
-		CurrentGenerationID: 3,
-		NextGenerationID:    4,
+		CurrentGenerationID: 4,
+		NextGenerationID:    5,
 		Generations: []leafGenerationRecord{
 			{GenerationID: 1, State: leafGenerationStateDeleted, FileIDs: []uint32{101}},
-			{GenerationID: 2, State: leafGenerationStateSealed, FileIDs: []uint32{202}},
-			{GenerationID: 3, State: leafGenerationStateWritable, FileIDs: []uint32{303}},
+			{GenerationID: 2, State: leafGenerationStateRetiring, FileIDs: []uint32{202}},
+			{GenerationID: 3, State: leafGenerationStateSealed, FileIDs: []uint32{303}},
+			{GenerationID: 4, State: leafGenerationStateWritable, FileIDs: []uint32{404}},
 		},
 	}
 	view := newLeafGenerationView(manifest)
@@ -118,8 +119,14 @@ func TestLeafGenerationView_SkipsDeletedGenerations(t *testing.T) {
 	if _, ok := view.FileToGeneration[101]; ok {
 		t.Fatalf("deleted file should be absent from file map")
 	}
-	if got, want := view.FileToGeneration[202], uint64(2); got != want {
-		t.Fatalf("FileToGeneration[202]=%d, want %d", got, want)
+	if _, ok := view.Generations[2]; ok {
+		t.Fatalf("retiring generation should be absent from view")
+	}
+	if _, ok := view.FileToGeneration[202]; ok {
+		t.Fatalf("retiring file should be absent from file map")
+	}
+	if got, want := view.FileToGeneration[303], uint64(3); got != want {
+		t.Fatalf("FileToGeneration[303]=%d, want %d", got, want)
 	}
 }
 

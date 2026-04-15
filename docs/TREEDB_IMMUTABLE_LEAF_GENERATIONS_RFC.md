@@ -518,8 +518,8 @@ Preferred first-rollout shape:
 - on `AcquireSnapshot`, increment pin counts for the generation IDs present in
   that published view
 - on `Snapshot.Close`, decrement those pin counts
-- omit `deleted` generations from newly published views so a generation already
-  scheduled for removal cannot repin itself
+- omit `retiring` and `deleted` generations from newly published views so a
+  generation already scheduled for removal cannot repin itself
 - treat the pin set as generation-granular, not page-granular
 
 The implementation should not try to infer pins from filesystem activity or from

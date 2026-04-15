@@ -26,7 +26,7 @@ func newLeafGenerationView(manifest *leafGenerationManifest) *leafGenerationView
 	}
 	for i := range manifest.Generations {
 		gen := manifest.Generations[i]
-		if gen.State == leafGenerationStateDeleted {
+		if gen.State == leafGenerationStateDeleted || gen.State == leafGenerationStateRetiring {
 			continue
 		}
 		view.GenerationOrder = append(view.GenerationOrder, gen.GenerationID)
