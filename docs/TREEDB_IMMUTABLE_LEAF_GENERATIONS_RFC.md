@@ -1181,7 +1181,7 @@ Sprint 3 goal:
 - manual `leafgen-pack -from-plan` now routes through `LeafGenerationPackFromPlan`, so the plan/select/pack composition exists as a DB API surface instead of a CLI-only orchestration path
 - `LeafGenerationPackRunOnce` now exists as a bounded skip-or-run backend surface: it returns the computed plan, selected prefix, pack stats when it runs, and an explicit skip reason when it declines work
 - the cached maintenance layer now has an env-gated, periodic-only `LeafGenerationPackRunOnce` hook that inherits the existing quiet-window, maintenance-phase suppression, and backend-maintenance barrier instead of introducing a parallel scheduler path
-- the first cached maintenance hook is intentionally conservative: it only runs for `IndexOuterLeavesInValueLog`, only on non-GC periodic passes, only when the quiet window is satisfied, and it defaults to a one-generation / 64 MiB copy cap until dwell validation proves the policy
+- the first cached maintenance hook is intentionally conservative: it only runs for `IndexOuterLeavesInValueLog`, only on non-GC periodic passes, only when the quiet window is satisfied, and it defaults to a one-generation / 64 MiB copy cap plus a conservative min-interval guard until dwell validation proves the policy
 - the bounded manual path is intentionally fail-closed when the top-ranked candidate alone exceeds `-max-bytes-to-copy`; it does not silently blow the requested copy budget
 
 ### Sprint 3 Code Work

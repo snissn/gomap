@@ -6553,6 +6553,7 @@ type DB struct {
 	vlogGenerationLeafPackAttempts                               atomic.Uint64
 	vlogGenerationLeafPackRuns                                   atomic.Uint64
 	vlogGenerationLeafPackSkips                                  atomic.Uint64
+	vlogGenerationLeafPackSkipMinInterval                        atomic.Uint64
 	vlogGenerationLeafPackErrors                                 atomic.Uint64
 	vlogGenerationLeafPackBytesCopied                            atomic.Uint64
 	vlogGenerationLeafPackExpectedReclaimBytes                   atomic.Uint64
@@ -6772,10 +6773,11 @@ const (
 )
 
 const (
-	vlogGenerationLoopInterval       = 1 * time.Second
-	vlogGenerationGCEvery            = 5
-	vlogGenerationGCMinBytes         = int64(1 << 20)
-	vlogGenerationRewriteMinInterval = 30 * time.Second
+	vlogGenerationLoopInterval               = 1 * time.Second
+	vlogGenerationGCEvery                    = 5
+	vlogGenerationGCMinBytes                 = int64(1 << 20)
+	vlogGenerationRewriteMinInterval         = 30 * time.Second
+	leafGenerationPackMaintenanceMinInterval = 30 * time.Second
 	// Rewrite staging uses a two-pass confirm flow: the first pass stages a plan,
 	// then a later pass re-plans and executes only if a stable subset persists.
 	//
@@ -22509,6 +22511,13 @@ func (db *DB) maybeRunLeafGenerationPackMaintenance(runGC bool, quiet bool, opts
 	if !ok {
 		return false, false, nil
 	}
+	lastRunNS := db.vlogGenerationLeafPackLastUnixNano.Load()
+	if lastRunNS > 0 {
+		if since := time.Since(time.Unix(0, lastRunNS)); since >= 0 && since < leafGenerationPackMaintenanceMinInterval {
+			db.vlogGenerationLeafPackSkipMinInterval.Add(1)
+			return false, false, nil
+		}
+	}
 
 	maxGenerations := int(envUint64(envLeafGenerationPackMaintenanceMaxGenerations, leafGenerationPackMaintenanceDefaultMaxGenerations))
 	if maxGenerations <= 0 {
@@ -23745,6 +23754,7 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_generation.leaf_pack.attempts"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackAttempts.Load())
 	stats["treedb.cache.vlog_generation.leaf_pack.runs"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackRuns.Load())
 	stats["treedb.cache.vlog_generation.leaf_pack.skips"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackSkips.Load())
+	stats["treedb.cache.vlog_generation.leaf_pack.skip.min_interval"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackSkipMinInterval.Load())
 	stats["treedb.cache.vlog_generation.leaf_pack.errors"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackErrors.Load())
 	stats["treedb.cache.vlog_generation.leaf_pack.bytes_copied"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackBytesCopied.Load())
 	stats["treedb.cache.vlog_generation.leaf_pack.expected_reclaim_bytes"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackExpectedReclaimBytes.Load())
@@ -23753,6 +23763,7 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_generation.leaf_pack.selection.bytes_dead"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackSelectionBytesDead.Load())
 	stats["treedb.cache.vlog_generation.leaf_pack.selection.generations"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackSelectionGenerations.Load())
 	stats["treedb.cache.vlog_generation.leaf_pack.last_wall_ms"] = fmt.Sprintf("%.3f", float64(db.vlogGenerationLeafPackLastWallNanos.Load())/float64(time.Millisecond))
+	stats["treedb.cache.vlog_generation.leaf_pack.min_interval_ms"] = fmt.Sprintf("%d", leafGenerationPackMaintenanceMinInterval.Milliseconds())
 	stats["treedb.cache.vlog_generation.leaf_pack.last_expected_reclaim_bytes"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackLastExpectedReclaimBytes.Load())
 	stats["treedb.cache.vlog_generation.leaf_pack.last_expected_reclaim_per_byte_copied_ppm"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackLastExpectedReclaimPerByteCopiedPPM.Load())
 	stats["treedb.cache.vlog_generation.leaf_pack.last_selection.bytes_to_copy"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackLastSelectionBytesToCopy.Load())

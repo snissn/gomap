@@ -1700,6 +1700,44 @@ func TestLeafGenerationPackMaintenance_RunsWithDefaultBounds(t *testing.T) {
 	}
 }
 
+func TestLeafGenerationPackMaintenance_SkipsWithinMinInterval(t *testing.T) {
+	t.Setenv(envEnableLeafGenerationPackMaintenance, "1")
+	backend, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	recorder := &rewriteBudgetRecordingBackend{DB: backend, leafPackResp: backenddb.LeafGenerationPackRunOnceStats{Ran: true}}
+	defer recorder.Close()
+	db := &DB{
+		backend:                    recorder,
+		indexOuterLeavesInValueLog: true,
+		valueLogGenerationPolicy:   uint8(backenddb.ValueLogGenerationHotWarmCold),
+		closeCh:                    make(chan struct{}),
+	}
+	db.checkpointCond = sync.NewCond(&db.checkpointMu)
+	attempted, ran, err := db.maybeRunLeafGenerationPackMaintenance(false, true, vlogGenerationMaintenanceOptions{skipCheckpoint: true})
+	if err != nil {
+		t.Fatalf("first maybeRunLeafGenerationPackMaintenance: %v", err)
+	}
+	if !attempted || !ran {
+		t.Fatalf("first attempted=%t ran=%t want true/true", attempted, ran)
+	}
+	attempted, ran, err = db.maybeRunLeafGenerationPackMaintenance(false, true, vlogGenerationMaintenanceOptions{skipCheckpoint: true})
+	if err != nil {
+		t.Fatalf("second maybeRunLeafGenerationPackMaintenance: %v", err)
+	}
+	if attempted || ran {
+		t.Fatalf("second attempted=%t ran=%t want false/false", attempted, ran)
+	}
+	_, calls := recorder.recordedLeafPack()
+	if calls != 1 {
+		t.Fatalf("leaf pack calls=%d want 1 after min-interval skip", calls)
+	}
+	if got := db.vlogGenerationLeafPackSkipMinInterval.Load(); got != 1 {
+		t.Fatalf("leaf pack skip min interval=%d want 1", got)
+	}
+}
+
 func TestVlogGenerationMaintenance_PeriodicPassRunsLeafPackWhenEnabled(t *testing.T) {
 	prepareDirectSchedulerTest(t)
 	t.Setenv(envEnableLeafGenerationPackMaintenance, "1")
@@ -8959,6 +8997,7 @@ func TestVlogGenerationStats_ReportRewriteBacklogAndDurations(t *testing.T) {
 	db.vlogGenerationLeafPackAttempts.Store(5)
 	db.vlogGenerationLeafPackRuns.Store(2)
 	db.vlogGenerationLeafPackSkips.Store(3)
+	db.vlogGenerationLeafPackSkipMinInterval.Store(6)
 	db.vlogGenerationLeafPackErrors.Store(1)
 	db.vlogGenerationLeafPackBytesCopied.Store(4096)
 	db.vlogGenerationLeafPackExpectedReclaimBytes.Store(2048)
@@ -9129,6 +9168,9 @@ func TestVlogGenerationStats_ReportRewriteBacklogAndDurations(t *testing.T) {
 	}
 	if got := stats["treedb.cache.vlog_generation.leaf_pack.runs"]; got != "2" {
 		t.Fatalf("leaf pack runs=%q want 2", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.leaf_pack.skip.min_interval"]; got != "6" {
+		t.Fatalf("leaf pack skip min_interval=%q want 6", got)
 	}
 	if got := stats["treedb.cache.vlog_generation.leaf_pack.last_selection.generations"]; got != "2" {
 		t.Fatalf("leaf pack last selection generations=%q want 2", got)
