@@ -1367,28 +1367,29 @@ func TestVlogGenerationRewriteMaxSegments_UsesOverrideLimits(t *testing.T) {
 type rewriteBudgetRecordingBackend struct {
 	*backenddb.DB
 
-	mu              sync.Mutex
-	planOpts        backenddb.ValueLogRewriteOnlineOptions
-	planCalls       int
-	planResponse    backenddb.ValueLogRewritePlan
-	planErr         error
-	planFn          func(backenddb.ValueLogRewriteOnlineOptions) (backenddb.ValueLogRewritePlan, error)
-	rewriteOpts     backenddb.ValueLogRewriteOnlineOptions
-	rewriteHistory  []backenddb.ValueLogRewriteOnlineOptions
-	rewriteCalls    int
-	rewriteResponse backenddb.ValueLogRewriteStats
-	rewriteErr      error
-	rewriteFn       func(context.Context, backenddb.ValueLogRewriteOnlineOptions) (backenddb.ValueLogRewriteStats, error)
-	gcCalls         int
-	gcOpts          []backenddb.ValueLogGCOptions
-	gcResponse      backenddb.ValueLogGCStats
-	gcResponses     []backenddb.ValueLogGCStats
-	gcErr           error
-	gcFn            func(context.Context, backenddb.ValueLogGCOptions) (backenddb.ValueLogGCStats, error)
-	leafPackCalls   int
-	leafPackOpts    backenddb.LeafGenerationPackFromPlanOptions
-	leafPackResp    backenddb.LeafGenerationPackRunOnceStats
-	leafPackErr     error
+	mu                sync.Mutex
+	planOpts          backenddb.ValueLogRewriteOnlineOptions
+	planCalls         int
+	planResponse      backenddb.ValueLogRewritePlan
+	planErr           error
+	planFn            func(backenddb.ValueLogRewriteOnlineOptions) (backenddb.ValueLogRewritePlan, error)
+	rewriteOpts       backenddb.ValueLogRewriteOnlineOptions
+	rewriteHistory    []backenddb.ValueLogRewriteOnlineOptions
+	rewriteCalls      int
+	rewriteResponse   backenddb.ValueLogRewriteStats
+	rewriteErr        error
+	rewriteFn         func(context.Context, backenddb.ValueLogRewriteOnlineOptions) (backenddb.ValueLogRewriteStats, error)
+	gcCalls           int
+	gcOpts            []backenddb.ValueLogGCOptions
+	gcResponse        backenddb.ValueLogGCStats
+	gcResponses       []backenddb.ValueLogGCStats
+	gcErr             error
+	gcFn              func(context.Context, backenddb.ValueLogGCOptions) (backenddb.ValueLogGCStats, error)
+	leafPackCalls     int
+	leafPackOpts      backenddb.LeafGenerationPackFromPlanOptions
+	leafPackResp      backenddb.LeafGenerationPackRunOnceStats
+	leafPackResponses []backenddb.LeafGenerationPackRunOnceStats
+	leafPackErr       error
 }
 
 func (b *rewriteBudgetRecordingBackend) ValueLogRewritePlan(ctx context.Context, opts backenddb.ValueLogRewriteOnlineOptions) (backenddb.ValueLogRewritePlan, error) {
@@ -1466,7 +1467,18 @@ func (b *rewriteBudgetRecordingBackend) LeafGenerationPackRunOnce(ctx context.Co
 	defer b.mu.Unlock()
 	b.leafPackCalls++
 	b.leafPackOpts = opts
-	return b.leafPackResp, b.leafPackErr
+	resp := b.leafPackResp
+	if len(b.leafPackResponses) > 0 {
+		idx := b.leafPackCalls - 1
+		if idx < 0 {
+			idx = 0
+		}
+		if idx >= len(b.leafPackResponses) {
+			idx = len(b.leafPackResponses) - 1
+		}
+		resp = b.leafPackResponses[idx]
+	}
+	return resp, b.leafPackErr
 }
 
 func (b *rewriteBudgetRecordingBackend) recordedRewrite() (backenddb.ValueLogRewriteOnlineOptions, int) {
@@ -1548,8 +1560,15 @@ type leafPackMaintenanceRecordingBackend struct {
 	mu                sync.Mutex
 	calls             int
 	opts              backenddb.LeafGenerationPackFromPlanOptions
+	optsHistory       []backenddb.LeafGenerationPackFromPlanOptions
 	resp              backenddb.LeafGenerationPackRunOnceStats
+	responses         []backenddb.LeafGenerationPackRunOnceStats
 	err               error
+	leafGCCalls       int
+	leafGCOpts        []backenddb.LeafGenerationGCOptions
+	leafGCResp        backenddb.LeafGenerationGCStats
+	leafGCResponses   []backenddb.LeafGenerationGCStats
+	leafGCErr         error
 	hasDeadline       bool
 	deadline          time.Time
 	entered           chan struct{}
@@ -1560,10 +1579,21 @@ func (b *leafPackMaintenanceRecordingBackend) LeafGenerationPackRunOnce(ctx cont
 	b.mu.Lock()
 	b.calls++
 	b.opts = opts
+	b.optsHistory = append(b.optsHistory, opts)
 	b.deadline, b.hasDeadline = ctx.Deadline()
 	entered := b.entered
 	blockUntilCtxDone := b.blockUntilCtxDone
 	resp := b.resp
+	if len(b.responses) > 0 {
+		idx := b.calls - 1
+		if idx < 0 {
+			idx = 0
+		}
+		if idx >= len(b.responses) {
+			idx = len(b.responses) - 1
+		}
+		resp = b.responses[idx]
+	}
 	err := b.err
 	b.mu.Unlock()
 	if entered != nil {
@@ -1579,10 +1609,51 @@ func (b *leafPackMaintenanceRecordingBackend) LeafGenerationPackRunOnce(ctx cont
 	return resp, err
 }
 
+func (b *leafPackMaintenanceRecordingBackend) LeafGenerationGC(ctx context.Context, opts backenddb.LeafGenerationGCOptions) (backenddb.LeafGenerationGCStats, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.leafGCCalls++
+	b.leafGCOpts = append(b.leafGCOpts, opts)
+	stats := b.leafGCResp
+	if len(b.leafGCResponses) > 0 {
+		idx := b.leafGCCalls - 1
+		if idx < 0 {
+			idx = 0
+		}
+		if idx >= len(b.leafGCResponses) {
+			idx = len(b.leafGCResponses) - 1
+		}
+		stats = b.leafGCResponses[idx]
+	}
+	return stats, b.leafGCErr
+}
+
 func (b *leafPackMaintenanceRecordingBackend) recordedLeafPack() (backenddb.LeafGenerationPackFromPlanOptions, int, bool, time.Time) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.opts, b.calls, b.hasDeadline, b.deadline
+}
+
+func (b *leafPackMaintenanceRecordingBackend) recordedLeafPackHistory() []backenddb.LeafGenerationPackFromPlanOptions {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	history := make([]backenddb.LeafGenerationPackFromPlanOptions, len(b.optsHistory))
+	copy(history, b.optsHistory)
+	return history
+}
+
+func (b *leafPackMaintenanceRecordingBackend) recordedLeafGC() (backenddb.LeafGenerationGCStats, int) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	stats := b.leafGCResp
+	if len(b.leafGCResponses) > 0 && b.leafGCCalls > 0 {
+		idx := b.leafGCCalls - 1
+		if idx >= len(b.leafGCResponses) {
+			idx = len(b.leafGCResponses) - 1
+		}
+		stats = b.leafGCResponses[idx]
+	}
+	return stats, b.leafGCCalls
 }
 
 func mustOpenLeafPackBackend(t *testing.T) *backenddb.DB {
@@ -1627,6 +1698,28 @@ func openLeafPackMaintenanceTestDB(t *testing.T, backend *leafPackMaintenanceRec
 	db.lastForegroundReadUnixNano.Store(time.Now().Add(-2 * vlogForegroundReadQuietWindow).UnixNano())
 	forceVlogMaintenanceIdle(db)
 	return db, func() { _ = db.Close() }
+}
+
+func leafPackWindowExhaustingStats(genID uint64, expectedReclaimBytes int64, copiedBytes int64) backenddb.LeafGenerationPackRunOnceStats {
+	if expectedReclaimBytes <= 0 {
+		expectedReclaimBytes = 1024
+	}
+	if copiedBytes <= 0 {
+		copiedBytes = 4096
+	}
+	return backenddb.LeafGenerationPackRunOnceStats{
+		Ran: true,
+		Selection: backenddb.LeafGenerationPackSelection{
+			GenerationIDs:        []uint64{genID},
+			BytesToCopy:          leafGenerationPackMaintenanceDefaultMaxBytesToCopy,
+			BytesDead:            expectedReclaimBytes,
+			ExpectedReclaimBytes: expectedReclaimBytes,
+		},
+		Pack: backenddb.LeafGenerationPackStats{
+			BytesCopied:   copiedBytes,
+			WallTimeNanos: (5 * time.Millisecond).Nanoseconds(),
+		},
+	}
 }
 
 func openRewriteQueueTestDB(t *testing.T, dir string, recorder *rewriteBudgetRecordingBackend) (*DB, func()) {
@@ -1678,7 +1771,7 @@ func TestLeafGenerationPackMaintenance_RequiresExplicitEnv(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open backend: %v", err)
 	}
-	recorder := &rewriteBudgetRecordingBackend{DB: backend, leafPackResp: backenddb.LeafGenerationPackRunOnceStats{Ran: true}}
+	recorder := &rewriteBudgetRecordingBackend{DB: backend, leafPackResp: leafPackWindowExhaustingStats(1, 1024, 4096)}
 	defer recorder.Close()
 	db := &DB{
 		backend:                    recorder,
@@ -1708,7 +1801,7 @@ func TestLeafGenerationPackMaintenance_RunsWithDefaultBounds(t *testing.T) {
 			Ran: true,
 			Selection: backenddb.LeafGenerationPackSelection{
 				GenerationIDs:                   []uint64{7},
-				BytesToCopy:                     1234,
+				BytesToCopy:                     leafGenerationPackMaintenanceDefaultMaxBytesToCopy,
 				BytesDead:                       2345,
 				ExpectedReclaimBytes:            2345,
 				ExpectedReclaimPerByteCopiedPPM: 900000,
@@ -1758,13 +1851,97 @@ func TestLeafGenerationPackMaintenance_RunsWithDefaultBounds(t *testing.T) {
 	}
 }
 
+func TestLeafGenerationPackMaintenance_LoopsWithinBudgetAndRunsLeafGC(t *testing.T) {
+	t.Setenv(envEnableLeafGenerationPackMaintenance, "1")
+	t.Setenv(envLeafGenerationPackMaintenanceMaxGenerations, "3")
+	t.Setenv(envLeafGenerationPackMaintenanceMaxBytesToCopy, "80")
+	recorder := &leafPackMaintenanceRecordingBackend{
+		DB: mustOpenLeafPackBackend(t),
+		responses: []backenddb.LeafGenerationPackRunOnceStats{
+			{
+				Ran: true,
+				Selection: backenddb.LeafGenerationPackSelection{
+					GenerationIDs:        []uint64{21, 22},
+					BytesToCopy:          40,
+					BytesDead:            90,
+					ExpectedReclaimBytes: 90,
+				},
+				Pack: backenddb.LeafGenerationPackStats{BytesCopied: 38, WallTimeNanos: (4 * time.Millisecond).Nanoseconds()},
+			},
+			{
+				Ran: true,
+				Selection: backenddb.LeafGenerationPackSelection{
+					GenerationIDs:        []uint64{23},
+					BytesToCopy:          20,
+					BytesDead:            60,
+					ExpectedReclaimBytes: 60,
+				},
+				Pack: backenddb.LeafGenerationPackStats{BytesCopied: 19, WallTimeNanos: (3 * time.Millisecond).Nanoseconds()},
+			},
+		},
+		leafGCResponses: []backenddb.LeafGenerationGCStats{
+			{GenerationsEligible: 2, GenerationsDeleted: 1, FilesDeleted: 3},
+			{GenerationsEligible: 1, GenerationsDeleted: 1, FilesDeleted: 2},
+		},
+	}
+	db, cleanup := openLeafPackMaintenanceTestDB(t, recorder)
+	defer cleanup()
+
+	attempted, ran, err := db.maybeRunLeafGenerationPackMaintenance(false, true, vlogGenerationMaintenanceOptions{skipCheckpoint: true})
+	if err != nil {
+		t.Fatalf("maybeRunLeafGenerationPackMaintenance: %v", err)
+	}
+	if !attempted || !ran {
+		t.Fatalf("attempted=%t ran=%t want true/true", attempted, ran)
+	}
+	history := recorder.recordedLeafPackHistory()
+	if len(history) != 2 {
+		t.Fatalf("leaf pack history=%d want 2", len(history))
+	}
+	if history[0].MaxGenerations != 3 || history[0].MaxBytesToCopy != 80 {
+		t.Fatalf("first bounds=(%d,%d) want (3,80)", history[0].MaxGenerations, history[0].MaxBytesToCopy)
+	}
+	if history[1].MaxGenerations != 1 || history[1].MaxBytesToCopy != 40 {
+		t.Fatalf("second bounds=(%d,%d) want (1,40)", history[1].MaxGenerations, history[1].MaxBytesToCopy)
+	}
+	gcStats, gcCalls := recorder.recordedLeafGC()
+	if gcCalls != 2 {
+		t.Fatalf("leaf gc calls=%d want 2", gcCalls)
+	}
+	if gcStats.GenerationsDeleted != 1 || gcStats.FilesDeleted != 2 {
+		t.Fatalf("last leaf gc stats=%+v want deleted=1 files=2", gcStats)
+	}
+	if got := db.vlogGenerationLeafPackRuns.Load(); got != 2 {
+		t.Fatalf("leaf pack runs=%d want 2", got)
+	}
+	if got := db.vlogGenerationLeafPackBytesCopied.Load(); got != 57 {
+		t.Fatalf("leaf pack bytes copied=%d want 57", got)
+	}
+	if got := db.vlogGenerationLeafPackGCRuns.Load(); got != 2 {
+		t.Fatalf("leaf gc runs=%d want 2", got)
+	}
+	if got := db.vlogGenerationLeafPackGCDeletedGenerations.Load(); got != 2 {
+		t.Fatalf("leaf gc deleted generations=%d want 2", got)
+	}
+	if got := db.vlogGenerationLeafPackGCDeletedFiles.Load(); got != 5 {
+		t.Fatalf("leaf gc deleted files=%d want 5", got)
+	}
+	stats := db.Stats()
+	if got := stats["treedb.cache.vlog_generation.leaf_pack.gc.deleted_files"]; got != "5" {
+		t.Fatalf("gc.deleted_files=%q want 5", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.leaf_pack.gc.last_deleted_files"]; got != "2" {
+		t.Fatalf("gc.last_deleted_files=%q want 2", got)
+	}
+}
+
 func TestLeafGenerationPackMaintenance_SkipsWithinMinInterval(t *testing.T) {
 	t.Setenv(envEnableLeafGenerationPackMaintenance, "1")
 	backend, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("open backend: %v", err)
 	}
-	recorder := &rewriteBudgetRecordingBackend{DB: backend, leafPackResp: backenddb.LeafGenerationPackRunOnceStats{Ran: true}}
+	recorder := &rewriteBudgetRecordingBackend{DB: backend, leafPackResp: leafPackWindowExhaustingStats(2, 1024, 4096)}
 	defer recorder.Close()
 	db := &DB{
 		backend:                    recorder,
@@ -1800,19 +1977,9 @@ func TestVlogGenerationMaintenance_PeriodicPassRunsLeafPackWhenEnabled(t *testin
 	prepareDirectSchedulerTest(t)
 	t.Setenv(envEnableLeafGenerationPackMaintenance, "1")
 	recorder := &leafPackMaintenanceRecordingBackend{
-		DB: mustOpenLeafPackBackend(t),
-		resp: backenddb.LeafGenerationPackRunOnceStats{
-			Ran: true,
-			Selection: backenddb.LeafGenerationPackSelection{
-				GenerationIDs:        []uint64{9},
-				BytesToCopy:          4096,
-				ExpectedReclaimBytes: 1024,
-			},
-			Pack: backenddb.LeafGenerationPackStats{
-				BytesCopied:   4096,
-				WallTimeNanos: (5 * time.Millisecond).Nanoseconds(),
-			},
-		},
+		DB:         mustOpenLeafPackBackend(t),
+		resp:       leafPackWindowExhaustingStats(9, 1024, 4096),
+		leafGCResp: backenddb.LeafGenerationGCStats{GenerationsEligible: 1, GenerationsDeleted: 1, FilesDeleted: 2},
 	}
 	db, cleanup := openLeafPackMaintenanceTestDB(t, recorder)
 	defer cleanup()
@@ -1848,7 +2015,7 @@ func TestVlogGenerationMaintenance_LeafPackUsesConfiguredPolicy(t *testing.T) {
 	t.Setenv(envEnableLeafGenerationPackMaintenance, "1")
 	t.Setenv(envLeafGenerationPackMaintenanceMinCandidateGenerations, "3")
 	t.Setenv(envLeafGenerationPackMaintenanceTimeoutSeconds, "7")
-	recorder := &leafPackMaintenanceRecordingBackend{DB: mustOpenLeafPackBackend(t), resp: backenddb.LeafGenerationPackRunOnceStats{Ran: true}}
+	recorder := &leafPackMaintenanceRecordingBackend{DB: mustOpenLeafPackBackend(t), resp: leafPackWindowExhaustingStats(10, 1024, 4096)}
 	db, cleanup := openLeafPackMaintenanceTestDB(t, recorder)
 	defer cleanup()
 
@@ -1934,7 +2101,7 @@ func TestVlogGenerationMaintenance_LeafPackCanceledIsNotAnError(t *testing.T) {
 func TestVlogGenerationMaintenance_RestorePhaseSkipsLeafPack(t *testing.T) {
 	prepareDirectSchedulerTest(t)
 	t.Setenv(envEnableLeafGenerationPackMaintenance, "1")
-	recorder := &leafPackMaintenanceRecordingBackend{DB: mustOpenLeafPackBackend(t), resp: backenddb.LeafGenerationPackRunOnceStats{Ran: true}}
+	recorder := &leafPackMaintenanceRecordingBackend{DB: mustOpenLeafPackBackend(t), resp: leafPackWindowExhaustingStats(11, 1024, 4096)}
 	db, cleanup := openLeafPackMaintenanceTestDB(t, recorder)
 	defer cleanup()
 	db.SetMaintenancePhase(MaintenancePhaseRestore)
@@ -1953,7 +2120,7 @@ func TestVlogGenerationMaintenance_RestorePhaseSkipsLeafPack(t *testing.T) {
 func TestVlogGenerationMaintenance_RunGCPassSkipsLeafPack(t *testing.T) {
 	prepareDirectSchedulerTest(t)
 	t.Setenv(envEnableLeafGenerationPackMaintenance, "1")
-	recorder := &leafPackMaintenanceRecordingBackend{DB: mustOpenLeafPackBackend(t), resp: backenddb.LeafGenerationPackRunOnceStats{Ran: true}}
+	recorder := &leafPackMaintenanceRecordingBackend{DB: mustOpenLeafPackBackend(t), resp: leafPackWindowExhaustingStats(12, 1024, 4096)}
 	db, cleanup := openLeafPackMaintenanceTestDB(t, recorder)
 	defer cleanup()
 
@@ -1968,7 +2135,7 @@ func TestVlogGenerationMaintenance_RunGCPassSkipsLeafPack(t *testing.T) {
 func TestVlogGenerationMaintenance_BypassQuietSkipsLeafPack(t *testing.T) {
 	prepareDirectSchedulerTest(t)
 	t.Setenv(envEnableLeafGenerationPackMaintenance, "1")
-	recorder := &leafPackMaintenanceRecordingBackend{DB: mustOpenLeafPackBackend(t), resp: backenddb.LeafGenerationPackRunOnceStats{Ran: true}}
+	recorder := &leafPackMaintenanceRecordingBackend{DB: mustOpenLeafPackBackend(t), resp: leafPackWindowExhaustingStats(13, 1024, 4096)}
 	db, cleanup := openLeafPackMaintenanceTestDB(t, recorder)
 	defer cleanup()
 
