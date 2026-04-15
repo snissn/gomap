@@ -494,10 +494,11 @@ func (db *DB) scanLeafGenerationLiveStats(ctx context.Context, snap *Snapshot) (
 	view := snap.state.LeafGenerations
 	type leafGenerationScanFileState struct {
 		fileID     uint32
-		genIndex   int
 		persist    bool
 		idx        *leafGenerationRecordLengthIndex
 		lookupHint int
+		fileTotals leafGenerationLiveTotals
+		genTotals  *leafGenerationLiveTotals
 	}
 	genStates := make([]uint64, 0, len(view.GenerationOrder))
 	genIndexByID := make(map[uint64]int, len(view.GenerationOrder))
@@ -509,7 +510,8 @@ func (db *DB) scanLeafGenerationLiveStats(ctx context.Context, snap *Snapshot) (
 		genStates = append(genStates, genID)
 	}
 	fileStates := make([]leafGenerationScanFileState, 0, len(view.FileToGeneration))
-	fileIndexByID := make(map[uint32]int, len(view.FileToGeneration))
+	genTotals := make([]leafGenerationLiveTotals, len(genStates))
+	fileStateByID := make(map[uint32]*leafGenerationScanFileState, len(view.FileToGeneration))
 	for fileID, genID := range view.FileToGeneration {
 		gen, ok := view.Generations[genID]
 		if !ok {
@@ -524,16 +526,14 @@ func (db *DB) scanLeafGenerationLiveStats(ctx context.Context, snap *Snapshot) (
 		if err != nil {
 			return leafGenerationLiveScanStats{}, err
 		}
-		fileIndexByID[fileID] = len(fileStates)
 		fileStates = append(fileStates, leafGenerationScanFileState{
-			fileID:   fileID,
-			genIndex: genIndex,
-			persist:  persist,
-			idx:      idx,
+			fileID:    fileID,
+			persist:   persist,
+			idx:       idx,
+			genTotals: &genTotals[genIndex],
 		})
+		fileStateByID[fileID] = &fileStates[len(fileStates)-1]
 	}
-	fileTotals := make([]leafGenerationLiveTotals, len(fileStates))
-	genTotals := make([]leafGenerationLiveTotals, len(genStates))
 	verifyAlways := snap.idx.pager.VerifyOnRead()
 	verify := func(pageID uint64, n node.Node) error {
 		if verifyAlways || !snap.idx.pager.IsVerified(pageID) {
@@ -547,23 +547,22 @@ func (db *DB) scanLeafGenerationLiveStats(ctx context.Context, snap *Snapshot) (
 		return nil
 	}
 	lastFileID := uint32(0)
-	lastFileIndex := -1
+	var lastFileState *leafGenerationScanFileState
 	visit := func(ptr page.LeafLogPtr) error {
 		// Published B-tree state should not reference the same external leaf page
 		// from multiple parents; leafrefscan.Walk already deduplicates pager page
 		// IDs. Keep per-file planner state local to the scan so the hot path only
 		// resolves file identity once per contiguous run.
-		fileIndex := lastFileIndex
-		if fileIndex < 0 || lastFileID != ptr.FileID {
+		fileState := lastFileState
+		if fileState == nil || lastFileID != ptr.FileID {
 			var ok bool
-			fileIndex, ok = fileIndexByID[ptr.FileID]
+			fileState, ok = fileStateByID[ptr.FileID]
 			if !ok {
 				return fmt.Errorf("leaf generation plan: missing generation for leaf file %d", ptr.FileID)
 			}
 			lastFileID = ptr.FileID
-			lastFileIndex = fileIndex
+			lastFileState = fileState
 		}
-		fileState := &fileStates[fileIndex]
 		recordLen, hint, ok := fileState.idx.lookupWithHint(ptr.Offset, fileState.lookupHint)
 		fileState.lookupHint = hint
 		if !ok {
@@ -588,10 +587,10 @@ func (db *DB) scanLeafGenerationLiveStats(ctx context.Context, snap *Snapshot) (
 				}
 			}
 		}
-		fileTotals[fileIndex].LivePages++
-		fileTotals[fileIndex].LiveBytes += int64(recordLen)
-		genTotals[fileState.genIndex].LivePages++
-		genTotals[fileState.genIndex].LiveBytes += int64(recordLen)
+		fileState.fileTotals.LivePages++
+		fileState.fileTotals.LiveBytes += int64(recordLen)
+		fileState.genTotals.LivePages++
+		fileState.genTotals.LiveBytes += int64(recordLen)
 		return nil
 	}
 	walkState := getLeafGenerationPagerWalkState(snap.idx.pager.PageCount())
@@ -642,7 +641,8 @@ func (db *DB) scanLeafGenerationLiveStats(ctx context.Context, snap *Snapshot) (
 			return leafGenerationLiveScanStats{}, fmt.Errorf("invalid page type %d on page %d", n.Type(), pageID)
 		}
 	}
-	for i, totals := range fileTotals {
+	for i := range fileStates {
+		totals := fileStates[i].fileTotals
 		if totals.LivePages == 0 && totals.LiveBytes == 0 {
 			continue
 		}
