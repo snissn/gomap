@@ -136,6 +136,8 @@ type DB struct {
 
 	leafGenerationLiveStatsMu        sync.RWMutex
 	leafGenerationLiveStatsCache     leafGenerationLiveStatsCache
+	leafGenerationSubtreeStatsMu     sync.RWMutex
+	leafGenerationSubtreeStatsByPage map[uint64]leafGenerationSubtreeStats
 	leafGenerationRecordLengthMu     sync.RWMutex
 	leafGenerationRecordLengthByFile map[uint32]*leafGenerationRecordLengthIndex
 

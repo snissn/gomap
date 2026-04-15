@@ -33,6 +33,18 @@ func withLeafGenerationLiveScanCounter(t *testing.T) *atomic.Uint64 {
 	return &counter
 }
 
+func withLeafGenerationSubtreeCacheMissCounter(t *testing.T) *atomic.Uint64 {
+	t.Helper()
+	var counter atomic.Uint64
+	unregister := registerLeafGenerationSubtreeCacheMissHook(func(uint64) {
+		counter.Add(1)
+	})
+	t.Cleanup(func() {
+		unregister()
+	})
+	return &counter
+}
+
 func withValueLogRecordLengthHeaderReadCounter(t *testing.T) *atomic.Uint64 {
 	t.Helper()
 	var counter atomic.Uint64
@@ -616,6 +628,46 @@ func TestLeafGenerationPlan_CachesLiveStatsUntilTreeRootsChange(t *testing.T) {
 	}
 	if got, want := counter.Load(), uint64(2); got != want {
 		t.Fatalf("scan count after root change=%d, want %d", got, want)
+	}
+}
+
+func TestLeafGenerationPlan_ReusesCachedSubtreesAcrossRootChanges(t *testing.T) {
+	db, _ := openLeafGenerationGCTestDB(t)
+	counter := withLeafGenerationSubtreeCacheMissCounter(t)
+
+	writeLeafGenerationKeys(t, db, "k", 4096, 'a')
+	stateBefore := db.State()
+	if stateBefore == nil {
+		t.Fatal("expected published state")
+	}
+	rootBefore := stateBefore.RootPageID
+
+	if _, err := db.LeafGenerationPlan(context.Background(), LeafGenerationPlanOptions{}); err != nil {
+		t.Fatalf("LeafGenerationPlan first: %v", err)
+	}
+	firstMisses := counter.Load()
+	if firstMisses < 2 {
+		t.Fatalf("initial subtree miss count=%d, want at least 2 cached pages", firstMisses)
+	}
+
+	counter.Store(0)
+	writeLeafGenerationKeyRange(t, db, "k", 0, 1, 'b')
+	stateAfterWrite := db.State()
+	if stateAfterWrite == nil {
+		t.Fatal("expected published state after write")
+	}
+	if stateAfterWrite.RootPageID == rootBefore {
+		t.Fatalf("write did not change root: root=%d", stateAfterWrite.RootPageID)
+	}
+	if _, err := db.LeafGenerationPlan(context.Background(), LeafGenerationPlanOptions{}); err != nil {
+		t.Fatalf("LeafGenerationPlan after root change: %v", err)
+	}
+	secondMisses := counter.Load()
+	if secondMisses == 0 {
+		t.Fatal("expected some subtree misses after root change")
+	}
+	if secondMisses >= firstMisses {
+		t.Fatalf("subtree misses after root change=%d, want less than initial %d", secondMisses, firstMisses)
 	}
 }
 
