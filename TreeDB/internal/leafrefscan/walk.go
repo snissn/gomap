@@ -74,19 +74,14 @@ func walkRootsCommon(ctx context.Context, rootIDs []uint64, get GetFunc, verify 
 		case page.PageTypeLeaf:
 			// no children
 		case page.PageTypeInternal:
-			count := n.Count()
-			for i := uint16(0); i < count; i++ {
-				childID, err := n.GetInternalChildID(i)
-				if err != nil {
-					return err
-				}
+			if err := n.ForEachInternalChildID(func(childID uint64) error {
 				if ptr, ok := page.DecodeLeafRef(childID); ok {
-					if err := visit(ptr); err != nil {
-						return err
-					}
-					continue
+					return visit(ptr)
 				}
 				stack = append(stack, childID)
+				return nil
+			}); err != nil {
+				return err
 			}
 		default:
 			return fmt.Errorf("invalid page type %d on page %d", n.Type(), pageID)
