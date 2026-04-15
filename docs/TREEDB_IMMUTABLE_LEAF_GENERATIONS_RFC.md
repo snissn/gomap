@@ -362,6 +362,25 @@ That is the conservative recovery rule:
 - extra manifest-listed generations are harmless
 - a root that references an unknown generation is not acceptable
 
+### 7.7 Transitional Rollout Rule
+
+The rollout into the existing pre-alpha codebase may temporarily tolerate old
+`leaf_vlog` directories that do not yet have `manifest.json`.
+
+For the first implementation slice:
+
+- read-write open with `IndexOuterLeavesInValueLog=true` must create and persist
+  the manifest if it is missing
+- read-only open may synthesize the default single writable generation in memory
+  when the manifest is missing
+- once generation lifecycle state becomes actively mutated by maintenance, this
+  compatibility escape hatch should be removed and the manifest should become
+  hard-required for both read-write and read-only open
+
+This rollout rule is narrow and temporary. It exists only to let saved homes and
+older local fixtures remain inspectable while the generation-store control plane
+lands incrementally.
+
 ## 8. Write Path
 
 ### 8.1 Steady-State Writes

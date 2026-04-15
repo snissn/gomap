@@ -54,14 +54,15 @@ type snapshotView struct {
 }
 
 type DB struct {
-	valueLogManager    *valuelog.Manager
-	snapshotViewRO     atomic.Pointer[snapshotView]
-	snapshotAcquireRO  [snapshotAcquireShardCount]atomic.Int32
-	valueLogRefTracker *valueLogRefTracker
-	leafPageLog        LeafPageLog
-	lock               *lockfile.Lock
-	adaptive           *adaptive.Controller
-	pruner             pruneWorker
+	valueLogManager        *valuelog.Manager
+	snapshotViewRO         atomic.Pointer[snapshotView]
+	snapshotAcquireRO      [snapshotAcquireShardCount]atomic.Int32
+	valueLogRefTracker     *valueLogRefTracker
+	leafPageLog            LeafPageLog
+	leafGenerationManifest *leafGenerationManifest
+	lock                   *lockfile.Lock
+	adaptive               *adaptive.Controller
+	pruner                 pruneWorker
 
 	// idx is the current index generation (pager + MVCC lifecycle state).
 	idx atomic.Pointer[indexGen]
@@ -1148,6 +1149,14 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	if err := vm.Refresh(); err != nil {
 		db.Close()
 		return nil, err
+	}
+	if opts.IndexOuterLeavesInValueLog {
+		manifest, err := loadOrCreateLeafGenerationManifest(layout.leafVLogDir, db.meta.CommitSeq, false)
+		if err != nil {
+			db.Close()
+			return nil, err
+		}
+		db.leafGenerationManifest = manifest
 	}
 
 	// Initialize State after recovery so log cleanup can proceed without pinning.

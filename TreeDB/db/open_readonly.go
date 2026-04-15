@@ -109,6 +109,14 @@ func openReadOnly(opts Options) (*DB, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	if opts.IndexOuterLeavesInValueLog {
+		manifest, err := loadOrCreateLeafGenerationManifest(layout.leafVLogDir, db.meta.CommitSeq, true)
+		if err != nil {
+			_ = db.Close()
+			return nil, err
+		}
+		db.leafGenerationManifest = manifest
+	}
 
 	initialState := &DBState{
 		CommitSeq:        db.meta.CommitSeq,
@@ -206,6 +214,14 @@ func openReadOnlyNoLock(opts Options) (*DB, error) {
 	if err := db.recover(); err != nil {
 		_ = db.Close()
 		return nil, err
+	}
+	if opts.IndexOuterLeavesInValueLog {
+		manifest, err := loadOrCreateLeafGenerationManifest(layout.leafVLogDir, db.meta.CommitSeq, true)
+		if err != nil {
+			_ = db.Close()
+			return nil, err
+		}
+		db.leafGenerationManifest = manifest
 	}
 
 	initialState := &DBState{
