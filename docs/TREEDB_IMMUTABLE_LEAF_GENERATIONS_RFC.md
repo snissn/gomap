@@ -1245,6 +1245,14 @@ Required follow-on:
 - only after synthetic or replay-proxy sweeps identify a promising geometry,
   repeat dwell validation on large saved homes or Celestia
 
+First synthetic sweep result using [scripts/leafgen_target_sweep.sh](/home/mikers/dev/snissn/gomap/scripts/leafgen_target_sweep.sh) on a small churn workload (`20k` keys, `5k` hot keys, `4` rewrite rounds, `96`-byte values) already shows the expected cliff:
+
+- `256 KiB` target: `3` generations, pack admitted, about `282,083` reclaim bytes for `242,729` bytes copied
+- `512 KiB` target: `2` generations, pack admitted, essentially the same reclaim/copy economics
+- `1 MiB` and `2 MiB` targets: `1` generation, no pack candidates at all
+
+That first pass is synthetic rather than Celestia-like, but it is already enough to prove the design direction: generation size/seal policy directly controls whether `leaf_vlog` maintenance has any reclaimable structure to work with.
+
 ## 24. Sprint 4 Punch List
 
 Sprint 4 goal:
