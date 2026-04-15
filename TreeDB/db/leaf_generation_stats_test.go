@@ -77,6 +77,18 @@ func TestStats_LeafGenerationLifecycle(t *testing.T) {
 	if got := leafGenerationStatInt64(t, stats, "treedb.leaf_generation.bytes.total"); got <= 0 {
 		t.Fatalf("bytes.total=%d, want > 0", got)
 	}
+	if got := leafGenerationStatInt64(t, stats, "treedb.leaf_generation.plan_cache.subtree_pages"); got != 0 {
+		t.Fatalf("plan_cache.subtree_pages before planning=%d, want 0", got)
+	}
+	if _, err := db.LeafGenerationPlan(context.Background(), LeafGenerationPlanOptions{}); err != nil {
+		closeNoErr(t, snap)
+		t.Fatalf("LeafGenerationPlan: %v", err)
+	}
+	stats = db.Stats()
+	if got := leafGenerationStatInt64(t, stats, "treedb.leaf_generation.plan_cache.subtree_pages"); got <= 0 {
+		closeNoErr(t, snap)
+		t.Fatalf("plan_cache.subtree_pages after planning=%d, want > 0", got)
+	}
 
 	if _, err := db.LeafGenerationGC(context.Background(), LeafGenerationGCOptions{}); err != nil {
 		closeNoErr(t, snap)

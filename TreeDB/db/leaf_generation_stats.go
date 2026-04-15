@@ -9,30 +9,31 @@ import (
 )
 
 type leafGenerationMetrics struct {
-	enabled             bool
-	currentGenerationID uint64
-	generationsTotal    int
-	generationsWritable int
-	generationsSealed   int
-	generationsRetiring int
-	generationsDeleted  int
-	generationsRetained int
-	generationsPinned   int
-	pinsTotal           uint64
-	filesTotal          int
-	filesWritable       int
-	filesSealed         int
-	filesRetiring       int
-	filesDeleted        int
-	filesRetained       int
-	bytesTotal          int64
-	bytesWritable       int64
-	bytesSealed         int64
-	bytesRetiring       int64
-	bytesDeleted        int64
-	bytesRetained       int64
-	currentFiles        int
-	currentBytes        int64
+	enabled                       bool
+	currentGenerationID           uint64
+	generationsTotal              int
+	generationsWritable           int
+	generationsSealed             int
+	generationsRetiring           int
+	generationsDeleted            int
+	generationsRetained           int
+	generationsPinned             int
+	pinsTotal                     uint64
+	filesTotal                    int
+	filesWritable                 int
+	filesSealed                   int
+	filesRetiring                 int
+	filesDeleted                  int
+	filesRetained                 int
+	bytesTotal                    int64
+	bytesWritable                 int64
+	bytesSealed                   int64
+	bytesRetiring                 int64
+	bytesDeleted                  int64
+	bytesRetained                 int64
+	currentFiles                  int
+	currentBytes                  int64
+	reachabilitySubtreeCachePages int
 }
 
 func (db *DB) collectLeafGenerationMetrics(set *valuelog.Set) leafGenerationMetrics {
@@ -49,6 +50,9 @@ func (db *DB) collectLeafGenerationMetrics(set *valuelog.Set) leafGenerationMetr
 		return m
 	}
 	m.currentGenerationID = manifest.CurrentGenerationID
+	db.leafGenerationSubtreeStatsMu.RLock()
+	m.reachabilitySubtreeCachePages = len(db.leafGenerationSubtreeStatsByPage)
+	db.leafGenerationSubtreeStatsMu.RUnlock()
 
 	for _, gen := range manifest.Generations {
 		genFiles := len(gen.FileIDs)
@@ -147,4 +151,5 @@ func writeLeafGenerationMetrics(stats map[string]string, m leafGenerationMetrics
 	stats["treedb.leaf_generation.bytes.retained"] = fmt.Sprintf("%d", m.bytesRetained)
 	stats["treedb.leaf_generation.current.files"] = fmt.Sprintf("%d", m.currentFiles)
 	stats["treedb.leaf_generation.current.bytes"] = fmt.Sprintf("%d", m.currentBytes)
+	stats["treedb.leaf_generation.plan_cache.subtree_pages"] = fmt.Sprintf("%d", m.reachabilitySubtreeCachePages)
 }
