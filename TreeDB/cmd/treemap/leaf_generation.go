@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	treedb "github.com/snissn/gomap/TreeDB"
 )
@@ -180,13 +181,17 @@ func runLeafGenerationPack(dir string, args []string) {
 		source = "plan"
 	}
 	fmt.Printf(
-		"leafgen-pack: source=%s requested=%d matched=%d source_files=%d leaf_pages_copied=%d bytes_copied=%d created_file_ids=%s\n",
+		"leafgen-pack: source=%s requested=%d matched=%d source_files=%d source_dead_bytes=%d source_bytes_to_copy=%d reclaim_per_copy_ppm=%d leaf_pages_copied=%d bytes_copied=%d wall_ms=%d created_file_ids=%s\n",
 		source,
 		stats.GenerationsRequested,
 		stats.GenerationsMatched,
 		stats.SourceFilesRequested,
+		stats.SourceBytesDead,
+		stats.SourceBytesToCopy,
+		stats.ExpectedReclaimPerByteCopiedPPM,
 		stats.LeafPagesCopied,
 		stats.BytesCopied,
+		stats.WallTimeNanos/int64(time.Millisecond),
 		formatUint32List(created),
 	)
 }

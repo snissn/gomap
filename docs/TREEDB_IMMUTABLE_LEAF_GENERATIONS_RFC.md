@@ -1139,6 +1139,7 @@ Sprint 2 goal:
 - repeatable saved-home validation harness now lives at [scripts/leafgen_saved_home_validate.sh](/home/mikers/dev/snissn/gomap/scripts/leafgen_saved_home_validate.sh)
 - the harness now records both the default planner view and the forced experimental view so dense homes can be rejected by normal operator policy without losing the ability to study them under explicit force
 - `leafgen-pack` now enforces the same default reclaim-per-copy safety on explicit generation sets, and `-force` is the deliberate override for research or one-off experiments
+- `LeafGenerationPackStats` now returns the selected-generation economics directly: source generation ids, source live/dead/copy bytes, expected reclaim metrics, and wall time, so operator tooling no longer has to reconstruct that from a separate plan after the fact
 - first real saved-home result on `/home/mikers/.application-db-engine-matrix-splitouterleaf-20260414090917/treedb/application.db`:
   planner reconstructs 9 generations, default admission rejects pack as `reclaim_per_copy_too_low`, and the forced view still exposes the same 8 sealed generations with only `4,585,857` reclaimable bytes across about `2.1 GiB` of `leaf_vlog`
 - the same plan reports about `2,142,908,926` candidate bytes to copy and only `2,140` reclaimable ppm per byte copied, which is the right high-level signal for why this home is a bad pack candidate

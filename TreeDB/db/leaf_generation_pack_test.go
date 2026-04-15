@@ -125,6 +125,30 @@ func TestLeafGenerationPack_MovesSparseSealedGeneration(t *testing.T) {
 	if got, want := stats.SourceFilesRequested, 1; got != want {
 		t.Fatalf("SourceFilesRequested=%d, want %d", got, want)
 	}
+	if got, want := len(stats.SourceGenerationIDs), 1; got != want || stats.SourceGenerationIDs[0] != gen1.GenerationID {
+		t.Fatalf("SourceGenerationIDs=%v, want [%d]", stats.SourceGenerationIDs, gen1.GenerationID)
+	}
+	if got := stats.SourceBytesTotal; got <= 0 {
+		t.Fatalf("SourceBytesTotal=%d, want > 0", got)
+	}
+	if got := stats.SourceBytesLive; got <= 0 {
+		t.Fatalf("SourceBytesLive=%d, want > 0", got)
+	}
+	if got := stats.SourceBytesDead; got <= 0 {
+		t.Fatalf("SourceBytesDead=%d, want > 0", got)
+	}
+	if got := stats.SourceBytesToCopy; got <= 0 {
+		t.Fatalf("SourceBytesToCopy=%d, want > 0", got)
+	}
+	if got, want := stats.ExpectedReclaimBytes, stats.SourceBytesDead; got != want {
+		t.Fatalf("ExpectedReclaimBytes=%d, want %d", got, want)
+	}
+	if got := stats.ExpectedReclaimPerByteCopiedPPM; got <= 0 {
+		t.Fatalf("ExpectedReclaimPerByteCopiedPPM=%d, want > 0", got)
+	}
+	if got := stats.WallTimeNanos; got <= 0 {
+		t.Fatalf("WallTimeNanos=%d, want > 0", got)
+	}
 	if got := stats.LeafPagesCopied; got <= 0 {
 		t.Fatalf("LeafPagesCopied=%d, want > 0", got)
 	}
@@ -230,13 +254,13 @@ func TestLeafGenerationPack_RejectsDenseGenerationByDefault(t *testing.T) {
 func TestLeafGenerationPack_ForceAllowsDenseGeneration(t *testing.T) {
 	db, leafLog, dir := openLeafGenerationPackTestDB(t)
 
-	writeLeafGenerationKeys(t, db, "k", 128, 'a')
+	writeLeafGenerationKeys(t, db, "k", 32768, 'a')
 	_, fileID1 := currentLeafSegmentOrFatal(t, leafLog)
 	rawFileID1 := page.ValueLogSegmentID(fileID1)
 	if err := leafLog.rotateLeaf(); err != nil {
 		t.Fatalf("rotateLeaf: %v", err)
 	}
-	writeLeafGenerationKeys(t, db, "z", 8, 'z')
+	writeLeafGenerationKeyRange(t, db, "k", 0, 1, 'b')
 
 	manifest := loadLeafGenerationManifestOrFatal(t, dir)
 	gen1 := findLeafGenerationByFileID(t, manifest, rawFileID1)
@@ -251,6 +275,15 @@ func TestLeafGenerationPack_ForceAllowsDenseGeneration(t *testing.T) {
 	}
 	if got, want := stats.GenerationsMatched, 1; got != want {
 		t.Fatalf("GenerationsMatched=%d, want %d", got, want)
+	}
+	if got := stats.ExpectedReclaimBytes; got <= 0 {
+		t.Fatalf("ExpectedReclaimBytes=%d, want > 0", got)
+	}
+	if got := stats.ExpectedReclaimPerByteCopiedPPM; got <= 0 || got >= leafGenerationPackDefaultMinReclaimPerByteCopiedPPM {
+		t.Fatalf("ExpectedReclaimPerByteCopiedPPM=%d, want > 0 and < %d", got, leafGenerationPackDefaultMinReclaimPerByteCopiedPPM)
+	}
+	if got := stats.WallTimeNanos; got <= 0 {
+		t.Fatalf("WallTimeNanos=%d, want > 0", got)
 	}
 	if got := stats.LeafPagesCopied; got <= 0 {
 		t.Fatalf("LeafPagesCopied=%d, want > 0", got)

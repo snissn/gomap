@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -22,20 +23,28 @@ type LeafGenerationPackOptions struct {
 }
 
 type LeafGenerationPackStats struct {
-	GenerationsRequested int
-	GenerationsMatched   int
-	SourceFilesRequested int
-	SourceFileIDs        []uint32
-	LeafPagesCopied      int
-	BytesCopied          int64
-	CreatedFileIDs       []uint32
+	GenerationsRequested            int
+	GenerationsMatched              int
+	SourceGenerationIDs             []uint64
+	SourceFilesRequested            int
+	SourceFileIDs                   []uint32
+	SourceBytesTotal                int64
+	SourceBytesLive                 int64
+	SourceBytesDead                 int64
+	SourceBytesToCopy               int64
+	ExpectedReclaimBytes            int64
+	ExpectedReclaimRatioPPM         int
+	ExpectedReclaimPerByteCopiedPPM int
+	LeafPagesCopied                 int
+	BytesCopied                     int64
+	CreatedFileIDs                  []uint32
+	WallTimeNanos                   int64
 }
 
 // LeafGenerationPack rewrites live LeafRef pages from sealed source generations
 // into a fresh leaf-log output so the old generations can later be reclaimed by
 // ordinary generation GC.
-func (db *DB) LeafGenerationPack(ctx context.Context, opts LeafGenerationPackOptions) (LeafGenerationPackStats, error) {
-	var stats LeafGenerationPackStats
+func (db *DB) LeafGenerationPack(ctx context.Context, opts LeafGenerationPackOptions) (stats LeafGenerationPackStats, err error) {
 	if db == nil {
 		return stats, fmt.Errorf("missing db")
 	}
@@ -48,12 +57,25 @@ func (db *DB) LeafGenerationPack(ctx context.Context, opts LeafGenerationPackOpt
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	started := time.Now()
+	defer func() {
+		stats.WallTimeNanos = time.Since(started).Nanoseconds()
+	}()
 	stats.GenerationsRequested = len(opts.GenerationIDs)
 	opts = normalizeLeafGenerationPackOptions(opts)
 
 	db.maintenanceMu.Lock()
 	defer db.maintenanceMu.Unlock()
-	if err := db.validateLeafGenerationPackSelection(ctx, opts); err != nil {
+	selectedPlan, err := db.validateLeafGenerationPackSelection(ctx, opts)
+	stats.SourceGenerationIDs = append(stats.SourceGenerationIDs, selectedPlan.CandidateGenerationIDs...)
+	stats.SourceBytesTotal = selectedPlan.CandidateBytesTotal
+	stats.SourceBytesLive = selectedPlan.CandidateBytesLive
+	stats.SourceBytesDead = selectedPlan.CandidateBytesDead
+	stats.SourceBytesToCopy = selectedPlan.CandidateBytesToCopy
+	stats.ExpectedReclaimBytes = selectedPlan.ExpectedReclaimBytes
+	stats.ExpectedReclaimRatioPPM = selectedPlan.ExpectedReclaimRatioPPM
+	stats.ExpectedReclaimPerByteCopiedPPM = selectedPlan.ExpectedReclaimPerByteCopiedPPM
+	if err != nil {
 		return stats, err
 	}
 	rawSourceIDs, matchedGenerations, err := db.resolveLeafGenerationPackSourceFileIDs(opts.GenerationIDs)
@@ -133,20 +155,21 @@ func leafGenerationPackPlanOptions(opts LeafGenerationPackOptions) LeafGeneratio
 	}
 }
 
-func (db *DB) validateLeafGenerationPackSelection(ctx context.Context, opts LeafGenerationPackOptions) error {
+func (db *DB) validateLeafGenerationPackSelection(ctx context.Context, opts LeafGenerationPackOptions) (LeafGenerationPlan, error) {
+	var selected LeafGenerationPlan
 	if len(opts.GenerationIDs) == 0 {
-		return nil
+		return selected, nil
 	}
 	plan, err := db.LeafGenerationPlan(ctx, leafGenerationPackPlanOptions(opts))
 	if err != nil {
-		return err
+		return selected, err
 	}
 	byGenerationID := make(map[uint64]LeafGenerationPlanGeneration, len(plan.Generations))
 	for _, gen := range plan.Generations {
 		byGenerationID[gen.GenerationID] = gen
 	}
 	seen := make(map[uint64]struct{}, len(opts.GenerationIDs))
-	selected := LeafGenerationPlan{Candidates: make([]LeafGenerationPlanGeneration, 0, len(opts.GenerationIDs))}
+	selected = LeafGenerationPlan{Candidates: make([]LeafGenerationPlanGeneration, 0, len(opts.GenerationIDs))}
 	for _, generationID := range opts.GenerationIDs {
 		if generationID == 0 {
 			continue
@@ -157,13 +180,13 @@ func (db *DB) validateLeafGenerationPackSelection(ctx context.Context, opts Leaf
 		seen[generationID] = struct{}{}
 		gen, ok := byGenerationID[generationID]
 		if !ok {
-			return fmt.Errorf("leaf generation pack: generation %d not found", generationID)
+			return selected, fmt.Errorf("leaf generation pack: generation %d not found", generationID)
 		}
 		if gen.WholeGenerationGCEligible {
-			return fmt.Errorf("leaf generation pack: generation %d is a whole-generation GC candidate; use leafgen-gc", generationID)
+			return selected, fmt.Errorf("leaf generation pack: generation %d is a whole-generation GC candidate; use leafgen-gc", generationID)
 		}
 		if !gen.Eligible {
-			return fmt.Errorf("leaf generation pack: generation %d ineligible: %s", generationID, gen.SkipReason)
+			return selected, fmt.Errorf("leaf generation pack: generation %d ineligible: %s", generationID, gen.SkipReason)
 		}
 		selected.Candidates = append(selected.Candidates, gen)
 		selected.CandidateGenerationIDs = append(selected.CandidateGenerationIDs, generationID)
@@ -178,9 +201,9 @@ func (db *DB) validateLeafGenerationPackSelection(ctx context.Context, opts Leaf
 	selected.ExpectedReclaimPerByteCopiedPPM = ratioPPM(selected.CandidateBytesDead, selected.CandidateBytesToCopy)
 	selected.Admission = leafGenerationPlanAdmission(leafGenerationPackPlanOptions(opts), selected)
 	if selected.Admission != leafGenerationPlanAdmissionEligible {
-		return fmt.Errorf("leaf generation pack: selection admission=%s", selected.Admission)
+		return selected, fmt.Errorf("leaf generation pack: selection admission=%s", selected.Admission)
 	}
-	return nil
+	return selected, nil
 }
 
 func (db *DB) resolveLeafGenerationPackSourceFileIDs(generationIDs []uint64) ([]uint32, int, error) {
