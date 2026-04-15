@@ -1376,6 +1376,23 @@ Sprint 4 goal:
 - document final retained bytes, pack reclaim, wall time, RSS, and temp-disk
   behavior
 
+Current saved-home dwell result on `2026-04-15` using
+`/home/mikers/.celestia-app-mainnet-treedb-20260415102153/data/application.db`
+and `scripts/leafgen_cached_dwell_validate.sh` with the new default leaf-pack
+window (`256 MiB`, `8` generations, `180s` dwell, `fast` profile):
+
+- `application.db`: `4,736,992,671` bytes -> `3,431,477,665` bytes
+- `leaf_vlog`: `4,491,474,477` bytes -> `3,191,178,215` bytes
+- forced `leafgen-plan` expected reclaim: `2,103,358,517` bytes ->
+  `806,745,850` bytes
+- runtime pack maintenance: `5` successful windows, `214,790,144` bytes copied,
+  `40` generations deleted, `40` files deleted
+- dwell RSS/HWM: `407,904 KiB` / `471,340 KiB`
+
+This is the first saved-home proof on the branch that Sprint 4 is no longer
+just "bounded and correct"; the standard Celestia-shaped dwell now removes a
+material portion of the leaf backlog during steady-state maintenance.
+
 Required final runtime readout:
 
 - pre-dwell and post-dwell `leafgen-plan` on the same copied home
