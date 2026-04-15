@@ -453,9 +453,15 @@ func (db *DB) scanLeafGenerationLiveStats(ctx context.Context, snap *Snapshot) (
 	}
 	fileTotals := make([]leafGenerationLiveTotals, len(fileStates))
 	genTotals := make([]leafGenerationLiveTotals, len(genStates))
+	verifyAlways := snap.idx.pager.VerifyOnRead()
 	verify := func(pageID uint64, n node.Node) error {
-		if !n.VerifyChecksum() {
-			return fmt.Errorf("leaf generation plan: checksum mismatch on page %d", pageID)
+		if verifyAlways || !snap.idx.pager.IsVerified(pageID) {
+			if !n.VerifyChecksum() {
+				return fmt.Errorf("leaf generation plan: checksum mismatch on page %d", pageID)
+			}
+			if !verifyAlways {
+				snap.idx.pager.MarkVerified(pageID)
+			}
 		}
 		return nil
 	}

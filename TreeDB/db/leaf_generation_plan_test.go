@@ -416,6 +416,52 @@ func TestLeafGenerationRecordLengthForPlan_UsesWritableIndex(t *testing.T) {
 	}
 }
 
+func TestLeafGenerationLiveStats_MarksPagerPagesVerified(t *testing.T) {
+	db, _ := openLeafGenerationGCTestDB(t)
+	writeLeafGenerationKeys(t, db, "k", 256, 'a')
+
+	db.writeMu.RLock()
+	snap := db.AcquireSnapshot()
+	db.writeMu.RUnlock()
+	if snap == nil {
+		t.Fatal("expected snapshot")
+	}
+	defer func() { _ = snap.Close() }()
+	if len(snap.leafGenerationIDs) > 0 {
+		db.unpinLeafGenerationIDs(snap.leafGenerationIDs)
+		snap.leafGenerationIDs = snap.leafGenerationIDs[:0]
+	}
+	if snap.idx == nil || snap.idx.pager == nil {
+		t.Fatal("expected pager")
+	}
+	rootIDs := []uint64{snap.state.RootPageID, snap.state.SystemRootPageID}
+	checked := 0
+	for _, rootID := range rootIDs {
+		if rootID == 0 {
+			continue
+		}
+		snap.idx.pager.MarkUnverified(rootID)
+		if snap.idx.pager.IsVerified(rootID) {
+			t.Fatalf("root %d unexpectedly verified before scan", rootID)
+		}
+		checked++
+	}
+	if checked == 0 {
+		t.Fatal("expected at least one root page")
+	}
+	if _, err := db.scanLeafGenerationLiveStats(context.Background(), snap); err != nil {
+		t.Fatalf("scanLeafGenerationLiveStats: %v", err)
+	}
+	for _, rootID := range rootIDs {
+		if rootID == 0 {
+			continue
+		}
+		if !snap.idx.pager.IsVerified(rootID) {
+			t.Fatalf("root %d not marked verified after scan", rootID)
+		}
+	}
+}
+
 func TestLeafGenerationRecordLengthForPlan_UsesSealedIndex(t *testing.T) {
 
 	db, leafLog := openLeafGenerationGCTestDB(t)
