@@ -3,12 +3,10 @@ package db
 import (
 	"context"
 	"fmt"
-	"sort"
-	"sync"
-
-	"github.com/snissn/gomap/TreeDB/internal/leafrefscan"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
+	"sort"
+	"sync"
 )
 
 const (
@@ -90,6 +88,79 @@ type leafGenerationLiveTotals struct {
 var leafGenerationLiveScanHook struct {
 	mu sync.Mutex
 	fn func()
+}
+
+type leafGenerationPagerWalkState struct {
+	stack         []uint64
+	visitedDense  []uint32
+	visitedSparse map[uint64]struct{}
+	epoch         uint32
+}
+
+var leafGenerationPagerWalkStatePool = sync.Pool{
+	New: func() any {
+		return &leafGenerationPagerWalkState{
+			stack:         make([]uint64, 0, 128),
+			visitedSparse: make(map[uint64]struct{}),
+			epoch:         1,
+		}
+	},
+}
+
+func getLeafGenerationPagerWalkState(pageCount uint64) *leafGenerationPagerWalkState {
+	if v := leafGenerationPagerWalkStatePool.Get(); v != nil {
+		if s, ok := v.(*leafGenerationPagerWalkState); ok && s != nil {
+			s.stack = s.stack[:0]
+			s.epoch++
+			if s.epoch == 0 {
+				clear(s.visitedDense)
+				s.epoch = 1
+			}
+			if need := int(pageCount) + 1; need > len(s.visitedDense) {
+				s.visitedDense = make([]uint32, need)
+			}
+			clear(s.visitedSparse)
+			return s
+		}
+	}
+	need := int(pageCount) + 1
+	if need < 0 {
+		need = 0
+	}
+	return &leafGenerationPagerWalkState{
+		stack:         make([]uint64, 0, 128),
+		visitedDense:  make([]uint32, need),
+		visitedSparse: make(map[uint64]struct{}),
+		epoch:         1,
+	}
+}
+
+func putLeafGenerationPagerWalkState(state *leafGenerationPagerWalkState) {
+	if state == nil {
+		return
+	}
+	if cap(state.stack) > 1<<16 {
+		state.stack = make([]uint64, 0, 128)
+	} else {
+		state.stack = state.stack[:0]
+	}
+	clear(state.visitedSparse)
+	leafGenerationPagerWalkStatePool.Put(state)
+}
+
+func (s *leafGenerationPagerWalkState) markVisited(pageID uint64) bool {
+	if pageID < uint64(len(s.visitedDense)) {
+		if s.visitedDense[pageID] == s.epoch {
+			return true
+		}
+		s.visitedDense[pageID] = s.epoch
+		return false
+	}
+	if _, ok := s.visitedSparse[pageID]; ok {
+		return true
+	}
+	s.visitedSparse[pageID] = struct{}{}
+	return false
 }
 
 func registerLeafGenerationLiveScanHook(hook func()) func() {
@@ -523,8 +594,53 @@ func (db *DB) scanLeafGenerationLiveStats(ctx context.Context, snap *Snapshot) (
 		genTotals[fileState.genIndex].LiveBytes += int64(recordLen)
 		return nil
 	}
-	if err := leafrefscan.WalkRoots(ctx, []uint64{snap.state.RootPageID, snap.state.SystemRootPageID}, snap.idx.pager.Get, verify, visit); err != nil {
-		return leafGenerationLiveScanStats{}, err
+	walkState := getLeafGenerationPagerWalkState(snap.idx.pager.PageCount())
+	defer putLeafGenerationPagerWalkState(walkState)
+	for _, rootID := range []uint64{snap.state.RootPageID, snap.state.SystemRootPageID} {
+		if rootID == 0 {
+			continue
+		}
+		if ptr, ok := page.DecodeLeafRef(rootID); ok {
+			if err := visit(ptr); err != nil {
+				return leafGenerationLiveScanStats{}, err
+			}
+			continue
+		}
+		walkState.stack = append(walkState.stack, rootID)
+	}
+	for len(walkState.stack) > 0 {
+		if err := ctx.Err(); err != nil {
+			return leafGenerationLiveScanStats{}, err
+		}
+		pageID := walkState.stack[len(walkState.stack)-1]
+		walkState.stack = walkState.stack[:len(walkState.stack)-1]
+		if walkState.markVisited(pageID) {
+			continue
+		}
+		data, err := snap.idx.pager.Get(pageID)
+		if err != nil {
+			return leafGenerationLiveScanStats{}, err
+		}
+		n := node.NewNodeView(data)
+		if err := verify(pageID, n); err != nil {
+			return leafGenerationLiveScanStats{}, err
+		}
+		switch n.Type() {
+		case page.PageTypeLeaf:
+			continue
+		case page.PageTypeInternal:
+			if err := n.ForEachInternalChildID(func(childID uint64) error {
+				if ptr, ok := page.DecodeLeafRef(childID); ok {
+					return visit(ptr)
+				}
+				walkState.stack = append(walkState.stack, childID)
+				return nil
+			}); err != nil {
+				return leafGenerationLiveScanStats{}, err
+			}
+		default:
+			return leafGenerationLiveScanStats{}, fmt.Errorf("invalid page type %d on page %d", n.Type(), pageID)
+		}
 	}
 	for i, totals := range fileTotals {
 		if totals.LivePages == 0 && totals.LiveBytes == 0 {
