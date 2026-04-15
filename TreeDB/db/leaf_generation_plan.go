@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"sync"
 
 	"github.com/snissn/gomap/TreeDB/internal/leafrefscan"
 	"github.com/snissn/gomap/TreeDB/node"
@@ -86,6 +87,32 @@ type leafGenerationLiveTotals struct {
 	LiveBytes int64
 }
 
+var leafGenerationLiveScanHook struct {
+	mu sync.Mutex
+	fn func()
+}
+
+func registerLeafGenerationLiveScanHook(hook func()) func() {
+	leafGenerationLiveScanHook.mu.Lock()
+	prev := leafGenerationLiveScanHook.fn
+	leafGenerationLiveScanHook.fn = hook
+	leafGenerationLiveScanHook.mu.Unlock()
+	return func() {
+		leafGenerationLiveScanHook.mu.Lock()
+		leafGenerationLiveScanHook.fn = prev
+		leafGenerationLiveScanHook.mu.Unlock()
+	}
+}
+
+func runLeafGenerationLiveScanHook() {
+	leafGenerationLiveScanHook.mu.Lock()
+	hook := leafGenerationLiveScanHook.fn
+	leafGenerationLiveScanHook.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
+}
+
 // LeafGenerationPlan estimates reclaim opportunities for sealed leaf generations
 // by scanning the current live tree once and attributing reachable LeafRef pages
 // back to manifest generations.
@@ -122,7 +149,7 @@ func (db *DB) LeafGenerationPlan(ctx context.Context, opts LeafGenerationPlanOpt
 	plan.CurrentCommitSeq = snap.state.CommitSeq
 	plan.CurrentGenerationID = manifest.CurrentGenerationID
 
-	liveScan, err := db.scanLeafGenerationLiveStats(ctx, snap)
+	liveScan, err := db.leafGenerationLiveStatsForSnapshot(ctx, snap)
 	if err != nil {
 		return plan, err
 	}
@@ -292,6 +319,84 @@ func ratioPPM(num, den int64) int {
 		return 1_000_000
 	}
 	return int((num * 1_000_000) / den)
+}
+
+func cloneLeafGenerationLiveTotalsMap(src map[uint64]leafGenerationLiveTotals) map[uint64]leafGenerationLiveTotals {
+	if len(src) == 0 {
+		return map[uint64]leafGenerationLiveTotals{}
+	}
+	dst := make(map[uint64]leafGenerationLiveTotals, len(src))
+	for id, totals := range src {
+		dst[id] = totals
+	}
+	return dst
+}
+
+func cloneLeafGenerationFileTotalsMap(src map[uint32]leafGenerationLiveTotals) map[uint32]leafGenerationLiveTotals {
+	if len(src) == 0 {
+		return map[uint32]leafGenerationLiveTotals{}
+	}
+	dst := make(map[uint32]leafGenerationLiveTotals, len(src))
+	for id, totals := range src {
+		dst[id] = totals
+	}
+	return dst
+}
+
+func cloneLeafGenerationLiveScanStats(src leafGenerationLiveScanStats) leafGenerationLiveScanStats {
+	return leafGenerationLiveScanStats{
+		Generations: cloneLeafGenerationLiveTotalsMap(src.Generations),
+		Files:       cloneLeafGenerationFileTotalsMap(src.Files),
+	}
+}
+
+func (db *DB) loadCachedLeafGenerationLiveStats(key valueLogRewriteLiveBytesKey) (leafGenerationLiveScanStats, bool) {
+	if db == nil {
+		return leafGenerationLiveScanStats{}, false
+	}
+	db.leafGenerationLiveStatsMu.RLock()
+	cache := db.leafGenerationLiveStatsCache
+	db.leafGenerationLiveStatsMu.RUnlock()
+	if !cache.ok || cache.key != key {
+		return leafGenerationLiveScanStats{}, false
+	}
+	return cloneLeafGenerationLiveScanStats(cache.stats), true
+}
+
+func (db *DB) storeCachedLeafGenerationLiveStats(key valueLogRewriteLiveBytesKey, stats leafGenerationLiveScanStats) {
+	if db == nil {
+		return
+	}
+	cloned := cloneLeafGenerationLiveScanStats(stats)
+	db.leafGenerationLiveStatsMu.Lock()
+	db.leafGenerationLiveStatsCache = leafGenerationLiveStatsCache{
+		key:   key,
+		stats: cloned,
+		ok:    true,
+	}
+	db.leafGenerationLiveStatsMu.Unlock()
+}
+
+func (db *DB) leafGenerationLiveStatsForSnapshot(ctx context.Context, snap *Snapshot) (leafGenerationLiveScanStats, error) {
+	if snap == nil || snap.state == nil {
+		runLeafGenerationLiveScanHook()
+		return db.scanLeafGenerationLiveStats(ctx, snap)
+	}
+	cacheKey, cacheable := rewritePlanLiveBytesKeyForState(snap.state)
+	if cacheable {
+		if stats, ok := db.loadCachedLeafGenerationLiveStats(cacheKey); ok {
+			return stats, nil
+		}
+	}
+	runLeafGenerationLiveScanHook()
+	stats, err := db.scanLeafGenerationLiveStats(ctx, snap)
+	if err != nil {
+		return leafGenerationLiveScanStats{}, err
+	}
+	if cacheable {
+		db.storeCachedLeafGenerationLiveStats(cacheKey, stats)
+	}
+	return stats, nil
 }
 
 func (db *DB) scanLeafGenerationLiveStats(ctx context.Context, snap *Snapshot) (leafGenerationLiveScanStats, error) {

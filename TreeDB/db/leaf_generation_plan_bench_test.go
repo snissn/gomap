@@ -46,6 +46,21 @@ func openLeafGenerationPlanFixtureDB(b *testing.B) *DB {
 func BenchmarkLeafGenerationPlan_SavedHome(b *testing.B) {
 	db := openLeafGenerationPlanFixtureDB(b)
 
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		db.leafGenerationLiveStatsMu.Lock()
+		db.leafGenerationLiveStatsCache = leafGenerationLiveStatsCache{}
+		db.leafGenerationLiveStatsMu.Unlock()
+		if _, err := db.LeafGenerationPlan(context.Background(), LeafGenerationPlanOptions{}); err != nil {
+			b.Fatalf("LeafGenerationPlan: %v", err)
+		}
+	}
+}
+
+func BenchmarkLeafGenerationPlanCached_SavedHome(b *testing.B) {
+	db := openLeafGenerationPlanFixtureDB(b)
+
 	if _, err := db.LeafGenerationPlan(context.Background(), LeafGenerationPlanOptions{}); err != nil {
 		b.Fatalf("warmup LeafGenerationPlan: %v", err)
 	}
@@ -54,7 +69,7 @@ func BenchmarkLeafGenerationPlan_SavedHome(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		if _, err := db.LeafGenerationPlan(context.Background(), LeafGenerationPlanOptions{}); err != nil {
-			b.Fatalf("LeafGenerationPlan: %v", err)
+			b.Fatalf("LeafGenerationPlan cached: %v", err)
 		}
 	}
 }

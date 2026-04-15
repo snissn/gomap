@@ -134,6 +134,9 @@ type DB struct {
 	bgErrMu     sync.Mutex
 	bgErr       error
 
+	leafGenerationLiveStatsMu    sync.RWMutex
+	leafGenerationLiveStatsCache leafGenerationLiveStatsCache
+
 	rewritePlanLiveBytesMu    sync.RWMutex
 	rewritePlanLiveBytesCache valueLogRewriteLiveBytesCache
 
@@ -162,6 +165,12 @@ type valueLogRewriteLiveBytesCache struct {
 	// publication, so readers may snapshot the map header under RLock and clone
 	// after unlocking without racing a writer mutating the same map.
 	liveByID map[uint32]int64
+}
+
+type leafGenerationLiveStatsCache struct {
+	key   valueLogRewriteLiveBytesKey
+	stats leafGenerationLiveScanStats
+	ok    bool
 }
 
 const (

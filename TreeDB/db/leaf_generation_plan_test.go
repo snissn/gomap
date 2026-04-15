@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/page"
@@ -16,6 +17,18 @@ func findLeafGenerationPlanEntry(t *testing.T, plan LeafGenerationPlan, generati
 	}
 	t.Fatalf("generation %d not found in plan %+v", generationID, plan.Generations)
 	return LeafGenerationPlanGeneration{}
+}
+
+func withLeafGenerationLiveScanCounter(t *testing.T) *atomic.Uint64 {
+	t.Helper()
+	var counter atomic.Uint64
+	unregister := registerLeafGenerationLiveScanHook(func() {
+		counter.Add(1)
+	})
+	t.Cleanup(func() {
+		unregister()
+	})
+	return &counter
 }
 
 func TestRankLeafGenerationPlanCandidates(t *testing.T) {
@@ -225,6 +238,58 @@ func TestLeafGenerationPlan_MinReclaimPerByteCopiedAdmission(t *testing.T) {
 	}
 	if got, want := allowed.Admission, leafGenerationPlanAdmissionEligible; got != want {
 		t.Fatalf("allowed Admission=%q, want %q", got, want)
+	}
+}
+
+func TestLeafGenerationPlan_CachesLiveStatsUntilPublishedStateChanges(t *testing.T) {
+	db, leafLog := openLeafGenerationGCTestDB(t)
+	counter := withLeafGenerationLiveScanCounter(t)
+
+	writeLeafGenerationKeys(t, db, "k", 64, 'a')
+	if err := leafLog.rotateLeaf(); err != nil {
+		t.Fatalf("rotateLeaf: %v", err)
+	}
+	writeLeafGenerationKeyRange(t, db, "k", 0, 16, 'b')
+
+	if _, err := db.LeafGenerationPlan(context.Background(), LeafGenerationPlanOptions{}); err != nil {
+		t.Fatalf("LeafGenerationPlan first: %v", err)
+	}
+	if got, want := counter.Load(), uint64(1); got != want {
+		t.Fatalf("scan count after first plan=%d, want %d", got, want)
+	}
+
+	if _, err := db.LeafGenerationPlan(context.Background(), LeafGenerationPlanOptions{}); err != nil {
+		t.Fatalf("LeafGenerationPlan second: %v", err)
+	}
+	if got, want := counter.Load(), uint64(1); got != want {
+		t.Fatalf("scan count after cached second plan=%d, want %d", got, want)
+	}
+
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("expected snapshot")
+	}
+	if len(snap.leafGenerationIDs) > 0 {
+		db.unpinLeafGenerationIDs(snap.leafGenerationIDs)
+		snap.leafGenerationIDs = snap.leafGenerationIDs[:0]
+	}
+	if _, err := collectLiveLeafGenerationIDs(context.Background(), snap); err != nil {
+		_ = snap.Close()
+		t.Fatalf("collectLiveLeafGenerationIDs: %v", err)
+	}
+	if err := snap.Close(); err != nil {
+		t.Fatalf("close snapshot: %v", err)
+	}
+	if got, want := counter.Load(), uint64(1); got != want {
+		t.Fatalf("scan count after gc helper reuse=%d, want %d", got, want)
+	}
+
+	writeLeafGenerationKeyRange(t, db, "k", 16, 32, 'c')
+	if _, err := db.LeafGenerationPlan(context.Background(), LeafGenerationPlanOptions{}); err != nil {
+		t.Fatalf("LeafGenerationPlan after commit: %v", err)
+	}
+	if got, want := counter.Load(), uint64(2); got != want {
+		t.Fatalf("scan count after published-state change=%d, want %d", got, want)
 	}
 }
 

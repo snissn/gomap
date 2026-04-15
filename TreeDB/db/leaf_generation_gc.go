@@ -171,7 +171,7 @@ func collectLiveLeafGenerationIDs(ctx context.Context, snap *Snapshot) (map[uint
 	if snap == nil || snap.db == nil {
 		return live, nil
 	}
-	scan, err := snap.db.scanLeafGenerationLiveStats(ctx, snap)
+	scan, err := snap.db.leafGenerationLiveStatsForSnapshot(ctx, snap)
 	if err != nil {
 		return nil, err
 	}
