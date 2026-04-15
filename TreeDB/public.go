@@ -601,6 +601,7 @@ func Open(opts Options) (*DB, error) {
 		ValueLogIncompressibleProbeBytes:         opts.ValueLog.IncompressibleProbeIntervalBytes,
 		ValueLogAutoPolicy:                       uint8(opts.ValueLog.AutoPolicy),
 		ValueLogGenerationPolicy:                 uint8(opts.ValueLog.Generational.Policy),
+		ValueLogGenerationLeafSegmentTargetBytes: opts.ValueLog.Generational.LeafSegmentTargetBytes,
 		ValueLogGenerationHotSegmentTargetBytes:  opts.ValueLog.Generational.HotSegmentTargetBytes,
 		ValueLogGenerationWarmSegmentTargetBytes: opts.ValueLog.Generational.WarmSegmentTargetBytes,
 		ValueLogGenerationColdSegmentTargetBytes: opts.ValueLog.Generational.ColdSegmentTargetBytes,

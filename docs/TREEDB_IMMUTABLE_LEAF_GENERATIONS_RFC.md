@@ -1187,7 +1187,7 @@ Sprint 3 goal:
 - the same `fast` dwell stayed bounded in memory and disk behavior: process HWM peaked at about `209,692 KiB`, `leaf_vlog` bytes stayed effectively flat, and the copied home grew only by small metadata noise rather than by pack churn
 - control run with `TREEDB_PROFILE=wal_on_fast` currently reports `scheduler_state=disabled` for the full dwell and records zero leaf-pack attempts, so `wal_on_fast` still has no background online leaf-pack behavior at all on this branch
 - for `leaf_vlog`, the current planner is already measuring the right thing for pack economics: each reachable `LeafLogPtr` accounts for one whole compressed outer-leaf page record, so `BytesLive`/`BytesDead` at generation scope are exact record-level pack costs rather than a fuzzy estimator; on this home, every sealed generation is a single ~268 MiB file with only about `0.4` to `0.8` MiB dead, which means the main remaining problem is write-time generation geometry, not a missing finer-grained pack opportunity inside the existing files
-- generation geometry is currently just leaf-log file-roll geometry: a new leaf generation is created when the writable `leaf_vlog` file changes, and that file roll inherits the generic hot segment target (`256 << 20` bytes by default), so the observed ~268 MiB sealed generations on the saved Celestia home are expected; a follow-on design requirement is to make leaf generation sealing a leaf-specific policy instead of an implicit side effect of generic value-log segment sizing
+- generation geometry is still leaf-log file-roll geometry, but this branch now exposes an explicit leaf-only sizing override: `ValueLog.Generational.LeafSegmentTargetBytes` (and `TREEDB_VLOG_GENERATION_LEAF_SEGMENT_TARGET_BYTES`) can seal `leaf_vlog` generations more aggressively without changing generic hot/warm/cold `value_vlog` targets; when unset it still falls back to the generic hot target (`256 << 20` bytes by default), which is why the saved Celestia home still presents ~268 MiB sealed generations today
 - the bounded manual path is intentionally fail-closed when the top-ranked candidate alone exceeds `-max-bytes-to-copy`; it does not silently blow the requested copy budget
 
 ### Sprint 3 Code Work
@@ -1233,8 +1233,8 @@ policy.
 
 Required follow-on:
 
-- introduce a leaf-specific generation target / seal policy instead of reusing
-  the generic hot `value_vlog` segment target implicitly
+- choose and validate the default leaf generation target / seal policy now that
+  `LeafSegmentTargetBytes` exists as a leaf-only override
 - run a controlled sweep across leaf generation targets (for example `16 MiB`,
   `32 MiB`, `64 MiB`, `128 MiB`, `256 MiB`) on a repeatable churn workload
 - record for each target: generation count, bytes per generation, whole-generation
@@ -1245,13 +1245,15 @@ Required follow-on:
 - only after synthetic or replay-proxy sweeps identify a promising geometry,
   repeat dwell validation on large saved homes or Celestia
 
-First synthetic sweep result using [scripts/leafgen_target_sweep.sh](/home/mikers/dev/snissn/gomap/scripts/leafgen_target_sweep.sh) on a small churn workload (`20k` keys, `5k` hot keys, `4` rewrite rounds, `96`-byte values) already shows the expected cliff:
+Synthetic sweeps using [scripts/leafgen_target_sweep.sh](/home/mikers/dev/snissn/gomap/scripts/leafgen_target_sweep.sh) on a small churn workload (`20k` keys, `5k` hot keys, `4` rewrite rounds, `96`-byte values) already show the expected cliff:
 
-- `256 KiB` target: `3` generations, pack admitted, about `282,083` reclaim bytes for `242,729` bytes copied
-- `512 KiB` target: `2` generations, pack admitted, essentially the same reclaim/copy economics
-- `1 MiB` and `2 MiB` targets: `1` generation, no pack candidates at all
+- `64 KiB` leaf target: `10` generations, eligible plan, about `66,810` reclaim bytes for `261,921` bytes copied (`255,076` ppm reclaim/copy)
+- `256 KiB` leaf target: `3` generations, pack admitted, about `282,083` reclaim bytes for `242,729` bytes copied (`1,000,000` ppm reclaim/copy)
+- `512 KiB` leaf target: `2` generations, pack admitted, essentially the same reclaim/copy economics as `256 KiB`
+- `1 MiB` and `2 MiB` leaf targets: `1` generation, no pack candidates at all
+- these results now come from the dedicated leaf-only target knob, so generic `value_vlog` hot/warm/cold sizing stayed untouched during the sweep
 
-That first pass is synthetic rather than Celestia-like, but it is already enough to prove the design direction: generation size/seal policy directly controls whether `leaf_vlog` maintenance has any reclaimable structure to work with.
+That pass is still synthetic rather than Celestia-like, but it is already enough to prove the design direction: generation size/seal policy directly controls whether `leaf_vlog` maintenance has any reclaimable structure to work with, and the leaf-only target knob is sufficient to drive that geometry independently of generic `value_vlog` settings.
 
 ## 24. Sprint 4 Punch List
 

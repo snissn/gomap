@@ -273,6 +273,11 @@ const (
 type ValueLogGenerationConfig struct {
 	// Policy selects generation behavior. Off preserves current behavior.
 	Policy ValueLogGenerationPolicy
+	// LeafSegmentTargetBytes configures target segment size for leaf_vlog
+	// generations when outer leaves are stored out-of-line.
+	//
+	// 0 falls back to HotSegmentTargetBytes.
+	LeafSegmentTargetBytes int64
 	// HotSegmentTargetBytes configures target segment size for hot generation.
 	// 0 uses implementation default.
 	HotSegmentTargetBytes int64
@@ -991,6 +996,9 @@ func validateOptions(opts Options) error {
 	}
 	if opts.ValueLog.Generational.HotSegmentTargetBytes < 0 {
 		return fmt.Errorf("treedb: invalid value-log generational hot segment target bytes %d", opts.ValueLog.Generational.HotSegmentTargetBytes)
+	}
+	if opts.ValueLog.Generational.LeafSegmentTargetBytes < 0 {
+		return fmt.Errorf("treedb: invalid value-log generational leaf segment target bytes %d", opts.ValueLog.Generational.LeafSegmentTargetBytes)
 	}
 	if opts.ValueLog.Generational.WarmSegmentTargetBytes < 0 {
 		return fmt.Errorf("treedb: invalid value-log generational warm segment target bytes %d", opts.ValueLog.Generational.WarmSegmentTargetBytes)

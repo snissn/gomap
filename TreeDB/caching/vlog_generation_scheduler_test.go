@@ -9864,6 +9864,7 @@ func TestVlogGenerationStats_QueueCapHintCoverageWithoutLedger(t *testing.T) {
 
 func TestVlogGenerationSegmentTargetEnvOverrides(t *testing.T) {
 	prepareDirectSchedulerTest(t)
+	t.Setenv(envVlogGenerationLeafSegmentTargetBytes, "32768")
 	t.Setenv(envVlogGenerationHotSegmentTargetBytes, "65536")
 	t.Setenv(envVlogGenerationWarmSegmentTargetBytes, "131072")
 	t.Setenv(envVlogGenerationColdSegmentTargetBytes, "262144")
@@ -9877,6 +9878,9 @@ func TestVlogGenerationSegmentTargetEnvOverrides(t *testing.T) {
 	db, cleanup := openRewriteQueueTestDB(t, dir, recorder)
 	defer cleanup()
 
+	if got := db.valueLogGenerationLeafTarget; got != 32768 {
+		t.Fatalf("leaf segment target=%d want 32768", got)
+	}
 	if got := db.valueLogGenerationHotTarget; got != 65536 {
 		t.Fatalf("hot segment target=%d want 65536", got)
 	}
@@ -9888,6 +9892,9 @@ func TestVlogGenerationSegmentTargetEnvOverrides(t *testing.T) {
 	}
 
 	stats := db.Stats()
+	if got := stats["treedb.cache.vlog_generation.leaf.segment_target_bytes"]; got != "32768" {
+		t.Fatalf("leaf segment target stats=%q want 32768", got)
+	}
 	if got := stats["treedb.cache.vlog_generation.hot.segment_target_bytes"]; got != "65536" {
 		t.Fatalf("hot segment target stats=%q want 65536", got)
 	}

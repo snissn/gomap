@@ -1901,6 +1901,7 @@ const (
 	envVlogGenerationRewriteFreshPlanDebtDrainMinSegs = "TREEDB_VLOG_GENERATION_REWRITE_FRESH_PLAN_DEBT_DRAIN_MIN_SEGMENTS"
 	envVlogGenerationRewriteFreshPlanDebtDrainMaxSegs = "TREEDB_VLOG_GENERATION_REWRITE_FRESH_PLAN_DEBT_DRAIN_MAX_SEGMENTS"
 	// Optional generational segment target overrides for live A/B experiments.
+	envVlogGenerationLeafSegmentTargetBytes = "TREEDB_VLOG_GENERATION_LEAF_SEGMENT_TARGET_BYTES"
 	envVlogGenerationHotSegmentTargetBytes  = "TREEDB_VLOG_GENERATION_HOT_SEGMENT_TARGET_BYTES"
 	envVlogGenerationWarmSegmentTargetBytes = "TREEDB_VLOG_GENERATION_WARM_SEGMENT_TARGET_BYTES"
 	envVlogGenerationColdSegmentTargetBytes = "TREEDB_VLOG_GENERATION_COLD_SEGMENT_TARGET_BYTES"
@@ -5658,13 +5659,17 @@ func (db *DB) valueLogMaxSegmentBytesForLane(l *lane) int64 {
 		return base
 	}
 	target := int64(0)
-	switch l.vlogGenerationClass {
-	case vlogGenerationClassWarm:
-		target = db.valueLogGenerationWarmTarget
-	case vlogGenerationClassCold:
-		target = db.valueLogGenerationColdTarget
-	default:
-		target = db.valueLogGenerationHotTarget
+	if db.indexOuterLeavesInValueLog && l == &db.leafLog && db.valueLogGenerationLeafTarget > 0 {
+		target = db.valueLogGenerationLeafTarget
+	} else {
+		switch l.vlogGenerationClass {
+		case vlogGenerationClassWarm:
+			target = db.valueLogGenerationWarmTarget
+		case vlogGenerationClassCold:
+			target = db.valueLogGenerationColdTarget
+		default:
+			target = db.valueLogGenerationHotTarget
+		}
 	}
 	if target <= 0 {
 		return base
@@ -5892,6 +5897,8 @@ type Options struct {
 	// 0=default(unset; normalized to hot_warm_cold by Open),
 	// 1=off, 2=hot_warm_cold.
 	ValueLogGenerationPolicy uint8
+	// ValueLogGenerationLeafSegmentTargetBytes configures leaf_vlog segment target size.
+	ValueLogGenerationLeafSegmentTargetBytes int64
 	// ValueLogGenerationHotSegmentTargetBytes configures hot segment target size.
 	ValueLogGenerationHotSegmentTargetBytes int64
 	// ValueLogGenerationWarmSegmentTargetBytes configures warm segment target size.
@@ -6152,6 +6159,7 @@ type DB struct {
 	valueLogIncompressibleProbe    uint64
 	valueLogAutoPolicy             uint8
 	valueLogGenerationPolicy       uint8
+	valueLogGenerationLeafTarget   int64
 	valueLogGenerationHotTarget    int64
 	valueLogGenerationWarmTarget   int64
 	valueLogGenerationColdTarget   int64
@@ -8384,9 +8392,11 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	if valueLogMaxSegmentBytes < 0 {
 		valueLogMaxSegmentBytes = 0
 	}
+	valueLogGenerationLeafTarget := opts.ValueLogGenerationLeafSegmentTargetBytes
 	valueLogGenerationHotTarget := opts.ValueLogGenerationHotSegmentTargetBytes
 	valueLogGenerationWarmTarget := opts.ValueLogGenerationWarmSegmentTargetBytes
 	valueLogGenerationColdTarget := opts.ValueLogGenerationColdSegmentTargetBytes
+	valueLogGenerationLeafTarget = loadPositiveInt64EnvDefault(envVlogGenerationLeafSegmentTargetBytes, valueLogGenerationLeafTarget)
 	valueLogGenerationHotTarget = loadPositiveInt64EnvDefault(envVlogGenerationHotSegmentTargetBytes, valueLogGenerationHotTarget)
 	valueLogGenerationWarmTarget = loadPositiveInt64EnvDefault(envVlogGenerationWarmSegmentTargetBytes, valueLogGenerationWarmTarget)
 	valueLogGenerationColdTarget = loadPositiveInt64EnvDefault(envVlogGenerationColdSegmentTargetBytes, valueLogGenerationColdTarget)
@@ -8396,6 +8406,9 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	valueLogRewriteTriggerBytes := opts.ValueLogRewriteTriggerTotalBytes
 	valueLogRewriteTriggerChurn := opts.ValueLogRewriteTriggerChurnPerSec
 	valueLogRewriteMinSegmentAge := opts.ValueLogRewriteMinSegmentAge
+	if valueLogGenerationLeafTarget < 0 {
+		return nil, fmt.Errorf("cachingdb: invalid value-log generational leaf segment target bytes %d", valueLogGenerationLeafTarget)
+	}
 	if valueLogGenerationHotTarget < 0 {
 		return nil, fmt.Errorf("cachingdb: invalid value-log generational hot segment target bytes %d", valueLogGenerationHotTarget)
 	}
@@ -8423,6 +8436,9 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	if valueLogGenerationPolicyUint8 == uint8(backenddb.ValueLogGenerationHotWarmCold) {
 		if valueLogGenerationHotTarget == 0 {
 			valueLogGenerationHotTarget = defaultVlogGenerationHotTargetBytes
+		}
+		if valueLogGenerationLeafTarget == 0 {
+			valueLogGenerationLeafTarget = valueLogGenerationHotTarget
 		}
 		if valueLogGenerationWarmTarget == 0 {
 			valueLogGenerationWarmTarget = defaultVlogGenerationWarmTargetBytes
@@ -8738,6 +8754,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		valueLogIncompressibleProbe:          uint64(valueLogIncompressibleProbe),
 		valueLogAutoPolicy:                   uint8(valueLogAutoPolicy),
 		valueLogGenerationPolicy:             valueLogGenerationPolicyUint8,
+		valueLogGenerationLeafTarget:         valueLogGenerationLeafTarget,
 		valueLogGenerationHotTarget:          valueLogGenerationHotTarget,
 		valueLogGenerationWarmTarget:         valueLogGenerationWarmTarget,
 		valueLogGenerationColdTarget:         valueLogGenerationColdTarget,
@@ -23882,6 +23899,7 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_generation.rewrite.age_blocked_until_unix_nano"] = fmt.Sprintf("%d", rewriteAgeBlockedUntilNS)
 	stats["treedb.cache.vlog_generation.rewrite.age_blocked_due"] = fmt.Sprintf("%t", rewriteAgeBlockedDue)
 	stats["treedb.cache.vlog_generation.rewrite.age_blocked_remaining_ms"] = fmt.Sprintf("%d", rewriteAgeBlockedRemainingMS)
+	stats["treedb.cache.vlog_generation.leaf.segment_target_bytes"] = fmt.Sprintf("%d", db.valueLogGenerationLeafTarget)
 	stats["treedb.cache.vlog_generation.hot.segment_target_bytes"] = fmt.Sprintf("%d", db.valueLogGenerationHotTarget)
 	stats["treedb.cache.vlog_generation.warm.segment_target_bytes"] = fmt.Sprintf("%d", db.valueLogGenerationWarmTarget)
 	stats["treedb.cache.vlog_generation.cold.segment_target_bytes"] = fmt.Sprintf("%d", db.valueLogGenerationColdTarget)

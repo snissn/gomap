@@ -37,7 +37,7 @@ import (
 type result struct {
     DBDir       string            `json:"db_dir"`
     Profile     string            `json:"profile"`
-    HotTarget   int64             `json:"hot_target_bytes"`
+    LeafTarget  int64             `json:"leaf_target_bytes"`
     KeyCount    int               `json:"key_count"`
     HotKeyCount int               `json:"hot_key_count"`
     Rounds      int               `json:"rounds"`
@@ -50,7 +50,7 @@ func main() {
     var (
         dbDir       = flag.String("db", "", "application.db directory")
         profile     = flag.String("profile", string(treedb.ProfileFast), "profile")
-        hotTarget   = flag.Int64("hot-target", 0, "leaf/value hot segment target bytes")
+        leafTarget  = flag.Int64("leaf-target", 0, "leaf_vlog segment target bytes")
         keyCount    = flag.Int("key-count", 100000, "total initial keys")
         hotKeyCount = flag.Int("hot-key-count", 25000, "keys rewritten each round")
         rounds      = flag.Int("rounds", 6, "rewrite rounds")
@@ -60,8 +60,8 @@ func main() {
     if *dbDir == "" {
         fatalf("missing -db")
     }
-    if *hotTarget <= 0 {
-        fatalf("invalid -hot-target %d", *hotTarget)
+    if *leafTarget <= 0 {
+        fatalf("invalid -leaf-target %d", *leafTarget)
     }
     if *keyCount <= 0 || *hotKeyCount <= 0 || *hotKeyCount > *keyCount || *rounds <= 0 || *valueBytes <= 0 {
         fatalf("invalid workload parameters")
@@ -76,9 +76,7 @@ func main() {
     opts.MaxWALBytes = -1
     opts.BackgroundIndexVacuumInterval = -1
     opts.ValueLog.Generational.Policy = treedb.ValueLogGenerationHotWarmCold
-    opts.ValueLog.Generational.HotSegmentTargetBytes = *hotTarget
-    opts.ValueLog.Generational.WarmSegmentTargetBytes = *hotTarget
-    opts.ValueLog.Generational.ColdSegmentTargetBytes = *hotTarget
+    opts.ValueLog.Generational.LeafSegmentTargetBytes = *leafTarget
 
     db, err := treedb.Open(opts)
     if err != nil {
@@ -137,7 +135,7 @@ func main() {
     out := result{
         DBDir:       *dbDir,
         Profile:     *profile,
-        HotTarget:   *hotTarget,
+        LeafTarget:  *leafTarget,
         KeyCount:    *keyCount,
         HotKeyCount: *hotKeyCount,
         Rounds:      *rounds,
@@ -180,7 +178,7 @@ for target in "${TARGETS[@]}"; do
   GOWORK=off go run "$OUT/leafgen_target_sweep.go" \
     -db "$db_dir" \
     -profile "$PROFILE" \
-    -hot-target "$target" \
+    -leaf-target "$target" \
     -key-count "$KEY_COUNT" \
     -hot-key-count "$HOT_KEY_COUNT" \
     -rounds "$ROUNDS" \
@@ -192,16 +190,16 @@ for target in "${TARGETS[@]}"; do
   du -sb "$db_dir/maindb/leaf_vlog" | awk '{print $1}' > "$run_dir/leaf_vlog_bytes.txt"
   cp "$db_dir/maindb/leaf_vlog/manifest.json" "$run_dir/manifest.json"
   jq -n \
-    --argjson hot_target_bytes "$target" \
-    --argjson hot_target_mib "$label_mib" \
+    --argjson leaf_target_bytes "$target" \
+    --argjson leaf_target_mib "$label_mib" \
     --argjson application_db_bytes "$(cat "$run_dir/application_db_bytes.txt")" \
     --argjson leaf_vlog_bytes "$(cat "$run_dir/leaf_vlog_bytes.txt")" \
     --slurpfile build "$run_dir/build.json" \
     --slurpfile plan "$run_dir/plan.json" \
     --slurpfile plan_force "$run_dir/plan-force.json" \
     '{
-      hot_target_bytes: $hot_target_bytes,
-      hot_target_mib: $hot_target_mib,
+      leaf_target_bytes: $leaf_target_bytes,
+      leaf_target_mib: $leaf_target_mib,
       elapsed_ms: $build[0].elapsed_ms,
       application_db_bytes: $application_db_bytes,
       leaf_vlog_bytes: $leaf_vlog_bytes,
