@@ -412,10 +412,11 @@ func (db *DB) scanLeafGenerationLiveStats(ctx context.Context, snap *Snapshot) (
 	}
 	view := snap.state.LeafGenerations
 	type leafGenerationScanFileState struct {
-		fileID   uint32
-		genIndex int
-		persist  bool
-		idx      *leafGenerationRecordLengthIndex
+		fileID     uint32
+		genIndex   int
+		persist    bool
+		idx        *leafGenerationRecordLengthIndex
+		lookupHint int
 	}
 	genStates := make([]uint64, 0, len(view.GenerationOrder))
 	genIndexByID := make(map[uint64]int, len(view.GenerationOrder))
@@ -476,7 +477,8 @@ func (db *DB) scanLeafGenerationLiveStats(ctx context.Context, snap *Snapshot) (
 			lastFileIndex = fileIndex
 		}
 		fileState := &fileStates[fileIndex]
-		recordLen, ok := fileState.idx.lookup(ptr.Offset)
+		recordLen, hint, ok := fileState.idx.lookupWithHint(ptr.Offset, fileState.lookupHint)
+		fileState.lookupHint = hint
 		if !ok {
 			if !fileState.persist {
 				idx, err := db.buildLeafGenerationRecordLengthIndex(ptr.FileID, snap.state.ValueLogSet)
@@ -485,7 +487,8 @@ func (db *DB) scanLeafGenerationLiveStats(ctx context.Context, snap *Snapshot) (
 				}
 				db.storeLeafGenerationRecordLengthIndex(ptr.FileID, idx)
 				fileState.idx = idx
-				recordLen, ok = idx.lookup(ptr.Offset)
+				recordLen, hint, ok = idx.lookupWithHint(ptr.Offset, fileState.lookupHint)
+				fileState.lookupHint = hint
 			}
 			if !ok {
 				if fileState.persist {

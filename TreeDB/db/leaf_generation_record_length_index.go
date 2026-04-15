@@ -59,17 +59,40 @@ func (idx *leafGenerationRecordLengthIndex) len() int {
 }
 
 func (idx *leafGenerationRecordLengthIndex) lookup(offset uint64) (uint32, bool) {
+	length, _, ok := idx.lookupWithHint(offset, 0)
+	return length, ok
+}
+
+func (idx *leafGenerationRecordLengthIndex) lookupWithHint(offset uint64, hint int) (uint32, int, bool) {
 	if idx == nil || len(idx.offsets) == 0 || offset > uint64(^uint32(0)) {
-		return 0, false
+		return 0, 0, false
 	}
 	off32 := uint32(offset)
-	i := sort.Search(len(idx.offsets), func(i int) bool {
+	n := len(idx.offsets)
+	if hint < 0 {
+		hint = 0
+	} else if hint >= n {
+		hint = n - 1
+	}
+	if idx.offsets[hint] == off32 {
+		return idx.lengths[hint], hint, true
+	}
+	if idx.offsets[hint] < off32 {
+		i := hint + sort.Search(n-hint, func(i int) bool {
+			return idx.offsets[hint+i] >= off32
+		})
+		if i >= n || idx.offsets[i] != off32 {
+			return 0, i, false
+		}
+		return idx.lengths[i], i, true
+	}
+	i := sort.Search(hint+1, func(i int) bool {
 		return idx.offsets[i] >= off32
 	})
-	if i >= len(idx.offsets) || idx.offsets[i] != off32 {
-		return 0, false
+	if i > hint || idx.offsets[i] != off32 {
+		return 0, i, false
 	}
-	return idx.lengths[i], true
+	return idx.lengths[i], i, true
 }
 
 func (idx *leafGenerationRecordLengthIndex) add(offset uint64, length uint32) bool {
