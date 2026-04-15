@@ -1294,6 +1294,8 @@ Sprint 4 goal:
 - leaf-specific rewrite planning/execution paths are deleted from the generic
   value maintenance flow
 - crash-point coverage around manifest/publish/delete and pack transitions
+- tuned online leaf-pack policy that can retire meaningful Celestia backlog
+  during the standard post-sync dwell instead of merely proving liveness
 - final docs and operator guidance
 - final Celestia validation readout
 
@@ -1369,14 +1371,38 @@ Sprint 4 goal:
 
 - saved-home regression suite
 - final Celestia sync + dwell validation package
+- standard post-sync Celestia dwell must show material backlog reduction, not
+  only successful bounded runs
 - document final retained bytes, pack reclaim, wall time, RSS, and temp-disk
   behavior
+
+Required final runtime readout:
+
+- pre-dwell and post-dwell `leafgen-plan` on the same copied home
+- pre-dwell and post-dwell `leaf_vlog` / `application.db` sizes
+- number of generations retired and deleted during dwell
+- bytes copied by online pack during dwell
+- remaining expected reclaim bytes after dwell
+- sync wall time, dwell RSS/HWM, and any observable sync regression
+
+Sprint 4 runtime success requires all of:
+
+- no control-plane regression versus Sprint 3: bounded, explainable, and
+  non-pathological behavior still holds
+- the standard Celestia dwell materially reduces leaf backlog, not just by a
+  token amount
+- the reduction is visible in either retired/deleted generations or on-disk
+  `leaf_vlog` size after GC, not only in "runs happened" counters
+- post-dwell remaining reclaim backlog is materially lower than the current
+  Sprint 3 baseline
 
 ### Sprint 4 Exit Criteria
 
 - `leaf_vlog` maintenance is generation GC plus pack only
 - `value_vlog` maintenance is value-only
 - crash behavior is explicit and tested
+- standard Celestia dwell shows substantial leaf cleanup rather than merely safe
+  low-throughput liveness
 - docs, tests, and validation results are consistent with the final design
 
 ## 25. Validation Framework
@@ -1418,6 +1444,8 @@ Required final checks:
 - no background page-by-page leaf rewrite activity remains
 - retained generation counts and retained bytes are explainable
 - online pack, if enabled, is bounded and useful rather than churn-heavy
+- online pack materially reduces the standard post-sync Celestia leaf backlog
+  during dwell
 - sync and dwell behavior remain operationally acceptable
 
 ## 26. Authoritative Acceptance Criteria
@@ -1432,7 +1460,7 @@ The milestone is complete only when all of the following are true:
 - saved-home validation proves that `leaf-pack` solves reclaim cases that
   whole-generation deletion alone cannot solve
 - final Celestia validation shows the resulting maintenance model is bounded,
-  correct, and explainable
+  correct, explainable, and materially effective on the standard dwell
 
 The milestone is not complete if TreeDB still requires repeated generic
 full-tree rediscovery to keep `leaf_vlog` healthy in steady state.
