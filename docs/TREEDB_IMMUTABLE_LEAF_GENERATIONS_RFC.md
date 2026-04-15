@@ -1099,9 +1099,10 @@ Sprint 2 goal:
 ### Sprint 2 Current Local Status
 
 - landed backend `LeafGenerationPlan` with exact live-byte accounting by generation
-- planner now reuses the same `LeafRef` reachability scan shape as whole-generation GC
-- planner exposes per-generation total/live/dead bytes, live-page counts, age, pin counts, ranking, and admission
-- unit coverage now includes ranking, dead-vs-live geometry, age-gate force override, and snapshot-pin non-interference
+- landed backend `LeafGenerationPack` for explicit sealed-generation leaf compaction
+- planner and GC now share the same `LeafRef` reachability scan shape
+- rewrite-created leaf files are now registered into the leaf-generation manifest before publish
+- unit coverage now includes ranking, dead-vs-live geometry, age-gate force override, snapshot-pin non-interference, explicit pack, reopen, and post-pack GC
 
 ### Sprint 2 Code Work
 

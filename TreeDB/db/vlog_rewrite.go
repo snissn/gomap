@@ -2317,6 +2317,9 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 			}
 		}
 	}
+	if err := db.noteCreatedLeafGenerationFileIDs(snap.state.CommitSeq+1, createdIDs); err != nil {
+		return 0, 0, err
+	}
 
 	if err := db.finalizeCommit(newRoot, newSysRoot, leafCtx.retired, sync, adaptive.Metrics{}, createdIDs, false, nil); err != nil {
 		return 0, 0, err
