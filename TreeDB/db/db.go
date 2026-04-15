@@ -169,8 +169,13 @@ type valueLogRewriteLiveBytesCache struct {
 	liveByID map[uint32]int64
 }
 
+type treeReachabilityCacheKey struct {
+	rootID     uint64
+	systemRoot uint64
+}
+
 type leafGenerationLiveStatsCache struct {
-	key   valueLogRewriteLiveBytesKey
+	key   treeReachabilityCacheKey
 	stats leafGenerationLiveScanStats
 	ok    bool
 }

@@ -534,7 +534,7 @@ func TestLeafGenerationRecordLengthForPlan_UsesSealedIndex(t *testing.T) {
 	}
 }
 
-func TestLeafGenerationPlan_CachesLiveStatsUntilPublishedStateChanges(t *testing.T) {
+func TestLeafGenerationPlan_CachesLiveStatsUntilTreeRootsChange(t *testing.T) {
 	db, leafLog := openLeafGenerationGCTestDB(t)
 	counter := withLeafGenerationLiveScanCounter(t)
 
@@ -543,6 +543,12 @@ func TestLeafGenerationPlan_CachesLiveStatsUntilPublishedStateChanges(t *testing
 		t.Fatalf("rotateLeaf: %v", err)
 	}
 	writeLeafGenerationKeyRange(t, db, "k", 0, 16, 'b')
+
+	stateBefore := db.State()
+	if stateBefore == nil {
+		t.Fatal("expected published state")
+	}
+	rootBefore := stateBefore.RootPageID
 
 	if _, err := db.LeafGenerationPlan(context.Background(), LeafGenerationPlanOptions{}); err != nil {
 		t.Fatalf("LeafGenerationPlan first: %v", err)
@@ -577,12 +583,39 @@ func TestLeafGenerationPlan_CachesLiveStatsUntilPublishedStateChanges(t *testing
 		t.Fatalf("scan count after gc helper reuse=%d, want %d", got, want)
 	}
 
-	writeLeafGenerationKeyRange(t, db, "k", 16, 32, 'c')
+	if err := db.Commit(rootBefore); err != nil {
+		t.Fatalf("Commit same root: %v", err)
+	}
+	stateSameRoot := db.State()
+	if stateSameRoot == nil {
+		t.Fatal("expected published state after same-root commit")
+	}
+	if stateSameRoot.CommitSeq == stateBefore.CommitSeq {
+		t.Fatalf("same-root commit did not advance commit seq: before=%d after=%d", stateBefore.CommitSeq, stateSameRoot.CommitSeq)
+	}
+	if stateSameRoot.RootPageID != rootBefore {
+		t.Fatalf("same-root commit changed root: got=%d want=%d", stateSameRoot.RootPageID, rootBefore)
+	}
 	if _, err := db.LeafGenerationPlan(context.Background(), LeafGenerationPlanOptions{}); err != nil {
-		t.Fatalf("LeafGenerationPlan after commit: %v", err)
+		t.Fatalf("LeafGenerationPlan after same-root commit: %v", err)
+	}
+	if got, want := counter.Load(), uint64(1); got != want {
+		t.Fatalf("scan count after same-root commit=%d, want %d", got, want)
+	}
+
+	writeLeafGenerationKeyRange(t, db, "k", 16, 32, 'c')
+	stateAfterWrite := db.State()
+	if stateAfterWrite == nil {
+		t.Fatal("expected published state after write")
+	}
+	if stateAfterWrite.RootPageID == rootBefore {
+		t.Fatalf("write did not change root: root=%d", stateAfterWrite.RootPageID)
+	}
+	if _, err := db.LeafGenerationPlan(context.Background(), LeafGenerationPlanOptions{}); err != nil {
+		t.Fatalf("LeafGenerationPlan after root change: %v", err)
 	}
 	if got, want := counter.Load(), uint64(2); got != want {
-		t.Fatalf("scan count after published-state change=%d, want %d", got, want)
+		t.Fatalf("scan count after root change=%d, want %d", got, want)
 	}
 }
 

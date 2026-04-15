@@ -350,7 +350,17 @@ func cloneLeafGenerationLiveScanStats(src leafGenerationLiveScanStats) leafGener
 	}
 }
 
-func (db *DB) loadCachedLeafGenerationLiveStats(key valueLogRewriteLiveBytesKey) (leafGenerationLiveScanStats, bool) {
+func leafGenerationLiveStatsKeyForState(state *DBState) (treeReachabilityCacheKey, bool) {
+	if state == nil {
+		return treeReachabilityCacheKey{}, false
+	}
+	return treeReachabilityCacheKey{
+		rootID:     state.RootPageID,
+		systemRoot: state.SystemRootPageID,
+	}, true
+}
+
+func (db *DB) loadCachedLeafGenerationLiveStats(key treeReachabilityCacheKey) (leafGenerationLiveScanStats, bool) {
 	if db == nil {
 		return leafGenerationLiveScanStats{}, false
 	}
@@ -363,7 +373,7 @@ func (db *DB) loadCachedLeafGenerationLiveStats(key valueLogRewriteLiveBytesKey)
 	return cloneLeafGenerationLiveScanStats(cache.stats), true
 }
 
-func (db *DB) storeCachedLeafGenerationLiveStats(key valueLogRewriteLiveBytesKey, stats leafGenerationLiveScanStats) {
+func (db *DB) storeCachedLeafGenerationLiveStats(key treeReachabilityCacheKey, stats leafGenerationLiveScanStats) {
 	if db == nil {
 		return
 	}
@@ -382,7 +392,7 @@ func (db *DB) leafGenerationLiveStatsForSnapshot(ctx context.Context, snap *Snap
 		runLeafGenerationLiveScanHook()
 		return db.scanLeafGenerationLiveStats(ctx, snap)
 	}
-	cacheKey, cacheable := rewritePlanLiveBytesKeyForState(snap.state)
+	cacheKey, cacheable := leafGenerationLiveStatsKeyForState(snap.state)
 	if cacheable {
 		if stats, ok := db.loadCachedLeafGenerationLiveStats(cacheKey); ok {
 			return stats, nil
