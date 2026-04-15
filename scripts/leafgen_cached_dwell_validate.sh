@@ -296,6 +296,7 @@ GOWORK=off go run "$OUT/leafgen_cached_dwell.go" \
   > "$OUT/dwell.jsonl"
 
 capture_sizes after_dwell > "$OUT/size-after-dwell.json"
+jq -s '.' "$OUT/dwell.jsonl" > "$OUT/dwell-array.json"
 GOWORK=off "${TREEMAP[@]}" leafgen-plan "$DST" -rw -json > "$OUT/plan-after.json"
 GOWORK=off "${TREEMAP[@]}" leafgen-plan "$DST" -rw -json -force > "$OUT/plan-after-force.json"
 ls -lh "$DST/maindb/leaf_vlog" > "$OUT/leaf-vlog-ls.txt"
@@ -311,6 +312,7 @@ jq -n \
   --argjson pack_min_age_commits "$PACK_MIN_AGE_COMMITS" \
   --slurpfile before "$OUT/size-before.json" \
   --slurpfile after_dwell "$OUT/size-after-dwell.json" \
+  --slurpfile dwell "$OUT/dwell-array.json" \
   --slurpfile plan_before "$OUT/plan-before.json" \
   --slurpfile plan_before_force "$OUT/plan-before-force.json" \
   --slurpfile plan_after "$OUT/plan-after.json" \
@@ -330,6 +332,10 @@ jq -n \
       before: $before[0],
       after_dwell: $after_dwell[0]
     },
+    sample_count: ($dwell[0] | length),
+    max_rss_kb: (($dwell[0] | map(.rss_kb // 0) | max) // 0),
+    max_hwm_kb: (($dwell[0] | map(.hwm_kb // 0) | max) // 0),
+    final_sample: (($dwell[0] | last) // null),
     plan_before: {
       default: {
         admission: $plan_before[0].Admission,

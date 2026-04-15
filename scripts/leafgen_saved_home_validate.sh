@@ -12,7 +12,11 @@ cp -a "$SRC" "$DST"
 cd "$ROOT"
 
 du_bytes() {
-  du -sb "$1" | awk '{print $1}'
+  if [[ -e "$1" ]]; then
+    du -sb "$1" | awk '{print $1}'
+  else
+    echo 0
+  fi
 }
 
 capture_sizes() {
@@ -20,8 +24,20 @@ capture_sizes() {
   jq -n \
     --arg phase "$phase" \
     --argjson application_db_bytes "$(du_bytes "$DST")" \
+    --argjson maindb_bytes "$(du_bytes "$DST/maindb")" \
+    --argjson index_db_bytes "$(du_bytes "$DST/maindb/index.db")" \
     --argjson leaf_vlog_bytes "$(du_bytes "$DST/maindb/leaf_vlog")" \
-    '{phase:$phase, application_db_bytes:$application_db_bytes, leaf_vlog_bytes:$leaf_vlog_bytes}'
+    --argjson value_vlog_bytes "$(du_bytes "$DST/maindb/value_vlog")" \
+    --argjson wal_bytes "$(du_bytes "$DST/wal")" \
+    '{
+      phase:$phase,
+      application_db_bytes:$application_db_bytes,
+      maindb_bytes:$maindb_bytes,
+      index_db_bytes:$index_db_bytes,
+      leaf_vlog_bytes:$leaf_vlog_bytes,
+      value_vlog_bytes:$value_vlog_bytes,
+      wal_bytes:$wal_bytes
+    }'
 }
 
 {
@@ -51,6 +67,7 @@ capture_sizes after_gc2 > "$OUT/size-after-gc2.json"
 GOWORK=off "${TREEMAP[@]}" leafgen-plan "$DST" -rw -json > "$OUT/plan-after.json"
 GOWORK=off "${TREEMAP[@]}" leafgen-plan "$DST" -rw -json -force > "$OUT/plan-after-force.json"
 ls -lh "$DST/maindb/leaf_vlog" > "$OUT/leaf-vlog-ls.txt"
+ls -lh "$DST/maindb/value_vlog" > "$OUT/value-vlog-ls.txt"
 
 jq -n \
   --arg source "$SRC" \
