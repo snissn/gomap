@@ -36,7 +36,7 @@ IDS=$(jq -r '.CandidateGenerationIDs | map(tostring) | join(",")' "$OUT/plan-bef
 printf '%s\n' "$IDS" > "$OUT/generation-ids.txt"
 
 if [[ -n "$IDS" ]]; then
-  GOWORK=off "${TREEMAP[@]}" leafgen-pack "$DST" -rw -generation-ids "$IDS" -json > "$OUT/pack.json"
+  GOWORK=off "${TREEMAP[@]}" leafgen-pack "$DST" -rw -from-plan -force -json > "$OUT/pack.json"
 else
   jq -n '{skipped:true, reason:"no candidate generations"}' > "$OUT/pack.json"
 fi

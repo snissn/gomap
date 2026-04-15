@@ -85,12 +85,41 @@ func runLeafGenerationPlan(dir string, args []string) {
 	}
 }
 
+func chooseLeafGenerationPackIDs(explicit []uint64, fromPlan bool, plan *treedb.LeafGenerationPlan) ([]uint64, error) {
+	if fromPlan {
+		if len(explicit) > 0 {
+			return nil, fmt.Errorf("leafgen-pack accepts either -generation-ids or -from-plan, not both")
+		}
+		if plan == nil {
+			return nil, fmt.Errorf("leafgen-pack missing plan for -from-plan")
+		}
+		if plan.Admission != "eligible" {
+			return nil, fmt.Errorf("leafgen-pack plan admission=%s", plan.Admission)
+		}
+		if len(plan.CandidateGenerationIDs) == 0 {
+			return nil, fmt.Errorf("leafgen-pack plan produced no candidate generations")
+		}
+		return append([]uint64(nil), plan.CandidateGenerationIDs...), nil
+	}
+	if len(explicit) == 0 {
+		return nil, fmt.Errorf("leafgen-pack requires at least one generation id")
+	}
+	return explicit, nil
+}
+
 func runLeafGenerationPack(dir string, args []string) {
 	fs := flag.NewFlagSet("leafgen-pack", flag.ExitOnError)
 	rw := fs.Bool("rw", false, "Open read-write (required)")
 	jsonOut := fs.Bool("json", false, "Emit JSON instead of human-readable text")
-	generationIDsCSV := fs.String("generation-ids", "", "Comma-separated sealed generation IDs to pack (required)")
+	generationIDsCSV := fs.String("generation-ids", "", "Comma-separated sealed generation IDs to pack")
+	fromPlan := fs.Bool("from-plan", false, "Resolve generation IDs from the current leaf-generation plan")
 	sync := fs.Bool("sync", true, "Sync packed leaf output before publish")
+	force := fs.Bool("force", false, "Bypass age and reclaim thresholds when -from-plan is used")
+	minAgeCommits := fs.Uint64("min-age-commits", 0, "Minimum published age in commits for plan candidate eligibility when -from-plan is used")
+	minCandidateGenerations := fs.Int("min-candidate-generations", 0, "Require at least this many plan candidate generations unless -force")
+	minExpectedReclaimBytes := fs.Int64("min-expected-reclaim-bytes", 0, "Require at least this many reclaimable bytes unless -force")
+	minExpectedReclaimRatioPPM := fs.Int("min-expected-reclaim-ratio-ppm", 0, "Require at least this reclaim ratio in ppm unless -force")
+	minReclaimPerByteCopiedPPM := fs.Int("min-reclaim-per-byte-copied-ppm", 10000, "Require at least this many reclaimable bytes per byte copied, in ppm, unless -force")
 	_ = fs.Parse(args)
 
 	if !*rw {
@@ -100,12 +129,29 @@ func runLeafGenerationPack(dir string, args []string) {
 	if err != nil {
 		fatalf("invalid -generation-ids: %v", err)
 	}
-	if len(generationIDs) == 0 {
-		fatalf("leafgen-pack requires at least one generation id")
-	}
 
 	db := openTreeDB(dir, true)
 	defer closeTreeDB(db)
+
+	var plan *treedb.LeafGenerationPlan
+	if *fromPlan {
+		resolved, err := db.LeafGenerationPlan(context.Background(), treedb.LeafGenerationPlanOptions{
+			MinPublishedAgeCommits:     *minAgeCommits,
+			MinCandidateGenerations:    *minCandidateGenerations,
+			MinExpectedReclaimBytes:    *minExpectedReclaimBytes,
+			MinExpectedReclaimRatioPPM: *minExpectedReclaimRatioPPM,
+			MinReclaimPerByteCopiedPPM: *minReclaimPerByteCopiedPPM,
+			Force:                      *force,
+		})
+		if err != nil {
+			fatalf("LeafGenerationPlan error: %v", err)
+		}
+		plan = &resolved
+	}
+	generationIDs, err = chooseLeafGenerationPackIDs(generationIDs, *fromPlan, plan)
+	if err != nil {
+		fatalf("%v", err)
+	}
 
 	stats, err := db.LeafGenerationPack(context.Background(), treedb.LeafGenerationPackOptions{
 		GenerationIDs: generationIDs,
@@ -124,8 +170,13 @@ func runLeafGenerationPack(dir string, args []string) {
 	}
 	created := append([]uint32(nil), stats.CreatedFileIDs...)
 	sort.Slice(created, func(i, j int) bool { return created[i] < created[j] })
+	source := "explicit"
+	if *fromPlan {
+		source = "plan"
+	}
 	fmt.Printf(
-		"leafgen-pack: requested=%d matched=%d source_files=%d leaf_pages_copied=%d bytes_copied=%d created_file_ids=%s\n",
+		"leafgen-pack: source=%s requested=%d matched=%d source_files=%d leaf_pages_copied=%d bytes_copied=%d created_file_ids=%s\n",
+		source,
 		stats.GenerationsRequested,
 		stats.GenerationsMatched,
 		stats.SourceFilesRequested,

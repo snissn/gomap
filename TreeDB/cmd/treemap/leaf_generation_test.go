@@ -3,6 +3,8 @@ package main
 import (
 	"strings"
 	"testing"
+
+	treedb "github.com/snissn/gomap/TreeDB"
 )
 
 func TestParseUint64CSV(t *testing.T) {
@@ -33,5 +35,40 @@ func TestFormatUint32List(t *testing.T) {
 func TestUsageTextMentionsLeafGenerationGC(t *testing.T) {
 	if got := usageText; !strings.Contains(got, "leafgen-gc") {
 		t.Fatalf("usageText missing leafgen-gc command: %q", got)
+	}
+}
+
+func TestChooseLeafGenerationPackIDs(t *testing.T) {
+	ids, err := chooseLeafGenerationPackIDs([]uint64{7, 11}, false, nil)
+	if err != nil {
+		t.Fatalf("explicit choose err=%v", err)
+	}
+	if got, want := len(ids), 2; got != want || ids[0] != 7 || ids[1] != 11 {
+		t.Fatalf("explicit ids=%v, want [7 11]", ids)
+	}
+
+	plan := &treedb.LeafGenerationPlan{Admission: "eligible", CandidateGenerationIDs: []uint64{3, 5}}
+	ids, err = chooseLeafGenerationPackIDs(nil, true, plan)
+	if err != nil {
+		t.Fatalf("from-plan choose err=%v", err)
+	}
+	if got, want := len(ids), 2; got != want || ids[0] != 3 || ids[1] != 5 {
+		t.Fatalf("from-plan ids=%v, want [3 5]", ids)
+	}
+
+	if _, err := chooseLeafGenerationPackIDs([]uint64{1}, true, plan); err == nil {
+		t.Fatalf("expected conflicting explicit/from-plan selection to fail")
+	}
+	if _, err := chooseLeafGenerationPackIDs(nil, true, nil); err == nil {
+		t.Fatalf("expected nil plan to fail")
+	}
+	if _, err := chooseLeafGenerationPackIDs(nil, true, &treedb.LeafGenerationPlan{Admission: "reclaim_per_copy_too_low", CandidateGenerationIDs: []uint64{3}}); err == nil {
+		t.Fatalf("expected non-eligible plan admission to fail")
+	}
+	if _, err := chooseLeafGenerationPackIDs(nil, true, &treedb.LeafGenerationPlan{Admission: "eligible"}); err == nil {
+		t.Fatalf("expected empty eligible plan to fail")
+	}
+	if _, err := chooseLeafGenerationPackIDs(nil, false, nil); err == nil {
+		t.Fatalf("expected empty explicit selection to fail")
 	}
 }
