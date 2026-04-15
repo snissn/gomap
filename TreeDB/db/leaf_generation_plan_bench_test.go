@@ -1,8 +1,12 @@
 package db
 
 import (
+	"bytes"
 	"context"
+	"fmt"
 	"os"
+	"strconv"
+	"sync/atomic"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/leafrefscan"
@@ -57,6 +61,82 @@ func openLeafGenerationPlanFixtureDB(b *testing.B) *DB {
 	db := openLeafGenerationPlanDB(b, benchmarkLeafGenerationPlanFixture(b), true)
 	b.Cleanup(func() { _ = db.Close() })
 	return db
+}
+
+func benchmarkCloseNoErr(b *testing.B, c interface{ Close() error }) {
+	b.Helper()
+	if err := c.Close(); err != nil {
+		b.Fatalf("close: %v", err)
+	}
+}
+
+func benchmarkLeafGenerationStatInt64(b *testing.B, stats map[string]string, key string) int64 {
+	b.Helper()
+	raw, ok := stats[key]
+	if !ok {
+		b.Fatalf("missing stats key %q", key)
+	}
+	v, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		b.Fatalf("parse %s=%q: %v", key, raw, err)
+	}
+	return v
+}
+
+func openLeafGenerationPlanRootChurnBenchDB(b *testing.B) (*DB, *rewriteWriter) {
+	b.Helper()
+	dir := b.TempDir()
+	db, err := Open(Options{
+		Dir:                        dir,
+		Durability:                 DurabilityWALOffRelaxed,
+		DisableBackgroundPrune:     true,
+		IndexOuterLeavesInValueLog: true,
+		LeafPrefixCompression:      true,
+		IndexColumnarLeaves:        true,
+		IndexPackedValuePtr:        true,
+	})
+	if err != nil {
+		b.Fatalf("Open: %v", err)
+	}
+	leafLog := newRewriteWriter(ValueLogDirPath(dir), 0, 0, 64<<20)
+	leafLog.ConfigureLeafLog(LeafLogDirPath(dir), rewriteLeafLogLaneID, 0)
+	db.SetLeafPageLog(leafLog)
+	b.Cleanup(func() { benchmarkCloseNoErr(b, leafLog) })
+	b.Cleanup(func() { benchmarkCloseNoErr(b, db) })
+	return db, leafLog
+}
+
+func writeLeafGenerationBenchKeyRange(b *testing.B, db *DB, prefix string, start, count int, fill byte) {
+	b.Helper()
+	raw := db.NewBatch()
+	batch, ok := raw.(*Batch)
+	if !ok {
+		_ = raw.Close()
+		b.Fatalf("NewBatch type=%T, want *Batch", raw)
+	}
+	for i := 0; i < count; i++ {
+		key := []byte(fmt.Sprintf("%s-%04d", prefix, start+i))
+		value := bytes.Repeat([]byte{fill}, 32)
+		if err := batch.Set(key, value); err != nil {
+			_ = batch.Close()
+			b.Fatalf("Set(%q): %v", key, err)
+		}
+	}
+	if err := batch.WriteSync(); err != nil {
+		_ = batch.Close()
+		b.Fatalf("WriteSync: %v", err)
+	}
+	benchmarkCloseNoErr(b, batch)
+}
+
+func withLeafGenerationSubtreeCacheMissCounterB(b *testing.B) *atomic.Uint64 {
+	b.Helper()
+	var counter atomic.Uint64
+	unregister := registerLeafGenerationSubtreeCacheMissHook(func(uint64) {
+		counter.Add(1)
+	})
+	b.Cleanup(unregister)
+	return &counter
 }
 
 func BenchmarkLeafGenerationPlan_SavedHome(b *testing.B) {
@@ -235,6 +315,36 @@ func BenchmarkLeafGenerationPlanCached_SavedHome(b *testing.B) {
 			b.Fatalf("LeafGenerationPlan cached: %v", err)
 		}
 	}
+}
+
+func BenchmarkLeafGenerationPlanAfterSingleKeyRootChange_Local(b *testing.B) {
+	db, _ := openLeafGenerationPlanRootChurnBenchDB(b)
+	writeLeafGenerationBenchKeyRange(b, db, "k", 0, 4096, 'a')
+	if _, err := db.LeafGenerationPlan(context.Background(), LeafGenerationPlanOptions{}); err != nil {
+		b.Fatalf("warmup LeafGenerationPlan: %v", err)
+	}
+
+	cacheMisses := withLeafGenerationSubtreeCacheMissCounterB(b)
+	var totalMisses uint64
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		fill := byte('b' + byte(i%23))
+		b.StopTimer()
+		writeLeafGenerationBenchKeyRange(b, db, "k", 0, 1, fill)
+		beforeMisses := cacheMisses.Load()
+		b.StartTimer()
+		if _, err := db.LeafGenerationPlan(context.Background(), LeafGenerationPlanOptions{}); err != nil {
+			b.Fatalf("LeafGenerationPlan root churn: %v", err)
+		}
+		totalMisses += cacheMisses.Load() - beforeMisses
+	}
+	b.StopTimer()
+	if b.N > 0 {
+		b.ReportMetric(float64(totalMisses)/float64(b.N), "subtree_misses/op")
+	}
+	stats := db.Stats()
+	b.ReportMetric(float64(benchmarkLeafGenerationStatInt64(b, stats, "treedb.leaf_generation.plan_cache.subtree_pages")), "subtree_pages")
 }
 
 func BenchmarkLeafGenerationPlanLeafRefStats_SavedHome(b *testing.B) {
