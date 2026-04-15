@@ -2935,56 +2935,6 @@ func TestValueLogRewriteOnline_MaxCopiedBytes_ProcessesExplicitSourceIncremental
 	}
 }
 
-func TestValueLogRewriteOnline_MaxCopiedBytes_DoesNotRunLeafRefRewriteWhenBudgetExhausted(t *testing.T) {
-	db, leafSourceIDs, cleanup := setupLeafRefRewriteBench(t, 768)
-	defer cleanup()
-
-	ptrs := appendPointersInNewSegment(t, db.dir, 253, 1, 320_000, 1, func(int) []byte {
-		return bytes.Repeat([]byte("pointer-budget"), 32)
-	})
-
-	b := db.NewBatch().(*Batch)
-	if err := b.SetPointer([]byte("ptr-budget"), ptrs[0]); err != nil {
-		t.Fatalf("set ptr-budget: %v", err)
-	}
-	if err := b.Write(); err != nil {
-		t.Fatalf("seed pointer write: %v", err)
-	}
-	closeNoErr(t, b)
-
-	recordLen, err := db.valueLogRecordLengthForRewrite(ptrs[0])
-	if err != nil {
-		t.Fatalf("record length: %v", err)
-	}
-
-	stats, err := db.ValueLogRewriteOnline(context.Background(), ValueLogRewriteOnlineOptions{
-		SourceFileIDs:  []uint32{ptrs[0].FileID, leafSourceIDs[0]},
-		BatchSize:      8,
-		MaxCopiedBytes: int64(recordLen),
-	})
-	if err != nil {
-		t.Fatalf("ValueLogRewriteOnline: %v", err)
-	}
-	if stats.RecordsCopied != 1 {
-		t.Fatalf("records copied=%d want 1", stats.RecordsCopied)
-	}
-	if stats.LeafRefRecordsCopied != 0 {
-		t.Fatalf("leafref records copied=%d want 0", stats.LeafRefRecordsCopied)
-	}
-	if stats.LeafRefBytesCopied != 0 {
-		t.Fatalf("leafref bytes copied=%d want 0", stats.LeafRefBytesCopied)
-	}
-	if stats.SourceBytesProcessed != int64(recordLen) {
-		t.Fatalf("source bytes processed=%d want %d", stats.SourceBytesProcessed, recordLen)
-	}
-	if !slices.Contains(stats.SourceFileIDsUnreferenced, ptrs[0].FileID) {
-		t.Fatalf("unreferenced ids=%v want pointer source %d", stats.SourceFileIDsUnreferenced, ptrs[0].FileID)
-	}
-	if !slices.Contains(stats.SourceFileIDsStillReferenced, leafSourceIDs[0]) {
-		t.Fatalf("still referenced ids=%v want leaf source %d", stats.SourceFileIDsStillReferenced, leafSourceIDs[0])
-	}
-}
-
 func TestValueLogRewriteOnline_ReserveRIDsUsesExternalAllocator(t *testing.T) {
 	dir := t.TempDir()
 
@@ -3291,35 +3241,6 @@ func TestValueLogRewriteOnline_LeafLogReservedLaneHintFallsBackToScan(t *testing
 	}
 	if walScanCalls != 1 {
 		t.Fatalf("expected one wal segment scan call, got %d", walScanCalls)
-	}
-}
-
-func TestValueLogRewriteOnline_LeafRefsReserveRIDs_DoesNotRefreshManager(t *testing.T) {
-	db, sourceIDs, cleanup := setupLeafRefRewriteBench(t, 768)
-	defer cleanup()
-
-	refreshBefore := db.valueLogManager.RefreshScanCount()
-	nextRID := uint64(1 << 40)
-	stats, err := db.ValueLogRewriteOnline(context.Background(), ValueLogRewriteOnlineOptions{
-		SourceFileIDs: sourceIDs,
-		BatchSize:     128,
-		ReserveRIDs: func(count int) (uint64, error) {
-			if count <= 0 {
-				return 0, fmt.Errorf("invalid count %d", count)
-			}
-			start := nextRID
-			nextRID += uint64(count)
-			return start, nil
-		},
-	})
-	if err != nil {
-		t.Fatalf("ValueLogRewriteOnline: %v", err)
-	}
-	if stats.LeafRefRecordsCopied == 0 {
-		t.Fatalf("expected leafref rewrite to copy records")
-	}
-	if delta := db.valueLogManager.RefreshScanCount() - refreshBefore; delta != 0 {
-		t.Fatalf("expected reserve leafref rewrite to avoid manager refresh scans, got %d", delta)
 	}
 }
 

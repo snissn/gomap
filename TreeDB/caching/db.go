@@ -6435,8 +6435,6 @@ type DB struct {
 	vlogGenerationRewriteReclaimedBytes                          atomic.Uint64
 	vlogGenerationRewriteValueRecordsCopied                      atomic.Uint64
 	vlogGenerationRewriteValueBytesCopied                        atomic.Uint64
-	vlogGenerationRewriteLeafRefRecordsCopied                    atomic.Uint64
-	vlogGenerationRewriteLeafRefBytesCopied                      atomic.Uint64
 	vlogGenerationRewriteProcessedLiveBytes                      atomic.Uint64
 	vlogGenerationRewriteProcessedStaleBytes                     atomic.Uint64
 	vlogGenerationRewriteNoReclaimRuns                           atomic.Uint64
@@ -17340,12 +17338,6 @@ planned:
 			if stats.ValueBytesCopied > 0 {
 				db.vlogGenerationRewriteValueBytesCopied.Add(uint64(stats.ValueBytesCopied))
 			}
-			if stats.LeafRefRecordsCopied > 0 {
-				db.vlogGenerationRewriteLeafRefRecordsCopied.Add(uint64(stats.LeafRefRecordsCopied))
-			}
-			if stats.LeafRefBytesCopied > 0 {
-				db.vlogGenerationRewriteLeafRefBytesCopied.Add(uint64(stats.LeafRefBytesCopied))
-			}
 			if consumed > 0 {
 				db.vlogGenerationConsumeRewriteBudgetBytes(consumed, activeSourceIdx)
 			}
@@ -23563,8 +23555,6 @@ func (db *DB) Stats() map[string]string {
 	rewriteReclaimedBytesTotal := db.vlogGenerationRewriteReclaimedBytes.Load()
 	rewriteValueRecordsCopiedTotal := db.vlogGenerationRewriteValueRecordsCopied.Load()
 	rewriteValueBytesCopiedTotal := db.vlogGenerationRewriteValueBytesCopied.Load()
-	rewriteLeafRefRecordsCopiedTotal := db.vlogGenerationRewriteLeafRefRecordsCopied.Load()
-	rewriteLeafRefBytesCopiedTotal := db.vlogGenerationRewriteLeafRefBytesCopied.Load()
 	rewriteProcessedLiveBytes := db.vlogGenerationRewriteProcessedLiveBytes.Load()
 	rewriteProcessedStaleBytes := db.vlogGenerationRewriteProcessedStaleBytes.Load()
 	rewriteProcessedTotal := rewriteProcessedLiveBytes + rewriteProcessedStaleBytes
@@ -23937,8 +23927,6 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_generation.rewrite.bytes_out"] = fmt.Sprintf("%d", rewriteBytesOutTotal)
 	stats["treedb.cache.vlog_generation.rewrite.value_records_copied"] = fmt.Sprintf("%d", rewriteValueRecordsCopiedTotal)
 	stats["treedb.cache.vlog_generation.rewrite.value_bytes_copied"] = fmt.Sprintf("%d", rewriteValueBytesCopiedTotal)
-	stats["treedb.cache.vlog_generation.rewrite.leafref_records_copied"] = fmt.Sprintf("%d", rewriteLeafRefRecordsCopiedTotal)
-	stats["treedb.cache.vlog_generation.rewrite.leafref_bytes_copied"] = fmt.Sprintf("%d", rewriteLeafRefBytesCopiedTotal)
 	stats["treedb.cache.vlog_generation.rewrite.processed_live_bytes"] = fmt.Sprintf("%d", rewriteProcessedLiveBytes)
 	stats["treedb.cache.vlog_generation.rewrite.processed_stale_bytes"] = fmt.Sprintf("%d", rewriteProcessedStaleBytes)
 	stats["treedb.cache.vlog_generation.rewrite.reclaim_ratio"] = fmt.Sprintf("%.6f", rewriteReclaimRatio)

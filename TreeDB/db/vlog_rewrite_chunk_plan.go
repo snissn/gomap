@@ -12,7 +12,6 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
-	"github.com/snissn/gomap/TreeDB/pager"
 	"github.com/snissn/gomap/TreeDB/tree"
 )
 
@@ -170,14 +169,6 @@ func (db *DB) estimateValueLogLiveBytesByChunk(ctx context.Context, chunkBytes i
 		}
 		_ = sysIter.Close()
 
-		if snap.idx != nil && snap.idx.pager != nil {
-			if err := db.collectLeafRefValueLogLiveBytesByChunk(ctx, snap.idx.pager, snap.state.RootPageID, liveByChunk, &seenGroupedRecords, snap.state.ValueLogSet, chunkBytes); err != nil {
-				return nil, err
-			}
-			if err := db.collectLeafRefValueLogLiveBytesByChunk(ctx, snap.idx.pager, snap.state.SystemRootPageID, liveByChunk, &seenGroupedRecords, snap.state.ValueLogSet, chunkBytes); err != nil {
-				return nil, err
-			}
-		}
 		return liveByChunk, nil
 	}
 
@@ -216,84 +207,6 @@ func (db *DB) collectValueLogLiveBytesByChunk(ctx context.Context, it iterator.U
 	return it.Error()
 }
 
-func (db *DB) collectLeafRefValueLogLiveBytesByChunk(ctx context.Context, p *pager.Pager, rootID uint64, liveByChunk map[valueLogChunkKey]int64, seenGroupedRecords *map[groupedRecordKey]struct{}, set *valuelog.Set, chunkBytes int64) error {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	if p == nil || rootID == 0 || liveByChunk == nil {
-		return nil
-	}
-	if ptr, ok := page.DecodeLeafRef(rootID); ok {
-		return db.collectLeafRefPtrLiveBytesByChunk(ptr, liveByChunk, seenGroupedRecords, set, chunkBytes)
-	}
-	stack := make([]uint64, 0, 128)
-	stack = append(stack, rootID)
-	visited := make(map[uint64]struct{}, 1024)
-	verifyAlways := p.VerifyOnRead()
-
-	for len(stack) > 0 {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		pageID := stack[len(stack)-1]
-		stack = stack[:len(stack)-1]
-		if _, ok := visited[pageID]; ok {
-			continue
-		}
-		visited[pageID] = struct{}{}
-
-		data, err := p.Get(pageID)
-		if err != nil {
-			return err
-		}
-		n := node.NewNodeView(data)
-		if verifyAlways || !p.IsVerified(pageID) {
-			if !n.VerifyChecksum() {
-				return fmt.Errorf("checksum mismatch on page %d", pageID)
-			}
-			if !verifyAlways {
-				p.MarkVerified(pageID)
-			}
-		}
-
-		switch n.Type() {
-		case page.PageTypeInternal:
-			count := n.Count()
-			for i := uint16(0); i < count; i++ {
-				childID, err := n.GetInternalChildID(i)
-				if err != nil {
-					return err
-				}
-				if ptr, ok := page.DecodeLeafRef(childID); ok {
-					if err := db.collectLeafRefPtrLiveBytesByChunk(ptr, liveByChunk, seenGroupedRecords, set, chunkBytes); err != nil {
-						return err
-					}
-					continue
-				}
-				stack = append(stack, childID)
-			}
-		case page.PageTypeLeaf:
-		default:
-			return fmt.Errorf("invalid page type %d on page %d", n.Type(), pageID)
-		}
-	}
-	return nil
-}
-
-func (db *DB) collectLeafRefPtrLiveBytesByChunk(ptr page.LeafLogPtr, liveByChunk map[valueLogChunkKey]int64, seenGroupedRecords *map[groupedRecordKey]struct{}, set *valuelog.Set, chunkBytes int64) error {
-	if liveByChunk == nil {
-		return nil
-	}
-	return db.collectValueLogPtrLiveBytes(ptr.ValuePtr(), seenGroupedRecords, set, func(ptr page.ValuePtr, recordLen uint32) error {
-		chunkOffset, err := valueLogChunkOffsetForPtr(ptr, chunkBytes)
-		if err != nil {
-			return err
-		}
-		liveByChunk[valueLogChunkKey{fileID: ptr.FileID, chunkOffset: chunkOffset}] += int64(recordLen)
-		return nil
-	})
-}
-
 func (db *DB) ValueLogRewriteChunkPlan(ctx context.Context, opts ValueLogRewriteOnlineOptions, chunkBytes int64) (ValueLogRewriteChunkPlan, error) {
 	var plan ValueLogRewriteChunkPlan
 	if db == nil {
@@ -327,14 +240,18 @@ func (db *DB) ValueLogRewriteChunkPlan(ctx context.Context, opts ValueLogRewrite
 	if set == nil || len(set.Files) == 0 {
 		return plan, nil
 	}
+	files := db.valueOnlyRewriteFiles(set.Files)
+	if len(files) == 0 {
+		return plan, nil
+	}
 
-	fileIDs := make([]uint32, 0, len(set.Files))
-	for id := range set.Files {
+	fileIDs := make([]uint32, 0, len(files))
+	for id := range files {
 		fileIDs = append(fileIDs, id)
 	}
 	sort.Slice(fileIDs, func(i, j int) bool { return fileIDs[i] < fileIDs[j] })
 	for _, id := range fileIDs {
-		size := fileSize(set.Files[id])
+		size := fileSize(files[id])
 		if size <= 0 {
 			continue
 		}
@@ -352,7 +269,7 @@ func (db *DB) ValueLogRewriteChunkPlan(ctx context.Context, opts ValueLogRewrite
 			return plan, err
 		}
 		for _, id := range fileIDs {
-			size := fileSize(set.Files[id])
+			size := fileSize(files[id])
 			if size <= 0 {
 				continue
 			}
@@ -374,8 +291,8 @@ func (db *DB) ValueLogRewriteChunkPlan(ctx context.Context, opts ValueLogRewrite
 		}
 	}
 
-	active := currentValueLogIDs(set)
-	selectedChunks, selectionStats := selectRewriteSourceChunksWithStats(opts, set.Files, active, liveByChunk, chunkBytes)
+	active := currentValueLogIDs(&valuelog.Set{Files: files})
+	selectedChunks, selectionStats := selectRewriteSourceChunksWithStats(opts, files, active, liveByChunk, chunkBytes)
 	plan.AgeBlockedChunks = selectionStats.ageBlockedSegments
 	plan.AgeBlockedBytesTotal = selectionStats.ageBlockedBytesTotal
 	plan.AgeBlockedBytesLive = selectionStats.ageBlockedBytesLive
