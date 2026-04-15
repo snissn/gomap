@@ -1177,6 +1177,7 @@ Sprint 3 goal:
 ### Sprint 3 Current Local Status
 
 - manual `leafgen-pack -from-plan` now supports bounded prefix selection with `-max-generations` and `-max-bytes-to-copy`, so the first online-style admission surface is available to operators before any background scheduler exists
+- the bounded prefix selector now lives in reusable TreeDB code (`SelectLeafGenerationPackCandidates`) instead of only in the CLI, so future backend online-pack runners can share the exact same ranking and budget semantics
 - the bounded manual path is intentionally fail-closed when the top-ranked candidate alone exceeds `-max-bytes-to-copy`; it does not silently blow the requested copy budget
 
 ### Sprint 3 Code Work

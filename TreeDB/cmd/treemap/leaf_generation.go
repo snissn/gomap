@@ -94,31 +94,14 @@ func chooseLeafGenerationPackIDs(explicit []uint64, fromPlan bool, plan *treedb.
 		if plan == nil {
 			return nil, fmt.Errorf("leafgen-pack missing plan for -from-plan")
 		}
-		if plan.Admission != "eligible" {
-			return nil, fmt.Errorf("leafgen-pack plan admission=%s", plan.Admission)
+		selection, err := treedb.SelectLeafGenerationPackCandidates(*plan, treedb.LeafGenerationPackSelectOptions{
+			MaxGenerations: maxGenerations,
+			MaxBytesToCopy: maxBytesToCopy,
+		})
+		if err != nil {
+			return nil, err
 		}
-		if len(plan.Candidates) == 0 {
-			return nil, fmt.Errorf("leafgen-pack plan produced no candidate generations")
-		}
-		selected := make([]uint64, 0, len(plan.Candidates))
-		selectedBytesToCopy := int64(0)
-		for _, gen := range plan.Candidates {
-			if maxGenerations > 0 && len(selected) >= maxGenerations {
-				break
-			}
-			if maxBytesToCopy > 0 && gen.BytesToCopy > 0 && selectedBytesToCopy+gen.BytesToCopy > maxBytesToCopy {
-				if len(selected) == 0 {
-					return nil, fmt.Errorf("leafgen-pack first candidate bytes_to_copy=%d exceeds max-bytes-to-copy=%d", gen.BytesToCopy, maxBytesToCopy)
-				}
-				break
-			}
-			selected = append(selected, gen.GenerationID)
-			selectedBytesToCopy += gen.BytesToCopy
-		}
-		if len(selected) == 0 {
-			return nil, fmt.Errorf("leafgen-pack plan produced no candidate generations within limits")
-		}
-		return selected, nil
+		return append([]uint64(nil), selection.GenerationIDs...), nil
 	}
 	if len(explicit) == 0 {
 		return nil, fmt.Errorf("leafgen-pack requires at least one generation id")

@@ -51,8 +51,8 @@ func TestChooseLeafGenerationPackIDs(t *testing.T) {
 		Admission:              "eligible",
 		CandidateGenerationIDs: []uint64{3, 5},
 		Candidates: []treedb.LeafGenerationPlanGeneration{
-			{GenerationID: 3, BytesToCopy: 100},
-			{GenerationID: 5, BytesToCopy: 200},
+			{GenerationID: 3, BytesTotal: 120, BytesLive: 100, BytesDead: 20, BytesToCopy: 100},
+			{GenerationID: 5, BytesTotal: 240, BytesLive: 180, BytesDead: 60, BytesToCopy: 200},
 		},
 	}
 	ids, err = chooseLeafGenerationPackIDs(nil, true, plan, 0, 0)
@@ -65,26 +65,6 @@ func TestChooseLeafGenerationPackIDs(t *testing.T) {
 
 	if _, err := chooseLeafGenerationPackIDs([]uint64{1}, true, plan, 0, 0); err == nil {
 		t.Fatalf("expected conflicting explicit/from-plan selection to fail")
-	}
-
-	ids, err = chooseLeafGenerationPackIDs(nil, true, plan, 1, 0)
-	if err != nil {
-		t.Fatalf("max-generations choose err=%v", err)
-	}
-	if got, want := len(ids), 1; got != want || ids[0] != 3 {
-		t.Fatalf("max-generations ids=%v, want [3]", ids)
-	}
-
-	ids, err = chooseLeafGenerationPackIDs(nil, true, plan, 0, 150)
-	if err != nil {
-		t.Fatalf("max-bytes choose err=%v", err)
-	}
-	if got, want := len(ids), 1; got != want || ids[0] != 3 {
-		t.Fatalf("max-bytes ids=%v, want [3]", ids)
-	}
-
-	if _, err := chooseLeafGenerationPackIDs(nil, true, plan, 0, 50); err == nil {
-		t.Fatalf("expected oversize first candidate to fail")
 	}
 	if _, err := chooseLeafGenerationPackIDs(nil, true, nil, 0, 0); err == nil {
 		t.Fatalf("expected nil plan to fail")
