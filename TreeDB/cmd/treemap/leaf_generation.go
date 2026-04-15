@@ -86,29 +86,6 @@ func runLeafGenerationPlan(dir string, args []string) {
 	}
 }
 
-func chooseLeafGenerationPackIDs(explicit []uint64, fromPlan bool, plan *treedb.LeafGenerationPlan, maxGenerations int, maxBytesToCopy int64) ([]uint64, error) {
-	if fromPlan {
-		if len(explicit) > 0 {
-			return nil, fmt.Errorf("leafgen-pack accepts either -generation-ids or -from-plan, not both")
-		}
-		if plan == nil {
-			return nil, fmt.Errorf("leafgen-pack missing plan for -from-plan")
-		}
-		selection, err := treedb.SelectLeafGenerationPackCandidates(*plan, treedb.LeafGenerationPackSelectOptions{
-			MaxGenerations: maxGenerations,
-			MaxBytesToCopy: maxBytesToCopy,
-		})
-		if err != nil {
-			return nil, err
-		}
-		return append([]uint64(nil), selection.GenerationIDs...), nil
-	}
-	if len(explicit) == 0 {
-		return nil, fmt.Errorf("leafgen-pack requires at least one generation id")
-	}
-	return explicit, nil
-}
-
 func runLeafGenerationPack(dir string, args []string) {
 	fs := flag.NewFlagSet("leafgen-pack", flag.ExitOnError)
 	rw := fs.Bool("rw", false, "Open read-write (required)")
@@ -133,39 +110,40 @@ func runLeafGenerationPack(dir string, args []string) {
 	if err != nil {
 		fatalf("invalid -generation-ids: %v", err)
 	}
+	if *fromPlan && len(generationIDs) > 0 {
+		fatalf("leafgen-pack accepts either -generation-ids or -from-plan, not both")
+	}
+	if !*fromPlan && len(generationIDs) == 0 {
+		fatalf("leafgen-pack requires at least one generation id")
+	}
 
 	db := openTreeDB(dir, true)
 	defer closeTreeDB(db)
 
-	var plan *treedb.LeafGenerationPlan
+	var stats treedb.LeafGenerationPackStats
 	if *fromPlan {
-		resolved, err := db.LeafGenerationPlan(context.Background(), treedb.LeafGenerationPlanOptions{
+		stats, err = db.LeafGenerationPackFromPlan(context.Background(), treedb.LeafGenerationPackFromPlanOptions{
+			Sync:                       *sync,
+			Force:                      *force,
 			MinPublishedAgeCommits:     *minAgeCommits,
 			MinCandidateGenerations:    *minCandidateGenerations,
 			MinExpectedReclaimBytes:    *minExpectedReclaimBytes,
 			MinExpectedReclaimRatioPPM: *minExpectedReclaimRatioPPM,
 			MinReclaimPerByteCopiedPPM: *minReclaimPerByteCopiedPPM,
+			MaxGenerations:             *maxGenerations,
+			MaxBytesToCopy:             *maxBytesToCopy,
+		})
+	} else {
+		stats, err = db.LeafGenerationPack(context.Background(), treedb.LeafGenerationPackOptions{
+			GenerationIDs:              generationIDs,
+			Sync:                       *sync,
+			MinPublishedAgeCommits:     *minAgeCommits,
+			MinExpectedReclaimBytes:    *minExpectedReclaimBytes,
+			MinExpectedReclaimRatioPPM: *minExpectedReclaimRatioPPM,
+			MinReclaimPerByteCopiedPPM: *minReclaimPerByteCopiedPPM,
 			Force:                      *force,
 		})
-		if err != nil {
-			fatalf("LeafGenerationPlan error: %v", err)
-		}
-		plan = &resolved
 	}
-	generationIDs, err = chooseLeafGenerationPackIDs(generationIDs, *fromPlan, plan, *maxGenerations, *maxBytesToCopy)
-	if err != nil {
-		fatalf("%v", err)
-	}
-
-	stats, err := db.LeafGenerationPack(context.Background(), treedb.LeafGenerationPackOptions{
-		GenerationIDs:              generationIDs,
-		Sync:                       *sync,
-		MinPublishedAgeCommits:     *minAgeCommits,
-		MinExpectedReclaimBytes:    *minExpectedReclaimBytes,
-		MinExpectedReclaimRatioPPM: *minExpectedReclaimRatioPPM,
-		MinReclaimPerByteCopiedPPM: *minReclaimPerByteCopiedPPM,
-		Force:                      *force,
-	})
 	if err != nil {
 		fatalf("LeafGenerationPack error: %v", err)
 	}

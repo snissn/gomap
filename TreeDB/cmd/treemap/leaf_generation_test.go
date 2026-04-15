@@ -3,8 +3,6 @@ package main
 import (
 	"strings"
 	"testing"
-
-	treedb "github.com/snissn/gomap/TreeDB"
 )
 
 func TestParseUint64CSV(t *testing.T) {
@@ -35,47 +33,5 @@ func TestFormatUint32List(t *testing.T) {
 func TestUsageTextMentionsLeafGenerationGC(t *testing.T) {
 	if got := usageText; !strings.Contains(got, "leafgen-gc") {
 		t.Fatalf("usageText missing leafgen-gc command: %q", got)
-	}
-}
-
-func TestChooseLeafGenerationPackIDs(t *testing.T) {
-	ids, err := chooseLeafGenerationPackIDs([]uint64{7, 11}, false, nil, 0, 0)
-	if err != nil {
-		t.Fatalf("explicit choose err=%v", err)
-	}
-	if got, want := len(ids), 2; got != want || ids[0] != 7 || ids[1] != 11 {
-		t.Fatalf("explicit ids=%v, want [7 11]", ids)
-	}
-
-	plan := &treedb.LeafGenerationPlan{
-		Admission:              "eligible",
-		CandidateGenerationIDs: []uint64{3, 5},
-		Candidates: []treedb.LeafGenerationPlanGeneration{
-			{GenerationID: 3, BytesTotal: 120, BytesLive: 100, BytesDead: 20, BytesToCopy: 100},
-			{GenerationID: 5, BytesTotal: 240, BytesLive: 180, BytesDead: 60, BytesToCopy: 200},
-		},
-	}
-	ids, err = chooseLeafGenerationPackIDs(nil, true, plan, 0, 0)
-	if err != nil {
-		t.Fatalf("from-plan choose err=%v", err)
-	}
-	if got, want := len(ids), 2; got != want || ids[0] != 3 || ids[1] != 5 {
-		t.Fatalf("from-plan ids=%v, want [3 5]", ids)
-	}
-
-	if _, err := chooseLeafGenerationPackIDs([]uint64{1}, true, plan, 0, 0); err == nil {
-		t.Fatalf("expected conflicting explicit/from-plan selection to fail")
-	}
-	if _, err := chooseLeafGenerationPackIDs(nil, true, nil, 0, 0); err == nil {
-		t.Fatalf("expected nil plan to fail")
-	}
-	if _, err := chooseLeafGenerationPackIDs(nil, true, &treedb.LeafGenerationPlan{Admission: "reclaim_per_copy_too_low", CandidateGenerationIDs: []uint64{3}}, 0, 0); err == nil {
-		t.Fatalf("expected non-eligible plan admission to fail")
-	}
-	if _, err := chooseLeafGenerationPackIDs(nil, true, &treedb.LeafGenerationPlan{Admission: "eligible"}, 0, 0); err == nil {
-		t.Fatalf("expected empty eligible plan to fail")
-	}
-	if _, err := chooseLeafGenerationPackIDs(nil, false, nil, 0, 0); err == nil {
-		t.Fatalf("expected empty explicit selection to fail")
 	}
 }
