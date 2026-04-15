@@ -1,6 +1,9 @@
 package main
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestParseUint64CSV(t *testing.T) {
 	got, err := parseUint64CSV("3, 1, 3, 2, 0")
@@ -24,5 +27,11 @@ func TestFormatUint32List(t *testing.T) {
 	}
 	if got, want := formatUint32List([]uint32{7, 11, 42}), "7,11,42"; got != want {
 		t.Fatalf("formatUint32List=%q, want %q", got, want)
+	}
+}
+
+func TestUsageTextMentionsLeafGenerationGC(t *testing.T) {
+	if got := usageText; !strings.Contains(got, "leafgen-gc") {
+		t.Fatalf("usageText missing leafgen-gc command: %q", got)
 	}
 }

@@ -45,6 +45,7 @@ Commands:
   vlog-rewrite    Rewrite value-log segments and shrink via swap (requires -rw)
   leafgen-plan    Print explicit leaf-generation pack plan
   leafgen-pack    Pack sealed leaf generations by id (requires -rw)
+  leafgen-gc      Delete fully unreachable sealed leaf generations (requires -rw)
   get             Get a single key
   keys            List keys in a range/prefix
   scan            Scan keys and values in a range/prefix (requires -allow-values)
@@ -107,6 +108,8 @@ func main() {
 		runLeafGenerationPlan(dir, args)
 	case "leafgen-pack":
 		runLeafGenerationPack(dir, args)
+	case "leafgen-gc":
+		runLeafGenerationGC(dir, args)
 	case "get":
 		runGet(dir, args)
 	case "keys":

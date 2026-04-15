@@ -11,7 +11,6 @@ import (
 	"strings"
 
 	treedb "github.com/snissn/gomap/TreeDB"
-	treedbdb "github.com/snissn/gomap/TreeDB/db"
 )
 
 func runLeafGenerationPlan(dir string, args []string) {
@@ -25,13 +24,10 @@ func runLeafGenerationPlan(dir string, args []string) {
 	minExpectedReclaimRatioPPM := fs.Int("min-expected-reclaim-ratio-ppm", 0, "Require at least this reclaim ratio in ppm unless -force")
 	_ = fs.Parse(args)
 
-	backend, cleanup, err := treedb.OpenBackend(treedb.Options{Dir: dir, ReadOnly: !*rw})
-	if err != nil {
-		fatalf("OpenBackend error: %v", err)
-	}
-	defer func() { _ = cleanup() }()
+	db := openTreeDB(dir, *rw)
+	defer closeTreeDB(db)
 
-	plan, err := backend.LeafGenerationPlan(context.Background(), treedbdb.LeafGenerationPlanOptions{
+	plan, err := db.LeafGenerationPlan(context.Background(), treedb.LeafGenerationPlanOptions{
 		MinPublishedAgeCommits:     *minAgeCommits,
 		MinCandidateGenerations:    *minCandidateGenerations,
 		MinExpectedReclaimBytes:    *minExpectedReclaimBytes,
@@ -102,13 +98,10 @@ func runLeafGenerationPack(dir string, args []string) {
 		fatalf("leafgen-pack requires at least one generation id")
 	}
 
-	backend, cleanup, err := treedb.OpenBackend(treedb.Options{Dir: dir, ReadOnly: false})
-	if err != nil {
-		fatalf("OpenBackend error: %v", err)
-	}
-	defer func() { _ = cleanup() }()
+	db := openTreeDB(dir, true)
+	defer closeTreeDB(db)
 
-	stats, err := backend.LeafGenerationPack(context.Background(), treedbdb.LeafGenerationPackOptions{
+	stats, err := db.LeafGenerationPack(context.Background(), treedb.LeafGenerationPackOptions{
 		GenerationIDs: generationIDs,
 		Sync:          *sync,
 	})
@@ -133,6 +126,49 @@ func runLeafGenerationPack(dir string, args []string) {
 		stats.LeafPagesCopied,
 		stats.BytesCopied,
 		formatUint32List(created),
+	)
+}
+
+func runLeafGenerationGC(dir string, args []string) {
+	fs := flag.NewFlagSet("leafgen-gc", flag.ExitOnError)
+	rw := fs.Bool("rw", false, "Open read-write (required)")
+	jsonOut := fs.Bool("json", false, "Emit JSON instead of human-readable text")
+	dryRun := fs.Bool("dry-run", false, "Report eligible generations without deleting them")
+	_ = fs.Parse(args)
+
+	if !*rw {
+		fatalf("leafgen-gc requires -rw")
+	}
+
+	db := openTreeDB(dir, true)
+	defer closeTreeDB(db)
+
+	stats, err := db.LeafGenerationGC(context.Background(), treedb.LeafGenerationGCOptions{DryRun: *dryRun})
+	if err != nil {
+		fatalf("LeafGenerationGC error: %v", err)
+	}
+	if *jsonOut {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		if err := enc.Encode(stats); err != nil {
+			fatalf("encode gc json: %v", err)
+		}
+		return
+	}
+	mode := "apply"
+	if *dryRun {
+		mode = "dry-run"
+	}
+	fmt.Printf(
+		"leafgen-gc: mode=%s generations_total=%d writable=%d live=%d retiring=%d eligible=%d deleted=%d files_deleted=%d\n",
+		mode,
+		stats.GenerationsTotal,
+		stats.GenerationsWritable,
+		stats.GenerationsLive,
+		stats.GenerationsRetiring,
+		stats.GenerationsEligible,
+		stats.GenerationsDeleted,
+		stats.FilesDeleted,
 	)
 }
 
