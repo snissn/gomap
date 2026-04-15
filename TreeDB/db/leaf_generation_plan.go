@@ -306,7 +306,6 @@ func (db *DB) scanLeafGenerationLiveStats(ctx context.Context, snap *Snapshot) (
 		ctx = context.Background()
 	}
 	view := snap.state.LeafGenerations
-	seen := make(map[page.LeafLogPtr]struct{}, 1024)
 	verify := func(pageID uint64, n node.Node) error {
 		if !n.VerifyChecksum() {
 			return fmt.Errorf("leaf generation plan: checksum mismatch on page %d", pageID)
@@ -314,10 +313,9 @@ func (db *DB) scanLeafGenerationLiveStats(ctx context.Context, snap *Snapshot) (
 		return nil
 	}
 	visit := func(ptr page.LeafLogPtr) error {
-		if _, ok := seen[ptr]; ok {
-			return nil
-		}
-		seen[ptr] = struct{}{}
+		// Published B-tree state should not reference the same external leaf page
+		// from multiple parents; leafrefscan.Walk already deduplicates pager page
+		// IDs. Avoid retaining a per-LeafLogPtr seen map on this hot planner path.
 		genID, ok := view.FileToGeneration[ptr.FileID]
 		if !ok {
 			return fmt.Errorf("leaf generation plan: missing generation for leaf file %d", ptr.FileID)
