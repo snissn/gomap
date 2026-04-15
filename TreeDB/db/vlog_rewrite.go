@@ -513,7 +513,15 @@ func selectSingleExplicitRewriteSourceID(sourceFileIDs []uint32, files map[uint3
 	return id, true
 }
 
-func (db *DB) valueOnlyRewriteFiles(files map[uint32]*valuelog.File) map[uint32]*valuelog.File {
+func (db *DB) isLeafLogValueFileID(fileID uint32) bool {
+	if db == nil || !db.indexOuterLeavesInValueLog {
+		return false
+	}
+	lane, _ := valuelog.DecodeFileID(fileID)
+	return lane == rewriteLeafLogLaneID
+}
+
+func (db *DB) valueOnlyValueLogFiles(files map[uint32]*valuelog.File) map[uint32]*valuelog.File {
 	if len(files) == 0 {
 		return nil
 	}
@@ -525,8 +533,7 @@ func (db *DB) valueOnlyRewriteFiles(files map[uint32]*valuelog.File) map[uint32]
 		if f == nil {
 			continue
 		}
-		lane, _ := valuelog.DecodeFileID(id)
-		if lane == rewriteLeafLogLaneID {
+		if db.isLeafLogValueFileID(id) {
 			continue
 		}
 		filtered[id] = f
@@ -588,7 +595,7 @@ func (db *DB) ValueLogRewritePlan(ctx context.Context, opts ValueLogRewriteOnlin
 	if set != nil {
 		defer func() { _ = db.valueLogManager.Release(set) }()
 	}
-	files := db.valueOnlyRewriteFiles(set.Files)
+	files := db.valueOnlyValueLogFiles(set.Files)
 	if len(files) == 0 {
 		return plan, nil
 	}
@@ -1200,7 +1207,7 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		}
 		return stats, nil
 	}
-	files := db.valueOnlyRewriteFiles(set.Files)
+	files := db.valueOnlyValueLogFiles(set.Files)
 	if len(files) == 0 {
 		_ = db.valueLogManager.Release(set)
 		return stats, nil
@@ -1736,7 +1743,7 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 	}
 
 	if postSet != nil {
-		stats.SegmentsAfter, stats.BytesAfter = valueLogSegmentStatsFromFiles(db.valueOnlyRewriteFiles(postSet.Files))
+		stats.SegmentsAfter, stats.BytesAfter = valueLogSegmentStatsFromFiles(db.valueOnlyValueLogFiles(postSet.Files))
 	} else {
 		afterSegs, afterBytes, err := db.valueLogSegmentStatsValueOnly(db.dir)
 		if err != nil {
@@ -3945,7 +3952,7 @@ func (db *DB) valueLogSegmentStatsValueOnly(dir string) (count int, bytes int64,
 		if !seg.valueLog {
 			continue
 		}
-		if db != nil && db.indexOuterLeavesInValueLog && uint32(seg.lane) == rewriteLeafLogLaneID {
+		if db != nil && db.isLeafLogValueFileID(uint32(seg.fileID)) {
 			continue
 		}
 		if seg.size > 0 {

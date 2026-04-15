@@ -240,7 +240,7 @@ func (db *DB) ValueLogRewriteChunkPlan(ctx context.Context, opts ValueLogRewrite
 	if set == nil || len(set.Files) == 0 {
 		return plan, nil
 	}
-	files := db.valueOnlyRewriteFiles(set.Files)
+	files := db.valueOnlyValueLogFiles(set.Files)
 	if len(files) == 0 {
 		return plan, nil
 	}

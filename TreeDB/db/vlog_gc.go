@@ -86,10 +86,10 @@ type ValueLogGCStats struct {
 	ObservedSourceBytesPending              int64
 }
 
-// ValueLogGC deletes fully-unreferenced value-log segments.
+// ValueLogGC deletes fully-unreferenced value-log segments from value_vlog.
 //
 // It scans the user + system trees for value-log pointers, computes referenced
-// segments, and removes segments that are:
+// value_vlog segments, and removes segments that are:
 //   - not referenced,
 //   - not the currently-active segment per lane,
 //   - and not pinned by active snapshots.
@@ -134,15 +134,24 @@ func (db *DB) ValueLogGC(ctx context.Context, opts ValueLogGCOptions) (ValueLogG
 		}
 		set = vm.CurrentSetNoRefresh()
 	}
-	keptIDs := currentValueLogIDs(set)
+	files := db.valueOnlyValueLogFiles(set.Files)
+	if len(files) == 0 {
+		if set != nil {
+			_ = vm.Release(set)
+		}
+		db.persistValueLogRefTrackerBestEffort()
+		return stats, nil
+	}
+	valueSet := &valuelog.Set{Files: files}
+	keptIDs := currentValueLogIDs(valueSet)
 	protectedAll := mergeUniqueNonEmptyPaths(opts.ProtectedPaths, opts.ProtectedInUsePaths, opts.ProtectedRetainedPaths)
 	if len(protectedAll) > 0 {
-		if recent := recentValueLogIDsForProtectedPaths(set, valueLogKeepRecentSegmentsPerLane, protectedAll); len(recent) > 0 {
+		if recent := recentValueLogIDsForProtectedPaths(valueSet, valueLogKeepRecentSegmentsPerLane, protectedAll); len(recent) > 0 {
 			// Protected-path mode should keep a narrow recent window only for the
 			// protected lanes so historical rewrite lanes remain eligible. Keep the
 			// current primary-lane segment as a safety guard for live writes.
 			keptIDs = recent
-			for id := range currentValueLogIDs(set) {
+			for id := range currentValueLogIDs(valueSet) {
 				lane, _ := valuelog.DecodeFileID(id)
 				if lane == 0 {
 					keptIDs[id] = struct{}{}
@@ -190,7 +199,7 @@ func (db *DB) ValueLogGC(ctx context.Context, opts ValueLogGCOptions) (ValueLogG
 			if err := ctx.Err(); err != nil {
 				return stats, err
 			}
-			f, ok := set.Files[id]
+			f, ok := files[id]
 			if !ok {
 				continue
 			}
@@ -263,7 +272,7 @@ func (db *DB) ValueLogGC(ctx context.Context, opts ValueLogGCOptions) (ValueLogG
 			candidates[id] = candidate{path: f.Path, size: size, observed: true}
 		}
 	} else {
-		for id, f := range set.Files {
+		for id, f := range files {
 			if err := ctx.Err(); err != nil {
 				return stats, err
 			}
@@ -415,7 +424,7 @@ func (db *DB) ValueLogGC(ctx context.Context, opts ValueLogGCOptions) (ValueLogG
 	if !observedOnly {
 		currentSet := vm.CurrentSetNoRefresh()
 		if currentSet != nil {
-			if err := updateValueLogHealthAfterGC(db.dir, currentSet, referenced); err != nil {
+			if err := updateValueLogHealthAfterGC(db.dir, &valuelog.Set{Files: db.valueOnlyValueLogFiles(currentSet.Files)}, referenced); err != nil {
 				if db.notifyError != nil {
 					db.notifyError(fmt.Errorf("value-log health update after gc: %w", err))
 				}
