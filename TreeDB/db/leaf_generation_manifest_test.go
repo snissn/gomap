@@ -202,6 +202,83 @@ func TestLoadOrCreateLeafGenerationManifest_ReadOnlyMissingReturnsSynthetic(t *t
 	}
 }
 
+func TestLoadOrCreateLeafGenerationManifest_BootstrapsExistingLeafFiles(t *testing.T) {
+	leafDir := t.TempDir()
+	_, fileID1 := createLeafGenerationTestSegment(t, leafDir, rewriteLeafLogLaneID, 1)
+	_, fileID2 := createLeafGenerationTestSegment(t, leafDir, rewriteLeafLogLaneID, 2)
+	_, fileID3 := createLeafGenerationTestSegment(t, leafDir, rewriteLeafLogLaneID, 3)
+	createLeafGenerationTestSegment(t, leafDir, 0, 9)
+
+	manifest, err := loadOrCreateLeafGenerationManifest(leafDir, 77, true)
+	if err != nil {
+		t.Fatalf("loadOrCreateLeafGenerationManifest(read-only): %v", err)
+	}
+	if manifest == nil {
+		t.Fatalf("expected manifest")
+	}
+	if got, want := manifest.CurrentGenerationID, uint64(3); got != want {
+		t.Fatalf("CurrentGenerationID=%d, want %d", got, want)
+	}
+	if got, want := manifest.NextGenerationID, uint64(4); got != want {
+		t.Fatalf("NextGenerationID=%d, want %d", got, want)
+	}
+	if got, want := len(manifest.Generations), 3; got != want {
+		t.Fatalf("len(Generations)=%d, want %d", got, want)
+	}
+	for i, wantRaw := range []uint32{
+		page.ValueLogSegmentID(fileID1),
+		page.ValueLogSegmentID(fileID2),
+		page.ValueLogSegmentID(fileID3),
+	} {
+		gen := manifest.Generations[i]
+		if got, want := gen.GenerationID, uint64(i+1); got != want {
+			t.Fatalf("generation[%d].GenerationID=%d, want %d", i, got, want)
+		}
+		wantState := leafGenerationStateSealed
+		wantSealedCommitSeq := uint64(77)
+		if i == 2 {
+			wantState = leafGenerationStateWritable
+			wantSealedCommitSeq = 0
+		}
+		if got := gen.State; got != wantState {
+			t.Fatalf("generation[%d].State=%q, want %q", i, got, wantState)
+		}
+		if got, want := len(gen.FileIDs), 1; got != want {
+			t.Fatalf("generation[%d].len(FileIDs)=%d, want %d", i, got, want)
+		}
+		if got := gen.FileIDs[0]; got != wantRaw {
+			t.Fatalf("generation[%d].FileIDs[0]=%d, want %d", i, got, wantRaw)
+		}
+		if got, want := gen.CreatedCommitSeq, uint64(77); got != want {
+			t.Fatalf("generation[%d].CreatedCommitSeq=%d, want %d", i, got, want)
+		}
+		if got := gen.SealedCommitSeq; got != wantSealedCommitSeq {
+			t.Fatalf("generation[%d].SealedCommitSeq=%d, want %d", i, got, wantSealedCommitSeq)
+		}
+	}
+	if _, err := os.Stat(leafGenerationManifestPath(leafDir)); !os.IsNotExist(err) {
+		t.Fatalf("expected read-only bootstrap to avoid writing manifest, got %v", err)
+	}
+
+	writeManifest, err := loadOrCreateLeafGenerationManifest(leafDir, 88, false)
+	if err != nil {
+		t.Fatalf("loadOrCreateLeafGenerationManifest(writeable): %v", err)
+	}
+	if writeManifest == nil {
+		t.Fatalf("expected persisted manifest")
+	}
+	loaded, ok, err := loadLeafGenerationManifest(leafDir)
+	if err != nil {
+		t.Fatalf("loadLeafGenerationManifest: %v", err)
+	}
+	if !ok {
+		t.Fatalf("expected manifest file to exist after writeable bootstrap")
+	}
+	if got, want := loaded.CurrentGenerationID, uint64(3); got != want {
+		t.Fatalf("persisted CurrentGenerationID=%d, want %d", got, want)
+	}
+}
+
 func TestOpen_IndexOuterLeavesInValueLog_CreatesLeafGenerationManifest(t *testing.T) {
 	dir := t.TempDir()
 	db, err := Open(Options{Dir: dir, IndexOuterLeavesInValueLog: true})

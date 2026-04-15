@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 
+	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -266,6 +268,76 @@ func saveLeafGenerationManifest(leafDir string, manifest *leafGenerationManifest
 	return writeFileAtomic(path, data, 0o600)
 }
 
+type leafGenerationBootstrapFile struct {
+	rawFileID uint32
+	lane      uint32
+	seq       uint32
+}
+
+func bootstrapLeafGenerationManifestFromDir(leafDir string, commitSeq uint64) (*leafGenerationManifest, error) {
+	entries, err := os.ReadDir(leafDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return newLeafGenerationManifest(commitSeq), nil
+		}
+		return nil, err
+	}
+	files := make([]leafGenerationBootstrapFile, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		var lane, seq uint32
+		if _, err := fmt.Sscanf(entry.Name(), "value-l%d-%d.log", &lane, &seq); err != nil {
+			continue
+		}
+		if lane != rewriteLeafLogLaneID {
+			continue
+		}
+		rawFileID, err := valuelog.EncodeSegmentID(lane, seq)
+		if err != nil {
+			return nil, err
+		}
+		files = append(files, leafGenerationBootstrapFile{rawFileID: rawFileID, lane: lane, seq: seq})
+	}
+	if len(files) == 0 {
+		return newLeafGenerationManifest(commitSeq), nil
+	}
+	sort.Slice(files, func(i, j int) bool {
+		if files[i].lane != files[j].lane {
+			return files[i].lane < files[j].lane
+		}
+		if files[i].seq != files[j].seq {
+			return files[i].seq < files[j].seq
+		}
+		return files[i].rawFileID < files[j].rawFileID
+	})
+	manifest := &leafGenerationManifest{
+		Version:             leafGenerationManifestVersion,
+		CurrentGenerationID: uint64(len(files)),
+		NextGenerationID:    uint64(len(files) + 1),
+		Generations:         make([]leafGenerationRecord, 0, len(files)),
+	}
+	for i, file := range files {
+		generationID := uint64(i + 1)
+		state := leafGenerationStateSealed
+		sealedCommitSeq := commitSeq
+		if i == len(files)-1 {
+			state = leafGenerationStateWritable
+			sealedCommitSeq = 0
+		}
+		manifest.Generations = append(manifest.Generations, leafGenerationRecord{
+			GenerationID:       generationID,
+			State:              state,
+			FileIDs:            []uint32{file.rawFileID},
+			CreatedCommitSeq:   commitSeq,
+			SealedCommitSeq:    sealedCommitSeq,
+			PublishedCommitSeq: commitSeq,
+		})
+	}
+	return manifest, nil
+}
+
 func loadOrCreateLeafGenerationManifest(leafDir string, commitSeq uint64, readOnly bool) (*leafGenerationManifest, error) {
 	manifest, ok, err := loadLeafGenerationManifest(leafDir)
 	if err != nil {
@@ -274,7 +346,10 @@ func loadOrCreateLeafGenerationManifest(leafDir string, commitSeq uint64, readOn
 	if ok {
 		return manifest, nil
 	}
-	manifest = newLeafGenerationManifest(commitSeq)
+	manifest, err = bootstrapLeafGenerationManifestFromDir(leafDir, commitSeq)
+	if err != nil {
+		return nil, err
+	}
 	if readOnly {
 		return manifest, nil
 	}

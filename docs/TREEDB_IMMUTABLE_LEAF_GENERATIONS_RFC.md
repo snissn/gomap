@@ -1104,7 +1104,9 @@ Sprint 2 goal:
 - `treemap` now exposes `leafgen-plan` and `leafgen-pack` operator entrypoints
 - planner and GC now share the same `LeafRef` reachability scan shape
 - rewrite-created leaf files are now registered into the leaf-generation manifest before publish
-- unit coverage now includes ranking, dead-vs-live geometry, age-gate force override, snapshot-pin non-interference, explicit pack, reopen, post-pack GC, and operator-surface parsing/checkpoint tests
+- legacy split-leaf homes that predate `leaf_vlog/manifest.json` now bootstrap generation state from existing `leaf_vlog` segment files instead of fabricating an empty synthetic manifest
+- saved-home validation on `/home/mikers/.application-db-engine-matrix-splitouterleaf-20260414090917/treedb/application.db` now reconstructs 9 generations correctly and proves the compatibility path works on a real pre-manifest Celestia home
+- unit coverage now includes ranking, dead-vs-live geometry, age-gate force override, snapshot-pin non-interference, explicit pack, reopen, post-pack GC, operator-surface parsing/checkpoint tests, and pre-manifest saved-home manifest bootstrap
 
 ### Sprint 2 Code Work
 
@@ -1134,6 +1136,9 @@ Sprint 2 goal:
 - compare bytes copied versus bytes reclaimed
 - confirm reclaim on homes where whole-generation delete alone produced zero or
   near-zero reclaim
+- first real saved-home result on `/home/mikers/.application-db-engine-matrix-splitouterleaf-20260414090917/treedb/application.db`:
+  planner reconstructs 9 generations, selects 8 sealed generations, and estimates only `4,585,857` reclaimable bytes across about `2.1 GiB` of `leaf_vlog`
+- same saved-home `leafgen-pack` validation copied about `3,878,699,008` live bytes into one new generation; after two GC passes the copied home returned to about `2.3 GiB` total / `2.1 GiB` `leaf_vlog`, confirming correctness but also confirming that whole-generation delete plus naive pack will not materially shrink this Celestia snapshot because the sealed generations are almost entirely live
 
 ### Sprint 2 Exit Criteria
 
