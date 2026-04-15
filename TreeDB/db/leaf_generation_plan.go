@@ -445,13 +445,8 @@ func (db *DB) scanLeafGenerationLiveStats(ctx context.Context, snap *Snapshot) (
 		stats.Generations[genID] = genTotals
 		return nil
 	}
-	for _, rootID := range []uint64{snap.state.RootPageID, snap.state.SystemRootPageID} {
-		if rootID == 0 {
-			continue
-		}
-		if err := leafrefscan.Walk(ctx, rootID, snap.idx.pager.Get, verify, visit); err != nil {
-			return leafGenerationLiveScanStats{}, err
-		}
+	if err := leafrefscan.WalkRoots(ctx, []uint64{snap.state.RootPageID, snap.state.SystemRootPageID}, snap.idx.pager.Get, verify, visit); err != nil {
+		return leafGenerationLiveScanStats{}, err
 	}
 	return stats, nil
 }

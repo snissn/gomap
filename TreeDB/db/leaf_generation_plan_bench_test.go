@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/leafrefscan"
+	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -102,6 +103,44 @@ func BenchmarkLeafGenerationPlanPersistedIndexReopen_SavedHome(b *testing.B) {
 	}
 }
 
+func BenchmarkLeafGenerationLiveStatsPersistedIndex_SavedHome(b *testing.B) {
+	fixture := benchmarkLeafGenerationPlanWorkFixture(b)
+	materialize := openLeafGenerationPlanDB(b, fixture, false)
+	if _, err := materialize.LeafGenerationPlan(context.Background(), LeafGenerationPlanOptions{}); err != nil {
+		_ = materialize.Close()
+		b.Fatalf("materialize LeafGenerationPlan: %v", err)
+	}
+	if err := materialize.Close(); err != nil {
+		b.Fatalf("close materialize db: %v", err)
+	}
+
+	db := openLeafGenerationPlanDB(b, fixture, true)
+	b.Cleanup(func() { _ = db.Close() })
+
+	db.writeMu.RLock()
+	snap := db.AcquireSnapshot()
+	db.writeMu.RUnlock()
+	if snap == nil {
+		b.Fatal(ErrClosed)
+	}
+	b.Cleanup(func() { _ = snap.Close() })
+	if len(snap.leafGenerationIDs) > 0 {
+		db.unpinLeafGenerationIDs(snap.leafGenerationIDs)
+		snap.leafGenerationIDs = snap.leafGenerationIDs[:0]
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		db.leafGenerationRecordLengthMu.Lock()
+		db.leafGenerationRecordLengthByFile = nil
+		db.leafGenerationRecordLengthMu.Unlock()
+		if _, err := db.scanLeafGenerationLiveStats(context.Background(), snap); err != nil {
+			b.Fatalf("scanLeafGenerationLiveStats: %v", err)
+		}
+	}
+}
+
 func BenchmarkLeafGenerationPlanCached_SavedHome(b *testing.B) {
 
 	db := openLeafGenerationPlanFixtureDB(b)
@@ -165,4 +204,82 @@ func BenchmarkLeafGenerationPlanLeafRefStats_SavedHome(b *testing.B) {
 	b.ReportMetric(float64(totalPtrs), "total_leafrefs")
 	b.ReportMetric(float64(uniquePtrs), "unique_leafrefs")
 	b.ReportMetric(float64(duplicatePtrs), "duplicate_leafrefs")
+}
+
+func BenchmarkLeafGenerationPlanLeafRefPageStats_SavedHome(b *testing.B) {
+	db := openLeafGenerationPlanFixtureDB(b)
+	var totalPages, uniquePages, duplicatePages, leafRefs int64
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		db.writeMu.RLock()
+		snap := db.AcquireSnapshot()
+		db.writeMu.RUnlock()
+		if snap == nil {
+			b.Fatal(ErrClosed)
+		}
+		if len(snap.leafGenerationIDs) > 0 {
+			db.unpinLeafGenerationIDs(snap.leafGenerationIDs)
+			snap.leafGenerationIDs = snap.leafGenerationIDs[:0]
+		}
+
+		seenPages := make(map[uint64]struct{}, 1024)
+		stack := make([]uint64, 0, 128)
+		totalPages, uniquePages, duplicatePages, leafRefs = 0, 0, 0, 0
+		for _, rootID := range []uint64{snap.state.RootPageID, snap.state.SystemRootPageID} {
+			if rootID == 0 {
+				continue
+			}
+			if _, ok := page.DecodeLeafRef(rootID); ok {
+				leafRefs++
+				continue
+			}
+			stack = append(stack, rootID)
+		}
+		for len(stack) > 0 {
+			pageID := stack[len(stack)-1]
+			stack = stack[:len(stack)-1]
+			totalPages++
+			if _, ok := seenPages[pageID]; ok {
+				duplicatePages++
+				continue
+			}
+			seenPages[pageID] = struct{}{}
+			uniquePages++
+			data, err := snap.idx.pager.Get(pageID)
+			if err != nil {
+				_ = snap.Close()
+				b.Fatalf("pager.Get(%d): %v", pageID, err)
+			}
+			n := node.NewNodeView(data)
+			switch n.Type() {
+			case page.PageTypeLeaf:
+				continue
+			case page.PageTypeInternal:
+				count := n.Count()
+				for j := uint16(0); j < count; j++ {
+					childID, err := n.GetInternalChildID(j)
+					if err != nil {
+						_ = snap.Close()
+						b.Fatalf("GetInternalChildID(%d): %v", j, err)
+					}
+					if _, ok := page.DecodeLeafRef(childID); ok {
+						leafRefs++
+						continue
+					}
+					stack = append(stack, childID)
+				}
+			default:
+				_ = snap.Close()
+				b.Fatalf("invalid page type %d on %d", n.Type(), pageID)
+			}
+		}
+		if err := snap.Close(); err != nil {
+			b.Fatalf("close snapshot: %v", err)
+		}
+	}
+	b.ReportMetric(float64(totalPages), "total_pages")
+	b.ReportMetric(float64(uniquePages), "unique_pages")
+	b.ReportMetric(float64(duplicatePages), "duplicate_pages")
+	b.ReportMetric(float64(leafRefs), "leafrefs")
 }

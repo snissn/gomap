@@ -282,38 +282,39 @@ func (db *DB) scanLeafGenerationRecordLengthIndexFromDisk(rawFileID uint32) (*le
 	return scanLeafGenerationRecordLengthIndexPath(path, page.ValueLogFileID(rawFileID))
 }
 
-func (db *DB) loadOrBuildLeafGenerationRecordLengthIndex(rawFileID uint32, set *valuelog.Set) (*leafGenerationRecordLengthIndex, error) {
+func (db *DB) buildLeafGenerationRecordLengthIndex(rawFileID uint32, set *valuelog.Set) (*leafGenerationRecordLengthIndex, error) {
+	if db == nil || rawFileID == 0 {
+		return &leafGenerationRecordLengthIndex{}, nil
+	}
+	if set != nil {
+		if seg := set.Files[page.ValueLogFileID(rawFileID)]; seg != nil && seg.File != nil {
+			return scanLeafGenerationRecordLengthIndex(seg)
+		}
+	}
+	return db.scanLeafGenerationRecordLengthIndexFromDisk(rawFileID)
+}
+
+func (db *DB) loadOrBuildLeafGenerationRecordLengthIndex(rawFileID uint32, set *valuelog.Set, persist bool) (*leafGenerationRecordLengthIndex, error) {
 	if db == nil || rawFileID == 0 {
 		return &leafGenerationRecordLengthIndex{}, nil
 	}
 	if idx, ok := db.loadLeafGenerationRecordLengthIndex(rawFileID); ok {
 		return idx, nil
 	}
-	if idx, ok, err := db.loadLeafGenerationRecordLengthIndexFromDisk(rawFileID); err != nil {
-		return nil, err
-	} else if ok {
-		db.storeLeafGenerationRecordLengthIndex(rawFileID, idx)
-		return idx, nil
-	}
-	if set != nil {
-		if seg := set.Files[page.ValueLogFileID(rawFileID)]; seg != nil && seg.File != nil {
-			idx, err := scanLeafGenerationRecordLengthIndex(seg)
-			if err != nil {
-				return nil, err
-			}
+	if persist {
+		if idx, ok, err := db.loadLeafGenerationRecordLengthIndexFromDisk(rawFileID); err != nil {
+			return nil, err
+		} else if ok {
 			db.storeLeafGenerationRecordLengthIndex(rawFileID, idx)
-			if !db.readOnly {
-				_ = saveLeafGenerationRecordLengthIndexFile(leafGenerationRecordLengthIndexPath(db.dir, rawFileID), rawFileID, idx)
-			}
 			return idx, nil
 		}
 	}
-	idx, err := db.scanLeafGenerationRecordLengthIndexFromDisk(rawFileID)
+	idx, err := db.buildLeafGenerationRecordLengthIndex(rawFileID, set)
 	if err != nil {
 		return nil, err
 	}
 	db.storeLeafGenerationRecordLengthIndex(rawFileID, idx)
-	if !db.readOnly {
+	if persist && !db.readOnly {
 		_ = saveLeafGenerationRecordLengthIndexFile(leafGenerationRecordLengthIndexPath(db.dir, rawFileID), rawFileID, idx)
 	}
 	return idx, nil
@@ -328,18 +329,29 @@ func (db *DB) leafGenerationRecordLengthForPlan(ptr page.LeafLogPtr, set *valuel
 		return 0, false, nil
 	}
 	gen, ok := view.Generations[genID]
-	if !ok || gen.State != leafGenerationStateSealed {
+	if !ok {
 		return 0, false, nil
 	}
-	idx, err := db.loadOrBuildLeafGenerationRecordLengthIndex(ptr.FileID, set)
+	persist := gen.State == leafGenerationStateSealed
+	idx, err := db.loadOrBuildLeafGenerationRecordLengthIndex(ptr.FileID, set, persist)
 	if err != nil {
 		return 0, false, err
 	}
-	length, ok := idx.lookup(ptr.Offset)
-	if !ok {
-		return 0, false, fmt.Errorf("leaf generation plan: missing record length for file=%d offset=%d", ptr.FileID, ptr.Offset)
+	if length, ok := idx.lookup(ptr.Offset); ok {
+		return length, true, nil
 	}
-	return length, true, nil
+	if !persist {
+		idx, err = db.buildLeafGenerationRecordLengthIndex(ptr.FileID, set)
+		if err != nil {
+			return 0, false, err
+		}
+		db.storeLeafGenerationRecordLengthIndex(ptr.FileID, idx)
+		if length, ok := idx.lookup(ptr.Offset); ok {
+			return length, true, nil
+		}
+		return 0, false, nil
+	}
+	return 0, false, fmt.Errorf("leaf generation plan: missing record length for file=%d offset=%d", ptr.FileID, ptr.Offset)
 }
 
 func scanLeafGenerationRecordLengthIndexPath(path string, fileID uint32) (*leafGenerationRecordLengthIndex, error) {

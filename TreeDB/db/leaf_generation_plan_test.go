@@ -353,7 +353,71 @@ func TestLeafGenerationRecordLengthForPlan_LoadsPersistedSidecarWithoutRescan(t 
 	}
 }
 
+func TestLeafGenerationRecordLengthForPlan_UsesWritableIndex(t *testing.T) {
+	db, _ := openLeafGenerationGCTestDB(t)
+
+	writeLeafGenerationKeys(t, db, "k", 256, 'a')
+
+	db.writeMu.RLock()
+	snap := db.AcquireSnapshot()
+	db.writeMu.RUnlock()
+	if snap == nil {
+		t.Fatal("expected snapshot")
+	}
+	defer func() { _ = snap.Close() }()
+	if len(snap.leafGenerationIDs) > 0 {
+		db.unpinLeafGenerationIDs(snap.leafGenerationIDs)
+		snap.leafGenerationIDs = snap.leafGenerationIDs[:0]
+	}
+	view := snap.state.LeafGenerations
+	if view == nil {
+		t.Fatal("expected leaf generation view")
+	}
+	currentGenID := view.CurrentGenerationID
+	var writablePtr page.LeafLogPtr
+	visit := func(ptr page.LeafLogPtr) error {
+		if view.FileToGeneration[ptr.FileID] == currentGenID && writablePtr.FileID == 0 {
+			writablePtr = ptr
+		}
+		return nil
+	}
+	for _, rootID := range []uint64{snap.state.RootPageID, snap.state.SystemRootPageID} {
+		if rootID == 0 || writablePtr.FileID != 0 {
+			continue
+		}
+		if err := leafrefscan.Walk(context.Background(), rootID, snap.idx.pager.Get, nil, visit); err != nil {
+			t.Fatalf("leafref walk: %v", err)
+		}
+	}
+	if writablePtr.FileID == 0 {
+		t.Fatal("expected writable leafref pointer")
+	}
+
+	want, err := db.valueLogRecordLengthForRewriteInSet(writablePtr.ValuePtr(), snap.state.ValueLogSet)
+	if err != nil {
+		t.Fatalf("valueLogRecordLengthForRewriteInSet: %v", err)
+	}
+	counter := withValueLogRecordLengthHeaderReadCounter(t)
+	got, usedIndex, err := db.leafGenerationRecordLengthForPlan(writablePtr, snap.state.ValueLogSet, view)
+	if err != nil {
+		t.Fatalf("leafGenerationRecordLengthForPlan: %v", err)
+	}
+	if !usedIndex {
+		t.Fatal("expected writable leaf length lookup to use in-memory index")
+	}
+	if got != want {
+		t.Fatalf("record length=%d, want %d", got, want)
+	}
+	if got := counter.Load(); got != 0 {
+		t.Fatalf("writable index path unexpectedly read %d headers", got)
+	}
+	if idx, ok := db.loadLeafGenerationRecordLengthIndex(writablePtr.FileID); !ok || idx == nil {
+		t.Fatalf("expected cached record-length index for writable file %d", writablePtr.FileID)
+	}
+}
+
 func TestLeafGenerationRecordLengthForPlan_UsesSealedIndex(t *testing.T) {
+
 	db, leafLog := openLeafGenerationGCTestDB(t)
 
 	writeLeafGenerationKeys(t, db, "k", 2048, 'a')
