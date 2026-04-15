@@ -1277,6 +1277,39 @@ Sprint 4 goal:
 - `leafgen/s4-delete-mixed-leaf-maintenance`
 - `leafgen/s4-crash-hardening-docs-and-final-validation`
 
+### Sprint 4 PR-By-PR Execution Plan
+
+`leafgen/s4-value-only-rewrite`
+
+- remove leaf-page rewrite execution from [TreeDB/db/vlog_rewrite.go](/home/mikers/dev/snissn/gomap/TreeDB/db/vlog_rewrite.go): delete `rewriteLeafRefsOnline`, `leafRefRewriteCtx`, `LeafRefRecordsCopied`, and `LeafRefBytesCopied`
+- remove leaf-page live-byte planning from [TreeDB/db/vlog_rewrite.go](/home/mikers/dev/snissn/gomap/TreeDB/db/vlog_rewrite.go) and [TreeDB/db/vlog_rewrite_chunk_plan.go](/home/mikers/dev/snissn/gomap/TreeDB/db/vlog_rewrite_chunk_plan.go): delete `collectLeafRefValueLogLiveBytes`, `collectLeafRefPtrLiveBytes`, `collectLeafRefValueLogLiveBytesByChunk`, and `collectLeafRefPtrLiveBytesByChunk`
+- keep `LeafRef` read semantics intact; only delete generic rewrite ownership of outer-leaf pages
+- migrate or delete rewrite tests that assume leafref compaction still lives in generic rewrite: [TreeDB/db/vlog_leafref_maintenance_test.go](/home/mikers/dev/snissn/gomap/TreeDB/db/vlog_leafref_maintenance_test.go), the leafref-specific cases in [TreeDB/db/vlog_rewrite_test.go](/home/mikers/dev/snissn/gomap/TreeDB/db/vlog_rewrite_test.go), and the leafref portions of [TreeDB/db/vlog_rewrite_bench_test.go](/home/mikers/dev/snissn/gomap/TreeDB/db/vlog_rewrite_bench_test.go)
+- required proof before PR merge:
+  - unit: `ValueLogRewritePlan` on a split-outer-leaf DB with no true value pointers returns no leaf-driven candidates
+  - unit: `ValueLogRewriteOnline` copies only value records and never increments leaf-specific counters because those counters no longer exist
+  - saved-home: planner/executor on a copied split-outer-leaf home show value-only behavior while `leafgen-plan` still reports leaf reclaim opportunities separately
+
+`leafgen/s4-delete-mixed-leaf-maintenance`
+
+- remove leaf reachability merges from [TreeDB/db/vlog_gc_incremental.go](/home/mikers/dev/snissn/gomap/TreeDB/db/vlog_gc_incremental.go): delete `mergeLeafRefValueLogRefs`, `collectLeafRefValueLogRefCounts`, `shouldScanLeafRefValueLogRefs`, and related state-tracking helpers
+- remove cached mixed counters from [TreeDB/caching/db.go](/home/mikers/dev/snissn/gomap/TreeDB/caching/db.go): delete `vlogGenerationRewriteLeafRefRecordsCopied`, `vlogGenerationRewriteLeafRefBytesCopied`, and their exported stats
+- make the split explicit in operator stats: `leaf_vlog` lifecycle comes only from leaf-generation stats, and `value_vlog` stats describe only value records
+- required proof before PR merge:
+  - unit: `value_vlog` GC no longer scans leaf pages or merges leaf refs into value refcounts in split mode
+  - unit: leaf-generation GC/pack tests still cover leaf reclaim after mixed GC logic is deleted
+  - saved-home: `value_vlog` retained bytes remain stable when only leaf pages churn, and `leafgen-plan` remains the only source of leaf reclaim accounting
+
+`leafgen/s4-crash-hardening-docs-and-final-validation`
+
+- harden generation state transitions around [TreeDB/db/leaf_generation_manifest.go](/home/mikers/dev/snissn/gomap/TreeDB/db/leaf_generation_manifest.go), publish paths, and generation deletion so crash ordering is explicit and testable
+- document final operator model: `leaf_vlog` = generation GC + optional bounded pack, `value_vlog` = value-only GC/rewrite, `wal` = durability log only
+- assemble the milestone validation package from saved-home and Celestia runs after the control-plane deletion PRs are green
+- required proof before PR merge:
+  - crash-point tests cover seal, publish, retire, delete ordering
+  - saved-home validation package is updated after the control-plane split
+  - final Celestia validation reports separate leaf/value metrics and shows no background page-by-page leaf rewrite activity
+
 ### Sprint 4 Code Work
 
 - remove leaf-ref rewrite from the common path in
@@ -1299,7 +1332,12 @@ Sprint 4 goal:
 - crash after old generations are marked retiring but before deletion completes
 - generic value rewrite no longer rewrites or scans leaf pages in the common
   path
+- generic value rewrite tests fail if they observe leafref-specific stats or
+  leaf-page copy activity
+- value-log incremental GC no longer walks leafref pages in split mode
 - leaf maintenance metrics are separate from value maintenance metrics
+- legacy leafref rewrite tests/benches are either deleted or replaced with
+  leaf-generation pack tests/benches
 
 ### Sprint 4 Integration / Large-Home Validation
 
