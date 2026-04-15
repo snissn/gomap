@@ -39,7 +39,7 @@ func TestUsageTextMentionsLeafGenerationGC(t *testing.T) {
 }
 
 func TestChooseLeafGenerationPackIDs(t *testing.T) {
-	ids, err := chooseLeafGenerationPackIDs([]uint64{7, 11}, false, nil)
+	ids, err := chooseLeafGenerationPackIDs([]uint64{7, 11}, false, nil, 0, 0)
 	if err != nil {
 		t.Fatalf("explicit choose err=%v", err)
 	}
@@ -47,8 +47,15 @@ func TestChooseLeafGenerationPackIDs(t *testing.T) {
 		t.Fatalf("explicit ids=%v, want [7 11]", ids)
 	}
 
-	plan := &treedb.LeafGenerationPlan{Admission: "eligible", CandidateGenerationIDs: []uint64{3, 5}}
-	ids, err = chooseLeafGenerationPackIDs(nil, true, plan)
+	plan := &treedb.LeafGenerationPlan{
+		Admission:              "eligible",
+		CandidateGenerationIDs: []uint64{3, 5},
+		Candidates: []treedb.LeafGenerationPlanGeneration{
+			{GenerationID: 3, BytesToCopy: 100},
+			{GenerationID: 5, BytesToCopy: 200},
+		},
+	}
+	ids, err = chooseLeafGenerationPackIDs(nil, true, plan, 0, 0)
 	if err != nil {
 		t.Fatalf("from-plan choose err=%v", err)
 	}
@@ -56,19 +63,39 @@ func TestChooseLeafGenerationPackIDs(t *testing.T) {
 		t.Fatalf("from-plan ids=%v, want [3 5]", ids)
 	}
 
-	if _, err := chooseLeafGenerationPackIDs([]uint64{1}, true, plan); err == nil {
+	if _, err := chooseLeafGenerationPackIDs([]uint64{1}, true, plan, 0, 0); err == nil {
 		t.Fatalf("expected conflicting explicit/from-plan selection to fail")
 	}
-	if _, err := chooseLeafGenerationPackIDs(nil, true, nil); err == nil {
+
+	ids, err = chooseLeafGenerationPackIDs(nil, true, plan, 1, 0)
+	if err != nil {
+		t.Fatalf("max-generations choose err=%v", err)
+	}
+	if got, want := len(ids), 1; got != want || ids[0] != 3 {
+		t.Fatalf("max-generations ids=%v, want [3]", ids)
+	}
+
+	ids, err = chooseLeafGenerationPackIDs(nil, true, plan, 0, 150)
+	if err != nil {
+		t.Fatalf("max-bytes choose err=%v", err)
+	}
+	if got, want := len(ids), 1; got != want || ids[0] != 3 {
+		t.Fatalf("max-bytes ids=%v, want [3]", ids)
+	}
+
+	if _, err := chooseLeafGenerationPackIDs(nil, true, plan, 0, 50); err == nil {
+		t.Fatalf("expected oversize first candidate to fail")
+	}
+	if _, err := chooseLeafGenerationPackIDs(nil, true, nil, 0, 0); err == nil {
 		t.Fatalf("expected nil plan to fail")
 	}
-	if _, err := chooseLeafGenerationPackIDs(nil, true, &treedb.LeafGenerationPlan{Admission: "reclaim_per_copy_too_low", CandidateGenerationIDs: []uint64{3}}); err == nil {
+	if _, err := chooseLeafGenerationPackIDs(nil, true, &treedb.LeafGenerationPlan{Admission: "reclaim_per_copy_too_low", CandidateGenerationIDs: []uint64{3}}, 0, 0); err == nil {
 		t.Fatalf("expected non-eligible plan admission to fail")
 	}
-	if _, err := chooseLeafGenerationPackIDs(nil, true, &treedb.LeafGenerationPlan{Admission: "eligible"}); err == nil {
+	if _, err := chooseLeafGenerationPackIDs(nil, true, &treedb.LeafGenerationPlan{Admission: "eligible"}, 0, 0); err == nil {
 		t.Fatalf("expected empty eligible plan to fail")
 	}
-	if _, err := chooseLeafGenerationPackIDs(nil, false, nil); err == nil {
+	if _, err := chooseLeafGenerationPackIDs(nil, false, nil, 0, 0); err == nil {
 		t.Fatalf("expected empty explicit selection to fail")
 	}
 }

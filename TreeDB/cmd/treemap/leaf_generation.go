@@ -86,7 +86,7 @@ func runLeafGenerationPlan(dir string, args []string) {
 	}
 }
 
-func chooseLeafGenerationPackIDs(explicit []uint64, fromPlan bool, plan *treedb.LeafGenerationPlan) ([]uint64, error) {
+func chooseLeafGenerationPackIDs(explicit []uint64, fromPlan bool, plan *treedb.LeafGenerationPlan, maxGenerations int, maxBytesToCopy int64) ([]uint64, error) {
 	if fromPlan {
 		if len(explicit) > 0 {
 			return nil, fmt.Errorf("leafgen-pack accepts either -generation-ids or -from-plan, not both")
@@ -97,10 +97,28 @@ func chooseLeafGenerationPackIDs(explicit []uint64, fromPlan bool, plan *treedb.
 		if plan.Admission != "eligible" {
 			return nil, fmt.Errorf("leafgen-pack plan admission=%s", plan.Admission)
 		}
-		if len(plan.CandidateGenerationIDs) == 0 {
+		if len(plan.Candidates) == 0 {
 			return nil, fmt.Errorf("leafgen-pack plan produced no candidate generations")
 		}
-		return append([]uint64(nil), plan.CandidateGenerationIDs...), nil
+		selected := make([]uint64, 0, len(plan.Candidates))
+		selectedBytesToCopy := int64(0)
+		for _, gen := range plan.Candidates {
+			if maxGenerations > 0 && len(selected) >= maxGenerations {
+				break
+			}
+			if maxBytesToCopy > 0 && gen.BytesToCopy > 0 && selectedBytesToCopy+gen.BytesToCopy > maxBytesToCopy {
+				if len(selected) == 0 {
+					return nil, fmt.Errorf("leafgen-pack first candidate bytes_to_copy=%d exceeds max-bytes-to-copy=%d", gen.BytesToCopy, maxBytesToCopy)
+				}
+				break
+			}
+			selected = append(selected, gen.GenerationID)
+			selectedBytesToCopy += gen.BytesToCopy
+		}
+		if len(selected) == 0 {
+			return nil, fmt.Errorf("leafgen-pack plan produced no candidate generations within limits")
+		}
+		return selected, nil
 	}
 	if len(explicit) == 0 {
 		return nil, fmt.Errorf("leafgen-pack requires at least one generation id")
@@ -121,6 +139,8 @@ func runLeafGenerationPack(dir string, args []string) {
 	minExpectedReclaimBytes := fs.Int64("min-expected-reclaim-bytes", 0, "Require at least this many reclaimable bytes unless -force")
 	minExpectedReclaimRatioPPM := fs.Int("min-expected-reclaim-ratio-ppm", 0, "Require at least this reclaim ratio in ppm unless -force")
 	minReclaimPerByteCopiedPPM := fs.Int("min-reclaim-per-byte-copied-ppm", 10000, "Require at least this many reclaimable bytes per byte copied, in ppm, unless -force")
+	maxGenerations := fs.Int("max-generations", 0, "When -from-plan is used, pack at most this many candidate generations")
+	maxBytesToCopy := fs.Int64("max-bytes-to-copy", 0, "When -from-plan is used, cap the selected candidate prefix by bytes_to_copy")
 	_ = fs.Parse(args)
 
 	if !*rw {
@@ -149,7 +169,7 @@ func runLeafGenerationPack(dir string, args []string) {
 		}
 		plan = &resolved
 	}
-	generationIDs, err = chooseLeafGenerationPackIDs(generationIDs, *fromPlan, plan)
+	generationIDs, err = chooseLeafGenerationPackIDs(generationIDs, *fromPlan, plan, *maxGenerations, *maxBytesToCopy)
 	if err != nil {
 		fatalf("%v", err)
 	}

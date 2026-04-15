@@ -1174,6 +1174,11 @@ Sprint 3 goal:
 - `leafgen/s3-online-pack-runner`
 - `leafgen/s3-pack-observability-and-dwell-validation`
 
+### Sprint 3 Current Local Status
+
+- manual `leafgen-pack -from-plan` now supports bounded prefix selection with `-max-generations` and `-max-bytes-to-copy`, so the first online-style admission surface is available to operators before any background scheduler exists
+- the bounded manual path is intentionally fail-closed when the top-ranked candidate alone exceeds `-max-bytes-to-copy`; it does not silently blow the requested copy budget
+
 ### Sprint 3 Code Work
 
 - add a bounded online pack path in [TreeDB/db](/home/mikers/dev/snissn/gomap/TreeDB/db)
