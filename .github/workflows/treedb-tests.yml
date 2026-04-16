@@ -69,14 +69,27 @@ jobs:
               go test -json -timeout 30m -p 1 $packages | tee treedb-test.jsonl
               ;;
             windows-caching-heavy)
-              regex="^($(grep -v '^#' ../.github/ci/treedb_windows_caching_heavy_tests.txt | sed '/^$/d' | paste -sd'|' -))$"
+              heavy_file="$(mktemp)"
+              tr -d '' < ../.github/ci/treedb_windows_caching_heavy_tests.txt | grep -v '^#' | sed '/^$/d' > "$heavy_file"
+              regex="^($(paste -sd'|' "$heavy_file"))$"
               echo "TreeDB/caching heavy regex=${regex}"
               go test -json -timeout 30m -p 1 ./caching -run "$regex" | tee treedb-test.jsonl
+              rm -f "$heavy_file"
               ;;
             windows-caching-rest)
-              regex="^($(grep -v '^#' ../.github/ci/treedb_windows_caching_heavy_tests.txt | sed '/^$/d' | paste -sd'|' -))$"
-              echo "TreeDB/caching rest skip regex=${regex}"
-              go test -json -timeout 30m -p 1 ./caching -skip "$regex" | tee treedb-test.jsonl
+              heavy_file="$(mktemp)"
+              rest_file="$(mktemp)"
+              tr -d '' < ../.github/ci/treedb_windows_caching_heavy_tests.txt | grep -v '^#' | sed '/^$/d' > "$heavy_file"
+              go test ./caching -list 'Test.*' | grep '^Test' | grep -F -x -v -f "$heavy_file" > "$rest_file"
+              rest_regex="^($(paste -sd'|' "$rest_file"))$"
+              if [ "$rest_regex" = '^()$' ]; then
+                echo "no non-heavy caching tests found" >&2
+                rm -f "$heavy_file" "$rest_file"
+                exit 1
+              fi
+              echo "TreeDB/caching rest regex=${rest_regex}"
+              go test -json -timeout 30m -p 1 ./caching -run "$rest_regex" | tee treedb-test.jsonl
+              rm -f "$heavy_file" "$rest_file"
               ;;
             *)
               echo "unknown shard kind: ${{ matrix.shard_kind }}" >&2
