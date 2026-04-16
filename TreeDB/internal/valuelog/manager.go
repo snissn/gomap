@@ -1259,7 +1259,16 @@ func (m *Manager) PromoteCurrentWritable(fileID uint32) error {
 	if prevID, ok := m.currentWritableByLane[lane]; ok && prevID != 0 && prevID != fileID {
 		if prev := m.files[prevID]; prev != nil {
 			prev.currentWritable.Store(false)
-			prev.retirePersistentMmapToDead()
+			if data, _ := prev.mmapData.Load().([]byte); len(data) > 0 {
+				targetSize := prev.sealedLazyMmapTargetSize()
+				if allow, _ := m.allowSealedLazyMmapLocked(prev, targetSize); allow {
+					prev.sealedLazyMmapDenied.Store(false)
+					prev.sealedLazyMmapDeniedCountCap.Store(0)
+					prev.sealedLazyMmapDeniedBytesCap.Store(0)
+				} else {
+					prev.retirePersistentMmapToDead()
+				}
+			}
 		}
 	}
 	f.currentWritable.Store(true)
