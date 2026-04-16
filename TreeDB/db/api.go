@@ -523,10 +523,6 @@ func (db *DB) Stats() map[string]string {
 		return stats
 	}
 	defer func() { _ = snap.Close() }()
-	if len(snap.leafGenerationIDs) > 0 {
-		db.unpinLeafGenerationIDs(snap.leafGenerationIDs)
-		snap.leafGenerationIDs = snap.leafGenerationIDs[:0]
-	}
 
 	state := snap.state
 	idx := snap.idx
@@ -535,7 +531,7 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.root_page"] = fmt.Sprintf("%d", state.RootPageID)
 	stats["treedb.system_root_page"] = fmt.Sprintf("%d", state.SystemRootPageID)
 
-	writeLeafGenerationMetrics(stats, db.collectLeafGenerationMetrics(state.ValueLogSet))
+	writeLeafGenerationMetrics(stats, db.collectLeafGenerationMetrics(state.ValueLogSet, snap.leafGenerationIDs))
 
 	stats["treedb.pages.total"] = fmt.Sprintf("%d", idx.pager.PageCount())
 	// PR1 generational scaffolding (backend/read-only path). Cached mode exports
