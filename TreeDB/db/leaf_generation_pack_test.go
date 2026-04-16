@@ -154,8 +154,8 @@ func TestNoteCreatedLeafGenerationFileIDsInManifest_OnlyReturnsNewLeafFiles(t *t
 	}
 }
 
-func TestPersistLeafGenerationManifestAndRecordLengthIndexes_ReturnsSidecarError(t *testing.T) {
-	db, _, _ := openLeafGenerationPackTestDB(t)
+func TestPersistLeafGenerationManifestAndRecordLengthIndexes_ReportsSidecarError(t *testing.T) {
+	db, _, dir := openLeafGenerationPackTestDB(t)
 	if db.leafGenerationManifest == nil {
 		t.Fatal("expected leaf generation manifest")
 	}
@@ -170,13 +170,27 @@ func TestPersistLeafGenerationManifestAndRecordLengthIndexes_ReturnsSidecarError
 	}
 	db.leafGenerationRecordLengthMu.Unlock()
 
+	var reported error
+	db.notifyError = func(err error) {
+		reported = err
+	}
+
 	err := db.persistLeafGenerationManifestAndRecordLengthIndexes(db.leafGenerationManifest.clone(), []uint32{rawFileID})
-	if err == nil {
-		t.Fatal("expected record-length sidecar persist error")
+	if err != nil {
+		t.Fatalf("persistLeafGenerationManifestAndRecordLengthIndexes: %v", err)
 	}
-	if !strings.Contains(err.Error(), "raw file 77") {
-		t.Fatalf("error=%q, want raw file id context", err)
+	if reported == nil {
+		t.Fatal("expected record-length sidecar persist error to be reported")
 	}
+	if !strings.Contains(reported.Error(), "raw file 77") {
+		t.Fatalf("reported error=%q, want raw file id context", reported)
+	}
+	if _, err := os.Stat(leafGenerationManifestPath(LeafLogDirPath(dir))); err != nil {
+		t.Fatalf("manifest stat: %v", err)
+	}
+	db.bgErrMu.Lock()
+	db.bgErr = nil
+	db.bgErrMu.Unlock()
 }
 
 func TestLeafGenerationPack_FinalizeFailpointCleansCreatedSegments(t *testing.T) {
