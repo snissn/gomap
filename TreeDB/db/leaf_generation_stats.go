@@ -36,7 +36,7 @@ type leafGenerationMetrics struct {
 	reachabilitySubtreeCachePages int
 }
 
-func (db *DB) collectLeafGenerationMetrics(set *valuelog.Set) leafGenerationMetrics {
+func (db *DB) collectLeafGenerationMetrics(set *valuelog.Set, excludePinIDs []uint64) leafGenerationMetrics {
 	var m leafGenerationMetrics
 	if db == nil || !db.indexOuterLeavesInValueLog {
 		return m
@@ -53,6 +53,13 @@ func (db *DB) collectLeafGenerationMetrics(set *valuelog.Set) leafGenerationMetr
 	db.leafGenerationSubtreeStatsMu.RLock()
 	m.reachabilitySubtreeCachePages = len(db.leafGenerationSubtreeStatsByPage)
 	db.leafGenerationSubtreeStatsMu.RUnlock()
+
+	excludedPins := make(map[uint64]struct{}, len(excludePinIDs))
+	for _, id := range excludePinIDs {
+		if id != 0 {
+			excludedPins[id] = struct{}{}
+		}
+	}
 
 	for _, gen := range manifest.Generations {
 		genFiles := len(gen.FileIDs)
@@ -94,8 +101,13 @@ func (db *DB) collectLeafGenerationMetrics(set *valuelog.Set) leafGenerationMetr
 			m.bytesDeleted += genBytes
 		}
 		if pins := db.leafGenerationPins.count(gen.GenerationID); pins > 0 {
-			m.generationsPinned++
-			m.pinsTotal += pins
+			if _, ok := excludedPins[gen.GenerationID]; ok && pins > 0 {
+				pins--
+			}
+			if pins > 0 {
+				m.generationsPinned++
+				m.pinsTotal += pins
+			}
 		}
 	}
 	return m

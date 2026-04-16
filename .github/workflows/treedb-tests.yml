@@ -70,7 +70,11 @@ jobs:
               ;;
             windows-caching-heavy)
               heavy_file="$(mktemp)"
+<<<<<<< HEAD
               tr -d '' < ../.github/ci/treedb_windows_caching_heavy_tests.txt | grep -v '^#' | sed '/^$/d' > "$heavy_file"
+=======
+              tr -d '\r' < ../.github/ci/treedb_windows_caching_heavy_tests.txt | grep -v '^#' | sed '/^$/d' > "$heavy_file"
+>>>>>>> 2bc9cb67 (TreeDB: fix leaf-pack review regressions)
               regex="^($(paste -sd'|' "$heavy_file"))$"
               echo "TreeDB/caching heavy regex=${regex}"
               go test -json -timeout 30m -p 1 ./caching -run "$regex" | tee treedb-test.jsonl
@@ -79,7 +83,7 @@ jobs:
             windows-caching-rest)
               heavy_file="$(mktemp)"
               rest_file="$(mktemp)"
-              tr -d '' < ../.github/ci/treedb_windows_caching_heavy_tests.txt | grep -v '^#' | sed '/^$/d' > "$heavy_file"
+              tr -d '\r' < ../.github/ci/treedb_windows_caching_heavy_tests.txt | grep -v '^#' | sed '/^$/d' > "$heavy_file"
               go test ./caching -list 'Test.*' | grep '^Test' | grep -F -x -v -f "$heavy_file" > "$rest_file"
               rest_regex="^($(paste -sd'|' "$rest_file"))$"
               if [ "$rest_regex" = '^()$' ]; then

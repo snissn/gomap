@@ -72,7 +72,7 @@ func (c *leafRefRewriteCtx) readLeafPage(ptr page.ValuePtr) ([]byte, error) {
 	if c == nil {
 		return nil, fmt.Errorf("vlog-rewrite: value-log snapshot reader unavailable")
 	}
-	if c.leafReader == nil && (c.db == nil || c.db.valueLogManager == nil) {
+	if c.leafReader == nil && c.leafToer == nil && (c.db == nil || c.db.valueLogManager == nil) {
 		return nil, fmt.Errorf("vlog-rewrite: value-log snapshot reader unavailable")
 	}
 	if c.db != nil && c.db.valueLogManager != nil {
@@ -243,9 +243,6 @@ func (c *leafRefRewriteCtx) rewriteNode(id uint64) (uint64, bool, error) {
 			if !ok {
 				return id, false, nil
 			}
-		}
-		if c.leafReader == nil {
-			return id, false, fmt.Errorf("vlog-rewrite: value-log snapshot reader unavailable")
 		}
 		if c.writer == nil || c.ridAlloc == nil {
 			return id, false, fmt.Errorf("vlog-rewrite: rewrite writer unavailable")
