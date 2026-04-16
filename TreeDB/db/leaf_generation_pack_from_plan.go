@@ -47,8 +47,9 @@ func (db *DB) LeafGenerationPackFromPlan(ctx context.Context, opts LeafGeneratio
 		return LeafGenerationPackStats{}, err
 	}
 	selection, err := SelectLeafGenerationPackCandidates(plan, LeafGenerationPackSelectOptions{
-		MaxGenerations: opts.MaxGenerations,
-		MaxBytesToCopy: opts.MaxBytesToCopy,
+		MaxGenerations:             opts.MaxGenerations,
+		MaxBytesToCopy:             opts.MaxBytesToCopy,
+		MinReclaimPerByteCopiedPPM: opts.MinReclaimPerByteCopiedPPM,
 	})
 	if err != nil {
 		return LeafGenerationPackStats{}, err
