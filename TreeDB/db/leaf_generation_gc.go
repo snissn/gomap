@@ -84,11 +84,20 @@ func (db *DB) LeafGenerationGC(ctx context.Context, opts LeafGenerationGCOptions
 		return stats, err
 	}
 	snap = nil
+	filePaths := db.leafGenerationFilePaths(manifest)
 	intermediateChanged := false
 	zombieFileIDs := make(map[uint32]struct{})
 	for i := range manifest.Generations {
 		gen := &manifest.Generations[i]
-		genBytes := leafGenerationRecordBytesTotal(*gen, filePaths)
+		genBytes := int64(0)
+		genBytesKnown := false
+		loadGenBytes := func() int64 {
+			if !genBytesKnown {
+				genBytes = leafGenerationRecordBytesTotal(*gen, filePaths, db.reportError)
+				genBytesKnown = true
+			}
+			return genBytes
+		}
 		stats.GenerationsTotal++
 		if gen.State == leafGenerationStateDeleted {
 			continue
@@ -117,8 +126,8 @@ func (db *DB) LeafGenerationGC(ctx context.Context, opts LeafGenerationGCOptions
 			continue
 		}
 		stats.GenerationsEligible++
-		if genBytes > 0 {
-			stats.BytesEligible += genBytes
+		if bytes := loadGenBytes(); bytes > 0 {
+			stats.BytesEligible += bytes
 		}
 		if opts.DryRun {
 			continue
@@ -128,8 +137,8 @@ func (db *DB) LeafGenerationGC(ctx context.Context, opts LeafGenerationGCOptions
 			if currentCommitSeq > gen.DeletedCommitSeq {
 				gen.DeletedCommitSeq = currentCommitSeq
 			}
-			if genBytes > 0 {
-				stats.BytesDeleted += genBytes
+			if bytes := loadGenBytes(); bytes > 0 {
+				stats.BytesDeleted += bytes
 			}
 			for _, fileID := range gen.FileIDs {
 				if fileID == 0 {
@@ -226,7 +235,7 @@ func leafGenerationFallbackPath(rootDir string, fileID uint32) string {
 	return filepath.Join(LeafLogDirPath(rootDir), fmt.Sprintf("value-l%d-%06d.log", lane, seq))
 }
 
-func leafGenerationRecordBytesTotal(gen leafGenerationRecord, filePaths map[uint32]string) int64 {
+func leafGenerationRecordBytesTotal(gen leafGenerationRecord, filePaths map[uint32]string, report func(error)) int64 {
 	var total int64
 	for _, fileID := range gen.FileIDs {
 		if fileID == 0 {
@@ -238,6 +247,9 @@ func leafGenerationRecordBytesTotal(gen leafGenerationRecord, filePaths map[uint
 		}
 		info, err := os.Stat(path)
 		if err != nil {
+			if report != nil && !os.IsNotExist(err) {
+				report(fmt.Errorf("treedb: stat leaf generation file %d (%s): %w", fileID, path, err))
+			}
 			continue
 		}
 		total += info.Size()
