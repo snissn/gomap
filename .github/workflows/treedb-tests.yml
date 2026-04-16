@@ -95,7 +95,7 @@ jobs:
               rest_file="$(mktemp)"
               rest_shard_file="$(mktemp)"
               tr -d '\r' < ../.github/ci/treedb_windows_caching_heavy_tests.txt | grep -v '^#' | sed '/^$/d' > "$heavy_file"
-              go test ./caching -list 'Test.*' | grep '^Test' | grep -F -x -v -f "$heavy_file" > "$rest_file"
+              go test ./caching -list 'Test.*' | tr -d '\r' | grep '^Test' | grep -F -x -v -f "$heavy_file" > "$rest_file"
               rest_shard_index="${{ matrix.rest_shard_index }}"
               rest_shard_count="${{ matrix.rest_shard_count }}"
               if [ -z "$rest_shard_index" ]; then

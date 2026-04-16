@@ -3,10 +3,12 @@ package db
 import (
 	"context"
 	"fmt"
-	"github.com/snissn/gomap/TreeDB/node"
-	"github.com/snissn/gomap/TreeDB/page"
+	"math/bits"
 	"sort"
 	"sync"
+
+	"github.com/snissn/gomap/TreeDB/node"
+	"github.com/snissn/gomap/TreeDB/page"
 )
 
 const (
@@ -322,12 +324,18 @@ func compareDeadPerLive(aDead, aLive, bDead, bLive int64) int {
 	if bLive == 0 {
 		bLive = 1
 	}
-	left := aDead * bLive
-	right := bDead * aLive
-	if left > right {
+	leftHi, leftLo := bits.Mul64(uint64(aDead), uint64(bLive))
+	rightHi, rightLo := bits.Mul64(uint64(bDead), uint64(aLive))
+	if leftHi > rightHi {
 		return 1
 	}
-	if left < right {
+	if leftHi < rightHi {
+		return -1
+	}
+	if leftLo > rightLo {
+		return 1
+	}
+	if leftLo < rightLo {
 		return -1
 	}
 	return 0
