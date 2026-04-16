@@ -1643,6 +1643,9 @@ func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired [
 	watermarkHold += time.Since(holdStart)
 
 	leafPageSegmentRegistered := false
+	if db.testFailFinalizeCommit.Load() {
+		return post, errTestFinalizeCommitFailpoint
+	}
 	if forceValueLogRefresh && db.valueLogManager != nil {
 		registered, err := db.ensureLeafPageLogSegmentRegistered(nextMeta.CommitSeq)
 		if err != nil {
@@ -1650,10 +1653,6 @@ func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired [
 		}
 		leafPageSegmentRegistered = registered
 		post.drainLeafGenerationPending = registered
-	}
-
-	if db.testFailFinalizeCommit.Load() {
-		return post, errTestFinalizeCommitFailpoint
 	}
 
 	// 3. Write Meta - No DB Lock
@@ -1761,7 +1760,7 @@ func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired [
 	return post, nil
 }
 
-func (db *DB) finalizeCommitPostWork(post finalizeCommitPost) {
+func (db *DB) finalizeCommitPostWork(post finalizeCommitPost) error {
 	var durPrune time.Duration
 
 	if post.vlogRefDelta != nil {
@@ -1789,6 +1788,7 @@ func (db *DB) finalizeCommitPostWork(post finalizeCommitPost) {
 		}
 	}
 
+	var postErr error
 	if post.oldState != nil {
 		_ = db.valueLogManager.Release(post.oldState.ValueLogSet)
 	}
@@ -1809,9 +1809,11 @@ func (db *DB) finalizeCommitPostWork(post finalizeCommitPost) {
 		db.commitMu.Unlock()
 		if persistErr != nil {
 			db.reportError(persistErr)
+			postErr = errors.Join(postErr, persistErr)
 		}
 		if pendingErr != nil {
 			db.reportError(pendingErr)
+			postErr = errors.Join(postErr, pendingErr)
 		}
 	}
 
@@ -1830,6 +1832,7 @@ func (db *DB) finalizeCommitPostWork(post finalizeCommitPost) {
 			time.Since(post.start),
 		)
 	}
+	return postErr
 }
 
 // finalizeCommit handles durability and state updates.
@@ -1838,8 +1841,7 @@ func (db *DB) finalizeCommit(newRootID uint64, sysRootID uint64, retired []uint6
 	if err != nil {
 		return err
 	}
-	db.finalizeCommitPostWork(post)
-	return nil
+	return db.finalizeCommitPostWork(post)
 }
 
 // Commit persists the new root (Sync=true by default).

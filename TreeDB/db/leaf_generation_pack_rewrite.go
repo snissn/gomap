@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 
 	"github.com/snissn/gomap/TreeDB/internal/adaptive"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
@@ -16,6 +17,28 @@ import (
 const leafRefRewriteMapInitCap = 128    // initial map capacity for small leafref rewrite batches
 const leafRefRewriteInlineChildCap = 64 // stack-backed child-id scratch for common small internal nodes
 const leafRefRewriteInlineRemapCap = 8  // inline remap cache before promoting to map
+
+func (db *DB) cleanupRewriteCreatedSegments(createdSegments []rewriteCreatedSegment) error {
+	if len(createdSegments) == 0 {
+		return nil
+	}
+	var errs []error
+	for _, seg := range createdSegments {
+		if seg.fileID == 0 || seg.path == "" {
+			continue
+		}
+		if db != nil && db.valueLogManager != nil && db.valueLogManager.HasSegment(seg.fileID) {
+			if err := db.valueLogManager.RemoveSegmentForce(seg.fileID); err != nil {
+				errs = append(errs, fmt.Errorf("remove rewrite-created segment %d: %w", seg.fileID, err))
+			}
+			continue
+		}
+		if err := os.Remove(seg.path); err != nil && !os.IsNotExist(err) {
+			errs = append(errs, fmt.Errorf("remove rewrite-created segment %d: %w", seg.fileID, err))
+		}
+	}
+	return errors.Join(errs...)
+}
 
 type leafRefRewriteCtx struct {
 	ctx context.Context
@@ -450,13 +473,21 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 	if err != nil {
 		return 0, 0, err
 	}
+	cleanupCreatedSegments := func(baseErr error) (int, int64, error) {
+		closeErr := writer.Close()
+		cleanupErr := db.cleanupRewriteCreatedSegments(createdSegments)
+		if closeErr != nil || cleanupErr != nil {
+			baseErr = errors.Join(baseErr, closeErr, cleanupErr)
+		}
+		return 0, 0, baseErr
+	}
 	if len(createdSegments) > 0 {
 		// Register rewrite-created segments before commit publication so
 		// finalizeCommit can publish CurrentSetNoRefresh without forcing a
 		// filesystem rescan in leafref-heavy rewrite paths.
 		for _, seg := range createdSegments {
 			if err := db.valueLogManager.RegisterSegment(seg.path, seg.fileID); err != nil {
-				return 0, 0, err
+				return cleanupCreatedSegments(err)
 			}
 		}
 	}
@@ -475,6 +506,12 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 	}
 
 	if err := db.finalizeCommit(newRoot, newSysRoot, leafCtx.retired, sync, adaptive.Metrics{}, createdIDs, false, nil, leafManifest, leafManifestRawFileIDs); err != nil {
+		db.mu.RLock()
+		commitPublished := db.meta.CommitSeq > snap.state.CommitSeq
+		db.mu.RUnlock()
+		if !commitPublished {
+			return cleanupCreatedSegments(err)
+		}
 		return 0, 0, err
 	}
 	db.invalidateLeafGenerationSubtreeStats(tracker.Pages())

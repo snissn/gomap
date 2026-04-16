@@ -2,6 +2,7 @@ package db
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -673,5 +674,26 @@ func TestCurrentSetRefresh_DeleteOnlyBatch_NoFalseRefresh(t *testing.T) {
 	}
 	if _, ok := st2.ValueLogSet.Files[fileID2]; ok {
 		t.Fatalf("delete-only batch unexpectedly refreshed CurrentSet with untouched segment %d", fileID2)
+	}
+}
+
+func TestFinalizeCommitFailpoint_DoesNotRegisterCurrentLeafSegment(t *testing.T) {
+	db, leafLog, _ := openLeafGenerationPackTestDB(t)
+	if _, err := leafLog.AppendLeafPage(bytes.Repeat([]byte("l"), page.PageSize)); err != nil {
+		t.Fatalf("AppendLeafPage: %v", err)
+	}
+	_, fileID := currentLeafSegmentOrFatal(t, leafLog)
+	if db.valueLogManager.HasSegment(fileID) {
+		t.Fatalf("expected file %d to be unregistered before failpoint", fileID)
+	}
+
+	db.testFailFinalizeCommit.Store(true)
+	err := db.Set([]byte("k"), bytes.Repeat([]byte("v"), 64))
+	db.testFailFinalizeCommit.Store(false)
+	if !errors.Is(err, errTestFinalizeCommitFailpoint) {
+		t.Fatalf("Set failpoint err=%v, want %v", err, errTestFinalizeCommitFailpoint)
+	}
+	if db.valueLogManager.HasSegment(fileID) {
+		t.Fatalf("expected failpoint to avoid registering leaf segment %d", fileID)
 	}
 }

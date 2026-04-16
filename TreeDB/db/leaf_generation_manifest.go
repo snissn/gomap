@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
+	"strings"
 
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -551,6 +553,26 @@ type leafGenerationBootstrapFile struct {
 	seq       uint32
 }
 
+func parseLeafGenerationBootstrapFileName(name string) (lane uint32, seq uint32, ok bool) {
+	if !strings.HasPrefix(name, "value-l") || !strings.HasSuffix(name, ".log") {
+		return 0, 0, false
+	}
+	body := strings.TrimSuffix(strings.TrimPrefix(name, "value-l"), ".log")
+	lanePart, seqPart, found := strings.Cut(body, "-")
+	if !found || lanePart == "" || seqPart == "" || strings.Contains(seqPart, "-") {
+		return 0, 0, false
+	}
+	lane64, err := strconv.ParseUint(lanePart, 10, 32)
+	if err != nil {
+		return 0, 0, false
+	}
+	seq64, err := strconv.ParseUint(seqPart, 10, 32)
+	if err != nil {
+		return 0, 0, false
+	}
+	return uint32(lane64), uint32(seq64), true
+}
+
 func listLeafGenerationBootstrapFiles(leafDir string) ([]leafGenerationBootstrapFile, error) {
 	entries, err := os.ReadDir(leafDir)
 	if err != nil {
@@ -564,8 +586,8 @@ func listLeafGenerationBootstrapFiles(leafDir string) ([]leafGenerationBootstrap
 		if entry.IsDir() {
 			continue
 		}
-		var lane, seq uint32
-		if _, err := fmt.Sscanf(entry.Name(), "value-l%d-%d.log", &lane, &seq); err != nil {
+		lane, seq, ok := parseLeafGenerationBootstrapFileName(entry.Name())
+		if !ok {
 			continue
 		}
 		if lane != rewriteLeafLogLaneID {
