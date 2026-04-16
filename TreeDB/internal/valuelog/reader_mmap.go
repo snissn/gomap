@@ -48,6 +48,7 @@ const (
 	maxDeadMappingsEnvKey           = "TREEDB_VLOG_MAX_DEAD_MAPPINGS"
 	enableAdaptiveCapEnvKey         = "TREEDB_VLOG_ADAPTIVE_DEAD_MAPPINGS"
 	enableCurrentWritableEnvKey     = "TREEDB_VLOG_ENABLE_CURRENT_WRITABLE_MMAP"
+	enableCurrentLeafWritableEnvKey = "TREEDB_VLOG_ENABLE_CURRENT_LEAF_WRITABLE_MMAP"
 	maxMappedSealedEnvKey           = "TREEDB_VLOG_MAX_MAPPED_SEALED_SEGMENTS"
 	maxMappedSealedBytesEnvKey      = "TREEDB_VLOG_MAX_MAPPED_SEALED_BYTES"
 	maxMappedLeafSealedEnvKey       = "TREEDB_VLOG_MAX_MAPPED_LEAF_SEALED_SEGMENTS"
@@ -60,13 +61,14 @@ const (
 )
 
 var (
-	maxDeadMappingsExplicit     bool
-	adaptiveDeadMappings              = defaultAdaptiveCapEnabled
-	enableCurrentWritableMmap         = false
-	MaxMappedSealedSegments           = defaultMaxMappedSealed
-	MaxMappedSealedBytes        int64 = defaultMaxMappedSealedBytes
-	MaxMappedLeafSealedSegments       = defaultMaxMappedLeafSealed
-	MaxMappedLeafSealedBytes    int64 = defaultMaxMappedLeafSealedBytes
+	maxDeadMappingsExplicit       bool
+	adaptiveDeadMappings                = defaultAdaptiveCapEnabled
+	enableCurrentWritableMmap           = false
+	enableCurrentLeafWritableMmap       = true
+	MaxMappedSealedSegments             = defaultMaxMappedSealed
+	MaxMappedSealedBytes          int64 = defaultMaxMappedSealedBytes
+	MaxMappedLeafSealedSegments         = defaultMaxMappedLeafSealed
+	MaxMappedLeafSealedBytes      int64 = defaultMaxMappedLeafSealedBytes
 )
 
 func init() {
@@ -90,6 +92,14 @@ func init() {
 			enableCurrentWritableMmap = false
 		case "1", "true", "on", "yes":
 			enableCurrentWritableMmap = true
+		}
+	}
+	if raw := strings.TrimSpace(os.Getenv(enableCurrentLeafWritableEnvKey)); raw != "" {
+		switch strings.ToLower(raw) {
+		case "0", "false", "off", "no":
+			enableCurrentLeafWritableMmap = false
+		case "1", "true", "on", "yes":
+			enableCurrentLeafWritableMmap = true
 		}
 	}
 	if raw := strings.TrimSpace(os.Getenv(maxMappedSealedEnvKey)); raw != "" {
@@ -117,6 +127,16 @@ func init() {
 func isLeafLogFileID(fileID uint32) bool {
 	lane, _ := DecodeFileID(fileID)
 	return lane == ReservedLeafLogLaneID
+}
+
+func (f *File) currentWritablePersistentMmapEnabled() bool {
+	if f == nil || !f.currentWritable.Load() {
+		return false
+	}
+	if enableCurrentWritableMmap {
+		return true
+	}
+	return enableCurrentLeafWritableMmap && isLeafLogFileID(f.ID)
 }
 
 func effectiveMaxDeadMappings(mappedLen int) int {
@@ -161,14 +181,14 @@ func (f *File) usesPersistentMmap() bool {
 	if f.manager == nil {
 		return true
 	}
-	return enableCurrentWritableMmap && f.currentWritable.Load()
+	return f.currentWritablePersistentMmapEnabled()
 }
 
 func (f *File) tryEnableSealedLazyMmap() bool {
 	if f == nil || f.closed.Load() || f.File == nil {
 		return false
 	}
-	if f.currentWritable.Load() && !enableCurrentWritableMmap {
+	if f.currentWritable.Load() && !f.currentWritablePersistentMmapEnabled() {
 		return false
 	}
 	if f.usesPersistentMmap() {

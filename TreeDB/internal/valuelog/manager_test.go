@@ -267,6 +267,80 @@ func TestManagerReadUnsafe_CurrentWritableFallsBackWithoutPersistentMmap(t *test
 	}
 }
 
+func TestManagerReadUnsafe_CurrentWritableLeafUsesPersistentMmapByDefault(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("mmap not supported on windows")
+	}
+	prevCurrent := enableCurrentWritableMmap
+	prevLeaf := enableCurrentLeafWritableMmap
+	enableCurrentWritableMmap = false
+	enableCurrentLeafWritableMmap = true
+	t.Cleanup(func() {
+		enableCurrentWritableMmap = prevCurrent
+		enableCurrentLeafWritableMmap = prevLeaf
+	})
+
+	dir := t.TempDir()
+	fileID := mustEncodeFileID(t, ReservedLeafLogLaneID, 1)
+	path := filepath.Join(dir, "value-l255-000001.log")
+
+	w, err := NewWriter(path, fileID)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	defer func() { _ = w.Close() }()
+
+	want := bytes.Repeat([]byte("leaf"), 1024)
+	ptr, err := w.Append(0, nil, 1, want)
+	if err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	if err := w.Flush(); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+
+	mgr, err := NewManager(dir)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	defer func() { _ = mgr.Close() }()
+
+	if err := mgr.RegisterSegment(path, fileID); err != nil {
+		t.Fatalf("RegisterSegment: %v", err)
+	}
+	if err := mgr.PromoteCurrentWritable(fileID); err != nil {
+		t.Fatalf("PromoteCurrentWritable: %v", err)
+	}
+
+	got, err := mgr.ReadUnsafe(ptr)
+	if err != nil {
+		t.Fatalf("ReadUnsafe: %v", err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("ReadUnsafe mismatch")
+	}
+
+	f := mgr.files[fileID]
+	data, _ := f.mmapData.Load().([]byte)
+	if len(data) == 0 {
+		t.Fatalf("expected current leaf segment to install persistent mmap")
+	}
+	if remaps := f.remapCount.Load(); remaps == 0 {
+		t.Fatalf("expected current leaf segment remapCount > 0")
+	}
+	currentSegs, currentBytes, sealedSegs, sealedBytes, deadMappings, deadBytes := mgr.MmapResidencyStats()
+	if currentSegs != 1 || currentBytes == 0 {
+		t.Fatalf("expected one mapped current leaf segment, currentSegs=%d currentBytes=%d", currentSegs, currentBytes)
+	}
+	if sealedSegs != 0 || sealedBytes != 0 || deadMappings != 0 || deadBytes != 0 {
+		t.Fatalf("unexpected non-current residency sealedSegs=%d sealedBytes=%d deadMappings=%d deadBytes=%d", sealedSegs, sealedBytes, deadMappings, deadBytes)
+	}
+	hits, _, _, _, fallbacks := mgr.MmapReadStats()
+	if hits == 0 || fallbacks != 0 {
+		t.Fatalf("expected mmap hit without fallback, hits=%d fallbacks=%d", hits, fallbacks)
+	}
+}
+
 func TestFileRead_CountsDeadMappingCapFallback(t *testing.T) {
 	dir := t.TempDir()
 	fileID, err := EncodeFileID(0, 1)
