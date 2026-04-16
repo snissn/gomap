@@ -172,6 +172,7 @@ type valueLogRewriteLiveBytesCache struct {
 }
 
 type treeReachabilityCacheKey struct {
+	commitSeq  uint64
 	rootID     uint64
 	systemRoot uint64
 }

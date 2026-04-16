@@ -448,6 +448,7 @@ func leafGenerationLiveStatsKeyForState(state *DBState) (treeReachabilityCacheKe
 		return treeReachabilityCacheKey{}, false
 	}
 	return treeReachabilityCacheKey{
+		commitSeq:  state.CommitSeq,
 		rootID:     state.RootPageID,
 		systemRoot: state.SystemRootPageID,
 	}, true

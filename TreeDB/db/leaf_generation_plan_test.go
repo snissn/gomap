@@ -564,7 +564,7 @@ func TestLeafGenerationRecordLengthForPlan_UsesSealedIndex(t *testing.T) {
 	}
 }
 
-func TestLeafGenerationPlan_CachesLiveStatsUntilTreeRootsChange(t *testing.T) {
+func TestLeafGenerationPlan_CachesLiveStatsPerPublishedState(t *testing.T) {
 	db, leafLog := openLeafGenerationGCTestDB(t)
 	counter := withLeafGenerationLiveScanCounter(t)
 
@@ -629,7 +629,7 @@ func TestLeafGenerationPlan_CachesLiveStatsUntilTreeRootsChange(t *testing.T) {
 	if _, err := db.LeafGenerationPlan(context.Background(), LeafGenerationPlanOptions{}); err != nil {
 		t.Fatalf("LeafGenerationPlan after same-root commit: %v", err)
 	}
-	if got, want := counter.Load(), uint64(1); got != want {
+	if got, want := counter.Load(), uint64(2); got != want {
 		t.Fatalf("scan count after same-root commit=%d, want %d", got, want)
 	}
 
@@ -644,7 +644,7 @@ func TestLeafGenerationPlan_CachesLiveStatsUntilTreeRootsChange(t *testing.T) {
 	if _, err := db.LeafGenerationPlan(context.Background(), LeafGenerationPlanOptions{}); err != nil {
 		t.Fatalf("LeafGenerationPlan after root change: %v", err)
 	}
-	if got, want := counter.Load(), uint64(2); got != want {
+	if got, want := counter.Load(), uint64(3); got != want {
 		t.Fatalf("scan count after root change=%d, want %d", got, want)
 	}
 }

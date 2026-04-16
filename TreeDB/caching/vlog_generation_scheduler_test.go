@@ -12,6 +12,7 @@ import (
 	"time"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
 )
 
 type blockingRewritePlannerBackend struct {
@@ -1572,6 +1573,7 @@ type leafPackMaintenanceRecordingBackend struct {
 	hasDeadline       bool
 	deadline          time.Time
 	entered           chan struct{}
+	release           chan struct{}
 	blockUntilCtxDone bool
 }
 
@@ -1582,6 +1584,7 @@ func (b *leafPackMaintenanceRecordingBackend) LeafGenerationPackRunOnce(ctx cont
 	b.optsHistory = append(b.optsHistory, opts)
 	b.deadline, b.hasDeadline = ctx.Deadline()
 	entered := b.entered
+	release := b.release
 	blockUntilCtxDone := b.blockUntilCtxDone
 	resp := b.resp
 	if len(b.responses) > 0 {
@@ -1605,6 +1608,13 @@ func (b *leafPackMaintenanceRecordingBackend) LeafGenerationPackRunOnce(ctx cont
 	if blockUntilCtxDone {
 		<-ctx.Done()
 		return backenddb.LeafGenerationPackRunOnceStats{}, ctx.Err()
+	}
+	if release != nil {
+		select {
+		case <-release:
+		case <-ctx.Done():
+			return backenddb.LeafGenerationPackRunOnceStats{}, ctx.Err()
+		}
 	}
 	return resp, err
 }
@@ -1780,7 +1790,7 @@ func TestLeafGenerationPackMaintenance_RequiresExplicitEnv(t *testing.T) {
 		closeCh:                    make(chan struct{}),
 	}
 	db.checkpointCond = sync.NewCond(&db.checkpointMu)
-	attempted, ran, err := db.maybeRunLeafGenerationPackMaintenance(false, true, vlogGenerationMaintenanceOptions{skipCheckpoint: true})
+	attempted, ran, err := db.maybeRunLeafGenerationPackMaintenance(false, true, leafGenerationPackMaintenanceAdmission{allowed: true}, vlogGenerationMaintenanceOptions{skipCheckpoint: true})
 	if err != nil {
 		t.Fatalf("maybeRunLeafGenerationPackMaintenance: %v", err)
 	}
@@ -1820,7 +1830,7 @@ func TestLeafGenerationPackMaintenance_RunsWithDefaultBounds(t *testing.T) {
 		closeCh:                    make(chan struct{}),
 	}
 	db.checkpointCond = sync.NewCond(&db.checkpointMu)
-	attempted, ran, err := db.maybeRunLeafGenerationPackMaintenance(false, true, vlogGenerationMaintenanceOptions{skipCheckpoint: true})
+	attempted, ran, err := db.maybeRunLeafGenerationPackMaintenance(false, true, leafGenerationPackMaintenanceAdmission{allowed: true}, vlogGenerationMaintenanceOptions{skipCheckpoint: true})
 	if err != nil {
 		t.Fatalf("maybeRunLeafGenerationPackMaintenance: %v", err)
 	}
@@ -1887,7 +1897,7 @@ func TestLeafGenerationPackMaintenance_LoopsWithinBudgetAndRunsLeafGC(t *testing
 	db, cleanup := openLeafPackMaintenanceTestDB(t, recorder)
 	defer cleanup()
 
-	attempted, ran, err := db.maybeRunLeafGenerationPackMaintenance(false, true, vlogGenerationMaintenanceOptions{skipCheckpoint: true})
+	attempted, ran, err := db.maybeRunLeafGenerationPackMaintenance(false, true, leafGenerationPackMaintenanceAdmission{allowed: true}, vlogGenerationMaintenanceOptions{skipCheckpoint: true})
 	if err != nil {
 		t.Fatalf("maybeRunLeafGenerationPackMaintenance: %v", err)
 	}
@@ -1950,14 +1960,14 @@ func TestLeafGenerationPackMaintenance_SkipsWithinMinInterval(t *testing.T) {
 		closeCh:                    make(chan struct{}),
 	}
 	db.checkpointCond = sync.NewCond(&db.checkpointMu)
-	attempted, ran, err := db.maybeRunLeafGenerationPackMaintenance(false, true, vlogGenerationMaintenanceOptions{skipCheckpoint: true})
+	attempted, ran, err := db.maybeRunLeafGenerationPackMaintenance(false, true, leafGenerationPackMaintenanceAdmission{allowed: true}, vlogGenerationMaintenanceOptions{skipCheckpoint: true})
 	if err != nil {
 		t.Fatalf("first maybeRunLeafGenerationPackMaintenance: %v", err)
 	}
 	if !attempted || !ran {
 		t.Fatalf("first attempted=%t ran=%t want true/true", attempted, ran)
 	}
-	attempted, ran, err = db.maybeRunLeafGenerationPackMaintenance(false, true, vlogGenerationMaintenanceOptions{skipCheckpoint: true})
+	attempted, ran, err = db.maybeRunLeafGenerationPackMaintenance(false, true, leafGenerationPackMaintenanceAdmission{allowed: true}, vlogGenerationMaintenanceOptions{skipCheckpoint: true})
 	if err != nil {
 		t.Fatalf("second maybeRunLeafGenerationPackMaintenance: %v", err)
 	}
@@ -2007,6 +2017,183 @@ func TestVlogGenerationMaintenance_PeriodicPassRunsLeafPackWhenEnabled(t *testin
 	}
 	if got := db.vlogGenerationLeafPackRuns.Load(); got != 1 {
 		t.Fatalf("leaf pack runs=%d want 1", got)
+	}
+}
+
+func TestVlogGenerationMaintenance_PeriodicPassRunsLeafPackUnderSteadyForegroundActivity(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+	t.Setenv(envEnableLeafGenerationPackMaintenance, "1")
+	t.Setenv(envLeafGenerationPackMaintenanceWriteBurstGraceMillis, "250")
+	recorder := &leafPackMaintenanceRecordingBackend{
+		DB:         mustOpenLeafPackBackend(t),
+		resp:       leafPackWindowExhaustingStats(91, 1024, 4096),
+		leafGCResp: backenddb.LeafGenerationGCStats{GenerationsEligible: 1, GenerationsDeleted: 1, FilesDeleted: 1},
+	}
+	db, cleanup := openLeafPackMaintenanceTestDB(t, recorder)
+	defer cleanup()
+
+	now := time.Now()
+	db.lastForegroundWriteUnixNano.Store(now.Add(-500 * time.Millisecond).UnixNano())
+	db.lastForegroundReadUnixNano.Store(now.Add(-2 * vlogForegroundReadQuietWindow).UnixNano())
+
+	if ran := db.maybeRunPeriodicVlogGenerationMaintenance(false); !ran {
+		t.Fatal("expected periodic maintenance to run on active-safe leaf-pack admission")
+	}
+
+	_, calls, _, _ := recorder.recordedLeafPack()
+	if calls != 1 {
+		t.Fatalf("leaf pack calls=%d want 1", calls)
+	}
+	if got := db.vlogGenerationMaintenancePassWithLeafPack.Load(); got != 1 {
+		t.Fatalf("maintenance leaf pack passes=%d want 1", got)
+	}
+	if got := db.vlogGenerationLeafPackRuns.Load(); got != 1 {
+		t.Fatalf("leaf pack runs=%d want 1", got)
+	}
+}
+
+func TestVlogGenerationMaintenance_PeriodicPassSkipsLeafPackOnWriteBurst(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+	t.Setenv(envEnableLeafGenerationPackMaintenance, "1")
+	t.Setenv(envLeafGenerationPackMaintenanceWriteBurstGraceMillis, "250")
+	recorder := &leafPackMaintenanceRecordingBackend{DB: mustOpenLeafPackBackend(t), resp: leafPackWindowExhaustingStats(92, 1024, 4096)}
+	db, cleanup := openLeafPackMaintenanceTestDB(t, recorder)
+	defer cleanup()
+
+	now := time.Now()
+	db.lastForegroundWriteUnixNano.Store(now.Add(-100 * time.Millisecond).UnixNano())
+	db.lastForegroundReadUnixNano.Store(now.Add(-2 * vlogForegroundReadQuietWindow).UnixNano())
+
+	if ran := db.maybeRunPeriodicVlogGenerationMaintenance(false); ran {
+		t.Fatal("expected periodic maintenance to skip on fresh write burst")
+	}
+
+	_, calls, _, _ := recorder.recordedLeafPack()
+	if calls != 0 {
+		t.Fatalf("leaf pack calls=%d want 0", calls)
+	}
+	if got := db.vlogGenerationLeafPackSkipWriteBurst.Load(); got != 1 {
+		t.Fatalf("leaf pack write burst skips=%d want 1", got)
+	}
+	if got := db.Stats()["treedb.cache.vlog_generation.leaf_pack.last_skip_reason"]; got != "write_burst" {
+		t.Fatalf("last_skip_reason=%q want write_burst", got)
+	}
+}
+
+func TestVlogGenerationMaintenance_PeriodicPassSkipsLeafPackOnQueuePressure(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+	t.Setenv(envEnableLeafGenerationPackMaintenance, "1")
+	t.Setenv(envLeafGenerationPackMaintenanceWriteBurstGraceMillis, "250")
+	t.Setenv(envLeafGenerationPackMaintenanceMaxForegroundQueue, "1")
+	recorder := &leafPackMaintenanceRecordingBackend{DB: mustOpenLeafPackBackend(t), resp: leafPackWindowExhaustingStats(93, 1024, 4096)}
+	db, cleanup := openLeafPackMaintenanceTestDB(t, recorder)
+	defer cleanup()
+
+	now := time.Now()
+	db.lastForegroundWriteUnixNano.Store(now.Add(-500 * time.Millisecond).UnixNano())
+	db.lastForegroundReadUnixNano.Store(now.Add(-2 * vlogForegroundReadQuietWindow).UnixNano())
+	db.memtables.Store(&memtableView{queue: make([]memtable.Table, 2)})
+
+	if ran := db.maybeRunPeriodicVlogGenerationMaintenance(false); ran {
+		t.Fatal("expected periodic maintenance to skip on queue pressure")
+	}
+
+	_, calls, _, _ := recorder.recordedLeafPack()
+	if calls != 0 {
+		t.Fatalf("leaf pack calls=%d want 0", calls)
+	}
+	if got := db.vlogGenerationLeafPackSkipQueuePressure.Load(); got != 1 {
+		t.Fatalf("leaf pack queue pressure skips=%d want 1", got)
+	}
+	if got := db.Stats()["treedb.cache.vlog_generation.leaf_pack.last_skip_reason"]; got != "queue_pressure" {
+		t.Fatalf("last_skip_reason=%q want queue_pressure", got)
+	}
+}
+
+func TestVlogGenerationMaintenance_PeriodicLeafPackDoesNotBlockOnScheduledRetainedPruneQuietWait(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+	t.Setenv(envEnableLeafGenerationPackMaintenance, "1")
+	t.Setenv(envLeafGenerationPackMaintenanceWriteBurstGraceMillis, "250")
+	recorder := &leafPackMaintenanceRecordingBackend{
+		DB:         mustOpenLeafPackBackend(t),
+		resp:       leafPackWindowExhaustingStats(95, 1024, 4096),
+		leafGCResp: backenddb.LeafGenerationGCStats{GenerationsEligible: 1, GenerationsDeleted: 1, FilesDeleted: 1},
+	}
+	db, cleanup := openLeafPackMaintenanceTestDB(t, recorder)
+	defer cleanup()
+
+	retainedPath := filepath.Join(t.TempDir(), "value_vlog", "value-l0-000321.log")
+	seedRetainedPrunePressure(db, retainedPath, 2<<30)
+	// Leaf-pack admission should allow this write age, while retained prune still
+	// treats it as foreground-hot and waits for its much larger quiet window.
+	now := time.Now()
+	db.lastForegroundWriteUnixNano.Store(now.Add(-500 * time.Millisecond).UnixNano())
+	db.lastForegroundReadUnixNano.Store(now.Add(-2 * vlogForegroundReadQuietWindow).UnixNano())
+	db.scheduleRetainedValueLogPrune()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		db.retainedPruneMu.Lock()
+		waiting := db.retainedPruneDone != nil
+		running := db.retainedPruneRunningDone != nil
+		db.retainedPruneMu.Unlock()
+		if waiting && !running {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("retained prune did not enter scheduled quiet-wait state in time")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	start := time.Now()
+	if ran := db.maybeRunPeriodicVlogGenerationMaintenance(false); !ran {
+		t.Fatal("expected periodic maintenance to run while retained prune only waited for quiet")
+	}
+	if elapsed := time.Since(start); elapsed > 500*time.Millisecond {
+		t.Fatalf("periodic maintenance elapsed=%s want <=500ms while retained prune waits for quiet", elapsed)
+	}
+
+	_, calls, _, _ := recorder.recordedLeafPack()
+	if calls != 1 {
+		t.Fatalf("leaf pack calls=%d want 1", calls)
+	}
+	if db.vlogGenerationMaintenanceActive.Load() {
+		t.Fatal("maintenance active remained set after periodic leaf pack run")
+	}
+
+	quietAt := time.Now().Add(-2 * retainedPruneQuietWindow).UnixNano()
+	db.lastForegroundWriteUnixNano.Store(quietAt)
+	db.lastForegroundReadUnixNano.Store(quietAt)
+	db.waitForRetainedValueLogPrune()
+}
+
+func TestVlogGenerationMaintenance_PeriodicPassSkipsLeafPackOnForegroundIterators(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+	t.Setenv(envEnableLeafGenerationPackMaintenance, "1")
+	t.Setenv(envLeafGenerationPackMaintenanceWriteBurstGraceMillis, "250")
+	recorder := &leafPackMaintenanceRecordingBackend{DB: mustOpenLeafPackBackend(t), resp: leafPackWindowExhaustingStats(94, 1024, 4096)}
+	db, cleanup := openLeafPackMaintenanceTestDB(t, recorder)
+	defer cleanup()
+
+	now := time.Now()
+	db.lastForegroundWriteUnixNano.Store(now.Add(-500 * time.Millisecond).UnixNano())
+	db.lastForegroundReadUnixNano.Store(now.Add(-2 * vlogForegroundReadQuietWindow).UnixNano())
+	db.activeForegroundIterators.Store(1)
+
+	if ran := db.maybeRunPeriodicVlogGenerationMaintenance(false); ran {
+		t.Fatal("expected periodic maintenance to skip on foreground iterators")
+	}
+
+	_, calls, _, _ := recorder.recordedLeafPack()
+	if calls != 0 {
+		t.Fatalf("leaf pack calls=%d want 0", calls)
+	}
+	if got := db.vlogGenerationLeafPackSkipForegroundIterators.Load(); got != 1 {
+		t.Fatalf("leaf pack foreground iterator skips=%d want 1", got)
+	}
+	if got := db.Stats()["treedb.cache.vlog_generation.leaf_pack.last_skip_reason"]; got != "foreground_iterators" {
+		t.Fatalf("last_skip_reason=%q want foreground_iterators", got)
 	}
 }
 
@@ -2060,10 +2247,15 @@ func TestVlogGenerationMaintenance_LeafPackDeadlineIsNotAnError(t *testing.T) {
 	}
 }
 
-func TestVlogGenerationMaintenance_LeafPackCanceledIsNotAnError(t *testing.T) {
+func TestVlogGenerationMaintenance_LeafPackContinuesAcrossForegroundResume(t *testing.T) {
 	prepareDirectSchedulerTest(t)
 	t.Setenv(envEnableLeafGenerationPackMaintenance, "1")
-	recorder := &leafPackMaintenanceRecordingBackend{DB: mustOpenLeafPackBackend(t), entered: make(chan struct{}, 1), blockUntilCtxDone: true}
+	recorder := &leafPackMaintenanceRecordingBackend{
+		DB:      mustOpenLeafPackBackend(t),
+		entered: make(chan struct{}, 1),
+		release: make(chan struct{}),
+		resp:    leafPackWindowExhaustingStats(90, 1024, 4096),
+	}
 	db, cleanup := openLeafPackMaintenanceTestDB(t, recorder)
 	defer cleanup()
 
@@ -2080,6 +2272,120 @@ func TestVlogGenerationMaintenance_LeafPackCanceledIsNotAnError(t *testing.T) {
 	db.lastForegroundWriteUnixNano.Store(time.Now().UnixNano())
 	select {
 	case <-done:
+		t.Fatal("leaf pack maintenance finished early after foreground resume")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(recorder.release)
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for leaf pack maintenance completion")
+	}
+
+	if got := db.vlogGenerationLeafPackCanceled.Load(); got != 0 {
+		t.Fatalf("leaf pack canceled=%d want 0", got)
+	}
+	if got := db.vlogGenerationLeafPackRuns.Load(); got != 1 {
+		t.Fatalf("leaf pack runs=%d want 1", got)
+	}
+}
+
+func TestVlogGenerationMaintenance_ReleasesActiveBeforeQueueProgressSnapshot(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+	t.Setenv(envEnableLeafGenerationPackMaintenance, "1")
+	recorder := &leafPackMaintenanceRecordingBackend{
+		DB:      mustOpenLeafPackBackend(t),
+		entered: make(chan struct{}, 1),
+		release: make(chan struct{}),
+		resp:    leafPackWindowExhaustingStats(91, 1024, 4096),
+	}
+	db, cleanup := openLeafPackMaintenanceTestDB(t, recorder)
+	defer cleanup()
+
+	done := make(chan struct{})
+	go func() {
+		db.maybeRunVlogGenerationMaintenanceWithOptions(false, vlogGenerationMaintenanceOptions{})
+		close(done)
+	}()
+	select {
+	case <-recorder.entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for leaf pack backend entry")
+	}
+
+	queueLocked := make(chan struct{})
+	queueRelease := make(chan struct{})
+	go func() {
+		db.vlogGenerationRewriteQueueMu.Lock()
+		close(queueLocked)
+		<-queueRelease
+		db.vlogGenerationRewriteQueueMu.Unlock()
+	}()
+	select {
+	case <-queueLocked:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting to lock rewrite queue mutex")
+	}
+
+	close(recorder.release)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for db.vlogGenerationMaintenanceActive.Load() {
+		if time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if db.vlogGenerationMaintenanceActive.Load() {
+		close(queueRelease)
+		<-done
+		t.Fatal("maintenance active remained true while queue progress snapshot was blocked")
+	}
+	select {
+	case <-done:
+		close(queueRelease)
+		t.Fatal("maintenance finished before blocked queue snapshot was released")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(queueRelease)
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for maintenance completion after releasing queue snapshot")
+	}
+
+	if got := db.vlogGenerationLeafPackRuns.Load(); got != 1 {
+		t.Fatalf("leaf pack runs=%d want 1", got)
+	}
+}
+
+func TestVlogGenerationMaintenance_LeafPackCloseCanceledIsNotAnError(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+	t.Setenv(envEnableLeafGenerationPackMaintenance, "1")
+	recorder := &leafPackMaintenanceRecordingBackend{DB: mustOpenLeafPackBackend(t), entered: make(chan struct{}, 1), blockUntilCtxDone: true}
+	db, cleanup := openLeafPackMaintenanceTestDB(t, recorder)
+	closed := false
+	defer func() {
+		if !closed {
+			cleanup()
+		}
+	}()
+
+	done := make(chan struct{})
+	go func() {
+		db.maybeRunVlogGenerationMaintenanceWithOptions(false, vlogGenerationMaintenanceOptions{})
+		close(done)
+	}()
+	select {
+	case <-recorder.entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for leaf pack backend entry")
+	}
+	cleanup()
+	closed = true
+	select {
+	case <-done:
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for maintenance cancellation")
 	}
@@ -2092,9 +2398,6 @@ func TestVlogGenerationMaintenance_LeafPackCanceledIsNotAnError(t *testing.T) {
 	}
 	if got := db.Stats()["treedb.cache.vlog_generation.leaf_pack.last_skip_reason"]; got != "context_canceled" {
 		t.Fatalf("last_skip_reason=%q want context_canceled", got)
-	}
-	if got := db.Stats()["treedb.cache.vlog_generation.scheduler_state"]; got != vlogGenerationSchedulerStateString(vlogGenerationSchedulerIdle) {
-		t.Fatalf("scheduler_state=%q want idle", got)
 	}
 }
 
@@ -9347,9 +9650,13 @@ func TestVlogGenerationStats_ReportRewriteBacklogAndDurations(t *testing.T) {
 	db.vlogGenerationMaintenancePassWithLeafPackBySource[vlogGenerationMaintenanceSourcePeriodic].Store(3)
 	db.vlogGenerationMaintenancePassNoopBySource[vlogGenerationMaintenanceSourceOther].Store(3)
 	db.vlogGenerationLeafPackAttempts.Store(5)
+	db.vlogGenerationLeafPackAdmitted.Store(4)
 	db.vlogGenerationLeafPackRuns.Store(2)
 	db.vlogGenerationLeafPackSkips.Store(3)
 	db.vlogGenerationLeafPackSkipMinInterval.Store(6)
+	db.vlogGenerationLeafPackSkipWriteBurst.Store(7)
+	db.vlogGenerationLeafPackSkipQueuePressure.Store(8)
+	db.vlogGenerationLeafPackSkipForegroundIterators.Store(9)
 	db.vlogGenerationLeafPackErrors.Store(1)
 	db.vlogGenerationLeafPackBytesCopied.Store(4096)
 	db.vlogGenerationLeafPackExpectedReclaimBytes.Store(2048)
@@ -9518,11 +9825,23 @@ func TestVlogGenerationStats_ReportRewriteBacklogAndDurations(t *testing.T) {
 	if got := stats["treedb.cache.vlog_generation.maintenance.passes.noop.source.other"]; got != "3" {
 		t.Fatalf("maintenance noop passes source other=%q want 3", got)
 	}
+	if got := stats["treedb.cache.vlog_generation.leaf_pack.admitted"]; got != "4" {
+		t.Fatalf("leaf pack admitted=%q want 4", got)
+	}
 	if got := stats["treedb.cache.vlog_generation.leaf_pack.runs"]; got != "2" {
 		t.Fatalf("leaf pack runs=%q want 2", got)
 	}
 	if got := stats["treedb.cache.vlog_generation.leaf_pack.skip.min_interval"]; got != "6" {
 		t.Fatalf("leaf pack skip min_interval=%q want 6", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.leaf_pack.skip.write_burst"]; got != "7" {
+		t.Fatalf("leaf pack skip write_burst=%q want 7", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.leaf_pack.skip.queue_pressure"]; got != "8" {
+		t.Fatalf("leaf pack skip queue_pressure=%q want 8", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.leaf_pack.skip.foreground_iterators"]; got != "9" {
+		t.Fatalf("leaf pack skip foreground_iterators=%q want 9", got)
 	}
 	if got := stats["treedb.cache.vlog_generation.leaf_pack.last_selection.generations"]; got != "2" {
 		t.Fatalf("leaf pack last selection generations=%q want 2", got)

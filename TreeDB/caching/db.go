@@ -353,6 +353,11 @@ func loadPositiveInt64EnvDefault(key string, def int64) int64 {
 	return v
 }
 
+type leafGenerationPackMaintenanceAdmission struct {
+	allowed bool
+	reason  string
+}
+
 func maybeRecordBatchSetCallerSample(bytes int) {
 	maybeRecordCallerSample(batchSetCallerSampleMod, &batchSetCallerSampleSeq, &batchSetCallerSamplesTotal, &batchSetCallerStatsMap, bytes)
 }
@@ -1897,6 +1902,8 @@ const (
 	envLeafGenerationPackMaintenanceMinPublishedAgeSeq      = "TREEDB_LEAF_GENERATION_PACK_MAINTENANCE_MIN_PUBLISHED_AGE_COMMITS"
 	envLeafGenerationPackMaintenanceMinCandidateGenerations = "TREEDB_LEAF_GENERATION_PACK_MAINTENANCE_MIN_CANDIDATE_GENERATIONS"
 	envLeafGenerationPackMaintenanceTimeoutSeconds          = "TREEDB_LEAF_GENERATION_PACK_MAINTENANCE_TIMEOUT_SECONDS"
+	envLeafGenerationPackMaintenanceWriteBurstGraceMillis   = "TREEDB_LEAF_GENERATION_PACK_MAINTENANCE_WRITE_BURST_GRACE_MS"
+	envLeafGenerationPackMaintenanceMaxForegroundQueue      = "TREEDB_LEAF_GENERATION_PACK_MAINTENANCE_MAX_FOREGROUND_QUEUE"
 	// Optional rewrite debt-drain caps for controlled online experiments.
 	envVlogGenerationRewriteResumeMaxSegments         = "TREEDB_VLOG_GENERATION_REWRITE_RESUME_MAX_SEGMENTS"
 	envVlogGenerationRewriteDebtDrainMaxSegments      = "TREEDB_VLOG_GENERATION_REWRITE_DEBT_DRAIN_MAX_SEGMENTS"
@@ -1924,6 +1931,8 @@ const (
 	leafGenerationPackMaintenanceDefaultMinPublishedAgeSeq      = 1
 	leafGenerationPackMaintenanceDefaultMinCandidateGenerations = 2
 	leafGenerationPackMaintenanceDefaultTimeout                 = 30 * time.Second
+	leafGenerationPackMaintenanceDefaultWriteBurstGrace         = 250 * time.Millisecond
+	leafGenerationPackMaintenanceDefaultMaxForegroundQueue      = 2
 	maxMemtablePrealloc                                         = 256 << 20
 	appendOnlyEntryHintMinEntries                               = 128
 	appendOnlyEntryHintMaxEntries                               = 1 << 20
@@ -5403,6 +5412,9 @@ func (db *DB) scheduleRetainedValueLogPruneWithForce(force bool) {
 		defer func() {
 			db.retainedPruneMu.Lock()
 			close(done)
+			if db.retainedPruneRunningDone == done {
+				db.retainedPruneRunningDone = nil
+			}
 			db.retainedPruneDone = nil
 			db.retainedPruneMu.Unlock()
 		}()
@@ -5421,7 +5433,12 @@ func (db *DB) scheduleRetainedValueLogPruneWithForce(force bool) {
 			return
 		}
 		// Retained prune is opportunistic reclaim; do not compete with checkpoint
-		// cutovers or other backend maintenance windows.
+		// cutovers or other backend maintenance windows. Mark it running only now,
+		// after quiet-window admission and pressure checks have passed. Scheduled
+		// quiet-wait sleepers must not block generational maintenance.
+		db.retainedPruneMu.Lock()
+		db.retainedPruneRunningDone = done
+		db.retainedPruneMu.Unlock()
 		db.checkpointMu.Lock()
 		for db.checkpointing.Load() || db.maintenanceActive.Load() {
 			if db.closing.Load() {
@@ -5465,7 +5482,7 @@ func (db *DB) retainedPruneActive() bool {
 	}
 	db.retainedPruneMu.Lock()
 	defer db.retainedPruneMu.Unlock()
-	return db.retainedPruneDone != nil
+	return db.retainedPruneRunningDone != nil
 }
 
 func (db *DB) waitForRetainedValueLogPrune() {
@@ -5474,6 +5491,18 @@ func (db *DB) waitForRetainedValueLogPrune() {
 	}
 	db.retainedPruneMu.Lock()
 	done := db.retainedPruneDone
+	db.retainedPruneMu.Unlock()
+	if done != nil {
+		<-done
+	}
+}
+
+func (db *DB) waitForActiveRetainedValueLogPrune() {
+	if db == nil || !db.valueLogEnabled() {
+		return
+	}
+	db.retainedPruneMu.Lock()
+	done := db.retainedPruneRunningDone
 	db.retainedPruneMu.Unlock()
 	if done != nil {
 		<-done
@@ -5492,10 +5521,14 @@ func (db *DB) runRetainedValueLogPruneInline(force bool, observedSourceIDs map[u
 	}
 	done := make(chan struct{})
 	db.retainedPruneDone = done
+	db.retainedPruneRunningDone = done
 	db.retainedPruneMu.Unlock()
 	defer func() {
 		db.retainedPruneMu.Lock()
 		close(done)
+		if db.retainedPruneRunningDone == done {
+			db.retainedPruneRunningDone = nil
+		}
 		db.retainedPruneDone = nil
 		db.retainedPruneMu.Unlock()
 	}()
@@ -6460,6 +6493,7 @@ type DB struct {
 	vlogGenerationObservedGCSourceBytesProtectedOtherTotal       atomic.Int64
 	retainedPruneMu                                              sync.Mutex
 	retainedPruneDone                                            chan struct{}
+	retainedPruneRunningDone                                     chan struct{}
 	vlogGenerationRemapSuccesses                                 atomic.Uint64
 	vlogGenerationRemapFailures                                  atomic.Uint64
 	vlogGenerationRewriteBytesIn                                 atomic.Uint64
@@ -6589,9 +6623,13 @@ type DB struct {
 	vlogGenerationMaintenancePassWithGCBySource                  [vlogGenerationMaintenanceSourceCount]atomic.Uint64
 	vlogGenerationMaintenancePassWithLeafPackBySource            [vlogGenerationMaintenanceSourceCount]atomic.Uint64
 	vlogGenerationLeafPackAttempts                               atomic.Uint64
+	vlogGenerationLeafPackAdmitted                               atomic.Uint64
 	vlogGenerationLeafPackRuns                                   atomic.Uint64
 	vlogGenerationLeafPackSkips                                  atomic.Uint64
 	vlogGenerationLeafPackSkipMinInterval                        atomic.Uint64
+	vlogGenerationLeafPackSkipWriteBurst                         atomic.Uint64
+	vlogGenerationLeafPackSkipQueuePressure                      atomic.Uint64
+	vlogGenerationLeafPackSkipForegroundIterators                atomic.Uint64
 	vlogGenerationLeafPackErrors                                 atomic.Uint64
 	vlogGenerationLeafPackCanceled                               atomic.Uint64
 	vlogGenerationLeafPackDeadline                               atomic.Uint64
@@ -9345,6 +9383,45 @@ func (db *DB) foregroundWriteQuiet(now time.Time) bool {
 	return db.foregroundWriteQuietFor(now, vlogForegroundQuietWindow)
 }
 
+func leafGenerationPackMaintenanceWriteBurstGrace() time.Duration {
+	graceMS := envUint64(envLeafGenerationPackMaintenanceWriteBurstGraceMillis, uint64(leafGenerationPackMaintenanceDefaultWriteBurstGrace/time.Millisecond))
+	if graceMS == 0 {
+		return 0
+	}
+	return time.Duration(graceMS) * time.Millisecond
+}
+
+func leafGenerationPackMaintenanceMaxForegroundQueue() int {
+	return int(loadUintEnvDefault(envLeafGenerationPackMaintenanceMaxForegroundQueue, leafGenerationPackMaintenanceDefaultMaxForegroundQueue))
+}
+
+func (db *DB) foregroundLeafPackAdmission(now time.Time) leafGenerationPackMaintenanceAdmission {
+	if db == nil {
+		return leafGenerationPackMaintenanceAdmission{allowed: true}
+	}
+	if db.activeForegroundIterators.Load() > 0 {
+		return leafGenerationPackMaintenanceAdmission{reason: "foreground_iterators"}
+	}
+	maxQueue := leafGenerationPackMaintenanceMaxForegroundQueue()
+	if maxQueue >= 0 {
+		queueLen := 0
+		if view := db.memtables.Load(); view != nil {
+			queueLen = len(view.queue)
+		}
+		if queueLen > maxQueue {
+			return leafGenerationPackMaintenanceAdmission{reason: "queue_pressure"}
+		}
+	}
+	if grace := leafGenerationPackMaintenanceWriteBurstGrace(); grace > 0 && !db.foregroundWriteQuietFor(now, grace) {
+		return leafGenerationPackMaintenanceAdmission{reason: "write_burst"}
+	}
+	return leafGenerationPackMaintenanceAdmission{allowed: true}
+}
+
+func (db *DB) foregroundLeafPackEligible(now time.Time) bool {
+	return db.foregroundLeafPackAdmission(now).allowed
+}
+
 func (db *DB) waitForForegroundMaintenanceQuietWindow(quietWindow time.Duration) {
 	if db == nil || quietWindow <= 0 {
 		return
@@ -9498,6 +9575,30 @@ func (db *DB) vlogGenerationMaintenanceContext(timeout time.Duration, opts vlogG
 		return ctx, cancel
 	}
 	return db.foregroundMaintenanceContext(timeout)
+}
+
+func (db *DB) leafGenerationPackMaintenanceContext(timeout time.Duration) (context.Context, context.CancelFunc) {
+	var (
+		ctx    context.Context
+		cancel context.CancelFunc
+	)
+	if timeout > 0 {
+		ctx, cancel = context.WithTimeout(context.Background(), timeout)
+	} else {
+		ctx, cancel = context.WithCancel(context.Background())
+	}
+	if db == nil {
+		return ctx, cancel
+	}
+	go func() {
+		select {
+		case <-ctx.Done():
+			return
+		case <-db.closeCh:
+			cancel()
+		}
+	}()
+	return ctx, cancel
 }
 
 func (db *DB) vlogGenerationRewritePlanContext(timeout time.Duration, opts vlogGenerationMaintenanceOptions) (context.Context, context.CancelFunc) {
@@ -13943,10 +14044,12 @@ func (db *DB) maybeRunPeriodicVlogGenerationMaintenance(runGC bool) bool {
 	// issue expensive full scans every interval during restore-heavy sync phases.
 	now := time.Now()
 	quiet := db.foregroundActivityQuietFor(now, vlogGenerationMaintenanceQuietWindow, vlogForegroundReadQuietWindow)
-	if !quiet &&
+	leafPackAdmission := db.foregroundLeafPackAdmission(now)
+	if !quiet && !leafPackAdmission.allowed &&
 		!db.vlogGenerationCheckpointKickPending.Load() &&
 		!db.vlogGenerationDeferredMaintenancePending.Load() &&
 		!db.vlogGenerationDeferredMaintenanceDue(now) {
+		db.observeVlogGenerationLeafPackAdmissionSkip(leafPackAdmission.reason)
 		return false
 	}
 	db.maybeRunVlogGenerationMaintenance(runGC)
@@ -14677,6 +14780,24 @@ func (db *DB) storeVlogGenerationLeafPackLastSkipReason(reason string) {
 		return
 	}
 	db.vlogGenerationLeafPackLastSkipReason.Store(reason)
+}
+
+func (db *DB) observeVlogGenerationLeafPackAdmissionSkip(reason string) {
+	if db == nil || reason == "" {
+		return
+	}
+	if !envBool(envEnableLeafGenerationPackMaintenance) || !db.indexOuterLeavesInValueLog {
+		return
+	}
+	switch reason {
+	case "write_burst":
+		db.vlogGenerationLeafPackSkipWriteBurst.Add(1)
+	case "queue_pressure":
+		db.vlogGenerationLeafPackSkipQueuePressure.Add(1)
+	case "foreground_iterators":
+		db.vlogGenerationLeafPackSkipForegroundIterators.Add(1)
+	}
+	db.storeVlogGenerationLeafPackLastSkipReason(reason)
 }
 
 func leafGenerationPackMaintenanceTimeout() time.Duration {
@@ -15728,6 +15849,17 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 			db.vlogGenerationMaintenancePassNoop.Add(1)
 			db.vlogGenerationMaintenancePassNoopBySource[activeSourceIdx].Add(1)
 		}
+		// Release the active scheduler slot before optional queue-progress
+		// bookkeeping. The progress snapshot is observational only; if it blocks
+		// on rewrite-state I/O or a long-held queue mutex, periodic maintenance
+		// must still be able to re-enter on live workloads.
+		db.vlogGenerationMaintenanceActive.Store(false)
+		// If a deferred confirmation/age wake became due while this pass held the
+		// scheduler active, requeue it immediately on exit instead of relying on
+		// the original retry goroutine to still be alive.
+		db.scheduleDueVlogGenerationDeferredMaintenance()
+		db.schedulePendingVlogGenerationRewriteQueue()
+		db.schedulePendingVlogGenerationCheckpointKick()
 		if rewriteQueueSnapshotCaptured {
 			afterQueue, afterErr := db.currentVlogGenerationRewriteQueue()
 			afterSegments := 0
@@ -15758,16 +15890,10 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 				afterLiveKnown,
 			)
 		}
-		db.vlogGenerationMaintenanceActive.Store(false)
-		// If a deferred confirmation/age wake became due while this pass held the
-		// scheduler active, requeue it immediately on exit instead of relying on
-		// the original retry goroutine to still be alive.
-		db.scheduleDueVlogGenerationDeferredMaintenance()
-		db.schedulePendingVlogGenerationRewriteQueue()
-		db.schedulePendingVlogGenerationCheckpointKick()
 	}()
 	now := time.Now()
 	quiet := db.foregroundActivityQuietFor(now, vlogGenerationMaintenanceQuietWindow, vlogForegroundReadQuietWindow)
+	leafPackAdmission := db.foregroundLeafPackAdmission(now)
 	rewriteQueue, err := db.currentVlogGenerationRewriteQueue()
 	if err != nil {
 		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
@@ -15887,8 +16013,9 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 	}
 	// Explicit GC runs bypass the foreground quiet-window gate so callers can
 	// force a safety/cleanup pass even while foreground activity is ongoing.
-	if !runGC && !opts.bypassQuiet && !quiet {
+	if !runGC && !opts.bypassQuiet && !quiet && !leafPackAdmission.allowed {
 		db.vlogGenerationMaintenanceSkipQuiet.Add(1)
+		db.observeVlogGenerationLeafPackAdmissionSkip(leafPackAdmission.reason)
 		return
 	}
 	// In WAL-off mode, do not start rewrite/GC planning before the first
@@ -15908,7 +16035,7 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 	// foregroundMaintenancePollInterval(), not by the full quiet window. Waiting here keeps
 	// active retained-prune scans serialized with rewrite/GC planning once the system has gone quiet.
 	if !opts.skipRetainedPruneWait {
-		db.waitForRetainedValueLogPrune()
+		db.waitForActiveRetainedValueLogPrune()
 	}
 	if db.checkpointing.Load() {
 		if opts.bypassQuiet && !opts.skipCheckpoint {
@@ -17450,7 +17577,7 @@ planned:
 		return
 	}
 
-	leafPackAttempted, leafPackRan, err := db.maybeRunLeafGenerationPackMaintenance(runGC, quiet, opts)
+	leafPackAttempted, leafPackRan, err := db.maybeRunLeafGenerationPackMaintenance(runGC, quiet, leafPackAdmission, opts)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			db.observeVlogGenerationLeafPackCanceled()
@@ -22596,7 +22723,7 @@ func (db *DB) Has(key []byte) (bool, error) {
 	return db.backend.Has(key)
 }
 
-func (db *DB) maybeRunLeafGenerationPackMaintenance(runGC bool, quiet bool, opts vlogGenerationMaintenanceOptions) (attempted bool, ran bool, err error) {
+func (db *DB) maybeRunLeafGenerationPackMaintenance(runGC bool, quiet bool, admission leafGenerationPackMaintenanceAdmission, opts vlogGenerationMaintenanceOptions) (attempted bool, ran bool, err error) {
 	if db == nil || db.closing.Load() {
 		return false, false, nil
 	}
@@ -22606,7 +22733,11 @@ func (db *DB) maybeRunLeafGenerationPackMaintenance(runGC bool, quiet bool, opts
 	if !db.indexOuterLeavesInValueLog {
 		return false, false, nil
 	}
-	if runGC || opts.bypassQuiet || !quiet {
+	if runGC || opts.bypassQuiet {
+		return false, false, nil
+	}
+	if !quiet && !admission.allowed {
+		db.observeVlogGenerationLeafPackAdmissionSkip(admission.reason)
 		return false, false, nil
 	}
 	runner, ok := db.backend.(backendLeafGenerationPackRunner)
@@ -22636,6 +22767,7 @@ func (db *DB) maybeRunLeafGenerationPackMaintenance(runGC bool, quiet bool, opts
 	timeout := leafGenerationPackMaintenanceTimeout()
 
 	db.vlogGenerationLeafPackAttempts.Add(1)
+	db.vlogGenerationLeafPackAdmitted.Add(1)
 	attempted = true
 	db.vlogGenerationLastReason.Store(vlogGenerationReasonLeafPack)
 	db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerRunning)
@@ -22659,7 +22791,7 @@ func (db *DB) maybeRunLeafGenerationPackMaintenance(runGC bool, quiet bool, opts
 		skipCheckpoint:        opts.skipCheckpoint,
 		skipRetainedPruneWait: opts.skipRetainedPruneWait,
 	}, func() error {
-		ctx, cancel := db.vlogGenerationMaintenanceContext(timeout, opts)
+		ctx, cancel := db.leafGenerationPackMaintenanceContext(timeout)
 		defer cancel()
 
 		remainingGenerations := maxGenerations
@@ -23872,6 +24004,7 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_generation.enabled"] = fmt.Sprintf("%t", db.valueLogGenerationPolicy == uint8(backenddb.ValueLogGenerationHotWarmCold))
 	stats["treedb.cache.vlog_generation.maintenance_phase"] = maintenancePhaseString(db.maintenancePhase.Load())
 	stats["treedb.cache.vlog_generation.scheduler_state"] = vlogGenerationSchedulerStateString(db.vlogGenerationSchedulerState.Load())
+	stats["treedb.cache.vlog_generation.maintenance.active"] = fmt.Sprintf("%t", db.vlogGenerationMaintenanceActive.Load())
 	stats["treedb.cache.vlog_generation.scheduler_last_reason"] = vlogGenerationReasonString(db.vlogGenerationLastReason.Load())
 	stats["treedb.cache.vlog_generation.checkpoint_kick.active"] = fmt.Sprintf("%t", db.vlogGenerationCheckpointKickActive.Load())
 	stats["treedb.cache.vlog_generation.checkpoint_kick.pending"] = fmt.Sprintf("%t", db.vlogGenerationCheckpointKickPending.Load())
@@ -23933,9 +24066,13 @@ func (db *DB) Stats() map[string]string {
 		)
 	}
 	stats["treedb.cache.vlog_generation.leaf_pack.attempts"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackAttempts.Load())
+	stats["treedb.cache.vlog_generation.leaf_pack.admitted"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackAdmitted.Load())
 	stats["treedb.cache.vlog_generation.leaf_pack.runs"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackRuns.Load())
 	stats["treedb.cache.vlog_generation.leaf_pack.skips"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackSkips.Load())
 	stats["treedb.cache.vlog_generation.leaf_pack.skip.min_interval"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackSkipMinInterval.Load())
+	stats["treedb.cache.vlog_generation.leaf_pack.skip.write_burst"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackSkipWriteBurst.Load())
+	stats["treedb.cache.vlog_generation.leaf_pack.skip.queue_pressure"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackSkipQueuePressure.Load())
+	stats["treedb.cache.vlog_generation.leaf_pack.skip.foreground_iterators"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackSkipForegroundIterators.Load())
 	stats["treedb.cache.vlog_generation.leaf_pack.errors"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackErrors.Load())
 	stats["treedb.cache.vlog_generation.leaf_pack.canceled"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackCanceled.Load())
 	stats["treedb.cache.vlog_generation.leaf_pack.deadline"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackDeadline.Load())
@@ -23948,6 +24085,8 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_generation.leaf_pack.last_wall_ms"] = fmt.Sprintf("%.3f", float64(db.vlogGenerationLeafPackLastWallNanos.Load())/float64(time.Millisecond))
 	stats["treedb.cache.vlog_generation.leaf_pack.min_interval_ms"] = fmt.Sprintf("%d", leafGenerationPackMaintenanceMinInterval.Milliseconds())
 	stats["treedb.cache.vlog_generation.leaf_pack.timeout_ms"] = fmt.Sprintf("%d", leafGenerationPackMaintenanceTimeout().Milliseconds())
+	stats["treedb.cache.vlog_generation.leaf_pack.write_burst_grace_ms"] = fmt.Sprintf("%d", leafGenerationPackMaintenanceWriteBurstGrace().Milliseconds())
+	stats["treedb.cache.vlog_generation.leaf_pack.max_foreground_queue"] = fmt.Sprintf("%d", leafGenerationPackMaintenanceMaxForegroundQueue())
 	stats["treedb.cache.vlog_generation.leaf_pack.max_generations"] = fmt.Sprintf("%d", int(envUint64(envLeafGenerationPackMaintenanceMaxGenerations, leafGenerationPackMaintenanceDefaultMaxGenerations)))
 	stats["treedb.cache.vlog_generation.leaf_pack.max_bytes_to_copy"] = fmt.Sprintf("%d", int64(envUint64(envLeafGenerationPackMaintenanceMaxBytesToCopy, leafGenerationPackMaintenanceDefaultMaxBytesToCopy)))
 	stats["treedb.cache.vlog_generation.leaf_pack.min_candidate_generations"] = fmt.Sprintf("%d", loadPositiveIntEnvDefault(envLeafGenerationPackMaintenanceMinCandidateGenerations, leafGenerationPackMaintenanceDefaultMinCandidateGenerations))

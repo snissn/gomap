@@ -90,37 +90,43 @@ type sizeSnapshot struct {
 }
 
 type sample struct {
-    Kind                  string            `json:"kind"`
-    SampleIndex           int               `json:"sample_index"`
-    Profile               string            `json:"profile"`
-    ElapsedSeconds        float64           `json:"elapsed_seconds"`
-    UnixNano              int64             `json:"unix_nano"`
-    MaintenancePhase      string            `json:"maintenance_phase,omitempty"`
-    SchedulerState        string            `json:"scheduler_state,omitempty"`
-    Reason                string            `json:"reason,omitempty"`
-    CommitSeq             uint64            `json:"commit_seq,omitempty"`
-    RSSKB                 uint64            `json:"rss_kb,omitempty"`
-    HWMKB                 uint64            `json:"hwm_kb,omitempty"`
-    Sizes                 sizeSnapshot      `json:"sizes"`
-    LeafPackAttempts      uint64            `json:"leaf_pack_attempts"`
-    LeafPackRuns          uint64            `json:"leaf_pack_runs"`
-    LeafPackSkips         uint64            `json:"leaf_pack_skips"`
-    LeafPackSkipMinInt    uint64            `json:"leaf_pack_skip_min_interval"`
-    LeafPackErrors        uint64            `json:"leaf_pack_errors"`
-    LeafPackCanceled      uint64            `json:"leaf_pack_canceled"`
-    LeafPackDeadline      uint64            `json:"leaf_pack_deadline"`
-    LeafPackBytesCopied    uint64            `json:"leaf_pack_bytes_copied"`
-    LeafPackExpectedBytes  uint64            `json:"leaf_pack_expected_reclaim_bytes"`
-    LeafPackPassesPeriodic uint64            `json:"leaf_pack_passes_periodic"`
-    LeafPackGCRuns         uint64            `json:"leaf_pack_gc_runs"`
-    LeafPackGCEligible     uint64            `json:"leaf_pack_gc_eligible_generations"`
-    LeafPackGCDeletedGen   uint64            `json:"leaf_pack_gc_deleted_generations"`
-    LeafPackGCDeletedFiles uint64            `json:"leaf_pack_gc_deleted_files"`
-    LeafPackLastWallMS     string            `json:"leaf_pack_last_wall_ms,omitempty"`
-    LeafPackLastSkipReason string            `json:"leaf_pack_last_skip_reason,omitempty"`
-    LeafPackLastGenCount   uint64            `json:"leaf_pack_last_selection_generations"`
-    LeafPackLastCopyBytes  uint64            `json:"leaf_pack_last_bytes_copied"`
-    Stats                  map[string]string `json:"stats,omitempty"`
+    Kind                          string            `json:"kind"`
+    SampleIndex                   int               `json:"sample_index"`
+    Profile                       string            `json:"profile"`
+    ElapsedSeconds                float64           `json:"elapsed_seconds"`
+    UnixNano                      int64             `json:"unix_nano"`
+    MaintenancePhase              string            `json:"maintenance_phase,omitempty"`
+    SchedulerState                string            `json:"scheduler_state,omitempty"`
+    Reason                        string            `json:"reason,omitempty"`
+    CommitSeq                     uint64            `json:"commit_seq,omitempty"`
+    RSSKB                         uint64            `json:"rss_kb,omitempty"`
+    HWMKB                         uint64            `json:"hwm_kb,omitempty"`
+    Sizes                         sizeSnapshot      `json:"sizes"`
+    LeafPackAttempts              uint64            `json:"leaf_pack_attempts"`
+    LeafPackAdmitted              uint64            `json:"leaf_pack_admitted"`
+    LeafPackRuns                  uint64            `json:"leaf_pack_runs"`
+    LeafPackSkips                 uint64            `json:"leaf_pack_skips"`
+    LeafPackSkipMinInt            uint64            `json:"leaf_pack_skip_min_interval"`
+    LeafPackSkipWriteBurst        uint64            `json:"leaf_pack_skip_write_burst"`
+    LeafPackSkipQueuePressure     uint64            `json:"leaf_pack_skip_queue_pressure"`
+    LeafPackSkipForegroundIterators uint64          `json:"leaf_pack_skip_foreground_iterators"`
+    LeafPackErrors                uint64            `json:"leaf_pack_errors"`
+    LeafPackCanceled              uint64            `json:"leaf_pack_canceled"`
+    LeafPackDeadline              uint64            `json:"leaf_pack_deadline"`
+    LeafPackBytesCopied           uint64            `json:"leaf_pack_bytes_copied"`
+    LeafPackExpectedBytes         uint64            `json:"leaf_pack_expected_reclaim_bytes"`
+    LeafPackPassesPeriodic        uint64            `json:"leaf_pack_passes_periodic"`
+    LeafPackGCRuns                uint64            `json:"leaf_pack_gc_runs"`
+    LeafPackGCEligible            uint64            `json:"leaf_pack_gc_eligible_generations"`
+    LeafPackGCDeletedGen          uint64            `json:"leaf_pack_gc_deleted_generations"`
+    LeafPackGCDeletedFiles        uint64            `json:"leaf_pack_gc_deleted_files"`
+    LeafPackLastWallMS            string            `json:"leaf_pack_last_wall_ms,omitempty"`
+    LeafPackLastSkipReason        string            `json:"leaf_pack_last_skip_reason,omitempty"`
+    LeafPackLastGenCount          uint64            `json:"leaf_pack_last_selection_generations"`
+    LeafPackLastCopyBytes         uint64            `json:"leaf_pack_last_bytes_copied"`
+    LeafPackWriteBurstGraceMS     uint64            `json:"leaf_pack_write_burst_grace_ms"`
+    LeafPackMaxForegroundQueue    uint64            `json:"leaf_pack_max_foreground_queue"`
+    Stats                         map[string]string `json:"stats,omitempty"`
 }
 
 func main() {
@@ -174,25 +180,31 @@ func main() {
             CommitSeq:             parseUint(stats["treedb.commit_seq"]),
             RSSKB:                 readProcStatusKB("VmRSS"),
             HWMKB:                 readProcStatusKB("VmHWM"),
-            Sizes:                 captureSizes(*dbDir),
-            LeafPackAttempts:      parseUint(stats["treedb.cache.vlog_generation.leaf_pack.attempts"]),
-            LeafPackRuns:          parseUint(stats["treedb.cache.vlog_generation.leaf_pack.runs"]),
-            LeafPackSkips:         parseUint(stats["treedb.cache.vlog_generation.leaf_pack.skips"]),
-            LeafPackSkipMinInt:    parseUint(stats["treedb.cache.vlog_generation.leaf_pack.skip.min_interval"]),
-            LeafPackErrors:        parseUint(stats["treedb.cache.vlog_generation.leaf_pack.errors"]),
-            LeafPackCanceled:      parseUint(stats["treedb.cache.vlog_generation.leaf_pack.canceled"]),
-            LeafPackDeadline:      parseUint(stats["treedb.cache.vlog_generation.leaf_pack.deadline"]),
-            LeafPackBytesCopied:    parseUint(stats["treedb.cache.vlog_generation.leaf_pack.bytes_copied"]),
-            LeafPackExpectedBytes:  parseUint(stats["treedb.cache.vlog_generation.leaf_pack.expected_reclaim_bytes"]),
-            LeafPackPassesPeriodic: parseUint(stats["treedb.cache.vlog_generation.maintenance.passes.with_leaf_pack.source.periodic"]),
-            LeafPackGCRuns:         parseUint(stats["treedb.cache.vlog_generation.leaf_pack.gc.runs"]),
-            LeafPackGCEligible:     parseUint(stats["treedb.cache.vlog_generation.leaf_pack.gc.eligible_generations"]),
-            LeafPackGCDeletedGen:   parseUint(stats["treedb.cache.vlog_generation.leaf_pack.gc.deleted_generations"]),
-            LeafPackGCDeletedFiles: parseUint(stats["treedb.cache.vlog_generation.leaf_pack.gc.deleted_files"]),
-            LeafPackLastWallMS:     stats["treedb.cache.vlog_generation.leaf_pack.last_wall_ms"],
-            LeafPackLastSkipReason: stats["treedb.cache.vlog_generation.leaf_pack.last_skip_reason"],
-            LeafPackLastGenCount:   parseUint(stats["treedb.cache.vlog_generation.leaf_pack.last_selection.generations"]),
-            LeafPackLastCopyBytes:  parseUint(stats["treedb.cache.vlog_generation.leaf_pack.last_bytes_copied"]),
+            Sizes:                         captureSizes(*dbDir),
+            LeafPackAttempts:              parseUint(stats["treedb.cache.vlog_generation.leaf_pack.attempts"]),
+            LeafPackAdmitted:              parseUint(stats["treedb.cache.vlog_generation.leaf_pack.admitted"]),
+            LeafPackRuns:                  parseUint(stats["treedb.cache.vlog_generation.leaf_pack.runs"]),
+            LeafPackSkips:                 parseUint(stats["treedb.cache.vlog_generation.leaf_pack.skips"]),
+            LeafPackSkipMinInt:            parseUint(stats["treedb.cache.vlog_generation.leaf_pack.skip.min_interval"]),
+            LeafPackSkipWriteBurst:        parseUint(stats["treedb.cache.vlog_generation.leaf_pack.skip.write_burst"]),
+            LeafPackSkipQueuePressure:     parseUint(stats["treedb.cache.vlog_generation.leaf_pack.skip.queue_pressure"]),
+            LeafPackSkipForegroundIterators: parseUint(stats["treedb.cache.vlog_generation.leaf_pack.skip.foreground_iterators"]),
+            LeafPackErrors:                parseUint(stats["treedb.cache.vlog_generation.leaf_pack.errors"]),
+            LeafPackCanceled:              parseUint(stats["treedb.cache.vlog_generation.leaf_pack.canceled"]),
+            LeafPackDeadline:              parseUint(stats["treedb.cache.vlog_generation.leaf_pack.deadline"]),
+            LeafPackBytesCopied:           parseUint(stats["treedb.cache.vlog_generation.leaf_pack.bytes_copied"]),
+            LeafPackExpectedBytes:         parseUint(stats["treedb.cache.vlog_generation.leaf_pack.expected_reclaim_bytes"]),
+            LeafPackPassesPeriodic:        parseUint(stats["treedb.cache.vlog_generation.maintenance.passes.with_leaf_pack.source.periodic"]),
+            LeafPackGCRuns:                parseUint(stats["treedb.cache.vlog_generation.leaf_pack.gc.runs"]),
+            LeafPackGCEligible:            parseUint(stats["treedb.cache.vlog_generation.leaf_pack.gc.eligible_generations"]),
+            LeafPackGCDeletedGen:          parseUint(stats["treedb.cache.vlog_generation.leaf_pack.gc.deleted_generations"]),
+            LeafPackGCDeletedFiles:        parseUint(stats["treedb.cache.vlog_generation.leaf_pack.gc.deleted_files"]),
+            LeafPackLastWallMS:            stats["treedb.cache.vlog_generation.leaf_pack.last_wall_ms"],
+            LeafPackLastSkipReason:        stats["treedb.cache.vlog_generation.leaf_pack.last_skip_reason"],
+            LeafPackLastGenCount:          parseUint(stats["treedb.cache.vlog_generation.leaf_pack.last_selection.generations"]),
+            LeafPackLastCopyBytes:         parseUint(stats["treedb.cache.vlog_generation.leaf_pack.last_bytes_copied"]),
+            LeafPackWriteBurstGraceMS:     parseUint(stats["treedb.cache.vlog_generation.leaf_pack.write_burst_grace_ms"]),
+            LeafPackMaxForegroundQueue:    parseUint(stats["treedb.cache.vlog_generation.leaf_pack.max_foreground_queue"]),
         }
         if *emitFullStats {
             out.Stats = stats
@@ -355,12 +367,18 @@ jq -n \
     max_hwm_kb: (($dwell[0] | map(.hwm_kb // 0) | max) // 0),
     final_sample: (($dwell[0] | last) // null),
     leaf_pack_totals: {
+      admitted: ((($dwell[0] | last) // {}) | .leaf_pack_admitted // 0),
       runs: ((($dwell[0] | last) // {}) | .leaf_pack_runs // 0),
+      skip_write_burst: ((($dwell[0] | last) // {}) | .leaf_pack_skip_write_burst // 0),
+      skip_queue_pressure: ((($dwell[0] | last) // {}) | .leaf_pack_skip_queue_pressure // 0),
+      skip_foreground_iterators: ((($dwell[0] | last) // {}) | .leaf_pack_skip_foreground_iterators // 0),
       bytes_copied: ((($dwell[0] | last) // {}) | .leaf_pack_bytes_copied // 0),
       expected_reclaim_bytes: ((($dwell[0] | last) // {}) | .leaf_pack_expected_reclaim_bytes // 0),
       gc_runs: ((($dwell[0] | last) // {}) | .leaf_pack_gc_runs // 0),
       gc_deleted_generations: ((($dwell[0] | last) // {}) | .leaf_pack_gc_deleted_generations // 0),
-      gc_deleted_files: ((($dwell[0] | last) // {}) | .leaf_pack_gc_deleted_files // 0)
+      gc_deleted_files: ((($dwell[0] | last) // {}) | .leaf_pack_gc_deleted_files // 0),
+      write_burst_grace_ms: ((($dwell[0] | last) // {}) | .leaf_pack_write_burst_grace_ms // 0),
+      max_foreground_queue: ((($dwell[0] | last) // {}) | .leaf_pack_max_foreground_queue // 0)
     },
     plan_before: {
       default: {
