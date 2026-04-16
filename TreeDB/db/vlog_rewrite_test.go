@@ -215,6 +215,23 @@ func (r *rewriteTestLeafReader) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
 	return val, nil
 }
 
+type rewriteTestLeafUnsafeToReader struct {
+	values map[page.ValuePtr][]byte
+}
+
+func (r *rewriteTestLeafUnsafeToReader) ReadUnsafeTo(ptr page.ValuePtr, dst []byte) ([]byte, bool, error) {
+	val, ok := r.values[ptr]
+	if !ok {
+		return nil, false, fmt.Errorf("leaf pointer not found")
+	}
+	if cap(dst) >= len(val) {
+		dst = dst[:len(val)]
+		copy(dst, val)
+		return dst, true, nil
+	}
+	return val, false, nil
+}
+
 func TestLeafRefRewriteCtx_RewriteNodeUsesConfiguredLeafLog(t *testing.T) {
 	root := t.TempDir()
 	valueDir := filepath.Join(root, "value_vlog")
@@ -275,6 +292,62 @@ func TestLeafRefRewriteCtx_RewriteNodeUsesConfiguredLeafLog(t *testing.T) {
 	}
 	if !strings.HasPrefix(createdSegments[0].path, leafDir+string(os.PathSeparator)) {
 		t.Fatalf("rewritten leaf segment path=%q want prefix %q", createdSegments[0].path, leafDir)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+}
+
+func TestLeafRefRewriteCtx_RewriteNodeUsesUnsafeToReaderWhenLeafReaderNil(t *testing.T) {
+	root := t.TempDir()
+	valueDir := filepath.Join(root, "value_vlog")
+	leafDir := filepath.Join(root, "leaf_vlog")
+	if err := os.MkdirAll(valueDir, 0o755); err != nil {
+		t.Fatalf("mkdir value dir: %v", err)
+	}
+	if err := os.MkdirAll(leafDir, 0o755); err != nil {
+		t.Fatalf("mkdir leaf dir: %v", err)
+	}
+
+	writer := newRewriteWriter(valueDir, 254, 0, 64<<20)
+	writer.ConfigureLeafLog(leafDir, rewriteLeafLogLaneID, 0)
+	leafPage := bytes.Repeat([]byte("u"), page.PageSize)
+	sourceFileID, err := valuelog.EncodeFileID(3, 11)
+	if err != nil {
+		t.Fatalf("EncodeFileID: %v", err)
+	}
+	oldPtr := page.ValuePtr{FileID: sourceFileID, Offset: 128, Length: page.ValuePtrMarkGrouped(0, 0)}
+	oldLeafPtr, err := page.LeafLogPtrFromValuePtr(oldPtr)
+	if err != nil {
+		t.Fatalf("LeafLogPtrFromValuePtr: %v", err)
+	}
+	oldID, err := page.EncodeLeafRef(oldLeafPtr)
+	if err != nil {
+		t.Fatalf("EncodeLeafRef: %v", err)
+	}
+
+	ctx := leafRefRewriteCtx{
+		ctx:       context.Background(),
+		leafToer:  &rewriteTestLeafUnsafeToReader{values: map[page.ValuePtr][]byte{oldPtr: leafPage}},
+		writer:    writer,
+		ridAlloc:  newRewriteRIDAllocator(1000, nil),
+		sourceIDs: map[uint32]struct{}{sourceFileID: {}},
+	}
+
+	newID, changed, err := ctx.rewriteNode(oldID)
+	if err != nil {
+		t.Fatalf("rewriteNode: %v", err)
+	}
+	if !changed {
+		t.Fatalf("expected leaf ref rewrite to change node")
+	}
+	newLeafPtr, ok := page.DecodeLeafRef(newID)
+	if !ok {
+		t.Fatalf("expected rewritten leaf ref")
+	}
+	lane, _ := valuelog.DecodeFileID(newLeafPtr.ValueLogFileID())
+	if lane != rewriteLeafLogLaneID {
+		t.Fatalf("rewritten leaf lane=%d want=%d", lane, rewriteLeafLogLaneID)
 	}
 	if err := writer.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
