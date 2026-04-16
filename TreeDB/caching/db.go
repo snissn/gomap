@@ -9413,7 +9413,12 @@ func leafGenerationPackReclaimPerByteCopiedPPM(reclaimedBytes, copiedBytes int64
 	if reclaimedBytes >= copiedBytes {
 		return 1000000
 	}
-	return (reclaimedBytes * 1000000) / copiedBytes
+	hi, lo := bits.Mul64(uint64(reclaimedBytes), 1000000)
+	ppm, _ := bits.Div64(hi, lo, uint64(copiedBytes))
+	if ppm > math.MaxInt64 {
+		return math.MaxInt64
+	}
+	return int64(ppm)
 }
 
 func (db *DB) foregroundLeafPackAdmission(now time.Time) leafGenerationPackMaintenanceAdmission {
