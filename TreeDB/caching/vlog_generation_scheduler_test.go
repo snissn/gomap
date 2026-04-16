@@ -1678,13 +1678,17 @@ func mustLeafPackTempDir(t *testing.T, prefix string) string {
 func removeLeafPackTempDir(t *testing.T, dir string) {
 	t.Helper()
 	var lastErr error
-	for i := 0; i < 50; i++ {
+	sleep := 20 * time.Millisecond
+	for i := 0; i < 80; i++ {
 		err := os.RemoveAll(dir)
 		if err == nil || errors.Is(err, os.ErrNotExist) {
 			return
 		}
 		lastErr = err
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(sleep)
+		if sleep < 100*time.Millisecond {
+			sleep += 10 * time.Millisecond
+		}
 	}
 	t.Fatalf("remove tempdir %s: %v", dir, lastErr)
 }
