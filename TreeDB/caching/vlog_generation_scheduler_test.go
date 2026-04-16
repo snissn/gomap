@@ -1666,18 +1666,50 @@ func (b *leafPackMaintenanceRecordingBackend) recordedLeafGC() (backenddb.LeafGe
 	return stats, b.leafGCCalls
 }
 
+func mustLeafPackTempDir(t *testing.T, prefix string) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", prefix)
+	if err != nil {
+		t.Fatalf("mkdir tempdir: %v", err)
+	}
+	return dir
+}
+
+func removeLeafPackTempDir(t *testing.T, dir string) {
+	t.Helper()
+	var lastErr error
+	for i := 0; i < 50; i++ {
+		err := os.RemoveAll(dir)
+		if err == nil || errors.Is(err, os.ErrNotExist) {
+			return
+		}
+		lastErr = err
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("remove tempdir %s: %v", dir, lastErr)
+}
+
 func mustOpenLeafPackBackend(t *testing.T) *backenddb.DB {
 	t.Helper()
-	backend, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	dir := mustLeafPackTempDir(t, "treedb-leaf-pack-backend-")
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
 	if err != nil {
+		removeLeafPackTempDir(t, dir)
 		t.Fatalf("open backend: %v", err)
 	}
+	t.Cleanup(func() {
+		if err := backend.Close(); err != nil {
+			t.Fatalf("close backend: %v", err)
+		}
+		removeLeafPackTempDir(t, dir)
+	})
 	return backend
 }
 
 func openLeafPackMaintenanceTestDB(t *testing.T, backend *leafPackMaintenanceRecordingBackend) (*DB, func()) {
 	t.Helper()
-	db, err := Open(t.TempDir(), backend, Options{
+	dir := mustLeafPackTempDir(t, "treedb-leaf-pack-cache-")
+	db, err := Open(dir, backend, Options{
 		AllowUnsafe:                      true,
 		DisableWAL:                       true,
 		JournalLanes:                     4,
@@ -1707,7 +1739,43 @@ func openLeafPackMaintenanceTestDB(t *testing.T, backend *leafPackMaintenanceRec
 	db.lastForegroundWriteUnixNano.Store(time.Now().Add(-2 * vlogGenerationMaintenanceQuietWindow).UnixNano())
 	db.lastForegroundReadUnixNano.Store(time.Now().Add(-2 * vlogForegroundReadQuietWindow).UnixNano())
 	forceVlogMaintenanceIdle(db)
-	return db, func() { _ = db.Close() }
+	return db, func() {
+		if err := db.Close(); err != nil {
+			t.Fatalf("close cachingdb: %v", err)
+		}
+		removeLeafPackTempDir(t, dir)
+	}
+}
+
+func openLeafPackMaintenanceSchedulerOnlyTestDB(t *testing.T, backend *leafPackMaintenanceRecordingBackend) (*DB, func()) {
+	t.Helper()
+	dir := mustLeafPackTempDir(t, "treedb-leaf-pack-cache-")
+	db, err := Open(dir, backend, Options{
+		AllowUnsafe:                      true,
+		DisableWAL:                       true,
+		JournalLanes:                     4,
+		IndexOuterLeavesInValueLog:       true,
+		ValueLogGenerationPolicy:         uint8(backenddb.ValueLogGenerationHotWarmCold),
+		ValueLogRewriteTriggerTotalBytes: 1,
+		ValueLogRewriteBudgetBytesPerSec: 1024,
+		ForceValueLogPointers:            true,
+	})
+	if err != nil {
+		t.Fatalf("open cachingdb: %v", err)
+	}
+	db.testSkipVlogCheckpointKick = true
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
+	db.lastForegroundWriteUnixNano.Store(time.Now().Add(-2 * vlogGenerationMaintenanceQuietWindow).UnixNano())
+	db.lastForegroundReadUnixNano.Store(time.Now().Add(-2 * vlogForegroundReadQuietWindow).UnixNano())
+	forceVlogMaintenanceIdle(db)
+	return db, func() {
+		if err := db.Close(); err != nil {
+			t.Fatalf("close cachingdb: %v", err)
+		}
+		removeLeafPackTempDir(t, dir)
+	}
 }
 
 func leafPackWindowExhaustingStats(genID uint64, expectedReclaimBytes int64, copiedBytes int64) backenddb.LeafGenerationPackRunOnceStats {
