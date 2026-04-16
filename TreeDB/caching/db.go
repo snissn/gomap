@@ -22954,7 +22954,7 @@ func (db *DB) maybeRunLeafGenerationPackMaintenance(runGC bool, quiet bool, admi
 
 	if ran {
 		db.debugVlogMaintf(
-			"leaf_pack_done runs=%d generations=%d bytes_to_copy=%d expected_reclaim_bytes=%d bytes_copied=%d gc_eligible=%d gc_deleted=%d gc_deleted_bytes=%d gc_files_deleted=%d reclaimed_bytes=%d reclaim_per_copy_ppm=%d wall_ms=%.3f",
+			"leaf_pack_done runs=%d generations=%d bytes_to_copy=%d expected_reclaim_bytes=%d bytes_copied=%d gc_eligible=%d gc_deleted=%d gc_deleted_bytes=%d gc_files_deleted=%d attributed_reclaim_bytes=%d attributed_reclaim_per_copy_ppm=%d wall_ms=%.3f",
 			totalRuns,
 			totalSelectedGenerations,
 			totalSelectedBytesToCopy,
@@ -24136,8 +24136,8 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_generation.leaf_pack.bytes_copied"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackBytesCopied.Load())
 	stats["treedb.cache.vlog_generation.leaf_pack.expected_reclaim_bytes"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackExpectedReclaimBytes.Load())
 	stats["treedb.cache.vlog_generation.leaf_pack.expected_reclaim_per_byte_copied_ppm"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackExpectedReclaimPerByteCopiedPPM.Load())
-	stats["treedb.cache.vlog_generation.leaf_pack.reclaimed_bytes"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackReclaimedBytes.Load())
-	stats["treedb.cache.vlog_generation.leaf_pack.reclaim_per_byte_copied_ppm"] = fmt.Sprintf("%d", leafGenerationPackReclaimPerByteCopiedPPM(int64(db.vlogGenerationLeafPackReclaimedBytes.Load()), int64(db.vlogGenerationLeafPackBytesCopied.Load())))
+	stats["treedb.cache.vlog_generation.leaf_pack.attributed_reclaim_bytes"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackReclaimedBytes.Load())
+	stats["treedb.cache.vlog_generation.leaf_pack.attributed_reclaim_per_byte_copied_ppm"] = fmt.Sprintf("%d", leafGenerationPackReclaimPerByteCopiedPPM(int64(db.vlogGenerationLeafPackReclaimedBytes.Load()), int64(db.vlogGenerationLeafPackBytesCopied.Load())))
 	stats["treedb.cache.vlog_generation.leaf_pack.selection.bytes_to_copy"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackSelectionBytesToCopy.Load())
 	stats["treedb.cache.vlog_generation.leaf_pack.selection.bytes_dead"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackSelectionBytesDead.Load())
 	stats["treedb.cache.vlog_generation.leaf_pack.selection.generations"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackSelectionGenerations.Load())
@@ -24156,8 +24156,8 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_generation.leaf_pack.last_selection.bytes_dead"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackLastSelectionBytesDead.Load())
 	stats["treedb.cache.vlog_generation.leaf_pack.last_selection.generations"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackLastSelectionGenerations.Load())
 	stats["treedb.cache.vlog_generation.leaf_pack.last_bytes_copied"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackLastBytesCopied.Load())
-	stats["treedb.cache.vlog_generation.leaf_pack.last_reclaimed_bytes"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackLastReclaimedBytes.Load())
-	stats["treedb.cache.vlog_generation.leaf_pack.last_reclaim_per_byte_copied_ppm"] = fmt.Sprintf("%d", leafGenerationPackReclaimPerByteCopiedPPM(db.vlogGenerationLeafPackLastReclaimedBytes.Load(), db.vlogGenerationLeafPackLastBytesCopied.Load()))
+	stats["treedb.cache.vlog_generation.leaf_pack.last_attributed_reclaim_bytes"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackLastReclaimedBytes.Load())
+	stats["treedb.cache.vlog_generation.leaf_pack.last_attributed_reclaim_per_byte_copied_ppm"] = fmt.Sprintf("%d", leafGenerationPackReclaimPerByteCopiedPPM(db.vlogGenerationLeafPackLastReclaimedBytes.Load(), db.vlogGenerationLeafPackLastBytesCopied.Load()))
 	stats["treedb.cache.vlog_generation.leaf_pack.gc.runs"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackGCRuns.Load())
 	stats["treedb.cache.vlog_generation.leaf_pack.gc.eligible_generations"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackGCEligibleGenerations.Load())
 	stats["treedb.cache.vlog_generation.leaf_pack.gc.deleted_generations"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackGCDeletedGenerations.Load())

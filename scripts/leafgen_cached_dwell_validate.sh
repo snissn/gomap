@@ -115,8 +115,8 @@ type sample struct {
     LeafPackDeadline              uint64            `json:"leaf_pack_deadline"`
     LeafPackBytesCopied           uint64            `json:"leaf_pack_bytes_copied"`
     LeafPackExpectedBytes         uint64            `json:"leaf_pack_expected_reclaim_bytes"`
-    LeafPackReclaimedBytes        uint64            `json:"leaf_pack_reclaimed_bytes"`
-    LeafPackReclaimPerCopyPPM     uint64            `json:"leaf_pack_reclaim_per_byte_copied_ppm"`
+    LeafPackReclaimedBytes        uint64            `json:"leaf_pack_attributed_reclaim_bytes"`
+    LeafPackReclaimPerCopyPPM     uint64            `json:"leaf_pack_attributed_reclaim_per_byte_copied_ppm"`
     LeafPackMinReclaimPerCopyPPM  uint64            `json:"leaf_pack_min_reclaim_per_byte_copied_ppm"`
     LeafPackStopLowYield          uint64            `json:"leaf_pack_stop_low_yield"`
     LeafPackPassesPeriodic        uint64            `json:"leaf_pack_passes_periodic"`
@@ -129,8 +129,8 @@ type sample struct {
     LeafPackLastSkipReason        string            `json:"leaf_pack_last_skip_reason,omitempty"`
     LeafPackLastGenCount          uint64            `json:"leaf_pack_last_selection_generations"`
     LeafPackLastCopyBytes         uint64            `json:"leaf_pack_last_bytes_copied"`
-    LeafPackLastReclaimedBytes    uint64            `json:"leaf_pack_last_reclaimed_bytes"`
-    LeafPackLastReclaimPerCopyPPM uint64            `json:"leaf_pack_last_reclaim_per_byte_copied_ppm"`
+    LeafPackLastReclaimedBytes    uint64            `json:"leaf_pack_last_attributed_reclaim_bytes"`
+    LeafPackLastReclaimPerCopyPPM uint64            `json:"leaf_pack_last_attributed_reclaim_per_byte_copied_ppm"`
     LeafPackWriteBurstGraceMS     uint64            `json:"leaf_pack_write_burst_grace_ms"`
     LeafPackMaxForegroundQueue    uint64            `json:"leaf_pack_max_foreground_queue"`
     Stats                         map[string]string `json:"stats,omitempty"`
@@ -204,8 +204,8 @@ func main() {
             LeafPackDeadline:              parseUint(stats["treedb.cache.vlog_generation.leaf_pack.deadline"]),
             LeafPackBytesCopied:           parseUint(stats["treedb.cache.vlog_generation.leaf_pack.bytes_copied"]),
             LeafPackExpectedBytes:         parseUint(stats["treedb.cache.vlog_generation.leaf_pack.expected_reclaim_bytes"]),
-            LeafPackReclaimedBytes:        parseUint(stats["treedb.cache.vlog_generation.leaf_pack.reclaimed_bytes"]),
-            LeafPackReclaimPerCopyPPM:     parseUint(stats["treedb.cache.vlog_generation.leaf_pack.reclaim_per_byte_copied_ppm"]),
+            LeafPackReclaimedBytes:        parseUint(stats["treedb.cache.vlog_generation.leaf_pack.attributed_reclaim_bytes"]),
+            LeafPackReclaimPerCopyPPM:     parseUint(stats["treedb.cache.vlog_generation.leaf_pack.attributed_reclaim_per_byte_copied_ppm"]),
             LeafPackMinReclaimPerCopyPPM:  parseUint(stats["treedb.cache.vlog_generation.leaf_pack.min_reclaim_per_byte_copied_ppm"]),
             LeafPackStopLowYield:          parseUint(stats["treedb.cache.vlog_generation.leaf_pack.stop.low_yield"]),
             LeafPackPassesPeriodic:        parseUint(stats["treedb.cache.vlog_generation.maintenance.passes.with_leaf_pack.source.periodic"]),
@@ -218,8 +218,8 @@ func main() {
             LeafPackLastSkipReason:        stats["treedb.cache.vlog_generation.leaf_pack.last_skip_reason"],
             LeafPackLastGenCount:          parseUint(stats["treedb.cache.vlog_generation.leaf_pack.last_selection.generations"]),
             LeafPackLastCopyBytes:         parseUint(stats["treedb.cache.vlog_generation.leaf_pack.last_bytes_copied"]),
-            LeafPackLastReclaimedBytes:    parseUint(stats["treedb.cache.vlog_generation.leaf_pack.last_reclaimed_bytes"]),
-            LeafPackLastReclaimPerCopyPPM: parseUint(stats["treedb.cache.vlog_generation.leaf_pack.last_reclaim_per_byte_copied_ppm"]),
+            LeafPackLastReclaimedBytes:    parseUint(stats["treedb.cache.vlog_generation.leaf_pack.last_attributed_reclaim_bytes"]),
+            LeafPackLastReclaimPerCopyPPM: parseUint(stats["treedb.cache.vlog_generation.leaf_pack.last_attributed_reclaim_per_byte_copied_ppm"]),
             LeafPackWriteBurstGraceMS:     parseUint(stats["treedb.cache.vlog_generation.leaf_pack.write_burst_grace_ms"]),
             LeafPackMaxForegroundQueue:    parseUint(stats["treedb.cache.vlog_generation.leaf_pack.max_foreground_queue"]),
         }
@@ -391,16 +391,16 @@ jq -n \
       skip_foreground_iterators: ((($dwell[0] | last) // {}) | .leaf_pack_skip_foreground_iterators // 0),
       bytes_copied: ((($dwell[0] | last) // {}) | .leaf_pack_bytes_copied // 0),
       expected_reclaim_bytes: ((($dwell[0] | last) // {}) | .leaf_pack_expected_reclaim_bytes // 0),
-      reclaimed_bytes: ((($dwell[0] | last) // {}) | .leaf_pack_reclaimed_bytes // 0),
-      reclaim_per_byte_copied_ppm: ((($dwell[0] | last) // {}) | .leaf_pack_reclaim_per_byte_copied_ppm // 0),
+      reclaimed_bytes: ((($dwell[0] | last) // {}) | .leaf_pack_attributed_reclaim_bytes // 0),
+      reclaim_per_byte_copied_ppm: ((($dwell[0] | last) // {}) | .leaf_pack_attributed_reclaim_per_byte_copied_ppm // 0),
       min_reclaim_per_byte_copied_ppm: ((($dwell[0] | last) // {}) | .leaf_pack_min_reclaim_per_byte_copied_ppm // 0),
       stop_low_yield: ((($dwell[0] | last) // {}) | .leaf_pack_stop_low_yield // 0),
       gc_runs: ((($dwell[0] | last) // {}) | .leaf_pack_gc_runs // 0),
       gc_deleted_generations: ((($dwell[0] | last) // {}) | .leaf_pack_gc_deleted_generations // 0),
       gc_deleted_files: ((($dwell[0] | last) // {}) | .leaf_pack_gc_deleted_files // 0),
       gc_deleted_bytes: ((($dwell[0] | last) // {}) | .leaf_pack_gc_deleted_bytes // 0),
-      last_reclaimed_bytes: ((($dwell[0] | last) // {}) | .leaf_pack_last_reclaimed_bytes // 0),
-      last_reclaim_per_byte_copied_ppm: ((($dwell[0] | last) // {}) | .leaf_pack_last_reclaim_per_byte_copied_ppm // 0),
+      last_reclaimed_bytes: ((($dwell[0] | last) // {}) | .leaf_pack_last_attributed_reclaim_bytes // 0),
+      last_reclaim_per_byte_copied_ppm: ((($dwell[0] | last) // {}) | .leaf_pack_last_attributed_reclaim_per_byte_copied_ppm // 0),
       write_burst_grace_ms: ((($dwell[0] | last) // {}) | .leaf_pack_write_burst_grace_ms // 0),
       max_foreground_queue: ((($dwell[0] | last) // {}) | .leaf_pack_max_foreground_queue // 0)
     },
