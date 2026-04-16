@@ -2022,8 +2022,8 @@ func TestLeafGenerationPackMaintenance_LoopsWithinBudgetAndRunsLeafGC(t *testing
 	if got := db.vlogGenerationLeafPackGCDeletedBytes.Load(); got != 75 {
 		t.Fatalf("leaf gc deleted bytes=%d want 75", got)
 	}
-	if got := db.vlogGenerationLeafPackReclaimedBytes.Load(); got != 18 {
-		t.Fatalf("leaf pack reclaimed bytes=%d want 18", got)
+	if got := db.vlogGenerationLeafPackReclaimedBytes.Load(); got != 150 {
+		t.Fatalf("leaf pack reclaimed bytes=%d want 150", got)
 	}
 	stats := db.Stats()
 	if got := stats["treedb.cache.vlog_generation.leaf_pack.gc.deleted_files"]; got != "5" {
@@ -2038,17 +2038,17 @@ func TestLeafGenerationPackMaintenance_LoopsWithinBudgetAndRunsLeafGC(t *testing
 	if got := stats["treedb.cache.vlog_generation.leaf_pack.gc.last_deleted_bytes"]; got != "25" {
 		t.Fatalf("gc.last_deleted_bytes=%q want 25", got)
 	}
-	if got := stats["treedb.cache.vlog_generation.leaf_pack.reclaimed_bytes"]; got != "18" {
-		t.Fatalf("reclaimed_bytes=%q want 18", got)
+	if got := stats["treedb.cache.vlog_generation.leaf_pack.reclaimed_bytes"]; got != "150" {
+		t.Fatalf("reclaimed_bytes=%q want 150", got)
 	}
-	if got := stats["treedb.cache.vlog_generation.leaf_pack.last_reclaimed_bytes"]; got != "6" {
-		t.Fatalf("last_reclaimed_bytes=%q want 6", got)
+	if got := stats["treedb.cache.vlog_generation.leaf_pack.last_reclaimed_bytes"]; got != "60" {
+		t.Fatalf("last_reclaimed_bytes=%q want 60", got)
 	}
-	if got := stats["treedb.cache.vlog_generation.leaf_pack.reclaim_per_byte_copied_ppm"]; got != "315789" {
-		t.Fatalf("reclaim_per_byte_copied_ppm=%q want 315789", got)
+	if got := stats["treedb.cache.vlog_generation.leaf_pack.reclaim_per_byte_copied_ppm"]; got != "1000000" {
+		t.Fatalf("reclaim_per_byte_copied_ppm=%q want 1000000", got)
 	}
-	if got := stats["treedb.cache.vlog_generation.leaf_pack.last_reclaim_per_byte_copied_ppm"]; got != "315789" {
-		t.Fatalf("last_reclaim_per_byte_copied_ppm=%q want 315789", got)
+	if got := stats["treedb.cache.vlog_generation.leaf_pack.last_reclaim_per_byte_copied_ppm"]; got != "1000000" {
+		t.Fatalf("last_reclaim_per_byte_copied_ppm=%q want 1000000", got)
 	}
 }
 
@@ -2063,8 +2063,8 @@ func TestLeafGenerationPackMaintenance_StopsAfterLowYieldWindow(t *testing.T) {
 				Selection: backenddb.LeafGenerationPackSelection{
 					GenerationIDs:        []uint64{31},
 					BytesToCopy:          50,
-					BytesDead:            60,
-					ExpectedReclaimBytes: 60,
+					BytesDead:            10,
+					ExpectedReclaimBytes: 10,
 				},
 				Pack: backenddb.LeafGenerationPackStats{BytesCopied: 50, WallTimeNanos: (4 * time.Millisecond).Nanoseconds()},
 			},

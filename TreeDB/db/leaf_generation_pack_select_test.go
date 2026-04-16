@@ -100,3 +100,23 @@ func TestSelectLeafGenerationPackCandidates_RejectsNonEligiblePlan(t *testing.T)
 		t.Fatalf("expected non-eligible plan to fail")
 	}
 }
+
+func TestSelectLeafGenerationPackCandidates_PrioritizesOversizeErrorWhenNothingFits(t *testing.T) {
+	plan := LeafGenerationPlan{
+		Admission: leafGenerationPlanAdmissionEligible,
+		Candidates: []LeafGenerationPlanGeneration{
+			{GenerationID: 13, BytesDead: 100, BytesLive: 100, BytesToCopy: 100},
+			{GenerationID: 14, BytesDead: 90, BytesLive: 90, BytesToCopy: 90},
+		},
+	}
+	_, err := SelectLeafGenerationPackCandidates(plan, LeafGenerationPackSelectOptions{
+		MaxBytesToCopy:             50,
+		MinReclaimPerByteCopiedPPM: 900000,
+	})
+	if err == nil {
+		t.Fatal("expected oversize selection error")
+	}
+	if got := err.Error(); got != "leaf generation pack selection: no candidate generations fit max-bytes-to-copy=50" {
+		t.Fatalf("error=%q, want oversize no-fit error", got)
+	}
+}

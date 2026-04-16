@@ -22914,7 +22914,11 @@ func (db *DB) maybeRunLeafGenerationPackMaintenance(runGC bool, quiet bool, admi
 				totalGCDeletedFiles += gcStats.FilesDeleted
 				totalGCDeletedBytes += gcStats.BytesDeleted
 
-				windowReclaimedBytes := gcStats.BytesDeleted - stats.Pack.BytesCopied
+				// Attribute pack-window yield to the selected generations rather than
+				// the whole GC pass. A GC sweep can delete bytes from unrelated delayed
+				// generations, so whole-pass deleted bytes are not a stable per-window
+				// reclaim signal.
+				windowReclaimedBytes := stats.Selection.ExpectedReclaimBytes
 				if windowReclaimedBytes < 0 {
 					windowReclaimedBytes = 0
 				}
