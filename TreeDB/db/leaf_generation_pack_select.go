@@ -39,6 +39,7 @@ func SelectLeafGenerationPackCandidates(plan LeafGenerationPlan, opts LeafGenera
 		return out, fmt.Errorf("leaf generation pack selection: plan produced no candidate generations")
 	}
 	rejectedOversize := false
+	rejectedLowYield := false
 	for _, gen := range plan.Candidates {
 		if opts.MaxGenerations > 0 && len(out.GenerationIDs) >= opts.MaxGenerations {
 			break
@@ -51,6 +52,7 @@ func SelectLeafGenerationPackCandidates(plan LeafGenerationPlan, opts LeafGenera
 			tentativeDead := out.BytesDead + gen.BytesDead
 			tentativeCopy := out.BytesToCopy + gen.BytesToCopy
 			if tentativeCopy > 0 && ratioPPM(tentativeDead, tentativeCopy) < opts.MinReclaimPerByteCopiedPPM {
+				rejectedLowYield = true
 				break
 			}
 		}
@@ -63,6 +65,9 @@ func SelectLeafGenerationPackCandidates(plan LeafGenerationPlan, opts LeafGenera
 		out.LivePages += gen.LivePages
 	}
 	if len(out.GenerationIDs) == 0 {
+		if opts.MinReclaimPerByteCopiedPPM > 0 && rejectedLowYield {
+			return out, fmt.Errorf("leaf generation pack selection: no candidate generations satisfy min-reclaim-per-byte-copied-ppm=%d", opts.MinReclaimPerByteCopiedPPM)
+		}
 		if opts.MaxBytesToCopy > 0 && rejectedOversize {
 			return out, fmt.Errorf("leaf generation pack selection: no candidate generations fit max-bytes-to-copy=%d", opts.MaxBytesToCopy)
 		}
