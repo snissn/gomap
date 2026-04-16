@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
@@ -475,6 +476,128 @@ func TestNoteLeafGenerationWritableFileIDs_PersistsSealedRecordLengthIndex(t *te
 	}
 	if got, found := idx.lookup(128); !found || got != 104 {
 		t.Fatalf("lookup(128)=(%d,%v), want (104,true)", got, found)
+	}
+}
+
+func TestNoteLeafGenerationWritableFileID_SaveFailureLeavesManifestRetryable(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("chmod-based save failure is not reliable on Windows")
+	}
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir, IndexOuterLeavesInValueLog: true})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	leafDir := LeafLogDirPath(dir)
+	_, fileID1 := createLeafGenerationTestSegment(t, leafDir, rewriteLeafLogLaneID, 1)
+	_, fileID2 := createLeafGenerationTestSegment(t, leafDir, rewriteLeafLogLaneID, 2)
+	rawFileID1 := page.ValueLogSegmentID(fileID1)
+	rawFileID2 := page.ValueLogSegmentID(fileID2)
+	if err := db.noteLeafGenerationWritableFileID(fileID1, 55); err != nil {
+		t.Fatalf("noteLeafGenerationWritableFileID first: %v", err)
+	}
+	if err := os.Chmod(leafDir, 0o500); err != nil {
+		t.Fatalf("Chmod read-only leaf dir: %v", err)
+	}
+	defer func() {
+		_ = os.Chmod(leafDir, 0o700)
+	}()
+	if err := db.noteLeafGenerationWritableFileID(fileID2, 89); err == nil {
+		t.Fatal("expected manifest save failure")
+	}
+	current := db.leafGenerationManifest.Generations[db.leafGenerationManifest.currentGenerationIndex()]
+	if got, want := current.FileIDs, []uint32{rawFileID1}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("in-memory current FileIDs=%v, want %v", got, want)
+	}
+	loadedBefore, ok, err := loadLeafGenerationManifest(leafDir)
+	if err != nil {
+		t.Fatalf("loadLeafGenerationManifest before retry: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected manifest file before retry")
+	}
+	if got, want := loadedBefore.Generations[loadedBefore.currentGenerationIndex()].FileIDs, []uint32{rawFileID1}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("persisted current FileIDs before retry=%v, want %v", got, want)
+	}
+	if err := os.Chmod(leafDir, 0o700); err != nil {
+		t.Fatalf("Chmod writable leaf dir: %v", err)
+	}
+	if err := db.noteLeafGenerationWritableFileID(fileID2, 89); err != nil {
+		t.Fatalf("noteLeafGenerationWritableFileID retry: %v", err)
+	}
+	loadedAfter, ok, err := loadLeafGenerationManifest(leafDir)
+	if err != nil {
+		t.Fatalf("loadLeafGenerationManifest after retry: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected manifest file after retry")
+	}
+	if got, want := len(loadedAfter.Generations), 2; got != want {
+		t.Fatalf("len(Generations)=%d, want %d", got, want)
+	}
+	if got, want := loadedAfter.Generations[0].FileIDs, []uint32{rawFileID1}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("sealed FileIDs=%v, want %v", got, want)
+	}
+	if got, want := loadedAfter.Generations[1].FileIDs, []uint32{rawFileID2}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("current FileIDs=%v, want %v", got, want)
+	}
+}
+
+func TestStagedLeafGenerationManifestWithPending_ReflectsQueuedWritableFiles(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir, IndexOuterLeavesInValueLog: true})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	path1, fileID1 := createLeafGenerationTestSegment(t, LeafLogDirPath(dir), rewriteLeafLogLaneID, 1)
+	db.SetLeafPageLog(&manifestTestLeafPageLog{path: path1, fileID: fileID1})
+	if registered, err := db.ensureLeafPageLogSegmentRegistered(55); err != nil || !registered {
+		t.Fatalf("ensureLeafPageLogSegmentRegistered first: registered=%v err=%v", registered, err)
+	}
+	if err := db.noteLeafGenerationPendingFileIDs(0, 55); err != nil {
+		t.Fatalf("noteLeafGenerationPendingFileIDs first: %v", err)
+	}
+
+	path2, fileID2 := createLeafGenerationTestSegment(t, LeafLogDirPath(dir), rewriteLeafLogLaneID, 2)
+	db.SetLeafPageLog(&manifestTestLeafPageLog{path: path2, fileID: fileID2})
+	if registered, err := db.ensureLeafPageLogSegmentRegistered(144); err != nil || !registered {
+		t.Fatalf("ensureLeafPageLogSegmentRegistered rollover: registered=%v err=%v", registered, err)
+	}
+	before := db.currentLeafGenerationView()
+	if _, ok := before.FileToGeneration[page.ValueLogSegmentID(fileID2)]; ok {
+		t.Fatalf("pending file %d already visible before staging", page.ValueLogSegmentID(fileID2))
+	}
+	staged, changed, err := db.stagedLeafGenerationManifestWithPending(db.leafGenerationManifest, 0, 144)
+	if err != nil {
+		t.Fatalf("stagedLeafGenerationManifestWithPending: %v", err)
+	}
+	if !changed {
+		t.Fatal("expected staged manifest change")
+	}
+	if staged == db.leafGenerationManifest {
+		t.Fatal("expected staged manifest clone, got shared pointer")
+	}
+	view := newLeafGenerationView(staged)
+	if got, want := len(view.GenerationOrder), 2; got != want {
+		t.Fatalf("len(GenerationOrder)=%d, want %d", got, want)
+	}
+	if got, want := view.FileToGeneration[page.ValueLogSegmentID(fileID1)], uint64(1); got != want {
+		t.Fatalf("file1 generation=%d, want %d", got, want)
+	}
+	if got, want := view.FileToGeneration[page.ValueLogSegmentID(fileID2)], uint64(2); got != want {
+		t.Fatalf("file2 generation=%d, want %d", got, want)
+	}
+	current := staged.Generations[staged.currentGenerationIndex()]
+	if got, want := current.FileIDs, []uint32{page.ValueLogSegmentID(fileID2)}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("staged current FileIDs=%v, want %v", got, want)
+	}
+	liveCurrent := db.leafGenerationManifest.Generations[db.leafGenerationManifest.currentGenerationIndex()]
+	if got, want := liveCurrent.FileIDs, []uint32{page.ValueLogSegmentID(fileID1)}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("live current FileIDs=%v, want %v", got, want)
 	}
 }
 
