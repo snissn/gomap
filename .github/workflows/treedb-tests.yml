@@ -30,10 +30,24 @@ jobs:
             os: windows-latest
             timeout: 25
             shard_kind: windows-caching-heavy
-          - name: windows-caching-rest
+          - name: windows-caching-rest-1
             os: windows-latest
             timeout: 25
             shard_kind: windows-caching-rest
+            rest_shard_index: 0
+            rest_shard_count: 3
+          - name: windows-caching-rest-2
+            os: windows-latest
+            timeout: 25
+            shard_kind: windows-caching-rest
+            rest_shard_index: 1
+            rest_shard_count: 3
+          - name: windows-caching-rest-3
+            os: windows-latest
+            timeout: 25
+            shard_kind: windows-caching-rest
+            rest_shard_index: 2
+            rest_shard_count: 3
     timeout-minutes: ${{ matrix.timeout }}
     steps:
       - name: Checkout
@@ -79,17 +93,27 @@ jobs:
             windows-caching-rest)
               heavy_file="$(mktemp)"
               rest_file="$(mktemp)"
+              rest_shard_file="$(mktemp)"
               tr -d '\r' < ../.github/ci/treedb_windows_caching_heavy_tests.txt | grep -v '^#' | sed '/^$/d' > "$heavy_file"
               go test ./caching -list 'Test.*' | grep '^Test' | grep -F -x -v -f "$heavy_file" > "$rest_file"
-              rest_regex="^($(paste -sd'|' "$rest_file"))$"
+              rest_shard_index="${{ matrix.rest_shard_index }}"
+              rest_shard_count="${{ matrix.rest_shard_count }}"
+              if [ -z "$rest_shard_index" ]; then
+                rest_shard_index=0
+              fi
+              if [ -z "$rest_shard_count" ] || [ "$rest_shard_count" -lt 1 ]; then
+                rest_shard_count=1
+              fi
+              awk -v idx="$rest_shard_index" -v n="$rest_shard_count" 'BEGIN { c = 0 } { if ((c % n) == idx) print; c++ }' "$rest_file" > "$rest_shard_file"
+              rest_regex="^($(paste -sd'|' "$rest_shard_file"))$"
               if [ "$rest_regex" = '^()$' ]; then
-                echo "no non-heavy caching tests found" >&2
-                rm -f "$heavy_file" "$rest_file"
+                echo "no non-heavy caching tests found for shard ${rest_shard_index}/${rest_shard_count}" >&2
+                rm -f "$heavy_file" "$rest_file" "$rest_shard_file"
                 exit 1
               fi
-              echo "TreeDB/caching rest regex=${rest_regex}"
+              echo "TreeDB/caching rest shard=${rest_shard_index}/${rest_shard_count} regex=${rest_regex}"
               go test -json -timeout 30m -p 1 ./caching -run "$rest_regex" | tee treedb-test.jsonl
-              rm -f "$heavy_file" "$rest_file"
+              rm -f "$heavy_file" "$rest_file" "$rest_shard_file"
               ;;
             *)
               echo "unknown shard kind: ${{ matrix.shard_kind }}" >&2
