@@ -445,6 +445,48 @@ func TestManagerPromoteCurrentWritable_RetiresLeafCurrentMmapBeforeSealedFallbac
 	}
 }
 
+func TestFileRemapToFileSizePersistentOnly_SkipsDemotedLeafSegment(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("mmap not supported on windows")
+	}
+
+	dir := t.TempDir()
+	fileID := mustEncodeFileID(t, ReservedLeafLogLaneID, 1)
+	path := filepath.Join(dir, "value-l255-000001.log")
+
+	w, err := NewWriter(path, fileID)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	defer func() { _ = w.Close() }()
+	if _, err := w.Append(0, nil, 1, bytes.Repeat([]byte("leaf"), 64)); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	if err := w.Flush(); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+
+	f, err := openFile(path, fileID, nil, nil, templ.DecodeOptions{}, nil)
+	if err != nil {
+		t.Fatalf("openFile: %v", err)
+	}
+	defer func() { _ = f.Close() }()
+
+	mgr := &Manager{
+		files:                 map[uint32]*File{fileID: f},
+		currentWritableByLane: make(map[uint32]uint32),
+	}
+	f.manager = mgr
+	f.currentWritable.Store(true)
+	f.currentWritable.Store(false)
+
+	f.remapToFileSizePersistentOnly()
+
+	if data, _ := f.mmapData.Load().([]byte); len(data) != 0 {
+		t.Fatalf("expected demoted leaf segment to skip persistent-only remap, len=%d", len(data))
+	}
+}
+
 func TestFileRead_CountsDeadMappingCapFallback(t *testing.T) {
 	dir := t.TempDir()
 	fileID, err := EncodeFileID(0, 1)

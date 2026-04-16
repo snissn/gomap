@@ -335,10 +335,7 @@ func (f *File) maybeScheduleRemap() {
 	}
 	go func() {
 		defer f.remapRequested.Store(false)
-		if !f.usesPersistentMmap() {
-			return
-		}
-		f.remapToFileSize()
+		f.remapToFileSizePersistentOnly()
 	}()
 }
 
@@ -366,7 +363,15 @@ func (f *File) tryRefreshMmapRange(start, end int64) ([]byte, bool) {
 	return data, true
 }
 
+func (f *File) remapToFileSizePersistentOnly() {
+	f.remapToFileSizeWithPolicy(true)
+}
+
 func (f *File) remapToFileSize() {
+	f.remapToFileSizeWithPolicy(false)
+}
+
+func (f *File) remapToFileSizeWithPolicy(requirePersistent bool) {
 	if f == nil || f.closed.Load() || f.File == nil {
 		return
 	}
@@ -374,6 +379,9 @@ func (f *File) remapToFileSize() {
 	f.remapMu.Lock()
 	defer f.remapMu.Unlock()
 	if f.closed.Load() || f.File == nil {
+		return
+	}
+	if requirePersistent && !f.usesPersistentMmap() {
 		return
 	}
 	// If we have already hit the dead-mapping cap, we cannot remap again without
