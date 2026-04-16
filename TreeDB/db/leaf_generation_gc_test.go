@@ -177,6 +177,12 @@ func TestLeafGenerationGC_DeletesFullyDeadGeneration(t *testing.T) {
 	if got, want := stats1.FilesDeleted, 1; got != want {
 		t.Fatalf("FilesDeleted=%d, want %d (stats=%+v)", got, want, stats1)
 	}
+	if got := stats1.BytesEligible; got <= 0 {
+		t.Fatalf("BytesEligible=%d, want > 0 (stats=%+v)", got, stats1)
+	}
+	if got := stats1.BytesDeleted; got <= 0 {
+		t.Fatalf("BytesDeleted=%d, want > 0 (stats=%+v)", got, stats1)
+	}
 	if err := waitForPathRemoval(path1, 5*time.Second); err != nil {
 		t.Fatalf("waitForPathRemoval(%s): %v", path1, err)
 	}
@@ -233,6 +239,14 @@ func TestLeafGenerationGC_RetiresPinnedGenerationUntilSnapshotCloses(t *testing.
 		closeNoErr(t, snap)
 		t.Fatalf("GenerationsDeleted=%d, want 0 while pinned", got)
 	}
+	if got := stats1.BytesEligible; got != 0 {
+		closeNoErr(t, snap)
+		t.Fatalf("BytesEligible=%d, want 0 while pinned", got)
+	}
+	if got := stats1.BytesDeleted; got != 0 {
+		closeNoErr(t, snap)
+		t.Fatalf("BytesDeleted=%d, want 0 while pinned", got)
+	}
 	if _, err := os.Stat(path1); err != nil {
 		closeNoErr(t, snap)
 		t.Fatalf("expected pinned segment to remain, stat err=%v", err)
@@ -260,6 +274,9 @@ func TestLeafGenerationGC_RetiresPinnedGenerationUntilSnapshotCloses(t *testing.
 	}
 	if got, want := stats2.GenerationsDeleted, 1; got != want {
 		t.Fatalf("GenerationsDeleted=%d, want %d (stats=%+v)", got, want, stats2)
+	}
+	if got := stats2.BytesDeleted; got <= 0 {
+		t.Fatalf("BytesDeleted=%d, want > 0 (stats=%+v)", got, stats2)
 	}
 	if err := waitForPathRemoval(path1, 5*time.Second); err != nil {
 		t.Fatalf("waitForPathRemoval(%s): %v", path1, err)

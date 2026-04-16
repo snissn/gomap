@@ -45,15 +45,52 @@ func TestSelectLeafGenerationPackCandidates(t *testing.T) {
 	}
 }
 
-func TestSelectLeafGenerationPackCandidates_RejectsOversizeFirstCandidate(t *testing.T) {
+func TestSelectLeafGenerationPackCandidates_SkipsOversizeCandidateToFitLaterRankedGeneration(t *testing.T) {
 	plan := LeafGenerationPlan{
 		Admission: leafGenerationPlanAdmissionEligible,
 		Candidates: []LeafGenerationPlanGeneration{
-			{GenerationID: 7, BytesToCopy: 100},
+			{GenerationID: 7, BytesDead: 100, BytesLive: 100, BytesToCopy: 100},
+			{GenerationID: 8, BytesDead: 30, BytesLive: 30, BytesToCopy: 30},
 		},
 	}
-	if _, err := SelectLeafGenerationPackCandidates(plan, LeafGenerationPackSelectOptions{MaxBytesToCopy: 50}); err == nil {
-		t.Fatalf("expected oversize first candidate to fail")
+	selected, err := SelectLeafGenerationPackCandidates(plan, LeafGenerationPackSelectOptions{MaxBytesToCopy: 50})
+	if err != nil {
+		t.Fatalf("SelectLeafGenerationPackCandidates: %v", err)
+	}
+	if got, want := selected.GenerationIDs, []uint64{8}; len(got) != len(want) || got[0] != want[0] {
+		t.Fatalf("GenerationIDs=%v, want %v", got, want)
+	}
+}
+
+func TestSelectLeafGenerationPackCandidates_StopsBeforeLowYieldCandidate(t *testing.T) {
+	plan := LeafGenerationPlan{
+		Admission: leafGenerationPlanAdmissionEligible,
+		Candidates: []LeafGenerationPlanGeneration{
+			{GenerationID: 11, BytesTotal: 100, BytesLive: 20, BytesDead: 80, BytesToCopy: 20},
+			{GenerationID: 12, BytesTotal: 100, BytesLive: 95, BytesDead: 5, BytesToCopy: 95},
+		},
+	}
+	selected, err := SelectLeafGenerationPackCandidates(plan, LeafGenerationPackSelectOptions{MinReclaimPerByteCopiedPPM: 800000})
+	if err != nil {
+		t.Fatalf("SelectLeafGenerationPackCandidates: %v", err)
+	}
+	if got, want := selected.GenerationIDs, []uint64{11}; len(got) != len(want) || got[0] != want[0] {
+		t.Fatalf("GenerationIDs=%v, want %v", got, want)
+	}
+	if got, want := selected.ExpectedReclaimPerByteCopiedPPM, ratioPPM(80, 20); got != want {
+		t.Fatalf("ExpectedReclaimPerByteCopiedPPM=%d, want %d", got, want)
+	}
+}
+
+func TestSelectLeafGenerationPackCandidates_RejectsLowYieldPlanForSelection(t *testing.T) {
+	plan := LeafGenerationPlan{
+		Admission: leafGenerationPlanAdmissionEligible,
+		Candidates: []LeafGenerationPlanGeneration{
+			{GenerationID: 7, BytesDead: 5, BytesLive: 95, BytesToCopy: 95},
+		},
+	}
+	if _, err := SelectLeafGenerationPackCandidates(plan, LeafGenerationPackSelectOptions{MinReclaimPerByteCopiedPPM: 100000}); err == nil {
+		t.Fatalf("expected low-yield first candidate to fail selection")
 	}
 }
 

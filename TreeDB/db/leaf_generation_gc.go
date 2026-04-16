@@ -23,6 +23,8 @@ type LeafGenerationGCStats struct {
 	GenerationsEligible int
 	GenerationsDeleted  int
 	FilesDeleted        int
+	BytesEligible       int64
+	BytesDeleted        int64
 }
 
 func (db *DB) LeafGenerationGC(ctx context.Context, opts LeafGenerationGCOptions) (LeafGenerationGCStats, error) {
@@ -86,6 +88,7 @@ func (db *DB) LeafGenerationGC(ctx context.Context, opts LeafGenerationGCOptions
 	zombieFileIDs := make(map[uint32]struct{})
 	for i := range manifest.Generations {
 		gen := &manifest.Generations[i]
+		genBytes := leafGenerationRecordBytesTotal(*gen, filePaths)
 		stats.GenerationsTotal++
 		if gen.State == leafGenerationStateDeleted {
 			continue
@@ -114,6 +117,9 @@ func (db *DB) LeafGenerationGC(ctx context.Context, opts LeafGenerationGCOptions
 			continue
 		}
 		stats.GenerationsEligible++
+		if genBytes > 0 {
+			stats.BytesEligible += genBytes
+		}
 		if opts.DryRun {
 			continue
 		}
@@ -121,6 +127,9 @@ func (db *DB) LeafGenerationGC(ctx context.Context, opts LeafGenerationGCOptions
 			gen.State = leafGenerationStateDeleted
 			if currentCommitSeq > gen.DeletedCommitSeq {
 				gen.DeletedCommitSeq = currentCommitSeq
+			}
+			if genBytes > 0 {
+				stats.BytesDeleted += genBytes
 			}
 			for _, fileID := range gen.FileIDs {
 				if fileID == 0 {
@@ -215,6 +224,25 @@ func leafGenerationFallbackPath(rootDir string, fileID uint32) string {
 	}
 	lane, seq := valuelog.DecodeFileID(fileID)
 	return filepath.Join(LeafLogDirPath(rootDir), fmt.Sprintf("value-l%d-%06d.log", lane, seq))
+}
+
+func leafGenerationRecordBytesTotal(gen leafGenerationRecord, filePaths map[uint32]string) int64 {
+	var total int64
+	for _, fileID := range gen.FileIDs {
+		if fileID == 0 {
+			continue
+		}
+		path := filePaths[fileID]
+		if path == "" {
+			continue
+		}
+		info, err := os.Stat(path)
+		if err != nil {
+			continue
+		}
+		total += info.Size()
+	}
+	return total
 }
 
 func pruneDeletedLeafGenerationRecords(manifest *leafGenerationManifest, filePaths map[uint32]string) (*leafGenerationManifest, bool, int) {

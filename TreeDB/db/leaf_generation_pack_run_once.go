@@ -29,8 +29,9 @@ func (db *DB) LeafGenerationPackRunOnce(ctx context.Context, opts LeafGeneration
 		return stats, nil
 	}
 	selection, err := SelectLeafGenerationPackCandidates(plan, LeafGenerationPackSelectOptions{
-		MaxGenerations: opts.MaxGenerations,
-		MaxBytesToCopy: opts.MaxBytesToCopy,
+		MaxGenerations:             opts.MaxGenerations,
+		MaxBytesToCopy:             opts.MaxBytesToCopy,
+		MinReclaimPerByteCopiedPPM: opts.MinReclaimPerByteCopiedPPM,
 	})
 	if err != nil {
 		stats.SkipReason = fmt.Sprintf("selection:%v", err)

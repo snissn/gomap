@@ -95,3 +95,24 @@ func TestLeafGenerationPackRunOnce_SkipsDensePlan(t *testing.T) {
 		t.Fatalf("SkipReason=%q, want %q", got, want)
 	}
 }
+
+func TestLeafGenerationPackRunOnce_SkipsPlanWhenWindowYieldTooLow(t *testing.T) {
+	db, leafLog, _ := openLeafGenerationPackTestDB(t)
+
+	writeLeafGenerationKeys(t, db, "k", 32768, 'a')
+	if err := leafLog.rotateLeaf(); err != nil {
+		t.Fatalf("rotateLeaf: %v", err)
+	}
+	writeLeafGenerationKeyRange(t, db, "k", 0, 1, 'b')
+
+	stats, err := db.LeafGenerationPackRunOnce(context.Background(), LeafGenerationPackFromPlanOptions{MinReclaimPerByteCopiedPPM: 200000})
+	if err != nil {
+		t.Fatalf("LeafGenerationPackRunOnce: %v", err)
+	}
+	if stats.Ran {
+		t.Fatalf("expected low-yield window to skip, got pack=%+v", stats.Pack)
+	}
+	if got, want := stats.SkipReason, "plan_admission:reclaim_per_copy_too_low"; got != want {
+		t.Fatalf("SkipReason=%q, want %q", got, want)
+	}
+}
