@@ -91,6 +91,31 @@ func TestNoteCreatedLeafGenerationFileIDs_PersistsRecordLengthIndex(t *testing.T
 	}
 }
 
+func TestPersistLeafGenerationManifestAndRecordLengthIndexes_ReturnsSidecarError(t *testing.T) {
+	db, _, _ := openLeafGenerationPackTestDB(t)
+	if db.leafGenerationManifest == nil {
+		t.Fatal("expected leaf generation manifest")
+	}
+	rawFileID := uint32(77)
+	db.leafGenerationRecordLengthMu.Lock()
+	if db.leafGenerationRecordLengthByFile == nil {
+		db.leafGenerationRecordLengthByFile = make(map[uint32]*leafGenerationRecordLengthIndex)
+	}
+	db.leafGenerationRecordLengthByFile[rawFileID] = &leafGenerationRecordLengthIndex{
+		offsets: []uint32{4},
+		lengths: nil,
+	}
+	db.leafGenerationRecordLengthMu.Unlock()
+
+	err := db.persistLeafGenerationManifestAndRecordLengthIndexes(db.leafGenerationManifest.clone(), []uint32{rawFileID})
+	if err == nil {
+		t.Fatal("expected record-length sidecar persist error")
+	}
+	if !strings.Contains(err.Error(), "raw file 77") {
+		t.Fatalf("error=%q, want raw file id context", err)
+	}
+}
+
 func TestLeafGenerationPack_MovesSparseSealedGeneration(t *testing.T) {
 	dir := t.TempDir()
 	db, err := Open(Options{
