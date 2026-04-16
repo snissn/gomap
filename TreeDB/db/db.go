@@ -1705,17 +1705,6 @@ func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired [
 		}
 		leafPageSegmentRegistered = registered
 	}
-	if forceValueLogRefresh && db.valueLogManager != nil {
-		path, fileID, ok := db.currentLeafPageLogSegment()
-		if ok {
-			leafPageSegmentFileID = fileID
-		}
-		registered, err := db.ensureLeafPageLogSegmentRegisteredAt(path, fileID, 0)
-		if err != nil {
-			return post, err
-		}
-		leafPageSegmentRegistered = registered
-	}
 
 	// 3. Write Meta - No DB Lock
 	t0 := time.Now()
