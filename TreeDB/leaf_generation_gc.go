@@ -35,7 +35,7 @@ func (db *DB) LeafGenerationGC(ctx context.Context, opts LeafGenerationGCOptions
 	if db.backend == nil {
 		return out, ErrClosed
 	}
-	_, finishMaintenance := db.beginFullScanMaintenance("gc")
+	_, finishMaintenance := db.beginFullScanMaintenance("leaf-gc")
 	success := false
 	defer func() { finishMaintenance(success) }()
 
