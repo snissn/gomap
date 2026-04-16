@@ -280,6 +280,54 @@ func TestLoadOrCreateLeafGenerationManifest_BootstrapsExistingLeafFiles(t *testi
 	}
 }
 
+func TestLoadOrCreateLeafGenerationManifest_ReconcilesExistingLeafFiles(t *testing.T) {
+	leafDir := t.TempDir()
+	_, fileID1 := createLeafGenerationTestSegment(t, leafDir, rewriteLeafLogLaneID, 1)
+	_, fileID2 := createLeafGenerationTestSegment(t, leafDir, rewriteLeafLogLaneID, 2)
+
+	manifest := newLeafGenerationManifest(55)
+	if _, err := manifest.registerCurrentGenerationFileID(page.ValueLogSegmentID(fileID1), 55); err != nil {
+		t.Fatalf("registerCurrentGenerationFileID: %v", err)
+	}
+	if err := saveLeafGenerationManifest(leafDir, manifest); err != nil {
+		t.Fatalf("saveLeafGenerationManifest: %v", err)
+	}
+
+	reconciled, err := loadOrCreateLeafGenerationManifest(leafDir, 89, false)
+	if err != nil {
+		t.Fatalf("loadOrCreateLeafGenerationManifest: %v", err)
+	}
+	if reconciled == nil {
+		t.Fatal("expected reconciled manifest")
+	}
+	if got, want := len(reconciled.Generations), 2; got != want {
+		t.Fatalf("len(Generations)=%d, want %d", got, want)
+	}
+	if got, want := reconciled.Generations[0].State, leafGenerationStateSealed; got != want {
+		t.Fatalf("generation[0].State=%q, want %q", got, want)
+	}
+	if got, want := reconciled.Generations[1].State, leafGenerationStateWritable; got != want {
+		t.Fatalf("generation[1].State=%q, want %q", got, want)
+	}
+	if got, want := reconciled.Generations[1].FileIDs[0], page.ValueLogSegmentID(fileID2); got != want {
+		t.Fatalf("generation[1].FileIDs[0]=%d, want %d", got, want)
+	}
+
+	loaded, ok, err := loadLeafGenerationManifest(leafDir)
+	if err != nil {
+		t.Fatalf("loadLeafGenerationManifest: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected persisted reconciled manifest")
+	}
+	if got, want := len(loaded.Generations), 2; got != want {
+		t.Fatalf("persisted len(Generations)=%d, want %d", got, want)
+	}
+	if got, want := loaded.Generations[1].FileIDs[0], page.ValueLogSegmentID(fileID2); got != want {
+		t.Fatalf("persisted generation[1].FileIDs[0]=%d, want %d", got, want)
+	}
+}
+
 func TestOpen_IndexOuterLeavesInValueLog_CreatesLeafGenerationManifest(t *testing.T) {
 	dir := t.TempDir()
 	db, err := Open(Options{Dir: dir, IndexOuterLeavesInValueLog: true})

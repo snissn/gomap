@@ -59,6 +59,16 @@ func (idx *leafGenerationRecordLengthIndex) len() int {
 	return len(idx.offsets)
 }
 
+func (idx *leafGenerationRecordLengthIndex) clone() *leafGenerationRecordLengthIndex {
+	if idx == nil {
+		return nil
+	}
+	return &leafGenerationRecordLengthIndex{
+		offsets: append([]uint32(nil), idx.offsets...),
+		lengths: append([]uint32(nil), idx.lengths...),
+	}
+}
+
 func (idx *leafGenerationRecordLengthIndex) lookup(offset uint64) (uint32, bool) {
 	length, _, ok := idx.lookupWithHint(offset, 0)
 	return length, ok
@@ -289,29 +299,33 @@ func (db *DB) storeLeafGenerationRecordLengthIndex(rawFileID uint32, idx *leafGe
 	if db.leafGenerationRecordLengthByFile == nil {
 		db.leafGenerationRecordLengthByFile = make(map[uint32]*leafGenerationRecordLengthIndex)
 	}
-	db.leafGenerationRecordLengthByFile[rawFileID] = idx
+	db.leafGenerationRecordLengthByFile[rawFileID] = idx.clone()
 	db.leafGenerationRecordLengthMu.Unlock()
 }
 
 func (db *DB) noteLeafGenerationRecordLengthRaw(rawFileID uint32, offset uint64, recordLen uint32) {
-	if db == nil || rawFileID == 0 || offset == 0 || recordLen == 0 {
+	if db == nil || rawFileID == 0 || recordLen == 0 {
 		return
 	}
 	db.leafGenerationRecordLengthMu.Lock()
 	if db.leafGenerationRecordLengthByFile == nil {
 		db.leafGenerationRecordLengthByFile = make(map[uint32]*leafGenerationRecordLengthIndex)
 	}
-	idx := db.leafGenerationRecordLengthByFile[rawFileID]
-	if idx == nil {
-		idx = &leafGenerationRecordLengthIndex{}
-		db.leafGenerationRecordLengthByFile[rawFileID] = idx
+	current := db.leafGenerationRecordLengthByFile[rawFileID]
+	next := current.clone()
+	if next == nil {
+		next = &leafGenerationRecordLengthIndex{}
 	}
-	idx.add(offset, recordLen)
+	if !next.add(offset, recordLen) {
+		db.leafGenerationRecordLengthMu.Unlock()
+		return
+	}
+	db.leafGenerationRecordLengthByFile[rawFileID] = next
 	db.leafGenerationRecordLengthMu.Unlock()
 }
 
 func (db *DB) NoteLeafGenerationRecordLength(ptr page.ValuePtr) {
-	if db == nil || ptr.FileID == 0 || ptr.Offset == 0 {
+	if db == nil || ptr.FileID == 0 {
 		return
 	}
 	recordLen := page.ValuePtrRecordLength(ptr)

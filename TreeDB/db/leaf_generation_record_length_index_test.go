@@ -24,3 +24,44 @@ func TestLeafGenerationRecordLengthIndex_LookupWithHintLocality(t *testing.T) {
 		t.Fatalf("low miss = (%d,%d,%v), want (0,0,false)", got, hint, ok)
 	}
 }
+
+func TestLeafGenerationRecordLengthIndex_NoteRawIsCopyOnWrite(t *testing.T) {
+	db := &DB{}
+	seed := &leafGenerationRecordLengthIndex{
+		offsets: []uint32{4},
+		lengths: []uint32{96},
+	}
+	db.storeLeafGenerationRecordLengthIndex(7, seed)
+
+	before, ok := db.loadLeafGenerationRecordLengthIndex(7)
+	if !ok || before == nil {
+		t.Fatal("expected cached record-length index")
+	}
+	db.noteLeafGenerationRecordLengthRaw(7, 128, 144)
+
+	after, ok := db.loadLeafGenerationRecordLengthIndex(7)
+	if !ok || after == nil {
+		t.Fatal("expected updated cached record-length index")
+	}
+	if before == after {
+		t.Fatal("expected copy-on-write index replacement")
+	}
+	if got, ok := before.lookup(128); ok || got != 0 {
+		t.Fatalf("stale reader lookup(128)=(%d,%v), want (0,false)", got, ok)
+	}
+	if got, ok := after.lookup(128); !ok || got != 144 {
+		t.Fatalf("updated reader lookup(128)=(%d,%v), want (144,true)", got, ok)
+	}
+}
+
+func TestLeafGenerationRecordLengthIndex_NoteRawAllowsOffsetZero(t *testing.T) {
+	db := &DB{}
+	db.noteLeafGenerationRecordLengthRaw(9, 0, 64)
+	idx, ok := db.loadLeafGenerationRecordLengthIndex(9)
+	if !ok || idx == nil {
+		t.Fatal("expected record-length index for offset-zero entry")
+	}
+	if got, ok := idx.lookup(0); !ok || got != 64 {
+		t.Fatalf("lookup(0)=(%d,%v), want (64,true)", got, ok)
+	}
+}
