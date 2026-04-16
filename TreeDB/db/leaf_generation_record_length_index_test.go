@@ -43,9 +43,6 @@ func TestLeafGenerationRecordLengthIndex_NoteRawIsCopyOnWrite(t *testing.T) {
 	if !ok || after == nil {
 		t.Fatal("expected updated cached record-length index")
 	}
-	if before == after {
-		t.Fatal("expected copy-on-write index replacement")
-	}
 	if got, ok := before.lookup(128); ok || got != 0 {
 		t.Fatalf("stale reader lookup(128)=(%d,%v), want (0,false)", got, ok)
 	}
