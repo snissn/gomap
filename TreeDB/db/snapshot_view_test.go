@@ -271,3 +271,16 @@ func TestSnapshotPool_PutClearsLeafGenerationRefs(t *testing.T) {
 		t.Fatalf("expected pooled snapshot refs backing array to be cleared")
 	}
 }
+
+func TestSnapshotReleaseLeafGenerationPins_ClearsRefBackingArray(t *testing.T) {
+	snap := &Snapshot{}
+	snap.leafGenerationRefs = append(snap.leafGenerationRefs, &leafGenerationPinRef{id: 1})
+	snap.releaseLeafGenerationPins()
+
+	if len(snap.leafGenerationRefs) != 0 {
+		t.Fatalf("expected leafGenerationRefs len=0 after release, got %d", len(snap.leafGenerationRefs))
+	}
+	if cap(snap.leafGenerationRefs) > 0 && snap.leafGenerationRefs[:1][0] != nil {
+		t.Fatalf("expected leafGenerationRefs backing array to be cleared on release")
+	}
+}

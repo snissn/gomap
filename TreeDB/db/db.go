@@ -901,6 +901,7 @@ func (s *Snapshot) releaseLeafGenerationPins() {
 		}
 	}
 	s.leafGenerationIDs = s.leafGenerationIDs[:0]
+	clear(s.leafGenerationRefs)
 	s.leafGenerationRefs = s.leafGenerationRefs[:0]
 }
 
