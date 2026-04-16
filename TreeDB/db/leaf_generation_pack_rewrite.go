@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sync"
 
 	"github.com/snissn/gomap/TreeDB/internal/adaptive"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
@@ -67,58 +66,6 @@ type leafRefRewriteRunStats struct {
 type leafRefRewriteRemap struct {
 	oldID uint64
 	newID uint64
-}
-
-var leafRefRewriteInternalVisitHook struct {
-	mu sync.Mutex
-	fn func(uint64)
-}
-
-var leafRefRewriteSubtreePruneHook struct {
-	mu sync.Mutex
-	fn func(uint64)
-}
-
-func registerLeafRefRewriteInternalVisitHook(hook func(uint64)) func() {
-	leafRefRewriteInternalVisitHook.mu.Lock()
-	prev := leafRefRewriteInternalVisitHook.fn
-	leafRefRewriteInternalVisitHook.fn = hook
-	leafRefRewriteInternalVisitHook.mu.Unlock()
-	return func() {
-		leafRefRewriteInternalVisitHook.mu.Lock()
-		leafRefRewriteInternalVisitHook.fn = prev
-		leafRefRewriteInternalVisitHook.mu.Unlock()
-	}
-}
-
-func runLeafRefRewriteInternalVisitHook(pageID uint64) {
-	leafRefRewriteInternalVisitHook.mu.Lock()
-	hook := leafRefRewriteInternalVisitHook.fn
-	leafRefRewriteInternalVisitHook.mu.Unlock()
-	if hook != nil {
-		hook(pageID)
-	}
-}
-
-func registerLeafRefRewriteSubtreePruneHook(hook func(uint64)) func() {
-	leafRefRewriteSubtreePruneHook.mu.Lock()
-	prev := leafRefRewriteSubtreePruneHook.fn
-	leafRefRewriteSubtreePruneHook.fn = hook
-	leafRefRewriteSubtreePruneHook.mu.Unlock()
-	return func() {
-		leafRefRewriteSubtreePruneHook.mu.Lock()
-		leafRefRewriteSubtreePruneHook.fn = prev
-		leafRefRewriteSubtreePruneHook.mu.Unlock()
-	}
-}
-
-func runLeafRefRewriteSubtreePruneHook(pageID uint64) {
-	leafRefRewriteSubtreePruneHook.mu.Lock()
-	hook := leafRefRewriteSubtreePruneHook.fn
-	leafRefRewriteSubtreePruneHook.mu.Unlock()
-	if hook != nil {
-		hook(pageID)
-	}
 }
 
 func (c *leafRefRewriteCtx) readLeafPage(ptr page.ValuePtr) ([]byte, error) {
@@ -329,11 +276,8 @@ func (c *leafRefRewriteCtx) rewriteNode(id uint64) (uint64, bool, error) {
 	}
 	if !c.subtreeMayContainRewriteSource(id) {
 		c.subtreesPruned++
-		runLeafRefRewriteSubtreePruneHook(id)
 		return id, false, nil
 	}
-	c.internalVisited++
-	runLeafRefRewriteInternalVisitHook(id)
 	data, err := c.pager.Get(id)
 	if err != nil {
 		return id, false, err
@@ -349,6 +293,7 @@ func (c *leafRefRewriteCtx) rewriteNode(id uint64) (uint64, bool, error) {
 	}
 	switch n.Type() {
 	case page.PageTypeInternal:
+		c.internalVisited++
 		count := n.Count()
 		if count == 0 {
 			return id, false, nil
@@ -489,9 +434,12 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 		err = freeErr
 	}()
 
-	sourceGenerationIDs := make(map[uint64]struct{})
+	var sourceGenerationIDs map[uint64]struct{}
 	if snap.state.LeafGenerations != nil && sourceChunks == nil {
 		for rawFileID, generationID := range snap.state.LeafGenerations.FileToGeneration {
+			if sourceGenerationIDs == nil {
+				sourceGenerationIDs = make(map[uint64]struct{})
+			}
 			valueFileID := page.ValueLogFileID(rawFileID)
 			if hasSingleSourceID {
 				if valueFileID != singleSourceID {
@@ -504,9 +452,6 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 			}
 			sourceGenerationIDs[generationID] = struct{}{}
 		}
-	}
-	if len(sourceGenerationIDs) == 0 {
-		sourceGenerationIDs = nil
 	}
 
 	leafCtx := &leafRefRewriteCtx{
