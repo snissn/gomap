@@ -38,11 +38,12 @@ const (
 )
 
 type DBState struct {
-	CommitSeq        uint64
-	RootPageID       uint64
-	SystemRootPageID uint64
-	ValueLogSet      *valuelog.Set
-	LeafGenerations  *leafGenerationView
+	CommitSeq                  uint64
+	RootPageID                 uint64
+	SystemRootPageID           uint64
+	ValueLogSet                *valuelog.Set
+	LeafGenerations            *leafGenerationView
+	LeafGenerationStateVersion uint64
 }
 
 // snapshotView is the coherent publication unit for snapshot acquisition.
@@ -141,6 +142,7 @@ type DB struct {
 	leafGenerationSubtreeStatsByPage map[uint64]leafGenerationSubtreeStats
 	leafGenerationRecordLengthMu     sync.RWMutex
 	leafGenerationRecordLengthByFile map[uint32]*leafGenerationRecordLengthIndex
+	leafGenerationStateVersion       uint64
 
 	rewritePlanLiveBytesMu    sync.RWMutex
 	rewritePlanLiveBytesCache valueLogRewriteLiveBytesCache
@@ -173,9 +175,10 @@ type valueLogRewriteLiveBytesCache struct {
 }
 
 type treeReachabilityCacheKey struct {
-	commitSeq  uint64
-	rootID     uint64
-	systemRoot uint64
+	commitSeq           uint64
+	rootID              uint64
+	systemRoot          uint64
+	leafGenerationStamp uint64
 }
 
 type leafGenerationLiveStatsCache struct {
@@ -1210,11 +1213,12 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 
 	// Initialize State after recovery so log cleanup can proceed without pinning.
 	initialState := &DBState{
-		CommitSeq:        db.meta.CommitSeq,
-		RootPageID:       db.meta.UserRootPageID,
-		SystemRootPageID: db.meta.SystemRootPageID,
-		ValueLogSet:      vm.CurrentSet(),
-		LeafGenerations:  db.currentLeafGenerationView(),
+		CommitSeq:                  db.meta.CommitSeq,
+		RootPageID:                 db.meta.UserRootPageID,
+		SystemRootPageID:           db.meta.SystemRootPageID,
+		ValueLogSet:                vm.CurrentSet(),
+		LeafGenerations:            db.currentLeafGenerationView(),
+		LeafGenerationStateVersion: db.leafGenerationStateVersion,
 	}
 	db.state.Store(initialState)
 	db.publishSnapshotView(gen, initialState, vm)
@@ -1734,6 +1738,10 @@ func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired [
 		ValueLogSet:      valueLogSet,
 		LeafGenerations:  leafGenerationView,
 	}
+	if leafGenerationView != nil {
+		db.leafGenerationStateVersion++
+		newState.LeafGenerationStateVersion = db.leafGenerationStateVersion
+	}
 	db.state.Store(newState)
 	db.publishSnapshotView(idx, newState, db.valueLogManager)
 	post.commitSeq = nextMeta.CommitSeq
@@ -2021,11 +2029,12 @@ func (db *DB) RefreshValueLogSet() error {
 	}
 
 	newState := &DBState{
-		CommitSeq:        oldState.CommitSeq,
-		RootPageID:       oldState.RootPageID,
-		SystemRootPageID: oldState.SystemRootPageID,
-		ValueLogSet:      db.valueLogManager.CurrentSetNoRefresh(),
-		LeafGenerations:  oldState.LeafGenerations,
+		CommitSeq:                  oldState.CommitSeq,
+		RootPageID:                 oldState.RootPageID,
+		SystemRootPageID:           oldState.SystemRootPageID,
+		ValueLogSet:                db.valueLogManager.CurrentSetNoRefresh(),
+		LeafGenerations:            oldState.LeafGenerations,
+		LeafGenerationStateVersion: oldState.LeafGenerationStateVersion,
 	}
 	db.state.Store(newState)
 	db.publishSnapshotView(db.idx.Load(), newState, db.valueLogManager)
@@ -2063,11 +2072,12 @@ func (db *DB) publishValueLogSetNoRefresh() error {
 	}
 
 	newState := &DBState{
-		CommitSeq:        oldState.CommitSeq,
-		RootPageID:       oldState.RootPageID,
-		SystemRootPageID: oldState.SystemRootPageID,
-		ValueLogSet:      valueLogSet,
-		LeafGenerations:  oldState.LeafGenerations,
+		CommitSeq:                  oldState.CommitSeq,
+		RootPageID:                 oldState.RootPageID,
+		SystemRootPageID:           oldState.SystemRootPageID,
+		ValueLogSet:                valueLogSet,
+		LeafGenerations:            oldState.LeafGenerations,
+		LeafGenerationStateVersion: oldState.LeafGenerationStateVersion,
 	}
 	db.state.Store(newState)
 	db.publishSnapshotView(db.idx.Load(), newState, db.valueLogManager)

@@ -351,6 +351,12 @@ func (db *DB) publishLeafGenerationState(refreshValueLogSet bool) error {
 		ValueLogSet:      valueLogSet,
 		LeafGenerations:  db.currentLeafGenerationView(),
 	}
+	if newState.LeafGenerations != nil {
+		db.leafGenerationStateVersion++
+		newState.LeafGenerationStateVersion = db.leafGenerationStateVersion
+	} else {
+		newState.LeafGenerationStateVersion = oldState.LeafGenerationStateVersion
+	}
 	db.state.Store(newState)
 	db.publishSnapshotView(db.idx.Load(), newState, db.valueLogManager)
 	if oldState.ValueLogSet != nil && db.valueLogManager != nil {

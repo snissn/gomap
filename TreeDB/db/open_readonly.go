@@ -119,11 +119,12 @@ func openReadOnly(opts Options) (*DB, error) {
 	}
 
 	initialState := &DBState{
-		CommitSeq:        db.meta.CommitSeq,
-		RootPageID:       db.meta.UserRootPageID,
-		SystemRootPageID: db.meta.SystemRootPageID,
-		ValueLogSet:      vm.CurrentSet(),
-		LeafGenerations:  db.currentLeafGenerationView(),
+		CommitSeq:                  db.meta.CommitSeq,
+		RootPageID:                 db.meta.UserRootPageID,
+		SystemRootPageID:           db.meta.SystemRootPageID,
+		ValueLogSet:                vm.CurrentSet(),
+		LeafGenerations:            db.currentLeafGenerationView(),
+		LeafGenerationStateVersion: db.leafGenerationStateVersion,
 	}
 	db.state.Store(initialState)
 	db.publishSnapshotView(gen, initialState, vm)
@@ -226,11 +227,12 @@ func openReadOnlyNoLock(opts Options) (*DB, error) {
 	}
 
 	initialState := &DBState{
-		CommitSeq:        db.meta.CommitSeq,
-		RootPageID:       db.meta.UserRootPageID,
-		SystemRootPageID: db.meta.SystemRootPageID,
-		ValueLogSet:      vm.CurrentSet(),
-		LeafGenerations:  db.currentLeafGenerationView(),
+		CommitSeq:                  db.meta.CommitSeq,
+		RootPageID:                 db.meta.UserRootPageID,
+		SystemRootPageID:           db.meta.SystemRootPageID,
+		ValueLogSet:                vm.CurrentSet(),
+		LeafGenerations:            db.currentLeafGenerationView(),
+		LeafGenerationStateVersion: db.leafGenerationStateVersion,
 	}
 	db.state.Store(initialState)
 	db.publishSnapshotView(gen, initialState, vm)
