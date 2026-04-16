@@ -1,10 +1,14 @@
 package db
 
-import "sync"
+import (
+	"sync"
+	"sync/atomic"
+)
 
 type leafGenerationView struct {
 	CurrentGenerationID uint64
 	GenerationOrder     []uint64
+	PinRefs             []*leafGenerationPinRef
 	Generations         map[uint64]leafGenerationViewGeneration
 	FileToGeneration    map[uint32]uint64
 }
@@ -46,50 +50,120 @@ func (db *DB) currentLeafGenerationView() *leafGenerationView {
 	if db == nil || db.leafGenerationManifest == nil {
 		return nil
 	}
-	return newLeafGenerationView(db.leafGenerationManifest)
+	view := newLeafGenerationView(db.leafGenerationManifest)
+	if view != nil && len(view.GenerationOrder) > 0 {
+		view.PinRefs = db.leafGenerationPins.refsForGenerationIDs(view.GenerationOrder)
+	}
+	return view
+}
+
+type leafGenerationPinRef struct {
+	count atomic.Int64
 }
 
 type leafGenerationPinTracker struct {
-	mu     sync.Mutex
-	counts map[uint64]uint64
+	mu   sync.RWMutex
+	refs map[uint64]*leafGenerationPinRef
 }
 
-func (t *leafGenerationPinTracker) pin(ids []uint64) {
+func (t *leafGenerationPinTracker) refsForGenerationIDs(ids []uint64) []*leafGenerationPinRef {
 	if len(ids) == 0 {
-		return
+		return nil
 	}
+	t.mu.RLock()
+	allPresent := t.refs != nil
+	if allPresent {
+		for _, id := range ids {
+			if id == 0 {
+				continue
+			}
+			if t.refs[id] == nil {
+				allPresent = false
+				break
+			}
+		}
+	}
+	if allPresent {
+		refs := make([]*leafGenerationPinRef, 0, len(ids))
+		for _, id := range ids {
+			if id == 0 {
+				continue
+			}
+			if ref := t.refs[id]; ref != nil {
+				refs = append(refs, ref)
+			}
+		}
+		t.mu.RUnlock()
+		return refs
+	}
+	t.mu.RUnlock()
+
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if t.counts == nil {
-		t.counts = make(map[uint64]uint64, len(ids))
+	if t.refs == nil {
+		t.refs = make(map[uint64]*leafGenerationPinRef, len(ids))
 	}
+	refs := make([]*leafGenerationPinRef, 0, len(ids))
 	for _, id := range ids {
 		if id == 0 {
 			continue
 		}
-		t.counts[id]++
+		ref := t.refs[id]
+		if ref == nil {
+			ref = &leafGenerationPinRef{}
+			t.refs[id] = ref
+		}
+		refs = append(refs, ref)
+	}
+	return refs
+}
+
+func (t *leafGenerationPinTracker) lookupRefs(ids []uint64) []*leafGenerationPinRef {
+	if len(ids) == 0 {
+		return nil
+	}
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	if len(t.refs) == 0 {
+		return nil
+	}
+	refs := make([]*leafGenerationPinRef, 0, len(ids))
+	for _, id := range ids {
+		if id == 0 {
+			continue
+		}
+		if ref := t.refs[id]; ref != nil {
+			refs = append(refs, ref)
+		}
+	}
+	return refs
+}
+
+func (t *leafGenerationPinTracker) pin(ids []uint64) {
+	t.pinRefs(t.refsForGenerationIDs(ids))
+}
+
+func (t *leafGenerationPinTracker) pinRefs(refs []*leafGenerationPinRef) {
+	for _, ref := range refs {
+		if ref == nil {
+			continue
+		}
+		ref.count.Add(1)
 	}
 }
 
 func (t *leafGenerationPinTracker) unpin(ids []uint64) {
-	if len(ids) == 0 {
-		return
-	}
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	if len(t.counts) == 0 {
-		return
-	}
-	for _, id := range ids {
-		if id == 0 {
+	t.unpinRefs(t.lookupRefs(ids))
+}
+
+func (t *leafGenerationPinTracker) unpinRefs(refs []*leafGenerationPinRef) {
+	for _, ref := range refs {
+		if ref == nil {
 			continue
 		}
-		count := t.counts[id]
-		if count <= 1 {
-			delete(t.counts, id)
-			continue
+		if ref.count.Add(-1) < 0 {
+			ref.count.Store(0)
 		}
-		t.counts[id] = count - 1
 	}
 }
 
@@ -97,9 +171,17 @@ func (t *leafGenerationPinTracker) count(id uint64) uint64 {
 	if id == 0 {
 		return 0
 	}
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	return t.counts[id]
+	t.mu.RLock()
+	ref := t.refs[id]
+	t.mu.RUnlock()
+	if ref == nil {
+		return 0
+	}
+	count := ref.count.Load()
+	if count <= 0 {
+		return 0
+	}
+	return uint64(count)
 }
 
 func (db *DB) pinLeafGenerationIDs(ids []uint64) {
@@ -114,6 +196,20 @@ func (db *DB) unpinLeafGenerationIDs(ids []uint64) {
 		return
 	}
 	db.leafGenerationPins.unpin(ids)
+}
+
+func (db *DB) pinLeafGenerationRefs(refs []*leafGenerationPinRef) {
+	if db == nil {
+		return
+	}
+	db.leafGenerationPins.pinRefs(refs)
+}
+
+func (db *DB) unpinLeafGenerationRefs(refs []*leafGenerationPinRef) {
+	if db == nil {
+		return
+	}
+	db.leafGenerationPins.unpinRefs(refs)
 }
 
 func (db *DB) leafGenerationPinCountForTesting(id uint64) uint64 {

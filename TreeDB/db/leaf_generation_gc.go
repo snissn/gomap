@@ -65,8 +65,7 @@ func (db *DB) LeafGenerationGC(ctx context.Context, opts LeafGenerationGCOptions
 		return stats, ErrClosed
 	}
 	if len(snap.leafGenerationIDs) > 0 {
-		db.unpinLeafGenerationIDs(snap.leafGenerationIDs)
-		snap.leafGenerationIDs = snap.leafGenerationIDs[:0]
+		snap.releaseLeafGenerationPins()
 	}
 	if snap.state == nil || snap.state.LeafGenerations == nil {
 		_ = snap.Close()

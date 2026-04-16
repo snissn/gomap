@@ -42,25 +42,32 @@ const readViaMmapViewPrefixCacheEnabled = false
 var MaxDeadMappings = defaultMaxDeadMappings
 
 const (
-	defaultMaxDeadMappings      = 64
-	maxAdaptiveDeadMappings     = 4096
-	deadMappingBytesPerStep     = 256 << 10 // increase cap by 1 per 256KiB mapped
-	maxDeadMappingsEnvKey       = "TREEDB_VLOG_MAX_DEAD_MAPPINGS"
-	enableAdaptiveCapEnvKey     = "TREEDB_VLOG_ADAPTIVE_DEAD_MAPPINGS"
-	enableCurrentWritableEnvKey = "TREEDB_VLOG_ENABLE_CURRENT_WRITABLE_MMAP"
-	maxMappedSealedEnvKey       = "TREEDB_VLOG_MAX_MAPPED_SEALED_SEGMENTS"
-	maxMappedSealedBytesEnvKey  = "TREEDB_VLOG_MAX_MAPPED_SEALED_BYTES"
-	defaultAdaptiveCapEnabled   = true
-	defaultMaxMappedSealed      = 8
-	defaultMaxMappedSealedBytes = 64 << 20
+	defaultMaxDeadMappings          = 64
+	maxAdaptiveDeadMappings         = 4096
+	deadMappingBytesPerStep         = 256 << 10 // increase cap by 1 per 256KiB mapped
+	maxDeadMappingsEnvKey           = "TREEDB_VLOG_MAX_DEAD_MAPPINGS"
+	enableAdaptiveCapEnvKey         = "TREEDB_VLOG_ADAPTIVE_DEAD_MAPPINGS"
+	enableCurrentWritableEnvKey     = "TREEDB_VLOG_ENABLE_CURRENT_WRITABLE_MMAP"
+	maxMappedSealedEnvKey           = "TREEDB_VLOG_MAX_MAPPED_SEALED_SEGMENTS"
+	maxMappedSealedBytesEnvKey      = "TREEDB_VLOG_MAX_MAPPED_SEALED_BYTES"
+	maxMappedLeafSealedEnvKey       = "TREEDB_VLOG_MAX_MAPPED_LEAF_SEALED_SEGMENTS"
+	maxMappedLeafBytesEnvKey        = "TREEDB_VLOG_MAX_MAPPED_LEAF_SEALED_BYTES"
+	defaultAdaptiveCapEnabled       = true
+	defaultMaxMappedSealed          = 8
+	defaultMaxMappedSealedBytes     = 64 << 20
+	defaultMaxMappedLeafSealed      = 64
+	defaultMaxMappedLeafSealedBytes = 1 << 30
+	reservedLeafLogLaneID           = 255
 )
 
 var (
-	maxDeadMappingsExplicit   bool
-	adaptiveDeadMappings            = defaultAdaptiveCapEnabled
-	enableCurrentWritableMmap       = false
-	MaxMappedSealedSegments         = defaultMaxMappedSealed
-	MaxMappedSealedBytes      int64 = defaultMaxMappedSealedBytes
+	maxDeadMappingsExplicit     bool
+	adaptiveDeadMappings              = defaultAdaptiveCapEnabled
+	enableCurrentWritableMmap         = false
+	MaxMappedSealedSegments           = defaultMaxMappedSealed
+	MaxMappedSealedBytes        int64 = defaultMaxMappedSealedBytes
+	MaxMappedLeafSealedSegments       = defaultMaxMappedLeafSealed
+	MaxMappedLeafSealedBytes    int64 = defaultMaxMappedLeafSealedBytes
 )
 
 func init() {
@@ -96,6 +103,21 @@ func init() {
 			MaxMappedSealedBytes = v
 		}
 	}
+	if raw := strings.TrimSpace(os.Getenv(maxMappedLeafSealedEnvKey)); raw != "" {
+		if v, err := strconv.Atoi(raw); err == nil && v >= 0 {
+			MaxMappedLeafSealedSegments = v
+		}
+	}
+	if raw := strings.TrimSpace(os.Getenv(maxMappedLeafBytesEnvKey)); raw != "" {
+		if v, err := strconv.ParseInt(raw, 10, 64); err == nil && v >= 0 {
+			MaxMappedLeafSealedBytes = v
+		}
+	}
+}
+
+func isLeafLogFileID(fileID uint32) bool {
+	lane, _ := DecodeFileID(fileID)
+	return lane == reservedLeafLogLaneID
 }
 
 func effectiveMaxDeadMappings(mappedLen int) int {

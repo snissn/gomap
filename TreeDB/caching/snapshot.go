@@ -3,6 +3,7 @@ package caching
 import (
 	"errors"
 	"sync"
+	"sync/atomic"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/node"
@@ -25,8 +26,29 @@ type Snapshot struct {
 	view    *memtableView
 	backend *backenddb.Snapshot
 
-	closeOnce sync.Once
-	closeErr  error
+	closed atomic.Bool
+}
+
+var snapshotPool = sync.Pool{
+	New: func() any {
+		return &Snapshot{}
+	},
+}
+
+func acquirePooledSnapshot() *Snapshot {
+	s := snapshotPool.Get().(*Snapshot)
+	s.closed.Store(false)
+	return s
+}
+
+func releasePooledSnapshot(s *Snapshot) {
+	if s == nil {
+		return
+	}
+	s.db = nil
+	s.view = nil
+	s.backend = nil
+	snapshotPool.Put(s)
 }
 
 type backendSnapshotProvider interface {
@@ -38,6 +60,7 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 	if db == nil || db.backend == nil || db.closing.Load() {
 		return nil
 	}
+	snap := acquirePooledSnapshot()
 
 	view := db.retainMemtableView()
 	needsRotate := db.mutableBytes.Load() > 0
@@ -72,6 +95,7 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 				if db.notifyError != nil {
 					db.notifyError(err)
 				}
+				releasePooledSnapshot(snap)
 				return nil
 			}
 		}
@@ -89,6 +113,7 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 		if view != nil {
 			db.releaseMemtableView(view)
 		}
+		releasePooledSnapshot(snap)
 		return nil
 	}
 	backendSnap := provider.AcquireSnapshot()
@@ -96,10 +121,14 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 		if view != nil {
 			db.releaseMemtableView(view)
 		}
+		releasePooledSnapshot(snap)
 		return nil
 	}
 
-	return &Snapshot{db: db, view: view, backend: backendSnap}
+	snap.db = db
+	snap.view = view
+	snap.backend = backendSnap
+	return snap
 }
 
 func (s *Snapshot) Pager() *pager.Pager {
@@ -120,19 +149,22 @@ func (s *Snapshot) Close() error {
 	if s == nil {
 		return nil
 	}
-	s.closeOnce.Do(func() {
-		var errs []error
-		if s.backend != nil {
-			errs = append(errs, s.backend.Close())
-			s.backend = nil
-		}
-		if s.view != nil && s.db != nil {
-			s.db.releaseMemtableView(s.view)
-			s.view = nil
-		}
-		s.closeErr = errors.Join(errs...)
-	})
-	return s.closeErr
+	if !s.closed.CompareAndSwap(false, true) {
+		return nil
+	}
+
+	var errs []error
+	if s.backend != nil {
+		errs = append(errs, s.backend.Close())
+		s.backend = nil
+	}
+	if s.view != nil && s.db != nil {
+		s.db.releaseMemtableView(s.view)
+		s.view = nil
+	}
+	err := errors.Join(errs...)
+	releasePooledSnapshot(s)
+	return err
 }
 
 func (s *Snapshot) lookupQueueEntry(key []byte) (val []byte, ptr page.ValuePtr, flags byte, found bool) {
