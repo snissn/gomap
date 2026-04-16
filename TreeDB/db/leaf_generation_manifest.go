@@ -132,6 +132,42 @@ func (m *leafGenerationManifest) registerCurrentGenerationFileID(fileID uint32, 
 	return true, nil
 }
 
+func (m *leafGenerationManifest) appendRecoveredSealedGenerationFileID(fileID uint32, commitSeq uint64) (bool, error) {
+	if m == nil {
+		return false, errors.New("treedb: leaf generation manifest is nil")
+	}
+	if fileID == 0 {
+		return false, errors.New("treedb: leaf generation file_id must be non-zero")
+	}
+	for _, gen := range m.Generations {
+		for _, existing := range gen.FileIDs {
+			if existing == fileID {
+				return false, nil
+			}
+		}
+	}
+	maxID := uint64(0)
+	for i := range m.Generations {
+		if m.Generations[i].GenerationID > maxID {
+			maxID = m.Generations[i].GenerationID
+		}
+	}
+	if m.NextGenerationID <= maxID {
+		m.NextGenerationID = maxID + 1
+	}
+	newID := m.NextGenerationID
+	m.NextGenerationID++
+	m.Generations = append(m.Generations, leafGenerationRecord{
+		GenerationID:       newID,
+		State:              leafGenerationStateSealed,
+		FileIDs:            []uint32{fileID},
+		CreatedCommitSeq:   commitSeq,
+		SealedCommitSeq:    commitSeq,
+		PublishedCommitSeq: commitSeq,
+	})
+	return true, nil
+}
+
 func (m *leafGenerationManifest) clone() *leafGenerationManifest {
 	if m == nil {
 		return nil
@@ -655,11 +691,34 @@ func reconcileLeafGenerationManifestWithDir(leafDir string, manifest *leafGenera
 	if len(files) == 0 {
 		return manifest, false, nil
 	}
-	// Once a manifest exists, treat it as the authoritative generation catalog.
-	// Unknown files may be aborted rewrite output or other orphaned leftovers;
-	// blindly re-importing them on open can resurrect unreachable bytes into the
-	// writable generation and skew later maintenance decisions.
-	return manifest, false, nil
+	seen := make(map[uint32]struct{}, len(manifest.Generations))
+	for _, gen := range manifest.Generations {
+		for _, rawFileID := range gen.FileIDs {
+			if rawFileID == 0 {
+				continue
+			}
+			seen[rawFileID] = struct{}{}
+		}
+	}
+	reconciled := manifest.clone()
+	changedAny := false
+	for _, file := range files {
+		if _, ok := seen[file.rawFileID]; ok {
+			continue
+		}
+		changed, err := reconciled.appendRecoveredSealedGenerationFileID(file.rawFileID, commitSeq)
+		if err != nil {
+			return nil, false, err
+		}
+		if changed {
+			changedAny = true
+			seen[file.rawFileID] = struct{}{}
+		}
+	}
+	if !changedAny {
+		return manifest, false, nil
+	}
+	return reconciled, true, nil
 }
 
 func loadOrCreateLeafGenerationManifest(leafDir string, commitSeq uint64, readOnly bool) (*leafGenerationManifest, error) {

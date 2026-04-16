@@ -303,7 +303,7 @@ func TestLoadOrCreateLeafGenerationManifest_BootstrapsExistingLeafFiles(t *testi
 	}
 }
 
-func TestLoadOrCreateLeafGenerationManifest_IgnoresUnknownLeafFilesWhenManifestExists(t *testing.T) {
+func TestLoadOrCreateLeafGenerationManifest_RecoversUnknownLeafFilesAsSealedGenerations(t *testing.T) {
 	leafDir := t.TempDir()
 	_, fileID1 := createLeafGenerationTestSegment(t, leafDir, rewriteLeafLogLaneID, 1)
 	_, fileID2 := createLeafGenerationTestSegment(t, leafDir, rewriteLeafLogLaneID, 2)
@@ -323,11 +323,17 @@ func TestLoadOrCreateLeafGenerationManifest_IgnoresUnknownLeafFilesWhenManifestE
 	if loadedManifest == nil {
 		t.Fatal("expected manifest")
 	}
-	if got, want := len(loadedManifest.Generations), 1; got != want {
+	if got, want := len(loadedManifest.Generations), 2; got != want {
 		t.Fatalf("len(Generations)=%d, want %d", got, want)
 	}
 	if got, want := loadedManifest.Generations[0].FileIDs[0], page.ValueLogSegmentID(fileID1); got != want {
 		t.Fatalf("generation[0].FileIDs[0]=%d, want %d", got, want)
+	}
+	if got, want := loadedManifest.Generations[1].State, leafGenerationStateSealed; got != want {
+		t.Fatalf("generation[1].State=%q, want %q", got, want)
+	}
+	if got, want := loadedManifest.Generations[1].FileIDs[0], page.ValueLogSegmentID(fileID2); got != want {
+		t.Fatalf("generation[1].FileIDs[0]=%d, want %d", got, want)
 	}
 
 	loaded, ok, err := loadLeafGenerationManifest(leafDir)
@@ -337,19 +343,17 @@ func TestLoadOrCreateLeafGenerationManifest_IgnoresUnknownLeafFilesWhenManifestE
 	if !ok {
 		t.Fatal("expected persisted manifest")
 	}
-	if got, want := len(loaded.Generations), 1; got != want {
+	if got, want := len(loaded.Generations), 2; got != want {
 		t.Fatalf("persisted len(Generations)=%d, want %d", got, want)
 	}
 	if got, want := loaded.Generations[0].FileIDs[0], page.ValueLogSegmentID(fileID1); got != want {
 		t.Fatalf("persisted generation[0].FileIDs[0]=%d, want %d", got, want)
 	}
-	if len(loaded.Generations[0].FileIDs) != 1 {
-		t.Fatalf("persisted generation[0].FileIDs=%v, want only original file", loaded.Generations[0].FileIDs)
+	if got, want := loaded.Generations[1].State, leafGenerationStateSealed; got != want {
+		t.Fatalf("persisted generation[1].State=%q, want %q", got, want)
 	}
-	for _, rawFileID := range loaded.Generations[0].FileIDs {
-		if rawFileID == page.ValueLogSegmentID(fileID2) {
-			t.Fatalf("unexpected imported file id %d in manifest", rawFileID)
-		}
+	if got, want := loaded.Generations[1].FileIDs[0], page.ValueLogSegmentID(fileID2); got != want {
+		t.Fatalf("persisted generation[1].FileIDs[0]=%d, want %d", got, want)
 	}
 }
 
