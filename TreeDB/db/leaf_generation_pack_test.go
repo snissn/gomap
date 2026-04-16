@@ -92,6 +92,33 @@ func TestNoteCreatedLeafGenerationFileIDs_PersistsRecordLengthIndex(t *testing.T
 	}
 }
 
+func TestLoadLeafGenerationRecordLengthIndex_ReturnsStableSnapshot(t *testing.T) {
+	db, _, _ := openLeafGenerationPackTestDB(t)
+	rawFileID := uint32(77)
+	db.noteLeafGenerationRecordLengthRaw(rawFileID, 4, 96)
+
+	first, ok := db.loadLeafGenerationRecordLengthIndex(rawFileID)
+	if !ok || first == nil {
+		t.Fatal("expected first record-length snapshot")
+	}
+	if got, found := first.lookup(4); !found || got != 96 {
+		t.Fatalf("first.lookup(4)=(%d,%v), want (96,true)", got, found)
+	}
+
+	db.noteLeafGenerationRecordLengthRaw(rawFileID, 128, 104)
+	if _, found := first.lookup(128); found {
+		t.Fatal("first snapshot observed later append")
+	}
+
+	second, ok := db.loadLeafGenerationRecordLengthIndex(rawFileID)
+	if !ok || second == nil {
+		t.Fatal("expected second record-length snapshot")
+	}
+	if got, found := second.lookup(128); !found || got != 104 {
+		t.Fatalf("second.lookup(128)=(%d,%v), want (104,true)", got, found)
+	}
+}
+
 func TestNoteCreatedLeafGenerationFileIDsInManifest_OnlyReturnsNewLeafFiles(t *testing.T) {
 	manifest := newLeafGenerationManifest(10)
 	leafFileID, err := valuelog.EncodeFileID(rewriteLeafLogLaneID, 7)
