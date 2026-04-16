@@ -5595,6 +5595,9 @@ func (db *DB) runWithBackendMaintenanceOptions(opts backendMaintenanceOptions, f
 	if fn != nil {
 		fnErr = fn()
 	}
+	if db.closing.Load() {
+		return fnErr
+	}
 	reconcileErr := db.reconcileSplitValueLogWritersAfterBackendMaintenance()
 	if fnErr != nil {
 		if reconcileErr != nil {
@@ -5606,7 +5609,7 @@ func (db *DB) runWithBackendMaintenanceOptions(opts backendMaintenanceOptions, f
 }
 
 func (db *DB) reconcileSplitValueLogWritersAfterBackendMaintenance() error {
-	if db == nil {
+	if db == nil || db.closing.Load() {
 		return nil
 	}
 	if db.valueLogReader != nil {

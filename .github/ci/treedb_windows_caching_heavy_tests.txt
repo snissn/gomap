@@ -1,4 +1,4 @@
-# Windows caching shard: explicit heavy tests run separately to reduce walletime.
+# Windows caching shard: explicit heavy tests run separately to reduce wall time.
 TestBackpressureInvariantsAcrossWorkloads
 TestCachingDB_CheckpointParallelBuildCompletes
 TestCachingDB_CloseFlushesPendingMemtables_MultipleShards
