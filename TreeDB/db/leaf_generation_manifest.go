@@ -168,6 +168,27 @@ func (m *leafGenerationManifest) appendRecoveredSealedGenerationFileID(fileID ui
 	return true, nil
 }
 
+func (m *leafGenerationManifest) currentGenerationMaxRecoveredSeq() uint32 {
+	if m == nil {
+		return 0
+	}
+	idx := m.currentGenerationIndex()
+	if idx < 0 {
+		return 0
+	}
+	maxSeq := uint32(0)
+	for _, rawFileID := range m.Generations[idx].FileIDs {
+		if rawFileID == 0 {
+			continue
+		}
+		_, seq := valuelog.DecodeSegmentID(rawFileID)
+		if seq > maxSeq {
+			maxSeq = seq
+		}
+	}
+	return maxSeq
+}
+
 func (m *leafGenerationManifest) clone() *leafGenerationManifest {
 	if m == nil {
 		return nil
@@ -702,11 +723,21 @@ func reconcileLeafGenerationManifestWithDir(leafDir string, manifest *leafGenera
 	}
 	reconciled := manifest.clone()
 	changedAny := false
+	currentSeq := reconciled.currentGenerationMaxRecoveredSeq()
 	for _, file := range files {
 		if _, ok := seen[file.rawFileID]; ok {
 			continue
 		}
-		changed, err := reconciled.appendRecoveredSealedGenerationFileID(file.rawFileID, commitSeq)
+		changed := false
+		var err error
+		if file.seq > currentSeq {
+			changed, err = reconciled.registerCurrentGenerationFileID(file.rawFileID, commitSeq)
+			if err == nil && file.seq > currentSeq {
+				currentSeq = file.seq
+			}
+		} else {
+			changed, err = reconciled.appendRecoveredSealedGenerationFileID(file.rawFileID, commitSeq)
+		}
 		if err != nil {
 			return nil, false, err
 		}
