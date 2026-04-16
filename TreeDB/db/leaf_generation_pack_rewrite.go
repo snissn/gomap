@@ -188,9 +188,17 @@ func (c *leafRefRewriteCtx) subtreeMayContainRewriteSource(pageID uint64) bool {
 	if !ok {
 		return true
 	}
-	for generationID := range c.sourceGenerationIDs {
-		totals := stats[generationID]
-		if totals.LivePages > 0 || totals.LiveBytes > 0 {
+	if len(c.sourceGenerationIDs) <= len(stats) {
+		for generationID := range c.sourceGenerationIDs {
+			totals := stats[generationID]
+			if totals.LivePages > 0 || totals.LiveBytes > 0 {
+				return true
+			}
+		}
+		return false
+	}
+	for generationID, totals := range stats {
+		if _, selected := c.sourceGenerationIDs[generationID]; selected && (totals.LivePages > 0 || totals.LiveBytes > 0) {
 			return true
 		}
 	}
