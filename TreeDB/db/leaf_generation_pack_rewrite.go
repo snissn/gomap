@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 
 	"github.com/snissn/gomap/TreeDB/internal/adaptive"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
@@ -32,11 +33,13 @@ type leafRefRewriteCtx struct {
 	writer   *rewriteWriter
 	ridAlloc *rewriteRIDAllocator
 
-	sourceIDs        map[uint32]struct{}
-	sourceChunks     map[valueLogChunkKey]ValueLogRewritePlanChunk
-	sourceChunkBytes int64
-	singleSourceID   uint32
-	hasSingleID      bool
+	sourceIDs            map[uint32]struct{}
+	sourceChunks         map[valueLogChunkKey]ValueLogRewritePlanChunk
+	sourceChunkBytes     int64
+	singleSourceID       uint32
+	hasSingleID          bool
+	sourceGenerationIDs  map[uint64]struct{}
+	useSubtreeStatsPrune bool
 
 	leafMap            map[uint64]uint64 // old leafref id -> new leafref id
 	leafRemapInline    [leafRefRewriteInlineRemapCap]leafRefRewriteRemap
@@ -46,17 +49,76 @@ type leafRefRewriteCtx struct {
 	internalRemapInline    [leafRefRewriteInlineRemapCap]leafRefRewriteRemap
 	internalRemapInlineLen int
 
-	retired        []uint64
-	copied         int
-	copiedBytes    int64
-	maxCopiedBytes int64
+	retired         []uint64
+	copied          int
+	copiedBytes     int64
+	internalVisited int
+	subtreesPruned  int
+	maxCopiedBytes  int64
 
 	readRefreshRetried bool
+}
+
+type leafRefRewriteRunStats struct {
+	InternalPagesVisited int
+	SubtreesPruned       int
 }
 
 type leafRefRewriteRemap struct {
 	oldID uint64
 	newID uint64
+}
+
+var leafRefRewriteInternalVisitHook struct {
+	mu sync.Mutex
+	fn func(uint64)
+}
+
+var leafRefRewriteSubtreePruneHook struct {
+	mu sync.Mutex
+	fn func(uint64)
+}
+
+func registerLeafRefRewriteInternalVisitHook(hook func(uint64)) func() {
+	leafRefRewriteInternalVisitHook.mu.Lock()
+	prev := leafRefRewriteInternalVisitHook.fn
+	leafRefRewriteInternalVisitHook.fn = hook
+	leafRefRewriteInternalVisitHook.mu.Unlock()
+	return func() {
+		leafRefRewriteInternalVisitHook.mu.Lock()
+		leafRefRewriteInternalVisitHook.fn = prev
+		leafRefRewriteInternalVisitHook.mu.Unlock()
+	}
+}
+
+func runLeafRefRewriteInternalVisitHook(pageID uint64) {
+	leafRefRewriteInternalVisitHook.mu.Lock()
+	hook := leafRefRewriteInternalVisitHook.fn
+	leafRefRewriteInternalVisitHook.mu.Unlock()
+	if hook != nil {
+		hook(pageID)
+	}
+}
+
+func registerLeafRefRewriteSubtreePruneHook(hook func(uint64)) func() {
+	leafRefRewriteSubtreePruneHook.mu.Lock()
+	prev := leafRefRewriteSubtreePruneHook.fn
+	leafRefRewriteSubtreePruneHook.fn = hook
+	leafRefRewriteSubtreePruneHook.mu.Unlock()
+	return func() {
+		leafRefRewriteSubtreePruneHook.mu.Lock()
+		leafRefRewriteSubtreePruneHook.fn = prev
+		leafRefRewriteSubtreePruneHook.mu.Unlock()
+	}
+}
+
+func runLeafRefRewriteSubtreePruneHook(pageID uint64) {
+	leafRefRewriteSubtreePruneHook.mu.Lock()
+	hook := leafRefRewriteSubtreePruneHook.fn
+	leafRefRewriteSubtreePruneHook.mu.Unlock()
+	if hook != nil {
+		hook(pageID)
+	}
 }
 
 func (c *leafRefRewriteCtx) readLeafPage(ptr page.ValuePtr) ([]byte, error) {
@@ -171,7 +233,25 @@ func (c *leafRefRewriteCtx) storeInternalRemap(oldID, newID uint64) {
 	c.internalMap[oldID] = newID
 }
 
+func (c *leafRefRewriteCtx) subtreeMayContainRewriteSource(pageID uint64) bool {
+	if c == nil || !c.useSubtreeStatsPrune || c.db == nil || len(c.sourceGenerationIDs) == 0 {
+		return true
+	}
+	stats, ok := c.db.loadLeafGenerationSubtreeStats(pageID)
+	if !ok {
+		return true
+	}
+	for generationID := range c.sourceGenerationIDs {
+		totals := stats[generationID]
+		if totals.LivePages > 0 || totals.LiveBytes > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 func (c *leafRefRewriteCtx) rewriteNode(id uint64) (uint64, bool, error) {
+
 	if c == nil {
 		return id, false, errors.New("vlog-rewrite: nil leafref rewrite ctx")
 	}
@@ -247,6 +327,13 @@ func (c *leafRefRewriteCtx) rewriteNode(id uint64) (uint64, bool, error) {
 	if c.pager == nil {
 		return id, false, errors.New("vlog-rewrite: missing pager")
 	}
+	if !c.subtreeMayContainRewriteSource(id) {
+		c.subtreesPruned++
+		runLeafRefRewriteSubtreePruneHook(id)
+		return id, false, nil
+	}
+	c.internalVisited++
+	runLeafRefRewriteInternalVisitHook(id)
 	data, err := c.pager.Get(id)
 	if err != nil {
 		return id, false, err
@@ -344,7 +431,7 @@ func (c *leafRefRewriteCtx) rewriteNode(id uint64) (uint64, bool, error) {
 	}
 }
 
-func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, ridAlloc *rewriteRIDAllocator, sourceIDs map[uint32]struct{}, sourceChunks map[valueLogChunkKey]ValueLogRewritePlanChunk, sourceChunkBytes int64, singleSourceID uint32, hasSingleSourceID bool, maxCopiedBytes int64, sync bool) (copied int, copiedBytes int64, err error) {
+func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, ridAlloc *rewriteRIDAllocator, sourceIDs map[uint32]struct{}, sourceChunks map[valueLogChunkKey]ValueLogRewritePlanChunk, sourceChunkBytes int64, singleSourceID uint32, hasSingleSourceID bool, maxCopiedBytes int64, sync bool, runStats *leafRefRewriteRunStats) (copied int, copiedBytes int64, err error) {
 	if db == nil {
 		return 0, 0, fmt.Errorf("missing db")
 	}
@@ -402,20 +489,48 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 		err = freeErr
 	}()
 
+	sourceGenerationIDs := make(map[uint64]struct{})
+	if snap.state.LeafGenerations != nil && sourceChunks == nil {
+		for rawFileID, generationID := range snap.state.LeafGenerations.FileToGeneration {
+			valueFileID := page.ValueLogFileID(rawFileID)
+			if hasSingleSourceID {
+				if valueFileID != singleSourceID {
+					continue
+				}
+			} else if sourceIDs != nil {
+				if _, ok := sourceIDs[valueFileID]; !ok {
+					continue
+				}
+			}
+			sourceGenerationIDs[generationID] = struct{}{}
+		}
+	}
+	if len(sourceGenerationIDs) == 0 {
+		sourceGenerationIDs = nil
+	}
+
 	leafCtx := &leafRefRewriteCtx{
-		ctx:              ctx,
-		db:               db,
-		pager:            idx.pager,
-		leafReader:       &snap.reader,
-		alloc:            tracker,
-		writer:           writer,
-		ridAlloc:         ridAlloc,
-		sourceIDs:        sourceIDs,
-		sourceChunks:     sourceChunks,
-		sourceChunkBytes: normalizeValueLogRewriteChunkBytes(sourceChunkBytes),
-		singleSourceID:   singleSourceID,
-		hasSingleID:      hasSingleSourceID,
-		maxCopiedBytes:   maxCopiedBytes,
+		ctx:                  ctx,
+		db:                   db,
+		pager:                idx.pager,
+		leafReader:           &snap.reader,
+		alloc:                tracker,
+		writer:               writer,
+		ridAlloc:             ridAlloc,
+		sourceIDs:            sourceIDs,
+		sourceChunks:         sourceChunks,
+		sourceChunkBytes:     normalizeValueLogRewriteChunkBytes(sourceChunkBytes),
+		singleSourceID:       singleSourceID,
+		hasSingleID:          hasSingleSourceID,
+		sourceGenerationIDs:  sourceGenerationIDs,
+		useSubtreeStatsPrune: len(sourceGenerationIDs) > 0,
+		maxCopiedBytes:       maxCopiedBytes,
+	}
+	if runStats != nil {
+		defer func() {
+			runStats.InternalPagesVisited = leafCtx.internalVisited
+			runStats.SubtreesPruned = leafCtx.subtreesPruned
+		}()
 	}
 	if toer, ok := leafCtx.leafReader.(unsafeToReader); ok {
 		leafCtx.leafToer = toer

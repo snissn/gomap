@@ -37,6 +37,8 @@ type LeafGenerationPackStats struct {
 	ExpectedReclaimPerByteCopiedPPM int
 	LeafPagesCopied                 int
 	BytesCopied                     int64
+	InternalPagesVisited            int
+	SubtreesPruned                  int
 	CreatedFileIDs                  []uint32
 	WallTimeNanos                   int64
 }
@@ -123,7 +125,10 @@ func (db *DB) LeafGenerationPack(ctx context.Context, opts LeafGenerationPackOpt
 		sourceValueIDs[page.ValueLogFileID(rawID)] = struct{}{}
 	}
 	ridAlloc := newRewriteRIDAllocator(nextRID, nil)
-	stats.LeafPagesCopied, stats.BytesCopied, err = db.rewriteLeafRefsOnline(ctx, writer, ridAlloc, sourceValueIDs, nil, 0, 0, false, 0, opts.Sync)
+	var rewriteStats leafRefRewriteRunStats
+	stats.LeafPagesCopied, stats.BytesCopied, err = db.rewriteLeafRefsOnline(ctx, writer, ridAlloc, sourceValueIDs, nil, 0, 0, false, 0, opts.Sync, &rewriteStats)
+	stats.InternalPagesVisited = rewriteStats.InternalPagesVisited
+	stats.SubtreesPruned = rewriteStats.SubtreesPruned
 	if err != nil {
 		return stats, err
 	}
