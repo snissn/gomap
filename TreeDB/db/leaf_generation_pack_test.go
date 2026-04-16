@@ -3,6 +3,7 @@ package db
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -113,6 +114,50 @@ func TestPersistLeafGenerationManifestAndRecordLengthIndexes_ReturnsSidecarError
 	}
 	if !strings.Contains(err.Error(), "raw file 77") {
 		t.Fatalf("error=%q, want raw file id context", err)
+	}
+}
+
+func TestLeafGenerationPack_FinalizeFailpointCleansCreatedSegments(t *testing.T) {
+	db, leafLog, dir := openLeafGenerationPackTestDB(t)
+
+	writeLeafGenerationKeys(t, db, "k", 2048, 'a')
+	_, fileID1 := currentLeafSegmentOrFatal(t, leafLog)
+	rawFileID1 := page.ValueLogSegmentID(fileID1)
+	if err := leafLog.rotateLeaf(); err != nil {
+		t.Fatalf("rotateLeaf: %v", err)
+	}
+	writeLeafGenerationKeyRange(t, db, "k", 0, 1024, 'b')
+	writeLeafGenerationKeys(t, db, "z", 32, 'z')
+
+	manifestBefore := loadLeafGenerationManifestOrFatal(t, dir)
+	beforeFiles, err := listLeafGenerationBootstrapFiles(LeafLogDirPath(dir))
+	if err != nil {
+		t.Fatalf("listLeafGenerationBootstrapFiles(before): %v", err)
+	}
+	gen1 := findLeafGenerationByFileID(t, manifestBefore, rawFileID1)
+
+	db.testFailFinalizeCommit.Store(true)
+	_, err = db.LeafGenerationPack(context.Background(), LeafGenerationPackOptions{GenerationIDs: []uint64{gen1.GenerationID}, Force: true})
+	db.testFailFinalizeCommit.Store(false)
+	if !errors.Is(err, errTestFinalizeCommitFailpoint) {
+		t.Fatalf("LeafGenerationPack failpoint err=%v, want %v", err, errTestFinalizeCommitFailpoint)
+	}
+
+	afterFiles, err := listLeafGenerationBootstrapFiles(LeafLogDirPath(dir))
+	if err != nil {
+		t.Fatalf("listLeafGenerationBootstrapFiles(after): %v", err)
+	}
+	if len(afterFiles) != len(beforeFiles) {
+		t.Fatalf("bootstrap file count=%d, want %d", len(afterFiles), len(beforeFiles))
+	}
+	for i := range beforeFiles {
+		if afterFiles[i] != beforeFiles[i] {
+			t.Fatalf("bootstrap files[%d]=%+v, want %+v", i, afterFiles[i], beforeFiles[i])
+		}
+	}
+	manifestAfter := loadLeafGenerationManifestOrFatal(t, dir)
+	if len(manifestAfter.Generations) != len(manifestBefore.Generations) {
+		t.Fatalf("manifest generations=%d, want %d", len(manifestAfter.Generations), len(manifestBefore.Generations))
 	}
 }
 

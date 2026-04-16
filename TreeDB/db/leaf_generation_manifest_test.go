@@ -204,6 +204,28 @@ func TestLoadOrCreateLeafGenerationManifest_ReadOnlyMissingReturnsSynthetic(t *t
 	}
 }
 
+func TestParseLeafGenerationBootstrapFileName(t *testing.T) {
+	cases := []struct {
+		name string
+		lane uint32
+		seq  uint32
+		ok   bool
+	}{
+		{name: "value-l3-12.log", lane: 3, seq: 12, ok: true},
+		{name: "value-l3-12.log.tmp", ok: false},
+		{name: "value-l3-12.log~", ok: false},
+		{name: "value-l3-12", ok: false},
+		{name: "value-l3-x.log", ok: false},
+		{name: "value-l3-12-extra.log", ok: false},
+	}
+	for _, tc := range cases {
+		lane, seq, ok := parseLeafGenerationBootstrapFileName(tc.name)
+		if ok != tc.ok || lane != tc.lane || seq != tc.seq {
+			t.Fatalf("parseLeafGenerationBootstrapFileName(%q)=(%d,%d,%v), want (%d,%d,%v)", tc.name, lane, seq, ok, tc.lane, tc.seq, tc.ok)
+		}
+	}
+}
+
 func TestLoadOrCreateLeafGenerationManifest_BootstrapsExistingLeafFiles(t *testing.T) {
 	leafDir := t.TempDir()
 	_, fileID1 := createLeafGenerationTestSegment(t, leafDir, rewriteLeafLogLaneID, 1)
