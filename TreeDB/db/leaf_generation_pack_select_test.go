@@ -101,6 +101,26 @@ func TestSelectLeafGenerationPackCandidates_RejectsNonEligiblePlan(t *testing.T)
 	}
 }
 
+func TestSelectLeafGenerationPackCandidates_PrioritizesLowYieldErrorWhenOversizeCandidateWasSkipped(t *testing.T) {
+	plan := LeafGenerationPlan{
+		Admission: leafGenerationPlanAdmissionEligible,
+		Candidates: []LeafGenerationPlanGeneration{
+			{GenerationID: 21, BytesDead: 100, BytesLive: 100, BytesToCopy: 100},
+			{GenerationID: 22, BytesDead: 5, BytesLive: 35, BytesToCopy: 35},
+		},
+	}
+	_, err := SelectLeafGenerationPackCandidates(plan, LeafGenerationPackSelectOptions{
+		MaxBytesToCopy:             50,
+		MinReclaimPerByteCopiedPPM: 200000,
+	})
+	if err == nil {
+		t.Fatal("expected low-yield selection error")
+	}
+	if got := err.Error(); got != "leaf generation pack selection: no candidate generations satisfy min-reclaim-per-byte-copied-ppm=200000" {
+		t.Fatalf("error=%q, want low-yield selection error", got)
+	}
+}
+
 func TestSelectLeafGenerationPackCandidates_PrioritizesOversizeErrorWhenNothingFits(t *testing.T) {
 	plan := LeafGenerationPlan{
 		Admission: leafGenerationPlanAdmissionEligible,
