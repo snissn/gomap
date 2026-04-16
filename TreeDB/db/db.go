@@ -1719,6 +1719,16 @@ func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired [
 		post.persistLeafGenerationRawFileIDs = append(post.persistLeafGenerationRawFileIDs[:0], leafManifestRawFileIDs...)
 		leafGenerationView = newLeafGenerationView(leafManifest)
 	}
+	if db.indexOuterLeavesInValueLog && db.leafPageLog != nil {
+		stagedLeafManifest, changed, err := db.stagedLeafGenerationManifestWithPending(db.leafGenerationManifest, 0, nextMeta.CommitSeq)
+		if err != nil {
+			db.mu.Unlock()
+			return post, err
+		}
+		if changed {
+			leafGenerationView = newLeafGenerationView(stagedLeafManifest)
+		}
+	}
 	newState := &DBState{
 		CommitSeq:        nextMeta.CommitSeq,
 		RootPageID:       nextMeta.UserRootPageID,

@@ -14,6 +14,18 @@ TREEMAP=(go run ./TreeDB/cmd/treemap)
 mkdir -p "$OUT"
 cd "$ROOT"
 
+du_bytes() {
+  if [[ -e "$1" ]]; then
+    if du -sb "$1" >/dev/null 2>&1; then
+      du -sb "$1" | awk '{print $1}'
+    else
+      du -sk "$1" | awk '{print $1 * 1024}'
+    fi
+  else
+    echo 0
+  fi
+}
+
 if (( HOT_KEY_COUNT > KEY_COUNT )); then
   echo "hot key count must be <= key count" >&2
   exit 1
@@ -186,8 +198,8 @@ for target in "${TARGETS[@]}"; do
     > "$run_dir/build.json"
   GOWORK=off "${TREEMAP[@]}" leafgen-plan "$db_dir" -rw -json > "$run_dir/plan.json"
   GOWORK=off "${TREEMAP[@]}" leafgen-plan "$db_dir" -rw -json -force > "$run_dir/plan-force.json"
-  du -sb "$db_dir" | awk '{print $1}' > "$run_dir/application_db_bytes.txt"
-  du -sb "$db_dir/maindb/leaf_vlog" | awk '{print $1}' > "$run_dir/leaf_vlog_bytes.txt"
+  du_bytes "$db_dir" > "$run_dir/application_db_bytes.txt"
+  du_bytes "$db_dir/maindb/leaf_vlog" > "$run_dir/leaf_vlog_bytes.txt"
   cp "$db_dir/maindb/leaf_vlog/manifest.json" "$run_dir/manifest.json"
   jq -n \
     --argjson leaf_target_bytes "$target" \

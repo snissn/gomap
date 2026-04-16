@@ -13,7 +13,11 @@ cd "$ROOT"
 
 du_bytes() {
   if [[ -e "$1" ]]; then
-    du -sb "$1" | awk '{print $1}'
+    if du -sb "$1" >/dev/null 2>&1; then
+      du -sb "$1" | awk '{print $1}'
+    else
+      du -sk "$1" | awk '{print $1 * 1024}'
+    fi
   else
     echo 0
   fi
