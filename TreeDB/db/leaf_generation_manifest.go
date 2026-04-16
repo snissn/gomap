@@ -317,17 +317,17 @@ func (db *DB) noteLeafGenerationPendingFileIDs(currentFileID uint32, commitSeq u
 	if len(pending) == 0 {
 		return nil
 	}
-	processed := make([]uint32, 0, len(pending))
 	batch := make([]uint32, 0, len(pending))
 	batchCommitSeq := uint64(0)
 	flushBatch := func() error {
 		if len(batch) == 0 {
 			return nil
 		}
-		if err := db.noteLeafGenerationWritableFileIDs(batch, batchCommitSeq); err != nil {
+		flushed := append([]uint32(nil), batch...)
+		if err := db.noteLeafGenerationWritableFileIDs(flushed, batchCommitSeq); err != nil {
 			return err
 		}
-		processed = append(processed, batch...)
+		db.clearLeafGenerationPendingFileIDs(flushed)
 		batch = batch[:0]
 		batchCommitSeq = 0
 		return nil
@@ -353,7 +353,6 @@ func (db *DB) noteLeafGenerationPendingFileIDs(currentFileID uint32, commitSeq u
 	if err := flushBatch(); err != nil {
 		return err
 	}
-	db.clearLeafGenerationPendingFileIDs(processed)
 	return nil
 }
 

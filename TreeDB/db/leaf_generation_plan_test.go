@@ -123,6 +123,15 @@ func TestCompareDeadPerLive_OverflowSafe(t *testing.T) {
 	}
 }
 
+func TestCompareDeadPerLive_ClampsNegativeInputs(t *testing.T) {
+	if got := compareDeadPerLive(-1, 100, 10, 100); got != -1 {
+		t.Fatalf("compareDeadPerLive negative aDead=%d, want -1", got)
+	}
+	if got := compareDeadPerLive(10, -1, 5, 10); got != 1 {
+		t.Fatalf("compareDeadPerLive negative aLive=%d, want 1", got)
+	}
+}
+
 func TestLeafGenerationPlan_SeparatesWholeGenerationGCFromPack(t *testing.T) {
 	db, leafLog := openLeafGenerationGCTestDB(t)
 
