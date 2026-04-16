@@ -1672,6 +1672,9 @@ func mustOpenLeafPackBackend(t *testing.T) *backenddb.DB {
 	if err != nil {
 		t.Fatalf("open backend: %v", err)
 	}
+	t.Cleanup(func() {
+		_ = backend.Close()
+	})
 	return backend
 }
 
