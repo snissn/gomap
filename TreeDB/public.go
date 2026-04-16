@@ -114,15 +114,18 @@ type maintenanceCoordinator struct {
 	waitMax   atomic.Int64
 
 	gcRuns     atomic.Uint64
+	leafGCRuns atomic.Uint64
 	vacuumRuns atomic.Uint64
 
 	lastGCAt     atomic.Int64
+	lastLeafGCAt atomic.Int64
 	lastVacuumAt atomic.Int64
 }
 
 const (
 	maintenanceOpNone int32 = iota
 	maintenanceOpGC
+	maintenanceOpLeafGC
 	maintenanceOpVacuum
 	maintenanceOpOther
 )
@@ -131,6 +134,8 @@ func maintenanceOpCode(op string) int32 {
 	switch op {
 	case "gc":
 		return maintenanceOpGC
+	case "leaf-gc":
+		return maintenanceOpLeafGC
 	case "vacuum":
 		return maintenanceOpVacuum
 	case "":
@@ -144,6 +149,8 @@ func maintenanceActiveLabel(code int32) string {
 	switch code {
 	case maintenanceOpGC:
 		return "gc"
+	case maintenanceOpLeafGC:
+		return "leaf-gc"
 	case maintenanceOpVacuum:
 		return "vacuum"
 	case maintenanceOpOther:
@@ -232,6 +239,9 @@ func (db *DB) beginFullScanMaintenance(op string) (time.Duration, func(success b
 			case "gc":
 				db.maintenance.gcRuns.Add(1)
 				db.maintenance.lastGCAt.Store(now)
+			case "leaf-gc":
+				db.maintenance.leafGCRuns.Add(1)
+				db.maintenance.lastLeafGCAt.Store(now)
 			case "vacuum":
 				db.maintenance.vacuumRuns.Add(1)
 				db.maintenance.lastVacuumAt.Store(now)
@@ -251,8 +261,10 @@ func maintenanceStatsInto(stats map[string]string, m *maintenanceCoordinator) {
 	waitTotal := time.Duration(m.waitTotal.Load())
 	waitMax := time.Duration(m.waitMax.Load())
 	gcRuns := m.gcRuns.Load()
+	leafGCRuns := m.leafGCRuns.Load()
 	vacuumRuns := m.vacuumRuns.Load()
 	lastGCAt := m.lastGCAt.Load()
+	lastLeafGCAt := m.lastLeafGCAt.Load()
 	lastVacuumAt := m.lastVacuumAt.Load()
 
 	stats["treedb.maintenance.full_scan.active"] = active
@@ -260,11 +272,17 @@ func maintenanceStatsInto(stats map[string]string, m *maintenanceCoordinator) {
 	stats["treedb.maintenance.full_scan.wait_total_ms"] = fmt.Sprintf("%.3f", float64(waitTotal)/float64(time.Millisecond))
 	stats["treedb.maintenance.full_scan.wait_max_ms"] = fmt.Sprintf("%.3f", float64(waitMax)/float64(time.Millisecond))
 	stats["treedb.maintenance.full_scan.gc_runs"] = fmt.Sprintf("%d", gcRuns)
+	stats["treedb.maintenance.full_scan.leaf_gc_runs"] = fmt.Sprintf("%d", leafGCRuns)
 	stats["treedb.maintenance.full_scan.vacuum_runs"] = fmt.Sprintf("%d", vacuumRuns)
 	if lastGCAt > 0 {
 		stats["treedb.maintenance.full_scan.last_gc_unix_nano"] = fmt.Sprintf("%d", lastGCAt)
 	} else {
 		stats["treedb.maintenance.full_scan.last_gc_unix_nano"] = "0"
+	}
+	if lastLeafGCAt > 0 {
+		stats["treedb.maintenance.full_scan.last_leaf_gc_unix_nano"] = fmt.Sprintf("%d", lastLeafGCAt)
+	} else {
+		stats["treedb.maintenance.full_scan.last_leaf_gc_unix_nano"] = "0"
 	}
 	if lastVacuumAt > 0 {
 		stats["treedb.maintenance.full_scan.last_vacuum_unix_nano"] = fmt.Sprintf("%d", lastVacuumAt)

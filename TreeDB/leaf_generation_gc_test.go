@@ -52,4 +52,15 @@ func TestLeafGenerationGC_CachedModeCheckpointsBeforeDryRun(t *testing.T) {
 	if metaAfterGC.CommitSeq <= metaBeforeGC.CommitSeq {
 		t.Fatalf("expected LeafGenerationGC to checkpoint cached state, got before=%d after=%d", metaBeforeGC.CommitSeq, metaAfterGC.CommitSeq)
 	}
+
+	statsMap := db.Stats()
+	if got := statsMap["treedb.maintenance.full_scan.leaf_gc_runs"]; got != "1" {
+		t.Fatalf("leaf_gc_runs=%q want 1", got)
+	}
+	if got := statsMap["treedb.maintenance.full_scan.gc_runs"]; got != "0" {
+		t.Fatalf("gc_runs=%q want 0", got)
+	}
+	if got := statsMap["treedb.maintenance.full_scan.active"]; got != "" {
+		t.Fatalf("active=%q want empty after completion", got)
+	}
 }
