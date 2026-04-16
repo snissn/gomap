@@ -263,9 +263,9 @@ func (db *DB) resolveLeafGenerationPackSourceFileIDs(generationIDs []uint64) ([]
 	return out, matched, nil
 }
 
-func (db *DB) noteCreatedLeafGenerationFileIDs(commitSeq uint64, fileIDs []uint32) error {
-	if db == nil || db.leafGenerationManifest == nil || commitSeq == 0 || len(fileIDs) == 0 {
-		return nil
+func noteCreatedLeafGenerationFileIDsInManifest(manifest *leafGenerationManifest, commitSeq uint64, fileIDs []uint32) ([]uint32, bool, error) {
+	if manifest == nil || commitSeq == 0 || len(fileIDs) == 0 {
+		return nil, false, nil
 	}
 	changed := false
 	rawFileIDs := make([]uint32, 0, len(fileIDs))
@@ -278,9 +278,9 @@ func (db *DB) noteCreatedLeafGenerationFileIDs(commitSeq uint64, fileIDs []uint3
 			continue
 		}
 		rawFileID := page.ValueLogSegmentID(fileID)
-		registered, err := db.leafGenerationManifest.registerCurrentGenerationFileID(rawFileID, commitSeq)
+		registered, err := manifest.registerCurrentGenerationFileID(rawFileID, commitSeq)
 		if err != nil {
-			return err
+			return nil, false, err
 		}
 		if registered {
 			changed = true
@@ -288,9 +288,16 @@ func (db *DB) noteCreatedLeafGenerationFileIDs(commitSeq uint64, fileIDs []uint3
 		rawFileIDs = append(rawFileIDs, rawFileID)
 	}
 	if !changed {
+		return nil, false, nil
+	}
+	return rawFileIDs, true, nil
+}
+
+func (db *DB) persistLeafGenerationManifestAndRecordLengthIndexes(manifest *leafGenerationManifest, rawFileIDs []uint32) error {
+	if db == nil || manifest == nil {
 		return nil
 	}
-	if err := saveLeafGenerationManifest(LeafLogDirPath(db.dir), db.leafGenerationManifest); err != nil {
+	if err := saveLeafGenerationManifest(LeafLogDirPath(db.dir), manifest); err != nil {
 		return err
 	}
 	for _, rawFileID := range rawFileIDs {
@@ -299,6 +306,20 @@ func (db *DB) noteCreatedLeafGenerationFileIDs(commitSeq uint64, fileIDs []uint3
 		}
 	}
 	return nil
+}
+
+func (db *DB) noteCreatedLeafGenerationFileIDs(commitSeq uint64, fileIDs []uint32) error {
+	if db == nil || db.leafGenerationManifest == nil || commitSeq == 0 || len(fileIDs) == 0 {
+		return nil
+	}
+	rawFileIDs, changed, err := noteCreatedLeafGenerationFileIDsInManifest(db.leafGenerationManifest, commitSeq, fileIDs)
+	if err != nil {
+		return err
+	}
+	if !changed {
+		return nil
+	}
+	return db.persistLeafGenerationManifestAndRecordLengthIndexes(db.leafGenerationManifest, rawFileIDs)
 }
 
 func filterLeafGenerationRawFileIDs(fileIDs []uint32) []uint32 {

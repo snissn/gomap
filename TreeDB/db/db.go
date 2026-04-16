@@ -1552,24 +1552,27 @@ func (db *DB) writeMeta(pageID uint64, meta page.MetaPageBody) error {
 }
 
 type finalizeCommitPost struct {
-	oldState     *DBState
-	metrics      adaptive.Metrics
-	vlogRefDelta *valueLogRefDelta
-	commitSeq    uint64
-	kickPrune    bool
-	doPrune      bool
-	debug        bool
-	sync         bool
-	start        time.Time
-	durSync1     time.Duration
-	durMeta      time.Duration
-	durSync2     time.Duration
+	oldState                          *DBState
+	metrics                           adaptive.Metrics
+	vlogRefDelta                      *valueLogRefDelta
+	commitSeq                         uint64
+	kickPrune                         bool
+	doPrune                           bool
+	debug                             bool
+	sync                              bool
+	start                             time.Time
+	durSync1                          time.Duration
+	durMeta                           time.Duration
+	durSync2                          time.Duration
+	persistLeafGenerationManifest     bool
+	persistLeafGenerationManifestView *leafGenerationManifest
+	persistLeafGenerationRawFileIDs   []uint32
 }
 
 // finalizeCommitLocked performs the durability-critical publish path.
 // Callers that already hold commit serialization may run post work after
 // releasing the serialization lock.
-func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired []uint64, sync bool, metrics adaptive.Metrics, touchedValueLogSegments []uint32, forceValueLogRefresh bool, vlogRefDelta *valueLogRefDelta) (finalizeCommitPost, error) {
+func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired []uint64, sync bool, metrics adaptive.Metrics, touchedValueLogSegments []uint32, forceValueLogRefresh bool, vlogRefDelta *valueLogRefDelta, leafManifest *leafGenerationManifest, leafManifestRawFileIDs []uint32) (finalizeCommitPost, error) {
 	post := finalizeCommitPost{
 		metrics: metrics,
 	}
@@ -1636,6 +1639,15 @@ func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired [
 	db.mu.Unlock()
 	watermarkHold += time.Since(holdStart)
 
+	leafPageSegmentRegistered := false
+	if forceValueLogRefresh && db.valueLogManager != nil {
+		registered, err := db.ensureLeafPageLogSegmentRegistered(nextMeta.CommitSeq)
+		if err != nil {
+			return post, err
+		}
+		leafPageSegmentRegistered = registered
+	}
+
 	if db.testFailFinalizeCommit.Load() {
 		return post, errTestFinalizeCommitFailpoint
 	}
@@ -1680,25 +1692,10 @@ func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired [
 				}
 			}
 		}
-		if forceValueLogRefresh {
-			// Outer-leaf commits can keep ValueLogSet complete without a full
-			// scan when the leaf log can report/register its current segment.
-			//
-			// Call this regardless of touchedValueLogSegments. Some commit paths
-			// can touch pointer-backed segments that are already known while also
-			// publishing outer-leaf pages through a leaf log that cannot report
-			// or register its current segment. In that case we must fall back to
-			// one manager refresh to avoid publishing an incomplete ValueLogSet.
-			registered, err := db.ensureLeafPageLogSegmentRegistered(nextMeta.CommitSeq)
-			if err != nil {
-				db.mu.Unlock()
-				return post, err
-			}
-			if !registered {
-				// If no registration path is available, force one refresh as a
-				// safety fallback before publishing the new state.
-				needRefresh = true
-			}
+		if forceValueLogRefresh && !leafPageSegmentRegistered {
+			// If no registration path is available, force one refresh as a
+			// safety fallback before publishing the new state.
+			needRefresh = true
 		}
 		if needRefresh {
 			if err := db.valueLogManager.Refresh(); err != nil {
@@ -1710,12 +1707,20 @@ func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired [
 			valueLogSet = db.valueLogManager.CurrentSetNoRefresh()
 		}
 	}
+	leafGenerationView := db.currentLeafGenerationView()
+	if leafManifest != nil {
+		db.leafGenerationManifest = leafManifest
+		post.persistLeafGenerationManifest = true
+		post.persistLeafGenerationManifestView = leafManifest
+		post.persistLeafGenerationRawFileIDs = append(post.persistLeafGenerationRawFileIDs[:0], leafManifestRawFileIDs...)
+		leafGenerationView = newLeafGenerationView(leafManifest)
+	}
 	newState := &DBState{
 		CommitSeq:        nextMeta.CommitSeq,
 		RootPageID:       nextMeta.UserRootPageID,
 		SystemRootPageID: nextMeta.SystemRootPageID,
 		ValueLogSet:      valueLogSet,
-		LeafGenerations:  db.currentLeafGenerationView(),
+		LeafGenerations:  leafGenerationView,
 	}
 	db.state.Store(newState)
 	db.publishSnapshotView(idx, newState, db.valueLogManager)
@@ -1770,6 +1775,11 @@ func (db *DB) finalizeCommitPostWork(post finalizeCommitPost) {
 	if post.oldState != nil {
 		_ = db.valueLogManager.Release(post.oldState.ValueLogSet)
 	}
+	if post.persistLeafGenerationManifest {
+		if err := db.persistLeafGenerationManifestAndRecordLengthIndexes(post.persistLeafGenerationManifestView, post.persistLeafGenerationRawFileIDs); err != nil {
+			db.reportError(err)
+		}
+	}
 
 	if db.adaptive != nil {
 		db.adaptive.RecordCommit(post.metrics)
@@ -1789,8 +1799,8 @@ func (db *DB) finalizeCommitPostWork(post finalizeCommitPost) {
 }
 
 // finalizeCommit handles durability and state updates.
-func (db *DB) finalizeCommit(newRootID uint64, sysRootID uint64, retired []uint64, sync bool, metrics adaptive.Metrics, touchedValueLogSegments []uint32, forceValueLogRefresh bool, vlogRefDelta *valueLogRefDelta) error {
-	post, err := db.finalizeCommitLocked(newRootID, sysRootID, retired, sync, metrics, touchedValueLogSegments, forceValueLogRefresh, vlogRefDelta)
+func (db *DB) finalizeCommit(newRootID uint64, sysRootID uint64, retired []uint64, sync bool, metrics adaptive.Metrics, touchedValueLogSegments []uint32, forceValueLogRefresh bool, vlogRefDelta *valueLogRefDelta, leafManifest *leafGenerationManifest, leafManifestRawFileIDs []uint32) error {
+	post, err := db.finalizeCommitLocked(newRootID, sysRootID, retired, sync, metrics, touchedValueLogSegments, forceValueLogRefresh, vlogRefDelta, leafManifest, leafManifestRawFileIDs)
 	if err != nil {
 		return err
 	}
@@ -1822,7 +1832,7 @@ func (db *DB) Commit(newRootID uint64) error {
 	sysRoot := db.meta.SystemRootPageID
 	db.mu.RUnlock()
 
-	return db.finalizeCommit(newRootID, sysRoot, nil, true, adaptive.Metrics{}, nil, true, nil)
+	return db.finalizeCommit(newRootID, sysRoot, nil, true, adaptive.Metrics{}, nil, true, nil, nil, nil)
 }
 
 // Prune reclaims pages from the graveyard.
@@ -2095,7 +2105,7 @@ func (db *DB) CompactIndex() error {
 	db.mu.Unlock()
 
 	// Commit new root and retire the old tree pages.
-	return db.finalizeCommit(newRoot, sysRoot, retired, true, adaptive.Metrics{}, nil, true, nil)
+	return db.finalizeCommit(newRoot, sysRoot, retired, true, adaptive.Metrics{}, nil, true, nil, nil, nil)
 }
 
 type pagerAllocator struct {

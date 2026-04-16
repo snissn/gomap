@@ -18,10 +18,10 @@ func walkRootsCommon(ctx context.Context, rootIDs []uint64, get GetFunc, verify 
 		return nil
 	}
 	if get == nil {
-		return fmt.Errorf("leafrefscan.Walk: get function is nil")
+		return fmt.Errorf("leafrefscan: get function is nil")
 	}
 	if visit == nil {
-		return fmt.Errorf("leafrefscan.Walk: visit function is nil")
+		return fmt.Errorf("leafrefscan: visit function is nil")
 	}
 	if ctx == nil {
 		ctx = context.Background()
