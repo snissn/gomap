@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/page"
 	templ "github.com/snissn/gomap/TreeDB/template"
@@ -47,6 +48,27 @@ func withMappedLeafSealedBytesBudget(t *testing.T, maxMappedBytes int64) {
 	t.Cleanup(func() {
 		MaxMappedLeafSealedBytes = prev
 	})
+}
+
+func waitForRemapIdle(t *testing.T, files ...*File) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		allIdle := true
+		for _, f := range files {
+			if f != nil && f.remapRequested.Load() {
+				allIdle = false
+				break
+			}
+		}
+		if allIdle {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for remap goroutine to drain")
+		}
+		time.Sleep(1 * time.Millisecond)
+	}
 }
 
 func TestManagerMmapReadStatsAggregatesCounters(t *testing.T) {
@@ -271,11 +293,13 @@ func TestManagerReadUnsafe_CurrentWritableLeafUsesPersistentMmapByDefault(t *tes
 	if runtime.GOOS == "windows" {
 		t.Skip("mmap not supported on windows")
 	}
+	var file *File
 	prevCurrent := enableCurrentWritableMmap
 	prevLeaf := enableCurrentLeafWritableMmap
 	enableCurrentWritableMmap = false
 	enableCurrentLeafWritableMmap = true
 	t.Cleanup(func() {
+		waitForRemapIdle(t, file)
 		enableCurrentWritableMmap = prevCurrent
 		enableCurrentLeafWritableMmap = prevLeaf
 	})
@@ -321,6 +345,7 @@ func TestManagerReadUnsafe_CurrentWritableLeafUsesPersistentMmapByDefault(t *tes
 	}
 
 	f := mgr.files[fileID]
+	file = f
 	data, _ := f.mmapData.Load().([]byte)
 	if len(data) == 0 {
 		t.Fatalf("expected current leaf segment to install persistent mmap")
@@ -345,12 +370,14 @@ func TestManagerPromoteCurrentWritable_RetiresLeafCurrentMmapBeforeSealedFallbac
 	if runtime.GOOS == "windows" {
 		t.Skip("mmap not supported on windows")
 	}
+	var files []*File
 	prevCurrent := enableCurrentWritableMmap
 	prevLeaf := enableCurrentLeafWritableMmap
 	enableCurrentWritableMmap = false
 	enableCurrentLeafWritableMmap = true
 	withMappedLeafSealedBudget(t, 0)
 	t.Cleanup(func() {
+		waitForRemapIdle(t, files...)
 		enableCurrentWritableMmap = prevCurrent
 		enableCurrentLeafWritableMmap = prevLeaf
 	})
@@ -385,6 +412,7 @@ func TestManagerPromoteCurrentWritable_RetiresLeafCurrentMmapBeforeSealedFallbac
 	}
 
 	f1 := mgr.files[id1]
+	files = []*File{f1, mgr.files[id2]}
 	if data, _ := f1.mmapData.Load().([]byte); len(data) == 0 {
 		t.Fatalf("expected current leaf segment to hold active mmap before promotion")
 	}
