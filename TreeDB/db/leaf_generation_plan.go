@@ -307,6 +307,18 @@ func rankLeafGenerationPlanCandidates(gens []LeafGenerationPlanGeneration) {
 }
 
 func compareDeadPerLive(aDead, aLive, bDead, bLive int64) int {
+	if aDead < 0 {
+		aDead = 0
+	}
+	if aLive < 0 {
+		aLive = 0
+	}
+	if bDead < 0 {
+		bDead = 0
+	}
+	if bLive < 0 {
+		bLive = 0
+	}
 	aInf := aDead > 0 && aLive == 0
 	bInf := bDead > 0 && bLive == 0
 	if aInf != bInf {
