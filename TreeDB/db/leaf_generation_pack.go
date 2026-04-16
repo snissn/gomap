@@ -279,8 +279,8 @@ func noteCreatedLeafGenerationFileIDsInManifest(manifest *leafGenerationManifest
 		}
 		if registered {
 			changed = true
+			rawFileIDs = append(rawFileIDs, rawFileID)
 		}
-		rawFileIDs = append(rawFileIDs, rawFileID)
 	}
 	if !changed {
 		return nil, false, nil
@@ -292,6 +292,7 @@ func (db *DB) persistLeafGenerationManifestAndRecordLengthIndexes(manifest *leaf
 	if db == nil || manifest == nil {
 		return nil
 	}
+	rawFileIDs = dedupeLeafGenerationRawFileIDs(rawFileIDs)
 	if err := saveLeafGenerationManifest(LeafLogDirPath(db.dir), manifest); err != nil {
 		return err
 	}
@@ -334,6 +335,28 @@ func (db *DB) noteCreatedLeafGenerationFileIDs(commitSeq uint64, fileIDs []uint3
 		return nil
 	}
 	return db.persistLeafGenerationManifestAndRecordLengthIndexes(db.leafGenerationManifest, rawFileIDs)
+}
+
+func dedupeLeafGenerationRawFileIDs(rawFileIDs []uint32) []uint32 {
+	if len(rawFileIDs) == 0 {
+		return nil
+	}
+	out := make([]uint32, 0, len(rawFileIDs))
+	seen := make(map[uint32]struct{}, len(rawFileIDs))
+	for _, rawID := range rawFileIDs {
+		if rawID == 0 {
+			continue
+		}
+		if _, ok := seen[rawID]; ok {
+			continue
+		}
+		seen[rawID] = struct{}{}
+		out = append(out, rawID)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i] < out[j]
+	})
+	return out
 }
 
 func filterLeafGenerationRawFileIDs(fileIDs []uint32) []uint32 {
