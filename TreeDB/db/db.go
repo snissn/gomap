@@ -1789,12 +1789,11 @@ func (db *DB) finalizeCommitPostWork(post finalizeCommitPost) {
 		db.commitMu.Lock()
 		currentCommitSeq := db.meta.CommitSeq
 		currentManifest := db.leafGenerationManifest
-		shouldRun := currentCommitSeq == post.commitSeq
-		if shouldRun && post.persistLeafGenerationManifest && currentManifest == post.persistLeafGenerationManifestView {
+		if post.persistLeafGenerationManifest && currentManifest == post.persistLeafGenerationManifestView {
 			persistErr = db.persistLeafGenerationManifestAndRecordLengthIndexes(post.persistLeafGenerationManifestView, post.persistLeafGenerationRawFileIDs)
 		}
-		if shouldRun && post.drainLeafGenerationPending {
-			pendingErr = db.noteLeafGenerationPendingFileIDs(0, post.commitSeq)
+		if post.drainLeafGenerationPending {
+			pendingErr = db.noteLeafGenerationPendingFileIDs(0, currentCommitSeq)
 		}
 		db.commitMu.Unlock()
 		if persistErr != nil {
