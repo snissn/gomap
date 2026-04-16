@@ -173,9 +173,10 @@ type valueLogRewriteLiveBytesCache struct {
 }
 
 type treeReachabilityCacheKey struct {
-	commitSeq  uint64
-	rootID     uint64
-	systemRoot uint64
+	commitSeq          uint64
+	rootID             uint64
+	systemRoot         uint64
+	leafGenerationView *leafGenerationView
 }
 
 type leafGenerationLiveStatsCache struct {
