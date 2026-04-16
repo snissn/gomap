@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
@@ -287,9 +288,6 @@ func TestOpen_IndexOuterLeavesInValueLog_CreatesLeafGenerationManifest(t *testin
 	}
 	defer func() { _ = db.Close() }()
 
-	if db.leafGenerationManifest == nil {
-		t.Fatalf("expected in-memory leaf generation manifest")
-	}
 	loaded, ok, err := loadLeafGenerationManifest(LeafLogDirPath(dir))
 	if err != nil {
 		t.Fatalf("loadLeafGenerationManifest: %v", err)
@@ -336,6 +334,21 @@ func TestEnsureLeafPageLogSegmentRegistered_AddsWritableFileToManifest(t *testin
 	}
 	if !registered {
 		t.Fatalf("expected rollover registration to succeed")
+	}
+
+	wantPending := []uint32{page.ValueLogSegmentID(fileID), page.ValueLogSegmentID(fileID2)}
+	if got := append([]uint32(nil), db.leafGenerationPendingFileIDs...); !reflect.DeepEqual(got, wantPending) {
+		t.Fatalf("pending file ids=%v want %v", got, wantPending)
+	}
+	if got, want := db.leafGenerationPendingCommitSeq[wantPending[0]], uint64(55); got != want {
+		t.Fatalf("pending commit seq for first file=%d want %d", got, want)
+	}
+	if got, want := db.leafGenerationPendingCommitSeq[wantPending[1]], uint64(144); got != want {
+		t.Fatalf("pending commit seq for second file=%d want %d", got, want)
+	}
+
+	if err := db.noteLeafGenerationPendingFileIDs(0, 144); err != nil {
+		t.Fatalf("noteLeafGenerationPendingFileIDs: %v", err)
 	}
 
 	loaded, ok, err := loadLeafGenerationManifest(LeafLogDirPath(dir))
