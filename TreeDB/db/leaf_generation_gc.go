@@ -84,7 +84,6 @@ func (db *DB) LeafGenerationGC(ctx context.Context, opts LeafGenerationGCOptions
 		return stats, err
 	}
 	snap = nil
-	filePaths := db.leafGenerationFilePaths(manifest)
 	intermediateChanged := false
 	zombieFileIDs := make(map[uint32]struct{})
 	for i := range manifest.Generations {
