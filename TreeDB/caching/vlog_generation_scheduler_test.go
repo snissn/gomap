@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"sync"
 	"testing"
@@ -1675,14 +1676,13 @@ func mustLeafPackTempDir(t *testing.T, prefix string) string {
 	return dir
 }
 
-func removeLeafPackTempDir(t *testing.T, dir string) {
-	t.Helper()
+func removeLeafPackTempDirErr(dir string) error {
 	var lastErr error
 	sleep := 20 * time.Millisecond
 	for i := 0; i < 80; i++ {
 		err := os.RemoveAll(dir)
 		if err == nil || errors.Is(err, os.ErrNotExist) {
-			return
+			return nil
 		}
 		lastErr = err
 		time.Sleep(sleep)
@@ -1690,7 +1690,25 @@ func removeLeafPackTempDir(t *testing.T, dir string) {
 			sleep += 10 * time.Millisecond
 		}
 	}
-	t.Fatalf("remove tempdir %s: %v", dir, lastErr)
+	return lastErr
+}
+
+func removeLeafPackTempDir(t *testing.T, dir string) {
+	t.Helper()
+	if err := removeLeafPackTempDirErr(dir); err != nil {
+		t.Fatalf("remove tempdir %s: %v", dir, err)
+	}
+}
+
+func removeLeafPackTempDirBestEffort(t *testing.T, dir string) {
+	t.Helper()
+	if err := removeLeafPackTempDirErr(dir); err != nil {
+		if runtime.GOOS == "windows" {
+			t.Logf("best-effort remove tempdir %s: %v", dir, err)
+			return
+		}
+		t.Fatalf("remove tempdir %s: %v", dir, err)
+	}
 }
 
 func mustOpenLeafPackBackend(t *testing.T) *backenddb.DB {
@@ -1784,7 +1802,7 @@ func openLeafPackMaintenanceSchedulerOnlyTestDBWithClose(t *testing.T, backend *
 	}
 	return db, closeDB, func() {
 		closeDB()
-		removeLeafPackTempDir(t, dir)
+		removeLeafPackTempDirBestEffort(t, dir)
 	}
 }
 
