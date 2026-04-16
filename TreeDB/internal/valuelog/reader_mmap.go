@@ -55,9 +55,8 @@ const (
 	defaultAdaptiveCapEnabled       = true
 	defaultMaxMappedSealed          = 8
 	defaultMaxMappedSealedBytes     = 64 << 20
-	defaultMaxMappedLeafSealed      = 64
-	defaultMaxMappedLeafSealedBytes = 1 << 30
-	reservedLeafLogLaneID           = 255
+	defaultMaxMappedLeafSealed      = defaultMaxMappedSealed * 4
+	defaultMaxMappedLeafSealedBytes = defaultMaxMappedSealedBytes * 4
 )
 
 var (
@@ -117,7 +116,7 @@ func init() {
 
 func isLeafLogFileID(fileID uint32) bool {
 	lane, _ := DecodeFileID(fileID)
-	return lane == reservedLeafLogLaneID
+	return lane == ReservedLeafLogLaneID
 }
 
 func effectiveMaxDeadMappings(mappedLen int) int {

@@ -104,7 +104,7 @@ const (
 	vlogGenerationClassCold
 )
 
-const leafLogLaneID = 255
+const leafLogLaneID = valuelog.ReservedLeafLogLaneID
 
 func commitLogName(laneID, seq int) string {
 	return fmt.Sprintf("commit-l%d-%06d.log", laneID, seq)

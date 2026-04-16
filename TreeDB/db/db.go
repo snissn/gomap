@@ -2075,6 +2075,9 @@ func (db *DB) publishSnapshotView(idx *indexGen, state *DBState, vm *valuelog.Ma
 		state:       state,
 		vlogManager: vm,
 	})
+	if state.LeafGenerations != nil && db.snapshotAcquireInFlight() == 0 {
+		db.leafGenerationPins.pruneInactiveGenerationIDs(state.LeafGenerations.GenerationOrder)
+	}
 }
 
 func (db *DB) clearSnapshotView() {

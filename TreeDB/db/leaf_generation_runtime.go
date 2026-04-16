@@ -51,9 +51,6 @@ func (db *DB) currentLeafGenerationView() *leafGenerationView {
 		return nil
 	}
 	view := newLeafGenerationView(db.leafGenerationManifest)
-	if view != nil && db.snapshotAcquireInFlight() == 0 {
-		db.leafGenerationPins.pruneInactiveGenerationIDs(view.GenerationOrder)
-	}
 	if view != nil && len(view.GenerationOrder) > 0 {
 		view.PinRefs = db.leafGenerationPins.refsForGenerationIDs(view.GenerationOrder)
 	}

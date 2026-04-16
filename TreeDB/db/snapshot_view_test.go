@@ -220,7 +220,7 @@ func TestLeafGenerationPinTracker_PrunesInactiveZeroCountRefs(t *testing.T) {
 	}
 }
 
-func TestCurrentLeafGenerationView_SkipsPruneDuringInFlightSnapshotAcquire(t *testing.T) {
+func TestCurrentLeafGenerationView_DoesNotPruneTrackedRefs(t *testing.T) {
 	db := &DB{}
 	db.leafGenerationManifest = &leafGenerationManifest{
 		CurrentGenerationID: 1,
@@ -233,9 +233,7 @@ func TestCurrentLeafGenerationView_SkipsPruneDuringInFlightSnapshotAcquire(t *te
 	if len(staleRefs) != 1 {
 		t.Fatalf("expected one stale ref, got %d", len(staleRefs))
 	}
-	db.snapshotAcquireRO[0].Store(1)
 	view := db.currentLeafGenerationView()
-	db.snapshotAcquireRO[0].Store(0)
 	if view == nil {
 		t.Fatal("expected leaf generation view")
 	}
@@ -244,11 +242,36 @@ func TestCurrentLeafGenerationView_SkipsPruneDuringInFlightSnapshotAcquire(t *te
 	_, stillTracked := db.leafGenerationPins.refs[7]
 	db.leafGenerationPins.mu.RUnlock()
 	if !stillTracked {
+		t.Fatalf("expected currentLeafGenerationView not to prune tracked refs")
+	}
+}
+
+func TestPublishSnapshotView_SkipsPruneDuringInFlightSnapshotAcquire(t *testing.T) {
+	db := &DB{}
+	idx := &indexGen{}
+	state := &DBState{
+		LeafGenerations: &leafGenerationView{
+			CurrentGenerationID: 1,
+			GenerationOrder:     []uint64{1},
+		},
+	}
+
+	staleRefs := db.leafGenerationPins.refsForGenerationIDs([]uint64{7})
+	if len(staleRefs) != 1 {
+		t.Fatalf("expected one stale ref, got %d", len(staleRefs))
+	}
+
+	db.snapshotAcquireRO[0].Store(1)
+	db.publishSnapshotView(idx, state, nil)
+	db.leafGenerationPins.mu.RLock()
+	_, stillTracked := db.leafGenerationPins.refs[7]
+	db.leafGenerationPins.mu.RUnlock()
+	if !stillTracked {
 		t.Fatalf("expected stale ref to remain tracked while snapshot acquisition is in flight")
 	}
 
-	db.currentLeafGenerationView()
-
+	db.snapshotAcquireRO[0].Store(0)
+	db.publishSnapshotView(idx, state, nil)
 	db.leafGenerationPins.mu.RLock()
 	_, stillTracked = db.leafGenerationPins.refs[7]
 	db.leafGenerationPins.mu.RUnlock()

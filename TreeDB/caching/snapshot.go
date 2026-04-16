@@ -20,6 +20,9 @@ import (
 //
 // Mutable memtables are intentionally ignored so that writes after AcquireSnapshot
 // are not visible through the snapshot.
+//
+// Snapshot pointers are single-use: after Close returns, callers must discard the
+// pointer and treat further use as invalid.
 type Snapshot struct {
 	db      *DB
 	view    *memtableView

@@ -567,8 +567,8 @@ func TestReadUnsafe_LeafLaneUsesLeafSealedMmapByteBudget(t *testing.T) {
 	withMappedLeafSealedBytesBudget(t, 1<<30)
 
 	dir := t.TempDir()
-	id1, ptr1 := writeTestSegmentWithPtr(t, dir, reservedLeafLogLaneID, 1, 1, bytes.Repeat([]byte("a"), 64))
-	id2, ptr2 := writeTestSegmentWithPtr(t, dir, reservedLeafLogLaneID, 2, 2, bytes.Repeat([]byte("b"), 64))
+	id1, ptr1 := writeTestSegmentWithPtr(t, dir, ReservedLeafLogLaneID, 1, 1, bytes.Repeat([]byte("a"), 64))
+	id2, ptr2 := writeTestSegmentWithPtr(t, dir, ReservedLeafLogLaneID, 2, 2, bytes.Repeat([]byte("b"), 64))
 
 	f1, err := openFile(filepath.Join(dir, "value-l255-000001.log"), id1, nil, nil, templ.DecodeOptions{}, nil)
 	if err != nil {
@@ -631,8 +631,8 @@ func TestReadUnsafe_LeafLaneDenyCacheRechecksWhenLeafBudgetChanges(t *testing.T)
 	withMappedLeafSealedBytesBudget(t, 1)
 
 	dir := t.TempDir()
-	id1, ptr1 := writeTestSegmentWithPtr(t, dir, reservedLeafLogLaneID, 1, 1, bytes.Repeat([]byte("a"), 64))
-	id2, ptr2 := writeTestSegmentWithPtr(t, dir, reservedLeafLogLaneID, 2, 2, bytes.Repeat([]byte("b"), 64))
+	id1, ptr1 := writeTestSegmentWithPtr(t, dir, ReservedLeafLogLaneID, 1, 1, bytes.Repeat([]byte("a"), 64))
+	id2, ptr2 := writeTestSegmentWithPtr(t, dir, ReservedLeafLogLaneID, 2, 2, bytes.Repeat([]byte("b"), 64))
 
 	f1, err := openFile(filepath.Join(dir, "value-l255-000001.log"), id1, nil, nil, templ.DecodeOptions{}, nil)
 	if err != nil {
