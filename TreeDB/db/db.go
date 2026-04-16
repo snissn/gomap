@@ -155,7 +155,10 @@ type DB struct {
 	// testFailFinalizeCommit forces finalizeCommitLocked to fail before writing
 	// the next meta page. Used by crash-safety tests.
 	testFailFinalizeCommit atomic.Bool
-	closing                atomic.Bool
+	// testFailWriteMeta forces writeMeta to fail before mutating the target meta
+	// page so tests can exercise pre-publish cleanup paths.
+	testFailWriteMeta atomic.Bool
+	closing           atomic.Bool
 }
 
 type valueLogRewriteLiveBytesKey struct {
@@ -193,6 +196,41 @@ const (
 const snapshotShardHintUnset = -1
 
 var errTestFinalizeCommitFailpoint = errors.New("treedb: finalize commit failpoint")
+var errTestWriteMetaFailpoint = errors.New("treedb: write meta failpoint")
+
+type finalizeCommitError struct {
+	err                        error
+	cleanupCreatedSegmentsSafe bool
+}
+
+func (e *finalizeCommitError) Error() string {
+	if e == nil || e.err == nil {
+		return ""
+	}
+	return e.err.Error()
+}
+
+func (e *finalizeCommitError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.err
+}
+
+func wrapFinalizeCommitError(err error, cleanupCreatedSegmentsSafe bool) error {
+	if err == nil {
+		return nil
+	}
+	return &finalizeCommitError{
+		err:                        err,
+		cleanupCreatedSegmentsSafe: cleanupCreatedSegmentsSafe,
+	}
+}
+
+func finalizeCommitErrorAllowsCreatedSegmentCleanup(err error) bool {
+	var commitErr *finalizeCommitError
+	return errors.As(err, &commitErr) && commitErr.cleanupCreatedSegmentsSafe
+}
 
 // DurabilityMode configures cached-mode durability semantics.
 //
@@ -1539,6 +1577,9 @@ func (db *DB) writeMeta(pageID uint64, meta page.MetaPageBody) error {
 	if idx == nil || idx.pager == nil {
 		return errors.New("missing pager")
 	}
+	if db.testFailWriteMeta.Load() {
+		return errTestWriteMetaFailpoint
+	}
 
 	data, err := idx.pager.GetForWrite(pageID)
 	if err != nil {
@@ -1579,6 +1620,9 @@ func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired [
 	post := finalizeCommitPost{
 		metrics: metrics,
 	}
+	prePublishErr := func(err error) error {
+		return wrapFinalizeCommitError(err, true)
+	}
 	if db.readOnly {
 		return post, ErrReadOnly
 	}
@@ -1592,11 +1636,11 @@ func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired [
 	if db.indexOuterLeavesInValueLog && db.leafPageLog != nil {
 		if sync {
 			if err := db.leafPageLog.Sync(); err != nil {
-				return post, err
+				return post, prePublishErr(err)
 			}
 		} else {
 			if err := db.leafPageLog.Flush(); err != nil {
-				return post, err
+				return post, prePublishErr(err)
 			}
 		}
 	}
@@ -1616,7 +1660,7 @@ func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired [
 	if sync {
 		t0 := time.Now()
 		if err := idx.pager.Sync(); err != nil {
-			return post, err
+			return post, prePublishErr(err)
 		}
 		if debugTiming {
 			durSync1 = time.Since(t0)
@@ -1645,7 +1689,7 @@ func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired [
 	leafPageSegmentRegistered := false
 	leafPageSegmentFileID := uint32(0)
 	if db.testFailFinalizeCommit.Load() {
-		return post, errTestFinalizeCommitFailpoint
+		return post, prePublishErr(errTestFinalizeCommitFailpoint)
 	}
 	if forceValueLogRefresh && db.valueLogManager != nil {
 		path, fileID, ok := db.currentLeafPageLogSegment()
@@ -1654,7 +1698,7 @@ func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired [
 		}
 		registered, err := db.ensureLeafPageLogSegmentRegisteredAt(path, fileID, 0)
 		if err != nil {
-			return post, err
+			return post, prePublishErr(err)
 		}
 		leafPageSegmentRegistered = registered
 	}
@@ -1662,7 +1706,7 @@ func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired [
 	// 3. Write Meta - No DB Lock
 	t0 := time.Now()
 	if err := db.writeMeta(targetPageID, nextMeta); err != nil {
-		return post, err
+		return post, prePublishErr(err)
 	}
 	if debugTiming {
 		durMeta = time.Since(t0)
