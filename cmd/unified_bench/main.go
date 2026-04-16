@@ -199,8 +199,44 @@ type BenchRun struct {
 	VacuumIndexBytes    map[string]map[string][2]uint64 // [0]=before, [1]=after (best-effort; treedb only)
 	TreeDBDiskUsage     map[string]treeDBDiskUsage
 	TreeDBVlogRewrite   map[string]treeDBVlogRewriteReport
+	TreeDBPerf          map[string]map[string]treeDBPerfMetrics
 	TreeDBStats         map[string]map[string]string
 	DiskUsage           map[string]dirDiskUsage
+}
+
+type treeDBPerfMetrics struct {
+	Mmap                  treeDBMmapPerfMetrics     `json:"mmap,omitempty"`
+	Snapshot              treeDBSnapshotPerfMetrics `json:"snapshot,omitempty"`
+	LeafGenerationsPinned int64                     `json:"leaf_generations_pinned,omitempty"`
+	LeafPinsTotal         int64                     `json:"leaf_pins_total,omitempty"`
+}
+
+type treeDBMmapPerfMetrics struct {
+	Hits           uint64  `json:"hits,omitempty"`
+	MissOutOfRange uint64  `json:"miss_out_of_range,omitempty"`
+	MissNoMapping  uint64  `json:"miss_no_mapping,omitempty"`
+	MissDeadMapCap uint64  `json:"miss_dead_mapping_cap,omitempty"`
+	FallbackReadAt uint64  `json:"fallback_readat,omitempty"`
+	HitRatio       float64 `json:"hit_ratio,omitempty"`
+}
+
+type treeDBSnapshotPerfMetrics struct {
+	AcquireCalls      uint64  `json:"acquire_calls,omitempty"`
+	AcquireTotalNanos uint64  `json:"acquire_total_nanos,omitempty"`
+	AcquireAvgMicros  float64 `json:"acquire_avg_micros,omitempty"`
+	CloseCalls        uint64  `json:"close_calls,omitempty"`
+	CloseTotalNanos   uint64  `json:"close_total_nanos,omitempty"`
+	CloseAvgMicros    float64 `json:"close_avg_micros,omitempty"`
+}
+
+type treeDBSelectedStats struct {
+	mmapHits           uint64
+	mmapMissOutOfRange uint64
+	mmapMissNoMapping  uint64
+	mmapMissDeadCap    uint64
+	mmapFallbackReadAt uint64
+	leafGenerationsPin int64
+	leafPinsTotal      int64
 }
 
 type benchprofExport struct {
@@ -209,9 +245,11 @@ type benchprofExport struct {
 }
 
 type benchprofExportRun struct {
-	Keys    int                           `json:"keys"`
-	Profile string                        `json:"profile,omitempty"`
-	Results map[string]map[string]float64 `json:"results,omitempty"`
+	Keys        int                                     `json:"keys"`
+	Profile     string                                  `json:"profile,omitempty"`
+	Results     map[string]map[string]float64           `json:"results,omitempty"`
+	TreeDBPerf  map[string]map[string]treeDBPerfMetrics `json:"treedb_perf,omitempty"`
+	TreeDBStats map[string]map[string]string            `json:"treedb_stats,omitempty"`
 }
 
 type scanDiag struct {
@@ -1016,9 +1054,11 @@ func writeBenchprofArtifacts(dir string, runs []BenchRun) error {
 	}
 	for _, run := range runs {
 		out.Runs = append(out.Runs, benchprofExportRun{
-			Keys:    run.Config.Keys,
-			Profile: strings.TrimSpace(run.Config.Profile),
-			Results: run.Results,
+			Keys:        run.Config.Keys,
+			Profile:     strings.TrimSpace(run.Config.Profile),
+			Results:     run.Results,
+			TreeDBPerf:  run.TreeDBPerf,
+			TreeDBStats: run.TreeDBStats,
 		})
 	}
 
@@ -1645,6 +1685,113 @@ func newPeriodicCheckpoint(cfg BenchConfig) *periodicCheckpoint {
 	}
 }
 
+func parseUint64StatValue(stats map[string]string, keys ...string) (uint64, bool) {
+	if stats == nil {
+		return 0, false
+	}
+	for _, key := range keys {
+		raw, ok := stats[key]
+		if !ok {
+			continue
+		}
+		v, err := strconv.ParseUint(strings.TrimSpace(raw), 10, 64)
+		if err == nil {
+			return v, true
+		}
+	}
+	return 0, false
+}
+
+func parseInt64StatValue(stats map[string]string, keys ...string) (int64, bool) {
+	if stats == nil {
+		return 0, false
+	}
+	for _, key := range keys {
+		raw, ok := stats[key]
+		if !ok {
+			continue
+		}
+		v, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
+		if err == nil {
+			return v, true
+		}
+	}
+	return 0, false
+}
+
+func snapshotSelectedTreeDBStats(db kvstore.DB) treeDBSelectedStats {
+	sp, ok := db.(kvstore.StatsProvider)
+	if !ok {
+		return treeDBSelectedStats{}
+	}
+	stats := sp.Stats()
+	var snap treeDBSelectedStats
+	snap.mmapHits, _ = parseUint64StatValue(stats,
+		"treedb.cache.vlog_mmap.read.hits",
+		"treedb.vlog.mmap_read.hits",
+	)
+	snap.mmapMissOutOfRange, _ = parseUint64StatValue(stats,
+		"treedb.cache.vlog_mmap.read.miss_out_of_range",
+		"treedb.vlog.mmap_read.miss_out_of_range",
+	)
+	snap.mmapMissNoMapping, _ = parseUint64StatValue(stats,
+		"treedb.cache.vlog_mmap.read.miss_no_mapping",
+		"treedb.vlog.mmap_read.miss_no_mapping",
+	)
+	snap.mmapMissDeadCap, _ = parseUint64StatValue(stats,
+		"treedb.cache.vlog_mmap.read.miss_dead_mapping_cap",
+		"treedb.vlog.mmap_read.miss_dead_mapping_cap",
+	)
+	snap.mmapFallbackReadAt, _ = parseUint64StatValue(stats,
+		"treedb.cache.vlog_mmap.read.fallback_readat",
+		"treedb.vlog.mmap_read.fallback_readat",
+	)
+	snap.leafGenerationsPin, _ = parseInt64StatValue(stats, "treedb.leaf_generation.generations.pinned")
+	snap.leafPinsTotal, _ = parseInt64StatValue(stats, "treedb.leaf_generation.pins.total")
+	return snap
+}
+
+func computeTreeDBPerfMetrics(before, after treeDBSelectedStats, snapshot treeDBSnapshotPerfMetrics) treeDBPerfMetrics {
+	m := treeDBPerfMetrics{
+		Mmap: treeDBMmapPerfMetrics{
+			Hits:           after.mmapHits - before.mmapHits,
+			MissOutOfRange: after.mmapMissOutOfRange - before.mmapMissOutOfRange,
+			MissNoMapping:  after.mmapMissNoMapping - before.mmapMissNoMapping,
+			MissDeadMapCap: after.mmapMissDeadCap - before.mmapMissDeadCap,
+			FallbackReadAt: after.mmapFallbackReadAt - before.mmapFallbackReadAt,
+		},
+		Snapshot:              snapshot,
+		LeafGenerationsPinned: after.leafGenerationsPin,
+		LeafPinsTotal:         after.leafPinsTotal,
+	}
+	totalReads := m.Mmap.Hits + m.Mmap.FallbackReadAt
+	if totalReads > 0 {
+		m.Mmap.HitRatio = float64(m.Mmap.Hits) / float64(totalReads)
+	}
+	if m.Snapshot.AcquireCalls > 0 {
+		m.Snapshot.AcquireAvgMicros = float64(m.Snapshot.AcquireTotalNanos) / float64(m.Snapshot.AcquireCalls) / 1_000.0
+	}
+	if m.Snapshot.CloseCalls > 0 {
+		m.Snapshot.CloseAvgMicros = float64(m.Snapshot.CloseTotalNanos) / float64(m.Snapshot.CloseCalls) / 1_000.0
+	}
+	return m
+}
+
+func treeDBPerfMetricsEmpty(m treeDBPerfMetrics) bool {
+	return m.Mmap.Hits == 0 &&
+		m.Mmap.MissOutOfRange == 0 &&
+		m.Mmap.MissNoMapping == 0 &&
+		m.Mmap.MissDeadMapCap == 0 &&
+		m.Mmap.FallbackReadAt == 0 &&
+		m.Mmap.HitRatio == 0 &&
+		m.Snapshot.AcquireCalls == 0 &&
+		m.Snapshot.AcquireTotalNanos == 0 &&
+		m.Snapshot.CloseCalls == 0 &&
+		m.Snapshot.CloseTotalNanos == 0 &&
+		m.LeafGenerationsPinned == 0 &&
+		m.LeafPinsTotal == 0
+}
+
 func (p *periodicCheckpoint) Add(db kvstore.DB, opsDelta int, bytesDelta int64) error {
 	if p == nil {
 		return nil
@@ -1747,6 +1894,8 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 	checkpointDurations := make(map[string]map[string]time.Duration)
 	vacuumDurations := make(map[string]map[string]time.Duration)
 	vacuumIndexBytes := make(map[string]map[string][2]uint64)
+	treeDBPerf := make(map[string]map[string]treeDBPerfMetrics)
+	snapshotPerfByTest := make(map[string]map[string]treeDBSnapshotPerfMetrics)
 
 	// dataset_write_* mirrors op-geth's Write1M when -keys=1_000_000 and -valsize=32 (32B keys).
 	datasetKeySize := 32
@@ -2122,6 +2271,20 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			}
 		}
 		return float64(total) / time.Since(start).Seconds(), nil
+	}
+	recordSnapshotPerf := func(testName string, db kvstore.DB, perf treeDBSnapshotPerfMetrics) {
+		if db == nil {
+			return
+		}
+		if perf.AcquireCalls == 0 && perf.CloseCalls == 0 {
+			return
+		}
+		perDB := snapshotPerfByTest[testName]
+		if perDB == nil {
+			perDB = make(map[string]treeDBSnapshotPerfMetrics)
+			snapshotPerfByTest[testName] = perDB
+		}
+		perDB[db.Name()] = perf
 	}
 	testFuncs := map[string]TestFunc{
 		"vacuum_index": func(db kvstore.DB, _ *rand.Rand) (float64, error) {
@@ -2806,6 +2969,10 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				GetAppend(key, dst []byte) ([]byte, error)
 			})
 			baseSeed := testSeed(cfg.SeedUsed, "random_read_parallel")
+			var snapshotAcquireCalls atomic.Uint64
+			var snapshotAcquireNanos atomic.Uint64
+			var snapshotCloseCalls atomic.Uint64
+			var snapshotCloseNanos atomic.Uint64
 
 			runWorker := func(workerRng *rand.Rand, stop *atomic.Bool) error {
 				getter := interface {
@@ -2814,14 +2981,23 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				workerAppendGetter := appendGetter
 				var closeSnapshot func() error
 				if hasSnapshotter {
+					acquireStarted := time.Now()
 					snap, err := snapshotter.AcquireReadSnapshot()
 					if err != nil && !errors.Is(err, kvstore.ErrUnsupported) {
 						return err
 					}
 					if err == nil {
+						snapshotAcquireCalls.Add(1)
+						snapshotAcquireNanos.Add(uint64(time.Since(acquireStarted)))
 						getter = snap
 						workerAppendGetter = snap
-						closeSnapshot = snap.Close
+						closeSnapshot = func() error {
+							closeStarted := time.Now()
+							err := snap.Close()
+							snapshotCloseCalls.Add(1)
+							snapshotCloseNanos.Add(uint64(time.Since(closeStarted)))
+							return err
+						}
 					} else if !hasAppendGetter {
 						workerAppendGetter = nil
 					}
@@ -2874,6 +3050,12 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				if err := runWorker(rng, nil); err != nil {
 					return 0, fmt.Errorf("random_read_parallel: %w", err)
 				}
+				recordSnapshotPerf("random_read_parallel", db, treeDBSnapshotPerfMetrics{
+					AcquireCalls:      snapshotAcquireCalls.Load(),
+					AcquireTotalNanos: snapshotAcquireNanos.Load(),
+					CloseCalls:        snapshotCloseCalls.Load(),
+					CloseTotalNanos:   snapshotCloseNanos.Load(),
+				})
 				return float64(cfg.Keys) / time.Since(start).Seconds(), nil
 			}
 
@@ -2903,6 +3085,12 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				return 0, fmt.Errorf("random_read_parallel: %w", err)
 			default:
 			}
+			recordSnapshotPerf("random_read_parallel", db, treeDBSnapshotPerfMetrics{
+				AcquireCalls:      snapshotAcquireCalls.Load(),
+				AcquireTotalNanos: snapshotAcquireNanos.Load(),
+				CloseCalls:        snapshotCloseCalls.Load(),
+				CloseTotalNanos:   snapshotCloseNanos.Load(),
+			})
 			totalOps := float64(cfg.Keys) * float64(workers)
 			return totalOps / time.Since(start).Seconds(), nil
 		},
@@ -2933,6 +3121,10 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				return 0, fmt.Errorf("random_read_parallel_acquire_snapshot probe close: %w", err)
 			}
 			baseSeed := testSeed(cfg.SeedUsed, "random_read_parallel_acquire_snapshot")
+			var snapshotAcquireCalls atomic.Uint64
+			var snapshotAcquireNanos atomic.Uint64
+			var snapshotCloseCalls atomic.Uint64
+			var snapshotCloseNanos atomic.Uint64
 
 			runWorker := func(workerRng *rand.Rand, stop *atomic.Bool) error {
 				var k [8]byte
@@ -2948,12 +3140,18 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 					}
 					encodeKey(k[:], uint64(workerRng.Intn(cfg.Keys)))
 
+					acquireStarted := time.Now()
 					snap, err := snapshotter.AcquireReadSnapshot()
 					if err != nil {
 						return err
 					}
+					snapshotAcquireCalls.Add(1)
+					snapshotAcquireNanos.Add(uint64(time.Since(acquireStarted)))
 					nextBuf, getErr := snap.GetAppend(k[:], buf[:0])
+					closeStarted := time.Now()
 					closeErr := snap.Close()
+					snapshotCloseCalls.Add(1)
+					snapshotCloseNanos.Add(uint64(time.Since(closeStarted)))
 					if closeErr != nil {
 						return fmt.Errorf("random_read_parallel_acquire_snapshot close: %w", closeErr)
 					}
@@ -2981,6 +3179,12 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				if err := runWorker(rng, nil); err != nil {
 					return 0, fmt.Errorf("random_read_parallel_acquire_snapshot: %w", err)
 				}
+				recordSnapshotPerf("random_read_parallel_acquire_snapshot", db, treeDBSnapshotPerfMetrics{
+					AcquireCalls:      snapshotAcquireCalls.Load(),
+					AcquireTotalNanos: snapshotAcquireNanos.Load(),
+					CloseCalls:        snapshotCloseCalls.Load(),
+					CloseTotalNanos:   snapshotCloseNanos.Load(),
+				})
 				return float64(cfg.Keys) / time.Since(start).Seconds(), nil
 			}
 
@@ -3010,6 +3214,12 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				return 0, fmt.Errorf("random_read_parallel_acquire_snapshot: %w", err)
 			default:
 			}
+			recordSnapshotPerf("random_read_parallel_acquire_snapshot", db, treeDBSnapshotPerfMetrics{
+				AcquireCalls:      snapshotAcquireCalls.Load(),
+				AcquireTotalNanos: snapshotAcquireNanos.Load(),
+				CloseCalls:        snapshotCloseCalls.Load(),
+				CloseTotalNanos:   snapshotCloseNanos.Load(),
+			})
 			totalOps := float64(cfg.Keys) * float64(workers)
 			return totalOps / time.Since(start).Seconds(), nil
 		},
@@ -3645,6 +3855,11 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				return BenchRun{}, err
 			}
 
+			var treeStatsBefore treeDBSelectedStats
+			if isTreeDBInstance(inst) {
+				treeStatsBefore = snapshotSelectedTreeDBStats(inst.Wrapper)
+			}
+
 			// Create a fresh PRNG for each DB so they get the same sequence
 			rng := rand.New(rand.NewSource(seed))
 
@@ -3793,6 +4008,20 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				return BenchRun{}, fmt.Errorf("test %s on %s: %w", testName, inst.Name, runErr)
 			}
 
+			if isTreeDBInstance(inst) {
+				treeStatsAfter := snapshotSelectedTreeDBStats(inst.Wrapper)
+				snapshotPerf := snapshotPerfByTest[testName][inst.Wrapper.Name()]
+				metrics := computeTreeDBPerfMetrics(treeStatsBefore, treeStatsAfter, snapshotPerf)
+				if !treeDBPerfMetricsEmpty(metrics) {
+					perDB := treeDBPerf[testName]
+					if perDB == nil {
+						perDB = make(map[string]treeDBPerfMetrics)
+						treeDBPerf[testName] = perDB
+					}
+					perDB[inst.Wrapper.Name()] = metrics
+				}
+			}
+
 			results[testName][inst.Wrapper.Name()] = opsPerSec
 
 			// Update live table cell
@@ -3922,6 +4151,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 		VacuumIndexBytes:    vacuumIndexBytes,
 		TreeDBDiskUsage:     treedbDisk,
 		TreeDBVlogRewrite:   treedbRewrite,
+		TreeDBPerf:          treeDBPerf,
 		TreeDBStats:         treedbStats,
 		DiskUsage:           diskUsage,
 	}, nil
@@ -4413,6 +4643,20 @@ func renderMarkdownSingle(run BenchRun) string {
 		sb.WriteString(renderTreeDBVlogRewriteString(run.TreeDBVlogRewrite))
 		sb.WriteString("```\n")
 	}
+	if perf := strings.TrimSpace(renderTreeDBPerfString(run.Instances, run.TestOrder, run.DisplayNames, run.TreeDBPerf)); perf != "" {
+		sb.WriteString("\n")
+		sb.WriteString("## TreeDB Perf Instrumentation\n\n")
+		sb.WriteString("```text\n")
+		sb.WriteString(perf)
+		sb.WriteString("\n```\n")
+	}
+	if stats := strings.TrimSpace(renderTreeDBSelectedStatsString(run.Instances, run.TreeDBStats)); stats != "" {
+		sb.WriteString("\n")
+		sb.WriteString("## TreeDB Selected Stats (End of Run)\n\n")
+		sb.WriteString("```text\n")
+		sb.WriteString(stats)
+		sb.WriteString("\n```\n")
+	}
 	if run.Config.KeepDir {
 		if kept := strings.TrimSpace(renderKeptDirsString(run.Instances)); kept != "" {
 			sb.WriteString("\n")
@@ -4423,6 +4667,118 @@ func renderMarkdownSingle(run BenchRun) string {
 		}
 	}
 	return sb.String()
+}
+
+func renderTreeDBPerfString(instances []*DBInstance, finalTestOrder []string, displayNames map[string]string, perf map[string]map[string]treeDBPerfMetrics) string {
+	if len(perf) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	for _, testName := range finalTestOrder {
+		perDB := perf[testName]
+		if len(perDB) == 0 {
+			continue
+		}
+		label := displayNames[testName]
+		if strings.TrimSpace(label) == "" {
+			label = testName
+		}
+		wroteHeader := false
+		for _, inst := range instances {
+			if inst == nil || inst.Wrapper == nil {
+				continue
+			}
+			dbName := inst.Wrapper.Name()
+			m, ok := perDB[dbName]
+			if !ok || treeDBPerfMetricsEmpty(m) {
+				continue
+			}
+			if wroteHeader {
+				sb.WriteByte('\n')
+			}
+			wroteHeader = true
+			sb.WriteString(label)
+			sb.WriteString(" / ")
+			sb.WriteString(dbName)
+			sb.WriteByte('\n')
+			if m.Snapshot.AcquireCalls > 0 || m.Snapshot.CloseCalls > 0 {
+				sb.WriteString(fmt.Sprintf("  snapshot.acquire.calls=%d total_ms=%.3f avg_us=%.3f\n",
+					m.Snapshot.AcquireCalls,
+					float64(m.Snapshot.AcquireTotalNanos)/1_000_000.0,
+					m.Snapshot.AcquireAvgMicros,
+				))
+				sb.WriteString(fmt.Sprintf("  snapshot.close.calls=%d total_ms=%.3f avg_us=%.3f\n",
+					m.Snapshot.CloseCalls,
+					float64(m.Snapshot.CloseTotalNanos)/1_000_000.0,
+					m.Snapshot.CloseAvgMicros,
+				))
+			}
+			mmapTotal := m.Mmap.Hits + m.Mmap.FallbackReadAt
+			if mmapTotal > 0 || m.Mmap.MissOutOfRange > 0 || m.Mmap.MissNoMapping > 0 || m.Mmap.MissDeadMapCap > 0 {
+				sb.WriteString(fmt.Sprintf("  vlog_mmap.read.hits.delta=%d miss_out_of_range.delta=%d miss_no_mapping.delta=%d miss_dead_mapping_cap.delta=%d fallback_readat.delta=%d hit_ratio.delta=%.6f\n",
+					m.Mmap.Hits,
+					m.Mmap.MissOutOfRange,
+					m.Mmap.MissNoMapping,
+					m.Mmap.MissDeadMapCap,
+					m.Mmap.FallbackReadAt,
+					m.Mmap.HitRatio,
+				))
+			}
+			sb.WriteString(fmt.Sprintf("  leaf_generation.generations.pinned.after=%d leaf_generation.pins.total.after=%d\n",
+				m.LeafGenerationsPinned,
+				m.LeafPinsTotal,
+			))
+		}
+		if wroteHeader {
+			sb.WriteByte('\n')
+		}
+	}
+	return strings.TrimSpace(sb.String())
+}
+
+func renderTreeDBSelectedStatsString(instances []*DBInstance, treeStats map[string]map[string]string) string {
+	if len(treeStats) == 0 {
+		return ""
+	}
+	keys := []struct {
+		label string
+		alts  []string
+	}{
+		{label: "vlog_mmap.read.hits", alts: []string{"treedb.cache.vlog_mmap.read.hits", "treedb.vlog.mmap_read.hits"}},
+		{label: "vlog_mmap.read.miss_out_of_range", alts: []string{"treedb.cache.vlog_mmap.read.miss_out_of_range", "treedb.vlog.mmap_read.miss_out_of_range"}},
+		{label: "vlog_mmap.read.miss_no_mapping", alts: []string{"treedb.cache.vlog_mmap.read.miss_no_mapping", "treedb.vlog.mmap_read.miss_no_mapping"}},
+		{label: "vlog_mmap.read.miss_dead_mapping_cap", alts: []string{"treedb.cache.vlog_mmap.read.miss_dead_mapping_cap", "treedb.vlog.mmap_read.miss_dead_mapping_cap"}},
+		{label: "vlog_mmap.read.fallback_readat", alts: []string{"treedb.cache.vlog_mmap.read.fallback_readat", "treedb.vlog.mmap_read.fallback_readat"}},
+		{label: "vlog_mmap.read.hit_ratio", alts: []string{"treedb.cache.vlog_mmap.read.hit_ratio", "treedb.vlog.mmap_read.hit_ratio"}},
+		{label: "leaf_generation.generations.pinned", alts: []string{"treedb.leaf_generation.generations.pinned"}},
+		{label: "leaf_generation.pins.total", alts: []string{"treedb.leaf_generation.pins.total"}},
+	}
+	var sb strings.Builder
+	for _, inst := range instances {
+		if inst == nil || inst.Wrapper == nil {
+			continue
+		}
+		dbName := inst.Wrapper.Name()
+		stats := treeStats[dbName]
+		if len(stats) == 0 {
+			continue
+		}
+		sb.WriteString(dbName)
+		sb.WriteString(":\n")
+		for _, key := range keys {
+			for _, alt := range key.alts {
+				if value, ok := stats[alt]; ok {
+					sb.WriteString("  ")
+					sb.WriteString(key.label)
+					sb.WriteString(": ")
+					sb.WriteString(value)
+					sb.WriteByte('\n')
+					break
+				}
+			}
+		}
+	}
+	return strings.TrimSpace(sb.String())
 }
 
 func renderMarkdownSweep(runs []BenchRun) string {

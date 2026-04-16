@@ -533,6 +533,45 @@ func TestRunBenchmark_RandomReadParallelAcquireSnapshot_UsesSnapshots(t *testing
 	}
 }
 
+func TestRunBenchmark_TreeDBPerfCapturesSnapshotMetrics(t *testing.T) {
+	run, err := runBenchmark(BenchConfig{
+		Keys:         256,
+		ValueSize:    16,
+		BatchSize:    64,
+		RangeQueries: 0,
+		RangeSpan:    0,
+		DBsArg:       "treedb",
+		TestsArg:     "sequential_write,random_read_parallel_acquire_snapshot",
+		KeepDir:      false,
+		Progress:     false,
+		ReadWorkers:  4,
+		SeedUsed:     1,
+	})
+	if err != nil {
+		t.Fatalf("runBenchmark: %v", err)
+	}
+	perTest, ok := run.TreeDBPerf["random_read_parallel_acquire_snapshot"]
+	if !ok {
+		t.Fatalf("expected TreeDB perf entry for snapshot benchmark")
+	}
+	perf, ok := perTest["TreeDB"]
+	if !ok {
+		t.Fatalf("expected TreeDB perf metrics for snapshot benchmark")
+	}
+	if perf.Snapshot.AcquireCalls == 0 {
+		t.Fatalf("expected snapshot acquire calls > 0, got 0")
+	}
+	if perf.Snapshot.CloseCalls == 0 {
+		t.Fatalf("expected snapshot close calls > 0, got 0")
+	}
+	if perf.Snapshot.AcquireTotalNanos == 0 {
+		t.Fatalf("expected snapshot acquire time > 0")
+	}
+	if perf.Snapshot.CloseTotalNanos == 0 {
+		t.Fatalf("expected snapshot close time > 0")
+	}
+}
+
 func TestNormalizeTests_ReadRandomBatchAliases(t *testing.T) {
 	got := normalizeTests(parseList("read_rand_batch,read_random_batch,random_read_batch"))
 	want := []string{"random_read_batch"}
@@ -1122,6 +1161,75 @@ func TestRenderMarkdownSingle_KeepDirIncludesKeptSection(t *testing.T) {
 	}
 }
 
+func TestRenderMarkdownSingle_IncludesTreeDBPerfSections(t *testing.T) {
+	run := BenchRun{
+		Config: BenchConfig{
+			Keys:      100,
+			ValueSize: 16,
+			BatchSize: 10,
+		},
+		Instances: []*DBInstance{
+			{Name: "treedb", Wrapper: &fixedNameDB{name: "TreeDB"}, Dir: "/tmp/bench-treedb"},
+		},
+		TestOrder: []string{"random_read_parallel_acquire_snapshot"},
+		DisplayNames: map[string]string{
+			"random_read_parallel_acquire_snapshot": "Random Read (Parallel, Snapshot Per Key)",
+		},
+		Results: map[string]map[string]float64{
+			"random_read_parallel_acquire_snapshot": {
+				"TreeDB": 1234,
+			},
+		},
+		TreeDBPerf: map[string]map[string]treeDBPerfMetrics{
+			"random_read_parallel_acquire_snapshot": {
+				"TreeDB": {
+					Mmap: treeDBMmapPerfMetrics{
+						Hits:           7,
+						MissNoMapping:  2,
+						FallbackReadAt: 3,
+						HitRatio:       0.7,
+					},
+					Snapshot: treeDBSnapshotPerfMetrics{
+						AcquireCalls:      4,
+						AcquireTotalNanos: 8_000,
+						AcquireAvgMicros:  2,
+						CloseCalls:        4,
+						CloseTotalNanos:   12_000,
+						CloseAvgMicros:    3,
+					},
+					LeafGenerationsPinned: 1,
+					LeafPinsTotal:         4,
+				},
+			},
+		},
+		TreeDBStats: map[string]map[string]string{
+			"TreeDB": {
+				"treedb.cache.vlog_mmap.read.hits":          "7",
+				"treedb.cache.vlog_mmap.read.hit_ratio":     "0.700000",
+				"treedb.leaf_generation.generations.pinned": "1",
+				"treedb.leaf_generation.pins.total":         "4",
+			},
+		},
+	}
+
+	md := renderMarkdownSingle(run)
+	if !strings.Contains(md, "## TreeDB Perf Instrumentation") {
+		t.Fatalf("expected TreeDB perf section, got:\n%s", md)
+	}
+	if !strings.Contains(md, "snapshot.acquire.calls=4") {
+		t.Fatalf("expected snapshot metrics in markdown, got:\n%s", md)
+	}
+	if !strings.Contains(md, "vlog_mmap.read.hits.delta=7") {
+		t.Fatalf("expected mmap metrics in markdown, got:\n%s", md)
+	}
+	if !strings.Contains(md, "## TreeDB Selected Stats (End of Run)") {
+		t.Fatalf("expected TreeDB selected stats section, got:\n%s", md)
+	}
+	if !strings.Contains(md, "leaf_generation.pins.total: 4") {
+		t.Fatalf("expected selected stats in markdown, got:\n%s", md)
+	}
+}
+
 func TestRenderMarkdownSweep_KeepDirIncludesKeptSection(t *testing.T) {
 	makeRun := func(keys int, dir string) BenchRun {
 		return BenchRun{
@@ -1197,6 +1305,18 @@ func TestWriteBenchprofArtifacts_WritesJSONAndMarkdown(t *testing.T) {
 					"TreeDB": 1200,
 				},
 			},
+			TreeDBPerf: map[string]map[string]treeDBPerfMetrics{
+				"full_scan": {
+					"TreeDB": {
+						Mmap: treeDBMmapPerfMetrics{Hits: 10, FallbackReadAt: 2, HitRatio: 0.833333},
+					},
+				},
+			},
+			TreeDBStats: map[string]map[string]string{
+				"TreeDB": {
+					"treedb.cache.vlog_mmap.read.hits": "10",
+				},
+			},
 		},
 	}
 
@@ -1226,6 +1346,12 @@ func TestWriteBenchprofArtifacts_WritesJSONAndMarkdown(t *testing.T) {
 	}
 	if got := parsed.Runs[0].Results["full_scan"]["TreeDB"]; got != 1000 {
 		t.Fatalf("unexpected full_scan value: %v", got)
+	}
+	if got := parsed.Runs[0].TreeDBPerf["full_scan"]["TreeDB"].Mmap.Hits; got != 10 {
+		t.Fatalf("unexpected TreeDB perf mmap hits: %v", got)
+	}
+	if got := parsed.Runs[0].TreeDBStats["TreeDB"]["treedb.cache.vlog_mmap.read.hits"]; got != "10" {
+		t.Fatalf("unexpected TreeDB stats value: %v", got)
 	}
 }
 
