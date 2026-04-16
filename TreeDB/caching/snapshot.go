@@ -2,7 +2,6 @@ package caching
 
 import (
 	"errors"
-	"sync"
 	"sync/atomic"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -27,18 +26,25 @@ type Snapshot struct {
 	backend *backenddb.Snapshot
 
 	closed atomic.Bool
+	next   *Snapshot
 }
 
-var snapshotPool = sync.Pool{
-	New: func() any {
-		return &Snapshot{}
-	},
-}
+var snapshotPoolHead atomic.Pointer[Snapshot]
 
 func acquirePooledSnapshot() *Snapshot {
-	s := snapshotPool.Get().(*Snapshot)
-	s.closed.Store(false)
-	return s
+	for {
+		head := snapshotPoolHead.Load()
+		if head == nil {
+			return &Snapshot{}
+		}
+		next := head.next
+		if !snapshotPoolHead.CompareAndSwap(head, next) {
+			continue
+		}
+		head.next = nil
+		head.closed.Store(false)
+		return head
+	}
 }
 
 func releasePooledSnapshot(s *Snapshot) {
@@ -48,7 +54,13 @@ func releasePooledSnapshot(s *Snapshot) {
 	s.db = nil
 	s.view = nil
 	s.backend = nil
-	snapshotPool.Put(s)
+	for {
+		head := snapshotPoolHead.Load()
+		s.next = head
+		if snapshotPoolHead.CompareAndSwap(head, s) {
+			return
+		}
+	}
 }
 
 type backendSnapshotProvider interface {
