@@ -877,6 +877,13 @@ func Open(opts Options) (*DB, error) {
 	if opts.Dir == "" {
 		return nil, errors.New("db dir required")
 	}
+	if !opts.IgnoreFormatConfig {
+		if cfg, ok, err := LoadFormatConfig(opts.Dir); err != nil {
+			return nil, err
+		} else if ok {
+			cfg.ApplyIndexFormatToOptions(&opts)
+		}
+	}
 	if opts.ChunkSize == 0 {
 		opts.ChunkSize = defaultChunkSize
 	}
