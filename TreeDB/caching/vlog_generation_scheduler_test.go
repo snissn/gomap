@@ -2038,16 +2038,16 @@ func TestLeafGenerationPackMaintenance_LoopsWithinBudgetAndRunsLeafGC(t *testing
 	if got := stats["treedb.cache.vlog_generation.leaf_pack.gc.last_deleted_bytes"]; got != "25" {
 		t.Fatalf("gc.last_deleted_bytes=%q want 25", got)
 	}
-	if got := stats["treedb.cache.vlog_generation.leaf_pack.reclaimed_bytes"]; got != "150" {
+	if got := stats["treedb.cache.vlog_generation.leaf_pack.attributed_reclaim_bytes"]; got != "150" {
 		t.Fatalf("reclaimed_bytes=%q want 150", got)
 	}
-	if got := stats["treedb.cache.vlog_generation.leaf_pack.last_reclaimed_bytes"]; got != "60" {
+	if got := stats["treedb.cache.vlog_generation.leaf_pack.last_attributed_reclaim_bytes"]; got != "60" {
 		t.Fatalf("last_reclaimed_bytes=%q want 60", got)
 	}
-	if got := stats["treedb.cache.vlog_generation.leaf_pack.reclaim_per_byte_copied_ppm"]; got != "1000000" {
+	if got := stats["treedb.cache.vlog_generation.leaf_pack.attributed_reclaim_per_byte_copied_ppm"]; got != "1000000" {
 		t.Fatalf("reclaim_per_byte_copied_ppm=%q want 1000000", got)
 	}
-	if got := stats["treedb.cache.vlog_generation.leaf_pack.last_reclaim_per_byte_copied_ppm"]; got != "1000000" {
+	if got := stats["treedb.cache.vlog_generation.leaf_pack.last_attributed_reclaim_per_byte_copied_ppm"]; got != "1000000" {
 		t.Fatalf("last_reclaim_per_byte_copied_ppm=%q want 1000000", got)
 	}
 }
@@ -2114,7 +2114,7 @@ func TestLeafGenerationPackMaintenance_StopsAfterLowYieldWindow(t *testing.T) {
 	if got := stats["treedb.cache.vlog_generation.leaf_pack.gc.last_deleted_bytes"]; got != "60" {
 		t.Fatalf("gc.last_deleted_bytes=%q want 60", got)
 	}
-	if got := stats["treedb.cache.vlog_generation.leaf_pack.last_reclaim_per_byte_copied_ppm"]; got != "200000" {
+	if got := stats["treedb.cache.vlog_generation.leaf_pack.last_attributed_reclaim_per_byte_copied_ppm"]; got != "200000" {
 		t.Fatalf("last_reclaim_per_byte_copied_ppm=%q want 200000", got)
 	}
 }
@@ -10023,10 +10023,10 @@ func TestVlogGenerationStats_ReportRewriteBacklogAndDurations(t *testing.T) {
 	if got := stats["treedb.cache.vlog_generation.leaf_pack.skip.foreground_iterators"]; got != "9" {
 		t.Fatalf("leaf pack skip foreground_iterators=%q want 9", got)
 	}
-	if got := stats["treedb.cache.vlog_generation.leaf_pack.reclaimed_bytes"]; got != "1536" {
+	if got := stats["treedb.cache.vlog_generation.leaf_pack.attributed_reclaim_bytes"]; got != "1536" {
 		t.Fatalf("leaf pack reclaimed bytes=%q want 1536", got)
 	}
-	if got := stats["treedb.cache.vlog_generation.leaf_pack.reclaim_per_byte_copied_ppm"]; got != "375000" {
+	if got := stats["treedb.cache.vlog_generation.leaf_pack.attributed_reclaim_per_byte_copied_ppm"]; got != "375000" {
 		t.Fatalf("leaf pack reclaim_per_byte_copied_ppm=%q want 375000", got)
 	}
 	if got := stats["treedb.cache.vlog_generation.leaf_pack.min_reclaim_per_byte_copied_ppm"]; got != "250000" {
@@ -10038,10 +10038,10 @@ func TestVlogGenerationStats_ReportRewriteBacklogAndDurations(t *testing.T) {
 	if got := stats["treedb.cache.vlog_generation.leaf_pack.last_selection.generations"]; got != "2" {
 		t.Fatalf("leaf pack last selection generations=%q want 2", got)
 	}
-	if got := stats["treedb.cache.vlog_generation.leaf_pack.last_reclaimed_bytes"]; got != "50" {
+	if got := stats["treedb.cache.vlog_generation.leaf_pack.last_attributed_reclaim_bytes"]; got != "50" {
 		t.Fatalf("leaf pack last reclaimed bytes=%q want 50", got)
 	}
-	if got := stats["treedb.cache.vlog_generation.leaf_pack.last_reclaim_per_byte_copied_ppm"]; got != "76923" {
+	if got := stats["treedb.cache.vlog_generation.leaf_pack.last_attributed_reclaim_per_byte_copied_ppm"]; got != "76923" {
 		t.Fatalf("leaf pack last reclaim_per_byte_copied_ppm=%q want 76923", got)
 	}
 	if got := stats["treedb.cache.vlog_generation.leaf_pack.gc.deleted_bytes"]; got != "3000" {
