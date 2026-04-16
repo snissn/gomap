@@ -135,12 +135,7 @@ func (db *DB) LeafGenerationGC(ctx context.Context, opts LeafGenerationGCOptions
 		return stats, nil
 	}
 
-	if intermediateChanged {
-		if err := saveLeafGenerationManifest(LeafLogDirPath(db.dir), manifest); err != nil {
-			return stats, err
-		}
-	}
-	if !opts.DryRun && len(zombieFileIDs) > 0 {
+	if len(zombieFileIDs) > 0 {
 		for fileID := range zombieFileIDs {
 			if err := db.valueLogManager.MarkZombie(fileID); err != nil && !errors.Is(err, valuelog.ErrFileNotFound) {
 				return stats, err
@@ -149,6 +144,9 @@ func (db *DB) LeafGenerationGC(ctx context.Context, opts LeafGenerationGCOptions
 	}
 
 	if intermediateChanged {
+		if err := saveLeafGenerationManifest(LeafLogDirPath(db.dir), manifest); err != nil {
+			return stats, err
+		}
 		db.leafGenerationManifest = manifest
 		if err := db.publishLeafGenerationState(len(zombieFileIDs) > 0); err != nil {
 			return stats, err

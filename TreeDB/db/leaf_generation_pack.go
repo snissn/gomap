@@ -295,10 +295,24 @@ func (db *DB) persistLeafGenerationManifestAndRecordLengthIndexes(manifest *leaf
 	if err := saveLeafGenerationManifest(LeafLogDirPath(db.dir), manifest); err != nil {
 		return err
 	}
+	var firstErr error
+	var firstRawFileID uint32
+	failedCount := 0
 	for _, rawFileID := range rawFileIDs {
 		if err := db.persistLeafGenerationRecordLengthIndex(rawFileID); err != nil {
+			if firstErr == nil {
+				firstErr = err
+				firstRawFileID = rawFileID
+			}
+			failedCount++
 			continue
 		}
+	}
+	if firstErr != nil {
+		if failedCount == 1 {
+			return fmt.Errorf("persist leaf generation record-length index for raw file %d: %w", firstRawFileID, firstErr)
+		}
+		return fmt.Errorf("persist leaf generation record-length indexes failed for %d files (first raw file %d): %w", failedCount, firstRawFileID, firstErr)
 	}
 	return nil
 }
