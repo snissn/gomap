@@ -427,7 +427,7 @@ func TestValueLogRewriteOffline_LeafPagesInValueLog_PreservesLeafRefRoot_WhenVal
 	}
 }
 
-func TestValueLogGC_LeafPagesInValueLog_BackendOpenWithoutFlag_PreservesLeafRefs(t *testing.T) {
+func TestLeafGenerationGC_BackendOpenWithoutFlag_PreservesLeafRefs(t *testing.T) {
 	dir := t.TempDir()
 	const (
 		keyCount = 20000
@@ -470,9 +470,9 @@ func TestValueLogGC_LeafPagesInValueLog_BackendOpenWithoutFlag_PreservesLeafRefs
 		t.Fatalf("close: %v", err)
 	}
 
-	// Mimic treemap's vlog-gc path: open the backend directly without the
-	// IndexOuterLeavesInValueLog option, then run GC. GC must still treat leaf
-	// pages stored in the value log as referenced.
+	// Open the backend directly without repeating IndexOuterLeavesInValueLog.
+	// The backend open path must honor persisted format.json so split-log leaf
+	// maintenance still sees live leaf generations after reopen.
 	backend, err := treedbdb.Open(treedbdb.Options{
 		Dir:      dir,
 		ReadOnly: false,
@@ -480,16 +480,19 @@ func TestValueLogGC_LeafPagesInValueLog_BackendOpenWithoutFlag_PreservesLeafRefs
 	if err != nil {
 		t.Fatalf("backend open: %v", err)
 	}
-	stats, err := backend.ValueLogGC(context.Background(), treedbdb.ValueLogGCOptions{})
+	leafStats, err := backend.LeafGenerationGC(context.Background(), treedbdb.LeafGenerationGCOptions{DryRun: true})
 	if err != nil {
 		_ = backend.Close()
-		t.Fatalf("ValueLogGC: %v", err)
+		t.Fatalf("LeafGenerationGC: %v", err)
 	}
 	if err := backend.Close(); err != nil {
 		t.Fatalf("backend close: %v", err)
 	}
-	if stats.SegmentsReferenced == 0 {
-		t.Fatalf("expected referenced segments to be non-zero with leaf pages in value log; stats=%+v", stats)
+	if leafStats.GenerationsTotal == 0 {
+		t.Fatalf("expected leaf generations to be visible on backend reopen; stats=%+v", leafStats)
+	}
+	if leafStats.GenerationsLive+leafStats.GenerationsWritable == 0 {
+		t.Fatalf("expected live or writable leaf generations to remain visible; stats=%+v", leafStats)
 	}
 
 	reopen, err := treedb.Open(opts)
