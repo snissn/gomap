@@ -315,10 +315,15 @@ func (db *DB) persistLeafGenerationManifestAndRecordLengthIndexes(manifest *leaf
 		}
 	}
 	if firstErr != nil {
+		var reportErr error
 		if failedCount == 1 {
-			return fmt.Errorf("persist leaf generation record-length index for raw file %d: %w", firstRawFileID, firstErr)
+			reportErr = fmt.Errorf("persist leaf generation record-length index for raw file %d: %w", firstRawFileID, firstErr)
+		} else {
+			reportErr = fmt.Errorf("persist leaf generation record-length indexes failed for %d files (first raw file %d): %w", failedCount, firstRawFileID, firstErr)
 		}
-		return fmt.Errorf("persist leaf generation record-length indexes failed for %d files (first raw file %d): %w", failedCount, firstRawFileID, firstErr)
+		// Record-length sidecars are rebuildable optimization metadata. Keep the
+		// manifest authoritative and surface the failure out-of-band.
+		db.reportError(reportErr)
 	}
 	return nil
 }
