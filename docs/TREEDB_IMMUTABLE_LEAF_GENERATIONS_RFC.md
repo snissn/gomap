@@ -1413,6 +1413,61 @@ Sprint 4 runtime success requires all of:
 - post-dwell remaining reclaim backlog is materially lower than the current
   Sprint 3 baseline
 
+### Sprint 4 Follow-On: Reclaimed-Bytes-Per-Byte-Copied Efficiency
+
+The current branch now has live proof that online `leaf-pack` engages and makes
+material progress under real Celestia dwell. The next PR must not revisit the
+control-plane question. It must improve maintenance efficiency on the exact same
+workload.
+
+Current live baseline from the fresh full `wal_on_fast` run at
+`/home/mikers/.celestia-app-mainnet-treedb-20260415150245`:
+
+- `application.db`: `4.303 GiB` at sync complete -> `2.474 GiB` after the
+  standard `15m` dwell
+- `leaf_pack_runs`: `25`
+- `leaf_pack_bytes_copied`: about `7.462 GiB`
+- final gap versus the current recorded offline TreeDB compacted floor:
+  `2.474 GiB - 2.092 GiB = 0.382 GiB`
+
+That means the remaining problem is no longer "maintenance does not run." The
+remaining problem is "maintenance copies too many mostly-live bytes per unit of
+reclaim."
+
+The immediate follow-on PR should therefore target:
+
+- better reclaimed-bytes-per-byte-copied on the standard post-sync Celestia
+  dwell
+- fewer low-yield pack windows against mostly-live generations
+- improved end-of-dwell `leaf_vlog` / `application.db` size without reopening
+  the mixed generic rewrite architecture
+
+Preferred scope for the follow-on efficiency PR:
+
+- tighten pack candidate ranking to favor higher dead-byte density and avoid
+  spending window budget on near-live generations too early
+- add explicit per-window yield accounting so the scheduler can stop or defer
+  when a candidate set is real but low-value
+- bias online pack toward deleting more whole generations per copied byte, even
+  if that means fewer total windows run
+- preserve the current active-safe admission model; do not reintroduce global
+  quiet-window dependence as the main control
+
+Required proof for that follow-on PR:
+
+- same validation shape as the current live run: full `run_celestia` +
+  `15m` dwell
+- compare against the current baseline, not against an older broken scheduler
+  baseline
+- report:
+  - sync wall time
+  - dwell RSS/HWM
+  - pre-dwell and post-dwell `application.db` and `leaf_vlog`
+  - `leaf_pack_runs`
+  - `leaf_pack_bytes_copied`
+  - deleted generations/files
+  - final gap versus the `2.092 GiB` offline compacted TreeDB floor
+
 ### Sprint 4 Exit Criteria
 
 - `leaf_vlog` maintenance is generation GC plus pack only
