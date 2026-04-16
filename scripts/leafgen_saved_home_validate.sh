@@ -52,7 +52,7 @@ capture_sizes() {
 capture_sizes before > "$OUT/size-before.json"
 GOWORK=off "${TREEMAP[@]}" leafgen-plan "$DST" -rw -json > "$OUT/plan-before.json"
 GOWORK=off "${TREEMAP[@]}" leafgen-plan "$DST" -rw -json -force > "$OUT/plan-before-force.json"
-IDS=$(jq -r '.CandidateGenerationIDs | map(tostring) | join(",")' "$OUT/plan-before-force.json")
+IDS=$(jq -r '(.CandidateGenerationIDs // []) | map(tostring) | join(",")' "$OUT/plan-before-force.json")
 printf '%s\n' "$IDS" > "$OUT/generation-ids.txt"
 
 if [[ -n "$IDS" ]]; then
