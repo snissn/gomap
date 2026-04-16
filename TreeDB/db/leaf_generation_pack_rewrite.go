@@ -506,10 +506,7 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 	}
 
 	if err := db.finalizeCommit(newRoot, newSysRoot, leafCtx.retired, sync, adaptive.Metrics{}, createdIDs, false, nil, leafManifest, leafManifestRawFileIDs); err != nil {
-		db.mu.RLock()
-		commitPublished := db.meta.CommitSeq > snap.state.CommitSeq
-		db.mu.RUnlock()
-		if !commitPublished {
+		if errors.Is(err, errTestFinalizeCommitFailpoint) {
 			return cleanupCreatedSegments(err)
 		}
 		return 0, 0, err

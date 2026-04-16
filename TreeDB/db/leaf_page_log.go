@@ -77,6 +77,17 @@ func (l *leafPageLogWithRecordLengthHints) CurrentValueLogSegment() (path string
 	return provider.CurrentValueLogSegment()
 }
 
+func (db *DB) currentLeafPageLogSegment() (path string, fileID uint32, ok bool) {
+	if db == nil || db.leafPageLog == nil {
+		return "", 0, false
+	}
+	provider, ok := db.leafPageLog.(leafPageLogCurrentSegmentProvider)
+	if !ok {
+		return "", 0, false
+	}
+	return provider.CurrentValueLogSegment()
+}
+
 func wrapLeafPageLogWithRecordLengthHints(db *DB, log LeafPageLog) LeafPageLog {
 	if db == nil || log == nil || !db.indexOuterLeavesInValueLog {
 		return log
@@ -134,22 +145,24 @@ func (db *DB) RegisterValueLogSegment(path string, fileID uint32) error {
 // scan. Returns (true, nil) when registration is confirmed on the no-refresh
 // path; callers should fall back to manager.Refresh() when it returns false.
 func (db *DB) ensureLeafPageLogSegmentRegistered(commitSeq uint64) (bool, error) {
-	if db == nil || db.valueLogManager == nil || db.leafPageLog == nil {
-		return false, nil
-	}
-	provider, ok := db.leafPageLog.(leafPageLogCurrentSegmentProvider)
-	if !ok {
-		return false, nil
-	}
-	path, fileID, ok := provider.CurrentValueLogSegment()
+	path, fileID, ok := db.currentLeafPageLogSegment()
 	if !ok || path == "" || fileID == 0 {
+		return false, nil
+	}
+	return db.ensureLeafPageLogSegmentRegisteredAt(path, fileID, commitSeq)
+}
+
+func (db *DB) ensureLeafPageLogSegmentRegisteredAt(path string, fileID uint32, commitSeq uint64) (bool, error) {
+	if db == nil || db.valueLogManager == nil || path == "" || fileID == 0 {
 		return false, nil
 	}
 	if db.valueLogManager.HasSegment(fileID) {
 		if err := db.valueLogManager.PromoteCurrentWritable(fileID); err != nil {
 			return false, err
 		}
-		db.queueLeafGenerationWritableFileIDAtCommit(fileID, commitSeq)
+		if commitSeq > 0 {
+			db.queueLeafGenerationWritableFileIDAtCommit(fileID, commitSeq)
+		}
 		return true, nil
 	}
 	if err := db.valueLogManager.RegisterSegment(path, fileID); err != nil {
@@ -163,7 +176,9 @@ func (db *DB) ensureLeafPageLogSegmentRegistered(commitSeq uint64) (bool, error)
 	if err := db.valueLogManager.PromoteCurrentWritable(fileID); err != nil {
 		return false, err
 	}
-	db.queueLeafGenerationWritableFileIDAtCommit(fileID, commitSeq)
+	if commitSeq > 0 {
+		db.queueLeafGenerationWritableFileIDAtCommit(fileID, commitSeq)
+	}
 	return true, nil
 }
 

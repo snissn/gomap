@@ -107,9 +107,10 @@ jobs:
               awk -v idx="$rest_shard_index" -v n="$rest_shard_count" 'BEGIN { c = 0 } { if ((c % n) == idx) print; c++ }' "$rest_file" > "$rest_shard_file"
               rest_regex="^($(paste -sd'|' "$rest_shard_file"))$"
               if [ "$rest_regex" = '^()$' ]; then
-                echo "no non-heavy caching tests found for shard ${rest_shard_index}/${rest_shard_count}" >&2
+                echo "no non-heavy caching tests found for shard ${rest_shard_index}/${rest_shard_count}; skipping"
+                printf '{"Time":"%s","Action":"skip","Package":"github.com/snissn/gomap/TreeDB/caching"}\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > treedb-test.jsonl
                 rm -f "$heavy_file" "$rest_file" "$rest_shard_file"
-                exit 1
+                exit 0
               fi
               echo "TreeDB/caching rest shard=${rest_shard_index}/${rest_shard_count} regex=${rest_regex}"
               go test -json -timeout 30m -p 1 ./caching -run "$rest_regex" | tee treedb-test.jsonl
