@@ -197,3 +197,25 @@ func TestAcquireSnapshot_DoesNotLeakLeafGenerationPinsOnRegistryNil(t *testing.T
 		t.Fatalf("pin count for generation 1=%d, want 0", got)
 	}
 }
+
+func TestLeafGenerationPinTracker_PrunesInactiveZeroCountRefs(t *testing.T) {
+	var tracker leafGenerationPinTracker
+
+	refs := tracker.refsForGenerationIDs([]uint64{1, 2, 3})
+	tracker.pinRefs(refs)
+	tracker.unpinRefs(refs)
+	tracker.pruneInactiveGenerationIDs([]uint64{1})
+
+	tracker.mu.RLock()
+	defer tracker.mu.RUnlock()
+
+	if _, ok := tracker.refs[1]; !ok {
+		t.Fatalf("expected active generation ref to be retained")
+	}
+	if _, ok := tracker.refs[2]; ok {
+		t.Fatalf("expected inactive zero-count ref for generation 2 to be pruned")
+	}
+	if _, ok := tracker.refs[3]; ok {
+		t.Fatalf("expected inactive zero-count ref for generation 3 to be pruned")
+	}
+}

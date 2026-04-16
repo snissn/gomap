@@ -51,6 +51,9 @@ func (db *DB) currentLeafGenerationView() *leafGenerationView {
 		return nil
 	}
 	view := newLeafGenerationView(db.leafGenerationManifest)
+	if view != nil {
+		db.leafGenerationPins.pruneInactiveGenerationIDs(view.GenerationOrder)
+	}
 	if view != nil && len(view.GenerationOrder) > 0 {
 		view.PinRefs = db.leafGenerationPins.refsForGenerationIDs(view.GenerationOrder)
 	}
@@ -58,6 +61,7 @@ func (db *DB) currentLeafGenerationView() *leafGenerationView {
 }
 
 type leafGenerationPinRef struct {
+	id    uint64
 	count atomic.Int64
 }
 
@@ -110,7 +114,7 @@ func (t *leafGenerationPinTracker) refsForGenerationIDs(ids []uint64) []*leafGen
 		}
 		ref := t.refs[id]
 		if ref == nil {
-			ref = &leafGenerationPinRef{}
+			ref = &leafGenerationPinRef{id: id}
 			t.refs[id] = ref
 		}
 		refs = append(refs, ref)
@@ -158,11 +162,46 @@ func (t *leafGenerationPinTracker) unpin(ids []uint64) {
 
 func (t *leafGenerationPinTracker) unpinRefs(refs []*leafGenerationPinRef) {
 	for _, ref := range refs {
-		if ref == nil {
+		t.unpinRef(ref)
+	}
+}
+
+func (t *leafGenerationPinTracker) unpinRef(ref *leafGenerationPinRef) {
+	if ref == nil {
+		return
+	}
+	for {
+		current := ref.count.Load()
+		if current <= 0 {
+			return
+		}
+		next := current - 1
+		if !ref.count.CompareAndSwap(current, next) {
 			continue
 		}
-		if ref.count.Add(-1) < 0 {
-			ref.count.Store(0)
+		return
+	}
+}
+
+func (t *leafGenerationPinTracker) pruneInactiveGenerationIDs(active []uint64) {
+	activeSet := make(map[uint64]struct{}, len(active))
+	for _, id := range active {
+		if id != 0 {
+			activeSet[id] = struct{}{}
+		}
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for id, ref := range t.refs {
+		if ref == nil {
+			delete(t.refs, id)
+			continue
+		}
+		if _, ok := activeSet[id]; ok {
+			continue
+		}
+		if ref.count.Load() == 0 {
+			delete(t.refs, id)
 		}
 	}
 }

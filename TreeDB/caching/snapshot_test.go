@@ -118,7 +118,10 @@ func TestIteratorSnapshotIsolation(t *testing.T) {
 	}
 }
 
-func TestAcquireSnapshot_AllocsAfterWarmPool(t *testing.T) {
+func TestAcquireSnapshot_AllocsBoundedAfterWarmPath(t *testing.T) {
+	if testRaceEnabled {
+		t.Skip("AllocsPerRun is not stable under -race")
+	}
 	dir, err := os.MkdirTemp("", "treedb-snapshot-pool-")
 	if err != nil {
 		t.Fatal(err)
@@ -154,7 +157,7 @@ func TestAcquireSnapshot_AllocsAfterWarmPool(t *testing.T) {
 			t.Fatalf("Close: %v", err)
 		}
 	})
-	if allocs > 0.05 {
-		t.Fatalf("AcquireSnapshot allocs/run=%f, want <= 0.05 after warm pool", allocs)
+	if allocs > 1.05 {
+		t.Fatalf("AcquireSnapshot allocs/run=%f, want <= 1.05 after warm path", allocs)
 	}
 }

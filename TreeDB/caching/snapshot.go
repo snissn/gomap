@@ -26,41 +26,6 @@ type Snapshot struct {
 	backend *backenddb.Snapshot
 
 	closed atomic.Bool
-	next   *Snapshot
-}
-
-var snapshotPoolHead atomic.Pointer[Snapshot]
-
-func acquirePooledSnapshot() *Snapshot {
-	for {
-		head := snapshotPoolHead.Load()
-		if head == nil {
-			return &Snapshot{}
-		}
-		next := head.next
-		if !snapshotPoolHead.CompareAndSwap(head, next) {
-			continue
-		}
-		head.next = nil
-		head.closed.Store(false)
-		return head
-	}
-}
-
-func releasePooledSnapshot(s *Snapshot) {
-	if s == nil {
-		return
-	}
-	s.db = nil
-	s.view = nil
-	s.backend = nil
-	for {
-		head := snapshotPoolHead.Load()
-		s.next = head
-		if snapshotPoolHead.CompareAndSwap(head, s) {
-			return
-		}
-	}
 }
 
 type backendSnapshotProvider interface {
@@ -72,7 +37,7 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 	if db == nil || db.backend == nil || db.closing.Load() {
 		return nil
 	}
-	snap := acquirePooledSnapshot()
+	snap := &Snapshot{}
 
 	view := db.retainMemtableView()
 	needsRotate := db.mutableBytes.Load() > 0
@@ -107,7 +72,6 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 				if db.notifyError != nil {
 					db.notifyError(err)
 				}
-				releasePooledSnapshot(snap)
 				return nil
 			}
 		}
@@ -125,7 +89,6 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 		if view != nil {
 			db.releaseMemtableView(view)
 		}
-		releasePooledSnapshot(snap)
 		return nil
 	}
 	backendSnap := provider.AcquireSnapshot()
@@ -133,7 +96,6 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 		if view != nil {
 			db.releaseMemtableView(view)
 		}
-		releasePooledSnapshot(snap)
 		return nil
 	}
 
@@ -165,17 +127,16 @@ func (s *Snapshot) Close() error {
 		return nil
 	}
 
-	var errs []error
+	var err error
 	if s.backend != nil {
-		errs = append(errs, s.backend.Close())
+		err = s.backend.Close()
 		s.backend = nil
 	}
 	if s.view != nil && s.db != nil {
 		s.db.releaseMemtableView(s.view)
 		s.view = nil
 	}
-	err := errors.Join(errs...)
-	releasePooledSnapshot(s)
+	s.db = nil
 	return err
 }
 

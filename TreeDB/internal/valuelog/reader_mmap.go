@@ -182,10 +182,11 @@ func (f *File) tryEnableSealedLazyMmap() bool {
 		return false
 	}
 	if f.sealedLazyMmapDenied.Load() {
+		deniedCountCapWant, deniedBytesCapWant := f.sealedLazyMmapBudgetSnapshot()
 		deniedCountCap := int(f.sealedLazyMmapDeniedCountCap.Load())
 		deniedBytesCap := f.sealedLazyMmapDeniedBytesCap.Load()
 		// Preserve the cheap deny fast-path while budgets stay unchanged.
-		if deniedCountCap == MaxMappedSealedSegments && deniedBytesCap == MaxMappedSealedBytes {
+		if int64(deniedCountCap) == deniedCountCapWant && deniedBytesCap == deniedBytesCapWant {
 			return false
 		}
 		// Budgets changed; re-check once to allow in-process recovery.
@@ -194,8 +195,7 @@ func (f *File) tryEnableSealedLazyMmap() bool {
 		allow, _ := m.allowSealedLazyMmapLocked(f, targetSize)
 		m.mu.Unlock()
 		if !allow {
-			f.sealedLazyMmapDeniedCountCap.Store(int64(MaxMappedSealedSegments))
-			f.sealedLazyMmapDeniedBytesCap.Store(MaxMappedSealedBytes)
+			f.storeSealedLazyMmapBudgetSnapshot()
 			return false
 		}
 		f.sealedLazyMmapDenied.Store(false)
@@ -212,8 +212,7 @@ func (f *File) tryEnableSealedLazyMmap() bool {
 		m.mu.Unlock()
 		if !allow {
 			f.sealedLazyMmapDenied.Store(true)
-			f.sealedLazyMmapDeniedCountCap.Store(int64(MaxMappedSealedSegments))
-			f.sealedLazyMmapDeniedBytesCap.Store(MaxMappedSealedBytes)
+			f.storeSealedLazyMmapBudgetSnapshot()
 			switch denyReason {
 			case sealedLazyMmapDenyCountCap:
 				f.sealedMapDeniedByCount.Add(1)
@@ -234,8 +233,7 @@ func (f *File) tryEnableSealedLazyMmap() bool {
 	m.mu.Unlock()
 	if !allow {
 		f.sealedLazyMmapDenied.Store(true)
-		f.sealedLazyMmapDeniedCountCap.Store(int64(MaxMappedSealedSegments))
-		f.sealedLazyMmapDeniedBytesCap.Store(MaxMappedSealedBytes)
+		f.storeSealedLazyMmapBudgetSnapshot()
 		switch denyReason {
 		case sealedLazyMmapDenyCountCap:
 			f.sealedMapDeniedByCount.Add(1)
@@ -252,6 +250,19 @@ func (f *File) tryEnableSealedLazyMmap() bool {
 	f.remapToFileSize()
 	data, _ := f.mmapData.Load().([]byte)
 	return len(data) > 0
+}
+
+func (f *File) sealedLazyMmapBudgetSnapshot() (countCap int64, bytesCap int64) {
+	if f != nil && isLeafLogFileID(f.ID) {
+		return int64(MaxMappedLeafSealedSegments), MaxMappedLeafSealedBytes
+	}
+	return int64(MaxMappedSealedSegments), MaxMappedSealedBytes
+}
+
+func (f *File) storeSealedLazyMmapBudgetSnapshot() {
+	countCap, bytesCap := f.sealedLazyMmapBudgetSnapshot()
+	f.sealedLazyMmapDeniedCountCap.Store(countCap)
+	f.sealedLazyMmapDeniedBytesCap.Store(bytesCap)
 }
 
 func (f *File) sealedLazyMmapTargetSize() int64 {
