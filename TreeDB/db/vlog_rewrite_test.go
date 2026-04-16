@@ -215,6 +215,23 @@ func (r *rewriteTestLeafReader) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
 	return val, nil
 }
 
+type rewriteTestLeafUnsafeToReader struct {
+	values map[page.ValuePtr][]byte
+}
+
+func (r *rewriteTestLeafUnsafeToReader) ReadUnsafeTo(ptr page.ValuePtr, dst []byte) ([]byte, bool, error) {
+	val, ok := r.values[ptr]
+	if !ok {
+		return nil, false, fmt.Errorf("leaf pointer not found")
+	}
+	if cap(dst) >= len(val) {
+		dst = dst[:len(val)]
+		copy(dst, val)
+		return dst, true, nil
+	}
+	return val, false, nil
+}
+
 func TestLeafRefRewriteCtx_RewriteNodeUsesConfiguredLeafLog(t *testing.T) {
 	root := t.TempDir()
 	valueDir := filepath.Join(root, "value_vlog")
@@ -275,6 +292,62 @@ func TestLeafRefRewriteCtx_RewriteNodeUsesConfiguredLeafLog(t *testing.T) {
 	}
 	if !strings.HasPrefix(createdSegments[0].path, leafDir+string(os.PathSeparator)) {
 		t.Fatalf("rewritten leaf segment path=%q want prefix %q", createdSegments[0].path, leafDir)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+}
+
+func TestLeafRefRewriteCtx_RewriteNodeUsesUnsafeToReaderWhenLeafReaderNil(t *testing.T) {
+	root := t.TempDir()
+	valueDir := filepath.Join(root, "value_vlog")
+	leafDir := filepath.Join(root, "leaf_vlog")
+	if err := os.MkdirAll(valueDir, 0o755); err != nil {
+		t.Fatalf("mkdir value dir: %v", err)
+	}
+	if err := os.MkdirAll(leafDir, 0o755); err != nil {
+		t.Fatalf("mkdir leaf dir: %v", err)
+	}
+
+	writer := newRewriteWriter(valueDir, 254, 0, 64<<20)
+	writer.ConfigureLeafLog(leafDir, rewriteLeafLogLaneID, 0)
+	leafPage := bytes.Repeat([]byte("u"), page.PageSize)
+	sourceFileID, err := valuelog.EncodeFileID(3, 11)
+	if err != nil {
+		t.Fatalf("EncodeFileID: %v", err)
+	}
+	oldPtr := page.ValuePtr{FileID: sourceFileID, Offset: 128, Length: page.ValuePtrMarkGrouped(0, 0)}
+	oldLeafPtr, err := page.LeafLogPtrFromValuePtr(oldPtr)
+	if err != nil {
+		t.Fatalf("LeafLogPtrFromValuePtr: %v", err)
+	}
+	oldID, err := page.EncodeLeafRef(oldLeafPtr)
+	if err != nil {
+		t.Fatalf("EncodeLeafRef: %v", err)
+	}
+
+	ctx := leafRefRewriteCtx{
+		ctx:       context.Background(),
+		leafToer:  &rewriteTestLeafUnsafeToReader{values: map[page.ValuePtr][]byte{oldPtr: leafPage}},
+		writer:    writer,
+		ridAlloc:  newRewriteRIDAllocator(1000, nil),
+		sourceIDs: map[uint32]struct{}{sourceFileID: {}},
+	}
+
+	newID, changed, err := ctx.rewriteNode(oldID)
+	if err != nil {
+		t.Fatalf("rewriteNode: %v", err)
+	}
+	if !changed {
+		t.Fatalf("expected leaf ref rewrite to change node")
+	}
+	newLeafPtr, ok := page.DecodeLeafRef(newID)
+	if !ok {
+		t.Fatalf("expected rewritten leaf ref")
+	}
+	lane, _ := valuelog.DecodeFileID(newLeafPtr.ValueLogFileID())
+	if lane != rewriteLeafLogLaneID {
+		t.Fatalf("rewritten leaf lane=%d want=%d", lane, rewriteLeafLogLaneID)
 	}
 	if err := writer.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
@@ -2935,56 +3008,6 @@ func TestValueLogRewriteOnline_MaxCopiedBytes_ProcessesExplicitSourceIncremental
 	}
 }
 
-func TestValueLogRewriteOnline_MaxCopiedBytes_DoesNotRunLeafRefRewriteWhenBudgetExhausted(t *testing.T) {
-	db, leafSourceIDs, cleanup := setupLeafRefRewriteBench(t, 768)
-	defer cleanup()
-
-	ptrs := appendPointersInNewSegment(t, db.dir, 253, 1, 320_000, 1, func(int) []byte {
-		return bytes.Repeat([]byte("pointer-budget"), 32)
-	})
-
-	b := db.NewBatch().(*Batch)
-	if err := b.SetPointer([]byte("ptr-budget"), ptrs[0]); err != nil {
-		t.Fatalf("set ptr-budget: %v", err)
-	}
-	if err := b.Write(); err != nil {
-		t.Fatalf("seed pointer write: %v", err)
-	}
-	closeNoErr(t, b)
-
-	recordLen, err := db.valueLogRecordLengthForRewrite(ptrs[0])
-	if err != nil {
-		t.Fatalf("record length: %v", err)
-	}
-
-	stats, err := db.ValueLogRewriteOnline(context.Background(), ValueLogRewriteOnlineOptions{
-		SourceFileIDs:  []uint32{ptrs[0].FileID, leafSourceIDs[0]},
-		BatchSize:      8,
-		MaxCopiedBytes: int64(recordLen),
-	})
-	if err != nil {
-		t.Fatalf("ValueLogRewriteOnline: %v", err)
-	}
-	if stats.RecordsCopied != 1 {
-		t.Fatalf("records copied=%d want 1", stats.RecordsCopied)
-	}
-	if stats.LeafRefRecordsCopied != 0 {
-		t.Fatalf("leafref records copied=%d want 0", stats.LeafRefRecordsCopied)
-	}
-	if stats.LeafRefBytesCopied != 0 {
-		t.Fatalf("leafref bytes copied=%d want 0", stats.LeafRefBytesCopied)
-	}
-	if stats.SourceBytesProcessed != int64(recordLen) {
-		t.Fatalf("source bytes processed=%d want %d", stats.SourceBytesProcessed, recordLen)
-	}
-	if !slices.Contains(stats.SourceFileIDsUnreferenced, ptrs[0].FileID) {
-		t.Fatalf("unreferenced ids=%v want pointer source %d", stats.SourceFileIDsUnreferenced, ptrs[0].FileID)
-	}
-	if !slices.Contains(stats.SourceFileIDsStillReferenced, leafSourceIDs[0]) {
-		t.Fatalf("still referenced ids=%v want leaf source %d", stats.SourceFileIDsStillReferenced, leafSourceIDs[0])
-	}
-}
-
 func TestValueLogRewriteOnline_ReserveRIDsUsesExternalAllocator(t *testing.T) {
 	dir := t.TempDir()
 
@@ -3291,35 +3314,6 @@ func TestValueLogRewriteOnline_LeafLogReservedLaneHintFallsBackToScan(t *testing
 	}
 	if walScanCalls != 1 {
 		t.Fatalf("expected one wal segment scan call, got %d", walScanCalls)
-	}
-}
-
-func TestValueLogRewriteOnline_LeafRefsReserveRIDs_DoesNotRefreshManager(t *testing.T) {
-	db, sourceIDs, cleanup := setupLeafRefRewriteBench(t, 768)
-	defer cleanup()
-
-	refreshBefore := db.valueLogManager.RefreshScanCount()
-	nextRID := uint64(1 << 40)
-	stats, err := db.ValueLogRewriteOnline(context.Background(), ValueLogRewriteOnlineOptions{
-		SourceFileIDs: sourceIDs,
-		BatchSize:     128,
-		ReserveRIDs: func(count int) (uint64, error) {
-			if count <= 0 {
-				return 0, fmt.Errorf("invalid count %d", count)
-			}
-			start := nextRID
-			nextRID += uint64(count)
-			return start, nil
-		},
-	})
-	if err != nil {
-		t.Fatalf("ValueLogRewriteOnline: %v", err)
-	}
-	if stats.LeafRefRecordsCopied == 0 {
-		t.Fatalf("expected leafref rewrite to copy records")
-	}
-	if delta := db.valueLogManager.RefreshScanCount() - refreshBefore; delta != 0 {
-		t.Fatalf("expected reserve leafref rewrite to avoid manager refresh scans, got %d", delta)
 	}
 }
 

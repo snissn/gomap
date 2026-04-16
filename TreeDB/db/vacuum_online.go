@@ -508,10 +508,12 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 			RootPageID:       nextMeta.UserRootPageID,
 			SystemRootPageID: nextMeta.SystemRootPageID,
 			ValueLogSet:      db.valueLogManager.CurrentSetNoRefresh(),
+			LeafGenerations:  oldState.LeafGenerations,
 		}
 		db.state.Store(newState)
 		db.publishSnapshotView(newGen, newState, db.valueLogManager)
 		db.mu.Unlock()
+		db.clearLeafGenerationReachabilityCaches()
 
 		db.writeMu.Unlock()
 

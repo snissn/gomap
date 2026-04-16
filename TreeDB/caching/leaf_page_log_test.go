@@ -6,7 +6,10 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/snissn/gomap/TreeDB/batch"
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
+	"github.com/snissn/gomap/TreeDB/page"
 )
 
 func TestCachingLeafPageLog_AppendLeafPageReturnsAppendError(t *testing.T) {
@@ -55,5 +58,70 @@ func TestCachingLeafPageLog_SyncRespectsRelaxedSync(t *testing.T) {
 	}
 	if got := syncCalls.Load(); got != 0 {
 		t.Fatalf("sync calls=%d want 0", got)
+	}
+}
+
+type leafRecordLengthNotifierBackendStub struct {
+	notified []page.ValuePtr
+}
+
+func (s *leafRecordLengthNotifierBackendStub) Get([]byte) ([]byte, error)       { return nil, nil }
+func (s *leafRecordLengthNotifierBackendStub) GetUnsafe([]byte) ([]byte, error) { return nil, nil }
+func (s *leafRecordLengthNotifierBackendStub) GetAppend(key, dst []byte) ([]byte, error) {
+	return dst, nil
+}
+func (s *leafRecordLengthNotifierBackendStub) Has([]byte) (bool, error) { return false, nil }
+func (s *leafRecordLengthNotifierBackendStub) Iterator(start, end []byte) (iterator.UnsafeIterator, error) {
+	return nil, nil
+}
+func (s *leafRecordLengthNotifierBackendStub) ReverseIterator(start, end []byte) (iterator.UnsafeIterator, error) {
+	return nil, nil
+}
+func (s *leafRecordLengthNotifierBackendStub) NewBatch() batch.Interface { return nil }
+func (s *leafRecordLengthNotifierBackendStub) Close() error              { return nil }
+func (s *leafRecordLengthNotifierBackendStub) Print() error              { return nil }
+func (s *leafRecordLengthNotifierBackendStub) Stats() map[string]string  { return nil }
+func (s *leafRecordLengthNotifierBackendStub) NoteLeafGenerationRecordLength(ptr page.ValuePtr) {
+	s.notified = append(s.notified, ptr)
+}
+
+func TestDB_NoteLeafGenerationRecordLength_ForwardsToBackend(t *testing.T) {
+	stub := &leafRecordLengthNotifierBackendStub{}
+	db := &DB{backend: stub}
+	ptr := page.ValuePtr{FileID: 7, Offset: 11, Length: page.ValuePtrMarkCompressed(123)}
+
+	db.noteLeafGenerationRecordLength(ptr)
+
+	if got, want := len(stub.notified), 1; got != want {
+		t.Fatalf("notified=%d want %d", got, want)
+	}
+	if got := stub.notified[0]; got != ptr {
+		t.Fatalf("notified ptr=%+v want %+v", got, ptr)
+	}
+}
+
+func TestDB_NoteLeafGenerationRecordLength_ForwardsOffsetZero(t *testing.T) {
+	stub := &leafRecordLengthNotifierBackendStub{}
+	db := &DB{backend: stub}
+	ptr := page.ValuePtr{FileID: 7, Offset: 0, Length: page.ValuePtrMarkCompressed(123)}
+
+	db.noteLeafGenerationRecordLength(ptr)
+
+	if got, want := len(stub.notified), 1; got != want {
+		t.Fatalf("notified=%d want %d", got, want)
+	}
+	if got := stub.notified[0]; got != ptr {
+		t.Fatalf("notified ptr=%+v want %+v", got, ptr)
+	}
+}
+
+func TestDB_NoteLeafGenerationRecordLength_SkipsZeroLength(t *testing.T) {
+	stub := &leafRecordLengthNotifierBackendStub{}
+	db := &DB{backend: stub}
+
+	db.noteLeafGenerationRecordLength(page.ValuePtr{FileID: 7, Offset: 0, Length: 0})
+
+	if got := len(stub.notified); got != 0 {
+		t.Fatalf("notified=%d want 0", got)
 	}
 }

@@ -225,13 +225,14 @@ func (b *Batch) writeOptimistic(sync bool) (bool, error) {
 		return false, nil
 	}
 
-	post, err := b.db.finalizeCommitLocked(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta)
+	post, err := b.db.finalizeCommitLocked(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil)
 	b.db.commitMu.Unlock()
 	if err != nil {
 		b.db.writeMu.RUnlock()
 		return false, err
 	}
 	vlogRefDelta = nil
+	b.db.invalidateLeafGenerationSubtreeStats(tracker.Pages())
 	b.db.finalizeCommitPostWork(post)
 	if b.db.vacuum.Active() {
 		b.db.vacuum.RecordEntries(entries)
@@ -283,10 +284,11 @@ func (b *Batch) writeSerialized(sync bool) error {
 	sysRoot := b.db.meta.SystemRootPageID
 	b.db.mu.Unlock()
 
-	if err := b.db.finalizeCommit(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta); err != nil {
+	if err := b.db.finalizeCommit(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil); err != nil {
 		return err
 	}
 	vlogRefDelta = nil
+	b.db.clearLeafGenerationReachabilityCaches()
 	if b.db.vacuum.Active() {
 		b.db.vacuum.RecordEntries(entries)
 	}

@@ -8,17 +8,46 @@ permissions:
 
 jobs:
   test:
-    name: ${{ matrix.os }}
+    name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          - name: ubuntu-latest
+            os: ubuntu-latest
             timeout: 15
-          - os: macos-latest
+            shard_kind: all
+          - name: macos-latest
+            os: macos-latest
             timeout: 15
-          - os: windows-latest
+            shard_kind: all
+          - name: windows-core
+            os: windows-latest
             timeout: 25
+            shard_kind: windows-core
+          - name: windows-caching-heavy
+            os: windows-latest
+            timeout: 25
+            shard_kind: windows-caching-heavy
+          - name: windows-caching-rest-1
+            os: windows-latest
+            timeout: 25
+            shard_kind: windows-caching-rest
+            rest_shard_index: 0
+            rest_shard_count: 3
+          - name: windows-caching-rest-2
+            os: windows-latest
+            timeout: 25
+            shard_kind: windows-caching-rest
+            rest_shard_index: 1
+            rest_shard_count: 3
+          - name: windows-caching-rest-3
+            os: windows-latest
+            timeout: 25
+            shard_kind: windows-caching-rest
+            rest_shard_index: 2
+            rest_shard_count: 3
     timeout-minutes: ${{ matrix.timeout }}
     steps:
       - name: Checkout
@@ -33,6 +62,7 @@ jobs:
             go.sum
 
       - name: Vet
+        if: ${{ matrix.shard_kind != 'windows-caching-heavy' && matrix.shard_kind != 'windows-caching-rest' }}
         working-directory: TreeDB
         run: go vet ./...
 
@@ -44,7 +74,53 @@ jobs:
           GOMAXPROCS: 2
         run: |
           set -o pipefail
-          go test -json -p 1 ./... | tee treedb-test.jsonl
+          case "${{ matrix.shard_kind }}" in
+            all)
+              go test -json -timeout 30m -p 1 ./... | tee treedb-test.jsonl
+              ;;
+            windows-core)
+              packages=$(go list ./... | grep -v '^github.com/snissn/gomap/TreeDB/caching$')
+              go test -json -timeout 30m -p 1 $packages | tee treedb-test.jsonl
+              ;;
+            windows-caching-heavy)
+              heavy_file="$(mktemp)"
+              tr -d '\r' < ../.github/ci/treedb_windows_caching_heavy_tests.txt | grep -v '^#' | sed '/^$/d' > "$heavy_file"
+              regex="^($(paste -sd'|' "$heavy_file"))$"
+              echo "TreeDB/caching heavy regex=${regex}"
+              go test -json -timeout 30m -p 1 ./caching -run "$regex" | tee treedb-test.jsonl
+              rm -f "$heavy_file"
+              ;;
+            windows-caching-rest)
+              heavy_file="$(mktemp)"
+              rest_file="$(mktemp)"
+              rest_shard_file="$(mktemp)"
+              tr -d '\r' < ../.github/ci/treedb_windows_caching_heavy_tests.txt | grep -v '^#' | sed '/^$/d' > "$heavy_file"
+              go test ./caching -list 'Test.*' | tr -d '\r' | grep '^Test' | grep -F -x -v -f "$heavy_file" > "$rest_file"
+              rest_shard_index="${{ matrix.rest_shard_index }}"
+              rest_shard_count="${{ matrix.rest_shard_count }}"
+              if [ -z "$rest_shard_index" ]; then
+                rest_shard_index=0
+              fi
+              if [ -z "$rest_shard_count" ] || [ "$rest_shard_count" -lt 1 ]; then
+                rest_shard_count=1
+              fi
+              awk -v idx="$rest_shard_index" -v n="$rest_shard_count" 'BEGIN { c = 0 } { if ((c % n) == idx) print; c++ }' "$rest_file" > "$rest_shard_file"
+              rest_regex="^($(paste -sd'|' "$rest_shard_file"))$"
+              if [ "$rest_regex" = '^()$' ]; then
+                echo "no non-heavy caching tests found for shard ${rest_shard_index}/${rest_shard_count}; skipping"
+                printf '{"Time":"%s","Action":"skip","Package":"github.com/snissn/gomap/TreeDB/caching"}\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > treedb-test.jsonl
+                rm -f "$heavy_file" "$rest_file" "$rest_shard_file"
+                exit 0
+              fi
+              echo "TreeDB/caching rest shard=${rest_shard_index}/${rest_shard_count} regex=${rest_regex}"
+              go test -json -timeout 30m -p 1 ./caching -run "$rest_regex" | tee treedb-test.jsonl
+              rm -f "$heavy_file" "$rest_file" "$rest_shard_file"
+              ;;
+            *)
+              echo "unknown shard kind: ${{ matrix.shard_kind }}" >&2
+              exit 1
+              ;;
+          esac
 
       - name: Summarize test timings
         if: always()
@@ -53,7 +129,7 @@ jobs:
         run: |
           python ../.github/scripts/summarize_go_test_json.py treedb-test.jsonl | tee treedb-test-summary.md
           {
-            echo "### TreeDB test timing summary"
+            echo "### TreeDB test timing summary (${{ matrix.name }})"
             echo
             cat treedb-test-summary.md
           } >> "$GITHUB_STEP_SUMMARY"
@@ -62,7 +138,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: treedb-test-json-${{ matrix.os }}
+          name: treedb-test-json-${{ matrix.name }}
           path: |
             TreeDB/treedb-test.jsonl
             TreeDB/treedb-test.jsonl.summary.md

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -26,19 +27,89 @@ type leafPageLogCurrentSegmentProvider interface {
 	CurrentValueLogSegment() (path string, fileID uint32, ok bool)
 }
 
+type leafPageLogRecordLengthProvider interface {
+	LastLeafPageRecordLength() uint32
+}
+
+type leafPageLogWithRecordLengthHints struct {
+	db    *DB
+	inner LeafPageLog
+}
+
+func (l *leafPageLogWithRecordLengthHints) AppendLeafPage(leafPage []byte) (page.LeafLogPtr, error) {
+	if l == nil || l.inner == nil {
+		return page.LeafLogPtr{}, errors.New("leaf page log unavailable")
+	}
+	ptr, err := l.inner.AppendLeafPage(leafPage)
+	if err != nil {
+		return page.LeafLogPtr{}, err
+	}
+	if l.db != nil {
+		if provider, ok := l.inner.(leafPageLogRecordLengthProvider); ok {
+			l.db.noteLeafGenerationRecordLengthRaw(ptr.FileID, ptr.Offset, provider.LastLeafPageRecordLength())
+		}
+	}
+	return ptr, nil
+}
+
+func (l *leafPageLogWithRecordLengthHints) Flush() error {
+	if l == nil || l.inner == nil {
+		return nil
+	}
+	return l.inner.Flush()
+}
+
+func (l *leafPageLogWithRecordLengthHints) Sync() error {
+	if l == nil || l.inner == nil {
+		return nil
+	}
+	return l.inner.Sync()
+}
+
+func (l *leafPageLogWithRecordLengthHints) CurrentValueLogSegment() (path string, fileID uint32, ok bool) {
+	if l == nil || l.inner == nil {
+		return "", 0, false
+	}
+	provider, ok := l.inner.(leafPageLogCurrentSegmentProvider)
+	if !ok {
+		return "", 0, false
+	}
+	return provider.CurrentValueLogSegment()
+}
+
+func (db *DB) currentLeafPageLogSegment() (path string, fileID uint32, ok bool) {
+	if db == nil || db.leafPageLog == nil {
+		return "", 0, false
+	}
+	provider, ok := db.leafPageLog.(leafPageLogCurrentSegmentProvider)
+	if !ok {
+		return "", 0, false
+	}
+	return provider.CurrentValueLogSegment()
+}
+
+func wrapLeafPageLogWithRecordLengthHints(db *DB, log LeafPageLog) LeafPageLog {
+	if db == nil || log == nil || !db.indexOuterLeavesInValueLog {
+		return log
+	}
+	if wrapped, ok := log.(*leafPageLogWithRecordLengthHints); ok {
+		wrapped.db = db
+		return wrapped
+	}
+	return &leafPageLogWithRecordLengthHints{db: db, inner: log}
+}
+
 // SetLeafPageLog installs the value-log appender used for value-log-backed leaf
 // pages. It is typically wired by the cached layer after opening the backend.
 func (db *DB) SetLeafPageLog(log LeafPageLog) {
 	if db == nil {
 		return
 	}
+	wrapped := wrapLeafPageLogWithRecordLengthHints(db, log)
 	db.writeMu.Lock()
-	db.leafPageLog = log
-	if log != nil {
-		db.leafRefState.Store(leafRefStateUnknown)
-	}
+	db.leafPageLog = wrapped
 	if idx := db.idx.Load(); idx != nil && idx.zipper != nil {
-		idx.zipper.SetLeafPageLog(log)
+		idx.zipper.SetLeafPageLog(wrapped)
 	}
 	db.writeMu.Unlock()
 }
@@ -60,28 +131,37 @@ func (db *DB) RegisterValueLogSegment(path string, fileID uint32) error {
 	if err := db.valueLogManager.RegisterSegment(path, fileID); err != nil {
 		return err
 	}
-	return db.valueLogManager.PromoteCurrentWritable(fileID)
+	if err := db.valueLogManager.PromoteCurrentWritable(fileID); err != nil {
+		return err
+	}
+	if db.isLeafGenerationSegmentPath(path) {
+		db.queueLeafGenerationWritableFileID(fileID)
+	}
+	return nil
 }
 
 // ensureLeafPageLogSegmentRegistered tries to keep the leaf-page log's current
 // writable segment visible in the value-log manager without a full directory
 // scan. Returns (true, nil) when registration is confirmed on the no-refresh
 // path; callers should fall back to manager.Refresh() when it returns false.
-func (db *DB) ensureLeafPageLogSegmentRegistered() (bool, error) {
-	if db == nil || db.valueLogManager == nil || db.leafPageLog == nil {
-		return false, nil
-	}
-	provider, ok := db.leafPageLog.(leafPageLogCurrentSegmentProvider)
-	if !ok {
-		return false, nil
-	}
-	path, fileID, ok := provider.CurrentValueLogSegment()
+func (db *DB) ensureLeafPageLogSegmentRegistered(commitSeq uint64) (bool, error) {
+	path, fileID, ok := db.currentLeafPageLogSegment()
 	if !ok || path == "" || fileID == 0 {
+		return false, nil
+	}
+	return db.ensureLeafPageLogSegmentRegisteredAt(path, fileID, commitSeq)
+}
+
+func (db *DB) ensureLeafPageLogSegmentRegisteredAt(path string, fileID uint32, commitSeq uint64) (bool, error) {
+	if db == nil || db.valueLogManager == nil || path == "" || fileID == 0 {
 		return false, nil
 	}
 	if db.valueLogManager.HasSegment(fileID) {
 		if err := db.valueLogManager.PromoteCurrentWritable(fileID); err != nil {
 			return false, err
+		}
+		if commitSeq > 0 {
+			db.queueLeafGenerationWritableFileIDAtCommit(fileID, commitSeq)
 		}
 		return true, nil
 	}
@@ -96,7 +176,21 @@ func (db *DB) ensureLeafPageLogSegmentRegistered() (bool, error) {
 	if err := db.valueLogManager.PromoteCurrentWritable(fileID); err != nil {
 		return false, err
 	}
+	if commitSeq > 0 {
+		db.queueLeafGenerationWritableFileIDAtCommit(fileID, commitSeq)
+	}
 	return true, nil
+}
+
+func (db *DB) isLeafGenerationSegmentPath(path string) bool {
+	if db == nil || path == "" || db.leafGenerationManifest == nil {
+		return false
+	}
+	leafDir := LeafLogDirPath(db.dir)
+	if leafDir == "" {
+		return false
+	}
+	return filepath.Clean(filepath.Dir(path)) == filepath.Clean(leafDir)
 }
 
 // SetCurrentValueLogReadBarrier installs a callback that will be invoked before

@@ -126,3 +126,74 @@ func TestAcquireSnapshot_ReturnsNilWhenDBIsClosing(t *testing.T) {
 		t.Fatalf("expected registry to remain unpinned, got %d", min)
 	}
 }
+
+func TestAcquireSnapshot_PinsLeafGenerationView(t *testing.T) {
+	idx := &indexGen{registry: lifecycle.NewReaderRegistry()}
+	idx.refs.Store(1)
+	state := &DBState{
+		CommitSeq:  1,
+		RootPageID: 1,
+		LeafGenerations: &leafGenerationView{
+			CurrentGenerationID: 2,
+			GenerationOrder:     []uint64{1, 2},
+			Generations: map[uint64]leafGenerationViewGeneration{
+				1: {State: leafGenerationStateSealed, FileIDs: []uint32{111}},
+				2: {State: leafGenerationStateWritable, FileIDs: []uint32{222}},
+			},
+			FileToGeneration: map[uint32]uint64{111: 1, 222: 2},
+		},
+	}
+
+	db := &DB{snapPool: NewSnapshotPool()}
+	db.publishSnapshotView(idx, state, nil)
+
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("expected snapshot")
+	}
+	if got, want := len(snap.leafGenerationIDs), 2; got != want {
+		t.Fatalf("len(leafGenerationIDs)=%d, want %d", got, want)
+	}
+	if got, want := db.leafGenerationPinCountForTesting(1), uint64(1); got != want {
+		t.Fatalf("pin count for generation 1=%d, want %d", got, want)
+	}
+	if got, want := db.leafGenerationPinCountForTesting(2), uint64(1); got != want {
+		t.Fatalf("pin count for generation 2=%d, want %d", got, want)
+	}
+	if err := snap.Close(); err != nil {
+		t.Fatalf("close snapshot: %v", err)
+	}
+	if got := db.leafGenerationPinCountForTesting(1); got != 0 {
+		t.Fatalf("pin count for generation 1 after close=%d, want 0", got)
+	}
+	if got := db.leafGenerationPinCountForTesting(2); got != 0 {
+		t.Fatalf("pin count for generation 2 after close=%d, want 0", got)
+	}
+}
+
+func TestAcquireSnapshot_DoesNotLeakLeafGenerationPinsOnRegistryNil(t *testing.T) {
+	idx := &indexGen{}
+	idx.refs.Store(1)
+	state := &DBState{
+		CommitSeq:  1,
+		RootPageID: 1,
+		LeafGenerations: &leafGenerationView{
+			CurrentGenerationID: 1,
+			GenerationOrder:     []uint64{1},
+			Generations: map[uint64]leafGenerationViewGeneration{
+				1: {State: leafGenerationStateWritable, FileIDs: []uint32{111}},
+			},
+			FileToGeneration: map[uint32]uint64{111: 1},
+		},
+	}
+
+	db := &DB{snapPool: NewSnapshotPool()}
+	db.publishSnapshotView(idx, state, nil)
+
+	if snap := db.AcquireSnapshot(); snap != nil {
+		t.Fatal("expected nil snapshot when registry is unavailable")
+	}
+	if got := db.leafGenerationPinCountForTesting(1); got != 0 {
+		t.Fatalf("pin count for generation 1=%d, want 0", got)
+	}
+}

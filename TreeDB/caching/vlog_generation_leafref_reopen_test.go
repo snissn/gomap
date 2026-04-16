@@ -441,60 +441,53 @@ func TestCachedRewriteLeafRefs_RemainReopenableAfterLaterCheckpoint(t *testing.T
 		t.Fatalf("expected many leafref source files, got %d", len(leafCounts))
 	}
 
-	currentSet := backend.State().ValueLogSet
-	if currentSet == nil {
-		t.Fatalf("missing current value-log set")
+	var (
+		packStats backenddb.LeafGenerationPackRunOnceStats
+		gcStats   backenddb.LeafGenerationGCStats
+	)
+	if err := db.runWithBackendMaintenance(func() error {
+		var err error
+		packStats, err = backend.LeafGenerationPackRunOnce(context.Background(), backenddb.LeafGenerationPackFromPlanOptions{
+			Sync:                    true,
+			MinPublishedAgeCommits:  1,
+			MinCandidateGenerations: 2,
+			MaxGenerations:          4,
+			MaxBytesToCopy:          1 << 30,
+		})
+		if err != nil {
+			return err
+		}
+		gcStats, err = backend.LeafGenerationGC(context.Background(), backenddb.LeafGenerationGCOptions{})
+		return err
+	}); err != nil {
+		t.Fatalf("backend leaf generation maintenance: %v", err)
 	}
-	maxByLane := make(map[uint32]uint32)
-	for id := range currentSet.Files {
-		seg := page.ValueLogSegmentID(id)
-		lane := seg >> 23
-		seq := seg & ((1 << 23) - 1)
-		if cur, ok := maxByLane[lane]; !ok || seq > cur {
-			maxByLane[lane] = seq
+	if !packStats.Ran {
+		t.Fatalf("expected leaf generation pack to run, skip=%s", packStats.SkipReason)
+	}
+	sourceIDSet := make(map[uint32]struct{})
+	for _, gen := range packStats.Selection.Generations {
+		for _, fileID := range gen.FileIDs {
+			if fileID == 0 {
+				continue
+			}
+			sourceIDSet[fileID] = struct{}{}
 		}
 	}
-
-	sourceIDs := make([]uint32, 0, 8)
-	for fileID, count := range leafCounts {
-		if count < 8 {
-			continue
-		}
-		seg := page.ValueLogSegmentID(fileID)
-		lane := seg >> 23
-		seq := seg & ((1 << 23) - 1)
-		if maxByLane[lane] == seq {
-			continue
-		}
+	sourceIDs := make([]uint32, 0, len(sourceIDSet))
+	for fileID := range sourceIDSet {
 		sourceIDs = append(sourceIDs, fileID)
 	}
 	sort.Slice(sourceIDs, func(i, j int) bool { return sourceIDs[i] < sourceIDs[j] })
-	if len(sourceIDs) < 4 {
-		t.Fatalf("expected at least four non-active source files, got %d", len(sourceIDs))
+	if len(sourceIDs) == 0 {
+		t.Fatal("expected packed source file IDs")
 	}
-	sourceIDs = sourceIDs[:4]
-
-	var stats backenddb.ValueLogRewriteStats
-	if err := db.runWithBackendMaintenance(func() error {
-		var err error
-		stats, err = backend.ValueLogRewriteOnline(context.Background(), backenddb.ValueLogRewriteOnlineOptions{
-			BatchSize:      32,
-			SyncEachBatch:  true,
-			ProtectedPaths: db.valueLogProtectedPaths(),
-			SourceFileIDs:  sourceIDs,
-		})
-		return err
-	}); err != nil {
-		t.Fatalf("backend maintenance rewrite: %v", err)
+	postPackCounts := collectLeafRefFileCounts(t, backend.Pager(), backend.State().RootPageID)
+	if hits := countLeafRefHits(postPackCounts, sourceIDs); hits != 0 {
+		t.Fatalf("pack+gc left %d leafrefs on packed source files", hits)
 	}
-	postRewriteCounts := collectLeafRefFileCounts(t, backend.Pager(), backend.State().RootPageID)
-	if hits := countLeafRefHits(postRewriteCounts, sourceIDs); hits != 0 {
-		t.Fatalf("rewrite left %d leafrefs on rewritten source files", hits)
-	}
-	db.maybeRunVlogGenerationIndexVacuum(int64(stats.BytesBefore))
-	postVacuumCounts := collectLeafRefFileCounts(t, backend.Pager(), backend.State().RootPageID)
-	if hits := countLeafRefHits(postVacuumCounts, sourceIDs); hits != 0 {
-		t.Fatalf("post-vacuum backend state still references %d rewritten source leafrefs", hits)
+	if gcStats.GenerationsDeleted == 0 && gcStats.FilesDeleted == 0 && gcStats.GenerationsEligible == 0 {
+		t.Fatalf("expected leaf generation gc to delete, retire, or at least mark packed generations eligible, got %+v", gcStats)
 	}
 
 	b := db.NewBatch()
@@ -546,6 +539,8 @@ func TestCachedRewriteLeafRefs_RemainReopenableAfterLaterCheckpoint(t *testing.T
 }
 
 func TestCachedGenerationalMaintenance_LeafRefsRemainReopenable(t *testing.T) {
+	t.Setenv(envEnableLeafGenerationPackMaintenance, "1")
+	t.Setenv(envLeafGenerationPackMaintenanceMinReclaimPerByteCopiedPPM, "0")
 	dir := t.TempDir()
 
 	backend, err := backenddb.Open(backenddb.Options{
@@ -626,8 +621,11 @@ func TestCachedGenerationalMaintenance_LeafRefsRemainReopenable(t *testing.T) {
 		db.maybeRunVlogGenerationMaintenance(false)
 	}
 
-	if db.vlogGenerationRewriteRuns.Load() == 0 {
-		t.Fatalf("expected generational rewrite to run")
+	if db.vlogGenerationLeafPackRuns.Load() == 0 {
+		t.Fatalf("expected leaf generation pack maintenance to run")
+	}
+	if db.vlogGenerationLeafPackGCRuns.Load() == 0 {
+		t.Fatalf("expected leaf generation gc maintenance to run")
 	}
 
 	preCloseCounts := collectBackendLiveFileCounts(t, backend)
@@ -795,7 +793,7 @@ func TestCachedGenerationalMaintenance_DirectPointersRemainInCurrentSet_WALOn(t 
 	closed = true
 }
 
-func TestCachedGenerationalMaintenance_BackgroundSchedulerDisabled_WALOn(t *testing.T) {
+func TestCachedGenerationalMaintenance_BackgroundSchedulerIdle_WALOn(t *testing.T) {
 	dir := t.TempDir()
 
 	backend, err := backenddb.Open(backenddb.Options{
@@ -865,8 +863,8 @@ func TestCachedGenerationalMaintenance_BackgroundSchedulerDisabled_WALOn(t *test
 		writeBatch(fmt.Sprintf("seed-%02d", i), 384)
 	}
 
-	if got := db.vlogGenerationSchedulerState.Load(); got != vlogGenerationSchedulerDisabled {
-		t.Fatalf("scheduler state=%d want disabled", got)
+	if got := db.vlogGenerationSchedulerState.Load(); got != vlogGenerationSchedulerIdle {
+		t.Fatalf("scheduler state=%d want idle", got)
 	}
 
 	if err := db.checkpointForBackendMaintenance(); err != nil {

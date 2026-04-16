@@ -17,6 +17,15 @@ func newCachingLeafPageLog(db *DB, l *lane) backenddb.LeafPageLog {
 	return &cachingLeafPageLog{db: db, lane: l}
 }
 
+func (db *DB) noteLeafGenerationRecordLength(ptr page.ValuePtr) {
+	if db == nil || db.backend == nil || ptr.FileID == 0 || ptr.Length == 0 {
+		return
+	}
+	if notifier, ok := db.backend.(interface{ NoteLeafGenerationRecordLength(page.ValuePtr) }); ok {
+		notifier.NoteLeafGenerationRecordLength(ptr)
+	}
+}
+
 func (l *cachingLeafPageLog) AppendLeafPage(leafPage []byte) (page.LeafLogPtr, error) {
 	if l == nil || l.db == nil || l.lane == nil {
 		return page.LeafLogPtr{}, errWALUnavailable
@@ -33,6 +42,7 @@ func (l *cachingLeafPageLog) AppendLeafPage(leafPage []byte) (page.LeafLogPtr, e
 	if convErr != nil {
 		return page.LeafLogPtr{}, convErr
 	}
+	l.db.noteLeafGenerationRecordLength(ptr)
 	return leafPtr, nil
 }
 
