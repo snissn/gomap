@@ -574,7 +574,7 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 	}
 
 	if err := db.finalizeCommit(newRoot, newSysRoot, leafCtx.retired, sync, adaptive.Metrics{}, createdIDs, false, nil, leafManifest, leafManifestRawFileIDs); err != nil {
-		if errors.Is(err, errTestFinalizeCommitFailpoint) {
+		if finalizeCommitErrorAllowsCreatedSegmentCleanup(err) {
 			return cleanupCreatedSegments(err)
 		}
 		return 0, 0, err

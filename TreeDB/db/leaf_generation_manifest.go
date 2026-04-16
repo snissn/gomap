@@ -655,34 +655,11 @@ func reconcileLeafGenerationManifestWithDir(leafDir string, manifest *leafGenera
 	if len(files) == 0 {
 		return manifest, false, nil
 	}
-	seen := make(map[uint32]struct{}, len(manifest.Generations))
-	for _, gen := range manifest.Generations {
-		for _, rawFileID := range gen.FileIDs {
-			if rawFileID == 0 {
-				continue
-			}
-			seen[rawFileID] = struct{}{}
-		}
-	}
-	reconciled := manifest.clone()
-	changedAny := false
-	for _, file := range files {
-		if _, ok := seen[file.rawFileID]; ok {
-			continue
-		}
-		changed, err := reconciled.registerCurrentGenerationFileID(file.rawFileID, commitSeq)
-		if err != nil {
-			return nil, false, err
-		}
-		if changed {
-			changedAny = true
-			seen[file.rawFileID] = struct{}{}
-		}
-	}
-	if !changedAny {
-		return manifest, false, nil
-	}
-	return reconciled, true, nil
+	// Once a manifest exists, treat it as the authoritative generation catalog.
+	// Unknown files may be aborted rewrite output or other orphaned leftovers;
+	// blindly re-importing them on open can resurrect unreachable bytes into the
+	// writable generation and skew later maintenance decisions.
+	return manifest, false, nil
 }
 
 func loadOrCreateLeafGenerationManifest(leafDir string, commitSeq uint64, readOnly bool) (*leafGenerationManifest, error) {
