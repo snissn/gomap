@@ -303,10 +303,11 @@ func TestLoadOrCreateLeafGenerationManifest_BootstrapsExistingLeafFiles(t *testi
 	}
 }
 
-func TestLoadOrCreateLeafGenerationManifest_ReconcilesExistingLeafFiles(t *testing.T) {
+func TestLoadOrCreateLeafGenerationManifest_RecoversUnknownLeafFilesPreservesWritableTail(t *testing.T) {
 	leafDir := t.TempDir()
 	_, fileID1 := createLeafGenerationTestSegment(t, leafDir, rewriteLeafLogLaneID, 1)
 	_, fileID2 := createLeafGenerationTestSegment(t, leafDir, rewriteLeafLogLaneID, 2)
+	_, fileID3 := createLeafGenerationTestSegment(t, leafDir, rewriteLeafLogLaneID, 3)
 
 	manifest := newLeafGenerationManifest(55)
 	if _, err := manifest.registerCurrentGenerationFileID(page.ValueLogSegmentID(fileID1), 55); err != nil {
@@ -316,24 +317,36 @@ func TestLoadOrCreateLeafGenerationManifest_ReconcilesExistingLeafFiles(t *testi
 		t.Fatalf("saveLeafGenerationManifest: %v", err)
 	}
 
-	reconciled, err := loadOrCreateLeafGenerationManifest(leafDir, 89, false)
+	loadedManifest, err := loadOrCreateLeafGenerationManifest(leafDir, 89, false)
 	if err != nil {
 		t.Fatalf("loadOrCreateLeafGenerationManifest: %v", err)
 	}
-	if reconciled == nil {
-		t.Fatal("expected reconciled manifest")
+	if loadedManifest == nil {
+		t.Fatal("expected manifest")
 	}
-	if got, want := len(reconciled.Generations), 2; got != want {
+	if got, want := len(loadedManifest.Generations), 3; got != want {
 		t.Fatalf("len(Generations)=%d, want %d", got, want)
 	}
-	if got, want := reconciled.Generations[0].State, leafGenerationStateSealed; got != want {
+	if got, want := loadedManifest.Generations[0].FileIDs[0], page.ValueLogSegmentID(fileID1); got != want {
+		t.Fatalf("generation[0].FileIDs[0]=%d, want %d", got, want)
+	}
+	if got, want := loadedManifest.Generations[0].State, leafGenerationStateSealed; got != want {
 		t.Fatalf("generation[0].State=%q, want %q", got, want)
 	}
-	if got, want := reconciled.Generations[1].State, leafGenerationStateWritable; got != want {
+	if got, want := loadedManifest.Generations[1].State, leafGenerationStateSealed; got != want {
 		t.Fatalf("generation[1].State=%q, want %q", got, want)
 	}
-	if got, want := reconciled.Generations[1].FileIDs[0], page.ValueLogSegmentID(fileID2); got != want {
+	if got, want := loadedManifest.Generations[1].FileIDs[0], page.ValueLogSegmentID(fileID2); got != want {
 		t.Fatalf("generation[1].FileIDs[0]=%d, want %d", got, want)
+	}
+	if got, want := loadedManifest.Generations[2].State, leafGenerationStateWritable; got != want {
+		t.Fatalf("generation[2].State=%q, want %q", got, want)
+	}
+	if got, want := loadedManifest.Generations[2].FileIDs[0], page.ValueLogSegmentID(fileID3); got != want {
+		t.Fatalf("generation[2].FileIDs[0]=%d, want %d", got, want)
+	}
+	if got, want := loadedManifest.CurrentGenerationID, loadedManifest.Generations[2].GenerationID; got != want {
+		t.Fatalf("CurrentGenerationID=%d, want %d", got, want)
 	}
 
 	loaded, ok, err := loadLeafGenerationManifest(leafDir)
@@ -341,13 +354,31 @@ func TestLoadOrCreateLeafGenerationManifest_ReconcilesExistingLeafFiles(t *testi
 		t.Fatalf("loadLeafGenerationManifest: %v", err)
 	}
 	if !ok {
-		t.Fatal("expected persisted reconciled manifest")
+		t.Fatal("expected persisted manifest")
 	}
-	if got, want := len(loaded.Generations), 2; got != want {
+	if got, want := len(loaded.Generations), 3; got != want {
 		t.Fatalf("persisted len(Generations)=%d, want %d", got, want)
+	}
+	if got, want := loaded.Generations[0].FileIDs[0], page.ValueLogSegmentID(fileID1); got != want {
+		t.Fatalf("persisted generation[0].FileIDs[0]=%d, want %d", got, want)
+	}
+	if got, want := loaded.Generations[0].State, leafGenerationStateSealed; got != want {
+		t.Fatalf("persisted generation[0].State=%q, want %q", got, want)
+	}
+	if got, want := loaded.Generations[1].State, leafGenerationStateSealed; got != want {
+		t.Fatalf("persisted generation[1].State=%q, want %q", got, want)
 	}
 	if got, want := loaded.Generations[1].FileIDs[0], page.ValueLogSegmentID(fileID2); got != want {
 		t.Fatalf("persisted generation[1].FileIDs[0]=%d, want %d", got, want)
+	}
+	if got, want := loaded.Generations[2].State, leafGenerationStateWritable; got != want {
+		t.Fatalf("persisted generation[2].State=%q, want %q", got, want)
+	}
+	if got, want := loaded.Generations[2].FileIDs[0], page.ValueLogSegmentID(fileID3); got != want {
+		t.Fatalf("persisted generation[2].FileIDs[0]=%d, want %d", got, want)
+	}
+	if got, want := loaded.CurrentGenerationID, loaded.Generations[2].GenerationID; got != want {
+		t.Fatalf("persisted CurrentGenerationID=%d, want %d", got, want)
 	}
 }
 

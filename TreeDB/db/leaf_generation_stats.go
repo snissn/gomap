@@ -54,10 +54,13 @@ func (db *DB) collectLeafGenerationMetrics(set *valuelog.Set, excludePinIDs []ui
 	m.reachabilitySubtreeCachePages = len(db.leafGenerationSubtreeStatsByPage)
 	db.leafGenerationSubtreeStatsMu.RUnlock()
 
-	excludedPins := make(map[uint64]struct{}, len(excludePinIDs))
-	for _, id := range excludePinIDs {
-		if id != 0 {
-			excludedPins[id] = struct{}{}
+	var excludedPins map[uint64]struct{}
+	if len(excludePinIDs) > 0 {
+		excludedPins = make(map[uint64]struct{}, len(excludePinIDs))
+		for _, id := range excludePinIDs {
+			if id != 0 {
+				excludedPins[id] = struct{}{}
+			}
 		}
 	}
 

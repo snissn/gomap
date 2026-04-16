@@ -18,7 +18,7 @@ func newCachingLeafPageLog(db *DB, l *lane) backenddb.LeafPageLog {
 }
 
 func (db *DB) noteLeafGenerationRecordLength(ptr page.ValuePtr) {
-	if db == nil || db.backend == nil || ptr.FileID == 0 || ptr.Length == 0 {
+	if db == nil || db.backend == nil || ptr.FileID == 0 || ptr.Offset == 0 {
 		return
 	}
 	if notifier, ok := db.backend.(interface{ NoteLeafGenerationRecordLength(page.ValuePtr) }); ok {

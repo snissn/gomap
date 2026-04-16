@@ -132,6 +132,63 @@ func (m *leafGenerationManifest) registerCurrentGenerationFileID(fileID uint32, 
 	return true, nil
 }
 
+func (m *leafGenerationManifest) appendRecoveredSealedGenerationFileID(fileID uint32, commitSeq uint64) (bool, error) {
+	if m == nil {
+		return false, errors.New("treedb: leaf generation manifest is nil")
+	}
+	if fileID == 0 {
+		return false, errors.New("treedb: leaf generation file_id must be non-zero")
+	}
+	for _, gen := range m.Generations {
+		for _, existing := range gen.FileIDs {
+			if existing == fileID {
+				return false, nil
+			}
+		}
+	}
+	maxID := uint64(0)
+	for i := range m.Generations {
+		if m.Generations[i].GenerationID > maxID {
+			maxID = m.Generations[i].GenerationID
+		}
+	}
+	if m.NextGenerationID <= maxID {
+		m.NextGenerationID = maxID + 1
+	}
+	newID := m.NextGenerationID
+	m.NextGenerationID++
+	m.Generations = append(m.Generations, leafGenerationRecord{
+		GenerationID:       newID,
+		State:              leafGenerationStateSealed,
+		FileIDs:            []uint32{fileID},
+		CreatedCommitSeq:   commitSeq,
+		SealedCommitSeq:    commitSeq,
+		PublishedCommitSeq: commitSeq,
+	})
+	return true, nil
+}
+
+func (m *leafGenerationManifest) currentGenerationMaxRecoveredSeq() uint32 {
+	if m == nil {
+		return 0
+	}
+	idx := m.currentGenerationIndex()
+	if idx < 0 {
+		return 0
+	}
+	maxSeq := uint32(0)
+	for _, rawFileID := range m.Generations[idx].FileIDs {
+		if rawFileID == 0 {
+			continue
+		}
+		_, seq := valuelog.DecodeSegmentID(rawFileID)
+		if seq > maxSeq {
+			maxSeq = seq
+		}
+	}
+	return maxSeq
+}
+
 func (m *leafGenerationManifest) clone() *leafGenerationManifest {
 	if m == nil {
 		return nil
@@ -666,11 +723,21 @@ func reconcileLeafGenerationManifestWithDir(leafDir string, manifest *leafGenera
 	}
 	reconciled := manifest.clone()
 	changedAny := false
+	currentSeq := reconciled.currentGenerationMaxRecoveredSeq()
 	for _, file := range files {
 		if _, ok := seen[file.rawFileID]; ok {
 			continue
 		}
-		changed, err := reconciled.registerCurrentGenerationFileID(file.rawFileID, commitSeq)
+		changed := false
+		var err error
+		if file.seq > currentSeq {
+			changed, err = reconciled.registerCurrentGenerationFileID(file.rawFileID, commitSeq)
+			if err == nil && file.seq > currentSeq {
+				currentSeq = file.seq
+			}
+		} else {
+			changed, err = reconciled.appendRecoveredSealedGenerationFileID(file.rawFileID, commitSeq)
+		}
 		if err != nil {
 			return nil, false, err
 		}

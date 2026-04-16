@@ -504,11 +504,12 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 		db.meta = nextMeta
 		db.metaPageID = MetaPage0ID
 		newState := &DBState{
-			CommitSeq:        nextMeta.CommitSeq,
-			RootPageID:       nextMeta.UserRootPageID,
-			SystemRootPageID: nextMeta.SystemRootPageID,
-			ValueLogSet:      db.valueLogManager.CurrentSetNoRefresh(),
-			LeafGenerations:  oldState.LeafGenerations,
+			CommitSeq:                  nextMeta.CommitSeq,
+			RootPageID:                 nextMeta.UserRootPageID,
+			SystemRootPageID:           nextMeta.SystemRootPageID,
+			ValueLogSet:                db.valueLogManager.CurrentSetNoRefresh(),
+			LeafGenerations:            oldState.LeafGenerations,
+			LeafGenerationStateVersion: oldState.LeafGenerationStateVersion,
 		}
 		db.state.Store(newState)
 		db.publishSnapshotView(newGen, newState, db.valueLogManager)

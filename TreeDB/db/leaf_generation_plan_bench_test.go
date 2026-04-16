@@ -347,6 +347,59 @@ func BenchmarkLeafGenerationPlanAfterSingleKeyRootChange_Local(b *testing.B) {
 	b.ReportMetric(float64(benchmarkLeafGenerationStatInt64(b, stats, "treedb.leaf_generation.plan_cache.subtree_pages")), "subtree_pages")
 }
 
+func BenchmarkLeafGenerationPlanAfterSingleKeyRootChange_SavedHome(b *testing.B) {
+	fixture := benchmarkLeafGenerationPlanWorkFixture(b)
+	db := openLeafGenerationPlanDB(b, fixture, false)
+	b.Cleanup(func() { _ = db.Close() })
+	set := db.valueLogManager.CurrentSetNoRefresh()
+	if set == nil {
+		b.Fatal("missing value-log set")
+	}
+	leafStartSeq := maxRewriteLaneSeqFromSet(set, rewriteLeafLogLaneID)
+	_ = db.valueLogManager.Release(set)
+	leafLog := newRewriteWriter(ValueLogDirPath(fixture), 0, 0, 64<<20)
+	leafLog.ConfigureLeafLog(LeafLogDirPath(fixture), rewriteLeafLogLaneID, leafStartSeq)
+	db.SetLeafPageLog(leafLog)
+	b.Cleanup(func() { benchmarkCloseNoErr(b, leafLog) })
+	if _, err := db.LeafGenerationPlan(context.Background(), LeafGenerationPlanOptions{}); err != nil {
+		b.Fatalf("warmup LeafGenerationPlan: %v", err)
+	}
+
+	key := []byte("~leafgen-bench-root-churn")
+	value := []byte{0}
+	if err := db.Set(key, value); err != nil {
+		b.Fatalf("seed Set: %v", err)
+	}
+	if _, err := db.LeafGenerationPlan(context.Background(), LeafGenerationPlanOptions{}); err != nil {
+		b.Fatalf("warmup LeafGenerationPlan after seed Set: %v", err)
+	}
+
+	cacheMisses := withLeafGenerationSubtreeCacheMissCounterB(b)
+	var totalMisses uint64
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		b.StopTimer()
+		value = []byte{byte(i)}
+		if err := db.Set(key, value); err != nil {
+			b.Fatalf("Set: %v", err)
+		}
+		beforeMisses := cacheMisses.Load()
+		b.StartTimer()
+		if _, err := db.LeafGenerationPlan(context.Background(), LeafGenerationPlanOptions{}); err != nil {
+			b.Fatalf("LeafGenerationPlan saved-home root churn: %v", err)
+		}
+		totalMisses += cacheMisses.Load() - beforeMisses
+	}
+	b.StopTimer()
+	if b.N > 0 {
+		b.ReportMetric(float64(totalMisses)/float64(b.N), "subtree_misses/op")
+	}
+	stats := db.Stats()
+	b.ReportMetric(float64(benchmarkLeafGenerationStatInt64(b, stats, "treedb.leaf_generation.plan_cache.subtree_pages")), "subtree_pages")
+}
+
 func BenchmarkLeafGenerationPlanLeafRefStats_SavedHome(b *testing.B) {
 	db := openLeafGenerationPlanFixtureDB(b)
 	ctx := context.Background()
