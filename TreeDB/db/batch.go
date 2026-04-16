@@ -233,14 +233,11 @@ func (b *Batch) writeOptimistic(sync bool) (bool, error) {
 	}
 	vlogRefDelta = nil
 	b.db.invalidateLeafGenerationSubtreeStats(tracker.Pages())
-	postErr := b.db.finalizeCommitPostWork(post)
+	b.db.finalizeCommitPostWork(post)
 	if b.db.vacuum.Active() {
 		b.db.vacuum.RecordEntries(entries)
 	}
 	b.db.writeMu.RUnlock()
-	if postErr != nil {
-		return true, postErr
-	}
 	return true, nil
 }
 

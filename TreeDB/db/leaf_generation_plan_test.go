@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"math/big"
 	"os"
 	"sync/atomic"
 	"testing"
@@ -83,6 +84,42 @@ func TestRankLeafGenerationPlanCandidates(t *testing.T) {
 		if got[i] != want[i] {
 			t.Fatalf("ranked generation[%d]=%d, want %d (full=%v)", i, got[i], want[i], got)
 		}
+	}
+}
+
+func TestCompareDeadPerLive_OverflowSafe(t *testing.T) {
+	tests := []struct {
+		name  string
+		aDead int64
+		aLive int64
+		bDead int64
+		bLive int64
+	}{
+		{
+			name:  "a_greater",
+			aDead: 1<<62 - 1,
+			aLive: 1<<62 - 7,
+			bDead: 1<<62 - 9,
+			bLive: 1<<62 - 11,
+		},
+		{
+			name:  "b_greater",
+			aDead: 1<<62 - 25,
+			aLive: 1<<62 - 3,
+			bDead: 1<<62 - 5,
+			bLive: 1<<62 - 33,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			left := new(big.Int).Mul(big.NewInt(tc.aDead), big.NewInt(tc.bLive))
+			right := new(big.Int).Mul(big.NewInt(tc.bDead), big.NewInt(tc.aLive))
+			want := left.Cmp(right)
+			got := compareDeadPerLive(tc.aDead, tc.aLive, tc.bDead, tc.bLive)
+			if got != want {
+				t.Fatalf("compareDeadPerLive(%d,%d,%d,%d)=%d, want %d", tc.aDead, tc.aLive, tc.bDead, tc.bLive, got, want)
+			}
+		})
 	}
 }
 
