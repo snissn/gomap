@@ -149,9 +149,7 @@ func (db *DB) ensureLeafPageLogSegmentRegistered(commitSeq uint64) (bool, error)
 		if err := db.valueLogManager.PromoteCurrentWritable(fileID); err != nil {
 			return false, err
 		}
-		if err := db.noteLeafGenerationPendingFileIDs(fileID, commitSeq); err != nil {
-			return false, err
-		}
+		db.queueLeafGenerationWritableFileIDAtCommit(fileID, commitSeq)
 		return true, nil
 	}
 	if err := db.valueLogManager.RegisterSegment(path, fileID); err != nil {
@@ -165,9 +163,7 @@ func (db *DB) ensureLeafPageLogSegmentRegistered(commitSeq uint64) (bool, error)
 	if err := db.valueLogManager.PromoteCurrentWritable(fileID); err != nil {
 		return false, err
 	}
-	if err := db.noteLeafGenerationPendingFileIDs(fileID, commitSeq); err != nil {
-		return false, err
-	}
+	db.queueLeafGenerationWritableFileIDAtCommit(fileID, commitSeq)
 	return true, nil
 }
 

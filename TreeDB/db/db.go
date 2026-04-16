@@ -55,19 +55,20 @@ type snapshotView struct {
 }
 
 type DB struct {
-	valueLogManager              *valuelog.Manager
-	snapshotViewRO               atomic.Pointer[snapshotView]
-	snapshotAcquireRO            [snapshotAcquireShardCount]atomic.Int32
-	valueLogRefTracker           *valueLogRefTracker
-	leafPageLog                  LeafPageLog
-	leafGenerationManifest       *leafGenerationManifest
-	leafGenerationPendingMu      sync.Mutex
-	leafGenerationPendingFileIDs []uint32
-	leafGenerationPendingSet     map[uint32]struct{}
-	lock                         *lockfile.Lock
-	adaptive                     *adaptive.Controller
-	pruner                       pruneWorker
-	leafGenerationPins           leafGenerationPinTracker
+	valueLogManager                *valuelog.Manager
+	snapshotViewRO                 atomic.Pointer[snapshotView]
+	snapshotAcquireRO              [snapshotAcquireShardCount]atomic.Int32
+	valueLogRefTracker             *valueLogRefTracker
+	leafPageLog                    LeafPageLog
+	leafGenerationManifest         *leafGenerationManifest
+	leafGenerationPendingMu        sync.Mutex
+	leafGenerationPendingFileIDs   []uint32
+	leafGenerationPendingSet       map[uint32]struct{}
+	leafGenerationPendingCommitSeq map[uint32]uint64
+	lock                           *lockfile.Lock
+	adaptive                       *adaptive.Controller
+	pruner                         pruneWorker
+	leafGenerationPins             leafGenerationPinTracker
 
 	// idx is the current index generation (pager + MVCC lifecycle state).
 	idx atomic.Pointer[indexGen]
@@ -1567,6 +1568,7 @@ type finalizeCommitPost struct {
 	persistLeafGenerationManifest     bool
 	persistLeafGenerationManifestView *leafGenerationManifest
 	persistLeafGenerationRawFileIDs   []uint32
+	drainLeafGenerationPending        bool
 }
 
 // finalizeCommitLocked performs the durability-critical publish path.
@@ -1646,6 +1648,7 @@ func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired [
 			return post, err
 		}
 		leafPageSegmentRegistered = registered
+		post.drainLeafGenerationPending = registered
 	}
 
 	if db.testFailFinalizeCommit.Load() {
@@ -1726,6 +1729,9 @@ func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired [
 	db.publishSnapshotView(idx, newState, db.valueLogManager)
 	post.commitSeq = nextMeta.CommitSeq
 	post.vlogRefDelta = vlogRefDelta
+	if db.indexOuterLeavesInValueLog && db.leafPageLog != nil {
+		post.drainLeafGenerationPending = true
+	}
 	db.mu.Unlock()
 	watermarkHold += time.Since(holdStart)
 	db.observePublishWatermark(watermarkWait, watermarkHold, watermarkWait+watermarkHold)
@@ -1775,18 +1781,27 @@ func (db *DB) finalizeCommitPostWork(post finalizeCommitPost) {
 	if post.oldState != nil {
 		_ = db.valueLogManager.Release(post.oldState.ValueLogSet)
 	}
-	if post.persistLeafGenerationManifest {
-		var persistErr error
+	if post.persistLeafGenerationManifest || post.drainLeafGenerationPending {
+		var (
+			persistErr error
+			pendingErr error
+		)
 		db.commitMu.Lock()
 		currentCommitSeq := db.meta.CommitSeq
 		currentManifest := db.leafGenerationManifest
-		shouldPersist := currentCommitSeq == post.commitSeq && currentManifest == post.persistLeafGenerationManifestView
-		if shouldPersist {
+		shouldRun := currentCommitSeq == post.commitSeq
+		if shouldRun && post.persistLeafGenerationManifest && currentManifest == post.persistLeafGenerationManifestView {
 			persistErr = db.persistLeafGenerationManifestAndRecordLengthIndexes(post.persistLeafGenerationManifestView, post.persistLeafGenerationRawFileIDs)
+		}
+		if shouldRun && post.drainLeafGenerationPending {
+			pendingErr = db.noteLeafGenerationPendingFileIDs(0, post.commitSeq)
 		}
 		db.commitMu.Unlock()
 		if persistErr != nil {
 			db.reportError(persistErr)
+		}
+		if pendingErr != nil {
+			db.reportError(pendingErr)
 		}
 	}
 

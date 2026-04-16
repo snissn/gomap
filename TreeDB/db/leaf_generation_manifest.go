@@ -210,6 +210,11 @@ func validateLeafGenerationManifest(m *leafGenerationManifest) error {
 	return nil
 }
 
+type leafGenerationPendingFile struct {
+	rawFileID uint32
+	commitSeq uint64
+}
+
 func rawLeafGenerationFileID(fileID uint32) (uint32, bool) {
 	rawFileID := page.ValueLogSegmentID(fileID)
 	if rawFileID == 0 {
@@ -219,6 +224,10 @@ func rawLeafGenerationFileID(fileID uint32) (uint32, bool) {
 }
 
 func (db *DB) queueLeafGenerationWritableFileID(fileID uint32) {
+	db.queueLeafGenerationWritableFileIDAtCommit(fileID, 0)
+}
+
+func (db *DB) queueLeafGenerationWritableFileIDAtCommit(fileID uint32, commitSeq uint64) {
 	if db == nil || db.leafGenerationManifest == nil {
 		return
 	}
@@ -230,14 +239,22 @@ func (db *DB) queueLeafGenerationWritableFileID(fileID uint32) {
 	if db.leafGenerationPendingSet == nil {
 		db.leafGenerationPendingSet = make(map[uint32]struct{})
 	}
+	if db.leafGenerationPendingCommitSeq == nil {
+		db.leafGenerationPendingCommitSeq = make(map[uint32]uint64)
+	}
 	if _, exists := db.leafGenerationPendingSet[rawFileID]; !exists {
 		db.leafGenerationPendingSet[rawFileID] = struct{}{}
 		db.leafGenerationPendingFileIDs = append(db.leafGenerationPendingFileIDs, rawFileID)
 	}
+	if commitSeq > 0 {
+		if existing := db.leafGenerationPendingCommitSeq[rawFileID]; existing == 0 || commitSeq < existing {
+			db.leafGenerationPendingCommitSeq[rawFileID] = commitSeq
+		}
+	}
 	db.leafGenerationPendingMu.Unlock()
 }
 
-func (db *DB) snapshotLeafGenerationPendingFileIDs(currentFileID uint32) []uint32 {
+func (db *DB) snapshotLeafGenerationPendingFileIDs(currentFileID uint32) []leafGenerationPendingFile {
 	if db == nil || db.leafGenerationManifest == nil {
 		return nil
 	}
@@ -247,11 +264,16 @@ func (db *DB) snapshotLeafGenerationPendingFileIDs(currentFileID uint32) []uint3
 	if len(db.leafGenerationPendingFileIDs) == 0 && currentRawFileID == 0 {
 		return nil
 	}
-	out := make([]uint32, 0, len(db.leafGenerationPendingFileIDs)+1)
-	out = append(out, db.leafGenerationPendingFileIDs...)
+	out := make([]leafGenerationPendingFile, 0, len(db.leafGenerationPendingFileIDs)+1)
+	for _, rawFileID := range db.leafGenerationPendingFileIDs {
+		out = append(out, leafGenerationPendingFile{
+			rawFileID: rawFileID,
+			commitSeq: db.leafGenerationPendingCommitSeq[rawFileID],
+		})
+	}
 	if currentRawFileID != 0 {
 		if _, exists := db.leafGenerationPendingSet[currentRawFileID]; !exists {
-			out = append(out, currentRawFileID)
+			out = append(out, leafGenerationPendingFile{rawFileID: currentRawFileID})
 		}
 	}
 	return out
@@ -273,6 +295,7 @@ func (db *DB) clearLeafGenerationPendingFileIDs(fileIDs []uint32) {
 		}
 		remove[fileID] = struct{}{}
 		delete(db.leafGenerationPendingSet, fileID)
+		delete(db.leafGenerationPendingCommitSeq, fileID)
 	}
 	dst := db.leafGenerationPendingFileIDs[:0]
 	for _, fileID := range db.leafGenerationPendingFileIDs {
@@ -288,14 +311,47 @@ func (db *DB) clearLeafGenerationPendingFileIDs(fileIDs []uint32) {
 }
 
 func (db *DB) noteLeafGenerationPendingFileIDs(currentFileID uint32, commitSeq uint64) error {
-	fileIDs := db.snapshotLeafGenerationPendingFileIDs(currentFileID)
-	if len(fileIDs) == 0 {
+	pending := db.snapshotLeafGenerationPendingFileIDs(currentFileID)
+	if len(pending) == 0 {
 		return nil
 	}
-	if err := db.noteLeafGenerationWritableFileIDs(fileIDs, commitSeq); err != nil {
+	processed := make([]uint32, 0, len(pending))
+	batch := make([]uint32, 0, len(pending))
+	batchCommitSeq := uint64(0)
+	flushBatch := func() error {
+		if len(batch) == 0 {
+			return nil
+		}
+		if err := db.noteLeafGenerationWritableFileIDs(batch, batchCommitSeq); err != nil {
+			return err
+		}
+		processed = append(processed, batch...)
+		batch = batch[:0]
+		batchCommitSeq = 0
+		return nil
+	}
+	for _, item := range pending {
+		itemCommitSeq := item.commitSeq
+		if itemCommitSeq == 0 {
+			itemCommitSeq = commitSeq
+		}
+		if itemCommitSeq == 0 {
+			continue
+		}
+		if batchCommitSeq != 0 && itemCommitSeq != batchCommitSeq {
+			if err := flushBatch(); err != nil {
+				return err
+			}
+		}
+		if batchCommitSeq == 0 {
+			batchCommitSeq = itemCommitSeq
+		}
+		batch = append(batch, item.rawFileID)
+	}
+	if err := flushBatch(); err != nil {
 		return err
 	}
-	db.clearLeafGenerationPendingFileIDs(fileIDs)
+	db.clearLeafGenerationPendingFileIDs(processed)
 	return nil
 }
 
@@ -341,6 +397,9 @@ func (db *DB) noteLeafGenerationWritableFileIDs(fileIDs []uint32, commitSeq uint
 		return nil
 	}
 	if err := saveLeafGenerationManifest(LeafLogDirPath(db.dir), db.leafGenerationManifest); err != nil {
+		return err
+	}
+	if err := db.publishLeafGenerationState(false); err != nil {
 		return err
 	}
 	for rawFileID := range sealedFileIDs {
