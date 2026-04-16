@@ -1707,7 +1707,40 @@ func openLeafPackMaintenanceTestDB(t *testing.T, backend *leafPackMaintenanceRec
 	db.lastForegroundWriteUnixNano.Store(time.Now().Add(-2 * vlogGenerationMaintenanceQuietWindow).UnixNano())
 	db.lastForegroundReadUnixNano.Store(time.Now().Add(-2 * vlogForegroundReadQuietWindow).UnixNano())
 	forceVlogMaintenanceIdle(db)
-	return db, func() { _ = db.Close() }
+	return db, func() {
+		if err := db.Close(); err != nil {
+			t.Fatalf("close cachingdb: %v", err)
+		}
+	}
+}
+
+func openLeafPackMaintenanceSchedulerOnlyTestDB(t *testing.T, backend *leafPackMaintenanceRecordingBackend) (*DB, func()) {
+	t.Helper()
+	db, err := Open(t.TempDir(), backend, Options{
+		AllowUnsafe:                      true,
+		DisableWAL:                       true,
+		JournalLanes:                     4,
+		IndexOuterLeavesInValueLog:       true,
+		ValueLogGenerationPolicy:         uint8(backenddb.ValueLogGenerationHotWarmCold),
+		ValueLogRewriteTriggerTotalBytes: 1,
+		ValueLogRewriteBudgetBytesPerSec: 1024,
+		ForceValueLogPointers:            true,
+	})
+	if err != nil {
+		t.Fatalf("open cachingdb: %v", err)
+	}
+	db.testSkipVlogCheckpointKick = true
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
+	db.lastForegroundWriteUnixNano.Store(time.Now().Add(-2 * vlogGenerationMaintenanceQuietWindow).UnixNano())
+	db.lastForegroundReadUnixNano.Store(time.Now().Add(-2 * vlogForegroundReadQuietWindow).UnixNano())
+	forceVlogMaintenanceIdle(db)
+	return db, func() {
+		if err := db.Close(); err != nil {
+			t.Fatalf("close cachingdb: %v", err)
+		}
+	}
 }
 
 func leafPackWindowExhaustingStats(genID uint64, expectedReclaimBytes int64, copiedBytes int64) backenddb.LeafGenerationPackRunOnceStats {
@@ -2364,7 +2397,7 @@ func TestVlogGenerationMaintenance_LeafPackCloseCanceledIsNotAnError(t *testing.
 	prepareDirectSchedulerTest(t)
 	t.Setenv(envEnableLeafGenerationPackMaintenance, "1")
 	recorder := &leafPackMaintenanceRecordingBackend{DB: mustOpenLeafPackBackend(t), entered: make(chan struct{}, 1), blockUntilCtxDone: true}
-	db, cleanup := openLeafPackMaintenanceTestDB(t, recorder)
+	db, cleanup := openLeafPackMaintenanceSchedulerOnlyTestDB(t, recorder)
 	closed := false
 	defer func() {
 		if !closed {
