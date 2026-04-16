@@ -1896,14 +1896,15 @@ const (
 	envDisableVlogGenerationCheckpointKick = "TREEDB_DISABLE_VLOG_GENERATION_CHECKPOINT_KICK"
 	// Experimental immutable-leaf maintenance hook. Disabled by default until
 	// the cached scheduler policy and dwell behavior are validated.
-	envEnableLeafGenerationPackMaintenance                  = "TREEDB_ENABLE_LEAF_GENERATION_PACK_MAINTENANCE"
-	envLeafGenerationPackMaintenanceMaxBytesToCopy          = "TREEDB_LEAF_GENERATION_PACK_MAINTENANCE_MAX_BYTES_TO_COPY"
-	envLeafGenerationPackMaintenanceMaxGenerations          = "TREEDB_LEAF_GENERATION_PACK_MAINTENANCE_MAX_GENERATIONS"
-	envLeafGenerationPackMaintenanceMinPublishedAgeSeq      = "TREEDB_LEAF_GENERATION_PACK_MAINTENANCE_MIN_PUBLISHED_AGE_COMMITS"
-	envLeafGenerationPackMaintenanceMinCandidateGenerations = "TREEDB_LEAF_GENERATION_PACK_MAINTENANCE_MIN_CANDIDATE_GENERATIONS"
-	envLeafGenerationPackMaintenanceTimeoutSeconds          = "TREEDB_LEAF_GENERATION_PACK_MAINTENANCE_TIMEOUT_SECONDS"
-	envLeafGenerationPackMaintenanceWriteBurstGraceMillis   = "TREEDB_LEAF_GENERATION_PACK_MAINTENANCE_WRITE_BURST_GRACE_MS"
-	envLeafGenerationPackMaintenanceMaxForegroundQueue      = "TREEDB_LEAF_GENERATION_PACK_MAINTENANCE_MAX_FOREGROUND_QUEUE"
+	envEnableLeafGenerationPackMaintenance                     = "TREEDB_ENABLE_LEAF_GENERATION_PACK_MAINTENANCE"
+	envLeafGenerationPackMaintenanceMaxBytesToCopy             = "TREEDB_LEAF_GENERATION_PACK_MAINTENANCE_MAX_BYTES_TO_COPY"
+	envLeafGenerationPackMaintenanceMaxGenerations             = "TREEDB_LEAF_GENERATION_PACK_MAINTENANCE_MAX_GENERATIONS"
+	envLeafGenerationPackMaintenanceMinPublishedAgeSeq         = "TREEDB_LEAF_GENERATION_PACK_MAINTENANCE_MIN_PUBLISHED_AGE_COMMITS"
+	envLeafGenerationPackMaintenanceMinCandidateGenerations    = "TREEDB_LEAF_GENERATION_PACK_MAINTENANCE_MIN_CANDIDATE_GENERATIONS"
+	envLeafGenerationPackMaintenanceTimeoutSeconds             = "TREEDB_LEAF_GENERATION_PACK_MAINTENANCE_TIMEOUT_SECONDS"
+	envLeafGenerationPackMaintenanceWriteBurstGraceMillis      = "TREEDB_LEAF_GENERATION_PACK_MAINTENANCE_WRITE_BURST_GRACE_MS"
+	envLeafGenerationPackMaintenanceMaxForegroundQueue         = "TREEDB_LEAF_GENERATION_PACK_MAINTENANCE_MAX_FOREGROUND_QUEUE"
+	envLeafGenerationPackMaintenanceMinReclaimPerByteCopiedPPM = "TREEDB_LEAF_GENERATION_PACK_MAINTENANCE_MIN_RECLAIM_PER_BYTE_COPIED_PPM"
 	// Optional rewrite debt-drain caps for controlled online experiments.
 	envVlogGenerationRewriteResumeMaxSegments         = "TREEDB_VLOG_GENERATION_REWRITE_RESUME_MAX_SEGMENTS"
 	envVlogGenerationRewriteDebtDrainMaxSegments      = "TREEDB_VLOG_GENERATION_REWRITE_DEBT_DRAIN_MAX_SEGMENTS"
@@ -1930,6 +1931,7 @@ const (
 	leafGenerationPackMaintenanceDefaultMaxGenerations          = 8
 	leafGenerationPackMaintenanceDefaultMinPublishedAgeSeq      = 1
 	leafGenerationPackMaintenanceDefaultMinCandidateGenerations = 2
+	leafGenerationPackMaintenanceDefaultMinReclaimPerByteCopied = 10000
 	leafGenerationPackMaintenanceDefaultTimeout                 = 30 * time.Second
 	leafGenerationPackMaintenanceDefaultWriteBurstGrace         = 250 * time.Millisecond
 	leafGenerationPackMaintenanceDefaultMaxForegroundQueue      = 2
@@ -22764,6 +22766,12 @@ func (db *DB) maybeRunLeafGenerationPackMaintenance(runGC bool, quiet bool, admi
 	}
 	minPublishedAgeCommits := envUint64(envLeafGenerationPackMaintenanceMinPublishedAgeSeq, leafGenerationPackMaintenanceDefaultMinPublishedAgeSeq)
 	minCandidateGenerations := loadPositiveIntEnvDefault(envLeafGenerationPackMaintenanceMinCandidateGenerations, leafGenerationPackMaintenanceDefaultMinCandidateGenerations)
+	minReclaimPerByteCopiedPPM := leafGenerationPackMaintenanceDefaultMinReclaimPerByteCopied
+	if raw := strings.TrimSpace(os.Getenv(envLeafGenerationPackMaintenanceMinReclaimPerByteCopiedPPM)); raw != "" {
+		if v, err := strconv.Atoi(raw); err == nil && v >= 0 {
+			minReclaimPerByteCopiedPPM = v
+		}
+	}
 	timeout := leafGenerationPackMaintenanceTimeout()
 
 	db.vlogGenerationLeafPackAttempts.Add(1)
@@ -22798,11 +22806,12 @@ func (db *DB) maybeRunLeafGenerationPackMaintenance(runGC bool, quiet bool, admi
 		remainingBytesToCopy := maxBytesToCopy
 		for remainingGenerations > 0 && remainingBytesToCopy > 0 {
 			stats, runErr := runner.LeafGenerationPackRunOnce(ctx, backenddb.LeafGenerationPackFromPlanOptions{
-				Sync:                    false,
-				MinPublishedAgeCommits:  minPublishedAgeCommits,
-				MinCandidateGenerations: minCandidateGenerations,
-				MaxGenerations:          remainingGenerations,
-				MaxBytesToCopy:          remainingBytesToCopy,
+				Sync:                       false,
+				MinPublishedAgeCommits:     minPublishedAgeCommits,
+				MinCandidateGenerations:    minCandidateGenerations,
+				MinReclaimPerByteCopiedPPM: minReclaimPerByteCopiedPPM,
+				MaxGenerations:             remainingGenerations,
+				MaxBytesToCopy:             remainingBytesToCopy,
 			})
 			if runErr != nil {
 				return runErr

@@ -463,11 +463,21 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 			}
 		}
 	}
-	if err := db.noteCreatedLeafGenerationFileIDs(snap.state.CommitSeq+1, createdIDs); err != nil {
-		return 0, 0, err
+	var leafManifest *leafGenerationManifest
+	var leafManifestRawFileIDs []uint32
+	if db.leafGenerationManifest != nil {
+		stagedManifest := db.leafGenerationManifest.clone()
+		rawFileIDs, changed, err := noteCreatedLeafGenerationFileIDsInManifest(stagedManifest, snap.state.CommitSeq+1, createdIDs)
+		if err != nil {
+			return 0, 0, err
+		}
+		if changed {
+			leafManifest = stagedManifest
+			leafManifestRawFileIDs = rawFileIDs
+		}
 	}
 
-	if err := db.finalizeCommit(newRoot, newSysRoot, leafCtx.retired, sync, adaptive.Metrics{}, createdIDs, false, nil); err != nil {
+	if err := db.finalizeCommit(newRoot, newSysRoot, leafCtx.retired, sync, adaptive.Metrics{}, createdIDs, false, nil, leafManifest, leafManifestRawFileIDs); err != nil {
 		return 0, 0, err
 	}
 	db.invalidateLeafGenerationSubtreeStats(tracker.Pages())
