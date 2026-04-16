@@ -445,9 +445,6 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 	var sourceGenerationIDs map[uint64]struct{}
 	if snap.state.LeafGenerations != nil && sourceChunks == nil {
 		for rawFileID, generationID := range snap.state.LeafGenerations.FileToGeneration {
-			if sourceGenerationIDs == nil {
-				sourceGenerationIDs = make(map[uint64]struct{})
-			}
 			valueFileID := page.ValueLogFileID(rawFileID)
 			if hasSingleSourceID {
 				if valueFileID != singleSourceID {
@@ -457,6 +454,9 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 				if _, ok := sourceIDs[valueFileID]; !ok {
 					continue
 				}
+			}
+			if sourceGenerationIDs == nil {
+				sourceGenerationIDs = make(map[uint64]struct{})
 			}
 			sourceGenerationIDs[generationID] = struct{}{}
 		}
