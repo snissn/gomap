@@ -300,6 +300,23 @@ func (f *File) sealedLazyMmapTargetSize() int64 {
 	return targetSize
 }
 
+func (f *File) retirePersistentMmapToDead() {
+	if f == nil {
+		return
+	}
+	f.remapMu.Lock()
+	defer f.remapMu.Unlock()
+
+	data, _ := f.mmapData.Load().([]byte)
+	if len(data) == 0 {
+		return
+	}
+	f.deadMappings = append(f.deadMappings, data)
+	f.deadMappingsCount.Add(1)
+	f.deadMappedBytes.Add(uint64(len(data)))
+	f.mmapData.Store([]byte(nil))
+}
+
 func (f *File) maybeScheduleRemap() {
 	if f == nil || f.closed.Load() || !f.usesPersistentMmap() {
 		return
@@ -318,6 +335,9 @@ func (f *File) maybeScheduleRemap() {
 	}
 	go func() {
 		defer f.remapRequested.Store(false)
+		if !f.usesPersistentMmap() {
+			return
+		}
 		f.remapToFileSize()
 	}()
 }

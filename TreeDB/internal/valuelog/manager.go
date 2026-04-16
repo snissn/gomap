@@ -1259,6 +1259,7 @@ func (m *Manager) PromoteCurrentWritable(fileID uint32) error {
 	if prevID, ok := m.currentWritableByLane[lane]; ok && prevID != 0 && prevID != fileID {
 		if prev := m.files[prevID]; prev != nil {
 			prev.currentWritable.Store(false)
+			prev.retirePersistentMmapToDead()
 		}
 	}
 	f.currentWritable.Store(true)
