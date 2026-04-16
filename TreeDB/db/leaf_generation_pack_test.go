@@ -448,6 +448,65 @@ func TestLeafGenerationPack_MovesSparseSealedGeneration(t *testing.T) {
 	}
 }
 
+func TestLeafGenerationPack_PrunesCachedSubtreesOutsideSelection(t *testing.T) {
+	db, leafLog, dir := openLeafGenerationPackTestDB(t)
+
+	writeLeafGenerationKeys(t, db, "a", 3072, 'a')
+	writeLeafGenerationKeys(t, db, "m", 1024, 'm')
+	_, fileID1 := currentLeafSegmentOrFatal(t, leafLog)
+	rawFileID1 := page.ValueLogSegmentID(fileID1)
+	if err := leafLog.rotateLeaf(); err != nil {
+		t.Fatalf("rotateLeaf after generation 1: %v", err)
+	}
+	writeLeafGenerationKeys(t, db, "z", 4096, 'z')
+	if err := leafLog.rotateLeaf(); err != nil {
+		t.Fatalf("rotateLeaf after generation 2: %v", err)
+	}
+	writeLeafGenerationKeys(t, db, "a", 3072, 'b')
+
+	manifest := loadLeafGenerationManifestOrFatal(t, dir)
+	gen1 := findLeafGenerationByFileID(t, manifest, rawFileID1)
+
+	plan, err := db.LeafGenerationPlan(context.Background(), LeafGenerationPlanOptions{})
+	if err != nil {
+		t.Fatalf("LeafGenerationPlan before pack: %v", err)
+	}
+	entry := findLeafGenerationPlanEntry(t, plan, gen1.GenerationID)
+	if !entry.Eligible {
+		t.Fatalf("generation %d should remain pack-eligible: %+v", gen1.GenerationID, entry)
+	}
+	if entry.WholeGenerationGCEligible {
+		t.Fatalf("generation %d unexpectedly became whole-generation GC eligible: %+v", gen1.GenerationID, entry)
+	}
+
+	stats, err := db.LeafGenerationPack(context.Background(), LeafGenerationPackOptions{
+		GenerationIDs: []uint64{gen1.GenerationID},
+		Sync:          true,
+	})
+	if err != nil {
+		t.Fatalf("LeafGenerationPack: %v", err)
+	}
+	if got := stats.LeafPagesCopied; got <= 0 {
+		t.Fatalf("LeafPagesCopied=%d, want > 0", got)
+	}
+	if got := stats.InternalPagesVisited; got == 0 {
+		t.Fatalf("InternalPagesVisited=%d, want > 0", got)
+	}
+	if got := stats.SubtreesPruned; got == 0 {
+		t.Fatalf("SubtreesPruned=%d, want > 0", got)
+	}
+
+	for i := 0; i < 3072; i++ {
+		expectLeafGenerationValue(t, db, leafGenerationKey("a", i), 'b')
+	}
+	for i := 0; i < 1024; i++ {
+		expectLeafGenerationValue(t, db, leafGenerationKey("m", i), 'm')
+	}
+	for i := 0; i < 4096; i += 257 {
+		expectLeafGenerationValue(t, db, leafGenerationKey("z", i), 'z')
+	}
+}
+
 func TestLeafGenerationPack_RejectsDenseGenerationByDefault(t *testing.T) {
 	db, leafLog, dir := openLeafGenerationPackTestDB(t)
 

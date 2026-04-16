@@ -58,6 +58,7 @@ func (db *DB) LeafGenerationGC(ctx context.Context, opts LeafGenerationGCOptions
 	if manifest == nil {
 		return stats, nil
 	}
+	filePaths := db.leafGenerationFilePaths(manifest)
 
 	snap := db.AcquireSnapshot()
 	if snap == nil {
@@ -83,7 +84,6 @@ func (db *DB) LeafGenerationGC(ctx context.Context, opts LeafGenerationGCOptions
 		return stats, err
 	}
 	snap = nil
-	filePaths := db.leafGenerationFilePaths(manifest)
 	intermediateChanged := false
 	zombieFileIDs := make(map[uint32]struct{})
 	for i := range manifest.Generations {
@@ -107,7 +107,7 @@ func (db *DB) LeafGenerationGC(ctx context.Context, opts LeafGenerationGCOptions
 		}
 		if _, ok := liveGenerations[gen.GenerationID]; ok {
 			stats.GenerationsLive++
-			if !opts.DryRun && gen.State != leafGenerationStateSealed {
+			if gen.State != leafGenerationStateSealed {
 				gen.State = leafGenerationStateSealed
 				intermediateChanged = true
 			}
@@ -115,7 +115,7 @@ func (db *DB) LeafGenerationGC(ctx context.Context, opts LeafGenerationGCOptions
 		}
 		if db.leafGenerationPins.count(gen.GenerationID) > 0 {
 			stats.GenerationsRetiring++
-			if !opts.DryRun && gen.State != leafGenerationStateRetiring {
+			if gen.State != leafGenerationStateRetiring {
 				gen.State = leafGenerationStateRetiring
 				if currentCommitSeq > gen.RetiredCommitSeq {
 					gen.RetiredCommitSeq = currentCommitSeq
@@ -228,11 +228,11 @@ func (db *DB) leafGenerationFilePaths(manifest *leafGenerationManifest) map[uint
 	return paths
 }
 
-func leafGenerationFallbackPath(rootDir string, rawSegmentID uint32) string {
-	if rootDir == "" || rawSegmentID == 0 {
+func leafGenerationFallbackPath(rootDir string, fileID uint32) string {
+	if rootDir == "" || fileID == 0 {
 		return ""
 	}
-	lane, seq := valuelog.DecodeSegmentID(rawSegmentID)
+	lane, seq := valuelog.DecodeFileID(fileID)
 	return filepath.Join(LeafLogDirPath(rootDir), fmt.Sprintf("value-l%d-%06d.log", lane, seq))
 }
 
@@ -271,7 +271,7 @@ func pruneDeletedLeafGenerationRecords(manifest *leafGenerationManifest, filePat
 			continue
 		}
 		pruned = true
-		filesDeleted += countDistinctLeafGenerationFileIDs(gen.FileIDs)
+		filesDeleted += len(gen.FileIDs)
 	}
 	if !pruned {
 		return manifest, false, 0
@@ -280,28 +280,11 @@ func pruneDeletedLeafGenerationRecords(manifest *leafGenerationManifest, filePat
 	return manifest, true, filesDeleted
 }
 
-func countDistinctLeafGenerationFileIDs(fileIDs []uint32) int {
-	if len(fileIDs) == 0 {
-		return 0
-	}
-	seen := make(map[uint32]struct{}, len(fileIDs))
-	for _, fileID := range fileIDs {
-		if fileID == 0 {
-			continue
-		}
-		seen[fileID] = struct{}{}
-	}
-	return len(seen)
-}
-
 func leafGenerationFilesMissing(fileIDs []uint32, filePaths map[uint32]string) bool {
 	if len(fileIDs) == 0 {
 		return true
 	}
 	for _, fileID := range fileIDs {
-		if fileID == 0 {
-			continue
-		}
 		path := filePaths[fileID]
 		if path == "" {
 			return false
@@ -367,6 +350,12 @@ func (db *DB) publishLeafGenerationState(refreshValueLogSet bool) error {
 		SystemRootPageID: oldState.SystemRootPageID,
 		ValueLogSet:      valueLogSet,
 		LeafGenerations:  db.currentLeafGenerationView(),
+	}
+	if newState.LeafGenerations != nil {
+		db.leafGenerationStateVersion++
+		newState.LeafGenerationStateVersion = db.leafGenerationStateVersion
+	} else {
+		newState.LeafGenerationStateVersion = oldState.LeafGenerationStateVersion
 	}
 	db.state.Store(newState)
 	db.publishSnapshotView(db.idx.Load(), newState, db.valueLogManager)
