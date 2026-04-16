@@ -537,6 +537,95 @@ func TestManagerPromoteCurrentWritable_KeepsLeafCurrentMmapWhenSealedBudgetAllow
 	}
 }
 
+func TestManagerPromoteCurrentWritable_RetiresDemotedLeafWhenSealedBudgetAlreadyFull(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("mmap not supported on windows")
+	}
+	var files []*File
+	prevCurrent := enableCurrentWritableMmap
+	prevLeaf := enableCurrentLeafWritableMmap
+	enableCurrentWritableMmap = false
+	enableCurrentLeafWritableMmap = true
+	withMappedLeafSealedBudget(t, 1)
+	withMappedLeafSealedBytesBudget(t, 1<<20)
+	t.Cleanup(func() {
+		waitForRemapIdle(t, files...)
+		enableCurrentWritableMmap = prevCurrent
+		enableCurrentLeafWritableMmap = prevLeaf
+	})
+
+	dir := t.TempDir()
+	id1, ptr1 := writeTestSegmentWithPtr(t, dir, ReservedLeafLogLaneID, 1, 1, bytes.Repeat([]byte("a"), 64))
+	id2, ptr2 := writeTestSegmentWithPtr(t, dir, ReservedLeafLogLaneID, 2, 2, bytes.Repeat([]byte("b"), 64))
+	id3, _ := writeTestSegmentWithPtr(t, dir, ReservedLeafLogLaneID, 3, 3, bytes.Repeat([]byte("c"), 64))
+
+	mgr, err := NewManager(dir)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	defer func() { _ = mgr.Close() }()
+
+	path1 := filepath.Join(dir, "value-l255-000001.log")
+	path2 := filepath.Join(dir, "value-l255-000002.log")
+	path3 := filepath.Join(dir, "value-l255-000003.log")
+	if err := mgr.RegisterSegment(path1, id1); err != nil {
+		t.Fatalf("RegisterSegment(path1): %v", err)
+	}
+	if err := mgr.RegisterSegment(path2, id2); err != nil {
+		t.Fatalf("RegisterSegment(path2): %v", err)
+	}
+	if err := mgr.RegisterSegment(path3, id3); err != nil {
+		t.Fatalf("RegisterSegment(path3): %v", err)
+	}
+
+	if err := mgr.PromoteCurrentWritable(id1); err != nil {
+		t.Fatalf("PromoteCurrentWritable(id1): %v", err)
+	}
+	if _, err := mgr.ReadUnsafe(ptr1); err != nil {
+		t.Fatalf("ReadUnsafe(ptr1 current): %v", err)
+	}
+	if err := mgr.PromoteCurrentWritable(id2); err != nil {
+		t.Fatalf("PromoteCurrentWritable(id2): %v", err)
+	}
+	if _, err := mgr.ReadUnsafe(ptr2); err != nil {
+		t.Fatalf("ReadUnsafe(ptr2 current): %v", err)
+	}
+
+	f1 := mgr.files[id1]
+	f2 := mgr.files[id2]
+	f3 := mgr.files[id3]
+	files = []*File{f1, f2, f3}
+	if data, _ := f1.mmapData.Load().([]byte); len(data) == 0 {
+		t.Fatalf("expected first sealed leaf segment to remain mapped while within budget")
+	}
+	if data, _ := f2.mmapData.Load().([]byte); len(data) == 0 {
+		t.Fatalf("expected second current leaf segment to be mapped before demotion")
+	}
+
+	if err := mgr.PromoteCurrentWritable(id3); err != nil {
+		t.Fatalf("PromoteCurrentWritable(id3): %v", err)
+	}
+	if f2.currentWritable.Load() {
+		t.Fatalf("expected second segment to be sealed after promotion")
+	}
+	if data, _ := f2.mmapData.Load().([]byte); len(data) != 0 {
+		t.Fatalf("expected demoted second segment to retire active mmap once sealed budget is full, len=%d", len(data))
+	}
+	if dead := f2.deadMappingsCount.Load(); dead == 0 {
+		t.Fatalf("expected demoted second segment to move prior current mmap into deadMappings")
+	}
+	currentSegs, _, sealedSegs, _, deadMappings, _ := mgr.MmapResidencyStats()
+	if currentSegs != 0 {
+		t.Fatalf("expected new current segment to remain unmapped before any read, currentSegs=%d", currentSegs)
+	}
+	if sealedSegs != 1 {
+		t.Fatalf("expected sealed mmap count to stay capped at one, sealedSegs=%d", sealedSegs)
+	}
+	if deadMappings == 0 {
+		t.Fatalf("expected deadMappings to record the retired second segment")
+	}
+}
+
 func TestFileRemapToFileSizePersistentOnly_SkipsDemotedLeafSegment(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("mmap not supported on windows")

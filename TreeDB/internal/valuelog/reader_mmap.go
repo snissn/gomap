@@ -306,7 +306,13 @@ func (f *File) retirePersistentMmapToDead() {
 	}
 	f.remapMu.Lock()
 	defer f.remapMu.Unlock()
+	f.retirePersistentMmapToDeadLocked()
+}
 
+func (f *File) retirePersistentMmapToDeadLocked() {
+	if f == nil {
+		return
+	}
 	data, _ := f.mmapData.Load().([]byte)
 	if len(data) == 0 {
 		return
