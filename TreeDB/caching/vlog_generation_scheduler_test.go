@@ -1747,7 +1747,7 @@ func openLeafPackMaintenanceTestDB(t *testing.T, backend *leafPackMaintenanceRec
 	}
 }
 
-func openLeafPackMaintenanceSchedulerOnlyTestDB(t *testing.T, backend *leafPackMaintenanceRecordingBackend) (*DB, func()) {
+func openLeafPackMaintenanceSchedulerOnlyTestDBWithClose(t *testing.T, backend *leafPackMaintenanceRecordingBackend) (*DB, func(), func()) {
 	t.Helper()
 	dir := mustLeafPackTempDir(t, "treedb-leaf-pack-cache-")
 	db, err := Open(dir, backend, Options{
@@ -1770,12 +1770,24 @@ func openLeafPackMaintenanceSchedulerOnlyTestDB(t *testing.T, backend *leafPackM
 	db.lastForegroundWriteUnixNano.Store(time.Now().Add(-2 * vlogGenerationMaintenanceQuietWindow).UnixNano())
 	db.lastForegroundReadUnixNano.Store(time.Now().Add(-2 * vlogForegroundReadQuietWindow).UnixNano())
 	forceVlogMaintenanceIdle(db)
-	return db, func() {
-		if err := db.Close(); err != nil {
-			t.Fatalf("close cachingdb: %v", err)
-		}
+	var closeOnce sync.Once
+	closeDB := func() {
+		closeOnce.Do(func() {
+			if err := db.Close(); err != nil {
+				t.Fatalf("close cachingdb: %v", err)
+			}
+		})
+	}
+	return db, closeDB, func() {
+		closeDB()
 		removeLeafPackTempDir(t, dir)
 	}
+}
+
+func openLeafPackMaintenanceSchedulerOnlyTestDB(t *testing.T, backend *leafPackMaintenanceRecordingBackend) (*DB, func()) {
+	t.Helper()
+	db, _, cleanup := openLeafPackMaintenanceSchedulerOnlyTestDBWithClose(t, backend)
+	return db, cleanup
 }
 
 func leafPackWindowExhaustingStats(genID uint64, expectedReclaimBytes int64, copiedBytes int64) backenddb.LeafGenerationPackRunOnceStats {
@@ -2526,10 +2538,10 @@ func TestVlogGenerationMaintenance_LeafPackCloseCanceledIsNotAnError(t *testing.
 	prepareDirectSchedulerTest(t)
 	t.Setenv(envEnableLeafGenerationPackMaintenance, "1")
 	recorder := &leafPackMaintenanceRecordingBackend{DB: mustOpenLeafPackBackend(t), entered: make(chan struct{}, 1), blockUntilCtxDone: true}
-	db, cleanup := openLeafPackMaintenanceTestDB(t, recorder)
-	closed := false
+	db, closeDB, cleanup := openLeafPackMaintenanceSchedulerOnlyTestDBWithClose(t, recorder)
+	cleaned := false
 	defer func() {
-		if !closed {
+		if !cleaned {
 			cleanup()
 		}
 	}()
@@ -2544,13 +2556,14 @@ func TestVlogGenerationMaintenance_LeafPackCloseCanceledIsNotAnError(t *testing.
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for leaf pack backend entry")
 	}
-	cleanup()
-	closed = true
+	closeDB()
 	select {
 	case <-done:
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for maintenance cancellation")
 	}
+	cleanup()
+	cleaned = true
 
 	if got := db.vlogGenerationLeafPackCanceled.Load(); got != 1 {
 		t.Fatalf("leaf pack canceled=%d want 1", got)
