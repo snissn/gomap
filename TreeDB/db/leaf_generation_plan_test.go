@@ -689,6 +689,34 @@ func TestLeafGenerationPlan_ReusesCachedSubtreesAcrossRootChanges(t *testing.T) 
 	}
 }
 
+func TestLeafGenerationPlan_InvalidatesLiveStatsCacheWhenLeafGenerationViewChanges(t *testing.T) {
+	db, _ := openLeafGenerationGCTestDB(t)
+	writeLeafGenerationKeys(t, db, "k", 64, 'a')
+
+	counter := withLeafGenerationLiveScanCounter(t)
+	if _, err := db.LeafGenerationPlan(context.Background(), LeafGenerationPlanOptions{}); err != nil {
+		t.Fatalf("LeafGenerationPlan first: %v", err)
+	}
+	if got := counter.Load(); got != 1 {
+		t.Fatalf("live scan count after first plan=%d, want 1", got)
+	}
+	if _, err := db.LeafGenerationPlan(context.Background(), LeafGenerationPlanOptions{}); err != nil {
+		t.Fatalf("LeafGenerationPlan second: %v", err)
+	}
+	if got := counter.Load(); got != 1 {
+		t.Fatalf("live scan count after cached plan=%d, want 1", got)
+	}
+	if err := db.publishLeafGenerationState(false); err != nil {
+		t.Fatalf("publishLeafGenerationState: %v", err)
+	}
+	if _, err := db.LeafGenerationPlan(context.Background(), LeafGenerationPlanOptions{}); err != nil {
+		t.Fatalf("LeafGenerationPlan after leaf-generation view publish: %v", err)
+	}
+	if got := counter.Load(); got != 2 {
+		t.Fatalf("live scan count after leaf-generation view publish=%d, want 2", got)
+	}
+}
+
 func TestLeafGenerationPlan_DoesNotLeaveExtraSnapshotPins(t *testing.T) {
 	db, leafLog := openLeafGenerationGCTestDB(t)
 
