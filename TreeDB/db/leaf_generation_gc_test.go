@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -266,5 +267,70 @@ func TestLeafGenerationGC_RetiresPinnedGenerationUntilSnapshotCloses(t *testing.
 	}
 	if _, err := os.Stat(path1); !os.IsNotExist(err) {
 		t.Fatalf("expected retired segment removed, stat err=%v", err)
+	}
+}
+
+func TestLeafGenerationGC_DryRunDoesNotPersistRetiringState(t *testing.T) {
+	db, leafLog := openLeafGenerationGCTestDB(t)
+
+	writeLeafGenerationKeys(t, db, "k", 64, 'a')
+	_, fileID1 := currentLeafSegmentOrFatal(t, leafLog)
+	rawFileID1 := page.ValueLogSegmentID(fileID1)
+	manifestBefore := loadLeafGenerationManifestOrFatal(t, db.dir)
+	gen1 := findLeafGenerationByFileID(t, manifestBefore, rawFileID1)
+
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("expected snapshot")
+	}
+	defer closeNoErr(t, snap)
+
+	if err := leafLog.rotateLeaf(); err != nil {
+		t.Fatalf("rotateLeaf: %v", err)
+	}
+	writeLeafGenerationKeys(t, db, "k", 64, 'b')
+
+	stats, err := db.LeafGenerationGC(context.Background(), LeafGenerationGCOptions{DryRun: true})
+	if err != nil {
+		t.Fatalf("LeafGenerationGC dry-run: %v", err)
+	}
+	if got, want := stats.GenerationsRetiring, 1; got != want {
+		t.Fatalf("GenerationsRetiring=%d, want %d", got, want)
+	}
+	manifestAfter := loadLeafGenerationManifestOrFatal(t, db.dir)
+	genAfter := findLeafGenerationByFileID(t, manifestAfter, rawFileID1)
+	if got, want := genAfter.State, leafGenerationStateSealed; got != want {
+		t.Fatalf("generation state after dry-run=%q, want %q", got, want)
+	}
+	if got, want := genAfter.RetiredCommitSeq, uint64(0); got != want {
+		t.Fatalf("RetiredCommitSeq after dry-run=%d, want %d", got, want)
+	}
+	if got, want := genAfter.GenerationID, gen1.GenerationID; got != want {
+		t.Fatalf("GenerationID after dry-run=%d, want %d", got, want)
+	}
+}
+
+func TestPruneDeletedLeafGenerationRecords_CountsDistinctNonZeroFiles(t *testing.T) {
+	manifest := &leafGenerationManifest{
+		Generations: []leafGenerationRecord{{
+			GenerationID: 7,
+			State:        leafGenerationStateDeleted,
+			FileIDs:      []uint32{0, 11, 11, 12},
+		}},
+	}
+	filePaths := map[uint32]string{
+		11: filepath.Join(t.TempDir(), "missing-11.log"),
+		12: filepath.Join(t.TempDir(), "missing-12.log"),
+	}
+
+	pruned, changed, filesDeleted := pruneDeletedLeafGenerationRecords(manifest, filePaths)
+	if !changed {
+		t.Fatal("expected pruneDeletedLeafGenerationRecords to prune deleted generation")
+	}
+	if got, want := filesDeleted, 2; got != want {
+		t.Fatalf("FilesDeleted=%d, want %d", got, want)
+	}
+	if got, want := len(pruned.Generations), 0; got != want {
+		t.Fatalf("len(Generations)=%d, want %d", got, want)
 	}
 }

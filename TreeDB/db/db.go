@@ -1776,8 +1776,17 @@ func (db *DB) finalizeCommitPostWork(post finalizeCommitPost) {
 		_ = db.valueLogManager.Release(post.oldState.ValueLogSet)
 	}
 	if post.persistLeafGenerationManifest {
-		if err := db.persistLeafGenerationManifestAndRecordLengthIndexes(post.persistLeafGenerationManifestView, post.persistLeafGenerationRawFileIDs); err != nil {
-			db.reportError(err)
+		var persistErr error
+		db.commitMu.Lock()
+		currentCommitSeq := db.meta.CommitSeq
+		currentManifest := db.leafGenerationManifest
+		shouldPersist := currentCommitSeq == post.commitSeq && currentManifest == post.persistLeafGenerationManifestView
+		if shouldPersist {
+			persistErr = db.persistLeafGenerationManifestAndRecordLengthIndexes(post.persistLeafGenerationManifestView, post.persistLeafGenerationRawFileIDs)
+		}
+		db.commitMu.Unlock()
+		if persistErr != nil {
+			db.reportError(persistErr)
 		}
 	}
 
