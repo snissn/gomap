@@ -99,3 +99,29 @@ func TestDB_NoteLeafGenerationRecordLength_ForwardsToBackend(t *testing.T) {
 		t.Fatalf("notified ptr=%+v want %+v", got, ptr)
 	}
 }
+
+func TestDB_NoteLeafGenerationRecordLength_ForwardsOffsetZero(t *testing.T) {
+	stub := &leafRecordLengthNotifierBackendStub{}
+	db := &DB{backend: stub}
+	ptr := page.ValuePtr{FileID: 7, Offset: 0, Length: page.ValuePtrMarkCompressed(123)}
+
+	db.noteLeafGenerationRecordLength(ptr)
+
+	if got, want := len(stub.notified), 1; got != want {
+		t.Fatalf("notified=%d want %d", got, want)
+	}
+	if got := stub.notified[0]; got != ptr {
+		t.Fatalf("notified ptr=%+v want %+v", got, ptr)
+	}
+}
+
+func TestDB_NoteLeafGenerationRecordLength_SkipsZeroLength(t *testing.T) {
+	stub := &leafRecordLengthNotifierBackendStub{}
+	db := &DB{backend: stub}
+
+	db.noteLeafGenerationRecordLength(page.ValuePtr{FileID: 7, Offset: 0, Length: 0})
+
+	if got := len(stub.notified); got != 0 {
+		t.Fatalf("notified=%d want 0", got)
+	}
+}
