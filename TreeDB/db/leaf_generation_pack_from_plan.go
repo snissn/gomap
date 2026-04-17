@@ -47,6 +47,7 @@ func (db *DB) LeafGenerationPackFromPlan(ctx context.Context, opts LeafGeneratio
 		return LeafGenerationPackStats{}, err
 	}
 	selection, err := SelectLeafGenerationPackCandidates(plan, LeafGenerationPackSelectOptions{
+		Force:                      opts.Force,
 		MinExpectedReclaimBytes:    opts.MinExpectedReclaimBytes,
 		MinExpectedReclaimRatioPPM: opts.MinExpectedReclaimRatioPPM,
 		MaxGenerations:             opts.MaxGenerations,

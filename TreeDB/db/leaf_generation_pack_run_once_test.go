@@ -178,3 +178,29 @@ func TestLeafGenerationPackRunOnce_CallsLeafGenerationPlanOnce(t *testing.T) {
 		t.Fatalf("LeafGenerationPlan calls=%d, want %d", got, want)
 	}
 }
+
+func TestLeafGenerationPackFromPlan_ForceBypassesSelectionThresholds(t *testing.T) {
+	db, leafLog, _ := openLeafGenerationPackTestDB(t)
+
+	writeLeafGenerationKeys(t, db, "k", 2048, 'a')
+	if err := leafLog.rotateLeaf(); err != nil {
+		t.Fatalf("rotateLeaf: %v", err)
+	}
+	writeLeafGenerationKeyRange(t, db, "k", 0, 1024, 'b')
+	writeLeafGenerationKeys(t, db, "z", 32, 'z')
+
+	stats, err := db.LeafGenerationPackFromPlan(context.Background(), LeafGenerationPackFromPlanOptions{
+		Force:                      true,
+		MaxGenerations:             1,
+		MinExpectedReclaimBytes:    1 << 50,
+		MinExpectedReclaimRatioPPM: 900000,
+		MinReclaimPerByteCopiedPPM: 900000,
+		Sync:                       true,
+	})
+	if err != nil {
+		t.Fatalf("LeafGenerationPackFromPlan: %v", err)
+	}
+	if got, want := stats.GenerationsMatched, 1; got != want {
+		t.Fatalf("GenerationsMatched=%d, want %d", got, want)
+	}
+}

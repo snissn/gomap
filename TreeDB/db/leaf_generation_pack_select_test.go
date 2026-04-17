@@ -167,3 +167,44 @@ func TestSelectLeafGenerationPackCandidates_PrioritizesOversizeErrorWhenNothingF
 		t.Fatalf("error=%q, want oversize no-fit error", got)
 	}
 }
+
+func TestSelectLeafGenerationPackCandidates_ForceBypassesReclaimThresholds(t *testing.T) {
+	plan := LeafGenerationPlan{
+		Admission: leafGenerationPlanAdmissionEligible,
+		Candidates: []LeafGenerationPlanGeneration{
+			{GenerationID: 17, BytesDead: 5, BytesLive: 95, BytesToCopy: 95},
+		},
+	}
+	selected, err := SelectLeafGenerationPackCandidates(plan, LeafGenerationPackSelectOptions{
+		Force:                      true,
+		MinExpectedReclaimBytes:    100,
+		MinExpectedReclaimRatioPPM: 900000,
+		MinReclaimPerByteCopiedPPM: 900000,
+	})
+	if err != nil {
+		t.Fatalf("SelectLeafGenerationPackCandidates: %v", err)
+	}
+	if got, want := selected.GenerationIDs, []uint64{17}; len(got) != len(want) || got[0] != want[0] {
+		t.Fatalf("GenerationIDs=%v, want %v", got, want)
+	}
+}
+
+func TestSelectLeafGenerationPackCandidates_MaxBytesOnlyUsesGreedySelection(t *testing.T) {
+	plan := LeafGenerationPlan{
+		Admission: leafGenerationPlanAdmissionEligible,
+		Candidates: []LeafGenerationPlanGeneration{
+			{GenerationID: 21, BytesDead: 100, BytesLive: 10, BytesToCopy: 10},
+			{GenerationID: 22, BytesDead: 300, BytesLive: 30, BytesToCopy: 30},
+			{GenerationID: 23, BytesDead: 250, BytesLive: 20, BytesToCopy: 20},
+		},
+	}
+	selected, err := SelectLeafGenerationPackCandidates(plan, LeafGenerationPackSelectOptions{
+		MaxBytesToCopy: 30,
+	})
+	if err != nil {
+		t.Fatalf("SelectLeafGenerationPackCandidates: %v", err)
+	}
+	if got, want := selected.GenerationIDs, []uint64{21, 23}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("GenerationIDs=%v, want %v", got, want)
+	}
+}

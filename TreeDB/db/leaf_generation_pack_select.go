@@ -8,6 +8,7 @@ import (
 // LeafGenerationPackSelectOptions bounds a selected ranked subset of plan
 // candidates.
 type LeafGenerationPackSelectOptions struct {
+	Force                      bool
 	MinExpectedReclaimBytes    int64
 	MinExpectedReclaimRatioPPM int
 	MaxGenerations             int
@@ -46,7 +47,7 @@ func SelectLeafGenerationPackCandidates(plan LeafGenerationPlan, opts LeafGenera
 	if len(plan.Candidates) == 0 {
 		return LeafGenerationPackSelection{}, fmt.Errorf("leaf generation pack selection: plan produced no candidate generations")
 	}
-	if opts.MaxGenerations <= 0 && opts.MaxBytesToCopy <= 0 {
+	if opts.MaxGenerations <= 0 {
 		return selectLeafGenerationPackCandidatesGreedy(plan, opts)
 	}
 	return selectLeafGenerationPackCandidatesBounded(plan, opts)
@@ -64,7 +65,7 @@ func selectLeafGenerationPackCandidatesGreedy(plan LeafGenerationPlan, opts Leaf
 			rejectedOversize = true
 			continue
 		}
-		if opts.MinReclaimPerByteCopiedPPM > 0 {
+		if !opts.Force && opts.MinReclaimPerByteCopiedPPM > 0 {
 			tentativeDead := out.BytesDead + gen.BytesDead
 			tentativeCopy := out.BytesToCopy + gen.BytesToCopy
 			if tentativeCopy > 0 && ratioPPM(tentativeDead, tentativeCopy) < opts.MinReclaimPerByteCopiedPPM {
@@ -149,6 +150,9 @@ func (r *leafGenerationPackSelectionThresholdRejections) merge(other leafGenerat
 
 func leafGenerationPackSelectionThresholdsOK(bytesDead, bytesToCopy int64, opts LeafGenerationPackSelectOptions) (bool, leafGenerationPackSelectionThresholdRejections) {
 	var rejected leafGenerationPackSelectionThresholdRejections
+	if opts.Force {
+		return true, rejected
+	}
 	if opts.MinExpectedReclaimBytes > 0 && bytesDead < opts.MinExpectedReclaimBytes {
 		rejected.minBytes = true
 	}
@@ -162,6 +166,9 @@ func leafGenerationPackSelectionThresholdsOK(bytesDead, bytesToCopy int64, opts 
 }
 
 func leafGenerationPackSelectionThresholdError(opts LeafGenerationPackSelectOptions, rejected leafGenerationPackSelectionThresholdRejections) error {
+	if opts.Force {
+		return nil
+	}
 	switch {
 	case opts.MinExpectedReclaimBytes > 0 && rejected.minBytes:
 		return fmt.Errorf("leaf generation pack selection: no candidate generations satisfy min-expected-reclaim-bytes=%d", opts.MinExpectedReclaimBytes)
