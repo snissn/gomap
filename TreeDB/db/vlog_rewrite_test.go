@@ -4610,3 +4610,41 @@ func TestPrepareRewriteLeafDict_CurrentClassCompactModePreserved(t *testing.T) {
 		t.Fatalf("dict bytes mismatch: got=%x want=%x", gotDict, dictBytes)
 	}
 }
+
+func TestPrepareRewriteLeafDict_CurrentClassMissingModeDefaultsCompact(t *testing.T) {
+	dictID, _, useRawPages, err := prepareRewriteLeafDict(
+		&DB{},
+		&DBState{ValueLogSet: &valuelog.Set{}},
+		func(_ context.Context, class string) (uint64, error) {
+			if class != "outer_leaf" {
+				t.Fatalf("current class=%q want outer_leaf", class)
+			}
+			return 9123, nil
+		},
+		func(_ context.Context, id uint64) (bool, bool, error) {
+			if id != 9123 {
+				t.Fatalf("mode lookup dict id=%d want=9123", id)
+			}
+			return false, false, nil
+		},
+		func(id uint64) ([]byte, error) {
+			if id != 9123 {
+				t.Fatalf("lookup dict id=%d want=9123", id)
+			}
+			return []byte("class-current-dict"), nil
+		},
+		nil,
+		nil,
+		nil,
+		compression.TrainConfig{},
+	)
+	if err != nil {
+		t.Fatalf("prepareRewriteLeafDict: %v", err)
+	}
+	if dictID != 9123 {
+		t.Fatalf("dict id=%d want=9123", dictID)
+	}
+	if useRawPages {
+		t.Fatal("expected class-current dict without mode metadata to default to compact payloads")
+	}
+}

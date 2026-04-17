@@ -701,7 +701,7 @@ func prepareRewriteLeafDict(d *DB, state *DBState, currentForClass func(context.
 		if dictID != 0 && dictLookup != nil {
 			dictBytes, err := dictLookup(dictID)
 			if err == nil && len(dictBytes) > 0 {
-				useRawPages, err := resolveRewriteLeafDictUseRawPages(dictLeafPayloadMode, dictID, true)
+				useRawPages, err := resolveRewriteLeafDictUseRawPages(dictLeafPayloadMode, dictID, false)
 				if err != nil {
 					return 0, nil, false, err
 				}
