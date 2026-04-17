@@ -1271,6 +1271,92 @@ func TestRenderMarkdownSweep_KeepDirIncludesKeptSection(t *testing.T) {
 	}
 }
 
+func TestRenderTreeDBSelectedStatsString_SkipsDBsWithoutSelectedKeys(t *testing.T) {
+	instances := []*DBInstance{
+		{Name: "tree", Wrapper: &fixedNameDB{name: "TreeDB"}},
+		{Name: "other", Wrapper: &fixedNameDB{name: "OtherDB"}},
+	}
+	stats := map[string]map[string]string{
+		"TreeDB": {
+			"treedb.cache.vlog_mmap.read.hits": "7",
+		},
+		"OtherDB": {
+			"unrelated.stat": "1",
+		},
+	}
+
+	got := renderTreeDBSelectedStatsString(instances, stats)
+	if !strings.Contains(got, "TreeDB:\n") {
+		t.Fatalf("expected TreeDB stats, got:\n%s", got)
+	}
+	if strings.Contains(got, "OtherDB:\n") {
+		t.Fatalf("expected OtherDB to be omitted, got:\n%s", got)
+	}
+}
+
+func TestRenderMarkdownSweep_IncludesTreeDBPerfAndStatsSections(t *testing.T) {
+	makeRun := func(keys int, hits uint64, pinned int64) BenchRun {
+		return BenchRun{
+			Config: BenchConfig{
+				Keys:         keys,
+				ValueSize:    16,
+				BatchSize:    10,
+				RangeQueries: 0,
+				RangeSpan:    0,
+			},
+			Instances: []*DBInstance{
+				{Name: "tree", Wrapper: &fixedNameDB{name: "TreeDB"}},
+			},
+			TestOrder: []string{"random_read_parallel"},
+			DisplayNames: map[string]string{
+				"random_read_parallel": "Random Read (Parallel)",
+			},
+			Results: map[string]map[string]float64{
+				"random_read_parallel": {
+					"TreeDB": 1234,
+				},
+			},
+			TreeDBPerf: map[string]map[string]treeDBPerfMetrics{
+				"random_read_parallel": {
+					"TreeDB": {
+						Mmap: treeDBMmapPerfMetrics{
+							Hits:           hits,
+							FallbackReadAt: 1,
+							HitRatio:       0.5,
+						},
+					},
+				},
+			},
+			TreeDBStats: map[string]map[string]string{
+				"TreeDB": {
+					"treedb.cache.vlog_mmap.read.hits":          "7",
+					"treedb.leaf_generation.generations.pinned": formatInt(int(pinned)),
+				},
+			},
+		}
+	}
+
+	md := renderMarkdownSweep([]BenchRun{
+		makeRun(100, 7, 1),
+		makeRun(200, 9, 2),
+	})
+	if !strings.Contains(md, "## TreeDB Perf Instrumentation") {
+		t.Fatalf("expected TreeDB perf section, got:\n%s", md)
+	}
+	if !strings.Contains(md, "keys=100") || !strings.Contains(md, "keys=200") {
+		t.Fatalf("expected keyed perf/stats subsections, got:\n%s", md)
+	}
+	if !strings.Contains(md, "vlog_mmap.read.hits.delta=7") || !strings.Contains(md, "vlog_mmap.read.hits.delta=9") {
+		t.Fatalf("expected sweep perf details, got:\n%s", md)
+	}
+	if !strings.Contains(md, "## TreeDB Selected Stats (End of Run)") {
+		t.Fatalf("expected TreeDB selected stats section, got:\n%s", md)
+	}
+	if !strings.Contains(md, "leaf_generation.generations.pinned: 1") || !strings.Contains(md, "leaf_generation.generations.pinned: 2") {
+		t.Fatalf("expected sweep selected stats details, got:\n%s", md)
+	}
+}
+
 func TestRunFlushDrainSuite_ShortKeys(t *testing.T) {
 	cfg := BenchConfig{
 		Keys:                   1,

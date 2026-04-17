@@ -4768,20 +4768,27 @@ func renderTreeDBSelectedStatsString(instances []*DBInstance, treeStats map[stri
 		if len(stats) == 0 {
 			continue
 		}
-		sb.WriteString(dbName)
-		sb.WriteString(":\n")
+		var dbSB strings.Builder
+		foundSelectedStat := false
 		for _, key := range keys {
 			for _, alt := range key.alts {
 				if value, ok := stats[alt]; ok {
-					sb.WriteString("  ")
-					sb.WriteString(key.label)
-					sb.WriteString(": ")
-					sb.WriteString(value)
-					sb.WriteByte('\n')
+					dbSB.WriteString("  ")
+					dbSB.WriteString(key.label)
+					dbSB.WriteString(": ")
+					dbSB.WriteString(value)
+					dbSB.WriteByte('\n')
+					foundSelectedStat = true
 					break
 				}
 			}
 		}
+		if !foundSelectedStat {
+			continue
+		}
+		sb.WriteString(dbName)
+		sb.WriteString(":\n")
+		sb.WriteString(dbSB.String())
 	}
 	return strings.TrimSpace(sb.String())
 }
@@ -4892,6 +4899,48 @@ func renderMarkdownSweep(runs []BenchRun) string {
 			sb.WriteString("```text\n")
 			sb.WriteString(renderTreeDBVlogRewriteString(run.TreeDBVlogRewrite))
 			sb.WriteString("```\n\n")
+		}
+	}
+
+	anyPerf := false
+	for _, run := range runs {
+		if strings.TrimSpace(renderTreeDBPerfString(run.Instances, run.TestOrder, run.DisplayNames, run.TreeDBPerf)) != "" {
+			anyPerf = true
+			break
+		}
+	}
+	if anyPerf {
+		sb.WriteString("## TreeDB Perf Instrumentation\n\n")
+		for _, run := range runs {
+			perf := strings.TrimSpace(renderTreeDBPerfString(run.Instances, run.TestOrder, run.DisplayNames, run.TreeDBPerf))
+			if perf == "" {
+				continue
+			}
+			sb.WriteString(fmt.Sprintf("keys=%s\n\n", formatInt(run.Config.Keys)))
+			sb.WriteString("```text\n")
+			sb.WriteString(perf)
+			sb.WriteString("\n```\n\n")
+		}
+	}
+
+	anyTreeStats := false
+	for _, run := range runs {
+		if strings.TrimSpace(renderTreeDBSelectedStatsString(run.Instances, run.TreeDBStats)) != "" {
+			anyTreeStats = true
+			break
+		}
+	}
+	if anyTreeStats {
+		sb.WriteString("## TreeDB Selected Stats (End of Run)\n\n")
+		for _, run := range runs {
+			stats := strings.TrimSpace(renderTreeDBSelectedStatsString(run.Instances, run.TreeDBStats))
+			if stats == "" {
+				continue
+			}
+			sb.WriteString(fmt.Sprintf("keys=%s\n\n", formatInt(run.Config.Keys)))
+			sb.WriteString("```text\n")
+			sb.WriteString(stats)
+			sb.WriteString("\n```\n\n")
 		}
 	}
 
