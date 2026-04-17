@@ -1197,8 +1197,8 @@ func TestRenderMarkdownSingle_IncludesTreeDBPerfSections(t *testing.T) {
 						CloseTotalNanos:   12_000,
 						CloseAvgMicros:    3,
 					},
-					LeafGenerationsPinned: 1,
-					LeafPinsTotal:         4,
+					LeafGenerationsPinnedAfter: 1,
+					LeafPinsTotalAfter:         4,
 				},
 			},
 		},
@@ -1350,8 +1350,56 @@ func TestWriteBenchprofArtifacts_WritesJSONAndMarkdown(t *testing.T) {
 	if got := parsed.Runs[0].TreeDBPerf["full_scan"]["TreeDB"].Mmap.Hits; got != 10 {
 		t.Fatalf("unexpected TreeDB perf mmap hits: %v", got)
 	}
-	if got := parsed.Runs[0].TreeDBStats["TreeDB"]["treedb.cache.vlog_mmap.read.hits"]; got != "10" {
-		t.Fatalf("unexpected TreeDB stats value: %v", got)
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("unmarshal raw json: %v", err)
+	}
+	runsValue, ok := raw["runs"].([]any)
+	if !ok || len(runsValue) != 1 {
+		t.Fatalf("expected 1 raw run in json, got %#v", raw["runs"])
+	}
+	runValue, ok := runsValue[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected raw run object, got %#v", runsValue[0])
+	}
+	if _, ok := runValue["treedb_stats"]; ok {
+		t.Fatalf("expected treedb_stats to be omitted from benchprof json, got: %#v", runValue["treedb_stats"])
+	}
+}
+
+func TestComputeTreeDBPerfMetrics_SaturatesCounterRegression(t *testing.T) {
+	metrics := computeTreeDBPerfMetrics(
+		treeDBSelectedStats{
+			mmapHits:           11,
+			mmapMissOutOfRange: 13,
+			mmapMissNoMapping:  17,
+			mmapMissDeadCap:    19,
+			mmapFallbackReadAt: 23,
+			leafGenerationsPin: 5,
+			leafPinsTotal:      7,
+		},
+		treeDBSelectedStats{
+			mmapHits:           3,
+			mmapMissOutOfRange: 2,
+			mmapMissNoMapping:  1,
+			mmapMissDeadCap:    18,
+			mmapFallbackReadAt: 4,
+			leafGenerationsPin: 2,
+			leafPinsTotal:      9,
+		},
+		treeDBSnapshotPerfMetrics{},
+	)
+	if metrics.Mmap.Hits != 0 || metrics.Mmap.MissOutOfRange != 0 || metrics.Mmap.MissNoMapping != 0 || metrics.Mmap.FallbackReadAt != 0 {
+		t.Fatalf("expected saturating mmap deltas, got %+v", metrics.Mmap)
+	}
+	if metrics.Mmap.MissDeadMapCap != 0 {
+		t.Fatalf("expected saturating dead-map delta, got %d", metrics.Mmap.MissDeadMapCap)
+	}
+	if metrics.LeafGenerationsPinnedAfter != 2 {
+		t.Fatalf("expected after-value leaf generations pinned, got %d", metrics.LeafGenerationsPinnedAfter)
+	}
+	if metrics.LeafPinsTotalAfter != 9 {
+		t.Fatalf("expected after-value leaf pins total, got %d", metrics.LeafPinsTotalAfter)
 	}
 }
 
