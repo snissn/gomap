@@ -205,8 +205,7 @@ func BenchmarkLeafGenerationLiveStatsPersistedIndex_SavedHome(b *testing.B) {
 	}
 	b.Cleanup(func() { _ = snap.Close() })
 	if len(snap.leafGenerationIDs) > 0 {
-		db.unpinLeafGenerationIDs(snap.leafGenerationIDs)
-		snap.leafGenerationIDs = snap.leafGenerationIDs[:0]
+		snap.releaseLeafGenerationPins()
 	}
 
 	b.ReportAllocs()
@@ -243,8 +242,7 @@ func BenchmarkLeafGenerationLiveStatsVerifiedPagesPersistedIndex_SavedHome(b *te
 	}
 	b.Cleanup(func() { _ = snap.Close() })
 	if len(snap.leafGenerationIDs) > 0 {
-		db.unpinLeafGenerationIDs(snap.leafGenerationIDs)
-		snap.leafGenerationIDs = snap.leafGenerationIDs[:0]
+		snap.releaseLeafGenerationPins()
 	}
 	if _, err := db.scanLeafGenerationLiveStats(context.Background(), snap); err != nil {
 		b.Fatalf("warm scanLeafGenerationLiveStats: %v", err)
@@ -284,8 +282,7 @@ func BenchmarkLeafGenerationLiveStatsWarmIndexesVerifiedPages_SavedHome(b *testi
 	}
 	b.Cleanup(func() { _ = snap.Close() })
 	if len(snap.leafGenerationIDs) > 0 {
-		db.unpinLeafGenerationIDs(snap.leafGenerationIDs)
-		snap.leafGenerationIDs = snap.leafGenerationIDs[:0]
+		snap.releaseLeafGenerationPins()
 	}
 	if _, err := db.scanLeafGenerationLiveStats(context.Background(), snap); err != nil {
 		b.Fatalf("warm scanLeafGenerationLiveStats: %v", err)
@@ -414,8 +411,7 @@ func BenchmarkLeafGenerationPlanLeafRefStats_SavedHome(b *testing.B) {
 			b.Fatal(ErrClosed)
 		}
 		if len(snap.leafGenerationIDs) > 0 {
-			db.unpinLeafGenerationIDs(snap.leafGenerationIDs)
-			snap.leafGenerationIDs = snap.leafGenerationIDs[:0]
+			snap.releaseLeafGenerationPins()
 		}
 
 		seen := make(map[page.LeafLogPtr]struct{}, 1024)
@@ -461,8 +457,7 @@ func BenchmarkLeafGenerationPlanLeafRefPageStats_SavedHome(b *testing.B) {
 			b.Fatal(ErrClosed)
 		}
 		if len(snap.leafGenerationIDs) > 0 {
-			db.unpinLeafGenerationIDs(snap.leafGenerationIDs)
-			snap.leafGenerationIDs = snap.leafGenerationIDs[:0]
+			snap.releaseLeafGenerationPins()
 		}
 
 		seenPages := make(map[uint64]struct{}, 1024)

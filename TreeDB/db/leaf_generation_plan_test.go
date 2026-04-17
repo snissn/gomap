@@ -347,8 +347,7 @@ func TestLeafGenerationRecordLengthForPlan_LoadsPersistedSidecarWithoutRescan(t 
 	}
 	defer func() { _ = snap.Close() }()
 	if len(snap.leafGenerationIDs) > 0 {
-		db.unpinLeafGenerationIDs(snap.leafGenerationIDs)
-		snap.leafGenerationIDs = snap.leafGenerationIDs[:0]
+		snap.releaseLeafGenerationPins()
 	}
 	view := snap.state.LeafGenerations
 	if view == nil {
@@ -424,8 +423,7 @@ func TestLeafGenerationRecordLengthForPlan_UsesWritableIndex(t *testing.T) {
 	}
 	defer func() { _ = snap.Close() }()
 	if len(snap.leafGenerationIDs) > 0 {
-		db.unpinLeafGenerationIDs(snap.leafGenerationIDs)
-		snap.leafGenerationIDs = snap.leafGenerationIDs[:0]
+		snap.releaseLeafGenerationPins()
 	}
 	view := snap.state.LeafGenerations
 	if view == nil {
@@ -504,8 +502,7 @@ func TestLeafGenerationLiveStats_MarksPagerPagesVerified(t *testing.T) {
 	}
 	defer func() { _ = snap.Close() }()
 	if len(snap.leafGenerationIDs) > 0 {
-		db.unpinLeafGenerationIDs(snap.leafGenerationIDs)
-		snap.leafGenerationIDs = snap.leafGenerationIDs[:0]
+		snap.releaseLeafGenerationPins()
 	}
 	if snap.idx == nil || snap.idx.pager == nil {
 		t.Fatal("expected pager")
@@ -561,8 +558,7 @@ func TestLeafGenerationRecordLengthForPlan_UsesSealedIndex(t *testing.T) {
 	}
 	defer func() { _ = snap.Close() }()
 	if len(snap.leafGenerationIDs) > 0 {
-		db.unpinLeafGenerationIDs(snap.leafGenerationIDs)
-		snap.leafGenerationIDs = snap.leafGenerationIDs[:0]
+		snap.releaseLeafGenerationPins()
 	}
 	view := snap.state.LeafGenerations
 	if view == nil {
@@ -645,8 +641,7 @@ func TestLeafGenerationPlan_CachesLiveStatsPerPublishedState(t *testing.T) {
 		t.Fatal("expected snapshot")
 	}
 	if len(snap.leafGenerationIDs) > 0 {
-		db.unpinLeafGenerationIDs(snap.leafGenerationIDs)
-		snap.leafGenerationIDs = snap.leafGenerationIDs[:0]
+		snap.releaseLeafGenerationPins()
 	}
 	if _, err := collectLiveLeafGenerationIDs(context.Background(), snap); err != nil {
 		_ = snap.Close()

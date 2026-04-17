@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/page"
 	templ "github.com/snissn/gomap/TreeDB/template"
@@ -28,6 +29,66 @@ func withMappedSealedBytesBudget(t *testing.T, maxMappedBytes int64) {
 	MaxMappedSealedBytes = maxMappedBytes
 	t.Cleanup(func() {
 		MaxMappedSealedBytes = prev
+	})
+}
+
+func withMappedLeafSealedBudget(t *testing.T, maxMapped int) {
+	t.Helper()
+	prev := MaxMappedLeafSealedSegments
+	MaxMappedLeafSealedSegments = maxMapped
+	t.Cleanup(func() {
+		MaxMappedLeafSealedSegments = prev
+	})
+}
+
+func withMappedLeafSealedBytesBudget(t *testing.T, maxMappedBytes int64) {
+	t.Helper()
+	prev := MaxMappedLeafSealedBytes
+	MaxMappedLeafSealedBytes = maxMappedBytes
+	t.Cleanup(func() {
+		MaxMappedLeafSealedBytes = prev
+	})
+}
+
+func waitForRemapIdle(t *testing.T, files ...*File) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		allIdle := true
+		for _, f := range files {
+			if f == nil {
+				continue
+			}
+			if f.remapRequested.Load() {
+				allIdle = false
+				break
+			}
+			if !f.remapMu.TryLock() {
+				allIdle = false
+				break
+			}
+			f.remapMu.Unlock()
+			if f.remapRequested.Load() {
+				allIdle = false
+				break
+			}
+		}
+		if allIdle {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for remap goroutine to drain")
+		}
+		runtime.Gosched()
+	}
+}
+
+func withMaxDeadMappings(t *testing.T, max int) {
+	t.Helper()
+	prev := MaxDeadMappings
+	MaxDeadMappings = max
+	t.Cleanup(func() {
+		MaxDeadMappings = prev
 	})
 }
 
@@ -246,6 +307,524 @@ func TestManagerReadUnsafe_CurrentWritableFallsBackWithoutPersistentMmap(t *test
 	hits, _, _, _, fallbacks := mgr.MmapReadStats()
 	if hits != 0 || fallbacks == 0 {
 		t.Fatalf("expected mmap miss + fallback, hits=%d fallbacks=%d", hits, fallbacks)
+	}
+}
+
+func TestManagerReadUnsafe_CurrentWritableLeafUsesPersistentMmapByDefault(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("mmap not supported on windows")
+	}
+	var file *File
+	prevCurrent := enableCurrentWritableMmap
+	prevLeaf := enableCurrentLeafWritableMmap
+	enableCurrentWritableMmap = false
+	enableCurrentLeafWritableMmap = true
+	t.Cleanup(func() {
+		waitForRemapIdle(t, file)
+		enableCurrentWritableMmap = prevCurrent
+		enableCurrentLeafWritableMmap = prevLeaf
+	})
+
+	dir := t.TempDir()
+	fileID := mustEncodeFileID(t, ReservedLeafLogLaneID, 1)
+	path := segmentPathForID(dir, fileID)
+
+	w, err := NewWriter(path, fileID)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	defer func() { _ = w.Close() }()
+
+	want := bytes.Repeat([]byte("leaf"), 1024)
+	ptr, err := w.Append(0, nil, 1, want)
+	if err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	if err := w.Flush(); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+
+	mgr, err := NewManager(dir)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	defer func() { _ = mgr.Close() }()
+
+	if err := mgr.RegisterSegment(path, fileID); err != nil {
+		t.Fatalf("RegisterSegment: %v", err)
+	}
+	if err := mgr.PromoteCurrentWritable(fileID); err != nil {
+		t.Fatalf("PromoteCurrentWritable: %v", err)
+	}
+
+	got, err := mgr.ReadUnsafe(ptr)
+	if err != nil {
+		t.Fatalf("ReadUnsafe: %v", err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("ReadUnsafe mismatch")
+	}
+
+	f := mgr.files[fileID]
+	file = f
+	data, _ := f.mmapData.Load().([]byte)
+	if len(data) == 0 {
+		t.Fatalf("expected current leaf segment to install persistent mmap")
+	}
+	if remaps := f.remapCount.Load(); remaps == 0 {
+		t.Fatalf("expected current leaf segment remapCount > 0")
+	}
+	currentSegs, currentBytes, sealedSegs, sealedBytes, deadMappings, deadBytes := mgr.MmapResidencyStats()
+	if currentSegs != 1 || currentBytes == 0 {
+		t.Fatalf("expected one mapped current leaf segment, currentSegs=%d currentBytes=%d", currentSegs, currentBytes)
+	}
+	if sealedSegs != 0 || sealedBytes != 0 || deadMappings != 0 || deadBytes != 0 {
+		t.Fatalf("unexpected non-current residency sealedSegs=%d sealedBytes=%d deadMappings=%d deadBytes=%d", sealedSegs, sealedBytes, deadMappings, deadBytes)
+	}
+	hits, _, _, _, fallbacks := mgr.MmapReadStats()
+	if hits == 0 || fallbacks != 0 {
+		t.Fatalf("expected mmap hit without fallback, hits=%d fallbacks=%d", hits, fallbacks)
+	}
+}
+
+func TestManagerPromoteCurrentWritable_RetiresLeafCurrentMmapBeforeSealedFallback(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("mmap not supported on windows")
+	}
+	var files []*File
+	prevCurrent := enableCurrentWritableMmap
+	prevLeaf := enableCurrentLeafWritableMmap
+	enableCurrentWritableMmap = false
+	enableCurrentLeafWritableMmap = true
+	withMappedLeafSealedBudget(t, 0)
+	t.Cleanup(func() {
+		waitForRemapIdle(t, files...)
+		enableCurrentWritableMmap = prevCurrent
+		enableCurrentLeafWritableMmap = prevLeaf
+	})
+
+	dir := t.TempDir()
+	id1, ptr1 := writeTestSegmentWithPtr(t, dir, ReservedLeafLogLaneID, 1, 1, bytes.Repeat([]byte("a"), 64))
+	id2, _ := writeTestSegmentWithPtr(t, dir, ReservedLeafLogLaneID, 2, 2, bytes.Repeat([]byte("b"), 64))
+
+	mgr, err := NewManager(dir)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	defer func() { _ = mgr.Close() }()
+
+	path1 := segmentPathForID(dir, id1)
+	path2 := segmentPathForID(dir, id2)
+	if err := mgr.RegisterSegment(path1, id1); err != nil {
+		t.Fatalf("RegisterSegment(path1): %v", err)
+	}
+	if err := mgr.RegisterSegment(path2, id2); err != nil {
+		t.Fatalf("RegisterSegment(path2): %v", err)
+	}
+	if err := mgr.PromoteCurrentWritable(id1); err != nil {
+		t.Fatalf("PromoteCurrentWritable(id1): %v", err)
+	}
+	got, err := mgr.ReadUnsafe(ptr1)
+	if err != nil {
+		t.Fatalf("ReadUnsafe(ptr1 current): %v", err)
+	}
+	if !bytes.Equal(got, bytes.Repeat([]byte("a"), 64)) {
+		t.Fatalf("ReadUnsafe(ptr1 current) mismatch")
+	}
+
+	f1 := mgr.files[id1]
+	files = []*File{f1, mgr.files[id2]}
+	if data, _ := f1.mmapData.Load().([]byte); len(data) == 0 {
+		t.Fatalf("expected current leaf segment to hold active mmap before promotion")
+	}
+
+	if err := mgr.PromoteCurrentWritable(id2); err != nil {
+		t.Fatalf("PromoteCurrentWritable(id2): %v", err)
+	}
+	if f1.currentWritable.Load() {
+		t.Fatalf("expected prior leaf segment to be sealed after promotion")
+	}
+	if data, _ := f1.mmapData.Load().([]byte); len(data) != 0 {
+		t.Fatalf("expected prior current leaf mmap to be retired after promotion, len=%d", len(data))
+	}
+	if dead := f1.deadMappingsCount.Load(); dead == 0 {
+		t.Fatalf("expected retired current leaf mapping to move into deadMappings")
+	}
+
+	got, err = mgr.ReadUnsafe(ptr1)
+	if err != nil {
+		t.Fatalf("ReadUnsafe(ptr1 sealed): %v", err)
+	}
+	if !bytes.Equal(got, bytes.Repeat([]byte("a"), 64)) {
+		t.Fatalf("ReadUnsafe(ptr1 sealed) mismatch")
+	}
+	if data, _ := f1.mmapData.Load().([]byte); len(data) != 0 {
+		t.Fatalf("expected sealed leaf read to respect zero sealed-map budget after promotion")
+	}
+	if got := f1.mmapReadFallbackReadAt.Load(); got == 0 {
+		t.Fatalf("expected sealed leaf read to fall back to ReadAt under zero sealed-map budget")
+	}
+}
+
+func TestManagerPromoteCurrentWritable_KeepsLeafCurrentMmapWhenSealedBudgetAllows(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("mmap not supported on windows")
+	}
+	var files []*File
+	prevCurrent := enableCurrentWritableMmap
+	prevLeaf := enableCurrentLeafWritableMmap
+	enableCurrentWritableMmap = false
+	enableCurrentLeafWritableMmap = true
+	withMappedLeafSealedBudget(t, 1)
+	withMappedLeafSealedBytesBudget(t, 1<<20)
+	t.Cleanup(func() {
+		waitForRemapIdle(t, files...)
+		enableCurrentWritableMmap = prevCurrent
+		enableCurrentLeafWritableMmap = prevLeaf
+	})
+
+	dir := t.TempDir()
+	id1, ptr1 := writeTestSegmentWithPtr(t, dir, ReservedLeafLogLaneID, 1, 1, bytes.Repeat([]byte("a"), 64))
+	id2, _ := writeTestSegmentWithPtr(t, dir, ReservedLeafLogLaneID, 2, 2, bytes.Repeat([]byte("b"), 64))
+
+	mgr, err := NewManager(dir)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	defer func() { _ = mgr.Close() }()
+
+	path1 := segmentPathForID(dir, id1)
+	path2 := segmentPathForID(dir, id2)
+	if err := mgr.RegisterSegment(path1, id1); err != nil {
+		t.Fatalf("RegisterSegment(path1): %v", err)
+	}
+	if err := mgr.RegisterSegment(path2, id2); err != nil {
+		t.Fatalf("RegisterSegment(path2): %v", err)
+	}
+	if err := mgr.PromoteCurrentWritable(id1); err != nil {
+		t.Fatalf("PromoteCurrentWritable(id1): %v", err)
+	}
+	got, err := mgr.ReadUnsafe(ptr1)
+	if err != nil {
+		t.Fatalf("ReadUnsafe(ptr1 current): %v", err)
+	}
+	if !bytes.Equal(got, bytes.Repeat([]byte("a"), 64)) {
+		t.Fatalf("ReadUnsafe(ptr1 current) mismatch")
+	}
+
+	f1 := mgr.files[id1]
+	f2 := mgr.files[id2]
+	files = []*File{f1, f2}
+	beforeRemaps := f1.remapCount.Load()
+	if data, _ := f1.mmapData.Load().([]byte); len(data) == 0 {
+		t.Fatalf("expected current leaf segment to hold active mmap before promotion")
+	}
+
+	if err := mgr.PromoteCurrentWritable(id2); err != nil {
+		t.Fatalf("PromoteCurrentWritable(id2): %v", err)
+	}
+	if f1.currentWritable.Load() {
+		t.Fatalf("expected prior leaf segment to be sealed after promotion")
+	}
+	if data, _ := f1.mmapData.Load().([]byte); len(data) == 0 {
+		t.Fatalf("expected prior current leaf mmap to remain active when sealed budget allows")
+	}
+	if dead := f1.deadMappingsCount.Load(); dead != 0 {
+		t.Fatalf("expected no dead mappings when sealed budget allows, got=%d", dead)
+	}
+
+	got, err = mgr.ReadUnsafe(ptr1)
+	if err != nil {
+		t.Fatalf("ReadUnsafe(ptr1 sealed): %v", err)
+	}
+	if !bytes.Equal(got, bytes.Repeat([]byte("a"), 64)) {
+		t.Fatalf("ReadUnsafe(ptr1 sealed) mismatch")
+	}
+	if got := f1.mmapReadFallbackReadAt.Load(); got != 0 {
+		t.Fatalf("expected sealed leaf read to stay on mmap path, fallbacks=%d", got)
+	}
+	if remaps := f1.remapCount.Load(); remaps != beforeRemaps {
+		t.Fatalf("expected no extra remap for recently sealed leaf segment, before=%d after=%d", beforeRemaps, remaps)
+	}
+	currentSegs, currentBytes, sealedSegs, sealedBytes, deadMappings, deadBytes := mgr.MmapResidencyStats()
+	if currentSegs != 0 || currentBytes != 0 {
+		t.Fatalf("expected no mapped current segment before reading the new current file, currentSegs=%d currentBytes=%d", currentSegs, currentBytes)
+	}
+	if sealedSegs != 1 || sealedBytes == 0 {
+		t.Fatalf("expected one mapped sealed segment after promotion, sealedSegs=%d sealedBytes=%d", sealedSegs, sealedBytes)
+	}
+	if deadMappings != 0 || deadBytes != 0 {
+		t.Fatalf("expected no dead mapping duplication, deadMappings=%d deadBytes=%d", deadMappings, deadBytes)
+	}
+}
+
+func TestManagerPromoteCurrentWritable_ExcludesNextCurrentFromSealedBudget(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("mmap not supported on windows")
+	}
+	var files []*File
+	prevCurrent := enableCurrentWritableMmap
+	prevLeaf := enableCurrentLeafWritableMmap
+	enableCurrentWritableMmap = false
+	enableCurrentLeafWritableMmap = true
+	withMappedLeafSealedBudget(t, 1)
+	withMappedLeafSealedBytesBudget(t, 1<<20)
+	t.Cleanup(func() {
+		waitForRemapIdle(t, files...)
+		enableCurrentWritableMmap = prevCurrent
+		enableCurrentLeafWritableMmap = prevLeaf
+	})
+
+	dir := t.TempDir()
+	id1, ptr1 := writeTestSegmentWithPtr(t, dir, ReservedLeafLogLaneID, 1, 1, bytes.Repeat([]byte("a"), 64))
+	id2, ptr2 := writeTestSegmentWithPtr(t, dir, ReservedLeafLogLaneID, 2, 2, bytes.Repeat([]byte("b"), 64))
+
+	mgr, err := NewManager(dir)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	defer func() { _ = mgr.Close() }()
+
+	if err := mgr.RegisterSegment(segmentPathForID(dir, id1), id1); err != nil {
+		t.Fatalf("RegisterSegment(id1): %v", err)
+	}
+	if err := mgr.RegisterSegment(segmentPathForID(dir, id2), id2); err != nil {
+		t.Fatalf("RegisterSegment(id2): %v", err)
+	}
+
+	if err := mgr.PromoteCurrentWritable(id1); err != nil {
+		t.Fatalf("PromoteCurrentWritable(id1 first): %v", err)
+	}
+	if _, err := mgr.ReadUnsafe(ptr1); err != nil {
+		t.Fatalf("ReadUnsafe(ptr1): %v", err)
+	}
+	if err := mgr.PromoteCurrentWritable(id2); err != nil {
+		t.Fatalf("PromoteCurrentWritable(id2): %v", err)
+	}
+	if _, err := mgr.ReadUnsafe(ptr2); err != nil {
+		t.Fatalf("ReadUnsafe(ptr2): %v", err)
+	}
+
+	f1 := mgr.files[id1]
+	f2 := mgr.files[id2]
+	files = []*File{f1, f2}
+
+	if err := mgr.PromoteCurrentWritable(id1); err != nil {
+		t.Fatalf("PromoteCurrentWritable(id1 second): %v", err)
+	}
+	if !f1.currentWritable.Load() {
+		t.Fatalf("expected id1 to become current again")
+	}
+	if f2.currentWritable.Load() {
+		t.Fatalf("expected id2 to be sealed after re-promotion")
+	}
+	if data, _ := f2.mmapData.Load().([]byte); len(data) == 0 {
+		t.Fatalf("expected demoted id2 mapping to stay active when the next current file is excluded from sealed budgeting")
+	}
+	if dead := f2.deadMappingsCount.Load(); dead != 0 {
+		t.Fatalf("expected no dead mapping duplication when re-promoting a mapped leaf segment, got=%d", dead)
+	}
+}
+
+func TestManagerPromoteCurrentWritable_RetiresDemotedLeafWhenSealedBudgetAlreadyFull(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("mmap not supported on windows")
+	}
+	var files []*File
+	prevCurrent := enableCurrentWritableMmap
+	prevLeaf := enableCurrentLeafWritableMmap
+	enableCurrentWritableMmap = false
+	enableCurrentLeafWritableMmap = true
+	withMappedLeafSealedBudget(t, 1)
+	withMappedLeafSealedBytesBudget(t, 1<<20)
+	t.Cleanup(func() {
+		waitForRemapIdle(t, files...)
+		enableCurrentWritableMmap = prevCurrent
+		enableCurrentLeafWritableMmap = prevLeaf
+	})
+
+	dir := t.TempDir()
+	id1, ptr1 := writeTestSegmentWithPtr(t, dir, ReservedLeafLogLaneID, 1, 1, bytes.Repeat([]byte("a"), 64))
+	id2, ptr2 := writeTestSegmentWithPtr(t, dir, ReservedLeafLogLaneID, 2, 2, bytes.Repeat([]byte("b"), 64))
+	id3, _ := writeTestSegmentWithPtr(t, dir, ReservedLeafLogLaneID, 3, 3, bytes.Repeat([]byte("c"), 64))
+
+	mgr, err := NewManager(dir)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	defer func() { _ = mgr.Close() }()
+
+	path1 := segmentPathForID(dir, id1)
+	path2 := segmentPathForID(dir, id2)
+	path3 := segmentPathForID(dir, id3)
+	if err := mgr.RegisterSegment(path1, id1); err != nil {
+		t.Fatalf("RegisterSegment(path1): %v", err)
+	}
+	if err := mgr.RegisterSegment(path2, id2); err != nil {
+		t.Fatalf("RegisterSegment(path2): %v", err)
+	}
+	if err := mgr.RegisterSegment(path3, id3); err != nil {
+		t.Fatalf("RegisterSegment(path3): %v", err)
+	}
+
+	if err := mgr.PromoteCurrentWritable(id1); err != nil {
+		t.Fatalf("PromoteCurrentWritable(id1): %v", err)
+	}
+	if _, err := mgr.ReadUnsafe(ptr1); err != nil {
+		t.Fatalf("ReadUnsafe(ptr1 current): %v", err)
+	}
+	if err := mgr.PromoteCurrentWritable(id2); err != nil {
+		t.Fatalf("PromoteCurrentWritable(id2): %v", err)
+	}
+	if _, err := mgr.ReadUnsafe(ptr2); err != nil {
+		t.Fatalf("ReadUnsafe(ptr2 current): %v", err)
+	}
+
+	f1 := mgr.files[id1]
+	f2 := mgr.files[id2]
+	f3 := mgr.files[id3]
+	files = []*File{f1, f2, f3}
+	if data, _ := f1.mmapData.Load().([]byte); len(data) == 0 {
+		t.Fatalf("expected first sealed leaf segment to remain mapped while within budget")
+	}
+	if data, _ := f2.mmapData.Load().([]byte); len(data) == 0 {
+		t.Fatalf("expected second current leaf segment to be mapped before demotion")
+	}
+
+	if err := mgr.PromoteCurrentWritable(id3); err != nil {
+		t.Fatalf("PromoteCurrentWritable(id3): %v", err)
+	}
+	if f2.currentWritable.Load() {
+		t.Fatalf("expected second segment to be sealed after promotion")
+	}
+	if data, _ := f2.mmapData.Load().([]byte); len(data) != 0 {
+		t.Fatalf("expected demoted second segment to retire active mmap once sealed budget is full, len=%d", len(data))
+	}
+	if dead := f2.deadMappingsCount.Load(); dead == 0 {
+		t.Fatalf("expected demoted second segment to move prior current mmap into deadMappings")
+	}
+	currentSegs, _, sealedSegs, _, deadMappings, _ := mgr.MmapResidencyStats()
+	if currentSegs != 0 {
+		t.Fatalf("expected new current segment to remain unmapped before any read, currentSegs=%d", currentSegs)
+	}
+	if sealedSegs != 1 {
+		t.Fatalf("expected sealed mmap count to stay capped at one, sealedSegs=%d", sealedSegs)
+	}
+	if deadMappings == 0 {
+		t.Fatalf("expected deadMappings to record the retired second segment")
+	}
+}
+
+func TestManagerPromoteCurrentWritable_DeadMappingCapKeepsDemotedLeafMapped(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("mmap not supported on windows")
+	}
+	var files []*File
+	prevCurrent := enableCurrentWritableMmap
+	prevLeaf := enableCurrentLeafWritableMmap
+	enableCurrentWritableMmap = false
+	enableCurrentLeafWritableMmap = true
+	withMappedLeafSealedBudget(t, 1)
+	withMappedLeafSealedBytesBudget(t, 1<<20)
+	withMaxDeadMappings(t, 1)
+	t.Cleanup(func() {
+		waitForRemapIdle(t, files...)
+		enableCurrentWritableMmap = prevCurrent
+		enableCurrentLeafWritableMmap = prevLeaf
+	})
+
+	dir := t.TempDir()
+	id1, ptr1 := writeTestSegmentWithPtr(t, dir, ReservedLeafLogLaneID, 1, 1, bytes.Repeat([]byte("a"), 64))
+	id2, ptr2 := writeTestSegmentWithPtr(t, dir, ReservedLeafLogLaneID, 2, 2, bytes.Repeat([]byte("b"), 64))
+	id3, _ := writeTestSegmentWithPtr(t, dir, ReservedLeafLogLaneID, 3, 3, bytes.Repeat([]byte("c"), 64))
+
+	mgr, err := NewManager(dir)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	defer func() { _ = mgr.Close() }()
+
+	for _, id := range []uint32{id1, id2, id3} {
+		if err := mgr.RegisterSegment(segmentPathForID(dir, id), id); err != nil {
+			t.Fatalf("RegisterSegment(%d): %v", id, err)
+		}
+	}
+
+	if err := mgr.PromoteCurrentWritable(id1); err != nil {
+		t.Fatalf("PromoteCurrentWritable(id1): %v", err)
+	}
+	if _, err := mgr.ReadUnsafe(ptr1); err != nil {
+		t.Fatalf("ReadUnsafe(ptr1): %v", err)
+	}
+	if err := mgr.PromoteCurrentWritable(id2); err != nil {
+		t.Fatalf("PromoteCurrentWritable(id2): %v", err)
+	}
+	if _, err := mgr.ReadUnsafe(ptr2); err != nil {
+		t.Fatalf("ReadUnsafe(ptr2): %v", err)
+	}
+
+	f1 := mgr.files[id1]
+	f2 := mgr.files[id2]
+	f3 := mgr.files[id3]
+	files = []*File{f1, f2, f3}
+	var deadBefore uint64
+	if data, _ := f2.mmapData.Load().([]byte); len(data) == 0 {
+		t.Fatalf("expected id2 current mapping before saturating dead-mapping cap")
+	} else {
+		deadBefore = uint64(effectiveMaxDeadMappings(len(data)))
+		f2.deadMappingsCount.Store(deadBefore)
+	}
+
+	if err := mgr.PromoteCurrentWritable(id3); err != nil {
+		t.Fatalf("PromoteCurrentWritable(id3): %v", err)
+	}
+	if data, _ := f2.mmapData.Load().([]byte); len(data) == 0 {
+		t.Fatalf("expected demoted id2 mapping to stay live once dead-mapping cap is exhausted")
+	}
+	if dead := f2.deadMappingsCount.Load(); dead != deadBefore {
+		t.Fatalf("expected demoted id2 to avoid growing dead mappings when cap is exhausted, before=%d after=%d", deadBefore, dead)
+	}
+}
+
+func TestFileRemapToFileSizePersistentOnly_SkipsDemotedLeafSegment(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("mmap not supported on windows")
+	}
+
+	dir := t.TempDir()
+	fileID := mustEncodeFileID(t, ReservedLeafLogLaneID, 1)
+	path := segmentPathForID(dir, fileID)
+
+	w, err := NewWriter(path, fileID)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	defer func() { _ = w.Close() }()
+	if _, err := w.Append(0, nil, 1, bytes.Repeat([]byte("leaf"), 64)); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	if err := w.Flush(); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+
+	f, err := openFile(path, fileID, nil, nil, templ.DecodeOptions{}, nil)
+	if err != nil {
+		t.Fatalf("openFile: %v", err)
+	}
+	defer func() { _ = f.Close() }()
+
+	mgr := &Manager{
+		files:                 map[uint32]*File{fileID: f},
+		currentWritableByLane: make(map[uint32]uint32),
+	}
+	f.manager = mgr
+	f.currentWritable.Store(true)
+	f.currentWritable.Store(false)
+
+	f.remapToFileSizePersistentOnly()
+
+	if data, _ := f.mmapData.Load().([]byte); len(data) != 0 {
+		t.Fatalf("expected demoted leaf segment to skip persistent-only remap, len=%d", len(data))
 	}
 }
 
@@ -539,6 +1118,132 @@ func TestReadUnsafe_SealedLazyMmapByteBudgetFallsBackToReadAt(t *testing.T) {
 	}
 }
 
+func TestReadUnsafe_LeafLaneUsesLeafSealedMmapByteBudget(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("mmap not supported on windows")
+	}
+	withMappedSealedBudget(t, 8)
+	withMappedSealedBytesBudget(t, 1)
+	withMappedLeafSealedBudget(t, 8)
+	withMappedLeafSealedBytesBudget(t, 1<<30)
+
+	dir := t.TempDir()
+	id1, ptr1 := writeTestSegmentWithPtr(t, dir, ReservedLeafLogLaneID, 1, 1, bytes.Repeat([]byte("a"), 64))
+	id2, ptr2 := writeTestSegmentWithPtr(t, dir, ReservedLeafLogLaneID, 2, 2, bytes.Repeat([]byte("b"), 64))
+
+	f1, err := openFile(segmentPathForID(dir, id1), id1, nil, nil, templ.DecodeOptions{}, nil)
+	if err != nil {
+		t.Fatalf("openFile(f1): %v", err)
+	}
+	defer func() { _ = f1.Close() }()
+
+	f2, err := openFile(segmentPathForID(dir, id2), id2, nil, nil, templ.DecodeOptions{}, nil)
+	if err != nil {
+		t.Fatalf("openFile(f2): %v", err)
+	}
+	defer func() { _ = f2.Close() }()
+
+	mgr := &Manager{
+		files:                 map[uint32]*File{id1: f1, id2: f2},
+		currentWritableByLane: make(map[uint32]uint32),
+	}
+	f1.manager = mgr
+	f2.manager = mgr
+
+	set := mgr.CurrentSetNoRefresh()
+	defer func() { _ = mgr.Release(set) }()
+
+	got1, err := set.ReadUnsafe(ptr1)
+	if err != nil {
+		t.Fatalf("ReadUnsafe(ptr1): %v", err)
+	}
+	if !bytes.Equal(got1, bytes.Repeat([]byte("a"), 64)) {
+		t.Fatalf("ptr1 mismatch")
+	}
+	if data, _ := f1.mmapData.Load().([]byte); len(data) == 0 {
+		t.Fatalf("expected first leaf-lane sealed segment to be mapped")
+	}
+
+	got2, err := set.ReadUnsafe(ptr2)
+	if err != nil {
+		t.Fatalf("ReadUnsafe(ptr2): %v", err)
+	}
+	if !bytes.Equal(got2, bytes.Repeat([]byte("b"), 64)) {
+		t.Fatalf("ptr2 mismatch")
+	}
+	if data, _ := f2.mmapData.Load().([]byte); len(data) == 0 {
+		t.Fatalf("expected second leaf-lane sealed segment to be mapped under leaf budget")
+	}
+	if got := f2.mmapReadFallbackReadAt.Load(); got != 0 {
+		t.Fatalf("expected leaf-lane sealed mmap to avoid ReadAt fallback, got=%d", got)
+	}
+	if got := f2.sealedMapDeniedByBytes.Load(); got != 0 {
+		t.Fatalf("expected no leaf-lane byte-cap deny, got=%d", got)
+	}
+}
+
+func TestReadUnsafe_LeafLaneDenyCacheRechecksWhenLeafBudgetChanges(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("mmap not supported on windows")
+	}
+	withMappedSealedBudget(t, 8)
+	withMappedSealedBytesBudget(t, 1<<30)
+	withMappedLeafSealedBudget(t, 8)
+	withMappedLeafSealedBytesBudget(t, 1)
+
+	dir := t.TempDir()
+	id1, ptr1 := writeTestSegmentWithPtr(t, dir, ReservedLeafLogLaneID, 1, 1, bytes.Repeat([]byte("a"), 64))
+	id2, ptr2 := writeTestSegmentWithPtr(t, dir, ReservedLeafLogLaneID, 2, 2, bytes.Repeat([]byte("b"), 64))
+
+	f1, err := openFile(segmentPathForID(dir, id1), id1, nil, nil, templ.DecodeOptions{}, nil)
+	if err != nil {
+		t.Fatalf("openFile(f1): %v", err)
+	}
+	defer func() { _ = f1.Close() }()
+
+	f2, err := openFile(segmentPathForID(dir, id2), id2, nil, nil, templ.DecodeOptions{}, nil)
+	if err != nil {
+		t.Fatalf("openFile(f2): %v", err)
+	}
+	defer func() { _ = f2.Close() }()
+
+	mgr := &Manager{
+		files:                 map[uint32]*File{id1: f1, id2: f2},
+		currentWritableByLane: make(map[uint32]uint32),
+	}
+	f1.manager = mgr
+	f2.manager = mgr
+
+	set := mgr.CurrentSetNoRefresh()
+	defer func() { _ = mgr.Release(set) }()
+
+	if got, err := set.ReadUnsafe(ptr1); err != nil {
+		t.Fatalf("ReadUnsafe(ptr1): %v", err)
+	} else if !bytes.Equal(got, bytes.Repeat([]byte("a"), 64)) {
+		t.Fatalf("ptr1 mismatch")
+	}
+	if _, err := set.ReadUnsafe(ptr2); err != nil {
+		t.Fatalf("ReadUnsafe(ptr2 first): %v", err)
+	}
+	if data, _ := f2.mmapData.Load().([]byte); len(data) != 0 {
+		t.Fatalf("expected initial leaf-lane read to stay unmapped under tight leaf budget")
+	}
+	if got := f2.sealedMapDeniedByBytes.Load(); got == 0 {
+		t.Fatalf("expected leaf-lane byte-cap deny to increment")
+	}
+
+	MaxMappedLeafSealedBytes = 1 << 30
+
+	if got, err := set.ReadUnsafe(ptr2); err != nil {
+		t.Fatalf("ReadUnsafe(ptr2 second): %v", err)
+	} else if !bytes.Equal(got, bytes.Repeat([]byte("b"), 64)) {
+		t.Fatalf("ptr2 second mismatch")
+	}
+	if data, _ := f2.mmapData.Load().([]byte); len(data) == 0 {
+		t.Fatalf("expected leaf-lane deny cache to re-check after leaf budget change")
+	}
+}
+
 func TestReadUnsafe_SealedMappedOutOfRangeRemapsToKnownFileSize(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("mmap not supported on windows")
@@ -664,6 +1369,10 @@ func writeTestSegment(t *testing.T, dir string, lane, seq uint32, rid uint64, va
 	return fileID
 }
 
+func segmentPathForID(dir string, id uint32) string {
+	return (&Manager{dir: dir}).SegmentPath(id)
+}
+
 func TestManagerCurrentSetNoRefresh(t *testing.T) {
 	dir := t.TempDir()
 	seg1 := writeTestSegment(t, dir, 0, 1, 1, bytes.Repeat([]byte("a"), 64))
@@ -760,7 +1469,7 @@ func TestManagerSegmentPath_UsesRegisteredPathFromExtraScanDir(t *testing.T) {
 		t.Fatalf("MkdirAll(leaf_vlog): %v", err)
 	}
 	segID := writeTestSegment(t, leafDir, 255, 1, 1, bytes.Repeat([]byte("l"), 64))
-	wantPath := filepath.Join(leafDir, "value-l255-000001.log")
+	wantPath := segmentPathForID(leafDir, segID)
 
 	mgr, err := NewManager(dir)
 	if err != nil {

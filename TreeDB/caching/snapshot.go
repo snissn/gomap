@@ -2,7 +2,7 @@ package caching
 
 import (
 	"errors"
-	"sync"
+	"sync/atomic"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/node"
@@ -20,13 +20,15 @@ import (
 //
 // Mutable memtables are intentionally ignored so that writes after AcquireSnapshot
 // are not visible through the snapshot.
+//
+// Snapshot pointers are single-use: after Close returns, callers must discard the
+// pointer and treat further use as invalid.
 type Snapshot struct {
 	db      *DB
 	view    *memtableView
 	backend *backenddb.Snapshot
 
-	closeOnce sync.Once
-	closeErr  error
+	closed atomic.Bool
 }
 
 type backendSnapshotProvider interface {
@@ -99,7 +101,11 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 		return nil
 	}
 
-	return &Snapshot{db: db, view: view, backend: backendSnap}
+	return &Snapshot{
+		db:      db,
+		view:    view,
+		backend: backendSnap,
+	}
 }
 
 func (s *Snapshot) Pager() *pager.Pager {
@@ -120,19 +126,21 @@ func (s *Snapshot) Close() error {
 	if s == nil {
 		return nil
 	}
-	s.closeOnce.Do(func() {
-		var errs []error
-		if s.backend != nil {
-			errs = append(errs, s.backend.Close())
-			s.backend = nil
-		}
-		if s.view != nil && s.db != nil {
-			s.db.releaseMemtableView(s.view)
-			s.view = nil
-		}
-		s.closeErr = errors.Join(errs...)
-	})
-	return s.closeErr
+	if !s.closed.CompareAndSwap(false, true) {
+		return nil
+	}
+
+	var err error
+	if s.backend != nil {
+		err = s.backend.Close()
+		s.backend = nil
+	}
+	if s.view != nil && s.db != nil {
+		s.db.releaseMemtableView(s.view)
+		s.view = nil
+	}
+	s.db = nil
+	return err
 }
 
 func (s *Snapshot) lookupQueueEntry(key []byte) (val []byte, ptr page.ValuePtr, flags byte, found bool) {

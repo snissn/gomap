@@ -117,3 +117,47 @@ func TestIteratorSnapshotIsolation(t *testing.T) {
 		t.Error("Iterator saw key 'b' written AFTER iterator creation (Snapshot Isolation violation)")
 	}
 }
+
+func TestAcquireSnapshot_AllocsBoundedAfterWarmPath(t *testing.T) {
+	if testRaceEnabled {
+		t.Skip("AllocsPerRun is not stable under -race")
+	}
+	dir, err := os.MkdirTemp("", "treedb-snapshot-pool-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+
+	backend, err := db.Open(db.Options{Dir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer backend.Close()
+
+	cached, err := Open(dir, backend, Options{FlushThreshold: 1024 * 1024})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cached.Close()
+
+	warm := cached.AcquireSnapshot()
+	if warm == nil {
+		t.Fatal("warm AcquireSnapshot=nil")
+	}
+	if err := warm.Close(); err != nil {
+		t.Fatalf("warm Close: %v", err)
+	}
+
+	allocs := testing.AllocsPerRun(1000, func() {
+		snap := cached.AcquireSnapshot()
+		if snap == nil {
+			t.Fatal("AcquireSnapshot=nil")
+		}
+		if err := snap.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	})
+	if allocs > 1.05 {
+		t.Fatalf("AcquireSnapshot allocs/run=%f, want <= 1.05 after warm path", allocs)
+	}
+}
