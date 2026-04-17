@@ -18,7 +18,7 @@ func MaybeCompactLeafLogPayload(leafPage []byte) ([]byte, bool, error) {
 	}
 	prefixLen, suffixLen, err := node.LeafPageLiveBounds(leafPage)
 	if err != nil {
-		return nil, false, err
+		return leafPage, false, nil
 	}
 	compactLen := compactLeafPagePayloadHeaderSize + prefixLen + suffixLen
 	if compactLen >= len(leafPage) {
