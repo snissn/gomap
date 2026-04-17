@@ -22838,6 +22838,7 @@ func (db *DB) maybeRunLeafGenerationPackMaintenance(runGC bool, quiet bool, admi
 				MinReclaimPerByteCopiedPPM: minReclaimPerByteCopiedPPM,
 				MaxGenerations:             remainingGenerations,
 				MaxBytesToCopy:             remainingBytesToCopy,
+				ReserveRIDs:                db.ReserveValueLogRIDs,
 			})
 			if runErr != nil {
 				return runErr

@@ -12,6 +12,8 @@ import (
 
 const leafGenerationPackDefaultMinReclaimPerByteCopiedPPM = 10000
 
+var leafGenerationPackRIDStartScanner = nextRewriteRIDStartFromSet
+
 type LeafGenerationPackOptions struct {
 	GenerationIDs              []uint64
 	Sync                       bool
@@ -19,6 +21,7 @@ type LeafGenerationPackOptions struct {
 	MinExpectedReclaimBytes    int64
 	MinExpectedReclaimRatioPPM int
 	MinReclaimPerByteCopiedPPM int
+	ReserveRIDs                func(count int) (start uint64, err error)
 	Force                      bool
 }
 
@@ -80,6 +83,43 @@ func (db *DB) LeafGenerationPack(ctx context.Context, opts LeafGenerationPackOpt
 	if err != nil {
 		return stats, err
 	}
+	return db.leafGenerationPackLocked(ctx, opts, selectedPlan, stats)
+}
+
+func (db *DB) leafGenerationPackSelected(ctx context.Context, opts LeafGenerationPackOptions, selectedPlan LeafGenerationPlan) (stats LeafGenerationPackStats, err error) {
+	if db == nil {
+		return stats, fmt.Errorf("missing db")
+	}
+	if db.readOnly {
+		return stats, ErrReadOnly
+	}
+	if !db.indexOuterLeavesInValueLog {
+		return stats, nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	started := time.Now()
+	defer func() {
+		stats.WallTimeNanos = time.Since(started).Nanoseconds()
+	}()
+	stats.GenerationsRequested = len(opts.GenerationIDs)
+	opts = normalizeLeafGenerationPackOptions(opts)
+
+	db.maintenanceMu.Lock()
+	defer db.maintenanceMu.Unlock()
+	stats.SourceGenerationIDs = append(stats.SourceGenerationIDs, selectedPlan.CandidateGenerationIDs...)
+	stats.SourceBytesTotal = selectedPlan.CandidateBytesTotal
+	stats.SourceBytesLive = selectedPlan.CandidateBytesLive
+	stats.SourceBytesDead = selectedPlan.CandidateBytesDead
+	stats.SourceBytesToCopy = selectedPlan.CandidateBytesToCopy
+	stats.ExpectedReclaimBytes = selectedPlan.ExpectedReclaimBytes
+	stats.ExpectedReclaimRatioPPM = selectedPlan.ExpectedReclaimRatioPPM
+	stats.ExpectedReclaimPerByteCopiedPPM = selectedPlan.ExpectedReclaimPerByteCopiedPPM
+	return db.leafGenerationPackLocked(ctx, opts, selectedPlan, stats)
+}
+
+func (db *DB) leafGenerationPackLocked(ctx context.Context, opts LeafGenerationPackOptions, selectedPlan LeafGenerationPlan, stats LeafGenerationPackStats) (LeafGenerationPackStats, error) {
 	rawSourceIDs, matchedGenerations, err := db.resolveLeafGenerationPackSourceFileIDs(opts.GenerationIDs)
 	if err != nil {
 		return stats, err
@@ -107,7 +147,10 @@ func (db *DB) LeafGenerationPack(ctx context.Context, opts LeafGenerationPackOpt
 		return stats, fmt.Errorf("leaf generation pack: value-log set unavailable")
 	}
 	leafStartSeq := maxRewriteLaneSeqFromSet(set, rewriteLeafLogLaneID)
-	nextRID, err := nextRewriteRIDStartFromSet(set)
+	nextRID := uint64(0)
+	if opts.ReserveRIDs == nil {
+		nextRID, err = leafGenerationPackRIDStartScanner(set)
+	}
 	_ = db.valueLogManager.Release(set)
 	if err != nil {
 		return stats, err
@@ -124,7 +167,7 @@ func (db *DB) LeafGenerationPack(ctx context.Context, opts LeafGenerationPackOpt
 	for _, rawID := range rawSourceIDs {
 		sourceValueIDs[page.ValueLogFileID(rawID)] = struct{}{}
 	}
-	ridAlloc := newRewriteRIDAllocator(nextRID, nil)
+	ridAlloc := newRewriteRIDAllocator(nextRID, opts.ReserveRIDs)
 	var rewriteStats leafRefRewriteRunStats
 	stats.LeafPagesCopied, stats.BytesCopied, err = db.rewriteLeafRefsOnline(ctx, writer, ridAlloc, sourceValueIDs, nil, 0, 0, false, 0, opts.Sync, &rewriteStats)
 	stats.InternalPagesVisited = rewriteStats.InternalPagesVisited
@@ -138,6 +181,23 @@ func (db *DB) LeafGenerationPack(ctx context.Context, opts LeafGenerationPackOpt
 	}
 	stats.CreatedFileIDs = filterLeafGenerationRawFileIDs(createdIDs)
 	return stats, nil
+}
+
+func selectedLeafGenerationPackPlan(selection LeafGenerationPackSelection) LeafGenerationPlan {
+	return LeafGenerationPlan{
+		Admission:                       leafGenerationPlanAdmissionEligible,
+		Generations:                     append([]LeafGenerationPlanGeneration(nil), selection.Generations...),
+		Candidates:                      append([]LeafGenerationPlanGeneration(nil), selection.Generations...),
+		CandidateGenerationIDs:          append([]uint64(nil), selection.GenerationIDs...),
+		CandidateBytesTotal:             selection.BytesTotal,
+		CandidateBytesLive:              selection.BytesLive,
+		CandidateBytesDead:              selection.BytesDead,
+		CandidateBytesToCopy:            selection.BytesToCopy,
+		CandidateLivePages:              selection.LivePages,
+		ExpectedReclaimBytes:            selection.ExpectedReclaimBytes,
+		ExpectedReclaimRatioPPM:         selection.ExpectedReclaimRatioPPM,
+		ExpectedReclaimPerByteCopiedPPM: selection.ExpectedReclaimPerByteCopiedPPM,
+	}
 }
 
 func normalizeLeafGenerationPackOptions(opts LeafGenerationPackOptions) LeafGenerationPackOptions {
