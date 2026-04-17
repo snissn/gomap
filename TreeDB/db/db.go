@@ -97,8 +97,10 @@ type DB struct {
 	valueLogBlockCodec             ValueLogBlockCodec
 	valueLogDictLookup             valuelog.DictLookup
 	valueLogDictCurrentForClass    func(context.Context, string) (uint64, error)
+	valueLogDictLeafPayloadMode    func(context.Context, uint64) (bool, bool, error)
 	valueLogDictPut                func(context.Context, []byte) (uint64, error)
 	valueLogDictSetCurrentForClass func(context.Context, string, uint64) error
+	valueLogDictSetLeafPayloadMode func(context.Context, uint64, bool) error
 	valueLogDomainThresholds       []ValueLogDomainThreshold
 	leafFillTargetPPM              uint32
 	internalFillTargetPPM          uint32
@@ -456,6 +458,11 @@ type ValueLogOptions struct {
 	// DictCurrentForClass resolves the current dictionary ID for a payload class.
 	// Offline/maintenance rewrite uses this to seed class-specific rewrite codecs.
 	DictCurrentForClass func(context.Context, string) (uint64, error)
+	// DictLeafPayloadMode reports whether a published leaf dictionary expects raw
+	// 4KiB leaf pages (useRawPages=true) or compact split-leaf payloads
+	// (useRawPages=false). The returned ok flag is false when no explicit mode is
+	// recorded and callers should fall back to legacy defaults.
+	DictLeafPayloadMode func(context.Context, uint64) (useRawPages bool, ok bool, err error)
 	// DictPut persists dictionary bytes and returns the stable dictionary ID.
 	// Offline/maintenance rewrite may use this to bootstrap a class-specific dict
 	// before rewriting into dict-compressed frames.
@@ -464,6 +471,9 @@ type ValueLogOptions struct {
 	// provided payload class. Rewrite bootstrap uses this after publishing a new
 	// class-specific dict.
 	DictSetCurrentForClass func(context.Context, string, uint64) error
+	// DictSetLeafPayloadMode records whether a published leaf dictionary expects
+	// raw 4KiB leaf pages or compact split-leaf payloads.
+	DictSetLeafPayloadMode func(context.Context, uint64, bool) error
 
 	// DictTrain configures background dictionary training for value-log frame
 	// compression in cached mode.
@@ -1235,8 +1245,10 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		valueLogBlockCodec:             opts.ValueLog.BlockCodec,
 		valueLogDictLookup:             opts.ValueLog.DictLookup,
 		valueLogDictCurrentForClass:    opts.ValueLog.DictCurrentForClass,
+		valueLogDictLeafPayloadMode:    opts.ValueLog.DictLeafPayloadMode,
 		valueLogDictPut:                opts.ValueLog.DictPut,
 		valueLogDictSetCurrentForClass: opts.ValueLog.DictSetCurrentForClass,
+		valueLogDictSetLeafPayloadMode: opts.ValueLog.DictSetLeafPayloadMode,
 		valueLogDomainThresholds:       NormalizeValueLogDomainThresholds(opts.ValueLog.DomainInlineThresholds),
 		leafFillTargetPPM:              opts.LeafFillTargetPPM,
 		internalFillTargetPPM:          opts.InternalFillTargetPPM,

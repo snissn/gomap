@@ -675,7 +675,21 @@ func validateRewriteLeafDict(dict []byte) error {
 	return nil
 }
 
-func prepareRewriteLeafDict(d *DB, state *DBState, currentForClass func(context.Context, string) (uint64, error), dictLookup valuelog.DictLookup, dictPut func(context.Context, []byte) (uint64, error), dictSetCurrentForClass func(context.Context, string, uint64) error, cfg compression.TrainConfig) (uint64, []byte, bool, error) {
+func resolveRewriteLeafDictUseRawPages(dictLeafPayloadMode func(context.Context, uint64) (bool, bool, error), dictID uint64, fallbackUseRawPages bool) (bool, error) {
+	if dictID == 0 || dictLeafPayloadMode == nil {
+		return fallbackUseRawPages, nil
+	}
+	useRawPages, ok, err := dictLeafPayloadMode(context.Background(), dictID)
+	if err != nil {
+		return false, err
+	}
+	if ok {
+		return useRawPages, nil
+	}
+	return fallbackUseRawPages, nil
+}
+
+func prepareRewriteLeafDict(d *DB, state *DBState, currentForClass func(context.Context, string) (uint64, error), dictLeafPayloadMode func(context.Context, uint64) (bool, bool, error), dictLookup valuelog.DictLookup, dictPut func(context.Context, []byte) (uint64, error), dictSetCurrentForClass func(context.Context, string, uint64) error, dictSetLeafPayloadMode func(context.Context, uint64, bool) error, cfg compression.TrainConfig) (uint64, []byte, bool, error) {
 	if d == nil || state == nil {
 		return 0, nil, false, nil
 	}
@@ -687,7 +701,11 @@ func prepareRewriteLeafDict(d *DB, state *DBState, currentForClass func(context.
 		if dictID != 0 && dictLookup != nil {
 			dictBytes, err := dictLookup(dictID)
 			if err == nil && len(dictBytes) > 0 {
-				return dictID, dictBytes, true, nil
+				useRawPages, err := resolveRewriteLeafDictUseRawPages(dictLeafPayloadMode, dictID, true)
+				if err != nil {
+					return 0, nil, false, err
+				}
+				return dictID, dictBytes, useRawPages, nil
 			}
 		}
 	}
@@ -696,7 +714,11 @@ func prepareRewriteLeafDict(d *DB, state *DBState, currentForClass func(context.
 	} else if preferredLeafDict != 0 && dictLookup != nil {
 		dictBytes, err := dictLookup(preferredLeafDict)
 		if err == nil && len(dictBytes) > 0 {
-			return preferredLeafDict, dictBytes, true, nil
+			useRawPages, err := resolveRewriteLeafDictUseRawPages(dictLeafPayloadMode, preferredLeafDict, true)
+			if err != nil {
+				return 0, nil, false, err
+			}
+			return preferredLeafDict, dictBytes, useRawPages, nil
 		}
 	}
 	if preferredDictGlobal, err := scanValueLogSetPreferredDictID(state.ValueLogSet); err != nil {
@@ -704,7 +726,11 @@ func prepareRewriteLeafDict(d *DB, state *DBState, currentForClass func(context.
 	} else if preferredDictGlobal != 0 && dictLookup != nil {
 		dictBytes, err := dictLookup(preferredDictGlobal)
 		if err == nil && len(dictBytes) > 0 {
-			return preferredDictGlobal, dictBytes, true, nil
+			useRawPages, err := resolveRewriteLeafDictUseRawPages(dictLeafPayloadMode, preferredDictGlobal, true)
+			if err != nil {
+				return 0, nil, false, err
+			}
+			return preferredDictGlobal, dictBytes, useRawPages, nil
 		}
 	}
 	if dictPut == nil {
@@ -720,6 +746,11 @@ func prepareRewriteLeafDict(d *DB, state *DBState, currentForClass func(context.
 	}
 	if dictSetCurrentForClass != nil {
 		if err := dictSetCurrentForClass(context.Background(), "outer_leaf", dictID); err != nil {
+			return 0, nil, false, err
+		}
+	}
+	if dictSetLeafPayloadMode != nil {
+		if err := dictSetLeafPayloadMode(context.Background(), dictID, false); err != nil {
 			return 0, nil, false, err
 		}
 	}
@@ -1681,7 +1712,7 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 	writer.leafBlockCodec = leafPageBlockCodecFromOptions(db.valueLogCompression, db.valueLogAutoPolicy, db.valueLogBlockCodec, db.indexOuterLeavesInValueLog)
 	if db.indexOuterLeavesInValueLog {
 		if state := db.State(); state != nil {
-			leafDictID, leafDictBytes, leafDictUseRawPages, err := prepareRewriteLeafDict(db, state, db.valueLogDictCurrentForClass, db.valueLogDictLookup, db.valueLogDictPut, db.valueLogDictSetCurrentForClass, compression.TrainConfig{})
+			leafDictID, leafDictBytes, leafDictUseRawPages, err := prepareRewriteLeafDict(db, state, db.valueLogDictCurrentForClass, db.valueLogDictLeafPayloadMode, db.valueLogDictLookup, db.valueLogDictPut, db.valueLogDictSetCurrentForClass, db.valueLogDictSetLeafPayloadMode, compression.TrainConfig{})
 			if err != nil {
 				return stats, err
 			}
@@ -2633,7 +2664,7 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 		return stats, err
 	}
 	if writer.blockCompression && opts.IndexOuterLeavesInValueLog {
-		leafDictID, leafDictBytes, leafDictUseRawPages, err := prepareRewriteLeafDict(d, state, opts.ValueLog.DictCurrentForClass, opts.ValueLog.DictLookup, opts.ValueLog.DictPut, opts.ValueLog.DictSetCurrentForClass, opts.ValueLog.DictTrain)
+		leafDictID, leafDictBytes, leafDictUseRawPages, err := prepareRewriteLeafDict(d, state, opts.ValueLog.DictCurrentForClass, opts.ValueLog.DictLeafPayloadMode, opts.ValueLog.DictLookup, opts.ValueLog.DictPut, opts.ValueLog.DictSetCurrentForClass, opts.ValueLog.DictSetLeafPayloadMode, opts.ValueLog.DictTrain)
 		if err != nil {
 			_ = newPager.Close()
 			_ = d.Close()

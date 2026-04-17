@@ -86,7 +86,7 @@ func wireSideStoreLookups(rootDir string, opts *Options) (func() error, error) {
 			}
 			dictOpts := *opts
 			dictOpts.Dir = dictDir
-			dictOpts.ReadOnly = true
+			dictOpts.ReadOnly = opts.ReadOnly
 			dictOpts.ChunkSize = dictChunk
 			dictOpts.DisableBackgroundPrune = true
 			dictOpts.IgnoreFormatConfig = false
@@ -112,14 +112,24 @@ func wireSideStoreLookups(rootDir string, opts *Options) (func() error, error) {
 					return store.GetCurrentForClass(ctx, class)
 				}
 			}
-			if opts.ValueLog.DictPut == nil {
+			if opts.ValueLog.DictLeafPayloadMode == nil {
+				opts.ValueLog.DictLeafPayloadMode = func(ctx context.Context, dictID uint64) (bool, bool, error) {
+					return store.GetLeafPayloadMode(ctx, dictID)
+				}
+			}
+			if !dictOpts.ReadOnly && opts.ValueLog.DictPut == nil {
 				opts.ValueLog.DictPut = func(ctx context.Context, dictBytes []byte) (uint64, error) {
 					return store.PutDictBytes(ctx, dictBytes)
 				}
 			}
-			if opts.ValueLog.DictSetCurrentForClass == nil {
+			if !dictOpts.ReadOnly && opts.ValueLog.DictSetCurrentForClass == nil {
 				opts.ValueLog.DictSetCurrentForClass = func(ctx context.Context, class string, dictID uint64) error {
 					return store.SetCurrentForClass(ctx, class, dictID)
+				}
+			}
+			if !dictOpts.ReadOnly && opts.ValueLog.DictSetLeafPayloadMode == nil {
+				opts.ValueLog.DictSetLeafPayloadMode = func(ctx context.Context, dictID uint64, useRawPages bool) error {
+					return store.SetLeafPayloadMode(ctx, dictID, useRawPages)
 				}
 			}
 		}

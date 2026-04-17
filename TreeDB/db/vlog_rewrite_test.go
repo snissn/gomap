@@ -4507,7 +4507,7 @@ func TestPrepareRewriteLeafDict_LiveLeafRefBootstrapBestEffort(t *testing.T) {
 	var putCalls int
 	var gotPutDict []byte
 	var setCurrentCalls int
-	dictID, dictBytes, useRawPages, err := prepareRewriteLeafDict(db, state, nil, nil, func(_ context.Context, dict []byte) (uint64, error) {
+	dictID, dictBytes, useRawPages, err := prepareRewriteLeafDict(db, state, nil, nil, nil, func(_ context.Context, dict []byte) (uint64, error) {
 		putCalls++
 		gotPutDict = append([]byte(nil), dict...)
 		return 55123, nil
@@ -4518,6 +4518,14 @@ func TestPrepareRewriteLeafDict_LiveLeafRefBootstrapBestEffort(t *testing.T) {
 		}
 		if dictID != 55123 {
 			t.Fatalf("set current dict id=%d want=55123", dictID)
+		}
+		return nil
+	}, func(_ context.Context, dictID uint64, useRawPages bool) error {
+		if dictID != 55123 {
+			t.Fatalf("set payload mode dict id=%d want=55123", dictID)
+		}
+		if useRawPages {
+			t.Fatal("bootstrapped compact leaf dict unexpectedly marked raw")
 		}
 		return nil
 	}, compression.TrainConfig{
@@ -4557,5 +4565,48 @@ func TestPrepareRewriteLeafDict_LiveLeafRefBootstrapBestEffort(t *testing.T) {
 	}
 	if len(dictBytes) != 0 {
 		t.Fatalf("dict bytes len=%d want=0 when bootstrap does not produce a usable dict", len(dictBytes))
+	}
+}
+
+func TestPrepareRewriteLeafDict_CurrentClassCompactModePreserved(t *testing.T) {
+	state := &DBState{ValueLogSet: &valuelog.Set{}}
+	dictBytes := []byte("compact-leaf-dict")
+	dictID, gotDict, useRawPages, err := prepareRewriteLeafDict(
+		&DB{},
+		state,
+		func(_ context.Context, class string) (uint64, error) {
+			if class != "outer_leaf" {
+				t.Fatalf("current class=%q want outer_leaf", class)
+			}
+			return 8123, nil
+		},
+		func(_ context.Context, id uint64) (bool, bool, error) {
+			if id != 8123 {
+				t.Fatalf("mode lookup dict id=%d want=8123", id)
+			}
+			return false, true, nil
+		},
+		func(id uint64) ([]byte, error) {
+			if id != 8123 {
+				t.Fatalf("lookup dict id=%d want=8123", id)
+			}
+			return append([]byte(nil), dictBytes...), nil
+		},
+		nil,
+		nil,
+		nil,
+		compression.TrainConfig{},
+	)
+	if err != nil {
+		t.Fatalf("prepareRewriteLeafDict: %v", err)
+	}
+	if dictID != 8123 {
+		t.Fatalf("dict id=%d want=8123", dictID)
+	}
+	if useRawPages {
+		t.Fatal("expected explicit compact mode to preserve compact payloads")
+	}
+	if !bytes.Equal(gotDict, dictBytes) {
+		t.Fatalf("dict bytes mismatch: got=%x want=%x", gotDict, dictBytes)
 	}
 }
