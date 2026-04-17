@@ -53,7 +53,7 @@ func decodeCompactLeafLogPayloadTo(payload, dst []byte) ([]byte, bool, bool, err
 	}
 	prefixLen := int(binary.LittleEndian.Uint16(payload[len(compactLeafPagePayloadMagic) : len(compactLeafPagePayloadMagic)+2]))
 	suffixLen := int(binary.LittleEndian.Uint16(payload[len(compactLeafPagePayloadMagic)+2 : compactLeafPagePayloadHeaderSize]))
-	if prefixLen < node.NodeHeaderSize || suffixLen < 0 || prefixLen+suffixLen > page.PageSize {
+	if prefixLen < node.NodeHeaderSize || prefixLen+suffixLen > page.PageSize {
 		return nil, false, true, ErrCorrupt
 	}
 	if compactLeafPagePayloadHeaderSize+prefixLen+suffixLen != len(payload) {

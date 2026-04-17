@@ -445,7 +445,7 @@ func (n *Node) liveByteBounds() (dirEnd, heapStart int, ok bool) {
 		if int(off) < dirEnd || int(off) > len(n.data) {
 			return 0, 0, false
 		}
-		if int(off) < heapStart && off != 0 {
+		if int(off) < heapStart {
 			heapStart = int(off)
 		}
 	}
