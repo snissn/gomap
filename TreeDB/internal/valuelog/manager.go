@@ -791,17 +791,6 @@ func (f *File) ReadAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte
 	if err := f.ensureCurrentWritableReadable(); err != nil {
 		return nil, err
 	}
-	if isLeafLogFileID(f.ID) {
-		f.mmapReadFallbackReadAt.Add(1)
-		val, err := ReadAtWithDict(f.File, ptr, verifyCRC, f.dictLookup, f.templateLookup, f.templateDefCache, f.templateDecodeOpts)
-		if err != nil {
-			return nil, err
-		}
-		oldLen := len(dst)
-		dst = grow(dst, len(val))
-		copy(dst[oldLen:], val)
-		return dst, nil
-	}
 	if val, err, ok := f.readViaMmapAppend(ptr, verifyCRC, dst); ok {
 		f.mmapReadHits.Add(1)
 		return val, err

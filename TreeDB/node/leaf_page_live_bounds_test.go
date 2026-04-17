@@ -53,3 +53,13 @@ func TestLeafPageLiveBounds_RejectsNonLeaf(t *testing.T) {
 		t.Fatalf("LeafPageLiveBounds(non-leaf) err=%v want %v", err, ErrInvalidType)
 	}
 }
+
+func TestLeafPageLiveBounds_RejectsCorruptDirectoryLayout(t *testing.T) {
+	leaf := buildSparseLeafPageForBoundsTest(t)
+	n := NewNodeView(leaf)
+	n.SetCount(uint16(page.PageSize))
+
+	if _, _, err := LeafPageLiveBounds(leaf); err != ErrCorruptedNode {
+		t.Fatalf("LeafPageLiveBounds(corrupt-count) err=%v want %v", err, ErrCorruptedNode)
+	}
+}

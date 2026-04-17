@@ -385,18 +385,27 @@ func (n *Node) FreeSpace() int {
 func (n *Node) liveByteBounds() (dirEnd, heapStart int, ok bool) {
 	count := n.Count()
 	dirEnd = NodeHeaderSize + int(count)*DirectoryEntrySize
+	if dirEnd < NodeHeaderSize || dirEnd > len(n.data) {
+		return 0, 0, false
+	}
 	if n.Type() == page.PageTypeLeaf && n.leafColumnar() && n.leafPrefixCompressed() && n.leafPrefixV2() {
 		// Combined columnar+prefix leaves use top-level metadata columns:
 		// KeyOff[u16], ValOff[u16], Flags[u8], PrefixLen[u16].
 		dirEnd += int(count) * DirectoryEntrySize
 		dirEnd += int(count)
 		dirEnd += int(count) * DirectoryEntrySize
+		if dirEnd < NodeHeaderSize || dirEnd > len(n.data) {
+			return 0, 0, false
+		}
 	}
 	if n.Type() == page.PageTypeLeaf && n.leafColumnarV2() && !n.leafPrefixCompressed() {
 		// Columnar v2 leaves store additional per-entry metadata immediately after
 		// the key directory: ValOff (u16) + Flags (u8).
 		dirEnd += int(count) * DirectoryEntrySize
 		dirEnd += int(count)
+		if dirEnd < NodeHeaderSize || dirEnd > len(n.data) {
+			return 0, 0, false
+		}
 	}
 	heapStart = int(page.PageSize)
 	if count == 0 {
@@ -419,7 +428,11 @@ func (n *Node) liveByteBounds() (dirEnd, heapStart int, ok bool) {
 		return dirEnd, heapStart, true
 	}
 	for i := uint16(0); i < count; i++ {
-		off := getUint16(n.data[NodeHeaderSize+int(i)*2:])
+		dirOff := NodeHeaderSize + int(i)*DirectoryEntrySize
+		if dirOff+DirectoryEntrySize > len(n.data) {
+			return 0, 0, false
+		}
+		off := getUint16(n.data[dirOff : dirOff+DirectoryEntrySize])
 		if int(off) < heapStart && off != 0 {
 			heapStart = int(off)
 		}

@@ -140,6 +140,10 @@ func TestCachingLeafPageLog_AppendLeafPageCompactsSparseLeafPayload(t *testing.T
 	if _, err := leafLog.AppendLeafPage(buildSparseLeafPageForLeafLogTest(t)); err != nil {
 		t.Fatalf("AppendLeafPage: %v", err)
 	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("Close writer: %v", err)
+	}
+	writer = nil
 	info, err := os.Stat(path)
 	if err != nil {
 		t.Fatalf("Stat(%q): %v", path, err)
