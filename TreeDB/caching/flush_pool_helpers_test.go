@@ -14,9 +14,48 @@ import (
 )
 
 type pointerBatch struct {
-	entries      []batch.Entry
-	reserveCalls int
-	lastReserve  int
+	entries             []batch.Entry
+	reserveCalls        int
+	lastReserve         int
+	setCalls            int
+	setViewCalls        int
+	deleteCalls         int
+	deleteViewCalls     int
+	setPointerCalls     int
+	setPointerViewCalls int
+}
+
+type viewCountingBackend struct {
+	*MockBackend
+	batches []*pointerBatch
+}
+
+func (b *viewCountingBackend) NewBatch() batch.Interface {
+	pb := &pointerBatch{}
+	b.batches = append(b.batches, pb)
+	return pb
+}
+
+func (b *viewCountingBackend) NewBatchWithSize(size int) batch.Interface {
+	return b.NewBatch()
+}
+
+func (b *viewCountingBackend) totals() (setCalls, setViewCalls, deleteCalls, deleteViewCalls int) {
+	for _, pb := range b.batches {
+		setCalls += pb.setCalls
+		setViewCalls += pb.setViewCalls
+		deleteCalls += pb.deleteCalls
+		deleteViewCalls += pb.deleteViewCalls
+	}
+	return
+}
+
+func (b *viewCountingBackend) pointerTotals() (setPointerCalls, setPointerViewCalls int) {
+	for _, pb := range b.batches {
+		setPointerCalls += pb.setPointerCalls
+		setPointerViewCalls += pb.setPointerViewCalls
+	}
+	return
 }
 
 var entrySlicePoolTestMu sync.Mutex
@@ -28,30 +67,39 @@ func lockEntrySlicePoolStateForTest(t *testing.T) {
 }
 
 func (b *pointerBatch) Set(key, value []byte) error {
+	b.setCalls++
 	b.entries = append(b.entries, batch.Entry{Type: batch.OpPut, Key: key, Value: value})
 	return nil
 }
 
 func (b *pointerBatch) SetView(key, value []byte) error {
-	return b.Set(key, value)
+	b.setViewCalls++
+	b.entries = append(b.entries, batch.Entry{Type: batch.OpPut, Key: key, Value: value})
+	return nil
 }
 
 func (b *pointerBatch) Delete(key []byte) error {
+	b.deleteCalls++
 	b.entries = append(b.entries, batch.Entry{Type: batch.OpDelete, Key: key})
 	return nil
 }
 
 func (b *pointerBatch) DeleteView(key []byte) error {
-	return b.Delete(key)
+	b.deleteViewCalls++
+	b.entries = append(b.entries, batch.Entry{Type: batch.OpDelete, Key: key})
+	return nil
 }
 
 func (b *pointerBatch) SetPointer(key []byte, ptr page.ValuePtr) error {
+	b.setPointerCalls++
 	b.entries = append(b.entries, batch.Entry{Type: batch.OpPut, Key: key, ValuePtr: ptr, IsPtr: true})
 	return nil
 }
 
 func (b *pointerBatch) SetPointerView(key []byte, ptr page.ValuePtr) error {
-	return b.SetPointer(key, ptr)
+	b.setPointerViewCalls++
+	b.entries = append(b.entries, batch.Entry{Type: batch.OpPut, Key: key, ValuePtr: ptr, IsPtr: true})
+	return nil
 }
 
 func (b *pointerBatch) SetOps(ops []batch.Entry) error {
@@ -794,6 +842,152 @@ func TestAppendOnlyMemtableLeaseReuse(t *testing.T) {
 	}
 	if gotAppendOnly != mt {
 		t.Fatalf("expected leased append-only memtable reuse")
+	}
+}
+
+func TestFlushLaneOnce_UsesViewMethodsForInlineEntries_SerialAndParallel(t *testing.T) {
+	t.Run("serial", func(t *testing.T) {
+		testFlushLaneOnceUsesViewMethodsForInlineEntries(t, false, true, true)
+	})
+	t.Run("parallel", func(t *testing.T) {
+		testFlushLaneOnceUsesViewMethodsForInlineEntries(t, true, true, true)
+	})
+}
+
+func TestFlushLaneOnce_FallsBackFromViewMethodsForUnstableIterators(t *testing.T) {
+	t.Run("serial-direct-iterator", func(t *testing.T) {
+		testFlushLaneOnceUsesViewMethodsForInlineEntries(t, false, false, false)
+	})
+	t.Run("parallel-copied-runs", func(t *testing.T) {
+		testFlushLaneOnceUsesViewMethodsForInlineEntries(t, true, false, true)
+	})
+}
+
+type unstableIteratorMemtable struct {
+	memtable.Table
+}
+
+func (unstableIteratorMemtable) StableUnsafeIteratorSlices() bool { return false }
+
+func testFlushLaneOnceUsesViewMethodsForInlineEntries(t *testing.T, forceParallel, stableUnsafe, expectViewMethods bool) {
+	t.Helper()
+	dir := t.TempDir()
+	backend := &viewCountingBackend{MockBackend: NewMockBackend()}
+	db, err := Open(dir, backend, Options{
+		FlushThreshold: 1 << 60,
+		MemtableShards: 1,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	oldProcs := runtime.GOMAXPROCS(2)
+	defer runtime.GOMAXPROCS(oldProcs)
+
+	if forceParallel {
+		db.flushBuildConcurrency = 2
+		db.flushBuildMinEntries = 1
+		db.flushBuildMinUnits = 2
+		db.flushBuildChunkCap = 2
+	}
+
+	queueUnits := 1
+	if forceParallel {
+		queueUnits = 2
+	}
+	for unit := 0; unit < queueUnits; unit++ {
+		putKey := []byte{byte('a' + unit)}
+		delKey := []byte{byte('k' + unit)}
+		if err := db.Set(putKey, []byte("value")); err != nil {
+			t.Fatalf("Set unit %d: %v", unit, err)
+		}
+		if err := db.Delete(delKey); err != nil {
+			t.Fatalf("Delete unit %d: %v", unit, err)
+		}
+		if !stableUnsafe {
+			shard := &db.mutableShards[0]
+			shard.mu.Lock()
+			shard.mem = unstableIteratorMemtable{Table: shard.mem}
+			shard.mu.Unlock()
+		}
+		db.mu.Lock()
+		if err := db.rotateMemtableLocked(false); err != nil {
+			db.mu.Unlock()
+			t.Fatalf("rotateMemtableLocked unit %d: %v", unit, err)
+		}
+		db.mu.Unlock()
+	}
+
+	if !db.flushLaneOnce(false, 0) {
+		t.Fatal("flushLaneOnce returned false")
+	}
+
+	setCalls, setViewCalls, deleteCalls, deleteViewCalls := backend.totals()
+	if expectViewMethods {
+		if setCalls != 0 {
+			t.Fatalf("backend Set calls=%d, want 0", setCalls)
+		}
+		if deleteCalls != 0 {
+			t.Fatalf("backend Delete calls=%d, want 0", deleteCalls)
+		}
+		if setViewCalls != queueUnits {
+			t.Fatalf("backend SetView calls=%d, want %d", setViewCalls, queueUnits)
+		}
+		if deleteViewCalls != queueUnits {
+			t.Fatalf("backend DeleteView calls=%d, want %d", deleteViewCalls, queueUnits)
+		}
+		return
+	}
+	if setViewCalls != 0 {
+		t.Fatalf("backend SetView calls=%d, want 0", setViewCalls)
+	}
+	if deleteViewCalls != 0 {
+		t.Fatalf("backend DeleteView calls=%d, want 0", deleteViewCalls)
+	}
+	if setCalls != queueUnits {
+		t.Fatalf("backend Set calls=%d, want %d", setCalls, queueUnits)
+	}
+	if deleteCalls != queueUnits {
+		t.Fatalf("backend Delete calls=%d, want %d", deleteCalls, queueUnits)
+	}
+}
+
+func TestFlushLaneOnce_FallsBackFromPointerViewForUnstableIterators(t *testing.T) {
+	dir := t.TempDir()
+	backend := &viewCountingBackend{MockBackend: NewMockBackend()}
+	db, err := Open(dir, backend, Options{
+		FlushThreshold: 1 << 60,
+		MemtableShards: 1,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	ptr := page.ValuePtr{FileID: page.ValueLogFileID(1), Offset: 32, Length: 8}
+	shard := &db.mutableShards[0]
+	shard.mu.Lock()
+	shard.mem.SetEntry([]byte("a"), nil, ptr, node.FlagPointer)
+	shard.mem = unstableIteratorMemtable{Table: shard.mem}
+	shard.mu.Unlock()
+	db.mu.Lock()
+	if err := db.rotateMemtableLocked(false); err != nil {
+		db.mu.Unlock()
+		t.Fatalf("rotateMemtableLocked: %v", err)
+	}
+	db.mu.Unlock()
+
+	if !db.flushLaneOnce(false, 0) {
+		t.Fatal("flushLaneOnce returned false")
+	}
+
+	setPointerCalls, setPointerViewCalls := backend.pointerTotals()
+	if setPointerViewCalls != 0 {
+		t.Fatalf("backend SetPointerView calls=%d, want 0", setPointerViewCalls)
+	}
+	if setPointerCalls != 1 {
+		t.Fatalf("backend SetPointer calls=%d, want 1", setPointerCalls)
 	}
 }
 
