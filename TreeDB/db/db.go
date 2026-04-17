@@ -2089,7 +2089,7 @@ func (db *DB) publishSnapshotView(idx *indexGen, state *DBState, vm *valuelog.Ma
 		return
 	}
 	old := db.snapshotViewRO.Load()
-	if old != nil && old.state != nil && old.state.LeafGenerations != state.LeafGenerations {
+	if old != nil && old.state != nil && old.state.LeafGenerations != nil && old.state.LeafGenerations != state.LeafGenerations {
 		db.markLeafGenerationPinSetStale(old.state.LeafGenerations.PinSet)
 	}
 	db.snapshotViewRO.Store(&snapshotView{

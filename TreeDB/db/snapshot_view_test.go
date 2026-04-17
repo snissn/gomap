@@ -516,6 +516,77 @@ func TestPublishSnapshotView_SkipsPruneDuringInFlightSnapshotAcquire(t *testing.
 	}
 }
 
+func TestLeafGenerationPinSet_MarkStaleAfterLastReleaseDoesNotLeakPins(t *testing.T) {
+	var tracker leafGenerationPinTracker
+	pinSet := newLeafGenerationPinSet(tracker.refsForGenerationIDs([]uint64{1}))
+	if pinSet == nil {
+		t.Fatal("expected pin set")
+	}
+	if pinned := pinSet.retain(&tracker); pinned {
+		t.Fatal("expected current view retain not to pin")
+	}
+
+	pinSet.release(&tracker)
+	pinSet.markStale(&tracker)
+
+	if got := tracker.count(1); got != 0 {
+		t.Fatalf("pin count after markStale with no holders=%d, want 0", got)
+	}
+}
+
+func TestLeafGenerationPinSet_StaleRetainRepinsAfterZeroHolderRelease(t *testing.T) {
+	var tracker leafGenerationPinTracker
+	pinSet := newLeafGenerationPinSet(tracker.refsForGenerationIDs([]uint64{1}))
+	if pinSet == nil {
+		t.Fatal("expected pin set")
+	}
+
+	pinSet.markStale(&tracker)
+	if pinned := pinSet.retain(&tracker); !pinned {
+		t.Fatal("expected first stale retain to pin shared refs")
+	}
+	if got, want := tracker.count(1), uint64(1); got != want {
+		t.Fatalf("pin count after first stale retain=%d, want %d", got, want)
+	}
+
+	pinSet.release(&tracker)
+	if got := tracker.count(1); got != 0 {
+		t.Fatalf("pin count after releasing last stale holder=%d, want 0", got)
+	}
+
+	if pinned := pinSet.retain(&tracker); !pinned {
+		t.Fatal("expected stale retain after zero-holder release to repin shared refs")
+	}
+	if got, want := tracker.count(1), uint64(1); got != want {
+		t.Fatalf("pin count after stale repin=%d, want %d", got, want)
+	}
+
+	pinSet.release(&tracker)
+	if got := tracker.count(1); got != 0 {
+		t.Fatalf("pin count after final release=%d, want 0", got)
+	}
+}
+
+func TestPublishSnapshotView_AllowsNilOldLeafGenerations(t *testing.T) {
+	db := &DB{}
+	idx := &indexGen{}
+
+	db.publishSnapshotView(idx, &DBState{CommitSeq: 1, RootPageID: 1}, nil)
+	db.publishSnapshotView(idx, &DBState{
+		CommitSeq:  2,
+		RootPageID: 2,
+		LeafGenerations: &leafGenerationView{
+			CurrentGenerationID: 1,
+			GenerationOrder:     []uint64{1},
+		},
+	}, nil)
+
+	view := db.snapshotViewRO.Load()
+	if view == nil || view.state == nil || view.state.LeafGenerations == nil {
+		t.Fatal("expected published snapshot view with leaf generations")
+	}
+}
+
 func TestSnapshotPool_PutClearsLeafGenerationRefs(t *testing.T) {
 	pool := NewSnapshotPool()
 	snap := pool.Get()

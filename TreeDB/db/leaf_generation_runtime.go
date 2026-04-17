@@ -65,10 +65,12 @@ type leafGenerationPinRef struct {
 }
 
 type leafGenerationPinSet struct {
-	refs    []*leafGenerationPinRef
-	holders atomic.Int64
-	stale   atomic.Bool
-	pinned  atomic.Bool
+	refs []*leafGenerationPinRef
+
+	mu      sync.Mutex
+	holders int64
+	stale   bool
+	pinned  bool
 }
 
 func newLeafGenerationPinSet(refs []*leafGenerationPinRef) *leafGenerationPinSet {
@@ -82,8 +84,13 @@ func (s *leafGenerationPinSet) retain(tracker *leafGenerationPinTracker) bool {
 	if s == nil || tracker == nil {
 		return false
 	}
-	if s.holders.Add(1) == 1 && s.stale.Load() {
-		return s.pinIfNeeded(tracker)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.holders++
+	if s.stale && !s.pinned {
+		tracker.pinRefs(s.refs)
+		s.pinned = true
+		return true
 	}
 	return false
 }
@@ -92,8 +99,15 @@ func (s *leafGenerationPinSet) release(tracker *leafGenerationPinTracker) {
 	if s == nil || tracker == nil {
 		return
 	}
-	if s.holders.Add(-1) == 0 {
-		s.unpinIfNeeded(tracker)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.holders == 0 {
+		return
+	}
+	s.holders--
+	if s.holders == 0 && s.pinned {
+		tracker.unpinRefs(s.refs)
+		s.pinned = false
 	}
 }
 
@@ -101,31 +115,15 @@ func (s *leafGenerationPinSet) markStale(tracker *leafGenerationPinTracker) {
 	if s == nil || tracker == nil {
 		return
 	}
-	if !s.stale.CompareAndSwap(false, true) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.stale {
 		return
 	}
-	if s.holders.Load() > 0 {
-		s.pinIfNeeded(tracker)
-	}
-}
-
-func (s *leafGenerationPinSet) pinIfNeeded(tracker *leafGenerationPinTracker) bool {
-	if s == nil || tracker == nil {
-		return false
-	}
-	if s.pinned.CompareAndSwap(false, true) {
+	s.stale = true
+	if s.holders > 0 && !s.pinned {
 		tracker.pinRefs(s.refs)
-		return true
-	}
-	return false
-}
-
-func (s *leafGenerationPinSet) unpinIfNeeded(tracker *leafGenerationPinTracker) {
-	if s == nil || tracker == nil {
-		return
-	}
-	if s.pinned.CompareAndSwap(true, false) {
-		tracker.unpinRefs(s.refs)
+		s.pinned = true
 	}
 }
 
