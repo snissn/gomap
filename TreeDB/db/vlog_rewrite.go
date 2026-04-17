@@ -2780,10 +2780,7 @@ func (w *rewriteWriter) leafPagesUseCompactPayload() bool {
 	if w == nil {
 		return false
 	}
-	if w.leafDir != "" {
-		return true
-	}
-	return w.lane == rewriteLeafLogLaneID
+	return w.leafDir != ""
 }
 
 func (w *rewriteWriter) appendLeafPageSplit(rid uint64, leafPage []byte) (page.LeafLogPtr, error) {
