@@ -2,6 +2,7 @@ package caching
 
 import (
 	"errors"
+	"sync"
 	"sync/atomic"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -31,6 +32,12 @@ type Snapshot struct {
 	closed atomic.Bool
 }
 
+var snapshotWrapperPool = sync.Pool{
+	New: func() any {
+		return &Snapshot{}
+	},
+}
+
 type backendSnapshotProvider interface {
 	AcquireSnapshot() *backenddb.Snapshot
 }
@@ -40,7 +47,8 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 	if db == nil || db.backend == nil || db.closing.Load() {
 		return nil
 	}
-	snap := &Snapshot{}
+	snap := snapshotWrapperPool.Get().(*Snapshot)
+	snap.closed.Store(false)
 
 	view := db.retainMemtableView()
 	needsRotate := db.mutableBytes.Load() > 0
@@ -75,6 +83,7 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 				if db.notifyError != nil {
 					db.notifyError(err)
 				}
+				releaseSnapshotWrapper(snap)
 				return nil
 			}
 		}
@@ -92,6 +101,7 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 		if view != nil {
 			db.releaseMemtableView(view)
 		}
+		releaseSnapshotWrapper(snap)
 		return nil
 	}
 	backendSnap := provider.AcquireSnapshot()
@@ -99,6 +109,7 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 		if view != nil {
 			db.releaseMemtableView(view)
 		}
+		releaseSnapshotWrapper(snap)
 		return nil
 	}
 
@@ -140,7 +151,18 @@ func (s *Snapshot) Close() error {
 		s.view = nil
 	}
 	s.db = nil
+	releaseSnapshotWrapper(s)
 	return err
+}
+
+func releaseSnapshotWrapper(s *Snapshot) {
+	if s == nil {
+		return
+	}
+	s.db = nil
+	s.view = nil
+	s.backend = nil
+	snapshotWrapperPool.Put(s)
 }
 
 func (s *Snapshot) lookupQueueEntry(key []byte) (val []byte, ptr page.ValuePtr, flags byte, found bool) {

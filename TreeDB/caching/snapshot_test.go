@@ -157,7 +157,46 @@ func TestAcquireSnapshot_AllocsBoundedAfterWarmPath(t *testing.T) {
 			t.Fatalf("Close: %v", err)
 		}
 	})
-	if allocs > 1.05 {
-		t.Fatalf("AcquireSnapshot allocs/run=%f, want <= 1.05 after warm path", allocs)
+	if allocs > 0.05 {
+		t.Fatalf("AcquireSnapshot allocs/run=%f, want <= 0.05 after warm path", allocs)
+	}
+}
+
+func TestSnapshotClose_IdempotentBeforeWrapperReuse(t *testing.T) {
+	dir, err := os.MkdirTemp("", "treedb-snapshot-close-idempotent-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+
+	backend, err := db.Open(db.Options{Dir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer backend.Close()
+
+	cached, err := Open(dir, backend, Options{FlushThreshold: 1024 * 1024})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cached.Close()
+
+	snap := cached.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("AcquireSnapshot=nil")
+	}
+	if err := snap.Close(); err != nil {
+		t.Fatalf("first Close: %v", err)
+	}
+	if err := snap.Close(); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+
+	next := cached.AcquireSnapshot()
+	if next == nil {
+		t.Fatal("second AcquireSnapshot=nil")
+	}
+	if err := next.Close(); err != nil {
+		t.Fatalf("close second snapshot: %v", err)
 	}
 }

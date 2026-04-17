@@ -127,24 +127,30 @@ func TestAcquireSnapshot_ReturnsNilWhenDBIsClosing(t *testing.T) {
 	}
 }
 
-func TestAcquireSnapshot_PinsLeafGenerationView(t *testing.T) {
+func TestAcquireSnapshot_CurrentLeafGenerationViewOnlyPinsWhenItTurnsStale(t *testing.T) {
 	idx := &indexGen{registry: lifecycle.NewReaderRegistry()}
 	idx.refs.Store(1)
-	state := &DBState{
-		CommitSeq:  1,
-		RootPageID: 1,
-		LeafGenerations: &leafGenerationView{
-			CurrentGenerationID: 2,
-			GenerationOrder:     []uint64{1, 2},
-			Generations: map[uint64]leafGenerationViewGeneration{
-				1: {State: leafGenerationStateSealed, FileIDs: []uint32{111}},
-				2: {State: leafGenerationStateWritable, FileIDs: []uint32{222}},
-			},
-			FileToGeneration: map[uint32]uint64{111: 1, 222: 2},
+	db := &DB{snapPool: NewSnapshotPool()}
+	db.leafGenerationManifest = &leafGenerationManifest{
+		CurrentGenerationID: 2,
+		Generations: []leafGenerationRecord{
+			{GenerationID: 1, State: leafGenerationStateSealed, FileIDs: []uint32{111}},
+			{GenerationID: 2, State: leafGenerationStateWritable, FileIDs: []uint32{222}},
 		},
 	}
+	view := db.currentLeafGenerationView()
+	if view == nil {
+		t.Fatal("expected leaf generation view")
+	}
+	if view.PinSet == nil {
+		t.Fatal("expected shared leaf generation pin set")
+	}
+	state := &DBState{
+		CommitSeq:       1,
+		RootPageID:      1,
+		LeafGenerations: view,
+	}
 
-	db := &DB{snapPool: NewSnapshotPool()}
 	db.publishSnapshotView(idx, state, nil)
 
 	snap := db.AcquireSnapshot()
@@ -154,11 +160,39 @@ func TestAcquireSnapshot_PinsLeafGenerationView(t *testing.T) {
 	if got, want := len(snap.leafGenerationIDs), 2; got != want {
 		t.Fatalf("len(leafGenerationIDs)=%d, want %d", got, want)
 	}
+	if snap.leafGenerationPinSet == nil {
+		t.Fatal("expected snapshot to retain shared pin set")
+	}
+	if got := db.leafGenerationPinCountForTesting(1); got != 0 {
+		_ = snap.Close()
+		t.Fatalf("pin count for current generation 1=%d, want 0 before republish", got)
+	}
+	if got := db.leafGenerationPinCountForTesting(2); got != 0 {
+		_ = snap.Close()
+		t.Fatalf("pin count for current generation 2=%d, want 0 before republish", got)
+	}
+
+	db.leafGenerationManifest = &leafGenerationManifest{
+		CurrentGenerationID: 3,
+		Generations: []leafGenerationRecord{
+			{GenerationID: 2, State: leafGenerationStateSealed, FileIDs: []uint32{222}},
+			{GenerationID: 3, State: leafGenerationStateWritable, FileIDs: []uint32{333}},
+		},
+	}
+	state2 := &DBState{
+		CommitSeq:       2,
+		RootPageID:      2,
+		LeafGenerations: db.currentLeafGenerationView(),
+	}
+	db.publishSnapshotView(idx, state2, nil)
+
 	if got, want := db.leafGenerationPinCountForTesting(1), uint64(1); got != want {
-		t.Fatalf("pin count for generation 1=%d, want %d", got, want)
+		_ = snap.Close()
+		t.Fatalf("pin count for stale generation 1=%d, want %d", got, want)
 	}
 	if got, want := db.leafGenerationPinCountForTesting(2), uint64(1); got != want {
-		t.Fatalf("pin count for generation 2=%d, want %d", got, want)
+		_ = snap.Close()
+		t.Fatalf("pin count for stale generation 2=%d, want %d", got, want)
 	}
 	if err := snap.Close(); err != nil {
 		t.Fatalf("close snapshot: %v", err)
@@ -168,6 +202,208 @@ func TestAcquireSnapshot_PinsLeafGenerationView(t *testing.T) {
 	}
 	if got := db.leafGenerationPinCountForTesting(2); got != 0 {
 		t.Fatalf("pin count for generation 2 after close=%d, want 0", got)
+	}
+}
+
+func TestAcquireSnapshot_SharedLeafGenerationPinSetAmortizesPins(t *testing.T) {
+	idx := &indexGen{registry: lifecycle.NewReaderRegistry()}
+	idx.refs.Store(1)
+
+	db := &DB{snapPool: NewSnapshotPool()}
+	db.leafGenerationManifest = &leafGenerationManifest{
+		CurrentGenerationID: 2,
+		Generations: []leafGenerationRecord{
+			{GenerationID: 1, State: leafGenerationStateSealed, FileIDs: []uint32{111}},
+			{GenerationID: 2, State: leafGenerationStateWritable, FileIDs: []uint32{222}},
+		},
+	}
+	view := db.currentLeafGenerationView()
+	if view == nil || view.PinSet == nil {
+		t.Fatal("expected leaf generation view with shared pin set")
+	}
+	state := &DBState{
+		CommitSeq:       1,
+		RootPageID:      1,
+		LeafGenerations: view,
+	}
+	db.publishSnapshotView(idx, state, nil)
+
+	snap1 := db.AcquireSnapshot()
+	if snap1 == nil {
+		t.Fatal("expected first snapshot")
+	}
+	snap2 := db.AcquireSnapshot()
+	if snap2 == nil {
+		_ = snap1.Close()
+		t.Fatal("expected second snapshot")
+	}
+
+	if got := db.leafGenerationPinCountForTesting(1); got != 0 {
+		_ = snap2.Close()
+		_ = snap1.Close()
+		t.Fatalf("pin count for current generation 1=%d, want 0 before republish", got)
+	}
+	if got := db.leafGenerationPinCountForTesting(2); got != 0 {
+		_ = snap2.Close()
+		_ = snap1.Close()
+		t.Fatalf("pin count for current generation 2=%d, want 0 before republish", got)
+	}
+
+	db.leafGenerationManifest = &leafGenerationManifest{
+		CurrentGenerationID: 3,
+		Generations: []leafGenerationRecord{
+			{GenerationID: 2, State: leafGenerationStateSealed, FileIDs: []uint32{222}},
+			{GenerationID: 3, State: leafGenerationStateWritable, FileIDs: []uint32{333}},
+		},
+	}
+	state2 := &DBState{
+		CommitSeq:       2,
+		RootPageID:      2,
+		LeafGenerations: db.currentLeafGenerationView(),
+	}
+	db.publishSnapshotView(idx, state2, nil)
+
+	if got, want := db.leafGenerationPinCountForTesting(1), uint64(1); got != want {
+		_ = snap2.Close()
+		_ = snap1.Close()
+		t.Fatalf("pin count for stale generation 1=%d, want %d with two shared-view snapshots", got, want)
+	}
+	if got, want := db.leafGenerationPinCountForTesting(2), uint64(1); got != want {
+		_ = snap2.Close()
+		_ = snap1.Close()
+		t.Fatalf("pin count for stale generation 2=%d, want %d with two shared-view snapshots", got, want)
+	}
+
+	if err := snap1.Close(); err != nil {
+		_ = snap2.Close()
+		t.Fatalf("close first snapshot: %v", err)
+	}
+	if got, want := db.leafGenerationPinCountForTesting(1), uint64(1); got != want {
+		_ = snap2.Close()
+		t.Fatalf("pin count for generation 1 after first close=%d, want %d", got, want)
+	}
+	if got, want := db.leafGenerationPinCountForTesting(2), uint64(1); got != want {
+		_ = snap2.Close()
+		t.Fatalf("pin count for generation 2 after first close=%d, want %d", got, want)
+	}
+
+	if err := snap2.Close(); err != nil {
+		t.Fatalf("close second snapshot: %v", err)
+	}
+	if got := db.leafGenerationPinCountForTesting(1); got != 0 {
+		t.Fatalf("pin count for generation 1 after second close=%d, want 0", got)
+	}
+	if got := db.leafGenerationPinCountForTesting(2); got != 0 {
+		t.Fatalf("pin count for generation 2 after second close=%d, want 0", got)
+	}
+}
+
+func TestAcquireSnapshot_SharedLeafGenerationPinSet_RemainsPinnedAcrossPublish(t *testing.T) {
+	idx := &indexGen{registry: lifecycle.NewReaderRegistry()}
+	idx.refs.Store(1)
+
+	db := &DB{snapPool: NewSnapshotPool()}
+	db.leafGenerationManifest = &leafGenerationManifest{
+		CurrentGenerationID: 1,
+		Generations: []leafGenerationRecord{
+			{GenerationID: 1, State: leafGenerationStateWritable, FileIDs: []uint32{111}},
+		},
+	}
+	state1 := &DBState{
+		CommitSeq:       1,
+		RootPageID:      1,
+		LeafGenerations: db.currentLeafGenerationView(),
+	}
+	db.publishSnapshotView(idx, state1, nil)
+
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("expected snapshot")
+	}
+	if got := db.leafGenerationPinCountForTesting(1); got != 0 {
+		_ = snap.Close()
+		t.Fatalf("pin count for current generation 1=%d, want 0 before republish", got)
+	}
+
+	db.leafGenerationManifest = &leafGenerationManifest{
+		CurrentGenerationID: 2,
+		Generations: []leafGenerationRecord{
+			{GenerationID: 2, State: leafGenerationStateWritable, FileIDs: []uint32{222}},
+		},
+	}
+	state2 := &DBState{
+		CommitSeq:       2,
+		RootPageID:      2,
+		LeafGenerations: db.currentLeafGenerationView(),
+	}
+	db.publishSnapshotView(idx, state2, nil)
+
+	if got, want := db.leafGenerationPinCountForTesting(1), uint64(1); got != want {
+		_ = snap.Close()
+		t.Fatalf("pin count for generation 1 after republish=%d, want %d", got, want)
+	}
+	if got := db.leafGenerationPinCountForTesting(2); got != 0 {
+		_ = snap.Close()
+		t.Fatalf("pin count for generation 2 before new snapshot=%d, want 0", got)
+	}
+
+	if err := snap.Close(); err != nil {
+		t.Fatalf("close snapshot: %v", err)
+	}
+	if got := db.leafGenerationPinCountForTesting(1); got != 0 {
+		t.Fatalf("pin count for generation 1 after close=%d, want 0", got)
+	}
+}
+
+func TestAcquireSnapshot_ManualLeafGenerationViewFallbackStillPinsPerSnapshot(t *testing.T) {
+	idx := &indexGen{registry: lifecycle.NewReaderRegistry()}
+	idx.refs.Store(1)
+	state := &DBState{
+		CommitSeq:  1,
+		RootPageID: 1,
+		LeafGenerations: &leafGenerationView{
+			CurrentGenerationID: 1,
+			GenerationOrder:     []uint64{1},
+			Generations: map[uint64]leafGenerationViewGeneration{
+				1: {State: leafGenerationStateWritable, FileIDs: []uint32{111}},
+			},
+			FileToGeneration: map[uint32]uint64{111: 1},
+		},
+	}
+
+	db := &DB{snapPool: NewSnapshotPool()}
+	db.publishSnapshotView(idx, state, nil)
+
+	snap1 := db.AcquireSnapshot()
+	if snap1 == nil {
+		t.Fatal("expected first snapshot")
+	}
+	snap2 := db.AcquireSnapshot()
+	if snap2 == nil {
+		_ = snap1.Close()
+		t.Fatal("expected second snapshot")
+	}
+
+	if got, want := db.leafGenerationPinCountForTesting(1), uint64(2); got != want {
+		_ = snap2.Close()
+		_ = snap1.Close()
+		t.Fatalf("manual view pin count=%d, want %d", got, want)
+	}
+
+	if err := snap1.Close(); err != nil {
+		_ = snap2.Close()
+		t.Fatalf("close first snapshot: %v", err)
+	}
+	if got, want := db.leafGenerationPinCountForTesting(1), uint64(1); got != want {
+		_ = snap2.Close()
+		t.Fatalf("manual view pin count after first close=%d, want %d", got, want)
+	}
+
+	if err := snap2.Close(); err != nil {
+		t.Fatalf("close second snapshot: %v", err)
+	}
+	if got := db.leafGenerationPinCountForTesting(1); got != 0 {
+		t.Fatalf("manual view pin count after second close=%d, want 0", got)
 	}
 }
 
@@ -283,27 +519,51 @@ func TestPublishSnapshotView_SkipsPruneDuringInFlightSnapshotAcquire(t *testing.
 func TestSnapshotPool_PutClearsLeafGenerationRefs(t *testing.T) {
 	pool := NewSnapshotPool()
 	snap := pool.Get()
+	snap.leafGenerationIDs = []uint64{1}
+	snap.leafGenerationPinnedIDs = []uint64{1}
 	snap.leafGenerationRefs = append(snap.leafGenerationRefs, &leafGenerationPinRef{id: 1})
+	snap.leafGenerationPinSet = &leafGenerationPinSet{}
 	pool.Put(snap)
 
 	reused := pool.Get()
+	if len(reused.leafGenerationIDs) != 0 {
+		t.Fatalf("expected pooled snapshot ids slice to be reset, got len=%d", len(reused.leafGenerationIDs))
+	}
+	if len(reused.leafGenerationPinnedIDs) != 0 {
+		t.Fatalf("expected pooled snapshot pinned ids slice to be reset, got len=%d", len(reused.leafGenerationPinnedIDs))
+	}
 	if len(reused.leafGenerationRefs) != 0 {
 		t.Fatalf("expected pooled snapshot refs slice to be reset, got len=%d", len(reused.leafGenerationRefs))
 	}
 	if cap(reused.leafGenerationRefs) > 0 && reused.leafGenerationRefs[:1][0] != nil {
 		t.Fatalf("expected pooled snapshot refs backing array to be cleared")
 	}
+	if reused.leafGenerationPinSet != nil {
+		t.Fatalf("expected pooled snapshot pin set to be cleared")
+	}
 }
 
 func TestSnapshotReleaseLeafGenerationPins_ClearsRefBackingArray(t *testing.T) {
 	snap := &Snapshot{}
+	snap.leafGenerationIDs = []uint64{1}
+	snap.leafGenerationPinnedIDs = []uint64{1}
 	snap.leafGenerationRefs = append(snap.leafGenerationRefs, &leafGenerationPinRef{id: 1})
+	snap.leafGenerationPinSet = &leafGenerationPinSet{}
 	snap.releaseLeafGenerationPins()
 
+	if len(snap.leafGenerationIDs) != 0 {
+		t.Fatalf("expected leafGenerationIDs len=0 after release, got %d", len(snap.leafGenerationIDs))
+	}
+	if len(snap.leafGenerationPinnedIDs) != 0 {
+		t.Fatalf("expected leafGenerationPinnedIDs len=0 after release, got %d", len(snap.leafGenerationPinnedIDs))
+	}
 	if len(snap.leafGenerationRefs) != 0 {
 		t.Fatalf("expected leafGenerationRefs len=0 after release, got %d", len(snap.leafGenerationRefs))
 	}
 	if cap(snap.leafGenerationRefs) > 0 && snap.leafGenerationRefs[:1][0] != nil {
 		t.Fatalf("expected leafGenerationRefs backing array to be cleared on release")
+	}
+	if snap.leafGenerationPinSet != nil {
+		t.Fatalf("expected leafGenerationPinSet to be cleared on release")
 	}
 }
