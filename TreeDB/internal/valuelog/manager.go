@@ -113,6 +113,13 @@ type File struct {
 	mmapReadFallbackReadAt atomic.Uint64
 }
 
+func (f *File) allowsCompactLeafPayload() bool {
+	if f == nil {
+		return false
+	}
+	return allowsCompactLeafLogPayload(f.ID, f.Path)
+}
+
 func openFile(path string, id uint32, dictLookup DictLookup, templateLookup TemplateLookup, templateOpts templ.DecodeOptions, templateCache *templateDefCache) (*File, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -463,7 +470,7 @@ func (f *File) Read(ptr page.ValuePtr, verifyCRC bool) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
-		val, _, err = maybeDecodeLeafLogPayloadTo(f.ID, val, nil)
+		val, _, err = maybeDecodeLeafLogPayloadTo(f.ID, f.Path, val, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -479,7 +486,7 @@ func (f *File) Read(ptr page.ValuePtr, verifyCRC bool) ([]byte, error) {
 			if err != nil {
 				return nil, err
 			}
-			val, _, err = maybeDecodeLeafLogPayloadTo(f.ID, val, nil)
+			val, _, err = maybeDecodeLeafLogPayloadTo(f.ID, f.Path, val, nil)
 			if err != nil {
 				return nil, err
 			}
@@ -502,7 +509,7 @@ func (f *File) ReadUnsafe(ptr page.ValuePtr, verifyCRC bool) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
-		val, _, err = maybeDecodeLeafLogPayloadTo(f.ID, val, nil)
+		val, _, err = maybeDecodeLeafLogPayloadTo(f.ID, f.Path, val, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -515,7 +522,7 @@ func (f *File) ReadUnsafe(ptr page.ValuePtr, verifyCRC bool) ([]byte, error) {
 				if err != nil {
 					return nil, err
 				}
-				val, _, err = maybeDecodeLeafLogPayloadTo(f.ID, val, nil)
+				val, _, err = maybeDecodeLeafLogPayloadTo(f.ID, f.Path, val, nil)
 				if err != nil {
 					return nil, err
 				}
@@ -535,7 +542,7 @@ func (f *File) ReadUnsafe(ptr page.ValuePtr, verifyCRC bool) ([]byte, error) {
 			if err != nil {
 				return nil, err
 			}
-			val, _, err = maybeDecodeLeafLogPayloadTo(f.ID, val, nil)
+			val, _, err = maybeDecodeLeafLogPayloadTo(f.ID, f.Path, val, nil)
 			if err != nil {
 				return nil, err
 			}
@@ -563,7 +570,7 @@ func (f *File) ReadUnsafeTo(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]by
 		if err != nil {
 			return nil, false, err
 		}
-		val, compactUsedDst, err := maybeDecodeLeafLogPayloadTo(f.ID, val, dst)
+		val, compactUsedDst, err := maybeDecodeLeafLogPayloadTo(f.ID, f.Path, val, dst)
 		if err != nil {
 			return nil, false, err
 		}
@@ -576,7 +583,7 @@ func (f *File) ReadUnsafeTo(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]by
 				if err != nil {
 					return nil, false, err
 				}
-				val, compactUsedDst, err := maybeDecodeLeafLogPayloadTo(f.ID, val, dst)
+				val, compactUsedDst, err := maybeDecodeLeafLogPayloadTo(f.ID, f.Path, val, dst)
 				if err != nil {
 					return nil, false, err
 				}
@@ -589,7 +596,7 @@ func (f *File) ReadUnsafeTo(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]by
 				if err != nil {
 					return nil, false, err
 				}
-				val, compactUsedDst, err := maybeDecodeLeafLogPayloadTo(f.ID, val, dst)
+				val, compactUsedDst, err := maybeDecodeLeafLogPayloadTo(f.ID, f.Path, val, dst)
 				if err != nil {
 					return nil, false, err
 				}
@@ -608,7 +615,7 @@ func (f *File) ReadUnsafeTo(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]by
 			if err != nil {
 				return nil, false, err
 			}
-			val, compactUsedDst, err := maybeDecodeLeafLogPayloadTo(f.ID, val, dst)
+			val, compactUsedDst, err := maybeDecodeLeafLogPayloadTo(f.ID, f.Path, val, dst)
 			if err != nil {
 				return nil, false, err
 			}
@@ -623,7 +630,7 @@ func (f *File) ReadUnsafeTo(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]by
 			if err != nil {
 				return nil, false, err
 			}
-			val, compactUsedDst, err := maybeDecodeLeafLogPayloadTo(f.ID, val, dst)
+			val, compactUsedDst, err := maybeDecodeLeafLogPayloadTo(f.ID, f.Path, val, dst)
 			if err != nil {
 				return nil, false, err
 			}
@@ -955,14 +962,14 @@ func (f *File) appendPayloadFromFile(dst []byte, off int64, payloadLen int) ([]b
 		return nil, err
 	}
 	if f.templateLookup == nil || !templ.IsEncodedPayload(payload) {
-		return appendMaybeDecodeLeafLogPayload(f.ID, dst[:oldLen], payload)
+		return appendMaybeDecodeLeafLogPayload(f.ID, f.Path, dst[:oldLen], payload)
 	}
 	encoded := append([]byte(nil), payload...)
 	decoded, err := appendDecodedTemplatePayload(dst[:oldLen], encoded, f.templateLookup, f.templateDefCache, f.templateDecodeOpts)
 	if err != nil {
 		return nil, err
 	}
-	return appendMaybeDecodeLeafLogPayload(f.ID, decoded[:oldLen], decoded[oldLen:])
+	return appendMaybeDecodeLeafLogPayload(f.ID, f.Path, decoded[:oldLen], decoded[oldLen:])
 }
 
 // Set is an immutable snapshot of value-log files for snapshot isolation.

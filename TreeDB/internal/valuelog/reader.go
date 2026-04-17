@@ -299,7 +299,7 @@ func (r *Reader) ReadNext() (uint64, []byte, page.ValuePtr, error) {
 		if r.fileID == 0 {
 			return rid, payload, ptr, nil
 		}
-		payload, _, err := maybeDecodeLeafLogPayloadTo(r.fileID, payload, nil)
+		payload, _, err := maybeDecodeLeafLogPayloadTo(r.fileID, r.f.Name(), payload, nil)
 		if err != nil {
 			return 0, nil, page.ValuePtr{}, err
 		}
@@ -365,7 +365,7 @@ func (r *Reader) ReadNext() (uint64, []byte, page.ValuePtr, error) {
 				}
 				val = decoded
 			}
-			val, _, err = maybeDecodeLeafLogPayloadTo(r.fileID, val, nil)
+			val, _, err = maybeDecodeLeafLogPayloadTo(r.fileID, r.f.Name(), val, nil)
 			if err != nil {
 				return 0, nil, page.ValuePtr{}, err
 			}
@@ -821,13 +821,13 @@ func ReadAtWithDict(f *os.File, ptr page.ValuePtr, verifyCRC bool, dictLookup Di
 				if err != nil {
 					return nil, err
 				}
-				decoded, _, err = maybeDecodeLeafLogPayloadTo(ptr.FileID, decoded, nil)
+				decoded, _, err = maybeDecodeLeafLogPayloadTo(ptr.FileID, f.Name(), decoded, nil)
 				if err != nil {
 					return nil, err
 				}
 				return decoded, nil
 			}
-			val, _, err := maybeDecodeLeafLogPayloadTo(ptr.FileID, val, nil)
+			val, _, err := maybeDecodeLeafLogPayloadTo(ptr.FileID, f.Name(), val, nil)
 			if err != nil {
 				return nil, err
 			}
@@ -849,7 +849,7 @@ func ReadAtWithDict(f *os.File, ptr page.ValuePtr, verifyCRC bool, dictLookup Di
 	if err != nil {
 		return nil, err
 	}
-	val, _, err = maybeDecodeLeafLogPayloadTo(ptr.FileID, val, nil)
+	val, _, err = maybeDecodeLeafLogPayloadTo(ptr.FileID, f.Name(), val, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -988,13 +988,13 @@ func ReadAtWithDictTo(f *os.File, ptr page.ValuePtr, verifyCRC bool, dictLookup 
 				if err != nil {
 					return nil, false, err
 				}
-				decoded, _, err = maybeDecodeLeafLogPayloadTo(ptr.FileID, decoded, nil)
+				decoded, _, err = maybeDecodeLeafLogPayloadTo(ptr.FileID, f.Name(), decoded, nil)
 				if err != nil {
 					return nil, false, err
 				}
 				return decoded, false, nil
 			}
-			val, compactUsedDst, err := maybeDecodeLeafLogPayloadTo(ptr.FileID, val, dst)
+			val, compactUsedDst, err := maybeDecodeLeafLogPayloadTo(ptr.FileID, f.Name(), val, dst)
 			if err != nil {
 				return nil, false, err
 			}
@@ -1029,13 +1029,13 @@ func ReadAtWithDictTo(f *os.File, ptr page.ValuePtr, verifyCRC bool, dictLookup 
 			if err != nil {
 				return nil, false, err
 			}
-			decoded, _, err = maybeDecodeLeafLogPayloadTo(ptr.FileID, decoded, nil)
+			decoded, _, err = maybeDecodeLeafLogPayloadTo(ptr.FileID, f.Name(), decoded, nil)
 			if err != nil {
 				return nil, false, err
 			}
 			return decoded, false, nil
 		}
-		payload, compactUsedDst, err := maybeDecodeLeafLogPayloadTo(ptr.FileID, payload, dst)
+		payload, compactUsedDst, err := maybeDecodeLeafLogPayloadTo(ptr.FileID, f.Name(), payload, dst)
 		if err != nil {
 			return nil, false, err
 		}
@@ -1060,7 +1060,7 @@ func ReadAtWithDictTo(f *os.File, ptr page.ValuePtr, verifyCRC bool, dictLookup 
 		putDecodeScratch(payloadScratch)
 		return nil, false, err
 	}
-	val, compactUsedDst, err := maybeDecodeLeafLogPayloadTo(ptr.FileID, val, dst)
+	val, compactUsedDst, err := maybeDecodeLeafLogPayloadTo(ptr.FileID, f.Name(), val, dst)
 	if err != nil {
 		putDecodeScratch(payloadScratch)
 		return nil, false, err

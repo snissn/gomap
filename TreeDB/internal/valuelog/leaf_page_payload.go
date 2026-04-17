@@ -3,6 +3,7 @@ package valuelog
 import (
 	"bytes"
 	"encoding/binary"
+	"path/filepath"
 
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -11,6 +12,7 @@ import (
 var compactLeafPagePayloadMagic = [8]byte{0x8a, 'L', 'F', 'P', 'G', 0x01, 0x91, 0x3c}
 
 const compactLeafPagePayloadHeaderSize = len(compactLeafPagePayloadMagic) + 4
+const compactLeafPagePayloadDirName = "leaf_vlog"
 
 func MaybeCompactLeafLogPayload(leafPage []byte) ([]byte, bool, error) {
 	if len(leafPage) != page.PageSize {
@@ -69,8 +71,15 @@ func decodeCompactLeafLogPayloadTo(payload, dst []byte) ([]byte, bool, bool, err
 	return out, usedDst, true, nil
 }
 
-func maybeDecodeLeafLogPayloadTo(fileID uint32, payload, dst []byte) ([]byte, bool, error) {
-	if !isLeafLogFileID(fileID) {
+func allowsCompactLeafLogPayload(fileID uint32, path string) bool {
+	if !isLeafLogFileID(fileID) || path == "" {
+		return false
+	}
+	return filepath.Base(filepath.Dir(path)) == compactLeafPagePayloadDirName
+}
+
+func maybeDecodeLeafLogPayloadTo(fileID uint32, path string, payload, dst []byte) ([]byte, bool, error) {
+	if !allowsCompactLeafLogPayload(fileID, path) {
 		return payload, false, nil
 	}
 	out, usedDst, decoded, err := decodeCompactLeafLogPayloadTo(payload, dst)
@@ -83,8 +92,8 @@ func maybeDecodeLeafLogPayloadTo(fileID uint32, payload, dst []byte) ([]byte, bo
 	return payload, false, nil
 }
 
-func appendMaybeDecodeLeafLogPayload(fileID uint32, dst, payload []byte) ([]byte, error) {
-	if !isLeafLogFileID(fileID) {
+func appendMaybeDecodeLeafLogPayload(fileID uint32, path string, dst, payload []byte) ([]byte, error) {
+	if !allowsCompactLeafLogPayload(fileID, path) {
 		if len(payload) == 0 {
 			return dst, nil
 		}

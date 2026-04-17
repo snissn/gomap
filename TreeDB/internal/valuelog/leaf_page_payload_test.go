@@ -29,6 +29,28 @@ func buildSparseLeafPageForPayloadTest(t *testing.T) []byte {
 	return buf
 }
 
+func compactLeafPayloadTestPath(t *testing.T, root string, seq uint32) string {
+	t.Helper()
+	leafDir := filepath.Join(root, compactLeafPagePayloadDirName)
+	if err := os.MkdirAll(leafDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q): %v", leafDir, err)
+	}
+	return filepath.Join(leafDir, fmt.Sprintf("value-l%d-%06d.log", ReservedLeafLogLaneID, seq))
+}
+
+func newLeafPayloadTestManager(t *testing.T, dir, path string, fileID uint32) *Manager {
+	t.Helper()
+	mgr, err := NewManager(dir)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	if err := mgr.RegisterSegment(path, fileID); err != nil {
+		_ = mgr.Close()
+		t.Fatalf("RegisterSegment(%q): %v", path, err)
+	}
+	return mgr
+}
+
 func requireLeafPagesLogicallyEqual(t *testing.T, want, got []byte) {
 	t.Helper()
 	wantNode := node.NewNodeView(want)
@@ -139,7 +161,8 @@ func TestManagerReadUnsafeTo_DecodesCompactLeafPayload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EncodeFileID: %v", err)
 	}
-	w, err := NewWriter(filepath.Join(dir, fmt.Sprintf("value-l%d-%06d.log", ReservedLeafLogLaneID, 1)), fileID)
+	path := compactLeafPayloadTestPath(t, dir, 1)
+	w, err := NewWriter(path, fileID)
 	if err != nil {
 		t.Fatalf("NewWriter: %v", err)
 	}
@@ -160,10 +183,7 @@ func TestManagerReadUnsafeTo_DecodesCompactLeafPayload(t *testing.T) {
 		t.Fatalf("Close writer: %v", err)
 	}
 
-	mgr, err := NewManager(dir)
-	if err != nil {
-		t.Fatalf("NewManager: %v", err)
-	}
+	mgr := newLeafPayloadTestManager(t, dir, path, fileID)
 	defer func() { _ = mgr.Close() }()
 
 	dst := make([]byte, 0, page.PageSize)
@@ -186,7 +206,8 @@ func TestManagerReadUnsafe_DecodesCompactLeafPayload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EncodeFileID: %v", err)
 	}
-	w, err := NewWriter(filepath.Join(dir, fmt.Sprintf("value-l%d-%06d.log", ReservedLeafLogLaneID, 1)), fileID)
+	path := compactLeafPayloadTestPath(t, dir, 1)
+	w, err := NewWriter(path, fileID)
 	if err != nil {
 		t.Fatalf("NewWriter: %v", err)
 	}
@@ -207,10 +228,7 @@ func TestManagerReadUnsafe_DecodesCompactLeafPayload(t *testing.T) {
 		t.Fatalf("Close writer: %v", err)
 	}
 
-	mgr, err := NewManager(dir)
-	if err != nil {
-		t.Fatalf("NewManager: %v", err)
-	}
+	mgr := newLeafPayloadTestManager(t, dir, path, fileID)
 	defer func() { _ = mgr.Close() }()
 
 	got, err := mgr.ReadUnsafe(ptr)
@@ -229,7 +247,8 @@ func TestSetReadUnsafe_DecodesCompactLeafPayload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EncodeFileID: %v", err)
 	}
-	w, err := NewWriter(filepath.Join(dir, fmt.Sprintf("value-l%d-%06d.log", ReservedLeafLogLaneID, 1)), fileID)
+	path := compactLeafPayloadTestPath(t, dir, 1)
+	w, err := NewWriter(path, fileID)
 	if err != nil {
 		t.Fatalf("NewWriter: %v", err)
 	}
@@ -250,10 +269,7 @@ func TestSetReadUnsafe_DecodesCompactLeafPayload(t *testing.T) {
 		t.Fatalf("Close writer: %v", err)
 	}
 
-	mgr, err := NewManager(dir)
-	if err != nil {
-		t.Fatalf("NewManager: %v", err)
-	}
+	mgr := newLeafPayloadTestManager(t, dir, path, fileID)
 	defer func() { _ = mgr.Close() }()
 
 	set := mgr.CurrentSetNoRefresh()
@@ -274,7 +290,8 @@ func TestManagerReadUnsafeAppend_DecodesCompactLeafPayload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EncodeFileID: %v", err)
 	}
-	w, err := NewWriter(filepath.Join(dir, fmt.Sprintf("value-l%d-%06d.log", ReservedLeafLogLaneID, 1)), fileID)
+	path := compactLeafPayloadTestPath(t, dir, 1)
+	w, err := NewWriter(path, fileID)
 	if err != nil {
 		t.Fatalf("NewWriter: %v", err)
 	}
@@ -295,10 +312,7 @@ func TestManagerReadUnsafeAppend_DecodesCompactLeafPayload(t *testing.T) {
 		t.Fatalf("Close writer: %v", err)
 	}
 
-	mgr, err := NewManager(dir)
-	if err != nil {
-		t.Fatalf("NewManager: %v", err)
-	}
+	mgr := newLeafPayloadTestManager(t, dir, path, fileID)
 	defer func() { _ = mgr.Close() }()
 
 	got, err := mgr.ReadUnsafeAppend(ptr, make([]byte, 0, page.PageSize))
@@ -316,6 +330,60 @@ func TestManagerReadUnsafeAppend_DecodesCompactLeafPayload(t *testing.T) {
 }
 
 func TestManagerReadUnsafeAppend_LeafCompactPayloadUsesMmapPath(t *testing.T) {
+	dir := t.TempDir()
+	fileID, err := EncodeFileID(ReservedLeafLogLaneID, 1)
+	if err != nil {
+		t.Fatalf("EncodeFileID: %v", err)
+	}
+	path := compactLeafPayloadTestPath(t, dir, 1)
+	w, err := NewWriter(path, fileID)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+
+	leaf := buildSparseLeafPageForPayloadTest(t)
+	payload, compacted, err := MaybeCompactLeafLogPayload(leaf)
+	if err != nil {
+		t.Fatalf("MaybeCompactLeafLogPayload: %v", err)
+	}
+	if !compacted {
+		t.Fatalf("expected sparse leaf page to compact")
+	}
+	ptr, err := w.Append(0, nil, 1, payload)
+	if err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close writer: %v", err)
+	}
+
+	mgr := newLeafPayloadTestManager(t, dir, path, fileID)
+	defer func() { _ = mgr.Close() }()
+
+	f := mgr.files[fileID]
+	if f == nil {
+		t.Fatalf("manager missing file %d", fileID)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(%q): %v", path, err)
+	}
+	f.mmapData.Store(data)
+
+	got, err := mgr.ReadUnsafeAppend(ptr, make([]byte, 0, page.PageSize))
+	if err != nil {
+		t.Fatalf("ReadUnsafeAppend: %v", err)
+	}
+	if len(got) != page.PageSize {
+		t.Fatalf("ReadUnsafeAppend len=%d want %d", len(got), page.PageSize)
+	}
+	if fallbacks := f.mmapReadFallbackReadAt.Load(); fallbacks != 0 {
+		t.Fatalf("mmapReadFallbackReadAt=%d want 0", fallbacks)
+	}
+	requireLeafPagesLogicallyEqual(t, leaf, got)
+}
+
+func TestManagerReadUnsafe_RegularLane255PathDoesNotDecodeCompactLeafPayload(t *testing.T) {
 	dir := t.TempDir()
 	fileID, err := EncodeFileID(ReservedLeafLogLaneID, 1)
 	if err != nil {
@@ -349,27 +417,16 @@ func TestManagerReadUnsafeAppend_LeafCompactPayloadUsesMmapPath(t *testing.T) {
 	}
 	defer func() { _ = mgr.Close() }()
 
-	f := mgr.files[fileID]
-	if f == nil {
-		t.Fatalf("manager missing file %d", fileID)
-	}
-	data, err := os.ReadFile(path)
+	got, err := mgr.ReadUnsafe(ptr)
 	if err != nil {
-		t.Fatalf("ReadFile(%q): %v", path, err)
+		t.Fatalf("ReadUnsafe: %v", err)
 	}
-	f.mmapData.Store(data)
-
-	got, err := mgr.ReadUnsafeAppend(ptr, make([]byte, 0, page.PageSize))
-	if err != nil {
-		t.Fatalf("ReadUnsafeAppend: %v", err)
+	if len(got) != len(payload) {
+		t.Fatalf("ReadUnsafe len=%d want raw compact payload len=%d", len(got), len(payload))
 	}
-	if len(got) != page.PageSize {
-		t.Fatalf("ReadUnsafeAppend len=%d want %d", len(got), page.PageSize)
+	if !bytes.Equal(got, payload) {
+		t.Fatalf("ReadUnsafe unexpectedly decoded reserved-lane non-leaf-dir payload")
 	}
-	if fallbacks := f.mmapReadFallbackReadAt.Load(); fallbacks != 0 {
-		t.Fatalf("mmapReadFallbackReadAt=%d want 0", fallbacks)
-	}
-	requireLeafPagesLogicallyEqual(t, leaf, got)
 }
 
 func TestAppendMaybeDecodeLeafLogPayload_DecodesIntoPrefixBuffer(t *testing.T) {
@@ -383,7 +440,7 @@ func TestAppendMaybeDecodeLeafLogPayload_DecodesIntoPrefixBuffer(t *testing.T) {
 	}
 	dst := make([]byte, 0, page.PageSize)
 	dst = append(dst, payload...)
-	got, err := appendMaybeDecodeLeafLogPayload(mustEncodeFileID(t, ReservedLeafLogLaneID, 1), dst[:0], dst)
+	got, err := appendMaybeDecodeLeafLogPayload(mustEncodeFileID(t, ReservedLeafLogLaneID, 1), filepath.Join("db", compactLeafPagePayloadDirName, "value-l255-000001.log"), dst[:0], dst)
 	if err != nil {
 		t.Fatalf("appendMaybeDecodeLeafLogPayload: %v", err)
 	}

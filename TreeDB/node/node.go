@@ -417,6 +417,9 @@ func (n *Node) liveByteBounds() (dirEnd, heapStart int, ok bool) {
 			return 0, 0, false
 		}
 		heapStart = int(getUint16(n.data[valDirStart : valDirStart+2]))
+		if heapStart < dirEnd || heapStart > len(n.data) {
+			return 0, 0, false
+		}
 		return dirEnd, heapStart, true
 	}
 	if n.Type() == page.PageTypeLeaf && n.leafColumnarV2() && !n.leafPrefixCompressed() {
@@ -425,6 +428,9 @@ func (n *Node) liveByteBounds() (dirEnd, heapStart int, ok bool) {
 			return 0, 0, false
 		}
 		heapStart = int(getUint16(n.data[valDirStart : valDirStart+2]))
+		if heapStart < dirEnd || heapStart > len(n.data) {
+			return 0, 0, false
+		}
 		return dirEnd, heapStart, true
 	}
 	for i := uint16(0); i < count; i++ {
@@ -433,6 +439,12 @@ func (n *Node) liveByteBounds() (dirEnd, heapStart int, ok bool) {
 			return 0, 0, false
 		}
 		off := getUint16(n.data[dirOff : dirOff+DirectoryEntrySize])
+		if off == 0 {
+			continue
+		}
+		if int(off) < dirEnd || int(off) > len(n.data) {
+			return 0, 0, false
+		}
 		if int(off) < heapStart && off != 0 {
 			heapStart = int(off)
 		}
