@@ -570,13 +570,13 @@ func TestReadUnsafe_LeafLaneUsesLeafSealedMmapByteBudget(t *testing.T) {
 	id1, ptr1 := writeTestSegmentWithPtr(t, dir, ReservedLeafLogLaneID, 1, 1, bytes.Repeat([]byte("a"), 64))
 	id2, ptr2 := writeTestSegmentWithPtr(t, dir, ReservedLeafLogLaneID, 2, 2, bytes.Repeat([]byte("b"), 64))
 
-	f1, err := openFile(filepath.Join(dir, "value-l255-000001.log"), id1, nil, nil, templ.DecodeOptions{}, nil)
+	f1, err := openFile(segmentPathForID(dir, id1), id1, nil, nil, templ.DecodeOptions{}, nil)
 	if err != nil {
 		t.Fatalf("openFile(f1): %v", err)
 	}
 	defer func() { _ = f1.Close() }()
 
-	f2, err := openFile(filepath.Join(dir, "value-l255-000002.log"), id2, nil, nil, templ.DecodeOptions{}, nil)
+	f2, err := openFile(segmentPathForID(dir, id2), id2, nil, nil, templ.DecodeOptions{}, nil)
 	if err != nil {
 		t.Fatalf("openFile(f2): %v", err)
 	}
@@ -634,13 +634,13 @@ func TestReadUnsafe_LeafLaneDenyCacheRechecksWhenLeafBudgetChanges(t *testing.T)
 	id1, ptr1 := writeTestSegmentWithPtr(t, dir, ReservedLeafLogLaneID, 1, 1, bytes.Repeat([]byte("a"), 64))
 	id2, ptr2 := writeTestSegmentWithPtr(t, dir, ReservedLeafLogLaneID, 2, 2, bytes.Repeat([]byte("b"), 64))
 
-	f1, err := openFile(filepath.Join(dir, "value-l255-000001.log"), id1, nil, nil, templ.DecodeOptions{}, nil)
+	f1, err := openFile(segmentPathForID(dir, id1), id1, nil, nil, templ.DecodeOptions{}, nil)
 	if err != nil {
 		t.Fatalf("openFile(f1): %v", err)
 	}
 	defer func() { _ = f1.Close() }()
 
-	f2, err := openFile(filepath.Join(dir, "value-l255-000002.log"), id2, nil, nil, templ.DecodeOptions{}, nil)
+	f2, err := openFile(segmentPathForID(dir, id2), id2, nil, nil, templ.DecodeOptions{}, nil)
 	if err != nil {
 		t.Fatalf("openFile(f2): %v", err)
 	}
@@ -808,6 +808,10 @@ func writeTestSegment(t *testing.T, dir string, lane, seq uint32, rid uint64, va
 	return fileID
 }
 
+func segmentPathForID(dir string, id uint32) string {
+	return (&Manager{dir: dir}).SegmentPath(id)
+}
+
 func TestManagerCurrentSetNoRefresh(t *testing.T) {
 	dir := t.TempDir()
 	seg1 := writeTestSegment(t, dir, 0, 1, 1, bytes.Repeat([]byte("a"), 64))
@@ -904,7 +908,7 @@ func TestManagerSegmentPath_UsesRegisteredPathFromExtraScanDir(t *testing.T) {
 		t.Fatalf("MkdirAll(leaf_vlog): %v", err)
 	}
 	segID := writeTestSegment(t, leafDir, 255, 1, 1, bytes.Repeat([]byte("l"), 64))
-	wantPath := filepath.Join(leafDir, "value-l255-000001.log")
+	wantPath := segmentPathForID(leafDir, segID)
 
 	mgr, err := NewManager(dir)
 	if err != nil {
