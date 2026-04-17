@@ -299,7 +299,7 @@ func (r *Reader) ReadNext() (uint64, []byte, page.ValuePtr, error) {
 		if r.fileID == 0 {
 			return rid, payload, ptr, nil
 		}
-		payload, _, err := maybeDecodeLeafLogPayloadTo(r.fileID, r.f.Name(), payload, nil)
+		payload, _, _, err := maybeDecodeLeafLogPayloadTo(r.fileID, r.f.Name(), payload, nil)
 		if err != nil {
 			return 0, nil, page.ValuePtr{}, err
 		}
@@ -365,7 +365,7 @@ func (r *Reader) ReadNext() (uint64, []byte, page.ValuePtr, error) {
 				}
 				val = decoded
 			}
-			val, _, err = maybeDecodeLeafLogPayloadTo(r.fileID, r.f.Name(), val, nil)
+			val, _, _, err = maybeDecodeLeafLogPayloadTo(r.fileID, r.f.Name(), val, nil)
 			if err != nil {
 				return 0, nil, page.ValuePtr{}, err
 			}
@@ -821,13 +821,13 @@ func ReadAtWithDict(f *os.File, ptr page.ValuePtr, verifyCRC bool, dictLookup Di
 				if err != nil {
 					return nil, err
 				}
-				decoded, _, err = maybeDecodeLeafLogPayloadTo(ptr.FileID, f.Name(), decoded, nil)
+				decoded, _, _, err = maybeDecodeLeafLogPayloadTo(ptr.FileID, f.Name(), decoded, nil)
 				if err != nil {
 					return nil, err
 				}
 				return decoded, nil
 			}
-			val, _, err := maybeDecodeLeafLogPayloadTo(ptr.FileID, f.Name(), val, nil)
+			val, _, _, err := maybeDecodeLeafLogPayloadTo(ptr.FileID, f.Name(), val, nil)
 			if err != nil {
 				return nil, err
 			}
@@ -849,7 +849,7 @@ func ReadAtWithDict(f *os.File, ptr page.ValuePtr, verifyCRC bool, dictLookup Di
 	if err != nil {
 		return nil, err
 	}
-	val, _, err = maybeDecodeLeafLogPayloadTo(ptr.FileID, f.Name(), val, nil)
+	val, _, _, err = maybeDecodeLeafLogPayloadTo(ptr.FileID, f.Name(), val, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -988,17 +988,20 @@ func ReadAtWithDictTo(f *os.File, ptr page.ValuePtr, verifyCRC bool, dictLookup 
 				if err != nil {
 					return nil, false, err
 				}
-				decoded, _, err = maybeDecodeLeafLogPayloadTo(ptr.FileID, f.Name(), decoded, nil)
+				decoded, _, _, err = maybeDecodeLeafLogPayloadTo(ptr.FileID, f.Name(), decoded, nil)
 				if err != nil {
 					return nil, false, err
 				}
 				return decoded, false, nil
 			}
-			val, compactUsedDst, err := maybeDecodeLeafLogPayloadTo(ptr.FileID, f.Name(), val, dst)
+			val, compactUsedDst, compactDecoded, err := maybeDecodeLeafLogPayloadTo(ptr.FileID, f.Name(), val, dst)
 			if err != nil {
 				return nil, false, err
 			}
-			return val, compactUsedDst || usedDst, nil
+			if compactDecoded {
+				return val, compactUsedDst, nil
+			}
+			return val, usedDst, nil
 		}
 	}
 
@@ -1029,17 +1032,20 @@ func ReadAtWithDictTo(f *os.File, ptr page.ValuePtr, verifyCRC bool, dictLookup 
 			if err != nil {
 				return nil, false, err
 			}
-			decoded, _, err = maybeDecodeLeafLogPayloadTo(ptr.FileID, f.Name(), decoded, nil)
+			decoded, _, _, err = maybeDecodeLeafLogPayloadTo(ptr.FileID, f.Name(), decoded, nil)
 			if err != nil {
 				return nil, false, err
 			}
 			return decoded, false, nil
 		}
-		payload, compactUsedDst, err := maybeDecodeLeafLogPayloadTo(ptr.FileID, f.Name(), payload, dst)
+		payload, compactUsedDst, compactDecoded, err := maybeDecodeLeafLogPayloadTo(ptr.FileID, f.Name(), payload, dst)
 		if err != nil {
 			return nil, false, err
 		}
-		return payload, compactUsedDst || usedDst, nil
+		if compactDecoded {
+			return payload, compactUsedDst, nil
+		}
+		return payload, usedDst, nil
 	}
 
 	payloadScratch := getDecodeScratch(int(valueLen))
@@ -1060,17 +1066,21 @@ func ReadAtWithDictTo(f *os.File, ptr page.ValuePtr, verifyCRC bool, dictLookup 
 		putDecodeScratch(payloadScratch)
 		return nil, false, err
 	}
-	val, compactUsedDst, err := maybeDecodeLeafLogPayloadTo(ptr.FileID, f.Name(), val, dst)
+	val, compactUsedDst, compactDecoded, err := maybeDecodeLeafLogPayloadTo(ptr.FileID, f.Name(), val, dst)
 	if err != nil {
 		putDecodeScratch(payloadScratch)
 		return nil, false, err
 	}
 	// Safe to return payload scratch to the pool whenever the returned slice
 	// does not alias the payload buffer backed by payloadScratch.
-	if compactUsedDst || usedDst || !sliceAliasesBytes(payload, val) {
+	finalUsedDst := usedDst
+	if compactDecoded {
+		finalUsedDst = compactUsedDst
+	}
+	if finalUsedDst || !sliceAliasesBytes(payload, val) {
 		putDecodeScratch(payloadScratch)
 	}
-	return val, compactUsedDst || usedDst, nil
+	return val, finalUsedDst, nil
 }
 
 func decodeRecord(header []byte, payload []byte, ptr page.ValuePtr, verifyCRC bool, dictLookup DictLookup, templateLookup TemplateLookup, templateCache *templateDefCache, templateOpts templ.DecodeOptions) ([]byte, error) {

@@ -470,7 +470,7 @@ func (f *File) Read(ptr page.ValuePtr, verifyCRC bool) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
-		val, _, err = maybeDecodeLeafLogPayloadTo(f.ID, f.Path, val, nil)
+		val, _, _, err = maybeDecodeLeafLogPayloadTo(f.ID, f.Path, val, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -486,7 +486,7 @@ func (f *File) Read(ptr page.ValuePtr, verifyCRC bool) ([]byte, error) {
 			if err != nil {
 				return nil, err
 			}
-			val, _, err = maybeDecodeLeafLogPayloadTo(f.ID, f.Path, val, nil)
+			val, _, _, err = maybeDecodeLeafLogPayloadTo(f.ID, f.Path, val, nil)
 			if err != nil {
 				return nil, err
 			}
@@ -509,7 +509,7 @@ func (f *File) ReadUnsafe(ptr page.ValuePtr, verifyCRC bool) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
-		val, _, err = maybeDecodeLeafLogPayloadTo(f.ID, f.Path, val, nil)
+		val, _, _, err = maybeDecodeLeafLogPayloadTo(f.ID, f.Path, val, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -522,7 +522,7 @@ func (f *File) ReadUnsafe(ptr page.ValuePtr, verifyCRC bool) ([]byte, error) {
 				if err != nil {
 					return nil, err
 				}
-				val, _, err = maybeDecodeLeafLogPayloadTo(f.ID, f.Path, val, nil)
+				val, _, _, err = maybeDecodeLeafLogPayloadTo(f.ID, f.Path, val, nil)
 				if err != nil {
 					return nil, err
 				}
@@ -542,7 +542,7 @@ func (f *File) ReadUnsafe(ptr page.ValuePtr, verifyCRC bool) ([]byte, error) {
 			if err != nil {
 				return nil, err
 			}
-			val, _, err = maybeDecodeLeafLogPayloadTo(f.ID, f.Path, val, nil)
+			val, _, _, err = maybeDecodeLeafLogPayloadTo(f.ID, f.Path, val, nil)
 			if err != nil {
 				return nil, err
 			}
@@ -570,11 +570,14 @@ func (f *File) ReadUnsafeTo(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]by
 		if err != nil {
 			return nil, false, err
 		}
-		val, compactUsedDst, err := maybeDecodeLeafLogPayloadTo(f.ID, f.Path, val, dst)
+		val, compactUsedDst, compactDecoded, err := maybeDecodeLeafLogPayloadTo(f.ID, f.Path, val, dst)
 		if err != nil {
 			return nil, false, err
 		}
-		return val, compactUsedDst || usedDst, nil
+		if compactDecoded {
+			return val, compactUsedDst, nil
+		}
+		return val, usedDst, nil
 	}
 	if !f.usesPersistentMmap() {
 		if f.tryEnableSealedLazyMmap() {
@@ -583,11 +586,14 @@ func (f *File) ReadUnsafeTo(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]by
 				if err != nil {
 					return nil, false, err
 				}
-				val, compactUsedDst, err := maybeDecodeLeafLogPayloadTo(f.ID, f.Path, val, dst)
+				val, compactUsedDst, compactDecoded, err := maybeDecodeLeafLogPayloadTo(f.ID, f.Path, val, dst)
 				if err != nil {
 					return nil, false, err
 				}
-				return val, compactUsedDst || usedDst, nil
+				if compactDecoded {
+					return val, compactUsedDst, nil
+				}
+				return val, usedDst, nil
 			}
 		}
 		f.mmapReadFallbackReadAt.Add(1)
@@ -596,11 +602,14 @@ func (f *File) ReadUnsafeTo(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]by
 				if err != nil {
 					return nil, false, err
 				}
-				val, compactUsedDst, err := maybeDecodeLeafLogPayloadTo(f.ID, f.Path, val, dst)
+				val, compactUsedDst, compactDecoded, err := maybeDecodeLeafLogPayloadTo(f.ID, f.Path, val, dst)
 				if err != nil {
 					return nil, false, err
 				}
-				return val, compactUsedDst || usedDst, nil
+				if compactDecoded {
+					return val, compactUsedDst, nil
+				}
+				return val, usedDst, nil
 			}
 		}
 		return ReadAtWithDictTo(f.File, ptr, verifyCRC, f.dictLookup, f.templateLookup, f.templateDefCache, f.templateDecodeOpts, dst)
@@ -615,11 +624,14 @@ func (f *File) ReadUnsafeTo(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]by
 			if err != nil {
 				return nil, false, err
 			}
-			val, compactUsedDst, err := maybeDecodeLeafLogPayloadTo(f.ID, f.Path, val, dst)
+			val, compactUsedDst, compactDecoded, err := maybeDecodeLeafLogPayloadTo(f.ID, f.Path, val, dst)
 			if err != nil {
 				return nil, false, err
 			}
-			return val, compactUsedDst || usedDst, nil
+			if compactDecoded {
+				return val, compactUsedDst, nil
+			}
+			return val, usedDst, nil
 		}
 	} else {
 		f.mmapReadMissDeadMappingCap.Add(1)
@@ -630,11 +642,14 @@ func (f *File) ReadUnsafeTo(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]by
 			if err != nil {
 				return nil, false, err
 			}
-			val, compactUsedDst, err := maybeDecodeLeafLogPayloadTo(f.ID, f.Path, val, dst)
+			val, compactUsedDst, compactDecoded, err := maybeDecodeLeafLogPayloadTo(f.ID, f.Path, val, dst)
 			if err != nil {
 				return nil, false, err
 			}
-			return val, compactUsedDst || usedDst, nil
+			if compactDecoded {
+				return val, compactUsedDst, nil
+			}
+			return val, usedDst, nil
 		}
 	}
 	return ReadAtWithDictTo(f.File, ptr, verifyCRC, f.dictLookup, f.templateLookup, f.templateDefCache, f.templateDecodeOpts, dst)

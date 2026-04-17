@@ -9,6 +9,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
+	templ "github.com/snissn/gomap/TreeDB/template"
 )
 
 func buildSparseLeafPageForPayloadTest(t *testing.T) []byte {
@@ -427,6 +428,54 @@ func TestManagerReadUnsafe_RegularLane255PathDoesNotDecodeCompactLeafPayload(t *
 	if !bytes.Equal(got, payload) {
 		t.Fatalf("ReadUnsafe unexpectedly decoded reserved-lane non-leaf-dir payload")
 	}
+}
+
+func TestReadAtWithDictTo_CompactLeafPayloadDoesNotClaimDstWhenExpanded(t *testing.T) {
+	dir := t.TempDir()
+	fileID, err := EncodeFileID(ReservedLeafLogLaneID, 1)
+	if err != nil {
+		t.Fatalf("EncodeFileID: %v", err)
+	}
+	path := compactLeafPayloadTestPath(t, dir, 1)
+	w, err := NewWriter(path, fileID)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+
+	leaf := buildSparseLeafPageForPayloadTest(t)
+	payload, compacted, err := MaybeCompactLeafLogPayload(leaf)
+	if err != nil {
+		t.Fatalf("MaybeCompactLeafLogPayload: %v", err)
+	}
+	if !compacted {
+		t.Fatalf("expected sparse leaf page to compact")
+	}
+	ptr, err := w.Append(0, nil, 1, payload)
+	if err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close writer: %v", err)
+	}
+
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("Open(%q): %v", path, err)
+	}
+	defer func() { _ = f.Close() }()
+
+	dst := make([]byte, 0, len(payload))
+	got, usedDst, err := ReadAtWithDictTo(f, ptr, true, nil, nil, nil, templ.DecodeOptions{}, dst)
+	if err != nil {
+		t.Fatalf("ReadAtWithDictTo: %v", err)
+	}
+	if usedDst {
+		t.Fatalf("usedDst=true want false when compact leaf expansion allocates a full page")
+	}
+	if len(got) != page.PageSize {
+		t.Fatalf("ReadAtWithDictTo len=%d want %d", len(got), page.PageSize)
+	}
+	requireLeafPagesLogicallyEqual(t, leaf, got)
 }
 
 func TestAppendMaybeDecodeLeafLogPayload_DecodesIntoPrefixBuffer(t *testing.T) {
