@@ -36,6 +36,80 @@ func (r *countingValueReader) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
 	return r.inner.ReadUnsafe(ptr)
 }
 
+type readOnlyLeafRefReader struct {
+	values map[page.ValuePtr][]byte
+}
+
+func (r *readOnlyLeafRefReader) Read(ptr page.ValuePtr) ([]byte, error) {
+	return r.ReadUnsafe(ptr)
+}
+
+func (r *readOnlyLeafRefReader) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
+	val, ok := r.values[ptr]
+	if !ok {
+		return nil, fmt.Errorf("value pointer not found")
+	}
+	return append([]byte(nil), val...), nil
+}
+
+func TestIterator_LeafRefFallbackCountsAsIteratorLoad(t *testing.T) {
+	savedSampleMod := outerLeafReadSampleMod
+	savedEstimator := outerLeafRecentReadEstimator
+	outerLeafLoadsTotal.Store(0)
+	outerLeafPointLoadsTotal.Store(0)
+	outerLeafIteratorLoadsTotal.Store(0)
+	outerLeafBytesTotal.Store(0)
+	outerLeafSamplesTotal.Store(0)
+	outerLeafRecent64HitsTotal.Store(0)
+	outerLeafRecent256HitsTotal.Store(0)
+	outerLeafRecent1KHitsTotal.Store(0)
+	outerLeafRecent4KHitsTotal.Store(0)
+	outerLeafReadSampleMod = 1
+	outerLeafRecentReadEstimator = newOuterLeafRecentReadEstimator()
+	defer func() {
+		outerLeafReadSampleMod = savedSampleMod
+		outerLeafRecentReadEstimator = savedEstimator
+	}()
+
+	leafPtr := page.LeafLogPtr{FileID: 1, Offset: 8}
+	leafID, err := page.EncodeLeafRef(leafPtr)
+	if err != nil {
+		t.Fatalf("EncodeLeafRef: %v", err)
+	}
+
+	leafData := make([]byte, page.PageSize)
+	leaf := node.NewNode(leafData)
+	leaf.SetType(page.PageTypeLeaf)
+	leaf.SetPageID(leafID)
+	leaf.AddLeafEntry([]byte("k"), []byte("v"), node.FlagInline, page.ValuePtr{})
+	leaf.UpdateChecksum()
+
+	reader := &readOnlyLeafRefReader{
+		values: map[page.ValuePtr][]byte{
+			leafPtr.ValuePtr(): leafData,
+		},
+	}
+	tr := New(nil, reader, leafID)
+	it := tr.Iterator(nil, nil)
+	defer it.Close()
+	if !it.Valid() {
+		t.Fatalf("expected valid iterator, err=%v", it.Error())
+	}
+	if got := string(it.Key()); got != "k" {
+		t.Fatalf("Key=%q want %q", got, "k")
+	}
+	stats := OuterLeafReadStatsSnapshot()
+	if stats.LoadsTotal == 0 {
+		t.Fatalf("expected outer-leaf load to be counted")
+	}
+	if stats.IteratorLoadsTotal == 0 {
+		t.Fatalf("expected iterator load to be counted")
+	}
+	if stats.PointLoadsTotal != 0 {
+		t.Fatalf("PointLoadsTotal=%d want 0", stats.PointLoadsTotal)
+	}
+}
+
 func TestIterator_LeafRefChecksumPolicyHonored(t *testing.T) {
 	makeTree := func(checksumEnabled bool) *Tree {
 		tracked := &trackedValueReaderWithChecksumMode{

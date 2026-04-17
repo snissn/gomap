@@ -240,6 +240,10 @@ func (t *Tree) shouldVerifyLeafRefChecksum() bool {
 }
 
 func (t *Tree) loadNodeView(pageID uint64, verifyAlways bool) (node.Node, error) {
+	return t.loadNodeViewWithLoadKind(pageID, verifyAlways, false)
+}
+
+func (t *Tree) loadNodeViewWithLoadKind(pageID uint64, verifyAlways bool, iterator bool) (node.Node, error) {
 	if t == nil {
 		return node.Node{}, errors.New("missing tree")
 	}
@@ -261,6 +265,7 @@ func (t *Tree) loadNodeView(pageID uint64, verifyAlways bool) (node.Node, error)
 		if n.Type() != page.PageTypeLeaf {
 			return node.Node{}, fmt.Errorf("invalid page type %d at page %d", n.Type(), pageID)
 		}
+		noteOuterLeafLoad(ptr.ValuePtr(), len(data), iterator)
 		return n, nil
 	}
 	if t.pager == nil {
@@ -422,6 +427,7 @@ func (t *Tree) lookupLeafValueView(key []byte, dst []byte, appendMode bool) ([]b
 						}
 						return nil, page.ValuePtr{}, 0, false, fmt.Errorf("invalid page type %d at page %d", n.Type(), currID)
 					}
+					noteOuterLeafLoad(ptr.ValuePtr(), len(data), false)
 				}
 			}
 		}

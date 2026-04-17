@@ -23539,6 +23539,23 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.process.read_path.snapshot.queue_pointer_bytes_total"] = fmt.Sprintf("%d", snapshotReadQueuePointerBytesTotal.Load())
 	stats["treedb.process.read_path.snapshot.backend_hits_total"] = fmt.Sprintf("%d", snapshotReadBackendHitsTotal.Load())
 	stats["treedb.process.read_path.snapshot.backend_bytes_total"] = fmt.Sprintf("%d", snapshotReadBackendBytesTotal.Load())
+	outerLeafReadStats := tree.OuterLeafReadStatsSnapshot()
+	stats["treedb.process.read_path.outer_leaf.loads_total"] = fmt.Sprintf("%d", outerLeafReadStats.LoadsTotal)
+	stats["treedb.process.read_path.outer_leaf.point_loads_total"] = fmt.Sprintf("%d", outerLeafReadStats.PointLoadsTotal)
+	stats["treedb.process.read_path.outer_leaf.iterator_loads_total"] = fmt.Sprintf("%d", outerLeafReadStats.IteratorLoadsTotal)
+	stats["treedb.process.read_path.outer_leaf.bytes_total"] = fmt.Sprintf("%d", outerLeafReadStats.BytesTotal)
+	stats["treedb.process.read_path.outer_leaf.sample_mod"] = fmt.Sprintf("%d", outerLeafReadStats.SampleMod)
+	stats["treedb.process.read_path.outer_leaf.samples_total"] = fmt.Sprintf("%d", outerLeafReadStats.SamplesTotal)
+	stats["treedb.process.read_path.outer_leaf.cache_potential.capacity_64_hits_total"] = fmt.Sprintf("%d", outerLeafReadStats.Recent64HitsTotal)
+	stats["treedb.process.read_path.outer_leaf.cache_potential.capacity_256_hits_total"] = fmt.Sprintf("%d", outerLeafReadStats.Recent256HitsTotal)
+	stats["treedb.process.read_path.outer_leaf.cache_potential.capacity_1024_hits_total"] = fmt.Sprintf("%d", outerLeafReadStats.Recent1KHitsTotal)
+	stats["treedb.process.read_path.outer_leaf.cache_potential.capacity_4096_hits_total"] = fmt.Sprintf("%d", outerLeafReadStats.Recent4KHitsTotal)
+	if outerLeafReadStats.SamplesTotal > 0 {
+		stats["treedb.process.read_path.outer_leaf.cache_potential.capacity_64_hit_ratio"] = fmt.Sprintf("%.6f", float64(outerLeafReadStats.Recent64HitsTotal)/float64(outerLeafReadStats.SamplesTotal))
+		stats["treedb.process.read_path.outer_leaf.cache_potential.capacity_256_hit_ratio"] = fmt.Sprintf("%.6f", float64(outerLeafReadStats.Recent256HitsTotal)/float64(outerLeafReadStats.SamplesTotal))
+		stats["treedb.process.read_path.outer_leaf.cache_potential.capacity_1024_hit_ratio"] = fmt.Sprintf("%.6f", float64(outerLeafReadStats.Recent1KHitsTotal)/float64(outerLeafReadStats.SamplesTotal))
+		stats["treedb.process.read_path.outer_leaf.cache_potential.capacity_4096_hit_ratio"] = fmt.Sprintf("%.6f", float64(outerLeafReadStats.Recent4KHitsTotal)/float64(outerLeafReadStats.SamplesTotal))
+	}
 	stats["treedb.process.flush_merge.shadowed_ops_total"] = fmt.Sprintf("%d", mergeShadowedOpsTotal)
 	stats["treedb.process.flush_merge.applied_ops_total"] = fmt.Sprintf("%d", mergeAppliedOpsTotal)
 	if mergeAppliedOpsTotal > 0 {
