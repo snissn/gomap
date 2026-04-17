@@ -208,3 +208,32 @@ func TestSelectLeafGenerationPackCandidates_MaxBytesOnlyUsesGreedySelection(t *t
 		t.Fatalf("GenerationIDs=%v, want %v", got, want)
 	}
 }
+
+func TestBuildLeafGenerationPackTranscodePlan_UsesEstimatedSavings(t *testing.T) {
+	gens := []LeafGenerationPlanGeneration{
+		{GenerationID: 41, State: leafGenerationStateSealed, BytesLive: 1000, BytesToCopy: 1000, LivePages: 4},
+		{GenerationID: 42, State: leafGenerationStateSealed, BytesLive: 800, BytesToCopy: 800, LivePages: 3},
+	}
+	plan, err := buildLeafGenerationPackTranscodePlan(gens, map[uint64]leafGenerationPackTranscodeEstimate{
+		41: {SamplePages: 4, EstimatedBytesAfter: 700, ExpectedSavedBytes: 300},
+		42: {SamplePages: 3, EstimatedBytesAfter: 760, ExpectedSavedBytes: 40},
+	}, LeafGenerationPackFromPlanOptions{MinCandidateGenerations: 2})
+	if err != nil {
+		t.Fatalf("buildLeafGenerationPackTranscodePlan: %v", err)
+	}
+	if got, want := len(plan.Candidates), 2; got != want {
+		t.Fatalf("len(Candidates)=%d want %d", got, want)
+	}
+	if got, want := plan.CandidateGenerationIDs, []uint64{41, 42}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("CandidateGenerationIDs=%v want %v", got, want)
+	}
+	if got, want := plan.CandidateBytesDead, int64(340); got != want {
+		t.Fatalf("CandidateBytesDead=%d want %d", got, want)
+	}
+	if got, want := plan.CandidateBytesLive, int64(1460); got != want {
+		t.Fatalf("CandidateBytesLive=%d want %d", got, want)
+	}
+	if got, want := plan.ExpectedReclaimPerByteCopiedPPM, ratioPPM(340, 1800); got != want {
+		t.Fatalf("ExpectedReclaimPerByteCopiedPPM=%d want %d", got, want)
+	}
+}

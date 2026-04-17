@@ -18,16 +18,21 @@ type LeafGenerationPackSelectOptions struct {
 
 // LeafGenerationPackSelection summarizes a bounded subset of pack candidates.
 type LeafGenerationPackSelection struct {
-	GenerationIDs                   []uint64
-	Generations                     []LeafGenerationPlanGeneration
-	BytesTotal                      int64
-	BytesLive                       int64
-	BytesDead                       int64
-	BytesToCopy                     int64
-	LivePages                       int
-	ExpectedReclaimBytes            int64
-	ExpectedReclaimRatioPPM         int
-	ExpectedReclaimPerByteCopiedPPM int
+	Mode                               string
+	GenerationIDs                      []uint64
+	Generations                        []LeafGenerationPlanGeneration
+	BytesTotal                         int64
+	BytesLive                          int64
+	BytesDead                          int64
+	BytesToCopy                        int64
+	LivePages                          int
+	ExpectedReclaimBytes               int64
+	ExpectedReclaimRatioPPM            int
+	ExpectedReclaimPerByteCopiedPPM    int
+	ExpectedBytesAfter                 int64
+	ExpectedBytesSaved                 int64
+	ExpectedBytesSavedRatioPPM         int
+	ExpectedBytesSavedPerByteCopiedPPM int
 }
 
 type leafGenerationPackSelectionState struct {
@@ -197,6 +202,13 @@ func finalizeLeafGenerationPackSelection(out LeafGenerationPackSelection, opts L
 	out.ExpectedReclaimBytes = out.BytesDead
 	out.ExpectedReclaimRatioPPM = ratioPPM(out.BytesDead, out.BytesTotal)
 	out.ExpectedReclaimPerByteCopiedPPM = ratioPPM(out.BytesDead, out.BytesToCopy)
+	if out.Mode == "" {
+		out.Mode = leafGenerationPackSelectionModeReclaim
+	}
+	out.ExpectedBytesAfter = out.BytesLive
+	out.ExpectedBytesSaved = out.ExpectedReclaimBytes
+	out.ExpectedBytesSavedRatioPPM = out.ExpectedReclaimRatioPPM
+	out.ExpectedBytesSavedPerByteCopiedPPM = out.ExpectedReclaimPerByteCopiedPPM
 	return out, nil
 }
 

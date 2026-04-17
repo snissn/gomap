@@ -179,6 +179,76 @@ func TestLeafGenerationPackRunOnce_CallsLeafGenerationPlanOnce(t *testing.T) {
 	}
 }
 
+func TestLeafGenerationPackRunOnce_UsesTranscodeFallbackWhenPlanHasNoDeadBytes(t *testing.T) {
+	db, leafLog, dir := openLeafGenerationPackTestDB(t)
+
+	writeLeafGenerationKeys(t, db, "k", 32768, 'a')
+	path1, fileID1 := currentLeafSegmentOrFatal(t, leafLog)
+	rawFileID1 := page.ValueLogSegmentID(fileID1)
+	if err := leafLog.rotateLeaf(); err != nil {
+		t.Fatalf("rotateLeaf: %v", err)
+	}
+	writeLeafGenerationKeyRange(t, db, "k", 0, 1, 'b')
+
+	manifestBefore := loadLeafGenerationManifestOrFatal(t, dir)
+	gen1 := findLeafGenerationByFileID(t, manifestBefore, rawFileID1)
+
+	prev := leafGenerationPackSelectTranscode
+	leafGenerationPackSelectTranscode = func(_ *DB, _ context.Context, plan LeafGenerationPlan, _ LeafGenerationPackFromPlanOptions) (LeafGenerationPackSelection, error) {
+		if got, want := plan.Admission, leafGenerationPlanAdmissionEligible; got != want {
+			t.Fatalf("plan admission=%q want %q", got, want)
+		}
+		return LeafGenerationPackSelection{
+			Mode:          leafGenerationPackSelectionModeTranscode,
+			GenerationIDs: []uint64{gen1.GenerationID},
+			Generations: []LeafGenerationPlanGeneration{
+				{GenerationID: gen1.GenerationID, BytesTotal: 4096, BytesLive: 3584, BytesDead: 512, BytesToCopy: 4096, LivePages: 1},
+			},
+			BytesTotal:                         4096,
+			BytesLive:                          3584,
+			BytesDead:                          512,
+			BytesToCopy:                        4096,
+			LivePages:                          1,
+			ExpectedReclaimBytes:               512,
+			ExpectedReclaimRatioPPM:            ratioPPM(512, 4096),
+			ExpectedReclaimPerByteCopiedPPM:    ratioPPM(512, 4096),
+			ExpectedBytesAfter:                 3584,
+			ExpectedBytesSaved:                 512,
+			ExpectedBytesSavedRatioPPM:         ratioPPM(512, 4096),
+			ExpectedBytesSavedPerByteCopiedPPM: ratioPPM(512, 4096),
+		}, nil
+	}
+	defer func() {
+		leafGenerationPackSelectTranscode = prev
+	}()
+
+	stats, err := db.LeafGenerationPackRunOnce(context.Background(), LeafGenerationPackFromPlanOptions{
+		MaxGenerations:             1,
+		MinReclaimPerByteCopiedPPM: 900000,
+		Sync:                       true,
+	})
+	if err != nil {
+		t.Fatalf("LeafGenerationPackRunOnce: %v", err)
+	}
+	if !stats.Ran {
+		t.Fatalf("expected transcode fallback to run, skip_reason=%q", stats.SkipReason)
+	}
+	if got, want := stats.Selection.Mode, leafGenerationPackSelectionModeTranscode; got != want {
+		t.Fatalf("Selection.Mode=%q want %q", got, want)
+	}
+	if got, want := stats.Selection.GenerationIDs, []uint64{gen1.GenerationID}; len(got) != len(want) || got[0] != want[0] {
+		t.Fatalf("Selection.GenerationIDs=%v want %v", got, want)
+	}
+	expectLeafGenerationValue(t, db, leafGenerationKey("k", 0), 'b')
+	expectLeafGenerationValue(t, db, leafGenerationKey("k", 1), 'a')
+	if _, err := db.LeafGenerationGC(context.Background(), LeafGenerationGCOptions{}); err != nil {
+		t.Fatalf("LeafGenerationGC after transcode fallback: %v", err)
+	}
+	if err := waitForPathRemoval(path1, 5*time.Second); err != nil {
+		t.Fatalf("waitForPathRemoval(%s): %v", path1, err)
+	}
+}
+
 func TestLeafGenerationPackFromPlan_ForceBypassesSelectionThresholds(t *testing.T) {
 	db, leafLog, _ := openLeafGenerationPackTestDB(t)
 
