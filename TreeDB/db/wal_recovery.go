@@ -433,6 +433,7 @@ func newReplayInlineAppender(db *DB, segments []logSegment, ridMap map[uint64]pa
 	}
 	writer.blockCompression = db.valueLogCompression != ValueLogCompressionOff
 	writer.blockCodec = valuelogBlockCodecFromDB(db.valueLogBlockCodec)
+	writer.leafBlockCodec = leafPageBlockCodecFromOptions(db.valueLogCompression, db.valueLogAutoPolicy, db.valueLogBlockCodec, db.indexOuterLeavesInValueLog)
 	return &replayInlineAppender{
 		writer:  writer,
 		nextRID: maxRID + 1,

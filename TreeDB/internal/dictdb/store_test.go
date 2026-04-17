@@ -187,6 +187,36 @@ func TestStoreCurrentForClass_SetGetClear(t *testing.T) {
 	}
 }
 
+func TestStoreLeafPayloadMode_SetGet(t *testing.T) {
+	dir := t.TempDir()
+	store, err := Open(dir, db.Options{ChunkSize: 64 * 1024})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer store.Close()
+
+	ctx := context.Background()
+	id, err := store.PutDictBytes(ctx, []byte("outer-compact"))
+	if err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	if useRaw, ok, err := store.GetLeafPayloadMode(ctx, id); err != nil || ok || useRaw {
+		t.Fatalf("missing mode = (%v, %v, %v), want (false, false, nil)", useRaw, ok, err)
+	}
+	if err := store.SetLeafPayloadMode(ctx, id, false); err != nil {
+		t.Fatalf("set compact mode: %v", err)
+	}
+	if useRaw, ok, err := store.GetLeafPayloadMode(ctx, id); err != nil || !ok || useRaw {
+		t.Fatalf("compact mode = (%v, %v, %v), want (false, true, nil)", useRaw, ok, err)
+	}
+	if err := store.SetLeafPayloadMode(ctx, id, true); err != nil {
+		t.Fatalf("set raw mode: %v", err)
+	}
+	if useRaw, ok, err := store.GetLeafPayloadMode(ctx, id); err != nil || !ok || !useRaw {
+		t.Fatalf("raw mode = (%v, %v, %v), want (true, true, nil)", useRaw, ok, err)
+	}
+}
+
 func TestStoreRehydratesHashForExistingBytes(t *testing.T) {
 	dir := t.TempDir()
 	store, err := Open(dir, db.Options{ChunkSize: 64 * 1024})

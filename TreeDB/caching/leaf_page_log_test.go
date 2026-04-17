@@ -2,6 +2,7 @@ package caching
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
 	"sync/atomic"
 	"testing"
@@ -9,6 +10,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
+	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -97,5 +99,56 @@ func TestDB_NoteLeafGenerationRecordLength_ForwardsToBackend(t *testing.T) {
 	}
 	if got := stub.notified[0]; got != ptr {
 		t.Fatalf("notified ptr=%+v want %+v", got, ptr)
+	}
+}
+
+func buildSparseLeafPageForLeafLogTest(t *testing.T) []byte {
+	t.Helper()
+	buf := make([]byte, page.PageSize)
+	b := node.NewBuilderWithOptions(buf, page.PageTypeLeaf, node.BuilderOptions{
+		LeafPrefixCompression: true,
+		LeafColumnar:          true,
+		PackedValuePtr:        true,
+	})
+	for i := 0; i < 4; i++ {
+		if err := b.AddLeafEntry([]byte("key-"+string(rune('a'+i))), []byte("value"), node.FlagInline, page.ValuePtr{}); err != nil {
+			t.Fatalf("AddLeafEntry(%d): %v", i, err)
+		}
+	}
+	b.FinishNoNode()
+	return buf
+}
+
+func TestCachingLeafPageLog_AppendLeafPageCompactsSparseLeafPayload(t *testing.T) {
+	dir := t.TempDir()
+	fileID, err := valuelog.EncodeFileID(uint32(leafLogLaneID), 1)
+	if err != nil {
+		t.Fatalf("EncodeFileID: %v", err)
+	}
+	path := filepath.Join(dir, "leaf.log")
+	writer, err := valuelog.NewWriter(path, fileID)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	defer func() { _ = writer.Close() }()
+
+	db := &DB{closeCh: make(chan struct{})}
+	db.nextRID.Store(0)
+	leaf := lane{id: leafLogLaneID, vlog: writer}
+	leafLog := &cachingLeafPageLog{db: db, lane: &leaf}
+
+	if _, err := leafLog.AppendLeafPage(buildSparseLeafPageForLeafLogTest(t)); err != nil {
+		t.Fatalf("AppendLeafPage: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("Close writer: %v", err)
+	}
+	writer = nil
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("Stat(%q): %v", path, err)
+	}
+	if info.Size() >= int64(valuelog.HeaderSize+page.PageSize) {
+		t.Fatalf("file size=%d want compact leaf payload smaller than raw %d", info.Size(), valuelog.HeaderSize+page.PageSize)
 	}
 }

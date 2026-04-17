@@ -20,6 +20,7 @@ import (
 	"github.com/snissn/compress/zstd"
 	batchpkg "github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
+	"github.com/snissn/gomap/TreeDB/internal/compression"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -2112,6 +2113,135 @@ func readFirstRewriteFrameHeader(t *testing.T, walDir string) valuelog.FrameHead
 	return frameHeader
 }
 
+func readFirstRewriteFrameHeaderForLane(t *testing.T, walDir string, lane uint32) valuelog.FrameHeader {
+	t.Helper()
+	paths, err := filepath.Glob(filepath.Join(walDir, fmt.Sprintf("value-l%d-*.log", lane)))
+	if err != nil {
+		t.Fatalf("glob value-log files: %v", err)
+	}
+	if len(paths) == 0 {
+		t.Fatalf("expected at least one lane-%d value-log file in %s", lane, walDir)
+	}
+	slices.Sort(paths)
+	f, err := os.Open(paths[0])
+	if err != nil {
+		t.Fatalf("open %s: %v", filepath.Base(paths[0]), err)
+	}
+	defer f.Close()
+	var header [valuelog.HeaderSize]byte
+	if _, err := io.ReadFull(f, header[:]); err != nil {
+		t.Fatalf("read record header: %v", err)
+	}
+	bodyLen := binary.LittleEndian.Uint32(header[16:20])
+	body := make([]byte, int(bodyLen))
+	if _, err := io.ReadFull(f, body); err != nil {
+		t.Fatalf("read frame body: %v", err)
+	}
+	frameHeader, _, _, _, err := valuelog.DecodeFrame(body)
+	if err != nil {
+		t.Fatalf("DecodeFrame: %v", err)
+	}
+	return frameHeader
+}
+
+func buildRewriteLeafPageFixture(t *testing.T, seed string) []byte {
+	t.Helper()
+	buf := make([]byte, page.PageSize)
+	b := node.NewBuilderWithOptions(buf, page.PageTypeLeaf, node.BuilderOptions{
+		LeafPrefixCompression: true,
+		LeafColumnar:          true,
+		PackedValuePtr:        true,
+	})
+	for i := 0; i < 16; i++ {
+		key := []byte(fmt.Sprintf("%s-key-%03d", seed, i))
+		value := []byte(fmt.Sprintf("%s-value-%03d-%s", seed, i, strings.Repeat(seed, 8)))
+		if err := b.AddLeafEntry(key, value, node.FlagInline, page.ValuePtr{}); err != nil {
+			t.Fatalf("AddLeafEntry(%d): %v", i, err)
+		}
+	}
+	b.FinishNoNode()
+	return buf
+}
+
+type rewriteTestLeafPageLog struct {
+	db      *DB
+	dir     string
+	w       *valuelog.Writer
+	path    string
+	fileID  uint32
+	nextRID uint64
+}
+
+func (l *rewriteTestLeafPageLog) ensureWriter() error {
+	if l.w != nil {
+		return nil
+	}
+	fileID, err := valuelog.EncodeFileID(rewriteLeafLogLaneID, 1)
+	if err != nil {
+		return err
+	}
+	path := filepath.Join(l.dir, "leaf_vlog", fmt.Sprintf("value-l%d-%06d.log", rewriteLeafLogLaneID, 1))
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	w, err := valuelog.NewWriter(path, fileID)
+	if err != nil {
+		return err
+	}
+	if l.db != nil {
+		if err := l.db.RegisterValueLogSegment(path, fileID); err != nil {
+			_ = w.Close()
+			return err
+		}
+	}
+	l.w = w
+	l.path = path
+	l.fileID = fileID
+	return nil
+}
+
+func (l *rewriteTestLeafPageLog) AppendLeafPage(leafPage []byte) (page.LeafLogPtr, error) {
+	if err := l.ensureWriter(); err != nil {
+		return page.LeafLogPtr{}, err
+	}
+	l.nextRID++
+	ptr, err := l.w.Append(0, nil, l.nextRID, leafPage)
+	if err != nil {
+		return page.LeafLogPtr{}, err
+	}
+	return page.LeafLogPtrFromValuePtr(ptr)
+}
+
+func (l *rewriteTestLeafPageLog) Flush() error {
+	if err := l.ensureWriter(); err != nil {
+		return err
+	}
+	return l.w.Flush()
+}
+
+func (l *rewriteTestLeafPageLog) Sync() error {
+	if err := l.ensureWriter(); err != nil {
+		return err
+	}
+	return l.w.Sync()
+}
+
+func (l *rewriteTestLeafPageLog) Close() error {
+	if l.w == nil {
+		return nil
+	}
+	err := l.w.Close()
+	l.w = nil
+	return err
+}
+
+func (l *rewriteTestLeafPageLog) CurrentValueLogSegment() (string, uint32, bool) {
+	if l == nil || l.path == "" || l.fileID == 0 {
+		return "", 0, false
+	}
+	return l.path, l.fileID, true
+}
+
 func buildRewriteTemplateFixture(t *testing.T) (templ.Config, rewriteTemplateStore, func(uint64) ([]byte, error), []byte) {
 	t.Helper()
 	def := templ.TemplateDef{
@@ -2230,9 +2360,24 @@ func TestRewriteWriter_LeafPagesUseConfiguredLeafLogDir(t *testing.T) {
 	if _, err := w.appendValue(1, []byte("value-payload")); err != nil {
 		t.Fatalf("appendValue: %v", err)
 	}
-	leafPtr, err := w.AppendLeafPage(bytes.Repeat([]byte("l"), 4096))
+	leafBuf := make([]byte, page.PageSize)
+	leafBuilder := node.NewBuilderWithOptions(leafBuf, page.PageTypeLeaf, node.BuilderOptions{
+		LeafPrefixCompression: true,
+		LeafColumnar:          true,
+		PackedValuePtr:        true,
+	})
+	for i := 0; i < 4; i++ {
+		if err := leafBuilder.AddLeafEntry([]byte("rewrite-key-"+string(rune('a'+i))), []byte("value"), node.FlagInline, page.ValuePtr{}); err != nil {
+			t.Fatalf("AddLeafEntry(%d): %v", i, err)
+		}
+	}
+	leafBuilder.FinishNoNode()
+	leafPtr, err := w.AppendLeafPage(leafBuf)
 	if err != nil {
 		t.Fatalf("AppendLeafPage: %v", err)
+	}
+	if got := w.LastLeafPageRecordLength(); got == 0 || int(got) >= valuelog.HeaderSize+page.PageSize {
+		t.Fatalf("LastLeafPageRecordLength=%d want compact leaf payload smaller than raw %d", got, valuelog.HeaderSize+page.PageSize)
 	}
 	if err := w.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
@@ -2300,6 +2445,20 @@ func TestRewriteWriter_LeafPagesUseConfiguredLeafLogDir(t *testing.T) {
 	}
 	if !sawValuePath || !sawLeafPath {
 		t.Fatalf("expected created segments to preserve value and leaf paths, got=%v", createdSegments)
+	}
+}
+
+func TestLeafPageBlockCodecFromOptions_AutoBalancedPrefersLZ4(t *testing.T) {
+	got := leafPageBlockCodecFromOptions(ValueLogCompressionAuto, ValueLogAutoBalanced, ValueLogBlockSnappy, true)
+	if got != valuelog.BlockCodecLZ4 {
+		t.Fatalf("leafPageBlockCodecFromOptions auto/balanced=%v want lz4", got)
+	}
+}
+
+func TestLeafPageBlockCodecFromOptions_ThroughputKeepsConfiguredCodec(t *testing.T) {
+	got := leafPageBlockCodecFromOptions(ValueLogCompressionAuto, ValueLogAutoThroughput, ValueLogBlockSnappy, true)
+	if got != valuelog.BlockCodecSnappy {
+		t.Fatalf("leafPageBlockCodecFromOptions auto/throughput=%v want snappy", got)
 	}
 }
 
@@ -2655,6 +2814,46 @@ func TestRewriteWriter_AppendLeafPageUsesLeafDictWhenConfigured(t *testing.T) {
 	}
 	if blockFrames != 0 {
 		t.Fatalf("expected no block-compressed frames when leaf dict is configured, blockFrames=%d", blockFrames)
+	}
+}
+
+func TestRewriteWriter_AppendLeafPageLane0KeepsRawLeafPayload(t *testing.T) {
+	walDir := t.TempDir()
+	w := newRewriteWriter(walDir, 0, 0, 64<<20)
+	w.blockCompression = false
+
+	leafBuf := make([]byte, page.PageSize)
+	leafBuilder := node.NewBuilderWithOptions(leafBuf, page.PageTypeLeaf, node.BuilderOptions{
+		LeafPrefixCompression: true,
+		LeafColumnar:          true,
+		PackedValuePtr:        true,
+	})
+	for i := 0; i < 4; i++ {
+		if err := leafBuilder.AddLeafEntry([]byte("lane0-leaf-"+string(rune('a'+i))), []byte("value"), node.FlagInline, page.ValuePtr{}); err != nil {
+			t.Fatalf("AddLeafEntry(%d): %v", i, err)
+		}
+	}
+	leafBuilder.FinishNoNode()
+	leafPtr, err := w.AppendLeafPage(leafBuf)
+	if err != nil {
+		t.Fatalf("AppendLeafPage: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	mgr, err := valuelog.NewManager(walDir)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	defer func() { _ = mgr.Close() }()
+
+	got, err := mgr.ReadUnsafe(leafPtr.ValuePtr())
+	if err != nil {
+		t.Fatalf("ReadUnsafe: %v", err)
+	}
+	if len(got) != page.PageSize {
+		t.Fatalf("ReadUnsafe len=%d want %d", len(got), page.PageSize)
 	}
 }
 
@@ -4181,5 +4380,271 @@ func TestValueLogRewriteOnline_SourceFileIDsWithStaleFilterMatchesPlanSelection(
 	}
 	if ptrK2.FileID != ptrs2[0].FileID {
 		t.Fatalf("expected k2 pointer to remain on fully-live explicit segment %d, got %d", ptrs2[0].FileID, ptrK2.FileID)
+	}
+}
+
+func TestValueLogRewriteOffline_UsesCurrentOuterLeafDictForSplitLeafLog(t *testing.T) {
+	dir := t.TempDir()
+	opts := Options{
+		Dir:                        dir,
+		Durability:                 DurabilityWALOffRelaxed,
+		IndexOuterLeavesInValueLog: true,
+		ValueLog: ValueLogOptions{
+			Compression:      ValueLogCompressionBlock,
+			BlockCodec:       ValueLogBlockLZ4,
+			PointerThreshold: 4096,
+		},
+	}
+	db, err := Open(opts)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	leafLog := &rewriteTestLeafPageLog{db: db, dir: dir}
+	db.SetLeafPageLog(leafLog)
+	for i := 0; i < 256; i++ {
+		key := []byte(fmt.Sprintf("leaf-dict-rewrite-%04d", i))
+		val := bytes.Repeat([]byte(fmt.Sprintf("leaf-dict-%02d|", i%32)), 2)
+		if err := db.Set(key, val); err != nil {
+			_ = leafLog.Close()
+			_ = db.Close()
+			t.Fatalf("set %q: %v", key, err)
+		}
+	}
+	if err := leafLog.Close(); err != nil {
+		_ = db.Close()
+		t.Fatalf("close leaf log: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	leafA, _, err := valuelog.MaybeCompactLeafLogPayload(buildRewriteLeafPageFixture(t, "outer-a"))
+	if err != nil {
+		t.Fatalf("MaybeCompactLeafLogPayload(a): %v", err)
+	}
+	leafB, _, err := valuelog.MaybeCompactLeafLogPayload(buildRewriteLeafPageFixture(t, "outer-b"))
+	if err != nil {
+		t.Fatalf("MaybeCompactLeafLogPayload(b): %v", err)
+	}
+	leafC, _, err := valuelog.MaybeCompactLeafLogPayload(buildRewriteLeafPageFixture(t, "outer-c"))
+	if err != nil {
+		t.Fatalf("MaybeCompactLeafLogPayload(c): %v", err)
+	}
+	dictID := uint64(99231)
+	dict, err := zstd.BuildDict(zstd.BuildDictOptions{
+		ID:       uint32(dictID),
+		Contents: [][]byte{leafA, leafB, leafC},
+		History:  append([]byte(nil), leafA...),
+		Offsets:  [3]int{1, 4, 8},
+		Level:    zstd.SpeedFastest,
+	})
+	if err != nil {
+		t.Fatalf("BuildDict: %v", err)
+	}
+	if len(dict) == 0 {
+		t.Fatal("expected non-empty dict")
+	}
+
+	rewriteOpts := opts
+	rewriteOpts.ValueLog.DictLookup = func(id uint64) ([]byte, error) {
+		if id != dictID {
+			return nil, valuelog.ErrMissingDict
+		}
+		return dict, nil
+	}
+	rewriteOpts.ValueLog.DictCurrentForClass = func(_ context.Context, class string) (uint64, error) {
+		if class == "outer_leaf" {
+			return dictID, nil
+		}
+		return 0, nil
+	}
+	stats, err := ValueLogRewriteOffline(rewriteOpts)
+	if err != nil {
+		t.Fatalf("ValueLogRewriteOffline: %v", err)
+	}
+	if stats.RecordsCopied == 0 {
+		t.Fatalf("expected copied records, stats=%+v", stats)
+	}
+
+	leafDir := filepath.Join(dir, "leaf_vlog")
+	frameHeader := readFirstRewriteFrameHeaderForLane(t, leafDir, rewriteLeafLogLaneID)
+	if frameHeader.DictID != dictID {
+		t.Fatalf("leaf rewrite dict id=%d want=%d", frameHeader.DictID, dictID)
+	}
+}
+
+func TestPrepareRewriteLeafDict_LiveLeafRefBootstrapBestEffort(t *testing.T) {
+	dir := t.TempDir()
+	opts := Options{
+		Dir:                        dir,
+		Durability:                 DurabilityWALOffRelaxed,
+		IndexOuterLeavesInValueLog: true,
+		ValueLog: ValueLogOptions{
+			Compression:      ValueLogCompressionBlock,
+			BlockCodec:       ValueLogBlockLZ4,
+			PointerThreshold: 4096,
+		},
+	}
+	db, err := Open(opts)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	leafLog := &rewriteTestLeafPageLog{db: db, dir: dir}
+	db.SetLeafPageLog(leafLog)
+	defer func() { _ = leafLog.Close() }()
+	for i := 0; i < 1024; i++ {
+		key := []byte(fmt.Sprintf("leaf-dict-bootstrap-%04d", i))
+		val := bytes.Repeat([]byte(fmt.Sprintf("bootstrap/%02d/%02d/%s|", i%32, (i/32)%16, strings.Repeat(string('a'+byte(i%26)), 6))), 8)
+		if err := db.Set(key, val); err != nil {
+			t.Fatalf("set %q: %v", key, err)
+		}
+	}
+	state := db.State()
+	if state == nil {
+		t.Fatal("expected db state")
+	}
+	var putCalls int
+	var gotPutDict []byte
+	var setCurrentCalls int
+	dictID, dictBytes, useRawPages, err := prepareRewriteLeafDict(db, state, nil, nil, nil, func(_ context.Context, dict []byte) (uint64, error) {
+		putCalls++
+		gotPutDict = append([]byte(nil), dict...)
+		return 55123, nil
+	}, func(_ context.Context, class string, dictID uint64) error {
+		setCurrentCalls++
+		if class != "outer_leaf" {
+			t.Fatalf("set current class=%q want outer_leaf", class)
+		}
+		if dictID != 55123 {
+			t.Fatalf("set current dict id=%d want=55123", dictID)
+		}
+		return nil
+	}, func(_ context.Context, dictID uint64, useRawPages bool) error {
+		if dictID != 55123 {
+			t.Fatalf("set payload mode dict id=%d want=55123", dictID)
+		}
+		if useRawPages {
+			t.Fatal("bootstrapped compact leaf dict unexpectedly marked raw")
+		}
+		return nil
+	}, compression.TrainConfig{
+		TrainBytes: 64 << 10,
+		DictBytes:  8 << 10,
+		MinRecords: 4,
+	})
+	if err != nil {
+		t.Fatalf("prepareRewriteLeafDict: %v", err)
+	}
+	if useRawPages {
+		t.Fatal("expected bootstrapped leaf dict to target compact leaf payloads")
+	}
+	if dictID != 0 {
+		if dictID != 55123 {
+			t.Fatalf("dict id=%d want=55123", dictID)
+		}
+		if putCalls != 1 {
+			t.Fatalf("dict put calls=%d want=1", putCalls)
+		}
+		if setCurrentCalls != 1 {
+			t.Fatalf("set current calls=%d want=1", setCurrentCalls)
+		}
+		if len(dictBytes) == 0 {
+			t.Fatal("expected trained leaf dict bytes")
+		}
+		if !bytes.Equal(dictBytes, gotPutDict) {
+			t.Fatal("expected returned dict bytes to match published bytes")
+		}
+		return
+	}
+	if putCalls != 0 {
+		t.Fatalf("dict put calls=%d want=0 when no dict is produced", putCalls)
+	}
+	if setCurrentCalls != 0 {
+		t.Fatalf("set current calls=%d want=0 when no dict is produced", setCurrentCalls)
+	}
+	if len(dictBytes) != 0 {
+		t.Fatalf("dict bytes len=%d want=0 when bootstrap does not produce a usable dict", len(dictBytes))
+	}
+}
+
+func TestPrepareRewriteLeafDict_CurrentClassCompactModePreserved(t *testing.T) {
+	state := &DBState{ValueLogSet: &valuelog.Set{}}
+	dictBytes := []byte("compact-leaf-dict")
+	dictID, gotDict, useRawPages, err := prepareRewriteLeafDict(
+		&DB{},
+		state,
+		func(_ context.Context, class string) (uint64, error) {
+			if class != "outer_leaf" {
+				t.Fatalf("current class=%q want outer_leaf", class)
+			}
+			return 8123, nil
+		},
+		func(_ context.Context, id uint64) (bool, bool, error) {
+			if id != 8123 {
+				t.Fatalf("mode lookup dict id=%d want=8123", id)
+			}
+			return false, true, nil
+		},
+		func(id uint64) ([]byte, error) {
+			if id != 8123 {
+				t.Fatalf("lookup dict id=%d want=8123", id)
+			}
+			return append([]byte(nil), dictBytes...), nil
+		},
+		nil,
+		nil,
+		nil,
+		compression.TrainConfig{},
+	)
+	if err != nil {
+		t.Fatalf("prepareRewriteLeafDict: %v", err)
+	}
+	if dictID != 8123 {
+		t.Fatalf("dict id=%d want=8123", dictID)
+	}
+	if useRawPages {
+		t.Fatal("expected explicit compact mode to preserve compact payloads")
+	}
+	if !bytes.Equal(gotDict, dictBytes) {
+		t.Fatalf("dict bytes mismatch: got=%x want=%x", gotDict, dictBytes)
+	}
+}
+
+func TestPrepareRewriteLeafDict_CurrentClassMissingModeDefaultsCompact(t *testing.T) {
+	dictID, _, useRawPages, err := prepareRewriteLeafDict(
+		&DB{},
+		&DBState{ValueLogSet: &valuelog.Set{}},
+		func(_ context.Context, class string) (uint64, error) {
+			if class != "outer_leaf" {
+				t.Fatalf("current class=%q want outer_leaf", class)
+			}
+			return 9123, nil
+		},
+		func(_ context.Context, id uint64) (bool, bool, error) {
+			if id != 9123 {
+				t.Fatalf("mode lookup dict id=%d want=9123", id)
+			}
+			return false, false, nil
+		},
+		func(id uint64) ([]byte, error) {
+			if id != 9123 {
+				t.Fatalf("lookup dict id=%d want=9123", id)
+			}
+			return []byte("class-current-dict"), nil
+		},
+		nil,
+		nil,
+		nil,
+		compression.TrainConfig{},
+	)
+	if err != nil {
+		t.Fatalf("prepareRewriteLeafDict: %v", err)
+	}
+	if dictID != 9123 {
+		t.Fatalf("dict id=%d want=9123", dictID)
+	}
+	if useRawPages {
+		t.Fatal("expected class-current dict without mode metadata to default to compact payloads")
 	}
 }

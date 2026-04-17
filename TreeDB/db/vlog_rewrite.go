@@ -16,9 +16,12 @@ import (
 	"sync"
 	"time"
 
+	"github.com/snissn/compress/zstd"
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/bulk"
+	"github.com/snissn/gomap/TreeDB/internal/compression"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/internal/leafrefscan"
 	"github.com/snissn/gomap/TreeDB/internal/lockfile"
 	"github.com/snissn/gomap/TreeDB/internal/outerleaf"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
@@ -41,7 +44,7 @@ var rewriteWALSegmentsLister = listValueLogSegments
 
 func rewriteAllowDictForSmallPayload(value []byte) bool {
 	if len(value) < page.PageSize {
-		return false
+		return valuelog.HasCompactLeafLogPayload(value)
 	}
 	if len(value) == page.PageSize {
 		return true
@@ -369,6 +372,23 @@ func valuelogBlockCodecFromDB(codec ValueLogBlockCodec) valuelog.BlockCodec {
 	}
 }
 
+func leafPageBlockCodecFromOptions(compressionMode ValueLogCompressionMode, autoPolicy ValueLogAutoPolicy, configured ValueLogBlockCodec, splitLeafLog bool) valuelog.BlockCodec {
+	codec := valuelogBlockCodecFromDB(configured)
+	if !splitLeafLog {
+		return codec
+	}
+	if compressionMode == 0 {
+		compressionMode = ValueLogCompressionAuto
+	}
+	switch compressionMode {
+	case ValueLogCompressionAuto:
+		if autoPolicy != ValueLogAutoThroughput {
+			return valuelog.BlockCodecLZ4
+		}
+	}
+	return codec
+}
+
 func scanValueLogSegmentPreferredDictID(seg *valuelog.File) (uint64, error) {
 	if seg == nil || seg.File == nil {
 		return 0, nil
@@ -452,6 +472,289 @@ func scanValueLogSetPreferredDictID(set *valuelog.Set) (uint64, error) {
 		}
 	}
 	return 0, nil
+}
+
+func scanValueLogSetPreferredDictIDFiltered(set *valuelog.Set, keep func(uint32, *valuelog.File) bool) (uint64, error) {
+	if set == nil || len(set.Files) == 0 {
+		return 0, nil
+	}
+	ids := make([]uint32, 0, len(set.Files))
+	for id, seg := range set.Files {
+		if keep != nil && !keep(id, seg) {
+			continue
+		}
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	for _, id := range ids {
+		dictID, err := scanValueLogSegmentPreferredDictID(set.Files[id])
+		if err != nil {
+			return 0, fmt.Errorf("vlog-rewrite: scan preferred dict segment file=%d: %w", id, err)
+		}
+		if dictID != 0 {
+			return dictID, nil
+		}
+	}
+	return 0, nil
+}
+
+func scanValueLogSetPreferredLeafDictID(set *valuelog.Set) (uint64, error) {
+	return scanValueLogSetPreferredDictIDFiltered(set, func(id uint32, _ *valuelog.File) bool {
+		lane, _ := valuelog.DecodeFileID(id)
+		return lane == rewriteLeafLogLaneID
+	})
+}
+
+func rewriteLeafDictTrainBytes(cfg compression.TrainConfig) int {
+	if cfg.TrainBytes > 0 {
+		return cfg.TrainBytes
+	}
+	return compression.DefaultTrainBytes
+}
+
+func rewriteLeafDictMinRecords(cfg compression.TrainConfig) int {
+	if cfg.MinRecords > 0 {
+		return cfg.MinRecords
+	}
+	return compression.DefaultTrainMinRecords
+}
+
+func rewriteLeafDictBytes(cfg compression.TrainConfig) int {
+	if cfg.DictBytes > 0 {
+		return cfg.DictBytes
+	}
+	return compression.DefaultTrainDictBytes
+}
+
+var errRewriteLeafDictEnoughSamples = errors.New("vlog-rewrite: enough leaf dict samples")
+
+func trainRewriteLeafDictFromLiveLeafRefs(d *DB, state *DBState, cfg compression.TrainConfig) ([]byte, error) {
+	if d == nil || state == nil || d.valueLogManager == nil {
+		return nil, nil
+	}
+	roots := make([]uint64, 0, 2)
+	if state.RootPageID != 0 {
+		roots = append(roots, state.RootPageID)
+	}
+	if state.SystemRootPageID != 0 {
+		roots = append(roots, state.SystemRootPageID)
+	}
+	if len(roots) == 0 {
+		return nil, nil
+	}
+	targetBytes := rewriteLeafDictTrainBytes(cfg)
+	minRecords := rewriteLeafDictMinRecords(cfg)
+	if targetBytes <= 0 || minRecords <= 0 {
+		return nil, nil
+	}
+	seen := make(map[page.ValuePtr]struct{}, 1024)
+	samples := make([][]byte, 0, minRecords)
+	totalBytes := 0
+	scratch := make([]byte, 0, page.PageSize)
+	visit := func(ptr page.LeafLogPtr) error {
+		valuePtr := ptr.ValuePtr()
+		if _, ok := seen[valuePtr]; ok {
+			return nil
+		}
+		seen[valuePtr] = struct{}{}
+		leafPage, usedScratch, err := d.valueLogManager.ReadUnsafeTo(valuePtr, scratch[:0])
+		if err != nil {
+			return err
+		}
+		if usedScratch {
+			if cap(leafPage) > rewriteReadScratchMaxCap {
+				scratch = nil
+			} else {
+				scratch = leafPage[:0]
+			}
+		}
+		payload, _, err := valuelog.MaybeCompactLeafLogPayload(leafPage)
+		if err != nil {
+			return err
+		}
+		samples = append(samples, append([]byte(nil), payload...))
+		totalBytes += len(payload)
+		if totalBytes >= targetBytes && len(samples) >= minRecords {
+			return errRewriteLeafDictEnoughSamples
+		}
+		return nil
+	}
+	if err := leafrefscan.WalkRoots(context.Background(), roots, d.Pager().Get, nil, visit); err != nil && !errors.Is(err, errRewriteLeafDictEnoughSamples) {
+		return nil, err
+	}
+	if len(samples) < minRecords {
+		return nil, nil
+	}
+	dict, err := buildRewriteLeafDict(samples, rewriteLeafDictBytes(cfg))
+	if err != nil {
+		return nil, nil
+	}
+	return dict, nil
+}
+
+func buildRewriteLeafDict(samples [][]byte, dictBytes int) ([]byte, error) {
+	if len(samples) == 0 || dictBytes <= 0 {
+		return nil, nil
+	}
+	historyCap := compression.DefaultTrainMaxHistoryBytes
+	history := make([]byte, 0, historyCap)
+	for _, sample := range samples {
+		if len(history) >= historyCap {
+			break
+		}
+		remain := historyCap - len(history)
+		if remain > len(sample) {
+			remain = len(sample)
+		}
+		history = append(history, sample[:remain]...)
+	}
+	dict, err := tryBuildRewriteLeafDict(samples, history)
+	if (err != nil || len(dict) == 0) && len(history) > 0 {
+		dict, err = tryBuildRewriteLeafDict(samples, nil)
+	}
+	if err != nil || len(dict) == 0 {
+		return nil, err
+	}
+	if len(dict) > dictBytes {
+		dict = append([]byte(nil), dict[:dictBytes]...)
+	} else if len(dict) < dictBytes {
+		shaped := make([]byte, dictBytes)
+		copy(shaped, dict)
+		dict = shaped
+	}
+	if err := validateRewriteLeafDict(dict); err != nil {
+		return nil, err
+	}
+	return dict, nil
+}
+
+func tryBuildRewriteLeafDict(samples [][]byte, history []byte) (dict []byte, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			dict = nil
+			err = fmt.Errorf("rewrite leaf dict build panic: %v", r)
+		}
+	}()
+	return zstd.BuildDict(zstd.BuildDictOptions{
+		ID:       1,
+		Contents: samples,
+		History:  history,
+		Offsets:  [3]int{1, 4, 8},
+		Level:    zstd.SpeedFastest,
+	})
+}
+
+func validateRewriteLeafDict(dict []byte) error {
+	enc, err := zstd.NewWriter(nil,
+		zstd.WithEncoderLevel(zstd.SpeedFastest),
+		zstd.WithEncoderCRC(false),
+		zstd.WithEncoderConcurrency(1),
+		zstd.WithEncoderDict(dict),
+	)
+	if err != nil {
+		return err
+	}
+	defer enc.Close()
+
+	dummy := []byte("rewrite_leaf_dict_validation_payload")
+	compressed := enc.EncodeAll(dummy, nil)
+
+	dec, err := zstd.NewReader(nil, zstd.WithDecoderDicts(dict))
+	if err != nil {
+		return err
+	}
+	defer dec.Close()
+
+	got, err := dec.DecodeAll(compressed, nil)
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(got, dummy) {
+		return fmt.Errorf("rewrite leaf dict validation mismatch")
+	}
+	return nil
+}
+
+func resolveRewriteLeafDictUseRawPages(dictLeafPayloadMode func(context.Context, uint64) (bool, bool, error), dictID uint64, fallbackUseRawPages bool) (bool, error) {
+	if dictID == 0 || dictLeafPayloadMode == nil {
+		return fallbackUseRawPages, nil
+	}
+	useRawPages, ok, err := dictLeafPayloadMode(context.Background(), dictID)
+	if err != nil {
+		return false, err
+	}
+	if ok {
+		return useRawPages, nil
+	}
+	return fallbackUseRawPages, nil
+}
+
+func prepareRewriteLeafDict(d *DB, state *DBState, currentForClass func(context.Context, string) (uint64, error), dictLeafPayloadMode func(context.Context, uint64) (bool, bool, error), dictLookup valuelog.DictLookup, dictPut func(context.Context, []byte) (uint64, error), dictSetCurrentForClass func(context.Context, string, uint64) error, dictSetLeafPayloadMode func(context.Context, uint64, bool) error, cfg compression.TrainConfig) (uint64, []byte, bool, error) {
+	if d == nil || state == nil {
+		return 0, nil, false, nil
+	}
+	if currentForClass != nil {
+		dictID, err := currentForClass(context.Background(), "outer_leaf")
+		if err != nil {
+			return 0, nil, false, err
+		}
+		if dictID != 0 && dictLookup != nil {
+			dictBytes, err := dictLookup(dictID)
+			if err == nil && len(dictBytes) > 0 {
+				useRawPages, err := resolveRewriteLeafDictUseRawPages(dictLeafPayloadMode, dictID, false)
+				if err != nil {
+					return 0, nil, false, err
+				}
+				return dictID, dictBytes, useRawPages, nil
+			}
+		}
+	}
+	if preferredLeafDict, err := scanValueLogSetPreferredLeafDictID(state.ValueLogSet); err != nil {
+		return 0, nil, false, err
+	} else if preferredLeafDict != 0 && dictLookup != nil {
+		dictBytes, err := dictLookup(preferredLeafDict)
+		if err == nil && len(dictBytes) > 0 {
+			useRawPages, err := resolveRewriteLeafDictUseRawPages(dictLeafPayloadMode, preferredLeafDict, true)
+			if err != nil {
+				return 0, nil, false, err
+			}
+			return preferredLeafDict, dictBytes, useRawPages, nil
+		}
+	}
+	if preferredDictGlobal, err := scanValueLogSetPreferredDictID(state.ValueLogSet); err != nil {
+		return 0, nil, false, err
+	} else if preferredDictGlobal != 0 && dictLookup != nil {
+		dictBytes, err := dictLookup(preferredDictGlobal)
+		if err == nil && len(dictBytes) > 0 {
+			useRawPages, err := resolveRewriteLeafDictUseRawPages(dictLeafPayloadMode, preferredDictGlobal, true)
+			if err != nil {
+				return 0, nil, false, err
+			}
+			return preferredDictGlobal, dictBytes, useRawPages, nil
+		}
+	}
+	if dictPut == nil {
+		return 0, nil, false, nil
+	}
+	dictBytes, err := trainRewriteLeafDictFromLiveLeafRefs(d, state, cfg)
+	if err != nil || len(dictBytes) == 0 {
+		return 0, nil, false, err
+	}
+	dictID, err := dictPut(context.Background(), dictBytes)
+	if err != nil {
+		return 0, nil, false, err
+	}
+	if dictSetCurrentForClass != nil {
+		if err := dictSetCurrentForClass(context.Background(), "outer_leaf", dictID); err != nil {
+			return 0, nil, false, err
+		}
+	}
+	if dictSetLeafPayloadMode != nil {
+		if err := dictSetLeafPayloadMode(context.Background(), dictID, false); err != nil {
+			return 0, nil, false, err
+		}
+	}
+	return dictID, dictBytes, false, nil
 }
 
 func hasRewriteSourceSelection(opts ValueLogRewriteOnlineOptions) bool {
@@ -1406,6 +1709,18 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 	}
 	writer.blockCompression = db.valueLogCompression != ValueLogCompressionOff
 	writer.blockCodec = valuelogBlockCodecFromDB(db.valueLogBlockCodec)
+	writer.leafBlockCodec = leafPageBlockCodecFromOptions(db.valueLogCompression, db.valueLogAutoPolicy, db.valueLogBlockCodec, db.indexOuterLeavesInValueLog)
+	if db.indexOuterLeavesInValueLog {
+		if state := db.State(); state != nil {
+			leafDictID, leafDictBytes, leafDictUseRawPages, err := prepareRewriteLeafDict(db, state, db.valueLogDictCurrentForClass, db.valueLogDictLeafPayloadMode, db.valueLogDictLookup, db.valueLogDictPut, db.valueLogDictSetCurrentForClass, db.valueLogDictSetLeafPayloadMode, compression.TrainConfig{})
+			if err != nil {
+				return stats, err
+			}
+			if leafDictID != 0 && len(leafDictBytes) > 0 {
+				writer.SetLeafDictMode(leafDictID, leafDictBytes, leafDictUseRawPages)
+			}
+		}
+	}
 	defer func() { _ = writer.Close() }()
 
 	batchSize := normalizeValueLogRewriteBatchSize(opts.BatchSize)
@@ -2314,6 +2629,7 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 	}
 	writer.blockCompression = compressionMode != ValueLogCompressionOff
 	writer.blockCodec = valuelogBlockCodecFromDB(opts.ValueLog.BlockCodec)
+	writer.leafBlockCodec = leafPageBlockCodecFromOptions(compressionMode, opts.ValueLog.AutoPolicy, opts.ValueLog.BlockCodec, opts.IndexOuterLeavesInValueLog)
 	if err := writer.ensureWriter(); err != nil {
 		_ = d.Close()
 		return stats, err
@@ -2347,9 +2663,15 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 		_ = d.Close()
 		return stats, err
 	}
-	if writer.blockCompression && preferredDictGlobal != 0 && opts.ValueLog.DictLookup != nil {
-		if dictBytes, dictErr := opts.ValueLog.DictLookup(preferredDictGlobal); dictErr == nil && len(dictBytes) > 0 {
-			writer.SetLeafDict(preferredDictGlobal, dictBytes)
+	if writer.blockCompression && opts.IndexOuterLeavesInValueLog {
+		leafDictID, leafDictBytes, leafDictUseRawPages, err := prepareRewriteLeafDict(d, state, opts.ValueLog.DictCurrentForClass, opts.ValueLog.DictLeafPayloadMode, opts.ValueLog.DictLookup, opts.ValueLog.DictPut, opts.ValueLog.DictSetCurrentForClass, opts.ValueLog.DictSetLeafPayloadMode, opts.ValueLog.DictTrain)
+		if err != nil {
+			_ = newPager.Close()
+			_ = d.Close()
+			return stats, err
+		}
+		if leafDictID != 0 && len(leafDictBytes) > 0 {
+			writer.SetLeafDictMode(leafDictID, leafDictBytes, leafDictUseRawPages)
 		}
 	}
 
@@ -2531,11 +2853,13 @@ type rewriteWriter struct {
 	// not consult this setting.
 	blockCompression        bool
 	blockCodec              valuelog.BlockCodec
+	leafBlockCodec          valuelog.BlockCodec
 	keepIoNsPerByte         float64
 	keepEncodeNsRaw         float64
 	keepSafetyMargin        float64
 	leafDictID              uint64
 	leafDict                []byte
+	leafDictUseRawPages     bool
 	templateMode            template.Mode
 	templateEngineValue     *template.Engine
 	templateEngineOuterLeaf *template.Engine
@@ -2716,14 +3040,22 @@ func (w *rewriteWriter) appendLeafPageWithRID(rid uint64, leafPage []byte) (page
 	if rid == 0 {
 		return page.LeafLogPtr{}, fmt.Errorf("value-log rid space exhausted")
 	}
-	if w.leafDir != "" {
-		return w.appendLeafPageSplit(rid, leafPage)
+	encodedLeafPage := leafPage
+	if w.leafPagesUseCompactPayload() {
+		var err error
+		encodedLeafPage, _, err = valuelog.MaybeCompactLeafLogPayload(leafPage)
+		if err != nil {
+			return page.LeafLogPtr{}, err
+		}
 	}
-	if w.blockCompression && w.leafDictID != 0 && len(w.leafDict) > 0 && rewriteAllowDictForSmallPayload(leafPage) {
+	if w.leafDir != "" {
+		return w.appendLeafPageSplit(rid, encodedLeafPage)
+	}
+	if w.blockCompression && w.leafDictID != 0 && len(w.leafDict) > 0 && rewriteAllowDictForSmallPayload(encodedLeafPage) {
 		// LeafRef IDs intentionally omit grouped sub-index bits and therefore
 		// require K=1 frames. Use single-record append so decoded LeafRef pointers
 		// remain stable and do not alias another subrecord in a grouped batch.
-		ptr, err := w.appendSingleValueWithDictClass(rewriteTemplateClassOuterLeaf, w.leafDictID, w.leafDict, rid, leafPage)
+		ptr, err := w.appendSingleValueWithDictClass(rewriteTemplateClassOuterLeaf, w.leafDictID, w.leafDict, rid, encodedLeafPage)
 		if err == nil {
 			w.lastLeafRecordLen = page.ValuePtrRecordLength(ptr)
 			leafPtr, convErr := page.LeafLogPtrFromValuePtr(ptr)
@@ -2736,7 +3068,7 @@ func (w *rewriteWriter) appendLeafPageWithRID(rid uint64, leafPage []byte) (page
 			return page.LeafLogPtr{}, err
 		}
 	}
-	ptr, err := w.appendValueWithDictClass(rewriteTemplateClassOuterLeaf, 0, nil, rid, leafPage)
+	ptr, err := w.appendValueWithDictClass(rewriteTemplateClassOuterLeaf, 0, nil, rid, encodedLeafPage)
 	if err != nil {
 		return page.LeafLogPtr{}, err
 	}
@@ -2746,6 +3078,13 @@ func (w *rewriteWriter) appendLeafPageWithRID(rid uint64, leafPage []byte) (page
 		return page.LeafLogPtr{}, convErr
 	}
 	return leafPtr, nil
+}
+
+func (w *rewriteWriter) leafPagesUseCompactPayload() bool {
+	if w == nil {
+		return false
+	}
+	return w.leafDir != "" && !w.leafDictUseRawPages
 }
 
 func (w *rewriteWriter) appendLeafPageSplit(rid uint64, leafPage []byte) (page.LeafLogPtr, error) {
@@ -2890,7 +3229,11 @@ func (w *rewriteWriter) rotateLeaf() error {
 		if err != nil {
 			return err
 		}
-		writer.SetBlockCompression(w.blockCodec, w.blockCompression)
+		leafCodec := w.leafBlockCodec
+		if leafCodec == 0 {
+			leafCodec = w.blockCodec
+		}
+		writer.SetBlockCompression(leafCodec, w.blockCompression)
 		writer.SetKeepPolicy(w.keepIoNsPerByte, w.keepEncodeNsRaw, w.keepSafetyMargin)
 		w.leafW = writer
 		w.leafSeq = nextSeq
@@ -2902,7 +3245,11 @@ func (w *rewriteWriter) rotateLeaf() error {
 	if err := w.leafW.RotateTo(path, fileID); err != nil {
 		return err
 	}
-	w.leafW.SetBlockCompression(w.blockCodec, w.blockCompression)
+	leafCodec := w.leafBlockCodec
+	if leafCodec == 0 {
+		leafCodec = w.blockCodec
+	}
+	w.leafW.SetBlockCompression(leafCodec, w.blockCompression)
 	w.leafW.SetKeepPolicy(w.keepIoNsPerByte, w.keepEncodeNsRaw, w.keepSafetyMargin)
 	w.leafSeq = nextSeq
 	w.noteCreatedSegment(path, fileID)
@@ -2927,16 +3274,22 @@ func (w *rewriteWriter) SetKeepPolicy(ioNsPerStoredByte, encodeNsPerRawByte, saf
 }
 
 func (w *rewriteWriter) SetLeafDict(dictID uint64, dict []byte) {
+	w.SetLeafDictMode(dictID, dict, false)
+}
+
+func (w *rewriteWriter) SetLeafDictMode(dictID uint64, dict []byte, useRawPages bool) {
 	if w == nil {
 		return
 	}
 	if dictID == 0 || len(dict) == 0 {
 		w.leafDictID = 0
 		w.leafDict = nil
+		w.leafDictUseRawPages = false
 		return
 	}
 	w.leafDictID = dictID
 	w.leafDict = append(w.leafDict[:0], dict...)
+	w.leafDictUseRawPages = useRawPages
 }
 
 func (w *rewriteWriter) SetTemplateCompression(mode template.Mode, cfg template.Config, store template.Store) {

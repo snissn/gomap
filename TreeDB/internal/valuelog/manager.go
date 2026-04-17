@@ -113,6 +113,13 @@ type File struct {
 	mmapReadFallbackReadAt atomic.Uint64
 }
 
+func (f *File) allowsCompactLeafPayload() bool {
+	if f == nil {
+		return false
+	}
+	return allowsCompactLeafLogPayload(f.ID, f.Path)
+}
+
 func openFile(path string, id uint32, dictLookup DictLookup, templateLookup TemplateLookup, templateOpts templ.DecodeOptions, templateCache *templateDefCache) (*File, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -460,7 +467,14 @@ func (f *File) Read(ptr page.ValuePtr, verifyCRC bool) ([]byte, error) {
 	}
 	if val, err, ok := f.readViaMmap(ptr, verifyCRC); ok {
 		f.mmapReadHits.Add(1)
-		return val, err
+		if err != nil {
+			return nil, err
+		}
+		val, _, _, err = maybeDecodeLeafLogPayloadTo(f.ID, f.Path, val, nil)
+		if err != nil {
+			return nil, err
+		}
+		return val, nil
 	}
 	data, _ := f.mmapData.Load().([]byte)
 	if data != nil && deadMappingsCapExhausted(f.deadMappingsCount.Load(), len(data)) {
@@ -469,7 +483,14 @@ func (f *File) Read(ptr page.ValuePtr, verifyCRC bool) ([]byte, error) {
 	if !verifyCRC {
 		if val, _, err, ok := f.readGroupedCompressedFromFileTo(ptr, nil); ok {
 			f.mmapReadFallbackReadAt.Add(1)
-			return val, err
+			if err != nil {
+				return nil, err
+			}
+			val, _, _, err = maybeDecodeLeafLogPayloadTo(f.ID, f.Path, val, nil)
+			if err != nil {
+				return nil, err
+			}
+			return val, nil
 		}
 	}
 	f.mmapReadFallbackReadAt.Add(1)
@@ -485,13 +506,27 @@ func (f *File) ReadUnsafe(ptr page.ValuePtr, verifyCRC bool) ([]byte, error) {
 	}
 	if val, err, ok := f.readViaMmapView(ptr, verifyCRC); ok {
 		f.mmapReadHits.Add(1)
-		return val, err
+		if err != nil {
+			return nil, err
+		}
+		val, _, _, err = maybeDecodeLeafLogPayloadTo(f.ID, f.Path, val, nil)
+		if err != nil {
+			return nil, err
+		}
+		return val, nil
 	}
 	if !f.usesPersistentMmap() {
 		if f.tryEnableSealedLazyMmap() {
 			if val, err, ok := f.readViaMmapView(ptr, verifyCRC); ok {
 				f.mmapReadHits.Add(1)
-				return val, err
+				if err != nil {
+					return nil, err
+				}
+				val, _, _, err = maybeDecodeLeafLogPayloadTo(f.ID, f.Path, val, nil)
+				if err != nil {
+					return nil, err
+				}
+				return val, nil
 			}
 		}
 		f.mmapReadFallbackReadAt.Add(1)
@@ -504,7 +539,14 @@ func (f *File) ReadUnsafe(ptr page.ValuePtr, verifyCRC bool) ([]byte, error) {
 		f.remapToFileSize()
 		if val, err, ok := f.readViaMmapView(ptr, verifyCRC); ok {
 			f.mmapReadHits.Add(1)
-			return val, err
+			if err != nil {
+				return nil, err
+			}
+			val, _, _, err = maybeDecodeLeafLogPayloadTo(f.ID, f.Path, val, nil)
+			if err != nil {
+				return nil, err
+			}
+			return val, nil
 		}
 	} else {
 		f.mmapReadMissDeadMappingCap.Add(1)
@@ -525,19 +567,49 @@ func (f *File) ReadUnsafeTo(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]by
 	}
 	if val, usedDst, err, ok := f.readViaMmapViewTo(ptr, verifyCRC, dst); ok {
 		f.mmapReadHits.Add(1)
-		return val, usedDst, err
+		if err != nil {
+			return nil, false, err
+		}
+		val, compactUsedDst, compactDecoded, err := maybeDecodeLeafLogPayloadTo(f.ID, f.Path, val, dst)
+		if err != nil {
+			return nil, false, err
+		}
+		if compactDecoded {
+			return val, compactUsedDst, nil
+		}
+		return val, usedDst, nil
 	}
 	if !f.usesPersistentMmap() {
 		if f.tryEnableSealedLazyMmap() {
 			if val, usedDst, err, ok := f.readViaMmapViewTo(ptr, verifyCRC, dst); ok {
 				f.mmapReadHits.Add(1)
-				return val, usedDst, err
+				if err != nil {
+					return nil, false, err
+				}
+				val, compactUsedDst, compactDecoded, err := maybeDecodeLeafLogPayloadTo(f.ID, f.Path, val, dst)
+				if err != nil {
+					return nil, false, err
+				}
+				if compactDecoded {
+					return val, compactUsedDst, nil
+				}
+				return val, usedDst, nil
 			}
 		}
 		f.mmapReadFallbackReadAt.Add(1)
 		if !verifyCRC {
 			if val, usedDst, err, ok := f.readGroupedCompressedFromFileTo(ptr, dst); ok {
-				return val, usedDst, err
+				if err != nil {
+					return nil, false, err
+				}
+				val, compactUsedDst, compactDecoded, err := maybeDecodeLeafLogPayloadTo(f.ID, f.Path, val, dst)
+				if err != nil {
+					return nil, false, err
+				}
+				if compactDecoded {
+					return val, compactUsedDst, nil
+				}
+				return val, usedDst, nil
 			}
 		}
 		return ReadAtWithDictTo(f.File, ptr, verifyCRC, f.dictLookup, f.templateLookup, f.templateDefCache, f.templateDecodeOpts, dst)
@@ -549,7 +621,17 @@ func (f *File) ReadUnsafeTo(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]by
 		f.remapToFileSize()
 		if val, usedDst, err, ok := f.readViaMmapViewTo(ptr, verifyCRC, dst); ok {
 			f.mmapReadHits.Add(1)
-			return val, usedDst, err
+			if err != nil {
+				return nil, false, err
+			}
+			val, compactUsedDst, compactDecoded, err := maybeDecodeLeafLogPayloadTo(f.ID, f.Path, val, dst)
+			if err != nil {
+				return nil, false, err
+			}
+			if compactDecoded {
+				return val, compactUsedDst, nil
+			}
+			return val, usedDst, nil
 		}
 	} else {
 		f.mmapReadMissDeadMappingCap.Add(1)
@@ -557,7 +639,17 @@ func (f *File) ReadUnsafeTo(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]by
 	f.mmapReadFallbackReadAt.Add(1)
 	if !verifyCRC {
 		if val, usedDst, err, ok := f.readGroupedCompressedFromFileTo(ptr, dst); ok {
-			return val, usedDst, err
+			if err != nil {
+				return nil, false, err
+			}
+			val, compactUsedDst, compactDecoded, err := maybeDecodeLeafLogPayloadTo(f.ID, f.Path, val, dst)
+			if err != nil {
+				return nil, false, err
+			}
+			if compactDecoded {
+				return val, compactUsedDst, nil
+			}
+			return val, usedDst, nil
 		}
 	}
 	return ReadAtWithDictTo(f.File, ptr, verifyCRC, f.dictLookup, f.templateLookup, f.templateDefCache, f.templateDecodeOpts, dst)
@@ -885,10 +977,14 @@ func (f *File) appendPayloadFromFile(dst []byte, off int64, payloadLen int) ([]b
 		return nil, err
 	}
 	if f.templateLookup == nil || !templ.IsEncodedPayload(payload) {
-		return dst, nil
+		return appendMaybeDecodeLeafLogPayload(f.ID, f.Path, dst[:oldLen], payload)
 	}
 	encoded := append([]byte(nil), payload...)
-	return appendDecodedTemplatePayload(dst[:oldLen], encoded, f.templateLookup, f.templateDefCache, f.templateDecodeOpts)
+	decoded, err := appendDecodedTemplatePayload(dst[:oldLen], encoded, f.templateLookup, f.templateDefCache, f.templateDecodeOpts)
+	if err != nil {
+		return nil, err
+	}
+	return appendMaybeDecodeLeafLogPayload(f.ID, f.Path, decoded[:oldLen], decoded[oldLen:])
 }
 
 // Set is an immutable snapshot of value-log files for snapshot isolation.

@@ -30,8 +30,12 @@ func (l *cachingLeafPageLog) AppendLeafPage(leafPage []byte) (page.LeafLogPtr, e
 	if l == nil || l.db == nil || l.lane == nil {
 		return page.LeafLogPtr{}, errWALUnavailable
 	}
+	encodedLeafPage, _, err := valuelog.MaybeCompactLeafLogPayload(leafPage)
+	if err != nil {
+		return page.LeafLogPtr{}, err
+	}
 	rid := l.db.nextRID.Add(1)
-	ptr, retainPath, err := l.db.appendValueLogOneInternal(l.lane, 0, nil, rid, leafPage, journalDurabilityNone, false)
+	ptr, retainPath, err := l.db.appendValueLogOneInternal(l.lane, 0, nil, rid, encodedLeafPage, journalDurabilityNone, false)
 	if retainPath != "" {
 		l.db.markValueLogRetain(retainPath)
 	}

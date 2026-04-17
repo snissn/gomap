@@ -708,7 +708,7 @@ func runVlogRewrite(dir string, args []string) {
 	dictDir := filepath.Join(rootDir, "dictdb")
 	dictIndexPath := filepath.Join(dictDir, "index.db")
 	if _, err := os.Stat(dictIndexPath); err == nil {
-		dictOpts := treedbdb.Options{Dir: dictDir, ReadOnly: true}
+		dictOpts := treedbdb.Options{Dir: dictDir, ReadOnly: false}
 		applyPersistedFormatConfig(dictDir, &dictOpts)
 		dictOpts.DisableBackgroundPrune = true
 		dictOpts.ValueLog.Compression = treedbdb.ValueLogCompressionOff
@@ -719,6 +719,21 @@ func runVlogRewrite(dir string, args []string) {
 		store := dictdb.New(dictBackend)
 		opts.ValueLog.DictLookup = func(dictID uint64) ([]byte, error) {
 			return store.GetDictBytes(context.Background(), dictID)
+		}
+		opts.ValueLog.DictCurrentForClass = func(ctx context.Context, class string) (uint64, error) {
+			return store.GetCurrentForClass(ctx, class)
+		}
+		opts.ValueLog.DictLeafPayloadMode = func(ctx context.Context, dictID uint64) (bool, bool, error) {
+			return store.GetLeafPayloadMode(ctx, dictID)
+		}
+		opts.ValueLog.DictPut = func(ctx context.Context, dictBytes []byte) (uint64, error) {
+			return store.PutDictBytes(ctx, dictBytes)
+		}
+		opts.ValueLog.DictSetCurrentForClass = func(ctx context.Context, class string, dictID uint64) error {
+			return store.SetCurrentForClass(ctx, class, dictID)
+		}
+		opts.ValueLog.DictSetLeafPayloadMode = func(ctx context.Context, dictID uint64, useRawPages bool) error {
+			return store.SetLeafPayloadMode(ctx, dictID, useRawPages)
 		}
 		closers = append(closers, dictBackend.Close)
 	} else if !os.IsNotExist(err) {

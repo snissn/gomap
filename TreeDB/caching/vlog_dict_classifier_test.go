@@ -479,6 +479,60 @@ func TestValueLogDictCollectSamples_IgnoresOuterLeafPages(t *testing.T) {
 	}
 }
 
+func TestValueLogDictCollectSampleForLane_SplitLeafLaneUsesOuterLeafTrainer(t *testing.T) {
+	singleTrainer := newValueLogDictClassifierTrainer(t)
+	outerTrainer := newValueLogDictClassifierTrainer(t)
+	leafPage := buildSparseLeafPageForLeafLogTest(t)
+	payload, compacted, err := valuelog.MaybeCompactLeafLogPayload(leafPage)
+	if err != nil {
+		t.Fatalf("MaybeCompactLeafLogPayload: %v", err)
+	}
+	if !compacted {
+		t.Fatal("expected sparse test leaf page to compact")
+	}
+	db := &DB{
+		indexOuterLeavesInValueLog: true,
+		valueLogDictClassMode:      uint8(vlogDictClassModeSplitOuterLeaf),
+		valueLogDictTrainer:        singleTrainer,
+		valueLogDictTrainerByClass: [vlogDictClassCount]*compression.Trainer{
+			vlogDictClassSingleValue: singleTrainer,
+			vlogDictClassOuterLeaf:   outerTrainer,
+		},
+	}
+
+	db.valueLogDictCollectSampleForLane(&lane{id: leafLogLaneID}, payload)
+
+	if got := outerTrainer.Stats().Enqueued; got == 0 {
+		t.Fatalf("expected outer-leaf trainer enqueue, got=%d", got)
+	}
+	if got := singleTrainer.Stats().Enqueued; got != 0 {
+		t.Fatalf("expected single-value trainer to stay idle, got=%d", got)
+	}
+}
+
+func TestValueLogDictCollectSampleForLane_SplitLeafLaneRoutesRawLeafPages(t *testing.T) {
+	singleTrainer := newValueLogDictClassifierTrainer(t)
+	outerTrainer := newValueLogDictClassifierTrainer(t)
+	db := &DB{
+		indexOuterLeavesInValueLog: true,
+		valueLogDictClassMode:      uint8(vlogDictClassModeSplitOuterLeaf),
+		valueLogDictTrainer:        singleTrainer,
+		valueLogDictTrainerByClass: [vlogDictClassCount]*compression.Trainer{
+			vlogDictClassSingleValue: singleTrainer,
+			vlogDictClassOuterLeaf:   outerTrainer,
+		},
+	}
+
+	db.valueLogDictCollectSampleForLane(&lane{id: leafLogLaneID}, buildSparseLeafPageForLeafLogTest(t))
+
+	if got := outerTrainer.Stats().Enqueued; got == 0 {
+		t.Fatalf("expected raw leaf page to reach outer-leaf trainer, got=%d", got)
+	}
+	if got := singleTrainer.Stats().Enqueued; got != 0 {
+		t.Fatalf("expected raw leaf page to skip single-value trainer, got=%d", got)
+	}
+}
+
 func TestValueLogDictClassifierBypass_AllowsLargeValuesAfterDictPublish(t *testing.T) {
 	db := &DB{
 		valueLogDictIncompressibleHoldBytes:  256 << 10,

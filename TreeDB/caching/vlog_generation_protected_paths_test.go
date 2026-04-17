@@ -11,6 +11,8 @@ import (
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
+	"github.com/snissn/gomap/TreeDB/page"
+	"github.com/snissn/gomap/TreeDB/tree"
 )
 
 type rewriteRecordingBackend struct {
@@ -461,5 +463,71 @@ func TestPruneRetainedValueLogs_IgnoresLeafPathsInSplitMode(t *testing.T) {
 	}
 	if stats.RemovedSegments+stats.ZombieMarkedSegments != 1 {
 		t.Fatalf("value action count=%d want 1 (removed=%d zombie_marked=%d)", stats.RemovedSegments+stats.ZombieMarkedSegments, stats.RemovedSegments, stats.ZombieMarkedSegments)
+	}
+}
+
+func TestSplitValueLogOwnership_LeafRefStateReaderDecodesCompactLeafPages(t *testing.T) {
+	db := openSplitValueLogOwnershipTestDB(t)
+	snapper, ok := db.backend.(interface{ AcquireSnapshot() *backenddb.Snapshot })
+	if !ok {
+		t.Fatal("backend missing AcquireSnapshot")
+	}
+	snap := snapper.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("missing backend snapshot")
+	}
+	defer func() { _ = snap.Close() }()
+	state := snap.State()
+	p := snap.Pager()
+	if state == nil || p == nil {
+		t.Fatal("missing snapshot state/pager")
+	}
+	reader := valueReaderForBackendState(state)
+	if reader == nil {
+		t.Fatal("missing state value-log reader")
+	}
+	refs := collectLeafRefs(t, p, state.RootPageID)
+	if len(refs) == 0 {
+		t.Fatal("expected at least one leaf ref")
+	}
+	ptr, ok := page.DecodeLeafRef(refs[0])
+	if !ok {
+		t.Fatal("expected leaf ref id")
+	}
+	leafPage, err := reader.ReadUnsafe(ptr.ValuePtr())
+	if err != nil {
+		t.Fatalf("ReadUnsafe: %v", err)
+	}
+	if len(leafPage) != page.PageSize {
+		setPage, setErr := state.ValueLogSet.ReadUnsafe(ptr.ValuePtr())
+		managerPage, managerErr := db.valueLogReader.ReadUnsafe(ptr.ValuePtr())
+		t.Fatalf("leaf page len=%d want %d (set_len=%d set_err=%v manager_len=%d manager_err=%v)", len(leafPage), page.PageSize, len(setPage), setErr, len(managerPage), managerErr)
+	}
+}
+
+func TestSplitValueLogOwnership_PointerProjectionIteratorDecodesCompactLeafPages(t *testing.T) {
+	db := openSplitValueLogOwnershipTestDB(t)
+	snapper, ok := db.backend.(interface{ AcquireSnapshot() *backenddb.Snapshot })
+	if !ok {
+		t.Fatal("backend missing AcquireSnapshot")
+	}
+	snap := snapper.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("missing backend snapshot")
+	}
+	defer func() { _ = snap.Close() }()
+	state := snap.State()
+	p := snap.Pager()
+	if state == nil || p == nil {
+		t.Fatal("missing snapshot state/pager")
+	}
+	reader := newCachedLiveScanReader(valueReaderForBackendState(state), db.valueLogReader)
+	it := tree.New(p, reader, state.RootPageID).IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
+	defer it.Close()
+	if !it.Valid() {
+		t.Fatal("expected iterator to yield entries")
+	}
+	if err := it.Error(); err != nil {
+		t.Fatalf("iterator error: %v", err)
 	}
 }

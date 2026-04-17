@@ -375,79 +375,97 @@ func (n *Node) setOffset(index uint16, offset uint16) {
 // FreeSpace returns the number of bytes available for new items.
 // Free space is the gap between the end of the Directory and the start of the Heap.
 func (n *Node) FreeSpace() int {
-	// Directory End = Header + Count * 2
+	dirEnd, heapStart, ok := n.liveByteBounds()
+	if !ok {
+		return 0
+	}
+	return heapStart - dirEnd
+}
+
+func (n *Node) liveByteBounds() (dirEnd, heapStart int, ok bool) {
 	count := n.Count()
-	dirEnd := NodeHeaderSize + int(count)*DirectoryEntrySize
+	dirEnd = NodeHeaderSize + int(count)*DirectoryEntrySize
+	if dirEnd < NodeHeaderSize || dirEnd > len(n.data) {
+		return 0, 0, false
+	}
 	if n.Type() == page.PageTypeLeaf && n.leafColumnar() && n.leafPrefixCompressed() && n.leafPrefixV2() {
 		// Combined columnar+prefix leaves use top-level metadata columns:
 		// KeyOff[u16], ValOff[u16], Flags[u8], PrefixLen[u16].
 		dirEnd += int(count) * DirectoryEntrySize
 		dirEnd += int(count)
 		dirEnd += int(count) * DirectoryEntrySize
+		if dirEnd < NodeHeaderSize || dirEnd > len(n.data) {
+			return 0, 0, false
+		}
 	}
 	if n.Type() == page.PageTypeLeaf && n.leafColumnarV2() && !n.leafPrefixCompressed() {
 		// Columnar v2 leaves store additional per-entry metadata immediately after
 		// the key directory: ValOff (u16) + Flags (u8).
 		dirEnd += int(count) * DirectoryEntrySize
 		dirEnd += int(count)
-	}
-
-	// Heap Start = Minimum offset of all items, or PageSize if empty.
-	// To find Heap Start efficiently without scanning all offsets:
-	// 1. Maintain a "HeapStart" in the header? No, standard header doesn't have it.
-	// 2. Scan all offsets? Slow O(N).
-	// 3. Assume entries are added sequentially?
-	//    If we implement "Append only" or "Sorted Insert", we can track it.
-	//    But standard slotted pages usually compact or track the free pointer.
-	//    Wait, checking `specs/spec.md`:
-	//    "Directory (Top): Array of Offsets (uint16) growing downward."
-	//    "Heap (Bottom): Data growing upward."
-	//    It DOES NOT mention a "FreePtr".
-	//    However, usually in Slotted Pages, we just check the offsets.
-	//    Optimization: If we keep the items sorted by offset in the heap?
-	//    No, usually items are sorted by Key in the Directory (logical order),
-	//    but physical order in Heap can be anything (usually append-only).
-	//    So to find the "Heap Top" (lowest used address), we usually need to know it.
-	//    OR we scan.
-	//    Since `Count` is small (max ~200-300 items per 4KB page), scanning is fast enough?
-	//    Actually, we can just find the min offset.
-
-	heapStart := int(page.PageSize)
-	if count > 0 {
-		if n.Type() == page.PageTypeLeaf && n.leafColumnar() && n.leafPrefixCompressed() && n.leafPrefixV2() {
-			valDirStart := NodeHeaderSize + int(count)*DirectoryEntrySize
-			if valDirStart+2 > len(n.data) {
-				return 0
-			}
-			heapStart = int(getUint16(n.data[valDirStart : valDirStart+2]))
-			return heapStart - dirEnd
-		}
-		if n.Type() == page.PageTypeLeaf && n.leafColumnarV2() && !n.leafPrefixCompressed() {
-			// The lowest used offset is ValOff[0] (start of the value blob).
-			valDirStart := NodeHeaderSize + int(count)*DirectoryEntrySize
-			if valDirStart+2 > len(n.data) {
-				return 0
-			}
-			heapStart = int(getUint16(n.data[valDirStart : valDirStart+2]))
-			return heapStart - dirEnd
-		}
-
-		// Scan offsets to find the lowest one.
-		// This is O(N). Is there a better way?
-		// Most implementations store "FreePtr" or "HeapOffset" in the header or special slot.
-		// The provided header `PageHeader` has `Flags` and `Count`, but no `HeapOffset`.
-		// Unless `Flags` is used for something else?
-		// Spec says `Flags` is Node Type.
-		// So we must compute it or store it elsewhere.
-		// Wait, if we compact on every write, or keep heap contiguous?
-		// Let's assume we scan for now.
-		for i := uint16(0); i < count; i++ {
-			off := getUint16(n.data[NodeHeaderSize+int(i)*2:])
-			if int(off) < heapStart && off != 0 { // 0 checks for safety
-				heapStart = int(off)
-			}
+		if dirEnd < NodeHeaderSize || dirEnd > len(n.data) {
+			return 0, 0, false
 		}
 	}
+	heapStart = int(page.PageSize)
+	if count == 0 {
+		return dirEnd, heapStart, true
+	}
+	if n.Type() == page.PageTypeLeaf && n.leafColumnar() && n.leafPrefixCompressed() && n.leafPrefixV2() {
+		valDirStart := NodeHeaderSize + int(count)*DirectoryEntrySize
+		if valDirStart+2 > len(n.data) {
+			return 0, 0, false
+		}
+		heapStart = int(getUint16(n.data[valDirStart : valDirStart+2]))
+		if heapStart < dirEnd || heapStart > len(n.data) {
+			return 0, 0, false
+		}
+		return dirEnd, heapStart, true
+	}
+	if n.Type() == page.PageTypeLeaf && n.leafColumnarV2() && !n.leafPrefixCompressed() {
+		valDirStart := NodeHeaderSize + int(count)*DirectoryEntrySize
+		if valDirStart+2 > len(n.data) {
+			return 0, 0, false
+		}
+		heapStart = int(getUint16(n.data[valDirStart : valDirStart+2]))
+		if heapStart < dirEnd || heapStart > len(n.data) {
+			return 0, 0, false
+		}
+		return dirEnd, heapStart, true
+	}
+	for i := uint16(0); i < count; i++ {
+		dirOff := NodeHeaderSize + int(i)*DirectoryEntrySize
+		if dirOff+DirectoryEntrySize > len(n.data) {
+			return 0, 0, false
+		}
+		off := getUint16(n.data[dirOff : dirOff+DirectoryEntrySize])
+		if off == 0 {
+			continue
+		}
+		if int(off) < dirEnd || int(off) > len(n.data) {
+			return 0, 0, false
+		}
+		if int(off) < heapStart {
+			heapStart = int(off)
+		}
+	}
+	return dirEnd, heapStart, true
+}
 
-	return heapStart - dirEnd
+// LeafPageLiveBounds reports the live prefix and suffix lengths for a leaf page.
+// Bytes between the prefix and suffix are free gap bytes that can be elided when
+// persisting a canonical external representation.
+func LeafPageLiveBounds(data []byte) (prefixLen, suffixLen int, err error) {
+	if len(data) != page.PageSize {
+		return 0, 0, ErrCorruptedNode
+	}
+	n := NewNodeView(data)
+	if n.Type() != page.PageTypeLeaf {
+		return 0, 0, ErrInvalidType
+	}
+	dirEnd, heapStart, ok := n.liveByteBounds()
+	if !ok || dirEnd < NodeHeaderSize || heapStart < dirEnd || heapStart > len(data) {
+		return 0, 0, ErrCorruptedNode
+	}
+	return dirEnd, len(data) - heapStart, nil
 }

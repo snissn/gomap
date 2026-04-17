@@ -296,6 +296,13 @@ func (r *Reader) ReadNext() (uint64, []byte, page.ValuePtr, error) {
 			Length: recordLen,
 			FileID: r.fileID,
 		}
+		if r.fileID == 0 {
+			return rid, payload, ptr, nil
+		}
+		payload, _, _, err := maybeDecodeLeafLogPayloadTo(r.fileID, r.f.Name(), payload, nil)
+		if err != nil {
+			return 0, nil, page.ValuePtr{}, err
+		}
 		return rid, payload, ptr, nil
 	}
 
@@ -357,6 +364,10 @@ func (r *Reader) ReadNext() (uint64, []byte, page.ValuePtr, error) {
 					return 0, nil, page.ValuePtr{}, decErr
 				}
 				val = decoded
+			}
+			val, _, _, err = maybeDecodeLeafLogPayloadTo(r.fileID, r.f.Name(), val, nil)
+			if err != nil {
+				return 0, nil, page.ValuePtr{}, err
 			}
 		}
 		r.pending = append(r.pending, frameEntry{rid: frameRID, value: val, ptr: ptr})
@@ -810,7 +821,15 @@ func ReadAtWithDict(f *os.File, ptr page.ValuePtr, verifyCRC bool, dictLookup Di
 				if err != nil {
 					return nil, err
 				}
+				decoded, _, _, err = maybeDecodeLeafLogPayloadTo(ptr.FileID, f.Name(), decoded, nil)
+				if err != nil {
+					return nil, err
+				}
 				return decoded, nil
+			}
+			val, _, _, err := maybeDecodeLeafLogPayloadTo(ptr.FileID, f.Name(), val, nil)
+			if err != nil {
+				return nil, err
 			}
 			return val, nil
 		}
@@ -826,7 +845,15 @@ func ReadAtWithDict(f *os.File, ptr page.ValuePtr, verifyCRC bool, dictLookup Di
 			return nil, ErrCorrupt
 		}
 	}
-	return decodeRecord(header[:], payload, ptr, false, dictLookup, templateLookup, templateCache, templateOpts)
+	val, err := decodeRecord(header[:], payload, ptr, false, dictLookup, templateLookup, templateCache, templateOpts)
+	if err != nil {
+		return nil, err
+	}
+	val, _, _, err = maybeDecodeLeafLogPayloadTo(ptr.FileID, f.Name(), val, nil)
+	if err != nil {
+		return nil, err
+	}
+	return val, nil
 }
 
 // ReadAtWithDictTo is ReadAtWithDict with caller-provided decode storage.
@@ -961,7 +988,18 @@ func ReadAtWithDictTo(f *os.File, ptr page.ValuePtr, verifyCRC bool, dictLookup 
 				if err != nil {
 					return nil, false, err
 				}
+				decoded, _, _, err = maybeDecodeLeafLogPayloadTo(ptr.FileID, f.Name(), decoded, nil)
+				if err != nil {
+					return nil, false, err
+				}
 				return decoded, false, nil
+			}
+			val, compactUsedDst, compactDecoded, err := maybeDecodeLeafLogPayloadTo(ptr.FileID, f.Name(), val, dst)
+			if err != nil {
+				return nil, false, err
+			}
+			if compactDecoded {
+				return val, compactUsedDst, nil
 			}
 			return val, usedDst, nil
 		}
@@ -994,7 +1032,18 @@ func ReadAtWithDictTo(f *os.File, ptr page.ValuePtr, verifyCRC bool, dictLookup 
 			if err != nil {
 				return nil, false, err
 			}
+			decoded, _, _, err = maybeDecodeLeafLogPayloadTo(ptr.FileID, f.Name(), decoded, nil)
+			if err != nil {
+				return nil, false, err
+			}
 			return decoded, false, nil
+		}
+		payload, compactUsedDst, compactDecoded, err := maybeDecodeLeafLogPayloadTo(ptr.FileID, f.Name(), payload, dst)
+		if err != nil {
+			return nil, false, err
+		}
+		if compactDecoded {
+			return payload, compactUsedDst, nil
 		}
 		return payload, usedDst, nil
 	}
@@ -1017,12 +1066,21 @@ func ReadAtWithDictTo(f *os.File, ptr page.ValuePtr, verifyCRC bool, dictLookup 
 		putDecodeScratch(payloadScratch)
 		return nil, false, err
 	}
+	val, compactUsedDst, compactDecoded, err := maybeDecodeLeafLogPayloadTo(ptr.FileID, f.Name(), val, dst)
+	if err != nil {
+		putDecodeScratch(payloadScratch)
+		return nil, false, err
+	}
 	// Safe to return payload scratch to the pool whenever the returned slice
 	// does not alias the payload buffer backed by payloadScratch.
-	if usedDst || !sliceAliasesBytes(payload, val) {
+	finalUsedDst := usedDst
+	if compactDecoded {
+		finalUsedDst = compactUsedDst
+	}
+	if finalUsedDst || !sliceAliasesBytes(payload, val) {
 		putDecodeScratch(payloadScratch)
 	}
-	return val, usedDst, nil
+	return val, finalUsedDst, nil
 }
 
 func decodeRecord(header []byte, payload []byte, ptr page.ValuePtr, verifyCRC bool, dictLookup DictLookup, templateLookup TemplateLookup, templateCache *templateDefCache, templateOpts templ.DecodeOptions) ([]byte, error) {
