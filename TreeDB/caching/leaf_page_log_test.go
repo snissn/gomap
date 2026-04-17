@@ -1,8 +1,8 @@
 package caching
 
 import (
+	"bytes"
 	"errors"
-	"os"
 	"path/filepath"
 	"sync/atomic"
 	"testing"
@@ -119,7 +119,7 @@ func buildSparseLeafPageForLeafLogTest(t *testing.T) []byte {
 	return buf
 }
 
-func TestCachingLeafPageLog_AppendLeafPageCompactsSparseLeafPayload(t *testing.T) {
+func TestCachingLeafPageLog_AppendLeafPageKeepsRawLeafPayload(t *testing.T) {
 	dir := t.TempDir()
 	fileID, err := valuelog.EncodeFileID(uint32(leafLogLaneID), 1)
 	if err != nil {
@@ -144,11 +144,20 @@ func TestCachingLeafPageLog_AppendLeafPageCompactsSparseLeafPayload(t *testing.T
 		t.Fatalf("Close writer: %v", err)
 	}
 	writer = nil
-	info, err := os.Stat(path)
+	reader, err := valuelog.NewReader(path, 0)
 	if err != nil {
-		t.Fatalf("Stat(%q): %v", path, err)
+		t.Fatalf("NewReader(%q): %v", path, err)
 	}
-	if info.Size() >= int64(valuelog.HeaderSize+page.PageSize) {
-		t.Fatalf("file size=%d want compact leaf payload smaller than raw %d", info.Size(), valuelog.HeaderSize+page.PageSize)
+	defer func() { _ = reader.Close() }()
+	_, payload, _, err := reader.ReadNext()
+	if err != nil {
+		t.Fatalf("ReadNext: %v", err)
+	}
+	if valuelog.HasCompactLeafLogPayload(payload) {
+		t.Fatal("expected live leaf payload to stay raw, got compact payload marker")
+	}
+	want := buildSparseLeafPageForLeafLogTest(t)
+	if !bytes.Equal(payload, want) {
+		t.Fatalf("stored payload mismatch: got len=%d want len=%d", len(payload), len(want))
 	}
 }
