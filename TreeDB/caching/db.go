@@ -10522,17 +10522,18 @@ func estimateUnitRunEntries(unitRuns [][][]batch.Entry, floor int) int {
 	return total
 }
 
-func collectOpsInto(mem memtable.Table, dst []batch.Entry) (int, error) {
+func collectOpsInto(mem memtable.Table, dst []batch.Entry) (int, int, error) {
 	if mem == nil {
-		return 0, errors.New("cachingdb: nil memtable")
+		return 0, 0, errors.New("cachingdb: nil memtable")
 	}
 	iter := mem.NewIterator(nil, nil)
 	defer func() { _ = iter.Close() }()
 
 	i := 0
+	deleteOps := 0
 	for iter.Valid() {
 		if i >= len(dst) {
-			return 0, fmt.Errorf("cachingdb: collectOpsInto overflow (have=%d need>=%d)", len(dst), i+1)
+			return 0, 0, fmt.Errorf("cachingdb: collectOpsInto overflow (have=%d need>=%d)", len(dst), i+1)
 		}
 		val, ptr, flags := iter.UnsafeEntry()
 		if flags&node.FlagTombstone != 0 {
@@ -10540,6 +10541,7 @@ func collectOpsInto(mem memtable.Table, dst []batch.Entry) (int, error) {
 				Type: batch.OpDelete,
 				Key:  iter.UnsafeKey(),
 			}
+			deleteOps++
 		} else if flags&node.FlagPointer != 0 {
 			dst[i] = batch.Entry{
 				Type:     batch.OpPut,
@@ -10558,9 +10560,9 @@ func collectOpsInto(mem memtable.Table, dst []batch.Entry) (int, error) {
 		iter.Next()
 	}
 	if err := iter.Error(); err != nil {
-		return 0, err
+		return 0, 0, err
 	}
-	return i, nil
+	return i, deleteOps, nil
 }
 
 type opRunIter struct {
@@ -10699,26 +10701,39 @@ func buildOpRuns(mem memtable.Table, chunkCap int) ([][]batch.Entry, int, error)
 	if chunkCap <= 0 {
 		chunkCap = 8192
 	}
+	if _, ok := mem.(*memtable.AppendOnly); ok && stableUnsafeIteratorSlices(mem) {
+		totalOps := mem.Len()
+		if totalOps == 0 {
+			return nil, 0, nil
+		}
+		runs := getEntryRuns(1)
+		ops := getEntrySlice(totalOps)
+		ops = ops[:totalOps]
+		count, deleteOps, err := collectOpsInto(mem, ops)
+		if err != nil {
+			putEntrySlice(ops)
+			putEntryRuns(runs)
+			return nil, 0, err
+		}
+		runs = append(runs, ops[:count])
+		return runs, deleteOps, nil
+	}
 	iter := mem.NewIterator(nil, nil)
 	runsCap := mem.Len()/chunkCap + 1
 	runs := getEntryRuns(runsCap)
 	deleteOps := 0
 	ops := getEntrySlice(chunkCap)
 	ops = ops[:0]
-	stableUnsafe := stableUnsafeIteratorSlices(mem)
 	for iter.Valid() {
 		val, ptr, flags := iter.UnsafeEntry()
-		key := iter.UnsafeKey()
-		if !stableUnsafe {
-			key = append([]byte(nil), key...)
-		}
+		key := append([]byte(nil), iter.UnsafeKey()...)
 		if flags&node.FlagTombstone != 0 {
 			ops = append(ops, batch.Entry{Type: batch.OpDelete, Key: key})
 			deleteOps++
 		} else if flags&node.FlagPointer != 0 {
 			ops = append(ops, batch.Entry{Type: batch.OpPut, Key: key, ValuePtr: ptr, IsPtr: true})
 		} else {
-			if !stableUnsafe && val != nil {
+			if val != nil {
 				val = append([]byte(nil), val...)
 			}
 			ops = append(ops, batch.Entry{Type: batch.OpPut, Key: key, Value: val})
