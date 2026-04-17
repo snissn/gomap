@@ -31,6 +31,24 @@ func withMappedSealedBytesBudget(t *testing.T, maxMappedBytes int64) {
 	})
 }
 
+func withMappedLeafSealedBudget(t *testing.T, maxMapped int) {
+	t.Helper()
+	prev := MaxMappedLeafSealedSegments
+	MaxMappedLeafSealedSegments = maxMapped
+	t.Cleanup(func() {
+		MaxMappedLeafSealedSegments = prev
+	})
+}
+
+func withMappedLeafSealedBytesBudget(t *testing.T, maxMappedBytes int64) {
+	t.Helper()
+	prev := MaxMappedLeafSealedBytes
+	MaxMappedLeafSealedBytes = maxMappedBytes
+	t.Cleanup(func() {
+		MaxMappedLeafSealedBytes = prev
+	})
+}
+
 func TestManagerMmapReadStatsAggregatesCounters(t *testing.T) {
 	mgr := &Manager{
 		files: map[uint32]*File{
@@ -539,6 +557,132 @@ func TestReadUnsafe_SealedLazyMmapByteBudgetFallsBackToReadAt(t *testing.T) {
 	}
 }
 
+func TestReadUnsafe_LeafLaneUsesLeafSealedMmapByteBudget(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("mmap not supported on windows")
+	}
+	withMappedSealedBudget(t, 8)
+	withMappedSealedBytesBudget(t, 1)
+	withMappedLeafSealedBudget(t, 8)
+	withMappedLeafSealedBytesBudget(t, 1<<30)
+
+	dir := t.TempDir()
+	id1, ptr1 := writeTestSegmentWithPtr(t, dir, ReservedLeafLogLaneID, 1, 1, bytes.Repeat([]byte("a"), 64))
+	id2, ptr2 := writeTestSegmentWithPtr(t, dir, ReservedLeafLogLaneID, 2, 2, bytes.Repeat([]byte("b"), 64))
+
+	f1, err := openFile(segmentPathForID(dir, id1), id1, nil, nil, templ.DecodeOptions{}, nil)
+	if err != nil {
+		t.Fatalf("openFile(f1): %v", err)
+	}
+	defer func() { _ = f1.Close() }()
+
+	f2, err := openFile(segmentPathForID(dir, id2), id2, nil, nil, templ.DecodeOptions{}, nil)
+	if err != nil {
+		t.Fatalf("openFile(f2): %v", err)
+	}
+	defer func() { _ = f2.Close() }()
+
+	mgr := &Manager{
+		files:                 map[uint32]*File{id1: f1, id2: f2},
+		currentWritableByLane: make(map[uint32]uint32),
+	}
+	f1.manager = mgr
+	f2.manager = mgr
+
+	set := mgr.CurrentSetNoRefresh()
+	defer func() { _ = mgr.Release(set) }()
+
+	got1, err := set.ReadUnsafe(ptr1)
+	if err != nil {
+		t.Fatalf("ReadUnsafe(ptr1): %v", err)
+	}
+	if !bytes.Equal(got1, bytes.Repeat([]byte("a"), 64)) {
+		t.Fatalf("ptr1 mismatch")
+	}
+	if data, _ := f1.mmapData.Load().([]byte); len(data) == 0 {
+		t.Fatalf("expected first leaf-lane sealed segment to be mapped")
+	}
+
+	got2, err := set.ReadUnsafe(ptr2)
+	if err != nil {
+		t.Fatalf("ReadUnsafe(ptr2): %v", err)
+	}
+	if !bytes.Equal(got2, bytes.Repeat([]byte("b"), 64)) {
+		t.Fatalf("ptr2 mismatch")
+	}
+	if data, _ := f2.mmapData.Load().([]byte); len(data) == 0 {
+		t.Fatalf("expected second leaf-lane sealed segment to be mapped under leaf budget")
+	}
+	if got := f2.mmapReadFallbackReadAt.Load(); got != 0 {
+		t.Fatalf("expected leaf-lane sealed mmap to avoid ReadAt fallback, got=%d", got)
+	}
+	if got := f2.sealedMapDeniedByBytes.Load(); got != 0 {
+		t.Fatalf("expected no leaf-lane byte-cap deny, got=%d", got)
+	}
+}
+
+func TestReadUnsafe_LeafLaneDenyCacheRechecksWhenLeafBudgetChanges(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("mmap not supported on windows")
+	}
+	withMappedSealedBudget(t, 8)
+	withMappedSealedBytesBudget(t, 1<<30)
+	withMappedLeafSealedBudget(t, 8)
+	withMappedLeafSealedBytesBudget(t, 1)
+
+	dir := t.TempDir()
+	id1, ptr1 := writeTestSegmentWithPtr(t, dir, ReservedLeafLogLaneID, 1, 1, bytes.Repeat([]byte("a"), 64))
+	id2, ptr2 := writeTestSegmentWithPtr(t, dir, ReservedLeafLogLaneID, 2, 2, bytes.Repeat([]byte("b"), 64))
+
+	f1, err := openFile(segmentPathForID(dir, id1), id1, nil, nil, templ.DecodeOptions{}, nil)
+	if err != nil {
+		t.Fatalf("openFile(f1): %v", err)
+	}
+	defer func() { _ = f1.Close() }()
+
+	f2, err := openFile(segmentPathForID(dir, id2), id2, nil, nil, templ.DecodeOptions{}, nil)
+	if err != nil {
+		t.Fatalf("openFile(f2): %v", err)
+	}
+	defer func() { _ = f2.Close() }()
+
+	mgr := &Manager{
+		files:                 map[uint32]*File{id1: f1, id2: f2},
+		currentWritableByLane: make(map[uint32]uint32),
+	}
+	f1.manager = mgr
+	f2.manager = mgr
+
+	set := mgr.CurrentSetNoRefresh()
+	defer func() { _ = mgr.Release(set) }()
+
+	if got, err := set.ReadUnsafe(ptr1); err != nil {
+		t.Fatalf("ReadUnsafe(ptr1): %v", err)
+	} else if !bytes.Equal(got, bytes.Repeat([]byte("a"), 64)) {
+		t.Fatalf("ptr1 mismatch")
+	}
+	if _, err := set.ReadUnsafe(ptr2); err != nil {
+		t.Fatalf("ReadUnsafe(ptr2 first): %v", err)
+	}
+	if data, _ := f2.mmapData.Load().([]byte); len(data) != 0 {
+		t.Fatalf("expected initial leaf-lane read to stay unmapped under tight leaf budget")
+	}
+	if got := f2.sealedMapDeniedByBytes.Load(); got == 0 {
+		t.Fatalf("expected leaf-lane byte-cap deny to increment")
+	}
+
+	MaxMappedLeafSealedBytes = 1 << 30
+
+	if got, err := set.ReadUnsafe(ptr2); err != nil {
+		t.Fatalf("ReadUnsafe(ptr2 second): %v", err)
+	} else if !bytes.Equal(got, bytes.Repeat([]byte("b"), 64)) {
+		t.Fatalf("ptr2 second mismatch")
+	}
+	if data, _ := f2.mmapData.Load().([]byte); len(data) == 0 {
+		t.Fatalf("expected leaf-lane deny cache to re-check after leaf budget change")
+	}
+}
+
 func TestReadUnsafe_SealedMappedOutOfRangeRemapsToKnownFileSize(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("mmap not supported on windows")
@@ -664,6 +808,10 @@ func writeTestSegment(t *testing.T, dir string, lane, seq uint32, rid uint64, va
 	return fileID
 }
 
+func segmentPathForID(dir string, id uint32) string {
+	return (&Manager{dir: dir}).SegmentPath(id)
+}
+
 func TestManagerCurrentSetNoRefresh(t *testing.T) {
 	dir := t.TempDir()
 	seg1 := writeTestSegment(t, dir, 0, 1, 1, bytes.Repeat([]byte("a"), 64))
@@ -760,7 +908,7 @@ func TestManagerSegmentPath_UsesRegisteredPathFromExtraScanDir(t *testing.T) {
 		t.Fatalf("MkdirAll(leaf_vlog): %v", err)
 	}
 	segID := writeTestSegment(t, leafDir, 255, 1, 1, bytes.Repeat([]byte("l"), 64))
-	wantPath := filepath.Join(leafDir, "value-l255-000001.log")
+	wantPath := segmentPathForID(leafDir, segID)
 
 	mgr, err := NewManager(dir)
 	if err != nil {

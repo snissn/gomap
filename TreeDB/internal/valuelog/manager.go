@@ -1685,7 +1685,14 @@ func (m *Manager) allowSealedLazyMmapLocked(target *File, targetSize int64) (boo
 	if m == nil || target == nil {
 		return false, sealedLazyMmapDenyCountCap
 	}
-	if MaxMappedSealedSegments <= 0 {
+	targetIsLeaf := isLeafLogFileID(target.ID)
+	maxSegments := MaxMappedSealedSegments
+	maxBytes := MaxMappedSealedBytes
+	if targetIsLeaf {
+		maxSegments = MaxMappedLeafSealedSegments
+		maxBytes = MaxMappedLeafSealedBytes
+	}
+	if maxSegments <= 0 {
 		return false, sealedLazyMmapDenyCountCap
 	}
 	if target.currentWritable.Load() {
@@ -1699,16 +1706,19 @@ func (m *Manager) allowSealedLazyMmapLocked(target *File, targetSize int64) (boo
 		if f == nil || f.currentWritable.Load() {
 			continue
 		}
+		if isLeafLogFileID(f.ID) != targetIsLeaf {
+			continue
+		}
 		data, _ := f.mmapData.Load().([]byte)
 		if len(data) > 0 {
 			mappedSealed++
 			mappedSealedBytes += uint64(len(data))
-			if !targetMapped && mappedSealed >= MaxMappedSealedSegments {
+			if !targetMapped && mappedSealed >= maxSegments {
 				return false, sealedLazyMmapDenyCountCap
 			}
 		}
 	}
-	if MaxMappedSealedBytes > 0 {
+	if maxBytes > 0 {
 		targetBytes := uint64(targetSize)
 		if targetBytes == 0 {
 			if known := target.fileSize.Load(); known > 0 {
@@ -1721,7 +1731,7 @@ func (m *Manager) allowSealedLazyMmapLocked(target *File, targetSize int64) (boo
 			}
 		}
 		if targetBytes > 0 {
-			limit := uint64(MaxMappedSealedBytes)
+			limit := uint64(maxBytes)
 			if targetMapped {
 				currentBytes := uint64(len(targetData))
 				if targetBytes > currentBytes {

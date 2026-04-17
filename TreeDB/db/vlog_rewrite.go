@@ -2581,7 +2581,7 @@ func newRewriteWriter(walDir string, lane, startSeq uint32, maxSize int64) *rewr
 	return &rewriteWriter{walDir: walDir, lane: lane, seq: startSeq, maxSize: maxSize}
 }
 
-const rewriteLeafLogLaneID uint32 = 255
+const rewriteLeafLogLaneID uint32 = valuelog.ReservedLeafLogLaneID
 
 func (w *rewriteWriter) ConfigureLeafLog(leafDir string, lane, startSeq uint32) {
 	if w == nil {

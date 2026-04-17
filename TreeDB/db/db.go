@@ -756,18 +756,19 @@ type Options struct {
 }
 
 type Snapshot struct {
-	db                *DB
-	idx               *indexGen
-	state             *DBState
-	vlogManager       *valuelog.Manager
-	vlogPinned        bool
-	leafGenerationIDs []uint64
-	registryID        int64
-	reader            valueReader
-	tree              tree.Tree
-	closed            atomic.Bool
-	treePager         *pager.Pager
-	treeRoot          uint64
+	db                 *DB
+	idx                *indexGen
+	state              *DBState
+	vlogManager        *valuelog.Manager
+	vlogPinned         bool
+	leafGenerationIDs  []uint64
+	leafGenerationRefs []*leafGenerationPinRef
+	registryID         int64
+	reader             valueReader
+	tree               tree.Tree
+	closed             atomic.Bool
+	treePager          *pager.Pager
+	treeRoot           uint64
 	// registryShardHint is used to route reader registrations to a stable fast
 	// registry shard for this snapshot object across operations.
 	registryShardHint int
@@ -849,9 +850,16 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 	}
 	if state.LeafGenerations != nil {
 		snap.leafGenerationIDs = append(snap.leafGenerationIDs[:0], state.LeafGenerations.GenerationOrder...)
-		db.pinLeafGenerationIDs(snap.leafGenerationIDs)
+		if len(state.LeafGenerations.PinRefs) == len(state.LeafGenerations.GenerationOrder) && len(state.LeafGenerations.PinRefs) > 0 {
+			snap.leafGenerationRefs = append(snap.leafGenerationRefs[:0], state.LeafGenerations.PinRefs...)
+			db.pinLeafGenerationRefs(snap.leafGenerationRefs)
+		} else {
+			snap.leafGenerationRefs = snap.leafGenerationRefs[:0]
+			db.pinLeafGenerationIDs(snap.leafGenerationIDs)
+		}
 	} else {
 		snap.leafGenerationIDs = snap.leafGenerationIDs[:0]
+		snap.leafGenerationRefs = snap.leafGenerationRefs[:0]
 	}
 
 	snap.db = db
@@ -880,6 +888,23 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 	return snap
 }
 
+func (s *Snapshot) releaseLeafGenerationPins() {
+	if s == nil {
+		return
+	}
+	if s.db != nil {
+		switch {
+		case len(s.leafGenerationRefs) > 0:
+			s.db.unpinLeafGenerationRefs(s.leafGenerationRefs)
+		case len(s.leafGenerationIDs) > 0:
+			s.db.unpinLeafGenerationIDs(s.leafGenerationIDs)
+		}
+	}
+	s.leafGenerationIDs = s.leafGenerationIDs[:0]
+	clear(s.leafGenerationRefs)
+	s.leafGenerationRefs = s.leafGenerationRefs[:0]
+}
+
 // Close releases the snapshot.
 func (s *Snapshot) Close() error {
 	if s == nil {
@@ -905,9 +930,7 @@ func (s *Snapshot) Close() error {
 			}
 		}
 	}
-	if s.db != nil && len(s.leafGenerationIDs) > 0 {
-		s.db.unpinLeafGenerationIDs(s.leafGenerationIDs)
-	}
+	s.releaseLeafGenerationPins()
 	if s.db != nil {
 		s.db.snapPool.Put(s)
 	}
@@ -2052,6 +2075,9 @@ func (db *DB) publishSnapshotView(idx *indexGen, state *DBState, vm *valuelog.Ma
 		state:       state,
 		vlogManager: vm,
 	})
+	if state.LeafGenerations != nil && db.snapshotAcquireInFlight() == 0 {
+		db.leafGenerationPins.pruneInactiveGenerationIDs(state.LeafGenerations.GenerationOrder)
+	}
 }
 
 func (db *DB) clearSnapshotView() {

@@ -42,25 +42,31 @@ const readViaMmapViewPrefixCacheEnabled = false
 var MaxDeadMappings = defaultMaxDeadMappings
 
 const (
-	defaultMaxDeadMappings      = 64
-	maxAdaptiveDeadMappings     = 4096
-	deadMappingBytesPerStep     = 256 << 10 // increase cap by 1 per 256KiB mapped
-	maxDeadMappingsEnvKey       = "TREEDB_VLOG_MAX_DEAD_MAPPINGS"
-	enableAdaptiveCapEnvKey     = "TREEDB_VLOG_ADAPTIVE_DEAD_MAPPINGS"
-	enableCurrentWritableEnvKey = "TREEDB_VLOG_ENABLE_CURRENT_WRITABLE_MMAP"
-	maxMappedSealedEnvKey       = "TREEDB_VLOG_MAX_MAPPED_SEALED_SEGMENTS"
-	maxMappedSealedBytesEnvKey  = "TREEDB_VLOG_MAX_MAPPED_SEALED_BYTES"
-	defaultAdaptiveCapEnabled   = true
-	defaultMaxMappedSealed      = 8
-	defaultMaxMappedSealedBytes = 64 << 20
+	defaultMaxDeadMappings          = 64
+	maxAdaptiveDeadMappings         = 4096
+	deadMappingBytesPerStep         = 256 << 10 // increase cap by 1 per 256KiB mapped
+	maxDeadMappingsEnvKey           = "TREEDB_VLOG_MAX_DEAD_MAPPINGS"
+	enableAdaptiveCapEnvKey         = "TREEDB_VLOG_ADAPTIVE_DEAD_MAPPINGS"
+	enableCurrentWritableEnvKey     = "TREEDB_VLOG_ENABLE_CURRENT_WRITABLE_MMAP"
+	maxMappedSealedEnvKey           = "TREEDB_VLOG_MAX_MAPPED_SEALED_SEGMENTS"
+	maxMappedSealedBytesEnvKey      = "TREEDB_VLOG_MAX_MAPPED_SEALED_BYTES"
+	maxMappedLeafSealedEnvKey       = "TREEDB_VLOG_MAX_MAPPED_LEAF_SEALED_SEGMENTS"
+	maxMappedLeafBytesEnvKey        = "TREEDB_VLOG_MAX_MAPPED_LEAF_SEALED_BYTES"
+	defaultAdaptiveCapEnabled       = true
+	defaultMaxMappedSealed          = 8
+	defaultMaxMappedSealedBytes     = 64 << 20
+	defaultMaxMappedLeafSealed      = defaultMaxMappedSealed * 4
+	defaultMaxMappedLeafSealedBytes = defaultMaxMappedSealedBytes * 4
 )
 
 var (
-	maxDeadMappingsExplicit   bool
-	adaptiveDeadMappings            = defaultAdaptiveCapEnabled
-	enableCurrentWritableMmap       = false
-	MaxMappedSealedSegments         = defaultMaxMappedSealed
-	MaxMappedSealedBytes      int64 = defaultMaxMappedSealedBytes
+	maxDeadMappingsExplicit     bool
+	adaptiveDeadMappings              = defaultAdaptiveCapEnabled
+	enableCurrentWritableMmap         = false
+	MaxMappedSealedSegments           = defaultMaxMappedSealed
+	MaxMappedSealedBytes        int64 = defaultMaxMappedSealedBytes
+	MaxMappedLeafSealedSegments       = defaultMaxMappedLeafSealed
+	MaxMappedLeafSealedBytes    int64 = defaultMaxMappedLeafSealedBytes
 )
 
 func init() {
@@ -96,6 +102,21 @@ func init() {
 			MaxMappedSealedBytes = v
 		}
 	}
+	if raw := strings.TrimSpace(os.Getenv(maxMappedLeafSealedEnvKey)); raw != "" {
+		if v, err := strconv.Atoi(raw); err == nil && v >= 0 {
+			MaxMappedLeafSealedSegments = v
+		}
+	}
+	if raw := strings.TrimSpace(os.Getenv(maxMappedLeafBytesEnvKey)); raw != "" {
+		if v, err := strconv.ParseInt(raw, 10, 64); err == nil && v >= 0 {
+			MaxMappedLeafSealedBytes = v
+		}
+	}
+}
+
+func isLeafLogFileID(fileID uint32) bool {
+	lane, _ := DecodeFileID(fileID)
+	return lane == ReservedLeafLogLaneID
 }
 
 func effectiveMaxDeadMappings(mappedLen int) int {
@@ -160,10 +181,11 @@ func (f *File) tryEnableSealedLazyMmap() bool {
 		return false
 	}
 	if f.sealedLazyMmapDenied.Load() {
+		deniedCountCapWant, deniedBytesCapWant := f.sealedLazyMmapBudgetSnapshot()
 		deniedCountCap := int(f.sealedLazyMmapDeniedCountCap.Load())
 		deniedBytesCap := f.sealedLazyMmapDeniedBytesCap.Load()
 		// Preserve the cheap deny fast-path while budgets stay unchanged.
-		if deniedCountCap == MaxMappedSealedSegments && deniedBytesCap == MaxMappedSealedBytes {
+		if int64(deniedCountCap) == deniedCountCapWant && deniedBytesCap == deniedBytesCapWant {
 			return false
 		}
 		// Budgets changed; re-check once to allow in-process recovery.
@@ -172,8 +194,7 @@ func (f *File) tryEnableSealedLazyMmap() bool {
 		allow, _ := m.allowSealedLazyMmapLocked(f, targetSize)
 		m.mu.Unlock()
 		if !allow {
-			f.sealedLazyMmapDeniedCountCap.Store(int64(MaxMappedSealedSegments))
-			f.sealedLazyMmapDeniedBytesCap.Store(MaxMappedSealedBytes)
+			f.storeSealedLazyMmapBudgetSnapshot()
 			return false
 		}
 		f.sealedLazyMmapDenied.Store(false)
@@ -190,8 +211,7 @@ func (f *File) tryEnableSealedLazyMmap() bool {
 		m.mu.Unlock()
 		if !allow {
 			f.sealedLazyMmapDenied.Store(true)
-			f.sealedLazyMmapDeniedCountCap.Store(int64(MaxMappedSealedSegments))
-			f.sealedLazyMmapDeniedBytesCap.Store(MaxMappedSealedBytes)
+			f.storeSealedLazyMmapBudgetSnapshot()
 			switch denyReason {
 			case sealedLazyMmapDenyCountCap:
 				f.sealedMapDeniedByCount.Add(1)
@@ -212,8 +232,7 @@ func (f *File) tryEnableSealedLazyMmap() bool {
 	m.mu.Unlock()
 	if !allow {
 		f.sealedLazyMmapDenied.Store(true)
-		f.sealedLazyMmapDeniedCountCap.Store(int64(MaxMappedSealedSegments))
-		f.sealedLazyMmapDeniedBytesCap.Store(MaxMappedSealedBytes)
+		f.storeSealedLazyMmapBudgetSnapshot()
 		switch denyReason {
 		case sealedLazyMmapDenyCountCap:
 			f.sealedMapDeniedByCount.Add(1)
@@ -230,6 +249,19 @@ func (f *File) tryEnableSealedLazyMmap() bool {
 	f.remapToFileSize()
 	data, _ := f.mmapData.Load().([]byte)
 	return len(data) > 0
+}
+
+func (f *File) sealedLazyMmapBudgetSnapshot() (countCap int64, bytesCap int64) {
+	if f != nil && isLeafLogFileID(f.ID) {
+		return int64(MaxMappedLeafSealedSegments), MaxMappedLeafSealedBytes
+	}
+	return int64(MaxMappedSealedSegments), MaxMappedSealedBytes
+}
+
+func (f *File) storeSealedLazyMmapBudgetSnapshot() {
+	countCap, bytesCap := f.sealedLazyMmapBudgetSnapshot()
+	f.sealedLazyMmapDeniedCountCap.Store(countCap)
+	f.sealedLazyMmapDeniedBytesCap.Store(bytesCap)
 }
 
 func (f *File) sealedLazyMmapTargetSize() int64 {

@@ -49,6 +49,10 @@ func (p *SnapshotPool) Put(s *Snapshot) {
 	s.vlogManager = nil
 	s.vlogPinned = false
 	s.leafGenerationIDs = s.leafGenerationIDs[:0]
+	if cap(s.leafGenerationRefs) > 0 {
+		clear(s.leafGenerationRefs[:cap(s.leafGenerationRefs)])
+	}
+	s.leafGenerationRefs = s.leafGenerationRefs[:0]
 	s.reader = valueReader{}
 	s.registryID = 0
 	s.closed.Store(false)

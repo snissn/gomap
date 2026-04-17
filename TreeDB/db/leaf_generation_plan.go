@@ -161,8 +161,7 @@ func (db *DB) LeafGenerationPlan(ctx context.Context, opts LeafGenerationPlanOpt
 		return plan, ErrClosed
 	}
 	if len(snap.leafGenerationIDs) > 0 {
-		db.unpinLeafGenerationIDs(snap.leafGenerationIDs)
-		snap.leafGenerationIDs = snap.leafGenerationIDs[:0]
+		snap.releaseLeafGenerationPins()
 	}
 	defer func() { _ = snap.Close() }()
 

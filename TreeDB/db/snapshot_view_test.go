@@ -197,3 +197,113 @@ func TestAcquireSnapshot_DoesNotLeakLeafGenerationPinsOnRegistryNil(t *testing.T
 		t.Fatalf("pin count for generation 1=%d, want 0", got)
 	}
 }
+
+func TestLeafGenerationPinTracker_PrunesInactiveZeroCountRefs(t *testing.T) {
+	var tracker leafGenerationPinTracker
+
+	refs := tracker.refsForGenerationIDs([]uint64{1, 2, 3})
+	tracker.pinRefs(refs)
+	tracker.unpinRefs(refs)
+	tracker.pruneInactiveGenerationIDs([]uint64{1})
+
+	tracker.mu.RLock()
+	defer tracker.mu.RUnlock()
+
+	if _, ok := tracker.refs[1]; !ok {
+		t.Fatalf("expected active generation ref to be retained")
+	}
+	if _, ok := tracker.refs[2]; ok {
+		t.Fatalf("expected inactive zero-count ref for generation 2 to be pruned")
+	}
+	if _, ok := tracker.refs[3]; ok {
+		t.Fatalf("expected inactive zero-count ref for generation 3 to be pruned")
+	}
+}
+
+func TestCurrentLeafGenerationView_DoesNotPruneTrackedRefs(t *testing.T) {
+	db := &DB{}
+	db.leafGenerationManifest = &leafGenerationManifest{
+		CurrentGenerationID: 1,
+		Generations: []leafGenerationRecord{
+			{GenerationID: 1, State: leafGenerationStateWritable, FileIDs: []uint32{111}},
+		},
+	}
+
+	staleRefs := db.leafGenerationPins.refsForGenerationIDs([]uint64{7})
+	if len(staleRefs) != 1 {
+		t.Fatalf("expected one stale ref, got %d", len(staleRefs))
+	}
+	view := db.currentLeafGenerationView()
+	if view == nil {
+		t.Fatal("expected leaf generation view")
+	}
+
+	db.leafGenerationPins.mu.RLock()
+	_, stillTracked := db.leafGenerationPins.refs[7]
+	db.leafGenerationPins.mu.RUnlock()
+	if !stillTracked {
+		t.Fatalf("expected currentLeafGenerationView not to prune tracked refs")
+	}
+}
+
+func TestPublishSnapshotView_SkipsPruneDuringInFlightSnapshotAcquire(t *testing.T) {
+	db := &DB{}
+	idx := &indexGen{}
+	state := &DBState{
+		LeafGenerations: &leafGenerationView{
+			CurrentGenerationID: 1,
+			GenerationOrder:     []uint64{1},
+		},
+	}
+
+	staleRefs := db.leafGenerationPins.refsForGenerationIDs([]uint64{7})
+	if len(staleRefs) != 1 {
+		t.Fatalf("expected one stale ref, got %d", len(staleRefs))
+	}
+
+	db.snapshotAcquireRO[0].Store(1)
+	db.publishSnapshotView(idx, state, nil)
+	db.leafGenerationPins.mu.RLock()
+	_, stillTracked := db.leafGenerationPins.refs[7]
+	db.leafGenerationPins.mu.RUnlock()
+	if !stillTracked {
+		t.Fatalf("expected stale ref to remain tracked while snapshot acquisition is in flight")
+	}
+
+	db.snapshotAcquireRO[0].Store(0)
+	db.publishSnapshotView(idx, state, nil)
+	db.leafGenerationPins.mu.RLock()
+	_, stillTracked = db.leafGenerationPins.refs[7]
+	db.leafGenerationPins.mu.RUnlock()
+	if stillTracked {
+		t.Fatalf("expected stale ref to be pruned once snapshot acquisition is quiescent")
+	}
+}
+
+func TestSnapshotPool_PutClearsLeafGenerationRefs(t *testing.T) {
+	pool := NewSnapshotPool()
+	snap := pool.Get()
+	snap.leafGenerationRefs = append(snap.leafGenerationRefs, &leafGenerationPinRef{id: 1})
+	pool.Put(snap)
+
+	reused := pool.Get()
+	if len(reused.leafGenerationRefs) != 0 {
+		t.Fatalf("expected pooled snapshot refs slice to be reset, got len=%d", len(reused.leafGenerationRefs))
+	}
+	if cap(reused.leafGenerationRefs) > 0 && reused.leafGenerationRefs[:1][0] != nil {
+		t.Fatalf("expected pooled snapshot refs backing array to be cleared")
+	}
+}
+
+func TestSnapshotReleaseLeafGenerationPins_ClearsRefBackingArray(t *testing.T) {
+	snap := &Snapshot{}
+	snap.leafGenerationRefs = append(snap.leafGenerationRefs, &leafGenerationPinRef{id: 1})
+	snap.releaseLeafGenerationPins()
+
+	if len(snap.leafGenerationRefs) != 0 {
+		t.Fatalf("expected leafGenerationRefs len=0 after release, got %d", len(snap.leafGenerationRefs))
+	}
+	if cap(snap.leafGenerationRefs) > 0 && snap.leafGenerationRefs[:1][0] != nil {
+		t.Fatalf("expected leafGenerationRefs backing array to be cleared on release")
+	}
+}
