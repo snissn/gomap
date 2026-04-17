@@ -237,6 +237,91 @@ func TestAppendValueLogOne_DictModeOuterLeafBypassFallsBackToBlock(t *testing.T)
 	}
 }
 
+func TestAppendValueLogOne_LeafLaneAutoBalancedPrefersLZ4(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "leaf.log")
+	writer, err := valuelog.NewWriter(path, page.ValueLogFileID(1))
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	defer func() { _ = writer.Close() }()
+
+	db := &DB{
+		closeCh:                    make(chan struct{}),
+		valueLogCompressionMode:    uint8(vlogCompressionAuto),
+		valueLogAutoPolicy:         uint8(vlogAutoBalanced),
+		valueLogBlockCodec:         valuelog.BlockCodecSnappy,
+		valueLogBlockTargetBytes:   4096,
+		indexOuterLeavesInValueLog: true,
+	}
+	db.leafLog = lane{
+		id:                      leafLogLaneID,
+		vlog:                    writer,
+		vlogCompressionSelector: newVlogCompressionSelector(vlogAutoBalanced, 0, 0),
+	}
+
+	value := bytes.Repeat([]byte("l"), page.PageSize)
+	ptr, _, err := db.appendValueLogOne(&db.leafLog, 0, nil, 1, value, journalDurabilityFlush)
+	if err != nil {
+		t.Fatalf("appendValueLogOne: %v", err)
+	}
+	if ptr == (page.ValuePtr{}) {
+		t.Fatalf("expected non-empty pointer")
+	}
+	if got := db.leafLog.vlogBlockCodec; got != valuelog.BlockCodecLZ4 {
+		t.Fatalf("leaf lane block codec=%v want lz4", got)
+	}
+
+	ratioSnap := snapshotLaneVlogBlockRatio(&db.leafLog)
+	if got := ratioSnap.Samples[vlogBlockCodecIndex(valuelog.BlockCodecLZ4)]; got == 0 {
+		t.Fatalf("expected leaf lane to record lz4 sample")
+	}
+	if got := ratioSnap.Samples[vlogBlockCodecIndex(valuelog.BlockCodecSnappy)]; got != 0 {
+		t.Fatalf("expected no snappy sample on leaf-lane lz4 override, got=%d", got)
+	}
+}
+
+func TestAppendValueLogOne_NonLeafLaneAutoBalancedKeepsConfiguredCodec(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "value.log")
+	writer, err := valuelog.NewWriter(path, page.ValueLogFileID(1))
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	defer func() { _ = writer.Close() }()
+
+	db := &DB{
+		closeCh:                  make(chan struct{}),
+		valueLogCompressionMode:  uint8(vlogCompressionAuto),
+		valueLogAutoPolicy:       uint8(vlogAutoBalanced),
+		valueLogBlockCodec:       valuelog.BlockCodecSnappy,
+		valueLogBlockTargetBytes: 4096,
+		lanes: []lane{
+			{id: 0, vlog: writer, vlogCompressionSelector: newVlogCompressionSelector(vlogAutoBalanced, 0, 0)},
+		},
+	}
+
+	value := bytes.Repeat([]byte("v"), page.PageSize)
+	ptr, _, err := db.appendValueLogOne(&db.lanes[0], 0, nil, 1, value, journalDurabilityFlush)
+	if err != nil {
+		t.Fatalf("appendValueLogOne: %v", err)
+	}
+	if ptr == (page.ValuePtr{}) {
+		t.Fatalf("expected non-empty pointer")
+	}
+	if got := db.lanes[0].vlogBlockCodec; got != valuelog.BlockCodecSnappy {
+		t.Fatalf("non-leaf lane block codec=%v want snappy", got)
+	}
+
+	ratioSnap := snapshotLaneVlogBlockRatio(&db.lanes[0])
+	if got := ratioSnap.Samples[vlogBlockCodecIndex(valuelog.BlockCodecSnappy)]; got == 0 {
+		t.Fatalf("expected non-leaf lane to record snappy sample")
+	}
+	if got := ratioSnap.Samples[vlogBlockCodecIndex(valuelog.BlockCodecLZ4)]; got != 0 {
+		t.Fatalf("expected no lz4 sample on non-leaf lane, got=%d", got)
+	}
+}
+
 func TestAppendValueLog_DictModeOuterLeafBypassFallsBackToBlock(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "value.log")

@@ -12601,7 +12601,12 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 		if writeMode != vlogWriteBlock {
 			return
 		}
-		if normalizeVlogCompressionMode(db.valueLogCompressionMode) != vlogCompressionAuto {
+		if codec, ok := db.preferLeafPageBlockCodec(l, selectorUnitPayloadBytes, blockCodec); ok {
+			blockCodec = codec
+			return
+		}
+		compressionMode := normalizeVlogCompressionMode(db.valueLogCompressionMode)
+		if compressionMode != vlogCompressionAuto && compressionMode != vlogCompressionDefault {
 			return
 		}
 		if normalizeVlogAutoPolicy(db.valueLogAutoPolicy) == vlogAutoThroughput {
@@ -13278,7 +13283,12 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 		if writeMode != vlogWriteBlock {
 			return
 		}
-		if normalizeVlogCompressionMode(db.valueLogCompressionMode) != vlogCompressionAuto {
+		if codec, ok := db.preferLeafPageBlockCodec(l, len(value), blockCodec); ok {
+			blockCodec = codec
+			return
+		}
+		compressionMode := normalizeVlogCompressionMode(db.valueLogCompressionMode)
+		if compressionMode != vlogCompressionAuto && compressionMode != vlogCompressionDefault {
 			return
 		}
 		if normalizeVlogAutoPolicy(db.valueLogAutoPolicy) == vlogAutoThroughput {

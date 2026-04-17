@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
+	"github.com/snissn/gomap/TreeDB/page"
 )
 
 type vlogCompressionMode uint8
@@ -1396,6 +1397,27 @@ func chooseLargePayloadNoDictBlockCodec(l *lane, configured valuelog.BlockCodec)
 		return valuelog.BlockCodecLZ4
 	}
 	return configured
+}
+
+func (db *DB) preferLeafPageBlockCodec(l *lane, unitPayloadBytes int, configured valuelog.BlockCodec) (valuelog.BlockCodec, bool) {
+	if db == nil || l == nil || !db.indexOuterLeavesInValueLog {
+		return configured, false
+	}
+	if l != &db.leafLog || l.id != leafLogLaneID {
+		return configured, false
+	}
+	if unitPayloadBytes != page.PageSize {
+		return configured, false
+	}
+	switch normalizeVlogCompressionMode(db.valueLogCompressionMode) {
+	case vlogCompressionDefault, vlogCompressionAuto:
+		if normalizeVlogAutoPolicy(db.valueLogAutoPolicy) == vlogAutoThroughput {
+			return configured, false
+		}
+		return valuelog.BlockCodecLZ4, true
+	default:
+		return configured, false
+	}
 }
 
 func recordLaneVlogBlockK(l *lane, codec valuelog.BlockCodec, k int) {

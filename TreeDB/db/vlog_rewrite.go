@@ -369,6 +369,23 @@ func valuelogBlockCodecFromDB(codec ValueLogBlockCodec) valuelog.BlockCodec {
 	}
 }
 
+func leafPageBlockCodecFromOptions(compressionMode ValueLogCompressionMode, autoPolicy ValueLogAutoPolicy, configured ValueLogBlockCodec, splitLeafLog bool) valuelog.BlockCodec {
+	codec := valuelogBlockCodecFromDB(configured)
+	if !splitLeafLog {
+		return codec
+	}
+	if compressionMode == 0 {
+		compressionMode = ValueLogCompressionAuto
+	}
+	switch compressionMode {
+	case ValueLogCompressionAuto:
+		if autoPolicy != ValueLogAutoThroughput {
+			return valuelog.BlockCodecLZ4
+		}
+	}
+	return codec
+}
+
 func scanValueLogSegmentPreferredDictID(seg *valuelog.File) (uint64, error) {
 	if seg == nil || seg.File == nil {
 		return 0, nil
@@ -1406,6 +1423,7 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 	}
 	writer.blockCompression = db.valueLogCompression != ValueLogCompressionOff
 	writer.blockCodec = valuelogBlockCodecFromDB(db.valueLogBlockCodec)
+	writer.leafBlockCodec = leafPageBlockCodecFromOptions(db.valueLogCompression, db.valueLogAutoPolicy, db.valueLogBlockCodec, db.indexOuterLeavesInValueLog)
 	defer func() { _ = writer.Close() }()
 
 	batchSize := normalizeValueLogRewriteBatchSize(opts.BatchSize)
@@ -2314,6 +2332,7 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 	}
 	writer.blockCompression = compressionMode != ValueLogCompressionOff
 	writer.blockCodec = valuelogBlockCodecFromDB(opts.ValueLog.BlockCodec)
+	writer.leafBlockCodec = leafPageBlockCodecFromOptions(compressionMode, opts.ValueLog.AutoPolicy, opts.ValueLog.BlockCodec, opts.IndexOuterLeavesInValueLog)
 	if err := writer.ensureWriter(); err != nil {
 		_ = d.Close()
 		return stats, err
@@ -2531,6 +2550,7 @@ type rewriteWriter struct {
 	// not consult this setting.
 	blockCompression        bool
 	blockCodec              valuelog.BlockCodec
+	leafBlockCodec          valuelog.BlockCodec
 	keepIoNsPerByte         float64
 	keepEncodeNsRaw         float64
 	keepSafetyMargin        float64
@@ -2890,7 +2910,11 @@ func (w *rewriteWriter) rotateLeaf() error {
 		if err != nil {
 			return err
 		}
-		writer.SetBlockCompression(w.blockCodec, w.blockCompression)
+		leafCodec := w.leafBlockCodec
+		if leafCodec == 0 {
+			leafCodec = w.blockCodec
+		}
+		writer.SetBlockCompression(leafCodec, w.blockCompression)
 		writer.SetKeepPolicy(w.keepIoNsPerByte, w.keepEncodeNsRaw, w.keepSafetyMargin)
 		w.leafW = writer
 		w.leafSeq = nextSeq
@@ -2902,7 +2926,11 @@ func (w *rewriteWriter) rotateLeaf() error {
 	if err := w.leafW.RotateTo(path, fileID); err != nil {
 		return err
 	}
-	w.leafW.SetBlockCompression(w.blockCodec, w.blockCompression)
+	leafCodec := w.leafBlockCodec
+	if leafCodec == 0 {
+		leafCodec = w.blockCodec
+	}
+	w.leafW.SetBlockCompression(leafCodec, w.blockCompression)
 	w.leafW.SetKeepPolicy(w.keepIoNsPerByte, w.keepEncodeNsRaw, w.keepSafetyMargin)
 	w.leafSeq = nextSeq
 	w.noteCreatedSegment(path, fileID)

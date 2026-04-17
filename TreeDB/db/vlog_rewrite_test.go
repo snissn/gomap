@@ -2303,6 +2303,20 @@ func TestRewriteWriter_LeafPagesUseConfiguredLeafLogDir(t *testing.T) {
 	}
 }
 
+func TestLeafPageBlockCodecFromOptions_AutoBalancedPrefersLZ4(t *testing.T) {
+	got := leafPageBlockCodecFromOptions(ValueLogCompressionAuto, ValueLogAutoBalanced, ValueLogBlockSnappy, true)
+	if got != valuelog.BlockCodecLZ4 {
+		t.Fatalf("leafPageBlockCodecFromOptions auto/balanced=%v want lz4", got)
+	}
+}
+
+func TestLeafPageBlockCodecFromOptions_ThroughputKeepsConfiguredCodec(t *testing.T) {
+	got := leafPageBlockCodecFromOptions(ValueLogCompressionAuto, ValueLogAutoThroughput, ValueLogBlockSnappy, true)
+	if got != valuelog.BlockCodecSnappy {
+		t.Fatalf("leafPageBlockCodecFromOptions auto/throughput=%v want snappy", got)
+	}
+}
+
 func TestRewriteWriter_TemplatePrepassEncodesBeforeDict(t *testing.T) {
 	walDir := t.TempDir()
 	cfg, store, lookup, value := buildRewriteTemplateFixture(t)

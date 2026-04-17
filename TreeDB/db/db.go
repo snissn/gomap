@@ -92,6 +92,7 @@ type DB struct {
 	keepRecent                 uint64
 	policy                     WritePolicy
 	valueLogCompression        ValueLogCompressionMode
+	valueLogAutoPolicy         ValueLogAutoPolicy
 	valueLogBlockCodec         ValueLogBlockCodec
 	valueLogDomainThresholds   []ValueLogDomainThreshold
 	leafFillTargetPPM          uint32
@@ -1214,6 +1215,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		adaptive:                   adaptiveCtrl,
 		keepRecent:                 opts.KeepRecent,
 		valueLogCompression:        opts.ValueLog.Compression,
+		valueLogAutoPolicy:         opts.ValueLog.AutoPolicy,
 		valueLogBlockCodec:         opts.ValueLog.BlockCodec,
 		valueLogDomainThresholds:   NormalizeValueLogDomainThresholds(opts.ValueLog.DomainInlineThresholds),
 		leafFillTargetPPM:          opts.LeafFillTargetPPM,
