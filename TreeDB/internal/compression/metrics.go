@@ -141,10 +141,6 @@ func (m *Metrics) finishLocked(reason string) {
 }
 
 func (m *Metrics) Reset(nextSlabID uint32) {
-	if !m.Enabled {
-		m.resetLocked(nextSlabID)
-		return
-	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.resetLocked(nextSlabID)
