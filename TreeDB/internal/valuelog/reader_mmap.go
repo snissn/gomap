@@ -309,18 +309,25 @@ func (f *File) retirePersistentMmapToDead() {
 	f.retirePersistentMmapToDeadLocked()
 }
 
-func (f *File) retirePersistentMmapToDeadLocked() {
+func (f *File) retirePersistentMmapToDeadLocked() bool {
 	if f == nil {
-		return
+		return false
 	}
 	data, _ := f.mmapData.Load().([]byte)
 	if len(data) == 0 {
-		return
+		return false
+	}
+	if deadMappingsCapExhausted(f.deadMappingsCount.Load(), len(data)) {
+		// Keep the existing mapping live as a sealed mapping once the dead-mapping
+		// budget is exhausted. That preserves reader safety without allowing the
+		// dead-mapping list to grow without bound.
+		return false
 	}
 	f.deadMappings = append(f.deadMappings, data)
 	f.deadMappingsCount.Add(1)
 	f.deadMappedBytes.Add(uint64(len(data)))
 	f.mmapData.Store([]byte(nil))
+	return true
 }
 
 func (f *File) maybeScheduleRemap() {
