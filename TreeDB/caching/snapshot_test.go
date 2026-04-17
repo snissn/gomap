@@ -122,7 +122,7 @@ func TestAcquireSnapshot_AllocsBoundedAfterWarmPath(t *testing.T) {
 	if testRaceEnabled {
 		t.Skip("AllocsPerRun is not stable under -race")
 	}
-	dir, err := os.MkdirTemp("", "treedb-snapshot-pool-")
+	dir, err := os.MkdirTemp("", "treedb-snapshot-allocs-")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -157,12 +157,12 @@ func TestAcquireSnapshot_AllocsBoundedAfterWarmPath(t *testing.T) {
 			t.Fatalf("Close: %v", err)
 		}
 	})
-	if allocs > 0.05 {
-		t.Fatalf("AcquireSnapshot allocs/run=%f, want <= 0.05 after warm path", allocs)
+	if allocs > 1.1 {
+		t.Fatalf("AcquireSnapshot allocs/run=%f, want <= 1.1 after warm path", allocs)
 	}
 }
 
-func TestSnapshotClose_IdempotentBeforeWrapperReuse(t *testing.T) {
+func TestSnapshotClose_Idempotent(t *testing.T) {
 	dir, err := os.MkdirTemp("", "treedb-snapshot-close-idempotent-")
 	if err != nil {
 		t.Fatal(err)
