@@ -13352,10 +13352,10 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 	}
 	switch mode {
 	case vlogCompressionDefault, vlogCompressionDict:
-		db.valueLogDictCollectSample(value)
+		db.valueLogDictCollectSampleForLane(l, value)
 	case vlogCompressionAuto:
 		if db.allowAutoDictSampling(l, writeMode, len(value)) {
-			db.valueLogDictCollectSample(value)
+			db.valueLogDictCollectSampleForLane(l, value)
 		}
 	}
 

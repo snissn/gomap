@@ -107,6 +107,21 @@ func wireSideStoreLookups(rootDir string, opts *Options) (func() error, error) {
 			opts.ValueLog.DictLookup = func(dictID uint64) ([]byte, error) {
 				return store.GetDictBytes(context.Background(), dictID)
 			}
+			if opts.ValueLog.DictCurrentForClass == nil {
+				opts.ValueLog.DictCurrentForClass = func(ctx context.Context, class string) (uint64, error) {
+					return store.GetCurrentForClass(ctx, class)
+				}
+			}
+			if opts.ValueLog.DictPut == nil {
+				opts.ValueLog.DictPut = func(ctx context.Context, dictBytes []byte) (uint64, error) {
+					return store.PutDictBytes(ctx, dictBytes)
+				}
+			}
+			if opts.ValueLog.DictSetCurrentForClass == nil {
+				opts.ValueLog.DictSetCurrentForClass = func(ctx context.Context, class string, dictID uint64) error {
+					return store.SetCurrentForClass(ctx, class, dictID)
+				}
+			}
 		}
 	}
 

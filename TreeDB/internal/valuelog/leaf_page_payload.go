@@ -14,6 +14,11 @@ var compactLeafPagePayloadMagic = [8]byte{0x8a, 'L', 'F', 'P', 'G', 0x01, 0x91, 
 const compactLeafPagePayloadHeaderSize = len(compactLeafPagePayloadMagic) + 4
 const compactLeafPagePayloadDirName = "leaf_vlog"
 
+func HasCompactLeafLogPayload(payload []byte) bool {
+	return len(payload) >= compactLeafPagePayloadHeaderSize &&
+		bytes.Equal(payload[:len(compactLeafPagePayloadMagic)], compactLeafPagePayloadMagic[:])
+}
+
 func MaybeCompactLeafLogPayload(leafPage []byte) ([]byte, bool, error) {
 	if len(leafPage) != page.PageSize {
 		return leafPage, false, nil
@@ -43,7 +48,7 @@ func MaybeCompactLeafLogPayload(leafPage []byte) ([]byte, bool, error) {
 }
 
 func decodeCompactLeafLogPayloadTo(payload, dst []byte) ([]byte, bool, bool, error) {
-	if len(payload) < compactLeafPagePayloadHeaderSize || !bytes.Equal(payload[:len(compactLeafPagePayloadMagic)], compactLeafPagePayloadMagic[:]) {
+	if !HasCompactLeafLogPayload(payload) {
 		return payload, false, false, nil
 	}
 	prefixLen := int(binary.LittleEndian.Uint16(payload[len(compactLeafPagePayloadMagic) : len(compactLeafPagePayloadMagic)+2]))

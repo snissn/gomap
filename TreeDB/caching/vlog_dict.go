@@ -87,6 +87,16 @@ func (db *DB) valueLogDictClassForValue(value []byte) vlogDictClass {
 	return db.valueLogDictClassForPayloadKind(db.classifyVlogPayloadKindForValue(value))
 }
 
+func (db *DB) valueLogDictClassForLaneValue(l *lane, value []byte) vlogDictClass {
+	if db.dictClassMode() != vlogDictClassModeSplitOuterLeaf {
+		return vlogDictClassSingleValue
+	}
+	if l != nil && l.id == leafLogLaneID {
+		return vlogDictClassOuterLeaf
+	}
+	return db.valueLogDictClassForValue(value)
+}
+
 func (db *DB) valueLogDictClassForRecordSplit(split vlogPayloadRecordSplit) vlogDictClass {
 	if db.dictClassMode() != vlogDictClassModeSplitOuterLeaf {
 		return vlogDictClassSingleValue
@@ -236,6 +246,15 @@ func (db *DB) valueLogDictAllowOuterLeaf() bool {
 	}
 }
 
+func (db *DB) valueLogDictShouldTrainClass(class vlogDictClass) bool {
+	if class != vlogDictClassOuterLeaf {
+		return true
+	}
+	return db != nil &&
+		db.indexOuterLeavesInValueLog &&
+		db.dictClassMode() == vlogDictClassModeSplitOuterLeaf
+}
+
 func (db *DB) isOuterLeafValueLogPayload(value []byte) bool {
 	if db == nil || len(value) == 0 {
 		return false
@@ -243,7 +262,7 @@ func (db *DB) isOuterLeafValueLogPayload(value []byte) bool {
 	if !db.indexOuterLeavesInValueLog {
 		return false
 	}
-	return outerleaf.HasMagic(value)
+	return outerleaf.HasMagic(value) || valuelog.HasCompactLeafLogPayload(value)
 }
 
 func (db *DB) classifyVlogPayloadKindForValue(value []byte) vlogPayloadKind {
@@ -678,20 +697,31 @@ func (db *DB) valueLogDictTrainerForClass(class vlogDictClass) *compression.Trai
 }
 
 func (db *DB) valueLogDictCollectSamples(records []valuelog.Record) {
+	class := db.valueLogDictClassForRecords(records)
+	db.valueLogDictCollectSamplesForClass(records, class)
+}
+
+func (db *DB) valueLogDictCollectSamplesForClass(records []valuelog.Record, class vlogDictClass) {
 	if db == nil {
 		return
 	}
-	class := db.valueLogDictClassForRecords(records)
 	tr := db.valueLogDictTrainerForClass(class)
 	if tr == nil || !tr.ShouldCollect() {
 		return
 	}
-	if db.valueLogDictIncompressibleHoldRemaining.Load() > 0 {
+	if !db.valueLogDictShouldTrainClass(class) {
 		return
 	}
-	paused := db.valueLogDictPaused()
-	if paused && !db.valueLogDictShouldCollectPausedBatch(len(records)) {
+	outerLeafTraining := class == vlogDictClassOuterLeaf
+	if !outerLeafTraining && db.valueLogDictIncompressibleHoldRemaining.Load() > 0 {
 		return
+	}
+	paused := false
+	if !outerLeafTraining {
+		paused = db.valueLogDictPaused()
+		if paused && !db.valueLogDictShouldCollectPausedBatch(len(records)) {
+			return
+		}
 	}
 	// Seed the trainer's IO cost model early so the initial dict/K selection can
 	// optimize for end-to-end throughput (encode + IO), rather than falling back
@@ -726,13 +756,15 @@ func (db *DB) valueLogDictCollectSamples(records []valuelog.Record) {
 			continue
 		}
 		v := records[i].Value
-		if db.valueLogDictIgnoreValueForSignal(v) {
-			continue
-		}
-		if db.valueLogDictClassifierBypass(v, false) {
-			// One high-entropy sample is enough to stop this collect pass and keep
-			// the write path cheap on incompressible streams.
-			return
+		if !outerLeafTraining {
+			if db.valueLogDictIgnoreValueForSignal(v) {
+				continue
+			}
+			if db.valueLogDictClassifierBypass(v, false) {
+				// One high-entropy sample is enough to stop this collect pass and keep
+				// the write path cheap on incompressible streams.
+				return
+			}
 		}
 		tr.Collect(v)
 		collected++
@@ -787,15 +819,28 @@ func (db *DB) valueLogDictCollectBudget(records []valuelog.Record, paused bool) 
 }
 
 func (db *DB) valueLogDictCollectSample(value []byte) {
+	class := db.valueLogDictClassForValue(value)
+	db.valueLogDictCollectSampleForClass(value, class)
+}
+
+func (db *DB) valueLogDictCollectSampleForLane(l *lane, value []byte) {
+	class := db.valueLogDictClassForLaneValue(l, value)
+	db.valueLogDictCollectSampleForClass(value, class)
+}
+
+func (db *DB) valueLogDictCollectSampleForClass(value []byte, class vlogDictClass) {
 	if db == nil {
 		return
 	}
-	class := db.valueLogDictClassForValue(value)
 	tr := db.valueLogDictTrainerForClass(class)
 	if tr == nil || !tr.ShouldCollect() {
 		return
 	}
-	if db.valueLogDictIncompressibleHoldRemaining.Load() > 0 {
+	if !db.valueLogDictShouldTrainClass(class) {
+		return
+	}
+	outerLeafTraining := class == vlogDictClassOuterLeaf
+	if !outerLeafTraining && db.valueLogDictIncompressibleHoldRemaining.Load() > 0 {
 		return
 	}
 	if ioNsPerStoredByte := db.valueLogDictTrainerIOCost(); ioNsPerStoredByte > 0 {
@@ -808,14 +853,16 @@ func (db *DB) valueLogDictCollectSample(value []byte) {
 	if stride > 1 && db.valueLogDictSampleStrideCount.Add(1)%stride != 0 {
 		return
 	}
-	if db.valueLogDictPaused() && !db.valueLogDictShouldCollectPaused() {
+	if !outerLeafTraining && db.valueLogDictPaused() && !db.valueLogDictShouldCollectPaused() {
 		return
 	}
-	if db.valueLogDictIgnoreValueForSignal(value) {
-		return
-	}
-	if db.valueLogDictClassifierBypass(value, false) {
-		return
+	if !outerLeafTraining {
+		if db.valueLogDictIgnoreValueForSignal(value) {
+			return
+		}
+		if db.valueLogDictClassifierBypass(value, false) {
+			return
+		}
 	}
 	tr.Collect(value)
 }

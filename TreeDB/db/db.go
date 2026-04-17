@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -89,23 +90,27 @@ type DB struct {
 
 	readOnly bool
 
-	keepRecent                 uint64
-	policy                     WritePolicy
-	valueLogCompression        ValueLogCompressionMode
-	valueLogAutoPolicy         ValueLogAutoPolicy
-	valueLogBlockCodec         ValueLogBlockCodec
-	valueLogDomainThresholds   []ValueLogDomainThreshold
-	leafFillTargetPPM          uint32
-	internalFillTargetPPM      uint32
-	leafPrefixCompression      bool
-	indexColumnarLeaves        bool
-	indexPackedValuePtr        bool
-	indexInternalBaseDelta     bool
-	indexOuterLeavesInValueLog bool
-	indexAdaptiveLeafEncoding  bool
-	piggybackCompaction        bool
-	maintenanceOpsPerCoalesce  int
-	zipperParallelMergeSource  zipper.ParallelMergePressureSource
+	keepRecent                     uint64
+	policy                         WritePolicy
+	valueLogCompression            ValueLogCompressionMode
+	valueLogAutoPolicy             ValueLogAutoPolicy
+	valueLogBlockCodec             ValueLogBlockCodec
+	valueLogDictLookup             valuelog.DictLookup
+	valueLogDictCurrentForClass    func(context.Context, string) (uint64, error)
+	valueLogDictPut                func(context.Context, []byte) (uint64, error)
+	valueLogDictSetCurrentForClass func(context.Context, string, uint64) error
+	valueLogDomainThresholds       []ValueLogDomainThreshold
+	leafFillTargetPPM              uint32
+	internalFillTargetPPM          uint32
+	leafPrefixCompression          bool
+	indexColumnarLeaves            bool
+	indexPackedValuePtr            bool
+	indexInternalBaseDelta         bool
+	indexOuterLeavesInValueLog     bool
+	indexAdaptiveLeafEncoding      bool
+	piggybackCompaction            bool
+	maintenanceOpsPerCoalesce      int
+	zipperParallelMergeSource      zipper.ParallelMergePressureSource
 
 	mu               sync.RWMutex
 	writeMu          sync.RWMutex
@@ -448,6 +453,17 @@ type ValueLogOptions struct {
 
 	// DictLookup provides dictionary bytes for value-log decoding.
 	DictLookup valuelog.DictLookup
+	// DictCurrentForClass resolves the current dictionary ID for a payload class.
+	// Offline/maintenance rewrite uses this to seed class-specific rewrite codecs.
+	DictCurrentForClass func(context.Context, string) (uint64, error)
+	// DictPut persists dictionary bytes and returns the stable dictionary ID.
+	// Offline/maintenance rewrite may use this to bootstrap a class-specific dict
+	// before rewriting into dict-compressed frames.
+	DictPut func(context.Context, []byte) (uint64, error)
+	// DictSetCurrentForClass marks a dictionary ID as the current dict for the
+	// provided payload class. Rewrite bootstrap uses this after publishing a new
+	// class-specific dict.
+	DictSetCurrentForClass func(context.Context, string, uint64) error
 
 	// DictTrain configures background dictionary training for value-log frame
 	// compression in cached mode.
@@ -1209,30 +1225,34 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	adaptiveCtrl, inlineThreshold := resolveInlineThresholdAndAdaptive(opts)
 
 	db := &DB{
-		valueLogManager:            vm,
-		valueLogRefTracker:         newValueLogRefTracker(),
-		lock:                       lock,
-		adaptive:                   adaptiveCtrl,
-		keepRecent:                 opts.KeepRecent,
-		valueLogCompression:        opts.ValueLog.Compression,
-		valueLogAutoPolicy:         opts.ValueLog.AutoPolicy,
-		valueLogBlockCodec:         opts.ValueLog.BlockCodec,
-		valueLogDomainThresholds:   NormalizeValueLogDomainThresholds(opts.ValueLog.DomainInlineThresholds),
-		leafFillTargetPPM:          opts.LeafFillTargetPPM,
-		internalFillTargetPPM:      opts.InternalFillTargetPPM,
-		leafPrefixCompression:      opts.LeafPrefixCompression,
-		indexColumnarLeaves:        opts.IndexColumnarLeaves,
-		indexPackedValuePtr:        opts.IndexPackedValuePtr,
-		indexInternalBaseDelta:     opts.IndexInternalBaseDelta,
-		indexOuterLeavesInValueLog: opts.IndexOuterLeavesInValueLog,
-		indexAdaptiveLeafEncoding:  opts.IndexAdaptiveLeafEncoding,
-		piggybackCompaction:        !opts.DisablePiggybackCompaction,
-		maintenanceOpsPerCoalesce:  opts.MaintenanceOpsPerCoalesce,
-		dir:                        opts.Dir,
-		chunkSize:                  opts.ChunkSize,
-		preferAppendAlloc:          opts.PreferAppendAlloc,
-		freelistRegionPages:        opts.FreelistRegionPages,
-		freelistRegionRadius:       opts.FreelistRegionRadius,
+		valueLogManager:                vm,
+		valueLogRefTracker:             newValueLogRefTracker(),
+		lock:                           lock,
+		adaptive:                       adaptiveCtrl,
+		keepRecent:                     opts.KeepRecent,
+		valueLogCompression:            opts.ValueLog.Compression,
+		valueLogAutoPolicy:             opts.ValueLog.AutoPolicy,
+		valueLogBlockCodec:             opts.ValueLog.BlockCodec,
+		valueLogDictLookup:             opts.ValueLog.DictLookup,
+		valueLogDictCurrentForClass:    opts.ValueLog.DictCurrentForClass,
+		valueLogDictPut:                opts.ValueLog.DictPut,
+		valueLogDictSetCurrentForClass: opts.ValueLog.DictSetCurrentForClass,
+		valueLogDomainThresholds:       NormalizeValueLogDomainThresholds(opts.ValueLog.DomainInlineThresholds),
+		leafFillTargetPPM:              opts.LeafFillTargetPPM,
+		internalFillTargetPPM:          opts.InternalFillTargetPPM,
+		leafPrefixCompression:          opts.LeafPrefixCompression,
+		indexColumnarLeaves:            opts.IndexColumnarLeaves,
+		indexPackedValuePtr:            opts.IndexPackedValuePtr,
+		indexInternalBaseDelta:         opts.IndexInternalBaseDelta,
+		indexOuterLeavesInValueLog:     opts.IndexOuterLeavesInValueLog,
+		indexAdaptiveLeafEncoding:      opts.IndexAdaptiveLeafEncoding,
+		piggybackCompaction:            !opts.DisablePiggybackCompaction,
+		maintenanceOpsPerCoalesce:      opts.MaintenanceOpsPerCoalesce,
+		dir:                            opts.Dir,
+		chunkSize:                      opts.ChunkSize,
+		preferAppendAlloc:              opts.PreferAppendAlloc,
+		freelistRegionPages:            opts.FreelistRegionPages,
+		freelistRegionRadius:           opts.FreelistRegionRadius,
 		policy: WritePolicy{
 			InlineThreshold: inlineThreshold,
 			FlushThreshold:  opts.FlushThreshold,
