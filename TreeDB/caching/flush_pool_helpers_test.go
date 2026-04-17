@@ -187,7 +187,7 @@ func TestBuildOpRunsChunking(t *testing.T) {
 		putEntrySlice(make([]batch.Entry, 0, classCap))
 	}
 
-	mt, err := memtable.NewWithCapacityMode(0, memtable.ModeHashSorted)
+	base, err := memtable.NewWithCapacityMode(0, memtable.ModeHashSorted)
 	if err != nil {
 		t.Fatalf("NewWithCapacityMode: %v", err)
 	}
@@ -195,11 +195,12 @@ func TestBuildOpRunsChunking(t *testing.T) {
 	entryCount := classCap*2 + 3
 	for i := 0; i < entryCount; i++ {
 		binary.BigEndian.PutUint64(key[:], uint64(i))
-		mt.Set(key[:], []byte{byte(i + 1)})
+		base.Set(key[:], []byte{byte(i + 1)})
 	}
 	binary.BigEndian.PutUint64(key[:], uint64(2))
-	mt.Delete(key[:])
-	mt.Freeze()
+	base.Delete(key[:])
+	base.Freeze()
+	mt := unstableIteratorMemtable{Table: base}
 
 	runs, deleteOps, err := buildOpRuns(mt, chunkCap)
 	if err != nil {
@@ -233,7 +234,7 @@ func TestBuildOpRunsChunking(t *testing.T) {
 	}
 }
 
-func TestBuildOpRunsStableUnsafeSingleRun(t *testing.T) {
+func TestBuildOpRunsStableUnsafeSingleRun_AppendOnly(t *testing.T) {
 	mt := memtable.NewAppendOnlyWithCapacity(0)
 	var key [8]byte
 	const entryCount = 257
@@ -261,6 +262,40 @@ func TestBuildOpRunsStableUnsafeSingleRun(t *testing.T) {
 	}
 	if len(runs) != 1 {
 		t.Fatalf("run count=%d want=1 for stable append-only memtable", len(runs))
+	}
+	if got := len(runs[0]); got != entryCount {
+		t.Fatalf("run len=%d want=%d", got, entryCount)
+	}
+}
+
+func TestBuildOpRunsStableUnsafeSingleRun_HashSorted(t *testing.T) {
+	mt := memtable.NewHashSorted()
+	var key [8]byte
+	const entryCount = 257
+	for i := 0; i < entryCount; i++ {
+		binary.BigEndian.PutUint64(key[:], uint64(i))
+		mt.Set(key[:], []byte{byte(i + 1)})
+	}
+	binary.BigEndian.PutUint64(key[:], uint64(7))
+	mt.Delete(key[:])
+	mt.Freeze()
+
+	runs, deleteOps, err := buildOpRuns(mt, 2)
+	if err != nil {
+		t.Fatalf("buildOpRuns: %v", err)
+	}
+	defer func() {
+		for _, run := range runs {
+			putEntrySlice(run)
+		}
+		putEntryRuns(runs)
+	}()
+
+	if deleteOps != 1 {
+		t.Fatalf("deleteOps=%d want=1", deleteOps)
+	}
+	if len(runs) != 1 {
+		t.Fatalf("run count=%d want=1 for stable hash-sorted memtable", len(runs))
 	}
 	if got := len(runs[0]); got != entryCount {
 		t.Fatalf("run len=%d want=%d", got, entryCount)
@@ -876,6 +911,25 @@ func TestAppendOnlyMemtableLeaseReuse(t *testing.T) {
 	}
 	if gotAppendOnly != mt {
 		t.Fatalf("expected leased append-only memtable reuse")
+	}
+}
+
+func TestHashSortedMemtableLeaseReuse(t *testing.T) {
+	db := &DB{}
+	mt := memtable.NewHashSortedWithCapacityAndIndexer(4096, nil)
+
+	db.recycleMemtables([]memtable.Table{mt})
+
+	got, err := db.newMutableMemtableWithCapacityMode(0, memtable.ModeHashSorted)
+	if err != nil {
+		t.Fatalf("newMutableMemtableWithCapacityMode: %v", err)
+	}
+	gotHashSorted, ok := got.(*memtable.HashSorted)
+	if !ok {
+		t.Fatalf("expected hash-sorted memtable, got %T", got)
+	}
+	if gotHashSorted != mt {
+		t.Fatalf("expected leased hash-sorted memtable reuse")
 	}
 }
 
