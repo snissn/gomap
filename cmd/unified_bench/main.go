@@ -205,10 +205,10 @@ type BenchRun struct {
 }
 
 type treeDBPerfMetrics struct {
-	Mmap                  treeDBMmapPerfMetrics     `json:"mmap,omitempty"`
-	Snapshot              treeDBSnapshotPerfMetrics `json:"snapshot,omitempty"`
-	LeafGenerationsPinned int64                     `json:"leaf_generations_pinned,omitempty"`
-	LeafPinsTotal         int64                     `json:"leaf_pins_total,omitempty"`
+	Mmap                       treeDBMmapPerfMetrics     `json:"mmap,omitempty"`
+	Snapshot                   treeDBSnapshotPerfMetrics `json:"snapshot,omitempty"`
+	LeafGenerationsPinnedAfter int64                     `json:"leaf_generations_pinned_after,omitempty"`
+	LeafPinsTotalAfter         int64                     `json:"leaf_pins_total_after,omitempty"`
 }
 
 type treeDBMmapPerfMetrics struct {
@@ -245,11 +245,10 @@ type benchprofExport struct {
 }
 
 type benchprofExportRun struct {
-	Keys        int                                     `json:"keys"`
-	Profile     string                                  `json:"profile,omitempty"`
-	Results     map[string]map[string]float64           `json:"results,omitempty"`
-	TreeDBPerf  map[string]map[string]treeDBPerfMetrics `json:"treedb_perf,omitempty"`
-	TreeDBStats map[string]map[string]string            `json:"treedb_stats,omitempty"`
+	Keys       int                                     `json:"keys"`
+	Profile    string                                  `json:"profile,omitempty"`
+	Results    map[string]map[string]float64           `json:"results,omitempty"`
+	TreeDBPerf map[string]map[string]treeDBPerfMetrics `json:"treedb_perf,omitempty"`
 }
 
 type scanDiag struct {
@@ -1054,11 +1053,10 @@ func writeBenchprofArtifacts(dir string, runs []BenchRun) error {
 	}
 	for _, run := range runs {
 		out.Runs = append(out.Runs, benchprofExportRun{
-			Keys:        run.Config.Keys,
-			Profile:     strings.TrimSpace(run.Config.Profile),
-			Results:     run.Results,
-			TreeDBPerf:  run.TreeDBPerf,
-			TreeDBStats: run.TreeDBStats,
+			Keys:       run.Config.Keys,
+			Profile:    strings.TrimSpace(run.Config.Profile),
+			Results:    run.Results,
+			TreeDBPerf: run.TreeDBPerf,
 		})
 	}
 
@@ -1754,15 +1752,15 @@ func snapshotSelectedTreeDBStats(db kvstore.DB) treeDBSelectedStats {
 func computeTreeDBPerfMetrics(before, after treeDBSelectedStats, snapshot treeDBSnapshotPerfMetrics) treeDBPerfMetrics {
 	m := treeDBPerfMetrics{
 		Mmap: treeDBMmapPerfMetrics{
-			Hits:           after.mmapHits - before.mmapHits,
-			MissOutOfRange: after.mmapMissOutOfRange - before.mmapMissOutOfRange,
-			MissNoMapping:  after.mmapMissNoMapping - before.mmapMissNoMapping,
-			MissDeadMapCap: after.mmapMissDeadCap - before.mmapMissDeadCap,
-			FallbackReadAt: after.mmapFallbackReadAt - before.mmapFallbackReadAt,
+			Hits:           saturatingUint64Delta(after.mmapHits, before.mmapHits),
+			MissOutOfRange: saturatingUint64Delta(after.mmapMissOutOfRange, before.mmapMissOutOfRange),
+			MissNoMapping:  saturatingUint64Delta(after.mmapMissNoMapping, before.mmapMissNoMapping),
+			MissDeadMapCap: saturatingUint64Delta(after.mmapMissDeadCap, before.mmapMissDeadCap),
+			FallbackReadAt: saturatingUint64Delta(after.mmapFallbackReadAt, before.mmapFallbackReadAt),
 		},
-		Snapshot:              snapshot,
-		LeafGenerationsPinned: after.leafGenerationsPin,
-		LeafPinsTotal:         after.leafPinsTotal,
+		Snapshot:                   snapshot,
+		LeafGenerationsPinnedAfter: after.leafGenerationsPin,
+		LeafPinsTotalAfter:         after.leafPinsTotal,
 	}
 	totalReads := m.Mmap.Hits + m.Mmap.FallbackReadAt
 	if totalReads > 0 {
@@ -1777,6 +1775,13 @@ func computeTreeDBPerfMetrics(before, after treeDBSelectedStats, snapshot treeDB
 	return m
 }
 
+func saturatingUint64Delta(after, before uint64) uint64 {
+	if after < before {
+		return 0
+	}
+	return after - before
+}
+
 func treeDBPerfMetricsEmpty(m treeDBPerfMetrics) bool {
 	return m.Mmap.Hits == 0 &&
 		m.Mmap.MissOutOfRange == 0 &&
@@ -1788,8 +1793,8 @@ func treeDBPerfMetricsEmpty(m treeDBPerfMetrics) bool {
 		m.Snapshot.AcquireTotalNanos == 0 &&
 		m.Snapshot.CloseCalls == 0 &&
 		m.Snapshot.CloseTotalNanos == 0 &&
-		m.LeafGenerationsPinned == 0 &&
-		m.LeafPinsTotal == 0
+		m.LeafGenerationsPinnedAfter == 0 &&
+		m.LeafPinsTotalAfter == 0
 }
 
 func (p *periodicCheckpoint) Add(db kvstore.DB, opsDelta int, bytesDelta int64) error {
@@ -4725,8 +4730,8 @@ func renderTreeDBPerfString(instances []*DBInstance, finalTestOrder []string, di
 				))
 			}
 			sb.WriteString(fmt.Sprintf("  leaf_generation.generations.pinned.after=%d leaf_generation.pins.total.after=%d\n",
-				m.LeafGenerationsPinned,
-				m.LeafPinsTotal,
+				m.LeafGenerationsPinnedAfter,
+				m.LeafPinsTotalAfter,
 			))
 		}
 		if wroteHeader {
