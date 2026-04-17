@@ -17,6 +17,35 @@ type pointerBatch struct {
 	entries      []batch.Entry
 	reserveCalls int
 	lastReserve  int
+	setCalls     int
+	setViewCalls int
+	deleteCalls  int
+	deleteViews  int
+}
+
+type viewCountingBackend struct {
+	*MockBackend
+	batches []*pointerBatch
+}
+
+func (b *viewCountingBackend) NewBatch() batch.Interface {
+	pb := &pointerBatch{}
+	b.batches = append(b.batches, pb)
+	return pb
+}
+
+func (b *viewCountingBackend) NewBatchWithSize(size int) batch.Interface {
+	return b.NewBatch()
+}
+
+func (b *viewCountingBackend) totals() (setCalls, setViewCalls, deleteCalls, deleteViewCalls int) {
+	for _, pb := range b.batches {
+		setCalls += pb.setCalls
+		setViewCalls += pb.setViewCalls
+		deleteCalls += pb.deleteCalls
+		deleteViewCalls += pb.deleteViews
+	}
+	return
 }
 
 var entrySlicePoolTestMu sync.Mutex
@@ -28,21 +57,27 @@ func lockEntrySlicePoolStateForTest(t *testing.T) {
 }
 
 func (b *pointerBatch) Set(key, value []byte) error {
+	b.setCalls++
 	b.entries = append(b.entries, batch.Entry{Type: batch.OpPut, Key: key, Value: value})
 	return nil
 }
 
 func (b *pointerBatch) SetView(key, value []byte) error {
-	return b.Set(key, value)
+	b.setViewCalls++
+	b.entries = append(b.entries, batch.Entry{Type: batch.OpPut, Key: key, Value: value})
+	return nil
 }
 
 func (b *pointerBatch) Delete(key []byte) error {
+	b.deleteCalls++
 	b.entries = append(b.entries, batch.Entry{Type: batch.OpDelete, Key: key})
 	return nil
 }
 
 func (b *pointerBatch) DeleteView(key []byte) error {
-	return b.Delete(key)
+	b.deleteViews++
+	b.entries = append(b.entries, batch.Entry{Type: batch.OpDelete, Key: key})
+	return nil
 }
 
 func (b *pointerBatch) SetPointer(key []byte, ptr page.ValuePtr) error {
@@ -794,6 +829,78 @@ func TestAppendOnlyMemtableLeaseReuse(t *testing.T) {
 	}
 	if gotAppendOnly != mt {
 		t.Fatalf("expected leased append-only memtable reuse")
+	}
+}
+
+func TestFlushLaneOnce_UsesViewMethodsForInlineEntries_SerialAndParallel(t *testing.T) {
+	t.Run("serial", func(t *testing.T) {
+		testFlushLaneOnceUsesViewMethodsForInlineEntries(t, false)
+	})
+	t.Run("parallel", func(t *testing.T) {
+		testFlushLaneOnceUsesViewMethodsForInlineEntries(t, true)
+	})
+}
+
+func testFlushLaneOnceUsesViewMethodsForInlineEntries(t *testing.T, forceParallel bool) {
+	t.Helper()
+	dir := t.TempDir()
+	backend := &viewCountingBackend{MockBackend: NewMockBackend()}
+	db, err := Open(dir, backend, Options{
+		FlushThreshold: 1 << 60,
+		MemtableShards: 1,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	oldProcs := runtime.GOMAXPROCS(2)
+	defer runtime.GOMAXPROCS(oldProcs)
+
+	if forceParallel {
+		db.flushBuildConcurrency = 2
+		db.flushBuildMinEntries = 1
+		db.flushBuildMinUnits = 2
+		db.flushBuildChunkCap = 2
+	}
+
+	queueUnits := 1
+	if forceParallel {
+		queueUnits = 2
+	}
+	for unit := 0; unit < queueUnits; unit++ {
+		putKey := []byte{byte('a' + unit)}
+		delKey := []byte{byte('k' + unit)}
+		if err := db.Set(putKey, []byte("value")); err != nil {
+			t.Fatalf("Set unit %d: %v", unit, err)
+		}
+		if err := db.Delete(delKey); err != nil {
+			t.Fatalf("Delete unit %d: %v", unit, err)
+		}
+		db.mu.Lock()
+		if err := db.rotateMemtableLocked(false); err != nil {
+			db.mu.Unlock()
+			t.Fatalf("rotateMemtableLocked unit %d: %v", unit, err)
+		}
+		db.mu.Unlock()
+	}
+
+	if !db.flushLaneOnce(false, 0) {
+		t.Fatal("flushLaneOnce returned false")
+	}
+
+	setCalls, setViewCalls, deleteCalls, deleteViewCalls := backend.totals()
+	if setCalls != 0 {
+		t.Fatalf("backend Set calls=%d, want 0", setCalls)
+	}
+	if deleteCalls != 0 {
+		t.Fatalf("backend Delete calls=%d, want 0", deleteCalls)
+	}
+	if setViewCalls != queueUnits {
+		t.Fatalf("backend SetView calls=%d, want %d", setViewCalls, queueUnits)
+	}
+	if deleteViewCalls != queueUnits {
+		t.Fatalf("backend DeleteView calls=%d, want %d", deleteViewCalls, queueUnits)
 	}
 }
 

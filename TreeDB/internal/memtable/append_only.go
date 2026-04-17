@@ -601,8 +601,10 @@ func (m *AppendOnly) appendEntryLocked(key, value []byte, ptr page.ValuePtr, fla
 			return
 		}
 		m.ordered = false
-		m.latestDirty = true
-		m.clearSnapshotLocked()
+		// Once order breaks, materialize the latest-key index immediately so
+		// subsequent unordered appends can maintain it incrementally instead of
+		// forcing the next iterator/lookup to rebuild the full map from scratch.
+		m.rebuildLatestIndexLocked()
 		return
 	}
 	if !m.latestDirty {

@@ -21281,12 +21281,20 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 		chunkBackend := totalLen > backendEntriesCap
 		emittedChunk := false
 
+		type setViewer interface {
+			SetView(key, value []byte) error
+		}
+		type deleteViewer interface {
+			DeleteView(key []byte) error
+		}
 		type ptrSetterView interface {
 			SetPointerView(key []byte, ptr page.ValuePtr) error
 		}
 		type ptrSetter interface {
 			SetPointer(key []byte, ptr page.ValuePtr) error
 		}
+		sv, _ := backendBatch.(setViewer)
+		dv, _ := backendBatch.(deleteViewer)
 		psv, _ := backendBatch.(ptrSetterView)
 		ps, _ := backendBatch.(ptrSetter)
 		var single [1]batch.Entry
@@ -21321,6 +21329,8 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 			}
 			backendBatch = db.newBackendBatchWithSize(sizeHint)
 			reserveBackendBatchOps(backendBatch, reserveChunkOps)
+			sv, _ = backendBatch.(setViewer)
+			dv, _ = backendBatch.(deleteViewer)
 			psv, _ = backendBatch.(ptrSetterView)
 			ps, _ = backendBatch.(ptrSetter)
 			backendPendingOps = 0
@@ -21371,7 +21381,11 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 			)
 			switch {
 			case entry.Type == batch.OpDelete:
-				err = backendBatch.Delete(entry.Key)
+				if dv != nil {
+					err = dv.DeleteView(entry.Key)
+				} else {
+					err = backendBatch.Delete(entry.Key)
+				}
 				applied = true
 			case entry.IsPtr:
 				if psv != nil {
@@ -21384,7 +21398,11 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 				}
 				applied = true
 			default:
-				err = backendBatch.Set(entry.Key, entry.Value)
+				if sv != nil {
+					err = sv.SetView(entry.Key, entry.Value)
+				} else {
+					err = backendBatch.Set(entry.Key, entry.Value)
+				}
 				applied = true
 			}
 			if err != nil {
@@ -21555,6 +21573,12 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 		backendPendingOps = pendingOps
 	} else {
 		type (
+			setViewer interface {
+				SetView(key, value []byte) error
+			}
+			deleteViewer interface {
+				DeleteView(key []byte) error
+			}
 			ptrSetter interface {
 				SetPointer(key []byte, ptr page.ValuePtr) error
 			}
@@ -21562,6 +21586,8 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 				SetPointerView(key []byte, ptr page.ValuePtr) error
 			}
 		)
+		sv, _ := backendBatch.(setViewer)
+		dv, _ := backendBatch.(deleteViewer)
 		psv, _ := backendBatch.(ptrSetterView)
 		ps, _ := backendBatch.(ptrSetter)
 		var single [1]batch.Entry
@@ -21598,6 +21624,8 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 			}
 			backendBatch = db.newBackendBatchWithSize(sizeHint)
 			reserveBackendBatchOps(backendBatch, reserveChunkOps)
+			sv, _ = backendBatch.(setViewer)
+			dv, _ = backendBatch.(deleteViewer)
 			psv, _ = backendBatch.(ptrSetterView)
 			ps, _ = backendBatch.(ptrSetter)
 			backendPendingOps = 0
@@ -21609,7 +21637,13 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 				key := iter.UnsafeKey()
 				val, ptr, flags := iter.UnsafeEntry()
 				if flags&node.FlagTombstone != 0 {
-					if err := backendBatch.Delete(key); err != nil {
+					var err error
+					if dv != nil {
+						err = dv.DeleteView(key)
+					} else {
+						err = backendBatch.Delete(key)
+					}
+					if err != nil {
 						db.reportError(fmt.Errorf("cachingdb: flush failed (delete): %w", err))
 						_ = iter.Close()
 						_ = backendBatch.Close()
@@ -21666,7 +21700,13 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 						return false
 					}
 				} else {
-					if err := backendBatch.Set(key, val); err != nil {
+					var err error
+					if sv != nil {
+						err = sv.SetView(key, val)
+					} else {
+						err = backendBatch.Set(key, val)
+					}
+					if err != nil {
 						db.reportError(fmt.Errorf("cachingdb: flush failed (set): %w", err))
 						_ = iter.Close()
 						_ = backendBatch.Close()

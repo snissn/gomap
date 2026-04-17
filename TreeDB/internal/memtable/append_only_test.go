@@ -360,8 +360,8 @@ func TestAppendOnlyGetBuildsLatestIndexOnFirstPointRead(t *testing.T) {
 			if ordered {
 				t.Fatalf("expected memtable to become unordered")
 			}
-			if !dirty {
-				t.Fatalf("expected latest index to start dirty")
+			if dirty {
+				t.Fatalf("expected latest index to stay clean after order break")
 			}
 
 			if got, del, ok := m.Get(lo); !ok || del || string(got) != "lo" {
@@ -373,7 +373,7 @@ func TestAppendOnlyGetBuildsLatestIndexOnFirstPointRead(t *testing.T) {
 			latestSize := kk.latestSize(m)
 			m.mu.RUnlock()
 			if dirty {
-				t.Fatalf("expected point read to rebuild latest index (latestDirty=false)")
+				t.Fatalf("expected point read to keep latest index clean (latestDirty=false)")
 			}
 			if latestSize < 2 {
 				t.Fatalf("expected latest index to be populated, size=%d", latestSize)
