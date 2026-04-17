@@ -1031,7 +1031,7 @@ func (it *Iterator) loadNode(pageID uint64) (node.Node, error) {
 		it.leafRefScratch = data[:0]
 		return n, nil
 	}
-	return it.tree.loadNodeView(pageID, it.verifyAlways)
+	return it.tree.loadNodeViewWithLoadKind(pageID, it.verifyAlways, true)
 }
 
 func (it *Iterator) ensurePointerLoaded() bool {
