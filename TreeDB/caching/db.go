@@ -10716,10 +10716,7 @@ func buildOpRuns(mem memtable.Table, chunkCap int) ([][]batch.Entry, int, error)
 	deleteOps := 0
 	ops := getEntrySlice(chunkCap)
 	ops = ops[:0]
-	stableUnsafe := false
-	if stable, ok := mem.(memtable.StableUnsafeIteratorTable); ok {
-		stableUnsafe = stable.StableUnsafeIteratorSlices()
-	}
+	stableUnsafe := stableUnsafeIteratorSlices(mem)
 	for iter.Valid() {
 		val, ptr, flags := iter.UnsafeEntry()
 		key := iter.UnsafeKey()
@@ -10763,6 +10760,13 @@ func buildOpRuns(mem memtable.Table, chunkCap int) ([][]batch.Entry, int, error)
 		putEntrySlice(ops)
 	}
 	return runs, deleteOps, nil
+}
+
+func stableUnsafeIteratorSlices(mem memtable.Table) bool {
+	if stable, ok := mem.(memtable.StableUnsafeIteratorTable); ok {
+		return stable.StableUnsafeIteratorSlices()
+	}
+	return false
 }
 
 type walFastItem struct {
@@ -21632,13 +21636,14 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 			return nil
 		}
 		for _, unit := range units {
+			stableUnsafe := stableUnsafeIteratorSlices(unit.mem)
 			iter := unit.mem.NewIterator(nil, nil)
 			for iter.Valid() {
 				key := iter.UnsafeKey()
 				val, ptr, flags := iter.UnsafeEntry()
 				if flags&node.FlagTombstone != 0 {
 					var err error
-					if dv != nil {
+					if stableUnsafe && dv != nil {
 						err = dv.DeleteView(key)
 					} else {
 						err = backendBatch.Delete(key)
@@ -21657,7 +21662,7 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 						return false
 					}
 				} else if flags&node.FlagPointer != 0 {
-					if psv != nil {
+					if stableUnsafe && psv != nil {
 						if err := psv.SetPointerView(key, ptr); err != nil {
 							db.reportError(fmt.Errorf("cachingdb: flush failed (set ptr): %w", err))
 							_ = iter.Close()
@@ -21683,7 +21688,11 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 								return false
 							}
 						} else {
-							single[0] = batch.Entry{Type: batch.OpPut, Key: key, ValuePtr: ptr, IsPtr: true}
+							entryKey := key
+							if !stableUnsafe {
+								entryKey = append([]byte(nil), key...)
+							}
+							single[0] = batch.Entry{Type: batch.OpPut, Key: entryKey, ValuePtr: ptr, IsPtr: true}
 							if err := backendBatch.SetOps(single[:]); err != nil {
 								db.reportError(fmt.Errorf("cachingdb: flush failed (setops ptr): %w", err))
 								_ = iter.Close()
@@ -21701,7 +21710,7 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 					}
 				} else {
 					var err error
-					if sv != nil {
+					if stableUnsafe && sv != nil {
 						err = sv.SetView(key, val)
 					} else {
 						err = backendBatch.Set(key, val)
@@ -22020,12 +22029,13 @@ func (db *DB) flushOneLocked(sync bool) bool {
 				return nil
 			}
 
+			stableUnsafe := stableUnsafeIteratorSlices(mem)
 			for iter.Valid() {
 				key := iter.UnsafeKey()
 				val, ptr, flags := iter.UnsafeEntry()
 				if flags&node.FlagTombstone != 0 {
 					var err error
-					if dv != nil {
+					if stableUnsafe && dv != nil {
 						err = dv.DeleteView(key)
 					} else {
 						err = backendBatch.Delete(key)
@@ -22044,7 +22054,7 @@ func (db *DB) flushOneLocked(sync bool) bool {
 						return false
 					}
 				} else if flags&node.FlagPointer != 0 {
-					if psv != nil {
+					if stableUnsafe && psv != nil {
 						if err := psv.SetPointerView(key, ptr); err != nil {
 							db.reportError(fmt.Errorf("cachingdb: flush failed (set ptr): %w", err))
 							_ = iter.Close()
@@ -22059,7 +22069,11 @@ func (db *DB) flushOneLocked(sync bool) bool {
 							return false
 						}
 					} else {
-						single[0] = batch.Entry{Type: batch.OpPut, Key: key, ValuePtr: ptr, IsPtr: true}
+						entryKey := key
+						if !stableUnsafe {
+							entryKey = append([]byte(nil), key...)
+						}
+						single[0] = batch.Entry{Type: batch.OpPut, Key: entryKey, ValuePtr: ptr, IsPtr: true}
 						if err := backendBatch.SetOps(single[:]); err != nil {
 							db.reportError(fmt.Errorf("cachingdb: flush failed (setops ptr): %w", err))
 							_ = iter.Close()
@@ -22076,7 +22090,7 @@ func (db *DB) flushOneLocked(sync bool) bool {
 					}
 				} else {
 					var err error
-					if sv != nil {
+					if stableUnsafe && sv != nil {
 						err = sv.SetView(key, val)
 					} else {
 						err = backendBatch.Set(key, val)
