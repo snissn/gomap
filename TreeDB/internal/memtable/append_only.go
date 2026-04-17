@@ -421,6 +421,20 @@ func appendOnlyNextCapacity(current int) int {
 	return next
 }
 
+func appendOnlyReserveCapacity(current, needed int) int {
+	if needed <= current {
+		return current
+	}
+	next := current
+	if next < appendOnlyMinInitialEntries {
+		next = appendOnlyMinInitialEntries
+	}
+	for next < needed {
+		next = appendOnlyNextCapacity(next)
+	}
+	return next
+}
+
 func appendOnlyKeyString(key []byte) string {
 	if len(key) == 0 {
 		return ""
@@ -543,12 +557,7 @@ func (m *AppendOnly) updateLatestIndexLocked(key []byte, idx int) {
 
 func (m *AppendOnly) appendEntryLocked(key, value []byte, ptr page.ValuePtr, flags byte, steal bool, borrowValue bool) {
 	if m.count == len(m.entries) {
-		nextCap := appendOnlyNextCapacity(len(m.entries))
-		prev := m.entries
-		grown := getAppendOnlyEntries(nextCap)
-		copy(grown, m.entries[:m.count])
-		m.entries = grown
-		putAppendOnlyEntries(prev)
+		m.reserveEntriesLocked(1)
 	}
 	idx := m.count
 	m.count++
@@ -614,6 +623,22 @@ func (m *AppendOnly) appendEntryLocked(key, value []byte, ptr page.ValuePtr, fla
 		m.updateLatestIndexLocked(k, idx)
 	}
 	m.clearSnapshotLocked()
+}
+
+func (m *AppendOnly) reserveEntriesLocked(additional int) {
+	if additional <= 0 {
+		return
+	}
+	needed := m.count + additional
+	if needed <= len(m.entries) {
+		return
+	}
+	nextCap := appendOnlyReserveCapacity(len(m.entries), needed)
+	prev := m.entries
+	grown := getAppendOnlyEntries(nextCap)
+	copy(grown, m.entries[:m.count])
+	m.entries = grown
+	putAppendOnlyEntries(prev)
 }
 
 func (m *AppendOnly) Set(key, value []byte) {
@@ -687,6 +712,7 @@ func (m *AppendOnly) ApplyStealSortedBatchTrusted(entries []batchpkg.Entry, onKe
 
 func (m *AppendOnly) applyStealBatch(entries []batchpkg.Entry, onKey func(key []byte)) {
 	m.mu.Lock()
+	m.reserveEntriesLocked(len(entries))
 	for i := range entries {
 		op := entries[i]
 		switch {

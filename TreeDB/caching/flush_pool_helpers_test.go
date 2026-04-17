@@ -233,6 +233,40 @@ func TestBuildOpRunsChunking(t *testing.T) {
 	}
 }
 
+func TestBuildOpRunsStableUnsafeSingleRun(t *testing.T) {
+	mt := memtable.NewAppendOnlyWithCapacity(0)
+	var key [8]byte
+	const entryCount = 257
+	for i := 0; i < entryCount; i++ {
+		binary.BigEndian.PutUint64(key[:], uint64(i))
+		mt.Set(key[:], []byte{byte(i + 1)})
+	}
+	binary.BigEndian.PutUint64(key[:], uint64(7))
+	mt.Delete(key[:])
+	mt.Freeze()
+
+	runs, deleteOps, err := buildOpRuns(mt, 2)
+	if err != nil {
+		t.Fatalf("buildOpRuns: %v", err)
+	}
+	defer func() {
+		for _, run := range runs {
+			putEntrySlice(run)
+		}
+		putEntryRuns(runs)
+	}()
+
+	if deleteOps != 1 {
+		t.Fatalf("deleteOps=%d want=1", deleteOps)
+	}
+	if len(runs) != 1 {
+		t.Fatalf("run count=%d want=1 for stable append-only memtable", len(runs))
+	}
+	if got := len(runs[0]); got != entryCount {
+		t.Fatalf("run len=%d want=%d", got, entryCount)
+	}
+}
+
 func TestFlushDeferredValueLogUnitsPointerOnly(t *testing.T) {
 	mt, err := memtable.NewWithCapacityMode(0, memtable.ModeHashSorted)
 	if err != nil {

@@ -1,6 +1,7 @@
 package memtable
 
 import (
+	"encoding/binary"
 	"sync"
 	"testing"
 	"time"
@@ -213,6 +214,39 @@ func TestAppendOnlyResetReusesEntryBuffers(t *testing.T) {
 		t.Fatalf("expected value buffer capacity reuse across reset")
 	}
 	_ = valBufPtr
+}
+
+func TestAppendOnlyReserveEntriesPreventsMidAppendGrowth(t *testing.T) {
+	m := &AppendOnly{
+		entries:        getAppendOnlyEntries(appendOnlyMinInitialEntries),
+		baseEntriesLen: appendOnlyMinInitialEntries,
+		ordered:        true,
+		lastIdx:        -1,
+	}
+
+	for i := 0; i < appendOnlyMinInitialEntries-8; i++ {
+		var key [8]byte
+		binary.BigEndian.PutUint64(key[:], uint64(i))
+		m.Set(key[:], []byte("v"))
+	}
+
+	const additional = 400
+	m.mu.Lock()
+	m.reserveEntriesLocked(additional)
+	m.mu.Unlock()
+	reservedCap := len(m.entries)
+	if reservedCap < m.count+additional {
+		t.Fatalf("reserved cap=%d want >= %d", reservedCap, m.count+additional)
+	}
+
+	for i := 0; i < additional; i++ {
+		var key [8]byte
+		binary.BigEndian.PutUint64(key[:], uint64(appendOnlyMinInitialEntries+i))
+		m.Set(key[:], []byte("v"))
+		if got := len(m.entries); got != reservedCap {
+			t.Fatalf("entries len changed during reserved append: got=%d want=%d", got, reservedCap)
+		}
+	}
 }
 
 func TestAppendOnlySetCopiesIntoArenaForNonSteal(t *testing.T) {
