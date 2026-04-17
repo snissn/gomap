@@ -783,8 +783,8 @@ func TestLeafGenerationPlan_DoesNotLeaveExtraSnapshotPins(t *testing.T) {
 
 	before1 := db.leafGenerationPinCountForTesting(gen1.GenerationID)
 	before2 := db.leafGenerationPinCountForTesting(gen2.GenerationID)
-	if before1 == 0 || before2 == 0 {
-		t.Fatalf("expected non-zero pins before plan: gen1=%d gen2=%d", before1, before2)
+	if before1 != 0 || before2 != 0 {
+		t.Fatalf("expected current-view snapshot pins to stay at zero before plan: gen1=%d gen2=%d", before1, before2)
 	}
 
 	if _, err := db.LeafGenerationPlan(context.Background(), LeafGenerationPlanOptions{}); err != nil {

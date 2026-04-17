@@ -216,8 +216,9 @@ func TestLeafGenerationGC_RetiresPinnedGenerationUntilSnapshotCloses(t *testing.
 	if snap == nil {
 		t.Fatal("expected snapshot")
 	}
-	if got, want := db.leafGenerationPinCountForTesting(gen1.GenerationID), uint64(1); got != want {
-		t.Fatalf("pin count=%d, want %d", got, want)
+	if got := db.leafGenerationPinCountForTesting(gen1.GenerationID); got != 0 {
+		closeNoErr(t, snap)
+		t.Fatalf("pin count before republish=%d, want 0", got)
 	}
 
 	if err := leafLog.rotateLeaf(); err != nil {
@@ -225,6 +226,10 @@ func TestLeafGenerationGC_RetiresPinnedGenerationUntilSnapshotCloses(t *testing.
 		t.Fatalf("rotateLeaf: %v", err)
 	}
 	writeLeafGenerationKeys(t, db, "k", 64, 'b')
+	if got, want := db.leafGenerationPinCountForTesting(gen1.GenerationID), uint64(1); got != want {
+		closeNoErr(t, snap)
+		t.Fatalf("pin count after republish=%d, want %d", got, want)
+	}
 
 	stats1, err := db.LeafGenerationGC(context.Background(), LeafGenerationGCOptions{})
 	if err != nil {
