@@ -40,7 +40,6 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 	if db == nil || db.backend == nil || db.closing.Load() {
 		return nil
 	}
-	snap := &Snapshot{}
 
 	view := db.retainMemtableView()
 	needsRotate := db.mutableBytes.Load() > 0
@@ -102,10 +101,11 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 		return nil
 	}
 
-	snap.db = db
-	snap.view = view
-	snap.backend = backendSnap
-	return snap
+	return &Snapshot{
+		db:      db,
+		view:    view,
+		backend: backendSnap,
+	}
 }
 
 func (s *Snapshot) Pager() *pager.Pager {
