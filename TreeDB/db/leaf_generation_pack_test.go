@@ -281,6 +281,52 @@ func TestLeafGenerationPack_WriteMetaFailpointCleansCreatedSegments(t *testing.T
 	}
 }
 
+func TestLeafGenerationPackRunOnce_ReserveRIDsUsesExternalAllocator(t *testing.T) {
+	db, leafLog, _ := openLeafGenerationPackTestDB(t)
+
+	writeLeafGenerationKeys(t, db, "k", 2048, 'a')
+	if err := leafLog.rotateLeaf(); err != nil {
+		t.Fatalf("rotateLeaf: %v", err)
+	}
+	writeLeafGenerationKeyRange(t, db, "k", 0, 1024, 'b')
+	writeLeafGenerationKeys(t, db, "z", 32, 'z')
+
+	origRIDScanner := leafGenerationPackRIDStartScanner
+	ridScanCalls := 0
+	leafGenerationPackRIDStartScanner = func(*valuelog.Set) (uint64, error) {
+		ridScanCalls++
+		return 0, fmt.Errorf("unexpected rid scan")
+	}
+	t.Cleanup(func() { leafGenerationPackRIDStartScanner = origRIDScanner })
+
+	var reserveCalls int
+	nextRIDBase := uint64(900_000)
+	stats, err := db.LeafGenerationPackRunOnce(context.Background(), LeafGenerationPackFromPlanOptions{
+		MaxGenerations: 1,
+		ReserveRIDs: func(count int) (uint64, error) {
+			if count <= 0 {
+				t.Fatalf("ReserveRIDs count=%d, want > 0", count)
+			}
+			reserveCalls++
+			start := nextRIDBase
+			nextRIDBase += uint64(count)
+			return start, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("LeafGenerationPackRunOnce: %v", err)
+	}
+	if !stats.Ran {
+		t.Fatalf("expected run once to execute, skip_reason=%q", stats.SkipReason)
+	}
+	if reserveCalls == 0 {
+		t.Fatal("expected ReserveRIDs to be called")
+	}
+	if ridScanCalls != 0 {
+		t.Fatalf("expected ReserveRIDs mode to skip rid scan, calls=%d", ridScanCalls)
+	}
+}
+
 func TestLeafGenerationPack_MovesSparseSealedGeneration(t *testing.T) {
 	dir := t.TempDir()
 	db, err := Open(Options{

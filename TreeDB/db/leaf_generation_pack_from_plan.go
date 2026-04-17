@@ -14,16 +14,15 @@ type LeafGenerationPackFromPlanOptions struct {
 	MinReclaimPerByteCopiedPPM int
 	MaxGenerations             int
 	MaxBytesToCopy             int64
+	ReserveRIDs                func(count int) (start uint64, err error)
 }
 
 func leafGenerationPackFromPlanPlanOptions(opts LeafGenerationPackFromPlanOptions) LeafGenerationPlanOptions {
 	return LeafGenerationPlanOptions{
-		MinPublishedAgeCommits:     opts.MinPublishedAgeCommits,
-		MinCandidateGenerations:    opts.MinCandidateGenerations,
-		MinExpectedReclaimBytes:    opts.MinExpectedReclaimBytes,
-		MinExpectedReclaimRatioPPM: opts.MinExpectedReclaimRatioPPM,
-		MinReclaimPerByteCopiedPPM: opts.MinReclaimPerByteCopiedPPM,
-		Force:                      opts.Force,
+		MinPublishedAgeCommits:  opts.MinPublishedAgeCommits,
+		MinCandidateGenerations: opts.MinCandidateGenerations,
+		MinExpectedReclaimBytes: opts.MinExpectedReclaimBytes,
+		Force:                   opts.Force,
 	}
 }
 
@@ -35,6 +34,7 @@ func leafGenerationPackFromPlanPackOptions(opts LeafGenerationPackFromPlanOption
 		MinExpectedReclaimBytes:    opts.MinExpectedReclaimBytes,
 		MinExpectedReclaimRatioPPM: opts.MinExpectedReclaimRatioPPM,
 		MinReclaimPerByteCopiedPPM: opts.MinReclaimPerByteCopiedPPM,
+		ReserveRIDs:                opts.ReserveRIDs,
 		Force:                      opts.Force,
 	}
 }
@@ -47,6 +47,8 @@ func (db *DB) LeafGenerationPackFromPlan(ctx context.Context, opts LeafGeneratio
 		return LeafGenerationPackStats{}, err
 	}
 	selection, err := SelectLeafGenerationPackCandidates(plan, LeafGenerationPackSelectOptions{
+		MinExpectedReclaimBytes:    opts.MinExpectedReclaimBytes,
+		MinExpectedReclaimRatioPPM: opts.MinExpectedReclaimRatioPPM,
 		MaxGenerations:             opts.MaxGenerations,
 		MaxBytesToCopy:             opts.MaxBytesToCopy,
 		MinReclaimPerByteCopiedPPM: opts.MinReclaimPerByteCopiedPPM,
@@ -54,5 +56,5 @@ func (db *DB) LeafGenerationPackFromPlan(ctx context.Context, opts LeafGeneratio
 	if err != nil {
 		return LeafGenerationPackStats{}, err
 	}
-	return db.LeafGenerationPack(ctx, leafGenerationPackFromPlanPackOptions(opts, selection.GenerationIDs))
+	return db.leafGenerationPackSelected(ctx, leafGenerationPackFromPlanPackOptions(opts, selection.GenerationIDs), selectedLeafGenerationPackPlan(selection))
 }

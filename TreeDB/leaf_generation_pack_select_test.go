@@ -15,10 +15,10 @@ func TestSelectLeafGenerationPackCandidates_PublicHelper(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SelectLeafGenerationPackCandidates: %v", err)
 	}
-	if got, want := len(selected.GenerationIDs), 1; got != want || selected.GenerationIDs[0] != 3 {
-		t.Fatalf("GenerationIDs=%v, want [3]", selected.GenerationIDs)
+	if got, want := len(selected.GenerationIDs), 1; got != want || selected.GenerationIDs[0] != 5 {
+		t.Fatalf("GenerationIDs=%v, want [5]", selected.GenerationIDs)
 	}
-	if got, want := selected.BytesToCopy, int64(100); got != want {
+	if got, want := selected.BytesToCopy, int64(180); got != want {
 		t.Fatalf("BytesToCopy=%d, want %d", got, want)
 	}
 }

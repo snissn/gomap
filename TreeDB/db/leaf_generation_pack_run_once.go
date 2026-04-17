@@ -29,6 +29,8 @@ func (db *DB) LeafGenerationPackRunOnce(ctx context.Context, opts LeafGeneration
 		return stats, nil
 	}
 	selection, err := SelectLeafGenerationPackCandidates(plan, LeafGenerationPackSelectOptions{
+		MinExpectedReclaimBytes:    opts.MinExpectedReclaimBytes,
+		MinExpectedReclaimRatioPPM: opts.MinExpectedReclaimRatioPPM,
 		MaxGenerations:             opts.MaxGenerations,
 		MaxBytesToCopy:             opts.MaxBytesToCopy,
 		MinReclaimPerByteCopiedPPM: opts.MinReclaimPerByteCopiedPPM,
@@ -38,7 +40,7 @@ func (db *DB) LeafGenerationPackRunOnce(ctx context.Context, opts LeafGeneration
 		return stats, nil
 	}
 	stats.Selection = selection
-	packStats, err := db.LeafGenerationPack(ctx, leafGenerationPackFromPlanPackOptions(opts, selection.GenerationIDs))
+	packStats, err := db.leafGenerationPackSelected(ctx, leafGenerationPackFromPlanPackOptions(opts, selection.GenerationIDs), selectedLeafGenerationPackPlan(selection))
 	if err != nil {
 		return stats, err
 	}

@@ -32,8 +32,8 @@ func TestSelectLeafGenerationPackCandidates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MaxGenerations: %v", err)
 	}
-	if got, want := len(selected.GenerationIDs), 1; got != want || selected.GenerationIDs[0] != 3 {
-		t.Fatalf("GenerationIDs=%v, want [3]", selected.GenerationIDs)
+	if got, want := len(selected.GenerationIDs), 1; got != want || selected.GenerationIDs[0] != 5 {
+		t.Fatalf("GenerationIDs=%v, want [5]", selected.GenerationIDs)
 	}
 
 	selected, err = SelectLeafGenerationPackCandidates(plan, LeafGenerationPackSelectOptions{MaxBytesToCopy: 150})
@@ -79,6 +79,33 @@ func TestSelectLeafGenerationPackCandidates_StopsBeforeLowYieldCandidate(t *test
 	}
 	if got, want := selected.ExpectedReclaimPerByteCopiedPPM, ratioPPM(80, 20); got != want {
 		t.Fatalf("ExpectedReclaimPerByteCopiedPPM=%d, want %d", got, want)
+	}
+}
+
+func TestSelectLeafGenerationPackCandidates_BoundedWindowPrefersHigherReclaimSubset(t *testing.T) {
+	plan := LeafGenerationPlan{
+		Admission: leafGenerationPlanAdmissionEligible,
+		Candidates: []LeafGenerationPlanGeneration{
+			{GenerationID: 31, BytesDead: 50, BytesLive: 5, BytesToCopy: 5},
+			{GenerationID: 32, BytesDead: 180, BytesLive: 30, BytesToCopy: 30},
+			{GenerationID: 33, BytesDead: 180, BytesLive: 30, BytesToCopy: 30},
+		},
+	}
+	selected, err := SelectLeafGenerationPackCandidates(plan, LeafGenerationPackSelectOptions{
+		MaxGenerations: 2,
+		MaxBytesToCopy: 60,
+	})
+	if err != nil {
+		t.Fatalf("SelectLeafGenerationPackCandidates: %v", err)
+	}
+	if got, want := selected.GenerationIDs, []uint64{32, 33}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("GenerationIDs=%v, want %v", got, want)
+	}
+	if got, want := selected.ExpectedReclaimBytes, int64(360); got != want {
+		t.Fatalf("ExpectedReclaimBytes=%d, want %d", got, want)
+	}
+	if got, want := selected.BytesToCopy, int64(60); got != want {
+		t.Fatalf("BytesToCopy=%d, want %d", got, want)
 	}
 }
 

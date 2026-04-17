@@ -31,6 +31,9 @@ func (db *DB) LeafGenerationPackRunOnce(ctx context.Context, opts LeafGeneration
 		if err := db.Checkpoint(); err != nil {
 			return out, err
 		}
+		if opts.ReserveRIDs == nil {
+			opts.ReserveRIDs = db.cached.ReserveValueLogRIDs
+		}
 	}
 	stats, err := db.backend.LeafGenerationPackRunOnce(ctx, treedbdb.LeafGenerationPackFromPlanOptions(opts))
 	if err != nil {

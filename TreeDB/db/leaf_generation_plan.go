@@ -111,9 +111,35 @@ var leafGenerationLiveScanHook struct {
 	fn func()
 }
 
+var leafGenerationPlanCallHook struct {
+	mu sync.Mutex
+	fn func()
+}
+
 var leafGenerationSubtreeCacheMissHook struct {
 	mu sync.Mutex
 	fn func(uint64)
+}
+
+func registerLeafGenerationPlanCallHook(hook func()) func() {
+	leafGenerationPlanCallHook.mu.Lock()
+	prev := leafGenerationPlanCallHook.fn
+	leafGenerationPlanCallHook.fn = hook
+	leafGenerationPlanCallHook.mu.Unlock()
+	return func() {
+		leafGenerationPlanCallHook.mu.Lock()
+		leafGenerationPlanCallHook.fn = prev
+		leafGenerationPlanCallHook.mu.Unlock()
+	}
+}
+
+func runLeafGenerationPlanCallHook() {
+	leafGenerationPlanCallHook.mu.Lock()
+	hook := leafGenerationPlanCallHook.fn
+	leafGenerationPlanCallHook.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
 }
 
 func registerLeafGenerationLiveScanHook(hook func()) func() {
@@ -145,6 +171,7 @@ func (db *DB) LeafGenerationPlan(ctx context.Context, opts LeafGenerationPlanOpt
 	if db == nil {
 		return plan, fmt.Errorf("missing db")
 	}
+	runLeafGenerationPlanCallHook()
 	if !db.indexOuterLeavesInValueLog {
 		plan.Admission = leafGenerationPlanAdmissionDisabled
 		return plan, nil

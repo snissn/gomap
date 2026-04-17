@@ -1966,6 +1966,42 @@ func TestLeafGenerationPackMaintenance_RunsWithDefaultBounds(t *testing.T) {
 	}
 }
 
+func TestLeafGenerationPackMaintenance_PassesReserveRIDs(t *testing.T) {
+	t.Setenv(envEnableLeafGenerationPackMaintenance, "1")
+	recorder := &leafPackMaintenanceRecordingBackend{
+		DB:   mustOpenLeafPackBackend(t),
+		resp: leafPackWindowExhaustingStats(7, 1024, 4096),
+	}
+	db, cleanup := openLeafPackMaintenanceTestDB(t, recorder)
+	defer cleanup()
+
+	attempted, ran, err := db.maybeRunLeafGenerationPackMaintenance(false, true, leafGenerationPackMaintenanceAdmission{allowed: true}, vlogGenerationMaintenanceOptions{skipCheckpoint: true})
+	if err != nil {
+		t.Fatalf("maybeRunLeafGenerationPackMaintenance: %v", err)
+	}
+	if !attempted || !ran {
+		t.Fatalf("attempted=%t ran=%t want true/true", attempted, ran)
+	}
+	history := recorder.recordedLeafPackHistory()
+	if len(history) != 1 {
+		t.Fatalf("leaf pack history=%d want 1", len(history))
+	}
+	if history[0].ReserveRIDs == nil {
+		t.Fatal("expected ReserveRIDs to be passed to leaf-pack maintenance")
+	}
+	before := db.nextRID.Load()
+	start, err := history[0].ReserveRIDs(3)
+	if err != nil {
+		t.Fatalf("ReserveRIDs(3): %v", err)
+	}
+	if got, want := start, before+1; got != want {
+		t.Fatalf("ReserveRIDs start=%d want %d", got, want)
+	}
+	if got, want := db.nextRID.Load(), before+3; got != want {
+		t.Fatalf("nextRID after ReserveRIDs=%d want %d", got, want)
+	}
+}
+
 func TestLeafGenerationPackMaintenance_LoopsWithinBudgetAndRunsLeafGC(t *testing.T) {
 	t.Setenv(envEnableLeafGenerationPackMaintenance, "1")
 	t.Setenv(envLeafGenerationPackMaintenanceMaxGenerations, "3")
