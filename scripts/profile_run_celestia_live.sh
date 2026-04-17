@@ -53,13 +53,19 @@ PY
 capture_debug_vars_loop() {
   local run_pid="$1"
   while kill -0 "$run_pid" >/dev/null 2>&1; do
-    local stamp tmp out_file
+    local stamp tmp out_file latest_tmp latest_file
     stamp="$(date +%Y%m%d%H%M%S)"
     tmp="$OUT/vars/${stamp}.json.tmp"
     out_file="$OUT/vars/${stamp}.json"
+    latest_tmp="$OUT/vars/latest.json.tmp"
+    latest_file="$OUT/vars/latest.json"
     if curl -fsS --max-time 10 "$VARS_URL" >"$tmp" 2>/dev/null && [[ -s "$tmp" ]]; then
       mv "$tmp" "$out_file"
-      cp "$out_file" "$OUT/vars/latest.json"
+      if cp "$out_file" "$latest_tmp"; then
+        mv "$latest_tmp" "$latest_file"
+      else
+        rm -f "$latest_tmp"
+      fi
     else
       rm -f "$tmp"
     fi
@@ -192,6 +198,13 @@ def tree_bytes(path):
             total += (pathlib.Path(root) / name).stat().st_size
     return total
 
+def load_json_object(path):
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
 sync = parse_sync_time(sync_time)
 if sync:
     for key in (
@@ -211,8 +224,10 @@ var_snapshots = sorted(p for p in vars_dir.glob("*.json") if p.name != "latest.j
 summary["artifacts"]["vars_snapshots"] = len(var_snapshots)
 summary["artifacts"]["cpu_profiles"] = len(list(pprof_dir.glob("cpu_*.pb.gz")))
 if latest_vars.exists():
-    vars_data = json.loads(latest_vars.read_text(encoding="utf-8"))
+    vars_data = load_json_object(latest_vars)
     treedb = vars_data.get("treedb", vars_data)
+    if not isinstance(treedb, dict):
+        treedb = {}
     for key in (
         "treedb.process.read_path.outer_leaf.loads_total",
         "treedb.process.read_path.outer_leaf.point_loads_total",
@@ -239,8 +254,10 @@ if latest_vars.exists():
     )
     peak_values = {key: 0 for key in peak_keys}
     for snapshot_path in var_snapshots:
-        snap = json.loads(snapshot_path.read_text(encoding="utf-8"))
+        snap = load_json_object(snapshot_path)
         snap_treedb = snap.get("treedb", snap)
+        if not isinstance(snap_treedb, dict):
+            snap_treedb = {}
         for key in peak_keys:
             value = snap_treedb.get(key)
             if isinstance(value, (int, float)) and value > peak_values[key]:

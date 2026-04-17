@@ -1,6 +1,7 @@
 package tree
 
 import (
+	"math/bits"
 	"os"
 	"strconv"
 	"strings"
@@ -123,7 +124,7 @@ func outerLeafRecentRingContains(ring []uint64, used int, key uint64) bool {
 }
 
 func noteOuterLeafLoad(ptr page.ValuePtr, bytes int, iterator bool) {
-	outerLeafLoadsTotal.Add(1)
+	seq := outerLeafLoadsTotal.Add(1)
 	if iterator {
 		outerLeafIteratorLoadsTotal.Add(1)
 	} else {
@@ -136,13 +137,12 @@ func noteOuterLeafLoad(ptr page.ValuePtr, bytes int, iterator bool) {
 	if outerLeafReadSampleMod == 0 {
 		return
 	}
-	seq := outerLeafLoadsTotal.Load()
 	if seq%outerLeafReadSampleMod != 0 {
 		return
 	}
 
 	outerLeafSamplesTotal.Add(1)
-	key := (uint64(ptr.FileID) << 32) | uint64(ptr.Offset)
+	key := makeOuterLeafEstimatorKey(ptr)
 	hit64, hit256, hit1K, hit4K := outerLeafRecentReadEstimator.observe(key)
 	if hit64 {
 		outerLeafRecent64HitsTotal.Add(1)
@@ -156,6 +156,17 @@ func noteOuterLeafLoad(ptr page.ValuePtr, bytes int, iterator bool) {
 	if hit4K {
 		outerLeafRecent4KHitsTotal.Add(1)
 	}
+}
+
+func makeOuterLeafEstimatorKey(ptr page.ValuePtr) uint64 {
+	return mixOuterLeafEstimatorUint64(uint64(ptr.FileID)) ^ bits.RotateLeft64(mixOuterLeafEstimatorUint64(ptr.Offset), 32)
+}
+
+func mixOuterLeafEstimatorUint64(v uint64) uint64 {
+	v += 0x9e3779b97f4a7c15
+	v = (v ^ (v >> 30)) * 0xbf58476d1ce4e5b9
+	v = (v ^ (v >> 27)) * 0x94d049bb133111eb
+	return v ^ (v >> 31)
 }
 
 func loadUintEnvDefault(key string, def uint64) uint64 {
