@@ -170,6 +170,8 @@ var appendOnlyDirectArenaFreshAllocChunksTotal atomic.Uint64
 var appendOnlyDirectArenaFreshAllocBytesTotal atomic.Uint64
 var appendOnlyMemNewAllocWithQueueTotal atomic.Uint64
 var appendOnlyMemNewAllocQueueBytesSum atomic.Uint64
+var hashSortedMemNewAllocWithQueueTotal atomic.Uint64
+var hashSortedMemNewAllocQueueBytesSum atomic.Uint64
 
 var poolPressureNow = time.Now
 var poolPressureReadMemStats = runtime.ReadMemStats
@@ -1936,6 +1938,9 @@ const (
 	leafGenerationPackMaintenanceDefaultMaxForegroundQueue         = 2
 	leafGenerationPackMaintenanceDefaultMinReclaimPerByteCopiedPPM = 250000
 	maxMemtablePrealloc                                            = 256 << 20
+	hashSortedEstimatedBytesPerEntryDefault                        = 64
+	hashSortedEntryHintMinEntries                                  = 128
+	hashSortedEntryHintMaxEntries                                  = 1 << 20
 	appendOnlyEntryHintMinEntries                                  = 128
 	appendOnlyEntryHintMaxEntries                                  = 1 << 20
 	adaptiveMinWrites                                              = 1024
@@ -6134,6 +6139,7 @@ type DB struct {
 	queueIDs                      []uint64
 	queueEnqueueNS                []int64
 	nextQueueID                   atomic.Uint64
+	hashSortedEntryHint           atomic.Int32
 	appendOnlyEntryHint           atomic.Int32
 	batchEntryHint                atomic.Int32
 	batchCopyBytesHint            atomic.Int32
@@ -6162,6 +6168,14 @@ type DB struct {
 	// Readers load it atomically to avoid holding db.mu around memtable access.
 	memtables                        atomic.Pointer[memtableView]
 	hashSortedIndexer                *memtable.HashSortedIndexer
+	hashSortedMemPool                sync.Pool
+	hashSortedMemLeaseMu             sync.Mutex
+	hashSortedMemLeases              []*memtable.HashSorted
+	hashSortedMemLeaseHitTotal       atomic.Uint64
+	hashSortedMemPoolHitTotal        atomic.Uint64
+	hashSortedMemNewAllocTotal       atomic.Uint64
+	hashSortedMemNewAllocWithQueue   atomic.Uint64
+	hashSortedMemNewAllocQueueBytes  atomic.Uint64
 	appendOnlyMemPool                sync.Pool
 	appendOnlyMemLeaseMu             sync.Mutex
 	appendOnlyMemLeases              []*memtable.AppendOnly
@@ -7081,6 +7095,13 @@ const appendOnlyEstimatedBytesPerEntryDefault = 96
 // and increases allocation churn.
 const maxAppendOnlyMemLeases = 32
 
+const maxHashSortedMemLeases = 32
+
+const (
+	postFlushHashSortedMemLeaseKeep      = 24
+	postCheckpointHashSortedMemLeaseKeep = 8
+)
+
 func updateInt64Max(dst *atomic.Int64, value int64) {
 	for {
 		cur := dst.Load()
@@ -7547,6 +7568,22 @@ func (db *DB) popAppendOnlyMemLease() *memtable.AppendOnly {
 	return mt
 }
 
+func (db *DB) popHashSortedMemLease() *memtable.HashSorted {
+	if db == nil {
+		return nil
+	}
+	db.hashSortedMemLeaseMu.Lock()
+	defer db.hashSortedMemLeaseMu.Unlock()
+	n := len(db.hashSortedMemLeases)
+	if n == 0 {
+		return nil
+	}
+	mt := db.hashSortedMemLeases[n-1]
+	db.hashSortedMemLeases[n-1] = nil
+	db.hashSortedMemLeases = db.hashSortedMemLeases[:n-1]
+	return mt
+}
+
 func (db *DB) putAppendOnlyMemLease(mt *memtable.AppendOnly) bool {
 	if db == nil || mt == nil {
 		return false
@@ -7560,15 +7597,35 @@ func (db *DB) putAppendOnlyMemLease(mt *memtable.AppendOnly) bool {
 	return true
 }
 
+func (db *DB) putHashSortedMemLease(mt *memtable.HashSorted) bool {
+	if db == nil || mt == nil {
+		return false
+	}
+	db.hashSortedMemLeaseMu.Lock()
+	defer db.hashSortedMemLeaseMu.Unlock()
+	if len(db.hashSortedMemLeases) >= maxHashSortedMemLeases {
+		return false
+	}
+	db.hashSortedMemLeases = append(db.hashSortedMemLeases, mt)
+	return true
+}
+
 func (db *DB) recycleMemtables(mems []memtable.Table) {
 	if db == nil || len(mems) == 0 {
 		return
 	}
 	resetCapacity := db.checkpointRotateCapacity()
+	hashSortedResetCapacity := db.hashSortedMemtableCapacityHint(resetCapacity)
 	estimate := appendOnlyEstimatedBytesPerEntryDefault
 	appendOnlyResetCapacity := db.appendOnlyMemtableCapacityHint(resetCapacity, estimate)
 	for _, mt := range mems {
 		switch typed := mt.(type) {
+		case *memtable.HashSorted:
+			typed.Reset()
+			if !db.putHashSortedMemLease(typed) {
+				typed.ResetWithCapacity(hashSortedResetCapacity)
+				db.hashSortedMemPool.Put(typed)
+			}
 		case *memtable.AppendOnly:
 			typed.ResetWithCapacityHard(appendOnlyResetCapacity, estimate)
 			db.releaseAppendOnlyDirectArenaLeaseForMemtable(typed)
@@ -7608,6 +7665,37 @@ func (db *DB) trimAppendOnlyMemLeases(maxLeases int, resetCapacity int) {
 			dropped[i].ResetWithCapacityHard(effectiveResetCapacity, appendOnlyEstimatedBytesPerEntryDefault)
 			db.releaseAppendOnlyDirectArenaLeaseForMemtable(dropped[i])
 			db.appendOnlyMemPool.Put(dropped[i])
+		}
+	}
+}
+
+func (db *DB) trimHashSortedMemLeases(maxLeases int, resetCapacity int) {
+	if db == nil {
+		return
+	}
+	if maxLeases < 0 {
+		maxLeases = 0
+	}
+	var dropped []*memtable.HashSorted
+	db.hashSortedMemLeaseMu.Lock()
+	if n := len(db.hashSortedMemLeases); n > maxLeases {
+		drop := n - maxLeases
+		dropped = append(dropped, db.hashSortedMemLeases[:drop]...)
+		copy(db.hashSortedMemLeases, db.hashSortedMemLeases[drop:])
+		for i := n - drop; i < n; i++ {
+			db.hashSortedMemLeases[i] = nil
+		}
+		db.hashSortedMemLeases = db.hashSortedMemLeases[:n-drop]
+	}
+	db.hashSortedMemLeaseMu.Unlock()
+
+	if len(dropped) == 0 {
+		return
+	}
+	for i := range dropped {
+		if dropped[i] != nil {
+			dropped[i].ResetWithCapacity(resetCapacity)
+			db.hashSortedMemPool.Put(dropped[i])
 		}
 	}
 }
@@ -7670,11 +7758,13 @@ func (db *DB) trimRetainedArenasAfterFlush(checkpoint bool) {
 	batchTarget := postFlushBatchArenaTargetBytes
 	entryTarget := postFlushEntrySliceTargetBytes
 	leaseKeepPerBucket := postFlushEntrySliceLeaseKeepPerBucket
+	hashSortedLeaseKeep := postFlushHashSortedMemLeaseKeep
 	appendOnlyLeaseKeep := postFlushAppendOnlyMemLeaseKeep
 	if checkpoint {
 		batchTarget = postCheckpointBatchArenaTargetBytes
 		entryTarget = postCheckpointEntrySliceTargetBytes
 		leaseKeepPerBucket = postCheckpointEntrySliceLeaseKeepPerBucket
+		hashSortedLeaseKeep = postCheckpointHashSortedMemLeaseKeep
 		appendOnlyLeaseKeep = postCheckpointAppendOnlyMemLeaseKeep
 	}
 	if budget := currentBatchArenaRetentionBudgetBytes(); budget >= 0 && budget < batchTarget {
@@ -7699,10 +7789,33 @@ func (db *DB) trimRetainedArenasAfterFlush(checkpoint bool) {
 	}
 
 	db.trimMutableShardAppendOnlyDirectArenas(checkpoint)
+	db.trimHashSortedMemLeases(hashSortedLeaseKeep, db.checkpointRotateCapacity())
 	db.trimAppendOnlyMemLeases(appendOnlyLeaseKeep, db.checkpointRotateCapacity())
 }
 
 func (db *DB) newMutableMemtableWithCapacityMode(capacity int, mode memtable.Mode) (memtable.Table, error) {
+	if db != nil && mode == memtable.ModeHashSorted {
+		capacity = db.hashSortedMemtableCapacityHint(capacity)
+		if mt := db.popHashSortedMemLease(); mt != nil {
+			db.hashSortedMemLeaseHitTotal.Add(1)
+			return mt, nil
+		}
+		if v := db.hashSortedMemPool.Get(); v != nil {
+			if mt, ok := v.(*memtable.HashSorted); ok && mt != nil {
+				db.hashSortedMemPoolHitTotal.Add(1)
+				mt.ResetWithCapacity(capacity)
+				return mt, nil
+			}
+		}
+		if backlog := db.queueBacklogBytes.Load(); backlog > 0 {
+			hashSortedMemNewAllocWithQueueTotal.Add(1)
+			hashSortedMemNewAllocQueueBytesSum.Add(uint64(backlog))
+			db.hashSortedMemNewAllocWithQueue.Add(1)
+			db.hashSortedMemNewAllocQueueBytes.Add(uint64(backlog))
+		}
+		db.hashSortedMemNewAllocTotal.Add(1)
+		return memtable.NewHashSortedWithCapacityAndIndexer(capacity, db.hashSortedIndexer), nil
+	}
 	if db != nil && mode == memtable.ModeAppendOnly {
 		estimate := appendOnlyEstimatedBytesPerEntryDefault
 		if mt := db.popAppendOnlyMemLease(); mt != nil {
@@ -10701,7 +10814,7 @@ func buildOpRuns(mem memtable.Table, chunkCap int) ([][]batch.Entry, int, error)
 	if chunkCap <= 0 {
 		chunkCap = 8192
 	}
-	if _, ok := mem.(*memtable.AppendOnly); ok && stableUnsafeIteratorSlices(mem) {
+	if stableUnsafeIteratorSlices(mem) {
 		totalOps := mem.Len()
 		if totalOps == 0 {
 			return nil, 0, nil
@@ -20361,6 +20474,9 @@ func (db *DB) rotateMutableShardsLocked(newCapacity int, triggerFlush bool) erro
 		if debugRotate {
 			oldMode = debugMemtableModeLabel(shard.mem)
 		}
+		if _, ok := shard.mem.(*memtable.HashSorted); ok {
+			db.observeHashSortedMutableEntries(oldLen)
+		}
 		if _, ok := shard.mem.(*memtable.AppendOnly); ok {
 			db.observeAppendOnlyMutableEntries(oldLen)
 		}
@@ -23596,13 +23712,34 @@ func (db *DB) Stats() map[string]string {
 	if mergeParallelAppliedOpsTotal > 0 {
 		stats["treedb.process.flush_merge.parallel.shadowed_per_applied"] = fmt.Sprintf("%.6f", float64(mergeParallelShadowedOpsTotal)/float64(mergeParallelAppliedOpsTotal))
 	}
+	hashSortedEntryHint := int(db.hashSortedEntryHint.Load())
+	hashSortedHintCapacity := hashSortedEntriesToCapacity(hashSortedEntryHint)
 	appendOnlyEntryHint := int(db.appendOnlyEntryHint.Load())
 	appendOnlyHintCapacity := appendOnlyEntriesToCapacity(appendOnlyEntryHint, appendOnlyEstimatedBytesPerEntryDefault)
+	hashSortedMemLeaseHitTotal := db.hashSortedMemLeaseHitTotal.Load()
+	hashSortedMemPoolHitTotal := db.hashSortedMemPoolHitTotal.Load()
+	hashSortedMemNewAllocTotal := db.hashSortedMemNewAllocTotal.Load()
+	hashSortedMemNewAllocWithQueue := db.hashSortedMemNewAllocWithQueue.Load()
+	hashSortedMemNewAllocQueueBytes := db.hashSortedMemNewAllocQueueBytes.Load()
 	appendOnlyMemLeaseHitTotal := db.appendOnlyMemLeaseHitTotal.Load()
 	appendOnlyMemPoolHitTotal := db.appendOnlyMemPoolHitTotal.Load()
 	appendOnlyMemNewAllocTotal := db.appendOnlyMemNewAllocTotal.Load()
 	appendOnlyMemNewAllocWithQueue := db.appendOnlyMemNewAllocWithQueue.Load()
 	appendOnlyMemNewAllocQueueBytes := db.appendOnlyMemNewAllocQueueBytes.Load()
+	stats["treedb.cache.hash_sorted.entry_hint_entries"] = fmt.Sprintf("%d", hashSortedEntryHint)
+	stats["treedb.cache.hash_sorted.entry_hint_capacity_bytes"] = fmt.Sprintf("%d", hashSortedHintCapacity)
+	stats["treedb.cache.hash_sorted.mutable_from_lease_total"] = fmt.Sprintf("%d", hashSortedMemLeaseHitTotal)
+	stats["treedb.cache.hash_sorted.mutable_from_pool_total"] = fmt.Sprintf("%d", hashSortedMemPoolHitTotal)
+	stats["treedb.cache.hash_sorted.mutable_new_alloc_total"] = fmt.Sprintf("%d", hashSortedMemNewAllocTotal)
+	stats["treedb.cache.hash_sorted.mutable_new_alloc_with_queue_total"] = fmt.Sprintf("%d", hashSortedMemNewAllocWithQueue)
+	stats["treedb.cache.hash_sorted.mutable_new_alloc_queue_bytes_sum"] = fmt.Sprintf("%d", hashSortedMemNewAllocQueueBytes)
+	stats["treedb.process.hash_sorted.entry_hint_entries"] = fmt.Sprintf("%d", hashSortedEntryHint)
+	stats["treedb.process.hash_sorted.entry_hint_capacity_bytes"] = fmt.Sprintf("%d", hashSortedHintCapacity)
+	stats["treedb.process.hash_sorted.mutable_from_lease_total"] = fmt.Sprintf("%d", hashSortedMemLeaseHitTotal)
+	stats["treedb.process.hash_sorted.mutable_from_pool_total"] = fmt.Sprintf("%d", hashSortedMemPoolHitTotal)
+	stats["treedb.process.hash_sorted.mutable_new_alloc_total"] = fmt.Sprintf("%d", hashSortedMemNewAllocTotal)
+	stats["treedb.process.hash_sorted.mutable_new_alloc_with_queue_total"] = fmt.Sprintf("%d", hashSortedMemNewAllocWithQueueTotal.Load())
+	stats["treedb.process.hash_sorted.mutable_new_alloc_queue_bytes_sum"] = fmt.Sprintf("%d", hashSortedMemNewAllocQueueBytesSum.Load())
 	stats["treedb.cache.append_only.entry_hint_entries"] = fmt.Sprintf("%d", appendOnlyEntryHint)
 	stats["treedb.cache.append_only.entry_hint_capacity_bytes"] = fmt.Sprintf("%d", appendOnlyHintCapacity)
 	stats["treedb.cache.append_only.mutable_from_lease_total"] = fmt.Sprintf("%d", appendOnlyMemLeaseHitTotal)
@@ -25704,6 +25841,41 @@ func clampAppendOnlyEntryHint(entries int) int {
 	return entries
 }
 
+func clampHashSortedEntryHint(entries int) int {
+	if entries < hashSortedEntryHintMinEntries {
+		return hashSortedEntryHintMinEntries
+	}
+	if entries > hashSortedEntryHintMaxEntries {
+		return hashSortedEntryHintMaxEntries
+	}
+	return entries
+}
+
+func (db *DB) observeHashSortedMutableEntries(entries int) {
+	if db == nil {
+		return
+	}
+	n := clampHashSortedEntryHint(entries)
+	for {
+		old := int(db.hashSortedEntryHint.Load())
+		next := n
+		if old > 0 {
+			if n > old {
+				next = (old*3 + n + 1) / 4
+			} else {
+				next = (old*7 + n + 3) / 8
+			}
+		}
+		next = clampHashSortedEntryHint(next)
+		if next == old {
+			return
+		}
+		if db.hashSortedEntryHint.CompareAndSwap(int32(old), int32(next)) {
+			return
+		}
+	}
+}
+
 func (db *DB) observeAppendOnlyMutableEntries(entries int) {
 	if db == nil {
 		return
@@ -25744,6 +25916,44 @@ func appendOnlyEntriesToCapacity(entries, estimatedBytesPerEntry int) int {
 		return maxInt
 	}
 	return entries * estimatedBytesPerEntry
+}
+
+func hashSortedEntriesToCapacity(entries int) int {
+	if entries <= 0 {
+		return 0
+	}
+	maxInt := int(^uint(0) >> 1)
+	if entries > maxInt/hashSortedEstimatedBytesPerEntryDefault {
+		return maxInt
+	}
+	return entries * hashSortedEstimatedBytesPerEntryDefault
+}
+
+func (db *DB) hashSortedMemtableCapacityHint(capacity int) int {
+	if db == nil || capacity <= 0 {
+		return capacity
+	}
+	if threshold := db.mutableFlushThreshold(); threshold > 0 {
+		if effectiveCap := memtableCapacity(threshold); effectiveCap > 0 && effectiveCap < capacity {
+			capacity = effectiveCap
+		}
+	}
+	hintEntries := int(db.hashSortedEntryHint.Load())
+	if hintEntries <= 0 {
+		return capacity
+	}
+	hintEntries = clampHashSortedEntryHint(hintEntries)
+	hintCapacity := hashSortedEntriesToCapacity(hintEntries)
+	if hintCapacity < minMemtablePrealloc {
+		hintCapacity = minMemtablePrealloc
+	}
+	if hintCapacity > capacity {
+		hintCapacity = capacity
+	}
+	if hintCapacity <= 0 {
+		return capacity
+	}
+	return hintCapacity
 }
 
 func (db *DB) appendOnlyMemtableCapacityHint(capacity, estimatedBytesPerEntry int) int {

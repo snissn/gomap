@@ -69,3 +69,48 @@ func TestTrimAppendOnlyMemLeases_DroppedLeasesReturnToPool(t *testing.T) {
 		t.Fatalf("expected trimmed append-only leases to be returned to mem pool")
 	}
 }
+
+func TestTrimRetainedArenasAfterFlush_CheckpointPathTrimsHashSortedLeases(t *testing.T) {
+	var db DB
+
+	leaseCount := postCheckpointHashSortedMemLeaseKeep + 6
+	for i := 0; i < leaseCount; i++ {
+		mt := memtable.NewHashSortedWithCapacityAndIndexer(4<<20, nil)
+		db.hashSortedMemLeases = append(db.hashSortedMemLeases, mt)
+	}
+
+	db.trimRetainedArenasAfterFlush(true)
+
+	if got := len(db.hashSortedMemLeases); got > postCheckpointHashSortedMemLeaseKeep {
+		t.Fatalf("hash-sorted mem leases=%d want <= %d", got, postCheckpointHashSortedMemLeaseKeep)
+	}
+}
+
+func TestTrimHashSortedMemLeases_DroppedLeasesReturnToPool(t *testing.T) {
+	var db DB
+
+	keep := 2
+	leaseCount := keep + 6
+	for i := 0; i < leaseCount; i++ {
+		mt := memtable.NewHashSortedWithCapacityAndIndexer(4<<20, nil)
+		db.hashSortedMemLeases = append(db.hashSortedMemLeases, mt)
+	}
+
+	db.trimHashSortedMemLeases(keep, 4<<20)
+
+	if got := len(db.hashSortedMemLeases); got != keep {
+		t.Fatalf("hash-sorted mem leases=%d want %d", got, keep)
+	}
+
+	reused := 0
+	for i := 0; i < leaseCount-keep; i++ {
+		if v := db.hashSortedMemPool.Get(); v != nil {
+			if _, ok := v.(*memtable.HashSorted); ok {
+				reused++
+			}
+		}
+	}
+	if reused == 0 {
+		t.Fatalf("expected trimmed hash-sorted leases to be returned to mem pool")
+	}
+}

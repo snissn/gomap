@@ -115,9 +115,19 @@ func TestProcessMemoryStatsIncludeRuntimeBreakdown(t *testing.T) {
 		"treedb.process.read_path.db_get_caller.samples_total",
 		"treedb.process.read_path.snapshot_get_caller.sample_mod",
 		"treedb.process.read_path.snapshot_get_caller.samples_total",
+		"treedb.cache.hash_sorted.entry_hint_entries",
+		"treedb.cache.hash_sorted.entry_hint_capacity_bytes",
+		"treedb.cache.hash_sorted.mutable_from_lease_total",
+		"treedb.cache.hash_sorted.mutable_from_pool_total",
+		"treedb.cache.hash_sorted.mutable_new_alloc_total",
 		"treedb.cache.append_only.mutable_from_lease_total",
 		"treedb.cache.append_only.mutable_from_pool_total",
 		"treedb.cache.append_only.mutable_new_alloc_total",
+		"treedb.process.hash_sorted.entry_hint_entries",
+		"treedb.process.hash_sorted.entry_hint_capacity_bytes",
+		"treedb.process.hash_sorted.mutable_from_lease_total",
+		"treedb.process.hash_sorted.mutable_from_pool_total",
+		"treedb.process.hash_sorted.mutable_new_alloc_total",
 		"treedb.process.append_only.mutable_from_lease_total",
 		"treedb.process.append_only.mutable_from_pool_total",
 		"treedb.process.append_only.mutable_new_alloc_total",
@@ -130,6 +140,15 @@ func TestProcessMemoryStatsIncludeRuntimeBreakdown(t *testing.T) {
 
 	if got := mustStatInt64(t, stats, "treedb.process.memory.queue_backlog_bytes"); got != mustStatInt64(t, stats, "treedb.cache.queue_backlog_bytes") {
 		t.Fatalf("queue_backlog mismatch process=%d cache=%d", got, mustStatInt64(t, stats, "treedb.cache.queue_backlog_bytes"))
+	}
+	if got := mustStatInt64(t, stats, "treedb.process.hash_sorted.mutable_from_lease_total"); got != mustStatInt64(t, stats, "treedb.cache.hash_sorted.mutable_from_lease_total") {
+		t.Fatalf("hash_sorted lease source mismatch process=%d cache=%d", got, mustStatInt64(t, stats, "treedb.cache.hash_sorted.mutable_from_lease_total"))
+	}
+	if got := mustStatInt64(t, stats, "treedb.process.hash_sorted.mutable_from_pool_total"); got != mustStatInt64(t, stats, "treedb.cache.hash_sorted.mutable_from_pool_total") {
+		t.Fatalf("hash_sorted pool source mismatch process=%d cache=%d", got, mustStatInt64(t, stats, "treedb.cache.hash_sorted.mutable_from_pool_total"))
+	}
+	if got := mustStatInt64(t, stats, "treedb.process.hash_sorted.mutable_new_alloc_total"); got != mustStatInt64(t, stats, "treedb.cache.hash_sorted.mutable_new_alloc_total") {
+		t.Fatalf("hash_sorted new source mismatch process=%d cache=%d", got, mustStatInt64(t, stats, "treedb.cache.hash_sorted.mutable_new_alloc_total"))
 	}
 	if got := mustStatInt64(t, stats, "treedb.process.append_only.mutable_from_lease_total"); got != mustStatInt64(t, stats, "treedb.cache.append_only.mutable_from_lease_total") {
 		t.Fatalf("append_only lease source mismatch process=%d cache=%d", got, mustStatInt64(t, stats, "treedb.cache.append_only.mutable_from_lease_total"))

@@ -25,6 +25,8 @@ const (
 	hashSortedEstimatedBytesPerEntry = 64
 	hashSortedMinInitialEntries      = 128
 	hashSortedMaxInitialEntries      = 1 << 20
+	hashSortedReuseOversizeFactor    = 4
+	hashSortedArenaRetainMaxCap      = 4 << 20
 )
 
 func hashEntryValueSize(flags byte, value []byte) int {
@@ -79,6 +81,7 @@ type HashSorted struct {
 	mu          sync.RWMutex
 	items       map[string]uint32
 	entries     []hashEntry
+	baseEntries int
 	sizeBytes   int64
 	maxKey      string
 	hasMaxKey   bool
@@ -132,6 +135,7 @@ func NewHashSortedWithCapacityAndIndexer(capacity int, indexer *HashSortedIndexe
 	m := &HashSorted{
 		items:       make(map[string]uint32, initialEntries),
 		entries:     make([]hashEntry, 0, initialEntries),
+		baseEntries: initialEntries,
 		sortedValid: true,
 		indexer:     indexer,
 	}
@@ -169,8 +173,53 @@ func (a *hashArena) resetKeepFirstChunk() {
 	a.nextCap = cap(first) * 2
 }
 
+func (a *hashArena) resetKeepFirstChunkWithin(maxCap int) {
+	if maxCap > 0 && len(a.chunks) > 0 && cap(a.chunks[0]) > maxCap {
+		a.chunks = nil
+		a.cur = nil
+		a.off = 0
+		a.nextCap = 0
+		return
+	}
+	a.resetKeepFirstChunk()
+}
+
 // Reset clears all entries while retaining internal allocations.
 func (m *HashSorted) Reset() {
+	m.ResetWithCapacity(0)
+}
+
+func hashSortedMaxReuseEntries(base int) int {
+	if base <= 0 {
+		return hashSortedMaxInitialEntries
+	}
+	maxReuse := base * hashSortedReuseOversizeFactor
+	if maxReuse < hashSortedMinInitialEntries {
+		maxReuse = hashSortedMinInitialEntries
+	}
+	if maxReuse > hashSortedMaxInitialEntries {
+		maxReuse = hashSortedMaxInitialEntries
+	}
+	return maxReuse
+}
+
+func hashSortedArenaRetainCap(capacity int) int {
+	if capacity <= 0 {
+		return hashSortedArenaRetainMaxCap
+	}
+	retain := capacity / 2
+	if retain < 64*1024 {
+		retain = 64 * 1024
+	}
+	if retain > hashSortedArenaRetainMaxCap {
+		retain = hashSortedArenaRetainMaxCap
+	}
+	return retain
+}
+
+// ResetWithCapacity clears all entries while shrinking oversized retained
+// buffers toward the provided capacity-derived baseline.
+func (m *HashSorted) ResetWithCapacity(capacity int) {
 	// Reset can be used to reuse the same memtable instance for full clears.
 	// Because incremental indexing is asynchronous, wait for in-flight chunks to
 	// finish before reusing the arena memory.
@@ -185,27 +234,78 @@ func (m *HashSorted) Reset() {
 	m.index.wait(target)
 
 	m.mu.Lock()
-
-	clear(m.items)
-	for i := range m.entries {
-		m.entries[i] = hashEntry{}
+	oldEntriesCap := cap(m.entries)
+	oldCount := len(m.entries)
+	targetEntries := 0
+	maxReuseEntries := hashSortedMaxInitialEntries
+	if capacity > 0 {
+		targetEntries = hashSortedInitialEntries(capacity)
+		if targetEntries > 0 {
+			m.baseEntries = targetEntries
+			maxReuseEntries = hashSortedMaxReuseEntries(targetEntries)
+		}
 	}
-	m.entries = m.entries[:0]
+	if targetEntries > 0 {
+		switch {
+		case oldEntriesCap > maxReuseEntries:
+			m.entries = make([]hashEntry, 0, targetEntries)
+		case oldEntriesCap < targetEntries:
+			m.entries = make([]hashEntry, 0, targetEntries)
+		default:
+			clear(m.entries)
+			m.entries = m.entries[:0]
+		}
+		if m.items == nil || oldCount > maxReuseEntries || oldEntriesCap < targetEntries {
+			m.items = make(map[string]uint32, targetEntries)
+		} else {
+			clear(m.items)
+		}
+		if cap(m.sortedKeys) > maxReuseEntries || cap(m.sortedKeys) < targetEntries {
+			m.sortedKeys = make([]string, 0, targetEntries)
+		} else {
+			clear(m.sortedKeys)
+			m.sortedKeys = m.sortedKeys[:0]
+		}
+		if cap(m.sortedDel) > maxReuseEntries || cap(m.sortedDel) < targetEntries {
+			m.sortedDel = make([]bool, 0, targetEntries)
+		} else {
+			clear(m.sortedDel)
+			m.sortedDel = m.sortedDel[:0]
+		}
+		if cap(m.pendingKeys) > maxReuseEntries || cap(m.pendingKeys) < targetEntries {
+			m.pendingKeys = nil
+		} else {
+			clear(m.pendingKeys)
+			m.pendingKeys = m.pendingKeys[:0]
+		}
+	} else {
+		clear(m.items)
+		clear(m.entries)
+		m.entries = m.entries[:0]
+		clear(m.sortedKeys)
+		m.sortedKeys = m.sortedKeys[:0]
+		clear(m.sortedDel)
+		m.sortedDel = m.sortedDel[:0]
+		clear(m.pendingKeys)
+		m.pendingKeys = m.pendingKeys[:0]
+	}
+
 	m.sizeBytes = 0
-	m.sortedKeys = m.sortedKeys[:0]
-	m.sortedDel = m.sortedDel[:0]
 	m.sortedValid = true
 	m.frozen = false
 	m.hasDeletes = false
 	m.maxKey = ""
 	m.hasMaxKey = false
-	m.pendingKeys = nil
 	m.pendingBytes = 0
 	m.nextSeq = 0
 	m.index.reset()
 	m.finalizeOnce = sync.Once{}
 	m.finalizeDone = nil
-	m.arena.resetKeepFirstChunk()
+	if capacity > 0 {
+		m.arena.resetKeepFirstChunkWithin(hashSortedArenaRetainCap(capacity))
+	} else {
+		m.arena.resetKeepFirstChunk()
+	}
 	m.mu.Unlock()
 }
 
