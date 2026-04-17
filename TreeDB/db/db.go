@@ -756,12 +756,15 @@ type Options struct {
 }
 
 type Snapshot struct {
-	db                      *DB
-	idx                     *indexGen
-	state                   *DBState
-	vlogManager             *valuelog.Manager
-	vlogPinned              bool
-	leafGenerationIDs       []uint64
+	db                *DB
+	idx               *indexGen
+	state             *DBState
+	vlogManager       *valuelog.Manager
+	vlogPinned        bool
+	leafGenerationIDs []uint64
+	// leafGenerationPinnedIDs mirrors the generation IDs retained by this
+	// snapshot for stats/debugging. Release follows leafGenerationPinSet or
+	// leafGenerationRefs when those optimized paths are present.
 	leafGenerationPinnedIDs []uint64
 	leafGenerationRefs      []*leafGenerationPinRef
 	leafGenerationPinSet    *leafGenerationPinSet

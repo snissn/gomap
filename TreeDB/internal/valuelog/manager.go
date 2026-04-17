@@ -1261,7 +1261,7 @@ func (m *Manager) PromoteCurrentWritable(fileID uint32) error {
 			prev.remapMu.Lock()
 			prev.currentWritable.Store(false)
 			if data, _ := prev.mmapData.Load().([]byte); len(data) > 0 {
-				if m.allowDemotedCurrentMmapLocked(prev) {
+				if m.allowDemotedCurrentMmapLocked(prev, fileID) {
 					prev.sealedLazyMmapDenied.Store(false)
 					prev.sealedLazyMmapDeniedCountCap.Store(0)
 					prev.sealedLazyMmapDeniedBytesCap.Store(0)
@@ -1762,7 +1762,7 @@ func (m *Manager) allowSealedLazyMmapLocked(target *File, targetSize int64) (boo
 	return true, sealedLazyMmapDenyNone
 }
 
-func (m *Manager) allowDemotedCurrentMmapLocked(target *File) bool {
+func (m *Manager) allowDemotedCurrentMmapLocked(target *File, nextCurrentID uint32) bool {
 	if m == nil || target == nil {
 		return false
 	}
@@ -1779,7 +1779,7 @@ func (m *Manager) allowDemotedCurrentMmapLocked(target *File) bool {
 	mappedSealed := 0
 	var mappedSealedBytes uint64
 	for _, f := range m.files {
-		if f == nil || f.currentWritable.Load() {
+		if f == nil || f.ID == nextCurrentID || f.currentWritable.Load() {
 			continue
 		}
 		if isLeafLogFileID(f.ID) != targetIsLeaf {
