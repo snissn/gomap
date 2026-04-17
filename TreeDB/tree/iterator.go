@@ -1027,6 +1027,7 @@ func (it *Iterator) loadNode(pageID uint64) (node.Node, error) {
 		if n.Type() != page.PageTypeLeaf {
 			return node.Node{}, fmt.Errorf("invalid page type %d at page %d", n.Type(), pageID)
 		}
+		noteOuterLeafLoad(ptr.ValuePtr(), len(data), true)
 		it.leafRefScratch = data[:0]
 		return n, nil
 	}
