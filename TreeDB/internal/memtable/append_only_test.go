@@ -363,6 +363,20 @@ func TestAppendOnlyGetBuildsLatestIndexOnFirstPointRead(t *testing.T) {
 			if dirty {
 				t.Fatalf("expected latest index to stay clean after order break")
 			}
+			m.mu.RLock()
+			latestSizeBeforeGet := kk.latestSize(m)
+			idxBeforeGet, okBeforeGet := kk.latestIdx(m, lo)
+			countBeforeGet := m.count
+			m.mu.RUnlock()
+			if latestSizeBeforeGet < 2 {
+				t.Fatalf("expected latest index to be materialized on order break, size=%d", latestSizeBeforeGet)
+			}
+			if !okBeforeGet {
+				t.Fatalf("expected latest index lookup to succeed immediately after order break")
+			}
+			if idxBeforeGet != countBeforeGet-1 {
+				t.Fatalf("latest index before Get=%d want %d", idxBeforeGet, countBeforeGet-1)
+			}
 
 			if got, del, ok := m.Get(lo); !ok || del || string(got) != "lo" {
 				t.Fatalf("Get(lo) = (%q,%v,%v), want (lo,false,true)", string(got), del, ok)

@@ -2774,14 +2774,31 @@ func (db *DB) rewriteValueLogOpsForBackend(ops []batch.Entry, durability journal
 	return ops, nil
 }
 
+type backendBatchReserveHint interface {
+	Reserve(int)
+}
+
+type backendBatchSetViewer interface {
+	SetView(key, value []byte) error
+}
+
+type backendBatchDeleteViewer interface {
+	DeleteView(key []byte) error
+}
+
+type backendBatchPointerSetter interface {
+	SetPointer(key []byte, ptr page.ValuePtr) error
+}
+
+type backendBatchPointerSetterView interface {
+	SetPointerView(key []byte, ptr page.ValuePtr) error
+}
+
 func reserveBackendBatchOps(backendBatch batch.Interface, n int) {
 	if backendBatch == nil || n <= 0 {
 		return
 	}
-	type reserveHint interface {
-		Reserve(int)
-	}
-	if r, ok := backendBatch.(reserveHint); ok {
+	if r, ok := backendBatch.(backendBatchReserveHint); ok {
 		r.Reserve(n)
 	}
 }
@@ -2805,24 +2822,10 @@ func (db *DB) flushDeferredValueLogMemtable(
 
 	allowPointers := db.allowValueLogPointers()
 
-	type (
-		setViewer interface {
-			SetView(key, value []byte) error
-		}
-		deleteViewer interface {
-			DeleteView(key []byte) error
-		}
-		ptrSetter interface {
-			SetPointer(key []byte, ptr page.ValuePtr) error
-		}
-		ptrSetterView interface {
-			SetPointerView(key []byte, ptr page.ValuePtr) error
-		}
-	)
-	sv, _ := backendBatch.(setViewer)
-	dv, _ := backendBatch.(deleteViewer)
-	psv, _ := backendBatch.(ptrSetterView)
-	ps, _ := backendBatch.(ptrSetter)
+	sv, _ := backendBatch.(backendBatchSetViewer)
+	dv, _ := backendBatch.(backendBatchDeleteViewer)
+	psv, _ := backendBatch.(backendBatchPointerSetterView)
+	ps, _ := backendBatch.(backendBatchPointerSetter)
 	reserveHint := memLen
 	if db.flushBackendMaxEntries > 0 && reserveHint > db.flushBackendMaxEntries {
 		reserveHint = db.flushBackendMaxEntries
@@ -3011,24 +3014,10 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 		return 0, errors.New("cachingdb: missing backend batch")
 	}
 
-	type (
-		setViewer interface {
-			SetView(key, value []byte) error
-		}
-		deleteViewer interface {
-			DeleteView(key []byte) error
-		}
-		ptrSetter interface {
-			SetPointer(key []byte, ptr page.ValuePtr) error
-		}
-		ptrSetterView interface {
-			SetPointerView(key []byte, ptr page.ValuePtr) error
-		}
-	)
-	sv, _ := backendBatch.(setViewer)
-	dv, _ := backendBatch.(deleteViewer)
-	psv, _ := backendBatch.(ptrSetterView)
-	ps, _ := backendBatch.(ptrSetter)
+	sv, _ := backendBatch.(backendBatchSetViewer)
+	dv, _ := backendBatch.(backendBatchDeleteViewer)
+	psv, _ := backendBatch.(backendBatchPointerSetterView)
+	ps, _ := backendBatch.(backendBatchPointerSetter)
 
 	chunkCap := db.flushBuildChunkCap
 	if chunkCap <= 0 {
@@ -21285,22 +21274,10 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 		chunkBackend := totalLen > backendEntriesCap
 		emittedChunk := false
 
-		type setViewer interface {
-			SetView(key, value []byte) error
-		}
-		type deleteViewer interface {
-			DeleteView(key []byte) error
-		}
-		type ptrSetterView interface {
-			SetPointerView(key []byte, ptr page.ValuePtr) error
-		}
-		type ptrSetter interface {
-			SetPointer(key []byte, ptr page.ValuePtr) error
-		}
-		sv, _ := backendBatch.(setViewer)
-		dv, _ := backendBatch.(deleteViewer)
-		psv, _ := backendBatch.(ptrSetterView)
-		ps, _ := backendBatch.(ptrSetter)
+		sv, _ := backendBatch.(backendBatchSetViewer)
+		dv, _ := backendBatch.(backendBatchDeleteViewer)
+		psv, _ := backendBatch.(backendBatchPointerSetterView)
+		ps, _ := backendBatch.(backendBatchPointerSetter)
 		var single [1]batch.Entry
 
 		// Best-effort: ensure value-log bytes are flushed before we start committing
@@ -21333,10 +21310,10 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 			}
 			backendBatch = db.newBackendBatchWithSize(sizeHint)
 			reserveBackendBatchOps(backendBatch, reserveChunkOps)
-			sv, _ = backendBatch.(setViewer)
-			dv, _ = backendBatch.(deleteViewer)
-			psv, _ = backendBatch.(ptrSetterView)
-			ps, _ = backendBatch.(ptrSetter)
+			sv, _ = backendBatch.(backendBatchSetViewer)
+			dv, _ = backendBatch.(backendBatchDeleteViewer)
+			psv, _ = backendBatch.(backendBatchPointerSetterView)
+			ps, _ = backendBatch.(backendBatchPointerSetter)
 			backendPendingOps = 0
 			return nil
 		}
@@ -21576,24 +21553,10 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 		}
 		backendPendingOps = pendingOps
 	} else {
-		type (
-			setViewer interface {
-				SetView(key, value []byte) error
-			}
-			deleteViewer interface {
-				DeleteView(key []byte) error
-			}
-			ptrSetter interface {
-				SetPointer(key []byte, ptr page.ValuePtr) error
-			}
-			ptrSetterView interface {
-				SetPointerView(key []byte, ptr page.ValuePtr) error
-			}
-		)
-		sv, _ := backendBatch.(setViewer)
-		dv, _ := backendBatch.(deleteViewer)
-		psv, _ := backendBatch.(ptrSetterView)
-		ps, _ := backendBatch.(ptrSetter)
+		sv, _ := backendBatch.(backendBatchSetViewer)
+		dv, _ := backendBatch.(backendBatchDeleteViewer)
+		psv, _ := backendBatch.(backendBatchPointerSetterView)
+		ps, _ := backendBatch.(backendBatchPointerSetter)
 		var single [1]batch.Entry
 
 		// Best-effort: ensure value-log bytes are flushed before we start committing
@@ -21628,10 +21591,10 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 			}
 			backendBatch = db.newBackendBatchWithSize(sizeHint)
 			reserveBackendBatchOps(backendBatch, reserveChunkOps)
-			sv, _ = backendBatch.(setViewer)
-			dv, _ = backendBatch.(deleteViewer)
-			psv, _ = backendBatch.(ptrSetterView)
-			ps, _ = backendBatch.(ptrSetter)
+			sv, _ = backendBatch.(backendBatchSetViewer)
+			dv, _ = backendBatch.(backendBatchDeleteViewer)
+			psv, _ = backendBatch.(backendBatchPointerSetterView)
+			ps, _ = backendBatch.(backendBatchPointerSetter)
 			backendPendingOps = 0
 			return nil
 		}
@@ -21677,10 +21640,7 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 							return false
 						}
 					} else {
-						type ptrSetterLegacy interface {
-							SetPointer(key []byte, ptr page.ValuePtr) error
-						}
-						if psl, ok := backendBatch.(ptrSetterLegacy); ok {
+						if psl, ok := backendBatch.(backendBatchPointerSetter); ok {
 							if err := psl.SetPointer(key, ptr); err != nil {
 								db.reportError(fmt.Errorf("cachingdb: flush failed (set ptr): %w", err))
 								_ = iter.Close()
@@ -21981,24 +21941,10 @@ func (db *DB) flushOneLocked(sync bool) bool {
 			}
 
 			t0 := time.Now()
-			type (
-				setViewer interface {
-					SetView(key, value []byte) error
-				}
-				deleteViewer interface {
-					DeleteView(key []byte) error
-				}
-				ptrSetter interface {
-					SetPointer(key []byte, ptr page.ValuePtr) error
-				}
-				ptrSetterView interface {
-					SetPointerView(key []byte, ptr page.ValuePtr) error
-				}
-			)
-			sv, _ := backendBatch.(setViewer)
-			dv, _ := backendBatch.(deleteViewer)
-			psv, _ := backendBatch.(ptrSetterView)
-			ps, _ := backendBatch.(ptrSetter)
+			sv, _ := backendBatch.(backendBatchSetViewer)
+			dv, _ := backendBatch.(backendBatchDeleteViewer)
+			psv, _ := backendBatch.(backendBatchPointerSetterView)
+			ps, _ := backendBatch.(backendBatchPointerSetter)
 			var single [1]batch.Entry
 
 			flushBackendChunk := func() error {
@@ -22021,10 +21967,10 @@ func (db *DB) flushOneLocked(sync bool) bool {
 				}
 				backendBatch = db.newBackendBatchWithSize(sizeHint)
 				reserveBackendBatchOps(backendBatch, reserveChunkOps)
-				sv, _ = backendBatch.(setViewer)
-				dv, _ = backendBatch.(deleteViewer)
-				psv, _ = backendBatch.(ptrSetterView)
-				ps, _ = backendBatch.(ptrSetter)
+				sv, _ = backendBatch.(backendBatchSetViewer)
+				dv, _ = backendBatch.(backendBatchDeleteViewer)
+				psv, _ = backendBatch.(backendBatchPointerSetterView)
+				ps, _ = backendBatch.(backendBatchPointerSetter)
 				backendPendingOps = 0
 				return nil
 			}

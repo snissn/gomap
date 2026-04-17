@@ -20,7 +20,7 @@ type pointerBatch struct {
 	setCalls            int
 	setViewCalls        int
 	deleteCalls         int
-	deleteViews         int
+	deleteViewCalls     int
 	setPointerCalls     int
 	setPointerViewCalls int
 }
@@ -45,7 +45,7 @@ func (b *viewCountingBackend) totals() (setCalls, setViewCalls, deleteCalls, del
 		setCalls += pb.setCalls
 		setViewCalls += pb.setViewCalls
 		deleteCalls += pb.deleteCalls
-		deleteViewCalls += pb.deleteViews
+		deleteViewCalls += pb.deleteViewCalls
 	}
 	return
 }
@@ -85,7 +85,7 @@ func (b *pointerBatch) Delete(key []byte) error {
 }
 
 func (b *pointerBatch) DeleteView(key []byte) error {
-	b.deleteViews++
+	b.deleteViewCalls++
 	b.entries = append(b.entries, batch.Entry{Type: batch.OpDelete, Key: key})
 	return nil
 }
@@ -900,13 +900,13 @@ func testFlushLaneOnceUsesViewMethodsForInlineEntries(t *testing.T, forceParalle
 		if err := db.Delete(delKey); err != nil {
 			t.Fatalf("Delete unit %d: %v", unit, err)
 		}
-		db.mu.Lock()
 		if !stableUnsafe {
 			shard := &db.mutableShards[0]
 			shard.mu.Lock()
 			shard.mem = unstableIteratorMemtable{Table: shard.mem}
 			shard.mu.Unlock()
 		}
+		db.mu.Lock()
 		if err := db.rotateMemtableLocked(false); err != nil {
 			db.mu.Unlock()
 			t.Fatalf("rotateMemtableLocked unit %d: %v", unit, err)
