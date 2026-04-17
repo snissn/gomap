@@ -24784,6 +24784,13 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_dict.last_publish_unix_nano"] = fmt.Sprintf("%d", db.valueLogDictLastPublishUnixNano.Load())
 	stats["treedb.cache.vlog_dict.last_k_update_unix_nano"] = fmt.Sprintf("%d", db.valueLogDictLastKUpdateUnixNano.Load())
 	stats["treedb.cache.vlog_dict.current_k"] = fmt.Sprintf("%d", db.valueLogDictCurrentK.Load())
+	for class := 0; class < vlogDictClassCount; class++ {
+		suffix := vlogDictClassSuffix(vlogDictClass(class))
+		stats["treedb.cache.vlog_dict.last_applied_dict_id."+suffix] = fmt.Sprintf("%d", db.valueLogDictLastAppliedDictIDByClass[class].Load())
+		stats["treedb.cache.vlog_dict.last_applied_dict_hash."+suffix] = fmt.Sprintf("%x", db.valueLogDictLastAppliedDictHashByClass[class].Load())
+		stats["treedb.cache.vlog_dict.current_k."+suffix] = fmt.Sprintf("%d", db.valueLogDictCurrentKByClass[class].Load())
+		stats["treedb.cache.vlog_dict.cached_current_id."+suffix] = fmt.Sprintf("%d", db.dictCurrentCachedByClass[class].Load())
+	}
 	db.valueLogDictBytesMu.Lock()
 	stats["treedb.cache.vlog_dict.cached_dict_id"] = fmt.Sprintf("%d", db.valueLogDictBytesID)
 	stats["treedb.cache.vlog_dict.cached_dict_bytes"] = fmt.Sprintf("%d", len(db.valueLogDictBytes))
@@ -24836,11 +24843,14 @@ func (db *DB) Stats() map[string]string {
 		payloadSplitSnap   vlogPayloadSplitSnapshot
 		outerLeafCodecSnap vlogOuterLeafCodecSnapshot
 	)
-	for i := range db.lanes {
-		laneSnap := snapshotLaneVlogWriteMode(&db.lanes[i])
-		kindSnap := snapshotLaneVlogPayloadKind(&db.lanes[i])
-		splitSnap := snapshotLaneVlogPayloadSplit(&db.lanes[i])
-		outerCodecSnap := snapshotLaneVlogOuterLeafCodec(&db.lanes[i])
+	accumulateLaneVlogStats := func(l *lane) {
+		if l == nil {
+			return
+		}
+		laneSnap := snapshotLaneVlogWriteMode(l)
+		kindSnap := snapshotLaneVlogPayloadKind(l)
+		splitSnap := snapshotLaneVlogPayloadSplit(l)
+		outerCodecSnap := snapshotLaneVlogOuterLeafCodec(l)
 		for mode := 0; mode < vlogCompressionWriteModeCount; mode++ {
 			writeSnap.RawBytes[mode] += laneSnap.RawBytes[mode]
 			writeSnap.StoredBytes[mode] += laneSnap.StoredBytes[mode]
@@ -24866,6 +24876,12 @@ func (db *DB) Stats() map[string]string {
 			outerLeafCodecSnap.StoredBytes[kind] += outerCodecSnap.StoredBytes[kind]
 			outerLeafCodecSnap.Frames[kind] += outerCodecSnap.Frames[kind]
 		}
+	}
+	for i := range db.lanes {
+		accumulateLaneVlogStats(&db.lanes[i])
+	}
+	if db.indexOuterLeavesInValueLog {
+		accumulateLaneVlogStats(&db.leafLog)
 	}
 	for mode := 0; mode < vlogCompressionWriteModeCount; mode++ {
 		suffix := vlogWriteModeSuffix(vlogCompressionWriteMode(mode))
@@ -24918,10 +24934,9 @@ func (db *DB) Stats() map[string]string {
 	}
 	if normalizeVlogCompressionMode(db.valueLogCompressionMode) == vlogCompressionAuto {
 		var autoSnap vlogCompressionSelectorStats
-		for i := range db.lanes {
-			selector := db.lanes[i].vlogCompressionSelector
+		accumulateSelectorStats := func(selector *vlogCompressionSelector) {
 			if selector == nil {
-				continue
+				return
 			}
 			snap := selector.snapshot()
 			for c := 0; c < vlogAutoCandidateCount; c++ {
@@ -24938,6 +24953,12 @@ func (db *DB) Stats() map[string]string {
 			autoSnap.holdEnters += snap.holdEnters
 			autoSnap.holdExits += snap.holdExits
 			autoSnap.bypassBytes += snap.bypassBytes
+		}
+		for i := range db.lanes {
+			accumulateSelectorStats(db.lanes[i].vlogCompressionSelector)
+		}
+		if db.indexOuterLeavesInValueLog {
+			accumulateSelectorStats(db.leafLog.vlogCompressionSelector)
 		}
 		var totalAutoFrames uint64
 		for c := 0; c < vlogAutoCandidateCount; c++ {

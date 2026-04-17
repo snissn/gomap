@@ -1495,12 +1495,20 @@ func (db *DB) vlogSelectorEnabled(mode vlogCompressionMode) bool {
 
 func (db *DB) resolveVlogWriteMode(l *lane, dictID uint64, rawPayloadBytes, unitPayloadBytes int, outerLeafPayload bool) (vlogCompressionWriteMode, valuelog.BlockCodec, bool) {
 	mode := normalizeVlogCompressionMode(db.valueLogCompressionMode)
+	preferLiveOuterLeafDict := dictID != 0 &&
+		outerLeafPayload &&
+		l != nil &&
+		l.id == leafLogLaneID &&
+		db.valueLogDictAllowOuterLeaf()
 	switch mode {
 	case vlogCompressionOff:
 		return vlogWriteOff, db.valueLogBlockCodec, false
 	case vlogCompressionBlock:
 		return vlogWriteBlock, db.valueLogBlockCodec, false
 	case vlogCompressionDict:
+		if preferLiveOuterLeafDict {
+			return vlogWriteDict, db.valueLogBlockCodec, false
+		}
 		if unitPayloadBytes <= 0 {
 			unitPayloadBytes = rawPayloadBytes
 		}
@@ -1537,6 +1545,9 @@ func (db *DB) resolveVlogWriteMode(l *lane, dictID uint64, rawPayloadBytes, unit
 		return vlogWriteDict, db.valueLogBlockCodec, false
 	default:
 		// Default/unset compression behavior follows auto mode.
+		if preferLiveOuterLeafDict {
+			return vlogWriteDict, db.valueLogBlockCodec, false
+		}
 		if unitPayloadBytes <= 0 {
 			unitPayloadBytes = rawPayloadBytes
 		}

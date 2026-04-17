@@ -1,6 +1,8 @@
 package caching
 
 import (
+	"context"
+
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -34,8 +36,15 @@ func (l *cachingLeafPageLog) AppendLeafPage(leafPage []byte) (page.LeafLogPtr, e
 	if err != nil {
 		return page.LeafLogPtr{}, err
 	}
+	dictID := uint64(0)
+	if l.db.dictStore != nil && l.db.valueLogDictAllowOuterLeaf() {
+		dictID, err = l.db.currentDictIDForClass(context.Background(), vlogDictClassOuterLeaf)
+		if err != nil {
+			return page.LeafLogPtr{}, err
+		}
+	}
 	rid := l.db.nextRID.Add(1)
-	ptr, retainPath, err := l.db.appendValueLogOneInternal(l.lane, 0, nil, rid, encodedLeafPage, journalDurabilityNone, false)
+	ptr, retainPath, err := l.db.appendValueLogOneInternal(l.lane, dictID, nil, rid, encodedLeafPage, journalDurabilityNone, false)
 	if retainPath != "" {
 		l.db.markValueLogRetain(retainPath)
 	}

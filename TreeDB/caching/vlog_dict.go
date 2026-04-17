@@ -135,6 +135,10 @@ type dictStoreWriter interface {
 	SetCurrent(context.Context, uint64) error
 }
 
+type dictStoreLeafPayloadModeSetter interface {
+	SetLeafPayloadMode(context.Context, uint64, bool) error
+}
+
 type dictStoreK interface {
 	SetK(context.Context, uint64, int) error
 	GetK(context.Context, uint64) (int, error)
@@ -230,17 +234,21 @@ func (db *DB) valueLogDictAllowOuterLeaf() bool {
 	if db == nil || !db.indexOuterLeavesInValueLog {
 		return false
 	}
-	// Keep default behavior conservative: only permit outer-leaf dict writes on
-	// explicitly size-biased runs.
-	if normalizeVlogAutoPolicy(db.valueLogAutoPolicy) != vlogAutoSize {
+	// Outer-leaf payloads benefit from a dedicated dictionary stream. Keep this
+	// gated on split class mode so single-value traffic does not lose its own
+	// trainer/current state, but allow balanced auto mode to participate instead
+	// of requiring an explicitly size-biased profile.
+	if db.dictClassMode() != vlogDictClassModeSplitOuterLeaf {
 		return false
 	}
+	policy := normalizeVlogAutoPolicy(db.valueLogAutoPolicy)
 	switch normalizeVlogCompressionMode(db.valueLogCompressionMode) {
 	case vlogCompressionDict:
 		// Require autotune to be enabled so poor dict fits can back off.
-		return db.valueLogAutotuneOptions.Mode != valuelog.AutotuneOff
+		return db.valueLogAutotuneOptions.Mode != valuelog.AutotuneOff &&
+			(policy == vlogAutoSize || policy == vlogAutoBalanced)
 	case vlogCompressionAuto:
-		return true
+		return policy == vlogAutoSize || policy == vlogAutoBalanced
 	default:
 		return false
 	}
@@ -1169,6 +1177,14 @@ func (db *DB) applyValueLogDictProfileForClass(class vlogDictClass) {
 	if ks, ok := store.(dictStoreK); ok {
 		if err := ks.SetK(ctx, dictID, profileK); err != nil {
 			db.reportError(err)
+		}
+	}
+	if class == vlogDictClassOuterLeaf {
+		if modeSetter, ok := store.(dictStoreLeafPayloadModeSetter); ok {
+			if err := modeSetter.SetLeafPayloadMode(ctx, dictID, false); err != nil {
+				db.reportError(err)
+				return
+			}
 		}
 	}
 	db.valueLogDictLastAppliedDictHashByClass[class].Store(profile.DictHash)

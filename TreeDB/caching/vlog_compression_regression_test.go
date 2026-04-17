@@ -61,6 +61,7 @@ func TestResolveVlogWriteMode_DictAggressiveSizeLargeOuterLeafPayloadCanUseDict(
 		valueLogAutoPolicy:         uint8(vlogAutoSize),
 		valueLogBlockCodec:         valuelog.BlockCodecLZ4,
 		valueLogAutotuneOptions:    valuelog.AutotuneOptions{Mode: valuelog.AutotuneAggressive},
+		valueLogDictClassMode:      uint8(vlogDictClassModeSplitOuterLeaf),
 		indexOuterLeavesInValueLog: true,
 	}
 

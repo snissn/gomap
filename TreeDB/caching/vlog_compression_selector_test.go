@@ -762,6 +762,21 @@ func TestResolveVlogWriteMode_LargePayloadBalancedBypassesSelectorToConfiguredBl
 	}
 }
 
+func TestResolveVlogWriteMode_OuterLeafDictUsesDictOnLeafLaneInBalancedAuto(t *testing.T) {
+	db := &DB{
+		valueLogCompressionMode:    uint8(vlogCompressionAuto),
+		valueLogAutoPolicy:         uint8(vlogAutoBalanced),
+		valueLogBlockCodec:         valuelog.BlockCodecSnappy,
+		indexOuterLeavesInValueLog: true,
+		valueLogDictClassMode:      uint8(vlogDictClassModeSplitOuterLeaf),
+	}
+	l := &lane{id: leafLogLaneID, vlogCompressionSelector: newVlogCompressionSelector(vlogAutoBalanced, 0, 0)}
+	mode, codec, probe := db.resolveVlogWriteMode(l, 9, 2048, 2048, true)
+	if mode != vlogWriteDict || codec != valuelog.BlockCodecSnappy || probe {
+		t.Fatalf("expected live outer-leaf dict write to stay on dict mode, got mode=%v codec=%v probe=%t", mode, codec, probe)
+	}
+}
+
 func TestResolveVlogWriteMode_LargePayloadBalancedUsesObservedBetterBlockCodec(t *testing.T) {
 	db := &DB{
 		valueLogCompressionMode: uint8(vlogCompressionAuto),

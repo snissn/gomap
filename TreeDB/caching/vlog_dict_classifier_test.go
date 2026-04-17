@@ -188,6 +188,7 @@ func TestValueLogDictClassifierBypass_AllowsOuterLeafPagesForDictSizeAggressive(
 	db := &DB{
 		valueLogCompressionMode:             uint8(vlogCompressionDict),
 		valueLogAutoPolicy:                  uint8(vlogAutoSize),
+		valueLogDictClassMode:               uint8(vlogDictClassModeSplitOuterLeaf),
 		valueLogAutotuneOptions:             valuelog.AutotuneOptions{Mode: valuelog.AutotuneAggressive},
 		indexOuterLeavesInValueLog:          true,
 		valueLogDictIncompressibleHoldBytes: 256 << 10,
@@ -206,6 +207,7 @@ func TestValueLogDictClassifierBypass_AllowsOuterLeafPagesForDictSizeMedium(t *t
 	db := &DB{
 		valueLogCompressionMode:             uint8(vlogCompressionDict),
 		valueLogAutoPolicy:                  uint8(vlogAutoSize),
+		valueLogDictClassMode:               uint8(vlogDictClassModeSplitOuterLeaf),
 		valueLogAutotuneOptions:             valuelog.AutotuneOptions{Mode: valuelog.AutotuneMedium},
 		indexOuterLeavesInValueLog:          true,
 		valueLogDictIncompressibleHoldBytes: 256 << 10,
@@ -224,6 +226,7 @@ func TestValueLogDictClassifierBypass_AllowsOuterLeafPagesForAutoSize(t *testing
 	db := &DB{
 		valueLogCompressionMode:             uint8(vlogCompressionAuto),
 		valueLogAutoPolicy:                  uint8(vlogAutoSize),
+		valueLogDictClassMode:               uint8(vlogDictClassModeSplitOuterLeaf),
 		valueLogAutotuneOptions:             valuelog.AutotuneOptions{Mode: valuelog.AutotuneMedium},
 		indexOuterLeavesInValueLog:          true,
 		valueLogDictIncompressibleHoldBytes: 256 << 10,
@@ -238,10 +241,30 @@ func TestValueLogDictClassifierBypass_AllowsOuterLeafPagesForAutoSize(t *testing
 	}
 }
 
+func TestValueLogDictClassifierBypass_AllowsOuterLeafPagesForAutoBalancedSplitMode(t *testing.T) {
+	db := &DB{
+		valueLogCompressionMode:             uint8(vlogCompressionAuto),
+		valueLogAutoPolicy:                  uint8(vlogAutoBalanced),
+		valueLogDictClassMode:               uint8(vlogDictClassModeSplitOuterLeaf),
+		valueLogAutotuneOptions:             valuelog.AutotuneOptions{Mode: valuelog.AutotuneMedium},
+		indexOuterLeavesInValueLog:          true,
+		valueLogDictIncompressibleHoldBytes: 256 << 10,
+		valueLogDictMetricsPauseBytes:       1 << 20,
+	}
+	pageValue := markOuterLeafMagic(bytes.Repeat([]byte("a"), 4096))
+	if db.valueLogDictClassifierBypass(pageValue, false) {
+		t.Fatalf("expected outer-leaf page value to stay on dict path in auto+balanced+split mode")
+	}
+	if hold := db.valueLogDictIncompressibleHoldRemaining.Load(); hold != 0 {
+		t.Fatalf("expected no incompressible hold for compressible outer-leaf page sample, hold=%d", hold)
+	}
+}
+
 func TestValueLogDictClassifierBypass_AllowsOuterLeafHighEntropyForAutoSize(t *testing.T) {
 	db := &DB{
 		valueLogCompressionMode:             uint8(vlogCompressionAuto),
 		valueLogAutoPolicy:                  uint8(vlogAutoSize),
+		valueLogDictClassMode:               uint8(vlogDictClassModeSplitOuterLeaf),
 		valueLogAutotuneOptions:             valuelog.AutotuneOptions{Mode: valuelog.AutotuneMedium},
 		indexOuterLeavesInValueLog:          true,
 		valueLogDictIncompressibleHoldBytes: 256 << 10,
@@ -608,6 +631,7 @@ func TestShouldBypassValueLogDictForRecords_OuterLeafPagesAllowedForDictSizeAggr
 	db := &DB{
 		valueLogCompressionMode:             uint8(vlogCompressionDict),
 		valueLogAutoPolicy:                  uint8(vlogAutoSize),
+		valueLogDictClassMode:               uint8(vlogDictClassModeSplitOuterLeaf),
 		valueLogAutotuneOptions:             valuelog.AutotuneOptions{Mode: valuelog.AutotuneAggressive},
 		indexOuterLeavesInValueLog:          true,
 		valueLogDictIncompressibleHoldBytes: 256 << 10,
@@ -629,6 +653,7 @@ func TestShouldBypassValueLogDictForRecords_OuterLeafPagesAllowedForAutoSize(t *
 	db := &DB{
 		valueLogCompressionMode:             uint8(vlogCompressionAuto),
 		valueLogAutoPolicy:                  uint8(vlogAutoSize),
+		valueLogDictClassMode:               uint8(vlogDictClassModeSplitOuterLeaf),
 		valueLogAutotuneOptions:             valuelog.AutotuneOptions{Mode: valuelog.AutotuneMedium},
 		indexOuterLeavesInValueLog:          true,
 		valueLogDictIncompressibleHoldBytes: 256 << 10,
@@ -637,6 +662,25 @@ func TestShouldBypassValueLogDictForRecords_OuterLeafPagesAllowedForAutoSize(t *
 	records := markOuterLeafMagicRecords(highEntropyValueLogRecords(8, 4096))
 	if db.shouldBypassValueLogDictForRecords(records, false) {
 		t.Fatalf("expected outer-leaf record batch to stay on dict path in auto+size mode")
+	}
+	if hold := db.valueLogDictIncompressibleHoldRemaining.Load(); hold != 0 {
+		t.Fatalf("expected no incompressible hold for outer-leaf record batch, hold=%d", hold)
+	}
+}
+
+func TestShouldBypassValueLogDictForRecords_OuterLeafPagesAllowedForAutoBalancedSplitMode(t *testing.T) {
+	db := &DB{
+		valueLogCompressionMode:             uint8(vlogCompressionAuto),
+		valueLogAutoPolicy:                  uint8(vlogAutoBalanced),
+		valueLogDictClassMode:               uint8(vlogDictClassModeSplitOuterLeaf),
+		valueLogAutotuneOptions:             valuelog.AutotuneOptions{Mode: valuelog.AutotuneMedium},
+		indexOuterLeavesInValueLog:          true,
+		valueLogDictIncompressibleHoldBytes: 256 << 10,
+		valueLogDictMetricsPauseBytes:       1 << 20,
+	}
+	records := markOuterLeafMagicRecords(highEntropyValueLogRecords(8, 4096))
+	if db.shouldBypassValueLogDictForRecords(records, false) {
+		t.Fatalf("expected outer-leaf record batch to stay on dict path in auto+balanced+split mode")
 	}
 	if hold := db.valueLogDictIncompressibleHoldRemaining.Load(); hold != 0 {
 		t.Fatalf("expected no incompressible hold for outer-leaf record batch, hold=%d", hold)

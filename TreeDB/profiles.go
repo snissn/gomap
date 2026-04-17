@@ -145,6 +145,7 @@ func applyFastProfile(opts *Options) {
 	opts.Durability = DurabilityWALOffRelaxed
 	opts.ValueLog.ReadIntegrity = IntegritySkipChecksums
 	opts.IndexOuterLeavesInValueLog = true
+	opts.ValueLog.DictClassMode = ValueLogDictClassSplitOuterLeaf
 	if opts.ValueLog.DictIncompressibleHoldBytes == 0 {
 		opts.ValueLog.DictIncompressibleHoldBytes = 64 << 20
 	}
@@ -164,6 +165,7 @@ func applyWALOnFastProfile(opts *Options) {
 	opts.Durability = DurabilityWALOnRelaxed
 	opts.ValueLog.ReadIntegrity = IntegritySkipChecksums
 	opts.IndexOuterLeavesInValueLog = true
+	opts.ValueLog.DictClassMode = ValueLogDictClassSplitOuterLeaf
 	if opts.ValueLog.DictIncompressibleHoldBytes == 0 {
 		opts.ValueLog.DictIncompressibleHoldBytes = 64 << 20
 	}

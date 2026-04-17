@@ -43,6 +43,9 @@ func TestApplyProfile_FastSetsPolicyBools(t *testing.T) {
 	if opts.IndexInternalBaseDelta {
 		t.Fatalf("expected IndexInternalBaseDelta=false for fast profile (incompatible with outer leaves in value log)")
 	}
+	if opts.ValueLog.DictClassMode != ValueLogDictClassSplitOuterLeaf {
+		t.Fatalf("expected DictClassMode=split_outer_leaf for fast profile, got %v", opts.ValueLog.DictClassMode)
+	}
 }
 
 func TestApplyProfile_WALOnFastKeepsWALOn(t *testing.T) {
@@ -75,6 +78,9 @@ func TestApplyProfile_WALOnFastKeepsWALOn(t *testing.T) {
 	}
 	if opts.IndexInternalBaseDelta {
 		t.Fatalf("expected IndexInternalBaseDelta=false for wal_on_fast profile (incompatible with outer leaves in value log)")
+	}
+	if opts.ValueLog.DictClassMode != ValueLogDictClassSplitOuterLeaf {
+		t.Fatalf("expected DictClassMode=split_outer_leaf for wal_on_fast profile, got %v", opts.ValueLog.DictClassMode)
 	}
 }
 
