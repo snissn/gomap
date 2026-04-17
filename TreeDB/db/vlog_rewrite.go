@@ -2736,14 +2736,24 @@ func (w *rewriteWriter) appendLeafPageWithRID(rid uint64, leafPage []byte) (page
 	if rid == 0 {
 		return page.LeafLogPtr{}, fmt.Errorf("value-log rid space exhausted")
 	}
-	if w.leafDir != "" {
-		return w.appendLeafPageSplit(rid, leafPage)
+	encodedLeafPage := leafPage
+	if w.leafPagesUseCompactPayload() {
+		var compacted bool
+		var err error
+		encodedLeafPage, compacted, err = valuelog.MaybeCompactLeafLogPayload(leafPage)
+		if err != nil {
+			return page.LeafLogPtr{}, err
+		}
+		_ = compacted
 	}
-	if w.blockCompression && w.leafDictID != 0 && len(w.leafDict) > 0 && rewriteAllowDictForSmallPayload(leafPage) {
+	if w.leafDir != "" {
+		return w.appendLeafPageSplit(rid, encodedLeafPage)
+	}
+	if w.blockCompression && w.leafDictID != 0 && len(w.leafDict) > 0 && rewriteAllowDictForSmallPayload(encodedLeafPage) {
 		// LeafRef IDs intentionally omit grouped sub-index bits and therefore
 		// require K=1 frames. Use single-record append so decoded LeafRef pointers
 		// remain stable and do not alias another subrecord in a grouped batch.
-		ptr, err := w.appendSingleValueWithDictClass(rewriteTemplateClassOuterLeaf, w.leafDictID, w.leafDict, rid, leafPage)
+		ptr, err := w.appendSingleValueWithDictClass(rewriteTemplateClassOuterLeaf, w.leafDictID, w.leafDict, rid, encodedLeafPage)
 		if err == nil {
 			w.lastLeafRecordLen = page.ValuePtrRecordLength(ptr)
 			leafPtr, convErr := page.LeafLogPtrFromValuePtr(ptr)
@@ -2756,7 +2766,7 @@ func (w *rewriteWriter) appendLeafPageWithRID(rid uint64, leafPage []byte) (page
 			return page.LeafLogPtr{}, err
 		}
 	}
-	ptr, err := w.appendValueWithDictClass(rewriteTemplateClassOuterLeaf, 0, nil, rid, leafPage)
+	ptr, err := w.appendValueWithDictClass(rewriteTemplateClassOuterLeaf, 0, nil, rid, encodedLeafPage)
 	if err != nil {
 		return page.LeafLogPtr{}, err
 	}
@@ -2766,6 +2776,16 @@ func (w *rewriteWriter) appendLeafPageWithRID(rid uint64, leafPage []byte) (page
 		return page.LeafLogPtr{}, convErr
 	}
 	return leafPtr, nil
+}
+
+func (w *rewriteWriter) leafPagesUseCompactPayload() bool {
+	if w == nil {
+		return false
+	}
+	if w.leafDir != "" {
+		return true
+	}
+	return w.lane == rewriteLeafLogLaneID
 }
 
 func (w *rewriteWriter) appendLeafPageSplit(rid uint64, leafPage []byte) (page.LeafLogPtr, error) {

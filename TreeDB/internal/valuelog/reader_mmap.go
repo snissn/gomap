@@ -1013,7 +1013,12 @@ func (f *File) readViaMmapAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 	}
 
 	if flags&recordFlagGrouped == 0 {
+		oldLen := len(dst)
 		dst, err := appendDecodedTemplatePayload(dst, payload, f.templateLookup, f.templateDefCache, f.templateDecodeOpts)
+		if err != nil {
+			return nil, err, true
+		}
+		dst, err = appendMaybeDecodeLeafLogPayload(f.ID, dst[:oldLen], dst[oldLen:])
 		if err != nil {
 			return nil, err, true
 		}
@@ -1064,7 +1069,12 @@ func (f *File) readViaMmapAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 					return nil, ErrCorrupt, true
 				}
 				var err error
+				oldLen := len(dst)
 				dst, err = appendDecodedTemplatePayload(dst, payload[cPrefixLen+int(valStart):cPrefixLen+int(valEnd)], f.templateLookup, f.templateDefCache, f.templateDecodeOpts)
+				if err != nil {
+					return nil, err, true
+				}
+				dst, err = appendMaybeDecodeLeafLogPayload(f.ID, dst[:oldLen], dst[oldLen:])
 				if err != nil {
 					return nil, err, true
 				}
@@ -1109,7 +1119,12 @@ func (f *File) readViaMmapAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 		f.cacheMu.Unlock()
 
 		var err error
+		oldLen := len(dst)
 		dst, err = appendDecodedTemplatePayload(dst, payload[prefixLen+int(valStart):prefixLen+int(valEnd)], f.templateLookup, f.templateDefCache, f.templateDecodeOpts)
+		if err != nil {
+			return nil, err, true
+		}
+		dst, err = appendMaybeDecodeLeafLogPayload(f.ID, dst[:oldLen], dst[oldLen:])
 		if err != nil {
 			return nil, err, true
 		}
@@ -1131,7 +1146,12 @@ func (f *File) readViaMmapAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 		if err != nil {
 			return nil, err, true
 		}
+		oldLen := len(dst)
 		dst, err := appendDecodedTemplatePayload(dst, cachedVal, f.templateLookup, f.templateDefCache, f.templateDecodeOpts)
+		if err != nil {
+			return nil, err, true
+		}
+		dst, err = appendMaybeDecodeLeafLogPayload(f.ID, dst[:oldLen], dst[oldLen:])
 		if err != nil {
 			return nil, err, true
 		}
@@ -1194,7 +1214,11 @@ func (f *File) readViaMmapAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 		f.setCacheRawLocked(nil, false)
 		f.cacheStart.Store(start)
 		f.cacheMu.Unlock()
-		return dst[:oldLen+int(rawLen)], nil, true
+		dst, err = appendMaybeDecodeLeafLogPayload(f.ID, dst[:oldLen], dst[oldLen:oldLen+int(rawLen)])
+		if err != nil {
+			return nil, err, true
+		}
+		return dst, nil, true
 	}
 	cacheableRaw := false
 	f.cacheMu.Lock()
@@ -1254,6 +1278,10 @@ func (f *File) readViaMmapAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 	}
 	if len(dst) < oldLen {
 		return nil, ErrCorrupt, true
+	}
+	dst, err = appendMaybeDecodeLeafLogPayload(f.ID, dst[:oldLen], dst[oldLen:])
+	if err != nil {
+		return nil, err, true
 	}
 	return dst, nil, true
 }

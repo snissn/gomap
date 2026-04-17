@@ -2230,9 +2230,24 @@ func TestRewriteWriter_LeafPagesUseConfiguredLeafLogDir(t *testing.T) {
 	if _, err := w.appendValue(1, []byte("value-payload")); err != nil {
 		t.Fatalf("appendValue: %v", err)
 	}
-	leafPtr, err := w.AppendLeafPage(bytes.Repeat([]byte("l"), 4096))
+	leafBuf := make([]byte, page.PageSize)
+	leafBuilder := node.NewBuilderWithOptions(leafBuf, page.PageTypeLeaf, node.BuilderOptions{
+		LeafPrefixCompression: true,
+		LeafColumnar:          true,
+		PackedValuePtr:        true,
+	})
+	for i := 0; i < 4; i++ {
+		if err := leafBuilder.AddLeafEntry([]byte("rewrite-key-"+string(rune('a'+i))), []byte("value"), node.FlagInline, page.ValuePtr{}); err != nil {
+			t.Fatalf("AddLeafEntry(%d): %v", i, err)
+		}
+	}
+	leafBuilder.FinishNoNode()
+	leafPtr, err := w.AppendLeafPage(leafBuf)
 	if err != nil {
 		t.Fatalf("AppendLeafPage: %v", err)
+	}
+	if got := w.LastLeafPageRecordLength(); got == 0 || int(got) >= valuelog.HeaderSize+page.PageSize {
+		t.Fatalf("LastLeafPageRecordLength=%d want compact leaf payload smaller than raw %d", got, valuelog.HeaderSize+page.PageSize)
 	}
 	if err := w.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
@@ -2669,6 +2684,46 @@ func TestRewriteWriter_AppendLeafPageUsesLeafDictWhenConfigured(t *testing.T) {
 	}
 	if blockFrames != 0 {
 		t.Fatalf("expected no block-compressed frames when leaf dict is configured, blockFrames=%d", blockFrames)
+	}
+}
+
+func TestRewriteWriter_AppendLeafPageLane0KeepsRawLeafPayload(t *testing.T) {
+	walDir := t.TempDir()
+	w := newRewriteWriter(walDir, 0, 0, 64<<20)
+	w.blockCompression = false
+
+	leafBuf := make([]byte, page.PageSize)
+	leafBuilder := node.NewBuilderWithOptions(leafBuf, page.PageTypeLeaf, node.BuilderOptions{
+		LeafPrefixCompression: true,
+		LeafColumnar:          true,
+		PackedValuePtr:        true,
+	})
+	for i := 0; i < 4; i++ {
+		if err := leafBuilder.AddLeafEntry([]byte("lane0-leaf-"+string(rune('a'+i))), []byte("value"), node.FlagInline, page.ValuePtr{}); err != nil {
+			t.Fatalf("AddLeafEntry(%d): %v", i, err)
+		}
+	}
+	leafBuilder.FinishNoNode()
+	leafPtr, err := w.AppendLeafPage(leafBuf)
+	if err != nil {
+		t.Fatalf("AppendLeafPage: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	mgr, err := valuelog.NewManager(walDir)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	defer func() { _ = mgr.Close() }()
+
+	got, err := mgr.ReadUnsafe(leafPtr.ValuePtr())
+	if err != nil {
+		t.Fatalf("ReadUnsafe: %v", err)
+	}
+	if len(got) != page.PageSize {
+		t.Fatalf("ReadUnsafe len=%d want %d", len(got), page.PageSize)
 	}
 }
 
