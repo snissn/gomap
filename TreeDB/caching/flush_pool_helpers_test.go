@@ -847,15 +847,20 @@ func TestAppendOnlyMemtableLeaseReuse(t *testing.T) {
 
 func TestFlushLaneOnce_UsesViewMethodsForInlineEntries_SerialAndParallel(t *testing.T) {
 	t.Run("serial", func(t *testing.T) {
-		testFlushLaneOnceUsesViewMethodsForInlineEntries(t, false, true)
+		testFlushLaneOnceUsesViewMethodsForInlineEntries(t, false, true, true)
 	})
 	t.Run("parallel", func(t *testing.T) {
-		testFlushLaneOnceUsesViewMethodsForInlineEntries(t, true, true)
+		testFlushLaneOnceUsesViewMethodsForInlineEntries(t, true, true, true)
 	})
 }
 
 func TestFlushLaneOnce_FallsBackFromViewMethodsForUnstableIterators(t *testing.T) {
-	testFlushLaneOnceUsesViewMethodsForInlineEntries(t, false, false)
+	t.Run("serial-direct-iterator", func(t *testing.T) {
+		testFlushLaneOnceUsesViewMethodsForInlineEntries(t, false, false, false)
+	})
+	t.Run("parallel-copied-runs", func(t *testing.T) {
+		testFlushLaneOnceUsesViewMethodsForInlineEntries(t, true, false, true)
+	})
 }
 
 type unstableIteratorMemtable struct {
@@ -864,7 +869,7 @@ type unstableIteratorMemtable struct {
 
 func (unstableIteratorMemtable) StableUnsafeIteratorSlices() bool { return false }
 
-func testFlushLaneOnceUsesViewMethodsForInlineEntries(t *testing.T, forceParallel, stableUnsafe bool) {
+func testFlushLaneOnceUsesViewMethodsForInlineEntries(t *testing.T, forceParallel, stableUnsafe, expectViewMethods bool) {
 	t.Helper()
 	dir := t.TempDir()
 	backend := &viewCountingBackend{MockBackend: NewMockBackend()}
@@ -919,7 +924,7 @@ func testFlushLaneOnceUsesViewMethodsForInlineEntries(t *testing.T, forceParalle
 	}
 
 	setCalls, setViewCalls, deleteCalls, deleteViewCalls := backend.totals()
-	if stableUnsafe {
+	if expectViewMethods {
 		if setCalls != 0 {
 			t.Fatalf("backend Set calls=%d, want 0", setCalls)
 		}
