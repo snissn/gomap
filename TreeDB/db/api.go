@@ -531,7 +531,7 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.root_page"] = fmt.Sprintf("%d", state.RootPageID)
 	stats["treedb.system_root_page"] = fmt.Sprintf("%d", state.SystemRootPageID)
 
-	writeLeafGenerationMetrics(stats, db.collectLeafGenerationMetrics(state.ValueLogSet, snap.leafGenerationIDs))
+	writeLeafGenerationMetrics(stats, db.collectLeafGenerationMetrics(state.ValueLogSet, snap.leafGenerationPinnedIDs))
 
 	stats["treedb.pages.total"] = fmt.Sprintf("%d", idx.pager.PageCount())
 	// PR1 generational scaffolding (backend/read-only path). Cached mode exports

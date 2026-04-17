@@ -9,6 +9,7 @@ type leafGenerationView struct {
 	CurrentGenerationID uint64
 	GenerationOrder     []uint64
 	PinRefs             []*leafGenerationPinRef
+	PinSet              *leafGenerationPinSet
 	Generations         map[uint64]leafGenerationViewGeneration
 	FileToGeneration    map[uint32]uint64
 }
@@ -53,6 +54,7 @@ func (db *DB) currentLeafGenerationView() *leafGenerationView {
 	view := newLeafGenerationView(db.leafGenerationManifest)
 	if view != nil && len(view.GenerationOrder) > 0 {
 		view.PinRefs = db.leafGenerationPins.refsForGenerationIDs(view.GenerationOrder)
+		view.PinSet = newLeafGenerationPinSet(view.PinRefs)
 	}
 	return view
 }
@@ -60,6 +62,69 @@ func (db *DB) currentLeafGenerationView() *leafGenerationView {
 type leafGenerationPinRef struct {
 	id    uint64
 	count atomic.Int64
+}
+
+type leafGenerationPinSet struct {
+	refs []*leafGenerationPinRef
+
+	mu      sync.Mutex
+	holders int64
+	stale   bool
+	pinned  bool
+}
+
+func newLeafGenerationPinSet(refs []*leafGenerationPinRef) *leafGenerationPinSet {
+	if len(refs) == 0 {
+		return nil
+	}
+	return &leafGenerationPinSet{refs: refs}
+}
+
+func (s *leafGenerationPinSet) retain(tracker *leafGenerationPinTracker) bool {
+	if s == nil || tracker == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.holders++
+	if s.stale && !s.pinned {
+		tracker.pinRefs(s.refs)
+		s.pinned = true
+		return true
+	}
+	return false
+}
+
+func (s *leafGenerationPinSet) release(tracker *leafGenerationPinTracker) {
+	if s == nil || tracker == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.holders == 0 {
+		return
+	}
+	s.holders--
+	if s.holders == 0 && s.pinned {
+		tracker.unpinRefs(s.refs)
+		s.pinned = false
+	}
+}
+
+func (s *leafGenerationPinSet) markStale(tracker *leafGenerationPinTracker) {
+	if s == nil || tracker == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.stale {
+		return
+	}
+	s.stale = true
+	if s.holders > 0 && !s.pinned {
+		tracker.pinRefs(s.refs)
+		s.pinned = true
+	}
 }
 
 type leafGenerationPinTracker struct {
@@ -246,6 +311,27 @@ func (db *DB) unpinLeafGenerationRefs(refs []*leafGenerationPinRef) {
 		return
 	}
 	db.leafGenerationPins.unpinRefs(refs)
+}
+
+func (db *DB) retainLeafGenerationPinSet(pinSet *leafGenerationPinSet) bool {
+	if db == nil || pinSet == nil {
+		return false
+	}
+	return pinSet.retain(&db.leafGenerationPins)
+}
+
+func (db *DB) releaseLeafGenerationPinSet(pinSet *leafGenerationPinSet) {
+	if db == nil || pinSet == nil {
+		return
+	}
+	pinSet.release(&db.leafGenerationPins)
+}
+
+func (db *DB) markLeafGenerationPinSetStale(pinSet *leafGenerationPinSet) {
+	if db == nil || pinSet == nil {
+		return
+	}
+	pinSet.markStale(&db.leafGenerationPins)
 }
 
 func (db *DB) leafGenerationPinCountForTesting(id uint64) uint64 {

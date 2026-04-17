@@ -48,6 +48,7 @@ const (
 	maxDeadMappingsEnvKey           = "TREEDB_VLOG_MAX_DEAD_MAPPINGS"
 	enableAdaptiveCapEnvKey         = "TREEDB_VLOG_ADAPTIVE_DEAD_MAPPINGS"
 	enableCurrentWritableEnvKey     = "TREEDB_VLOG_ENABLE_CURRENT_WRITABLE_MMAP"
+	enableCurrentLeafWritableEnvKey = "TREEDB_VLOG_ENABLE_CURRENT_LEAF_WRITABLE_MMAP"
 	maxMappedSealedEnvKey           = "TREEDB_VLOG_MAX_MAPPED_SEALED_SEGMENTS"
 	maxMappedSealedBytesEnvKey      = "TREEDB_VLOG_MAX_MAPPED_SEALED_BYTES"
 	maxMappedLeafSealedEnvKey       = "TREEDB_VLOG_MAX_MAPPED_LEAF_SEALED_SEGMENTS"
@@ -60,13 +61,14 @@ const (
 )
 
 var (
-	maxDeadMappingsExplicit     bool
-	adaptiveDeadMappings              = defaultAdaptiveCapEnabled
-	enableCurrentWritableMmap         = false
-	MaxMappedSealedSegments           = defaultMaxMappedSealed
-	MaxMappedSealedBytes        int64 = defaultMaxMappedSealedBytes
-	MaxMappedLeafSealedSegments       = defaultMaxMappedLeafSealed
-	MaxMappedLeafSealedBytes    int64 = defaultMaxMappedLeafSealedBytes
+	maxDeadMappingsExplicit       bool
+	adaptiveDeadMappings                = defaultAdaptiveCapEnabled
+	enableCurrentWritableMmap           = false
+	enableCurrentLeafWritableMmap       = true
+	MaxMappedSealedSegments             = defaultMaxMappedSealed
+	MaxMappedSealedBytes          int64 = defaultMaxMappedSealedBytes
+	MaxMappedLeafSealedSegments         = defaultMaxMappedLeafSealed
+	MaxMappedLeafSealedBytes      int64 = defaultMaxMappedLeafSealedBytes
 )
 
 func init() {
@@ -90,6 +92,14 @@ func init() {
 			enableCurrentWritableMmap = false
 		case "1", "true", "on", "yes":
 			enableCurrentWritableMmap = true
+		}
+	}
+	if raw := strings.TrimSpace(os.Getenv(enableCurrentLeafWritableEnvKey)); raw != "" {
+		switch strings.ToLower(raw) {
+		case "0", "false", "off", "no":
+			enableCurrentLeafWritableMmap = false
+		case "1", "true", "on", "yes":
+			enableCurrentLeafWritableMmap = true
 		}
 	}
 	if raw := strings.TrimSpace(os.Getenv(maxMappedSealedEnvKey)); raw != "" {
@@ -117,6 +127,16 @@ func init() {
 func isLeafLogFileID(fileID uint32) bool {
 	lane, _ := DecodeFileID(fileID)
 	return lane == ReservedLeafLogLaneID
+}
+
+func (f *File) currentWritablePersistentMmapEnabled() bool {
+	if f == nil || !f.currentWritable.Load() {
+		return false
+	}
+	if enableCurrentWritableMmap {
+		return true
+	}
+	return enableCurrentLeafWritableMmap && isLeafLogFileID(f.ID)
 }
 
 func effectiveMaxDeadMappings(mappedLen int) int {
@@ -161,14 +181,14 @@ func (f *File) usesPersistentMmap() bool {
 	if f.manager == nil {
 		return true
 	}
-	return enableCurrentWritableMmap && f.currentWritable.Load()
+	return f.currentWritablePersistentMmapEnabled()
 }
 
 func (f *File) tryEnableSealedLazyMmap() bool {
 	if f == nil || f.closed.Load() || f.File == nil {
 		return false
 	}
-	if f.currentWritable.Load() && !enableCurrentWritableMmap {
+	if f.currentWritable.Load() && !f.currentWritablePersistentMmapEnabled() {
 		return false
 	}
 	if f.usesPersistentMmap() {
@@ -280,6 +300,36 @@ func (f *File) sealedLazyMmapTargetSize() int64 {
 	return targetSize
 }
 
+func (f *File) retirePersistentMmapToDead() {
+	if f == nil {
+		return
+	}
+	f.remapMu.Lock()
+	defer f.remapMu.Unlock()
+	f.retirePersistentMmapToDeadLocked()
+}
+
+func (f *File) retirePersistentMmapToDeadLocked() bool {
+	if f == nil {
+		return false
+	}
+	data, _ := f.mmapData.Load().([]byte)
+	if len(data) == 0 {
+		return false
+	}
+	if deadMappingsCapExhausted(f.deadMappingsCount.Load(), len(data)) {
+		// Keep the existing mapping live as a sealed mapping once the dead-mapping
+		// budget is exhausted. That preserves reader safety without allowing the
+		// dead-mapping list to grow without bound.
+		return false
+	}
+	f.deadMappings = append(f.deadMappings, data)
+	f.deadMappingsCount.Add(1)
+	f.deadMappedBytes.Add(uint64(len(data)))
+	f.mmapData.Store([]byte(nil))
+	return true
+}
+
 func (f *File) maybeScheduleRemap() {
 	if f == nil || f.closed.Load() || !f.usesPersistentMmap() {
 		return
@@ -298,7 +348,7 @@ func (f *File) maybeScheduleRemap() {
 	}
 	go func() {
 		defer f.remapRequested.Store(false)
-		f.remapToFileSize()
+		f.remapToFileSizePersistentOnly()
 	}()
 }
 
@@ -326,7 +376,15 @@ func (f *File) tryRefreshMmapRange(start, end int64) ([]byte, bool) {
 	return data, true
 }
 
+func (f *File) remapToFileSizePersistentOnly() {
+	f.remapToFileSizeWithPolicy(true)
+}
+
 func (f *File) remapToFileSize() {
+	f.remapToFileSizeWithPolicy(false)
+}
+
+func (f *File) remapToFileSizeWithPolicy(requirePersistent bool) {
 	if f == nil || f.closed.Load() || f.File == nil {
 		return
 	}
@@ -334,6 +392,9 @@ func (f *File) remapToFileSize() {
 	f.remapMu.Lock()
 	defer f.remapMu.Unlock()
 	if f.closed.Load() || f.File == nil {
+		return
+	}
+	if requirePersistent && !f.usesPersistentMmap() {
 		return
 	}
 	// If we have already hit the dead-mapping cap, we cannot remap again without
