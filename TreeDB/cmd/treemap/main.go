@@ -46,6 +46,8 @@ Commands:
   leafgen-plan    Print explicit leaf-generation pack plan
   leafgen-pack    Pack sealed leaf generations by id (requires -rw)
   leafgen-gc      Delete fully unreachable sealed leaf generations (requires -rw)
+  leafgen-transcode-plan   Estimate sealed-generation transcode candidates (requires -rw)
+  leafgen-transcode-bench  Run repeated sealed-generation transcode passes on a frozen DB copy (requires -rw)
   get             Get a single key
   keys            List keys in a range/prefix
   scan            Scan keys and values in a range/prefix (requires -allow-values)
@@ -110,6 +112,10 @@ func main() {
 		runLeafGenerationPack(dir, args)
 	case "leafgen-gc":
 		runLeafGenerationGC(dir, args)
+	case "leafgen-transcode-plan":
+		runLeafGenerationTranscodePlan(dir, args)
+	case "leafgen-transcode-bench":
+		runLeafGenerationTranscodeBench(dir, args)
 	case "get":
 		runGet(dir, args)
 	case "keys":

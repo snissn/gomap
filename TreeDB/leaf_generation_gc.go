@@ -21,6 +21,8 @@ type LeafGenerationGCStats struct {
 	GenerationsEligible int
 	GenerationsDeleted  int
 	FilesDeleted        int
+	BytesEligible       int64
+	BytesDeleted        int64
 }
 
 // LeafGenerationGC deletes fully unreachable, unpinned sealed leaf generations.
@@ -58,6 +60,8 @@ func (db *DB) LeafGenerationGC(ctx context.Context, opts LeafGenerationGCOptions
 	out.GenerationsEligible = stats.GenerationsEligible
 	out.GenerationsDeleted = stats.GenerationsDeleted
 	out.FilesDeleted = stats.FilesDeleted
+	out.BytesEligible = stats.BytesEligible
+	out.BytesDeleted = stats.BytesDeleted
 	success = true
 	return out, nil
 }

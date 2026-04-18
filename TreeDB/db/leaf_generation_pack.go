@@ -23,6 +23,10 @@ type LeafGenerationPackOptions struct {
 	MinReclaimPerByteCopiedPPM int
 	ReserveRIDs                func(count int) (start uint64, err error)
 	Force                      bool
+
+	leafDictID          uint64
+	leafDictBytes       []byte
+	leafDictUseRawPages bool
 }
 
 type LeafGenerationPackStats struct {
@@ -161,6 +165,9 @@ func (db *DB) leafGenerationPackLocked(ctx context.Context, opts LeafGenerationP
 	writer.ConfigureLeafLog(layout.leafVLogDir, rewriteLeafLogLaneID, leafStartSeq)
 	writer.blockCompression = db.valueLogCompression != ValueLogCompressionOff
 	writer.blockCodec = valuelogBlockCodecFromDB(db.valueLogBlockCodec)
+	if writer.blockCompression && opts.leafDictID != 0 && len(opts.leafDictBytes) > 0 {
+		writer.SetLeafDictMode(opts.leafDictID, opts.leafDictBytes, opts.leafDictUseRawPages)
+	}
 	defer func() { _ = writer.Close() }()
 
 	sourceValueIDs := make(map[uint32]struct{}, len(rawSourceIDs))
