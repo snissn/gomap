@@ -391,6 +391,7 @@ func (db *DB) tryLeafGenerationLogicalRebuildCandidate(
 	writer.leafBlockCodec = leafPageBlockCodecFromOptions(db.valueLogCompression, db.valueLogAutoPolicy, db.valueLogBlockCodec, db.indexOuterLeavesInValueLog)
 	writer.nextRID = nextRID
 	writerOpen := true
+	published := false
 	cleanupCreated := func(baseErr error) error {
 		closeErr := error(nil)
 		if writerOpen {
@@ -406,7 +407,14 @@ func (db *DB) tryLeafGenerationLogicalRebuildCandidate(
 	}
 	defer func() {
 		if err != nil {
-			err = cleanupCreated(err)
+			if published {
+				if writerOpen {
+					err = errors.Join(err, writer.Close())
+					writerOpen = false
+				}
+			} else {
+				err = cleanupCreated(err)
+			}
 		} else if writerOpen {
 			_ = writer.Close()
 		}
@@ -513,9 +521,16 @@ func (db *DB) tryLeafGenerationLogicalRebuildCandidate(
 			}
 		}
 
-		if err := writer.Sync(); err != nil {
-			db.writeMu.Unlock()
-			return stats, err
+		if opts.Sync {
+			if err := writer.Sync(); err != nil {
+				db.writeMu.Unlock()
+				return stats, err
+			}
+		} else {
+			if err := writer.Flush(); err != nil {
+				db.writeMu.Unlock()
+				return stats, err
+			}
 		}
 		createdSegments, err := writer.createdSegmentsSnapshot()
 		if err != nil {
@@ -532,7 +547,7 @@ func (db *DB) tryLeafGenerationLogicalRebuildCandidate(
 			db.writeMu.Unlock()
 			return stats, err
 		}
-		createdTotalBytes, err := leafGenerationLogicalRebuildCreatedTotalBytes(createdSegments)
+		createdTotalBytes, err := leafGenerationLogicalRebuildCreatedLogBytes(createdSegments)
 		if err != nil {
 			db.writeMu.Unlock()
 			return stats, err
@@ -662,6 +677,7 @@ func (db *DB) tryLeafGenerationLogicalRebuildCandidate(
 		db.state.Store(newState)
 		db.publishSnapshotView(newGen, newState, db.valueLogManager)
 		db.mu.Unlock()
+		published = true
 		db.clearLeafGenerationReachabilityCaches()
 		db.writeMu.Unlock()
 
@@ -743,7 +759,11 @@ func (db *DB) selectLeafGenerationLogicalRebuildCandidates(snap *Snapshot, reque
 	accumByRaw := make(map[uint32]*leafLogicalRebuildSource)
 	orderedRaw := make([]uint32, 0, 64)
 	view := snap.state.LeafGenerations
-	manifestByGen := make(map[uint64]leafGenerationRecord, len(db.leafGenerationManifest.Generations))
+	manifestCapacity := 0
+	if db.leafGenerationManifest != nil {
+		manifestCapacity = len(db.leafGenerationManifest.Generations)
+	}
+	manifestByGen := make(map[uint64]leafGenerationRecord, manifestCapacity)
 	if db.leafGenerationManifest != nil {
 		for _, gen := range db.leafGenerationManifest.Generations {
 			manifestByGen[gen.GenerationID] = gen
@@ -1064,6 +1084,21 @@ func leafGenerationLogicalRebuildCreatedTotalBytes(segments []rewriteCreatedSegm
 			return 0, err
 		}
 		total += leafGenerationRecordLengthIndexEncodedSize(idx)
+	}
+	return total, nil
+}
+
+func leafGenerationLogicalRebuildCreatedLogBytes(segments []rewriteCreatedSegment) (int64, error) {
+	var total int64
+	for _, seg := range segments {
+		if seg.path == "" {
+			continue
+		}
+		info, err := os.Stat(seg.path)
+		if err != nil {
+			return 0, err
+		}
+		total += info.Size()
 	}
 	return total, nil
 }

@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"runtime"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/page"
@@ -34,6 +35,9 @@ func openLeafGenerationLogicalRebuildOnlineTestDB(t *testing.T, maxLeafSegmentBy
 }
 
 func TestLeafGenerationLogicalRebuildRunOnce_NoCandidate(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("online leaf logical rebuild not supported on windows")
+	}
 	db, _, _ := openLeafGenerationLogicalRebuildOnlineTestDB(t, 1024)
 	writeLeafGenerationKeys(t, db, "k", 32, 'a')
 
@@ -103,15 +107,20 @@ func TestLeafGenerationLogicalRebuildSampleRanges_PicksBoundedSlices(t *testing.
 }
 
 func TestLeafGenerationLogicalRebuildRunOnce_RetiresSelectedGenerationAndPreservesSnapshot(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("online leaf logical rebuild not supported on windows")
+	}
 	db, leafLog, dir := openLeafGenerationLogicalRebuildOnlineTestDB(t, 64<<20)
-	writeLeafGenerationKeyRange(t, db, "k", 0, 256, 'a')
+	for _, fill := range []byte("abcdefghijklmnop") {
+		writeLeafGenerationKeyRange(t, db, "k", 0, 4096, fill)
+	}
 	if err := leafLog.rotateLeaf(); err != nil {
 		t.Fatalf("rotateLeaf: %v", err)
 	}
-	writeLeafGenerationKeyRange(t, db, "k", 256, 256, 'b')
+	writeLeafGenerationKeyRange(t, db, "k", 4096, 512, 'z')
 
 	baseSnap := db.AcquireSnapshot()
-	candidates, _, err := db.selectLeafGenerationLogicalRebuildCandidates(baseSnap, 0, 0, 4)
+	candidates, _, err := db.selectLeafGenerationLogicalRebuildCandidates(baseSnap, 0, 0, 1)
 	if err != nil {
 		closeNoErr(t, baseSnap)
 		t.Fatalf("selectLeafGenerationLogicalRebuildCandidates: %v", err)
@@ -139,15 +148,17 @@ func TestLeafGenerationLogicalRebuildRunOnce_RetiresSelectedGenerationAndPreserv
 		closeNoErr(t, baseSnap)
 		t.Fatalf("snapshot Get before rebuild: %v", err)
 	}
-	wantValue := bytes.Repeat([]byte{'a'}, 32)
+	wantValue := bytes.Repeat([]byte{'p'}, 32)
 	if !bytes.Equal(snapValue, wantValue) {
 		closeNoErr(t, baseSnap)
 		t.Fatalf("snapshot value before rebuild=%x, want %x", snapValue, wantValue)
 	}
 
 	stats, err := db.LeafGenerationLogicalRebuildRunOnce(context.Background(), LeafGenerationLogicalRebuildRunOnceOptions{
-		RawFileID: candidate.rawFileIDs[0],
-		Sync:      true,
+		RawFileID:       candidate.rawFileIDs[0],
+		ClusterFilesMax: 1,
+		CandidateTryMax: 1,
+		Sync:            true,
 	})
 	if err != nil {
 		closeNoErr(t, baseSnap)
