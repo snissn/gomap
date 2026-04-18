@@ -62,6 +62,10 @@ const (
 	//   - you are exploring performance limits, and crashes/corruption detection
 	//     are acceptable trade-offs.
 	//
+	// It also pins the current run_celestia-style value-log compression policy:
+	// auto compression, balanced auto policy, snappy block fallback, and medium
+	// autotune.
+	//
 	// Background maintenance is left enabled by default; it is generally helpful
 	// for keeping the index compact and read-friendly.
 	ProfileFast Profile = "fast"
@@ -70,6 +74,7 @@ const (
 	// write-heavy benchmarks and ingest workloads.
 	//
 	// It keeps WAL enabled but disables fsync and value-log read checksums.
+	// It also pins the same value-log compression policy as ProfileFast.
 	ProfileWALOnFast Profile = "wal_on_fast"
 
 	// ProfileBench is a "fast + deterministic" profile intended specifically for
@@ -141,10 +146,20 @@ func applyIndexOptimizationsProfile(opts *Options) {
 	}
 }
 
+func applyRunCelestiaVLogCompressionProfile(opts *Options) {
+	if opts.ValueLog.Compression == 0 {
+		opts.ValueLog.Compression = ValueLogCompressionAuto
+	}
+	if opts.ValueLog.CompressionAutotune.Mode == AutotuneUnset {
+		opts.ValueLog.CompressionAutotune.Mode = AutotuneMedium
+	}
+}
+
 func applyFastProfile(opts *Options) {
 	opts.Durability = DurabilityWALOffRelaxed
 	opts.ValueLog.ReadIntegrity = IntegritySkipChecksums
 	opts.IndexOuterLeavesInValueLog = true
+	applyRunCelestiaVLogCompressionProfile(opts)
 	if opts.ValueLog.DictIncompressibleHoldBytes == 0 {
 		opts.ValueLog.DictIncompressibleHoldBytes = 64 << 20
 	}
@@ -164,6 +179,7 @@ func applyWALOnFastProfile(opts *Options) {
 	opts.Durability = DurabilityWALOnRelaxed
 	opts.ValueLog.ReadIntegrity = IntegritySkipChecksums
 	opts.IndexOuterLeavesInValueLog = true
+	applyRunCelestiaVLogCompressionProfile(opts)
 	if opts.ValueLog.DictIncompressibleHoldBytes == 0 {
 		opts.ValueLog.DictIncompressibleHoldBytes = 64 << 20
 	}

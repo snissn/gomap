@@ -28,6 +28,24 @@ func TestApplyProfile_FastSetsPolicyBools(t *testing.T) {
 	if !opts.PreferAppendAlloc {
 		t.Fatalf("expected PreferAppendAlloc=true for fast profile")
 	}
+	if opts.ValueLog.Compression != ValueLogCompressionAuto {
+		t.Fatalf("expected ValueLog.Compression=ValueLogCompressionAuto for fast profile, got %v", opts.ValueLog.Compression)
+	}
+	if opts.ValueLog.BlockCodec != ValueLogBlockSnappy {
+		t.Fatalf("expected ValueLog.BlockCodec=ValueLogBlockSnappy for fast profile, got %v", opts.ValueLog.BlockCodec)
+	}
+	if opts.ValueLog.AutoPolicy != ValueLogAutoBalanced {
+		t.Fatalf("expected ValueLog.AutoPolicy=ValueLogAutoBalanced for fast profile, got %v", opts.ValueLog.AutoPolicy)
+	}
+	if opts.ValueLog.CompressionAutotune.Mode != AutotuneMedium {
+		t.Fatalf("expected ValueLog.CompressionAutotune.Mode=AutotuneMedium for fast profile, got %v", opts.ValueLog.CompressionAutotune.Mode)
+	}
+	if opts.ValueLog.DictIncompressibleHoldBytes != 64<<20 {
+		t.Fatalf("expected DictIncompressibleHoldBytes=64MiB for fast profile, got %d", opts.ValueLog.DictIncompressibleHoldBytes)
+	}
+	if opts.ValueLog.DictProbeIntervalBytes != 32<<20 {
+		t.Fatalf("expected DictProbeIntervalBytes=32MiB for fast profile, got %d", opts.ValueLog.DictProbeIntervalBytes)
+	}
 	if opts.ValueLog.ForcePointers {
 		t.Fatalf("expected ValueLog.ForcePointers=false for fast profile")
 	}
@@ -60,6 +78,24 @@ func TestApplyProfile_WALOnFastKeepsWALOn(t *testing.T) {
 	}
 	if !opts.PreferAppendAlloc {
 		t.Fatalf("expected PreferAppendAlloc=true for wal_on_fast profile")
+	}
+	if opts.ValueLog.Compression != ValueLogCompressionAuto {
+		t.Fatalf("expected ValueLog.Compression=ValueLogCompressionAuto for wal_on_fast profile, got %v", opts.ValueLog.Compression)
+	}
+	if opts.ValueLog.BlockCodec != ValueLogBlockSnappy {
+		t.Fatalf("expected ValueLog.BlockCodec=ValueLogBlockSnappy for wal_on_fast profile, got %v", opts.ValueLog.BlockCodec)
+	}
+	if opts.ValueLog.AutoPolicy != ValueLogAutoBalanced {
+		t.Fatalf("expected ValueLog.AutoPolicy=ValueLogAutoBalanced for wal_on_fast profile, got %v", opts.ValueLog.AutoPolicy)
+	}
+	if opts.ValueLog.CompressionAutotune.Mode != AutotuneMedium {
+		t.Fatalf("expected ValueLog.CompressionAutotune.Mode=AutotuneMedium for wal_on_fast profile, got %v", opts.ValueLog.CompressionAutotune.Mode)
+	}
+	if opts.ValueLog.DictIncompressibleHoldBytes != 64<<20 {
+		t.Fatalf("expected DictIncompressibleHoldBytes=64MiB for wal_on_fast profile, got %d", opts.ValueLog.DictIncompressibleHoldBytes)
+	}
+	if opts.ValueLog.DictProbeIntervalBytes != 32<<20 {
+		t.Fatalf("expected DictProbeIntervalBytes=32MiB for wal_on_fast profile, got %d", opts.ValueLog.DictProbeIntervalBytes)
 	}
 	if opts.ValueLog.ForcePointers {
 		t.Fatalf("expected ValueLog.ForcePointers=false for wal_on_fast profile")
@@ -169,6 +205,29 @@ func TestApplyProfile_PreservesNegativeDictHoldProbeValues(t *testing.T) {
 			}
 			if opts.ValueLog.DictProbeIntervalBytes != -1 {
 				t.Fatalf("DictProbeIntervalBytes overridden: got %d", opts.ValueLog.DictProbeIntervalBytes)
+			}
+		})
+	}
+}
+
+func TestApplyProfile_PreservesExplicitVLogCompressionOverrides(t *testing.T) {
+	for _, profile := range []Profile{ProfileFast, ProfileWALOnFast} {
+		t.Run(string(profile), func(t *testing.T) {
+			opts := Options{
+				ValueLog: ValueLogOptions{
+					Compression: ValueLogCompressionBlock,
+					CompressionAutotune: AutotuneOptions{
+						Mode: AutotuneAggressive,
+					},
+				},
+			}
+			ApplyProfile(&opts, profile)
+
+			if opts.ValueLog.Compression != ValueLogCompressionBlock {
+				t.Fatalf("ValueLog.Compression overridden: got %v", opts.ValueLog.Compression)
+			}
+			if opts.ValueLog.CompressionAutotune.Mode != AutotuneAggressive {
+				t.Fatalf("ValueLog.CompressionAutotune overridden: got %v", opts.ValueLog.CompressionAutotune.Mode)
 			}
 		})
 	}
