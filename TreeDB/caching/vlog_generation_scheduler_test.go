@@ -1576,6 +1576,13 @@ type leafPackMaintenanceRecordingBackend struct {
 	entered           chan struct{}
 	release           chan struct{}
 	blockUntilCtxDone bool
+	logicalCalls      int
+	logicalOpts       backenddb.LeafGenerationLogicalRebuildRunOnceOptions
+	logicalOptsHist   []backenddb.LeafGenerationLogicalRebuildRunOnceOptions
+	logicalResp       backenddb.LeafGenerationLogicalRebuildRunOnceStats
+	logicalErr        error
+	logicalHasDL      bool
+	logicalDeadline   time.Time
 }
 
 func (b *leafPackMaintenanceRecordingBackend) LeafGenerationPackRunOnce(ctx context.Context, opts backenddb.LeafGenerationPackFromPlanOptions) (backenddb.LeafGenerationPackRunOnceStats, error) {
@@ -1639,6 +1646,16 @@ func (b *leafPackMaintenanceRecordingBackend) LeafGenerationGC(ctx context.Conte
 	return stats, b.leafGCErr
 }
 
+func (b *leafPackMaintenanceRecordingBackend) LeafGenerationLogicalRebuildRunOnce(ctx context.Context, opts backenddb.LeafGenerationLogicalRebuildRunOnceOptions) (backenddb.LeafGenerationLogicalRebuildRunOnceStats, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.logicalCalls++
+	b.logicalOpts = opts
+	b.logicalOptsHist = append(b.logicalOptsHist, opts)
+	b.logicalDeadline, b.logicalHasDL = ctx.Deadline()
+	return b.logicalResp, b.logicalErr
+}
+
 func (b *leafPackMaintenanceRecordingBackend) recordedLeafPack() (backenddb.LeafGenerationPackFromPlanOptions, int, bool, time.Time) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -1665,6 +1682,12 @@ func (b *leafPackMaintenanceRecordingBackend) recordedLeafGC() (backenddb.LeafGe
 		stats = b.leafGCResponses[idx]
 	}
 	return stats, b.leafGCCalls
+}
+
+func (b *leafPackMaintenanceRecordingBackend) recordedLeafLogicalRebuild() (backenddb.LeafGenerationLogicalRebuildRunOnceOptions, int, bool, time.Time) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.logicalOpts, b.logicalCalls, b.logicalHasDL, b.logicalDeadline
 }
 
 func mustLeafPackTempDir(t *testing.T, prefix string) string {
@@ -1966,6 +1989,93 @@ func TestLeafGenerationPackMaintenance_RunsWithDefaultBounds(t *testing.T) {
 	}
 }
 
+func TestLeafGenerationLogicalRebuildMaintenance_RequiresExplicitEnv(t *testing.T) {
+	recorder := &leafPackMaintenanceRecordingBackend{
+		DB: mustOpenLeafPackBackend(t),
+		logicalResp: backenddb.LeafGenerationLogicalRebuildRunOnceStats{
+			CommitSeqBefore:      10,
+			SelectedGenerationID: 7,
+			SelectedRawFileID:    42,
+			CreatedFileIDs:       []uint32{9001},
+			RetiredGenerationIDs: []uint64{7},
+		},
+	}
+	db, cleanup := openLeafPackMaintenanceTestDB(t, recorder)
+	defer cleanup()
+
+	attempted, ran, err := db.maybeRunLeafGenerationLogicalRebuildMaintenance(false, true, leafGenerationPackMaintenanceAdmission{allowed: true}, vlogGenerationMaintenanceOptions{skipCheckpoint: true})
+	if err != nil {
+		t.Fatalf("maybeRunLeafGenerationLogicalRebuildMaintenance: %v", err)
+	}
+	if attempted || ran {
+		t.Fatalf("attempted=%t ran=%t want false/false", attempted, ran)
+	}
+	if _, calls, _, _ := recorder.recordedLeafLogicalRebuild(); calls != 0 {
+		t.Fatalf("logical rebuild calls=%d want 0", calls)
+	}
+}
+
+func TestLeafGenerationLogicalRebuildMaintenance_RunsWithDefaultBounds(t *testing.T) {
+	t.Setenv(envEnableLeafGenerationLogicalRebuildMaintenance, "1")
+	recorder := &leafPackMaintenanceRecordingBackend{
+		DB: mustOpenLeafPackBackend(t),
+		logicalResp: backenddb.LeafGenerationLogicalRebuildRunOnceStats{
+			CommitSeqBefore:      3118,
+			SelectedGenerationID: 17,
+			SelectedRawFileID:    88,
+			SelectedSourceFiles:  3,
+			SelectedRunCount:     5,
+			SourceLeafPages:      144,
+			SourceLeafBytes:      65536,
+			ReplacementLeafPages: 120,
+			BytesCopied:          54321,
+			CandidateAttempts:    2,
+			CatchupPasses:        1,
+			CatchupKeys:          12,
+			FinalCutoverKeys:     3,
+			WallTimeNanos:        (21 * time.Millisecond).Nanoseconds(),
+			CreatedFileIDs:       []uint32{701, 702},
+			RetiredGenerationIDs: []uint64{17},
+		},
+		leafGCResp: backenddb.LeafGenerationGCStats{GenerationsDeleted: 1, FilesDeleted: 2, BytesDeleted: 4096},
+	}
+	db, cleanup := openLeafPackMaintenanceTestDB(t, recorder)
+	defer cleanup()
+
+	attempted, ran, err := db.maybeRunLeafGenerationLogicalRebuildMaintenance(false, true, leafGenerationPackMaintenanceAdmission{allowed: true}, vlogGenerationMaintenanceOptions{skipCheckpoint: true})
+	if err != nil {
+		t.Fatalf("maybeRunLeafGenerationLogicalRebuildMaintenance: %v", err)
+	}
+	if !attempted || !ran {
+		t.Fatalf("attempted=%t ran=%t want true/true", attempted, ran)
+	}
+	opts, calls, hasDeadline, _ := recorder.recordedLeafLogicalRebuild()
+	if calls != 1 {
+		t.Fatalf("logical rebuild calls=%d want 1", calls)
+	}
+	if !hasDeadline {
+		t.Fatal("expected logical rebuild maintenance deadline")
+	}
+	if opts.ClusterFilesMax != leafGenerationLogicalRebuildMaintenanceDefaultClusterFilesMax {
+		t.Fatalf("ClusterFilesMax=%d want %d", opts.ClusterFilesMax, leafGenerationLogicalRebuildMaintenanceDefaultClusterFilesMax)
+	}
+	if opts.CandidateTryMax != leafGenerationLogicalRebuildMaintenanceDefaultCandidateTryMax {
+		t.Fatalf("CandidateTryMax=%d want %d", opts.CandidateTryMax, leafGenerationLogicalRebuildMaintenanceDefaultCandidateTryMax)
+	}
+	if opts.PilotSamplePages != leafGenerationLogicalRebuildMaintenanceDefaultPilotSamplePages {
+		t.Fatalf("PilotSamplePages=%d want %d", opts.PilotSamplePages, leafGenerationLogicalRebuildMaintenanceDefaultPilotSamplePages)
+	}
+	if got := db.vlogGenerationLeafLogicalRebuildRuns.Load(); got != 1 {
+		t.Fatalf("logical rebuild runs=%d want 1", got)
+	}
+	if got := db.vlogGenerationLeafLogicalRebuildCampaignMaxPublishedCommit.Load(); got != 3118 {
+		t.Fatalf("campaign max published commit seq=%d want 3118", got)
+	}
+	if got := db.vlogGenerationLeafLogicalRebuildLeafGCDeletedBytes.Load(); got != 4096 {
+		t.Fatalf("logical rebuild leaf gc deleted bytes=%d want 4096", got)
+	}
+}
+
 func TestLeafGenerationPackMaintenance_PassesReserveRIDs(t *testing.T) {
 	t.Setenv(envEnableLeafGenerationPackMaintenance, "1")
 	recorder := &leafPackMaintenanceRecordingBackend{
@@ -2249,6 +2359,60 @@ func TestVlogGenerationMaintenance_PeriodicPassRunsLeafPackWhenEnabled(t *testin
 	}
 	if got := db.vlogGenerationLeafPackRuns.Load(); got != 1 {
 		t.Fatalf("leaf pack runs=%d want 1", got)
+	}
+}
+
+func TestVlogGenerationMaintenance_PeriodicPassRunsLeafLogicalRebuildWhenEnabled(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+	t.Setenv(envEnableLeafGenerationLogicalRebuildMaintenance, "1")
+	recorder := &leafPackMaintenanceRecordingBackend{
+		DB: mustOpenLeafPackBackend(t),
+		logicalResp: backenddb.LeafGenerationLogicalRebuildRunOnceStats{
+			CommitSeqBefore:      3118,
+			SelectedGenerationID: 55,
+			SelectedRawFileID:    144,
+			SelectedSourceFiles:  2,
+			SelectedRunCount:     3,
+			SourceLeafPages:      80,
+			SourceLeafBytes:      32768,
+			ReplacementLeafPages: 60,
+			BytesCopied:          12345,
+			CandidateAttempts:    1,
+			CreatedFileIDs:       []uint32{3001},
+			RetiredGenerationIDs: []uint64{55},
+			WallTimeNanos:        (14 * time.Millisecond).Nanoseconds(),
+		},
+		leafGCResp: backenddb.LeafGenerationGCStats{GenerationsEligible: 1, GenerationsDeleted: 1, FilesDeleted: 1, BytesDeleted: 2048},
+	}
+	db, cleanup := openLeafPackMaintenanceTestDB(t, recorder)
+	defer cleanup()
+
+	db.maybeRunVlogGenerationMaintenanceWithOptions(false, vlogGenerationMaintenanceOptions{})
+
+	opts, calls, hasDeadline, deadline := recorder.recordedLeafLogicalRebuild()
+	if calls != 1 {
+		t.Fatalf("logical rebuild calls=%d want 1", calls)
+	}
+	if opts.ClusterFilesMax != leafGenerationLogicalRebuildMaintenanceDefaultClusterFilesMax {
+		t.Fatalf("ClusterFilesMax=%d want %d", opts.ClusterFilesMax, leafGenerationLogicalRebuildMaintenanceDefaultClusterFilesMax)
+	}
+	if opts.CandidateTryMax != leafGenerationLogicalRebuildMaintenanceDefaultCandidateTryMax {
+		t.Fatalf("CandidateTryMax=%d want %d", opts.CandidateTryMax, leafGenerationLogicalRebuildMaintenanceDefaultCandidateTryMax)
+	}
+	if !hasDeadline {
+		t.Fatal("expected logical rebuild maintenance context deadline to be set")
+	}
+	if ttl := time.Until(deadline); ttl < 40*time.Second || ttl > 46*time.Second {
+		t.Fatalf("deadline ttl=%s want around 45s", ttl)
+	}
+	if got := db.vlogGenerationMaintenancePassWithLeafLogicalRebuild.Load(); got != 1 {
+		t.Fatalf("maintenance leaf logical rebuild passes=%d want 1", got)
+	}
+	if got := db.vlogGenerationLeafLogicalRebuildRuns.Load(); got != 1 {
+		t.Fatalf("leaf logical rebuild runs=%d want 1", got)
+	}
+	if got := db.vlogGenerationLeafLogicalRebuildCampaignMaxPublishedCommit.Load(); got != 3118 {
+		t.Fatalf("campaign max published commit seq=%d want 3118", got)
 	}
 }
 

@@ -1905,6 +1905,13 @@ const (
 	envLeafGenerationPackMaintenanceWriteBurstGraceMillis      = "TREEDB_LEAF_GENERATION_PACK_MAINTENANCE_WRITE_BURST_GRACE_MS"
 	envLeafGenerationPackMaintenanceMaxForegroundQueue         = "TREEDB_LEAF_GENERATION_PACK_MAINTENANCE_MAX_FOREGROUND_QUEUE"
 	envLeafGenerationPackMaintenanceMinReclaimPerByteCopiedPPM = "TREEDB_LEAF_GENERATION_PACK_MAINTENANCE_MIN_RECLAIM_PER_BYTE_COPIED_PPM"
+	// Experimental online logical outer-leaf rebuild hook. Disabled by default
+	// until live dwell behavior is validated.
+	envEnableLeafGenerationLogicalRebuildMaintenance           = "TREEDB_ENABLE_LEAF_GENERATION_LOGICAL_REBUILD_MAINTENANCE"
+	envLeafGenerationLogicalRebuildMaintenanceClusterFilesMax  = "TREEDB_LEAF_GENERATION_LOGICAL_REBUILD_MAINTENANCE_CLUSTER_FILES_MAX"
+	envLeafGenerationLogicalRebuildMaintenanceCandidateTryMax  = "TREEDB_LEAF_GENERATION_LOGICAL_REBUILD_MAINTENANCE_CANDIDATE_TRY_MAX"
+	envLeafGenerationLogicalRebuildMaintenancePilotSamplePages = "TREEDB_LEAF_GENERATION_LOGICAL_REBUILD_MAINTENANCE_PILOT_SAMPLE_PAGES"
+	envLeafGenerationLogicalRebuildMaintenanceTimeoutSeconds   = "TREEDB_LEAF_GENERATION_LOGICAL_REBUILD_MAINTENANCE_TIMEOUT_SECONDS"
 	// Optional rewrite debt-drain caps for controlled online experiments.
 	envVlogGenerationRewriteResumeMaxSegments         = "TREEDB_VLOG_GENERATION_REWRITE_RESUME_MAX_SEGMENTS"
 	envVlogGenerationRewriteDebtDrainMaxSegments      = "TREEDB_VLOG_GENERATION_REWRITE_DEBT_DRAIN_MAX_SEGMENTS"
@@ -1935,6 +1942,10 @@ const (
 	leafGenerationPackMaintenanceDefaultWriteBurstGrace            = 250 * time.Millisecond
 	leafGenerationPackMaintenanceDefaultMaxForegroundQueue         = 2
 	leafGenerationPackMaintenanceDefaultMinReclaimPerByteCopiedPPM = 250000
+	leafGenerationLogicalRebuildMaintenanceDefaultClusterFilesMax  = 8
+	leafGenerationLogicalRebuildMaintenanceDefaultCandidateTryMax  = 4
+	leafGenerationLogicalRebuildMaintenanceDefaultPilotSamplePages = 192
+	leafGenerationLogicalRebuildMaintenanceDefaultTimeout          = 45 * time.Second
 	maxMemtablePrealloc                                            = 256 << 20
 	appendOnlyEntryHintMinEntries                                  = 128
 	appendOnlyEntryHintMaxEntries                                  = 1 << 20
@@ -5799,6 +5810,10 @@ type backendLeafGenerationPackRunner interface {
 	LeafGenerationPackRunOnce(ctx context.Context, opts backenddb.LeafGenerationPackFromPlanOptions) (backenddb.LeafGenerationPackRunOnceStats, error)
 }
 
+type backendLeafGenerationLogicalRebuildRunner interface {
+	LeafGenerationLogicalRebuildRunOnce(ctx context.Context, opts backenddb.LeafGenerationLogicalRebuildRunOnceOptions) (backenddb.LeafGenerationLogicalRebuildRunOnceStats, error)
+}
+
 type backendLeafGenerationGCRunner interface {
 	LeafGenerationGC(ctx context.Context, opts backenddb.LeafGenerationGCOptions) (backenddb.LeafGenerationGCStats, error)
 }
@@ -6610,12 +6625,55 @@ type DB struct {
 	vlogGenerationMaintenancePassNoop                            atomic.Uint64
 	vlogGenerationMaintenancePassWithRewrite                     atomic.Uint64
 	vlogGenerationMaintenancePassWithGC                          atomic.Uint64
+	vlogGenerationMaintenancePassWithLeafLogicalRebuild          atomic.Uint64
 	vlogGenerationMaintenancePassWithLeafPack                    atomic.Uint64
 	vlogGenerationMaintenanceAcquiredBySource                    [vlogGenerationMaintenanceSourceCount]atomic.Uint64
 	vlogGenerationMaintenancePassNoopBySource                    [vlogGenerationMaintenanceSourceCount]atomic.Uint64
 	vlogGenerationMaintenancePassWithRewriteBySource             [vlogGenerationMaintenanceSourceCount]atomic.Uint64
 	vlogGenerationMaintenancePassWithGCBySource                  [vlogGenerationMaintenanceSourceCount]atomic.Uint64
+	vlogGenerationMaintenancePassWithLeafLogicalRebuildBySource  [vlogGenerationMaintenanceSourceCount]atomic.Uint64
 	vlogGenerationMaintenancePassWithLeafPackBySource            [vlogGenerationMaintenanceSourceCount]atomic.Uint64
+	vlogGenerationLeafLogicalRebuildAttempts                     atomic.Uint64
+	vlogGenerationLeafLogicalRebuildAdmitted                     atomic.Uint64
+	vlogGenerationLeafLogicalRebuildRuns                         atomic.Uint64
+	vlogGenerationLeafLogicalRebuildSkips                        atomic.Uint64
+	vlogGenerationLeafLogicalRebuildSkipMinInterval              atomic.Uint64
+	vlogGenerationLeafLogicalRebuildSkipWriteBurst               atomic.Uint64
+	vlogGenerationLeafLogicalRebuildSkipQueuePressure            atomic.Uint64
+	vlogGenerationLeafLogicalRebuildSkipForegroundIterators      atomic.Uint64
+	vlogGenerationLeafLogicalRebuildErrors                       atomic.Uint64
+	vlogGenerationLeafLogicalRebuildCanceled                     atomic.Uint64
+	vlogGenerationLeafLogicalRebuildDeadline                     atomic.Uint64
+	vlogGenerationLeafLogicalRebuildCampaignMaxPublishedCommit   atomic.Uint64
+	vlogGenerationLeafLogicalRebuildBytesCopied                  atomic.Uint64
+	vlogGenerationLeafLogicalRebuildSourceLeafBytes              atomic.Uint64
+	vlogGenerationLeafLogicalRebuildLeafGCDeletedBytes           atomic.Uint64
+	vlogGenerationLeafLogicalRebuildSelectionRuns                atomic.Uint64
+	vlogGenerationLeafLogicalRebuildSelectionSourceFiles         atomic.Uint64
+	vlogGenerationLeafLogicalRebuildSelectionSourcePages         atomic.Uint64
+	vlogGenerationLeafLogicalRebuildSelectionReplacementPages    atomic.Uint64
+	vlogGenerationLeafLogicalRebuildSelectionCandidateAttempts   atomic.Uint64
+	vlogGenerationLeafLogicalRebuildSelectionCatchupPasses       atomic.Uint64
+	vlogGenerationLeafLogicalRebuildSelectionCatchupKeys         atomic.Uint64
+	vlogGenerationLeafLogicalRebuildSelectionCutoverKeys         atomic.Uint64
+	vlogGenerationLeafLogicalRebuildLastWallNanos                atomic.Uint64
+	vlogGenerationLeafLogicalRebuildLastBytesCopied              atomic.Int64
+	vlogGenerationLeafLogicalRebuildLastSourceLeafBytes          atomic.Int64
+	vlogGenerationLeafLogicalRebuildLastLeafGCDeletedBytes       atomic.Int64
+	vlogGenerationLeafLogicalRebuildLastSelectionRuns            atomic.Int64
+	vlogGenerationLeafLogicalRebuildLastSelectionSourceFiles     atomic.Int64
+	vlogGenerationLeafLogicalRebuildLastSelectionSourcePages     atomic.Int64
+	vlogGenerationLeafLogicalRebuildLastReplacementPages         atomic.Int64
+	vlogGenerationLeafLogicalRebuildLastCandidateAttempts        atomic.Int64
+	vlogGenerationLeafLogicalRebuildLastCatchupPasses            atomic.Int64
+	vlogGenerationLeafLogicalRebuildLastCatchupKeys              atomic.Int64
+	vlogGenerationLeafLogicalRebuildLastCutoverKeys              atomic.Int64
+	vlogGenerationLeafLogicalRebuildLastSelectedRawFileID        atomic.Uint64
+	vlogGenerationLeafLogicalRebuildLastSelectedGenerationID     atomic.Uint64
+	vlogGenerationLeafLogicalRebuildLastUnixNano                 atomic.Int64
+	vlogGenerationLeafLogicalRebuildCanceledLastNS               atomic.Int64
+	vlogGenerationLeafLogicalRebuildDeadlineLastNS               atomic.Int64
+	vlogGenerationLeafLogicalRebuildLastSkipReason               atomic.Value // string
 	vlogGenerationLeafPackAttempts                               atomic.Uint64
 	vlogGenerationLeafPackAdmitted                               atomic.Uint64
 	vlogGenerationLeafPackRuns                                   atomic.Uint64
@@ -6856,6 +6914,7 @@ const (
 	vlogGenerationReasonPeriodicGC
 	vlogGenerationReasonPostRewriteVacuum
 	vlogGenerationReasonRewriteResume
+	vlogGenerationReasonLeafLogicalRebuild
 	vlogGenerationReasonLeafPack
 )
 
@@ -6864,6 +6923,7 @@ const (
 	vlogGenerationGCEvery                    = 5
 	vlogGenerationGCMinBytes                 = int64(1 << 20)
 	vlogGenerationRewriteMinInterval         = 30 * time.Second
+	leafGenerationLogicalRebuildMinInterval  = 30 * time.Second
 	leafGenerationPackMaintenanceMinInterval = 30 * time.Second
 	// Rewrite staging uses a two-pass confirm flow: the first pass stages a plan,
 	// then a later pass re-plans and executes only if a stable subset persists.
@@ -9797,6 +9857,8 @@ func vlogGenerationReasonString(v uint32) string {
 		return "post_rewrite_vacuum"
 	case vlogGenerationReasonRewriteResume:
 		return "rewrite_resume"
+	case vlogGenerationReasonLeafLogicalRebuild:
+		return "leaf_logical_rebuild"
 	case vlogGenerationReasonLeafPack:
 		return "leaf_pack"
 	default:
@@ -14832,10 +14894,43 @@ func (db *DB) observeVlogGenerationLeafPackAdmissionSkip(reason string) {
 	db.storeVlogGenerationLeafPackLastSkipReason(reason)
 }
 
+func (db *DB) storeVlogGenerationLeafLogicalRebuildLastSkipReason(reason string) {
+	if db == nil {
+		return
+	}
+	db.vlogGenerationLeafLogicalRebuildLastSkipReason.Store(reason)
+}
+
+func (db *DB) observeVlogGenerationLeafLogicalRebuildAdmissionSkip(reason string) {
+	if db == nil || reason == "" {
+		return
+	}
+	if !envBool(envEnableLeafGenerationLogicalRebuildMaintenance) || !db.indexOuterLeavesInValueLog {
+		return
+	}
+	switch reason {
+	case "write_burst":
+		db.vlogGenerationLeafLogicalRebuildSkipWriteBurst.Add(1)
+	case "queue_pressure":
+		db.vlogGenerationLeafLogicalRebuildSkipQueuePressure.Add(1)
+	case "foreground_iterators":
+		db.vlogGenerationLeafLogicalRebuildSkipForegroundIterators.Add(1)
+	}
+	db.storeVlogGenerationLeafLogicalRebuildLastSkipReason(reason)
+}
+
 func leafGenerationPackMaintenanceTimeout() time.Duration {
 	timeoutSeconds := envUint64(envLeafGenerationPackMaintenanceTimeoutSeconds, uint64(leafGenerationPackMaintenanceDefaultTimeout/time.Second))
 	if timeoutSeconds == 0 {
 		return leafGenerationPackMaintenanceDefaultTimeout
+	}
+	return time.Duration(timeoutSeconds) * time.Second
+}
+
+func leafGenerationLogicalRebuildMaintenanceTimeout() time.Duration {
+	timeoutSeconds := envUint64(envLeafGenerationLogicalRebuildMaintenanceTimeoutSeconds, uint64(leafGenerationLogicalRebuildMaintenanceDefaultTimeout/time.Second))
+	if timeoutSeconds == 0 {
+		return leafGenerationLogicalRebuildMaintenanceDefaultTimeout
 	}
 	return time.Duration(timeoutSeconds) * time.Second
 }
@@ -14856,6 +14951,24 @@ func (db *DB) observeVlogGenerationLeafPackDeadline() {
 	db.vlogGenerationLeafPackDeadline.Add(1)
 	db.vlogGenerationLeafPackDeadlineLastNS.Store(time.Now().UnixNano())
 	db.storeVlogGenerationLeafPackLastSkipReason("deadline_exceeded")
+}
+
+func (db *DB) observeVlogGenerationLeafLogicalRebuildCanceled() {
+	if db == nil {
+		return
+	}
+	db.vlogGenerationLeafLogicalRebuildCanceled.Add(1)
+	db.vlogGenerationLeafLogicalRebuildCanceledLastNS.Store(time.Now().UnixNano())
+	db.storeVlogGenerationLeafLogicalRebuildLastSkipReason("context_canceled")
+}
+
+func (db *DB) observeVlogGenerationLeafLogicalRebuildDeadline() {
+	if db == nil {
+		return
+	}
+	db.vlogGenerationLeafLogicalRebuildDeadline.Add(1)
+	db.vlogGenerationLeafLogicalRebuildDeadlineLastNS.Store(time.Now().UnixNano())
+	db.storeVlogGenerationLeafLogicalRebuildLastSkipReason("deadline_exceeded")
 }
 
 func (db *DB) vlogGenerationRewritePlanBackoffActive(now time.Time) bool {
@@ -15828,9 +15941,11 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 	db.vlogGenerationMaintenanceAcquired.Add(1)
 	rewriteRunsBefore := db.vlogGenerationRewriteRuns.Load()
 	gcRunsBefore := db.vlogGenerationGCRuns.Load()
+	leafLogicalRebuildRunsBefore := db.vlogGenerationLeafLogicalRebuildRuns.Load()
 	leafPackRunsBefore := db.vlogGenerationLeafPackRuns.Load()
 	rewriteAttempted := false
 	gcAttempted := false
+	leafLogicalRebuildAttempted := false
 	leafPackAttempted := false
 	activeSource := vlogGenerationMaintenanceDebugSource(opts)
 	activeSourceIdx := vlogGenerationMaintenanceSourceIndex(activeSource)
@@ -15861,9 +15976,11 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 		db.observeVlogGenerationMaintenancePassDuration(passDur)
 		rewriteRan := db.vlogGenerationRewriteRuns.Load() > rewriteRunsBefore
 		gcRan := db.vlogGenerationGCRuns.Load() > gcRunsBefore
+		leafLogicalRebuildRan := db.vlogGenerationLeafLogicalRebuildRuns.Load() > leafLogicalRebuildRunsBefore
 		leafPackRan := db.vlogGenerationLeafPackRuns.Load() > leafPackRunsBefore
 		rewritePass := rewriteRan || rewriteAttempted
 		gcPass := gcRan || gcAttempted
+		leafLogicalRebuildPass := leafLogicalRebuildRan || leafLogicalRebuildAttempted
 		leafPackPass := leafPackRan || leafPackAttempted
 		if rewritePass {
 			db.vlogGenerationMaintenancePassWithRewrite.Add(1)
@@ -15873,11 +15990,15 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 			db.vlogGenerationMaintenancePassWithGC.Add(1)
 			db.vlogGenerationMaintenancePassWithGCBySource[activeSourceIdx].Add(1)
 		}
+		if leafLogicalRebuildPass {
+			db.vlogGenerationMaintenancePassWithLeafLogicalRebuild.Add(1)
+			db.vlogGenerationMaintenancePassWithLeafLogicalRebuildBySource[activeSourceIdx].Add(1)
+		}
 		if leafPackPass {
 			db.vlogGenerationMaintenancePassWithLeafPack.Add(1)
 			db.vlogGenerationMaintenancePassWithLeafPackBySource[activeSourceIdx].Add(1)
 		}
-		if !rewritePass && !gcPass && !leafPackPass {
+		if !rewritePass && !gcPass && !leafLogicalRebuildPass && !leafPackPass {
 			db.vlogGenerationMaintenancePassNoop.Add(1)
 			db.vlogGenerationMaintenancePassNoopBySource[activeSourceIdx].Add(1)
 		}
@@ -17630,6 +17751,31 @@ planned:
 		return
 	}
 	if leafPackRan {
+		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
+		return
+	}
+
+	leafLogicalRebuildAttempted, leafLogicalRebuildRan, err := db.maybeRunLeafGenerationLogicalRebuildMaintenance(runGC, quiet, leafPackAdmission, opts)
+	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			db.observeVlogGenerationLeafLogicalRebuildCanceled()
+			db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
+			return
+		}
+		if errors.Is(err, context.DeadlineExceeded) {
+			db.observeVlogGenerationLeafLogicalRebuildDeadline()
+			db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
+			return
+		}
+		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
+		db.vlogGenerationLeafLogicalRebuildErrors.Add(1)
+		db.storeVlogGenerationLeafLogicalRebuildLastSkipReason("error")
+		if db.notifyError != nil {
+			db.notifyError(fmt.Errorf("cachingdb: %w", err))
+		}
+		return
+	}
+	if leafLogicalRebuildRan {
 		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
 		return
 	}
@@ -23003,6 +23149,171 @@ func (db *DB) maybeRunLeafGenerationPackMaintenance(runGC bool, quiet bool, admi
 	return attempted, false, nil
 }
 
+func (db *DB) maybeRunLeafGenerationLogicalRebuildMaintenance(runGC bool, quiet bool, admission leafGenerationPackMaintenanceAdmission, opts vlogGenerationMaintenanceOptions) (attempted bool, ran bool, err error) {
+	if db == nil || db.closing.Load() {
+		return false, false, nil
+	}
+	if !envBool(envEnableLeafGenerationLogicalRebuildMaintenance) {
+		return false, false, nil
+	}
+	if !db.indexOuterLeavesInValueLog {
+		return false, false, nil
+	}
+	if runGC || opts.bypassQuiet {
+		return false, false, nil
+	}
+	if !quiet && !admission.allowed {
+		db.observeVlogGenerationLeafLogicalRebuildAdmissionSkip(admission.reason)
+		return false, false, nil
+	}
+	runner, ok := db.backend.(backendLeafGenerationLogicalRebuildRunner)
+	if !ok {
+		return false, false, nil
+	}
+	gcRunner, _ := db.backend.(backendLeafGenerationGCRunner)
+	lastRunNS := db.vlogGenerationLeafLogicalRebuildLastUnixNano.Load()
+	if lastRunNS > 0 {
+		if since := time.Since(time.Unix(0, lastRunNS)); since >= 0 && since < leafGenerationLogicalRebuildMinInterval {
+			db.vlogGenerationLeafLogicalRebuildSkipMinInterval.Add(1)
+			db.storeVlogGenerationLeafLogicalRebuildLastSkipReason("min_interval")
+			return false, false, nil
+		}
+	}
+
+	clusterFilesMax := loadPositiveIntEnvDefault(envLeafGenerationLogicalRebuildMaintenanceClusterFilesMax, leafGenerationLogicalRebuildMaintenanceDefaultClusterFilesMax)
+	candidateTryMax := loadPositiveIntEnvDefault(envLeafGenerationLogicalRebuildMaintenanceCandidateTryMax, leafGenerationLogicalRebuildMaintenanceDefaultCandidateTryMax)
+	pilotSamplePages := loadPositiveIntEnvDefault(envLeafGenerationLogicalRebuildMaintenancePilotSamplePages, leafGenerationLogicalRebuildMaintenanceDefaultPilotSamplePages)
+	timeout := leafGenerationLogicalRebuildMaintenanceTimeout()
+
+	db.vlogGenerationLeafLogicalRebuildAttempts.Add(1)
+	db.vlogGenerationLeafLogicalRebuildAdmitted.Add(1)
+	attempted = true
+	db.vlogGenerationLastReason.Store(vlogGenerationReasonLeafLogicalRebuild)
+	db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerRunning)
+
+	err = db.runWithBackendMaintenanceOptions(backendMaintenanceOptions{
+		skipCheckpoint:        opts.skipCheckpoint,
+		skipRetainedPruneWait: opts.skipRetainedPruneWait,
+	}, func() error {
+		ctx, cancel := db.leafGenerationPackMaintenanceContext(timeout)
+		defer cancel()
+
+		runOpts := backenddb.LeafGenerationLogicalRebuildRunOnceOptions{
+			MaxPublishedCommitSeq: db.vlogGenerationLeafLogicalRebuildCampaignMaxPublishedCommit.Load(),
+			ClusterFilesMax:       clusterFilesMax,
+			CandidateTryMax:       candidateTryMax,
+			PilotSamplePages:      pilotSamplePages,
+			Sync:                  false,
+		}
+		stats, runErr := runner.LeafGenerationLogicalRebuildRunOnce(ctx, runOpts)
+		if runErr != nil {
+			if errors.Is(runErr, backenddb.ErrLeafGenerationLogicalRebuildNoCandidate) {
+				db.storeVlogGenerationLeafLogicalRebuildLastSkipReason("no_candidate")
+				return nil
+			}
+			return runErr
+		}
+		if stats.CommitSeqBefore > 0 {
+			db.vlogGenerationLeafLogicalRebuildCampaignMaxPublishedCommit.CompareAndSwap(0, stats.CommitSeqBefore)
+		}
+		if len(stats.RetiredGenerationIDs) == 0 || len(stats.CreatedFileIDs) == 0 {
+			db.storeVlogGenerationLeafLogicalRebuildLastSkipReason("no_publish")
+			return nil
+		}
+
+		ran = true
+		db.vlogGenerationLeafLogicalRebuildRuns.Add(1)
+		if stats.BytesCopied > 0 {
+			db.vlogGenerationLeafLogicalRebuildBytesCopied.Add(uint64(stats.BytesCopied))
+		}
+		if stats.SourceLeafBytes > 0 {
+			db.vlogGenerationLeafLogicalRebuildSourceLeafBytes.Add(uint64(stats.SourceLeafBytes))
+		}
+		if stats.SelectedRunCount > 0 {
+			db.vlogGenerationLeafLogicalRebuildSelectionRuns.Add(uint64(stats.SelectedRunCount))
+		}
+		if stats.SelectedSourceFiles > 0 {
+			db.vlogGenerationLeafLogicalRebuildSelectionSourceFiles.Add(uint64(stats.SelectedSourceFiles))
+		}
+		if stats.SourceLeafPages > 0 {
+			db.vlogGenerationLeafLogicalRebuildSelectionSourcePages.Add(uint64(stats.SourceLeafPages))
+		}
+		if stats.ReplacementLeafPages > 0 {
+			db.vlogGenerationLeafLogicalRebuildSelectionReplacementPages.Add(uint64(stats.ReplacementLeafPages))
+		}
+		if stats.CandidateAttempts > 0 {
+			db.vlogGenerationLeafLogicalRebuildSelectionCandidateAttempts.Add(uint64(stats.CandidateAttempts))
+		}
+		if stats.CatchupPasses > 0 {
+			db.vlogGenerationLeafLogicalRebuildSelectionCatchupPasses.Add(uint64(stats.CatchupPasses))
+		}
+		if stats.CatchupKeys > 0 {
+			db.vlogGenerationLeafLogicalRebuildSelectionCatchupKeys.Add(uint64(stats.CatchupKeys))
+		}
+		if stats.FinalCutoverKeys > 0 {
+			db.vlogGenerationLeafLogicalRebuildSelectionCutoverKeys.Add(uint64(stats.FinalCutoverKeys))
+		}
+		lastWallNanos := stats.WallTimeNanos
+		if lastWallNanos < 0 {
+			lastWallNanos = 0
+		}
+		db.vlogGenerationLeafLogicalRebuildLastWallNanos.Store(uint64(lastWallNanos))
+		db.vlogGenerationLeafLogicalRebuildLastBytesCopied.Store(stats.BytesCopied)
+		db.vlogGenerationLeafLogicalRebuildLastSourceLeafBytes.Store(stats.SourceLeafBytes)
+		db.vlogGenerationLeafLogicalRebuildLastSelectionRuns.Store(int64(stats.SelectedRunCount))
+		db.vlogGenerationLeafLogicalRebuildLastSelectionSourceFiles.Store(int64(stats.SelectedSourceFiles))
+		db.vlogGenerationLeafLogicalRebuildLastSelectionSourcePages.Store(int64(stats.SourceLeafPages))
+		db.vlogGenerationLeafLogicalRebuildLastReplacementPages.Store(int64(stats.ReplacementLeafPages))
+		db.vlogGenerationLeafLogicalRebuildLastCandidateAttempts.Store(int64(stats.CandidateAttempts))
+		db.vlogGenerationLeafLogicalRebuildLastCatchupPasses.Store(int64(stats.CatchupPasses))
+		db.vlogGenerationLeafLogicalRebuildLastCatchupKeys.Store(int64(stats.CatchupKeys))
+		db.vlogGenerationLeafLogicalRebuildLastCutoverKeys.Store(int64(stats.FinalCutoverKeys))
+		db.vlogGenerationLeafLogicalRebuildLastSelectedRawFileID.Store(uint64(stats.SelectedRawFileID))
+		db.vlogGenerationLeafLogicalRebuildLastSelectedGenerationID.Store(stats.SelectedGenerationID)
+		db.vlogGenerationLeafLogicalRebuildLastUnixNano.Store(time.Now().UnixNano())
+		db.storeVlogGenerationLeafLogicalRebuildLastSkipReason("")
+
+		if gcRunner != nil {
+			gcStats, gcErr := gcRunner.LeafGenerationGC(ctx, backenddb.LeafGenerationGCOptions{})
+			if gcErr != nil {
+				return gcErr
+			}
+			if gcStats.BytesDeleted > 0 {
+				db.vlogGenerationLeafLogicalRebuildLeafGCDeletedBytes.Add(uint64(gcStats.BytesDeleted))
+			}
+			db.vlogGenerationLeafLogicalRebuildLastLeafGCDeletedBytes.Store(gcStats.BytesDeleted)
+		}
+
+		db.debugVlogMaintf(
+			"leaf_logical_rebuild_done generation=%d raw_file=%d source_files=%d runs=%d source_pages=%d replacement_pages=%d source_bytes=%d bytes_copied=%d catchup_passes=%d cutover_keys=%d campaign_max_published=%d wall_ms=%.3f",
+			stats.SelectedGenerationID,
+			stats.SelectedRawFileID,
+			stats.SelectedSourceFiles,
+			stats.SelectedRunCount,
+			stats.SourceLeafPages,
+			stats.ReplacementLeafPages,
+			stats.SourceLeafBytes,
+			stats.BytesCopied,
+			stats.CatchupPasses,
+			stats.FinalCutoverKeys,
+			db.vlogGenerationLeafLogicalRebuildCampaignMaxPublishedCommit.Load(),
+			float64(lastWallNanos)/float64(time.Millisecond),
+		)
+		return nil
+	})
+	if err != nil {
+		return attempted, false, fmt.Errorf("leaf generation logical rebuild maintenance: %w", err)
+	}
+
+	if ran {
+		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
+		return attempted, true, nil
+	}
+	db.vlogGenerationLeafLogicalRebuildSkips.Add(1)
+	db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
+	return attempted, false, nil
+}
+
 func (db *DB) Stats() map[string]string {
 	stats := db.backend.Stats()
 	if stats == nil {
@@ -24134,6 +24445,7 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_generation.maintenance.passes.noop"] = fmt.Sprintf("%d", db.vlogGenerationMaintenancePassNoop.Load())
 	stats["treedb.cache.vlog_generation.maintenance.passes.with_rewrite"] = fmt.Sprintf("%d", db.vlogGenerationMaintenancePassWithRewrite.Load())
 	stats["treedb.cache.vlog_generation.maintenance.passes.with_gc"] = fmt.Sprintf("%d", db.vlogGenerationMaintenancePassWithGC.Load())
+	stats["treedb.cache.vlog_generation.maintenance.passes.with_leaf_logical_rebuild"] = fmt.Sprintf("%d", db.vlogGenerationMaintenancePassWithLeafLogicalRebuild.Load())
 	stats["treedb.cache.vlog_generation.maintenance.passes.with_leaf_pack"] = fmt.Sprintf("%d", db.vlogGenerationMaintenancePassWithLeafPack.Load())
 	for sourceIdx := 0; sourceIdx < vlogGenerationMaintenanceSourceCount; sourceIdx++ {
 		source := vlogGenerationMaintenanceSourceLabel(sourceIdx)
@@ -24153,11 +24465,56 @@ func (db *DB) Stats() map[string]string {
 			"%d",
 			db.vlogGenerationMaintenancePassWithGCBySource[sourceIdx].Load(),
 		)
+		stats["treedb.cache.vlog_generation.maintenance.passes.with_leaf_logical_rebuild.source."+source] = fmt.Sprintf(
+			"%d",
+			db.vlogGenerationMaintenancePassWithLeafLogicalRebuildBySource[sourceIdx].Load(),
+		)
 		stats["treedb.cache.vlog_generation.maintenance.passes.with_leaf_pack.source."+source] = fmt.Sprintf(
 			"%d",
 			db.vlogGenerationMaintenancePassWithLeafPackBySource[sourceIdx].Load(),
 		)
 	}
+	stats["treedb.cache.vlog_generation.leaf_logical_rebuild.attempts"] = fmt.Sprintf("%d", db.vlogGenerationLeafLogicalRebuildAttempts.Load())
+	stats["treedb.cache.vlog_generation.leaf_logical_rebuild.admitted"] = fmt.Sprintf("%d", db.vlogGenerationLeafLogicalRebuildAdmitted.Load())
+	stats["treedb.cache.vlog_generation.leaf_logical_rebuild.runs"] = fmt.Sprintf("%d", db.vlogGenerationLeafLogicalRebuildRuns.Load())
+	stats["treedb.cache.vlog_generation.leaf_logical_rebuild.skips"] = fmt.Sprintf("%d", db.vlogGenerationLeafLogicalRebuildSkips.Load())
+	stats["treedb.cache.vlog_generation.leaf_logical_rebuild.skip.min_interval"] = fmt.Sprintf("%d", db.vlogGenerationLeafLogicalRebuildSkipMinInterval.Load())
+	stats["treedb.cache.vlog_generation.leaf_logical_rebuild.skip.write_burst"] = fmt.Sprintf("%d", db.vlogGenerationLeafLogicalRebuildSkipWriteBurst.Load())
+	stats["treedb.cache.vlog_generation.leaf_logical_rebuild.skip.queue_pressure"] = fmt.Sprintf("%d", db.vlogGenerationLeafLogicalRebuildSkipQueuePressure.Load())
+	stats["treedb.cache.vlog_generation.leaf_logical_rebuild.skip.foreground_iterators"] = fmt.Sprintf("%d", db.vlogGenerationLeafLogicalRebuildSkipForegroundIterators.Load())
+	stats["treedb.cache.vlog_generation.leaf_logical_rebuild.errors"] = fmt.Sprintf("%d", db.vlogGenerationLeafLogicalRebuildErrors.Load())
+	stats["treedb.cache.vlog_generation.leaf_logical_rebuild.canceled"] = fmt.Sprintf("%d", db.vlogGenerationLeafLogicalRebuildCanceled.Load())
+	stats["treedb.cache.vlog_generation.leaf_logical_rebuild.deadline"] = fmt.Sprintf("%d", db.vlogGenerationLeafLogicalRebuildDeadline.Load())
+	stats["treedb.cache.vlog_generation.leaf_logical_rebuild.campaign_max_published_commit_seq"] = fmt.Sprintf("%d", db.vlogGenerationLeafLogicalRebuildCampaignMaxPublishedCommit.Load())
+	stats["treedb.cache.vlog_generation.leaf_logical_rebuild.bytes_copied"] = fmt.Sprintf("%d", db.vlogGenerationLeafLogicalRebuildBytesCopied.Load())
+	stats["treedb.cache.vlog_generation.leaf_logical_rebuild.source_leaf_bytes"] = fmt.Sprintf("%d", db.vlogGenerationLeafLogicalRebuildSourceLeafBytes.Load())
+	stats["treedb.cache.vlog_generation.leaf_logical_rebuild.gc.deleted_bytes"] = fmt.Sprintf("%d", db.vlogGenerationLeafLogicalRebuildLeafGCDeletedBytes.Load())
+	stats["treedb.cache.vlog_generation.leaf_logical_rebuild.selection.runs"] = fmt.Sprintf("%d", db.vlogGenerationLeafLogicalRebuildSelectionRuns.Load())
+	stats["treedb.cache.vlog_generation.leaf_logical_rebuild.selection.source_files"] = fmt.Sprintf("%d", db.vlogGenerationLeafLogicalRebuildSelectionSourceFiles.Load())
+	stats["treedb.cache.vlog_generation.leaf_logical_rebuild.selection.source_pages"] = fmt.Sprintf("%d", db.vlogGenerationLeafLogicalRebuildSelectionSourcePages.Load())
+	stats["treedb.cache.vlog_generation.leaf_logical_rebuild.selection.replacement_pages"] = fmt.Sprintf("%d", db.vlogGenerationLeafLogicalRebuildSelectionReplacementPages.Load())
+	stats["treedb.cache.vlog_generation.leaf_logical_rebuild.selection.candidate_attempts"] = fmt.Sprintf("%d", db.vlogGenerationLeafLogicalRebuildSelectionCandidateAttempts.Load())
+	stats["treedb.cache.vlog_generation.leaf_logical_rebuild.selection.catchup_passes"] = fmt.Sprintf("%d", db.vlogGenerationLeafLogicalRebuildSelectionCatchupPasses.Load())
+	stats["treedb.cache.vlog_generation.leaf_logical_rebuild.selection.catchup_keys"] = fmt.Sprintf("%d", db.vlogGenerationLeafLogicalRebuildSelectionCatchupKeys.Load())
+	stats["treedb.cache.vlog_generation.leaf_logical_rebuild.selection.cutover_keys"] = fmt.Sprintf("%d", db.vlogGenerationLeafLogicalRebuildSelectionCutoverKeys.Load())
+	stats["treedb.cache.vlog_generation.leaf_logical_rebuild.last_wall_ms"] = fmt.Sprintf("%.3f", float64(db.vlogGenerationLeafLogicalRebuildLastWallNanos.Load())/float64(time.Millisecond))
+	stats["treedb.cache.vlog_generation.leaf_logical_rebuild.last_bytes_copied"] = fmt.Sprintf("%d", db.vlogGenerationLeafLogicalRebuildLastBytesCopied.Load())
+	stats["treedb.cache.vlog_generation.leaf_logical_rebuild.last_source_leaf_bytes"] = fmt.Sprintf("%d", db.vlogGenerationLeafLogicalRebuildLastSourceLeafBytes.Load())
+	stats["treedb.cache.vlog_generation.leaf_logical_rebuild.last_gc_deleted_bytes"] = fmt.Sprintf("%d", db.vlogGenerationLeafLogicalRebuildLastLeafGCDeletedBytes.Load())
+	stats["treedb.cache.vlog_generation.leaf_logical_rebuild.last_selection.runs"] = fmt.Sprintf("%d", db.vlogGenerationLeafLogicalRebuildLastSelectionRuns.Load())
+	stats["treedb.cache.vlog_generation.leaf_logical_rebuild.last_selection.source_files"] = fmt.Sprintf("%d", db.vlogGenerationLeafLogicalRebuildLastSelectionSourceFiles.Load())
+	stats["treedb.cache.vlog_generation.leaf_logical_rebuild.last_selection.source_pages"] = fmt.Sprintf("%d", db.vlogGenerationLeafLogicalRebuildLastSelectionSourcePages.Load())
+	stats["treedb.cache.vlog_generation.leaf_logical_rebuild.last_selection.replacement_pages"] = fmt.Sprintf("%d", db.vlogGenerationLeafLogicalRebuildLastReplacementPages.Load())
+	stats["treedb.cache.vlog_generation.leaf_logical_rebuild.last_selection.candidate_attempts"] = fmt.Sprintf("%d", db.vlogGenerationLeafLogicalRebuildLastCandidateAttempts.Load())
+	stats["treedb.cache.vlog_generation.leaf_logical_rebuild.last_selection.catchup_passes"] = fmt.Sprintf("%d", db.vlogGenerationLeafLogicalRebuildLastCatchupPasses.Load())
+	stats["treedb.cache.vlog_generation.leaf_logical_rebuild.last_selection.catchup_keys"] = fmt.Sprintf("%d", db.vlogGenerationLeafLogicalRebuildLastCatchupKeys.Load())
+	stats["treedb.cache.vlog_generation.leaf_logical_rebuild.last_selection.cutover_keys"] = fmt.Sprintf("%d", db.vlogGenerationLeafLogicalRebuildLastCutoverKeys.Load())
+	stats["treedb.cache.vlog_generation.leaf_logical_rebuild.last_selected_raw_file_id"] = fmt.Sprintf("%d", db.vlogGenerationLeafLogicalRebuildLastSelectedRawFileID.Load())
+	stats["treedb.cache.vlog_generation.leaf_logical_rebuild.last_selected_generation_id"] = fmt.Sprintf("%d", db.vlogGenerationLeafLogicalRebuildLastSelectedGenerationID.Load())
+	stats["treedb.cache.vlog_generation.leaf_logical_rebuild.last_skip_reason"] = atomicValueString(&db.vlogGenerationLeafLogicalRebuildLastSkipReason)
+	stats["treedb.cache.vlog_generation.leaf_logical_rebuild.last_unix_nano"] = fmt.Sprintf("%d", db.vlogGenerationLeafLogicalRebuildLastUnixNano.Load())
+	stats["treedb.cache.vlog_generation.leaf_logical_rebuild.canceled_last_unix_nano"] = fmt.Sprintf("%d", db.vlogGenerationLeafLogicalRebuildCanceledLastNS.Load())
+	stats["treedb.cache.vlog_generation.leaf_logical_rebuild.deadline_last_unix_nano"] = fmt.Sprintf("%d", db.vlogGenerationLeafLogicalRebuildDeadlineLastNS.Load())
 	stats["treedb.cache.vlog_generation.leaf_pack.attempts"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackAttempts.Load())
 	stats["treedb.cache.vlog_generation.leaf_pack.admitted"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackAdmitted.Load())
 	stats["treedb.cache.vlog_generation.leaf_pack.runs"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackRuns.Load())
