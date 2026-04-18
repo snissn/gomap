@@ -98,12 +98,12 @@ type leafLogicalRebuildRunBuild struct {
 }
 
 type leafLogicalRebuildPilotEstimate struct {
-	sourceTotalBytes    int64
-	samplePages         int
-	sampleSourceBytes   int64
-	sampleCreatedBytes  int64
+	sourceTotalBytes      int64
+	samplePages           int
+	sampleSourceBytes     int64
+	sampleCreatedBytes    int64
 	estimatedCreatedBytes int64
-	minSavingsBytes     int64
+	minSavingsBytes       int64
 }
 
 func normalizeLeafGenerationLogicalRebuildRunOnceOptions(opts LeafGenerationLogicalRebuildRunOnceOptions) LeafGenerationLogicalRebuildRunOnceOptions {
