@@ -46,6 +46,8 @@ Commands:
   leafgen-plan    Print explicit leaf-generation pack plan
   leafgen-pack    Pack sealed leaf generations by id (requires -rw)
   leafgen-gc      Delete fully unreachable sealed leaf generations (requires -rw)
+  leafgen-logical-rebuild-run
+                  Rebuild one eligible sealed leaf run online (requires -rw)
   leafgen-logical-rebuild-bench
                   Rebuild outer-leaf pages logically on a frozen DB copy (requires -rw)
   get             Get a single key
@@ -112,6 +114,8 @@ func main() {
 		runLeafGenerationPack(dir, args)
 	case "leafgen-gc":
 		runLeafGenerationGC(dir, args)
+	case "leafgen-logical-rebuild-run":
+		runLeafGenerationLogicalRebuildRun(dir, args)
 	case "leafgen-logical-rebuild-bench":
 		runLeafGenerationLogicalRebuildBench(dir, args)
 	case "get":

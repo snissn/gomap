@@ -117,6 +117,12 @@ func TestClosedDB_VacuumIndexOnline(t *testing.T) {
 	})
 }
 
+func TestClosedDB_LeafGenerationLogicalRebuildRunOnce(t *testing.T) {
+	runClosedDBMethod(t, "LeafGenerationLogicalRebuildRunOnce", func(d *DB) {
+		_, _ = d.LeafGenerationLogicalRebuildRunOnce(context.Background(), LeafGenerationLogicalRebuildRunOnceOptions{})
+	})
+}
+
 func TestClosedDB_ValueLogRewriteOnline(t *testing.T) {
 	runClosedDBMethod(t, "ValueLogRewriteOnline", func(d *DB) {
 		_, _ = d.ValueLogRewriteOnline(context.Background(), ValueLogRewriteOnlineOptions{})

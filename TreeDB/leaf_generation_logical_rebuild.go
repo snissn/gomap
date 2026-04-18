@@ -1,10 +1,26 @@
 package treedb
 
-import treedbdb "github.com/snissn/gomap/TreeDB/db"
+import (
+	"context"
+
+	treedbdb "github.com/snissn/gomap/TreeDB/db"
+)
 
 // LeafGenerationLogicalRebuildStats summarizes a frozen leaf-only logical
 // rebuild that rewrites outer-leaf pages and swaps a fresh index.
 type LeafGenerationLogicalRebuildStats = treedbdb.LeafGenerationLogicalRebuildStats
+
+// ErrLeafGenerationLogicalRebuildNoCandidate reports that no eligible sealed
+// single-file leaf run was available for an online rebuild pass.
+var ErrLeafGenerationLogicalRebuildNoCandidate = treedbdb.ErrLeafGenerationLogicalRebuildNoCandidate
+
+// LeafGenerationLogicalRebuildRunOnceOptions controls one incremental online
+// logical rebuild pass over a single eligible sealed leaf file.
+type LeafGenerationLogicalRebuildRunOnceOptions = treedbdb.LeafGenerationLogicalRebuildRunOnceOptions
+
+// LeafGenerationLogicalRebuildRunOnceStats summarizes one incremental online
+// logical rebuild pass.
+type LeafGenerationLogicalRebuildRunOnceStats = treedbdb.LeafGenerationLogicalRebuildRunOnceStats
 
 // LeafGenerationLogicalRebuildOffline rebuilds outer-leaf pages logically into
 // a fresh leaf_vlog directory and swaps it with a fresh index.db under the
@@ -36,4 +52,34 @@ func LeafGenerationLogicalRebuildOffline(opts Options) (LeafGenerationLogicalReb
 		return LeafGenerationLogicalRebuildStats{}, err
 	}
 	return LeafGenerationLogicalRebuildStats(stats), nil
+}
+
+// LeafGenerationLogicalRebuildRunOnce performs one incremental online logical
+// rebuild pass against an eligible sealed single-file leaf run.
+//
+// In cached mode, this first checkpoints so the backend matches the durable
+// tree before the online maintenance pass begins.
+func (db *DB) LeafGenerationLogicalRebuildRunOnce(ctx context.Context, opts LeafGenerationLogicalRebuildRunOnceOptions) (LeafGenerationLogicalRebuildRunOnceStats, error) {
+	var out LeafGenerationLogicalRebuildRunOnceStats
+	if err := db.ensureOpen(); err != nil {
+		return out, err
+	}
+	if db.backend == nil {
+		return out, ErrClosed
+	}
+	_, finishMaintenance := db.beginFullScanMaintenance("leaf-logical-rebuild")
+	success := false
+	defer func() { finishMaintenance(success) }()
+
+	if db.cached != nil {
+		if err := db.Checkpoint(); err != nil {
+			return out, err
+		}
+	}
+	stats, err := db.backend.LeafGenerationLogicalRebuildRunOnce(ctx, treedbdb.LeafGenerationLogicalRebuildRunOnceOptions(opts))
+	if err != nil {
+		return out, err
+	}
+	success = true
+	return LeafGenerationLogicalRebuildRunOnceStats(stats), nil
 }
