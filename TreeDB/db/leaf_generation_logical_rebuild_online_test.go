@@ -154,15 +154,27 @@ func TestLeafGenerationLogicalRebuildRunOnce_RetiresSelectedGenerationAndPreserv
 		t.Fatalf("snapshot value before rebuild=%x, want %x", snapValue, wantValue)
 	}
 
+	reserveCalls := 0
 	stats, err := db.LeafGenerationLogicalRebuildRunOnce(context.Background(), LeafGenerationLogicalRebuildRunOnceOptions{
 		RawFileID:       candidate.rawFileIDs[0],
 		ClusterFilesMax: 1,
 		CandidateTryMax: 1,
 		Sync:            true,
+		ReserveRIDs: func(count int) (uint64, error) {
+			reserveCalls++
+			if count <= 0 {
+				t.Fatalf("ReserveRIDs count=%d want > 0", count)
+			}
+			return 5000 + uint64(reserveCalls), nil
+		},
 	})
 	if err != nil {
 		closeNoErr(t, baseSnap)
 		t.Fatalf("LeafGenerationLogicalRebuildRunOnce: %v", err)
+	}
+	if reserveCalls == 0 {
+		closeNoErr(t, baseSnap)
+		t.Fatal("expected ReserveRIDs to be used during logical rebuild")
 	}
 	if got, want := stats.SelectedRawFileID, candidate.rawFileIDs[0]; got != want {
 		closeNoErr(t, baseSnap)

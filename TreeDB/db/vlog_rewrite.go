@@ -2841,6 +2841,7 @@ type rewriteWriter struct {
 	leafLane uint32
 	leafSeq  uint32
 	nextRID  uint64
+	ridAlloc *rewriteRIDAllocator
 	// currentPath/currentFileID cache the active writer segment identity so
 	// CurrentValueLogSegment can avoid per-call path/fileID recomputation.
 	currentPath       string
@@ -3014,6 +3015,13 @@ func (w *rewriteWriter) flushPendingDictBatch() error {
 func (w *rewriteWriter) AppendLeafPage(leafPage []byte) (page.LeafLogPtr, error) {
 	if w == nil {
 		return page.LeafLogPtr{}, errors.New("vlog-rewrite: nil writer")
+	}
+	if w.ridAlloc != nil {
+		rid, err := w.ridAlloc.Next()
+		if err != nil {
+			return page.LeafLogPtr{}, err
+		}
+		return w.appendLeafPageWithRID(rid, leafPage)
 	}
 	if w.nextRID == 0 {
 		w.nextRID = 1

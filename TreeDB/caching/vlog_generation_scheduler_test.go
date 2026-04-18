@@ -2065,6 +2065,20 @@ func TestLeafGenerationLogicalRebuildMaintenance_RunsWithDefaultBounds(t *testin
 	if opts.PilotSamplePages != leafGenerationLogicalRebuildMaintenanceDefaultPilotSamplePages {
 		t.Fatalf("PilotSamplePages=%d want %d", opts.PilotSamplePages, leafGenerationLogicalRebuildMaintenanceDefaultPilotSamplePages)
 	}
+	if opts.ReserveRIDs == nil {
+		t.Fatal("expected ReserveRIDs to be passed to logical rebuild maintenance")
+	}
+	before := db.nextRID.Load()
+	start, err := opts.ReserveRIDs(3)
+	if err != nil {
+		t.Fatalf("ReserveRIDs(3): %v", err)
+	}
+	if got, want := start, before+1; got != want {
+		t.Fatalf("ReserveRIDs start=%d want %d", got, want)
+	}
+	if got, want := db.nextRID.Load(), before+3; got != want {
+		t.Fatalf("nextRID after ReserveRIDs=%d want %d", got, want)
+	}
 	if got := db.vlogGenerationLeafLogicalRebuildRuns.Load(); got != 1 {
 		t.Fatalf("logical rebuild runs=%d want 1", got)
 	}

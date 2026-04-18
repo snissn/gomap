@@ -76,7 +76,11 @@ func (db *DB) LeafGenerationLogicalRebuildRunOnce(ctx context.Context, opts Leaf
 			return out, err
 		}
 	}
-	stats, err := db.backend.LeafGenerationLogicalRebuildRunOnce(ctx, treedbdb.LeafGenerationLogicalRebuildRunOnceOptions(opts))
+	backendOpts := treedbdb.LeafGenerationLogicalRebuildRunOnceOptions(opts)
+	if db.cached != nil {
+		backendOpts.ReserveRIDs = db.cached.ReserveValueLogRIDs
+	}
+	stats, err := db.backend.LeafGenerationLogicalRebuildRunOnce(ctx, backendOpts)
 	if err != nil {
 		return out, err
 	}

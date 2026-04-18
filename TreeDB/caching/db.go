@@ -23204,6 +23204,7 @@ func (db *DB) maybeRunLeafGenerationLogicalRebuildMaintenance(runGC bool, quiet 
 			CandidateTryMax:       candidateTryMax,
 			PilotSamplePages:      pilotSamplePages,
 			Sync:                  false,
+			ReserveRIDs:           db.ReserveValueLogRIDs,
 		}
 		stats, runErr := runner.LeafGenerationLogicalRebuildRunOnce(ctx, runOpts)
 		if runErr != nil {

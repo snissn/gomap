@@ -34,6 +34,7 @@ type LeafGenerationLogicalRebuildRunOnceOptions struct {
 	CatchupPassesMax      int
 	CutoverMaxKeys        int
 	CutoverMaxDefers      int
+	ReserveRIDs           func(count int) (start uint64, err error)
 }
 
 type LeafGenerationLogicalRebuildRunOnceStats struct {
@@ -173,11 +174,17 @@ func (db *DB) LeafGenerationLogicalRebuildRunOnce(ctx context.Context, opts Leaf
 	bakPath := filepath.Join(db.dir, indexBakFileName)
 	readyPath := filepath.Join(db.dir, indexReadyFileName)
 
+	db.vacuum.Start()
+	defer db.vacuum.Stop()
+
 	baseSnap := db.AcquireSnapshot()
-	if baseSnap == nil || baseSnap.idx == nil || baseSnap.state == nil || baseSnap.state.LeafGenerations == nil {
+	if baseSnap == nil {
 		return stats, fmt.Errorf("leaf logical rebuild: missing snapshot state")
 	}
 	defer func() { _ = baseSnap.Close() }()
+	if baseSnap.idx == nil || baseSnap.state == nil || baseSnap.state.LeafGenerations == nil {
+		return stats, fmt.Errorf("leaf logical rebuild: missing snapshot state")
+	}
 	stats.CommitSeqBefore = baseSnap.state.CommitSeq
 
 	candidates, baseChildren, err := db.selectLeafGenerationLogicalRebuildCandidates(baseSnap, opts.RawFileID, opts.MaxPublishedCommitSeq, opts.ClusterFilesMax)
@@ -199,6 +206,7 @@ func (db *DB) LeafGenerationLogicalRebuildRunOnce(ctx context.Context, opts Leaf
 	sort.Ints(widths)
 
 	attempts := 0
+	var selected *leafLogicalRebuildCandidate
 	for _, width := range widths {
 		group := grouped[width]
 		limit := len(group)
@@ -214,27 +222,30 @@ func (db *DB) LeafGenerationLogicalRebuildRunOnce(ctx context.Context, opts Leaf
 			if !estimate.admit() {
 				continue
 			}
-			stats, err = db.tryLeafGenerationLogicalRebuildCandidate(
-				ctx,
-				opts,
-				baseSnap,
-				baseChildren,
-				group[i],
-				indexPath,
-				newPath,
-				bakPath,
-				readyPath,
-			)
-			if err == nil {
-				stats.CandidateAttempts = attempts
-				return stats, nil
-			}
-			if !errors.Is(err, ErrLeafGenerationLogicalRebuildNoCandidate) {
-				return stats, err
-			}
+			candidate := group[i]
+			selected = &candidate
+			break
+		}
+		if selected != nil {
+			break
 		}
 	}
-	return stats, ErrLeafGenerationLogicalRebuildNoCandidate
+	if selected == nil {
+		return stats, ErrLeafGenerationLogicalRebuildNoCandidate
+	}
+	stats, err = db.tryLeafGenerationLogicalRebuildCandidate(
+		ctx,
+		opts,
+		baseSnap,
+		baseChildren,
+		*selected,
+		indexPath,
+		newPath,
+		bakPath,
+		readyPath,
+	)
+	stats.CandidateAttempts = attempts
+	return stats, err
 }
 
 func (e leafLogicalRebuildPilotEstimate) admit() bool {
@@ -377,7 +388,10 @@ func (db *DB) tryLeafGenerationLogicalRebuildCandidate(
 		return stats, fmt.Errorf("leaf logical rebuild: value-log set unavailable")
 	}
 	leafStartSeq := maxRewriteLaneSeqFromSet(set, rewriteLeafLogLaneID)
-	nextRID, err := nextRewriteRIDStartFromSet(set)
+	nextRID := uint64(0)
+	if opts.ReserveRIDs == nil {
+		nextRID, err = nextRewriteRIDStartFromSet(set)
+	}
 	_ = db.valueLogManager.Release(set)
 	if err != nil {
 		return stats, err
@@ -390,6 +404,7 @@ func (db *DB) tryLeafGenerationLogicalRebuildCandidate(
 	writer.blockCodec = valuelogBlockCodecFromDB(db.valueLogBlockCodec)
 	writer.leafBlockCodec = leafPageBlockCodecFromOptions(db.valueLogCompression, db.valueLogAutoPolicy, db.valueLogBlockCodec, db.indexOuterLeavesInValueLog)
 	writer.nextRID = nextRID
+	writer.ridAlloc = newRewriteRIDAllocator(nextRID, opts.ReserveRIDs)
 	writerOpen := true
 	published := false
 	cleanupCreated := func(baseErr error) error {
@@ -433,9 +448,6 @@ func (db *DB) tryLeafGenerationLogicalRebuildCandidate(
 		}
 	}
 	newZ.SetLeafPageLog(writer)
-
-	db.vacuum.Start()
-	defer db.vacuum.Stop()
 
 	runBuilds, recordsCopied, err := db.buildLogicalRebuildRuns(baseSnap, baseChildren, candidate, writer)
 	if err != nil {
@@ -547,7 +559,7 @@ func (db *DB) tryLeafGenerationLogicalRebuildCandidate(
 			db.writeMu.Unlock()
 			return stats, err
 		}
-		createdTotalBytes, err := leafGenerationLogicalRebuildCreatedLogBytes(createdSegments)
+		createdTotalBytes, err := leafGenerationLogicalRebuildCreatedTotalBytes(createdSegments)
 		if err != nil {
 			db.writeMu.Unlock()
 			return stats, err
