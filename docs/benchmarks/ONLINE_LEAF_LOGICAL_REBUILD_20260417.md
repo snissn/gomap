@@ -1,19 +1,19 @@
 # Online Leaf Logical Rebuild
 
 This note measures the manual online incremental logical rebuild operator added
-on `codex/online-leaf-logical-rebuild`, including the later planner/admission
-iterations after the initial clustered-file prototype.
+on `codex/online-leaf-logical-rebuild`, including the planner iterations after
+the initial clustered-file prototype.
 
 ## Goal
 
 Take the frozen logical rebuild proof from `#986` and turn it into a bounded
 online-style operator that:
 
-- rebuilds one bounded contiguous outer-leaf window at a time
+- rebuilds one bounded outer-leaf candidate at a time
 - publishes through the vacuum-style index cutover path
 - makes durable incremental progress
 - stops instead of publishing a regression or spending unbounded time searching
-  wide low-yield clusters
+  low-yield candidates
 
 ## Command
 
@@ -23,23 +23,21 @@ Binary:
 GOWORK=off go build -o /tmp/treemap-online-leaf ./TreeDB/cmd/treemap
 ```
 
-Conservative campaign on a frozen copy of a recent `main wal_on_fast`
-post-dwell DB:
+Bounded campaign on a frozen copy of a recent `main wal_on_fast` post-dwell DB:
 
 ```bash
-/tmp/treemap-online-leaf leafgen-logical-rebuild-run \
-  /tmp/online_leaf_rebuild_ranked_try1_1776487209 \
-  -rw \
-  -json \
-  -max-published-commit-seq 3118 \
-  -cluster-files-max 8 \
-  -candidate-try-max 1
-```
-
-After each successful run:
-
-```bash
-/tmp/treemap-online-leaf leafgen-gc /tmp/online_leaf_rebuild_ranked_try1_1776487209 -rw -json
+for run in 1 2 3 4 5 6 7 8 9 10 11 12; do
+  /tmp/treemap-online-leaf leafgen-logical-rebuild-run \
+    /tmp/online_leaf_rebuild_ranges_1776489806 \
+    -rw \
+    -json \
+    -max-published-commit-seq 3118 \
+    -cluster-files-max 8 \
+    -candidate-try-max 4 >> /tmp/online_leaf_rebuild_ranges_1776489806/campaign.jsonl \
+  && /tmp/treemap-online-leaf leafgen-gc /tmp/online_leaf_rebuild_ranges_1776489806 -rw -json \
+    >> /tmp/online_leaf_rebuild_ranges_1776489806/campaign.jsonl \
+  || break
+done
 ```
 
 The `3118` watermark pins candidate selection to the original sealed generation
@@ -57,7 +55,7 @@ Frozen source copy from:
 Measured working copy:
 
 ```text
-/tmp/online_leaf_rebuild_ranked_try1_1776487209
+/tmp/online_leaf_rebuild_ranges_1776489806
 ```
 
 Offline rewrite leaf floor for the same source, from `#986`:
@@ -71,82 +69,105 @@ Before campaign:
 - `application.db = 2,576,631,807`
 - `leaf_vlog = 2,345,184,409`
 - `index.db = 61,341,696`
-- `value_vlog = 169,699,763`
+- `value_vlog = 169,695,667`
 
-After 1 successful run plus GC:
+After 12 successful runs plus GC:
 
-- `application.db = 2,562,828,875`
-- `leaf_vlog = 2,337,671,285`
-- `index.db = 55,050,240`
-- `value_vlog = 169,699,763`
+- `application.db = 2,521,680,293`
+- `leaf_vlog = 2,298,855,009`
+- `index.db = 52,690,944`
+- `value_vlog = 169,695,667`
 
 Net improvement:
 
-- `application.db`: `-13,802,932`
-- `leaf_vlog`: `-7,513,124`
-- `index.db`: `-6,291,456`
+- `application.db`: `-54,951,514`
+- `leaf_vlog`: `-46,329,400`
+- `index.db`: `-8,650,752`
 - `value_vlog`: unchanged
 
 Leaf gap against the matching offline rewrite floor:
 
 - before: `205,531,024`
-- after: `198,017,900`
-- closed: `7,513,124` (`3.66%`)
+- after: `159,201,624`
+- closed: `46,329,400` (`22.54%`)
 
-## Successful Run
+Compared to the earlier safe-but-weak online planner result on the same source:
 
-Run 1:
+- old planner closed `7,513,124` of leaf gap (`3.66%`)
+- current planner closes `46,329,400` of leaf gap (`22.54%`)
+- improvement over the old planner: `+38,816,276` leaf bytes
 
-- generation `52`
-- raw file `2139095092`
-- source leaf pages `8,308`
-- source bytes `33,555,865`
-- replacement leaf pages `8,458`
-- elapsed: `4.17s`
+## Campaign Shape
 
-Run 2:
+The campaign stayed incremental all the way through 12 bounded runs:
 
-- stopped with `leaf logical rebuild: no eligible sealed incremental candidate`
-- this is with `candidate-try-max=1`, so the operator refused to spend more
-  rebuild work on lower-ranked same-width candidates once the top-ranked
-  width tiers had no publishable winner
+- runs `1-5` found smaller single-, two-, and three-generation candidates
+- runs `6-12` continued making progress with wider three- and four-generation
+  candidates
+- every successful run was followed by `leafgen-gc`, and the post-GC DB stayed
+  smaller after each publish
+
+Largest later successful candidates:
+
+- run `10`
+  - generations: `185, 19, 30, 31`
+  - source files: `4`
+  - source bytes: `106,454,649`
+  - replacement pages: `43,604`
+  - elapsed: `35.27s`
+- run `11`
+  - generations: `33, 34, 35, 110`
+  - source files: `4`
+  - source bytes: `108,591,276`
+  - replacement pages: `45,270`
+  - elapsed: `35.98s`
+- run `12`
+  - generations: `28, 29, 49`
+  - source files: `3`
+  - source bytes: `100,666,724`
+  - replacement pages: `34,383`
+  - elapsed: `34.50s`
 
 ## Planner Iterations
 
-The earlier clustered prototype was not a good admission policy:
+The initial online planner had two structural problems:
 
-- scattered 4-file clusters produced tens of thousands of disjoint run slices
-- later runs could regress `leaf_vlog` after GC even when the local `.log` gate
-  passed
-- larger `candidate-try-max` values reintroduced long rebuild-and-reject search
+1. it collapsed each source file to one `firstIndex..lastIndex` span, which
+   forced rebuilds across bridge pages between disjoint live runs
+2. it had no cheap pre-rebuild estimate, so larger search budgets could spend a
+   lot of time doing full logical rebuilds only to reject them at publish time
 
-The current manual operator now does three things differently:
+The current manual operator now does four things differently:
 
-1. candidate windows are ranked narrow-first
-2. within a width tier, ranking prefers higher bytes-per-page density
-3. publish gating uses total leaf footprint, including `.lenidx`, not only the
-   raw `.log` byte size
+1. candidate groups are still ranked narrow-first
+2. within a width tier, ranking prefers higher retireable-bytes per rebuilt page
+3. each sealed file contributes the union of its live contiguous ranges rather
+   than one giant bridged span
+4. a pilot rebuild estimate samples bounded ranges before the full rebuild and
+   skips candidates that are unlikely to clear the total-byte savings gate
 
 ## Interpretation
 
-This branch now proves four things:
+This branch now proves five things:
 
 1. The online operator can make real durable incremental progress on the real
    Celestia-shaped sealed population.
 2. The vacuum-coupled publish path works for this leaf-only logical rebuild.
-3. A hard total-byte gate is required. The earlier `.log`-only gate was too
-   weak and allowed flat or regressive clustered publishes.
-4. Candidate search cost is now the dominant issue. `candidate-try-max=1`
-   gives a fast safe positive step; larger search budgets start paying a lot of
-   rebuild work just to discover that most remaining candidates are not worth
-   publishing.
+3. The pre-rebuild planner matters more than the cutover path now. The jump
+   from `3.66%` to `22.54%` leaf-gap closure came from better candidate
+   modeling, not from changing the publish mechanism.
+4. A hard total-byte gate is still required. The operator remains safe because
+   it only publishes candidates that leave the DB smaller after GC.
+5. The online path is still materially below the frozen logical rebuild ceiling.
+   It now closes a meaningful fraction of the leaf gap, but not enough to claim
+   parity with offline rewrite.
 
-This is still not a high-closure maintenance system. It is a safer manual
-online primitive with one clear positive incremental step and a tighter
-admission policy.
+This is now a real online primitive, not just a one-shot proof. But it is still
+not the final maintenance design.
 
-The next likely improvement is a better pre-rebuild planner:
+The next likely improvement is not more cutover work. It is one of:
 
-- expose candidate windows without rebuilding them
-- estimate total bytes saved before invoking `bulk.BuildWithOptions(...)`
-- only spend rebuild work on candidates with a strong expected total-byte win
+- better grouping of multi-generation candidates before pilot rebuild
+- stronger stop conditions based on marginal savings per run
+- eventually, scheduler integration after the manual operator is judged good
+  enough to automate

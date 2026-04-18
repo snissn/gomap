@@ -29,6 +29,7 @@ type LeafGenerationLogicalRebuildRunOnceOptions struct {
 	MaxPublishedCommitSeq uint64
 	ClusterFilesMax       int
 	CandidateTryMax       int
+	PilotSamplePages      int
 	Sync                  bool
 	CatchupPassesMax      int
 	CutoverMaxKeys        int
@@ -72,6 +73,7 @@ type leafLogicalRebuildSource struct {
 	fileID       uint32
 	firstIndex   int
 	lastIndex    int
+	ranges       [][2]int
 	sourcePages  int
 	sourceBytes  int64
 	retireable   bool
@@ -82,6 +84,7 @@ type leafLogicalRebuildCandidate struct {
 	rawFileIDs    []uint32
 	fileIDs       []uint32
 	runRanges     [][2]int
+	windowPages   int
 	sourcePages   int
 	sourceBytes   int64
 }
@@ -94,12 +97,24 @@ type leafLogicalRebuildRunBuild struct {
 	replacement []vacuumLeafChild
 }
 
+type leafLogicalRebuildPilotEstimate struct {
+	sourceTotalBytes    int64
+	samplePages         int
+	sampleSourceBytes   int64
+	sampleCreatedBytes  int64
+	estimatedCreatedBytes int64
+	minSavingsBytes     int64
+}
+
 func normalizeLeafGenerationLogicalRebuildRunOnceOptions(opts LeafGenerationLogicalRebuildRunOnceOptions) LeafGenerationLogicalRebuildRunOnceOptions {
 	if opts.ClusterFilesMax <= 0 {
 		opts.ClusterFilesMax = 4
 	}
 	if opts.CandidateTryMax <= 0 {
 		opts.CandidateTryMax = 8
+	}
+	if opts.PilotSamplePages <= 0 {
+		opts.PilotSamplePages = 192
 	}
 	if opts.CatchupPassesMax <= 0 {
 		opts.CatchupPassesMax = vacuumCatchupPassesMax
@@ -192,6 +207,13 @@ func (db *DB) LeafGenerationLogicalRebuildRunOnce(ctx context.Context, opts Leaf
 		}
 		for i := 0; i < limit; i++ {
 			attempts++
+			estimate, err := db.estimateLeafGenerationLogicalRebuildCandidate(baseSnap, baseChildren, group[i], opts.PilotSamplePages)
+			if err != nil {
+				return stats, err
+			}
+			if !estimate.admit() {
+				continue
+			}
 			stats, err = db.tryLeafGenerationLogicalRebuildCandidate(
 				ctx,
 				opts,
@@ -213,6 +235,56 @@ func (db *DB) LeafGenerationLogicalRebuildRunOnce(ctx context.Context, opts Leaf
 		}
 	}
 	return stats, ErrLeafGenerationLogicalRebuildNoCandidate
+}
+
+func (e leafLogicalRebuildPilotEstimate) admit() bool {
+	if e.sourceTotalBytes == 0 || e.sampleSourceBytes == 0 || e.sampleCreatedBytes == 0 {
+		return false
+	}
+	return e.estimatedCreatedBytes <= e.sourceTotalBytes-e.minSavingsBytes
+}
+
+func (db *DB) estimateLeafGenerationLogicalRebuildCandidate(baseSnap *Snapshot, baseChildren []vacuumLeafChild, candidate leafLogicalRebuildCandidate, pilotSamplePages int) (leafLogicalRebuildPilotEstimate, error) {
+	var estimate leafLogicalRebuildPilotEstimate
+	if baseSnap == nil || baseSnap.state == nil {
+		return estimate, fmt.Errorf("leaf logical rebuild: missing base snapshot")
+	}
+	if len(candidate.runRanges) == 0 || candidate.windowPages == 0 {
+		return estimate, nil
+	}
+	sourceTotalBytes, err := leafGenerationLogicalRebuildSourceTotalBytes(db.dir, candidate.rawFileIDs)
+	if err != nil {
+		return estimate, err
+	}
+	estimate.sourceTotalBytes = sourceTotalBytes
+	estimate.minSavingsBytes = max(int64(1<<20), sourceTotalBytes/100)
+	sampleRanges := leafGenerationLogicalRebuildSampleRanges(candidate.runRanges, pilotSamplePages)
+	if len(sampleRanges) == 0 {
+		return estimate, nil
+	}
+	sampleSourceBytes, err := db.leafGenerationLogicalRebuildSampleSourceBytes(baseSnap, baseChildren, sampleRanges)
+	if err != nil {
+		return estimate, err
+	}
+	estimate.sampleSourceBytes = sampleSourceBytes
+	for _, rr := range sampleRanges {
+		estimate.samplePages += rr[1] - rr[0] + 1
+	}
+	if sampleSourceBytes == 0 {
+		return estimate, nil
+	}
+	sampleCreatedBytes, err := db.pilotLeafGenerationLogicalRebuildCandidate(baseSnap, baseChildren, sampleRanges)
+	if err != nil {
+		return estimate, err
+	}
+	estimate.sampleCreatedBytes = sampleCreatedBytes
+	if sampleCreatedBytes == 0 {
+		return estimate, nil
+	}
+	if estimate.samplePages > 0 {
+		estimate.estimatedCreatedBytes = int64(float64(candidate.windowPages) * (float64(sampleCreatedBytes) / float64(estimate.samplePages)))
+	}
+	return estimate, nil
 }
 
 func (db *DB) tryLeafGenerationLogicalRebuildCandidate(
@@ -694,10 +766,18 @@ func (db *DB) selectLeafGenerationLogicalRebuildCandidates(snap *Snapshot, reque
 				fileID:       page.ValueLogFileID(rawFileID),
 				firstIndex:   i,
 				lastIndex:    i,
+				ranges:       [][2]int{{i, i}},
 				sourceBytes:  leafGenerationLogicalRebuildFileSize(db.dir, rawFileID),
 			}
 			accumByRaw[rawFileID] = accum
 			orderedRaw = append(orderedRaw, rawFileID)
+		} else {
+			lastRange := &accum.ranges[len(accum.ranges)-1]
+			if i <= lastRange[1]+1 {
+				lastRange[1] = i
+			} else {
+				accum.ranges = append(accum.ranges, [2]int{i, i})
+			}
 		}
 		accum.lastIndex = i
 		accum.sourcePages++
@@ -742,66 +822,44 @@ func buildLeafGenerationLogicalRebuildCandidates(allSources, eligibleSources []l
 	if clusterFilesMax <= 0 {
 		clusterFilesMax = len(eligibleSources)
 	}
-	sourceByRaw := make(map[uint32]leafLogicalRebuildSource, len(allSources))
-	for _, src := range allSources {
-		sourceByRaw[src.rawFileID] = src
-	}
-	type windowKey struct {
-		start int
-		end   int
-	}
+	type windowKey string
 	seen := make(map[windowKey]struct{}, len(allSources))
 	out := make([]leafLogicalRebuildCandidate, 0, len(eligibleSources))
 	for i := range eligibleSources {
-		start := eligibleSources[i].firstIndex
-		end := eligibleSources[i].lastIndex
+		generationIDs := make([]uint64, 0, clusterFilesMax)
+		rawFileIDs := make([]uint32, 0, clusterFilesMax)
+		fileIDs := make([]uint32, 0, clusterFilesMax)
+		runRanges := make([][2]int, 0, clusterFilesMax)
+		sourcePages := 0
+		sourceBytes := int64(0)
 		for j := i; j < len(eligibleSources); j++ {
-			if eligibleSources[j].firstIndex < start {
-				start = eligibleSources[j].firstIndex
+			src := eligibleSources[j]
+			generationIDs = append(generationIDs, src.generationID)
+			rawFileIDs = append(rawFileIDs, src.rawFileID)
+			fileIDs = append(fileIDs, src.fileID)
+			runRanges = append(runRanges, src.ranges...)
+			sourcePages += src.sourcePages
+			sourceBytes += src.sourceBytes
+			if len(rawFileIDs) > clusterFilesMax {
+				break
 			}
-			if eligibleSources[j].lastIndex > end {
-				end = eligibleSources[j].lastIndex
+			mergedRanges := mergeLeafLogicalRebuildRanges(runRanges)
+			if len(mergedRanges) == 0 {
+				continue
 			}
-			key := windowKey{start: start, end: end}
+			sortedRaw := append([]uint32(nil), rawFileIDs...)
+			slices.Sort(sortedRaw)
+			key := windowKey(leafLogicalRebuildWindowKey(sortedRaw, mergedRanges))
 			if _, ok := seen[key]; ok {
 				continue
 			}
 			seen[key] = struct{}{}
-
-			retireableRawFileIDs := make([]uint32, 0, clusterFilesMax)
-			sourcePages := 0
-			sourceBytes := int64(0)
-			for _, src := range allSources {
-				if src.lastIndex < start || src.firstIndex > end {
-					continue
-				}
-				if !src.retireable || src.firstIndex < start || src.lastIndex > end {
-					continue
-				}
-				retireableRawFileIDs = append(retireableRawFileIDs, src.rawFileID)
-				sourcePages += src.sourcePages
-				sourceBytes += src.sourceBytes
-			}
-			if len(retireableRawFileIDs) == 0 {
-				continue
-			}
-			if len(retireableRawFileIDs) > clusterFilesMax {
-				break
-			}
-
-			slices.Sort(retireableRawFileIDs)
-			generationIDs := make([]uint64, 0, len(retireableRawFileIDs))
-			fileIDs := make([]uint32, 0, len(retireableRawFileIDs))
-			for _, rawFileID := range retireableRawFileIDs {
-				src := sourceByRaw[rawFileID]
-				generationIDs = append(generationIDs, src.generationID)
-				fileIDs = append(fileIDs, src.fileID)
-			}
 			out = append(out, leafLogicalRebuildCandidate{
-				generationIDs: generationIDs,
-				rawFileIDs:    retireableRawFileIDs,
-				fileIDs:       fileIDs,
-				runRanges:     [][2]int{{start, end}},
+				generationIDs: append([]uint64(nil), generationIDs...),
+				rawFileIDs:    sortedRaw,
+				fileIDs:       append([]uint32(nil), fileIDs...),
+				runRanges:     mergedRanges,
+				windowPages:   leafLogicalRebuildRangePages(mergedRanges),
 				sourcePages:   sourcePages,
 				sourceBytes:   sourceBytes,
 			})
@@ -814,13 +872,19 @@ func buildLeafGenerationLogicalRebuildCandidates(allSources, eligibleSources []l
 			}
 			return 1
 		}
+		if len(a.runRanges) != len(b.runRanges) {
+			if len(a.runRanges) < len(b.runRanges) {
+				return -1
+			}
+			return 1
+		}
 		aDensity := float64(a.sourceBytes)
-		if a.sourcePages > 0 {
-			aDensity /= float64(a.sourcePages)
+		if a.windowPages > 0 {
+			aDensity /= float64(a.windowPages)
 		}
 		bDensity := float64(b.sourceBytes)
-		if b.sourcePages > 0 {
-			bDensity /= float64(b.sourcePages)
+		if b.windowPages > 0 {
+			bDensity /= float64(b.windowPages)
 		}
 		if aDensity != bDensity {
 			if aDensity > bDensity {
@@ -840,10 +904,8 @@ func buildLeafGenerationLogicalRebuildCandidates(allSources, eligibleSources []l
 			}
 			return 1
 		}
-		aStart, aEnd := a.runRanges[0][0], a.runRanges[0][1]
-		bStart, bEnd := b.runRanges[0][0], b.runRanges[0][1]
-		if (aEnd - aStart) != (bEnd - bStart) {
-			if (aEnd - aStart) > (bEnd - bStart) {
+		if a.windowPages != b.windowPages {
+			if a.windowPages < b.windowPages {
 				return -1
 			}
 			return 1
@@ -851,6 +913,56 @@ func buildLeafGenerationLogicalRebuildCandidates(allSources, eligibleSources []l
 		return 0
 	})
 	return out
+}
+
+func mergeLeafLogicalRebuildRanges(in [][2]int) [][2]int {
+	if len(in) == 0 {
+		return nil
+	}
+	out := append([][2]int(nil), in...)
+	slices.SortFunc(out, func(a, b [2]int) int {
+		if a[0] < b[0] {
+			return -1
+		}
+		if a[0] > b[0] {
+			return 1
+		}
+		if a[1] < b[1] {
+			return -1
+		}
+		if a[1] > b[1] {
+			return 1
+		}
+		return 0
+	})
+	merged := out[:0]
+	for _, rr := range out {
+		if len(merged) == 0 {
+			merged = append(merged, rr)
+			continue
+		}
+		last := &merged[len(merged)-1]
+		if rr[0] <= last[1]+1 {
+			if rr[1] > last[1] {
+				last[1] = rr[1]
+			}
+			continue
+		}
+		merged = append(merged, rr)
+	}
+	return merged
+}
+
+func leafLogicalRebuildRangePages(runRanges [][2]int) int {
+	total := 0
+	for _, rr := range runRanges {
+		total += rr[1] - rr[0] + 1
+	}
+	return total
+}
+
+func leafLogicalRebuildWindowKey(rawFileIDs []uint32, runRanges [][2]int) string {
+	return fmt.Sprintf("%v:%v", rawFileIDs, runRanges)
 }
 
 func leafGenerationLogicalRebuildRootRawFileIDs(p *pager.Pager, rootID uint64) (map[uint32]struct{}, error) {
@@ -961,6 +1073,157 @@ func leafGenerationRecordLengthIndexEncodedSize(idx *leafGenerationRecordLengthI
 		return 16
 	}
 	return int64(16 + idx.len()*8)
+}
+
+func leafGenerationLogicalRebuildSampleRanges(runRanges [][2]int, maxPages int) [][2]int {
+	if maxPages <= 0 || len(runRanges) == 0 {
+		return nil
+	}
+	totalPages := 0
+	for _, rr := range runRanges {
+		totalPages += rr[1] - rr[0] + 1
+	}
+	if totalPages == 0 {
+		return nil
+	}
+	if totalPages <= maxPages {
+		return append([][2]int(nil), runRanges...)
+	}
+	slicesN := 3
+	perSlice := max(1, maxPages/slicesN)
+	out := make([][2]int, 0, slicesN)
+	first := runRanges[0]
+	out = append(out, [2]int{first[0], min(first[1], first[0]+perSlice-1)})
+	midRR := runRanges[len(runRanges)/2]
+	midStart := midRR[0] + max(0, (midRR[1]-midRR[0]+1-perSlice)/2)
+	out = append(out, [2]int{midStart, min(midRR[1], midStart+perSlice-1)})
+	last := runRanges[len(runRanges)-1]
+	lastEnd := last[1]
+	lastStart := max(last[0], lastEnd-perSlice+1)
+	out = append(out, [2]int{lastStart, lastEnd})
+	slices.SortFunc(out, func(a, b [2]int) int {
+		if a[0] < b[0] {
+			return -1
+		}
+		if a[0] > b[0] {
+			return 1
+		}
+		if a[1] < b[1] {
+			return -1
+		}
+		if a[1] > b[1] {
+			return 1
+		}
+		return 0
+	})
+	merged := out[:0]
+	for _, rr := range out {
+		if len(merged) == 0 {
+			merged = append(merged, rr)
+			continue
+		}
+		last := &merged[len(merged)-1]
+		if rr[0] <= last[1]+1 {
+			if rr[1] > last[1] {
+				last[1] = rr[1]
+			}
+			continue
+		}
+		merged = append(merged, rr)
+	}
+	return merged
+}
+
+func (db *DB) leafGenerationLogicalRebuildSampleSourceBytes(baseSnap *Snapshot, baseChildren []vacuumLeafChild, sampleRanges [][2]int) (int64, error) {
+	if db == nil || baseSnap == nil || baseSnap.state == nil || baseSnap.state.LeafGenerations == nil {
+		return 0, fmt.Errorf("leaf logical rebuild: missing sample state")
+	}
+	var total int64
+	for _, rr := range sampleRanges {
+		for i := rr[0]; i <= rr[1]; i++ {
+			if i < 0 || i >= len(baseChildren) {
+				continue
+			}
+			ptr, ok := page.DecodeLeafRef(baseChildren[i].childID)
+			if !ok {
+				continue
+			}
+			length, ok, err := db.leafGenerationRecordLengthForPlan(ptr, baseSnap.state.ValueLogSet, baseSnap.state.LeafGenerations)
+			if err != nil {
+				return 0, err
+			}
+			if !ok {
+				continue
+			}
+			total += int64(length)
+		}
+	}
+	return total, nil
+}
+
+func (db *DB) pilotLeafGenerationLogicalRebuildCandidate(baseSnap *Snapshot, baseChildren []vacuumLeafChild, sampleRanges [][2]int) (int64, error) {
+	if db == nil || baseSnap == nil {
+		return 0, fmt.Errorf("leaf logical rebuild: missing pilot state")
+	}
+	set := db.valueLogManager.CurrentSetNoRefresh()
+	if set == nil || len(set.Files) == 0 {
+		if set != nil {
+			_ = db.valueLogManager.Release(set)
+		}
+		if err := db.valueLogManager.Refresh(); err != nil {
+			return 0, err
+		}
+		set = db.valueLogManager.CurrentSetNoRefresh()
+	}
+	if set == nil {
+		return 0, fmt.Errorf("leaf logical rebuild: value-log set unavailable")
+	}
+	leafStartSeq := maxRewriteLaneSeqFromSet(set, rewriteLeafLogLaneID)
+	nextRID, err := nextRewriteRIDStartFromSet(set)
+	_ = db.valueLogManager.Release(set)
+	if err != nil {
+		return 0, err
+	}
+
+	tempLeafDir, err := os.MkdirTemp("", "treedb-leaf-logical-pilot-*")
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = os.RemoveAll(tempLeafDir) }()
+
+	writer := newRewriteWriter(tempLeafDir, 0, 0, 0)
+	writer.ConfigureLeafLog(tempLeafDir, rewriteLeafLogLaneID, leafStartSeq)
+	writer.blockCompression = db.valueLogCompression != ValueLogCompressionOff
+	writer.blockCodec = valuelogBlockCodecFromDB(db.valueLogBlockCodec)
+	writer.leafBlockCodec = leafPageBlockCodecFromOptions(db.valueLogCompression, db.valueLogAutoPolicy, db.valueLogBlockCodec, db.indexOuterLeavesInValueLog)
+	writer.nextRID = nextRID
+	defer func() { _ = writer.Close() }()
+
+	if writer.blockCompression {
+		state := db.state.Load()
+		if state != nil {
+			leafDictID, leafDictBytes, leafDictUseRawPages, dictErr := prepareRewriteLeafDict(db, state, db.valueLogDictCurrentForClass, db.valueLogDictLeafPayloadMode, db.valueLogDictLookup, db.valueLogDictPut, db.valueLogDictSetCurrentForClass, db.valueLogDictSetLeafPayloadMode, compression.TrainConfig{})
+			if dictErr != nil {
+				return 0, dictErr
+			}
+			if leafDictID != 0 && len(leafDictBytes) > 0 {
+				writer.SetLeafDictMode(leafDictID, leafDictBytes, leafDictUseRawPages)
+			}
+		}
+	}
+
+	sampleCandidate := leafLogicalRebuildCandidate{runRanges: sampleRanges}
+	if _, _, err := db.buildLogicalRebuildRuns(baseSnap, baseChildren, sampleCandidate, writer); err != nil {
+		return 0, err
+	}
+	if err := writer.Flush(); err != nil {
+		return 0, err
+	}
+	segments, err := writer.createdSegmentsSnapshot()
+	if err != nil {
+		return 0, err
+	}
+	return leafGenerationLogicalRebuildCreatedTotalBytes(segments)
 }
 
 func (db *DB) buildLogicalRebuildRuns(baseSnap *Snapshot, baseChildren []vacuumLeafChild, candidate leafLogicalRebuildCandidate, writer *rewriteWriter) ([]leafLogicalRebuildRunBuild, int, error) {

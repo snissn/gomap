@@ -43,11 +43,11 @@ func TestLeafGenerationLogicalRebuildRunOnce_NoCandidate(t *testing.T) {
 	}
 }
 
-func TestBuildLeafGenerationLogicalRebuildCandidates_ExpandsToClosedContiguousWindow(t *testing.T) {
+func TestBuildLeafGenerationLogicalRebuildCandidates_UsesEligibleRunUnion(t *testing.T) {
 	allSources := []leafLogicalRebuildSource{
-		{generationID: 11, rawFileID: 101, fileID: page.ValueLogFileID(101), firstIndex: 0, lastIndex: 2, sourcePages: 2, sourceBytes: 200, retireable: true},
-		{generationID: 12, rawFileID: 102, fileID: page.ValueLogFileID(102), firstIndex: 1, lastIndex: 3, sourcePages: 2, sourceBytes: 180, retireable: true},
-		{generationID: 13, rawFileID: 103, fileID: page.ValueLogFileID(103), firstIndex: 4, lastIndex: 5, sourcePages: 2, sourceBytes: 160},
+		{generationID: 11, rawFileID: 101, fileID: page.ValueLogFileID(101), firstIndex: 0, lastIndex: 11, ranges: [][2]int{{0, 1}, {10, 11}}, sourcePages: 4, sourceBytes: 200, retireable: true},
+		{generationID: 12, rawFileID: 102, fileID: page.ValueLogFileID(102), firstIndex: 3, lastIndex: 4, ranges: [][2]int{{3, 4}}, sourcePages: 2, sourceBytes: 180, retireable: true},
+		{generationID: 13, rawFileID: 103, fileID: page.ValueLogFileID(103), firstIndex: 6, lastIndex: 8, ranges: [][2]int{{6, 8}}, sourcePages: 3, sourceBytes: 160},
 	}
 	eligibleSources := allSources[:2]
 
@@ -57,23 +57,48 @@ func TestBuildLeafGenerationLogicalRebuildCandidates_ExpandsToClosedContiguousWi
 	}
 	found := false
 	for _, got := range candidates {
-		if len(got.runRanges) != 1 {
-			t.Fatalf("runRanges=%v, want single contiguous range", got.runRanges)
-		}
-		if got.runRanges[0] != ([2]int{0, 3}) {
+		if len(got.rawFileIDs) != 2 {
 			continue
 		}
-		if len(got.rawFileIDs) != 2 {
-			t.Fatalf("rawFileIDs=%v, want 2-file window", got.rawFileIDs)
+		if len(got.runRanges) != 3 {
+			t.Fatalf("runRanges=%v, want three disjoint slices", got.runRanges)
+		}
+		if got.runRanges[0] != ([2]int{0, 1}) || got.runRanges[1] != ([2]int{3, 4}) || got.runRanges[2] != ([2]int{10, 11}) {
+			continue
 		}
 		if got.sourceBytes != 380 {
 			t.Fatalf("sourceBytes=%d, want 380", got.sourceBytes)
+		}
+		if got.windowPages != 6 {
+			t.Fatalf("windowPages=%d, want 6", got.windowPages)
 		}
 		found = true
 		break
 	}
 	if !found {
-		t.Fatalf("missing expected [0 3] two-file candidate in %v", candidates)
+		t.Fatalf("missing expected disjoint two-file candidate in %v", candidates)
+	}
+}
+
+func TestLeafGenerationLogicalRebuildSampleRanges_PicksBoundedSlices(t *testing.T) {
+	const maxPages = 96
+	got := leafGenerationLogicalRebuildSampleRanges([][2]int{{0, 299}}, maxPages)
+	if len(got) == 0 {
+		t.Fatalf("sample ranges empty")
+	}
+	total := 0
+	for _, rr := range got {
+		total += rr[1] - rr[0] + 1
+	}
+	if total > maxPages {
+		t.Fatalf("sampled pages=%d, want <= %d", total, maxPages)
+	}
+	if got[0][0] != 0 {
+		t.Fatalf("first sample=%v, want to include start", got[0])
+	}
+	last := got[len(got)-1]
+	if last[1] != 299 {
+		t.Fatalf("last sample=%v, want to include end", last)
 	}
 }
 
