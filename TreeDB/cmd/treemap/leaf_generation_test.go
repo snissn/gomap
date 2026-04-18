@@ -35,3 +35,9 @@ func TestUsageTextMentionsLeafGenerationGC(t *testing.T) {
 		t.Fatalf("usageText missing leafgen-gc command: %q", got)
 	}
 }
+
+func TestUsageTextMentionsLeafGenerationLogicalRebuildBench(t *testing.T) {
+	if got := usageText; !strings.Contains(got, "leafgen-logical-rebuild-bench") {
+		t.Fatalf("usageText missing leafgen-logical-rebuild-bench command: %q", got)
+	}
+}

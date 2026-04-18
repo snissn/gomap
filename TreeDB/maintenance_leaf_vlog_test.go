@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"testing"
 	"time"
 
@@ -427,6 +428,80 @@ func TestValueLogRewriteOffline_LeafPagesInValueLog_PreservesLeafRefRoot_WhenVal
 	}
 }
 
+func TestLeafGenerationLogicalRebuildOffline_ReopenParityPreservesValueLogSegments(t *testing.T) {
+	dir := t.TempDir()
+	opts := treedb.Options{
+		Dir:                        dir,
+		Durability:                 treedb.DurabilityWALOffRelaxed,
+		IndexOuterLeavesInValueLog: true,
+		ValueLog: treedb.ValueLogOptions{
+			PointerThreshold: 1,
+		},
+	}
+	db, err := treedb.Open(opts)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	for i := 0; i < 256; i++ {
+		key := []byte(fmt.Sprintf("leaf-logical-%04d", i))
+		val := bytes.Repeat([]byte{byte(i % 251)}, 2*1024)
+		if err := db.Set(key, val); err != nil {
+			_ = db.Close()
+			t.Fatalf("set %q: %v", string(key), err)
+		}
+	}
+	if err := db.Checkpoint(); err != nil {
+		_ = db.Close()
+		t.Fatalf("checkpoint before close: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	mainDir := filepath.Dir(mainIndexPath(dir))
+	leafBefore := mustGlobBaseNames(t, filepath.Join(mainDir, "leaf_vlog", "value-l*.log"))
+	valueBefore := mustGlobBaseNames(t, filepath.Join(mainDir, "value_vlog", "value-l*.log"))
+	if len(leafBefore) == 0 {
+		t.Fatalf("expected leaf_vlog files before logical rebuild")
+	}
+
+	stats, err := treedb.LeafGenerationLogicalRebuildOffline(treedb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("LeafGenerationLogicalRebuildOffline: %v", err)
+	}
+	if stats.RecordsCopied == 0 {
+		t.Fatalf("expected logical rebuild to copy records, stats=%+v", stats)
+	}
+
+	leafAfter := mustGlobBaseNames(t, filepath.Join(mainDir, "leaf_vlog", "value-l*.log"))
+	valueAfter := mustGlobBaseNames(t, filepath.Join(mainDir, "value_vlog", "value-l*.log"))
+	if len(leafAfter) == 0 {
+		t.Fatalf("expected leaf_vlog files after logical rebuild")
+	}
+	if sameStringSlices(leafBefore, leafAfter) {
+		t.Fatalf("expected rebuilt leaf_vlog files to differ; before=%v after=%v", leafBefore, leafAfter)
+	}
+	if !sameStringSlices(valueBefore, valueAfter) {
+		t.Fatalf("expected value_vlog files to remain unchanged; before=%v after=%v", valueBefore, valueAfter)
+	}
+
+	reopen, err := treedb.Open(opts)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer reopen.Close()
+
+	got, err := reopen.Get([]byte("leaf-logical-0010"))
+	if err != nil {
+		t.Fatalf("get after reopen: %v", err)
+	}
+	want := bytes.Repeat([]byte{10}, 2*1024)
+	if !bytes.Equal(got, want) {
+		t.Fatalf("value mismatch after reopen: got=%dB want=%dB", len(got), len(want))
+	}
+}
+
 func TestLeafGenerationGC_BackendOpenWithoutFlag_PreservesLeafRefs(t *testing.T) {
 	dir := t.TempDir()
 	const (
@@ -508,4 +583,30 @@ func TestLeafGenerationGC_BackendOpenWithoutFlag_PreservesLeafRefs(t *testing.T)
 	if len(got) != valSize {
 		t.Fatalf("expected %dB value after gc, got %dB", valSize, len(got))
 	}
+}
+
+func mustGlobBaseNames(t *testing.T, pattern string) []string {
+	t.Helper()
+	paths, err := filepath.Glob(pattern)
+	if err != nil {
+		t.Fatalf("glob %q: %v", pattern, err)
+	}
+	out := make([]string, 0, len(paths))
+	for _, path := range paths {
+		out = append(out, filepath.Base(path))
+	}
+	sort.Strings(out)
+	return out
+}
+
+func sameStringSlices(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
