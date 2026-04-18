@@ -8,23 +8,27 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"sort"
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/freelist"
 	"github.com/snissn/gomap/TreeDB/internal/bulk"
 	"github.com/snissn/gomap/TreeDB/internal/compression"
+	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/pager"
 	"github.com/snissn/gomap/TreeDB/tree"
 	"github.com/snissn/gomap/TreeDB/zipper"
 )
 
-var ErrLeafGenerationLogicalRebuildNoCandidate = errors.New("leaf logical rebuild: no eligible sealed single-file candidate")
+var ErrLeafGenerationLogicalRebuildNoCandidate = errors.New("leaf logical rebuild: no eligible sealed incremental candidate")
 
 type LeafGenerationLogicalRebuildRunOnceOptions struct {
 	RawFileID             uint32
 	MaxPublishedCommitSeq uint64
+	ClusterFilesMax       int
+	CandidateTryMax       int
 	Sync                  bool
 	CatchupPassesMax      int
 	CutoverMaxKeys        int
@@ -35,12 +39,16 @@ type LeafGenerationLogicalRebuildRunOnceStats struct {
 	CommitSeqBefore uint64
 	CommitSeqAfter  uint64
 
-	SelectedGenerationID uint64
-	SelectedRawFileID    uint32
-	SelectedFileID       uint32
-	SelectedRunCount     int
-	SourceLeafPages      int
-	SourceLeafBytes      int64
+	SelectedGenerationID  uint64
+	SelectedRawFileID     uint32
+	SelectedFileID        uint32
+	SelectedGenerationIDs []uint64
+	SelectedRawFileIDs    []uint32
+	SelectedFileIDs       []uint32
+	SelectedSourceFiles   int
+	SelectedRunCount      int
+	SourceLeafPages       int
+	SourceLeafBytes       int64
 
 	ReplacementLeafPages int
 	RecordsCopied        int
@@ -49,21 +57,33 @@ type LeafGenerationLogicalRebuildRunOnceStats struct {
 	CreatedFileIDs       []uint32
 	RetiredGenerationIDs []uint64
 
-	CatchupPasses    int
-	CatchupKeys      int
-	FinalCutoverKeys int
-	CutoverDefers    int
+	CandidateAttempts int
+	CatchupPasses     int
+	CatchupKeys       int
+	FinalCutoverKeys  int
+	CutoverDefers     int
 
 	WallTimeNanos int64
 }
 
-type leafLogicalRebuildCandidate struct {
+type leafLogicalRebuildSource struct {
 	generationID uint64
 	rawFileID    uint32
 	fileID       uint32
-	runRanges    [][2]int
+	firstIndex   int
+	lastIndex    int
 	sourcePages  int
 	sourceBytes  int64
+	retireable   bool
+}
+
+type leafLogicalRebuildCandidate struct {
+	generationIDs []uint64
+	rawFileIDs    []uint32
+	fileIDs       []uint32
+	runRanges     [][2]int
+	sourcePages   int
+	sourceBytes   int64
 }
 
 type leafLogicalRebuildRunBuild struct {
@@ -75,6 +95,12 @@ type leafLogicalRebuildRunBuild struct {
 }
 
 func normalizeLeafGenerationLogicalRebuildRunOnceOptions(opts LeafGenerationLogicalRebuildRunOnceOptions) LeafGenerationLogicalRebuildRunOnceOptions {
+	if opts.ClusterFilesMax <= 0 {
+		opts.ClusterFilesMax = 4
+	}
+	if opts.CandidateTryMax <= 0 {
+		opts.CandidateTryMax = 8
+	}
 	if opts.CatchupPassesMax <= 0 {
 		opts.CatchupPassesMax = vacuumCatchupPassesMax
 	}
@@ -131,9 +157,100 @@ func (db *DB) LeafGenerationLogicalRebuildRunOnce(ctx context.Context, opts Leaf
 	newPath := filepath.Join(db.dir, indexNewFileName)
 	bakPath := filepath.Join(db.dir, indexBakFileName)
 	readyPath := filepath.Join(db.dir, indexReadyFileName)
+
+	baseSnap := db.AcquireSnapshot()
+	if baseSnap == nil || baseSnap.idx == nil || baseSnap.state == nil || baseSnap.state.LeafGenerations == nil {
+		return stats, fmt.Errorf("leaf logical rebuild: missing snapshot state")
+	}
+	defer func() { _ = baseSnap.Close() }()
+	stats.CommitSeqBefore = baseSnap.state.CommitSeq
+
+	candidates, baseChildren, err := db.selectLeafGenerationLogicalRebuildCandidates(baseSnap, opts.RawFileID, opts.MaxPublishedCommitSeq, opts.ClusterFilesMax)
+	if err != nil {
+		return stats, err
+	}
+	if len(candidates) == 0 {
+		return stats, ErrLeafGenerationLogicalRebuildNoCandidate
+	}
+	grouped := make(map[int][]leafLogicalRebuildCandidate)
+	widths := make([]int, 0, 8)
+	for _, candidate := range candidates {
+		width := len(candidate.rawFileIDs)
+		if _, ok := grouped[width]; !ok {
+			widths = append(widths, width)
+		}
+		grouped[width] = append(grouped[width], candidate)
+	}
+	sort.Ints(widths)
+
+	attempts := 0
+	for _, width := range widths {
+		group := grouped[width]
+		limit := len(group)
+		if opts.CandidateTryMax > 0 && limit > opts.CandidateTryMax {
+			limit = opts.CandidateTryMax
+		}
+		for i := 0; i < limit; i++ {
+			attempts++
+			stats, err = db.tryLeafGenerationLogicalRebuildCandidate(
+				ctx,
+				opts,
+				baseSnap,
+				baseChildren,
+				group[i],
+				indexPath,
+				newPath,
+				bakPath,
+				readyPath,
+			)
+			if err == nil {
+				stats.CandidateAttempts = attempts
+				return stats, nil
+			}
+			if !errors.Is(err, ErrLeafGenerationLogicalRebuildNoCandidate) {
+				return stats, err
+			}
+		}
+	}
+	return stats, ErrLeafGenerationLogicalRebuildNoCandidate
+}
+
+func (db *DB) tryLeafGenerationLogicalRebuildCandidate(
+	ctx context.Context,
+	opts LeafGenerationLogicalRebuildRunOnceOptions,
+	baseSnap *Snapshot,
+	baseChildren []vacuumLeafChild,
+	candidate leafLogicalRebuildCandidate,
+	indexPath, newPath, bakPath, readyPath string,
+) (stats LeafGenerationLogicalRebuildRunOnceStats, err error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return stats, err
+	}
+
+	stats.CommitSeqBefore = baseSnap.state.CommitSeq
+	if len(candidate.generationIDs) > 0 {
+		stats.SelectedGenerationID = candidate.generationIDs[0]
+		stats.SelectedGenerationIDs = append([]uint64(nil), candidate.generationIDs...)
+	}
+	if len(candidate.rawFileIDs) > 0 {
+		stats.SelectedRawFileID = candidate.rawFileIDs[0]
+		stats.SelectedRawFileIDs = append([]uint32(nil), candidate.rawFileIDs...)
+	}
+	if len(candidate.fileIDs) > 0 {
+		stats.SelectedFileID = candidate.fileIDs[0]
+		stats.SelectedFileIDs = append([]uint32(nil), candidate.fileIDs...)
+	}
+	stats.SelectedSourceFiles = len(candidate.rawFileIDs)
+	stats.SelectedRunCount = len(candidate.runRanges)
+	stats.SourceLeafPages = candidate.sourcePages
+	stats.SourceLeafBytes = candidate.sourceBytes
+	stats.BytesCopied = candidate.sourceBytes
+
 	_ = os.Remove(newPath)
 	_ = os.Remove(readyPath)
-
 	newPager, err := pager.Open(newPath, db.chunkSize)
 	if err != nil {
 		return stats, err
@@ -151,7 +268,6 @@ func (db *DB) LeafGenerationLogicalRebuildRunOnce(ctx context.Context, opts Leaf
 			cleanupNewPager()
 		}
 	}()
-
 	if _, err = newPager.Alloc(2); err != nil {
 		return stats, err
 	}
@@ -241,29 +357,8 @@ func (db *DB) LeafGenerationLogicalRebuildRunOnce(ctx context.Context, opts Leaf
 	db.vacuum.Start()
 	defer db.vacuum.Stop()
 
-	baseSnap := db.AcquireSnapshot()
-	if baseSnap == nil || baseSnap.idx == nil || baseSnap.state == nil || baseSnap.state.LeafGenerations == nil {
-		closeRewriteSnapshot(&err, baseSnap)
-		return stats, fmt.Errorf("leaf logical rebuild: missing snapshot state")
-	}
-	stats.CommitSeqBefore = baseSnap.state.CommitSeq
-
-	candidate, baseChildren, err := db.selectLeafGenerationLogicalRebuildCandidate(baseSnap, opts.RawFileID, opts.MaxPublishedCommitSeq)
+	runBuilds, recordsCopied, err := db.buildLogicalRebuildRuns(baseSnap, baseChildren, candidate, writer)
 	if err != nil {
-		closeRewriteSnapshot(&err, baseSnap)
-		return stats, err
-	}
-	stats.SelectedGenerationID = candidate.generationID
-	stats.SelectedRawFileID = candidate.rawFileID
-	stats.SelectedFileID = candidate.fileID
-	stats.SelectedRunCount = len(candidate.runRanges)
-	stats.SourceLeafPages = candidate.sourcePages
-	stats.SourceLeafBytes = candidate.sourceBytes
-	stats.BytesCopied = candidate.sourceBytes
-
-	runBuilds, recordsCopied, err := db.buildLogicalRebuildRuns(baseSnap, candidate, writer)
-	if err != nil {
-		closeRewriteSnapshot(&err, baseSnap)
 		return stats, err
 	}
 	stats.RecordsCopied = recordsCopied
@@ -280,8 +375,6 @@ func (db *DB) LeafGenerationLogicalRebuildRunOnce(ctx context.Context, opts Leaf
 	}
 
 	newRoot, err := leafGenerationLogicalRebuildRootFromChildren(newPager, newAlloc, modifiedChildren, db.indexInternalBaseDelta)
-	_ = baseSnap.Close()
-	baseSnap = nil
 	if err != nil {
 		return stats, err
 	}
@@ -324,7 +417,6 @@ func (db *DB) LeafGenerationLogicalRebuildRunOnce(ctx context.Context, opts Leaf
 		if err := ctx.Err(); err != nil {
 			return stats, err
 		}
-
 		db.writeMu.Lock()
 		db.vacuum.Stop()
 		finalOps := db.vacuum.Drain()
@@ -358,22 +450,28 @@ func (db *DB) LeafGenerationLogicalRebuildRunOnce(ctx context.Context, opts Leaf
 			db.writeMu.Unlock()
 			return stats, err
 		}
-		createdLeafBytes, err := leafGenerationLogicalRebuildCreatedBytes(createdSegments)
+		createdIDs, err := writer.createdFileIDs()
 		if err != nil {
 			db.writeMu.Unlock()
 			return stats, err
 		}
-		if createdLeafBytes >= candidate.sourceBytes {
+		sourceTotalBytes, err := leafGenerationLogicalRebuildSourceTotalBytes(db.dir, candidate.rawFileIDs)
+		if err != nil {
+			db.writeMu.Unlock()
+			return stats, err
+		}
+		createdTotalBytes, err := leafGenerationLogicalRebuildCreatedTotalBytes(createdSegments)
+		if err != nil {
+			db.writeMu.Unlock()
+			return stats, err
+		}
+		minSavingsBytes := max(int64(1<<20), sourceTotalBytes/100)
+		if createdTotalBytes > sourceTotalBytes-minSavingsBytes {
 			db.writeMu.Unlock()
 			if cleanupErr := cleanupCreated(nil); cleanupErr != nil {
 				return stats, cleanupErr
 			}
 			return stats, ErrLeafGenerationLogicalRebuildNoCandidate
-		}
-		createdIDs, err := writer.createdFileIDs()
-		if err != nil {
-			db.writeMu.Unlock()
-			return stats, err
 		}
 		for _, seg := range createdSegments {
 			if err := db.valueLogManager.RegisterSegment(seg.path, seg.fileID); err != nil {
@@ -417,7 +515,7 @@ func (db *DB) LeafGenerationLogicalRebuildRunOnce(ctx context.Context, opts Leaf
 			db.writeMu.Unlock()
 			return stats, fmt.Errorf("leaf logical rebuild: created no new leaf generations")
 		}
-		retiredGenerationIDs, err := retireWholeLeafGenerationInManifest(stagedManifest, candidate.generationID, nextMeta.CommitSeq)
+		retiredGenerationIDs, err := retireLeafGenerationsInManifest(stagedManifest, candidate.generationIDs, nextMeta.CommitSeq)
 		if err != nil {
 			db.writeMu.Unlock()
 			return stats, err
@@ -511,6 +609,21 @@ func (db *DB) LeafGenerationLogicalRebuildRunOnce(ctx context.Context, opts Leaf
 	}
 }
 
+func retireLeafGenerationsInManifest(manifest *leafGenerationManifest, generationIDs []uint64, commitSeq uint64) ([]uint64, error) {
+	if len(generationIDs) == 0 {
+		return nil, nil
+	}
+	retired := make([]uint64, 0, len(generationIDs))
+	for _, generationID := range generationIDs {
+		genRetired, err := retireWholeLeafGenerationInManifest(manifest, generationID, commitSeq)
+		if err != nil {
+			return nil, err
+		}
+		retired = append(retired, genRetired...)
+	}
+	return retired, nil
+}
+
 func retireWholeLeafGenerationInManifest(manifest *leafGenerationManifest, generationID, commitSeq uint64) ([]uint64, error) {
 	if manifest == nil || generationID == 0 || commitSeq == 0 {
 		return nil, nil
@@ -532,10 +645,9 @@ func retireWholeLeafGenerationInManifest(manifest *leafGenerationManifest, gener
 	return nil, fmt.Errorf("leaf logical rebuild: generation %d not found", generationID)
 }
 
-func (db *DB) selectLeafGenerationLogicalRebuildCandidate(snap *Snapshot, requestedRawFileID uint32, maxPublishedCommitSeq uint64) (leafLogicalRebuildCandidate, []vacuumLeafChild, error) {
-	var zero leafLogicalRebuildCandidate
+func (db *DB) selectLeafGenerationLogicalRebuildCandidates(snap *Snapshot, requestedRawFileID uint32, maxPublishedCommitSeq uint64, clusterFilesMax int) ([]leafLogicalRebuildCandidate, []vacuumLeafChild, error) {
 	if snap == nil || snap.idx == nil || snap.state == nil || snap.state.LeafGenerations == nil {
-		return zero, nil, fmt.Errorf("leaf logical rebuild: missing snapshot state")
+		return nil, nil, fmt.Errorf("leaf logical rebuild: missing snapshot state")
 	}
 	rootID := snap.state.RootPageID
 	var children []vacuumLeafChild
@@ -545,20 +657,19 @@ func (db *DB) selectLeafGenerationLogicalRebuildCandidate(snap *Snapshot, reques
 		var err error
 		children, err = vacuumCollectLeafRefChildren(snap.idx.pager, rootID)
 		if err != nil {
-			return zero, nil, err
+			return nil, nil, err
 		}
 	}
 	if len(children) == 0 {
-		return zero, nil, ErrLeafGenerationLogicalRebuildNoCandidate
+		return nil, nil, ErrLeafGenerationLogicalRebuildNoCandidate
+	}
+	systemRawFileIDs, err := leafGenerationLogicalRebuildRootRawFileIDs(snap.idx.pager, snap.state.SystemRootPageID)
+	if err != nil {
+		return nil, nil, err
 	}
 
-	type fileAccum struct {
-		generationID uint64
-		runRanges    [][2]int
-		sourcePages  int
-		sourceBytes  int64
-	}
-	accumByRaw := make(map[uint32]*fileAccum)
+	accumByRaw := make(map[uint32]*leafLogicalRebuildSource)
+	orderedRaw := make([]uint32, 0, 64)
 	view := snap.state.LeafGenerations
 	manifestByGen := make(map[uint64]leafGenerationRecord, len(db.leafGenerationManifest.Generations))
 	if db.leafGenerationManifest != nil {
@@ -567,93 +678,231 @@ func (db *DB) selectLeafGenerationLogicalRebuildCandidate(snap *Snapshot, reques
 		}
 	}
 
-	currentRaw := uint32(0)
-	runStart := -1
-	finishRun := func(end int) {
-		if runStart < 0 || currentRaw == 0 {
-			runStart = -1
-			currentRaw = 0
-			return
-		}
-		accum := accumByRaw[currentRaw]
-		if accum != nil {
-			accum.runRanges = append(accum.runRanges, [2]int{runStart, end})
-		}
-		runStart = -1
-		currentRaw = 0
-	}
-
 	for i, child := range children {
 		ptr, ok := page.DecodeLeafRef(child.childID)
 		if !ok {
-			return zero, nil, fmt.Errorf("leaf logical rebuild: child %d is not a leaf ref", i)
+			return nil, nil, fmt.Errorf("leaf logical rebuild: child %d is not a leaf ref", i)
 		}
 		rawFileID := page.ValueLogSegmentID(ptr.ValueLogFileID())
 		generationID := view.FileToGeneration[rawFileID]
 		gen, ok := manifestByGen[generationID]
-		if !ok || gen.State != leafGenerationStateSealed || len(gen.FileIDs) != 1 {
-			if rawFileID == currentRaw {
-				finishRun(i - 1)
-			}
-			continue
-		}
-		if maxPublishedCommitSeq != 0 && gen.PublishedCommitSeq > maxPublishedCommitSeq {
-			if rawFileID == currentRaw {
-				finishRun(i - 1)
-			}
-			continue
-		}
-		if requestedRawFileID != 0 && rawFileID != requestedRawFileID {
-			if rawFileID == currentRaw {
-				finishRun(i - 1)
-			}
-			continue
-		}
 		accum := accumByRaw[rawFileID]
 		if accum == nil {
-			accum = &fileAccum{
+			accum = &leafLogicalRebuildSource{
 				generationID: generationID,
+				rawFileID:    rawFileID,
+				fileID:       page.ValueLogFileID(rawFileID),
+				firstIndex:   i,
+				lastIndex:    i,
 				sourceBytes:  leafGenerationLogicalRebuildFileSize(db.dir, rawFileID),
 			}
 			accumByRaw[rawFileID] = accum
+			orderedRaw = append(orderedRaw, rawFileID)
 		}
+		accum.lastIndex = i
 		accum.sourcePages++
-		if currentRaw != rawFileID {
-			if currentRaw != 0 {
-				finishRun(i - 1)
-			}
-			currentRaw = rawFileID
-			runStart = i
-		}
-	}
-	if currentRaw != 0 {
-		finishRun(len(children) - 1)
-	}
-
-	best := zero
-	bestPages := -1
-	bestBytes := int64(-1)
-	for rawFileID, accum := range accumByRaw {
-		if accum == nil || len(accum.runRanges) == 0 || accum.sourcePages == 0 {
+		if _, blocked := systemRawFileIDs[rawFileID]; blocked {
 			continue
 		}
-		if accum.sourcePages > bestPages || (accum.sourcePages == bestPages && accum.sourceBytes > bestBytes) {
-			best = leafLogicalRebuildCandidate{
-				generationID: accum.generationID,
-				rawFileID:    rawFileID,
-				fileID:       page.ValueLogFileID(rawFileID),
-				runRanges:    append([][2]int(nil), accum.runRanges...),
-				sourcePages:  accum.sourcePages,
-				sourceBytes:  accum.sourceBytes,
-			}
-			bestPages = accum.sourcePages
-			bestBytes = accum.sourceBytes
+		if !ok || gen.State != leafGenerationStateSealed || len(gen.FileIDs) != 1 {
+			continue
+		}
+		if maxPublishedCommitSeq != 0 && gen.PublishedCommitSeq > maxPublishedCommitSeq {
+			continue
+		}
+		if requestedRawFileID != 0 && rawFileID != requestedRawFileID {
+			continue
+		}
+		accum.retireable = true
+	}
+
+	allSources := make([]leafLogicalRebuildSource, 0, len(orderedRaw))
+	eligibleSources := make([]leafLogicalRebuildSource, 0, len(orderedRaw))
+	for _, rawFileID := range orderedRaw {
+		accum := accumByRaw[rawFileID]
+		if accum == nil || accum.sourcePages == 0 || accum.firstIndex > accum.lastIndex {
+			continue
+		}
+		allSources = append(allSources, *accum)
+		if accum.retireable {
+			eligibleSources = append(eligibleSources, *accum)
 		}
 	}
-	if best.rawFileID == 0 {
-		return zero, nil, ErrLeafGenerationLogicalRebuildNoCandidate
+	candidates := buildLeafGenerationLogicalRebuildCandidates(allSources, eligibleSources, clusterFilesMax)
+	if len(candidates) == 0 {
+		return nil, nil, ErrLeafGenerationLogicalRebuildNoCandidate
 	}
-	return best, children, nil
+	return candidates, children, nil
+}
+
+func buildLeafGenerationLogicalRebuildCandidates(allSources, eligibleSources []leafLogicalRebuildSource, clusterFilesMax int) []leafLogicalRebuildCandidate {
+	if len(allSources) == 0 || len(eligibleSources) == 0 {
+		return nil
+	}
+	if clusterFilesMax <= 0 {
+		clusterFilesMax = len(eligibleSources)
+	}
+	sourceByRaw := make(map[uint32]leafLogicalRebuildSource, len(allSources))
+	for _, src := range allSources {
+		sourceByRaw[src.rawFileID] = src
+	}
+	type windowKey struct {
+		start int
+		end   int
+	}
+	seen := make(map[windowKey]struct{}, len(allSources))
+	out := make([]leafLogicalRebuildCandidate, 0, len(eligibleSources))
+	for i := range eligibleSources {
+		start := eligibleSources[i].firstIndex
+		end := eligibleSources[i].lastIndex
+		for j := i; j < len(eligibleSources); j++ {
+			if eligibleSources[j].firstIndex < start {
+				start = eligibleSources[j].firstIndex
+			}
+			if eligibleSources[j].lastIndex > end {
+				end = eligibleSources[j].lastIndex
+			}
+			key := windowKey{start: start, end: end}
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+
+			retireableRawFileIDs := make([]uint32, 0, clusterFilesMax)
+			sourcePages := 0
+			sourceBytes := int64(0)
+			for _, src := range allSources {
+				if src.lastIndex < start || src.firstIndex > end {
+					continue
+				}
+				if !src.retireable || src.firstIndex < start || src.lastIndex > end {
+					continue
+				}
+				retireableRawFileIDs = append(retireableRawFileIDs, src.rawFileID)
+				sourcePages += src.sourcePages
+				sourceBytes += src.sourceBytes
+			}
+			if len(retireableRawFileIDs) == 0 {
+				continue
+			}
+			if len(retireableRawFileIDs) > clusterFilesMax {
+				break
+			}
+
+			slices.Sort(retireableRawFileIDs)
+			generationIDs := make([]uint64, 0, len(retireableRawFileIDs))
+			fileIDs := make([]uint32, 0, len(retireableRawFileIDs))
+			for _, rawFileID := range retireableRawFileIDs {
+				src := sourceByRaw[rawFileID]
+				generationIDs = append(generationIDs, src.generationID)
+				fileIDs = append(fileIDs, src.fileID)
+			}
+			out = append(out, leafLogicalRebuildCandidate{
+				generationIDs: generationIDs,
+				rawFileIDs:    retireableRawFileIDs,
+				fileIDs:       fileIDs,
+				runRanges:     [][2]int{{start, end}},
+				sourcePages:   sourcePages,
+				sourceBytes:   sourceBytes,
+			})
+		}
+	}
+	slices.SortFunc(out, func(a, b leafLogicalRebuildCandidate) int {
+		if len(a.rawFileIDs) != len(b.rawFileIDs) {
+			if len(a.rawFileIDs) < len(b.rawFileIDs) {
+				return -1
+			}
+			return 1
+		}
+		aDensity := float64(a.sourceBytes)
+		if a.sourcePages > 0 {
+			aDensity /= float64(a.sourcePages)
+		}
+		bDensity := float64(b.sourceBytes)
+		if b.sourcePages > 0 {
+			bDensity /= float64(b.sourcePages)
+		}
+		if aDensity != bDensity {
+			if aDensity > bDensity {
+				return -1
+			}
+			return 1
+		}
+		if a.sourceBytes != b.sourceBytes {
+			if a.sourceBytes > b.sourceBytes {
+				return -1
+			}
+			return 1
+		}
+		if a.sourcePages != b.sourcePages {
+			if a.sourcePages > b.sourcePages {
+				return -1
+			}
+			return 1
+		}
+		aStart, aEnd := a.runRanges[0][0], a.runRanges[0][1]
+		bStart, bEnd := b.runRanges[0][0], b.runRanges[0][1]
+		if (aEnd - aStart) != (bEnd - bStart) {
+			if (aEnd - aStart) > (bEnd - bStart) {
+				return -1
+			}
+			return 1
+		}
+		return 0
+	})
+	return out
+}
+
+func leafGenerationLogicalRebuildRootRawFileIDs(p *pager.Pager, rootID uint64) (map[uint32]struct{}, error) {
+	out := make(map[uint32]struct{})
+	if p == nil || rootID == 0 {
+		return out, nil
+	}
+	if _, ok := page.DecodeLeafRef(rootID); ok {
+		out[page.ValueLogSegmentID(page.DecodeLeafRefID(rootID).ValueLogFileID())] = struct{}{}
+		return out, nil
+	}
+	visited := make(map[uint64]struct{}, 128)
+	var walk func(uint64) error
+	walk = func(id uint64) error {
+		if id == 0 {
+			return nil
+		}
+		if _, ok := page.DecodeLeafRef(id); ok {
+			out[page.ValueLogSegmentID(page.DecodeLeafRefID(id).ValueLogFileID())] = struct{}{}
+			return nil
+		}
+		if _, seen := visited[id]; seen {
+			return nil
+		}
+		visited[id] = struct{}{}
+		data, err := p.Get(id)
+		if err != nil {
+			return err
+		}
+		n := node.NewNode(data)
+		switch n.Type() {
+		case page.PageTypeInternal:
+			count := n.Count()
+			for i := uint16(0); i < count; i++ {
+				_, childID, err := n.GetInternalEntryView(i)
+				if err != nil {
+					return err
+				}
+				if err := walk(childID); err != nil {
+					return err
+				}
+			}
+		case page.PageTypeLeaf:
+			// Pager-backed leaves in the System tree do not contribute outer-leaf
+			// leafref files, so there is nothing to record here.
+		}
+		return nil
+	}
+	if err := walk(rootID); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func leafGenerationLogicalRebuildFileSize(dir string, rawFileID uint32) int64 {
@@ -668,7 +917,26 @@ func leafGenerationLogicalRebuildFileSize(dir string, rawFileID uint32) int64 {
 	return info.Size()
 }
 
-func leafGenerationLogicalRebuildCreatedBytes(segments []rewriteCreatedSegment) (int64, error) {
+func leafGenerationLogicalRebuildSourceTotalBytes(rootDir string, rawFileIDs []uint32) (int64, error) {
+	var total int64
+	for _, rawFileID := range rawFileIDs {
+		logPath := leafGenerationFallbackPath(rootDir, rawFileID)
+		if info, err := os.Stat(logPath); err == nil {
+			total += info.Size()
+		} else if !os.IsNotExist(err) {
+			return 0, err
+		}
+		idxPath := leafGenerationRecordLengthIndexPath(rootDir, rawFileID)
+		if info, err := os.Stat(idxPath); err == nil {
+			total += info.Size()
+		} else if !os.IsNotExist(err) {
+			return 0, err
+		}
+	}
+	return total, nil
+}
+
+func leafGenerationLogicalRebuildCreatedTotalBytes(segments []rewriteCreatedSegment) (int64, error) {
 	var total int64
 	for _, seg := range segments {
 		if seg.path == "" {
@@ -679,27 +947,31 @@ func leafGenerationLogicalRebuildCreatedBytes(segments []rewriteCreatedSegment) 
 			return 0, err
 		}
 		total += info.Size()
+		idx, err := scanLeafGenerationRecordLengthIndexPath(seg.path, seg.fileID)
+		if err != nil {
+			return 0, err
+		}
+		total += leafGenerationRecordLengthIndexEncodedSize(idx)
 	}
 	return total, nil
 }
 
-func (db *DB) buildLogicalRebuildRuns(baseSnap *Snapshot, candidate leafLogicalRebuildCandidate, writer *rewriteWriter) ([]leafLogicalRebuildRunBuild, int, error) {
+func leafGenerationRecordLengthIndexEncodedSize(idx *leafGenerationRecordLengthIndex) int64 {
+	if idx == nil {
+		return 16
+	}
+	return int64(16 + idx.len()*8)
+}
+
+func (db *DB) buildLogicalRebuildRuns(baseSnap *Snapshot, baseChildren []vacuumLeafChild, candidate leafLogicalRebuildCandidate, writer *rewriteWriter) ([]leafLogicalRebuildRunBuild, int, error) {
 	if baseSnap == nil || baseSnap.idx == nil {
 		return nil, 0, fmt.Errorf("leaf logical rebuild: missing base snapshot")
 	}
 	if len(candidate.runRanges) == 0 {
 		return nil, 0, fmt.Errorf("leaf logical rebuild: candidate has no runs")
 	}
-	rootID := baseSnap.state.RootPageID
-	var baseChildren []vacuumLeafChild
-	if _, ok := page.DecodeLeafRef(rootID); ok {
-		baseChildren = []vacuumLeafChild{{key: []byte{}, childID: rootID}}
-	} else {
-		var err error
-		baseChildren, err = vacuumCollectLeafRefChildren(baseSnap.idx.pager, rootID)
-		if err != nil {
-			return nil, 0, err
-		}
+	if len(baseChildren) == 0 {
+		return nil, 0, fmt.Errorf("leaf logical rebuild: missing base frontier")
 	}
 	out := make([]leafLogicalRebuildRunBuild, 0, len(candidate.runRanges))
 	totalRecords := 0

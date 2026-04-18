@@ -26,6 +26,8 @@ func runLeafGenerationLogicalRebuildRun(dir string, args []string) {
 	jsonOut := fs.Bool("json", false, "Emit JSON instead of human-readable text")
 	rawFileID := fs.Uint("raw-file-id", 0, "Optional raw sealed leaf file ID to rebuild (0=auto-select)")
 	maxPublishedCommitSeq := fs.Uint64("max-published-commit-seq", 0, "Optional maximum published commit sequence to consider (0=no limit)")
+	clusterFilesMax := fs.Int("cluster-files-max", 4, "Maximum fully-covered sealed source files to include in one contiguous rebuild window")
+	candidateTryMax := fs.Int("candidate-try-max", 8, "Maximum candidate units to try before stopping")
 	syncOut := fs.Bool("sync", true, "Sync created leaf segments before publishing")
 	_ = fs.Parse(args)
 
@@ -45,6 +47,8 @@ func runLeafGenerationLogicalRebuildRun(dir string, args []string) {
 	stats, err := db.LeafGenerationLogicalRebuildRunOnce(context.Background(), treedb.LeafGenerationLogicalRebuildRunOnceOptions{
 		RawFileID:             uint32(*rawFileID),
 		MaxPublishedCommitSeq: *maxPublishedCommitSeq,
+		ClusterFilesMax:       *clusterFilesMax,
+		CandidateTryMax:       *candidateTryMax,
 		Sync:                  *syncOut,
 	})
 	if err != nil {
