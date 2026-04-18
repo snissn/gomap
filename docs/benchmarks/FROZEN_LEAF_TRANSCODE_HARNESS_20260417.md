@@ -138,6 +138,50 @@ Leaf-only:
 
 This is the main success signal for the harness.
 
+## Leaf Saturation Follow-Up
+
+After the initial harness landed, two focused leaf-only saturation experiments
+were run on the same frozen source, scored only against the `leaf_vlog`
+rewrite floor (`2,139,453,969`).
+
+### `reuse_current + include-current`
+
+- `leaf_vlog`: `2,344,984,993 -> 2,225,095,409`
+- remaining leaf gap: `85,641,440`
+- elapsed: `53.58s`
+- peak RSS: `694,124 kB`
+
+This is effectively the same ceiling as the first harness run. Including the
+current writable generation did not materially move the result.
+
+### `fresh_single + include-current`
+
+- `leaf_vlog`: `2,344,984,993 -> 2,317,657,169`
+- remaining leaf gap: `178,203,200`
+- elapsed: `32.92s`
+- peak RSS: `569,760 kB`
+
+This was materially worse than reusing the existing outer-leaf dict.
+
+## What This Means
+
+The remaining leaf-only gap is not explained by:
+
+- omitting the current writable generation
+- stale single-dict reuse
+
+The current best frozen result is still:
+
+- `leaf_vlog` gap closed: `119,889,584`
+- `leaf_vlog` gap remaining: `85,641,440`
+
+So the next meaningful leaf-only step is not more single-dict tuning. It is
+some form of better compression partitioning, for example:
+
+- clustered/multi-dict transcode
+- generation-local dict selection
+- or a stronger non-dict leaf-only rewrite mode
+
 ## Pass Breakdown
 
 ### Pass 1

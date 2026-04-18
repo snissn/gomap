@@ -24,9 +24,10 @@ type LeafGenerationPackOptions struct {
 	ReserveRIDs                func(count int) (start uint64, err error)
 	Force                      bool
 
-	leafDictID          uint64
-	leafDictBytes       []byte
-	leafDictUseRawPages bool
+	leafDictID           uint64
+	leafDictBytes        []byte
+	leafDictUseRawPages  bool
+	allowWritableCurrent bool
 }
 
 type LeafGenerationPackStats struct {
@@ -124,7 +125,7 @@ func (db *DB) leafGenerationPackSelected(ctx context.Context, opts LeafGeneratio
 }
 
 func (db *DB) leafGenerationPackLocked(ctx context.Context, opts LeafGenerationPackOptions, selectedPlan LeafGenerationPlan, stats LeafGenerationPackStats) (LeafGenerationPackStats, error) {
-	rawSourceIDs, matchedGenerations, err := db.resolveLeafGenerationPackSourceFileIDs(opts.GenerationIDs)
+	rawSourceIDs, matchedGenerations, err := db.resolveLeafGenerationPackSourceFileIDs(opts.GenerationIDs, opts.allowWritableCurrent)
 	if err != nil {
 		return stats, err
 	}
@@ -278,7 +279,7 @@ func (db *DB) validateLeafGenerationPackSelection(ctx context.Context, opts Leaf
 	return selected, nil
 }
 
-func (db *DB) resolveLeafGenerationPackSourceFileIDs(generationIDs []uint64) ([]uint32, int, error) {
+func (db *DB) resolveLeafGenerationPackSourceFileIDs(generationIDs []uint64, allowWritableCurrent bool) ([]uint32, int, error) {
 	if len(generationIDs) == 0 {
 		return nil, 0, nil
 	}
@@ -310,7 +311,9 @@ func (db *DB) resolveLeafGenerationPackSourceFileIDs(generationIDs []uint64) ([]
 			return nil, 0, fmt.Errorf("leaf generation pack: generation %d not found", generationID)
 		}
 		if gen.State != leafGenerationStateSealed {
-			return nil, 0, fmt.Errorf("leaf generation pack: generation %d state=%q, want %q", generationID, gen.State, leafGenerationStateSealed)
+			if !(allowWritableCurrent && generationID == manifest.CurrentGenerationID && gen.State == leafGenerationStateWritable) {
+				return nil, 0, fmt.Errorf("leaf generation pack: generation %d state=%q, want %q", generationID, gen.State, leafGenerationStateSealed)
+			}
 		}
 		matched++
 		for _, rawID := range gen.FileIDs {

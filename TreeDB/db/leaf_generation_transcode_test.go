@@ -115,3 +115,99 @@ func TestLeafGenerationTranscodeRunOnce_SkipsIneligiblePlan(t *testing.T) {
 		t.Fatalf("SkipReason=%q, want %q", got, want)
 	}
 }
+
+func TestLeafGenerationTranscodeEligibility_AllowsCurrentWritableWhenRequested(t *testing.T) {
+	gen := LeafGenerationPlanGeneration{
+		GenerationID: 7,
+		State:        leafGenerationStateWritable,
+		BytesLive:    1024,
+		LivePages:    4,
+	}
+	if ok, skip := leafGenerationTranscodeEligibility(gen, 7, LeafGenerationTranscodeOptions{}); ok || skip != leafGenerationPlanSkipWritableGeneration {
+		t.Fatalf("default writable eligibility=(%t,%q), want false/%q", ok, skip, leafGenerationPlanSkipWritableGeneration)
+	}
+	if ok, skip := leafGenerationTranscodeEligibility(gen, 7, LeafGenerationTranscodeOptions{IncludeWritableCurrent: true}); !ok || skip != "" {
+		t.Fatalf("include-current eligibility=(%t,%q), want true/empty", ok, skip)
+	}
+	if ok, skip := leafGenerationTranscodeEligibility(gen, 8, LeafGenerationTranscodeOptions{IncludeWritableCurrent: true}); ok || skip != leafGenerationPlanSkipWritableGeneration {
+		t.Fatalf("non-current writable eligibility=(%t,%q), want false/%q", ok, skip, leafGenerationPlanSkipWritableGeneration)
+	}
+}
+
+func TestPrepareLeafGenerationTranscodeDict_FreshSingleIgnoresCurrentDict(t *testing.T) {
+	db, _, _ := openLeafGenerationPackTestDB(t)
+
+	writeLeafGenerationKeys(t, db, "k", 2048, 'a')
+	snap := db.AcquireSnapshot()
+	if snap == nil || snap.state == nil {
+		t.Fatal("snapshot unavailable")
+	}
+	defer func() { _ = snap.Close() }()
+
+	var setCurrentCalled bool
+	db.valueLogDictCurrentForClass = func(context.Context, string) (uint64, error) {
+		return 77, nil
+	}
+	db.valueLogDictLookup = func(dictID uint64) ([]byte, error) {
+		if dictID == 77 {
+			return []byte("legacy-dict"), nil
+		}
+		return nil, nil
+	}
+	db.valueLogDictPut = func(context.Context, []byte) (uint64, error) {
+		return 88, nil
+	}
+	db.valueLogDictSetCurrentForClass = func(context.Context, string, uint64) error {
+		setCurrentCalled = true
+		return nil
+	}
+	db.valueLogDictSetLeafPayloadMode = func(context.Context, uint64, bool) error { return nil }
+	prevTrain := leafGenerationTranscodeTrainFreshDictHook
+	leafGenerationTranscodeTrainFreshDictHook = func(*DB, *DBState) ([]byte, error) {
+		return []byte("fresh-dict"), nil
+	}
+	defer func() {
+		leafGenerationTranscodeTrainFreshDictHook = prevTrain
+	}()
+
+	gotID, gotDict, useRawPages, err := prepareLeafGenerationTranscodeDict(db, snap.state, leafGenerationTranscodeDictStrategyFreshSingle)
+	if err != nil {
+		t.Fatalf("prepareLeafGenerationTranscodeDict: %v", err)
+	}
+	if gotID != 88 {
+		t.Fatalf("dictID=%d, want 88", gotID)
+	}
+	if len(gotDict) == 0 {
+		t.Fatal("expected fresh dict bytes")
+	}
+	if useRawPages {
+		t.Fatal("fresh compact leaf dict should not use raw pages")
+	}
+	if !setCurrentCalled {
+		t.Fatal("expected fresh dict to publish current outer_leaf class")
+	}
+}
+
+func TestResolveLeafGenerationPackSourceFileIDs_AllowsCurrentWritableWhenRequested(t *testing.T) {
+	db, leafLog, dir := openLeafGenerationPackTestDB(t)
+	writeLeafGenerationKeys(t, db, "k", 32, 'a')
+	_, fileID := currentLeafSegmentOrFatal(t, leafLog)
+	manifest := loadLeafGenerationManifestOrFatal(t, dir)
+	if manifest.CurrentGenerationID == 0 {
+		t.Fatal("expected current generation id")
+	}
+	if _, _, err := db.resolveLeafGenerationPackSourceFileIDs([]uint64{manifest.CurrentGenerationID}, false); err == nil {
+		t.Fatal("expected writable current generation to be rejected without opt-in")
+	}
+	fileIDs, matched, err := db.resolveLeafGenerationPackSourceFileIDs([]uint64{manifest.CurrentGenerationID}, true)
+	if err != nil {
+		t.Fatalf("resolveLeafGenerationPackSourceFileIDs allow current: %v", err)
+	}
+	if matched != 1 {
+		t.Fatalf("matched=%d, want 1", matched)
+	}
+	wantRaw := page.ValueLogSegmentID(fileID)
+	if len(fileIDs) != 1 || fileIDs[0] != wantRaw {
+		t.Fatalf("fileIDs=%v, want [%d]", fileIDs, wantRaw)
+	}
+}

@@ -10,6 +10,8 @@ import (
 	"time"
 
 	treedb "github.com/snissn/gomap/TreeDB"
+	treedbdb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/dictdb"
 )
 
 type leafGenerationTranscodeDiskUsage struct {
@@ -31,6 +33,8 @@ type leafGenerationTranscodeBenchGCStats struct {
 type leafGenerationTranscodeBenchOptions struct {
 	Sync                     bool   `json:"sync"`
 	Force                    bool   `json:"force"`
+	IncludeWritableCurrent   bool   `json:"include_writable_current"`
+	DictStrategy             string `json:"dict_strategy"`
 	MinPublishedAgeCommits   uint64 `json:"min_published_age_commits"`
 	MinCandidateGenerations  int    `json:"min_candidate_generations"`
 	MinExpectedSavedBytes    int64  `json:"min_expected_saved_bytes"`
@@ -47,6 +51,8 @@ type leafGenerationTranscodeBenchIteration struct {
 	ElapsedMilliseconds  int64                                   `json:"elapsed_ms"`
 	Before               leafGenerationTranscodeDiskUsage        `json:"before"`
 	After                leafGenerationTranscodeDiskUsage        `json:"after"`
+	LeafGapBeforeBytes   int64                                   `json:"leaf_gap_before_bytes,omitempty"`
+	LeafGapAfterBytes    int64                                   `json:"leaf_gap_after_bytes,omitempty"`
 	PlanAdmission        string                                  `json:"plan_admission"`
 	PlanCandidates       int                                     `json:"plan_candidates"`
 	PlanExpectedSaved    int64                                   `json:"plan_expected_saved_bytes"`
@@ -64,6 +70,9 @@ type leafGenerationTranscodeBenchSummary struct {
 	ElapsedMilliseconds int64                                   `json:"elapsed_ms"`
 	Before              leafGenerationTranscodeDiskUsage        `json:"before"`
 	After               leafGenerationTranscodeDiskUsage        `json:"after"`
+	LeafFloorBytes      int64                                   `json:"leaf_floor_bytes,omitempty"`
+	LeafGapBeforeBytes  int64                                   `json:"leaf_gap_before_bytes,omitempty"`
+	LeafGapAfterBytes   int64                                   `json:"leaf_gap_after_bytes,omitempty"`
 	StopReason          string                                  `json:"stop_reason"`
 	Options             leafGenerationTranscodeBenchOptions     `json:"options"`
 	Iterations          []leafGenerationTranscodeBenchIteration `json:"iterations"`
@@ -74,6 +83,8 @@ func runLeafGenerationTranscodePlan(dir string, args []string) {
 	rw := fs.Bool("rw", false, "Open read-write (required)")
 	jsonOut := fs.Bool("json", false, "Emit JSON instead of human-readable text")
 	force := fs.Bool("force", false, "Bypass saved-bytes thresholds")
+	includeCurrent := fs.Bool("include-current", false, "Allow the current writable generation to be considered on frozen copies")
+	dictStrategy := fs.String("dict-mode", "reuse_current", "Outer-leaf dict strategy: reuse_current or fresh_single")
 	minAgeCommits := fs.Uint64("min-age-commits", 0, "Minimum published age in commits for generation eligibility")
 	minCandidateGenerations := fs.Int("min-candidate-generations", 0, "Require at least this many candidate generations unless -force")
 	minExpectedSavedBytes := fs.Int64("min-expected-saved-bytes", 0, "Require at least this many estimated saved bytes unless -force")
@@ -85,11 +96,13 @@ func runLeafGenerationTranscodePlan(dir string, args []string) {
 	if !*rw {
 		fatalf("leafgen-transcode-plan requires -rw")
 	}
-	db := openTreeDB(dir, true)
-	defer closeTreeDB(db)
+	db, cleanup := openTreeDBForLeafTranscode(dir, true)
+	defer cleanup()
 
 	plan, err := db.LeafGenerationTranscodePlan(context.Background(), treedb.LeafGenerationTranscodeOptions{
 		Force:                    *force,
+		IncludeWritableCurrent:   *includeCurrent,
+		DictStrategy:             *dictStrategy,
 		MinPublishedAgeCommits:   *minAgeCommits,
 		MinCandidateGenerations:  *minCandidateGenerations,
 		MinExpectedSavedBytes:    *minExpectedSavedBytes,
@@ -150,6 +163,9 @@ func runLeafGenerationTranscodeBench(dir string, args []string) {
 	jsonOut := fs.Bool("json", false, "Emit JSON instead of human-readable text")
 	sync := fs.Bool("sync", false, "Sync each transcode pass before returning")
 	force := fs.Bool("force", false, "Bypass saved-bytes thresholds")
+	includeCurrent := fs.Bool("include-current", false, "Allow the current writable generation to be considered on frozen copies")
+	dictStrategy := fs.String("dict-mode", "reuse_current", "Outer-leaf dict strategy: reuse_current or fresh_single")
+	leafFloorBytes := fs.Int64("leaf-floor-bytes", 0, "Optional offline-rewrite leaf_vlog byte floor for leaf-gap reporting")
 	minAgeCommits := fs.Uint64("min-age-commits", 0, "Minimum published age in commits for generation eligibility")
 	minCandidateGenerations := fs.Int("min-candidate-generations", 0, "Require at least this many candidate generations unless -force")
 	minExpectedSavedBytes := fs.Int64("min-expected-saved-bytes", 0, "Require at least this many estimated saved bytes unless -force")
@@ -169,6 +185,8 @@ func runLeafGenerationTranscodeBench(dir string, args []string) {
 	opts := treedb.LeafGenerationTranscodeOptions{
 		Sync:                     *sync,
 		Force:                    *force,
+		IncludeWritableCurrent:   *includeCurrent,
+		DictStrategy:             *dictStrategy,
 		MinPublishedAgeCommits:   *minAgeCommits,
 		MinCandidateGenerations:  *minCandidateGenerations,
 		MinExpectedSavedBytes:    *minExpectedSavedBytes,
@@ -182,12 +200,15 @@ func runLeafGenerationTranscodeBench(dir string, args []string) {
 	started := time.Now()
 	rootDir := resolveTreeDBRootDir(dir)
 	summary := leafGenerationTranscodeBenchSummary{
-		Dir:          rootDir,
-		StartedAtUTC: started.UTC().Format(time.RFC3339),
-		Before:       mustLeafGenerationTranscodeDiskUsage(rootDir),
+		Dir:            rootDir,
+		StartedAtUTC:   started.UTC().Format(time.RFC3339),
+		Before:         mustLeafGenerationTranscodeDiskUsage(rootDir),
+		LeafFloorBytes: *leafFloorBytes,
 		Options: leafGenerationTranscodeBenchOptions{
 			Sync:                     opts.Sync,
 			Force:                    opts.Force,
+			IncludeWritableCurrent:   opts.IncludeWritableCurrent,
+			DictStrategy:             opts.DictStrategy,
 			MinPublishedAgeCommits:   opts.MinPublishedAgeCommits,
 			MinCandidateGenerations:  opts.MinCandidateGenerations,
 			MinExpectedSavedBytes:    opts.MinExpectedSavedBytes,
@@ -214,10 +235,10 @@ func runLeafGenerationTranscodeBench(dir string, args []string) {
 		}
 		iterStarted := time.Now()
 		before := mustLeafGenerationTranscodeDiskUsage(rootDir)
-		db := openTreeDB(dir, true)
+		db, cleanup := openTreeDBForLeafTranscode(dir, true)
 		runStats, err := db.LeafGenerationTranscodeRunOnce(context.Background(), opts)
 		if err != nil {
-			closeTreeDB(db)
+			cleanup()
 			fatalf("LeafGenerationTranscodeRunOnce pass=%d: %v", pass, err)
 		}
 		iter := leafGenerationTranscodeBenchIteration{
@@ -236,7 +257,7 @@ func runLeafGenerationTranscodeBench(dir string, args []string) {
 		if runStats.Ran && *gcEveryPass {
 			gcStats, err := db.LeafGenerationGC(context.Background(), treedb.LeafGenerationGCOptions{})
 			if err != nil {
-				closeTreeDB(db)
+				cleanup()
 				fatalf("LeafGenerationGC pass=%d: %v", pass, err)
 			}
 			iter.GC = leafGenerationTranscodeBenchGCStats{
@@ -246,8 +267,12 @@ func runLeafGenerationTranscodeBench(dir string, args []string) {
 				BytesDeleted:        gcStats.BytesDeleted,
 			}
 		}
-		closeTreeDB(db)
+		cleanup()
 		iter.After = mustLeafGenerationTranscodeDiskUsage(rootDir)
+		if *leafFloorBytes > 0 {
+			iter.LeafGapBeforeBytes = iter.Before.LeafVLogBytes - *leafFloorBytes
+			iter.LeafGapAfterBytes = iter.After.LeafVLogBytes - *leafFloorBytes
+		}
 		iter.ElapsedMilliseconds = time.Since(iterStarted).Milliseconds()
 		summary.Iterations = append(summary.Iterations, iter)
 		if !runStats.Ran {
@@ -260,6 +285,10 @@ func runLeafGenerationTranscodeBench(dir string, args []string) {
 		}
 	}
 	summary.After = mustLeafGenerationTranscodeDiskUsage(rootDir)
+	if *leafFloorBytes > 0 {
+		summary.LeafGapBeforeBytes = summary.Before.LeafVLogBytes - *leafFloorBytes
+		summary.LeafGapAfterBytes = summary.After.LeafVLogBytes - *leafFloorBytes
+	}
 	summary.ElapsedMilliseconds = time.Since(started).Milliseconds()
 
 	if *jsonOut {
@@ -306,6 +335,79 @@ func runLeafGenerationTranscodeBench(dir string, args []string) {
 			iter.ElapsedMilliseconds,
 			iter.SkipReason,
 		)
+	}
+}
+
+func openTreeDBForLeafTranscode(dir string, rw bool) (*treedb.DB, func()) {
+	rootDir := resolveTreeDBRootDir(dir)
+	opts := treedb.Options{Dir: rootDir}
+	applyPersistedFormatConfig(dir, &opts)
+	if !rw {
+		opts.ReadOnly = true
+	}
+
+	var closers []func() error
+	dictDir := filepath.Join(rootDir, "dictdb")
+	dictIndexPath := filepath.Join(dictDir, "index.db")
+	if _, err := os.Stat(dictIndexPath); err == nil {
+		dictOpts := treedbdb.Options{Dir: dictDir, ReadOnly: !rw}
+		applyPersistedFormatConfig(dictDir, &dictOpts)
+		dictOpts.DisableBackgroundPrune = true
+		dictOpts.ValueLog.Compression = treedbdb.ValueLogCompressionOff
+		dictBackend, err := treedbdb.Open(dictOpts)
+		if err != nil {
+			fatalf("dictdb open: %v", err)
+		}
+		store := dictdb.New(dictBackend)
+		opts.ValueLog.DictLookup = func(dictID uint64) ([]byte, error) {
+			return store.GetDictBytes(context.Background(), dictID)
+		}
+		opts.ValueLog.DictCurrentForClass = func(ctx context.Context, class string) (uint64, error) {
+			return store.GetCurrentForClass(ctx, class)
+		}
+		opts.ValueLog.DictLeafPayloadMode = func(ctx context.Context, dictID uint64) (bool, bool, error) {
+			return store.GetLeafPayloadMode(ctx, dictID)
+		}
+		if rw {
+			opts.ValueLog.DictPut = func(ctx context.Context, dictBytes []byte) (uint64, error) {
+				return store.PutDictBytes(ctx, dictBytes)
+			}
+			opts.ValueLog.DictSetCurrentForClass = func(ctx context.Context, class string, dictID uint64) error {
+				return store.SetCurrentForClass(ctx, class, dictID)
+			}
+			opts.ValueLog.DictSetLeafPayloadMode = func(ctx context.Context, dictID uint64, useRawPages bool) error {
+				return store.SetLeafPayloadMode(ctx, dictID, useRawPages)
+			}
+		}
+		closers = append(closers, dictBackend.Close)
+		opts.DisableSideStores = true
+		opts.Dir = resolveMainDBDir(rootDir)
+	} else if !os.IsNotExist(err) {
+		fatalf("stat dictdb index: %v", err)
+	}
+
+	db, err := treedb.Open(opts)
+	if err != nil {
+		for i := len(closers) - 1; i >= 0; i-- {
+			_ = closers[i]()
+		}
+		fatalf("Failed to open DB: %v", err)
+	}
+	registerSignalCloser(func() {
+		_ = db.Close()
+		for i := len(closers) - 1; i >= 0; i-- {
+			_ = closers[i]()
+		}
+	})
+	return db, func() {
+		if err := db.Close(); err != nil {
+			fatalf("Close error: %v", err)
+		}
+		for i := len(closers) - 1; i >= 0; i-- {
+			if err := closers[i](); err != nil {
+				fatalf("Close error: %v", err)
+			}
+		}
 	}
 }
 
