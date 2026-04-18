@@ -26,6 +26,7 @@ const (
 	leafGenerationTranscodeSkipNoLivePages                 = "no_live_pages"
 	leafGenerationTranscodeSkipNoEstimatedSavings          = "no_estimated_savings"
 	leafGenerationTranscodeDictStrategyReuseCurrent        = "reuse_current"
+	leafGenerationTranscodeDictStrategyReuseClustered      = "reuse_clustered"
 	leafGenerationTranscodeDictStrategyFreshSingle         = "fresh_single"
 	leafGenerationTranscodeDefaultMinSavedPerByteCopiedPPM = 10_000
 	leafGenerationTranscodeDefaultSamplePagesPerGeneration = 64
@@ -33,8 +34,12 @@ const (
 
 var errLeafGenerationTranscodeEnoughSamples = errors.New("leaf generation transcode: enough samples")
 
-var leafGenerationTranscodePlanPreparedHook = func(db *DB, ctx context.Context, opts LeafGenerationTranscodeOptions) (LeafGenerationTranscodePlan, leafGenerationTranscodePreparedDict, error) {
+var leafGenerationTranscodePlanPreparedHook = func(db *DB, ctx context.Context, opts LeafGenerationTranscodeOptions) (LeafGenerationTranscodePlan, leafGenerationTranscodePreparedDictSet, error) {
 	return db.leafGenerationTranscodePlanPrepared(ctx, opts)
+}
+
+var leafGenerationTranscodePackSelectedHook = func(db *DB, ctx context.Context, opts LeafGenerationPackOptions, selectedPlan LeafGenerationPlan) (LeafGenerationPackStats, error) {
+	return db.leafGenerationPackSelected(ctx, opts, selectedPlan)
 }
 
 var leafGenerationTranscodeTrainFreshDictHook = func(d *DB, state *DBState) ([]byte, error) {
@@ -86,6 +91,8 @@ type LeafGenerationTranscodePlanGeneration struct {
 	ExpectedBytesSaved            int64
 	ExpectedSavedRatioPPM         int
 	ExpectedSavedPerByteCopiedPPM int
+	SelectedLeafDictID            uint64
+	SelectedLeafDictUseRawPages   bool
 
 	Eligible   bool
 	SkipReason string
@@ -96,6 +103,7 @@ type LeafGenerationTranscodePlan struct {
 	CurrentGenerationID uint64
 
 	LeafDictID          uint64
+	LeafDictIDs         []uint64
 	LeafDictUseRawPages bool
 	LeafDictStrategy    string
 
@@ -132,12 +140,19 @@ type leafGenerationTranscodePreparedDict struct {
 	useRawPages bool
 }
 
+type leafGenerationTranscodePreparedDictSet struct {
+	choices []leafGenerationTranscodePreparedDict
+	byID    map[uint64]leafGenerationTranscodePreparedDict
+}
+
 type leafGenerationTranscodeEstimate struct {
-	SamplePages               int
-	SampleCurrentBytes        int64
-	SampleEstimatedBytesAfter int64
-	EstimatedBytesAfter       int64
-	ExpectedBytesSaved        int64
+	SamplePages                 int
+	SampleCurrentBytes          int64
+	SampleEstimatedBytesAfter   int64
+	EstimatedBytesAfter         int64
+	ExpectedBytesSaved          int64
+	SelectedLeafDictID          uint64
+	SelectedLeafDictUseRawPages bool
 }
 
 // LeafGenerationTranscodePlan estimates the size win from rewriting sealed live
@@ -153,7 +168,7 @@ func (db *DB) LeafGenerationTranscodePlan(ctx context.Context, opts LeafGenerati
 // outer-leaf dict mode.
 func (db *DB) LeafGenerationTranscodeRunOnce(ctx context.Context, opts LeafGenerationTranscodeOptions) (LeafGenerationTranscodeRunOnceStats, error) {
 	var stats LeafGenerationTranscodeRunOnceStats
-	plan, preparedDict, err := leafGenerationTranscodePlanPreparedHook(db, ctx, opts)
+	plan, preparedDicts, err := leafGenerationTranscodePlanPreparedHook(db, ctx, opts)
 	if err != nil {
 		return stats, err
 	}
@@ -175,20 +190,26 @@ func (db *DB) LeafGenerationTranscodeRunOnce(ctx context.Context, opts LeafGener
 		return stats, nil
 	}
 	stats.Selection = selection
-	packStats, err := db.leafGenerationPackSelected(ctx, LeafGenerationPackOptions{
-		GenerationIDs:        append([]uint64(nil), selection.GenerationIDs...),
-		Sync:                 opts.Sync,
-		ReserveRIDs:          opts.ReserveRIDs,
-		Force:                true,
-		leafDictID:           preparedDict.id,
-		leafDictBytes:        append([]byte(nil), preparedDict.bytes...),
-		leafDictUseRawPages:  preparedDict.useRawPages,
-		allowWritableCurrent: opts.IncludeWritableCurrent,
-	}, selectedLeafGenerationTranscodePlan(selection))
+	groups, err := groupLeafGenerationTranscodeSelectionByDict(selection, preparedDicts)
 	if err != nil {
 		return stats, err
 	}
-	stats.Pack = packStats
+	for _, group := range groups {
+		packStats, err := leafGenerationTranscodePackSelectedHook(db, ctx, LeafGenerationPackOptions{
+			GenerationIDs:        append([]uint64(nil), group.selection.GenerationIDs...),
+			Sync:                 opts.Sync,
+			ReserveRIDs:          opts.ReserveRIDs,
+			Force:                true,
+			leafDictID:           group.dict.id,
+			leafDictBytes:        append([]byte(nil), group.dict.bytes...),
+			leafDictUseRawPages:  group.dict.useRawPages,
+			allowWritableCurrent: opts.IncludeWritableCurrent,
+		}, selectedLeafGenerationTranscodePlan(group.selection))
+		if err != nil {
+			return stats, err
+		}
+		mergeLeafGenerationPackStats(&stats.Pack, packStats)
+	}
 	stats.Ran = true
 	return stats, nil
 }
@@ -200,6 +221,7 @@ func normalizeLeafGenerationTranscodeOptions(opts LeafGenerationTranscodeOptions
 	switch opts.DictStrategy {
 	case "":
 		opts.DictStrategy = leafGenerationTranscodeDictStrategyReuseCurrent
+	case leafGenerationTranscodeDictStrategyReuseCurrent, leafGenerationTranscodeDictStrategyReuseClustered, leafGenerationTranscodeDictStrategyFreshSingle:
 	}
 	if !opts.Force && opts.MinExpectedSavedBytes == 0 && opts.MinExpectedSavedRatioPPM == 0 && opts.MinSavedPerByteCopiedPPM == 0 {
 		opts.MinSavedPerByteCopiedPPM = leafGenerationTranscodeDefaultMinSavedPerByteCopiedPPM
@@ -207,10 +229,10 @@ func normalizeLeafGenerationTranscodeOptions(opts LeafGenerationTranscodeOptions
 	return opts
 }
 
-func (db *DB) leafGenerationTranscodePlanPrepared(ctx context.Context, opts LeafGenerationTranscodeOptions) (LeafGenerationTranscodePlan, leafGenerationTranscodePreparedDict, error) {
+func (db *DB) leafGenerationTranscodePlanPrepared(ctx context.Context, opts LeafGenerationTranscodeOptions) (LeafGenerationTranscodePlan, leafGenerationTranscodePreparedDictSet, error) {
 	var (
 		plan         LeafGenerationTranscodePlan
-		preparedDict leafGenerationTranscodePreparedDict
+		preparedDict leafGenerationTranscodePreparedDictSet
 	)
 	if db == nil {
 		return plan, preparedDict, fmt.Errorf("missing db")
@@ -257,26 +279,25 @@ func (db *DB) leafGenerationTranscodePlanPrepared(ctx context.Context, opts Leaf
 	}
 	defer func() { _ = snap.Close() }()
 
-	dictID, dictBytes, useRawPages, err := prepareLeafGenerationTranscodeDict(
+	preparedDict, err = prepareLeafGenerationTranscodeDictSet(
 		db,
 		snap.state,
+		candidateGens,
 		opts.DictStrategy,
 	)
 	if err != nil {
 		return plan, preparedDict, fmt.Errorf("leaf generation transcode: prepare leaf dict: %w", err)
 	}
-	if dictID == 0 || len(dictBytes) == 0 {
+	if len(preparedDict.choices) == 0 {
 		plan.Admission = leafGenerationTranscodePlanAdmissionNoCandidates
 		return plan, preparedDict, nil
 	}
-	preparedDict = leafGenerationTranscodePreparedDict{
-		id:          dictID,
-		bytes:       append([]byte(nil), dictBytes...),
-		useRawPages: useRawPages,
-	}
-	plan.LeafDictID = dictID
-	plan.LeafDictUseRawPages = useRawPages
+	plan.LeafDictID = preparedDict.choices[0].id
+	plan.LeafDictUseRawPages = preparedDict.choices[0].useRawPages
 	plan.LeafDictStrategy = opts.DictStrategy
+	for _, choice := range preparedDict.choices {
+		plan.LeafDictIDs = append(plan.LeafDictIDs, choice.id)
+	}
 
 	estimates, err := db.estimateLeafGenerationTranscodeSavings(ctx, snap, candidateGens, preparedDict, opts)
 	if err != nil {
@@ -419,6 +440,121 @@ func prepareLeafGenerationTranscodeDict(d *DB, state *DBState, strategy string) 
 	}
 }
 
+func prepareLeafGenerationTranscodeDictSet(d *DB, state *DBState, candidates []LeafGenerationTranscodePlanGeneration, strategy string) (leafGenerationTranscodePreparedDictSet, error) {
+	var out leafGenerationTranscodePreparedDictSet
+	add := func(dictID uint64, dictBytes []byte, useRawPages bool) {
+		if dictID == 0 || len(dictBytes) == 0 {
+			return
+		}
+		if out.byID == nil {
+			out.byID = make(map[uint64]leafGenerationTranscodePreparedDict)
+		}
+		if _, exists := out.byID[dictID]; exists {
+			return
+		}
+		entry := leafGenerationTranscodePreparedDict{
+			id:          dictID,
+			bytes:       append([]byte(nil), dictBytes...),
+			useRawPages: useRawPages,
+		}
+		out.byID[dictID] = entry
+		out.choices = append(out.choices, entry)
+	}
+
+	switch strategy {
+	case "", leafGenerationTranscodeDictStrategyReuseCurrent, leafGenerationTranscodeDictStrategyFreshSingle:
+		dictID, dictBytes, useRawPages, err := prepareLeafGenerationTranscodeDict(d, state, strategy)
+		if err != nil {
+			return out, err
+		}
+		add(dictID, dictBytes, useRawPages)
+		return out, nil
+	case leafGenerationTranscodeDictStrategyReuseClustered:
+		if d == nil || state == nil {
+			return out, nil
+		}
+		if d.valueLogDictCurrentForClass != nil && d.valueLogDictLookup != nil {
+			dictID, err := d.valueLogDictCurrentForClass(context.Background(), "outer_leaf")
+			if err != nil {
+				return out, err
+			}
+			if dictID != 0 {
+				if dictBytes, err := d.valueLogDictLookup(dictID); err == nil && len(dictBytes) > 0 {
+					useRawPages, err := resolveRewriteLeafDictUseRawPages(d.valueLogDictLeafPayloadMode, dictID, false)
+					if err != nil {
+						return out, err
+					}
+					add(dictID, dictBytes, useRawPages)
+				}
+			}
+		}
+		segmentDictIDs, err := collectLeafGenerationTranscodeSegmentDictIDs(state, candidates)
+		if err != nil {
+			return out, err
+		}
+		for _, dictID := range segmentDictIDs {
+			if d.valueLogDictLookup == nil {
+				break
+			}
+			dictBytes, err := d.valueLogDictLookup(dictID)
+			if err != nil || len(dictBytes) == 0 {
+				continue
+			}
+			useRawPages, err := resolveRewriteLeafDictUseRawPages(d.valueLogDictLeafPayloadMode, dictID, true)
+			if err != nil {
+				return out, err
+			}
+			add(dictID, dictBytes, useRawPages)
+		}
+		if len(out.choices) == 0 {
+			dictID, dictBytes, useRawPages, err := prepareLeafGenerationTranscodeDict(d, state, leafGenerationTranscodeDictStrategyReuseCurrent)
+			if err != nil {
+				return out, err
+			}
+			add(dictID, dictBytes, useRawPages)
+		}
+		return out, nil
+	default:
+		return out, fmt.Errorf("leaf generation transcode: unsupported dict strategy %q", strategy)
+	}
+}
+
+func collectLeafGenerationTranscodeSegmentDictIDs(state *DBState, candidates []LeafGenerationTranscodePlanGeneration) ([]uint64, error) {
+	if state == nil || state.ValueLogSet == nil || len(candidates) == 0 {
+		return nil, nil
+	}
+	seenFiles := make(map[uint32]struct{}, 64)
+	seenDicts := make(map[uint64]struct{}, 8)
+	out := make([]uint64, 0, 8)
+	for _, gen := range candidates {
+		for _, rawID := range gen.FileIDs {
+			fileID := page.ValueLogFileID(rawID)
+			if _, ok := seenFiles[fileID]; ok {
+				continue
+			}
+			seenFiles[fileID] = struct{}{}
+			seg := state.ValueLogSet.Files[fileID]
+			if seg == nil {
+				continue
+			}
+			dictID, err := scanValueLogSegmentPreferredDictID(seg)
+			if err != nil {
+				return nil, err
+			}
+			if dictID == 0 {
+				continue
+			}
+			if _, ok := seenDicts[dictID]; ok {
+				continue
+			}
+			seenDicts[dictID] = struct{}{}
+			out = append(out, dictID)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out, nil
+}
+
 func trainLeafGenerationTranscodeFreshDictFallback(d *DB, state *DBState) ([]byte, error) {
 	if d == nil || state == nil {
 		return nil, nil
@@ -490,6 +626,8 @@ func applyLeafGenerationTranscodeEstimate(gen *LeafGenerationTranscodePlanGenera
 	gen.ExpectedBytesSaved = estimate.ExpectedBytesSaved
 	gen.ExpectedSavedRatioPPM = ratioPPM(gen.ExpectedBytesSaved, gen.BytesToCopy)
 	gen.ExpectedSavedPerByteCopiedPPM = ratioPPM(gen.ExpectedBytesSaved, gen.BytesToCopy)
+	gen.SelectedLeafDictID = estimate.SelectedLeafDictID
+	gen.SelectedLeafDictUseRawPages = estimate.SelectedLeafDictUseRawPages
 	if gen.ExpectedBytesSaved <= 0 {
 		gen.Eligible = false
 		gen.SkipReason = leafGenerationTranscodeSkipNoEstimatedSavings
@@ -574,9 +712,12 @@ func selectedLeafGenerationTranscodePlan(selection LeafGenerationTranscodeSelect
 	}
 }
 
-func (db *DB) estimateLeafGenerationTranscodeSavings(ctx context.Context, snap *Snapshot, candidates []LeafGenerationTranscodePlanGeneration, preparedDict leafGenerationTranscodePreparedDict, opts LeafGenerationTranscodeOptions) (map[uint64]leafGenerationTranscodeEstimate, error) {
+func (db *DB) estimateLeafGenerationTranscodeSavings(ctx context.Context, snap *Snapshot, candidates []LeafGenerationTranscodePlanGeneration, preparedDicts leafGenerationTranscodePreparedDictSet, opts LeafGenerationTranscodeOptions) (map[uint64]leafGenerationTranscodeEstimate, error) {
 	if db == nil || snap == nil || snap.state == nil || snap.state.LeafGenerations == nil || snap.state.ValueLogSet == nil || snap.idx == nil {
 		return nil, fmt.Errorf("leaf generation transcode: snapshot state unavailable")
+	}
+	if len(preparedDicts.choices) == 0 {
+		return map[uint64]leafGenerationTranscodeEstimate{}, nil
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -628,6 +769,7 @@ func (db *DB) estimateLeafGenerationTranscodeSavings(ctx context.Context, snap *
 	bodyScratch := make([]byte, 0, page.PageSize)
 	leafScratch := make([]byte, 0, page.PageSize)
 	estimates := make(map[uint64]leafGenerationTranscodeEstimate, len(candidates))
+	sampleEstimatedByDict := make(map[uint64][]int64, len(candidates))
 	view := snap.state.LeafGenerations
 
 	visit := func(ptr page.LeafLogPtr) error {
@@ -654,27 +796,40 @@ func (db *DB) estimateLeafGenerationTranscodeSavings(ctx context.Context, snap *
 				leafScratch = leafPage[:0]
 			}
 		}
-		payload := leafPage
-		if !preparedDict.useRawPages {
-			payload, _, err = valuelog.MaybeCompactLeafLogPayload(leafPage)
+		var compactPayload []byte
+		haveCompact := false
+		perDictEstimated, ok := sampleEstimatedByDict[genID]
+		if !ok {
+			perDictEstimated = make([]int64, len(preparedDicts.choices))
+			sampleEstimatedByDict[genID] = perDictEstimated
+		}
+		for idx, preparedDict := range preparedDicts.choices {
+			payload := leafPage
+			if !preparedDict.useRawPages {
+				if !haveCompact {
+					compactPayload, _, err = valuelog.MaybeCompactLeafLogPayload(leafPage)
+					if err != nil {
+						return err
+					}
+					haveCompact = true
+				}
+				payload = compactPayload
+			}
+			records[0].Value = payload
+			body, _, err := preparer.PrepareFrameInto(bodyScratch[:0], preparedDict.id, preparedDict.bytes, records[:])
 			if err != nil {
 				return err
 			}
-		}
-		records[0].Value = payload
-		body, _, err := preparer.PrepareFrameInto(bodyScratch[:0], preparedDict.id, preparedDict.bytes, records[:])
-		if err != nil {
-			return err
-		}
-		if cap(body) > rewriteReadScratchMaxCap {
-			bodyScratch = nil
-		} else {
-			bodyScratch = body[:0]
+			perDictEstimated[idx] += int64((valuelog.HeaderSize - 4) + len(body))
+			if cap(body) > rewriteReadScratchMaxCap {
+				bodyScratch = nil
+			} else {
+				bodyScratch = body[:0]
+			}
 		}
 		estimate := estimates[genID]
 		estimate.SamplePages++
 		estimate.SampleCurrentBytes += int64(currentLen)
-		estimate.SampleEstimatedBytesAfter += int64((valuelog.HeaderSize - 4) + len(body))
 		estimates[genID] = estimate
 		quotas[genID] = quota - 1
 		remaining--
@@ -693,6 +848,14 @@ func (db *DB) estimateLeafGenerationTranscodeSavings(ctx context.Context, snap *
 			delete(estimates, genID)
 			continue
 		}
+		bestIdx, bestSampleEstimatedAfter := pickLeafGenerationTranscodeBestDict(sampleEstimatedByDict[genID])
+		if bestIdx < 0 {
+			delete(estimates, genID)
+			continue
+		}
+		estimate.SampleEstimatedBytesAfter = bestSampleEstimatedAfter
+		estimate.SelectedLeafDictID = preparedDicts.choices[bestIdx].id
+		estimate.SelectedLeafDictUseRawPages = preparedDicts.choices[bestIdx].useRawPages
 		estimatedAfter := (gen.BytesLive * estimate.SampleEstimatedBytesAfter) / estimate.SampleCurrentBytes
 		if estimatedAfter < 0 {
 			estimatedAfter = 0
@@ -709,4 +872,90 @@ func (db *DB) estimateLeafGenerationTranscodeSavings(ctx context.Context, snap *
 		estimates[genID] = estimate
 	}
 	return estimates, nil
+}
+
+func pickLeafGenerationTranscodeBestDict(sampleEstimatedBytesAfter []int64) (int, int64) {
+	bestIdx := -1
+	bestBytes := int64(0)
+	for idx, bytesAfter := range sampleEstimatedBytesAfter {
+		if bytesAfter <= 0 {
+			continue
+		}
+		if bestIdx < 0 || bytesAfter < bestBytes {
+			bestIdx = idx
+			bestBytes = bytesAfter
+		}
+	}
+	return bestIdx, bestBytes
+}
+
+type leafGenerationTranscodeSelectionGroup struct {
+	dict      leafGenerationTranscodePreparedDict
+	selection LeafGenerationTranscodeSelection
+}
+
+func groupLeafGenerationTranscodeSelectionByDict(selection LeafGenerationTranscodeSelection, preparedDicts leafGenerationTranscodePreparedDictSet) ([]leafGenerationTranscodeSelectionGroup, error) {
+	if len(selection.Generations) == 0 {
+		return nil, nil
+	}
+	if len(preparedDicts.choices) == 0 {
+		return nil, fmt.Errorf("leaf generation transcode: missing prepared dicts")
+	}
+	defaultDict := preparedDicts.choices[0]
+	lookup := preparedDicts.byID
+	groupsByID := make(map[uint64]*leafGenerationTranscodeSelectionGroup, len(preparedDicts.choices))
+	order := make([]uint64, 0, len(preparedDicts.choices))
+	for _, gen := range selection.Generations {
+		dictID := gen.SelectedLeafDictID
+		if dictID == 0 {
+			dictID = defaultDict.id
+		}
+		dict, ok := lookup[dictID]
+		if !ok {
+			if dictID == defaultDict.id {
+				dict = defaultDict
+			} else {
+				return nil, fmt.Errorf("leaf generation transcode: missing prepared dict %d for generation %d", dictID, gen.GenerationID)
+			}
+		}
+		group := groupsByID[dict.id]
+		if group == nil {
+			group = &leafGenerationTranscodeSelectionGroup{dict: dict}
+			groupsByID[dict.id] = group
+			order = append(order, dict.id)
+		}
+		appendLeafGenerationTranscodeSelection(&group.selection, gen)
+	}
+	out := make([]leafGenerationTranscodeSelectionGroup, 0, len(order))
+	for _, dictID := range order {
+		group := groupsByID[dictID]
+		group.selection.ExpectedBytesSavedRatioPPM = ratioPPM(group.selection.ExpectedBytesSaved, group.selection.BytesToCopy)
+		group.selection.ExpectedBytesSavedPerByteCopiedPPM = ratioPPM(group.selection.ExpectedBytesSaved, group.selection.BytesToCopy)
+		out = append(out, *group)
+	}
+	return out, nil
+}
+
+func mergeLeafGenerationPackStats(dst *LeafGenerationPackStats, src LeafGenerationPackStats) {
+	if dst == nil {
+		return
+	}
+	dst.GenerationsRequested += src.GenerationsRequested
+	dst.GenerationsMatched += src.GenerationsMatched
+	dst.SourceGenerationIDs = append(dst.SourceGenerationIDs, src.SourceGenerationIDs...)
+	dst.SourceFilesRequested += src.SourceFilesRequested
+	dst.SourceFileIDs = append(dst.SourceFileIDs, src.SourceFileIDs...)
+	dst.SourceBytesTotal += src.SourceBytesTotal
+	dst.SourceBytesLive += src.SourceBytesLive
+	dst.SourceBytesDead += src.SourceBytesDead
+	dst.SourceBytesToCopy += src.SourceBytesToCopy
+	dst.ExpectedReclaimBytes += src.ExpectedReclaimBytes
+	dst.LeafPagesCopied += src.LeafPagesCopied
+	dst.BytesCopied += src.BytesCopied
+	dst.InternalPagesVisited += src.InternalPagesVisited
+	dst.SubtreesPruned += src.SubtreesPruned
+	dst.CreatedFileIDs = append(dst.CreatedFileIDs, src.CreatedFileIDs...)
+	dst.WallTimeNanos += src.WallTimeNanos
+	dst.ExpectedReclaimRatioPPM = ratioPPM(dst.ExpectedReclaimBytes, dst.SourceBytesLive)
+	dst.ExpectedReclaimPerByteCopiedPPM = ratioPPM(dst.ExpectedReclaimBytes, dst.SourceBytesToCopy)
 }

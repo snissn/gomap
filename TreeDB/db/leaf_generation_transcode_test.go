@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"os"
+	"reflect"
 	"testing"
 	"time"
 
@@ -30,39 +31,42 @@ func TestLeafGenerationTranscodeRunOnce_UsesPreparedPlan(t *testing.T) {
 	segmentBytes := info.Size()
 
 	prev := leafGenerationTranscodePlanPreparedHook
-	leafGenerationTranscodePlanPreparedHook = func(_ *DB, _ context.Context, _ LeafGenerationTranscodeOptions) (LeafGenerationTranscodePlan, leafGenerationTranscodePreparedDict, error) {
+	leafGenerationTranscodePlanPreparedHook = func(_ *DB, _ context.Context, _ LeafGenerationTranscodeOptions) (LeafGenerationTranscodePlan, leafGenerationTranscodePreparedDictSet, error) {
 		return LeafGenerationTranscodePlan{
-			Admission:           leafGenerationTranscodePlanAdmissionEligible,
-			CurrentCommitSeq:    1,
-			CurrentGenerationID: manifestBefore.CurrentGenerationID,
-			Candidates: []LeafGenerationTranscodePlanGeneration{
-				{
-					GenerationID:                  gen1.GenerationID,
-					State:                         leafGenerationStateSealed,
-					FileIDs:                       append([]uint32(nil), gen1.FileIDs...),
-					FileCount:                     len(gen1.FileIDs),
-					BytesTotal:                    segmentBytes,
-					BytesLive:                     segmentBytes,
-					BytesToCopy:                   segmentBytes,
-					LivePages:                     1,
-					SamplePages:                   1,
-					EstimatedBytesAfter:           segmentBytes - 256,
-					ExpectedBytesSaved:            256,
-					ExpectedSavedPerByteCopiedPPM: ratioPPM(256, segmentBytes),
+				Admission:           leafGenerationTranscodePlanAdmissionEligible,
+				CurrentCommitSeq:    1,
+				CurrentGenerationID: manifestBefore.CurrentGenerationID,
+				Candidates: []LeafGenerationTranscodePlanGeneration{
+					{
+						GenerationID:                  gen1.GenerationID,
+						State:                         leafGenerationStateSealed,
+						FileIDs:                       append([]uint32(nil), gen1.FileIDs...),
+						FileCount:                     len(gen1.FileIDs),
+						BytesTotal:                    segmentBytes,
+						BytesLive:                     segmentBytes,
+						BytesToCopy:                   segmentBytes,
+						LivePages:                     1,
+						SamplePages:                   1,
+						EstimatedBytesAfter:           segmentBytes - 256,
+						ExpectedBytesSaved:            256,
+						ExpectedSavedPerByteCopiedPPM: ratioPPM(256, segmentBytes),
+					},
 				},
-			},
-			CandidateGenerationIDs:             []uint64{gen1.GenerationID},
-			CandidateBytesTotal:                segmentBytes,
-			CandidateBytesLive:                 segmentBytes,
-			CandidateBytesToCopy:               segmentBytes,
-			CandidateLivePages:                 1,
-			CandidateSamplePages:               1,
-			CandidateEstimatedBytesAfter:       segmentBytes - 256,
-			CandidateBytesSaved:                256,
-			ExpectedBytesSaved:                 256,
-			ExpectedBytesSavedRatioPPM:         ratioPPM(256, segmentBytes),
-			ExpectedBytesSavedPerByteCopiedPPM: ratioPPM(256, segmentBytes),
-		}, leafGenerationTranscodePreparedDict{}, nil
+				CandidateGenerationIDs:             []uint64{gen1.GenerationID},
+				CandidateBytesTotal:                segmentBytes,
+				CandidateBytesLive:                 segmentBytes,
+				CandidateBytesToCopy:               segmentBytes,
+				CandidateLivePages:                 1,
+				CandidateSamplePages:               1,
+				CandidateEstimatedBytesAfter:       segmentBytes - 256,
+				CandidateBytesSaved:                256,
+				ExpectedBytesSaved:                 256,
+				ExpectedBytesSavedRatioPPM:         ratioPPM(256, segmentBytes),
+				ExpectedBytesSavedPerByteCopiedPPM: ratioPPM(256, segmentBytes),
+			}, leafGenerationTranscodePreparedDictSet{
+				choices: []leafGenerationTranscodePreparedDict{{}},
+				byID:    map[uint64]leafGenerationTranscodePreparedDict{0: {}},
+			}, nil
 	}
 	defer func() {
 		leafGenerationTranscodePlanPreparedHook = prev
@@ -94,10 +98,10 @@ func TestLeafGenerationTranscodeRunOnce_UsesPreparedPlan(t *testing.T) {
 
 func TestLeafGenerationTranscodeRunOnce_SkipsIneligiblePlan(t *testing.T) {
 	prev := leafGenerationTranscodePlanPreparedHook
-	leafGenerationTranscodePlanPreparedHook = func(_ *DB, _ context.Context, _ LeafGenerationTranscodeOptions) (LeafGenerationTranscodePlan, leafGenerationTranscodePreparedDict, error) {
+	leafGenerationTranscodePlanPreparedHook = func(_ *DB, _ context.Context, _ LeafGenerationTranscodeOptions) (LeafGenerationTranscodePlan, leafGenerationTranscodePreparedDictSet, error) {
 		return LeafGenerationTranscodePlan{
 			Admission: leafGenerationTranscodePlanAdmissionSavedPerCopyTooLow,
-		}, leafGenerationTranscodePreparedDict{}, nil
+		}, leafGenerationTranscodePreparedDictSet{}, nil
 	}
 	defer func() {
 		leafGenerationTranscodePlanPreparedHook = prev
@@ -209,5 +213,117 @@ func TestResolveLeafGenerationPackSourceFileIDs_AllowsCurrentWritableWhenRequest
 	wantRaw := page.ValueLogSegmentID(fileID)
 	if len(fileIDs) != 1 || fileIDs[0] != wantRaw {
 		t.Fatalf("fileIDs=%v, want [%d]", fileIDs, wantRaw)
+	}
+}
+
+func TestLeafGenerationTranscodeRunOnce_GroupsSelectedGenerationsByDict(t *testing.T) {
+	db, _, _ := openLeafGenerationPackTestDB(t)
+
+	prevPlan := leafGenerationTranscodePlanPreparedHook
+	prevPack := leafGenerationTranscodePackSelectedHook
+	defer func() {
+		leafGenerationTranscodePlanPreparedHook = prevPlan
+		leafGenerationTranscodePackSelectedHook = prevPack
+	}()
+
+	leafGenerationTranscodePlanPreparedHook = func(_ *DB, _ context.Context, _ LeafGenerationTranscodeOptions) (LeafGenerationTranscodePlan, leafGenerationTranscodePreparedDictSet, error) {
+		plan := LeafGenerationTranscodePlan{
+			Admission: leafGenerationTranscodePlanAdmissionEligible,
+			Candidates: []LeafGenerationTranscodePlanGeneration{
+				{
+					GenerationID:                  11,
+					State:                         leafGenerationStateSealed,
+					BytesLive:                     100,
+					BytesToCopy:                   100,
+					LivePages:                     4,
+					SamplePages:                   4,
+					EstimatedBytesAfter:           60,
+					ExpectedBytesSaved:            40,
+					ExpectedSavedPerByteCopiedPPM: ratioPPM(40, 100),
+					SelectedLeafDictID:            101,
+				},
+				{
+					GenerationID:                  12,
+					State:                         leafGenerationStateSealed,
+					BytesLive:                     120,
+					BytesToCopy:                   120,
+					LivePages:                     5,
+					SamplePages:                   5,
+					EstimatedBytesAfter:           70,
+					ExpectedBytesSaved:            50,
+					ExpectedSavedPerByteCopiedPPM: ratioPPM(50, 120),
+					SelectedLeafDictID:            202,
+				},
+				{
+					GenerationID:                  13,
+					State:                         leafGenerationStateSealed,
+					BytesLive:                     90,
+					BytesToCopy:                   90,
+					LivePages:                     3,
+					SamplePages:                   3,
+					EstimatedBytesAfter:           50,
+					ExpectedBytesSaved:            40,
+					ExpectedSavedPerByteCopiedPPM: ratioPPM(40, 90),
+					SelectedLeafDictID:            101,
+				},
+			},
+		}
+		return plan, leafGenerationTranscodePreparedDictSet{
+			choices: []leafGenerationTranscodePreparedDict{
+				{id: 101, bytes: []byte("dict-a"), useRawPages: false},
+				{id: 202, bytes: []byte("dict-b"), useRawPages: true},
+			},
+			byID: map[uint64]leafGenerationTranscodePreparedDict{
+				101: {id: 101, bytes: []byte("dict-a"), useRawPages: false},
+				202: {id: 202, bytes: []byte("dict-b"), useRawPages: true},
+			},
+		}, nil
+	}
+
+	type packCall struct {
+		dictID        uint64
+		useRawPages   bool
+		generationIDs []uint64
+	}
+	var calls []packCall
+	leafGenerationTranscodePackSelectedHook = func(_ *DB, _ context.Context, opts LeafGenerationPackOptions, selectedPlan LeafGenerationPlan) (LeafGenerationPackStats, error) {
+		calls = append(calls, packCall{
+			dictID:        opts.leafDictID,
+			useRawPages:   opts.leafDictUseRawPages,
+			generationIDs: append([]uint64(nil), selectedPlan.CandidateGenerationIDs...),
+		})
+		return LeafGenerationPackStats{
+			GenerationsRequested: len(selectedPlan.CandidateGenerationIDs),
+			GenerationsMatched:   len(selectedPlan.CandidateGenerationIDs),
+			SourceGenerationIDs:  append([]uint64(nil), selectedPlan.CandidateGenerationIDs...),
+		}, nil
+	}
+
+	stats, err := db.LeafGenerationTranscodeRunOnce(context.Background(), LeafGenerationTranscodeOptions{Force: true})
+	if err != nil {
+		t.Fatalf("LeafGenerationTranscodeRunOnce: %v", err)
+	}
+	if !stats.Ran {
+		t.Fatalf("expected grouped run to execute, skip_reason=%q", stats.SkipReason)
+	}
+	if got, want := len(calls), 2; got != want {
+		t.Fatalf("pack call count=%d, want %d", got, want)
+	}
+	if calls[0].dictID != 101 || !reflect.DeepEqual(calls[0].generationIDs, []uint64{11, 13}) || calls[0].useRawPages {
+		t.Fatalf("first pack call=%+v, want dict 101 gens [11 13] compact", calls[0])
+	}
+	if calls[1].dictID != 202 || !reflect.DeepEqual(calls[1].generationIDs, []uint64{12}) || !calls[1].useRawPages {
+		t.Fatalf("second pack call=%+v, want dict 202 gens [12] raw", calls[1])
+	}
+}
+
+func TestPickLeafGenerationTranscodeBestDict(t *testing.T) {
+	idx, bytesAfter := pickLeafGenerationTranscodeBestDict([]int64{400, 275, 330})
+	if idx != 1 || bytesAfter != 275 {
+		t.Fatalf("best=(%d,%d), want (1,275)", idx, bytesAfter)
+	}
+	idx, bytesAfter = pickLeafGenerationTranscodeBestDict([]int64{0, 0})
+	if idx != -1 || bytesAfter != 0 {
+		t.Fatalf("empty best=(%d,%d), want (-1,0)", idx, bytesAfter)
 	}
 }

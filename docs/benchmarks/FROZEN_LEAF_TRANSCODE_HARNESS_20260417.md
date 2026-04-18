@@ -182,6 +182,53 @@ some form of better compression partitioning, for example:
 - generation-local dict selection
 - or a stronger non-dict leaf-only rewrite mode
 
+## `reuse_clustered` Follow-Up
+
+The next experiment added a clustered reuse mode to the frozen harness. The
+intent was:
+
+- build a pool from the current outer-leaf dict plus any preferred dict IDs
+  already observed in the source sealed leaf segments
+- estimate each generation against the full dict pool
+- rewrite selected generations in per-dict clusters
+
+### Result
+
+- `leaf_vlog`: `2,344,984,993 -> 2,250,027,716`
+- remaining leaf gap: `110,573,747`
+- elapsed: `61.16s`
+- peak RSS: `783,660 kB`
+
+This was worse than the existing `reuse_current` ceiling:
+
+- `reuse_current` remaining leaf gap: `85,641,440`
+- `reuse_clustered` remaining leaf gap: `110,573,747`
+
+### Why It Failed
+
+The frozen source did not actually expose a useful reusable dict pool.
+
+On the untouched source plan:
+
+- `LeafDictIDs = [15208934947383263000]`
+- all eligible generations selected the same `SelectedLeafDictID`
+
+So the clustered reuse pool collapsed to a single reusable dict in practice.
+This means:
+
+- the current source leaf segments are effectively single-dict-shaped
+- there is no latent “many reusable outer-leaf dicts” win to unlock by better
+  selection alone
+- better reuse clustering is not the next step
+
+### Updated Implication
+
+The next leaf-only experiment should be one of:
+
+- fresh clustered dict training, not reused clustered dict selection
+- generation-local freshly trained dicts
+- or a stronger non-dict compression mode for leaf transcode
+
 ## Pass Breakdown
 
 ### Pass 1
