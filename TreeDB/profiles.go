@@ -150,6 +150,12 @@ func applyRunCelestiaVLogCompressionProfile(opts *Options) {
 	if opts.ValueLog.Compression == 0 {
 		opts.ValueLog.Compression = ValueLogCompressionAuto
 	}
+	if opts.ValueLog.BlockCodec == 0 {
+		opts.ValueLog.BlockCodec = ValueLogBlockSnappy
+	}
+	if opts.ValueLog.AutoPolicy == 0 {
+		opts.ValueLog.AutoPolicy = ValueLogAutoBalanced
+	}
 	if opts.ValueLog.CompressionAutotune.Mode == AutotuneUnset {
 		opts.ValueLog.CompressionAutotune.Mode = AutotuneMedium
 	}

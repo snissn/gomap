@@ -216,6 +216,8 @@ func TestApplyProfile_PreservesExplicitVLogCompressionOverrides(t *testing.T) {
 			opts := Options{
 				ValueLog: ValueLogOptions{
 					Compression: ValueLogCompressionBlock,
+					BlockCodec:  ValueLogBlockLZ4,
+					AutoPolicy:  ValueLogAutoSize,
 					CompressionAutotune: AutotuneOptions{
 						Mode: AutotuneAggressive,
 					},
@@ -225,6 +227,12 @@ func TestApplyProfile_PreservesExplicitVLogCompressionOverrides(t *testing.T) {
 
 			if opts.ValueLog.Compression != ValueLogCompressionBlock {
 				t.Fatalf("ValueLog.Compression overridden: got %v", opts.ValueLog.Compression)
+			}
+			if opts.ValueLog.BlockCodec != ValueLogBlockLZ4 {
+				t.Fatalf("ValueLog.BlockCodec overridden: got %v", opts.ValueLog.BlockCodec)
+			}
+			if opts.ValueLog.AutoPolicy != ValueLogAutoSize {
+				t.Fatalf("ValueLog.AutoPolicy overridden: got %v", opts.ValueLog.AutoPolicy)
 			}
 			if opts.ValueLog.CompressionAutotune.Mode != AutotuneAggressive {
 				t.Fatalf("ValueLog.CompressionAutotune overridden: got %v", opts.ValueLog.CompressionAutotune.Mode)
