@@ -970,8 +970,9 @@ func (f *File) ReadUnsafeAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) (
 
 func (f *File) appendPayloadFromFile(dst []byte, off int64, payloadLen int) ([]byte, error) {
 	oldLen := len(dst)
-	noteGrowReadAppendPayload(payloadLen)
-	dst = grow(dst, payloadLen)
+	reserveLen := decodedLeafLogPayloadAppendLen(f.ID, f.Path, payloadLen)
+	noteGrowReadAppendPayload(reserveLen)
+	dst = grow(dst, reserveLen)
 	payload := dst[oldLen : oldLen+payloadLen]
 	if _, err := f.File.ReadAt(payload, off); err != nil {
 		return nil, err

@@ -59,21 +59,37 @@ func decodeCompactLeafLogPayloadTo(payload, dst []byte) ([]byte, bool, bool, err
 	if compactLeafPagePayloadHeaderSize+prefixLen+suffixLen != len(payload) {
 		return nil, false, true, ErrCorrupt
 	}
-	if cap(dst) >= page.PageSize && sliceAliasesBytes(dst[:cap(dst)], payload) {
-		payload = append([]byte(nil), payload...)
-	}
 	out := dst
 	usedDst := false
 	if cap(out) >= page.PageSize {
 		out = out[:page.PageSize]
-		clear(out)
 		usedDst = true
 	} else {
 		out = make([]byte, page.PageSize)
 	}
-	copy(out[:prefixLen], payload[compactLeafPagePayloadHeaderSize:compactLeafPagePayloadHeaderSize+prefixLen])
-	copy(out[page.PageSize-suffixLen:], payload[compactLeafPagePayloadHeaderSize+prefixLen:])
+	prefix := payload[compactLeafPagePayloadHeaderSize : compactLeafPagePayloadHeaderSize+prefixLen]
+	suffix := payload[compactLeafPagePayloadHeaderSize+prefixLen:]
+	if suffixLen > 0 {
+		copy(out[page.PageSize-suffixLen:], suffix)
+	}
+	copy(out[:prefixLen], prefix)
+	if gapStart, gapEnd := prefixLen, page.PageSize-suffixLen; gapStart < gapEnd {
+		clear(out[gapStart:gapEnd])
+	}
 	return out, usedDst, true, nil
+}
+
+func decodedLeafLogPayloadAppendLen(fileID uint32, path string, payloadLen int) int {
+	if payloadLen <= 0 {
+		return payloadLen
+	}
+	if !allowsCompactLeafLogPayload(fileID, path) {
+		return payloadLen
+	}
+	if payloadLen < page.PageSize {
+		return page.PageSize
+	}
+	return payloadLen
 }
 
 func allowsCompactLeafLogPayload(fileID uint32, path string) bool {
@@ -107,18 +123,21 @@ func appendMaybeDecodeLeafLogPayload(fileID uint32, path string, dst, payload []
 		}
 		return append(dst, payload...), nil
 	}
-	out, _, decoded, err := decodeCompactLeafLogPayloadTo(payload, nil)
+	oldLen := len(dst)
+	dst = grow(dst, decodedLeafLogPayloadAppendLen(fileID, path, len(payload)))
+	out, usedDst, decoded, err := decodeCompactLeafLogPayloadTo(payload, dst[oldLen:oldLen])
 	if err != nil {
 		return nil, err
 	}
 	if decoded {
-		return append(dst, out...), nil
+		if usedDst {
+			return dst[:oldLen+len(out)], nil
+		}
+		copy(dst[oldLen:], out)
+		return dst[:oldLen+len(out)], nil
 	}
-	if len(payload) == 0 {
-		return dst, nil
-	}
-	if cap(dst) >= len(dst)+len(payload) && sliceAliasesBytes(dst[:cap(dst)], payload) {
-		return dst[:len(dst)+len(payload)], nil
-	}
-	return append(dst, payload...), nil
+	nextLen := oldLen + len(payload)
+	dst = dst[:nextLen]
+	copy(dst[oldLen:], payload)
+	return dst, nil
 }
