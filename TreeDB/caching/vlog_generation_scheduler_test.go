@@ -2429,6 +2429,95 @@ func TestVlogGenerationMaintenance_PeriodicPassSkipsLeafPackOnForegroundIterator
 	}
 }
 
+func TestVlogGenerationMaintenance_PeriodicPassBacksOffLeafPackNoCandidates(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+	t.Setenv(envEnableLeafGenerationPackMaintenance, "1")
+	recorder := &leafPackMaintenanceRecordingBackend{
+		DB:   mustOpenLeafPackBackend(t),
+		resp: backenddb.LeafGenerationPackRunOnceStats{SkipReason: leafGenerationPackNoCandidateSkipReason},
+	}
+	db, cleanup := openLeafPackMaintenanceTestDB(t, recorder)
+	defer cleanup()
+
+	if ran := db.maybeRunPeriodicVlogGenerationMaintenance(false); !ran {
+		t.Fatal("expected first periodic maintenance pass to run")
+	}
+	_, calls, _, _ := recorder.recordedLeafPack()
+	if calls != 1 {
+		t.Fatalf("leaf pack calls after first pass=%d want 1", calls)
+	}
+	if got := db.vlogGenerationLeafPackAttempts.Load(); got != 1 {
+		t.Fatalf("leaf pack attempts after first pass=%d want 1", got)
+	}
+	if got := db.vlogGenerationLeafPackConsecutiveNoCandidate.Load(); got != 1 {
+		t.Fatalf("leaf pack consecutive no-candidate=%d want 1", got)
+	}
+	if got := db.Stats()["treedb.cache.vlog_generation.leaf_pack.last_skip_reason"]; got != leafGenerationPackNoCandidateSkipReason {
+		t.Fatalf("last_skip_reason after first pass=%q want %q", got, leafGenerationPackNoCandidateSkipReason)
+	}
+
+	if ran := db.maybeRunPeriodicVlogGenerationMaintenance(false); !ran {
+		t.Fatal("expected second periodic maintenance pass to acquire and noop under backoff")
+	}
+	_, calls, _, _ = recorder.recordedLeafPack()
+	if calls != 1 {
+		t.Fatalf("leaf pack calls after immediate retry=%d want 1", calls)
+	}
+	if got := db.vlogGenerationLeafPackAttempts.Load(); got != 1 {
+		t.Fatalf("leaf pack attempts after immediate retry=%d want 1", got)
+	}
+	if got := db.vlogGenerationLeafPackSkipNoCandidateBackoff.Load(); got != 1 {
+		t.Fatalf("leaf pack no-candidate backoff skips=%d want 1", got)
+	}
+	if got := db.vlogGenerationMaintenancePassNoop.Load(); got == 0 {
+		t.Fatal("expected noop maintenance pass to be recorded during no-candidate backoff")
+	}
+	if got := db.Stats()["treedb.cache.vlog_generation.leaf_pack.last_skip_reason"]; got != "no_candidate_backoff" {
+		t.Fatalf("last_skip_reason after immediate retry=%q want no_candidate_backoff", got)
+	}
+}
+
+func TestVlogGenerationMaintenance_PeriodicPassLeafPackBackoffExpiresAndRuns(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+	t.Setenv(envEnableLeafGenerationPackMaintenance, "1")
+	recorder := &leafPackMaintenanceRecordingBackend{
+		DB: mustOpenLeafPackBackend(t),
+		responses: []backenddb.LeafGenerationPackRunOnceStats{
+			{SkipReason: leafGenerationPackNoCandidateSkipReason},
+			leafPackWindowExhaustingStats(10, 1024, 4096),
+		},
+		leafGCResp: backenddb.LeafGenerationGCStats{GenerationsEligible: 1, GenerationsDeleted: 1, FilesDeleted: 1},
+	}
+	db, cleanup := openLeafPackMaintenanceTestDB(t, recorder)
+	defer cleanup()
+
+	if ran := db.maybeRunPeriodicVlogGenerationMaintenance(false); !ran {
+		t.Fatal("expected first periodic maintenance pass to run")
+	}
+	db.vlogGenerationLeafPackNoCandidateBackoffUntilUnixNano.Store(time.Now().Add(-time.Second).UnixNano())
+
+	if ran := db.maybeRunPeriodicVlogGenerationMaintenance(false); !ran {
+		t.Fatal("expected second periodic maintenance pass to run after expiring no-candidate backoff")
+	}
+
+	_, calls, _, _ := recorder.recordedLeafPack()
+	if calls != 2 {
+		t.Fatalf("leaf pack calls after expired backoff=%d want 2", calls)
+	}
+	if got := db.vlogGenerationLeafPackRuns.Load(); got != 1 {
+		t.Fatalf("leaf pack runs=%d want 1", got)
+	}
+	if got := db.vlogGenerationLeafPackConsecutiveNoCandidate.Load(); got != 0 {
+		t.Fatalf("leaf pack consecutive no-candidate after success=%d want 0", got)
+	}
+	if got := db.vlogGenerationLeafPackNoCandidateBackoffUntilUnixNano.Load(); got != 0 {
+		t.Fatalf("leaf pack no-candidate backoff until=%d want 0 after success", got)
+	}
+	if got := db.Stats()["treedb.cache.vlog_generation.leaf_pack.last_skip_reason"]; got != "" {
+		t.Fatalf("last_skip_reason after successful run=%q want empty", got)
+	}
+}
+
 func TestVlogGenerationMaintenance_LeafPackUsesConfiguredPolicy(t *testing.T) {
 	prepareDirectSchedulerTest(t)
 	t.Setenv(envEnableLeafGenerationPackMaintenance, "1")
