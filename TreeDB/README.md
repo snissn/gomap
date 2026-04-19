@@ -112,6 +112,10 @@ through `wal/` even when WAL is off.
 
 Details: `docs/TREEDB_WRITE_PATHS.md`.
 
+If you are integrating TreeDB behind a Cosmos/Comet-style wrapper, use
+`TreeDB/integration/kvstoreadapter` to standardize profile/env/default handling
+instead of re-copying the open-path glue in each downstream repo.
+
 ## Leaf Pages in the Value Log
 
 `Options.IndexOuterLeavesInValueLog` stores the B+Tree **leaf pages** (the 4096B
