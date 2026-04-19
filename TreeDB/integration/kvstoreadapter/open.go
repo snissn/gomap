@@ -101,14 +101,14 @@ func ResolveOptions(cfg OpenConfig) (treedb.Options, string, error) {
 		return treedb.Options{}, "", fmt.Errorf("database name must not contain path separators")
 	}
 
-	suffix := cfg.DBFileSuffix
+	suffix := strings.TrimSpace(cfg.DBFileSuffix)
 	if suffix == "" {
 		suffix = ".db"
 	}
-	dbPath := filepath.Join(parentDir, name+suffix)
-	if err := os.MkdirAll(dbPath, 0o755); err != nil {
-		return treedb.Options{}, "", fmt.Errorf("error creating treedb directory: %w", err)
+	if suffix == "." || suffix == ".." || strings.Contains(suffix, "/") || strings.Contains(suffix, "\\") || strings.Contains(suffix, "..") {
+		return treedb.Options{}, "", fmt.Errorf("database file suffix must be a simple suffix without path separators or traversal")
 	}
+	dbPath := filepath.Join(parentDir, name+suffix)
 
 	profileEnvKey := cfg.ProfileEnvKey
 	if profileEnvKey == "" {
@@ -158,6 +158,9 @@ func Open(cfg OpenConfig) (*Opened, error) {
 	opts, dbPath, err := ResolveOptions(cfg)
 	if err != nil {
 		return nil, err
+	}
+	if err := os.MkdirAll(dbPath, 0o755); err != nil {
+		return nil, fmt.Errorf("error creating treedb directory: %w", err)
 	}
 	tdb, err := treedb.Open(opts)
 	if err != nil {

@@ -132,11 +132,34 @@ func TestResolveOptionsRejectsInvalidPathInputs(t *testing.T) {
 			Name:           `bad\name`,
 			DefaultProfile: treedb.ProfileWALOnFast,
 		},
+		{
+			ParentDir:      t.TempDir(),
+			Name:           "application",
+			DBFileSuffix:   "../bad",
+			DefaultProfile: treedb.ProfileWALOnFast,
+		},
 	}
 	for _, cfg := range cases {
 		if _, _, err := ResolveOptions(cfg); err == nil {
 			t.Fatalf("expected ResolveOptions error for cfg=%+v", cfg)
 		}
+	}
+}
+
+func TestResolveOptionsIsSideEffectFreeOnError(t *testing.T) {
+	t.Setenv(EnvKeepRecent, "not-a-number")
+
+	parentDir := t.TempDir()
+	dbPath := filepath.Join(parentDir, "application.db")
+	if _, _, err := ResolveOptions(OpenConfig{
+		ParentDir:      parentDir,
+		Name:           "application",
+		DefaultProfile: treedb.ProfileWALOnFast,
+	}); err == nil {
+		t.Fatal("expected invalid keep recent error")
+	}
+	if _, err := os.Stat(dbPath); !os.IsNotExist(err) {
+		t.Fatalf("ResolveOptions created %q on error, stat err=%v", dbPath, err)
 	}
 }
 
