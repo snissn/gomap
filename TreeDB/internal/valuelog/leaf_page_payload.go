@@ -76,20 +76,8 @@ func decodeCompactLeafLogPayloadTo(payload, dst []byte) ([]byte, bool, bool, err
 	if gapStart, gapEnd := prefixLen, page.PageSize-suffixLen; gapStart < gapEnd {
 		clear(out[gapStart:gapEnd])
 	}
+	noteCompactLeafDecode(len(out))
 	return out, usedDst, true, nil
-}
-
-func decodedLeafLogPayloadAppendLen(fileID uint32, path string, payloadLen int) int {
-	if payloadLen <= 0 {
-		return payloadLen
-	}
-	if !allowsCompactLeafLogPayload(fileID, path) {
-		return payloadLen
-	}
-	if payloadLen < page.PageSize {
-		return page.PageSize
-	}
-	return payloadLen
 }
 
 func allowsCompactLeafLogPayload(fileID uint32, path string) bool {
@@ -123,21 +111,48 @@ func appendMaybeDecodeLeafLogPayload(fileID uint32, path string, dst, payload []
 		}
 		return append(dst, payload...), nil
 	}
+	if !HasCompactLeafLogPayload(payload) {
+		if len(payload) == 0 {
+			return dst, nil
+		}
+		if cap(dst) >= len(dst)+len(payload) && sliceAliasesBytes(dst[:cap(dst)], payload) {
+			return dst[:len(dst)+len(payload)], nil
+		}
+		return append(dst, payload...), nil
+	}
 	oldLen := len(dst)
-	dst = grow(dst, decodedLeafLogPayloadAppendLen(fileID, path, len(payload)))
-	out, usedDst, decoded, err := decodeCompactLeafLogPayloadTo(payload, dst[oldLen:oldLen])
+	if cap(dst)-oldLen >= page.PageSize {
+		out, usedDst, decoded, err := decodeCompactLeafLogPayloadTo(payload, dst[oldLen:oldLen])
+		if err != nil {
+			return nil, err
+		}
+		if decoded {
+			noteCompactLeafAppendDirectDecode(len(out))
+			if usedDst {
+				return dst[:oldLen+len(out)], nil
+			}
+			return append(dst, out...), nil
+		}
+		return append(dst, payload...), nil
+	}
+	scratch := getDecodeScratch(page.PageSize)
+	out, _, decoded, err := decodeCompactLeafLogPayloadTo(payload, scratch[:0])
 	if err != nil {
+		putDecodeScratch(scratch)
 		return nil, err
 	}
 	if decoded {
-		if usedDst {
-			return dst[:oldLen+len(out)], nil
-		}
-		copy(dst[oldLen:], out)
-		return dst[:oldLen+len(out)], nil
+		noteCompactLeafAppendScratchDecode(len(out))
+		dst = append(dst, out...)
+		putDecodeScratch(scratch)
+		return dst, nil
 	}
-	nextLen := oldLen + len(payload)
-	dst = dst[:nextLen]
-	copy(dst[oldLen:], payload)
-	return dst, nil
+	putDecodeScratch(scratch)
+	if len(payload) == 0 {
+		return dst, nil
+	}
+	if cap(dst) >= len(dst)+len(payload) && sliceAliasesBytes(dst[:cap(dst)], payload) {
+		return dst[:len(dst)+len(payload)], nil
+	}
+	return append(dst, payload...), nil
 }

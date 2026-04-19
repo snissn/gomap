@@ -1191,9 +1191,8 @@ func (f *File) readViaMmapAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 	// to avoid a decode-scratch allocation + extra copy.
 	if f.templateLookup == nil && k == 1 && subIndex == 0 && valStart == 0 && valEnd == rawLen {
 		oldLen := len(dst)
-		reserveLen := decodedLeafLogPayloadAppendLen(f.ID, f.Path, int(rawLen))
-		noteGrowReadAppendCurrentMmapDirectDecode(reserveLen)
-		dst = grow(dst, reserveLen)
+		noteGrowReadAppendCurrentMmapDirectDecode(int(rawLen))
+		dst = grow(dst, int(rawLen))
 		out, err := decodeFramePayloadTo(frame, payload[prefixLen:], f.dictLookup, rawLen, dst[oldLen:oldLen])
 		if err != nil {
 			return nil, err, true

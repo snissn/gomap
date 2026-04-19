@@ -93,14 +93,17 @@ func getDecodeScratch(minCap int) []byte {
 		if minCap <= maxLargeDecodeScratchKeep {
 			select {
 			case buf := <-largeDecodeScratchPool:
+				noteDecodeScratchGlobalLargeHit()
 				if cap(buf) < minCap {
 					buf = make([]byte, 0, minCap)
 				}
 				return buf[:0]
 			default:
+				noteDecodeScratchGlobalLargeMiss()
 				return make([]byte, 0, minCap)
 			}
 		}
+		noteDecodeScratchGlobalOversizeMiss()
 		return make([]byte, 0, minCap)
 	}
 	var buf []byte
@@ -110,6 +113,11 @@ func getDecodeScratch(minCap int) []byte {
 			h.buf = nil
 			decodeScratchHolderPool.Put(h)
 		}
+	}
+	if cap(buf) > 0 {
+		noteDecodeScratchGlobalSmallHit()
+	} else {
+		noteDecodeScratchGlobalSmallMiss()
 	}
 	if cap(buf) < minCap {
 		capHint := minCap
@@ -131,6 +139,7 @@ func putDecodeScratch(buf []byte) {
 	}
 	buf = buf[:0]
 	if c <= maxDecodeScratchKeep {
+		noteDecodeScratchSmallPut()
 		h, _ := decodeScratchHolderPool.Get().(*decodeScratchHolder)
 		if h == nil {
 			h = &decodeScratchHolder{}
@@ -142,10 +151,13 @@ func putDecodeScratch(buf []byte) {
 	if c <= maxLargeDecodeScratchKeep {
 		select {
 		case largeDecodeScratchPool <- buf:
+			noteDecodeScratchLargePut()
 		default:
+			noteDecodeScratchDrop()
 		}
 		return
 	}
+	noteDecodeScratchDrop()
 }
 
 func sliceDataPtr(b []byte) (uintptr, bool) {
