@@ -80,6 +80,23 @@ func TestResolveOptionsAppliesAdaptiveMemtableFallback(t *testing.T) {
 	}
 }
 
+func TestResolveOptionsNormalizesDefaultMemtableMode(t *testing.T) {
+	t.Parallel()
+
+	opts, _, err := ResolveOptions(OpenConfig{
+		ParentDir:           t.TempDir(),
+		Name:                "application",
+		DefaultProfile:      treedb.ProfileWALOnFast,
+		DefaultMemtableMode: "SkipList",
+	})
+	if err != nil {
+		t.Fatalf("ResolveOptions error: %v", err)
+	}
+	if opts.MemtableMode != "skiplist" {
+		t.Fatalf("MemtableMode = %q, want skiplist", opts.MemtableMode)
+	}
+}
+
 func TestResolveOptionsRejectsInvalidKeepRecent(t *testing.T) {
 	t.Setenv(EnvKeepRecent, "not-a-number")
 	if _, _, err := ResolveOptions(OpenConfig{
@@ -88,6 +105,38 @@ func TestResolveOptionsRejectsInvalidKeepRecent(t *testing.T) {
 		DefaultProfile: treedb.ProfileWALOnFast,
 	}); err == nil {
 		t.Fatal("expected invalid keep recent error")
+	}
+}
+
+func TestResolveOptionsRejectsInvalidPathInputs(t *testing.T) {
+	t.Parallel()
+
+	cases := []OpenConfig{
+		{
+			ParentDir:      "",
+			Name:           "application",
+			DefaultProfile: treedb.ProfileWALOnFast,
+		},
+		{
+			ParentDir:      t.TempDir(),
+			Name:           "",
+			DefaultProfile: treedb.ProfileWALOnFast,
+		},
+		{
+			ParentDir:      t.TempDir(),
+			Name:           "bad/name",
+			DefaultProfile: treedb.ProfileWALOnFast,
+		},
+		{
+			ParentDir:      t.TempDir(),
+			Name:           `bad\name`,
+			DefaultProfile: treedb.ProfileWALOnFast,
+		},
+	}
+	for _, cfg := range cases {
+		if _, _, err := ResolveOptions(cfg); err == nil {
+			t.Fatalf("expected ResolveOptions error for cfg=%+v", cfg)
+		}
 	}
 }
 

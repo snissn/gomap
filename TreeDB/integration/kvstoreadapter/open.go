@@ -89,11 +89,23 @@ func ParseProfile(raw string, fallback treedb.Profile) treedb.Profile {
 // ResolveOptions converts downstream wrapper defaults and standard TREEDB_*
 // environment overrides into TreeDB Options.
 func ResolveOptions(cfg OpenConfig) (treedb.Options, string, error) {
+	parentDir := strings.TrimSpace(cfg.ParentDir)
+	if parentDir == "" {
+		return treedb.Options{}, "", fmt.Errorf("parent directory must be non-empty")
+	}
+	name := strings.TrimSpace(cfg.Name)
+	if name == "" {
+		return treedb.Options{}, "", fmt.Errorf("database name must be non-empty")
+	}
+	if name == "." || name == ".." || strings.Contains(name, "/") || strings.Contains(name, "\\") {
+		return treedb.Options{}, "", fmt.Errorf("database name must not contain path separators")
+	}
+
 	suffix := cfg.DBFileSuffix
 	if suffix == "" {
 		suffix = ".db"
 	}
-	dbPath := filepath.Join(cfg.ParentDir, cfg.Name+suffix)
+	dbPath := filepath.Join(parentDir, name+suffix)
 	if err := os.MkdirAll(dbPath, 0o755); err != nil {
 		return treedb.Options{}, "", fmt.Errorf("error creating treedb directory: %w", err)
 	}
@@ -123,7 +135,7 @@ func ResolveOptions(cfg OpenConfig) (treedb.Options, string, error) {
 	if memtableModeEnvKey == "" {
 		memtableModeEnvKey = EnvMemtableMode
 	}
-	defaultMemtableMode := strings.TrimSpace(cfg.DefaultMemtableMode)
+	defaultMemtableMode := strings.ToLower(strings.TrimSpace(cfg.DefaultMemtableMode))
 	if defaultMemtableMode == "" {
 		profileMemtableMode := strings.TrimSpace(opts.MemtableMode)
 		if cfg.DefaultAdaptiveMemtableBase != "" &&

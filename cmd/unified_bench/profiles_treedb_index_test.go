@@ -296,8 +296,8 @@ func TestApplyProfile_FastAndWALOnFastEnableIndexOptimizations(t *testing.T) {
 	if !*treedbIndexOptimizations {
 		t.Fatalf("expected fast profile to set treedb-index-optimizations")
 	}
-	if got := *treedbVlogCompression; got != "auto" {
-		t.Fatalf("expected fast profile to set treedb-vlog-compression=auto, got %q", got)
+	if got := *treedbVlogCompression; got != "default" {
+		t.Fatalf("expected fast profile to keep treedb-vlog-compression on the default path, got %q", got)
 	}
 	if got := *treedbVlogBlockCodec; got != "snappy" {
 		t.Fatalf("expected fast profile to set treedb-vlog-block-codec=snappy, got %q", got)
@@ -331,8 +331,8 @@ func TestApplyProfile_FastAndWALOnFastEnableIndexOptimizations(t *testing.T) {
 	if !*treedbIndexOptimizations {
 		t.Fatalf("expected wal_on_fast profile to set treedb-index-optimizations")
 	}
-	if got := *treedbVlogCompression; got != "auto" {
-		t.Fatalf("expected wal_on_fast profile to set treedb-vlog-compression=auto, got %q", got)
+	if got := *treedbVlogCompression; got != "default" {
+		t.Fatalf("expected wal_on_fast profile to keep treedb-vlog-compression on the default path, got %q", got)
 	}
 	if got := *treedbVlogBlockCodec; got != "snappy" {
 		t.Fatalf("expected wal_on_fast profile to set treedb-vlog-block-codec=snappy, got %q", got)
@@ -360,6 +360,31 @@ func TestApplyProfile_FastAndWALOnFastEnableIndexOptimizations(t *testing.T) {
 	}
 	if !*treedbDisableReadChecksum {
 		t.Fatalf("expected wal_on_fast profile to disable read checksum")
+	}
+}
+
+func TestApplyProfile_FastKeepsImplicitCompressionPathForAutotuneOff(t *testing.T) {
+	saved := saveTreeDBFlagState()
+	defer restoreTreeDBFlagState(saved)
+
+	resetTreeDBIndexFlagsForTest()
+	if err := applyProfile("fast", map[string]bool{}); err != nil {
+		t.Fatalf("applyProfile fast: %v", err)
+	}
+	*treedbVlogCompressionAutotune = "off"
+
+	opts, _, err := buildTreeDBOptions("")
+	if err != nil {
+		t.Fatalf("buildTreeDBOptions: %v", err)
+	}
+	if opts.ValueLog.Compression != treedb.ValueLogCompressionAuto {
+		t.Fatalf("ValueLog.Compression = %v, want auto", opts.ValueLog.Compression)
+	}
+	if opts.ValueLog.CompressionAutotune.Mode != treedb.AutotuneOff {
+		t.Fatalf("CompressionAutotune.Mode = %v, want off", opts.ValueLog.CompressionAutotune.Mode)
+	}
+	if opts.ValueLog.DictTrain.TrainBytes != -1 {
+		t.Fatalf("DictTrain.TrainBytes = %d, want -1 when autotune=off", opts.ValueLog.DictTrain.TrainBytes)
 	}
 }
 

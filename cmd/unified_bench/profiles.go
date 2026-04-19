@@ -134,12 +134,20 @@ func applyTreeDBProfileIfUnset(profile treedb.Profile, isSet map[string]bool) {
 	)
 	setBoolIfUnset("treedb-index-outer-leaves-in-vlog", opts.IndexOuterLeavesInValueLog, isSet, treedbIndexOuterLeavesInVlog)
 	setBoolIfUnset("treedb-prefer-append-alloc", opts.PreferAppendAlloc, isSet, treedbPreferAppendAlloc)
-	setStringIfUnset("treedb-vlog-compression", formatTreeDBVlogCompressionFlagValue(opts.ValueLog.Compression), isSet, treedbVlogCompression)
+	profileCompression := formatTreeDBProfileVlogCompressionFlagValue(opts.ValueLog.Compression)
+	setStringIfUnset("treedb-vlog-compression", profileCompression, isSet, treedbVlogCompression)
 	setStringIfUnset("treedb-vlog-block-codec", formatTreeDBVlogBlockCodec(opts.ValueLog.BlockCodec), isSet, treedbVlogBlockCodec)
 	setStringIfUnset("treedb-vlog-auto-policy", formatTreeDBVlogAutoPolicy(opts.ValueLog.AutoPolicy), isSet, treedbVlogAutoPolicy)
 	setStringIfUnset("treedb-vlog-compression-autotune", formatTreeDBVlogCompressionAutotune(opts.ValueLog.CompressionAutotune.Mode), isSet, treedbVlogCompressionAutotune)
 	setIntIfUnset("treedb-vlog-dict-incompressible-hold-bytes", opts.ValueLog.DictIncompressibleHoldBytes, isSet, treedbVlogDictIncompressibleHoldBytes)
 	setIntIfUnset("treedb-vlog-dict-probe-interval-bytes", opts.ValueLog.DictProbeIntervalBytes, isSet, treedbVlogDictProbeIntervalBytes)
+}
+
+func formatTreeDBProfileVlogCompressionFlagValue(mode treedb.ValueLogCompressionMode) string {
+	if mode == treedb.ValueLogCompressionAuto {
+		return "default"
+	}
+	return formatTreeDBVlogCompressionFlagValue(mode)
 }
 
 func setBoolIfUnset(name string, val bool, isSet map[string]bool, target *bool) {

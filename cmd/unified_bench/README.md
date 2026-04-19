@@ -96,7 +96,7 @@ GOWORK=off GOMEMLIMIT=4GiB GOMAXPROCS=2 go test -json -p 1 . \
 - `-treedb-vlog-auto-policy` TreeDB: value-log auto policy (`balanced|throughput|size`)
 - `-treedb-vlog-generation-policy` TreeDB: generation policy (`default|off|hot_warm_cold`)
 
-### TreeDB Advanced / Expert Knobs
+### TreeDB Advanced Tuning
 
 These are mainly for experiments and should usually be left at engine defaults:
 
