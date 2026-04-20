@@ -89,7 +89,7 @@ var (
 	treedbVlogDictMinSavingsRatio         = flag.Float64("treedb-vlog-dict-min-savings-ratio", 0, "TreeDB: value-log dict min payload savings ratio (0=default)")
 	treedbVlogDictK                       = flag.Int("treedb-vlog-dict-k", 0, "TreeDB: value-log dict frame grouping K (records/frame, 0=default)")
 	treedbVlogDictClassMode               = flag.String("treedb-vlog-dict-class-mode", "single", "TreeDB: value-log dict class mode (single|split_outer_leaf)")
-	treedbVlogCompressionAutotune         = flag.String("treedb-vlog-compression-autotune", "off", "TreeDB: value-log compression autotune mode (off|medium|aggressive|default)")
+	treedbVlogCompressionAutotune         = flag.String("treedb-vlog-compression-autotune", "default", "TreeDB: value-log compression autotune mode (default|off|medium|aggressive)")
 	treedbVlogDictFrameEncodeLevel        = flag.String("treedb-vlog-dict-frame-encode-level", "engine", "TreeDB: zstd encoder level for dict-compressed value-log frames (engine|fastest|default|better|best|all|<int>)")
 	treedbVlogDictFrameEntropyMode        = flag.String("treedb-vlog-dict-frame-entropy", "engine", "TreeDB: dict-frame entropy mode (engine|on|off|both). Controls WithNoEntropyCompression.")
 	treedbVlogDictMode                    = flag.String("treedb-vlog-dict", "default", "TreeDB: value-log dict compression mode for unified_bench (default|on|off|both). Overrides dict/compression settings for TreeDB benchmarks.")
@@ -350,6 +350,11 @@ func (r treeDBOptionsReport) formatText(indent string) string {
 	lines = append(lines, fmt.Sprintf("vlog.compression=%s", formatTreeDBVlogCompression(r.opts.ValueLog.Compression)))
 	lines = append(lines, fmt.Sprintf("vlog.block_codec=%s", formatTreeDBVlogBlockCodec(r.opts.ValueLog.BlockCodec)))
 	lines = append(lines, fmt.Sprintf("vlog.auto_policy=%s", formatTreeDBVlogAutoPolicy(r.opts.ValueLog.AutoPolicy)))
+	if mode := r.opts.ValueLog.CompressionAutotune.Mode; mode == treedb.AutotuneUnset {
+		lines = append(lines, "vlog.compression_autotune=default (effective=medium)")
+	} else {
+		lines = append(lines, fmt.Sprintf("vlog.compression_autotune=%s", formatTreeDBVlogCompressionAutotune(mode)))
+	}
 	lines = append(lines, fmt.Sprintf("vlog.dict_class_mode=%s", formatTreeDBVlogDictClassMode(r.opts.ValueLog.DictClassMode)))
 	lines = append(lines, fmt.Sprintf("vlog.generation_policy=%s", formatTreeDBVlogGenerationPolicy(r.opts.ValueLog.Generational.Policy)))
 	lines = append(lines, fmt.Sprintf("vlog.generation_hot_segment_bytes=%d", r.opts.ValueLog.Generational.HotSegmentTargetBytes))
@@ -449,6 +454,13 @@ func formatTreeDBVlogCompression(mode treedb.ValueLogCompressionMode) string {
 	}
 }
 
+func formatTreeDBVlogCompressionFlagValue(mode treedb.ValueLogCompressionMode) string {
+	if mode == 0 {
+		return "default"
+	}
+	return formatTreeDBVlogCompression(mode)
+}
+
 func formatTreeDBVlogBlockCodec(codec treedb.ValueLogBlockCodec) string {
 	switch codec {
 	case treedb.ValueLogBlockSnappy:
@@ -470,6 +482,21 @@ func formatTreeDBVlogAutoPolicy(policy treedb.ValueLogAutoPolicy) string {
 		return "size"
 	default:
 		return fmt.Sprintf("auto_policy_%d", policy)
+	}
+}
+
+func formatTreeDBVlogCompressionAutotune(mode treedb.AutotuneMode) string {
+	switch mode {
+	case treedb.AutotuneUnset:
+		return "default"
+	case treedb.AutotuneOff:
+		return "off"
+	case treedb.AutotuneMedium:
+		return "medium"
+	case treedb.AutotuneAggressive:
+		return "aggressive"
+	default:
+		return fmt.Sprintf("autotune_%d", mode)
 	}
 }
 

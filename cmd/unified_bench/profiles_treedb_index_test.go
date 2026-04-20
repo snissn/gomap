@@ -150,15 +150,20 @@ func TestBuildTreeDBOptions_MaintenanceModeBenchDisablesBackgroundLoops(t *testi
 type savedTreeDBFlagState struct {
 	indexOptimizations      bool
 	indexOuterLeavesInVlog  bool
+	preferAppendAlloc       bool
 	forcePointers           bool
 	leafPrefix              bool
 	columnarLeaves          bool
 	packedValuePtr          bool
 	internalBaseDelta       bool
 	chunkSize               int64
+	vlogCompression         string
+	vlogBlockCodec          string
 	vlogAutoPolicy          string
 	vlogDictClassMode       string
 	vlogCompressionAutotune string
+	vlogDictHoldBytes       int
+	vlogDictProbeBytes      int
 	vlogGenerationPolicy    string
 	vlogGenHotBytes         int64
 	vlogGenWarmBytes        int64
@@ -183,15 +188,20 @@ func saveTreeDBFlagState() savedTreeDBFlagState {
 	return savedTreeDBFlagState{
 		indexOptimizations:      *treedbIndexOptimizations,
 		indexOuterLeavesInVlog:  *treedbIndexOuterLeavesInVlog,
+		preferAppendAlloc:       *treedbPreferAppendAlloc,
 		forcePointers:           *treedbForceValuePointers,
 		leafPrefix:              *treedbLeafPrefixCompression,
 		columnarLeaves:          *treedbIndexColumnarLeaves,
 		packedValuePtr:          *treedbIndexPackedValuePtr,
 		internalBaseDelta:       *treedbIndexInternalBaseDelta,
 		chunkSize:               *treedbChunkSize,
+		vlogCompression:         *treedbVlogCompression,
+		vlogBlockCodec:          *treedbVlogBlockCodec,
 		vlogAutoPolicy:          *treedbVlogAutoPolicy,
 		vlogDictClassMode:       *treedbVlogDictClassMode,
 		vlogCompressionAutotune: *treedbVlogCompressionAutotune,
+		vlogDictHoldBytes:       *treedbVlogDictIncompressibleHoldBytes,
+		vlogDictProbeBytes:      *treedbVlogDictProbeIntervalBytes,
 		vlogGenerationPolicy:    *treedbVlogGenerationPolicy,
 		vlogGenHotBytes:         *treedbVlogGenerationHotSegmentBytes,
 		vlogGenWarmBytes:        *treedbVlogGenerationWarmSegmentBytes,
@@ -212,15 +222,20 @@ func saveTreeDBFlagState() savedTreeDBFlagState {
 func restoreTreeDBFlagState(s savedTreeDBFlagState) {
 	*treedbIndexOptimizations = s.indexOptimizations
 	*treedbIndexOuterLeavesInVlog = s.indexOuterLeavesInVlog
+	*treedbPreferAppendAlloc = s.preferAppendAlloc
 	*treedbForceValuePointers = s.forcePointers
 	*treedbLeafPrefixCompression = s.leafPrefix
 	*treedbIndexColumnarLeaves = s.columnarLeaves
 	*treedbIndexPackedValuePtr = s.packedValuePtr
 	*treedbIndexInternalBaseDelta = s.internalBaseDelta
 	*treedbChunkSize = s.chunkSize
+	*treedbVlogCompression = s.vlogCompression
+	*treedbVlogBlockCodec = s.vlogBlockCodec
 	*treedbVlogAutoPolicy = s.vlogAutoPolicy
 	*treedbVlogDictClassMode = s.vlogDictClassMode
 	*treedbVlogCompressionAutotune = s.vlogCompressionAutotune
+	*treedbVlogDictIncompressibleHoldBytes = s.vlogDictHoldBytes
+	*treedbVlogDictProbeIntervalBytes = s.vlogDictProbeBytes
 	*treedbVlogGenerationPolicy = s.vlogGenerationPolicy
 	*treedbVlogGenerationHotSegmentBytes = s.vlogGenHotBytes
 	*treedbVlogGenerationWarmSegmentBytes = s.vlogGenWarmBytes
@@ -240,15 +255,20 @@ func restoreTreeDBFlagState(s savedTreeDBFlagState) {
 func resetTreeDBIndexFlagsForTest() {
 	*treedbIndexOptimizations = false
 	*treedbIndexOuterLeavesInVlog = true
+	*treedbPreferAppendAlloc = false
 	*treedbForceValuePointers = false
 	*treedbLeafPrefixCompression = false
 	*treedbIndexColumnarLeaves = false
 	*treedbIndexPackedValuePtr = false
 	*treedbIndexInternalBaseDelta = false
 	*treedbChunkSize = defaultTreeDBChunkSizeBytes
+	*treedbVlogCompression = "default"
+	*treedbVlogBlockCodec = "snappy"
 	*treedbVlogAutoPolicy = "balanced"
 	*treedbVlogDictClassMode = "single"
-	*treedbVlogCompressionAutotune = "off"
+	*treedbVlogCompressionAutotune = "default"
+	*treedbVlogDictIncompressibleHoldBytes = 0
+	*treedbVlogDictProbeIntervalBytes = 0
 	*treedbVlogGenerationPolicy = "default"
 	*treedbVlogGenerationHotSegmentBytes = 0
 	*treedbVlogGenerationWarmSegmentBytes = 0
@@ -276,11 +296,26 @@ func TestApplyProfile_FastAndWALOnFastEnableIndexOptimizations(t *testing.T) {
 	if !*treedbIndexOptimizations {
 		t.Fatalf("expected fast profile to set treedb-index-optimizations")
 	}
-	if got := *treedbVlogAutoPolicy; got != "throughput" {
-		t.Fatalf("expected fast profile to set treedb-vlog-auto-policy=throughput, got %q", got)
+	if got := *treedbVlogCompression; got != "default" {
+		t.Fatalf("expected fast profile to keep treedb-vlog-compression on the default path, got %q", got)
+	}
+	if got := *treedbVlogBlockCodec; got != "snappy" {
+		t.Fatalf("expected fast profile to set treedb-vlog-block-codec=snappy, got %q", got)
+	}
+	if got := *treedbVlogAutoPolicy; got != "balanced" {
+		t.Fatalf("expected fast profile to set treedb-vlog-auto-policy=balanced, got %q", got)
 	}
 	if got := *treedbVlogCompressionAutotune; got != "medium" {
 		t.Fatalf("expected fast profile to set treedb-vlog-compression-autotune=medium, got %q", got)
+	}
+	if got := *treedbVlogDictIncompressibleHoldBytes; got != 64<<20 {
+		t.Fatalf("expected fast profile to set treedb-vlog-dict-incompressible-hold-bytes=64MiB, got %d", got)
+	}
+	if got := *treedbVlogDictProbeIntervalBytes; got != 32<<20 {
+		t.Fatalf("expected fast profile to set treedb-vlog-dict-probe-interval-bytes=32MiB, got %d", got)
+	}
+	if !*treedbPreferAppendAlloc {
+		t.Fatalf("expected fast profile to set treedb-prefer-append-alloc")
 	}
 	if !*treedbDisableWAL {
 		t.Fatalf("expected fast profile to disable WAL")
@@ -296,11 +331,26 @@ func TestApplyProfile_FastAndWALOnFastEnableIndexOptimizations(t *testing.T) {
 	if !*treedbIndexOptimizations {
 		t.Fatalf("expected wal_on_fast profile to set treedb-index-optimizations")
 	}
-	if got := *treedbVlogAutoPolicy; got != "throughput" {
-		t.Fatalf("expected wal_on_fast profile to set treedb-vlog-auto-policy=throughput, got %q", got)
+	if got := *treedbVlogCompression; got != "default" {
+		t.Fatalf("expected wal_on_fast profile to keep treedb-vlog-compression on the default path, got %q", got)
+	}
+	if got := *treedbVlogBlockCodec; got != "snappy" {
+		t.Fatalf("expected wal_on_fast profile to set treedb-vlog-block-codec=snappy, got %q", got)
+	}
+	if got := *treedbVlogAutoPolicy; got != "balanced" {
+		t.Fatalf("expected wal_on_fast profile to set treedb-vlog-auto-policy=balanced, got %q", got)
 	}
 	if got := *treedbVlogCompressionAutotune; got != "medium" {
 		t.Fatalf("expected wal_on_fast profile to set treedb-vlog-compression-autotune=medium, got %q", got)
+	}
+	if got := *treedbVlogDictIncompressibleHoldBytes; got != 64<<20 {
+		t.Fatalf("expected wal_on_fast profile to set treedb-vlog-dict-incompressible-hold-bytes=64MiB, got %d", got)
+	}
+	if got := *treedbVlogDictProbeIntervalBytes; got != 32<<20 {
+		t.Fatalf("expected wal_on_fast profile to set treedb-vlog-dict-probe-interval-bytes=32MiB, got %d", got)
+	}
+	if !*treedbPreferAppendAlloc {
+		t.Fatalf("expected wal_on_fast profile to set treedb-prefer-append-alloc")
 	}
 	if *treedbDisableWAL {
 		t.Fatalf("expected wal_on_fast profile to keep WAL enabled")
@@ -310,6 +360,31 @@ func TestApplyProfile_FastAndWALOnFastEnableIndexOptimizations(t *testing.T) {
 	}
 	if !*treedbDisableReadChecksum {
 		t.Fatalf("expected wal_on_fast profile to disable read checksum")
+	}
+}
+
+func TestApplyProfile_FastKeepsImplicitCompressionPathForAutotuneOff(t *testing.T) {
+	saved := saveTreeDBFlagState()
+	defer restoreTreeDBFlagState(saved)
+
+	resetTreeDBIndexFlagsForTest()
+	if err := applyProfile("fast", map[string]bool{}); err != nil {
+		t.Fatalf("applyProfile fast: %v", err)
+	}
+	*treedbVlogCompressionAutotune = "off"
+
+	opts, _, err := buildTreeDBOptions("")
+	if err != nil {
+		t.Fatalf("buildTreeDBOptions: %v", err)
+	}
+	if opts.ValueLog.Compression != treedb.ValueLogCompressionAuto {
+		t.Fatalf("ValueLog.Compression = %v, want auto", opts.ValueLog.Compression)
+	}
+	if opts.ValueLog.CompressionAutotune.Mode != treedb.AutotuneOff {
+		t.Fatalf("CompressionAutotune.Mode = %v, want off", opts.ValueLog.CompressionAutotune.Mode)
+	}
+	if opts.ValueLog.DictTrain.TrainBytes != -1 {
+		t.Fatalf("DictTrain.TrainBytes = %d, want -1 when autotune=off", opts.ValueLog.DictTrain.TrainBytes)
 	}
 }
 
