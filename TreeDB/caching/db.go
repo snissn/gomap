@@ -9402,13 +9402,13 @@ func (db *DB) foregroundActivityQuietFor(now time.Time, writeQuietWindow, readQu
 	return db.foregroundWriteQuietFor(now, writeQuietWindow) && db.foregroundReadQuietFor(now, readQuietWindow)
 }
 
+// foregroundVlogMaintenanceQuietFor is the retained-prune-specific quiet check:
+// it only yields to recent foreground writes. Read traffic and active iterators
+// still gate other maintenance paths through foregroundActivityQuietFor.
 func (db *DB) foregroundVlogMaintenanceQuietFor(now time.Time, quietWindow time.Duration) bool {
 	if db == nil {
 		return false
 	}
-	// Retained value-log prune waiting yields only to recent foreground writes.
-	// Read-only traffic and active iterators still gate admission through the
-	// broader foreground-activity checks used by other maintenance paths.
 	return db.foregroundWriteQuietFor(now, quietWindow)
 }
 
