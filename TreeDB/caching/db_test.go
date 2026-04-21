@@ -294,6 +294,47 @@ func TestForegroundMaintenanceContext_CancelsOnActiveIterator(t *testing.T) {
 	}
 }
 
+func TestForegroundWritesResumedSince_FirstWriteAfterZeroBaseline(t *testing.T) {
+	db := &DB{}
+	if db.foregroundWritesResumedSince(0) {
+		t.Fatalf("expected zero baseline with no writes to remain idle")
+	}
+	now := time.Unix(1_700_000_000, 0).UnixNano()
+	db.lastForegroundWriteUnixNano.Store(now)
+	if !db.foregroundWritesResumedSince(0) {
+		t.Fatalf("expected first foreground write after open to count as resumed")
+	}
+}
+
+func TestForegroundVlogMaintenanceQuietFor_IgnoresReadOnlyTraffic(t *testing.T) {
+	db := &DB{}
+	now := time.Unix(1_700_000_100, 0)
+	db.lastForegroundWriteUnixNano.Store(now.Add(-2 * time.Second).UnixNano())
+	db.lastForegroundReadUnixNano.Store(now.UnixNano())
+	db.activeForegroundIterators.Store(1)
+
+	if db.foregroundActivityQuietFor(now, time.Second, time.Second) {
+		t.Fatalf("expected generic activity quiet check to remain blocked by read-only activity")
+	}
+	if !db.foregroundVlogMaintenanceQuietFor(now, time.Second, time.Second) {
+		t.Fatalf("expected value-log maintenance quiet check to ignore read-only activity")
+	}
+}
+
+func TestForegroundVlogMaintenanceContext_CancelsOnFirstWriteAfterOpen(t *testing.T) {
+	db := &DB{closeCh: make(chan struct{})}
+	ctx, cancel := db.foregroundVlogMaintenanceContextWithResumeGrace(250*time.Millisecond, 0)
+	defer cancel()
+
+	db.lastForegroundWriteUnixNano.Store(time.Unix(1_700_000_200, 0).UnixNano())
+
+	select {
+	case <-ctx.Done():
+	case <-time.After(500 * time.Millisecond):
+		t.Fatalf("value-log maintenance context did not cancel after first foreground write")
+	}
+}
+
 func countSnapshotLeafEntries(t *testing.T, snap *db.Snapshot) int {
 	t.Helper()
 	if snap == nil {

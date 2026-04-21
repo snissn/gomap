@@ -4302,10 +4302,10 @@ func (db *DB) foregroundWritesResumedSince(lastWrite int64) bool {
 	if db == nil {
 		return false
 	}
-	if lastWrite <= 0 {
-		return false
-	}
 	current := db.lastForegroundWriteUnixNano.Load()
+	if lastWrite <= 0 {
+		return current > 0
+	}
 	return current > lastWrite
 }
 
@@ -5088,7 +5088,7 @@ func (db *DB) waitForRetainedValueLogPruneQuietOrForce(quietWindow time.Duration
 		if db.retainedPruneForceRequested.Swap(false) {
 			return true
 		}
-		if db.foregroundActivityQuietFor(time.Now(), quietWindow, vlogForegroundReadQuietWindow) {
+		if db.foregroundVlogMaintenanceQuietFor(time.Now(), quietWindow, vlogForegroundReadQuietWindow) {
 			// Re-check immediately before returning so force requests racing with
 			// the quiet-window transition are not dropped.
 			if db.retainedPruneForceRequested.Swap(false) {
@@ -9368,9 +9368,16 @@ func (db *DB) foregroundActivityQuietFor(now time.Time, writeQuietWindow, readQu
 	if db == nil {
 		return true
 	}
-	// Value-log maintenance must not be suppressible by read-only traffic.
-	// Keep write quiet-window gating for foreground write latency protection and
-	// leave read quiet-window tracking available for diagnostics/observability.
+	return db.foregroundWriteQuietFor(now, writeQuietWindow) && db.foregroundReadQuietFor(now, readQuietWindow)
+}
+
+func (db *DB) foregroundVlogMaintenanceQuietFor(now time.Time, writeQuietWindow, readQuietWindow time.Duration) bool {
+	if db == nil {
+		return true
+	}
+	// Value-log maintenance should only yield to foreground writes. Keep the
+	// read quiet-window parameter so call sites share the same knobs without
+	// letting read-only traffic suppress maintenance indefinitely.
 	_ = readQuietWindow
 	return db.foregroundWriteQuietFor(now, writeQuietWindow)
 }
@@ -9444,7 +9451,7 @@ func (db *DB) waitForForegroundMaintenanceQuietWindow(quietWindow time.Duration)
 	ticker := time.NewTicker(foregroundMaintenancePollInterval())
 	defer ticker.Stop()
 	for {
-		if db.closing.Load() || db.foregroundActivityQuietFor(time.Now(), quietWindow, vlogForegroundReadQuietWindow) {
+		if db.closing.Load() || db.foregroundVlogMaintenanceQuietFor(time.Now(), quietWindow, vlogForegroundReadQuietWindow) {
 			return
 		}
 		select {
@@ -9475,10 +9482,17 @@ func (db *DB) foregroundActivityResumedSince(lastActivity int64) bool {
 	if db == nil {
 		return false
 	}
-	// Treat write resumption as the only maintenance-cancel signal so read-only
-	// clients (including long-lived iterators) cannot indefinitely defer
-	// maintenance passes.
-	return db.foregroundWritesResumedSince(lastActivity)
+	if db.activeForegroundIterators.Load() > 0 {
+		return true
+	}
+	return db.lastForegroundActivityUnixNano() > lastActivity
+}
+
+func (db *DB) foregroundVlogMaintenanceResumedSince(lastWrite int64) bool {
+	if db == nil {
+		return false
+	}
+	return db.foregroundWritesResumedSince(lastWrite)
 }
 
 func (db *DB) foregroundWriteResumeContext(lastWrite int64, timeout time.Duration) (context.Context, context.CancelFunc) {
@@ -9564,6 +9578,48 @@ func (db *DB) foregroundMaintenanceContext(timeout time.Duration) (context.Conte
 	return db.foregroundMaintenanceContextWithResumeGrace(timeout, 0)
 }
 
+func (db *DB) foregroundVlogMaintenanceContextWithResumeGrace(timeout, resumeGrace time.Duration) (context.Context, context.CancelFunc) {
+	if db == nil {
+		if timeout > 0 {
+			return context.WithTimeout(context.Background(), timeout)
+		}
+		return context.WithCancel(context.Background())
+	}
+	var (
+		ctx    context.Context
+		cancel context.CancelFunc
+	)
+	if timeout > 0 {
+		ctx, cancel = context.WithTimeout(context.Background(), timeout)
+	} else {
+		ctx, cancel = context.WithCancel(context.Background())
+	}
+	lastWrite := db.lastForegroundWriteUnixNano.Load()
+	startedAt := time.Now()
+	go func(lastWrite int64) {
+		ticker := time.NewTicker(foregroundMaintenancePollInterval())
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-db.closeCh:
+				cancel()
+				return
+			case <-ticker.C:
+				if resumeGrace > 0 && time.Since(startedAt) < resumeGrace {
+					continue
+				}
+				if db.foregroundVlogMaintenanceResumedSince(lastWrite) {
+					cancel()
+					return
+				}
+			}
+		}
+	}(lastWrite)
+	return ctx, cancel
+}
+
 func (db *DB) vlogGenerationMaintenanceContext(timeout time.Duration, opts vlogGenerationMaintenanceOptions) (context.Context, context.CancelFunc) {
 	// Checkpoint-kick maintenance is an explicit caller opt-in to run outside the
 	// quiet-window gate. Keep this context timeout-bounded, but do not
@@ -9589,7 +9645,7 @@ func (db *DB) vlogGenerationMaintenanceContext(timeout time.Duration, opts vlogG
 		}()
 		return ctx, cancel
 	}
-	return db.foregroundMaintenanceContext(timeout)
+	return db.foregroundVlogMaintenanceContextWithResumeGrace(timeout, 0)
 }
 
 func (db *DB) leafGenerationPackMaintenanceContext(timeout time.Duration) (context.Context, context.CancelFunc) {
@@ -9625,7 +9681,7 @@ func (db *DB) vlogGenerationRewritePlanContext(timeout time.Duration, opts vlogG
 		}
 		return context.WithCancel(context.Background())
 	}
-	return db.foregroundMaintenanceContextWithResumeGrace(timeout, vlogGenerationRewritePlanResumeGrace)
+	return db.foregroundVlogMaintenanceContextWithResumeGrace(timeout, vlogGenerationRewritePlanResumeGrace)
 }
 
 func (db *DB) noteWrite() {
@@ -14074,7 +14130,7 @@ func (db *DB) maybeRunPeriodicVlogGenerationMaintenance(runGC bool) bool {
 	// to both rewrite and periodic GC ticks; otherwise runGC ticks can still
 	// issue expensive full scans every interval during restore-heavy sync phases.
 	now := time.Now()
-	quiet := db.foregroundActivityQuietFor(now, vlogGenerationMaintenanceQuietWindow, vlogForegroundReadQuietWindow)
+	quiet := db.foregroundVlogMaintenanceQuietFor(now, vlogGenerationMaintenanceQuietWindow, vlogForegroundReadQuietWindow)
 	leafPackAdmission := db.foregroundLeafPackAdmission(now)
 	if !quiet && !leafPackAdmission.allowed &&
 		!db.vlogGenerationCheckpointKickPending.Load() &&
@@ -15642,7 +15698,7 @@ func (db *DB) scheduleVlogGenerationCheckpointKickHotNoDebtWake() {
 		if db.closing.Load() {
 			return
 		}
-		if !db.foregroundActivityQuietFor(time.Now(), vlogGenerationMaintenanceQuietWindow, vlogForegroundReadQuietWindow) {
+		if !db.foregroundVlogMaintenanceQuietFor(time.Now(), vlogGenerationMaintenanceQuietWindow, vlogForegroundReadQuietWindow) {
 			return
 		}
 		db.vlogGenerationCheckpointKickHotNoDebtWakeRuns.Add(1)
@@ -15923,7 +15979,7 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 		}
 	}()
 	now := time.Now()
-	quiet := db.foregroundActivityQuietFor(now, vlogGenerationMaintenanceQuietWindow, vlogForegroundReadQuietWindow)
+	quiet := db.foregroundVlogMaintenanceQuietFor(now, vlogGenerationMaintenanceQuietWindow, vlogForegroundReadQuietWindow)
 	leafPackAdmission := db.foregroundLeafPackAdmission(now)
 	rewriteQueue, err := db.currentVlogGenerationRewriteQueue()
 	if err != nil {
@@ -17981,7 +18037,7 @@ func (db *DB) maybeKickVlogGenerationMaintenanceAfterCheckpoint() {
 		rewriteQueueLen = len(rewriteQueue)
 	}
 	if envBool(envEnableVlogGenerationCheckpointKickHotDebtOnly) && !rewriteDisabled {
-		quiet := db.foregroundActivityQuietFor(now, vlogGenerationMaintenanceQuietWindow, vlogForegroundReadQuietWindow)
+		quiet := db.foregroundVlogMaintenanceQuietFor(now, vlogGenerationMaintenanceQuietWindow, vlogForegroundReadQuietWindow)
 		if !quiet && rewriteQueueLen == 0 && !db.vlogGenerationDeferredMaintenanceDue(now) {
 			db.vlogGenerationCheckpointKickSkippedHotNoDebt.Add(1)
 			db.scheduleVlogGenerationCheckpointKickHotNoDebtWake()
