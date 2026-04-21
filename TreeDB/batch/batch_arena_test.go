@@ -122,14 +122,16 @@ func TestBatchEnsureArenaChunk_GeometricGrowth(t *testing.T) {
 func TestBatchSet_OversizedValueDoesNotGrowArena(t *testing.T) {
 	b := New(newMapValueReader(), 4)
 	t.Cleanup(func() { _ = b.Close() })
+	key := []byte("k2")
 
 	if err := b.Set([]byte("k"), []byte("ok")); err != nil {
 		t.Fatalf("warm Set: %v", err)
 	}
 	chunksBefore := len(b.arenaChunks)
 	lastLenBefore := len(b.arenaChunks[chunksBefore-1])
+	oversizedValue := bytes.Repeat([]byte("x"), b.inlineThresholdForKey(key)+1)
 
-	if err := b.Set([]byte("k2"), bytes.Repeat([]byte("x"), 5)); err != ErrValueTooLarge {
+	if err := b.Set(key, oversizedValue); err != ErrValueTooLarge {
 		t.Fatalf("Set oversized err=%v want=%v", err, ErrValueTooLarge)
 	}
 
