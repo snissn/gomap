@@ -260,7 +260,7 @@ func TestWrapForegroundIterator_AvoidsDoubleWrapAndCloseIsIdempotent(t *testing.
 
 func TestForegroundReadQuietFor_DoesNotDependOnActiveIterators(t *testing.T) {
 	db := &DB{closeCh: make(chan struct{})}
-	now := time.Now()
+	now := time.Unix(1_700_000_000, 0)
 	quietWindow := 200 * time.Millisecond
 
 	db.activeForegroundIterators.Store(1)
