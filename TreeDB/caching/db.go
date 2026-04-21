@@ -14027,6 +14027,41 @@ func (db *DB) startVlogGenerationLoop() {
 		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerDisabled)
 		return
 	}
+	if !db.disableJournal {
+		// WAL-on profiles must explicitly re-arm the periodic scheduler after the
+		// caller transitions out of restore/catch-up. Starting the loop during Open
+		// races with callers that immediately move maintenance phase away from the
+		// default steady state.
+		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerDisabled)
+		return
+	}
+	db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
+	db.wg.Add(1)
+	go db.vlogGenerationLoop()
+}
+
+func (db *DB) maybeArmWALOnVlogGenerationLoopForSteadyPhase() {
+	if db == nil || db.disableJournal {
+		return
+	}
+	if envBool(envDisableVlogGenerationLoop) {
+		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerDisabled)
+		return
+	}
+	if db.valueLogGenerationPolicy != uint8(backenddb.ValueLogGenerationHotWarmCold) {
+		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerDisabled)
+		return
+	}
+	if _, ok := db.backend.(backendValueLogRewriter); !ok {
+		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerDisabled)
+		return
+	}
+	if db.suppressBackgroundVlogGenerationForMaintenancePhase() {
+		return
+	}
+	if !db.vlogGenerationSchedulerState.CompareAndSwap(vlogGenerationSchedulerDisabled, vlogGenerationSchedulerIdle) {
+		return
+	}
 	db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
 	db.wg.Add(1)
 	go db.vlogGenerationLoop()
@@ -17912,6 +17947,7 @@ func (db *DB) SetMaintenancePhase(phase MaintenancePhase) {
 	}
 	db.debugVlogMaintf("maintenance_phase_change from=%s to=%s", maintenancePhaseString(uint32(prev)), maintenancePhaseString(uint32(phase)))
 	if phase == MaintenancePhaseSteady {
+		db.maybeArmWALOnVlogGenerationLoopForSteadyPhase()
 		db.scheduleDueVlogGenerationDeferredMaintenance()
 		db.schedulePendingVlogGenerationCheckpointKick()
 	}

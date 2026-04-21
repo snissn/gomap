@@ -756,7 +756,7 @@ func TestMaybeRunVlogGenerationMaintenanceWithOptions_TracksWalOnPeriodicSkip(t 
 	}
 }
 
-func TestStartVlogGenerationLoop_WALOnStartsScheduler(t *testing.T) {
+func TestSetMaintenancePhase_WALOnSteadyArmsScheduler(t *testing.T) {
 	// Keep checkpoint-kick inert so this test only exercises the periodic
 	// scheduler state and direct maintenance gating under WAL-on.
 	t.Setenv(envDisableVlogGenerationCheckpointKick, "1")
@@ -780,11 +780,14 @@ func TestStartVlogGenerationLoop_WALOnStartsScheduler(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = db.Close() })
 
-	if got := db.vlogGenerationSchedulerState.Load(); got != vlogGenerationSchedulerIdle {
-		t.Fatalf("scheduler state=%d want=%d", got, vlogGenerationSchedulerIdle)
+	if got := db.vlogGenerationSchedulerState.Load(); got != vlogGenerationSchedulerDisabled {
+		t.Fatalf("scheduler state=%d want disabled", got)
 	}
 
 	db.SetMaintenancePhase(MaintenancePhaseRestore)
+	if got := db.vlogGenerationSchedulerState.Load(); got != vlogGenerationSchedulerDisabled {
+		t.Fatalf("scheduler state after restore=%d want disabled", got)
+	}
 	db.maybeRunVlogGenerationMaintenanceWithOptions(false, vlogGenerationMaintenanceOptions{})
 	if got, want := db.vlogGenerationMaintenanceAttempts.Load(), uint64(1); got != want {
 		t.Fatalf("maintenance attempts after restore-phase request=%d want=%d", got, want)
@@ -797,6 +800,9 @@ func TestStartVlogGenerationLoop_WALOnStartsScheduler(t *testing.T) {
 	}
 
 	db.SetMaintenancePhase(MaintenancePhaseSteady)
+	if got := db.vlogGenerationSchedulerState.Load(); got != vlogGenerationSchedulerIdle {
+		t.Fatalf("scheduler state after steady=%d want=%d", got, vlogGenerationSchedulerIdle)
+	}
 	db.maybeRunVlogGenerationMaintenanceWithOptions(true, vlogGenerationMaintenanceOptions{})
 	if got, want := db.vlogGenerationMaintenanceAttempts.Load(), uint64(2); got != want {
 		t.Fatalf("maintenance attempts after periodic request=%d want=%d", got, want)
