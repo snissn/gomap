@@ -170,6 +170,7 @@ func TestOpenSeedsRIDFromAllValueLogSegments(t *testing.T) {
 	}
 
 	writeSegment := func(seq int, rid uint64) {
+		t.Helper()
 		fileID, err := valuelog.EncodeFileID(0, uint32(seq))
 		if err != nil {
 			t.Fatalf("EncodeFileID(%d): %v", seq, err)
@@ -189,7 +190,8 @@ func TestOpenSeedsRIDFromAllValueLogSegments(t *testing.T) {
 	}
 
 	// Older segment contains a higher RID than the newest segment.
-	writeSegment(1, 100)
+	const expectedMaxRID = uint64(100)
+	writeSegment(1, expectedMaxRID)
 	writeSegment(2, 10)
 
 	backend := NewMockBackend()
@@ -203,8 +205,8 @@ func TestOpenSeedsRIDFromAllValueLogSegments(t *testing.T) {
 	}
 	defer func() { _ = db.Close() }()
 
-	if got := db.nextRID.Load(); got != 100 {
-		t.Fatalf("nextRID=%d want 100", got)
+	if got := db.nextRID.Load(); got != expectedMaxRID {
+		t.Fatalf("nextRID=%d want %d", got, expectedMaxRID)
 	}
 }
 
