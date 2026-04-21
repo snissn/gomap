@@ -258,6 +258,23 @@ func TestWrapForegroundIterator_AvoidsDoubleWrapAndCloseIsIdempotent(t *testing.
 	}
 }
 
+func TestForegroundReadQuietFor_DoesNotDependOnActiveIterators(t *testing.T) {
+	db := &DB{closeCh: make(chan struct{})}
+	now := time.Unix(1_700_000_000, 0)
+	quietWindow := 200 * time.Millisecond
+
+	db.activeForegroundIterators.Store(1)
+	db.lastForegroundReadUnixNano.Store(now.Add(-2 * quietWindow).UnixNano())
+	if !db.foregroundReadQuietFor(now, quietWindow) {
+		t.Fatalf("foregroundReadQuietFor=false want true when reads are old")
+	}
+
+	db.lastForegroundReadUnixNano.Store(now.Add(-quietWindow / 2).UnixNano())
+	if db.foregroundReadQuietFor(now, quietWindow) {
+		t.Fatalf("foregroundReadQuietFor=true want false when reads are recent")
+	}
+}
+
 func TestForegroundMaintenanceContext_CancelsOnGetUnsafe(t *testing.T) {
 	backend := NewMockBackend()
 	backend.data["k"] = []byte("value")

@@ -9342,9 +9342,6 @@ func (db *DB) foregroundReadQuietFor(now time.Time, quietWindow time.Duration) b
 	if db == nil {
 		return true
 	}
-	if db.activeForegroundIterators.Load() > 0 {
-		return false
-	}
 	last := db.lastForegroundReadUnixNano.Load()
 	if last <= 0 {
 		return true
