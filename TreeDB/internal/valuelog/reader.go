@@ -173,6 +173,7 @@ func sliceAliasesBytes(buf, candidate []byte) bool {
 
 type Reader struct {
 	f                  *os.File
+	closeFn            func() error
 	r                  *bufio.Reader
 	pos                int64
 	fileID             uint32
@@ -215,11 +216,32 @@ func NewReaderWithBufferSize(path string, fileID uint32, bufferSize int) (*Reade
 	}
 	return &Reader{
 		f:            f,
+		closeFn:      f.Close,
 		r:            bufio.NewReaderSize(f, bufferSize),
 		fileID:       fileID,
 		verifies:     true,
 		decodeValues: true,
 	}, nil
+}
+
+// NewReaderFromFileWithBufferSize creates a metadata/value reader from an
+// already-open segment handle without taking ownership of that file. The file
+// is read via a section reader so the caller's current offset is not disturbed.
+func NewReaderFromFileWithBufferSize(f *os.File, fileID uint32, bufferSize int) *Reader {
+	if f == nil {
+		return nil
+	}
+	if bufferSize <= 0 {
+		bufferSize = defaultBufferSize
+	}
+	sr := io.NewSectionReader(f, 0, 1<<63-1)
+	return &Reader{
+		f:            f,
+		r:            bufio.NewReaderSize(sr, bufferSize),
+		fileID:       fileID,
+		verifies:     true,
+		decodeValues: true,
+	}
 }
 
 func (r *Reader) DisableChecksum() {
@@ -604,10 +626,10 @@ func (r *Reader) discardNUpdateSum(n int, sum uint32) (uint32, error) {
 }
 
 func (r *Reader) Close() error {
-	if r == nil || r.f == nil {
+	if r == nil || r.closeFn == nil {
 		return nil
 	}
-	return r.f.Close()
+	return r.closeFn()
 }
 
 func decodeFramePayload(header FrameHeader, payload []byte, dictLookup DictLookup, rawLen uint32) ([]byte, error) {

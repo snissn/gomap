@@ -751,6 +751,65 @@ func TestNextRewriteRIDStartFromSet_MatchesSegmentScanner(t *testing.T) {
 	}
 }
 
+func TestNextRewriteRIDStartFromSet_ErrorsOnCorruptMidFileRecord(t *testing.T) {
+	dir := t.TempDir()
+
+	fileID, err := valuelog.EncodeFileID(0, 1)
+	if err != nil {
+		t.Fatalf("EncodeFileID(0,1): %v", err)
+	}
+	path := filepath.Join(dir, "value-l0-000001.log")
+	w, err := valuelog.NewWriter(path, fileID)
+	if err != nil {
+		t.Fatalf("NewWriter(path): %v", err)
+	}
+	if _, err := w.Append(0, nil, 11, bytes.Repeat([]byte("a"), 64)); err != nil {
+		t.Fatalf("Append(first): %v", err)
+	}
+
+	const (
+		crcStart     = 0
+		versionOff   = 4
+		flagsOff     = 5
+		ridStart     = 8
+		ridEnd       = 16
+		bodyLenStart = 16
+		bodyLenEnd   = 20
+	)
+
+	// Corrupt grouped record: grouped flag set but body too short for frame header.
+	rawRecord := make([]byte, valuelog.HeaderSize+1)
+	rawRecord[versionOff] = valuelog.Version
+	rawRecord[flagsOff] = 1 << 0
+	binary.LittleEndian.PutUint64(rawRecord[ridStart:ridEnd], 20)
+	binary.LittleEndian.PutUint32(rawRecord[bodyLenStart:bodyLenEnd], 1)
+	rawRecord[valuelog.HeaderSize] = 0xff
+	binary.LittleEndian.PutUint32(rawRecord[crcStart:versionOff], crc32.ChecksumIEEE(rawRecord[versionOff:]))
+	if _, err := w.AppendRawRecord(rawRecord, uint32(len(rawRecord)-versionOff)); err != nil {
+		t.Fatalf("AppendRawRecord(corrupt grouped): %v", err)
+	}
+	if _, err := w.Append(0, nil, 200, bytes.Repeat([]byte("b"), 64)); err != nil {
+		t.Fatalf("Append(last): %v", err)
+	}
+	closeNoErr(t, w)
+
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("Open(path): %v", err)
+	}
+	defer closeNoErr(t, f)
+
+	set := &valuelog.Set{
+		Files: map[uint32]*valuelog.File{
+			fileID: {ID: fileID, Path: path, File: f},
+		},
+	}
+	_, err = nextRewriteRIDStartFromSet(set)
+	if !errors.Is(err, valuelog.ErrCorrupt) {
+		t.Fatalf("nextRewriteRIDStartFromSet error=%v want ErrCorrupt", err)
+	}
+}
+
 func TestValueLogRewrite_HealthMetadata_PreservedAcrossReopen(t *testing.T) {
 	dir := t.TempDir()
 

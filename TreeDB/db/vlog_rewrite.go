@@ -2165,100 +2165,43 @@ func scanValueLogFileMaxRID(seg *valuelog.File) (uint64, error) {
 	if seg == nil {
 		return 0, nil
 	}
-	f := seg.File
-	closeAfter := false
-	if f == nil && seg.Path != "" {
-		var err error
-		f, err = os.Open(seg.Path)
+	const ridScanReaderBufferSize = 64 << 10
+	var (
+		reader *valuelog.Reader
+		err    error
+	)
+	if seg.File != nil {
+		reader = valuelog.NewReaderFromFileWithBufferSize(seg.File, seg.ID, ridScanReaderBufferSize)
+	}
+	if reader == nil {
+		path := seg.Path
+		if path == "" && seg.File != nil {
+			path = seg.File.Name()
+		}
+		if path == "" {
+			return 0, nil
+		}
+		reader, err = valuelog.NewReaderWithBufferSize(path, seg.ID, ridScanReaderBufferSize)
 		if err != nil {
 			return 0, err
 		}
-		closeAfter = true
 	}
-	if f == nil {
-		return 0, nil
-	}
-	if closeAfter {
-		defer func() { _ = f.Close() }()
-	}
-	info, err := f.Stat()
-	if err != nil {
-		return 0, err
-	}
-	size := info.Size()
-	if size < int64(valuelog.HeaderSize) {
-		return 0, nil
-	}
+	defer func() { _ = reader.Close() }()
 
-	const recordFlagGrouped byte = 1 << 0
-	const maxFrameRIDBytes = valuelog.MaxFrameK * 8
-
-	var (
-		header      [valuelog.HeaderSize]byte
-		frameHeader [valuelog.FrameHeaderSize]byte
-		frameRIDs   [maxFrameRIDBytes]byte
-		off         int64
-		maxRID      uint64
-	)
-	for off+int64(valuelog.HeaderSize) <= size {
-		if _, err := f.ReadAt(header[:], off); err != nil {
-			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
-				break
+	reader.DisableValueDecode()
+	maxRID := uint64(0)
+	for {
+		rid, _, err := reader.ReadNextMeta()
+		if err == nil {
+			if rid > maxRID {
+				maxRID = rid
 			}
-			return 0, err
+			continue
 		}
-		if header[4] != valuelog.Version {
-			return 0, valuelog.ErrCorrupt
-		}
-		rid := binary.LittleEndian.Uint64(header[8:16])
-		if rid > maxRID {
-			maxRID = rid
-		}
-		bodyLen := int64(binary.LittleEndian.Uint32(header[16:20]))
-		recordEnd := off + int64(valuelog.HeaderSize) + bodyLen
-		if recordEnd > size {
-			// Best-effort scan: tolerate truncated trailing records.
+		if errors.Is(err, io.EOF) || isTruncatedLogError(err) {
 			break
 		}
-		if header[5]&recordFlagGrouped != 0 {
-			if bodyLen < int64(valuelog.FrameHeaderSize) {
-				break
-			}
-			frameOff := off + int64(valuelog.HeaderSize)
-			if _, err := f.ReadAt(frameHeader[:], frameOff); err != nil {
-				if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
-					break
-				}
-				return 0, err
-			}
-			if frameHeader[0] != valuelog.FrameVersion {
-				return 0, valuelog.ErrCorrupt
-			}
-			k := int(frameHeader[2])
-			if k <= 0 || k > valuelog.MaxFrameK {
-				return 0, valuelog.ErrCorrupt
-			}
-			ridBytes := k * 8
-			if bodyLen < int64(valuelog.FrameHeaderSize+ridBytes) {
-				break
-			}
-			if _, err := f.ReadAt(frameRIDs[:ridBytes], frameOff+int64(valuelog.FrameHeaderSize)); err != nil {
-				if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
-					break
-				}
-				return 0, err
-			}
-			for i := 0; i < k; i++ {
-				frameRID := binary.LittleEndian.Uint64(frameRIDs[i*8 : (i+1)*8])
-				if frameRID == 0 {
-					return 0, valuelog.ErrCorrupt
-				}
-				if frameRID > maxRID {
-					maxRID = frameRID
-				}
-			}
-		}
-		off = recordEnd
+		return 0, err
 	}
 	return maxRID, nil
 }
