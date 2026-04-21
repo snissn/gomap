@@ -14041,7 +14041,7 @@ func (db *DB) startVlogGenerationLoop() {
 }
 
 func (db *DB) maybeArmWALOnVlogGenerationLoopForSteadyPhase() {
-	if db == nil || db.disableJournal {
+	if db == nil || db.disableJournal || db.closing.Load() {
 		return
 	}
 	if envBool(envDisableVlogGenerationLoop) {
@@ -14060,6 +14060,10 @@ func (db *DB) maybeArmWALOnVlogGenerationLoopForSteadyPhase() {
 		return
 	}
 	if !db.vlogGenerationSchedulerState.CompareAndSwap(vlogGenerationSchedulerDisabled, vlogGenerationSchedulerIdle) {
+		return
+	}
+	if db.closing.Load() {
+		db.vlogGenerationSchedulerState.CompareAndSwap(vlogGenerationSchedulerIdle, vlogGenerationSchedulerDisabled)
 		return
 	}
 	db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)

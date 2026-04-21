@@ -815,6 +815,36 @@ func TestSetMaintenancePhase_WALOnSteadyArmsScheduler(t *testing.T) {
 	}
 }
 
+func TestSetMaintenancePhase_WALOnSteadyDoesNotArmSchedulerWhileClosing(t *testing.T) {
+	t.Setenv(envDisableVlogGenerationCheckpointKick, "1")
+
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+
+	db, err := Open(dir, backend, Options{
+		AllowUnsafe:                      true,
+		DisableWAL:                       false,
+		JournalLanes:                     1,
+		ValueLogGenerationPolicy:         uint8(backenddb.ValueLogGenerationHotWarmCold),
+		ValueLogRewriteTriggerTotalBytes: 1,
+		ForceValueLogPointers:            true,
+	})
+	if err != nil {
+		t.Fatalf("open cachingdb: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	db.SetMaintenancePhase(MaintenancePhaseRestore)
+	db.closing.Store(true)
+	db.SetMaintenancePhase(MaintenancePhaseSteady)
+	if got := db.vlogGenerationSchedulerState.Load(); got != vlogGenerationSchedulerDisabled {
+		t.Fatalf("scheduler state while closing=%d want disabled", got)
+	}
+}
+
 func TestMaybeRunVlogGenerationMaintenanceWithOptions_TracksCollision(t *testing.T) {
 	db := &DB{valueLogGenerationPolicy: uint8(backenddb.ValueLogGenerationHotWarmCold)}
 	db.vlogGenerationMaintenanceActive.Store(true)
