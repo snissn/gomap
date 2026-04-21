@@ -122,7 +122,6 @@ func TestProfileFast_BatchWriteFlushesPointerValueLogBeforeMetadataSync(t *testi
 		IndexOuterLeavesInValueLog: true,
 		ValueLogPointerThreshold:   1,
 		ValueLogGenerationPolicy:   uint8(backenddb.ValueLogGenerationOff),
-		WriterFlushMaxMemtables:    0,
 		WriterFlushMaxDuration:     0,
 	})
 	if err != nil {
@@ -234,7 +233,6 @@ func TestCheckpoint_SyncsFlushedValueLogBytesInStrictMode(t *testing.T) {
 		IndexOuterLeavesInValueLog: true,
 		ValueLogPointerThreshold:   1,
 		ValueLogGenerationPolicy:   uint8(backenddb.ValueLogGenerationOff),
-		WriterFlushMaxMemtables:    0,
 		WriterFlushMaxDuration:     0,
 	})
 	if err != nil {
@@ -259,6 +257,66 @@ func TestCheckpoint_SyncsFlushedValueLogBytesInStrictMode(t *testing.T) {
 		t.Fatalf("checkpoint: %v", err)
 	}
 	waitForLaneVlogClean(t, db, 0)
+	if db.hasDirtyValueLogLanes() {
+		t.Fatalf("expected checkpoint to clear pending strict-sync value-log state")
+	}
+}
+
+func TestCheckpoint_SyncsFlushBarrierValueLogBytesInStrictMode(t *testing.T) {
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	defer func() { _ = backend.Close() }()
+	db, err := Open(dir, backend, Options{
+		DisableWAL:                 true,
+		AllowUnsafe:                true,
+		RelaxedSync:                false,
+		FlushThreshold:             1 << 30,
+		JournalLanes:               1,
+		MemtableShards:             1,
+		IndexOuterLeavesInValueLog: true,
+		ValueLogPointerThreshold:   1,
+		ValueLogGenerationPolicy:   uint8(backenddb.ValueLogGenerationOff),
+		WriterFlushMaxDuration:     0,
+	})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	b := db.NewBatch()
+	if err := b.Set([]byte("strict/flush-barrier"), bytes.Repeat([]byte("F"), vlogQueueMinValueSize+128)); err != nil {
+		t.Fatalf("set: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := b.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	waitForLaneVlogDirty(t, db, 0)
+	if err := db.flushValueLogLane(&db.lanes[0]); err != nil {
+		t.Fatalf("flushValueLogLane: %v", err)
+	}
+	if db.lanes[0].vlogDirty.Load() {
+		t.Fatalf("expected flush barrier to clear reader-visible dirty state")
+	}
+	if !db.lanes[0].vlogSyncPending.Load() {
+		t.Fatalf("expected strict-mode flush barrier to leave sync pending")
+	}
+	if !db.hasDirtyValueLogLanes() {
+		t.Fatalf("expected checkpoint to still observe pending strict-sync value-log state")
+	}
+
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
+	if db.hasDirtyValueLogLanes() {
+		t.Fatalf("expected checkpoint to clear pending strict-sync value-log state after flush barrier")
+	}
 }
 
 func TestProfileFast_BatchWriteFlushesPointerValueLogAcrossMultipleLanes(t *testing.T) {
@@ -278,7 +336,6 @@ func TestProfileFast_BatchWriteFlushesPointerValueLogAcrossMultipleLanes(t *test
 		IndexOuterLeavesInValueLog: true,
 		ValueLogPointerThreshold:   1,
 		ValueLogGenerationPolicy:   uint8(backenddb.ValueLogGenerationOff),
-		WriterFlushMaxMemtables:    0,
 		WriterFlushMaxDuration:     0,
 	})
 	if err != nil {

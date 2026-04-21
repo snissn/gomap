@@ -2015,11 +2015,35 @@ func (db *DB) hasDirtyValueLogLanes() bool {
 		return false
 	}
 	for i := range db.lanes {
-		if db.lanes[i].vlogDirty.Load() {
+		if db.lanes[i].vlogDirty.Load() || db.lanes[i].vlogSyncPending.Load() {
 			return true
 		}
 	}
 	return false
+}
+
+func (db *DB) markLaneValueLogBoundary(l *lane, totalBytes int64, flushedBoundary, syncedBoundary bool) {
+	if l == nil {
+		return
+	}
+	if syncedBoundary {
+		l.vlogDirty.Store(false)
+		l.vlogSyncPending.Store(false)
+		return
+	}
+	if totalBytes <= 0 {
+		return
+	}
+	if flushedBoundary {
+		l.vlogDirty.Store(false)
+	} else {
+		l.vlogDirty.Store(true)
+	}
+	if db == nil || db.relaxedSync {
+		l.vlogSyncPending.Store(false)
+		return
+	}
+	l.vlogSyncPending.Store(true)
 }
 
 func (db *DB) checkpointFlushValueLogLanes() error {
@@ -2031,21 +2055,26 @@ func (db *DB) checkpointFlushValueLogLanes() error {
 	flushOnly := db.relaxedSync
 	for i := range db.lanes {
 		l := &db.lanes[i]
-		if !l.vlogDirty.Load() {
+		if !l.vlogDirty.Load() && !l.vlogSyncPending.Load() {
 			continue
 		}
 		l.vlogMu.Lock()
 		w := l.vlog
 		var err error
+		syncBoundary := l.vlogSyncPending.Load() && !flushOnly
 		if w != nil {
-			if flushOnly {
-				err = w.Flush()
-			} else {
+			if syncBoundary {
 				err = w.Sync()
+			} else {
+				err = w.Flush()
 			}
 		}
 		if err == nil {
 			l.vlogDirty.Store(false)
+			if syncBoundary || flushOnly {
+				l.vlogSyncPending.Store(false)
+			}
+			l.backendReadFlushedSeq.Store(l.backendReadDirtySeq.Load())
 		}
 		l.vlogMu.Unlock()
 		if err != nil {
@@ -3854,6 +3883,9 @@ func (db *DB) flushValueLogLane(l *lane) error {
 		db.debugVlogTiming("vlog_flush", int(l.id), "vlogMu", waited, time.Since(start))
 		if err == nil {
 			l.vlogDirty.Store(false)
+			if db.relaxedSync {
+				l.vlogSyncPending.Store(false)
+			}
 			l.backendReadFlushedSeq.Store(l.backendReadDirtySeq.Load())
 		}
 		l.vlogMu.Unlock()
@@ -3901,6 +3933,7 @@ func (db *DB) syncValueLogLane(l *lane) error {
 		db.debugVlogTiming("vlog_sync", int(l.id), "vlogMu", waited, time.Since(start))
 		if err == nil {
 			l.vlogDirty.Store(false)
+			l.vlogSyncPending.Store(false)
 			l.backendReadFlushedSeq.Store(l.backendReadDirtySeq.Load())
 		}
 		l.vlogMu.Unlock()
@@ -12093,11 +12126,7 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 		totalBytes = w.Size() - startSize
 	}
 	if err == nil {
-		if needSync || needFlush || deferredFlushed {
-			l.vlogDirty.Store(false)
-		} else if totalBytes > 0 {
-			l.vlogDirty.Store(true)
-		}
+		db.markLaneValueLogBoundary(l, totalBytes, needFlush || deferredFlushed, needSync)
 		if !needSync && !needFlush && !deferredFlushed && totalBytes > 0 {
 			l.backendReadDirtySeq.Add(1)
 		}
@@ -12833,7 +12862,8 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	encodeNsTotal := int64(0)
 	encodeRawBytes := 0
 	rawBatchUsed := false
-	durableBoundary := false
+	flushedBoundary := false
+	syncedBoundary := false
 	if dictID == 0 && (hasRawInto || hasRawBufferedInto) && finalWriteMode != vlogWriteBlock && len(records) > 1 {
 		if maxBytes := db.valueLogMaxSegmentBytesForLane(l); maxBytes > 0 {
 			// Ensure the entire raw batch fits within the packed-offset cap so
@@ -13048,20 +13078,17 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 		switch durability {
 		case journalDurabilityFlush:
 			err = w.Flush()
-			// Flush is not an fsync durability boundary. In strict-sync mode keep
-			// the lane dirty so checkpoint can still issue Sync(); in relaxed mode
-			// Flush is the configured durability boundary.
-			durableBoundary = err == nil && db.relaxedSync
+			flushedBoundary = err == nil
 		case journalDurabilitySync:
 			err = w.Sync()
-			durableBoundary = err == nil
+			syncedBoundary = err == nil
 		default:
 			if db.shouldFlushDeferredValueLog(finalWriteMode, records) {
 				// In deferred value-log mode, the index will publish pointers to
 				// value-log records during the flush/commit path. Ensure the value-log
 				// bytes are visible to readers even when durability is "none".
 				err = w.Flush()
-				durableBoundary = err == nil
+				flushedBoundary = err == nil
 			}
 		}
 	}
@@ -13072,12 +13099,8 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 		}
 	}
 	if err == nil {
-		if durableBoundary {
-			l.vlogDirty.Store(false)
-		} else if bytesWrittenLive > 0 {
-			l.vlogDirty.Store(true)
-		}
-		if durability == journalDurabilityNone && !durableBoundary && bytesWrittenLive > 0 {
+		db.markLaneValueLogBoundary(l, bytesWrittenLive, flushedBoundary, syncedBoundary)
+		if durability == journalDurabilityNone && !flushedBoundary && !syncedBoundary && bytesWrittenLive > 0 {
 			l.backendReadDirtySeq.Add(1)
 		}
 	}
@@ -13397,7 +13420,7 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 			}
 
 			stats := valuelog.FrameStats{Records: 1, RawPayloadBytes: len(value), StoredPayloadBytes: len(value)}
-			durableBoundary := false
+			flushedBoundary := false
 			if finalWriteMode == vlogWriteBlock {
 				if concrete, ok := w.(*valuelog.Writer); ok {
 					ptr, stats, err = concrete.AppendOneFrameWithStats(0, nil, rid, value)
@@ -13431,11 +13454,11 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 				switch durability {
 				case journalDurabilityFlush:
 					err = w.Flush()
-					durableBoundary = err == nil
+					flushedBoundary = err == nil
 				default:
 					if db.shouldFlushDeferredValueLogValue(finalWriteMode, value) {
 						err = w.Flush()
-						durableBoundary = err == nil
+						flushedBoundary = err == nil
 					}
 				}
 			}
@@ -13448,12 +13471,8 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 				retainPath = l.vlogPath
 			}
 			if err == nil {
-				if durableBoundary {
-					l.vlogDirty.Store(false)
-				} else if totalBytes > 0 {
-					l.vlogDirty.Store(true)
-				}
-				if durability == journalDurabilityNone && !durableBoundary && totalBytes > 0 {
+				db.markLaneValueLogBoundary(l, totalBytes, flushedBoundary, false)
+				if durability == journalDurabilityNone && !flushedBoundary && totalBytes > 0 {
 					l.backendReadDirtySeq.Add(1)
 				}
 			}
@@ -13557,7 +13576,8 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 	statsWriter := caps.stats
 	statsWriterInto := caps.statsInto
 	startSize := w.Size()
-	durableBoundary := false
+	flushedBoundary := false
+	syncedBoundary := false
 
 	if policySetter != nil {
 		snap := db.valueLogAutotuneMetrics.snapshot()
@@ -13635,14 +13655,14 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 		switch durability {
 		case journalDurabilityFlush:
 			err = w.Flush()
-			durableBoundary = err == nil
+			flushedBoundary = err == nil
 		case journalDurabilitySync:
 			err = w.Sync()
-			durableBoundary = err == nil
+			syncedBoundary = err == nil
 		default:
 			if db.shouldFlushDeferredValueLogValue(finalWriteMode, value) {
 				err = w.Flush()
-				durableBoundary = err == nil
+				flushedBoundary = err == nil
 			}
 		}
 	}
@@ -13655,12 +13675,8 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 		retainPath = l.vlogPath
 	}
 	if err == nil {
-		if durableBoundary {
-			l.vlogDirty.Store(false)
-		} else if totalBytes > 0 {
-			l.vlogDirty.Store(true)
-		}
-		if durability == journalDurabilityNone && !durableBoundary && totalBytes > 0 {
+		db.markLaneValueLogBoundary(l, totalBytes, flushedBoundary, syncedBoundary)
+		if durability == journalDurabilityNone && !flushedBoundary && !syncedBoundary && totalBytes > 0 {
 			l.backendReadDirtySeq.Add(1)
 		}
 	}
