@@ -323,6 +323,25 @@ func TestForegroundReadQuietFor_DoesNotDependOnActiveIterators(t *testing.T) {
 	}
 }
 
+func TestForegroundVlogMaintenanceQuietFor_IgnoresReadTraffic(t *testing.T) {
+	db := &DB{closeCh: make(chan struct{})}
+	now := time.Unix(1_700_000_000, 0)
+	quietWindow := 200 * time.Millisecond
+
+	db.activeForegroundIterators.Store(1)
+	db.lastForegroundReadUnixNano.Store(now.UnixNano())
+	db.lastForegroundWriteUnixNano.Store(now.Add(-2 * quietWindow).UnixNano())
+
+	if !db.foregroundVlogMaintenanceQuietFor(now, quietWindow) {
+		t.Fatalf("foregroundVlogMaintenanceQuietFor=false want true when writes are quiet")
+	}
+
+	db.lastForegroundWriteUnixNano.Store(now.Add(-quietWindow / 2).UnixNano())
+	if db.foregroundVlogMaintenanceQuietFor(now, quietWindow) {
+		t.Fatalf("foregroundVlogMaintenanceQuietFor=true want false when writes are recent")
+	}
+}
+
 func TestForegroundMaintenanceContext_CancelsOnGetUnsafe(t *testing.T) {
 	backend := NewMockBackend()
 	backend.data["k"] = []byte("value")
