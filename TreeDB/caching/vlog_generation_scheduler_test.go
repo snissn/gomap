@@ -756,7 +756,7 @@ func TestMaybeRunVlogGenerationMaintenanceWithOptions_TracksWalOnPeriodicSkip(t 
 	}
 }
 
-func TestStartVlogGenerationLoop_WALOnDisabled(t *testing.T) {
+func TestStartVlogGenerationLoop_WALOnStartsScheduler(t *testing.T) {
 	// Keep checkpoint-kick inert so this test only exercises the periodic
 	// scheduler state and direct maintenance gating under WAL-on.
 	t.Setenv(envDisableVlogGenerationCheckpointKick, "1")
@@ -780,8 +780,8 @@ func TestStartVlogGenerationLoop_WALOnDisabled(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = db.Close() })
 
-	if got := db.vlogGenerationSchedulerState.Load(); got != vlogGenerationSchedulerDisabled {
-		t.Fatalf("scheduler state=%d want=%d", got, vlogGenerationSchedulerDisabled)
+	if got := db.vlogGenerationSchedulerState.Load(); got != vlogGenerationSchedulerIdle {
+		t.Fatalf("scheduler state=%d want=%d", got, vlogGenerationSchedulerIdle)
 	}
 
 	db.SetMaintenancePhase(MaintenancePhaseRestore)
