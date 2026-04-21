@@ -754,7 +754,7 @@ func TestMaybeRunVlogGenerationMaintenanceWithOptions_TracksWalOnPeriodicSkip(t 
 	}
 }
 
-func TestStartVlogGenerationLoop_WALOnStartsIdle(t *testing.T) {
+func TestStartVlogGenerationLoop_WALOnDisabled(t *testing.T) {
 	t.Setenv(envDisableVlogGenerationCheckpointKick, "1")
 
 	dir := t.TempDir()
@@ -776,17 +776,8 @@ func TestStartVlogGenerationLoop_WALOnStartsIdle(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = db.Close() })
 
-	if got := db.vlogGenerationSchedulerState.Load(); got != vlogGenerationSchedulerIdle {
-		t.Fatalf("scheduler state=%d want=%d", got, vlogGenerationSchedulerIdle)
-	}
-
-	db.SetMaintenancePhase(MaintenancePhaseRestore)
-	if ran := db.maybeRunPeriodicVlogGenerationMaintenance(false); ran {
-		t.Fatal("periodic maintenance unexpectedly ran during restore in WAL-on profile")
-	}
-	db.maybeRunVlogGenerationMaintenanceWithOptions(false, vlogGenerationMaintenanceOptions{})
-	if got := db.vlogGenerationMaintenanceSkipPhase.Load(); got == 0 {
-		t.Fatal("expected maintenance phase skip to be recorded for WAL-on profile")
+	if got := db.vlogGenerationSchedulerState.Load(); got != vlogGenerationSchedulerDisabled {
+		t.Fatalf("scheduler state=%d want=%d", got, vlogGenerationSchedulerDisabled)
 	}
 }
 
