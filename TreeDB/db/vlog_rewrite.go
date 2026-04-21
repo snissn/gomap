@@ -1542,7 +1542,6 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 	defer releaseSet()
 	files := db.valueOnlyValueLogFiles(set.Files)
 	if len(files) == 0 {
-		set = nil
 		return stats, nil
 	}
 	oldValueIDs := make(map[uint32]struct{}, len(files))
@@ -1599,7 +1598,6 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		if rewritePlanNeedsLiveEstimate(opts) {
 			liveByID, err = db.estimateValueLogLiveBytesBySegment(ctx)
 			if err != nil {
-				releaseSet()
 				return stats, err
 			}
 		}
@@ -1629,7 +1627,6 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 	}
 	if restrictSource && sourceSegmentCount == 0 {
 		// No source segments selected: this rewrite pass is a no-op.
-		set = nil
 		stats.SegmentsAfter = stats.SegmentsBefore
 		stats.BytesAfter = stats.BytesBefore
 		return stats, nil
@@ -1656,7 +1653,6 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 					}
 					needSegScan = false
 				} else {
-					set = nil
 					return stats, statErr
 				}
 			}
