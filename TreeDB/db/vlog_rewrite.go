@@ -1539,9 +1539,9 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		releaseSet()
 		return stats, nil
 	}
-	defer releaseSet()
 	files := db.valueOnlyValueLogFiles(set.Files)
 	if len(files) == 0 {
+		releaseSet()
 		return stats, nil
 	}
 	oldValueIDs := make(map[uint32]struct{}, len(files))
@@ -1598,6 +1598,7 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		if rewritePlanNeedsLiveEstimate(opts) {
 			liveByID, err = db.estimateValueLogLiveBytesBySegment(ctx)
 			if err != nil {
+				releaseSet()
 				return stats, err
 			}
 		}
@@ -1627,6 +1628,7 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 	}
 	if restrictSource && sourceSegmentCount == 0 {
 		// No source segments selected: this rewrite pass is a no-op.
+		releaseSet()
 		stats.SegmentsAfter = stats.SegmentsBefore
 		stats.BytesAfter = stats.BytesBefore
 		return stats, nil
@@ -1653,6 +1655,7 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 					}
 					needSegScan = false
 				} else {
+					releaseSet()
 					return stats, statErr
 				}
 			}
@@ -1667,7 +1670,7 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		nextRID, err = rewriteRIDStartScanner(segments)
 		if err != nil {
 			releaseSet()
-			return stats, err
+			return stats, fmt.Errorf("scan rewrite rid start in %s: %w", db.dir, err)
 		}
 	}
 	releaseSet()
@@ -1686,7 +1689,7 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 	if opts.ReserveRIDs == nil && nextRID == 0 {
 		nextRID, err = rewriteRIDStartScanner(segments)
 		if err != nil {
-			return stats, err
+			return stats, fmt.Errorf("scan rewrite rid start in %s: %w", db.dir, err)
 		}
 	}
 	ridAlloc := newRewriteRIDAllocator(nextRID, opts.ReserveRIDs)
