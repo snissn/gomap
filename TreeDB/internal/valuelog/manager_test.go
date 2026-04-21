@@ -777,6 +777,7 @@ func TestManagerPromoteCurrentWritable_RetiresDemotedLeafWhenFileGrewPastSealedB
 	if err := mgr.PromoteCurrentWritable(id2); err != nil {
 		t.Fatalf("PromoteCurrentWritable(id2): %v", err)
 	}
+	waitForRemapIdle(t, f1)
 	if data, _ := f1.mmapData.Load().([]byte); len(data) != 0 {
 		t.Fatalf("expected demoted id1 mapping to retire once sealed file size exceeds byte cap, len=%d", len(data))
 	}

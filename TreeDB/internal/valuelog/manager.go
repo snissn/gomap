@@ -1877,7 +1877,7 @@ func (m *Manager) allowDemotedCurrentMmapLocked(target *File, nextCurrentID uint
 	targetData, _ := target.mmapData.Load().([]byte)
 	targetMapped := len(targetData) > 0
 	for _, f := range m.files {
-		if f == nil || f.ID == nextCurrentID || f.currentWritable.Load() {
+		if f == nil || f == target || f.ID == nextCurrentID || f.currentWritable.Load() {
 			continue
 		}
 		if isLeafLogFileID(f.ID) != targetIsLeaf {
@@ -1890,7 +1890,11 @@ func (m *Manager) allowDemotedCurrentMmapLocked(target *File, nextCurrentID uint
 		mappedSealed++
 		mappedSealedBytes += uint64(len(data))
 	}
-	if mappedSealed > maxSegments {
+	projectedMappedSealed := mappedSealed
+	if targetMapped {
+		projectedMappedSealed++
+	}
+	if projectedMappedSealed > maxSegments {
 		return false
 	}
 	if maxBytes > 0 {
@@ -1907,16 +1911,7 @@ func (m *Manager) allowDemotedCurrentMmapLocked(target *File, nextCurrentID uint
 		}
 		limit := uint64(maxBytes)
 		if targetMapped {
-			currentBytes := uint64(len(targetData))
-			if targetBytes > currentBytes {
-				projected := targetBytes
-				if mappedSealedBytes > currentBytes {
-					projected += mappedSealedBytes - currentBytes
-				}
-				if projected > limit {
-					return false
-				}
-			} else if mappedSealedBytes > limit {
+			if mappedSealedBytes+targetBytes > limit {
 				return false
 			}
 		} else if mappedSealedBytes+targetBytes > limit {
