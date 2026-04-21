@@ -118,3 +118,28 @@ func TestBatchEnsureArenaChunk_GeometricGrowth(t *testing.T) {
 		t.Fatalf("third chunk cap=%d want=%d", got, want)
 	}
 }
+
+func TestBatchSet_OversizedValueDoesNotGrowArena(t *testing.T) {
+	b := New(newMapValueReader(), 4)
+	t.Cleanup(func() { _ = b.Close() })
+
+	if err := b.Set([]byte("k"), []byte("ok")); err != nil {
+		t.Fatalf("warm Set: %v", err)
+	}
+	chunksBefore := len(b.arenaChunks)
+	lastLenBefore := len(b.arenaChunks[chunksBefore-1])
+
+	if err := b.Set([]byte("k2"), bytes.Repeat([]byte("x"), 5)); err != ErrValueTooLarge {
+		t.Fatalf("Set oversized err=%v want=%v", err, ErrValueTooLarge)
+	}
+
+	if got := len(b.entries); got != 1 {
+		t.Fatalf("entries len=%d want=1", got)
+	}
+	if got := len(b.arenaChunks); got != chunksBefore {
+		t.Fatalf("arena chunk count=%d want=%d", got, chunksBefore)
+	}
+	if got := len(b.arenaChunks[chunksBefore-1]); got != lastLenBefore {
+		t.Fatalf("arena chunk len=%d want=%d", got, lastLenBefore)
+	}
+}

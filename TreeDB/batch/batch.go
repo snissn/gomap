@@ -380,6 +380,12 @@ func (b *Batch) Set(key, value []byte) error {
 		return ErrKeyEmpty
 	}
 
+	// Enforce inline threshold before copying into the arena so rejected values
+	// do not consume batch-retained memory.
+	if len(value) > b.inlineThresholdForKey(key) {
+		return ErrValueTooLarge
+	}
+
 	// Copy key/value to ensure immutability (reduce per-entry allocations by
 	// copying into a per-batch arena).
 	k, valCopy := b.arenaCopyPair(key, value)
@@ -389,10 +395,6 @@ func (b *Batch) Set(key, value []byte) error {
 		Key:  k,
 	}
 
-	// Check threshold
-	if len(value) > b.inlineThresholdForKey(key) {
-		return ErrValueTooLarge
-	}
 	// Store inline
 	entry.Value = valCopy
 
