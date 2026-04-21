@@ -1958,6 +1958,9 @@ func TestLeafGenerationPackMaintenance_RunsWithDefaultBounds(t *testing.T) {
 	if opts.MinReclaimPerByteCopiedPPM != leafGenerationPackMaintenanceDefaultMinReclaimPerByteCopiedPPM {
 		t.Fatalf("MinReclaimPerByteCopiedPPM=%d want %d", opts.MinReclaimPerByteCopiedPPM, leafGenerationPackMaintenanceDefaultMinReclaimPerByteCopiedPPM)
 	}
+	if !opts.Sync {
+		t.Fatal("expected leaf pack maintenance to run with Sync=true")
+	}
 	if got := db.vlogGenerationLeafPackRuns.Load(); got != 1 {
 		t.Fatalf("leaf pack runs=%d want 1", got)
 	}
@@ -2054,6 +2057,11 @@ func TestLeafGenerationPackMaintenance_LoopsWithinBudgetAndRunsLeafGC(t *testing
 	}
 	if history[1].MaxGenerations != 1 || history[1].MaxBytesToCopy != 40 {
 		t.Fatalf("second bounds=(%d,%d) want (1,40)", history[1].MaxGenerations, history[1].MaxBytesToCopy)
+	}
+	for i := range history {
+		if !history[i].Sync {
+			t.Fatalf("history[%d].Sync=false want true", i)
+		}
 	}
 	gcStats, gcCalls := recorder.recordedLeafGC()
 	if gcCalls != 2 {

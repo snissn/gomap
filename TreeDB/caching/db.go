@@ -22842,7 +22842,9 @@ func (db *DB) maybeRunLeafGenerationPackMaintenance(runGC bool, quiet bool, admi
 		remainingBytesToCopy := maxBytesToCopy
 		for remainingGenerations > 0 && remainingBytesToCopy > 0 {
 			stats, runErr := runner.LeafGenerationPackRunOnce(ctx, backenddb.LeafGenerationPackFromPlanOptions{
-				Sync:                       false,
+				// Pack maintenance runs GC immediately after successful pack runs.
+				// Keep pack writes durable before GC can retire older generations.
+				Sync:                       true,
 				MinPublishedAgeCommits:     minPublishedAgeCommits,
 				MinCandidateGenerations:    minCandidateGenerations,
 				MinReclaimPerByteCopiedPPM: minReclaimPerByteCopiedPPM,
