@@ -4304,7 +4304,7 @@ func (db *DB) foregroundWritesResumedSince(lastWrite int64) bool {
 	}
 	current := db.lastForegroundWriteUnixNano.Load()
 	if lastWrite <= 0 {
-		return current > 0
+		return false
 	}
 	return current > lastWrite
 }
@@ -9491,6 +9491,9 @@ func (db *DB) foregroundActivityResumedSince(lastActivity int64) bool {
 func (db *DB) foregroundVlogMaintenanceResumedSince(lastWrite int64) bool {
 	if db == nil {
 		return false
+	}
+	if lastWrite <= 0 {
+		return db.lastForegroundWriteUnixNano.Load() > 0
 	}
 	return db.foregroundWritesResumedSince(lastWrite)
 }

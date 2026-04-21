@@ -294,14 +294,14 @@ func TestForegroundMaintenanceContext_CancelsOnActiveIterator(t *testing.T) {
 	}
 }
 
-func TestForegroundWritesResumedSince_FirstWriteAfterZeroBaseline(t *testing.T) {
+func TestForegroundVlogMaintenanceResumedSince_FirstWriteAfterZeroBaseline(t *testing.T) {
 	db := &DB{}
-	if db.foregroundWritesResumedSince(0) {
+	if db.foregroundVlogMaintenanceResumedSince(0) {
 		t.Fatalf("expected zero baseline with no writes to remain idle")
 	}
 	now := time.Unix(1_700_000_000, 0).UnixNano()
 	db.lastForegroundWriteUnixNano.Store(now)
-	if !db.foregroundWritesResumedSince(0) {
+	if !db.foregroundVlogMaintenanceResumedSince(0) {
 		t.Fatalf("expected first foreground write after open to count as resumed")
 	}
 }
