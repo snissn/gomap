@@ -25649,6 +25649,7 @@ type Batch struct {
 	maxEntries         int
 
 	closed         bool
+	hasViewOps     bool
 	streamEligible bool
 	streamTried    bool
 	firstKey       []byte
@@ -26099,6 +26100,7 @@ func (b *Batch) Reset() {
 	b.walBuf = b.walBuf[:0]
 	b.streamEligible = true
 	b.streamTried = false
+	b.hasViewOps = false
 	b.firstKey = nil
 	b.lastKey = nil
 	b.batchRange = keyRange{}
@@ -26558,6 +26560,7 @@ func (b *Batch) SetView(key, value []byte) error {
 		Key:   key,
 		Value: value,
 	})
+	b.hasViewOps = true
 	b.noteEntryAppend()
 	b.size += len(key) + len(value)
 
@@ -26639,6 +26642,7 @@ func (b *Batch) DeleteView(key []byte) error {
 		Type: batch.OpDelete,
 		Key:  key,
 	})
+	b.hasViewOps = true
 	b.noteEntryAppend()
 	b.size += len(key)
 
@@ -27046,6 +27050,12 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 		prospectiveRetainBytes,
 		b.db.currentBatchArenaRetainedHardCapEffectiveBytes(),
 	)
+	// SetView/DeleteView callers provide externally-owned slices that are only
+	// guaranteed immutable until Write/Close returns. Do not retain or steal
+	// those slices into memtables.
+	if b.hasViewOps {
+		allowBatchArenaBorrow = false
+	}
 	if !allowBatchArenaBorrow {
 		batchArenaBorrowBlockedTotal.Add(1)
 		if preflightBlocked {
