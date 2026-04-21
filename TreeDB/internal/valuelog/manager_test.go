@@ -715,6 +715,76 @@ func TestManagerPromoteCurrentWritable_RetiresDemotedLeafWhenSealedBudgetAlready
 	}
 }
 
+func TestManagerPromoteCurrentWritable_RetiresDemotedLeafWhenFileGrewPastSealedBytesBudget(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("mmap not supported on windows")
+	}
+	var files []*File
+	prevCurrent := enableCurrentWritableMmap
+	prevLeaf := enableCurrentLeafWritableMmap
+	enableCurrentWritableMmap = false
+	enableCurrentLeafWritableMmap = true
+	withMappedLeafSealedBudget(t, 2)
+	withMappedLeafSealedBytesBudget(t, 512)
+	t.Cleanup(func() {
+		waitForRemapIdle(t, files...)
+		enableCurrentWritableMmap = prevCurrent
+		enableCurrentLeafWritableMmap = prevLeaf
+	})
+
+	dir := t.TempDir()
+	id1, ptr1 := writeTestSegmentWithPtr(t, dir, ReservedLeafLogLaneID, 1, 1, bytes.Repeat([]byte("a"), 64))
+	id2, _ := writeTestSegmentWithPtr(t, dir, ReservedLeafLogLaneID, 2, 2, bytes.Repeat([]byte("b"), 64))
+
+	mgr, err := NewManager(dir)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	defer func() { _ = mgr.Close() }()
+
+	for _, id := range []uint32{id1, id2} {
+		if err := mgr.RegisterSegment(segmentPathForID(dir, id), id); err != nil {
+			t.Fatalf("RegisterSegment(%d): %v", id, err)
+		}
+	}
+	if err := mgr.PromoteCurrentWritable(id1); err != nil {
+		t.Fatalf("PromoteCurrentWritable(id1): %v", err)
+	}
+	if _, err := mgr.ReadUnsafe(ptr1); err != nil {
+		t.Fatalf("ReadUnsafe(ptr1): %v", err)
+	}
+
+	path1 := segmentPathForID(dir, id1)
+	expand, err := os.OpenFile(path1, os.O_WRONLY|os.O_APPEND, 0)
+	if err != nil {
+		t.Fatalf("OpenFile(path1 append): %v", err)
+	}
+	if _, err := expand.Write(bytes.Repeat([]byte("x"), 4096)); err != nil {
+		_ = expand.Close()
+		t.Fatalf("append(path1): %v", err)
+	}
+	if err := expand.Close(); err != nil {
+		t.Fatalf("Close(path1 append): %v", err)
+	}
+
+	f1 := mgr.files[id1]
+	f2 := mgr.files[id2]
+	files = []*File{f1, f2}
+	if data, _ := f1.mmapData.Load().([]byte); len(data) == 0 {
+		t.Fatalf("expected id1 mmap to be active before demotion")
+	}
+
+	if err := mgr.PromoteCurrentWritable(id2); err != nil {
+		t.Fatalf("PromoteCurrentWritable(id2): %v", err)
+	}
+	if data, _ := f1.mmapData.Load().([]byte); len(data) != 0 {
+		t.Fatalf("expected demoted id1 mapping to retire once sealed file size exceeds byte cap, len=%d", len(data))
+	}
+	if dead := f1.deadMappingsCount.Load(); dead == 0 {
+		t.Fatalf("expected demoted id1 mapping to be retained in deadMappings after retirement")
+	}
+}
+
 func TestManagerPromoteCurrentWritable_DeadMappingCapKeepsDemotedLeafMapped(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("mmap not supported on windows")

@@ -1874,6 +1874,8 @@ func (m *Manager) allowDemotedCurrentMmapLocked(target *File, nextCurrentID uint
 	}
 	mappedSealed := 0
 	var mappedSealedBytes uint64
+	targetData, _ := target.mmapData.Load().([]byte)
+	targetMapped := len(targetData) > 0
 	for _, f := range m.files {
 		if f == nil || f.ID == nextCurrentID || f.currentWritable.Load() {
 			continue
@@ -1891,8 +1893,35 @@ func (m *Manager) allowDemotedCurrentMmapLocked(target *File, nextCurrentID uint
 	if mappedSealed > maxSegments {
 		return false
 	}
-	if maxBytes > 0 && mappedSealedBytes > uint64(maxBytes) {
-		return false
+	if maxBytes > 0 {
+		targetBytes := uint64(len(targetData))
+		if known := target.fileSize.Load(); known > int64(targetBytes) {
+			targetBytes = uint64(known)
+		} else if target.File != nil {
+			if info, err := target.File.Stat(); err == nil {
+				if sz := info.Size(); sz > int64(targetBytes) {
+					targetBytes = uint64(sz)
+					target.fileSize.Store(sz)
+				}
+			}
+		}
+		limit := uint64(maxBytes)
+		if targetMapped {
+			currentBytes := uint64(len(targetData))
+			if targetBytes > currentBytes {
+				projected := targetBytes
+				if mappedSealedBytes > currentBytes {
+					projected += mappedSealedBytes - currentBytes
+				}
+				if projected > limit {
+					return false
+				}
+			} else if mappedSealedBytes > limit {
+				return false
+			}
+		} else if mappedSealedBytes+targetBytes > limit {
+			return false
+		}
 	}
 	return true
 }
