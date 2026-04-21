@@ -84,10 +84,8 @@ func waitForLaneVlogDirtyState(t *testing.T, db *DB, laneID int, wantDirty bool)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if wantDirty {
-		t.Fatalf("lane %d never became dirty after %s", laneID, waitFor)
-	}
-	t.Fatalf("lane %d remained dirty waiting for value-log flush after %s", laneID, waitFor)
+	gotDirty := db.lanes[laneID].vlogDirty.Load()
+	t.Fatalf("lane %d vlogDirty=%t want %t after %s", laneID, gotDirty, wantDirty, waitFor)
 }
 
 func TestProfileFast_BatchWriteFlushesPointerValueLogBeforeMetadataSync(t *testing.T) {

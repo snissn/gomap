@@ -212,6 +212,8 @@ func TestOpenSeedsRIDFromAllValueLogSegments(t *testing.T) {
 
 func foregroundMaintenanceCancelWait(t *testing.T) time.Duration {
 	t.Helper()
+	// Give maintenance cancellation several poll intervals to fire, but clamp the
+	// wait to a small floor and at most a fraction of the remaining test budget.
 	waitFor := 5 * foregroundMaintenancePollInterval()
 	if waitFor < 50*time.Millisecond {
 		waitFor = 50 * time.Millisecond
