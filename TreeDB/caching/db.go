@@ -14028,14 +14028,14 @@ func (db *DB) startVlogGenerationLoop() {
 		return
 	}
 	if !db.disableJournal {
-		// WAL-on profiles must explicitly re-arm the periodic scheduler after the
-		// caller transitions out of restore/catch-up. Starting the loop during Open
-		// races with callers that immediately move maintenance phase away from the
-		// default steady state.
+		// WAL-on profiles start with the periodic scheduler disabled and re-enable
+		// it only after the caller transitions back to steady phase. The loop still
+		// starts here so later steady-phase arming never needs to spawn a new
+		// goroutine during runtime or shutdown.
 		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerDisabled)
-		return
+	} else {
+		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
 	}
-	db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
 	db.wg.Add(1)
 	go db.vlogGenerationLoop()
 }
@@ -14059,16 +14059,7 @@ func (db *DB) maybeArmWALOnVlogGenerationLoopForSteadyPhase() {
 	if db.suppressBackgroundVlogGenerationForMaintenancePhase() {
 		return
 	}
-	if !db.vlogGenerationSchedulerState.CompareAndSwap(vlogGenerationSchedulerDisabled, vlogGenerationSchedulerIdle) {
-		return
-	}
-	if db.closing.Load() {
-		db.vlogGenerationSchedulerState.CompareAndSwap(vlogGenerationSchedulerIdle, vlogGenerationSchedulerDisabled)
-		return
-	}
-	db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
-	db.wg.Add(1)
-	go db.vlogGenerationLoop()
+	db.vlogGenerationSchedulerState.CompareAndSwap(vlogGenerationSchedulerDisabled, vlogGenerationSchedulerIdle)
 }
 
 func (db *DB) vlogGenerationLoop() {
@@ -14082,6 +14073,9 @@ func (db *DB) vlogGenerationLoop() {
 			return
 		case <-ticker.C:
 			ticks++
+			if db.vlogGenerationSchedulerState.Load() == vlogGenerationSchedulerDisabled {
+				continue
+			}
 			db.maybeRunPeriodicVlogGenerationMaintenance(ticks%vlogGenerationGCEvery == 0)
 		}
 	}
