@@ -2165,17 +2165,26 @@ func scanValueLogFileMaxRID(seg *valuelog.File) (uint64, error) {
 	if seg == nil {
 		return 0, nil
 	}
-	path := seg.Path
-	if path == "" && seg.File != nil {
-		path = seg.File.Name()
-	}
-	if path == "" {
-		return 0, nil
-	}
 	const ridScanReaderBufferSize = 64 << 10
-	reader, err := valuelog.NewReaderWithBufferSize(path, seg.ID, ridScanReaderBufferSize)
-	if err != nil {
-		return 0, err
+	var (
+		reader *valuelog.Reader
+		err    error
+	)
+	if seg.File != nil {
+		reader = valuelog.NewReaderFromFileWithBufferSize(seg.File, seg.ID, ridScanReaderBufferSize)
+	}
+	if reader == nil {
+		path := seg.Path
+		if path == "" && seg.File != nil {
+			path = seg.File.Name()
+		}
+		if path == "" {
+			return 0, nil
+		}
+		reader, err = valuelog.NewReaderWithBufferSize(path, seg.ID, ridScanReaderBufferSize)
+		if err != nil {
+			return 0, err
+		}
 	}
 	defer func() { _ = reader.Close() }()
 
@@ -2189,7 +2198,7 @@ func scanValueLogFileMaxRID(seg *valuelog.File) (uint64, error) {
 			}
 			continue
 		}
-		if isTruncatedLogError(err) {
+		if errors.Is(err, io.EOF) || isTruncatedLogError(err) {
 			break
 		}
 		return 0, err

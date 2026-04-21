@@ -767,15 +767,25 @@ func TestNextRewriteRIDStartFromSet_ErrorsOnCorruptMidFileRecord(t *testing.T) {
 		t.Fatalf("Append(first): %v", err)
 	}
 
+	const (
+		crcStart     = 0
+		versionOff   = 4
+		flagsOff     = 5
+		ridStart     = 8
+		ridEnd       = 16
+		bodyLenStart = 16
+		bodyLenEnd   = 20
+	)
+
 	// Corrupt grouped record: grouped flag set but body too short for frame header.
 	rawRecord := make([]byte, valuelog.HeaderSize+1)
-	rawRecord[4] = valuelog.Version
-	rawRecord[5] = 1 << 0
-	binary.LittleEndian.PutUint64(rawRecord[8:16], 20)
-	binary.LittleEndian.PutUint32(rawRecord[16:20], 1)
+	rawRecord[versionOff] = valuelog.Version
+	rawRecord[flagsOff] = 1 << 0
+	binary.LittleEndian.PutUint64(rawRecord[ridStart:ridEnd], 20)
+	binary.LittleEndian.PutUint32(rawRecord[bodyLenStart:bodyLenEnd], 1)
 	rawRecord[valuelog.HeaderSize] = 0xff
-	binary.LittleEndian.PutUint32(rawRecord[0:4], crc32.ChecksumIEEE(rawRecord[4:]))
-	if _, err := w.AppendRawRecord(rawRecord, uint32(len(rawRecord)-4)); err != nil {
+	binary.LittleEndian.PutUint32(rawRecord[crcStart:versionOff], crc32.ChecksumIEEE(rawRecord[versionOff:]))
+	if _, err := w.AppendRawRecord(rawRecord, uint32(len(rawRecord)-versionOff)); err != nil {
 		t.Fatalf("AppendRawRecord(corrupt grouped): %v", err)
 	}
 	if _, err := w.Append(0, nil, 200, bytes.Repeat([]byte("b"), 64)); err != nil {
