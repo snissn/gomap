@@ -9404,7 +9404,7 @@ func (db *DB) foregroundActivityQuietFor(now time.Time, writeQuietWindow, readQu
 
 func (db *DB) foregroundVlogMaintenanceQuietFor(now time.Time, quietWindow time.Duration) bool {
 	if db == nil {
-		return true
+		return false
 	}
 	return db.foregroundWriteQuietFor(now, quietWindow)
 }
