@@ -3457,6 +3457,10 @@ func TestValueLogRewriteOnline_WithoutReserveRIDs_FastPathStillScansRIDStart(t *
 	if err != nil {
 		t.Fatalf("nextRewriteRIDStart: %v", err)
 	}
+	allocatedRID := nextRID - 1
+	if allocatedRID != 315_001 {
+		t.Fatalf("allocated rewrite RID=%d want 315001", allocatedRID)
+	}
 	if nextRID != 315_002 {
 		t.Fatalf("next RID after rewrite=%d want 315002", nextRID)
 	}
