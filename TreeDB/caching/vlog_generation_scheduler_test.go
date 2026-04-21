@@ -19,9 +19,10 @@ import (
 type blockingRewritePlannerBackend struct {
 	*backenddb.DB
 
-	startOnce sync.Once
-	planStart chan struct{}
-	planBlock chan struct{}
+	startOnce       sync.Once
+	planUnblockOnce sync.Once
+	planStart       chan struct{}
+	planBlock       chan struct{}
 
 	mu            sync.Mutex
 	rewriteCalls  int
@@ -245,6 +246,12 @@ func (b *blockingRewritePlannerBackend) recordedPlanOutcomes() (completed int, c
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.planCompleted, b.planCanceled
+}
+
+func (b *blockingRewritePlannerBackend) unblockPlan() {
+	b.planUnblockOnce.Do(func() {
+		close(b.planBlock)
+	})
 }
 
 type timedRewritePlannerBackend struct {
@@ -8779,7 +8786,7 @@ func TestVlogGenerationRewritePlan_RunsOutsideMaintenanceBarrier(t *testing.T) {
 		t.Fatalf("waitForCheckpoint blocked while rewrite planning was in progress")
 	}
 
-	close(blocking.planBlock)
+	blocking.unblockPlan()
 
 	select {
 	case <-doneMaintenance:
@@ -8869,7 +8876,7 @@ func TestVlogGenerationMaintenance_BypassQuietPlannerNotCanceledByForegroundActi
 	// Hold the planner past the 100ms foreground-cancel polling cadence to
 	// ensure bypass-quiet planning is not canceled by foreground activity.
 	time.Sleep(250 * time.Millisecond)
-	close(blocking.planBlock)
+	blocking.unblockPlan()
 
 	select {
 	case <-doneMaintenance:
@@ -9537,7 +9544,7 @@ func TestVlogGenerationRewritePlan_DoesNotCancelWhenForegroundReadsResume(t *tes
 	}
 
 	db.noteRead()
-	close(blocking.planBlock)
+	blocking.unblockPlan()
 
 	select {
 	case <-doneMaintenance:
@@ -9613,7 +9620,7 @@ func TestVlogGenerationRewritePlan_ForegroundReadsStillRunForcedGC(t *testing.T)
 
 	// Resume foreground read activity while a forced-GC maintenance pass is active.
 	db.noteRead()
-	close(blocking.planBlock)
+	blocking.unblockPlan()
 
 	select {
 	case <-doneMaintenance:

@@ -69,7 +69,7 @@ func findKeysForDistinctLanes(t *testing.T, db *DB, wantedLanes, perLane int) []
 	return keys
 }
 
-func waitForLaneVlogClean(t *testing.T, db *DB, laneID int) {
+func waitForLaneVlogDirtyState(t *testing.T, db *DB, laneID int, wantDirty bool) {
 	t.Helper()
 	waitFor := 2 * time.Second
 	if ddl, ok := t.Deadline(); ok {
@@ -79,30 +79,15 @@ func waitForLaneVlogClean(t *testing.T, db *DB, laneID int) {
 	}
 	deadline := time.Now().Add(waitFor)
 	for time.Now().Before(deadline) {
-		if !db.lanes[laneID].vlogDirty.Load() {
+		if db.lanes[laneID].vlogDirty.Load() == wantDirty {
 			return
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+	if wantDirty {
+		t.Fatalf("lane %d never became dirty after %s", laneID, waitFor)
 	}
 	t.Fatalf("lane %d remained dirty waiting for value-log flush after %s", laneID, waitFor)
-}
-
-func waitForLaneVlogDirty(t *testing.T, db *DB, laneID int) {
-	t.Helper()
-	waitFor := 2 * time.Second
-	if ddl, ok := t.Deadline(); ok {
-		if remaining := time.Until(ddl) / 10; remaining > 0 && remaining < waitFor {
-			waitFor = remaining
-		}
-	}
-	deadline := time.Now().Add(waitFor)
-	for time.Now().Before(deadline) {
-		if db.lanes[laneID].vlogDirty.Load() {
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatalf("lane %d never became dirty after %s", laneID, waitFor)
 }
 
 func TestProfileFast_BatchWriteFlushesPointerValueLogBeforeMetadataSync(t *testing.T) {
@@ -159,7 +144,7 @@ func TestProfileFast_BatchWriteFlushesPointerValueLogBeforeMetadataSync(t *testi
 		t.Fatalf("close unsynced batch: %v", err)
 	}
 
-	waitForLaneVlogClean(t, db, 0)
+	waitForLaneVlogDirtyState(t, db, 0, false)
 
 	meta := db.NewBatch()
 	if err := meta.Set(rootKey, rootValue); err != nil {
@@ -251,12 +236,12 @@ func TestCheckpoint_SyncsFlushedValueLogBytesInStrictMode(t *testing.T) {
 		t.Fatalf("close: %v", err)
 	}
 
-	waitForLaneVlogDirty(t, db, 0)
+	waitForLaneVlogDirtyState(t, db, 0, true)
 
 	if err := db.Checkpoint(); err != nil {
 		t.Fatalf("checkpoint: %v", err)
 	}
-	waitForLaneVlogClean(t, db, 0)
+	waitForLaneVlogDirtyState(t, db, 0, false)
 	if db.hasDirtyValueLogLanes() {
 		t.Fatalf("expected checkpoint to clear pending strict-sync value-log state")
 	}
@@ -297,7 +282,7 @@ func TestCheckpoint_SyncsFlushBarrierValueLogBytesInStrictMode(t *testing.T) {
 		t.Fatalf("close: %v", err)
 	}
 
-	waitForLaneVlogDirty(t, db, 0)
+	waitForLaneVlogDirtyState(t, db, 0, true)
 	if err := db.flushValueLogLane(&db.lanes[0]); err != nil {
 		t.Fatalf("flushValueLogLane: %v", err)
 	}
@@ -363,7 +348,7 @@ func TestProfileFast_BatchWriteFlushesPointerValueLogAcrossMultipleLanes(t *test
 
 	activeLanes := 0
 	for i := range db.lanes {
-		waitForLaneVlogClean(t, db, i)
+		waitForLaneVlogDirtyState(t, db, i, false)
 		if db.lanes[i].vlogLiveBytes.Load() > 0 {
 			activeLanes++
 		}
