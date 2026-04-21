@@ -475,6 +475,7 @@ func TestBatchSetView_MutationAfterWriteDoesNotCorruptStoredValue(t *testing.T) 
 	key := []byte("setview-key")
 	buf := bytes.Repeat([]byte("1"), 32)
 	want := bytes.Clone(buf)
+	blockedBefore := batchArenaBorrowViewOpsBlockedTotal.Load()
 
 	b := db.NewBatchWithSize(1)
 	defer func() { _ = b.Close() }()
@@ -495,5 +496,12 @@ func TestBatchSetView_MutationAfterWriteDoesNotCorruptStoredValue(t *testing.T) 
 	}
 	if !bytes.Equal(got, want) {
 		t.Fatalf("value mutated after write: got=%q want=%q", got, want)
+	}
+	if got := batchArenaBorrowViewOpsBlockedTotal.Load(); got <= blockedBefore {
+		t.Fatalf("borrow_view_ops_blocked_total=%d before=%d want increased", got, blockedBefore)
+	}
+	stats := db.Stats()
+	if got := stats["treedb.cache.batch_arena.borrow_view_ops_blocked_total"]; got == "0" {
+		t.Fatalf("cache borrow_view_ops_blocked_total=%q want >0", got)
 	}
 }
