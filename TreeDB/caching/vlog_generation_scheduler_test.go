@@ -165,6 +165,8 @@ func disableVlogGenerationLoop(t *testing.T) {
 func prepareDirectSchedulerTest(t *testing.T) {
 	t.Helper()
 	disableVlogGenerationLoop(t)
+	// Direct scheduler tests drive maintenance explicitly and should not arm the
+	// checkpoint-kick path during Open, even if the scheduler itself is disabled.
 	t.Setenv(envDisableVlogGenerationCheckpointKick, "1")
 }
 
@@ -754,7 +756,9 @@ func TestMaybeRunVlogGenerationMaintenanceWithOptions_TracksWalOnPeriodicSkip(t 
 	}
 }
 
-func TestStartVlogGenerationLoop_WALOnStartsIdle(t *testing.T) {
+func TestStartVlogGenerationLoop_WALOnDisabled(t *testing.T) {
+	// Keep checkpoint-kick inert so this test only exercises the periodic
+	// scheduler state and direct maintenance gating under WAL-on.
 	t.Setenv(envDisableVlogGenerationCheckpointKick, "1")
 
 	dir := t.TempDir()
@@ -776,17 +780,32 @@ func TestStartVlogGenerationLoop_WALOnStartsIdle(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = db.Close() })
 
-	if got := db.vlogGenerationSchedulerState.Load(); got != vlogGenerationSchedulerIdle {
-		t.Fatalf("scheduler state=%d want=%d", got, vlogGenerationSchedulerIdle)
+	if got := db.vlogGenerationSchedulerState.Load(); got != vlogGenerationSchedulerDisabled {
+		t.Fatalf("scheduler state=%d want=%d", got, vlogGenerationSchedulerDisabled)
 	}
 
 	db.SetMaintenancePhase(MaintenancePhaseRestore)
-	if ran := db.maybeRunPeriodicVlogGenerationMaintenance(false); ran {
-		t.Fatal("periodic maintenance unexpectedly ran during restore in WAL-on profile")
-	}
 	db.maybeRunVlogGenerationMaintenanceWithOptions(false, vlogGenerationMaintenanceOptions{})
-	if got := db.vlogGenerationMaintenanceSkipPhase.Load(); got == 0 {
-		t.Fatal("expected maintenance phase skip to be recorded for WAL-on profile")
+	if got, want := db.vlogGenerationMaintenanceAttempts.Load(), uint64(1); got != want {
+		t.Fatalf("maintenance attempts after restore-phase request=%d want=%d", got, want)
+	}
+	if got := db.vlogGenerationMaintenanceAcquired.Load(); got != 0 {
+		t.Fatalf("maintenance acquired during restore-phase request=%d want=0", got)
+	}
+	if got := db.vlogGenerationMaintenanceSkipWALOnPeriodic.Load(); got != 0 {
+		t.Fatalf("maintenance wal-on periodic skips after restore-phase request=%d want=0", got)
+	}
+
+	db.SetMaintenancePhase(MaintenancePhaseSteady)
+	db.maybeRunVlogGenerationMaintenanceWithOptions(true, vlogGenerationMaintenanceOptions{})
+	if got, want := db.vlogGenerationMaintenanceAttempts.Load(), uint64(2); got != want {
+		t.Fatalf("maintenance attempts after periodic request=%d want=%d", got, want)
+	}
+	if got, want := db.vlogGenerationMaintenanceSkipWALOnPeriodic.Load(), uint64(1); got != want {
+		t.Fatalf("maintenance wal-on periodic skips=%d want=%d", got, want)
+	}
+	if got := db.vlogGenerationMaintenanceAcquired.Load(); got != 0 {
+		t.Fatalf("maintenance acquired=%d want=0", got)
 	}
 }
 

@@ -14027,10 +14027,12 @@ func (db *DB) startVlogGenerationLoop() {
 		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerDisabled)
 		return
 	}
-	// Keep the scheduler alive in both WAL-off and WAL-on cached profiles. The
-	// restore/catch-up phase gate, WAL-on checkpoint-kick suppression, WAL-on
-	// periodic runGC suppression, and the quiet/economics checks decide whether
-	// any actual maintenance work is safe to do.
+	if !db.disableJournal {
+		// WAL-on profiles keep generational maintenance off the periodic path to
+		// avoid restore/catch-up races that can diverge post-snapshot state.
+		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerDisabled)
+		return
+	}
 	db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
 	db.wg.Add(1)
 	go db.vlogGenerationLoop()
