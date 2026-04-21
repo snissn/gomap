@@ -3397,7 +3397,7 @@ func TestValueLogRewriteOnline_WithoutReserveRIDs_UsesRIDStartScanner(t *testing
 	}
 }
 
-func TestValueLogRewriteOnline_WithoutReserveRIDs_UsesSetRIDFastPathWhenLaneHintIsClean(t *testing.T) {
+func TestValueLogRewriteOnline_WithoutReserveRIDs_FastPathStillScansRIDStart(t *testing.T) {
 	dir := t.TempDir()
 
 	db, err := Open(Options{Dir: dir})
@@ -3422,7 +3422,7 @@ func TestValueLogRewriteOnline_WithoutReserveRIDs_UsesSetRIDFastPathWhenLaneHint
 	ridStartScanCalls := 0
 	rewriteRIDStartScanner = func([]logSegment) (uint64, error) {
 		ridStartScanCalls++
-		return 0, fmt.Errorf("unexpected rid-start scan")
+		return 315_001, nil
 	}
 	t.Cleanup(func() { rewriteRIDStartScanner = origRIDStartScanner })
 	origWALLister := rewriteWALSegmentsLister
@@ -3443,8 +3443,8 @@ func TestValueLogRewriteOnline_WithoutReserveRIDs_UsesSetRIDFastPathWhenLaneHint
 	if stats.RecordsCopied != 1 {
 		t.Fatalf("expected one copied record, got %d", stats.RecordsCopied)
 	}
-	if ridStartScanCalls != 0 {
-		t.Fatalf("expected no rid-start scan calls, got %d", ridStartScanCalls)
+	if ridStartScanCalls != 1 {
+		t.Fatalf("expected one rid-start scan call, got %d", ridStartScanCalls)
 	}
 	if walScanCalls != 0 {
 		t.Fatalf("expected no wal segment scan calls, got %d", walScanCalls)

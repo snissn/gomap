@@ -1662,7 +1662,13 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		}
 	}
 	if !needSegScan && opts.ReserveRIDs == nil {
-		nextRID, err = nextRewriteRIDStartFromSet(set)
+		segments, err = listValueLogSegments(db.dir)
+		if err != nil {
+			_ = db.valueLogManager.Release(set)
+			set = nil
+			return stats, err
+		}
+		nextRID, err = rewriteRIDStartScanner(segments)
 		if err != nil {
 			_ = db.valueLogManager.Release(set)
 			set = nil
