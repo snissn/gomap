@@ -4888,7 +4888,7 @@ func (db *DB) pruneRetainedValueLogsWithObserved(force bool, observedSourceIDs m
 		return out
 	}
 
-	live, err := db.collectValueLogLiveIDsUntil(db.lastForegroundWriteUnixNano.Load())
+	liveIDs, err := db.collectValueLogLiveIDsUntil(db.lastForegroundWriteUnixNano.Load())
 	if err != nil {
 		if errors.Is(err, errForegroundWritesResumed) {
 			out.AbortedForegroundWrites = true
@@ -4917,7 +4917,7 @@ func (db *DB) pruneRetainedValueLogsWithObserved(force bool, observedSourceIDs m
 			}
 			continue
 		}
-		if _, ok := live[id]; ok {
+		if _, ok := liveIDs[id]; ok {
 			out.LiveSkippedSegments++
 			if size > 0 {
 				out.LiveSkippedBytes += size
