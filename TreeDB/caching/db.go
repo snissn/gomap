@@ -13048,7 +13048,10 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 		switch durability {
 		case journalDurabilityFlush:
 			err = w.Flush()
-			durableBoundary = err == nil
+			// Flush is not an fsync durability boundary. In strict-sync mode keep
+			// the lane dirty so checkpoint can still issue Sync(); in relaxed mode
+			// Flush is the configured durability boundary.
+			durableBoundary = err == nil && db.relaxedSync
 		case journalDurabilitySync:
 			err = w.Sync()
 			durableBoundary = err == nil
