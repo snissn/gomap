@@ -2285,7 +2285,7 @@ func TestRetainedValueLogPrune_AbortsWhenForegroundWritesResume(t *testing.T) {
 	}
 }
 
-func TestRetainedValueLogPruneForce_RetriesAfterForegroundWritesResume(t *testing.T) {
+func TestRetainedValueLogPruneForce_AbortsWhenForegroundWritesResume(t *testing.T) {
 	dir := t.TempDir()
 	backend := NewMockBackend()
 	backend.iteratorStartedCh = make(chan struct{})
@@ -2346,21 +2346,21 @@ func TestRetainedValueLogPruneForce_RetriesAfterForegroundWritesResume(t *testin
 	close(backend.iteratorBlockCh)
 	cache.waitForRetainedValueLogPrune()
 
-	if cache.valueLogRetained(retainedPath) {
-		t.Fatalf("retained path still marked after forced retry prune")
+	if !cache.valueLogRetained(retainedPath) {
+		t.Fatalf("retained path unmarked after forced prune abort")
 	}
 	stats := cache.Stats()
 	if got := stats["treedb.cache.vlog_retained_prune.forced_runs"]; got != "1" {
 		t.Fatalf("forced_runs=%q want 1", got)
 	}
-	if got := stats["treedb.cache.vlog_retained_prune.foreground_abort_runs"]; got != "0" {
-		t.Fatalf("foreground_abort_runs=%q want 0", got)
+	if got := stats["treedb.cache.vlog_retained_prune.foreground_abort_runs"]; got != "1" {
+		t.Fatalf("foreground_abort_runs=%q want 1", got)
 	}
-	if got := stats["treedb.cache.vlog_retained_prune.write_gate_retries"]; got != "1" {
-		t.Fatalf("write_gate_retries=%q want 1", got)
+	if got := stats["treedb.cache.vlog_retained_prune.write_gate_retries"]; got != "0" {
+		t.Fatalf("write_gate_retries=%q want 0", got)
 	}
-	if got := stats["treedb.cache.vlog_retained_prune.write_gate_retry_successes"]; got != "1" {
-		t.Fatalf("write_gate_retry_successes=%q want 1", got)
+	if got := stats["treedb.cache.vlog_retained_prune.write_gate_retry_successes"]; got != "0" {
+		t.Fatalf("write_gate_retry_successes=%q want 0", got)
 	}
 }
 

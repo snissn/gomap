@@ -4889,13 +4889,6 @@ func (db *DB) pruneRetainedValueLogsWithObserved(force bool, observedSourceIDs m
 	}
 
 	live, err := db.collectValueLogLiveIDsUntil(db.lastForegroundWriteUnixNano.Load())
-	if err != nil && force && errors.Is(err, errForegroundWritesResumed) {
-		out.RetriedWithoutWriteGate = true
-		live, err = db.collectValueLogLiveIDsUntil(0)
-		if err == nil {
-			out.RetrySucceeded = true
-		}
-	}
 	if err != nil {
 		if errors.Is(err, errForegroundWritesResumed) {
 			out.AbortedForegroundWrites = true
