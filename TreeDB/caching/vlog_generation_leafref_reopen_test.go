@@ -863,8 +863,8 @@ func TestCachedGenerationalMaintenance_BackgroundSchedulerIdle_WALOn(t *testing.
 		writeBatch(fmt.Sprintf("seed-%02d", i), 384)
 	}
 
-	if got := db.vlogGenerationSchedulerState.Load(); got != vlogGenerationSchedulerIdle {
-		t.Fatalf("scheduler state=%d want idle", got)
+	if got := db.vlogGenerationSchedulerState.Load(); got != vlogGenerationSchedulerDisabled {
+		t.Fatalf("scheduler state=%d want disabled", got)
 	}
 
 	if err := db.checkpointForBackendMaintenance(); err != nil {
