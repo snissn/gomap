@@ -4336,10 +4336,10 @@ func (db *DB) foregroundWritesResumedSince(lastWrite int64) bool {
 	if db == nil {
 		return false
 	}
+	current := db.lastForegroundWriteUnixNano.Load()
 	if lastWrite <= 0 {
 		return false
 	}
-	current := db.lastForegroundWriteUnixNano.Load()
 	return current > lastWrite
 }
 
@@ -9508,6 +9508,16 @@ func (db *DB) foregroundActivityResumedSince(lastActivity int64) bool {
 	return db.lastForegroundActivityUnixNano() > lastActivity
 }
 
+func (db *DB) foregroundVlogMaintenanceResumedSince(lastWrite int64) bool {
+	if db == nil {
+		return false
+	}
+	if lastWrite <= 0 {
+		return db.lastForegroundWriteUnixNano.Load() > 0
+	}
+	return db.foregroundWritesResumedSince(lastWrite)
+}
+
 func (db *DB) foregroundWriteResumeContext(lastWrite int64, timeout time.Duration) (context.Context, context.CancelFunc) {
 	var (
 		ctx    context.Context
@@ -9591,6 +9601,48 @@ func (db *DB) foregroundMaintenanceContext(timeout time.Duration) (context.Conte
 	return db.foregroundMaintenanceContextWithResumeGrace(timeout, 0)
 }
 
+func (db *DB) foregroundVlogMaintenanceContextWithResumeGrace(timeout, resumeGrace time.Duration) (context.Context, context.CancelFunc) {
+	if db == nil {
+		if timeout > 0 {
+			return context.WithTimeout(context.Background(), timeout)
+		}
+		return context.WithCancel(context.Background())
+	}
+	var (
+		ctx    context.Context
+		cancel context.CancelFunc
+	)
+	if timeout > 0 {
+		ctx, cancel = context.WithTimeout(context.Background(), timeout)
+	} else {
+		ctx, cancel = context.WithCancel(context.Background())
+	}
+	lastWrite := db.lastForegroundWriteUnixNano.Load()
+	startedAt := time.Now()
+	go func(lastWrite int64) {
+		ticker := time.NewTicker(foregroundMaintenancePollInterval())
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-db.closeCh:
+				cancel()
+				return
+			case <-ticker.C:
+				if resumeGrace > 0 && time.Since(startedAt) < resumeGrace {
+					continue
+				}
+				if db.foregroundVlogMaintenanceResumedSince(lastWrite) {
+					cancel()
+					return
+				}
+			}
+		}
+	}(lastWrite)
+	return ctx, cancel
+}
+
 func (db *DB) vlogGenerationMaintenanceContext(timeout time.Duration, opts vlogGenerationMaintenanceOptions) (context.Context, context.CancelFunc) {
 	// Checkpoint-kick maintenance is an explicit caller opt-in to run outside the
 	// quiet-window gate. Keep this context timeout-bounded, but do not
@@ -9616,7 +9668,7 @@ func (db *DB) vlogGenerationMaintenanceContext(timeout time.Duration, opts vlogG
 		}()
 		return ctx, cancel
 	}
-	return db.foregroundMaintenanceContext(timeout)
+	return db.foregroundVlogMaintenanceContextWithResumeGrace(timeout, 0)
 }
 
 func (db *DB) leafGenerationPackMaintenanceContext(timeout time.Duration) (context.Context, context.CancelFunc) {
@@ -9652,7 +9704,7 @@ func (db *DB) vlogGenerationRewritePlanContext(timeout time.Duration, opts vlogG
 		}
 		return context.WithCancel(context.Background())
 	}
-	return db.foregroundMaintenanceContextWithResumeGrace(timeout, vlogGenerationRewritePlanResumeGrace)
+	return db.foregroundVlogMaintenanceContextWithResumeGrace(timeout, vlogGenerationRewritePlanResumeGrace)
 }
 
 func (db *DB) noteWrite() {
