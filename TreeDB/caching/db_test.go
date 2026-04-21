@@ -307,7 +307,7 @@ func TestWrapForegroundIterator_AvoidsDoubleWrapAndCloseIsIdempotent(t *testing.
 }
 
 func TestForegroundReadQuietFor_DoesNotDependOnActiveIterators(t *testing.T) {
-	db := &DB{closeCh: make(chan struct{})}
+	db := foregroundQuietTestDB()
 	now := time.Unix(1_700_000_000, 0)
 	quietWindow := 200 * time.Millisecond
 
@@ -323,8 +323,12 @@ func TestForegroundReadQuietFor_DoesNotDependOnActiveIterators(t *testing.T) {
 	}
 }
 
+func foregroundQuietTestDB() *DB {
+	return &DB{closeCh: make(chan struct{})}
+}
+
 func TestForegroundVlogMaintenanceQuietFor_IgnoresReadTraffic(t *testing.T) {
-	db := &DB{closeCh: make(chan struct{})}
+	db := foregroundQuietTestDB()
 	now := time.Unix(1_700_000_000, 0)
 	quietWindow := 200 * time.Millisecond
 
