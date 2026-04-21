@@ -9478,7 +9478,7 @@ func TestVlogGenerationRewritePlan_CancelBackoffExpires(t *testing.T) {
 	}
 }
 
-func TestVlogGenerationRewritePlan_CancelsWhenForegroundReadsResume(t *testing.T) {
+func TestVlogGenerationRewritePlan_DoesNotCancelWhenForegroundReadsResume(t *testing.T) {
 	prepareDirectSchedulerTest(t)
 
 	dir := t.TempDir()
@@ -9537,22 +9537,23 @@ func TestVlogGenerationRewritePlan_CancelsWhenForegroundReadsResume(t *testing.T
 	}
 
 	db.noteRead()
+	close(blocking.planBlock)
 
 	select {
 	case <-doneMaintenance:
 	case <-time.After(wait):
-		t.Fatalf("maintenance did not cancel after foreground reads resumed")
+		t.Fatalf("maintenance did not complete after foreground reads resumed")
 	}
 
-	if got := db.vlogGenerationLastRewritePlanUnixNano.Load(); got != 0 {
-		t.Fatalf("last rewrite plan timestamp=%d want=0 after cancellation", got)
+	if got := db.vlogGenerationRewritePlanCanceled.Load(); got != 0 {
+		t.Fatalf("plan canceled=%d want=0", got)
 	}
 	if got := db.vlogGenerationSchedulerState.Load(); got != vlogGenerationSchedulerIdle {
 		t.Fatalf("scheduler state=%d want=%d", got, vlogGenerationSchedulerIdle)
 	}
 }
 
-func TestVlogGenerationRewritePlan_CancelStillRunsForcedGC(t *testing.T) {
+func TestVlogGenerationRewritePlan_ForegroundReadsStillRunForcedGC(t *testing.T) {
 	prepareDirectSchedulerTest(t)
 
 	dir := t.TempDir()
@@ -9610,17 +9611,18 @@ func TestVlogGenerationRewritePlan_CancelStillRunsForcedGC(t *testing.T) {
 		t.Fatalf("rewrite plan did not start")
 	}
 
-	// Resume foreground activity so rewrite planning is canceled.
+	// Resume foreground read activity while a forced-GC maintenance pass is active.
 	db.noteRead()
+	close(blocking.planBlock)
 
 	select {
 	case <-doneMaintenance:
 	case <-time.After(wait):
-		t.Fatalf("maintenance did not finish after rewrite-plan cancellation")
+		t.Fatalf("maintenance did not finish while foreground reads were active")
 	}
 
 	if got := db.vlogGenerationGCRuns.Load(); got == 0 {
-		t.Fatalf("expected forced GC path to run after rewrite-plan cancellation")
+		t.Fatalf("expected forced GC path to run while foreground reads were active")
 	}
 	if got := db.vlogGenerationSchedulerState.Load(); got != vlogGenerationSchedulerIdle {
 		t.Fatalf("scheduler state=%d want=%d", got, vlogGenerationSchedulerIdle)

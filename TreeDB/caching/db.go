@@ -9368,7 +9368,11 @@ func (db *DB) foregroundActivityQuietFor(now time.Time, writeQuietWindow, readQu
 	if db == nil {
 		return true
 	}
-	return db.foregroundWriteQuietFor(now, writeQuietWindow) && db.foregroundReadQuietFor(now, readQuietWindow)
+	// Value-log maintenance must not be suppressible by read-only traffic.
+	// Keep write quiet-window gating for foreground write latency protection and
+	// leave read quiet-window tracking available for diagnostics/observability.
+	_ = readQuietWindow
+	return db.foregroundWriteQuietFor(now, writeQuietWindow)
 }
 
 func (db *DB) foregroundWriteQuiet(now time.Time) bool {
@@ -9471,10 +9475,10 @@ func (db *DB) foregroundActivityResumedSince(lastActivity int64) bool {
 	if db == nil {
 		return false
 	}
-	if db.activeForegroundIterators.Load() > 0 {
-		return true
-	}
-	return db.lastForegroundActivityUnixNano() > lastActivity
+	// Treat write resumption as the only maintenance-cancel signal so read-only
+	// clients (including long-lived iterators) cannot indefinitely defer
+	// maintenance passes.
+	return db.foregroundWritesResumedSince(lastActivity)
 }
 
 func (db *DB) foregroundWriteResumeContext(lastWrite int64, timeout time.Duration) (context.Context, context.CancelFunc) {
