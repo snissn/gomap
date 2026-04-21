@@ -1522,24 +1522,26 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 	// path. Fall back to a refresh if the manager has not yet discovered any
 	// segments (or if another process created segments on disk).
 	set := db.valueLogManager.CurrentSetNoRefresh()
-	if set == nil || len(set.Files) == 0 {
+	releaseSet := func() {
 		if set != nil {
 			_ = db.valueLogManager.Release(set)
+			set = nil
 		}
+	}
+	if set == nil || len(set.Files) == 0 {
+		releaseSet()
 		if err := db.valueLogManager.Refresh(); err != nil {
 			return stats, err
 		}
 		set = db.valueLogManager.CurrentSetNoRefresh()
 	}
 	if set == nil || len(set.Files) == 0 {
-		if set != nil {
-			_ = db.valueLogManager.Release(set)
-		}
+		releaseSet()
 		return stats, nil
 	}
 	files := db.valueOnlyValueLogFiles(set.Files)
 	if len(files) == 0 {
-		_ = db.valueLogManager.Release(set)
+		releaseSet()
 		return stats, nil
 	}
 	oldValueIDs := make(map[uint32]struct{}, len(files))
@@ -1596,7 +1598,7 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		if rewritePlanNeedsLiveEstimate(opts) {
 			liveByID, err = db.estimateValueLogLiveBytesBySegment(ctx)
 			if err != nil {
-				_ = db.valueLogManager.Release(set)
+				releaseSet()
 				return stats, err
 			}
 		}
@@ -1626,8 +1628,7 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 	}
 	if restrictSource && sourceSegmentCount == 0 {
 		// No source segments selected: this rewrite pass is a no-op.
-		_ = db.valueLogManager.Release(set)
-		set = nil
+		releaseSet()
 		stats.SegmentsAfter = stats.SegmentsBefore
 		stats.BytesAfter = stats.BytesBefore
 		return stats, nil
@@ -1654,23 +1655,25 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 					}
 					needSegScan = false
 				} else {
-					_ = db.valueLogManager.Release(set)
-					set = nil
+					releaseSet()
 					return stats, statErr
 				}
 			}
 		}
 	}
 	if !needSegScan && opts.ReserveRIDs == nil {
-		nextRID, err = nextRewriteRIDStartFromSet(set)
+		segments, err = listValueLogSegments(db.dir)
 		if err != nil {
-			_ = db.valueLogManager.Release(set)
-			set = nil
-			return stats, err
+			releaseSet()
+			return stats, fmt.Errorf("list value-log segments for rewrite rid selection in %s: %w", db.dir, err)
+		}
+		nextRID, err = rewriteRIDStartScanner(segments)
+		if err != nil {
+			releaseSet()
+			return stats, fmt.Errorf("scan rewrite rid start in %s: %w", db.dir, err)
 		}
 	}
-	_ = db.valueLogManager.Release(set)
-	set = nil
+	releaseSet()
 	if needSegScan {
 		segments, err = rewriteWALSegmentsLister(db.dir)
 		if err != nil {
@@ -1686,7 +1689,7 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 	if opts.ReserveRIDs == nil && nextRID == 0 {
 		nextRID, err = rewriteRIDStartScanner(segments)
 		if err != nil {
-			return stats, err
+			return stats, fmt.Errorf("scan rewrite rid start in %s: %w", db.dir, err)
 		}
 	}
 	ridAlloc := newRewriteRIDAllocator(nextRID, opts.ReserveRIDs)
