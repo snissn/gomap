@@ -8383,7 +8383,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	// Cached value-log RIDs remain globally unique across reopen/rewrite cycles.
 	// Until we persist nextRID separately, opening must recover the max on-disk
 	// RID here rather than risk reusing low RIDs after a clean reopen.
-	maxExistingRID, err := maxValueLogRIDFromSegments(tailValueLogSegmentsByLane(segments))
+	maxExistingRID, err := maxValueLogRIDFromSegments(segments)
 	if err != nil {
 		return nil, err
 	}

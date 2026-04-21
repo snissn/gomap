@@ -162,6 +162,52 @@ func TestTailValueLogSegmentsByLane(t *testing.T) {
 	}
 }
 
+func TestOpenSeedsRIDFromAllValueLogSegments(t *testing.T) {
+	dir := t.TempDir()
+	valueDir := filepath.Join(dir, "value_vlog")
+	if err := os.MkdirAll(valueDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+
+	writeSegment := func(seq int, rid uint64) {
+		fileID, err := valuelog.EncodeFileID(0, uint32(seq))
+		if err != nil {
+			t.Fatalf("EncodeFileID(%d): %v", seq, err)
+		}
+		path := filepath.Join(valueDir, valueLogName(0, seq))
+		w, err := valuelog.NewWriter(path, fileID)
+		if err != nil {
+			t.Fatalf("NewWriter(%d): %v", seq, err)
+		}
+		if _, err := w.Append(0, nil, rid, []byte("v")); err != nil {
+			_ = w.Close()
+			t.Fatalf("Append(%d): %v", rid, err)
+		}
+		if err := w.Close(); err != nil {
+			t.Fatalf("Close(%d): %v", seq, err)
+		}
+	}
+
+	// Older segment contains a higher RID than the newest segment.
+	writeSegment(1, 100)
+	writeSegment(2, 10)
+
+	backend := NewMockBackend()
+	db, err := Open(dir, backend, Options{
+		DisableWAL:  true,
+		RelaxedSync: true,
+		AllowUnsafe: true,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	if got := db.nextRID.Load(); got != 100 {
+		t.Fatalf("nextRID=%d want 100", got)
+	}
+}
+
 func TestIteratorTracksActiveForegroundIterators(t *testing.T) {
 	dir := t.TempDir()
 	backend, err := db.Open(db.Options{Dir: dir})
