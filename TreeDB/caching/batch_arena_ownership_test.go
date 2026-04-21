@@ -457,3 +457,51 @@ func TestBatchArenaLeases_NotNeededForPointerWritesOnCopiedMemtables(t *testing.
 		})
 	}
 }
+
+func TestBatchSetView_MutationAfterWriteDoesNotCorruptStoredValue(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(dir, NewMockBackend(), Options{
+		AllowUnsafe:    true,
+		DisableWAL:     true,
+		MemtableMode:   "append_only",
+		MemtableShards: 1,
+		FlushThreshold: 1 << 30,
+	})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+
+	key := []byte("setview-key")
+	buf := bytes.Repeat([]byte("1"), 32)
+	want := bytes.Clone(buf)
+	blockedBefore := batchArenaBorrowViewOpsBlockedTotal.Load()
+
+	b := db.NewBatchWithSize(1)
+	defer func() { _ = b.Close() }()
+	if err := b.SetView(key, buf); err != nil {
+		t.Fatalf("set view: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	for i := range buf {
+		buf[i] = '2'
+	}
+
+	got, err := db.Get(key)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("value mutated after write: got=%q want=%q", got, want)
+	}
+	if got := batchArenaBorrowViewOpsBlockedTotal.Load(); got <= blockedBefore {
+		t.Fatalf("borrow_view_ops_blocked_total=%d before=%d want increased", got, blockedBefore)
+	}
+	stats := db.Stats()
+	if got := stats["treedb.cache.batch_arena.borrow_view_ops_blocked_total"]; got == "0" {
+		t.Fatalf("cache borrow_view_ops_blocked_total=%q want >0", got)
+	}
+}

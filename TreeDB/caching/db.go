@@ -96,6 +96,7 @@ var batchArenaPoolSkipZeroBudgetTotal atomic.Uint64
 var batchArenaPoolDropBytesTotal atomic.Uint64
 var batchArenaPoolDropHardCapBytesTotal atomic.Uint64
 var batchArenaBorrowBlockedTotal atomic.Uint64
+var batchArenaBorrowViewOpsBlockedTotal atomic.Uint64
 var batchArenaBorrowPreflightBlockedTotal atomic.Uint64
 var batchArenaBorrowPreflightBlockedBytesTotal atomic.Uint64
 var batchArenaStealSuppressedDeferredTotal atomic.Uint64
@@ -23358,6 +23359,7 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.batch_arena.pool_drop_bytes_total"] = fmt.Sprintf("%d", batchArenaPoolDropBytesTotal.Load())
 	stats["treedb.cache.batch_arena.pool_drop_hard_cap_bytes_total"] = fmt.Sprintf("%d", batchArenaPoolDropHardCapBytesTotal.Load())
 	stats["treedb.cache.batch_arena.borrow_blocked_total"] = fmt.Sprintf("%d", batchArenaBorrowBlockedTotal.Load())
+	stats["treedb.cache.batch_arena.borrow_view_ops_blocked_total"] = fmt.Sprintf("%d", batchArenaBorrowViewOpsBlockedTotal.Load())
 	stats["treedb.cache.batch_arena.borrow_preflight_blocked_total"] = fmt.Sprintf("%d", batchArenaBorrowPreflightBlockedTotal.Load())
 	stats["treedb.cache.batch_arena.borrow_preflight_blocked_bytes_total"] = fmt.Sprintf("%d", batchArenaBorrowPreflightBlockedBytesTotal.Load())
 	stats["treedb.cache.batch_arena.steal_suppressed_deferred_total"] = fmt.Sprintf("%d", batchArenaStealSuppressedDeferredTotal.Load())
@@ -23427,6 +23429,7 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.process.batch_arena.pool_drop_bytes_total"] = fmt.Sprintf("%d", batchArenaPoolDropBytesTotal.Load())
 	stats["treedb.process.batch_arena.pool_drop_hard_cap_bytes_total"] = fmt.Sprintf("%d", batchArenaPoolDropHardCapBytesTotal.Load())
 	stats["treedb.process.batch_arena.borrow_blocked_total"] = fmt.Sprintf("%d", batchArenaBorrowBlockedTotal.Load())
+	stats["treedb.process.batch_arena.borrow_view_ops_blocked_total"] = fmt.Sprintf("%d", batchArenaBorrowViewOpsBlockedTotal.Load())
 	stats["treedb.process.batch_arena.borrow_preflight_blocked_total"] = fmt.Sprintf("%d", batchArenaBorrowPreflightBlockedTotal.Load())
 	stats["treedb.process.batch_arena.borrow_preflight_blocked_bytes_total"] = fmt.Sprintf("%d", batchArenaBorrowPreflightBlockedBytesTotal.Load())
 	stats["treedb.process.batch_arena.steal_suppressed_deferred_total"] = fmt.Sprintf("%d", batchArenaStealSuppressedDeferredTotal.Load())
@@ -25642,7 +25645,10 @@ type Batch struct {
 	shardIdxSets       [][]int
 	maxEntries         int
 
-	closed         bool
+	closed bool
+	// SetView/DeleteView keep caller-owned bytes until Write/Close, so memtables
+	// must not borrow the batch arena when any view op is present.
+	hasViewOps     bool
 	streamEligible bool
 	streamTried    bool
 	firstKey       []byte
@@ -26093,6 +26099,7 @@ func (b *Batch) Reset() {
 	b.walBuf = b.walBuf[:0]
 	b.streamEligible = true
 	b.streamTried = false
+	b.hasViewOps = false
 	b.firstKey = nil
 	b.lastKey = nil
 	b.batchRange = keyRange{}
@@ -26552,6 +26559,7 @@ func (b *Batch) SetView(key, value []byte) error {
 		Key:   key,
 		Value: value,
 	})
+	b.hasViewOps = true
 	b.noteEntryAppend()
 	b.size += len(key) + len(value)
 
@@ -26633,6 +26641,7 @@ func (b *Batch) DeleteView(key []byte) error {
 		Type: batch.OpDelete,
 		Key:  key,
 	})
+	b.hasViewOps = true
 	b.noteEntryAppend()
 	b.size += len(key)
 
@@ -27040,6 +27049,13 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 		prospectiveRetainBytes,
 		b.db.currentBatchArenaRetainedHardCapEffectiveBytes(),
 	)
+	// SetView/DeleteView callers provide externally-owned slices that are only
+	// guaranteed immutable until Write/Close returns. Do not retain or steal
+	// those slices into memtables.
+	if b.hasViewOps {
+		allowBatchArenaBorrow = false
+		batchArenaBorrowViewOpsBlockedTotal.Add(1)
+	}
 	if !allowBatchArenaBorrow {
 		batchArenaBorrowBlockedTotal.Add(1)
 		if preflightBlocked {
