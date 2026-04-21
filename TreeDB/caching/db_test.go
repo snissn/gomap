@@ -306,21 +306,6 @@ func TestForegroundVlogMaintenanceResumedSince_FirstWriteAfterZeroBaseline(t *te
 	}
 }
 
-func TestForegroundVlogMaintenanceQuietFor_IgnoresReadOnlyTraffic(t *testing.T) {
-	db := &DB{}
-	now := time.Unix(1_700_000_100, 0)
-	db.lastForegroundWriteUnixNano.Store(now.Add(-2 * time.Second).UnixNano())
-	db.lastForegroundReadUnixNano.Store(now.UnixNano())
-	db.activeForegroundIterators.Store(1)
-
-	if db.foregroundActivityQuietFor(now, time.Second, time.Second) {
-		t.Fatalf("expected generic activity quiet check to remain blocked by read-only activity")
-	}
-	if !db.foregroundVlogMaintenanceQuietFor(now, time.Second, time.Second) {
-		t.Fatalf("expected value-log maintenance quiet check to ignore read-only activity")
-	}
-}
-
 func TestForegroundVlogMaintenanceContext_CancelsOnFirstWriteAfterOpen(t *testing.T) {
 	db := &DB{closeCh: make(chan struct{})}
 	ctx, cancel := db.foregroundVlogMaintenanceContextWithResumeGrace(250*time.Millisecond, 0)

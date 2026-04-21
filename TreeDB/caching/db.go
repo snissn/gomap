@@ -5088,7 +5088,7 @@ func (db *DB) waitForRetainedValueLogPruneQuietOrForce(quietWindow time.Duration
 		if db.retainedPruneForceRequested.Swap(false) {
 			return true
 		}
-		if db.foregroundVlogMaintenanceQuietFor(time.Now(), quietWindow, vlogForegroundReadQuietWindow) {
+		if db.foregroundActivityQuietFor(time.Now(), quietWindow, vlogForegroundReadQuietWindow) {
 			// Re-check immediately before returning so force requests racing with
 			// the quiet-window transition are not dropped.
 			if db.retainedPruneForceRequested.Swap(false) {
@@ -9371,17 +9371,6 @@ func (db *DB) foregroundActivityQuietFor(now time.Time, writeQuietWindow, readQu
 	return db.foregroundWriteQuietFor(now, writeQuietWindow) && db.foregroundReadQuietFor(now, readQuietWindow)
 }
 
-func (db *DB) foregroundVlogMaintenanceQuietFor(now time.Time, writeQuietWindow, readQuietWindow time.Duration) bool {
-	if db == nil {
-		return true
-	}
-	// Value-log maintenance should only yield to foreground writes. Keep the
-	// read quiet-window parameter so call sites share the same knobs without
-	// letting read-only traffic suppress maintenance indefinitely.
-	_ = readQuietWindow
-	return db.foregroundWriteQuietFor(now, writeQuietWindow)
-}
-
 func (db *DB) foregroundWriteQuiet(now time.Time) bool {
 	return db.foregroundWriteQuietFor(now, vlogForegroundQuietWindow)
 }
@@ -9451,7 +9440,7 @@ func (db *DB) waitForForegroundMaintenanceQuietWindow(quietWindow time.Duration)
 	ticker := time.NewTicker(foregroundMaintenancePollInterval())
 	defer ticker.Stop()
 	for {
-		if db.closing.Load() || db.foregroundVlogMaintenanceQuietFor(time.Now(), quietWindow, vlogForegroundReadQuietWindow) {
+		if db.closing.Load() || db.foregroundActivityQuietFor(time.Now(), quietWindow, vlogForegroundReadQuietWindow) {
 			return
 		}
 		select {
@@ -14133,7 +14122,7 @@ func (db *DB) maybeRunPeriodicVlogGenerationMaintenance(runGC bool) bool {
 	// to both rewrite and periodic GC ticks; otherwise runGC ticks can still
 	// issue expensive full scans every interval during restore-heavy sync phases.
 	now := time.Now()
-	quiet := db.foregroundVlogMaintenanceQuietFor(now, vlogGenerationMaintenanceQuietWindow, vlogForegroundReadQuietWindow)
+	quiet := db.foregroundActivityQuietFor(now, vlogGenerationMaintenanceQuietWindow, vlogForegroundReadQuietWindow)
 	leafPackAdmission := db.foregroundLeafPackAdmission(now)
 	if !quiet && !leafPackAdmission.allowed &&
 		!db.vlogGenerationCheckpointKickPending.Load() &&
@@ -15701,7 +15690,7 @@ func (db *DB) scheduleVlogGenerationCheckpointKickHotNoDebtWake() {
 		if db.closing.Load() {
 			return
 		}
-		if !db.foregroundVlogMaintenanceQuietFor(time.Now(), vlogGenerationMaintenanceQuietWindow, vlogForegroundReadQuietWindow) {
+		if !db.foregroundActivityQuietFor(time.Now(), vlogGenerationMaintenanceQuietWindow, vlogForegroundReadQuietWindow) {
 			return
 		}
 		db.vlogGenerationCheckpointKickHotNoDebtWakeRuns.Add(1)
@@ -15982,7 +15971,7 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 		}
 	}()
 	now := time.Now()
-	quiet := db.foregroundVlogMaintenanceQuietFor(now, vlogGenerationMaintenanceQuietWindow, vlogForegroundReadQuietWindow)
+	quiet := db.foregroundActivityQuietFor(now, vlogGenerationMaintenanceQuietWindow, vlogForegroundReadQuietWindow)
 	leafPackAdmission := db.foregroundLeafPackAdmission(now)
 	rewriteQueue, err := db.currentVlogGenerationRewriteQueue()
 	if err != nil {
@@ -18040,7 +18029,7 @@ func (db *DB) maybeKickVlogGenerationMaintenanceAfterCheckpoint() {
 		rewriteQueueLen = len(rewriteQueue)
 	}
 	if envBool(envEnableVlogGenerationCheckpointKickHotDebtOnly) && !rewriteDisabled {
-		quiet := db.foregroundVlogMaintenanceQuietFor(now, vlogGenerationMaintenanceQuietWindow, vlogForegroundReadQuietWindow)
+		quiet := db.foregroundActivityQuietFor(now, vlogGenerationMaintenanceQuietWindow, vlogForegroundReadQuietWindow)
 		if !quiet && rewriteQueueLen == 0 && !db.vlogGenerationDeferredMaintenanceDue(now) {
 			db.vlogGenerationCheckpointKickSkippedHotNoDebt.Add(1)
 			db.scheduleVlogGenerationCheckpointKickHotNoDebtWake()
