@@ -93,6 +93,12 @@ func appendCompactLeafLogPayload(dst, payload []byte) ([]byte, error) {
 		return nil, err
 	}
 	if !decoded {
+		if len(payload) == 0 {
+			return dst, nil
+		}
+		if cap(dst) >= len(dst)+len(payload) && sliceAliasesBytes(dst[:cap(dst)], payload) {
+			return dst[:len(dst)+len(payload)], nil
+		}
 		return append(dst, payload...), nil
 	}
 
