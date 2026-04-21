@@ -3449,6 +3449,17 @@ func TestValueLogRewriteOnline_WithoutReserveRIDs_FastPathStillScansRIDStart(t *
 	if walScanCalls != 0 {
 		t.Fatalf("expected no wal segment scan calls, got %d", walScanCalls)
 	}
+	segments, err := listValueLogSegments(dir)
+	if err != nil {
+		t.Fatalf("listValueLogSegments: %v", err)
+	}
+	nextRID, err := nextRewriteRIDStart(segments)
+	if err != nil {
+		t.Fatalf("nextRewriteRIDStart: %v", err)
+	}
+	if nextRID != 315_002 {
+		t.Fatalf("next RID after rewrite=%d want 315002", nextRID)
+	}
 }
 
 func TestValueLogRewriteOnline_LeafLogReservedLaneHintFallsBackToScan(t *testing.T) {

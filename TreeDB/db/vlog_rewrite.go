@@ -1537,9 +1537,14 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		}
 		return stats, nil
 	}
+	defer func() {
+		if set != nil {
+			_ = db.valueLogManager.Release(set)
+		}
+	}()
 	files := db.valueOnlyValueLogFiles(set.Files)
 	if len(files) == 0 {
-		_ = db.valueLogManager.Release(set)
+		set = nil
 		return stats, nil
 	}
 	oldValueIDs := make(map[uint32]struct{}, len(files))
@@ -1626,7 +1631,6 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 	}
 	if restrictSource && sourceSegmentCount == 0 {
 		// No source segments selected: this rewrite pass is a no-op.
-		_ = db.valueLogManager.Release(set)
 		set = nil
 		stats.SegmentsAfter = stats.SegmentsBefore
 		stats.BytesAfter = stats.BytesBefore
@@ -1654,7 +1658,6 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 					}
 					needSegScan = false
 				} else {
-					_ = db.valueLogManager.Release(set)
 					set = nil
 					return stats, statErr
 				}
@@ -1664,18 +1667,15 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 	if !needSegScan && opts.ReserveRIDs == nil {
 		segments, err = listValueLogSegments(db.dir)
 		if err != nil {
-			_ = db.valueLogManager.Release(set)
 			set = nil
-			return stats, err
+			return stats, fmt.Errorf("list value-log segments for rewrite rid selection in %s: %w", db.dir, err)
 		}
 		nextRID, err = rewriteRIDStartScanner(segments)
 		if err != nil {
-			_ = db.valueLogManager.Release(set)
 			set = nil
 			return stats, err
 		}
 	}
-	_ = db.valueLogManager.Release(set)
 	set = nil
 	if needSegScan {
 		segments, err = rewriteWALSegmentsLister(db.dir)
