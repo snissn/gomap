@@ -77,3 +77,53 @@ func TestReadAtWithDictTo_UsesDstForCompressedGroupedSubrecord(t *testing.T) {
 		}
 	}
 }
+
+func TestReadAtWithDictTo_CompressedWholeFrameNilDst(t *testing.T) {
+	dir := t.TempDir()
+	fileID, err := EncodeFileID(0, 1)
+	if err != nil {
+		t.Fatalf("encode file id: %v", err)
+	}
+	path := filepath.Join(dir, "value-l0-000001.log")
+
+	writer, err := NewWriter(path, fileID)
+	if err != nil {
+		t.Fatalf("new writer: %v", err)
+	}
+	writer.SetBlockCompression(BlockCodecSnappy, true)
+
+	want := make([]byte, 640)
+	copy(want, []byte("whole-frame-record:"))
+	for i := 32; i < len(want); i++ {
+		want[i] = 'z'
+	}
+	ptrs, stats, err := writer.AppendFrameWithStatsInto(0, nil, []Record{{RID: 1, Value: want}}, make([]page.ValuePtr, 1))
+	if err != nil {
+		_ = writer.Close()
+		t.Fatalf("append frame: %v", err)
+	}
+	if !stats.Kept {
+		_ = writer.Close()
+		t.Fatalf("expected block-compressed frame to be kept")
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("open file: %v", err)
+	}
+	defer func() { _ = f.Close() }()
+
+	got, usedDst, err := ReadAtWithDictTo(f, ptrs[0], false, nil, nil, nil, templ.DecodeOptions{}, nil)
+	if err != nil {
+		t.Fatalf("ReadAtWithDictTo: %v", err)
+	}
+	if usedDst {
+		t.Fatalf("expected usedDst=false for nil dst")
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("value mismatch")
+	}
+}

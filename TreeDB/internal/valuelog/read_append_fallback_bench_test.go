@@ -84,3 +84,76 @@ func BenchmarkFileReadAppendCompressedFallback(b *testing.B) {
 		}
 	})
 }
+
+func BenchmarkFileReadAppendCompressedWholeFrame(b *testing.B) {
+	dir := b.TempDir()
+	fileID, err := EncodeFileID(0, 1)
+	if err != nil {
+		b.Fatalf("EncodeFileID: %v", err)
+	}
+	path := filepath.Join(dir, "value-l0-000001.log")
+
+	writer, err := NewWriter(path, fileID)
+	if err != nil {
+		b.Fatalf("NewWriter: %v", err)
+	}
+	writer.SetBlockCompression(BlockCodecSnappy, true)
+
+	record := make([]byte, 4096)
+	copy(record, []byte("whole-frame-bench:"))
+	for i := 64; i < len(record); i++ {
+		record[i] = 'w'
+	}
+	ptrs, stats, err := writer.AppendFrameWithStatsInto(0, nil, []Record{{RID: 1, Value: record}}, make([]page.ValuePtr, 1))
+	if err != nil {
+		_ = writer.Close()
+		b.Fatalf("AppendFrameWithStatsInto: %v", err)
+	}
+	if !stats.Kept {
+		_ = writer.Close()
+		b.Fatalf("expected compressed frame to be kept")
+	}
+	if err := writer.Close(); err != nil {
+		b.Fatalf("Close writer: %v", err)
+	}
+
+	m, err := NewManager(dir)
+	if err != nil {
+		b.Fatalf("NewManager: %v", err)
+	}
+	defer func() { _ = m.Close() }()
+
+	f := m.files[fileID]
+	mapped := []byte{0}
+	f.mmapData.Store(mapped)
+	f.deadMappingsCount.Store(uint64(effectiveMaxDeadMappings(len(mapped))))
+
+	ptr := ptrs[0]
+
+	b.Run("nil_dst", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			got, err := f.ReadAppend(ptr, true, nil)
+			if err != nil {
+				b.Fatalf("ReadAppend(nil): %v", err)
+			}
+			if len(got) != len(record) {
+				b.Fatalf("ReadAppend(nil) len=%d want=%d", len(got), len(record))
+			}
+		}
+	})
+
+	b.Run("reused_dst", func(b *testing.B) {
+		dst := make([]byte, 0, len(record))
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			got, err := f.ReadAppend(ptr, true, dst[:0])
+			if err != nil {
+				b.Fatalf("ReadAppend(reused): %v", err)
+			}
+			if len(got) != len(record) {
+				b.Fatalf("ReadAppend(reused) len=%d want=%d", len(got), len(record))
+			}
+		}
+	})
+}

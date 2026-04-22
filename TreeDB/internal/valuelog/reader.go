@@ -1306,6 +1306,29 @@ func decodeRecordTo(header *[HeaderSize]byte, payload []byte, ptr page.ValuePtr,
 			return val, true, nil
 		}
 
+		// When the requested subrecord spans the whole decoded frame, return an
+		// owned full-frame decode directly instead of round-tripping through
+		// pooled scratch and then copying into a second allocation.
+		if start == 0 && end == rawLen {
+			val, err := decodeFramePayload(frameHeader, framePayload, dictLookup, rawLen)
+			if err != nil {
+				return nil, false, err
+			}
+			if uint32(len(val)) != rawLen {
+				return nil, false, ErrCorrupt
+			}
+			if templateLookup != nil && templ.IsEncodedPayload(val) {
+				decoded, err := templ.DecodePayloadAppend(nil, val, func(id uint64) (templ.TemplateDef, error) {
+					return resolveTemplateDef(id, templateLookup, templateCache)
+				}, templateOpts)
+				if err != nil {
+					return nil, false, err
+				}
+				return decoded, false, nil
+			}
+			return val, false, nil
+		}
+
 		// Fallback: keep existing behavior (decode into pooled scratch, then copy
 		// into a fresh allocation so we don't retain the full frame).
 		scratch := getDecodeScratch(int(rawLen))
