@@ -69,6 +69,7 @@ type ValuePtr struct {
 // CRC32C Table using Castagnoli polynomial.
 var crcTable = crc32.MakeTable(crc32.Castagnoli)
 var checksumZeroField = [4]byte{}
+var checksumZeroChunk = [256]byte{}
 
 // Checksum returns the CRC32C checksum of data.
 func Checksum(data []byte) uint32 {
@@ -102,6 +103,53 @@ func UpdateChecksum(data []byte) uint32 {
 	data[11] = 0
 	sum := crc32.Checksum(data, crcTable)
 	binary.LittleEndian.PutUint32(data[8:12], sum)
+	return sum
+}
+
+func updateChecksumZeros(sum uint32, count int) uint32 {
+	for count > 0 {
+		n := count
+		if n > len(checksumZeroChunk) {
+			n = len(checksumZeroChunk)
+		}
+		sum = crc32.Update(sum, crcTable, checksumZeroChunk[:n])
+		count -= n
+	}
+	return sum
+}
+
+func updateChecksumSegment(sum uint32, segment []byte, segmentStart, maskStart, maskEnd int) uint32 {
+	segEnd := segmentStart + len(segment)
+	if segEnd <= maskStart || segmentStart >= maskEnd {
+		return crc32.Update(sum, crcTable, segment)
+	}
+	if segmentStart < maskStart {
+		sum = crc32.Update(sum, crcTable, segment[:maskStart-segmentStart])
+	}
+	overlapStart := max(segmentStart, maskStart)
+	overlapEnd := min(segEnd, maskEnd)
+	sum = updateChecksumZeros(sum, overlapEnd-overlapStart)
+	if overlapEnd < segEnd {
+		sum = crc32.Update(sum, crcTable, segment[overlapEnd-segmentStart:])
+	}
+	return sum
+}
+
+// UpdateChecksumPrefixSuffix computes CRC32C for a page represented by a
+// prefix segment at offset 0, a zero-filled middle gap, and a suffix segment at
+// the end of the page. Checksum bytes 8-11 are treated as zero, and when the
+// prefix covers them the computed checksum is written back into prefix[8:12].
+func UpdateChecksumPrefixSuffix(prefix, suffix []byte, totalLen int) uint32 {
+	if totalLen < PageHeaderSize || len(prefix)+len(suffix) > totalLen {
+		return 0
+	}
+	suffixStart := totalLen - len(suffix)
+	sum := updateChecksumSegment(0, prefix, 0, 8, 12)
+	sum = updateChecksumZeros(sum, suffixStart-len(prefix))
+	sum = updateChecksumSegment(sum, suffix, suffixStart, 8, 12)
+	if len(prefix) >= 12 {
+		binary.LittleEndian.PutUint32(prefix[8:12], sum)
+	}
 	return sum
 }
 

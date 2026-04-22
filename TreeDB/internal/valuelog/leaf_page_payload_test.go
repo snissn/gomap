@@ -110,6 +110,26 @@ func TestMaybeCompactLeafLogPayload_SparseLeafRoundTrips(t *testing.T) {
 	requireLeafPagesLogicallyEqual(t, leaf, decoded)
 }
 
+func TestMaybeCompactLeafLogPayload_SparseLeafAllocatesOnlyPayload(t *testing.T) {
+	leaf := buildSparseLeafPageForPayloadTest(t)
+
+	allocs := testing.AllocsPerRun(1000, func() {
+		payload, compacted, err := MaybeCompactLeafLogPayload(leaf)
+		if err != nil {
+			t.Fatalf("MaybeCompactLeafLogPayload: %v", err)
+		}
+		if !compacted {
+			t.Fatalf("expected sparse leaf page to compact")
+		}
+		if len(payload) >= len(leaf) {
+			t.Fatalf("payload len=%d want < %d", len(payload), len(leaf))
+		}
+	})
+	if allocs > 1.1 {
+		t.Fatalf("allocs/run=%f want <= 1.1", allocs)
+	}
+}
+
 func TestDecodeCompactLeafLogPayloadTo_AliasedDstRoundTrips(t *testing.T) {
 	leaf := buildSparseLeafPageForPayloadTest(t)
 
