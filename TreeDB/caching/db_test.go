@@ -182,7 +182,7 @@ func TestOpenSeedsRIDFromAllValueLogSegments(t *testing.T) {
 		}
 		if _, err := w.Append(0, nil, rid, []byte("v")); err != nil {
 			_ = w.Close()
-			t.Fatalf("Append(%d): %v", rid, err)
+			t.Fatalf("Append(seq=%d rid=%d): %v", seq, rid, err)
 		}
 		if err := w.Close(); err != nil {
 			t.Fatalf("Close(%d): %v", seq, err)
@@ -208,6 +208,22 @@ func TestOpenSeedsRIDFromAllValueLogSegments(t *testing.T) {
 	if got := db.nextRID.Load(); got != expectedMaxRID {
 		t.Fatalf("nextRID=%d want %d", got, expectedMaxRID)
 	}
+}
+
+func foregroundMaintenanceCancelWait(t *testing.T) time.Duration {
+	t.Helper()
+	// Give maintenance cancellation several poll intervals to fire, but clamp the
+	// wait to a small floor and at most a fraction of the remaining test budget.
+	waitFor := 5 * foregroundMaintenancePollInterval()
+	if waitFor < 50*time.Millisecond {
+		waitFor = 50 * time.Millisecond
+	}
+	if ddl, ok := t.Deadline(); ok {
+		if remaining := time.Until(ddl) / 10; remaining > 0 && remaining < waitFor {
+			waitFor = remaining
+		}
+	}
+	return waitFor
 }
 
 func TestIteratorTracksActiveForegroundIterators(t *testing.T) {
@@ -362,7 +378,7 @@ func TestForegroundMaintenanceContext_CancelsOnGetUnsafe(t *testing.T) {
 
 	select {
 	case <-ctx.Done():
-	case <-time.After(500 * time.Millisecond):
+	case <-time.After(foregroundMaintenanceCancelWait(t)):
 		t.Fatalf("foreground maintenance context did not cancel after GetUnsafe")
 	}
 }
@@ -377,7 +393,7 @@ func TestForegroundMaintenanceContext_CancelsOnActiveIterator(t *testing.T) {
 
 	select {
 	case <-ctx.Done():
-	case <-time.After(500 * time.Millisecond):
+	case <-time.After(foregroundMaintenanceCancelWait(t)):
 		t.Fatalf("foreground maintenance context did not cancel with active iterator")
 	}
 }
@@ -403,7 +419,7 @@ func TestForegroundVlogMaintenanceContext_CancelsOnFirstWriteAfterOpen(t *testin
 
 	select {
 	case <-ctx.Done():
-	case <-time.After(500 * time.Millisecond):
+	case <-time.After(foregroundMaintenanceCancelWait(t)):
 		t.Fatalf("value-log maintenance context did not cancel after first foreground write")
 	}
 }
