@@ -722,16 +722,17 @@ func (f *File) readGroupedCompressedFromFileTo(ptr page.ValuePtr, dst []byte) ([
 		return nil, false, ErrCorrupt, true
 	}
 
-	payload := make([]byte, int(valueLen))
-	if _, err := f.File.ReadAt(payload, start+HeaderSize); err != nil {
+	off := FrameHeaderSize + ridBytes
+	const maxPrefixLen = FrameHeaderSize + (MaxFrameK * 8) + ((MaxFrameK + 1) * 4)
+	var prefix [maxPrefixLen]byte
+	if _, err := f.File.ReadAt(prefix[:prefixLen], frameOff); err != nil {
 		return nil, false, err, true
 	}
 
-	off := FrameHeaderSize + ridBytes
 	var offsets [MaxFrameK + 1]uint32
 	prev := uint32(0)
 	for i := 0; i < k+1; i++ {
-		cur := binary.LittleEndian.Uint32(payload[off : off+4])
+		cur := binary.LittleEndian.Uint32(prefix[off : off+4])
 		if cur < prev {
 			return nil, false, ErrCorrupt, true
 		}
@@ -757,9 +758,21 @@ func (f *File) readGroupedCompressedFromFileTo(ptr page.ValuePtr, dst []byte) ([
 		DictID:   binary.LittleEndian.Uint64(frameHeader[4:12]),
 	}
 
+	framePayloadLen := int(valueLen) - prefixLen
+	if framePayloadLen < 0 {
+		return nil, false, ErrCorrupt, true
+	}
+	payloadScratch := getDecodeScratch(framePayloadLen)
+	framePayload := payloadScratch[:framePayloadLen]
+	if _, err := f.File.ReadAt(framePayload, frameOff+int64(prefixLen)); err != nil {
+		putDecodeScratch(payloadScratch)
+		return nil, false, err, true
+	}
+
 	raw := f.takeDecodeScratch(int(rawLen))
 	pooledRaw := true
-	raw, err := decodeFramePayloadTo(frame, payload[prefixLen:], f.dictLookup, rawLen, raw)
+	raw, err := decodeFramePayloadTo(frame, framePayload, f.dictLookup, rawLen, raw)
+	putDecodeScratch(payloadScratch)
 	if err != nil {
 		if pooledRaw {
 			f.releaseDecodeScratch(raw)
