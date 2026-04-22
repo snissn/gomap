@@ -307,7 +307,7 @@ func TestWrapForegroundIterator_AvoidsDoubleWrapAndCloseIsIdempotent(t *testing.
 }
 
 func TestForegroundReadQuietFor_DoesNotDependOnActiveIterators(t *testing.T) {
-	db := &DB{closeCh: make(chan struct{})}
+	db := foregroundQuietTestDB()
 	now := time.Unix(1_700_000_000, 0)
 	quietWindow := 200 * time.Millisecond
 
@@ -320,6 +320,29 @@ func TestForegroundReadQuietFor_DoesNotDependOnActiveIterators(t *testing.T) {
 	db.lastForegroundReadUnixNano.Store(now.Add(-quietWindow / 2).UnixNano())
 	if db.foregroundReadQuietFor(now, quietWindow) {
 		t.Fatalf("foregroundReadQuietFor=true want false when reads are recent")
+	}
+}
+
+func foregroundQuietTestDB() *DB {
+	return &DB{closeCh: make(chan struct{})}
+}
+
+func TestForegroundVlogMaintenanceQuietFor_IgnoresReadTraffic(t *testing.T) {
+	db := foregroundQuietTestDB()
+	now := time.Unix(1_700_000_000, 0)
+	quietWindow := 200 * time.Millisecond
+
+	db.activeForegroundIterators.Store(1)
+	db.lastForegroundReadUnixNano.Store(now.UnixNano())
+	db.lastForegroundWriteUnixNano.Store(now.Add(-2 * quietWindow).UnixNano())
+
+	if !db.foregroundVlogMaintenanceQuietFor(now, quietWindow) {
+		t.Fatalf("foregroundVlogMaintenanceQuietFor=false want true when writes are quiet")
+	}
+
+	db.lastForegroundWriteUnixNano.Store(now.Add(-quietWindow / 2).UnixNano())
+	if db.foregroundVlogMaintenanceQuietFor(now, quietWindow) {
+		t.Fatalf("foregroundVlogMaintenanceQuietFor=true want false when writes are recent")
 	}
 }
 

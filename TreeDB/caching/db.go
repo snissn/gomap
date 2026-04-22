@@ -5122,7 +5122,7 @@ func (db *DB) waitForRetainedValueLogPruneQuietOrForce(quietWindow time.Duration
 		if db.retainedPruneForceRequested.Swap(false) {
 			return true
 		}
-		if db.foregroundActivityQuietFor(time.Now(), quietWindow, vlogForegroundReadQuietWindow) {
+		if db.foregroundVlogMaintenanceQuietFor(time.Now(), quietWindow) {
 			// Re-check immediately before returning so force requests racing with
 			// the quiet-window transition are not dropped.
 			if db.retainedPruneForceRequested.Swap(false) {
@@ -9400,6 +9400,18 @@ func (db *DB) foregroundActivityQuietFor(now time.Time, writeQuietWindow, readQu
 		return true
 	}
 	return db.foregroundWriteQuietFor(now, writeQuietWindow) && db.foregroundReadQuietFor(now, readQuietWindow)
+}
+
+// foregroundVlogMaintenanceQuietFor is the retained-prune-specific quiet check:
+// it only yields to recent foreground writes. Read traffic and active iterators
+// still gate other maintenance paths through foregroundActivityQuietFor. A nil
+// receiver intentionally fails closed so retained-prune callers do not treat
+// programmer error as a quiet window.
+func (db *DB) foregroundVlogMaintenanceQuietFor(now time.Time, quietWindow time.Duration) bool {
+	if db == nil {
+		return false
+	}
+	return db.foregroundWriteQuietFor(now, quietWindow)
 }
 
 func (db *DB) foregroundWriteQuiet(now time.Time) bool {
