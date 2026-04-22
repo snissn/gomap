@@ -756,7 +756,7 @@ func TestMaybeRunVlogGenerationMaintenanceWithOptions_TracksWalOnPeriodicSkip(t 
 	}
 }
 
-func TestStartVlogGenerationLoop_WALOnDisabled(t *testing.T) {
+func TestSetMaintenancePhase_WALOnSteadyArmsScheduler(t *testing.T) {
 	// Keep checkpoint-kick inert so this test only exercises the periodic
 	// scheduler state and direct maintenance gating under WAL-on.
 	t.Setenv(envDisableVlogGenerationCheckpointKick, "1")
@@ -781,10 +781,13 @@ func TestStartVlogGenerationLoop_WALOnDisabled(t *testing.T) {
 	t.Cleanup(func() { _ = db.Close() })
 
 	if got := db.vlogGenerationSchedulerState.Load(); got != vlogGenerationSchedulerDisabled {
-		t.Fatalf("scheduler state=%d want=%d", got, vlogGenerationSchedulerDisabled)
+		t.Fatalf("scheduler state=%d want disabled", got)
 	}
 
 	db.SetMaintenancePhase(MaintenancePhaseRestore)
+	if got := db.vlogGenerationSchedulerState.Load(); got != vlogGenerationSchedulerDisabled {
+		t.Fatalf("scheduler state after restore=%d want disabled", got)
+	}
 	db.maybeRunVlogGenerationMaintenanceWithOptions(false, vlogGenerationMaintenanceOptions{})
 	if got, want := db.vlogGenerationMaintenanceAttempts.Load(), uint64(1); got != want {
 		t.Fatalf("maintenance attempts after restore-phase request=%d want=%d", got, want)
@@ -797,6 +800,9 @@ func TestStartVlogGenerationLoop_WALOnDisabled(t *testing.T) {
 	}
 
 	db.SetMaintenancePhase(MaintenancePhaseSteady)
+	if got := db.vlogGenerationSchedulerState.Load(); got != vlogGenerationSchedulerIdle {
+		t.Fatalf("scheduler state after steady=%d want=%d", got, vlogGenerationSchedulerIdle)
+	}
 	db.maybeRunVlogGenerationMaintenanceWithOptions(true, vlogGenerationMaintenanceOptions{})
 	if got, want := db.vlogGenerationMaintenanceAttempts.Load(), uint64(2); got != want {
 		t.Fatalf("maintenance attempts after periodic request=%d want=%d", got, want)
@@ -806,6 +812,36 @@ func TestStartVlogGenerationLoop_WALOnDisabled(t *testing.T) {
 	}
 	if got := db.vlogGenerationMaintenanceAcquired.Load(); got != 0 {
 		t.Fatalf("maintenance acquired=%d want=0", got)
+	}
+}
+
+func TestSetMaintenancePhase_WALOnSteadyDoesNotArmSchedulerWhileClosing(t *testing.T) {
+	t.Setenv(envDisableVlogGenerationCheckpointKick, "1")
+
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+
+	db, err := Open(dir, backend, Options{
+		AllowUnsafe:                      true,
+		DisableWAL:                       false,
+		JournalLanes:                     1,
+		ValueLogGenerationPolicy:         uint8(backenddb.ValueLogGenerationHotWarmCold),
+		ValueLogRewriteTriggerTotalBytes: 1,
+		ForceValueLogPointers:            true,
+	})
+	if err != nil {
+		t.Fatalf("open cachingdb: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	db.SetMaintenancePhase(MaintenancePhaseRestore)
+	db.closing.Store(true)
+	db.SetMaintenancePhase(MaintenancePhaseSteady)
+	if got := db.vlogGenerationSchedulerState.Load(); got != vlogGenerationSchedulerDisabled {
+		t.Fatalf("scheduler state while closing=%d want disabled", got)
 	}
 }
 

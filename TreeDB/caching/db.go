@@ -14097,14 +14097,38 @@ func (db *DB) startVlogGenerationLoop() {
 		return
 	}
 	if !db.disableJournal {
-		// WAL-on profiles keep generational maintenance off the periodic path to
-		// avoid restore/catch-up races that can diverge post-snapshot state.
+		// WAL-on profiles start with the periodic scheduler disabled and re-enable
+		// it only after the caller transitions back to steady phase. The loop still
+		// starts here so later steady-phase arming never needs to spawn a new
+		// goroutine during runtime or shutdown.
+		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerDisabled)
+	} else {
+		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
+	}
+	db.wg.Add(1)
+	go db.vlogGenerationLoop()
+}
+
+func (db *DB) maybeArmWALOnVlogGenerationLoopForSteadyPhase() {
+	if db == nil || db.disableJournal || db.closing.Load() {
+		return
+	}
+	if envBool(envDisableVlogGenerationLoop) {
 		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerDisabled)
 		return
 	}
-	db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
-	db.wg.Add(1)
-	go db.vlogGenerationLoop()
+	if db.valueLogGenerationPolicy != uint8(backenddb.ValueLogGenerationHotWarmCold) {
+		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerDisabled)
+		return
+	}
+	if _, ok := db.backend.(backendValueLogRewriter); !ok {
+		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerDisabled)
+		return
+	}
+	if db.suppressBackgroundVlogGenerationForMaintenancePhase() {
+		return
+	}
+	db.vlogGenerationSchedulerState.CompareAndSwap(vlogGenerationSchedulerDisabled, vlogGenerationSchedulerIdle)
 }
 
 func (db *DB) vlogGenerationLoop() {
@@ -14118,6 +14142,9 @@ func (db *DB) vlogGenerationLoop() {
 			return
 		case <-ticker.C:
 			ticks++
+			if db.vlogGenerationSchedulerState.Load() == vlogGenerationSchedulerDisabled {
+				continue
+			}
 			db.maybeRunPeriodicVlogGenerationMaintenance(ticks%vlogGenerationGCEvery == 0)
 		}
 	}
@@ -17987,6 +18014,7 @@ func (db *DB) SetMaintenancePhase(phase MaintenancePhase) {
 	}
 	db.debugVlogMaintf("maintenance_phase_change from=%s to=%s", maintenancePhaseString(uint32(prev)), maintenancePhaseString(uint32(phase)))
 	if phase == MaintenancePhaseSteady {
+		db.maybeArmWALOnVlogGenerationLoopForSteadyPhase()
 		db.scheduleDueVlogGenerationDeferredMaintenance()
 		db.schedulePendingVlogGenerationCheckpointKick()
 	}
