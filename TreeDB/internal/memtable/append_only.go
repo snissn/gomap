@@ -206,12 +206,33 @@ func appendOnlyInitialEntriesForCapacity(capacity, estimatedBytesPerEntry int) i
 	return n
 }
 
+func appendOnlyInitialEntriesForCapacityAndHint(capacity, estimatedBytesPerEntry, entryHint int) int {
+	n := appendOnlyInitialEntriesForCapacity(capacity, estimatedBytesPerEntry)
+	if entryHint <= 0 {
+		return n
+	}
+	if entryHint < appendOnlyMinInitialEntries {
+		entryHint = appendOnlyMinInitialEntries
+	}
+	if entryHint > appendOnlyMaxInitialEntries {
+		entryHint = appendOnlyMaxInitialEntries
+	}
+	if entryHint > n {
+		n = entryHint
+	}
+	return n
+}
+
 func NewAppendOnlyWithCapacity(capacity int) *AppendOnly {
 	return NewAppendOnlyWithCapacityEstimatedEntryBytes(capacity, appendOnlyEstimatedBytesPerEntryPointer)
 }
 
 func NewAppendOnlyWithCapacityEstimatedEntryBytes(capacity, estimatedBytesPerEntry int) *AppendOnly {
-	n := appendOnlyInitialEntriesForCapacity(capacity, estimatedBytesPerEntry)
+	return NewAppendOnlyWithCapacityEstimatedEntryBytesAndHint(capacity, estimatedBytesPerEntry, 0)
+}
+
+func NewAppendOnlyWithCapacityEstimatedEntryBytesAndHint(capacity, estimatedBytesPerEntry, entryHint int) *AppendOnly {
+	n := appendOnlyInitialEntriesForCapacityAndHint(capacity, estimatedBytesPerEntry, entryHint)
 	return &AppendOnly{
 		entries:        getAppendOnlyEntries(n),
 		baseEntriesLen: n,
@@ -893,7 +914,7 @@ func (m *AppendOnly) Reset() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.waitIteratorLeasesLocked()
-	m.resetLockedWithPolicy(0, 0, true)
+	m.resetLockedWithPolicy(0, 0, 0, true)
 }
 
 // ResetWithCapacity resets the memtable and, when needed, shrinks retained
@@ -903,11 +924,18 @@ func (m *AppendOnly) ResetWithCapacity(capacity, estimatedBytesPerEntry int) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.waitIteratorLeasesLocked()
-	m.resetLockedWithPolicy(capacity, estimatedBytesPerEntry, true)
+	m.resetLockedWithPolicy(capacity, estimatedBytesPerEntry, 0, true)
+}
+
+func (m *AppendOnly) ResetWithCapacityAndEntryHint(capacity, estimatedBytesPerEntry, entryHint int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.waitIteratorLeasesLocked()
+	m.resetLockedWithPolicy(capacity, estimatedBytesPerEntry, entryHint, true)
 }
 
 func (m *AppendOnly) resetLocked(capacity, estimatedBytesPerEntry int) {
-	m.resetLockedWithPolicy(capacity, estimatedBytesPerEntry, true)
+	m.resetLockedWithPolicy(capacity, estimatedBytesPerEntry, 0, true)
 }
 
 // ResetWithCapacityHard resets and clamps retained internal buffers to the
@@ -916,14 +944,23 @@ func (m *AppendOnly) ResetWithCapacityHard(capacity, estimatedBytesPerEntry int)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.waitIteratorLeasesLocked()
-	m.resetLockedWithPolicy(capacity, estimatedBytesPerEntry, false)
+	m.resetLockedWithPolicy(capacity, estimatedBytesPerEntry, 0, false)
 }
 
-func (m *AppendOnly) resetLockedWithPolicy(capacity, estimatedBytesPerEntry int, retainObserved bool) {
+func (m *AppendOnly) ResetWithCapacityHardAndEntryHint(capacity, estimatedBytesPerEntry, entryHint int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.waitIteratorLeasesLocked()
+	m.resetLockedWithPolicy(capacity, estimatedBytesPerEntry, entryHint, false)
+}
+
+func (m *AppendOnly) resetLockedWithPolicy(capacity, estimatedBytesPerEntry, entryHint int, retainObserved bool) {
 	desiredEntries := m.baseEntriesLen
 	if capacity > 0 {
-		desiredEntries = appendOnlyInitialEntriesForCapacity(capacity, estimatedBytesPerEntry)
+		desiredEntries = appendOnlyInitialEntriesForCapacityAndHint(capacity, estimatedBytesPerEntry, entryHint)
 		m.baseEntriesLen = desiredEntries
+	} else if entryHint > 0 {
+		desiredEntries = appendOnlyInitialEntriesForCapacityAndHint(defaultMemtableCapacity, estimatedBytesPerEntry, entryHint)
 	}
 	if desiredEntries <= 0 {
 		desiredEntries = appendOnlyMinInitialEntries

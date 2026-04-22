@@ -7594,10 +7594,11 @@ func (db *DB) recycleMemtables(mems []memtable.Table) {
 	resetCapacity := db.checkpointRotateCapacity()
 	estimate := appendOnlyEstimatedBytesPerEntryDefault
 	appendOnlyResetCapacity := db.appendOnlyMemtableCapacityHint(resetCapacity, estimate)
+	entryHint := db.appendOnlyEntryHintEntries()
 	for _, mt := range mems {
 		switch typed := mt.(type) {
 		case *memtable.AppendOnly:
-			typed.ResetWithCapacityHard(appendOnlyResetCapacity, estimate)
+			typed.ResetWithCapacityHardAndEntryHint(appendOnlyResetCapacity, estimate, entryHint)
 			db.releaseAppendOnlyDirectArenaLeaseForMemtable(typed)
 			if !db.putAppendOnlyMemLease(typed) {
 				db.appendOnlyMemPool.Put(typed)
@@ -7630,9 +7631,10 @@ func (db *DB) trimAppendOnlyMemLeases(maxLeases int, resetCapacity int) {
 		return
 	}
 	effectiveResetCapacity := db.appendOnlyMemtableCapacityHint(resetCapacity, appendOnlyEstimatedBytesPerEntryDefault)
+	entryHint := db.appendOnlyEntryHintEntries()
 	for i := range dropped {
 		if dropped[i] != nil {
-			dropped[i].ResetWithCapacityHard(effectiveResetCapacity, appendOnlyEstimatedBytesPerEntryDefault)
+			dropped[i].ResetWithCapacityHardAndEntryHint(effectiveResetCapacity, appendOnlyEstimatedBytesPerEntryDefault, entryHint)
 			db.releaseAppendOnlyDirectArenaLeaseForMemtable(dropped[i])
 			db.appendOnlyMemPool.Put(dropped[i])
 		}
@@ -7732,15 +7734,16 @@ func (db *DB) trimRetainedArenasAfterFlush(checkpoint bool) {
 func (db *DB) newMutableMemtableWithCapacityMode(capacity int, mode memtable.Mode) (memtable.Table, error) {
 	if db != nil && mode == memtable.ModeAppendOnly {
 		estimate := appendOnlyEstimatedBytesPerEntryDefault
+		entryHint := db.appendOnlyEntryHintEntries()
 		if mt := db.popAppendOnlyMemLease(); mt != nil {
 			db.appendOnlyMemLeaseHitTotal.Add(1)
-			mt.ResetWithCapacity(capacity, estimate)
+			mt.ResetWithCapacityAndEntryHint(capacity, estimate, entryHint)
 			return mt, nil
 		}
 		if v := db.appendOnlyMemPool.Get(); v != nil {
 			if mt, ok := v.(*memtable.AppendOnly); ok && mt != nil {
 				db.appendOnlyMemPoolHitTotal.Add(1)
-				mt.ResetWithCapacity(capacity, estimate)
+				mt.ResetWithCapacityAndEntryHint(capacity, estimate, entryHint)
 				return mt, nil
 			}
 		}
@@ -7751,7 +7754,7 @@ func (db *DB) newMutableMemtableWithCapacityMode(capacity int, mode memtable.Mod
 			db.appendOnlyMemNewAllocQueueBytes.Add(uint64(backlog))
 		}
 		db.appendOnlyMemNewAllocTotal.Add(1)
-		return memtable.NewAppendOnlyWithCapacityEstimatedEntryBytes(capacity, estimate), nil
+		return memtable.NewAppendOnlyWithCapacityEstimatedEntryBytesAndHint(capacity, estimate, entryHint), nil
 	}
 	return memtable.NewWithCapacityModeAndIndexer(capacity, mode, db.hashSortedIndexer)
 }
@@ -25826,6 +25829,17 @@ func (db *DB) observeAppendOnlyMutableEntries(entries int) {
 			return
 		}
 	}
+}
+
+func (db *DB) appendOnlyEntryHintEntries() int {
+	if db == nil {
+		return 0
+	}
+	hint := int(db.appendOnlyEntryHint.Load())
+	if hint <= 0 {
+		return 0
+	}
+	return clampAppendOnlyEntryHint(hint)
 }
 
 func appendOnlyEntriesToCapacity(entries, estimatedBytesPerEntry int) int {

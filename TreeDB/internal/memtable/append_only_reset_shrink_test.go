@@ -78,3 +78,46 @@ func TestAppendOnlyResetWithCapacity_RetainsObservedEntriesWithinBound(t *testin
 		t.Fatalf("entries regrew after warm reset: cap(entries)=%d want=%d", got, capBeforeReset)
 	}
 }
+
+func TestAppendOnlyResetWithCapacityAndEntryHint_PreallocatesHintedEntries(t *testing.T) {
+	const (
+		capacityBytes          = 4 << 10
+		estimatedBytesPerEntry = 96
+	)
+
+	base := appendOnlyInitialEntriesForCapacity(capacityBytes, estimatedBytesPerEntry)
+	entryHint := base * 16
+	mt := NewAppendOnlyWithCapacityEstimatedEntryBytesAndHint(capacityBytes, estimatedBytesPerEntry, entryHint)
+	if got := len(mt.entries); got < entryHint {
+		t.Fatalf("initial len(entries)=%d want>=%d", got, entryHint)
+	}
+	if got := cap(mt.entries); got < entryHint {
+		t.Fatalf("initial cap(entries)=%d want>=%d", got, entryHint)
+	}
+
+	capBefore := cap(mt.entries)
+	for i := 0; i < entryHint; i++ {
+		key := []byte(fmt.Sprintf("h%08d", i))
+		mt.SetEntrySteal(key, nil, page.ValuePtr{}, node.FlagTombstone)
+	}
+	if got := cap(mt.entries); got != capBefore {
+		t.Fatalf("hinted constructor regrew entries: cap(entries)=%d want=%d", got, capBefore)
+	}
+
+	mt.ResetWithCapacityAndEntryHint(capacityBytes, estimatedBytesPerEntry, entryHint)
+	if got := len(mt.entries); got < entryHint {
+		t.Fatalf("reset len(entries)=%d want>=%d", got, entryHint)
+	}
+	if got := cap(mt.entries); got < entryHint {
+		t.Fatalf("reset cap(entries)=%d want>=%d", got, entryHint)
+	}
+
+	capAfterReset := cap(mt.entries)
+	for i := 0; i < entryHint; i++ {
+		key := []byte(fmt.Sprintf("r%08d", i))
+		mt.SetEntrySteal(key, nil, page.ValuePtr{}, node.FlagTombstone)
+	}
+	if got := cap(mt.entries); got != capAfterReset {
+		t.Fatalf("hinted reset regrew entries: cap(entries)=%d want=%d", got, capAfterReset)
+	}
+}
