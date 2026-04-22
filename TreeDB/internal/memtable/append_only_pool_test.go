@@ -439,15 +439,15 @@ func TestAppendOnlyResetRetainedArenaBounded(t *testing.T) {
 	}
 }
 
-func TestAppendOnlyUnorderedAppendBuildsLatestIndexImmediately(t *testing.T) {
+func TestAppendOnlyUnorderedAppendDefersLatestIndexUntilIterator(t *testing.T) {
 	m := NewAppendOnlyWithCapacity(0)
 	m.Set([]byte("b"), []byte("v1"))
 	m.Set([]byte("a"), []byte("v2")) // force unordered path
 	if m.ordered {
 		t.Fatalf("expected unordered memtable")
 	}
-	if m.latestDirty {
-		t.Fatalf("expected latest index to stay clean after order break")
+	if !m.latestDirty {
+		t.Fatalf("expected latest index to stay dirty until an iterator needs it")
 	}
 
 	it := m.NewIterator(nil, nil)
@@ -506,8 +506,8 @@ func TestAppendOnlyUnorderedReverseIteratorDoesNotCacheSharedSnapshot(t *testing
 	if m.ordered {
 		t.Fatalf("expected unordered memtable")
 	}
-	if m.latestDirty {
-		t.Fatalf("expected latest index to stay clean after order break")
+	if !m.latestDirty {
+		t.Fatalf("expected latest index to stay dirty until a reverse iterator needs it")
 	}
 
 	it := m.NewReverseIterator(nil, nil)
