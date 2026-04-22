@@ -143,6 +143,39 @@ func TestAppendOnlyIteratorSortedLatest(t *testing.T) {
 	}
 }
 
+func TestAppendOnlyDefersLatestIndexUntilLookup(t *testing.T) {
+	m := NewAppendOnlyWithCapacity(0)
+
+	var k2 [8]byte
+	var k1 [8]byte
+	binary.BigEndian.PutUint64(k2[:], 2)
+	binary.BigEndian.PutUint64(k1[:], 1)
+
+	m.Set(k2[:], []byte("v2"))
+	m.Set(k1[:], []byte("v1"))
+
+	if m.ordered {
+		t.Fatalf("expected out-of-order append to mark memtable unordered")
+	}
+	if !m.latestDirty {
+		t.Fatalf("expected latest index to remain dirty until a lookup needs it")
+	}
+	if len(m.latest) != 0 || len(m.latest64) != 0 {
+		t.Fatalf("expected no latest index materialized yet; latest=%d latest64=%d", len(m.latest), len(m.latest64))
+	}
+
+	val, del, ok := m.Get(k1[:])
+	if !ok || del || string(val) != "v1" {
+		t.Fatalf("Get(k1) = (%q,%v,%v), want (v1,false,true)", string(val), del, ok)
+	}
+	if m.latestDirty {
+		t.Fatalf("expected lookup to rebuild the latest index")
+	}
+	if len(m.latest64) != 2 {
+		t.Fatalf("latest64 size = %d, want 2", len(m.latest64))
+	}
+}
+
 func TestAppendOnlyResetClearsLatestIndex(t *testing.T) {
 	m := NewAppendOnlyWithCapacity(0)
 	m.Set([]byte("k1"), []byte("v1"))
@@ -360,22 +393,18 @@ func TestAppendOnlyGetBuildsLatestIndexOnFirstPointRead(t *testing.T) {
 			if ordered {
 				t.Fatalf("expected memtable to become unordered")
 			}
-			if dirty {
-				t.Fatalf("expected latest index to stay clean after order break")
+			if !dirty {
+				t.Fatalf("expected latest index to stay dirty after order break")
 			}
 			m.mu.RLock()
 			latestSizeBeforeGet := kk.latestSize(m)
 			idxBeforeGet, okBeforeGet := kk.latestIdx(m, lo)
-			countBeforeGet := m.count
 			m.mu.RUnlock()
-			if latestSizeBeforeGet < 2 {
-				t.Fatalf("expected latest index to be materialized on order break, size=%d", latestSizeBeforeGet)
+			if latestSizeBeforeGet != 0 {
+				t.Fatalf("expected no latest index materialized before first point read, size=%d", latestSizeBeforeGet)
 			}
-			if !okBeforeGet {
-				t.Fatalf("expected latest index lookup to succeed immediately after order break")
-			}
-			if idxBeforeGet != countBeforeGet-1 {
-				t.Fatalf("latest index before Get=%d want %d", idxBeforeGet, countBeforeGet-1)
+			if okBeforeGet {
+				t.Fatalf("expected latest index lookup to miss before first point read, got idx=%d", idxBeforeGet)
 			}
 
 			if got, del, ok := m.Get(lo); !ok || del || string(got) != "lo" {
