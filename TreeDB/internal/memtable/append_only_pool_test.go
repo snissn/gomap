@@ -13,15 +13,31 @@ import (
 func TestPutAppendOnlyEntriesClearsReferences(t *testing.T) {
 	entries := make([]appendOnlyEntry, 2)
 	entries[0].key = appendOnlyStringFromBytes([]byte("k0"))
-	entries[0].value = appendOnlyStringFromBytes([]byte("v0"))
+	entries[0].payloadIndex = 1
 	entries[1].key = appendOnlyStringFromBytes([]byte("k1"))
-	entries[1].value = appendOnlyStringFromBytes([]byte("v1"))
+	entries[1].payloadIndex = 2
 
 	putAppendOnlyEntries(entries)
 
 	for i := range entries {
-		if entries[i].key != "" || entries[i].value != "" {
+		if entries[i].key != "" || entries[i].payloadIndex != 0 {
 			t.Fatalf("entry %d still retains references after put: %+v", i, entries[i])
+		}
+	}
+}
+
+func TestPutAppendOnlyPayloadsClearsReferences(t *testing.T) {
+	payloads := make([]appendOnlyPayload, 2)
+	payloads[0].value = appendOnlyStringFromBytes([]byte("v0"))
+	payloads[0].ptr = page.ValuePtr{Offset: 1, Length: 2, FileID: 3}
+	payloads[1].value = appendOnlyStringFromBytes([]byte("v1"))
+	payloads[1].ptr = page.ValuePtr{Offset: 4, Length: 5, FileID: 6}
+
+	putAppendOnlyPayloads(payloads)
+
+	for i := range payloads {
+		if payloads[i].value != "" || payloads[i].ptr != (page.ValuePtr{}) {
+			t.Fatalf("payload %d still retains references after put: %+v", i, payloads[i])
 		}
 	}
 }
@@ -29,12 +45,16 @@ func TestPutAppendOnlyEntriesClearsReferences(t *testing.T) {
 func TestAppendOnlyIteratorCloseClearsPooledEntries(t *testing.T) {
 	entries := make([]appendOnlyEntry, 2)
 	entries[0].key = appendOnlyStringFromBytes([]byte("k0"))
-	entries[0].value = appendOnlyStringFromBytes([]byte("v0"))
+	entries[0].payloadIndex = 1
 	entries[1].key = appendOnlyStringFromBytes([]byte("k1"))
-	entries[1].value = appendOnlyStringFromBytes([]byte("v1"))
+	entries[1].payloadIndex = 2
+	payloads := make([]appendOnlyPayload, 2)
+	payloads[0].value = appendOnlyStringFromBytes([]byte("v0"))
+	payloads[1].value = appendOnlyStringFromBytes([]byte("v1"))
 
 	it := &appendOnlyIterator{
 		entries:       entries,
+		payloads:      payloads,
 		pooledEntries: true,
 	}
 	if err := it.Close(); err != nil {
@@ -42,12 +62,20 @@ func TestAppendOnlyIteratorCloseClearsPooledEntries(t *testing.T) {
 	}
 
 	for i := range entries {
-		if entries[i].key != "" || entries[i].value != "" {
+		if entries[i].key != "" || entries[i].payloadIndex != 0 {
 			t.Fatalf("entry %d still retains references after close: %+v", i, entries[i])
+		}
+	}
+	for i := range payloads {
+		if payloads[i].value != "" || payloads[i].ptr != (page.ValuePtr{}) {
+			t.Fatalf("payload %d still retains references after close: %+v", i, payloads[i])
 		}
 	}
 	if it.entries != nil {
 		t.Fatalf("iterator entries not cleared on close")
+	}
+	if it.payloads != nil {
+		t.Fatalf("iterator payloads not cleared on close")
 	}
 	if it.pooledEntries {
 		t.Fatalf("pooledEntries flag not cleared on close")
@@ -56,8 +84,8 @@ func TestAppendOnlyIteratorCloseClearsPooledEntries(t *testing.T) {
 
 func TestAppendOnlyIteratorCloseClearsPooledPointerEntries(t *testing.T) {
 	entries := []*appendOnlyEntry{
-		{key: appendOnlyStringFromBytes([]byte("k0")), value: appendOnlyStringFromBytes([]byte("v0"))},
-		{key: appendOnlyStringFromBytes([]byte("k1")), value: appendOnlyStringFromBytes([]byte("v1"))},
+		{key: appendOnlyStringFromBytes([]byte("k0"))},
+		{key: appendOnlyStringFromBytes([]byte("k1"))},
 	}
 	it := &appendOnlyIterator{
 		entryPtrs:       entries,
@@ -189,8 +217,8 @@ func TestAppendOnlyFrozenUnorderedIteratorBlocksResetUntilClose(t *testing.T) {
 }
 
 func TestAppendOnlyEntryStructSizeBound(t *testing.T) {
-	if got := unsafe.Sizeof(appendOnlyEntry{}); got > 64 {
-		t.Fatalf("appendOnlyEntry size=%d want <= 64", got)
+	if got := unsafe.Sizeof(appendOnlyEntry{}); got > 32 {
+		t.Fatalf("appendOnlyEntry size=%d want <= 32", got)
 	}
 }
 
@@ -231,7 +259,7 @@ func TestAppendOnlySetCopiesIntoArenaForNonSteal(t *testing.T) {
 		t.Fatalf("count=%d want=1", m.count)
 	}
 	ent := &m.entries[0]
-	val := appendOnlyEntryValue(ent)
+	val := m.appendOnlyEntryValue(ent)
 	if len(val) != len(src) {
 		t.Fatalf("entry value len=%d want=%d", len(val), len(src))
 	}
@@ -318,11 +346,11 @@ func TestAppendOnlyResetRetainsArenaChunksForReuse(t *testing.T) {
 
 	postResetKey := []byte("post-reset-long-key")
 	m.Set(postResetKey, make([]byte, 1024))
-	if m.count != 1 || len(appendOnlyEntryValue(&m.entries[0])) == 0 {
+	if m.count != 1 || len(m.appendOnlyEntryValue(&m.entries[0])) == 0 {
 		t.Fatalf("expected first post-reset set to allocate value from arena")
 	}
 	postResetKeyBuf := appendOnlyEntryKey(&m.entries[0])
-	postResetValue := appendOnlyEntryValue(&m.entries[0])
+	postResetValue := m.appendOnlyEntryValue(&m.entries[0])
 	if len(postResetKeyBuf) == 0 {
 		t.Fatalf("expected non-inline key to be retained after reset")
 	}
