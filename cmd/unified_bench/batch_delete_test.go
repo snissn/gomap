@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/snissn/gomap/kvstore"
@@ -107,6 +108,40 @@ func (b *batchDeleteFallbackBatch) Close() error {
 	return nil
 }
 
+type batchDeleteErrorDB struct {
+	batch *batchDeleteErrorBatch
+}
+
+func (d *batchDeleteErrorDB) Name() string                   { return "BatchDeleteError" }
+func (d *batchDeleteErrorDB) Close() error                   { return nil }
+func (d *batchDeleteErrorDB) Get(key []byte) ([]byte, error) { return nil, nil }
+func (d *batchDeleteErrorDB) Delete(key []byte) error        { return nil }
+func (d *batchDeleteErrorDB) Set(key, value []byte) error    { return nil }
+func (d *batchDeleteErrorDB) NewBatch() (kvstore.Batch, error) {
+	return d.NewBatchWithSize(0)
+}
+func (d *batchDeleteErrorDB) NewBatchWithSize(size int) (kvstore.Batch, error) {
+	d.batch = &batchDeleteErrorBatch{}
+	return d.batch, nil
+}
+
+type batchDeleteErrorBatch struct {
+	deleteCalls int
+	closeCalls  int
+}
+
+func (b *batchDeleteErrorBatch) Set(key, value []byte) error { return nil }
+func (b *batchDeleteErrorBatch) Delete(key []byte) error {
+	b.deleteCalls++
+	return errors.New("delete failed")
+}
+func (b *batchDeleteErrorBatch) Commit() error     { return nil }
+func (b *batchDeleteErrorBatch) CommitSync() error { return b.Commit() }
+func (b *batchDeleteErrorBatch) Close() error {
+	b.closeCalls++
+	return nil
+}
+
 func TestRunBenchmark_BatchDelete_ReusesResettableDeleteViewBatch(t *testing.T) {
 	const dbName = "batch_delete_fast_path_mock"
 	var db *batchDeleteFastPathDB
@@ -165,6 +200,40 @@ func TestRunBenchmark_BatchDelete_ReusesResettableDeleteViewBatch(t *testing.T) 
 		t.Fatalf("Reset calls=%d want=%d", got, want)
 	}
 	if got, want := b.closeCalls, 1; got != want {
+		t.Fatalf("Close calls=%d want=%d", got, want)
+	}
+}
+
+func TestRunBenchmark_BatchDelete_ClosesOnceOnDeleteError(t *testing.T) {
+	const dbName = "batch_delete_error_mock"
+	var db *batchDeleteErrorDB
+	RegisterHiddenDB(dbName, func(_ string) (kvstore.DB, error) {
+		db = &batchDeleteErrorDB{}
+		return db, nil
+	})
+
+	_, err := runBenchmark(BenchConfig{
+		Keys:         1,
+		ValueSize:    16,
+		BatchSize:    1,
+		RangeQueries: 0,
+		RangeSpan:    0,
+		DBsArg:       dbName,
+		TestsArg:     "batch_delete",
+		KeepDir:      false,
+		Progress:     false,
+		SeedUsed:     1,
+	})
+	if err == nil {
+		t.Fatal("expected batch_delete error")
+	}
+	if db == nil || db.batch == nil {
+		t.Fatal("expected failing batch to be created")
+	}
+	if got, want := db.batch.deleteCalls, 1; got != want {
+		t.Fatalf("Delete calls=%d want=%d", got, want)
+	}
+	if got, want := db.batch.closeCalls, 1; got != want {
 		t.Fatalf("Close calls=%d want=%d", got, want)
 	}
 }
