@@ -46,13 +46,15 @@ func (l *cachingLeafPageLog) AppendLeafPage(leafPage []byte) (page.LeafLogPtr, e
 		}
 		return page.LeafLogPtr{}, err
 	}
+	releaseScratch := payloadScratch
 	if compacted {
-		defer compactLeafPayloadScratchPool.Put(encodedLeafPage[:0])
-	} else if payloadScratch != nil {
-		compactLeafPayloadScratchPool.Put(payloadScratch[:0])
+		releaseScratch = encodedLeafPage
 	}
 	rid := l.db.nextRID.Add(1)
 	ptr, retainPath, err := l.db.appendValueLogOneInternal(l.lane, 0, nil, rid, encodedLeafPage, journalDurabilityNone, false)
+	if releaseScratch != nil {
+		compactLeafPayloadScratchPool.Put(releaseScratch[:0])
+	}
 	if retainPath != "" {
 		l.db.markValueLogRetain(retainPath)
 	}
