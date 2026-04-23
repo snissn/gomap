@@ -45,14 +45,14 @@ var appendOnlyIteratorPtrPool sync.Pool
 var appendOnlyValueArenaPools [appendOnlyValueArenaClassCount]sync.Pool
 
 type appendOnlyEntry struct {
-	key        []byte
-	value      []byte
-	ptr        page.ValuePtr
-	inlineKey  [appendOnlyInlineKeyLen]byte
-	flags      byte
-	keyInline  bool
-	valueOwned bool
+	key       []byte
+	value     string
+	ptr       page.ValuePtr
+	inlineKey [appendOnlyInlineKeyLen]byte
+	flags     byte
 }
+
+const appendOnlyEntryFlagKeyInline = 0x80
 
 type appendOnlyValueArena struct {
 	chunks    [][]byte
@@ -277,10 +277,24 @@ func appendOnlyEntryKey(ent *appendOnlyEntry) []byte {
 	if ent == nil {
 		return nil
 	}
-	if ent.keyInline {
+	if ent.flags&appendOnlyEntryFlagKeyInline != 0 {
 		return ent.inlineKey[:]
 	}
 	return ent.key
+}
+
+func appendOnlyEntryValue(ent *appendOnlyEntry) []byte {
+	if ent == nil || len(ent.value) == 0 {
+		return nil
+	}
+	return unsafe.Slice(unsafe.StringData(ent.value), len(ent.value))
+}
+
+func appendOnlyStringFromBytes(src []byte) string {
+	if len(src) == 0 {
+		return ""
+	}
+	return unsafe.String(&src[0], len(src))
 }
 
 func cloneBytes(src []byte) []byte {
@@ -484,7 +498,7 @@ func appendOnlyKeyU64(key []byte) (uint64, bool) {
 	return binary.BigEndian.Uint64(key), true
 }
 
-func entryValueSize(flags byte, value []byte) int {
+func entryValueSize(flags byte, value string) int {
 	if flags&node.FlagPointer != 0 {
 		return page.ValuePtrSize + len(value)
 	}
@@ -629,34 +643,31 @@ func (m *AppendOnly) appendEntryLocked(key, value []byte, ptr page.ValuePtr, fla
 	ent := &m.entries[idx]
 	ent.ptr = ptr
 	ent.flags = flags
-	ent.keyInline = false
-	ent.valueOwned = false
 	if steal {
 		ent.key = key
-		ent.value = value
+		ent.value = appendOnlyStringFromBytes(value)
 	} else {
 		if len(key) == appendOnlyInlineKeyLen {
 			copy(ent.inlineKey[:], key)
-			ent.keyInline = true
+			ent.flags |= appendOnlyEntryFlagKeyInline
 			ent.key = nil
 		} else {
 			ent.key = cloneOrReuseBytes(ent.key, key, appendOnlyReusableKeyMaxCap)
 		}
 		if len(value) > 0 {
 			if borrowValue {
-				ent.value = value
+				ent.value = appendOnlyStringFromBytes(value)
 			} else {
-				ent.value = m.valueArena.alloc(len(value))
-				copy(ent.value, value)
-				ent.valueOwned = true
+				buf := m.valueArena.alloc(len(value))
+				copy(buf, value)
+				ent.value = appendOnlyStringFromBytes(buf)
 			}
 		} else {
-			ent.value = nil
+			ent.value = ""
 		}
 	}
 	if flags&node.FlagTombstone != 0 {
-		ent.value = nil
-		ent.valueOwned = false
+		ent.value = ""
 		ent.ptr = page.ValuePtr{}
 	}
 	k := appendOnlyEntryKey(ent)
@@ -804,7 +815,7 @@ func (m *AppendOnly) Get(key []byte) ([]byte, bool, bool) {
 		m.mu.RLock()
 		if ent := m.orderedLookupEntryLocked(key); ent != nil {
 			deleted := ent.flags&node.FlagTombstone != 0
-			val := ent.value
+			val := appendOnlyEntryValue(ent)
 			m.mu.RUnlock()
 			if deleted {
 				return nil, true, true
@@ -822,7 +833,7 @@ func (m *AppendOnly) Get(key []byte) ([]byte, bool, bool) {
 					ent := &m.entries[idx]
 					if bytes.Equal(appendOnlyEntryKey(ent), key) {
 						deleted := ent.flags&node.FlagTombstone != 0
-						val := ent.value
+						val := appendOnlyEntryValue(ent)
 						m.mu.RUnlock()
 						if deleted {
 							return nil, true, true
@@ -836,7 +847,7 @@ func (m *AppendOnly) Get(key []byte) ([]byte, bool, bool) {
 					ent := &m.entries[idx]
 					if bytes.Equal(appendOnlyEntryKey(ent), key) {
 						deleted := ent.flags&node.FlagTombstone != 0
-						val := ent.value
+						val := appendOnlyEntryValue(ent)
 						m.mu.RUnlock()
 						if deleted {
 							return nil, true, true
@@ -863,9 +874,9 @@ func (m *AppendOnly) GetEntry(key []byte) ([]byte, page.ValuePtr, byte, bool) {
 	for {
 		m.mu.RLock()
 		if ent := m.orderedLookupEntryLocked(key); ent != nil {
-			val := ent.value
+			val := appendOnlyEntryValue(ent)
 			ptr := ent.ptr
-			flags := ent.flags
+			flags := ent.flags &^ appendOnlyEntryFlagKeyInline
 			m.mu.RUnlock()
 			return val, ptr, flags, true
 		}
@@ -879,9 +890,9 @@ func (m *AppendOnly) GetEntry(key []byte) ([]byte, page.ValuePtr, byte, bool) {
 				if idx, ok := m.latest64[k64]; ok && idx >= 0 && idx < m.count {
 					ent := &m.entries[idx]
 					if bytes.Equal(appendOnlyEntryKey(ent), key) {
-						val := ent.value
+						val := appendOnlyEntryValue(ent)
 						ptr := ent.ptr
-						flags := ent.flags
+						flags := ent.flags &^ appendOnlyEntryFlagKeyInline
 						m.mu.RUnlock()
 						return val, ptr, flags, true
 					}
@@ -891,9 +902,9 @@ func (m *AppendOnly) GetEntry(key []byte) ([]byte, page.ValuePtr, byte, bool) {
 				if idx, ok := m.latest[appendOnlyKeyString(key)]; ok && idx >= 0 && idx < m.count {
 					ent := &m.entries[idx]
 					if bytes.Equal(appendOnlyEntryKey(ent), key) {
-						val := ent.value
+						val := appendOnlyEntryValue(ent)
 						ptr := ent.ptr
-						flags := ent.flags
+						flags := ent.flags &^ appendOnlyEntryFlagKeyInline
 						m.mu.RUnlock()
 						return val, ptr, flags, true
 					}
@@ -1038,14 +1049,12 @@ func (m *AppendOnly) resetLockedWithPolicy(capacity, estimatedBytesPerEntry, ent
 		ent := &m.entries[i]
 		ent.ptr = page.ValuePtr{}
 		ent.flags = 0
-		ent.keyInline = false
-		ent.valueOwned = false
 		if cap(ent.key) > appendOnlyReusableKeyMaxCap {
 			ent.key = nil
 		} else if ent.key != nil {
 			ent.key = ent.key[:0]
 		}
-		ent.value = nil
+		ent.value = ""
 	}
 	m.valueArena.reset()
 	if !retainObserved {
@@ -1395,7 +1404,7 @@ func (it *appendOnlyIterator) UnsafeValue() []byte {
 	if ent.flags&node.FlagTombstone != 0 {
 		return nil
 	}
-	return ent.value
+	return appendOnlyEntryValue(ent)
 }
 
 func (it *appendOnlyIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
@@ -1403,7 +1412,7 @@ func (it *appendOnlyIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
 	if ent == nil || !it.validIndex() {
 		return nil, page.ValuePtr{}, 0
 	}
-	return ent.value, ent.ptr, ent.flags
+	return appendOnlyEntryValue(ent), ent.ptr, ent.flags &^ appendOnlyEntryFlagKeyInline
 }
 
 func (it *appendOnlyIterator) IsDeleted() bool {

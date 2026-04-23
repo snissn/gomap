@@ -13,14 +13,14 @@ import (
 func TestPutAppendOnlyEntriesClearsReferences(t *testing.T) {
 	entries := make([]appendOnlyEntry, 2)
 	entries[0].key = []byte("k0")
-	entries[0].value = []byte("v0")
+	entries[0].value = appendOnlyStringFromBytes([]byte("v0"))
 	entries[1].key = []byte("k1")
-	entries[1].value = []byte("v1")
+	entries[1].value = appendOnlyStringFromBytes([]byte("v1"))
 
 	putAppendOnlyEntries(entries)
 
 	for i := range entries {
-		if entries[i].key != nil || entries[i].value != nil {
+		if entries[i].key != nil || entries[i].value != "" {
 			t.Fatalf("entry %d still retains references after put: %+v", i, entries[i])
 		}
 	}
@@ -29,9 +29,9 @@ func TestPutAppendOnlyEntriesClearsReferences(t *testing.T) {
 func TestAppendOnlyIteratorCloseClearsPooledEntries(t *testing.T) {
 	entries := make([]appendOnlyEntry, 2)
 	entries[0].key = []byte("k0")
-	entries[0].value = []byte("v0")
+	entries[0].value = appendOnlyStringFromBytes([]byte("v0"))
 	entries[1].key = []byte("k1")
-	entries[1].value = []byte("v1")
+	entries[1].value = appendOnlyStringFromBytes([]byte("v1"))
 
 	it := &appendOnlyIterator{
 		entries:       entries,
@@ -42,7 +42,7 @@ func TestAppendOnlyIteratorCloseClearsPooledEntries(t *testing.T) {
 	}
 
 	for i := range entries {
-		if entries[i].key != nil || entries[i].value != nil {
+		if entries[i].key != nil || entries[i].value != "" {
 			t.Fatalf("entry %d still retains references after close: %+v", i, entries[i])
 		}
 	}
@@ -56,8 +56,8 @@ func TestAppendOnlyIteratorCloseClearsPooledEntries(t *testing.T) {
 
 func TestAppendOnlyIteratorCloseClearsPooledPointerEntries(t *testing.T) {
 	entries := []*appendOnlyEntry{
-		{key: []byte("k0"), value: []byte("v0")},
-		{key: []byte("k1"), value: []byte("v1")},
+		{key: []byte("k0"), value: appendOnlyStringFromBytes([]byte("v0"))},
+		{key: []byte("k1"), value: appendOnlyStringFromBytes([]byte("v1"))},
 	}
 	it := &appendOnlyIterator{
 		entryPtrs:       entries,
@@ -197,7 +197,8 @@ func TestAppendOnlyResetReusesEntryBuffers(t *testing.T) {
 		t.Fatalf("count=%d want=1", m.count)
 	}
 	keyBufPtr := &m.entries[0].key[0]
-	valBufPtr := &m.entries[0].value[0]
+	firstVal := appendOnlyEntryValue(&m.entries[0])
+	valBufPtr := &firstVal[0]
 
 	m.Reset()
 	key2 := []byte("long-key-02")
@@ -209,8 +210,9 @@ func TestAppendOnlyResetReusesEntryBuffers(t *testing.T) {
 	if &m.entries[0].key[0] != keyBufPtr {
 		t.Fatalf("expected key buffer reuse across reset")
 	}
-	if m.entries[0].value == nil || cap(m.entries[0].value) < len(val2) {
-		t.Fatalf("expected value buffer capacity reuse across reset")
+	nextVal := appendOnlyEntryValue(&m.entries[0])
+	if len(nextVal) != len(val2) {
+		t.Fatalf("value len after reset=%d want=%d", len(nextVal), len(val2))
 	}
 	_ = valBufPtr
 }
@@ -225,13 +227,11 @@ func TestAppendOnlySetCopiesIntoArenaForNonSteal(t *testing.T) {
 		t.Fatalf("count=%d want=1", m.count)
 	}
 	ent := &m.entries[0]
-	if !ent.valueOwned {
-		t.Fatalf("expected non-steal set to mark valueOwned")
+	val := appendOnlyEntryValue(ent)
+	if len(val) != len(src) {
+		t.Fatalf("entry value len=%d want=%d", len(val), len(src))
 	}
-	if len(ent.value) != len(src) {
-		t.Fatalf("entry value len=%d want=%d", len(ent.value), len(src))
-	}
-	if &ent.value[0] == &src[0] {
+	if &val[0] == &src[0] {
 		t.Fatalf("entry value unexpectedly aliases caller buffer")
 	}
 	src[0] = 'X'
@@ -297,10 +297,11 @@ func TestAppendOnlyResetRetainsArenaChunksForReuse(t *testing.T) {
 	}
 
 	m.Set([]byte("z"), make([]byte, 1024))
-	if m.count != 1 || len(m.entries[0].value) == 0 {
+	if m.count != 1 || len(appendOnlyEntryValue(&m.entries[0])) == 0 {
 		t.Fatalf("expected first post-reset set to allocate value from arena")
 	}
-	ptr := uintptr(unsafe.Pointer(&m.entries[0].value[0]))
+	postResetValue := appendOnlyEntryValue(&m.entries[0])
+	ptr := uintptr(unsafe.Pointer(&postResetValue[0]))
 	if _, ok := seen[ptr]; !ok {
 		t.Fatalf("post-reset value buffer did not reuse retained arena chunk")
 	}
