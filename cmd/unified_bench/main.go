@@ -2684,10 +2684,11 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				} else if resetBatch != nil {
 					resetBatch()
 				} else {
-					if err := batch.Close(); err != nil {
-						return 0, fmt.Errorf("batch_delete: close: %w", err)
-					}
+					closeErr := batch.Close()
 					batch = nil
+					if closeErr != nil {
+						return 0, fmt.Errorf("batch_delete: close: %w", closeErr)
+					}
 					if err := openBatch(); err != nil {
 						return 0, fmt.Errorf("batch_delete: new batch: %w", err)
 					}
@@ -2714,10 +2715,11 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 					return 0, fmt.Errorf("batch_delete: commit: %w", err)
 				}
 				if resetBatch == nil {
-					if err := batch.Close(); err != nil {
-						return 0, fmt.Errorf("batch_delete: close: %w", err)
-					}
+					closeErr := batch.Close()
 					batch = nil
+					if closeErr != nil {
+						return 0, fmt.Errorf("batch_delete: close: %w", closeErr)
+					}
 				}
 				if err := pc.Add(db, end-i, int64(end-i)*perOpBytes); err != nil {
 					return 0, fmt.Errorf("batch_delete checkpoint: %w", err)
@@ -2812,10 +2814,11 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				} else if resetBatch != nil {
 					resetBatch()
 				} else {
-					if err := batch.Close(); err != nil {
-						return 0, fmt.Errorf("batch_small_seq: close: %w", err)
-					}
+					closeErr := batch.Close()
 					batch = nil
+					if closeErr != nil {
+						return 0, fmt.Errorf("batch_small_seq: close: %w", closeErr)
+					}
 					if err := openBatch(); err != nil {
 						return 0, fmt.Errorf("batch_small_seq: new batch: %w", err)
 					}
@@ -2879,10 +2882,11 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 					return 0, fmt.Errorf("batch_small_seq: commit: %w", err)
 				}
 				if resetBatch == nil {
-					if err := batch.Close(); err != nil {
-						return 0, fmt.Errorf("batch_small_seq: close: %w", err)
-					}
+					closeErr := batch.Close()
 					batch = nil
+					if closeErr != nil {
+						return 0, fmt.Errorf("batch_small_seq: close: %w", closeErr)
+					}
 				}
 				if err := pc.Add(db, end-i, int64(end-i)*perOpBytes); err != nil {
 					return 0, fmt.Errorf("batch_small_seq checkpoint: %w", err)
