@@ -752,6 +752,57 @@ func TestAppendOnlyGet_EmptyKey_IncrementalLatestIndex(t *testing.T) {
 	if got, ptr, flags, ok := m.GetEntry([]byte{}); !ok || string(got) != "empty" || ptr != (page.ValuePtr{}) || flags != node.FlagInline {
 		t.Fatalf("GetEntry(empty key) = (%q,%+v,%d,%v), want (empty,zero,%d,true)", string(got), ptr, flags, ok, node.FlagInline)
 	}
+
+	m.Delete([]byte{})
+	if got, del, ok := m.Get([]byte{}); !ok || !del || got != nil {
+		t.Fatalf("Get(empty key after delete) = (%v,%v,%v), want (nil,true,true)", got, del, ok)
+	}
+	if got, ptr, flags, ok := m.GetEntry([]byte{}); !ok || got != nil || ptr != (page.ValuePtr{}) || flags != node.FlagTombstone {
+		t.Fatalf("GetEntry(empty key after delete) = (%v,%+v,%d,%v), want (nil,zero,%d,true)", got, ptr, flags, ok, node.FlagTombstone)
+	}
+	m.mu.RLock()
+	ent := &m.entries[m.count-1]
+	inlineLen := appendOnlyEntryInlineKeyLen(ent)
+	keyIndex := appendOnlyEntryKeyIndex(ent)
+	encodedKey := m.appendOnlyEntryKey(ent)
+	m.mu.RUnlock()
+	if inlineLen != 0 || keyIndex == 0 {
+		t.Fatalf("empty key entry encoding inlineLen=%d keyIndex=%d, want side-key encoding", inlineLen, keyIndex)
+	}
+	if encodedKey == nil || len(encodedKey) != 0 {
+		t.Fatalf("encoded empty key = %v len=%d, want non-nil empty key", encodedKey, len(encodedKey))
+	}
+}
+
+func TestAppendOnlyApplyBorrowValueSortedBatchTrusted_EmptyKeyPointer(t *testing.T) {
+	m := NewAppendOnlyWithCapacity(0)
+	ptr := page.ValuePtr{Offset: 7, Length: 11, FileID: 3}
+
+	m.ApplyBorrowValueSortedBatchTrusted([]batchpkg.Entry{
+		{Type: batchpkg.OpPut, Key: []byte{}, Value: []byte("empty-ptr"), IsPtr: true, ValuePtr: ptr},
+		{Type: batchpkg.OpPut, Key: []byte("a"), Value: []byte("a")},
+	}, true, nil)
+
+	if !m.ordered {
+		t.Fatal("expected empty-key trusted batch to stay ordered")
+	}
+	got, gotPtr, flags, ok := m.GetEntry([]byte{})
+	if !ok || string(got) != "empty-ptr" || gotPtr != ptr || flags != node.FlagPointer {
+		t.Fatalf("GetEntry(empty key pointer) = (%q,%+v,%d,%v), want (empty-ptr,%+v,%d,true)", string(got), gotPtr, flags, ok, ptr, node.FlagPointer)
+	}
+
+	it := m.NewIterator(nil, nil)
+	defer it.Close()
+	if !it.Valid() {
+		t.Fatal("expected iterator to start at empty key")
+	}
+	if gotKey := it.UnsafeKey(); gotKey == nil || len(gotKey) != 0 {
+		t.Fatalf("iterator empty key = %v len=%d, want non-nil empty key", gotKey, len(gotKey))
+	}
+	got, gotPtr, flags = it.UnsafeEntry()
+	if string(got) != "empty-ptr" || gotPtr != ptr || flags != node.FlagPointer {
+		t.Fatalf("iterator empty entry = (%q,%+v,%d), want (empty-ptr,%+v,%d)", string(got), gotPtr, flags, ptr, node.FlagPointer)
+	}
 }
 
 func TestAppendOnlyLatestIndexShortInlineKeysSurviveEntryGrowth(t *testing.T) {

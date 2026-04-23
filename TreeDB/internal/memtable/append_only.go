@@ -56,6 +56,7 @@ var appendOnlyIteratorValuePool sync.Pool
 var appendOnlyIteratorPtrPayloadPool sync.Pool
 var appendOnlyIteratorPtrPool sync.Pool
 var appendOnlyValueArenaPools [appendOnlyValueArenaClassCount]sync.Pool
+var appendOnlyEmptyKey = make([]byte, 0)
 
 type appendOnlyPointerPayload struct {
 	value string
@@ -572,7 +573,7 @@ func appendOnlyEntryKeyFromKeys(ent *appendOnlyEntry, keys []string) []byte {
 	}
 	key := keys[idx]
 	if len(key) == 0 {
-		return nil
+		return appendOnlyEmptyKey
 	}
 	return unsafe.Slice(unsafe.StringData(key), len(key))
 }
@@ -1064,7 +1065,9 @@ func (m *AppendOnly) appendEntryLocked(key, value []byte, ptr page.ValuePtr, fla
 	ent.payloadIndex = 0
 	payloadValue := ""
 	payloadPtr := page.ValuePtr{}
-	if len(key) <= appendOnlyInlineKeyLen {
+	if len(key) == 0 {
+		appendOnlyEntrySetKeyIndex(ent, m.appendKeyLocked(""))
+	} else if len(key) <= appendOnlyInlineKeyLen {
 		copy(ent.inlineKey[:], key)
 		appendOnlyEntrySetInlineKeyLen(ent, len(key))
 	} else if steal {
@@ -1167,7 +1170,9 @@ func (m *AppendOnly) appendEntryTrustedOrderedLocked(key, value []byte, ptr page
 	ent.payloadIndex = 0
 	payloadValue := ""
 	payloadPtr := page.ValuePtr{}
-	if len(key) <= appendOnlyInlineKeyLen {
+	if len(key) == 0 {
+		appendOnlyEntrySetKeyIndex(ent, m.appendKeyLocked(""))
+	} else if len(key) <= appendOnlyInlineKeyLen {
 		copy(ent.inlineKey[:], key)
 		appendOnlyEntrySetInlineKeyLen(ent, len(key))
 	} else if steal {
