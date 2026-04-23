@@ -148,3 +148,38 @@ func TestAppendOnlyResetWithCapacityAndEntryHint_DefersHintGrowthUntilAppend(t *
 		t.Fatalf("warm hinted cap(entries)=%d want=%d", got, capAfterGrowth)
 	}
 }
+
+func TestAppendOnlyPredictiveGrowthHintRaisesFutureGrowEntriesLen(t *testing.T) {
+	const (
+		capacityBytes          = 128 << 10
+		estimatedBytesPerEntry = 96
+	)
+
+	base := appendOnlyInitialEntriesForCapacity(capacityBytes, estimatedBytesPerEntry)
+	if base <= appendOnlyPredictHintMinEntries {
+		t.Fatalf("base=%d want > %d", base, appendOnlyPredictHintMinEntries)
+	}
+
+	mt := NewAppendOnlyWithCapacityEstimatedEntryBytes(capacityBytes, estimatedBytesPerEntry)
+	var observed int
+	mt.SetPredictiveGrowthHint(capacityBytes, func(entries int) {
+		if entries > observed {
+			observed = entries
+		}
+	})
+
+	for i := 0; i < appendOnlyPredictHintMinEntries; i++ {
+		key := []byte(fmt.Sprintf("p%08d", i))
+		mt.SetEntrySteal(key, nil, page.ValuePtr{}, node.FlagTombstone)
+	}
+
+	if got, wantMin := mt.growEntriesLen, base*8; got < wantMin {
+		t.Fatalf("growEntriesLen=%d want >= %d", got, wantMin)
+	}
+	if observed != mt.growEntriesLen {
+		t.Fatalf("observed predicted entries=%d want %d", observed, mt.growEntriesLen)
+	}
+	if got := cap(mt.entries); got != base {
+		t.Fatalf("predictive hint should not allocate immediately: cap(entries)=%d want=%d", got, base)
+	}
+}

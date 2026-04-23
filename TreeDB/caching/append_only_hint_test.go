@@ -1,9 +1,12 @@
 package caching
 
 import (
+	"encoding/binary"
 	"runtime"
 	"testing"
 	"time"
+
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
 )
 
 func TestAppendOnlyEntryHint_AdaptiveDecayAndCapacityClamp(t *testing.T) {
@@ -120,5 +123,30 @@ func TestAppendOnlyEntryHint_CapacityTracksPressureScaledMutableThreshold(t *tes
 
 	if !(critical < high && high < normal) {
 		t.Fatalf("expected stricter caps under pressure: normal=%d high=%d critical=%d", normal, high, critical)
+	}
+}
+
+func TestAppendOnlyPredictiveHintUpdatesSharedEntryHint(t *testing.T) {
+	db := &DB{backend: NewMockBackend()}
+	const capacity = 128 << 10
+
+	before := db.appendOnlyEntryHintEntries()
+	raw, err := db.newMutableMemtableWithCapacityMode(capacity, memtable.ModeAppendOnly)
+	if err != nil {
+		t.Fatalf("newMutableMemtableWithCapacityMode: %v", err)
+	}
+	mt, ok := raw.(*memtable.AppendOnly)
+	if !ok {
+		t.Fatalf("expected append-only memtable, got %T", raw)
+	}
+
+	for i := 0; i < 1<<10; i++ {
+		var key [8]byte
+		binary.BigEndian.PutUint64(key[:], uint64(i+1))
+		mt.Delete(key[:])
+	}
+
+	if got := int(db.appendOnlyEntryHint.Load()); got <= before {
+		t.Fatalf("shared entry hint=%d want > %d after predictive observation", got, before)
 	}
 }

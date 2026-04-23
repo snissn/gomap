@@ -7738,12 +7738,14 @@ func (db *DB) newMutableMemtableWithCapacityMode(capacity int, mode memtable.Mod
 		if mt := db.popAppendOnlyMemLease(); mt != nil {
 			db.appendOnlyMemLeaseHitTotal.Add(1)
 			mt.ResetWithCapacityAndEntryHint(capacity, estimate, entryHint)
+			mt.SetPredictiveGrowthHint(capacity, db.observeAppendOnlyMutableEntries)
 			return mt, nil
 		}
 		if v := db.appendOnlyMemPool.Get(); v != nil {
 			if mt, ok := v.(*memtable.AppendOnly); ok && mt != nil {
 				db.appendOnlyMemPoolHitTotal.Add(1)
 				mt.ResetWithCapacityAndEntryHint(capacity, estimate, entryHint)
+				mt.SetPredictiveGrowthHint(capacity, db.observeAppendOnlyMutableEntries)
 				return mt, nil
 			}
 		}
@@ -7754,7 +7756,9 @@ func (db *DB) newMutableMemtableWithCapacityMode(capacity int, mode memtable.Mod
 			db.appendOnlyMemNewAllocQueueBytes.Add(uint64(backlog))
 		}
 		db.appendOnlyMemNewAllocTotal.Add(1)
-		return memtable.NewAppendOnlyWithCapacityEstimatedEntryBytesAndHint(capacity, estimate, entryHint), nil
+		mt := memtable.NewAppendOnlyWithCapacityEstimatedEntryBytesAndHint(capacity, estimate, entryHint)
+		mt.SetPredictiveGrowthHint(capacity, db.observeAppendOnlyMutableEntries)
+		return mt, nil
 	}
 	return memtable.NewWithCapacityModeAndIndexer(capacity, mode, db.hashSortedIndexer)
 }

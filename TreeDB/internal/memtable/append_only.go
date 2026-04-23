@@ -36,6 +36,7 @@ const (
 	appendOnlyReuseOversizeFactor           = 4
 	appendOnlyResetDropThresholdEntries     = 1 << 15
 	appendOnlyAggressiveGrowCutoff          = appendOnlyResetDropThresholdEntries * 2
+	appendOnlyPredictHintMinEntries         = 1 << 10
 )
 
 var appendOnlyEntryPool sync.Pool
@@ -81,6 +82,9 @@ type AppendOnly struct {
 	frozen      bool
 	hasLast     bool
 	lastIdx     int
+
+	predictCapacityHintBytes int
+	observeEntries           func(int)
 
 	iteratorLeaseMu   sync.Mutex
 	iteratorLeaseCond *sync.Cond
@@ -212,19 +216,27 @@ func appendOnlyGrowthEntriesForHint(baseEntries, entryHint int) int {
 	if n < appendOnlyMinInitialEntries {
 		n = appendOnlyMinInitialEntries
 	}
+	entryHint = appendOnlyClampRetainedEntries(entryHint)
 	if entryHint <= 0 {
 		return n
-	}
-	if entryHint < appendOnlyMinInitialEntries {
-		entryHint = appendOnlyMinInitialEntries
-	}
-	if entryHint > appendOnlyMaxInitialEntries {
-		entryHint = appendOnlyMaxInitialEntries
 	}
 	if entryHint > n {
 		n = entryHint
 	}
 	return n
+}
+
+func appendOnlyClampRetainedEntries(entries int) int {
+	if entries <= 0 {
+		return 0
+	}
+	if entries < appendOnlyMinInitialEntries {
+		return appendOnlyMinInitialEntries
+	}
+	if entries > appendOnlyMaxInitialEntries {
+		return appendOnlyMaxInitialEntries
+	}
+	return entries
 }
 
 func NewAppendOnlyWithCapacity(capacity int) *AppendOnly {
@@ -249,6 +261,16 @@ func NewAppendOnlyWithCapacityEstimatedEntryBytesAndHint(capacity, estimatedByte
 		snapCount:      0,
 		sizeBytes:      0,
 	}
+}
+
+func (m *AppendOnly) SetPredictiveGrowthHint(capacityHintBytes int, observeEntries func(int)) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if capacityHintBytes <= 0 {
+		capacityHintBytes = defaultMemtableCapacity
+	}
+	m.predictCapacityHintBytes = capacityHintBytes
+	m.observeEntries = observeEntries
 }
 
 func appendOnlyEntryKey(ent *appendOnlyEntry) []byte {
@@ -472,6 +494,28 @@ func entryValueSize(flags byte, value []byte) int {
 	return len(value)
 }
 
+func appendOnlyShouldPredictHint(count int) bool {
+	return count >= appendOnlyPredictHintMinEntries && bits.OnesCount(uint(count)) == 1
+}
+
+func (m *AppendOnly) maybeRaisePredictedGrowthHintLocked() {
+	if m.predictCapacityHintBytes <= 0 || m.count <= 0 || m.sizeBytes <= 0 {
+		return
+	}
+	avgBytesPerEntry := int((m.sizeBytes + int64(m.count) - 1) / int64(m.count))
+	if avgBytesPerEntry <= 0 {
+		avgBytesPerEntry = 1
+	}
+	predictedEntries := appendOnlyClampRetainedEntries(m.predictCapacityHintBytes / avgBytesPerEntry)
+	if predictedEntries <= m.growEntriesLen {
+		return
+	}
+	m.growEntriesLen = predictedEntries
+	if observe := m.observeEntries; observe != nil {
+		observe(predictedEntries)
+	}
+}
+
 func (m *AppendOnly) clearSnapshotLocked() {
 	if m.snapshot != nil {
 		m.snapshot = m.snapshot[:0]
@@ -617,6 +661,9 @@ func (m *AppendOnly) appendEntryLocked(key, value []byte, ptr page.ValuePtr, fla
 	}
 	k := appendOnlyEntryKey(ent)
 	m.sizeBytes += int64(len(k) + entryValueSize(flags, ent.value))
+	if appendOnlyShouldPredictHint(m.count) {
+		m.maybeRaisePredictedGrowthHintLocked()
+	}
 
 	if !m.hasLast {
 		m.lastIdx = idx
@@ -1033,6 +1080,8 @@ func (m *AppendOnly) resetLockedWithPolicy(capacity, estimatedBytesPerEntry, ent
 	m.frozen = false
 	m.hasLast = false
 	m.lastIdx = -1
+	m.predictCapacityHintBytes = 0
+	m.observeEntries = nil
 
 	// If the entry slice grew far beyond the configured baseline, shrink it.
 	// This avoids permanently ratcheting heap high-water when a workload briefly
