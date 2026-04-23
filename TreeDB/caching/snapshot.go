@@ -265,9 +265,7 @@ func (s *Snapshot) Get(key []byte) ([]byte, error) {
 				return nil, nil
 			}
 			snapshotReadQueuePointerBytesTotal.Add(uint64(len(out)))
-			owned := make([]byte, len(out))
-			copy(owned, out)
-			return owned, nil
+			return ownedReadResult(out, scratch), nil
 		}
 		snapshotReadQueueInlineHitsTotal.Add(1)
 		if len(val) == 0 {

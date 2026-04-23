@@ -22696,9 +22696,7 @@ func (db *DB) Get(key []byte) ([]byte, error) {
 		if len(val) == 0 {
 			return nil, nil
 		}
-		cpy := make([]byte, len(val))
-		copy(cpy, val)
-		return cpy, nil
+		return ownedReadResult(val, scratch), nil
 	}
 	if err := db.flushValueLogForBackendRead(); err != nil {
 		return nil, err
