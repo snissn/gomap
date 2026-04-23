@@ -1217,14 +1217,14 @@ func (m *AppendOnly) resetLockedWithPolicy(capacity, estimatedBytesPerEntry, ent
 		ent.inlineKeyLen = 0
 	}
 	if !retainObserved || cap(m.keys) > maxRetainedEntries {
-		putAppendOnlyKeys(m.keys)
+		clear(m.keys)
 		m.keys = nil
 	} else {
 		clear(m.keys)
 		m.keys = m.keys[:0]
 	}
 	if !retainObserved || cap(m.payloads) > maxRetainedEntries {
-		putAppendOnlyPayloads(m.payloads)
+		clear(m.payloads)
 		m.payloads = nil
 	} else {
 		clear(m.payloads)
