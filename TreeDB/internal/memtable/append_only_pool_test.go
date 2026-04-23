@@ -57,6 +57,67 @@ func TestPutAppendOnlyPayloadsClearsReferences(t *testing.T) {
 	}
 }
 
+func TestGetAppendOnlyKeysFromPoolClearsReturnedSlice(t *testing.T) {
+	var pool sync.Pool
+	pool.New = func() any {
+		return []string{appendOnlyStringFromBytes([]byte("stale"))}
+	}
+
+	keys := getAppendOnlyKeysFromPool(1, &pool, 1)
+	if got := keys[0]; got != "" {
+		t.Fatalf("pooled key was not cleared: %q", got)
+	}
+}
+
+func TestGetAppendOnlyPayloadsFromPoolClearsReturnedSlice(t *testing.T) {
+	var pool sync.Pool
+	pool.New = func() any {
+		return []appendOnlyPayload{{
+			value: appendOnlyStringFromBytes([]byte("stale")),
+			ptr:   page.ValuePtr{Offset: 1, Length: 2, FileID: 3},
+		}}
+	}
+
+	payloads := getAppendOnlyPayloadsFromPool(1, &pool, 1)
+	if got := payloads[0]; got.value != "" || got.ptr != (page.ValuePtr{}) {
+		t.Fatalf("pooled payload was not cleared: %+v", got)
+	}
+}
+
+func TestGetAppendOnlyKeysFromPoolRespectsMaxCap(t *testing.T) {
+	var pool sync.Pool
+	gets := 0
+	pool.New = func() any {
+		gets++
+		return make([]string, 0, 4)
+	}
+
+	keys := getAppendOnlyKeysFromPool(2, &pool, 1)
+	if gets != 0 {
+		t.Fatalf("pool used despite max cap, gets=%d", gets)
+	}
+	if len(keys) != 2 {
+		t.Fatalf("len(keys)=%d want=2", len(keys))
+	}
+}
+
+func TestGetAppendOnlyPayloadsFromPoolRespectsMaxCap(t *testing.T) {
+	var pool sync.Pool
+	gets := 0
+	pool.New = func() any {
+		gets++
+		return make([]appendOnlyPayload, 0, 4)
+	}
+
+	payloads := getAppendOnlyPayloadsFromPool(2, &pool, 1)
+	if gets != 0 {
+		t.Fatalf("pool used despite max cap, gets=%d", gets)
+	}
+	if len(payloads) != 2 {
+		t.Fatalf("len(payloads)=%d want=2", len(payloads))
+	}
+}
+
 func TestAppendOnlyIteratorCloseClearsPooledEntries(t *testing.T) {
 	entries := make([]appendOnlyEntry, 2)
 	entries[0].keyIndex = 1
@@ -112,8 +173,8 @@ func TestAppendOnlyIteratorCloseClearsPooledEntries(t *testing.T) {
 
 func TestAppendOnlyIteratorCloseClearsPooledPointerEntries(t *testing.T) {
 	entries := []*appendOnlyEntry{
-		{flags: appendOnlyEntryFlagKeyInline},
-		{flags: appendOnlyEntryFlagKeyInline},
+		{keyIndex: 1},
+		{keyIndex: 2},
 	}
 	it := &appendOnlyIterator{
 		entryPtrs:       entries,
@@ -287,9 +348,6 @@ func TestAppendOnlySetInlinesShortKey(t *testing.T) {
 		t.Fatalf("count=%d want=1", m.count)
 	}
 	ent := &m.entries[0]
-	if ent.flags&appendOnlyEntryFlagKeyInline == 0 {
-		t.Fatalf("expected short key to be stored inline")
-	}
 	if ent.inlineKeyLen != uint8(len(lookupKey)) {
 		t.Fatalf("inline key len=%d want=%d", ent.inlineKeyLen, len(lookupKey))
 	}

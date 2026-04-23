@@ -2,6 +2,7 @@ package memtable
 
 import (
 	"encoding/binary"
+	"fmt"
 	"testing"
 	"time"
 
@@ -89,6 +90,22 @@ func TestAppendOnlyInitialEntriesForCapacity(t *testing.T) {
 			t.Fatalf("min clamp entries=%d want=%d", got, appendOnlyMinInitialEntries)
 		}
 	})
+}
+
+func TestAppendOnlyEntryHintDoesNotRaiseInitialCapacityBeyondBudget(t *testing.T) {
+	capacity := appendOnlyMinInitialEntries * appendOnlyEstimatedBytesPerEntryPointer
+	hint := appendOnlyMaxInitialEntries
+
+	m := NewAppendOnlyWithCapacityEstimatedEntryBytesAndHint(capacity, appendOnlyEstimatedBytesPerEntryPointer, hint)
+	if got := cap(m.entries); got != appendOnlyMinInitialEntries {
+		t.Fatalf("initial cap(entries)=%d want %d", got, appendOnlyMinInitialEntries)
+	}
+	if got := m.baseEntriesLen; got != appendOnlyMinInitialEntries {
+		t.Fatalf("baseEntriesLen=%d want %d", got, appendOnlyMinInitialEntries)
+	}
+	if got := m.growEntriesLen; got != hint {
+		t.Fatalf("growEntriesLen=%d want hint floor %d", got, hint)
+	}
 }
 
 func TestAppendOnlyCRUD(t *testing.T) {
@@ -457,6 +474,28 @@ func TestAppendOnlyGet_EmptyKey_IncrementalLatestIndex(t *testing.T) {
 	}
 	if got, ptr, flags, ok := m.GetEntry([]byte{}); !ok || string(got) != "empty" || ptr != (page.ValuePtr{}) || flags != node.FlagInline {
 		t.Fatalf("GetEntry(empty key) = (%q,%+v,%d,%v), want (empty,zero,%d,true)", string(got), ptr, flags, ok, node.FlagInline)
+	}
+}
+
+func TestAppendOnlyLatestIndexShortInlineKeysSurviveEntryGrowth(t *testing.T) {
+	m := NewAppendOnlyWithCapacityEstimatedEntryBytes(
+		appendOnlyMinInitialEntries*appendOnlyEstimatedBytesPerEntryPointer,
+		appendOnlyEstimatedBytesPerEntryPointer,
+	)
+
+	m.Set([]byte("b"), []byte("first"))
+	m.Set([]byte("a"), []byte("target"))
+	if got, del, ok := m.Get([]byte("a")); !ok || del || string(got) != "target" {
+		t.Fatalf("precondition Get(a) = (%q,%v,%v), want (target,false,true)", string(got), del, ok)
+	}
+
+	for i := 0; i < appendOnlyMinInitialEntries; i++ {
+		key := []byte(fmt.Sprintf("long-growth-key-%08d", i))
+		m.Set(key, []byte("growth"))
+	}
+
+	if got, del, ok := m.Get([]byte("a")); !ok || del || string(got) != "target" {
+		t.Fatalf("Get(a) after growth = (%q,%v,%v), want (target,false,true)", string(got), del, ok)
 	}
 }
 
