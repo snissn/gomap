@@ -23344,8 +23344,14 @@ func (db *DB) flushOneLocked(sync bool) bool {
 //   - We require global mutable bytes to be zero.
 //   - We additionally check the target mutable shard length to avoid races where
 //     mutableBytes is transiently zero while an old view still has entries.
+//   - Routed mutable ranges bypass the hash shard; if a key is currently routed,
+//     do not bypass because the hash shard can be empty while the routed shard
+//     still owns the newest value.
 func (db *DB) canBypassMemtableRead(view *memtableView, key []byte) bool {
 	if view == nil || len(view.queue) != 0 || db.mutableBytes.Load() != 0 {
+		return false
+	}
+	if keyInMutableRoute(view.mutableRoute, key) {
 		return false
 	}
 	if len(view.mutables) == 0 {
@@ -23371,6 +23377,11 @@ func (db *DB) canBypassMemtableReadMany(view *memtableView, keys [][]byte) bool 
 	}
 	if view == nil || len(view.queue) != 0 || db.mutableBytes.Load() != 0 {
 		return false
+	}
+	for _, key := range keys {
+		if keyInMutableRoute(view.mutableRoute, key) {
+			return false
+		}
 	}
 	n := len(view.mutables)
 	if n == 0 {
