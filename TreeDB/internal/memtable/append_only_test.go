@@ -99,8 +99,11 @@ func TestAppendOnlyEntryHintDoesNotRaiseInitialCapacityBeyondBudget(t *testing.T
 	hint := appendOnlyMaxInitialEntries
 
 	m := NewAppendOnlyWithCapacityEstimatedEntryBytesAndHint(capacity, appendOnlyEstimatedBytesPerEntryPointer, hint)
-	if got := cap(m.entries); got != appendOnlyMinInitialEntries {
-		t.Fatalf("initial cap(entries)=%d want %d", got, appendOnlyMinInitialEntries)
+	if got := len(m.entries); got != appendOnlyMinInitialEntries {
+		t.Fatalf("initial len(entries)=%d want %d", got, appendOnlyMinInitialEntries)
+	}
+	if got := cap(m.entries); got >= hint {
+		t.Fatalf("initial cap(entries)=%d want < hint %d", got, hint)
 	}
 	if got := m.baseEntriesLen; got != appendOnlyMinInitialEntries {
 		t.Fatalf("baseEntriesLen=%d want %d", got, appendOnlyMinInitialEntries)
@@ -752,6 +755,27 @@ func TestAppendOnlyLatestIndexShortInlineKeysSurviveEntryGrowth(t *testing.T) {
 
 	if got, del, ok := m.Get([]byte("a")); !ok || del || string(got) != "target" {
 		t.Fatalf("Get(a) after growth = (%q,%v,%v), want (target,false,true)", string(got), del, ok)
+	}
+}
+
+func TestAppendOnlyMutableIteratorShortInlineKeyStableAfterClose(t *testing.T) {
+	m := NewAppendOnlyWithCapacity(0)
+	m.Set([]byte("b"), []byte("first"))
+	m.Set([]byte("a"), []byte("target"))
+
+	it := m.NewIterator(nil, nil)
+	if !it.Valid() {
+		t.Fatal("iterator unexpectedly invalid")
+	}
+	key := it.UnsafeKey()
+	if got := string(key); got != "a" {
+		t.Fatalf("iterator key=%q want a", got)
+	}
+	if err := it.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if got := string(key); got != "a" {
+		t.Fatalf("iterator key after close=%q want a", got)
 	}
 }
 

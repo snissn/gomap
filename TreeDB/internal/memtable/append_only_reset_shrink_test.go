@@ -132,8 +132,8 @@ func TestAppendOnlyNewWithCapacityAndEntryHint_DefersHintGrowthUntilAppend(t *te
 	if got := len(mt.entries); got != base {
 		t.Fatalf("initial len(entries)=%d want=%d", got, base)
 	}
-	if got := cap(mt.entries); got != base {
-		t.Fatalf("initial cap(entries)=%d want=%d", got, base)
+	if got := cap(mt.entries); got >= entryHint {
+		t.Fatalf("initial cap(entries)=%d want <%d before append-driven growth", got, entryHint)
 	}
 	if got := mt.growEntriesLen; got < entryHint {
 		t.Fatalf("growEntriesLen=%d want >=%d", got, entryHint)
@@ -157,8 +157,11 @@ func TestAppendOnlyResetWithCapacityAndEntryHint_DefersHintGrowthUntilAppend(t *
 	base := appendOnlyInitialEntriesForCapacity(capacityBytes, estimatedBytesPerEntry)
 	entryHint := base * 16
 	mt := NewAppendOnlyWithCapacityEstimatedEntryBytes(capacityBytes, estimatedBytesPerEntry)
-	if got := cap(mt.entries); got != base {
-		t.Fatalf("initial cap(entries)=%d want=%d", got, base)
+	if got := len(mt.entries); got != base {
+		t.Fatalf("initial len(entries)=%d want=%d", got, base)
+	}
+	if got := cap(mt.entries); got >= entryHint {
+		t.Fatalf("initial cap(entries)=%d want <%d before append-driven growth", got, entryHint)
 	}
 
 	allocs := testing.AllocsPerRun(1000, func() {
@@ -170,8 +173,8 @@ func TestAppendOnlyResetWithCapacityAndEntryHint_DefersHintGrowthUntilAppend(t *
 	if got := len(mt.entries); got != base {
 		t.Fatalf("reset len(entries)=%d want=%d", got, base)
 	}
-	if got := cap(mt.entries); got != base {
-		t.Fatalf("reset cap(entries)=%d want=%d", got, base)
+	if got := cap(mt.entries); got >= entryHint {
+		t.Fatalf("reset cap(entries)=%d want <%d before append-driven growth", got, entryHint)
 	}
 	if got := mt.growEntriesLen; got < entryHint {
 		t.Fatalf("growEntriesLen=%d want >=%d", got, entryHint)
@@ -204,6 +207,7 @@ func TestAppendOnlyPredictiveGrowthHintRaisesFutureGrowEntriesLen(t *testing.T) 
 	}
 
 	mt := NewAppendOnlyWithCapacityEstimatedEntryBytes(capacityBytes, estimatedBytesPerEntry)
+	capBefore := cap(mt.entries)
 	var observed int
 	mt.SetPredictiveGrowthHint(capacityBytes, nil, func(entries int) {
 		if entries > observed {
@@ -222,8 +226,8 @@ func TestAppendOnlyPredictiveGrowthHintRaisesFutureGrowEntriesLen(t *testing.T) 
 	if observed != mt.growEntriesLen {
 		t.Fatalf("observed predicted entries=%d want %d", observed, mt.growEntriesLen)
 	}
-	if got := cap(mt.entries); got != base {
-		t.Fatalf("predictive hint should not allocate immediately: cap(entries)=%d want=%d", got, base)
+	if got := cap(mt.entries); got != capBefore {
+		t.Fatalf("predictive hint allocated immediately: cap(entries)=%d want=%d", got, capBefore)
 	}
 }
 
@@ -257,6 +261,27 @@ func TestAppendOnlyPredictiveGrowthHintSurvivesResetAndObservesAfterUnlock(t *te
 	}
 	if got := observed.Load(); got == 0 {
 		t.Fatalf("expected predictive observer after reset")
+	}
+}
+
+func TestAppendOnlyGrowthObserverRecordsLiveEntries(t *testing.T) {
+	const (
+		capacityBytes          = 4 << 10
+		estimatedBytesPerEntry = 96
+	)
+
+	mt := NewAppendOnlyWithCapacityEstimatedEntryBytes(capacityBytes, estimatedBytesPerEntry)
+	base := len(mt.entries)
+	var observed atomic.Int32
+	mt.SetPredictiveGrowthHint(0, nil, func(entries int) {
+		observed.Store(int32(entries))
+	})
+	for i := 0; i <= base; i++ {
+		key := []byte(fmt.Sprintf("g%08d", i))
+		mt.SetEntrySteal(key, nil, page.ValuePtr{}, node.FlagTombstone)
+	}
+	if got, want := int(observed.Load()), base+1; got != want {
+		t.Fatalf("observed entries=%d want live count %d", got, want)
 	}
 }
 
