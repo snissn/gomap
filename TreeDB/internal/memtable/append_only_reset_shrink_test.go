@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -184,6 +185,38 @@ func TestAppendOnlyPredictiveGrowthHintRaisesFutureGrowEntriesLen(t *testing.T) 
 	}
 	if got := cap(mt.entries); got != base {
 		t.Fatalf("predictive hint should not allocate immediately: cap(entries)=%d want=%d", got, base)
+	}
+}
+
+func TestAppendOnlyPredictiveGrowthHintSurvivesResetAndObservesAfterUnlock(t *testing.T) {
+	const capacityBytes = 128 << 10
+
+	mt := NewAppendOnlyWithCapacityEstimatedEntryBytes(capacityBytes, appendOnlyEstimatedBytesPerEntryPointer)
+	var observed atomic.Int32
+	mt.SetPredictiveGrowthHint(capacityBytes, nil, func(entries int) {
+		if mt.Len() == 0 {
+			return
+		}
+		observed.Store(int32(entries))
+	})
+	mt.Reset()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < appendOnlyPredictHintMinEntries; i++ {
+			key := []byte(fmt.Sprintf("u%08d", i))
+			mt.SetEntrySteal(key, nil, page.ValuePtr{}, node.FlagTombstone)
+		}
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("predictive observer appears to run while append-only lock is held")
+	}
+	if got := observed.Load(); got == 0 {
+		t.Fatalf("expected predictive observer after reset")
 	}
 }
 

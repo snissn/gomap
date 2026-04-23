@@ -265,6 +265,11 @@ func NewAppendOnlyWithCapacityEstimatedEntryBytesAndHint(capacity, estimatedByte
 	}
 }
 
+// SetPredictiveGrowthHint configures a best-effort growth forecast for future
+// appends. capacityHintBytes is converted to an entry target from the observed
+// average entry size; entryHintSource supplies a shared floor learned from other
+// append-only memtables. observeEntries is called after the memtable mutex is
+// released and must be non-blocking because it can run on the write path.
 func (m *AppendOnly) SetPredictiveGrowthHint(capacityHintBytes int, entryHintSource *atomic.Int32, observeEntries func(int)) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -503,10 +508,37 @@ func entryValueSize(flags byte, value []byte) int {
 }
 
 func appendOnlyShouldPredictHint(count int) bool {
-	return count >= appendOnlyPredictHintMinEntries && bits.OnesCount(uint(count)) == 1
+	return count >= appendOnlyPredictHintMinEntries && count&(count-1) == 0
 }
 
-func (m *AppendOnly) maybeRaisePredictedGrowthHintLocked() {
+type appendOnlyObserveEvent struct {
+	entries int
+	observe func(int)
+}
+
+func (e *appendOnlyObserveEvent) record(observe func(int), entries int) {
+	if observe == nil || entries <= 0 {
+		return
+	}
+	if e.observe == nil {
+		e.observe = observe
+	}
+	if entries > e.entries {
+		e.entries = entries
+	}
+}
+
+func (e *appendOnlyObserveEvent) recordEvent(other appendOnlyObserveEvent) {
+	e.record(other.observe, other.entries)
+}
+
+func (e appendOnlyObserveEvent) emit() {
+	if e.observe != nil && e.entries > 0 {
+		e.observe(e.entries)
+	}
+}
+
+func (m *AppendOnly) maybeRaisePredictedGrowthHintLocked(event *appendOnlyObserveEvent) {
 	if m.predictCapacityHintBytes <= 0 || m.count <= 0 || m.sizeBytes <= 0 {
 		return
 	}
@@ -519,9 +551,7 @@ func (m *AppendOnly) maybeRaisePredictedGrowthHintLocked() {
 		return
 	}
 	m.growEntriesLen = predictedEntries
-	if observe := m.observeEntries; observe != nil {
-		observe(predictedEntries)
-	}
+	event.record(m.observeEntries, predictedEntries)
 }
 
 func (m *AppendOnly) clearSnapshotLocked() {
@@ -620,7 +650,8 @@ func (m *AppendOnly) updateLatestIndexLocked(key []byte, idx int) {
 	m.latest[appendOnlyKeyString(key)] = idx
 }
 
-func (m *AppendOnly) appendEntryLocked(key, value []byte, ptr page.ValuePtr, flags byte, steal bool, borrowValue bool) {
+func (m *AppendOnly) appendEntryLocked(key, value []byte, ptr page.ValuePtr, flags byte, steal bool, borrowValue bool) appendOnlyObserveEvent {
+	var observeEvent appendOnlyObserveEvent
 	if m.count == len(m.entries) {
 		if m.predictEntryHintSource != nil {
 			if shared := appendOnlyClampRetainedEntries(int(m.predictEntryHintSource.Load())); shared > m.growEntriesLen {
@@ -636,9 +667,7 @@ func (m *AppendOnly) appendEntryLocked(key, value []byte, ptr page.ValuePtr, fla
 		copy(grown, m.entries[:m.count])
 		m.entries = grown
 		putAppendOnlyEntries(prev)
-		if observe := m.observeEntries; observe != nil {
-			observe(nextCap)
-		}
+		observeEvent.record(m.observeEntries, nextCap)
 	}
 	idx := m.count
 	m.count++
@@ -678,20 +707,20 @@ func (m *AppendOnly) appendEntryLocked(key, value []byte, ptr page.ValuePtr, fla
 	k := appendOnlyEntryKey(ent)
 	m.sizeBytes += int64(len(k) + entryValueSize(flags, ent.value))
 	if appendOnlyShouldPredictHint(m.count) {
-		m.maybeRaisePredictedGrowthHintLocked()
+		m.maybeRaisePredictedGrowthHintLocked(&observeEvent)
 	}
 
 	if !m.hasLast {
 		m.lastIdx = idx
 		m.hasLast = true
-		return
+		return observeEvent
 	}
 	if m.ordered {
 		prev := appendOnlyEntryKey(&m.entries[m.lastIdx])
 		cmp := bytes.Compare(k, prev)
 		if cmp > 0 {
 			m.lastIdx = idx
-			return
+			return observeEvent
 		}
 		m.ordered = false
 		// Once order breaks, invalidate the cached snapshot state and
@@ -701,12 +730,13 @@ func (m *AppendOnly) appendEntryLocked(key, value []byte, ptr page.ValuePtr, fla
 		// rebuildLatestIndexLocked clears the cached snapshot as part of the
 		// transition.
 		m.rebuildLatestIndexLocked()
-		return
+		return observeEvent
 	}
 	if !m.latestDirty {
 		m.updateLatestIndexLocked(k, idx)
 	}
 	m.clearSnapshotLocked()
+	return observeEvent
 }
 
 func (m *AppendOnly) Set(key, value []byte) {
@@ -719,20 +749,23 @@ func (m *AppendOnly) SetSteal(key, value []byte) {
 
 func (m *AppendOnly) SetEntry(key, value []byte, ptr page.ValuePtr, flags byte) {
 	m.mu.Lock()
-	m.appendEntryLocked(key, value, ptr, flags, false, false)
+	observeEvent := m.appendEntryLocked(key, value, ptr, flags, false, false)
 	m.mu.Unlock()
+	observeEvent.emit()
 }
 
 func (m *AppendOnly) SetEntrySteal(key, value []byte, ptr page.ValuePtr, flags byte) {
 	m.mu.Lock()
-	m.appendEntryLocked(key, value, ptr, flags, true, false)
+	observeEvent := m.appendEntryLocked(key, value, ptr, flags, true, false)
 	m.mu.Unlock()
+	observeEvent.emit()
 }
 
 func (m *AppendOnly) SetEntryBorrowValue(key, value []byte, ptr page.ValuePtr, flags byte) {
 	m.mu.Lock()
-	m.appendEntryLocked(key, value, ptr, flags, false, true)
+	observeEvent := m.appendEntryLocked(key, value, ptr, flags, false, true)
 	m.mu.Unlock()
+	observeEvent.emit()
 }
 
 func (m *AppendOnly) Delete(key []byte) {
@@ -752,8 +785,9 @@ func (m *AppendOnly) PutWithCallback(key, value []byte, cb func(k, v []byte) err
 		}
 	}
 	m.mu.Lock()
-	m.appendEntryLocked(k, v, page.ValuePtr{}, node.FlagInline, true, false)
+	observeEvent := m.appendEntryLocked(k, v, page.ValuePtr{}, node.FlagInline, true, false)
 	m.mu.Unlock()
+	observeEvent.emit()
 	return nil
 }
 
@@ -765,8 +799,9 @@ func (m *AppendOnly) DeleteWithCallback(key []byte, cb func(k, v []byte) error) 
 		}
 	}
 	m.mu.Lock()
-	m.appendEntryLocked(k, nil, page.ValuePtr{}, node.FlagTombstone, true, false)
+	observeEvent := m.appendEntryLocked(k, nil, page.ValuePtr{}, node.FlagTombstone, true, false)
 	m.mu.Unlock()
+	observeEvent.emit()
 	return nil
 }
 
@@ -780,21 +815,23 @@ func (m *AppendOnly) ApplyStealSortedBatchTrusted(entries []batchpkg.Entry, onKe
 
 func (m *AppendOnly) applyStealBatch(entries []batchpkg.Entry, onKey func(key []byte)) {
 	m.mu.Lock()
+	var observeEvent appendOnlyObserveEvent
 	for i := range entries {
 		op := entries[i]
 		switch {
 		case op.Type == batchpkg.OpDelete:
-			m.appendEntryLocked(op.Key, nil, page.ValuePtr{}, node.FlagTombstone, true, false)
+			observeEvent.recordEvent(m.appendEntryLocked(op.Key, nil, page.ValuePtr{}, node.FlagTombstone, true, false))
 		case op.IsPtr:
-			m.appendEntryLocked(op.Key, op.Value, op.ValuePtr, node.FlagPointer, true, false)
+			observeEvent.recordEvent(m.appendEntryLocked(op.Key, op.Value, op.ValuePtr, node.FlagPointer, true, false))
 		default:
-			m.appendEntryLocked(op.Key, op.Value, page.ValuePtr{}, node.FlagInline, true, false)
+			observeEvent.recordEvent(m.appendEntryLocked(op.Key, op.Value, page.ValuePtr{}, node.FlagInline, true, false))
 		}
 		if onKey != nil {
 			onKey(op.Key)
 		}
 	}
 	m.mu.Unlock()
+	observeEvent.emit()
 }
 
 func (m *AppendOnly) orderedLookupEntryLocked(key []byte) *appendOnlyEntry {
@@ -1096,9 +1133,6 @@ func (m *AppendOnly) resetLockedWithPolicy(capacity, estimatedBytesPerEntry, ent
 	m.frozen = false
 	m.hasLast = false
 	m.lastIdx = -1
-	m.predictCapacityHintBytes = 0
-	m.predictEntryHintSource = nil
-	m.observeEntries = nil
 
 	// If the entry slice grew far beyond the configured baseline, shrink it.
 	// This avoids permanently ratcheting heap high-water when a workload briefly
