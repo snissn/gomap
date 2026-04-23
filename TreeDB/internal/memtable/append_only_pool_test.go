@@ -101,6 +101,18 @@ func TestGetAppendOnlyKeysFromPoolRespectsMaxCap(t *testing.T) {
 	}
 }
 
+func TestGetAppendOnlyKeysFromPoolRejectsOversizedReuse(t *testing.T) {
+	var pool sync.Pool
+	pool.New = func() any {
+		return make([]string, 0, appendOnlyMaxReuseEntries(1)+1)
+	}
+
+	keys := getAppendOnlyKeysFromPool(1, &pool, appendOnlyKeyPoolMaxCap)
+	if cap(keys) > appendOnlyMaxReuseEntries(1) {
+		t.Fatalf("cap(keys)=%d want <=%d", cap(keys), appendOnlyMaxReuseEntries(1))
+	}
+}
+
 func TestGetAppendOnlyPayloadsFromPoolRespectsMaxCap(t *testing.T) {
 	var pool sync.Pool
 	gets := 0
@@ -115,6 +127,18 @@ func TestGetAppendOnlyPayloadsFromPoolRespectsMaxCap(t *testing.T) {
 	}
 	if len(payloads) != 2 {
 		t.Fatalf("len(payloads)=%d want=2", len(payloads))
+	}
+}
+
+func TestGetAppendOnlyPayloadsFromPoolRejectsOversizedReuse(t *testing.T) {
+	var pool sync.Pool
+	pool.New = func() any {
+		return make([]appendOnlyPayload, 0, appendOnlyMaxReuseEntries(1)+1)
+	}
+
+	payloads := getAppendOnlyPayloadsFromPool(1, &pool, appendOnlyPayloadPoolMaxCap)
+	if cap(payloads) > appendOnlyMaxReuseEntries(1) {
+		t.Fatalf("cap(payloads)=%d want <=%d", cap(payloads), appendOnlyMaxReuseEntries(1))
 	}
 }
 
