@@ -625,15 +625,28 @@ func appendOnlyNextCapacity(current int) int {
 	return next
 }
 
-func appendOnlyKeyString(key []byte) string {
-	return string(key)
-}
-
 func appendOnlyLookupKeyString(key []byte) string {
 	if len(key) == 0 {
 		return ""
 	}
 	return unsafe.String(unsafe.SliceData(key), len(key))
+}
+
+func (m *AppendOnly) appendOnlyEntryMapKey(ent *appendOnlyEntry) string {
+	if m == nil || ent == nil {
+		return ""
+	}
+	if ent.inlineKeyLen != 0 {
+		return string(ent.inlineKey[:int(ent.inlineKeyLen)])
+	}
+	if ent.keyIndex == 0 {
+		return ""
+	}
+	idx := int(ent.keyIndex - 1)
+	if idx < 0 || idx >= len(m.keys) {
+		return ""
+	}
+	return m.keys[idx]
 }
 
 func appendOnlyKeyU64(key []byte) (uint64, bool) {
@@ -748,7 +761,7 @@ func (m *AppendOnly) rebuildLatestIndexLocked() {
 		if m.latest == nil {
 			m.latest = make(map[string]int, reserve)
 		}
-		m.latest[appendOnlyKeyString(k)] = i
+		m.latest[m.appendOnlyEntryMapKey(&active[i])] = i
 	}
 	m.latestDirty = false
 	m.clearSnapshotLocked()
@@ -768,7 +781,7 @@ func (m *AppendOnly) updateLatestIndexLocked(key []byte, idx int) {
 	if m.latest == nil {
 		m.latest = make(map[string]int, 1)
 	}
-	m.latest[appendOnlyKeyString(key)] = idx
+	m.latest[m.appendOnlyEntryMapKey(&m.entries[idx])] = idx
 }
 
 func (m *AppendOnly) appendEntryLocked(key, value []byte, ptr page.ValuePtr, flags byte, steal bool, borrowValue bool) {

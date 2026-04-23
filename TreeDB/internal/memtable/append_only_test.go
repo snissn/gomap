@@ -343,7 +343,7 @@ func TestAppendOnlyGetBuildsLatestIndexOnFirstPointRead(t *testing.T) {
 				if m.latest == nil {
 					return 0, false
 				}
-				idx, ok := m.latest[appendOnlyKeyString(key)]
+				idx, ok := m.latest[string(key)]
 				return idx, ok
 			},
 			latestSize: func(m *AppendOnly) int {
