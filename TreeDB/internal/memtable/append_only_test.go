@@ -2,6 +2,7 @@ package memtable
 
 import (
 	"encoding/binary"
+	"fmt"
 	"testing"
 	"time"
 
@@ -486,6 +487,28 @@ func TestAppendOnlyGet_EmptyKey_IncrementalLatestIndex(t *testing.T) {
 	}
 	if got, ptr, flags, ok := m.GetEntry([]byte{}); !ok || string(got) != "empty" || ptr != (page.ValuePtr{}) || flags != node.FlagInline {
 		t.Fatalf("GetEntry(empty key) = (%q,%+v,%d,%v), want (empty,zero,%d,true)", string(got), ptr, flags, ok, node.FlagInline)
+	}
+}
+
+func TestAppendOnlyLatestIndexShortInlineKeysSurviveEntryGrowth(t *testing.T) {
+	m := NewAppendOnlyWithCapacityEstimatedEntryBytes(
+		appendOnlyMinInitialEntries*appendOnlyEstimatedBytesPerEntryPointer,
+		appendOnlyEstimatedBytesPerEntryPointer,
+	)
+
+	m.Set([]byte("b"), []byte("first"))
+	m.Set([]byte("a"), []byte("target"))
+	if got, del, ok := m.Get([]byte("a")); !ok || del || string(got) != "target" {
+		t.Fatalf("precondition Get(a) = (%q,%v,%v), want (target,false,true)", string(got), del, ok)
+	}
+
+	for i := 0; i < appendOnlyMinInitialEntries; i++ {
+		key := []byte(fmt.Sprintf("long-growth-key-%08d", i))
+		m.Set(key, []byte("growth"))
+	}
+
+	if got, del, ok := m.Get([]byte("a")); !ok || del || string(got) != "target" {
+		t.Fatalf("Get(a) after growth = (%q,%v,%v), want (target,false,true)", string(got), del, ok)
 	}
 }
 

@@ -626,10 +626,7 @@ func appendOnlyNextCapacity(current int) int {
 }
 
 func appendOnlyKeyString(key []byte) string {
-	if len(key) == 0 {
-		return ""
-	}
-	return unsafe.String(&key[0], len(key))
+	return string(key)
 }
 
 func appendOnlyKeyU64(key []byte) (uint64, bool) {
