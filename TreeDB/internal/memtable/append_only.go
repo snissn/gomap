@@ -6,6 +6,7 @@ import (
 	"math/bits"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"unsafe"
 
 	batchpkg "github.com/snissn/gomap/TreeDB/batch"
@@ -97,6 +98,7 @@ type AppendOnly struct {
 	lastIdx     int
 
 	predictCapacityHintBytes int
+	predictEntryHintSource   *atomic.Int32
 	observeEntries           func(int)
 
 	iteratorLeaseMu   sync.Mutex
@@ -364,13 +366,19 @@ func NewAppendOnlyWithCapacityEstimatedEntryBytesAndHint(capacity, estimatedByte
 	}
 }
 
-func (m *AppendOnly) SetPredictiveGrowthHint(capacityHintBytes int, observeEntries func(int)) {
+func (m *AppendOnly) SetPredictiveGrowthHint(capacityHintBytes int, entryHintSource *atomic.Int32, observeEntries func(int)) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if capacityHintBytes <= 0 {
 		capacityHintBytes = defaultMemtableCapacity
 	}
 	m.predictCapacityHintBytes = capacityHintBytes
+	m.predictEntryHintSource = entryHintSource
+	if entryHintSource != nil {
+		if shared := appendOnlyClampRetainedEntries(int(entryHintSource.Load())); shared > m.growEntriesLen {
+			m.growEntriesLen = shared
+		}
+	}
 	m.observeEntries = observeEntries
 }
 
@@ -761,6 +769,11 @@ func (m *AppendOnly) updateLatestIndexLocked(key []byte, idx int) {
 
 func (m *AppendOnly) appendEntryLocked(key, value []byte, ptr page.ValuePtr, flags byte, steal bool, borrowValue bool) {
 	if m.count == len(m.entries) {
+		if m.predictEntryHintSource != nil {
+			if shared := appendOnlyClampRetainedEntries(int(m.predictEntryHintSource.Load())); shared > m.growEntriesLen {
+				m.growEntriesLen = shared
+			}
+		}
 		nextCap := appendOnlyNextCapacity(len(m.entries))
 		if nextCap < m.growEntriesLen {
 			nextCap = m.growEntriesLen
@@ -770,6 +783,9 @@ func (m *AppendOnly) appendEntryLocked(key, value []byte, ptr page.ValuePtr, fla
 		copy(grown, m.entries[:m.count])
 		m.entries = grown
 		putAppendOnlyEntries(prev)
+		if observe := m.observeEntries; observe != nil {
+			observe(nextCap)
+		}
 	}
 	idx := m.count
 	m.count++
@@ -1234,6 +1250,7 @@ func (m *AppendOnly) resetLockedWithPolicy(capacity, estimatedBytesPerEntry, ent
 	m.hasLast = false
 	m.lastIdx = -1
 	m.predictCapacityHintBytes = 0
+	m.predictEntryHintSource = nil
 	m.observeEntries = nil
 
 	// If the entry slice grew far beyond the configured baseline, shrink it.

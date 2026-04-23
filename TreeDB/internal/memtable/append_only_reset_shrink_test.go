@@ -2,6 +2,7 @@ package memtable
 
 import (
 	"fmt"
+	"sync/atomic"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/node"
@@ -162,7 +163,7 @@ func TestAppendOnlyPredictiveGrowthHintRaisesFutureGrowEntriesLen(t *testing.T) 
 
 	mt := NewAppendOnlyWithCapacityEstimatedEntryBytes(capacityBytes, estimatedBytesPerEntry)
 	var observed int
-	mt.SetPredictiveGrowthHint(capacityBytes, func(entries int) {
+	mt.SetPredictiveGrowthHint(capacityBytes, nil, func(entries int) {
 		if entries > observed {
 			observed = entries
 		}
@@ -181,5 +182,27 @@ func TestAppendOnlyPredictiveGrowthHintRaisesFutureGrowEntriesLen(t *testing.T) 
 	}
 	if got := cap(mt.entries); got != base {
 		t.Fatalf("predictive hint should not allocate immediately: cap(entries)=%d want=%d", got, base)
+	}
+}
+
+func TestAppendOnlySharedPredictiveHintRaisesGrowthFloorBeforeLocalPrediction(t *testing.T) {
+	const (
+		capacityBytes          = 128 << 10
+		estimatedBytesPerEntry = 96
+	)
+
+	base := appendOnlyInitialEntriesForCapacity(capacityBytes, estimatedBytesPerEntry)
+	sharedHint := atomic.Int32{}
+	sharedHint.Store(int32(base * 8))
+
+	mt := NewAppendOnlyWithCapacityEstimatedEntryBytes(capacityBytes, estimatedBytesPerEntry)
+	mt.SetPredictiveGrowthHint(capacityBytes, &sharedHint, nil)
+
+	for i := 0; i < base+1; i++ {
+		key := []byte(fmt.Sprintf("s%08d", i))
+		mt.SetEntrySteal(key, nil, page.ValuePtr{}, node.FlagTombstone)
+	}
+	if got := cap(mt.entries); got < int(sharedHint.Load()) {
+		t.Fatalf("cap(entries)=%d want >= %d", got, sharedHint.Load())
 	}
 }
