@@ -69,12 +69,10 @@ type appendOnlyEntry struct {
 }
 
 const (
-	appendOnlyEntryInlineLenShift = 28
-	appendOnlyEntryInlineLenMask  = uint32(0xF) << appendOnlyEntryInlineLenShift
-	appendOnlyEntryKeyIndexMask   = ^appendOnlyEntryInlineLenMask
-	appendOnlyEntryFlagsShift     = 24
-	appendOnlyEntryFlagsMask      = uint32(0xFF) << appendOnlyEntryFlagsShift
-	appendOnlyEntryPayloadIdxMask = ^appendOnlyEntryFlagsMask
+	appendOnlyEntryInlineLenShift  = 28
+	appendOnlyEntryInlineLenMask   = uint32(0xF) << appendOnlyEntryInlineLenShift
+	appendOnlyEntryKeyIndexMask    = ^appendOnlyEntryInlineLenMask
+	appendOnlyEntryInlineFlagsMask = uint32(0xFF)
 )
 
 func appendOnlyEntryInlineKeyLen(ent *appendOnlyEntry) int {
@@ -96,6 +94,9 @@ func appendOnlyEntryKeyIndex(ent *appendOnlyEntry) uint32 {
 	if ent == nil {
 		return 0
 	}
+	if appendOnlyEntryInlineKeyLen(ent) != 0 {
+		return 0
+	}
 	return ent.keyIndex & appendOnlyEntryKeyIndexMask
 }
 
@@ -113,32 +114,41 @@ func appendOnlyEntryFlags(ent *appendOnlyEntry) byte {
 	if ent == nil {
 		return 0
 	}
-	return byte((ent.payloadIndex & appendOnlyEntryFlagsMask) >> appendOnlyEntryFlagsShift)
+	if appendOnlyEntryInlineKeyLen(ent) != 0 {
+		return byte(ent.keyIndex & appendOnlyEntryInlineFlagsMask)
+	}
+	if appendOnlyEntryKeyIndex(ent) != 0 {
+		return ent.inlineKey[0]
+	}
+	return 0
 }
 
 func appendOnlyEntrySetFlags(ent *appendOnlyEntry, flags byte) {
 	if ent == nil {
 		return
 	}
-	ent.payloadIndex = (ent.payloadIndex & appendOnlyEntryPayloadIdxMask) |
-		(uint32(flags) << appendOnlyEntryFlagsShift)
+	if appendOnlyEntryInlineKeyLen(ent) != 0 {
+		ent.keyIndex = (ent.keyIndex &^ appendOnlyEntryInlineFlagsMask) | uint32(flags)
+		return
+	}
+	if appendOnlyEntryKeyIndex(ent) != 0 {
+		ent.inlineKey[0] = flags
+		return
+	}
 }
 
 func appendOnlyEntryPayloadIndex(ent *appendOnlyEntry) uint32 {
 	if ent == nil {
 		return 0
 	}
-	return ent.payloadIndex & appendOnlyEntryPayloadIdxMask
+	return ent.payloadIndex
 }
 
 func appendOnlyEntrySetPayloadIndex(ent *appendOnlyEntry, idx uint32) {
 	if ent == nil {
 		return
 	}
-	if idx > appendOnlyEntryPayloadIdxMask {
-		panic("appendOnlyEntry payload index overflow")
-	}
-	ent.payloadIndex = (ent.payloadIndex & appendOnlyEntryFlagsMask) | idx
+	ent.payloadIndex = idx
 }
 
 type appendOnlyValueArena struct {
@@ -604,13 +614,12 @@ func (m *AppendOnly) appendOnlyEntryValue(ent *appendOnlyEntry) []byte {
 	if m == nil || ent == nil {
 		return nil
 	}
-	payloadMeta := ent.payloadIndex
-	payloadIndex := payloadMeta & appendOnlyEntryPayloadIdxMask
+	payloadIndex := ent.payloadIndex
 	if payloadIndex == 0 {
 		return nil
 	}
 	idx := int(payloadIndex - 1)
-	if byte(payloadMeta>>appendOnlyEntryFlagsShift)&node.FlagPointer != 0 {
+	if appendOnlyEntryFlags(ent)&node.FlagPointer != 0 {
 		if idx < 0 || idx >= len(m.ptrPayloads) {
 			return nil
 		}
@@ -626,11 +635,10 @@ func (m *AppendOnly) appendOnlyEntryPtr(ent *appendOnlyEntry) page.ValuePtr {
 	if m == nil || ent == nil {
 		return page.ValuePtr{}
 	}
-	payloadMeta := ent.payloadIndex
-	if byte(payloadMeta>>appendOnlyEntryFlagsShift)&node.FlagPointer == 0 {
+	if appendOnlyEntryFlags(ent)&node.FlagPointer == 0 {
 		return page.ValuePtr{}
 	}
-	payloadIndex := payloadMeta & appendOnlyEntryPayloadIdxMask
+	payloadIndex := ent.payloadIndex
 	if payloadIndex == 0 {
 		return page.ValuePtr{}
 	}
@@ -1034,7 +1042,6 @@ func (m *AppendOnly) appendEntryLocked(key, value []byte, ptr page.ValuePtr, fla
 	ent := &m.entries[idx]
 	ent.keyIndex = 0
 	ent.payloadIndex = 0
-	appendOnlyEntrySetFlags(ent, flags)
 	payloadValue := ""
 	payloadPtr := page.ValuePtr{}
 	if len(key) <= appendOnlyInlineKeyLen {
@@ -1045,6 +1052,7 @@ func (m *AppendOnly) appendEntryLocked(key, value []byte, ptr page.ValuePtr, fla
 	} else {
 		appendOnlyEntrySetKeyIndex(ent, m.appendKeyLocked(appendOnlyArenaStringCopy(&m.valueArena, key)))
 	}
+	appendOnlyEntrySetFlags(ent, flags)
 	if steal {
 		payloadValue = appendOnlyStringFromBytes(value)
 	} else {
@@ -1137,7 +1145,6 @@ func (m *AppendOnly) appendEntryTrustedOrderedLocked(key, value []byte, ptr page
 	ent := &m.entries[idx]
 	ent.keyIndex = 0
 	ent.payloadIndex = 0
-	appendOnlyEntrySetFlags(ent, flags)
 	payloadValue := ""
 	payloadPtr := page.ValuePtr{}
 	if len(key) <= appendOnlyInlineKeyLen {
@@ -1148,6 +1155,7 @@ func (m *AppendOnly) appendEntryTrustedOrderedLocked(key, value []byte, ptr page
 	} else {
 		appendOnlyEntrySetKeyIndex(ent, m.appendKeyLocked(appendOnlyArenaStringCopy(&m.valueArena, key)))
 	}
+	appendOnlyEntrySetFlags(ent, flags)
 	if steal {
 		payloadValue = appendOnlyStringFromBytes(value)
 	} else if len(value) > 0 {
@@ -1849,12 +1857,14 @@ func (m *AppendOnly) resetLockedWithPolicy(capacity, estimatedBytesPerEntry, ent
 		m.keys = m.keys[:0]
 	}
 	if !retainObserved || cap(m.values) > maxRetainedEntries {
+		putAppendOnlyValues(m.values)
 		m.values = nil
 	} else {
 		clear(m.values)
 		m.values = m.values[:0]
 	}
 	if !retainObserved || cap(m.ptrPayloads) > maxRetainedEntries {
+		putAppendOnlyPtrPayloads(m.ptrPayloads)
 		m.ptrPayloads = nil
 	} else {
 		clear(m.ptrPayloads)
@@ -2030,8 +2040,8 @@ func (m *AppendOnly) buildMutableSortedIteratorEntriesLocked() ([]appendOnlyEntr
 		if appendOnlyEntryInlineKeyLen(&active[idx]) != 0 || active[idx].keyIndex&appendOnlyEntryKeyIndexMask != 0 {
 			keyCount++
 		}
-		if active[idx].payloadIndex&appendOnlyEntryPayloadIdxMask != 0 {
-			if byte(active[idx].payloadIndex>>appendOnlyEntryFlagsShift)&node.FlagPointer != 0 {
+		if active[idx].payloadIndex != 0 {
+			if appendOnlyEntryFlags(&active[idx])&node.FlagPointer != 0 {
 				ptrPayloadCount++
 			} else {
 				valueCount++
@@ -2047,18 +2057,20 @@ func (m *AppendOnly) buildMutableSortedIteratorEntriesLocked() ([]appendOnlyEntr
 	for i, idx := range indices {
 		ent := active[idx]
 		if inlineLen := appendOnlyEntryInlineKeyLen(&ent); inlineLen != 0 {
+			flags := appendOnlyEntryFlags(&ent)
 			keys[nextKey] = appendOnlyArenaStringCopy(&m.valueArena, ent.inlineKey[:inlineLen])
 			ent.inlineKey = [appendOnlyInlineKeyLen]byte{}
 			appendOnlyEntrySetInlineKeyLen(&ent, 0)
 			appendOnlyEntrySetKeyIndex(&ent, uint32(nextKey+1))
+			appendOnlyEntrySetFlags(&ent, flags)
 			nextKey++
 		} else if keyIndex := ent.keyIndex & appendOnlyEntryKeyIndexMask; keyIndex != 0 {
 			keys[nextKey] = m.keys[keyIndex-1]
 			appendOnlyEntrySetKeyIndex(&ent, uint32(nextKey+1))
 			nextKey++
 		}
-		if payloadIndex := ent.payloadIndex & appendOnlyEntryPayloadIdxMask; payloadIndex != 0 {
-			if byte(ent.payloadIndex>>appendOnlyEntryFlagsShift)&node.FlagPointer != 0 {
+		if payloadIndex := ent.payloadIndex; payloadIndex != 0 {
+			if appendOnlyEntryFlags(&ent)&node.FlagPointer != 0 {
 				ptrPayloads[nextPtrPayload] = m.ptrPayloads[payloadIndex-1]
 				appendOnlyEntrySetPayloadIndex(&ent, uint32(nextPtrPayload+1))
 				nextPtrPayload++
@@ -2355,14 +2367,14 @@ func (it *appendOnlyIterator) UnsafeValue() []byte {
 	if ent == nil || !it.validIndex() {
 		return nil
 	}
-	flags := byte(ent.payloadIndex >> appendOnlyEntryFlagsShift)
+	flags := appendOnlyEntryFlags(ent)
 	if flags&node.FlagTombstone != 0 {
 		return nil
 	}
 	if it.owner != nil {
 		return it.owner.appendOnlyEntryValue(ent)
 	}
-	idx := int((ent.payloadIndex & appendOnlyEntryPayloadIdxMask) - 1)
+	idx := int(ent.payloadIndex - 1)
 	if idx < 0 {
 		return nil
 	}
@@ -2386,8 +2398,8 @@ func (it *appendOnlyIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
 	if it.owner != nil {
 		return it.owner.appendOnlyEntryValue(ent), it.owner.appendOnlyEntryPtr(ent), appendOnlyEntryFlags(ent)
 	}
-	flags := byte(ent.payloadIndex >> appendOnlyEntryFlagsShift)
-	idx := int((ent.payloadIndex & appendOnlyEntryPayloadIdxMask) - 1)
+	flags := appendOnlyEntryFlags(ent)
+	idx := int(ent.payloadIndex - 1)
 	if idx < 0 {
 		return nil, page.ValuePtr{}, flags
 	}
@@ -2409,7 +2421,7 @@ func (it *appendOnlyIterator) IsDeleted() bool {
 	if ent == nil || !it.validIndex() {
 		return false
 	}
-	return byte(ent.payloadIndex>>appendOnlyEntryFlagsShift)&node.FlagTombstone != 0
+	return appendOnlyEntryFlags(ent)&node.FlagTombstone != 0
 }
 
 func (it *appendOnlyIterator) Key() []byte {

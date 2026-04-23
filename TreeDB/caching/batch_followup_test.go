@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/db"
 )
@@ -189,6 +190,54 @@ func TestBatchWrite_DeleteOnlyEmptyDBNoOp_WALOff(t *testing.T) {
 
 	t.Run("delete", func(t *testing.T) { run(t, false) })
 	t.Run("delete_view", func(t *testing.T) { run(t, true) })
+}
+
+func TestBatchWrite_DeleteOnlyEmptyDBNoOp_LockOrder(t *testing.T) {
+	dir := t.TempDir()
+	backend := NewMockBackend()
+	cache, err := Open(dir, backend, Options{
+		DisableWAL:     true,
+		AllowUnsafe:    true,
+		FlushThreshold: 1 << 20,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer cache.Close()
+
+	b := cache.NewBatch()
+	if err := b.Delete([]byte("missing")); err != nil {
+		_ = b.Close()
+		t.Fatalf("Delete: %v", err)
+	}
+
+	cache.flushMu.Lock()
+	done := make(chan error, 1)
+	go func() {
+		done <- b.Write()
+	}()
+
+	heldWriteMu := false
+	deadline := time.Now().Add(100 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if cache.writeMu.TryLock() {
+			cache.writeMu.Unlock()
+			time.Sleep(time.Millisecond)
+			continue
+		}
+		heldWriteMu = true
+		break
+	}
+	cache.flushMu.Unlock()
+
+	if err := <-done; err != nil {
+		_ = b.Close()
+		t.Fatalf("Write: %v", err)
+	}
+	_ = b.Close()
+	if heldWriteMu {
+		t.Fatalf("delete-only empty DB fast path acquired writeMu before flushMu")
+	}
 }
 
 func TestBatchWrite_DeleteOnlyFastPath_WALOnWritesDeleteOpsOnly(t *testing.T) {

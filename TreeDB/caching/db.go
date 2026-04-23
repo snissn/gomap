@@ -27930,8 +27930,12 @@ func (b *Batch) SetView(key, value []byte) error {
 	return nil
 }
 
-// SetStealView records a Put without copying key/value bytes and permits the
-// DB to retain those slices beyond the batch lifetime.
+// SetStealView records a Put without copying key/value bytes. Unlike SetView,
+// the DB may retain key/value references beyond Write or Close.
+//
+// Callers must treat key/value as transferred and immutable after this call:
+// do not mutate, reuse, or repurpose their backing arrays in any way that
+// could affect stored data.
 func (b *Batch) SetStealView(key, value []byte) error {
 	if b.closed {
 		return ErrBatchClosed
@@ -28270,10 +28274,10 @@ func (b *Batch) trySkipDeleteOnlyWriteOnEmptyDB() (bool, error) {
 	cachedEmpty := b.db.backendRangeKnown
 	b.db.mu.RUnlock()
 
-	b.db.writeMu.Lock()
-	defer b.db.writeMu.Unlock()
 	b.db.flushMu.Lock()
 	defer b.db.flushMu.Unlock()
+	b.db.writeMu.Lock()
+	defer b.db.writeMu.Unlock()
 
 	if b.db.mutableBytes.Load() != 0 {
 		return false, nil

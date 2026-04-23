@@ -35,6 +35,24 @@ func TestAppendOnlyNextCapacityGrowthPolicy(t *testing.T) {
 	}
 }
 
+func TestAppendOnlyEntryPayloadIndexAllowsLargeSideBuffers(t *testing.T) {
+	var ent appendOnlyEntry
+	const payloadIndex = uint32(1<<31 | 12345)
+	const flags = node.FlagPointer | byte(0x40)
+
+	appendOnlyEntrySetPayloadIndex(&ent, payloadIndex)
+	copy(ent.inlineKey[:], []byte("long-key"))
+	appendOnlyEntrySetKeyIndex(&ent, 1)
+	appendOnlyEntrySetFlags(&ent, flags)
+
+	if got := appendOnlyEntryPayloadIndex(&ent); got != payloadIndex {
+		t.Fatalf("payload index=%d want=%d", got, payloadIndex)
+	}
+	if got := appendOnlyEntryFlags(&ent); got != flags {
+		t.Fatalf("flags=%d want=%d", got, flags)
+	}
+}
+
 func TestAppendOnlyInlineGrowthSkipsIntermediateDoublingBelowCutoff(t *testing.T) {
 	mt := &AppendOnly{
 		entries:        make([]appendOnlyEntry, appendOnlyMinInitialEntries),

@@ -383,8 +383,15 @@ func (b *batch) SetView(key, value []byte) error {
 	return b.b.Set(key, value)
 }
 
-// SetStealView records a Put without copying key/value bytes and allows TreeDB
-// to retain those slices beyond the batch lifetime when supported.
+// SetStealView records a Put without copying key/value bytes. Unlike SetView,
+// TreeDB may retain key/value references beyond Commit or Close when the
+// wrapped batch supports that optimization.
+//
+// Callers must treat key/value as transferred and immutable after this call:
+// do not mutate, reuse, or repurpose their backing arrays in any way that
+// could affect stored data. If the wrapped batch lacks SetStealView, this
+// adapter falls back to SetView/Set, but callers must still honor the stronger
+// SetStealView ownership contract.
 func (b *batch) SetStealView(key, value []byte) error {
 	if b.setSteal != nil {
 		return b.setSteal.SetStealView(key, value)
