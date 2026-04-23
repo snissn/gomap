@@ -342,9 +342,8 @@ func TestBatchWrite_SortedBatchRotatesSingleRoutedShard(t *testing.T) {
 			t.Fatalf("Set(%d): %v", i, err)
 		}
 	}
-	origFlushCh := cache.flushCh
-	cache.flushCh = nil
-	defer func() { cache.flushCh = origFlushCh }()
+	cache.flushMu.Lock()
+	defer cache.flushMu.Unlock()
 	if err := b.WriteSync(); err != nil {
 		t.Fatalf("Write: %v", err)
 	}

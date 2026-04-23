@@ -72,8 +72,8 @@ const (
 	appendOnlyEntryInlineLenShift = 28
 	appendOnlyEntryInlineLenMask  = uint32(0xF) << appendOnlyEntryInlineLenShift
 	appendOnlyEntryKeyIndexMask   = ^appendOnlyEntryInlineLenMask
-	appendOnlyEntryFlagsShift     = 30
-	appendOnlyEntryFlagsMask      = uint32(0x3) << appendOnlyEntryFlagsShift
+	appendOnlyEntryFlagsShift     = 24
+	appendOnlyEntryFlagsMask      = uint32(0xFF) << appendOnlyEntryFlagsShift
 	appendOnlyEntryPayloadIdxMask = ^appendOnlyEntryFlagsMask
 )
 
@@ -121,7 +121,7 @@ func appendOnlyEntrySetFlags(ent *appendOnlyEntry, flags byte) {
 		return
 	}
 	ent.payloadIndex = (ent.payloadIndex & appendOnlyEntryPayloadIdxMask) |
-		(uint32(flags&0x3) << appendOnlyEntryFlagsShift)
+		(uint32(flags) << appendOnlyEntryFlagsShift)
 }
 
 func appendOnlyEntryPayloadIndex(ent *appendOnlyEntry) uint32 {

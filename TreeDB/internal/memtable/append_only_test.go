@@ -346,6 +346,60 @@ func TestAppendOnlyIteratorSortedLatest(t *testing.T) {
 	}
 }
 
+func TestAppendOnlySetEntryPreservesExtraFlagBits(t *testing.T) {
+	m := NewAppendOnlyWithCapacity(0)
+	ptr := page.ValuePtr{Offset: 7, Length: 11, FileID: 3}
+	const extra = byte(0x40)
+
+	m.SetEntry([]byte("b-ptr"), []byte("tail"), ptr, node.FlagPointer|extra)
+	m.SetEntrySteal([]byte("a-del"), nil, page.ValuePtr{}, node.FlagTombstone|extra)
+
+	_, gotPtr, flags, ok := m.GetEntry([]byte("b-ptr"))
+	if !ok {
+		t.Fatalf("GetEntry(ptr) missing")
+	}
+	if gotPtr != ptr {
+		t.Fatalf("ptr=%+v want=%+v", gotPtr, ptr)
+	}
+	if flags != node.FlagPointer|extra {
+		t.Fatalf("ptr flags=%#x want=%#x", flags, node.FlagPointer|extra)
+	}
+
+	_, _, flags, ok = m.GetEntry([]byte("a-del"))
+	if !ok {
+		t.Fatalf("GetEntry(del) missing")
+	}
+	if flags != node.FlagTombstone|extra {
+		t.Fatalf("del flags=%#x want=%#x", flags, node.FlagTombstone|extra)
+	}
+
+	it := m.NewIterator(nil, nil)
+	defer func() { _ = it.Close() }()
+	seen := 0
+	for ; it.Valid(); it.Next() {
+		key := string(it.UnsafeKey())
+		_, gotPtr, gotFlags := it.UnsafeEntry()
+		switch key {
+		case "a-del":
+			if gotFlags != node.FlagTombstone|extra {
+				t.Fatalf("iterator del flags=%#x want=%#x", gotFlags, node.FlagTombstone|extra)
+			}
+			seen++
+		case "b-ptr":
+			if gotPtr != ptr {
+				t.Fatalf("iterator ptr=%+v want=%+v", gotPtr, ptr)
+			}
+			if gotFlags != node.FlagPointer|extra {
+				t.Fatalf("iterator ptr flags=%#x want=%#x", gotFlags, node.FlagPointer|extra)
+			}
+			seen++
+		}
+	}
+	if seen != 2 {
+		t.Fatalf("iterator saw %d flagged entries, want 2", seen)
+	}
+}
+
 func TestAppendOnlyResetClearsLatestIndex(t *testing.T) {
 	m := NewAppendOnlyWithCapacity(0)
 	m.Set([]byte("k1"), []byte("v1"))

@@ -3,6 +3,7 @@ package valuelog
 import (
 	"bytes"
 	"encoding/binary"
+	"hash/crc32"
 	"path/filepath"
 
 	"github.com/snissn/gomap/TreeDB/node"
@@ -10,6 +11,8 @@ import (
 )
 
 var compactLeafPagePayloadMagic = [8]byte{0x8a, 'L', 'F', 'P', 'G', 0x01, 0x91, 0x3c}
+var compactLeafPagePayloadCRCTable = crc32.MakeTable(crc32.Castagnoli)
+var compactLeafPagePayloadChecksumZeros [1024]byte
 
 const compactLeafPagePayloadHeaderSize = len(compactLeafPagePayloadMagic) + 4
 const compactLeafPagePayloadDirName = "leaf_vlog"
@@ -39,6 +42,30 @@ func compactLeafPagePayloadLen(prefixLen, suffixLen int) int {
 	return compactLeafPagePayloadHeaderSize + prefixLen + suffixLen
 }
 
+func compactLeafCanonicalChecksum(leafPage []byte, prefixLen, suffixStart, suffixLen int) uint32 {
+	if len(leafPage) < page.PageHeaderSize {
+		return 0
+	}
+	sum := crc32.Update(0, compactLeafPagePayloadCRCTable, leafPage[:8])
+	sum = crc32.Update(sum, compactLeafPagePayloadCRCTable, compactLeafPagePayloadChecksumZeros[:4])
+	if prefixLen > 12 {
+		sum = crc32.Update(sum, compactLeafPagePayloadCRCTable, leafPage[12:prefixLen])
+	}
+	gapLen := page.PageSize - prefixLen - suffixLen
+	for gapLen > 0 {
+		n := len(compactLeafPagePayloadChecksumZeros)
+		if n > gapLen {
+			n = gapLen
+		}
+		sum = crc32.Update(sum, compactLeafPagePayloadCRCTable, compactLeafPagePayloadChecksumZeros[:n])
+		gapLen -= n
+	}
+	if suffixLen > 0 {
+		sum = crc32.Update(sum, compactLeafPagePayloadCRCTable, leafPage[suffixStart:suffixStart+suffixLen])
+	}
+	return sum
+}
+
 // CompactLeafLogPayloadLen reports the payload length that
 // MaybeCompactLeafLogPayload would produce without materializing the payload.
 // When compaction is not beneficial, it returns len(leafPage) and compacted=false.
@@ -59,7 +86,7 @@ func encodeCompactLeafLogPayload(dst, leafPage []byte, prefixLen, suffixStart, s
 	binary.LittleEndian.PutUint16(dst[len(compactLeafPagePayloadMagic)+2:compactLeafPagePayloadHeaderSize], uint16(suffixLen))
 
 	payload := dst[compactLeafPagePayloadHeaderSize:]
-	sum := page.CalculateChecksum(leafPage)
+	sum := compactLeafCanonicalChecksum(leafPage, prefixLen, suffixStart, suffixLen)
 
 	copy(payload[:8], leafPage[:8])
 	binary.LittleEndian.PutUint32(payload[8:12], sum)

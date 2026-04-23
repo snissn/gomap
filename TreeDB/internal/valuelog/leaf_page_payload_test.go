@@ -110,6 +110,40 @@ func TestMaybeCompactLeafLogPayload_SparseLeafRoundTrips(t *testing.T) {
 	requireLeafPagesLogicallyEqual(t, leaf, decoded)
 }
 
+func TestMaybeCompactLeafLogPayload_DirtyFreeGapUsesCanonicalChecksum(t *testing.T) {
+	leaf := buildSparseLeafPageForPayloadTest(t)
+	prefixLen, suffixLen, err := node.LeafPageLiveBounds(leaf)
+	if err != nil {
+		t.Fatalf("LeafPageLiveBounds: %v", err)
+	}
+	suffixStart := len(leaf) - suffixLen
+	if prefixLen >= suffixStart {
+		t.Fatalf("leaf has no free gap: prefix=%d suffixStart=%d", prefixLen, suffixStart)
+	}
+	for i := prefixLen; i < suffixStart; i++ {
+		leaf[i] = byte(0x80 + i%64)
+	}
+
+	payload, compacted, err := MaybeCompactLeafLogPayload(leaf)
+	if err != nil {
+		t.Fatalf("MaybeCompactLeafLogPayload: %v", err)
+	}
+	if !compacted {
+		t.Fatalf("expected sparse leaf page to compact")
+	}
+	decoded, _, decodedFlag, err := decodeCompactLeafLogPayloadTo(payload, nil)
+	if err != nil {
+		t.Fatalf("decodeCompactLeafLogPayloadTo: %v", err)
+	}
+	if !decodedFlag {
+		t.Fatalf("expected compact payload to decode")
+	}
+	if !page.VerifyChecksumNonMutating(decoded) {
+		t.Fatalf("decoded canonical page checksum mismatch")
+	}
+	requireLeafPagesLogicallyEqual(t, leaf, decoded)
+}
+
 func TestDecodeCompactLeafLogPayloadTo_AliasedDstRoundTrips(t *testing.T) {
 	leaf := buildSparseLeafPageForPayloadTest(t)
 

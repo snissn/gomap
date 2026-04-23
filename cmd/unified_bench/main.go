@@ -2825,16 +2825,9 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				if end > total {
 					end = total
 				}
-				if setStealView != nil {
+				if setStealView != nil && precomputeKeys {
 					for j := i; j < end; j++ {
-						var keyView []byte
-						if precomputeKeys {
-							keyView = keyBytes[j*8 : (j+1)*8]
-						} else {
-							var key [8]byte
-							encodeKey(key[:], uint64(j))
-							keyView = key[:]
-						}
+						keyView := keyBytes[j*8 : (j+1)*8]
 						value := values[valPos%len(values)]
 						valPos++
 						if err := setStealView(keyView, value); err != nil {
