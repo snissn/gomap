@@ -245,11 +245,14 @@ func putAppendOnlyEntries(entries []appendOnlyEntry) {
 	appendOnlyEntryPool.Put(full[:0])
 }
 
-func getAppendOnlyKeysFromPool(length int, pool *sync.Pool) []string {
+func getAppendOnlyKeysFromPool(length int, pool *sync.Pool, maxCap int) []string {
 	if length < 0 {
 		length = 0
 	}
-	if length > appendOnlyKeyPoolMaxCap {
+	if maxCap <= 0 {
+		maxCap = appendOnlyKeyPoolMaxCap
+	}
+	if length > maxCap {
 		return make([]string, length)
 	}
 	if pool == nil {
@@ -257,14 +260,16 @@ func getAppendOnlyKeysFromPool(length int, pool *sync.Pool) []string {
 	}
 	if v := pool.Get(); v != nil {
 		if keys, ok := v.([]string); ok && cap(keys) >= length {
-			return keys[:length]
+			out := keys[:length]
+			clear(out)
+			return out
 		}
 	}
 	return make([]string, length)
 }
 
 func getAppendOnlyKeys(length int) []string {
-	return getAppendOnlyKeysFromPool(length, &appendOnlyKeyPool)
+	return getAppendOnlyKeysFromPool(length, &appendOnlyKeyPool, appendOnlyKeyPoolMaxCap)
 }
 
 func putAppendOnlyKeys(keys []string) {
@@ -276,11 +281,14 @@ func putAppendOnlyKeys(keys []string) {
 	appendOnlyKeyPool.Put(full[:0])
 }
 
-func getAppendOnlyValuesFromPool(length int, pool *sync.Pool) []string {
+func getAppendOnlyValuesFromPool(length int, pool *sync.Pool, maxCap int) []string {
 	if length < 0 {
 		length = 0
 	}
-	if length > appendOnlyValuePoolMaxCap {
+	if maxCap <= 0 {
+		maxCap = appendOnlyValuePoolMaxCap
+	}
+	if length > maxCap {
 		return make([]string, length)
 	}
 	if pool == nil {
@@ -288,14 +296,16 @@ func getAppendOnlyValuesFromPool(length int, pool *sync.Pool) []string {
 	}
 	if v := pool.Get(); v != nil {
 		if values, ok := v.([]string); ok && cap(values) >= length {
-			return values[:length]
+			out := values[:length]
+			clear(out)
+			return out
 		}
 	}
 	return make([]string, length)
 }
 
 func getAppendOnlyValues(length int) []string {
-	return getAppendOnlyValuesFromPool(length, &appendOnlyValuePool)
+	return getAppendOnlyValuesFromPool(length, &appendOnlyValuePool, appendOnlyValuePoolMaxCap)
 }
 
 func putAppendOnlyValues(values []string) {
@@ -307,11 +317,14 @@ func putAppendOnlyValues(values []string) {
 	appendOnlyValuePool.Put(full[:0])
 }
 
-func getAppendOnlyPtrPayloadsFromPool(length int, pool *sync.Pool) []appendOnlyPointerPayload {
+func getAppendOnlyPtrPayloadsFromPool(length int, pool *sync.Pool, maxCap int) []appendOnlyPointerPayload {
 	if length < 0 {
 		length = 0
 	}
-	if length > appendOnlyPtrPayloadPoolMaxCap {
+	if maxCap <= 0 {
+		maxCap = appendOnlyPtrPayloadPoolMaxCap
+	}
+	if length > maxCap {
 		return make([]appendOnlyPointerPayload, length)
 	}
 	if pool == nil {
@@ -319,14 +332,16 @@ func getAppendOnlyPtrPayloadsFromPool(length int, pool *sync.Pool) []appendOnlyP
 	}
 	if v := pool.Get(); v != nil {
 		if payloads, ok := v.([]appendOnlyPointerPayload); ok && cap(payloads) >= length {
-			return payloads[:length]
+			out := payloads[:length]
+			clear(out)
+			return out
 		}
 	}
 	return make([]appendOnlyPointerPayload, length)
 }
 
 func getAppendOnlyPtrPayloads(length int) []appendOnlyPointerPayload {
-	return getAppendOnlyPtrPayloadsFromPool(length, &appendOnlyPtrPayloadPool)
+	return getAppendOnlyPtrPayloadsFromPool(length, &appendOnlyPtrPayloadPool, appendOnlyPtrPayloadPoolMaxCap)
 }
 
 func putAppendOnlyPtrPayloads(payloads []appendOnlyPointerPayload) {
@@ -364,7 +379,7 @@ func putAppendOnlyIteratorEntries(entries []appendOnlyEntry) {
 }
 
 func getAppendOnlyIteratorKeys(length int) []string {
-	return getAppendOnlyKeysFromPool(length, &appendOnlyIteratorKeyPool)
+	return getAppendOnlyKeysFromPool(length, &appendOnlyIteratorKeyPool, appendOnlyIteratorKeyPoolMaxCap)
 }
 
 func putAppendOnlyIteratorKeys(keys []string) {
@@ -377,7 +392,7 @@ func putAppendOnlyIteratorKeys(keys []string) {
 }
 
 func getAppendOnlyIteratorValues(length int) []string {
-	return getAppendOnlyValuesFromPool(length, &appendOnlyIteratorValuePool)
+	return getAppendOnlyValuesFromPool(length, &appendOnlyIteratorValuePool, appendOnlyIteratorValuePoolMaxCap)
 }
 
 func putAppendOnlyIteratorValues(values []string) {
@@ -390,7 +405,7 @@ func putAppendOnlyIteratorValues(values []string) {
 }
 
 func getAppendOnlyIteratorPtrPayloads(length int) []appendOnlyPointerPayload {
-	return getAppendOnlyPtrPayloadsFromPool(length, &appendOnlyIteratorPtrPayloadPool)
+	return getAppendOnlyPtrPayloadsFromPool(length, &appendOnlyIteratorPtrPayloadPool, appendOnlyIteratorPtrPayloadPoolMaxCap)
 }
 
 func putAppendOnlyIteratorPtrPayloads(payloads []appendOnlyPointerPayload) {
@@ -484,7 +499,7 @@ func NewAppendOnlyWithCapacityEstimatedEntryBytesAndHint(capacity, estimatedByte
 	baseEntries := appendOnlyInitialEntriesForCapacity(capacity, estimatedBytesPerEntry)
 	growEntries := appendOnlyGrowthEntriesForHint(baseEntries, entryHint)
 	return &AppendOnly{
-		entries:        getAppendOnlyEntries(growEntries),
+		entries:        getAppendOnlyEntries(baseEntries),
 		baseEntriesLen: baseEntries,
 		growEntriesLen: growEntries,
 		count:          0,
@@ -496,6 +511,11 @@ func NewAppendOnlyWithCapacityEstimatedEntryBytesAndHint(capacity, estimatedByte
 	}
 }
 
+// SetPredictiveGrowthHint configures a best-effort growth forecast for future
+// appends. capacityHintBytes is converted to an entry target from the observed
+// average entry size; entryHintSource supplies a shared floor learned from other
+// append-only memtables. observeEntries is called after the memtable mutex is
+// released and must be non-blocking because it can run on the write path.
 func (m *AppendOnly) SetPredictiveGrowthHint(capacityHintBytes int, entryHintSource *atomic.Int32, observeEntries func(int)) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -791,10 +811,7 @@ func appendOnlyNextCapacity(current int) int {
 }
 
 func appendOnlyKeyString(key []byte) string {
-	if len(key) == 0 {
-		return ""
-	}
-	return unsafe.String(&key[0], len(key))
+	return string(key)
 }
 
 func appendOnlyKeyU64(key []byte) (uint64, bool) {
@@ -815,10 +832,37 @@ func entryValueSize(flags byte, valueLen int) int {
 }
 
 func appendOnlyShouldPredictHint(count int) bool {
-	return count >= appendOnlyPredictHintMinEntries && bits.OnesCount(uint(count)) == 1
+	return count >= appendOnlyPredictHintMinEntries && count&(count-1) == 0
 }
 
-func (m *AppendOnly) maybeRaisePredictedGrowthHintLocked() {
+type appendOnlyObserveEvent struct {
+	entries int
+	observe func(int)
+}
+
+func (e *appendOnlyObserveEvent) record(observe func(int), entries int) {
+	if observe == nil || entries <= 0 {
+		return
+	}
+	if e.observe == nil {
+		e.observe = observe
+	}
+	if entries > e.entries {
+		e.entries = entries
+	}
+}
+
+func (e *appendOnlyObserveEvent) recordEvent(other appendOnlyObserveEvent) {
+	e.record(other.observe, other.entries)
+}
+
+func (e appendOnlyObserveEvent) emit() {
+	if e.observe != nil && e.entries > 0 {
+		e.observe(e.entries)
+	}
+}
+
+func (m *AppendOnly) maybeRaisePredictedGrowthHintLocked(event *appendOnlyObserveEvent) {
 	if m.predictCapacityHintBytes <= 0 || m.count <= 0 || m.sizeBytes <= 0 {
 		return
 	}
@@ -831,9 +875,7 @@ func (m *AppendOnly) maybeRaisePredictedGrowthHintLocked() {
 		return
 	}
 	m.growEntriesLen = predictedEntries
-	if observe := m.observeEntries; observe != nil {
-		observe(predictedEntries)
-	}
+	event.record(m.observeEntries, predictedEntries)
 }
 
 func (m *AppendOnly) clearSnapshotLocked() {
@@ -932,7 +974,8 @@ func (m *AppendOnly) updateLatestIndexLocked(key []byte, idx int) {
 	m.latest[appendOnlyKeyString(key)] = idx
 }
 
-func (m *AppendOnly) appendEntryLocked(key, value []byte, ptr page.ValuePtr, flags byte, steal bool, borrowValue bool) {
+func (m *AppendOnly) appendEntryLocked(key, value []byte, ptr page.ValuePtr, flags byte, steal bool, borrowValue bool) appendOnlyObserveEvent {
+	var observeEvent appendOnlyObserveEvent
 	if m.count == len(m.entries) {
 		if m.predictEntryHintSource != nil {
 			if shared := appendOnlyClampRetainedEntries(int(m.predictEntryHintSource.Load())); shared > m.growEntriesLen {
@@ -948,9 +991,7 @@ func (m *AppendOnly) appendEntryLocked(key, value []byte, ptr page.ValuePtr, fla
 		copy(grown, m.entries[:m.count])
 		m.entries = grown
 		putAppendOnlyEntries(prev)
-		if observe := m.observeEntries; observe != nil {
-			observe(nextCap)
-		}
+		observeEvent.record(m.observeEntries, nextCap)
 	}
 	idx := m.count
 	m.count++
@@ -995,32 +1036,33 @@ func (m *AppendOnly) appendEntryLocked(key, value []byte, ptr page.ValuePtr, fla
 	k := m.appendOnlyEntryKey(ent)
 	m.sizeBytes += int64(len(k) + entryValueSize(flags, len(payloadValue)))
 	if appendOnlyShouldPredictHint(m.count) {
-		m.maybeRaisePredictedGrowthHintLocked()
+		m.maybeRaisePredictedGrowthHintLocked(&observeEvent)
 	}
 
 	if !m.hasLast {
 		m.lastIdx = idx
 		m.hasLast = true
-		return
+		return observeEvent
 	}
 	if m.ordered {
 		prev := m.appendOnlyEntryKey(&m.entries[m.lastIdx])
 		cmp := bytes.Compare(k, prev)
 		if cmp > 0 {
 			m.lastIdx = idx
-			return
+			return observeEvent
 		}
 		m.ordered = false
 		// Keep the write path purely append-only. The latest-key index is only
 		// materialized if a read or iterator needs the unordered view.
 		m.latestDirty = true
 		m.clearSnapshotLocked()
-		return
+		return observeEvent
 	}
 	if !m.latestDirty {
 		m.updateLatestIndexLocked(k, idx)
 	}
 	m.clearSnapshotLocked()
+	return observeEvent
 }
 
 func (m *AppendOnly) canAppendTrustedOrderedBatchLocked(firstKey []byte) bool {
@@ -1033,7 +1075,8 @@ func (m *AppendOnly) canAppendTrustedOrderedBatchLocked(firstKey []byte) bool {
 	return bytes.Compare(firstKey, m.appendOnlyEntryKey(&m.entries[m.lastIdx])) > 0
 }
 
-func (m *AppendOnly) appendEntryTrustedOrderedLocked(key, value []byte, ptr page.ValuePtr, flags byte, steal bool, borrowValue bool) {
+func (m *AppendOnly) appendEntryTrustedOrderedLocked(key, value []byte, ptr page.ValuePtr, flags byte, steal bool, borrowValue bool) appendOnlyObserveEvent {
+	var observeEvent appendOnlyObserveEvent
 	if m.count == len(m.entries) {
 		if m.predictEntryHintSource != nil {
 			if shared := appendOnlyClampRetainedEntries(int(m.predictEntryHintSource.Load())); shared > m.growEntriesLen {
@@ -1049,9 +1092,7 @@ func (m *AppendOnly) appendEntryTrustedOrderedLocked(key, value []byte, ptr page
 		copy(grown, m.entries[:m.count])
 		m.entries = grown
 		putAppendOnlyEntries(prev)
-		if observe := m.observeEntries; observe != nil {
-			observe(nextCap)
-		}
+		observeEvent.record(m.observeEntries, nextCap)
 	}
 	idx := m.count
 	m.count++
@@ -1093,10 +1134,11 @@ func (m *AppendOnly) appendEntryTrustedOrderedLocked(key, value []byte, ptr page
 	}
 	m.sizeBytes += int64(len(key) + entryValueSize(flags, len(payloadValue)))
 	if appendOnlyShouldPredictHint(m.count) {
-		m.maybeRaisePredictedGrowthHintLocked()
+		m.maybeRaisePredictedGrowthHintLocked(&observeEvent)
 	}
 	m.lastIdx = idx
 	m.hasLast = true
+	return observeEvent
 }
 
 func (m *AppendOnly) appendValueLocked(value string) uint32 {
@@ -1157,20 +1199,23 @@ func (m *AppendOnly) SetSteal(key, value []byte) {
 
 func (m *AppendOnly) SetEntry(key, value []byte, ptr page.ValuePtr, flags byte) {
 	m.mu.Lock()
-	m.appendEntryLocked(key, value, ptr, flags, false, false)
+	observeEvent := m.appendEntryLocked(key, value, ptr, flags, false, false)
 	m.mu.Unlock()
+	observeEvent.emit()
 }
 
 func (m *AppendOnly) SetEntrySteal(key, value []byte, ptr page.ValuePtr, flags byte) {
 	m.mu.Lock()
-	m.appendEntryLocked(key, value, ptr, flags, true, false)
+	observeEvent := m.appendEntryLocked(key, value, ptr, flags, true, false)
 	m.mu.Unlock()
+	observeEvent.emit()
 }
 
 func (m *AppendOnly) SetEntryBorrowValue(key, value []byte, ptr page.ValuePtr, flags byte) {
 	m.mu.Lock()
-	m.appendEntryLocked(key, value, ptr, flags, false, true)
+	observeEvent := m.appendEntryLocked(key, value, ptr, flags, false, true)
 	m.mu.Unlock()
+	observeEvent.emit()
 }
 
 func (m *AppendOnly) Delete(key []byte) {
@@ -1190,8 +1235,9 @@ func (m *AppendOnly) PutWithCallback(key, value []byte, cb func(k, v []byte) err
 		}
 	}
 	m.mu.Lock()
-	m.appendEntryLocked(k, v, page.ValuePtr{}, node.FlagInline, true, false)
+	observeEvent := m.appendEntryLocked(k, v, page.ValuePtr{}, node.FlagInline, true, false)
 	m.mu.Unlock()
+	observeEvent.emit()
 	return nil
 }
 
@@ -1203,8 +1249,9 @@ func (m *AppendOnly) DeleteWithCallback(key []byte, cb func(k, v []byte) error) 
 		}
 	}
 	m.mu.Lock()
-	m.appendEntryLocked(k, nil, page.ValuePtr{}, node.FlagTombstone, true, false)
+	observeEvent := m.appendEntryLocked(k, nil, page.ValuePtr{}, node.FlagTombstone, true, false)
 	m.mu.Unlock()
+	observeEvent.emit()
 	return nil
 }
 
@@ -1234,250 +1281,270 @@ func (m *AppendOnly) ApplyBorrowValueSortedBatchIndicesTrusted(entries []batchpk
 
 func (m *AppendOnly) applyStealBatch(entries []batchpkg.Entry, onKey func(key []byte)) {
 	m.mu.Lock()
+	var observeEvent appendOnlyObserveEvent
 	for i := range entries {
 		op := entries[i]
 		switch {
 		case op.Type == batchpkg.OpDelete:
-			m.appendEntryLocked(op.Key, nil, page.ValuePtr{}, node.FlagTombstone, true, false)
+			observeEvent.recordEvent(m.appendEntryLocked(op.Key, nil, page.ValuePtr{}, node.FlagTombstone, true, false))
 		case op.IsPtr:
-			m.appendEntryLocked(op.Key, op.Value, op.ValuePtr, node.FlagPointer, true, false)
+			observeEvent.recordEvent(m.appendEntryLocked(op.Key, op.Value, op.ValuePtr, node.FlagPointer, true, false))
 		default:
-			m.appendEntryLocked(op.Key, op.Value, page.ValuePtr{}, node.FlagInline, true, false)
+			observeEvent.recordEvent(m.appendEntryLocked(op.Key, op.Value, page.ValuePtr{}, node.FlagInline, true, false))
 		}
 		if onKey != nil {
 			onKey(op.Key)
 		}
 	}
 	m.mu.Unlock()
+	observeEvent.emit()
 }
 
 func (m *AppendOnly) applyStealBatchTrusted(entries []batchpkg.Entry, onKey func(key []byte)) {
 	m.mu.Lock()
+	var observeEvent appendOnlyObserveEvent
 	if len(entries) > 0 && m.canAppendTrustedOrderedBatchLocked(entries[0].Key) {
 		for i := range entries {
 			op := entries[i]
 			switch {
 			case op.Type == batchpkg.OpDelete:
-				m.appendEntryTrustedOrderedLocked(op.Key, nil, page.ValuePtr{}, node.FlagTombstone, true, false)
+				observeEvent.recordEvent(m.appendEntryTrustedOrderedLocked(op.Key, nil, page.ValuePtr{}, node.FlagTombstone, true, false))
 			case op.IsPtr:
-				m.appendEntryTrustedOrderedLocked(op.Key, op.Value, op.ValuePtr, node.FlagPointer, true, false)
+				observeEvent.recordEvent(m.appendEntryTrustedOrderedLocked(op.Key, op.Value, op.ValuePtr, node.FlagPointer, true, false))
 			default:
-				m.appendEntryTrustedOrderedLocked(op.Key, op.Value, page.ValuePtr{}, node.FlagInline, true, false)
+				observeEvent.recordEvent(m.appendEntryTrustedOrderedLocked(op.Key, op.Value, page.ValuePtr{}, node.FlagInline, true, false))
 			}
 			if onKey != nil {
 				onKey(op.Key)
 			}
 		}
 		m.mu.Unlock()
+		observeEvent.emit()
 		return
 	}
 	for i := range entries {
 		op := entries[i]
 		switch {
 		case op.Type == batchpkg.OpDelete:
-			m.appendEntryLocked(op.Key, nil, page.ValuePtr{}, node.FlagTombstone, true, false)
+			observeEvent.recordEvent(m.appendEntryLocked(op.Key, nil, page.ValuePtr{}, node.FlagTombstone, true, false))
 		case op.IsPtr:
-			m.appendEntryLocked(op.Key, op.Value, op.ValuePtr, node.FlagPointer, true, false)
+			observeEvent.recordEvent(m.appendEntryLocked(op.Key, op.Value, op.ValuePtr, node.FlagPointer, true, false))
 		default:
-			m.appendEntryLocked(op.Key, op.Value, page.ValuePtr{}, node.FlagInline, true, false)
+			observeEvent.recordEvent(m.appendEntryLocked(op.Key, op.Value, page.ValuePtr{}, node.FlagInline, true, false))
 		}
 		if onKey != nil {
 			onKey(op.Key)
 		}
 	}
 	m.mu.Unlock()
+	observeEvent.emit()
 }
 
 func (m *AppendOnly) applyStealBatchIndices(entries []batchpkg.Entry, idxs []int, onKey func(key []byte)) {
 	m.mu.Lock()
+	var observeEvent appendOnlyObserveEvent
 	for _, idx := range idxs {
 		op := entries[idx]
 		switch {
 		case op.Type == batchpkg.OpDelete:
-			m.appendEntryLocked(op.Key, nil, page.ValuePtr{}, node.FlagTombstone, true, false)
+			observeEvent.recordEvent(m.appendEntryLocked(op.Key, nil, page.ValuePtr{}, node.FlagTombstone, true, false))
 		case op.IsPtr:
-			m.appendEntryLocked(op.Key, op.Value, op.ValuePtr, node.FlagPointer, true, false)
+			observeEvent.recordEvent(m.appendEntryLocked(op.Key, op.Value, op.ValuePtr, node.FlagPointer, true, false))
 		default:
-			m.appendEntryLocked(op.Key, op.Value, page.ValuePtr{}, node.FlagInline, true, false)
+			observeEvent.recordEvent(m.appendEntryLocked(op.Key, op.Value, page.ValuePtr{}, node.FlagInline, true, false))
 		}
 		if onKey != nil {
 			onKey(op.Key)
 		}
 	}
 	m.mu.Unlock()
+	observeEvent.emit()
 }
 
 func (m *AppendOnly) applyStealBatchIndicesTrusted(entries []batchpkg.Entry, idxs []int, onKey func(key []byte)) {
 	m.mu.Lock()
+	var observeEvent appendOnlyObserveEvent
 	if len(idxs) > 0 && m.canAppendTrustedOrderedBatchLocked(entries[idxs[0]].Key) {
 		for _, idx := range idxs {
 			op := entries[idx]
 			switch {
 			case op.Type == batchpkg.OpDelete:
-				m.appendEntryTrustedOrderedLocked(op.Key, nil, page.ValuePtr{}, node.FlagTombstone, true, false)
+				observeEvent.recordEvent(m.appendEntryTrustedOrderedLocked(op.Key, nil, page.ValuePtr{}, node.FlagTombstone, true, false))
 			case op.IsPtr:
-				m.appendEntryTrustedOrderedLocked(op.Key, op.Value, op.ValuePtr, node.FlagPointer, true, false)
+				observeEvent.recordEvent(m.appendEntryTrustedOrderedLocked(op.Key, op.Value, op.ValuePtr, node.FlagPointer, true, false))
 			default:
-				m.appendEntryTrustedOrderedLocked(op.Key, op.Value, page.ValuePtr{}, node.FlagInline, true, false)
+				observeEvent.recordEvent(m.appendEntryTrustedOrderedLocked(op.Key, op.Value, page.ValuePtr{}, node.FlagInline, true, false))
 			}
 			if onKey != nil {
 				onKey(op.Key)
 			}
 		}
 		m.mu.Unlock()
+		observeEvent.emit()
 		return
 	}
 	for _, idx := range idxs {
 		op := entries[idx]
 		switch {
 		case op.Type == batchpkg.OpDelete:
-			m.appendEntryLocked(op.Key, nil, page.ValuePtr{}, node.FlagTombstone, true, false)
+			observeEvent.recordEvent(m.appendEntryLocked(op.Key, nil, page.ValuePtr{}, node.FlagTombstone, true, false))
 		case op.IsPtr:
-			m.appendEntryLocked(op.Key, op.Value, op.ValuePtr, node.FlagPointer, true, false)
+			observeEvent.recordEvent(m.appendEntryLocked(op.Key, op.Value, op.ValuePtr, node.FlagPointer, true, false))
 		default:
-			m.appendEntryLocked(op.Key, op.Value, page.ValuePtr{}, node.FlagInline, true, false)
+			observeEvent.recordEvent(m.appendEntryLocked(op.Key, op.Value, page.ValuePtr{}, node.FlagInline, true, false))
 		}
 		if onKey != nil {
 			onKey(op.Key)
 		}
 	}
 	m.mu.Unlock()
+	observeEvent.emit()
 }
 
 func (m *AppendOnly) applyBorrowValueBatch(entries []batchpkg.Entry, storeInlinePtrValues bool, onKey func(key []byte)) {
 	m.mu.Lock()
+	var observeEvent appendOnlyObserveEvent
 	for i := range entries {
 		op := entries[i]
 		switch {
 		case op.Type == batchpkg.OpDelete:
-			m.appendEntryLocked(op.Key, nil, page.ValuePtr{}, node.FlagTombstone, false, false)
+			observeEvent.recordEvent(m.appendEntryLocked(op.Key, nil, page.ValuePtr{}, node.FlagTombstone, false, false))
 		case op.IsPtr:
 			memVal := []byte(nil)
 			if storeInlinePtrValues {
 				memVal = op.Value
 			}
-			m.appendEntryLocked(op.Key, memVal, op.ValuePtr, node.FlagPointer, false, len(memVal) > 0)
+			observeEvent.recordEvent(m.appendEntryLocked(op.Key, memVal, op.ValuePtr, node.FlagPointer, false, len(memVal) > 0))
 		default:
-			m.appendEntryLocked(op.Key, op.Value, page.ValuePtr{}, node.FlagInline, false, len(op.Value) > 0)
+			observeEvent.recordEvent(m.appendEntryLocked(op.Key, op.Value, page.ValuePtr{}, node.FlagInline, false, len(op.Value) > 0))
 		}
 		if onKey != nil {
 			onKey(op.Key)
 		}
 	}
 	m.mu.Unlock()
+	observeEvent.emit()
 }
 
 func (m *AppendOnly) applyBorrowValueBatchTrusted(entries []batchpkg.Entry, storeInlinePtrValues bool, onKey func(key []byte)) {
 	m.mu.Lock()
+	var observeEvent appendOnlyObserveEvent
 	if len(entries) > 0 && m.canAppendTrustedOrderedBatchLocked(entries[0].Key) {
 		for i := range entries {
 			op := entries[i]
 			switch {
 			case op.Type == batchpkg.OpDelete:
-				m.appendEntryTrustedOrderedLocked(op.Key, nil, page.ValuePtr{}, node.FlagTombstone, false, false)
+				observeEvent.recordEvent(m.appendEntryTrustedOrderedLocked(op.Key, nil, page.ValuePtr{}, node.FlagTombstone, false, false))
 			case op.IsPtr:
 				memVal := []byte(nil)
 				if storeInlinePtrValues {
 					memVal = op.Value
 				}
-				m.appendEntryTrustedOrderedLocked(op.Key, memVal, op.ValuePtr, node.FlagPointer, false, len(memVal) > 0)
+				observeEvent.recordEvent(m.appendEntryTrustedOrderedLocked(op.Key, memVal, op.ValuePtr, node.FlagPointer, false, len(memVal) > 0))
 			default:
-				m.appendEntryTrustedOrderedLocked(op.Key, op.Value, page.ValuePtr{}, node.FlagInline, false, len(op.Value) > 0)
+				observeEvent.recordEvent(m.appendEntryTrustedOrderedLocked(op.Key, op.Value, page.ValuePtr{}, node.FlagInline, false, len(op.Value) > 0))
 			}
 			if onKey != nil {
 				onKey(op.Key)
 			}
 		}
 		m.mu.Unlock()
+		observeEvent.emit()
 		return
 	}
 	for i := range entries {
 		op := entries[i]
 		switch {
 		case op.Type == batchpkg.OpDelete:
-			m.appendEntryLocked(op.Key, nil, page.ValuePtr{}, node.FlagTombstone, false, false)
+			observeEvent.recordEvent(m.appendEntryLocked(op.Key, nil, page.ValuePtr{}, node.FlagTombstone, false, false))
 		case op.IsPtr:
 			memVal := []byte(nil)
 			if storeInlinePtrValues {
 				memVal = op.Value
 			}
-			m.appendEntryLocked(op.Key, memVal, op.ValuePtr, node.FlagPointer, false, len(memVal) > 0)
+			observeEvent.recordEvent(m.appendEntryLocked(op.Key, memVal, op.ValuePtr, node.FlagPointer, false, len(memVal) > 0))
 		default:
-			m.appendEntryLocked(op.Key, op.Value, page.ValuePtr{}, node.FlagInline, false, len(op.Value) > 0)
+			observeEvent.recordEvent(m.appendEntryLocked(op.Key, op.Value, page.ValuePtr{}, node.FlagInline, false, len(op.Value) > 0))
 		}
 		if onKey != nil {
 			onKey(op.Key)
 		}
 	}
 	m.mu.Unlock()
+	observeEvent.emit()
 }
 
 func (m *AppendOnly) applyBorrowValueBatchIndices(entries []batchpkg.Entry, idxs []int, storeInlinePtrValues bool, onKey func(key []byte)) {
 	m.mu.Lock()
+	var observeEvent appendOnlyObserveEvent
 	for _, idx := range idxs {
 		op := entries[idx]
 		switch {
 		case op.Type == batchpkg.OpDelete:
-			m.appendEntryLocked(op.Key, nil, page.ValuePtr{}, node.FlagTombstone, false, false)
+			observeEvent.recordEvent(m.appendEntryLocked(op.Key, nil, page.ValuePtr{}, node.FlagTombstone, false, false))
 		case op.IsPtr:
 			memVal := []byte(nil)
 			if storeInlinePtrValues {
 				memVal = op.Value
 			}
-			m.appendEntryLocked(op.Key, memVal, op.ValuePtr, node.FlagPointer, false, len(memVal) > 0)
+			observeEvent.recordEvent(m.appendEntryLocked(op.Key, memVal, op.ValuePtr, node.FlagPointer, false, len(memVal) > 0))
 		default:
-			m.appendEntryLocked(op.Key, op.Value, page.ValuePtr{}, node.FlagInline, false, len(op.Value) > 0)
+			observeEvent.recordEvent(m.appendEntryLocked(op.Key, op.Value, page.ValuePtr{}, node.FlagInline, false, len(op.Value) > 0))
 		}
 		if onKey != nil {
 			onKey(op.Key)
 		}
 	}
 	m.mu.Unlock()
+	observeEvent.emit()
 }
 
 func (m *AppendOnly) applyBorrowValueBatchIndicesTrusted(entries []batchpkg.Entry, idxs []int, storeInlinePtrValues bool, onKey func(key []byte)) {
 	m.mu.Lock()
+	var observeEvent appendOnlyObserveEvent
 	if len(idxs) > 0 && m.canAppendTrustedOrderedBatchLocked(entries[idxs[0]].Key) {
 		for _, idx := range idxs {
 			op := entries[idx]
 			switch {
 			case op.Type == batchpkg.OpDelete:
-				m.appendEntryTrustedOrderedLocked(op.Key, nil, page.ValuePtr{}, node.FlagTombstone, false, false)
+				observeEvent.recordEvent(m.appendEntryTrustedOrderedLocked(op.Key, nil, page.ValuePtr{}, node.FlagTombstone, false, false))
 			case op.IsPtr:
 				memVal := []byte(nil)
 				if storeInlinePtrValues {
 					memVal = op.Value
 				}
-				m.appendEntryTrustedOrderedLocked(op.Key, memVal, op.ValuePtr, node.FlagPointer, false, len(memVal) > 0)
+				observeEvent.recordEvent(m.appendEntryTrustedOrderedLocked(op.Key, memVal, op.ValuePtr, node.FlagPointer, false, len(memVal) > 0))
 			default:
-				m.appendEntryTrustedOrderedLocked(op.Key, op.Value, page.ValuePtr{}, node.FlagInline, false, len(op.Value) > 0)
+				observeEvent.recordEvent(m.appendEntryTrustedOrderedLocked(op.Key, op.Value, page.ValuePtr{}, node.FlagInline, false, len(op.Value) > 0))
 			}
 			if onKey != nil {
 				onKey(op.Key)
 			}
 		}
 		m.mu.Unlock()
+		observeEvent.emit()
 		return
 	}
 	for _, idx := range idxs {
 		op := entries[idx]
 		switch {
 		case op.Type == batchpkg.OpDelete:
-			m.appendEntryLocked(op.Key, nil, page.ValuePtr{}, node.FlagTombstone, false, false)
+			observeEvent.recordEvent(m.appendEntryLocked(op.Key, nil, page.ValuePtr{}, node.FlagTombstone, false, false))
 		case op.IsPtr:
 			memVal := []byte(nil)
 			if storeInlinePtrValues {
 				memVal = op.Value
 			}
-			m.appendEntryLocked(op.Key, memVal, op.ValuePtr, node.FlagPointer, false, len(memVal) > 0)
+			observeEvent.recordEvent(m.appendEntryLocked(op.Key, memVal, op.ValuePtr, node.FlagPointer, false, len(memVal) > 0))
 		default:
-			m.appendEntryLocked(op.Key, op.Value, page.ValuePtr{}, node.FlagInline, false, len(op.Value) > 0)
+			observeEvent.recordEvent(m.appendEntryLocked(op.Key, op.Value, page.ValuePtr{}, node.FlagInline, false, len(op.Value) > 0))
 		}
 		if onKey != nil {
 			onKey(op.Key)
 		}
 	}
 	m.mu.Unlock()
+	observeEvent.emit()
 }
 
 func (m *AppendOnly) orderedLookupEntryLocked(key []byte) *appendOnlyEntry {
@@ -1738,8 +1805,13 @@ func (m *AppendOnly) resetLockedWithPolicy(capacity, estimatedBytesPerEntry, ent
 	for i := 0; i < m.count; i++ {
 		m.entries[i] = appendOnlyEntry{}
 	}
-	clear(m.keys)
-	m.keys = m.keys[:0]
+	if !retainObserved || cap(m.keys) > maxRetainedEntries {
+		putAppendOnlyKeys(m.keys)
+		m.keys = nil
+	} else {
+		clear(m.keys)
+		m.keys = m.keys[:0]
+	}
 	clear(m.values)
 	m.values = m.values[:0]
 	clear(m.ptrPayloads)
@@ -1777,10 +1849,6 @@ func (m *AppendOnly) resetLockedWithPolicy(capacity, estimatedBytesPerEntry, ent
 	m.frozen = false
 	m.hasLast = false
 	m.lastIdx = -1
-	m.predictCapacityHintBytes = 0
-	m.predictEntryHintSource = nil
-	m.observeEntries = nil
-
 	// If the entry slice grew far beyond the configured baseline, shrink it.
 	// This avoids permanently ratcheting heap high-water when a workload briefly
 	// spikes in write volume (common during state-sync restore), while still
@@ -1800,6 +1868,9 @@ func (m *AppendOnly) resetLockedWithPolicy(capacity, estimatedBytesPerEntry, ent
 		}
 	}
 	maxRetainedValues := maxRetainedEntries
+	if !retainObserved {
+		maxRetainedValues = 0
+	}
 	retainedValues := 0
 	if retainObserved && oldValueCount > 0 {
 		retainedValues = oldValueCount
@@ -1814,6 +1885,9 @@ func (m *AppendOnly) resetLockedWithPolicy(capacity, estimatedBytesPerEntry, ent
 	}
 
 	maxRetainedPtrPayloads := maxRetainedEntries
+	if !retainObserved {
+		maxRetainedPtrPayloads = 0
+	}
 	retainedPtrPayloads := 0
 	if retainObserved && oldPtrPayloadCount > 0 {
 		retainedPtrPayloads = oldPtrPayloadCount
@@ -1845,6 +1919,11 @@ func (m *AppendOnly) replaceValuesSlice(length int) {
 		length = 0
 	}
 	prev := m.values
+	if length == 0 {
+		m.values = nil
+		putAppendOnlyValues(prev)
+		return
+	}
 	m.values = getAppendOnlyValues(length)
 	m.values = m.values[:0]
 	putAppendOnlyValues(prev)
@@ -1855,6 +1934,11 @@ func (m *AppendOnly) replacePtrPayloadsSlice(length int) {
 		length = 0
 	}
 	prev := m.ptrPayloads
+	if length == 0 {
+		m.ptrPayloads = nil
+		putAppendOnlyPtrPayloads(prev)
+		return
+	}
 	m.ptrPayloads = getAppendOnlyPtrPayloads(length)
 	m.ptrPayloads = m.ptrPayloads[:0]
 	putAppendOnlyPtrPayloads(prev)

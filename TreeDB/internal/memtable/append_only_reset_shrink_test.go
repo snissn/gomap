@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -37,6 +38,45 @@ func TestAppendOnlyResetWithCapacity_ShrinksEntriesAfterSpike(t *testing.T) {
 	}
 	if mt.count != 0 {
 		t.Fatalf("expected count=0 after reset, got %d", mt.count)
+	}
+}
+
+func TestAppendOnlyResetWithCapacityHardDropsSideBuffers(t *testing.T) {
+	const (
+		capacityBytes          = 4 << 10
+		estimatedBytesPerEntry = 96
+	)
+
+	mt := NewAppendOnlyWithCapacityEstimatedEntryBytes(capacityBytes, estimatedBytesPerEntry)
+	for i := 0; i < appendOnlyResetDropThresholdEntries; i++ {
+		key := []byte(fmt.Sprintf("long-key-%08d", i))
+		mt.SetEntrySteal(key, []byte("value"), page.ValuePtr{}, node.FlagInline)
+	}
+	mt.SetEntrySteal(
+		[]byte("long-key-pointer"),
+		[]byte("pointer-value"),
+		page.ValuePtr{Offset: 1, Length: 2, FileID: 3},
+		node.FlagPointer,
+	)
+	if cap(mt.keys) == 0 {
+		t.Fatalf("test did not populate key side buffer")
+	}
+	if cap(mt.values) == 0 {
+		t.Fatalf("test did not populate value side buffer")
+	}
+	if cap(mt.ptrPayloads) == 0 {
+		t.Fatalf("test did not populate pointer payload side buffer")
+	}
+
+	mt.ResetWithCapacityHard(capacityBytes, estimatedBytesPerEntry)
+	if got := cap(mt.keys); got != 0 {
+		t.Fatalf("cap(keys) after hard reset=%d want=0", got)
+	}
+	if got := cap(mt.values); got != 0 {
+		t.Fatalf("cap(values) after hard reset=%d want=0", got)
+	}
+	if got := cap(mt.ptrPayloads); got != 0 {
+		t.Fatalf("cap(ptrPayloads) after hard reset=%d want=0", got)
 	}
 }
 
@@ -80,7 +120,7 @@ func TestAppendOnlyResetWithCapacity_RetainsObservedEntriesWithinBound(t *testin
 	}
 }
 
-func TestAppendOnlyNewWithCapacityAndEntryHint_PreallocatesHintedEntries(t *testing.T) {
+func TestAppendOnlyNewWithCapacityAndEntryHint_DefersHintGrowthUntilAppend(t *testing.T) {
 	const (
 		capacityBytes          = 4 << 10
 		estimatedBytesPerEntry = 96
@@ -89,20 +129,22 @@ func TestAppendOnlyNewWithCapacityAndEntryHint_PreallocatesHintedEntries(t *test
 	base := appendOnlyInitialEntriesForCapacity(capacityBytes, estimatedBytesPerEntry)
 	entryHint := base * 16
 	mt := NewAppendOnlyWithCapacityEstimatedEntryBytesAndHint(capacityBytes, estimatedBytesPerEntry, entryHint)
-	if got := len(mt.entries); got < entryHint {
-		t.Fatalf("initial len(entries)=%d want>=%d", got, entryHint)
+	if got := len(mt.entries); got != base {
+		t.Fatalf("initial len(entries)=%d want=%d", got, base)
 	}
-	if got := cap(mt.entries); got < entryHint {
-		t.Fatalf("initial cap(entries)=%d want>=%d", got, entryHint)
+	if got := cap(mt.entries); got != base {
+		t.Fatalf("initial cap(entries)=%d want=%d", got, base)
+	}
+	if got := mt.growEntriesLen; got < entryHint {
+		t.Fatalf("growEntriesLen=%d want >=%d", got, entryHint)
 	}
 
-	capBefore := cap(mt.entries)
-	for i := 0; i < entryHint; i++ {
+	for i := 0; i <= base; i++ {
 		key := []byte(fmt.Sprintf("h%08d", i))
 		mt.SetEntrySteal(key, nil, page.ValuePtr{}, node.FlagTombstone)
 	}
-	if got := cap(mt.entries); got != capBefore {
-		t.Fatalf("hinted constructor regrew entries: cap(entries)=%d want=%d", got, capBefore)
+	if got := cap(mt.entries); got < entryHint {
+		t.Fatalf("cap(entries) after first growth=%d want >=%d", got, entryHint)
 	}
 }
 
@@ -182,6 +224,39 @@ func TestAppendOnlyPredictiveGrowthHintRaisesFutureGrowEntriesLen(t *testing.T) 
 	}
 	if got := cap(mt.entries); got != base {
 		t.Fatalf("predictive hint should not allocate immediately: cap(entries)=%d want=%d", got, base)
+	}
+}
+
+func TestAppendOnlyPredictiveGrowthHintSurvivesResetAndObservesAfterUnlock(t *testing.T) {
+	const capacityBytes = 128 << 10
+
+	mt := NewAppendOnlyWithCapacityEstimatedEntryBytes(capacityBytes, appendOnlyEstimatedBytesPerEntryPointer)
+	var observed atomic.Int32
+	mt.SetPredictiveGrowthHint(capacityBytes, nil, func(entries int) {
+		if mt.Len() == 0 {
+			return
+		}
+		observed.Store(int32(entries))
+	})
+	mt.Reset()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		limit := cap(mt.entries) + 1
+		for i := 0; i < limit; i++ {
+			key := []byte(fmt.Sprintf("u%08d", i))
+			mt.SetEntrySteal(key, nil, page.ValuePtr{}, node.FlagTombstone)
+		}
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("predictive observer appears to run while append-only lock is held")
+	}
+	if got := observed.Load(); got == 0 {
+		t.Fatalf("expected predictive observer after reset")
 	}
 }
 

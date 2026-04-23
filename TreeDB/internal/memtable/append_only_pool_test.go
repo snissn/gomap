@@ -72,6 +72,96 @@ func TestPutAppendOnlyPtrPayloadsClearsReferences(t *testing.T) {
 	}
 }
 
+func TestGetAppendOnlyKeysFromPoolClearsReturnedSlice(t *testing.T) {
+	var pool sync.Pool
+	pool.New = func() any {
+		return []string{appendOnlyStringFromBytes([]byte("stale"))}
+	}
+
+	keys := getAppendOnlyKeysFromPool(1, &pool, 1)
+	if got := keys[0]; got != "" {
+		t.Fatalf("pooled key was not cleared: %q", got)
+	}
+}
+
+func TestGetAppendOnlyValuesFromPoolClearsReturnedSlice(t *testing.T) {
+	var pool sync.Pool
+	pool.New = func() any {
+		return []string{appendOnlyStringFromBytes([]byte("stale"))}
+	}
+
+	values := getAppendOnlyValuesFromPool(1, &pool, 1)
+	if got := values[0]; got != "" {
+		t.Fatalf("pooled value was not cleared: %q", got)
+	}
+}
+
+func TestGetAppendOnlyPtrPayloadsFromPoolClearsReturnedSlice(t *testing.T) {
+	var pool sync.Pool
+	pool.New = func() any {
+		return []appendOnlyPointerPayload{{
+			value: appendOnlyStringFromBytes([]byte("stale")),
+			ptr:   page.ValuePtr{Offset: 1, Length: 2, FileID: 3},
+		}}
+	}
+
+	payloads := getAppendOnlyPtrPayloadsFromPool(1, &pool, 1)
+	if got := payloads[0]; got.value != "" || got.ptr != (page.ValuePtr{}) {
+		t.Fatalf("pooled ptr payload was not cleared: %+v", got)
+	}
+}
+
+func TestGetAppendOnlyKeysFromPoolRespectsMaxCap(t *testing.T) {
+	var pool sync.Pool
+	gets := 0
+	pool.New = func() any {
+		gets++
+		return make([]string, 0, 4)
+	}
+
+	keys := getAppendOnlyKeysFromPool(2, &pool, 1)
+	if gets != 0 {
+		t.Fatalf("pool used despite max cap, gets=%d", gets)
+	}
+	if len(keys) != 2 {
+		t.Fatalf("len(keys)=%d want=2", len(keys))
+	}
+}
+
+func TestGetAppendOnlyValuesFromPoolRespectsMaxCap(t *testing.T) {
+	var pool sync.Pool
+	gets := 0
+	pool.New = func() any {
+		gets++
+		return make([]string, 0, 4)
+	}
+
+	values := getAppendOnlyValuesFromPool(2, &pool, 1)
+	if gets != 0 {
+		t.Fatalf("pool used despite max cap, gets=%d", gets)
+	}
+	if len(values) != 2 {
+		t.Fatalf("len(values)=%d want=2", len(values))
+	}
+}
+
+func TestGetAppendOnlyPtrPayloadsFromPoolRespectsMaxCap(t *testing.T) {
+	var pool sync.Pool
+	gets := 0
+	pool.New = func() any {
+		gets++
+		return make([]appendOnlyPointerPayload, 0, 4)
+	}
+
+	payloads := getAppendOnlyPtrPayloadsFromPool(2, &pool, 1)
+	if gets != 0 {
+		t.Fatalf("pool used despite max cap, gets=%d", gets)
+	}
+	if len(payloads) != 2 {
+		t.Fatalf("len(ptrPayloads)=%d want=2", len(payloads))
+	}
+}
+
 func TestAppendOnlyIteratorCloseClearsPooledEntries(t *testing.T) {
 	entries := make([]appendOnlyEntry, 2)
 	appendOnlyEntrySetKeyIndex(&entries[0], 1)
