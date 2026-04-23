@@ -629,6 +629,13 @@ func appendOnlyKeyString(key []byte) string {
 	return string(key)
 }
 
+func appendOnlyLookupKeyString(key []byte) string {
+	if len(key) == 0 {
+		return ""
+	}
+	return unsafe.String(unsafe.SliceData(key), len(key))
+}
+
 func appendOnlyKeyU64(key []byte) (uint64, bool) {
 	if len(key) != appendOnlyInlineKeyLen {
 		return 0, false
@@ -1000,7 +1007,7 @@ func (m *AppendOnly) Get(key []byte) ([]byte, bool, bool) {
 				}
 			}
 			if m.latest != nil {
-				if idx, ok := m.latest[appendOnlyKeyString(key)]; ok && idx >= 0 && idx < m.count {
+				if idx, ok := m.latest[appendOnlyLookupKeyString(key)]; ok && idx >= 0 && idx < m.count {
 					ent := &m.entries[idx]
 					if bytes.Equal(m.appendOnlyEntryKey(ent), key) {
 						deleted := ent.flags&node.FlagTombstone != 0
@@ -1056,7 +1063,7 @@ func (m *AppendOnly) GetEntry(key []byte) ([]byte, page.ValuePtr, byte, bool) {
 				}
 			}
 			if m.latest != nil {
-				if idx, ok := m.latest[appendOnlyKeyString(key)]; ok && idx >= 0 && idx < m.count {
+				if idx, ok := m.latest[appendOnlyLookupKeyString(key)]; ok && idx >= 0 && idx < m.count {
 					ent := &m.entries[idx]
 					if bytes.Equal(m.appendOnlyEntryKey(ent), key) {
 						val := m.appendOnlyEntryValue(ent)
