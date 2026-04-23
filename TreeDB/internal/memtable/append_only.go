@@ -239,7 +239,7 @@ func NewAppendOnlyWithCapacityEstimatedEntryBytesAndHint(capacity, estimatedByte
 	baseEntries := appendOnlyInitialEntriesForCapacity(capacity, estimatedBytesPerEntry)
 	growEntries := appendOnlyGrowthEntriesForHint(baseEntries, entryHint)
 	return &AppendOnly{
-		entries:        getAppendOnlyEntries(growEntries),
+		entries:        getAppendOnlyEntries(baseEntries),
 		baseEntriesLen: baseEntries,
 		growEntriesLen: growEntries,
 		count:          0,

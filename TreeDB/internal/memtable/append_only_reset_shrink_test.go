@@ -79,7 +79,7 @@ func TestAppendOnlyResetWithCapacity_RetainsObservedEntriesWithinBound(t *testin
 	}
 }
 
-func TestAppendOnlyNewWithCapacityAndEntryHint_PreallocatesHintedEntries(t *testing.T) {
+func TestAppendOnlyNewWithCapacityAndEntryHint_DefersHintGrowthUntilAppend(t *testing.T) {
 	const (
 		capacityBytes          = 4 << 10
 		estimatedBytesPerEntry = 96
@@ -88,20 +88,22 @@ func TestAppendOnlyNewWithCapacityAndEntryHint_PreallocatesHintedEntries(t *test
 	base := appendOnlyInitialEntriesForCapacity(capacityBytes, estimatedBytesPerEntry)
 	entryHint := base * 16
 	mt := NewAppendOnlyWithCapacityEstimatedEntryBytesAndHint(capacityBytes, estimatedBytesPerEntry, entryHint)
-	if got := len(mt.entries); got < entryHint {
-		t.Fatalf("initial len(entries)=%d want>=%d", got, entryHint)
+	if got := len(mt.entries); got != base {
+		t.Fatalf("initial len(entries)=%d want=%d", got, base)
 	}
-	if got := cap(mt.entries); got < entryHint {
-		t.Fatalf("initial cap(entries)=%d want>=%d", got, entryHint)
+	if got := cap(mt.entries); got != base {
+		t.Fatalf("initial cap(entries)=%d want=%d", got, base)
+	}
+	if got := mt.growEntriesLen; got < entryHint {
+		t.Fatalf("growEntriesLen=%d want >=%d", got, entryHint)
 	}
 
-	capBefore := cap(mt.entries)
-	for i := 0; i < entryHint; i++ {
+	for i := 0; i <= base; i++ {
 		key := []byte(fmt.Sprintf("h%08d", i))
 		mt.SetEntrySteal(key, nil, page.ValuePtr{}, node.FlagTombstone)
 	}
-	if got := cap(mt.entries); got != capBefore {
-		t.Fatalf("hinted constructor regrew entries: cap(entries)=%d want=%d", got, capBefore)
+	if got := cap(mt.entries); got < entryHint {
+		t.Fatalf("cap(entries) after first growth=%d want >=%d", got, entryHint)
 	}
 }
 
