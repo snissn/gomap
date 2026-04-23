@@ -26212,12 +26212,7 @@ func (b *Batch) Reset() {
 	if b.shardIdxSets != nil {
 		b.shardIdxSets = b.shardIdxSets[:0]
 	}
-	if b.retainMainMems != nil {
-		b.retainMainMems = b.retainMainMems[:0]
-	}
-	if b.ptrTouchedMems != nil {
-		b.ptrTouchedMems = b.ptrTouchedMems[:0]
-	}
+	b.clearRetainedMemtableSlices()
 	b.recycleCopyArenaChunks()
 	b.recyclePtrCopyArenaChunks()
 	if b.arenaInFlightBytes > 0 {
@@ -26237,6 +26232,22 @@ func (b *Batch) Reset() {
 	b.maxEntries = 0
 	if b.ptrValueIdxs != nil {
 		b.ptrValueIdxs = b.ptrValueIdxs[:0]
+	}
+}
+
+func (b *Batch) clearRetainedMemtableSlices() {
+	if b == nil {
+		return
+	}
+	if b.retainMainMems != nil {
+		full := b.retainMainMems[:cap(b.retainMainMems)]
+		clear(full)
+		b.retainMainMems = b.retainMainMems[:0]
+	}
+	if b.ptrTouchedMems != nil {
+		full := b.ptrTouchedMems[:cap(b.ptrTouchedMems)]
+		clear(full)
+		b.ptrTouchedMems = b.ptrTouchedMems[:0]
 	}
 }
 
@@ -27750,11 +27761,15 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 	}
 	ptrChunks := b.drainPtrCopyArenaChunks()
 	b.db.retainBatchArenaChunksForMemtables(mainChunks, retainMainMems)
+	clear(retainMainMems)
+	b.retainMainMems = retainMainMems[:0]
 	if retainPtrArena {
 		b.db.retainBatchArenaChunksForMemtables(ptrChunks, ptrTouchedMems)
 	} else {
 		putBatchArenas(ptrChunks)
 	}
+	clear(ptrTouchedMems)
+	b.ptrTouchedMems = ptrTouchedMems[:0]
 	b.db.writeMu.RUnlock()
 
 	if needRotate {
