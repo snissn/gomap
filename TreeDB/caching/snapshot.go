@@ -2,6 +2,7 @@ package caching
 
 import (
 	"errors"
+	"sync"
 	"sync/atomic"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -29,6 +30,33 @@ type Snapshot struct {
 	backend *backenddb.Snapshot
 
 	closed atomic.Bool
+}
+
+type ownedReadScratch struct {
+	buf []byte
+}
+
+var ownedReadScratchPool = sync.Pool{
+	New: func() any {
+		return &ownedReadScratch{buf: make([]byte, 0, page.PageSize)}
+	},
+}
+
+func getOwnedReadScratch() *ownedReadScratch {
+	scratch, _ := ownedReadScratchPool.Get().(*ownedReadScratch)
+	if scratch == nil || cap(scratch.buf) != page.PageSize {
+		return &ownedReadScratch{buf: make([]byte, 0, page.PageSize)}
+	}
+	scratch.buf = scratch.buf[:0]
+	return scratch
+}
+
+func putOwnedReadScratch(scratch *ownedReadScratch) {
+	if scratch == nil || cap(scratch.buf) != page.PageSize {
+		return
+	}
+	scratch.buf = scratch.buf[:0]
+	ownedReadScratchPool.Put(scratch)
 }
 
 type backendSnapshotProvider interface {
@@ -216,15 +244,58 @@ func (s *Snapshot) GetAppend(key, dst []byte) ([]byte, error) {
 }
 
 func (s *Snapshot) Get(key []byte) ([]byte, error) {
-	out, err := s.GetAppend(key, nil)
+	val, ptr, flags, found := s.lookupQueueEntry(key)
+	if found {
+		if flags&node.FlagTombstone != 0 {
+			return nil, tree.ErrKeyNotFound
+		}
+		if flags&node.FlagPointer != 0 {
+			if s.db == nil {
+				return nil, errors.New("caching snapshot: value-log reader unavailable")
+			}
+			scratch := getOwnedReadScratch()
+			defer putOwnedReadScratch(scratch)
+
+			out, err := s.db.readValueLogAppend(key, ptr, scratch.buf[:0])
+			if err != nil {
+				return nil, err
+			}
+			snapshotReadQueuePointerHitsTotal.Add(1)
+			if len(out) == 0 {
+				return nil, nil
+			}
+			snapshotReadQueuePointerBytesTotal.Add(uint64(len(out)))
+			owned := make([]byte, len(out))
+			copy(owned, out)
+			return owned, nil
+		}
+		snapshotReadQueueInlineHitsTotal.Add(1)
+		if len(val) == 0 {
+			return nil, nil
+		}
+		snapshotReadQueueInlineBytesTotal.Add(uint64(len(val)))
+		owned := make([]byte, len(val))
+		copy(owned, val)
+		return owned, nil
+	}
+
+	if s == nil || s.backend == nil || s.db == nil {
+		return nil, tree.ErrKeyNotFound
+	}
+	if err := s.db.flushValueLogForBackendRead(); err != nil {
+		return nil, err
+	}
+	out, err := s.backend.Get(key)
 	if err != nil {
 		return nil, err
 	}
+	snapshotReadBackendHitsTotal.Add(1)
 	if len(out) == 0 {
-		return out, nil
+		return nil, nil
 	}
+	snapshotReadBackendBytesTotal.Add(uint64(len(out)))
 	maybeRecordSnapshotGetCallerSample(len(out))
-	return out[:len(out):len(out)], nil
+	return out, nil
 }
 
 func (s *Snapshot) GetUnsafe(key []byte) ([]byte, error) {

@@ -47,17 +47,28 @@ func MaybeCompactLeafLogPayload(leafPage []byte) ([]byte, bool, error) {
 	return payload, true, nil
 }
 
-func decodeCompactLeafLogPayloadTo(payload, dst []byte) ([]byte, bool, bool, error) {
+func compactLeafLogPayloadBounds(payload []byte) (prefixLen, suffixLen int, decoded bool, err error) {
 	if !HasCompactLeafLogPayload(payload) {
-		return payload, false, false, nil
+		return 0, 0, false, nil
 	}
-	prefixLen := int(binary.LittleEndian.Uint16(payload[len(compactLeafPagePayloadMagic) : len(compactLeafPagePayloadMagic)+2]))
-	suffixLen := int(binary.LittleEndian.Uint16(payload[len(compactLeafPagePayloadMagic)+2 : compactLeafPagePayloadHeaderSize]))
+	prefixLen = int(binary.LittleEndian.Uint16(payload[len(compactLeafPagePayloadMagic) : len(compactLeafPagePayloadMagic)+2]))
+	suffixLen = int(binary.LittleEndian.Uint16(payload[len(compactLeafPagePayloadMagic)+2 : compactLeafPagePayloadHeaderSize]))
 	if prefixLen < node.NodeHeaderSize || prefixLen+suffixLen > page.PageSize {
-		return nil, false, true, ErrCorrupt
+		return 0, 0, true, ErrCorrupt
 	}
 	if compactLeafPagePayloadHeaderSize+prefixLen+suffixLen != len(payload) {
-		return nil, false, true, ErrCorrupt
+		return 0, 0, true, ErrCorrupt
+	}
+	return prefixLen, suffixLen, true, nil
+}
+
+func decodeCompactLeafLogPayloadTo(payload, dst []byte) ([]byte, bool, bool, error) {
+	prefixLen, suffixLen, decoded, err := compactLeafLogPayloadBounds(payload)
+	if err != nil || !decoded {
+		if err != nil {
+			return nil, false, decoded, err
+		}
+		return payload, false, false, nil
 	}
 	if cap(dst) >= page.PageSize && sliceAliasesBytes(dst[:cap(dst)], payload) {
 		payload = append([]byte(nil), payload...)
@@ -74,6 +85,27 @@ func decodeCompactLeafLogPayloadTo(payload, dst []byte) ([]byte, bool, bool, err
 	copy(out[:prefixLen], payload[compactLeafPagePayloadHeaderSize:compactLeafPagePayloadHeaderSize+prefixLen])
 	copy(out[page.PageSize-suffixLen:], payload[compactLeafPagePayloadHeaderSize+prefixLen:])
 	return out, usedDst, true, nil
+}
+
+func appendCompactLeafLogPayload(dst, payload []byte) ([]byte, error) {
+	prefixLen, suffixLen, decoded, err := compactLeafLogPayloadBounds(payload)
+	if err != nil {
+		return nil, err
+	}
+	if !decoded {
+		if len(payload) == 0 {
+			return dst, nil
+		}
+		if cap(dst) >= len(dst)+len(payload) && sliceAliasesBytes(dst[:cap(dst)], payload) {
+			return dst[:len(dst)+len(payload)], nil
+		}
+		return append(dst, payload...), nil
+	}
+
+	var expanded [page.PageSize]byte
+	copy(expanded[:prefixLen], payload[compactLeafPagePayloadHeaderSize:compactLeafPagePayloadHeaderSize+prefixLen])
+	copy(expanded[page.PageSize-suffixLen:], payload[compactLeafPagePayloadHeaderSize+prefixLen:])
+	return append(dst, expanded[:]...), nil
 }
 
 func allowsCompactLeafLogPayload(fileID uint32, path string) bool {
@@ -107,18 +139,5 @@ func appendMaybeDecodeLeafLogPayload(fileID uint32, path string, dst, payload []
 		}
 		return append(dst, payload...), nil
 	}
-	out, _, decoded, err := decodeCompactLeafLogPayloadTo(payload, nil)
-	if err != nil {
-		return nil, err
-	}
-	if decoded {
-		return append(dst, out...), nil
-	}
-	if len(payload) == 0 {
-		return dst, nil
-	}
-	if cap(dst) >= len(dst)+len(payload) && sliceAliasesBytes(dst[:cap(dst)], payload) {
-		return dst[:len(dst)+len(payload)], nil
-	}
-	return append(dst, payload...), nil
+	return appendCompactLeafLogPayload(dst, payload)
 }
