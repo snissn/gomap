@@ -779,6 +779,34 @@ func TestAppendOnlyMutableIteratorShortInlineKeyStableAfterClose(t *testing.T) {
 	}
 }
 
+func TestAppendOnlyOrderedIteratorShortInlineKeyStableAfterCloseAndGrowth(t *testing.T) {
+	m := NewAppendOnlyWithCapacityEstimatedEntryBytes(
+		appendOnlyMinInitialEntries*appendOnlyEstimatedBytesPerEntryPointer,
+		appendOnlyEstimatedBytesPerEntryPointer,
+	)
+	m.Set([]byte("a"), []byte("target"))
+
+	it := m.NewIterator(nil, nil)
+	if !it.Valid() {
+		t.Fatal("iterator unexpectedly invalid")
+	}
+	key := it.UnsafeKey()
+	if got := string(key); got != "a" {
+		t.Fatalf("iterator key=%q want a", got)
+	}
+	if err := it.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	for i := 0; i < appendOnlyMinInitialEntries; i++ {
+		growthKey := []byte(fmt.Sprintf("long-growth-key-%08d", i))
+		m.Set(growthKey, []byte("growth"))
+	}
+	if got := string(key); got != "a" {
+		t.Fatalf("iterator key after close+growth=%q want a", got)
+	}
+}
+
 var appendOnlyGetBenchSink []byte
 var appendOnlyGetBenchSinkBool bool
 

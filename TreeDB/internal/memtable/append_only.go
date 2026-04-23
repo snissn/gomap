@@ -260,9 +260,11 @@ func getAppendOnlyKeysFromPool(length int, pool *sync.Pool, maxCap int) []string
 	}
 	if v := pool.Get(); v != nil {
 		if keys, ok := v.([]string); ok && cap(keys) >= length {
-			out := keys[:length]
-			clear(out)
-			return out
+			if cap(keys) <= appendOnlyMaxReuseEntries(length) {
+				out := keys[:length]
+				clear(out)
+				return out
+			}
 		}
 	}
 	return make([]string, length)
@@ -296,9 +298,11 @@ func getAppendOnlyValuesFromPool(length int, pool *sync.Pool, maxCap int) []stri
 	}
 	if v := pool.Get(); v != nil {
 		if values, ok := v.([]string); ok && cap(values) >= length {
-			out := values[:length]
-			clear(out)
-			return out
+			if cap(values) <= appendOnlyMaxReuseEntries(length) {
+				out := values[:length]
+				clear(out)
+				return out
+			}
 		}
 	}
 	return make([]string, length)
@@ -332,9 +336,11 @@ func getAppendOnlyPtrPayloadsFromPool(length int, pool *sync.Pool, maxCap int) [
 	}
 	if v := pool.Get(); v != nil {
 		if payloads, ok := v.([]appendOnlyPointerPayload); ok && cap(payloads) >= length {
-			out := payloads[:length]
-			clear(out)
-			return out
+			if cap(payloads) <= appendOnlyMaxReuseEntries(length) {
+				out := payloads[:length]
+				clear(out)
+				return out
+			}
 		}
 	}
 	return make([]appendOnlyPointerPayload, length)
@@ -2069,16 +2075,32 @@ func (m *AppendOnly) buildMutableSortedIteratorEntriesLocked() ([]appendOnlyEntr
 	return entries, keys, values, ptrPayloads
 }
 
+func appendOnlyOrderedIteratorInlineKeys(entries []appendOnlyEntry) [][]byte {
+	var inlineKeys [][]byte
+	for i := range entries {
+		inlineLen := appendOnlyEntryInlineKeyLen(&entries[i])
+		if inlineLen == 0 {
+			continue
+		}
+		if inlineKeys == nil {
+			inlineKeys = make([][]byte, len(entries))
+		}
+		inlineKeys[i] = cloneBytes(entries[i].inlineKey[:inlineLen])
+	}
+	return inlineKeys
+}
+
 func (m *AppendOnly) NewIterator(start, end []byte) iterator.UnsafeIterator {
 	m.mu.RLock()
 	if m.ordered {
 		entries := m.entries[:m.count]
 		it := &appendOnlyIterator{
-			entries: entries,
-			start:   start,
-			end:     end,
-			mu:      &m.mu,
-			owner:   m,
+			entries:    entries,
+			inlineKeys: appendOnlyOrderedIteratorInlineKeys(entries),
+			start:      start,
+			end:        end,
+			mu:         &m.mu,
+			owner:      m,
 		}
 		if start != nil {
 			it.Seek(start)
@@ -2134,12 +2156,13 @@ func (m *AppendOnly) NewReverseIterator(start, end []byte) iterator.UnsafeIterat
 	if m.ordered {
 		entries := m.entries[:m.count]
 		it := &appendOnlyIterator{
-			entries: entries,
-			start:   start,
-			end:     end,
-			mu:      &m.mu,
-			owner:   m,
-			reverse: true,
+			entries:    entries,
+			inlineKeys: appendOnlyOrderedIteratorInlineKeys(entries),
+			start:      start,
+			end:        end,
+			mu:         &m.mu,
+			owner:      m,
+			reverse:    true,
 		}
 		it.seekToReverseEnd(end)
 		return it
@@ -2187,6 +2210,7 @@ func (m *AppendOnly) NewReverseIterator(start, end []byte) iterator.UnsafeIterat
 type appendOnlyIterator struct {
 	entries         []appendOnlyEntry
 	keys            []string
+	inlineKeys      [][]byte
 	values          []string
 	ptrPayloads     []appendOnlyPointerPayload
 	entryPtrs       []*appendOnlyEntry
@@ -2320,6 +2344,9 @@ func (it *appendOnlyIterator) UnsafeKey() []byte {
 	if ent == nil || !it.validIndex() {
 		return nil
 	}
+	if it.inlineKeys != nil && it.idx >= 0 && it.idx < len(it.inlineKeys) && it.inlineKeys[it.idx] != nil {
+		return it.inlineKeys[it.idx]
+	}
 	return it.keyForEntry(ent)
 }
 
@@ -2435,6 +2462,7 @@ func (it *appendOnlyIterator) Close() error {
 	it.owner = nil
 	it.entries = nil
 	it.keys = nil
+	it.inlineKeys = nil
 	it.values = nil
 	it.ptrPayloads = nil
 	it.entryPtrs = nil
