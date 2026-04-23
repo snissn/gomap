@@ -2,6 +2,8 @@ package caching
 
 import (
 	"encoding/binary"
+	"fmt"
+	"reflect"
 	"runtime"
 	"testing"
 	"time"
@@ -56,6 +58,31 @@ func TestAppendOnlyEntriesToCapacity_OverflowSafe(t *testing.T) {
 	if got := appendOnlyEntriesToCapacity(0, appendOnlyEstimatedBytesPerEntryDefault); got != 0 {
 		t.Fatalf("zero entries capacity=%d want 0", got)
 	}
+}
+
+func TestTrimAppendOnlyMemLeasesIgnoresStaleEntryHint(t *testing.T) {
+	var cache DB
+	cache.appendOnlyEntryHint.Store(2048)
+
+	mt := memtable.NewAppendOnlyWithCapacityEstimatedEntryBytes(4<<10, appendOnlyEstimatedBytesPerEntryDefault)
+	for i := 0; i < 2048; i++ {
+		mt.Delete([]byte(fmt.Sprintf("trim-key-%08d", i)))
+	}
+	grownCap := appendOnlyEntriesCapForTest(mt)
+	if grownCap < 2048 {
+		t.Fatalf("test setup cap(entries)=%d want >=2048", grownCap)
+	}
+
+	cache.appendOnlyMemLeases = []*memtable.AppendOnly{mt}
+	cache.trimAppendOnlyMemLeases(0, 4<<10)
+
+	if got := appendOnlyEntriesCapForTest(mt); got >= grownCap {
+		t.Fatalf("trim retained stale hinted cap(entries)=%d, before=%d", got, grownCap)
+	}
+}
+
+func appendOnlyEntriesCapForTest(mt *memtable.AppendOnly) int {
+	return reflect.ValueOf(mt).Elem().FieldByName("entries").Cap()
 }
 
 func TestAppendOnlyEntryHint_CapacityTracksPressureScaledMutableThreshold(t *testing.T) {
