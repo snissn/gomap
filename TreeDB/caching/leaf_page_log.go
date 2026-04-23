@@ -1,6 +1,8 @@
 package caching
 
 import (
+	"sync"
+
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -10,6 +12,8 @@ type cachingLeafPageLog struct {
 	db   *DB
 	lane *lane
 }
+
+var compactLeafPayloadScratchPool sync.Pool
 
 var _ backenddb.LeafPageLog = (*cachingLeafPageLog)(nil)
 
@@ -30,9 +34,22 @@ func (l *cachingLeafPageLog) AppendLeafPage(leafPage []byte) (page.LeafLogPtr, e
 	if l == nil || l.db == nil || l.lane == nil {
 		return page.LeafLogPtr{}, errWALUnavailable
 	}
-	encodedLeafPage, _, err := valuelog.MaybeCompactLeafLogPayload(leafPage)
+	scratch := compactLeafPayloadScratchPool.Get()
+	var payloadScratch []byte
+	if b, ok := scratch.([]byte); ok {
+		payloadScratch = b[:0]
+	}
+	encodedLeafPage, compacted, err := valuelog.MaybeCompactLeafLogPayloadTo(payloadScratch, leafPage)
 	if err != nil {
+		if payloadScratch != nil {
+			compactLeafPayloadScratchPool.Put(payloadScratch[:0])
+		}
 		return page.LeafLogPtr{}, err
+	}
+	if compacted {
+		defer compactLeafPayloadScratchPool.Put(encodedLeafPage[:0])
+	} else if payloadScratch != nil {
+		compactLeafPayloadScratchPool.Put(payloadScratch[:0])
 	}
 	rid := l.db.nextRID.Add(1)
 	ptr, retainPath, err := l.db.appendValueLogOneInternal(l.lane, 0, nil, rid, encodedLeafPage, journalDurabilityNone, false)
