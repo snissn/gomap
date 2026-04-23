@@ -220,8 +220,10 @@ func (f *File) takeDecodeScratch(minCap int) []byte {
 	f.decodeScratch = nil
 	f.cacheMu.Unlock()
 	if cap(scratch) >= minCap {
+		noteDecodeScratchFileHit()
 		return scratch[:0]
 	}
+	noteDecodeScratchFileMiss()
 	if scratch != nil {
 		putDecodeScratch(scratch)
 	}
@@ -241,12 +243,14 @@ func (f *File) releaseDecodeScratch(buf []byte) {
 	if cap(f.decodeScratch) == 0 {
 		f.decodeScratch = buf
 		f.cacheMu.Unlock()
+		noteDecodeScratchFilePut()
 		return
 	}
 	if cap(buf) > cap(f.decodeScratch) {
 		old := f.decodeScratch
 		f.decodeScratch = buf
 		f.cacheMu.Unlock()
+		noteDecodeScratchFilePut()
 		putDecodeScratch(old)
 		return
 	}
@@ -806,20 +810,33 @@ func (f *File) readGroupedCompressedFromFileTo(ptr page.ValuePtr, dst []byte) ([
 	return out, false, nil, true
 }
 
-func (f *File) ReadAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte, error) {
+func (f *File) ReadAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) (out []byte, err error) {
 	if f == nil || f.File == nil {
 		return nil, errors.New("valuelog: nil file")
 	}
+	start := time.Now()
+	startLen := len(dst)
+	path := readAppendPathUnknown
+	defer func() {
+		bytesReturned := 0
+		if err == nil && len(out) >= startLen {
+			bytesReturned = len(out) - startLen
+		}
+		noteReadAppend(path, bytesReturned, time.Since(start))
+	}()
 	if err := f.ensureCurrentWritableReadable(); err != nil {
 		return nil, err
 	}
 	if val, err, ok := f.readViaMmapAppend(ptr, verifyCRC, dst); ok {
 		f.mmapReadHits.Add(1)
-		return val, err
+		path = readAppendPathMmap
+		out = val
+		return out, err
 	}
 	// Fast path (bench/unsafe reads): grouped + uncompressed + no CRC.
 	if !verifyCRC && page.ValuePtrIsGrouped(ptr) && ptr.Offset >= 4 {
 		f.mmapReadFallbackReadAt.Add(1)
+		path = readAppendPathFile
 		start := int64(ptr.Offset - 4)
 
 		// Read header to discover the frame length/flags.
@@ -859,7 +876,8 @@ func (f *File) ReadAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte
 					return nil, ErrCorrupt
 				}
 
-				return f.appendPayloadFromFile(dst, frameOff+int64(prefixLen)+int64(valStart), int(valEnd-valStart))
+				out, err = f.appendPayloadFromFile(dst, frameOff+int64(prefixLen)+int64(valStart), int(valEnd-valStart))
+				return out, err
 			}
 			f.cacheMu.Unlock()
 		}
@@ -880,7 +898,8 @@ func (f *File) ReadAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte
 		if fFlags&FrameFlagCompressed != 0 {
 			// Fallback to the full decoder path. Prefer decode-to-tail so hot
 			// append callers can reuse dst capacity and avoid per-read allocs.
-			return f.appendDecodedRecordTo(ptr, verifyCRC, dst)
+			out, err = f.appendDecodedRecordTo(ptr, verifyCRC, dst)
+			return out, err
 		}
 		ridBytes := k * 8
 		offsetBytes := (k + 1) * 4
@@ -933,12 +952,15 @@ func (f *File) ReadAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte
 		f.cacheStart.Store(start)
 		f.cacheMu.Unlock()
 
-		return f.appendPayloadFromFile(dst, frameOff+int64(prefixLen)+int64(valStart), int(valEnd-valStart))
+		out, err = f.appendPayloadFromFile(dst, frameOff+int64(prefixLen)+int64(valStart), int(valEnd-valStart))
+		return out, err
 	}
 
 	// Slow path: use existing decoder and append.
 	f.mmapReadFallbackReadAt.Add(1)
-	return f.appendDecodedRecordTo(ptr, verifyCRC, dst)
+	path = readAppendPathFile
+	out, err = f.appendDecodedRecordTo(ptr, verifyCRC, dst)
+	return out, err
 }
 
 func (f *File) appendDecodedRecordTo(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte, error) {
@@ -965,6 +987,7 @@ func (f *File) appendDecodedRecordTo(ptr page.ValuePtr, verifyCRC bool, dst []by
 }
 
 func (f *File) ReadUnsafeAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte, error) {
+	noteReadUnsafeAppendCall()
 	return f.ReadAppend(ptr, verifyCRC, dst)
 }
 

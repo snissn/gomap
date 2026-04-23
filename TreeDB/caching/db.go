@@ -24806,6 +24806,46 @@ func (db *DB) Stats() map[string]string {
 	if growStats.RequestedBytesTotal > 0 {
 		stats["treedb.cache.vlog_decode_buffer_grow.overalloc_ratio"] = fmt.Sprintf("%.6f", float64(growStats.AllocatedBytesTotal)/float64(growStats.RequestedBytesTotal))
 	}
+	readInst := valuelog.ReadInstrumentationStatsSnapshot()
+	stats["treedb.cache.vlog_compact_leaf_decode.calls_total"] = fmt.Sprintf("%d", readInst.CompactLeafDecodeCallsTotal)
+	stats["treedb.cache.vlog_compact_leaf_decode.bytes_total"] = fmt.Sprintf("%d", readInst.CompactLeafDecodeBytesTotal)
+	stats["treedb.cache.vlog_compact_leaf_decode.append_direct.calls_total"] = fmt.Sprintf("%d", readInst.CompactLeafAppendDirectCallsTotal)
+	stats["treedb.cache.vlog_compact_leaf_decode.append_direct.bytes_total"] = fmt.Sprintf("%d", readInst.CompactLeafAppendDirectBytesTotal)
+	stats["treedb.cache.vlog_compact_leaf_decode.append_scratch.calls_total"] = fmt.Sprintf("%d", readInst.CompactLeafAppendScratchCallsTotal)
+	stats["treedb.cache.vlog_compact_leaf_decode.append_scratch.bytes_total"] = fmt.Sprintf("%d", readInst.CompactLeafAppendScratchBytesTotal)
+	stats["treedb.cache.vlog_decode_scratch.global_small_hits_total"] = fmt.Sprintf("%d", readInst.DecodeScratchGlobalSmallHitsTotal)
+	stats["treedb.cache.vlog_decode_scratch.global_small_misses_total"] = fmt.Sprintf("%d", readInst.DecodeScratchGlobalSmallMissesTotal)
+	stats["treedb.cache.vlog_decode_scratch.global_large_hits_total"] = fmt.Sprintf("%d", readInst.DecodeScratchGlobalLargeHitsTotal)
+	stats["treedb.cache.vlog_decode_scratch.global_large_misses_total"] = fmt.Sprintf("%d", readInst.DecodeScratchGlobalLargeMissesTotal)
+	stats["treedb.cache.vlog_decode_scratch.global_oversize_misses_total"] = fmt.Sprintf("%d", readInst.DecodeScratchGlobalOversizeMissesTotal)
+	stats["treedb.cache.vlog_decode_scratch.file_hits_total"] = fmt.Sprintf("%d", readInst.DecodeScratchFileHitsTotal)
+	stats["treedb.cache.vlog_decode_scratch.file_misses_total"] = fmt.Sprintf("%d", readInst.DecodeScratchFileMissesTotal)
+	stats["treedb.cache.vlog_decode_scratch.small_puts_total"] = fmt.Sprintf("%d", readInst.DecodeScratchSmallPutsTotal)
+	stats["treedb.cache.vlog_decode_scratch.large_puts_total"] = fmt.Sprintf("%d", readInst.DecodeScratchLargePutsTotal)
+	stats["treedb.cache.vlog_decode_scratch.file_puts_total"] = fmt.Sprintf("%d", readInst.DecodeScratchFilePutsTotal)
+	stats["treedb.cache.vlog_decode_scratch.drops_total"] = fmt.Sprintf("%d", readInst.DecodeScratchDropsTotal)
+	stats["treedb.cache.vlog_read_unsafe_append.calls_total"] = fmt.Sprintf("%d", readInst.ReadUnsafeAppendCallsTotal)
+	stats["treedb.cache.vlog_read_append.calls_total"] = fmt.Sprintf("%d", readInst.ReadAppendCallsTotal)
+	stats["treedb.cache.vlog_read_append.bytes_total"] = fmt.Sprintf("%d", readInst.ReadAppendBytesTotal)
+	stats["treedb.cache.vlog_read_append.latency_ns_total"] = fmt.Sprintf("%d", readInst.ReadAppendLatencyNsTotal)
+	stats["treedb.cache.vlog_read_append.mmap.calls_total"] = fmt.Sprintf("%d", readInst.ReadAppendMmapCallsTotal)
+	stats["treedb.cache.vlog_read_append.mmap.bytes_total"] = fmt.Sprintf("%d", readInst.ReadAppendMmapBytesTotal)
+	stats["treedb.cache.vlog_read_append.mmap.latency_ns_total"] = fmt.Sprintf("%d", readInst.ReadAppendMmapLatencyNsTotal)
+	stats["treedb.cache.vlog_read_append.file.calls_total"] = fmt.Sprintf("%d", readInst.ReadAppendFileCallsTotal)
+	stats["treedb.cache.vlog_read_append.file.bytes_total"] = fmt.Sprintf("%d", readInst.ReadAppendFileBytesTotal)
+	stats["treedb.cache.vlog_read_append.file.latency_ns_total"] = fmt.Sprintf("%d", readInst.ReadAppendFileLatencyNsTotal)
+	if readInst.ReadAppendCallsTotal > 0 {
+		stats["treedb.cache.vlog_read_append.avg_latency_us"] = fmt.Sprintf("%.3f", float64(readInst.ReadAppendLatencyNsTotal)/float64(readInst.ReadAppendCallsTotal)/1000.0)
+		stats["treedb.cache.vlog_read_append.avg_bytes_per_call"] = fmt.Sprintf("%.3f", float64(readInst.ReadAppendBytesTotal)/float64(readInst.ReadAppendCallsTotal))
+	}
+	if readInst.ReadAppendMmapCallsTotal > 0 {
+		stats["treedb.cache.vlog_read_append.mmap.avg_latency_us"] = fmt.Sprintf("%.3f", float64(readInst.ReadAppendMmapLatencyNsTotal)/float64(readInst.ReadAppendMmapCallsTotal)/1000.0)
+		stats["treedb.cache.vlog_read_append.mmap.avg_bytes_per_call"] = fmt.Sprintf("%.3f", float64(readInst.ReadAppendMmapBytesTotal)/float64(readInst.ReadAppendMmapCallsTotal))
+	}
+	if readInst.ReadAppendFileCallsTotal > 0 {
+		stats["treedb.cache.vlog_read_append.file.avg_latency_us"] = fmt.Sprintf("%.3f", float64(readInst.ReadAppendFileLatencyNsTotal)/float64(readInst.ReadAppendFileCallsTotal)/1000.0)
+		stats["treedb.cache.vlog_read_append.file.avg_bytes_per_call"] = fmt.Sprintf("%.3f", float64(readInst.ReadAppendFileBytesTotal)/float64(readInst.ReadAppendFileCallsTotal))
+	}
 	cacheVlogMmap := cacheVlogMmapStatsSnapshot(db.valueLogReader)
 	if db.valueLogReader != nil {
 		remaps, deadMappings := db.valueLogReader.RemapStats()

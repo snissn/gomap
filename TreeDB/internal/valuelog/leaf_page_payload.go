@@ -59,20 +59,24 @@ func decodeCompactLeafLogPayloadTo(payload, dst []byte) ([]byte, bool, bool, err
 	if compactLeafPagePayloadHeaderSize+prefixLen+suffixLen != len(payload) {
 		return nil, false, true, ErrCorrupt
 	}
-	if cap(dst) >= page.PageSize && sliceAliasesBytes(dst[:cap(dst)], payload) {
-		payload = append([]byte(nil), payload...)
-	}
 	out := dst
 	usedDst := false
 	if cap(out) >= page.PageSize {
 		out = out[:page.PageSize]
-		clear(out)
 		usedDst = true
 	} else {
 		out = make([]byte, page.PageSize)
 	}
-	copy(out[:prefixLen], payload[compactLeafPagePayloadHeaderSize:compactLeafPagePayloadHeaderSize+prefixLen])
-	copy(out[page.PageSize-suffixLen:], payload[compactLeafPagePayloadHeaderSize+prefixLen:])
+	prefix := payload[compactLeafPagePayloadHeaderSize : compactLeafPagePayloadHeaderSize+prefixLen]
+	suffix := payload[compactLeafPagePayloadHeaderSize+prefixLen:]
+	if suffixLen > 0 {
+		copy(out[page.PageSize-suffixLen:], suffix)
+	}
+	copy(out[:prefixLen], prefix)
+	if gapStart, gapEnd := prefixLen, page.PageSize-suffixLen; gapStart < gapEnd {
+		clear(out[gapStart:gapEnd])
+	}
+	noteCompactLeafDecode(len(out))
 	return out, usedDst, true, nil
 }
 
@@ -107,13 +111,43 @@ func appendMaybeDecodeLeafLogPayload(fileID uint32, path string, dst, payload []
 		}
 		return append(dst, payload...), nil
 	}
-	out, _, decoded, err := decodeCompactLeafLogPayloadTo(payload, nil)
+	if !HasCompactLeafLogPayload(payload) {
+		if len(payload) == 0 {
+			return dst, nil
+		}
+		if cap(dst) >= len(dst)+len(payload) && sliceAliasesBytes(dst[:cap(dst)], payload) {
+			return dst[:len(dst)+len(payload)], nil
+		}
+		return append(dst, payload...), nil
+	}
+	oldLen := len(dst)
+	if cap(dst)-oldLen >= page.PageSize {
+		out, usedDst, decoded, err := decodeCompactLeafLogPayloadTo(payload, dst[oldLen:oldLen])
+		if err != nil {
+			return nil, err
+		}
+		if decoded {
+			noteCompactLeafAppendDirectDecode(len(out))
+			if usedDst {
+				return dst[:oldLen+len(out)], nil
+			}
+			return append(dst, out...), nil
+		}
+		return append(dst, payload...), nil
+	}
+	scratch := getDecodeScratch(page.PageSize)
+	out, _, decoded, err := decodeCompactLeafLogPayloadTo(payload, scratch[:0])
 	if err != nil {
+		putDecodeScratch(scratch)
 		return nil, err
 	}
 	if decoded {
-		return append(dst, out...), nil
+		noteCompactLeafAppendScratchDecode(len(out))
+		dst = append(dst, out...)
+		putDecodeScratch(scratch)
+		return dst, nil
 	}
+	putDecodeScratch(scratch)
 	if len(payload) == 0 {
 		return dst, nil
 	}
