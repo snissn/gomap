@@ -23249,6 +23249,9 @@ func (db *DB) flushOneLocked(sync bool) bool {
 	if len(db.queueShardIDs) > 0 {
 		db.queueShardIDs = db.queueShardIDs[1:]
 	}
+	if len(db.queueRouteModes) > 0 {
+		db.queueRouteModes = db.queueRouteModes[1:]
+	}
 	if len(db.queueLaneIDs) > 0 {
 		db.queueLaneIDs = db.queueLaneIDs[1:]
 	}

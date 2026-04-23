@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
 )
 
 func batchFollowupBE8Key(i uint64) []byte {
@@ -442,5 +443,103 @@ func TestBatchWrite_SortedBatchRotatesSingleRoutedShard(t *testing.T) {
 	}
 	if !bytes.Equal(got, value) {
 		t.Fatalf("Get(queued routed) len=%d want %d", len(got), len(value))
+	}
+}
+
+func TestFlushOneLockedDequeuesQueueRouteModes(t *testing.T) {
+	backend := NewMockBackend()
+	cache, err := Open(t.TempDir(), backend, Options{
+		AllowUnsafe:        true,
+		DisableWAL:         true,
+		RelaxedSync:        true,
+		MemtableMode:       "append_only",
+		MemtableShards:     8,
+		FlushThreshold:     1 << 30,
+		MaxQueuedMemtables: -1,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer cache.Close()
+
+	cache.flushMu.Lock()
+	defer cache.flushMu.Unlock()
+
+	first, err := memtable.NewWithCapacityMode(0, memtable.ModeHashSorted)
+	if err != nil {
+		t.Fatalf("new first memtable: %v", err)
+	}
+	second, err := memtable.NewWithCapacityMode(0, memtable.ModeHashSorted)
+	if err != nil {
+		t.Fatalf("new second memtable: %v", err)
+	}
+
+	first.Set([]byte("hashed-first"), []byte("hashed-value"))
+
+	const routedShard = 3
+	var routedKey []byte
+	for i := uint64(0); ; i++ {
+		key := batchFollowupBE8Key(i)
+		if cache.hashShardIndex(key) != routedShard {
+			routedKey = key
+			break
+		}
+	}
+	value := bytes.Repeat([]byte("x"), 128)
+	second.Set(routedKey, value)
+	first.Freeze()
+	second.Freeze()
+
+	routedRange := keyRange{}
+	routedRange.add(routedKey)
+
+	cache.mu.Lock()
+	cache.queue = []memtable.Table{first, second}
+	cache.queueShardIDs = []uint16{0, routedShard}
+	cache.queueRouteModes = []uint8{memtableRouteHashed, memtableRouteRanged}
+	cache.queueLaneIDs = []uint16{0, 0}
+	cache.queueIDs = []uint64{1, 2}
+	cache.queueEnqueueNS = []int64{time.Now().UnixNano(), time.Now().UnixNano()}
+	cache.queueRanges = []keyRange{{}, routedRange}
+	cache.queueWALPaths = nil
+	cache.queueValueLogPaths = nil
+	cache.queueBacklogBytes.Store(first.Size() + second.Size())
+	cache.publishMemtablesLocked()
+	if len(cache.queue) != 2 {
+		cache.mu.Unlock()
+		t.Fatalf("queue len before flush=%d want 2", len(cache.queue))
+	}
+	if len(cache.queueRouteModes) != len(cache.queue) {
+		cache.mu.Unlock()
+		t.Fatalf("queue route modes len=%d want %d", len(cache.queueRouteModes), len(cache.queue))
+	}
+	if cache.queueRouteModes[0] != memtableRouteHashed || cache.queueRouteModes[1] != memtableRouteRanged {
+		modes := append([]uint8(nil), cache.queueRouteModes...)
+		cache.mu.Unlock()
+		t.Fatalf("queue route modes before flush=%v want [%d %d]", modes, memtableRouteHashed, memtableRouteRanged)
+	}
+	cache.mu.Unlock()
+
+	if !cache.flushOneLocked(false) {
+		t.Fatal("flushOneLocked returned false")
+	}
+
+	cache.mu.RLock()
+	queueLen := len(cache.queue)
+	queueRouteModes := append([]uint8(nil), cache.queueRouteModes...)
+	cache.mu.RUnlock()
+	if queueLen != 1 {
+		t.Fatalf("queue len after one flush=%d want 1", queueLen)
+	}
+	if len(queueRouteModes) != 1 || queueRouteModes[0] != memtableRouteRanged {
+		t.Fatalf("queue route modes after one flush=%v want [%d]", queueRouteModes, memtableRouteRanged)
+	}
+
+	got, err := cache.Get(routedKey)
+	if err != nil {
+		t.Fatalf("Get(routed after one flush): %v", err)
+	}
+	if !bytes.Equal(got, value) {
+		t.Fatalf("Get(routed after one flush) len=%d want %d", len(got), len(value))
 	}
 }
