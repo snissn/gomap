@@ -801,6 +801,7 @@ func (m *AppendOnly) updateLatestIndexLocked(key []byte, idx int) {
 
 func (m *AppendOnly) appendEntryLocked(key, value []byte, ptr page.ValuePtr, flags byte, steal bool, borrowValue bool) appendOnlyObserveEvent {
 	var observeEvent appendOnlyObserveEvent
+	grewEntries := false
 	if m.count == len(m.entries) {
 		if m.predictEntryHintSource != nil {
 			if shared := appendOnlyClampRetainedEntries(int(m.predictEntryHintSource.Load())); shared > m.growEntriesLen {
@@ -816,10 +817,13 @@ func (m *AppendOnly) appendEntryLocked(key, value []byte, ptr page.ValuePtr, fla
 		copy(grown, m.entries[:m.count])
 		m.entries = grown
 		putAppendOnlyEntries(prev)
-		observeEvent.record(m.observeEntries, nextCap)
+		grewEntries = true
 	}
 	idx := m.count
 	m.count++
+	if grewEntries {
+		observeEvent.record(m.observeEntries, m.count)
+	}
 	ent := &m.entries[idx]
 	ent.flags = flags
 	ent.keyIndex = 0
