@@ -59,6 +59,7 @@ type appendOnlyEntry struct {
 	inlineKey    [appendOnlyInlineKeyLen]byte
 	keyIndex     uint32
 	payloadIndex uint32
+	inlineKeyLen uint8
 	flags        byte
 }
 
@@ -378,7 +379,7 @@ func appendOnlyEntryKeyFromKeys(ent *appendOnlyEntry, keys []string) []byte {
 		return nil
 	}
 	if ent.flags&appendOnlyEntryFlagKeyInline != 0 {
-		return ent.inlineKey[:]
+		return ent.inlineKey[:int(ent.inlineKeyLen)]
 	}
 	if ent.keyIndex == 0 {
 		return nil
@@ -776,10 +777,12 @@ func (m *AppendOnly) appendEntryLocked(key, value []byte, ptr page.ValuePtr, fla
 	ent.flags = flags
 	ent.keyIndex = 0
 	ent.payloadIndex = 0
+	ent.inlineKeyLen = 0
 	payloadValue := ""
 	payloadPtr := page.ValuePtr{}
-	if len(key) == appendOnlyInlineKeyLen {
+	if len(key) <= appendOnlyInlineKeyLen {
 		copy(ent.inlineKey[:], key)
+		ent.inlineKeyLen = uint8(len(key))
 		ent.flags |= appendOnlyEntryFlagKeyInline
 	} else if steal {
 		m.keys = append(m.keys, appendOnlyStringFromBytes(key))
@@ -1192,6 +1195,7 @@ func (m *AppendOnly) resetLockedWithPolicy(capacity, estimatedBytesPerEntry, ent
 		ent.flags = 0
 		ent.keyIndex = 0
 		ent.payloadIndex = 0
+		ent.inlineKeyLen = 0
 	}
 	clear(m.keys)
 	m.keys = m.keys[:0]

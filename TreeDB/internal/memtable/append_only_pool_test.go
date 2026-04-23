@@ -277,6 +277,35 @@ func TestAppendOnlySetCopiesNonInlineKeyIntoArena(t *testing.T) {
 	}
 }
 
+func TestAppendOnlySetInlinesShortKey(t *testing.T) {
+	m := NewAppendOnlyWithCapacity(0)
+	key := []byte("short")
+	lookupKey := cloneBytes(key)
+	m.Set(key, []byte("v"))
+
+	if m.count != 1 {
+		t.Fatalf("count=%d want=1", m.count)
+	}
+	ent := &m.entries[0]
+	if ent.flags&appendOnlyEntryFlagKeyInline == 0 {
+		t.Fatalf("expected short key to be stored inline")
+	}
+	if ent.inlineKeyLen != uint8(len(lookupKey)) {
+		t.Fatalf("inline key len=%d want=%d", ent.inlineKeyLen, len(lookupKey))
+	}
+	if ent.keyIndex != 0 {
+		t.Fatalf("short inline key should not allocate a key slot; keyIndex=%d", ent.keyIndex)
+	}
+	storedKey := m.appendOnlyEntryKey(ent)
+	if string(storedKey) != string(lookupKey) {
+		t.Fatalf("stored key=%q want=%q", storedKey, lookupKey)
+	}
+	key[0] = 'X'
+	if string(m.appendOnlyEntryKey(ent)) != string(lookupKey) {
+		t.Fatalf("inline key changed after caller mutation: got=%q want=%q", m.appendOnlyEntryKey(ent), lookupKey)
+	}
+}
+
 func TestAppendOnlySetCopiesIntoArenaForNonSteal(t *testing.T) {
 	m := NewAppendOnlyWithCapacity(0)
 	key := []byte("long-key-arena")
