@@ -204,7 +204,8 @@ func TestAppendOnlyPredictiveGrowthHintSurvivesResetAndObservesAfterUnlock(t *te
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		for i := 0; i < appendOnlyPredictHintMinEntries; i++ {
+		limit := cap(mt.entries) + 1
+		for i := 0; i < limit; i++ {
 			key := []byte(fmt.Sprintf("u%08d", i))
 			mt.SetEntrySteal(key, nil, page.ValuePtr{}, node.FlagTombstone)
 		}
