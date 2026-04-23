@@ -7359,6 +7359,18 @@ func memtableBatchDelete(mt memtable.Table, useSteal bool, key []byte) {
 	mt.Delete(key)
 }
 
+func appendUniqueTouchedMem(dst []memtable.Table, mt memtable.Table) []memtable.Table {
+	if mt == nil {
+		return dst
+	}
+	for i := range dst {
+		if dst[i] == mt {
+			return dst
+		}
+	}
+	return append(dst, mt)
+}
+
 // memtableBatchSet applies a cached batch write while preserving the ownership
 // rules selected by cachedBatchWriteUsesSteal. Pointer entries may still keep
 // inline bytes in memtables that do not use value-log pointers internally.
@@ -25754,6 +25766,8 @@ type Batch struct {
 	shardCnts          []int
 	shardEntries       [][]batch.Entry
 	shardIdxSets       [][]int
+	retainMainMems     []memtable.Table
+	ptrTouchedMems     []memtable.Table
 	maxEntries         int
 
 	closed bool
@@ -26197,6 +26211,12 @@ func (b *Batch) Reset() {
 	}
 	if b.shardIdxSets != nil {
 		b.shardIdxSets = b.shardIdxSets[:0]
+	}
+	if b.retainMainMems != nil {
+		b.retainMainMems = b.retainMainMems[:0]
+	}
+	if b.ptrTouchedMems != nil {
+		b.ptrTouchedMems = b.ptrTouchedMems[:0]
 	}
 	b.recycleCopyArenaChunks()
 	b.recyclePtrCopyArenaChunks()
@@ -27140,8 +27160,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 		}
 		shardAdds[idx] += add
 	}
-	retainMainMems := make([]memtable.Table, 0, shardCount)
-	retainMainSeen := make(map[memtable.Table]struct{}, shardCount)
+	retainMainMems := b.retainMainMems[:0]
 	for i, add := range shardAdds {
 		if add == 0 {
 			continue
@@ -27549,10 +27568,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 				batchArenaStealSuppressedDeferredEntriesTotal.Add(uint64(len(idxs)))
 			}
 			if useSteal && cachedBatchWriteNeedsBatchArenaRetention(shard.mem) {
-				if _, ok := retainMainSeen[shard.mem]; !ok {
-					retainMainSeen[shard.mem] = struct{}{}
-					retainMainMems = append(retainMainMems, shard.mem)
-				}
+				retainMainMems = appendUniqueTouchedMem(retainMainMems, shard.mem)
 			}
 			if b.streamEligible {
 				first := b.entries[idxs[0]].Key
@@ -27624,10 +27640,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 				batchArenaStealSuppressedDeferredEntriesTotal.Add(uint64(len(entries)))
 			}
 			if useSteal && cachedBatchWriteNeedsBatchArenaRetention(shard.mem) {
-				if _, ok := retainMainSeen[shard.mem]; !ok {
-					retainMainSeen[shard.mem] = struct{}{}
-					retainMainMems = append(retainMainMems, shard.mem)
-				}
+				retainMainMems = appendUniqueTouchedMem(retainMainMems, shard.mem)
 			}
 			storeInlinePtrValues := !b.db.memtableValueLogPointers
 			if useStream && useSteal {
@@ -27668,10 +27681,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 						}
 						memtableBatchSet(shard.mem, useSteal, allowBatchArenaBorrow, storeInlinePtrValues, op)
 						if borrowed {
-							if _, ok := retainMainSeen[shard.mem]; !ok {
-								retainMainSeen[shard.mem] = struct{}{}
-								retainMainMems = append(retainMainMems, shard.mem)
-							}
+							retainMainMems = appendUniqueTouchedMem(retainMainMems, shard.mem)
 						}
 					}
 					if useStream {
@@ -27698,6 +27708,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 			shard.mu.Unlock()
 		}
 	}
+	b.retainMainMems = retainMainMems
 
 	// 3. Threshold Check
 	if b.db.mutableBytes.Load() > b.db.mutableFlushThreshold() {
@@ -27710,9 +27721,8 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 	b.updateBatchCopyHint()
 	mainChunks := b.drainCopyArenaChunks()
 	retainPtrArena := false
-	ptrTouchedMems := make([]memtable.Table, 0, len(b.ptrValueIdxs))
+	ptrTouchedMems := b.ptrTouchedMems[:0]
 	if allowBatchArenaBorrow && len(b.ptrValueIdxs) > 0 {
-		seenPtrMems := make(map[memtable.Table]struct{}, len(b.ptrValueIdxs))
 		for _, idx := range b.ptrValueIdxs {
 			if idx < 0 || idx >= len(b.entries) || idx >= len(shardIdxs) {
 				b.db.writeMu.RUnlock()
@@ -27731,13 +27741,10 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 			if mt == nil {
 				continue
 			}
-			if _, ok := seenPtrMems[mt]; ok {
-				continue
-			}
-			seenPtrMems[mt] = struct{}{}
-			ptrTouchedMems = append(ptrTouchedMems, mt)
+			ptrTouchedMems = appendUniqueTouchedMem(ptrTouchedMems, mt)
 		}
 	}
+	b.ptrTouchedMems = ptrTouchedMems
 	if b.ptrValueIdxs != nil {
 		b.ptrValueIdxs = b.ptrValueIdxs[:0]
 	}
