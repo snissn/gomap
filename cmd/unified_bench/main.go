@@ -2003,6 +2003,14 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				encodeKey(keyBytes[j*8:(j+1)*8], uint64(j+cfg.Keys))
 			}
 		}
+		var batchKeyBytes []byte
+		batchKeySlab := func(entries int) []byte {
+			need := entries * 8
+			if cap(batchKeyBytes) < need {
+				batchKeyBytes = make([]byte, need)
+			}
+			return batchKeyBytes[:need]
+		}
 		type batcherWithSize interface {
 			NewBatchWithSize(size int) (kvstore.Batch, error)
 		}
@@ -2131,8 +2139,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 						}
 					} else {
 						// SetView is zero-copy: keep keys in a stable owned slab until commit.
-						need := (end - i) * 8
-						keysView := make([]byte, need)
+						keysView := batchKeySlab(end - i)
 						for j := i; j < end; j++ {
 							off := (j - i) * 8
 							keyView := keysView[off : off+8]
@@ -2227,9 +2234,8 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 					}
 				} else {
 					// Keep the zero-copy SetView path for large key counts by using
-					// one owned key slab per batch (stable beyond Commit()).
-					need := (end - i) * 8
-					keysView := make([]byte, need)
+					// one reused owned key slab per batch (stable until Commit()).
+					keysView := batchKeySlab(end - i)
 					for j := i; j < end; j++ {
 						off := (j - i) * 8
 						keyView := keysView[off : off+8]
@@ -2753,6 +2759,14 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 					encodeKey(keyBytes[j*8:(j+1)*8], uint64(j))
 				}
 			}
+			var batchKeyBytes []byte
+			batchKeySlab := func(entries int) []byte {
+				need := entries * 8
+				if cap(batchKeyBytes) < need {
+					batchKeyBytes = make([]byte, need)
+				}
+				return batchKeyBytes[:need]
+			}
 			type batcherWithSize interface {
 				NewBatchWithSize(size int) (kvstore.Batch, error)
 			}
@@ -2849,7 +2863,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 						}
 					} else {
 						// SetView is zero-copy: keep keys in a stable owned slab until commit.
-						keysView := make([]byte, (end-i)*8)
+						keysView := batchKeySlab(end - i)
 						for j := i; j < end; j++ {
 							off := (j - i) * 8
 							keyView := keysView[off : off+8]
