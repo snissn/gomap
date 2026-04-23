@@ -7631,10 +7631,9 @@ func (db *DB) trimAppendOnlyMemLeases(maxLeases int, resetCapacity int) {
 		return
 	}
 	effectiveResetCapacity := db.appendOnlyMemtableCapacityHint(resetCapacity, appendOnlyEstimatedBytesPerEntryDefault)
-	entryHint := db.appendOnlyEntryHintEntries()
 	for i := range dropped {
 		if dropped[i] != nil {
-			dropped[i].ResetWithCapacityHardAndEntryHint(effectiveResetCapacity, appendOnlyEstimatedBytesPerEntryDefault, entryHint)
+			dropped[i].ResetWithCapacityHard(effectiveResetCapacity, appendOnlyEstimatedBytesPerEntryDefault)
 			db.releaseAppendOnlyDirectArenaLeaseForMemtable(dropped[i])
 			db.appendOnlyMemPool.Put(dropped[i])
 		}

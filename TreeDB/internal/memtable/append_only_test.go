@@ -96,8 +96,11 @@ func TestAppendOnlyEntryHintDoesNotRaiseInitialCapacityBeyondBudget(t *testing.T
 	hint := appendOnlyMaxInitialEntries
 
 	m := NewAppendOnlyWithCapacityEstimatedEntryBytesAndHint(capacity, appendOnlyEstimatedBytesPerEntryPointer, hint)
-	if got := cap(m.entries); got != appendOnlyMinInitialEntries {
-		t.Fatalf("initial cap(entries)=%d want %d", got, appendOnlyMinInitialEntries)
+	if got := len(m.entries); got != appendOnlyMinInitialEntries {
+		t.Fatalf("initial len(entries)=%d want %d", got, appendOnlyMinInitialEntries)
+	}
+	if got := cap(m.entries); got >= hint {
+		t.Fatalf("initial cap(entries)=%d want < hint %d", got, hint)
 	}
 	if got := m.baseEntriesLen; got != appendOnlyMinInitialEntries {
 		t.Fatalf("baseEntriesLen=%d want %d", got, appendOnlyMinInitialEntries)
