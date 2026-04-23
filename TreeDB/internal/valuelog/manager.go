@@ -959,6 +959,12 @@ func (f *File) appendDecodedRecordTo(ptr page.ValuePtr, verifyCRC bool, dst []by
 	}
 	noteGrowReadAppendCompressedFallback(len(val))
 	noteGrowReadAppendCompressedFallbackDst(dst, len(val))
+	// When the caller started with an empty destination, ReadAtWithDictTo has
+	// already produced the decoded value as a standalone slice. Returning it
+	// directly avoids a second allocation+copy in the compressed fallback path.
+	if oldLen == 0 {
+		return val, nil
+	}
 	dst = grow(dst, len(val))
 	copy(dst[oldLen:], val)
 	return dst, nil
