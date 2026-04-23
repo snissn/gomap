@@ -25,7 +25,6 @@ const (
 	appendOnlyEntryPoolMaxCap               = 1 << 20
 	appendOnlyIteratorPoolMaxCap            = 1 << 20
 	appendOnlyIteratorPtrPoolMaxCap         = 1 << 20
-	appendOnlyReusableKeyMaxCap             = 1 << 10
 	appendOnlyValueArenaMinShift            = 12
 	appendOnlyValueArenaMaxShift            = 20
 	appendOnlyValueArenaClassCount          = appendOnlyValueArenaMaxShift - appendOnlyValueArenaMinShift + 1
@@ -45,7 +44,7 @@ var appendOnlyIteratorPtrPool sync.Pool
 var appendOnlyValueArenaPools [appendOnlyValueArenaClassCount]sync.Pool
 
 type appendOnlyEntry struct {
-	key       []byte
+	key       string
 	value     string
 	ptr       page.ValuePtr
 	inlineKey [appendOnlyInlineKeyLen]byte
@@ -280,7 +279,10 @@ func appendOnlyEntryKey(ent *appendOnlyEntry) []byte {
 	if ent.flags&appendOnlyEntryFlagKeyInline != 0 {
 		return ent.inlineKey[:]
 	}
-	return ent.key
+	if len(ent.key) == 0 {
+		return nil
+	}
+	return unsafe.Slice(unsafe.StringData(ent.key), len(ent.key))
 }
 
 func appendOnlyEntryValue(ent *appendOnlyEntry) []byte {
@@ -306,21 +308,13 @@ func cloneBytes(src []byte) []byte {
 	return dst
 }
 
-func cloneOrReuseBytes(dst, src []byte, maxCap int) []byte {
+func appendOnlyArenaStringCopy(arena *appendOnlyValueArena, src []byte) string {
 	if len(src) == 0 {
-		return nil
+		return ""
 	}
-	if maxCap <= 0 {
-		maxCap = len(src)
-	}
-	if cap(dst) >= len(src) && cap(dst) <= maxCap {
-		out := dst[:len(src)]
-		copy(out, src)
-		return out
-	}
-	out := make([]byte, len(src))
-	copy(out, src)
-	return out
+	buf := arena.alloc(len(src))
+	copy(buf, src)
+	return appendOnlyStringFromBytes(buf)
 }
 
 func appendOnlyValueArenaClassForLen(length int) (idx int, classCap int, ok bool) {
@@ -643,24 +637,23 @@ func (m *AppendOnly) appendEntryLocked(key, value []byte, ptr page.ValuePtr, fla
 	ent := &m.entries[idx]
 	ent.ptr = ptr
 	ent.flags = flags
+	if len(key) == appendOnlyInlineKeyLen {
+		copy(ent.inlineKey[:], key)
+		ent.flags |= appendOnlyEntryFlagKeyInline
+		ent.key = ""
+	} else if steal {
+		ent.key = appendOnlyStringFromBytes(key)
+	} else {
+		ent.key = appendOnlyArenaStringCopy(&m.valueArena, key)
+	}
 	if steal {
-		ent.key = key
 		ent.value = appendOnlyStringFromBytes(value)
 	} else {
-		if len(key) == appendOnlyInlineKeyLen {
-			copy(ent.inlineKey[:], key)
-			ent.flags |= appendOnlyEntryFlagKeyInline
-			ent.key = nil
-		} else {
-			ent.key = cloneOrReuseBytes(ent.key, key, appendOnlyReusableKeyMaxCap)
-		}
 		if len(value) > 0 {
 			if borrowValue {
 				ent.value = appendOnlyStringFromBytes(value)
 			} else {
-				buf := m.valueArena.alloc(len(value))
-				copy(buf, value)
-				ent.value = appendOnlyStringFromBytes(buf)
+				ent.value = appendOnlyArenaStringCopy(&m.valueArena, value)
 			}
 		} else {
 			ent.value = ""
@@ -1049,11 +1042,7 @@ func (m *AppendOnly) resetLockedWithPolicy(capacity, estimatedBytesPerEntry, ent
 		ent := &m.entries[i]
 		ent.ptr = page.ValuePtr{}
 		ent.flags = 0
-		if cap(ent.key) > appendOnlyReusableKeyMaxCap {
-			ent.key = nil
-		} else if ent.key != nil {
-			ent.key = ent.key[:0]
-		}
+		ent.key = ""
 		ent.value = ""
 	}
 	m.valueArena.reset()
