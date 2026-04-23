@@ -672,7 +672,7 @@ func TestAppendOnlyUnorderedAppendBuildsLatestIndexLazily(t *testing.T) {
 	if m.snapCount != 0 {
 		t.Fatalf("expected mutable unordered iterator to keep shared snapshot uncached after rebuild; got snapCount=%d", m.snapCount)
 	}
-	idx, ok := m.latest[appendOnlyKeyString([]byte("b"))]
+	idx, ok := m.latest["b"]
 	if !ok {
 		t.Fatalf("missing latest index entry for key b")
 	}
