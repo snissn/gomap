@@ -66,6 +66,7 @@ type AppendOnly struct {
 
 	entries        []appendOnlyEntry
 	baseEntriesLen int
+	growEntriesLen int
 	latest         map[string]int
 	latest64       map[uint64]int
 	snapshot       []*appendOnlyEntry
@@ -206,8 +207,11 @@ func appendOnlyInitialEntriesForCapacity(capacity, estimatedBytesPerEntry int) i
 	return n
 }
 
-func appendOnlyInitialEntriesForCapacityAndHint(capacity, estimatedBytesPerEntry, entryHint int) int {
-	n := appendOnlyInitialEntriesForCapacity(capacity, estimatedBytesPerEntry)
+func appendOnlyGrowthEntriesForHint(baseEntries, entryHint int) int {
+	n := baseEntries
+	if n < appendOnlyMinInitialEntries {
+		n = appendOnlyMinInitialEntries
+	}
 	if entryHint <= 0 {
 		return n
 	}
@@ -232,10 +236,12 @@ func NewAppendOnlyWithCapacityEstimatedEntryBytes(capacity, estimatedBytesPerEnt
 }
 
 func NewAppendOnlyWithCapacityEstimatedEntryBytesAndHint(capacity, estimatedBytesPerEntry, entryHint int) *AppendOnly {
-	n := appendOnlyInitialEntriesForCapacityAndHint(capacity, estimatedBytesPerEntry, entryHint)
+	baseEntries := appendOnlyInitialEntriesForCapacity(capacity, estimatedBytesPerEntry)
+	growEntries := appendOnlyGrowthEntriesForHint(baseEntries, entryHint)
 	return &AppendOnly{
-		entries:        getAppendOnlyEntries(n),
-		baseEntriesLen: n,
+		entries:        getAppendOnlyEntries(growEntries),
+		baseEntriesLen: baseEntries,
+		growEntriesLen: growEntries,
 		count:          0,
 		ordered:        true,
 		hasLast:        false,
@@ -565,6 +571,9 @@ func (m *AppendOnly) updateLatestIndexLocked(key []byte, idx int) {
 func (m *AppendOnly) appendEntryLocked(key, value []byte, ptr page.ValuePtr, flags byte, steal bool, borrowValue bool) {
 	if m.count == len(m.entries) {
 		nextCap := appendOnlyNextCapacity(len(m.entries))
+		if nextCap < m.growEntriesLen {
+			nextCap = m.growEntriesLen
+		}
 		prev := m.entries
 		grown := getAppendOnlyEntries(nextCap)
 		copy(grown, m.entries[:m.count])
@@ -957,17 +966,20 @@ func (m *AppendOnly) ResetWithCapacityHardAndEntryHint(capacity, estimatedBytesP
 func (m *AppendOnly) resetLockedWithPolicy(capacity, estimatedBytesPerEntry, entryHint int, retainObserved bool) {
 	desiredEntries := m.baseEntriesLen
 	if capacity > 0 {
-		desiredEntries = appendOnlyInitialEntriesForCapacityAndHint(capacity, estimatedBytesPerEntry, entryHint)
+		desiredEntries = appendOnlyInitialEntriesForCapacity(capacity, estimatedBytesPerEntry)
 		m.baseEntriesLen = desiredEntries
-	} else if entryHint > 0 {
-		desiredEntries = appendOnlyInitialEntriesForCapacityAndHint(defaultMemtableCapacity, estimatedBytesPerEntry, entryHint)
 	}
 	if desiredEntries <= 0 {
 		desiredEntries = appendOnlyMinInitialEntries
+		m.baseEntriesLen = desiredEntries
 	}
+	// Hints should improve the next growth jump and warm-retention ceiling, but
+	// reset itself must not allocate just to satisfy the hint.
+	growthEntries := appendOnlyGrowthEntriesForHint(desiredEntries, entryHint)
+	m.growEntriesLen = growthEntries
 
 	oldCount := m.count
-	maxRetainedEntries := appendOnlyMaxReuseEntries(desiredEntries)
+	maxRetainedEntries := appendOnlyMaxReuseEntries(growthEntries)
 	retainedEntries := desiredEntries
 	if retainObserved && oldCount > retainedEntries {
 		retainedEntries = oldCount

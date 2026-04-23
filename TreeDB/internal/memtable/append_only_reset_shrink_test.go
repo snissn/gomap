@@ -79,7 +79,7 @@ func TestAppendOnlyResetWithCapacity_RetainsObservedEntriesWithinBound(t *testin
 	}
 }
 
-func TestAppendOnlyResetWithCapacityAndEntryHint_PreallocatesHintedEntries(t *testing.T) {
+func TestAppendOnlyNewWithCapacityAndEntryHint_PreallocatesHintedEntries(t *testing.T) {
 	const (
 		capacityBytes          = 4 << 10
 		estimatedBytesPerEntry = 96
@@ -103,21 +103,48 @@ func TestAppendOnlyResetWithCapacityAndEntryHint_PreallocatesHintedEntries(t *te
 	if got := cap(mt.entries); got != capBefore {
 		t.Fatalf("hinted constructor regrew entries: cap(entries)=%d want=%d", got, capBefore)
 	}
+}
 
-	mt.ResetWithCapacityAndEntryHint(capacityBytes, estimatedBytesPerEntry, entryHint)
-	if got := len(mt.entries); got < entryHint {
-		t.Fatalf("reset len(entries)=%d want>=%d", got, entryHint)
-	}
-	if got := cap(mt.entries); got < entryHint {
-		t.Fatalf("reset cap(entries)=%d want>=%d", got, entryHint)
+func TestAppendOnlyResetWithCapacityAndEntryHint_DefersHintGrowthUntilAppend(t *testing.T) {
+	const (
+		capacityBytes          = 4 << 10
+		estimatedBytesPerEntry = 96
+	)
+
+	base := appendOnlyInitialEntriesForCapacity(capacityBytes, estimatedBytesPerEntry)
+	entryHint := base * 16
+	mt := NewAppendOnlyWithCapacityEstimatedEntryBytes(capacityBytes, estimatedBytesPerEntry)
+	if got := cap(mt.entries); got != base {
+		t.Fatalf("initial cap(entries)=%d want=%d", got, base)
 	}
 
-	capAfterReset := cap(mt.entries)
+	allocs := testing.AllocsPerRun(1000, func() {
+		mt.ResetWithCapacityAndEntryHint(capacityBytes, estimatedBytesPerEntry, entryHint)
+	})
+	if allocs > 0 {
+		t.Fatalf("reset allocs/run=%f want 0", allocs)
+	}
+	if got := len(mt.entries); got != base {
+		t.Fatalf("reset len(entries)=%d want=%d", got, base)
+	}
+	if got := cap(mt.entries); got != base {
+		t.Fatalf("reset cap(entries)=%d want=%d", got, base)
+	}
+	if got := mt.growEntriesLen; got < entryHint {
+		t.Fatalf("growEntriesLen=%d want >=%d", got, entryHint)
+	}
+
 	for i := 0; i < entryHint; i++ {
 		key := []byte(fmt.Sprintf("r%08d", i))
 		mt.SetEntrySteal(key, nil, page.ValuePtr{}, node.FlagTombstone)
 	}
-	if got := cap(mt.entries); got != capAfterReset {
-		t.Fatalf("hinted reset regrew entries: cap(entries)=%d want=%d", got, capAfterReset)
+	capAfterGrowth := cap(mt.entries)
+	if capAfterGrowth < entryHint {
+		t.Fatalf("grown cap(entries)=%d want >=%d", capAfterGrowth, entryHint)
+	}
+
+	mt.ResetWithCapacityAndEntryHint(capacityBytes, estimatedBytesPerEntry, entryHint)
+	if got := cap(mt.entries); got != capAfterGrowth {
+		t.Fatalf("warm hinted cap(entries)=%d want=%d", got, capAfterGrowth)
 	}
 }

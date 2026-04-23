@@ -36,6 +36,7 @@ func TestAppendOnlyInlineGrowthSkipsIntermediateDoublingBelowCutoff(t *testing.T
 	mt := &AppendOnly{
 		entries:        make([]appendOnlyEntry, appendOnlyMinInitialEntries),
 		baseEntriesLen: appendOnlyMinInitialEntries,
+		growEntriesLen: appendOnlyMinInitialEntries,
 		ordered:        true,
 		lastIdx:        -1,
 	}
