@@ -371,6 +371,12 @@ func (b *Batch) SetView(key, value []byte) error {
 	return nil
 }
 
+// SetStealView records a Put without copying key/value bytes and allows higher
+// layers to retain those slices beyond the batch lifetime.
+func (b *Batch) SetStealView(key, value []byte) error {
+	return b.SetView(key, value)
+}
+
 // Set adds or replaces a key/value operation.
 func (b *Batch) Set(key, value []byte) error {
 	if err := b.ensureOpen(); err != nil {

@@ -19,31 +19,66 @@ func HasCompactLeafLogPayload(payload []byte) bool {
 		bytes.Equal(payload[:len(compactLeafPagePayloadMagic)], compactLeafPagePayloadMagic[:])
 }
 
-func MaybeCompactLeafLogPayload(leafPage []byte) ([]byte, bool, error) {
+func compactLeafLogPayloadBounds(leafPage []byte) (prefixLen, suffixStart, suffixLen int, ok bool, err error) {
 	if len(leafPage) != page.PageSize {
-		return leafPage, false, nil
+		return 0, 0, 0, false, nil
 	}
-	prefixLen, suffixLen, err := node.LeafPageLiveBounds(leafPage)
+	prefixLen, suffixLen, err = node.LeafPageLiveBounds(leafPage)
 	if err != nil {
-		return leafPage, false, nil
+		return 0, 0, 0, false, nil
 	}
-	compactLen := compactLeafPagePayloadHeaderSize + prefixLen + suffixLen
+	compactLen := compactLeafPagePayloadLen(prefixLen, suffixLen)
 	if compactLen >= len(leafPage) {
+		return 0, 0, 0, false, nil
+	}
+	suffixStart = len(leafPage) - suffixLen
+	return prefixLen, suffixStart, suffixLen, true, nil
+}
+
+func compactLeafPagePayloadLen(prefixLen, suffixLen int) int {
+	return compactLeafPagePayloadHeaderSize + prefixLen + suffixLen
+}
+
+// CompactLeafLogPayloadLen reports the payload length that
+// MaybeCompactLeafLogPayload would produce without materializing the payload.
+// When compaction is not beneficial, it returns len(leafPage) and compacted=false.
+func CompactLeafLogPayloadLen(leafPage []byte) (payloadLen int, compacted bool, err error) {
+	prefixLen, _, suffixLen, ok, err := compactLeafLogPayloadBounds(leafPage)
+	if err != nil {
+		return 0, false, err
+	}
+	if !ok {
+		return len(leafPage), false, nil
+	}
+	return compactLeafPagePayloadLen(prefixLen, suffixLen), true, nil
+}
+
+func encodeCompactLeafLogPayload(dst, leafPage []byte, prefixLen, suffixStart, suffixLen int) {
+	copy(dst[:len(compactLeafPagePayloadMagic)], compactLeafPagePayloadMagic[:])
+	binary.LittleEndian.PutUint16(dst[len(compactLeafPagePayloadMagic):len(compactLeafPagePayloadMagic)+2], uint16(prefixLen))
+	binary.LittleEndian.PutUint16(dst[len(compactLeafPagePayloadMagic)+2:compactLeafPagePayloadHeaderSize], uint16(suffixLen))
+
+	payload := dst[compactLeafPagePayloadHeaderSize:]
+	sum := page.CalculateChecksum(leafPage)
+
+	copy(payload[:8], leafPage[:8])
+	binary.LittleEndian.PutUint32(payload[8:12], sum)
+	if prefixLen > 12 {
+		copy(payload[12:prefixLen], leafPage[12:prefixLen])
+	}
+	copy(payload[prefixLen:], leafPage[suffixStart:])
+}
+
+func MaybeCompactLeafLogPayload(leafPage []byte) ([]byte, bool, error) {
+	prefixLen, suffixStart, suffixLen, ok, err := compactLeafLogPayloadBounds(leafPage)
+	if err != nil {
+		return nil, false, err
+	}
+	if !ok {
 		return leafPage, false, nil
 	}
-
-	suffixStart := len(leafPage) - suffixLen
-	var canonical [page.PageSize]byte
-	copy(canonical[:prefixLen], leafPage[:prefixLen])
-	copy(canonical[suffixStart:], leafPage[suffixStart:])
-	page.UpdateChecksum(canonical[:])
-
-	payload := make([]byte, compactLen)
-	copy(payload[:len(compactLeafPagePayloadMagic)], compactLeafPagePayloadMagic[:])
-	binary.LittleEndian.PutUint16(payload[len(compactLeafPagePayloadMagic):len(compactLeafPagePayloadMagic)+2], uint16(prefixLen))
-	binary.LittleEndian.PutUint16(payload[len(compactLeafPagePayloadMagic)+2:compactLeafPagePayloadHeaderSize], uint16(suffixLen))
-	copy(payload[compactLeafPagePayloadHeaderSize:compactLeafPagePayloadHeaderSize+prefixLen], canonical[:prefixLen])
-	copy(payload[compactLeafPagePayloadHeaderSize+prefixLen:], canonical[suffixStart:])
+	payload := make([]byte, compactLeafPagePayloadLen(prefixLen, suffixLen))
+	encodeCompactLeafLogPayload(payload, leafPage, prefixLen, suffixStart, suffixLen)
 	return payload, true, nil
 }
 

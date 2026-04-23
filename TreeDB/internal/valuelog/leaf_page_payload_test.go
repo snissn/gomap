@@ -242,6 +242,47 @@ func TestManagerReadUnsafe_DecodesCompactLeafPayload(t *testing.T) {
 	requireLeafPagesLogicallyEqual(t, leaf, got)
 }
 
+func TestWriterAppendCompactLeafPage_BlockCompressionRoundTrips(t *testing.T) {
+	dir := t.TempDir()
+	fileID, err := EncodeFileID(ReservedLeafLogLaneID, 1)
+	if err != nil {
+		t.Fatalf("EncodeFileID: %v", err)
+	}
+	path := compactLeafPayloadTestPath(t, dir, 1)
+	w, err := NewWriter(path, fileID)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	w.SetBlockCompression(BlockCodecSnappy, true)
+
+	leaf := buildSparseLeafPageForPayloadTest(t)
+	ptr, stats, compacted, err := w.AppendCompactLeafPage(1, leaf)
+	if err != nil {
+		t.Fatalf("AppendCompactLeafPage: %v", err)
+	}
+	if !compacted {
+		t.Fatalf("expected sparse leaf page to compact")
+	}
+	if stats.RawPayloadBytes <= 0 {
+		t.Fatalf("stats.RawPayloadBytes=%d want > 0", stats.RawPayloadBytes)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close writer: %v", err)
+	}
+
+	mgr := newLeafPayloadTestManager(t, dir, path, fileID)
+	defer func() { _ = mgr.Close() }()
+
+	got, err := mgr.ReadUnsafe(ptr)
+	if err != nil {
+		t.Fatalf("ReadUnsafe: %v", err)
+	}
+	if len(got) != page.PageSize {
+		t.Fatalf("ReadUnsafe len=%d want %d", len(got), page.PageSize)
+	}
+	requireLeafPagesLogicallyEqual(t, leaf, got)
+}
+
 func TestSetReadUnsafe_DecodesCompactLeafPayload(t *testing.T) {
 	dir := t.TempDir()
 	fileID, err := EncodeFileID(ReservedLeafLogLaneID, 1)

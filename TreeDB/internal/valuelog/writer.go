@@ -917,6 +917,143 @@ func (w *Writer) Append(dictID uint64, dict []byte, rid uint64, value []byte) (p
 	return ptrs[0], nil
 }
 
+// AppendCompactLeafPage appends a compact split-leaf payload directly from the
+// source page when compaction is beneficial, avoiding a transient merged
+// payload allocation. When the page does not benefit from compaction, it falls
+// back to a normal raw append.
+func (w *Writer) AppendCompactLeafPage(rid uint64, leafPage []byte) (page.ValuePtr, FrameStats, bool, error) {
+	if w == nil {
+		return page.ValuePtr{}, FrameStats{}, false, errors.New("valuelog: nil writer")
+	}
+	if rid == 0 {
+		return page.ValuePtr{}, FrameStats{}, false, errors.New("valuelog: missing rid")
+	}
+	prefixLen, suffixStart, suffixLen, compacted, err := compactLeafLogPayloadBounds(leafPage)
+	if err != nil {
+		return page.ValuePtr{}, FrameStats{}, false, err
+	}
+	payloadLen := len(leafPage)
+	if compacted {
+		payloadLen = compactLeafPagePayloadLen(prefixLen, suffixLen)
+	}
+	if w.blockCompression {
+		var (
+			rec [1]Record
+			dst [1]page.ValuePtr
+		)
+		if compacted {
+			if cap(w.rawScratch) < payloadLen {
+				w.rawScratch = make([]byte, payloadLen)
+			}
+			payload := w.rawScratch[:payloadLen]
+			encodeCompactLeafLogPayload(payload, leafPage, prefixLen, suffixStart, suffixLen)
+			rec[0] = Record{RID: rid, Value: payload}
+		} else {
+			rec[0] = Record{RID: rid, Value: leafPage}
+		}
+		ptrs, stats, appendErr := w.appendBlockFrameWithStats(rec[:], payloadLen, dst[:])
+		if appendErr != nil {
+			return page.ValuePtr{}, FrameStats{}, compacted, appendErr
+		}
+		if len(ptrs) != 1 {
+			return page.ValuePtr{}, FrameStats{}, compacted, ErrCorrupt
+		}
+		return ptrs[0], stats, compacted, nil
+	}
+	if !compacted {
+		ptr, appendErr := w.Append(0, nil, rid, leafPage)
+		if appendErr != nil {
+			return page.ValuePtr{}, FrameStats{}, false, appendErr
+		}
+		return ptr, FrameStats{Records: 1, RawPayloadBytes: len(leafPage), StoredPayloadBytes: len(leafPage), Kept: false}, false, nil
+	}
+
+	bodyLen := uint32(FrameHeaderSize + 8 + 8 + payloadLen)
+	if recordSizeExceedsMax(bodyLen) {
+		return page.ValuePtr{}, FrameStats{}, false, ErrRecordTooLarge
+	}
+
+	recordLen := HeaderSize + int(bodyLen)
+	start := w.size
+	max := w.appendMax
+	if max <= 0 {
+		max = defaultBufferSize
+	}
+	recordLenHint := uint32(headerWithoutCRC) + bodyLen
+	if recordLenHint > page.ValuePtrGroupedMaxRecordLen {
+		recordLenHint = 0
+	}
+
+	writeRecord := func(buf []byte) {
+		buf[4] = Version
+		buf[5] = recordFlagGrouped
+		buf[6] = 0
+		buf[7] = 0
+		binary.LittleEndian.PutUint64(buf[8:16], 0)
+		binary.LittleEndian.PutUint32(buf[16:20], bodyLen)
+
+		off := HeaderSize
+		buf[off] = FrameVersion
+		buf[off+1] = 0
+		buf[off+2] = 1
+		buf[off+3] = 0
+		binary.LittleEndian.PutUint64(buf[off+4:off+12], 0)
+		off += FrameHeaderSize
+
+		binary.LittleEndian.PutUint64(buf[off:off+8], rid)
+		off += 8
+		binary.LittleEndian.PutUint32(buf[off:off+4], 0)
+		binary.LittleEndian.PutUint32(buf[off+4:off+8], uint32(payloadLen))
+		off += 8
+		encodeCompactLeafLogPayload(buf[off:off+payloadLen], leafPage, prefixLen, suffixStart, suffixLen)
+
+		sum := crc.ChecksumParts(buf[4:HeaderSize], buf[HeaderSize:])
+		binary.LittleEndian.PutUint32(buf[0:4], sum)
+	}
+
+	if w.f != nil && recordLen <= max {
+		if len(w.appendBuf)+recordLen > max {
+			if err := w.flushAppendBuf(); err != nil {
+				return page.ValuePtr{}, FrameStats{}, false, err
+			}
+		}
+		if cap(w.appendBuf) < max {
+			w.appendBuf = make([]byte, len(w.appendBuf), max)
+		}
+		base := len(w.appendBuf)
+		w.appendBuf = w.appendBuf[:base+recordLen]
+		buf := w.appendBuf[base : base+recordLen]
+		writeRecord(buf)
+		w.size += int64(recordLen)
+
+		if len(w.appendBuf) >= max {
+			if err := w.flushAppendBuf(); err != nil {
+				return page.ValuePtr{}, FrameStats{}, false, err
+			}
+		}
+		return page.ValuePtr{
+			Offset: uint64(start + 4),
+			Length: page.ValuePtrMarkGrouped(recordLenHint, 0),
+			FileID: w.fileID,
+		}, FrameStats{Records: 1, RawPayloadBytes: payloadLen, StoredPayloadBytes: payloadLen, Kept: false}, true, nil
+	}
+
+	if cap(w.scratch) < recordLen {
+		w.scratch = make([]byte, recordLen)
+	}
+	buf := w.scratch[:recordLen]
+	writeRecord(buf)
+	if err := w.writeBytes(buf); err != nil {
+		return page.ValuePtr{}, FrameStats{}, false, err
+	}
+	w.size += int64(recordLen)
+	return page.ValuePtr{
+		Offset: uint64(start + 4),
+		Length: page.ValuePtrMarkGrouped(recordLenHint, 0),
+		FileID: w.fileID,
+	}, FrameStats{Records: 1, RawPayloadBytes: payloadLen, StoredPayloadBytes: payloadLen, Kept: false}, true, nil
+}
+
 func (w *Writer) AppendOneFrameWithStats(dictID uint64, dict []byte, rid uint64, value []byte) (page.ValuePtr, FrameStats, error) {
 	if w == nil {
 		return page.ValuePtr{}, FrameStats{}, errors.New("valuelog: nil writer")

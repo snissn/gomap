@@ -303,3 +303,190 @@ func TestPointReads_EmptyMemtableBypassGuardChecksMutableLen(t *testing.T) {
 		t.Fatalf("expected memtable GetEntry to be consulted by GetAppend")
 	}
 }
+
+func TestPointReads_CurrentMutableRouteUsesRangedShard(t *testing.T) {
+	const shards = 8
+	const routeShard = 3
+
+	db := &DB{
+		backend:          panicBackend{},
+		mutableShards:    make([]memShard, shards),
+		mutableShardMask: shards - 1,
+	}
+
+	var key [8]byte
+	for i := uint64(0); ; i++ {
+		binary.BigEndian.PutUint64(key[:], i)
+		if db.shardIndex(key[:]) != routeShard {
+			break
+		}
+	}
+	wantKey := append([]byte(nil), key[:]...)
+
+	mutables := make([]memtable.Table, shards)
+	tables := make([]*countingTable, shards)
+	for shard := 0; shard < shards; shard++ {
+		mt, err := memtable.NewWithCapacityMode(0, memtable.ModeHashSorted)
+		if err != nil {
+			t.Fatalf("new memtable: %v", err)
+		}
+		ct := &countingTable{inner: mt}
+		mutables[shard] = ct
+		tables[shard] = ct
+	}
+	mutables[routeShard].SetEntry(wantKey, []byte("routed"), page.ValuePtr{}, node.FlagInline)
+
+	rng := keyRange{}
+	rng.add(wantKey)
+	db.memtables.Store(&memtableView{
+		mutables: mutables,
+		mutableRoute: &mutableRouteState{
+			shardID: routeShard,
+			rng:     rng,
+		},
+	})
+	db.mutableBytes.Store(1)
+
+	val, found, err := db.getMemtable(wantKey)
+	if err != nil {
+		t.Fatalf("getMemtable: %v", err)
+	}
+	if !found || string(val) != "routed" {
+		t.Fatalf("unexpected routed get: found=%v val=%q", found, string(val))
+	}
+
+	for shard := 0; shard < shards; shard++ {
+		calls := tables[shard].getEntryCalls
+		if shard == routeShard {
+			if calls == 0 {
+				t.Fatalf("expected routed shard GetEntry calls > 0, got %d", calls)
+			}
+			continue
+		}
+		if calls != 0 {
+			t.Fatalf("expected non-routed shard %d GetEntry calls = 0, got %d", shard, calls)
+		}
+	}
+}
+
+func TestPointReads_CurrentMutableRouteSetProbesNewestMatchFirst(t *testing.T) {
+	const shards = 8
+	const oldShard = 1
+	const newShard = 3
+
+	db := &DB{
+		backend:          panicBackend{},
+		mutableShards:    make([]memShard, shards),
+		mutableShardMask: shards - 1,
+	}
+
+	var rawKey [8]byte
+	binary.BigEndian.PutUint64(rawKey[:], 42)
+	key := append([]byte(nil), rawKey[:]...)
+
+	mutables := make([]memtable.Table, shards)
+	for shard := 0; shard < shards; shard++ {
+		mt, err := memtable.NewWithCapacityMode(0, memtable.ModeHashSorted)
+		if err != nil {
+			t.Fatalf("new memtable: %v", err)
+		}
+		mutables[shard] = mt
+	}
+	mutables[oldShard].SetEntry(key, []byte("old"), page.ValuePtr{}, node.FlagInline)
+	mutables[newShard].SetEntry(key, []byte("new"), page.ValuePtr{}, node.FlagInline)
+
+	rng := keyRange{}
+	rng.add(key)
+	db.memtables.Store(&memtableView{
+		mutables: mutables,
+		mutableRoute: &mutableRouteState{
+			shardID: newShard,
+			rng:     cloneRange(rng),
+			entries: []mutableRouteEntry{
+				{shardID: oldShard, rng: cloneRange(rng)},
+				{shardID: newShard, rng: cloneRange(rng)},
+			},
+		},
+	})
+	db.mutableBytes.Store(1)
+
+	val, found, err := db.getMemtable(key)
+	if err != nil {
+		t.Fatalf("getMemtable: %v", err)
+	}
+	if !found || string(val) != "new" {
+		t.Fatalf("unexpected route-set get: found=%v val=%q", found, string(val))
+	}
+}
+
+func TestPointReads_RangedQueueUsesQueueRangeNotHashShard(t *testing.T) {
+	const shards = 8
+	const routeShard = 6
+
+	db := &DB{
+		backend:          panicBackend{},
+		mutableShards:    make([]memShard, shards),
+		mutableShardMask: shards - 1,
+	}
+
+	var key [8]byte
+	for i := uint64(0); ; i++ {
+		binary.BigEndian.PutUint64(key[:], i)
+		if db.shardIndex(key[:]) != routeShard {
+			break
+		}
+	}
+	wantKey := append([]byte(nil), key[:]...)
+
+	queue := make([]memtable.Table, 0, shards)
+	queueShardIDs := make([]uint16, 0, shards)
+	queueRouteModes := make([]uint8, 0, shards)
+	queueRanges := make([]keyRange, 0, shards)
+	tables := make([]*countingTable, 0, shards)
+
+	for shard := 0; shard < shards; shard++ {
+		mt, err := memtable.NewWithCapacityMode(0, memtable.ModeHashSorted)
+		if err != nil {
+			t.Fatalf("new memtable: %v", err)
+		}
+		ct := &countingTable{inner: mt}
+		queue = append(queue, ct)
+		queueShardIDs = append(queueShardIDs, uint16(shard))
+		queueRouteModes = append(queueRouteModes, memtableRouteHashed)
+		queueRanges = append(queueRanges, keyRange{})
+		tables = append(tables, ct)
+	}
+
+	queue[routeShard].SetEntry(wantKey, []byte("queued-routed"), page.ValuePtr{}, node.FlagInline)
+	queueRouteModes[routeShard] = memtableRouteRanged
+	queueRanges[routeShard].add(wantKey)
+
+	db.memtables.Store(&memtableView{
+		mutables:        make([]memtable.Table, shards),
+		queue:           queue,
+		queueShardIDs:   queueShardIDs,
+		queueRouteModes: queueRouteModes,
+		queueRanges:     queueRanges,
+	})
+
+	val, found, err := db.getMemtable(wantKey)
+	if err != nil {
+		t.Fatalf("getMemtable: %v", err)
+	}
+	if !found || string(val) != "queued-routed" {
+		t.Fatalf("unexpected queued routed get: found=%v val=%q", found, string(val))
+	}
+
+	for shard := 0; shard < shards; shard++ {
+		calls := tables[shard].getEntryCalls
+		if shard == routeShard {
+			if calls == 0 {
+				t.Fatalf("expected ranged queue shard GetEntry calls > 0, got %d", calls)
+			}
+			continue
+		}
+		if calls != 0 {
+			t.Fatalf("expected non-ranged queue shard %d GetEntry calls = 0, got %d", shard, calls)
+		}
+	}
+}

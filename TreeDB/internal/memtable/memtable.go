@@ -87,6 +87,18 @@ type SortedBatchApplier interface {
 	ApplyStealSortedBatch(entries []batchpkg.Entry, onKey func(key []byte))
 }
 
+// SortedBatchBorrowValueApplier is an optional fast path for applying a
+// strictly-increasing batch under a single memtable lock while borrowing value
+// slices from the caller. Keys must still be copied into memtable-owned
+// storage.
+//
+// Callers should only use this when they know the entries are already in
+// increasing key order and the borrowed values will remain immutable for the
+// memtable lifetime.
+type SortedBatchBorrowValueApplier interface {
+	ApplyBorrowValueSortedBatch(entries []batchpkg.Entry, storeInlinePtrValues bool, onKey func(key []byte))
+}
+
 // ValueBorrower marks memtables that can safely retain caller-owned value
 // slices while still copying keys into their own storage.
 //
@@ -115,6 +127,29 @@ type StableUnsafeIteratorTable interface {
 // writes partitioned by shard while preserving source order).
 type TrustedSortedBatchApplier interface {
 	ApplyStealSortedBatchTrusted(entries []batchpkg.Entry, onKey func(key []byte))
+}
+
+// TrustedSortedBatchBorrowValueApplier is an optional fast path for callers
+// that already guarantee strictly increasing keys and immutable borrowed value
+// slices.
+type TrustedSortedBatchBorrowValueApplier interface {
+	ApplyBorrowValueSortedBatchTrusted(entries []batchpkg.Entry, storeInlinePtrValues bool, onKey func(key []byte))
+}
+
+// TrustedSortedBatchIndexApplier is an optional fast path for callers that
+// already guarantee strictly increasing keys and can provide a sorted index
+// list into a shared batch entry slice. This avoids materializing per-shard
+// []batch.Entry views when the memtable can consume the original batch slice
+// directly.
+type TrustedSortedBatchIndexApplier interface {
+	ApplyStealSortedBatchIndicesTrusted(entries []batchpkg.Entry, idxs []int, onKey func(key []byte))
+}
+
+// TrustedSortedBatchBorrowValueIndexApplier is like
+// TrustedSortedBatchBorrowValueApplier but consumes a sorted index list into a
+// shared batch entry slice.
+type TrustedSortedBatchBorrowValueIndexApplier interface {
+	ApplyBorrowValueSortedBatchIndicesTrusted(entries []batchpkg.Entry, idxs []int, storeInlinePtrValues bool, onKey func(key []byte))
 }
 
 type Memtable struct {

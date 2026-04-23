@@ -4,7 +4,9 @@ import (
 	"encoding/binary"
 	"testing"
 	"time"
+	"unsafe"
 
+	batchpkg "github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -107,6 +109,206 @@ func TestAppendOnlyCRUD(t *testing.T) {
 	val, del, ok = m.Get([]byte("k2"))
 	if !ok || !del || val != nil {
 		t.Fatalf("Get(k2) = (%v,%v,%v), want (nil,true,true)", val, del, ok)
+	}
+}
+
+func TestAppendOnlyApplyBorrowValueSortedBatch_CopiesKeysBorrowsValues(t *testing.T) {
+	m := NewAppendOnlyWithCapacity(0)
+	key := []byte("k-short")
+	value := []byte("borrowed-value")
+
+	m.ApplyBorrowValueSortedBatch([]batchpkg.Entry{{
+		Type:  batchpkg.OpPut,
+		Key:   key,
+		Value: value,
+	}}, false, nil)
+
+	if m.count != 1 {
+		t.Fatalf("count=%d want=1", m.count)
+	}
+	ent := &m.entries[0]
+	got := m.appendOnlyEntryValue(ent)
+	if len(got) != len(value) {
+		t.Fatalf("value len=%d want=%d", len(got), len(value))
+	}
+	if unsafe.SliceData(got) != unsafe.SliceData(value) {
+		t.Fatal("expected borrowed value storage to alias caller slice")
+	}
+	if len(m.valueArena.chunks) != 0 {
+		t.Fatalf("valueArena chunks=%d want=0 for inline borrowed value", len(m.valueArena.chunks))
+	}
+
+	key[0] = 'z'
+	if gotKey := string(m.appendOnlyEntryKey(ent)); gotKey != "k-short" {
+		t.Fatalf("stored key changed after caller mutation: got=%q want=%q", gotKey, "k-short")
+	}
+	gotValue, deleted, ok := m.Get([]byte("k-short"))
+	if !ok || deleted || string(gotValue) != "borrowed-value" {
+		t.Fatalf("Get(k-short)=(%q,%v,%v) want=(borrowed-value,false,true)", string(gotValue), deleted, ok)
+	}
+}
+
+func TestAppendOnlyApplyBorrowValueSortedBatchTrusted_PreservesOrderedFastPath(t *testing.T) {
+	m := NewAppendOnlyWithCapacityEstimatedEntryBytes(appendOnlyMinInitialEntries*appendOnlyEstimatedBytesPerEntryPointer, appendOnlyEstimatedBytesPerEntryPointer)
+	entries := make([]batchpkg.Entry, appendOnlyMinInitialEntries*4)
+	value := []byte("borrowed-value")
+	callbacks := 0
+	for i := range entries {
+		var key [8]byte
+		binary.BigEndian.PutUint64(key[:], uint64(i+1))
+		entries[i] = batchpkg.Entry{Type: batchpkg.OpPut, Key: append([]byte(nil), key[:]...), Value: value}
+	}
+
+	m.ApplyBorrowValueSortedBatchTrusted(entries, false, func(key []byte) {
+		callbacks++
+	})
+
+	if callbacks != len(entries) {
+		t.Fatalf("callbacks=%d want=%d", callbacks, len(entries))
+	}
+	if !m.ordered {
+		t.Fatal("expected ordered append-only memtable after trusted sorted batch")
+	}
+	if !m.hasLast || m.lastIdx != len(entries)-1 {
+		t.Fatalf("last state hasLast=%v lastIdx=%d want lastIdx=%d", m.hasLast, m.lastIdx, len(entries)-1)
+	}
+	if m.count != len(entries) {
+		t.Fatalf("count=%d want=%d", m.count, len(entries))
+	}
+	if m.latest != nil || m.latest64 != nil {
+		t.Fatalf("trusted ordered batch should not materialize latest maps: latest=%v latest64=%v", m.latest != nil, m.latest64 != nil)
+	}
+
+	lastKey := entries[len(entries)-1].Key
+	got, deleted, ok := m.Get(lastKey)
+	if !ok || deleted || string(got) != string(value) {
+		t.Fatalf("Get(last)=(%q,%v,%v) want=(%q,false,true)", string(got), deleted, ok, string(value))
+	}
+}
+
+func TestAppendOnlyApplyBorrowValueSortedBatchIndicesTrusted_PreservesOrderedFastPath(t *testing.T) {
+	m := NewAppendOnlyWithCapacityEstimatedEntryBytes(appendOnlyMinInitialEntries*appendOnlyEstimatedBytesPerEntryPointer, appendOnlyEstimatedBytesPerEntryPointer)
+	entries := make([]batchpkg.Entry, appendOnlyMinInitialEntries*4)
+	value := []byte("borrowed-value")
+	idxs := make([]int, 0, len(entries)/2)
+	callbacks := 0
+	lastSelected := -1
+	for i := range entries {
+		var key [8]byte
+		binary.BigEndian.PutUint64(key[:], uint64(i+1))
+		entries[i] = batchpkg.Entry{Type: batchpkg.OpPut, Key: append([]byte(nil), key[:]...), Value: value}
+		if i%2 == 0 {
+			idxs = append(idxs, i)
+			lastSelected = i
+		}
+	}
+
+	m.ApplyBorrowValueSortedBatchIndicesTrusted(entries, idxs, false, func(key []byte) {
+		callbacks++
+	})
+
+	if callbacks != len(idxs) {
+		t.Fatalf("callbacks=%d want=%d", callbacks, len(idxs))
+	}
+	if !m.ordered {
+		t.Fatal("expected ordered append-only memtable after trusted sorted batch indices")
+	}
+	if !m.hasLast || m.lastIdx != len(idxs)-1 {
+		t.Fatalf("last state hasLast=%v lastIdx=%d want lastIdx=%d", m.hasLast, m.lastIdx, len(idxs)-1)
+	}
+	if m.count != len(idxs) {
+		t.Fatalf("count=%d want=%d", m.count, len(idxs))
+	}
+	lastKey := entries[lastSelected].Key
+	got, deleted, ok := m.Get(lastKey)
+	if !ok || deleted || string(got) != string(value) {
+		t.Fatalf("Get(lastSelected)=(%q,%v,%v) want=(%q,false,true)", string(got), deleted, ok, string(value))
+	}
+}
+
+func TestAppendOnlyApplyBorrowValueSortedBatchTrusted_FallsBackWhenBatchStartsBeforeLastKey(t *testing.T) {
+	m := NewAppendOnlyWithCapacity(0)
+	var highKey [8]byte
+	binary.BigEndian.PutUint64(highKey[:], 10)
+	m.Set(highKey[:], []byte("ten"))
+
+	var keyOne [8]byte
+	var keyTwo [8]byte
+	binary.BigEndian.PutUint64(keyOne[:], 1)
+	binary.BigEndian.PutUint64(keyTwo[:], 2)
+	m.ApplyBorrowValueSortedBatchTrusted([]batchpkg.Entry{
+		{Type: batchpkg.OpPut, Key: keyOne[:], Value: []byte("one")},
+		{Type: batchpkg.OpPut, Key: keyTwo[:], Value: []byte("two")},
+	}, false, nil)
+
+	if m.ordered {
+		t.Fatal("expected fallback trusted batch to mark memtable unordered")
+	}
+	if !m.latestDirty {
+		t.Fatal("expected unordered fallback to defer latest index materialization")
+	}
+	if m.latest != nil || m.latest64 != nil {
+		t.Fatal("expected unordered fallback to keep latest index unmaterialized before read")
+	}
+
+	if got, deleted, ok := m.Get(keyOne[:]); !ok || deleted || string(got) != "one" {
+		t.Fatalf("Get(keyOne)=(%q,%v,%v) want=(one,false,true)", string(got), deleted, ok)
+	}
+	if m.latestDirty {
+		t.Fatal("expected first point read to materialize latest index")
+	}
+	if got, deleted, ok := m.Get(highKey[:]); !ok || deleted || string(got) != "ten" {
+		t.Fatalf("Get(highKey)=(%q,%v,%v) want=(ten,false,true)", string(got), deleted, ok)
+	}
+}
+
+func TestAppendOnlyApplyBorrowValueSortedBatchIndicesTrusted_FallsBackWhenBatchStartsBeforeLastKey(t *testing.T) {
+	m := NewAppendOnlyWithCapacity(0)
+	var highKey [8]byte
+	binary.BigEndian.PutUint64(highKey[:], 10)
+	m.Set(highKey[:], []byte("ten"))
+
+	entries := []batchpkg.Entry{
+		{Type: batchpkg.OpPut, Key: func() []byte { var k [8]byte; binary.BigEndian.PutUint64(k[:], 1); return append([]byte(nil), k[:]...) }(), Value: []byte("one")},
+		{Type: batchpkg.OpPut, Key: func() []byte { var k [8]byte; binary.BigEndian.PutUint64(k[:], 2); return append([]byte(nil), k[:]...) }(), Value: []byte("two")},
+	}
+	m.ApplyBorrowValueSortedBatchIndicesTrusted(entries, []int{0, 1}, false, nil)
+
+	if m.ordered {
+		t.Fatal("expected fallback trusted batch indices to mark memtable unordered")
+	}
+	if !m.latestDirty {
+		t.Fatal("expected unordered fallback to defer latest index materialization")
+	}
+	if m.latest != nil || m.latest64 != nil {
+		t.Fatal("expected unordered fallback to keep latest index unmaterialized before read")
+	}
+
+	if got, deleted, ok := m.Get(entries[0].Key); !ok || deleted || string(got) != "one" {
+		t.Fatalf("Get(entries[0])=(%q,%v,%v) want=(one,false,true)", string(got), deleted, ok)
+	}
+	if m.latestDirty {
+		t.Fatal("expected first point read to materialize latest index")
+	}
+	if got, deleted, ok := m.Get(highKey[:]); !ok || deleted || string(got) != "ten" {
+		t.Fatalf("Get(highKey)=(%q,%v,%v) want=(ten,false,true)", string(got), deleted, ok)
+	}
+}
+
+func TestAppendOnlyFirstPayloadUsesDenseEntryCapacityFloor(t *testing.T) {
+	m := &AppendOnly{
+		entries: make([]appendOnlyEntry, 1024),
+		ordered: true,
+		lastIdx: -1,
+	}
+
+	m.Set([]byte("k-short"), []byte("value"))
+
+	if got := cap(m.values); got != cap(m.entries) {
+		t.Fatalf("value cap=%d want entry cap=%d", got, cap(m.entries))
+	}
+	if got := len(m.values); got != 1 {
+		t.Fatalf("value len=%d want=1", got)
 	}
 }
 
@@ -361,22 +563,22 @@ func TestAppendOnlyGetBuildsLatestIndexOnFirstPointRead(t *testing.T) {
 			if ordered {
 				t.Fatalf("expected memtable to become unordered")
 			}
-			if dirty {
-				t.Fatalf("expected latest index to stay clean after order break")
+			if !dirty {
+				t.Fatalf("expected latest index to be dirty after order break")
 			}
 			m.mu.RLock()
 			latestSizeBeforeGet := kk.latestSize(m)
-			idxBeforeGet, okBeforeGet := kk.latestIdx(m, lo)
+			_, okBeforeGet := kk.latestIdx(m, lo)
 			countBeforeGet := m.count
 			m.mu.RUnlock()
-			if latestSizeBeforeGet < 2 {
-				t.Fatalf("expected latest index to be materialized on order break, size=%d", latestSizeBeforeGet)
+			if latestSizeBeforeGet != 0 {
+				t.Fatalf("expected latest index to remain unmaterialized on order break, size=%d", latestSizeBeforeGet)
 			}
-			if !okBeforeGet {
-				t.Fatalf("expected latest index lookup to succeed immediately after order break")
+			if okBeforeGet {
+				t.Fatalf("expected latest index lookup to miss before first read")
 			}
-			if idxBeforeGet != countBeforeGet-1 {
-				t.Fatalf("latest index before Get=%d want %d", idxBeforeGet, countBeforeGet-1)
+			if countBeforeGet != 2 {
+				t.Fatalf("count before Get=%d want 2", countBeforeGet)
 			}
 
 			if got, del, ok := m.Get(lo); !ok || del || string(got) != "lo" {

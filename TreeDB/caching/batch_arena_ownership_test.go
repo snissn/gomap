@@ -3,11 +3,19 @@ package caching
 import (
 	"bytes"
 	"testing"
+	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 )
+
+func batchArenaChunkPtr(buf []byte) unsafe.Pointer {
+	if cap(buf) == 0 {
+		return nil
+	}
+	return unsafe.Pointer(unsafe.SliceData(buf[:1]))
+}
 
 func TestBatchReset_DoesNotCorruptPriorBorrowedWrites(t *testing.T) {
 	for _, mode := range []string{"append_only", "hash_sorted"} {
@@ -57,6 +65,63 @@ func TestBatchReset_DoesNotCorruptPriorBorrowedWrites(t *testing.T) {
 				t.Fatalf("first value corrupted: got=%x want=%x", got, firstVal)
 			}
 		})
+	}
+}
+
+func TestBatchReset_RetainsOwnedCopyArenaForReuse(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(dir, NewMockBackend(), Options{
+		AllowUnsafe:    true,
+		DisableWAL:     true,
+		MemtableMode:   "hash_sorted",
+		MemtableShards: 1,
+		FlushThreshold: 1 << 30,
+	})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+
+	b := db.NewBatchWithSize(1)
+	value := bytes.Repeat([]byte{0x5A}, 64)
+	if err := b.Set([]byte("k1"), value); err != nil {
+		t.Fatalf("set first: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("write first: %v", err)
+	}
+	if got := len(b.copyArenaChunks); got != 1 {
+		t.Fatalf("copyArenaChunks after first write=%d want 1", got)
+	}
+	if cap(b.copyArena) == 0 {
+		t.Fatal("expected retained copy arena after first write")
+	}
+	firstChunkPtr := batchArenaChunkPtr(b.copyArena)
+	if firstChunkPtr == nil {
+		t.Fatal("expected stable retained arena pointer after first write")
+	}
+
+	if err := b.Set([]byte("k2"), value); err != nil {
+		t.Fatalf("set second: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("write second: %v", err)
+	}
+	if got := len(b.copyArenaChunks); got != 1 {
+		t.Fatalf("copyArenaChunks after second write=%d want 1", got)
+	}
+	if got := batchArenaChunkPtr(b.copyArena); got != firstChunkPtr {
+		t.Fatalf("copy arena chunk pointer changed across reset reuse: before=%p after=%p", firstChunkPtr, got)
+	}
+
+	if err := b.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	if b.copyArena != nil {
+		t.Fatal("expected copyArena to drain on close")
+	}
+	if len(b.copyArenaChunks) != 0 {
+		t.Fatalf("copyArenaChunks after close=%d want 0", len(b.copyArenaChunks))
 	}
 }
 
@@ -503,5 +568,53 @@ func TestBatchSetView_MutationAfterWriteDoesNotCorruptStoredValue(t *testing.T) 
 	stats := db.Stats()
 	if got := stats["treedb.cache.batch_arena.borrow_view_ops_blocked_total"]; got == "0" {
 		t.Fatalf("cache borrow_view_ops_blocked_total=%q want >0", got)
+	}
+}
+
+func TestBatchSetStealView_AvoidsBatchArenaAndWritesValue(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(dir, NewMockBackend(), Options{
+		AllowUnsafe:    true,
+		DisableWAL:     true,
+		MemtableMode:   "append_only",
+		MemtableShards: 1,
+		FlushThreshold: 1 << 30,
+	})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+
+	key := []byte("setsteal-key")
+	value := bytes.Repeat([]byte("s"), 32)
+
+	blockedBefore := batchArenaBorrowViewOpsBlockedTotal.Load()
+	b := db.NewBatchWithSize(1)
+	defer func() { _ = b.Close() }()
+	if err := b.SetStealView(key, value); err != nil {
+		t.Fatalf("set steal view: %v", err)
+	}
+	if got := len(b.copyArenaChunks); got != 0 {
+		t.Fatalf("copyArenaChunks before write=%d want 0", got)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if got := len(b.copyArenaChunks); got != 0 {
+		t.Fatalf("copyArenaChunks after write=%d want 0", got)
+	}
+	if got := db.batchArenaLeaseBytes.Load(); got != 0 {
+		t.Fatalf("batchArenaLeaseBytes=%d want 0", got)
+	}
+	if got := batchArenaBorrowViewOpsBlockedTotal.Load(); got != blockedBefore {
+		t.Fatalf("borrow_view_ops_blocked_total=%d before=%d want unchanged", got, blockedBefore)
+	}
+
+	got, err := db.Get(key)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if !bytes.Equal(got, value) {
+		t.Fatalf("value mismatch: got=%q want=%q", got, value)
 	}
 }

@@ -316,6 +316,9 @@ func (d *DB) NewBatch() (kvstore.Batch, error) {
 		return nil, kvstore.ErrUnsupported
 	}
 	wrapped := &batch{b: b}
+	if ssv, ok := b.(batchSetStealViewer); ok {
+		wrapped.setSteal = ssv
+	}
 	if sv, ok := b.(batchSetViewer); ok {
 		wrapped.setView = sv
 	}
@@ -331,6 +334,9 @@ func (d *DB) NewBatchWithSize(size int) (kvstore.Batch, error) {
 		return nil, kvstore.ErrUnsupported
 	}
 	wrapped := &batch{b: b}
+	if ssv, ok := b.(batchSetStealViewer); ok {
+		wrapped.setSteal = ssv
+	}
 	if sv, ok := b.(batchSetViewer); ok {
 		wrapped.setView = sv
 	}
@@ -338,6 +344,10 @@ func (d *DB) NewBatchWithSize(size int) (kvstore.Batch, error) {
 		wrapped.deleteView = dv
 	}
 	return wrapped, nil
+}
+
+type batchSetStealViewer interface {
+	SetStealView(key, value []byte) error
 }
 
 type batchSetViewer interface {
@@ -350,6 +360,7 @@ type batchDeleteViewer interface {
 
 type batch struct {
 	b          treedb.Batch
+	setSteal   batchSetStealViewer
 	setView    batchSetViewer
 	deleteView batchDeleteViewer
 }
@@ -366,6 +377,18 @@ func (b *batch) Delete(key []byte) error {
 // underlying TreeDB batch. Callers must treat key/value as immutable until
 // Commit/CommitSync/Close.
 func (b *batch) SetView(key, value []byte) error {
+	if b.setView != nil {
+		return b.setView.SetView(key, value)
+	}
+	return b.b.Set(key, value)
+}
+
+// SetStealView records a Put without copying key/value bytes and allows TreeDB
+// to retain those slices beyond the batch lifetime when supported.
+func (b *batch) SetStealView(key, value []byte) error {
+	if b.setSteal != nil {
+		return b.setSteal.SetStealView(key, value)
+	}
 	if b.setView != nil {
 		return b.setView.SetView(key, value)
 	}
