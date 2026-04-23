@@ -329,7 +329,7 @@ func TestAppendOnlyGetBuildsLatestIndexOnFirstPointRead(t *testing.T) {
 				if m.latest == nil {
 					return 0, false
 				}
-				idx, ok := m.latest[appendOnlyKeyString(key)]
+				idx, ok := m.latest[string(key)]
 				return idx, ok
 			},
 			latestSize: func(m *AppendOnly) int {
@@ -506,8 +506,13 @@ func TestAppendOnlyMutableIteratorShortInlineKeyStableAfterClose(t *testing.T) {
 	m := NewAppendOnlyWithCapacity(0)
 	m.Set([]byte("b"), []byte("first"))
 	m.Set([]byte("a"), []byte("target"))
+	arenaChunks := len(m.valueArena.chunks)
+	arenaPos := m.valueArena.curPos
 
 	it := m.NewIterator(nil, nil)
+	if len(m.valueArena.chunks) != arenaChunks || m.valueArena.curPos != arenaPos {
+		t.Fatalf("mutable iterator copied inline keys into memtable arena")
+	}
 	if !it.Valid() {
 		t.Fatal("iterator unexpectedly invalid")
 	}
@@ -529,8 +534,16 @@ func TestAppendOnlyOrderedIteratorShortInlineKeyStableAfterCloseAndGrowth(t *tes
 		appendOnlyEstimatedBytesPerEntryPointer,
 	)
 	m.Set([]byte("a"), []byte("target"))
+	m.Set([]byte("long-growth-key"), []byte("growth"))
 
 	it := m.NewIterator(nil, nil)
+	internalIt, ok := it.(*appendOnlyIterator)
+	if !ok {
+		t.Fatalf("iterator type %T, want *appendOnlyIterator", it)
+	}
+	if got := len(internalIt.inlineKeys); got != 1 {
+		t.Fatalf("ordered iterator inline key copies=%d want 1 sparse copy", got)
+	}
 	if !it.Valid() {
 		t.Fatal("iterator unexpectedly invalid")
 	}
