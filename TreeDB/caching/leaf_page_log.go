@@ -46,15 +46,9 @@ func (l *cachingLeafPageLog) AppendLeafPage(leafPage []byte) (page.LeafLogPtr, e
 		}
 		return page.LeafLogPtr{}, err
 	}
-	releaseScratch := payloadScratch
-	if compacted {
-		releaseScratch = encodedLeafPage
-	}
 	rid := l.db.nextRID.Add(1)
 	ptr, retainPath, err := l.db.appendValueLogOneInternal(l.lane, 0, nil, rid, encodedLeafPage, journalDurabilityNone, false)
-	if releaseScratch != nil {
-		compactLeafPayloadScratchPool.Put(releaseScratch[:0])
-	}
+	releaseCompactLeafPayloadScratch(payloadScratch, encodedLeafPage, compacted)
 	if retainPath != "" {
 		l.db.markValueLogRetain(retainPath)
 	}
@@ -67,6 +61,24 @@ func (l *cachingLeafPageLog) AppendLeafPage(leafPage []byte) (page.LeafLogPtr, e
 	}
 	l.db.noteLeafGenerationRecordLength(ptr)
 	return leafPtr, nil
+}
+
+func releaseCompactLeafPayloadScratch(payloadScratch, encodedLeafPage []byte, compacted bool) {
+	if payloadScratch != nil {
+		compactLeafPayloadScratchPool.Put(payloadScratch[:0])
+	}
+	if compacted && encodedLeafPage != nil && !sameSliceBacking(payloadScratch, encodedLeafPage) {
+		compactLeafPayloadScratchPool.Put(encodedLeafPage[:0])
+	}
+}
+
+func sameSliceBacking(a, b []byte) bool {
+	if cap(a) == 0 || cap(b) == 0 {
+		return false
+	}
+	aFull := a[:cap(a)]
+	bFull := b[:cap(b)]
+	return &aFull[0] == &bFull[0]
 }
 
 func (l *cachingLeafPageLog) Flush() error {
