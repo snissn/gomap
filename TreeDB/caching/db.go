@@ -23487,6 +23487,47 @@ func (db *DB) getMemtable(key []byte) ([]byte, bool, error) {
 		return nil, false, nil
 	}
 
+	checkQueue := func(rangedOnly bool) ([]byte, bool, error) {
+		for i := len(queue) - 1; i >= 0; i-- {
+			routeMode := memtableRouteHashed
+			if len(queueRouteModes) > i {
+				routeMode = queueRouteModes[i]
+			}
+			isRanged := routeMode == memtableRouteRanged
+			if rangedOnly != isRanged {
+				continue
+			}
+			if isRanged {
+				if len(queueRanges) > i && !keyInRange(queueRanges[i], key) {
+					continue
+				}
+			} else if len(queueShardIDs) > i && int(queueShardIDs[i]) != hashIdx {
+				continue
+			}
+			val, ptr, flags, found := queue[i].GetEntry(key)
+			if found {
+				if flags&node.FlagTombstone != 0 {
+					return nil, true, nil
+				}
+				if flags&node.FlagPointer != 0 {
+					if val == nil {
+						readVal, err := db.readValueLog(key, ptr)
+						if err != nil {
+							return nil, true, err
+						}
+						return readVal, true, nil
+					}
+					return val, true, nil
+				}
+				if val == nil {
+					return []byte{}, true, nil
+				}
+				return val, true, nil
+			}
+		}
+		return nil, false, nil
+	}
+
 	checkedHashMutable := false
 	if len(mutables) > 0 {
 		var (
@@ -23505,51 +23546,16 @@ func (db *DB) getMemtable(key []byte) ([]byte, bool, error) {
 			return routeVal, routeFound, routeErr
 		}
 	}
+	if val, found, err := checkQueue(true); err != nil || found {
+		return val, found, err
+	}
 	if len(mutables) > 0 && !checkedHashMutable {
 		val, found, err := checkMutable(hashIdx)
 		if err != nil || found {
 			return val, found, err
 		}
 	}
-
-	// check queue backwards (newest first)
-	for i := len(queue) - 1; i >= 0; i-- {
-		routeMode := memtableRouteHashed
-		if len(queueRouteModes) > i {
-			routeMode = queueRouteModes[i]
-		}
-		switch routeMode {
-		case memtableRouteRanged:
-			if len(queueRanges) > i && !keyInRange(queueRanges[i], key) {
-				continue
-			}
-		default:
-			if len(queueShardIDs) > i && int(queueShardIDs[i]) != hashIdx {
-				continue
-			}
-		}
-		val, ptr, flags, found := queue[i].GetEntry(key)
-		if found {
-			if flags&node.FlagTombstone != 0 {
-				return nil, true, nil
-			}
-			if flags&node.FlagPointer != 0 {
-				if val == nil {
-					readVal, err := db.readValueLog(key, ptr)
-					if err != nil {
-						return nil, true, err
-					}
-					return readVal, true, nil
-				}
-				return val, true, nil
-			}
-			if val == nil {
-				return []byte{}, true, nil
-			}
-			return val, true, nil
-		}
-	}
-	return nil, false, nil
+	return checkQueue(false)
 }
 
 func (db *DB) getMemtableAppend(key, dst []byte) ([]byte, bool, error) {
@@ -23624,6 +23630,47 @@ func (db *DB) getMemtableAppend(key, dst []byte) ([]byte, bool, error) {
 		return dst, false, nil
 	}
 
+	checkQueueAppend := func(rangedOnly bool) ([]byte, bool, error) {
+		for i := len(queue) - 1; i >= 0; i-- {
+			routeMode := memtableRouteHashed
+			if len(queueRouteModes) > i {
+				routeMode = queueRouteModes[i]
+			}
+			isRanged := routeMode == memtableRouteRanged
+			if rangedOnly != isRanged {
+				continue
+			}
+			if isRanged {
+				if len(queueRanges) > i && !keyInRange(queueRanges[i], key) {
+					continue
+				}
+			} else if len(queueShardIDs) > i && int(queueShardIDs[i]) != hashIdx {
+				continue
+			}
+			val, ptr, flags, found := queue[i].GetEntry(key)
+			if found {
+				if flags&node.FlagTombstone != 0 {
+					return dst, true, tree.ErrKeyNotFound
+				}
+				if flags&node.FlagPointer != 0 {
+					if val == nil {
+						out, err := db.readValueLogAppend(key, ptr, dst)
+						if err != nil {
+							return dst, true, err
+						}
+						return out, true, nil
+					}
+					return append(dst, val...), true, nil
+				}
+				if val == nil {
+					return dst, true, nil
+				}
+				return append(dst, val...), true, nil
+			}
+		}
+		return dst, false, nil
+	}
+
 	checkedHashMutable := false
 	if len(mutables) > 0 {
 		var (
@@ -23642,50 +23689,16 @@ func (db *DB) getMemtableAppend(key, dst []byte) ([]byte, bool, error) {
 			return routeOut, routeFound, routeErr
 		}
 	}
+	if out, found, err := checkQueueAppend(true); err != nil || found {
+		return out, found, err
+	}
 	if len(mutables) > 0 && !checkedHashMutable {
 		out, found, err := checkMutableAppend(hashIdx)
 		if err != nil || found {
 			return out, found, err
 		}
 	}
-
-	for i := len(queue) - 1; i >= 0; i-- {
-		routeMode := memtableRouteHashed
-		if len(queueRouteModes) > i {
-			routeMode = queueRouteModes[i]
-		}
-		switch routeMode {
-		case memtableRouteRanged:
-			if len(queueRanges) > i && !keyInRange(queueRanges[i], key) {
-				continue
-			}
-		default:
-			if len(queueShardIDs) > i && int(queueShardIDs[i]) != hashIdx {
-				continue
-			}
-		}
-		val, ptr, flags, found := queue[i].GetEntry(key)
-		if found {
-			if flags&node.FlagTombstone != 0 {
-				return dst, true, tree.ErrKeyNotFound
-			}
-			if flags&node.FlagPointer != 0 {
-				if val == nil {
-					out, err := db.readValueLogAppend(key, ptr, dst)
-					if err != nil {
-						return dst, true, err
-					}
-					return out, true, nil
-				}
-				return append(dst, val...), true, nil
-			}
-			if val == nil {
-				return dst, true, nil
-			}
-			return append(dst, val...), true, nil
-		}
-	}
-	return dst, false, nil
+	return checkQueueAppend(false)
 }
 
 type backendManyGetter interface {
@@ -23944,6 +23957,31 @@ func (db *DB) Has(key []byte) (bool, error) {
 		return false, false
 	}
 
+	checkQueueHas := func(rangedOnly bool) (bool, bool) {
+		for i := len(queue) - 1; i >= 0; i-- {
+			routeMode := memtableRouteHashed
+			if len(queueRouteModes) > i {
+				routeMode = queueRouteModes[i]
+			}
+			isRanged := routeMode == memtableRouteRanged
+			if rangedOnly != isRanged {
+				continue
+			}
+			if isRanged {
+				if len(queueRanges) > i && !keyInRange(queueRanges[i], key) {
+					continue
+				}
+			} else if len(queueShardIDs) > i && int(queueShardIDs[i]) != hashIdx {
+				continue
+			}
+			_, deleted, found := queue[i].Get(key)
+			if found {
+				return !deleted, true
+			}
+		}
+		return false, false
+	}
+
 	checkedHashMutable := false
 	if len(mutables) > 0 {
 		var (
@@ -23961,32 +23999,17 @@ func (db *DB) Has(key []byte) (bool, error) {
 			return routeHas, nil
 		}
 	}
+	if has, found := checkQueueHas(true); found {
+		return has, nil
+	}
 	if len(mutables) > 0 && !checkedHashMutable {
 		has, found := checkMutableHas(hashIdx)
 		if found {
 			return has, nil
 		}
 	}
-
-	for i := len(queue) - 1; i >= 0; i-- {
-		routeMode := memtableRouteHashed
-		if len(queueRouteModes) > i {
-			routeMode = queueRouteModes[i]
-		}
-		switch routeMode {
-		case memtableRouteRanged:
-			if len(queueRanges) > i && !keyInRange(queueRanges[i], key) {
-				continue
-			}
-		default:
-			if len(queueShardIDs) > i && int(queueShardIDs[i]) != hashIdx {
-				continue
-			}
-		}
-		_, deleted, found := queue[i].Get(key)
-		if found {
-			return !deleted, nil
-		}
+	if has, found := checkQueueHas(false); found {
+		return has, nil
 	}
 
 	return db.backend.Has(key)

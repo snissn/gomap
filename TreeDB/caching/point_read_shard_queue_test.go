@@ -490,3 +490,70 @@ func TestPointReads_RangedQueueUsesQueueRangeNotHashShard(t *testing.T) {
 		}
 	}
 }
+
+func TestPointReads_RangedQueueShadowsHashMutableFallback(t *testing.T) {
+	const shards = 8
+
+	db := &DB{
+		backend:          panicBackend{},
+		mutableShards:    make([]memShard, shards),
+		mutableShardMask: shards - 1,
+	}
+
+	var rawKey [8]byte
+	binary.BigEndian.PutUint64(rawKey[:], 42)
+	key := append([]byte(nil), rawKey[:]...)
+	hashShard := db.shardIndex(key)
+	routeShard := (hashShard + 1) % shards
+
+	mutables := make([]memtable.Table, shards)
+	for shard := 0; shard < shards; shard++ {
+		mt, err := memtable.NewWithCapacityMode(0, memtable.ModeHashSorted)
+		if err != nil {
+			t.Fatalf("new mutable memtable: %v", err)
+		}
+		mutables[shard] = mt
+	}
+	mutables[hashShard].SetEntry(key, []byte("stale-hash"), page.ValuePtr{}, node.FlagInline)
+
+	routed, err := memtable.NewWithCapacityMode(0, memtable.ModeHashSorted)
+	if err != nil {
+		t.Fatalf("new routed queue memtable: %v", err)
+	}
+	routed.Delete(key)
+	rng := keyRange{}
+	rng.add(key)
+
+	db.memtables.Store(&memtableView{
+		mutables:        mutables,
+		queue:           []memtable.Table{routed},
+		queueShardIDs:   []uint16{uint16(routeShard)},
+		queueRouteModes: []uint8{memtableRouteRanged},
+		queueRanges:     []keyRange{rng},
+	})
+	db.mutableBytes.Store(1)
+
+	val, found, err := db.getMemtable(key)
+	if err != nil {
+		t.Fatalf("getMemtable: %v", err)
+	}
+	if !found || val != nil {
+		t.Fatalf("getMemtable = (%q,%v), want ranged queue tombstone", string(val), found)
+	}
+
+	out, found, err := db.getMemtableAppend(key, []byte("prefix:"))
+	if !found || err == nil {
+		t.Fatalf("getMemtableAppend found=%v err=%v, want ranged queue tombstone error", found, err)
+	}
+	if string(out) != "prefix:" {
+		t.Fatalf("getMemtableAppend mutated dst on tombstone: %q", out)
+	}
+
+	has, err := db.Has(key)
+	if err != nil {
+		t.Fatalf("Has: %v", err)
+	}
+	if has {
+		t.Fatalf("Has returned true from stale hash mutable; want ranged queue tombstone")
+	}
+}
