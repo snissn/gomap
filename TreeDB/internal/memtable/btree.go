@@ -202,7 +202,8 @@ func NewBTreeWithDegree(degree int) *BTree {
 
 func newBTreeMap(degree int) *btree.Map[string, btreeEntry] {
 	return btree.NewMapWithOptions[string, btreeEntry](degree, btree.MapOptions{
-		ReuseRightSplitCapacity: true,
+		ReuseRightSplitCapacity:  true,
+		ReuseSplitInsertCapacity: true,
 	})
 }
 
