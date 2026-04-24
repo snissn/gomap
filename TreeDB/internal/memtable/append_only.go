@@ -64,10 +64,15 @@ type appendOnlyEntry struct {
 	flags        byte
 }
 
-type appendOnlyIteratorInlineKey struct {
-	idx    int
-	length uint8
+type appendOnlyInlineMapKey struct {
 	key    [appendOnlyInlineKeyLen]byte
+	length uint8
+}
+
+type appendOnlyIteratorKeyRef struct {
+	idx    int
+	offset int
+	length int
 }
 
 type appendOnlyValueArena struct {
@@ -87,6 +92,7 @@ type AppendOnly struct {
 	baseEntriesLen int
 	growEntriesLen int
 	latest         map[string]int
+	latestInline   map[appendOnlyInlineMapKey]int
 	latest64       map[uint64]int
 	snapshot       []*appendOnlyEntry
 	indexBuf       []int
@@ -163,29 +169,42 @@ func putAppendOnlyEntries(entries []appendOnlyEntry) {
 	appendOnlyEntryPool.Put(full[:0])
 }
 
-func getAppendOnlyKeysFromPool(length int, pool *sync.Pool, maxCap int) []string {
+func getAppendOnlySliceFromPool[T any](length int, pool *sync.Pool, maxCap, defaultMaxCap int) []T {
 	if length < 0 {
 		length = 0
 	}
 	if maxCap <= 0 {
-		maxCap = appendOnlyKeyPoolMaxCap
+		maxCap = defaultMaxCap
 	}
 	if length > maxCap {
-		return make([]string, length)
+		return make([]T, length)
 	}
 	if pool == nil {
-		return make([]string, length)
+		return make([]T, length)
 	}
 	if v := pool.Get(); v != nil {
-		if keys, ok := v.([]string); ok && cap(keys) >= length {
-			if cap(keys) <= appendOnlyMaxReuseEntries(length) {
-				out := keys[:length]
+		if items, ok := v.([]T); ok && cap(items) >= length {
+			if cap(items) <= appendOnlyMaxReuseEntries(length) {
+				out := items[:length]
 				clear(out)
 				return out
 			}
 		}
 	}
-	return make([]string, length)
+	return make([]T, length)
+}
+
+func putAppendOnlySliceToPool[T any](items []T, pool *sync.Pool, maxCap int) {
+	if items == nil || cap(items) == 0 || cap(items) > maxCap {
+		return
+	}
+	full := items[:cap(items)]
+	clear(full)
+	pool.Put(full[:0])
+}
+
+func getAppendOnlyKeysFromPool(length int, pool *sync.Pool, maxCap int) []string {
+	return getAppendOnlySliceFromPool[string](length, pool, maxCap, appendOnlyKeyPoolMaxCap)
 }
 
 func getAppendOnlyKeys(length int) []string {
@@ -193,37 +212,11 @@ func getAppendOnlyKeys(length int) []string {
 }
 
 func putAppendOnlyKeys(keys []string) {
-	if keys == nil || cap(keys) == 0 || cap(keys) > appendOnlyKeyPoolMaxCap {
-		return
-	}
-	full := keys[:cap(keys)]
-	clear(full)
-	appendOnlyKeyPool.Put(full[:0])
+	putAppendOnlySliceToPool(keys, &appendOnlyKeyPool, appendOnlyKeyPoolMaxCap)
 }
 
 func getAppendOnlyPayloadsFromPool(length int, pool *sync.Pool, maxCap int) []appendOnlyPayload {
-	if length < 0 {
-		length = 0
-	}
-	if maxCap <= 0 {
-		maxCap = appendOnlyPayloadPoolMaxCap
-	}
-	if length > maxCap {
-		return make([]appendOnlyPayload, length)
-	}
-	if pool == nil {
-		return make([]appendOnlyPayload, length)
-	}
-	if v := pool.Get(); v != nil {
-		if payloads, ok := v.([]appendOnlyPayload); ok && cap(payloads) >= length {
-			if cap(payloads) <= appendOnlyMaxReuseEntries(length) {
-				out := payloads[:length]
-				clear(out)
-				return out
-			}
-		}
-	}
-	return make([]appendOnlyPayload, length)
+	return getAppendOnlySliceFromPool[appendOnlyPayload](length, pool, maxCap, appendOnlyPayloadPoolMaxCap)
 }
 
 func getAppendOnlyPayloads(length int) []appendOnlyPayload {
@@ -231,12 +224,7 @@ func getAppendOnlyPayloads(length int) []appendOnlyPayload {
 }
 
 func putAppendOnlyPayloads(payloads []appendOnlyPayload) {
-	if payloads == nil || cap(payloads) == 0 || cap(payloads) > appendOnlyPayloadPoolMaxCap {
-		return
-	}
-	full := payloads[:cap(payloads)]
-	clear(full)
-	appendOnlyPayloadPool.Put(full[:0])
+	putAppendOnlySliceToPool(payloads, &appendOnlyPayloadPool, appendOnlyPayloadPoolMaxCap)
 }
 
 func getAppendOnlyIteratorEntries(length int) []appendOnlyEntry {
@@ -269,12 +257,7 @@ func getAppendOnlyIteratorKeys(length int) []string {
 }
 
 func putAppendOnlyIteratorKeys(keys []string) {
-	if keys == nil || cap(keys) == 0 || cap(keys) > appendOnlyIteratorKeyPoolMaxCap {
-		return
-	}
-	full := keys[:cap(keys)]
-	clear(full)
-	appendOnlyIteratorKeyPool.Put(full[:0])
+	putAppendOnlySliceToPool(keys, &appendOnlyIteratorKeyPool, appendOnlyIteratorKeyPoolMaxCap)
 }
 
 func getAppendOnlyIteratorPayloads(length int) []appendOnlyPayload {
@@ -282,12 +265,7 @@ func getAppendOnlyIteratorPayloads(length int) []appendOnlyPayload {
 }
 
 func putAppendOnlyIteratorPayloads(payloads []appendOnlyPayload) {
-	if payloads == nil || cap(payloads) == 0 || cap(payloads) > appendOnlyIteratorPayloadPoolMaxCap {
-		return
-	}
-	full := payloads[:cap(payloads)]
-	clear(full)
-	appendOnlyIteratorPayloadPool.Put(full[:0])
+	putAppendOnlySliceToPool(payloads, &appendOnlyIteratorPayloadPool, appendOnlyIteratorPayloadPoolMaxCap)
 }
 
 func getAppendOnlyIteratorPtrs(length int) []*appendOnlyEntry {
@@ -661,6 +639,30 @@ func appendOnlyLookupKeyString(key []byte) string {
 	return unsafe.String(unsafe.SliceData(key), len(key))
 }
 
+func appendOnlyInlineMapKeyFromBytes(key []byte) (appendOnlyInlineMapKey, bool) {
+	if len(key) > appendOnlyInlineKeyLen {
+		return appendOnlyInlineMapKey{}, false
+	}
+	var mapKey appendOnlyInlineMapKey
+	mapKey.length = uint8(len(key))
+	copy(mapKey.key[:], key)
+	return mapKey, true
+}
+
+func appendOnlyInlineMapKeyFromEntry(ent *appendOnlyEntry) (appendOnlyInlineMapKey, bool) {
+	if ent == nil || ent.keyIndex != 0 {
+		return appendOnlyInlineMapKey{}, false
+	}
+	inlineLen := int(ent.inlineKeyLen)
+	if inlineLen < 0 || inlineLen > appendOnlyInlineKeyLen {
+		return appendOnlyInlineMapKey{}, false
+	}
+	var mapKey appendOnlyInlineMapKey
+	mapKey.length = ent.inlineKeyLen
+	copy(mapKey.key[:], ent.inlineKey[:inlineLen])
+	return mapKey, true
+}
+
 func (m *AppendOnly) appendOnlyEntryMapKey(ent *appendOnlyEntry) string {
 	if m == nil || ent == nil {
 		return ""
@@ -756,14 +758,14 @@ func (m *AppendOnly) buildSortedLatestIndicesLocked() []int {
 	if m.count == 0 || m.ordered {
 		return nil
 	}
-	if m.latestDirty || (len(m.latest) == 0 && len(m.latest64) == 0) {
+	if m.latestDirty || (len(m.latest) == 0 && len(m.latestInline) == 0 && len(m.latest64) == 0) {
 		m.rebuildLatestIndexLocked()
 	}
 	// The returned slice aliases m.indexBuf scratch storage. It is only valid
 	// while m.mu is held and may be overwritten by the next call. When
 	// m.count == 0 or m.ordered is true, this helper returns nil, which callers
 	// may treat as "no indices" (equivalent to an empty result).
-	need := len(m.latest) + len(m.latest64)
+	need := len(m.latest) + len(m.latestInline) + len(m.latest64)
 	if cap(m.indexBuf) < need {
 		m.indexBuf = make([]int, 0, need)
 	} else {
@@ -771,6 +773,9 @@ func (m *AppendOnly) buildSortedLatestIndicesLocked() []int {
 	}
 	indices := m.indexBuf
 	for _, idx := range m.latest {
+		indices = append(indices, idx)
+	}
+	for _, idx := range m.latestInline {
 		indices = append(indices, idx)
 	}
 	for _, idx := range m.latest64 {
@@ -791,6 +796,9 @@ func (m *AppendOnly) rebuildLatestIndexLocked() {
 		if m.latest != nil {
 			clear(m.latest)
 		}
+		if m.latestInline != nil {
+			clear(m.latestInline)
+		}
 		if m.latest64 != nil {
 			clear(m.latest64)
 		}
@@ -801,12 +809,29 @@ func (m *AppendOnly) rebuildLatestIndexLocked() {
 	if m.latest != nil {
 		clear(m.latest)
 	}
+	if m.latestInline != nil {
+		clear(m.latestInline)
+	}
 	if m.latest64 != nil {
 		clear(m.latest64)
 	}
 	reserve := m.count
 	active := m.entries[:m.count]
 	for i := range active {
+		if inlineKey, ok := appendOnlyInlineMapKeyFromEntry(&active[i]); ok {
+			if inlineKey.length == appendOnlyInlineKeyLen {
+				if m.latest64 == nil {
+					m.latest64 = make(map[uint64]int, reserve)
+				}
+				m.latest64[binary.BigEndian.Uint64(inlineKey.key[:])] = i
+				continue
+			}
+			if m.latestInline == nil {
+				m.latestInline = make(map[appendOnlyInlineMapKey]int, reserve)
+			}
+			m.latestInline[inlineKey] = i
+			continue
+		}
 		k := m.appendOnlyEntryKey(&active[i])
 		if k64, ok := appendOnlyKeyU64(k); ok {
 			if m.latest64 == nil {
@@ -833,6 +858,13 @@ func (m *AppendOnly) updateLatestIndexLocked(key []byte, idx int) {
 			m.latest64 = make(map[uint64]int, 1)
 		}
 		m.latest64[k64] = idx
+		return
+	}
+	if inlineKey, ok := appendOnlyInlineMapKeyFromBytes(key); ok {
+		if m.latestInline == nil {
+			m.latestInline = make(map[appendOnlyInlineMapKey]int, 1)
+		}
+		m.latestInline[inlineKey] = idx
 		return
 	}
 	if m.latest == nil {
@@ -1122,6 +1154,20 @@ func (m *AppendOnly) Get(key []byte) ([]byte, bool, bool) {
 					}
 				}
 			}
+			if inlineKey, ok := appendOnlyInlineMapKeyFromBytes(key); ok && m.latestInline != nil {
+				if idx, ok := m.latestInline[inlineKey]; ok && idx >= 0 && idx < m.count {
+					ent := &m.entries[idx]
+					if bytes.Equal(m.appendOnlyEntryKey(ent), key) {
+						deleted := ent.flags&node.FlagTombstone != 0
+						val := m.appendOnlyEntryValue(ent)
+						m.mu.RUnlock()
+						if deleted {
+							return nil, true, true
+						}
+						return val, false, true
+					}
+				}
+			}
 			if m.latest != nil {
 				if idx, ok := m.latest[appendOnlyLookupKeyString(key)]; ok && idx >= 0 && idx < m.count {
 					ent := &m.entries[idx]
@@ -1168,6 +1214,18 @@ func (m *AppendOnly) GetEntry(key []byte) ([]byte, page.ValuePtr, byte, bool) {
 		if !m.latestDirty {
 			if k64, ok := appendOnlyKeyU64(key); ok && m.latest64 != nil {
 				if idx, ok := m.latest64[k64]; ok && idx >= 0 && idx < m.count {
+					ent := &m.entries[idx]
+					if bytes.Equal(m.appendOnlyEntryKey(ent), key) {
+						val := m.appendOnlyEntryValue(ent)
+						ptr := m.appendOnlyEntryPtr(ent)
+						flags := ent.flags
+						m.mu.RUnlock()
+						return val, ptr, flags, true
+					}
+				}
+			}
+			if inlineKey, ok := appendOnlyInlineMapKeyFromBytes(key); ok && m.latestInline != nil {
+				if idx, ok := m.latestInline[inlineKey]; ok && idx >= 0 && idx < m.count {
 					ent := &m.entries[idx]
 					if bytes.Equal(m.appendOnlyEntryKey(ent), key) {
 						val := m.appendOnlyEntryValue(ent)
@@ -1362,9 +1420,11 @@ func (m *AppendOnly) resetLockedWithPolicy(capacity, estimatedBytesPerEntry, ent
 	// after one-off spikes.
 	if !retainObserved || (oldCount > 0 && oldCount >= appendOnlyResetDropThresholdEntries) {
 		m.latest = nil
+		m.latestInline = nil
 		m.latest64 = nil
 	} else {
 		clear(m.latest)
+		clear(m.latestInline)
 		clear(m.latest64)
 	}
 	// Snapshot/index buffers are only needed for unordered memtables; drop large
@@ -1624,8 +1684,8 @@ type appendOnlyIterator struct {
 	keyBytes        []byte
 	payloads        []appendOnlyPayload
 	entryPtrs       []*appendOnlyEntry
-	inlineKeys      []appendOnlyIteratorInlineKey
-	inlineKeyIndex  map[int]int
+	keyRefs         []appendOnlyIteratorKeyRef
+	keyRefIndex     map[int]int
 	idx             int
 	start           []byte
 	end             []byte
@@ -1685,46 +1745,54 @@ func (it *appendOnlyIterator) keyForEntry(ent *appendOnlyEntry) []byte {
 	return appendOnlyEntryKeyFromKeys(ent, it.keys)
 }
 
-func (it *appendOnlyIterator) inlineKeyForEntry(idx int, ent *appendOnlyEntry) []byte {
-	if ent == nil || ent.inlineKeyLen == 0 {
-		return nil
-	}
-	inlineLen := int(ent.inlineKeyLen)
-	if n := len(it.inlineKeys); n > 0 {
-		last := &it.inlineKeys[n-1]
+func (it *appendOnlyIterator) cachedStableKeyForIndex(idx int) ([]byte, bool) {
+	if n := len(it.keyRefs); n > 0 {
+		last := &it.keyRefs[n-1]
 		if last.idx == idx {
-			return last.key[:int(last.length)]
+			return it.keyBytes[last.offset : last.offset+last.length], true
 		}
 	}
-	if it.inlineKeyIndex != nil {
-		if pos, ok := it.inlineKeyIndex[idx]; ok {
-			inlineKey := &it.inlineKeys[pos]
-			return inlineKey.key[:int(inlineKey.length)]
+	if it.keyRefIndex != nil {
+		if pos, ok := it.keyRefIndex[idx]; ok {
+			ref := &it.keyRefs[pos]
+			return it.keyBytes[ref.offset : ref.offset+ref.length], true
 		}
 	} else {
-		for i := len(it.inlineKeys) - 1; i >= 0; i-- {
-			if it.inlineKeys[i].idx == idx {
-				inlineKey := &it.inlineKeys[i]
-				return inlineKey.key[:int(inlineKey.length)]
+		for i := len(it.keyRefs) - 1; i >= 0; i-- {
+			if it.keyRefs[i].idx == idx {
+				ref := &it.keyRefs[i]
+				return it.keyBytes[ref.offset : ref.offset+ref.length], true
 			}
 		}
-		if len(it.inlineKeys) >= 8 {
-			it.inlineKeyIndex = make(map[int]int, len(it.inlineKeys)+1)
-			for i := range it.inlineKeys {
-				it.inlineKeyIndex[it.inlineKeys[i].idx] = i
+		if len(it.keyRefs) >= 8 {
+			it.keyRefIndex = make(map[int]int, len(it.keyRefs)+1)
+			for i := range it.keyRefs {
+				it.keyRefIndex[it.keyRefs[i].idx] = i
 			}
 		}
 	}
-	it.inlineKeys = append(it.inlineKeys, appendOnlyIteratorInlineKey{
+	return nil, false
+}
+
+func (it *appendOnlyIterator) stableKeyForEntry(idx int, ent *appendOnlyEntry) []byte {
+	if ent == nil {
+		return nil
+	}
+	if cached, ok := it.cachedStableKeyForIndex(idx); ok {
+		return cached
+	}
+	key := it.keyForEntry(ent)
+	offset := len(it.keyBytes)
+	it.keyBytes = append(it.keyBytes, key...)
+	it.keyRefs = append(it.keyRefs, appendOnlyIteratorKeyRef{
 		idx:    idx,
-		length: ent.inlineKeyLen,
+		offset: offset,
+		length: len(key),
 	})
-	copy(it.inlineKeys[len(it.inlineKeys)-1].key[:], ent.inlineKey[:inlineLen])
-	if it.inlineKeyIndex != nil {
-		it.inlineKeyIndex[idx] = len(it.inlineKeys) - 1
+	if it.keyRefIndex != nil {
+		it.keyRefIndex[idx] = len(it.keyRefs) - 1
 	}
-	inlineKey := &it.inlineKeys[len(it.inlineKeys)-1]
-	return inlineKey.key[:inlineLen]
+	return it.keyBytes[offset : offset+len(key)]
 }
 
 func (it *appendOnlyIterator) validIndex() bool {
@@ -1812,10 +1880,7 @@ func (it *appendOnlyIterator) UnsafeKey() []byte {
 	if ent == nil || !it.validIndex() {
 		return nil
 	}
-	if inlineKey := it.inlineKeyForEntry(it.idx, ent); inlineKey != nil {
-		return inlineKey
-	}
-	return it.keyForEntry(ent)
+	return it.stableKeyForEntry(it.idx, ent)
 }
 
 func (it *appendOnlyIterator) UnsafeValue() []byte {
@@ -1900,8 +1965,8 @@ func (it *appendOnlyIterator) Close() error {
 	it.entries = nil
 	it.keys = nil
 	it.keyBytes = nil
-	it.inlineKeys = nil
-	it.inlineKeyIndex = nil
+	it.keyRefs = nil
+	it.keyRefIndex = nil
 	it.payloads = nil
 	it.entryPtrs = nil
 	return nil
