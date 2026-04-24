@@ -2,8 +2,10 @@ package memtable
 
 import (
 	"bytes"
+	"math/bits"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	batchpkg "github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
@@ -17,6 +19,13 @@ const btreeUseLoadFastPath = false
 const btreeArenaChunkSize = 1 << 20
 const btreeArenaInitialChunkSize = 64 << 10
 const btreeInlineValueDedupeMax = 1 << 20
+const btreeArenaPoolMinShift = 16
+const btreeArenaPoolMaxShift = 20
+const btreeArenaPoolClassCount = btreeArenaPoolMaxShift - btreeArenaPoolMinShift + 1
+const btreeArenaPoolBudgetBytes = 64 << 20
+
+var btreeArenaChunkPools [btreeArenaPoolClassCount]sync.Pool
+var btreeArenaPoolBytes atomic.Int64
 
 type btreeEntry struct {
 	value []byte // inline bytes (if pointer, may store inline tail bytes)
@@ -77,14 +86,15 @@ func normalizeBTreeEntryFlags(flags byte) byte {
 }
 
 type BTree struct {
-	mu         sync.RWMutex
-	tree       *btree.Map[string, btreeEntry]
-	sizeBytes  int64
-	arena      *btreeArena
-	lastKey    string
-	hasLast    bool
-	degree     int
-	lastInline []byte
+	mu          sync.RWMutex
+	tree        *btree.Map[string, btreeEntry]
+	sizeBytes   int64
+	arena       *btreeArena
+	lastKey     string
+	hasLast     bool
+	degree      int
+	lastInline  []byte
+	deleteCount int
 }
 
 func (*BTree) StableUnsafeIteratorSlices() bool { return true }
@@ -195,11 +205,16 @@ func (m *BTree) Reset() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	m.tree = btree.NewMap[string, btreeEntry](m.degree)
+	if m.tree == nil {
+		m.tree = btree.NewMap[string, btreeEntry](m.degree)
+	} else {
+		m.tree.Clear()
+	}
 	m.sizeBytes = 0
 	m.lastKey = ""
 	m.hasLast = false
 	m.lastInline = nil
+	m.deleteCount = 0
 	if m.arena != nil {
 		m.arena.resetKeepFirstChunk()
 	}
@@ -342,6 +357,15 @@ func (m *BTree) Len() int {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.tree.Len()
+}
+
+func (m *BTree) OperationMix() OperationMix {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return OperationMix{
+		Entries: m.tree.Len(),
+		Deletes: m.deleteCount,
+	}
 }
 
 func (m *BTree) Freeze() {}
@@ -804,11 +828,22 @@ func (m *BTree) btreeEntryFromBatchOpLocked(op batchpkg.Entry) btreeEntry {
 
 func (m *BTree) recordSetLocked(key string, keyLen int, entry, prev btreeEntry, replaced bool) {
 	newSize := btreeEntryPayloadSize(entry.flags, entry.value)
+	newDelete := entry.flags&node.FlagTombstone != 0
 	if replaced {
 		oldSize := btreeEntryPayloadSize(prev.flags, prev.value)
 		m.sizeBytes += int64(newSize - oldSize)
+		oldDelete := prev.flags&node.FlagTombstone != 0
+		switch {
+		case oldDelete && !newDelete:
+			m.deleteCount--
+		case !oldDelete && newDelete:
+			m.deleteCount++
+		}
 	} else {
 		m.sizeBytes += int64(keyLen + newSize)
+		if newDelete {
+			m.deleteCount++
+		}
 	}
 	if !m.hasLast || key > m.lastKey {
 		m.lastKey = key
@@ -833,6 +868,10 @@ func (a *btreeArena) resetKeepFirstChunk() {
 	}
 	first := a.chunks[0]
 	first = first[:cap(first)]
+	for i := 1; i < len(a.chunks); i++ {
+		putBTreeArenaChunk(a.chunks[i])
+		a.chunks[i] = nil
+	}
 	a.chunks = a.chunks[:1]
 	a.chunks[0] = first
 	a.offset = 0
@@ -869,7 +908,7 @@ func (a *btreeArena) currentChunk(n int) []byte {
 		if size < n {
 			size = n
 		}
-		a.chunks = append(a.chunks, make([]byte, size))
+		a.chunks = append(a.chunks, getBTreeArenaChunk(size))
 		a.offset = 0
 		return a.chunks[len(a.chunks)-1]
 	}
@@ -887,7 +926,80 @@ func (a *btreeArena) currentChunk(n int) []byte {
 	if size < n {
 		size = n
 	}
-	a.chunks = append(a.chunks, make([]byte, size))
+	a.chunks = append(a.chunks, getBTreeArenaChunk(size))
 	a.offset = 0
 	return a.chunks[len(a.chunks)-1]
+}
+
+func getBTreeArenaChunk(size int) []byte {
+	if size <= 0 {
+		return nil
+	}
+	idx, classSize, ok := btreeArenaClassForLen(size)
+	if !ok {
+		return make([]byte, size)
+	}
+	if v := btreeArenaChunkPools[idx].Get(); v != nil {
+		if chunk, ok := v.([]byte); ok && cap(chunk) == classSize {
+			if next := btreeArenaPoolBytes.Add(-int64(classSize)); next < 0 {
+				btreeArenaPoolBytes.Store(0)
+			}
+			return chunk[:classSize]
+		}
+	}
+	return make([]byte, classSize)
+}
+
+func putBTreeArenaChunk(chunk []byte) {
+	if chunk == nil {
+		return
+	}
+	idx, ok := btreeArenaClassForCap(cap(chunk))
+	if !ok {
+		return
+	}
+	size := int64(cap(chunk))
+	for {
+		held := btreeArenaPoolBytes.Load()
+		if held+size > btreeArenaPoolBudgetBytes {
+			return
+		}
+		if btreeArenaPoolBytes.CompareAndSwap(held, held+size) {
+			break
+		}
+	}
+	btreeArenaChunkPools[idx].Put(chunk[:0])
+}
+
+func btreeArenaClassForLen(size int) (idx int, classSize int, ok bool) {
+	minSize := 1 << btreeArenaPoolMinShift
+	maxSize := 1 << btreeArenaPoolMaxShift
+	if size < minSize || size > maxSize {
+		return 0, 0, false
+	}
+	classSize = 1 << uint(bits.Len(uint(size-1)))
+	if classSize < minSize {
+		classSize = minSize
+	}
+	if classSize > maxSize {
+		return 0, 0, false
+	}
+	idx = bits.Len(uint(classSize)) - 1 - btreeArenaPoolMinShift
+	if idx < 0 || idx >= btreeArenaPoolClassCount {
+		return 0, 0, false
+	}
+	return idx, classSize, true
+}
+
+func btreeArenaClassForCap(capacity int) (idx int, ok bool) {
+	minSize := 1 << btreeArenaPoolMinShift
+	maxSize := 1 << btreeArenaPoolMaxShift
+	if capacity < minSize || capacity > maxSize || capacity&(capacity-1) != 0 {
+		return 0, false
+	}
+	idx = bits.TrailingZeros(uint(capacity)) - btreeArenaPoolMinShift
+	if idx < 0 || idx >= btreeArenaPoolClassCount {
+		return 0, false
+	}
+	return idx, true
 }
