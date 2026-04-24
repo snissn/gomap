@@ -25802,14 +25802,18 @@ func (db *DB) NewBatchWithSize(size int) *Batch {
 	}
 }
 
-func clampAppendOnlyEntryHint(entries int) int {
-	if entries < appendOnlyEntryHintMinEntries {
+func clampAppendOnlyEntryHint64(entries int64) int {
+	if entries < int64(appendOnlyEntryHintMinEntries) {
 		return appendOnlyEntryHintMinEntries
 	}
-	if entries > appendOnlyEntryHintMaxEntries {
+	if entries > int64(appendOnlyEntryHintMaxEntries) {
 		return appendOnlyEntryHintMaxEntries
 	}
-	return entries
+	return int(entries)
+}
+
+func clampAppendOnlyEntryHint(entries int) int {
+	return clampAppendOnlyEntryHint64(int64(entries))
 }
 
 func (db *DB) observeAppendOnlyMutableEntries(entries int) {
@@ -25817,24 +25821,27 @@ func (db *DB) observeAppendOnlyMutableEntries(entries int) {
 		return
 	}
 	n := clampAppendOnlyEntryHint(entries)
+	n64 := int64(n)
 	for {
-		old := int(db.appendOnlyEntryHint.Load())
-		next := n
+		old32 := db.appendOnlyEntryHint.Load()
+		old := int64(old32)
+		next := n64
 		if old > 0 {
-			if n > old {
+			if n64 > old {
 				// Grow faster so sustained larger mutables avoid repeated regrowth.
-				next = (old*3 + n + 1) / 4
+				next = (old*3 + n64 + 1) / 4
 			} else {
 				// Decay to recent smaller mutables to avoid pinning high-water entry
 				// slices through rotate/checkpoint-heavy workloads.
-				next = (old*7 + n + 3) / 8
+				next = (old*7 + n64 + 3) / 8
 			}
 		}
-		next = clampAppendOnlyEntryHint(next)
+		nextClamped := clampAppendOnlyEntryHint64(next)
+		next = int64(nextClamped)
 		if next == old {
 			return
 		}
-		if db.appendOnlyEntryHint.CompareAndSwap(int32(old), int32(next)) {
+		if db.appendOnlyEntryHint.CompareAndSwap(old32, int32(nextClamped)) {
 			return
 		}
 	}
@@ -25844,11 +25851,11 @@ func (db *DB) appendOnlyEntryHintEntries() int {
 	if db == nil {
 		return 0
 	}
-	hint := int(db.appendOnlyEntryHint.Load())
+	hint := db.appendOnlyEntryHint.Load()
 	if hint <= 0 {
 		return 0
 	}
-	return clampAppendOnlyEntryHint(hint)
+	return clampAppendOnlyEntryHint64(int64(hint))
 }
 
 func appendOnlyEntriesToCapacity(entries, estimatedBytesPerEntry int) int {
@@ -25878,12 +25885,13 @@ func (db *DB) appendOnlyMemtableCapacityHint(capacity, estimatedBytesPerEntry in
 			capacity = effectiveCap
 		}
 	}
-	hintEntries := int(db.appendOnlyEntryHint.Load())
+	hintEntries32 := db.appendOnlyEntryHint.Load()
+	hintEntries := int64(hintEntries32)
 	if hintEntries <= 0 {
 		return capacity
 	}
-	hintEntries = clampAppendOnlyEntryHint(hintEntries)
-	hintCapacity := appendOnlyEntriesToCapacity(hintEntries, estimatedBytesPerEntry)
+	hintEntriesClamped := clampAppendOnlyEntryHint64(hintEntries)
+	hintCapacity := appendOnlyEntriesToCapacity(hintEntriesClamped, estimatedBytesPerEntry)
 	if hintCapacity < minMemtablePrealloc {
 		hintCapacity = minMemtablePrealloc
 	}
