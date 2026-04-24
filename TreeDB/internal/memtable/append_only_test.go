@@ -534,13 +534,6 @@ func TestAppendOnlyOrderedIteratorShortInlineKeyStableAfterCloseAndGrowth(t *tes
 	m.Set([]byte("long-growth-key"), []byte("growth"))
 
 	it := m.NewIterator(nil, nil)
-	internalIt, ok := it.(*appendOnlyIterator)
-	if !ok {
-		t.Fatalf("iterator type %T, want *appendOnlyIterator", it)
-	}
-	if got := len(internalIt.inlineKeys); got != 1 {
-		t.Fatalf("ordered iterator inline key copies=%d want 1 sparse copy", got)
-	}
 	if !it.Valid() {
 		t.Fatal("iterator unexpectedly invalid")
 	}
