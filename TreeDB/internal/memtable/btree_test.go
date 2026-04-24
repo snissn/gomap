@@ -215,6 +215,87 @@ func TestBTreeSetEntryDedupesRepeatedCopiedInlineValues(t *testing.T) {
 	}
 }
 
+func TestBTreeArenaUsesSmallInitialChunkThenGrows(t *testing.T) {
+	a := &btreeArena{
+		chunkSize:        256,
+		initialChunkSize: 32,
+	}
+
+	if got := len(a.Copy(make([]byte, 8))); got != 8 {
+		t.Fatalf("first copy len=%d want 8", got)
+	}
+	if got := arenaChunkSizes(a); !equalInts(got, []int{32}) {
+		t.Fatalf("chunks after first copy=%v want [32]", got)
+	}
+
+	a.Copy(make([]byte, 25))
+	if got := arenaChunkSizes(a); !equalInts(got, []int{32, 64}) {
+		t.Fatalf("chunks after second copy=%v want [32 64]", got)
+	}
+
+	a.Copy(make([]byte, 50))
+	if got := arenaChunkSizes(a); !equalInts(got, []int{32, 64, 128}) {
+		t.Fatalf("chunks after third copy=%v want [32 64 128]", got)
+	}
+
+	a.Copy(make([]byte, 100))
+	if got := arenaChunkSizes(a); !equalInts(got, []int{32, 64, 128, 256}) {
+		t.Fatalf("chunks after capped growth=%v want [32 64 128 256]", got)
+	}
+}
+
+func TestBTreeArenaLargeAllocationCanExceedInitialChunk(t *testing.T) {
+	a := &btreeArena{
+		chunkSize:        256,
+		initialChunkSize: 32,
+	}
+
+	got := a.Copy(make([]byte, 96))
+	if len(got) != 96 {
+		t.Fatalf("large copy len=%d want 96", len(got))
+	}
+	if sizes := arenaChunkSizes(a); !equalInts(sizes, []int{96}) {
+		t.Fatalf("chunks=%v want [96]", sizes)
+	}
+
+	got = a.Copy(make([]byte, 300))
+	if len(got) != 300 {
+		t.Fatalf("oversized copy len=%d want 300", len(got))
+	}
+	if sizes := arenaChunkSizes(a); !equalInts(sizes, []int{96, 300}) {
+		t.Fatalf("chunks=%v want [96 300]", sizes)
+	}
+}
+
+func TestBTreeResetKeepsFirstArenaChunk(t *testing.T) {
+	m := NewBTree()
+	m.Set([]byte("key"), []byte("value"))
+	if len(m.arena.chunks) != 1 {
+		t.Fatalf("chunks after first set=%d want 1", len(m.arena.chunks))
+	}
+	first := &m.arena.chunks[0][0]
+	if got := len(m.arena.chunks[0]); got != btreeArenaInitialChunkSize {
+		t.Fatalf("first chunk size=%d want %d", got, btreeArenaInitialChunkSize)
+	}
+	if m.arena.offset == 0 {
+		t.Fatal("arena offset is zero after set")
+	}
+
+	m.Reset()
+	if len(m.arena.chunks) != 1 {
+		t.Fatalf("chunks after reset=%d want 1", len(m.arena.chunks))
+	}
+	if got := len(m.arena.chunks[0]); got != btreeArenaInitialChunkSize {
+		t.Fatalf("retained chunk size=%d want %d", got, btreeArenaInitialChunkSize)
+	}
+	if got := &m.arena.chunks[0][0]; got != first {
+		t.Fatal("reset did not retain first arena chunk")
+	}
+	if got := m.arena.offset; got != 0 {
+		t.Fatalf("offset after reset=%d want 0", got)
+	}
+}
+
 func TestBTreeIteratorUnsafeEntry_ForInlinePointerAndTombstone(t *testing.T) {
 	ptrWant := page.ValuePtr{Offset: 99, Length: 123, FileID: 7}
 	m := NewBTree()
@@ -405,4 +486,24 @@ func equalStrings(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+func equalInts(a, b []int) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func arenaChunkSizes(a *btreeArena) []int {
+	sizes := make([]int, len(a.chunks))
+	for i, chunk := range a.chunks {
+		sizes[i] = len(chunk)
+	}
+	return sizes
 }
