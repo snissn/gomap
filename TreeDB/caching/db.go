@@ -11740,11 +11740,6 @@ func stableFlushStreamingPlan(units []flushUnit, totalLen int) (int, bool) {
 	if !stableFlushStreamingSources(units) {
 		return 0, false
 	}
-	for i := range units {
-		if _, isBTree := units[i].mem.(*memtable.BTree); isBTree {
-			return 0, false
-		}
-	}
 	deleteOps, ok := flushStreamingDeleteOps(units, totalLen)
 	if !ok {
 		return 0, false
