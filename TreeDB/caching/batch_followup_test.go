@@ -218,16 +218,12 @@ func TestBatchWrite_DeleteOnlyEmptyDBNoOp_LockOrder(t *testing.T) {
 		done <- b.Write()
 	}()
 
-	heldWriteMu := false
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if cache.writeMu.TryLock() {
-			cache.writeMu.Unlock()
-			time.Sleep(time.Millisecond)
-			continue
-		}
-		heldWriteMu = true
-		break
+	// Give the writer goroutine a brief chance to reach any attempted writeMu
+	// acquisition. The success path should not wait for the full blocked write.
+	time.Sleep(10 * time.Millisecond)
+	heldWriteMu := !cache.writeMu.TryLock()
+	if !heldWriteMu {
+		cache.writeMu.Unlock()
 	}
 	cache.flushMu.Unlock()
 

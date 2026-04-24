@@ -18,8 +18,8 @@ var (
 	// PageHeader field offsets: 0, 8, 12, 14.
 	_ [int(unsafe.Offsetof(PageHeader{}.PageID)) - 0]byte
 	_ [0 - int(unsafe.Offsetof(PageHeader{}.PageID))]byte
-	_ [int(unsafe.Offsetof(PageHeader{}.Checksum)) - 8]byte
-	_ [8 - int(unsafe.Offsetof(PageHeader{}.Checksum))]byte
+	_ [int(unsafe.Offsetof(PageHeader{}.Checksum)) - PageChecksumOffset]byte
+	_ [PageChecksumOffset - int(unsafe.Offsetof(PageHeader{}.Checksum))]byte
 	_ [int(unsafe.Offsetof(PageHeader{}.Flags)) - 12]byte
 	_ [12 - int(unsafe.Offsetof(PageHeader{}.Flags))]byte
 	_ [int(unsafe.Offsetof(PageHeader{}.Count)) - 14]byte

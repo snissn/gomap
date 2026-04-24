@@ -265,9 +265,17 @@ func TestAppendOnlyIteratorCloseClearsPooledEntries(t *testing.T) {
 }
 
 func TestAppendOnlyIteratorCloseClearsPooledPointerEntries(t *testing.T) {
+	entry0 := &appendOnlyEntry{}
+	appendOnlyEntrySetKeyIndex(entry0, 1)
+	appendOnlyEntrySetPayloadIndex(entry0, 1)
+	appendOnlyEntrySetFlags(entry0, node.FlagPointer)
+	entry1 := &appendOnlyEntry{}
+	appendOnlyEntrySetKeyIndex(entry1, 2)
+	appendOnlyEntrySetPayloadIndex(entry1, 2)
+	appendOnlyEntrySetFlags(entry1, node.FlagTombstone)
 	entries := []*appendOnlyEntry{
-		{},
-		{},
+		entry0,
+		entry1,
 	}
 	it := &appendOnlyIterator{
 		entryPtrs:       entries,

@@ -19,6 +19,13 @@ const (
 	// PageHeaderSize is the size of the PageHeader struct.
 	PageHeaderSize = 16
 
+	// PageChecksumOffset is the byte offset of PageHeader.Checksum within a
+	// serialized page header.
+	PageChecksumOffset = 8
+
+	// PageChecksumSize is the serialized size of PageHeader.Checksum.
+	PageChecksumSize = 4
+
 	// ValuePtrSize is the size of the ValuePtr struct.
 	ValuePtrSize = 16
 
@@ -68,51 +75,48 @@ type ValuePtr struct {
 
 // CRC32C Table using Castagnoli polynomial.
 var crcTable = crc32.MakeTable(crc32.Castagnoli)
-var checksumZeroField = [4]byte{}
+var checksumZeroField = [PageChecksumSize]byte{}
 
 // Checksum returns the CRC32C checksum of data.
 func Checksum(data []byte) uint32 {
 	return crc32.Checksum(data, crcTable)
 }
 
-// CalculateChecksum computes the checksum of the page data,
-// treating checksum bytes 8-11 (data[8:12]) as zero.
+// CalculateChecksum computes the checksum of the page data, treating the page
+// checksum field bytes as zero.
 func CalculateChecksum(data []byte) uint32 {
 	if len(data) < PageHeaderSize {
 		return 0
 	}
-	// CRC over bytes 0-7, then the zeroed checksum field (bytes 8-11), then the rest.
-	sum := crc32.Update(0, crcTable, data[0:8])
+	checksumEnd := PageChecksumOffset + PageChecksumSize
+	sum := crc32.Update(0, crcTable, data[:PageChecksumOffset])
 	sum = crc32.Update(sum, crcTable, checksumZeroField[:])
-	sum = crc32.Update(sum, crcTable, data[12:])
+	sum = crc32.Update(sum, crcTable, data[checksumEnd:])
 	return sum
 }
 
-// UpdateChecksum computes CRC32C for the page while treating checksum bytes
-// 8-11 (data[8:12]) as zero, then writes the computed checksum back into the
+// UpdateChecksum computes CRC32C for the page while treating the page checksum
+// field bytes as zero, then writes the computed checksum back into the
 // page header.
 // It mutates data in-place and returns the computed checksum.
 func UpdateChecksum(data []byte) uint32 {
 	if len(data) < PageHeaderSize {
 		return 0
 	}
-	data[8] = 0
-	data[9] = 0
-	data[10] = 0
-	data[11] = 0
+	clear(data[PageChecksumOffset : PageChecksumOffset+PageChecksumSize])
 	sum := crc32.Checksum(data, crcTable)
-	binary.LittleEndian.PutUint32(data[8:12], sum)
+	binary.LittleEndian.PutUint32(data[PageChecksumOffset:PageChecksumOffset+PageChecksumSize], sum)
 	return sum
 }
 
 // VerifyChecksumNonMutating verifies that the page checksum matches the data,
-// assuming checksum bytes 8-11 (data[8:12]) are zero for the calculation.
+// assuming the page checksum field bytes are zero for the calculation.
 // It avoids modifying the underlying buffer.
 func VerifyChecksumNonMutating(data []byte) bool {
 	if len(data) < PageHeaderSize {
 		return false
 	}
-	stored := binary.LittleEndian.Uint32(data[8:12])
+	stored := binary.LittleEndian.Uint32(data[PageChecksumOffset : PageChecksumOffset+PageChecksumSize])
 	computed := CalculateChecksum(data)
 	return stored == computed
 }
@@ -126,7 +130,7 @@ func (h *PageHeader) Encode(buf []byte) {
 		return
 	}
 	binary.LittleEndian.PutUint64(buf[0:8], h.PageID)
-	binary.LittleEndian.PutUint32(buf[8:12], h.Checksum)
+	binary.LittleEndian.PutUint32(buf[PageChecksumOffset:PageChecksumOffset+PageChecksumSize], h.Checksum)
 	binary.LittleEndian.PutUint16(buf[12:14], h.Flags)
 	binary.LittleEndian.PutUint16(buf[14:16], h.Count)
 }
@@ -141,7 +145,7 @@ func DecodeHeader(buf []byte) PageHeader {
 	}
 	return PageHeader{
 		PageID:   binary.LittleEndian.Uint64(buf[0:8]),
-		Checksum: binary.LittleEndian.Uint32(buf[8:12]),
+		Checksum: binary.LittleEndian.Uint32(buf[PageChecksumOffset : PageChecksumOffset+PageChecksumSize]),
 		Flags:    binary.LittleEndian.Uint16(buf[12:14]),
 		Count:    binary.LittleEndian.Uint16(buf[14:16]),
 	}

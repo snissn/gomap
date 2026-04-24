@@ -46,10 +46,11 @@ func compactLeafCanonicalChecksum(leafPage []byte, prefixLen, suffixStart, suffi
 	if len(leafPage) < page.PageHeaderSize {
 		return 0
 	}
-	sum := crc32.Update(0, compactLeafPagePayloadCRCTable, leafPage[:8])
-	sum = crc32.Update(sum, compactLeafPagePayloadCRCTable, compactLeafPagePayloadChecksumZeros[:4])
-	if prefixLen > 12 {
-		sum = crc32.Update(sum, compactLeafPagePayloadCRCTable, leafPage[12:prefixLen])
+	checksumEnd := page.PageChecksumOffset + page.PageChecksumSize
+	sum := crc32.Update(0, compactLeafPagePayloadCRCTable, leafPage[:page.PageChecksumOffset])
+	sum = crc32.Update(sum, compactLeafPagePayloadCRCTable, compactLeafPagePayloadChecksumZeros[:page.PageChecksumSize])
+	if prefixLen > checksumEnd {
+		sum = crc32.Update(sum, compactLeafPagePayloadCRCTable, leafPage[checksumEnd:prefixLen])
 	}
 	gapLen := page.PageSize - prefixLen - suffixLen
 	for gapLen > 0 {
@@ -88,10 +89,11 @@ func encodeCompactLeafLogPayload(dst, leafPage []byte, prefixLen, suffixStart, s
 	payload := dst[compactLeafPagePayloadHeaderSize:]
 	sum := compactLeafCanonicalChecksum(leafPage, prefixLen, suffixStart, suffixLen)
 
-	copy(payload[:8], leafPage[:8])
-	binary.LittleEndian.PutUint32(payload[8:12], sum)
-	if prefixLen > 12 {
-		copy(payload[12:prefixLen], leafPage[12:prefixLen])
+	checksumEnd := page.PageChecksumOffset + page.PageChecksumSize
+	copy(payload[:page.PageChecksumOffset], leafPage[:page.PageChecksumOffset])
+	binary.LittleEndian.PutUint32(payload[page.PageChecksumOffset:checksumEnd], sum)
+	if prefixLen > checksumEnd {
+		copy(payload[checksumEnd:prefixLen], leafPage[checksumEnd:prefixLen])
 	}
 	copy(payload[prefixLen:], leafPage[suffixStart:])
 }
