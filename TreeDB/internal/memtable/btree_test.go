@@ -3,11 +3,25 @@ package memtable
 import (
 	"bytes"
 	"testing"
+	"unsafe"
 
 	batchpkg "github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 )
+
+func TestBTreeEntryLayoutCompact(t *testing.T) {
+	if got, wantMax := unsafe.Sizeof(btreeEntry{}), uintptr(32); got > wantMax {
+		t.Fatalf("btreeEntry size=%d, want <= %d", got, wantMax)
+	}
+	type btreeMapPair struct {
+		value btreeEntry
+		key   string
+	}
+	if got, wantMax := unsafe.Sizeof(btreeMapPair{}), uintptr(48); got > wantMax {
+		t.Fatalf("btree map pair size=%d, want <= %d", got, wantMax)
+	}
+}
 
 func TestBTreeGetEntry_PointersAndTombstones(t *testing.T) {
 	m := NewBTree()
