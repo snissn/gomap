@@ -5,8 +5,10 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
@@ -250,4 +252,113 @@ func TestDB_AppendPreparedLeafPageValueLog_AppendsAndReturnsUnlocked(t *testing.
 		t.Fatalf("ReadUnsafe: %v", err)
 	}
 	requireLeafLogTestPagesEqual(t, leafPage, got)
+}
+
+func TestDB_AppendPreparedLeafPageValueLog_BatchesQueuedPreparedAppends(t *testing.T) {
+	dir := t.TempDir()
+	fileID, err := valuelog.EncodeFileID(uint32(leafLogLaneID), 1)
+	if err != nil {
+		t.Fatalf("EncodeFileID: %v", err)
+	}
+	leafDir := filepath.Join(dir, "leaf_vlog")
+	if err := os.MkdirAll(leafDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q): %v", leafDir, err)
+	}
+	path := filepath.Join(leafDir, "value-l255-000001.log")
+	writer, err := valuelog.NewWriter(path, fileID)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	defer func() {
+		if writer != nil {
+			_ = writer.Close()
+		}
+	}()
+
+	db := &DB{
+		closeCh:                 make(chan struct{}),
+		valueLogCompressionMode: uint8(vlogCompressionOff),
+	}
+	var preUnlockHooks atomic.Int32
+	db.testBeforeVlogUnlock = func(laneID int) {
+		if laneID == leafLogLaneID {
+			preUnlockHooks.Add(1)
+		}
+	}
+
+	leaf := lane{id: leafLogLaneID, vlog: writer}
+	leafPage := buildSparseLeafPageForLeafLogTest(t)
+	const requests = 8
+	ptrs := make([]page.ValuePtr, requests)
+	errs := make(chan error, requests)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+
+	leaf.vlogMu.Lock()
+	for i := 0; i < requests; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			ptr, _, _, _, _, _, err := db.appendPreparedLeafPageValueLogQueued(&leaf, uint64(i+1), leafPage)
+			ptrs[i] = ptr
+			errs <- err
+		}(i)
+	}
+	close(start)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		leaf.leafAppendMu.Lock()
+		queued := len(leaf.leafAppendQueue)
+		draining := leaf.leafAppendDraining
+		leaf.leafAppendMu.Unlock()
+		if queued == requests && draining {
+			break
+		}
+		if time.Now().After(deadline) {
+			leaf.vlogMu.Unlock()
+			t.Fatalf("queued prepared appends=%d draining=%v want %d queued and draining", queued, draining, requests)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	leaf.vlogMu.Unlock()
+
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("appendPreparedLeafPageValueLogQueued: %v", err)
+		}
+	}
+	if got := preUnlockHooks.Load(); got != 1 {
+		t.Fatalf("pre-unlock hooks=%d want 1 batched writer lock", got)
+	}
+	if got := leaf.backendReadDirtySeq.Load(); got != 1 {
+		t.Fatalf("backendReadDirtySeq=%d want 1 batched boundary", got)
+	}
+
+	if err := writer.Close(); err != nil {
+		t.Fatalf("Close writer: %v", err)
+	}
+	writer = nil
+
+	mgr, err := valuelog.NewManager(dir)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	defer func() { _ = mgr.Close() }()
+	if err := mgr.RegisterSegment(path, fileID); err != nil {
+		t.Fatalf("RegisterSegment(%q): %v", path, err)
+	}
+	for i, ptr := range ptrs {
+		if ptr.FileID == 0 {
+			t.Fatalf("ptr[%d] is empty", i)
+		}
+		got, err := mgr.ReadUnsafe(ptr)
+		if err != nil {
+			t.Fatalf("ReadUnsafe(%d): %v", i, err)
+		}
+		requireLeafLogTestPagesEqual(t, leafPage, got)
+	}
 }

@@ -16,11 +16,27 @@ type cachingLeafPageLog struct {
 
 var _ backenddb.LeafPageLog = (*cachingLeafPageLog)(nil)
 
+const leafPageAppendBatchMax = 512
+
 var preparedLeafPageRecordPool = sync.Pool{
 	New: func() any {
 		buf := make([]byte, 0, valuelog.HeaderSize+valuelog.FrameHeaderSize+16+page.PageSize)
 		return &buf
 	},
+}
+
+type leafPageAppendRequest struct {
+	raw        []byte
+	ptrLength  uint32
+	stats      valuelog.FrameStats
+	compacted  bool
+	payloadLen int
+
+	wg         sync.WaitGroup
+	ptr        page.ValuePtr
+	retainPath string
+	totalBytes int64
+	err        error
 }
 
 func newCachingLeafPageLog(db *DB, l *lane) backenddb.LeafPageLog {
@@ -64,6 +80,10 @@ func (db *DB) noteLeafGenerationRecordLength(ptr page.ValuePtr) {
 // preparing the record and returns with the mutex unlocked.
 func (db *DB) appendPreparedLeafPageValueLog(l *lane, rid uint64, leafPage []byte) (page.ValuePtr, string, valuelog.FrameStats, bool, int, int64, error) {
 	l.vlogMu.Unlock()
+	return db.appendPreparedLeafPageValueLogQueued(l, rid, leafPage)
+}
+
+func (db *DB) appendPreparedLeafPageValueLogQueued(l *lane, rid uint64, leafPage []byte) (page.ValuePtr, string, valuelog.FrameStats, bool, int, int64, error) {
 	bufp := getPreparedLeafPageRecordBuffer()
 	raw, stats, compacted, ptrLength, err := valuelog.PrepareCompactLeafPageRecord((*bufp)[:0], rid, leafPage)
 	if err != nil {
@@ -72,24 +92,94 @@ func (db *DB) appendPreparedLeafPageValueLog(l *lane, rid uint64, leafPage []byt
 	}
 	payloadLen := stats.RawPayloadBytes
 
-	l.vlogMu.Lock()
-	defer func() {
-		putPreparedLeafPageRecordBuffer(bufp)
-	}()
+	req := &leafPageAppendRequest{
+		raw:        raw,
+		ptrLength:  ptrLength,
+		stats:      stats,
+		compacted:  compacted,
+		payloadLen: payloadLen,
+	}
+	req.wg.Add(1)
 
+	leader := false
+	l.leafAppendMu.Lock()
+	if !l.leafAppendDraining {
+		l.leafAppendDraining = true
+		leader = true
+	}
+	l.leafAppendQueue = append(l.leafAppendQueue, req)
+	l.leafAppendMu.Unlock()
+
+	if leader {
+		db.drainPreparedLeafPageValueLogQueue(l)
+	}
+
+	req.wg.Wait()
+	putPreparedLeafPageRecordBuffer(bufp)
+	if req.err != nil {
+		return page.ValuePtr{}, "", valuelog.FrameStats{}, false, 0, 0, req.err
+	}
+	return req.ptr, req.retainPath, req.stats, req.compacted, req.payloadLen, req.totalBytes, nil
+}
+
+// drainPreparedLeafPageValueLogQueue lets one contended caller append several
+// already-encoded leaf records under a single vlogMu acquisition.
+func (db *DB) drainPreparedLeafPageValueLogQueue(l *lane) {
+	batch := make([]*leafPageAppendRequest, 0, leafPageAppendBatchMax)
+	for {
+		batch = batch[:0]
+
+		l.vlogMu.Lock()
+		l.leafAppendMu.Lock()
+		if len(l.leafAppendQueue) == 0 {
+			l.leafAppendDraining = false
+			l.leafAppendMu.Unlock()
+			l.vlogMu.Unlock()
+			return
+		}
+		n := len(l.leafAppendQueue)
+		if n > leafPageAppendBatchMax {
+			n = leafPageAppendBatchMax
+		}
+		queue := l.leafAppendQueue
+		batch = append(batch, queue[:n]...)
+		copy(queue, queue[n:])
+		clear(queue[len(queue)-n:])
+		l.leafAppendQueue = queue[:len(queue)-n]
+		l.leafAppendMu.Unlock()
+
+		retainPaths := db.appendPreparedLeafPageValueLogBatchMuHeld(l, batch, nil)
+		if db.testBeforeVlogUnlock != nil {
+			db.testBeforeVlogUnlock(int(l.id))
+		}
+		l.vlogMu.Unlock()
+
+		for _, path := range retainPaths {
+			db.markValueLogRetain(path)
+		}
+		for i := range batch {
+			batch[i].wg.Done()
+		}
+	}
+}
+
+func (db *DB) appendPreparedLeafPageValueLogBatchMuHeld(l *lane, batch []*leafPageAppendRequest, retainPaths []string) []string {
+	if len(batch) == 0 {
+		return retainPaths
+	}
 	w, ok := l.vlog.(*valuelog.Writer)
 	if !ok || w == nil {
-		l.vlogMu.Unlock()
-		return page.ValuePtr{}, "", valuelog.FrameStats{}, false, 0, 0, errWALUnavailable
+		finishLeafPageAppendBatch(batch, errWALUnavailable)
+		return retainPaths
 	}
 	if rotateErr := db.rotateValueLogForMaxSegmentMuHeld(l, w); rotateErr != nil {
-		l.vlogMu.Unlock()
-		return page.ValuePtr{}, "", valuelog.FrameStats{}, false, 0, 0, rotateErr
+		finishLeafPageAppendBatch(batch, rotateErr)
+		return retainPaths
 	}
 	w, ok = l.vlog.(*valuelog.Writer)
 	if !ok || w == nil {
-		l.vlogMu.Unlock()
-		return page.ValuePtr{}, "", valuelog.FrameStats{}, false, 0, 0, errWALUnavailable
+		finishLeafPageAppendBatch(batch, errWALUnavailable)
+		return retainPaths
 	}
 	if l.vlogCaps.writer != w {
 		l.vlogCaps = computeVlogWriterCaps(w)
@@ -97,20 +187,62 @@ func (db *DB) appendPreparedLeafPageValueLog(l *lane, rid uint64, leafPage []byt
 	db.setVlogWriterMode(l, w, vlogWriteOff, db.valueLogBlockCodec)
 
 	startSize := w.Size()
-	ptr, err := w.AppendRawRecordBuffered(raw, ptrLength)
 	flushedBoundary := false
-	if err == nil && db.shouldFlushDeferredValueLogValue(vlogWriteOff, leafPage) {
+	noteRetainPath := func() {
+		if l.vlogPath == "" || l.vlogPath == l.vlogRetainedPath {
+			return
+		}
+		l.vlogRetainedPath = l.vlogPath
+		retainPaths = append(retainPaths, l.vlogPath)
+	}
+	var err error
+	for _, req := range batch {
+		if req == nil {
+			continue
+		}
+		if rotateErr := db.rotateValueLogForMaxSegmentMuHeld(l, w); rotateErr != nil {
+			err = rotateErr
+			finishLeafPageAppendBatch(batch, err)
+			break
+		}
+		next, ok := l.vlog.(*valuelog.Writer)
+		if !ok || next == nil {
+			err = errWALUnavailable
+			finishLeafPageAppendBatch(batch, err)
+			break
+		}
+		if next != w {
+			w = next
+			if l.vlogCaps.writer != w {
+				l.vlogCaps = computeVlogWriterCaps(w)
+			}
+			db.setVlogWriterMode(l, w, vlogWriteOff, db.valueLogBlockCodec)
+		}
+		before := w.Size()
+		req.ptr, err = w.AppendRawRecordBuffered(req.raw, req.ptrLength)
+		if err != nil {
+			finishLeafPageAppendBatch(batch, err)
+			break
+		}
+		req.totalBytes = w.Size() - before
+		noteRetainPath()
+		if db.shouldFlushDeferredValueLogValue(vlogWriteOff, req.raw) {
+			flushedBoundary = true
+		}
+	}
+	if err == nil && flushedBoundary {
 		err = w.Flush()
-		flushedBoundary = err == nil
+		if err != nil {
+			for i := range batch {
+				if batch[i] != nil && batch[i].err == nil {
+					batch[i].err = err
+				}
+			}
+		}
 	}
 	totalBytes := int64(0)
 	if err == nil {
 		totalBytes = w.Size() - startSize
-	}
-	retainPath := ""
-	if l.vlogPath != "" && l.vlogPath != l.vlogRetainedPath {
-		l.vlogRetainedPath = l.vlogPath
-		retainPath = l.vlogPath
 	}
 	if err == nil {
 		db.markLaneValueLogBoundary(l, totalBytes, flushedBoundary, false)
@@ -118,14 +250,19 @@ func (db *DB) appendPreparedLeafPageValueLog(l *lane, rid uint64, leafPage []byt
 			l.backendReadDirtySeq.Add(1)
 		}
 	}
-	if db.testBeforeVlogUnlock != nil {
-		db.testBeforeVlogUnlock(int(l.id))
+	return retainPaths
+}
+
+func finishLeafPageAppendBatch(batch []*leafPageAppendRequest, err error) {
+	for i := range batch {
+		if batch[i] == nil {
+			continue
+		}
+		batch[i].ptr = page.ValuePtr{}
+		batch[i].retainPath = ""
+		batch[i].totalBytes = 0
+		batch[i].err = err
 	}
-	l.vlogMu.Unlock()
-	if err != nil {
-		return page.ValuePtr{}, "", valuelog.FrameStats{}, false, 0, 0, err
-	}
-	return ptr, retainPath, stats, compacted, payloadLen, totalBytes, nil
 }
 
 func (db *DB) observeLeafPageValueLogAppend(l *lane, ptr page.ValuePtr, retainPath string, stats valuelog.FrameStats, compacted bool, finalWriteMode vlogCompressionWriteMode, finalBlockCodec valuelog.BlockCodec, payloadLen int, totalBytes int64, probeCompression bool, selectorStart time.Time) (page.ValuePtr, string, error) {
