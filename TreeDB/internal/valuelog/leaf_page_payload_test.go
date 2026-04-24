@@ -142,6 +142,39 @@ func TestDecodeCompactLeafLogPayloadTo_AliasedDstRoundTrips(t *testing.T) {
 	requireLeafPagesLogicallyEqual(t, leaf, decoded)
 }
 
+func TestDecodeCompactLeafLogPayloadTo_AliasedDstDoesNotAllocate(t *testing.T) {
+	leaf := buildSparseLeafPageForPayloadTest(t)
+
+	payload, compacted, err := MaybeCompactLeafLogPayload(leaf)
+	if err != nil {
+		t.Fatalf("MaybeCompactLeafLogPayload: %v", err)
+	}
+	if !compacted {
+		t.Fatalf("expected sparse leaf page to compact")
+	}
+
+	buf := make([]byte, page.PageSize)
+	var decoded []byte
+	allocs := testing.AllocsPerRun(100, func() {
+		copy(buf, payload)
+		out, usedDst, decodedFlag, err := decodeCompactLeafLogPayloadTo(buf[:len(payload)], buf[:0])
+		if err != nil {
+			t.Fatalf("decodeCompactLeafLogPayloadTo: %v", err)
+		}
+		if !decodedFlag {
+			t.Fatalf("expected compact payload to decode")
+		}
+		if !usedDst {
+			t.Fatalf("expected decode to reuse aliased dst")
+		}
+		decoded = out
+	})
+	if allocs != 0 {
+		t.Fatalf("aliased decode allocations=%v want 0", allocs)
+	}
+	requireLeafPagesLogicallyEqual(t, leaf, decoded)
+}
+
 func TestMaybeCompactLeafLogPayload_PassthroughNonPagePayload(t *testing.T) {
 	raw := []byte("not-a-leaf-page")
 	payload, compacted, err := MaybeCompactLeafLogPayload(raw)
