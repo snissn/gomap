@@ -145,7 +145,9 @@ type TrustedSortedBatchApplier interface {
 }
 
 // TrustedSortedBatchCopyIndexApplier consumes a sorted index list into a shared
-// batch entry slice while copying key/value bytes into memtable-owned storage.
+// batch entry slice while copying keys into memtable-owned storage. Pointer
+// ValuePtr bytes are always copied, and inline tail bytes for pointer entries
+// are copied only when storeInlinePtrValues is true.
 type TrustedSortedBatchCopyIndexApplier interface {
 	ApplyCopySortedBatchIndicesTrusted(entries []batchpkg.Entry, idxs []int, storeInlinePtrValues bool, onKey func(key []byte))
 }

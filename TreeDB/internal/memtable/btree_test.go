@@ -347,6 +347,54 @@ func TestBTreeApplyCopySortedBatchIndicesTrustedCopiesKeyValue(t *testing.T) {
 	}
 }
 
+func TestBTreeApplyCopySortedBatchIndicesTrustedPointerTail(t *testing.T) {
+	ptr := page.ValuePtr{Offset: 7, Length: 11, FileID: 2}
+
+	t.Run("omits inline tail", func(t *testing.T) {
+		m := NewBTree()
+		tail := []byte("tail")
+		entries := []batchpkg.Entry{{
+			Type:     batchpkg.OpPut,
+			Key:      []byte("ptr"),
+			Value:    tail,
+			ValuePtr: ptr,
+			IsPtr:    true,
+		}}
+
+		m.ApplyCopySortedBatchIndicesTrusted(entries, []int{0}, false, nil)
+		got, gotPtr, flags, ok := m.GetEntry([]byte("ptr"))
+		if !ok || got != nil || gotPtr != ptr || flags != node.FlagPointer {
+			t.Fatalf("GetEntry(ptr)=(%v,%+v,%d,%v), want (nil,%+v,%d,true)", got, gotPtr, flags, ok, ptr, node.FlagPointer)
+		}
+	})
+
+	t.Run("copies inline tail", func(t *testing.T) {
+		m := NewBTree()
+		tail := []byte("tail")
+		entries := []batchpkg.Entry{{
+			Type:     batchpkg.OpPut,
+			Key:      []byte("ptr"),
+			Value:    tail,
+			ValuePtr: ptr,
+			IsPtr:    true,
+		}}
+
+		m.ApplyCopySortedBatchIndicesTrusted(entries, []int{0}, true, nil)
+		got, gotPtr, flags, ok := m.GetEntry([]byte("ptr"))
+		if !ok || string(got) != "tail" || gotPtr != ptr || flags != node.FlagPointer {
+			t.Fatalf("GetEntry(ptr)=(%q,%+v,%d,%v), want (tail,%+v,%d,true)", string(got), gotPtr, flags, ok, ptr, node.FlagPointer)
+		}
+		if unsafe.SliceData(got) == unsafe.SliceData(tail) {
+			t.Fatal("copy sorted batch pointer tail aliases caller storage")
+		}
+		tail[0] = 'X'
+		got, gotPtr, flags, ok = m.GetEntry([]byte("ptr"))
+		if !ok || string(got) != "tail" || gotPtr != ptr || flags != node.FlagPointer {
+			t.Fatalf("GetEntry(ptr) after caller mutation=(%q,%+v,%d,%v), want (tail,%+v,%d,true)", string(got), gotPtr, flags, ok, ptr, node.FlagPointer)
+		}
+	})
+}
+
 func equalStrings(a, b []string) bool {
 	if len(a) != len(b) {
 		return false
