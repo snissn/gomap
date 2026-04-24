@@ -217,7 +217,7 @@ func TestBTreeSetEntryDedupesRepeatedCopiedInlineValues(t *testing.T) {
 
 func TestBTreeArenaUsesSmallInitialChunkThenGrows(t *testing.T) {
 	a := &btreeArena{
-		chunkSize:        256,
+		maxChunkSize:     256,
 		initialChunkSize: 32,
 	}
 
@@ -246,7 +246,7 @@ func TestBTreeArenaUsesSmallInitialChunkThenGrows(t *testing.T) {
 
 func TestBTreeArenaLargeAllocationCanExceedInitialChunk(t *testing.T) {
 	a := &btreeArena{
-		chunkSize:        256,
+		maxChunkSize:     256,
 		initialChunkSize: 32,
 	}
 
