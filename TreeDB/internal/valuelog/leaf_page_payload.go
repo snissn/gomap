@@ -134,21 +134,25 @@ func decodeCompactLeafLogPayloadTo(payload, dst []byte) ([]byte, bool, bool, err
 		}
 		return payload, false, false, nil
 	}
-	if cap(dst) >= page.PageSize && sliceAliasesBytes(dst[:cap(dst)], payload) {
-		payload = append([]byte(nil), payload...)
-	}
 	out := dst
 	usedDst := false
 	if cap(out) >= page.PageSize {
 		out = out[:page.PageSize]
-		clear(out)
 		usedDst = true
 	} else {
 		out = make([]byte, page.PageSize)
 	}
-	copy(out[:prefixLen], payload[compactLeafPagePayloadHeaderSize:compactLeafPagePayloadHeaderSize+prefixLen])
-	copy(out[page.PageSize-suffixLen:], payload[compactLeafPagePayloadHeaderSize+prefixLen:])
+	decodeCompactLeafLogPayloadInto(out, payload, prefixLen, suffixLen)
 	return out, usedDst, true, nil
+}
+
+func decodeCompactLeafLogPayloadInto(out, payload []byte, prefixLen, suffixLen int) {
+	src := payload[compactLeafPagePayloadHeaderSize:]
+	copy(out[:prefixLen], src[:prefixLen])
+	if suffixLen > 0 {
+		copy(out[page.PageSize-suffixLen:], src[prefixLen:prefixLen+suffixLen])
+	}
+	clear(out[prefixLen : page.PageSize-suffixLen])
 }
 
 func appendCompactLeafLogPayload(dst, payload []byte) ([]byte, error) {
