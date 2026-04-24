@@ -11405,11 +11405,12 @@ func (it *opRunIter) Key() []byte {
 func (*opRunIter) Close() error { return nil }
 
 type iteratorOpSource struct {
-	iter iterator.UnsafeIterator
+	iter         iterator.UnsafeIterator
+	stableUnsafe bool
 }
 
-func newIteratorOpSource(iter iterator.UnsafeIterator) *iteratorOpSource {
-	return &iteratorOpSource{iter: iter}
+func newIteratorOpSource(iter iterator.UnsafeIterator, stableUnsafe bool) *iteratorOpSource {
+	return &iteratorOpSource{iter: iter, stableUnsafe: stableUnsafe}
 }
 
 func (it *iteratorOpSource) Valid() bool {
@@ -11428,13 +11429,20 @@ func (it *iteratorOpSource) Entry() batch.Entry {
 		return batch.Entry{}
 	}
 	val, ptr, flags := it.iter.UnsafeEntry()
+	key := stableIteratorKey(it.iter, it.stableUnsafe)
+	if !it.stableUnsafe {
+		key = append([]byte(nil), key...)
+		if val != nil {
+			val = append([]byte(nil), val...)
+		}
+	}
 	switch {
 	case flags&node.FlagTombstone != 0:
-		return batch.Entry{Type: batch.OpDelete, Key: it.iter.UnsafeKey()}
+		return batch.Entry{Type: batch.OpDelete, Key: key}
 	case flags&node.FlagPointer != 0:
-		return batch.Entry{Type: batch.OpPut, Key: it.iter.UnsafeKey(), ValuePtr: ptr, IsPtr: true}
+		return batch.Entry{Type: batch.OpPut, Key: key, ValuePtr: ptr, IsPtr: true}
 	default:
-		return batch.Entry{Type: batch.OpPut, Key: it.iter.UnsafeKey(), Value: val}
+		return batch.Entry{Type: batch.OpPut, Key: key, Value: val}
 	}
 }
 
@@ -11442,14 +11450,22 @@ func (it *iteratorOpSource) Key() []byte {
 	if it == nil || it.iter == nil || !it.iter.Valid() {
 		return nil
 	}
-	return it.iter.UnsafeKey()
+	key := stableIteratorKey(it.iter, it.stableUnsafe)
+	if !it.stableUnsafe {
+		key = append([]byte(nil), key...)
+	}
+	return key
 }
 
 func (it *iteratorOpSource) Close() error {
 	if it == nil || it.iter == nil {
 		return nil
 	}
-	err := it.iter.Close()
+	err := it.iter.Error()
+	cerr := it.iter.Close()
+	if err == nil {
+		err = cerr
+	}
 	it.iter = nil
 	return err
 }
@@ -11613,6 +11629,29 @@ func stableIteratorKey(iter iterator.UnsafeIterator, stableUnsafe bool) []byte {
 		}
 	}
 	return iter.UnsafeKey()
+}
+
+func deleteHeavyStreamingDeleteOps(units []flushUnit, totalLen int) (int, bool) {
+	if len(units) == 0 || totalLen <= 0 {
+		return 0, false
+	}
+	deleteOps := 0
+	for i := range units {
+		provider, ok := units[i].mem.(memtable.OperationMixProvider)
+		if !ok {
+			return 0, false
+		}
+		mix := provider.OperationMix()
+		if mix.Deletes <= 0 {
+			continue
+		}
+		deleteOps += mix.Deletes
+		if deleteOps < 0 {
+			deleteOps = totalLen
+			break
+		}
+	}
+	return deleteOps, deleteOps >= (totalLen+3)/4
 }
 
 func closeOpMergeSources(sources []opMergeSource) error {
@@ -22254,18 +22293,25 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 			err       error
 		}
 
-		unitRuns := getUnitRuns(len(units))
-		defer func() {
-			for i := range unitRuns {
-				for _, run := range unitRuns[i] {
-					putEntrySlice(run)
+		streamSources := false
+		if deleteOps, ok := deleteHeavyStreamingDeleteOps(units, totalLen); ok {
+			streamSources = true
+			backendEntriesCap = db.flushBackendEntriesCapForOps(totalLen, deleteOps, sync)
+		}
+
+		var unitRuns [][][]batch.Entry
+		if !streamSources {
+			unitRuns = getUnitRuns(len(units))
+			defer func() {
+				for i := range unitRuns {
+					for _, run := range unitRuns[i] {
+						putEntrySlice(run)
+					}
+					putEntryRuns(unitRuns[i])
 				}
-				putEntryRuns(unitRuns[i])
-			}
-			putUnitRuns(unitRuns)
-		}()
-		unitDeleteOps := make([]int, len(units))
-		{
+				putUnitRuns(unitRuns)
+			}()
+			unitDeleteOps := make([]int, len(units))
 			jobs := make(chan int, len(units))
 			results := make(chan buildResult, len(units))
 			closeCh := db.closeCh
@@ -22350,18 +22396,18 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 			if failed {
 				return false
 			}
-		}
 
-		// Adaptive micro-batching: delete-heavy flushes are expensive to apply in
-		// many intermediate commits (each commit re-writes leaf pages, copying
-		// surviving values). Build runs for every unit so this decision sees the
-		// actual tombstone mix instead of the pre-dedup append-only entry count.
-		deleteOps := 0
-		for _, n := range unitDeleteOps {
-			deleteOps += n
-		}
-		if deleteOps > 0 {
-			backendEntriesCap = db.flushBackendEntriesCapForOps(totalLen, deleteOps, sync)
+			// Adaptive micro-batching: delete-heavy flushes are expensive to apply
+			// in many intermediate commits (each commit re-writes leaf pages,
+			// copying surviving values). The materialized path counts the actual
+			// iterator-visible tombstone mix while building runs.
+			deleteOps := 0
+			for _, n := range unitDeleteOps {
+				deleteOps += n
+			}
+			if deleteOps > 0 {
+				backendEntriesCap = db.flushBackendEntriesCapForOps(totalLen, deleteOps, sync)
+			}
 		}
 
 		reserveChunkOps := totalLen
@@ -22432,13 +22478,25 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 		}()
 		for i := range units {
 			priority := len(units) - 1 - i
-			if len(unitRuns[i]) == 0 {
-				continue
+			var source opMergeSource
+			if streamSources {
+				iter := units[i].mem.NewIterator(nil, nil)
+				source = newIteratorOpSource(iter, stableUnsafeIteratorSlices(units[i].mem))
+			} else {
+				if len(unitRuns[i]) == 0 {
+					continue
+				}
+				source = newOpRunIter(unitRuns[i])
 			}
-			source := newOpRunIter(unitRuns[i])
 			if source.Valid() {
 				sources = append(sources, source)
 				heap = append(heap, opMergeItem{source: source, priority: priority, key: source.Key()})
+				continue
+			}
+			if err := source.Close(); err != nil {
+				db.reportError(fmt.Errorf("cachingdb: flush failed (iter close): %w", err))
+				_ = backendBatch.Close()
+				return false
 			}
 		}
 		for i := len(heap)/2 - 1; i >= 0; i-- {

@@ -87,6 +87,7 @@ type HashSorted struct {
 	sortedValid bool
 	frozen      bool
 	hasDeletes  bool
+	deleteCount int
 	arena       hashArena
 
 	// Incremental ordering:
@@ -197,6 +198,7 @@ func (m *HashSorted) Reset() {
 	m.sortedValid = true
 	m.frozen = false
 	m.hasDeletes = false
+	m.deleteCount = 0
 	m.maxKey = ""
 	m.hasMaxKey = false
 	m.pendingKeys = nil
@@ -350,6 +352,9 @@ func (m *HashSorted) PutWithCallback(key, value []byte, cb func(k, v []byte) err
 			}
 		}
 		oldLen := hashEntryValueSize(ent.flags, ent.value)
+		if ent.flags&node.FlagTombstone != 0 {
+			m.deleteCount--
+		}
 		ent.value = valCopy
 		ent.ptr = page.ValuePtr{}
 		ent.flags = node.FlagInline
@@ -415,6 +420,7 @@ func (m *HashSorted) DeleteWithCallback(key []byte, cb func(k, v []byte) error) 
 			ent.value = nil
 			ent.ptr = page.ValuePtr{}
 			ent.flags = node.FlagTombstone
+			m.deleteCount++
 		}
 		m.mu.Unlock()
 		return nil
@@ -430,6 +436,7 @@ func (m *HashSorted) DeleteWithCallback(key []byte, cb func(k, v []byte) error) 
 	keyStored := bytesToStringNoCopy(keyCopy)
 	m.entries = append(m.entries, hashEntry{flags: node.FlagTombstone})
 	m.items[keyStored] = uint32(len(m.entries) - 1)
+	m.deleteCount++
 	m.sizeBytes += int64(len(keyCopy))
 	m.updateMaxKeyLocked(keyStored)
 	chunk, seq = m.noteNewKeyLocked(keyStored)
@@ -509,6 +516,15 @@ func (m *HashSorted) Len() int {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return len(m.items)
+}
+
+func (m *HashSorted) OperationMix() OperationMix {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return OperationMix{
+		Entries: len(m.items),
+		Deletes: m.deleteCount,
+	}
 }
 
 func (m *HashSorted) Freeze() {
@@ -897,6 +913,7 @@ func (m *HashSorted) setEntryLocked(key, value []byte, ptr page.ValuePtr, flags 
 	keyLookup := bytesToStringNoCopy(key)
 	if ent, ok := m.entryForWriteLocked(keyLookup); ok {
 		oldLen := hashEntryValueSize(ent.flags, ent.value)
+		oldDeleted := ent.flags&node.FlagTombstone != 0
 		ent.value = m.encodeEntryValueLocked(value, ptr, flags, steal)
 		if flags&node.FlagPointer != 0 {
 			ent.ptr = ptr
@@ -907,6 +924,13 @@ func (m *HashSorted) setEntryLocked(key, value []byte, ptr page.ValuePtr, flags 
 		m.sizeBytes += int64(hashEntryValueSize(ent.flags, ent.value) - oldLen)
 		if flags&node.FlagTombstone != 0 {
 			m.hasDeletes = true
+		}
+		newDeleted := flags&node.FlagTombstone != 0
+		switch {
+		case !oldDeleted && newDeleted:
+			m.deleteCount++
+		case oldDeleted && !newDeleted:
+			m.deleteCount--
 		}
 		return nil, 0
 	}
@@ -928,6 +952,7 @@ func (m *HashSorted) setEntryLocked(key, value []byte, ptr page.ValuePtr, flags 
 	m.sizeBytes += int64(len(keyCopy) + hashEntryValueSize(flags, valCopy))
 	if flags&node.FlagTombstone != 0 {
 		m.hasDeletes = true
+		m.deleteCount++
 	}
 	m.updateMaxKeyLocked(keyStored)
 	return m.noteNewKeyLocked(keyStored)
@@ -960,6 +985,7 @@ func (m *HashSorted) setEntryNewStealNoChunkLocked(op batchpkg.Entry) (string, i
 	m.sizeBytes += int64(len(op.Key) + hashEntryValueSize(flags, val))
 	if flags&node.FlagTombstone != 0 {
 		m.hasDeletes = true
+		m.deleteCount++
 	}
 	// The fast path is append-only and entries are strictly increasing.
 	m.maxKey = keyStored

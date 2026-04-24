@@ -122,6 +122,21 @@ type StableUnsafeIteratorTable interface {
 	StableUnsafeIteratorSlices() bool
 }
 
+// OperationMix describes the operation mix currently retained by a memtable.
+// It is a performance-planning hint, not a correctness contract: implementations
+// may count superseded append-log entries when their iterators later collapse
+// multiple writes to the latest value for a key.
+type OperationMix struct {
+	Entries int
+	Deletes int
+}
+
+// OperationMixProvider marks memtables that can report their write-buffer
+// operation mix without forcing an iterator materialization pass.
+type OperationMixProvider interface {
+	OperationMix() OperationMix
+}
+
 // TrustedSortedBatchApplier is an optional fast path for callers that already
 // guarantee strictly increasing keys (for example, stream-qualified batch
 // writes partitioned by shard while preserving source order).

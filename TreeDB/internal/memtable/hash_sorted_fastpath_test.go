@@ -55,3 +55,27 @@ func TestHashSortedApplyStealSortedBatch_DuplicateKeyForcesFallback(t *testing.T
 		t.Fatalf("len=%d want 2", got)
 	}
 }
+
+func TestHashSortedOperationMixTracksCurrentDeletes(t *testing.T) {
+	m := NewHashSorted()
+	m.Set([]byte("k1"), []byte("v1"))
+	m.Delete([]byte("k2"))
+	m.Delete([]byte("k1"))
+
+	mix := m.OperationMix()
+	if mix.Entries != 2 || mix.Deletes != 2 {
+		t.Fatalf("operation mix=(entries=%d deletes=%d), want (2,2)", mix.Entries, mix.Deletes)
+	}
+
+	m.Set([]byte("k1"), []byte("v2"))
+	mix = m.OperationMix()
+	if mix.Entries != 2 || mix.Deletes != 1 {
+		t.Fatalf("operation mix after put=(entries=%d deletes=%d), want (2,1)", mix.Entries, mix.Deletes)
+	}
+
+	m.Reset()
+	mix = m.OperationMix()
+	if mix.Entries != 0 || mix.Deletes != 0 {
+		t.Fatalf("operation mix after reset=(entries=%d deletes=%d), want (0,0)", mix.Entries, mix.Deletes)
+	}
+}

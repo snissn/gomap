@@ -1011,6 +1011,72 @@ func TestFlushLaneOnce_FallsBackFromPointerViewForUnstableIterators(t *testing.T
 	}
 }
 
+func TestFlushLaneOnce_DeleteHeavyParallelStreamsWithoutEntryRuns(t *testing.T) {
+	for _, mode := range []string{"append_only", "hash_sorted"} {
+		t.Run(mode, func(t *testing.T) {
+			testFlushLaneOnceDeleteHeavyParallelStreamsWithoutEntryRuns(t, mode)
+		})
+	}
+}
+
+func testFlushLaneOnceDeleteHeavyParallelStreamsWithoutEntryRuns(t *testing.T, mode string) {
+	t.Helper()
+	lockEntrySlicePoolStateForTest(t)
+
+	dir := t.TempDir()
+	backend := &viewCountingBackend{MockBackend: NewMockBackend()}
+	db, err := Open(dir, backend, Options{
+		FlushThreshold:         1 << 60,
+		MemtableShards:         1,
+		MemtableMode:           mode,
+		MaxQueuedMemtables:     -1,
+		FlushBuildConcurrency:  2,
+		FlushBuildMinEntries:   1,
+		FlushBuildMinUnits:     2,
+		FlushBuildChunkCap:     2,
+		FlushBackendMaxEntries: -1,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	oldProcs := runtime.GOMAXPROCS(2)
+	defer runtime.GOMAXPROCS(oldProcs)
+
+	for unit := 0; unit < 2; unit++ {
+		for i := 0; i < 4; i++ {
+			key := []byte{byte('z' - i), byte('0' + unit)}
+			if err := db.Delete(key); err != nil {
+				t.Fatalf("Delete unit %d entry %d: %v", unit, i, err)
+			}
+		}
+		db.mu.Lock()
+		if err := db.rotateMemtableLocked(false); err != nil {
+			db.mu.Unlock()
+			t.Fatalf("rotateMemtableLocked unit %d: %v", unit, err)
+		}
+		db.mu.Unlock()
+	}
+
+	beforeGets := entrySliceFreshAllocTotal.Load() + entrySliceLeaseHitTotal.Load() + entrySlicePoolHitTotal.Load()
+	if !db.flushLaneOnce(false, 0) {
+		t.Fatal("flushLaneOnce returned false")
+	}
+	afterGets := entrySliceFreshAllocTotal.Load() + entrySliceLeaseHitTotal.Load() + entrySlicePoolHitTotal.Load()
+	if afterGets != beforeGets {
+		t.Fatalf("entry slice gets changed by delete-heavy streaming flush: before=%d after=%d", beforeGets, afterGets)
+	}
+
+	_, _, deleteCalls, deleteViewCalls := backend.totals()
+	if deleteCalls != 0 {
+		t.Fatalf("backend Delete calls=%d, want 0", deleteCalls)
+	}
+	if deleteViewCalls != 8 {
+		t.Fatalf("backend DeleteView calls=%d, want 8", deleteViewCalls)
+	}
+}
+
 func TestFlushLaneOnce_ReusesResettableBackendBatchAcrossChunks(t *testing.T) {
 	dir := t.TempDir()
 	backend := &viewCountingBackend{MockBackend: NewMockBackend()}
