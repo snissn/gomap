@@ -130,6 +130,30 @@ func TestMaybeCompactLeafLogPayload_SparseLeafAllocatesOnlyPayload(t *testing.T)
 	}
 }
 
+func TestMaybeCompactLeafLogPayloadTo_SparseLeafReusesDstWithoutAllocations(t *testing.T) {
+	leaf := buildSparseLeafPageForPayloadTest(t)
+	dst := make([]byte, 0, page.PageSize)
+
+	allocs := testing.AllocsPerRun(1000, func() {
+		payload, compacted, err := MaybeCompactLeafLogPayloadTo(dst, leaf)
+		if err != nil {
+			t.Fatalf("MaybeCompactLeafLogPayloadTo: %v", err)
+		}
+		if !compacted {
+			t.Fatalf("expected sparse leaf page to compact")
+		}
+		if len(payload) >= len(leaf) {
+			t.Fatalf("payload len=%d want < %d", len(payload), len(leaf))
+		}
+		if len(payload) > 0 && &payload[0] != &dst[:cap(dst)][0] {
+			t.Fatalf("expected compact payload to reuse dst backing storage")
+		}
+	})
+	if allocs > 0 {
+		t.Fatalf("allocs/run=%f want 0", allocs)
+	}
+}
+
 func TestDecodeCompactLeafLogPayloadTo_AliasedDstRoundTrips(t *testing.T) {
 	leaf := buildSparseLeafPageForPayloadTest(t)
 

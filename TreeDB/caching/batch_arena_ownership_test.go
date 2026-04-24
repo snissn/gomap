@@ -60,6 +60,30 @@ func TestBatchReset_DoesNotCorruptPriorBorrowedWrites(t *testing.T) {
 	}
 }
 
+func TestBatchResetClearsRetainedMemtableSliceBackingArrays(t *testing.T) {
+	mt1 := memtable.NewAppendOnlyWithCapacity(0)
+	mt2 := memtable.NewAppendOnlyWithCapacity(0)
+	b := &Batch{
+		retainMainMems: []memtable.Table{mt1},
+		ptrTouchedMems: []memtable.Table{mt2},
+	}
+
+	b.Reset()
+
+	if got := len(b.retainMainMems); got != 0 {
+		t.Fatalf("retainMainMems len=%d want=0", got)
+	}
+	if got := len(b.ptrTouchedMems); got != 0 {
+		t.Fatalf("ptrTouchedMems len=%d want=0", got)
+	}
+	if full := b.retainMainMems[:cap(b.retainMainMems)]; len(full) > 0 && full[0] != nil {
+		t.Fatalf("retainMainMems backing array still references %T", full[0])
+	}
+	if full := b.ptrTouchedMems[:cap(b.ptrTouchedMems)]; len(full) > 0 && full[0] != nil {
+		t.Fatalf("ptrTouchedMems backing array still references %T", full[0])
+	}
+}
+
 func TestBatchArenaLeases_CopiedMemtablesMatchOwnershipMode(t *testing.T) {
 	cases := []struct {
 		mode       string

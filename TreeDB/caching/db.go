@@ -7359,6 +7359,20 @@ func memtableBatchDelete(mt memtable.Table, useSteal bool, key []byte) {
 	mt.Delete(key)
 }
 
+func appendUniqueTouchedMem(dst []memtable.Table, mt memtable.Table) []memtable.Table {
+	if mt == nil {
+		return dst
+	}
+	// The touched set is bounded by mutable shard count in this write path, so a
+	// short slice scan avoids adding a per-batch map to the hot path.
+	for i := range dst {
+		if dst[i] == mt {
+			return dst
+		}
+	}
+	return append(dst, mt)
+}
+
 // memtableBatchSet applies a cached batch write while preserving the ownership
 // rules selected by cachedBatchWriteUsesSteal. Pointer entries may still keep
 // inline bytes in memtables that do not use value-log pointers internally.
@@ -25764,6 +25778,8 @@ type Batch struct {
 	shardCnts          []int
 	shardEntries       [][]batch.Entry
 	shardIdxSets       [][]int
+	retainMainMems     []memtable.Table
+	ptrTouchedMems     []memtable.Table
 	maxEntries         int
 
 	closed bool
@@ -26208,6 +26224,7 @@ func (b *Batch) Reset() {
 	if b.shardIdxSets != nil {
 		b.shardIdxSets = b.shardIdxSets[:0]
 	}
+	b.clearRetainedMemtableSlices()
 	b.recycleCopyArenaChunks()
 	b.recyclePtrCopyArenaChunks()
 	if b.arenaInFlightBytes > 0 {
@@ -26227,6 +26244,22 @@ func (b *Batch) Reset() {
 	b.maxEntries = 0
 	if b.ptrValueIdxs != nil {
 		b.ptrValueIdxs = b.ptrValueIdxs[:0]
+	}
+}
+
+func (b *Batch) clearRetainedMemtableSlices() {
+	if b == nil {
+		return
+	}
+	if b.retainMainMems != nil {
+		full := b.retainMainMems[:cap(b.retainMainMems)]
+		clear(full)
+		b.retainMainMems = b.retainMainMems[:0]
+	}
+	if b.ptrTouchedMems != nil {
+		full := b.ptrTouchedMems[:cap(b.ptrTouchedMems)]
+		clear(full)
+		b.ptrTouchedMems = b.ptrTouchedMems[:0]
 	}
 }
 
@@ -27150,8 +27183,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 		}
 		shardAdds[idx] += add
 	}
-	retainMainMems := make([]memtable.Table, 0, shardCount)
-	retainMainSeen := make(map[memtable.Table]struct{}, shardCount)
+	retainMainMems := b.retainMainMems[:0]
 	for i, add := range shardAdds {
 		if add == 0 {
 			continue
@@ -27559,10 +27591,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 				batchArenaStealSuppressedDeferredEntriesTotal.Add(uint64(len(idxs)))
 			}
 			if useSteal && cachedBatchWriteNeedsBatchArenaRetention(shard.mem) {
-				if _, ok := retainMainSeen[shard.mem]; !ok {
-					retainMainSeen[shard.mem] = struct{}{}
-					retainMainMems = append(retainMainMems, shard.mem)
-				}
+				retainMainMems = appendUniqueTouchedMem(retainMainMems, shard.mem)
 			}
 			if b.streamEligible {
 				first := b.entries[idxs[0]].Key
@@ -27634,10 +27663,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 				batchArenaStealSuppressedDeferredEntriesTotal.Add(uint64(len(entries)))
 			}
 			if useSteal && cachedBatchWriteNeedsBatchArenaRetention(shard.mem) {
-				if _, ok := retainMainSeen[shard.mem]; !ok {
-					retainMainSeen[shard.mem] = struct{}{}
-					retainMainMems = append(retainMainMems, shard.mem)
-				}
+				retainMainMems = appendUniqueTouchedMem(retainMainMems, shard.mem)
 			}
 			storeInlinePtrValues := !b.db.memtableValueLogPointers
 			if useStream && useSteal {
@@ -27678,10 +27704,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 						}
 						memtableBatchSet(shard.mem, useSteal, allowBatchArenaBorrow, storeInlinePtrValues, op)
 						if borrowed {
-							if _, ok := retainMainSeen[shard.mem]; !ok {
-								retainMainSeen[shard.mem] = struct{}{}
-								retainMainMems = append(retainMainMems, shard.mem)
-							}
+							retainMainMems = appendUniqueTouchedMem(retainMainMems, shard.mem)
 						}
 					}
 					if useStream {
@@ -27708,6 +27731,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 			shard.mu.Unlock()
 		}
 	}
+	b.retainMainMems = retainMainMems
 
 	// 3. Threshold Check
 	if b.db.mutableBytes.Load() > b.db.mutableFlushThreshold() {
@@ -27720,11 +27744,13 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 	b.updateBatchCopyHint()
 	mainChunks := b.drainCopyArenaChunks()
 	retainPtrArena := false
-	ptrTouchedMems := make([]memtable.Table, 0, len(b.ptrValueIdxs))
+	ptrTouchedMems := b.ptrTouchedMems[:0]
 	if allowBatchArenaBorrow && len(b.ptrValueIdxs) > 0 {
-		seenPtrMems := make(map[memtable.Table]struct{}, len(b.ptrValueIdxs))
 		for _, idx := range b.ptrValueIdxs {
 			if idx < 0 || idx >= len(b.entries) || idx >= len(shardIdxs) {
+				b.retainMainMems = retainMainMems
+				b.ptrTouchedMems = ptrTouchedMems
+				b.clearRetainedMemtableSlices()
 				b.db.writeMu.RUnlock()
 				return fmt.Errorf("cachingdb: ptr value entry index %d out of range", idx)
 			}
@@ -27734,6 +27760,9 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 			retainPtrArena = true
 			shardIdx := shardIdxs[idx]
 			if shardIdx < 0 || shardIdx >= len(b.db.mutableShards) {
+				b.retainMainMems = retainMainMems
+				b.ptrTouchedMems = ptrTouchedMems
+				b.clearRetainedMemtableSlices()
 				b.db.writeMu.RUnlock()
 				return fmt.Errorf("cachingdb: ptr value shard index %d out of range for entry %d", shardIdx, idx)
 			}
@@ -27741,23 +27770,24 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 			if mt == nil {
 				continue
 			}
-			if _, ok := seenPtrMems[mt]; ok {
-				continue
-			}
-			seenPtrMems[mt] = struct{}{}
-			ptrTouchedMems = append(ptrTouchedMems, mt)
+			ptrTouchedMems = appendUniqueTouchedMem(ptrTouchedMems, mt)
 		}
 	}
+	b.ptrTouchedMems = ptrTouchedMems
 	if b.ptrValueIdxs != nil {
 		b.ptrValueIdxs = b.ptrValueIdxs[:0]
 	}
 	ptrChunks := b.drainPtrCopyArenaChunks()
 	b.db.retainBatchArenaChunksForMemtables(mainChunks, retainMainMems)
+	clear(retainMainMems)
+	b.retainMainMems = retainMainMems[:0]
 	if retainPtrArena {
 		b.db.retainBatchArenaChunksForMemtables(ptrChunks, ptrTouchedMems)
 	} else {
 		putBatchArenas(ptrChunks)
 	}
+	clear(ptrTouchedMems)
+	b.ptrTouchedMems = ptrTouchedMems[:0]
 	b.db.writeMu.RUnlock()
 
 	if needRotate {
