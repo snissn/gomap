@@ -29237,9 +29237,13 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 			delta := newBytes - shard.bytes
 			shard.bytes = newBytes
 			b.db.mutableBytes.Add(delta)
-			shard.mu.Unlock()
+			var retainedMain memtable.Table
 			if retainMain {
-				retainMainMems = append(retainMainMems, shard.mem)
+				retainedMain = shard.mem
+			}
+			shard.mu.Unlock()
+			if retainedMain != nil {
+				retainMainMems = append(retainMainMems, retainedMain)
 			}
 		}
 	}
