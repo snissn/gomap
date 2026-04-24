@@ -104,6 +104,26 @@ func (m *BTree) ApplyStealSortedBatchIndicesTrusted(entries []batchpkg.Entry, id
 	m.applyStealSortedBatch(entries, idxs, onKey)
 }
 
+func (m *BTree) ApplyCopySortedBatchIndicesTrusted(entries []batchpkg.Entry, idxs []int, storeInlinePtrValues bool, onKey func(key []byte)) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	for _, idx := range idxs {
+		op := entries[idx]
+		if op.Key == nil {
+			continue
+		}
+		keyCopy := m.arena.Copy(op.Key)
+		keyStr := bytesToStringNoCopy(keyCopy)
+		entry := m.btreeEntryCopyFromBatchOpLocked(op, storeInlinePtrValues)
+		prev, replaced := m.setMaybeSortedLoadLocked(keyStr, entry)
+		m.recordSetLocked(keyStr, len(keyCopy), entry, prev, replaced)
+		if onKey != nil {
+			onKey(op.Key)
+		}
+	}
+}
+
 func (m *BTree) applyStealSortedBatch(entries []batchpkg.Entry, idxs []int, onKey func(key []byte)) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -129,6 +149,28 @@ func (m *BTree) applyStealSortedBatch(entries []batchpkg.Entry, idxs []int, onKe
 	}
 	for _, idx := range idxs {
 		apply(entries[idx])
+	}
+}
+
+func (m *BTree) btreeEntryCopyFromBatchOpLocked(op batchpkg.Entry, storeInlinePtrValues bool) btreeEntry {
+	switch {
+	case op.Type == batchpkg.OpDelete:
+		return btreeEntry{flags: node.FlagTombstone}
+	case op.IsPtr:
+		value := op.Value
+		if !storeInlinePtrValues {
+			value = nil
+		}
+		return btreeEntry{
+			value: m.copyPointerValueLocked(op.ValuePtr, value),
+			flags: node.FlagPointer,
+		}
+	default:
+		value := canonicalizeBTreeInlineValue(op.Value)
+		return btreeEntry{
+			value: m.copyInlineValueLocked(value),
+			flags: node.FlagInline,
+		}
 	}
 }
 
