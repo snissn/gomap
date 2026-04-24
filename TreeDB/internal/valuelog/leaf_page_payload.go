@@ -22,7 +22,7 @@ func HasCompactLeafLogPayload(payload []byte) bool {
 		bytes.Equal(payload[:len(compactLeafPagePayloadMagic)], compactLeafPagePayloadMagic[:])
 }
 
-func compactLeafLogPayloadBounds(leafPage []byte) (prefixLen, suffixStart, suffixLen int, ok bool, err error) {
+func compactLeafPageLivePayloadBounds(leafPage []byte) (prefixLen, suffixStart, suffixLen int, ok bool, err error) {
 	if len(leafPage) != page.PageSize {
 		return 0, 0, 0, false, nil
 	}
@@ -70,7 +70,7 @@ func compactLeafCanonicalChecksum(leafPage []byte, prefixLen, suffixStart, suffi
 // MaybeCompactLeafLogPayload would produce without materializing the payload.
 // When compaction is not beneficial, it returns len(leafPage) and compacted=false.
 func CompactLeafLogPayloadLen(leafPage []byte) (payloadLen int, compacted bool, err error) {
-	prefixLen, _, suffixLen, ok, err := compactLeafLogPayloadBounds(leafPage)
+	prefixLen, _, suffixLen, ok, err := compactLeafPageLivePayloadBounds(leafPage)
 	if err != nil {
 		return 0, false, err
 	}
@@ -97,7 +97,7 @@ func encodeCompactLeafLogPayload(dst, leafPage []byte, prefixLen, suffixStart, s
 }
 
 func MaybeCompactLeafLogPayload(leafPage []byte) ([]byte, bool, error) {
-	prefixLen, suffixStart, suffixLen, ok, err := compactLeafLogPayloadBounds(leafPage)
+	prefixLen, suffixStart, suffixLen, ok, err := compactLeafPageLivePayloadBounds(leafPage)
 	if err != nil {
 		return nil, false, err
 	}

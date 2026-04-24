@@ -928,7 +928,7 @@ func (w *Writer) AppendCompactLeafPage(rid uint64, leafPage []byte) (page.ValueP
 	if rid == 0 {
 		return page.ValuePtr{}, FrameStats{}, false, errors.New("valuelog: missing rid")
 	}
-	prefixLen, suffixStart, suffixLen, compacted, err := compactLeafLogPayloadBounds(leafPage)
+	prefixLen, suffixStart, suffixLen, compacted, err := compactLeafPageLivePayloadBounds(leafPage)
 	if err != nil {
 		return page.ValuePtr{}, FrameStats{}, false, err
 	}
