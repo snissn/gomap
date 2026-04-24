@@ -1,6 +1,7 @@
 package memtable
 
 import (
+	"bytes"
 	"strings"
 	"sync"
 
@@ -14,6 +15,7 @@ import (
 const btreeDefaultDegree = 32
 const btreeUseLoadFastPath = false
 const btreeArenaChunkSize = 1 << 20
+const btreeInlineValueDedupeMax = 1 << 20
 
 type btreeEntry struct {
 	value []byte // inline bytes (if pointer, may store inline tail bytes)
@@ -60,13 +62,14 @@ func normalizeBTreeEntryFlags(flags byte) byte {
 }
 
 type BTree struct {
-	mu        sync.RWMutex
-	tree      *btree.Map[string, btreeEntry]
-	sizeBytes int64
-	arena     *btreeArena
-	lastKey   string
-	hasLast   bool
-	degree    int
+	mu         sync.RWMutex
+	tree       *btree.Map[string, btreeEntry]
+	sizeBytes  int64
+	arena      *btreeArena
+	lastKey    string
+	hasLast    bool
+	degree     int
+	lastInline []byte
 }
 
 func (*BTree) StableUnsafeIteratorSlices() bool { return true }
@@ -76,65 +79,42 @@ func NewBTree() *BTree {
 }
 
 func (m *BTree) ApplyStealSortedBatch(entries []batchpkg.Entry, onKey func(key []byte)) {
+	m.applyStealSortedBatch(entries, nil, onKey)
+}
+
+func (m *BTree) ApplyStealSortedBatchTrusted(entries []batchpkg.Entry, onKey func(key []byte)) {
+	m.applyStealSortedBatch(entries, nil, onKey)
+}
+
+func (m *BTree) ApplyStealSortedBatchIndicesTrusted(entries []batchpkg.Entry, idxs []int, onKey func(key []byte)) {
+	m.applyStealSortedBatch(entries, idxs, onKey)
+}
+
+func (m *BTree) applyStealSortedBatch(entries []batchpkg.Entry, idxs []int, onKey func(key []byte)) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	for _, op := range entries {
+	apply := func(op batchpkg.Entry) {
+		if op.Key == nil {
+			return
+		}
 		keyStr := bytesToStringNoCopy(op.Key)
-		var prev btreeEntry
-		var replaced bool
-
-		if op.Type == batchpkg.OpDelete {
-			entry := btreeEntry{flags: node.FlagTombstone}
-			if m.hasLast && keyStr > m.lastKey {
-				prev, replaced = m.tree.Load(keyStr, entry)
-			} else {
-				prev, replaced = m.tree.Set(keyStr, entry)
-			}
-			if replaced {
-				if prev.flags&node.FlagTombstone == 0 {
-					m.sizeBytes -= int64(btreeEntryPayloadSize(prev.flags, prev.value))
-				}
-			} else {
-				m.sizeBytes += int64(len(op.Key))
-			}
-		} else if op.IsPtr {
-			entry := btreeEntry{value: canonicalizeBTreePointerValue(node.FlagPointer, op.Value), ptr: op.ValuePtr, flags: node.FlagPointer}
-			if m.hasLast && keyStr > m.lastKey {
-				prev, replaced = m.tree.Load(keyStr, entry)
-			} else {
-				prev, replaced = m.tree.Set(keyStr, entry)
-			}
-			newSize := btreeEntryPayloadSize(entry.flags, entry.value)
-			if replaced {
-				oldSize := btreeEntryPayloadSize(prev.flags, prev.value)
-				m.sizeBytes += int64(newSize - oldSize)
-			} else {
-				m.sizeBytes += int64(len(op.Key) + newSize)
-			}
-		} else {
-			entry := btreeEntry{value: canonicalizeBTreeInlineValue(op.Value), flags: node.FlagInline}
-			if m.hasLast && keyStr > m.lastKey {
-				prev, replaced = m.tree.Load(keyStr, entry)
-			} else {
-				prev, replaced = m.tree.Set(keyStr, entry)
-			}
-			newSize := btreeEntryPayloadSize(entry.flags, entry.value)
-			if replaced {
-				oldSize := btreeEntryPayloadSize(prev.flags, prev.value)
-				m.sizeBytes += int64(newSize - oldSize)
-			} else {
-				m.sizeBytes += int64(len(op.Key) + newSize)
-			}
-		}
-
-		if !m.hasLast || keyStr > m.lastKey {
-			m.lastKey = keyStr
-			m.hasLast = true
-		}
+		entry := btreeEntryFromBatchOp(op)
+		prev, replaced := m.setMaybeSortedLoadLocked(keyStr, entry)
+		m.recordSetLocked(keyStr, len(op.Key), entry, prev, replaced)
 		if onKey != nil {
 			onKey(op.Key)
 		}
+	}
+
+	if idxs == nil {
+		for _, op := range entries {
+			apply(op)
+		}
+		return
+	}
+	for _, idx := range idxs {
+		apply(entries[idx])
 	}
 }
 
@@ -160,6 +140,7 @@ func (m *BTree) Reset() {
 	m.sizeBytes = 0
 	m.lastKey = ""
 	m.hasLast = false
+	m.lastInline = nil
 	if m.arena != nil {
 		m.arena.resetKeepFirstChunk()
 	}
@@ -185,24 +166,11 @@ func (m *BTree) PutWithCallback(key, value []byte, cb func(k, v []byte) error) e
 	defer m.mu.Unlock()
 
 	keyStored := m.arena.Copy(key)
-	valStored := []byte(nil)
-	if len(value) > 0 {
-		valStored = m.arena.Copy(value)
-	}
+	valStored := m.copyInlineValueLocked(canonicalizeBTreeInlineValue(value))
 	keyStr := bytesToStringNoCopy(keyStored)
 	entry := btreeEntry{value: valStored, flags: node.FlagInline}
 	prev, replaced := m.setMaybeLoadLocked(keyStr, entry)
-	newSize := btreeEntryPayloadSize(entry.flags, entry.value)
-	if replaced {
-		oldSize := btreeEntryPayloadSize(prev.flags, prev.value)
-		m.sizeBytes += int64(newSize - oldSize)
-		return nil
-	}
-	m.sizeBytes += int64(len(keyStored) + newSize)
-	if !m.hasLast || keyStr > m.lastKey {
-		m.lastKey = keyStr
-		m.hasLast = true
-	}
+	m.recordSetLocked(keyStr, len(keyStored), entry, prev, replaced)
 	return nil
 }
 
@@ -232,22 +200,10 @@ func (m *BTree) SetEntry(key, value []byte, ptr page.ValuePtr, flags byte) {
 		}
 	default:
 		value = canonicalizeBTreeInlineValue(value)
-		if len(value) > 0 {
-			entry.value = m.arena.Copy(value)
-		}
+		entry.value = m.copyInlineValueLocked(value)
 	}
 	prev, replaced := m.setMaybeLoadLocked(keyStr, entry)
-	newSize := btreeEntryPayloadSize(entry.flags, entry.value)
-	if replaced {
-		oldSize := btreeEntryPayloadSize(prev.flags, prev.value)
-		m.sizeBytes += int64(newSize - oldSize)
-		return
-	}
-	m.sizeBytes += int64(len(keyCopy) + newSize)
-	if !m.hasLast || keyStr > m.lastKey {
-		m.lastKey = keyStr
-		m.hasLast = true
-	}
+	m.recordSetLocked(keyStr, len(keyCopy), entry, prev, replaced)
 }
 
 func (m *BTree) SetEntrySteal(key, value []byte, ptr page.ValuePtr, flags byte) {
@@ -271,17 +227,7 @@ func (m *BTree) SetEntrySteal(key, value []byte, ptr page.ValuePtr, flags byte) 
 		entry.value = canonicalizeBTreeInlineValue(value)
 	}
 	prev, replaced := m.setMaybeLoadLocked(keyStr, entry)
-	newSize := btreeEntryPayloadSize(entry.flags, entry.value)
-	if replaced {
-		oldSize := btreeEntryPayloadSize(prev.flags, prev.value)
-		m.sizeBytes += int64(newSize - oldSize)
-		return
-	}
-	m.sizeBytes += int64(len(key) + newSize)
-	if !m.hasLast || keyStr > m.lastKey {
-		m.lastKey = keyStr
-		m.hasLast = true
-	}
+	m.recordSetLocked(keyStr, len(key), entry, prev, replaced)
 }
 
 func (m *BTree) Delete(key []byte) {
@@ -305,14 +251,8 @@ func (m *BTree) DeleteWithCallback(key []byte, cb func(k, v []byte) error) error
 	keyStored := m.arena.Copy(key)
 	keyStr := bytesToStringNoCopy(keyStored)
 	entry := btreeEntry{flags: node.FlagTombstone}
-	prev, replaced := m.tree.Set(keyStr, entry)
-	if replaced {
-		if prev.flags&node.FlagTombstone == 0 {
-			m.sizeBytes -= int64(btreeEntryPayloadSize(prev.flags, prev.value))
-		}
-		return nil
-	}
-	m.sizeBytes += int64(len(keyStored))
+	prev, replaced := m.setMaybeLoadLocked(keyStr, entry)
+	m.recordSetLocked(keyStr, len(keyStored), entry, prev, replaced)
 	return nil
 }
 
@@ -741,6 +681,61 @@ func (m *BTree) setMaybeLoadLocked(key string, entry btreeEntry) (btreeEntry, bo
 		return m.tree.Load(key, entry)
 	}
 	return m.tree.Set(key, entry)
+}
+
+func (m *BTree) setMaybeSortedLoadLocked(key string, entry btreeEntry) (btreeEntry, bool) {
+	if m.hasLast && key > m.lastKey {
+		return m.tree.Load(key, entry)
+	}
+	return m.tree.Set(key, entry)
+}
+
+func (m *BTree) copyInlineValueLocked(value []byte) []byte {
+	if len(value) == 0 {
+		return nil
+	}
+	if len(value) <= btreeInlineValueDedupeMax && bytes.Equal(value, m.lastInline) {
+		return m.lastInline
+	}
+	stored := m.arena.Copy(value)
+	if len(stored) <= btreeInlineValueDedupeMax {
+		m.lastInline = stored
+	} else {
+		m.lastInline = nil
+	}
+	return stored
+}
+
+func btreeEntryFromBatchOp(op batchpkg.Entry) btreeEntry {
+	switch {
+	case op.Type == batchpkg.OpDelete:
+		return btreeEntry{flags: node.FlagTombstone}
+	case op.IsPtr:
+		return btreeEntry{
+			value: canonicalizeBTreePointerValue(node.FlagPointer, op.Value),
+			ptr:   op.ValuePtr,
+			flags: node.FlagPointer,
+		}
+	default:
+		return btreeEntry{
+			value: canonicalizeBTreeInlineValue(op.Value),
+			flags: node.FlagInline,
+		}
+	}
+}
+
+func (m *BTree) recordSetLocked(key string, keyLen int, entry, prev btreeEntry, replaced bool) {
+	newSize := btreeEntryPayloadSize(entry.flags, entry.value)
+	if replaced {
+		oldSize := btreeEntryPayloadSize(prev.flags, prev.value)
+		m.sizeBytes += int64(newSize - oldSize)
+	} else {
+		m.sizeBytes += int64(keyLen + newSize)
+	}
+	if !m.hasLast || key > m.lastKey {
+		m.lastKey = key
+		m.hasLast = true
+	}
 }
 
 type btreeArena struct {
