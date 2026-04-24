@@ -273,15 +273,17 @@ func NewAppendOnlyWithCapacityEstimatedEntryBytesAndHint(capacity, estimatedByte
 }
 
 // SetPredictiveGrowthHint configures a best-effort growth forecast for future
-// appends. capacityHintBytes is converted to an entry target from the observed
-// average entry size; entryHintSource supplies a shared floor learned from other
+// appends. A positive capacityHintBytes is converted to an entry target from the
+// observed average entry size; a non-positive value disables capacity-based
+// prediction while still allowing entryHintSource and observeEntries to be
+// configured. entryHintSource supplies a shared floor learned from other
 // append-only memtables. observeEntries is called after the memtable mutex is
 // released and must be non-blocking because it can run on the write path.
 func (m *AppendOnly) SetPredictiveGrowthHint(capacityHintBytes int, entryHintSource *atomic.Int32, observeEntries func(int)) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if capacityHintBytes <= 0 {
-		capacityHintBytes = defaultMemtableCapacity
+		capacityHintBytes = 0
 	}
 	m.predictCapacityHintBytes = capacityHintBytes
 	m.predictEntryHintSource = entryHintSource
@@ -541,6 +543,9 @@ func (e *appendOnlyObserveEvent) recordEvent(other appendOnlyObserveEvent) {
 
 func (e appendOnlyObserveEvent) emit() {
 	if e.observe != nil && e.entries > 0 {
+		defer func() {
+			_ = recover()
+		}()
 		e.observe(e.entries)
 	}
 }
@@ -553,7 +558,7 @@ func (m *AppendOnly) maybeRaisePredictedGrowthHintLocked(event *appendOnlyObserv
 	if avgBytesPerEntry <= 0 {
 		avgBytesPerEntry = 1
 	}
-	predictedEntries := appendOnlyClampRetainedEntries(m.predictCapacityHintBytes / avgBytesPerEntry)
+	predictedEntries := appendOnlyClampRetainedEntries(1 + (m.predictCapacityHintBytes-1)/avgBytesPerEntry)
 	if predictedEntries <= m.growEntriesLen {
 		return
 	}

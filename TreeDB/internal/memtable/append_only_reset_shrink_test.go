@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -187,42 +186,30 @@ func TestAppendOnlyPredictiveGrowthHintSurvivesResetAndObservesAfterUnlock(t *te
 	const capacityBytes = 128 << 10
 
 	mt := NewAppendOnlyWithCapacityEstimatedEntryBytes(capacityBytes, appendOnlyEstimatedBytesPerEntryPointer)
-	var observed atomic.Int32
+	var observed atomic.Bool
+	var observedAfterUnlock atomic.Bool
 	mt.SetPredictiveGrowthHint(capacityBytes, nil, func(entries int) {
-		if mt.Len() == 0 {
+		if entries <= 0 {
 			return
 		}
-		observed.Store(int32(entries))
+		observed.Store(true)
+		if mt.mu.TryLock() {
+			observedAfterUnlock.Store(true)
+			mt.mu.Unlock()
+		}
 	})
 	mt.Reset()
 
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		limit := cap(mt.entries) + 1
-		for i := 0; i < limit; i++ {
-			key := []byte(fmt.Sprintf("u%08d", i))
-			mt.SetEntrySteal(key, nil, page.ValuePtr{}, node.FlagTombstone)
-		}
-	}()
-
-	timer := time.NewTimer(2 * time.Second)
-	defer func() {
-		if !timer.Stop() {
-			select {
-			case <-timer.C:
-			default:
-			}
-		}
-	}()
-
-	select {
-	case <-done:
-	case <-timer.C:
-		t.Fatal("predictive observer appears to run while append-only lock is held")
+	limit := cap(mt.entries) + 1
+	for i := 0; i < limit; i++ {
+		key := []byte(fmt.Sprintf("u%08d", i))
+		mt.SetEntrySteal(key, nil, page.ValuePtr{}, node.FlagTombstone)
 	}
-	if got := observed.Load(); got == 0 {
+	if !observed.Load() {
 		t.Fatalf("expected predictive observer after reset")
+	}
+	if !observedAfterUnlock.Load() {
+		t.Fatalf("predictive observer ran while append-only lock was held")
 	}
 }
 
@@ -244,6 +231,24 @@ func TestAppendOnlyGrowthObserverRecordsLiveEntries(t *testing.T) {
 	}
 	if got, want := int(observed.Load()), base+1; got != want {
 		t.Fatalf("observed entries=%d want live count %d", got, want)
+	}
+}
+
+func TestAppendOnlyPredictiveGrowthHintZeroCapacityDisablesCapacityPrediction(t *testing.T) {
+	const (
+		capacityBytes          = 128 << 10
+		estimatedBytesPerEntry = 96
+	)
+
+	mt := NewAppendOnlyWithCapacityEstimatedEntryBytes(capacityBytes, estimatedBytesPerEntry)
+	baseGrow := mt.growEntriesLen
+	mt.SetPredictiveGrowthHint(0, nil, nil)
+	for i := 0; i < appendOnlyPredictHintMinEntries; i++ {
+		key := []byte(fmt.Sprintf("z%08d", i))
+		mt.SetEntrySteal(key, nil, page.ValuePtr{}, node.FlagTombstone)
+	}
+	if got := mt.growEntriesLen; got != baseGrow {
+		t.Fatalf("zero capacity hint changed growEntriesLen=%d want %d", got, baseGrow)
 	}
 }
 
