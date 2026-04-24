@@ -12,15 +12,15 @@ import (
 
 func TestPutAppendOnlyEntriesClearsReferences(t *testing.T) {
 	entries := make([]appendOnlyEntry, 2)
-	entries[0].keyIndex = 1
-	entries[0].payloadIndex = 1
-	entries[1].keyIndex = 2
-	entries[1].payloadIndex = 2
+	appendOnlyEntrySetKeyIndex(&entries[0], 1)
+	appendOnlyEntrySetPayloadIndex(&entries[0], 1)
+	appendOnlyEntrySetKeyIndex(&entries[1], 2)
+	appendOnlyEntrySetPayloadIndex(&entries[1], 2)
 
 	putAppendOnlyEntries(entries)
 
 	for i := range entries {
-		if entries[i].keyIndex != 0 || entries[i].payloadIndex != 0 {
+		if appendOnlyEntryKeyIndex(&entries[i]) != 0 || appendOnlyEntryPayloadIndex(&entries[i]) != 0 {
 			t.Fatalf("entry %d still retains references after put: %+v", i, entries[i])
 		}
 	}
@@ -41,18 +41,33 @@ func TestPutAppendOnlyKeysClearsReferences(t *testing.T) {
 	}
 }
 
-func TestPutAppendOnlyPayloadsClearsReferences(t *testing.T) {
-	payloads := make([]appendOnlyPayload, 2)
+func TestPutAppendOnlyValuesClearsReferences(t *testing.T) {
+	values := []string{
+		appendOnlyStringFromBytes([]byte("v0")),
+		appendOnlyStringFromBytes([]byte("v1")),
+	}
+
+	putAppendOnlyValues(values)
+
+	for i := range values {
+		if values[i] != "" {
+			t.Fatalf("value %d still retains references after put: %q", i, values[i])
+		}
+	}
+}
+
+func TestPutAppendOnlyPtrPayloadsClearsReferences(t *testing.T) {
+	payloads := make([]appendOnlyPointerPayload, 2)
 	payloads[0].value = appendOnlyStringFromBytes([]byte("v0"))
 	payloads[0].ptr = page.ValuePtr{Offset: 1, Length: 2, FileID: 3}
 	payloads[1].value = appendOnlyStringFromBytes([]byte("v1"))
 	payloads[1].ptr = page.ValuePtr{Offset: 4, Length: 5, FileID: 6}
 
-	putAppendOnlyPayloads(payloads)
+	putAppendOnlyPtrPayloads(payloads)
 
 	for i := range payloads {
 		if payloads[i].value != "" || payloads[i].ptr != (page.ValuePtr{}) {
-			t.Fatalf("payload %d still retains references after put: %+v", i, payloads[i])
+			t.Fatalf("ptr payload %d still retains references after put: %+v", i, payloads[i])
 		}
 	}
 }
@@ -69,18 +84,30 @@ func TestGetAppendOnlyKeysFromPoolClearsReturnedSlice(t *testing.T) {
 	}
 }
 
-func TestGetAppendOnlyPayloadsFromPoolClearsReturnedSlice(t *testing.T) {
+func TestGetAppendOnlyValuesFromPoolClearsReturnedSlice(t *testing.T) {
 	var pool sync.Pool
 	pool.New = func() any {
-		return []appendOnlyPayload{{
+		return []string{appendOnlyStringFromBytes([]byte("stale"))}
+	}
+
+	values := getAppendOnlyValuesFromPool(1, &pool, 1)
+	if got := values[0]; got != "" {
+		t.Fatalf("pooled value was not cleared: %q", got)
+	}
+}
+
+func TestGetAppendOnlyPtrPayloadsFromPoolClearsReturnedSlice(t *testing.T) {
+	var pool sync.Pool
+	pool.New = func() any {
+		return []appendOnlyPointerPayload{{
 			value: appendOnlyStringFromBytes([]byte("stale")),
 			ptr:   page.ValuePtr{Offset: 1, Length: 2, FileID: 3},
 		}}
 	}
 
-	payloads := getAppendOnlyPayloadsFromPool(1, &pool, 1)
+	payloads := getAppendOnlyPtrPayloadsFromPool(1, &pool, 1)
 	if got := payloads[0]; got.value != "" || got.ptr != (page.ValuePtr{}) {
-		t.Fatalf("pooled payload was not cleared: %+v", got)
+		t.Fatalf("pooled ptr payload was not cleared: %+v", got)
 	}
 }
 
@@ -113,30 +140,59 @@ func TestGetAppendOnlyKeysFromPoolRejectsOversizedReuse(t *testing.T) {
 	}
 }
 
-func TestGetAppendOnlyPayloadsFromPoolRespectsMaxCap(t *testing.T) {
+func TestGetAppendOnlyValuesFromPoolRespectsMaxCap(t *testing.T) {
 	var pool sync.Pool
 	gets := 0
 	pool.New = func() any {
 		gets++
-		return make([]appendOnlyPayload, 0, 4)
+		return make([]string, 0, 4)
 	}
 
-	payloads := getAppendOnlyPayloadsFromPool(2, &pool, 1)
+	values := getAppendOnlyValuesFromPool(2, &pool, 1)
+	if gets != 0 {
+		t.Fatalf("pool used despite max cap, gets=%d", gets)
+	}
+	if len(values) != 2 {
+		t.Fatalf("len(values)=%d want=2", len(values))
+	}
+}
+
+func TestGetAppendOnlyValuesFromPoolRejectsOversizedReuse(t *testing.T) {
+	var pool sync.Pool
+	pool.New = func() any {
+		return make([]string, 0, appendOnlyMaxReuseEntries(1)+1)
+	}
+
+	values := getAppendOnlyValuesFromPool(1, &pool, appendOnlyValuePoolMaxCap)
+	if cap(values) > appendOnlyMaxReuseEntries(1) {
+		t.Fatalf("cap(values)=%d want <=%d", cap(values), appendOnlyMaxReuseEntries(1))
+	}
+}
+
+func TestGetAppendOnlyPtrPayloadsFromPoolRespectsMaxCap(t *testing.T) {
+	var pool sync.Pool
+	gets := 0
+	pool.New = func() any {
+		gets++
+		return make([]appendOnlyPointerPayload, 0, 4)
+	}
+
+	payloads := getAppendOnlyPtrPayloadsFromPool(2, &pool, 1)
 	if gets != 0 {
 		t.Fatalf("pool used despite max cap, gets=%d", gets)
 	}
 	if len(payloads) != 2 {
-		t.Fatalf("len(payloads)=%d want=2", len(payloads))
+		t.Fatalf("len(ptrPayloads)=%d want=2", len(payloads))
 	}
 }
 
-func TestGetAppendOnlyPayloadsFromPoolRejectsOversizedReuse(t *testing.T) {
+func TestGetAppendOnlyPtrPayloadsFromPoolRejectsOversizedReuse(t *testing.T) {
 	var pool sync.Pool
 	pool.New = func() any {
-		return make([]appendOnlyPayload, 0, appendOnlyMaxReuseEntries(1)+1)
+		return make([]appendOnlyPointerPayload, 0, appendOnlyMaxReuseEntries(1)+1)
 	}
 
-	payloads := getAppendOnlyPayloadsFromPool(1, &pool, appendOnlyPayloadPoolMaxCap)
+	payloads := getAppendOnlyPtrPayloadsFromPool(1, &pool, appendOnlyPtrPayloadPoolMaxCap)
 	if cap(payloads) > appendOnlyMaxReuseEntries(1) {
 		t.Fatalf("cap(payloads)=%d want <=%d", cap(payloads), appendOnlyMaxReuseEntries(1))
 	}
@@ -144,22 +200,27 @@ func TestGetAppendOnlyPayloadsFromPoolRejectsOversizedReuse(t *testing.T) {
 
 func TestAppendOnlyIteratorCloseClearsPooledEntries(t *testing.T) {
 	entries := make([]appendOnlyEntry, 2)
-	entries[0].keyIndex = 1
-	entries[0].payloadIndex = 1
-	entries[1].keyIndex = 2
-	entries[1].payloadIndex = 2
+	appendOnlyEntrySetKeyIndex(&entries[0], 1)
+	appendOnlyEntrySetPayloadIndex(&entries[0], 1)
+	appendOnlyEntrySetKeyIndex(&entries[1], 2)
+	appendOnlyEntrySetPayloadIndex(&entries[1], 2)
 	keys := []string{
 		appendOnlyStringFromBytes([]byte("k0")),
 		appendOnlyStringFromBytes([]byte("k1")),
 	}
-	payloads := make([]appendOnlyPayload, 2)
-	payloads[0].value = appendOnlyStringFromBytes([]byte("v0"))
-	payloads[1].value = appendOnlyStringFromBytes([]byte("v1"))
+	values := []string{
+		appendOnlyStringFromBytes([]byte("v0")),
+		appendOnlyStringFromBytes([]byte("v1")),
+	}
+	ptrPayloads := []appendOnlyPointerPayload{
+		{value: appendOnlyStringFromBytes([]byte("pv0")), ptr: page.ValuePtr{Offset: 7, Length: 8, FileID: 9}},
+	}
 
 	it := &appendOnlyIterator{
 		entries:       entries,
 		keys:          keys,
-		payloads:      payloads,
+		values:        values,
+		ptrPayloads:   ptrPayloads,
 		pooledEntries: true,
 	}
 	if err := it.Close(); err != nil {
@@ -167,7 +228,7 @@ func TestAppendOnlyIteratorCloseClearsPooledEntries(t *testing.T) {
 	}
 
 	for i := range entries {
-		if entries[i].keyIndex != 0 || entries[i].payloadIndex != 0 {
+		if appendOnlyEntryKeyIndex(&entries[i]) != 0 || appendOnlyEntryPayloadIndex(&entries[i]) != 0 {
 			t.Fatalf("entry %d still retains references after close: %+v", i, entries[i])
 		}
 	}
@@ -176,9 +237,14 @@ func TestAppendOnlyIteratorCloseClearsPooledEntries(t *testing.T) {
 			t.Fatalf("key %d still retains references after close: %q", i, keys[i])
 		}
 	}
-	for i := range payloads {
-		if payloads[i].value != "" || payloads[i].ptr != (page.ValuePtr{}) {
-			t.Fatalf("payload %d still retains references after close: %+v", i, payloads[i])
+	for i := range values {
+		if values[i] != "" {
+			t.Fatalf("value %d still retains references after close: %q", i, values[i])
+		}
+	}
+	for i := range ptrPayloads {
+		if ptrPayloads[i].value != "" || ptrPayloads[i].ptr != (page.ValuePtr{}) {
+			t.Fatalf("ptr payload %d still retains references after close: %+v", i, ptrPayloads[i])
 		}
 	}
 	if it.entries != nil {
@@ -187,8 +253,11 @@ func TestAppendOnlyIteratorCloseClearsPooledEntries(t *testing.T) {
 	if it.keys != nil {
 		t.Fatalf("iterator keys not cleared on close")
 	}
-	if it.payloads != nil {
-		t.Fatalf("iterator payloads not cleared on close")
+	if it.values != nil {
+		t.Fatalf("iterator values not cleared on close")
+	}
+	if it.ptrPayloads != nil {
+		t.Fatalf("iterator ptr payloads not cleared on close")
 	}
 	if it.pooledEntries {
 		t.Fatalf("pooledEntries flag not cleared on close")
@@ -196,9 +265,17 @@ func TestAppendOnlyIteratorCloseClearsPooledEntries(t *testing.T) {
 }
 
 func TestAppendOnlyIteratorCloseClearsPooledPointerEntries(t *testing.T) {
+	entry0 := &appendOnlyEntry{}
+	appendOnlyEntrySetKeyIndex(entry0, 1)
+	appendOnlyEntrySetPayloadIndex(entry0, 1)
+	appendOnlyEntrySetFlags(entry0, node.FlagPointer)
+	entry1 := &appendOnlyEntry{}
+	appendOnlyEntrySetKeyIndex(entry1, 2)
+	appendOnlyEntrySetPayloadIndex(entry1, 2)
+	appendOnlyEntrySetFlags(entry1, node.FlagTombstone)
 	entries := []*appendOnlyEntry{
-		{keyIndex: 1},
-		{keyIndex: 2},
+		entry0,
+		entry1,
 	}
 	it := &appendOnlyIterator{
 		entryPtrs:       entries,
@@ -330,8 +407,8 @@ func TestAppendOnlyFrozenUnorderedIteratorBlocksResetUntilClose(t *testing.T) {
 }
 
 func TestAppendOnlyEntryStructSizeBound(t *testing.T) {
-	if got := unsafe.Sizeof(appendOnlyEntry{}); got > 20 {
-		t.Fatalf("appendOnlyEntry size=%d want <= 20", got)
+	if got := unsafe.Sizeof(appendOnlyEntry{}); got > 16 {
+		t.Fatalf("appendOnlyEntry size=%d want <= 16", got)
 	}
 }
 
@@ -372,11 +449,14 @@ func TestAppendOnlySetInlinesShortKey(t *testing.T) {
 		t.Fatalf("count=%d want=1", m.count)
 	}
 	ent := &m.entries[0]
-	if ent.inlineKeyLen != uint8(len(lookupKey)) {
-		t.Fatalf("inline key len=%d want=%d", ent.inlineKeyLen, len(lookupKey))
+	if appendOnlyEntryInlineKeyLen(ent) == 0 {
+		t.Fatalf("expected short key to be stored inline")
 	}
-	if ent.keyIndex != 0 {
-		t.Fatalf("short inline key should not allocate a key slot; keyIndex=%d", ent.keyIndex)
+	if got := appendOnlyEntryInlineKeyLen(ent); got != len(lookupKey) {
+		t.Fatalf("inline key len=%d want=%d", got, len(lookupKey))
+	}
+	if got := appendOnlyEntryKeyIndex(ent); got != 0 {
+		t.Fatalf("short inline key should not allocate a key slot; keyIndex=%d", got)
 	}
 	storedKey := m.appendOnlyEntryKey(ent)
 	if string(storedKey) != string(lookupKey) {
@@ -521,15 +601,43 @@ func TestAppendOnlyResetRetainedArenaBounded(t *testing.T) {
 	}
 }
 
-func TestAppendOnlyUnorderedAppendBuildsLatestIndexImmediately(t *testing.T) {
+func TestAppendOnlyValueArenaChunksGrowBounded(t *testing.T) {
+	m := NewAppendOnlyWithCapacity(0)
+	key := []byte("k")
+	val := make([]byte, 2048)
+	for i := 0; i < 128; i++ {
+		key[0] = byte('a' + byte(i%26))
+		val[0] = byte(i)
+		m.Set(key, val)
+	}
+	if len(m.valueArena.chunks) < 2 {
+		t.Fatalf("expected multiple arena chunks, got=%d", len(m.valueArena.chunks))
+	}
+	prevCap := 0
+	for i, chunk := range m.valueArena.chunks {
+		c := cap(chunk)
+		if c < appendOnlyValueArenaDefaultChunk {
+			t.Fatalf("chunk %d cap=%d want >= %d", i, c, appendOnlyValueArenaDefaultChunk)
+		}
+		if c > appendOnlyValueArenaGrowthMaxChunk {
+			t.Fatalf("chunk %d cap=%d want <= %d", i, c, appendOnlyValueArenaGrowthMaxChunk)
+		}
+		if prevCap > c {
+			t.Fatalf("chunk %d cap=%d regressed from %d", i, c, prevCap)
+		}
+		prevCap = c
+	}
+}
+
+func TestAppendOnlyUnorderedAppendBuildsLatestIndexLazily(t *testing.T) {
 	m := NewAppendOnlyWithCapacity(0)
 	m.Set([]byte("b"), []byte("v1"))
 	m.Set([]byte("a"), []byte("v2")) // force unordered path
 	if m.ordered {
 		t.Fatalf("expected unordered memtable")
 	}
-	if m.latestDirty {
-		t.Fatalf("expected latest index to stay clean after order break")
+	if !m.latestDirty {
+		t.Fatalf("expected latest index to be dirty after order break")
 	}
 
 	it := m.NewIterator(nil, nil)
@@ -548,7 +656,7 @@ func TestAppendOnlyUnorderedAppendBuildsLatestIndexImmediately(t *testing.T) {
 
 	m.Set([]byte("b"), []byte("v3"))
 	if m.latestDirty {
-		t.Fatalf("expected unordered append to keep latest index clean")
+		t.Fatalf("expected unordered append to keep latest index clean after iterator rebuild")
 	}
 	if m.snapCount != 0 {
 		t.Fatalf("expected snapshot invalidation after append; got snapCount=%d", m.snapCount)
@@ -592,8 +700,8 @@ func TestAppendOnlyUnorderedReverseIteratorDoesNotCacheSharedSnapshot(t *testing
 	if m.ordered {
 		t.Fatalf("expected unordered memtable")
 	}
-	if m.latestDirty {
-		t.Fatalf("expected latest index to stay clean after order break")
+	if !m.latestDirty {
+		t.Fatalf("expected latest index to be dirty after order break")
 	}
 
 	it := m.NewReverseIterator(nil, nil)
@@ -612,7 +720,7 @@ func TestAppendOnlyUnorderedReverseIteratorDoesNotCacheSharedSnapshot(t *testing
 
 	m.Set([]byte("b"), []byte("v3"))
 	if m.latestDirty {
-		t.Fatalf("expected unordered append to keep latest index clean")
+		t.Fatalf("expected unordered append to keep latest index clean after reverse iterator rebuild")
 	}
 	if m.snapCount != 0 {
 		t.Fatalf("expected snapshot invalidation after append; got snapCount=%d", m.snapCount)

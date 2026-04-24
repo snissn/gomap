@@ -3,6 +3,7 @@ package valuelog
 import (
 	"bytes"
 	"encoding/binary"
+	"hash/crc32"
 	"path/filepath"
 
 	"github.com/snissn/gomap/TreeDB/node"
@@ -10,6 +11,8 @@ import (
 )
 
 var compactLeafPagePayloadMagic = [8]byte{0x8a, 'L', 'F', 'P', 'G', 0x01, 0x91, 0x3c}
+var compactLeafPagePayloadCRCTable = crc32.MakeTable(crc32.Castagnoli)
+var compactLeafPagePayloadChecksumZeros [1024]byte
 
 const compactLeafPagePayloadHeaderSize = len(compactLeafPagePayloadMagic) + 4
 const compactLeafPagePayloadDirName = "leaf_vlog"
@@ -19,31 +22,92 @@ func HasCompactLeafLogPayload(payload []byte) bool {
 		bytes.Equal(payload[:len(compactLeafPagePayloadMagic)], compactLeafPagePayloadMagic[:])
 }
 
-func MaybeCompactLeafLogPayload(leafPage []byte) ([]byte, bool, error) {
+func compactLeafPageLivePayloadBounds(leafPage []byte) (prefixLen, suffixStart, suffixLen int, ok bool, err error) {
 	if len(leafPage) != page.PageSize {
-		return leafPage, false, nil
+		return 0, 0, 0, false, nil
 	}
-	prefixLen, suffixLen, err := node.LeafPageLiveBounds(leafPage)
+	prefixLen, suffixLen, err = node.LeafPageLiveBounds(leafPage)
 	if err != nil {
-		return leafPage, false, nil
+		return 0, 0, 0, false, nil
 	}
-	compactLen := compactLeafPagePayloadHeaderSize + prefixLen + suffixLen
+	compactLen := compactLeafPagePayloadLen(prefixLen, suffixLen)
 	if compactLen >= len(leafPage) {
+		return 0, 0, 0, false, nil
+	}
+	suffixStart = len(leafPage) - suffixLen
+	return prefixLen, suffixStart, suffixLen, true, nil
+}
+
+func compactLeafPagePayloadLen(prefixLen, suffixLen int) int {
+	return compactLeafPagePayloadHeaderSize + prefixLen + suffixLen
+}
+
+func compactLeafCanonicalChecksum(leafPage []byte, prefixLen, suffixStart, suffixLen int) uint32 {
+	if len(leafPage) < page.PageHeaderSize {
+		return 0
+	}
+	checksumEnd := page.PageChecksumOffset + page.PageChecksumSize
+	sum := crc32.Update(0, compactLeafPagePayloadCRCTable, leafPage[:page.PageChecksumOffset])
+	sum = crc32.Update(sum, compactLeafPagePayloadCRCTable, compactLeafPagePayloadChecksumZeros[:page.PageChecksumSize])
+	if prefixLen > checksumEnd {
+		sum = crc32.Update(sum, compactLeafPagePayloadCRCTable, leafPage[checksumEnd:prefixLen])
+	}
+	gapLen := page.PageSize - prefixLen - suffixLen
+	for gapLen > 0 {
+		n := len(compactLeafPagePayloadChecksumZeros)
+		if n > gapLen {
+			n = gapLen
+		}
+		sum = crc32.Update(sum, compactLeafPagePayloadCRCTable, compactLeafPagePayloadChecksumZeros[:n])
+		gapLen -= n
+	}
+	if suffixLen > 0 {
+		sum = crc32.Update(sum, compactLeafPagePayloadCRCTable, leafPage[suffixStart:suffixStart+suffixLen])
+	}
+	return sum
+}
+
+// CompactLeafLogPayloadLen reports the payload length that
+// MaybeCompactLeafLogPayload would produce without materializing the payload.
+// When compaction is not beneficial, it returns len(leafPage) and compacted=false.
+func CompactLeafLogPayloadLen(leafPage []byte) (payloadLen int, compacted bool, err error) {
+	prefixLen, _, suffixLen, ok, err := compactLeafPageLivePayloadBounds(leafPage)
+	if err != nil {
+		return 0, false, err
+	}
+	if !ok {
+		return len(leafPage), false, nil
+	}
+	return compactLeafPagePayloadLen(prefixLen, suffixLen), true, nil
+}
+
+func encodeCompactLeafLogPayload(dst, leafPage []byte, prefixLen, suffixStart, suffixLen int) {
+	copy(dst[:len(compactLeafPagePayloadMagic)], compactLeafPagePayloadMagic[:])
+	binary.LittleEndian.PutUint16(dst[len(compactLeafPagePayloadMagic):len(compactLeafPagePayloadMagic)+2], uint16(prefixLen))
+	binary.LittleEndian.PutUint16(dst[len(compactLeafPagePayloadMagic)+2:compactLeafPagePayloadHeaderSize], uint16(suffixLen))
+
+	payload := dst[compactLeafPagePayloadHeaderSize:]
+	sum := compactLeafCanonicalChecksum(leafPage, prefixLen, suffixStart, suffixLen)
+
+	checksumEnd := page.PageChecksumOffset + page.PageChecksumSize
+	copy(payload[:page.PageChecksumOffset], leafPage[:page.PageChecksumOffset])
+	binary.LittleEndian.PutUint32(payload[page.PageChecksumOffset:checksumEnd], sum)
+	if prefixLen > checksumEnd {
+		copy(payload[checksumEnd:prefixLen], leafPage[checksumEnd:prefixLen])
+	}
+	copy(payload[prefixLen:], leafPage[suffixStart:])
+}
+
+func MaybeCompactLeafLogPayload(leafPage []byte) ([]byte, bool, error) {
+	prefixLen, suffixStart, suffixLen, ok, err := compactLeafPageLivePayloadBounds(leafPage)
+	if err != nil {
+		return nil, false, err
+	}
+	if !ok {
 		return leafPage, false, nil
 	}
-
-	suffixStart := len(leafPage) - suffixLen
-	var canonical [page.PageSize]byte
-	copy(canonical[:prefixLen], leafPage[:prefixLen])
-	copy(canonical[suffixStart:], leafPage[suffixStart:])
-	page.UpdateChecksum(canonical[:])
-
-	payload := make([]byte, compactLen)
-	copy(payload[:len(compactLeafPagePayloadMagic)], compactLeafPagePayloadMagic[:])
-	binary.LittleEndian.PutUint16(payload[len(compactLeafPagePayloadMagic):len(compactLeafPagePayloadMagic)+2], uint16(prefixLen))
-	binary.LittleEndian.PutUint16(payload[len(compactLeafPagePayloadMagic)+2:compactLeafPagePayloadHeaderSize], uint16(suffixLen))
-	copy(payload[compactLeafPagePayloadHeaderSize:compactLeafPagePayloadHeaderSize+prefixLen], canonical[:prefixLen])
-	copy(payload[compactLeafPagePayloadHeaderSize+prefixLen:], canonical[suffixStart:])
+	payload := make([]byte, compactLeafPagePayloadLen(prefixLen, suffixLen))
+	encodeCompactLeafLogPayload(payload, leafPage, prefixLen, suffixStart, suffixLen)
 	return payload, true, nil
 }
 

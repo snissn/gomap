@@ -110,6 +110,40 @@ func TestMaybeCompactLeafLogPayload_SparseLeafRoundTrips(t *testing.T) {
 	requireLeafPagesLogicallyEqual(t, leaf, decoded)
 }
 
+func TestMaybeCompactLeafLogPayload_DirtyFreeGapUsesCanonicalChecksum(t *testing.T) {
+	leaf := buildSparseLeafPageForPayloadTest(t)
+	prefixLen, suffixLen, err := node.LeafPageLiveBounds(leaf)
+	if err != nil {
+		t.Fatalf("LeafPageLiveBounds: %v", err)
+	}
+	suffixStart := len(leaf) - suffixLen
+	if prefixLen >= suffixStart {
+		t.Fatalf("leaf has no free gap: prefix=%d suffixStart=%d", prefixLen, suffixStart)
+	}
+	for i := prefixLen; i < suffixStart; i++ {
+		leaf[i] = byte(0x80 + i%64)
+	}
+
+	payload, compacted, err := MaybeCompactLeafLogPayload(leaf)
+	if err != nil {
+		t.Fatalf("MaybeCompactLeafLogPayload: %v", err)
+	}
+	if !compacted {
+		t.Fatalf("expected sparse leaf page to compact")
+	}
+	decoded, _, decodedFlag, err := decodeCompactLeafLogPayloadTo(payload, nil)
+	if err != nil {
+		t.Fatalf("decodeCompactLeafLogPayloadTo: %v", err)
+	}
+	if !decodedFlag {
+		t.Fatalf("expected compact payload to decode")
+	}
+	if !page.VerifyChecksumNonMutating(decoded) {
+		t.Fatalf("decoded canonical page checksum mismatch")
+	}
+	requireLeafPagesLogicallyEqual(t, leaf, decoded)
+}
+
 func TestDecodeCompactLeafLogPayloadTo_AliasedDstRoundTrips(t *testing.T) {
 	leaf := buildSparseLeafPageForPayloadTest(t)
 
@@ -224,6 +258,47 @@ func TestManagerReadUnsafe_DecodesCompactLeafPayload(t *testing.T) {
 	ptr, err := w.Append(0, nil, 1, payload)
 	if err != nil {
 		t.Fatalf("Append: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close writer: %v", err)
+	}
+
+	mgr := newLeafPayloadTestManager(t, dir, path, fileID)
+	defer func() { _ = mgr.Close() }()
+
+	got, err := mgr.ReadUnsafe(ptr)
+	if err != nil {
+		t.Fatalf("ReadUnsafe: %v", err)
+	}
+	if len(got) != page.PageSize {
+		t.Fatalf("ReadUnsafe len=%d want %d", len(got), page.PageSize)
+	}
+	requireLeafPagesLogicallyEqual(t, leaf, got)
+}
+
+func TestWriterAppendCompactLeafPage_BlockCompressionRoundTrips(t *testing.T) {
+	dir := t.TempDir()
+	fileID, err := EncodeFileID(ReservedLeafLogLaneID, 1)
+	if err != nil {
+		t.Fatalf("EncodeFileID: %v", err)
+	}
+	path := compactLeafPayloadTestPath(t, dir, 1)
+	w, err := NewWriter(path, fileID)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	w.SetBlockCompression(BlockCodecSnappy, true)
+
+	leaf := buildSparseLeafPageForPayloadTest(t)
+	ptr, stats, compacted, err := w.AppendCompactLeafPage(1, leaf)
+	if err != nil {
+		t.Fatalf("AppendCompactLeafPage: %v", err)
+	}
+	if !compacted {
+		t.Fatalf("expected sparse leaf page to compact")
+	}
+	if stats.RawPayloadBytes <= 0 {
+		t.Fatalf("stats.RawPayloadBytes=%d want > 0", stats.RawPayloadBytes)
 	}
 	if err := w.Close(); err != nil {
 		t.Fatalf("Close writer: %v", err)

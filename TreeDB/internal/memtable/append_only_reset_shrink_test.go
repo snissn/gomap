@@ -51,19 +51,31 @@ func TestAppendOnlyResetWithCapacityHardDropsSideBuffers(t *testing.T) {
 		key := []byte(fmt.Sprintf("long-key-%08d", i))
 		mt.SetEntrySteal(key, []byte("value"), page.ValuePtr{}, node.FlagInline)
 	}
+	mt.SetEntrySteal(
+		[]byte("long-key-pointer"),
+		[]byte("pointer-value"),
+		page.ValuePtr{Offset: 1, Length: 2, FileID: 3},
+		node.FlagPointer,
+	)
 	if cap(mt.keys) == 0 {
 		t.Fatalf("test did not populate key side buffer")
 	}
-	if cap(mt.payloads) == 0 {
-		t.Fatalf("test did not populate payload side buffer")
+	if cap(mt.values) == 0 {
+		t.Fatalf("test did not populate value side buffer")
+	}
+	if cap(mt.ptrPayloads) == 0 {
+		t.Fatalf("test did not populate pointer payload side buffer")
 	}
 
 	mt.ResetWithCapacityHard(capacityBytes, estimatedBytesPerEntry)
 	if got := cap(mt.keys); got != 0 {
 		t.Fatalf("cap(keys) after hard reset=%d want=0", got)
 	}
-	if got := cap(mt.payloads); got != 0 {
-		t.Fatalf("cap(payloads) after hard reset=%d want=0", got)
+	if got := cap(mt.values); got != 0 {
+		t.Fatalf("cap(values) after hard reset=%d want=0", got)
+	}
+	if got := cap(mt.ptrPayloads); got != 0 {
+		t.Fatalf("cap(ptrPayloads) after hard reset=%d want=0", got)
 	}
 }
 

@@ -14,9 +14,14 @@ import (
 )
 
 type pointerBatch struct {
+	backend             *viewCountingBackend
 	entries             []batch.Entry
 	reserveCalls        int
 	lastReserve         int
+	resetCalls          int
+	writeCalls          int
+	writeSyncCalls      int
+	closeCalls          int
 	setCalls            int
 	setViewCalls        int
 	deleteCalls         int
@@ -31,7 +36,7 @@ type viewCountingBackend struct {
 }
 
 func (b *viewCountingBackend) NewBatch() batch.Interface {
-	pb := &pointerBatch{}
+	pb := &pointerBatch{backend: b}
 	b.batches = append(b.batches, pb)
 	return pb
 }
@@ -107,11 +112,26 @@ func (b *pointerBatch) SetOps(ops []batch.Entry) error {
 	return nil
 }
 
-func (b *pointerBatch) Write() error { return nil }
+func (b *pointerBatch) Write() error {
+	b.writeCalls++
+	return nil
+}
 
-func (b *pointerBatch) WriteSync() error { return nil }
+func (b *pointerBatch) WriteSync() error {
+	b.writeSyncCalls++
+	return nil
+}
 
-func (b *pointerBatch) Close() error { return nil }
+func (b *pointerBatch) Close() error {
+	b.closeCalls++
+	return nil
+}
+
+func (b *pointerBatch) Reset() {
+	b.resetCalls++
+	clear(b.entries)
+	b.entries = b.entries[:0]
+}
 
 func (b *pointerBatch) Replay(fn func(batch.Entry) error) error {
 	for _, e := range b.entries {
@@ -160,14 +180,14 @@ func TestPutUnitRunsClearsReferences(t *testing.T) {
 func TestPutOpMergeHeapClearsReferences(t *testing.T) {
 	h := make(opMergeHeap, 1, 2)
 	h[0] = opMergeItem{
-		iter:     &opRunIter{valid: true},
+		source:   &opRunIter{valid: true},
 		priority: 7,
 		key:      []byte("k"),
 	}
 
 	putOpMergeHeap(h)
 
-	if h[0].iter != nil || h[0].priority != 0 || h[0].key != nil {
+	if h[0].source != nil || h[0].priority != 0 || h[0].key != nil {
 		t.Fatalf("heap item not cleared: %+v", h[0])
 	}
 }
@@ -363,7 +383,7 @@ func TestFlushDeferredValueLogMemtableReservesBackendBatch(t *testing.T) {
 	db := &DB{valueLogThreshold: page.DefaultInlineThreshold}
 	const reserveHint = 7
 
-	if emitted, err := db.flushDeferredValueLogMemtable(iter, backendBatch, reserveHint, false, 0); err != nil {
+	if emitted, err := db.flushDeferredValueLogMemtable(iter, backendBatch, reserveHint, stableUnsafeIteratorSlices(mt), false, 0); err != nil {
 		_ = iter.Close()
 		t.Fatalf("flushDeferredValueLogMemtable: %v", err)
 	} else if emitted != 2 {
@@ -988,6 +1008,66 @@ func TestFlushLaneOnce_FallsBackFromPointerViewForUnstableIterators(t *testing.T
 	}
 	if setPointerCalls != 1 {
 		t.Fatalf("backend SetPointer calls=%d, want 1", setPointerCalls)
+	}
+}
+
+func TestFlushLaneOnce_ReusesResettableBackendBatchAcrossChunks(t *testing.T) {
+	dir := t.TempDir()
+	backend := &viewCountingBackend{MockBackend: NewMockBackend()}
+	db, err := Open(dir, backend, Options{
+		FlushThreshold:         1 << 60,
+		MemtableShards:         1,
+		MemtableMode:           "hash_sorted",
+		MaxQueuedMemtables:     -1,
+		AllowUnsafe:            true,
+		FlushBackendMaxEntries: 2,
+		FlushBuildConcurrency:  2,
+		FlushBuildMinEntries:   1,
+		FlushBuildMinUnits:     2,
+		FlushBuildChunkCap:     2,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	oldProcs := runtime.GOMAXPROCS(2)
+	defer runtime.GOMAXPROCS(oldProcs)
+
+	for unit := 0; unit < 3; unit++ {
+		for i := 0; i < 2; i++ {
+			key := []byte{byte('a' + unit), byte('0' + i)}
+			if err := db.Set(key, []byte("value")); err != nil {
+				t.Fatalf("Set unit %d entry %d: %v", unit, i, err)
+			}
+		}
+		db.mu.Lock()
+		if err := db.rotateMemtableLocked(false); err != nil {
+			db.mu.Unlock()
+			t.Fatalf("rotateMemtableLocked unit %d: %v", unit, err)
+		}
+		db.mu.Unlock()
+	}
+
+	if !db.flushLaneOnce(false, 0) {
+		t.Fatal("flushLaneOnce returned false")
+	}
+
+	if got := len(backend.batches); got != 1 {
+		t.Fatalf("backend batch creations=%d want 1", got)
+	}
+	pb := backend.batches[0]
+	if got := pb.writeCalls; got < 3 {
+		t.Fatalf("backend batch writes=%d want >=3 for chunked flush", got)
+	}
+	if got := pb.resetCalls; got < 2 {
+		t.Fatalf("backend batch resets=%d want >=2 after intermediate chunk commits", got)
+	}
+	if got := pb.closeCalls; got != 1 {
+		t.Fatalf("backend batch closes=%d want 1", got)
+	}
+	if got := pb.reserveCalls; got != 1 {
+		t.Fatalf("backend batch reserveCalls=%d want 1", got)
 	}
 }
 
