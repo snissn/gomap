@@ -2636,6 +2636,9 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				if err != nil {
 					return err
 				}
+				if batch == nil {
+					return fmt.Errorf("batch_delete: new batch returned nil")
+				}
 				deleteOp = batch.Delete
 				if dv, ok := batch.(batchDeleteView); ok {
 					deleteOp = dv.DeleteView
@@ -2646,10 +2649,18 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				}
 				return nil
 			}
-			defer func() {
-				if batch != nil {
-					_ = batch.Close()
+			closeBatch := func() error {
+				if batch == nil {
+					return nil
 				}
+				b := batch
+				batch = nil
+				deleteOp = nil
+				resetBatch = nil
+				return b.Close()
+			}
+			defer func() {
+				_ = closeBatch()
 			}()
 
 			const keySize = 8
@@ -2681,10 +2692,9 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				} else if resetBatch != nil {
 					resetBatch()
 				} else {
-					if err := batch.Close(); err != nil {
+					if err := closeBatch(); err != nil {
 						return 0, fmt.Errorf("batch_delete: close: %w", err)
 					}
-					batch = nil
 					if err := openBatch(); err != nil {
 						return 0, fmt.Errorf("batch_delete: new batch: %w", err)
 					}
@@ -2698,19 +2708,18 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 					offset := j * keySize
 					key := allKeys[offset : offset+keySize]
 					if err := deleteOp(key); err != nil {
-						_ = batch.Close()
+						_ = closeBatch()
 						return 0, fmt.Errorf("batch_delete: delete: %w", err)
 					}
 				}
 				if err := batch.Commit(); err != nil {
-					_ = batch.Close()
+					_ = closeBatch()
 					return 0, fmt.Errorf("batch_delete: commit: %w", err)
 				}
 				if resetBatch == nil {
-					if err := batch.Close(); err != nil {
+					if err := closeBatch(); err != nil {
 						return 0, fmt.Errorf("batch_delete: close: %w", err)
 					}
-					batch = nil
 				}
 				if err := pc.Add(db, end-i, int64(end-i)*perOpBytes); err != nil {
 					return 0, fmt.Errorf("batch_delete checkpoint: %w", err)
