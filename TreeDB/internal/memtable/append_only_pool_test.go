@@ -672,7 +672,11 @@ func TestAppendOnlyUnorderedAppendBuildsLatestIndexLazily(t *testing.T) {
 	if m.snapCount != 0 {
 		t.Fatalf("expected mutable unordered iterator to keep shared snapshot uncached after rebuild; got snapCount=%d", m.snapCount)
 	}
-	idx, ok := m.latest["b"]
+	inlineKey, ok := appendOnlyInlineMapKeyFromBytes([]byte("b"))
+	if !ok {
+		t.Fatalf("test key did not fit inline latest index")
+	}
+	idx, ok := m.latestInline[inlineKey]
 	if !ok {
 		t.Fatalf("missing latest index entry for key b")
 	}

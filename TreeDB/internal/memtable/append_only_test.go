@@ -592,15 +592,35 @@ func TestAppendOnlyGetBuildsLatestIndexOnFirstPointRead(t *testing.T) {
 		latestSize func(m *AppendOnly) int
 	}{
 		{
-			name: "non-8-byte",
+			name: "short-inline",
 			makeKey: func(v uint64) []byte {
 				return []byte{byte('a' + v)}
+			},
+			latestIdx: func(m *AppendOnly, key []byte) (int, bool) {
+				inlineKey, ok := appendOnlyInlineMapKeyFromBytes(key)
+				if !ok || m.latestInline == nil {
+					return 0, false
+				}
+				idx, ok := m.latestInline[inlineKey]
+				return idx, ok
+			},
+			latestSize: func(m *AppendOnly) int {
+				if m.latestInline == nil {
+					return 0
+				}
+				return len(m.latestInline)
+			},
+		},
+		{
+			name: "long-string",
+			makeKey: func(v uint64) []byte {
+				return []byte(fmt.Sprintf("long-key-%08d", v))
 			},
 			latestIdx: func(m *AppendOnly, key []byte) (int, bool) {
 				if m.latest == nil {
 					return 0, false
 				}
-				idx, ok := m.latest[string(key)]
+				idx, ok := m.latest[appendOnlyLookupKeyString(key)]
 				return idx, ok
 			},
 			latestSize: func(m *AppendOnly) int {
@@ -879,6 +899,36 @@ func TestAppendOnlyOrderedIteratorShortInlineKeyStableAfterCloseAndGrowth(t *tes
 	}
 }
 
+func TestAppendOnlyIteratorLongKeyDoesNotExposeIndexStorage(t *testing.T) {
+	m := NewAppendOnlyWithCapacity(0)
+	const (
+		targetKey = "long-key-a"
+		otherKey  = "long-key-b"
+	)
+	m.Set([]byte(otherKey), []byte("other"))
+	m.Set([]byte(targetKey), []byte("target")) // force unordered latest-index path
+
+	it := m.NewIterator(nil, nil)
+	if !it.Valid() {
+		t.Fatal("iterator unexpectedly invalid")
+	}
+	key := it.UnsafeKey()
+	if got := string(key); got != targetKey {
+		t.Fatalf("iterator key=%q want %q", got, targetKey)
+	}
+	key[0] = 'X'
+	if err := it.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	if got, del, ok := m.Get([]byte(targetKey)); !ok || del || string(got) != "target" {
+		t.Fatalf("Get(%q) after iterator key mutation = (%q,%v,%v), want (target,false,true)", targetKey, got, del, ok)
+	}
+	if _, _, ok := m.Get([]byte("Xong-key-a")); ok {
+		t.Fatalf("mutating iterator key created lookup hit for corrupted key")
+	}
+}
+
 var appendOnlyGetBenchSink []byte
 var appendOnlyGetBenchSinkBool bool
 
@@ -903,6 +953,7 @@ func benchmarkAppendOnlyGetOrderedVsReverseScan(b *testing.B, count int) {
 	reverse.ordered = false
 	reverse.latestDirty = true
 	clear(reverse.latest)
+	clear(reverse.latestInline)
 	clear(reverse.latest64)
 	reverse.mu.Unlock()
 
