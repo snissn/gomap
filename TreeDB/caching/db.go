@@ -7737,12 +7737,14 @@ func (db *DB) newMutableMemtableWithCapacityMode(capacity int, mode memtable.Mod
 		if mt := db.popAppendOnlyMemLease(); mt != nil {
 			db.appendOnlyMemLeaseHitTotal.Add(1)
 			mt.ResetWithCapacityAndEntryHint(capacity, estimate, entryHint)
+			db.setAppendOnlyPredictiveGrowthHint(mt, capacity)
 			return mt, nil
 		}
 		if v := db.appendOnlyMemPool.Get(); v != nil {
 			if mt, ok := v.(*memtable.AppendOnly); ok && mt != nil {
 				db.appendOnlyMemPoolHitTotal.Add(1)
 				mt.ResetWithCapacityAndEntryHint(capacity, estimate, entryHint)
+				db.setAppendOnlyPredictiveGrowthHint(mt, capacity)
 				return mt, nil
 			}
 		}
@@ -7753,9 +7755,18 @@ func (db *DB) newMutableMemtableWithCapacityMode(capacity int, mode memtable.Mod
 			db.appendOnlyMemNewAllocQueueBytes.Add(uint64(backlog))
 		}
 		db.appendOnlyMemNewAllocTotal.Add(1)
-		return memtable.NewAppendOnlyWithCapacityEstimatedEntryBytesAndHint(capacity, estimate, entryHint), nil
+		mt := memtable.NewAppendOnlyWithCapacityEstimatedEntryBytesAndHint(capacity, estimate, entryHint)
+		db.setAppendOnlyPredictiveGrowthHint(mt, capacity)
+		return mt, nil
 	}
 	return memtable.NewWithCapacityModeAndIndexer(capacity, mode, db.hashSortedIndexer)
+}
+
+func (db *DB) setAppendOnlyPredictiveGrowthHint(mt *memtable.AppendOnly, capacity int) {
+	if db == nil || mt == nil {
+		return
+	}
+	mt.SetPredictiveGrowthHint(capacity, &db.appendOnlyEntryHint, db.observeAppendOnlyMutableEntries)
 }
 
 // publishMemtablesLocked publishes a new memtable snapshot.
@@ -8015,6 +8026,9 @@ func (db *DB) resetMutableShardsLocked(nextMode memtable.Mode, reuse bool) error
 		if reuse {
 			if r, ok := any(shard.mem).(interface{ Reset() }); ok {
 				r.Reset()
+				if mt, ok := shard.mem.(*memtable.AppendOnly); ok {
+					db.setAppendOnlyPredictiveGrowthHint(mt, db.memtableCap)
+				}
 				shard.appendOnlyDirectValueArena.recycleActive()
 				reused = true
 			}
@@ -8913,6 +8927,13 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		flushLaneMu:                          make([]sync.Mutex, len(lanes)),
 	}
 	db.storeMemtableMode(mode)
+	if mode == memtable.ModeAppendOnly {
+		for i := range db.mutableShards {
+			if mt, ok := db.mutableShards[i].mem.(*memtable.AppendOnly); ok {
+				db.setAppendOnlyPredictiveGrowthHint(mt, warmupCap)
+			}
+		}
+	}
 	if opts.IndexOuterLeavesInValueLog {
 		db.leafLog.id = leafLogLaneID
 		db.leafLog.vlogSeq = maxLeafVlogSeq

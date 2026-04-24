@@ -2,6 +2,7 @@ package memtable
 
 import (
 	"fmt"
+	"sync/atomic"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/node"
@@ -142,5 +143,133 @@ func TestAppendOnlyResetWithCapacityAndEntryHint_DefersHintGrowthUntilAppend(t *
 	mt.ResetWithCapacityAndEntryHint(capacityBytes, estimatedBytesPerEntry, entryHint)
 	if got := cap(mt.entries); got != capAfterGrowth {
 		t.Fatalf("warm hinted cap(entries)=%d want=%d", got, capAfterGrowth)
+	}
+}
+
+func TestAppendOnlyPredictiveGrowthHintRaisesFutureGrowEntriesLen(t *testing.T) {
+	const (
+		capacityBytes          = 128 << 10
+		estimatedBytesPerEntry = 96
+	)
+
+	base := appendOnlyInitialEntriesForCapacity(capacityBytes, estimatedBytesPerEntry)
+	if base <= appendOnlyPredictHintMinEntries {
+		t.Fatalf("base=%d want > %d", base, appendOnlyPredictHintMinEntries)
+	}
+
+	mt := NewAppendOnlyWithCapacityEstimatedEntryBytes(capacityBytes, estimatedBytesPerEntry)
+	capBefore := cap(mt.entries)
+	var observed int
+	mt.SetPredictiveGrowthHint(capacityBytes, nil, func(entries int) {
+		if entries > observed {
+			observed = entries
+		}
+	})
+
+	for i := 0; i < appendOnlyPredictHintMinEntries; i++ {
+		key := []byte(fmt.Sprintf("p%08d", i))
+		mt.SetEntrySteal(key, nil, page.ValuePtr{}, node.FlagTombstone)
+	}
+
+	if got, wantMin := mt.growEntriesLen, base*8; got < wantMin {
+		t.Fatalf("growEntriesLen=%d want >= %d", got, wantMin)
+	}
+	if observed != mt.growEntriesLen {
+		t.Fatalf("observed predicted entries=%d want %d", observed, mt.growEntriesLen)
+	}
+	if got := cap(mt.entries); got != capBefore {
+		t.Fatalf("predictive hint allocated immediately: cap(entries)=%d want=%d", got, capBefore)
+	}
+}
+
+func TestAppendOnlyPredictiveGrowthHintSurvivesResetAndObservesAfterUnlock(t *testing.T) {
+	const capacityBytes = 128 << 10
+
+	mt := NewAppendOnlyWithCapacityEstimatedEntryBytes(capacityBytes, appendOnlyEstimatedBytesPerEntryPointer)
+	var observed atomic.Bool
+	var observedAfterUnlock atomic.Bool
+	mt.SetPredictiveGrowthHint(capacityBytes, nil, func(entries int) {
+		if entries <= 0 {
+			return
+		}
+		observed.Store(true)
+		if mt.mu.TryLock() {
+			observedAfterUnlock.Store(true)
+			mt.mu.Unlock()
+		}
+	})
+	mt.Reset()
+
+	limit := cap(mt.entries) + 1
+	for i := 0; i < limit; i++ {
+		key := []byte(fmt.Sprintf("u%08d", i))
+		mt.SetEntrySteal(key, nil, page.ValuePtr{}, node.FlagTombstone)
+	}
+	if !observed.Load() {
+		t.Fatalf("expected predictive observer after reset")
+	}
+	if !observedAfterUnlock.Load() {
+		t.Fatalf("predictive observer ran while append-only lock was held")
+	}
+}
+
+func TestAppendOnlyGrowthObserverRecordsLiveEntries(t *testing.T) {
+	const (
+		capacityBytes          = 4 << 10
+		estimatedBytesPerEntry = 96
+	)
+
+	mt := NewAppendOnlyWithCapacityEstimatedEntryBytes(capacityBytes, estimatedBytesPerEntry)
+	base := len(mt.entries)
+	var observed atomic.Int32
+	mt.SetPredictiveGrowthHint(0, nil, func(entries int) {
+		observed.Store(int32(entries))
+	})
+	for i := 0; i <= base; i++ {
+		key := []byte(fmt.Sprintf("g%08d", i))
+		mt.SetEntrySteal(key, nil, page.ValuePtr{}, node.FlagTombstone)
+	}
+	if got, want := int(observed.Load()), base+1; got != want {
+		t.Fatalf("observed entries=%d want live count %d", got, want)
+	}
+}
+
+func TestAppendOnlyPredictiveGrowthHintZeroCapacityDisablesCapacityPrediction(t *testing.T) {
+	const (
+		capacityBytes          = 128 << 10
+		estimatedBytesPerEntry = 96
+	)
+
+	mt := NewAppendOnlyWithCapacityEstimatedEntryBytes(capacityBytes, estimatedBytesPerEntry)
+	baseGrow := mt.growEntriesLen
+	mt.SetPredictiveGrowthHint(0, nil, nil)
+	for i := 0; i < appendOnlyPredictHintMinEntries; i++ {
+		key := []byte(fmt.Sprintf("z%08d", i))
+		mt.SetEntrySteal(key, nil, page.ValuePtr{}, node.FlagTombstone)
+	}
+	if got := mt.growEntriesLen; got != baseGrow {
+		t.Fatalf("zero capacity hint changed growEntriesLen=%d want %d", got, baseGrow)
+	}
+}
+
+func TestAppendOnlySharedPredictiveHintRaisesGrowthFloorBeforeLocalPrediction(t *testing.T) {
+	const (
+		capacityBytes          = 128 << 10
+		estimatedBytesPerEntry = 96
+	)
+
+	base := appendOnlyInitialEntriesForCapacity(capacityBytes, estimatedBytesPerEntry)
+	sharedHint := atomic.Int32{}
+	sharedHint.Store(int32(base * 8))
+
+	mt := NewAppendOnlyWithCapacityEstimatedEntryBytes(capacityBytes, estimatedBytesPerEntry)
+	mt.SetPredictiveGrowthHint(capacityBytes, &sharedHint, nil)
+
+	for i := 0; i < base+1; i++ {
+		key := []byte(fmt.Sprintf("s%08d", i))
+		mt.SetEntrySteal(key, nil, page.ValuePtr{}, node.FlagTombstone)
+	}
+	if got := cap(mt.entries); got < int(sharedHint.Load()) {
+		t.Fatalf("cap(entries)=%d want >= %d", got, sharedHint.Load())
 	}
 }
