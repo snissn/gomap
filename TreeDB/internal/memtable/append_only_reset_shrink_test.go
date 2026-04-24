@@ -245,9 +245,19 @@ func TestAppendOnlyPredictiveGrowthHintSurvivesResetAndObservesAfterUnlock(t *te
 		}
 	}()
 
+	timer := time.NewTimer(2 * time.Second)
+	defer func() {
+		if !timer.Stop() {
+			select {
+			case <-timer.C:
+			default:
+			}
+		}
+	}()
+
 	select {
 	case <-done:
-	case <-time.After(2 * time.Second):
+	case <-timer.C:
 		t.Fatal("predictive observer appears to run while append-only lock is held")
 	}
 	if got := observed.Load(); got == 0 {

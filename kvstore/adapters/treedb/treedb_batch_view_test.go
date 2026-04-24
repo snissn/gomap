@@ -119,13 +119,13 @@ func TestBatchSetDeleteViewPropagateOptionalErrors(t *testing.T) {
 		setView:    base,
 		deleteView: base,
 	}
-	if err := wrapped.SetStealView([]byte("k"), []byte("v")); err == nil || err.Error() != "set-steal-view-failed" {
+	if err := wrapped.SetStealView([]byte("k"), []byte("v")); !errors.Is(err, base.setStealViewErr) {
 		t.Fatalf("expected set steal view error propagation, got=%v", err)
 	}
-	if err := wrapped.SetView([]byte("k"), []byte("v")); err == nil || err.Error() != "set-view-failed" {
+	if err := wrapped.SetView([]byte("k"), []byte("v")); !errors.Is(err, base.setViewErr) {
 		t.Fatalf("expected set view error propagation, got=%v", err)
 	}
-	if err := wrapped.DeleteView([]byte("k")); err == nil || err.Error() != "delete-view-failed" {
+	if err := wrapped.DeleteView([]byte("k")); !errors.Is(err, base.deleteViewErr) {
 		t.Fatalf("expected delete view error propagation, got=%v", err)
 	}
 }

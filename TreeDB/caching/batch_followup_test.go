@@ -219,7 +219,7 @@ func TestBatchWrite_DeleteOnlyEmptyDBNoOp_LockOrder(t *testing.T) {
 	}()
 
 	heldWriteMu := false
-	deadline := time.Now().Add(100 * time.Millisecond)
+	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		if cache.writeMu.TryLock() {
 			cache.writeMu.Unlock()

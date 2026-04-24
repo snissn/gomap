@@ -70,7 +70,7 @@ func (b *batchSmallSeqTrackingBatch) Close() error { return nil }
 
 func (b *batchSmallSeqTrackingBatch) Reset() {}
 
-func TestBatchSmallSeqPrefersSetStealView(t *testing.T) {
+func TestBatchSmallSeqPrefersSetView(t *testing.T) {
 	const dbName = "batch_small_seq_tracking"
 	var dbRef atomic.Pointer[batchSmallSeqTrackingDB]
 	RegisterHiddenDB(dbName, func(dir string) (kvstore.DB, error) {
@@ -99,11 +99,11 @@ func TestBatchSmallSeqPrefersSetStealView(t *testing.T) {
 	if db == nil || db.batch == nil {
 		t.Fatal("tracking batch was not created")
 	}
-	if got := db.batch.setStealViewCalls.Load(); got != 64 {
-		t.Fatalf("batch_small_seq used SetStealView %d times; want 64", got)
+	if got := db.batch.setViewCalls.Load(); got != 64 {
+		t.Fatalf("batch_small_seq used SetView %d times; want 64", got)
 	}
-	if got := db.batch.setViewCalls.Load(); got != 0 {
-		t.Fatalf("batch_small_seq used SetView %d times; want 0", got)
+	if got := db.batch.setStealViewCalls.Load(); got != 0 {
+		t.Fatalf("batch_small_seq used SetStealView %d times; want 0", got)
 	}
 	if got := db.batch.setCalls.Load(); got != 0 {
 		t.Fatalf("batch_small_seq used Set %d times; want 0", got)

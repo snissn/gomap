@@ -87,6 +87,7 @@ var (
 	checkpointEveryBytes            = flag.Int64("checkpoint-every-bytes", 0, "Force a best-effort durability checkpoint every N approx bytes during write-heavy tests (0=disabled; DBs that support Checkpoint())")
 	batchWriteSteadyCheckpointBytes = flag.Int64("batch-write-steady-checkpoint-bytes", 64<<20, "batch_write_steady: default periodic checkpoint interval in bytes when checkpoint-every-* flags are unset (0 disables)")
 	batchWriteDictWarmup            = flag.Bool("batch-write-dict-warmup", false, "Enable pre-measurement dict warmup writes for batch_write* (TreeDB dict mode); off by default to keep measured runs on empty DB state")
+	gcBetweenTests                  = flag.Bool("gc-between-tests", false, "Force runtime.GC after each benchmark test to reduce cross-test harness heap carryover")
 
 	flushdrainCheckpointMax = flag.Duration("flushdrain-checkpoint-max", 0, "Abort flushdrain suite if checkpoint-before-random_read exceeds this duration (0=disabled)")
 
@@ -166,6 +167,7 @@ type BenchConfig struct {
 	CheckpointEveryBytes            int64
 	BatchWriteSteadyCheckpointBytes int64
 	BatchWriteDictWarmup            bool
+	GCBetweenTests                  bool
 
 	SettleBeforeScans bool
 
@@ -476,6 +478,7 @@ func main() {
 		CheckpointEveryBytes:             *checkpointEveryBytes,
 		BatchWriteSteadyCheckpointBytes:  *batchWriteSteadyCheckpointBytes,
 		BatchWriteDictWarmup:             *batchWriteDictWarmup,
+		GCBetweenTests:                   *gcBetweenTests,
 		SettleBeforeScans:                *settleBeforeScans,
 		TreeDBCacheStatsBeforeReads:      *treedbCacheStatsBeforeReads,
 		TreeDBCacheStatsAfterTests:       *treedbCacheStatsAfterTests,
@@ -2770,9 +2773,6 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			type batcherWithSize interface {
 				NewBatchWithSize(size int) (kvstore.Batch, error)
 			}
-			type batchSetStealView interface {
-				SetStealView(key, value []byte) error
-			}
 			type batchSetView interface {
 				SetView(key, value []byte) error
 			}
@@ -2780,10 +2780,9 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				Reset()
 			}
 			var (
-				batch        kvstore.Batch
-				setStealView func(key, value []byte) error
-				setView      func(key, value []byte) error
-				resetBatch   func()
+				batch      kvstore.Batch
+				setView    func(key, value []byte) error
+				resetBatch func()
 			)
 			openBatch := func() error {
 				var err error
@@ -2794,10 +2793,6 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				}
 				if err != nil {
 					return err
-				}
-				setStealView = nil
-				if ssv, ok := batch.(batchSetStealView); ok {
-					setStealView = ssv.SetStealView
 				}
 				setView = nil
 				if sv, ok := batch.(batchSetView); ok {
@@ -2842,16 +2837,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				if end > total {
 					end = total
 				}
-				if setStealView != nil && precomputeKeys {
-					for j := i; j < end; j++ {
-						keyView := keyBytes[j*8 : (j+1)*8]
-						value := values[valPos%len(values)]
-						valPos++
-						if err := setStealView(keyView, value); err != nil {
-							return 0, fmt.Errorf("batch_small_seq: set: %w", err)
-						}
-					}
-				} else if setView != nil {
+				if setView != nil {
 					if precomputeKeys {
 						for j := i; j < end; j++ {
 							keyView := keyBytes[j*8 : (j+1)*8]
@@ -4226,11 +4212,9 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				printTreeDBCacheStats(os.Stderr, inst, "post-"+testName+" treedb.cache")
 			}
 		}
-		// Test functions can retain large dead setup buffers (for example the
-		// precomputed key slabs used by batch benchmarks). Reclaim them before the
-		// next test starts so cross-test throughput reflects DB state, not stale
-		// harness heap pressure.
-		runtime.GC()
+		if cfg.GCBetweenTests {
+			runtime.GC()
+		}
 	}
 
 	// Final clear of live table
