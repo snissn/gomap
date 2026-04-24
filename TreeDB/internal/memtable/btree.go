@@ -15,6 +15,7 @@ import (
 const btreeDefaultDegree = 32
 const btreeUseLoadFastPath = false
 const btreeArenaChunkSize = 1 << 20
+const btreeArenaInitialChunkSize = 64 << 10
 const btreeInlineValueDedupeMax = 1 << 20
 
 type btreeEntry struct {
@@ -182,7 +183,8 @@ func NewBTreeWithDegree(degree int) *BTree {
 		tree:   btree.NewMap[string, btreeEntry](degree),
 		degree: degree,
 		arena: &btreeArena{
-			chunkSize: btreeArenaChunkSize,
+			maxChunkSize:     btreeArenaChunkSize,
+			initialChunkSize: btreeArenaInitialChunkSize,
 		},
 	}
 }
@@ -783,9 +785,10 @@ func (m *BTree) recordSetLocked(key string, keyLen int, entry, prev btreeEntry, 
 }
 
 type btreeArena struct {
-	chunkSize int
-	chunks    [][]byte
-	offset    int
+	maxChunkSize     int
+	initialChunkSize int
+	chunks           [][]byte
+	offset           int
 }
 
 func (a *btreeArena) resetKeepFirstChunk() {
@@ -797,7 +800,7 @@ func (a *btreeArena) resetKeepFirstChunk() {
 		return
 	}
 	first := a.chunks[0]
-	first = first[:len(first)]
+	first = first[:cap(first)]
 	a.chunks = a.chunks[:1]
 	a.chunks[0] = first
 	a.offset = 0
@@ -827,7 +830,10 @@ func (a *btreeArena) currentChunk(n int) []byte {
 		return make([]byte, n)
 	}
 	if len(a.chunks) == 0 {
-		size := a.chunkSize
+		size := a.initialChunkSize
+		if size <= 0 {
+			size = a.maxChunkSize
+		}
 		if size < n {
 			size = n
 		}
@@ -839,7 +845,13 @@ func (a *btreeArena) currentChunk(n int) []byte {
 	if a.offset+n <= len(chunk) {
 		return chunk
 	}
-	size := a.chunkSize
+	size := len(chunk) * 2
+	if max := a.maxChunkSize; max > 0 && size > max {
+		size = max
+	}
+	if size <= 0 {
+		size = a.maxChunkSize
+	}
 	if size < n {
 		size = n
 	}
