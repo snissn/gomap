@@ -8027,7 +8027,7 @@ func (db *DB) resetMutableShardsLocked(nextMode memtable.Mode, reuse bool) error
 			if r, ok := any(shard.mem).(interface{ Reset() }); ok {
 				r.Reset()
 				if mt, ok := shard.mem.(*memtable.AppendOnly); ok {
-					db.setAppendOnlyPredictiveGrowthHint(mt, 0)
+					db.setAppendOnlyPredictiveGrowthHint(mt, db.memtableCap)
 				}
 				shard.appendOnlyDirectValueArena.recycleActive()
 				reused = true
