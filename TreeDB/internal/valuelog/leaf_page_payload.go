@@ -3,9 +3,11 @@ package valuelog
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"hash/crc32"
 	"path/filepath"
 
+	"github.com/snissn/gomap/TreeDB/internal/crc"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -109,6 +111,69 @@ func MaybeCompactLeafLogPayload(leafPage []byte) ([]byte, bool, error) {
 	payload := make([]byte, compactLeafPagePayloadLen(prefixLen, suffixLen))
 	encodeCompactLeafLogPayload(payload, leafPage, prefixLen, suffixStart, suffixLen)
 	return payload, true, nil
+}
+
+// PrepareCompactLeafPageRecord builds the raw K=1 value-log record used for an
+// outer leaf page. It lets callers do the page compaction, copy and CRC work
+// before taking the writer mutex; the returned length is ready to store in a
+// ValuePtr.
+func PrepareCompactLeafPageRecord(dst []byte, rid uint64, leafPage []byte) ([]byte, FrameStats, bool, uint32, error) {
+	if rid == 0 {
+		return nil, FrameStats{}, false, 0, errors.New("valuelog: missing rid")
+	}
+	prefixLen, suffixStart, suffixLen, compacted, err := compactLeafPageLivePayloadBounds(leafPage)
+	if err != nil {
+		return nil, FrameStats{}, false, 0, err
+	}
+	payloadLen := len(leafPage)
+	if compacted {
+		payloadLen = compactLeafPagePayloadLen(prefixLen, suffixLen)
+	}
+	bodyLen := uint32(FrameHeaderSize + 8 + 8 + payloadLen)
+	if recordSizeExceedsMax(bodyLen) {
+		return nil, FrameStats{}, false, 0, ErrRecordTooLarge
+	}
+	recordLen := HeaderSize + int(bodyLen)
+	if cap(dst) < recordLen {
+		dst = make([]byte, recordLen)
+	} else {
+		dst = dst[:recordLen]
+	}
+
+	dst[4] = Version
+	dst[5] = recordFlagGrouped
+	dst[6] = 0
+	dst[7] = 0
+	binary.LittleEndian.PutUint64(dst[8:16], 0)
+	binary.LittleEndian.PutUint32(dst[16:20], bodyLen)
+
+	off := HeaderSize
+	dst[off] = FrameVersion
+	dst[off+1] = 0
+	dst[off+2] = 1
+	dst[off+3] = 0
+	binary.LittleEndian.PutUint64(dst[off+4:off+12], 0)
+	off += FrameHeaderSize
+
+	binary.LittleEndian.PutUint64(dst[off:off+8], rid)
+	off += 8
+	binary.LittleEndian.PutUint32(dst[off:off+4], 0)
+	binary.LittleEndian.PutUint32(dst[off+4:off+8], uint32(payloadLen))
+	off += 8
+
+	if compacted {
+		encodeCompactLeafLogPayload(dst[off:off+payloadLen], leafPage, prefixLen, suffixStart, suffixLen)
+	} else {
+		copy(dst[off:], leafPage)
+	}
+	sum := crc.ChecksumParts(dst[4:HeaderSize], dst[HeaderSize:])
+	binary.LittleEndian.PutUint32(dst[0:4], sum)
+
+	recordLenHint := uint32(headerWithoutCRC) + bodyLen
+	if recordLenHint > page.ValuePtrGroupedMaxRecordLen {
+		recordLenHint = 0
+	}
+	return dst, FrameStats{Records: 1, RawPayloadBytes: payloadLen, StoredPayloadBytes: payloadLen, Kept: false}, compacted, page.ValuePtrMarkGrouped(recordLenHint, 0), nil
 }
 
 func compactLeafLogPayloadBounds(payload []byte) (prefixLen, suffixLen int, decoded bool, err error) {

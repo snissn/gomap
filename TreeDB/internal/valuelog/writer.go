@@ -1101,6 +1101,32 @@ func (w *Writer) AppendRawRecord(raw []byte, length uint32) (page.ValuePtr, erro
 	}, nil
 }
 
+// AppendRawRecordBuffered appends a pre-encoded raw value-log record through the
+// writer append buffer. This keeps syscall coalescing for records prepared
+// outside the writer's critical section.
+func (w *Writer) AppendRawRecordBuffered(raw []byte, length uint32) (page.ValuePtr, error) {
+	if w == nil {
+		return page.ValuePtr{}, errors.New("valuelog: nil writer")
+	}
+	if len(raw) < 4 {
+		return page.ValuePtr{}, errors.New("valuelog: empty record")
+	}
+	expected := uint32(len(raw) - 4)
+	if !page.ValuePtrRecordLengthHintMatches(page.ValuePtr{Length: length}, expected) {
+		return page.ValuePtr{}, errors.New("valuelog: raw record size mismatch")
+	}
+	start := w.size
+	if err := w.writeBytesBuffered(raw); err != nil {
+		return page.ValuePtr{}, err
+	}
+	w.size += int64(len(raw))
+	return page.ValuePtr{
+		Offset: uint64(start + 4),
+		Length: length,
+		FileID: w.fileID,
+	}, nil
+}
+
 func (w *Writer) AppendFrame(dictID uint64, dict []byte, records []Record) ([]page.ValuePtr, error) {
 	ptrs, _, err := w.AppendFrameWithStats(dictID, dict, records)
 	return ptrs, err

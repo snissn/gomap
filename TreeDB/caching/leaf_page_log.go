@@ -1,6 +1,7 @@
 package caching
 
 import (
+	"sync"
 	"time"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -15,8 +16,38 @@ type cachingLeafPageLog struct {
 
 var _ backenddb.LeafPageLog = (*cachingLeafPageLog)(nil)
 
+var preparedLeafPageRecordPool = sync.Pool{
+	New: func() any {
+		buf := make([]byte, 0, valuelog.HeaderSize+valuelog.FrameHeaderSize+16+page.PageSize)
+		return &buf
+	},
+}
+
 func newCachingLeafPageLog(db *DB, l *lane) backenddb.LeafPageLog {
 	return &cachingLeafPageLog{db: db, lane: l}
+}
+
+func getPreparedLeafPageRecordBuffer() *[]byte {
+	buf, _ := preparedLeafPageRecordPool.Get().(*[]byte)
+	if buf == nil {
+		b := make([]byte, 0, valuelog.HeaderSize+valuelog.FrameHeaderSize+16+page.PageSize)
+		return &b
+	}
+	return buf
+}
+
+func putPreparedLeafPageRecordBuffer(buf *[]byte) {
+	if buf == nil {
+		return
+	}
+	const maxKeep = 64 << 10
+	if cap(*buf) > maxKeep {
+		b := make([]byte, 0, valuelog.HeaderSize+valuelog.FrameHeaderSize+16+page.PageSize)
+		*buf = b
+	} else {
+		*buf = (*buf)[:0]
+	}
+	preparedLeafPageRecordPool.Put(buf)
 }
 
 func (db *DB) noteLeafGenerationRecordLength(ptr page.ValuePtr) {
@@ -28,80 +59,47 @@ func (db *DB) noteLeafGenerationRecordLength(ptr page.ValuePtr) {
 	}
 }
 
-func (db *DB) appendLeafPageValueLog(l *lane, rid uint64, leafPage []byte) (page.ValuePtr, string, error) {
-	if !db.splitValueLogEnabled() {
-		return page.ValuePtr{}, "", errWALUnavailable
+// appendPreparedLeafPageValueLog appends a raw leaf-page record that was encoded
+// outside vlogMu. The caller must hold l.vlogMu; this helper releases it while
+// preparing the record and returns with the mutex unlocked.
+func (db *DB) appendPreparedLeafPageValueLog(l *lane, rid uint64, leafPage []byte) (page.ValuePtr, string, valuelog.FrameStats, bool, int, int64, error) {
+	l.vlogMu.Unlock()
+	bufp := getPreparedLeafPageRecordBuffer()
+	raw, stats, compacted, ptrLength, err := valuelog.PrepareCompactLeafPageRecord((*bufp)[:0], rid, leafPage)
+	if err != nil {
+		putPreparedLeafPageRecordBuffer(bufp)
+		return page.ValuePtr{}, "", valuelog.FrameStats{}, false, 0, 0, err
 	}
-	if l == nil {
-		return page.ValuePtr{}, "", errWALUnavailable
-	}
-	select {
-	case <-db.closeCh:
-		return page.ValuePtr{}, "", errWALClosed
-	default:
-	}
+	payloadLen := stats.RawPayloadBytes
 
 	l.vlogMu.Lock()
-	selectorStart := time.Now()
-	w := l.vlog
-	if w == nil {
+	defer func() {
+		putPreparedLeafPageRecordBuffer(bufp)
+	}()
+
+	w, ok := l.vlog.(*valuelog.Writer)
+	if !ok || w == nil {
 		l.vlogMu.Unlock()
-		return page.ValuePtr{}, "", errWALUnavailable
+		return page.ValuePtr{}, "", valuelog.FrameStats{}, false, 0, 0, errWALUnavailable
 	}
 	if rotateErr := db.rotateValueLogForMaxSegmentMuHeld(l, w); rotateErr != nil {
 		l.vlogMu.Unlock()
-		return page.ValuePtr{}, "", rotateErr
+		return page.ValuePtr{}, "", valuelog.FrameStats{}, false, 0, 0, rotateErr
 	}
-	w = l.vlog
-	if w == nil {
+	w, ok = l.vlog.(*valuelog.Writer)
+	if !ok || w == nil {
 		l.vlogMu.Unlock()
-		return page.ValuePtr{}, "", errWALUnavailable
+		return page.ValuePtr{}, "", valuelog.FrameStats{}, false, 0, 0, errWALUnavailable
 	}
 	if l.vlogCaps.writer != w {
 		l.vlogCaps = computeVlogWriterCaps(w)
 	}
+	db.setVlogWriterMode(l, w, vlogWriteOff, db.valueLogBlockCodec)
 
-	concrete, ok := w.(*valuelog.Writer)
-	if !ok || db.valueLogTemplateEnabled {
-		l.vlogMu.Unlock()
-		encodedLeafPage, _, err := valuelog.MaybeCompactLeafLogPayload(leafPage)
-		if err != nil {
-			return page.ValuePtr{}, "", err
-		}
-		return db.appendValueLogOneInternal(l, 0, nil, rid, encodedLeafPage, journalDurabilityNone, false)
-	}
-
-	payloadLen, compacted, err := valuelog.CompactLeafLogPayloadLen(leafPage)
-	if err != nil {
-		l.vlogMu.Unlock()
-		return page.ValuePtr{}, "", err
-	}
-	writeMode, blockCodec, probeCompression := db.resolveVlogWriteMode(l, 0, payloadLen, payloadLen, compacted)
-	if writeMode == vlogWriteBlock {
-		if codec, ok := db.preferLeafPageBlockCodec(l, payloadLen, blockCodec); ok {
-			blockCodec = codec
-		} else {
-			compressionMode := normalizeVlogCompressionMode(db.valueLogCompressionMode)
-			if (compressionMode == vlogCompressionAuto || compressionMode == vlogCompressionDefault) &&
-				normalizeVlogAutoPolicy(db.valueLogAutoPolicy) != vlogAutoThroughput &&
-				payloadLen >= 2048 {
-				blockCodec = chooseLargePayloadNoDictBlockCodec(l, db.valueLogBlockCodec)
-			}
-		}
-	}
-	finalWriteMode := vlogWriteOff
-	if writeMode == vlogWriteBlock {
-		finalWriteMode = vlogWriteBlock
-	}
-	finalBlockCodec := db.valueLogBlockCodec
-	if finalWriteMode == vlogWriteBlock {
-		finalBlockCodec = blockCodec
-	}
-	db.setVlogWriterMode(l, w, finalWriteMode, finalBlockCodec)
 	startSize := w.Size()
-	ptr, stats, compacted, err := concrete.AppendCompactLeafPage(rid, leafPage)
+	ptr, err := w.AppendRawRecordBuffered(raw, ptrLength)
 	flushedBoundary := false
-	if err == nil && db.shouldFlushDeferredValueLogValue(finalWriteMode, leafPage) {
+	if err == nil && db.shouldFlushDeferredValueLogValue(vlogWriteOff, leafPage) {
 		err = w.Flush()
 		flushedBoundary = err == nil
 	}
@@ -125,8 +123,12 @@ func (db *DB) appendLeafPageValueLog(l *lane, rid uint64, leafPage []byte) (page
 	}
 	l.vlogMu.Unlock()
 	if err != nil {
-		return page.ValuePtr{}, "", err
+		return page.ValuePtr{}, "", valuelog.FrameStats{}, false, 0, 0, err
 	}
+	return ptr, retainPath, stats, compacted, payloadLen, totalBytes, nil
+}
+
+func (db *DB) observeLeafPageValueLogAppend(l *lane, ptr page.ValuePtr, retainPath string, stats valuelog.FrameStats, compacted bool, finalWriteMode vlogCompressionWriteMode, finalBlockCodec valuelog.BlockCodec, payloadLen int, totalBytes int64, probeCompression bool, selectorStart time.Time) (page.ValuePtr, string, error) {
 	if totalBytes > 0 {
 		l.vlogLiveBytes.Add(totalBytes)
 	}
@@ -158,6 +160,118 @@ func (db *DB) appendLeafPageValueLog(l *lane, rid uint64, leafPage []byte) (page
 	}
 	db.observeVlogWriteMode(l, finalWriteMode, finalBlockCodec, payloadLen, payloadLen, storedForSelector, probeCompression, time.Since(selectorStart).Nanoseconds())
 	return ptr, retainPath, nil
+}
+
+func (db *DB) appendLeafPageValueLog(l *lane, rid uint64, leafPage []byte) (page.ValuePtr, string, error) {
+	if !db.splitValueLogEnabled() {
+		return page.ValuePtr{}, "", errWALUnavailable
+	}
+	if l == nil {
+		return page.ValuePtr{}, "", errWALUnavailable
+	}
+	select {
+	case <-db.closeCh:
+		return page.ValuePtr{}, "", errWALClosed
+	default:
+	}
+
+	selectorStart := time.Now()
+	payloadLen, compacted, err := valuelog.CompactLeafLogPayloadLen(leafPage)
+	if err != nil {
+		return page.ValuePtr{}, "", err
+	}
+	locked := l.vlogMu.TryLock()
+	contended := !locked
+	if contended {
+		l.vlogMu.Lock()
+	}
+	w := l.vlog
+	if w == nil {
+		l.vlogMu.Unlock()
+		return page.ValuePtr{}, "", errWALUnavailable
+	}
+	if rotateErr := db.rotateValueLogForMaxSegmentMuHeld(l, w); rotateErr != nil {
+		l.vlogMu.Unlock()
+		return page.ValuePtr{}, "", rotateErr
+	}
+	w = l.vlog
+	if w == nil {
+		l.vlogMu.Unlock()
+		return page.ValuePtr{}, "", errWALUnavailable
+	}
+	if l.vlogCaps.writer != w {
+		l.vlogCaps = computeVlogWriterCaps(w)
+	}
+
+	concrete, ok := w.(*valuelog.Writer)
+	if !ok || db.valueLogTemplateEnabled {
+		l.vlogMu.Unlock()
+		encodedLeafPage, _, err := valuelog.MaybeCompactLeafLogPayload(leafPage)
+		if err != nil {
+			return page.ValuePtr{}, "", err
+		}
+		return db.appendValueLogOneInternal(l, 0, nil, rid, encodedLeafPage, journalDurabilityNone, false)
+	}
+
+	writeMode, blockCodec, probeCompression := db.resolveVlogWriteMode(l, 0, payloadLen, payloadLen, compacted)
+	if writeMode == vlogWriteBlock {
+		if codec, ok := db.preferLeafPageBlockCodec(l, payloadLen, blockCodec); ok {
+			blockCodec = codec
+		} else {
+			compressionMode := normalizeVlogCompressionMode(db.valueLogCompressionMode)
+			if (compressionMode == vlogCompressionAuto || compressionMode == vlogCompressionDefault) &&
+				normalizeVlogAutoPolicy(db.valueLogAutoPolicy) != vlogAutoThroughput &&
+				payloadLen >= 2048 {
+				blockCodec = chooseLargePayloadNoDictBlockCodec(l, db.valueLogBlockCodec)
+			}
+		}
+	}
+	finalWriteMode := vlogWriteOff
+	if writeMode == vlogWriteBlock {
+		finalWriteMode = vlogWriteBlock
+	}
+	finalBlockCodec := db.valueLogBlockCodec
+	if finalWriteMode == vlogWriteBlock {
+		finalBlockCodec = blockCodec
+	}
+	if contended && finalWriteMode == vlogWriteOff {
+		ptr, retainPath, stats, compacted, payloadLen, totalBytes, err := db.appendPreparedLeafPageValueLog(l, rid, leafPage)
+		if err != nil {
+			return page.ValuePtr{}, "", err
+		}
+		return db.observeLeafPageValueLogAppend(l, ptr, retainPath, stats, compacted, finalWriteMode, finalBlockCodec, payloadLen, totalBytes, probeCompression, selectorStart)
+	}
+	db.setVlogWriterMode(l, w, finalWriteMode, finalBlockCodec)
+	startSize := w.Size()
+	ptr, stats, compacted, err := concrete.AppendCompactLeafPage(rid, leafPage)
+	flushedBoundary := false
+	if err == nil && db.shouldFlushDeferredValueLogValue(finalWriteMode, leafPage) {
+		err = w.Flush()
+		flushedBoundary = err == nil
+	}
+	totalBytes := int64(0)
+	if err == nil {
+		totalBytes = w.Size() - startSize
+	}
+	retainPath := ""
+	if l.vlogPath != "" && l.vlogPath != l.vlogRetainedPath {
+		l.vlogRetainedPath = l.vlogPath
+		retainPath = l.vlogPath
+	}
+	if err == nil {
+		db.markLaneValueLogBoundary(l, totalBytes, flushedBoundary, false)
+		if !flushedBoundary && totalBytes > 0 {
+			l.backendReadDirtySeq.Add(1)
+		}
+	}
+	if db.testBeforeVlogUnlock != nil {
+		db.testBeforeVlogUnlock(int(l.id))
+	}
+	l.vlogMu.Unlock()
+	if err != nil {
+		return page.ValuePtr{}, "", err
+	}
+	return db.observeLeafPageValueLogAppend(l, ptr, retainPath, stats, compacted, finalWriteMode, finalBlockCodec, payloadLen, totalBytes, probeCompression, selectorStart)
 }
 
 func (l *cachingLeafPageLog) AppendLeafPage(leafPage []byte) (page.LeafLogPtr, error) {
