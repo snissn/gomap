@@ -1243,6 +1243,9 @@ func (m *AppendOnly) appendValueBytesLocked(value []byte, borrowed bool) uint32 
 	if idx := m.recentValueIndexLocked(value); idx != 0 {
 		return idx
 	}
+	if len(m.values) == 0 {
+		return m.appendValueLockedSmall(appendOnlyArenaStringCopy(&m.valueArena, value))
+	}
 	return m.appendValueLocked(appendOnlyArenaStringCopy(&m.valueArena, value))
 }
 
@@ -1258,11 +1261,27 @@ func (m *AppendOnly) recentValueIndexLocked(value []byte) uint32 {
 }
 
 func (m *AppendOnly) appendValueLocked(value string) uint32 {
+	return m.appendValueLockedWithPolicy(value, true)
+}
+
+func (m *AppendOnly) appendValueLockedSmall(value string) uint32 {
+	return m.appendValueLockedWithPolicy(value, false)
+}
+
+func (m *AppendOnly) appendValueLockedWithPolicy(value string, useEntryCapHint bool) uint32 {
 	if len(m.values) == cap(m.values) {
 		nextCap := appendOnlyMinInitialEntries
 		if cap(m.values) > 0 {
 			nextCap = appendOnlyNextCapacity(cap(m.values))
-		} else if len(m.values) == m.count-1 {
+			if useEntryCapHint {
+				if entriesCap := cap(m.entries); entriesCap > nextCap {
+					if entriesCap > appendOnlyResetDropThresholdEntries {
+						entriesCap = appendOnlyResetDropThresholdEntries
+					}
+					nextCap = entriesCap
+				}
+			}
+		} else if useEntryCapHint && len(m.values) == m.count-1 {
 			if entriesCap := cap(m.entries); entriesCap > nextCap {
 				if entriesCap > appendOnlyResetDropThresholdEntries {
 					entriesCap = appendOnlyResetDropThresholdEntries

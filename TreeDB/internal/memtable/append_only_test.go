@@ -160,6 +160,9 @@ func TestAppendOnlyRepeatedSmallValueReusesPayloadCopy(t *testing.T) {
 	if got := len(m.values); got != 1 {
 		t.Fatalf("values=%d want=1", got)
 	}
+	if got := cap(m.values); got > appendOnlyMinInitialEntries {
+		t.Fatalf("value cap=%d want <=%d for single repeated payload", got, appendOnlyMinInitialEntries)
+	}
 	if m.entries[0].payloadIndex == 0 || m.entries[0].payloadIndex != m.entries[1].payloadIndex {
 		t.Fatalf("payload indices=(%d,%d), want shared non-zero index", m.entries[0].payloadIndex, m.entries[1].payloadIndex)
 	}
@@ -383,7 +386,7 @@ func TestAppendOnlyApplyBorrowValueSortedBatchIndicesTrusted_FallsBackWhenBatchS
 	}
 }
 
-func TestAppendOnlyFirstPayloadUsesDenseEntryCapacityFloor(t *testing.T) {
+func TestAppendOnlyFirstPayloadKeepsValueSideBufferSmall(t *testing.T) {
 	m := &AppendOnly{
 		entries: make([]appendOnlyEntry, 1024),
 		ordered: true,
@@ -392,11 +395,30 @@ func TestAppendOnlyFirstPayloadUsesDenseEntryCapacityFloor(t *testing.T) {
 
 	m.Set([]byte("k-short"), []byte("value"))
 
-	if got := cap(m.values); got != cap(m.entries) {
-		t.Fatalf("value cap=%d want entry cap=%d", got, cap(m.entries))
+	if got := cap(m.values); got != appendOnlyMinInitialEntries {
+		t.Fatalf("value cap=%d want %d", got, appendOnlyMinInitialEntries)
 	}
 	if got := len(m.values); got != 1 {
 		t.Fatalf("value len=%d want=1", got)
+	}
+}
+
+func TestAppendOnlyDistinctPayloadsGrowValueSideBufferToDenseFloor(t *testing.T) {
+	m := &AppendOnly{
+		entries: make([]appendOnlyEntry, 1024),
+		ordered: true,
+		lastIdx: -1,
+	}
+
+	for i := 0; i <= appendOnlyMinInitialEntries; i++ {
+		m.Set([]byte(fmt.Sprintf("k%03d", i)), []byte(fmt.Sprintf("value-%03d", i)))
+	}
+
+	if got := cap(m.values); got != cap(m.entries) {
+		t.Fatalf("value cap=%d want entry cap=%d", got, cap(m.entries))
+	}
+	if got := len(m.values); got != appendOnlyMinInitialEntries+1 {
+		t.Fatalf("value len=%d want=%d", got, appendOnlyMinInitialEntries+1)
 	}
 }
 
