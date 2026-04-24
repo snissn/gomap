@@ -218,6 +218,9 @@ func appendOnlyGrowthEntriesForHint(baseEntries, entryHint int) int {
 	if n < appendOnlyMinInitialEntries {
 		n = appendOnlyMinInitialEntries
 	}
+	if n > appendOnlyMaxInitialEntries {
+		n = appendOnlyMaxInitialEntries
+	}
 	entryHint = appendOnlyClampRetainedEntries(entryHint)
 	if entryHint <= 0 {
 		return n
@@ -249,6 +252,10 @@ func NewAppendOnlyWithCapacityEstimatedEntryBytes(capacity, estimatedBytesPerEnt
 	return NewAppendOnlyWithCapacityEstimatedEntryBytesAndHint(capacity, estimatedBytesPerEntry, 0)
 }
 
+// NewAppendOnlyWithCapacityEstimatedEntryBytesAndHint creates an append-only
+// memtable using the capacity-derived baseline plus entryHint as the expected
+// upcoming entry count. The hint does not allocate entries immediately; it only
+// influences the next growth jump and bounded reuse after reset.
 func NewAppendOnlyWithCapacityEstimatedEntryBytesAndHint(capacity, estimatedBytesPerEntry, entryHint int) *AppendOnly {
 	baseEntries := appendOnlyInitialEntriesForCapacity(capacity, estimatedBytesPerEntry)
 	growEntries := appendOnlyGrowthEntriesForHint(baseEntries, entryHint)
@@ -1040,6 +1047,10 @@ func (m *AppendOnly) ResetWithCapacity(capacity, estimatedBytesPerEntry int) {
 	m.resetLockedWithPolicy(capacity, estimatedBytesPerEntry, 0, true)
 }
 
+// ResetWithCapacityAndEntryHint resets the memtable like ResetWithCapacity, but
+// also records entryHint as the expected upcoming entry count. The hint is used
+// to influence the next growth jump and the ceiling for retained buffer reuse.
+// It does not cause reset to allocate entries immediately.
 func (m *AppendOnly) ResetWithCapacityAndEntryHint(capacity, estimatedBytesPerEntry, entryHint int) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -1060,6 +1071,10 @@ func (m *AppendOnly) ResetWithCapacityHard(capacity, estimatedBytesPerEntry int)
 	m.resetLockedWithPolicy(capacity, estimatedBytesPerEntry, 0, false)
 }
 
+// ResetWithCapacityHardAndEntryHint resets the memtable like
+// ResetWithCapacityHard, but records entryHint as the expected upcoming entry
+// count for the next growth jump. The hint does not allocate entries during
+// reset and hard reset still drops observed spike retention.
 func (m *AppendOnly) ResetWithCapacityHardAndEntryHint(capacity, estimatedBytesPerEntry, entryHint int) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

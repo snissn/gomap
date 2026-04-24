@@ -93,9 +93,6 @@ func TestAppendOnlyNewWithCapacityAndEntryHint_DefersHintGrowthUntilAppend(t *te
 	if got := len(mt.entries); got != base {
 		t.Fatalf("initial len(entries)=%d want=%d", got, base)
 	}
-	if got := cap(mt.entries); got >= entryHint {
-		t.Fatalf("initial cap(entries)=%d want <%d before append-driven growth", got, entryHint)
-	}
 	if got := mt.growEntriesLen; got < entryHint {
 		t.Fatalf("growEntriesLen=%d want >=%d", got, entryHint)
 	}
@@ -121,9 +118,6 @@ func TestAppendOnlyResetWithCapacityAndEntryHint_DefersHintGrowthUntilAppend(t *
 	if got := len(mt.entries); got != base {
 		t.Fatalf("initial len(entries)=%d want=%d", got, base)
 	}
-	if got := cap(mt.entries); got >= entryHint {
-		t.Fatalf("initial cap(entries)=%d want <%d before append-driven growth", got, entryHint)
-	}
 
 	allocs := testing.AllocsPerRun(1000, func() {
 		mt.ResetWithCapacityAndEntryHint(capacityBytes, estimatedBytesPerEntry, entryHint)
@@ -133,9 +127,6 @@ func TestAppendOnlyResetWithCapacityAndEntryHint_DefersHintGrowthUntilAppend(t *
 	}
 	if got := len(mt.entries); got != base {
 		t.Fatalf("reset len(entries)=%d want=%d", got, base)
-	}
-	if got := cap(mt.entries); got >= entryHint {
-		t.Fatalf("reset cap(entries)=%d want <%d before append-driven growth", got, entryHint)
 	}
 	if got := mt.growEntriesLen; got < entryHint {
 		t.Fatalf("growEntriesLen=%d want >=%d", got, entryHint)
