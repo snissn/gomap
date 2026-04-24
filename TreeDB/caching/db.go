@@ -11646,7 +11646,30 @@ func stableIteratorKey(iter iterator.UnsafeIterator, stableUnsafe bool) []byte {
 	return iter.UnsafeKey()
 }
 
-func deleteHeavyStreamingDeleteOps(units []flushUnit, totalLen int) (int, bool) {
+func stableFlushStreamingSources(units []flushUnit) bool {
+	if len(units) == 0 {
+		return false
+	}
+	for i := range units {
+		if units[i].mem == nil || !stableUnsafeIteratorSlices(units[i].mem) {
+			return false
+		}
+	}
+	return true
+}
+
+func stableFlushStreamingPlan(units []flushUnit, totalLen int) (int, bool) {
+	if !stableFlushStreamingSources(units) {
+		return 0, false
+	}
+	deleteOps, ok := flushStreamingDeleteOps(units, totalLen)
+	if !ok {
+		return 0, false
+	}
+	return deleteOps, true
+}
+
+func flushStreamingDeleteOps(units []flushUnit, totalLen int) (int, bool) {
 	if len(units) == 0 || totalLen <= 0 {
 		return 0, false
 	}
@@ -11665,6 +11688,19 @@ func deleteHeavyStreamingDeleteOps(units []flushUnit, totalLen int) (int, bool) 
 			deleteOps = totalLen
 			break
 		}
+	}
+	// OperationMix may include superseded append-log entries; the cap planner is
+	// bounded by iterator-visible ops.
+	if deleteOps > totalLen {
+		deleteOps = totalLen
+	}
+	return deleteOps, true
+}
+
+func deleteHeavyStreamingDeleteOps(units []flushUnit, totalLen int) (int, bool) {
+	deleteOps, ok := flushStreamingDeleteOps(units, totalLen)
+	if !ok {
+		return 0, false
 	}
 	return deleteOps, deleteOps >= (totalLen+3)/4
 }
@@ -22312,6 +22348,11 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 		if deleteOps, ok := deleteHeavyStreamingDeleteOps(units, totalLen); ok {
 			streamSources = true
 			backendEntriesCap = db.flushBackendEntriesCapForOps(totalLen, deleteOps, sync)
+		} else if deleteOps, ok := stableFlushStreamingPlan(units, totalLen); ok {
+			streamSources = true
+			if deleteOps > 0 {
+				backendEntriesCap = db.flushBackendEntriesCapForOps(totalLen, deleteOps, sync)
+			}
 		}
 
 		var unitRuns [][][]batch.Entry
