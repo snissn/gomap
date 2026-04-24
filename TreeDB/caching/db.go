@@ -7861,16 +7861,17 @@ func (db *DB) newMutableMemtableWithCapacityMode(capacity int, mode memtable.Mod
 	if db != nil && mode == memtable.ModeAppendOnly {
 		estimate := appendOnlyEstimatedBytesPerEntryDefault
 		entryHint := db.appendOnlyEntryHintEntries()
+		resetCapacity := db.appendOnlyMemtableCapacityHint(capacity, estimate)
 		if mt := db.popAppendOnlyMemLease(); mt != nil {
 			db.appendOnlyMemLeaseHitTotal.Add(1)
-			mt.ResetWithCapacityAndEntryHint(capacity, estimate, entryHint)
+			mt.ResetWithCapacityAndEntryHint(resetCapacity, estimate, entryHint)
 			db.setAppendOnlyPredictiveGrowthHint(mt, capacity)
 			return mt, nil
 		}
 		if v := db.appendOnlyMemPool.Get(); v != nil {
 			if mt, ok := v.(*memtable.AppendOnly); ok && mt != nil {
 				db.appendOnlyMemPoolHitTotal.Add(1)
-				mt.ResetWithCapacityAndEntryHint(capacity, estimate, entryHint)
+				mt.ResetWithCapacityAndEntryHint(resetCapacity, estimate, entryHint)
 				db.setAppendOnlyPredictiveGrowthHint(mt, capacity)
 				return mt, nil
 			}
@@ -7882,7 +7883,7 @@ func (db *DB) newMutableMemtableWithCapacityMode(capacity int, mode memtable.Mod
 			db.appendOnlyMemNewAllocQueueBytes.Add(uint64(backlog))
 		}
 		db.appendOnlyMemNewAllocTotal.Add(1)
-		mt := memtable.NewAppendOnlyWithCapacityEstimatedEntryBytesAndHint(capacity, estimate, entryHint)
+		mt := memtable.NewAppendOnlyWithCapacityEstimatedEntryBytesAndHint(resetCapacity, estimate, entryHint)
 		db.setAppendOnlyPredictiveGrowthHint(mt, capacity)
 		return mt, nil
 	}
