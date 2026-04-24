@@ -17,6 +17,64 @@ func batchArenaChunkPtr(buf []byte) unsafe.Pointer {
 	return unsafe.Pointer(unsafe.SliceData(buf[:1]))
 }
 
+func batchSlicePtr(buf []byte) unsafe.Pointer {
+	if len(buf) == 0 {
+		return nil
+	}
+	return unsafe.Pointer(unsafe.SliceData(buf))
+}
+
+func TestBatchSetDedupesRepeatedCopiedValues(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(dir, NewMockBackend(), Options{
+		AllowUnsafe:    true,
+		DisableWAL:     true,
+		MemtableMode:   "btree",
+		MemtableShards: 1,
+		FlushThreshold: 1 << 30,
+	})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+
+	value := bytes.Repeat([]byte{0x11}, 128)
+	sameValue := bytes.Clone(value)
+	otherValue := bytes.Repeat([]byte{0x22}, 128)
+
+	b := db.NewBatchWithSize(3)
+	defer func() { _ = b.Close() }()
+	if err := b.Set([]byte("a"), value); err != nil {
+		t.Fatalf("set a: %v", err)
+	}
+	value[0] = 0xff
+	if err := b.Set([]byte("b"), sameValue); err != nil {
+		t.Fatalf("set b: %v", err)
+	}
+	if err := b.Set([]byte("c"), otherValue); err != nil {
+		t.Fatalf("set c: %v", err)
+	}
+
+	if got, want := len(b.entries), 3; got != want {
+		t.Fatalf("entries=%d want=%d", got, want)
+	}
+	if !bytes.Equal(b.entries[0].Value, sameValue) || !bytes.Equal(b.entries[1].Value, sameValue) {
+		t.Fatalf("deduped values changed: got %x and %x want %x", b.entries[0].Value, b.entries[1].Value, sameValue)
+	}
+	if batchSlicePtr(b.entries[0].Value) != batchSlicePtr(b.entries[1].Value) {
+		t.Fatal("repeated copied values do not share the batch-owned value slice")
+	}
+	if batchSlicePtr(b.entries[0].Key) == batchSlicePtr(b.entries[1].Key) {
+		t.Fatal("distinct keys unexpectedly share storage")
+	}
+	if batchSlicePtr(b.entries[1].Value) == batchSlicePtr(b.entries[2].Value) {
+		t.Fatal("different values unexpectedly share storage")
+	}
+	if got, want := b.copyBytes, len("a")+len(sameValue)+len("b")+len("c")+len(otherValue); got != want {
+		t.Fatalf("copyBytes=%d want=%d", got, want)
+	}
+}
+
 func TestBatchReset_DoesNotCorruptPriorBorrowedWrites(t *testing.T) {
 	for _, mode := range []string{"append_only", "hash_sorted"} {
 		t.Run(mode, func(t *testing.T) {

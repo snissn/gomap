@@ -27051,6 +27051,7 @@ type Batch struct {
 	ptrCopyArena       []byte
 	ptrCopyArenaChunks [][]byte
 	ptrCopyBytes       int
+	lastCopiedValue    []byte
 	arenaInFlightBytes int64
 	ptrValueIdxs       []int
 	walBuf             []logRecord
@@ -27549,6 +27550,7 @@ func (b *Batch) Reset() {
 	b.hasViewOps = false
 	b.firstKey = nil
 	b.lastKey = nil
+	b.lastCopiedValue = nil
 	b.batchRange = keyRange{}
 	b.maxEntries = 0
 	if b.ptrValueIdxs != nil {
@@ -27592,6 +27594,7 @@ func (b *Batch) drainCopyArenaChunks() [][]byte {
 	b.copyArenaChunks = nil
 	b.copyArena = nil
 	b.copyBytes = 0
+	b.lastCopiedValue = nil
 	return chunks
 }
 
@@ -27648,6 +27651,7 @@ func (b *Batch) retainCopyArenaChunkOnReset() bool {
 	b.copyArenaChunks = b.copyArenaChunks[:1]
 	b.copyArena = retained
 	b.copyBytes = 0
+	b.lastCopiedValue = nil
 	return true
 }
 
@@ -27679,6 +27683,7 @@ func (b *Batch) reclaimOwnedCopyArenaChunks(chunks [][]byte) {
 	b.copyArena = retained
 	b.copyArenaChunks = chunks[:1]
 	b.copyBytes = 0
+	b.lastCopiedValue = nil
 	b.addArenaInFlightBytes(cap(retained))
 }
 
@@ -27817,8 +27822,12 @@ func (b *Batch) cloneValue(value []byte) []byte {
 	if len(value) > 0 {
 		batchArenaCopyValueBytesTotal.Add(uint64(len(value)))
 	}
+	if val, ok := b.reuseLastCopiedValue(value); ok {
+		return val
+	}
 	dst := b.arenaCopy(len(value))
 	copy(dst, value)
+	b.rememberLastCopiedValue(dst)
 	return dst
 }
 
@@ -27827,12 +27836,46 @@ func (b *Batch) cloneKeyValue(key, value []byte) ([]byte, []byte) {
 	if n := len(key) + len(value); n > 0 {
 		batchArenaCopyKeyValueBytesTotal.Add(uint64(n))
 	}
+	if valCopy, ok := b.reuseLastCopiedValue(value); ok {
+		keyCopy := b.arenaCopy(len(key))
+		copy(keyCopy, key)
+		return keyCopy, valCopy
+	}
 	buf := b.arenaCopy(len(key) + len(value))
 	keyCopy := buf[:len(key):len(key)]
 	copy(keyCopy, key)
 	valCopy := buf[len(key):]
 	copy(valCopy, value)
+	b.rememberLastCopiedValue(valCopy)
 	return keyCopy, valCopy
+}
+
+func (b *Batch) reuseLastCopiedValue(value []byte) ([]byte, bool) {
+	if b == nil || len(value) == 0 || len(value) > batchCopyValueDedupeMax {
+		return nil, false
+	}
+	last := b.lastCopiedValue
+	if len(last) != len(value) {
+		return nil, false
+	}
+	if len(value) > 1 && (last[0] != value[0] || last[len(last)-1] != value[len(value)-1]) {
+		return nil, false
+	}
+	if !bytes.Equal(last, value) {
+		return nil, false
+	}
+	return last, true
+}
+
+func (b *Batch) rememberLastCopiedValue(value []byte) {
+	if b == nil {
+		return
+	}
+	if len(value) == 0 || len(value) > batchCopyValueDedupeMax {
+		b.lastCopiedValue = nil
+		return
+	}
+	b.lastCopiedValue = value
 }
 
 func (b *Batch) clonePtrValue(value []byte) []byte {
@@ -27913,6 +27956,9 @@ func (b *Batch) releaseCompactedBatchArenaTail(kind batchArenaKind, chunks *[][]
 	if b.db != nil {
 		b.db.noteBatchArenaChunkFinalize(kind, used, classCap)
 		b.db.noteBatchArenaTailCompact(copiedBytes, classCap)
+	}
+	if kind == batchArenaKindMain {
+		b.lastCopiedValue = nil
 	}
 	*arena = nil
 }
@@ -28282,6 +28328,7 @@ const (
 	batchCopyArenaUnsizedInit   = 8 << 10
 	batchCopyArenaBytesPerEntry = 192
 	batchCopyArenaInitMax       = 2 << 20
+	batchCopyValueDedupeMax     = 1 << 20
 	// Keep retained batch-copy chunks bounded to 1MiB. Larger chunks are often
 	// underfilled in restore-heavy traffic and can disproportionately inflate
 	// peak RSS when multiple memtable views pin retired arenas.
@@ -29983,6 +30030,7 @@ func (b *Batch) Close() error {
 	b.ptrTouchedMems = nil
 	b.firstKey = nil
 	b.lastKey = nil
+	b.lastCopiedValue = nil
 	b.ptrValueIdxs = nil
 	return nil
 }
