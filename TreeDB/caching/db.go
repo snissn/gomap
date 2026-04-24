@@ -29311,7 +29311,20 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 			storeInlinePtrValues := !b.db.memtableValueLogPointers
 			firstKey := b.entries[idxs[0]].Key
 			lastKey := b.entries[idxs[len(idxs)-1]].Key
-			if useStream && useSteal {
+			handledCopyStream := false
+			if useStream && !useSteal {
+				if applier, ok := shard.mem.(memtable.TrustedSortedBatchCopyIndexApplier); ok {
+					applier.ApplyCopySortedBatchIndicesTrusted(b.entries, idxs, storeInlinePtrValues, nil)
+					shard.rng.add(firstKey)
+					if len(idxs) > 1 {
+						shard.rng.add(lastKey)
+					}
+					handledCopyStream = true
+				}
+			}
+			if handledCopyStream {
+				// Applied by a copy-owning sorted index fast path above.
+			} else if useStream && useSteal {
 				if applier, ok := shard.mem.(memtable.TrustedSortedBatchIndexApplier); ok {
 					applier.ApplyStealSortedBatchIndicesTrusted(b.entries, idxs, nil)
 				} else {

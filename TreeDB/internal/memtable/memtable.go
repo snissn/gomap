@@ -144,6 +144,12 @@ type TrustedSortedBatchApplier interface {
 	ApplyStealSortedBatchTrusted(entries []batchpkg.Entry, onKey func(key []byte))
 }
 
+// TrustedSortedBatchCopyIndexApplier consumes a sorted index list into a shared
+// batch entry slice while copying key/value bytes into memtable-owned storage.
+type TrustedSortedBatchCopyIndexApplier interface {
+	ApplyCopySortedBatchIndicesTrusted(entries []batchpkg.Entry, idxs []int, storeInlinePtrValues bool, onKey func(key []byte))
+}
+
 // TrustedSortedBatchBorrowValueApplier is an optional fast path for callers
 // that already guarantee strictly increasing keys and immutable borrowed value
 // slices.
