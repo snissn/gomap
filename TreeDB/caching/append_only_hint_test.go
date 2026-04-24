@@ -81,6 +81,32 @@ func TestTrimAppendOnlyMemLeasesIgnoresStaleEntryHint(t *testing.T) {
 	}
 }
 
+func TestNewAppendOnlyMutableUsesLearnedEntryHintCapacity(t *testing.T) {
+	db := &DB{backend: NewMockBackend()}
+	const (
+		requestedCap = 4 << 20
+		hintEntries  = 4096
+	)
+	db.appendOnlyEntryHint.Store(hintEntries)
+
+	raw, err := db.newMutableMemtableWithCapacityMode(requestedCap, memtable.ModeAppendOnly)
+	if err != nil {
+		t.Fatalf("newMutableMemtableWithCapacityMode: %v", err)
+	}
+	mt, ok := raw.(*memtable.AppendOnly)
+	if !ok {
+		t.Fatalf("expected append-only memtable, got %T", raw)
+	}
+
+	if got := appendOnlyEntriesLenForTest(mt); got != hintEntries {
+		t.Fatalf("entry len=%d want learned hint=%d", got, hintEntries)
+	}
+}
+
+func appendOnlyEntriesLenForTest(mt *memtable.AppendOnly) int {
+	return reflect.ValueOf(mt).Elem().FieldByName("entries").Len()
+}
+
 func appendOnlyEntriesCapForTest(mt *memtable.AppendOnly) int {
 	return reflect.ValueOf(mt).Elem().FieldByName("entries").Cap()
 }
