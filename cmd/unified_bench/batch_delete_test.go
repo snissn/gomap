@@ -2,10 +2,24 @@ package main
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/snissn/gomap/kvstore"
 )
+
+func registerHiddenDBForTest(t *testing.T, name string, factory DBFactory) {
+	t.Helper()
+	prev, hadPrev := dbFactories[name]
+	RegisterHiddenDB(name, factory)
+	t.Cleanup(func() {
+		if hadPrev {
+			dbFactories[name] = prev
+			return
+		}
+		delete(dbFactories, name)
+	})
+}
 
 type batchDeleteFastPathDB struct {
 	newBatchCalls         int
@@ -142,10 +156,21 @@ func (b *batchDeleteErrorBatch) Close() error {
 	return nil
 }
 
+type batchDeleteNilBatchDB struct{}
+
+func (d *batchDeleteNilBatchDB) Name() string                   { return "BatchDeleteNilBatch" }
+func (d *batchDeleteNilBatchDB) Close() error                   { return nil }
+func (d *batchDeleteNilBatchDB) Get(key []byte) ([]byte, error) { return nil, nil }
+func (d *batchDeleteNilBatchDB) Delete(key []byte) error        { return nil }
+func (d *batchDeleteNilBatchDB) Set(key, value []byte) error    { return nil }
+func (d *batchDeleteNilBatchDB) NewBatch() (kvstore.Batch, error) {
+	return nil, nil
+}
+
 func TestRunBenchmark_BatchDelete_ReusesResettableDeleteViewBatch(t *testing.T) {
 	const dbName = "batch_delete_fast_path_mock"
 	var db *batchDeleteFastPathDB
-	RegisterHiddenDB(dbName, func(_ string) (kvstore.DB, error) {
+	registerHiddenDBForTest(t, dbName, func(_ string) (kvstore.DB, error) {
 		db = &batchDeleteFastPathDB{}
 		return db, nil
 	})
@@ -207,7 +232,7 @@ func TestRunBenchmark_BatchDelete_ReusesResettableDeleteViewBatch(t *testing.T) 
 func TestRunBenchmark_BatchDelete_ClosesOnceOnDeleteError(t *testing.T) {
 	const dbName = "batch_delete_error_mock"
 	var db *batchDeleteErrorDB
-	RegisterHiddenDB(dbName, func(_ string) (kvstore.DB, error) {
+	registerHiddenDBForTest(t, dbName, func(_ string) (kvstore.DB, error) {
 		db = &batchDeleteErrorDB{}
 		return db, nil
 	})
@@ -241,7 +266,7 @@ func TestRunBenchmark_BatchDelete_ClosesOnceOnDeleteError(t *testing.T) {
 func TestRunBenchmark_BatchDelete_FallsBackWithoutDeleteViewOrReset(t *testing.T) {
 	const dbName = "batch_delete_fallback_mock"
 	var db *batchDeleteFallbackDB
-	RegisterHiddenDB(dbName, func(_ string) (kvstore.DB, error) {
+	registerHiddenDBForTest(t, dbName, func(_ string) (kvstore.DB, error) {
 		db = &batchDeleteFallbackDB{}
 		return db, nil
 	})
@@ -289,5 +314,31 @@ func TestRunBenchmark_BatchDelete_FallsBackWithoutDeleteViewOrReset(t *testing.T
 		if got, want := b.closeCalls, 1; got != want {
 			t.Fatalf("batch %d Close calls=%d want=%d", i, got, want)
 		}
+	}
+}
+
+func TestRunBenchmark_BatchDelete_NilBatchReturnsError(t *testing.T) {
+	const dbName = "batch_delete_nil_batch_mock"
+	registerHiddenDBForTest(t, dbName, func(_ string) (kvstore.DB, error) {
+		return &batchDeleteNilBatchDB{}, nil
+	})
+
+	_, err := runBenchmark(BenchConfig{
+		Keys:         1,
+		ValueSize:    16,
+		BatchSize:    1,
+		RangeQueries: 0,
+		RangeSpan:    0,
+		DBsArg:       dbName,
+		TestsArg:     "batch_delete",
+		KeepDir:      false,
+		Progress:     false,
+		SeedUsed:     1,
+	})
+	if err == nil {
+		t.Fatal("expected nil batch error")
+	}
+	if !strings.Contains(err.Error(), "new batch returned nil") {
+		t.Fatalf("error=%q want nil batch message", err)
 	}
 }

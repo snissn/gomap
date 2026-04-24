@@ -2636,6 +2636,9 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				if err != nil {
 					return err
 				}
+				if batch == nil {
+					return fmt.Errorf("batch_delete: new batch returned nil")
+				}
 				deleteOp = batch.Delete
 				if dv, ok := batch.(batchDeleteView); ok {
 					deleteOp = dv.DeleteView
