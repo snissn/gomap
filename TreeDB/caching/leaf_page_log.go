@@ -41,8 +41,8 @@ func (db *DB) appendLeafPageValueLog(l *lane, rid uint64, leafPage []byte) (page
 	default:
 	}
 
-	selectorStart := time.Now()
 	l.vlogMu.Lock()
+	selectorStart := time.Now()
 	w := l.vlog
 	if w == nil {
 		l.vlogMu.Unlock()

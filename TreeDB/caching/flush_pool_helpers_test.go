@@ -129,6 +129,7 @@ func (b *pointerBatch) Close() error {
 
 func (b *pointerBatch) Reset() {
 	b.resetCalls++
+	clear(b.entries)
 	b.entries = b.entries[:0]
 }
 

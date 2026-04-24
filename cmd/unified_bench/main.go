@@ -111,6 +111,22 @@ type DBInstance struct {
 	Dir     string
 }
 
+type batcherWithSize interface {
+	NewBatchWithSize(size int) (kvstore.Batch, error)
+}
+
+type batchSetView interface {
+	SetView(key, value []byte) error
+}
+
+type batchDeleteView interface {
+	DeleteView(key []byte) error
+}
+
+type resettableBatch interface {
+	Reset()
+}
+
 type BenchConfig struct {
 	Keys          int
 	KeyShape      string
@@ -2014,15 +2030,6 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			}
 			return batchKeyBytes[:need]
 		}
-		type batcherWithSize interface {
-			NewBatchWithSize(size int) (kvstore.Batch, error)
-		}
-		type batchSetView interface {
-			SetView(key, value []byte) error
-		}
-		type resettableBatch interface {
-			Reset()
-		}
 		var (
 			batch      kvstore.Batch
 			setView    func(key, value []byte) error
@@ -2640,15 +2647,6 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			start := time.Now()
 			pc := newPeriodicCheckpoint(cfg)
 			perOpBytes := int64(8)
-			type batcherWithSize interface {
-				NewBatchWithSize(size int) (kvstore.Batch, error)
-			}
-			type batchDeleteView interface {
-				DeleteView(key []byte) error
-			}
-			type resettableBatch interface {
-				Reset()
-			}
 			var (
 				batch      kvstore.Batch
 				deleteView func(key []byte) error
@@ -2769,15 +2767,6 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 					batchKeyBytes = make([]byte, need)
 				}
 				return batchKeyBytes[:need]
-			}
-			type batcherWithSize interface {
-				NewBatchWithSize(size int) (kvstore.Batch, error)
-			}
-			type batchSetView interface {
-				SetView(key, value []byte) error
-			}
-			type resettableBatch interface {
-				Reset()
 			}
 			var (
 				batch      kvstore.Batch
