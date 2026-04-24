@@ -13,7 +13,13 @@ type cachingLeafPageLog struct {
 	lane *lane
 }
 
-var compactLeafPayloadScratchPool sync.Pool
+const compactLeafPayloadScratchMaxCap = page.PageSize
+
+var compactLeafPayloadScratchPool = sync.Pool{
+	New: func() any {
+		return make([]byte, 0)
+	},
+}
 
 var _ backenddb.LeafPageLog = (*cachingLeafPageLog)(nil)
 
@@ -34,27 +40,17 @@ func (l *cachingLeafPageLog) AppendLeafPage(leafPage []byte) (page.LeafLogPtr, e
 	if l == nil || l.db == nil || l.lane == nil {
 		return page.LeafLogPtr{}, errWALUnavailable
 	}
-	scratch := compactLeafPayloadScratchPool.Get()
-	var payloadScratch []byte
-	if b, ok := scratch.([]byte); ok {
-		payloadScratch = b[:0]
-	}
+	payloadScratch := getCompactLeafPayloadScratch()
 	encodedLeafPage, compacted, err := valuelog.MaybeCompactLeafLogPayloadTo(payloadScratch, leafPage)
 	if err != nil {
-		if payloadScratch != nil {
-			compactLeafPayloadScratchPool.Put(payloadScratch[:0])
-		}
+		releaseCompactLeafPayloadScratch(payloadScratch, nil, false)
 		return page.LeafLogPtr{}, err
 	}
-	releaseScratch := payloadScratch
-	if compacted {
-		releaseScratch = encodedLeafPage
-	}
 	rid := l.db.nextRID.Add(1)
+	// appendValueLogOneInternal writes/copies value before returning; release the
+	// pooled scratch only after that synchronous append completes.
 	ptr, retainPath, err := l.db.appendValueLogOneInternal(l.lane, 0, nil, rid, encodedLeafPage, journalDurabilityNone, false)
-	if releaseScratch != nil {
-		compactLeafPayloadScratchPool.Put(releaseScratch[:0])
-	}
+	releaseCompactLeafPayloadScratch(payloadScratch, encodedLeafPage, compacted)
 	if retainPath != "" {
 		l.db.markValueLogRetain(retainPath)
 	}
@@ -67,6 +63,40 @@ func (l *cachingLeafPageLog) AppendLeafPage(leafPage []byte) (page.LeafLogPtr, e
 	}
 	l.db.noteLeafGenerationRecordLength(ptr)
 	return leafPtr, nil
+}
+
+func getCompactLeafPayloadScratch() []byte {
+	scratch := compactLeafPayloadScratchPool.Get()
+	if b, ok := scratch.([]byte); ok {
+		return b[:0]
+	}
+	if scratch != nil {
+		compactLeafPayloadScratchPool.Put(scratch)
+	}
+	return nil
+}
+
+func releaseCompactLeafPayloadScratch(payloadScratch, encodedLeafPage []byte, compacted bool) {
+	putCompactLeafPayloadScratch(payloadScratch)
+	if compacted && encodedLeafPage != nil && !sameSliceBacking(payloadScratch, encodedLeafPage) {
+		putCompactLeafPayloadScratch(encodedLeafPage)
+	}
+}
+
+func putCompactLeafPayloadScratch(buf []byte) {
+	if buf == nil || cap(buf) == 0 || cap(buf) > compactLeafPayloadScratchMaxCap {
+		return
+	}
+	compactLeafPayloadScratchPool.Put(buf[:0])
+}
+
+func sameSliceBacking(a, b []byte) bool {
+	if cap(a) == 0 || cap(b) == 0 {
+		return false
+	}
+	aFull := a[:cap(a)]
+	bFull := b[:cap(b)]
+	return &aFull[0] == &bFull[0]
 }
 
 func (l *cachingLeafPageLog) Flush() error {

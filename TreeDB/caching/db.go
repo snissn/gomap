@@ -7363,6 +7363,8 @@ func appendUniqueTouchedMem(dst []memtable.Table, mt memtable.Table) []memtable.
 	if mt == nil {
 		return dst
 	}
+	// The touched set is bounded by mutable shard count in this write path, so a
+	// short slice scan avoids adding a per-batch map to the hot path.
 	for i := range dst {
 		if dst[i] == mt {
 			return dst
@@ -27746,6 +27748,9 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 	if allowBatchArenaBorrow && len(b.ptrValueIdxs) > 0 {
 		for _, idx := range b.ptrValueIdxs {
 			if idx < 0 || idx >= len(b.entries) || idx >= len(shardIdxs) {
+				b.retainMainMems = retainMainMems
+				b.ptrTouchedMems = ptrTouchedMems
+				b.clearRetainedMemtableSlices()
 				b.db.writeMu.RUnlock()
 				return fmt.Errorf("cachingdb: ptr value entry index %d out of range", idx)
 			}
@@ -27755,6 +27760,9 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 			retainPtrArena = true
 			shardIdx := shardIdxs[idx]
 			if shardIdx < 0 || shardIdx >= len(b.db.mutableShards) {
+				b.retainMainMems = retainMainMems
+				b.ptrTouchedMems = ptrTouchedMems
+				b.clearRetainedMemtableSlices()
 				b.db.writeMu.RUnlock()
 				return fmt.Errorf("cachingdb: ptr value shard index %d out of range for entry %d", shardIdx, idx)
 			}
