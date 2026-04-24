@@ -40,6 +40,33 @@ func TestAppendOnlyResetWithCapacity_ShrinksEntriesAfterSpike(t *testing.T) {
 	}
 }
 
+func TestAppendOnlyResetWithCapacityHardDropsSideBuffers(t *testing.T) {
+	const (
+		capacityBytes          = 4 << 10
+		estimatedBytesPerEntry = 96
+	)
+
+	mt := NewAppendOnlyWithCapacityEstimatedEntryBytes(capacityBytes, estimatedBytesPerEntry)
+	for i := 0; i < appendOnlyResetDropThresholdEntries; i++ {
+		key := []byte(fmt.Sprintf("long-key-%08d", i))
+		mt.SetEntrySteal(key, []byte("value"), page.ValuePtr{}, node.FlagInline)
+	}
+	if cap(mt.keys) == 0 {
+		t.Fatalf("test did not populate key side buffer")
+	}
+	if cap(mt.payloads) == 0 {
+		t.Fatalf("test did not populate payload side buffer")
+	}
+
+	mt.ResetWithCapacityHard(capacityBytes, estimatedBytesPerEntry)
+	if got := cap(mt.keys); got != 0 {
+		t.Fatalf("cap(keys) after hard reset=%d want=0", got)
+	}
+	if got := cap(mt.payloads); got != 0 {
+		t.Fatalf("cap(payloads) after hard reset=%d want=0", got)
+	}
+}
+
 func TestAppendOnlyResetWithCapacity_RetainsObservedEntriesWithinBound(t *testing.T) {
 	const (
 		capacityBytes          = 4 << 10

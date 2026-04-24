@@ -24,9 +24,12 @@ const (
 	appendOnlyMaxInitialEntries             = 1 << 20
 	appendOnlyInlineKeyLen                  = 8
 	appendOnlyEntryPoolMaxCap               = 1 << 20
+	appendOnlyKeyPoolMaxCap                 = 1 << 20
+	appendOnlyPayloadPoolMaxCap             = 1 << 20
 	appendOnlyIteratorPoolMaxCap            = 1 << 20
+	appendOnlyIteratorKeyPoolMaxCap         = 1 << 20
+	appendOnlyIteratorPayloadPoolMaxCap     = 1 << 20
 	appendOnlyIteratorPtrPoolMaxCap         = 1 << 20
-	appendOnlyReusableKeyMaxCap             = 1 << 10
 	appendOnlyValueArenaMinShift            = 12
 	appendOnlyValueArenaMaxShift            = 20
 	appendOnlyValueArenaClassCount          = appendOnlyValueArenaMaxShift - appendOnlyValueArenaMinShift + 1
@@ -41,18 +44,35 @@ const (
 )
 
 var appendOnlyEntryPool sync.Pool
+var appendOnlyKeyPool sync.Pool
+var appendOnlyPayloadPool sync.Pool
 var appendOnlyIteratorPool sync.Pool
+var appendOnlyIteratorKeyPool sync.Pool
+var appendOnlyIteratorPayloadPool sync.Pool
 var appendOnlyIteratorPtrPool sync.Pool
 var appendOnlyValueArenaPools [appendOnlyValueArenaClassCount]sync.Pool
 
+type appendOnlyPayload struct {
+	value string
+	ptr   page.ValuePtr
+}
 type appendOnlyEntry struct {
-	key        []byte
-	value      []byte
-	ptr        page.ValuePtr
-	inlineKey  [appendOnlyInlineKeyLen]byte
-	flags      byte
-	keyInline  bool
-	valueOwned bool
+	inlineKey    [appendOnlyInlineKeyLen]byte
+	keyIndex     uint32
+	payloadIndex uint32
+	inlineKeyLen uint8
+	flags        byte
+}
+
+type appendOnlyInlineMapKey struct {
+	key    [appendOnlyInlineKeyLen]byte
+	length uint8
+}
+
+type appendOnlyIteratorKeyRef struct {
+	idx    int
+	offset int
+	length int
 }
 
 type appendOnlyValueArena struct {
@@ -67,9 +87,12 @@ type AppendOnly struct {
 	mu sync.RWMutex
 
 	entries        []appendOnlyEntry
+	keys           []string
+	payloads       []appendOnlyPayload
 	baseEntriesLen int
 	growEntriesLen int
 	latest         map[string]int
+	latestInline   map[appendOnlyInlineMapKey]int
 	latest64       map[uint64]int
 	snapshot       []*appendOnlyEntry
 	indexBuf       []int
@@ -146,6 +169,64 @@ func putAppendOnlyEntries(entries []appendOnlyEntry) {
 	appendOnlyEntryPool.Put(full[:0])
 }
 
+func getAppendOnlySliceFromPool[T any](length int, pool *sync.Pool, maxCap, defaultMaxCap int) []T {
+	if length < 0 {
+		length = 0
+	}
+	if maxCap <= 0 {
+		maxCap = defaultMaxCap
+	}
+	if length > maxCap {
+		return make([]T, length)
+	}
+	if pool == nil {
+		return make([]T, length)
+	}
+	if v := pool.Get(); v != nil {
+		if items, ok := v.([]T); ok && cap(items) >= length {
+			if cap(items) <= appendOnlyMaxReuseEntries(length) {
+				out := items[:length]
+				clear(out)
+				return out
+			}
+		}
+	}
+	return make([]T, length)
+}
+
+func putAppendOnlySliceToPool[T any](items []T, pool *sync.Pool, maxCap int) {
+	if items == nil || cap(items) == 0 || cap(items) > maxCap {
+		return
+	}
+	full := items[:cap(items)]
+	clear(full)
+	pool.Put(full[:0])
+}
+
+func getAppendOnlyKeysFromPool(length int, pool *sync.Pool, maxCap int) []string {
+	return getAppendOnlySliceFromPool[string](length, pool, maxCap, appendOnlyKeyPoolMaxCap)
+}
+
+func getAppendOnlyKeys(length int) []string {
+	return getAppendOnlyKeysFromPool(length, &appendOnlyKeyPool, appendOnlyKeyPoolMaxCap)
+}
+
+func putAppendOnlyKeys(keys []string) {
+	putAppendOnlySliceToPool(keys, &appendOnlyKeyPool, appendOnlyKeyPoolMaxCap)
+}
+
+func getAppendOnlyPayloadsFromPool(length int, pool *sync.Pool, maxCap int) []appendOnlyPayload {
+	return getAppendOnlySliceFromPool[appendOnlyPayload](length, pool, maxCap, appendOnlyPayloadPoolMaxCap)
+}
+
+func getAppendOnlyPayloads(length int) []appendOnlyPayload {
+	return getAppendOnlyPayloadsFromPool(length, &appendOnlyPayloadPool, appendOnlyPayloadPoolMaxCap)
+}
+
+func putAppendOnlyPayloads(payloads []appendOnlyPayload) {
+	putAppendOnlySliceToPool(payloads, &appendOnlyPayloadPool, appendOnlyPayloadPoolMaxCap)
+}
+
 func getAppendOnlyIteratorEntries(length int) []appendOnlyEntry {
 	if length < 0 {
 		length = 0
@@ -169,6 +250,22 @@ func putAppendOnlyIteratorEntries(entries []appendOnlyEntry) {
 	}
 	clear(entries)
 	appendOnlyIteratorPool.Put(entries[:0])
+}
+
+func getAppendOnlyIteratorKeys(length int) []string {
+	return getAppendOnlyKeysFromPool(length, &appendOnlyIteratorKeyPool, appendOnlyIteratorKeyPoolMaxCap)
+}
+
+func putAppendOnlyIteratorKeys(keys []string) {
+	putAppendOnlySliceToPool(keys, &appendOnlyIteratorKeyPool, appendOnlyIteratorKeyPoolMaxCap)
+}
+
+func getAppendOnlyIteratorPayloads(length int) []appendOnlyPayload {
+	return getAppendOnlyPayloadsFromPool(length, &appendOnlyIteratorPayloadPool, appendOnlyIteratorPayloadPoolMaxCap)
+}
+
+func putAppendOnlyIteratorPayloads(payloads []appendOnlyPayload) {
+	putAppendOnlySliceToPool(payloads, &appendOnlyIteratorPayloadPool, appendOnlyIteratorPayloadPoolMaxCap)
 }
 
 func getAppendOnlyIteratorPtrs(length int) []*appendOnlyEntry {
@@ -295,14 +392,36 @@ func (m *AppendOnly) SetPredictiveGrowthHint(capacityHintBytes int, entryHintSou
 	m.observeEntries = observeEntries
 }
 
-func appendOnlyEntryKey(ent *appendOnlyEntry) []byte {
+func appendOnlyEntryKeyFromKeys(ent *appendOnlyEntry, keys []string) []byte {
 	if ent == nil {
 		return nil
 	}
-	if ent.keyInline {
-		return ent.inlineKey[:]
+	if ent.keyIndex == 0 {
+		return ent.inlineKey[:int(ent.inlineKeyLen)]
 	}
-	return ent.key
+	idx := int(ent.keyIndex - 1)
+	if idx < 0 || idx >= len(keys) {
+		return nil
+	}
+	key := keys[idx]
+	if len(key) == 0 {
+		return nil
+	}
+	return unsafe.Slice(unsafe.StringData(key), len(key))
+}
+
+func appendOnlyPayloadValue(payload *appendOnlyPayload) []byte {
+	if payload == nil || len(payload.value) == 0 {
+		return nil
+	}
+	return unsafe.Slice(unsafe.StringData(payload.value), len(payload.value))
+}
+
+func appendOnlyStringFromBytes(src []byte) string {
+	if len(src) == 0 {
+		return ""
+	}
+	return unsafe.String(&src[0], len(src))
 }
 
 func cloneBytes(src []byte) []byte {
@@ -314,21 +433,42 @@ func cloneBytes(src []byte) []byte {
 	return dst
 }
 
-func cloneOrReuseBytes(dst, src []byte, maxCap int) []byte {
+func appendOnlyArenaStringCopy(arena *appendOnlyValueArena, src []byte) string {
 	if len(src) == 0 {
+		return ""
+	}
+	buf := arena.alloc(len(src))
+	copy(buf, src)
+	return appendOnlyStringFromBytes(buf)
+}
+
+func (m *AppendOnly) appendOnlyEntryKey(ent *appendOnlyEntry) []byte {
+	if m == nil {
+		return appendOnlyEntryKeyFromKeys(ent, nil)
+	}
+	return appendOnlyEntryKeyFromKeys(ent, m.keys)
+}
+
+func (m *AppendOnly) appendOnlyPayload(ent *appendOnlyEntry) *appendOnlyPayload {
+	if m == nil || ent == nil || ent.payloadIndex == 0 {
 		return nil
 	}
-	if maxCap <= 0 {
-		maxCap = len(src)
+	idx := int(ent.payloadIndex - 1)
+	if idx < 0 || idx >= len(m.payloads) {
+		return nil
 	}
-	if cap(dst) >= len(src) && cap(dst) <= maxCap {
-		out := dst[:len(src)]
-		copy(out, src)
-		return out
+	return &m.payloads[idx]
+}
+
+func (m *AppendOnly) appendOnlyEntryValue(ent *appendOnlyEntry) []byte {
+	return appendOnlyPayloadValue(m.appendOnlyPayload(ent))
+}
+
+func (m *AppendOnly) appendOnlyEntryPtr(ent *appendOnlyEntry) page.ValuePtr {
+	if payload := m.appendOnlyPayload(ent); payload != nil {
+		return payload.ptr
 	}
-	out := make([]byte, len(src))
-	copy(out, src)
-	return out
+	return page.ValuePtr{}
 }
 
 func appendOnlyValueArenaClassForLen(length int) (idx int, classCap int, ok bool) {
@@ -492,11 +632,52 @@ func appendOnlyNextCapacity(current int) int {
 	return next
 }
 
-func appendOnlyKeyString(key []byte) string {
+func appendOnlyLookupKeyString(key []byte) string {
 	if len(key) == 0 {
 		return ""
 	}
-	return unsafe.String(&key[0], len(key))
+	return unsafe.String(unsafe.SliceData(key), len(key))
+}
+
+func appendOnlyInlineMapKeyFromBytes(key []byte) (appendOnlyInlineMapKey, bool) {
+	if len(key) > appendOnlyInlineKeyLen {
+		return appendOnlyInlineMapKey{}, false
+	}
+	var mapKey appendOnlyInlineMapKey
+	mapKey.length = uint8(len(key))
+	copy(mapKey.key[:], key)
+	return mapKey, true
+}
+
+func appendOnlyInlineMapKeyFromEntry(ent *appendOnlyEntry) (appendOnlyInlineMapKey, bool) {
+	if ent == nil || ent.keyIndex != 0 {
+		return appendOnlyInlineMapKey{}, false
+	}
+	inlineLen := int(ent.inlineKeyLen)
+	if inlineLen < 0 || inlineLen > appendOnlyInlineKeyLen {
+		return appendOnlyInlineMapKey{}, false
+	}
+	var mapKey appendOnlyInlineMapKey
+	mapKey.length = ent.inlineKeyLen
+	copy(mapKey.key[:], ent.inlineKey[:inlineLen])
+	return mapKey, true
+}
+
+func (m *AppendOnly) appendOnlyEntryMapKey(ent *appendOnlyEntry) string {
+	if m == nil || ent == nil {
+		return ""
+	}
+	if ent.inlineKeyLen != 0 {
+		return string(ent.inlineKey[:int(ent.inlineKeyLen)])
+	}
+	if ent.keyIndex == 0 {
+		return ""
+	}
+	idx := int(ent.keyIndex - 1)
+	if idx < 0 || idx >= len(m.keys) {
+		return ""
+	}
+	return m.keys[idx]
 }
 
 func appendOnlyKeyU64(key []byte) (uint64, bool) {
@@ -506,14 +687,14 @@ func appendOnlyKeyU64(key []byte) (uint64, bool) {
 	return binary.BigEndian.Uint64(key), true
 }
 
-func entryValueSize(flags byte, value []byte) int {
+func entryValueSize(flags byte, valueLen int) int {
 	if flags&node.FlagPointer != 0 {
-		return page.ValuePtrSize + len(value)
+		return page.ValuePtrSize + valueLen
 	}
 	if flags&node.FlagTombstone != 0 {
 		return 0
 	}
-	return len(value)
+	return valueLen
 }
 
 func appendOnlyShouldPredictHint(count int) bool {
@@ -577,14 +758,14 @@ func (m *AppendOnly) buildSortedLatestIndicesLocked() []int {
 	if m.count == 0 || m.ordered {
 		return nil
 	}
-	if m.latestDirty || (len(m.latest) == 0 && len(m.latest64) == 0) {
+	if m.latestDirty || (len(m.latest) == 0 && len(m.latestInline) == 0 && len(m.latest64) == 0) {
 		m.rebuildLatestIndexLocked()
 	}
 	// The returned slice aliases m.indexBuf scratch storage. It is only valid
 	// while m.mu is held and may be overwritten by the next call. When
 	// m.count == 0 or m.ordered is true, this helper returns nil, which callers
 	// may treat as "no indices" (equivalent to an empty result).
-	need := len(m.latest) + len(m.latest64)
+	need := len(m.latest) + len(m.latestInline) + len(m.latest64)
 	if cap(m.indexBuf) < need {
 		m.indexBuf = make([]int, 0, need)
 	} else {
@@ -594,14 +775,17 @@ func (m *AppendOnly) buildSortedLatestIndicesLocked() []int {
 	for _, idx := range m.latest {
 		indices = append(indices, idx)
 	}
+	for _, idx := range m.latestInline {
+		indices = append(indices, idx)
+	}
 	for _, idx := range m.latest64 {
 		indices = append(indices, idx)
 	}
 	active := m.entries[:m.count]
 	sort.Slice(indices, func(i, j int) bool {
 		return bytes.Compare(
-			appendOnlyEntryKey(&active[indices[i]]),
-			appendOnlyEntryKey(&active[indices[j]]),
+			m.appendOnlyEntryKey(&active[indices[i]]),
+			m.appendOnlyEntryKey(&active[indices[j]]),
 		) < 0
 	})
 	return indices
@@ -611,6 +795,9 @@ func (m *AppendOnly) rebuildLatestIndexLocked() {
 	if m.count == 0 {
 		if m.latest != nil {
 			clear(m.latest)
+		}
+		if m.latestInline != nil {
+			clear(m.latestInline)
 		}
 		if m.latest64 != nil {
 			clear(m.latest64)
@@ -622,13 +809,30 @@ func (m *AppendOnly) rebuildLatestIndexLocked() {
 	if m.latest != nil {
 		clear(m.latest)
 	}
+	if m.latestInline != nil {
+		clear(m.latestInline)
+	}
 	if m.latest64 != nil {
 		clear(m.latest64)
 	}
 	reserve := m.count
 	active := m.entries[:m.count]
 	for i := range active {
-		k := appendOnlyEntryKey(&active[i])
+		if inlineKey, ok := appendOnlyInlineMapKeyFromEntry(&active[i]); ok {
+			if inlineKey.length == appendOnlyInlineKeyLen {
+				if m.latest64 == nil {
+					m.latest64 = make(map[uint64]int, reserve)
+				}
+				m.latest64[binary.BigEndian.Uint64(inlineKey.key[:])] = i
+				continue
+			}
+			if m.latestInline == nil {
+				m.latestInline = make(map[appendOnlyInlineMapKey]int, reserve)
+			}
+			m.latestInline[inlineKey] = i
+			continue
+		}
+		k := m.appendOnlyEntryKey(&active[i])
 		if k64, ok := appendOnlyKeyU64(k); ok {
 			if m.latest64 == nil {
 				m.latest64 = make(map[uint64]int, reserve)
@@ -639,7 +843,7 @@ func (m *AppendOnly) rebuildLatestIndexLocked() {
 		if m.latest == nil {
 			m.latest = make(map[string]int, reserve)
 		}
-		m.latest[appendOnlyKeyString(k)] = i
+		m.latest[m.appendOnlyEntryMapKey(&active[i])] = i
 	}
 	m.latestDirty = false
 	m.clearSnapshotLocked()
@@ -656,10 +860,55 @@ func (m *AppendOnly) updateLatestIndexLocked(key []byte, idx int) {
 		m.latest64[k64] = idx
 		return
 	}
+	if inlineKey, ok := appendOnlyInlineMapKeyFromBytes(key); ok {
+		if m.latestInline == nil {
+			m.latestInline = make(map[appendOnlyInlineMapKey]int, 1)
+		}
+		m.latestInline[inlineKey] = idx
+		return
+	}
 	if m.latest == nil {
 		m.latest = make(map[string]int, 1)
 	}
-	m.latest[appendOnlyKeyString(key)] = idx
+	m.latest[m.appendOnlyEntryMapKey(&m.entries[idx])] = idx
+}
+
+func (m *AppendOnly) appendKeyLocked(key string) uint32 {
+	if len(m.keys) == cap(m.keys) {
+		nextCap := appendOnlyMinInitialEntries
+		if cap(m.keys) > 0 {
+			nextCap = appendOnlyNextCapacity(cap(m.keys))
+		}
+		if nextCap < len(m.keys)+1 {
+			nextCap = len(m.keys) + 1
+		}
+		prev := m.keys
+		grown := getAppendOnlyKeys(nextCap)
+		copy(grown, prev)
+		m.keys = grown[:len(prev)]
+		putAppendOnlyKeys(prev)
+	}
+	m.keys = append(m.keys, key)
+	return uint32(len(m.keys))
+}
+
+func (m *AppendOnly) appendPayloadLocked(payload appendOnlyPayload) uint32 {
+	if len(m.payloads) == cap(m.payloads) {
+		nextCap := appendOnlyMinInitialEntries
+		if cap(m.payloads) > 0 {
+			nextCap = appendOnlyNextCapacity(cap(m.payloads))
+		}
+		if nextCap < len(m.payloads)+1 {
+			nextCap = len(m.payloads) + 1
+		}
+		prev := m.payloads
+		grown := getAppendOnlyPayloads(nextCap)
+		copy(grown, prev)
+		m.payloads = grown[:len(prev)]
+		putAppendOnlyPayloads(prev)
+	}
+	m.payloads = append(m.payloads, payload)
+	return uint32(len(m.payloads))
 }
 
 func (m *AppendOnly) appendEntryLocked(key, value []byte, ptr page.ValuePtr, flags byte, steal bool, borrowValue bool) appendOnlyObserveEvent {
@@ -688,40 +937,45 @@ func (m *AppendOnly) appendEntryLocked(key, value []byte, ptr page.ValuePtr, fla
 		observeEvent.record(m.observeEntries, m.count)
 	}
 	ent := &m.entries[idx]
-	ent.ptr = ptr
 	ent.flags = flags
-	ent.keyInline = false
-	ent.valueOwned = false
-	if steal {
-		ent.key = key
-		ent.value = value
+	ent.keyIndex = 0
+	ent.payloadIndex = 0
+	ent.inlineKeyLen = 0
+	payloadValue := ""
+	payloadPtr := page.ValuePtr{}
+	if len(key) <= appendOnlyInlineKeyLen {
+		copy(ent.inlineKey[:], key)
+		ent.inlineKeyLen = uint8(len(key))
+	} else if steal {
+		ent.keyIndex = m.appendKeyLocked(appendOnlyStringFromBytes(key))
 	} else {
-		if len(key) == appendOnlyInlineKeyLen {
-			copy(ent.inlineKey[:], key)
-			ent.keyInline = true
-			ent.key = nil
-		} else {
-			ent.key = cloneOrReuseBytes(ent.key, key, appendOnlyReusableKeyMaxCap)
-		}
+		ent.keyIndex = m.appendKeyLocked(appendOnlyArenaStringCopy(&m.valueArena, key))
+	}
+	if steal {
+		payloadValue = appendOnlyStringFromBytes(value)
+	} else {
 		if len(value) > 0 {
 			if borrowValue {
-				ent.value = value
+				payloadValue = appendOnlyStringFromBytes(value)
 			} else {
-				ent.value = m.valueArena.alloc(len(value))
-				copy(ent.value, value)
-				ent.valueOwned = true
+				payloadValue = appendOnlyArenaStringCopy(&m.valueArena, value)
 			}
-		} else {
-			ent.value = nil
 		}
 	}
-	if flags&node.FlagTombstone != 0 {
-		ent.value = nil
-		ent.valueOwned = false
-		ent.ptr = page.ValuePtr{}
+	if flags&node.FlagPointer != 0 {
+		payloadPtr = ptr
 	}
-	k := appendOnlyEntryKey(ent)
-	m.sizeBytes += int64(len(k) + entryValueSize(flags, ent.value))
+	if flags&node.FlagTombstone != 0 {
+		payloadValue = ""
+		payloadPtr = page.ValuePtr{}
+	} else if payloadValue != "" || payloadPtr != (page.ValuePtr{}) {
+		ent.payloadIndex = m.appendPayloadLocked(appendOnlyPayload{
+			value: payloadValue,
+			ptr:   payloadPtr,
+		})
+	}
+	k := m.appendOnlyEntryKey(ent)
+	m.sizeBytes += int64(len(k) + entryValueSize(flags, len(payloadValue)))
 	if appendOnlyShouldPredictHint(m.count) {
 		m.maybeRaisePredictedGrowthHintLocked(&observeEvent)
 	}
@@ -732,7 +986,7 @@ func (m *AppendOnly) appendEntryLocked(key, value []byte, ptr page.ValuePtr, fla
 		return observeEvent
 	}
 	if m.ordered {
-		prev := appendOnlyEntryKey(&m.entries[m.lastIdx])
+		prev := m.appendOnlyEntryKey(&m.entries[m.lastIdx])
 		cmp := bytes.Compare(k, prev)
 		if cmp > 0 {
 			m.lastIdx = idx
@@ -856,13 +1110,13 @@ func (m *AppendOnly) orderedLookupEntryLocked(key []byte) *appendOnlyEntry {
 	}
 	active := m.entries[:m.count]
 	idx := sort.Search(len(active), func(i int) bool {
-		return bytes.Compare(appendOnlyEntryKey(&active[i]), key) >= 0
+		return bytes.Compare(m.appendOnlyEntryKey(&active[i]), key) >= 0
 	})
 	if idx >= len(active) {
 		return nil
 	}
 	ent := &active[idx]
-	if !bytes.Equal(appendOnlyEntryKey(ent), key) {
+	if !bytes.Equal(m.appendOnlyEntryKey(ent), key) {
 		return nil
 	}
 	return ent
@@ -873,7 +1127,7 @@ func (m *AppendOnly) Get(key []byte) ([]byte, bool, bool) {
 		m.mu.RLock()
 		if ent := m.orderedLookupEntryLocked(key); ent != nil {
 			deleted := ent.flags&node.FlagTombstone != 0
-			val := ent.value
+			val := m.appendOnlyEntryValue(ent)
 			m.mu.RUnlock()
 			if deleted {
 				return nil, true, true
@@ -889,9 +1143,23 @@ func (m *AppendOnly) Get(key []byte) ([]byte, bool, bool) {
 			if k64, ok := appendOnlyKeyU64(key); ok && m.latest64 != nil {
 				if idx, ok := m.latest64[k64]; ok && idx >= 0 && idx < m.count {
 					ent := &m.entries[idx]
-					if bytes.Equal(appendOnlyEntryKey(ent), key) {
+					if bytes.Equal(m.appendOnlyEntryKey(ent), key) {
 						deleted := ent.flags&node.FlagTombstone != 0
-						val := ent.value
+						val := m.appendOnlyEntryValue(ent)
+						m.mu.RUnlock()
+						if deleted {
+							return nil, true, true
+						}
+						return val, false, true
+					}
+				}
+			}
+			if inlineKey, ok := appendOnlyInlineMapKeyFromBytes(key); ok && m.latestInline != nil {
+				if idx, ok := m.latestInline[inlineKey]; ok && idx >= 0 && idx < m.count {
+					ent := &m.entries[idx]
+					if bytes.Equal(m.appendOnlyEntryKey(ent), key) {
+						deleted := ent.flags&node.FlagTombstone != 0
+						val := m.appendOnlyEntryValue(ent)
 						m.mu.RUnlock()
 						if deleted {
 							return nil, true, true
@@ -901,11 +1169,11 @@ func (m *AppendOnly) Get(key []byte) ([]byte, bool, bool) {
 				}
 			}
 			if m.latest != nil {
-				if idx, ok := m.latest[appendOnlyKeyString(key)]; ok && idx >= 0 && idx < m.count {
+				if idx, ok := m.latest[appendOnlyLookupKeyString(key)]; ok && idx >= 0 && idx < m.count {
 					ent := &m.entries[idx]
-					if bytes.Equal(appendOnlyEntryKey(ent), key) {
+					if bytes.Equal(m.appendOnlyEntryKey(ent), key) {
 						deleted := ent.flags&node.FlagTombstone != 0
-						val := ent.value
+						val := m.appendOnlyEntryValue(ent)
 						m.mu.RUnlock()
 						if deleted {
 							return nil, true, true
@@ -932,8 +1200,8 @@ func (m *AppendOnly) GetEntry(key []byte) ([]byte, page.ValuePtr, byte, bool) {
 	for {
 		m.mu.RLock()
 		if ent := m.orderedLookupEntryLocked(key); ent != nil {
-			val := ent.value
-			ptr := ent.ptr
+			val := m.appendOnlyEntryValue(ent)
+			ptr := m.appendOnlyEntryPtr(ent)
 			flags := ent.flags
 			m.mu.RUnlock()
 			return val, ptr, flags, true
@@ -947,9 +1215,21 @@ func (m *AppendOnly) GetEntry(key []byte) ([]byte, page.ValuePtr, byte, bool) {
 			if k64, ok := appendOnlyKeyU64(key); ok && m.latest64 != nil {
 				if idx, ok := m.latest64[k64]; ok && idx >= 0 && idx < m.count {
 					ent := &m.entries[idx]
-					if bytes.Equal(appendOnlyEntryKey(ent), key) {
-						val := ent.value
-						ptr := ent.ptr
+					if bytes.Equal(m.appendOnlyEntryKey(ent), key) {
+						val := m.appendOnlyEntryValue(ent)
+						ptr := m.appendOnlyEntryPtr(ent)
+						flags := ent.flags
+						m.mu.RUnlock()
+						return val, ptr, flags, true
+					}
+				}
+			}
+			if inlineKey, ok := appendOnlyInlineMapKeyFromBytes(key); ok && m.latestInline != nil {
+				if idx, ok := m.latestInline[inlineKey]; ok && idx >= 0 && idx < m.count {
+					ent := &m.entries[idx]
+					if bytes.Equal(m.appendOnlyEntryKey(ent), key) {
+						val := m.appendOnlyEntryValue(ent)
+						ptr := m.appendOnlyEntryPtr(ent)
 						flags := ent.flags
 						m.mu.RUnlock()
 						return val, ptr, flags, true
@@ -957,11 +1237,11 @@ func (m *AppendOnly) GetEntry(key []byte) ([]byte, page.ValuePtr, byte, bool) {
 				}
 			}
 			if m.latest != nil {
-				if idx, ok := m.latest[appendOnlyKeyString(key)]; ok && idx >= 0 && idx < m.count {
+				if idx, ok := m.latest[appendOnlyLookupKeyString(key)]; ok && idx >= 0 && idx < m.count {
 					ent := &m.entries[idx]
-					if bytes.Equal(appendOnlyEntryKey(ent), key) {
-						val := ent.value
-						ptr := ent.ptr
+					if bytes.Equal(m.appendOnlyEntryKey(ent), key) {
+						val := m.appendOnlyEntryValue(ent)
+						ptr := m.appendOnlyEntryPtr(ent)
 						flags := ent.flags
 						m.mu.RUnlock()
 						return val, ptr, flags, true
@@ -1113,16 +1393,24 @@ func (m *AppendOnly) resetLockedWithPolicy(capacity, estimatedBytesPerEntry, ent
 	}
 	for i := 0; i < m.count; i++ {
 		ent := &m.entries[i]
-		ent.ptr = page.ValuePtr{}
 		ent.flags = 0
-		ent.keyInline = false
-		ent.valueOwned = false
-		if cap(ent.key) > appendOnlyReusableKeyMaxCap {
-			ent.key = nil
-		} else if ent.key != nil {
-			ent.key = ent.key[:0]
-		}
-		ent.value = nil
+		ent.keyIndex = 0
+		ent.payloadIndex = 0
+		ent.inlineKeyLen = 0
+	}
+	if !retainObserved || cap(m.keys) > maxRetainedEntries {
+		putAppendOnlyKeys(m.keys)
+		m.keys = nil
+	} else {
+		clear(m.keys)
+		m.keys = m.keys[:0]
+	}
+	if !retainObserved || cap(m.payloads) > maxRetainedEntries {
+		putAppendOnlyPayloads(m.payloads)
+		m.payloads = nil
+	} else {
+		clear(m.payloads)
+		m.payloads = m.payloads[:0]
 	}
 	m.valueArena.reset()
 	if !retainObserved {
@@ -1132,9 +1420,11 @@ func (m *AppendOnly) resetLockedWithPolicy(capacity, estimatedBytesPerEntry, ent
 	// after one-off spikes.
 	if !retainObserved || (oldCount > 0 && oldCount >= appendOnlyResetDropThresholdEntries) {
 		m.latest = nil
+		m.latestInline = nil
 		m.latest64 = nil
 	} else {
 		clear(m.latest)
+		clear(m.latestInline)
 		clear(m.latest64)
 	}
 	// Snapshot/index buffers are only needed for unordered memtables; drop large
@@ -1157,7 +1447,6 @@ func (m *AppendOnly) resetLockedWithPolicy(capacity, estimatedBytesPerEntry, ent
 	m.frozen = false
 	m.hasLast = false
 	m.lastIdx = -1
-
 	// If the entry slice grew far beyond the configured baseline, shrink it.
 	// This avoids permanently ratcheting heap high-water when a workload briefly
 	// spikes in write volume (common during state-sync restore), while still
@@ -1216,20 +1505,62 @@ func (m *AppendOnly) buildSortedLatestSnapshotLocked() []*appendOnlyEntry {
 	return snapshot
 }
 
-func (m *AppendOnly) buildMutableSortedIteratorEntriesLocked() []appendOnlyEntry {
+func (m *AppendOnly) buildMutableSortedIteratorEntriesLocked() ([]appendOnlyEntry, []string, []appendOnlyPayload, []byte) {
 	if m.count == 0 {
 		m.clearSnapshotLocked()
-		return getAppendOnlyIteratorEntries(0)
+		return getAppendOnlyIteratorEntries(0), getAppendOnlyIteratorKeys(0), getAppendOnlyIteratorPayloads(0), nil
 	}
 	indices := m.buildSortedLatestIndicesLocked()
 	active := m.entries[:m.count]
 	entries := getAppendOnlyIteratorEntries(len(indices))
+	keyCount := 0
+	payloadCount := 0
+	inlineKeyBytes := 0
+	for _, idx := range indices {
+		if active[idx].inlineKeyLen != 0 || active[idx].keyIndex != 0 {
+			keyCount++
+		}
+		inlineKeyBytes += int(active[idx].inlineKeyLen)
+		if active[idx].payloadIndex != 0 {
+			payloadCount++
+		}
+	}
+	keys := getAppendOnlyIteratorKeys(keyCount)
+	payloads := getAppendOnlyIteratorPayloads(payloadCount)
+	var keyBytes []byte
+	if inlineKeyBytes > 0 {
+		keyBytes = make([]byte, inlineKeyBytes)
+	}
+	nextKey := 0
+	nextKeyByte := 0
+	nextPayload := 0
 	for i, idx := range indices {
-		entries[i] = active[idx]
+		ent := active[idx]
+		if ent.inlineKeyLen != 0 {
+			inlineLen := int(ent.inlineKeyLen)
+			next := nextKeyByte + inlineLen
+			copy(keyBytes[nextKeyByte:next], ent.inlineKey[:inlineLen])
+			keys[nextKey] = appendOnlyStringFromBytes(keyBytes[nextKeyByte:next])
+			nextKeyByte = next
+			ent.inlineKey = [appendOnlyInlineKeyLen]byte{}
+			ent.inlineKeyLen = 0
+			ent.keyIndex = uint32(nextKey + 1)
+			nextKey++
+		} else if ent.keyIndex != 0 {
+			keys[nextKey] = m.keys[ent.keyIndex-1]
+			ent.keyIndex = uint32(nextKey + 1)
+			nextKey++
+		}
+		if ent.payloadIndex != 0 {
+			payloads[nextPayload] = m.payloads[ent.payloadIndex-1]
+			ent.payloadIndex = uint32(nextPayload + 1)
+			nextPayload++
+		}
+		entries[i] = ent
 	}
 	m.indexBuf = indices[:0]
 	m.clearSnapshotLocked()
-	return entries
+	return entries, keys, payloads, keyBytes
 }
 
 func (m *AppendOnly) NewIterator(start, end []byte) iterator.UnsafeIterator {
@@ -1241,6 +1572,7 @@ func (m *AppendOnly) NewIterator(start, end []byte) iterator.UnsafeIterator {
 			start:   start,
 			end:     end,
 			mu:      &m.mu,
+			owner:   m,
 		}
 		if start != nil {
 			it.Seek(start)
@@ -1261,6 +1593,7 @@ func (m *AppendOnly) NewIterator(start, end []byte) iterator.UnsafeIterator {
 			entryPtrs:       snapshotPtrs,
 			start:           start,
 			end:             end,
+			owner:           m,
 			pooledEntryPtrs: false,
 			leaseOwner:      m,
 			leaseHeld:       true,
@@ -1271,11 +1604,14 @@ func (m *AppendOnly) NewIterator(start, end []byte) iterator.UnsafeIterator {
 		}
 		return it
 	}
-	entries := m.buildMutableSortedIteratorEntriesLocked()
+	entries, keys, payloads, keyBytes := m.buildMutableSortedIteratorEntriesLocked()
 	m.mu.Unlock()
 
 	it := &appendOnlyIterator{
 		entries:       entries,
+		keys:          keys,
+		keyBytes:      keyBytes,
+		payloads:      payloads,
 		start:         start,
 		end:           end,
 		pooledEntries: true,
@@ -1296,6 +1632,7 @@ func (m *AppendOnly) NewReverseIterator(start, end []byte) iterator.UnsafeIterat
 			start:   start,
 			end:     end,
 			mu:      &m.mu,
+			owner:   m,
 			reverse: true,
 		}
 		it.seekToReverseEnd(end)
@@ -1315,6 +1652,7 @@ func (m *AppendOnly) NewReverseIterator(start, end []byte) iterator.UnsafeIterat
 			entryPtrs:       snapshotPtrs,
 			start:           start,
 			end:             end,
+			owner:           m,
 			pooledEntryPtrs: false,
 			leaseOwner:      m,
 			leaseHeld:       true,
@@ -1323,11 +1661,14 @@ func (m *AppendOnly) NewReverseIterator(start, end []byte) iterator.UnsafeIterat
 		it.seekToReverseEnd(end)
 		return it
 	}
-	entries := m.buildMutableSortedIteratorEntriesLocked()
+	entries, keys, payloads, keyBytes := m.buildMutableSortedIteratorEntriesLocked()
 	m.mu.Unlock()
 
 	it := &appendOnlyIterator{
 		entries:       entries,
+		keys:          keys,
+		keyBytes:      keyBytes,
+		payloads:      payloads,
 		start:         start,
 		end:           end,
 		pooledEntries: true,
@@ -1339,11 +1680,17 @@ func (m *AppendOnly) NewReverseIterator(start, end []byte) iterator.UnsafeIterat
 
 type appendOnlyIterator struct {
 	entries         []appendOnlyEntry
+	keys            []string
+	keyBytes        []byte
+	payloads        []appendOnlyPayload
 	entryPtrs       []*appendOnlyEntry
+	keyRefs         []appendOnlyIteratorKeyRef
+	keyRefIndex     map[int]int
 	idx             int
 	start           []byte
 	end             []byte
 	mu              *sync.RWMutex
+	owner           *AppendOnly
 	pooledEntries   bool
 	pooledEntryPtrs bool
 	leaseOwner      *AppendOnly
@@ -1374,6 +1721,80 @@ func (it *appendOnlyIterator) entryAt(idx int) *appendOnlyEntry {
 	return &it.entries[idx]
 }
 
+func (it *appendOnlyIterator) payloadForEntry(ent *appendOnlyEntry) *appendOnlyPayload {
+	if ent == nil || ent.payloadIndex == 0 {
+		return nil
+	}
+	if it.owner != nil {
+		return it.owner.appendOnlyPayload(ent)
+	}
+	idx := int(ent.payloadIndex - 1)
+	if idx < 0 || idx >= len(it.payloads) {
+		return nil
+	}
+	return &it.payloads[idx]
+}
+
+func (it *appendOnlyIterator) keyForEntry(ent *appendOnlyEntry) []byte {
+	if ent == nil {
+		return nil
+	}
+	if it.owner != nil {
+		return it.owner.appendOnlyEntryKey(ent)
+	}
+	return appendOnlyEntryKeyFromKeys(ent, it.keys)
+}
+
+func (it *appendOnlyIterator) cachedStableKeyForIndex(idx int) ([]byte, bool) {
+	if n := len(it.keyRefs); n > 0 {
+		last := &it.keyRefs[n-1]
+		if last.idx == idx {
+			return it.keyBytes[last.offset : last.offset+last.length], true
+		}
+	}
+	if it.keyRefIndex != nil {
+		if pos, ok := it.keyRefIndex[idx]; ok {
+			ref := &it.keyRefs[pos]
+			return it.keyBytes[ref.offset : ref.offset+ref.length], true
+		}
+	} else {
+		for i := len(it.keyRefs) - 1; i >= 0; i-- {
+			if it.keyRefs[i].idx == idx {
+				ref := &it.keyRefs[i]
+				return it.keyBytes[ref.offset : ref.offset+ref.length], true
+			}
+		}
+		if len(it.keyRefs) >= 8 {
+			it.keyRefIndex = make(map[int]int, len(it.keyRefs)+1)
+			for i := range it.keyRefs {
+				it.keyRefIndex[it.keyRefs[i].idx] = i
+			}
+		}
+	}
+	return nil, false
+}
+
+func (it *appendOnlyIterator) stableKeyForEntry(idx int, ent *appendOnlyEntry) []byte {
+	if ent == nil {
+		return nil
+	}
+	if cached, ok := it.cachedStableKeyForIndex(idx); ok {
+		return cached
+	}
+	key := it.keyForEntry(ent)
+	offset := len(it.keyBytes)
+	it.keyBytes = append(it.keyBytes, key...)
+	it.keyRefs = append(it.keyRefs, appendOnlyIteratorKeyRef{
+		idx:    idx,
+		offset: offset,
+		length: len(key),
+	})
+	if it.keyRefIndex != nil {
+		it.keyRefIndex[idx] = len(it.keyRefs) - 1
+	}
+	return it.keyBytes[offset : offset+len(key)]
+}
+
 func (it *appendOnlyIterator) validIndex() bool {
 	if it.idx < 0 || it.idx >= it.len() {
 		return false
@@ -1382,10 +1803,10 @@ func (it *appendOnlyIterator) validIndex() bool {
 	if ent == nil {
 		return false
 	}
-	if it.start != nil && bytes.Compare(appendOnlyEntryKey(ent), it.start) < 0 {
+	if it.start != nil && bytes.Compare(it.keyForEntry(ent), it.start) < 0 {
 		return false
 	}
-	if it.end != nil && bytes.Compare(appendOnlyEntryKey(ent), it.end) >= 0 {
+	if it.end != nil && bytes.Compare(it.keyForEntry(ent), it.end) >= 0 {
 		return false
 	}
 	return true
@@ -1412,7 +1833,7 @@ func (it *appendOnlyIterator) Seek(key []byte) {
 			if ent == nil {
 				return true
 			}
-			return bytes.Compare(appendOnlyEntryKey(ent), key) >= 0
+			return bytes.Compare(it.keyForEntry(ent), key) >= 0
 		})
 		return
 	}
@@ -1429,7 +1850,7 @@ func (it *appendOnlyIterator) Seek(key []byte) {
 		if ent == nil {
 			return true
 		}
-		return bytes.Compare(appendOnlyEntryKey(ent), key) > 0
+		return bytes.Compare(it.keyForEntry(ent), key) > 0
 	})
 	it.idx = pos - 1
 }
@@ -1449,7 +1870,7 @@ func (it *appendOnlyIterator) seekToReverseEnd(end []byte) {
 		if ent == nil {
 			return true
 		}
-		return bytes.Compare(appendOnlyEntryKey(ent), end) >= 0
+		return bytes.Compare(it.keyForEntry(ent), end) >= 0
 	})
 	it.idx = pos - 1
 }
@@ -1459,7 +1880,7 @@ func (it *appendOnlyIterator) UnsafeKey() []byte {
 	if ent == nil || !it.validIndex() {
 		return nil
 	}
-	return appendOnlyEntryKey(ent)
+	return it.stableKeyForEntry(it.idx, ent)
 }
 
 func (it *appendOnlyIterator) UnsafeValue() []byte {
@@ -1470,7 +1891,7 @@ func (it *appendOnlyIterator) UnsafeValue() []byte {
 	if ent.flags&node.FlagTombstone != 0 {
 		return nil
 	}
-	return ent.value
+	return appendOnlyPayloadValue(it.payloadForEntry(ent))
 }
 
 func (it *appendOnlyIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
@@ -1478,7 +1899,12 @@ func (it *appendOnlyIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
 	if ent == nil || !it.validIndex() {
 		return nil, page.ValuePtr{}, 0
 	}
-	return ent.value, ent.ptr, ent.flags
+	payload := it.payloadForEntry(ent)
+	ptr := page.ValuePtr{}
+	if payload != nil {
+		ptr = payload.ptr
+	}
+	return appendOnlyPayloadValue(payload), ptr, ent.flags
 }
 
 func (it *appendOnlyIterator) IsDeleted() bool {
@@ -1522,6 +1948,8 @@ func (it *appendOnlyIterator) Close() error {
 	}
 	if it.pooledEntries {
 		putAppendOnlyIteratorEntries(it.entries)
+		putAppendOnlyIteratorKeys(it.keys)
+		putAppendOnlyIteratorPayloads(it.payloads)
 		it.pooledEntries = false
 	}
 	if it.pooledEntryPtrs {
@@ -1533,7 +1961,13 @@ func (it *appendOnlyIterator) Close() error {
 		it.leaseHeld = false
 	}
 	it.leaseOwner = nil
+	it.owner = nil
 	it.entries = nil
+	it.keys = nil
+	it.keyBytes = nil
+	it.keyRefs = nil
+	it.keyRefIndex = nil
+	it.payloads = nil
 	it.entryPtrs = nil
 	return nil
 }

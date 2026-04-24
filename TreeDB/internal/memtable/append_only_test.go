@@ -2,6 +2,7 @@ package memtable
 
 import (
 	"encoding/binary"
+	"fmt"
 	"testing"
 	"time"
 
@@ -317,15 +318,35 @@ func TestAppendOnlyGetBuildsLatestIndexOnFirstPointRead(t *testing.T) {
 		latestSize func(m *AppendOnly) int
 	}{
 		{
-			name: "non-8-byte",
+			name: "short-inline",
 			makeKey: func(v uint64) []byte {
 				return []byte{byte('a' + v)}
+			},
+			latestIdx: func(m *AppendOnly, key []byte) (int, bool) {
+				inlineKey, ok := appendOnlyInlineMapKeyFromBytes(key)
+				if !ok || m.latestInline == nil {
+					return 0, false
+				}
+				idx, ok := m.latestInline[inlineKey]
+				return idx, ok
+			},
+			latestSize: func(m *AppendOnly) int {
+				if m.latestInline == nil {
+					return 0
+				}
+				return len(m.latestInline)
+			},
+		},
+		{
+			name: "long-string",
+			makeKey: func(v uint64) []byte {
+				return []byte(fmt.Sprintf("long-key-%08d", v))
 			},
 			latestIdx: func(m *AppendOnly, key []byte) (int, bool) {
 				if m.latest == nil {
 					return 0, false
 				}
-				idx, ok := m.latest[appendOnlyKeyString(key)]
+				idx, ok := m.latest[appendOnlyLookupKeyString(key)]
 				return idx, ok
 			},
 			latestSize: func(m *AppendOnly) int {
@@ -476,6 +497,113 @@ func TestAppendOnlyGet_EmptyKey_IncrementalLatestIndex(t *testing.T) {
 	}
 }
 
+func TestAppendOnlyLatestIndexShortInlineKeysSurviveEntryGrowth(t *testing.T) {
+	m := NewAppendOnlyWithCapacityEstimatedEntryBytes(
+		appendOnlyMinInitialEntries*appendOnlyEstimatedBytesPerEntryPointer,
+		appendOnlyEstimatedBytesPerEntryPointer,
+	)
+
+	m.Set([]byte("b"), []byte("first"))
+	m.Set([]byte("a"), []byte("target"))
+	if got, del, ok := m.Get([]byte("a")); !ok || del || string(got) != "target" {
+		t.Fatalf("precondition Get(a) = (%q,%v,%v), want (target,false,true)", string(got), del, ok)
+	}
+
+	for i := 0; i < appendOnlyMinInitialEntries; i++ {
+		key := []byte(fmt.Sprintf("long-growth-key-%08d", i))
+		m.Set(key, []byte("growth"))
+	}
+
+	if got, del, ok := m.Get([]byte("a")); !ok || del || string(got) != "target" {
+		t.Fatalf("Get(a) after growth = (%q,%v,%v), want (target,false,true)", string(got), del, ok)
+	}
+}
+
+func TestAppendOnlyMutableIteratorShortInlineKeyStableAfterClose(t *testing.T) {
+	m := NewAppendOnlyWithCapacity(0)
+	m.Set([]byte("b"), []byte("first"))
+	m.Set([]byte("a"), []byte("target"))
+	arenaChunks := len(m.valueArena.chunks)
+	arenaPos := m.valueArena.curPos
+
+	it := m.NewIterator(nil, nil)
+	if len(m.valueArena.chunks) != arenaChunks || m.valueArena.curPos != arenaPos {
+		t.Fatalf("mutable iterator copied inline keys into memtable arena")
+	}
+	if !it.Valid() {
+		t.Fatal("iterator unexpectedly invalid")
+	}
+	key := it.UnsafeKey()
+	if got := string(key); got != "a" {
+		t.Fatalf("iterator key=%q want a", got)
+	}
+	if err := it.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if got := string(key); got != "a" {
+		t.Fatalf("iterator key after close=%q want a", got)
+	}
+}
+
+func TestAppendOnlyOrderedIteratorShortInlineKeyStableAfterCloseAndGrowth(t *testing.T) {
+	m := NewAppendOnlyWithCapacityEstimatedEntryBytes(
+		appendOnlyMinInitialEntries*appendOnlyEstimatedBytesPerEntryPointer,
+		appendOnlyEstimatedBytesPerEntryPointer,
+	)
+	m.Set([]byte("a"), []byte("target"))
+	m.Set([]byte("long-growth-key"), []byte("growth"))
+
+	it := m.NewIterator(nil, nil)
+	if !it.Valid() {
+		t.Fatal("iterator unexpectedly invalid")
+	}
+	key := it.UnsafeKey()
+	if got := string(key); got != "a" {
+		t.Fatalf("iterator key=%q want a", got)
+	}
+	if err := it.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	for i := 0; i < appendOnlyMinInitialEntries; i++ {
+		growthKey := []byte(fmt.Sprintf("long-growth-key-%08d", i))
+		m.Set(growthKey, []byte("growth"))
+	}
+	if got := string(key); got != "a" {
+		t.Fatalf("iterator key after close+growth=%q want a", got)
+	}
+}
+
+func TestAppendOnlyIteratorLongKeyDoesNotExposeIndexStorage(t *testing.T) {
+	m := NewAppendOnlyWithCapacity(0)
+	const (
+		targetKey = "long-key-a"
+		otherKey  = "long-key-b"
+	)
+	m.Set([]byte(otherKey), []byte("other"))
+	m.Set([]byte(targetKey), []byte("target")) // force unordered latest-index path
+
+	it := m.NewIterator(nil, nil)
+	if !it.Valid() {
+		t.Fatal("iterator unexpectedly invalid")
+	}
+	key := it.UnsafeKey()
+	if got := string(key); got != targetKey {
+		t.Fatalf("iterator key=%q want %q", got, targetKey)
+	}
+	key[0] = 'X'
+	if err := it.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	if got, del, ok := m.Get([]byte(targetKey)); !ok || del || string(got) != "target" {
+		t.Fatalf("Get(%q) after iterator key mutation = (%q,%v,%v), want (target,false,true)", targetKey, got, del, ok)
+	}
+	if _, _, ok := m.Get([]byte("Xong-key-a")); ok {
+		t.Fatalf("mutating iterator key created lookup hit for corrupted key")
+	}
+}
+
 var appendOnlyGetBenchSink []byte
 var appendOnlyGetBenchSinkBool bool
 
@@ -500,6 +628,7 @@ func benchmarkAppendOnlyGetOrderedVsReverseScan(b *testing.B, count int) {
 	reverse.ordered = false
 	reverse.latestDirty = true
 	clear(reverse.latest)
+	clear(reverse.latestInline)
 	clear(reverse.latest64)
 	reverse.mu.Unlock()
 
