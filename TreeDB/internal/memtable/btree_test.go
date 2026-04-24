@@ -113,6 +113,37 @@ func TestBTreeSetEntryPreservesExtraFlagBits(t *testing.T) {
 	}
 }
 
+func TestBTreeSetEntryAppendFastPathMixedUpdates(t *testing.T) {
+	m := NewBTreeWithDegree(2)
+	key := func(i int) []byte {
+		return []byte{byte(i >> 8), byte(i)}
+	}
+
+	for i := 0; i < 128; i++ {
+		m.Set(key(i), []byte{byte(i)})
+	}
+	m.Set(key(64), []byte("overwrite"))
+	m.Delete(key(127))
+	m.Set(key(128), []byte("new-max"))
+	m.Set(key(1), []byte("low-overwrite"))
+
+	if got := m.Len(); got != 129 {
+		t.Fatalf("Len()=%d want 129", got)
+	}
+	if got, del, ok := m.Get(key(64)); !ok || del || string(got) != "overwrite" {
+		t.Fatalf("Get(64)=(%q,%v,%v), want overwrite,false,true", string(got), del, ok)
+	}
+	if got, del, ok := m.Get(key(127)); !ok || !del || got != nil {
+		t.Fatalf("Get(127)=(%v,%v,%v), want nil,true,true", got, del, ok)
+	}
+	if got, del, ok := m.Get(key(128)); !ok || del || string(got) != "new-max" {
+		t.Fatalf("Get(128)=(%q,%v,%v), want new-max,false,true", string(got), del, ok)
+	}
+	if got, del, ok := m.Get(key(1)); !ok || del || string(got) != "low-overwrite" {
+		t.Fatalf("Get(1)=(%q,%v,%v), want low-overwrite,false,true", string(got), del, ok)
+	}
+}
+
 func TestBTreePointerEmptySliceCanonicalizesToNil(t *testing.T) {
 	ptr := page.ValuePtr{Offset: 21, Length: 34, FileID: 5}
 

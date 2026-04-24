@@ -15,7 +15,6 @@ import (
 )
 
 const btreeDefaultDegree = 32
-const btreeUseLoadFastPath = false
 const btreeArenaChunkSize = 1 << 20
 const btreeArenaInitialChunkSize = 64 << 10
 const btreeInlineValueDedupeMax = 1 << 20
@@ -747,7 +746,7 @@ func (it *btreeReverseIterator) refresh() {
 }
 
 func (m *BTree) setMaybeLoadLocked(key string, entry btreeEntry) (btreeEntry, bool) {
-	if btreeUseLoadFastPath && m.hasLast && key > m.lastKey {
+	if m.hasLast && key > m.lastKey {
 		return m.tree.Load(key, entry)
 	}
 	return m.tree.Set(key, entry)
