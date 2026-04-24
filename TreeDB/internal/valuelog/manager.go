@@ -465,7 +465,7 @@ func (f *File) Read(ptr page.ValuePtr, verifyCRC bool) ([]byte, error) {
 	if err := f.ensureCurrentWritableReadable(); err != nil {
 		return nil, err
 	}
-	if val, err, ok := f.readViaMmap(ptr, verifyCRC); ok {
+	finishMmapRead := func(val []byte, err error) ([]byte, error) {
 		f.mmapReadHits.Add(1)
 		if err != nil {
 			return nil, err
@@ -476,9 +476,25 @@ func (f *File) Read(ptr page.ValuePtr, verifyCRC bool) ([]byte, error) {
 		}
 		return val, nil
 	}
-	data, _ := f.mmapData.Load().([]byte)
-	if data != nil && deadMappingsCapExhausted(f.deadMappingsCount.Load(), len(data)) {
-		f.mmapReadMissDeadMappingCap.Add(1)
+	if val, err, ok := f.readViaMmap(ptr, verifyCRC); ok {
+		return finishMmapRead(val, err)
+	}
+	if !f.usesPersistentMmap() {
+		if f.tryEnableSealedLazyMmap() {
+			if val, err, ok := f.readViaMmap(ptr, verifyCRC); ok {
+				return finishMmapRead(val, err)
+			}
+		}
+	} else {
+		data, _ := f.mmapData.Load().([]byte)
+		if !deadMappingsCapExhausted(f.deadMappingsCount.Load(), len(data)) {
+			f.remapToFileSize()
+			if val, err, ok := f.readViaMmap(ptr, verifyCRC); ok {
+				return finishMmapRead(val, err)
+			}
+		} else {
+			f.mmapReadMissDeadMappingCap.Add(1)
+		}
 	}
 	if !verifyCRC {
 		if val, _, err, ok := f.readGroupedCompressedFromFileTo(ptr, nil); ok {
@@ -829,6 +845,25 @@ func (f *File) ReadAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte
 	if val, err, ok := f.readViaMmapAppend(ptr, verifyCRC, dst); ok {
 		f.mmapReadHits.Add(1)
 		return val, err
+	}
+	if !f.usesPersistentMmap() {
+		if f.tryEnableSealedLazyMmap() {
+			if val, err, ok := f.readViaMmapAppend(ptr, verifyCRC, dst); ok {
+				f.mmapReadHits.Add(1)
+				return val, err
+			}
+		}
+	} else {
+		data, _ := f.mmapData.Load().([]byte)
+		if !deadMappingsCapExhausted(f.deadMappingsCount.Load(), len(data)) {
+			f.remapToFileSize()
+			if val, err, ok := f.readViaMmapAppend(ptr, verifyCRC, dst); ok {
+				f.mmapReadHits.Add(1)
+				return val, err
+			}
+		} else {
+			f.mmapReadMissDeadMappingCap.Add(1)
+		}
 	}
 	// Fast path (bench/unsafe reads): grouped + uncompressed + no CRC.
 	if !verifyCRC && page.ValuePtrIsGrouped(ptr) && ptr.Offset >= 4 {

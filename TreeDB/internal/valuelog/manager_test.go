@@ -1253,6 +1253,141 @@ func TestReadUnsafe_LeafLaneUsesLeafSealedMmapByteBudget(t *testing.T) {
 	}
 }
 
+func TestReadUnsafe_LeafLaneDefaultBudgetCoversSparseProfileScale(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("mmap not supported on windows")
+	}
+
+	const (
+		segmentCount      = 9
+		sparseSegmentSize = 32 << 20
+	)
+
+	dir := t.TempDir()
+	files := make(map[uint32]*File, segmentCount)
+	ptrs := make([]page.ValuePtr, 0, segmentCount)
+	values := make([][]byte, 0, segmentCount)
+	for i := 0; i < segmentCount; i++ {
+		value := bytes.Repeat([]byte{byte('a' + i)}, 64)
+		fileID, ptr := writeTestSegmentWithPtr(t, dir, ReservedLeafLogLaneID, uint32(i+1), uint64(i+1), value)
+		path := segmentPathForID(dir, fileID)
+		if err := os.Truncate(path, sparseSegmentSize); err != nil {
+			t.Fatalf("Truncate(%s): %v", path, err)
+		}
+		f, err := openFile(path, fileID, nil, nil, templ.DecodeOptions{}, nil)
+		if err != nil {
+			t.Fatalf("openFile(%s): %v", path, err)
+		}
+		defer func() { _ = f.Close() }()
+		files[fileID] = f
+		ptrs = append(ptrs, ptr)
+		values = append(values, value)
+	}
+
+	mgr := &Manager{
+		files:                 files,
+		currentWritableByLane: make(map[uint32]uint32),
+	}
+	for _, f := range files {
+		f.manager = mgr
+	}
+
+	set := mgr.CurrentSetNoRefresh()
+	defer func() { _ = mgr.Release(set) }()
+
+	for i, ptr := range ptrs {
+		got, err := set.ReadUnsafe(ptr)
+		if err != nil {
+			t.Fatalf("ReadUnsafe(%d): %v", i, err)
+		}
+		if !bytes.Equal(got, values[i]) {
+			t.Fatalf("ReadUnsafe(%d) mismatch", i)
+		}
+	}
+
+	_, _, _, _, fallbacks := mgr.MmapReadStats()
+	if fallbacks != 0 {
+		t.Fatalf("expected default leaf mmap budget to avoid ReadAt fallback, got=%d", fallbacks)
+	}
+	_, _, sealedSegments, sealedBytes, _, _ := mgr.MmapResidencyStats()
+	if sealedSegments != segmentCount {
+		t.Fatalf("sealedSegments=%d want %d", sealedSegments, segmentCount)
+	}
+	if sealedBytes < segmentCount*sparseSegmentSize {
+		t.Fatalf("sealedBytes=%d want at least %d", sealedBytes, segmentCount*sparseSegmentSize)
+	}
+}
+
+func TestReadAppend_SealedLeafLazyMmapAvoidsReadAtFallback(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("mmap not supported on windows")
+	}
+
+	dir := t.TempDir()
+	value := bytes.Repeat([]byte("a"), 64)
+	fileID, ptr := writeTestSegmentWithPtr(t, dir, ReservedLeafLogLaneID, 1, 1, value)
+	f, err := openFile(segmentPathForID(dir, fileID), fileID, nil, nil, templ.DecodeOptions{}, nil)
+	if err != nil {
+		t.Fatalf("openFile: %v", err)
+	}
+	defer func() { _ = f.Close() }()
+
+	mgr := &Manager{
+		files:                 map[uint32]*File{fileID: f},
+		currentWritableByLane: make(map[uint32]uint32),
+	}
+	f.manager = mgr
+
+	got, err := f.ReadUnsafeAppend(ptr, false, nil)
+	if err != nil {
+		t.Fatalf("ReadUnsafeAppend: %v", err)
+	}
+	if !bytes.Equal(got, value) {
+		t.Fatalf("ReadUnsafeAppend mismatch")
+	}
+	if data, _ := f.mmapData.Load().([]byte); len(data) == 0 {
+		t.Fatalf("expected sealed leaf append read to enable mmap")
+	}
+	if got := f.mmapReadFallbackReadAt.Load(); got != 0 {
+		t.Fatalf("expected append read to avoid ReadAt fallback, got=%d", got)
+	}
+}
+
+func TestRead_SealedLeafLazyMmapAvoidsReadAtFallback(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("mmap not supported on windows")
+	}
+
+	dir := t.TempDir()
+	value := bytes.Repeat([]byte("b"), 64)
+	fileID, ptr := writeTestSegmentWithPtr(t, dir, ReservedLeafLogLaneID, 1, 1, value)
+	f, err := openFile(segmentPathForID(dir, fileID), fileID, nil, nil, templ.DecodeOptions{}, nil)
+	if err != nil {
+		t.Fatalf("openFile: %v", err)
+	}
+	defer func() { _ = f.Close() }()
+
+	mgr := &Manager{
+		files:                 map[uint32]*File{fileID: f},
+		currentWritableByLane: make(map[uint32]uint32),
+	}
+	f.manager = mgr
+
+	got, err := f.Read(ptr, false)
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if !bytes.Equal(got, value) {
+		t.Fatalf("Read mismatch")
+	}
+	if data, _ := f.mmapData.Load().([]byte); len(data) == 0 {
+		t.Fatalf("expected sealed leaf read to enable mmap")
+	}
+	if got := f.mmapReadFallbackReadAt.Load(); got != 0 {
+		t.Fatalf("expected read to avoid ReadAt fallback, got=%d", got)
+	}
+}
+
 func TestReadUnsafe_LeafLaneDenyCacheRechecksWhenLeafBudgetChanges(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("mmap not supported on windows")
