@@ -147,6 +147,62 @@ func TestAppendOnlyCRUD(t *testing.T) {
 	}
 }
 
+func TestAppendOnlyRepeatedSmallValueReusesPayloadCopy(t *testing.T) {
+	m := NewAppendOnlyWithCapacity(0)
+	value1 := []byte("same repeated value")
+	value2 := []byte("same repeated value")
+
+	m.Set([]byte("k1"), value1)
+	value1[0] = 'X'
+	m.Set([]byte("k2"), value2)
+	value2[0] = 'Y'
+
+	if got := len(m.values); got != 1 {
+		t.Fatalf("values=%d want=1", got)
+	}
+	if got := cap(m.values); got > appendOnlyMinInitialEntries {
+		t.Fatalf("value cap=%d want <=%d for single repeated payload", got, appendOnlyMinInitialEntries)
+	}
+	if m.entries[0].payloadIndex == 0 || m.entries[0].payloadIndex != m.entries[1].payloadIndex {
+		t.Fatalf("payload indices=(%d,%d), want shared non-zero index", m.entries[0].payloadIndex, m.entries[1].payloadIndex)
+	}
+	for _, key := range []string{"k1", "k2"} {
+		got, deleted, ok := m.Get([]byte(key))
+		if !ok || deleted || string(got) != "same repeated value" {
+			t.Fatalf("Get(%s)=(%q,%v,%v), want same repeated value,false,true", key, string(got), deleted, ok)
+		}
+	}
+
+	it := m.NewIterator(nil, nil)
+	defer func() { _ = it.Close() }()
+	for _, key := range []string{"k1", "k2"} {
+		if !it.Valid() || string(it.Key()) != key {
+			t.Fatalf("iterator key=%q valid=%v, want %s", string(it.Key()), it.Valid(), key)
+		}
+		if got := string(it.Value()); got != "same repeated value" {
+			t.Fatalf("iterator value for %s=%q, want same repeated value", key, got)
+		}
+		it.Next()
+	}
+	if it.Valid() {
+		t.Fatal("iterator should be exhausted")
+	}
+}
+
+func TestAppendOnlyDifferentSmallValuesKeepSeparatePayloads(t *testing.T) {
+	m := NewAppendOnlyWithCapacity(0)
+
+	m.Set([]byte("k1"), []byte("first value"))
+	m.Set([]byte("k2"), []byte("second value"))
+
+	if got := len(m.values); got != 2 {
+		t.Fatalf("values=%d want=2", got)
+	}
+	if m.entries[0].payloadIndex == m.entries[1].payloadIndex {
+		t.Fatalf("payload indices=(%d,%d), want distinct indices", m.entries[0].payloadIndex, m.entries[1].payloadIndex)
+	}
+}
+
 func TestAppendOnlyApplyBorrowValueSortedBatch_CopiesKeysBorrowsValues(t *testing.T) {
 	m := NewAppendOnlyWithCapacity(0)
 	key := []byte("k-short")
@@ -330,7 +386,7 @@ func TestAppendOnlyApplyBorrowValueSortedBatchIndicesTrusted_FallsBackWhenBatchS
 	}
 }
 
-func TestAppendOnlyFirstPayloadUsesDenseEntryCapacityFloor(t *testing.T) {
+func TestAppendOnlyFirstPayloadKeepsValueSideBufferSmall(t *testing.T) {
 	m := &AppendOnly{
 		entries: make([]appendOnlyEntry, 1024),
 		ordered: true,
@@ -339,11 +395,30 @@ func TestAppendOnlyFirstPayloadUsesDenseEntryCapacityFloor(t *testing.T) {
 
 	m.Set([]byte("k-short"), []byte("value"))
 
-	if got := cap(m.values); got != cap(m.entries) {
-		t.Fatalf("value cap=%d want entry cap=%d", got, cap(m.entries))
+	if got := cap(m.values); got != appendOnlyMinInitialEntries {
+		t.Fatalf("value cap=%d want %d", got, appendOnlyMinInitialEntries)
 	}
 	if got := len(m.values); got != 1 {
 		t.Fatalf("value len=%d want=1", got)
+	}
+}
+
+func TestAppendOnlyDistinctPayloadsGrowValueSideBufferToDenseFloor(t *testing.T) {
+	m := &AppendOnly{
+		entries: make([]appendOnlyEntry, 1024),
+		ordered: true,
+		lastIdx: -1,
+	}
+
+	for i := 0; i <= appendOnlyMinInitialEntries; i++ {
+		m.Set([]byte(fmt.Sprintf("k%03d", i)), []byte(fmt.Sprintf("value-%03d", i)))
+	}
+
+	if got := cap(m.values); got != cap(m.entries) {
+		t.Fatalf("value cap=%d want entry cap=%d", got, cap(m.entries))
+	}
+	if got := len(m.values); got != appendOnlyMinInitialEntries+1 {
+		t.Fatalf("value len=%d want=%d", got, appendOnlyMinInitialEntries+1)
 	}
 }
 
