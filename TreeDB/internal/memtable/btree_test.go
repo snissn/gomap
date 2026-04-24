@@ -215,6 +215,30 @@ func TestBTreeSetEntryDedupesRepeatedCopiedInlineValues(t *testing.T) {
 	}
 }
 
+func TestBTreeSetEntryCopiesKeyValue(t *testing.T) {
+	m := NewBTree()
+	key := []byte("key")
+	value := []byte("value")
+
+	m.SetEntry(key, value, page.ValuePtr{}, node.FlagInline)
+
+	got, _, _, ok := m.GetEntry([]byte("key"))
+	if !ok || string(got) != "value" {
+		t.Fatalf("GetEntry(key)=(%q,%v), want value,true", string(got), ok)
+	}
+	if unsafe.SliceData(got) == unsafe.SliceData(value) {
+		t.Fatal("SetEntry value aliases caller storage")
+	}
+	key[0] = 'z'
+	value[0] = 'X'
+	if got, _, ok := m.Get([]byte("key")); !ok || string(got) != "value" {
+		t.Fatalf("stored entry changed after caller mutation: got=(%q,%v)", string(got), ok)
+	}
+	if _, _, ok := m.Get([]byte("zey")); ok {
+		t.Fatal("stored key aliases caller storage")
+	}
+}
+
 func TestBTreeArenaUsesSmallInitialChunkThenGrows(t *testing.T) {
 	a := &btreeArena{
 		maxChunkSize:     256,
