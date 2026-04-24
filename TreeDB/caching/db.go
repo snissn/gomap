@@ -2860,6 +2860,7 @@ func (db *DB) flushDeferredValueLogMemtable(
 	iter iterator.UnsafeIterator,
 	backendBatch batch.Interface,
 	memLen int,
+	stableUnsafe bool,
 	sync bool,
 	laneID int,
 ) (int, error) {
@@ -2912,7 +2913,7 @@ func (db *DB) flushDeferredValueLogMemtable(
 	}
 
 	for iter.Valid() {
-		key := iter.UnsafeKey()
+		key := stableIteratorKey(iter, stableUnsafe)
 		if iter.IsDeleted() {
 			var err error
 			if dv != nil {
@@ -9819,6 +9820,7 @@ func (job flushBuildJob) run(closeCh <-chan struct{}) {
 	}
 
 	iter := job.mem.NewIterator(nil, nil)
+	stableUnsafe := stableUnsafeIteratorSlices(job.mem)
 
 	send := func(ops []batch.Entry) bool {
 		for {
@@ -9837,22 +9839,23 @@ func (job flushBuildJob) run(closeCh <-chan struct{}) {
 	ops = ops[:0]
 	for iter.Valid() {
 		val, ptr, flags := iter.UnsafeEntry()
+		key := stableIteratorKey(iter, stableUnsafe)
 		if flags&node.FlagTombstone != 0 {
 			ops = append(ops, batch.Entry{
 				Type: batch.OpDelete,
-				Key:  iter.UnsafeKey(),
+				Key:  key,
 			})
 		} else if flags&node.FlagPointer != 0 {
 			ops = append(ops, batch.Entry{
 				Type:     batch.OpPut,
-				Key:      iter.UnsafeKey(),
+				Key:      key,
 				ValuePtr: ptr,
 				IsPtr:    true,
 			})
 		} else {
 			ops = append(ops, batch.Entry{
 				Type:  batch.OpPut,
-				Key:   iter.UnsafeKey(),
+				Key:   key,
 				Value: val,
 			})
 		}
@@ -11310,6 +11313,7 @@ func collectOpsInto(mem memtable.Table, dst []batch.Entry) (int, error) {
 		return 0, errors.New("cachingdb: nil memtable")
 	}
 	iter := mem.NewIterator(nil, nil)
+	stableUnsafe := stableUnsafeIteratorSlices(mem)
 	defer func() { _ = iter.Close() }()
 
 	i := 0
@@ -11318,22 +11322,23 @@ func collectOpsInto(mem memtable.Table, dst []batch.Entry) (int, error) {
 			return 0, fmt.Errorf("cachingdb: collectOpsInto overflow (have=%d need>=%d)", len(dst), i+1)
 		}
 		val, ptr, flags := iter.UnsafeEntry()
+		key := stableIteratorKey(iter, stableUnsafe)
 		if flags&node.FlagTombstone != 0 {
 			dst[i] = batch.Entry{
 				Type: batch.OpDelete,
-				Key:  iter.UnsafeKey(),
+				Key:  key,
 			}
 		} else if flags&node.FlagPointer != 0 {
 			dst[i] = batch.Entry{
 				Type:     batch.OpPut,
-				Key:      iter.UnsafeKey(),
+				Key:      key,
 				ValuePtr: ptr,
 				IsPtr:    true,
 			}
 		} else {
 			dst[i] = batch.Entry{
 				Type:  batch.OpPut,
-				Key:   iter.UnsafeKey(),
+				Key:   key,
 				Value: val,
 			}
 		}
@@ -11551,7 +11556,7 @@ func buildOpRuns(mem memtable.Table, chunkCap int) ([][]batch.Entry, int, error)
 	stableUnsafe := stableUnsafeIteratorSlices(mem)
 	for iter.Valid() {
 		val, ptr, flags := iter.UnsafeEntry()
-		key := iter.UnsafeKey()
+		key := stableIteratorKey(iter, stableUnsafe)
 		if !stableUnsafe {
 			key = append([]byte(nil), key...)
 		}
@@ -11599,6 +11604,15 @@ func stableUnsafeIteratorSlices(mem memtable.Table) bool {
 		return stable.StableUnsafeIteratorSlices()
 	}
 	return false
+}
+
+func stableIteratorKey(iter iterator.UnsafeIterator, stableUnsafe bool) []byte {
+	if stableUnsafe {
+		if stableKey, ok := iter.(iterator.StableKeyViewIterator); ok {
+			return stableKey.UnsafeStableKey()
+		}
+	}
+	return iter.UnsafeKey()
 }
 
 func closeOpMergeSources(sources []opMergeSource) error {
@@ -22705,7 +22719,7 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 			stableUnsafe := stableUnsafeIteratorSlices(unit.mem)
 			iter := unit.mem.NewIterator(nil, nil)
 			for iter.Valid() {
-				key := iter.UnsafeKey()
+				key := stableIteratorKey(iter, stableUnsafe)
 				val, ptr, flags := iter.UnsafeEntry()
 				if flags&node.FlagTombstone != 0 {
 					var err error
@@ -22994,12 +23008,13 @@ func (db *DB) flushOneLocked(sync bool) bool {
 		reserveBackendBatchOps(backendBatch, reserveChunkOps)
 		vlogFlushed := false
 		backendPendingOps := 0
+		stableUnsafe := stableUnsafeIteratorSlices(mem)
 		iter := mem.NewIterator(nil, nil) // Returns iterator.UnsafeIterator
 
 		if db.deferredValueLogEnabled() {
 			t0 := time.Now()
 			var err error
-			backendPendingOps, err = db.flushDeferredValueLogMemtable(iter, backendBatch, memLen, sync, laneID)
+			backendPendingOps, err = db.flushDeferredValueLogMemtable(iter, backendBatch, memLen, stableUnsafe, sync, laneID)
 			if err != nil {
 				db.reportError(fmt.Errorf("cachingdb: flush failed (defer vlog): %w", err))
 				_ = iter.Close()
@@ -23078,9 +23093,8 @@ func (db *DB) flushOneLocked(sync bool) bool {
 				return nil
 			}
 
-			stableUnsafe := stableUnsafeIteratorSlices(mem)
 			for iter.Valid() {
-				key := iter.UnsafeKey()
+				key := stableIteratorKey(iter, stableUnsafe)
 				val, ptr, flags := iter.UnsafeEntry()
 				if flags&node.FlagTombstone != 0 {
 					var err error

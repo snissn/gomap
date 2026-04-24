@@ -2487,6 +2487,18 @@ func (it *appendOnlyIterator) UnsafeKey() []byte {
 	return it.stableKeyForEntry(it.idx, ent)
 }
 
+func (it *appendOnlyIterator) UnsafeStableKey() []byte {
+	ent := it.entryAt(it.idx)
+	if ent == nil || !it.validIndex() {
+		return nil
+	}
+	key := it.keyForEntry(ent)
+	if len(key) == 0 {
+		return appendOnlyEmptyKey
+	}
+	return key
+}
+
 func (it *appendOnlyIterator) UnsafeValue() []byte {
 	ent := it.entryAt(it.idx)
 	if ent == nil || !it.validIndex() {

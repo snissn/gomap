@@ -929,6 +929,38 @@ func TestAppendOnlyIteratorLongKeyDoesNotExposeIndexStorage(t *testing.T) {
 	}
 }
 
+func TestAppendOnlyIteratorUnsafeStableKeyUsesTrustedNoCopyView(t *testing.T) {
+	m := NewAppendOnlyWithCapacity(0)
+	const (
+		targetKey = "long-key-a"
+		otherKey  = "long-key-b"
+	)
+	m.Set([]byte(otherKey), []byte("other"))
+	m.Set([]byte(targetKey), []byte("target")) // force unordered latest-index path
+
+	it := m.NewIterator(nil, nil)
+	stableIt, ok := it.(interface{ UnsafeStableKey() []byte })
+	if !ok {
+		t.Fatal("append-only iterator does not expose trusted stable key view")
+	}
+	if !it.Valid() {
+		t.Fatal("iterator unexpectedly invalid")
+	}
+	key := stableIt.UnsafeStableKey()
+	if got := string(key); got != targetKey {
+		t.Fatalf("stable iterator key=%q want %q", got, targetKey)
+	}
+	if err := it.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if got := string(key); got != targetKey {
+		t.Fatalf("stable iterator key after close=%q want %q", got, targetKey)
+	}
+	if got, del, ok := m.Get([]byte(targetKey)); !ok || del || string(got) != "target" {
+		t.Fatalf("Get(%q) after stable key view = (%q,%v,%v), want (target,false,true)", targetKey, got, del, ok)
+	}
+}
+
 var appendOnlyGetBenchSink []byte
 var appendOnlyGetBenchSinkBool bool
 
