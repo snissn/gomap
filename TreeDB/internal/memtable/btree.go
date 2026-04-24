@@ -191,7 +191,7 @@ func NewBTreeWithDegree(degree int) *BTree {
 		degree = btreeDefaultDegree
 	}
 	return &BTree{
-		tree:   btree.NewMap[string, btreeEntry](degree),
+		tree:   newBTreeMap(degree),
 		degree: degree,
 		arena: &btreeArena{
 			maxChunkSize:     btreeArenaChunkSize,
@@ -200,13 +200,19 @@ func NewBTreeWithDegree(degree int) *BTree {
 	}
 }
 
+func newBTreeMap(degree int) *btree.Map[string, btreeEntry] {
+	return btree.NewMapWithOptions[string, btreeEntry](degree, btree.MapOptions{
+		ReuseRightSplitCapacity: true,
+	})
+}
+
 // Reset clears all entries while retaining internal allocations.
 func (m *BTree) Reset() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	if m.tree == nil {
-		m.tree = btree.NewMap[string, btreeEntry](m.degree)
+		m.tree = newBTreeMap(m.degree)
 	} else {
 		m.tree.Clear()
 	}
@@ -434,7 +440,6 @@ func (m *BTree) NewReverseIterator(start, end []byte) iterator.UnsafeIterator {
 			valid = iter.Last()
 		}
 	}
-
 	it := &btreeReverseIterator{
 		iter:     iter,
 		start:    startKey,

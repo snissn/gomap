@@ -26,6 +26,8 @@ require (
 	gonum.org/v1/plot v0.16.0
 )
 
+replace github.com/tidwall/btree => github.com/snissn/tidwall-btree v0.0.0-20260424113355-de381a45250c
+
 require (
 	codeberg.org/go-fonts/liberation v0.5.0 // indirect
 	codeberg.org/go-latex/latex v0.1.0 // indirect
