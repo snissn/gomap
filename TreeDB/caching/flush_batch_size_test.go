@@ -82,6 +82,23 @@ func TestFlushCapsBackendBatchSizeHint(t *testing.T) {
 	}
 }
 
+func TestFlushBackendEntriesCapForOpsReducesNearPureDeletePasses(t *testing.T) {
+	db := &DB{
+		flushBackendMaxEntries: 100,
+		flushBackendMaxBatches: 32,
+	}
+
+	if got := db.flushBackendEntriesCapForOps(10_000, 9_000, false); got != 5_000 {
+		t.Fatalf("near-pure delete cap=%d want 5000", got)
+	}
+	if got := db.flushBackendEntriesCapForOps(10_000, 2_500, false); got != 2_500 {
+		t.Fatalf("delete-heavy cap=%d want 2500", got)
+	}
+	if got := db.flushBackendEntriesCapForOps(10_000, 2_499, false); got != 313 {
+		t.Fatalf("non-delete-heavy cap=%d want 313", got)
+	}
+}
+
 func TestWaitForStopSelfHealsStaleBacklogBytes(t *testing.T) {
 	dir := t.TempDir()
 	backend := NewMockBackend()

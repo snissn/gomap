@@ -7092,9 +7092,18 @@ func (db *DB) flushBackendEntriesCapForOps(totalOps int, deleteOps int, sync boo
 	// commits amplify work dramatically when deletes touch a large fraction of the
 	// keyspace. Favor fewer commits in that case.
 	if maxBatches > 0 && deleteOps > 0 && totalOps > 0 {
-		// Deterministic "delete-heavy" trigger: deletes are at least 25% of ops.
-		if deleteOps*4 >= totalOps && maxBatches > 4 {
-			maxBatches = 4
+		switch {
+		case deleteOps >= totalOps-totalOps/10:
+			// Near-pure delete flushes rewrite most touched leaves on every
+			// intermediate commit. Keep enough chunking to bound backend batch
+			// memory, but avoid repeatedly applying the same broad keyspace churn.
+			if maxBatches > 2 {
+				maxBatches = 2
+			}
+		case deleteOps >= (totalOps+3)/4:
+			if maxBatches > 4 {
+				maxBatches = 4
+			}
 		}
 	}
 	if maxBatches > 0 {
