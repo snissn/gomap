@@ -44,6 +44,7 @@ const (
 	appendOnlyResetDropThresholdEntries     = 1 << 15
 	appendOnlyAggressiveGrowCutoff          = appendOnlyResetDropThresholdEntries * 2
 	appendOnlyPredictHintMinEntries         = 1 << 10
+	appendOnlyRecentValueDedupeMaxLen       = 256
 )
 
 var appendOnlyEntryPool sync.Pool
@@ -570,6 +571,21 @@ func appendOnlyArenaStringCopy(arena *appendOnlyValueArena, src []byte) string {
 	return appendOnlyStringFromBytes(buf)
 }
 
+func appendOnlyStringEqualBytes(s string, b []byte) bool {
+	if len(s) != len(b) {
+		return false
+	}
+	if len(b) == 0 {
+		return true
+	}
+	// Cheaply reject non-matches before comparing the full payload. This keeps
+	// the repeated-value fast path cheap for random small values.
+	if s[0] != b[0] || s[len(s)-1] != b[len(b)-1] {
+		return false
+	}
+	return bytes.Equal(appendOnlyValueStringBytes(s), b)
+}
+
 func (m *AppendOnly) appendOnlyEntryKey(ent *appendOnlyEntry) []byte {
 	if m == nil {
 		return appendOnlyEntryKeyFromKeys(ent, nil)
@@ -1080,8 +1096,6 @@ func (m *AppendOnly) appendEntryLocked(key, value []byte, ptr page.ValuePtr, fla
 	ent := &m.entries[idx]
 	ent.keyIndex = 0
 	ent.payloadIndex = 0
-	payloadValue := ""
-	payloadPtr := page.ValuePtr{}
 	if len(key) == 0 {
 		appendOnlyEntrySetKeyIndex(ent, m.appendKeyLocked(""))
 	} else if len(key) <= appendOnlyInlineKeyLen {
@@ -1093,31 +1107,26 @@ func (m *AppendOnly) appendEntryLocked(key, value []byte, ptr page.ValuePtr, fla
 		appendOnlyEntrySetKeyIndex(ent, m.appendKeyLocked(appendOnlyArenaStringCopy(&m.valueArena, key)))
 	}
 	appendOnlyEntrySetFlags(ent, flags)
-	if steal {
-		payloadValue = appendOnlyStringFromBytes(value)
-	} else {
+	payloadValueLen := 0
+	if flags&node.FlagTombstone != 0 {
+		m.deleteCount++
+	} else if flags&node.FlagPointer != 0 {
+		payloadValue := ""
 		if len(value) > 0 {
-			if borrowValue {
+			payloadValueLen = len(value)
+			if steal || borrowValue {
 				payloadValue = appendOnlyStringFromBytes(value)
 			} else {
 				payloadValue = appendOnlyArenaStringCopy(&m.valueArena, value)
 			}
 		}
-	}
-	if flags&node.FlagPointer != 0 {
-		payloadPtr = ptr
-	}
-	if flags&node.FlagTombstone != 0 {
-		m.deleteCount++
-		payloadValue = ""
-		payloadPtr = page.ValuePtr{}
-	} else if flags&node.FlagPointer != 0 {
-		appendOnlyEntrySetPayloadIndex(ent, m.appendPtrPayloadLocked(payloadValue, payloadPtr))
-	} else if payloadValue != "" {
-		appendOnlyEntrySetPayloadIndex(ent, m.appendValueLocked(payloadValue))
+		appendOnlyEntrySetPayloadIndex(ent, m.appendPtrPayloadLocked(payloadValue, ptr))
+	} else if len(value) > 0 {
+		payloadValueLen = len(value)
+		appendOnlyEntrySetPayloadIndex(ent, m.appendValueBytesLocked(value, steal || borrowValue))
 	}
 	k := m.appendOnlyEntryKey(ent)
-	m.sizeBytes += int64(len(k) + entryValueSize(flags, len(payloadValue)))
+	m.sizeBytes += int64(len(k) + entryValueSize(flags, payloadValueLen))
 	if appendOnlyShouldPredictHint(m.count) {
 		m.maybeRaisePredictedGrowthHintLocked(&observeEvent)
 	}
@@ -1186,8 +1195,6 @@ func (m *AppendOnly) appendEntryTrustedOrderedLocked(key, value []byte, ptr page
 	ent := &m.entries[idx]
 	ent.keyIndex = 0
 	ent.payloadIndex = 0
-	payloadValue := ""
-	payloadPtr := page.ValuePtr{}
 	if len(key) == 0 {
 		appendOnlyEntrySetKeyIndex(ent, m.appendKeyLocked(""))
 	} else if len(key) <= appendOnlyInlineKeyLen {
@@ -1199,34 +1206,55 @@ func (m *AppendOnly) appendEntryTrustedOrderedLocked(key, value []byte, ptr page
 		appendOnlyEntrySetKeyIndex(ent, m.appendKeyLocked(appendOnlyArenaStringCopy(&m.valueArena, key)))
 	}
 	appendOnlyEntrySetFlags(ent, flags)
-	if steal {
-		payloadValue = appendOnlyStringFromBytes(value)
-	} else if len(value) > 0 {
-		if borrowValue {
-			payloadValue = appendOnlyStringFromBytes(value)
-		} else {
-			payloadValue = appendOnlyArenaStringCopy(&m.valueArena, value)
-		}
-	}
-	if flags&node.FlagPointer != 0 {
-		payloadPtr = ptr
-	}
+	payloadValueLen := 0
 	if flags&node.FlagTombstone != 0 {
 		m.deleteCount++
-		payloadValue = ""
-		payloadPtr = page.ValuePtr{}
 	} else if flags&node.FlagPointer != 0 {
-		appendOnlyEntrySetPayloadIndex(ent, m.appendPtrPayloadLocked(payloadValue, payloadPtr))
-	} else if payloadValue != "" {
-		appendOnlyEntrySetPayloadIndex(ent, m.appendValueLocked(payloadValue))
+		payloadValue := ""
+		if len(value) > 0 {
+			payloadValueLen = len(value)
+			if steal || borrowValue {
+				payloadValue = appendOnlyStringFromBytes(value)
+			} else {
+				payloadValue = appendOnlyArenaStringCopy(&m.valueArena, value)
+			}
+		}
+		appendOnlyEntrySetPayloadIndex(ent, m.appendPtrPayloadLocked(payloadValue, ptr))
+	} else if len(value) > 0 {
+		payloadValueLen = len(value)
+		appendOnlyEntrySetPayloadIndex(ent, m.appendValueBytesLocked(value, steal || borrowValue))
 	}
-	m.sizeBytes += int64(len(key) + entryValueSize(flags, len(payloadValue)))
+	m.sizeBytes += int64(len(key) + entryValueSize(flags, payloadValueLen))
 	if appendOnlyShouldPredictHint(m.count) {
 		m.maybeRaisePredictedGrowthHintLocked(&observeEvent)
 	}
 	m.lastIdx = idx
 	m.hasLast = true
 	return observeEvent
+}
+
+func (m *AppendOnly) appendValueBytesLocked(value []byte, borrowed bool) uint32 {
+	if len(value) == 0 {
+		return 0
+	}
+	if borrowed {
+		return m.appendValueLocked(appendOnlyStringFromBytes(value))
+	}
+	if idx := m.recentValueIndexLocked(value); idx != 0 {
+		return idx
+	}
+	return m.appendValueLocked(appendOnlyArenaStringCopy(&m.valueArena, value))
+}
+
+func (m *AppendOnly) recentValueIndexLocked(value []byte) uint32 {
+	if len(value) == 0 || len(value) > appendOnlyRecentValueDedupeMaxLen || len(m.values) == 0 {
+		return 0
+	}
+	idx := len(m.values) - 1
+	if appendOnlyStringEqualBytes(m.values[idx], value) {
+		return uint32(idx + 1)
+	}
+	return 0
 }
 
 func (m *AppendOnly) appendValueLocked(value string) uint32 {

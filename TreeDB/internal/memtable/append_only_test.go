@@ -147,6 +147,59 @@ func TestAppendOnlyCRUD(t *testing.T) {
 	}
 }
 
+func TestAppendOnlyRepeatedSmallValueReusesPayloadCopy(t *testing.T) {
+	m := NewAppendOnlyWithCapacity(0)
+	value1 := []byte("same repeated value")
+	value2 := []byte("same repeated value")
+
+	m.Set([]byte("k1"), value1)
+	value1[0] = 'X'
+	m.Set([]byte("k2"), value2)
+	value2[0] = 'Y'
+
+	if got := len(m.values); got != 1 {
+		t.Fatalf("values=%d want=1", got)
+	}
+	if m.entries[0].payloadIndex == 0 || m.entries[0].payloadIndex != m.entries[1].payloadIndex {
+		t.Fatalf("payload indices=(%d,%d), want shared non-zero index", m.entries[0].payloadIndex, m.entries[1].payloadIndex)
+	}
+	for _, key := range []string{"k1", "k2"} {
+		got, deleted, ok := m.Get([]byte(key))
+		if !ok || deleted || string(got) != "same repeated value" {
+			t.Fatalf("Get(%s)=(%q,%v,%v), want same repeated value,false,true", key, string(got), deleted, ok)
+		}
+	}
+
+	it := m.NewIterator(nil, nil)
+	defer func() { _ = it.Close() }()
+	for _, key := range []string{"k1", "k2"} {
+		if !it.Valid() || string(it.Key()) != key {
+			t.Fatalf("iterator key=%q valid=%v, want %s", string(it.Key()), it.Valid(), key)
+		}
+		if got := string(it.Value()); got != "same repeated value" {
+			t.Fatalf("iterator value for %s=%q, want same repeated value", key, got)
+		}
+		it.Next()
+	}
+	if it.Valid() {
+		t.Fatal("iterator should be exhausted")
+	}
+}
+
+func TestAppendOnlyDifferentSmallValuesKeepSeparatePayloads(t *testing.T) {
+	m := NewAppendOnlyWithCapacity(0)
+
+	m.Set([]byte("k1"), []byte("first value"))
+	m.Set([]byte("k2"), []byte("second value"))
+
+	if got := len(m.values); got != 2 {
+		t.Fatalf("values=%d want=2", got)
+	}
+	if m.entries[0].payloadIndex == m.entries[1].payloadIndex {
+		t.Fatalf("payload indices=(%d,%d), want distinct indices", m.entries[0].payloadIndex, m.entries[1].payloadIndex)
+	}
+}
+
 func TestAppendOnlyApplyBorrowValueSortedBatch_CopiesKeysBorrowsValues(t *testing.T) {
 	m := NewAppendOnlyWithCapacity(0)
 	key := []byte("k-short")
