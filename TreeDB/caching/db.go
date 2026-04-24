@@ -22674,27 +22674,37 @@ func (db *DB) Get(key []byte) ([]byte, error) {
 			return nil, err
 		}
 		val, err := db.backend.Get(key)
+		if err == tree.ErrKeyNotFound {
+			return nil, nil
+		}
 		if err == nil && val != nil {
 			maybeRecordDBGetCallerSample(len(val))
 		}
 		return val, err
 	}
-	val, found, err := db.getMemtable(key)
+	scratch := getOwnedReadScratch()
+	defer putOwnedReadScratch(scratch)
+
+	val, found, err := db.getMemtableAppend(key, scratch.buf[:0])
 	if err != nil {
+		if err == tree.ErrKeyNotFound {
+			return nil, nil
+		}
 		return nil, err
 	}
 	if found {
-		if val == nil {
+		if len(val) == 0 {
 			return nil, nil
 		}
-		cpy := make([]byte, len(val))
-		copy(cpy, val)
-		return cpy, nil
+		return ownedReadResult(val, scratch), nil
 	}
 	if err := db.flushValueLogForBackendRead(); err != nil {
 		return nil, err
 	}
 	val, err = db.backend.Get(key)
+	if err == tree.ErrKeyNotFound {
+		return nil, nil
+	}
 	if err == nil && val != nil {
 		maybeRecordDBGetCallerSample(len(val))
 	}
