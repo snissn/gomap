@@ -7091,21 +7091,20 @@ func (db *DB) flushBackendEntriesCapForOps(totalOps int, deleteOps int, sync boo
 	// Each commit re-writes leaf pages (copying surviving values), so repeated
 	// commits amplify work dramatically when deletes touch a large fraction of the
 	// keyspace. Favor fewer commits in that case.
-	nearPureDeleteMaxEntries := 0
 	if maxBatches > 0 && deleteOps > 0 && totalOps > 0 {
 		switch {
 		case deleteOps >= totalOps-totalOps/10:
-			// Near-pure delete flushes rewrite most touched leaves on every
-			// intermediate commit. Keep enough chunking to bound backend batch
-			// memory, but avoid repeatedly applying the same broad keyspace churn.
-			if maxBatches > 2 {
-				maxBatches = 2
-			}
+			// Near-pure delete flushes rewrite most touched leaves on every commit.
+			// Use two passes only while the resulting batch cap stays within a
+			// bounded multiple of the configured per-batch cap; larger flushes keep
+			// the existing four-pass delete-heavy behavior instead of trading away
+			// memory headroom for fewer applies.
 			maxInt := int(^uint(0) >> 1)
-			if capEntries > maxInt/4 {
-				nearPureDeleteMaxEntries = maxInt
-			} else {
-				nearPureDeleteMaxEntries = capEntries * 4
+			twoPassBounded := capEntries > maxInt/8 || totalOps <= capEntries*8
+			if twoPassBounded && maxBatches > 2 {
+				maxBatches = 2
+			} else if maxBatches > 4 {
+				maxBatches = 4
 			}
 		case deleteOps >= (totalOps+3)/4:
 			if maxBatches > 4 {
@@ -7125,9 +7124,6 @@ func (db *DB) flushBackendEntriesCapForOps(totalOps int, deleteOps int, sync boo
 				capEntries = 1
 			}
 		}
-	}
-	if nearPureDeleteMaxEntries > 0 && capEntries > nearPureDeleteMaxEntries {
-		capEntries = nearPureDeleteMaxEntries
 	}
 	return capEntries
 }
