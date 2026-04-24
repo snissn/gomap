@@ -190,6 +190,7 @@ type AppendOnly struct {
 	indexBuf       []int
 	valueArena     appendOnlyValueArena
 	count          int
+	deleteCount    int
 	snapCount      int
 	sizeBytes      int64
 
@@ -1107,6 +1108,7 @@ func (m *AppendOnly) appendEntryLocked(key, value []byte, ptr page.ValuePtr, fla
 		payloadPtr = ptr
 	}
 	if flags&node.FlagTombstone != 0 {
+		m.deleteCount++
 		payloadValue = ""
 		payloadPtr = page.ValuePtr{}
 	} else if flags&node.FlagPointer != 0 {
@@ -1210,6 +1212,7 @@ func (m *AppendOnly) appendEntryTrustedOrderedLocked(key, value []byte, ptr page
 		payloadPtr = ptr
 	}
 	if flags&node.FlagTombstone != 0 {
+		m.deleteCount++
 		payloadValue = ""
 		payloadPtr = page.ValuePtr{}
 	} else if flags&node.FlagPointer != 0 {
@@ -1802,6 +1805,15 @@ func (m *AppendOnly) Len() int {
 	return m.count
 }
 
+func (m *AppendOnly) OperationMix() OperationMix {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return OperationMix{
+		Entries: m.count,
+		Deletes: m.deleteCount,
+	}
+}
+
 func (m *AppendOnly) Freeze() {
 	m.mu.Lock()
 	if m.frozen {
@@ -1974,6 +1986,7 @@ func (m *AppendOnly) resetLockedWithPolicy(capacity, estimatedBytesPerEntry, ent
 		m.indexBuf = m.indexBuf[:0]
 	}
 	m.count = 0
+	m.deleteCount = 0
 	m.sizeBytes = 0
 	m.ordered = true
 	m.latestDirty = false

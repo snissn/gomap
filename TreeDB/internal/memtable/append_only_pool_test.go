@@ -824,3 +824,21 @@ func TestBuildSortedLatestIndicesLockedRetainsGrownIndexBuf(t *testing.T) {
 		t.Fatal("indexBuf does not retain grown indices backing array")
 	}
 }
+
+func TestAppendOnlyOperationMixTracksDeleteEntries(t *testing.T) {
+	m := NewAppendOnlyWithCapacity(0)
+	m.Set([]byte("k1"), []byte("v1"))
+	m.Delete([]byte("k2"))
+	m.Delete([]byte("k1"))
+
+	mix := m.OperationMix()
+	if mix.Entries != 3 || mix.Deletes != 2 {
+		t.Fatalf("operation mix=(entries=%d deletes=%d), want (3,2)", mix.Entries, mix.Deletes)
+	}
+
+	m.Reset()
+	mix = m.OperationMix()
+	if mix.Entries != 0 || mix.Deletes != 0 {
+		t.Fatalf("operation mix after reset=(entries=%d deletes=%d), want (0,0)", mix.Entries, mix.Deletes)
+	}
+}
