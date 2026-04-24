@@ -6195,6 +6195,7 @@ type DB struct {
 	mutableShards                 []memShard
 	mutableShardMask              uint64
 	mutableBytes                  atomic.Int64
+	mutableEntries                atomic.Int64
 	mutableThreshold              atomic.Int64
 	rotatePending                 atomic.Bool
 	currentMutableRoute           atomic.Pointer[mutableRouteState]
@@ -7158,8 +7159,37 @@ type memShard struct {
 	mem                        memtable.Table
 	rng                        keyRange
 	bytes                      int64
+	entries                    int
 	stats                      memtableStats
 	appendOnlyDirectValueArena appendOnlyDirectValueArena
+}
+
+func (db *DB) updateMutableShardAccountingLocked(shard *memShard, newBytes int64, newEntries int) {
+	if db == nil || shard == nil {
+		return
+	}
+	if delta := newBytes - shard.bytes; delta != 0 {
+		db.mutableBytes.Add(delta)
+	}
+	if delta := newEntries - shard.entries; delta != 0 {
+		db.mutableEntries.Add(int64(delta))
+	}
+	shard.bytes = newBytes
+	shard.entries = newEntries
+}
+
+func (db *DB) clearMutableShardAccountingLocked(shard *memShard) {
+	if db == nil || shard == nil {
+		return
+	}
+	if shard.bytes != 0 {
+		db.mutableBytes.Add(-shard.bytes)
+	}
+	if shard.entries != 0 {
+		db.mutableEntries.Add(-int64(shard.entries))
+	}
+	shard.bytes = 0
+	shard.entries = 0
 }
 
 // memtableView is an immutable snapshot of the in-memory layers.
@@ -8062,6 +8092,48 @@ func (db *DB) clearCurrentMutableRouteLocked() {
 	db.currentMutableRoute.Store(nil)
 }
 
+func (db *DB) hasQueuedRangedMemtablesLocked() bool {
+	if db == nil {
+		return false
+	}
+	for _, mode := range db.queueRouteModes {
+		if mode == memtableRouteRanged {
+			return true
+		}
+	}
+	return false
+}
+
+func (db *DB) routeMutableHasEntriesLocked(route *mutableRouteState) bool {
+	if db == nil || route == nil {
+		return false
+	}
+	for _, shardID := range route.shardIDs() {
+		if shardID < 0 || shardID >= len(db.mutableShards) {
+			continue
+		}
+		shard := &db.mutableShards[shardID]
+		shard.mu.Lock()
+		hasEntries := shard.entries > 0 || shard.bytes > 0 || shard.rng.valid || shard.mem.Len() > 0
+		shard.mu.Unlock()
+		if hasEntries {
+			return true
+		}
+	}
+	return false
+}
+
+func (db *DB) clearInactiveMutableRouteLocked() {
+	if db == nil {
+		return
+	}
+	route := db.currentMutableRoute.Load()
+	if route == nil || db.hasQueuedRangedMemtablesLocked() || db.routeMutableHasEntriesLocked(route) {
+		return
+	}
+	db.currentMutableRoute.Store(nil)
+}
+
 func (db *DB) extendCurrentMutableRouteLocked(first, last []byte) *mutableRouteState {
 	if db == nil || len(first) == 0 || len(last) == 0 {
 		return db.currentMutableRoute.Load()
@@ -8618,6 +8690,7 @@ func (db *DB) snapshotMutableRange() keyRange {
 
 func (db *DB) resetMutableShardsLocked(nextMode memtable.Mode, reuse bool) error {
 	db.mutableBytes.Store(0)
+	db.mutableEntries.Store(0)
 	db.clearCurrentMutableRouteLocked()
 	for i := range db.mutableShards {
 		shard := &db.mutableShards[i]
@@ -8645,6 +8718,7 @@ func (db *DB) resetMutableShardsLocked(nextMode memtable.Mode, reuse bool) error
 		}
 		shard.rng = keyRange{}
 		shard.bytes = 0
+		shard.entries = 0
 		shard.mu.Unlock()
 	}
 	db.resetAdaptiveMemtableStatsLocked()
@@ -20419,9 +20493,8 @@ func (db *DB) setDirect(key, value []byte, sync bool) error {
 	}
 	shard.rng.add(key)
 	newBytes := shard.mem.Size()
-	delta := newBytes - shard.bytes
-	shard.bytes = newBytes
-	db.mutableBytes.Add(delta)
+	newEntries := shard.mem.Len()
+	db.updateMutableShardAccountingLocked(shard, newBytes, newEntries)
 	shard.mu.Unlock()
 	db.noteWriteKey(key)
 
@@ -20511,9 +20584,8 @@ func (db *DB) DeleteRange(start, end []byte) error {
 				}
 				shard.rng.add(key)
 				newBytes := shard.mem.Size()
-				delta := newBytes - shard.bytes
-				shard.bytes = newBytes
-				db.mutableBytes.Add(delta)
+				newEntries := shard.mem.Len()
+				db.updateMutableShardAccountingLocked(shard, newBytes, newEntries)
 				shard.mu.Unlock()
 				db.noteDeleteKey(key)
 				if db.mutableBytes.Load() > db.mutableFlushThreshold() {
@@ -20989,9 +21061,8 @@ func (db *DB) DeleteRange(start, end []byte) error {
 			shard.mem.Delete(key)
 			shard.rng.add(key)
 			newBytes := shard.mem.Size()
-			delta := newBytes - shard.bytes
-			shard.bytes = newBytes
-			db.mutableBytes.Add(delta)
+			newEntries := shard.mem.Len()
+			db.updateMutableShardAccountingLocked(shard, newBytes, newEntries)
 			shard.mu.Unlock()
 			db.noteDeleteKey(key)
 			if db.mutableBytes.Load() > db.mutableFlushThreshold() {
@@ -21132,9 +21203,8 @@ func (db *DB) deleteDirect(key []byte, sync bool) error {
 	shard.mem.Delete(key)
 	shard.rng.add(key)
 	newBytes := shard.mem.Size()
-	delta := newBytes - shard.bytes
-	shard.bytes = newBytes
-	db.mutableBytes.Add(delta)
+	newEntries := shard.mem.Len()
+	db.updateMutableShardAccountingLocked(shard, newBytes, newEntries)
 	shard.mu.Unlock()
 	db.noteDeleteKey(key)
 
@@ -21208,6 +21278,7 @@ func (db *DB) rotateMemtableLockedWithCapacity(triggerFlush bool, newCapacity in
 		)
 	}
 	db.mutableBytes.Store(0)
+	db.mutableEntries.Store(0)
 	enqueueNS := time.Now().UnixNano()
 	for i := range db.mutableShards {
 		shard := &db.mutableShards[i]
@@ -21249,6 +21320,7 @@ func (db *DB) rotateMemtableLockedWithCapacity(triggerFlush bool, newCapacity in
 		shard.mem = mt
 		shard.rng = keyRange{}
 		shard.bytes = 0
+		shard.entries = 0
 		if debugRotate {
 			db.debugMemtableRotatef(
 				"event=shard path=with_capacity shard=%d lane=%d old_mode=%s old_len=%d old_size=%d old_bytes=%d new_mode=%s new_capacity=%d queue_len=%d queue_backlog_bytes=%d",
@@ -21269,7 +21341,6 @@ func (db *DB) rotateMemtableLockedWithCapacity(triggerFlush bool, newCapacity in
 	if len(retiredMems) > 0 {
 		db.pendingRetiredMems = append(db.pendingRetiredMems, retiredMems...)
 	}
-	db.clearCurrentMutableRouteLocked()
 	db.resetAdaptiveMemtableStatsLocked()
 	db.updateMutableThresholdLocked()
 	db.publishMemtablesLocked()
@@ -21428,11 +21499,9 @@ func (db *DB) rotateMutableShardsLockedWithMode(newCapacity int, triggerFlush bo
 			db.observeAppendOnlyMutableEntries(oldLen)
 		}
 
-		// Remove this shard's contribution from the global byte counter before
-		// resetting it, since writers may still be updating other shards.
-		if shard.bytes != 0 {
-			db.mutableBytes.Add(-shard.bytes)
-		}
+		// Remove this shard's contribution before resetting it, since writers may
+		// still be updating other shards.
+		db.clearMutableShardAccountingLocked(shard)
 
 		// Freeze and enqueue the old mutable shard.
 		db.retainMutableShardAppendOnlyArenaLocked(i, shard)
@@ -21462,6 +21531,7 @@ func (db *DB) rotateMutableShardsLockedWithMode(newCapacity int, triggerFlush bo
 		shard.mem = mt
 		shard.rng = keyRange{}
 		shard.bytes = 0
+		shard.entries = 0
 		if debugRotate {
 			db.debugMemtableRotatef(
 				"event=shard path=mutable_shards shard=%d lane=%d old_mode=%s old_len=%d old_size=%d old_bytes=%d new_mode=%s new_capacity=%d queue_len=%d queue_backlog_bytes=%d",
@@ -21481,7 +21551,6 @@ func (db *DB) rotateMutableShardsLockedWithMode(newCapacity int, triggerFlush bo
 	if len(retiredMems) > 0 {
 		db.pendingRetiredMems = append(db.pendingRetiredMems, retiredMems...)
 	}
-	db.clearCurrentMutableRouteLocked()
 	db.resetAdaptiveMemtableStatsLocked()
 	db.updateMutableThresholdLocked()
 	db.publishMemtablesLocked()
@@ -21541,9 +21610,7 @@ func (db *DB) rotateMutableShardsSelectedLocked(shardIDs []int, newCapacity int,
 		if _, ok := shard.mem.(*memtable.AppendOnly); ok {
 			db.observeAppendOnlyMutableEntries(oldLen)
 		}
-		if shard.bytes != 0 {
-			db.mutableBytes.Add(-shard.bytes)
-		}
+		db.clearMutableShardAccountingLocked(shard)
 		db.retainMutableShardAppendOnlyArenaLocked(shardID, shard)
 		shard.mem.Freeze()
 		memBytes := shard.mem.Size()
@@ -21575,17 +21642,11 @@ func (db *DB) rotateMutableShardsSelectedLocked(shardIDs []int, newCapacity int,
 		shard.mem = mt
 		shard.rng = keyRange{}
 		shard.bytes = 0
+		shard.entries = 0
 		shard.mu.Unlock()
 	}
 	if len(retiredMems) > 0 {
 		db.pendingRetiredMems = append(db.pendingRetiredMems, retiredMems...)
-	}
-	if activeRoute != nil {
-		remove := make(map[int]struct{}, len(sortedShardIDs))
-		for _, shardID := range sortedShardIDs {
-			remove[shardID] = struct{}{}
-		}
-		db.currentMutableRoute.Store(activeRoute.withoutShards(remove))
 	}
 	db.resetAdaptiveMemtableStatsLocked()
 	db.updateMutableThresholdLocked()
@@ -22359,6 +22420,7 @@ func (db *DB) removeQueuedUnitsLocked(removeIDs map[uint64]struct{}, units []flu
 	if len(db.queue) == 0 {
 		db.materializationLastDrainUnixNano.Store(time.Now().UnixNano())
 	}
+	db.clearInactiveMutableRouteLocked()
 	db.publishMemtablesLocked()
 }
 
@@ -23480,6 +23542,7 @@ func (db *DB) flushOneLocked(sync bool) bool {
 	if len(db.queue) == 0 {
 		db.materializationLastDrainUnixNano.Store(time.Now().UnixNano())
 	}
+	db.clearInactiveMutableRouteLocked()
 	db.publishMemtablesLocked()
 
 	deletable := make([]string, 0, len(walPaths))
@@ -23550,14 +23613,16 @@ func (db *DB) flushOneLocked(sync bool) bool {
 //
 // Safety notes:
 //   - We require an empty immutable queue.
-//   - We require global mutable bytes to be zero.
+//   - We require global mutable bytes and entries to be zero. Bytes alone are
+//     not a complete shadowing guard because tombstone-heavy updates can shrink
+//     byte accounting while entries still exist.
 //   - We additionally check the target mutable shard length to avoid races where
 //     mutableBytes is transiently zero while an old view still has entries.
 //   - Routed mutable ranges bypass the hash shard; if a key is currently routed,
 //     do not bypass because the hash shard can be empty while the routed shard
 //     still owns the newest value.
 func (db *DB) canBypassMemtableRead(view *memtableView, key []byte) bool {
-	if view == nil || len(view.queue) != 0 || db.mutableBytes.Load() != 0 {
+	if view == nil || len(view.queue) != 0 || db.queueBacklogBytes.Load() != 0 || db.mutableBytes.Load() != 0 || db.mutableEntries.Load() != 0 {
 		return false
 	}
 	if keyInMutableRoute(view.mutableRoute, key) {
@@ -23584,7 +23649,7 @@ func (db *DB) canBypassMemtableReadMany(view *memtableView, keys [][]byte) bool 
 	if len(keys) == 0 {
 		return true
 	}
-	if view == nil || len(view.queue) != 0 || db.mutableBytes.Load() != 0 {
+	if view == nil || len(view.queue) != 0 || db.queueBacklogBytes.Load() != 0 || db.mutableBytes.Load() != 0 || db.mutableEntries.Load() != 0 {
 		return false
 	}
 	for _, key := range keys {
@@ -29305,9 +29370,8 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 				}
 			}
 			newBytes := shard.mem.Size()
-			delta := newBytes - shard.bytes
-			shard.bytes = newBytes
-			b.db.mutableBytes.Add(delta)
+			newEntries := shard.mem.Len()
+			b.db.updateMutableShardAccountingLocked(shard, newBytes, newEntries)
 			shard.mu.Unlock()
 			if retainMain {
 				retainMainMems = append(retainMainMems, shard.mem)
@@ -29502,9 +29566,8 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 				}
 			}
 			newBytes := shard.mem.Size()
-			delta := newBytes - shard.bytes
-			shard.bytes = newBytes
-			b.db.mutableBytes.Add(delta)
+			newEntries := shard.mem.Len()
+			b.db.updateMutableShardAccountingLocked(shard, newBytes, newEntries)
 			var retainedMain memtable.Table
 			if retainMain {
 				retainedMain = shard.mem
