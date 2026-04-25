@@ -404,7 +404,7 @@ func newCollectionRunTable(entries int) memtable.Table {
 	if entries < 0 {
 		entries = 0
 	}
-	return memtable.NewAppendOnlyWithCapacity(entries * 64)
+	return memtable.NewAppendOnlyWithEntryCapacity(entries)
 }
 
 func sortedItemOrderByKey(items []insertBatchItem, keyFn func(*insertBatchItem) []byte) []int {

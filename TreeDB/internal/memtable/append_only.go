@@ -206,12 +206,33 @@ func appendOnlyInitialEntriesForCapacity(capacity, estimatedBytesPerEntry int) i
 	return n
 }
 
+func appendOnlyInitialEntriesForCount(entries int) int {
+	if entries < appendOnlyMinInitialEntries {
+		return appendOnlyMinInitialEntries
+	}
+	if entries > appendOnlyMaxInitialEntries {
+		return appendOnlyMaxInitialEntries
+	}
+	return entries
+}
+
 func NewAppendOnlyWithCapacity(capacity int) *AppendOnly {
 	return NewAppendOnlyWithCapacityEstimatedEntryBytes(capacity, appendOnlyEstimatedBytesPerEntryPointer)
 }
 
 func NewAppendOnlyWithCapacityEstimatedEntryBytes(capacity, estimatedBytesPerEntry int) *AppendOnly {
 	n := appendOnlyInitialEntriesForCapacity(capacity, estimatedBytesPerEntry)
+	return newAppendOnlyWithInitialEntries(n)
+}
+
+// NewAppendOnlyWithEntryCapacity creates an append-only table sized for an
+// expected entry count instead of a byte-capacity estimate.
+func NewAppendOnlyWithEntryCapacity(entries int) *AppendOnly {
+	n := appendOnlyInitialEntriesForCount(entries)
+	return newAppendOnlyWithInitialEntries(n)
+}
+
+func newAppendOnlyWithInitialEntries(n int) *AppendOnly {
 	return &AppendOnly{
 		entries:        getAppendOnlyEntries(n),
 		baseEntriesLen: n,
