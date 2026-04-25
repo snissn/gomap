@@ -9,6 +9,7 @@ BENCH_REGEX="${BENCH_REGEX:-Benchmark(CollectionInsertProvidedID|CollectionInser
 COUNT="${COUNT:-3}"
 BENCHTIME="${BENCHTIME:-}"
 BENCH_ENGINE="${TREEDB_COLLECTION_BENCH_ENGINE:-backend_direct_fast}"
+BATCH_SIZE="${TREEDB_COLLECTION_BENCH_BATCH_SIZE:-8000}"
 PATH_LABEL="${TREEDB_COLLECTION_PATH_LABEL:-}"
 
 RAW_JSON="$OUT_DIR/collections_bench.json"
@@ -37,6 +38,7 @@ fi
 
 echo "running focused collections benchmarks into: $OUT_DIR"
 echo "benchmark engine: $BENCH_ENGINE"
+echo "collection batch size: $BATCH_SIZE"
 echo "execution path: $PATH_LABEL"
 
 if [[ -z "$PATH_LABEL" ]]; then
@@ -52,11 +54,12 @@ if [[ ! -d "$ROOT/TreeDB/collections" ]]; then
     -worktree "$WORKTREE" \
     -execution-path "$PATH_LABEL" \
     -benchmark-engine "$BENCH_ENGINE" \
+    -collection-batch-size "$BATCH_SIZE" \
     -bench-pattern "$BENCH_REGEX" \
     -count "$COUNT" \
     -unavailable-reason "N/A before R0 harness bring-up"
 else
-  TREEDB_COLLECTION_BENCH_ENGINE="$BENCH_ENGINE" GOWORK=off "${cmd[@]}" | tee "$RAW_JSON"
+  TREEDB_COLLECTION_BENCH_ENGINE="$BENCH_ENGINE" TREEDB_COLLECTION_BENCH_BATCH_SIZE="$BATCH_SIZE" GOWORK=off "${cmd[@]}" | tee "$RAW_JSON"
 
   GOWORK=off go run ./cmd/collection_bench_report \
     -in "$RAW_JSON" \
@@ -66,6 +69,7 @@ else
     -worktree "$WORKTREE" \
     -execution-path "$PATH_LABEL" \
     -benchmark-engine "$BENCH_ENGINE" \
+    -collection-batch-size "$BATCH_SIZE" \
     -bench-pattern "$BENCH_REGEX" \
     -count "$COUNT"
 fi
@@ -79,6 +83,7 @@ cat >"$OUT_DIR/README.md" <<EOF
 - commit: \`$COMMIT\`
 - execution path: \`$PATH_LABEL\`
 - benchmark engine: \`$BENCH_ENGINE\`
+- collection batch size: \`$BATCH_SIZE\`
 - benchmark regex: \`$BENCH_REGEX\`
 - benchmark count: \`$COUNT\`
 - raw benchmark json: \`$RAW_JSON\`
@@ -89,6 +94,7 @@ cat >"$OUT_DIR/README.md" <<EOF
 - json report: \`$OUT_DIR/collections_report.json\`
 - backend-direct fast override: \`TREEDB_COLLECTION_BENCH_ENGINE=backend_direct_fast scripts/bench_collections_report.sh\`
 - backend-direct WAL-on-fast override: \`TREEDB_COLLECTION_BENCH_ENGINE=backend_direct_wal_on_fast scripts/bench_collections_report.sh\`
+- batch-size override: \`TREEDB_COLLECTION_BENCH_BATCH_SIZE=8000 scripts/bench_collections_report.sh\`
 - oracle-path override: \`TREEDB_COLLECTION_PATH_LABEL=oracle scripts/bench_collections_report.sh\`
 EOF
 

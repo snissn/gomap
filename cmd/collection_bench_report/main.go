@@ -21,16 +21,17 @@ import (
 )
 
 type config struct {
-	inputPath         string
-	outDir            string
-	branch            string
-	commit            string
-	worktree          string
-	executionPath     string
-	benchPattern      string
-	count             int
-	benchmarkEngine   string
-	unavailableReason string
+	inputPath           string
+	outDir              string
+	branch              string
+	commit              string
+	worktree            string
+	executionPath       string
+	benchPattern        string
+	count               int
+	benchmarkEngine     string
+	collectionBatchSize int
+	unavailableReason   string
 }
 
 type jsonEvent struct {
@@ -72,18 +73,19 @@ type reportSection struct {
 }
 
 type report struct {
-	GeneratedAt       string          `json:"generated_at"`
-	Status            string          `json:"status"`
-	UnavailableReason string          `json:"unavailable_reason,omitempty"`
-	ExecutionPath     string          `json:"execution_path,omitempty"`
-	BenchmarkEngine   string          `json:"benchmark_engine,omitempty"`
-	Worktree          string          `json:"worktree,omitempty"`
-	Branch            string          `json:"branch,omitempty"`
-	Commit            string          `json:"commit,omitempty"`
-	BenchPattern      string          `json:"bench_pattern,omitempty"`
-	Count             int             `json:"count,omitempty"`
-	RawJSONPath       string          `json:"raw_json_path,omitempty"`
-	Sections          []reportSection `json:"sections"`
+	GeneratedAt         string          `json:"generated_at"`
+	Status              string          `json:"status"`
+	UnavailableReason   string          `json:"unavailable_reason,omitempty"`
+	ExecutionPath       string          `json:"execution_path,omitempty"`
+	BenchmarkEngine     string          `json:"benchmark_engine,omitempty"`
+	Worktree            string          `json:"worktree,omitempty"`
+	Branch              string          `json:"branch,omitempty"`
+	Commit              string          `json:"commit,omitempty"`
+	BenchPattern        string          `json:"bench_pattern,omitempty"`
+	Count               int             `json:"count,omitempty"`
+	CollectionBatchSize int             `json:"collection_batch_size,omitempty"`
+	RawJSONPath         string          `json:"raw_json_path,omitempty"`
+	Sections            []reportSection `json:"sections"`
 }
 
 var benchmarkSpecs = []benchmarkSpec{
@@ -172,6 +174,7 @@ func parseFlagsFrom(args []string) (config, error) {
 	fs.StringVar(&cfg.benchPattern, "bench-pattern", "", "Optional benchmark regex to include in report metadata")
 	fs.IntVar(&cfg.count, "count", 0, "Optional benchmark count to include in report metadata")
 	fs.StringVar(&cfg.benchmarkEngine, "benchmark-engine", "", "Optional benchmark engine label to include in report metadata")
+	fs.IntVar(&cfg.collectionBatchSize, "collection-batch-size", 0, "Optional collection benchmark batch size to include in report metadata")
 	fs.StringVar(&cfg.unavailableReason, "unavailable-reason", "", "Emit an explicit unavailable report instead of parsing benchmark input")
 	if err := fs.Parse(args); err != nil {
 		return config{}, err
@@ -201,17 +204,18 @@ func validateExecutionPath(path string) error {
 func buildReport(cfg config) (*report, error) {
 	if cfg.unavailableReason != "" {
 		return &report{
-			GeneratedAt:       time.Now().UTC().Format(time.RFC3339),
-			Status:            "unavailable",
-			UnavailableReason: cfg.unavailableReason,
-			ExecutionPath:     cfg.executionPath,
-			BenchmarkEngine:   cfg.benchmarkEngine,
-			Worktree:          cfg.worktree,
-			Branch:            cfg.branch,
-			Commit:            cfg.commit,
-			BenchPattern:      cfg.benchPattern,
-			Count:             cfg.count,
-			Sections:          nil,
+			GeneratedAt:         time.Now().UTC().Format(time.RFC3339),
+			Status:              "unavailable",
+			UnavailableReason:   cfg.unavailableReason,
+			ExecutionPath:       cfg.executionPath,
+			BenchmarkEngine:     cfg.benchmarkEngine,
+			Worktree:            cfg.worktree,
+			Branch:              cfg.branch,
+			Commit:              cfg.commit,
+			BenchPattern:        cfg.benchPattern,
+			Count:               cfg.count,
+			CollectionBatchSize: cfg.collectionBatchSize,
+			Sections:            nil,
 		}, nil
 	}
 
@@ -233,17 +237,18 @@ func buildReport(cfg config) (*report, error) {
 	sections := buildSections(aggregates)
 
 	return &report{
-		GeneratedAt:     time.Now().UTC().Format(time.RFC3339),
-		Status:          "ok",
-		ExecutionPath:   cfg.executionPath,
-		BenchmarkEngine: cfg.benchmarkEngine,
-		Worktree:        cfg.worktree,
-		Branch:          cfg.branch,
-		Commit:          cfg.commit,
-		BenchPattern:    cfg.benchPattern,
-		Count:           cfg.count,
-		RawJSONPath:     cfg.inputPath,
-		Sections:        sections,
+		GeneratedAt:         time.Now().UTC().Format(time.RFC3339),
+		Status:              "ok",
+		ExecutionPath:       cfg.executionPath,
+		BenchmarkEngine:     cfg.benchmarkEngine,
+		Worktree:            cfg.worktree,
+		Branch:              cfg.branch,
+		Commit:              cfg.commit,
+		BenchPattern:        cfg.benchPattern,
+		Count:               cfg.count,
+		CollectionBatchSize: cfg.collectionBatchSize,
+		RawJSONPath:         cfg.inputPath,
+		Sections:            sections,
 	}, nil
 }
 
@@ -467,6 +472,9 @@ func renderMarkdown(rep *report) string {
 	}
 	if rep.Count > 0 {
 		sb.WriteString(fmt.Sprintf("- benchmark count: `%d`\n", rep.Count))
+	}
+	if rep.CollectionBatchSize > 0 {
+		sb.WriteString(fmt.Sprintf("- collection batch size: `%d`\n", rep.CollectionBatchSize))
 	}
 	if rep.RawJSONPath != "" {
 		sb.WriteString(fmt.Sprintf("- raw benchmark json: `%s`\n", rep.RawJSONPath))

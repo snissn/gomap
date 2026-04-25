@@ -79,15 +79,16 @@ func TestBuildReportAndRenderMarkdown(t *testing.T) {
 	}
 
 	rep := &report{
-		GeneratedAt:     "2026-03-05T00:00:00Z",
-		Status:          "ok",
-		ExecutionPath:   "oracle",
-		BenchmarkEngine: "cached",
-		Worktree:        "/tmp/oracle",
-		Branch:          "pr/oracle",
-		Commit:          "deadbeef",
-		RawJSONPath:     "/tmp/collections_bench.json",
-		Sections:        buildSections(aggregates),
+		GeneratedAt:         "2026-03-05T00:00:00Z",
+		Status:              "ok",
+		ExecutionPath:       "oracle",
+		BenchmarkEngine:     "cached",
+		Worktree:            "/tmp/oracle",
+		Branch:              "pr/oracle",
+		Commit:              "deadbeef",
+		CollectionBatchSize: 8000,
+		RawJSONPath:         "/tmp/collections_bench.json",
+		Sections:            buildSections(aggregates),
 	}
 	md := renderMarkdown(rep)
 	if !strings.Contains(md, "- execution path: `oracle`") {
@@ -95,6 +96,9 @@ func TestBuildReportAndRenderMarkdown(t *testing.T) {
 	}
 	if !strings.Contains(md, "- worktree: `/tmp/oracle`") {
 		t.Fatalf("markdown missing worktree:\n%s", md)
+	}
+	if !strings.Contains(md, "- collection batch size: `8000`") {
+		t.Fatalf("markdown missing collection batch size:\n%s", md)
 	}
 	if !strings.Contains(md, "## Document Path") {
 		t.Fatalf("markdown missing document section:\n%s", md)

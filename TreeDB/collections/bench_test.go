@@ -3,6 +3,7 @@ package collections_test
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -12,13 +13,27 @@ import (
 )
 
 const (
-	collectionBenchBatchSize = 256
-	collectionBenchSeedDocs  = 4096
-	collectionBenchCities    = 64
-	collectionBenchBackfill  = 1024
+	defaultCollectionBenchBatchSize = 8000
+	collectionBenchSeedDocs         = 4096
+	collectionBenchCities           = 64
+	collectionBenchBackfill         = 1024
 )
 
 var collectionBenchPayload = []byte(`{"name":"ada","city":"hnl","email":"ada@example.com","pad":"0123456789012345678901234567890123456789"}`)
+
+func benchmarkBatchSize(b *testing.B) int {
+	b.Helper()
+
+	raw := strings.TrimSpace(os.Getenv("TREEDB_COLLECTION_BENCH_BATCH_SIZE"))
+	if raw == "" {
+		return defaultCollectionBenchBatchSize
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n <= 0 {
+		b.Fatalf("unsupported TREEDB_COLLECTION_BENCH_BATCH_SIZE=%q", raw)
+	}
+	return n
+}
 
 func benchmarkTreeDBProfile(b *testing.B) treedb.Profile {
 	b.Helper()
@@ -123,9 +138,10 @@ func benchmarkDocumentBatch(start, count int, indexed bool) ([][]byte, [][]byte)
 func seedBenchmarkCollection(b *testing.B, collection *collections.Collection, start, count int, indexed bool) [][]byte {
 	b.Helper()
 
+	targetBatchSize := benchmarkBatchSize(b)
 	allIDs := make([][]byte, 0, count)
-	for inserted := 0; inserted < count; inserted += collectionBenchBatchSize {
-		batchSize := collectionBenchBatchSize
+	for inserted := 0; inserted < count; inserted += targetBatchSize {
+		batchSize := targetBatchSize
 		if remaining := count - inserted; remaining < batchSize {
 			batchSize = remaining
 		}
@@ -160,13 +176,14 @@ func BenchmarkCollectionInsertProvidedID(b *testing.B) {
 
 func BenchmarkCollectionInsertBatchProvidedID(b *testing.B) {
 	_, collection := openBenchmarkCollection(b, "bench_insert_batch_provided")
+	targetBatchSize := benchmarkBatchSize(b)
 
 	b.ReportAllocs()
-	b.ReportMetric(float64(collectionBenchBatchSize), "target_docs/batch")
+	b.ReportMetric(float64(targetBatchSize), "target_docs/batch")
 	b.ResetTimer()
 	for inserted := 0; inserted < b.N; {
 		b.StopTimer()
-		batchSize := collectionBenchBatchSize
+		batchSize := targetBatchSize
 		if remaining := b.N - inserted; remaining < batchSize {
 			batchSize = remaining
 		}
@@ -223,13 +240,14 @@ func BenchmarkCollectionInsertWithSecondaryIndexes(b *testing.B) {
 
 func BenchmarkCollectionInsertBatchWithSecondaryIndexes(b *testing.B) {
 	_, collection := openBenchmarkCollection(b, "bench_insert_batch_secondary", secondaryIndexes()...)
+	targetBatchSize := benchmarkBatchSize(b)
 
 	b.ReportAllocs()
-	b.ReportMetric(float64(collectionBenchBatchSize), "target_docs/batch")
+	b.ReportMetric(float64(targetBatchSize), "target_docs/batch")
 	b.ResetTimer()
 	for inserted := 0; inserted < b.N; {
 		b.StopTimer()
-		batchSize := collectionBenchBatchSize
+		batchSize := targetBatchSize
 		if remaining := b.N - inserted; remaining < batchSize {
 			batchSize = remaining
 		}
@@ -245,13 +263,14 @@ func BenchmarkCollectionInsertBatchWithSecondaryIndexes(b *testing.B) {
 
 func BenchmarkCollectionInsertBatchCheckpointWithSecondaryIndexes(b *testing.B) {
 	backend, collection := openBenchmarkCollection(b, "bench_insert_batch_checkpoint_secondary", secondaryIndexes()...)
+	targetBatchSize := benchmarkBatchSize(b)
 
 	b.ReportAllocs()
-	b.ReportMetric(float64(collectionBenchBatchSize), "target_docs/checkpoint")
+	b.ReportMetric(float64(targetBatchSize), "target_docs/checkpoint")
 	b.ResetTimer()
 	for inserted := 0; inserted < b.N; {
 		b.StopTimer()
-		batchSize := collectionBenchBatchSize
+		batchSize := targetBatchSize
 		if remaining := b.N - inserted; remaining < batchSize {
 			batchSize = remaining
 		}
