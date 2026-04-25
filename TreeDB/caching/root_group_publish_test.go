@@ -1342,6 +1342,7 @@ func TestPublishInstalledRootSet_SystemThenNonSystemWithoutGroupedPublisher_Publ
 		},
 	}
 	oldPoint := newRootDomainTestTable(t, rootDomainTestOp{key: "primary/doc", value: "old-p"})
+	oldIter := newRootDomainTestTable(t, rootDomainTestOp{key: "iter/doc", value: "old-i"})
 	oldSystem := newRootDomainTestTable(t, rootDomainTestOp{key: "sys/catalog", value: "old-s"})
 	db := &DB{
 		backend:          backend,
@@ -1354,6 +1355,13 @@ func TestPublishInstalledRootSet_SystemThenNonSystemWithoutGroupedPublisher_Publ
 				newRootDomainTestTable(t, rootDomainTestOp{key: "primary/doc", value: "new-p"}),
 			},
 		}},
+		rootIteratorState: rootDomainState{
+			published:       oldIter,
+			publishedRootID: 91,
+			immutables: []memtable.Table{
+				newRootDomainTestTable(t, rootDomainTestOp{key: "iter/doc", value: "new-i"}),
+			},
+		},
 		rootSystemState: rootDomainState{
 			published:       oldSystem,
 			publishedRootID: 80,
@@ -1367,7 +1375,8 @@ func TestPublishInstalledRootSet_SystemThenNonSystemWithoutGroupedPublisher_Publ
 		pointShards: []publishedRootRef{
 			{lookup: oldPoint, rootID: 90},
 		},
-		system: publishedRootRef{lookup: oldSystem, rootID: 80},
+		system:   publishedRootRef{lookup: oldSystem, rootID: 80},
+		iterator: publishedRootRef{lookup: oldIter, rootID: 91},
 	}) {
 		t.Fatal("expected initial install")
 	}
@@ -1377,7 +1386,8 @@ func TestPublishInstalledRootSet_SystemThenNonSystemWithoutGroupedPublisher_Publ
 		pointShards: []publishedRootRef{
 			{lookup: newRootDomainTestTable(t, rootDomainTestOp{key: "primary/doc", value: "new-p"}), rootID: 90},
 		},
-		system: publishedRootRef{lookup: newRootDomainTestTable(t, rootDomainTestOp{key: "sys/catalog", value: "new-s"}), rootID: 80},
+		system:   publishedRootRef{lookup: newRootDomainTestTable(t, rootDomainTestOp{key: "sys/catalog", value: "new-s"}), rootID: 80},
+		iterator: publishedRootRef{lookup: newRootDomainTestTable(t, rootDomainTestOp{key: "iter/doc", value: "new-i"}), rootID: 91},
 	}); err != nil {
 		t.Fatalf("publishInstalledRootSet: %v", err)
 	}
@@ -1385,14 +1395,17 @@ func TestPublishInstalledRootSet_SystemThenNonSystemWithoutGroupedPublisher_Publ
 	if backend.inner.publishes != 1 {
 		t.Fatalf("system publishes=%d want 1", backend.inner.publishes)
 	}
-	if backend.inner.orderedPublishes != 1 {
-		t.Fatalf("ordered publishes=%d want 1", backend.inner.orderedPublishes)
+	if backend.inner.orderedPublishes != 2 {
+		t.Fatalf("ordered publishes=%d want 2", backend.inner.orderedPublishes)
 	}
 	if got := backend.inner.values["sys/catalog"]; got != "new-s" {
 		t.Fatalf("system value=%q want new-s", got)
 	}
-	if got := backend.inner.orderedValues["primary/doc"]; got != "new-p" {
-		t.Fatalf("ordered value=%q want new-p", got)
+	if got := backend.inner.orderedCalls[0].values["primary/doc"]; got != "new-p" {
+		t.Fatalf("point value=%q want new-p", got)
+	}
+	if got := backend.inner.orderedCalls[1].values["iter/doc"]; got != "new-i" {
+		t.Fatalf("iterator value=%q want new-i", got)
 	}
 	if db.rootPublishedSet == nil {
 		t.Fatal("expected installed published root set")
@@ -1405,6 +1418,9 @@ func TestPublishInstalledRootSet_SystemThenNonSystemWithoutGroupedPublisher_Publ
 	}
 	if db.rootPublishedSet.pointShards[0].rootID == 90 {
 		t.Fatal("expected point root id to advance")
+	}
+	if db.rootPublishedSet.iterator.rootID == 91 {
+		t.Fatal("expected iterator root id to advance")
 	}
 }
 

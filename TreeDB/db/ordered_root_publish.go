@@ -316,9 +316,6 @@ func (db *DB) publishOrderedRootIterator(baseRoot uint64, iter iterator.UnsafeIt
 			case orderedRootPublishPlanColdBuild:
 				err = errors.New("ordered root warm publish selected cold build for a non-empty base root")
 				return
-			default:
-				err = errors.New("ordered root warm publish selected unknown plan")
-				return
 			}
 		}
 	} else {
