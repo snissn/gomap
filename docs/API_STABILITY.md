@@ -18,7 +18,8 @@
 ### Stable (intended for downstream use)
 
 Note: while these packages are the *intended* stable surface, the repo is still pre-alpha.
-Downstream users should pin a commit and expect breaking changes until we start tagging releases.
+Downstream users should pin a tagged release or commit and still expect breaking
+changes until the project reaches a stable post-pre-alpha phase.
 
 - `TreeDB` / package `treedb`
   - Primary entrypoint: `treedb.Open(opts)` (cached write-back mode by default).
@@ -56,7 +57,8 @@ The intent is to let downstream projects depend on the stable surface without su
 
 Policy:
 - Breaking changes to the stable surface should be reflected in `CHANGELOG.md`.
-- When we start tagging releases, breaking changes will correspond to a SemVer major bump.
+- Releases are tagged with SemVer, but pre-`1.0.0` tags do not yet guarantee
+  API or on-disk compatibility across minor versions.
 - Non-stable packages/tooling may change freely without guarantees.
 
 ## Documentation + Examples (Go Best Practices)

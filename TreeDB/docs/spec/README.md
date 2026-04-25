@@ -85,9 +85,9 @@ Given pre-alpha status, this is a living spec that tracks implementation.
 - `TreeDB/docs/spec/collections-native-fastpath-pr-note-template.md`
   - required PR note template for rewrite phases, including benchmark tables,
     artifact references, and go/no-go decisions.
-- `TreeDB/docs/spec/collections-native-fastpath-baseline-2026-03-09.md`
-  - frozen pre-`R0` baseline note for issue `#768`, including exact main/oracle
-    SHAs, artifact dirs, commands, and benchmark baselines.
+- `TreeDB/docs/spec/collections-native-fastpath-baseline-2026-04-25.md`
+  - refreshed pre-`R0` baseline note for issue `#768`, including exact
+    main/oracle SHAs, artifact dirs, commands, and benchmark baselines.
 
 ## Relationship to Existing Docs
 

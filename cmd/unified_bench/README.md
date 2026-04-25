@@ -61,8 +61,8 @@ GOWORK=off GOMEMLIMIT=4GiB GOMAXPROCS=2 go test -json -p 1 . \
 - `-profile` benchmark profile preset (see `cmd/unified_bench/profiles.go`):
   - `balanced` (default)
   - `durable` (strict durability)
-  - `fast` (max throughput; TreeDB WAL off + throughput-biased vlog auto policy; unsafe)
-  - `wal_on_fast` (TreeDB WAL on + relaxed durability + throughput-biased vlog auto policy; unsafe)
+  - `fast` (max throughput; TreeDB mirrors `treedb.ProfileFast`, including Celestia-aligned auto/snappy/balanced value-log compression; unsafe)
+  - `wal_on_fast` (TreeDB mirrors `treedb.ProfileWALOnFast`, including the same compression defaults with WAL on; unsafe)
 - `-dbs` (`all` or CSV): `hashdb,btree,treedb,badger,leveldb`
 - `-test` (`all` or CSV): see list above
 - `-keys` number of keys (default 100000)
@@ -79,8 +79,37 @@ GOWORK=off GOMEMLIMIT=4GiB GOMAXPROCS=2 go test -json -p 1 . \
 - `-range-span` number of keys per range (default 100)
 - `-leveldb-block-compression` LevelDB: block compression mode (`default|on|off|both`)
 - `-leveldb-block-size` LevelDB: table block size in bytes (default 4096)
+
+### TreeDB Main Knobs
+
 - `-treedb-chunk-size` TreeDB: pager chunk size in bytes (default `256KiB`)
-- `-treedb-flush-threshold` TreeDB (cached) flush threshold in bytes (default 64MB)
+- `-treedb-flush-threshold` TreeDB (cached): flush threshold in bytes (default 64MB)
+- `-treedb-maintenance-mode` TreeDB maintenance preset (`normal|bench`)
+- `-treedb-memtable-mode` TreeDB memtable implementation override
+- `-treedb-index-optimizations` TreeDB profile-style index optimization bundle
+- `-treedb-index-outer-leaves-in-vlog` TreeDB: store outer leaves in `leaf_vlog`
+- `-treedb-prefer-append-alloc` TreeDB: prefer append allocation over freelist reuse
+- `-treedb-force-value-pointers` TreeDB: force all values into the value log
+- `-treedb-value-log-threshold` TreeDB: inline-vs-pointer threshold
+- `-treedb-vlog-compression` TreeDB: value-log compression mode (`default|off|block|dict|auto`)
+- `-treedb-vlog-block-codec` TreeDB: block codec (`snappy|lz4`)
+- `-treedb-vlog-auto-policy` TreeDB: value-log auto policy (`balanced|throughput|size`)
+- `-treedb-vlog-generation-policy` TreeDB: generation policy (`default|off|hot_warm_cold`)
+
+### TreeDB Advanced Tuning
+
+These are mainly for experiments and should usually be left at engine defaults:
+
+- `-treedb-vlog-compression-autotune`
+- `-treedb-vlog-dict-*`
+- `-treedb-vlog-rewrite-*`
+- `-treedb-flush-build-*`
+- `-treedb-max-queued-memtables`, `-treedb-slowdown-backlog-seconds`, `-treedb-stop-backlog-seconds`
+
+Use `./bin/unified-bench -h` for the full grouped TreeDB advanced flag list.
+
+### Additional Common Flags
+
 - `-treedb-max-queued-memtables` TreeDB (cached) max queued immutable memtables before applying backpressure flush (`0`=default, `<0`=disable)
 - `-treedb-slowdown-backlog-seconds` TreeDB (cached) start backpressure when queued backlog exceeds this many seconds of flush work
 - `-treedb-stop-backlog-seconds` TreeDB (cached) block writers when queued backlog exceeds this many seconds of flush work
@@ -94,7 +123,7 @@ GOWORK=off GOMEMLIMIT=4GiB GOMAXPROCS=2 go test -json -p 1 . \
 - `-treedb-bg-vacuum-span-ppm` TreeDB: background index vacuum span ratio threshold (ppm), `0`=default
 - `-treedb-allow-unsafe` TreeDB: allow unsafe durability/integrity options (required for unsafe toggles)
 - `-treedb-vlog-dict` TreeDB: value-log dict compression mode (`default|on|off|both`)
-- `-treedb-vlog-auto-policy` TreeDB: value-log auto policy (`balanced|throughput|size`)
+- `-treedb-vlog-rewrite-min-segment-age-ms` TreeDB: minimum source segment age for online generational rewrite (`0`=default)
 - `-treedb-vlog-dict-frame-encode-level` TreeDB: dict frame zstd encoder level (`engine|fastest|default|better|best|all|<int>`)
 - `-treedb-vlog-dict-frame-entropy` TreeDB: dict frame entropy mode (`engine|on|off|both`)
 - `-seed` PRNG seed for randomized tests (default 1; `0` = time-based)

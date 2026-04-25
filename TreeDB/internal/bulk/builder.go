@@ -15,9 +15,9 @@ type Allocator interface {
 //
 // When BuildOptions.LeafPageLog is non-nil, BuildWithOptions writes leaf pages
 // via this interface and returns LeafRef ids (encoded from the returned
-// ValuePtr) in internal children and as the tree root when the height is 1.
+// LeafLogPtr) in internal children and as the tree root when the height is 1.
 type LeafPageAppender interface {
-	AppendLeafPage(leafPage []byte) (page.ValuePtr, error)
+	AppendLeafPage(leafPage []byte) (page.LeafLogPtr, error)
 }
 
 type levelBuilder struct {

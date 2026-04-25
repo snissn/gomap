@@ -26,9 +26,13 @@ var missingValueLogIDPattern = regexp.MustCompile(`valuelog file ([0-9]+) not fo
 
 func ageValueLogFilesForTest(t *testing.T, dir string, age time.Duration) {
 	t.Helper()
-	paths, err := filepath.Glob(filepath.Join(dir, "wal", "value-l*.log"))
-	if err != nil {
-		t.Fatalf("glob wal files: %v", err)
+	var paths []string
+	for _, subdir := range []string{"value_vlog", "leaf_vlog"} {
+		matches, err := filepath.Glob(filepath.Join(dir, subdir, "value-l*.log"))
+		if err != nil {
+			t.Fatalf("glob %s files: %v", subdir, err)
+		}
+		paths = append(paths, matches...)
 	}
 	old := time.Now().Add(-age)
 	for _, path := range paths {
@@ -36,6 +40,15 @@ func ageValueLogFilesForTest(t *testing.T, dir string, age time.Duration) {
 			t.Fatalf("chtimes %s: %v", path, err)
 		}
 	}
+}
+
+func valueLogPathForFileID(root string, fileID uint32) string {
+	lane, seq := valuelog.DecodeFileID(fileID)
+	subdir := "value_vlog"
+	if int(lane) == leafLogLaneID {
+		subdir = "leaf_vlog"
+	}
+	return filepath.Join(root, subdir, fmt.Sprintf("value-l%d-%06d.log", lane, seq))
 }
 
 func extractMissingValueLogID(err error) (uint32, bool) {
@@ -70,8 +83,7 @@ func missingLeafRefPaths(root string, counts map[uint32]int) []string {
 		if count == 0 {
 			continue
 		}
-		lane, seq := valuelog.DecodeFileID(fileID)
-		path := filepath.Join(root, "wal", fmt.Sprintf("value-l%d-%06d.log", lane, seq))
+		path := valueLogPathForFileID(root, fileID)
 		if _, err := os.Stat(path); err == nil {
 			continue
 		} else if os.IsNotExist(err) {
@@ -243,7 +255,7 @@ func collectLeafRefFileCounts(t *testing.T, p *pager.Pager, rootID uint64) map[u
 		}
 		seen[pageID] = struct{}{}
 		if ptr, ok := page.DecodeLeafRef(pageID); ok {
-			out[ptr.FileID]++
+			out[ptr.ValueLogFileID()]++
 			continue
 		}
 		data, err := p.Get(pageID)
@@ -324,11 +336,11 @@ func collectNestedLeafValueLogFileCounts(t *testing.T, reader interface {
 			continue
 		}
 		if len(sourceSet) > 0 {
-			if _, ok := sourceSet[ptr.FileID]; !ok {
+			if _, ok := sourceSet[ptr.ValueLogFileID()]; !ok {
 				continue
 			}
 		}
-		leafPage, err := reader.ReadUnsafe(ptr)
+		leafPage, err := reader.ReadUnsafe(ptr.ValuePtr())
 		if err != nil {
 			t.Fatalf("read leaf page file=%d offset=%d: %v", ptr.FileID, ptr.Offset, err)
 		}
@@ -429,56 +441,53 @@ func TestCachedRewriteLeafRefs_RemainReopenableAfterLaterCheckpoint(t *testing.T
 		t.Fatalf("expected many leafref source files, got %d", len(leafCounts))
 	}
 
-	currentSet := backend.State().ValueLogSet
-	if currentSet == nil {
-		t.Fatalf("missing current value-log set")
+	var (
+		packStats backenddb.LeafGenerationPackRunOnceStats
+		gcStats   backenddb.LeafGenerationGCStats
+	)
+	if err := db.runWithBackendMaintenance(func() error {
+		var err error
+		packStats, err = backend.LeafGenerationPackRunOnce(context.Background(), backenddb.LeafGenerationPackFromPlanOptions{
+			Sync:                    true,
+			MinPublishedAgeCommits:  1,
+			MinCandidateGenerations: 2,
+			MaxGenerations:          4,
+			MaxBytesToCopy:          1 << 30,
+		})
+		if err != nil {
+			return err
+		}
+		gcStats, err = backend.LeafGenerationGC(context.Background(), backenddb.LeafGenerationGCOptions{})
+		return err
+	}); err != nil {
+		t.Fatalf("backend leaf generation maintenance: %v", err)
 	}
-	maxByLane := make(map[uint32]uint32)
-	for id := range currentSet.Files {
-		seg := page.ValueLogSegmentID(id)
-		lane := seg >> 23
-		seq := seg & ((1 << 23) - 1)
-		if cur, ok := maxByLane[lane]; !ok || seq > cur {
-			maxByLane[lane] = seq
+	if !packStats.Ran {
+		t.Fatalf("expected leaf generation pack to run, skip=%s", packStats.SkipReason)
+	}
+	sourceIDSet := make(map[uint32]struct{})
+	for _, gen := range packStats.Selection.Generations {
+		for _, fileID := range gen.FileIDs {
+			if fileID == 0 {
+				continue
+			}
+			sourceIDSet[fileID] = struct{}{}
 		}
 	}
-
-	sourceIDs := make([]uint32, 0, 8)
-	for fileID, count := range leafCounts {
-		if count < 8 {
-			continue
-		}
-		seg := page.ValueLogSegmentID(fileID)
-		lane := seg >> 23
-		seq := seg & ((1 << 23) - 1)
-		if maxByLane[lane] == seq {
-			continue
-		}
+	sourceIDs := make([]uint32, 0, len(sourceIDSet))
+	for fileID := range sourceIDSet {
 		sourceIDs = append(sourceIDs, fileID)
 	}
 	sort.Slice(sourceIDs, func(i, j int) bool { return sourceIDs[i] < sourceIDs[j] })
-	if len(sourceIDs) < 4 {
-		t.Fatalf("expected at least four non-active source files, got %d", len(sourceIDs))
+	if len(sourceIDs) == 0 {
+		t.Fatal("expected packed source file IDs")
 	}
-	sourceIDs = sourceIDs[:4]
-
-	stats, err := backend.ValueLogRewriteOnline(context.Background(), backenddb.ValueLogRewriteOnlineOptions{
-		BatchSize:      32,
-		SyncEachBatch:  true,
-		ProtectedPaths: db.valueLogProtectedPaths(),
-		SourceFileIDs:  sourceIDs,
-	})
-	if err != nil {
-		t.Fatalf("ValueLogRewriteOnline: %v", err)
+	postPackCounts := collectLeafRefFileCounts(t, backend.Pager(), backend.State().RootPageID)
+	if hits := countLeafRefHits(postPackCounts, sourceIDs); hits != 0 {
+		t.Fatalf("pack+gc left %d leafrefs on packed source files", hits)
 	}
-	postRewriteCounts := collectLeafRefFileCounts(t, backend.Pager(), backend.State().RootPageID)
-	if hits := countLeafRefHits(postRewriteCounts, sourceIDs); hits != 0 {
-		t.Fatalf("rewrite left %d leafrefs on rewritten source files", hits)
-	}
-	db.maybeRunVlogGenerationIndexVacuum(int64(stats.BytesBefore))
-	postVacuumCounts := collectLeafRefFileCounts(t, backend.Pager(), backend.State().RootPageID)
-	if hits := countLeafRefHits(postVacuumCounts, sourceIDs); hits != 0 {
-		t.Fatalf("post-vacuum backend state still references %d rewritten source leafrefs", hits)
+	if gcStats.GenerationsDeleted == 0 && gcStats.BytesDeleted == 0 {
+		t.Fatalf("expected leaf generation gc to delete or at least tombstone packed generations, got %+v", gcStats)
 	}
 
 	b := db.NewBatch()
@@ -530,6 +539,8 @@ func TestCachedRewriteLeafRefs_RemainReopenableAfterLaterCheckpoint(t *testing.T
 }
 
 func TestCachedGenerationalMaintenance_LeafRefsRemainReopenable(t *testing.T) {
+	t.Setenv(envEnableLeafGenerationPackMaintenance, "1")
+	t.Setenv(envLeafGenerationPackMaintenanceMinReclaimPerByteCopiedPPM, "0")
 	dir := t.TempDir()
 
 	backend, err := backenddb.Open(backenddb.Options{
@@ -601,15 +612,20 @@ func TestCachedGenerationalMaintenance_LeafRefsRemainReopenable(t *testing.T) {
 	}
 
 	for round := 0; round < 6; round++ {
+		ageValueLogFilesForTest(t, dir, vlogGenerationRewriteMinSegmentAge+time.Second)
 		forceVlogMaintenanceIdle(db)
 		db.maybeRunVlogGenerationMaintenance(false)
 		writeBatch(fmt.Sprintf("post-%02d", round), 512)
+		ageValueLogFilesForTest(t, dir, vlogGenerationRewriteMinSegmentAge+time.Second)
 		forceVlogMaintenanceIdle(db)
 		db.maybeRunVlogGenerationMaintenance(false)
 	}
 
-	if db.vlogGenerationRewriteRuns.Load() == 0 {
-		t.Fatalf("expected generational rewrite to run")
+	if db.vlogGenerationLeafPackRuns.Load() == 0 {
+		t.Fatalf("expected leaf generation pack maintenance to run")
+	}
+	if db.vlogGenerationLeafPackGCRuns.Load() == 0 {
+		t.Fatalf("expected leaf generation gc maintenance to run")
 	}
 
 	preCloseCounts := collectBackendLiveFileCounts(t, backend)
@@ -777,7 +793,7 @@ func TestCachedGenerationalMaintenance_DirectPointersRemainInCurrentSet_WALOn(t 
 	closed = true
 }
 
-func TestCachedGenerationalMaintenance_DirectPointersBackgroundScheduler_WALOn(t *testing.T) {
+func TestCachedGenerationalMaintenance_BackgroundSchedulerIdle_WALOn(t *testing.T) {
 	dir := t.TempDir()
 
 	backend, err := backenddb.Open(backenddb.Options{
@@ -843,27 +859,12 @@ func TestCachedGenerationalMaintenance_DirectPointersBackgroundScheduler_WALOn(t
 		_ = b.Close()
 	}
 
-	ageCurrentValueLogFiles := func(age time.Duration) {
-		t.Helper()
-		state := backend.State()
-		if state == nil || state.ValueLogSet == nil {
-			return
-		}
-		at := time.Now().Add(-age)
-		for _, f := range state.ValueLogSet.Files {
-			if f.Path == "" {
-				continue
-			}
-			if err := os.Chtimes(f.Path, at, at); err != nil && !os.IsNotExist(err) {
-				t.Fatalf("age %s: %v", f.Path, err)
-			}
-		}
-	}
-
 	for i := 0; i < 3; i++ {
 		writeBatch(fmt.Sprintf("seed-%02d", i), 384)
-		ageCurrentValueLogFiles(2 * time.Second)
-		time.Sleep(vlogGenerationLoopInterval + 100*time.Millisecond)
+	}
+
+	if got := db.vlogGenerationSchedulerState.Load(); got != vlogGenerationSchedulerDisabled {
+		t.Fatalf("scheduler state=%d want disabled", got)
 	}
 
 	if err := db.checkpointForBackendMaintenance(); err != nil {
@@ -1122,10 +1123,7 @@ func TestCachedGenerationalMaintenance_DirectPointersSeedPhaseLarge_WALOn(t *tes
 		refreshedState := backend.State()
 		sample := make([]sourceKind, 0, min(8, len(missingIDs)))
 		for _, id := range missingIDs[:min(8, len(missingIDs))] {
-			seg := page.ValueLogSegmentID(id)
-			laneID := seg >> 23
-			seq := seg & ((1 << 23) - 1)
-			path := filepath.Join(dir, "wal", fmt.Sprintf("value-l%d-%06d.log", laneID, seq))
+			path := valueLogPathForFileID(dir, id)
 			_, statErr := os.Stat(path)
 			inRefreshed := false
 			if refreshedState != nil && refreshedState.ValueLogSet != nil {
@@ -1422,10 +1420,7 @@ func testCachedRepeatedRewriteVacuumLeafRefsRemainReopenable(t *testing.T, disab
 				var missingID uint32
 				if id, ok := extractMissingValueLogID(err); ok {
 					missingID = id
-					seg := page.ValueLogSegmentID(missingID)
-					lane := seg >> 23
-					seq := seg & ((1 << 23) - 1)
-					path := filepath.Join(dir, "wal", fmt.Sprintf("value-l%d-%06d.log", lane, seq))
+					path := valueLogPathForFileID(dir, missingID)
 					_, statErr := os.Stat(path)
 					t.Fatalf("rewrite round %d: %v (missing_id=%d in_leaf_counts=%d in_live_counts=%d in_current_set=%v path=%s stat_err=%v sources=%v)",
 						round, err, missingID, leafCounts[missingID], preRoundCounts[missingID], currentSet.Files[missingID] != nil, path, statErr, sourceIDs[:min(8, len(sourceIDs))])
@@ -1461,16 +1456,13 @@ func testCachedRepeatedRewriteVacuumLeafRefsRemainReopenable(t *testing.T, disab
 				if refreshed != nil && refreshed.ValueLogSet != nil {
 					_, inRefreshedSet = refreshed.ValueLogSet.Files[missingID]
 				}
-				seg := page.ValueLogSegmentID(missingID)
-				laneID := int(seg >> 23)
-				seq := seg & ((1 << 23) - 1)
-				path := filepath.Join(dir, "wal", fmt.Sprintf("value-l%d-%06d.log", laneID, seq))
+				path := valueLogPathForFileID(dir, missingID)
 				_, statErr := os.Stat(path)
+				laneID, _ := valuelog.DecodeFileID(missingID)
 				currentPath := ""
 				currentSeq := 0
 				currentRetained := false
-				if laneID >= 0 && laneID < len(db.lanes) {
-					lane := &db.lanes[laneID]
+				if lane := db.valueLogLaneByID(int(laneID)); lane != nil {
 					lane.vlogMu.Lock()
 					currentPath = lane.vlogPath
 					currentSeq = lane.vlogSeq
@@ -1713,10 +1705,7 @@ func TestCachedManualMaintenanceDirectPointersRemainReopenable_WALOn(t *testing.
 					if refreshedState != nil && refreshedState.ValueLogSet != nil {
 						_, inSet = refreshedState.ValueLogSet.Files[missingID]
 					}
-					seg := page.ValueLogSegmentID(missingID)
-					laneID := seg >> 23
-					seq := seg & ((1 << 23) - 1)
-					path := filepath.Join(dir, "wal", fmt.Sprintf("value-l%d-%06d.log", laneID, seq))
+					path := valueLogPathForFileID(dir, missingID)
 					_, statErr := os.Stat(path)
 					t.Fatalf("rewrite round %d: %v (missing_id=%d in_set=%v path=%s stat_err=%v sources=%v)",
 						round, err, missingID, inSet, path, statErr, sourceIDs[:min(8, len(sourceIDs))])
@@ -1742,10 +1731,7 @@ func TestCachedManualMaintenanceDirectPointersRemainReopenable_WALOn(t *testing.
 				if refreshedState != nil && refreshedState.ValueLogSet != nil {
 					_, inSet = refreshedState.ValueLogSet.Files[missingID]
 				}
-				seg := page.ValueLogSegmentID(missingID)
-				laneID := seg >> 23
-				seq := seg & ((1 << 23) - 1)
-				path := filepath.Join(dir, "wal", fmt.Sprintf("value-l%d-%06d.log", laneID, seq))
+				path := valueLogPathForFileID(dir, missingID)
 				_, statErr := os.Stat(path)
 				t.Fatalf("round %d post-write iterator error: %v (missing_id=%d in_set=%v path=%s stat_err=%v)", round, err, missingID, inSet, path, statErr)
 			}

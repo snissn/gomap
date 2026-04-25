@@ -92,6 +92,7 @@ func TestIntegration_ProfileDir_AutoRunsBenchprof(t *testing.T) {
 		"-keys", "128",
 		"-format", "table",
 		"-profile-dir", profileDir,
+		"-path-label", "native-fastpath",
 		"-progress=false",
 	)
 

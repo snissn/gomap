@@ -72,19 +72,6 @@ func NewWriterWithOptions(path string, opts Options) (*Writer, error) {
 		_ = f.Close()
 		return nil, err
 	}
-	var enc *zstd.Encoder
-	if opts.Compress {
-		enc, err = zstd.NewWriter(nil,
-			zstd.WithEncoderLevel(zstd.SpeedFastest),
-			zstd.WithEncoderConcurrency(1),
-			zstd.WithEncoderCRC(false),
-			zstd.WithNoEntropyCompression(true),
-		)
-		if err != nil {
-			_ = f.Close()
-			return nil, err
-		}
-	}
 	return &Writer{
 		f:              f,
 		bw:             bufio.NewWriterSize(f, defaultBufferSize),
@@ -92,9 +79,29 @@ func NewWriterWithOptions(path string, opts Options) (*Writer, error) {
 		size:           info.Size(),
 		maxSegmentSize: normalizeMaxSegmentSize(opts.MaxSegmentSize),
 		compress:       opts.Compress,
-		enc:            enc,
 		syncFn:         func(file *os.File) error { return file.Sync() },
 	}, nil
+}
+
+func newEncoder() (*zstd.Encoder, error) {
+	return zstd.NewWriter(nil,
+		zstd.WithEncoderLevel(zstd.SpeedFastest),
+		zstd.WithEncoderConcurrency(1),
+		zstd.WithEncoderCRC(false),
+		zstd.WithNoEntropyCompression(true),
+	)
+}
+
+func (w *Writer) ensureEncoder() error {
+	if w == nil || !w.compress || w.enc != nil {
+		return nil
+	}
+	enc, err := newEncoder()
+	if err != nil {
+		return err
+	}
+	w.enc = enc
+	return nil
 }
 
 // RotateTo flushes and closes the current file, then opens (or creates) the
@@ -297,7 +304,10 @@ func (w *Writer) writeSegment(payload []byte) error {
 	wantCRC := crc.Checksum(payload)
 	rawLenPrefix := w.rawLenPrefix[:]
 
-	if w.compress && w.enc != nil && len(payload) >= defaultCompressMinLen {
+	if w.compress && len(payload) >= defaultCompressMinLen {
+		if err := w.ensureEncoder(); err != nil {
+			return err
+		}
 		encDst := w.encScratch[:0]
 		encoded := w.enc.EncodeAll(payload, encDst)
 		// Only keep compressed bytes when it is a strict size win even after

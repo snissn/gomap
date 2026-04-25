@@ -113,6 +113,110 @@ func TestStoreKMeta(t *testing.T) {
 	}
 }
 
+func TestStoreCurrentForClass_FallbackToGlobal(t *testing.T) {
+	dir := t.TempDir()
+	store, err := Open(dir, db.Options{ChunkSize: 64 * 1024})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer store.Close()
+
+	ctx := context.Background()
+	id, err := store.PutDictBytes(ctx, []byte("alpha"))
+	if err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	if err := store.SetCurrent(ctx, id); err != nil {
+		t.Fatalf("set current: %v", err)
+	}
+	got, err := store.GetCurrentForClass(ctx, "outer_leaf")
+	if err != nil {
+		t.Fatalf("get current for class: %v", err)
+	}
+	if got != id {
+		t.Fatalf("class fallback current mismatch: got %d want %d", got, id)
+	}
+}
+
+func TestStoreCurrentForClass_SetGetClear(t *testing.T) {
+	dir := t.TempDir()
+	store, err := Open(dir, db.Options{ChunkSize: 64 * 1024})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer store.Close()
+
+	ctx := context.Background()
+	idGlobal, err := store.PutDictBytes(ctx, []byte("global"))
+	if err != nil {
+		t.Fatalf("put global: %v", err)
+	}
+	idOuter, err := store.PutDictBytes(ctx, []byte("outer"))
+	if err != nil {
+		t.Fatalf("put outer: %v", err)
+	}
+	if err := store.SetCurrent(ctx, idGlobal); err != nil {
+		t.Fatalf("set global current: %v", err)
+	}
+	if err := store.SetCurrentForClass(ctx, "outer_leaf", idOuter); err != nil {
+		t.Fatalf("set class current: %v", err)
+	}
+	gotOuter, err := store.GetCurrentForClass(ctx, "outer_leaf")
+	if err != nil {
+		t.Fatalf("get class current: %v", err)
+	}
+	if gotOuter != idOuter {
+		t.Fatalf("class current mismatch: got %d want %d", gotOuter, idOuter)
+	}
+	gotSingle, err := store.GetCurrentForClass(ctx, "single_value")
+	if err != nil {
+		t.Fatalf("get single class current: %v", err)
+	}
+	if gotSingle != idGlobal {
+		t.Fatalf("single class fallback mismatch: got %d want %d", gotSingle, idGlobal)
+	}
+	if err := store.SetCurrentForClass(ctx, "outer_leaf", 0); err != nil {
+		t.Fatalf("clear class current: %v", err)
+	}
+	gotFallback, err := store.GetCurrentForClass(ctx, "outer_leaf")
+	if err != nil {
+		t.Fatalf("get class current after clear: %v", err)
+	}
+	if gotFallback != idGlobal {
+		t.Fatalf("class clear fallback mismatch: got %d want %d", gotFallback, idGlobal)
+	}
+}
+
+func TestStoreLeafPayloadMode_SetGet(t *testing.T) {
+	dir := t.TempDir()
+	store, err := Open(dir, db.Options{ChunkSize: 64 * 1024})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer store.Close()
+
+	ctx := context.Background()
+	id, err := store.PutDictBytes(ctx, []byte("outer-compact"))
+	if err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	if useRaw, ok, err := store.GetLeafPayloadMode(ctx, id); err != nil || ok || useRaw {
+		t.Fatalf("missing mode = (%v, %v, %v), want (false, false, nil)", useRaw, ok, err)
+	}
+	if err := store.SetLeafPayloadMode(ctx, id, false); err != nil {
+		t.Fatalf("set compact mode: %v", err)
+	}
+	if useRaw, ok, err := store.GetLeafPayloadMode(ctx, id); err != nil || !ok || useRaw {
+		t.Fatalf("compact mode = (%v, %v, %v), want (false, true, nil)", useRaw, ok, err)
+	}
+	if err := store.SetLeafPayloadMode(ctx, id, true); err != nil {
+		t.Fatalf("set raw mode: %v", err)
+	}
+	if useRaw, ok, err := store.GetLeafPayloadMode(ctx, id); err != nil || !ok || !useRaw {
+		t.Fatalf("raw mode = (%v, %v, %v), want (true, true, nil)", useRaw, ok, err)
+	}
+}
+
 func TestStoreRehydratesHashForExistingBytes(t *testing.T) {
 	dir := t.TempDir()
 	store, err := Open(dir, db.Options{ChunkSize: 64 * 1024})

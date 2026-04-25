@@ -505,11 +505,14 @@ func TestRecovery_RIDJoinReplaysValueLog(t *testing.T) {
 	dir := t.TempDir()
 
 	walDir := filepath.Join(dir, "maindb", "wal")
-	if err := os.MkdirAll(walDir, 0755); err != nil {
-		t.Fatalf("mkdir wal: %v", err)
+	valueLogDir := filepath.Join(dir, "maindb", "value_vlog")
+	for _, path := range []string{walDir, valueLogDir} {
+		if err := os.MkdirAll(path, 0755); err != nil {
+			t.Fatalf("mkdir log dir %s: %v", path, err)
+		}
 	}
 
-	valuePath := filepath.Join(walDir, "value-l0-000001.log")
+	valuePath := filepath.Join(valueLogDir, "value-l0-000001.log")
 	vw, err := valuelog.NewWriter(valuePath, page.ValueLogFileID(1))
 	if err != nil {
 		t.Fatalf("valuelog.NewWriter: %v", err)
@@ -567,11 +570,14 @@ func TestRecovery_RIDJoinReplaysValueLog(t *testing.T) {
 func TestRecovery_CommitFence_PublishesOnlyCommittedVLogRefs(t *testing.T) {
 	dir := t.TempDir()
 	walDir := filepath.Join(dir, "maindb", "wal")
-	if err := os.MkdirAll(walDir, 0o755); err != nil {
-		t.Fatalf("mkdir wal: %v", err)
+	valueLogDir := filepath.Join(dir, "maindb", "value_vlog")
+	for _, path := range []string{walDir, valueLogDir} {
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatalf("mkdir log dir %s: %v", path, err)
+		}
 	}
 
-	valuePath := filepath.Join(walDir, "value-l0-000001.log")
+	valuePath := filepath.Join(valueLogDir, "value-l0-000001.log")
 	vw, err := valuelog.NewWriter(valuePath, page.ValueLogFileID(1))
 	if err != nil {
 		t.Fatalf("valuelog.NewWriter: %v", err)
@@ -638,11 +644,14 @@ func TestRecovery_CommitFence_PublishesOnlyCommittedVLogRefs(t *testing.T) {
 func TestRecovery_PartialFlushFence_NoPhantomPointers(t *testing.T) {
 	dir := t.TempDir()
 	walDir := filepath.Join(dir, "maindb", "wal")
-	if err := os.MkdirAll(walDir, 0o755); err != nil {
-		t.Fatalf("mkdir wal: %v", err)
+	valueLogDir := filepath.Join(dir, "maindb", "value_vlog")
+	for _, path := range []string{walDir, valueLogDir} {
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatalf("mkdir log dir %s: %v", path, err)
+		}
 	}
 
-	valuePath := filepath.Join(walDir, "value-l0-000001.log")
+	valuePath := filepath.Join(valueLogDir, "value-l0-000001.log")
 	vw, err := valuelog.NewWriter(valuePath, page.ValueLogFileID(1))
 	if err != nil {
 		t.Fatalf("valuelog.NewWriter: %v", err)
@@ -796,8 +805,11 @@ func TestRecovery_MissingDictFails(t *testing.T) {
 	dir := t.TempDir()
 
 	walDir := filepath.Join(dir, "maindb", "wal")
-	if err := os.MkdirAll(walDir, 0755); err != nil {
-		t.Fatalf("mkdir wal: %v", err)
+	valueLogDir := filepath.Join(dir, "maindb", "value_vlog")
+	for _, path := range []string{walDir, valueLogDir} {
+		if err := os.MkdirAll(path, 0755); err != nil {
+			t.Fatalf("mkdir log dir %s: %v", path, err)
+		}
 	}
 	if err := os.MkdirAll(filepath.Join(dir, "dictdb"), 0755); err != nil {
 		t.Fatalf("mkdir dictdb: %v", err)
@@ -805,7 +817,7 @@ func TestRecovery_MissingDictFails(t *testing.T) {
 
 	dictID := uint64(1)
 	records := []valuelog.Record{{RID: 1, Value: bytes.Repeat([]byte("value"), 1024)}}
-	valuePath := filepath.Join(walDir, "value-l0-000001.log")
+	valuePath := filepath.Join(valueLogDir, "value-l0-000001.log")
 	frame, _, err := valuelog.EncodeFrame(0, nil, records)
 	if err != nil {
 		t.Fatalf("EncodeFrame: %v", err)
@@ -942,11 +954,14 @@ func TestRecovery_TruncatedValueLogRecord(t *testing.T) {
 	dir := t.TempDir()
 
 	walDir := filepath.Join(dir, "maindb", "wal")
-	if err := os.MkdirAll(walDir, 0755); err != nil {
-		t.Fatalf("mkdir wal: %v", err)
+	valueLogDir := filepath.Join(dir, "maindb", "value_vlog")
+	for _, path := range []string{walDir, valueLogDir} {
+		if err := os.MkdirAll(path, 0755); err != nil {
+			t.Fatalf("mkdir log dir %s: %v", path, err)
+		}
 	}
 
-	valuePath := filepath.Join(walDir, "value-l0-000001.log")
+	valuePath := filepath.Join(valueLogDir, "value-l0-000001.log")
 	vw, err := valuelog.NewWriter(valuePath, page.ValueLogFileID(1))
 	if err != nil {
 		t.Fatalf("valuelog.NewWriter: %v", err)

@@ -81,17 +81,17 @@ func TestVacuumIndexOffline_WithTemplateFrames_WiresTemplateLookup(t *testing.T)
 	if err != nil {
 		t.Fatalf("Open(writer): %v", err)
 	}
-	walDir := filepath.Join(mainDir, "wal")
-	if err := os.MkdirAll(walDir, 0o755); err != nil {
+	valueLogDir := filepath.Join(mainDir, "value_vlog")
+	if err := os.MkdirAll(valueLogDir, 0o755); err != nil {
 		_ = writer.Close()
-		t.Fatalf("MkdirAll(wal): %v", err)
+		t.Fatalf("MkdirAll(value_vlog): %v", err)
 	}
 	fileID, err := valuelog.EncodeFileID(0, 1)
 	if err != nil {
 		_ = writer.Close()
 		t.Fatalf("EncodeFileID: %v", err)
 	}
-	vlogWriter, err := valuelog.NewWriter(filepath.Join(walDir, "value-l0-000001.log"), fileID)
+	vlogWriter, err := valuelog.NewWriter(filepath.Join(valueLogDir, "value-l0-000001.log"), fileID)
 	if err != nil {
 		_ = writer.Close()
 		t.Fatalf("NewWriter: %v", err)

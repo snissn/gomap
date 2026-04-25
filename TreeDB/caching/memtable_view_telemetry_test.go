@@ -10,13 +10,16 @@ func TestMemtableViewDeferredEnter_SkipsReleasedView(t *testing.T) {
 	view := &memtableView{}
 	view.refs.Store(0)
 
-	db.noteMemtableViewDeferredEnter(view, 2)
+	db.noteMemtableViewDeferredEnter(view, 2, 256)
 
 	if got := db.memtableViewTelemetry.deferredViewsCurrent.Load(); got != 0 {
 		t.Fatalf("deferred views current=%d want=0", got)
 	}
 	if got := db.memtableViewTelemetry.deferredMemtablesCurrent.Load(); got != 0 {
 		t.Fatalf("deferred memtables current=%d want=0", got)
+	}
+	if got := db.memtableViewTelemetry.deferredBytesCurrent.Load(); got != 0 {
+		t.Fatalf("deferred bytes current=%d want=0", got)
 	}
 	if got := db.memtableViewTelemetry.oldestDeferredUnixNano.Load(); got != 0 {
 		t.Fatalf("oldest deferred timestamp=%d want=0", got)
@@ -36,15 +39,18 @@ func TestMemtableViewDeferredExit_RecomputesOldestTrackedView(t *testing.T) {
 	older.refs.Store(1)
 	newer.refs.Store(1)
 
-	db.noteMemtableViewDeferredEnter(older, 1)
+	db.noteMemtableViewDeferredEnter(older, 1, 256)
 	time.Sleep(1 * time.Millisecond)
-	db.noteMemtableViewDeferredEnter(newer, 3)
+	db.noteMemtableViewDeferredEnter(newer, 3, 1024)
 
 	if got := db.memtableViewTelemetry.deferredViewsCurrent.Load(); got != 2 {
 		t.Fatalf("deferred views current=%d want=2", got)
 	}
 	if got := db.memtableViewTelemetry.deferredMemtablesCurrent.Load(); got != 4 {
 		t.Fatalf("deferred memtables current=%d want=4", got)
+	}
+	if got := db.memtableViewTelemetry.deferredBytesCurrent.Load(); got != 1280 {
+		t.Fatalf("deferred bytes current=%d want=1280", got)
 	}
 
 	db.noteMemtableViewDeferredExit(older)
@@ -64,6 +70,9 @@ func TestMemtableViewDeferredExit_RecomputesOldestTrackedView(t *testing.T) {
 	if got := db.memtableViewTelemetry.deferredMemtablesCurrent.Load(); got != 3 {
 		t.Fatalf("deferred memtables current=%d want=3", got)
 	}
+	if got := db.memtableViewTelemetry.deferredBytesCurrent.Load(); got != 1024 {
+		t.Fatalf("deferred bytes current=%d want=1024", got)
+	}
 
 	db.noteMemtableViewDeferredExit(newer)
 	if got := db.memtableViewTelemetry.oldestDeferredUnixNano.Load(); got != 0 {
@@ -74,5 +83,8 @@ func TestMemtableViewDeferredExit_RecomputesOldestTrackedView(t *testing.T) {
 	}
 	if got := db.memtableViewTelemetry.deferredMemtablesCurrent.Load(); got != 0 {
 		t.Fatalf("deferred memtables current=%d want=0", got)
+	}
+	if got := db.memtableViewTelemetry.deferredBytesCurrent.Load(); got != 0 {
+		t.Fatalf("deferred bytes current=%d want=0", got)
 	}
 }

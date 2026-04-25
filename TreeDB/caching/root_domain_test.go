@@ -530,9 +530,9 @@ func TestRotateMutableShardsLocked_UpdatesRootDomainStates(t *testing.T) {
 		mutableShards: []memShard{
 			{mem: mutable, rng: keyRange{valid: true, min: []byte("k"), max: []byte("k")}},
 		},
-		memtableMode:    memtable.ModeAppendOnly,
 		rootPointStates: []rootDomainState{{mutable: mutable}},
 	}
+	db.storeMemtableMode(memtable.ModeAppendOnly)
 	db.bpCond = sync.NewCond(&db.bpMu)
 
 	db.mu.Lock()

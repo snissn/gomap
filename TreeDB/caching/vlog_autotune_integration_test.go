@@ -74,3 +74,31 @@ func TestValueLogAutotuneShouldSwitch_DwellAndGain(t *testing.T) {
 		t.Fatalf("expected switch when gain is sufficient")
 	}
 }
+
+func TestValueLogAutotuneShouldSwitch_SizePolicyUsesRatioGain(t *testing.T) {
+	db := &DB{valueLogAutoPolicy: uint8(vlogAutoSize)}
+	db.valueLogAutotuneOptions = valuelog.AutotuneOptions{
+		Mode:            valuelog.AutotuneMedium,
+		MinGainToSwitch: 0.10,
+	}
+	current := &vlogAutotuneProfile{
+		TotalRatio:       0.80,
+		EncodeNsEstimate: 100,
+		AvgSampleBytes:   100,
+	}
+	db.valueLogAutotuneLastProfile.Store(current)
+
+	candidate := &vlogAutotuneProfile{
+		TotalRatio:       0.75, // ~6.25% better ratio: below 10% gain threshold.
+		EncodeNsEstimate: 1_000_000_000,
+		AvgSampleBytes:   100,
+	}
+	if db.valueLogAutotuneShouldSwitch(candidate, 0) {
+		t.Fatalf("expected size policy gain gating to block small ratio improvement")
+	}
+
+	candidate.TotalRatio = 0.70 // 12.5% better ratio: clears 10% gain threshold.
+	if !db.valueLogAutotuneShouldSwitch(candidate, 0) {
+		t.Fatalf("expected size policy to switch on sufficient ratio gain")
+	}
+}

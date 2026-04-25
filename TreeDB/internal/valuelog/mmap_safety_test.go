@@ -30,6 +30,9 @@ func TestMmapSafety_ZeroCopy_Remap(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("mmap not supported on windows")
 	}
+	old := enableCurrentWritableMmap
+	enableCurrentWritableMmap = true
+	defer func() { enableCurrentWritableMmap = old }()
 
 	dir := t.TempDir()
 	path := filepath.Join(dir, "value-l0-000001.log")
@@ -107,6 +110,9 @@ func TestMmapSafety_Concurrent_Remap(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("mmap not supported on windows")
 	}
+	old := enableCurrentWritableMmap
+	enableCurrentWritableMmap = true
+	defer func() { enableCurrentWritableMmap = old }()
 
 	dir := t.TempDir()
 	path := filepath.Join(dir, "value-l0-000001.log")

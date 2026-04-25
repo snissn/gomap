@@ -162,6 +162,47 @@ func TestCommitLogWriteReadBatchCompressed(t *testing.T) {
 	}
 }
 
+func TestCommitLogWriter_LazyCompressionEncoder(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "commit.log")
+
+	writer, err := NewWriterWithOptions(path, Options{Compress: true})
+	if err != nil {
+		t.Fatalf("NewWriterWithOptions: %v", err)
+	}
+	defer func() { _ = writer.Close() }()
+
+	if writer.enc != nil {
+		t.Fatalf("encoder should be lazy and remain nil until compression is needed")
+	}
+
+	small := []Record{{
+		Op:    OpSetInline,
+		Key:   []byte("k"),
+		Value: bytes.Repeat([]byte("x"), 1024),
+		Seq:   1,
+	}}
+	if err := writer.AppendBatch(small); err != nil {
+		t.Fatalf("AppendBatch(small): %v", err)
+	}
+	if writer.enc != nil {
+		t.Fatalf("small payload should not initialize compression encoder")
+	}
+
+	large := []Record{{
+		Op:    OpSetInline,
+		Key:   []byte("big"),
+		Value: bytes.Repeat([]byte("A"), defaultCompressMinLen),
+		Seq:   2,
+	}}
+	if err := writer.AppendBatch(large); err != nil {
+		t.Fatalf("AppendBatch(large): %v", err)
+	}
+	if writer.enc == nil {
+		t.Fatalf("large payload should initialize compression encoder")
+	}
+}
+
 func TestCommitLogCorruptCRC(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "commit.log")

@@ -219,3 +219,76 @@ func DecodeFrame(body []byte) (FrameHeader, []uint64, []uint32, []byte, error) {
 	}
 	return header, rids, offsets, payload, nil
 }
+
+func decodeFrameValueBounds(body []byte, subIndex int) (FrameHeader, uint32, uint32, uint32, []byte, error) {
+	if len(body) < FrameHeaderSize {
+		return FrameHeader{}, 0, 0, 0, nil, ErrCorrupt
+	}
+	if body[0] != FrameVersion {
+		return FrameHeader{}, 0, 0, 0, nil, ErrCorrupt
+	}
+	k := int(body[2])
+	if k <= 0 || k > MaxFrameK {
+		return FrameHeader{}, 0, 0, 0, nil, ErrCorrupt
+	}
+	if subIndex < 0 || subIndex >= k {
+		return FrameHeader{}, 0, 0, 0, nil, ErrCorrupt
+	}
+
+	ridBytes := k * 8
+	offsetBytes := (k + 1) * 4
+	headerEnd := FrameHeaderSize + ridBytes + offsetBytes
+	if len(body) < headerEnd {
+		return FrameHeader{}, 0, 0, 0, nil, ErrCorrupt
+	}
+
+	header := FrameHeader{
+		Version:  body[0],
+		Flags:    body[1],
+		K:        uint8(k),
+		Reserved: body[3],
+		DictID:   binary.LittleEndian.Uint64(body[4:12]),
+	}
+
+	ridOff := FrameHeaderSize
+	for i := 0; i < k; i++ {
+		if binary.LittleEndian.Uint64(body[ridOff:ridOff+8]) == 0 {
+			return FrameHeader{}, 0, 0, 0, nil, ErrCorrupt
+		}
+		ridOff += 8
+	}
+
+	var (
+		start  uint32
+		end    uint32
+		rawLen uint32
+		prev   uint32
+	)
+	off := FrameHeaderSize + ridBytes
+	for i := 0; i < k+1; i++ {
+		cur := binary.LittleEndian.Uint32(body[off : off+4])
+		if cur < prev {
+			return FrameHeader{}, 0, 0, 0, nil, ErrCorrupt
+		}
+		if i == subIndex {
+			start = cur
+		}
+		if i == subIndex+1 {
+			end = cur
+		}
+		prev = cur
+		rawLen = cur
+		off += 4
+	}
+
+	payload := body[headerEnd:]
+	if len(payload) == 0 && rawLen != 0 {
+		return FrameHeader{}, 0, 0, 0, nil, ErrCorrupt
+	}
+	if header.Flags&FrameFlagCompressed == 0 {
+		if uint32(len(payload)) != rawLen {
+			return FrameHeader{}, 0, 0, 0, nil, ErrCorrupt
+		}
+	}
+	return header, start, end, rawLen, payload, nil
+}

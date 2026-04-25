@@ -70,6 +70,7 @@ var (
 	treedbVlogRewriteTriggerStaleRatioPPM = flag.Uint("treedb-vlog-rewrite-trigger-stale-ratio-ppm", 0, "TreeDB: generational rewrite stale/live trigger in ppm (0=disabled)")
 	treedbVlogRewriteTriggerTotalBytes    = flag.Int64("treedb-vlog-rewrite-trigger-total-bytes", 0, "TreeDB: generational rewrite total retained bytes trigger (0=disabled)")
 	treedbVlogRewriteTriggerChurnPerSec   = flag.Int64("treedb-vlog-rewrite-trigger-churn-per-sec", 0, "TreeDB: generational rewrite churn trigger in bytes/sec (0=disabled)")
+	treedbVlogRewriteMinSegmentAgeMS      = flag.Int("treedb-vlog-rewrite-min-segment-age-ms", 0, "TreeDB: generational rewrite minimum source segment age in milliseconds (0=default)")
 	treedbVlogBlockTargetBytes            = flag.Int("treedb-vlog-block-target-bytes", 0, "TreeDB: value-log block target compressed bytes (0=default)")
 	treedbVlogIncompressibleHoldBytes     = flag.Int("treedb-vlog-incompressible-hold-bytes", 0, "TreeDB: auto-mode incompressible hold bytes (0=default)")
 	treedbVlogIncompressibleProbeBytes    = flag.Int("treedb-vlog-incompressible-probe-bytes", 0, "TreeDB: auto-mode incompressible probe interval bytes (0=default)")
@@ -87,7 +88,8 @@ var (
 	treedbVlogDictProbeIntervalBytes      = flag.Int("treedb-vlog-dict-probe-interval-bytes", 0, "TreeDB: probe interval bytes while incompressible hold is active (0=default)")
 	treedbVlogDictMinSavingsRatio         = flag.Float64("treedb-vlog-dict-min-savings-ratio", 0, "TreeDB: value-log dict min payload savings ratio (0=default)")
 	treedbVlogDictK                       = flag.Int("treedb-vlog-dict-k", 0, "TreeDB: value-log dict frame grouping K (records/frame, 0=default)")
-	treedbVlogCompressionAutotune         = flag.String("treedb-vlog-compression-autotune", "off", "TreeDB: value-log compression autotune mode (off|medium|aggressive|default)")
+	treedbVlogDictClassMode               = flag.String("treedb-vlog-dict-class-mode", "single", "TreeDB: value-log dict class mode (single|split_outer_leaf)")
+	treedbVlogCompressionAutotune         = flag.String("treedb-vlog-compression-autotune", "default", "TreeDB: value-log compression autotune mode (default|off|medium|aggressive)")
 	treedbVlogDictFrameEncodeLevel        = flag.String("treedb-vlog-dict-frame-encode-level", "engine", "TreeDB: zstd encoder level for dict-compressed value-log frames (engine|fastest|default|better|best|all|<int>)")
 	treedbVlogDictFrameEntropyMode        = flag.String("treedb-vlog-dict-frame-entropy", "engine", "TreeDB: dict-frame entropy mode (engine|on|off|both). Controls WithNoEntropyCompression.")
 	treedbVlogDictMode                    = flag.String("treedb-vlog-dict", "default", "TreeDB: value-log dict compression mode for unified_bench (default|on|off|both). Overrides dict/compression settings for TreeDB benchmarks.")
@@ -348,6 +350,12 @@ func (r treeDBOptionsReport) formatText(indent string) string {
 	lines = append(lines, fmt.Sprintf("vlog.compression=%s", formatTreeDBVlogCompression(r.opts.ValueLog.Compression)))
 	lines = append(lines, fmt.Sprintf("vlog.block_codec=%s", formatTreeDBVlogBlockCodec(r.opts.ValueLog.BlockCodec)))
 	lines = append(lines, fmt.Sprintf("vlog.auto_policy=%s", formatTreeDBVlogAutoPolicy(r.opts.ValueLog.AutoPolicy)))
+	if mode := r.opts.ValueLog.CompressionAutotune.Mode; mode == treedb.AutotuneUnset {
+		lines = append(lines, "vlog.compression_autotune=default (effective=medium)")
+	} else {
+		lines = append(lines, fmt.Sprintf("vlog.compression_autotune=%s", formatTreeDBVlogCompressionAutotune(mode)))
+	}
+	lines = append(lines, fmt.Sprintf("vlog.dict_class_mode=%s", formatTreeDBVlogDictClassMode(r.opts.ValueLog.DictClassMode)))
 	lines = append(lines, fmt.Sprintf("vlog.generation_policy=%s", formatTreeDBVlogGenerationPolicy(r.opts.ValueLog.Generational.Policy)))
 	lines = append(lines, fmt.Sprintf("vlog.generation_hot_segment_bytes=%d", r.opts.ValueLog.Generational.HotSegmentTargetBytes))
 	lines = append(lines, fmt.Sprintf("vlog.generation_warm_segment_bytes=%d", r.opts.ValueLog.Generational.WarmSegmentTargetBytes))
@@ -357,6 +365,11 @@ func (r treeDBOptionsReport) formatText(indent string) string {
 	lines = append(lines, fmt.Sprintf("vlog.rewrite_trigger_stale_ratio_ppm=%d", r.opts.ValueLog.Generational.RewriteTriggerStaleRatioPPM))
 	lines = append(lines, fmt.Sprintf("vlog.rewrite_trigger_total_bytes=%d", r.opts.ValueLog.Generational.RewriteTriggerTotalBytes))
 	lines = append(lines, fmt.Sprintf("vlog.rewrite_trigger_churn_per_sec=%d", r.opts.ValueLog.Generational.RewriteTriggerChurnPerSec))
+	if minAge := r.opts.ValueLog.Generational.RewriteMinSegmentAge; minAge <= 0 {
+		lines = append(lines, fmt.Sprintf("vlog.rewrite_min_segment_age_ms=default (effective=%d)", int((30*time.Second)/time.Millisecond)))
+	} else {
+		lines = append(lines, fmt.Sprintf("vlog.rewrite_min_segment_age_ms=%d", int(minAge/time.Millisecond)))
+	}
 	if target := r.opts.ValueLog.BlockTargetCompressedBytes; target <= 0 {
 		lines = append(lines, "vlog.block_target_bytes=default (effective=4096B)")
 	} else {
@@ -441,6 +454,13 @@ func formatTreeDBVlogCompression(mode treedb.ValueLogCompressionMode) string {
 	}
 }
 
+func formatTreeDBVlogCompressionFlagValue(mode treedb.ValueLogCompressionMode) string {
+	if mode == 0 {
+		return "default"
+	}
+	return formatTreeDBVlogCompression(mode)
+}
+
 func formatTreeDBVlogBlockCodec(codec treedb.ValueLogBlockCodec) string {
 	switch codec {
 	case treedb.ValueLogBlockSnappy:
@@ -462,6 +482,43 @@ func formatTreeDBVlogAutoPolicy(policy treedb.ValueLogAutoPolicy) string {
 		return "size"
 	default:
 		return fmt.Sprintf("auto_policy_%d", policy)
+	}
+}
+
+func formatTreeDBVlogCompressionAutotune(mode treedb.AutotuneMode) string {
+	switch mode {
+	case treedb.AutotuneUnset:
+		return "default"
+	case treedb.AutotuneOff:
+		return "off"
+	case treedb.AutotuneMedium:
+		return "medium"
+	case treedb.AutotuneAggressive:
+		return "aggressive"
+	default:
+		return fmt.Sprintf("autotune_%d", mode)
+	}
+}
+
+func formatTreeDBVlogDictClassMode(mode treedb.ValueLogDictClassMode) string {
+	switch mode {
+	case treedb.ValueLogDictClassSingle:
+		return "single"
+	case treedb.ValueLogDictClassSplitOuterLeaf:
+		return "split_outer_leaf"
+	default:
+		return fmt.Sprintf("dict_class_mode_%d", mode)
+	}
+}
+
+func parseTreeDBVlogDictClassMode(s string) (treedb.ValueLogDictClassMode, error) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "", "default", "single":
+		return treedb.ValueLogDictClassSingle, nil
+	case "split_outer_leaf":
+		return treedb.ValueLogDictClassSplitOuterLeaf, nil
+	default:
+		return treedb.ValueLogDictClassSingle, fmt.Errorf("unsupported -treedb-vlog-dict-class-mode=%q (expected single|split_outer_leaf)", s)
 	}
 }
 
@@ -612,6 +669,11 @@ func buildTreeDBOptions(dir string) (treedb.Options, treeDBOptionsReport, error)
 		return treedb.Options{}, treeDBOptionsReport{}, err
 	}
 	opts.ValueLog.AutoPolicy = autoPolicy
+	dictClassMode, err := parseTreeDBVlogDictClassMode(*treedbVlogDictClassMode)
+	if err != nil {
+		return treedb.Options{}, treeDBOptionsReport{}, err
+	}
+	opts.ValueLog.DictClassMode = dictClassMode
 	genPolicy, err := parseTreeDBVlogGenerationPolicy(*treedbVlogGenerationPolicy)
 	if err != nil {
 		return treedb.Options{}, treeDBOptionsReport{}, err
@@ -634,6 +696,7 @@ func buildTreeDBOptions(dir string) (treedb.Options, treeDBOptionsReport, error)
 	opts.ValueLog.Generational.RewriteTriggerStaleRatioPPM = clampUint32(uint64(*treedbVlogRewriteTriggerStaleRatioPPM))
 	opts.ValueLog.Generational.RewriteTriggerTotalBytes = *treedbVlogRewriteTriggerTotalBytes
 	opts.ValueLog.Generational.RewriteTriggerChurnPerSec = *treedbVlogRewriteTriggerChurnPerSec
+	opts.ValueLog.Generational.RewriteMinSegmentAge = time.Duration(*treedbVlogRewriteMinSegmentAgeMS) * time.Millisecond
 
 	if maintenanceMode == "bench" {
 		// Disable background maintenance loops. "bench" mode aims for stable
@@ -783,13 +846,15 @@ func resolvedTreeDBVlogCompressionModeForDictVariants() (uint64, error) {
 
 func resolvedTreeDBVlogTrainDefaults(trainBytes, dictBytes int) (int, int) {
 	if trainBytes == 0 {
-		trainBytes = 4 << 20
+		// Match engine defaults so dict variants preserve self-tuning behavior
+		// while still bootstrapping quickly in short benchmark runs.
+		trainBytes = 1 << 20
 	}
 	if trainBytes < 0 {
 		return trainBytes, dictBytes
 	}
 	if dictBytes <= 0 {
-		dictBytes = 40 << 10
+		dictBytes = 32 << 10
 	}
 	return trainBytes, dictBytes
 }
