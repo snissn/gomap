@@ -202,6 +202,256 @@ func TestCollectionInsertBatchBridge_AppendsWithoutDroppingExistingRoots(t *test
 	}
 }
 
+func TestCollectionCreateIndexBackfill_BuildsSecondaryAndIndexState(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u2"), []byte("u1")},
+		[][]byte{
+			[]byte(`{"email":"grace@example.com","city":"hnl"}`),
+			[]byte(`{"email":"ada@example.com","city":"hnl"}`),
+		},
+	); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+
+	meta, err := col.CreateIndex(IndexDefinition{Name: "city", Field: "city"})
+	if err != nil {
+		t.Fatalf("create index: %v", err)
+	}
+	if _, ok := findIndex(meta.Indexes, "city"); !ok {
+		t.Fatalf("created meta missing city index: %+v", meta.Indexes)
+	}
+	if _, ok := findIndex(col.Meta().Indexes, "city"); !ok {
+		t.Fatalf("collection meta missing city index after create: %+v", col.Meta().Indexes)
+	}
+
+	cityIDs, err := col.FindByIndex("city", "hnl")
+	if err != nil {
+		t.Fatalf("find city: %v", err)
+	}
+	if len(cityIDs) != 2 || !bytes.Equal(cityIDs[0], []byte("u1")) || !bytes.Equal(cityIDs[1], []byte("u2")) {
+		t.Fatalf("city ids=%q want [u1 u2]", cityIDs)
+	}
+
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("expected snapshot")
+	}
+	catalog, err := loadCollectionCatalog(snap, "users")
+	_ = snap.Close()
+	if err != nil {
+		t.Fatalf("load catalog: %v", err)
+	}
+	for _, rootName := range []string{
+		collectionPrimaryRootName("users"),
+		collectionIndexStateRootName("users"),
+		collectionSecondaryRootName("users", "city"),
+	} {
+		if got := catalog.rootID(rootName); got == 0 {
+			t.Fatalf("root %q was not persisted", rootName)
+		}
+	}
+
+	if _, err := col.Insert([]byte("u3"), []byte(`{"email":"katherine@example.com","city":"hnl"}`)); err != nil {
+		t.Fatalf("insert after create index: %v", err)
+	}
+	cityIDs, err = col.FindByIndex("city", "hnl")
+	if err != nil {
+		t.Fatalf("find city after insert: %v", err)
+	}
+	if len(cityIDs) != 3 ||
+		!bytes.Equal(cityIDs[0], []byte("u1")) ||
+		!bytes.Equal(cityIDs[1], []byte("u2")) ||
+		!bytes.Equal(cityIDs[2], []byte("u3")) {
+		t.Fatalf("city ids after insert=%q want [u1 u2 u3]", cityIDs)
+	}
+}
+
+func TestCollectionCreateIndexBackfill_EmptyCollectionUpdatesSchema(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.CreateIndex(IndexDefinition{Name: "city", Field: "city"}); err != nil {
+		t.Fatalf("create index on empty collection: %v", err)
+	}
+	if _, ok := findIndex(col.Meta().Indexes, "city"); !ok {
+		t.Fatalf("collection meta missing city index after empty create: %+v", col.Meta().Indexes)
+	}
+	if _, err := col.Insert([]byte("u1"), []byte(`{"city":"hnl"}`)); err != nil {
+		t.Fatalf("insert after empty create index: %v", err)
+	}
+	ids, err := col.FindByIndex("city", "hnl")
+	if err != nil {
+		t.Fatalf("find city after empty create: %v", err)
+	}
+	if len(ids) != 1 || !bytes.Equal(ids[0], []byte("u1")) {
+		t.Fatalf("city ids after empty create=%q want [u1]", ids)
+	}
+}
+
+func TestCollectionCreateIndexBackfill_PreservesExistingIndexState(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name:    "users",
+		Indexes: []IndexDefinition{{Name: "email", Field: "email", Unique: true}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1"), []byte("u2")},
+		[][]byte{
+			[]byte(`{"email":"ada@example.com","city":"hnl"}`),
+			[]byte(`{"email":"grace@example.com","city":"sfo"}`),
+		},
+	); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+	if _, err := col.CreateIndex(IndexDefinition{Name: "city", Field: "city"}); err != nil {
+		t.Fatalf("create city index: %v", err)
+	}
+	if err := col.Delete([]byte("u1")); err != nil {
+		t.Fatalf("delete u1: %v", err)
+	}
+
+	emailIDs, err := col.FindByIndex("email", "ada@example.com")
+	if err != nil {
+		t.Fatalf("find deleted email: %v", err)
+	}
+	if len(emailIDs) != 0 {
+		t.Fatalf("deleted email ids=%q want none", emailIDs)
+	}
+	cityIDs, err := col.FindByIndex("city", "hnl")
+	if err != nil {
+		t.Fatalf("find deleted city: %v", err)
+	}
+	if len(cityIDs) != 0 {
+		t.Fatalf("deleted city ids=%q want none", cityIDs)
+	}
+	if _, err := col.Insert([]byte("u3"), []byte(`{"email":"ada@example.com","city":"hnl"}`)); err != nil {
+		t.Fatalf("reuse unique email after delete: %v", err)
+	}
+}
+
+func TestCollectionCreateIndexBackfill_ReopenUsesPersistedSchemaAndRoots(t *testing.T) {
+	dir := t.TempDir()
+	d, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.Insert([]byte("u1"), []byte(`{"email":"ada@example.com"}`)); err != nil {
+		t.Fatalf("insert u1: %v", err)
+	}
+	if _, err := col.CreateIndex(IndexDefinition{Name: "email", Field: "email", Unique: true}); err != nil {
+		t.Fatalf("create unique index: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("close db: %v", err)
+	}
+
+	reopened, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("reopen db: %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	reopenedCol, err := NewCollectionManager(reopened).OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open reopened collection: %v", err)
+	}
+	ids, err := reopenedCol.FindByIndex("email", "ada@example.com")
+	if err != nil {
+		t.Fatalf("find email after reopen: %v", err)
+	}
+	if len(ids) != 1 || !bytes.Equal(ids[0], []byte("u1")) {
+		t.Fatalf("email ids after reopen=%q want [u1]", ids)
+	}
+	if _, err := reopenedCol.Insert([]byte("u2"), []byte(`{"email":"ada@example.com"}`)); err == nil || !strings.Contains(err.Error(), "unique index") {
+		t.Fatalf("duplicate insert err=%v want unique index conflict", err)
+	}
+}
+
+func TestCollectionCreateIndexBackfill_RejectsUniqueConflictAtomically(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1"), []byte("u2")},
+		[][]byte{
+			[]byte(`{"email":"ada@example.com"}`),
+			[]byte(`{"email":"ada@example.com"}`),
+		},
+	); err != nil {
+		t.Fatalf("insert duplicate documents before unique index: %v", err)
+	}
+
+	_, err = col.CreateIndex(IndexDefinition{Name: "email", Field: "email", Unique: true})
+	if err == nil || !strings.Contains(err.Error(), "unique index") {
+		t.Fatalf("create unique index err=%v want unique index conflict", err)
+	}
+	if _, ok := findIndex(col.Meta().Indexes, "email"); ok {
+		t.Fatalf("collection meta gained failed email index: %+v", col.Meta().Indexes)
+	}
+	ids, err := col.FindByIndex("email", "ada@example.com")
+	if err != nil {
+		t.Fatalf("find failed index: %v", err)
+	}
+	if len(ids) != 0 {
+		t.Fatalf("failed index visible ids=%q want none", ids)
+	}
+}
+
 func TestCollectionInsertBatchBridge_RejectsPersistedUniqueConflictAtomically(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {

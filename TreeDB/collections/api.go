@@ -68,6 +68,12 @@ type collectionCatalog struct {
 	roots map[string]uint64
 }
 
+type createIndexBackfillPlan struct {
+	rootNames   []string
+	baseRootIDs map[string]uint64
+	tables      []memtable.Table
+}
+
 func NewCollectionManager(database *backenddb.DB) *CollectionManager {
 	return &CollectionManager{db: database}
 }
@@ -174,6 +180,85 @@ func (c *Collection) Meta() CollectionMeta {
 		return CollectionMeta{}
 	}
 	return *c.meta.copy()
+}
+
+func (c *Collection) CreateIndex(def IndexDefinition) (*CollectionMeta, error) {
+	if c == nil {
+		return nil, errCollectionNil
+	}
+	if c.db == nil {
+		return nil, errors.New("collections: db is nil")
+	}
+
+	snap := c.db.AcquireSnapshot()
+	if snap == nil {
+		return nil, backenddb.ErrClosed
+	}
+	catalog, err := loadCollectionCatalog(snap, c.meta.Name)
+	if err != nil {
+		_ = snap.Close()
+		return nil, err
+	}
+	if catalog == nil {
+		_ = snap.Close()
+		return nil, errCollectionNotFound
+	}
+
+	baseMeta := catalog.meta
+	c.meta = baseMeta
+	newMeta, normalizedDef, err := addIndexToCollectionMeta(baseMeta, def)
+	if err != nil {
+		_ = snap.Close()
+		return nil, err
+	}
+	newRuntime, err := singleIndexRuntime(normalizedDef)
+	if err != nil {
+		_ = snap.Close()
+		return nil, err
+	}
+	existingRuntimes, err := (insertBatchPlanner{
+		collection: baseMeta.Name,
+		indexes:    plannerIndexes(baseMeta.Indexes),
+	}).indexRuntimes()
+	if err != nil {
+		_ = snap.Close()
+		return nil, err
+	}
+	plan, err := buildCreateIndexBackfillPlan(snap, catalog, newRuntime, existingRuntimes, collectionOptions{
+		allowArrayValuesInIndex: baseMeta.Options.AllowArrayValuesInIndex,
+	})
+	_ = snap.Close()
+	if err != nil {
+		return nil, err
+	}
+
+	ordered := make([]backenddb.OrderedRootDeltaPublishInput, 0, len(plan.rootNames))
+	iterators := make([]iterator.UnsafeIterator, 0, len(plan.rootNames))
+	defer func() {
+		for _, it := range iterators {
+			_ = it.Close()
+		}
+	}()
+	for i, rootName := range plan.rootNames {
+		iter := plan.tables[i].NewIterator(nil, nil)
+		iterators = append(iterators, iter)
+		ordered = append(ordered, backenddb.OrderedRootDeltaPublishInput{
+			BaseRoot: plan.baseRootIDs[rootName],
+			Iter:     iter,
+		})
+	}
+
+	_, rootIDs, err := c.db.PublishOrderedRootDeltaGroupWithSystemBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		return c.buildSchemaAndRootDescriptorSystemIterator(baseMeta, newMeta, plan.rootNames, plan.baseRootIDs, rootIDs)
+	})
+	if err != nil {
+		return nil, err
+	}
+	if len(rootIDs) != len(plan.rootNames) {
+		return nil, errors.New("collections: ordered root publish returned unexpected root count")
+	}
+	c.meta = newMeta
+	return newMeta.copy(), nil
 }
 
 func (c *Collection) Insert(id, document []byte) ([]byte, error) {
@@ -406,6 +491,142 @@ func buildDeleteRootDeltaTable(deleteKeys [][]byte) memtable.Table {
 	return table
 }
 
+func buildCreateIndexBackfillPlan(
+	snap *backenddb.Snapshot,
+	catalog *collectionCatalog,
+	newRuntime indexRuntime,
+	existingRuntimes []indexRuntime,
+	opts collectionOptions,
+) (*createIndexBackfillPlan, error) {
+	if snap == nil {
+		return nil, backenddb.ErrClosed
+	}
+	if catalog == nil {
+		return nil, errCollectionNotFound
+	}
+	primaryRootName := collectionPrimaryRootName(catalog.meta.Name)
+	primaryRootID := catalog.rootID(primaryRootName)
+	plan := &createIndexBackfillPlan{
+		baseRootIDs: make(map[string]uint64, 2),
+	}
+	if primaryRootID == 0 {
+		return plan, nil
+	}
+
+	it, err := snap.IteratorAtRoot(primaryRootID, nil, nil)
+	if errors.Is(err, tree.ErrKeyNotFound) {
+		return plan, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = it.Close() }()
+
+	indexStateTable := newCollectionRunTable(0)
+	secondaryTable := newCollectionRunTable(0)
+	uniqueProbes := make([]uniqueProbeCandidate, 0)
+	stateRootName := collectionIndexStateRootName(catalog.meta.Name)
+	stateRootID := catalog.rootID(stateRootName)
+	secondaryRootName := collectionSecondaryRootName(catalog.meta.Name, newRuntime.def.name)
+	documentCount := 0
+	secondaryCount := 0
+	for it.Valid() {
+		if it.IsDeleted() {
+			it.Next()
+			continue
+		}
+		documentID := bytes.Clone(it.UnsafeKey())
+		document := it.ValueCopy(nil)
+		if err := it.Error(); err != nil {
+			return nil, err
+		}
+
+		newState, err := indexStateForDocument(document, []indexRuntime{newRuntime}, opts)
+		if err != nil {
+			return nil, err
+		}
+		existingState, err := loadBackfillIndexState(snap, stateRootID, documentID, document, existingRuntimes, opts)
+		if err != nil {
+			return nil, err
+		}
+		merged := cloneDocumentIndexState(existingState)
+		values := newState[newRuntime.def.name]
+		if len(values) > 0 {
+			merged[newRuntime.def.name] = values
+		} else {
+			delete(merged, newRuntime.def.name)
+		}
+		rawState, err := encodeDocumentIndexState(merged)
+		if err != nil {
+			return nil, err
+		}
+		indexStateTable.SetSteal(bytes.Clone(documentID), rawState)
+		documentCount++
+
+		for _, encoded := range values {
+			key, err := indexEntryKey(encoded, documentID)
+			if err != nil {
+				return nil, err
+			}
+			secondaryTable.SetSteal(key, nil)
+			secondaryCount++
+			if !newRuntime.def.unique {
+				continue
+			}
+			prefix, err := indexValuePrefix(encoded)
+			if err != nil {
+				return nil, err
+			}
+			uniqueProbes = append(uniqueProbes, uniqueProbeCandidate{
+				indexName:  newRuntime.def.name,
+				prefix:     prefix,
+				documentID: bytes.Clone(documentID),
+			})
+		}
+		it.Next()
+	}
+	if err := it.Error(); err != nil {
+		return nil, err
+	}
+	if _, err := buildUniqueProbeRuns(uniqueProbes); err != nil {
+		return nil, err
+	}
+	if documentCount > 0 {
+		indexStateTable.Freeze()
+		plan.rootNames = append(plan.rootNames, stateRootName)
+		plan.baseRootIDs[stateRootName] = stateRootID
+		plan.tables = append(plan.tables, indexStateTable)
+	}
+	if secondaryCount > 0 {
+		secondaryTable.Freeze()
+		plan.rootNames = append(plan.rootNames, secondaryRootName)
+		plan.baseRootIDs[secondaryRootName] = catalog.rootID(secondaryRootName)
+		plan.tables = append(plan.tables, secondaryTable)
+	}
+	return plan, nil
+}
+
+func loadBackfillIndexState(snap *backenddb.Snapshot, stateRootID uint64, documentID, document []byte, existingRuntimes []indexRuntime, opts collectionOptions) (documentIndexState, error) {
+	if stateRootID != 0 {
+		entry, err := snap.GetEntryAtRoot(stateRootID, documentID)
+		if err == nil {
+			return decodeDocumentIndexState(entry.Value)
+		}
+		if err != nil && !errors.Is(err, tree.ErrKeyNotFound) {
+			return nil, err
+		}
+	}
+	return indexStateForDocument(document, existingRuntimes, opts)
+}
+
+func cloneDocumentIndexState(state documentIndexState) documentIndexState {
+	out := make(documentIndexState, len(state))
+	for name, values := range state {
+		out[name] = normalizeEncodedIndexValues(values)
+	}
+	return out
+}
+
 func (c *Collection) buildRootDescriptorSystemIterator(rootNames []string, baseRootIDs map[string]uint64, rootIDs []uint64) (iterator.UnsafeIterator, error) {
 	if len(rootIDs) != len(rootNames) {
 		return nil, errors.New("collections: ordered root publish returned unexpected root count")
@@ -428,6 +649,53 @@ func (c *Collection) buildRootDescriptorSystemIterator(rootNames []string, baseR
 		}
 	}
 	updates := make(map[string][]byte, len(rootNames))
+	for i, rootName := range rootNames {
+		updates[systemCollectionRootKey(rootName)] = encodeRootID(rootIDs[i])
+	}
+	table, err := buildSystemTargetTable(current, updates)
+	if err != nil {
+		return nil, err
+	}
+	return table.NewIterator(nil, nil), nil
+}
+
+func (c *Collection) buildSchemaAndRootDescriptorSystemIterator(
+	baseMeta CollectionMeta,
+	newMeta CollectionMeta,
+	rootNames []string,
+	baseRootIDs map[string]uint64,
+	rootIDs []uint64,
+) (iterator.UnsafeIterator, error) {
+	if len(rootIDs) != len(rootNames) {
+		return nil, errors.New("collections: ordered root publish returned unexpected root count")
+	}
+	current := c.db.AcquireSnapshot()
+	if current == nil {
+		return nil, backenddb.ErrClosed
+	}
+	defer func() { _ = current.Close() }()
+	catalog, err := loadCollectionCatalog(current, baseMeta.Name)
+	if err != nil {
+		return nil, err
+	}
+	if catalog == nil {
+		return nil, errCollectionNotFound
+	}
+	if !sameCollectionMeta(catalog.meta, baseMeta) {
+		return nil, fmt.Errorf("collections: concurrent schema modification detected for %q", baseMeta.Name)
+	}
+	for _, rootName := range rootNames {
+		if got, want := catalog.rootID(rootName), baseRootIDs[rootName]; got != want {
+			return nil, fmt.Errorf("collections: concurrent root modification detected for %q", rootName)
+		}
+	}
+
+	encodedMeta, err := encodeCollectionMeta(newMeta)
+	if err != nil {
+		return nil, err
+	}
+	updates := make(map[string][]byte, 1+len(rootNames))
+	updates[systemCollectionMetaKey(baseMeta.Name)] = encodedMeta
 	for i, rootName := range rootNames {
 		updates[systemCollectionRootKey(rootName)] = encodeRootID(rootIDs[i])
 	}
@@ -711,6 +979,39 @@ func sameCollectionMeta(a, b CollectionMeta) bool {
 		return false
 	}
 	return reflect.DeepEqual(na, nb)
+}
+
+func addIndexToCollectionMeta(meta CollectionMeta, def IndexDefinition) (CollectionMeta, IndexDefinition, error) {
+	if _, ok := findIndex(meta.Indexes, def.Name); ok {
+		return CollectionMeta{}, IndexDefinition{}, fmt.Errorf("collections: duplicate index %q", def.Name)
+	}
+	candidate := CollectionMeta{
+		Name:    meta.Name,
+		Options: meta.Options,
+		Indexes: append(append([]IndexDefinition(nil), meta.Indexes...), def),
+	}
+	normalized, err := normalizeCollectionMeta(candidate)
+	if err != nil {
+		return CollectionMeta{}, IndexDefinition{}, err
+	}
+	normalizedDef, ok := findIndex(normalized.Indexes, def.Name)
+	if !ok {
+		return CollectionMeta{}, IndexDefinition{}, fmt.Errorf("collections: normalized index %q not found", def.Name)
+	}
+	return normalized, normalizedDef, nil
+}
+
+func singleIndexRuntime(def IndexDefinition) (indexRuntime, error) {
+	runtimes, err := (insertBatchPlanner{
+		indexes: plannerIndexes([]IndexDefinition{def}),
+	}).indexRuntimes()
+	if err != nil {
+		return indexRuntime{}, err
+	}
+	if len(runtimes) != 1 {
+		return indexRuntime{}, errors.New("collections: expected one index runtime")
+	}
+	return runtimes[0], nil
 }
 
 func plannerIndexes(indexes []IndexDefinition) []indexDefinition {
