@@ -167,15 +167,29 @@ func (idx *leafGenerationRecordLengthIndex) add(offset uint64, length uint32) bo
 }
 
 func (idx *leafGenerationRecordLengthIndex) reserveLiveAppendCapacity(nextLen int) {
-	if idx == nil || nextLen <= cap(idx.offsets) && nextLen <= cap(idx.lengths) {
+	if idx == nil || nextLen <= leafGenerationRecordLengthIndexLivePreallocTrigger {
 		return
 	}
-	target := nextLen
-	if nextLen > leafGenerationRecordLengthIndexLivePreallocTrigger && target < leafGenerationRecordLengthIndexLivePreallocCap {
-		target = leafGenerationRecordLengthIndexLivePreallocCap
-	}
-	if target <= cap(idx.offsets) && target <= cap(idx.lengths) {
+	if nextLen <= cap(idx.offsets) && nextLen <= cap(idx.lengths) {
 		return
+	}
+	current := cap(idx.offsets)
+	if cap(idx.lengths) > current {
+		current = cap(idx.lengths)
+	}
+	target := leafGenerationRecordLengthIndexLivePreallocCap
+	if current > 0 {
+		maxInt := int(^uint(0) >> 1)
+		grown := nextLen
+		if current <= maxInt/2 {
+			grown = current * 2
+		}
+		if target < grown {
+			target = grown
+		}
+	}
+	if target < nextLen {
+		target = nextLen
 	}
 	offsets := make([]uint32, len(idx.offsets), target)
 	copy(offsets, idx.offsets)
