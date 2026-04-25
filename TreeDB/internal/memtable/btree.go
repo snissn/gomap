@@ -3,6 +3,7 @@ package memtable
 import (
 	"bytes"
 	"math/bits"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -26,6 +27,12 @@ const btreeArenaPoolBudgetBytes = 64 << 20
 
 var btreeArenaChunkPools [btreeArenaPoolClassCount]sync.Pool
 var btreeArenaPoolBytes atomic.Int64
+var btreeArenaPoolLastGC atomic.Uint64
+var btreeArenaPoolNumGC = func() uint64 {
+	var stats runtime.MemStats
+	runtime.ReadMemStats(&stats)
+	return uint64(stats.NumGC)
+}
 
 type btreeEntry struct {
 	value []byte // inline bytes (if pointer, may store inline tail bytes)
@@ -945,13 +952,16 @@ func getBTreeArenaChunk(size int) []byte {
 		return make([]byte, size)
 	}
 	if v := btreeArenaChunkPools[idx].Get(); v != nil {
-		if chunk, ok := v.([]byte); ok && cap(chunk) == classSize {
-			if next := btreeArenaPoolBytes.Add(-int64(classSize)); next < 0 {
+		if chunk, ok := v.([]byte); ok {
+			if next := btreeArenaPoolBytes.Add(-int64(cap(chunk))); next < 0 {
 				btreeArenaPoolBytes.Store(0)
 			}
-			return chunk[:classSize]
+			if cap(chunk) == classSize {
+				return chunk[:classSize]
+			}
 		}
 	}
+	maybeResetBTreeArenaPoolBytesAfterGC()
 	return make([]byte, classSize)
 }
 
@@ -964,16 +974,56 @@ func putBTreeArenaChunk(chunk []byte) {
 		return
 	}
 	size := int64(cap(chunk))
+	noteEpoch := false
 	for {
 		held := btreeArenaPoolBytes.Load()
 		if held+size > btreeArenaPoolBudgetBytes {
-			return
+			before := held
+			maybeResetBTreeArenaPoolBytesAfterGC()
+			held = btreeArenaPoolBytes.Load()
+			if held == before || held+size > btreeArenaPoolBudgetBytes {
+				return
+			}
+			continue
 		}
 		if btreeArenaPoolBytes.CompareAndSwap(held, held+size) {
+			noteEpoch = held == 0
 			break
 		}
 	}
+	if noteEpoch {
+		noteBTreeArenaPoolGC(btreeArenaPoolNumGC())
+	}
 	btreeArenaChunkPools[idx].Put(chunk[:0])
+}
+
+func maybeResetBTreeArenaPoolBytesAfterGC() {
+	if btreeArenaPoolBytes.Load() <= 0 {
+		return
+	}
+	numGC := btreeArenaPoolNumGC()
+	last := btreeArenaPoolLastGC.Load()
+	if last == numGC {
+		return
+	}
+	if btreeArenaPoolLastGC.CompareAndSwap(last, numGC) {
+		btreeArenaPoolBytes.Store(0)
+	}
+}
+
+func noteBTreeArenaPoolGC(numGC uint64) {
+	if numGC == 0 {
+		return
+	}
+	for {
+		last := btreeArenaPoolLastGC.Load()
+		if last >= numGC {
+			return
+		}
+		if btreeArenaPoolLastGC.CompareAndSwap(last, numGC) {
+			return
+		}
+	}
 }
 
 func btreeArenaClassForLen(size int) (idx int, classSize int, ok bool) {
