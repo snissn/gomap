@@ -29936,6 +29936,34 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 				if len(idxs) > 1 {
 					shard.rng.add(lastKey)
 				}
+			} else if !useStream {
+				for _, entryIdx := range idxs {
+					op := b.entries[entryIdx]
+					if op.Type == batch.OpDelete {
+						memtableBatchDelete(shard.mem, useSteal, op.Key)
+					} else {
+						borrowed := false
+						if allowBatchArenaBorrow && !useSteal {
+							if _, ok := shard.mem.(memtable.ValueBorrower); ok {
+								if op.IsPtr {
+									borrowed = storeInlinePtrValues && len(op.Value) > 0
+								} else {
+									borrowed = len(op.Value) > 0
+								}
+							}
+						}
+						memtableBatchSet(shard.mem, useSteal, allowBatchArenaBorrow, storeInlinePtrValues, op)
+						if borrowed {
+							retainMain = true
+						}
+					}
+					shard.rng.add(op.Key)
+					if op.Type == batch.OpDelete {
+						b.db.noteDeleteKey(op.Key)
+					} else {
+						b.db.noteWriteKey(op.Key)
+					}
+				}
 			} else {
 				entries := materializeShardEntries(i, idxs)
 				for _, op := range entries {
@@ -29957,22 +29985,10 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 							retainMain = true
 						}
 					}
-					if useStream {
-						// Preserve sorted-run accounting even when we avoid Steal.
-						continue
-					}
-					shard.rng.add(op.Key)
-					if op.Type == batch.OpDelete {
-						b.db.noteDeleteKey(op.Key)
-					} else {
-						b.db.noteWriteKey(op.Key)
-					}
 				}
-				if useStream {
-					shard.rng.add(firstKey)
-					if len(idxs) > 1 {
-						shard.rng.add(lastKey)
-					}
+				shard.rng.add(firstKey)
+				if len(idxs) > 1 {
+					shard.rng.add(lastKey)
 				}
 			}
 			newBytes := shard.mem.Size()

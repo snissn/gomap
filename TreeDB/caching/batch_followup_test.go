@@ -124,6 +124,47 @@ func TestBatchWrite_DeleteOnlyFastPath_SortedAndUnsorted(t *testing.T) {
 	t.Run("unsorted", func(t *testing.T) { run(t, []string{"b", "a"}) })
 }
 
+func TestBatchWrite_UnsortedBatchDoesNotMaterializeShardEntries(t *testing.T) {
+	cache, err := Open(t.TempDir(), NewMockBackend(), Options{
+		DisableWAL:     true,
+		AllowUnsafe:    true,
+		FlushThreshold: 1 << 30,
+		MemtableMode:   "btree",
+		MemtableShards: 4,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer cache.Close()
+
+	b := cache.NewBatchWithSize(3)
+	defer func() { _ = b.Close() }()
+	for _, key := range []string{"c", "a", "b"} {
+		if err := b.Set([]byte(key), []byte("v-"+key)); err != nil {
+			t.Fatalf("Set(%q): %v", key, err)
+		}
+	}
+	if b.streamEligible {
+		t.Fatal("test batch unexpectedly stream eligible")
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if cap(b.shardEntries) != 0 {
+		t.Fatalf("unsorted write materialized shard entries: cap=%d", cap(b.shardEntries))
+	}
+	for _, key := range []string{"a", "b", "c"} {
+		got, err := cache.Get([]byte(key))
+		if err != nil {
+			t.Fatalf("Get(%q): %v", key, err)
+		}
+		want := []byte("v-" + key)
+		if !bytes.Equal(got, want) {
+			t.Fatalf("Get(%q)=%q want %q", key, got, want)
+		}
+	}
+}
+
 func TestBatchWrite_DeleteOnlyEmptyDBNoOp_WALOff(t *testing.T) {
 	run := func(t *testing.T, useView bool) {
 		t.Helper()
