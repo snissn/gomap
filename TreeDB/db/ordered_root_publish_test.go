@@ -9,6 +9,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
+	"github.com/snissn/gomap/TreeDB/page"
 )
 
 func TestPublishOrderedRootIterator_WarmSparseDelta_PreservesPages(t *testing.T) {
@@ -496,6 +497,132 @@ func TestPublishOrderedRootDeltaGroupWithSystemBuilder_AppliesDeletes(t *testing
 	if _, err := snap.GetEntryAtRoot(rootIDs[0], []byte("root/b")); err == nil {
 		t.Fatal("root/b still exists after delta delete")
 	}
+}
+
+func TestOrderedRootDeltaBatchFromIterator_StableIteratorUsesViews(t *testing.T) {
+	key := []byte("root/a")
+	value := []byte("value-a")
+	iter := &stableRootDeltaIterator{
+		entries: []stableRootDeltaEntry{{key: key, value: value}},
+	}
+
+	delta, err := orderedRootDeltaBatchFromIterator(iter)
+	if err != nil {
+		t.Fatalf("orderedRootDeltaBatchFromIterator: %v", err)
+	}
+	defer func() { _ = delta.Close() }()
+
+	entries := delta.SortedEntries()
+	if len(entries) != 1 {
+		t.Fatalf("entries len=%d want 1", len(entries))
+	}
+	if got := string(entries[0].Key); got != string(key) {
+		t.Fatalf("key=%q want %q", got, key)
+	}
+	if got := string(entries[0].Value); got != string(value) {
+		t.Fatalf("value=%q want %q", got, value)
+	}
+	if &entries[0].Key[0] != &key[0] {
+		t.Fatal("stable iterator key was copied into batch arena")
+	}
+	if &entries[0].Value[0] != &value[0] {
+		t.Fatal("stable iterator value was copied into batch arena")
+	}
+}
+
+type stableRootDeltaEntry struct {
+	key   []byte
+	value []byte
+}
+
+type stableRootDeltaIterator struct {
+	entries []stableRootDeltaEntry
+	idx     int
+}
+
+func (it *stableRootDeltaIterator) StableUnsafeIteratorSlices() bool { return true }
+
+func (it *stableRootDeltaIterator) Len() int {
+	if it == nil {
+		return 0
+	}
+	return len(it.entries)
+}
+
+func (it *stableRootDeltaIterator) Valid() bool {
+	return it != nil && it.idx >= 0 && it.idx < len(it.entries)
+}
+
+func (it *stableRootDeltaIterator) Next() {
+	if it != nil && it.idx < len(it.entries) {
+		it.idx++
+	}
+}
+
+func (it *stableRootDeltaIterator) Seek(key []byte) {
+	it.idx = len(it.entries)
+	for i := range it.entries {
+		if string(it.entries[i].key) >= string(key) {
+			it.idx = i
+			return
+		}
+	}
+}
+
+func (it *stableRootDeltaIterator) UnsafeKey() []byte {
+	if !it.Valid() {
+		return nil
+	}
+	return it.entries[it.idx].key
+}
+
+func (it *stableRootDeltaIterator) UnsafeValue() []byte {
+	if !it.Valid() {
+		return nil
+	}
+	return it.entries[it.idx].value
+}
+
+func (it *stableRootDeltaIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
+	return it.UnsafeValue(), page.ValuePtr{}, 0
+}
+
+func (it *stableRootDeltaIterator) Key() []byte {
+	return it.UnsafeKey()
+}
+
+func (it *stableRootDeltaIterator) Value() []byte {
+	return it.UnsafeValue()
+}
+
+func (it *stableRootDeltaIterator) KeyCopy(dst []byte) []byte {
+	if !it.Valid() {
+		return dst
+	}
+	return append(dst, it.entries[it.idx].key...)
+}
+
+func (it *stableRootDeltaIterator) ValueCopy(dst []byte) []byte {
+	if !it.Valid() {
+		return dst
+	}
+	return append(dst, it.entries[it.idx].value...)
+}
+
+func (it *stableRootDeltaIterator) IsDeleted() bool {
+	return false
+}
+
+func (it *stableRootDeltaIterator) Error() error {
+	return nil
+}
+
+func (it *stableRootDeltaIterator) Close() error {
+	return nil
+}
+
+func (it *stableRootDeltaIterator) Domain() (start, end []byte) {
+	return nil, nil
 }
 
 func TestPublishOrderedRootGroupWithSystemBuilder_ErrorLeavesMetaRootsUnchanged(t *testing.T) {

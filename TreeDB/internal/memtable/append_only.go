@@ -1185,6 +1185,15 @@ func (it *appendOnlyIterator) len() int {
 	return len(it.entries)
 }
 
+func (it *appendOnlyIterator) Len() int {
+	if it == nil {
+		return 0
+	}
+	return it.len()
+}
+
+func (*appendOnlyIterator) StableUnsafeIteratorSlices() bool { return true }
+
 func (it *appendOnlyIterator) entryAt(idx int) *appendOnlyEntry {
 	if idx < 0 {
 		return nil
