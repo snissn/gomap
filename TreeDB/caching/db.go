@@ -6234,6 +6234,9 @@ type DB struct {
 	// Readers load it atomically to avoid holding db.mu around memtable access.
 	memtables                        atomic.Pointer[memtableView]
 	hashSortedIndexer                *memtable.HashSortedIndexer
+	btreeMemLeaseMu                  sync.Mutex
+	btreeMemLeases                   []*memtable.BTree
+	btreeMemLeaseHitTotal            atomic.Uint64
 	appendOnlyMemPool                sync.Pool
 	appendOnlyMemLeaseMu             sync.Mutex
 	appendOnlyMemLeases              []*memtable.AppendOnly
@@ -7215,6 +7218,11 @@ const appendOnlyEstimatedBytesPerEntryDefault = 96
 // and increases allocation churn.
 const maxAppendOnlyMemLeases = 32
 
+// maxBTreeMemLeases bounds strong references to recycled BTree memtables.
+// Each retained BTree can hold arena chunks, so keep this much smaller than
+// append-only leasing.
+const maxBTreeMemLeases = 8
+
 func updateInt64Max(dst *atomic.Int64, value int64) {
 	for {
 		cur := dst.Load()
@@ -7744,6 +7752,35 @@ func (db *DB) putAppendOnlyMemLease(mt *memtable.AppendOnly) bool {
 	return true
 }
 
+func (db *DB) popBTreeMemLease() *memtable.BTree {
+	if db == nil {
+		return nil
+	}
+	db.btreeMemLeaseMu.Lock()
+	defer db.btreeMemLeaseMu.Unlock()
+	n := len(db.btreeMemLeases)
+	if n == 0 {
+		return nil
+	}
+	mt := db.btreeMemLeases[n-1]
+	db.btreeMemLeases[n-1] = nil
+	db.btreeMemLeases = db.btreeMemLeases[:n-1]
+	return mt
+}
+
+func (db *DB) putBTreeMemLease(mt *memtable.BTree) bool {
+	if db == nil || mt == nil {
+		return false
+	}
+	db.btreeMemLeaseMu.Lock()
+	defer db.btreeMemLeaseMu.Unlock()
+	if len(db.btreeMemLeases) >= maxBTreeMemLeases {
+		return false
+	}
+	db.btreeMemLeases = append(db.btreeMemLeases, mt)
+	return true
+}
+
 func (db *DB) recycleMemtables(mems []memtable.Table) {
 	if db == nil || len(mems) == 0 {
 		return
@@ -7760,6 +7797,9 @@ func (db *DB) recycleMemtables(mems []memtable.Table) {
 			if !db.putAppendOnlyMemLease(typed) {
 				db.appendOnlyMemPool.Put(typed)
 			}
+		case *memtable.BTree:
+			typed.Reset()
+			db.putBTreeMemLease(typed)
 		}
 	}
 }
@@ -7793,6 +7833,33 @@ func (db *DB) trimAppendOnlyMemLeases(maxLeases int, resetCapacity int) {
 			dropped[i].ResetWithCapacityHard(effectiveResetCapacity, appendOnlyEstimatedBytesPerEntryDefault)
 			db.releaseAppendOnlyDirectArenaLeaseForMemtable(dropped[i])
 			db.appendOnlyMemPool.Put(dropped[i])
+		}
+	}
+}
+
+func (db *DB) trimBTreeMemLeases(maxLeases int) {
+	if db == nil {
+		return
+	}
+	if maxLeases < 0 {
+		maxLeases = 0
+	}
+	var dropped []*memtable.BTree
+	db.btreeMemLeaseMu.Lock()
+	if n := len(db.btreeMemLeases); n > maxLeases {
+		drop := n - maxLeases
+		dropped = append(dropped, db.btreeMemLeases[:drop]...)
+		copy(db.btreeMemLeases, db.btreeMemLeases[drop:])
+		for i := n - drop; i < n; i++ {
+			db.btreeMemLeases[i] = nil
+		}
+		db.btreeMemLeases = db.btreeMemLeases[:n-drop]
+	}
+	db.btreeMemLeaseMu.Unlock()
+
+	for i := range dropped {
+		if dropped[i] != nil {
+			dropped[i].Reset()
 		}
 	}
 }
@@ -7856,11 +7923,13 @@ func (db *DB) trimRetainedArenasAfterFlush(checkpoint bool) {
 	entryTarget := postFlushEntrySliceTargetBytes
 	leaseKeepPerBucket := postFlushEntrySliceLeaseKeepPerBucket
 	appendOnlyLeaseKeep := postFlushAppendOnlyMemLeaseKeep
+	btreeLeaseKeep := maxBTreeMemLeases / 2
 	if checkpoint {
 		batchTarget = postCheckpointBatchArenaTargetBytes
 		entryTarget = postCheckpointEntrySliceTargetBytes
 		leaseKeepPerBucket = postCheckpointEntrySliceLeaseKeepPerBucket
 		appendOnlyLeaseKeep = postCheckpointAppendOnlyMemLeaseKeep
+		btreeLeaseKeep = maxBTreeMemLeases / 4
 	}
 	if budget := currentBatchArenaRetentionBudgetBytes(); budget >= 0 && budget < batchTarget {
 		batchTarget = budget
@@ -7885,9 +7954,18 @@ func (db *DB) trimRetainedArenasAfterFlush(checkpoint bool) {
 
 	db.trimMutableShardAppendOnlyDirectArenas(checkpoint)
 	db.trimAppendOnlyMemLeases(appendOnlyLeaseKeep, db.checkpointRotateCapacity())
+	db.trimBTreeMemLeases(btreeLeaseKeep)
 }
 
 func (db *DB) newMutableMemtableWithCapacityMode(capacity int, mode memtable.Mode) (memtable.Table, error) {
+	if db != nil && mode == memtable.ModeBTree {
+		if mt := db.popBTreeMemLease(); mt != nil {
+			db.btreeMemLeaseHitTotal.Add(1)
+			mt.Reset()
+			return mt, nil
+		}
+		return memtable.NewBTree(), nil
+	}
 	if db != nil && mode == memtable.ModeAppendOnly {
 		estimate := appendOnlyEstimatedBytesPerEntryDefault
 		entryHint := db.appendOnlyEntryHintEntries()
@@ -11735,6 +11813,11 @@ func stableFlushStreamingSources(units []flushUnit) bool {
 func stableFlushStreamingPlan(units []flushUnit, totalLen int) (int, bool) {
 	if !stableFlushStreamingSources(units) {
 		return 0, false
+	}
+	for i := range units {
+		if _, isBTree := units[i].mem.(*memtable.BTree); isBTree {
+			return 0, false
+		}
 	}
 	deleteOps, ok := flushStreamingDeleteOps(units, totalLen)
 	if !ok {

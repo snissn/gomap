@@ -865,6 +865,29 @@ func TestAppendOnlyMemtableLeaseReuse(t *testing.T) {
 	}
 }
 
+func TestBTreeMemtableLeaseReuse(t *testing.T) {
+	db := &DB{}
+	mt := memtable.NewBTree()
+	mt.Set([]byte("key"), []byte("value"))
+
+	db.recycleMemtables([]memtable.Table{mt})
+
+	got, err := db.newMutableMemtableWithCapacityMode(0, memtable.ModeBTree)
+	if err != nil {
+		t.Fatalf("newMutableMemtableWithCapacityMode: %v", err)
+	}
+	gotBTree, ok := got.(*memtable.BTree)
+	if !ok {
+		t.Fatalf("expected BTree memtable, got %T", got)
+	}
+	if gotBTree != mt {
+		t.Fatalf("expected leased BTree memtable reuse")
+	}
+	if _, _, ok := gotBTree.Get([]byte("key")); ok {
+		t.Fatal("leased BTree memtable retained old key")
+	}
+}
+
 func TestFlushLaneOnce_UsesViewMethodsForInlineEntries_SerialAndParallel(t *testing.T) {
 	t.Run("serial", func(t *testing.T) {
 		testFlushLaneOnceUsesViewMethodsForInlineEntries(t, false, true, true)
@@ -1071,9 +1094,18 @@ func TestFlushStreamingDeleteOps(t *testing.T) {
 		t.Fatalf("NewWithCapacityMode btree: %v", err)
 	}
 	btree.Set([]byte("a"), []byte("va"))
+	btree.Delete([]byte("b"))
+	btree.Delete([]byte("c"))
+	btree.Delete([]byte("d"))
 	btree.Freeze()
+	if deleteOps, ok := flushStreamingDeleteOps([]flushUnit{{mem: btree}}, btree.Len()); !ok || deleteOps != 3 {
+		t.Fatalf("BTree flushStreamingDeleteOps=(%d,%t), want (3,true)", deleteOps, ok)
+	}
+	if deleteOps, ok := deleteHeavyStreamingDeleteOps([]flushUnit{{mem: btree}}, btree.Len()); !ok || deleteOps != 3 {
+		t.Fatalf("BTree deleteHeavyStreamingDeleteOps=(%d,%t), want (3,true)", deleteOps, ok)
+	}
 	if _, ok := stableFlushStreamingPlan([]flushUnit{{mem: btree}}, btree.Len()); ok {
-		t.Fatal("stable memtable without operation mix should stay on materialized path")
+		t.Fatal("BTree generic stable plan should stay materialized; delete-heavy path handles BTree separately")
 	}
 }
 

@@ -2,6 +2,7 @@ package memtable
 
 import (
 	"bytes"
+	"sync"
 	"testing"
 	"unsafe"
 
@@ -239,6 +240,28 @@ func TestBTreeSetEntryCopiesKeyValue(t *testing.T) {
 	}
 }
 
+func TestBTreeOperationMixTracksCurrentDeletes(t *testing.T) {
+	m := NewBTree()
+	m.Set([]byte("a"), []byte("va"))
+	m.Delete([]byte("b"))
+	m.Delete([]byte("c"))
+
+	if got := m.OperationMix(); got.Entries != 3 || got.Deletes != 2 {
+		t.Fatalf("OperationMix after inserts=%+v, want entries=3 deletes=2", got)
+	}
+
+	m.Set([]byte("b"), []byte("vb"))
+	m.Delete([]byte("a"))
+	if got := m.OperationMix(); got.Entries != 3 || got.Deletes != 2 {
+		t.Fatalf("OperationMix after replacements=%+v, want entries=3 deletes=2", got)
+	}
+
+	m.Reset()
+	if got := m.OperationMix(); got.Entries != 0 || got.Deletes != 0 {
+		t.Fatalf("OperationMix after reset=%+v, want zero", got)
+	}
+}
+
 func TestBTreeArenaUsesSmallInitialChunkThenGrows(t *testing.T) {
 	a := &btreeArena{
 		maxChunkSize:     256,
@@ -317,6 +340,92 @@ func TestBTreeResetKeepsFirstArenaChunk(t *testing.T) {
 	}
 	if got := m.arena.offset; got != 0 {
 		t.Fatalf("offset after reset=%d want 0", got)
+	}
+}
+
+func TestBTreeArenaPoolClasses(t *testing.T) {
+	tests := []struct {
+		size      int
+		classSize int
+		ok        bool
+	}{
+		{size: (64 << 10) - 1, ok: false},
+		{size: 64 << 10, classSize: 64 << 10, ok: true},
+		{size: (64 << 10) + 1, classSize: 128 << 10, ok: true},
+		{size: 1 << 20, classSize: 1 << 20, ok: true},
+		{size: (1 << 20) + 1, ok: false},
+	}
+	for _, tt := range tests {
+		_, gotClass, gotOK := btreeArenaClassForLen(tt.size)
+		if gotOK != tt.ok || gotClass != tt.classSize {
+			t.Fatalf("btreeArenaClassForLen(%d)=(%d,%t), want (%d,%t)", tt.size, gotClass, gotOK, tt.classSize, tt.ok)
+		}
+	}
+}
+
+func TestBTreeArenaReusesReleasedChunk(t *testing.T) {
+	resetBTreeArenaPoolForTest(t)
+	a := &btreeArena{
+		maxChunkSize:     btreeArenaChunkSize,
+		initialChunkSize: btreeArenaInitialChunkSize,
+	}
+	a.Copy(make([]byte, btreeArenaInitialChunkSize))
+	a.Copy(make([]byte, btreeArenaInitialChunkSize+1))
+	if got := len(a.chunks); got != 2 {
+		t.Fatalf("chunks before reset=%d want 2", got)
+	}
+	released := a.chunks[1]
+	a.resetKeepFirstChunk()
+	if got := len(a.chunks); got != 1 {
+		t.Fatalf("chunks after reset=%d want 1", got)
+	}
+	if got := btreeArenaPoolBytes.Load(); got < int64(cap(released)) {
+		t.Fatalf("pooled bytes=%d want at least %d", got, cap(released))
+	}
+	reused := getBTreeArenaChunk(cap(released))
+	if cap(reused) != cap(released) {
+		t.Fatalf("reused chunk cap=%d want %d", cap(reused), cap(released))
+	}
+	putBTreeArenaChunk(reused)
+}
+
+func TestBTreeArenaPoolAccountingMissResetsAfterGC(t *testing.T) {
+	resetBTreeArenaPoolForTest(t)
+	var fakeNumGC uint64 = 7
+	btreeArenaPoolNumGC = func() uint64 { return fakeNumGC }
+
+	btreeArenaPoolBytes.Store(1234)
+	btreeArenaPoolLastGC.Store(fakeNumGC)
+	fakeNumGC++
+	_ = getBTreeArenaChunk(64 << 10)
+
+	if got := btreeArenaPoolBytes.Load(); got != 0 {
+		t.Fatalf("btreeArenaPoolBytes after GC miss=%d want 0", got)
+	}
+	if got := btreeArenaPoolLastGC.Load(); got != fakeNumGC {
+		t.Fatalf("btreeArenaPoolLastGC=%d want %d", got, fakeNumGC)
+	}
+}
+
+func TestPutBTreeArenaChunkBudgetResetsAfterGC(t *testing.T) {
+	resetBTreeArenaPoolForTest(t)
+	var fakeNumGC uint64 = 11
+	btreeArenaPoolNumGC = func() uint64 { return fakeNumGC }
+
+	_, classSize, ok := btreeArenaClassForLen(64 << 10)
+	if !ok {
+		t.Fatal("btreeArenaClassForLen failed")
+	}
+	btreeArenaPoolBytes.Store(btreeArenaPoolBudgetBytes)
+	btreeArenaPoolLastGC.Store(fakeNumGC)
+	fakeNumGC++
+	putBTreeArenaChunk(make([]byte, classSize))
+
+	if got := btreeArenaPoolBytes.Load(); got != int64(classSize) {
+		t.Fatalf("btreeArenaPoolBytes after GC-aware put=%d want %d", got, classSize)
+	}
+	if got := btreeArenaPoolLastGC.Load(); got != fakeNumGC {
+		t.Fatalf("btreeArenaPoolLastGC=%d want %d", got, fakeNumGC)
 	}
 }
 
@@ -522,6 +631,24 @@ func equalInts(a, b []int) bool {
 		}
 	}
 	return true
+}
+
+func resetBTreeArenaPoolForTest(t *testing.T) {
+	t.Helper()
+	prevNumGC := btreeArenaPoolNumGC
+	for i := range btreeArenaChunkPools {
+		btreeArenaChunkPools[i] = sync.Pool{}
+	}
+	btreeArenaPoolBytes.Store(0)
+	btreeArenaPoolLastGC.Store(0)
+	t.Cleanup(func() {
+		btreeArenaPoolNumGC = prevNumGC
+		for i := range btreeArenaChunkPools {
+			btreeArenaChunkPools[i] = sync.Pool{}
+		}
+		btreeArenaPoolBytes.Store(0)
+		btreeArenaPoolLastGC.Store(0)
+	})
 }
 
 func arenaChunkSizes(a *btreeArena) []int {
