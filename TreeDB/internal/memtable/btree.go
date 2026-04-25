@@ -23,6 +23,8 @@ const btreeArenaPoolMinShift = 16
 const btreeArenaPoolMaxShift = 20
 const btreeArenaPoolClassCount = btreeArenaPoolMaxShift - btreeArenaPoolMinShift + 1
 const btreeArenaPoolBudgetBytes = 64 << 20
+const btreeAdaptiveBothSplitMinEntries = 512
+const btreeAdaptiveBothSplitMinNonAppend = 64
 
 var btreeArenaChunkPools [btreeArenaPoolClassCount]sync.Pool
 var btreeArenaPoolBytes atomic.Int64
@@ -92,15 +94,17 @@ func normalizeBTreeEntryFlags(flags byte) byte {
 }
 
 type BTree struct {
-	mu          sync.RWMutex
-	tree        *btree.Map[string, btreeEntry]
-	sizeBytes   int64
-	arena       *btreeArena
-	lastKey     string
-	hasLast     bool
-	degree      int
-	lastInline  []byte
-	deleteCount int
+	mu                           sync.RWMutex
+	tree                         *btree.Map[string, btreeEntry]
+	sizeBytes                    int64
+	arena                        *btreeArena
+	lastKey                      string
+	hasLast                      bool
+	degree                       int
+	lastInline                   []byte
+	deleteCount                  int
+	nonAppendSetCount            int
+	reuseBothSplitInsertCapacity bool
 }
 
 func (*BTree) StableUnsafeIteratorSlices() bool { return true }
@@ -228,6 +232,9 @@ func (m *BTree) Reset() {
 	m.hasLast = false
 	m.lastInline = nil
 	m.deleteCount = 0
+	m.nonAppendSetCount = 0
+	m.reuseBothSplitInsertCapacity = false
+	m.tree.SetReuseBothSplitInsertCapacity(false)
 	if m.arena != nil {
 		m.arena.resetKeepFirstChunk()
 	}
@@ -753,17 +760,37 @@ func (it *btreeReverseIterator) refresh() {
 }
 
 func (m *BTree) setMaybeLoadLocked(key string, entry btreeEntry) (btreeEntry, bool) {
-	if m.hasLast && key > m.lastKey {
+	if !m.hasLast || key > m.lastKey {
 		return m.tree.Load(key, entry)
 	}
-	return m.tree.Set(key, entry)
+	prev, replaced := m.tree.Set(key, entry)
+	if !replaced {
+		m.noteNonAppendInsertLocked()
+	}
+	return prev, replaced
 }
 
 func (m *BTree) setMaybeSortedLoadLocked(key string, entry btreeEntry) (btreeEntry, bool) {
-	if m.hasLast && key > m.lastKey {
+	if !m.hasLast || key > m.lastKey {
 		return m.tree.Load(key, entry)
 	}
-	return m.tree.Set(key, entry)
+	prev, replaced := m.tree.Set(key, entry)
+	if !replaced {
+		m.noteNonAppendInsertLocked()
+	}
+	return prev, replaced
+}
+
+func (m *BTree) noteNonAppendInsertLocked() {
+	if m.reuseBothSplitInsertCapacity || m.tree.Len() < btreeAdaptiveBothSplitMinEntries {
+		return
+	}
+	m.nonAppendSetCount++
+	if m.nonAppendSetCount < btreeAdaptiveBothSplitMinNonAppend {
+		return
+	}
+	m.reuseBothSplitInsertCapacity = true
+	m.tree.SetReuseBothSplitInsertCapacity(true)
 }
 
 func (m *BTree) copyInlineValueLocked(value []byte) []byte {
