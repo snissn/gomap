@@ -20515,29 +20515,9 @@ func (db *DB) setDirect(key, value []byte, sync bool) error {
 		if !db.memtableValueLogPointers {
 			memVal = value
 		}
-		if borrower, ok := shard.mem.(memtable.ValueBorrower); ok && len(memVal) > 0 {
-			owned := shard.appendOnlyDirectValueArena.alloc(len(memVal))
-			copy(owned, memVal)
-			if stableBorrower, ok := shard.mem.(memtable.StableValueBorrower); ok {
-				stableBorrower.SetEntryBorrowStableValue(key, owned, ptr, node.FlagPointer)
-			} else {
-				borrower.SetEntryBorrowValue(key, owned, ptr, node.FlagPointer)
-			}
-		} else {
-			shard.mem.SetEntry(key, memVal, ptr, node.FlagPointer)
-		}
+		db.setDirectMemtableEntryLocked(shard, key, memVal, ptr, node.FlagPointer)
 	} else {
-		if borrower, ok := shard.mem.(memtable.ValueBorrower); ok && len(value) > 0 {
-			owned := shard.appendOnlyDirectValueArena.alloc(len(value))
-			copy(owned, value)
-			if stableBorrower, ok := shard.mem.(memtable.StableValueBorrower); ok {
-				stableBorrower.SetEntryBorrowStableValue(key, owned, page.ValuePtr{}, node.FlagInline)
-			} else {
-				borrower.SetEntryBorrowValue(key, owned, page.ValuePtr{}, node.FlagInline)
-			}
-		} else {
-			shard.mem.SetEntry(key, value, page.ValuePtr{}, node.FlagInline)
-		}
+		db.setDirectMemtableEntryLocked(shard, key, value, page.ValuePtr{}, node.FlagInline)
 	}
 	shard.rng.add(key)
 	newBytes := shard.mem.Size()
@@ -20573,6 +20553,29 @@ func (db *DB) setDirect(key, value []byte, sync bool) error {
 	db.noteWrite()
 	db.maybeAssistFlush()
 	return nil
+}
+
+func (db *DB) setDirectMemtableEntryLocked(shard *memShard, key, value []byte, ptr page.ValuePtr, flags byte) {
+	if len(value) > 0 {
+		// Direct Set callers do not promise stable value ownership. Reuse is only
+		// allowed when the memtable can append by referring to an existing payload.
+		if reuser, ok := shard.mem.(memtable.StableValueReuser); ok {
+			if reuser.SetEntryReuseStableValue(key, value, ptr, flags) {
+				return
+			}
+		}
+		if borrower, ok := shard.mem.(memtable.ValueBorrower); ok {
+			owned := shard.appendOnlyDirectValueArena.alloc(len(value))
+			copy(owned, value)
+			if stableBorrower, ok := shard.mem.(memtable.StableValueBorrower); ok {
+				stableBorrower.SetEntryBorrowStableValue(key, owned, ptr, flags)
+			} else {
+				borrower.SetEntryBorrowValue(key, owned, ptr, flags)
+			}
+			return
+		}
+	}
+	shard.mem.SetEntry(key, value, ptr, flags)
 }
 
 func (db *DB) Delete(key []byte) error {
@@ -21779,6 +21782,9 @@ func (db *DB) maybeRotateMutableShards(triggerFlush bool, candidates []int) erro
 	defer db.mu.Unlock()
 	if db.mutableBytes.Load() <= db.mutableFlushThreshold() {
 		return nil
+	}
+	if db.shouldRotateForTailSequentialRecovery() {
+		return db.rotateMutableShardsLocked(-1, triggerFlush)
 	}
 	selected := db.selectMutableShardsToRotateLocked(candidates)
 	if len(selected) == 0 {

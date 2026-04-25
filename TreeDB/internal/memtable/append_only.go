@@ -1158,6 +1158,74 @@ func (m *AppendOnly) appendEntryLocked(key, value []byte, ptr page.ValuePtr, fla
 	return observeEvent
 }
 
+func (m *AppendOnly) appendEntryReuseStableValueLocked(key []byte, payloadIndex uint32, valueLen int, flags byte) appendOnlyObserveEvent {
+	var observeEvent appendOnlyObserveEvent
+	grewEntries := false
+	if m.count == len(m.entries) {
+		if m.predictEntryHintSource != nil {
+			if shared := appendOnlyClampRetainedEntries(int(m.predictEntryHintSource.Load())); shared > m.growEntriesLen {
+				m.growEntriesLen = shared
+			}
+		}
+		nextCap := appendOnlyNextCapacity(len(m.entries))
+		if nextCap < m.growEntriesLen {
+			nextCap = m.growEntriesLen
+		}
+		prev := m.entries
+		grown := getAppendOnlyEntries(nextCap)
+		copy(grown, m.entries[:m.count])
+		m.entries = grown
+		putAppendOnlyEntries(prev)
+		grewEntries = true
+	}
+	idx := m.count
+	m.count++
+	if grewEntries {
+		observeEvent.record(m.observeEntries, m.count)
+	}
+	ent := &m.entries[idx]
+	ent.keyIndex = 0
+	ent.payloadIndex = 0
+	if len(key) == 0 {
+		appendOnlyEntrySetKeyIndex(ent, m.appendKeyLocked(""))
+	} else if len(key) <= appendOnlyInlineKeyLen {
+		copy(ent.inlineKey[:], key)
+		appendOnlyEntrySetInlineKeyLen(ent, len(key))
+	} else {
+		appendOnlyEntrySetKeyIndex(ent, m.appendKeyLocked(appendOnlyArenaStringCopy(&m.valueArena, key)))
+	}
+	appendOnlyEntrySetFlags(ent, flags)
+	appendOnlyEntrySetPayloadIndex(ent, payloadIndex)
+	k := m.appendOnlyEntryKey(ent)
+	m.sizeBytes += int64(len(k) + entryValueSize(flags, valueLen))
+	if appendOnlyShouldPredictHint(m.count) {
+		m.maybeRaisePredictedGrowthHintLocked(&observeEvent)
+	}
+
+	if !m.hasLast {
+		m.lastIdx = idx
+		m.hasLast = true
+		return observeEvent
+	}
+	if m.ordered {
+		prev := m.appendOnlyEntryKey(&m.entries[m.lastIdx])
+		cmp := bytes.Compare(k, prev)
+		if cmp > 0 {
+			m.lastIdx = idx
+			return observeEvent
+		}
+		m.ordered = false
+		m.latestDirty = true
+		m.clearSnapshotLocked()
+		return observeEvent
+	}
+	if !m.latestDirty {
+		m.updateLatestIndexLocked(k, idx)
+	}
+	m.clearSnapshotLocked()
+	return observeEvent
+}
+
 func (m *AppendOnly) canAppendTrustedOrderedBatchLocked(firstKey []byte) bool {
 	if !m.ordered {
 		return false
@@ -1378,6 +1446,22 @@ func (m *AppendOnly) SetEntryBorrowStableValue(key, value []byte, ptr page.Value
 	observeEvent := m.appendEntryLocked(key, value, ptr, flags, false, true, true)
 	m.mu.Unlock()
 	observeEvent.emit()
+}
+
+func (m *AppendOnly) SetEntryReuseStableValue(key, value []byte, ptr page.ValuePtr, flags byte) bool {
+	if len(value) == 0 || flags&node.FlagPointer != 0 || flags&node.FlagTombstone != 0 {
+		return false
+	}
+	m.mu.Lock()
+	payloadIndex := m.recentValueIndexLocked(value, true)
+	if payloadIndex == 0 {
+		m.mu.Unlock()
+		return false
+	}
+	observeEvent := m.appendEntryReuseStableValueLocked(key, payloadIndex, len(value), flags)
+	m.mu.Unlock()
+	observeEvent.emit()
+	return true
 }
 
 func (m *AppendOnly) Delete(key []byte) {

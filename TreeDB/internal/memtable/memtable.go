@@ -114,6 +114,13 @@ type StableValueBorrower interface {
 	SetEntryBorrowStableValue(key, value []byte, ptr page.ValuePtr, flags byte)
 }
 
+// StableValueReuser appends an entry by reusing an already-retained matching
+// value without retaining the caller's value slice. It returns false when the
+// caller must fall back to the normal copy/borrow path.
+type StableValueReuser interface {
+	SetEntryReuseStableValue(key, value []byte, ptr page.ValuePtr, flags byte) bool
+}
+
 // StableUnsafeIteratorTable marks memtable implementations whose
 // iterator.UnsafeIterator key/value views (from UnsafeKey/UnsafeValue/UnsafeEntry)
 // are backed by storage that outlives the iterator itself.

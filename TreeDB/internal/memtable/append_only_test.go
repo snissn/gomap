@@ -254,6 +254,36 @@ func TestAppendOnlyBorrowStableRepeatedValueReusesPayloadAlias(t *testing.T) {
 	}
 }
 
+func TestAppendOnlyReuseStableValueDoesNotRetainCaller(t *testing.T) {
+	m := NewAppendOnlyWithCapacity(0)
+	first := []byte("same stable value")
+	m.SetEntryBorrowStableValue([]byte("k1"), first, page.ValuePtr{}, node.FlagInline)
+
+	second := []byte("same stable value")
+	if !m.SetEntryReuseStableValue([]byte("k2"), second, page.ValuePtr{}, node.FlagInline) {
+		t.Fatalf("expected stable value reuse")
+	}
+	second[0] = 'X'
+
+	if got := len(m.values); got != 1 {
+		t.Fatalf("values=%d want=1", got)
+	}
+	if m.entries[0].payloadIndex == 0 || m.entries[0].payloadIndex != m.entries[1].payloadIndex {
+		t.Fatalf("payload indices=(%d,%d), want shared non-zero index", m.entries[0].payloadIndex, m.entries[1].payloadIndex)
+	}
+	got, deleted, ok := m.Get([]byte("k2"))
+	if !ok || deleted || string(got) != "same stable value" {
+		t.Fatalf("Get(k2)=(%q,%v,%v), want stable value,false,true", string(got), deleted, ok)
+	}
+
+	if m.SetEntryReuseStableValue([]byte("k3"), []byte("different"), page.ValuePtr{}, node.FlagInline) {
+		t.Fatalf("unexpected stable value reuse for different payload")
+	}
+	if _, _, ok := m.Get([]byte("k3")); ok {
+		t.Fatalf("different payload should not be appended by failed reuse")
+	}
+}
+
 func TestAppendOnlyBorrowValueKeepsDistinctAliases(t *testing.T) {
 	m := NewAppendOnlyWithCapacity(0)
 	value1 := []byte("same borrowed value")
