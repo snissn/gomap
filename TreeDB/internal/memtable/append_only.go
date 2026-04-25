@@ -22,7 +22,6 @@ const (
 	appendOnlyMinInitialEntries             = 128
 	appendOnlyMaxInitialEntries             = 1 << 20
 	appendOnlyInlineKeyLen                  = 8
-	appendOnlyPointerGrowCutoff             = 1 << 15
 	appendOnlyEntryPoolMaxCap               = 1 << 20
 	appendOnlyIteratorPoolMaxCap            = 1 << 20
 	appendOnlyIteratorPtrPoolMaxCap         = 1 << 20
@@ -36,6 +35,7 @@ const (
 	appendOnlyValueArenaRetainChunks        = 128
 	appendOnlyReuseOversizeFactor           = 4
 	appendOnlyResetDropThresholdEntries     = 1 << 15
+	appendOnlyAggressiveGrowCutoff          = appendOnlyResetDropThresholdEntries * 2
 )
 
 var appendOnlyEntryPool sync.Pool
@@ -391,15 +391,28 @@ func (a *appendOnlyValueArena) reset() {
 	a.curPos = 0
 }
 
-func appendOnlyNextCapacity(current int, flags byte) int {
+func (a *appendOnlyValueArena) dropRetained() {
+	for i := range a.retained {
+		if a.retained[i] != nil {
+			putAppendOnlyValueArenaChunk(a.retained[i])
+			a.retained[i] = nil
+		}
+	}
+	a.retained = nil
+	a.retainedB = 0
+}
+
+func appendOnlyNextCapacity(current int) int {
 	if current < appendOnlyMinInitialEntries {
 		return appendOnlyMinInitialEntries
 	}
 	next := current * 2
-	// Pointer-heavy write paths can spend a disproportionate amount of time
-	// copying entry arrays during growth. Grow more aggressively early, then
-	// fall back to 2x to keep memory expansion bounded.
-	if flags&node.FlagPointer != 0 && current < appendOnlyPointerGrowCutoff {
+	// Entry-heavy write paths can spend a disproportionate amount of time
+	// copying entry arrays during growth, even when values themselves are
+	// borrowed from batch arenas or stored inline. Grow more aggressively up to
+	// the retained warm-reset window, then fall back to 2x to keep expansion
+	// bounded once the memtable is already large.
+	if current < appendOnlyAggressiveGrowCutoff {
 		next = current * 4
 	}
 	if next <= current {
@@ -528,9 +541,9 @@ func (m *AppendOnly) updateLatestIndexLocked(key []byte, idx int) {
 	m.latest[appendOnlyKeyString(key)] = idx
 }
 
-func (m *AppendOnly) appendEntryLocked(key, value []byte, ptr page.ValuePtr, flags byte, steal bool) {
+func (m *AppendOnly) appendEntryLocked(key, value []byte, ptr page.ValuePtr, flags byte, steal bool, borrowValue bool) {
 	if m.count == len(m.entries) {
-		nextCap := appendOnlyNextCapacity(len(m.entries), flags)
+		nextCap := appendOnlyNextCapacity(len(m.entries))
 		prev := m.entries
 		grown := getAppendOnlyEntries(nextCap)
 		copy(grown, m.entries[:m.count])
@@ -556,9 +569,13 @@ func (m *AppendOnly) appendEntryLocked(key, value []byte, ptr page.ValuePtr, fla
 			ent.key = cloneOrReuseBytes(ent.key, key, appendOnlyReusableKeyMaxCap)
 		}
 		if len(value) > 0 {
-			ent.value = m.valueArena.alloc(len(value))
-			copy(ent.value, value)
-			ent.valueOwned = true
+			if borrowValue {
+				ent.value = value
+			} else {
+				ent.value = m.valueArena.alloc(len(value))
+				copy(ent.value, value)
+				ent.valueOwned = true
+			}
 		} else {
 			ent.value = nil
 		}
@@ -584,8 +601,13 @@ func (m *AppendOnly) appendEntryLocked(key, value []byte, ptr page.ValuePtr, fla
 			return
 		}
 		m.ordered = false
-		m.latestDirty = true
-		m.clearSnapshotLocked()
+		// Once order breaks, invalidate the cached snapshot state and
+		// materialize the latest-key index immediately so subsequent unordered
+		// appends can maintain it incrementally instead of forcing the next
+		// iterator/lookup to rebuild the full map from scratch.
+		// rebuildLatestIndexLocked clears the cached snapshot as part of the
+		// transition.
+		m.rebuildLatestIndexLocked()
 		return
 	}
 	if !m.latestDirty {
@@ -604,13 +626,19 @@ func (m *AppendOnly) SetSteal(key, value []byte) {
 
 func (m *AppendOnly) SetEntry(key, value []byte, ptr page.ValuePtr, flags byte) {
 	m.mu.Lock()
-	m.appendEntryLocked(key, value, ptr, flags, false)
+	m.appendEntryLocked(key, value, ptr, flags, false, false)
 	m.mu.Unlock()
 }
 
 func (m *AppendOnly) SetEntrySteal(key, value []byte, ptr page.ValuePtr, flags byte) {
 	m.mu.Lock()
-	m.appendEntryLocked(key, value, ptr, flags, true)
+	m.appendEntryLocked(key, value, ptr, flags, true, false)
+	m.mu.Unlock()
+}
+
+func (m *AppendOnly) SetEntryBorrowValue(key, value []byte, ptr page.ValuePtr, flags byte) {
+	m.mu.Lock()
+	m.appendEntryLocked(key, value, ptr, flags, false, true)
 	m.mu.Unlock()
 }
 
@@ -631,7 +659,7 @@ func (m *AppendOnly) PutWithCallback(key, value []byte, cb func(k, v []byte) err
 		}
 	}
 	m.mu.Lock()
-	m.appendEntryLocked(k, v, page.ValuePtr{}, node.FlagInline, true)
+	m.appendEntryLocked(k, v, page.ValuePtr{}, node.FlagInline, true, false)
 	m.mu.Unlock()
 	return nil
 }
@@ -644,7 +672,7 @@ func (m *AppendOnly) DeleteWithCallback(key []byte, cb func(k, v []byte) error) 
 		}
 	}
 	m.mu.Lock()
-	m.appendEntryLocked(k, nil, page.ValuePtr{}, node.FlagTombstone, true)
+	m.appendEntryLocked(k, nil, page.ValuePtr{}, node.FlagTombstone, true, false)
 	m.mu.Unlock()
 	return nil
 }
@@ -663,11 +691,11 @@ func (m *AppendOnly) applyStealBatch(entries []batchpkg.Entry, onKey func(key []
 		op := entries[i]
 		switch {
 		case op.Type == batchpkg.OpDelete:
-			m.appendEntryLocked(op.Key, nil, page.ValuePtr{}, node.FlagTombstone, true)
+			m.appendEntryLocked(op.Key, nil, page.ValuePtr{}, node.FlagTombstone, true, false)
 		case op.IsPtr:
-			m.appendEntryLocked(op.Key, op.Value, op.ValuePtr, node.FlagPointer, true)
+			m.appendEntryLocked(op.Key, op.Value, op.ValuePtr, node.FlagPointer, true, false)
 		default:
-			m.appendEntryLocked(op.Key, op.Value, page.ValuePtr{}, node.FlagInline, true)
+			m.appendEntryLocked(op.Key, op.Value, page.ValuePtr{}, node.FlagInline, true, false)
 		}
 		if onKey != nil {
 			onKey(op.Key)
@@ -865,7 +893,7 @@ func (m *AppendOnly) Reset() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.waitIteratorLeasesLocked()
-	m.resetLocked(0, 0)
+	m.resetLockedWithPolicy(0, 0, true)
 }
 
 // ResetWithCapacity resets the memtable and, when needed, shrinks retained
@@ -875,10 +903,23 @@ func (m *AppendOnly) ResetWithCapacity(capacity, estimatedBytesPerEntry int) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.waitIteratorLeasesLocked()
-	m.resetLocked(capacity, estimatedBytesPerEntry)
+	m.resetLockedWithPolicy(capacity, estimatedBytesPerEntry, true)
 }
 
 func (m *AppendOnly) resetLocked(capacity, estimatedBytesPerEntry int) {
+	m.resetLockedWithPolicy(capacity, estimatedBytesPerEntry, true)
+}
+
+// ResetWithCapacityHard resets and clamps retained internal buffers to the
+// capacity-derived baseline (without carrying over recent spike cardinality).
+func (m *AppendOnly) ResetWithCapacityHard(capacity, estimatedBytesPerEntry int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.waitIteratorLeasesLocked()
+	m.resetLockedWithPolicy(capacity, estimatedBytesPerEntry, false)
+}
+
+func (m *AppendOnly) resetLockedWithPolicy(capacity, estimatedBytesPerEntry int, retainObserved bool) {
 	desiredEntries := m.baseEntriesLen
 	if capacity > 0 {
 		desiredEntries = appendOnlyInitialEntriesForCapacity(capacity, estimatedBytesPerEntry)
@@ -889,6 +930,14 @@ func (m *AppendOnly) resetLocked(capacity, estimatedBytesPerEntry int) {
 	}
 
 	oldCount := m.count
+	maxRetainedEntries := appendOnlyMaxReuseEntries(desiredEntries)
+	retainedEntries := desiredEntries
+	if retainObserved && oldCount > retainedEntries {
+		retainedEntries = oldCount
+		if retainedEntries > maxRetainedEntries {
+			retainedEntries = maxRetainedEntries
+		}
+	}
 	for i := 0; i < m.count; i++ {
 		ent := &m.entries[i]
 		ent.ptr = page.ValuePtr{}
@@ -903,9 +952,12 @@ func (m *AppendOnly) resetLocked(capacity, estimatedBytesPerEntry int) {
 		ent.value = nil
 	}
 	m.valueArena.reset()
+	if !retainObserved {
+		m.valueArena.dropRetained()
+	}
 	// Clear small maps in-place; drop large ones so they don't pin hash tables
 	// after one-off spikes.
-	if oldCount > 0 && oldCount >= appendOnlyResetDropThresholdEntries {
+	if !retainObserved || (oldCount > 0 && oldCount >= appendOnlyResetDropThresholdEntries) {
 		m.latest = nil
 		m.latest64 = nil
 	} else {
@@ -914,13 +966,13 @@ func (m *AppendOnly) resetLocked(capacity, estimatedBytesPerEntry int) {
 	}
 	// Snapshot/index buffers are only needed for unordered memtables; drop large
 	// ones on reset to keep post-spike memory bounded.
-	if cap(m.snapshot) > 0 && cap(m.snapshot) >= appendOnlyResetDropThresholdEntries {
+	if !retainObserved || (cap(m.snapshot) > 0 && cap(m.snapshot) >= appendOnlyResetDropThresholdEntries) {
 		m.snapshot = nil
 		m.snapCount = 0
 	} else {
 		m.clearSnapshotLocked()
 	}
-	if cap(m.indexBuf) > 0 && cap(m.indexBuf) >= appendOnlyResetDropThresholdEntries {
+	if !retainObserved || (cap(m.indexBuf) > 0 && cap(m.indexBuf) >= appendOnlyResetDropThresholdEntries) {
 		m.indexBuf = nil
 	} else if m.indexBuf != nil {
 		m.indexBuf = m.indexBuf[:0]
@@ -935,18 +987,33 @@ func (m *AppendOnly) resetLocked(capacity, estimatedBytesPerEntry int) {
 
 	// If the entry slice grew far beyond the configured baseline, shrink it.
 	// This avoids permanently ratcheting heap high-water when a workload briefly
-	// spikes in write volume (common during state-sync restore).
-	if cap(m.entries) > appendOnlyMaxReuseEntries(desiredEntries) {
-		m.entries = make([]appendOnlyEntry, desiredEntries)
+	// spikes in write volume (common during state-sync restore), while still
+	// keeping the next steady-state cycle warm if we just observed a larger-but-
+	// still-bounded mutable memtable.
+	if cap(m.entries) > maxRetainedEntries {
+		m.replaceEntriesSlice(retainedEntries)
 		return
 	}
-	if cap(m.entries) < desiredEntries {
-		m.entries = make([]appendOnlyEntry, desiredEntries)
+	if cap(m.entries) < retainedEntries {
+		m.replaceEntriesSlice(retainedEntries)
 		return
 	}
-	if len(m.entries) != desiredEntries {
-		m.entries = m.entries[:desiredEntries]
+	reuseEntries := retainedEntries
+	if cap(m.entries) <= maxRetainedEntries && cap(m.entries) > reuseEntries {
+		reuseEntries = cap(m.entries)
 	}
+	if len(m.entries) != reuseEntries {
+		m.entries = m.entries[:reuseEntries]
+	}
+}
+
+func (m *AppendOnly) replaceEntriesSlice(length int) {
+	if length < 0 {
+		length = 0
+	}
+	prev := m.entries
+	m.entries = getAppendOnlyEntries(length)
+	putAppendOnlyEntries(prev)
 }
 
 func (m *AppendOnly) buildSortedLatestSnapshotLocked() []*appendOnlyEntry {

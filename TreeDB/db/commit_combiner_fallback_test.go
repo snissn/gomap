@@ -272,7 +272,7 @@ func TestCommitCombinerFallback_PointerCommitDurableAfterReopen(t *testing.T) {
 		_ = d.Close()
 		t.Fatalf("EncodeFileID: %v", err)
 	}
-	path := filepath.Join(dir, "wal", "value-l0-000001.log")
+	path := filepath.Join(dir, "value_vlog", "value-l0-000001.log")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		_ = d.Close()
 		t.Fatalf("MkdirAll(wal): %v", err)

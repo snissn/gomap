@@ -1,12 +1,14 @@
 package db
 
 import (
+	"errors"
 	"fmt"
 	"runtime"
 	"sync"
 	"sync/atomic"
 
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/tree"
 )
@@ -85,16 +87,83 @@ func (db *DB) acquireSnapshotOrErr() (*Snapshot, error) {
 	return snap, nil
 }
 
+func (db *DB) refreshOnValueLogFileNotFound(err error) bool {
+	if db == nil || db.valueLogManager == nil {
+		return false
+	}
+	return errors.Is(err, valuelog.ErrFileNotFound)
+}
+
+func (db *DB) refreshValueLogSetForReadRetry(observedEpoch uint64) error {
+	if db == nil {
+		return ErrClosed
+	}
+	for {
+		db.readRetryRefreshMu.Lock()
+		if !db.readRetryRefreshInFlight {
+			if db.readRetryRefreshEpoch.Load() != observedEpoch {
+				db.readRetryRefreshSkippedEpoch.Add(1)
+				db.readRetryRefreshMu.Unlock()
+				return nil
+			}
+			done := make(chan struct{})
+			db.readRetryRefreshInFlight = true
+			db.readRetryRefreshDone = done
+			db.readRetryRefreshErr = nil
+			db.readRetryRefreshLeaderCount.Add(1)
+			db.readRetryRefreshMu.Unlock()
+
+			err := db.RefreshValueLogSet()
+
+			db.readRetryRefreshMu.Lock()
+			db.readRetryRefreshErr = err
+			if err == nil {
+				db.readRetryRefreshEpoch.Add(1)
+			}
+			db.readRetryRefreshInFlight = false
+			db.readRetryRefreshDone = nil
+			close(done)
+			db.readRetryRefreshMu.Unlock()
+			return err
+		}
+		done := db.readRetryRefreshDone
+		db.readRetryRefreshFollowerCount.Add(1)
+		db.readRetryRefreshMu.Unlock()
+
+		if done == nil {
+			runtime.Gosched()
+			continue
+		}
+
+		<-done
+		db.readRetryRefreshMu.Lock()
+		err := db.readRetryRefreshErr
+		db.readRetryRefreshMu.Unlock()
+		return err
+	}
+}
+
 // Get returns the value for a key.
 //
 // Semantics: Returns a safe copy of the value.
 func (db *DB) Get(key []byte) ([]byte, error) {
-	snap, err := db.acquireSnapshotOrErr()
-	if err != nil {
-		return nil, err
+	readOnce := func() ([]byte, error) {
+		snap, err := db.acquireSnapshotOrErr()
+		if err != nil {
+			return nil, err
+		}
+		defer snap.Close()
+		return snap.Get(key)
 	}
-	defer snap.Close()
-	val, err := snap.Get(key)
+
+	retryEpoch := db.readRetryRefreshEpoch.Load()
+	val, err := readOnce()
+	if db.refreshOnValueLogFileNotFound(err) {
+		if refreshErr := db.refreshValueLogSetForReadRetry(retryEpoch); refreshErr != nil {
+			return nil, refreshErr
+		}
+		val, err = readOnce()
+	}
 	if err == tree.ErrKeyNotFound {
 		return nil, nil
 	}
@@ -106,6 +175,18 @@ func (db *DB) Get(key []byte) ([]byte, error) {
 // Semantics: Returns safe copies of values. Missing keys are returned as nil
 // entries with no error.
 func (db *DB) GetMany(keys [][]byte) ([][]byte, error) {
+	retryEpoch := db.readRetryRefreshEpoch.Load()
+	out, err := db.getManyOnce(keys)
+	if db.refreshOnValueLogFileNotFound(err) {
+		if refreshErr := db.refreshValueLogSetForReadRetry(retryEpoch); refreshErr != nil {
+			return nil, refreshErr
+		}
+		return db.getManyOnce(keys)
+	}
+	return out, err
+}
+
+func (db *DB) getManyOnce(keys [][]byte) ([][]byte, error) {
 	out := make([][]byte, len(keys))
 	if len(keys) == 0 {
 		return out, nil
@@ -219,12 +300,23 @@ func (db *DB) Dir() string {
 // GetAppend appends the value for the key to dst and returns the new slice.
 // If the key is not found, it returns dst and ErrKeyNotFound.
 func (db *DB) GetAppend(key, dst []byte) ([]byte, error) {
-	snap, err := db.acquireSnapshotOrErr()
-	if err != nil {
-		return dst, err
+	readOnce := func(base []byte) ([]byte, error) {
+		snap, err := db.acquireSnapshotOrErr()
+		if err != nil {
+			return base, err
+		}
+		defer snap.Close()
+		return snap.GetAppend(key, base)
 	}
-	defer snap.Close()
-	val, err := snap.GetAppend(key, dst)
+
+	retryEpoch := db.readRetryRefreshEpoch.Load()
+	val, err := readOnce(dst)
+	if db.refreshOnValueLogFileNotFound(err) {
+		if refreshErr := db.refreshValueLogSetForReadRetry(retryEpoch); refreshErr != nil {
+			return dst, refreshErr
+		}
+		val, err = readOnce(dst)
+	}
 	if err == tree.ErrKeyNotFound {
 		return dst, err
 	}
@@ -246,34 +338,44 @@ func (db *DB) Has(key []byte) (bool, error) {
 
 // Set sets the value for a key.
 func (db *DB) Set(key, value []byte) error {
-	if handled, err := db.writeViaCommitCombiner(key, value, false, false); handled {
+	unlock := db.lockUpdateKey(key)
+	defer unlock()
+	return db.setPoint(key, value, false)
+}
+
+func (db *DB) setPoint(key, value []byte, sync bool) error {
+	if handled, err := db.writeViaCommitCombiner(key, value, false, sync); handled {
 		return err
 	}
-	return db.writeSingleKV(key, value, false, false)
+	return db.writeSingleKV(key, value, false, sync)
 }
 
 // SetSync sets the value and syncs to disk.
 func (db *DB) SetSync(key, value []byte) error {
-	if handled, err := db.writeViaCommitCombiner(key, value, false, true); handled {
-		return err
-	}
-	return db.writeSingleKV(key, value, false, true)
+	unlock := db.lockUpdateKey(key)
+	defer unlock()
+	return db.setPoint(key, value, true)
 }
 
 // Delete removes a key.
 func (db *DB) Delete(key []byte) error {
-	if handled, err := db.writeViaCommitCombiner(key, nil, true, false); handled {
+	unlock := db.lockUpdateKey(key)
+	defer unlock()
+	return db.deletePoint(key, false)
+}
+
+func (db *DB) deletePoint(key []byte, sync bool) error {
+	if handled, err := db.writeViaCommitCombiner(key, nil, true, sync); handled {
 		return err
 	}
-	return db.writeSingleKV(key, nil, true, false)
+	return db.writeSingleKV(key, nil, true, sync)
 }
 
 // DeleteSync removes a key and syncs.
 func (db *DB) DeleteSync(key []byte) error {
-	if handled, err := db.writeViaCommitCombiner(key, nil, true, true); handled {
-		return err
-	}
-	return db.writeSingleKV(key, nil, true, true)
+	unlock := db.lockUpdateKey(key)
+	defer unlock()
+	return db.deletePoint(key, true)
 }
 
 // DBIterator wraps tree.Iterator and holds a Snapshot.
@@ -467,6 +569,8 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.root_page"] = fmt.Sprintf("%d", state.RootPageID)
 	stats["treedb.system_root_page"] = fmt.Sprintf("%d", state.SystemRootPageID)
 
+	writeLeafGenerationMetrics(stats, db.collectLeafGenerationMetrics(state.ValueLogSet, snap.leafGenerationPinnedIDs))
+
 	stats["treedb.pages.total"] = fmt.Sprintf("%d", idx.pager.PageCount())
 	// PR1 generational scaffolding (backend/read-only path). Cached mode exports
 	// richer live counters; backend path reports stable defaults.
@@ -483,11 +587,75 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.vlog_generation.gc.deleted_bytes"] = "0"
 	stats["treedb.vlog_generation.remap.successes"] = "0"
 	stats["treedb.vlog_generation.remap.failures"] = "0"
+	growStats := valuelog.GrowBufferStatsSnapshot()
+	stats["treedb.vlog.decode_buffer_grow.calls_total"] = fmt.Sprintf("%d", growStats.CallsTotal)
+	stats["treedb.vlog.decode_buffer_grow.realloc_calls_total"] = fmt.Sprintf("%d", growStats.ReallocCallsTotal)
+	stats["treedb.vlog.decode_buffer_grow.requested_bytes_total"] = fmt.Sprintf("%d", growStats.RequestedBytesTotal)
+	stats["treedb.vlog.decode_buffer_grow.allocated_bytes_total"] = fmt.Sprintf("%d", growStats.AllocatedBytesTotal)
+	stats["treedb.vlog.decode_buffer_grow.copied_bytes_total"] = fmt.Sprintf("%d", growStats.CopiedBytesTotal)
+	stats["treedb.vlog.decode_buffer_grow.capacity_waste_bytes_total"] = fmt.Sprintf("%d", growStats.CapacityWasteBytesTotal)
+	if growStats.CallsTotal > 0 {
+		stats["treedb.vlog.decode_buffer_grow.realloc_rate"] = fmt.Sprintf("%.6f", float64(growStats.ReallocCallsTotal)/float64(growStats.CallsTotal))
+	}
+	if growStats.ReallocCallsTotal > 0 {
+		stats["treedb.vlog.decode_buffer_grow.avg_allocated_bytes_per_realloc"] = fmt.Sprintf("%.3f", float64(growStats.AllocatedBytesTotal)/float64(growStats.ReallocCallsTotal))
+		stats["treedb.vlog.decode_buffer_grow.avg_copied_bytes_per_realloc"] = fmt.Sprintf("%.3f", float64(growStats.CopiedBytesTotal)/float64(growStats.ReallocCallsTotal))
+	}
+	if growStats.RequestedBytesTotal > 0 {
+		stats["treedb.vlog.decode_buffer_grow.overalloc_ratio"] = fmt.Sprintf("%.6f", float64(growStats.AllocatedBytesTotal)/float64(growStats.RequestedBytesTotal))
+	}
+	readPathStats := tree.ReadPathStatsSnapshot()
+	stats["treedb.process.read_path.backend_tree.get_append_inline_hits_total"] = fmt.Sprintf("%d", readPathStats.GetAppendInlineHitsTotal)
+	stats["treedb.process.read_path.backend_tree.get_append_inline_bytes_total"] = fmt.Sprintf("%d", readPathStats.GetAppendInlineBytesTotal)
+	stats["treedb.process.read_path.backend_tree.get_append_pointer_hits_total"] = fmt.Sprintf("%d", readPathStats.GetAppendPointerHitsTotal)
+	stats["treedb.process.read_path.backend_tree.get_append_pointer_bytes_total"] = fmt.Sprintf("%d", readPathStats.GetAppendPointerBytesTotal)
+	outerLeafReadStats := tree.OuterLeafReadStatsSnapshot()
+	stats["treedb.process.read_path.outer_leaf.loads_total"] = fmt.Sprintf("%d", outerLeafReadStats.LoadsTotal)
+	stats["treedb.process.read_path.outer_leaf.point_loads_total"] = fmt.Sprintf("%d", outerLeafReadStats.PointLoadsTotal)
+	stats["treedb.process.read_path.outer_leaf.iterator_loads_total"] = fmt.Sprintf("%d", outerLeafReadStats.IteratorLoadsTotal)
+	stats["treedb.process.read_path.outer_leaf.bytes_total"] = fmt.Sprintf("%d", outerLeafReadStats.BytesTotal)
+	stats["treedb.process.read_path.outer_leaf.sample_mod"] = fmt.Sprintf("%d", outerLeafReadStats.SampleMod)
+	stats["treedb.process.read_path.outer_leaf.samples_total"] = fmt.Sprintf("%d", outerLeafReadStats.SamplesTotal)
+	stats["treedb.process.read_path.outer_leaf.cache_potential.capacity_64_hits_total"] = fmt.Sprintf("%d", outerLeafReadStats.Recent64HitsTotal)
+	stats["treedb.process.read_path.outer_leaf.cache_potential.capacity_256_hits_total"] = fmt.Sprintf("%d", outerLeafReadStats.Recent256HitsTotal)
+	stats["treedb.process.read_path.outer_leaf.cache_potential.capacity_1024_hits_total"] = fmt.Sprintf("%d", outerLeafReadStats.Recent1KHitsTotal)
+	stats["treedb.process.read_path.outer_leaf.cache_potential.capacity_4096_hits_total"] = fmt.Sprintf("%d", outerLeafReadStats.Recent4KHitsTotal)
+	if outerLeafReadStats.SamplesTotal > 0 {
+		stats["treedb.process.read_path.outer_leaf.cache_potential.capacity_64_hit_ratio"] = fmt.Sprintf("%.6f", float64(outerLeafReadStats.Recent64HitsTotal)/float64(outerLeafReadStats.SamplesTotal))
+		stats["treedb.process.read_path.outer_leaf.cache_potential.capacity_256_hit_ratio"] = fmt.Sprintf("%.6f", float64(outerLeafReadStats.Recent256HitsTotal)/float64(outerLeafReadStats.SamplesTotal))
+		stats["treedb.process.read_path.outer_leaf.cache_potential.capacity_1024_hit_ratio"] = fmt.Sprintf("%.6f", float64(outerLeafReadStats.Recent1KHitsTotal)/float64(outerLeafReadStats.SamplesTotal))
+		stats["treedb.process.read_path.outer_leaf.cache_potential.capacity_4096_hit_ratio"] = fmt.Sprintf("%.6f", float64(outerLeafReadStats.Recent4KHitsTotal)/float64(outerLeafReadStats.SamplesTotal))
+	}
 
 	if db.valueLogManager != nil {
 		vlogRemaps, vlogDeadMappings := db.valueLogManager.RemapStats()
 		stats["treedb.vlog.mmap_remaps"] = fmt.Sprintf("%d", vlogRemaps)
 		stats["treedb.vlog.mmap_dead_mappings"] = fmt.Sprintf("%d", vlogDeadMappings)
+		stats["treedb.vlog.mmap_dead_mappings.cap_base"] = fmt.Sprintf("%d", valuelog.MaxDeadMappings)
+		stats["treedb.vlog.mmap_max_mapped_sealed_segments"] = fmt.Sprintf("%d", valuelog.MaxMappedSealedSegments)
+		stats["treedb.vlog.mmap_max_mapped_sealed_bytes"] = fmt.Sprintf("%d", valuelog.MaxMappedSealedBytes)
+		currentSegments, currentBytes, sealedSegments, sealedBytes, _, deadBytes := db.valueLogManager.MmapResidencyStats()
+		stats["treedb.vlog.mmap_active_segments"] = fmt.Sprintf("%d", currentSegments+sealedSegments)
+		stats["treedb.vlog.mmap_active_bytes"] = fmt.Sprintf("%d", currentBytes+sealedBytes)
+		stats["treedb.vlog.mmap_current_segments"] = fmt.Sprintf("%d", currentSegments)
+		stats["treedb.vlog.mmap_current_bytes"] = fmt.Sprintf("%d", currentBytes)
+		stats["treedb.vlog.mmap_sealed_segments"] = fmt.Sprintf("%d", sealedSegments)
+		stats["treedb.vlog.mmap_sealed_bytes"] = fmt.Sprintf("%d", sealedBytes)
+		stats["treedb.vlog.mmap_dead_bytes"] = fmt.Sprintf("%d", deadBytes)
+		sealedDeniedCountCap, sealedDeniedBytesCap := db.valueLogManager.SealedMapDeniedByReasonStats()
+		stats["treedb.vlog.mmap_sealed_map_denied.count_cap"] = fmt.Sprintf("%d", sealedDeniedCountCap)
+		stats["treedb.vlog.mmap_sealed_map_denied.bytes_cap"] = fmt.Sprintf("%d", sealedDeniedBytesCap)
+		stats["treedb.vlog.mmap_sealed_map_denied"] = fmt.Sprintf("%d", sealedDeniedCountCap+sealedDeniedBytesCap)
+
+		mmapHits, mmapMissOutOfRange, mmapMissNoMapping, mmapMissDeadCap, mmapFallbackReadAt := db.valueLogManager.MmapReadStats()
+		stats["treedb.vlog.mmap_read.hits"] = fmt.Sprintf("%d", mmapHits)
+		stats["treedb.vlog.mmap_read.miss_out_of_range"] = fmt.Sprintf("%d", mmapMissOutOfRange)
+		stats["treedb.vlog.mmap_read.miss_no_mapping"] = fmt.Sprintf("%d", mmapMissNoMapping)
+		stats["treedb.vlog.mmap_read.miss_dead_mapping_cap"] = fmt.Sprintf("%d", mmapMissDeadCap)
+		stats["treedb.vlog.mmap_read.fallback_readat"] = fmt.Sprintf("%d", mmapFallbackReadAt)
+		if total := mmapHits + mmapFallbackReadAt; total > 0 {
+			stats["treedb.vlog.mmap_read.hit_ratio"] = fmt.Sprintf("%.6f", float64(mmapHits)/float64(total))
+		}
 
 		gHits, gMisses, gEntries, gCapacity := db.valueLogManager.GroupedFrameCacheStats()
 		stats["treedb.vlog.grouped_frame_cache.hits"] = fmt.Sprintf("%d", gHits)
@@ -497,6 +665,10 @@ func (db *DB) Stats() map[string]string {
 		if total := gHits + gMisses; total > 0 {
 			stats["treedb.vlog.grouped_frame_cache.hit_ratio"] = fmt.Sprintf("%.6f", float64(gHits)/float64(total))
 		}
+
+		stats["treedb.vlog.read_retry_refresh.leader_calls"] = fmt.Sprintf("%d", db.readRetryRefreshLeaderCount.Load())
+		stats["treedb.vlog.read_retry_refresh.follower_calls"] = fmt.Sprintf("%d", db.readRetryRefreshFollowerCount.Load())
+		stats["treedb.vlog.read_retry_refresh.skipped_epoch_calls"] = fmt.Sprintf("%d", db.readRetryRefreshSkippedEpoch.Load())
 
 		hits, misses, entries, capacity := db.valueLogManager.TemplateDefCacheStats()
 		stats["treedb.vlog.template_def_cache.hits"] = fmt.Sprintf("%d", hits)

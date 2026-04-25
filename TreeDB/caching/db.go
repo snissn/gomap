@@ -6,11 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"math"
 	"math/bits"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
+	"runtime/debug"
 	"runtime/metrics"
 	"sort"
 	"strconv"
@@ -27,6 +30,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/compression"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/internal/keyupdate"
 	"github.com/snissn/gomap/TreeDB/internal/limits"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/merging"
@@ -36,6 +40,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/template"
 	"github.com/snissn/gomap/TreeDB/tree"
+	"github.com/snissn/gomap/TreeDB/zipper"
 )
 
 var errDBClosing = errors.New("cachingdb: db closing")
@@ -50,12 +55,13 @@ var errWALUnavailable = errors.New("cachingdb: wal unavailable")
 
 var iteratorDebugEnabled atomic.Bool
 
-var valueLogEligiblePool sync.Pool                          // stores []int
-var valueLogRecordPool sync.Pool                            // stores []valuelog.Record
-var valueLogKeyPool sync.Pool                               // stores [][]byte
-var valueLogPtrPool sync.Pool                               // stores []page.ValuePtr
-var batchArenaPools [batchArenaClassCount]sync.Pool         // stores []byte
-var batchArenaLeasePool sync.Pool                           // stores *batchArenaLease
+var valueLogEligiblePool sync.Pool                  // stores []int
+var valueLogRecordPool sync.Pool                    // stores []valuelog.Record
+var valueLogKeyPool sync.Pool                       // stores [][]byte
+var valueLogPtrPool sync.Pool                       // stores []page.ValuePtr
+var batchArenaPools [batchArenaClassCount]sync.Pool // stores []byte
+var batchArenaLeasePool sync.Pool                   // stores *batchArenaLease
+var appendOnlyDirectValueArenaPools [appendOnlyDirectValueArenaClassCount]sync.Pool
 var batchEntrySliceRefPool sync.Pool                        // stores *batchEntrySliceRef
 var outerLeafArenaPools [outerLeafArenaClassCount]sync.Pool // stores []byte
 var outerLeafArenaLeaseMu sync.Mutex
@@ -67,12 +73,114 @@ var valueLogPreparedFramesPool sync.Pool     // stores []preparedDictFrame
 var valueLogDictPrepareResultsPool sync.Pool // stores chan vlogDictPrepareResult
 var valueLogKeyLeaseMu sync.Mutex
 var valueLogKeyLeases [][][]byte
+var backendValueLogReadBarrierRegistryMu sync.Mutex
+var backendValueLogReadBarrierRegistry = make(map[uintptr]*backendValueLogReadBarrierOwners)
+
+type backendValueLogReadBarrierOwners struct {
+	set      map[*DB]struct{}
+	snapshot []*DB
+}
 
 // Batch arena pooling can retain substantial heap across restore spikes. Track
 // pooled bytes and enforce a byte-budget to cap retention.
 var batchArenaPoolBytes atomic.Int64
+var batchArenaPoolBytesMaxGlobal atomic.Int64
 var batchArenaPoolLastGC atomic.Uint64
 var batchArenaPoolBudgetState atomic.Value
+var batchArenaLeasedBytesGlobal atomic.Int64
+var batchArenaLeasedBytesMaxGlobal atomic.Int64
+var batchArenaInFlightBytes atomic.Int64
+var batchArenaInFlightBytesMaxGlobal atomic.Int64
+var batchArenaRetainedBytesMaxGlobal atomic.Int64
+var batchArenaRetainedHardCapOverride atomic.Int64
+var batchArenaPoolSkipZeroBudgetTotal atomic.Uint64
+var batchArenaPoolDropBytesTotal atomic.Uint64
+var batchArenaPoolDropHardCapBytesTotal atomic.Uint64
+var batchArenaBorrowBlockedTotal atomic.Uint64
+var batchArenaBorrowViewOpsBlockedTotal atomic.Uint64
+var batchArenaBorrowPreflightBlockedTotal atomic.Uint64
+var batchArenaBorrowPreflightBlockedBytesTotal atomic.Uint64
+var batchArenaStealSuppressedDeferredTotal atomic.Uint64
+var batchArenaStealSuppressedDeferredEntriesTotal atomic.Uint64
+var batchArenaCopyKeyCallsTotal atomic.Uint64
+var batchArenaCopyKeyBytesTotal atomic.Uint64
+var batchArenaCopyValueCallsTotal atomic.Uint64
+var batchArenaCopyValueBytesTotal atomic.Uint64
+var batchArenaCopyKeyValueCallsTotal atomic.Uint64
+var batchArenaCopyKeyValueBytesTotal atomic.Uint64
+var batchArenaCopyPtrValueCallsTotal atomic.Uint64
+var batchArenaCopyPtrValueBytesTotal atomic.Uint64
+var batchSetCallsTotal atomic.Uint64
+var batchSetBytesTotal atomic.Uint64
+var batchSetViewCallsTotal atomic.Uint64
+var batchSetViewBytesTotal atomic.Uint64
+var batchSetCallerSamplesTotal atomic.Uint64
+var batchSetCallerSampleSeq atomic.Uint64
+var batchSetCallerStatsMap sync.Map
+var dbGetCallerSamplesTotal atomic.Uint64
+var dbGetCallerSampleSeq atomic.Uint64
+var dbGetCallerStatsMap sync.Map
+var snapshotGetCallerSamplesTotal atomic.Uint64
+var snapshotGetCallerSampleSeq atomic.Uint64
+var snapshotGetCallerStatsMap sync.Map
+var poolPressureState atomic.Value
+var poolPressureMu sync.Mutex
+var poolPressureLastLeaseTrimUnixNano atomic.Int64
+var poolPressureNormalSamplesTotal atomic.Uint64
+var poolPressureHighSamplesTotal atomic.Uint64
+var poolPressureCriticalSamplesTotal atomic.Uint64
+var entrySlicePoolTrimRunsTotal atomic.Uint64
+var entrySlicePoolTrimDropBytesTotal atomic.Uint64
+var entrySliceLeaseHitTotal atomic.Uint64
+var entrySliceLeaseHitBytesTotal atomic.Uint64
+var entrySliceLeaseHitRequestedBytesTotal atomic.Uint64
+var entrySliceLeaseHitExcessBytesTotal atomic.Uint64
+var entrySlicePoolHitTotal atomic.Uint64
+var entrySlicePoolHitBytesTotal atomic.Uint64
+var entrySlicePoolHitRequestedBytesTotal atomic.Uint64
+var entrySlicePoolHitExcessBytesTotal atomic.Uint64
+var entrySliceFreshAllocTotal atomic.Uint64
+var entrySliceFreshAllocBytesTotal atomic.Uint64
+var entrySliceFreshAllocRequestedBytesTotal atomic.Uint64
+var entrySliceFreshAllocExcessBytesTotal atomic.Uint64
+var entrySlicePutLeaseTotal atomic.Uint64
+var entrySlicePutLeaseBytesTotal atomic.Uint64
+var entrySlicePutPoolTotal atomic.Uint64
+var entrySlicePutPoolBytesTotal atomic.Uint64
+var entrySlicePutDropBudgetTotal atomic.Uint64
+var entrySlicePutDropBudgetBytesTotal atomic.Uint64
+var snapshotReadQueueInlineHitsTotal atomic.Uint64
+var snapshotReadQueueInlineBytesTotal atomic.Uint64
+var snapshotReadQueuePointerHitsTotal atomic.Uint64
+var snapshotReadQueuePointerBytesTotal atomic.Uint64
+var snapshotReadBackendHitsTotal atomic.Uint64
+var snapshotReadBackendBytesTotal atomic.Uint64
+var flushMergeShadowedOpsTotal atomic.Uint64
+var flushMergeAppliedOpsTotal atomic.Uint64
+var flushMergeDeferredShadowedOpsTotal atomic.Uint64
+var flushMergeDeferredAppliedOpsTotal atomic.Uint64
+var flushMergeParallelShadowedOpsTotal atomic.Uint64
+var flushMergeParallelAppliedOpsTotal atomic.Uint64
+var batchEntriesPoolDropUnderPressureTotal atomic.Uint64
+var batchShardEntriesPoolDropUnderPressureTotal atomic.Uint64
+var batchIntPoolDropUnderPressureTotal atomic.Uint64
+var appendOnlyDirectArenaPoolHitChunksTotal atomic.Uint64
+var appendOnlyDirectArenaPoolHitBytesTotal atomic.Uint64
+var appendOnlyDirectArenaRetainedHitChunksTotal atomic.Uint64
+var appendOnlyDirectArenaRetainedHitBytesTotal atomic.Uint64
+var appendOnlyDirectArenaFreshAllocChunksTotal atomic.Uint64
+var appendOnlyDirectArenaFreshAllocBytesTotal atomic.Uint64
+var appendOnlyMemNewAllocWithQueueTotal atomic.Uint64
+var appendOnlyMemNewAllocQueueBytesSum atomic.Uint64
+
+var poolPressureNow = time.Now
+var poolPressureReadMemStats = runtime.ReadMemStats
+var poolPressureMemoryLimit = func() int64 {
+	return debug.SetMemoryLimit(-1)
+}
+var batchSetCallerSampleMod = loadUintEnvDefault("TREEDB_DEBUG_BATCH_SET_CALLER_SAMPLE_MOD", 0)
+var dbGetCallerSampleMod = loadUintEnvDefault("TREEDB_DEBUG_DB_GET_CALLER_SAMPLE_MOD", 0)
+var snapshotGetCallerSampleMod = loadUintEnvDefault("TREEDB_DEBUG_SNAPSHOT_GET_CALLER_SAMPLE_MOD", 0)
 
 var runtimeNumGC = func() uint64 {
 	samples := []metrics.Sample{{Name: "/gc/cycles/total:gc-cycles"}}
@@ -87,6 +195,98 @@ var runtimeNumGC = func() uint64 {
 var batchArenaPoolNumGC = runtimeNumGC
 var entrySlicePoolNumGC = runtimeNumGC
 
+type poolPressureLevel uint8
+
+const (
+	poolPressureNormal poolPressureLevel = iota
+	poolPressureHigh
+	poolPressureCritical
+)
+
+type poolPressureSnapshot struct {
+	sampledUnixNano    int64
+	level              poolPressureLevel
+	usedBytes          uint64
+	heapAllocBytes     uint64
+	heapInuseBytes     uint64
+	heapSysBytes       uint64
+	heapIdleBytes      uint64
+	heapReleasedBytes  uint64
+	heapIdleUnreleased uint64
+	stackInuseBytes    uint64
+	stackSysBytes      uint64
+	nextGCBytes        uint64
+	numGC              uint32
+	gcCPUFraction      float64
+	totalSysBytes      uint64
+	nonHeapSysBytes    uint64
+	memoryLimitBytes   int64
+}
+
+type memtableResidencySummary struct {
+	count int
+	len   int
+	size  int64
+}
+
+type memtableResidencyBreakdown struct {
+	total      memtableResidencySummary
+	skiplist   memtableResidencySummary
+	hashSorted memtableResidencySummary
+	btree      memtableResidencySummary
+	appendOnly memtableResidencySummary
+}
+
+type batchSetCallerSampleStats struct {
+	calls atomic.Uint64
+	bytes atomic.Uint64
+}
+
+type batchSetCallerSampleSnapshot struct {
+	frame string
+	calls uint64
+	bytes uint64
+}
+
+const (
+	poolPressureRefreshInterval = 250 * time.Millisecond
+	processMemorySampleInterval = 1 * time.Second
+	// Treat high/critical pressure as heap residency (not alloc churn). These
+	// thresholds target restore-like peaks where pool retention can inflate RSS.
+	poolPressureHighHeapBytes     = uint64(4 << 30)
+	poolPressureCriticalHeapBytes = uint64(8 << 30)
+	poolPressureTrimInterval      = 2 * time.Second
+	poolPressureHighBudgetDivisor = int64(2)
+	// Under heap pressure, reduce mutable flush threshold so we rotate/flush
+	// earlier and cap memtable residency growth during restore-like ingest.
+	mutableFlushThresholdHighPressureDivisor     = int64(2)
+	mutableFlushThresholdCriticalPressureDivisor = int64(4)
+	mutableFlushThresholdPressureFloorBytes      = int64(32 << 20)
+	// Under heap pressure, aggressively cap fresh batch-copy chunk sizing. Keep
+	// large single-copy writes functional by allowing request-size override.
+	batchCopyArenaHighPressureMaxChunk     = 512 << 10
+	batchCopyArenaCriticalPressureMaxChunk = 128 << 10
+	// Direct append-only arena retention is best-effort reuse. Shrink retained
+	// headroom materially under pressure so reuse does not dominate inuse peaks.
+	appendOnlyDirectArenaHighPressureDivisor = int64(4)
+	// Keep total live batch-arena retention (pool + active memtable leases) bounded.
+	// We derive this from the pool budget so it scales with machine parallelism.
+	batchArenaRetainedHardCapMultiplier = int64(2)
+	// Regular flushes use a soft trim cadence; checkpoints perform an immediate
+	// stricter trim pass because they are already explicit maintenance boundaries.
+	flushRetainedArenaTrimMinInterval = 2 * time.Second
+	// Keep post-flush pool footprints bounded without forcing full cold-start.
+	postFlushBatchArenaTargetBytes = int64(64 << 20)
+	postFlushEntrySliceTargetBytes = int64(64 << 20)
+	// Checkpoint trim is intentionally stricter.
+	postCheckpointBatchArenaTargetBytes        = int64(32 << 20)
+	postCheckpointEntrySliceTargetBytes        = int64(32 << 20)
+	postFlushEntrySliceLeaseKeepPerBucket      = 16
+	postCheckpointEntrySliceLeaseKeepPerBucket = 8
+	postFlushAppendOnlyMemLeaseKeep            = 24
+	postCheckpointAppendOnlyMemLeaseKeep       = 8
+)
+
 func computeBatchArenaPoolBudgetBytes() int64 {
 	return computeBatchArenaPoolBudgetBytesForProcs(runtime.GOMAXPROCS(0))
 }
@@ -95,7 +295,7 @@ func computeBatchArenaPoolBudgetBytesForProcs(procs int) int64 {
 	// Keep a few max-size chunks per P to avoid thrash while preventing runaway
 	// retention during restore workloads.
 	const maxChunksPerP = 4
-	const maxBudgetBytes = int64(256 << 20)
+	const maxBudgetBytes = int64(128 << 20)
 	const perPBytes = int64(batchCopyArenaMaxRetain) * maxChunksPerP
 	if procs < 1 {
 		procs = 1
@@ -117,6 +317,599 @@ func computeBatchArenaPoolBudgetBytesForProcs(procs int) int64 {
 		budget = maxBudgetBytes
 	}
 	return budget
+}
+
+func loadUintEnvDefault(key string, def uint64) uint64 {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return def
+	}
+	v, err := strconv.ParseUint(raw, 10, 64)
+	if err != nil {
+		return def
+	}
+	return v
+}
+
+func loadPositiveIntEnvDefault(key string, def int) int {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return def
+	}
+	v, err := strconv.Atoi(raw)
+	if err != nil || v <= 0 {
+		return def
+	}
+	return v
+}
+
+func loadPositiveInt64EnvDefault(key string, def int64) int64 {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return def
+	}
+	v, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || v <= 0 {
+		return def
+	}
+	return v
+}
+
+type leafGenerationPackMaintenanceAdmission struct {
+	allowed bool
+	reason  string
+}
+
+func maybeRecordBatchSetCallerSample(bytes int) {
+	maybeRecordCallerSample(batchSetCallerSampleMod, &batchSetCallerSampleSeq, &batchSetCallerSamplesTotal, &batchSetCallerStatsMap, bytes)
+}
+
+func maybeRecordDBGetCallerSample(bytes int) {
+	maybeRecordCallerSample(dbGetCallerSampleMod, &dbGetCallerSampleSeq, &dbGetCallerSamplesTotal, &dbGetCallerStatsMap, bytes)
+}
+
+func maybeRecordSnapshotGetCallerSample(bytes int) {
+	maybeRecordCallerSample(snapshotGetCallerSampleMod, &snapshotGetCallerSampleSeq, &snapshotGetCallerSamplesTotal, &snapshotGetCallerStatsMap, bytes)
+}
+
+func maybeRecordCallerSample(mod uint64, seqCounter, totalCounter *atomic.Uint64, statsMap *sync.Map, bytes int) {
+	if mod == 0 {
+		return
+	}
+	seq := seqCounter.Add(1)
+	if mod > 1 && seq%mod != 0 {
+		return
+	}
+	frame := captureCallerChain()
+	statsAny, _ := statsMap.LoadOrStore(frame, &batchSetCallerSampleStats{})
+	stats := statsAny.(*batchSetCallerSampleStats)
+	stats.calls.Add(1)
+	stats.bytes.Add(uint64(bytes))
+	totalCounter.Add(1)
+}
+
+func captureCallerChain() string {
+	var pcs [12]uintptr
+	n := runtime.Callers(4, pcs[:])
+	if n == 0 {
+		return "unknown"
+	}
+	frames := runtime.CallersFrames(pcs[:n])
+	parts := make([]string, 0, 4)
+	for len(parts) < 4 {
+		frame, more := frames.Next()
+		fn := compactCallerFunc(frame.Function)
+		if fn != "" && !skipCallerFunc(fn) {
+			parts = append(parts, fn)
+		}
+		if !more {
+			break
+		}
+	}
+	if len(parts) == 0 {
+		return "unknown"
+	}
+	return strings.Join(parts, " <= ")
+}
+
+func skipCallerFunc(fn string) bool {
+	switch {
+	case strings.HasPrefix(fn, "runtime."),
+		strings.HasPrefix(fn, "runtime/"),
+		strings.HasPrefix(fn, "testing."),
+		strings.Contains(fn, ".tRunner"),
+		strings.Contains(fn, "maybeRecordCallerSample"),
+		strings.Contains(fn, "captureCallerChain"),
+		strings.Contains(fn, "gomap/TreeDB/caching.(*DB).Get"),
+		strings.Contains(fn, "gomap/TreeDB/caching.(*Snapshot).Get"),
+		strings.Contains(fn, "gomap/TreeDB.(*DB).Get"),
+		strings.Contains(fn, "gomap/TreeDB.(*DB).GetUnsafe"),
+		strings.Contains(fn, "gomap/TreeDB/db.(*DB).Get"),
+		strings.Contains(fn, "gomap/TreeDB/db.(*DB).GetUnsafe"),
+		strings.Contains(fn, "gomap/TreeDB/db.(*Snapshot).Get"),
+		strings.Contains(fn, "gomap/kvstore/adapters/treedb.(*DB).GetUnsafe"):
+		return true
+	default:
+		return false
+	}
+}
+
+func compactCallerFunc(fn string) string {
+	if fn == "" {
+		return ""
+	}
+	for _, prefix := range [...]string{
+		"github.com/snissn/",
+		"github.com/cosmos/",
+		"github.com/cometbft/",
+	} {
+		fn = strings.TrimPrefix(fn, prefix)
+	}
+	return fn
+}
+
+func callerSampleSnapshots(statsMap *sync.Map, limit int) []batchSetCallerSampleSnapshot {
+	snaps := make([]batchSetCallerSampleSnapshot, 0, 16)
+	statsMap.Range(func(key, value any) bool {
+		frame, _ := key.(string)
+		stats, _ := value.(*batchSetCallerSampleStats)
+		if frame == "" || stats == nil {
+			return true
+		}
+		snaps = append(snaps, batchSetCallerSampleSnapshot{
+			frame: frame,
+			calls: stats.calls.Load(),
+			bytes: stats.bytes.Load(),
+		})
+		return true
+	})
+	sort.Slice(snaps, func(i, j int) bool {
+		if snaps[i].bytes != snaps[j].bytes {
+			return snaps[i].bytes > snaps[j].bytes
+		}
+		if snaps[i].calls != snaps[j].calls {
+			return snaps[i].calls > snaps[j].calls
+		}
+		return snaps[i].frame < snaps[j].frame
+	})
+	if limit > 0 && len(snaps) > limit {
+		snaps = snaps[:limit]
+	}
+	return snaps
+}
+
+func batchSetCallerSnapshots(limit int) []batchSetCallerSampleSnapshot {
+	return callerSampleSnapshots(&batchSetCallerStatsMap, limit)
+}
+
+func dbGetCallerSnapshots(limit int) []batchSetCallerSampleSnapshot {
+	return callerSampleSnapshots(&dbGetCallerStatsMap, limit)
+}
+
+func snapshotGetCallerSnapshots(limit int) []batchSetCallerSampleSnapshot {
+	return callerSampleSnapshots(&snapshotGetCallerStatsMap, limit)
+}
+
+func classifyPoolPressureLevel(usedBytes uint64, memoryLimitBytes int64) poolPressureLevel {
+	high := poolPressureHighHeapBytes
+	critical := poolPressureCriticalHeapBytes
+
+	if memoryLimitBytes > 0 {
+		limit := uint64(memoryLimitBytes)
+		if limit > 0 {
+			limitHigh := (limit * 70) / 100
+			limitCritical := (limit * 85) / 100
+			if limitHigh > 0 && limitHigh < high {
+				high = limitHigh
+			}
+			if limitCritical > 0 && limitCritical < critical {
+				critical = limitCritical
+			}
+			if critical < high {
+				critical = high
+			}
+		}
+	}
+
+	if usedBytes >= critical {
+		return poolPressureCritical
+	}
+	if usedBytes >= high {
+		return poolPressureHigh
+	}
+	return poolPressureNormal
+}
+
+func poolPressureUsedBytes(ms runtime.MemStats, heapIdleUnreleased uint64) uint64 {
+	used := ms.HeapInuse
+	if ms.HeapAlloc > used {
+		used = ms.HeapAlloc
+	}
+	if heapIdleUnreleased > 0 {
+		if used > math.MaxUint64-heapIdleUnreleased {
+			return math.MaxUint64
+		}
+		used += heapIdleUnreleased
+	}
+	return used
+}
+
+func samplePoolPressureSnapshot(sampledAt time.Time) poolPressureSnapshot {
+	var ms runtime.MemStats
+	poolPressureReadMemStats(&ms)
+	heapIdleUnreleased := uint64(0)
+	if ms.HeapIdle > ms.HeapReleased {
+		heapIdleUnreleased = ms.HeapIdle - ms.HeapReleased
+	}
+	used := poolPressureUsedBytes(ms, heapIdleUnreleased)
+	memLimit := poolPressureMemoryLimit()
+	level := classifyPoolPressureLevel(used, memLimit)
+	nonHeapSysBytes := uint64(0)
+	if ms.Sys > ms.HeapSys {
+		nonHeapSysBytes = ms.Sys - ms.HeapSys
+	}
+	return poolPressureSnapshot{
+		sampledUnixNano:    sampledAt.UnixNano(),
+		level:              level,
+		usedBytes:          used,
+		heapAllocBytes:     ms.HeapAlloc,
+		heapInuseBytes:     ms.HeapInuse,
+		heapSysBytes:       ms.HeapSys,
+		heapIdleBytes:      ms.HeapIdle,
+		heapReleasedBytes:  ms.HeapReleased,
+		heapIdleUnreleased: heapIdleUnreleased,
+		stackInuseBytes:    ms.StackInuse,
+		stackSysBytes:      ms.StackSys,
+		nextGCBytes:        ms.NextGC,
+		numGC:              ms.NumGC,
+		gcCPUFraction:      ms.GCCPUFraction,
+		totalSysBytes:      ms.Sys,
+		nonHeapSysBytes:    nonHeapSysBytes,
+		memoryLimitBytes:   memLimit,
+	}
+}
+
+func trimEntrySliceLeasesToKeep(keepPerBucket int) int64 {
+	if keepPerBucket < 0 {
+		keepPerBucket = 0
+	}
+	var droppedBytes int64
+	entrySliceLeaseMu.Lock()
+	for i := range entrySliceLeases {
+		leases := entrySliceLeases[i]
+		if len(leases) > keepPerBucket {
+			drop := len(leases) - keepPerBucket
+			for j := 0; j < drop; j++ {
+				if entries := leases[j]; entries != nil {
+					droppedBytes += int64(cap(entries)) * entrySliceEntrySizeBytes
+				}
+				leases[j] = nil
+			}
+			if keepPerBucket == 0 {
+				entrySliceLeases[i] = nil
+			} else {
+				entrySliceLeases[i] = leases[drop:]
+			}
+		}
+	}
+	entrySliceLeaseMu.Unlock()
+	if droppedBytes > 0 {
+		releaseEntrySlicePoolBytes(droppedBytes)
+	}
+	return droppedBytes
+}
+
+func maybeTrimEntrySliceLeasesUnderPressure(level poolPressureLevel, sampledAt time.Time) {
+	if level == poolPressureNormal {
+		return
+	}
+	nowUnix := sampledAt.UnixNano()
+	last := poolPressureLastLeaseTrimUnixNano.Load()
+	if last != 0 && nowUnix-last < int64(poolPressureTrimInterval) {
+		return
+	}
+	if !poolPressureLastLeaseTrimUnixNano.CompareAndSwap(last, nowUnix) {
+		return
+	}
+
+	keepPerBucket := maxEntrySliceLeasesPerBucket
+	switch level {
+	case poolPressureCritical:
+		keepPerBucket = 0
+	case poolPressureHigh:
+		keepPerBucket = maxEntrySliceLeasesPerBucket / 8
+		if keepPerBucket < 2 {
+			keepPerBucket = 2
+		}
+	}
+	droppedBytes := trimEntrySliceLeasesToKeep(keepPerBucket)
+	entrySlicePoolTrimRunsTotal.Add(1)
+	if droppedBytes > 0 {
+		entrySlicePoolTrimDropBytesTotal.Add(uint64(droppedBytes))
+	}
+}
+
+func currentPoolPressureSnapshot() poolPressureSnapshot {
+	now := poolPressureNow()
+	if cached, ok := poolPressureState.Load().(poolPressureSnapshot); ok {
+		if now.UnixNano()-cached.sampledUnixNano <= int64(poolPressureRefreshInterval) {
+			return cached
+		}
+	}
+
+	poolPressureMu.Lock()
+	defer poolPressureMu.Unlock()
+
+	now = poolPressureNow()
+	if cached, ok := poolPressureState.Load().(poolPressureSnapshot); ok {
+		if now.UnixNano()-cached.sampledUnixNano <= int64(poolPressureRefreshInterval) {
+			return cached
+		}
+	}
+
+	snap := samplePoolPressureSnapshot(now)
+	poolPressureState.Store(snap)
+	switch snap.level {
+	case poolPressureCritical:
+		poolPressureCriticalSamplesTotal.Add(1)
+	case poolPressureHigh:
+		poolPressureHighSamplesTotal.Add(1)
+	default:
+		poolPressureNormalSamplesTotal.Add(1)
+	}
+	maybeTrimEntrySliceLeasesUnderPressure(snap.level, now)
+	return snap
+}
+
+func currentZipperParallelMergePressure() zipper.ParallelMergePressureLevel {
+	switch currentPoolPressureSnapshot().level {
+	case poolPressureCritical:
+		return zipper.ParallelMergePressureCritical
+	case poolPressureHigh:
+		return zipper.ParallelMergePressureHigh
+	default:
+		return zipper.ParallelMergePressureNormal
+	}
+}
+
+func scalePoolBudgetForPressure(base int64, level poolPressureLevel) int64 {
+	if base <= 0 {
+		return 0
+	}
+	switch level {
+	case poolPressureCritical:
+		return 0
+	case poolPressureHigh:
+		return base / poolPressureHighBudgetDivisor
+	default:
+		return base
+	}
+}
+
+func currentBatchArenaRetentionBudgetBytes() int64 {
+	base := currentBatchArenaPoolBudgetBytes()
+	level := currentPoolPressureSnapshot().level
+	return scalePoolBudgetForPressure(base, level)
+}
+
+func currentBatchArenaRetainedHardCapBytes() int64 {
+	if override := batchArenaRetainedHardCapOverride.Load(); override > 0 {
+		return override
+	}
+	base := currentBatchArenaPoolBudgetBytes()
+	if base <= 0 {
+		return 0
+	}
+	hardCap := base * batchArenaRetainedHardCapMultiplier
+	if hardCap < int64(batchCopyArenaMinChunk) {
+		hardCap = int64(batchCopyArenaMinChunk)
+	}
+	level := currentPoolPressureSnapshot().level
+	hardCap = scalePoolBudgetForPressure(hardCap, level)
+	if hardCap < 0 {
+		hardCap = 0
+	}
+	return hardCap
+}
+
+func (db *DB) batchArenaDeferredPressureActive() bool {
+	return db != nil && db.memtableViewTelemetry.deferredBytesCurrent.Load() >= batchArenaDeferredPressureThresholdBytes
+}
+
+func (db *DB) currentBatchArenaRetainedHardCapEffectiveBytes() int64 {
+	hardCap := currentBatchArenaRetainedHardCapBytes()
+	if hardCap <= 0 || !db.batchArenaDeferredPressureActive() {
+		return hardCap
+	}
+	reduced := hardCap / batchArenaDeferredPressureHardCapDivisor
+	minCap := int64(batchCopyArenaMinChunk)
+	if reduced < minCap {
+		reduced = minCap
+	}
+	if reduced > hardCap {
+		return hardCap
+	}
+	return reduced
+}
+
+func currentBatchArenaRetainedBytesEstimate() int64 {
+	poolBytes := batchArenaPoolBytes.Load()
+	if poolBytes < 0 {
+		poolBytes = 0
+	}
+	leasedBytes := batchArenaLeasedBytesGlobal.Load()
+	if leasedBytes < 0 {
+		leasedBytes = 0
+	}
+	return poolBytes + leasedBytes
+}
+
+func noteBatchArenaRetainedBytesMax() {
+	total := currentBatchArenaRetainedBytesEstimate()
+	if total <= 0 {
+		return
+	}
+	updateInt64Max(&batchArenaRetainedBytesMaxGlobal, total)
+}
+
+func noteBatchArenaPoolBytesMax(value int64) {
+	if value <= 0 {
+		return
+	}
+	updateInt64Max(&batchArenaPoolBytesMaxGlobal, value)
+}
+
+func noteBatchArenaLeasedBytesGlobalMax(value int64) {
+	if value <= 0 {
+		return
+	}
+	updateInt64Max(&batchArenaLeasedBytesMaxGlobal, value)
+}
+
+func noteBatchArenaInFlightBytesMax(value int64) {
+	if value <= 0 {
+		return
+	}
+	updateInt64Max(&batchArenaInFlightBytesMaxGlobal, value)
+}
+
+func shouldBorrowBatchArenaBytes() bool {
+	hardCap := currentBatchArenaRetainedHardCapBytes()
+	if hardCap <= 0 {
+		return false
+	}
+	return currentBatchArenaRetainedBytesEstimate() < hardCap
+}
+
+func shouldBorrowBatchArenaBytesForWrite(prospectiveRetainBytes int64) (allow bool, preflightBlocked bool) {
+	return shouldBorrowBatchArenaBytesForWriteWithHardCap(prospectiveRetainBytes, currentBatchArenaRetainedHardCapBytes())
+}
+
+func shouldBorrowBatchArenaBytesForWriteWithHardCap(prospectiveRetainBytes int64, hardCap int64) (allow bool, preflightBlocked bool) {
+	if hardCap <= 0 {
+		return false, false
+	}
+	currentRetained := currentBatchArenaRetainedBytesEstimate()
+	if currentRetained >= hardCap {
+		return false, false
+	}
+	if prospectiveRetainBytes <= 0 {
+		return true, false
+	}
+	if prospectiveRetainBytes >= hardCap || currentRetained > math.MaxInt64-prospectiveRetainBytes {
+		return false, true
+	}
+	if currentRetained+prospectiveRetainBytes > hardCap {
+		return false, true
+	}
+	return true, false
+}
+
+func batchArenaChunksCapBytes(chunks [][]byte) int64 {
+	var total int64
+	for i := range chunks {
+		c := cap(chunks[i])
+		if c <= 0 {
+			continue
+		}
+		if total > math.MaxInt64-int64(c) {
+			return math.MaxInt64
+		}
+		total += int64(c)
+	}
+	return total
+}
+
+func currentEntrySlicePoolBudgetBytes() int64 {
+	base := entrySlicePoolBudgetBytes
+	level := currentPoolPressureSnapshot().level
+	return scalePoolBudgetForPressure(base, level)
+}
+
+func scaleMutableFlushThresholdForPressure(base int64, level poolPressureLevel) int64 {
+	if base <= 0 {
+		return base
+	}
+	switch level {
+	case poolPressureCritical:
+		scaled := base / mutableFlushThresholdCriticalPressureDivisor
+		if scaled <= 0 {
+			scaled = 1
+		}
+		if base > mutableFlushThresholdPressureFloorBytes && scaled < mutableFlushThresholdPressureFloorBytes {
+			scaled = mutableFlushThresholdPressureFloorBytes
+		}
+		if scaled > base {
+			return base
+		}
+		return scaled
+	case poolPressureHigh:
+		scaled := base / mutableFlushThresholdHighPressureDivisor
+		if scaled <= 0 {
+			scaled = 1
+		}
+		if base > mutableFlushThresholdPressureFloorBytes && scaled < mutableFlushThresholdPressureFloorBytes {
+			scaled = mutableFlushThresholdPressureFloorBytes
+		}
+		if scaled > base {
+			return base
+		}
+		return scaled
+	default:
+		return base
+	}
+}
+
+func batchCopyArenaMaxChunkForPressure(level poolPressureLevel) int {
+	switch level {
+	case poolPressureCritical:
+		return batchCopyArenaCriticalPressureMaxChunk
+	case poolPressureHigh:
+		return batchCopyArenaHighPressureMaxChunk
+	default:
+		return batchCopyArenaMaxRetain
+	}
+}
+
+func currentBatchCopyArenaMaxChunk() int {
+	return batchCopyArenaMaxChunkForPressure(currentPoolPressureSnapshot().level)
+}
+
+func shouldRetainBatchAuxPoolEntries(level poolPressureLevel) bool {
+	return level == poolPressureNormal
+}
+
+func appendOnlyDirectArenaRetentionLimitsForPressure(level poolPressureLevel) (maxChunks int, maxBytes int64) {
+	switch level {
+	case poolPressureCritical:
+		return 0, 0
+	case poolPressureHigh:
+		maxBytes = int64(appendOnlyDirectValueArenaRetainMaxBytes) / appendOnlyDirectArenaHighPressureDivisor
+		if maxBytes < appendOnlyDirectValueArenaDefaultChunk {
+			maxBytes = appendOnlyDirectValueArenaDefaultChunk
+		}
+	default:
+		maxBytes = int64(appendOnlyDirectValueArenaRetainMaxBytes)
+	}
+	maxChunks = int(maxBytes) / appendOnlyDirectValueArenaDefaultChunk
+	if maxChunks < 1 {
+		maxChunks = 1
+	}
+	if maxChunks > appendOnlyDirectValueArenaRetainMaxChunks {
+		maxChunks = appendOnlyDirectValueArenaRetainMaxChunks
+	}
+	return maxChunks, maxBytes
+}
+
+func poolPressureLevelString(level poolPressureLevel) string {
+	switch level {
+	case poolPressureCritical:
+		return "critical"
+	case poolPressureHigh:
+		return "high"
+	default:
+		return "normal"
+	}
 }
 
 func currentBatchArenaPoolBudgetBytes() int64 {
@@ -161,6 +954,7 @@ type batchArenaPoolBudgetCache struct {
 
 func init() {
 	batchArenaPoolBudgetState.Store(batchArenaPoolBudgetCache{})
+	poolPressureState.Store(poolPressureSnapshot{})
 }
 
 func noteBatchArenaPoolGC(numGC uint64) {
@@ -185,12 +979,22 @@ const (
 	// batch arenas are chunked key/value copy buffers that may be leased to
 	// memtables. Keep the max pooled chunk size modest to avoid retaining large
 	// mostly-empty tail chunks during big restore batches.
-	batchArenaMaxShift       = 21
-	batchArenaClassCount     = batchArenaMaxShift - batchArenaMinShift + 1
-	outerLeafArenaMinShift   = 12
-	outerLeafArenaMaxShift   = 24
-	outerLeafArenaClassCount = outerLeafArenaMaxShift - outerLeafArenaMinShift + 1
-	maxOuterLeafArenaLeases  = 64
+	batchArenaMaxShift                       = 21
+	batchArenaClassCount                     = batchArenaMaxShift - batchArenaMinShift + 1
+	appendOnlyDirectValueArenaMinShift       = 15
+	appendOnlyDirectValueArenaMaxShift       = 20
+	appendOnlyDirectValueArenaClassCount     = appendOnlyDirectValueArenaMaxShift - appendOnlyDirectValueArenaMinShift + 1
+	appendOnlyDirectValueArenaDefaultChunk   = 32 << 10
+	appendOnlyDirectValueArenaPoolMaxCap     = 1 << appendOnlyDirectValueArenaMaxShift
+	appendOnlyDirectValueArenaRetainMaxBytes = 8 << 20
+	// Keep chunk count aligned with the byte cap for the common default-chunk
+	// case; otherwise a low chunk cap can silently reduce effective retention to
+	// ~1MB and force unnecessary regrowth allocations each memtable cycle.
+	appendOnlyDirectValueArenaRetainMaxChunks = appendOnlyDirectValueArenaRetainMaxBytes / appendOnlyDirectValueArenaDefaultChunk
+	outerLeafArenaMinShift                    = 12
+	outerLeafArenaMaxShift                    = 24
+	outerLeafArenaClassCount                  = outerLeafArenaMaxShift - outerLeafArenaMinShift + 1
+	maxOuterLeafArenaLeases                   = 64
 )
 
 type vlogPreparedFrameBody struct {
@@ -450,28 +1254,46 @@ func putBatchArena(buf []byte) {
 	if !ok {
 		return
 	}
-	if budget := currentBatchArenaPoolBudgetBytes(); budget > 0 {
-		size := int64(cap(buf))
-		noteEpoch := false
-		for {
-			held := batchArenaPoolBytes.Load()
-			if held+size > budget {
-				before := held
-				maybeResetBatchArenaPoolBytesAfterGC()
-				held = batchArenaPoolBytes.Load()
-				if held == before || held+size > budget {
-					return
-				}
-				continue
+	budget := currentBatchArenaRetentionBudgetBytes()
+	if budget <= 0 {
+		batchArenaPoolSkipZeroBudgetTotal.Add(1)
+		return
+	}
+	hardCap := currentBatchArenaRetainedHardCapBytes()
+	size := int64(cap(buf))
+	noteEpoch := false
+	for {
+		held := batchArenaPoolBytes.Load()
+		if held+size > budget {
+			before := held
+			maybeResetBatchArenaPoolBytesAfterGC()
+			held = batchArenaPoolBytes.Load()
+			if held == before || held+size > budget {
+				batchArenaPoolDropBytesTotal.Add(uint64(size))
+				return
 			}
-			if batchArenaPoolBytes.CompareAndSwap(held, held+size) {
-				noteEpoch = held == 0
-				break
+			continue
+		}
+		if hardCap > 0 {
+			leased := batchArenaLeasedBytesGlobal.Load()
+			if leased < 0 {
+				leased = 0
+			}
+			if held+leased+size > hardCap {
+				batchArenaPoolDropBytesTotal.Add(uint64(size))
+				batchArenaPoolDropHardCapBytesTotal.Add(uint64(size))
+				return
 			}
 		}
-		if noteEpoch {
-			noteBatchArenaPoolGC(batchArenaPoolNumGC())
+		if batchArenaPoolBytes.CompareAndSwap(held, held+size) {
+			noteEpoch = held == 0
+			noteBatchArenaPoolBytesMax(held + size)
+			noteBatchArenaRetainedBytesMax()
+			break
 		}
+	}
+	if noteEpoch {
+		noteBatchArenaPoolGC(batchArenaPoolNumGC())
 	}
 	batchArenaPools[idx].Put(buf[:0])
 }
@@ -483,6 +1305,302 @@ func putBatchArenas(chunks [][]byte) {
 			chunks[i] = nil
 		}
 	}
+}
+
+func drainBatchArenaPoolToTargetBytes(target int64) int64 {
+	if target < 0 {
+		target = 0
+	}
+	if batchArenaPoolBytes.Load() <= target {
+		return 0
+	}
+	var dropped int64
+	for classIdx := len(batchArenaPools) - 1; classIdx >= 0 && batchArenaPoolBytes.Load() > target; classIdx-- {
+		for batchArenaPoolBytes.Load() > target {
+			v := batchArenaPools[classIdx].Get()
+			if v == nil {
+				break
+			}
+			buf, ok := v.([]byte)
+			if !ok {
+				continue
+			}
+			size := int64(cap(buf))
+			if size <= 0 {
+				continue
+			}
+			dropped += size
+			next := batchArenaPoolBytes.Add(-size)
+			if next < 0 {
+				batchArenaPoolBytes.Store(0)
+			}
+		}
+	}
+	if dropped > 0 {
+		batchArenaPoolDropBytesTotal.Add(uint64(dropped))
+	}
+	return dropped
+}
+
+func appendOnlyDirectValueArenaClassForLen(capacity int) (idx int, classCap int, ok bool) {
+	if capacity <= 0 || capacity > appendOnlyDirectValueArenaPoolMaxCap {
+		return 0, 0, false
+	}
+	classCap = 1 << uint(bits.Len(uint(capacity-1)))
+	minCap := 1 << appendOnlyDirectValueArenaMinShift
+	if classCap < minCap {
+		classCap = minCap
+	}
+	if classCap > appendOnlyDirectValueArenaPoolMaxCap {
+		return 0, 0, false
+	}
+	shift := bits.Len(uint(classCap)) - 1
+	idx = shift - appendOnlyDirectValueArenaMinShift
+	if idx < 0 || idx >= appendOnlyDirectValueArenaClassCount {
+		return 0, 0, false
+	}
+	return idx, classCap, true
+}
+
+func appendOnlyDirectValueArenaClassForCap(capacity int) (idx int, ok bool) {
+	minCap := 1 << appendOnlyDirectValueArenaMinShift
+	if capacity < minCap || capacity > appendOnlyDirectValueArenaPoolMaxCap {
+		return 0, false
+	}
+	if capacity&(capacity-1) != 0 {
+		return 0, false
+	}
+	shift := bits.TrailingZeros(uint(capacity))
+	idx = shift - appendOnlyDirectValueArenaMinShift
+	if idx < 0 || idx >= appendOnlyDirectValueArenaClassCount {
+		return 0, false
+	}
+	return idx, true
+}
+
+func getAppendOnlyDirectValueArenaChunk(capacity int) []byte {
+	if capacity <= 0 {
+		capacity = appendOnlyDirectValueArenaDefaultChunk
+	}
+	if capacity < appendOnlyDirectValueArenaDefaultChunk {
+		capacity = appendOnlyDirectValueArenaDefaultChunk
+	}
+	if idx, classCap, ok := appendOnlyDirectValueArenaClassForLen(capacity); ok {
+		if v := appendOnlyDirectValueArenaPools[idx].Get(); v != nil {
+			if b, ok := v.([]byte); ok && cap(b) >= classCap {
+				appendOnlyDirectArenaPoolHitChunksTotal.Add(1)
+				appendOnlyDirectArenaPoolHitBytesTotal.Add(uint64(cap(b)))
+				return b[:0]
+			}
+		}
+		appendOnlyDirectArenaFreshAllocChunksTotal.Add(1)
+		appendOnlyDirectArenaFreshAllocBytesTotal.Add(uint64(classCap))
+		return make([]byte, 0, classCap)
+	}
+	appendOnlyDirectArenaFreshAllocChunksTotal.Add(1)
+	appendOnlyDirectArenaFreshAllocBytesTotal.Add(uint64(capacity))
+	return make([]byte, 0, capacity)
+}
+
+func putAppendOnlyDirectValueArenaChunk(chunk []byte) {
+	if chunk == nil {
+		return
+	}
+	if idx, ok := appendOnlyDirectValueArenaClassForCap(cap(chunk)); ok {
+		appendOnlyDirectValueArenaPools[idx].Put(chunk[:0])
+	}
+}
+
+func putAppendOnlyDirectValueArenaChunks(chunks [][]byte) {
+	for i := range chunks {
+		if chunks[i] != nil {
+			putAppendOnlyDirectValueArenaChunk(chunks[i])
+			chunks[i] = nil
+		}
+	}
+}
+
+func appendOnlyDirectArenaChunksBytes(chunks [][]byte) int64 {
+	var total int64
+	for i := range chunks {
+		if chunks[i] != nil {
+			total += int64(cap(chunks[i]))
+		}
+	}
+	return total
+}
+
+type appendOnlyDirectValueArena struct {
+	retained      [][]byte
+	retainedBytes int64
+	active        [][]byte
+	cur           []byte
+	curPos        int
+}
+
+func (a *appendOnlyDirectValueArena) takeRetainedChunk(length int) []byte {
+	want := length
+	if want < appendOnlyDirectValueArenaDefaultChunk {
+		want = appendOnlyDirectValueArenaDefaultChunk
+	}
+	for i := len(a.retained) - 1; i >= 0; i-- {
+		chunk := a.retained[i]
+		if cap(chunk) < want {
+			continue
+		}
+		last := len(a.retained) - 1
+		a.retained[i] = a.retained[last]
+		a.retained[last] = nil
+		a.retained = a.retained[:last]
+		a.retainedBytes -= int64(cap(chunk))
+		appendOnlyDirectArenaRetainedHitChunksTotal.Add(1)
+		appendOnlyDirectArenaRetainedHitBytesTotal.Add(uint64(cap(chunk)))
+		return chunk[:0]
+	}
+	return getAppendOnlyDirectValueArenaChunk(want)
+}
+
+func (a *appendOnlyDirectValueArena) alloc(length int) []byte {
+	if length <= 0 {
+		return nil
+	}
+	if a.cur == nil || cap(a.cur)-a.curPos < length {
+		chunk := a.takeRetainedChunk(length)
+		a.active = append(a.active, chunk)
+		a.cur = chunk[:cap(chunk)]
+		a.curPos = 0
+	}
+	out := a.cur[a.curPos : a.curPos+length : a.curPos+length]
+	a.curPos += length
+	return out
+}
+
+func (a *appendOnlyDirectValueArena) drainActiveChunks() [][]byte {
+	chunks := a.active
+	a.active = nil
+	a.cur = nil
+	a.curPos = 0
+	return chunks
+}
+
+func (a *appendOnlyDirectValueArena) trimRetained(maxChunks int, maxBytes int64, maxChunkCap int) (droppedBytes int64) {
+	if maxChunks < 0 {
+		maxChunks = 0
+	}
+	if maxBytes < 0 {
+		maxBytes = 0
+	}
+	if maxChunkCap <= 0 {
+		maxChunkCap = appendOnlyDirectValueArenaPoolMaxCap
+	}
+	trimmed := a.retained[:0]
+	var keptBytes int64
+	for i := range a.retained {
+		chunk := a.retained[i]
+		if chunk == nil {
+			continue
+		}
+		size := int64(cap(chunk))
+		if cap(chunk) > maxChunkCap {
+			putAppendOnlyDirectValueArenaChunk(chunk)
+			droppedBytes += size
+			continue
+		}
+		trimmed = append(trimmed, chunk[:0])
+		keptBytes += size
+	}
+	for i := len(trimmed); i < len(a.retained); i++ {
+		a.retained[i] = nil
+	}
+	a.retained = trimmed
+	a.retainedBytes = keptBytes
+
+	for len(a.retained) > maxChunks || a.retainedBytes > maxBytes {
+		if len(a.retained) == 0 {
+			break
+		}
+		evict := a.retained[0]
+		copy(a.retained, a.retained[1:])
+		last := len(a.retained) - 1
+		a.retained[last] = nil
+		a.retained = a.retained[:last]
+		size := int64(cap(evict))
+		a.retainedBytes -= size
+		if a.retainedBytes < 0 {
+			a.retainedBytes = 0
+		}
+		putAppendOnlyDirectValueArenaChunk(evict)
+		droppedBytes += size
+	}
+	return droppedBytes
+}
+
+func (a *appendOnlyDirectValueArena) evictOldestRetainedToPool() bool {
+	if len(a.retained) == 0 {
+		return false
+	}
+	evict := a.retained[0]
+	copy(a.retained, a.retained[1:])
+	last := len(a.retained) - 1
+	a.retained[last] = nil
+	a.retained = a.retained[:last]
+	a.retainedBytes -= int64(cap(evict))
+	if a.retainedBytes < 0 {
+		a.retainedBytes = 0
+	}
+	putAppendOnlyDirectValueArenaChunk(evict)
+	return true
+}
+
+func (a *appendOnlyDirectValueArena) retainChunks(chunks [][]byte) {
+	level := currentPoolPressureSnapshot().level
+	maxRetainedChunks, maxRetainedBytes := appendOnlyDirectArenaRetentionLimitsForPressure(level)
+	for len(a.retained) > 0 && (len(a.retained) > maxRetainedChunks || a.retainedBytes > maxRetainedBytes) {
+		if !a.evictOldestRetainedToPool() {
+			break
+		}
+	}
+	if maxRetainedChunks <= 0 || maxRetainedBytes <= 0 {
+		putAppendOnlyDirectValueArenaChunks(chunks)
+		return
+	}
+	for i := range chunks {
+		chunk := chunks[i]
+		if chunk == nil {
+			continue
+		}
+		chunks[i] = nil
+		if cap(chunk) > appendOnlyDirectValueArenaPoolMaxCap {
+			// Never retain oversize one-off chunks; they cannot be pooled by class
+			// and would otherwise pin large backing arrays across rotations.
+			putAppendOnlyDirectValueArenaChunk(chunk)
+			continue
+		}
+		chunk = chunk[:0]
+		size := int64(cap(chunk))
+		for len(a.retained) > 0 && (len(a.retained) >= maxRetainedChunks || a.retainedBytes+size > maxRetainedBytes) {
+			if !a.evictOldestRetainedToPool() {
+				break
+			}
+		}
+		if len(a.retained) >= maxRetainedChunks || a.retainedBytes+size > maxRetainedBytes {
+			putAppendOnlyDirectValueArenaChunk(chunk)
+			continue
+		}
+		a.retained = append(a.retained, chunk)
+		a.retainedBytes += size
+	}
+}
+
+func (a *appendOnlyDirectValueArena) recycleActive() {
+	a.retainChunks(a.drainActiveChunks())
+}
+
+func (a *appendOnlyDirectValueArena) recycleAll() {
+	putAppendOnlyDirectValueArenaChunks(a.drainActiveChunks())
+	putAppendOnlyDirectValueArenaChunks(a.retained)
+	a.retained = nil
+	a.retainedBytes = 0
 }
 
 func getOuterLeafArena(capacity int) []byte {
@@ -769,30 +1887,74 @@ func putVlogDictPrepareResults(ch chan vlogDictPrepareResult) {
 const (
 	envDebugFlushPointers = "TREEDB_DEBUG_FLUSH_PTRS"
 	envDebugFlushTiming   = "TREEDB_DEBUG_FLUSH_TIMING"
+	// Optional adaptive-memtable tuning knob for BTree selection safety.
+	// 0 keeps legacy behavior (no iterator-sample gate).
+	envAdaptiveBTreeMinIteratorSamples = "TREEDB_ADAPTIVE_BTREE_MIN_ITERATOR_SAMPLES"
 	// Generational maintenance toggles (forensics / isolation).
 	envDisableVlogGenerationRewrite        = "TREEDB_DISABLE_VLOG_GENERATION_REWRITE"
 	envDisableVlogGenerationGC             = "TREEDB_DISABLE_VLOG_GENERATION_GC"
 	envDisableVlogGenerationVacuum         = "TREEDB_DISABLE_VLOG_GENERATION_VACUUM"
 	envDisableVlogGenerationLoop           = "TREEDB_DISABLE_VLOG_GENERATION_LOOP"
 	envDisableVlogGenerationCheckpointKick = "TREEDB_DISABLE_VLOG_GENERATION_CHECKPOINT_KICK"
+	// Experimental immutable-leaf maintenance hook. Disabled by default until
+	// the cached scheduler policy and dwell behavior are validated.
+	envEnableLeafGenerationPackMaintenance                     = "TREEDB_ENABLE_LEAF_GENERATION_PACK_MAINTENANCE"
+	envLeafGenerationPackMaintenanceMaxBytesToCopy             = "TREEDB_LEAF_GENERATION_PACK_MAINTENANCE_MAX_BYTES_TO_COPY"
+	envLeafGenerationPackMaintenanceMaxGenerations             = "TREEDB_LEAF_GENERATION_PACK_MAINTENANCE_MAX_GENERATIONS"
+	envLeafGenerationPackMaintenanceMinPublishedAgeSeq         = "TREEDB_LEAF_GENERATION_PACK_MAINTENANCE_MIN_PUBLISHED_AGE_COMMITS"
+	envLeafGenerationPackMaintenanceMinCandidateGenerations    = "TREEDB_LEAF_GENERATION_PACK_MAINTENANCE_MIN_CANDIDATE_GENERATIONS"
+	envLeafGenerationPackMaintenanceTimeoutSeconds             = "TREEDB_LEAF_GENERATION_PACK_MAINTENANCE_TIMEOUT_SECONDS"
+	envLeafGenerationPackMaintenanceWriteBurstGraceMillis      = "TREEDB_LEAF_GENERATION_PACK_MAINTENANCE_WRITE_BURST_GRACE_MS"
+	envLeafGenerationPackMaintenanceMaxForegroundQueue         = "TREEDB_LEAF_GENERATION_PACK_MAINTENANCE_MAX_FOREGROUND_QUEUE"
+	envLeafGenerationPackMaintenanceMinReclaimPerByteCopiedPPM = "TREEDB_LEAF_GENERATION_PACK_MAINTENANCE_MIN_RECLAIM_PER_BYTE_COPIED_PPM"
+	// Optional rewrite debt-drain caps for controlled online experiments.
+	envVlogGenerationRewriteResumeMaxSegments         = "TREEDB_VLOG_GENERATION_REWRITE_RESUME_MAX_SEGMENTS"
+	envVlogGenerationRewriteDebtDrainMaxSegments      = "TREEDB_VLOG_GENERATION_REWRITE_DEBT_DRAIN_MAX_SEGMENTS"
+	envVlogGenerationRewriteFreshPlanDebtDrainMinSegs = "TREEDB_VLOG_GENERATION_REWRITE_FRESH_PLAN_DEBT_DRAIN_MIN_SEGMENTS"
+	envVlogGenerationRewriteFreshPlanDebtDrainMaxSegs = "TREEDB_VLOG_GENERATION_REWRITE_FRESH_PLAN_DEBT_DRAIN_MAX_SEGMENTS"
+	// Optional generational segment target overrides for live A/B experiments.
+	envVlogGenerationLeafSegmentTargetBytes = "TREEDB_VLOG_GENERATION_LEAF_SEGMENT_TARGET_BYTES"
+	envVlogGenerationHotSegmentTargetBytes  = "TREEDB_VLOG_GENERATION_HOT_SEGMENT_TARGET_BYTES"
+	envVlogGenerationWarmSegmentTargetBytes = "TREEDB_VLOG_GENERATION_WARM_SEGMENT_TARGET_BYTES"
+	envVlogGenerationColdSegmentTargetBytes = "TREEDB_VLOG_GENERATION_COLD_SEGMENT_TARGET_BYTES"
+	// Experimental WAL-off checkpoint-kick guard: when enabled, avoid starting
+	// fresh rewrite planning during hot foreground activity. Queued rewrite debt
+	// (or deferred maintenance due) remains eligible so resumable progress is not
+	// starved.
+	envEnableVlogGenerationCheckpointKickHotDebtOnly = "TREEDB_ENABLE_VLOG_GENERATION_CHECKPOINT_KICK_HOT_DEBT_ONLY"
+	// Experimental WAL-off override: allow rewrite planning/execution before the
+	// first explicit checkpoint. Disabled by default because it can add restore
+	// contention during early state-sync.
+	envEnableVlogGenerationPreCheckpointRewrite = "TREEDB_ENABLE_VLOG_GENERATION_PRECHECKPOINT_REWRITE"
 	// Diagnostic toggle for WAL-off checkpoint-time sparse-index vacuum.
-	envDisableCheckpointAutoVacuum   = "TREEDB_DISABLE_CHECKPOINT_AUTO_VACUUM"
-	minMemtablePrealloc              = 64 * 1024
-	maxMemtablePrealloc              = 256 << 20
-	adaptiveMinWrites                = 1024
-	adaptiveSequentialWritePct       = 0.85
-	adaptiveRangeIteratorPct         = 0.40
-	adaptiveOverwriteWritePct        = 0.25
-	adaptiveWarmupBytes              = 16 * 1024 * 1024
-	maxMemtableBytesPerShard         = int64(3 << 30)
-	maxOuterLeafArenaPoolCap         = 16 << 20
-	outerLeafBlobRefStackScratchCap  = 256
-	maxOuterLeafEncoderRawScratchCap = 2 << 20
-	maxOuterLeafEncoderEncScratchCap = 2 << 20
-	maxOuterLeafEncoderRestartsCap   = 1 << 15
-	maxVlogPreparedBodyPoolCap       = 8 << 20
-	maxVlogPreparedFramesPoolCap     = 1 << 14
-	maxVlogDictPrepareResultsPoolCap = 1 << 14
+	envDisableCheckpointAutoVacuum                                 = "TREEDB_DISABLE_CHECKPOINT_AUTO_VACUUM"
+	minMemtablePrealloc                                            = 64 * 1024
+	leafGenerationPackMaintenanceDefaultMaxBytesToCopy             = 256 << 20
+	leafGenerationPackMaintenanceDefaultMaxGenerations             = 8
+	leafGenerationPackMaintenanceDefaultMinPublishedAgeSeq         = 1
+	leafGenerationPackMaintenanceDefaultMinCandidateGenerations    = 2
+	leafGenerationPackMaintenanceDefaultTimeout                    = 30 * time.Second
+	leafGenerationPackMaintenanceDefaultWriteBurstGrace            = 250 * time.Millisecond
+	leafGenerationPackMaintenanceDefaultMaxForegroundQueue         = 2
+	leafGenerationPackMaintenanceDefaultMinReclaimPerByteCopiedPPM = 250000
+	maxMemtablePrealloc                                            = 256 << 20
+	appendOnlyEntryHintMinEntries                                  = 128
+	appendOnlyEntryHintMaxEntries                                  = 1 << 20
+	adaptiveMinWrites                                              = 1024
+	adaptiveSequentialWritePct                                     = 0.85
+	adaptiveRangeIteratorPct                                       = 0.40
+	adaptiveOverwriteWritePct                                      = 0.25
+	adaptiveBTreeMinIteratorSamplesDefault                         = 0
+	adaptiveWarmupBytes                                            = 16 * 1024 * 1024
+	maxMemtableBytesPerShard                                       = int64(3 << 30)
+	maxOuterLeafArenaPoolCap                                       = 16 << 20
+	outerLeafBlobRefStackScratchCap                                = 256
+	maxOuterLeafEncoderRawScratchCap                               = 2 << 20
+	maxOuterLeafEncoderEncScratchCap                               = 2 << 20
+	maxOuterLeafEncoderRestartsCap                                 = 1 << 15
+	maxVlogPreparedBodyPoolCap                                     = 8 << 20
+	maxVlogPreparedFramesPoolCap                                   = 1 << 14
+	maxVlogDictPrepareResultsPoolCap                               = 1 << 14
 )
 
 // SetIteratorDebug toggles attaching debug metadata to iterators returned by
@@ -822,6 +1984,22 @@ func envBool(name string) bool {
 	return false
 }
 
+func envUint64(name string, fallback uint64) uint64 {
+	v, ok := os.LookupEnv(name)
+	if !ok {
+		return fallback
+	}
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return fallback
+	}
+	n, err := strconv.ParseUint(v, 10, 64)
+	if err != nil {
+		return fallback
+	}
+	return n
+}
+
 func updateAtomicMaxUint64(dst *atomic.Uint64, value uint64) {
 	for {
 		cur := dst.Load()
@@ -839,11 +2017,73 @@ func (db *DB) hasDirtyValueLogLanes() bool {
 		return false
 	}
 	for i := range db.lanes {
-		if db.lanes[i].vlogDirty.Load() {
+		if db.lanes[i].vlogDirty.Load() || db.lanes[i].vlogSyncPending.Load() {
 			return true
 		}
 	}
 	return false
+}
+
+func (db *DB) markLaneValueLogBoundary(l *lane, totalBytes int64, flushedBoundary, syncedBoundary bool) {
+	if l == nil {
+		return
+	}
+	if syncedBoundary {
+		l.vlogDirty.Store(false)
+		l.vlogSyncPending.Store(false)
+		return
+	}
+	if totalBytes <= 0 {
+		return
+	}
+	if flushedBoundary {
+		l.vlogDirty.Store(false)
+	} else {
+		l.vlogDirty.Store(true)
+	}
+	if db == nil || db.relaxedSync {
+		l.vlogSyncPending.Store(false)
+		return
+	}
+	l.vlogSyncPending.Store(true)
+}
+
+func (db *DB) checkpointFlushValueLogLanes() error {
+	if db == nil || !db.splitValueLogEnabled() {
+		return nil
+	}
+	// Checkpoint is a durability boundary for cached mode. Ensure any buffered
+	// value-log bytes are visible before publishing pointers durably to the backend.
+	flushOnly := db.relaxedSync
+	for i := range db.lanes {
+		l := &db.lanes[i]
+		if !l.vlogDirty.Load() && !l.vlogSyncPending.Load() {
+			continue
+		}
+		l.vlogMu.Lock()
+		w := l.vlog
+		var err error
+		syncBoundary := l.vlogSyncPending.Load() && !flushOnly
+		if w != nil {
+			if syncBoundary {
+				err = w.Sync()
+			} else {
+				err = w.Flush()
+			}
+		}
+		if err == nil {
+			l.vlogDirty.Store(false)
+			if syncBoundary || flushOnly {
+				l.vlogSyncPending.Store(false)
+			}
+			l.backendReadFlushedSeq.Store(l.backendReadDirtySeq.Load())
+		}
+		l.vlogMu.Unlock()
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (db *DB) syncDirBestEffort(dir string) {
@@ -993,6 +2233,31 @@ func (db *DB) splitValueLogEnabled() bool {
 	return true
 }
 
+// ReserveValueLogRIDs reserves a contiguous RID range from the cached-mode
+// shared allocator and returns the starting RID.
+func (db *DB) ReserveValueLogRIDs(count int) (uint64, error) {
+	if db == nil {
+		return 0, fmt.Errorf("value-log rid allocator unavailable")
+	}
+	if count <= 0 {
+		return 0, fmt.Errorf("value-log rid allocator requires positive count: count=%d", count)
+	}
+	need := uint64(count)
+	for {
+		cur := db.nextRID.Load()
+		if need > (^uint64(0) - cur) {
+			return 0, fmt.Errorf("value-log rid space exhausted")
+		}
+		next := cur + need
+		if next == 0 || next < cur {
+			return 0, fmt.Errorf("value-log rid space exhausted")
+		}
+		if db.nextRID.CompareAndSwap(cur, next) {
+			return cur + 1, nil
+		}
+	}
+}
+
 func (db *DB) valueLogThresholdForKey(key []byte) int {
 	if db == nil {
 		return page.DefaultInlineThreshold
@@ -1032,8 +2297,167 @@ func (db *DB) buildOuterLeafValueRecords(keys [][]byte, values [][]byte) ([]valu
 	return records, groups, nil, nil
 }
 
-func fallbackAutoVlogWriteMode(mode vlogCompressionMode, writeMode vlogCompressionWriteMode) vlogCompressionWriteMode {
-	if mode == vlogCompressionAuto && writeMode == vlogWriteDict {
+type valueLogDictClassRange struct {
+	start int
+	end   int
+	class vlogDictClass
+}
+
+func (db *DB) valueLogDictClassRangesForRecords(records []valuelog.Record) []valueLogDictClassRange {
+	if len(records) == 0 {
+		return nil
+	}
+	ranges := make([]valueLogDictClassRange, 0, 4)
+	start := 0
+	class := db.valueLogDictClassForValue(records[0].Value)
+	for i := 1; i < len(records); i++ {
+		nextClass := db.valueLogDictClassForValue(records[i].Value)
+		if nextClass == class {
+			continue
+		}
+		ranges = append(ranges, valueLogDictClassRange{
+			start: start,
+			end:   i,
+			class: class,
+		})
+		start = i
+		class = nextClass
+	}
+	ranges = append(ranges, valueLogDictClassRange{
+		start: start,
+		end:   len(records),
+		class: class,
+	})
+	return ranges
+}
+
+func (db *DB) appendValueLogForRecords(l *lane, records []valuelog.Record, durability journalDurability) ([]page.ValuePtr, error) {
+	if len(records) == 0 {
+		return nil, nil
+	}
+	if db != nil && db.dictStore == nil {
+		return db.appendValueLog(l, 0, nil, records, durability)
+	}
+	ranges := db.valueLogDictClassRangesForRecords(records)
+	if len(ranges) == 0 {
+		return nil, nil
+	}
+	resolveDictID := func(class vlogDictClass, cache *[vlogDictClassCount]uint64, cached *[vlogDictClassCount]bool) (uint64, error) {
+		if db == nil || db.dictStore == nil {
+			return 0, nil
+		}
+		classIdx := int(class)
+		if classIdx < 0 || classIdx >= vlogDictClassCount {
+			classIdx = int(vlogDictClassSingleValue)
+			class = vlogDictClassSingleValue
+		}
+		if cached[classIdx] {
+			return cache[classIdx], nil
+		}
+		id, err := db.currentDictIDForClass(context.Background(), class)
+		if err != nil {
+			return 0, err
+		}
+		cache[classIdx] = id
+		cached[classIdx] = true
+		return id, nil
+	}
+
+	var (
+		dictIDCache  [vlogDictClassCount]uint64
+		dictIDCached [vlogDictClassCount]bool
+	)
+	if len(ranges) == 1 {
+		dictID, err := resolveDictID(ranges[0].class, &dictIDCache, &dictIDCached)
+		if err != nil {
+			return nil, err
+		}
+		return db.appendValueLog(l, dictID, nil, records, durability)
+	}
+	// Highly alternating class layouts can explode contiguous ranges and
+	// degrade batching. Re-pack by class to bound append calls.
+	if len(ranges) > 8 {
+		var (
+			classRecords [vlogDictClassCount][]valuelog.Record
+			classIndexes [vlogDictClassCount][]int
+		)
+		for i := range ranges {
+			r := ranges[i]
+			classIdx := int(r.class)
+			if classIdx < 0 || classIdx >= vlogDictClassCount {
+				classIdx = int(vlogDictClassSingleValue)
+			}
+			classRecords[classIdx] = append(classRecords[classIdx], records[r.start:r.end]...)
+			idxs := classIndexes[classIdx]
+			for j := r.start; j < r.end; j++ {
+				idxs = append(idxs, j)
+			}
+			classIndexes[classIdx] = idxs
+		}
+		ptrs := getValueLogPtrsCap(len(records))
+		ptrs = ptrs[:len(records)]
+		for classIdx := 0; classIdx < vlogDictClassCount; classIdx++ {
+			recs := classRecords[classIdx]
+			if len(recs) == 0 {
+				continue
+			}
+			dictID, err := resolveDictID(vlogDictClass(classIdx), &dictIDCache, &dictIDCached)
+			if err != nil {
+				putValueLogPtrs(ptrs)
+				return nil, err
+			}
+			segPtrs, err := db.appendValueLog(l, dictID, nil, recs, durability)
+			if err != nil {
+				putValueLogPtrs(ptrs)
+				return nil, err
+			}
+			if len(segPtrs) != len(recs) {
+				putValueLogPtrs(segPtrs)
+				putValueLogPtrs(ptrs)
+				return nil, fmt.Errorf("cachingdb: value-log segment returned %d ptrs for %d records", len(segPtrs), len(recs))
+			}
+			idxs := classIndexes[classIdx]
+			for j := 0; j < len(segPtrs); j++ {
+				ptrs[idxs[j]] = segPtrs[j]
+			}
+			putValueLogPtrs(segPtrs)
+		}
+		return ptrs, nil
+	}
+
+	ptrs := getValueLogPtrsCap(len(records))
+	ptrs = ptrs[:len(records)]
+	for i := range ranges {
+		r := ranges[i]
+		dictID, err := resolveDictID(r.class, &dictIDCache, &dictIDCached)
+		if err != nil {
+			putValueLogPtrs(ptrs)
+			return nil, err
+		}
+		segPtrs, err := db.appendValueLog(l, dictID, nil, records[r.start:r.end], durability)
+		if err != nil {
+			putValueLogPtrs(ptrs)
+			return nil, err
+		}
+		if len(segPtrs) != r.end-r.start {
+			putValueLogPtrs(segPtrs)
+			putValueLogPtrs(ptrs)
+			return nil, fmt.Errorf("cachingdb: value-log segment returned %d ptrs for %d records", len(segPtrs), r.end-r.start)
+		}
+		copy(ptrs[r.start:r.end], segPtrs)
+		putValueLogPtrs(segPtrs)
+	}
+	return ptrs, nil
+}
+
+func fallbackAutoVlogWriteMode(mode vlogCompressionMode, writeMode vlogCompressionWriteMode, allowDictFallback bool) vlogCompressionWriteMode {
+	if writeMode != vlogWriteDict {
+		return writeMode
+	}
+	if mode == vlogCompressionAuto {
+		return vlogWriteBlock
+	}
+	if mode == vlogCompressionDict && allowDictFallback {
 		return vlogWriteBlock
 	}
 	return writeMode
@@ -1162,6 +2586,29 @@ func (db *DB) releaseLaneSync(l *lane) {
 	db.laneMu.Unlock()
 }
 
+func (db *DB) valueLogDirForLane(l *lane) string {
+	if db == nil {
+		return ""
+	}
+	if l != nil && db.indexOuterLeavesInValueLog && l == &db.leafLog && l.id == leafLogLaneID && db.leafLogDir != "" {
+		return db.leafLogDir
+	}
+	return db.valueLogDir
+}
+
+func (db *DB) valueLogLaneByID(laneID int) *lane {
+	if db == nil || laneID < 0 {
+		return nil
+	}
+	if laneID < len(db.lanes) {
+		return &db.lanes[laneID]
+	}
+	if laneID == leafLogLaneID && db.indexOuterLeavesInValueLog {
+		return &db.leafLog
+	}
+	return nil
+}
+
 func (db *DB) currentValueLogPath(l *lane) string {
 	if l == nil {
 		return ""
@@ -1214,7 +2661,7 @@ func (db *DB) currentValueLogPaths() []string {
 	if db == nil || !db.valueLogEnabled() {
 		return nil
 	}
-	paths := make([]string, 0, len(db.lanes))
+	paths := make([]string, 0, len(db.lanes)+1)
 	for i := range db.lanes {
 		l := &db.lanes[i]
 		if db.splitValueLogEnabled() {
@@ -1230,6 +2677,13 @@ func (db *DB) currentValueLogPaths() []string {
 			paths = append(paths, l.walPath)
 		}
 		l.walMu.Unlock()
+	}
+	if db.indexOuterLeavesInValueLog && db.splitValueLogEnabled() {
+		db.leafLog.vlogMu.Lock()
+		if db.leafLog.vlogPath != "" {
+			paths = append(paths, db.leafLog.vlogPath)
+		}
+		db.leafLog.vlogMu.Unlock()
 	}
 	return paths
 }
@@ -1289,14 +2743,6 @@ func (db *DB) rewriteValueLogOpsForBackend(ops []batch.Entry, durability journal
 		return nil, err
 	}
 
-	// Best-effort: use the current dict when available.
-	dictID := uint64(0)
-	if db.dictStore != nil {
-		if id, err := db.currentDictID(context.Background()); err == nil {
-			dictID = id
-		}
-	}
-
 	keys := getValueLogKeys(len(eligible))
 	defer putValueLogKeys(keys)
 	values := getValueLogKeys(len(eligible))
@@ -1317,7 +2763,7 @@ func (db *DB) rewriteValueLogOpsForBackend(ops []batch.Entry, durability journal
 	for i := range records {
 		records[i].RID = startRID + uint64(i)
 	}
-	ptrs, err := db.appendValueLog(lane, dictID, nil, records, durability)
+	ptrs, err := db.appendValueLogForRecords(lane, records, durability)
 	if err != nil {
 		putValueLogRecordsNoClear(records)
 		putOuterLeafArena(outerArena)
@@ -1359,14 +2805,31 @@ func (db *DB) rewriteValueLogOpsForBackend(ops []batch.Entry, durability journal
 	return ops, nil
 }
 
+type backendBatchReserveHint interface {
+	Reserve(int)
+}
+
+type backendBatchSetViewer interface {
+	SetView(key, value []byte) error
+}
+
+type backendBatchDeleteViewer interface {
+	DeleteView(key []byte) error
+}
+
+type backendBatchPointerSetter interface {
+	SetPointer(key []byte, ptr page.ValuePtr) error
+}
+
+type backendBatchPointerSetterView interface {
+	SetPointerView(key []byte, ptr page.ValuePtr) error
+}
+
 func reserveBackendBatchOps(backendBatch batch.Interface, n int) {
 	if backendBatch == nil || n <= 0 {
 		return
 	}
-	type reserveHint interface {
-		Reserve(int)
-	}
-	if r, ok := backendBatch.(reserveHint); ok {
+	if r, ok := backendBatch.(backendBatchReserveHint); ok {
 		r.Reserve(n)
 	}
 }
@@ -1390,24 +2853,10 @@ func (db *DB) flushDeferredValueLogMemtable(
 
 	allowPointers := db.allowValueLogPointers()
 
-	type (
-		setViewer interface {
-			SetView(key, value []byte) error
-		}
-		deleteViewer interface {
-			DeleteView(key []byte) error
-		}
-		ptrSetter interface {
-			SetPointer(key []byte, ptr page.ValuePtr) error
-		}
-		ptrSetterView interface {
-			SetPointerView(key []byte, ptr page.ValuePtr) error
-		}
-	)
-	sv, _ := backendBatch.(setViewer)
-	dv, _ := backendBatch.(deleteViewer)
-	psv, _ := backendBatch.(ptrSetterView)
-	ps, _ := backendBatch.(ptrSetter)
+	sv, _ := backendBatch.(backendBatchSetViewer)
+	dv, _ := backendBatch.(backendBatchDeleteViewer)
+	psv, _ := backendBatch.(backendBatchPointerSetterView)
+	ps, _ := backendBatch.(backendBatchPointerSetter)
 	reserveHint := memLen
 	if db.flushBackendMaxEntries > 0 && reserveHint > db.flushBackendMaxEntries {
 		reserveHint = db.flushBackendMaxEntries
@@ -1428,10 +2877,6 @@ func (db *DB) flushDeferredValueLogMemtable(
 	}
 
 	vlogLane := (*lane)(nil)
-	var (
-		dictID      uint64
-		dictIDReady bool
-	)
 	ensureVlogLane := func() error {
 		if vlogLane != nil {
 			return nil
@@ -1441,14 +2886,6 @@ func (db *DB) flushDeferredValueLogMemtable(
 			return err
 		}
 		vlogLane = l
-		if !dictIDReady {
-			if db.dictStore != nil {
-				if id, err := db.currentDictID(context.Background()); err == nil {
-					dictID = id
-				}
-			}
-			dictIDReady = true
-		}
 		return nil
 	}
 
@@ -1554,7 +2991,7 @@ func (db *DB) flushDeferredValueLogMemtable(
 		records[i].RID = startRID + uint64(i)
 	}
 
-	ptrs, err := db.appendValueLog(vlogLane, dictID, nil, records, durability)
+	ptrs, err := db.appendValueLogForRecords(vlogLane, records, durability)
 	if err != nil {
 		return 0, err
 	}
@@ -1608,24 +3045,10 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 		return 0, errors.New("cachingdb: missing backend batch")
 	}
 
-	type (
-		setViewer interface {
-			SetView(key, value []byte) error
-		}
-		deleteViewer interface {
-			DeleteView(key []byte) error
-		}
-		ptrSetter interface {
-			SetPointer(key []byte, ptr page.ValuePtr) error
-		}
-		ptrSetterView interface {
-			SetPointerView(key []byte, ptr page.ValuePtr) error
-		}
-	)
-	sv, _ := backendBatch.(setViewer)
-	dv, _ := backendBatch.(deleteViewer)
-	psv, _ := backendBatch.(ptrSetterView)
-	ps, _ := backendBatch.(ptrSetter)
+	sv, _ := backendBatch.(backendBatchSetViewer)
+	dv, _ := backendBatch.(backendBatchDeleteViewer)
+	psv, _ := backendBatch.(backendBatchPointerSetterView)
+	ps, _ := backendBatch.(backendBatchPointerSetter)
 
 	chunkCap := db.flushBuildChunkCap
 	if chunkCap <= 0 {
@@ -1692,10 +3115,6 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 
 	backendPendingOps := 0
 	vlogLane := (*lane)(nil)
-	var (
-		dictID      uint64
-		dictIDReady bool
-	)
 	ensureVlogLane := func() error {
 		if vlogLane != nil {
 			return nil
@@ -1705,14 +3124,6 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 			return err
 		}
 		vlogLane = l
-		if !dictIDReady {
-			if db.dictStore != nil {
-				if id, err := db.currentDictID(context.Background()); err == nil {
-					dictID = id
-				}
-			}
-			dictIDReady = true
-		}
 		return nil
 	}
 
@@ -1771,7 +3182,7 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 				records[i].RID = startRID + uint64(i)
 			}
 
-			ptrs, err := db.appendValueLog(vlogLane, dictID, nil, records, durability)
+			ptrs, err := db.appendValueLogForRecords(vlogLane, records, durability)
 			putValueLogRecordsNoClear(records)
 			putOuterLeafArena(outerArena)
 			if err != nil {
@@ -1810,6 +3221,8 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 		return nil
 	}
 
+	shadowedOps := 0
+	appliedOps := 0
 	for len(heap) > 0 {
 		top := heap.pop()
 		currentKey := top.key
@@ -1818,6 +3231,7 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 			next := heap.peek()
 			if next != nil && bytes.Equal(next.key, currentKey) {
 				shadowed := heap.pop()
+				shadowedOps++
 				shadowed.iter.Next()
 				if shadowed.iter.Valid() {
 					shadowed.key = shadowed.iter.Key()
@@ -1844,6 +3258,7 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 				return 0, err
 			}
 			backendPendingOps++
+			appliedOps++
 		case entry.IsPtr:
 			if err := flushInlinePointerGroup(); err != nil {
 				return 0, err
@@ -1876,6 +3291,7 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 					return 0, err
 				}
 				backendPendingOps++
+				appliedOps++
 			}
 		}
 
@@ -1897,6 +3313,14 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 			db.markValueLogRetain(retainPath)
 		}
 	}
+	if shadowedOps > 0 {
+		flushMergeShadowedOpsTotal.Add(uint64(shadowedOps))
+		flushMergeDeferredShadowedOpsTotal.Add(uint64(shadowedOps))
+	}
+	if appliedOps > 0 {
+		flushMergeAppliedOpsTotal.Add(uint64(appliedOps))
+		flushMergeDeferredAppliedOpsTotal.Add(uint64(appliedOps))
+	}
 	return backendPendingOps, nil
 }
 
@@ -1908,9 +3332,40 @@ func (db *DB) SetDictStore(store DictStore) {
 	db.dictStore = store
 	db.dictCurrentCached.Store(0)
 	db.dictCurrentOps.Store(0)
+	for class := 0; class < vlogDictClassCount; class++ {
+		db.dictCurrentCachedByClass[class].Store(0)
+		db.dictCurrentOpsByClass[class].Store(0)
+	}
 	if store != nil {
+		globalCurrent := uint64(0)
 		if dictID, err := store.GetCurrent(context.Background()); err == nil {
 			db.dictCurrentCached.Store(dictID)
+			db.dictCurrentCachedByClass[vlogDictClassSingleValue].Store(dictID)
+			globalCurrent = dictID
+		}
+		if db.dictClassMode() == vlogDictClassModeSplitOuterLeaf {
+			byClass, hasClassReader := store.(dictStoreCurrentByClass)
+			_, hasClassWriter := store.(dictStoreWriterByClass)
+			if hasClassReader && hasClassWriter {
+				for class := 0; class < vlogDictClassCount; class++ {
+					clampedClass := vlogDictClass(class)
+					dictID, err := byClass.GetCurrentForClass(context.Background(), vlogDictClassSuffix(clampedClass))
+					if err != nil {
+						continue
+					}
+					if dictID == 0 {
+						dictID = globalCurrent
+					}
+					if dictID == 0 {
+						continue
+					}
+					db.dictCurrentCachedByClass[class].Store(dictID)
+					if clampedClass == vlogDictClassSingleValue {
+						db.dictCurrentCached.Store(dictID)
+						globalCurrent = dictID
+					}
+				}
+			}
 		}
 	}
 	db.valueLogDictBytesMu.Lock()
@@ -1959,11 +3414,52 @@ func (db *DB) templateLookup(ctx context.Context, templateID uint64) ([]byte, er
 }
 
 func (db *DB) currentDictID(ctx context.Context) (uint64, error) {
+	return db.currentDictIDForClass(ctx, vlogDictClassSingleValue)
+}
+
+func (db *DB) currentDictIDForClass(ctx context.Context, class vlogDictClass) (uint64, error) {
 	if db == nil || db.dictStore == nil {
 		return 0, nil
 	}
-	// Avoid per-write dictdb reads on the hot path; refresh every N uses.
 	const refreshEvery = uint64(1 << 16)
+	clampedClass := class
+	classIdx := int(clampedClass)
+	if classIdx < 0 || classIdx >= vlogDictClassCount {
+		clampedClass = vlogDictClassSingleValue
+		classIdx = int(clampedClass)
+	}
+	if db.dictClassMode() == vlogDictClassModeSplitOuterLeaf {
+		byClass, hasClassReader := db.dictStore.(dictStoreCurrentByClass)
+		_, hasClassWriter := db.dictStore.(dictStoreWriterByClass)
+		if hasClassReader && hasClassWriter {
+			seq := db.dictCurrentOpsByClass[classIdx].Add(1)
+			if seq&(refreshEvery-1) != 0 {
+				return db.dictCurrentCachedByClass[classIdx].Load(), nil
+			}
+			dictID, err := byClass.GetCurrentForClass(ctx, vlogDictClassSuffix(clampedClass))
+			if err != nil {
+				// Fall back to cached value on transient errors (best-effort).
+				return db.dictCurrentCachedByClass[classIdx].Load(), nil
+			}
+			if dictID == 0 {
+				// Class marker can legitimately be unset; refresh legacy global current.
+				globalDictID, globalErr := db.dictStore.GetCurrent(ctx)
+				if globalErr != nil {
+					dictID = db.dictCurrentCached.Load()
+				} else {
+					dictID = globalDictID
+					db.dictCurrentCached.Store(globalDictID)
+					db.dictCurrentCachedByClass[vlogDictClassSingleValue].Store(globalDictID)
+				}
+			}
+			db.dictCurrentCachedByClass[classIdx].Store(dictID)
+			if clampedClass == vlogDictClassSingleValue {
+				db.dictCurrentCached.Store(dictID)
+			}
+			return dictID, nil
+		}
+	}
+	// Avoid per-write dictdb reads on the hot path; refresh every N uses.
 	seq := db.dictCurrentOps.Add(1)
 	if seq&(refreshEvery-1) != 0 {
 		return db.dictCurrentCached.Load(), nil
@@ -1974,6 +3470,8 @@ func (db *DB) currentDictID(ctx context.Context) (uint64, error) {
 		return db.dictCurrentCached.Load(), nil
 	}
 	db.dictCurrentCached.Store(dictID)
+	db.dictCurrentCachedByClass[classIdx].Store(dictID)
+	db.dictCurrentCachedByClass[vlogDictClassSingleValue].Store(dictID)
 	return dictID, nil
 }
 
@@ -2091,7 +3589,7 @@ func (db *DB) readValueLogAppend(key []byte, ptr page.ValuePtr, dst []byte) ([]b
 			return nil, err
 		}
 	}
-	return db.valueLogReader.ReadAppend(ptr, dst[:0])
+	return db.valueLogReader.ReadAppend(ptr, dst)
 }
 
 func (db *DB) flushValueLogForPtr(ptr page.ValuePtr) error {
@@ -2099,10 +3597,10 @@ func (db *DB) flushValueLogForPtr(ptr page.ValuePtr) error {
 		return nil
 	}
 	laneID, seq := valuelog.DecodeFileID(ptr.FileID)
-	if laneID >= uint32(len(db.lanes)) {
+	l := db.valueLogLaneByID(int(laneID))
+	if l == nil {
 		return nil
 	}
-	l := &db.lanes[laneID]
 	currentSeq := db.currentValueLogSeq(l)
 	if currentSeq == int(seq) {
 		return db.flushValueLogLane(l)
@@ -2139,8 +3637,13 @@ func (db *DB) flushValueLog(laneIDs ...int) error {
 	return nil
 }
 
-func (db *DB) flushDeferredValueLogForBackendRead() error {
-	if db == nil || !db.deferredValueLogEnabled() || !db.valueLogEnabled() {
+// flushValueLogForBackendRead makes value-log bytes visible to backend reads
+// once pointer-bearing backend keys may already reference them. This matters
+// even when deferred value-log mode is disabled: durability-none grouped
+// appends can leave the current segment tail buffered in-process while backend
+// keys already point at those records.
+func (db *DB) flushValueLogForBackendRead() error {
+	if db == nil || !db.valueLogEnabled() {
 		return nil
 	}
 	dirtySeq := db.backendReadVlogDirtySeq.Load()
@@ -2152,6 +3655,177 @@ func (db *DB) flushDeferredValueLogForBackendRead() error {
 	}
 	db.backendReadVlogFlushedSeq.Store(dirtySeq)
 	return nil
+}
+
+type valueLogReadBarrierSetter interface {
+	SetCurrentValueLogReadBarrier(func(fileID uint32) error)
+}
+
+func backendValueLogReadBarrierKey(backend any) uintptr {
+	if backend == nil {
+		return 0
+	}
+	v := reflect.ValueOf(backend)
+	if !v.IsValid() {
+		return 0
+	}
+	switch v.Kind() {
+	case reflect.Pointer, reflect.UnsafePointer:
+		return v.Pointer()
+	default:
+		return 0
+	}
+}
+
+func registerBackendValueLogReadBarrierDB(key uintptr, db *DB) {
+	if key == 0 || db == nil {
+		return
+	}
+	backendValueLogReadBarrierRegistryMu.Lock()
+	owners := backendValueLogReadBarrierRegistry[key]
+	if owners == nil {
+		owners = &backendValueLogReadBarrierOwners{
+			set: make(map[*DB]struct{}),
+		}
+		backendValueLogReadBarrierRegistry[key] = owners
+	}
+	if _, exists := owners.set[db]; !exists {
+		owners.set[db] = struct{}{}
+		rebuildBackendValueLogReadBarrierSnapshot(owners)
+	}
+	backendValueLogReadBarrierRegistryMu.Unlock()
+}
+
+func unregisterBackendValueLogReadBarrierDB(key uintptr, db *DB) int {
+	if key == 0 || db == nil {
+		return 0
+	}
+	backendValueLogReadBarrierRegistryMu.Lock()
+	defer backendValueLogReadBarrierRegistryMu.Unlock()
+	owners := backendValueLogReadBarrierRegistry[key]
+	if owners == nil {
+		return 0
+	}
+	delete(owners.set, db)
+	if len(owners.set) == 0 {
+		delete(backendValueLogReadBarrierRegistry, key)
+		return 0
+	}
+	rebuildBackendValueLogReadBarrierSnapshot(owners)
+	return len(owners.snapshot)
+}
+
+func rebuildBackendValueLogReadBarrierSnapshot(owners *backendValueLogReadBarrierOwners) {
+	if owners == nil {
+		return
+	}
+	if len(owners.set) == 0 {
+		owners.snapshot = nil
+		return
+	}
+	snapshot := make([]*DB, 0, len(owners.set))
+	for db := range owners.set {
+		snapshot = append(snapshot, db)
+	}
+	owners.snapshot = snapshot
+}
+
+func snapshotBackendValueLogReadBarrierDBs(key uintptr) []*DB {
+	if key == 0 {
+		return nil
+	}
+	backendValueLogReadBarrierRegistryMu.Lock()
+	owners := backendValueLogReadBarrierRegistry[key]
+	var dbs []*DB
+	if owners != nil && len(owners.snapshot) > 0 {
+		dbs = owners.snapshot
+	}
+	backendValueLogReadBarrierRegistryMu.Unlock()
+	return dbs
+}
+
+func dispatchBackendValueLogReadBarrier(key uintptr, fileID uint32) error {
+	dbs := snapshotBackendValueLogReadBarrierDBs(key)
+	if len(dbs) == 0 {
+		return nil
+	}
+	laneID, seq := valuelog.DecodeFileID(fileID)
+	var firstErr error
+	flushedAny := false
+	for _, db := range dbs {
+		if db == nil || db.closing.Load() {
+			continue
+		}
+		l := db.valueLogLaneByID(int(laneID))
+		if l == nil {
+			continue
+		}
+		// Reads against sealed segments do not need a lane flush barrier.
+		if db.currentValueLogSeq(l) != int(seq) {
+			continue
+		}
+		if l.backendReadDirtySeq.Load() == l.backendReadFlushedSeq.Load() {
+			continue
+		}
+		if err := db.flushValueLogLane(l); err != nil {
+			if errors.Is(err, errWALUnavailable) {
+				continue
+			}
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		flushedAny = true
+	}
+	if flushedAny {
+		return nil
+	}
+	return firstErr
+}
+
+func (db *DB) installBackendValueLogReadBarrier() {
+	if db == nil {
+		return
+	}
+	barrierSetter, ok := db.backend.(valueLogReadBarrierSetter)
+	if !ok {
+		return
+	}
+	key := backendValueLogReadBarrierKey(db.backend)
+	if key == 0 {
+		barrierSetter.SetCurrentValueLogReadBarrier(func(fileID uint32) error {
+			laneID, _ := valuelog.DecodeFileID(fileID)
+			l := db.valueLogLaneByID(int(laneID))
+			if l == nil {
+				return nil
+			}
+			return db.flushValueLogLane(l)
+		})
+		return
+	}
+	registerBackendValueLogReadBarrierDB(key, db)
+	barrierSetter.SetCurrentValueLogReadBarrier(func(fileID uint32) error {
+		return dispatchBackendValueLogReadBarrier(key, fileID)
+	})
+}
+
+func (db *DB) clearBackendValueLogReadBarrier() {
+	if db == nil {
+		return
+	}
+	barrierSetter, ok := db.backend.(valueLogReadBarrierSetter)
+	if !ok {
+		return
+	}
+	key := backendValueLogReadBarrierKey(db.backend)
+	if key == 0 {
+		barrierSetter.SetCurrentValueLogReadBarrier(nil)
+		return
+	}
+	if remaining := unregisterBackendValueLogReadBarrierDB(key, db); remaining == 0 {
+		barrierSetter.SetCurrentValueLogReadBarrier(nil)
+	}
 }
 
 func (db *DB) syncValueLog(laneIDs ...int) error {
@@ -2198,8 +3872,10 @@ func (db *DB) flushValueLogLane(l *lane) error {
 		}
 		// Always take vlogMu first so flush acts as a write barrier for in-flight appends.
 		if !l.vlogDirty.Load() {
-			l.vlogMu.Unlock()
-			return nil
+			if pending, ok := w.(interface{ PendingBytes() int }); !ok || pending.PendingBytes() == 0 {
+				l.vlogMu.Unlock()
+				return nil
+			}
 		}
 		start := time.Now()
 		err := w.Flush()
@@ -2209,6 +3885,10 @@ func (db *DB) flushValueLogLane(l *lane) error {
 		db.debugVlogTiming("vlog_flush", int(l.id), "vlogMu", waited, time.Since(start))
 		if err == nil {
 			l.vlogDirty.Store(false)
+			if db.relaxedSync {
+				l.vlogSyncPending.Store(false)
+			}
+			l.backendReadFlushedSeq.Store(l.backendReadDirtySeq.Load())
 		}
 		l.vlogMu.Unlock()
 		return err
@@ -2227,6 +3907,9 @@ func (db *DB) flushValueLogLane(l *lane) error {
 		db.testOnVlogFlush(int(l.id))
 	}
 	db.debugVlogTiming("wal_flush", int(l.id), "walMu", waited, time.Since(start))
+	if err == nil {
+		l.backendReadFlushedSeq.Store(l.backendReadDirtySeq.Load())
+	}
 	l.walMu.Unlock()
 	return err
 }
@@ -2252,6 +3935,8 @@ func (db *DB) syncValueLogLane(l *lane) error {
 		db.debugVlogTiming("vlog_sync", int(l.id), "vlogMu", waited, time.Since(start))
 		if err == nil {
 			l.vlogDirty.Store(false)
+			l.vlogSyncPending.Store(false)
+			l.backendReadFlushedSeq.Store(l.backendReadDirtySeq.Load())
 		}
 		l.vlogMu.Unlock()
 		return err
@@ -2270,6 +3955,9 @@ func (db *DB) syncValueLogLane(l *lane) error {
 		db.testOnVlogSync(int(l.id))
 	}
 	db.debugVlogTiming("wal_sync", int(l.id), "walMu", waited, time.Since(start))
+	if err == nil {
+		l.backendReadFlushedSeq.Store(l.backendReadDirtySeq.Load())
+	}
 	l.walMu.Unlock()
 	return err
 }
@@ -2355,7 +4043,7 @@ func (db *DB) cleanupOrphanedRetainedValueLog(path string) bool {
 	db.untrackValueLogSegmentLocked(path)
 	db.mu.Unlock()
 	db.forgetValueLogRetain(path)
-	db.syncDirBestEffort(db.dir)
+	db.syncDirBestEffort(filepath.Dir(path))
 	return true
 }
 
@@ -2433,6 +4121,18 @@ func (db *DB) valueLogRetainedStatsDetailed() valueLogRetainedGenerationStats {
 			}
 			l.vlogMu.Unlock()
 		}
+		if db.indexOuterLeavesInValueLog {
+			db.leafLog.vlogMu.Lock()
+			for path, size := range db.leafLog.vlogClosedSizes {
+				pathSizes[path] = size
+				pathClasses[path] = db.leafLog.vlogGenerationClass
+			}
+			if db.leafLog.vlogPath != "" {
+				currentSizes[db.leafLog.vlogPath] = db.leafLog.vlogLiveBytes.Load()
+				pathClasses[db.leafLog.vlogPath] = db.leafLog.vlogGenerationClass
+			}
+			db.leafLog.vlogMu.Unlock()
+		}
 	} else {
 		for i := range db.lanes {
 			l := &db.lanes[i]
@@ -2497,38 +4197,68 @@ func (db *DB) ValueLogRetainedPaths() []string {
 	return db.valueLogRetainedPaths()
 }
 
+func mergeUniqueNonEmptyStrings(pathSets ...[]string) []string {
+	seen := make(map[string]struct{})
+	var out []string
+	for _, paths := range pathSets {
+		for _, path := range paths {
+			if path == "" {
+				continue
+			}
+			if _, ok := seen[path]; ok {
+				continue
+			}
+			seen[path] = struct{}{}
+			out = append(out, path)
+		}
+	}
+	return out
+}
+
+func (db *DB) isLeafValueLogPath(path string) bool {
+	if db == nil || !db.indexOuterLeavesInValueLog || db.leafLogDir == "" || path == "" {
+		return false
+	}
+	return filepath.Clean(filepath.Dir(path)) == filepath.Clean(db.leafLogDir)
+}
+
+func (db *DB) valueOnlyLogPaths(paths []string) []string {
+	if len(paths) == 0 {
+		return nil
+	}
+	if db == nil || !db.indexOuterLeavesInValueLog {
+		return append([]string(nil), paths...)
+	}
+	out := make([]string, 0, len(paths))
+	for _, path := range paths {
+		if path == "" || db.isLeafValueLogPath(path) {
+			continue
+		}
+		out = append(out, path)
+	}
+	return out
+}
+
+func (db *DB) valueLogGCProtectedPathSets() (retained []string, inUse []string, merged []string) {
+	retained = db.valueOnlyLogPaths(db.valueLogRetainedPaths())
+	inUse = db.valueOnlyLogPaths(db.valueLogInUsePaths())
+	merged = mergeUniqueNonEmptyStrings(retained, inUse)
+	return retained, inUse, merged
+}
+
 func (db *DB) valueLogProtectedPaths() []string {
-	retained := db.valueLogRetainedPaths()
-	inUse := db.valueLogInUsePaths()
-	if len(retained) == 0 {
-		return inUse
+	_, _, merged := db.valueLogGCProtectedPathSets()
+	return merged
+}
+
+func (db *DB) valueLogGCOptions(dryRun bool) backenddb.ValueLogGCOptions {
+	retained, inUse, merged := db.valueLogGCProtectedPathSets()
+	return backenddb.ValueLogGCOptions{
+		DryRun:                 dryRun,
+		ProtectedPaths:         merged,
+		ProtectedInUsePaths:    inUse,
+		ProtectedRetainedPaths: retained,
 	}
-	if len(inUse) == 0 {
-		return retained
-	}
-	seen := make(map[string]struct{}, len(retained)+len(inUse))
-	paths := make([]string, 0, len(retained)+len(inUse))
-	for _, path := range retained {
-		if path == "" {
-			continue
-		}
-		if _, ok := seen[path]; ok {
-			continue
-		}
-		seen[path] = struct{}{}
-		paths = append(paths, path)
-	}
-	for _, path := range inUse {
-		if path == "" {
-			continue
-		}
-		if _, ok := seen[path]; ok {
-			continue
-		}
-		seen[path] = struct{}{}
-		paths = append(paths, path)
-	}
-	return paths
 }
 
 // valueLogInUsePaths returns a best-effort snapshot of value-log segment paths
@@ -2607,10 +4337,10 @@ func (db *DB) foregroundWritesResumedSince(lastWrite int64) bool {
 	if db == nil {
 		return false
 	}
+	current := db.lastForegroundWriteUnixNano.Load()
 	if lastWrite <= 0 {
 		return false
 	}
-	current := db.lastForegroundWriteUnixNano.Load()
 	return current > lastWrite
 }
 
@@ -2653,7 +4383,7 @@ func (db *DB) collectValueLogLiveIDsUntil(lastWrite int64) (map[uint32]struct{},
 					_ = snap.Close()
 					return nil, errForegroundWritesResumed
 				}
-				if err := collectLeafRefValueLogLiveIDs(leafCtx, p, state.RootPageID, reader, live); err != nil {
+				if err := collectLeafRefNestedValueLogLiveIDs(leafCtx, p, state.RootPageID, reader, live); err != nil {
 					if errors.Is(err, context.Canceled) {
 						err = errForegroundWritesResumed
 					}
@@ -2664,7 +4394,7 @@ func (db *DB) collectValueLogLiveIDsUntil(lastWrite int64) (map[uint32]struct{},
 					_ = snap.Close()
 					return nil, errForegroundWritesResumed
 				}
-				if err := collectLeafRefValueLogLiveIDs(leafCtx, p, state.SystemRootPageID, reader, live); err != nil {
+				if err := collectLeafRefNestedValueLogLiveIDs(leafCtx, p, state.SystemRootPageID, reader, live); err != nil {
 					if errors.Is(err, context.Canceled) {
 						err = errForegroundWritesResumed
 					}
@@ -2708,6 +4438,7 @@ func (db *DB) collectIteratorValueLogLiveIDsUntil(it iterator.UnsafeIterator, li
 	}
 	defer it.Close()
 	seen := 0
+	var outerLeafReadScratch []byte
 	for it.Valid() {
 		if seen > 0 && seen&foregroundWriteResumeCheckMask == 0 && db.foregroundWritesResumedSince(lastWrite) {
 			return errForegroundWritesResumed
@@ -2715,7 +4446,7 @@ func (db *DB) collectIteratorValueLogLiveIDsUntil(it iterator.UnsafeIterator, li
 		_, ptr, flags := it.UnsafeEntry()
 		if flags&node.FlagPointer != 0 && page.IsValueLogFileID(ptr.FileID) {
 			live[ptr.FileID] = struct{}{}
-			if err := db.collectNestedValueLogLiveIDsFromOuterLeaf(ptr, live); err != nil {
+			if err := db.collectNestedValueLogLiveIDsFromOuterLeaf(ptr, live, &outerLeafReadScratch); err != nil {
 				return err
 			}
 		}
@@ -2731,13 +4462,36 @@ func (db *DB) collectIteratorValueLogLiveIDsUntil(it iterator.UnsafeIterator, li
 	return nil
 }
 
-func (db *DB) collectNestedValueLogLiveIDsFromOuterLeaf(ptr page.ValuePtr, live map[uint32]struct{}) error {
+const nestedOuterLeafReadScratchDefaultCap = 64 << 10
+
+func (db *DB) collectNestedValueLogLiveIDsFromOuterLeaf(ptr page.ValuePtr, live map[uint32]struct{}, readScratch *[]byte) error {
 	if db == nil || len(live) == 0 || db.valueLogReader == nil {
 		return nil
 	}
-	raw, err := db.valueLogReader.Read(ptr)
-	if err != nil {
-		return err
+	var (
+		raw []byte
+		err error
+	)
+	if readScratch != nil {
+		dst := *readScratch
+		if dst == nil {
+			dst = make([]byte, 0, nestedOuterLeafReadScratchDefaultCap)
+		} else {
+			dst = dst[:0]
+		}
+		var usedDst bool
+		raw, usedDst, err = db.valueLogReader.ReadUnsafeTo(ptr, dst)
+		if err != nil {
+			return err
+		}
+		if usedDst {
+			*readScratch = raw[:0]
+		}
+	} else {
+		raw, err = db.valueLogReader.Read(ptr)
+		if err != nil {
+			return err
+		}
 	}
 	if !outerleaf.HasMagic(raw) {
 		return nil
@@ -2798,10 +4552,16 @@ func (db *DB) allowValueLogPointers() bool {
 				bytes += l.vlogLiveBytes.Load()
 			}
 		}
+		if db.indexOuterLeavesInValueLog && db.leafLog.vlogPath != "" && db.leafLog.vlogPath == db.leafLog.vlogRetainedPath {
+			bytes += db.leafLog.vlogLiveBytes.Load()
+		}
 	}
 	if bytes >= limit {
 		if db.valueLogHardCapWarned.CompareAndSwap(false, true) {
 			db.reportError(fmt.Errorf("cachingdb: retained value-log bytes %d exceed hard cap %d; disabling new value-log pointers", bytes, limit))
+			// Hard-cap entry means retained bytes are now constraining placement.
+			// Request an eager retained prune so lifecycle pins can drain promptly.
+			db.scheduleRetainedValueLogPruneForce()
 		}
 		return false
 	}
@@ -2817,58 +4577,392 @@ type valueLogSetRefresher interface {
 	RefreshValueLogSet() error
 }
 
-func (db *DB) pruneRetainedValueLogs() {
-	if !db.valueLogEnabled() {
+type retainedValueLogPruneStats struct {
+	RemovedSegments                    int
+	RemovedBytes                       int64
+	InUseSkippedSegments               int
+	InUseSkippedBytes                  int64
+	CandidateSegments                  int
+	CandidateBytes                     int64
+	LiveSkippedSegments                int
+	LiveSkippedBytes                   int64
+	ParseSkippedSegments               int
+	ParseSkippedBytes                  int64
+	ZombieMarkedSegments               int
+	ZombieMarkedBytes                  int64
+	ObservedSourceSegments             int
+	ObservedSourceBytes                int64
+	ObservedSourceCandidateSegments    int
+	ObservedSourceCandidateBytes       int64
+	ObservedSourceRemovedSegments      int
+	ObservedSourceRemovedBytes         int64
+	ObservedSourceInUseSkippedSegments int
+	ObservedSourceInUseSkippedBytes    int64
+	ObservedSourceLiveSkippedSegments  int
+	ObservedSourceLiveSkippedBytes     int64
+	ObservedSourceParseSkippedSegments int
+	ObservedSourceParseSkippedBytes    int64
+	ObservedSourceZombieMarkedSegments int
+	ObservedSourceZombieMarkedBytes    int64
+	AbortedForegroundWrites            bool
+	RetriedWithoutWriteGate            bool
+	RetrySucceeded                     bool
+}
+
+func (db *DB) observeRetainedValueLogPruneStats(pruneStats retainedValueLogPruneStats) {
+	if db == nil {
 		return
 	}
-	paths := db.valueLogRetainedPaths()
+	db.retainedValueLogPruneLastObservedSourceSegments.Store(int64(pruneStats.ObservedSourceSegments))
+	db.retainedValueLogPruneLastObservedSourceBytes.Store(pruneStats.ObservedSourceBytes)
+	db.retainedValueLogPruneLastObservedSourceCandidateSegments.Store(int64(pruneStats.ObservedSourceCandidateSegments))
+	db.retainedValueLogPruneLastObservedSourceCandidateBytes.Store(pruneStats.ObservedSourceCandidateBytes)
+	db.retainedValueLogPruneLastObservedSourceRemovedSegments.Store(int64(pruneStats.ObservedSourceRemovedSegments))
+	db.retainedValueLogPruneLastObservedSourceRemovedBytes.Store(pruneStats.ObservedSourceRemovedBytes)
+	db.retainedValueLogPruneLastObservedSourceInUseSkippedSegments.Store(int64(pruneStats.ObservedSourceInUseSkippedSegments))
+	db.retainedValueLogPruneLastObservedSourceInUseSkippedBytes.Store(pruneStats.ObservedSourceInUseSkippedBytes)
+	db.retainedValueLogPruneLastObservedSourceLiveSkippedSegments.Store(int64(pruneStats.ObservedSourceLiveSkippedSegments))
+	db.retainedValueLogPruneLastObservedSourceLiveSkippedBytes.Store(pruneStats.ObservedSourceLiveSkippedBytes)
+	db.retainedValueLogPruneLastObservedSourceParseSkippedSegments.Store(int64(pruneStats.ObservedSourceParseSkippedSegments))
+	db.retainedValueLogPruneLastObservedSourceParseSkippedBytes.Store(pruneStats.ObservedSourceParseSkippedBytes)
+	db.retainedValueLogPruneLastObservedSourceZombieMarkedSegments.Store(int64(pruneStats.ObservedSourceZombieMarkedSegments))
+	db.retainedValueLogPruneLastObservedSourceZombieMarkedBytes.Store(pruneStats.ObservedSourceZombieMarkedBytes)
+	if pruneStats.ObservedSourceSegments > 0 {
+		db.retainedValueLogPruneObservedSourceSegmentsTotal.Add(uint64(pruneStats.ObservedSourceSegments))
+	}
+	if pruneStats.ObservedSourceBytes > 0 {
+		db.retainedValueLogPruneObservedSourceBytesTotal.Add(pruneStats.ObservedSourceBytes)
+	}
+	if pruneStats.ObservedSourceCandidateSegments > 0 {
+		db.retainedValueLogPruneObservedSourceCandidateSegmentsTotal.Add(uint64(pruneStats.ObservedSourceCandidateSegments))
+	}
+	if pruneStats.ObservedSourceCandidateBytes > 0 {
+		db.retainedValueLogPruneObservedSourceCandidateBytesTotal.Add(pruneStats.ObservedSourceCandidateBytes)
+	}
+	if pruneStats.ObservedSourceRemovedSegments > 0 {
+		db.retainedValueLogPruneObservedSourceRemovedSegmentsTotal.Add(uint64(pruneStats.ObservedSourceRemovedSegments))
+	}
+	if pruneStats.ObservedSourceRemovedBytes > 0 {
+		db.retainedValueLogPruneObservedSourceRemovedBytesTotal.Add(pruneStats.ObservedSourceRemovedBytes)
+	}
+	if pruneStats.ObservedSourceInUseSkippedSegments > 0 {
+		db.retainedValueLogPruneObservedSourceInUseSkippedSegmentsTotal.Add(uint64(pruneStats.ObservedSourceInUseSkippedSegments))
+	}
+	if pruneStats.ObservedSourceInUseSkippedBytes > 0 {
+		db.retainedValueLogPruneObservedSourceInUseSkippedBytesTotal.Add(pruneStats.ObservedSourceInUseSkippedBytes)
+	}
+	if pruneStats.ObservedSourceLiveSkippedSegments > 0 {
+		db.retainedValueLogPruneObservedSourceLiveSkippedSegmentsTotal.Add(uint64(pruneStats.ObservedSourceLiveSkippedSegments))
+	}
+	if pruneStats.ObservedSourceLiveSkippedBytes > 0 {
+		db.retainedValueLogPruneObservedSourceLiveSkippedBytesTotal.Add(pruneStats.ObservedSourceLiveSkippedBytes)
+	}
+	if pruneStats.ObservedSourceParseSkippedSegments > 0 {
+		db.retainedValueLogPruneObservedSourceParseSkippedSegmentsTotal.Add(uint64(pruneStats.ObservedSourceParseSkippedSegments))
+	}
+	if pruneStats.ObservedSourceParseSkippedBytes > 0 {
+		db.retainedValueLogPruneObservedSourceParseSkippedBytesTotal.Add(pruneStats.ObservedSourceParseSkippedBytes)
+	}
+	if pruneStats.ObservedSourceZombieMarkedSegments > 0 {
+		db.retainedValueLogPruneObservedSourceZombieMarkedSegmentsTotal.Add(uint64(pruneStats.ObservedSourceZombieMarkedSegments))
+	}
+	if pruneStats.ObservedSourceZombieMarkedBytes > 0 {
+		db.retainedValueLogPruneObservedSourceZombieMarkedBytesTotal.Add(pruneStats.ObservedSourceZombieMarkedBytes)
+	}
+	if pruneStats.RetriedWithoutWriteGate {
+		db.retainedValueLogPruneWriteGateRetries.Add(1)
+		if pruneStats.RetrySucceeded {
+			db.retainedValueLogPruneWriteGateRetrySuccesses.Add(1)
+		}
+	}
+	if pruneStats.AbortedForegroundWrites {
+		db.retainedValueLogPruneForegroundAbortRuns.Add(1)
+	}
+	if pruneStats.RemovedSegments > 0 {
+		db.retainedValueLogPruneRemovedSegments.Add(uint64(pruneStats.RemovedSegments))
+	}
+	if pruneStats.RemovedBytes > 0 {
+		db.retainedValueLogPruneRemovedBytes.Add(uint64(pruneStats.RemovedBytes))
+	}
+	if pruneStats.InUseSkippedSegments > 0 {
+		db.retainedValueLogPruneInUseSkippedSegments.Add(uint64(pruneStats.InUseSkippedSegments))
+	}
+	if pruneStats.InUseSkippedBytes > 0 {
+		db.retainedValueLogPruneInUseSkippedBytes.Add(uint64(pruneStats.InUseSkippedBytes))
+	}
+	if pruneStats.CandidateSegments > 0 {
+		db.retainedValueLogPruneCandidateSegments.Add(uint64(pruneStats.CandidateSegments))
+	}
+	if pruneStats.CandidateBytes > 0 {
+		db.retainedValueLogPruneCandidateBytes.Add(uint64(pruneStats.CandidateBytes))
+	}
+	if pruneStats.LiveSkippedSegments > 0 {
+		db.retainedValueLogPruneLiveSkippedSegments.Add(uint64(pruneStats.LiveSkippedSegments))
+	}
+	if pruneStats.LiveSkippedBytes > 0 {
+		db.retainedValueLogPruneLiveSkippedBytes.Add(uint64(pruneStats.LiveSkippedBytes))
+	}
+	if pruneStats.ParseSkippedSegments > 0 {
+		db.retainedValueLogPruneParseSkippedSegments.Add(uint64(pruneStats.ParseSkippedSegments))
+	}
+	if pruneStats.ParseSkippedBytes > 0 {
+		db.retainedValueLogPruneParseSkippedBytes.Add(uint64(pruneStats.ParseSkippedBytes))
+	}
+	if pruneStats.ZombieMarkedSegments > 0 {
+		db.retainedValueLogPruneZombieMarkedSegments.Add(uint64(pruneStats.ZombieMarkedSegments))
+	}
+	if pruneStats.ZombieMarkedBytes > 0 {
+		db.retainedValueLogPruneZombieMarkedBytes.Add(uint64(pruneStats.ZombieMarkedBytes))
+	}
+}
+
+func (db *DB) valueLogClosedSegmentSize(path string) int64 {
+	if db == nil || path == "" {
+		return 0
+	}
+	laneID, _, _, ok := parseLogSeq(filepath.Base(path))
+	if !ok {
+		return 0
+	}
+	l := db.valueLogLaneByID(laneID)
+	if l == nil {
+		return 0
+	}
+	l.vlogMu.Lock()
+	defer l.vlogMu.Unlock()
+	if l.vlogClosedSizes == nil {
+		return 0
+	}
+	return l.vlogClosedSizes[path]
+}
+
+func (db *DB) pruneRetainedValueLogs(force bool) retainedValueLogPruneStats {
+	return db.pruneRetainedValueLogsWithObserved(force, nil)
+}
+
+func (db *DB) pruneRetainedValueLogsWithObserved(force bool, observedSourceIDs map[uint32]struct{}) retainedValueLogPruneStats {
+	var out retainedValueLogPruneStats
+	if !db.valueLogEnabled() {
+		return out
+	}
+	paths := db.valueOnlyLogPaths(db.valueLogRetainedPaths())
 	if len(paths) == 0 {
-		return
+		return out
 	}
 
 	inUse := make(map[string]struct{})
-	for _, path := range db.valueLogInUsePaths() {
+	for _, path := range db.valueOnlyLogPaths(db.valueLogInUsePaths()) {
 		inUse[path] = struct{}{}
 	}
 
-	candidatePaths := make([]string, 0, len(paths))
+	type pruneCandidate struct {
+		path     string
+		size     int64
+		id       uint32
+		hasID    bool
+		observed bool
+	}
+	candidatePaths := make([]pruneCandidate, 0, len(paths))
 	for _, path := range paths {
+		size := db.valueLogClosedSegmentSize(path)
+		candidate := pruneCandidate{path: path, size: size}
+		if laneID, seq, valueLog, ok := parseLogSeq(filepath.Base(path)); ok && valueLog && laneID >= 0 {
+			if id, err := valuelog.EncodeFileID(uint32(laneID), uint32(seq)); err == nil {
+				candidate.id = id
+				candidate.hasID = true
+				if _, ok := observedSourceIDs[id]; ok {
+					candidate.observed = true
+					out.ObservedSourceSegments++
+					if size > 0 {
+						out.ObservedSourceBytes += size
+					}
+				}
+			}
+		}
 		if _, ok := inUse[path]; ok {
+			out.InUseSkippedSegments++
+			if size > 0 {
+				out.InUseSkippedBytes += size
+			}
+			if candidate.observed {
+				out.ObservedSourceInUseSkippedSegments++
+				if size > 0 {
+					out.ObservedSourceInUseSkippedBytes += size
+				}
+			}
 			continue
 		}
 		if db.cleanupMissingRetainedValueLog(path) {
+			out.RemovedSegments++
+			if size > 0 {
+				out.RemovedBytes += size
+			}
+			if candidate.observed {
+				out.ObservedSourceRemovedSegments++
+				if size > 0 {
+					out.ObservedSourceRemovedBytes += size
+				}
+			}
 			continue
 		}
-		candidatePaths = append(candidatePaths, path)
+		out.CandidateSegments++
+		if size > 0 {
+			out.CandidateBytes += size
+		}
+		if candidate.observed {
+			out.ObservedSourceCandidateSegments++
+			if size > 0 {
+				out.ObservedSourceCandidateBytes += size
+			}
+		}
+		candidatePaths = append(candidatePaths, candidate)
 	}
 	if len(candidatePaths) == 0 {
-		return
+		return out
 	}
 
-	live, err := db.collectValueLogLiveIDsUntil(db.lastForegroundWriteUnixNano.Load())
+	// When a queued rewrite explicitly observed source segment IDs that are
+	// currently pinned by retention, we already know those segments are
+	// unreachable in the backend index (otherwise rewrite+GC would not have
+	// classified them as retained-protected blockers). In that case, prune only
+	// the observed IDs and avoid an expensive full pointer scan.
+	if force && len(observedSourceIDs) > 0 {
+		removed := false
+		marked := false
+		for _, candidate := range candidatePaths {
+			if !candidate.observed {
+				continue
+			}
+			path := candidate.path
+			size := candidate.size
+			id := candidate.id
+			if !candidate.hasID {
+				out.ParseSkippedSegments++
+				if size > 0 {
+					out.ParseSkippedBytes += size
+				}
+				out.ObservedSourceParseSkippedSegments++
+				if size > 0 {
+					out.ObservedSourceParseSkippedBytes += size
+				}
+				continue
+			}
+
+			if marker, ok := db.backend.(valueLogZombieMarker); ok {
+				if db.valueLogReader != nil {
+					_ = db.valueLogReader.EvictSegment(id)
+				}
+				if err := marker.MarkValueLogZombie(id); err != nil {
+					if errors.Is(err, valuelog.ErrFileNotFound) && db.cleanupOrphanedRetainedValueLog(path) {
+						removed = true
+						out.RemovedSegments++
+						if size > 0 {
+							out.RemovedBytes += size
+						}
+						out.ObservedSourceRemovedSegments++
+						if size > 0 {
+							out.ObservedSourceRemovedBytes += size
+						}
+						continue
+					}
+					if db.cleanupMissingRetainedValueLog(path) {
+						out.RemovedSegments++
+						if size > 0 {
+							out.RemovedBytes += size
+						}
+						out.ObservedSourceRemovedSegments++
+						if size > 0 {
+							out.ObservedSourceRemovedBytes += size
+						}
+						continue
+					}
+					db.reportError(fmt.Errorf("cachingdb: failed to mark value-log %d zombie: %w", id, err))
+					continue
+				}
+				out.ZombieMarkedSegments++
+				if size > 0 {
+					out.ZombieMarkedBytes += size
+				}
+				out.ObservedSourceZombieMarkedSegments++
+				if size > 0 {
+					out.ObservedSourceZombieMarkedBytes += size
+				}
+				marked = true
+			} else {
+				db.dropValueLogSegment(path)
+				_ = db.removeFileRetry(path)
+				db.mu.Lock()
+				db.untrackValueLogSegmentLocked(path)
+				db.mu.Unlock()
+				removed = true
+				out.RemovedSegments++
+				if size > 0 {
+					out.RemovedBytes += size
+				}
+				out.ObservedSourceRemovedSegments++
+				if size > 0 {
+					out.ObservedSourceRemovedBytes += size
+				}
+			}
+			db.forgetValueLogRetain(path)
+		}
+
+		if marked {
+			if refresher, ok := db.backend.(valueLogSetRefresher); ok {
+				if err := refresher.RefreshValueLogSet(); err != nil {
+					db.reportError(fmt.Errorf("cachingdb: failed to refresh value-log set: %w", err))
+				}
+			}
+		}
+		if removed {
+			db.syncDirBestEffort(db.valueLogDir)
+			if db.leafLogDir != "" {
+				db.syncDirBestEffort(db.leafLogDir)
+			}
+		}
+		return out
+	}
+
+	liveIDs, err := db.collectValueLogLiveIDsUntil(db.lastForegroundWriteUnixNano.Load())
 	if err != nil {
 		if errors.Is(err, errForegroundWritesResumed) {
-			return
+			out.AbortedForegroundWrites = true
+			return out
 		}
 		db.reportError(fmt.Errorf("cachingdb: failed to scan value-log pointers: %w", err))
-		return
+		return out
 	}
 
 	removed := false
 	marked := false
-	for _, path := range candidatePaths {
-		laneID, seq, valueLog, ok := parseLogSeq(filepath.Base(path))
-		if !ok || !valueLog {
+	for _, candidate := range candidatePaths {
+		path := candidate.path
+		size := candidate.size
+		id := candidate.id
+		if !candidate.hasID {
+			out.ParseSkippedSegments++
+			if size > 0 {
+				out.ParseSkippedBytes += size
+			}
+			if candidate.observed {
+				out.ObservedSourceParseSkippedSegments++
+				if size > 0 {
+					out.ObservedSourceParseSkippedBytes += size
+				}
+			}
 			continue
 		}
-		if laneID < 0 {
-			continue
-		}
-		id, err := valuelog.EncodeFileID(uint32(laneID), uint32(seq))
-		if err != nil {
-			continue
-		}
-		if _, ok := live[id]; ok {
+		if _, ok := liveIDs[id]; ok {
+			out.LiveSkippedSegments++
+			if size > 0 {
+				out.LiveSkippedBytes += size
+			}
+			if candidate.observed {
+				out.ObservedSourceLiveSkippedSegments++
+				if size > 0 {
+					out.ObservedSourceLiveSkippedBytes += size
+				}
+			}
 			continue
 		}
 
@@ -2879,13 +4973,43 @@ func (db *DB) pruneRetainedValueLogs() {
 			if err := marker.MarkValueLogZombie(id); err != nil {
 				if errors.Is(err, valuelog.ErrFileNotFound) && db.cleanupOrphanedRetainedValueLog(path) {
 					removed = true
+					out.RemovedSegments++
+					if size > 0 {
+						out.RemovedBytes += size
+					}
+					if candidate.observed {
+						out.ObservedSourceRemovedSegments++
+						if size > 0 {
+							out.ObservedSourceRemovedBytes += size
+						}
+					}
 					continue
 				}
 				if db.cleanupMissingRetainedValueLog(path) {
+					out.RemovedSegments++
+					if size > 0 {
+						out.RemovedBytes += size
+					}
+					if candidate.observed {
+						out.ObservedSourceRemovedSegments++
+						if size > 0 {
+							out.ObservedSourceRemovedBytes += size
+						}
+					}
 					continue
 				}
 				db.reportError(fmt.Errorf("cachingdb: failed to mark value-log %d zombie: %w", id, err))
 				continue
+			}
+			out.ZombieMarkedSegments++
+			if size > 0 {
+				out.ZombieMarkedBytes += size
+			}
+			if candidate.observed {
+				out.ObservedSourceZombieMarkedSegments++
+				if size > 0 {
+					out.ObservedSourceZombieMarkedBytes += size
+				}
 			}
 			marked = true
 		} else {
@@ -2895,6 +5019,16 @@ func (db *DB) pruneRetainedValueLogs() {
 			db.untrackValueLogSegmentLocked(path)
 			db.mu.Unlock()
 			removed = true
+			out.RemovedSegments++
+			if size > 0 {
+				out.RemovedBytes += size
+			}
+			if candidate.observed {
+				out.ObservedSourceRemovedSegments++
+				if size > 0 {
+					out.ObservedSourceRemovedBytes += size
+				}
+			}
 		}
 		db.forgetValueLogRetain(path)
 	}
@@ -2907,8 +5041,12 @@ func (db *DB) pruneRetainedValueLogs() {
 		}
 	}
 	if removed {
-		db.syncDirBestEffort(db.dir)
+		db.syncDirBestEffort(db.valueLogDir)
+		if db.leafLogDir != "" {
+			db.syncDirBestEffort(db.leafLogDir)
+		}
 	}
+	return out
 }
 
 func (db *DB) retainedPrunePressureBytes() int64 {
@@ -2952,6 +5090,10 @@ func (db *DB) retainedPrunePressureBytes() int64 {
 }
 
 func (db *DB) shouldScheduleRetainedValueLogPrune() bool {
+	return db.shouldScheduleRetainedValueLogPruneWithForce(false)
+}
+
+func (db *DB) shouldScheduleRetainedValueLogPruneWithForce(force bool) bool {
 	if db == nil || !db.valueLogEnabled() {
 		return false
 	}
@@ -2959,23 +5101,327 @@ func (db *DB) shouldScheduleRetainedValueLogPrune() bool {
 	if closed <= 0 {
 		return false
 	}
+	if force {
+		return true
+	}
 	return closed >= db.retainedPrunePressureBytes()
 }
 
+func (db *DB) waitForRetainedValueLogPruneQuietOrForce(quietWindow time.Duration) bool {
+	if db == nil {
+		return false
+	}
+	if quietWindow <= 0 {
+		return db.retainedPruneForceRequested.Swap(false)
+	}
+	ticker := time.NewTicker(foregroundMaintenancePollInterval())
+	defer ticker.Stop()
+	for {
+		if db.closing.Load() {
+			return db.retainedPruneForceRequested.Swap(false)
+		}
+		if db.retainedPruneForceRequested.Swap(false) {
+			return true
+		}
+		if db.foregroundVlogMaintenanceQuietFor(time.Now(), quietWindow) {
+			// Re-check immediately before returning so force requests racing with
+			// the quiet-window transition are not dropped.
+			if db.retainedPruneForceRequested.Swap(false) {
+				return true
+			}
+			return false
+		}
+		select {
+		case <-db.closeCh:
+			return db.retainedPruneForceRequested.Swap(false)
+		case <-ticker.C:
+		}
+	}
+}
+
+func (db *DB) queueRetainedPruneObservedSourceIDs(ids []uint32) {
+	if db == nil || len(ids) == 0 {
+		return
+	}
+	db.retainedPruneObservedMu.Lock()
+	if db.retainedPruneObservedSourceIDs == nil {
+		db.retainedPruneObservedSourceIDs = make(map[uint32]struct{}, len(ids))
+	}
+	for _, id := range ids {
+		if id == 0 {
+			continue
+		}
+		db.retainedPruneObservedSourceIDs[id] = struct{}{}
+	}
+	db.retainedPruneObservedMu.Unlock()
+}
+
+func (db *DB) takeRetainedPruneObservedSourceIDs() map[uint32]struct{} {
+	if db == nil {
+		return nil
+	}
+	db.retainedPruneObservedMu.Lock()
+	if len(db.retainedPruneObservedSourceIDs) == 0 {
+		db.retainedPruneObservedMu.Unlock()
+		return nil
+	}
+	out := db.retainedPruneObservedSourceIDs
+	db.retainedPruneObservedSourceIDs = nil
+	db.retainedPruneObservedMu.Unlock()
+	return out
+}
+
+func (db *DB) retainedPruneObservedSourcePending() bool {
+	if db == nil {
+		return false
+	}
+	db.retainedPruneObservedMu.Lock()
+	pending := len(db.retainedPruneObservedSourceIDs) > 0
+	db.retainedPruneObservedMu.Unlock()
+	return pending
+}
+
+func (db *DB) queueVlogGenerationObservedSourceGCList(ids []uint32) {
+	if db == nil || len(ids) == 0 {
+		return
+	}
+	nowUnixNano := time.Now().UnixNano()
+	db.vlogGenerationObservedGCMu.Lock()
+	if db.vlogGenerationObservedGCSourceIDs == nil {
+		db.vlogGenerationObservedGCSourceIDs = make(map[uint32]struct{}, len(ids))
+	}
+	if db.vlogGenerationObservedGCFirstQueuedUnixNano == nil {
+		db.vlogGenerationObservedGCFirstQueuedUnixNano = make(map[uint32]int64, len(ids))
+	}
+	added := 0
+	for _, id := range ids {
+		if id == 0 {
+			continue
+		}
+		if _, exists := db.vlogGenerationObservedGCSourceIDs[id]; exists {
+			continue
+		}
+		db.vlogGenerationObservedGCSourceIDs[id] = struct{}{}
+		if _, exists := db.vlogGenerationObservedGCFirstQueuedUnixNano[id]; !exists {
+			db.vlogGenerationObservedGCFirstQueuedUnixNano[id] = nowUnixNano
+		}
+		added++
+	}
+	db.vlogGenerationObservedGCMu.Unlock()
+	if added > 0 {
+		db.vlogGenerationObservedGCQueuedBatches.Add(1)
+		db.vlogGenerationObservedGCQueuedIDs.Add(uint64(added))
+	}
+}
+
+func (db *DB) queueVlogGenerationObservedSourceGCIDs(ids map[uint32]struct{}) {
+	if db == nil || len(ids) == 0 {
+		return
+	}
+	nowUnixNano := time.Now().UnixNano()
+	db.vlogGenerationObservedGCMu.Lock()
+	if db.vlogGenerationObservedGCSourceIDs == nil {
+		db.vlogGenerationObservedGCSourceIDs = make(map[uint32]struct{}, len(ids))
+	}
+	if db.vlogGenerationObservedGCFirstQueuedUnixNano == nil {
+		db.vlogGenerationObservedGCFirstQueuedUnixNano = make(map[uint32]int64, len(ids))
+	}
+	added := 0
+	for id := range ids {
+		if id == 0 {
+			continue
+		}
+		if _, exists := db.vlogGenerationObservedGCSourceIDs[id]; exists {
+			continue
+		}
+		db.vlogGenerationObservedGCSourceIDs[id] = struct{}{}
+		if _, exists := db.vlogGenerationObservedGCFirstQueuedUnixNano[id]; !exists {
+			db.vlogGenerationObservedGCFirstQueuedUnixNano[id] = nowUnixNano
+		}
+		added++
+	}
+	db.vlogGenerationObservedGCMu.Unlock()
+	if added > 0 {
+		db.vlogGenerationObservedGCQueuedBatches.Add(1)
+		db.vlogGenerationObservedGCQueuedIDs.Add(uint64(added))
+	}
+}
+
+func (db *DB) takeVlogGenerationObservedSourceGCListBefore(cutoffUnixNano int64) []uint32 {
+	if db == nil {
+		return nil
+	}
+	db.vlogGenerationObservedGCMu.Lock()
+	if len(db.vlogGenerationObservedGCSourceIDs) == 0 {
+		db.vlogGenerationObservedGCMu.Unlock()
+		return nil
+	}
+	remaining := make(map[uint32]struct{}, len(db.vlogGenerationObservedGCSourceIDs))
+	out := make([]uint32, 0, len(db.vlogGenerationObservedGCSourceIDs))
+	for id := range db.vlogGenerationObservedGCSourceIDs {
+		if id == 0 {
+			continue
+		}
+		firstQueued := int64(0)
+		if db.vlogGenerationObservedGCFirstQueuedUnixNano != nil {
+			firstQueued = db.vlogGenerationObservedGCFirstQueuedUnixNano[id]
+		}
+		if cutoffUnixNano > 0 && firstQueued > cutoffUnixNano {
+			remaining[id] = struct{}{}
+			continue
+		}
+		out = append(out, id)
+	}
+	if len(remaining) == 0 {
+		db.vlogGenerationObservedGCSourceIDs = nil
+	} else {
+		db.vlogGenerationObservedGCSourceIDs = remaining
+	}
+	db.vlogGenerationObservedGCMu.Unlock()
+	if len(out) > 0 {
+		db.vlogGenerationObservedGCTakenBatches.Add(1)
+		db.vlogGenerationObservedGCTakenIDs.Add(uint64(len(out)))
+	}
+	return out
+}
+
+func (db *DB) takeVlogGenerationObservedSourceGCList() []uint32 {
+	return db.takeVlogGenerationObservedSourceGCListBefore(0)
+}
+
+func (db *DB) finalizeVlogGenerationObservedSourceGCIDs(ids []uint32, dropped bool) {
+	if db == nil || len(ids) == 0 {
+		return
+	}
+	nowUnixNano := time.Now().UnixNano()
+	totalLatencyMS := uint64(0)
+	maxLatencyMS := uint64(0)
+	finalized := 0
+	seen := make(map[uint32]struct{}, len(ids))
+	db.vlogGenerationObservedGCMu.Lock()
+	for _, id := range ids {
+		if id == 0 {
+			continue
+		}
+		if _, exists := seen[id]; exists {
+			continue
+		}
+		seen[id] = struct{}{}
+		finalized++
+		delete(db.vlogGenerationObservedGCRetryAttempts, id)
+		if startUnixNano, exists := db.vlogGenerationObservedGCFirstQueuedUnixNano[id]; exists {
+			delete(db.vlogGenerationObservedGCFirstQueuedUnixNano, id)
+			if startUnixNano > 0 && nowUnixNano > startUnixNano {
+				latencyMS := uint64((nowUnixNano - startUnixNano) / int64(time.Millisecond))
+				totalLatencyMS += latencyMS
+				if latencyMS > maxLatencyMS {
+					maxLatencyMS = latencyMS
+				}
+			}
+		}
+	}
+	db.vlogGenerationObservedGCMu.Unlock()
+	if finalized == 0 {
+		return
+	}
+	if dropped {
+		db.vlogGenerationObservedGCLatencyDroppedIDs.Add(uint64(finalized))
+	} else {
+		db.vlogGenerationObservedGCLatencyCompletedIDs.Add(uint64(finalized))
+	}
+	if totalLatencyMS > 0 {
+		db.vlogGenerationObservedGCLatencyTotalMS.Add(totalLatencyMS)
+		updateAtomicMaxUint64(&db.vlogGenerationObservedGCLatencyMaxMS, maxLatencyMS)
+	}
+}
+
+func (db *DB) retryVlogGenerationObservedSourceGCList(ids []uint32) (queuedIDs, droppedIDs int) {
+	if db == nil || len(ids) == 0 {
+		return 0, 0
+	}
+	retry := make([]uint32, 0, len(ids))
+	dropped := make([]uint32, 0, len(ids))
+	seen := make(map[uint32]struct{}, len(ids))
+	db.vlogGenerationObservedGCMu.Lock()
+	if db.vlogGenerationObservedGCRetryAttempts == nil {
+		db.vlogGenerationObservedGCRetryAttempts = make(map[uint32]uint8, len(ids))
+	}
+	for _, id := range ids {
+		if id == 0 {
+			continue
+		}
+		if _, exists := seen[id]; exists {
+			continue
+		}
+		seen[id] = struct{}{}
+		attempts := db.vlogGenerationObservedGCRetryAttempts[id]
+		if attempts >= vlogGenerationObservedGCRetryMaxAttempts {
+			delete(db.vlogGenerationObservedGCRetryAttempts, id)
+			dropped = append(dropped, id)
+			continue
+		}
+		db.vlogGenerationObservedGCRetryAttempts[id] = attempts + 1
+		retry = append(retry, id)
+	}
+	db.vlogGenerationObservedGCMu.Unlock()
+	if len(retry) > 0 {
+		db.vlogGenerationObservedGCRetryQueued.Add(1)
+		db.queueVlogGenerationObservedSourceGCList(retry)
+	}
+	if len(dropped) > 0 {
+		db.vlogGenerationObservedGCRetryDropped.Add(uint64(len(dropped)))
+		db.finalizeVlogGenerationObservedSourceGCIDs(dropped, true)
+	}
+	return len(retry), len(dropped)
+}
+
 func (db *DB) scheduleRetainedValueLogPrune() {
+	db.scheduleRetainedValueLogPruneWithForce(false)
+}
+
+func (db *DB) scheduleRetainedValueLogPruneForce() {
+	db.scheduleRetainedValueLogPruneWithForce(true)
+}
+
+func (db *DB) scheduleRetainedValueLogPruneWithForce(force bool) {
 	if db == nil || !db.valueLogEnabled() {
 		return
+	}
+	db.retainedValueLogPruneScheduleRequests.Add(1)
+	if force {
+		db.retainedPruneForceRequested.Store(true)
+		db.retainedValueLogPruneScheduleForcedRequests.Add(1)
 	}
 	if db.testSkipRetainedPrune {
 		return
 	}
 	db.retainedPruneMu.Lock()
 	if db.closing.Load() {
+		db.retainedValueLogPruneScheduleSkipClosing.Add(1)
 		db.retainedPruneMu.Unlock()
 		return
 	}
 	if db.retainedPruneDone != nil {
+		inFlightDone := db.retainedPruneDone
+		db.retainedValueLogPruneScheduleSkipInFlight.Add(1)
 		db.retainedPruneMu.Unlock()
+		if force && inFlightDone != nil {
+			// Force requests that arrive while a prune is in-flight should get a
+			// follow-up attempt immediately after the active prune exits.
+			db.wg.Add(1)
+			go func(done <-chan struct{}) {
+				defer db.wg.Done()
+				if done != nil {
+					<-done
+				}
+				if db == nil || db.closing.Load() {
+					return
+				}
+				if db.retainedPruneForceRequested.Load() {
+					db.scheduleRetainedValueLogPruneWithForce(false)
+				}
+			}(inFlightDone)
+		}
 		return
 	}
 	done := make(chan struct{})
@@ -2985,20 +5431,67 @@ func (db *DB) scheduleRetainedValueLogPrune() {
 		defer func() {
 			db.retainedPruneMu.Lock()
 			close(done)
+			if db.retainedPruneRunningDone == done {
+				db.retainedPruneRunningDone = nil
+			}
 			db.retainedPruneDone = nil
 			db.retainedPruneMu.Unlock()
 		}()
-		db.waitForForegroundMaintenanceQuietWindow(retainedPruneQuietWindow)
-		if !db.shouldScheduleRetainedValueLogPrune() {
+		requestedForce := db.retainedPruneForceRequested.Swap(false)
+		effectiveForce := force || requestedForce
+		if !effectiveForce {
+			effectiveForce = db.waitForRetainedValueLogPruneQuietOrForce(retainedPruneQuietWindow)
+		}
+		if !db.shouldScheduleRetainedValueLogPruneWithForce(effectiveForce) {
+			closed := db.valueLogRetainedClosedBytes.Load()
+			if closed <= 0 {
+				db.retainedValueLogPruneScheduleSkipNoClosedBytes.Add(1)
+			} else if !effectiveForce && closed < db.retainedPrunePressureBytes() {
+				db.retainedValueLogPruneScheduleSkipBelowPressure.Add(1)
+			}
 			return
 		}
+		// Retained prune is opportunistic reclaim; do not compete with checkpoint
+		// cutovers or other backend maintenance windows. Mark it running only now,
+		// after quiet-window admission and pressure checks have passed. Scheduled
+		// quiet-wait sleepers must not block generational maintenance.
+		db.retainedPruneMu.Lock()
+		db.retainedPruneRunningDone = done
+		db.retainedPruneMu.Unlock()
+		db.checkpointMu.Lock()
+		for db.checkpointing.Load() || db.maintenanceActive.Load() {
+			if db.closing.Load() {
+				db.checkpointMu.Unlock()
+				return
+			}
+			db.checkpointCond.Wait()
+		}
+		db.checkpointMu.Unlock()
 		now := time.Now()
+		minInterval := retainedPruneMinInterval
+		if effectiveForce && db.retainedPruneObservedSourcePending() {
+			minInterval = retainedPruneObservedMinInterval
+		}
 		last := db.retainedPruneLastStartUnixNano.Load()
-		if last > 0 && now.Sub(time.Unix(0, last)) < retainedPruneMinInterval {
+		if last > 0 && now.Sub(time.Unix(0, last)) < minInterval {
+			db.retainedValueLogPruneScheduleSkipMinInterval.Add(1)
 			return
 		}
 		db.retainedPruneLastStartUnixNano.Store(now.UnixNano())
-		db.pruneRetainedValueLogs()
+		db.retainedValueLogPruneRuns.Add(1)
+		if effectiveForce {
+			db.retainedValueLogPruneForcedRuns.Add(1)
+		}
+		db.retainedValueLogPruneLastUnixNano.Store(now.UnixNano())
+		observedSourceIDs := db.takeRetainedPruneObservedSourceIDs()
+		pruneStats := db.pruneRetainedValueLogsWithObserved(effectiveForce, observedSourceIDs)
+		db.observeRetainedValueLogPruneStats(pruneStats)
+		if len(observedSourceIDs) > 0 && (pruneStats.ObservedSourceZombieMarkedSegments > 0 || pruneStats.ObservedSourceRemovedSegments > 0) {
+			// When a retained prune processes rewrite-observed source segments,
+			// queue a near-term maintenance pass so GC can re-check reclaim state.
+			db.queueVlogGenerationObservedSourceGCIDs(observedSourceIDs)
+			db.vlogGenerationCheckpointKickPending.Store(true)
+		}
 	}()
 }
 
@@ -3008,7 +5501,7 @@ func (db *DB) retainedPruneActive() bool {
 	}
 	db.retainedPruneMu.Lock()
 	defer db.retainedPruneMu.Unlock()
-	return db.retainedPruneDone != nil
+	return db.retainedPruneRunningDone != nil
 }
 
 func (db *DB) waitForRetainedValueLogPrune() {
@@ -3021,6 +5514,54 @@ func (db *DB) waitForRetainedValueLogPrune() {
 	if done != nil {
 		<-done
 	}
+}
+
+func (db *DB) waitForActiveRetainedValueLogPrune() {
+	if db == nil || !db.valueLogEnabled() {
+		return
+	}
+	db.retainedPruneMu.Lock()
+	done := db.retainedPruneRunningDone
+	db.retainedPruneMu.Unlock()
+	if done != nil {
+		<-done
+	}
+}
+
+func (db *DB) runRetainedValueLogPruneInline(force bool, observedSourceIDs map[uint32]struct{}) (retainedValueLogPruneStats, bool) {
+	var out retainedValueLogPruneStats
+	if db == nil || !db.valueLogEnabled() {
+		return out, false
+	}
+	db.retainedPruneMu.Lock()
+	if db.closing.Load() || db.retainedPruneDone != nil {
+		db.retainedPruneMu.Unlock()
+		return out, false
+	}
+	done := make(chan struct{})
+	db.retainedPruneDone = done
+	db.retainedPruneRunningDone = done
+	db.retainedPruneMu.Unlock()
+	defer func() {
+		db.retainedPruneMu.Lock()
+		close(done)
+		if db.retainedPruneRunningDone == done {
+			db.retainedPruneRunningDone = nil
+		}
+		db.retainedPruneDone = nil
+		db.retainedPruneMu.Unlock()
+	}()
+
+	nowPrune := time.Now()
+	db.retainedPruneLastStartUnixNano.Store(nowPrune.UnixNano())
+	db.retainedValueLogPruneRuns.Add(1)
+	if force {
+		db.retainedValueLogPruneForcedRuns.Add(1)
+	}
+	db.retainedValueLogPruneLastUnixNano.Store(nowPrune.UnixNano())
+	out = db.pruneRetainedValueLogsWithObserved(force, observedSourceIDs)
+	db.observeRetainedValueLogPruneStats(out)
+	return out, true
 }
 
 func (db *DB) checkpointForBackendMaintenance() error {
@@ -3062,18 +5603,83 @@ func (db *DB) runWithBackendMaintenanceOptions(opts backendMaintenanceOptions, f
 			return err
 		}
 	}
-	if !opts.skipRetainedPruneWait {
-		db.waitForRetainedValueLogPrune()
-	}
 	if refresher, ok := db.backend.(valueLogSetRefresher); ok {
 		if err := refresher.RefreshValueLogSet(); err != nil {
 			return err
 		}
 	}
+	var fnErr error
 	if fn != nil {
-		return fn()
+		fnErr = fn()
+	}
+	if db.closing.Load() {
+		return fnErr
+	}
+	reconcileErr := db.reconcileSplitValueLogWritersAfterBackendMaintenance()
+	if fnErr != nil {
+		if reconcileErr != nil {
+			return errors.Join(fnErr, reconcileErr)
+		}
+		return fnErr
+	}
+	return reconcileErr
+}
+
+func (db *DB) reconcileSplitValueLogWritersAfterBackendMaintenance() error {
+	if db == nil || db.closing.Load() {
+		return nil
+	}
+	if db.valueLogReader != nil {
+		if err := db.valueLogReader.Refresh(); err != nil {
+			return err
+		}
+	}
+	if !db.splitValueLogEnabled() || !db.valueLogEnabled() {
+		return nil
+	}
+	// In cached mode DB.dir is the wal/ directory, not the DB root.
+	walDir := db.dir
+	segments, _ := listNonEmptySplitLogSegments(walDir, db.valueLogDir, db.leafLogDir)
+	maxSeqByLane := make(map[int]int, len(db.lanes)+1)
+	for _, seg := range segments {
+		if !seg.valueLog {
+			continue
+		}
+		if seg.seq > maxSeqByLane[seg.lane] {
+			maxSeqByLane[seg.lane] = seg.seq
+		}
+	}
+	for i := range db.lanes {
+		if err := db.advanceValueLogWriterPastObservedSeq(&db.lanes[i], maxSeqByLane[db.lanes[i].id]); err != nil {
+			return err
+		}
+	}
+	if db.indexOuterLeavesInValueLog {
+		if err := db.advanceValueLogWriterPastObservedSeq(&db.leafLog, maxSeqByLane[leafLogLaneID]); err != nil {
+			return err
+		}
 	}
 	return nil
+}
+
+func (db *DB) advanceValueLogWriterPastObservedSeq(l *lane, observedMaxSeq int) error {
+	if db == nil || l == nil || observedMaxSeq <= 0 {
+		return nil
+	}
+	l.vlogMu.Lock()
+	defer l.vlogMu.Unlock()
+	if observedMaxSeq <= l.vlogSeq {
+		return nil
+	}
+	if l.vlog == nil {
+		l.vlogSeq = observedMaxSeq
+		l.vlogPath = ""
+		l.vlogCaps = vlogWriterCaps{}
+		l.vlogModeSet = false
+		l.vlogModeWriter = nil
+		return nil
+	}
+	return db.rotateValueLogMuHeldToSeq(l, observedMaxSeq+1)
 }
 
 func hashKey(key []byte) uint64 {
@@ -3136,13 +5742,17 @@ func (db *DB) valueLogMaxSegmentBytesForLane(l *lane) int64 {
 		return base
 	}
 	target := int64(0)
-	switch l.vlogGenerationClass {
-	case vlogGenerationClassWarm:
-		target = db.valueLogGenerationWarmTarget
-	case vlogGenerationClassCold:
-		target = db.valueLogGenerationColdTarget
-	default:
-		target = db.valueLogGenerationHotTarget
+	if db.indexOuterLeavesInValueLog && l == &db.leafLog && db.valueLogGenerationLeafTarget > 0 {
+		target = db.valueLogGenerationLeafTarget
+	} else {
+		switch l.vlogGenerationClass {
+		case vlogGenerationClassWarm:
+			target = db.valueLogGenerationWarmTarget
+		case vlogGenerationClassCold:
+			target = db.valueLogGenerationColdTarget
+		default:
+			target = db.valueLogGenerationHotTarget
+		}
 	}
 	if target <= 0 {
 		return base
@@ -3205,8 +5815,20 @@ type backendValueLogRewritePlanner interface {
 	ValueLogRewritePlan(ctx context.Context, opts backenddb.ValueLogRewriteOnlineOptions) (backenddb.ValueLogRewritePlan, error)
 }
 
+type backendValueLogRewriteChunkPlanner interface {
+	ValueLogRewriteChunkPlan(ctx context.Context, opts backenddb.ValueLogRewriteOnlineOptions, chunkBytes int64) (backenddb.ValueLogRewriteChunkPlan, error)
+}
+
 type backendValueLogGCer interface {
 	ValueLogGC(ctx context.Context, opts backenddb.ValueLogGCOptions) (backenddb.ValueLogGCStats, error)
+}
+
+type backendLeafGenerationPackRunner interface {
+	LeafGenerationPackRunOnce(ctx context.Context, opts backenddb.LeafGenerationPackFromPlanOptions) (backenddb.LeafGenerationPackRunOnceStats, error)
+}
+
+type backendLeafGenerationGCRunner interface {
+	LeafGenerationGC(ctx context.Context, opts backenddb.LeafGenerationGCOptions) (backenddb.LeafGenerationGCStats, error)
 }
 
 type backendIndexVacuumer interface {
@@ -3362,6 +5984,8 @@ type Options struct {
 	// 0=default(unset; normalized to hot_warm_cold by Open),
 	// 1=off, 2=hot_warm_cold.
 	ValueLogGenerationPolicy uint8
+	// ValueLogGenerationLeafSegmentTargetBytes configures leaf_vlog segment target size.
+	ValueLogGenerationLeafSegmentTargetBytes int64
 	// ValueLogGenerationHotSegmentTargetBytes configures hot segment target size.
 	ValueLogGenerationHotSegmentTargetBytes int64
 	// ValueLogGenerationWarmSegmentTargetBytes configures warm segment target size.
@@ -3378,6 +6002,11 @@ type Options struct {
 	ValueLogRewriteTriggerTotalBytes int64
 	// ValueLogRewriteTriggerChurnPerSec triggers rewrite by churn rate.
 	ValueLogRewriteTriggerChurnPerSec int64
+	// ValueLogRewriteMinSegmentAge gates online rewrite to source segments that
+	// are at least this old.
+	//
+	// 0 uses the implementation default.
+	ValueLogRewriteMinSegmentAge time.Duration
 	// ForceValueLogPointers stores all values out-of-line in the value log.
 	ForceValueLogPointers bool
 	// DisableReadChecksum skips CRC verification on value-log reads.
@@ -3399,6 +6028,9 @@ type Options struct {
 	// ValueLogDictMaxK clamps the maximum group size (K) used for dict-compressed
 	// value-log frames. Values <= 0 use the default (32).
 	ValueLogDictMaxK int
+	// ValueLogDictClassMode controls dictionary-state partitioning:
+	// 0=single shared dict stream, 1=split outer-leaf vs single-value streams.
+	ValueLogDictClassMode uint8
 	// ValueLogDictFrameEncodeLevel controls the zstd encoder level used for
 	// dict-compressed value-log frames. Values <= 0 use SpeedFastest.
 	ValueLogDictFrameEncodeLevel zstd.EncoderLevel
@@ -3453,14 +6085,29 @@ type DictStore interface {
 	GetDictBytes(ctx context.Context, dictID uint64) ([]byte, error)
 }
 
+type dictStoreCurrentByClass interface {
+	GetCurrentForClass(ctx context.Context, class string) (uint64, error)
+}
+
+type dictStoreWriterByClass interface {
+	SetCurrentForClass(ctx context.Context, class string, dictID uint64) error
+}
+
 type batchArenaLease struct {
 	refs   int
 	chunks [][]byte
 	bytes  int64
 }
 
+type appendOnlyDirectArenaLease struct {
+	shardID uint16
+	chunks  [][]byte
+	bytes   int64
+}
+
 type memtableViewDeferredInfo struct {
 	memtables     int64
+	bytes         int64
 	sinceUnixNano int64
 }
 
@@ -3477,6 +6124,9 @@ type memtableViewLifecycleTelemetry struct {
 	deferredMemtablesCurrent atomic.Int64
 	deferredMemtablesMax     atomic.Int64
 	deferredMemtablesTotal   atomic.Uint64
+	deferredBytesCurrent     atomic.Int64
+	deferredBytesMax         atomic.Int64
+	deferredBytesTotal       atomic.Uint64
 
 	deferredMu sync.Mutex
 	deferred   map[*memtableView]memtableViewDeferredInfo
@@ -3485,12 +6135,13 @@ type memtableViewLifecycleTelemetry struct {
 }
 
 type DB struct {
-	mu      sync.RWMutex
-	flushMu sync.Mutex
-	writeMu sync.RWMutex
-	statsMu sync.Mutex // Re-introduce global statsMu for isolation
-	bpMu    sync.Mutex
-	bpCond  *sync.Cond
+	mu          sync.RWMutex
+	flushMu     sync.Mutex
+	writeMu     sync.RWMutex
+	updateLocks keyupdate.Locks
+	statsMu     sync.Mutex // Re-introduce global statsMu for isolation
+	bpMu        sync.Mutex
+	bpCond      *sync.Cond
 
 	// Commit workers removed; backend commits are synchronous.
 
@@ -3498,51 +6149,75 @@ type DB struct {
 	checkpointCond    *sync.Cond
 	checkpointing     atomic.Bool
 	maintenanceActive atomic.Bool
+	maintenancePhase  atomic.Uint32
 
 	// Level 0 (Memory)
-	mutableShards           []memShard
-	mutableShardMask        uint64
-	mutableBytes            atomic.Int64
-	mutableThreshold        atomic.Int64
-	rotatePending           atomic.Bool
-	queue                   []memtable.Table
-	queueShardIDs           []uint16
-	queueLaneIDs            []uint16
-	queueIDs                []uint64
-	queueEnqueueNS          []int64
-	nextQueueID             atomic.Uint64
-	batchEntryHint          atomic.Int32
-	batchCopyBytesHint      atomic.Int32
-	batchArenaLeaseMu       sync.Mutex
-	batchArenaLeasesByMem   map[memtable.Table][]*batchArenaLease
-	batchArenaLeaseBytes    atomic.Int64
-	batchArenaLeaseBytesMax atomic.Int64
-	batchEntriesPool        sync.Pool
-	batchShardEntriesPool   sync.Pool
-	batchIntPool            sync.Pool
+	mutableShards                 []memShard
+	mutableShardMask              uint64
+	mutableBytes                  atomic.Int64
+	mutableThreshold              atomic.Int64
+	rotatePending                 atomic.Bool
+	queue                         []memtable.Table
+	queueShardIDs                 []uint16
+	queueLaneIDs                  []uint16
+	queueIDs                      []uint64
+	queueEnqueueNS                []int64
+	nextQueueID                   atomic.Uint64
+	appendOnlyEntryHint           atomic.Int32
+	batchEntryHint                atomic.Int32
+	batchCopyBytesHint            atomic.Int32
+	batchArenaLeaseMu             sync.Mutex
+	batchArenaLeasesByMem         map[memtable.Table][]*batchArenaLease
+	batchArenaLeaseBytes          atomic.Int64
+	batchArenaLeaseBytesMax       atomic.Int64
+	batchArenaAllocRequestedBytes atomic.Uint64
+	batchArenaAllocClassBytes     atomic.Uint64
+	batchArenaUsedBytes           atomic.Uint64
+	batchArenaTailWasteBytes      atomic.Uint64
+	batchArenaMainAllocClassBytes atomic.Uint64
+	batchArenaMainUsedBytes       atomic.Uint64
+	batchArenaMainTailWasteBytes  atomic.Uint64
+	batchArenaPtrAllocClassBytes  atomic.Uint64
+	batchArenaPtrUsedBytes        atomic.Uint64
+	batchArenaPtrTailWasteBytes   atomic.Uint64
+	batchArenaTailCompactRuns     atomic.Uint64
+	batchArenaTailCompactCopied   atomic.Uint64
+	batchArenaTailCompactSaved    atomic.Uint64
+	batchEntriesPool              sync.Pool
+	batchShardEntriesPool         sync.Pool
+	batchIntPool                  sync.Pool
 
 	// memtables is an RCU-style snapshot of (mutable, queue, queueRanges).
 	// Readers load it atomically to avoid holding db.mu around memtable access.
-	memtables             atomic.Pointer[memtableView]
-	rootDomainVersion     atomic.Uint64
-	rootPointStates       []rootDomainState
-	rootIteratorState     rootDomainState
-	hashSortedIndexer     *memtable.HashSortedIndexer
-	appendOnlyMemPool     sync.Pool
-	appendOnlyMemLeaseMu  sync.Mutex
-	appendOnlyMemLeases   []*memtable.AppendOnly
-	pendingRetiredMems    []memtable.Table
-	memtableViewTelemetry memtableViewLifecycleTelemetry
-	queueRanges           []keyRange
-	queueWALPaths         [][]string
-	queueValueLogPaths    [][]string
-	backendRange          keyRange
-	backendRangeKnown     bool
-	backendRangeInit      sync.Once
-	backendRangeErr       error
+	memtables                        atomic.Pointer[memtableView]
+	rootDomainVersion                atomic.Uint64
+	rootPointStates                  []rootDomainState
+	rootIteratorState                rootDomainState
+	hashSortedIndexer                *memtable.HashSortedIndexer
+	appendOnlyMemPool                sync.Pool
+	appendOnlyMemLeaseMu             sync.Mutex
+	appendOnlyMemLeases              []*memtable.AppendOnly
+	appendOnlyMemLeaseHitTotal       atomic.Uint64
+	appendOnlyMemPoolHitTotal        atomic.Uint64
+	appendOnlyMemNewAllocTotal       atomic.Uint64
+	appendOnlyMemNewAllocWithQueue   atomic.Uint64
+	appendOnlyMemNewAllocQueueBytes  atomic.Uint64
+	appendOnlyDirectArenaLeaseMu     sync.Mutex
+	appendOnlyDirectArenaLeasesByMem map[memtable.Table]*appendOnlyDirectArenaLease
+	pendingRetiredMems               []memtable.Table
+	memtableViewTelemetry            memtableViewLifecycleTelemetry
+	retainedArenaTrimLastUnixNano    atomic.Int64
+	queueRanges                      []keyRange
+	queueWALPaths                    [][]string
+	queueValueLogPaths               [][]string
+	backendRange                     keyRange
+	backendRangeKnown                bool
+	backendRangeInit                 sync.Once
+	backendRangeErr                  error
 
 	// Durability
 	lanes         []lane
+	leafLog       lane
 	laneMu        sync.Mutex
 	laneCond      *sync.Cond
 	nextLane      int
@@ -3575,6 +6250,7 @@ type DB struct {
 	valueLogIncompressibleProbe    uint64
 	valueLogAutoPolicy             uint8
 	valueLogGenerationPolicy       uint8
+	valueLogGenerationLeafTarget   int64
 	valueLogGenerationHotTarget    int64
 	valueLogGenerationWarmTarget   int64
 	valueLogGenerationColdTarget   int64
@@ -3583,6 +6259,7 @@ type DB struct {
 	valueLogRewriteTriggerRatioPPM uint32
 	valueLogRewriteTriggerBytes    int64
 	valueLogRewriteTriggerChurn    int64
+	valueLogRewriteMinSegmentAge   time.Duration
 	valueLogReader                 *valuelog.Manager
 	valueLogHotLanes               []int
 	valueLogWarmLanes              []int
@@ -3605,6 +6282,7 @@ type DB struct {
 	// Value-log dictionary compression (cached mode).
 	valueLogDictTrain              compression.TrainConfig
 	valueLogDictMaxK               int
+	valueLogDictClassMode          uint8
 	valueLogDictFrameEncodeLevel   zstd.EncoderLevel
 	valueLogDictFrameEnableEntropy bool
 	valueLogDictSampleStride       uint64
@@ -3617,11 +6295,13 @@ type DB struct {
 	valueLogDictMetricsMinRecords  int
 	valueLogDictMetricsPauseBytes  int
 
-	valueLogDictTrainerMu sync.Mutex
-	valueLogDictTrainer   *compression.Trainer
-	valueLogDictKickCh    chan struct{}
-	valueLogDictMetrics   compression.Metrics
-	valueLogDictFrames    struct {
+	valueLogDictTrainerMu      sync.RWMutex
+	valueLogDictApplyMu        sync.RWMutex
+	valueLogDictTrainer        *compression.Trainer
+	valueLogDictTrainerByClass [vlogDictClassCount]*compression.Trainer
+	valueLogDictKickCh         chan struct{}
+	valueLogDictMetrics        compression.Metrics
+	valueLogDictFrames         struct {
 		total     atomic.Uint64
 		attempted atomic.Uint64
 		kept      atomic.Uint64
@@ -3646,10 +6326,13 @@ type DB struct {
 	valueLogDictPausedSampleStride           uint64
 	valueLogDictPausedSampleCounter          atomic.Uint64
 	valueLogDictLastAppliedDictHash          atomic.Uint64
+	valueLogDictLastAppliedDictHashByClass   [vlogDictClassCount]atomic.Uint64
 	valueLogDictLastAppliedDictID            atomic.Uint64
 	valueLogDictLastPublishUnixNano          atomic.Int64
 	valueLogDictLastKUpdateUnixNano          atomic.Int64
 	valueLogDictCurrentK                     atomic.Uint32
+	valueLogDictLastAppliedDictIDByClass     [vlogDictClassCount]atomic.Uint64
+	valueLogDictCurrentKByClass              [vlogDictClassCount]atomic.Uint32
 	valueLogDictKMu                          sync.RWMutex
 	valueLogDictKCache                       map[uint64]int
 	valueLogDictBytesMu                      sync.Mutex
@@ -3666,117 +6349,484 @@ type DB struct {
 	// Cached dictdb current pointer to avoid per-write lookups on the hot path.
 	// A stale dictID is safe (it always points to a durable dict); at worst we
 	// lag adoption of a newly trained dictionary.
-	dictCurrentCached atomic.Uint64
-	dictCurrentOps    atomic.Uint64
+	dictCurrentCached        atomic.Uint64
+	dictCurrentOps           atomic.Uint64
+	dictCurrentCachedByClass [vlogDictClassCount]atomic.Uint64
+	dictCurrentOpsByClass    [vlogDictClassCount]atomic.Uint64
 
 	// Config
-	dir                       string
-	flushThreshold            int64
-	memtableCap               int
-	memtableMode              memtable.Mode
-	memtableStats             memtableStats
-	rootDomainProbeStats      rootDomainProbeStats
-	memtableAdaptive          bool
-	memtableAdaptiveObserve   atomic.Bool
-	adaptiveShardedStats      bool
-	memtableWarmupActive      bool
-	memtableWarmupThreshold   int64
-	domainIngressWorkers      int
-	domainIngressQueueSize    int
-	maxQueuedMemtables        int
-	slowdownBacklogSeconds    float64
-	stopBacklogSeconds        float64
-	maxBacklogBytes           int64
-	writerFlushMaxMemtables   int
-	writerFlushMaxDuration    time.Duration
-	flushBuildConcurrency     int
-	flushBuildAutoConcurrency bool
-	flushBuildMinEntries      int
-	flushBuildMinUnits        int
-	flushBuildChunkCap        int
-	flushBuildChunkTarget     int
-	flushBuildChunkMinBytes   int
-	flushBuildChunkMaxBytes   int
-	flushBuildPrefetchUnits   int
-	flushBackendMaxEntries    int
-	flushBackendInitEntries   int
-	flushBackendMaxBatches    int
-	walMaxSegmentBytes        int64
-	valueLogMaxSegmentBytes   int64
-	journalCompression        bool
+	dir                                               string
+	valueLogDir                                       string
+	leafLogDir                                        string
+	flushThreshold                                    int64
+	memtableCap                                       int
+	memtableMode                                      atomic.Uint32
+	memtableStats                                     memtableStats
+	rootDomainProbeStats                              rootDomainProbeStats
+	memtableAdaptive                                  bool
+	memtableAdaptiveObserve                           atomic.Bool
+	memtableAdaptiveBTreeMinIters                     uint64
+	memtableAdaptiveDecisionTotal                     atomic.Uint64
+	memtableAdaptiveDecisionReason                    atomic.Uint32
+	memtableAdaptiveDecisionMode                      atomic.Uint32
+	memtableAdaptiveDecisionWrites                    atomic.Uint64
+	memtableAdaptiveDecisionSeqWrites                 atomic.Uint64
+	memtableAdaptiveDecisionOverwriteWrites           atomic.Uint64
+	memtableAdaptiveDecisionIters                     atomic.Uint64
+	memtableAdaptiveDecisionRangeIters                atomic.Uint64
+	memtableAdaptiveDecisionRangePctPPM               atomic.Uint32
+	memtableAdaptiveDecisionLowDataTotal              atomic.Uint64
+	memtableAdaptiveDecisionBTreeTotal                atomic.Uint64
+	memtableAdaptiveDecisionBTreeBlockedMinItersTotal atomic.Uint64
+	memtableAdaptiveDecisionAppendTotal               atomic.Uint64
+	memtableAdaptiveDecisionHashTotal                 atomic.Uint64
+	adaptiveShardedStats                              bool
+	memtableWarmupActive                              bool
+	memtableWarmupThreshold                           int64
+	domainIngressWorkers                              int
+	domainIngressQueueSize                            int
+	maxQueuedMemtables                                int
+	slowdownBacklogSeconds                            float64
+	stopBacklogSeconds                                float64
+	maxBacklogBytes                                   int64
+	writerFlushMaxMemtables                           int
+	writerFlushMaxDuration                            time.Duration
+	flushBuildConcurrency                             int
+	flushBuildAutoConcurrency                         bool
+	flushBuildMinEntries                              int
+	flushBuildMinUnits                                int
+	flushBuildChunkCap                                int
+	flushBuildChunkTarget                             int
+	flushBuildChunkMinBytes                           int
+	flushBuildChunkMaxBytes                           int
+	flushBuildPrefetchUnits                           int
+	flushBackendMaxEntries                            int
+	flushBackendInitEntries                           int
+	flushBackendMaxBatches                            int
+	walMaxSegmentBytes                                int64
+	valueLogMaxSegmentBytes                           int64
+	journalCompression                                bool
 
-	disableJournal                           bool
-	relaxedSync                              bool
-	notifyError                              func(error)
-	debugFlushPointers                       bool
-	debugFlushTiming                         bool
-	debugPtrEligible                         atomic.Int64
-	debugPtrUsed                             atomic.Int64
-	debugPtrNoPtr                            atomic.Int64
-	debugPtrDenied                           atomic.Int64
-	debugPtrDisabled                         atomic.Int64
-	checkpointRuns                           atomic.Uint64
-	checkpointTotalNs                        atomic.Uint64
-	checkpointMaxNs                          atomic.Uint64
-	checkpointNoopSkips                      atomic.Uint64
-	checkpointFlushMuWaitNs                  atomic.Uint64
-	checkpointFlushMuWaitMaxNs               atomic.Uint64
-	checkpointAutoVacuumRuns                 atomic.Uint64
-	checkpointAutoVacuumLastCheckRun         atomic.Uint64
-	checkpointAutoVacuumLastPages            atomic.Uint64
-	checkpointAutoVacuumLastInternalP50      atomic.Uint64
-	checkpointAutoVacuumLastInternalAvg      atomic.Uint64
-	lastForegroundWriteUnixNano              atomic.Int64
-	lastForegroundReadUnixNano               atomic.Int64
-	foregroundReadStampCounter               atomic.Uint32
-	activeForegroundIterators                atomic.Int64
-	retainedPruneLastStartUnixNano           atomic.Int64
-	retainedPruneMu                          sync.Mutex
-	retainedPruneDone                        chan struct{}
-	vlogGenerationRemapSuccesses             atomic.Uint64
-	vlogGenerationRemapFailures              atomic.Uint64
-	vlogGenerationRewriteBytesIn             atomic.Uint64
-	vlogGenerationRewriteBytesOut            atomic.Uint64
-	vlogGenerationRewriteRuns                atomic.Uint64
-	vlogGenerationGCSegmentsDeleted          atomic.Uint64
-	vlogGenerationGCBytesDeleted             atomic.Uint64
-	vlogGenerationGCRuns                     atomic.Uint64
-	vlogGenerationVacuumRuns                 atomic.Uint64
-	vlogGenerationVacuumFailures             atomic.Uint64
-	vlogGenerationLastVacuumUnixNano         atomic.Int64
-	vlogGenerationLastRewritePlanUnixNano    atomic.Int64
-	vlogGenerationLastRewriteUnixNano        atomic.Int64
-	vlogGenerationLastGCUnixNano             atomic.Int64
-	vlogGenerationLastCheckpointKickUnixNano atomic.Int64
-	vlogGenerationChurnBytes                 atomic.Uint64
-	vlogGenerationSchedulerState             atomic.Uint32
-	vlogGenerationLastReason                 atomic.Uint32
-	vlogGenerationRewriteQueueMu             sync.Mutex
-	vlogGenerationCheckpointKickActive       atomic.Bool
-	vlogGenerationRewriteQueue               []uint32
-	vlogGenerationRewriteQueueLoaded         bool
-	vlogGenerationLastChurnBps               atomic.Int64
-	vlogGenerationLastChurnSampleBytes       atomic.Uint64
-	vlogGenerationLastChurnSampleNS          atomic.Int64
+	disableJournal                                               bool
+	relaxedSync                                                  bool
+	notifyError                                                  func(error)
+	debugFlushPointers                                           bool
+	debugFlushTiming                                             bool
+	debugPtrEligible                                             atomic.Int64
+	debugPtrUsed                                                 atomic.Int64
+	debugPtrNoPtr                                                atomic.Int64
+	debugPtrDenied                                               atomic.Int64
+	debugPtrDisabled                                             atomic.Int64
+	checkpointRuns                                               atomic.Uint64
+	checkpointTotalNs                                            atomic.Uint64
+	checkpointMaxNs                                              atomic.Uint64
+	checkpointNoopSkips                                          atomic.Uint64
+	checkpointFlushMuWaitNs                                      atomic.Uint64
+	checkpointFlushMuWaitMaxNs                                   atomic.Uint64
+	checkpointAutoVacuumRuns                                     atomic.Uint64
+	checkpointAutoVacuumLastCheckRun                             atomic.Uint64
+	checkpointAutoVacuumLastPages                                atomic.Uint64
+	checkpointAutoVacuumLastInternalP50                          atomic.Uint64
+	checkpointAutoVacuumLastInternalAvg                          atomic.Uint64
+	lastForegroundWriteUnixNano                                  atomic.Int64
+	lastForegroundReadUnixNano                                   atomic.Int64
+	foregroundReadStampCounter                                   atomic.Uint32
+	activeForegroundIterators                                    atomic.Int64
+	retainedPruneLastStartUnixNano                               atomic.Int64
+	retainedValueLogPruneLastUnixNano                            atomic.Int64
+	retainedValueLogPruneRuns                                    atomic.Uint64
+	retainedValueLogPruneForcedRuns                              atomic.Uint64
+	retainedValueLogPruneForegroundAbortRuns                     atomic.Uint64
+	retainedValueLogPruneRemovedSegments                         atomic.Uint64
+	retainedValueLogPruneRemovedBytes                            atomic.Uint64
+	retainedValueLogPruneInUseSkippedSegments                    atomic.Uint64
+	retainedValueLogPruneInUseSkippedBytes                       atomic.Uint64
+	retainedValueLogPruneCandidateSegments                       atomic.Uint64
+	retainedValueLogPruneCandidateBytes                          atomic.Uint64
+	retainedValueLogPruneLiveSkippedSegments                     atomic.Uint64
+	retainedValueLogPruneLiveSkippedBytes                        atomic.Uint64
+	retainedValueLogPruneParseSkippedSegments                    atomic.Uint64
+	retainedValueLogPruneParseSkippedBytes                       atomic.Uint64
+	retainedValueLogPruneZombieMarkedSegments                    atomic.Uint64
+	retainedValueLogPruneZombieMarkedBytes                       atomic.Uint64
+	retainedValueLogPruneLastObservedSourceSegments              atomic.Int64
+	retainedValueLogPruneLastObservedSourceBytes                 atomic.Int64
+	retainedValueLogPruneLastObservedSourceCandidateSegments     atomic.Int64
+	retainedValueLogPruneLastObservedSourceCandidateBytes        atomic.Int64
+	retainedValueLogPruneLastObservedSourceRemovedSegments       atomic.Int64
+	retainedValueLogPruneLastObservedSourceRemovedBytes          atomic.Int64
+	retainedValueLogPruneLastObservedSourceInUseSkippedSegments  atomic.Int64
+	retainedValueLogPruneLastObservedSourceInUseSkippedBytes     atomic.Int64
+	retainedValueLogPruneLastObservedSourceLiveSkippedSegments   atomic.Int64
+	retainedValueLogPruneLastObservedSourceLiveSkippedBytes      atomic.Int64
+	retainedValueLogPruneLastObservedSourceParseSkippedSegments  atomic.Int64
+	retainedValueLogPruneLastObservedSourceParseSkippedBytes     atomic.Int64
+	retainedValueLogPruneLastObservedSourceZombieMarkedSegments  atomic.Int64
+	retainedValueLogPruneLastObservedSourceZombieMarkedBytes     atomic.Int64
+	retainedValueLogPruneObservedSourceSegmentsTotal             atomic.Uint64
+	retainedValueLogPruneObservedSourceBytesTotal                atomic.Int64
+	retainedValueLogPruneObservedSourceCandidateSegmentsTotal    atomic.Uint64
+	retainedValueLogPruneObservedSourceCandidateBytesTotal       atomic.Int64
+	retainedValueLogPruneObservedSourceRemovedSegmentsTotal      atomic.Uint64
+	retainedValueLogPruneObservedSourceRemovedBytesTotal         atomic.Int64
+	retainedValueLogPruneObservedSourceInUseSkippedSegmentsTotal atomic.Uint64
+	retainedValueLogPruneObservedSourceInUseSkippedBytesTotal    atomic.Int64
+	retainedValueLogPruneObservedSourceLiveSkippedSegmentsTotal  atomic.Uint64
+	retainedValueLogPruneObservedSourceLiveSkippedBytesTotal     atomic.Int64
+	retainedValueLogPruneObservedSourceParseSkippedSegmentsTotal atomic.Uint64
+	retainedValueLogPruneObservedSourceParseSkippedBytesTotal    atomic.Int64
+	retainedValueLogPruneObservedSourceZombieMarkedSegmentsTotal atomic.Uint64
+	retainedValueLogPruneObservedSourceZombieMarkedBytesTotal    atomic.Int64
+	retainedValueLogPruneScheduleRequests                        atomic.Uint64
+	retainedValueLogPruneScheduleForcedRequests                  atomic.Uint64
+	retainedValueLogPruneScheduleSkipClosing                     atomic.Uint64
+	retainedValueLogPruneScheduleSkipInFlight                    atomic.Uint64
+	retainedValueLogPruneScheduleSkipNoClosedBytes               atomic.Uint64
+	retainedValueLogPruneScheduleSkipBelowPressure               atomic.Uint64
+	retainedValueLogPruneScheduleSkipMinInterval                 atomic.Uint64
+	retainedValueLogPruneWriteGateRetries                        atomic.Uint64
+	retainedValueLogPruneWriteGateRetrySuccesses                 atomic.Uint64
+	retainedPruneForceRequested                                  atomic.Bool
+	retainedPruneObservedMu                                      sync.Mutex
+	retainedPruneObservedSourceIDs                               map[uint32]struct{}
+	vlogGenerationObservedGCMu                                   sync.Mutex
+	vlogGenerationObservedGCSourceIDs                            map[uint32]struct{}
+	vlogGenerationObservedGCQueuedBatches                        atomic.Uint64
+	vlogGenerationObservedGCQueuedIDs                            atomic.Uint64
+	vlogGenerationObservedGCTakenBatches                         atomic.Uint64
+	vlogGenerationObservedGCTakenIDs                             atomic.Uint64
+	vlogGenerationObservedGCRuns                                 atomic.Uint64
+	vlogGenerationObservedGCRetryQueued                          atomic.Uint64
+	vlogGenerationObservedGCRetryDropped                         atomic.Uint64
+	vlogGenerationObservedGCRetryAttempts                        map[uint32]uint8
+	vlogGenerationObservedGCFirstQueuedUnixNano                  map[uint32]int64
+	vlogGenerationObservedGCLatencyCompletedIDs                  atomic.Uint64
+	vlogGenerationObservedGCLatencyDroppedIDs                    atomic.Uint64
+	vlogGenerationObservedGCLatencyTotalMS                       atomic.Uint64
+	vlogGenerationObservedGCLatencyMaxMS                         atomic.Uint64
+	vlogGenerationObservedGCSourceSegmentsTotal                  atomic.Uint64
+	vlogGenerationObservedGCSourceSegmentsEligibleTotal          atomic.Uint64
+	vlogGenerationObservedGCSourceSegmentsDeletedTotal           atomic.Uint64
+	vlogGenerationObservedGCSourceSegmentsProtectedInUseTotal    atomic.Uint64
+	vlogGenerationObservedGCSourceSegmentsProtectedRetainedTotal atomic.Uint64
+	vlogGenerationObservedGCSourceSegmentsProtectedOverlapTotal  atomic.Uint64
+	vlogGenerationObservedGCSourceSegmentsProtectedOtherTotal    atomic.Uint64
+	vlogGenerationObservedGCSourceBytesTotal                     atomic.Int64
+	vlogGenerationObservedGCSourceBytesEligibleTotal             atomic.Int64
+	vlogGenerationObservedGCSourceBytesDeletedTotal              atomic.Int64
+	vlogGenerationObservedGCSourceBytesProtectedInUseTotal       atomic.Int64
+	vlogGenerationObservedGCSourceBytesProtectedRetainedTotal    atomic.Int64
+	vlogGenerationObservedGCSourceBytesProtectedOverlapTotal     atomic.Int64
+	vlogGenerationObservedGCSourceBytesProtectedOtherTotal       atomic.Int64
+	retainedPruneMu                                              sync.Mutex
+	retainedPruneDone                                            chan struct{}
+	retainedPruneRunningDone                                     chan struct{}
+	vlogGenerationRemapSuccesses                                 atomic.Uint64
+	vlogGenerationRemapFailures                                  atomic.Uint64
+	vlogGenerationRewriteBytesIn                                 atomic.Uint64
+	vlogGenerationRewriteBytesOut                                atomic.Uint64
+	vlogGenerationRewriteReclaimedBytes                          atomic.Uint64
+	vlogGenerationRewriteValueRecordsCopied                      atomic.Uint64
+	vlogGenerationRewriteValueBytesCopied                        atomic.Uint64
+	vlogGenerationRewriteProcessedLiveBytes                      atomic.Uint64
+	vlogGenerationRewriteProcessedStaleBytes                     atomic.Uint64
+	vlogGenerationRewriteNoReclaimRuns                           atomic.Uint64
+	vlogGenerationRewriteNoReclaimStaleBytes                     atomic.Uint64
+	vlogGenerationRewriteRuns                                    atomic.Uint64
+	vlogGenerationRewritePlanRuns                                atomic.Uint64
+	vlogGenerationRewritePlanCanceled                            atomic.Uint64
+	vlogGenerationRewritePlanErrors                              atomic.Uint64
+	vlogGenerationRewritePlanEmpty                               atomic.Uint64
+	vlogGenerationRewritePlanEmptyAgeBlocked                     atomic.Uint64
+	vlogGenerationRewritePlanEmptyNoSelection                    atomic.Uint64
+	vlogGenerationRewritePlanSelected                            atomic.Uint64
+	vlogGenerationRewritePlanSelectedSegments                    atomic.Uint64
+	vlogGenerationRewritePlanSelectedChunks                      atomic.Uint64
+	vlogGenerationRewritePlanSelectedBytes                       atomic.Uint64
+	vlogGenerationRewritePlanSelectedLiveBytes                   atomic.Uint64
+	vlogGenerationRewritePlanSelectedStaleBytes                  atomic.Uint64
+	vlogGenerationRewritePlanPenaltyFilterRuns                   atomic.Uint64
+	vlogGenerationRewritePlanPenaltyFilterSegments               atomic.Uint64
+	vlogGenerationRewritePlanPenaltyFilterToEmpty                atomic.Uint64
+	vlogGenerationRewritePlanCanceledLastNS                      atomic.Int64
+	vlogGenerationRewriteAgeBlockedUntilNS                       atomic.Int64
+	vlogGenerationRewriteAgeBlockedWakeRunning                   atomic.Bool
+	vlogGenerationRewriteIneffectiveLastNS                       atomic.Int64
+	vlogGenerationRewriteIneffectiveRuns                         atomic.Uint64
+	vlogGenerationRewriteIneffectiveBytesIn                      atomic.Uint64
+	vlogGenerationRewriteIneffectiveBytesOut                     atomic.Uint64
+	vlogGenerationRewriteCanceledRuns                            atomic.Uint64
+	vlogGenerationRewriteCanceledFreshPlanRuns                   atomic.Uint64
+	vlogGenerationRewriteCanceledQueuedDebtRuns                  atomic.Uint64
+	vlogGenerationRewriteCanceledLastNS                          atomic.Int64
+	vlogGenerationRewriteDeadlineRuns                            atomic.Uint64
+	vlogGenerationRewriteDeadlineFreshPlanRuns                   atomic.Uint64
+	vlogGenerationRewriteDeadlineQueuedDebtRuns                  atomic.Uint64
+	vlogGenerationRewriteDeadlineLastNS                          atomic.Int64
+	vlogGenerationRewriteQueuePruneRuns                          atomic.Uint64
+	vlogGenerationRewriteQueuePruneIDs                           atomic.Uint64
+	vlogGenerationGCSegmentsDeleted                              atomic.Uint64
+	vlogGenerationGCBytesDeleted                                 atomic.Uint64
+	vlogGenerationGCRuns                                         atomic.Uint64
+	vlogGenerationVacuumRuns                                     atomic.Uint64
+	vlogGenerationVacuumFailures                                 atomic.Uint64
+	vlogGenerationVacuumSkippedDisabled                          atomic.Uint64
+	vlogGenerationVacuumSkippedRewriteBytes                      atomic.Uint64
+	vlogGenerationVacuumSkippedCooldown                          atomic.Uint64
+	vlogGenerationLastVacuumUnixNano                             atomic.Int64
+	vlogGenerationLastRewritePlanUnixNano                        atomic.Int64
+	vlogGenerationLastRewriteUnixNano                            atomic.Int64
+	vlogGenerationLastGCUnixNano                                 atomic.Int64
+	vlogGenerationLastGCNoopUnixNano                             atomic.Int64
+	vlogGenerationLastCheckpointKickUnixNano                     atomic.Int64
+	vlogGenerationLastGCDryRunUnixNano                           atomic.Int64
+	vlogGenerationLastGCDryRunBytesEligible                      atomic.Int64
+	vlogGenerationLastGCDryRunSegsEligible                       atomic.Int64
+	vlogGenerationLastGCBytesReferenced                          atomic.Int64
+	vlogGenerationLastGCSegmentsReferenced                       atomic.Int64
+	vlogGenerationLastGCBytesActive                              atomic.Int64
+	vlogGenerationLastGCSegmentsActive                           atomic.Int64
+	vlogGenerationLastGCBytesProtected                           atomic.Int64
+	vlogGenerationLastGCSegmentsProtected                        atomic.Int64
+	vlogGenerationLastGCBytesProtectedInUse                      atomic.Int64
+	vlogGenerationLastGCSegmentsProtectedInUse                   atomic.Int64
+	vlogGenerationLastGCBytesProtectedRetained                   atomic.Int64
+	vlogGenerationLastGCSegmentsProtectedRetained                atomic.Int64
+	vlogGenerationLastGCBytesProtectedOverlap                    atomic.Int64
+	vlogGenerationLastGCSegmentsProtectedOverlap                 atomic.Int64
+	vlogGenerationLastGCBytesProtectedOther                      atomic.Int64
+	vlogGenerationLastGCSegmentsProtectedOther                   atomic.Int64
+	vlogGenerationLastGCBytesEligible                            atomic.Int64
+	vlogGenerationLastGCSegmentsEligible                         atomic.Int64
+	vlogGenerationLastGCBytesDeleted                             atomic.Int64
+	vlogGenerationLastGCSegmentsDeleted                          atomic.Int64
+	vlogGenerationLastGCBytesPending                             atomic.Int64
+	vlogGenerationLastGCSegmentsPending                          atomic.Int64
+	vlogGenerationLastGCObservedSourceSegments                   atomic.Int64
+	vlogGenerationLastGCObservedSourceSegmentsReferenced         atomic.Int64
+	vlogGenerationLastGCObservedSourceSegmentsActive             atomic.Int64
+	vlogGenerationLastGCObservedSourceSegmentsProtected          atomic.Int64
+	vlogGenerationLastGCObservedSourceSegmentsProtectedInUse     atomic.Int64
+	vlogGenerationLastGCObservedSourceSegmentsProtectedRetained  atomic.Int64
+	vlogGenerationLastGCObservedSourceSegmentsProtectedOverlap   atomic.Int64
+	vlogGenerationLastGCObservedSourceSegmentsProtectedOther     atomic.Int64
+	vlogGenerationLastGCObservedSourceSegmentsEligible           atomic.Int64
+	vlogGenerationLastGCObservedSourceSegmentsDeleted            atomic.Int64
+	vlogGenerationLastGCObservedSourceSegmentsPending            atomic.Int64
+	vlogGenerationLastGCObservedSourceBytes                      atomic.Int64
+	vlogGenerationLastGCObservedSourceBytesReferenced            atomic.Int64
+	vlogGenerationLastGCObservedSourceBytesActive                atomic.Int64
+	vlogGenerationLastGCObservedSourceBytesProtected             atomic.Int64
+	vlogGenerationLastGCObservedSourceBytesProtectedInUse        atomic.Int64
+	vlogGenerationLastGCObservedSourceBytesProtectedRetained     atomic.Int64
+	vlogGenerationLastGCObservedSourceBytesProtectedOverlap      atomic.Int64
+	vlogGenerationLastGCObservedSourceBytesProtectedOther        atomic.Int64
+	vlogGenerationLastGCObservedSourceBytesEligible              atomic.Int64
+	vlogGenerationLastGCObservedSourceBytesDeleted               atomic.Int64
+	vlogGenerationLastGCObservedSourceBytesPending               atomic.Int64
+	vlogGenerationChurnBytes                                     atomic.Uint64
+	vlogGenerationSchedulerState                                 atomic.Uint32
+	vlogGenerationMaintenanceActive                              atomic.Bool
+	vlogGenerationMaintenanceAttempts                            atomic.Uint64
+	vlogGenerationMaintenanceAcquired                            atomic.Uint64
+	vlogGenerationMaintenanceCollisions                          atomic.Uint64
+	vlogGenerationMaintenanceSkipWALOnPeriodic                   atomic.Uint64
+	vlogGenerationMaintenanceSkipPhase                           atomic.Uint64
+	vlogGenerationMaintenanceSkipStageGate                       atomic.Uint64
+	vlogGenerationMaintenanceSkipStageNotDue                     atomic.Uint64
+	vlogGenerationMaintenanceSkipStageDue                        atomic.Uint64
+	vlogGenerationMaintenanceSkipAgeBlocked                      atomic.Uint64
+	vlogGenerationMaintenanceSkipPriority                        atomic.Uint64
+	vlogGenerationMaintenanceSkipQuiet                           atomic.Uint64
+	vlogGenerationMaintenanceSkipPreCheckpoint                   atomic.Uint64
+	vlogGenerationMaintenanceSkipCheckpointing                   atomic.Uint64
+	vlogGenerationMaintenancePassNoop                            atomic.Uint64
+	vlogGenerationMaintenancePassWithRewrite                     atomic.Uint64
+	vlogGenerationMaintenancePassWithGC                          atomic.Uint64
+	vlogGenerationMaintenancePassWithLeafPack                    atomic.Uint64
+	vlogGenerationMaintenanceAcquiredBySource                    [vlogGenerationMaintenanceSourceCount]atomic.Uint64
+	vlogGenerationMaintenancePassNoopBySource                    [vlogGenerationMaintenanceSourceCount]atomic.Uint64
+	vlogGenerationMaintenancePassWithRewriteBySource             [vlogGenerationMaintenanceSourceCount]atomic.Uint64
+	vlogGenerationMaintenancePassWithGCBySource                  [vlogGenerationMaintenanceSourceCount]atomic.Uint64
+	vlogGenerationMaintenancePassWithLeafPackBySource            [vlogGenerationMaintenanceSourceCount]atomic.Uint64
+	vlogGenerationLeafPackAttempts                               atomic.Uint64
+	vlogGenerationLeafPackAdmitted                               atomic.Uint64
+	vlogGenerationLeafPackRuns                                   atomic.Uint64
+	vlogGenerationLeafPackSkips                                  atomic.Uint64
+	vlogGenerationLeafPackSkipMinInterval                        atomic.Uint64
+	vlogGenerationLeafPackSkipWriteBurst                         atomic.Uint64
+	vlogGenerationLeafPackSkipQueuePressure                      atomic.Uint64
+	vlogGenerationLeafPackSkipForegroundIterators                atomic.Uint64
+	vlogGenerationLeafPackErrors                                 atomic.Uint64
+	vlogGenerationLeafPackCanceled                               atomic.Uint64
+	vlogGenerationLeafPackDeadline                               atomic.Uint64
+	vlogGenerationLeafPackBytesCopied                            atomic.Uint64
+	vlogGenerationLeafPackExpectedReclaimBytes                   atomic.Uint64
+	vlogGenerationLeafPackExpectedReclaimPerByteCopiedPPM        atomic.Uint64
+	vlogGenerationLeafPackSelectionBytesToCopy                   atomic.Uint64
+	vlogGenerationLeafPackSelectionBytesDead                     atomic.Uint64
+	vlogGenerationLeafPackSelectionGenerations                   atomic.Uint64
+	vlogGenerationLeafPackLastWallNanos                          atomic.Uint64
+	vlogGenerationLeafPackLastExpectedReclaimBytes               atomic.Int64
+	vlogGenerationLeafPackLastExpectedReclaimPerByteCopiedPPM    atomic.Int64
+	vlogGenerationLeafPackLastSelectionBytesToCopy               atomic.Int64
+	vlogGenerationLeafPackLastSelectionBytesDead                 atomic.Int64
+	vlogGenerationLeafPackLastSelectionGenerations               atomic.Int64
+	vlogGenerationLeafPackLastBytesCopied                        atomic.Int64
+	vlogGenerationLeafPackGCRuns                                 atomic.Uint64
+	vlogGenerationLeafPackGCEligibleGenerations                  atomic.Uint64
+	vlogGenerationLeafPackGCDeletedGenerations                   atomic.Uint64
+	vlogGenerationLeafPackGCDeletedFiles                         atomic.Uint64
+	vlogGenerationLeafPackGCDeletedBytes                         atomic.Uint64
+	vlogGenerationLeafPackReclaimedBytes                         atomic.Uint64
+	vlogGenerationLeafPackStopLowYield                           atomic.Uint64
+	vlogGenerationLeafPackGCLastEligibleGenerations              atomic.Int64
+	vlogGenerationLeafPackGCLastDeletedGenerations               atomic.Int64
+	vlogGenerationLeafPackGCLastDeletedFiles                     atomic.Int64
+	vlogGenerationLeafPackGCLastDeletedBytes                     atomic.Int64
+	vlogGenerationLeafPackLastReclaimedBytes                     atomic.Int64
+	vlogGenerationLeafPackLastUnixNano                           atomic.Int64
+	vlogGenerationLeafPackCanceledLastNS                         atomic.Int64
+	vlogGenerationLeafPackDeadlineLastNS                         atomic.Int64
+	vlogGenerationLeafPackLastSkipReason                         atomic.Value // string
+	vlogGenerationRewriteRunsBySource                            [vlogGenerationMaintenanceSourceCount]atomic.Uint64
+	vlogGenerationRewriteBudgetConsumedBySource                  [vlogGenerationMaintenanceSourceCount]atomic.Uint64
+	vlogGenerationRewriteSourceBytesRequestedBySource            [vlogGenerationMaintenanceSourceCount]atomic.Uint64
+	vlogGenerationRewriteSourceBytesUnreferencedBySource         [vlogGenerationMaintenanceSourceCount]atomic.Uint64
+	vlogGenerationMaintenancePassTotalNanos                      atomic.Uint64
+	vlogGenerationMaintenancePassMaxNanos                        atomic.Uint64
+	vlogGenerationLastReason                                     atomic.Uint32
+	vlogGenerationCheckpointKickRuns                             atomic.Uint64
+	vlogGenerationCheckpointKickRewriteRuns                      atomic.Uint64
+	vlogGenerationCheckpointKickGCRuns                           atomic.Uint64
+	vlogGenerationCheckpointKickSkippedHotNoDebt                 atomic.Uint64
+	vlogGenerationCheckpointKickHotNoDebtWakeRuns                atomic.Uint64
+	vlogGenerationCheckpointKickPending                          atomic.Bool
+	vlogGenerationCheckpointKickHotNoDebtWakeRunning             atomic.Bool
+	vlogGenerationDeferredMaintenancePending                     atomic.Bool
+	vlogGenerationDeferredMaintenanceRunning                     atomic.Bool
+	vlogGenerationRewriteQueuePending                            atomic.Bool
+	vlogGenerationRewriteQueueRunning                            atomic.Bool
+	vlogGenerationRewriteStageWakeObservedNS                     atomic.Int64
+	vlogGenerationRewriteQueueMu                                 sync.Mutex
+	vlogGenerationCheckpointKickActive                           atomic.Bool
+	vlogGenerationRewriteQueue                                   []uint32
+	vlogGenerationRewriteLedger                                  []backenddb.ValueLogRewritePlanSegment
+	vlogGenerationRewriteChunkLedger                             []backenddb.ValueLogRewritePlanChunk
+	vlogGenerationRewriteChunkBytes                              int64
+	vlogGenerationRewriteLedgerByFileID                          map[uint32]backenddb.ValueLogRewritePlanSegment
+	vlogGenerationRewriteHistory                                 map[uint32]valueLogGenerationRewriteHistory
+	vlogGenerationRewritePenalties                               map[uint32]valueLogGenerationRewritePenalty
+	vlogGenerationRewriteStagePending                            bool
+	vlogGenerationRewriteStageObservedUnixNano                   int64
+	vlogGenerationRewriteQueueLoaded                             bool
+	vlogGenerationLastChurnBps                                   atomic.Int64
+	vlogGenerationLastChurnSampleBytes                           atomic.Uint64
+	vlogGenerationLastChurnSampleNS                              atomic.Int64
 	// Rewrite budget token bucket (bytes) for online maintenance. This lets us
 	// interpret ValueLogRewriteBudgetBytesPerSec as a true per-second bandwidth
 	// budget while still running maintenance at coarse intervals.
-	vlogGenerationRewriteBudgetLastUnixNano atomic.Int64
-	vlogGenerationRewriteBudgetTokensBytes  atomic.Int64
-	bgErrMu                                 sync.Mutex
-	bgErr                                   error
+	vlogGenerationRewriteBudgetLastUnixNano                    atomic.Int64
+	vlogGenerationRewriteBudgetTokensBytes                     atomic.Int64
+	vlogGenerationRewriteBudgetConsumed                        atomic.Uint64
+	vlogGenerationRewritePlanTotalNanos                        atomic.Uint64
+	vlogGenerationRewritePlanMaxNanos                          atomic.Uint64
+	vlogGenerationRewriteExecTotalNanos                        atomic.Uint64
+	vlogGenerationRewriteExecMaxNanos                          atomic.Uint64
+	vlogGenerationRewriteExecLastLiveBytes                     atomic.Int64
+	vlogGenerationRewriteExecLastBytesOut                      atomic.Int64
+	vlogGenerationRewriteExecLastDurationNanos                 atomic.Uint64
+	vlogGenerationRewriteExecLastUnixNano                      atomic.Int64
+	vlogGenerationRewriteExecSourceSegments                    atomic.Uint64
+	vlogGenerationRewriteExecSourceChunks                      atomic.Uint64
+	vlogGenerationRewriteSourceSegmentsRequestedTotal          atomic.Uint64
+	vlogGenerationRewriteSourceChunksRequestedTotal            atomic.Uint64
+	vlogGenerationRewriteSourceSegmentsStillReferencedTotal    atomic.Uint64
+	vlogGenerationRewriteSourceSegmentsUnreferencedTotal       atomic.Uint64
+	vlogGenerationRewriteSourceSegmentsRequestedLast           atomic.Uint64
+	vlogGenerationRewriteSourceChunksRequestedLast             atomic.Uint64
+	vlogGenerationRewriteSourceSegmentsStillReferencedLast     atomic.Uint64
+	vlogGenerationRewriteSourceSegmentsUnreferencedLast        atomic.Uint64
+	vlogGenerationRewriteSourceBytesRequestedTotal             atomic.Uint64
+	vlogGenerationRewriteSourceBytesStillReferencedTotal       atomic.Uint64
+	vlogGenerationRewriteSourceBytesUnreferencedTotal          atomic.Uint64
+	vlogGenerationRewriteSourceBytesRequestedLast              atomic.Uint64
+	vlogGenerationRewriteSourceBytesStillReferencedLast        atomic.Uint64
+	vlogGenerationRewriteSourceBytesUnreferencedLast           atomic.Uint64
+	vlogGenerationRewriteQueueProgressPasses                   atomic.Uint64
+	vlogGenerationRewriteQueueProgressSnapshotErrors           atomic.Uint64
+	vlogGenerationRewriteQueueSegmentsBeforeTotal              atomic.Uint64
+	vlogGenerationRewriteQueueSegmentsAfterTotal               atomic.Uint64
+	vlogGenerationRewriteQueueSegmentsDrainedTotal             atomic.Uint64
+	vlogGenerationRewriteQueueSegmentsGrownTotal               atomic.Uint64
+	vlogGenerationRewriteQueueSegmentsBeforeLast               atomic.Int64
+	vlogGenerationRewriteQueueSegmentsAfterLast                atomic.Int64
+	vlogGenerationRewriteQueueSegmentsDeltaLast                atomic.Int64
+	vlogGenerationRewriteQueueLiveBytesKnownPasses             atomic.Uint64
+	vlogGenerationRewriteQueueLiveBytesUnknownPasses           atomic.Uint64
+	vlogGenerationRewriteQueueLiveBytesBeforeTotal             atomic.Uint64
+	vlogGenerationRewriteQueueLiveBytesAfterTotal              atomic.Uint64
+	vlogGenerationRewriteQueueLiveBytesDrainedTotal            atomic.Uint64
+	vlogGenerationRewriteQueueLiveBytesGrownTotal              atomic.Uint64
+	vlogGenerationRewriteQueueLiveBytesBeforeLast              atomic.Int64
+	vlogGenerationRewriteQueueLiveBytesAfterLast               atomic.Int64
+	vlogGenerationRewriteQueueLiveBytesDeltaLast               atomic.Int64
+	vlogGenerationRewriteQueueRunSegmentCapDecisions           atomic.Uint64
+	vlogGenerationRewriteQueueFreshPlanSegmentCapDecisions     atomic.Uint64
+	vlogGenerationRewriteQueueRunSegmentCapLimiterCounts       [vlogGenerationRewriteSegmentCapLimiterCount]atomic.Uint64
+	vlogGenerationRewriteQueueFreshPlanSegmentCapLimiterCounts [vlogGenerationRewriteSegmentCapLimiterCount]atomic.Uint64
+	vlogGenerationRewriteQueuedDebtPasses                      atomic.Uint64
+	vlogGenerationRewriteQueuedDebtRewriteStarted              atomic.Uint64
+	vlogGenerationRewriteQueuedDebtSkipQuiet                   atomic.Uint64
+	vlogGenerationRewriteQueuedDebtSkipCancelBackoff           atomic.Uint64
+	vlogGenerationRewriteQueuedDebtSkipIneffectiveBackoff      atomic.Uint64
+	vlogGenerationRewriteQueuedDebtSkipMinInterval             atomic.Uint64
+	vlogGenerationRewriteQueuedDebtSkipBudgetEmpty             atomic.Uint64
+	vlogGenerationRewriteQueuedDebtSkipNoChunk                 atomic.Uint64
+	vlogGenerationRewriteQueuedDebtFollowupSuppressed          atomic.Uint64
+	vlogGenerationRewriteQueuedDebtExecRuns                    atomic.Uint64
+	vlogGenerationRewriteQueuedDebtExecSegments                atomic.Uint64
+	vlogGenerationRewriteQueuedDebtExecPlanBytesTotal          atomic.Uint64
+	vlogGenerationRewriteQueuedDebtExecPlanBytesLive           atomic.Uint64
+	vlogGenerationRewriteQueuedDebtExecPlanBytesStale          atomic.Uint64
+	vlogGenerationRewriteQueuedDebtExecEffectiveBytesBefore    atomic.Uint64
+	vlogGenerationRewriteQueuedDebtExecEffectiveBytesAfter     atomic.Uint64
+	vlogGenerationRewriteQueuedDebtExecGCBytesDeleted          atomic.Uint64
+	vlogGenerationRewriteQueuedDebtExecReclaimedBytes          atomic.Uint64
+	vlogGenerationRewriteQueuedDebtExecNoReclaimRuns           atomic.Uint64
+	vlogGenerationRewriteQueuedDebtExecSourceBytesRequested    atomic.Uint64
+	vlogGenerationRewriteQueuedDebtExecSourceBytesUnreferenced atomic.Uint64
+	vlogGenerationGCExecTotalNanos                             atomic.Uint64
+	vlogGenerationGCExecMaxNanos                               atomic.Uint64
+	vlogGenerationVacuumExecTotalNanos                         atomic.Uint64
+	vlogGenerationVacuumExecMaxNanos                           atomic.Uint64
+	vlogGenerationRewriteQueueFollowupBlockedUntilNS           atomic.Int64
+	bgErrMu                                                    sync.Mutex
+	bgErr                                                      error
 
 	// Backpressure state
-	queueBacklogBytes        atomic.Int64
-	flushBpsEWMA             float64
-	queueLaneIDMisses        atomic.Int64
-	backendWriteBatchesTotal atomic.Int64
-	domainIngressMu          sync.Mutex
-	domainIngressCh          []chan domainIngressRequest
-	domainIngressEnqueued    atomic.Uint64
-	domainIngressProcessed   atomic.Uint64
-	domainIngressFallback    atomic.Uint64
-	domainIngressDepthMax    atomic.Uint64
+	queueBacklogBytes                  atomic.Int64
+	flushBpsEWMA                       float64
+	queueLaneIDMisses                  atomic.Int64
+	backendWriteBatchesTotal           atomic.Int64
+	domainIngressMu                    sync.Mutex
+	domainIngressCh                    []chan domainIngressRequest
+	domainIngressEnqueued              atomic.Uint64
+	domainIngressProcessed             atomic.Uint64
+	domainIngressFallback              atomic.Uint64
+	domainIngressDepthMax              atomic.Uint64
+	processRSSBytes                    atomic.Uint64
+	processRSSHWMBytes                 atomic.Uint64
+	processPeakRSSBytes                atomic.Uint64
+	processPeakHeapAllocBytes          atomic.Uint64
+	processPeakHeapInuseBytes          atomic.Uint64
+	processPeakTotalSysBytes           atomic.Uint64
+	processPeakVlogMmapActiveBytes     atomic.Uint64
+	processPeakVlogMmapCurrentBytes    atomic.Uint64
+	processPeakVlogMmapSealedBytes     atomic.Uint64
+	processPeakVlogMmapActiveSegments  atomic.Uint64
+	processPeakVlogMmapCurrentSegments atomic.Uint64
+	processPeakVlogMmapSealedSegments  atomic.Uint64
 
 	// Lifecycle
 	closeCh chan struct{}
@@ -3839,15 +6889,33 @@ const (
 	vlogGenerationReasonPeriodicGC
 	vlogGenerationReasonPostRewriteVacuum
 	vlogGenerationReasonRewriteResume
+	vlogGenerationReasonLeafPack
 )
 
 const (
-	vlogGenerationLoopInterval              = 1 * time.Second
-	vlogGenerationGCEvery                   = 5
-	vlogGenerationGCMinBytes                = int64(1 << 20)
-	vlogGenerationRewriteMinInterval        = 30 * time.Second
-	vlogGenerationGCMinInterval             = 45 * time.Second
+	vlogGenerationLoopInterval               = 1 * time.Second
+	vlogGenerationGCEvery                    = 5
+	vlogGenerationGCMinBytes                 = int64(1 << 20)
+	vlogGenerationRewriteMinInterval         = 30 * time.Second
+	leafGenerationPackMaintenanceMinInterval = 30 * time.Second
+	// Rewrite staging uses a two-pass confirm flow: the first pass stages a plan,
+	// then a later pass re-plans and executes only if a stable subset persists.
+	//
+	// The confirmation wake must be short enough that end-to-end benchmarks can
+	// actually exercise rewrite execution, but long enough to filter transient
+	// stale-ratio spikes.
+	vlogGenerationRewriteStageConfirmDelay  = 15 * time.Second
+	vlogGenerationGCMinInterval             = 90 * time.Second
+	vlogGenerationGCNoopMinInterval         = 3 * time.Minute
 	vlogGenerationCheckpointKickMinInterval = 5 * time.Second
+	vlogGenerationCheckpointKickRetryWindow = 5 * time.Second
+	vlogGenerationDeferredRetryWindow       = 30 * time.Second
+	vlogGenerationRewritePlanCancelBackoff  = 5 * time.Second
+	vlogGenerationRewriteCancelBackoff      = 20 * time.Second
+	vlogGenerationRewriteIneffectiveBackoff = 2 * time.Minute
+	// Keep rewrite planning cancelable, but allow a short grace window so
+	// sub-second plan scans can complete under light foreground jitter.
+	vlogGenerationRewritePlanResumeGrace = 350 * time.Millisecond
 	// Best-effort background maintenance should not immediately compete with
 	// a just-active foreground write stream.
 	vlogForegroundQuietWindow = 2 * time.Second
@@ -3865,18 +6933,74 @@ const (
 	// Retained-path prune is opportunistic reclaim. Do not restart a full live-ID
 	// scan on every periodic checkpoint during a hot workload.
 	retainedPruneMinInterval = 30 * time.Second
+	// Rewrite-observed source IDs can quickly re-trigger forced retained-prune
+	// requests while replay GC is trying to converge. Allow a faster cadence for
+	// that targeted path without dropping the generic min-interval guard.
+	retainedPruneObservedMinInterval = 3 * time.Second
+	// Bound observed-source replay retries so a permanently retained-protected ID
+	// cannot stay queued forever when replay GC cannot make progress.
+	vlogGenerationObservedGCRetryMaxAttempts = uint8(3)
 	// Coordinate index vacuum with major rewrite windows; do not run on every GC.
 	vlogGenerationVacuumTriggerRewriteBytes = int64(64 << 20)
 	vlogGenerationVacuumMinInterval         = 5 * time.Minute
 )
 
 const (
+	defaultVlogGenerationLeafTargetBytes int64  = 32 << 20
 	defaultVlogGenerationHotTargetBytes  int64  = 256 << 20
 	defaultVlogGenerationWarmTargetBytes int64  = 256 << 20
 	defaultVlogGenerationColdTargetBytes int64  = 512 << 20
 	defaultVlogRewriteBudgetBytesPerSec  int64  = 128 << 20
 	defaultVlogRewriteTriggerTotalBytes  int64  = 4 << 30
 	defaultVlogRewriteTriggerStalePPM    uint32 = 200000
+	// Staged stale-ratio debt can begin with a moderate floor, then confirm on a
+	// later opportunity. Generic total-bytes/churn rewrites do not get that
+	// safety net, so they must target only nearly-cold segments.
+	vlogGenerationRewriteMinSegmentStaleRatio        = 0.50
+	vlogGenerationRewriteGenericMinSegmentStaleRatio = 0.85
+	vlogGenerationRewriteMinSegmentStaleBytes        = int64(1)
+	vlogGenerationRewriteMinSegmentAge               = 30 * time.Second
+	vlogGenerationRewriteEfficacyMinTotalBytes       = int64(512 << 20)
+	// Treat rewrites that materially increase bytes as harmful and stop resuming
+	// the remaining queued plan in the same debt cycle.
+	vlogGenerationRewriteIneffectiveGrowthMinBytes = int64(4 << 20)
+	vlogGenerationRewriteIneffectiveCooldown       = 10 * time.Minute
+	// A bounded queued rewrite pass that copied data but produced no reclaim
+	// signal should cool down briefly before the dedicated queue runner resumes.
+	vlogGenerationRewriteQueuedFollowupCooldown = 30 * time.Second
+	// When chunk-based queued debt drains make local progress but don't yet
+	// unreference segments, allow a bounded follow-up only when we are close to
+	// finishing the chunk debt for the processed IDs.
+	vlogGenerationRewriteQueuedFollowupChunkDebtMaxRemainingChunks = 2
+	// Bound queued follow-ups for chunk debt by remaining live bytes so we avoid
+	// tight resume loops that burn wall time without immediate reclaim signal.
+	vlogGenerationRewriteQueuedFollowupChunkDebtMaxRemainingLiveBytes = int64(32 << 20)
+	// Even after cooldown expires, admit only a small amount of prior failed
+	// queue debt per pass so fresh debt keeps priority.
+	vlogGenerationRewriteRetriedSelectionLimit = 1
+	// Resumable queued rewrites are already segment-limited; let them finish
+	// under foreground activity with a bounded timeout instead of immediate
+	// foreground-cancel semantics.
+	vlogGenerationRewriteBoundedExecTimeout = 30 * time.Second
+	// During checkpoint-kick debt drain, allow a bounded multi-segment rewrite
+	// selection so debt can converge faster than one-segment-per-pass.
+	vlogGenerationRewriteDebtDrainMaxSegments = 8
+	// Checkpoint-kick retries run in foreground-adjacent windows; allow a small
+	// burst only when queued debt is clearly non-trivial.
+	vlogGenerationRewriteCheckpointKickBurstMinQueueSegments = 4
+	vlogGenerationRewriteCheckpointKickBurstMaxSegments      = 2
+	// Freshly planned rewrites normally execute one segment to limit immediate
+	// write amplification. In explicit debt-drain mode, allow a small burst once
+	// the queue is materially large so convergence does not stall.
+	vlogGenerationRewriteFreshPlanDebtDrainMinSegments = 4
+	vlogGenerationRewriteFreshPlanDebtDrainMaxSegments = 4
+)
+
+var (
+	vlogGenerationRewriteResumeMaxSegmentsLimit             = loadPositiveIntEnvDefault(envVlogGenerationRewriteResumeMaxSegments, vlogGenerationRewriteResumeMaxSegments)
+	vlogGenerationRewriteDebtDrainMaxSegmentsLimit          = loadPositiveIntEnvDefault(envVlogGenerationRewriteDebtDrainMaxSegments, vlogGenerationRewriteDebtDrainMaxSegments)
+	vlogGenerationRewriteFreshPlanDebtDrainMinSegmentsLimit = loadPositiveIntEnvDefault(envVlogGenerationRewriteFreshPlanDebtDrainMinSegs, vlogGenerationRewriteFreshPlanDebtDrainMinSegments)
+	vlogGenerationRewriteFreshPlanDebtDrainMaxSegmentsLimit = loadPositiveIntEnvDefault(envVlogGenerationRewriteFreshPlanDebtDrainMaxSegs, vlogGenerationRewriteFreshPlanDebtDrainMaxSegments)
 )
 
 func (db *DB) flushBackendEntriesCap(totalOps int, sync bool) int {
@@ -3958,11 +7082,12 @@ type keyRange struct {
 }
 
 type memShard struct {
-	mu    sync.Mutex
-	mem   memtable.Table
-	rng   keyRange
-	bytes int64
-	stats memtableStats
+	mu                         sync.Mutex
+	mem                        memtable.Table
+	rng                        keyRange
+	bytes                      int64
+	stats                      memtableStats
+	appendOnlyDirectValueArena appendOnlyDirectValueArena
 }
 
 // memtableView is an immutable snapshot of the in-memory layers.
@@ -3980,6 +7105,7 @@ type memtableView struct {
 	refs                     atomic.Int64
 	retiredMems              []memtable.Table
 	deferredRetiredMemtables atomic.Int64
+	deferredRetiredBytes     atomic.Int64
 }
 
 // appendOnlyEstimatedBytesPerEntryDefault tunes initial append-only memtable
@@ -3988,9 +7114,10 @@ type memtableView struct {
 const appendOnlyEstimatedBytesPerEntryDefault = 96
 
 // maxAppendOnlyMemLeases bounds strong references to recycled append-only
-// memtables. Keeping this too high can retain large entry slices after
-// short-lived spikes (e.g. state-sync restore), inflating heap high-water.
-const maxAppendOnlyMemLeases = 8
+// memtables. A very small bound forces frequent fallback to sync.Pool under
+// rotate/checkpoint-heavy write workloads, which regresses entry-slice reuse
+// and increases allocation churn.
+const maxAppendOnlyMemLeases = 32
 
 func updateInt64Max(dst *atomic.Int64, value int64) {
 	for {
@@ -4002,6 +7129,16 @@ func updateInt64Max(dst *atomic.Int64, value int64) {
 			return
 		}
 	}
+}
+
+func memtableBytesTotal(mems []memtable.Table) int64 {
+	var total int64
+	for _, mt := range mems {
+		if mt != nil {
+			total += mt.Size()
+		}
+	}
+	return total
 }
 
 func (db *DB) noteMemtableViewRetain() {
@@ -4023,9 +7160,12 @@ func (db *DB) noteMemtableViewRelease() {
 	tel.leasesInFlight.Add(-1)
 }
 
-func (db *DB) noteMemtableViewDeferredEnter(view *memtableView, memtables int64) {
+func (db *DB) noteMemtableViewDeferredEnter(view *memtableView, memtables int64, bytes int64) {
 	if db == nil || view == nil || memtables <= 0 {
 		return
+	}
+	if bytes < 0 {
+		bytes = 0
 	}
 	tel := &db.memtableViewTelemetry
 	since := time.Now().UnixNano()
@@ -4045,6 +7185,7 @@ func (db *DB) noteMemtableViewDeferredEnter(view *memtableView, memtables int64)
 	}
 	tel.deferred[view] = memtableViewDeferredInfo{
 		memtables:     memtables,
+		bytes:         bytes,
 		sinceUnixNano: since,
 	}
 	oldest := int64(0)
@@ -4061,6 +7202,9 @@ func (db *DB) noteMemtableViewDeferredEnter(view *memtableView, memtables int64)
 	tel.deferredMemtablesTotal.Add(uint64(memtables))
 	deferredMemtablesCurrent := tel.deferredMemtablesCurrent.Add(memtables)
 	updateInt64Max(&tel.deferredMemtablesMax, deferredMemtablesCurrent)
+	tel.deferredBytesTotal.Add(uint64(bytes))
+	deferredBytesCurrent := tel.deferredBytesCurrent.Add(bytes)
+	updateInt64Max(&tel.deferredBytesMax, deferredBytesCurrent)
 }
 
 func (db *DB) noteMemtableViewDeferredExit(view *memtableView) {
@@ -4092,6 +7236,7 @@ func (db *DB) noteMemtableViewDeferredExit(view *memtableView) {
 	}
 	tel.deferredViewsCurrent.Add(-1)
 	tel.deferredMemtablesCurrent.Add(-info.memtables)
+	tel.deferredBytesCurrent.Add(-info.bytes)
 }
 
 func (db *DB) retainMemtableView() *memtableView {
@@ -4122,6 +7267,28 @@ func (db *DB) retainMemtableView() *memtableView {
 	}
 }
 
+func (db *DB) retainMemtableViewUntracked() *memtableView {
+	if db == nil {
+		return nil
+	}
+	for {
+		view := db.memtables.Load()
+		if view == nil {
+			return nil
+		}
+		if n := view.refs.Add(1); n > 1 {
+			return view
+		}
+		view.refs.Add(-1)
+		if db.memtables.Load() != view {
+			continue
+		}
+		if view.refs.CompareAndSwap(0, 2) {
+			return view
+		}
+	}
+}
+
 func (db *DB) releaseMemtableView(view *memtableView) {
 	db.releaseMemtableViewRef(view, true)
 }
@@ -4139,11 +7306,13 @@ func (db *DB) releaseMemtableViewRef(view *memtableView, leaseRelease bool) {
 	}
 	if refs := view.refs.Add(-1); refs != 0 {
 		if refs > 0 && view.deferredRetiredMemtables.Load() > 0 {
-			db.noteMemtableViewDeferredEnter(view, view.deferredRetiredMemtables.Load())
+			db.noteMemtableViewDeferredEnter(view, view.deferredRetiredMemtables.Load(), view.deferredRetiredBytes.Load())
 		}
 		return
 	}
 	db.noteMemtableViewDeferredExit(view)
+	view.deferredRetiredMemtables.Store(0)
+	view.deferredRetiredBytes.Store(0)
 	db.recycleMemtables(view.retiredMems)
 	view.retiredMems = nil
 }
@@ -4178,6 +7347,21 @@ func cachedBatchWriteUsesSteal(mt memtable.Table) bool {
 	}
 }
 
+func cachedBatchWriteUseSteal(db *DB, mt memtable.Table) (useSteal bool, suppressedDeferred bool) {
+	if !cachedBatchWriteUsesSteal(mt) {
+		return false, false
+	}
+	// Under deferred memtable-view pressure, BTree Steal extends the lifetime
+	// of batch-owned buffers until retired memtables are released. Prefer the
+	// copy path in this mode to cap retained lease growth.
+	if db != nil && db.batchArenaDeferredPressureActive() {
+		if _, isBTree := mt.(*memtable.BTree); isBTree {
+			return false, true
+		}
+	}
+	return true, false
+}
+
 func memtableBatchDelete(mt memtable.Table, useSteal bool, key []byte) {
 	if useSteal {
 		mt.DeleteSteal(key)
@@ -4189,7 +7373,7 @@ func memtableBatchDelete(mt memtable.Table, useSteal bool, key []byte) {
 // memtableBatchSet applies a cached batch write while preserving the ownership
 // rules selected by cachedBatchWriteUsesSteal. Pointer entries may still keep
 // inline bytes in memtables that do not use value-log pointers internally.
-func memtableBatchSet(mt memtable.Table, useSteal bool, storeInlinePtrValues bool, op batch.Entry) {
+func memtableBatchSet(mt memtable.Table, useSteal bool, allowBorrow bool, storeInlinePtrValues bool, op batch.Entry) {
 	if op.IsPtr {
 		memVal := []byte(nil)
 		if storeInlinePtrValues {
@@ -4199,12 +7383,24 @@ func memtableBatchSet(mt memtable.Table, useSteal bool, storeInlinePtrValues boo
 			mt.SetEntrySteal(op.Key, memVal, op.ValuePtr, node.FlagPointer)
 			return
 		}
+		if allowBorrow {
+			if borrower, ok := mt.(memtable.ValueBorrower); ok && len(memVal) > 0 {
+				borrower.SetEntryBorrowValue(op.Key, memVal, op.ValuePtr, node.FlagPointer)
+				return
+			}
+		}
 		mt.SetEntry(op.Key, memVal, op.ValuePtr, node.FlagPointer)
 		return
 	}
 	if useSteal {
 		mt.SetSteal(op.Key, op.Value)
 		return
+	}
+	if allowBorrow {
+		if borrower, ok := mt.(memtable.ValueBorrower); ok && len(op.Value) > 0 {
+			borrower.SetEntryBorrowValue(op.Key, op.Value, page.ValuePtr{}, node.FlagInline)
+			return
+		}
 	}
 	mt.Set(op.Key, op.Value)
 }
@@ -4244,30 +7440,19 @@ func (db *DB) retainBatchArenaChunksForMemtables(chunks [][]byte, mems []memtabl
 		putBatchArenas(chunks)
 		return
 	}
-	filtered := mems[:0]
-	for _, mt := range mems {
-		// Lease retention follows the cached batch writer's actual copy/steal
-		// choice; memtables that only receive copied writes here must not pin
-		// batch arenas past the write call.
-		if mt == nil || !cachedBatchWriteNeedsBatchArenaRetention(mt) {
-			continue
-		}
-		filtered = append(filtered, mt)
-	}
-	if len(filtered) == 0 {
-		putBatchArenas(chunks)
-		return
-	}
-	lease := getBatchArenaLease(len(filtered), chunks)
+	lease := getBatchArenaLease(len(mems), chunks)
 	if lease.bytes > 0 {
 		cur := db.batchArenaLeaseBytes.Add(lease.bytes)
 		updateInt64Max(&db.batchArenaLeaseBytesMax, cur)
+		globalLeased := batchArenaLeasedBytesGlobal.Add(lease.bytes)
+		noteBatchArenaLeasedBytesGlobalMax(globalLeased)
+		noteBatchArenaRetainedBytesMax()
 	}
 	db.batchArenaLeaseMu.Lock()
 	if db.batchArenaLeasesByMem == nil {
-		db.batchArenaLeasesByMem = make(map[memtable.Table][]*batchArenaLease, len(filtered))
+		db.batchArenaLeasesByMem = make(map[memtable.Table][]*batchArenaLease, len(mems))
 	}
-	for _, mt := range filtered {
+	for _, mt := range mems {
 		db.batchArenaLeasesByMem[mt] = append(db.batchArenaLeasesByMem[mt], lease)
 	}
 	db.batchArenaLeaseMu.Unlock()
@@ -4290,6 +7475,9 @@ func (db *DB) releaseBatchArenaLeasesForMemtable(mt memtable.Table) {
 			if lease.refs == 0 && len(lease.chunks) > 0 {
 				if lease.bytes > 0 {
 					db.batchArenaLeaseBytes.Add(-lease.bytes)
+					if next := batchArenaLeasedBytesGlobal.Add(-lease.bytes); next < 0 {
+						batchArenaLeasedBytesGlobal.Store(0)
+					}
 					lease.bytes = 0
 				}
 				release = append(release, lease.chunks...)
@@ -4302,6 +7490,66 @@ func (db *DB) releaseBatchArenaLeasesForMemtable(mt memtable.Table) {
 	if len(release) > 0 {
 		putBatchArenas(release)
 	}
+}
+
+func (db *DB) retainAppendOnlyDirectArenaChunksForMemtable(shardID int, mt memtable.Table, chunks [][]byte) {
+	if len(chunks) == 0 {
+		return
+	}
+	if db == nil || mt == nil || shardID < 0 || shardID >= len(db.mutableShards) {
+		putAppendOnlyDirectValueArenaChunks(chunks)
+		return
+	}
+	db.appendOnlyDirectArenaLeaseMu.Lock()
+	if db.appendOnlyDirectArenaLeasesByMem == nil {
+		db.appendOnlyDirectArenaLeasesByMem = make(map[memtable.Table]*appendOnlyDirectArenaLease, 1)
+	}
+	if lease := db.appendOnlyDirectArenaLeasesByMem[mt]; lease != nil {
+		lease.chunks = append(lease.chunks, chunks...)
+		lease.bytes += appendOnlyDirectArenaChunksBytes(chunks)
+		db.appendOnlyDirectArenaLeaseMu.Unlock()
+		return
+	}
+	db.appendOnlyDirectArenaLeasesByMem[mt] = &appendOnlyDirectArenaLease{
+		shardID: uint16(shardID),
+		chunks:  chunks,
+		bytes:   appendOnlyDirectArenaChunksBytes(chunks),
+	}
+	db.appendOnlyDirectArenaLeaseMu.Unlock()
+}
+
+func (db *DB) releaseAppendOnlyDirectArenaLeaseForMemtable(mt memtable.Table) {
+	if db == nil || mt == nil {
+		return
+	}
+	var lease *appendOnlyDirectArenaLease
+	db.appendOnlyDirectArenaLeaseMu.Lock()
+	if db.appendOnlyDirectArenaLeasesByMem != nil {
+		lease = db.appendOnlyDirectArenaLeasesByMem[mt]
+		delete(db.appendOnlyDirectArenaLeasesByMem, mt)
+	}
+	db.appendOnlyDirectArenaLeaseMu.Unlock()
+	if lease == nil || len(lease.chunks) == 0 {
+		return
+	}
+	if int(lease.shardID) >= len(db.mutableShards) {
+		putAppendOnlyDirectValueArenaChunks(lease.chunks)
+		return
+	}
+	shard := &db.mutableShards[lease.shardID]
+	shard.mu.Lock()
+	shard.appendOnlyDirectValueArena.retainChunks(lease.chunks)
+	shard.mu.Unlock()
+}
+
+func (db *DB) retainMutableShardAppendOnlyArenaLocked(shardID int, shard *memShard) {
+	if db == nil || shard == nil {
+		return
+	}
+	if _, ok := shard.mem.(memtable.ValueBorrower); !ok {
+		return
+	}
+	db.retainAppendOnlyDirectArenaChunksForMemtable(shardID, shard.mem, shard.appendOnlyDirectValueArena.drainActiveChunks())
 }
 
 func (db *DB) queueRetiredMemtableLocked(mem memtable.Table) {
@@ -4354,10 +7602,14 @@ func (db *DB) recycleMemtables(mems []memtable.Table) {
 	if db == nil || len(mems) == 0 {
 		return
 	}
+	resetCapacity := db.checkpointRotateCapacity()
+	estimate := appendOnlyEstimatedBytesPerEntryDefault
+	appendOnlyResetCapacity := db.appendOnlyMemtableCapacityHint(resetCapacity, estimate)
 	for _, mt := range mems {
 		switch typed := mt.(type) {
 		case *memtable.AppendOnly:
-			typed.Reset()
+			typed.ResetWithCapacityHard(appendOnlyResetCapacity, estimate)
+			db.releaseAppendOnlyDirectArenaLeaseForMemtable(typed)
 			if !db.putAppendOnlyMemLease(typed) {
 				db.appendOnlyMemPool.Put(typed)
 			}
@@ -4365,19 +7617,151 @@ func (db *DB) recycleMemtables(mems []memtable.Table) {
 	}
 }
 
+func (db *DB) trimAppendOnlyMemLeases(maxLeases int, resetCapacity int) {
+	if db == nil {
+		return
+	}
+	if maxLeases < 0 {
+		maxLeases = 0
+	}
+	var dropped []*memtable.AppendOnly
+	db.appendOnlyMemLeaseMu.Lock()
+	if n := len(db.appendOnlyMemLeases); n > maxLeases {
+		drop := n - maxLeases
+		dropped = append(dropped, db.appendOnlyMemLeases[:drop]...)
+		copy(db.appendOnlyMemLeases, db.appendOnlyMemLeases[drop:])
+		for i := n - drop; i < n; i++ {
+			db.appendOnlyMemLeases[i] = nil
+		}
+		db.appendOnlyMemLeases = db.appendOnlyMemLeases[:n-drop]
+	}
+	db.appendOnlyMemLeaseMu.Unlock()
+
+	if len(dropped) == 0 {
+		return
+	}
+	effectiveResetCapacity := db.appendOnlyMemtableCapacityHint(resetCapacity, appendOnlyEstimatedBytesPerEntryDefault)
+	for i := range dropped {
+		if dropped[i] != nil {
+			dropped[i].ResetWithCapacityHard(effectiveResetCapacity, appendOnlyEstimatedBytesPerEntryDefault)
+			db.releaseAppendOnlyDirectArenaLeaseForMemtable(dropped[i])
+			db.appendOnlyMemPool.Put(dropped[i])
+		}
+	}
+}
+
+func (db *DB) trimMutableShardAppendOnlyDirectArenas(checkpoint bool) {
+	if db == nil || len(db.mutableShards) == 0 {
+		return
+	}
+	level := currentPoolPressureSnapshot().level
+	maxChunks, maxBytes := appendOnlyDirectArenaRetentionLimitsForPressure(level)
+	if checkpoint {
+		checkpointBytes := int64(appendOnlyDirectValueArenaRetainMaxBytes / 4)
+		if maxBytes > checkpointBytes {
+			maxBytes = checkpointBytes
+		}
+	} else {
+		flushBytes := int64(appendOnlyDirectValueArenaRetainMaxBytes / 2)
+		if maxBytes > flushBytes {
+			maxBytes = flushBytes
+		}
+	}
+	if maxBytes <= 0 || maxChunks <= 0 {
+		maxBytes = 0
+		maxChunks = 0
+	} else {
+		derivedChunks := int(maxBytes) / appendOnlyDirectValueArenaDefaultChunk
+		if derivedChunks < 1 {
+			derivedChunks = 1
+		}
+		if derivedChunks < maxChunks {
+			maxChunks = derivedChunks
+		}
+	}
+	for i := range db.mutableShards {
+		shard := &db.mutableShards[i]
+		shard.mu.Lock()
+		shard.appendOnlyDirectValueArena.trimRetained(maxChunks, maxBytes, appendOnlyDirectValueArenaPoolMaxCap)
+		shard.mu.Unlock()
+	}
+}
+
+func (db *DB) trimRetainedArenasAfterFlush(checkpoint bool) {
+	if db == nil {
+		return
+	}
+	now := time.Now()
+	if checkpoint {
+		db.retainedArenaTrimLastUnixNano.Store(now.UnixNano())
+	} else {
+		nowUnix := now.UnixNano()
+		last := db.retainedArenaTrimLastUnixNano.Load()
+		if last != 0 && nowUnix-last < int64(flushRetainedArenaTrimMinInterval) {
+			return
+		}
+		if !db.retainedArenaTrimLastUnixNano.CompareAndSwap(last, nowUnix) {
+			return
+		}
+	}
+
+	batchTarget := postFlushBatchArenaTargetBytes
+	entryTarget := postFlushEntrySliceTargetBytes
+	leaseKeepPerBucket := postFlushEntrySliceLeaseKeepPerBucket
+	appendOnlyLeaseKeep := postFlushAppendOnlyMemLeaseKeep
+	if checkpoint {
+		batchTarget = postCheckpointBatchArenaTargetBytes
+		entryTarget = postCheckpointEntrySliceTargetBytes
+		leaseKeepPerBucket = postCheckpointEntrySliceLeaseKeepPerBucket
+		appendOnlyLeaseKeep = postCheckpointAppendOnlyMemLeaseKeep
+	}
+	if budget := currentBatchArenaRetentionBudgetBytes(); budget >= 0 && budget < batchTarget {
+		batchTarget = budget
+	}
+	if budget := currentEntrySlicePoolBudgetBytes(); budget >= 0 && budget < entryTarget {
+		entryTarget = budget
+	}
+	if batchTarget < 0 {
+		batchTarget = 0
+	}
+	if entryTarget < 0 {
+		entryTarget = 0
+	}
+
+	drainBatchArenaPoolToTargetBytes(batchTarget)
+	entryDropped := trimEntrySliceLeasesToKeep(leaseKeepPerBucket)
+	entryDropped += drainEntrySlicePoolsToTargetBytes(entryTarget)
+	entrySlicePoolTrimRunsTotal.Add(1)
+	if entryDropped > 0 {
+		entrySlicePoolTrimDropBytesTotal.Add(uint64(entryDropped))
+	}
+
+	db.trimMutableShardAppendOnlyDirectArenas(checkpoint)
+	db.trimAppendOnlyMemLeases(appendOnlyLeaseKeep, db.checkpointRotateCapacity())
+}
+
 func (db *DB) newMutableMemtableWithCapacityMode(capacity int, mode memtable.Mode) (memtable.Table, error) {
 	if db != nil && mode == memtable.ModeAppendOnly {
 		estimate := appendOnlyEstimatedBytesPerEntryDefault
 		if mt := db.popAppendOnlyMemLease(); mt != nil {
+			db.appendOnlyMemLeaseHitTotal.Add(1)
 			mt.ResetWithCapacity(capacity, estimate)
 			return mt, nil
 		}
 		if v := db.appendOnlyMemPool.Get(); v != nil {
 			if mt, ok := v.(*memtable.AppendOnly); ok && mt != nil {
+				db.appendOnlyMemPoolHitTotal.Add(1)
 				mt.ResetWithCapacity(capacity, estimate)
 				return mt, nil
 			}
 		}
+		if backlog := db.queueBacklogBytes.Load(); backlog > 0 {
+			appendOnlyMemNewAllocWithQueueTotal.Add(1)
+			appendOnlyMemNewAllocQueueBytesSum.Add(uint64(backlog))
+			db.appendOnlyMemNewAllocWithQueue.Add(1)
+			db.appendOnlyMemNewAllocQueueBytes.Add(uint64(backlog))
+		}
+		db.appendOnlyMemNewAllocTotal.Add(1)
 		return memtable.NewAppendOnlyWithCapacityEstimatedEntryBytes(capacity, estimate), nil
 	}
 	return memtable.NewWithCapacityModeAndIndexer(capacity, mode, db.hashSortedIndexer)
@@ -4419,6 +7803,7 @@ func (db *DB) publishMemtablesLocked() {
 		if len(retired) > 0 {
 			old.retiredMems = append(old.retiredMems, retired...)
 			old.deferredRetiredMemtables.Store(int64(len(old.retiredMems)))
+			old.deferredRetiredBytes.Add(memtableBytesTotal(retired))
 		}
 		db.releasePublishedMemtableView(old)
 		return
@@ -4449,6 +7834,81 @@ type memtableStats struct {
 	lastKeyMu       sync.Mutex
 	lastKey         []byte
 	hasLastKey      bool
+}
+
+type adaptiveMemtableDecisionReason uint32
+
+const (
+	adaptiveDecisionLowData adaptiveMemtableDecisionReason = iota + 1
+	adaptiveDecisionBTreeRange
+	adaptiveDecisionBTreeBlockedMinIters
+	adaptiveDecisionAppendSequential
+	adaptiveDecisionHashMixed
+)
+
+func adaptiveDecisionReasonString(v uint32) string {
+	switch adaptiveMemtableDecisionReason(v) {
+	case adaptiveDecisionLowData:
+		return "low_data"
+	case adaptiveDecisionBTreeRange:
+		return "btree_range"
+	case adaptiveDecisionBTreeBlockedMinIters:
+		return "btree_blocked_min_iters"
+	case adaptiveDecisionAppendSequential:
+		return "append_sequential"
+	case adaptiveDecisionHashMixed:
+		return "hash_mixed"
+	default:
+		return "unknown"
+	}
+}
+
+func addMemtableResidencySummary(dst *memtableResidencySummary, mt memtable.Table) {
+	if dst == nil || mt == nil {
+		return
+	}
+	dst.count++
+	dst.len += mt.Len()
+	dst.size += mt.Size()
+}
+
+func summarizeMemtableResidency(tables []memtable.Table) memtableResidencyBreakdown {
+	var out memtableResidencyBreakdown
+	for _, mt := range tables {
+		if mt == nil {
+			continue
+		}
+		addMemtableResidencySummary(&out.total, mt)
+		switch mt.(type) {
+		case *memtable.Memtable:
+			addMemtableResidencySummary(&out.skiplist, mt)
+		case *memtable.HashSorted:
+			addMemtableResidencySummary(&out.hashSorted, mt)
+		case *memtable.BTree:
+			addMemtableResidencySummary(&out.btree, mt)
+		case *memtable.AppendOnly:
+			addMemtableResidencySummary(&out.appendOnly, mt)
+		default:
+			addMemtableResidencySummary(&out.skiplist, mt)
+		}
+	}
+	return out
+}
+
+func addMemtableResidencyStats(stats map[string]string, prefix string, summary memtableResidencyBreakdown) {
+	if stats == nil || prefix == "" {
+		return
+	}
+	add := func(name string, s memtableResidencySummary) {
+		stats[prefix+"."+name+".count"] = fmt.Sprintf("%d", s.count)
+		stats[prefix+"."+name+".entries"] = fmt.Sprintf("%d", s.len)
+		stats[prefix+"."+name+".size_bytes"] = fmt.Sprintf("%d", s.size)
+	}
+	add("total", summary.total)
+	add("skiplist", summary.skiplist)
+	add("hash_sorted", summary.hashSorted)
+	add("btree", summary.btree)
+	add("append_only", summary.appendOnly)
 }
 
 func (r *keyRange) add(key []byte) {
@@ -4566,10 +8026,12 @@ func (db *DB) resetMutableShardsLocked(nextMode memtable.Mode, reuse bool) error
 		if reuse {
 			if r, ok := any(shard.mem).(interface{ Reset() }); ok {
 				r.Reset()
+				shard.appendOnlyDirectValueArena.recycleActive()
 				reused = true
 			}
 		}
 		if !reused {
+			db.retainMutableShardAppendOnlyArenaLocked(i, shard)
 			db.queueRetiredMemtableLocked(shard.mem)
 			mt, err := db.newMutableMemtableWithCapacityMode(0, nextMode)
 			if err != nil {
@@ -4671,7 +8133,62 @@ func (db *DB) updateMutableThresholdLocked() {
 }
 
 func (db *DB) mutableFlushThreshold() int64 {
-	return db.mutableThreshold.Load()
+	base := db.mutableThreshold.Load()
+	if base <= 0 {
+		return base
+	}
+	level := currentPoolPressureSnapshot().level
+	return scaleMutableFlushThresholdForPressure(base, level)
+}
+
+func (db *DB) adaptiveBTreeMinIteratorSamples() uint64 {
+	if db == nil {
+		return adaptiveBTreeMinIteratorSamplesDefault
+	}
+	if db.memtableAdaptiveBTreeMinIters > 0 {
+		return db.memtableAdaptiveBTreeMinIters
+	}
+	return adaptiveBTreeMinIteratorSamplesDefault
+}
+
+func (db *DB) noteAdaptiveMemtableDecision(
+	mode memtable.Mode,
+	reason adaptiveMemtableDecisionReason,
+	writes, seqWrites, overwriteWrites, iters, rangeIters uint64,
+	rangeIterPct float64,
+) {
+	if db == nil {
+		return
+	}
+	if rangeIterPct < 0 {
+		rangeIterPct = 0
+	}
+	if rangeIterPct > 1 {
+		rangeIterPct = 1
+	}
+	rangePPM := uint32(rangeIterPct * 1_000_000)
+	db.memtableAdaptiveDecisionTotal.Add(1)
+	db.memtableAdaptiveDecisionReason.Store(uint32(reason))
+	db.memtableAdaptiveDecisionMode.Store(uint32(mode))
+	db.memtableAdaptiveDecisionWrites.Store(writes)
+	db.memtableAdaptiveDecisionSeqWrites.Store(seqWrites)
+	db.memtableAdaptiveDecisionOverwriteWrites.Store(overwriteWrites)
+	db.memtableAdaptiveDecisionIters.Store(iters)
+	db.memtableAdaptiveDecisionRangeIters.Store(rangeIters)
+	db.memtableAdaptiveDecisionRangePctPPM.Store(rangePPM)
+
+	switch reason {
+	case adaptiveDecisionLowData:
+		db.memtableAdaptiveDecisionLowDataTotal.Add(1)
+	case adaptiveDecisionBTreeRange:
+		db.memtableAdaptiveDecisionBTreeTotal.Add(1)
+	case adaptiveDecisionBTreeBlockedMinIters:
+		db.memtableAdaptiveDecisionBTreeBlockedMinItersTotal.Add(1)
+	case adaptiveDecisionAppendSequential:
+		db.memtableAdaptiveDecisionAppendTotal.Add(1)
+	case adaptiveDecisionHashMixed:
+		db.memtableAdaptiveDecisionHashTotal.Add(1)
+	}
 }
 
 func (db *DB) chooseAdaptiveMemtableModeLocked() memtable.Mode {
@@ -4684,7 +8201,9 @@ func (db *DB) chooseAdaptiveMemtableModeLocked() memtable.Mode {
 
 	// Default to configured mode if not enough data
 	if writes < adaptiveMinWrites {
-		return db.memtableMode
+		mode := db.currentMemtableMode()
+		db.noteAdaptiveMemtableDecision(mode, adaptiveDecisionLowData, writes, seqWrites, overwriteWrites, iters, rangeIters, 0)
+		return mode
 	}
 
 	seqWritePct := float64(seqWrites) / float64(writes)
@@ -4694,23 +8213,36 @@ func (db *DB) chooseAdaptiveMemtableModeLocked() memtable.Mode {
 		rangeIterPct = float64(rangeIters) / float64(iters)
 	}
 
+	btreeBlockedByMinIters := false
 	// 1) Range-heavy read paths benefit most from BTree order stability.
 	if rangeIterPct >= adaptiveRangeIteratorPct {
-		return memtable.ModeBTree
+		minIters := db.adaptiveBTreeMinIteratorSamples()
+		if minIters > 0 && (iters < minIters || rangeIters < minIters) {
+			btreeBlockedByMinIters = true
+		} else {
+			db.noteAdaptiveMemtableDecision(memtable.ModeBTree, adaptiveDecisionBTreeRange, writes, seqWrites, overwriteWrites, iters, rangeIters, rangeIterPct)
+			return memtable.ModeBTree
+		}
 	}
 
 	// 2) Mostly increasing writes with low overwrite pressure favor append-only.
 	if seqWritePct >= adaptiveSequentialWritePct && overwriteWritePct < adaptiveOverwriteWritePct {
+		db.noteAdaptiveMemtableDecision(memtable.ModeAppendOnly, adaptiveDecisionAppendSequential, writes, seqWrites, overwriteWrites, iters, rangeIters, rangeIterPct)
 		return memtable.ModeAppendOnly
 	}
 
 	// 3) Overwrite-heavy or mixed-write traffic defaults to hash-sorted.
+	if btreeBlockedByMinIters {
+		db.noteAdaptiveMemtableDecision(memtable.ModeHashSorted, adaptiveDecisionBTreeBlockedMinIters, writes, seqWrites, overwriteWrites, iters, rangeIters, rangeIterPct)
+		return memtable.ModeHashSorted
+	}
+	db.noteAdaptiveMemtableDecision(memtable.ModeHashSorted, adaptiveDecisionHashMixed, writes, seqWrites, overwriteWrites, iters, rangeIters, rangeIterPct)
 	return memtable.ModeHashSorted
 }
 
 func (db *DB) updateAdaptiveObservationLocked() {
 	observe := db.memtableAdaptive
-	if observe && !db.memtableWarmupActive && db.memtableMode == memtable.ModeAppendOnly {
+	if observe && !db.memtableWarmupActive && db.currentMemtableMode() == memtable.ModeAppendOnly {
 		observe = false
 	}
 	db.memtableAdaptiveObserve.Store(observe)
@@ -4718,9 +8250,23 @@ func (db *DB) updateAdaptiveObservationLocked() {
 
 func (db *DB) applyAdaptiveMemtableModeLocked() memtable.Mode {
 	desired := db.chooseAdaptiveMemtableModeLocked()
-	db.memtableMode = desired
+	db.storeMemtableMode(desired)
 	db.updateAdaptiveObservationLocked()
 	return desired
+}
+
+func (db *DB) currentMemtableMode() memtable.Mode {
+	if db == nil {
+		return memtable.ModeSkiplist
+	}
+	return memtable.Mode(db.memtableMode.Load())
+}
+
+func (db *DB) storeMemtableMode(mode memtable.Mode) {
+	if db == nil {
+		return
+	}
+	db.memtableMode.Store(uint32(mode))
 }
 
 func validateValueLogDomainThresholds(domains []backenddb.ValueLogDomainThreshold) error {
@@ -4865,32 +8411,57 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		return nil, err
 	}
 
-	// Ensure wal dir exists
+	// Ensure split log dirs exist.
 	walDir := filepath.Join(dir, "wal")
-	if err := os.MkdirAll(walDir, 0700); err != nil {
-		return nil, err
+	valueLogDir := filepath.Join(dir, "value_vlog")
+	leafLogDir := filepath.Join(dir, "leaf_vlog")
+	for _, path := range []string{walDir, valueLogDir, leafLogDir} {
+		if err := os.MkdirAll(path, 0o700); err != nil {
+			return nil, err
+		}
 	}
 	warnInsecureDir(walDir, opts.NotifyError)
-	segments, _ := listNonEmptyLogSegments(walDir)
+	warnInsecureDir(valueLogDir, opts.NotifyError)
+	warnInsecureDir(leafLogDir, opts.NotifyError)
+	if err := ensureNoLegacyMixedWALValueSegments(walDir); err != nil {
+		return nil, err
+	}
+	segments, _ := listNonEmptySplitLogSegments(walDir, valueLogDir, leafLogDir)
+	reserveLeafLogLane := opts.IndexOuterLeavesInValueLog
 	// Cached value-log RIDs remain globally unique across reopen/rewrite cycles.
 	// Until we persist nextRID separately, opening must recover the max on-disk
 	// RID here rather than risk reusing low RIDs after a clean reopen.
-	maxExistingRID, err := maxValueLogRIDFromSegments(tailValueLogSegmentsByLane(segments))
+	maxExistingRID, err := maxValueLogRIDFromSegments(segments)
 	if err != nil {
 		return nil, err
 	}
 	maxLaneID := -1
+	maxLeafVlogSeq := 0
 	maxWALSeq := make(map[int]int)
 	maxVlogSeq := make(map[int]int)
 	for _, seg := range segments {
-		if seg.lane > maxLaneID {
-			maxLaneID = seg.lane
-		}
 		if seg.valueLog {
+			if reserveLeafLogLane && seg.lane == leafLogLaneID {
+				if filepath.Clean(filepath.Dir(seg.path)) != filepath.Clean(leafLogDir) {
+					return nil, fmt.Errorf("cachingdb: value_vlog lane %d conflicts with reserved leaf_vlog lane; rebuild required", leafLogLaneID)
+				}
+				if seg.seq > maxLeafVlogSeq {
+					maxLeafVlogSeq = seg.seq
+				}
+				continue
+			}
+			if seg.lane > maxLaneID {
+				maxLaneID = seg.lane
+			}
 			if seg.seq > maxVlogSeq[seg.lane] {
 				maxVlogSeq[seg.lane] = seg.seq
 			}
-		} else if seg.seq > maxWALSeq[seg.lane] {
+			continue
+		}
+		if seg.lane > maxLaneID {
+			maxLaneID = seg.lane
+		}
+		if seg.seq > maxWALSeq[seg.lane] {
 			maxWALSeq[seg.lane] = seg.seq
 		}
 	}
@@ -4898,6 +8469,9 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	laneCountDefaulted := laneCount <= 0
 	if laneCountDefaulted {
 		laneCount = defaultJournalLaneCount(runtime.GOMAXPROCS(0))
+	}
+	if reserveLeafLogLane && laneCount > leafLogLaneID {
+		return nil, fmt.Errorf("cachingdb: IndexOuterLeavesInValueLog reserves lane %d; JournalLanes must be <= %d", leafLogLaneID, leafLogLaneID)
 	}
 	valueLogGenerationPolicy := backenddb.ValueLogGenerationPolicy(opts.ValueLogGenerationPolicy)
 	switch valueLogGenerationPolicy {
@@ -4920,6 +8494,9 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	if maxLaneID+1 > laneCount {
 		laneCount = maxLaneID + 1
 	}
+	if reserveLeafLogLane && laneCount > leafLogLaneID {
+		return nil, fmt.Errorf("cachingdb: IndexOuterLeavesInValueLog reserves lane %d; recovered WAL/value lanes require rebuild before reopen", leafLogLaneID)
+	}
 
 	inlineThreshold := page.DefaultInlineThreshold
 	if provider, ok := backend.(interface{ InlineThreshold() int }); ok {
@@ -4936,14 +8513,23 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	if valueLogMaxSegmentBytes < 0 {
 		valueLogMaxSegmentBytes = 0
 	}
+	valueLogGenerationLeafTarget := opts.ValueLogGenerationLeafSegmentTargetBytes
 	valueLogGenerationHotTarget := opts.ValueLogGenerationHotSegmentTargetBytes
 	valueLogGenerationWarmTarget := opts.ValueLogGenerationWarmSegmentTargetBytes
 	valueLogGenerationColdTarget := opts.ValueLogGenerationColdSegmentTargetBytes
+	valueLogGenerationLeafTarget = loadPositiveInt64EnvDefault(envVlogGenerationLeafSegmentTargetBytes, valueLogGenerationLeafTarget)
+	valueLogGenerationHotTarget = loadPositiveInt64EnvDefault(envVlogGenerationHotSegmentTargetBytes, valueLogGenerationHotTarget)
+	valueLogGenerationWarmTarget = loadPositiveInt64EnvDefault(envVlogGenerationWarmSegmentTargetBytes, valueLogGenerationWarmTarget)
+	valueLogGenerationColdTarget = loadPositiveInt64EnvDefault(envVlogGenerationColdSegmentTargetBytes, valueLogGenerationColdTarget)
 	valueLogRewriteBudgetBytes := opts.ValueLogRewriteBudgetBytesPerSec
 	valueLogRewriteBudgetRecords := opts.ValueLogRewriteBudgetRecordsPerSec
 	valueLogRewriteTriggerRatioPPM := opts.ValueLogRewriteTriggerStaleRatioPPM
 	valueLogRewriteTriggerBytes := opts.ValueLogRewriteTriggerTotalBytes
 	valueLogRewriteTriggerChurn := opts.ValueLogRewriteTriggerChurnPerSec
+	valueLogRewriteMinSegmentAge := opts.ValueLogRewriteMinSegmentAge
+	if valueLogGenerationLeafTarget < 0 {
+		return nil, fmt.Errorf("cachingdb: invalid value-log generational leaf segment target bytes %d", valueLogGenerationLeafTarget)
+	}
 	if valueLogGenerationHotTarget < 0 {
 		return nil, fmt.Errorf("cachingdb: invalid value-log generational hot segment target bytes %d", valueLogGenerationHotTarget)
 	}
@@ -4965,9 +8551,15 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	if valueLogRewriteTriggerChurn < 0 {
 		return nil, fmt.Errorf("cachingdb: invalid value-log generational rewrite trigger churn/sec %d", valueLogRewriteTriggerChurn)
 	}
+	if valueLogRewriteMinSegmentAge < 0 {
+		return nil, fmt.Errorf("cachingdb: invalid value-log generational rewrite min segment age %s", valueLogRewriteMinSegmentAge)
+	}
 	if valueLogGenerationPolicyUint8 == uint8(backenddb.ValueLogGenerationHotWarmCold) {
 		if valueLogGenerationHotTarget == 0 {
 			valueLogGenerationHotTarget = defaultVlogGenerationHotTargetBytes
+		}
+		if valueLogGenerationLeafTarget == 0 {
+			valueLogGenerationLeafTarget = defaultVlogGenerationLeafTargetBytes
 		}
 		if valueLogGenerationWarmTarget == 0 {
 			valueLogGenerationWarmTarget = defaultVlogGenerationWarmTargetBytes
@@ -4984,6 +8576,9 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		if valueLogRewriteTriggerRatioPPM == 0 {
 			valueLogRewriteTriggerRatioPPM = defaultVlogRewriteTriggerStalePPM
 		}
+	}
+	if valueLogRewriteMinSegmentAge == 0 {
+		valueLogRewriteMinSegmentAge = vlogGenerationRewriteMinSegmentAge
 	}
 	valueLogRawWritevMinAvgBytes := opts.ValueLogRawWritevMinAvgBytes
 	if valueLogRawWritevMinAvgBytes < 0 {
@@ -5025,14 +8620,19 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		}
 		mutableShards[i] = memShard{mem: mt}
 	}
-	reader, err := valuelog.NewManager(walDir)
+	reader, err := valuelog.NewManager(valueLogDir)
 	if err != nil {
+		return nil, err
+	}
+	if err := reader.AddScanDir(leafLogDir); err != nil {
+		_ = reader.Close()
 		return nil, err
 	}
 	reader.SetDisableReadChecksum(opts.DisableReadChecksum)
 	valueLogReader := reader
 	debugFlushPointers := envBool(envDebugFlushPointers)
 	debugFlushTiming := envBool(envDebugFlushTiming)
+	adaptiveBTreeMinIters := envUint64(envAdaptiveBTreeMinIteratorSamples, adaptiveBTreeMinIteratorSamplesDefault)
 
 	valueLogCompressionMode := normalizeVlogCompressionMode(opts.ValueLogCompression)
 	if valueLogCompressionMode == vlogCompressionDefault {
@@ -5070,9 +8670,22 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		// Callers may explicitly disable training via TrainBytes < 0.
 		valueLogDictTrain.TrainBytes = compression.DefaultTrainBytes
 	}
+	if valueLogDictTrain.TrainBytes > 0 &&
+		valueLogDictTrain.MinRecords == 0 &&
+		opts.ForceValueLogPointers &&
+		(valueLogCompressionMode == vlogCompressionDict ||
+			(valueLogCompressionMode == vlogCompressionAuto && valueLogAutoPolicy == vlogAutoThroughput)) {
+		// Pointer-heavy ingest streams are often front-loaded with the largest
+		// value-log pressure. Lower the initial profile record floor so the first
+		// dictionary can publish earlier and influence more of the run.
+		valueLogDictTrain.MinRecords = 8
+	}
 	valueLogDictMaxK := opts.ValueLogDictMaxK
 	if valueLogDictMaxK <= 0 {
 		valueLogDictMaxK = 32
+		if opts.ForceValueLogPointers {
+			valueLogDictMaxK = 128
+		}
 	}
 	if valueLogDictMaxK < 1 {
 		valueLogDictMaxK = 1
@@ -5080,6 +8693,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	if valueLogDictMaxK > valuelog.MaxFrameK {
 		valueLogDictMaxK = valuelog.MaxFrameK
 	}
+	valueLogDictClassMode := normalizeVlogDictClassMode(opts.ValueLogDictClassMode)
 
 	valueLogDictFrameEncodeLevel := opts.ValueLogDictFrameEncodeLevel
 	if valueLogDictFrameEncodeLevel <= 0 {
@@ -5108,23 +8722,12 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 
 	valueLogAutotuneCandidateKSet := len(opts.ValueLogCompressionAutotune.CandidateK) > 0
 	valueLogAutotune := valuelog.NormalizeAutotuneOptions(opts.ValueLogCompressionAutotune, true)
-	valueLogTemplateEnabled := opts.ValueLogTemplateMode != template.TemplateOff
-	valueLogTemplateCfg := template.NormalizeConfig(opts.ValueLogTemplateConfig)
-	if opts.ValueLogTemplateMode == template.TemplatePrepass {
-		// TemplatePrepass can be CPU-heavy (template match + dict/zstd encode). If
-		// templates have not been kept recently, enter cold mode sooner so we don't
-		// pay candidate lookup/matching cost on every value.
-		if opts.ValueLogTemplateConfig.ColdSearchAfter <= 0 {
-			valueLogTemplateCfg.ColdSearchAfter = 64
-		}
-		if opts.ValueLogTemplateConfig.ColdSearchProbeEvery <= 0 {
-			valueLogTemplateCfg.ColdSearchProbeEvery = 64
-		}
+	if opts.ValueLogTemplateMode != template.TemplateOff || opts.ValueLogTemplateReadStrict {
+		log.Printf("cachingdb: template compression options are currently disabled; ignoring ValueLogTemplateMode=%d, ValueLogTemplateReadStrict=%t", opts.ValueLogTemplateMode, opts.ValueLogTemplateReadStrict)
 	}
-	valueLogTemplateDecodeOpts := template.DecodeOptions{MaxGaps: valueLogTemplateCfg.MaxGaps, MaxDecodedBytes: valueLogTemplateCfg.MaxDecodedBytes, DefCacheSize: valueLogTemplateCfg.DefCacheSize}
-	if valueLogTemplateDecodeOpts.MaxDecodedBytes <= 0 && limits.MaxRecordSize > 0 {
-		valueLogTemplateDecodeOpts.MaxDecodedBytes = int(limits.MaxRecordSize)
-	}
+	valueLogTemplateEnabled := false
+	valueLogTemplateMode := template.TemplateOff
+	valueLogTemplateDecodeOpts := template.DecodeOptions{}
 
 	// Favor aggressive sampling so the first dict arrives quickly. The trainer
 	// still caps total work via TrainBytes and queue backpressure.
@@ -5222,11 +8825,13 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	}
 	db := &DB{
 		dir:                                  walDir,
+		valueLogDir:                          valueLogDir,
+		leafLogDir:                           leafLogDir,
 		backend:                              backend,
 		flushThreshold:                       opts.FlushThreshold,
 		memtableCap:                          memCap,
-		memtableMode:                         mode,
 		memtableAdaptive:                     adaptive,
+		memtableAdaptiveBTreeMinIters:        adaptiveBTreeMinIters,
 		memtableWarmupActive:                 adaptive && warmupThreshold < opts.FlushThreshold,
 		memtableWarmupThreshold:              warmupThreshold,
 		domainIngressWorkers:                 domainIngressWorkers,
@@ -5270,6 +8875,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		valueLogIncompressibleProbe:          uint64(valueLogIncompressibleProbe),
 		valueLogAutoPolicy:                   uint8(valueLogAutoPolicy),
 		valueLogGenerationPolicy:             valueLogGenerationPolicyUint8,
+		valueLogGenerationLeafTarget:         valueLogGenerationLeafTarget,
 		valueLogGenerationHotTarget:          valueLogGenerationHotTarget,
 		valueLogGenerationWarmTarget:         valueLogGenerationWarmTarget,
 		valueLogGenerationColdTarget:         valueLogGenerationColdTarget,
@@ -5278,6 +8884,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		valueLogRewriteTriggerRatioPPM:       valueLogRewriteTriggerRatioPPM,
 		valueLogRewriteTriggerBytes:          valueLogRewriteTriggerBytes,
 		valueLogRewriteTriggerChurn:          valueLogRewriteTriggerChurn,
+		valueLogRewriteMinSegmentAge:         valueLogRewriteMinSegmentAge,
 		memtableValueLogPointers:             true,
 		indexOuterLeavesInValueLog:           opts.IndexOuterLeavesInValueLog,
 		valueLogReader:                       valueLogReader,
@@ -5288,6 +8895,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		maxValueLogRetainedBytesHard:         opts.MaxValueLogRetainedBytesHard,
 		valueLogDictTrain:                    valueLogDictTrain,
 		valueLogDictMaxK:                     valueLogDictMaxK,
+		valueLogDictClassMode:                uint8(valueLogDictClassMode),
 		valueLogDictFrameEncodeLevel:         valueLogDictFrameEncodeLevel,
 		valueLogDictFrameEnableEntropy:       valueLogDictFrameEnableEntropy,
 		valueLogDictAdaptiveRatio:            valueLogDictAdaptiveRatio,
@@ -5302,24 +8910,31 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		valueLogAutotuneOptions:              valueLogAutotune,
 		valueLogAutotuneCandidateKSet:        valueLogAutotuneCandidateKSet,
 		valueLogTemplateEnabled:              valueLogTemplateEnabled,
-		valueLogTemplateMode:                 opts.ValueLogTemplateMode,
-		valueLogTemplateReadStrict:           opts.ValueLogTemplateReadStrict,
+		valueLogTemplateMode:                 valueLogTemplateMode,
+		valueLogTemplateReadStrict:           false,
 		valueLogTemplateDecodeOpts:           valueLogTemplateDecodeOpts,
-		valueLogTemplateEngine: func() *template.Engine {
-			if !valueLogTemplateEnabled {
-				return nil
-			}
-			return template.NewEngine(valueLogTemplateCfg)
-		}(),
-		mutableShards:         mutableShards,
-		mutableShardMask:      uint64(shardCount - 1),
-		hashSortedIndexer:     indexer,
-		closeCh:               make(chan struct{}),
-		flushCh:               make(chan struct{}, 1),
-		autoCheckpointOnceCh:  make(chan struct{}, 1),
-		autoCheckpointWriteCh: make(chan struct{}, 1),
-		lanes:                 lanes,
-		flushLaneMu:           make([]sync.Mutex, len(lanes)),
+		valueLogTemplateEngine:               nil,
+		mutableShards:                        mutableShards,
+		mutableShardMask:                     uint64(shardCount - 1),
+		hashSortedIndexer:                    indexer,
+		closeCh:                              make(chan struct{}),
+		flushCh:                              make(chan struct{}, 1),
+		autoCheckpointOnceCh:                 make(chan struct{}, 1),
+		autoCheckpointWriteCh:                make(chan struct{}, 1),
+		lanes:                                lanes,
+		flushLaneMu:                          make([]sync.Mutex, len(lanes)),
+	}
+	db.storeMemtableMode(mode)
+	if opts.IndexOuterLeavesInValueLog {
+		db.leafLog.id = leafLogLaneID
+		db.leafLog.vlogSeq = maxLeafVlogSeq
+		db.leafLog.vlogGenerationClass = vlogGenerationClassHot
+		db.leafLog.vlogCompressionSelector = newVlogCompressionSelectorWithSeed(
+			valueLogAutoPolicy,
+			uint64(valueLogIncompressibleHold),
+			uint64(valueLogIncompressibleProbe),
+			selectorSeedCodec,
+		)
 	}
 	if maxExistingRID > 0 {
 		db.nextRID.Store(maxExistingRID)
@@ -5327,6 +8942,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	db.rebuildGenerationLaneSets()
 	db.valueLogAutotuneMetrics.init(valuelog.RealClock{})
 	db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerDisabled)
+	db.maintenancePhase.Store(uint32(MaintenancePhaseSteady))
 	db.bpCond = sync.NewCond(&db.bpMu)
 	db.laneCond = sync.NewCond(&db.laneMu)
 	db.checkpointCond = sync.NewCond(&db.checkpointMu)
@@ -5334,6 +8950,17 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	nowNS := time.Now().UnixNano()
 	db.materializationLastDrainUnixNano.Store(nowNS)
 	db.publishWatermarkLastUnixNano = nowNS
+
+	var outerLeafPageLogSetter interface {
+		SetLeafPageLog(backenddb.LeafPageLog)
+	}
+	if opts.IndexOuterLeavesInValueLog {
+		setter, ok := backend.(interface{ SetLeafPageLog(backenddb.LeafPageLog) })
+		if !ok {
+			return nil, errors.New("cachingdb: backend does not support value-log leaf pages")
+		}
+		outerLeafPageLogSetter = setter
+	}
 
 	// Open initial value-log segments (if enabled) and journal/commit log
 	// segments (if enabled). Journal and value log are decoupled.
@@ -5347,6 +8974,20 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 				for j := 0; j <= i && j < len(db.lanes); j++ {
 					db.cleanupLaneWALWriters(&db.lanes[j])
 				}
+				db.cleanupLaneWALWriters(&db.leafLog)
+				return nil, err
+			}
+		}
+		if opts.IndexOuterLeavesInValueLog {
+			if err := db.rotateValueLogLocked(&db.leafLog); err != nil {
+				if db.valueLogReader != nil {
+					_ = db.valueLogReader.Close()
+					db.valueLogReader = nil
+				}
+				for i := range db.lanes {
+					db.cleanupLaneWALWriters(&db.lanes[i])
+				}
+				db.cleanupLaneWALWriters(&db.leafLog)
 				return nil, err
 			}
 		}
@@ -5367,10 +9008,16 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	}
 	if len(segments) > 0 {
 		for _, seg := range segments {
-			if seg.lane < 0 || seg.lane >= len(db.lanes) {
-				continue
+			l := db.valueLogLaneByID(seg.lane)
+			if l == nil {
+				if seg.valueLog {
+					continue
+				}
+				if seg.lane < 0 || seg.lane >= len(db.lanes) {
+					continue
+				}
+				l = &db.lanes[seg.lane]
 			}
-			l := &db.lanes[seg.lane]
 			if db.splitValueLog {
 				if seg.valueLog {
 					if seg.path == l.vlogPath {
@@ -5381,6 +9028,9 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 					}
 					l.vlogClosedSizes[seg.path] = seg.size
 					l.vlogClosedBytes.Add(seg.size)
+					if _, retained := db.valueLogRetain[seg.path]; retained {
+						db.valueLogRetainedClosedBytes.Add(seg.size)
+					}
 				} else {
 					if seg.path == l.walPath {
 						continue
@@ -5415,15 +9065,27 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		for i := range db.lanes {
 			db.startVlogWriter(&db.lanes[i])
 		}
+		if opts.IndexOuterLeavesInValueLog {
+			db.startVlogWriter(&db.leafLog)
+		}
 	}
 
-	if opts.IndexOuterLeavesInValueLog {
-		setter, ok := backend.(interface{ SetLeafPageLog(backenddb.LeafPageLog) })
-		if !ok {
-			return nil, errors.New("cachingdb: backend does not support value-log leaf pages")
-		}
-		setter.SetLeafPageLog(newCachingLeafPageLog(db, 0))
+	if outerLeafPageLogSetter != nil {
+		outerLeafPageLogSetter.SetLeafPageLog(newCachingLeafPageLog(db, &db.leafLog))
 	}
+	if opts.DisableWAL {
+		// Stage the adaptive gate on the fastest cached profile first. WAL-on
+		// modes keep the legacy zipper fan-out policy until benchmark data shows
+		// this pressure signal is neutral there as well.
+		if setter, ok := backend.(interface {
+			SetZipperParallelMergePressureSource(src zipper.ParallelMergePressureSource)
+		}); ok {
+			setter.SetZipperParallelMergePressureSource(func() zipper.ParallelMergePressureLevel {
+				return currentZipperParallelMergePressure()
+			})
+		}
+	}
+	db.installBackendValueLogReadBarrier()
 
 	// Publish initial memtable snapshot for lock-free reads.
 	db.mu.Lock()
@@ -5432,11 +9094,14 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	db.mu.Unlock()
 
 	db.startDomainIngressWorkers()
+	db.startProcessMemorySampler()
 
 	// Start background flusher
 	db.wg.Add(1)
 	go db.flushLoop()
 	db.startVlogGenerationLoop()
+	db.startVlogShapeLoop()
+	registerTreeDBExpvarStatsDB(db)
 
 	return db, nil
 }
@@ -5572,6 +9237,105 @@ func (db *DB) backgroundError() error {
 	return db.bgErr
 }
 
+type vlogMmapStatsSnapshot struct {
+	activeSegments  uint64
+	activeBytes     uint64
+	currentSegments uint64
+	currentBytes    uint64
+	sealedSegments  uint64
+	sealedBytes     uint64
+	deadBytes       uint64
+}
+
+func parseUintStat(stats map[string]string, key string) uint64 {
+	if len(stats) == 0 {
+		return 0
+	}
+	raw, ok := stats[key]
+	if !ok || raw == "" {
+		return 0
+	}
+	v, err := strconv.ParseUint(raw, 10, 64)
+	if err != nil {
+		return 0
+	}
+	return v
+}
+
+func backendVlogMmapStatsSnapshot(stats map[string]string) vlogMmapStatsSnapshot {
+	return vlogMmapStatsSnapshot{
+		activeSegments:  parseUintStat(stats, "treedb.vlog.mmap_active_segments"),
+		activeBytes:     parseUintStat(stats, "treedb.vlog.mmap_active_bytes"),
+		currentSegments: parseUintStat(stats, "treedb.vlog.mmap_current_segments"),
+		currentBytes:    parseUintStat(stats, "treedb.vlog.mmap_current_bytes"),
+		sealedSegments:  parseUintStat(stats, "treedb.vlog.mmap_sealed_segments"),
+		sealedBytes:     parseUintStat(stats, "treedb.vlog.mmap_sealed_bytes"),
+		deadBytes:       parseUintStat(stats, "treedb.vlog.mmap_dead_bytes"),
+	}
+}
+
+func cacheVlogMmapStatsSnapshot(reader *valuelog.Manager) vlogMmapStatsSnapshot {
+	if reader == nil {
+		return vlogMmapStatsSnapshot{}
+	}
+	currentSegments, currentBytes, sealedSegments, sealedBytes, _, deadBytes := reader.MmapResidencyStats()
+	return vlogMmapStatsSnapshot{
+		activeSegments:  currentSegments + sealedSegments,
+		activeBytes:     currentBytes + sealedBytes,
+		currentSegments: currentSegments,
+		currentBytes:    currentBytes,
+		sealedSegments:  sealedSegments,
+		sealedBytes:     sealedBytes,
+		deadBytes:       deadBytes,
+	}
+}
+
+func (db *DB) sampleProcessMemoryPeaks(backendMmap vlogMmapStatsSnapshot) {
+	if db == nil {
+		return
+	}
+	snap := samplePoolPressureSnapshot(time.Now())
+	updateAtomicMax(&db.processPeakHeapAllocBytes, snap.heapAllocBytes)
+	updateAtomicMax(&db.processPeakHeapInuseBytes, snap.heapInuseBytes)
+	updateAtomicMax(&db.processPeakTotalSysBytes, snap.totalSysBytes)
+	if rssBytes, rssHWMBytes, ok := currentProcessRSSBytes(); ok {
+		db.processRSSBytes.Store(rssBytes)
+		db.processRSSHWMBytes.Store(rssHWMBytes)
+		updateAtomicMax(&db.processPeakRSSBytes, rssBytes)
+		if rssHWMBytes > 0 {
+			updateAtomicMax(&db.processPeakRSSBytes, rssHWMBytes)
+		}
+	}
+	cacheMmap := cacheVlogMmapStatsSnapshot(db.valueLogReader)
+	updateAtomicMax(&db.processPeakVlogMmapActiveBytes, cacheMmap.activeBytes+backendMmap.activeBytes)
+	updateAtomicMax(&db.processPeakVlogMmapCurrentBytes, cacheMmap.currentBytes+backendMmap.currentBytes)
+	updateAtomicMax(&db.processPeakVlogMmapSealedBytes, cacheMmap.sealedBytes+backendMmap.sealedBytes)
+	updateAtomicMax(&db.processPeakVlogMmapActiveSegments, cacheMmap.activeSegments+backendMmap.activeSegments)
+	updateAtomicMax(&db.processPeakVlogMmapCurrentSegments, cacheMmap.currentSegments+backendMmap.currentSegments)
+	updateAtomicMax(&db.processPeakVlogMmapSealedSegments, cacheMmap.sealedSegments+backendMmap.sealedSegments)
+}
+
+func (db *DB) startProcessMemorySampler() {
+	if db == nil {
+		return
+	}
+	db.sampleProcessMemoryPeaks(vlogMmapStatsSnapshot{})
+	db.wg.Add(1)
+	go func() {
+		defer db.wg.Done()
+		ticker := time.NewTicker(processMemorySampleInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				db.sampleProcessMemoryPeaks(vlogMmapStatsSnapshot{})
+			case <-db.closeCh:
+				return
+			}
+		}
+	}()
+}
+
 // StartAutoCheckpoint enables a background loop that periodically forces a
 // durable boundary and trims cached-mode WAL segments. When idleInterval > 0,
 // it also triggers an opportunistic checkpoint after a period of write-idleness.
@@ -5626,9 +9390,6 @@ func (db *DB) foregroundReadQuietFor(now time.Time, quietWindow time.Duration) b
 	if db == nil {
 		return true
 	}
-	if db.activeForegroundIterators.Load() > 0 {
-		return false
-	}
 	last := db.lastForegroundReadUnixNano.Load()
 	if last <= 0 {
 		return true
@@ -5655,8 +9416,78 @@ func (db *DB) foregroundActivityQuietFor(now time.Time, writeQuietWindow, readQu
 	return db.foregroundWriteQuietFor(now, writeQuietWindow) && db.foregroundReadQuietFor(now, readQuietWindow)
 }
 
+// foregroundVlogMaintenanceQuietFor is the retained-prune-specific quiet check:
+// it only yields to recent foreground writes. Read traffic and active iterators
+// still gate other maintenance paths through foregroundActivityQuietFor. A nil
+// receiver intentionally fails closed so retained-prune callers do not treat
+// programmer error as a quiet window.
+func (db *DB) foregroundVlogMaintenanceQuietFor(now time.Time, quietWindow time.Duration) bool {
+	if db == nil {
+		return false
+	}
+	return db.foregroundWriteQuietFor(now, quietWindow)
+}
+
 func (db *DB) foregroundWriteQuiet(now time.Time) bool {
 	return db.foregroundWriteQuietFor(now, vlogForegroundQuietWindow)
+}
+
+func leafGenerationPackMaintenanceWriteBurstGrace() time.Duration {
+	graceMS := envUint64(envLeafGenerationPackMaintenanceWriteBurstGraceMillis, uint64(leafGenerationPackMaintenanceDefaultWriteBurstGrace/time.Millisecond))
+	if graceMS == 0 {
+		return 0
+	}
+	return time.Duration(graceMS) * time.Millisecond
+}
+
+func leafGenerationPackMaintenanceMaxForegroundQueue() int {
+	return int(loadUintEnvDefault(envLeafGenerationPackMaintenanceMaxForegroundQueue, leafGenerationPackMaintenanceDefaultMaxForegroundQueue))
+}
+
+func leafGenerationPackMaintenanceMinReclaimPerByteCopiedPPM() int {
+	return int(loadUintEnvDefault(envLeafGenerationPackMaintenanceMinReclaimPerByteCopiedPPM, leafGenerationPackMaintenanceDefaultMinReclaimPerByteCopiedPPM))
+}
+
+func leafGenerationPackReclaimPerByteCopiedPPM(reclaimedBytes, copiedBytes int64) int64 {
+	if reclaimedBytes <= 0 || copiedBytes <= 0 {
+		return 0
+	}
+	if reclaimedBytes >= copiedBytes {
+		return 1000000
+	}
+	hi, lo := bits.Mul64(uint64(reclaimedBytes), 1000000)
+	ppm, _ := bits.Div64(hi, lo, uint64(copiedBytes))
+	if ppm > math.MaxInt64 {
+		return math.MaxInt64
+	}
+	return int64(ppm)
+}
+
+func (db *DB) foregroundLeafPackAdmission(now time.Time) leafGenerationPackMaintenanceAdmission {
+	if db == nil {
+		return leafGenerationPackMaintenanceAdmission{allowed: true}
+	}
+	if db.activeForegroundIterators.Load() > 0 {
+		return leafGenerationPackMaintenanceAdmission{reason: "foreground_iterators"}
+	}
+	maxQueue := leafGenerationPackMaintenanceMaxForegroundQueue()
+	if maxQueue >= 0 {
+		queueLen := 0
+		if view := db.memtables.Load(); view != nil {
+			queueLen = len(view.queue)
+		}
+		if queueLen > maxQueue {
+			return leafGenerationPackMaintenanceAdmission{reason: "queue_pressure"}
+		}
+	}
+	if grace := leafGenerationPackMaintenanceWriteBurstGrace(); grace > 0 && !db.foregroundWriteQuietFor(now, grace) {
+		return leafGenerationPackMaintenanceAdmission{reason: "write_burst"}
+	}
+	return leafGenerationPackMaintenanceAdmission{allowed: true}
+}
+
+func (db *DB) foregroundLeafPackEligible(now time.Time) bool {
+	return db.foregroundLeafPackAdmission(now).allowed
 }
 
 func (db *DB) waitForForegroundMaintenanceQuietWindow(quietWindow time.Duration) {
@@ -5703,6 +9534,16 @@ func (db *DB) foregroundActivityResumedSince(lastActivity int64) bool {
 	return db.lastForegroundActivityUnixNano() > lastActivity
 }
 
+func (db *DB) foregroundVlogMaintenanceResumedSince(lastWrite int64) bool {
+	if db == nil {
+		return false
+	}
+	if lastWrite <= 0 {
+		return db.lastForegroundWriteUnixNano.Load() > 0
+	}
+	return db.foregroundWritesResumedSince(lastWrite)
+}
+
 func (db *DB) foregroundWriteResumeContext(lastWrite int64, timeout time.Duration) (context.Context, context.CancelFunc) {
 	var (
 		ctx    context.Context
@@ -5740,7 +9581,7 @@ func (db *DB) foregroundWriteResumeContext(lastWrite int64, timeout time.Duratio
 	return ctx, cancel
 }
 
-func (db *DB) foregroundMaintenanceContext(timeout time.Duration) (context.Context, context.CancelFunc) {
+func (db *DB) foregroundMaintenanceContextWithResumeGrace(timeout, resumeGrace time.Duration) (context.Context, context.CancelFunc) {
 	if db == nil {
 		if timeout > 0 {
 			return context.WithTimeout(context.Background(), timeout)
@@ -5757,8 +9598,9 @@ func (db *DB) foregroundMaintenanceContext(timeout time.Duration) (context.Conte
 		ctx, cancel = context.WithCancel(context.Background())
 	}
 	lastActivity := db.lastForegroundActivityUnixNano()
+	startedAt := time.Now()
 	go func(lastActivity int64) {
-		ticker := time.NewTicker(vlogGenerationLoopInterval / 10)
+		ticker := time.NewTicker(foregroundMaintenancePollInterval())
 		defer ticker.Stop()
 		for {
 			select {
@@ -5768,6 +9610,9 @@ func (db *DB) foregroundMaintenanceContext(timeout time.Duration) (context.Conte
 				cancel()
 				return
 			case <-ticker.C:
+				if resumeGrace > 0 && time.Since(startedAt) < resumeGrace {
+					continue
+				}
 				if db.foregroundActivityResumedSince(lastActivity) {
 					cancel()
 					return
@@ -5776,6 +9621,116 @@ func (db *DB) foregroundMaintenanceContext(timeout time.Duration) (context.Conte
 		}
 	}(lastActivity)
 	return ctx, cancel
+}
+
+func (db *DB) foregroundMaintenanceContext(timeout time.Duration) (context.Context, context.CancelFunc) {
+	return db.foregroundMaintenanceContextWithResumeGrace(timeout, 0)
+}
+
+func (db *DB) foregroundVlogMaintenanceContextWithResumeGrace(timeout, resumeGrace time.Duration) (context.Context, context.CancelFunc) {
+	if db == nil {
+		if timeout > 0 {
+			return context.WithTimeout(context.Background(), timeout)
+		}
+		return context.WithCancel(context.Background())
+	}
+	var (
+		ctx    context.Context
+		cancel context.CancelFunc
+	)
+	if timeout > 0 {
+		ctx, cancel = context.WithTimeout(context.Background(), timeout)
+	} else {
+		ctx, cancel = context.WithCancel(context.Background())
+	}
+	lastWrite := db.lastForegroundWriteUnixNano.Load()
+	startedAt := time.Now()
+	go func(lastWrite int64) {
+		ticker := time.NewTicker(foregroundMaintenancePollInterval())
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-db.closeCh:
+				cancel()
+				return
+			case <-ticker.C:
+				if resumeGrace > 0 && time.Since(startedAt) < resumeGrace {
+					continue
+				}
+				if db.foregroundVlogMaintenanceResumedSince(lastWrite) {
+					cancel()
+					return
+				}
+			}
+		}
+	}(lastWrite)
+	return ctx, cancel
+}
+
+func (db *DB) vlogGenerationMaintenanceContext(timeout time.Duration, opts vlogGenerationMaintenanceOptions) (context.Context, context.CancelFunc) {
+	// Checkpoint-kick maintenance is an explicit caller opt-in to run outside the
+	// quiet-window gate. Keep this context timeout-bounded, but do not
+	// self-cancel on immediate foreground activity resumes.
+	if opts.bypassQuiet {
+		var (
+			ctx    context.Context
+			cancel context.CancelFunc
+		)
+		if timeout > 0 {
+			ctx, cancel = context.WithTimeout(context.Background(), timeout)
+		} else {
+			ctx, cancel = context.WithCancel(context.Background())
+		}
+		// Preserve close-aware cancellation even on bypass-quiet paths.
+		go func() {
+			select {
+			case <-ctx.Done():
+				return
+			case <-db.closeCh:
+				cancel()
+			}
+		}()
+		return ctx, cancel
+	}
+	return db.foregroundVlogMaintenanceContextWithResumeGrace(timeout, 0)
+}
+
+func (db *DB) leafGenerationPackMaintenanceContext(timeout time.Duration) (context.Context, context.CancelFunc) {
+	var (
+		ctx    context.Context
+		cancel context.CancelFunc
+	)
+	if timeout > 0 {
+		ctx, cancel = context.WithTimeout(context.Background(), timeout)
+	} else {
+		ctx, cancel = context.WithCancel(context.Background())
+	}
+	if db == nil {
+		return ctx, cancel
+	}
+	go func() {
+		select {
+		case <-ctx.Done():
+			return
+		case <-db.closeCh:
+			cancel()
+		}
+	}()
+	return ctx, cancel
+}
+
+func (db *DB) vlogGenerationRewritePlanContext(timeout time.Duration, opts vlogGenerationMaintenanceOptions) (context.Context, context.CancelFunc) {
+	// Keep planner calls quiet-window-gated, but tolerate short foreground
+	// activity resumes so sub-second plan scans can complete.
+	if opts.bypassQuiet {
+		if timeout > 0 {
+			return context.WithTimeout(context.Background(), timeout)
+		}
+		return context.WithCancel(context.Background())
+	}
+	return db.foregroundVlogMaintenanceContextWithResumeGrace(timeout, vlogGenerationRewritePlanResumeGrace)
 }
 
 func (db *DB) noteWrite() {
@@ -5858,6 +9813,14 @@ const (
 	autoCheckpointModeForce
 )
 
+type MaintenancePhase uint8
+
+const (
+	MaintenancePhaseSteady MaintenancePhase = iota
+	MaintenancePhaseRestore
+	MaintenancePhaseCatchUp
+)
+
 const (
 	autoCheckpointMinIdleWALBytesMin int64 = 1 << 20  // 1MiB
 	autoCheckpointMinIdleWALBytesMax int64 = 32 << 20 // 32MiB
@@ -5882,6 +9845,26 @@ func autoCheckpointReasonString(v uint32) string {
 		return "force"
 	default:
 		return "unknown"
+	}
+}
+
+func normalizeMaintenancePhase(phase MaintenancePhase) MaintenancePhase {
+	switch phase {
+	case MaintenancePhaseSteady, MaintenancePhaseRestore, MaintenancePhaseCatchUp:
+		return phase
+	default:
+		return MaintenancePhaseSteady
+	}
+}
+
+func maintenancePhaseString(v uint32) string {
+	switch normalizeMaintenancePhase(MaintenancePhase(v)) {
+	case MaintenancePhaseRestore:
+		return "restore"
+	case MaintenancePhaseCatchUp:
+		return "catchup"
+	default:
+		return "steady"
 	}
 }
 
@@ -5916,6 +9899,105 @@ func vlogGenerationReasonString(v uint32) string {
 		return "post_rewrite_vacuum"
 	case vlogGenerationReasonRewriteResume:
 		return "rewrite_resume"
+	case vlogGenerationReasonLeafPack:
+		return "leaf_pack"
+	default:
+		return "unknown"
+	}
+}
+
+const (
+	vlogGenerationMaintenanceSourcePeriodic = iota
+	vlogGenerationMaintenanceSourceBypass
+	vlogGenerationMaintenanceSourceCheckpointPending
+	vlogGenerationMaintenanceSourceRewriteQueuePending
+	vlogGenerationMaintenanceSourceRewriteAgeBlocked
+	vlogGenerationMaintenanceSourceRewriteStageConfirm
+	vlogGenerationMaintenanceSourceOther
+)
+
+const vlogGenerationMaintenanceSourceCount = vlogGenerationMaintenanceSourceOther + 1
+
+func vlogGenerationMaintenanceSourceIndex(source string) int {
+	switch source {
+	case "periodic":
+		return vlogGenerationMaintenanceSourcePeriodic
+	case "bypass":
+		return vlogGenerationMaintenanceSourceBypass
+	case "checkpoint_pending":
+		return vlogGenerationMaintenanceSourceCheckpointPending
+	case "rewrite_queue_pending":
+		return vlogGenerationMaintenanceSourceRewriteQueuePending
+	case "rewrite_age_blocked", "rewrite_age_blocked_exit":
+		return vlogGenerationMaintenanceSourceRewriteAgeBlocked
+	case "rewrite_stage_confirm", "rewrite_stage_confirm_exit":
+		return vlogGenerationMaintenanceSourceRewriteStageConfirm
+	default:
+		return vlogGenerationMaintenanceSourceOther
+	}
+}
+
+func vlogGenerationMaintenanceSourceLabel(idx int) string {
+	switch idx {
+	case vlogGenerationMaintenanceSourcePeriodic:
+		return "periodic"
+	case vlogGenerationMaintenanceSourceBypass:
+		return "bypass"
+	case vlogGenerationMaintenanceSourceCheckpointPending:
+		return "checkpoint_pending"
+	case vlogGenerationMaintenanceSourceRewriteQueuePending:
+		return "rewrite_queue_pending"
+	case vlogGenerationMaintenanceSourceRewriteAgeBlocked:
+		return "rewrite_age_blocked"
+	case vlogGenerationMaintenanceSourceRewriteStageConfirm:
+		return "rewrite_stage_confirm"
+	case vlogGenerationMaintenanceSourceOther:
+		return "other"
+	default:
+		return "other"
+	}
+}
+
+const (
+	vlogGenerationRewriteSegmentCapLimiterNone uint32 = iota
+	vlogGenerationRewriteSegmentCapLimiterResumeDefault
+	vlogGenerationRewriteSegmentCapLimiterCheckpointKickSafety
+	vlogGenerationRewriteSegmentCapLimiterCheckpointKickBurst
+	vlogGenerationRewriteSegmentCapLimiterQueueLen
+	vlogGenerationRewriteSegmentCapLimiterDebtDrainCap
+	vlogGenerationRewriteSegmentCapLimiterBudgetEmpty
+	vlogGenerationRewriteSegmentCapLimiterBudgetPerSegment
+	vlogGenerationRewriteSegmentCapLimiterBudgetTokens
+	vlogGenerationRewriteSegmentCapLimiterFreshPlanQueueThreshold
+	vlogGenerationRewriteSegmentCapLimiterFreshPlanCap
+)
+
+const vlogGenerationRewriteSegmentCapLimiterCount = int(vlogGenerationRewriteSegmentCapLimiterFreshPlanCap) + 1
+
+func vlogGenerationRewriteSegmentCapLimiterString(v uint32) string {
+	switch v {
+	case vlogGenerationRewriteSegmentCapLimiterNone:
+		return "none"
+	case vlogGenerationRewriteSegmentCapLimiterResumeDefault:
+		return "resume_default"
+	case vlogGenerationRewriteSegmentCapLimiterCheckpointKickSafety:
+		return "checkpoint_kick_safety"
+	case vlogGenerationRewriteSegmentCapLimiterCheckpointKickBurst:
+		return "checkpoint_kick_burst"
+	case vlogGenerationRewriteSegmentCapLimiterQueueLen:
+		return "queue_len"
+	case vlogGenerationRewriteSegmentCapLimiterDebtDrainCap:
+		return "debt_drain_cap"
+	case vlogGenerationRewriteSegmentCapLimiterBudgetEmpty:
+		return "budget_empty"
+	case vlogGenerationRewriteSegmentCapLimiterBudgetPerSegment:
+		return "budget_per_segment"
+	case vlogGenerationRewriteSegmentCapLimiterBudgetTokens:
+		return "budget_tokens"
+	case vlogGenerationRewriteSegmentCapLimiterFreshPlanQueueThreshold:
+		return "fresh_plan_queue_threshold"
+	case vlogGenerationRewriteSegmentCapLimiterFreshPlanCap:
+		return "fresh_plan_cap"
 	default:
 		return "unknown"
 	}
@@ -6065,6 +10147,13 @@ var vlogAckPool = sync.Pool{
 	New: func() any { return &vlogAck{} },
 }
 
+type batchArenaKind uint8
+
+const (
+	batchArenaKindMain batchArenaKind = iota + 1
+	batchArenaKindPtr
+)
+
 type vlogDictPrepareTask struct {
 	fi             int
 	dictID         uint64
@@ -6159,7 +10248,7 @@ func reserveEntrySlicePoolBytes(bytes int64) (ok, transitionedFromZero bool) {
 	if bytes <= 0 {
 		return true, false
 	}
-	budget := entrySlicePoolBudgetBytes
+	budget := currentEntrySlicePoolBudgetBytes()
 	if budget <= 0 {
 		return false, false
 	}
@@ -6299,6 +10388,7 @@ func getEntrySlice(capacity int) []batch.Entry {
 	if capacity < 0 {
 		capacity = 0
 	}
+	requestedBytes := uint64(capacity) * uint64(entrySliceEntrySizeBytes)
 	idx, classCap, ok := entrySliceLeaseClassForLen(capacity)
 	if !ok {
 		return make([]batch.Entry, 0, capacity)
@@ -6319,6 +10409,12 @@ func getEntrySlice(capacity int) []batch.Entry {
 			leaseBytes := int64(cap(s)) * entrySliceEntrySizeBytes
 			releaseEntrySlicePoolBytes(leaseBytes)
 			if cap(s) >= capacity {
+				entrySliceLeaseHitTotal.Add(1)
+				entrySliceLeaseHitBytesTotal.Add(uint64(leaseBytes))
+				entrySliceLeaseHitRequestedBytesTotal.Add(requestedBytes)
+				if granted := uint64(leaseBytes); granted > requestedBytes {
+					entrySliceLeaseHitExcessBytesTotal.Add(granted - requestedBytes)
+				}
 				return s[:0]
 			}
 			if capIdx, ok := entrySliceLeaseClassForCap(cap(s)); ok {
@@ -6331,6 +10427,12 @@ func getEntrySlice(capacity int) []batch.Entry {
 					entrySlicePools[capIdx].Put(s[:0])
 				}
 			}
+			entrySliceFreshAllocTotal.Add(1)
+			entrySliceFreshAllocBytesTotal.Add(uint64(classCap) * uint64(entrySliceEntrySizeBytes))
+			entrySliceFreshAllocRequestedBytesTotal.Add(requestedBytes)
+			if granted := uint64(classCap) * uint64(entrySliceEntrySizeBytes); granted > requestedBytes {
+				entrySliceFreshAllocExcessBytesTotal.Add(granted - requestedBytes)
+			}
 			return make([]batch.Entry, 0, classCap)
 		}
 	}
@@ -6341,13 +10443,26 @@ func getEntrySlice(capacity int) []batch.Entry {
 			if !ok {
 				continue
 			}
-			releaseEntrySlicePoolBytes(int64(cap(s)) * entrySliceEntrySizeBytes)
+			poolBytes := int64(cap(s)) * entrySliceEntrySizeBytes
+			releaseEntrySlicePoolBytes(poolBytes)
 			if cap(s) >= capacity && cap(s) <= maxReuseCap {
+				entrySlicePoolHitTotal.Add(1)
+				entrySlicePoolHitBytesTotal.Add(uint64(poolBytes))
+				entrySlicePoolHitRequestedBytesTotal.Add(requestedBytes)
+				if granted := uint64(poolBytes); granted > requestedBytes {
+					entrySlicePoolHitExcessBytesTotal.Add(granted - requestedBytes)
+				}
 				return s[:0]
 			}
 		}
 	}
 	maybeResetEntrySlicePoolBytesAfterGC()
+	entrySliceFreshAllocTotal.Add(1)
+	entrySliceFreshAllocBytesTotal.Add(uint64(classCap) * uint64(entrySliceEntrySizeBytes))
+	entrySliceFreshAllocRequestedBytesTotal.Add(requestedBytes)
+	if granted := uint64(classCap) * uint64(entrySliceEntrySizeBytes); granted > requestedBytes {
+		entrySliceFreshAllocExcessBytesTotal.Add(granted - requestedBytes)
+	}
 	return make([]batch.Entry, 0, classCap)
 }
 
@@ -6371,6 +10486,8 @@ func putEntrySlice(entries []batch.Entry) {
 	leaseBytes := int64(cap(entries)) * entrySliceEntrySizeBytes
 	ok, transitioned := reserveEntrySlicePoolBytes(leaseBytes)
 	if !ok {
+		entrySlicePutDropBudgetTotal.Add(1)
+		entrySlicePutDropBudgetBytesTotal.Add(uint64(leaseBytes))
 		return
 	}
 	if transitioned {
@@ -6381,10 +10498,40 @@ func putEntrySlice(entries []batch.Entry) {
 	if len(entrySliceLeases[idx]) < maxEntrySliceLeasesPerBucket {
 		entrySliceLeases[idx] = append(entrySliceLeases[idx], entries)
 		entrySliceLeaseMu.Unlock()
+		entrySlicePutLeaseTotal.Add(1)
+		entrySlicePutLeaseBytesTotal.Add(uint64(leaseBytes))
 		return
 	}
 	entrySliceLeaseMu.Unlock()
 	entrySlicePools[idx].Put(entries)
+	entrySlicePutPoolTotal.Add(1)
+	entrySlicePutPoolBytesTotal.Add(uint64(leaseBytes))
+}
+
+func drainEntrySlicePoolsToTargetBytes(target int64) int64 {
+	if target < 0 {
+		target = 0
+	}
+	if entrySlicePoolBytes.Load() <= target {
+		return 0
+	}
+	var dropped int64
+	for classIdx := len(entrySlicePools) - 1; classIdx >= 0 && entrySlicePoolBytes.Load() > target; classIdx-- {
+		for entrySlicePoolBytes.Load() > target {
+			v := entrySlicePools[classIdx].Get()
+			if v == nil {
+				break
+			}
+			entries, ok := v.([]batch.Entry)
+			if !ok {
+				continue
+			}
+			size := int64(cap(entries)) * entrySliceEntrySizeBytes
+			releaseEntrySlicePoolBytes(size)
+			dropped += size
+		}
+	}
+	return dropped
 }
 
 func getEntryRuns(capacity int) [][]batch.Entry {
@@ -6660,10 +10807,7 @@ func buildOpRuns(mem memtable.Table, chunkCap int) ([][]batch.Entry, int, error)
 	deleteOps := 0
 	ops := getEntrySlice(chunkCap)
 	ops = ops[:0]
-	stableUnsafe := false
-	if stable, ok := mem.(memtable.StableUnsafeIteratorTable); ok {
-		stableUnsafe = stable.StableUnsafeIteratorSlices()
-	}
+	stableUnsafe := stableUnsafeIteratorSlices(mem)
 	for iter.Valid() {
 		val, ptr, flags := iter.UnsafeEntry()
 		key := iter.UnsafeKey()
@@ -6707,6 +10851,13 @@ func buildOpRuns(mem memtable.Table, chunkCap int) ([][]batch.Entry, int, error)
 		putEntrySlice(ops)
 	}
 	return runs, deleteOps, nil
+}
+
+func stableUnsafeIteratorSlices(mem memtable.Table) bool {
+	if stable, ok := mem.(memtable.StableUnsafeIteratorTable); ok {
+		return stable.StableUnsafeIteratorSlices()
+	}
+	return false
 }
 
 type walFastItem struct {
@@ -7515,6 +11666,8 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 	if len(requests) > len(planScratch) {
 		plans = make([]vlogBatchPlan, 0, len(requests))
 	}
+	mode := normalizeVlogCompressionMode(db.valueLogCompressionMode)
+	allowDictFallback := mode == vlogCompressionAuto || (mode == vlogCompressionDict && db.vlogSelectorEnabled(mode))
 	for i := 0; i < len(requests); {
 		writeMode := requests[i].writeMode
 		blockCodec := normalizeSelectorBlockCodec(requests[i].blockCodec)
@@ -7527,7 +11680,10 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 			dictID = 0
 			dict = nil
 			if writeMode == vlogWriteDict {
-				writeMode = vlogWriteOff
+				writeMode = fallbackAutoVlogWriteMode(mode, writeMode, allowDictFallback)
+				if writeMode == vlogWriteDict {
+					writeMode = vlogWriteOff
+				}
 			}
 		}
 		probe := requests[i].probeCompression
@@ -7546,7 +11702,10 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 				nextDictID = 0
 			}
 			if nextMode == vlogWriteDict && nextDictID == 0 {
-				nextMode = vlogWriteOff
+				nextMode = fallbackAutoVlogWriteMode(mode, nextMode, allowDictFallback)
+				if nextMode == vlogWriteDict {
+					nextMode = vlogWriteOff
+				}
 			}
 			if nextMode != writeMode {
 				break
@@ -7821,7 +11980,9 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 			baseEncodeNsPerRaw = 0
 		}
 	}
-	autoSelectorMode := normalizeVlogCompressionMode(db.valueLogCompressionMode) == vlogCompressionAuto
+	autoSelectorMode := mode == vlogCompressionAuto
+	dictMode := mode == vlogCompressionDict
+	selectorEnabled := db.vlogSelectorEnabled(mode)
 
 	ptrs = getValueLogPtrsCap(len(records))
 	ptrs = ptrs[:len(records)]
@@ -7836,9 +11997,10 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 		if policySetter != nil {
 			ioNsPerStored := baseIoNsPerStored
 			encodeNsPerRaw := baseEncodeNsPerRaw
-			// In auto mode, block candidate evaluation must observe real compressed
-			// output (not keep-policy short-circuits), same as explicit probes.
-			if plan.probe || (autoSelectorMode && plan.writeMode == vlogWriteBlock) {
+			// In selector-driven modes, block candidate evaluation must observe
+			// real compressed output (not keep-policy short-circuits), same as
+			// explicit probes.
+			if plan.probe || (selectorEnabled && (autoSelectorMode || dictMode) && plan.writeMode == vlogWriteBlock) {
 				ioNsPerStored = 0
 				encodeNsPerRaw = 0
 			}
@@ -8040,10 +12202,9 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 		totalBytes = w.Size() - startSize
 	}
 	if err == nil {
-		if needSync || needFlush || deferredFlushed {
-			l.vlogDirty.Store(false)
-		} else if totalBytes > 0 {
-			l.vlogDirty.Store(true)
+		db.markLaneValueLogBoundary(l, totalBytes, needFlush || deferredFlushed, needSync)
+		if !needSync && !needFlush && !deferredFlushed && totalBytes > 0 {
+			l.backendReadDirtySeq.Add(1)
 		}
 	}
 	if err == nil && totalBytes > 0 {
@@ -8109,6 +12270,14 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 			unitForSelector := rawForSelector
 			if recordsInPlan := plan.end - plan.start; recordsInPlan > 0 {
 				unitForSelector = rawForSelector / recordsInPlan
+			}
+			segment := records[plan.start:plan.end]
+			payloadSplit := db.classifyVlogPayloadSplitForRecords(segment)
+			recordLaneVlogPayloadKindObservation(l, payloadSplit.Kind, rawForSelector, storedForSelector)
+			recordLaneVlogPayloadSplitFromSummary(l, payloadSplit, storedForSelector)
+			if payloadSplit.Kind != vlogPayloadKindSingleValue {
+				outerLeafCodecKind := db.classifyVlogOuterLeafCodecKindForRecords(segment)
+				recordLaneVlogOuterLeafCodecObservation(l, outerLeafCodecKind, rawForSelector, storedForSelector)
 			}
 			db.observeVlogWriteMode(l, plan.writeMode, codec, rawForSelector, unitForSelector, storedForSelector, plan.probe, plan.wallNs)
 		}
@@ -8508,18 +12677,51 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	}
 
 	mode := normalizeVlogCompressionMode(db.valueLogCompressionMode)
+	allowDictFallback := mode == vlogCompressionAuto || (mode == vlogCompressionDict && db.vlogSelectorEnabled(mode))
+	payloadKindForFallback := db.classifyVlogPayloadKindForRecords(records)
+	outerLeafPayloadsOnly := payloadKindForFallback == vlogPayloadKindOuterLeaf
+	dictFallbackWriteMode := func(current vlogCompressionWriteMode) vlogCompressionWriteMode {
+		next := fallbackAutoVlogWriteMode(mode, current, allowDictFallback)
+		if mode == vlogCompressionDict && next == vlogWriteDict && outerLeafPayloadsOnly {
+			// Keep explicit dict mode strict for value payloads, but avoid writing
+			// known outer-leaf pages raw when dict is bypassed.
+			return vlogWriteBlock
+		}
+		return next
+	}
 	selectorPayloadBytes := rawPayloadBytes
 	selectorUnitPayloadBytes := rawPayloadBytes
 	if n := len(records); n > 0 {
 		selectorUnitPayloadBytes = rawPayloadBytes / n
 	}
-	writeMode, blockCodec, selectorProbe := db.resolveVlogWriteMode(l, dictID, selectorPayloadBytes, selectorUnitPayloadBytes)
+	writeMode, blockCodec, selectorProbe := db.resolveVlogWriteMode(l, dictID, selectorPayloadBytes, selectorUnitPayloadBytes, outerLeafPayloadsOnly)
+	normalizeNoDictBlockCodec := func() {
+		if writeMode != vlogWriteBlock {
+			return
+		}
+		if codec, ok := db.preferLeafPageBlockCodec(l, selectorUnitPayloadBytes, blockCodec); ok {
+			blockCodec = codec
+			return
+		}
+		compressionMode := normalizeVlogCompressionMode(db.valueLogCompressionMode)
+		if compressionMode != vlogCompressionAuto && compressionMode != vlogCompressionDefault {
+			return
+		}
+		if normalizeVlogAutoPolicy(db.valueLogAutoPolicy) == vlogAutoThroughput {
+			return
+		}
+		if selectorUnitPayloadBytes < 2048 {
+			return
+		}
+		blockCodec = chooseLargePayloadNoDictBlockCodec(l, db.valueLogBlockCodec)
+	}
 	blockMode := writeMode == vlogWriteBlock
 	probeCompression := selectorProbe
 	paused := false
 	if writeMode != vlogWriteDict {
 		dictID = 0
 		dict = nil
+		normalizeNoDictBlockCodec()
 	}
 
 	if dictID != 0 {
@@ -8529,23 +12731,26 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 		if !attemptCompression {
 			dictID = 0
 			dict = nil
-			writeMode = fallbackAutoVlogWriteMode(mode, writeMode)
+			writeMode = dictFallbackWriteMode(writeMode)
 			blockMode = writeMode == vlogWriteBlock
+			normalizeNoDictBlockCodec()
 		}
 	}
 	if dictID != 0 && db.shouldBypassValueLogDictForRecords(records, probeCompression) {
 		dictID = 0
 		dict = nil
-		writeMode = fallbackAutoVlogWriteMode(mode, writeMode)
+		writeMode = dictFallbackWriteMode(writeMode)
 		blockMode = writeMode == vlogWriteBlock
+		normalizeNoDictBlockCodec()
 	}
 	if dictID != 0 && db.valueLogAutotuneOptions.DisableBelowValueBytes > 0 {
 		avg := rawPayloadBytes / len(records)
 		if avg < db.valueLogAutotuneOptions.DisableBelowValueBytes {
 			dictID = 0
 			dict = nil
-			writeMode = fallbackAutoVlogWriteMode(mode, writeMode)
+			writeMode = dictFallbackWriteMode(writeMode)
 			blockMode = writeMode == vlogWriteBlock
+			normalizeNoDictBlockCodec()
 		}
 	}
 	if dictID != 0 && len(dict) == 0 {
@@ -8554,8 +12759,9 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 		} else {
 			dictID = 0
 			dict = nil
-			writeMode = fallbackAutoVlogWriteMode(mode, writeMode)
+			writeMode = dictFallbackWriteMode(writeMode)
 			blockMode = writeMode == vlogWriteBlock
+			normalizeNoDictBlockCodec()
 		}
 	}
 	switch mode {
@@ -8657,9 +12863,10 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	}
 	ioNsPerStoredForWriter := ioNsPerStored
 	encodeNsPerRawForWriter := encodeNsPerRaw
-	if normalizeVlogCompressionMode(db.valueLogCompressionMode) == vlogCompressionAuto && finalWriteMode == vlogWriteBlock {
-		// Keep-policy bypass is required for fair auto-mode block evaluation; the
-		// selector should decide whether block stays active based on real outcomes.
+	blockEvalBypass := mode == vlogCompressionAuto || (mode == vlogCompressionDict && db.vlogSelectorEnabled(mode))
+	if blockEvalBypass && finalWriteMode == vlogWriteBlock {
+		// Keep-policy bypass is required for fair selector-driven block
+		// evaluation; mode choice should rely on real frame outcomes.
 		ioNsPerStoredForWriter = 0
 		encodeNsPerRawForWriter = 0
 	}
@@ -8731,7 +12938,8 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	encodeNsTotal := int64(0)
 	encodeRawBytes := 0
 	rawBatchUsed := false
-	durableBoundary := false
+	flushedBoundary := false
+	syncedBoundary := false
 	if dictID == 0 && (hasRawInto || hasRawBufferedInto) && finalWriteMode != vlogWriteBlock && len(records) > 1 {
 		if maxBytes := db.valueLogMaxSegmentBytesForLane(l); maxBytes > 0 {
 			// Ensure the entire raw batch fits within the packed-offset cap so
@@ -8946,17 +13154,17 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 		switch durability {
 		case journalDurabilityFlush:
 			err = w.Flush()
-			durableBoundary = err == nil
+			flushedBoundary = err == nil
 		case journalDurabilitySync:
 			err = w.Sync()
-			durableBoundary = err == nil
+			syncedBoundary = err == nil
 		default:
 			if db.shouldFlushDeferredValueLog(finalWriteMode, records) {
 				// In deferred value-log mode, the index will publish pointers to
 				// value-log records during the flush/commit path. Ensure the value-log
 				// bytes are visible to readers even when durability is "none".
 				err = w.Flush()
-				durableBoundary = err == nil
+				flushedBoundary = err == nil
 			}
 		}
 	}
@@ -8967,10 +13175,9 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 		}
 	}
 	if err == nil {
-		if durableBoundary {
-			l.vlogDirty.Store(false)
-		} else if bytesWrittenLive > 0 {
-			l.vlogDirty.Store(true)
+		db.markLaneValueLogBoundary(l, bytesWrittenLive, flushedBoundary, syncedBoundary)
+		if durability == journalDurabilityNone && !flushedBoundary && !syncedBoundary && bytesWrittenLive > 0 {
+			l.backendReadDirtySeq.Add(1)
 		}
 	}
 	if db.testBeforeVlogUnlock != nil {
@@ -9049,6 +13256,13 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 		}
 	}
 	selectorWallNs := time.Since(selectorStart).Nanoseconds()
+	payloadSplit := db.classifyVlogPayloadSplitForRecords(records)
+	recordLaneVlogPayloadKindObservation(l, payloadSplit.Kind, rawForSelector, storedForSelector)
+	recordLaneVlogPayloadSplitFromSummary(l, payloadSplit, storedForSelector)
+	if payloadSplit.Kind != vlogPayloadKindSingleValue {
+		outerLeafCodecKind := db.classifyVlogOuterLeafCodecKindForRecords(records)
+		recordLaneVlogOuterLeafCodecObservation(l, outerLeafCodecKind, rawForSelector, storedForSelector)
+	}
 	db.observeVlogWriteMode(l, finalWriteMode, finalBlockCodec, rawForSelector, unitForSelector, storedForSelector, probeCompression, selectorWallNs)
 
 	if bytesWrittenLive > 0 {
@@ -9148,11 +13362,43 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 	}
 
 	mode := normalizeVlogCompressionMode(db.valueLogCompressionMode)
-	writeMode, blockCodec, selectorProbe := db.resolveVlogWriteMode(l, dictID, len(value), len(value))
+	allowDictFallback := mode == vlogCompressionAuto || (mode == vlogCompressionDict && db.vlogSelectorEnabled(mode))
+	outerLeafPayload := db.isOuterLeafValueLogPayload(value)
+	dictFallbackWriteMode := func(current vlogCompressionWriteMode) vlogCompressionWriteMode {
+		next := fallbackAutoVlogWriteMode(mode, current, allowDictFallback)
+		if mode == vlogCompressionDict && next == vlogWriteDict && outerLeafPayload {
+			// In explicit dict mode, keep outer-leaf pages on block codecs when
+			// dict compression is bypassed.
+			return vlogWriteBlock
+		}
+		return next
+	}
+	writeMode, blockCodec, selectorProbe := db.resolveVlogWriteMode(l, dictID, len(value), len(value), outerLeafPayload)
+	normalizeNoDictBlockCodec := func() {
+		if writeMode != vlogWriteBlock {
+			return
+		}
+		if codec, ok := db.preferLeafPageBlockCodec(l, len(value), blockCodec); ok {
+			blockCodec = codec
+			return
+		}
+		compressionMode := normalizeVlogCompressionMode(db.valueLogCompressionMode)
+		if compressionMode != vlogCompressionAuto && compressionMode != vlogCompressionDefault {
+			return
+		}
+		if normalizeVlogAutoPolicy(db.valueLogAutoPolicy) == vlogAutoThroughput {
+			return
+		}
+		if len(value) < 2048 {
+			return
+		}
+		blockCodec = chooseLargePayloadNoDictBlockCodec(l, db.valueLogBlockCodec)
+	}
 	probeCompression := selectorProbe
 	if writeMode != vlogWriteDict {
 		dictID = 0
 		dict = nil
+		normalizeNoDictBlockCodec()
 	}
 	if dictID != 0 {
 		attemptCompression, dictProbe, _ := db.valueLogDictShouldAttemptCompression(len(value))
@@ -9160,18 +13406,21 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 		if !attemptCompression {
 			dictID = 0
 			dict = nil
-			writeMode = fallbackAutoVlogWriteMode(mode, writeMode)
+			writeMode = dictFallbackWriteMode(writeMode)
+			normalizeNoDictBlockCodec()
 		}
 	}
 	if dictID != 0 && db.shouldBypassValueLogDictForValue(value, probeCompression) {
 		dictID = 0
 		dict = nil
-		writeMode = fallbackAutoVlogWriteMode(mode, writeMode)
+		writeMode = dictFallbackWriteMode(writeMode)
+		normalizeNoDictBlockCodec()
 	}
 	if dictID != 0 && db.valueLogAutotuneOptions.DisableBelowValueBytes > 0 && len(value) < db.valueLogAutotuneOptions.DisableBelowValueBytes {
 		dictID = 0
 		dict = nil
-		writeMode = fallbackAutoVlogWriteMode(mode, writeMode)
+		writeMode = dictFallbackWriteMode(writeMode)
+		normalizeNoDictBlockCodec()
 	}
 	if dictID != 0 && len(dict) == 0 {
 		if b, dictErr := db.dictBytes(context.Background(), dictID); dictErr == nil {
@@ -9179,7 +13428,8 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 		} else {
 			dictID = 0
 			dict = nil
-			writeMode = fallbackAutoVlogWriteMode(mode, writeMode)
+			writeMode = dictFallbackWriteMode(writeMode)
+			normalizeNoDictBlockCodec()
 		}
 	}
 	finalWriteMode := vlogWriteOff
@@ -9197,10 +13447,10 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 	}
 	switch mode {
 	case vlogCompressionDefault, vlogCompressionDict:
-		db.valueLogDictCollectSample(value)
+		db.valueLogDictCollectSampleForLane(l, value)
 	case vlogCompressionAuto:
 		if db.allowAutoDictSampling(l, writeMode, len(value)) {
-			db.valueLogDictCollectSample(value)
+			db.valueLogDictCollectSampleForLane(l, value)
 		}
 	}
 
@@ -9237,11 +13487,16 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 					ioNsPerStored = 0
 					encodeNsPerRaw = 0
 				}
+				if finalWriteMode == vlogWriteBlock &&
+					(mode == vlogCompressionAuto || (mode == vlogCompressionDict && db.vlogSelectorEnabled(mode))) {
+					ioNsPerStored = 0
+					encodeNsPerRaw = 0
+				}
 				policySetter.SetKeepPolicy(ioNsPerStored, encodeNsPerRaw, db.valueLogAutotuneSafetyMargin())
 			}
 
 			stats := valuelog.FrameStats{Records: 1, RawPayloadBytes: len(value), StoredPayloadBytes: len(value)}
-			durableBoundary := false
+			flushedBoundary := false
 			if finalWriteMode == vlogWriteBlock {
 				if concrete, ok := w.(*valuelog.Writer); ok {
 					ptr, stats, err = concrete.AppendOneFrameWithStats(0, nil, rid, value)
@@ -9275,11 +13530,11 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 				switch durability {
 				case journalDurabilityFlush:
 					err = w.Flush()
-					durableBoundary = err == nil
+					flushedBoundary = err == nil
 				default:
 					if db.shouldFlushDeferredValueLogValue(finalWriteMode, value) {
 						err = w.Flush()
-						durableBoundary = err == nil
+						flushedBoundary = err == nil
 					}
 				}
 			}
@@ -9292,10 +13547,9 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 				retainPath = l.vlogPath
 			}
 			if err == nil {
-				if durableBoundary {
-					l.vlogDirty.Store(false)
-				} else if totalBytes > 0 {
-					l.vlogDirty.Store(true)
+				db.markLaneValueLogBoundary(l, totalBytes, flushedBoundary, false)
+				if durability == journalDurabilityNone && !flushedBoundary && totalBytes > 0 {
+					l.backendReadDirtySeq.Add(1)
 				}
 			}
 			if db.testBeforeVlogUnlock != nil {
@@ -9324,6 +13578,17 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 				}
 			}
 			selectorWallNs := time.Since(selectorStart).Nanoseconds()
+			payloadKind := db.classifyVlogPayloadKindForValue(value)
+			recordLaneVlogPayloadKindObservation(l, payloadKind, len(value), storedForSelector)
+			if payloadKind == vlogPayloadKindOuterLeaf {
+				recordLaneVlogPayloadSplitObservation(l, vlogPayloadSplitOuterLeaf, len(value), storedForSelector, 1)
+			} else {
+				recordLaneVlogPayloadSplitObservation(l, vlogPayloadSplitSingleValue, len(value), storedForSelector, 1)
+			}
+			if payloadKind != vlogPayloadKindSingleValue {
+				outerLeafCodecKind := db.classifyVlogOuterLeafCodecKindForValue(value)
+				recordLaneVlogOuterLeafCodecObservation(l, outerLeafCodecKind, len(value), storedForSelector)
+			}
 			db.observeVlogWriteMode(l, finalWriteMode, finalBlockCodec, len(value), len(value), storedForSelector, probeCompression, selectorWallNs)
 			return ptr, retainPath, nil
 		}
@@ -9387,13 +13652,19 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 	statsWriter := caps.stats
 	statsWriterInto := caps.statsInto
 	startSize := w.Size()
-	durableBoundary := false
+	flushedBoundary := false
+	syncedBoundary := false
 
 	if policySetter != nil {
 		snap := db.valueLogAutotuneMetrics.snapshot()
 		ioNsPerStored := snap.IoNsPerStoredByte
 		encodeNsPerRaw := snap.EncodeNsPerRawByte
 		if db.valueLogAutotuneOptions.Mode == valuelog.AutotuneOff {
+			ioNsPerStored = 0
+			encodeNsPerRaw = 0
+		}
+		if finalWriteMode == vlogWriteBlock &&
+			(mode == vlogCompressionAuto || (mode == vlogCompressionDict && db.vlogSelectorEnabled(mode))) {
 			ioNsPerStored = 0
 			encodeNsPerRaw = 0
 		}
@@ -9460,14 +13731,14 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 		switch durability {
 		case journalDurabilityFlush:
 			err = w.Flush()
-			durableBoundary = err == nil
+			flushedBoundary = err == nil
 		case journalDurabilitySync:
 			err = w.Sync()
-			durableBoundary = err == nil
+			syncedBoundary = err == nil
 		default:
 			if db.shouldFlushDeferredValueLogValue(finalWriteMode, value) {
 				err = w.Flush()
-				durableBoundary = err == nil
+				flushedBoundary = err == nil
 			}
 		}
 	}
@@ -9480,10 +13751,9 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 		retainPath = l.vlogPath
 	}
 	if err == nil {
-		if durableBoundary {
-			l.vlogDirty.Store(false)
-		} else if totalBytes > 0 {
-			l.vlogDirty.Store(true)
+		db.markLaneValueLogBoundary(l, totalBytes, flushedBoundary, syncedBoundary)
+		if durability == journalDurabilityNone && !flushedBoundary && !syncedBoundary && totalBytes > 0 {
+			l.backendReadDirtySeq.Add(1)
 		}
 	}
 	if db.testBeforeVlogUnlock != nil {
@@ -9523,6 +13793,17 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 		}
 	}
 	selectorWallNs := time.Since(selectorStart).Nanoseconds()
+	payloadKind := db.classifyVlogPayloadKindForValue(value)
+	recordLaneVlogPayloadKindObservation(l, payloadKind, len(value), storedForSelector)
+	if payloadKind == vlogPayloadKindOuterLeaf {
+		recordLaneVlogPayloadSplitObservation(l, vlogPayloadSplitOuterLeaf, len(value), storedForSelector, 1)
+	} else {
+		recordLaneVlogPayloadSplitObservation(l, vlogPayloadSplitSingleValue, len(value), storedForSelector, 1)
+	}
+	if payloadKind != vlogPayloadKindSingleValue {
+		outerLeafCodecKind := db.classifyVlogOuterLeafCodecKindForValue(value)
+		recordLaneVlogOuterLeafCodecObservation(l, outerLeafCodecKind, len(value), storedForSelector)
+	}
 	db.observeVlogWriteMode(l, finalWriteMode, finalBlockCodec, len(value), len(value), storedForSelector, probeCompression, selectorWallNs)
 	if totalBytes > 0 {
 		l.vlogLiveBytes.Add(totalBytes)
@@ -9841,10 +14122,39 @@ func (db *DB) startVlogGenerationLoop() {
 		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerDisabled)
 		return
 	}
-	// GC integration is optional in this phase; rewrite is required.
-	db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
+	if !db.disableJournal {
+		// WAL-on profiles start with the periodic scheduler disabled and re-enable
+		// it only after the caller transitions back to steady phase. The loop still
+		// starts here so later steady-phase arming never needs to spawn a new
+		// goroutine during runtime or shutdown.
+		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerDisabled)
+	} else {
+		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
+	}
 	db.wg.Add(1)
 	go db.vlogGenerationLoop()
+}
+
+func (db *DB) maybeArmWALOnVlogGenerationLoopForSteadyPhase() {
+	if db == nil || db.disableJournal || db.closing.Load() {
+		return
+	}
+	if envBool(envDisableVlogGenerationLoop) {
+		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerDisabled)
+		return
+	}
+	if db.valueLogGenerationPolicy != uint8(backenddb.ValueLogGenerationHotWarmCold) {
+		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerDisabled)
+		return
+	}
+	if _, ok := db.backend.(backendValueLogRewriter); !ok {
+		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerDisabled)
+		return
+	}
+	if db.suppressBackgroundVlogGenerationForMaintenancePhase() {
+		return
+	}
+	db.vlogGenerationSchedulerState.CompareAndSwap(vlogGenerationSchedulerDisabled, vlogGenerationSchedulerIdle)
 }
 
 func (db *DB) vlogGenerationLoop() {
@@ -9858,9 +14168,41 @@ func (db *DB) vlogGenerationLoop() {
 			return
 		case <-ticker.C:
 			ticks++
-			db.maybeRunVlogGenerationMaintenance(ticks%vlogGenerationGCEvery == 0)
+			if db.vlogGenerationSchedulerState.Load() == vlogGenerationSchedulerDisabled {
+				continue
+			}
+			db.maybeRunPeriodicVlogGenerationMaintenance(ticks%vlogGenerationGCEvery == 0)
 		}
 	}
+}
+
+func (db *DB) maybeRunPeriodicVlogGenerationMaintenance(runGC bool) bool {
+	if db == nil {
+		return false
+	}
+	if db.vlogGenerationMaintenanceActive.Load() {
+		return false
+	}
+	if db.suppressBackgroundVlogGenerationForMaintenancePhase() {
+		db.debugVlogMaintf("periodic_skip reason=maintenance_phase phase=%s run_gc=%t", maintenancePhaseString(uint32(db.MaintenancePhase())), runGC)
+		return false
+	}
+	// Coarse preflight: while foreground activity is hot, avoid entering the
+	// maintenance engine unless a deferred/checkpoint wake is pending. Apply this
+	// to both rewrite and periodic GC ticks; otherwise runGC ticks can still
+	// issue expensive full scans every interval during restore-heavy sync phases.
+	now := time.Now()
+	quiet := db.foregroundActivityQuietFor(now, vlogGenerationMaintenanceQuietWindow, vlogForegroundReadQuietWindow)
+	leafPackAdmission := db.foregroundLeafPackAdmission(now)
+	if !quiet && !leafPackAdmission.allowed &&
+		!db.vlogGenerationCheckpointKickPending.Load() &&
+		!db.vlogGenerationDeferredMaintenancePending.Load() &&
+		!db.vlogGenerationDeferredMaintenanceDue(now) {
+		db.observeVlogGenerationLeafPackAdmissionSkip(leafPackAdmission.reason)
+		return false
+	}
+	db.maybeRunVlogGenerationMaintenance(runGC)
+	return true
 }
 
 func (db *DB) vlogGenerationRewriteBudgetCapBytes() int64 {
@@ -9935,6 +14277,225 @@ func (db *DB) vlogGenerationRewriteBudgetEnabled() bool {
 	return db != nil && db.valueLogRewriteBudgetBytes > 0
 }
 
+func vlogGenerationRewriteResumeMaxSegmentsEffective() int {
+	if vlogGenerationRewriteResumeMaxSegmentsLimit > 0 {
+		return vlogGenerationRewriteResumeMaxSegmentsLimit
+	}
+	return vlogGenerationRewriteResumeMaxSegments
+}
+
+func vlogGenerationRewriteDebtDrainMaxSegmentsEffective() int {
+	if vlogGenerationRewriteDebtDrainMaxSegmentsLimit > 0 {
+		return vlogGenerationRewriteDebtDrainMaxSegmentsLimit
+	}
+	return vlogGenerationRewriteDebtDrainMaxSegments
+}
+
+func vlogGenerationRewriteFreshPlanDebtDrainLimitsEffective() (minSegments int, maxSegments int) {
+	minSegments = vlogGenerationRewriteFreshPlanDebtDrainMinSegments
+	if vlogGenerationRewriteFreshPlanDebtDrainMinSegmentsLimit > 0 {
+		minSegments = vlogGenerationRewriteFreshPlanDebtDrainMinSegmentsLimit
+	}
+	maxSegments = vlogGenerationRewriteFreshPlanDebtDrainMaxSegments
+	if vlogGenerationRewriteFreshPlanDebtDrainMaxSegmentsLimit > 0 {
+		maxSegments = vlogGenerationRewriteFreshPlanDebtDrainMaxSegmentsLimit
+	}
+	if maxSegments < minSegments {
+		maxSegments = minSegments
+	}
+	return minSegments, maxSegments
+}
+
+type vlogGenerationRewriteSegmentCapDecision struct {
+	maxSegments        int
+	limiter            uint32
+	byBudgetSegments   int
+	perSegmentBudget   int64
+	budgetEnabled      bool
+	resumeMaxSegments  int
+	debtDrainMaxTarget int
+}
+
+func (db *DB) vlogGenerationRewritePerSegmentBudgetBytes(queueLen int, queueLiveBytes int64, queueLiveKnown bool) int64 {
+	perSegmentBudget := defaultVlogGenerationWarmTargetBytes
+	if db != nil && db.valueLogGenerationWarmTarget > 0 {
+		perSegmentBudget = db.valueLogGenerationWarmTarget
+	}
+	if queueLen <= 0 || !queueLiveKnown || queueLiveBytes <= 0 {
+		return perSegmentBudget
+	}
+	avgLiveBytes := queueLiveBytes / int64(queueLen)
+	if queueLiveBytes%int64(queueLen) != 0 {
+		avgLiveBytes++
+	}
+	if avgLiveBytes > 0 {
+		return avgLiveBytes
+	}
+	return perSegmentBudget
+}
+
+func (db *DB) vlogGenerationRewriteSegmentCapForRunWithHint(queueLen int, budgetTokens int64, queueLiveBytes int64, queueLiveKnown bool, opts vlogGenerationMaintenanceOptions) vlogGenerationRewriteSegmentCapDecision {
+	resumeMaxSegments := vlogGenerationRewriteResumeMaxSegmentsEffective()
+	decision := vlogGenerationRewriteSegmentCapDecision{
+		maxSegments:        resumeMaxSegments,
+		limiter:            vlogGenerationRewriteSegmentCapLimiterResumeDefault,
+		byBudgetSegments:   0,
+		perSegmentBudget:   0,
+		budgetEnabled:      db != nil && db.vlogGenerationRewriteBudgetEnabled(),
+		resumeMaxSegments:  resumeMaxSegments,
+		debtDrainMaxTarget: vlogGenerationRewriteDebtDrainMaxSegmentsEffective(),
+	}
+	if db == nil || queueLen <= 1 || !opts.rewriteDebtDrain {
+		return decision
+	}
+	// Checkpoint-kick retries should keep each debt-drain run small to reduce
+	// write amplification when foreground ingest is still active.
+	if opts.bypassQuiet && !opts.skipCheckpoint {
+		decision.maxSegments = 1
+		decision.limiter = vlogGenerationRewriteSegmentCapLimiterCheckpointKickSafety
+
+		burstMinQueueSegments := vlogGenerationRewriteCheckpointKickBurstMinQueueSegments
+		if vlogGenerationIsStageConfirmSource(opts) || vlogGenerationIsAgeBlockedSource(opts) {
+			burstMinQueueSegments = 2
+		}
+
+		if decision.budgetEnabled &&
+			queueLen >= burstMinQueueSegments &&
+			budgetTokens > 0 {
+			perSegmentBudget := db.vlogGenerationRewritePerSegmentBudgetBytes(queueLen, queueLiveBytes, queueLiveKnown)
+			if perSegmentBudget > 0 {
+				byBudget := int(budgetTokens / perSegmentBudget)
+				if byBudget < 1 {
+					byBudget = 1
+				}
+				burstMax := vlogGenerationRewriteCheckpointKickBurstMaxSegments
+				if burstMax > queueLen {
+					burstMax = queueLen
+				}
+				if burstMax > decision.debtDrainMaxTarget {
+					burstMax = decision.debtDrainMaxTarget
+				}
+				if byBudget < burstMax {
+					burstMax = byBudget
+				}
+				if burstMax > 1 {
+					decision.maxSegments = burstMax
+					decision.limiter = vlogGenerationRewriteSegmentCapLimiterCheckpointKickBurst
+					decision.byBudgetSegments = byBudget
+					decision.perSegmentBudget = perSegmentBudget
+				}
+			}
+		}
+		return decision
+	}
+	decision.maxSegments = queueLen
+	decision.limiter = vlogGenerationRewriteSegmentCapLimiterQueueLen
+	debtDrainCap := decision.debtDrainMaxTarget
+	if decision.maxSegments > debtDrainCap {
+		decision.maxSegments = debtDrainCap
+		decision.limiter = vlogGenerationRewriteSegmentCapLimiterDebtDrainCap
+	}
+	if decision.maxSegments < 1 {
+		decision.maxSegments = 1
+	}
+	if !decision.budgetEnabled {
+		return decision
+	}
+	if budgetTokens <= 0 {
+		decision.maxSegments = 1
+		decision.limiter = vlogGenerationRewriteSegmentCapLimiterBudgetEmpty
+		return decision
+	}
+	perSegmentBudget := db.vlogGenerationRewritePerSegmentBudgetBytes(queueLen, queueLiveBytes, queueLiveKnown)
+	decision.perSegmentBudget = perSegmentBudget
+	if perSegmentBudget <= 0 {
+		decision.maxSegments = 1
+		decision.limiter = vlogGenerationRewriteSegmentCapLimiterBudgetPerSegment
+		return decision
+	}
+	byBudget := int(budgetTokens / perSegmentBudget)
+	if byBudget < 1 {
+		byBudget = 1
+	}
+	decision.byBudgetSegments = byBudget
+	if byBudget < decision.maxSegments {
+		decision.maxSegments = byBudget
+		decision.limiter = vlogGenerationRewriteSegmentCapLimiterBudgetTokens
+	}
+	if decision.maxSegments < 1 {
+		decision.maxSegments = 1
+	}
+	return decision
+}
+
+func (db *DB) vlogGenerationRewriteSegmentCapForRun(queueLen int, budgetTokens int64, opts vlogGenerationMaintenanceOptions) vlogGenerationRewriteSegmentCapDecision {
+	return db.vlogGenerationRewriteSegmentCapForRunWithHint(queueLen, budgetTokens, 0, false, opts)
+}
+
+func (db *DB) vlogGenerationRewriteMaxSegmentsForRun(queueLen int, budgetTokens int64, opts vlogGenerationMaintenanceOptions) int {
+	return db.vlogGenerationRewriteSegmentCapForRun(queueLen, budgetTokens, opts).maxSegments
+}
+
+func (db *DB) vlogGenerationRewriteSegmentCapForFreshPlanWithHint(queueLen int, budgetTokens int64, queueLiveBytes int64, queueLiveKnown bool, opts vlogGenerationMaintenanceOptions) vlogGenerationRewriteSegmentCapDecision {
+	resumeMaxSegments := vlogGenerationRewriteResumeMaxSegmentsEffective()
+	decision := vlogGenerationRewriteSegmentCapDecision{
+		maxSegments:        resumeMaxSegments,
+		limiter:            vlogGenerationRewriteSegmentCapLimiterResumeDefault,
+		byBudgetSegments:   0,
+		perSegmentBudget:   0,
+		budgetEnabled:      db != nil && db.vlogGenerationRewriteBudgetEnabled(),
+		resumeMaxSegments:  resumeMaxSegments,
+		debtDrainMaxTarget: vlogGenerationRewriteDebtDrainMaxSegmentsEffective(),
+	}
+	if db == nil || queueLen <= 1 || !opts.rewriteDebtDrain {
+		return decision
+	}
+	freshPlanMin, freshPlanMax := vlogGenerationRewriteFreshPlanDebtDrainLimitsEffective()
+	if queueLen < freshPlanMin {
+		decision.limiter = vlogGenerationRewriteSegmentCapLimiterFreshPlanQueueThreshold
+		return decision
+	}
+	decision = db.vlogGenerationRewriteSegmentCapForRunWithHint(queueLen, budgetTokens, queueLiveBytes, queueLiveKnown, opts)
+	if decision.maxSegments > freshPlanMax {
+		decision.maxSegments = freshPlanMax
+		decision.limiter = vlogGenerationRewriteSegmentCapLimiterFreshPlanCap
+	}
+	if decision.maxSegments < 1 {
+		decision.maxSegments = 1
+	}
+	return decision
+}
+
+func (db *DB) vlogGenerationRewriteSegmentCapForFreshPlan(queueLen int, budgetTokens int64, opts vlogGenerationMaintenanceOptions) vlogGenerationRewriteSegmentCapDecision {
+	return db.vlogGenerationRewriteSegmentCapForFreshPlanWithHint(queueLen, budgetTokens, 0, false, opts)
+}
+
+func (db *DB) vlogGenerationRewriteMaxSegmentsForFreshPlan(queueLen int, budgetTokens int64, opts vlogGenerationMaintenanceOptions) int {
+	return db.vlogGenerationRewriteSegmentCapForFreshPlan(queueLen, budgetTokens, opts).maxSegments
+}
+
+func normalizeVlogGenerationRewriteSegmentCapLimiter(v uint32) int {
+	idx := int(v)
+	if idx < 0 || idx >= vlogGenerationRewriteSegmentCapLimiterCount {
+		return int(vlogGenerationRewriteSegmentCapLimiterNone)
+	}
+	return idx
+}
+
+func (db *DB) observeVlogGenerationRewriteSegmentCapDecision(decision vlogGenerationRewriteSegmentCapDecision, freshPlan bool) {
+	if db == nil {
+		return
+	}
+	limiterIdx := normalizeVlogGenerationRewriteSegmentCapLimiter(decision.limiter)
+	if freshPlan {
+		db.vlogGenerationRewriteQueueFreshPlanSegmentCapDecisions.Add(1)
+		db.vlogGenerationRewriteQueueFreshPlanSegmentCapLimiterCounts[limiterIdx].Add(1)
+		return
+	}
+	db.vlogGenerationRewriteQueueRunSegmentCapDecisions.Add(1)
+	db.vlogGenerationRewriteQueueRunSegmentCapLimiterCounts[limiterIdx].Add(1)
+}
+
 const maxPositiveInt64 = int64(^uint64(0) >> 1)
 
 func addClampInt64(cur, add, limit int64) int64 {
@@ -10001,7 +14562,7 @@ func mulDivClampPositiveInt64(x, y, div, capValue int64) int64 {
 	return int64(q)
 }
 
-func (db *DB) vlogGenerationConsumeRewriteBudgetBytes(n int64) {
+func (db *DB) vlogGenerationConsumeRewriteBudgetBytes(n int64, sourceIdx int) {
 	if db == nil || n <= 0 {
 		return
 	}
@@ -10012,25 +14573,1476 @@ func (db *DB) vlogGenerationConsumeRewriteBudgetBytes(n int64) {
 			next = 0
 		}
 		if db.vlogGenerationRewriteBudgetTokensBytes.CompareAndSwap(cur, next) {
+			if consumed := cur - next; consumed > 0 {
+				db.vlogGenerationRewriteBudgetConsumed.Add(uint64(consumed))
+				if sourceIdx >= 0 && sourceIdx < vlogGenerationMaintenanceSourceCount {
+					db.vlogGenerationRewriteBudgetConsumedBySource[sourceIdx].Add(uint64(consumed))
+				}
+			}
 			return
 		}
 	}
+}
+
+func sumVlogRewritePlanBytes(segments []backenddb.ValueLogRewritePlanSegment, ids []uint32) (total, live, stale int64, ok bool) {
+	if len(segments) == 0 || len(ids) == 0 {
+		return 0, 0, 0, false
+	}
+	byID := make(map[uint32]backenddb.ValueLogRewritePlanSegment, len(segments))
+	for _, seg := range segments {
+		if seg.FileID == 0 {
+			continue
+		}
+		byID[seg.FileID] = seg
+	}
+	for _, id := range ids {
+		seg, found := byID[id]
+		if !found {
+			continue
+		}
+		ok = true
+		total += seg.BytesTotal
+		live += seg.BytesLive
+		stale += seg.BytesStale
+	}
+	return total, live, stale, ok
+}
+
+func sumVlogRewritePlanLiveBytes(segments []backenddb.ValueLogRewritePlanSegment, ids []uint32) (sum int64, ok bool) {
+	_, sum, _, ok = sumVlogRewritePlanBytes(segments, ids)
+	return sum, ok
+}
+
+func sumVlogRewritePlanChunkBytes(chunks []backenddb.ValueLogRewritePlanChunk, selected []backenddb.ValueLogRewritePlanChunk) (total, live, stale int64, ok bool) {
+	if len(chunks) == 0 || len(selected) == 0 {
+		return 0, 0, 0, false
+	}
+	byKey := make(map[valueLogGenerationRewriteChunkKey]backenddb.ValueLogRewritePlanChunk, len(chunks))
+	for _, chunk := range chunks {
+		if chunk.FileID == 0 {
+			continue
+		}
+		byKey[valueLogGenerationRewriteChunkKey{FileID: chunk.FileID, ChunkOffset: chunk.ChunkOffset}] = chunk
+	}
+	for _, chunk := range selected {
+		entry, found := byKey[valueLogGenerationRewriteChunkKey{FileID: chunk.FileID, ChunkOffset: chunk.ChunkOffset}]
+		if !found {
+			continue
+		}
+		ok = true
+		total += entry.BytesTotal
+		live += entry.BytesLive
+		stale += entry.BytesStale
+	}
+	return total, live, stale, ok
+}
+
+func vlogGenerationRewriteChunkBytesForPlan(budgetTokens int64) int64 {
+	const (
+		defaultChunkBytes = int64(16 << 20)
+		minChunkBytes     = int64(64 << 10)
+	)
+	if budgetTokens > 0 && budgetTokens < defaultChunkBytes {
+		if budgetTokens < minChunkBytes {
+			return minChunkBytes
+		}
+		return budgetTokens
+	}
+	return defaultChunkBytes
+}
+
+func observeDurationNanos(total, max *atomic.Uint64, d time.Duration) {
+	if total == nil || max == nil || d <= 0 {
+		return
+	}
+	n := uint64(d)
+	total.Add(n)
+	updateAtomicMaxUint64(max, n)
+}
+
+func (db *DB) observeVlogGenerationMaintenancePassDuration(d time.Duration) {
+	if db == nil {
+		return
+	}
+	observeDurationNanos(&db.vlogGenerationMaintenancePassTotalNanos, &db.vlogGenerationMaintenancePassMaxNanos, d)
+}
+
+func (db *DB) observeVlogGenerationRewritePlanDuration(d time.Duration) {
+	if db == nil {
+		return
+	}
+	observeDurationNanos(&db.vlogGenerationRewritePlanTotalNanos, &db.vlogGenerationRewritePlanMaxNanos, d)
+}
+
+func (db *DB) observeVlogGenerationRewriteExecDuration(d time.Duration) {
+	if db == nil {
+		return
+	}
+	observeDurationNanos(&db.vlogGenerationRewriteExecTotalNanos, &db.vlogGenerationRewriteExecMaxNanos, d)
+}
+
+func (db *DB) observeVlogGenerationGCExecDuration(d time.Duration) {
+	if db == nil {
+		return
+	}
+	observeDurationNanos(&db.vlogGenerationGCExecTotalNanos, &db.vlogGenerationGCExecMaxNanos, d)
+}
+
+func (db *DB) observeVlogGenerationGCStats(stats backenddb.ValueLogGCStats) {
+	if db == nil {
+		return
+	}
+	db.vlogGenerationLastGCBytesReferenced.Store(stats.BytesReferenced)
+	db.vlogGenerationLastGCSegmentsReferenced.Store(int64(stats.SegmentsReferenced))
+	db.vlogGenerationLastGCBytesActive.Store(stats.BytesActive)
+	db.vlogGenerationLastGCSegmentsActive.Store(int64(stats.SegmentsActive))
+	db.vlogGenerationLastGCBytesProtected.Store(stats.BytesProtected)
+	db.vlogGenerationLastGCSegmentsProtected.Store(int64(stats.SegmentsProtected))
+	db.vlogGenerationLastGCBytesProtectedInUse.Store(stats.BytesProtectedInUse)
+	db.vlogGenerationLastGCSegmentsProtectedInUse.Store(int64(stats.SegmentsProtectedInUse))
+	db.vlogGenerationLastGCBytesProtectedRetained.Store(stats.BytesProtectedRetained)
+	db.vlogGenerationLastGCSegmentsProtectedRetained.Store(int64(stats.SegmentsProtectedRetained))
+	db.vlogGenerationLastGCBytesProtectedOverlap.Store(stats.BytesProtectedOverlap)
+	db.vlogGenerationLastGCSegmentsProtectedOverlap.Store(int64(stats.SegmentsProtectedOverlap))
+	db.vlogGenerationLastGCBytesProtectedOther.Store(stats.BytesProtectedOther)
+	db.vlogGenerationLastGCSegmentsProtectedOther.Store(int64(stats.SegmentsProtectedOther))
+	db.vlogGenerationLastGCBytesEligible.Store(stats.BytesEligible)
+	db.vlogGenerationLastGCSegmentsEligible.Store(int64(stats.SegmentsEligible))
+	db.vlogGenerationLastGCBytesDeleted.Store(stats.BytesDeleted)
+	db.vlogGenerationLastGCSegmentsDeleted.Store(int64(stats.SegmentsDeleted))
+	db.vlogGenerationLastGCBytesPending.Store(stats.BytesPending)
+	db.vlogGenerationLastGCSegmentsPending.Store(int64(stats.SegmentsPending))
+	db.vlogGenerationLastGCObservedSourceSegments.Store(int64(stats.ObservedSourceSegments))
+	db.vlogGenerationLastGCObservedSourceSegmentsReferenced.Store(int64(stats.ObservedSourceSegmentsReferenced))
+	db.vlogGenerationLastGCObservedSourceSegmentsActive.Store(int64(stats.ObservedSourceSegmentsActive))
+	db.vlogGenerationLastGCObservedSourceSegmentsProtected.Store(int64(stats.ObservedSourceSegmentsProtected))
+	db.vlogGenerationLastGCObservedSourceSegmentsProtectedInUse.Store(int64(stats.ObservedSourceSegmentsProtectedInUse))
+	db.vlogGenerationLastGCObservedSourceSegmentsProtectedRetained.Store(int64(stats.ObservedSourceSegmentsProtectedRetained))
+	db.vlogGenerationLastGCObservedSourceSegmentsProtectedOverlap.Store(int64(stats.ObservedSourceSegmentsProtectedOverlap))
+	db.vlogGenerationLastGCObservedSourceSegmentsProtectedOther.Store(int64(stats.ObservedSourceSegmentsProtectedOther))
+	db.vlogGenerationLastGCObservedSourceSegmentsEligible.Store(int64(stats.ObservedSourceSegmentsEligible))
+	db.vlogGenerationLastGCObservedSourceSegmentsDeleted.Store(int64(stats.ObservedSourceSegmentsDeleted))
+	db.vlogGenerationLastGCObservedSourceSegmentsPending.Store(int64(stats.ObservedSourceSegmentsPending))
+	db.vlogGenerationLastGCObservedSourceBytes.Store(stats.ObservedSourceBytes)
+	db.vlogGenerationLastGCObservedSourceBytesReferenced.Store(stats.ObservedSourceBytesReferenced)
+	db.vlogGenerationLastGCObservedSourceBytesActive.Store(stats.ObservedSourceBytesActive)
+	db.vlogGenerationLastGCObservedSourceBytesProtected.Store(stats.ObservedSourceBytesProtected)
+	db.vlogGenerationLastGCObservedSourceBytesProtectedInUse.Store(stats.ObservedSourceBytesProtectedInUse)
+	db.vlogGenerationLastGCObservedSourceBytesProtectedRetained.Store(stats.ObservedSourceBytesProtectedRetained)
+	db.vlogGenerationLastGCObservedSourceBytesProtectedOverlap.Store(stats.ObservedSourceBytesProtectedOverlap)
+	db.vlogGenerationLastGCObservedSourceBytesProtectedOther.Store(stats.ObservedSourceBytesProtectedOther)
+	db.vlogGenerationLastGCObservedSourceBytesEligible.Store(stats.ObservedSourceBytesEligible)
+	db.vlogGenerationLastGCObservedSourceBytesDeleted.Store(stats.ObservedSourceBytesDeleted)
+	db.vlogGenerationLastGCObservedSourceBytesPending.Store(stats.ObservedSourceBytesPending)
+	db.vlogGenerationObservedGCSourceSegmentsTotal.Add(uint64(stats.ObservedSourceSegments))
+	db.vlogGenerationObservedGCSourceSegmentsEligibleTotal.Add(uint64(stats.ObservedSourceSegmentsEligible))
+	db.vlogGenerationObservedGCSourceSegmentsDeletedTotal.Add(uint64(stats.ObservedSourceSegmentsDeleted))
+	db.vlogGenerationObservedGCSourceSegmentsProtectedInUseTotal.Add(uint64(stats.ObservedSourceSegmentsProtectedInUse))
+	db.vlogGenerationObservedGCSourceSegmentsProtectedRetainedTotal.Add(uint64(stats.ObservedSourceSegmentsProtectedRetained))
+	db.vlogGenerationObservedGCSourceSegmentsProtectedOverlapTotal.Add(uint64(stats.ObservedSourceSegmentsProtectedOverlap))
+	db.vlogGenerationObservedGCSourceSegmentsProtectedOtherTotal.Add(uint64(stats.ObservedSourceSegmentsProtectedOther))
+	db.vlogGenerationObservedGCSourceBytesTotal.Add(stats.ObservedSourceBytes)
+	db.vlogGenerationObservedGCSourceBytesEligibleTotal.Add(stats.ObservedSourceBytesEligible)
+	db.vlogGenerationObservedGCSourceBytesDeletedTotal.Add(stats.ObservedSourceBytesDeleted)
+	db.vlogGenerationObservedGCSourceBytesProtectedInUseTotal.Add(stats.ObservedSourceBytesProtectedInUse)
+	db.vlogGenerationObservedGCSourceBytesProtectedRetainedTotal.Add(stats.ObservedSourceBytesProtectedRetained)
+	db.vlogGenerationObservedGCSourceBytesProtectedOverlapTotal.Add(stats.ObservedSourceBytesProtectedOverlap)
+	db.vlogGenerationObservedGCSourceBytesProtectedOtherTotal.Add(stats.ObservedSourceBytesProtectedOther)
+}
+
+func (db *DB) observeVlogGenerationVacuumExecDuration(d time.Duration) {
+	if db == nil {
+		return
+	}
+	observeDurationNanos(&db.vlogGenerationVacuumExecTotalNanos, &db.vlogGenerationVacuumExecMaxNanos, d)
+}
+
+func vlogGenerationRewriteLedgerIDs(segments []backenddb.ValueLogRewritePlanSegment) []uint32 {
+	if len(segments) == 0 {
+		return nil
+	}
+	ids := make([]uint32, 0, len(segments))
+	for _, seg := range segments {
+		if seg.FileID == 0 {
+			continue
+		}
+		ids = append(ids, seg.FileID)
+	}
+	return ids
+}
+
+func (db *DB) observeVlogGenerationRewritePlanOutcome(plan backenddb.ValueLogRewritePlan, err error) {
+	db.observeVlogGenerationRewritePlanOutcomeWithDuration(plan, err, 0)
+}
+
+func (db *DB) observeVlogGenerationRewriteChunkPlanOutcomeWithDuration(plan backenddb.ValueLogRewriteChunkPlan, err error, dur time.Duration) {
+	if db == nil {
+		return
+	}
+	db.observeVlogGenerationRewritePlanDuration(dur)
+	db.vlogGenerationRewritePlanRuns.Add(1)
+	if err != nil {
+		if isVlogGenerationPlannerCanceled(err) {
+			db.vlogGenerationRewritePlanCanceled.Add(1)
+			db.vlogGenerationRewritePlanCanceledLastNS.Store(time.Now().UnixNano())
+		} else {
+			db.vlogGenerationRewritePlanErrors.Add(1)
+		}
+		return
+	}
+	if len(plan.SourceChunks) > 0 || plan.ChunksSelected > 0 {
+		db.vlogGenerationRewritePlanSelected.Add(1)
+		selectedChunks := plan.ChunksSelected
+		if selectedChunks <= 0 {
+			selectedChunks = len(plan.SourceChunks)
+		}
+		if selectedChunks > 0 {
+			db.vlogGenerationRewritePlanSelectedChunks.Add(uint64(selectedChunks))
+		}
+		if selectedSegments := len(vlogGenerationRewriteChunkLedgerIDs(plan.SourceChunks)); selectedSegments > 0 {
+			db.vlogGenerationRewritePlanSelectedSegments.Add(uint64(selectedSegments))
+		}
+		if plan.SelectedBytesTotal > 0 {
+			db.vlogGenerationRewritePlanSelectedBytes.Add(uint64(plan.SelectedBytesTotal))
+		}
+		if plan.SelectedBytesLive > 0 {
+			db.vlogGenerationRewritePlanSelectedLiveBytes.Add(uint64(plan.SelectedBytesLive))
+		}
+		if plan.SelectedBytesStale > 0 {
+			db.vlogGenerationRewritePlanSelectedStaleBytes.Add(uint64(plan.SelectedBytesStale))
+		}
+		return
+	}
+	db.vlogGenerationRewritePlanEmpty.Add(1)
+	if plan.AgeBlockedChunks > 0 && plan.AgeBlockedMinRemainingAge > 0 {
+		db.vlogGenerationRewritePlanEmptyAgeBlocked.Add(1)
+	} else {
+		db.vlogGenerationRewritePlanEmptyNoSelection.Add(1)
+	}
+}
+
+func (db *DB) observeVlogGenerationRewritePlanOutcomeWithDuration(plan backenddb.ValueLogRewritePlan, err error, dur time.Duration) {
+	if db == nil {
+		return
+	}
+	db.observeVlogGenerationRewritePlanDuration(dur)
+	db.vlogGenerationRewritePlanRuns.Add(1)
+	if err != nil {
+		if isVlogGenerationPlannerCanceled(err) {
+			db.vlogGenerationRewritePlanCanceled.Add(1)
+			db.vlogGenerationRewritePlanCanceledLastNS.Store(time.Now().UnixNano())
+		} else {
+			db.vlogGenerationRewritePlanErrors.Add(1)
+		}
+		return
+	}
+	if len(plan.SourceFileIDs) > 0 || len(plan.SelectedSegments) > 0 || plan.SegmentsSelected > 0 {
+		db.vlogGenerationRewritePlanSelected.Add(1)
+		selectedSegments := plan.SegmentsSelected
+		if selectedSegments <= 0 {
+			switch {
+			case len(plan.SelectedSegments) > 0:
+				selectedSegments = len(plan.SelectedSegments)
+			case len(plan.SourceFileIDs) > 0:
+				selectedSegments = len(plan.SourceFileIDs)
+			}
+		}
+		if selectedSegments > 0 {
+			db.vlogGenerationRewritePlanSelectedSegments.Add(uint64(selectedSegments))
+		}
+		selectedTotal := plan.SelectedBytesTotal
+		selectedLive := plan.SelectedBytesLive
+		selectedStale := plan.SelectedBytesStale
+		if len(plan.SelectedSegments) > 0 && (selectedTotal <= 0 || selectedLive <= 0 || selectedStale <= 0) {
+			fallbackTotal := int64(0)
+			fallbackLive := int64(0)
+			fallbackStale := int64(0)
+			for _, seg := range plan.SelectedSegments {
+				if seg.BytesTotal > 0 {
+					fallbackTotal += seg.BytesTotal
+				}
+				if seg.BytesLive > 0 {
+					fallbackLive += seg.BytesLive
+				}
+				if seg.BytesStale > 0 {
+					fallbackStale += seg.BytesStale
+				}
+			}
+			if selectedTotal <= 0 {
+				selectedTotal = fallbackTotal
+			}
+			if selectedLive <= 0 {
+				selectedLive = fallbackLive
+			}
+			if selectedStale <= 0 {
+				selectedStale = fallbackStale
+			}
+		}
+		if selectedTotal > 0 {
+			db.vlogGenerationRewritePlanSelectedBytes.Add(uint64(selectedTotal))
+		}
+		if selectedLive > 0 {
+			db.vlogGenerationRewritePlanSelectedLiveBytes.Add(uint64(selectedLive))
+		}
+		if selectedStale > 0 {
+			db.vlogGenerationRewritePlanSelectedStaleBytes.Add(uint64(selectedStale))
+		}
+		return
+	}
+	db.vlogGenerationRewritePlanEmpty.Add(1)
+	if plan.AgeBlockedSegments > 0 && plan.AgeBlockedMinRemainingAge > 0 {
+		db.vlogGenerationRewritePlanEmptyAgeBlocked.Add(1)
+	} else {
+		db.vlogGenerationRewritePlanEmptyNoSelection.Add(1)
+	}
+}
+
+func (db *DB) observeVlogGenerationRewritePlanPenaltyFilter(before, after int) {
+	if db == nil || before <= 0 || after >= before {
+		return
+	}
+	db.vlogGenerationRewritePlanPenaltyFilterRuns.Add(1)
+	db.vlogGenerationRewritePlanPenaltyFilterSegments.Add(uint64(before - after))
+	if after == 0 {
+		db.vlogGenerationRewritePlanPenaltyFilterToEmpty.Add(1)
+	}
+}
+
+func isVlogGenerationPlannerCanceled(err error) bool {
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
+}
+
+func atomicValueString(v *atomic.Value) string {
+	if v == nil {
+		return ""
+	}
+	raw := v.Load()
+	if raw == nil {
+		return ""
+	}
+	s, _ := raw.(string)
+	return s
+}
+
+func (db *DB) storeVlogGenerationLeafPackLastSkipReason(reason string) {
+	if db == nil {
+		return
+	}
+	db.vlogGenerationLeafPackLastSkipReason.Store(reason)
+}
+
+func (db *DB) observeVlogGenerationLeafPackAdmissionSkip(reason string) {
+	if db == nil || reason == "" {
+		return
+	}
+	if !envBool(envEnableLeafGenerationPackMaintenance) || !db.indexOuterLeavesInValueLog {
+		return
+	}
+	switch reason {
+	case "write_burst":
+		db.vlogGenerationLeafPackSkipWriteBurst.Add(1)
+	case "queue_pressure":
+		db.vlogGenerationLeafPackSkipQueuePressure.Add(1)
+	case "foreground_iterators":
+		db.vlogGenerationLeafPackSkipForegroundIterators.Add(1)
+	}
+	db.storeVlogGenerationLeafPackLastSkipReason(reason)
+}
+
+func leafGenerationPackMaintenanceTimeout() time.Duration {
+	timeoutSeconds := envUint64(envLeafGenerationPackMaintenanceTimeoutSeconds, uint64(leafGenerationPackMaintenanceDefaultTimeout/time.Second))
+	if timeoutSeconds == 0 {
+		return leafGenerationPackMaintenanceDefaultTimeout
+	}
+	return time.Duration(timeoutSeconds) * time.Second
+}
+
+func (db *DB) observeVlogGenerationLeafPackCanceled() {
+	if db == nil {
+		return
+	}
+	db.vlogGenerationLeafPackCanceled.Add(1)
+	db.vlogGenerationLeafPackCanceledLastNS.Store(time.Now().UnixNano())
+	db.storeVlogGenerationLeafPackLastSkipReason("context_canceled")
+}
+
+func (db *DB) observeVlogGenerationLeafPackDeadline() {
+	if db == nil {
+		return
+	}
+	db.vlogGenerationLeafPackDeadline.Add(1)
+	db.vlogGenerationLeafPackDeadlineLastNS.Store(time.Now().UnixNano())
+	db.storeVlogGenerationLeafPackLastSkipReason("deadline_exceeded")
+}
+
+func (db *DB) vlogGenerationRewritePlanBackoffActive(now time.Time) bool {
+	if db == nil {
+		return false
+	}
+	lastCanceled := db.vlogGenerationRewritePlanCanceledLastNS.Load()
+	if lastCanceled <= 0 {
+		return false
+	}
+	return now.Sub(time.Unix(0, lastCanceled)) < vlogGenerationRewritePlanCancelBackoff
+}
+
+func (db *DB) observeVlogGenerationRewriteCanceled(queuedDebt bool) {
+	if db == nil {
+		return
+	}
+	db.vlogGenerationRewriteCanceledRuns.Add(1)
+	if queuedDebt {
+		db.vlogGenerationRewriteCanceledQueuedDebtRuns.Add(1)
+	} else {
+		db.vlogGenerationRewriteCanceledFreshPlanRuns.Add(1)
+	}
+	db.vlogGenerationRewriteCanceledLastNS.Store(time.Now().UnixNano())
+}
+
+func (db *DB) observeVlogGenerationRewriteDeadline(queuedDebt bool) {
+	if db == nil {
+		return
+	}
+	db.vlogGenerationRewriteDeadlineRuns.Add(1)
+	if queuedDebt {
+		db.vlogGenerationRewriteDeadlineQueuedDebtRuns.Add(1)
+	} else {
+		db.vlogGenerationRewriteDeadlineFreshPlanRuns.Add(1)
+	}
+	db.vlogGenerationRewriteDeadlineLastNS.Store(time.Now().UnixNano())
+}
+
+func (db *DB) observeVlogGenerationRewriteQueuePrune(dropped int) {
+	if db == nil || dropped <= 0 {
+		return
+	}
+	db.vlogGenerationRewriteQueuePruneRuns.Add(1)
+	db.vlogGenerationRewriteQueuePruneIDs.Add(uint64(dropped))
+}
+
+func (db *DB) vlogGenerationRewriteQueueLiveBytesSnapshot(ids []uint32) (liveBytes int64, known bool, err error) {
+	if db == nil || len(ids) == 0 {
+		return 0, true, nil
+	}
+	db.vlogGenerationRewriteQueueMu.Lock()
+	defer db.vlogGenerationRewriteQueueMu.Unlock()
+	if err := db.loadVlogGenerationRewriteQueueLocked(); err != nil {
+		return 0, false, err
+	}
+	ledgerByFileID := db.vlogGenerationRewriteLedgerByFileID
+	if len(ledgerByFileID) == 0 && len(db.vlogGenerationRewriteLedger) > 0 {
+		ledgerByFileID = buildVlogGenerationRewriteLedgerByFileID(db.vlogGenerationRewriteLedger)
+		db.vlogGenerationRewriteLedgerByFileID = ledgerByFileID
+	}
+	if len(ledgerByFileID) == 0 {
+		return 0, false, nil
+	}
+	idsPresent := 0
+	idsKnown := 0
+	for _, id := range ids {
+		if id == 0 {
+			continue
+		}
+		idsPresent++
+		seg, ok := ledgerByFileID[id]
+		if !ok {
+			continue
+		}
+		idsKnown++
+		liveBytes += seg.BytesLive
+	}
+	known = idsPresent == idsKnown
+	if liveBytes < 0 {
+		liveBytes = 0
+	}
+	return liveBytes, known, nil
+}
+
+func (db *DB) observeVlogGenerationRewriteQueueProgress(
+	beforeSegments int,
+	beforeLiveBytes int64,
+	beforeLiveKnown bool,
+	afterSegments int,
+	afterLiveBytes int64,
+	afterLiveKnown bool,
+) {
+	if db == nil {
+		return
+	}
+	if beforeSegments < 0 {
+		beforeSegments = 0
+	}
+	if afterSegments < 0 {
+		afterSegments = 0
+	}
+	if beforeLiveBytes < 0 {
+		beforeLiveBytes = 0
+	}
+	if afterLiveBytes < 0 {
+		afterLiveBytes = 0
+	}
+	db.vlogGenerationRewriteQueueProgressPasses.Add(1)
+	db.vlogGenerationRewriteQueueSegmentsBeforeTotal.Add(uint64(beforeSegments))
+	db.vlogGenerationRewriteQueueSegmentsAfterTotal.Add(uint64(afterSegments))
+	db.vlogGenerationRewriteQueueSegmentsBeforeLast.Store(int64(beforeSegments))
+	db.vlogGenerationRewriteQueueSegmentsAfterLast.Store(int64(afterSegments))
+	segmentsDelta := afterSegments - beforeSegments
+	db.vlogGenerationRewriteQueueSegmentsDeltaLast.Store(int64(segmentsDelta))
+	if segmentsDelta < 0 {
+		db.vlogGenerationRewriteQueueSegmentsDrainedTotal.Add(uint64(-segmentsDelta))
+	} else if segmentsDelta > 0 {
+		db.vlogGenerationRewriteQueueSegmentsGrownTotal.Add(uint64(segmentsDelta))
+	}
+	if !beforeLiveKnown || !afterLiveKnown {
+		db.vlogGenerationRewriteQueueLiveBytesUnknownPasses.Add(1)
+		// Avoid stale "last pass" values when a pass has no reliable live-bytes snapshot.
+		db.vlogGenerationRewriteQueueLiveBytesBeforeLast.Store(-1)
+		db.vlogGenerationRewriteQueueLiveBytesAfterLast.Store(-1)
+		db.vlogGenerationRewriteQueueLiveBytesDeltaLast.Store(-1)
+		return
+	}
+	db.vlogGenerationRewriteQueueLiveBytesKnownPasses.Add(1)
+	db.vlogGenerationRewriteQueueLiveBytesBeforeTotal.Add(uint64(beforeLiveBytes))
+	db.vlogGenerationRewriteQueueLiveBytesAfterTotal.Add(uint64(afterLiveBytes))
+	db.vlogGenerationRewriteQueueLiveBytesBeforeLast.Store(beforeLiveBytes)
+	db.vlogGenerationRewriteQueueLiveBytesAfterLast.Store(afterLiveBytes)
+	liveDelta := afterLiveBytes - beforeLiveBytes
+	db.vlogGenerationRewriteQueueLiveBytesDeltaLast.Store(liveDelta)
+	if liveDelta < 0 {
+		db.vlogGenerationRewriteQueueLiveBytesDrainedTotal.Add(uint64(-liveDelta))
+	} else if liveDelta > 0 {
+		db.vlogGenerationRewriteQueueLiveBytesGrownTotal.Add(uint64(liveDelta))
+	}
+}
+
+func (db *DB) vlogGenerationRewriteCancelBackoffActive(now time.Time) bool {
+	if db == nil {
+		return false
+	}
+	lastCanceled := db.vlogGenerationRewriteCanceledLastNS.Load()
+	if lastCanceled <= 0 {
+		return false
+	}
+	return now.Sub(time.Unix(0, lastCanceled)) < vlogGenerationRewriteCancelBackoff
+}
+
+func (db *DB) vlogGenerationRewriteIneffectiveBackoffActive(now time.Time) bool {
+	if db == nil {
+		return false
+	}
+	lastIneffective := db.vlogGenerationRewriteIneffectiveLastNS.Load()
+	if lastIneffective <= 0 {
+		return false
+	}
+	return now.Sub(time.Unix(0, lastIneffective)) < vlogGenerationRewriteIneffectiveBackoff
+}
+
+func filterVlogGenerationRewriteChunkPlanByPenalty(plan backenddb.ValueLogRewriteChunkPlan, penalties map[uint32]valueLogGenerationRewritePenalty, now time.Time) backenddb.ValueLogRewriteChunkPlan {
+	if len(plan.SourceChunks) == 0 || len(penalties) == 0 {
+		return plan
+	}
+	filteredChunks := make([]backenddb.ValueLogRewritePlanChunk, 0, len(plan.SourceChunks))
+	for _, chunk := range plan.SourceChunks {
+		if chunk.FileID == 0 {
+			continue
+		}
+		penalty, ok := penalties[chunk.FileID]
+		if ok && penalty.CooldownUntilUnixNano > now.UnixNano() {
+			continue
+		}
+		filteredChunks = append(filteredChunks, chunk)
+	}
+	if len(filteredChunks) == len(plan.SourceChunks) {
+		return plan
+	}
+	plan.SourceChunks = filteredChunks
+	plan.ChunksSelected = len(filteredChunks)
+	plan.SelectedBytesTotal = 0
+	plan.SelectedBytesLive = 0
+	plan.SelectedBytesStale = 0
+	for _, chunk := range filteredChunks {
+		plan.SelectedBytesTotal += chunk.BytesTotal
+		plan.SelectedBytesLive += chunk.BytesLive
+		plan.SelectedBytesStale += chunk.BytesStale
+	}
+	return plan
+}
+
+func (db *DB) vlogGenerationRewriteQueueFollowupBlockedActive(now time.Time) bool {
+	if db == nil {
+		return false
+	}
+	blockedUntil := db.vlogGenerationRewriteQueueFollowupBlockedUntilNS.Load()
+	if blockedUntil <= 0 {
+		return false
+	}
+	return now.UnixNano() < blockedUntil
+}
+
+func filterVlogGenerationRewriteIDsByPenalty(ids []uint32, penalties map[uint32]valueLogGenerationRewritePenalty, now time.Time) []uint32 {
+	if len(ids) == 0 || len(penalties) == 0 {
+		return append([]uint32(nil), ids...)
+	}
+	filtered := make([]uint32, 0, len(ids))
+	for _, id := range ids {
+		if id == 0 {
+			continue
+		}
+		penalty, ok := penalties[id]
+		if ok && penalty.CooldownUntilUnixNano > now.UnixNano() {
+			continue
+		}
+		filtered = append(filtered, id)
+	}
+	return filtered
+}
+
+func filterVlogGenerationRewriteLedgerByPenalty(segments []backenddb.ValueLogRewritePlanSegment, penalties map[uint32]valueLogGenerationRewritePenalty, now time.Time) []backenddb.ValueLogRewritePlanSegment {
+	if len(segments) == 0 || len(penalties) == 0 {
+		return append([]backenddb.ValueLogRewritePlanSegment(nil), segments...)
+	}
+	filtered := make([]backenddb.ValueLogRewritePlanSegment, 0, len(segments))
+	for _, seg := range segments {
+		if seg.FileID == 0 {
+			continue
+		}
+		penalty, ok := penalties[seg.FileID]
+		if ok && penalty.CooldownUntilUnixNano > now.UnixNano() {
+			continue
+		}
+		filtered = append(filtered, seg)
+	}
+	return filtered
+}
+
+func shouldReadmitPenalizedRewriteSegment(seg backenddb.ValueLogRewritePlanSegment, penalty valueLogGenerationRewritePenalty, now time.Time) bool {
+	if seg.FileID == 0 {
+		return false
+	}
+	if penalty.CooldownUntilUnixNano <= now.UnixNano() {
+		return true
+	}
+	if penalty.LastStaleBytes <= 0 {
+		return false
+	}
+	return seg.BytesStale > penalty.LastStaleBytes
+}
+
+func filterVlogGenerationRewritePlanByPenalty(plan backenddb.ValueLogRewritePlan, penalties map[uint32]valueLogGenerationRewritePenalty, now time.Time) (backenddb.ValueLogRewritePlan, []uint32) {
+	if len(plan.SourceFileIDs) == 0 || len(penalties) == 0 {
+		return plan, nil
+	}
+	selectedByID := buildVlogGenerationRewriteLedgerByFileID(plan.SelectedSegments)
+	allowed := make(map[uint32]struct{}, len(plan.SourceFileIDs))
+	filteredIDs := make([]uint32, 0, len(plan.SourceFileIDs))
+	readmitted := make([]uint32, 0, len(plan.SourceFileIDs))
+	for _, id := range plan.SourceFileIDs {
+		if id == 0 {
+			continue
+		}
+		penalty, ok := penalties[id]
+		if ok && penalty.CooldownUntilUnixNano > now.UnixNano() {
+			seg, hasSeg := selectedByID[id]
+			if !hasSeg || !shouldReadmitPenalizedRewriteSegment(seg, penalty, now) {
+				continue
+			}
+			readmitted = append(readmitted, id)
+		}
+		allowed[id] = struct{}{}
+		filteredIDs = append(filteredIDs, id)
+	}
+	if len(filteredIDs) == len(plan.SourceFileIDs) {
+		return plan, readmitted
+	}
+	plan.SourceFileIDs = filteredIDs
+	plan.SegmentsSelected = len(filteredIDs)
+	plan.SelectedBytesTotal = 0
+	plan.SelectedBytesLive = 0
+	plan.SelectedBytesStale = 0
+	if len(plan.SelectedSegments) == 0 {
+		return plan, readmitted
+	}
+	filteredSegments := make([]backenddb.ValueLogRewritePlanSegment, 0, len(plan.SelectedSegments))
+	for _, seg := range plan.SelectedSegments {
+		if _, ok := allowed[seg.FileID]; !ok {
+			continue
+		}
+		filteredSegments = append(filteredSegments, seg)
+		plan.SelectedBytesTotal += seg.BytesTotal
+		plan.SelectedBytesLive += seg.BytesLive
+		plan.SelectedBytesStale += seg.BytesStale
+	}
+	plan.SelectedSegments = filteredSegments
+	plan.SegmentsSelected = len(filteredSegments)
+	return plan, readmitted
+}
+
+func (db *DB) filterVlogGenerationRewritePlanPenalties(plan backenddb.ValueLogRewritePlan, now time.Time) (backenddb.ValueLogRewritePlan, error) {
+	if db == nil || len(plan.SourceFileIDs) == 0 {
+		return plan, nil
+	}
+	db.vlogGenerationRewriteQueueMu.Lock()
+	defer db.vlogGenerationRewriteQueueMu.Unlock()
+	if err := db.loadVlogGenerationRewriteQueueLocked(); err != nil {
+		return backenddb.ValueLogRewritePlan{}, err
+	}
+	filtered, readmitted := filterVlogGenerationRewritePlanByPenalty(plan, db.vlogGenerationRewritePenalties, now)
+	if len(readmitted) == 0 {
+		return filtered, nil
+	}
+	changed := false
+	for _, id := range readmitted {
+		if _, ok := db.vlogGenerationRewritePenalties[id]; ok {
+			delete(db.vlogGenerationRewritePenalties, id)
+			changed = true
+		}
+	}
+	if !changed {
+		return filtered, nil
+	}
+	if err := saveValueLogGenerationRewriteState(db.valueLogGenerationStatePath(), db.vlogGenerationRewriteQueue, db.vlogGenerationRewriteLedger, db.vlogGenerationRewriteChunkLedger, db.vlogGenerationRewriteChunkBytes, db.vlogGenerationRewriteHistory, db.vlogGenerationRewritePenalties, db.vlogGenerationRewriteStagePending, db.vlogGenerationRewriteStageObservedUnixNano); err != nil {
+		return backenddb.ValueLogRewritePlan{}, err
+	}
+	return filtered, nil
+}
+
+func (db *DB) filterVlogGenerationRewriteChunkPlanPenalties(plan backenddb.ValueLogRewriteChunkPlan, now time.Time) (backenddb.ValueLogRewriteChunkPlan, error) {
+	if db == nil || len(plan.SourceChunks) == 0 {
+		return plan, nil
+	}
+	penalties, err := db.currentVlogGenerationRewritePenalties()
+	if err != nil {
+		return backenddb.ValueLogRewriteChunkPlan{}, err
+	}
+	return filterVlogGenerationRewriteChunkPlanByPenalty(plan, penalties, now), nil
+}
+
+func filterVlogGenerationRewritePlanToSegments(plan backenddb.ValueLogRewritePlan, segments []backenddb.ValueLogRewritePlanSegment) backenddb.ValueLogRewritePlan {
+	if len(segments) == 0 {
+		plan.SourceFileIDs = nil
+		plan.SelectedSegments = nil
+		plan.SegmentsSelected = 0
+		plan.SelectedBytesTotal = 0
+		plan.SelectedBytesLive = 0
+		plan.SelectedBytesStale = 0
+		return plan
+	}
+	filtered := append([]backenddb.ValueLogRewritePlanSegment(nil), segments...)
+	ids := make([]uint32, 0, len(filtered))
+	var total, live, stale int64
+	for _, seg := range filtered {
+		if seg.FileID == 0 {
+			continue
+		}
+		ids = append(ids, seg.FileID)
+		total += seg.BytesTotal
+		live += seg.BytesLive
+		stale += seg.BytesStale
+	}
+	plan.SourceFileIDs = ids
+	plan.SelectedSegments = filtered
+	plan.SegmentsSelected = len(ids)
+	plan.SelectedBytesTotal = total
+	plan.SelectedBytesLive = live
+	plan.SelectedBytesStale = stale
+	return plan
+}
+
+func filterVlogGenerationRewriteChunkLedgerByQuality(chunks []backenddb.ValueLogRewritePlanChunk, minStaleRatio float64, minStaleBytes int64) []backenddb.ValueLogRewritePlanChunk {
+	if len(chunks) == 0 {
+		return nil
+	}
+	if minStaleRatio <= 0 && minStaleBytes <= 0 {
+		return append([]backenddb.ValueLogRewritePlanChunk(nil), chunks...)
+	}
+	filtered := make([]backenddb.ValueLogRewritePlanChunk, 0, len(chunks))
+	for _, chunk := range chunks {
+		if chunk.FileID == 0 {
+			continue
+		}
+		if minStaleBytes > 0 && chunk.BytesStale < minStaleBytes {
+			continue
+		}
+		ratio := chunk.StaleRatio
+		if ratio <= 0 && chunk.BytesTotal > 0 {
+			ratio = float64(chunk.BytesStale) / float64(chunk.BytesTotal)
+		}
+		if minStaleRatio > 0 && ratio < minStaleRatio {
+			continue
+		}
+		filtered = append(filtered, chunk)
+	}
+	return filtered
+}
+
+func filterVlogGenerationRewriteLedgerByQuality(segments []backenddb.ValueLogRewritePlanSegment, minStaleRatio float64, minStaleBytes int64) []backenddb.ValueLogRewritePlanSegment {
+	if len(segments) == 0 {
+		return nil
+	}
+	if minStaleRatio <= 0 && minStaleBytes <= 0 {
+		return append([]backenddb.ValueLogRewritePlanSegment(nil), segments...)
+	}
+	filtered := make([]backenddb.ValueLogRewritePlanSegment, 0, len(segments))
+	for _, seg := range segments {
+		if seg.FileID == 0 {
+			continue
+		}
+		if minStaleBytes > 0 && seg.BytesStale < minStaleBytes {
+			continue
+		}
+		ratio := seg.StaleRatio
+		if ratio <= 0 && seg.BytesTotal > 0 {
+			ratio = float64(seg.BytesStale) / float64(seg.BytesTotal)
+		}
+		if minStaleRatio > 0 && ratio < minStaleRatio {
+			continue
+		}
+		filtered = append(filtered, seg)
+	}
+	return filtered
+}
+
+func shouldDeferVlogGenerationRewriteChunkPlanForAge(plan backenddb.ValueLogRewriteChunkPlan) bool {
+	return len(plan.SourceChunks) == 0 && plan.AgeBlockedChunks > 0 && plan.AgeBlockedMinRemainingAge > 0
+}
+
+func shouldDeferVlogGenerationRewritePlanForAge(plan backenddb.ValueLogRewritePlan, minSegmentAge time.Duration) bool {
+	if minSegmentAge <= 0 {
+		return false
+	}
+	if len(plan.SourceFileIDs) > 0 {
+		return false
+	}
+	if plan.AgeBlockedSegments <= 0 || plan.AgeBlockedMinRemainingAge <= 0 {
+		return false
+	}
+	return plan.BytesStale > 0
+}
+
+func (db *DB) setVlogGenerationRewriteAgeBlockedUntil(deadline time.Time) {
+	if db == nil {
+		return
+	}
+	until := deadline.UnixNano()
+	db.vlogGenerationRewriteAgeBlockedUntilNS.Store(until)
+	if !db.vlogGenerationRewriteAgeBlockedWakeRunning.CompareAndSwap(false, true) {
+		return
+	}
+	db.wg.Add(1)
+	go func() {
+		defer db.wg.Done()
+		defer db.vlogGenerationRewriteAgeBlockedWakeRunning.Store(false)
+		for !db.closing.Load() {
+			expectedUntil := db.vlogGenerationRewriteAgeBlockedUntilNS.Load()
+			if expectedUntil <= 0 {
+				return
+			}
+			deadline := time.Unix(0, expectedUntil)
+			delay := time.Until(deadline)
+			if delay > 0 {
+				sleepFor := delay
+				if sleepFor > 100*time.Millisecond {
+					sleepFor = 100 * time.Millisecond
+				}
+				timer := time.NewTimer(sleepFor)
+				select {
+				case <-timer.C:
+				case <-db.closeCh:
+					if !timer.Stop() {
+						<-timer.C
+					}
+					return
+				}
+				timer.Stop()
+				// Re-check the deadline after every bounded sleep so a shorter
+				// replacement deadline can fire promptly without spawning extra
+				// wake goroutines.
+				continue
+			}
+			if db.closing.Load() {
+				return
+			}
+			if db.vlogGenerationRewriteAgeBlockedUntilNS.Load() != expectedUntil {
+				continue
+			}
+			db.debugVlogMaintf(
+				"rewrite_plan age_blocked_retry_due retry_after_ms=%d",
+				delay.Milliseconds(),
+			)
+			db.startVlogGenerationDeferredMaintenance(vlogGenerationMaintenanceOptions{
+				bypassQuiet:           true,
+				skipRetainedPruneWait: true,
+				skipCheckpoint:        false,
+				rewriteDebtDrain:      true,
+				debugSource:           "rewrite_age_blocked",
+			})
+			return
+		}
+	}()
+}
+
+func (db *DB) clearVlogGenerationRewriteAgeBlockedUntil() {
+	if db == nil {
+		return
+	}
+	db.vlogGenerationRewriteAgeBlockedUntilNS.Store(0)
+}
+
+func (db *DB) clearVlogGenerationRewriteStageConfirmation() {
+	if db == nil {
+		return
+	}
+	db.vlogGenerationRewriteStageWakeObservedNS.Store(0)
+}
+
+func (db *DB) scheduleVlogGenerationRewriteStageConfirmation(observedAt int64) {
+	if db == nil || observedAt <= 0 || db.closing.Load() {
+		return
+	}
+	if db.vlogGenerationRewriteStageWakeObservedNS.Load() == observedAt {
+		return
+	}
+	db.vlogGenerationRewriteStageWakeObservedNS.Store(observedAt)
+	dueAt := time.Unix(0, observedAt).Add(vlogGenerationRewriteStageConfirmDelay)
+	delay := time.Until(dueAt)
+	if delay < 0 {
+		delay = 0
+	}
+	db.wg.Add(1)
+	go func(expectedObservedAt int64, wait time.Duration) {
+		defer db.wg.Done()
+		if wait > 0 {
+			timer := time.NewTimer(wait)
+			select {
+			case <-timer.C:
+			case <-db.closeCh:
+				if !timer.Stop() {
+					<-timer.C
+				}
+				return
+			}
+			timer.Stop()
+		}
+		if db.closing.Load() {
+			return
+		}
+		if db.vlogGenerationRewriteStageWakeObservedNS.Load() != expectedObservedAt {
+			return
+		}
+		stagePending, stageObservedAt, err := db.currentVlogGenerationRewriteStage()
+		if err != nil || !stagePending || stageObservedAt != expectedObservedAt {
+			return
+		}
+		db.debugVlogMaintf(
+			"rewrite_plan stage_confirm_due observed_age_ms=%d",
+			time.Since(time.Unix(0, expectedObservedAt)).Milliseconds(),
+		)
+		db.startVlogGenerationDeferredMaintenance(vlogGenerationMaintenanceOptions{
+			bypassQuiet:           true,
+			skipRetainedPruneWait: true,
+			skipCheckpoint:        false,
+			rewriteDebtDrain:      true,
+			debugSource:           "rewrite_stage_confirm",
+		})
+	}(observedAt, delay)
+}
+
+func (db *DB) vlogGenerationRewriteAgeBlockedDue(now time.Time) bool {
+	if db == nil {
+		return false
+	}
+	until := db.vlogGenerationRewriteAgeBlockedUntilNS.Load()
+	return until > 0 && !now.Before(time.Unix(0, until))
 }
 
 type vlogGenerationMaintenanceOptions struct {
 	bypassQuiet           bool
 	skipRetainedPruneWait bool
 	skipCheckpoint        bool
+	rewriteDebtDrain      bool
+	debugSource           string
+}
+
+func vlogGenerationMaintenanceDebugSource(opts vlogGenerationMaintenanceOptions) string {
+	if opts.debugSource != "" {
+		return opts.debugSource
+	}
+	if opts.bypassQuiet {
+		return "bypass"
+	}
+	return "periodic"
+}
+
+func vlogGenerationIsStageConfirmSource(opts vlogGenerationMaintenanceOptions) bool {
+	return opts.debugSource == "rewrite_stage_confirm" || opts.debugSource == "rewrite_stage_confirm_exit"
+}
+
+func vlogGenerationIsQueueSource(opts vlogGenerationMaintenanceOptions) bool {
+	return opts.debugSource == "rewrite_queue_pending"
+}
+
+func vlogGenerationIsAgeBlockedSource(opts vlogGenerationMaintenanceOptions) bool {
+	return opts.debugSource == "rewrite_age_blocked" || opts.debugSource == "rewrite_age_blocked_exit"
 }
 
 func (db *DB) maybeRunVlogGenerationMaintenance(runGC bool) {
 	db.maybeRunVlogGenerationMaintenanceWithOptions(runGC, vlogGenerationMaintenanceOptions{})
 }
 
-func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlogGenerationMaintenanceOptions) {
-	if db == nil || db.valueLogGenerationPolicy != uint8(backenddb.ValueLogGenerationHotWarmCold) {
+func (db *DB) vlogGenerationRewriteStageConfirmDue(now time.Time) bool {
+	if db == nil || db.closing.Load() {
+		return false
+	}
+	stagePending, stageObservedAt, err := db.currentVlogGenerationRewriteStage()
+	if err != nil || !stagePending || stageObservedAt <= 0 {
+		return false
+	}
+	return !now.Before(time.Unix(0, stageObservedAt).Add(vlogGenerationRewriteStageConfirmDelay))
+}
+
+func (db *DB) vlogGenerationDeferredMaintenanceDue(now time.Time) bool {
+	if db == nil || db.closing.Load() {
+		return false
+	}
+	if db.vlogGenerationRewriteAgeBlockedDue(now) {
+		return true
+	}
+	return db.vlogGenerationRewriteStageConfirmDue(now)
+}
+
+func (db *DB) schedulePendingVlogGenerationCheckpointKick() {
+	if db == nil || db.closing.Load() {
 		return
 	}
+	if db.vlogGenerationDeferredMaintenanceDue(time.Now()) {
+		db.scheduleDueVlogGenerationDeferredMaintenance()
+		return
+	}
+	if !db.vlogGenerationCheckpointKickPending.CompareAndSwap(true, false) {
+		return
+	}
+	db.wg.Add(1)
+	go func() {
+		defer db.wg.Done()
+		if db.closing.Load() {
+			return
+		}
+		db.runVlogGenerationCheckpointKickRetries(vlogGenerationMaintenanceOptions{
+			bypassQuiet:           true,
+			skipRetainedPruneWait: true,
+			// This path retries a checkpoint-triggered kick that collided with an
+			// already-active maintenance pass.
+			skipCheckpoint:   false,
+			rewriteDebtDrain: true,
+			debugSource:      "checkpoint_pending",
+		})
+	}()
+}
+
+func (db *DB) startVlogGenerationRewriteQueueMaintenance(opts vlogGenerationMaintenanceOptions) {
+	if db == nil || db.closing.Load() {
+		return
+	}
+	db.vlogGenerationRewriteQueuePending.Store(true)
+	if !db.vlogGenerationRewriteQueueRunning.CompareAndSwap(false, true) {
+		return
+	}
+	db.wg.Add(1)
+	go func() {
+		defer db.wg.Done()
+		defer db.vlogGenerationRewriteQueueRunning.Store(false)
+		if db.closing.Load() {
+			return
+		}
+		for !db.closing.Load() {
+			if !db.vlogGenerationRewriteQueuePending.CompareAndSwap(true, false) {
+				return
+			}
+			rewriteQueue, _, qerr := db.currentVlogGenerationRewriteEligible(time.Now())
+			stagePending, _, serr := db.currentVlogGenerationRewriteStage()
+			if qerr == nil && serr == nil && (len(rewriteQueue) == 0 || stagePending) {
+				continue
+			}
+			db.runVlogGenerationMaintenanceRetries(opts, vlogGenerationDeferredRetryWindow, true)
+		}
+	}()
+}
+
+func (db *DB) schedulePendingVlogGenerationRewriteQueue() {
+	if db == nil || db.closing.Load() {
+		return
+	}
+	if db.vlogGenerationDeferredMaintenanceDue(time.Now()) {
+		db.scheduleDueVlogGenerationDeferredMaintenance()
+		return
+	}
+	if !db.vlogGenerationRewriteQueuePending.Load() {
+		return
+	}
+	db.startVlogGenerationRewriteQueueMaintenance(vlogGenerationMaintenanceOptions{
+		bypassQuiet:           true,
+		skipRetainedPruneWait: true,
+		skipCheckpoint:        false,
+		rewriteDebtDrain:      true,
+		debugSource:           "rewrite_queue_pending",
+	})
+}
+
+func (db *DB) startVlogGenerationDeferredMaintenance(opts vlogGenerationMaintenanceOptions) {
+	if db == nil || db.closing.Load() {
+		return
+	}
+	db.vlogGenerationDeferredMaintenancePending.Store(true)
+	if !db.vlogGenerationDeferredMaintenanceRunning.CompareAndSwap(false, true) {
+		return
+	}
+	db.wg.Add(1)
+	go func() {
+		defer db.wg.Done()
+		defer db.vlogGenerationDeferredMaintenanceRunning.Store(false)
+		if db.closing.Load() {
+			return
+		}
+		for !db.closing.Load() {
+			if !db.vlogGenerationDeferredMaintenancePending.CompareAndSwap(true, false) {
+				return
+			}
+			db.runVlogGenerationMaintenanceRetries(opts, vlogGenerationDeferredRetryWindow, true)
+		}
+	}()
+}
+
+func (db *DB) scheduleDueVlogGenerationDeferredMaintenance() {
+	if db == nil || db.closing.Load() {
+		return
+	}
+	now := time.Now()
+	if db.vlogGenerationRewriteAgeBlockedDue(now) {
+		db.startVlogGenerationDeferredMaintenance(vlogGenerationMaintenanceOptions{
+			bypassQuiet:           true,
+			skipRetainedPruneWait: true,
+			skipCheckpoint:        false,
+			rewriteDebtDrain:      true,
+			debugSource:           "rewrite_age_blocked_exit",
+		})
+		return
+	}
+	stagePending, stageObservedAt, err := db.currentVlogGenerationRewriteStage()
+	if err != nil || !stagePending || stageObservedAt <= 0 {
+		return
+	}
+	if now.Before(time.Unix(0, stageObservedAt).Add(vlogGenerationRewriteStageConfirmDelay)) {
+		return
+	}
+	db.startVlogGenerationDeferredMaintenance(vlogGenerationMaintenanceOptions{
+		bypassQuiet:           true,
+		skipRetainedPruneWait: true,
+		skipCheckpoint:        false,
+		rewriteDebtDrain:      true,
+		debugSource:           "rewrite_stage_confirm_exit",
+	})
+}
+
+func (db *DB) scheduleVlogGenerationCheckpointKickHotNoDebtWake() {
+	if db == nil || db.closing.Load() {
+		return
+	}
+	if !db.vlogGenerationCheckpointKickHotNoDebtWakeRunning.CompareAndSwap(false, true) {
+		return
+	}
+	db.wg.Add(1)
+	go func() {
+		defer db.wg.Done()
+		defer db.vlogGenerationCheckpointKickHotNoDebtWakeRunning.Store(false)
+		// Checkpoint-kick hot-debt-only skips should still get one bounded
+		// follow-up attempt when the same maintenance quiet criterion is met.
+		db.waitForForegroundMaintenanceQuietWindow(vlogGenerationMaintenanceQuietWindow)
+		if db.closing.Load() {
+			return
+		}
+		if !db.foregroundActivityQuietFor(time.Now(), vlogGenerationMaintenanceQuietWindow, vlogForegroundReadQuietWindow) {
+			return
+		}
+		db.vlogGenerationCheckpointKickHotNoDebtWakeRuns.Add(1)
+		db.maybeKickVlogGenerationMaintenanceAfterCheckpoint()
+	}()
+}
+
+func (db *DB) runVlogGenerationCheckpointKickRetries(opts vlogGenerationMaintenanceOptions) {
+	db.runVlogGenerationMaintenanceRetries(opts, vlogGenerationCheckpointKickRetryWindow, true)
+}
+
+func (db *DB) runVlogGenerationMaintenanceRetries(opts vlogGenerationMaintenanceOptions, retryWindow time.Duration, stopWhenAcquired bool) {
+	if db == nil || db.closing.Load() {
+		return
+	}
+	if retryWindow <= 0 {
+		retryWindow = vlogGenerationCheckpointKickRetryWindow
+	}
+	attempt := 0
+	if opts.debugSource != "" {
+		db.debugVlogMaintf(
+			"maintenance_retry_start source=%s retry_window_ms=%d checkpoint_pending=%t deferred_pending=%t active=%t",
+			opts.debugSource,
+			retryWindow.Milliseconds(),
+			db.vlogGenerationCheckpointKickPending.Load(),
+			db.vlogGenerationDeferredMaintenancePending.Load(),
+			db.vlogGenerationMaintenanceActive.Load(),
+		)
+	}
+	deadline := time.Now().Add(retryWindow)
+	sleepDelay := 10 * time.Millisecond
+	preservePendingIntent := func() {
+		if vlogGenerationIsQueueSource(opts) {
+			db.vlogGenerationRewriteQueuePending.Store(true)
+			return
+		}
+		if !stopWhenAcquired || !opts.bypassQuiet || opts.skipCheckpoint {
+			return
+		}
+		// If retries time out while another pass stays active, keep one
+		// checkpoint/deferred retry intent latched for post-release scheduling.
+		db.vlogGenerationCheckpointKickPending.Store(true)
+		if db.vlogGenerationDeferredMaintenanceRunning.Load() {
+			db.vlogGenerationDeferredMaintenancePending.Store(true)
+		}
+	}
+	for !db.closing.Load() {
+		// Retry loops should never hammer an already-active maintenance pass.
+		// Wait for release/deadline instead of repeatedly colliding and inflating
+		// maintenance.attempts/collisions under hot checkpoint-kick activity.
+		if db.vlogGenerationMaintenanceActive.Load() {
+			if time.Now().After(deadline) {
+				preservePendingIntent()
+				return
+			}
+			time.Sleep(sleepDelay)
+			if sleepDelay < 100*time.Millisecond {
+				sleepDelay *= 2
+				if sleepDelay > 100*time.Millisecond {
+					sleepDelay = 100 * time.Millisecond
+				}
+			}
+			continue
+		}
+		attempt++
+		if opts.debugSource != "" {
+			db.debugVlogMaintf(
+				"maintenance_retry_attempt source=%s attempt=%d checkpoint_pending=%t deferred_pending=%t active=%t",
+				opts.debugSource,
+				attempt,
+				db.vlogGenerationCheckpointKickPending.Load(),
+				db.vlogGenerationDeferredMaintenancePending.Load(),
+				db.vlogGenerationMaintenanceActive.Load(),
+			)
+		}
+		// Retry-driven maintenance (checkpoint kick / deferred stage confirmation)
+		// prioritizes rewrite debt progress. Keep periodic/full-scan GC on the
+		// normal scheduler path to avoid introducing long full-scan stalls on hot
+		// checkpoint-triggered retries.
+		ran := db.maybeRunVlogGenerationMaintenanceWithOptions(false, opts)
+		if stopWhenAcquired && ran {
+			if opts.debugSource != "" {
+				db.debugVlogMaintf(
+					"maintenance_retry_done source=%s attempt=%d checkpoint_pending=%t deferred_pending=%t active=%t acquired=true",
+					opts.debugSource,
+					attempt,
+					db.vlogGenerationCheckpointKickPending.Load(),
+					db.vlogGenerationDeferredMaintenancePending.Load(),
+					db.vlogGenerationMaintenanceActive.Load(),
+				)
+			}
+			return
+		}
+		if !stopWhenAcquired && !db.vlogGenerationCheckpointKickPending.Load() {
+			if opts.debugSource != "" {
+				db.debugVlogMaintf(
+					"maintenance_retry_done source=%s attempt=%d checkpoint_pending=%t deferred_pending=%t active=%t",
+					opts.debugSource,
+					attempt,
+					db.vlogGenerationCheckpointKickPending.Load(),
+					db.vlogGenerationDeferredMaintenancePending.Load(),
+					db.vlogGenerationMaintenanceActive.Load(),
+				)
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			preservePendingIntent()
+			if opts.debugSource != "" {
+				db.debugVlogMaintf(
+					"maintenance_retry_deadline source=%s attempt=%d checkpoint_pending=%t deferred_pending=%t active=%t",
+					opts.debugSource,
+					attempt,
+					db.vlogGenerationCheckpointKickPending.Load(),
+					db.vlogGenerationDeferredMaintenancePending.Load(),
+					db.vlogGenerationMaintenanceActive.Load(),
+				)
+			}
+			return
+		}
+		time.Sleep(sleepDelay)
+		if sleepDelay < 100*time.Millisecond {
+			sleepDelay *= 2
+			if sleepDelay > 100*time.Millisecond {
+				sleepDelay = 100 * time.Millisecond
+			}
+		}
+	}
+}
+
+func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlogGenerationMaintenanceOptions) (acquired bool) {
+	if db == nil || db.closing.Load() || db.valueLogGenerationPolicy != uint8(backenddb.ValueLogGenerationHotWarmCold) {
+		return
+	}
+	db.vlogGenerationMaintenanceAttempts.Add(1)
+	// In WAL-on mode, the periodic "runGC" tick must not enter the maintenance
+	// engine at all. Checkpoint-coupled work belongs to the explicit
+	// checkpoint-kick/deferred paths; letting the periodic GC tick even acquire
+	// maintenanceActive can strand that slot behind hot restore-time locks.
+	if runGC && !db.disableJournal && !opts.bypassQuiet {
+		db.vlogGenerationMaintenanceSkipWALOnPeriodic.Add(1)
+		return
+	}
+	if db.suppressBackgroundVlogGenerationForMaintenancePhase() {
+		db.vlogGenerationMaintenanceSkipPhase.Add(1)
+		if opts.debugSource != "" {
+			db.debugVlogMaintf(
+				"maintenance_skip reason=maintenance_phase source=%s phase=%s checkpoint_pending=%t deferred_pending=%t",
+				opts.debugSource,
+				maintenancePhaseString(uint32(db.MaintenancePhase())),
+				db.vlogGenerationCheckpointKickPending.Load(),
+				db.vlogGenerationDeferredMaintenancePending.Load(),
+			)
+		}
+		return
+	}
+	// Serialize generation maintenance passes. The periodic loop and
+	// checkpoint-kick path can race otherwise, which causes overlapping rewrite
+	// runs to compete on the same resume queue.
+	if !db.vlogGenerationMaintenanceActive.CompareAndSwap(false, true) {
+		db.vlogGenerationMaintenanceCollisions.Add(1)
+		// Checkpoint-kick retries are high-priority and quiet-window-bypassed by
+		// design. If they collide with an active pass, queue exactly one retry to
+		// run right after the active pass exits.
+		if vlogGenerationIsQueueSource(opts) {
+			db.vlogGenerationRewriteQueuePending.Store(true)
+		} else if opts.bypassQuiet && !opts.skipCheckpoint {
+			db.vlogGenerationCheckpointKickPending.Store(true)
+		}
+		if opts.debugSource != "" {
+			db.debugVlogMaintf(
+				"maintenance_retry_collision source=%s checkpoint_pending=%t deferred_pending=%t active=%t",
+				opts.debugSource,
+				db.vlogGenerationCheckpointKickPending.Load(),
+				db.vlogGenerationDeferredMaintenancePending.Load(),
+				db.vlogGenerationMaintenanceActive.Load(),
+			)
+		}
+		return
+	}
+	acquired = true
+	db.vlogGenerationMaintenanceAcquired.Add(1)
+	rewriteRunsBefore := db.vlogGenerationRewriteRuns.Load()
+	gcRunsBefore := db.vlogGenerationGCRuns.Load()
+	leafPackRunsBefore := db.vlogGenerationLeafPackRuns.Load()
+	rewriteAttempted := false
+	gcAttempted := false
+	leafPackAttempted := false
+	activeSource := vlogGenerationMaintenanceDebugSource(opts)
+	activeSourceIdx := vlogGenerationMaintenanceSourceIndex(activeSource)
+	db.vlogGenerationMaintenanceAcquiredBySource[activeSourceIdx].Add(1)
+	activeStart := time.Now()
+	rewriteQueueSnapshotCaptured := false
+	rewriteQueueBeforeSegments := 0
+	rewriteQueueBeforeLiveBytes := int64(0)
+	rewriteQueueBeforeLiveKnown := true
+	db.debugVlogMaintf(
+		"maintenance_active_acquire source=%s run_gc=%t bypass_quiet=%t skip_checkpoint=%t checkpoint_pending=%t deferred_pending=%t",
+		activeSource,
+		runGC,
+		opts.bypassQuiet,
+		opts.skipCheckpoint,
+		db.vlogGenerationCheckpointKickPending.Load(),
+		db.vlogGenerationDeferredMaintenancePending.Load(),
+	)
+	defer func() {
+		passDur := time.Since(activeStart)
+		db.debugVlogMaintf(
+			"maintenance_active_release source=%s dur_ms=%d checkpoint_pending=%t deferred_pending=%t",
+			activeSource,
+			passDur.Milliseconds(),
+			db.vlogGenerationCheckpointKickPending.Load(),
+			db.vlogGenerationDeferredMaintenancePending.Load(),
+		)
+		db.observeVlogGenerationMaintenancePassDuration(passDur)
+		rewriteRan := db.vlogGenerationRewriteRuns.Load() > rewriteRunsBefore
+		gcRan := db.vlogGenerationGCRuns.Load() > gcRunsBefore
+		leafPackRan := db.vlogGenerationLeafPackRuns.Load() > leafPackRunsBefore
+		rewritePass := rewriteRan || rewriteAttempted
+		gcPass := gcRan || gcAttempted
+		leafPackPass := leafPackRan || leafPackAttempted
+		if rewritePass {
+			db.vlogGenerationMaintenancePassWithRewrite.Add(1)
+			db.vlogGenerationMaintenancePassWithRewriteBySource[activeSourceIdx].Add(1)
+		}
+		if gcPass {
+			db.vlogGenerationMaintenancePassWithGC.Add(1)
+			db.vlogGenerationMaintenancePassWithGCBySource[activeSourceIdx].Add(1)
+		}
+		if leafPackPass {
+			db.vlogGenerationMaintenancePassWithLeafPack.Add(1)
+			db.vlogGenerationMaintenancePassWithLeafPackBySource[activeSourceIdx].Add(1)
+		}
+		if !rewritePass && !gcPass && !leafPackPass {
+			db.vlogGenerationMaintenancePassNoop.Add(1)
+			db.vlogGenerationMaintenancePassNoopBySource[activeSourceIdx].Add(1)
+		}
+		// Release the active scheduler slot before optional queue-progress
+		// bookkeeping. The progress snapshot is observational only; if it blocks
+		// on rewrite-state I/O or a long-held queue mutex, periodic maintenance
+		// must still be able to re-enter on live workloads.
+		db.vlogGenerationMaintenanceActive.Store(false)
+		// If a deferred confirmation/age wake became due while this pass held the
+		// scheduler active, requeue it immediately on exit instead of relying on
+		// the original retry goroutine to still be alive.
+		db.scheduleDueVlogGenerationDeferredMaintenance()
+		db.schedulePendingVlogGenerationRewriteQueue()
+		db.schedulePendingVlogGenerationCheckpointKick()
+		if rewriteQueueSnapshotCaptured {
+			afterQueue, afterErr := db.currentVlogGenerationRewriteQueue()
+			afterSegments := 0
+			afterLiveBytes := int64(0)
+			afterLiveKnown := true
+			if afterErr != nil {
+				db.vlogGenerationRewriteQueueProgressSnapshotErrors.Add(1)
+				afterSegments = rewriteQueueBeforeSegments
+				afterLiveKnown = false
+			} else {
+				afterSegments = len(afterQueue)
+				if afterSegments > 0 {
+					afterLiveKnown = false
+					if liveBytes, known, snapshotErr := db.vlogGenerationRewriteQueueLiveBytesSnapshot(afterQueue); snapshotErr != nil {
+						db.vlogGenerationRewriteQueueProgressSnapshotErrors.Add(1)
+					} else {
+						afterLiveBytes = liveBytes
+						afterLiveKnown = known
+					}
+				}
+			}
+			db.observeVlogGenerationRewriteQueueProgress(
+				rewriteQueueBeforeSegments,
+				rewriteQueueBeforeLiveBytes,
+				rewriteQueueBeforeLiveKnown,
+				afterSegments,
+				afterLiveBytes,
+				afterLiveKnown,
+			)
+		}
+	}()
+	now := time.Now()
+	quiet := db.foregroundActivityQuietFor(now, vlogGenerationMaintenanceQuietWindow, vlogForegroundReadQuietWindow)
+	leafPackAdmission := db.foregroundLeafPackAdmission(now)
 	rewriteQueue, err := db.currentVlogGenerationRewriteQueue()
 	if err != nil {
 		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
@@ -10039,9 +16051,120 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 		}
 		return
 	}
+	if len(rewriteQueue) > 0 {
+		prunedQueue, dropped, pruneErr := db.pruneVlogGenerationRewriteLedgerNonPositiveLive()
+		if pruneErr != nil {
+			db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
+			if db.notifyError != nil {
+				db.notifyError(fmt.Errorf("cachingdb: prune generational rewrite queue: %w", pruneErr))
+			}
+			return
+		}
+		if dropped > 0 {
+			rewriteQueue = prunedQueue
+			db.observeVlogGenerationRewriteQueuePrune(dropped)
+			db.debugVlogMaintf("rewrite_queue_prune dropped=%d remaining=%d", dropped, len(rewriteQueue))
+		}
+	}
+	rewriteLedger, ledgerErr := db.currentVlogGenerationRewriteLedger()
+	if ledgerErr != nil {
+		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
+		if db.notifyError != nil {
+			db.notifyError(fmt.Errorf("cachingdb: load generational rewrite ledger: %w", ledgerErr))
+		}
+		return
+	}
+	rewriteQueueBeforeSegments = len(rewriteQueue)
+	rewriteQueueBeforeLiveBytes = 0
+	rewriteQueueBeforeLiveKnown = rewriteQueueBeforeSegments == 0
+	if rewriteQueueBeforeSegments > 0 {
+		if liveBytes, known, snapshotErr := db.vlogGenerationRewriteQueueLiveBytesSnapshot(rewriteQueue); snapshotErr != nil {
+			db.vlogGenerationRewriteQueueProgressSnapshotErrors.Add(1)
+		} else {
+			rewriteQueueBeforeLiveBytes = liveBytes
+			rewriteQueueBeforeLiveKnown = known
+		}
+	}
+	rewriteQueueSnapshotCaptured = true
+	stagePending, _, stageErr := db.currentVlogGenerationRewriteStage()
+	if stageErr != nil {
+		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
+		if db.notifyError != nil {
+			db.notifyError(fmt.Errorf("cachingdb: load generational rewrite stage: %w", stageErr))
+		}
+		return
+	}
+	if vlogGenerationIsStageConfirmSource(opts) && !stagePending {
+		// Stage-confirm wakes should only run while staged debt is still pending.
+		// If another maintenance pass cleared the stage before this wake acquired
+		// the maintenance slot, treat it as a no-op instead of accidentally
+		// draining rewrite-queue debt under the stage-confirm debugSource.
+		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
+		return
+	}
+	rewritePenalties, penaltyErr := db.currentVlogGenerationRewritePenalties()
+	if penaltyErr != nil {
+		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
+		if db.notifyError != nil {
+			db.notifyError(fmt.Errorf("cachingdb: load generational rewrite penalties: %w", penaltyErr))
+		}
+		return
+	}
+	rewriteQueueEligible := append([]uint32(nil), rewriteQueue...)
+	rewriteLedgerEligible := append([]backenddb.ValueLogRewritePlanSegment(nil), rewriteLedger...)
+	if len(rewriteQueue) > 0 && !stagePending {
+		if len(rewritePenalties) > 0 {
+			rewriteQueueEligible = filterVlogGenerationRewriteIDsByPenalty(rewriteQueue, rewritePenalties, now)
+			rewriteLedgerEligible = filterVlogGenerationRewriteLedgerByPenalty(rewriteLedger, rewritePenalties, now)
+		}
+		rewriteQueueEligible = prioritizeVlogGenerationRewriteIDs(rewriteQueueEligible, db.vlogGenerationRewriteHistory, rewritePenalties)
+		rewriteLedgerEligible = prioritizeVlogGenerationRewriteLedger(rewriteLedgerEligible, db.vlogGenerationRewriteHistory, rewritePenalties)
+	}
+	rewriteQueueFollowupBlocked := len(rewriteQueue) > 0 && !stagePending && db.vlogGenerationRewriteQueueFollowupBlockedActive(now)
+	ageBlockedDue := db.vlogGenerationRewriteAgeBlockedDue(now)
+	stageConfirmDue := db.vlogGenerationRewriteStageConfirmDue(now)
+	if stagePending {
+		if !stageConfirmDue {
+			// Once debt is staged, do not let generic periodic or checkpoint-kick
+			// passes spend long maintenance windows before the confirmation delay
+			// has elapsed. The only valid next step is to wait for confirmation.
+			if !vlogGenerationIsStageConfirmSource(opts) {
+				db.vlogGenerationMaintenanceSkipStageGate.Add(1)
+				db.vlogGenerationMaintenanceSkipStageNotDue.Add(1)
+				return
+			}
+		} else if !vlogGenerationIsStageConfirmSource(opts) {
+			// When confirmation becomes due, reserve the maintenance slot for the
+			// explicit stage-confirm wake instead of letting generic retries or
+			// periodic passes reacquire it first.
+			db.vlogGenerationMaintenanceSkipStageGate.Add(1)
+			db.vlogGenerationMaintenanceSkipStageDue.Add(1)
+			return
+		}
+	}
+	if !stagePending && ageBlockedDue && !vlogGenerationIsAgeBlockedSource(opts) {
+		db.vlogGenerationMaintenanceSkipAgeBlocked.Add(1)
+		return
+	}
+	hasExecutableRewriteQueue := len(rewriteQueueEligible) > 0 && !stagePending && !rewriteQueueFollowupBlocked
+	if hasExecutableRewriteQueue && !vlogGenerationIsQueueSource(opts) && !vlogGenerationIsStageConfirmSource(opts) {
+		db.vlogGenerationRewriteQueuePending.Store(true)
+		db.vlogGenerationMaintenanceSkipPriority.Add(1)
+		return
+	}
+	// Checkpoint-collision retries and timer-driven confirmation wakes should run
+	// ahead of generic periodic passes. This avoids repeated active-pass
+	// collisions where periodic maintenance keeps reacquiring the scheduler while
+	// the higher-priority retry is still trying to run.
+	if !opts.bypassQuiet && (db.vlogGenerationCheckpointKickPending.Load() || db.vlogGenerationDeferredMaintenancePending.Load() || db.vlogGenerationRewriteQueuePending.Load() || db.vlogGenerationRewriteQueueRunning.Load()) {
+		db.vlogGenerationMaintenanceSkipPriority.Add(1)
+		return
+	}
 	// Explicit GC runs bypass the foreground quiet-window gate so callers can
 	// force a safety/cleanup pass even while foreground activity is ongoing.
-	if !runGC && !opts.bypassQuiet && !db.foregroundActivityQuietFor(time.Now(), vlogGenerationMaintenanceQuietWindow, vlogForegroundReadQuietWindow) {
+	if !runGC && !opts.bypassQuiet && !quiet && !leafPackAdmission.allowed {
+		db.vlogGenerationMaintenanceSkipQuiet.Add(1)
+		db.observeVlogGenerationLeafPackAdmissionSkip(leafPackAdmission.reason)
 		return
 	}
 	// In WAL-off mode, do not start rewrite/GC planning before the first
@@ -10051,7 +16174,9 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 	// caused real restore stalls. Keep WAL-on profiles eligible for maintenance
 	// before the first checkpoint; starving that path causes the main value-log
 	// lane to grow unchecked during restore.
-	if db.disableJournal && db.checkpointRuns.Load() == 0 && !runGC && len(rewriteQueue) == 0 && !opts.skipCheckpoint {
+	allowPreCheckpointRewrite := envBool(envEnableVlogGenerationPreCheckpointRewrite)
+	if db.disableJournal && db.checkpointRuns.Load() == 0 && !runGC && len(rewriteQueue) == 0 && !opts.skipCheckpoint && !allowPreCheckpointRewrite {
+		db.vlogGenerationMaintenanceSkipPreCheckpoint.Add(1)
 		return
 	}
 	// Retained-prune and generation maintenance use the same foreground quiet-window gate.
@@ -10059,12 +16184,28 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 	// foregroundMaintenancePollInterval(), not by the full quiet window. Waiting here keeps
 	// active retained-prune scans serialized with rewrite/GC planning once the system has gone quiet.
 	if !opts.skipRetainedPruneWait {
-		db.waitForRetainedValueLogPrune()
+		db.waitForActiveRetainedValueLogPrune()
 	}
 	if db.checkpointing.Load() {
+		if opts.bypassQuiet && !opts.skipCheckpoint {
+			db.checkpointMu.Lock()
+			for db.checkpointing.Load() && !db.closing.Load() {
+				db.checkpointCond.Wait()
+			}
+			db.checkpointMu.Unlock()
+			if db.closing.Load() {
+				return
+			}
+		} else {
+			db.vlogGenerationMaintenanceSkipCheckpointing.Add(1)
+			return
+		}
+	}
+	if db.checkpointing.Load() {
+		db.vlogGenerationMaintenanceSkipCheckpointing.Add(1)
 		return
 	}
-	now := time.Now()
+	now = time.Now()
 	db.vlogGenerationAccrueRewriteBudget(now)
 	queueLen := 0
 	if view := db.memtables.Load(); view != nil {
@@ -10088,27 +16229,83 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 
 	shouldRewrite, reason := db.shouldRunVlogGenerationRewrite(totalBytes, staleRatioPPM, churnBps)
 	var rewritePlan backenddb.ValueLogRewritePlan
+	var rewriteChunkPlan backenddb.ValueLogRewriteChunkPlan
 	haveRewritePlan := false
+	haveRewriteChunkPlan := false
 	planner, hasPlanner := db.backend.(backendValueLogRewritePlanner)
-	if len(rewriteQueue) > 0 {
+	chunkPlanner, hasChunkPlanner := db.backend.(backendValueLogRewriteChunkPlanner)
+	allowCheckpointKickBypass := opts.bypassQuiet && !opts.skipCheckpoint
+	if hasExecutableRewriteQueue {
+		db.vlogGenerationRewriteQueuedDebtPasses.Add(1)
+	}
+	allowCheckpointKickRetry := allowCheckpointKickBypass && hasExecutableRewriteQueue
+	ageBlockedRetryDue := len(rewriteQueue) == 0 && db.vlogGenerationRewriteAgeBlockedDue(now)
+	if hasExecutableRewriteQueue {
 		shouldRewrite = true
 		reason = vlogGenerationReasonRewriteResume
 	}
+	rewriteCancelBackoff := hasExecutableRewriteQueue && db.vlogGenerationRewriteCancelBackoffActive(now) && !allowCheckpointKickRetry
+	if rewriteCancelBackoff {
+		db.vlogGenerationRewriteQueuedDebtSkipCancelBackoff.Add(1)
+		shouldRewrite = false
+		reason = vlogGenerationReasonNone
+	}
+	planBackoff := !hasExecutableRewriteQueue && db.vlogGenerationRewritePlanBackoffActive(now) && !allowCheckpointKickBypass && !ageBlockedRetryDue
+	if planBackoff {
+		shouldRewrite = false
+		reason = vlogGenerationReasonNone
+	}
+	// Apply ineffective-backoff uniformly. Previously checkpoint-kick fresh-plan
+	// passes bypassed this guard, which can create repeated no-reclaim rewrite/GC
+	// loops during active sync windows.
+	ineffectiveBackoff := db.vlogGenerationRewriteIneffectiveBackoffActive(now) &&
+		!ageBlockedRetryDue
+	if ineffectiveBackoff {
+		if hasExecutableRewriteQueue {
+			db.vlogGenerationRewriteQueuedDebtSkipIneffectiveBackoff.Add(1)
+		}
+		shouldRewrite = false
+		reason = vlogGenerationReasonNone
+	}
+	// Periodic "runGC" passes can run during foreground activity, but rewrite
+	// planning/execution should remain quiet-window-bound unless explicitly
+	// bypassed (checkpoint-kick).
+	if !quiet && !opts.bypassQuiet {
+		if hasExecutableRewriteQueue {
+			db.vlogGenerationRewriteQueuedDebtSkipQuiet.Add(1)
+		}
+		shouldRewrite = false
+		reason = vlogGenerationReasonNone
+	}
+	freshPlanAllowed := len(rewriteQueue) == 0 || stagePending || !hasExecutableRewriteQueue
 	// Stale-ratio trigger: use a sparse rewrite plan (live-byte estimate) to
 	// detect when any segments are meaningfully stale. This avoids relying on
 	// reclaimable-WAL heuristics (which can be 0 in split-value-log mode).
-	if len(rewriteQueue) == 0 && !shouldRewrite && hasPlanner && db.valueLogRewriteTriggerRatioPPM > 0 {
+	if (len(rewriteQueue) == 0 || stagePending) && (!shouldRewrite || stagePending) && (hasPlanner || hasChunkPlanner) && db.valueLogRewriteTriggerRatioPPM > 0 {
+		if planBackoff {
+			goto planned
+		}
+		if ineffectiveBackoff {
+			goto planned
+		}
+		if !quiet && !opts.bypassQuiet && !ageBlockedRetryDue {
+			goto planned
+		}
 		lastPlan := db.vlogGenerationLastRewritePlanUnixNano.Load()
-		if lastPlan > 0 {
+		if lastPlan > 0 && !ageBlockedRetryDue {
 			lastAt := time.Unix(0, lastPlan)
-			if now.Sub(lastAt) < vlogGenerationRewriteMinInterval {
+			// Stage confirmation is explicitly retry-driven; do not let the generic
+			// planning min-interval prevent the confirm pass from re-planning soon
+			// enough to execute rewrite within short end-to-end runs.
+			if now.Sub(lastAt) < vlogGenerationRewriteMinInterval &&
+				!vlogGenerationIsStageConfirmSource(opts) {
 				goto planned
 			}
 		}
 		// Avoid planning work before we have at least one full hot segment worth
 		// of data; early on this is almost always pure inserts with no stale
 		// bytes, and planning would just scan the tree.
-		if db.valueLogGenerationHotTarget > 0 && totalBytes < db.valueLogGenerationHotTarget {
+		if db.valueLogGenerationHotTarget > 0 && totalBytes < db.valueLogGenerationHotTarget && !ageBlockedRetryDue {
 			goto planned
 		}
 		maxSourceBytes := db.vlogGenerationRewriteBudgetTokensBytes.Load()
@@ -10117,45 +16314,255 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 		}
 		// ValueLogRewriteOnline treats MaxSourceBytes=0 as "unbounded". When the
 		// configured rewrite token bucket is enabled and currently empty, skip the
-		// sparse planning pass instead of issuing an unbounded plan.
-		if maxSourceBytes == 0 && db.vlogGenerationRewriteBudgetEnabled() {
+		// sparse planning pass instead of issuing an unbounded plan. Keep staged
+		// debt eligible for a confirmation pass even with an empty bucket: the
+		// planner pass is cheap compared with execution, and otherwise staged debt
+		// can get stuck pending forever.
+		if maxSourceBytes == 0 && db.vlogGenerationRewriteBudgetEnabled() && !stagePending {
 			goto planned
 		}
 		if maxSourceBytes > 0 && totalBytes > 0 && maxSourceBytes > totalBytes {
 			maxSourceBytes = totalBytes
 		}
-		ctx, cancel := db.foregroundMaintenanceContext(30 * time.Second)
-		minStaleRatio := float64(db.valueLogRewriteTriggerRatioPPM) / 1_000_000.0
-		plan, err := planner.ValueLogRewritePlan(ctx, backenddb.ValueLogRewriteOnlineOptions{
+		ctx, cancel := db.vlogGenerationRewritePlanContext(30*time.Second, opts)
+		minStaleRatio := db.vlogGenerationRewriteMinStaleRatioForStaleRatioTrigger(totalBytes)
+		if minStaleRatio <= 0 {
+			cancel()
+			goto planned
+		}
+		planOpts := backenddb.ValueLogRewriteOnlineOptions{
 			MaxSourceSegments:    0,
 			MaxSourceBytes:       maxSourceBytes,
 			MinSegmentStaleRatio: minStaleRatio,
 			MinSegmentStaleBytes: 1,
-		})
-		cancel()
-		updatePlanTimestamp := false
-		if err != nil {
-			if errors.Is(err, context.Canceled) {
-				db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
-				return
-			}
-			updatePlanTimestamp = true
-			// Best-effort planning: keep legacy triggers (total-bytes/churn) alive,
-			// but surface the failure for observability.
-			if db.notifyError != nil {
-				db.notifyError(fmt.Errorf("cachingdb: generational rewrite plan: %w", err))
-			}
-		} else if len(plan.SourceFileIDs) > 0 {
-			updatePlanTimestamp = true
-			shouldRewrite = true
-			reason = vlogGenerationReasonStaleRatio
-			rewritePlan = plan
-			haveRewritePlan = true
-		} else {
-			updatePlanTimestamp = true
+			MinSegmentAge:        db.valueLogRewriteMinSegmentAge,
 		}
-		if updatePlanTimestamp {
-			db.vlogGenerationLastRewritePlanUnixNano.Store(now.UnixNano())
+		planStart := time.Now()
+		if hasChunkPlanner {
+			chunkPlan, err := chunkPlanner.ValueLogRewriteChunkPlan(ctx, planOpts, vlogGenerationRewriteChunkBytesForPlan(maxSourceBytes))
+			cancel()
+			planDur := time.Since(planStart)
+			db.debugVlogMaintf(
+				"rewrite_chunk_plan stale_ratio_trigger min_ratio=%.6f max_source_bytes=%d chunk_bytes=%d selected=%d/%d selected_bytes_total=%d selected_bytes_live=%d selected_bytes_stale=%d total_bytes=%d live_bytes=%d stale_bytes=%d dur_ms=%.3f err=%v",
+				minStaleRatio,
+				maxSourceBytes,
+				chunkPlan.ChunkBytes,
+				chunkPlan.ChunksSelected,
+				chunkPlan.ChunksTotal,
+				chunkPlan.SelectedBytesTotal,
+				chunkPlan.SelectedBytesLive,
+				chunkPlan.SelectedBytesStale,
+				chunkPlan.BytesTotal,
+				chunkPlan.BytesLive,
+				chunkPlan.BytesStale,
+				float64(planDur.Microseconds())/1000,
+				err,
+			)
+			db.observeVlogGenerationRewriteChunkPlanOutcomeWithDuration(chunkPlan, err, planDur)
+			updatePlanTimestamp := false
+			if err != nil {
+				db.clearVlogGenerationRewriteAgeBlockedUntil()
+				if isVlogGenerationPlannerCanceled(err) {
+					db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
+					shouldRewrite = false
+					haveRewriteChunkPlan = false
+				}
+				if !isVlogGenerationPlannerCanceled(err) {
+					updatePlanTimestamp = true
+					if db.notifyError != nil {
+						db.notifyError(fmt.Errorf("cachingdb: generational rewrite chunk plan: %w", err))
+					}
+				}
+			} else if len(chunkPlan.SourceChunks) > 0 {
+				db.clearVlogGenerationRewriteAgeBlockedUntil()
+				beforePenaltyFilter := len(chunkPlan.SourceChunks)
+				chunkPlan, err = db.filterVlogGenerationRewriteChunkPlanPenalties(chunkPlan, now)
+				if err != nil {
+					db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
+					if db.notifyError != nil {
+						db.notifyError(fmt.Errorf("cachingdb: filter generational rewrite chunk penalties: %w", err))
+					}
+					return
+				}
+				db.observeVlogGenerationRewritePlanPenaltyFilter(beforePenaltyFilter, len(chunkPlan.SourceChunks))
+				updatePlanTimestamp = true
+				if len(chunkPlan.SourceChunks) > 0 {
+					if stagePending {
+						stagedChunks, stagedChunkBytes, ledgerErr := db.currentVlogGenerationRewriteChunkLedger()
+						if ledgerErr != nil {
+							db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
+							if db.notifyError != nil {
+								db.notifyError(fmt.Errorf("cachingdb: load staged generational rewrite chunk ledger: %w", ledgerErr))
+							}
+							return
+						}
+						confirmed := []backenddb.ValueLogRewritePlanChunk(nil)
+						if stagedChunkBytes == 0 || stagedChunkBytes == chunkPlan.ChunkBytes {
+							stagedLedger := []backenddb.ValueLogRewritePlanSegment(nil)
+							if len(stagedChunks) == 0 {
+								stagedLedger, ledgerErr = db.currentVlogGenerationRewriteLedger()
+								if ledgerErr != nil {
+									db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
+									if db.notifyError != nil {
+										db.notifyError(fmt.Errorf("cachingdb: load staged generational rewrite ledger: %w", ledgerErr))
+									}
+									return
+								}
+							}
+							confirmed = stableVlogGenerationRewriteLedgerChunksWithSegmentFallback(stagedChunks, stagedLedger, chunkPlan.SourceChunks)
+						}
+						if len(confirmed) > 0 {
+							shouldRewrite = true
+							reason = vlogGenerationReasonRewriteResume
+						} else {
+							reason = vlogGenerationReasonStaleRatio
+						}
+					} else {
+						shouldRewrite = true
+						reason = vlogGenerationReasonStaleRatio
+					}
+					rewriteChunkPlan = chunkPlan
+					haveRewriteChunkPlan = true
+				}
+			} else if shouldDeferVlogGenerationRewriteChunkPlanForAge(chunkPlan) {
+				if stagePending {
+					if err := db.setVlogGenerationRewriteChunkLedger(nil, 0); err != nil {
+						db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
+						if db.notifyError != nil {
+							db.notifyError(fmt.Errorf("cachingdb: clear staged generational rewrite chunk ledger after age-blocked confirmation: %w", err))
+						}
+						return
+					}
+				}
+				db.setVlogGenerationRewriteAgeBlockedUntil(now.Add(chunkPlan.AgeBlockedMinRemainingAge))
+				db.debugVlogMaintf(
+					"rewrite_chunk_plan stale_ratio_trigger age_blocked chunks=%d stale_bytes=%d retry_after_ms=%d min_age_ms=%d",
+					chunkPlan.AgeBlockedChunks,
+					chunkPlan.AgeBlockedBytesStale,
+					chunkPlan.AgeBlockedMinRemainingAge.Milliseconds(),
+					planOpts.MinSegmentAge.Milliseconds(),
+				)
+			} else {
+				if stagePending {
+					if err := db.setVlogGenerationRewriteChunkLedger(nil, 0); err != nil {
+						db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
+						if db.notifyError != nil {
+							db.notifyError(fmt.Errorf("cachingdb: clear staged generational rewrite chunk ledger after empty confirmation: %w", err))
+						}
+						return
+					}
+				}
+				db.clearVlogGenerationRewriteAgeBlockedUntil()
+				updatePlanTimestamp = true
+			}
+			if updatePlanTimestamp {
+				db.vlogGenerationLastRewritePlanUnixNano.Store(now.UnixNano())
+			}
+		} else {
+			plan, err := planner.ValueLogRewritePlan(ctx, planOpts)
+			cancel()
+			planDur := time.Since(planStart)
+			db.debugVlogMaintf(
+				"rewrite_plan stale_ratio_trigger min_ratio=%.6f max_source_bytes=%d selected=%d/%d selected_bytes_total=%d selected_bytes_live=%d selected_bytes_stale=%d total_bytes=%d live_bytes=%d stale_bytes=%d dur_ms=%.3f err=%v",
+				minStaleRatio,
+				maxSourceBytes,
+				plan.SegmentsSelected,
+				plan.SegmentsTotal,
+				plan.SelectedBytesTotal,
+				plan.SelectedBytesLive,
+				plan.SelectedBytesStale,
+				plan.BytesTotal,
+				plan.BytesLive,
+				plan.BytesStale,
+				float64(planDur.Microseconds())/1000,
+				err,
+			)
+			db.observeVlogGenerationRewritePlanOutcomeWithDuration(plan, err, planDur)
+			updatePlanTimestamp := false
+			if err != nil {
+				db.clearVlogGenerationRewriteAgeBlockedUntil()
+				if isVlogGenerationPlannerCanceled(err) {
+					db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
+					shouldRewrite = false
+					haveRewritePlan = false
+				}
+				if !isVlogGenerationPlannerCanceled(err) {
+					updatePlanTimestamp = true
+					if db.notifyError != nil {
+						db.notifyError(fmt.Errorf("cachingdb: generational rewrite plan: %w", err))
+					}
+				}
+			} else if len(plan.SourceFileIDs) > 0 {
+				db.clearVlogGenerationRewriteAgeBlockedUntil()
+				beforePenaltyFilter := len(plan.SourceFileIDs)
+				plan, err = db.filterVlogGenerationRewritePlanPenalties(plan, now)
+				if err != nil {
+					db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
+					if db.notifyError != nil {
+						db.notifyError(fmt.Errorf("cachingdb: filter generational rewrite penalties: %w", err))
+					}
+					return
+				}
+				db.observeVlogGenerationRewritePlanPenaltyFilter(beforePenaltyFilter, len(plan.SourceFileIDs))
+				updatePlanTimestamp = true
+				if len(plan.SourceFileIDs) > 0 {
+					if stagePending {
+						stagedLedger, ledgerErr := db.currentVlogGenerationRewriteLedger()
+						if ledgerErr != nil {
+							db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
+							if db.notifyError != nil {
+								db.notifyError(fmt.Errorf("cachingdb: load staged generational rewrite ledger: %w", ledgerErr))
+							}
+							return
+						}
+						confirmed := stableVlogGenerationRewriteLedgerSegments(stagedLedger, plan.SelectedSegments)
+						if len(confirmed) > 0 {
+							shouldRewrite = true
+							reason = vlogGenerationReasonRewriteResume
+						} else {
+							reason = vlogGenerationReasonStaleRatio
+						}
+					} else {
+						shouldRewrite = true
+						reason = vlogGenerationReasonStaleRatio
+					}
+					rewritePlan = plan
+					haveRewritePlan = true
+				}
+			} else if shouldDeferVlogGenerationRewritePlanForAge(plan, planOpts.MinSegmentAge) {
+				if stagePending {
+					if err := db.setVlogGenerationRewriteLedger(nil); err != nil {
+						db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
+						if db.notifyError != nil {
+							db.notifyError(fmt.Errorf("cachingdb: clear staged generational rewrite ledger after age-blocked confirmation: %w", err))
+						}
+						return
+					}
+				}
+				db.setVlogGenerationRewriteAgeBlockedUntil(now.Add(plan.AgeBlockedMinRemainingAge))
+				db.debugVlogMaintf(
+					"rewrite_plan stale_ratio_trigger age_blocked segments=%d stale_bytes=%d retry_after_ms=%d min_age_ms=%d",
+					plan.AgeBlockedSegments,
+					plan.AgeBlockedBytesStale,
+					plan.AgeBlockedMinRemainingAge.Milliseconds(),
+					planOpts.MinSegmentAge.Milliseconds(),
+				)
+			} else {
+				if stagePending {
+					if err := db.setVlogGenerationRewriteLedger(nil); err != nil {
+						db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
+						if db.notifyError != nil {
+							db.notifyError(fmt.Errorf("cachingdb: clear staged generational rewrite ledger after empty confirmation: %w", err))
+						}
+						return
+					}
+				}
+				db.clearVlogGenerationRewriteAgeBlockedUntil()
+				updatePlanTimestamp = true
+			}
+			if updatePlanTimestamp {
+				db.vlogGenerationLastRewritePlanUnixNano.Store(now.UnixNano())
+			}
 		}
 	}
 planned:
@@ -10163,20 +16570,33 @@ planned:
 		shouldRewrite = false
 	}
 	rewriter, hasRewriter := db.backend.(backendValueLogRewriter)
+	rewriteMinIntervalBlocked := false
 	if shouldRewrite && hasRewriter {
 		last := db.vlogGenerationLastRewriteUnixNano.Load()
 		minInterval := vlogGenerationRewriteMinInterval
 		if len(rewriteQueue) > 0 {
 			minInterval = vlogGenerationRewriteResumeMinInterval
+			// Stage confirmation is already a retry/wake-driven path. Keeping the
+			// generic queued-debt resume interval (1s) here can create repeated
+			// back-to-back stage-confirm rewrite passes during restore-heavy runs,
+			// inflating wall time without improving reclaim. Use the regular
+			// min-interval to keep stage-confirm execution bounded.
+			if vlogGenerationIsStageConfirmSource(opts) {
+				minInterval = vlogGenerationRewriteMinInterval
+			}
 		}
 		if last > 0 {
 			lastAt := time.Unix(0, last)
-			if now.Sub(lastAt) < minInterval {
+			if now.Sub(lastAt) < minInterval && !allowCheckpointKickRetry {
 				shouldRewrite = false
+				rewriteMinIntervalBlocked = true
+				if hasExecutableRewriteQueue {
+					db.vlogGenerationRewriteQueuedDebtSkipMinInterval.Add(1)
+				}
 			}
 		}
 	}
-	if len(rewriteQueue) == 0 && shouldRewrite && hasRewriter && !haveRewritePlan && hasPlanner {
+	if freshPlanAllowed && shouldRewrite && hasRewriter && !haveRewritePlan && !haveRewriteChunkPlan && hasPlanner {
 		maxSourceBytes := db.vlogGenerationRewriteBudgetTokensBytes.Load()
 		if maxSourceBytes < 0 {
 			maxSourceBytes = 0
@@ -10191,25 +16611,80 @@ planned:
 				maxSourceBytes = totalBytes
 			}
 			if maxSourceBytes > 0 {
-				ctx, cancel := db.foregroundMaintenanceContext(30 * time.Second)
+				ctx, cancel := db.vlogGenerationRewritePlanContext(30*time.Second, opts)
+				planStart := time.Now()
+				minStaleRatio := db.vlogGenerationRewriteMinStaleRatioForGenericPass(totalBytes)
 				plan, err := planner.ValueLogRewritePlan(ctx, backenddb.ValueLogRewriteOnlineOptions{
-					MaxSourceSegments: 0,
-					MaxSourceBytes:    maxSourceBytes,
+					MaxSourceSegments:    0,
+					MaxSourceBytes:       maxSourceBytes,
+					MinSegmentStaleRatio: minStaleRatio,
+					MinSegmentStaleBytes: vlogGenerationRewriteMinSegmentStaleBytes,
+					MinSegmentAge:        db.valueLogRewriteMinSegmentAge,
 				})
 				cancel()
+				planDur := time.Since(planStart)
+				db.debugVlogMaintf(
+					"rewrite_plan pre_rewrite max_source_bytes=%d min_ratio=%.6f min_stale_bytes=%d selected=%d/%d selected_bytes_total=%d selected_bytes_live=%d selected_bytes_stale=%d total_bytes=%d live_bytes=%d stale_bytes=%d dur_ms=%.3f err=%v",
+					maxSourceBytes,
+					minStaleRatio,
+					vlogGenerationRewriteMinSegmentStaleBytes,
+					plan.SegmentsSelected,
+					plan.SegmentsTotal,
+					plan.SelectedBytesTotal,
+					plan.SelectedBytesLive,
+					plan.SelectedBytesStale,
+					plan.BytesTotal,
+					plan.BytesLive,
+					plan.BytesStale,
+					float64(planDur.Microseconds())/1000,
+					err,
+				)
+				db.observeVlogGenerationRewritePlanOutcomeWithDuration(plan, err, planDur)
 				if err != nil {
-					if errors.Is(err, context.Canceled) {
+					db.clearVlogGenerationRewriteAgeBlockedUntil()
+					if isVlogGenerationPlannerCanceled(err) {
 						db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
+						// Foreground activity resumed while planning. Skip rewrite
+						// this cycle, but still allow GC to run below.
+						shouldRewrite = false
+						haveRewritePlan = false
+					}
+					if !isVlogGenerationPlannerCanceled(err) {
+						db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
+						db.vlogGenerationRemapFailures.Add(1)
+						if db.notifyError != nil {
+							db.notifyError(fmt.Errorf("cachingdb: generational rewrite plan: %w", err))
+						}
 						return
 					}
-					db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
-					db.vlogGenerationRemapFailures.Add(1)
-					if db.notifyError != nil {
-						db.notifyError(fmt.Errorf("cachingdb: generational rewrite plan: %w", err))
+				}
+				if len(plan.SourceFileIDs) > 0 {
+					db.clearVlogGenerationRewriteAgeBlockedUntil()
+					beforePenaltyFilter := len(plan.SourceFileIDs)
+					plan, err = db.filterVlogGenerationRewritePlanPenalties(plan, now)
+					if err != nil {
+						db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
+						db.vlogGenerationRemapFailures.Add(1)
+						if db.notifyError != nil {
+							db.notifyError(fmt.Errorf("cachingdb: filter generational rewrite penalties: %w", err))
+						}
+						return
 					}
-					return
+					db.observeVlogGenerationRewritePlanPenaltyFilter(beforePenaltyFilter, len(plan.SourceFileIDs))
 				}
 				if len(plan.SourceFileIDs) == 0 {
+					if shouldDeferVlogGenerationRewritePlanForAge(plan, db.valueLogRewriteMinSegmentAge) {
+						db.setVlogGenerationRewriteAgeBlockedUntil(now.Add(plan.AgeBlockedMinRemainingAge))
+						db.debugVlogMaintf(
+							"rewrite_plan pre_rewrite age_blocked segments=%d stale_bytes=%d retry_after_ms=%d min_age_ms=%d",
+							plan.AgeBlockedSegments,
+							plan.AgeBlockedBytesStale,
+							plan.AgeBlockedMinRemainingAge.Milliseconds(),
+							db.valueLogRewriteMinSegmentAge.Milliseconds(),
+						)
+					} else {
+						db.clearVlogGenerationRewriteAgeBlockedUntil()
+					}
 					shouldRewrite = false
 				} else {
 					rewritePlan = plan
@@ -10218,17 +16693,47 @@ planned:
 			}
 		}
 	}
+	if !shouldRewrite && hasRewriter {
+		db.debugVlogMaintf(
+			"rewrite_skip reason=%s quiet=%t queue_len=%d plan_backoff=%t cancel_backoff=%t ineffective_backoff=%t min_interval_blocked=%t run_gc=%t bypass_quiet=%t total_bytes=%d stale_ratio_ppm=%d churn_bps=%d checkpoint_runs=%d disable_journal=%t",
+			vlogGenerationReasonString(reason),
+			quiet,
+			len(rewriteQueue),
+			planBackoff,
+			rewriteCancelBackoff,
+			ineffectiveBackoff,
+			rewriteMinIntervalBlocked,
+			runGC,
+			opts.bypassQuiet,
+			totalBytes,
+			staleRatioPPM,
+			churnBps,
+			db.checkpointRuns.Load(),
+			db.disableJournal,
+		)
+	}
 	if shouldRewrite && hasRewriter {
+		db.debugVlogMaintf(
+			"rewrite_start reason=%s total_bytes=%d stale_ratio_ppm=%d churn_bps=%d rewrite_queue=%d checkpoint_runs=%d disable_journal=%t have_plan=%t",
+			vlogGenerationReasonString(reason),
+			totalBytes,
+			staleRatioPPM,
+			churnBps,
+			len(rewriteQueue),
+			db.checkpointRuns.Load(),
+			db.disableJournal,
+			haveRewritePlan || haveRewriteChunkPlan,
+		)
 		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerRunning)
 		db.vlogGenerationLastReason.Store(reason)
 		err := db.runWithBackendMaintenanceOptions(backendMaintenanceOptions{
 			skipCheckpoint:        opts.skipCheckpoint,
 			skipRetainedPruneWait: opts.skipRetainedPruneWait,
 		}, func() error {
-			now = time.Now()
+			now := time.Now()
 			db.vlogGenerationLastRewriteUnixNano.Store(now.UnixNano())
 			maxSourceBytes := int64(0)
-			if len(rewriteQueue) == 0 && !haveRewritePlan {
+			if len(rewriteQueue) == 0 && !haveRewritePlan && !haveRewriteChunkPlan {
 				maxSourceBytes = db.vlogGenerationRewriteBudgetTokensBytes.Load()
 				if maxSourceBytes < 0 {
 					maxSourceBytes = 0
@@ -10244,71 +16749,911 @@ planned:
 					maxSourceBytes = totalBytes
 				}
 			}
-			ctx, cancel := db.foregroundMaintenanceContext(2 * time.Minute)
 			rewriteOpts := backenddb.ValueLogRewriteOnlineOptions{
 				BatchSize:       db.valueLogRewriteBatchSize(),
 				SyncEachBatch:   false,
 				MaxSegmentBytes: db.valueLogGenerationWarmTarget,
-				ProtectedPaths:  db.valueLogProtectedPaths(),
-				ReserveRIDs: func(count int) (uint64, error) {
-					if count <= 0 {
-						return 0, nil
-					}
-					end := db.nextRID.Add(uint64(count))
-					start := end - uint64(count) + 1
-					if start == 0 || end < start {
-						return 0, fmt.Errorf("value-log rid space exhausted")
-					}
-					return start, nil
-				},
+				// Maintenance rewrites are throughput-sensitive and operate on large
+				// source segments; group rewrite candidates by old segment+offset to
+				// improve value-log read locality and reduce wall-time.
+				LocalityPolicy: backenddb.ValueLogRewriteLocalityGrouped,
+				ProtectedPaths: db.valueLogProtectedPaths(),
+				ReserveRIDs:    db.ReserveValueLogRIDs,
 			}
 			processedRewriteIDs := []uint32(nil)
-			if len(rewriteQueue) > 0 {
-				processedRewriteIDs = vlogGenerationRewriteQueueChunk(rewriteQueue, vlogGenerationRewriteResumeMaxSegments)
-			} else if haveRewritePlan {
-				if err := db.setVlogGenerationRewriteQueue(rewritePlan.SourceFileIDs); err != nil {
-					return fmt.Errorf("persist generational rewrite queue: %w", err)
+			processedRewriteChunks := []backenddb.ValueLogRewritePlanChunk(nil)
+			processedChunkBytes := int64(0)
+			processedLedgerTotalBytes := int64(0)
+			processedLedgerLiveBytes := int64(0)
+			processedLedgerStaleBytes := int64(0)
+			processedLedgerOK := false
+			budgetTokens := int64(0)
+			if db.vlogGenerationRewriteBudgetEnabled() {
+				budgetTokens = db.vlogGenerationRewriteBudgetTokensBytes.Load()
+				// If a queued rewrite is pending, do not run it while the bucket is
+				// empty; that defeats the whole point of a bounded executor.
+				if budgetTokens <= 0 && len(rewriteQueueEligible) > 0 {
+					db.vlogGenerationRewriteQueuedDebtSkipBudgetEmpty.Add(1)
+					db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
+					return nil
 				}
-				rewriteQueue = append([]uint32(nil), rewritePlan.SourceFileIDs...)
-				processedRewriteIDs = vlogGenerationRewriteQueueChunk(rewriteQueue, vlogGenerationRewriteResumeMaxSegments)
 			}
-			if len(processedRewriteIDs) > 0 {
+			hadAnyRewriteQueue := len(rewriteQueue) > 0
+			hadRewriteQueue := len(rewriteQueueEligible) > 0
+			rewriteMaxSegments := vlogGenerationRewriteResumeMaxSegments
+			if hadRewriteQueue {
+				runDecision := db.vlogGenerationRewriteSegmentCapForRunWithHint(
+					len(rewriteQueueEligible),
+					budgetTokens,
+					rewriteQueueBeforeLiveBytes,
+					rewriteQueueBeforeLiveKnown,
+					opts,
+				)
+				rewriteMaxSegments = runDecision.maxSegments
+				db.observeVlogGenerationRewriteSegmentCapDecision(runDecision, false)
+			}
+			if haveRewriteChunkPlan {
+				plannedChunksForExec := rewriteChunkPlan.SourceChunks
+				if reason == vlogGenerationReasonStaleRatio && len(rewriteChunkPlan.SourceChunks) > 0 {
+					prevChunks, prevChunkBytes, _ := db.currentVlogGenerationRewriteChunkLedger()
+					prevLedger := []backenddb.ValueLogRewritePlanSegment(nil)
+					if len(prevChunks) == 0 {
+						prevLedger, _ = db.currentVlogGenerationRewriteLedger()
+					}
+					if prevChunkBytes == 0 || prevChunkBytes == rewriteChunkPlan.ChunkBytes {
+						plannedChunksForExec = stableVlogGenerationRewriteLedgerChunksWithSegmentFallback(prevChunks, prevLedger, rewriteChunkPlan.SourceChunks)
+					} else {
+						plannedChunksForExec = nil
+					}
+				}
+				if len(rewriteChunkPlan.SourceChunks) > 0 {
+					stageLedger := reason == vlogGenerationReasonStaleRatio && len(plannedChunksForExec) == 0
+					stageObservedAt := int64(0)
+					if stageLedger {
+						stageObservedAt = now.UnixNano()
+					}
+					if err := db.setVlogGenerationRewriteChunkLedgerWithStage(rewriteChunkPlan.SourceChunks, rewriteChunkPlan.ChunkBytes, stageLedger, stageObservedAt); err != nil {
+						return fmt.Errorf("persist generational rewrite chunk ledger: %w", err)
+					}
+				}
+				rewriteQueue = append([]uint32(nil), vlogGenerationRewriteChunkLedgerIDs(rewriteChunkPlan.SourceChunks)...)
+				plannedQueueLiveBytes := rewriteChunkPlan.SelectedBytesLive
+				plannedQueueLiveKnown := len(rewriteChunkPlan.SourceChunks) > 0
+				if plannedQueueLiveBytes <= 0 && len(rewriteChunkPlan.SourceChunks) > 0 {
+					plannedQueueLiveKnown = true
+					for i := range rewriteChunkPlan.SourceChunks {
+						if live := rewriteChunkPlan.SourceChunks[i].BytesLive; live > 0 {
+							plannedQueueLiveBytes += live
+						}
+					}
+				}
+				allowPlanDebtDrain := reason == vlogGenerationReasonRewriteResume && opts.rewriteDebtDrain
+				if allowPlanDebtDrain {
+					runDecision := db.vlogGenerationRewriteSegmentCapForRunWithHint(
+						len(rewriteQueue),
+						budgetTokens,
+						plannedQueueLiveBytes,
+						plannedQueueLiveKnown,
+						opts,
+					)
+					rewriteMaxSegments = runDecision.maxSegments
+					db.observeVlogGenerationRewriteSegmentCapDecision(runDecision, false)
+				} else {
+					freshDecision := db.vlogGenerationRewriteSegmentCapForFreshPlanWithHint(
+						len(rewriteQueue),
+						budgetTokens,
+						plannedQueueLiveBytes,
+						plannedQueueLiveKnown,
+						opts,
+					)
+					rewriteMaxSegments = freshDecision.maxSegments
+					db.observeVlogGenerationRewriteSegmentCapDecision(freshDecision, true)
+				}
+				if db.vlogGenerationRewriteBudgetEnabled() && budgetTokens <= 0 {
+					db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
+					return nil
+				}
+				if len(rewriteChunkPlan.SourceChunks) > 0 {
+					if reason == vlogGenerationReasonStaleRatio && len(plannedChunksForExec) == 0 {
+						db.debugVlogMaintf(
+							"rewrite_chunk_plan staged reason=%s selected_chunks=%d observed_once_only=1 queue_len=%d",
+							vlogGenerationReasonString(reason),
+							len(rewriteChunkPlan.SourceChunks),
+							len(rewriteQueue),
+						)
+						db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
+						return nil
+					}
+					processedRewriteChunks = vlogGenerationRewriteChunkLedgerChunk(plannedChunksForExec, rewriteMaxSegments, budgetTokens)
+					if len(processedRewriteChunks) == 0 {
+						if hadRewriteQueue {
+							db.vlogGenerationRewriteQueuedDebtSkipNoChunk.Add(1)
+						}
+						prunedQueue, dropped, pruneErr := db.pruneVlogGenerationRewriteLedgerNonPositiveLive()
+						if pruneErr != nil {
+							return fmt.Errorf("prune generational rewrite chunk ledger: %w", pruneErr)
+						}
+						if dropped > 0 {
+							db.observeVlogGenerationRewriteQueuePrune(dropped)
+							rewriteQueue = prunedQueue
+							db.debugVlogMaintf("rewrite_skip reason=%s planned_zero_live_chunks=%d queue_len=%d", vlogGenerationReasonString(reason), dropped, len(rewriteQueue))
+						}
+						db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
+						return nil
+					}
+					processedRewriteIDs = vlogGenerationRewriteChunkLedgerIDs(processedRewriteChunks)
+					processedChunkBytes = rewriteChunkPlan.ChunkBytes
+				} else {
+					processedRewriteIDs = vlogGenerationRewriteQueueChunk(rewriteQueue, rewriteMaxSegments)
+				}
+			} else if haveRewritePlan {
+				plannedLedgerForExec := rewritePlan.SelectedSegments
+				if reason == vlogGenerationReasonStaleRatio && len(rewritePlan.SelectedSegments) > 0 {
+					prevLedger, _ := db.currentVlogGenerationRewriteLedger()
+					plannedLedgerForExec = stableVlogGenerationRewriteLedgerSegments(prevLedger, rewritePlan.SelectedSegments)
+				}
+				persistQueue := append([]uint32(nil), rewritePlan.SourceFileIDs...)
+				persistLedger := append([]backenddb.ValueLogRewritePlanSegment(nil), rewritePlan.SelectedSegments...)
+				if hadAnyRewriteQueue && !hadRewriteQueue {
+					if len(persistLedger) > 0 {
+						persistLedger = mergeVlogGenerationRewriteLedgerSegments(persistLedger, rewriteLedger)
+						persistQueue = vlogGenerationRewriteLedgerIDs(persistLedger)
+					} else {
+						persistQueue = mergeVlogGenerationRewriteIDs(persistQueue, rewriteQueue)
+					}
+				}
+				if len(rewritePlan.SelectedSegments) > 0 {
+					stageLedger := reason == vlogGenerationReasonStaleRatio && len(plannedLedgerForExec) == 0
+					stageObservedAt := int64(0)
+					if stageLedger {
+						stageObservedAt = now.UnixNano()
+					}
+					if err := db.setVlogGenerationRewriteLedgerWithStage(persistLedger, stageLedger, stageObservedAt); err != nil {
+						return fmt.Errorf("persist generational rewrite ledger: %w", err)
+					}
+				} else {
+					if err := db.setVlogGenerationRewriteQueue(persistQueue); err != nil {
+						return fmt.Errorf("persist generational rewrite queue: %w", err)
+					}
+				}
+				rewriteQueue = append([]uint32(nil), persistQueue...)
+				rewriteQueueEligible = append([]uint32(nil), rewritePlan.SourceFileIDs...)
+				rewriteLedgerEligible = append([]backenddb.ValueLogRewritePlanSegment(nil), plannedLedgerForExec...)
+				plannedQueueLiveBytes := int64(0)
+				plannedQueueLiveKnown := false
+				if len(rewritePlan.SelectedSegments) > 0 {
+					plannedQueueLiveKnown = true
+					if rewritePlan.SelectedBytesLive > 0 {
+						plannedQueueLiveBytes = rewritePlan.SelectedBytesLive
+					} else {
+						for i := range rewritePlan.SelectedSegments {
+							if live := rewritePlan.SelectedSegments[i].BytesLive; live > 0 {
+								plannedQueueLiveBytes += live
+							}
+						}
+					}
+				}
+				allowPlanDebtDrain := reason == vlogGenerationReasonRewriteResume && opts.rewriteDebtDrain
+				if allowPlanDebtDrain {
+					runDecision := db.vlogGenerationRewriteSegmentCapForRunWithHint(
+						len(rewriteQueue),
+						budgetTokens,
+						plannedQueueLiveBytes,
+						plannedQueueLiveKnown,
+						opts,
+					)
+					rewriteMaxSegments = runDecision.maxSegments
+					db.observeVlogGenerationRewriteSegmentCapDecision(runDecision, false)
+				} else {
+					freshDecision := db.vlogGenerationRewriteSegmentCapForFreshPlanWithHint(
+						len(rewriteQueue),
+						budgetTokens,
+						plannedQueueLiveBytes,
+						plannedQueueLiveKnown,
+						opts,
+					)
+					rewriteMaxSegments = freshDecision.maxSegments
+					db.observeVlogGenerationRewriteSegmentCapDecision(freshDecision, true)
+				}
+				if db.vlogGenerationRewriteBudgetEnabled() && budgetTokens <= 0 {
+					db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
+					return nil
+				}
+				if len(rewritePlan.SelectedSegments) > 0 {
+					if reason == vlogGenerationReasonStaleRatio && len(plannedLedgerForExec) == 0 {
+						db.debugVlogMaintf(
+							"rewrite_plan staged reason=%s selected=%d observed_once_only=1 queue_len=%d",
+							vlogGenerationReasonString(reason),
+							len(rewritePlan.SelectedSegments),
+							len(rewriteQueue),
+						)
+						db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
+						return nil
+					}
+					chunkBudgetTokens := budgetTokens
+					if hadRewriteQueue {
+						chunkBudgetTokens = 0
+					}
+					if hadRewriteQueue {
+						processedRewriteIDs = vlogGenerationRewriteLedgerChunkWithPenalty(plannedLedgerForExec, db.vlogGenerationRewriteHistory, rewritePenalties, rewriteMaxSegments, chunkBudgetTokens)
+					} else {
+						processedRewriteIDs = vlogGenerationRewriteLedgerChunk(plannedLedgerForExec, rewriteMaxSegments, chunkBudgetTokens)
+					}
+					if len(processedRewriteIDs) == 0 {
+						if hadRewriteQueue {
+							db.vlogGenerationRewriteQueuedDebtSkipNoChunk.Add(1)
+						}
+						prunedQueue, dropped, pruneErr := db.pruneVlogGenerationRewriteLedgerNonPositiveLive()
+						if pruneErr != nil {
+							return fmt.Errorf("prune generational rewrite plan ledger: %w", pruneErr)
+						}
+						if dropped > 0 {
+							db.observeVlogGenerationRewriteQueuePrune(dropped)
+							rewriteQueue = prunedQueue
+							db.debugVlogMaintf("rewrite_skip reason=%s planned_zero_live=%d queue_len=%d", vlogGenerationReasonString(reason), dropped, len(rewriteQueue))
+						}
+						db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
+						return nil
+					}
+				} else {
+					processedRewriteIDs = vlogGenerationRewriteQueueChunkWithPenalty(rewriteQueueEligible, db.vlogGenerationRewriteHistory, rewritePenalties, rewriteMaxSegments)
+				}
+			} else if len(rewriteQueueEligible) > 0 {
+				chunkLedger, chunkBytes, _ := db.currentVlogGenerationRewriteChunkLedger()
+				if len(chunkLedger) > 0 {
+					queueMinStaleRatio := db.vlogGenerationRewriteMinStaleRatioForQueuedDebt(totalBytes, reason)
+					filteredChunks := filterVlogGenerationRewriteChunkLedgerByQuality(chunkLedger, queueMinStaleRatio, vlogGenerationRewriteMinSegmentStaleBytes)
+					if dropped := len(chunkLedger) - len(filteredChunks); dropped > 0 {
+						if err := db.setVlogGenerationRewriteChunkLedger(filteredChunks, chunkBytes); err != nil {
+							return fmt.Errorf("persist filtered generational rewrite chunk ledger: %w", err)
+						}
+						db.observeVlogGenerationRewriteQueuePrune(dropped)
+						rewriteQueue = append(rewriteQueue[:0], vlogGenerationRewriteChunkLedgerIDs(filteredChunks)...)
+						chunkLedger = filteredChunks
+						rewriteLedger = synthesizeVlogGenerationRewriteLedgerFromChunks(filteredChunks)
+						rewriteQueueEligible = filterVlogGenerationRewriteIDsByPenalty(rewriteQueue, rewritePenalties, now)
+						rewriteLedgerEligible = filterVlogGenerationRewriteLedgerByPenalty(rewriteLedger, rewritePenalties, now)
+						rewriteQueueEligible = prioritizeVlogGenerationRewriteIDs(rewriteQueueEligible, db.vlogGenerationRewriteHistory, rewritePenalties)
+						rewriteLedgerEligible = prioritizeVlogGenerationRewriteLedger(rewriteLedgerEligible, db.vlogGenerationRewriteHistory, rewritePenalties)
+						db.debugVlogMaintf(
+							"rewrite_chunk_queue_quality_prune dropped=%d remaining=%d min_ratio=%.6f min_stale_bytes=%d",
+							dropped,
+							len(chunkLedger),
+							queueMinStaleRatio,
+							vlogGenerationRewriteMinSegmentStaleBytes,
+						)
+					}
+					chunkLedgerEligible := append([]backenddb.ValueLogRewritePlanChunk(nil), chunkLedger...)
+					if len(rewritePenalties) > 0 {
+						chunkPlanEligible := filterVlogGenerationRewriteChunkPlanByPenalty(backenddb.ValueLogRewriteChunkPlan{SourceChunks: chunkLedger}, rewritePenalties, now)
+						chunkLedgerEligible = chunkPlanEligible.SourceChunks
+					}
+					processedRewriteChunks = vlogGenerationRewriteChunkLedgerChunk(chunkLedgerEligible, rewriteMaxSegments, budgetTokens)
+					if len(processedRewriteChunks) == 0 {
+						if hadRewriteQueue {
+							db.vlogGenerationRewriteQueuedDebtSkipNoChunk.Add(1)
+						}
+						prunedQueue, dropped, pruneErr := db.pruneVlogGenerationRewriteLedgerNonPositiveLive()
+						if pruneErr != nil {
+							return fmt.Errorf("prune generational rewrite chunk ledger: %w", pruneErr)
+						}
+						if dropped > 0 {
+							db.observeVlogGenerationRewriteQueuePrune(dropped)
+							rewriteQueue = prunedQueue
+							db.debugVlogMaintf("rewrite_skip reason=%s dropped_zero_live_chunks=%d queue_len=%d", vlogGenerationReasonString(reason), dropped, len(rewriteQueue))
+						}
+						db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
+						return nil
+					}
+					processedRewriteIDs = vlogGenerationRewriteChunkLedgerIDs(processedRewriteChunks)
+					processedChunkBytes = chunkBytes
+				} else {
+					ledger := append([]backenddb.ValueLogRewritePlanSegment(nil), rewriteLedger...)
+					if len(ledger) > 0 {
+						queueMinStaleRatio := db.vlogGenerationRewriteMinStaleRatioForQueuedDebt(totalBytes, reason)
+						filteredLedger := filterVlogGenerationRewriteLedgerByQuality(ledger, queueMinStaleRatio, vlogGenerationRewriteMinSegmentStaleBytes)
+						if dropped := len(ledger) - len(filteredLedger); dropped > 0 {
+							if err := db.setVlogGenerationRewriteLedger(filteredLedger); err != nil {
+								return fmt.Errorf("persist filtered generational rewrite ledger: %w", err)
+							}
+							db.observeVlogGenerationRewriteQueuePrune(dropped)
+							rewriteQueue = append(rewriteQueue[:0], vlogGenerationRewriteLedgerIDs(filteredLedger)...)
+							rewriteLedger = filteredLedger
+							ledger = filteredLedger
+							rewriteQueueEligible = filterVlogGenerationRewriteIDsByPenalty(rewriteQueue, rewritePenalties, now)
+							rewriteLedgerEligible = filterVlogGenerationRewriteLedgerByPenalty(filteredLedger, rewritePenalties, now)
+							rewriteQueueEligible = prioritizeVlogGenerationRewriteIDs(rewriteQueueEligible, db.vlogGenerationRewriteHistory, rewritePenalties)
+							rewriteLedgerEligible = prioritizeVlogGenerationRewriteLedger(rewriteLedgerEligible, db.vlogGenerationRewriteHistory, rewritePenalties)
+							db.debugVlogMaintf(
+								"rewrite_queue_quality_prune dropped=%d remaining=%d min_ratio=%.6f min_stale_bytes=%d",
+								dropped,
+								len(ledger),
+								queueMinStaleRatio,
+								vlogGenerationRewriteMinSegmentStaleBytes,
+							)
+						}
+						processedRewriteIDs = vlogGenerationRewriteLedgerChunkWithPenalty(rewriteLedgerEligible, db.vlogGenerationRewriteHistory, rewritePenalties, rewriteMaxSegments, 0)
+						if len(processedRewriteIDs) == 0 {
+							if hadRewriteQueue {
+								db.vlogGenerationRewriteQueuedDebtSkipNoChunk.Add(1)
+							}
+							prunedQueue, dropped, pruneErr := db.pruneVlogGenerationRewriteLedgerNonPositiveLive()
+							if pruneErr != nil {
+								return fmt.Errorf("prune generational rewrite ledger: %w", pruneErr)
+							}
+							if dropped > 0 {
+								db.observeVlogGenerationRewriteQueuePrune(dropped)
+								rewriteQueue = prunedQueue
+								db.debugVlogMaintf("rewrite_skip reason=%s dropped_zero_live=%d queue_len=%d", vlogGenerationReasonString(reason), dropped, len(rewriteQueue))
+							}
+							db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
+							return nil
+						}
+					} else {
+						processedRewriteIDs = vlogGenerationRewriteQueueChunkWithPenalty(rewriteQueueEligible, db.vlogGenerationRewriteHistory, rewritePenalties, rewriteMaxSegments)
+					}
+				}
+			}
+			if len(processedRewriteChunks) > 0 {
+				chunkLedger, _, _ := db.currentVlogGenerationRewriteChunkLedger()
+				processedLedgerTotalBytes, processedLedgerLiveBytes, processedLedgerStaleBytes, processedLedgerOK = sumVlogRewritePlanChunkBytes(chunkLedger, processedRewriteChunks)
+				rewriteOpts.SourceFileIDs = append([]uint32(nil), processedRewriteIDs...)
+				rewriteOpts.SourceChunks = append([]backenddb.ValueLogRewritePlanChunk(nil), processedRewriteChunks...)
+				rewriteOpts.SourceChunkBytes = processedChunkBytes
+			} else if len(processedRewriteIDs) > 0 {
+				ledger := rewriteLedgerEligible
+				if len(ledger) == 0 {
+					ledger, _ = db.currentVlogGenerationRewriteLedger()
+				}
+				processedLedgerTotalBytes, processedLedgerLiveBytes, processedLedgerStaleBytes, processedLedgerOK = sumVlogRewritePlanBytes(ledger, processedRewriteIDs)
 				rewriteOpts.SourceFileIDs = processedRewriteIDs
+				if hadRewriteQueue && processedLedgerOK && budgetTokens > 0 && processedLedgerLiveBytes > budgetTokens {
+					rewriteOpts.MaxCopiedBytes = budgetTokens
+				}
 			} else {
 				rewriteOpts.MaxSourceSegments = 0
 				rewriteOpts.MaxSourceBytes = maxSourceBytes
-				rewriteOpts.MinSegmentStaleRatio = func() float64 {
-					if db.valueLogRewriteTriggerRatioPPM <= 0 {
-						return 0
-					}
-					return float64(db.valueLogRewriteTriggerRatioPPM) / 1_000_000.0
-				}()
+				rewriteOpts.MinSegmentStaleRatio = db.vlogGenerationRewriteMinStaleRatioForGenericPass(totalBytes)
+				rewriteOpts.MinSegmentStaleBytes = vlogGenerationRewriteMinSegmentStaleBytes
+				rewriteOpts.MinSegmentAge = db.valueLogRewriteMinSegmentAge
 			}
+			var ctx context.Context
+			var cancel context.CancelFunc
+			if len(processedRewriteIDs) > 0 {
+				ctx, cancel = context.WithTimeout(context.Background(), vlogGenerationRewriteBoundedExecTimeout)
+			} else {
+				ctx, cancel = db.vlogGenerationMaintenanceContext(2*time.Minute, opts)
+			}
+			db.debugVlogMaintf(
+				"rewrite_exec reason=%s source_ids=%d max_segments=%d budget_tokens=%d max_source_bytes=%d max_copied_bytes=%d min_stale_ratio=%.6f queue_len=%d ledger_live_bytes=%d",
+				vlogGenerationReasonString(reason),
+				len(rewriteOpts.SourceFileIDs),
+				rewriteMaxSegments,
+				budgetTokens,
+				maxSourceBytes,
+				rewriteOpts.MaxCopiedBytes,
+				rewriteOpts.MinSegmentStaleRatio,
+				len(rewriteQueue),
+				processedLedgerLiveBytes,
+			)
+			if hadRewriteQueue && len(rewriteOpts.SourceFileIDs) > 0 {
+				db.vlogGenerationRewriteQueuedDebtRewriteStarted.Add(1)
+			}
+			rewriteStart := time.Now()
+			rewriteAttempted = true
 			stats, err := rewriter.ValueLogRewriteOnline(ctx, rewriteOpts)
 			cancel()
+			rewriteDur := time.Since(rewriteStart)
 			if err != nil {
+				db.debugVlogMaintf("rewrite_err reason=%s err=%v dur_ms=%.3f", vlogGenerationReasonString(reason), err, float64(rewriteDur.Microseconds())/1000)
+				queuedDebt := hadRewriteQueue && len(processedRewriteIDs) > 0
+				if queuedDebt {
+					db.vlogGenerationRewriteQueuePending.Store(true)
+				}
+				if errors.Is(err, context.Canceled) {
+					db.observeVlogGenerationRewriteCanceled(queuedDebt)
+					if len(processedRewriteIDs) > 0 {
+						// A canceled rewrite that already selected a queued chunk should
+						// immediately queue a checkpoint-kick retry. The retry executes
+						// as resumable debt with bounded non-cancel semantics.
+						db.vlogGenerationCheckpointKickPending.Store(true)
+					}
+				} else if errors.Is(err, context.DeadlineExceeded) {
+					db.observeVlogGenerationRewriteDeadline(queuedDebt)
+				}
 				return fmt.Errorf("generational rewrite: %w", err)
 			}
-			if len(processedRewriteIDs) > 0 {
-				if err := db.consumeVlogGenerationRewriteQueueChunk(processedRewriteIDs); err != nil {
-					return fmt.Errorf("consume generational rewrite queue: %w", err)
+			db.observeVlogGenerationRewriteExecDuration(rewriteDur)
+			db.debugVlogMaintf(
+				"rewrite_done reason=%s segments_before=%d segments_after=%d bytes_before=%d bytes_after=%d records=%d dur_ms=%.3f",
+				vlogGenerationReasonString(reason),
+				stats.SegmentsBefore,
+				stats.SegmentsAfter,
+				stats.BytesBefore,
+				stats.BytesAfter,
+				stats.RecordsCopied,
+				float64(rewriteDur.Microseconds())/1000,
+			)
+			effectiveBytesBefore := int64(stats.BytesBefore)
+			effectiveBytesAfter := int64(stats.BytesAfter)
+			gcBytesDeleted := int64(0)
+			if len(processedRewriteChunks) > 0 {
+				if err := db.consumeVlogGenerationRewriteChunkLedger(processedRewriteChunks); err != nil {
+					return fmt.Errorf("consume generational rewrite chunk ledger: %w", err)
+				}
+			} else if len(processedRewriteIDs) > 0 {
+				removeRewriteIDs := processedRewriteIDs
+				if rewriteOpts.MaxCopiedBytes > 0 {
+					removeRewriteIDs = append([]uint32(nil), stats.SourceFileIDsUnreferenced...)
+					if len(removeRewriteIDs) == 0 &&
+						stats.SourceSegmentsRequested == 0 &&
+						stats.SourceSegmentsStillReferenced == 0 &&
+						stats.SourceSegmentsUnreferenced == 0 &&
+						len(stats.SourceFileIDsStillReferenced) == 0 &&
+						len(stats.SourceFileIDsUnreferenced) == 0 {
+						// The selected queued IDs can disappear from the live value-log
+						// set before execution. In that no-op case the backend reports
+						// no requested/unreferenced sources, so fall back to consuming
+						// the stale queued IDs we actually attempted.
+						removeRewriteIDs = append([]uint32(nil), processedRewriteIDs...)
+					}
+				}
+				if len(removeRewriteIDs) > 0 {
+					if err := db.consumeVlogGenerationRewriteQueueChunk(removeRewriteIDs); err != nil {
+						return fmt.Errorf("consume generational rewrite queue: %w", err)
+					}
+				}
+			}
+			if stagePending && vlogGenerationIsStageConfirmSource(opts) {
+				if err := db.clearVlogGenerationRewriteStage(); err != nil {
+					return fmt.Errorf("clear generational rewrite stage: %w", err)
 				}
 			}
 			if gcer, ok := db.backend.(backendValueLogGCer); ok {
-				gcCtx, gcCancel := context.WithTimeout(context.Background(), 30*time.Second)
-				_, gcErr := gcer.ValueLogGC(gcCtx, backenddb.ValueLogGCOptions{
-					ProtectedPaths: db.valueLogProtectedPaths(),
-				})
-				gcCancel()
+				gcOpts := db.valueLogGCOptions(false)
+				observedRewriteSourceIDs := processedRewriteIDs
+				assumeUnreferencedObserved := false
+				if len(stats.SourceFileIDsUnreferenced) > 0 {
+					observedRewriteSourceIDs = stats.SourceFileIDsUnreferenced
+					assumeUnreferencedObserved = true
+				}
+				if len(observedRewriteSourceIDs) > 0 {
+					gcOpts.ObservedSourceFileIDs = append([]uint32(nil), observedRewriteSourceIDs...)
+					if assumeUnreferencedObserved {
+						gcOpts.ObservedSourceAssumeUnreferenced = true
+					}
+				}
+				runGC := func(phase string) (backenddb.ValueLogGCStats, error) {
+					gcCtx, gcCancel := context.WithTimeout(context.Background(), 30*time.Second)
+					gcStart := time.Now()
+					gcAttempted = true
+					gcStats, gcErr := gcer.ValueLogGC(gcCtx, gcOpts)
+					gcCancel()
+					gcDur := time.Since(gcStart)
+					if gcErr != nil {
+						db.debugVlogMaintf(
+							"gc_after_rewrite_err reason=%s phase=%s err=%v dur_ms=%.3f",
+							vlogGenerationReasonString(reason),
+							phase,
+							gcErr,
+							float64(gcDur.Microseconds())/1000,
+						)
+						return backenddb.ValueLogGCStats{}, gcErr
+					}
+					db.observeVlogGenerationGCExecDuration(gcDur)
+					db.observeVlogGenerationGCStats(gcStats)
+					db.vlogGenerationGCRuns.Add(1)
+					if gcStats.SegmentsDeleted > 0 {
+						db.vlogGenerationGCSegmentsDeleted.Add(uint64(gcStats.SegmentsDeleted))
+					}
+					if gcStats.BytesDeleted > 0 {
+						db.vlogGenerationGCBytesDeleted.Add(uint64(gcStats.BytesDeleted))
+						gcBytesDeleted += int64(gcStats.BytesDeleted)
+						effectiveBytesAfter -= int64(gcStats.BytesDeleted)
+						if effectiveBytesAfter < 0 {
+							effectiveBytesAfter = 0
+						}
+					}
+					db.debugVlogMaintf(
+						"gc_after_rewrite_done reason=%s phase=%s dur_ms=%.3f",
+						vlogGenerationReasonString(reason),
+						phase,
+						float64(gcDur.Microseconds())/1000,
+					)
+					return gcStats, nil
+				}
+
+				gcStats, gcErr := runGC("initial")
 				if gcErr != nil {
 					return fmt.Errorf("generational gc after rewrite: %w", gcErr)
+				}
+
+				rewriteBlockedByRetained := len(processedRewriteIDs) > 0 &&
+					gcStats.ObservedSourceSegments > 0 &&
+					gcStats.ObservedSourceSegmentsReferenced == 0 &&
+					gcStats.ObservedSourceSegmentsEligible == 0 &&
+					gcStats.ObservedSourceSegmentsProtectedRetained > 0
+				if rewriteBlockedByRetained {
+					observedSourceIDSet := make(map[uint32]struct{}, len(observedRewriteSourceIDs))
+					for _, id := range observedRewriteSourceIDs {
+						if id == 0 {
+							continue
+						}
+						observedSourceIDSet[id] = struct{}{}
+					}
+					pruneStats, inlinePruneRan := db.runRetainedValueLogPruneInline(true, observedSourceIDSet)
+					if inlinePruneRan {
+						db.debugVlogMaintf(
+							"rewrite_retained_prune reason=%s observed_source_retained_segments=%d observed_source_retained_bytes=%d observed_source_seen_segments=%d observed_source_seen_bytes=%d observed_source_candidate_segments=%d observed_source_candidate_bytes=%d observed_source_removed_segments=%d observed_source_removed_bytes=%d observed_source_zombie_marked_segments=%d observed_source_zombie_marked_bytes=%d observed_source_live_skipped_segments=%d observed_source_live_skipped_bytes=%d observed_source_in_use_skipped_segments=%d observed_source_in_use_skipped_bytes=%d observed_source_parse_skipped_segments=%d observed_source_parse_skipped_bytes=%d removed_segments=%d removed_bytes=%d zombie_marked_segments=%d zombie_marked_bytes=%d live_skipped_segments=%d live_skipped_bytes=%d aborted=%t",
+							vlogGenerationReasonString(reason),
+							gcStats.ObservedSourceSegmentsProtectedRetained,
+							gcStats.ObservedSourceBytesProtectedRetained,
+							pruneStats.ObservedSourceSegments,
+							pruneStats.ObservedSourceBytes,
+							pruneStats.ObservedSourceCandidateSegments,
+							pruneStats.ObservedSourceCandidateBytes,
+							pruneStats.ObservedSourceRemovedSegments,
+							pruneStats.ObservedSourceRemovedBytes,
+							pruneStats.ObservedSourceZombieMarkedSegments,
+							pruneStats.ObservedSourceZombieMarkedBytes,
+							pruneStats.ObservedSourceLiveSkippedSegments,
+							pruneStats.ObservedSourceLiveSkippedBytes,
+							pruneStats.ObservedSourceInUseSkippedSegments,
+							pruneStats.ObservedSourceInUseSkippedBytes,
+							pruneStats.ObservedSourceParseSkippedSegments,
+							pruneStats.ObservedSourceParseSkippedBytes,
+							pruneStats.RemovedSegments,
+							pruneStats.RemovedBytes,
+							pruneStats.ZombieMarkedSegments,
+							pruneStats.ZombieMarkedBytes,
+							pruneStats.LiveSkippedSegments,
+							pruneStats.LiveSkippedBytes,
+							pruneStats.AbortedForegroundWrites,
+						)
+						// Refresh protected path sets after inline retained prune so
+						// the follow-up GC pass evaluates updated retention state.
+						gcOpts = db.valueLogGCOptions(false)
+						if len(observedRewriteSourceIDs) > 0 {
+							gcOpts.ObservedSourceFileIDs = append([]uint32(nil), observedRewriteSourceIDs...)
+							if assumeUnreferencedObserved {
+								gcOpts.ObservedSourceAssumeUnreferenced = true
+							}
+						}
+						gcStatsAfterPrune, gcErr := runGC("post_retained_prune")
+						if gcErr != nil {
+							return fmt.Errorf("generational gc after retained prune: %w", gcErr)
+						}
+						gcStats = gcStatsAfterPrune
+					} else {
+						if assumeUnreferencedObserved && len(observedRewriteSourceIDs) > 0 {
+							db.queueRetainedPruneObservedSourceIDs(observedRewriteSourceIDs)
+						}
+						// A prune is already in flight. Ensure a follow-up attempt stays queued.
+						db.scheduleRetainedValueLogPruneForce()
+					}
+				}
+				rewriteBlockedByActive := len(processedRewriteIDs) > 0 &&
+					gcStats.ObservedSourceSegments > 0 &&
+					gcStats.ObservedSourceSegmentsReferenced == 0 &&
+					gcStats.ObservedSourceSegmentsEligible == 0 &&
+					gcStats.ObservedSourceSegmentsActive > 0
+				if rewriteBlockedByActive {
+					// Rewrite-selected source segments can remain temporarily active when
+					// the writer is still appending. Queue observed-source replay and a
+					// checkpoint-kick so follow-up maintenance can rotate/re-check quickly.
+					if assumeUnreferencedObserved && len(observedRewriteSourceIDs) > 0 {
+						db.queueVlogGenerationObservedSourceGCList(observedRewriteSourceIDs)
+					}
+					db.vlogGenerationCheckpointKickPending.Store(true)
+				}
+				if gcStats.BytesProtectedRetained > 0 && gcStats.BytesEligible == 0 && db.valueLogRetainedClosedBytes.Load() > 0 {
+					// Retained-path protection can starve live reclaim even when rewrite
+					// processed stale payload in-pass. Kick an eager retained prune so
+					// lifecycle pins can drain without waiting for byte-pressure gates.
+					if assumeUnreferencedObserved && len(observedRewriteSourceIDs) > 0 {
+						db.queueRetainedPruneObservedSourceIDs(observedRewriteSourceIDs)
+					}
+					db.scheduleRetainedValueLogPruneForce()
+				}
+			}
+			if effectiveBytesBefore > effectiveBytesAfter {
+				db.vlogGenerationRewriteReclaimedBytes.Add(uint64(effectiveBytesBefore - effectiveBytesAfter))
+			}
+			queuedDebtExecuted := hadRewriteQueue && len(processedRewriteIDs) > 0
+			if queuedDebtExecuted {
+				db.vlogGenerationRewriteQueuedDebtExecRuns.Add(1)
+				db.vlogGenerationRewriteQueuedDebtExecSegments.Add(uint64(len(processedRewriteIDs)))
+				if processedLedgerTotalBytes > 0 {
+					db.vlogGenerationRewriteQueuedDebtExecPlanBytesTotal.Add(uint64(processedLedgerTotalBytes))
+				}
+				if processedLedgerLiveBytes > 0 {
+					db.vlogGenerationRewriteQueuedDebtExecPlanBytesLive.Add(uint64(processedLedgerLiveBytes))
+				}
+				if processedLedgerStaleBytes > 0 {
+					db.vlogGenerationRewriteQueuedDebtExecPlanBytesStale.Add(uint64(processedLedgerStaleBytes))
+				}
+				if effectiveBytesBefore > 0 {
+					db.vlogGenerationRewriteQueuedDebtExecEffectiveBytesBefore.Add(uint64(effectiveBytesBefore))
+				}
+				if effectiveBytesAfter > 0 {
+					db.vlogGenerationRewriteQueuedDebtExecEffectiveBytesAfter.Add(uint64(effectiveBytesAfter))
+				}
+				if gcBytesDeleted > 0 {
+					db.vlogGenerationRewriteQueuedDebtExecGCBytesDeleted.Add(uint64(gcBytesDeleted))
+				}
+				if effectiveBytesBefore > effectiveBytesAfter {
+					db.vlogGenerationRewriteQueuedDebtExecReclaimedBytes.Add(uint64(effectiveBytesBefore - effectiveBytesAfter))
+				} else if effectiveBytesBefore > 0 {
+					db.vlogGenerationRewriteQueuedDebtExecNoReclaimRuns.Add(1)
+				}
+				if stats.SourceBytesRequested > 0 {
+					db.vlogGenerationRewriteQueuedDebtExecSourceBytesRequested.Add(uint64(stats.SourceBytesRequested))
+				}
+				if stats.SourceBytesUnreferenced > 0 {
+					db.vlogGenerationRewriteQueuedDebtExecSourceBytesUnreferenced.Add(uint64(stats.SourceBytesUnreferenced))
+				}
+			}
+			locallyEffectiveProcessedDebt := len(processedRewriteIDs) > 0 && processedLedgerOK && processedLedgerStaleBytes > 0 && stats.RecordsCopied > 0
+			if processedLedgerOK {
+				if processedLedgerLiveBytes > 0 {
+					db.vlogGenerationRewriteProcessedLiveBytes.Add(uint64(processedLedgerLiveBytes))
+				}
+				if processedLedgerStaleBytes > 0 {
+					db.vlogGenerationRewriteProcessedStaleBytes.Add(uint64(processedLedgerStaleBytes))
+				}
+			}
+			if queuedDebtExecuted {
+				reclaimedBytes := int64(0)
+				if effectiveBytesBefore > effectiveBytesAfter {
+					reclaimedBytes = effectiveBytesBefore - effectiveBytesAfter
+				}
+				if err := db.recordVlogGenerationRewriteHistoryWithLedger(processedRewriteIDs, rewriteLedgerEligible, int64(stats.SourceBytesUnreferenced), reclaimedBytes, time.Now()); err != nil {
+					return fmt.Errorf("record queued rewrite history: %w", err)
+				}
+			}
+			if effectiveBytesBefore > 0 && effectiveBytesAfter >= effectiveBytesBefore && !locallyEffectiveProcessedDebt {
+				db.vlogGenerationRewriteIneffectiveRuns.Add(1)
+				db.vlogGenerationRewriteIneffectiveBytesIn.Add(uint64(effectiveBytesBefore))
+				db.vlogGenerationRewriteIneffectiveBytesOut.Add(uint64(effectiveBytesAfter))
+				db.debugVlogMaintf(
+					"rewrite_ineffective reason=%s source_ids=%d bytes_before=%d bytes_after=%d gc_bytes_deleted=%d queue_len=%d",
+					vlogGenerationReasonString(reason),
+					len(rewriteOpts.SourceFileIDs),
+					effectiveBytesBefore,
+					effectiveBytesAfter,
+					gcBytesDeleted,
+					len(rewriteQueue),
+				)
+			}
+			penalizeProcessedRewriteDebt := false
+			penaltyReason := ""
+			if len(processedRewriteIDs) > 0 && effectiveBytesAfter >= effectiveBytesBefore && !locallyEffectiveProcessedDebt {
+				growth := effectiveBytesAfter - effectiveBytesBefore
+				if growth >= vlogGenerationRewriteIneffectiveGrowthMinBytes {
+					penalizeProcessedRewriteDebt = true
+					penaltyReason = "material_growth"
+				} else if growth == 0 && stats.RecordsCopied == 0 {
+					// A queued rewrite that copies nothing and does not reduce bytes is
+					// effectively a no-op resume loop; cool down the processed segment
+					// and let the remaining debt continue instead of discarding it.
+					penalizeProcessedRewriteDebt = true
+					penaltyReason = "no_progress"
+				}
+			}
+			if locallyEffectiveProcessedDebt {
+				if effectiveBytesAfter >= effectiveBytesBefore {
+					db.vlogGenerationRewriteNoReclaimRuns.Add(1)
+					if !queuedDebtExecuted {
+						db.vlogGenerationRewriteIneffectiveLastNS.Store(time.Now().UnixNano())
+					}
+					if processedLedgerStaleBytes > 0 {
+						db.vlogGenerationRewriteNoReclaimStaleBytes.Add(uint64(processedLedgerStaleBytes))
+					}
+				}
+				db.debugVlogMaintf(
+					"rewrite_effective_local reason=%s processed_ids=%d planned_total=%d planned_live=%d planned_stale=%d global_bytes_before=%d global_bytes_after=%d gc_bytes_deleted=%d records=%d",
+					vlogGenerationReasonString(reason),
+					len(processedRewriteIDs),
+					processedLedgerTotalBytes,
+					processedLedgerLiveBytes,
+					processedLedgerStaleBytes,
+					effectiveBytesBefore,
+					effectiveBytesAfter,
+					gcBytesDeleted,
+					stats.RecordsCopied,
+				)
+			}
+			suppressQueuedFollowup := false
+			if queuedDebtExecuted {
+				remainingQueue, queueErr := db.currentVlogGenerationRewriteQueue()
+				if queueErr != nil {
+					return fmt.Errorf("load generational rewrite queue after queued execution: %w", queueErr)
+				}
+				queuedUsefulSignal := stats.SourceBytesUnreferenced > 0 || effectiveBytesAfter < effectiveBytesBefore || gcBytesDeleted > 0
+				// Chunk-debt drains are incremental: if a processed ID remains queued, we
+				// intentionally executed a partial drain. In that case, "no immediate
+				// reclaim" is expected; allow a bounded follow-up only when the remaining
+				// chunk debt is small enough to finish quickly.
+				allowChunkDebtFollowup := false
+				if len(processedRewriteChunks) > 0 && len(remainingQueue) > 0 && len(processedRewriteIDs) > 0 {
+					processedIDsStillQueued := false
+					for _, processedID := range processedRewriteIDs {
+						if processedID == 0 {
+							continue
+						}
+						for _, queuedID := range remainingQueue {
+							if queuedID == processedID {
+								processedIDsStillQueued = true
+								break
+							}
+						}
+						if processedIDsStillQueued {
+							break
+						}
+					}
+					if processedIDsStillQueued {
+						remainingLedger, _, ledgerErr := db.currentVlogGenerationRewriteChunkLedger()
+						if ledgerErr == nil && len(remainingLedger) > 0 {
+							remainingChunks := 0
+							remainingLiveBytes := int64(0)
+							for _, chunk := range remainingLedger {
+								if chunk.FileID == 0 || chunk.BytesLive <= 0 {
+									continue
+								}
+								for _, processedID := range processedRewriteIDs {
+									if chunk.FileID == processedID {
+										remainingChunks++
+										remainingLiveBytes += chunk.BytesLive
+										break
+									}
+								}
+							}
+							if remainingLiveBytes > 0 && remainingLiveBytes <= vlogGenerationRewriteQueuedFollowupChunkDebtMaxRemainingLiveBytes {
+								allowChunkDebtFollowup = true
+							} else if remainingLiveBytes <= 0 && remainingChunks > 0 && remainingChunks <= vlogGenerationRewriteQueuedFollowupChunkDebtMaxRemainingChunks {
+								allowChunkDebtFollowup = true
+							}
+						}
+
+					}
+				}
+				if len(remainingQueue) > 0 && !queuedUsefulSignal && !penalizeProcessedRewriteDebt && !allowChunkDebtFollowup {
+					cooldownUntil := time.Now().Add(vlogGenerationRewriteQueuedFollowupCooldown)
+					if err := db.recordVlogGenerationRewritePenaltyWithLedger(
+						processedRewriteIDs,
+						rewriteLedgerEligible,
+						cooldownUntil,
+						effectiveBytesAfter-effectiveBytesBefore,
+					); err != nil {
+						return fmt.Errorf("record queued rewrite follow-up penalty: %w", err)
+					}
+					db.vlogGenerationRewriteQueueFollowupBlockedUntilNS.Store(cooldownUntil.UnixNano())
+					db.vlogGenerationRewriteQueuedDebtFollowupSuppressed.Add(1)
+					suppressQueuedFollowup = true
+					db.debugVlogMaintf(
+						"rewrite_queue_followup_suppressed reason=%s processed_ids=%d remaining_ids=%d source_bytes_unreferenced=%d bytes_before=%d bytes_after=%d gc_bytes_deleted=%d cooldown_ms=%d",
+						vlogGenerationReasonString(reason),
+						len(processedRewriteIDs),
+						len(remainingQueue),
+						stats.SourceBytesUnreferenced,
+						effectiveBytesBefore,
+						effectiveBytesAfter,
+						gcBytesDeleted,
+						vlogGenerationRewriteQueuedFollowupCooldown.Milliseconds(),
+					)
+				}
+			}
+			if penalizeProcessedRewriteDebt {
+				db.vlogGenerationRewriteIneffectiveLastNS.Store(time.Now().UnixNano())
+				if err := db.recordVlogGenerationRewritePenaltyWithLedger(
+					processedRewriteIDs,
+					rewriteLedgerEligible,
+					time.Now().Add(vlogGenerationRewriteIneffectiveCooldown),
+					effectiveBytesAfter-effectiveBytesBefore,
+				); err != nil {
+					return fmt.Errorf("record generational rewrite penalty: %w", err)
+				}
+				remainingQueue, queueErr := db.currentVlogGenerationRewriteQueue()
+				if queueErr != nil {
+					return fmt.Errorf("load generational rewrite queue after ineffective rewrite penalty: %w", queueErr)
+				}
+				db.debugVlogMaintf(
+					"rewrite_ineffective_penalty reason=%s processed_ids=%d remaining_ids=%d growth=%d threshold=%d penalty_reason=%s cooldown_ms=%d gc_bytes_deleted=%d",
+					vlogGenerationReasonString(reason),
+					len(processedRewriteIDs),
+					len(remainingQueue),
+					effectiveBytesAfter-effectiveBytesBefore,
+					vlogGenerationRewriteIneffectiveGrowthMinBytes,
+					penaltyReason,
+					vlogGenerationRewriteIneffectiveCooldown.Milliseconds(),
+					gcBytesDeleted,
+				)
+			}
+			if queuedDebtExecuted && !suppressQueuedFollowup && !vlogGenerationIsStageConfirmSource(opts) {
+				remainingQueue, _, queueErr := db.currentVlogGenerationRewriteEligible(time.Now())
+				if queueErr != nil {
+					return fmt.Errorf("load eligible generational rewrite queue after queued execution: %w", queueErr)
+				}
+				if len(remainingQueue) > 0 && !db.vlogGenerationRewriteQueueFollowupBlockedActive(time.Now()) {
+					db.vlogGenerationRewriteQueuePending.Store(true)
 				}
 			}
 			db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
 			db.vlogGenerationRewriteRuns.Add(1)
+			db.vlogGenerationRewriteRunsBySource[activeSourceIdx].Add(1)
+			if sourceSegments := len(rewriteOpts.SourceFileIDs); sourceSegments > 0 {
+				db.vlogGenerationRewriteExecSourceSegments.Add(uint64(sourceSegments))
+			}
+			if sourceChunks := len(rewriteOpts.SourceChunks); sourceChunks > 0 {
+				db.vlogGenerationRewriteExecSourceChunks.Add(uint64(sourceChunks))
+			}
+			sourceSegmentsRequested := uint64(0)
+			if stats.SourceSegmentsRequested > 0 {
+				sourceSegmentsRequested = uint64(stats.SourceSegmentsRequested)
+			}
+			sourceChunksRequested := uint64(0)
+			if stats.SourceChunksRequested > 0 {
+				sourceChunksRequested = uint64(stats.SourceChunksRequested)
+			}
+			sourceSegmentsStillReferenced := uint64(0)
+			if stats.SourceSegmentsStillReferenced > 0 {
+				sourceSegmentsStillReferenced = uint64(stats.SourceSegmentsStillReferenced)
+			}
+			sourceSegmentsUnreferenced := uint64(0)
+			if stats.SourceSegmentsUnreferenced > 0 {
+				sourceSegmentsUnreferenced = uint64(stats.SourceSegmentsUnreferenced)
+			}
+			sourceBytesRequested := uint64(0)
+			if stats.SourceBytesRequested > 0 {
+				sourceBytesRequested = uint64(stats.SourceBytesRequested)
+			}
+			sourceBytesStillReferenced := uint64(0)
+			if stats.SourceBytesStillReferenced > 0 {
+				sourceBytesStillReferenced = uint64(stats.SourceBytesStillReferenced)
+			}
+			sourceBytesUnreferenced := uint64(0)
+			if stats.SourceBytesUnreferenced > 0 {
+				sourceBytesUnreferenced = uint64(stats.SourceBytesUnreferenced)
+			}
+			db.vlogGenerationRewriteSourceChunksRequestedLast.Store(sourceChunksRequested)
+			db.vlogGenerationRewriteSourceSegmentsRequestedLast.Store(sourceSegmentsRequested)
+			db.vlogGenerationRewriteSourceSegmentsStillReferencedLast.Store(sourceSegmentsStillReferenced)
+			db.vlogGenerationRewriteSourceSegmentsUnreferencedLast.Store(sourceSegmentsUnreferenced)
+			db.vlogGenerationRewriteSourceBytesRequestedLast.Store(sourceBytesRequested)
+			db.vlogGenerationRewriteSourceBytesStillReferencedLast.Store(sourceBytesStillReferenced)
+			db.vlogGenerationRewriteSourceBytesUnreferencedLast.Store(sourceBytesUnreferenced)
+			if sourceChunksRequested > 0 {
+				db.vlogGenerationRewriteSourceChunksRequestedTotal.Add(sourceChunksRequested)
+			}
+			if sourceSegmentsRequested > 0 {
+				db.vlogGenerationRewriteSourceSegmentsRequestedTotal.Add(sourceSegmentsRequested)
+			}
+			if sourceSegmentsStillReferenced > 0 {
+				db.vlogGenerationRewriteSourceSegmentsStillReferencedTotal.Add(sourceSegmentsStillReferenced)
+			}
+			if sourceSegmentsUnreferenced > 0 {
+				db.vlogGenerationRewriteSourceSegmentsUnreferencedTotal.Add(sourceSegmentsUnreferenced)
+			}
+			if sourceBytesRequested > 0 {
+				db.vlogGenerationRewriteSourceBytesRequestedTotal.Add(sourceBytesRequested)
+				db.vlogGenerationRewriteSourceBytesRequestedBySource[activeSourceIdx].Add(sourceBytesRequested)
+			}
+			if sourceBytesStillReferenced > 0 {
+				db.vlogGenerationRewriteSourceBytesStillReferencedTotal.Add(sourceBytesStillReferenced)
+			}
+			if sourceBytesUnreferenced > 0 {
+				db.vlogGenerationRewriteSourceBytesUnreferencedTotal.Add(sourceBytesUnreferenced)
+				db.vlogGenerationRewriteSourceBytesUnreferencedBySource[activeSourceIdx].Add(sourceBytesUnreferenced)
+			}
 			rewriteBytesIn := int64(0)
-			if len(processedRewriteIDs) > 0 && stats.BytesBefore > 0 {
+			if stats.SourceBytesProcessed > 0 {
+				rewriteBytesIn = stats.SourceBytesProcessed
+			} else if processedLedgerOK {
+				rewriteBytesIn = processedLedgerLiveBytes
+			} else if len(processedRewriteIDs) > 0 && stats.BytesBefore > 0 {
 				rewriteBytesIn = int64(stats.BytesBefore)
+			} else if haveRewriteChunkPlan && rewriteChunkPlan.SelectedBytesLive > 0 {
+				rewriteBytesIn = rewriteChunkPlan.SelectedBytesLive
 			} else if haveRewritePlan && rewritePlan.SelectedBytesLive > 0 {
 				rewriteBytesIn = rewritePlan.SelectedBytesLive
 			} else if maxSourceBytes > 0 {
@@ -10322,9 +17667,23 @@ planned:
 			if stats.BytesAfter > 0 {
 				db.vlogGenerationRewriteBytesOut.Add(uint64(stats.BytesAfter))
 			}
+			rewriteBytesOut := int64(stats.BytesAfter)
+			if rewriteBytesOut < 0 {
+				rewriteBytesOut = 0
+			}
+			db.vlogGenerationRewriteExecLastLiveBytes.Store(rewriteBytesIn)
+			db.vlogGenerationRewriteExecLastBytesOut.Store(rewriteBytesOut)
+			db.vlogGenerationRewriteExecLastDurationNanos.Store(uint64(rewriteDur))
+			db.vlogGenerationRewriteExecLastUnixNano.Store(time.Now().UnixNano())
 			consumed := int64(0)
-			if len(processedRewriteIDs) > 0 && stats.BytesBefore > 0 {
+			if stats.SourceBytesProcessed > 0 {
+				consumed = stats.SourceBytesProcessed
+			} else if processedLedgerOK {
+				consumed = processedLedgerLiveBytes
+			} else if len(processedRewriteIDs) > 0 && stats.BytesBefore > 0 {
 				consumed = int64(stats.BytesBefore)
+			} else if haveRewriteChunkPlan && rewriteChunkPlan.SelectedBytesLive > 0 {
+				consumed = rewriteChunkPlan.SelectedBytesLive
 			} else if haveRewritePlan && rewritePlan.SelectedBytesLive > 0 {
 				consumed = rewritePlan.SelectedBytesLive
 			} else if maxSourceBytes > 0 {
@@ -10335,8 +17694,14 @@ planned:
 			if stats.RecordsCopied > 0 {
 				db.vlogGenerationRemapSuccesses.Add(uint64(stats.RecordsCopied))
 			}
+			if stats.ValueRecordsCopied > 0 {
+				db.vlogGenerationRewriteValueRecordsCopied.Add(uint64(stats.ValueRecordsCopied))
+			}
+			if stats.ValueBytesCopied > 0 {
+				db.vlogGenerationRewriteValueBytesCopied.Add(uint64(stats.ValueBytesCopied))
+			}
 			if consumed > 0 {
-				db.vlogGenerationConsumeRewriteBudgetBytes(consumed)
+				db.vlogGenerationConsumeRewriteBudgetBytes(consumed, activeSourceIdx)
 			}
 			db.maybeRunVlogGenerationIndexVacuum(int64(stats.BytesBefore))
 			return nil
@@ -10354,27 +17719,128 @@ planned:
 		}
 	}
 
+	// If rewrite debt is already staged or waiting on segment age, do not spend
+	// the active maintenance slot on generic periodic GC. Let the deferred
+	// rewrite confirmation/age retry get the next opportunity instead.
+	if !opts.bypassQuiet && !shouldRewrite && (stagePending || db.vlogGenerationRewriteAgeBlockedUntilNS.Load() > 0) {
+		return
+	}
+
+	leafPackAttempted, leafPackRan, err := db.maybeRunLeafGenerationPackMaintenance(runGC, quiet, leafPackAdmission, opts)
+	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			db.observeVlogGenerationLeafPackCanceled()
+			db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
+			return
+		}
+		if errors.Is(err, context.DeadlineExceeded) {
+			db.observeVlogGenerationLeafPackDeadline()
+			db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
+			return
+		}
+		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
+		db.vlogGenerationLeafPackErrors.Add(1)
+		db.storeVlogGenerationLeafPackLastSkipReason("error")
+		if db.notifyError != nil {
+			db.notifyError(fmt.Errorf("cachingdb: %w", err))
+		}
+		return
+	}
+	if leafPackRan {
+		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
+		return
+	}
+
+	observedSourceGCIDs := db.takeVlogGenerationObservedSourceGCList()
+	forceObservedSourceGC := len(observedSourceGCIDs) > 0
+	if !runGC && opts.bypassQuiet && !forceObservedSourceGC {
+		// Checkpoint-kick/deferred retry passes are rewrite-priority. Do not run
+		// opportunistic GC here unless we are replaying observed-source IDs from
+		// a prior rewrite/GC cycle.
+		return
+	}
 	if envBool(envDisableVlogGenerationGC) {
+		db.debugVlogMaintf(
+			"gc_skip reason=disabled_env run_gc=%t force_observed=%t observed_ids=%d",
+			runGC,
+			forceObservedSourceGC,
+			len(observedSourceGCIDs),
+		)
+		if forceObservedSourceGC {
+			queuedIDs, droppedIDs := db.retryVlogGenerationObservedSourceGCList(observedSourceGCIDs)
+			db.debugVlogMaintf(
+				"gc_observed_retry reason=disabled_env observed_ids=%d queued_ids=%d dropped_ids=%d",
+				len(observedSourceGCIDs),
+				queuedIDs,
+				droppedIDs,
+			)
+		}
 		return
 	}
 	// GC is a best-effort background maintenance task. It requires a checkpoint
 	// barrier to be safe, and that barrier can be very expensive during sustained
 	// ingest/restore when the flush queue is non-empty. Avoid introducing long
 	// stalls by only running the GC path when the cached write queue is drained.
-	if queueLen != 0 {
+	if queueLen != 0 && !forceObservedSourceGC {
+		db.debugVlogMaintf(
+			"gc_skip reason=queue_not_drained run_gc=%t queue_len=%d force_observed=%t",
+			runGC,
+			queueLen,
+			forceObservedSourceGC,
+		)
 		return
 	}
 	gcer, ok := db.backend.(backendValueLogGCer)
 	if !ok {
+		db.debugVlogMaintf(
+			"gc_skip reason=backend_no_gcer run_gc=%t force_observed=%t observed_ids=%d",
+			runGC,
+			forceObservedSourceGC,
+			len(observedSourceGCIDs),
+		)
+		if forceObservedSourceGC {
+			queuedIDs, droppedIDs := db.retryVlogGenerationObservedSourceGCList(observedSourceGCIDs)
+			db.debugVlogMaintf(
+				"gc_observed_retry reason=backend_no_gcer observed_ids=%d queued_ids=%d dropped_ids=%d",
+				len(observedSourceGCIDs),
+				queuedIDs,
+				droppedIDs,
+			)
+		}
 		return
 	}
-	needEligibilityEstimate := !runGC && !db.shouldRunVlogGenerationGC(retained, reclaimable, churnBps)
+	// Retry-driven checkpoint/deferred passes are rewrite-priority paths. Avoid
+	// issuing GC dry-run scans there; let periodic/manual GC decide eligibility.
+	needEligibilityEstimate := !runGC && !opts.bypassQuiet && !forceObservedSourceGC && !db.shouldRunVlogGenerationGC(retained, reclaimable, churnBps)
 	now = time.Now()
 	lastGC := db.vlogGenerationLastGCUnixNano.Load()
 	if lastGC > 0 {
 		lastAt := time.Unix(0, lastGC)
-		if now.Sub(lastAt) < vlogGenerationGCMinInterval {
+		if !forceObservedSourceGC && now.Sub(lastAt) < vlogGenerationGCMinInterval {
+			db.debugVlogMaintf(
+				"gc_skip reason=min_interval run_gc=%t force_observed=%t observed_ids=%d since_ms=%.3f min_ms=%.3f",
+				runGC,
+				forceObservedSourceGC,
+				len(observedSourceGCIDs),
+				float64(now.Sub(lastAt).Microseconds())/1000,
+				float64(vlogGenerationGCMinInterval.Microseconds())/1000,
+			)
 			return
+		}
+	}
+	if !forceObservedSourceGC {
+		lastNoop := db.vlogGenerationLastGCNoopUnixNano.Load()
+		if lastNoop > 0 {
+			lastNoopAt := time.Unix(0, lastNoop)
+			if now.Sub(lastNoopAt) < vlogGenerationGCNoopMinInterval {
+				db.debugVlogMaintf(
+					"gc_skip reason=noop_cooldown run_gc=%t since_ms=%.3f min_ms=%.3f",
+					runGC,
+					float64(now.Sub(lastNoopAt).Microseconds())/1000,
+					float64(vlogGenerationGCNoopMinInterval.Microseconds())/1000,
+				)
+				return
+			}
 		}
 	}
 	db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerRunning)
@@ -10389,17 +17855,131 @@ planned:
 				return fmt.Errorf("generational gc dry-run: %w", err)
 			}
 			if gcStats.BytesEligible < vlogGenerationGCMinBytes && gcStats.SegmentsEligible == 0 {
+				db.debugVlogMaintf(
+					"gc_skip reason=below_eligibility_floor run_gc=%t force_observed=%t eligible_bytes=%d eligible_segments=%d min_bytes=%d",
+					runGC,
+					forceObservedSourceGC,
+					gcStats.BytesEligible,
+					gcStats.SegmentsEligible,
+					vlogGenerationGCMinBytes,
+				)
 				return nil
 			}
 		}
-		now = time.Now()
+		now := time.Now()
 		db.vlogGenerationLastGCUnixNano.Store(now.UnixNano())
-		ctx, cancel := db.foregroundMaintenanceContext(30 * time.Second)
-		gcOpts := backenddb.ValueLogGCOptions{ProtectedPaths: db.valueLogProtectedPaths()}
+		ctx, cancel := db.vlogGenerationMaintenanceContext(30*time.Second, opts)
+		gcOpts := db.valueLogGCOptions(false)
+		if forceObservedSourceGC {
+			gcOpts.ObservedSourceFileIDs = append([]uint32(nil), observedSourceGCIDs...)
+			gcOpts.ObservedSourceAssumeUnreferenced = true
+		}
+		db.debugVlogMaintf(
+			"gc_run start run_gc=%t force_observed=%t observed_ids=%d need_estimate=%t",
+			runGC,
+			forceObservedSourceGC,
+			len(observedSourceGCIDs),
+			needEligibilityEstimate,
+		)
+		gcStart := time.Now()
+		gcAttempted = true
 		gcStats, err := gcer.ValueLogGC(ctx, gcOpts)
 		cancel()
+		gcDur := time.Since(gcStart)
 		if err != nil {
+			db.debugVlogMaintf(
+				"gc_run err run_gc=%t force_observed=%t observed_ids=%d err=%v",
+				runGC,
+				forceObservedSourceGC,
+				len(observedSourceGCIDs),
+				err,
+			)
 			return fmt.Errorf("generational gc: %w", err)
+		}
+		db.observeVlogGenerationGCExecDuration(gcDur)
+		if forceObservedSourceGC {
+			db.vlogGenerationObservedGCRuns.Add(1)
+		}
+		db.debugVlogMaintf(
+			"gc_run done run_gc=%t force_observed=%t observed_ids=%d deleted_segments=%d deleted_bytes=%d protected_retained_bytes=%d observed_segments=%d observed_eligible=%d observed_deleted=%d observed_protected_retained=%d",
+			runGC,
+			forceObservedSourceGC,
+			len(observedSourceGCIDs),
+			gcStats.SegmentsDeleted,
+			gcStats.BytesDeleted,
+			gcStats.BytesProtectedRetained,
+			gcStats.ObservedSourceSegments,
+			gcStats.ObservedSourceSegmentsEligible,
+			gcStats.ObservedSourceSegmentsDeleted,
+			gcStats.ObservedSourceSegmentsProtectedRetained,
+		)
+		db.observeVlogGenerationGCStats(gcStats)
+		if !forceObservedSourceGC &&
+			gcStats.BytesDeleted == 0 &&
+			gcStats.SegmentsDeleted == 0 &&
+			gcStats.BytesEligible == 0 &&
+			gcStats.SegmentsEligible == 0 {
+			db.vlogGenerationLastGCNoopUnixNano.Store(now.UnixNano())
+		} else {
+			db.vlogGenerationLastGCNoopUnixNano.Store(0)
+		}
+		if gcStats.BytesProtectedRetained > 0 && gcStats.BytesEligible == 0 && db.valueLogRetainedClosedBytes.Load() > 0 {
+			// When GC classifies all reclaim blockers as retained-path protection,
+			// trigger an eager retained prune pass to release stale lifecycle pins.
+			if forceObservedSourceGC {
+				db.queueRetainedPruneObservedSourceIDs(observedSourceGCIDs)
+			}
+			db.scheduleRetainedValueLogPruneForce()
+		}
+		if forceObservedSourceGC &&
+			gcStats.ObservedSourceSegments > 0 &&
+			gcStats.ObservedSourceSegmentsProtectedRetained > 0 &&
+			gcStats.ObservedSourceSegmentsEligible == 0 {
+			db.debugVlogMaintf(
+				"gc_observed_retry reason=retained_protected observed_ids=%d observed_segments=%d observed_protected_retained=%d observed_eligible=%d",
+				len(observedSourceGCIDs),
+				gcStats.ObservedSourceSegments,
+				gcStats.ObservedSourceSegmentsProtectedRetained,
+				gcStats.ObservedSourceSegmentsEligible,
+			)
+			db.queueRetainedPruneObservedSourceIDs(observedSourceGCIDs)
+			db.scheduleRetainedValueLogPruneForce()
+			queuedIDs, droppedIDs := db.retryVlogGenerationObservedSourceGCList(observedSourceGCIDs)
+			if queuedIDs > 0 {
+				db.vlogGenerationCheckpointKickPending.Store(true)
+			}
+			db.debugVlogMaintf(
+				"gc_observed_retry_result reason=retained_protected observed_ids=%d queued_ids=%d dropped_ids=%d max_attempts=%d",
+				len(observedSourceGCIDs),
+				queuedIDs,
+				droppedIDs,
+				vlogGenerationObservedGCRetryMaxAttempts,
+			)
+		} else if forceObservedSourceGC &&
+			gcStats.ObservedSourceSegments > 0 &&
+			gcStats.ObservedSourceSegmentsReferenced == 0 &&
+			gcStats.ObservedSourceSegmentsActive > 0 &&
+			gcStats.ObservedSourceSegmentsEligible == 0 {
+			db.debugVlogMaintf(
+				"gc_observed_retry reason=active_source observed_ids=%d observed_segments=%d observed_active=%d observed_eligible=%d",
+				len(observedSourceGCIDs),
+				gcStats.ObservedSourceSegments,
+				gcStats.ObservedSourceSegmentsActive,
+				gcStats.ObservedSourceSegmentsEligible,
+			)
+			queuedIDs, droppedIDs := db.retryVlogGenerationObservedSourceGCList(observedSourceGCIDs)
+			if queuedIDs > 0 {
+				db.vlogGenerationCheckpointKickPending.Store(true)
+			}
+			db.debugVlogMaintf(
+				"gc_observed_retry_result reason=active_source observed_ids=%d queued_ids=%d dropped_ids=%d max_attempts=%d",
+				len(observedSourceGCIDs),
+				queuedIDs,
+				droppedIDs,
+				vlogGenerationObservedGCRetryMaxAttempts,
+			)
+		} else if forceObservedSourceGC {
+			db.finalizeVlogGenerationObservedSourceGCIDs(observedSourceGCIDs, false)
 		}
 		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
 		db.vlogGenerationGCRuns.Add(1)
@@ -10412,6 +17992,22 @@ planned:
 		return nil
 	})
 	if err != nil {
+		db.debugVlogMaintf(
+			"gc_maintenance_err run_gc=%t force_observed=%t observed_ids=%d err=%v",
+			runGC,
+			forceObservedSourceGC,
+			len(observedSourceGCIDs),
+			err,
+		)
+		if forceObservedSourceGC {
+			queuedIDs, droppedIDs := db.retryVlogGenerationObservedSourceGCList(observedSourceGCIDs)
+			db.debugVlogMaintf(
+				"gc_observed_retry reason=gc_error observed_ids=%d queued_ids=%d dropped_ids=%d",
+				len(observedSourceGCIDs),
+				queuedIDs,
+				droppedIDs,
+			)
+		}
 		if errors.Is(err, context.Canceled) {
 			db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
 			return
@@ -10423,33 +18019,137 @@ planned:
 		return
 	}
 	db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
+	return
+}
+
+func (db *DB) MaintenancePhase() MaintenancePhase {
+	if db == nil {
+		return MaintenancePhaseSteady
+	}
+	return normalizeMaintenancePhase(MaintenancePhase(db.maintenancePhase.Load()))
+}
+
+func (db *DB) SetMaintenancePhase(phase MaintenancePhase) {
+	if db == nil {
+		return
+	}
+	phase = normalizeMaintenancePhase(phase)
+	prev := normalizeMaintenancePhase(MaintenancePhase(db.maintenancePhase.Swap(uint32(phase))))
+	if prev == phase {
+		return
+	}
+	db.debugVlogMaintf("maintenance_phase_change from=%s to=%s", maintenancePhaseString(uint32(prev)), maintenancePhaseString(uint32(phase)))
+	if phase == MaintenancePhaseSteady {
+		db.maybeArmWALOnVlogGenerationLoopForSteadyPhase()
+		db.scheduleDueVlogGenerationDeferredMaintenance()
+		db.schedulePendingVlogGenerationCheckpointKick()
+	}
+}
+
+func (db *DB) suppressBackgroundVlogGenerationForMaintenancePhase() bool {
+	switch db.MaintenancePhase() {
+	case MaintenancePhaseRestore, MaintenancePhaseCatchUp:
+		return true
+	default:
+		return false
+	}
 }
 
 func (db *DB) maybeKickVlogGenerationMaintenanceAfterCheckpoint() {
 	if db == nil || db.closing.Load() {
+		if db != nil {
+			db.debugVlogMaintf("checkpoint_kick_skip reason=closing")
+		}
 		return
 	}
 	if envBool(envDisableVlogGenerationCheckpointKick) {
+		db.debugVlogMaintf("checkpoint_kick_skip reason=disabled_env")
 		return
 	}
 	if db.testSkipVlogCheckpointKick {
-		return
-	}
-	if !db.disableJournal {
+		db.debugVlogMaintf("checkpoint_kick_skip reason=test_skip")
 		return
 	}
 	if db.valueLogGenerationPolicy != uint8(backenddb.ValueLogGenerationHotWarmCold) {
+		db.debugVlogMaintf("checkpoint_kick_skip reason=policy_off policy=%d", db.valueLogGenerationPolicy)
+		return
+	}
+	if db.suppressBackgroundVlogGenerationForMaintenancePhase() {
+		db.debugVlogMaintf("checkpoint_kick_skip reason=maintenance_phase phase=%s", maintenancePhaseString(uint32(db.MaintenancePhase())))
+		return
+	}
+	if !db.disableJournal {
+		// In WAL-on profiles, checkpoint-kick maintenance races with restore/catch-up
+		// work and has produced real post-snapshot state divergence. Keep WAL-on
+		// generation maintenance off the checkpoint-triggered fast path.
+		db.debugVlogMaintf("checkpoint_kick_skip reason=wal_on")
 		return
 	}
 	now := time.Now()
+	rewriteDisabled := envBool(envDisableVlogGenerationRewrite)
+	rewriteQueueLen := 0
+	if !rewriteDisabled {
+		rewriteQueue, qerr := db.currentVlogGenerationRewriteQueue()
+		if qerr != nil {
+			db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
+			if db.notifyError != nil {
+				db.notifyError(fmt.Errorf("cachingdb: load generational rewrite queue for checkpoint kick: %w", qerr))
+			}
+			return
+		}
+		rewriteQueueLen = len(rewriteQueue)
+	}
+	if envBool(envEnableVlogGenerationCheckpointKickHotDebtOnly) && !rewriteDisabled {
+		quiet := db.foregroundActivityQuietFor(now, vlogGenerationMaintenanceQuietWindow, vlogForegroundReadQuietWindow)
+		if !quiet && rewriteQueueLen == 0 && !db.vlogGenerationDeferredMaintenanceDue(now) {
+			db.vlogGenerationCheckpointKickSkippedHotNoDebt.Add(1)
+			db.scheduleVlogGenerationCheckpointKickHotNoDebtWake()
+			db.debugVlogMaintf(
+				"checkpoint_kick_skip reason=foreground_hot_no_debt quiet=%t queue_len=%d checkpoint_pending=%t deferred_pending=%t deferred_due=%t hot_no_debt_wake_running=%t",
+				quiet,
+				rewriteQueueLen,
+				db.vlogGenerationCheckpointKickPending.Load(),
+				db.vlogGenerationDeferredMaintenancePending.Load(),
+				db.vlogGenerationDeferredMaintenanceDue(now),
+				db.vlogGenerationCheckpointKickHotNoDebtWakeRunning.Load(),
+			)
+			return
+		}
+	}
 	last := db.vlogGenerationLastCheckpointKickUnixNano.Load()
 	if last > 0 && now.Sub(time.Unix(0, last)) < vlogGenerationCheckpointKickMinInterval {
+		db.debugVlogMaintf(
+			"checkpoint_kick_skip reason=min_interval since_ms=%.3f min_ms=%.3f",
+			float64(now.Sub(time.Unix(0, last)).Microseconds())/1000,
+			float64(vlogGenerationCheckpointKickMinInterval.Microseconds())/1000,
+		)
 		return
 	}
+	// Avoid forcing extra checkpoint boundaries when rewrite is clearly ineligible.
+	// Skip this fast-path when rewrite is disabled so GC-only kicks still run.
+	if !rewriteDisabled {
+		if rewriteQueueLen == 0 {
+			if trigger := db.valueLogRewriteTriggerBytes; trigger > 0 {
+				retained, bytes := db.valueLogRetainedStats()
+				if bytes < trigger && retained < 2 {
+					db.debugVlogMaintf(
+						"checkpoint_kick_skip reason=trigger_floor bytes=%d trigger=%d retained=%d queue_len=0",
+						bytes,
+						trigger,
+						retained,
+					)
+					return
+				}
+			}
+		}
+	}
 	if !db.vlogGenerationCheckpointKickActive.CompareAndSwap(false, true) {
+		db.debugVlogMaintf("checkpoint_kick_skip reason=already_active")
 		return
 	}
 	db.vlogGenerationLastCheckpointKickUnixNano.Store(now.UnixNano())
+	db.vlogGenerationCheckpointKickRuns.Add(1)
+	db.debugVlogMaintf("checkpoint_kick_start")
 	db.wg.Add(1)
 	go func() {
 		defer db.wg.Done()
@@ -10462,15 +18162,32 @@ func (db *DB) maybeKickVlogGenerationMaintenanceAfterCheckpoint() {
 		if db.closing.Load() {
 			return
 		}
-		db.maybeRunVlogGenerationMaintenanceWithOptions(true, vlogGenerationMaintenanceOptions{
+		rewriteRunsBefore := db.vlogGenerationRewriteRuns.Load()
+		gcRunsBefore := db.vlogGenerationGCRuns.Load()
+		db.runVlogGenerationCheckpointKickRetries(vlogGenerationMaintenanceOptions{
 			bypassQuiet:           true,
 			skipRetainedPruneWait: true,
 			// Checkpoint-triggered maintenance still needs a fresh serialized
 			// backend view before iterator-based rewrite/GC scans run. Re-entering
 			// Checkpoint here is safe: the just-finished caller has already cleared
 			// checkpointing, and the kick-active guard prevents recursive kicks.
-			skipCheckpoint: false,
+			skipCheckpoint:   false,
+			rewriteDebtDrain: true,
 		})
+		if db.vlogGenerationRewriteRuns.Load() > rewriteRunsBefore {
+			db.vlogGenerationCheckpointKickRewriteRuns.Add(1)
+		}
+		if db.vlogGenerationGCRuns.Load() > gcRunsBefore {
+			db.vlogGenerationCheckpointKickGCRuns.Add(1)
+		}
+		db.debugVlogMaintf(
+			"checkpoint_kick_done rewrite_runs_before=%d rewrite_runs_after=%d gc_runs_before=%d gc_runs_after=%d pending=%t",
+			rewriteRunsBefore,
+			db.vlogGenerationRewriteRuns.Load(),
+			gcRunsBefore,
+			db.vlogGenerationGCRuns.Load(),
+			db.vlogGenerationCheckpointKickPending.Load(),
+		)
 	}()
 }
 
@@ -10479,6 +18196,7 @@ func (db *DB) maybeRunVlogGenerationIndexVacuum(rewriteBytesIn int64) {
 		return
 	}
 	if envBool(envDisableVlogGenerationVacuum) {
+		db.vlogGenerationVacuumSkippedDisabled.Add(1)
 		return
 	}
 	vacuumer, ok := db.backend.(backendIndexVacuumer)
@@ -10498,11 +18216,13 @@ func (db *DB) maybeRunVlogGenerationIndexVacuum(rewriteBytesIn int64) {
 		return err
 	}
 	var err error
+	vacuumStart := time.Now()
 	if db.maintenanceActive.Load() {
 		err = runVacuum()
 	} else {
 		err = db.runWithBackendMaintenance(runVacuum)
 	}
+	vacuumDur := time.Since(vacuumStart)
 	if err != nil {
 		db.vlogGenerationVacuumFailures.Add(1)
 		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
@@ -10511,6 +18231,7 @@ func (db *DB) maybeRunVlogGenerationIndexVacuum(rewriteBytesIn int64) {
 		}
 		return
 	}
+	db.observeVlogGenerationVacuumExecDuration(vacuumDur)
 	db.vlogGenerationVacuumRuns.Add(1)
 	db.vlogGenerationLastVacuumUnixNano.Store(now.UnixNano())
 	db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
@@ -10521,12 +18242,14 @@ func (db *DB) shouldRunVlogGenerationIndexVacuum(rewriteBytesIn int64, now time.
 		return false
 	}
 	if rewriteBytesIn < vlogGenerationVacuumTriggerRewriteBytes {
+		db.vlogGenerationVacuumSkippedRewriteBytes.Add(1)
 		return false
 	}
 	last := db.vlogGenerationLastVacuumUnixNano.Load()
 	if last > 0 {
 		lastAt := time.Unix(0, last)
 		if now.Sub(lastAt) < vlogGenerationVacuumMinInterval {
+			db.vlogGenerationVacuumSkippedCooldown.Add(1)
 			return false
 		}
 	}
@@ -10555,10 +18278,13 @@ func (db *DB) estimateVlogGenerationGCEligible(gcer backendValueLogGCer) (backen
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	return gcer.ValueLogGC(ctx, backenddb.ValueLogGCOptions{
-		DryRun:         true,
-		ProtectedPaths: db.valueLogProtectedPaths(),
-	})
+	stats, err := gcer.ValueLogGC(ctx, db.valueLogGCOptions(true))
+	if err == nil {
+		db.vlogGenerationLastGCDryRunUnixNano.Store(time.Now().UnixNano())
+		db.vlogGenerationLastGCDryRunBytesEligible.Store(stats.BytesEligible)
+		db.vlogGenerationLastGCDryRunSegsEligible.Store(int64(stats.SegmentsEligible))
+	}
+	return stats, err
 }
 
 func (db *DB) vlogGenerationEstimateChurnBps() int64 {
@@ -10601,6 +18327,42 @@ func (db *DB) shouldRunVlogGenerationRewrite(totalBytes int64, staleRatioPPM uin
 		return true, vlogGenerationReasonChurn
 	}
 	return false, vlogGenerationReasonNone
+}
+
+func (db *DB) vlogGenerationRewriteMinStaleRatioForGenericPass(totalBytes int64) float64 {
+	if totalBytes < vlogGenerationRewriteEfficacyMinTotalBytes {
+		return 0
+	}
+	if configured := db.vlogGenerationRewriteMinStaleRatioForStaleRatioTrigger(totalBytes); configured > 0 {
+		if configured < vlogGenerationRewriteGenericMinSegmentStaleRatio {
+			return vlogGenerationRewriteGenericMinSegmentStaleRatio
+		}
+		return configured
+	}
+	return vlogGenerationRewriteGenericMinSegmentStaleRatio
+}
+
+func (db *DB) vlogGenerationRewriteMinStaleRatioForQueuedDebt(totalBytes int64, reason uint32) float64 {
+	if reason == vlogGenerationReasonTotalBytes || reason == vlogGenerationReasonChurn {
+		if ratio := db.vlogGenerationRewriteMinStaleRatioForGenericPass(totalBytes); ratio > 0 {
+			return ratio
+		}
+	}
+	return vlogGenerationRewriteMinSegmentStaleRatio
+}
+
+func (db *DB) vlogGenerationRewriteMinStaleRatioForStaleRatioTrigger(totalBytes int64) float64 {
+	if db == nil || db.valueLogRewriteTriggerRatioPPM <= 0 {
+		return 0
+	}
+	ratio := float64(db.valueLogRewriteTriggerRatioPPM) / 1_000_000.0
+	if ratio > 1 {
+		return 1
+	}
+	if totalBytes >= vlogGenerationRewriteEfficacyMinTotalBytes && ratio < vlogGenerationRewriteMinSegmentStaleRatio {
+		ratio = vlogGenerationRewriteMinSegmentStaleRatio
+	}
+	return ratio
 }
 
 func (db *DB) valueLogRewriteBatchSize() int {
@@ -10838,7 +18600,14 @@ func (db *DB) checkpointRotateCapacity() int {
 	if capacity <= 0 {
 		return -1
 	}
-	const checkpointRotateCapMax = 256 * 1024
+	// Checkpoint cutover uses a bounded preallocation to keep lock hold time
+	// predictable. append_only entry slices, however, pay a high regrowth/copy
+	// tax when this cap is too small (notably in settled batch write workloads).
+	// Use a higher cap there while still avoiding full-threshold prealloc.
+	checkpointRotateCapMax := 256 * 1024
+	if db.currentMemtableMode() == memtable.ModeAppendOnly {
+		checkpointRotateCapMax = 4 * 1024 * 1024
+	}
 	if capacity > checkpointRotateCapMax {
 		return checkpointRotateCapMax
 	}
@@ -10933,15 +18702,21 @@ func (db *DB) Checkpoint() error {
 		}
 		hasQueue = len(db.queue) > 0
 	} else if db.disableJournal && !hasQueue && !hasDirtyVLog {
-		db.mu.Unlock()
-		releaseWriteMu()
-		db.checkpointNoopSkips.Add(1)
-		if err := db.maybeVacuumSparseIndexOnCheckpoint(); err != nil {
-			return err
+		// Checkpoint-kick retries may need to rotate current value-log segments
+		// even when there is no new foreground dirtiness, so observed-source GC
+		// can re-check recently rewritten active sources.
+		forceVLogRotate := db.vlogGenerationCheckpointKickPending.Load()
+		if !forceVLogRotate {
+			db.mu.Unlock()
+			releaseWriteMu()
+			db.checkpointNoopSkips.Add(1)
+			if err := db.maybeVacuumSparseIndexOnCheckpoint(); err != nil {
+				return err
+			}
+			db.checkValueLogRetention()
+			db.scheduleRetainedValueLogPrune()
+			return nil
 		}
-		db.checkValueLogRetention()
-		db.scheduleRetainedValueLogPrune()
-		return nil
 	}
 	walDir := db.dir
 	preRotateWALPaths := db.currentWALPaths()
@@ -10979,12 +18754,8 @@ func (db *DB) Checkpoint() error {
 		}
 	}
 	wroteDuringWALRotate := db.nextRID.Load() != ridBeforeWALRotate
-	if db.splitValueLogEnabled() {
-		for i := range db.lanes {
-			if err := db.rotateValueLogLocked(&db.lanes[i]); err != nil {
-				return err
-			}
-		}
+	if err := db.checkpointFlushValueLogLanes(); err != nil {
+		return err
 	}
 
 	// Flush all queued memtables with backend sync.
@@ -11071,6 +18842,7 @@ func (db *DB) Checkpoint() error {
 	db.checkValueLogRetention()
 	db.maybeKickVlogGenerationMaintenanceAfterCheckpoint()
 	db.scheduleRetainedValueLogPrune()
+	db.trimRetainedArenasAfterFlush(true)
 
 	return nil
 }
@@ -11295,6 +19067,8 @@ func (db *DB) Close() error {
 	var errs []error
 	hadMemtables := false
 	db.closing.Store(true)
+	db.clearBackendValueLogReadBarrier()
+	unregisterTreeDBExpvarStatsDB(db)
 	db.stopDomainIngressWorkers()
 	db.waitForRetainedValueLogPrune()
 
@@ -11337,15 +19111,36 @@ func (db *DB) Close() error {
 	db.writeMu.Unlock()
 	db.flushMu.Unlock()
 	db.wg.Wait()
+	// Drain any in-flight dict-profile publish callbacks before teardown.
+	// New callbacks will observe closing=true and return without touching stores.
+	db.valueLogDictApplyMu.Lock()
+	db.valueLogDictApplyMu.Unlock()
 	// Retained-prune scans use the live value-log reader and backend state.
 	// Wait for any in-flight prune before tearing down readers or removing
 	// lane files so Close cannot race a background live-ID walk.
 	db.waitForRetainedValueLogPrune()
 	db.valueLogDictTrainerMu.Lock()
-	trainer := db.valueLogDictTrainer
+	trainers := make([]*compression.Trainer, 0, 1+vlogDictClassCount)
+	if db.valueLogDictTrainer != nil {
+		trainers = append(trainers, db.valueLogDictTrainer)
+	}
+	for i := range db.valueLogDictTrainerByClass {
+		if tr := db.valueLogDictTrainerByClass[i]; tr != nil {
+			trainers = append(trainers, tr)
+			db.valueLogDictTrainerByClass[i] = nil
+		}
+	}
 	db.valueLogDictTrainer = nil
 	db.valueLogDictTrainerMu.Unlock()
-	if trainer != nil {
+	closed := make(map[*compression.Trainer]struct{}, len(trainers))
+	for _, trainer := range trainers {
+		if trainer == nil {
+			continue
+		}
+		if _, ok := closed[trainer]; ok {
+			continue
+		}
+		closed[trainer] = struct{}{}
 		trainer.Close()
 	}
 	if db.valueLogTemplateEngine != nil {
@@ -11396,6 +19191,18 @@ func (db *DB) Close() error {
 		l.vlogModeSet = false
 		l.vlogModeWriter = nil
 		l.vlogMu.Unlock()
+	}
+	if db.indexOuterLeavesInValueLog {
+		db.leafLog.vlogMu.Lock()
+		if db.leafLog.vlog != nil {
+			_ = db.leafLog.vlog.Close()
+			db.leafLog.vlog = nil
+			db.leafLog.vlogCaps = vlogWriterCaps{}
+			db.leafLog.vlogLiveBytes.Store(0)
+		}
+		db.leafLog.vlogModeSet = false
+		db.leafLog.vlogModeWriter = nil
+		db.leafLog.vlogMu.Unlock()
 	}
 
 	if walBytes > 0 && !hadMemtables {
@@ -11464,6 +19271,8 @@ func (db *DB) Set(key, value []byte) error {
 		return ErrValueNil
 	}
 	db.waitForCheckpoint()
+	unlock := db.lockUpdateKey(key)
+	defer unlock()
 	return db.set(key, value, false)
 }
 
@@ -11475,7 +19284,106 @@ func (db *DB) SetSync(key, value []byte) error {
 		return ErrValueNil
 	}
 	db.waitForCheckpoint()
+	unlock := db.lockUpdateKey(key)
+	defer unlock()
 	return db.set(key, value, true)
+}
+
+// Update applies fn to the current value for key and writes the returned
+// mutation without forcing an fsync boundary.
+func (db *DB) Update(key []byte, fn backenddb.UpdateFunc) error {
+	return db.update(key, fn, false)
+}
+
+// UpdateSync applies fn to the current value for key and writes the returned
+// mutation with a sync durability boundary.
+func (db *DB) UpdateSync(key []byte, fn backenddb.UpdateFunc) error {
+	return db.update(key, fn, true)
+}
+
+func (db *DB) update(key []byte, fn backenddb.UpdateFunc, syncWrite bool) error {
+	if len(key) == 0 {
+		return ErrKeyEmpty
+	}
+	if fn == nil {
+		return backenddb.ErrNilUpdateFunc
+	}
+	db.waitForCheckpoint()
+
+	for {
+		unlock := db.lockUpdateKey(key)
+		old, err := db.getForUpdate(key)
+		unlock()
+		if err != nil {
+			return err
+		}
+		observed := cloneUpdateValue(old)
+
+		result, err := fn(old)
+		if err != nil {
+			return err
+		}
+		if result.Op == backenddb.UpdateSet && result.Value == nil {
+			return ErrValueNil
+		}
+		if result.Op != backenddb.UpdateNoop && result.Op != backenddb.UpdateSet && result.Op != backenddb.UpdateDelete {
+			return fmt.Errorf("treedb: unknown update op %d", result.Op)
+		}
+
+		unlock = db.lockUpdateKey(key)
+		latest, err := db.getForUpdate(key)
+		if err != nil {
+			unlock()
+			return err
+		}
+		if !sameUpdateValue(observed, latest) {
+			unlock()
+			continue
+		}
+
+		switch result.Op {
+		case backenddb.UpdateNoop:
+			unlock()
+			return nil
+		case backenddb.UpdateSet:
+			err = db.set(key, result.Value, syncWrite)
+			unlock()
+			return err
+		case backenddb.UpdateDelete:
+			err = db.delete(key, syncWrite)
+			unlock()
+			return err
+		default:
+			unlock()
+			return fmt.Errorf("treedb: unknown update op %d", result.Op)
+		}
+	}
+}
+
+func (db *DB) getForUpdate(key []byte) ([]byte, error) {
+	dst := make([]byte, 0)
+	old, err := db.GetAppend(key, dst)
+	if err == tree.ErrKeyNotFound {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return old[:len(old):len(old)], nil
+}
+
+func cloneUpdateValue(value []byte) []byte {
+	if value == nil {
+		return nil
+	}
+	return append([]byte{}, value...)
+}
+
+func sameUpdateValue(a, b []byte) bool {
+	if (a == nil) != (b == nil) {
+		return false
+	}
+	return bytes.Equal(a, b)
 }
 
 func (db *DB) flushAllMemtablesForSync(sync bool) error {
@@ -11598,8 +19506,9 @@ func (db *DB) setDirect(key, value []byte, sync bool) error {
 
 	if allowPointers {
 		dictID := uint64(0)
-		if db.valueLogDictTrain.TrainBytes > 0 {
-			id, err := db.currentDictID(context.Background())
+		class := db.valueLogDictClassForValue(value)
+		if db.dictStore != nil && (db.valueLogDictTrain.TrainBytes > 0 || db.dictClassMode() == vlogDictClassModeSplitOuterLeaf) {
+			id, err := db.currentDictIDForClass(context.Background(), class)
 			if err != nil {
 				db.writeMu.RUnlock()
 				return err
@@ -11657,9 +19566,21 @@ func (db *DB) setDirect(key, value []byte, sync bool) error {
 		if !db.memtableValueLogPointers {
 			memVal = value
 		}
-		shard.mem.SetEntry(key, memVal, ptr, node.FlagPointer)
+		if borrower, ok := shard.mem.(memtable.ValueBorrower); ok && len(memVal) > 0 {
+			owned := shard.appendOnlyDirectValueArena.alloc(len(memVal))
+			copy(owned, memVal)
+			borrower.SetEntryBorrowValue(key, owned, ptr, node.FlagPointer)
+		} else {
+			shard.mem.SetEntry(key, memVal, ptr, node.FlagPointer)
+		}
 	} else {
-		shard.mem.SetEntry(key, value, page.ValuePtr{}, node.FlagInline)
+		if borrower, ok := shard.mem.(memtable.ValueBorrower); ok && len(value) > 0 {
+			owned := shard.appendOnlyDirectValueArena.alloc(len(value))
+			copy(owned, value)
+			borrower.SetEntryBorrowValue(key, owned, page.ValuePtr{}, node.FlagInline)
+		} else {
+			shard.mem.SetEntry(key, value, page.ValuePtr{}, node.FlagInline)
+		}
 	}
 	shard.rng.add(key)
 	newBytes := shard.mem.Size()
@@ -11703,6 +19624,8 @@ func (db *DB) Delete(key []byte) error {
 		return ErrKeyEmpty
 	}
 	db.waitForCheckpoint()
+	unlock := db.lockUpdateKey(key)
+	defer unlock()
 	return db.delete(key, false)
 }
 
@@ -11952,7 +19875,7 @@ func (db *DB) DeleteRange(start, end []byte) error {
 		// currently have buffered in memory, just drop the in-memory state. This
 		// avoids iterator creation, merges, and per-key tombstones.
 		if coversAll && db.disableJournal && backendEmpty {
-			curMode := db.memtableMode
+			curMode := db.currentMemtableMode()
 			nextMode := curMode
 			if db.memtableAdaptive {
 				nextMode = db.applyAdaptiveMemtableModeLocked()
@@ -12014,7 +19937,7 @@ func (db *DB) DeleteRange(start, end []byte) error {
 		// backend. This avoids building large tombstone sets and avoids per-key
 		// copies into an intermediate slice.
 		if coversInMemory {
-			curMode := db.memtableMode
+			curMode := db.currentMemtableMode()
 			nextMode := curMode
 			if db.memtableAdaptive {
 				nextMode = db.applyAdaptiveMemtableModeLocked()
@@ -12077,7 +20000,7 @@ func (db *DB) DeleteRange(start, end []byte) error {
 		// first so we never mutate a memtable while iterating it.
 		if overlapsQuery(start, end, mutableRange) && db.mutableBytes.Load() > 0 {
 			if queryCoversRange(start, end, mutableRange) {
-				if err := db.resetMutableShardsLocked(db.memtableMode, true); err != nil {
+				if err := db.resetMutableShardsLocked(db.currentMemtableMode(), true); err != nil {
 					db.mu.Unlock()
 					return err
 				}
@@ -12315,7 +20238,16 @@ func (db *DB) DeleteSync(key []byte) error {
 		return ErrKeyEmpty
 	}
 	db.waitForCheckpoint()
+	unlock := db.lockUpdateKey(key)
+	defer unlock()
 	return db.delete(key, true)
+}
+
+func (db *DB) lockUpdateKey(key []byte) func() {
+	if db == nil {
+		return func() {}
+	}
+	return db.updateLocks.Lock(key)
 }
 
 func (db *DB) delete(key []byte, sync bool) error {
@@ -12418,6 +20350,8 @@ func (db *DB) canReuseWALSegments() bool {
 func (db *DB) rotateMemtableLockedWithCapacity(triggerFlush bool, newCapacity int) error {
 	var walPaths []string
 	var valueLogPaths []string
+	debugRotate := debugMemtableRotateOn()
+	retiredMems := make([]memtable.Table, 0, len(db.mutableShards))
 	if !db.disableJournal {
 		walPaths = db.currentWALPaths()
 	}
@@ -12434,26 +20368,49 @@ func (db *DB) rotateMemtableLockedWithCapacity(triggerFlush bool, newCapacity in
 		db.memtableWarmupActive = false
 		db.updateAdaptiveObservationLocked()
 	}
+	if debugRotate {
+		db.debugMemtableRotatef(
+			"event=start path=with_capacity trigger_flush=%t new_capacity=%d mode=%s mutable_bytes=%d queue_len=%d queue_backlog_bytes=%d",
+			triggerFlush,
+			newCapacity,
+			db.currentMemtableMode().String(),
+			db.mutableBytes.Load(),
+			len(db.queue),
+			db.queueBacklogBytes.Load(),
+		)
+	}
 	db.mutableBytes.Store(0)
 	enqueueNS := time.Now().UnixNano()
 	for i := range db.mutableShards {
 		shard := &db.mutableShards[i]
 		shard.mu.Lock()
 		oldMem := shard.mem
+		oldMode := ""
+		oldLen := oldMem.Len()
+		if debugRotate {
+			oldMode = debugMemtableModeLabel(oldMem)
+		}
+		oldShardBytes := shard.bytes
+		db.retainMutableShardAppendOnlyArenaLocked(i, shard)
 		oldMem.Freeze()
 		memBytes := oldMem.Size()
 		queueLaneID := db.laneForShardIndex(i)
-		db.queue = append(db.queue, oldMem)
-		db.queueShardIDs = append(db.queueShardIDs, uint16(i))
-		db.queueLaneIDs = append(db.queueLaneIDs, uint16(queueLaneID))
-		db.queueIDs = append(db.queueIDs, db.nextQueueID.Add(1))
-		db.queueEnqueueNS = append(db.queueEnqueueNS, enqueueNS)
-		db.queueBacklogBytes.Add(memBytes)
-		db.queueRanges = append(db.queueRanges, shard.rng)
-		db.queueWALPaths = append(db.queueWALPaths, walPaths)
-		db.queueValueLogPaths = append(db.queueValueLogPaths, valueLogPaths)
+		enqueueShard := memBytes > 0 || oldLen > 0
+		if enqueueShard {
+			db.queue = append(db.queue, oldMem)
+			db.queueShardIDs = append(db.queueShardIDs, uint16(i))
+			db.queueLaneIDs = append(db.queueLaneIDs, uint16(queueLaneID))
+			db.queueIDs = append(db.queueIDs, db.nextQueueID.Add(1))
+			db.queueEnqueueNS = append(db.queueEnqueueNS, enqueueNS)
+			db.queueBacklogBytes.Add(memBytes)
+			db.queueRanges = append(db.queueRanges, shard.rng)
+			db.queueWALPaths = append(db.queueWALPaths, walPaths)
+			db.queueValueLogPaths = append(db.queueValueLogPaths, valueLogPaths)
+		} else {
+			retiredMems = append(retiredMems, oldMem)
+		}
 
-		mt, err := db.newMutableMemtableWithCapacityMode(newCapacity, db.memtableMode)
+		mt, err := db.newMutableMemtableWithCapacityMode(newCapacity, db.currentMemtableMode())
 		if err != nil {
 			shard.mu.Unlock()
 			return err
@@ -12462,10 +20419,37 @@ func (db *DB) rotateMemtableLockedWithCapacity(triggerFlush bool, newCapacity in
 		db.promoteRootDomainMutableLocked(i, oldMem, mt)
 		shard.rng = keyRange{}
 		shard.bytes = 0
+		if debugRotate {
+			db.debugMemtableRotatef(
+				"event=shard path=with_capacity shard=%d lane=%d old_mode=%s old_len=%d old_size=%d old_bytes=%d new_mode=%s new_capacity=%d queue_len=%d queue_backlog_bytes=%d",
+				i,
+				queueLaneID,
+				oldMode,
+				oldLen,
+				memBytes,
+				oldShardBytes,
+				debugMemtableModeLabel(mt),
+				newCapacity,
+				len(db.queue),
+				db.queueBacklogBytes.Load(),
+			)
+		}
 		shard.mu.Unlock()
+	}
+	if len(retiredMems) > 0 {
+		db.pendingRetiredMems = append(db.pendingRetiredMems, retiredMems...)
 	}
 	db.updateMutableThresholdLocked()
 	db.publishMemtablesLocked()
+	if debugRotate {
+		db.debugMemtableRotatef(
+			"event=done path=with_capacity trigger_flush=%t queue_len=%d queue_backlog_bytes=%d mutable_threshold=%d",
+			triggerFlush,
+			len(db.queue),
+			db.queueBacklogBytes.Load(),
+			db.mutableFlushThreshold(),
+		)
+	}
 
 	// Optimization: Reuse WAL if small (e.g. < 10MB) to avoid syscall overhead
 	// on frequent rotations (e.g. caused by frequent Iterator creation).
@@ -12506,7 +20490,12 @@ func (db *DB) rotateMemtableLockedWithCapacity(triggerFlush bool, newCapacity in
 //
 // Caller must hold db.mu.
 func (db *DB) rotateMemtableLockedForIterator(newCapacity int) error {
-	return db.rotateMutableShardsLocked(newCapacity, false)
+	// Iterator snapshot rotation can be invoked repeatedly under read-heavy
+	// traffic. If we already have queued immutable shards, request a background
+	// flush so repeated snapshot rotations do not let queue depth grow
+	// unboundedly while still preserving snapshot semantics.
+	triggerFlush := len(db.queue) > 0
+	return db.rotateMutableShardsLocked(newCapacity, triggerFlush)
 }
 
 func (db *DB) rotateMemtableLocked(triggerFlush bool) error {
@@ -12541,6 +20530,8 @@ func (db *DB) maybeRotateMemtable(triggerFlush bool) error {
 // for establishing durable boundaries and trimming old segments. This avoids
 // requiring a global writer barrier around WAL rotation.
 func (db *DB) rotateMutableShardsLocked(newCapacity int, triggerFlush bool) error {
+	debugRotate := debugMemtableRotateOn()
+	retiredMems := make([]memtable.Table, 0, len(db.mutableShards))
 	if newCapacity < 0 {
 		newCapacity = db.memtableCap
 	}
@@ -12559,6 +20550,17 @@ func (db *DB) rotateMutableShardsLocked(newCapacity int, triggerFlush bool) erro
 	if db.valueLogEnabled() {
 		valueLogPaths = db.currentValueLogPaths()
 	}
+	if debugRotate {
+		db.debugMemtableRotatef(
+			"event=start path=mutable_shards trigger_flush=%t new_capacity=%d mode=%s mutable_bytes=%d queue_len=%d queue_backlog_bytes=%d",
+			triggerFlush,
+			newCapacity,
+			db.currentMemtableMode().String(),
+			db.mutableBytes.Load(),
+			len(db.queue),
+			db.queueBacklogBytes.Load(),
+		)
+	}
 
 	locked := make([]*memShard, 0, len(db.mutableShards))
 	defer func() {
@@ -12572,6 +20574,15 @@ func (db *DB) rotateMutableShardsLocked(newCapacity int, triggerFlush bool) erro
 		shard := &db.mutableShards[i]
 		shard.mu.Lock()
 		locked = append(locked, shard)
+		oldMode := ""
+		oldLen := shard.mem.Len()
+		if debugRotate {
+			oldMode = debugMemtableModeLabel(shard.mem)
+		}
+		if _, ok := shard.mem.(*memtable.AppendOnly); ok {
+			db.observeAppendOnlyMutableEntries(oldLen)
+		}
+		oldShardBytes := shard.bytes
 
 		// Remove this shard's contribution from the global byte counter before
 		// resetting it, since writers may still be updating other shards.
@@ -12581,20 +20592,26 @@ func (db *DB) rotateMutableShardsLocked(newCapacity int, triggerFlush bool) erro
 
 		// Freeze and enqueue the old mutable shard.
 		oldMem := shard.mem
+		db.retainMutableShardAppendOnlyArenaLocked(i, shard)
 		oldMem.Freeze()
 		memBytes := oldMem.Size()
 		queueLaneID := db.laneForShardIndex(i)
-		db.queue = append(db.queue, oldMem)
-		db.queueShardIDs = append(db.queueShardIDs, uint16(i))
-		db.queueLaneIDs = append(db.queueLaneIDs, uint16(queueLaneID))
-		db.queueIDs = append(db.queueIDs, db.nextQueueID.Add(1))
-		db.queueEnqueueNS = append(db.queueEnqueueNS, enqueueNS)
-		db.queueBacklogBytes.Add(memBytes)
-		db.queueRanges = append(db.queueRanges, shard.rng)
-		db.queueWALPaths = append(db.queueWALPaths, walPaths)
-		db.queueValueLogPaths = append(db.queueValueLogPaths, valueLogPaths)
+		enqueueShard := memBytes > 0 || oldLen > 0
+		if enqueueShard {
+			db.queue = append(db.queue, oldMem)
+			db.queueShardIDs = append(db.queueShardIDs, uint16(i))
+			db.queueLaneIDs = append(db.queueLaneIDs, uint16(queueLaneID))
+			db.queueIDs = append(db.queueIDs, db.nextQueueID.Add(1))
+			db.queueEnqueueNS = append(db.queueEnqueueNS, enqueueNS)
+			db.queueBacklogBytes.Add(memBytes)
+			db.queueRanges = append(db.queueRanges, shard.rng)
+			db.queueWALPaths = append(db.queueWALPaths, walPaths)
+			db.queueValueLogPaths = append(db.queueValueLogPaths, valueLogPaths)
+		} else {
+			retiredMems = append(retiredMems, oldMem)
+		}
 
-		mt, err := db.newMutableMemtableWithCapacityMode(newCapacity, db.memtableMode)
+		mt, err := db.newMutableMemtableWithCapacityMode(newCapacity, db.currentMemtableMode())
 		if err != nil {
 			return err
 		}
@@ -12602,10 +20619,37 @@ func (db *DB) rotateMutableShardsLocked(newCapacity int, triggerFlush bool) erro
 		db.promoteRootDomainMutableLocked(i, oldMem, mt)
 		shard.rng = keyRange{}
 		shard.bytes = 0
+		if debugRotate {
+			db.debugMemtableRotatef(
+				"event=shard path=mutable_shards shard=%d lane=%d old_mode=%s old_len=%d old_size=%d old_bytes=%d new_mode=%s new_capacity=%d queue_len=%d queue_backlog_bytes=%d",
+				i,
+				queueLaneID,
+				oldMode,
+				oldLen,
+				memBytes,
+				oldShardBytes,
+				debugMemtableModeLabel(mt),
+				newCapacity,
+				len(db.queue),
+				db.queueBacklogBytes.Load(),
+			)
+		}
+	}
+	if len(retiredMems) > 0 {
+		db.pendingRetiredMems = append(db.pendingRetiredMems, retiredMems...)
 	}
 
 	db.updateMutableThresholdLocked()
 	db.publishMemtablesLocked()
+	if debugRotate {
+		db.debugMemtableRotatef(
+			"event=done path=mutable_shards trigger_flush=%t queue_len=%d queue_backlog_bytes=%d mutable_threshold=%d",
+			triggerFlush,
+			len(db.queue),
+			db.queueBacklogBytes.Load(),
+			db.mutableFlushThreshold(),
+		)
+	}
 
 	if triggerFlush {
 		select {
@@ -12743,15 +20787,25 @@ func (db *DB) rotateValueLogLocked(l *lane) error {
 }
 
 func (db *DB) rotateValueLogMuHeld(l *lane) error {
-	nextSeq := l.vlogSeq + 1
+	return db.rotateValueLogMuHeldToSeq(l, l.vlogSeq+1)
+}
+
+func (db *DB) rotateValueLogMuHeldToSeq(l *lane, nextSeq int) error {
+	if l == nil {
+		return errWALUnavailable
+	}
+	if nextSeq <= l.vlogSeq {
+		return nil
+	}
 	oldSeq := l.vlogSeq
 	oldPath := l.vlogPath
+	oldLiveBytes := l.vlogLiveBytes.Load()
 	var (
 		closedPrev    int64
 		hadClosedPrev bool
 	)
 	name := valueLogName(l.id, nextSeq)
-	path := filepath.Join(db.dir, name)
+	path := filepath.Join(db.valueLogDirForLane(l), name)
 	fileID, err := valuelog.EncodeFileID(uint32(l.id), uint32(nextSeq))
 	if err != nil {
 		return err
@@ -12761,6 +20815,11 @@ func (db *DB) rotateValueLogMuHeld(l *lane) error {
 		oldSize := l.vlog.Size()
 		if err := l.vlog.RotateTo(path, fileID); err != nil {
 			return err
+		}
+		l.vlogRotateTotal.Add(1)
+		// Avoid counting an "idle rotation" when there was no previous segment.
+		if oldPath != "" && oldLiveBytes <= 0 {
+			l.vlogRotateIdleTotal.Add(1)
 		}
 		l.vlogSeq = nextSeq
 		l.vlog.SetDictFrameEncoderOptions(db.valueLogDictFrameEncodeLevel, db.valueLogDictFrameEnableEntropy)
@@ -12789,6 +20848,12 @@ func (db *DB) rotateValueLogMuHeld(l *lane) error {
 		w, err := valuelog.NewWriter(path, fileID)
 		if err != nil {
 			return err
+		}
+		// Segment creation is treated as a rotation from "no current segment" for observability.
+		l.vlogRotateTotal.Add(1)
+		// Avoid counting an "idle rotation" when there was no previous segment.
+		if oldPath != "" && oldLiveBytes <= 0 {
+			l.vlogRotateIdleTotal.Add(1)
 		}
 		w.SetDictFrameEncoderOptions(db.valueLogDictFrameEncodeLevel, db.valueLogDictFrameEnableEntropy)
 		l.vlogModeSet = false
@@ -12872,6 +20937,10 @@ func (db *DB) registerValueLogSegment(path string, fileID uint32) error {
 		if err := db.valueLogReader.RegisterSegment(path, fileID); err != nil {
 			return err
 		}
+		if err := db.valueLogReader.PromoteCurrentWritable(fileID); err != nil {
+			_ = db.valueLogReader.RemoveSegment(fileID)
+			return err
+		}
 	}
 	if registrar, ok := db.backend.(interface {
 		RegisterValueLogSegment(path string, fileID uint32) error
@@ -12930,10 +20999,13 @@ func (db *DB) untrackWALSegmentLocked(path string) {
 
 func (db *DB) untrackValueLogSegmentLocked(path string) {
 	laneID, _, _, ok := parseLogSeq(filepath.Base(path))
-	if !ok || laneID < 0 || laneID >= len(db.lanes) {
+	if !ok {
 		return
 	}
-	l := &db.lanes[laneID]
+	l := db.valueLogLaneByID(laneID)
+	if l == nil {
+		return
+	}
 	l.vlogMu.Lock()
 	defer l.vlogMu.Unlock()
 	if l.vlogClosedSizes == nil || path == "" {
@@ -13074,6 +21146,14 @@ func (db *DB) flushAllLocked(reqSync bool) {
 		}()
 	}
 	wg.Wait()
+	if !db.checkpointing.Load() {
+		db.mu.RLock()
+		queueEmpty := len(db.queue) == 0
+		db.mu.RUnlock()
+		if queueEmpty {
+			db.trimRetainedArenasAfterFlush(false)
+		}
+	}
 }
 
 func (db *DB) flushOne() bool {
@@ -13088,7 +21168,16 @@ func (db *DB) flushOne() bool {
 		db.flushLaneMu[laneID].Lock()
 		defer db.flushLaneMu[laneID].Unlock()
 	}
-	return db.flushLaneOnce(true, laneID)
+	flushed := db.flushLaneOnce(true, laneID)
+	if flushed && !db.checkpointing.Load() {
+		db.mu.RLock()
+		queueEmpty := len(db.queue) == 0
+		db.mu.RUnlock()
+		if queueEmpty {
+			db.trimRetainedArenasAfterFlush(false)
+		}
+	}
+	return flushed
 }
 
 const (
@@ -13431,14 +21520,10 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 		chunkBackend := totalLen > backendEntriesCap
 		emittedChunk := false
 
-		type ptrSetterView interface {
-			SetPointerView(key []byte, ptr page.ValuePtr) error
-		}
-		type ptrSetter interface {
-			SetPointer(key []byte, ptr page.ValuePtr) error
-		}
-		psv, _ := backendBatch.(ptrSetterView)
-		ps, _ := backendBatch.(ptrSetter)
+		sv, _ := backendBatch.(backendBatchSetViewer)
+		dv, _ := backendBatch.(backendBatchDeleteViewer)
+		psv, _ := backendBatch.(backendBatchPointerSetterView)
+		ps, _ := backendBatch.(backendBatchPointerSetter)
 		var single [1]batch.Entry
 
 		// Best-effort: ensure value-log bytes are flushed before we start committing
@@ -13471,8 +21556,10 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 			}
 			backendBatch = db.newBackendBatchWithSize(sizeHint)
 			reserveBackendBatchOps(backendBatch, reserveChunkOps)
-			psv, _ = backendBatch.(ptrSetterView)
-			ps, _ = backendBatch.(ptrSetter)
+			sv, _ = backendBatch.(backendBatchSetViewer)
+			dv, _ = backendBatch.(backendBatchDeleteViewer)
+			psv, _ = backendBatch.(backendBatchPointerSetterView)
+			ps, _ = backendBatch.(backendBatchPointerSetter)
 			backendPendingOps = 0
 			return nil
 		}
@@ -13493,6 +21580,8 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 			(&heap).down(i, len(heap))
 		}
 
+		shadowedOps := 0
+		appliedOps := 0
 		for len(heap) > 0 {
 			top := heap.pop()
 			currentKey := top.key
@@ -13501,6 +21590,7 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 				next := heap.peek()
 				if next != nil && bytes.Equal(next.key, currentKey) {
 					shadowed := heap.pop()
+					shadowedOps++
 					shadowed.iter.Next()
 					if shadowed.iter.Valid() {
 						shadowed.key = shadowed.iter.Key()
@@ -13518,7 +21608,11 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 			)
 			switch {
 			case entry.Type == batch.OpDelete:
-				err = backendBatch.Delete(entry.Key)
+				if dv != nil {
+					err = dv.DeleteView(entry.Key)
+				} else {
+					err = backendBatch.Delete(entry.Key)
+				}
 				applied = true
 			case entry.IsPtr:
 				if psv != nil {
@@ -13531,7 +21625,11 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 				}
 				applied = true
 			default:
-				err = backendBatch.Set(entry.Key, entry.Value)
+				if sv != nil {
+					err = sv.SetView(entry.Key, entry.Value)
+				} else {
+					err = backendBatch.Set(entry.Key, entry.Value)
+				}
 				applied = true
 			}
 			if err != nil {
@@ -13541,6 +21639,7 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 			}
 			if applied {
 				backendPendingOps++
+				appliedOps++
 				if err := flushBackendChunk(); err != nil {
 					db.reportError(err)
 					_ = backendBatch.Close()
@@ -13553,6 +21652,14 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 				top.key = top.iter.Key()
 				heap.push(top)
 			}
+		}
+		if shadowedOps > 0 {
+			flushMergeShadowedOpsTotal.Add(uint64(shadowedOps))
+			flushMergeParallelShadowedOpsTotal.Add(uint64(shadowedOps))
+		}
+		if appliedOps > 0 {
+			flushMergeAppliedOpsTotal.Add(uint64(appliedOps))
+			flushMergeParallelAppliedOpsTotal.Add(uint64(appliedOps))
 		}
 
 		if db.valueLogEnabled() {
@@ -13635,7 +21742,6 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 			}
 		}
 		db.mu.Unlock()
-
 		removed := false
 		for _, walPath := range deletable {
 			db.dropValueLogSegment(walPath)
@@ -13693,16 +21799,10 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 		}
 		backendPendingOps = pendingOps
 	} else {
-		type (
-			ptrSetter interface {
-				SetPointer(key []byte, ptr page.ValuePtr) error
-			}
-			ptrSetterView interface {
-				SetPointerView(key []byte, ptr page.ValuePtr) error
-			}
-		)
-		psv, _ := backendBatch.(ptrSetterView)
-		ps, _ := backendBatch.(ptrSetter)
+		sv, _ := backendBatch.(backendBatchSetViewer)
+		dv, _ := backendBatch.(backendBatchDeleteViewer)
+		psv, _ := backendBatch.(backendBatchPointerSetterView)
+		ps, _ := backendBatch.(backendBatchPointerSetter)
 		var single [1]batch.Entry
 
 		// Best-effort: ensure value-log bytes are flushed before we start committing
@@ -13737,18 +21837,27 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 			}
 			backendBatch = db.newBackendBatchWithSize(sizeHint)
 			reserveBackendBatchOps(backendBatch, reserveChunkOps)
-			psv, _ = backendBatch.(ptrSetterView)
-			ps, _ = backendBatch.(ptrSetter)
+			sv, _ = backendBatch.(backendBatchSetViewer)
+			dv, _ = backendBatch.(backendBatchDeleteViewer)
+			psv, _ = backendBatch.(backendBatchPointerSetterView)
+			ps, _ = backendBatch.(backendBatchPointerSetter)
 			backendPendingOps = 0
 			return nil
 		}
 		for _, unit := range units {
+			stableUnsafe := stableUnsafeIteratorSlices(unit.mem)
 			iter := unit.mem.NewIterator(nil, nil)
 			for iter.Valid() {
 				key := iter.UnsafeKey()
 				val, ptr, flags := iter.UnsafeEntry()
 				if flags&node.FlagTombstone != 0 {
-					if err := backendBatch.Delete(key); err != nil {
+					var err error
+					if stableUnsafe && dv != nil {
+						err = dv.DeleteView(key)
+					} else {
+						err = backendBatch.Delete(key)
+					}
+					if err != nil {
 						db.reportError(fmt.Errorf("cachingdb: flush failed (delete): %w", err))
 						_ = iter.Close()
 						_ = backendBatch.Close()
@@ -13762,7 +21871,7 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 						return false
 					}
 				} else if flags&node.FlagPointer != 0 {
-					if psv != nil {
+					if stableUnsafe && psv != nil {
 						if err := psv.SetPointerView(key, ptr); err != nil {
 							db.reportError(fmt.Errorf("cachingdb: flush failed (set ptr): %w", err))
 							_ = iter.Close()
@@ -13777,10 +21886,7 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 							return false
 						}
 					} else {
-						type ptrSetterLegacy interface {
-							SetPointer(key []byte, ptr page.ValuePtr) error
-						}
-						if psl, ok := backendBatch.(ptrSetterLegacy); ok {
+						if psl, ok := backendBatch.(backendBatchPointerSetter); ok {
 							if err := psl.SetPointer(key, ptr); err != nil {
 								db.reportError(fmt.Errorf("cachingdb: flush failed (set ptr): %w", err))
 								_ = iter.Close()
@@ -13788,7 +21894,11 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 								return false
 							}
 						} else {
-							single[0] = batch.Entry{Type: batch.OpPut, Key: key, ValuePtr: ptr, IsPtr: true}
+							entryKey := key
+							if !stableUnsafe {
+								entryKey = append([]byte(nil), key...)
+							}
+							single[0] = batch.Entry{Type: batch.OpPut, Key: entryKey, ValuePtr: ptr, IsPtr: true}
 							if err := backendBatch.SetOps(single[:]); err != nil {
 								db.reportError(fmt.Errorf("cachingdb: flush failed (setops ptr): %w", err))
 								_ = iter.Close()
@@ -13805,7 +21915,13 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 						return false
 					}
 				} else {
-					if err := backendBatch.Set(key, val); err != nil {
+					var err error
+					if stableUnsafe && sv != nil {
+						err = sv.SetView(key, val)
+					} else {
+						err = backendBatch.Set(key, val)
+					}
+					if err != nil {
 						db.reportError(fmt.Errorf("cachingdb: flush failed (set): %w", err))
 						_ = iter.Close()
 						_ = backendBatch.Close()
@@ -13916,7 +22032,6 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 		}
 	}
 	db.mu.Unlock()
-
 	removed := false
 	for _, walPath := range deletable {
 		db.dropValueLogSegment(walPath)
@@ -14072,24 +22187,10 @@ func (db *DB) flushOneLocked(sync bool) bool {
 			}
 
 			t0 := time.Now()
-			type (
-				setViewer interface {
-					SetView(key, value []byte) error
-				}
-				deleteViewer interface {
-					DeleteView(key []byte) error
-				}
-				ptrSetter interface {
-					SetPointer(key []byte, ptr page.ValuePtr) error
-				}
-				ptrSetterView interface {
-					SetPointerView(key []byte, ptr page.ValuePtr) error
-				}
-			)
-			sv, _ := backendBatch.(setViewer)
-			dv, _ := backendBatch.(deleteViewer)
-			psv, _ := backendBatch.(ptrSetterView)
-			ps, _ := backendBatch.(ptrSetter)
+			sv, _ := backendBatch.(backendBatchSetViewer)
+			dv, _ := backendBatch.(backendBatchDeleteViewer)
+			psv, _ := backendBatch.(backendBatchPointerSetterView)
+			ps, _ := backendBatch.(backendBatchPointerSetter)
 			var single [1]batch.Entry
 
 			flushBackendChunk := func() error {
@@ -14112,20 +22213,21 @@ func (db *DB) flushOneLocked(sync bool) bool {
 				}
 				backendBatch = db.newBackendBatchWithSize(sizeHint)
 				reserveBackendBatchOps(backendBatch, reserveChunkOps)
-				sv, _ = backendBatch.(setViewer)
-				dv, _ = backendBatch.(deleteViewer)
-				psv, _ = backendBatch.(ptrSetterView)
-				ps, _ = backendBatch.(ptrSetter)
+				sv, _ = backendBatch.(backendBatchSetViewer)
+				dv, _ = backendBatch.(backendBatchDeleteViewer)
+				psv, _ = backendBatch.(backendBatchPointerSetterView)
+				ps, _ = backendBatch.(backendBatchPointerSetter)
 				backendPendingOps = 0
 				return nil
 			}
 
+			stableUnsafe := stableUnsafeIteratorSlices(mem)
 			for iter.Valid() {
 				key := iter.UnsafeKey()
 				val, ptr, flags := iter.UnsafeEntry()
 				if flags&node.FlagTombstone != 0 {
 					var err error
-					if dv != nil {
+					if stableUnsafe && dv != nil {
 						err = dv.DeleteView(key)
 					} else {
 						err = backendBatch.Delete(key)
@@ -14144,7 +22246,7 @@ func (db *DB) flushOneLocked(sync bool) bool {
 						return false
 					}
 				} else if flags&node.FlagPointer != 0 {
-					if psv != nil {
+					if stableUnsafe && psv != nil {
 						if err := psv.SetPointerView(key, ptr); err != nil {
 							db.reportError(fmt.Errorf("cachingdb: flush failed (set ptr): %w", err))
 							_ = iter.Close()
@@ -14159,7 +22261,11 @@ func (db *DB) flushOneLocked(sync bool) bool {
 							return false
 						}
 					} else {
-						single[0] = batch.Entry{Type: batch.OpPut, Key: key, ValuePtr: ptr, IsPtr: true}
+						entryKey := key
+						if !stableUnsafe {
+							entryKey = append([]byte(nil), key...)
+						}
+						single[0] = batch.Entry{Type: batch.OpPut, Key: entryKey, ValuePtr: ptr, IsPtr: true}
 						if err := backendBatch.SetOps(single[:]); err != nil {
 							db.reportError(fmt.Errorf("cachingdb: flush failed (setops ptr): %w", err))
 							_ = iter.Close()
@@ -14176,7 +22282,7 @@ func (db *DB) flushOneLocked(sync bool) bool {
 					}
 				} else {
 					var err error
-					if sv != nil {
+					if stableUnsafe && sv != nil {
 						err = sv.SetView(key, val)
 					} else {
 						err = backendBatch.Set(key, val)
@@ -14756,7 +22862,7 @@ func (db *DB) GetManyParallelPlan(keyCount int) (workers int, parallel bool) {
 }
 
 func (db *DB) backendGetMany(keys [][]byte) ([][]byte, error) {
-	if err := db.flushDeferredValueLogForBackendRead(); err != nil {
+	if err := db.flushValueLogForBackendRead(); err != nil {
 		return nil, err
 	}
 	if mg, ok := db.backend.(backendManyGetter); ok {
@@ -14787,27 +22893,45 @@ func (db *DB) Get(key []byte) ([]byte, error) {
 		db.releaseMemtableView(view)
 	}
 	if bypass {
-		if err := db.flushDeferredValueLogForBackendRead(); err != nil {
+		if err := db.flushValueLogForBackendRead(); err != nil {
 			return nil, err
 		}
-		return db.backend.Get(key)
+		val, err := db.backend.Get(key)
+		if err == tree.ErrKeyNotFound {
+			return nil, nil
+		}
+		if err == nil && val != nil {
+			maybeRecordDBGetCallerSample(len(val))
+		}
+		return val, err
 	}
-	val, found, err := db.getMemtable(key)
+	scratch := getOwnedReadScratch()
+	defer putOwnedReadScratch(scratch)
+
+	val, found, err := db.getMemtableAppend(key, scratch.buf[:0])
 	if err != nil {
+		if err == tree.ErrKeyNotFound {
+			return nil, nil
+		}
 		return nil, err
 	}
 	if found {
-		if val == nil {
+		if len(val) == 0 {
 			return nil, nil
 		}
-		cpy := make([]byte, len(val))
-		copy(cpy, val)
-		return cpy, nil
+		return ownedReadResult(val, scratch), nil
 	}
-	if err := db.flushDeferredValueLogForBackendRead(); err != nil {
+	if err := db.flushValueLogForBackendRead(); err != nil {
 		return nil, err
 	}
-	return db.backend.Get(key)
+	val, err = db.backend.Get(key)
+	if err == tree.ErrKeyNotFound {
+		return nil, nil
+	}
+	if err == nil && val != nil {
+		maybeRecordDBGetCallerSample(len(val))
+	}
+	return val, err
 }
 
 // GetMany returns safe copies of values for keys.
@@ -14837,18 +22961,52 @@ func (db *DB) GetMany(keys [][]byte) ([][]byte, error) {
 	out := make([][]byte, len(keys))
 	backendIdx := make([]int, 0, len(keys))
 	backendKeys := make([][]byte, 0, len(keys))
+
+	// Copy all found values into a shared arena-style buffer to avoid one
+	// allocation per key. Each returned slice is capacity-capped to preserve
+	// safe-copy semantics.
+	//
+	// The cache layer may need to resolve value-log pointers for memtable hits;
+	// by using the append path, those decodes can write directly into this arena
+	// instead of allocating per key. The limit below bounds only the initial
+	// arena capacity; subsequent appends may still grow the backing array, so
+	// multiple underlying allocations may be retained.
+	const (
+		getManyValueGuessBytes         = 128
+		getManyMaxArenaInitialCapBytes = 1 << 20
+	)
+	arenaCap := len(keys) * getManyValueGuessBytes
+	if arenaCap < 0 {
+		arenaCap = 0
+	}
+	if arenaCap > getManyMaxArenaInitialCapBytes {
+		arenaCap = getManyMaxArenaInitialCapBytes
+	}
+	arena := make([]byte, 0, arenaCap)
+	emptyValue := []byte{}
 	for i, key := range keys {
-		val, found, err := db.getMemtable(key)
+		start := len(arena)
+		nextArena, found, err := db.getMemtableAppend(key, arena)
 		if err != nil {
-			return nil, err
+			if err == tree.ErrKeyNotFound {
+				// Tombstone in cache layers: treat as a missing key and do not fall
+				// through to backend.
+				if found {
+					continue
+				}
+			} else {
+				// Defensive: if getMemtableAppend ever returns errors with found=false,
+				// do not silently route those keys to backend reads.
+				return nil, err
+			}
 		}
 		if found {
-			if val == nil {
+			arena = nextArena
+			if len(arena) == start {
+				out[i] = emptyValue
 				continue
 			}
-			cpy := make([]byte, len(val))
-			copy(cpy, val)
-			out[i] = cpy
+			out[i] = arena[start:len(arena):len(arena)]
 			continue
 		}
 		backendIdx = append(backendIdx, i)
@@ -14884,7 +23042,7 @@ func (db *DB) GetAppend(key, dst []byte) ([]byte, error) {
 	}
 
 	// 2. Backend
-	if err := db.flushDeferredValueLogForBackendRead(); err != nil {
+	if err := db.flushValueLogForBackendRead(); err != nil {
 		return dst, err
 	}
 	return db.backend.GetAppend(key, dst)
@@ -14914,15 +23072,262 @@ func (db *DB) Has(key []byte) (bool, error) {
 	}
 }
 
+func (db *DB) maybeRunLeafGenerationPackMaintenance(runGC bool, quiet bool, admission leafGenerationPackMaintenanceAdmission, opts vlogGenerationMaintenanceOptions) (attempted bool, ran bool, err error) {
+	if db == nil || db.closing.Load() {
+		return false, false, nil
+	}
+	if !envBool(envEnableLeafGenerationPackMaintenance) {
+		return false, false, nil
+	}
+	if !db.indexOuterLeavesInValueLog {
+		return false, false, nil
+	}
+	if runGC || opts.bypassQuiet {
+		return false, false, nil
+	}
+	if !quiet && !admission.allowed {
+		db.observeVlogGenerationLeafPackAdmissionSkip(admission.reason)
+		return false, false, nil
+	}
+	runner, ok := db.backend.(backendLeafGenerationPackRunner)
+	if !ok {
+		return false, false, nil
+	}
+	gcRunner, _ := db.backend.(backendLeafGenerationGCRunner)
+	lastRunNS := db.vlogGenerationLeafPackLastUnixNano.Load()
+	if lastRunNS > 0 {
+		if since := time.Since(time.Unix(0, lastRunNS)); since >= 0 && since < leafGenerationPackMaintenanceMinInterval {
+			db.vlogGenerationLeafPackSkipMinInterval.Add(1)
+			db.storeVlogGenerationLeafPackLastSkipReason("min_interval")
+			return false, false, nil
+		}
+	}
+
+	maxGenerations := int(envUint64(envLeafGenerationPackMaintenanceMaxGenerations, leafGenerationPackMaintenanceDefaultMaxGenerations))
+	if maxGenerations <= 0 {
+		maxGenerations = leafGenerationPackMaintenanceDefaultMaxGenerations
+	}
+	maxBytesToCopy := int64(envUint64(envLeafGenerationPackMaintenanceMaxBytesToCopy, leafGenerationPackMaintenanceDefaultMaxBytesToCopy))
+	if maxBytesToCopy <= 0 {
+		maxBytesToCopy = leafGenerationPackMaintenanceDefaultMaxBytesToCopy
+	}
+	minPublishedAgeCommits := envUint64(envLeafGenerationPackMaintenanceMinPublishedAgeSeq, leafGenerationPackMaintenanceDefaultMinPublishedAgeSeq)
+	minCandidateGenerations := loadPositiveIntEnvDefault(envLeafGenerationPackMaintenanceMinCandidateGenerations, leafGenerationPackMaintenanceDefaultMinCandidateGenerations)
+	minReclaimPerByteCopiedPPM := leafGenerationPackMaintenanceMinReclaimPerByteCopiedPPM()
+	timeout := leafGenerationPackMaintenanceTimeout()
+
+	db.vlogGenerationLeafPackAttempts.Add(1)
+	db.vlogGenerationLeafPackAdmitted.Add(1)
+	attempted = true
+	db.vlogGenerationLastReason.Store(vlogGenerationReasonLeafPack)
+	db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerRunning)
+	db.vlogGenerationLeafPackGCLastEligibleGenerations.Store(0)
+	db.vlogGenerationLeafPackGCLastDeletedGenerations.Store(0)
+	db.vlogGenerationLeafPackGCLastDeletedFiles.Store(0)
+	db.vlogGenerationLeafPackGCLastDeletedBytes.Store(0)
+	db.vlogGenerationLeafPackLastReclaimedBytes.Store(0)
+
+	var (
+		lastStats                  backenddb.LeafGenerationPackRunOnceStats
+		totalRuns                  int
+		totalSelectedGenerations   int
+		totalSelectedBytesToCopy   int64
+		totalExpectedReclaimBytes  int64
+		totalBytesCopied           int64
+		totalWallNanos             int64
+		totalGCEligibleGenerations int
+		totalGCDeletedGenerations  int
+		totalGCDeletedFiles        int
+		totalGCDeletedBytes        int64
+		totalReclaimedBytes        int64
+	)
+	err = db.runWithBackendMaintenanceOptions(backendMaintenanceOptions{
+		skipCheckpoint:        opts.skipCheckpoint,
+		skipRetainedPruneWait: opts.skipRetainedPruneWait,
+	}, func() error {
+		ctx, cancel := db.leafGenerationPackMaintenanceContext(timeout)
+		defer cancel()
+
+		remainingGenerations := maxGenerations
+		remainingBytesToCopy := maxBytesToCopy
+		for remainingGenerations > 0 && remainingBytesToCopy > 0 {
+			stats, runErr := runner.LeafGenerationPackRunOnce(ctx, backenddb.LeafGenerationPackFromPlanOptions{
+				// Pack maintenance runs GC immediately after successful pack runs.
+				// Keep pack writes durable before GC can retire older generations.
+				Sync:                       true,
+				MinPublishedAgeCommits:     minPublishedAgeCommits,
+				MinCandidateGenerations:    minCandidateGenerations,
+				MinReclaimPerByteCopiedPPM: minReclaimPerByteCopiedPPM,
+				MaxGenerations:             remainingGenerations,
+				MaxBytesToCopy:             remainingBytesToCopy,
+				ReserveRIDs:                db.ReserveValueLogRIDs,
+			})
+			if runErr != nil {
+				return runErr
+			}
+			lastStats = stats
+
+			lastWallNanos := stats.Pack.WallTimeNanos
+			if lastWallNanos < 0 {
+				lastWallNanos = 0
+			}
+			db.vlogGenerationLeafPackLastWallNanos.Store(uint64(lastWallNanos))
+			db.vlogGenerationLeafPackLastExpectedReclaimBytes.Store(stats.Selection.ExpectedReclaimBytes)
+			db.vlogGenerationLeafPackLastExpectedReclaimPerByteCopiedPPM.Store(int64(stats.Selection.ExpectedReclaimPerByteCopiedPPM))
+			db.vlogGenerationLeafPackLastSelectionBytesToCopy.Store(stats.Selection.BytesToCopy)
+			db.vlogGenerationLeafPackLastSelectionBytesDead.Store(stats.Selection.BytesDead)
+			db.vlogGenerationLeafPackLastSelectionGenerations.Store(int64(len(stats.Selection.GenerationIDs)))
+			db.vlogGenerationLeafPackLastBytesCopied.Store(stats.Pack.BytesCopied)
+
+			if stats.Selection.ExpectedReclaimBytes > 0 {
+				db.vlogGenerationLeafPackExpectedReclaimBytes.Add(uint64(stats.Selection.ExpectedReclaimBytes))
+			}
+			if stats.Selection.ExpectedReclaimPerByteCopiedPPM > 0 {
+				db.vlogGenerationLeafPackExpectedReclaimPerByteCopiedPPM.Add(uint64(stats.Selection.ExpectedReclaimPerByteCopiedPPM))
+			}
+			if stats.Selection.BytesToCopy > 0 {
+				db.vlogGenerationLeafPackSelectionBytesToCopy.Add(uint64(stats.Selection.BytesToCopy))
+			}
+			if stats.Selection.BytesDead > 0 {
+				db.vlogGenerationLeafPackSelectionBytesDead.Add(uint64(stats.Selection.BytesDead))
+			}
+			if len(stats.Selection.GenerationIDs) > 0 {
+				db.vlogGenerationLeafPackSelectionGenerations.Add(uint64(len(stats.Selection.GenerationIDs)))
+			}
+			if !stats.Ran {
+				if !ran {
+					db.storeVlogGenerationLeafPackLastSkipReason(stats.SkipReason)
+				}
+				return nil
+			}
+			if len(stats.Selection.GenerationIDs) == 0 {
+				return fmt.Errorf("leaf generation pack maintenance: successful run selected no generations")
+			}
+
+			ran = true
+			totalRuns++
+			totalSelectedGenerations += len(stats.Selection.GenerationIDs)
+			totalSelectedBytesToCopy += stats.Selection.BytesToCopy
+			totalExpectedReclaimBytes += stats.Selection.ExpectedReclaimBytes
+			totalBytesCopied += stats.Pack.BytesCopied
+			totalWallNanos += lastWallNanos
+			db.vlogGenerationLeafPackRuns.Add(1)
+			if stats.Pack.BytesCopied > 0 {
+				db.vlogGenerationLeafPackBytesCopied.Add(uint64(stats.Pack.BytesCopied))
+			}
+			db.vlogGenerationLeafPackLastUnixNano.Store(time.Now().UnixNano())
+			db.storeVlogGenerationLeafPackLastSkipReason("")
+
+			if gcRunner != nil {
+				gcStats, gcErr := gcRunner.LeafGenerationGC(ctx, backenddb.LeafGenerationGCOptions{})
+				if gcErr != nil {
+					return gcErr
+				}
+				db.vlogGenerationLeafPackGCRuns.Add(1)
+				if gcStats.GenerationsEligible > 0 {
+					db.vlogGenerationLeafPackGCEligibleGenerations.Add(uint64(gcStats.GenerationsEligible))
+				}
+				if gcStats.GenerationsDeleted > 0 {
+					db.vlogGenerationLeafPackGCDeletedGenerations.Add(uint64(gcStats.GenerationsDeleted))
+				}
+				if gcStats.FilesDeleted > 0 {
+					db.vlogGenerationLeafPackGCDeletedFiles.Add(uint64(gcStats.FilesDeleted))
+				}
+				if gcStats.BytesDeleted > 0 {
+					db.vlogGenerationLeafPackGCDeletedBytes.Add(uint64(gcStats.BytesDeleted))
+				}
+				db.vlogGenerationLeafPackGCLastEligibleGenerations.Store(int64(gcStats.GenerationsEligible))
+				db.vlogGenerationLeafPackGCLastDeletedGenerations.Store(int64(gcStats.GenerationsDeleted))
+				db.vlogGenerationLeafPackGCLastDeletedFiles.Store(int64(gcStats.FilesDeleted))
+				db.vlogGenerationLeafPackGCLastDeletedBytes.Store(gcStats.BytesDeleted)
+				totalGCEligibleGenerations += gcStats.GenerationsEligible
+				totalGCDeletedGenerations += gcStats.GenerationsDeleted
+				totalGCDeletedFiles += gcStats.FilesDeleted
+				totalGCDeletedBytes += gcStats.BytesDeleted
+
+				// Attribute pack-window yield to the selected generations rather than
+				// the whole GC pass. A GC sweep can delete bytes from unrelated delayed
+				// generations, so whole-pass deleted bytes are not a stable per-window
+				// reclaim signal.
+				windowReclaimedBytes := stats.Selection.ExpectedReclaimBytes
+				if windowReclaimedBytes < 0 {
+					windowReclaimedBytes = 0
+				}
+				if windowReclaimedBytes > 0 {
+					db.vlogGenerationLeafPackReclaimedBytes.Add(uint64(windowReclaimedBytes))
+				}
+				db.vlogGenerationLeafPackLastReclaimedBytes.Store(windowReclaimedBytes)
+				totalReclaimedBytes += windowReclaimedBytes
+
+				if minReclaimPerByteCopiedPPM > 0 && stats.Pack.BytesCopied > 0 {
+					windowReclaimPPM := leafGenerationPackReclaimPerByteCopiedPPM(windowReclaimedBytes, stats.Pack.BytesCopied)
+					if windowReclaimPPM < int64(minReclaimPerByteCopiedPPM) {
+						db.vlogGenerationLeafPackStopLowYield.Add(1)
+						return nil
+					}
+				}
+			}
+
+			remainingGenerations -= len(stats.Selection.GenerationIDs)
+			if stats.Selection.BytesToCopy > 0 {
+				remainingBytesToCopy -= stats.Selection.BytesToCopy
+			} else if stats.Pack.BytesCopied > 0 {
+				remainingBytesToCopy -= stats.Pack.BytesCopied
+			} else {
+				return nil
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return attempted, false, fmt.Errorf("leaf generation pack maintenance: %w", err)
+	}
+
+	if ran {
+		db.debugVlogMaintf(
+			"leaf_pack_done runs=%d generations=%d bytes_to_copy=%d expected_reclaim_bytes=%d bytes_copied=%d gc_eligible=%d gc_deleted=%d gc_deleted_bytes=%d gc_files_deleted=%d attributed_reclaim_bytes=%d attributed_reclaim_per_copy_ppm=%d wall_ms=%.3f",
+			totalRuns,
+			totalSelectedGenerations,
+			totalSelectedBytesToCopy,
+			totalExpectedReclaimBytes,
+			totalBytesCopied,
+			totalGCEligibleGenerations,
+			totalGCDeletedGenerations,
+			totalGCDeletedBytes,
+			totalGCDeletedFiles,
+			totalReclaimedBytes,
+			leafGenerationPackReclaimPerByteCopiedPPM(totalReclaimedBytes, totalBytesCopied),
+			float64(totalWallNanos)/float64(time.Millisecond),
+		)
+		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
+		return attempted, true, nil
+	}
+
+	db.vlogGenerationLeafPackSkips.Add(1)
+	db.debugVlogMaintf(
+		"leaf_pack_skip reason=%s generations=%d bytes_to_copy=%d expected_reclaim_bytes=%d",
+		lastStats.SkipReason,
+		len(lastStats.Selection.GenerationIDs),
+		lastStats.Selection.BytesToCopy,
+		lastStats.Selection.ExpectedReclaimBytes,
+	)
+	db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
+	return attempted, false, nil
+}
+
 func (db *DB) Stats() map[string]string {
 	stats := db.backend.Stats()
 	if stats == nil {
 		stats = make(map[string]string)
 	}
+	backendVlogMmap := backendVlogMmapStatsSnapshot(stats)
+	stats["treedb.process.identity.wal_dir"] = db.dir
+	db.sampleProcessMemoryPeaks(backendVlogMmap)
 	db.mu.RLock()
 	queueLen := len(db.queue)
 	flushThreshold := db.flushThreshold
-	memtableMode := db.memtableMode
+	mutableThresholdBase := db.mutableThreshold.Load()
+	memtableMode := db.currentMemtableMode()
 	memtableAdaptive := db.memtableAdaptive
 	memtableWarmupActive := db.memtableWarmupActive
 	maxQueued := db.maxQueuedMemtables
@@ -14938,6 +23343,25 @@ func (db *DB) Stats() map[string]string {
 		}
 	}
 	db.mu.RUnlock()
+	var mutableTables []memtable.Table
+	var queueTables []memtable.Table
+	if view := db.retainMemtableViewUntracked(); view != nil {
+		mutableTables = append(mutableTables, view.mutables...)
+		queueTables = append(queueTables, view.queue...)
+		db.releaseMemtableViewRef(view, false)
+	} else {
+		db.mu.RLock()
+		if len(db.mutableShards) > 0 {
+			mutableTables = make([]memtable.Table, len(db.mutableShards))
+			for i := range db.mutableShards {
+				mutableTables[i] = db.mutableShards[i].mem
+			}
+		}
+		queueTables = append(queueTables, db.queue...)
+		db.mu.RUnlock()
+	}
+	mutableResidency := summarizeMemtableResidency(mutableTables)
+	queueResidency := summarizeMemtableResidency(queueTables)
 	var walCurrentBytes int64
 	var walClosedBytes int64
 	var queueLagBuckets [vlogQueueLagBucketCount]uint64
@@ -14957,6 +23381,12 @@ func (db *DB) Stats() map[string]string {
 	var rawWriteSyscalls uint64
 	var rawWriteBytes uint64
 	var rawWriteCalls uint64
+	var vlogShapeSegmentsTotal int64
+	var vlogShapeBytesTotal int64
+	var vlogShapeL0Segments int64
+	var vlogShapeL0Bytes int64
+	splitValueLog := db.splitValueLogEnabled()
+	valueLogOn := db.valueLogEnabled()
 	for i := range db.lanes {
 		l := &db.lanes[i]
 		walCurrentBytes += l.walLiveBytes.Load()
@@ -14982,9 +23412,56 @@ func (db *DB) Stats() map[string]string {
 		if depthSnap.PositiveRunMaxNs > queueDepthPositiveRunMaxNs {
 			queueDepthPositiveRunMaxNs = depthSnap.PositiveRunMaxNs
 		}
+		var (
+			vlogWriter  valueWriter
+			vlogPath    string
+			closedSegs  int
+			rotTotal    uint64
+			rotIdle     uint64
+			hasCurrent  bool
+			laneID      = l.id
+			liveBytes   = l.vlogLiveBytes.Load()
+			closedBytes = l.vlogClosedBytes.Load()
+		)
 		l.vlogMu.Lock()
-		vlogWriter := l.vlog
+		vlogWriter = l.vlog
+		vlogPath = l.vlogPath
+		if l.vlogClosedSizes != nil {
+			closedSegs = len(l.vlogClosedSizes)
+		}
+		rotTotal = l.vlogRotateTotal.Load()
+		rotIdle = l.vlogRotateIdleTotal.Load()
 		l.vlogMu.Unlock()
+		hasCurrent = vlogPath != ""
+
+		if splitValueLog && valueLogOn {
+			segs := closedSegs
+			if hasCurrent {
+				segs++
+			}
+			bytes := closedBytes + liveBytes
+			if bytes < 0 {
+				bytes = 0
+			}
+			vlogShapeSegmentsTotal += int64(segs)
+			vlogShapeBytesTotal += bytes
+			if laneID == 0 {
+				vlogShapeL0Segments = int64(segs)
+				vlogShapeL0Bytes = bytes
+			}
+			stats[fmt.Sprintf("treedb.cache.vlog_shape.lane.%d.segments_total", laneID)] = fmt.Sprintf("%d", segs)
+			stats[fmt.Sprintf("treedb.cache.vlog_shape.lane.%d.segments_closed", laneID)] = fmt.Sprintf("%d", closedSegs)
+			if hasCurrent {
+				stats[fmt.Sprintf("treedb.cache.vlog_shape.lane.%d.segment_current", laneID)] = "1"
+			} else {
+				stats[fmt.Sprintf("treedb.cache.vlog_shape.lane.%d.segment_current", laneID)] = "0"
+			}
+			stats[fmt.Sprintf("treedb.cache.vlog_shape.lane.%d.bytes_total", laneID)] = fmt.Sprintf("%d", bytes)
+			stats[fmt.Sprintf("treedb.cache.vlog_shape.lane.%d.bytes_closed", laneID)] = fmt.Sprintf("%d", closedBytes)
+			stats[fmt.Sprintf("treedb.cache.vlog_shape.lane.%d.bytes_live", laneID)] = fmt.Sprintf("%d", liveBytes)
+			stats[fmt.Sprintf("treedb.cache.vlog_shape.lane.%d.rotations_total", laneID)] = fmt.Sprintf("%d", rotTotal)
+			stats[fmt.Sprintf("treedb.cache.vlog_shape.lane.%d.rotations_idle_total", laneID)] = fmt.Sprintf("%d", rotIdle)
+		}
 		if snapper, ok := any(vlogWriter).(interface {
 			RawWritevStats() valuelog.RawWritevStats
 		}); ok {
@@ -15018,10 +23495,23 @@ func (db *DB) Stats() map[string]string {
 		stats[fmt.Sprintf("treedb.cache.vlog_queue.lane.%d.lag_p99_ms", i)] = fmt.Sprintf("%.3f", float64(laneLagP99)/float64(time.Millisecond))
 		stats[fmt.Sprintf("treedb.cache.vlog_queue.lane.%d.lag_p999_ms", i)] = fmt.Sprintf("%.3f", float64(laneLagP999)/float64(time.Millisecond))
 	}
+	if splitValueLog && valueLogOn {
+		stats["treedb.cache.vlog_shape.segments_total"] = fmt.Sprintf("%d", vlogShapeSegmentsTotal)
+		stats["treedb.cache.vlog_shape.bytes_total"] = fmt.Sprintf("%d", vlogShapeBytesTotal)
+		stats["treedb.cache.vlog_shape.l0.segments_total"] = fmt.Sprintf("%d", vlogShapeL0Segments)
+		stats["treedb.cache.vlog_shape.l0.bytes_total"] = fmt.Sprintf("%d", vlogShapeL0Bytes)
+	} else {
+		stats["treedb.cache.vlog_shape.segments_total"] = "0"
+		stats["treedb.cache.vlog_shape.bytes_total"] = "0"
+		stats["treedb.cache.vlog_shape.l0.segments_total"] = "0"
+		stats["treedb.cache.vlog_shape.l0.bytes_total"] = "0"
+	}
 
 	stats["treedb.cache.queue_len"] = fmt.Sprintf("%d", queueLen)
 	stats["treedb.cache.mutable_bytes"] = fmt.Sprintf("%d", db.mutableBytes.Load())
 	stats["treedb.cache.flush_threshold_bytes"] = fmt.Sprintf("%d", flushThreshold)
+	stats["treedb.cache.mutable_flush_threshold_base_bytes"] = fmt.Sprintf("%d", mutableThresholdBase)
+	stats["treedb.cache.mutable_flush_threshold_effective_bytes"] = fmt.Sprintf("%d", db.mutableFlushThreshold())
 	stats["treedb.cache.checkpoint.runs"] = fmt.Sprintf("%d", db.checkpointRuns.Load())
 	stats["treedb.cache.checkpoint.total_ms"] = fmt.Sprintf("%.3f", float64(db.checkpointTotalNs.Load())/float64(time.Millisecond))
 	stats["treedb.cache.checkpoint.max_ms"] = fmt.Sprintf("%.3f", float64(db.checkpointMaxNs.Load())/float64(time.Millisecond))
@@ -15038,11 +23528,24 @@ func (db *DB) Stats() map[string]string {
 	} else {
 		stats["treedb.cache.memtable_mode_config"] = "fixed"
 	}
+	addMemtableResidencyStats(stats, "treedb.cache.memtable_residency.mutable", mutableResidency)
+	addMemtableResidencyStats(stats, "treedb.cache.memtable_residency.queue", queueResidency)
+	addMemtableResidencyStats(stats, "treedb.process.memtable_residency.mutable", mutableResidency)
+	addMemtableResidencyStats(stats, "treedb.process.memtable_residency.queue", queueResidency)
 	memWrites := db.memtableStats.writes.Load()
 	memSeqWrites := db.memtableStats.seqWrites.Load()
 	memOverwriteWrites := db.memtableStats.overwriteWrites.Load()
 	memIters := db.memtableStats.iterators.Load()
 	memRangeIters := db.memtableStats.rangeIters.Load()
+	memAdaptiveDecisionTotal := db.memtableAdaptiveDecisionTotal.Load()
+	memAdaptiveDecisionReason := db.memtableAdaptiveDecisionReason.Load()
+	memAdaptiveDecisionMode := db.memtableAdaptiveDecisionMode.Load()
+	memAdaptiveDecisionWrites := db.memtableAdaptiveDecisionWrites.Load()
+	memAdaptiveDecisionSeqWrites := db.memtableAdaptiveDecisionSeqWrites.Load()
+	memAdaptiveDecisionOverwriteWrites := db.memtableAdaptiveDecisionOverwriteWrites.Load()
+	memAdaptiveDecisionIters := db.memtableAdaptiveDecisionIters.Load()
+	memAdaptiveDecisionRangeIters := db.memtableAdaptiveDecisionRangeIters.Load()
+	memAdaptiveDecisionRangePctPPM := db.memtableAdaptiveDecisionRangePctPPM.Load()
 	memViewRetainTotal := db.memtableViewTelemetry.retainTotal.Load()
 	memViewReleaseTotal := db.memtableViewTelemetry.releaseTotal.Load()
 	memViewLeasesInFlight := db.memtableViewTelemetry.leasesInFlight.Load()
@@ -15053,6 +23556,9 @@ func (db *DB) Stats() map[string]string {
 	memViewDeferredMemtablesCurrent := db.memtableViewTelemetry.deferredMemtablesCurrent.Load()
 	memViewDeferredMemtablesMax := db.memtableViewTelemetry.deferredMemtablesMax.Load()
 	memViewDeferredMemtablesTotal := db.memtableViewTelemetry.deferredMemtablesTotal.Load()
+	memViewDeferredBytesCurrent := db.memtableViewTelemetry.deferredBytesCurrent.Load()
+	memViewDeferredBytesMax := db.memtableViewTelemetry.deferredBytesMax.Load()
+	memViewDeferredBytesTotal := db.memtableViewTelemetry.deferredBytesTotal.Load()
 	memViewOldestDeferredUnixNano := db.memtableViewTelemetry.oldestDeferredUnixNano.Load()
 	memViewOldestDeferredAgeMS := 0.0
 	if memViewOldestDeferredUnixNano > 0 {
@@ -15073,6 +23579,21 @@ func (db *DB) Stats() map[string]string {
 		stats["treedb.cache.memtable_stats.range_iter_pct"] = fmt.Sprintf("%.4f", float64(memRangeIters)/float64(memIters))
 	}
 	db.rootDomainProbeStats.appendStats(stats)
+	stats["treedb.cache.memtable_adaptive.btree_min_iterator_samples_effective"] = fmt.Sprintf("%d", db.adaptiveBTreeMinIteratorSamples())
+	stats["treedb.cache.memtable_adaptive.decision_total"] = fmt.Sprintf("%d", memAdaptiveDecisionTotal)
+	stats["treedb.cache.memtable_adaptive.last_reason"] = adaptiveDecisionReasonString(memAdaptiveDecisionReason)
+	stats["treedb.cache.memtable_adaptive.last_mode"] = memtable.Mode(memAdaptiveDecisionMode).String()
+	stats["treedb.cache.memtable_adaptive.last_writes"] = fmt.Sprintf("%d", memAdaptiveDecisionWrites)
+	stats["treedb.cache.memtable_adaptive.last_seq_writes"] = fmt.Sprintf("%d", memAdaptiveDecisionSeqWrites)
+	stats["treedb.cache.memtable_adaptive.last_overwrite_writes"] = fmt.Sprintf("%d", memAdaptiveDecisionOverwriteWrites)
+	stats["treedb.cache.memtable_adaptive.last_iterators"] = fmt.Sprintf("%d", memAdaptiveDecisionIters)
+	stats["treedb.cache.memtable_adaptive.last_range_iterators"] = fmt.Sprintf("%d", memAdaptiveDecisionRangeIters)
+	stats["treedb.cache.memtable_adaptive.last_range_iter_pct"] = fmt.Sprintf("%.4f", float64(memAdaptiveDecisionRangePctPPM)/1_000_000.0)
+	stats["treedb.cache.memtable_adaptive.reason_low_data_total"] = fmt.Sprintf("%d", db.memtableAdaptiveDecisionLowDataTotal.Load())
+	stats["treedb.cache.memtable_adaptive.reason_btree_range_total"] = fmt.Sprintf("%d", db.memtableAdaptiveDecisionBTreeTotal.Load())
+	stats["treedb.cache.memtable_adaptive.reason_btree_blocked_min_iters_total"] = fmt.Sprintf("%d", db.memtableAdaptiveDecisionBTreeBlockedMinItersTotal.Load())
+	stats["treedb.cache.memtable_adaptive.reason_append_sequential_total"] = fmt.Sprintf("%d", db.memtableAdaptiveDecisionAppendTotal.Load())
+	stats["treedb.cache.memtable_adaptive.reason_hash_mixed_total"] = fmt.Sprintf("%d", db.memtableAdaptiveDecisionHashTotal.Load())
 	stats["treedb.cache.memtable_view.retain_total"] = fmt.Sprintf("%d", memViewRetainTotal)
 	stats["treedb.cache.memtable_view.release_total"] = fmt.Sprintf("%d", memViewReleaseTotal)
 	stats["treedb.cache.memtable_view.leases_inflight"] = fmt.Sprintf("%d", memViewLeasesInFlight)
@@ -15083,29 +23604,385 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.memtable_view.deferred_memtables_current"] = fmt.Sprintf("%d", memViewDeferredMemtablesCurrent)
 	stats["treedb.cache.memtable_view.deferred_memtables_max"] = fmt.Sprintf("%d", memViewDeferredMemtablesMax)
 	stats["treedb.cache.memtable_view.deferred_memtables_total"] = fmt.Sprintf("%d", memViewDeferredMemtablesTotal)
+	stats["treedb.cache.memtable_view.deferred_bytes_current"] = fmt.Sprintf("%d", memViewDeferredBytesCurrent)
+	stats["treedb.cache.memtable_view.deferred_bytes_max"] = fmt.Sprintf("%d", memViewDeferredBytesMax)
+	stats["treedb.cache.memtable_view.deferred_bytes_total"] = fmt.Sprintf("%d", memViewDeferredBytesTotal)
 	stats["treedb.cache.memtable_view.deferred_oldest_age_ms"] = fmt.Sprintf("%.3f", memViewOldestDeferredAgeMS)
 	stats["treedb.cache.memtable_warmup_active"] = fmt.Sprintf("%t", memtableWarmupActive)
 	stats["treedb.cache.max_queued_memtables"] = fmt.Sprintf("%d", maxQueued)
+	poolPressure := currentPoolPressureSnapshot()
+	arenaBaseBudget := currentBatchArenaPoolBudgetBytes()
+	arenaEffectiveBudget := scalePoolBudgetForPressure(arenaBaseBudget, poolPressure.level)
+	entrySliceBaseBudget := entrySlicePoolBudgetBytes
+	entrySliceEffectiveBudget := scalePoolBudgetForPressure(entrySliceBaseBudget, poolPressure.level)
 	arenaPoolBytes := batchArenaPoolBytes.Load()
+	arenaPoolBytesMax := batchArenaPoolBytesMaxGlobal.Load()
+	arenaInFlightBytes := batchArenaInFlightBytes.Load()
+	arenaInFlightBytesMax := batchArenaInFlightBytesMaxGlobal.Load()
 	arenaLeasedBytes := db.batchArenaLeaseBytes.Load()
-	arenaPoolBudget := fmt.Sprintf("%d", currentBatchArenaPoolBudgetBytes())
+	arenaGlobalLeasedBytes := batchArenaLeasedBytesGlobal.Load()
+	arenaGlobalLeasedBytesMax := batchArenaLeasedBytesMaxGlobal.Load()
+	arenaRetainedHardCapBytes := currentBatchArenaRetainedHardCapBytes()
+	arenaRetainedHardCapEffectiveBytes := db.currentBatchArenaRetainedHardCapEffectiveBytes()
+	arenaRetainedEstimate := currentBatchArenaRetainedBytesEstimate()
+	arenaRetainedMaxEstimate := batchArenaRetainedBytesMaxGlobal.Load()
+	arenaAllocRequestedBytes := db.batchArenaAllocRequestedBytes.Load()
+	arenaAllocClassBytes := db.batchArenaAllocClassBytes.Load()
+	arenaUsedBytes := db.batchArenaUsedBytes.Load()
+	arenaTailWasteBytes := db.batchArenaTailWasteBytes.Load()
+	arenaMainAllocClassBytes := db.batchArenaMainAllocClassBytes.Load()
+	arenaMainUsedBytes := db.batchArenaMainUsedBytes.Load()
+	arenaMainTailWasteBytes := db.batchArenaMainTailWasteBytes.Load()
+	arenaPtrAllocClassBytes := db.batchArenaPtrAllocClassBytes.Load()
+	arenaPtrUsedBytes := db.batchArenaPtrUsedBytes.Load()
+	arenaPtrTailWasteBytes := db.batchArenaPtrTailWasteBytes.Load()
+	arenaTailCompactRuns := db.batchArenaTailCompactRuns.Load()
+	arenaTailCompactCopied := db.batchArenaTailCompactCopied.Load()
+	arenaTailCompactSaved := db.batchArenaTailCompactSaved.Load()
+	arenaPoolBudget := fmt.Sprintf("%d", arenaBaseBudget)
+	arenaPoolBudgetEffective := fmt.Sprintf("%d", arenaEffectiveBudget)
 	arenaPoolEstimate := fmt.Sprintf("%d", arenaPoolBytes)
 	arenaLeased := fmt.Sprintf("%d", arenaLeasedBytes)
 	arenaLeasedMax := fmt.Sprintf("%d", db.batchArenaLeaseBytesMax.Load())
 	stats["treedb.cache.batch_arena.pool_budget_bytes"] = arenaPoolBudget
+	stats["treedb.cache.batch_arena.pool_budget_effective_bytes"] = arenaPoolBudgetEffective
 	stats["treedb.cache.batch_arena.pool_bytes_estimate"] = arenaPoolEstimate
+	stats["treedb.cache.batch_arena.pool_bytes_global_max_estimate"] = fmt.Sprintf("%d", arenaPoolBytesMax)
+	stats["treedb.cache.batch_arena.in_flight_bytes_estimate"] = fmt.Sprintf("%d", arenaInFlightBytes)
+	stats["treedb.cache.batch_arena.in_flight_bytes_global_max_estimate"] = fmt.Sprintf("%d", arenaInFlightBytesMax)
 	stats["treedb.cache.batch_arena.leased_bytes"] = arenaLeased
+	stats["treedb.cache.batch_arena.leased_bytes_global_estimate"] = fmt.Sprintf("%d", arenaGlobalLeasedBytes)
+	stats["treedb.cache.batch_arena.leased_bytes_global_max_estimate"] = fmt.Sprintf("%d", arenaGlobalLeasedBytesMax)
 	stats["treedb.cache.batch_arena.leased_bytes_max"] = arenaLeasedMax
+	stats["treedb.cache.batch_arena.retained_hard_cap_bytes"] = fmt.Sprintf("%d", arenaRetainedHardCapBytes)
+	stats["treedb.cache.batch_arena.retained_hard_cap_effective_bytes"] = fmt.Sprintf("%d", arenaRetainedHardCapEffectiveBytes)
+	stats["treedb.cache.batch_arena.deferred_pressure_active"] = fmt.Sprintf("%t", db.batchArenaDeferredPressureActive())
+	stats["treedb.cache.batch_arena.retained_bytes_global_estimate"] = fmt.Sprintf("%d", arenaRetainedEstimate)
+	stats["treedb.cache.batch_arena.retained_bytes_global_max_estimate"] = fmt.Sprintf("%d", arenaRetainedMaxEstimate)
 	stats["treedb.cache.batch_arena.pool_plus_db_leases_bytes_estimate"] = fmt.Sprintf("%d", arenaPoolBytes+arenaLeasedBytes)
+	stats["treedb.cache.batch_arena.alloc_requested_bytes_total"] = fmt.Sprintf("%d", arenaAllocRequestedBytes)
+	stats["treedb.cache.batch_arena.alloc_class_bytes_total"] = fmt.Sprintf("%d", arenaAllocClassBytes)
+	stats["treedb.cache.batch_arena.used_bytes_total"] = fmt.Sprintf("%d", arenaUsedBytes)
+	stats["treedb.cache.batch_arena.tail_waste_bytes_total"] = fmt.Sprintf("%d", arenaTailWasteBytes)
+	stats["treedb.cache.batch_arena.main.alloc_class_bytes_total"] = fmt.Sprintf("%d", arenaMainAllocClassBytes)
+	stats["treedb.cache.batch_arena.main.used_bytes_total"] = fmt.Sprintf("%d", arenaMainUsedBytes)
+	stats["treedb.cache.batch_arena.main.tail_waste_bytes_total"] = fmt.Sprintf("%d", arenaMainTailWasteBytes)
+	stats["treedb.cache.batch_arena.ptr.alloc_class_bytes_total"] = fmt.Sprintf("%d", arenaPtrAllocClassBytes)
+	stats["treedb.cache.batch_arena.ptr.used_bytes_total"] = fmt.Sprintf("%d", arenaPtrUsedBytes)
+	stats["treedb.cache.batch_arena.ptr.tail_waste_bytes_total"] = fmt.Sprintf("%d", arenaPtrTailWasteBytes)
+	stats["treedb.cache.batch_arena.tail_compact_runs_total"] = fmt.Sprintf("%d", arenaTailCompactRuns)
+	stats["treedb.cache.batch_arena.tail_compact_copied_bytes_total"] = fmt.Sprintf("%d", arenaTailCompactCopied)
+	stats["treedb.cache.batch_arena.tail_compact_saved_bytes_total"] = fmt.Sprintf("%d", arenaTailCompactSaved)
+	stats["treedb.cache.batch_arena.pool_skip_zero_budget_total"] = fmt.Sprintf("%d", batchArenaPoolSkipZeroBudgetTotal.Load())
+	stats["treedb.cache.batch_arena.pool_drop_bytes_total"] = fmt.Sprintf("%d", batchArenaPoolDropBytesTotal.Load())
+	stats["treedb.cache.batch_arena.pool_drop_hard_cap_bytes_total"] = fmt.Sprintf("%d", batchArenaPoolDropHardCapBytesTotal.Load())
+	stats["treedb.cache.batch_arena.borrow_blocked_total"] = fmt.Sprintf("%d", batchArenaBorrowBlockedTotal.Load())
+	stats["treedb.cache.batch_arena.borrow_view_ops_blocked_total"] = fmt.Sprintf("%d", batchArenaBorrowViewOpsBlockedTotal.Load())
+	stats["treedb.cache.batch_arena.borrow_preflight_blocked_total"] = fmt.Sprintf("%d", batchArenaBorrowPreflightBlockedTotal.Load())
+	stats["treedb.cache.batch_arena.borrow_preflight_blocked_bytes_total"] = fmt.Sprintf("%d", batchArenaBorrowPreflightBlockedBytesTotal.Load())
+	stats["treedb.cache.batch_arena.steal_suppressed_deferred_total"] = fmt.Sprintf("%d", batchArenaStealSuppressedDeferredTotal.Load())
+	stats["treedb.cache.batch_arena.steal_suppressed_deferred_entries_total"] = fmt.Sprintf("%d", batchArenaStealSuppressedDeferredEntriesTotal.Load())
+	stats["treedb.cache.batch_arena.copy_source.key.calls_total"] = fmt.Sprintf("%d", batchArenaCopyKeyCallsTotal.Load())
+	stats["treedb.cache.batch_arena.copy_source.key.bytes_total"] = fmt.Sprintf("%d", batchArenaCopyKeyBytesTotal.Load())
+	stats["treedb.cache.batch_arena.copy_source.value.calls_total"] = fmt.Sprintf("%d", batchArenaCopyValueCallsTotal.Load())
+	stats["treedb.cache.batch_arena.copy_source.value.bytes_total"] = fmt.Sprintf("%d", batchArenaCopyValueBytesTotal.Load())
+	stats["treedb.cache.batch_arena.copy_source.key_value.calls_total"] = fmt.Sprintf("%d", batchArenaCopyKeyValueCallsTotal.Load())
+	stats["treedb.cache.batch_arena.copy_source.key_value.bytes_total"] = fmt.Sprintf("%d", batchArenaCopyKeyValueBytesTotal.Load())
+	stats["treedb.cache.batch_arena.copy_source.ptr_value.calls_total"] = fmt.Sprintf("%d", batchArenaCopyPtrValueCallsTotal.Load())
+	stats["treedb.cache.batch_arena.copy_source.ptr_value.bytes_total"] = fmt.Sprintf("%d", batchArenaCopyPtrValueBytesTotal.Load())
+	stats["treedb.cache.batch.set.calls_total"] = fmt.Sprintf("%d", batchSetCallsTotal.Load())
+	stats["treedb.cache.batch.set.bytes_total"] = fmt.Sprintf("%d", batchSetBytesTotal.Load())
+	stats["treedb.cache.batch.set_view.calls_total"] = fmt.Sprintf("%d", batchSetViewCallsTotal.Load())
+	stats["treedb.cache.batch.set_view.bytes_total"] = fmt.Sprintf("%d", batchSetViewBytesTotal.Load())
+	stats["treedb.cache.batch.set_caller.sample_mod"] = fmt.Sprintf("%d", batchSetCallerSampleMod)
+	stats["treedb.cache.batch.set_caller.samples_total"] = fmt.Sprintf("%d", batchSetCallerSamplesTotal.Load())
+	for i, caller := range batchSetCallerSnapshots(8) {
+		stats[fmt.Sprintf("treedb.cache.batch.set_caller.top.%d.frame", i)] = caller.frame
+		stats[fmt.Sprintf("treedb.cache.batch.set_caller.top.%d.calls_total", i)] = fmt.Sprintf("%d", caller.calls)
+		stats[fmt.Sprintf("treedb.cache.batch.set_caller.top.%d.bytes_total", i)] = fmt.Sprintf("%d", caller.bytes)
+	}
+	stats["treedb.cache.read_path.db_get_caller.sample_mod"] = fmt.Sprintf("%d", dbGetCallerSampleMod)
+	stats["treedb.cache.read_path.db_get_caller.samples_total"] = fmt.Sprintf("%d", dbGetCallerSamplesTotal.Load())
+	for i, caller := range dbGetCallerSnapshots(8) {
+		stats[fmt.Sprintf("treedb.cache.read_path.db_get_caller.top.%d.frame", i)] = caller.frame
+		stats[fmt.Sprintf("treedb.cache.read_path.db_get_caller.top.%d.calls_total", i)] = fmt.Sprintf("%d", caller.calls)
+		stats[fmt.Sprintf("treedb.cache.read_path.db_get_caller.top.%d.bytes_total", i)] = fmt.Sprintf("%d", caller.bytes)
+	}
+	stats["treedb.cache.read_path.snapshot_get_caller.sample_mod"] = fmt.Sprintf("%d", snapshotGetCallerSampleMod)
+	stats["treedb.cache.read_path.snapshot_get_caller.samples_total"] = fmt.Sprintf("%d", snapshotGetCallerSamplesTotal.Load())
+	for i, caller := range snapshotGetCallerSnapshots(8) {
+		stats[fmt.Sprintf("treedb.cache.read_path.snapshot_get_caller.top.%d.frame", i)] = caller.frame
+		stats[fmt.Sprintf("treedb.cache.read_path.snapshot_get_caller.top.%d.calls_total", i)] = fmt.Sprintf("%d", caller.calls)
+		stats[fmt.Sprintf("treedb.cache.read_path.snapshot_get_caller.top.%d.bytes_total", i)] = fmt.Sprintf("%d", caller.bytes)
+	}
 	stats["treedb.process.batch_arena.pool_budget_bytes"] = arenaPoolBudget
+	stats["treedb.process.batch_arena.pool_budget_effective_bytes"] = arenaPoolBudgetEffective
 	stats["treedb.process.batch_arena.pool_bytes_estimate"] = arenaPoolEstimate
+	stats["treedb.process.batch_arena.pool_bytes_global_max_estimate"] = fmt.Sprintf("%d", arenaPoolBytesMax)
+	stats["treedb.process.batch_arena.in_flight_bytes_estimate"] = fmt.Sprintf("%d", arenaInFlightBytes)
+	stats["treedb.process.batch_arena.in_flight_bytes_global_max_estimate"] = fmt.Sprintf("%d", arenaInFlightBytesMax)
 	stats["treedb.process.batch_arena.leased_bytes"] = arenaLeased
+	stats["treedb.process.batch_arena.leased_bytes_global_estimate"] = fmt.Sprintf("%d", arenaGlobalLeasedBytes)
+	stats["treedb.process.batch_arena.leased_bytes_global_max_estimate"] = fmt.Sprintf("%d", arenaGlobalLeasedBytesMax)
 	stats["treedb.process.batch_arena.leased_bytes_max"] = arenaLeasedMax
-	stats["treedb.process.batch_arena.retained_bytes_estimate"] = fmt.Sprintf("%d", arenaPoolBytes+arenaLeasedBytes)
-	stats["treedb.cache.entry_slice.pool_budget_bytes"] = fmt.Sprintf("%d", entrySlicePoolBudgetBytes)
+	stats["treedb.process.batch_arena.retained_hard_cap_bytes"] = fmt.Sprintf("%d", arenaRetainedHardCapBytes)
+	stats["treedb.process.batch_arena.retained_hard_cap_effective_bytes"] = fmt.Sprintf("%d", arenaRetainedHardCapEffectiveBytes)
+	stats["treedb.process.batch_arena.deferred_pressure_active"] = fmt.Sprintf("%t", db.batchArenaDeferredPressureActive())
+	stats["treedb.process.batch_arena.retained_bytes_estimate"] = fmt.Sprintf("%d", arenaRetainedEstimate)
+	stats["treedb.process.batch_arena.retained_bytes_global_max_estimate"] = fmt.Sprintf("%d", arenaRetainedMaxEstimate)
+	stats["treedb.process.batch_arena.alloc_requested_bytes_total"] = fmt.Sprintf("%d", arenaAllocRequestedBytes)
+	stats["treedb.process.batch_arena.alloc_class_bytes_total"] = fmt.Sprintf("%d", arenaAllocClassBytes)
+	stats["treedb.process.batch_arena.used_bytes_total"] = fmt.Sprintf("%d", arenaUsedBytes)
+	stats["treedb.process.batch_arena.tail_waste_bytes_total"] = fmt.Sprintf("%d", arenaTailWasteBytes)
+	stats["treedb.process.batch_arena.main.alloc_class_bytes_total"] = fmt.Sprintf("%d", arenaMainAllocClassBytes)
+	stats["treedb.process.batch_arena.main.used_bytes_total"] = fmt.Sprintf("%d", arenaMainUsedBytes)
+	stats["treedb.process.batch_arena.main.tail_waste_bytes_total"] = fmt.Sprintf("%d", arenaMainTailWasteBytes)
+	stats["treedb.process.batch_arena.ptr.alloc_class_bytes_total"] = fmt.Sprintf("%d", arenaPtrAllocClassBytes)
+	stats["treedb.process.batch_arena.ptr.used_bytes_total"] = fmt.Sprintf("%d", arenaPtrUsedBytes)
+	stats["treedb.process.batch_arena.ptr.tail_waste_bytes_total"] = fmt.Sprintf("%d", arenaPtrTailWasteBytes)
+	stats["treedb.process.batch_arena.tail_compact_runs_total"] = fmt.Sprintf("%d", arenaTailCompactRuns)
+	stats["treedb.process.batch_arena.tail_compact_copied_bytes_total"] = fmt.Sprintf("%d", arenaTailCompactCopied)
+	stats["treedb.process.batch_arena.tail_compact_saved_bytes_total"] = fmt.Sprintf("%d", arenaTailCompactSaved)
+	stats["treedb.process.batch_arena.pool_skip_zero_budget_total"] = fmt.Sprintf("%d", batchArenaPoolSkipZeroBudgetTotal.Load())
+	stats["treedb.process.batch_arena.pool_drop_bytes_total"] = fmt.Sprintf("%d", batchArenaPoolDropBytesTotal.Load())
+	stats["treedb.process.batch_arena.pool_drop_hard_cap_bytes_total"] = fmt.Sprintf("%d", batchArenaPoolDropHardCapBytesTotal.Load())
+	stats["treedb.process.batch_arena.borrow_blocked_total"] = fmt.Sprintf("%d", batchArenaBorrowBlockedTotal.Load())
+	stats["treedb.process.batch_arena.borrow_view_ops_blocked_total"] = fmt.Sprintf("%d", batchArenaBorrowViewOpsBlockedTotal.Load())
+	stats["treedb.process.batch_arena.borrow_preflight_blocked_total"] = fmt.Sprintf("%d", batchArenaBorrowPreflightBlockedTotal.Load())
+	stats["treedb.process.batch_arena.borrow_preflight_blocked_bytes_total"] = fmt.Sprintf("%d", batchArenaBorrowPreflightBlockedBytesTotal.Load())
+	stats["treedb.process.batch_arena.steal_suppressed_deferred_total"] = fmt.Sprintf("%d", batchArenaStealSuppressedDeferredTotal.Load())
+	stats["treedb.process.batch_arena.steal_suppressed_deferred_entries_total"] = fmt.Sprintf("%d", batchArenaStealSuppressedDeferredEntriesTotal.Load())
+	stats["treedb.process.batch_arena.copy_source.key.calls_total"] = fmt.Sprintf("%d", batchArenaCopyKeyCallsTotal.Load())
+	stats["treedb.process.batch_arena.copy_source.key.bytes_total"] = fmt.Sprintf("%d", batchArenaCopyKeyBytesTotal.Load())
+	stats["treedb.process.batch_arena.copy_source.value.calls_total"] = fmt.Sprintf("%d", batchArenaCopyValueCallsTotal.Load())
+	stats["treedb.process.batch_arena.copy_source.value.bytes_total"] = fmt.Sprintf("%d", batchArenaCopyValueBytesTotal.Load())
+	stats["treedb.process.batch_arena.copy_source.key_value.calls_total"] = fmt.Sprintf("%d", batchArenaCopyKeyValueCallsTotal.Load())
+	stats["treedb.process.batch_arena.copy_source.key_value.bytes_total"] = fmt.Sprintf("%d", batchArenaCopyKeyValueBytesTotal.Load())
+	stats["treedb.process.batch_arena.copy_source.ptr_value.calls_total"] = fmt.Sprintf("%d", batchArenaCopyPtrValueCallsTotal.Load())
+	stats["treedb.process.batch_arena.copy_source.ptr_value.bytes_total"] = fmt.Sprintf("%d", batchArenaCopyPtrValueBytesTotal.Load())
+	stats["treedb.process.batch.set.calls_total"] = fmt.Sprintf("%d", batchSetCallsTotal.Load())
+	stats["treedb.process.batch.set.bytes_total"] = fmt.Sprintf("%d", batchSetBytesTotal.Load())
+	stats["treedb.process.batch.set_view.calls_total"] = fmt.Sprintf("%d", batchSetViewCallsTotal.Load())
+	stats["treedb.process.batch.set_view.bytes_total"] = fmt.Sprintf("%d", batchSetViewBytesTotal.Load())
+	stats["treedb.process.batch.set_caller.sample_mod"] = fmt.Sprintf("%d", batchSetCallerSampleMod)
+	stats["treedb.process.batch.set_caller.samples_total"] = fmt.Sprintf("%d", batchSetCallerSamplesTotal.Load())
+	for i, caller := range batchSetCallerSnapshots(8) {
+		stats[fmt.Sprintf("treedb.process.batch.set_caller.top.%d.frame", i)] = caller.frame
+		stats[fmt.Sprintf("treedb.process.batch.set_caller.top.%d.calls_total", i)] = fmt.Sprintf("%d", caller.calls)
+		stats[fmt.Sprintf("treedb.process.batch.set_caller.top.%d.bytes_total", i)] = fmt.Sprintf("%d", caller.bytes)
+	}
+	stats["treedb.process.read_path.db_get_caller.sample_mod"] = fmt.Sprintf("%d", dbGetCallerSampleMod)
+	stats["treedb.process.read_path.db_get_caller.samples_total"] = fmt.Sprintf("%d", dbGetCallerSamplesTotal.Load())
+	for i, caller := range dbGetCallerSnapshots(8) {
+		stats[fmt.Sprintf("treedb.process.read_path.db_get_caller.top.%d.frame", i)] = caller.frame
+		stats[fmt.Sprintf("treedb.process.read_path.db_get_caller.top.%d.calls_total", i)] = fmt.Sprintf("%d", caller.calls)
+		stats[fmt.Sprintf("treedb.process.read_path.db_get_caller.top.%d.bytes_total", i)] = fmt.Sprintf("%d", caller.bytes)
+	}
+	stats["treedb.process.read_path.snapshot_get_caller.sample_mod"] = fmt.Sprintf("%d", snapshotGetCallerSampleMod)
+	stats["treedb.process.read_path.snapshot_get_caller.samples_total"] = fmt.Sprintf("%d", snapshotGetCallerSamplesTotal.Load())
+	for i, caller := range snapshotGetCallerSnapshots(8) {
+		stats[fmt.Sprintf("treedb.process.read_path.snapshot_get_caller.top.%d.frame", i)] = caller.frame
+		stats[fmt.Sprintf("treedb.process.read_path.snapshot_get_caller.top.%d.calls_total", i)] = fmt.Sprintf("%d", caller.calls)
+		stats[fmt.Sprintf("treedb.process.read_path.snapshot_get_caller.top.%d.bytes_total", i)] = fmt.Sprintf("%d", caller.bytes)
+	}
+	stats["treedb.cache.entry_slice.pool_budget_bytes"] = fmt.Sprintf("%d", entrySliceBaseBudget)
+	stats["treedb.cache.entry_slice.pool_budget_effective_bytes"] = fmt.Sprintf("%d", entrySliceEffectiveBudget)
 	stats["treedb.cache.entry_slice.retained_bytes_estimate"] = fmt.Sprintf("%d", entrySlicePoolBytes.Load())
-	stats["treedb.process.entry_slice.pool_budget_bytes"] = fmt.Sprintf("%d", entrySlicePoolBudgetBytes)
+	stats["treedb.cache.entry_slice.trim_runs_total"] = fmt.Sprintf("%d", entrySlicePoolTrimRunsTotal.Load())
+	stats["treedb.cache.entry_slice.trim_drop_bytes_total"] = fmt.Sprintf("%d", entrySlicePoolTrimDropBytesTotal.Load())
+	stats["treedb.cache.entry_slice.get.lease_hits_total"] = fmt.Sprintf("%d", entrySliceLeaseHitTotal.Load())
+	stats["treedb.cache.entry_slice.get.lease_hit_bytes_total"] = fmt.Sprintf("%d", entrySliceLeaseHitBytesTotal.Load())
+	stats["treedb.cache.entry_slice.get.lease_hit_requested_bytes_total"] = fmt.Sprintf("%d", entrySliceLeaseHitRequestedBytesTotal.Load())
+	stats["treedb.cache.entry_slice.get.lease_hit_excess_bytes_total"] = fmt.Sprintf("%d", entrySliceLeaseHitExcessBytesTotal.Load())
+	stats["treedb.cache.entry_slice.get.pool_hits_total"] = fmt.Sprintf("%d", entrySlicePoolHitTotal.Load())
+	stats["treedb.cache.entry_slice.get.pool_hit_bytes_total"] = fmt.Sprintf("%d", entrySlicePoolHitBytesTotal.Load())
+	stats["treedb.cache.entry_slice.get.pool_hit_requested_bytes_total"] = fmt.Sprintf("%d", entrySlicePoolHitRequestedBytesTotal.Load())
+	stats["treedb.cache.entry_slice.get.pool_hit_excess_bytes_total"] = fmt.Sprintf("%d", entrySlicePoolHitExcessBytesTotal.Load())
+	stats["treedb.cache.entry_slice.get.fresh_alloc_total"] = fmt.Sprintf("%d", entrySliceFreshAllocTotal.Load())
+	stats["treedb.cache.entry_slice.get.fresh_alloc_bytes_total"] = fmt.Sprintf("%d", entrySliceFreshAllocBytesTotal.Load())
+	stats["treedb.cache.entry_slice.get.fresh_alloc_requested_bytes_total"] = fmt.Sprintf("%d", entrySliceFreshAllocRequestedBytesTotal.Load())
+	stats["treedb.cache.entry_slice.get.fresh_alloc_excess_bytes_total"] = fmt.Sprintf("%d", entrySliceFreshAllocExcessBytesTotal.Load())
+	stats["treedb.cache.entry_slice.put.lease_total"] = fmt.Sprintf("%d", entrySlicePutLeaseTotal.Load())
+	stats["treedb.cache.entry_slice.put.lease_bytes_total"] = fmt.Sprintf("%d", entrySlicePutLeaseBytesTotal.Load())
+	stats["treedb.cache.entry_slice.put.pool_total"] = fmt.Sprintf("%d", entrySlicePutPoolTotal.Load())
+	stats["treedb.cache.entry_slice.put.pool_bytes_total"] = fmt.Sprintf("%d", entrySlicePutPoolBytesTotal.Load())
+	stats["treedb.cache.entry_slice.put.drop_budget_total"] = fmt.Sprintf("%d", entrySlicePutDropBudgetTotal.Load())
+	stats["treedb.cache.entry_slice.put.drop_budget_bytes_total"] = fmt.Sprintf("%d", entrySlicePutDropBudgetBytesTotal.Load())
+	stats["treedb.cache.read_path.snapshot.queue_inline_hits_total"] = fmt.Sprintf("%d", snapshotReadQueueInlineHitsTotal.Load())
+	stats["treedb.cache.read_path.snapshot.queue_inline_bytes_total"] = fmt.Sprintf("%d", snapshotReadQueueInlineBytesTotal.Load())
+	stats["treedb.cache.read_path.snapshot.queue_pointer_hits_total"] = fmt.Sprintf("%d", snapshotReadQueuePointerHitsTotal.Load())
+	stats["treedb.cache.read_path.snapshot.queue_pointer_bytes_total"] = fmt.Sprintf("%d", snapshotReadQueuePointerBytesTotal.Load())
+	stats["treedb.cache.read_path.snapshot.backend_hits_total"] = fmt.Sprintf("%d", snapshotReadBackendHitsTotal.Load())
+	stats["treedb.cache.read_path.snapshot.backend_bytes_total"] = fmt.Sprintf("%d", snapshotReadBackendBytesTotal.Load())
+	mergeShadowedOpsTotal := flushMergeShadowedOpsTotal.Load()
+	mergeAppliedOpsTotal := flushMergeAppliedOpsTotal.Load()
+	mergeDeferredShadowedOpsTotal := flushMergeDeferredShadowedOpsTotal.Load()
+	mergeDeferredAppliedOpsTotal := flushMergeDeferredAppliedOpsTotal.Load()
+	mergeParallelShadowedOpsTotal := flushMergeParallelShadowedOpsTotal.Load()
+	mergeParallelAppliedOpsTotal := flushMergeParallelAppliedOpsTotal.Load()
+	stats["treedb.cache.flush_merge.shadowed_ops_total"] = fmt.Sprintf("%d", mergeShadowedOpsTotal)
+	stats["treedb.cache.flush_merge.applied_ops_total"] = fmt.Sprintf("%d", mergeAppliedOpsTotal)
+	if mergeAppliedOpsTotal > 0 {
+		stats["treedb.cache.flush_merge.shadowed_per_applied"] = fmt.Sprintf("%.6f", float64(mergeShadowedOpsTotal)/float64(mergeAppliedOpsTotal))
+	}
+	stats["treedb.cache.flush_merge.deferred.shadowed_ops_total"] = fmt.Sprintf("%d", mergeDeferredShadowedOpsTotal)
+	stats["treedb.cache.flush_merge.deferred.applied_ops_total"] = fmt.Sprintf("%d", mergeDeferredAppliedOpsTotal)
+	if mergeDeferredAppliedOpsTotal > 0 {
+		stats["treedb.cache.flush_merge.deferred.shadowed_per_applied"] = fmt.Sprintf("%.6f", float64(mergeDeferredShadowedOpsTotal)/float64(mergeDeferredAppliedOpsTotal))
+	}
+	stats["treedb.cache.flush_merge.parallel.shadowed_ops_total"] = fmt.Sprintf("%d", mergeParallelShadowedOpsTotal)
+	stats["treedb.cache.flush_merge.parallel.applied_ops_total"] = fmt.Sprintf("%d", mergeParallelAppliedOpsTotal)
+	if mergeParallelAppliedOpsTotal > 0 {
+		stats["treedb.cache.flush_merge.parallel.shadowed_per_applied"] = fmt.Sprintf("%.6f", float64(mergeParallelShadowedOpsTotal)/float64(mergeParallelAppliedOpsTotal))
+	}
+	stats["treedb.process.entry_slice.pool_budget_bytes"] = fmt.Sprintf("%d", entrySliceBaseBudget)
+	stats["treedb.process.entry_slice.pool_budget_effective_bytes"] = fmt.Sprintf("%d", entrySliceEffectiveBudget)
 	stats["treedb.process.entry_slice.retained_bytes_estimate"] = fmt.Sprintf("%d", entrySlicePoolBytes.Load())
+	stats["treedb.process.entry_slice.trim_runs_total"] = fmt.Sprintf("%d", entrySlicePoolTrimRunsTotal.Load())
+	stats["treedb.process.entry_slice.trim_drop_bytes_total"] = fmt.Sprintf("%d", entrySlicePoolTrimDropBytesTotal.Load())
+	stats["treedb.process.entry_slice.get.lease_hits_total"] = fmt.Sprintf("%d", entrySliceLeaseHitTotal.Load())
+	stats["treedb.process.entry_slice.get.lease_hit_bytes_total"] = fmt.Sprintf("%d", entrySliceLeaseHitBytesTotal.Load())
+	stats["treedb.process.entry_slice.get.lease_hit_requested_bytes_total"] = fmt.Sprintf("%d", entrySliceLeaseHitRequestedBytesTotal.Load())
+	stats["treedb.process.entry_slice.get.lease_hit_excess_bytes_total"] = fmt.Sprintf("%d", entrySliceLeaseHitExcessBytesTotal.Load())
+	stats["treedb.process.entry_slice.get.pool_hits_total"] = fmt.Sprintf("%d", entrySlicePoolHitTotal.Load())
+	stats["treedb.process.entry_slice.get.pool_hit_bytes_total"] = fmt.Sprintf("%d", entrySlicePoolHitBytesTotal.Load())
+	stats["treedb.process.entry_slice.get.pool_hit_requested_bytes_total"] = fmt.Sprintf("%d", entrySlicePoolHitRequestedBytesTotal.Load())
+	stats["treedb.process.entry_slice.get.pool_hit_excess_bytes_total"] = fmt.Sprintf("%d", entrySlicePoolHitExcessBytesTotal.Load())
+	stats["treedb.process.entry_slice.get.fresh_alloc_total"] = fmt.Sprintf("%d", entrySliceFreshAllocTotal.Load())
+	stats["treedb.process.entry_slice.get.fresh_alloc_bytes_total"] = fmt.Sprintf("%d", entrySliceFreshAllocBytesTotal.Load())
+	stats["treedb.process.entry_slice.get.fresh_alloc_requested_bytes_total"] = fmt.Sprintf("%d", entrySliceFreshAllocRequestedBytesTotal.Load())
+	stats["treedb.process.entry_slice.get.fresh_alloc_excess_bytes_total"] = fmt.Sprintf("%d", entrySliceFreshAllocExcessBytesTotal.Load())
+	stats["treedb.process.entry_slice.put.lease_total"] = fmt.Sprintf("%d", entrySlicePutLeaseTotal.Load())
+	stats["treedb.process.entry_slice.put.lease_bytes_total"] = fmt.Sprintf("%d", entrySlicePutLeaseBytesTotal.Load())
+	stats["treedb.process.entry_slice.put.pool_total"] = fmt.Sprintf("%d", entrySlicePutPoolTotal.Load())
+	stats["treedb.process.entry_slice.put.pool_bytes_total"] = fmt.Sprintf("%d", entrySlicePutPoolBytesTotal.Load())
+	stats["treedb.process.entry_slice.put.drop_budget_total"] = fmt.Sprintf("%d", entrySlicePutDropBudgetTotal.Load())
+	stats["treedb.process.entry_slice.put.drop_budget_bytes_total"] = fmt.Sprintf("%d", entrySlicePutDropBudgetBytesTotal.Load())
+	stats["treedb.process.read_path.snapshot.queue_inline_hits_total"] = fmt.Sprintf("%d", snapshotReadQueueInlineHitsTotal.Load())
+	stats["treedb.process.read_path.snapshot.queue_inline_bytes_total"] = fmt.Sprintf("%d", snapshotReadQueueInlineBytesTotal.Load())
+	stats["treedb.process.read_path.snapshot.queue_pointer_hits_total"] = fmt.Sprintf("%d", snapshotReadQueuePointerHitsTotal.Load())
+	stats["treedb.process.read_path.snapshot.queue_pointer_bytes_total"] = fmt.Sprintf("%d", snapshotReadQueuePointerBytesTotal.Load())
+	stats["treedb.process.read_path.snapshot.backend_hits_total"] = fmt.Sprintf("%d", snapshotReadBackendHitsTotal.Load())
+	stats["treedb.process.read_path.snapshot.backend_bytes_total"] = fmt.Sprintf("%d", snapshotReadBackendBytesTotal.Load())
+	outerLeafReadStats := tree.OuterLeafReadStatsSnapshot()
+	stats["treedb.process.read_path.outer_leaf.loads_total"] = fmt.Sprintf("%d", outerLeafReadStats.LoadsTotal)
+	stats["treedb.process.read_path.outer_leaf.point_loads_total"] = fmt.Sprintf("%d", outerLeafReadStats.PointLoadsTotal)
+	stats["treedb.process.read_path.outer_leaf.iterator_loads_total"] = fmt.Sprintf("%d", outerLeafReadStats.IteratorLoadsTotal)
+	stats["treedb.process.read_path.outer_leaf.bytes_total"] = fmt.Sprintf("%d", outerLeafReadStats.BytesTotal)
+	stats["treedb.process.read_path.outer_leaf.sample_mod"] = fmt.Sprintf("%d", outerLeafReadStats.SampleMod)
+	stats["treedb.process.read_path.outer_leaf.samples_total"] = fmt.Sprintf("%d", outerLeafReadStats.SamplesTotal)
+	stats["treedb.process.read_path.outer_leaf.cache_potential.capacity_64_hits_total"] = fmt.Sprintf("%d", outerLeafReadStats.Recent64HitsTotal)
+	stats["treedb.process.read_path.outer_leaf.cache_potential.capacity_256_hits_total"] = fmt.Sprintf("%d", outerLeafReadStats.Recent256HitsTotal)
+	stats["treedb.process.read_path.outer_leaf.cache_potential.capacity_1024_hits_total"] = fmt.Sprintf("%d", outerLeafReadStats.Recent1KHitsTotal)
+	stats["treedb.process.read_path.outer_leaf.cache_potential.capacity_4096_hits_total"] = fmt.Sprintf("%d", outerLeafReadStats.Recent4KHitsTotal)
+	if outerLeafReadStats.SamplesTotal > 0 {
+		stats["treedb.process.read_path.outer_leaf.cache_potential.capacity_64_hit_ratio"] = fmt.Sprintf("%.6f", float64(outerLeafReadStats.Recent64HitsTotal)/float64(outerLeafReadStats.SamplesTotal))
+		stats["treedb.process.read_path.outer_leaf.cache_potential.capacity_256_hit_ratio"] = fmt.Sprintf("%.6f", float64(outerLeafReadStats.Recent256HitsTotal)/float64(outerLeafReadStats.SamplesTotal))
+		stats["treedb.process.read_path.outer_leaf.cache_potential.capacity_1024_hit_ratio"] = fmt.Sprintf("%.6f", float64(outerLeafReadStats.Recent1KHitsTotal)/float64(outerLeafReadStats.SamplesTotal))
+		stats["treedb.process.read_path.outer_leaf.cache_potential.capacity_4096_hit_ratio"] = fmt.Sprintf("%.6f", float64(outerLeafReadStats.Recent4KHitsTotal)/float64(outerLeafReadStats.SamplesTotal))
+	}
+	stats["treedb.process.flush_merge.shadowed_ops_total"] = fmt.Sprintf("%d", mergeShadowedOpsTotal)
+	stats["treedb.process.flush_merge.applied_ops_total"] = fmt.Sprintf("%d", mergeAppliedOpsTotal)
+	if mergeAppliedOpsTotal > 0 {
+		stats["treedb.process.flush_merge.shadowed_per_applied"] = fmt.Sprintf("%.6f", float64(mergeShadowedOpsTotal)/float64(mergeAppliedOpsTotal))
+	}
+	stats["treedb.process.flush_merge.deferred.shadowed_ops_total"] = fmt.Sprintf("%d", mergeDeferredShadowedOpsTotal)
+	stats["treedb.process.flush_merge.deferred.applied_ops_total"] = fmt.Sprintf("%d", mergeDeferredAppliedOpsTotal)
+	if mergeDeferredAppliedOpsTotal > 0 {
+		stats["treedb.process.flush_merge.deferred.shadowed_per_applied"] = fmt.Sprintf("%.6f", float64(mergeDeferredShadowedOpsTotal)/float64(mergeDeferredAppliedOpsTotal))
+	}
+	stats["treedb.process.flush_merge.parallel.shadowed_ops_total"] = fmt.Sprintf("%d", mergeParallelShadowedOpsTotal)
+	stats["treedb.process.flush_merge.parallel.applied_ops_total"] = fmt.Sprintf("%d", mergeParallelAppliedOpsTotal)
+	if mergeParallelAppliedOpsTotal > 0 {
+		stats["treedb.process.flush_merge.parallel.shadowed_per_applied"] = fmt.Sprintf("%.6f", float64(mergeParallelShadowedOpsTotal)/float64(mergeParallelAppliedOpsTotal))
+	}
+	appendOnlyEntryHint := int(db.appendOnlyEntryHint.Load())
+	appendOnlyHintCapacity := appendOnlyEntriesToCapacity(appendOnlyEntryHint, appendOnlyEstimatedBytesPerEntryDefault)
+	appendOnlyMemLeaseHitTotal := db.appendOnlyMemLeaseHitTotal.Load()
+	appendOnlyMemPoolHitTotal := db.appendOnlyMemPoolHitTotal.Load()
+	appendOnlyMemNewAllocTotal := db.appendOnlyMemNewAllocTotal.Load()
+	appendOnlyMemNewAllocWithQueue := db.appendOnlyMemNewAllocWithQueue.Load()
+	appendOnlyMemNewAllocQueueBytes := db.appendOnlyMemNewAllocQueueBytes.Load()
+	stats["treedb.cache.append_only.entry_hint_entries"] = fmt.Sprintf("%d", appendOnlyEntryHint)
+	stats["treedb.cache.append_only.entry_hint_capacity_bytes"] = fmt.Sprintf("%d", appendOnlyHintCapacity)
+	stats["treedb.cache.append_only.mutable_from_lease_total"] = fmt.Sprintf("%d", appendOnlyMemLeaseHitTotal)
+	stats["treedb.cache.append_only.mutable_from_pool_total"] = fmt.Sprintf("%d", appendOnlyMemPoolHitTotal)
+	stats["treedb.cache.append_only.mutable_new_alloc_total"] = fmt.Sprintf("%d", appendOnlyMemNewAllocTotal)
+	stats["treedb.cache.append_only.mutable_new_alloc_with_queue_total"] = fmt.Sprintf("%d", appendOnlyMemNewAllocWithQueue)
+	stats["treedb.cache.append_only.mutable_new_alloc_queue_bytes_sum"] = fmt.Sprintf("%d", appendOnlyMemNewAllocQueueBytes)
+	stats["treedb.process.append_only.entry_hint_entries"] = fmt.Sprintf("%d", appendOnlyEntryHint)
+	stats["treedb.process.append_only.entry_hint_capacity_bytes"] = fmt.Sprintf("%d", appendOnlyHintCapacity)
+	stats["treedb.process.append_only.mutable_from_lease_total"] = fmt.Sprintf("%d", appendOnlyMemLeaseHitTotal)
+	stats["treedb.process.append_only.mutable_from_pool_total"] = fmt.Sprintf("%d", appendOnlyMemPoolHitTotal)
+	stats["treedb.process.append_only.mutable_new_alloc_total"] = fmt.Sprintf("%d", appendOnlyMemNewAllocTotal)
+	stats["treedb.process.append_only.mutable_new_alloc_with_queue_total"] = fmt.Sprintf("%d", appendOnlyMemNewAllocWithQueueTotal.Load())
+	stats["treedb.process.append_only.mutable_new_alloc_queue_bytes_sum"] = fmt.Sprintf("%d", appendOnlyMemNewAllocQueueBytesSum.Load())
+	appendOnlyRetainChunks, appendOnlyRetainBytes := appendOnlyDirectArenaRetentionLimitsForPressure(poolPressure.level)
+	stats["treedb.cache.append_only_direct_arena.retain_max_bytes_effective"] = fmt.Sprintf("%d", appendOnlyRetainBytes)
+	stats["treedb.cache.append_only_direct_arena.retain_max_chunks_effective"] = fmt.Sprintf("%d", appendOnlyRetainChunks)
+	stats["treedb.cache.append_only_direct_arena.pool_hit_chunks_total"] = fmt.Sprintf("%d", appendOnlyDirectArenaPoolHitChunksTotal.Load())
+	stats["treedb.cache.append_only_direct_arena.pool_hit_bytes_total"] = fmt.Sprintf("%d", appendOnlyDirectArenaPoolHitBytesTotal.Load())
+	stats["treedb.cache.append_only_direct_arena.retained_hit_chunks_total"] = fmt.Sprintf("%d", appendOnlyDirectArenaRetainedHitChunksTotal.Load())
+	stats["treedb.cache.append_only_direct_arena.retained_hit_bytes_total"] = fmt.Sprintf("%d", appendOnlyDirectArenaRetainedHitBytesTotal.Load())
+	stats["treedb.cache.append_only_direct_arena.fresh_alloc_chunks_total"] = fmt.Sprintf("%d", appendOnlyDirectArenaFreshAllocChunksTotal.Load())
+	stats["treedb.cache.append_only_direct_arena.fresh_alloc_bytes_total"] = fmt.Sprintf("%d", appendOnlyDirectArenaFreshAllocBytesTotal.Load())
+	stats["treedb.cache.batch_pool.drop_under_pressure.entries_total"] = fmt.Sprintf("%d", batchEntriesPoolDropUnderPressureTotal.Load())
+	stats["treedb.cache.batch_pool.drop_under_pressure.shard_entries_total"] = fmt.Sprintf("%d", batchShardEntriesPoolDropUnderPressureTotal.Load())
+	stats["treedb.cache.batch_pool.drop_under_pressure.int_slices_total"] = fmt.Sprintf("%d", batchIntPoolDropUnderPressureTotal.Load())
+	stats["treedb.process.append_only_direct_arena.retain_max_bytes_effective"] = fmt.Sprintf("%d", appendOnlyRetainBytes)
+	stats["treedb.process.append_only_direct_arena.retain_max_chunks_effective"] = fmt.Sprintf("%d", appendOnlyRetainChunks)
+	stats["treedb.process.append_only_direct_arena.pool_hit_chunks_total"] = fmt.Sprintf("%d", appendOnlyDirectArenaPoolHitChunksTotal.Load())
+	stats["treedb.process.append_only_direct_arena.pool_hit_bytes_total"] = fmt.Sprintf("%d", appendOnlyDirectArenaPoolHitBytesTotal.Load())
+	stats["treedb.process.append_only_direct_arena.retained_hit_chunks_total"] = fmt.Sprintf("%d", appendOnlyDirectArenaRetainedHitChunksTotal.Load())
+	stats["treedb.process.append_only_direct_arena.retained_hit_bytes_total"] = fmt.Sprintf("%d", appendOnlyDirectArenaRetainedHitBytesTotal.Load())
+	stats["treedb.process.append_only_direct_arena.fresh_alloc_chunks_total"] = fmt.Sprintf("%d", appendOnlyDirectArenaFreshAllocChunksTotal.Load())
+	stats["treedb.process.append_only_direct_arena.fresh_alloc_bytes_total"] = fmt.Sprintf("%d", appendOnlyDirectArenaFreshAllocBytesTotal.Load())
+	stats["treedb.process.batch_pool.drop_under_pressure.entries_total"] = fmt.Sprintf("%d", batchEntriesPoolDropUnderPressureTotal.Load())
+	stats["treedb.process.batch_pool.drop_under_pressure.shard_entries_total"] = fmt.Sprintf("%d", batchShardEntriesPoolDropUnderPressureTotal.Load())
+	stats["treedb.process.batch_pool.drop_under_pressure.int_slices_total"] = fmt.Sprintf("%d", batchIntPoolDropUnderPressureTotal.Load())
+	stats["treedb.process.memory.pool_pressure_level"] = poolPressureLevelString(poolPressure.level)
+	stats["treedb.process.memory.pool_pressure_used_bytes"] = fmt.Sprintf("%d", poolPressure.usedBytes)
+	stats["treedb.process.memory.heap_alloc_bytes"] = fmt.Sprintf("%d", poolPressure.heapAllocBytes)
+	stats["treedb.process.memory.heap_inuse_bytes"] = fmt.Sprintf("%d", poolPressure.heapInuseBytes)
+	stats["treedb.process.memory.heap_sys_bytes"] = fmt.Sprintf("%d", poolPressure.heapSysBytes)
+	stats["treedb.process.memory.heap_idle_bytes"] = fmt.Sprintf("%d", poolPressure.heapIdleBytes)
+	stats["treedb.process.memory.heap_released_bytes"] = fmt.Sprintf("%d", poolPressure.heapReleasedBytes)
+	stats["treedb.process.memory.heap_idle_unreleased_bytes"] = fmt.Sprintf("%d", poolPressure.heapIdleUnreleased)
+	stats["treedb.process.memory.stack_inuse_bytes"] = fmt.Sprintf("%d", poolPressure.stackInuseBytes)
+	stats["treedb.process.memory.stack_sys_bytes"] = fmt.Sprintf("%d", poolPressure.stackSysBytes)
+	stats["treedb.process.memory.total_sys_bytes"] = fmt.Sprintf("%d", poolPressure.totalSysBytes)
+	stats["treedb.process.memory.non_heap_sys_bytes"] = fmt.Sprintf("%d", poolPressure.nonHeapSysBytes)
+	stats["treedb.process.memory.next_gc_bytes"] = fmt.Sprintf("%d", poolPressure.nextGCBytes)
+	stats["treedb.process.memory.num_gc"] = fmt.Sprintf("%d", poolPressure.numGC)
+	stats["treedb.process.memory.gc_cpu_fraction"] = fmt.Sprintf("%.6f", poolPressure.gcCPUFraction)
+	stats["treedb.process.memory.gomemlimit_bytes"] = fmt.Sprintf("%d", poolPressure.memoryLimitBytes)
+	stats["treedb.process.memory.mutable_bytes"] = fmt.Sprintf("%d", db.mutableBytes.Load())
+	stats["treedb.process.memory.memtable_view_deferred_bytes_current"] = fmt.Sprintf("%d", memViewDeferredBytesCurrent)
+	stats["treedb.process.memory.memtable_view_deferred_bytes_max"] = fmt.Sprintf("%d", memViewDeferredBytesMax)
+	stats["treedb.process.memory.memtable_view_deferred_memtables_current"] = fmt.Sprintf("%d", memViewDeferredMemtablesCurrent)
+	stats["treedb.process.memory.memtable_view_deferred_memtables_max"] = fmt.Sprintf("%d", memViewDeferredMemtablesMax)
+	stats["treedb.process.memory.memtable_view_deferred_oldest_age_ms"] = fmt.Sprintf("%.3f", memViewOldestDeferredAgeMS)
+	stats["treedb.process.memory.pool_pressure_normal_samples_total"] = fmt.Sprintf("%d", poolPressureNormalSamplesTotal.Load())
+	stats["treedb.process.memory.pool_pressure_high_samples_total"] = fmt.Sprintf("%d", poolPressureHighSamplesTotal.Load())
+	stats["treedb.process.memory.pool_pressure_critical_samples_total"] = fmt.Sprintf("%d", poolPressureCriticalSamplesTotal.Load())
+	rssBytes := db.processRSSBytes.Load()
+	rssHWMBytes := db.processRSSHWMBytes.Load()
+	stats["treedb.process.memory.rss_bytes"] = fmt.Sprintf("%d", rssBytes)
+	stats["treedb.process.memory.rss_hwm_bytes"] = fmt.Sprintf("%d", rssHWMBytes)
+	if rssBytes > poolPressure.heapInuseBytes {
+		stats["treedb.process.memory.rss_minus_heap_inuse_bytes"] = fmt.Sprintf("%d", rssBytes-poolPressure.heapInuseBytes)
+	} else {
+		stats["treedb.process.memory.rss_minus_heap_inuse_bytes"] = "0"
+	}
+	if rssBytes > poolPressure.totalSysBytes {
+		stats["treedb.process.memory.rss_minus_total_sys_bytes"] = fmt.Sprintf("%d", rssBytes-poolPressure.totalSysBytes)
+	} else {
+		stats["treedb.process.memory.rss_minus_total_sys_bytes"] = "0"
+	}
+	stats["treedb.process.memory.peak_rss_bytes"] = fmt.Sprintf("%d", db.processPeakRSSBytes.Load())
+	stats["treedb.process.memory.peak_heap_alloc_bytes"] = fmt.Sprintf("%d", db.processPeakHeapAllocBytes.Load())
+	stats["treedb.process.memory.peak_heap_inuse_bytes"] = fmt.Sprintf("%d", db.processPeakHeapInuseBytes.Load())
+	stats["treedb.process.memory.peak_total_sys_bytes"] = fmt.Sprintf("%d", db.processPeakTotalSysBytes.Load())
 	db.domainIngressMu.Lock()
 	ingressWorkers := len(db.domainIngressCh)
 	ingressQueueSize := db.domainIngressQueueSize
@@ -15149,22 +24026,630 @@ func (db *DB) Stats() map[string]string {
 	}
 	retained := db.valueLogRetainedStatsDetailed()
 	vlogSegments, vlogBytes := retained.SegmentsTotal, retained.BytesTotal
+	rewriteQueueLiveBytesHint := int64(0)
+	rewriteQueueLiveBytesHintKnown := true
+	rewriteQueueLiveHintIDsPresent := 0
+	rewriteQueueLiveHintIDsKnown := 0
+	db.vlogGenerationRewriteQueueMu.Lock()
+	rewriteQueueLen := len(db.vlogGenerationRewriteQueue)
+	rewriteQueueLoaded := db.vlogGenerationRewriteQueueLoaded
+	rewriteLedgerSegments := len(db.vlogGenerationRewriteLedger)
+	rewriteLedgerChunks := len(db.vlogGenerationRewriteChunkLedger)
+	rewriteLedgerChunkBytes := db.vlogGenerationRewriteChunkBytes
+	rewritePenaltiesActive := len(db.vlogGenerationRewritePenalties)
+	rewriteStagePending := db.vlogGenerationRewriteStagePending
+	rewriteStageObservedNS := db.vlogGenerationRewriteStageObservedUnixNano
+	rewriteLedgerBytesTotal := int64(0)
+	rewriteLedgerBytesLive := int64(0)
+	rewriteLedgerBytesStale := int64(0)
+	for i := range db.vlogGenerationRewriteLedger {
+		seg := db.vlogGenerationRewriteLedger[i]
+		if seg.BytesTotal > 0 {
+			rewriteLedgerBytesTotal += seg.BytesTotal
+		}
+		if seg.BytesLive > 0 {
+			rewriteLedgerBytesLive += seg.BytesLive
+		}
+		if seg.BytesStale > 0 {
+			rewriteLedgerBytesStale += seg.BytesStale
+		}
+	}
+	if rewriteLedgerSegments == 0 && rewriteLedgerChunks > 0 {
+		rewriteLedgerSegments = len(vlogGenerationRewriteChunkLedgerIDs(db.vlogGenerationRewriteChunkLedger))
+		for i := range db.vlogGenerationRewriteChunkLedger {
+			chunk := db.vlogGenerationRewriteChunkLedger[i]
+			if chunk.BytesTotal > 0 {
+				rewriteLedgerBytesTotal += chunk.BytesTotal
+			}
+			if chunk.BytesLive > 0 {
+				rewriteLedgerBytesLive += chunk.BytesLive
+			}
+			if chunk.BytesStale > 0 {
+				rewriteLedgerBytesStale += chunk.BytesStale
+			}
+		}
+	}
+	if rewriteQueueLen > 0 {
+		rewriteQueueLiveBytesHintKnown = false
+		for _, id := range db.vlogGenerationRewriteQueue {
+			if id == 0 {
+				continue
+			}
+			rewriteQueueLiveHintIDsPresent++
+		}
+		ledgerByFileID := db.vlogGenerationRewriteLedgerByFileID
+		if len(ledgerByFileID) == 0 && len(db.vlogGenerationRewriteLedger) > 0 {
+			ledgerByFileID = buildVlogGenerationRewriteLedgerByFileID(db.vlogGenerationRewriteLedger)
+			db.vlogGenerationRewriteLedgerByFileID = ledgerByFileID
+		}
+		if len(ledgerByFileID) > 0 {
+			for _, id := range db.vlogGenerationRewriteQueue {
+				if id == 0 {
+					continue
+				}
+				seg, ok := ledgerByFileID[id]
+				if !ok {
+					continue
+				}
+				rewriteQueueLiveHintIDsKnown++
+				if seg.BytesLive > 0 {
+					rewriteQueueLiveBytesHint += seg.BytesLive
+				}
+			}
+			rewriteQueueLiveBytesHintKnown = rewriteQueueLiveHintIDsPresent == rewriteQueueLiveHintIDsKnown
+		}
+	}
+	db.vlogGenerationRewriteQueueMu.Unlock()
+	statsNow := time.Now()
+	db.vlogGenerationObservedGCMu.Lock()
+	observedGCPending := len(db.vlogGenerationObservedGCSourceIDs)
+	observedGCPendingOldestNS := int64(0)
+	observedGCPendingRetryIDs := 0
+	observedGCPendingRetryAttemptsTotal := uint64(0)
+	observedGCPendingRetryAttemptsMax := uint8(0)
+	for id := range db.vlogGenerationObservedGCSourceIDs {
+		if firstQueued, ok := db.vlogGenerationObservedGCFirstQueuedUnixNano[id]; ok && firstQueued > 0 {
+			if observedGCPendingOldestNS == 0 || firstQueued < observedGCPendingOldestNS {
+				observedGCPendingOldestNS = firstQueued
+			}
+		}
+		if attempts, ok := db.vlogGenerationObservedGCRetryAttempts[id]; ok && attempts > 0 {
+			observedGCPendingRetryIDs++
+			observedGCPendingRetryAttemptsTotal += uint64(attempts)
+			if attempts > observedGCPendingRetryAttemptsMax {
+				observedGCPendingRetryAttemptsMax = attempts
+			}
+		}
+	}
+	db.vlogGenerationObservedGCMu.Unlock()
+	observedGCPendingOldestAgeMS := int64(0)
+	if observedGCPendingOldestNS > 0 && observedGCPendingOldestNS < statsNow.UnixNano() {
+		observedGCPendingOldestAgeMS = time.Duration(statsNow.UnixNano() - observedGCPendingOldestNS).Milliseconds()
+	}
+	observedGCLatencyCompleted := db.vlogGenerationObservedGCLatencyCompletedIDs.Load()
+	observedGCLatencyDropped := db.vlogGenerationObservedGCLatencyDroppedIDs.Load()
+	observedGCLatencyTotalMS := db.vlogGenerationObservedGCLatencyTotalMS.Load()
+	observedGCLatencyAvgMS := 0.0
+	if totalObservedGCLatencyIDs := observedGCLatencyCompleted + observedGCLatencyDropped; totalObservedGCLatencyIDs > 0 {
+		observedGCLatencyAvgMS = float64(observedGCLatencyTotalMS) / float64(totalObservedGCLatencyIDs)
+	}
+	rewriteAgeBlockedUntilNS := db.vlogGenerationRewriteAgeBlockedUntilNS.Load()
+	rewriteAgeBlockedRemainingMS := int64(0)
+	if rewriteAgeBlockedUntilNS > 0 {
+		blockedUntil := time.Unix(0, rewriteAgeBlockedUntilNS)
+		if remaining := blockedUntil.Sub(statsNow); remaining > 0 {
+			rewriteAgeBlockedRemainingMS = remaining.Milliseconds()
+		}
+	}
+	foregroundWriteQuiet := db.foregroundWriteQuietFor(statsNow, vlogGenerationMaintenanceQuietWindow)
+	foregroundReadQuiet := db.foregroundReadQuietFor(statsNow, vlogForegroundReadQuietWindow)
+	foregroundQuiet := foregroundWriteQuiet && foregroundReadQuiet
+	foregroundActiveIters := db.activeForegroundIterators.Load()
+	foregroundLastWriteNS := db.lastForegroundWriteUnixNano.Load()
+	foregroundLastReadNS := db.lastForegroundReadUnixNano.Load()
+	foregroundWriteAgeMS := int64(0)
+	if foregroundLastWriteNS > 0 && foregroundLastWriteNS < statsNow.UnixNano() {
+		foregroundWriteAgeMS = time.Duration(statsNow.UnixNano() - foregroundLastWriteNS).Milliseconds()
+	}
+	foregroundReadAgeMS := int64(0)
+	if foregroundLastReadNS > 0 && foregroundLastReadNS < statsNow.UnixNano() {
+		foregroundReadAgeMS = time.Duration(statsNow.UnixNano() - foregroundLastReadNS).Milliseconds()
+	}
+	rewriteStageDue := false
+	rewriteStageDueInMS := int64(0)
+	rewriteStageObservedAgeMS := int64(0)
+	if rewriteStageObservedNS > 0 {
+		if rewriteStageObservedNS < statsNow.UnixNano() {
+			rewriteStageObservedAgeMS = time.Duration(statsNow.UnixNano() - rewriteStageObservedNS).Milliseconds()
+		}
+		if rewriteStagePending {
+			dueAt := time.Unix(0, rewriteStageObservedNS).Add(vlogGenerationRewriteStageConfirmDelay)
+			if !statsNow.Before(dueAt) {
+				rewriteStageDue = true
+			} else {
+				remaining := dueAt.Sub(statsNow)
+				if remaining > 0 {
+					rewriteStageDueInMS = remaining.Milliseconds()
+				}
+			}
+		}
+	}
+	rewriteAgeBlockedDue := rewriteAgeBlockedUntilNS > 0 && !statsNow.Before(time.Unix(0, rewriteAgeBlockedUntilNS))
+	rewriteBudgetTokens := db.vlogGenerationRewriteBudgetTokensBytes.Load()
+	if rewriteBudgetTokens < 0 {
+		rewriteBudgetTokens = 0
+	}
+	rewriteBudgetCap := db.vlogGenerationRewriteBudgetCapBytes()
+	if rewriteBudgetCap < 0 {
+		rewriteBudgetCap = 0
+	}
+	rewriteBudgetUtilPct := 0.0
+	if rewriteBudgetCap > 0 {
+		rewriteBudgetUtilPct = (float64(rewriteBudgetTokens) / float64(rewriteBudgetCap)) * 100.0
+		if rewriteBudgetUtilPct > 100.0 {
+			rewriteBudgetUtilPct = 100.0
+		}
+	}
+	rewriteQueueLiveBytesAfterTokens := rewriteLedgerBytesLive - rewriteBudgetTokens
+	if rewriteQueueLiveBytesAfterTokens < 0 {
+		rewriteQueueLiveBytesAfterTokens = 0
+	}
+	rewriteResumeMaxSegments := vlogGenerationRewriteResumeMaxSegmentsEffective()
+	rewriteDebtDrainMaxSegments := vlogGenerationRewriteDebtDrainMaxSegmentsEffective()
+	rewriteFreshPlanDebtDrainMinSegments, rewriteFreshPlanDebtDrainMaxSegments := vlogGenerationRewriteFreshPlanDebtDrainLimitsEffective()
+	rewriteQueueRunSegmentCap := 0
+	rewriteQueueRunSegmentCapCheckpointKick := 0
+	rewriteQueueRunSegmentCapLimiter := vlogGenerationRewriteSegmentCapLimiterNone
+	rewriteQueueRunSegmentCapCheckpointKickLimiter := vlogGenerationRewriteSegmentCapLimiterNone
+	rewriteQueueRunSegmentCapByBudget := 0
+	rewriteQueueRunSegmentCapByBudgetCheckpointKick := 0
+	rewriteQueueRunSegmentCapPerSegmentBudgetBytes := int64(0)
+	rewriteQueueRunSegmentCapPerSegmentBudgetBytesCheckpointKick := int64(0)
+	rewriteQueueFreshPlanSegmentCap := 0
+	rewriteQueueFreshPlanSegmentCapLimiter := vlogGenerationRewriteSegmentCapLimiterNone
+	rewriteQueueFreshPlanSegmentCapByBudget := 0
+	rewriteQueueFreshPlanSegmentCapPerSegmentBudgetBytes := int64(0)
+	if rewriteQueueLen > 0 {
+		rewriteQueueRunDecision := db.vlogGenerationRewriteSegmentCapForRunWithHint(
+			rewriteQueueLen,
+			rewriteBudgetTokens,
+			rewriteQueueLiveBytesHint,
+			rewriteQueueLiveBytesHintKnown,
+			vlogGenerationMaintenanceOptions{rewriteDebtDrain: true},
+		)
+		rewriteQueueRunSegmentCap = rewriteQueueRunDecision.maxSegments
+		rewriteQueueRunSegmentCapLimiter = rewriteQueueRunDecision.limiter
+		rewriteQueueRunSegmentCapByBudget = rewriteQueueRunDecision.byBudgetSegments
+		rewriteQueueRunSegmentCapPerSegmentBudgetBytes = rewriteQueueRunDecision.perSegmentBudget
+		rewriteQueueRunCheckpointDecision := db.vlogGenerationRewriteSegmentCapForRunWithHint(
+			rewriteQueueLen,
+			rewriteBudgetTokens,
+			rewriteQueueLiveBytesHint,
+			rewriteQueueLiveBytesHintKnown,
+			vlogGenerationMaintenanceOptions{rewriteDebtDrain: true, bypassQuiet: true},
+		)
+		rewriteQueueRunSegmentCapCheckpointKick = rewriteQueueRunCheckpointDecision.maxSegments
+		rewriteQueueRunSegmentCapCheckpointKickLimiter = rewriteQueueRunCheckpointDecision.limiter
+		rewriteQueueRunSegmentCapByBudgetCheckpointKick = rewriteQueueRunCheckpointDecision.byBudgetSegments
+		rewriteQueueRunSegmentCapPerSegmentBudgetBytesCheckpointKick = rewriteQueueRunCheckpointDecision.perSegmentBudget
+		rewriteQueueFreshPlanDecision := db.vlogGenerationRewriteSegmentCapForFreshPlanWithHint(
+			rewriteQueueLen,
+			rewriteBudgetTokens,
+			rewriteQueueLiveBytesHint,
+			rewriteQueueLiveBytesHintKnown,
+			vlogGenerationMaintenanceOptions{rewriteDebtDrain: true},
+		)
+		rewriteQueueFreshPlanSegmentCap = rewriteQueueFreshPlanDecision.maxSegments
+		rewriteQueueFreshPlanSegmentCapLimiter = rewriteQueueFreshPlanDecision.limiter
+		rewriteQueueFreshPlanSegmentCapByBudget = rewriteQueueFreshPlanDecision.byBudgetSegments
+		rewriteQueueFreshPlanSegmentCapPerSegmentBudgetBytes = rewriteQueueFreshPlanDecision.perSegmentBudget
+	}
+	rewriteQueueETABudgetSeconds := 0.0
+	if rewriteLedgerBytesLive > 0 && db.valueLogRewriteBudgetBytes > 0 {
+		rewriteQueueETABudgetSeconds = float64(rewriteQueueLiveBytesAfterTokens) / float64(db.valueLogRewriteBudgetBytes)
+	}
+	rewriteQueueLiveHintCoveragePct := 0.0
+	if rewriteQueueLiveHintIDsPresent > 0 {
+		rewriteQueueLiveHintCoveragePct = (float64(rewriteQueueLiveHintIDsKnown) / float64(rewriteQueueLiveHintIDsPresent)) * 100.0
+		if rewriteQueueLiveHintCoveragePct > 100.0 {
+			rewriteQueueLiveHintCoveragePct = 100.0
+		}
+	}
+	maintenancePassTotalNS := db.vlogGenerationMaintenancePassTotalNanos.Load()
+	maintenancePassMaxNS := db.vlogGenerationMaintenancePassMaxNanos.Load()
+	maintenancePasses := db.vlogGenerationMaintenanceAcquired.Load()
+	rewritePlanTotalNS := db.vlogGenerationRewritePlanTotalNanos.Load()
+	rewritePlanMaxNS := db.vlogGenerationRewritePlanMaxNanos.Load()
+	rewritePlanRuns := db.vlogGenerationRewritePlanRuns.Load()
+	rewriteExecTotalNS := db.vlogGenerationRewriteExecTotalNanos.Load()
+	rewriteExecMaxNS := db.vlogGenerationRewriteExecMaxNanos.Load()
+	rewriteRuns := db.vlogGenerationRewriteRuns.Load()
+	rewriteBytesInTotal := db.vlogGenerationRewriteBytesIn.Load()
+	rewriteBytesOutTotal := db.vlogGenerationRewriteBytesOut.Load()
+	rewriteReclaimedBytesTotal := db.vlogGenerationRewriteReclaimedBytes.Load()
+	rewriteValueRecordsCopiedTotal := db.vlogGenerationRewriteValueRecordsCopied.Load()
+	rewriteValueBytesCopiedTotal := db.vlogGenerationRewriteValueBytesCopied.Load()
+	rewriteProcessedLiveBytes := db.vlogGenerationRewriteProcessedLiveBytes.Load()
+	rewriteProcessedStaleBytes := db.vlogGenerationRewriteProcessedStaleBytes.Load()
+	rewriteProcessedTotal := rewriteProcessedLiveBytes + rewriteProcessedStaleBytes
+	rewriteBudgetConsumedTotal := db.vlogGenerationRewriteBudgetConsumed.Load()
+	rewriteLastExecLiveBytes := db.vlogGenerationRewriteExecLastLiveBytes.Load()
+	if rewriteLastExecLiveBytes < 0 {
+		rewriteLastExecLiveBytes = 0
+	}
+	rewriteLastExecBytesOut := db.vlogGenerationRewriteExecLastBytesOut.Load()
+	if rewriteLastExecBytesOut < 0 {
+		rewriteLastExecBytesOut = 0
+	}
+	rewriteLastExecDurationNS := db.vlogGenerationRewriteExecLastDurationNanos.Load()
+	rewriteLastExecUnixNano := db.vlogGenerationRewriteExecLastUnixNano.Load()
+	rewriteLastExecDurationMS := float64(rewriteLastExecDurationNS) / float64(time.Millisecond)
+	rewriteLastExecLiveBytesPerSec := 0.0
+	if rewriteLastExecDurationNS > 0 && rewriteLastExecLiveBytes > 0 {
+		rewriteLastExecLiveBytesPerSec = (float64(rewriteLastExecLiveBytes) * float64(time.Second)) / float64(rewriteLastExecDurationNS)
+	}
+	rewriteQueueETARecentExecSeconds := 0.0
+	if rewriteQueueLiveBytesAfterTokens > 0 && rewriteLastExecLiveBytesPerSec > 0 {
+		rewriteQueueETARecentExecSeconds = float64(rewriteQueueLiveBytesAfterTokens) / rewriteLastExecLiveBytesPerSec
+	}
+	rewriteQueueProgressPasses := db.vlogGenerationRewriteQueueProgressPasses.Load()
+	rewriteQueueProgressSegmentsBeforeTotal := db.vlogGenerationRewriteQueueSegmentsBeforeTotal.Load()
+	rewriteQueueProgressSegmentsAfterTotal := db.vlogGenerationRewriteQueueSegmentsAfterTotal.Load()
+	rewriteQueueProgressSegmentsDrainedTotal := db.vlogGenerationRewriteQueueSegmentsDrainedTotal.Load()
+	rewriteQueueProgressSegmentsGrownTotal := db.vlogGenerationRewriteQueueSegmentsGrownTotal.Load()
+	rewriteQueueProgressSegmentsBeforeLast := db.vlogGenerationRewriteQueueSegmentsBeforeLast.Load()
+	rewriteQueueProgressSegmentsAfterLast := db.vlogGenerationRewriteQueueSegmentsAfterLast.Load()
+	rewriteQueueProgressSegmentsDeltaLast := db.vlogGenerationRewriteQueueSegmentsDeltaLast.Load()
+	rewriteQueueProgressLiveBytesKnownPasses := db.vlogGenerationRewriteQueueLiveBytesKnownPasses.Load()
+	rewriteQueueProgressLiveBytesUnknownPasses := db.vlogGenerationRewriteQueueLiveBytesUnknownPasses.Load()
+	rewriteQueueProgressLiveBytesBeforeTotal := db.vlogGenerationRewriteQueueLiveBytesBeforeTotal.Load()
+	rewriteQueueProgressLiveBytesAfterTotal := db.vlogGenerationRewriteQueueLiveBytesAfterTotal.Load()
+	rewriteQueueProgressLiveBytesDrainedTotal := db.vlogGenerationRewriteQueueLiveBytesDrainedTotal.Load()
+	rewriteQueueProgressLiveBytesGrownTotal := db.vlogGenerationRewriteQueueLiveBytesGrownTotal.Load()
+	rewriteQueueProgressLiveBytesBeforeLast := db.vlogGenerationRewriteQueueLiveBytesBeforeLast.Load()
+	rewriteQueueProgressLiveBytesAfterLast := db.vlogGenerationRewriteQueueLiveBytesAfterLast.Load()
+	rewriteQueueProgressLiveBytesDeltaLast := db.vlogGenerationRewriteQueueLiveBytesDeltaLast.Load()
+	rewriteQueueProgressSnapshotErrors := db.vlogGenerationRewriteQueueProgressSnapshotErrors.Load()
+	rewriteChurnBps := db.vlogGenerationLastChurnBps.Load()
+	rewriteExecSeconds := 0.0
+	if rewriteExecTotalNS > 0 {
+		rewriteExecSeconds = float64(rewriteExecTotalNS) / float64(time.Second)
+	}
+	rewriteBytesInPerSec := 0.0
+	rewriteBytesOutPerSec := 0.0
+	rewriteReclaimedBytesPerSec := 0.0
+	rewriteBudgetConsumedPerSec := 0.0
+	if rewriteExecSeconds > 0 {
+		rewriteBytesInPerSec = float64(rewriteBytesInTotal) / rewriteExecSeconds
+		rewriteBytesOutPerSec = float64(rewriteBytesOutTotal) / rewriteExecSeconds
+		rewriteReclaimedBytesPerSec = float64(rewriteReclaimedBytesTotal) / rewriteExecSeconds
+		rewriteBudgetConsumedPerSec = float64(rewriteBudgetConsumedTotal) / rewriteExecSeconds
+	}
+	rewriteOutputRatio := 0.0
+	rewriteReclaimRatio := 0.0
+	if rewriteBytesInTotal > 0 {
+		rewriteOutputRatio = float64(rewriteBytesOutTotal) / float64(rewriteBytesInTotal)
+		rewriteReclaimRatio = float64(rewriteReclaimedBytesTotal) / float64(rewriteBytesInTotal)
+	}
+	rewriteProcessedStaleRatio := 0.0
+	if rewriteProcessedTotal > 0 {
+		rewriteProcessedStaleRatio = float64(rewriteProcessedStaleBytes) / float64(rewriteProcessedTotal)
+	}
+	rewriteBudgetConsumedSharePct := 0.0
+	if db.valueLogRewriteBudgetBytes > 0 {
+		rewriteBudgetConsumedSharePct = (rewriteBudgetConsumedPerSec / float64(db.valueLogRewriteBudgetBytes)) * 100.0
+	}
+	rewriteReclaimedVsChurnRatio := 0.0
+	if rewriteChurnBps > 0 {
+		rewriteReclaimedVsChurnRatio = rewriteReclaimedBytesPerSec / float64(rewriteChurnBps)
+	}
+	gcExecTotalNS := db.vlogGenerationGCExecTotalNanos.Load()
+	gcExecMaxNS := db.vlogGenerationGCExecMaxNanos.Load()
+	gcRuns := db.vlogGenerationGCRuns.Load()
+	vacuumExecTotalNS := db.vlogGenerationVacuumExecTotalNanos.Load()
+	vacuumExecMaxNS := db.vlogGenerationVacuumExecMaxNanos.Load()
+	vacuumRuns := db.vlogGenerationVacuumRuns.Load()
 	stats["treedb.cache.vlog_retained_segments"] = fmt.Sprintf("%d", vlogSegments)
 	stats["treedb.cache.vlog_retained_bytes_estimate"] = fmt.Sprintf("%d", vlogBytes)
+	stats["treedb.process.memory.vlog_retained_bytes_estimate"] = fmt.Sprintf("%d", vlogBytes)
+	stats["treedb.cache.vlog_retained_prune.closed_bytes"] = fmt.Sprintf("%d", db.valueLogRetainedClosedBytes.Load())
+	stats["treedb.cache.vlog_retained_prune.last_unix_nano"] = fmt.Sprintf("%d", db.retainedValueLogPruneLastUnixNano.Load())
+	stats["treedb.cache.vlog_retained_prune.runs"] = fmt.Sprintf("%d", db.retainedValueLogPruneRuns.Load())
+	stats["treedb.cache.vlog_retained_prune.forced_runs"] = fmt.Sprintf("%d", db.retainedValueLogPruneForcedRuns.Load())
+	stats["treedb.cache.vlog_retained_prune.foreground_abort_runs"] = fmt.Sprintf("%d", db.retainedValueLogPruneForegroundAbortRuns.Load())
+	stats["treedb.cache.vlog_retained_prune.removed_segments"] = fmt.Sprintf("%d", db.retainedValueLogPruneRemovedSegments.Load())
+	stats["treedb.cache.vlog_retained_prune.removed_bytes"] = fmt.Sprintf("%d", db.retainedValueLogPruneRemovedBytes.Load())
+	stats["treedb.cache.vlog_retained_prune.in_use_skipped_segments"] = fmt.Sprintf("%d", db.retainedValueLogPruneInUseSkippedSegments.Load())
+	stats["treedb.cache.vlog_retained_prune.in_use_skipped_bytes"] = fmt.Sprintf("%d", db.retainedValueLogPruneInUseSkippedBytes.Load())
+	stats["treedb.cache.vlog_retained_prune.candidate_segments"] = fmt.Sprintf("%d", db.retainedValueLogPruneCandidateSegments.Load())
+	stats["treedb.cache.vlog_retained_prune.candidate_bytes"] = fmt.Sprintf("%d", db.retainedValueLogPruneCandidateBytes.Load())
+	stats["treedb.cache.vlog_retained_prune.live_skipped_segments"] = fmt.Sprintf("%d", db.retainedValueLogPruneLiveSkippedSegments.Load())
+	stats["treedb.cache.vlog_retained_prune.live_skipped_bytes"] = fmt.Sprintf("%d", db.retainedValueLogPruneLiveSkippedBytes.Load())
+	stats["treedb.cache.vlog_retained_prune.parse_skipped_segments"] = fmt.Sprintf("%d", db.retainedValueLogPruneParseSkippedSegments.Load())
+	stats["treedb.cache.vlog_retained_prune.parse_skipped_bytes"] = fmt.Sprintf("%d", db.retainedValueLogPruneParseSkippedBytes.Load())
+	stats["treedb.cache.vlog_retained_prune.zombie_marked_segments"] = fmt.Sprintf("%d", db.retainedValueLogPruneZombieMarkedSegments.Load())
+	stats["treedb.cache.vlog_retained_prune.zombie_marked_bytes"] = fmt.Sprintf("%d", db.retainedValueLogPruneZombieMarkedBytes.Load())
+	stats["treedb.cache.vlog_retained_prune.last_observed_source.segments"] = fmt.Sprintf("%d", db.retainedValueLogPruneLastObservedSourceSegments.Load())
+	stats["treedb.cache.vlog_retained_prune.last_observed_source.bytes"] = fmt.Sprintf("%d", db.retainedValueLogPruneLastObservedSourceBytes.Load())
+	stats["treedb.cache.vlog_retained_prune.last_observed_source.segments_candidate"] = fmt.Sprintf("%d", db.retainedValueLogPruneLastObservedSourceCandidateSegments.Load())
+	stats["treedb.cache.vlog_retained_prune.last_observed_source.bytes_candidate"] = fmt.Sprintf("%d", db.retainedValueLogPruneLastObservedSourceCandidateBytes.Load())
+	stats["treedb.cache.vlog_retained_prune.last_observed_source.segments_removed"] = fmt.Sprintf("%d", db.retainedValueLogPruneLastObservedSourceRemovedSegments.Load())
+	stats["treedb.cache.vlog_retained_prune.last_observed_source.bytes_removed"] = fmt.Sprintf("%d", db.retainedValueLogPruneLastObservedSourceRemovedBytes.Load())
+	stats["treedb.cache.vlog_retained_prune.last_observed_source.segments_in_use_skipped"] = fmt.Sprintf("%d", db.retainedValueLogPruneLastObservedSourceInUseSkippedSegments.Load())
+	stats["treedb.cache.vlog_retained_prune.last_observed_source.bytes_in_use_skipped"] = fmt.Sprintf("%d", db.retainedValueLogPruneLastObservedSourceInUseSkippedBytes.Load())
+	stats["treedb.cache.vlog_retained_prune.last_observed_source.segments_live_skipped"] = fmt.Sprintf("%d", db.retainedValueLogPruneLastObservedSourceLiveSkippedSegments.Load())
+	stats["treedb.cache.vlog_retained_prune.last_observed_source.bytes_live_skipped"] = fmt.Sprintf("%d", db.retainedValueLogPruneLastObservedSourceLiveSkippedBytes.Load())
+	stats["treedb.cache.vlog_retained_prune.last_observed_source.segments_parse_skipped"] = fmt.Sprintf("%d", db.retainedValueLogPruneLastObservedSourceParseSkippedSegments.Load())
+	stats["treedb.cache.vlog_retained_prune.last_observed_source.bytes_parse_skipped"] = fmt.Sprintf("%d", db.retainedValueLogPruneLastObservedSourceParseSkippedBytes.Load())
+	stats["treedb.cache.vlog_retained_prune.last_observed_source.segments_zombie_marked"] = fmt.Sprintf("%d", db.retainedValueLogPruneLastObservedSourceZombieMarkedSegments.Load())
+	stats["treedb.cache.vlog_retained_prune.last_observed_source.bytes_zombie_marked"] = fmt.Sprintf("%d", db.retainedValueLogPruneLastObservedSourceZombieMarkedBytes.Load())
+	stats["treedb.cache.vlog_retained_prune.observed_source.segments_total"] = fmt.Sprintf("%d", db.retainedValueLogPruneObservedSourceSegmentsTotal.Load())
+	stats["treedb.cache.vlog_retained_prune.observed_source.bytes_total"] = fmt.Sprintf("%d", db.retainedValueLogPruneObservedSourceBytesTotal.Load())
+	stats["treedb.cache.vlog_retained_prune.observed_source.segments_candidate_total"] = fmt.Sprintf("%d", db.retainedValueLogPruneObservedSourceCandidateSegmentsTotal.Load())
+	stats["treedb.cache.vlog_retained_prune.observed_source.bytes_candidate_total"] = fmt.Sprintf("%d", db.retainedValueLogPruneObservedSourceCandidateBytesTotal.Load())
+	stats["treedb.cache.vlog_retained_prune.observed_source.segments_removed_total"] = fmt.Sprintf("%d", db.retainedValueLogPruneObservedSourceRemovedSegmentsTotal.Load())
+	stats["treedb.cache.vlog_retained_prune.observed_source.bytes_removed_total"] = fmt.Sprintf("%d", db.retainedValueLogPruneObservedSourceRemovedBytesTotal.Load())
+	stats["treedb.cache.vlog_retained_prune.observed_source.segments_in_use_skipped_total"] = fmt.Sprintf("%d", db.retainedValueLogPruneObservedSourceInUseSkippedSegmentsTotal.Load())
+	stats["treedb.cache.vlog_retained_prune.observed_source.bytes_in_use_skipped_total"] = fmt.Sprintf("%d", db.retainedValueLogPruneObservedSourceInUseSkippedBytesTotal.Load())
+	stats["treedb.cache.vlog_retained_prune.observed_source.segments_live_skipped_total"] = fmt.Sprintf("%d", db.retainedValueLogPruneObservedSourceLiveSkippedSegmentsTotal.Load())
+	stats["treedb.cache.vlog_retained_prune.observed_source.bytes_live_skipped_total"] = fmt.Sprintf("%d", db.retainedValueLogPruneObservedSourceLiveSkippedBytesTotal.Load())
+	stats["treedb.cache.vlog_retained_prune.observed_source.segments_parse_skipped_total"] = fmt.Sprintf("%d", db.retainedValueLogPruneObservedSourceParseSkippedSegmentsTotal.Load())
+	stats["treedb.cache.vlog_retained_prune.observed_source.bytes_parse_skipped_total"] = fmt.Sprintf("%d", db.retainedValueLogPruneObservedSourceParseSkippedBytesTotal.Load())
+	stats["treedb.cache.vlog_retained_prune.observed_source.segments_zombie_marked_total"] = fmt.Sprintf("%d", db.retainedValueLogPruneObservedSourceZombieMarkedSegmentsTotal.Load())
+	stats["treedb.cache.vlog_retained_prune.observed_source.bytes_zombie_marked_total"] = fmt.Sprintf("%d", db.retainedValueLogPruneObservedSourceZombieMarkedBytesTotal.Load())
+	stats["treedb.cache.vlog_retained_prune.pressure_bytes"] = fmt.Sprintf("%d", db.retainedPrunePressureBytes())
+	stats["treedb.cache.vlog_retained_prune.schedule_requests"] = fmt.Sprintf("%d", db.retainedValueLogPruneScheduleRequests.Load())
+	stats["treedb.cache.vlog_retained_prune.schedule_forced_requests"] = fmt.Sprintf("%d", db.retainedValueLogPruneScheduleForcedRequests.Load())
+	stats["treedb.cache.vlog_retained_prune.schedule_skip.closing"] = fmt.Sprintf("%d", db.retainedValueLogPruneScheduleSkipClosing.Load())
+	stats["treedb.cache.vlog_retained_prune.schedule_skip.inflight"] = fmt.Sprintf("%d", db.retainedValueLogPruneScheduleSkipInFlight.Load())
+	stats["treedb.cache.vlog_retained_prune.schedule_skip.no_closed_bytes"] = fmt.Sprintf("%d", db.retainedValueLogPruneScheduleSkipNoClosedBytes.Load())
+	stats["treedb.cache.vlog_retained_prune.schedule_skip.below_pressure"] = fmt.Sprintf("%d", db.retainedValueLogPruneScheduleSkipBelowPressure.Load())
+	stats["treedb.cache.vlog_retained_prune.schedule_skip.min_interval"] = fmt.Sprintf("%d", db.retainedValueLogPruneScheduleSkipMinInterval.Load())
+	stats["treedb.cache.vlog_retained_prune.write_gate_retries"] = fmt.Sprintf("%d", db.retainedValueLogPruneWriteGateRetries.Load())
+	stats["treedb.cache.vlog_retained_prune.write_gate_retry_successes"] = fmt.Sprintf("%d", db.retainedValueLogPruneWriteGateRetrySuccesses.Load())
+	stats["treedb.cache.vlog_retained_prune.force_pending"] = fmt.Sprintf("%t", db.retainedPruneForceRequested.Load())
 	stats["treedb.cache.vlog_generation.policy"] = fmt.Sprintf("%d", db.valueLogGenerationPolicy)
 	stats["treedb.cache.vlog_generation.enabled"] = fmt.Sprintf("%t", db.valueLogGenerationPolicy == uint8(backenddb.ValueLogGenerationHotWarmCold))
+	stats["treedb.cache.vlog_generation.maintenance_phase"] = maintenancePhaseString(db.maintenancePhase.Load())
 	stats["treedb.cache.vlog_generation.scheduler_state"] = vlogGenerationSchedulerStateString(db.vlogGenerationSchedulerState.Load())
+	stats["treedb.cache.vlog_generation.maintenance.active"] = fmt.Sprintf("%t", db.vlogGenerationMaintenanceActive.Load())
 	stats["treedb.cache.vlog_generation.scheduler_last_reason"] = vlogGenerationReasonString(db.vlogGenerationLastReason.Load())
+	stats["treedb.cache.vlog_generation.checkpoint_kick.active"] = fmt.Sprintf("%t", db.vlogGenerationCheckpointKickActive.Load())
+	stats["treedb.cache.vlog_generation.checkpoint_kick.pending"] = fmt.Sprintf("%t", db.vlogGenerationCheckpointKickPending.Load())
+	stats["treedb.cache.vlog_generation.rewrite.queue.pending"] = fmt.Sprintf("%t", db.vlogGenerationRewriteQueuePending.Load())
+	stats["treedb.cache.vlog_generation.rewrite.queue.running"] = fmt.Sprintf("%t", db.vlogGenerationRewriteQueueRunning.Load())
+	stats["treedb.cache.vlog_generation.checkpoint_kick.last_unix_nano"] = fmt.Sprintf("%d", db.vlogGenerationLastCheckpointKickUnixNano.Load())
+	stats["treedb.cache.vlog_generation.checkpoint_kick.runs"] = fmt.Sprintf("%d", db.vlogGenerationCheckpointKickRuns.Load())
+	stats["treedb.cache.vlog_generation.checkpoint_kick.rewrite_runs"] = fmt.Sprintf("%d", db.vlogGenerationCheckpointKickRewriteRuns.Load())
+	stats["treedb.cache.vlog_generation.checkpoint_kick.gc_runs"] = fmt.Sprintf("%d", db.vlogGenerationCheckpointKickGCRuns.Load())
+	stats["treedb.cache.vlog_generation.checkpoint_kick.skipped_hot_no_debt"] = fmt.Sprintf("%d", db.vlogGenerationCheckpointKickSkippedHotNoDebt.Load())
+	stats["treedb.cache.vlog_generation.checkpoint_kick.hot_no_debt_wake.running"] = fmt.Sprintf("%t", db.vlogGenerationCheckpointKickHotNoDebtWakeRunning.Load())
+	stats["treedb.cache.vlog_generation.checkpoint_kick.hot_no_debt_wake.runs"] = fmt.Sprintf("%d", db.vlogGenerationCheckpointKickHotNoDebtWakeRuns.Load())
+	stats["treedb.cache.vlog_generation.maintenance.attempts"] = fmt.Sprintf("%d", db.vlogGenerationMaintenanceAttempts.Load())
+	stats["treedb.cache.vlog_generation.maintenance.acquired"] = fmt.Sprintf("%d", db.vlogGenerationMaintenanceAcquired.Load())
+	stats["treedb.cache.vlog_generation.maintenance.collisions"] = fmt.Sprintf("%d", db.vlogGenerationMaintenanceCollisions.Load())
+	stats["treedb.cache.vlog_generation.maintenance.skip.wal_on_periodic"] = fmt.Sprintf("%d", db.vlogGenerationMaintenanceSkipWALOnPeriodic.Load())
+	stats["treedb.cache.vlog_generation.maintenance.skip.maintenance_phase"] = fmt.Sprintf("%d", db.vlogGenerationMaintenanceSkipPhase.Load())
+	stats["treedb.cache.vlog_generation.maintenance.skip.stage_gate"] = fmt.Sprintf("%d", db.vlogGenerationMaintenanceSkipStageGate.Load())
+	stats["treedb.cache.vlog_generation.maintenance.skip.stage_gate_not_due"] = fmt.Sprintf("%d", db.vlogGenerationMaintenanceSkipStageNotDue.Load())
+	stats["treedb.cache.vlog_generation.maintenance.skip.stage_gate_due_reserved"] = fmt.Sprintf("%d", db.vlogGenerationMaintenanceSkipStageDue.Load())
+	stats["treedb.cache.vlog_generation.maintenance.skip.age_blocked_gate"] = fmt.Sprintf("%d", db.vlogGenerationMaintenanceSkipAgeBlocked.Load())
+	stats["treedb.cache.vlog_generation.maintenance.skip.priority_pending"] = fmt.Sprintf("%d", db.vlogGenerationMaintenanceSkipPriority.Load())
+	stats["treedb.cache.vlog_generation.maintenance.skip.quiet_window"] = fmt.Sprintf("%d", db.vlogGenerationMaintenanceSkipQuiet.Load())
+	stats["treedb.cache.vlog_generation.maintenance.skip.before_first_checkpoint"] = fmt.Sprintf("%d", db.vlogGenerationMaintenanceSkipPreCheckpoint.Load())
+	stats["treedb.cache.vlog_generation.maintenance.skip.checkpoint_inflight"] = fmt.Sprintf("%d", db.vlogGenerationMaintenanceSkipCheckpointing.Load())
+	stats["treedb.cache.vlog_generation.maintenance.foreground_quiet"] = fmt.Sprintf("%t", foregroundQuiet)
+	stats["treedb.cache.vlog_generation.maintenance.foreground_write_quiet"] = fmt.Sprintf("%t", foregroundWriteQuiet)
+	stats["treedb.cache.vlog_generation.maintenance.foreground_read_quiet"] = fmt.Sprintf("%t", foregroundReadQuiet)
+	stats["treedb.cache.vlog_generation.maintenance.foreground_active_iterators"] = fmt.Sprintf("%d", foregroundActiveIters)
+	stats["treedb.cache.vlog_generation.maintenance.foreground_last_write_unix_nano"] = fmt.Sprintf("%d", foregroundLastWriteNS)
+	stats["treedb.cache.vlog_generation.maintenance.foreground_last_read_unix_nano"] = fmt.Sprintf("%d", foregroundLastReadNS)
+	stats["treedb.cache.vlog_generation.maintenance.foreground_write_age_ms"] = fmt.Sprintf("%d", foregroundWriteAgeMS)
+	stats["treedb.cache.vlog_generation.maintenance.foreground_read_age_ms"] = fmt.Sprintf("%d", foregroundReadAgeMS)
+	stats["treedb.cache.vlog_generation.maintenance.passes.noop"] = fmt.Sprintf("%d", db.vlogGenerationMaintenancePassNoop.Load())
+	stats["treedb.cache.vlog_generation.maintenance.passes.with_rewrite"] = fmt.Sprintf("%d", db.vlogGenerationMaintenancePassWithRewrite.Load())
+	stats["treedb.cache.vlog_generation.maintenance.passes.with_gc"] = fmt.Sprintf("%d", db.vlogGenerationMaintenancePassWithGC.Load())
+	stats["treedb.cache.vlog_generation.maintenance.passes.with_leaf_pack"] = fmt.Sprintf("%d", db.vlogGenerationMaintenancePassWithLeafPack.Load())
+	for sourceIdx := 0; sourceIdx < vlogGenerationMaintenanceSourceCount; sourceIdx++ {
+		source := vlogGenerationMaintenanceSourceLabel(sourceIdx)
+		stats["treedb.cache.vlog_generation.maintenance.acquired.source."+source] = fmt.Sprintf(
+			"%d",
+			db.vlogGenerationMaintenanceAcquiredBySource[sourceIdx].Load(),
+		)
+		stats["treedb.cache.vlog_generation.maintenance.passes.noop.source."+source] = fmt.Sprintf(
+			"%d",
+			db.vlogGenerationMaintenancePassNoopBySource[sourceIdx].Load(),
+		)
+		stats["treedb.cache.vlog_generation.maintenance.passes.with_rewrite.source."+source] = fmt.Sprintf(
+			"%d",
+			db.vlogGenerationMaintenancePassWithRewriteBySource[sourceIdx].Load(),
+		)
+		stats["treedb.cache.vlog_generation.maintenance.passes.with_gc.source."+source] = fmt.Sprintf(
+			"%d",
+			db.vlogGenerationMaintenancePassWithGCBySource[sourceIdx].Load(),
+		)
+		stats["treedb.cache.vlog_generation.maintenance.passes.with_leaf_pack.source."+source] = fmt.Sprintf(
+			"%d",
+			db.vlogGenerationMaintenancePassWithLeafPackBySource[sourceIdx].Load(),
+		)
+	}
+	stats["treedb.cache.vlog_generation.leaf_pack.attempts"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackAttempts.Load())
+	stats["treedb.cache.vlog_generation.leaf_pack.admitted"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackAdmitted.Load())
+	stats["treedb.cache.vlog_generation.leaf_pack.runs"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackRuns.Load())
+	stats["treedb.cache.vlog_generation.leaf_pack.skips"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackSkips.Load())
+	stats["treedb.cache.vlog_generation.leaf_pack.skip.min_interval"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackSkipMinInterval.Load())
+	stats["treedb.cache.vlog_generation.leaf_pack.skip.write_burst"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackSkipWriteBurst.Load())
+	stats["treedb.cache.vlog_generation.leaf_pack.skip.queue_pressure"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackSkipQueuePressure.Load())
+	stats["treedb.cache.vlog_generation.leaf_pack.skip.foreground_iterators"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackSkipForegroundIterators.Load())
+	stats["treedb.cache.vlog_generation.leaf_pack.errors"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackErrors.Load())
+	stats["treedb.cache.vlog_generation.leaf_pack.canceled"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackCanceled.Load())
+	stats["treedb.cache.vlog_generation.leaf_pack.deadline"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackDeadline.Load())
+	stats["treedb.cache.vlog_generation.leaf_pack.bytes_copied"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackBytesCopied.Load())
+	stats["treedb.cache.vlog_generation.leaf_pack.expected_reclaim_bytes"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackExpectedReclaimBytes.Load())
+	stats["treedb.cache.vlog_generation.leaf_pack.expected_reclaim_per_byte_copied_ppm"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackExpectedReclaimPerByteCopiedPPM.Load())
+	stats["treedb.cache.vlog_generation.leaf_pack.attributed_reclaim_bytes"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackReclaimedBytes.Load())
+	stats["treedb.cache.vlog_generation.leaf_pack.attributed_reclaim_per_byte_copied_ppm"] = fmt.Sprintf("%d", leafGenerationPackReclaimPerByteCopiedPPM(int64(db.vlogGenerationLeafPackReclaimedBytes.Load()), int64(db.vlogGenerationLeafPackBytesCopied.Load())))
+	stats["treedb.cache.vlog_generation.leaf_pack.selection.bytes_to_copy"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackSelectionBytesToCopy.Load())
+	stats["treedb.cache.vlog_generation.leaf_pack.selection.bytes_dead"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackSelectionBytesDead.Load())
+	stats["treedb.cache.vlog_generation.leaf_pack.selection.generations"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackSelectionGenerations.Load())
+	stats["treedb.cache.vlog_generation.leaf_pack.last_wall_ms"] = fmt.Sprintf("%.3f", float64(db.vlogGenerationLeafPackLastWallNanos.Load())/float64(time.Millisecond))
+	stats["treedb.cache.vlog_generation.leaf_pack.min_interval_ms"] = fmt.Sprintf("%d", leafGenerationPackMaintenanceMinInterval.Milliseconds())
+	stats["treedb.cache.vlog_generation.leaf_pack.timeout_ms"] = fmt.Sprintf("%d", leafGenerationPackMaintenanceTimeout().Milliseconds())
+	stats["treedb.cache.vlog_generation.leaf_pack.write_burst_grace_ms"] = fmt.Sprintf("%d", leafGenerationPackMaintenanceWriteBurstGrace().Milliseconds())
+	stats["treedb.cache.vlog_generation.leaf_pack.max_foreground_queue"] = fmt.Sprintf("%d", leafGenerationPackMaintenanceMaxForegroundQueue())
+	stats["treedb.cache.vlog_generation.leaf_pack.max_generations"] = fmt.Sprintf("%d", int(envUint64(envLeafGenerationPackMaintenanceMaxGenerations, leafGenerationPackMaintenanceDefaultMaxGenerations)))
+	stats["treedb.cache.vlog_generation.leaf_pack.max_bytes_to_copy"] = fmt.Sprintf("%d", int64(envUint64(envLeafGenerationPackMaintenanceMaxBytesToCopy, leafGenerationPackMaintenanceDefaultMaxBytesToCopy)))
+	stats["treedb.cache.vlog_generation.leaf_pack.min_candidate_generations"] = fmt.Sprintf("%d", loadPositiveIntEnvDefault(envLeafGenerationPackMaintenanceMinCandidateGenerations, leafGenerationPackMaintenanceDefaultMinCandidateGenerations))
+	stats["treedb.cache.vlog_generation.leaf_pack.min_reclaim_per_byte_copied_ppm"] = fmt.Sprintf("%d", leafGenerationPackMaintenanceMinReclaimPerByteCopiedPPM())
+	stats["treedb.cache.vlog_generation.leaf_pack.last_expected_reclaim_bytes"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackLastExpectedReclaimBytes.Load())
+	stats["treedb.cache.vlog_generation.leaf_pack.last_expected_reclaim_per_byte_copied_ppm"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackLastExpectedReclaimPerByteCopiedPPM.Load())
+	stats["treedb.cache.vlog_generation.leaf_pack.last_selection.bytes_to_copy"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackLastSelectionBytesToCopy.Load())
+	stats["treedb.cache.vlog_generation.leaf_pack.last_selection.bytes_dead"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackLastSelectionBytesDead.Load())
+	stats["treedb.cache.vlog_generation.leaf_pack.last_selection.generations"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackLastSelectionGenerations.Load())
+	stats["treedb.cache.vlog_generation.leaf_pack.last_bytes_copied"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackLastBytesCopied.Load())
+	stats["treedb.cache.vlog_generation.leaf_pack.last_attributed_reclaim_bytes"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackLastReclaimedBytes.Load())
+	stats["treedb.cache.vlog_generation.leaf_pack.last_attributed_reclaim_per_byte_copied_ppm"] = fmt.Sprintf("%d", leafGenerationPackReclaimPerByteCopiedPPM(db.vlogGenerationLeafPackLastReclaimedBytes.Load(), db.vlogGenerationLeafPackLastBytesCopied.Load()))
+	stats["treedb.cache.vlog_generation.leaf_pack.gc.runs"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackGCRuns.Load())
+	stats["treedb.cache.vlog_generation.leaf_pack.gc.eligible_generations"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackGCEligibleGenerations.Load())
+	stats["treedb.cache.vlog_generation.leaf_pack.gc.deleted_generations"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackGCDeletedGenerations.Load())
+	stats["treedb.cache.vlog_generation.leaf_pack.gc.deleted_files"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackGCDeletedFiles.Load())
+	stats["treedb.cache.vlog_generation.leaf_pack.gc.deleted_bytes"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackGCDeletedBytes.Load())
+	stats["treedb.cache.vlog_generation.leaf_pack.gc.last_eligible_generations"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackGCLastEligibleGenerations.Load())
+	stats["treedb.cache.vlog_generation.leaf_pack.gc.last_deleted_generations"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackGCLastDeletedGenerations.Load())
+	stats["treedb.cache.vlog_generation.leaf_pack.gc.last_deleted_files"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackGCLastDeletedFiles.Load())
+	stats["treedb.cache.vlog_generation.leaf_pack.gc.last_deleted_bytes"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackGCLastDeletedBytes.Load())
+	stats["treedb.cache.vlog_generation.leaf_pack.stop.low_yield"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackStopLowYield.Load())
+	stats["treedb.cache.vlog_generation.leaf_pack.last_unix_nano"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackLastUnixNano.Load())
+	stats["treedb.cache.vlog_generation.leaf_pack.canceled_last_unix_nano"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackCanceledLastNS.Load())
+	stats["treedb.cache.vlog_generation.leaf_pack.deadline_last_unix_nano"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackDeadlineLastNS.Load())
+	stats["treedb.cache.vlog_generation.leaf_pack.last_skip_reason"] = atomicValueString(&db.vlogGenerationLeafPackLastSkipReason)
+	stats["treedb.cache.vlog_generation.maintenance.pass.total_ms"] = fmt.Sprintf("%.3f", float64(maintenancePassTotalNS)/float64(time.Millisecond))
+	stats["treedb.cache.vlog_generation.maintenance.pass.max_ms"] = fmt.Sprintf("%.3f", float64(maintenancePassMaxNS)/float64(time.Millisecond))
+	if maintenancePasses > 0 {
+		stats["treedb.cache.vlog_generation.maintenance.pass.avg_ms"] = fmt.Sprintf("%.3f", (float64(maintenancePassTotalNS)/float64(maintenancePasses))/float64(time.Millisecond))
+	} else {
+		stats["treedb.cache.vlog_generation.maintenance.pass.avg_ms"] = "0.000"
+	}
 	stats["treedb.cache.vlog_generation.churn_bytes_total"] = fmt.Sprintf("%d", db.vlogGenerationChurnBytes.Load())
-	stats["treedb.cache.vlog_generation.churn_bytes_per_sec"] = fmt.Sprintf("%d", db.vlogGenerationLastChurnBps.Load())
+	stats["treedb.cache.vlog_generation.churn_bytes_per_sec"] = fmt.Sprintf("%d", rewriteChurnBps)
+	stats["treedb.cache.vlog_generation.rewrite.queue_len"] = fmt.Sprintf("%d", rewriteQueueLen)
+	stats["treedb.cache.vlog_generation.rewrite.queue_loaded"] = fmt.Sprintf("%t", rewriteQueueLoaded)
+	stats["treedb.cache.vlog_generation.rewrite.queue_live_hint.known"] = fmt.Sprintf("%t", rewriteQueueLiveBytesHintKnown)
+	stats["treedb.cache.vlog_generation.rewrite.queue_live_hint.ids_present"] = fmt.Sprintf("%d", rewriteQueueLiveHintIDsPresent)
+	stats["treedb.cache.vlog_generation.rewrite.queue_live_hint.ids_known"] = fmt.Sprintf("%d", rewriteQueueLiveHintIDsKnown)
+	stats["treedb.cache.vlog_generation.rewrite.queue_live_hint.coverage_pct"] = fmt.Sprintf("%.3f", rewriteQueueLiveHintCoveragePct)
+	stats["treedb.cache.vlog_generation.rewrite.queue_live_hint.bytes"] = fmt.Sprintf("%d", rewriteQueueLiveBytesHint)
+	stats["treedb.cache.vlog_generation.rewrite.queue_run_segment_cap"] = fmt.Sprintf("%d", rewriteQueueRunSegmentCap)
+	stats["treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.checkpoint_kick"] = fmt.Sprintf("%d", rewriteQueueRunSegmentCapCheckpointKick)
+	stats["treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.limiter"] = vlogGenerationRewriteSegmentCapLimiterString(rewriteQueueRunSegmentCapLimiter)
+	stats["treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.limiter.checkpoint_kick"] = vlogGenerationRewriteSegmentCapLimiterString(rewriteQueueRunSegmentCapCheckpointKickLimiter)
+	stats["treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.by_budget"] = fmt.Sprintf("%d", rewriteQueueRunSegmentCapByBudget)
+	stats["treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.by_budget.checkpoint_kick"] = fmt.Sprintf("%d", rewriteQueueRunSegmentCapByBudgetCheckpointKick)
+	stats["treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.per_segment_budget_bytes"] = fmt.Sprintf("%d", rewriteQueueRunSegmentCapPerSegmentBudgetBytes)
+	stats["treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.per_segment_budget_bytes.checkpoint_kick"] = fmt.Sprintf("%d", rewriteQueueRunSegmentCapPerSegmentBudgetBytesCheckpointKick)
+	stats["treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.fresh_plan"] = fmt.Sprintf("%d", rewriteQueueFreshPlanSegmentCap)
+	stats["treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.limiter.fresh_plan"] = vlogGenerationRewriteSegmentCapLimiterString(rewriteQueueFreshPlanSegmentCapLimiter)
+	stats["treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.by_budget.fresh_plan"] = fmt.Sprintf("%d", rewriteQueueFreshPlanSegmentCapByBudget)
+	stats["treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.per_segment_budget_bytes.fresh_plan"] = fmt.Sprintf("%d", rewriteQueueFreshPlanSegmentCapPerSegmentBudgetBytes)
+	stats["treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.decisions"] = fmt.Sprintf("%d", db.vlogGenerationRewriteQueueRunSegmentCapDecisions.Load())
+	stats["treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.decisions.fresh_plan"] = fmt.Sprintf("%d", db.vlogGenerationRewriteQueueFreshPlanSegmentCapDecisions.Load())
+	for limiterIdx := 0; limiterIdx < vlogGenerationRewriteSegmentCapLimiterCount; limiterIdx++ {
+		limiter := vlogGenerationRewriteSegmentCapLimiterString(uint32(limiterIdx))
+		if limiter == "unknown" {
+			continue
+		}
+		stats["treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.limiter_count."+limiter] = fmt.Sprintf("%d", db.vlogGenerationRewriteQueueRunSegmentCapLimiterCounts[limiterIdx].Load())
+		stats["treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.limiter_count."+limiter+".fresh_plan"] = fmt.Sprintf("%d", db.vlogGenerationRewriteQueueFreshPlanSegmentCapLimiterCounts[limiterIdx].Load())
+	}
+	stats["treedb.cache.vlog_generation.rewrite.queue_config.resume_max_segments"] = fmt.Sprintf("%d", rewriteResumeMaxSegments)
+	stats["treedb.cache.vlog_generation.rewrite.queue_config.debt_drain_max_segments"] = fmt.Sprintf("%d", rewriteDebtDrainMaxSegments)
+	stats["treedb.cache.vlog_generation.rewrite.queue_config.fresh_plan_debt_drain_min_segments"] = fmt.Sprintf("%d", rewriteFreshPlanDebtDrainMinSegments)
+	stats["treedb.cache.vlog_generation.rewrite.queue_config.fresh_plan_debt_drain_max_segments"] = fmt.Sprintf("%d", rewriteFreshPlanDebtDrainMaxSegments)
+	stats["treedb.cache.vlog_generation.rewrite.queued_debt.passes"] = fmt.Sprintf("%d", db.vlogGenerationRewriteQueuedDebtPasses.Load())
+	stats["treedb.cache.vlog_generation.rewrite.queued_debt.rewrite_started"] = fmt.Sprintf("%d", db.vlogGenerationRewriteQueuedDebtRewriteStarted.Load())
+	stats["treedb.cache.vlog_generation.rewrite.queued_debt.skip.quiet_window"] = fmt.Sprintf("%d", db.vlogGenerationRewriteQueuedDebtSkipQuiet.Load())
+	stats["treedb.cache.vlog_generation.rewrite.queued_debt.skip.cancel_backoff"] = fmt.Sprintf("%d", db.vlogGenerationRewriteQueuedDebtSkipCancelBackoff.Load())
+	stats["treedb.cache.vlog_generation.rewrite.queued_debt.skip.ineffective_backoff"] = fmt.Sprintf("%d", db.vlogGenerationRewriteQueuedDebtSkipIneffectiveBackoff.Load())
+	stats["treedb.cache.vlog_generation.rewrite.queued_debt.skip.min_interval"] = fmt.Sprintf("%d", db.vlogGenerationRewriteQueuedDebtSkipMinInterval.Load())
+	stats["treedb.cache.vlog_generation.rewrite.queued_debt.skip.budget_empty"] = fmt.Sprintf("%d", db.vlogGenerationRewriteQueuedDebtSkipBudgetEmpty.Load())
+	stats["treedb.cache.vlog_generation.rewrite.queued_debt.skip.no_chunk"] = fmt.Sprintf("%d", db.vlogGenerationRewriteQueuedDebtSkipNoChunk.Load())
+	stats["treedb.cache.vlog_generation.rewrite.queued_debt.followup_suppressed"] = fmt.Sprintf("%d", db.vlogGenerationRewriteQueuedDebtFollowupSuppressed.Load())
+	stats["treedb.cache.vlog_generation.rewrite.queued_debt.exec.runs"] = fmt.Sprintf("%d", db.vlogGenerationRewriteQueuedDebtExecRuns.Load())
+	stats["treedb.cache.vlog_generation.rewrite.queued_debt.exec.segments"] = fmt.Sprintf("%d", db.vlogGenerationRewriteQueuedDebtExecSegments.Load())
+	stats["treedb.cache.vlog_generation.rewrite.queued_debt.exec.plan_bytes_total"] = fmt.Sprintf("%d", db.vlogGenerationRewriteQueuedDebtExecPlanBytesTotal.Load())
+	stats["treedb.cache.vlog_generation.rewrite.queued_debt.exec.plan_bytes_live"] = fmt.Sprintf("%d", db.vlogGenerationRewriteQueuedDebtExecPlanBytesLive.Load())
+	stats["treedb.cache.vlog_generation.rewrite.queued_debt.exec.plan_bytes_stale"] = fmt.Sprintf("%d", db.vlogGenerationRewriteQueuedDebtExecPlanBytesStale.Load())
+	stats["treedb.cache.vlog_generation.rewrite.queued_debt.exec.effective_bytes_before"] = fmt.Sprintf("%d", db.vlogGenerationRewriteQueuedDebtExecEffectiveBytesBefore.Load())
+	stats["treedb.cache.vlog_generation.rewrite.queued_debt.exec.effective_bytes_after"] = fmt.Sprintf("%d", db.vlogGenerationRewriteQueuedDebtExecEffectiveBytesAfter.Load())
+	stats["treedb.cache.vlog_generation.rewrite.queued_debt.exec.gc_bytes_deleted"] = fmt.Sprintf("%d", db.vlogGenerationRewriteQueuedDebtExecGCBytesDeleted.Load())
+	stats["treedb.cache.vlog_generation.rewrite.queued_debt.exec.reclaimed_bytes"] = fmt.Sprintf("%d", db.vlogGenerationRewriteQueuedDebtExecReclaimedBytes.Load())
+	stats["treedb.cache.vlog_generation.rewrite.queued_debt.exec.no_reclaim_runs"] = fmt.Sprintf("%d", db.vlogGenerationRewriteQueuedDebtExecNoReclaimRuns.Load())
+	stats["treedb.cache.vlog_generation.rewrite.queued_debt.exec.source_bytes_requested"] = fmt.Sprintf("%d", db.vlogGenerationRewriteQueuedDebtExecSourceBytesRequested.Load())
+	stats["treedb.cache.vlog_generation.rewrite.queued_debt.exec.source_bytes_unreferenced"] = fmt.Sprintf("%d", db.vlogGenerationRewriteQueuedDebtExecSourceBytesUnreferenced.Load())
+	stats["treedb.cache.vlog_generation.rewrite.queue_progress.passes"] = fmt.Sprintf("%d", rewriteQueueProgressPasses)
+	stats["treedb.cache.vlog_generation.rewrite.queue_progress.snapshot_errors"] = fmt.Sprintf("%d", rewriteQueueProgressSnapshotErrors)
+	stats["treedb.cache.vlog_generation.rewrite.queue_progress.segments_before_total"] = fmt.Sprintf("%d", rewriteQueueProgressSegmentsBeforeTotal)
+	stats["treedb.cache.vlog_generation.rewrite.queue_progress.segments_after_total"] = fmt.Sprintf("%d", rewriteQueueProgressSegmentsAfterTotal)
+	stats["treedb.cache.vlog_generation.rewrite.queue_progress.segments_drained_total"] = fmt.Sprintf("%d", rewriteQueueProgressSegmentsDrainedTotal)
+	stats["treedb.cache.vlog_generation.rewrite.queue_progress.segments_grown_total"] = fmt.Sprintf("%d", rewriteQueueProgressSegmentsGrownTotal)
+	stats["treedb.cache.vlog_generation.rewrite.queue_progress.segments_before_last"] = fmt.Sprintf("%d", rewriteQueueProgressSegmentsBeforeLast)
+	stats["treedb.cache.vlog_generation.rewrite.queue_progress.segments_after_last"] = fmt.Sprintf("%d", rewriteQueueProgressSegmentsAfterLast)
+	stats["treedb.cache.vlog_generation.rewrite.queue_progress.segments_delta_last"] = fmt.Sprintf("%d", rewriteQueueProgressSegmentsDeltaLast)
+	stats["treedb.cache.vlog_generation.rewrite.queue_progress.live_bytes_known_passes"] = fmt.Sprintf("%d", rewriteQueueProgressLiveBytesKnownPasses)
+	stats["treedb.cache.vlog_generation.rewrite.queue_progress.live_bytes_unknown_passes"] = fmt.Sprintf("%d", rewriteQueueProgressLiveBytesUnknownPasses)
+	stats["treedb.cache.vlog_generation.rewrite.queue_progress.live_bytes_before_total"] = fmt.Sprintf("%d", rewriteQueueProgressLiveBytesBeforeTotal)
+	stats["treedb.cache.vlog_generation.rewrite.queue_progress.live_bytes_after_total"] = fmt.Sprintf("%d", rewriteQueueProgressLiveBytesAfterTotal)
+	stats["treedb.cache.vlog_generation.rewrite.queue_progress.live_bytes_drained_total"] = fmt.Sprintf("%d", rewriteQueueProgressLiveBytesDrainedTotal)
+	stats["treedb.cache.vlog_generation.rewrite.queue_progress.live_bytes_grown_total"] = fmt.Sprintf("%d", rewriteQueueProgressLiveBytesGrownTotal)
+	stats["treedb.cache.vlog_generation.rewrite.queue_progress.live_bytes_before_last"] = fmt.Sprintf("%d", rewriteQueueProgressLiveBytesBeforeLast)
+	stats["treedb.cache.vlog_generation.rewrite.queue_progress.live_bytes_after_last"] = fmt.Sprintf("%d", rewriteQueueProgressLiveBytesAfterLast)
+	stats["treedb.cache.vlog_generation.rewrite.queue_progress.live_bytes_delta_last"] = fmt.Sprintf("%d", rewriteQueueProgressLiveBytesDeltaLast)
+	stats["treedb.cache.vlog_generation.rewrite.ledger_segments"] = fmt.Sprintf("%d", rewriteLedgerSegments)
+	stats["treedb.cache.vlog_generation.rewrite.ledger_chunks"] = fmt.Sprintf("%d", rewriteLedgerChunks)
+	stats["treedb.cache.vlog_generation.rewrite.ledger_chunk_bytes"] = fmt.Sprintf("%d", rewriteLedgerChunkBytes)
+	stats["treedb.cache.vlog_generation.rewrite.ledger_bytes_total"] = fmt.Sprintf("%d", rewriteLedgerBytesTotal)
+	stats["treedb.cache.vlog_generation.rewrite.ledger_bytes_live"] = fmt.Sprintf("%d", rewriteLedgerBytesLive)
+	stats["treedb.cache.vlog_generation.rewrite.ledger_bytes_stale"] = fmt.Sprintf("%d", rewriteLedgerBytesStale)
+	stats["treedb.cache.vlog_generation.rewrite.queue_live_bytes_after_tokens"] = fmt.Sprintf("%d", rewriteQueueLiveBytesAfterTokens)
+	stats["treedb.cache.vlog_generation.rewrite.queue_eta_seconds.budget"] = fmt.Sprintf("%.3f", rewriteQueueETABudgetSeconds)
+	stats["treedb.cache.vlog_generation.rewrite.queue_eta_seconds.recent_exec"] = fmt.Sprintf("%.3f", rewriteQueueETARecentExecSeconds)
+	if rewriteLedgerBytesTotal > 0 {
+		staleRatioPPM := 0.0
+		if rewriteLedgerBytesStale > 0 {
+			staleRatioPPM = (float64(rewriteLedgerBytesStale) / float64(rewriteLedgerBytesTotal)) * 1_000_000.0
+		}
+		if staleRatioPPM > 1_000_000.0 {
+			staleRatioPPM = 1_000_000.0
+		}
+		stats["treedb.cache.vlog_generation.rewrite.ledger_stale_ratio_ppm"] = fmt.Sprintf("%d", int64(staleRatioPPM))
+	} else {
+		stats["treedb.cache.vlog_generation.rewrite.ledger_stale_ratio_ppm"] = "0"
+	}
+	stats["treedb.cache.vlog_generation.rewrite.stage_pending"] = fmt.Sprintf("%t", rewriteStagePending)
+	stats["treedb.cache.vlog_generation.rewrite.stage_observed_unix_nano"] = fmt.Sprintf("%d", rewriteStageObservedNS)
+	stats["treedb.cache.vlog_generation.rewrite.stage_observed_age_ms"] = fmt.Sprintf("%d", rewriteStageObservedAgeMS)
+	stats["treedb.cache.vlog_generation.rewrite.stage_due"] = fmt.Sprintf("%t", rewriteStageDue)
+	stats["treedb.cache.vlog_generation.rewrite.stage_due_in_ms"] = fmt.Sprintf("%d", rewriteStageDueInMS)
+	stats["treedb.cache.vlog_generation.rewrite.penalties_active"] = fmt.Sprintf("%d", rewritePenaltiesActive)
+	stats["treedb.cache.vlog_generation.rewrite.age_blocked_until_unix_nano"] = fmt.Sprintf("%d", rewriteAgeBlockedUntilNS)
+	stats["treedb.cache.vlog_generation.rewrite.age_blocked_due"] = fmt.Sprintf("%t", rewriteAgeBlockedDue)
+	stats["treedb.cache.vlog_generation.rewrite.age_blocked_remaining_ms"] = fmt.Sprintf("%d", rewriteAgeBlockedRemainingMS)
+	stats["treedb.cache.vlog_generation.leaf.segment_target_bytes"] = fmt.Sprintf("%d", db.valueLogGenerationLeafTarget)
 	stats["treedb.cache.vlog_generation.hot.segment_target_bytes"] = fmt.Sprintf("%d", db.valueLogGenerationHotTarget)
 	stats["treedb.cache.vlog_generation.warm.segment_target_bytes"] = fmt.Sprintf("%d", db.valueLogGenerationWarmTarget)
 	stats["treedb.cache.vlog_generation.cold.segment_target_bytes"] = fmt.Sprintf("%d", db.valueLogGenerationColdTarget)
 	stats["treedb.cache.vlog_generation.rewrite_budget.bytes_per_sec"] = fmt.Sprintf("%d", db.valueLogRewriteBudgetBytes)
 	stats["treedb.cache.vlog_generation.rewrite_budget.records_per_sec"] = fmt.Sprintf("%d", db.valueLogRewriteBudgetRecords)
+	stats["treedb.cache.vlog_generation.rewrite_budget.tokens_bytes"] = fmt.Sprintf("%d", rewriteBudgetTokens)
+	stats["treedb.cache.vlog_generation.rewrite_budget.tokens_cap_bytes"] = fmt.Sprintf("%d", rewriteBudgetCap)
+	stats["treedb.cache.vlog_generation.rewrite_budget.tokens_utilization_pct"] = fmt.Sprintf("%.3f", rewriteBudgetUtilPct)
+	stats["treedb.cache.vlog_generation.rewrite_budget.consumed_bytes_total"] = fmt.Sprintf("%d", rewriteBudgetConsumedTotal)
+	stats["treedb.cache.vlog_generation.rewrite_budget.consumed_bytes_per_sec"] = fmt.Sprintf("%.3f", rewriteBudgetConsumedPerSec)
+	stats["treedb.cache.vlog_generation.rewrite_budget.consumed_share_of_budget_pct"] = fmt.Sprintf("%.3f", rewriteBudgetConsumedSharePct)
 	stats["treedb.cache.vlog_generation.rewrite_trigger.stale_ratio_ppm"] = fmt.Sprintf("%d", db.valueLogRewriteTriggerRatioPPM)
 	stats["treedb.cache.vlog_generation.rewrite_trigger.total_bytes"] = fmt.Sprintf("%d", db.valueLogRewriteTriggerBytes)
 	stats["treedb.cache.vlog_generation.rewrite_trigger.churn_per_sec"] = fmt.Sprintf("%d", db.valueLogRewriteTriggerChurn)
+	stats["treedb.cache.vlog_generation.rewrite.min_segment_age_ms"] = fmt.Sprintf("%d", db.valueLogRewriteMinSegmentAge.Milliseconds())
 	// PR1 scaffolding: legacy allocator still owns placement; report retained
 	// totals under hot generation until generation-aware allocator lands.
 	stats["treedb.cache.vlog_generation.bytes.live.total"] = fmt.Sprintf("%d", retained.BytesTotal)
@@ -15183,17 +24668,211 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_generation.segments.hot"] = fmt.Sprintf("%d", retained.SegmentsHot)
 	stats["treedb.cache.vlog_generation.segments.warm"] = fmt.Sprintf("%d", retained.SegmentsWarm)
 	stats["treedb.cache.vlog_generation.segments.cold"] = fmt.Sprintf("%d", retained.SegmentsCold)
-	stats["treedb.cache.vlog_generation.rewrite.bytes_in"] = fmt.Sprintf("%d", db.vlogGenerationRewriteBytesIn.Load())
-	stats["treedb.cache.vlog_generation.rewrite.bytes_out"] = fmt.Sprintf("%d", db.vlogGenerationRewriteBytesOut.Load())
+	stats["treedb.cache.vlog_generation.rewrite.bytes_in"] = fmt.Sprintf("%d", rewriteBytesInTotal)
+	stats["treedb.cache.vlog_generation.rewrite.bytes_out"] = fmt.Sprintf("%d", rewriteBytesOutTotal)
+	stats["treedb.cache.vlog_generation.rewrite.value_records_copied"] = fmt.Sprintf("%d", rewriteValueRecordsCopiedTotal)
+	stats["treedb.cache.vlog_generation.rewrite.value_bytes_copied"] = fmt.Sprintf("%d", rewriteValueBytesCopiedTotal)
+	stats["treedb.cache.vlog_generation.rewrite.processed_live_bytes"] = fmt.Sprintf("%d", rewriteProcessedLiveBytes)
+	stats["treedb.cache.vlog_generation.rewrite.processed_stale_bytes"] = fmt.Sprintf("%d", rewriteProcessedStaleBytes)
+	stats["treedb.cache.vlog_generation.rewrite.reclaim_ratio"] = fmt.Sprintf("%.6f", rewriteReclaimRatio)
+	stats["treedb.cache.vlog_generation.rewrite.output_ratio"] = fmt.Sprintf("%.6f", rewriteOutputRatio)
+	stats["treedb.cache.vlog_generation.rewrite.processed_stale_ratio"] = fmt.Sprintf("%.6f", rewriteProcessedStaleRatio)
+	stats["treedb.cache.vlog_generation.rewrite.exec.bytes_in_per_sec"] = fmt.Sprintf("%.3f", rewriteBytesInPerSec)
+	stats["treedb.cache.vlog_generation.rewrite.exec.bytes_out_per_sec"] = fmt.Sprintf("%.3f", rewriteBytesOutPerSec)
+	stats["treedb.cache.vlog_generation.rewrite.exec.reclaimed_bytes_per_sec"] = fmt.Sprintf("%.3f", rewriteReclaimedBytesPerSec)
+	stats["treedb.cache.vlog_generation.rewrite.exec.reclaimed_vs_churn_ratio"] = fmt.Sprintf("%.6f", rewriteReclaimedVsChurnRatio)
+	stats["treedb.cache.vlog_generation.rewrite.exec.last_live_bytes"] = fmt.Sprintf("%d", rewriteLastExecLiveBytes)
+	stats["treedb.cache.vlog_generation.rewrite.exec.last_bytes_out"] = fmt.Sprintf("%d", rewriteLastExecBytesOut)
+	stats["treedb.cache.vlog_generation.rewrite.exec.last_duration_ms"] = fmt.Sprintf("%.3f", rewriteLastExecDurationMS)
+	stats["treedb.cache.vlog_generation.rewrite.exec.last_live_bytes_per_sec"] = fmt.Sprintf("%.3f", rewriteLastExecLiveBytesPerSec)
+	stats["treedb.cache.vlog_generation.rewrite.exec.last_unix_nano"] = fmt.Sprintf("%d", rewriteLastExecUnixNano)
+	stats["treedb.cache.vlog_generation.rewrite.no_reclaim_runs"] = fmt.Sprintf("%d", db.vlogGenerationRewriteNoReclaimRuns.Load())
+	stats["treedb.cache.vlog_generation.rewrite.no_reclaim_stale_bytes"] = fmt.Sprintf("%d", db.vlogGenerationRewriteNoReclaimStaleBytes.Load())
 	stats["treedb.cache.vlog_generation.rewrite.runs"] = fmt.Sprintf("%d", db.vlogGenerationRewriteRuns.Load())
+	for sourceIdx := 0; sourceIdx < vlogGenerationMaintenanceSourceCount; sourceIdx++ {
+		source := vlogGenerationMaintenanceSourceLabel(sourceIdx)
+		stats["treedb.cache.vlog_generation.rewrite.runs.source."+source] = fmt.Sprintf(
+			"%d",
+			db.vlogGenerationRewriteRunsBySource[sourceIdx].Load(),
+		)
+		stats["treedb.cache.vlog_generation.rewrite_budget.consumed_bytes_total.source."+source] = fmt.Sprintf(
+			"%d",
+			db.vlogGenerationRewriteBudgetConsumedBySource[sourceIdx].Load(),
+		)
+		stats["treedb.cache.vlog_generation.rewrite.exec.source_bytes_requested_total.source."+source] = fmt.Sprintf(
+			"%d",
+			db.vlogGenerationRewriteSourceBytesRequestedBySource[sourceIdx].Load(),
+		)
+		stats["treedb.cache.vlog_generation.rewrite.exec.source_bytes_unreferenced_total.source."+source] = fmt.Sprintf(
+			"%d",
+			db.vlogGenerationRewriteSourceBytesUnreferencedBySource[sourceIdx].Load(),
+		)
+	}
+	stats["treedb.cache.vlog_generation.rewrite.plan_runs"] = fmt.Sprintf("%d", db.vlogGenerationRewritePlanRuns.Load())
+	stats["treedb.cache.vlog_generation.rewrite.plan_canceled"] = fmt.Sprintf("%d", db.vlogGenerationRewritePlanCanceled.Load())
+	stats["treedb.cache.vlog_generation.rewrite.plan_canceled_last_unix_nano"] = fmt.Sprintf("%d", db.vlogGenerationRewritePlanCanceledLastNS.Load())
+	stats["treedb.cache.vlog_generation.rewrite.plan_errors"] = fmt.Sprintf("%d", db.vlogGenerationRewritePlanErrors.Load())
+	stats["treedb.cache.vlog_generation.rewrite.plan_empty"] = fmt.Sprintf("%d", db.vlogGenerationRewritePlanEmpty.Load())
+	stats["treedb.cache.vlog_generation.rewrite.plan_empty.age_blocked"] = fmt.Sprintf("%d", db.vlogGenerationRewritePlanEmptyAgeBlocked.Load())
+	stats["treedb.cache.vlog_generation.rewrite.plan_empty.no_selection"] = fmt.Sprintf("%d", db.vlogGenerationRewritePlanEmptyNoSelection.Load())
+	stats["treedb.cache.vlog_generation.rewrite.plan_selected"] = fmt.Sprintf("%d", db.vlogGenerationRewritePlanSelected.Load())
+	stats["treedb.cache.vlog_generation.rewrite.plan_selected_chunks_total"] = fmt.Sprintf("%d", db.vlogGenerationRewritePlanSelectedChunks.Load())
+	stats["treedb.cache.vlog_generation.rewrite.plan_selected_segments_total"] = fmt.Sprintf("%d", db.vlogGenerationRewritePlanSelectedSegments.Load())
+	stats["treedb.cache.vlog_generation.rewrite.plan_selected_bytes_total"] = fmt.Sprintf("%d", db.vlogGenerationRewritePlanSelectedBytes.Load())
+	stats["treedb.cache.vlog_generation.rewrite.plan_selected_bytes_live"] = fmt.Sprintf("%d", db.vlogGenerationRewritePlanSelectedLiveBytes.Load())
+	stats["treedb.cache.vlog_generation.rewrite.plan_selected_bytes_stale"] = fmt.Sprintf("%d", db.vlogGenerationRewritePlanSelectedStaleBytes.Load())
+	stats["treedb.cache.vlog_generation.rewrite.plan_penalty_filter.runs"] = fmt.Sprintf("%d", db.vlogGenerationRewritePlanPenaltyFilterRuns.Load())
+	stats["treedb.cache.vlog_generation.rewrite.plan_penalty_filter.segments"] = fmt.Sprintf("%d", db.vlogGenerationRewritePlanPenaltyFilterSegments.Load())
+	stats["treedb.cache.vlog_generation.rewrite.plan_penalty_filter.to_empty_runs"] = fmt.Sprintf("%d", db.vlogGenerationRewritePlanPenaltyFilterToEmpty.Load())
+	stats["treedb.cache.vlog_generation.observed_gc.pending_ids"] = fmt.Sprintf("%d", observedGCPending)
+	stats["treedb.cache.vlog_generation.observed_gc.pending_oldest_unix_nano"] = fmt.Sprintf("%d", observedGCPendingOldestNS)
+	stats["treedb.cache.vlog_generation.observed_gc.pending_oldest_age_ms"] = fmt.Sprintf("%d", observedGCPendingOldestAgeMS)
+	stats["treedb.cache.vlog_generation.observed_gc.pending_retry_ids"] = fmt.Sprintf("%d", observedGCPendingRetryIDs)
+	stats["treedb.cache.vlog_generation.observed_gc.pending_retry_attempts_total"] = fmt.Sprintf("%d", observedGCPendingRetryAttemptsTotal)
+	stats["treedb.cache.vlog_generation.observed_gc.pending_retry_attempts_max"] = fmt.Sprintf("%d", observedGCPendingRetryAttemptsMax)
+	stats["treedb.cache.vlog_generation.observed_gc.queued_batches"] = fmt.Sprintf("%d", db.vlogGenerationObservedGCQueuedBatches.Load())
+	stats["treedb.cache.vlog_generation.observed_gc.queued_ids"] = fmt.Sprintf("%d", db.vlogGenerationObservedGCQueuedIDs.Load())
+	stats["treedb.cache.vlog_generation.observed_gc.taken_batches"] = fmt.Sprintf("%d", db.vlogGenerationObservedGCTakenBatches.Load())
+	stats["treedb.cache.vlog_generation.observed_gc.taken_ids"] = fmt.Sprintf("%d", db.vlogGenerationObservedGCTakenIDs.Load())
+	stats["treedb.cache.vlog_generation.observed_gc.runs"] = fmt.Sprintf("%d", db.vlogGenerationObservedGCRuns.Load())
+	stats["treedb.cache.vlog_generation.observed_gc.retry_queued"] = fmt.Sprintf("%d", db.vlogGenerationObservedGCRetryQueued.Load())
+	stats["treedb.cache.vlog_generation.observed_gc.retry_dropped"] = fmt.Sprintf("%d", db.vlogGenerationObservedGCRetryDropped.Load())
+	stats["treedb.cache.vlog_generation.observed_gc.retry_max_attempts"] = fmt.Sprintf("%d", vlogGenerationObservedGCRetryMaxAttempts)
+	stats["treedb.cache.vlog_generation.observed_gc.latency.completed_ids"] = fmt.Sprintf("%d", observedGCLatencyCompleted)
+	stats["treedb.cache.vlog_generation.observed_gc.latency.dropped_ids"] = fmt.Sprintf("%d", observedGCLatencyDropped)
+	stats["treedb.cache.vlog_generation.observed_gc.latency.total_ms"] = fmt.Sprintf("%d", observedGCLatencyTotalMS)
+	stats["treedb.cache.vlog_generation.observed_gc.latency.max_ms"] = fmt.Sprintf("%d", db.vlogGenerationObservedGCLatencyMaxMS.Load())
+	stats["treedb.cache.vlog_generation.observed_gc.latency.avg_ms"] = fmt.Sprintf("%.3f", observedGCLatencyAvgMS)
+	stats["treedb.cache.vlog_generation.observed_gc.source_segments_total"] = fmt.Sprintf("%d", db.vlogGenerationObservedGCSourceSegmentsTotal.Load())
+	stats["treedb.cache.vlog_generation.observed_gc.source_segments_eligible_total"] = fmt.Sprintf("%d", db.vlogGenerationObservedGCSourceSegmentsEligibleTotal.Load())
+	stats["treedb.cache.vlog_generation.observed_gc.source_segments_deleted_total"] = fmt.Sprintf("%d", db.vlogGenerationObservedGCSourceSegmentsDeletedTotal.Load())
+	stats["treedb.cache.vlog_generation.observed_gc.source_segments_protected_in_use_total"] = fmt.Sprintf("%d", db.vlogGenerationObservedGCSourceSegmentsProtectedInUseTotal.Load())
+	stats["treedb.cache.vlog_generation.observed_gc.source_segments_protected_retained_total"] = fmt.Sprintf("%d", db.vlogGenerationObservedGCSourceSegmentsProtectedRetainedTotal.Load())
+	stats["treedb.cache.vlog_generation.observed_gc.source_segments_protected_overlap_total"] = fmt.Sprintf("%d", db.vlogGenerationObservedGCSourceSegmentsProtectedOverlapTotal.Load())
+	stats["treedb.cache.vlog_generation.observed_gc.source_segments_protected_other_total"] = fmt.Sprintf("%d", db.vlogGenerationObservedGCSourceSegmentsProtectedOtherTotal.Load())
+	stats["treedb.cache.vlog_generation.observed_gc.source_bytes_total"] = fmt.Sprintf("%d", db.vlogGenerationObservedGCSourceBytesTotal.Load())
+	stats["treedb.cache.vlog_generation.observed_gc.source_bytes_eligible_total"] = fmt.Sprintf("%d", db.vlogGenerationObservedGCSourceBytesEligibleTotal.Load())
+	stats["treedb.cache.vlog_generation.observed_gc.source_bytes_deleted_total"] = fmt.Sprintf("%d", db.vlogGenerationObservedGCSourceBytesDeletedTotal.Load())
+	stats["treedb.cache.vlog_generation.observed_gc.source_bytes_protected_in_use_total"] = fmt.Sprintf("%d", db.vlogGenerationObservedGCSourceBytesProtectedInUseTotal.Load())
+	stats["treedb.cache.vlog_generation.observed_gc.source_bytes_protected_retained_total"] = fmt.Sprintf("%d", db.vlogGenerationObservedGCSourceBytesProtectedRetainedTotal.Load())
+	stats["treedb.cache.vlog_generation.observed_gc.source_bytes_protected_overlap_total"] = fmt.Sprintf("%d", db.vlogGenerationObservedGCSourceBytesProtectedOverlapTotal.Load())
+	stats["treedb.cache.vlog_generation.observed_gc.source_bytes_protected_other_total"] = fmt.Sprintf("%d", db.vlogGenerationObservedGCSourceBytesProtectedOtherTotal.Load())
+	stats["treedb.cache.vlog_generation.rewrite.exec.source_chunks_total"] = fmt.Sprintf("%d", db.vlogGenerationRewriteExecSourceChunks.Load())
+	stats["treedb.cache.vlog_generation.rewrite.exec.source_chunks_requested_total"] = fmt.Sprintf("%d", db.vlogGenerationRewriteSourceChunksRequestedTotal.Load())
+	stats["treedb.cache.vlog_generation.rewrite.exec.source_chunks_requested_last"] = fmt.Sprintf("%d", db.vlogGenerationRewriteSourceChunksRequestedLast.Load())
+	stats["treedb.cache.vlog_generation.rewrite.exec.source_segments_total"] = fmt.Sprintf("%d", db.vlogGenerationRewriteExecSourceSegments.Load())
+	stats["treedb.cache.vlog_generation.rewrite.exec.source_segments_requested_total"] = fmt.Sprintf("%d", db.vlogGenerationRewriteSourceSegmentsRequestedTotal.Load())
+	stats["treedb.cache.vlog_generation.rewrite.exec.source_segments_still_referenced_total"] = fmt.Sprintf("%d", db.vlogGenerationRewriteSourceSegmentsStillReferencedTotal.Load())
+	stats["treedb.cache.vlog_generation.rewrite.exec.source_segments_unreferenced_total"] = fmt.Sprintf("%d", db.vlogGenerationRewriteSourceSegmentsUnreferencedTotal.Load())
+	stats["treedb.cache.vlog_generation.rewrite.exec.source_segments_requested_last"] = fmt.Sprintf("%d", db.vlogGenerationRewriteSourceSegmentsRequestedLast.Load())
+	stats["treedb.cache.vlog_generation.rewrite.exec.source_segments_still_referenced_last"] = fmt.Sprintf("%d", db.vlogGenerationRewriteSourceSegmentsStillReferencedLast.Load())
+	stats["treedb.cache.vlog_generation.rewrite.exec.source_segments_unreferenced_last"] = fmt.Sprintf("%d", db.vlogGenerationRewriteSourceSegmentsUnreferencedLast.Load())
+	stats["treedb.cache.vlog_generation.rewrite.exec.source_bytes_requested_total"] = fmt.Sprintf("%d", db.vlogGenerationRewriteSourceBytesRequestedTotal.Load())
+	stats["treedb.cache.vlog_generation.rewrite.exec.source_bytes_still_referenced_total"] = fmt.Sprintf("%d", db.vlogGenerationRewriteSourceBytesStillReferencedTotal.Load())
+	stats["treedb.cache.vlog_generation.rewrite.exec.source_bytes_unreferenced_total"] = fmt.Sprintf("%d", db.vlogGenerationRewriteSourceBytesUnreferencedTotal.Load())
+	stats["treedb.cache.vlog_generation.rewrite.exec.source_bytes_requested_last"] = fmt.Sprintf("%d", db.vlogGenerationRewriteSourceBytesRequestedLast.Load())
+	stats["treedb.cache.vlog_generation.rewrite.exec.source_bytes_still_referenced_last"] = fmt.Sprintf("%d", db.vlogGenerationRewriteSourceBytesStillReferencedLast.Load())
+	stats["treedb.cache.vlog_generation.rewrite.exec.source_bytes_unreferenced_last"] = fmt.Sprintf("%d", db.vlogGenerationRewriteSourceBytesUnreferencedLast.Load())
+	stats["treedb.cache.vlog_generation.rewrite.canceled_runs"] = fmt.Sprintf("%d", db.vlogGenerationRewriteCanceledRuns.Load())
+	stats["treedb.cache.vlog_generation.rewrite.canceled_runs.fresh_plan"] = fmt.Sprintf("%d", db.vlogGenerationRewriteCanceledFreshPlanRuns.Load())
+	stats["treedb.cache.vlog_generation.rewrite.canceled_runs.queued_debt"] = fmt.Sprintf("%d", db.vlogGenerationRewriteCanceledQueuedDebtRuns.Load())
+	stats["treedb.cache.vlog_generation.rewrite.canceled_last_unix_nano"] = fmt.Sprintf("%d", db.vlogGenerationRewriteCanceledLastNS.Load())
+	stats["treedb.cache.vlog_generation.rewrite.deadline_runs"] = fmt.Sprintf("%d", db.vlogGenerationRewriteDeadlineRuns.Load())
+	stats["treedb.cache.vlog_generation.rewrite.deadline_runs.fresh_plan"] = fmt.Sprintf("%d", db.vlogGenerationRewriteDeadlineFreshPlanRuns.Load())
+	stats["treedb.cache.vlog_generation.rewrite.deadline_runs.queued_debt"] = fmt.Sprintf("%d", db.vlogGenerationRewriteDeadlineQueuedDebtRuns.Load())
+	stats["treedb.cache.vlog_generation.rewrite.deadline_last_unix_nano"] = fmt.Sprintf("%d", db.vlogGenerationRewriteDeadlineLastNS.Load())
+	stats["treedb.cache.vlog_generation.rewrite.queue_prune_runs"] = fmt.Sprintf("%d", db.vlogGenerationRewriteQueuePruneRuns.Load())
+	stats["treedb.cache.vlog_generation.rewrite.queue_prune_ids"] = fmt.Sprintf("%d", db.vlogGenerationRewriteQueuePruneIDs.Load())
+	stats["treedb.cache.vlog_generation.rewrite.ineffective_runs"] = fmt.Sprintf("%d", db.vlogGenerationRewriteIneffectiveRuns.Load())
+	stats["treedb.cache.vlog_generation.rewrite.ineffective_bytes_in"] = fmt.Sprintf("%d", db.vlogGenerationRewriteIneffectiveBytesIn.Load())
+	stats["treedb.cache.vlog_generation.rewrite.ineffective_bytes_out"] = fmt.Sprintf("%d", db.vlogGenerationRewriteIneffectiveBytesOut.Load())
+	stats["treedb.cache.vlog_generation.rewrite.ineffective_last_unix_nano"] = fmt.Sprintf("%d", db.vlogGenerationRewriteIneffectiveLastNS.Load())
+	stats["treedb.cache.vlog_generation.rewrite.ineffective_backoff_seconds"] = fmt.Sprintf("%.0f", vlogGenerationRewriteIneffectiveBackoff.Seconds())
+	stats["treedb.cache.vlog_generation.rewrite.reclaimed_bytes"] = fmt.Sprintf("%d", db.vlogGenerationRewriteReclaimedBytes.Load())
+	stats["treedb.cache.vlog_generation.rewrite.plan.total_ms"] = fmt.Sprintf("%.3f", float64(rewritePlanTotalNS)/float64(time.Millisecond))
+	stats["treedb.cache.vlog_generation.rewrite.plan.max_ms"] = fmt.Sprintf("%.3f", float64(rewritePlanMaxNS)/float64(time.Millisecond))
+	if rewritePlanRuns > 0 {
+		stats["treedb.cache.vlog_generation.rewrite.plan.avg_ms"] = fmt.Sprintf("%.3f", (float64(rewritePlanTotalNS)/float64(rewritePlanRuns))/float64(time.Millisecond))
+	} else {
+		stats["treedb.cache.vlog_generation.rewrite.plan.avg_ms"] = "0.000"
+	}
+	stats["treedb.cache.vlog_generation.rewrite.exec.total_ms"] = fmt.Sprintf("%.3f", float64(rewriteExecTotalNS)/float64(time.Millisecond))
+	stats["treedb.cache.vlog_generation.rewrite.exec.max_ms"] = fmt.Sprintf("%.3f", float64(rewriteExecMaxNS)/float64(time.Millisecond))
+	if rewriteRuns > 0 {
+		stats["treedb.cache.vlog_generation.rewrite.exec.avg_ms"] = fmt.Sprintf("%.3f", (float64(rewriteExecTotalNS)/float64(rewriteRuns))/float64(time.Millisecond))
+	} else {
+		stats["treedb.cache.vlog_generation.rewrite.exec.avg_ms"] = "0.000"
+	}
 	stats["treedb.cache.vlog_generation.rewrite.plan_last_unix_nano"] = fmt.Sprintf("%d", db.vlogGenerationLastRewritePlanUnixNano.Load())
 	stats["treedb.cache.vlog_generation.rewrite.last_unix_nano"] = fmt.Sprintf("%d", db.vlogGenerationLastRewriteUnixNano.Load())
 	stats["treedb.cache.vlog_generation.gc.deleted_segments"] = fmt.Sprintf("%d", db.vlogGenerationGCSegmentsDeleted.Load())
 	stats["treedb.cache.vlog_generation.gc.deleted_bytes"] = fmt.Sprintf("%d", db.vlogGenerationGCBytesDeleted.Load())
+	stats["treedb.cache.vlog_generation.gc.last_referenced_segments"] = fmt.Sprintf("%d", db.vlogGenerationLastGCSegmentsReferenced.Load())
+	stats["treedb.cache.vlog_generation.gc.last_referenced_bytes"] = fmt.Sprintf("%d", db.vlogGenerationLastGCBytesReferenced.Load())
+	stats["treedb.cache.vlog_generation.gc.last_active_segments"] = fmt.Sprintf("%d", db.vlogGenerationLastGCSegmentsActive.Load())
+	stats["treedb.cache.vlog_generation.gc.last_active_bytes"] = fmt.Sprintf("%d", db.vlogGenerationLastGCBytesActive.Load())
+	stats["treedb.cache.vlog_generation.gc.last_protected_segments"] = fmt.Sprintf("%d", db.vlogGenerationLastGCSegmentsProtected.Load())
+	stats["treedb.cache.vlog_generation.gc.last_protected_bytes"] = fmt.Sprintf("%d", db.vlogGenerationLastGCBytesProtected.Load())
+	stats["treedb.cache.vlog_generation.gc.last_protected_in_use_segments"] = fmt.Sprintf("%d", db.vlogGenerationLastGCSegmentsProtectedInUse.Load())
+	stats["treedb.cache.vlog_generation.gc.last_protected_in_use_bytes"] = fmt.Sprintf("%d", db.vlogGenerationLastGCBytesProtectedInUse.Load())
+	stats["treedb.cache.vlog_generation.gc.last_protected_retained_segments"] = fmt.Sprintf("%d", db.vlogGenerationLastGCSegmentsProtectedRetained.Load())
+	stats["treedb.cache.vlog_generation.gc.last_protected_retained_bytes"] = fmt.Sprintf("%d", db.vlogGenerationLastGCBytesProtectedRetained.Load())
+	stats["treedb.cache.vlog_generation.gc.last_protected_overlap_segments"] = fmt.Sprintf("%d", db.vlogGenerationLastGCSegmentsProtectedOverlap.Load())
+	stats["treedb.cache.vlog_generation.gc.last_protected_overlap_bytes"] = fmt.Sprintf("%d", db.vlogGenerationLastGCBytesProtectedOverlap.Load())
+	stats["treedb.cache.vlog_generation.gc.last_protected_other_segments"] = fmt.Sprintf("%d", db.vlogGenerationLastGCSegmentsProtectedOther.Load())
+	stats["treedb.cache.vlog_generation.gc.last_protected_other_bytes"] = fmt.Sprintf("%d", db.vlogGenerationLastGCBytesProtectedOther.Load())
+	stats["treedb.cache.vlog_generation.gc.last_eligible_segments"] = fmt.Sprintf("%d", db.vlogGenerationLastGCSegmentsEligible.Load())
+	stats["treedb.cache.vlog_generation.gc.last_eligible_bytes"] = fmt.Sprintf("%d", db.vlogGenerationLastGCBytesEligible.Load())
+	stats["treedb.cache.vlog_generation.gc.last_deleted_segments"] = fmt.Sprintf("%d", db.vlogGenerationLastGCSegmentsDeleted.Load())
+	stats["treedb.cache.vlog_generation.gc.last_deleted_bytes"] = fmt.Sprintf("%d", db.vlogGenerationLastGCBytesDeleted.Load())
+	stats["treedb.cache.vlog_generation.gc.last_pending_segments"] = fmt.Sprintf("%d", db.vlogGenerationLastGCSegmentsPending.Load())
+	stats["treedb.cache.vlog_generation.gc.last_pending_bytes"] = fmt.Sprintf("%d", db.vlogGenerationLastGCBytesPending.Load())
+	stats["treedb.cache.vlog_generation.gc.last_observed_source.segments"] = fmt.Sprintf("%d", db.vlogGenerationLastGCObservedSourceSegments.Load())
+	stats["treedb.cache.vlog_generation.gc.last_observed_source.segments_referenced"] = fmt.Sprintf("%d", db.vlogGenerationLastGCObservedSourceSegmentsReferenced.Load())
+	stats["treedb.cache.vlog_generation.gc.last_observed_source.segments_active"] = fmt.Sprintf("%d", db.vlogGenerationLastGCObservedSourceSegmentsActive.Load())
+	stats["treedb.cache.vlog_generation.gc.last_observed_source.segments_protected"] = fmt.Sprintf("%d", db.vlogGenerationLastGCObservedSourceSegmentsProtected.Load())
+	stats["treedb.cache.vlog_generation.gc.last_observed_source.segments_protected_in_use"] = fmt.Sprintf("%d", db.vlogGenerationLastGCObservedSourceSegmentsProtectedInUse.Load())
+	stats["treedb.cache.vlog_generation.gc.last_observed_source.segments_protected_retained"] = fmt.Sprintf("%d", db.vlogGenerationLastGCObservedSourceSegmentsProtectedRetained.Load())
+	stats["treedb.cache.vlog_generation.gc.last_observed_source.segments_protected_overlap"] = fmt.Sprintf("%d", db.vlogGenerationLastGCObservedSourceSegmentsProtectedOverlap.Load())
+	stats["treedb.cache.vlog_generation.gc.last_observed_source.segments_protected_other"] = fmt.Sprintf("%d", db.vlogGenerationLastGCObservedSourceSegmentsProtectedOther.Load())
+	stats["treedb.cache.vlog_generation.gc.last_observed_source.segments_eligible"] = fmt.Sprintf("%d", db.vlogGenerationLastGCObservedSourceSegmentsEligible.Load())
+	stats["treedb.cache.vlog_generation.gc.last_observed_source.segments_deleted"] = fmt.Sprintf("%d", db.vlogGenerationLastGCObservedSourceSegmentsDeleted.Load())
+	stats["treedb.cache.vlog_generation.gc.last_observed_source.segments_pending"] = fmt.Sprintf("%d", db.vlogGenerationLastGCObservedSourceSegmentsPending.Load())
+	stats["treedb.cache.vlog_generation.gc.last_observed_source.bytes"] = fmt.Sprintf("%d", db.vlogGenerationLastGCObservedSourceBytes.Load())
+	stats["treedb.cache.vlog_generation.gc.last_observed_source.bytes_referenced"] = fmt.Sprintf("%d", db.vlogGenerationLastGCObservedSourceBytesReferenced.Load())
+	stats["treedb.cache.vlog_generation.gc.last_observed_source.bytes_active"] = fmt.Sprintf("%d", db.vlogGenerationLastGCObservedSourceBytesActive.Load())
+	stats["treedb.cache.vlog_generation.gc.last_observed_source.bytes_protected"] = fmt.Sprintf("%d", db.vlogGenerationLastGCObservedSourceBytesProtected.Load())
+	stats["treedb.cache.vlog_generation.gc.last_observed_source.bytes_protected_in_use"] = fmt.Sprintf("%d", db.vlogGenerationLastGCObservedSourceBytesProtectedInUse.Load())
+	stats["treedb.cache.vlog_generation.gc.last_observed_source.bytes_protected_retained"] = fmt.Sprintf("%d", db.vlogGenerationLastGCObservedSourceBytesProtectedRetained.Load())
+	stats["treedb.cache.vlog_generation.gc.last_observed_source.bytes_protected_overlap"] = fmt.Sprintf("%d", db.vlogGenerationLastGCObservedSourceBytesProtectedOverlap.Load())
+	stats["treedb.cache.vlog_generation.gc.last_observed_source.bytes_protected_other"] = fmt.Sprintf("%d", db.vlogGenerationLastGCObservedSourceBytesProtectedOther.Load())
+	stats["treedb.cache.vlog_generation.gc.last_observed_source.bytes_eligible"] = fmt.Sprintf("%d", db.vlogGenerationLastGCObservedSourceBytesEligible.Load())
+	stats["treedb.cache.vlog_generation.gc.last_observed_source.bytes_deleted"] = fmt.Sprintf("%d", db.vlogGenerationLastGCObservedSourceBytesDeleted.Load())
+	stats["treedb.cache.vlog_generation.gc.last_observed_source.bytes_pending"] = fmt.Sprintf("%d", db.vlogGenerationLastGCObservedSourceBytesPending.Load())
 	stats["treedb.cache.vlog_generation.gc.runs"] = fmt.Sprintf("%d", db.vlogGenerationGCRuns.Load())
+	stats["treedb.cache.vlog_generation.gc.exec.total_ms"] = fmt.Sprintf("%.3f", float64(gcExecTotalNS)/float64(time.Millisecond))
+	stats["treedb.cache.vlog_generation.gc.exec.max_ms"] = fmt.Sprintf("%.3f", float64(gcExecMaxNS)/float64(time.Millisecond))
+	if gcRuns > 0 {
+		stats["treedb.cache.vlog_generation.gc.exec.avg_ms"] = fmt.Sprintf("%.3f", (float64(gcExecTotalNS)/float64(gcRuns))/float64(time.Millisecond))
+	} else {
+		stats["treedb.cache.vlog_generation.gc.exec.avg_ms"] = "0.000"
+	}
 	stats["treedb.cache.vlog_generation.gc.last_unix_nano"] = fmt.Sprintf("%d", db.vlogGenerationLastGCUnixNano.Load())
+	stats["treedb.cache.vlog_generation.gc.dry_run.last_unix_nano"] = fmt.Sprintf("%d", db.vlogGenerationLastGCDryRunUnixNano.Load())
+	stats["treedb.cache.vlog_generation.gc.dry_run.last_eligible_bytes"] = fmt.Sprintf("%d", db.vlogGenerationLastGCDryRunBytesEligible.Load())
+	stats["treedb.cache.vlog_generation.gc.dry_run.last_eligible_segments"] = fmt.Sprintf("%d", db.vlogGenerationLastGCDryRunSegsEligible.Load())
 	stats["treedb.cache.vlog_generation.vacuum.runs"] = fmt.Sprintf("%d", db.vlogGenerationVacuumRuns.Load())
 	stats["treedb.cache.vlog_generation.vacuum.failures"] = fmt.Sprintf("%d", db.vlogGenerationVacuumFailures.Load())
+	stats["treedb.cache.vlog_generation.vacuum.skipped_disabled"] = fmt.Sprintf("%d", db.vlogGenerationVacuumSkippedDisabled.Load())
+	stats["treedb.cache.vlog_generation.vacuum.skipped_rewrite_bytes"] = fmt.Sprintf("%d", db.vlogGenerationVacuumSkippedRewriteBytes.Load())
+	stats["treedb.cache.vlog_generation.vacuum.skipped_cooldown"] = fmt.Sprintf("%d", db.vlogGenerationVacuumSkippedCooldown.Load())
+	stats["treedb.cache.vlog_generation.vacuum.exec.total_ms"] = fmt.Sprintf("%.3f", float64(vacuumExecTotalNS)/float64(time.Millisecond))
+	stats["treedb.cache.vlog_generation.vacuum.exec.max_ms"] = fmt.Sprintf("%.3f", float64(vacuumExecMaxNS)/float64(time.Millisecond))
+	if vacuumRuns > 0 {
+		stats["treedb.cache.vlog_generation.vacuum.exec.avg_ms"] = fmt.Sprintf("%.3f", (float64(vacuumExecTotalNS)/float64(vacuumRuns))/float64(time.Millisecond))
+	} else {
+		stats["treedb.cache.vlog_generation.vacuum.exec.avg_ms"] = "0.000"
+	}
 	stats["treedb.cache.vlog_generation.vacuum.last_unix_nano"] = fmt.Sprintf("%d", db.vlogGenerationLastVacuumUnixNano.Load())
 	stats["treedb.cache.vlog_generation.remap.successes"] = fmt.Sprintf("%d", db.vlogGenerationRemapSuccesses.Load())
 	stats["treedb.cache.vlog_generation.remap.failures"] = fmt.Sprintf("%d", db.vlogGenerationRemapFailures.Load())
@@ -15237,6 +24916,7 @@ func (db *DB) Stats() map[string]string {
 		db.materializationLastDrainUnixNano.Store(now.UnixNano())
 	}
 	stats["treedb.cache.queue_backlog_bytes"] = fmt.Sprintf("%d", backlogBytes)
+	stats["treedb.process.memory.queue_backlog_bytes"] = fmt.Sprintf("%d", backlogBytes)
 	stats["treedb.cache.queue_laneid_misses"] = fmt.Sprintf("%d", db.queueLaneIDMisses.Load())
 	stats["treedb.cache.stats.backend_write_batches_total"] = fmt.Sprintf("%d", db.backendWriteBatchesTotal.Load())
 	watermarkLagDriftBps := db.observePublishWatermarkLagDrift(backlogBytes, now)
@@ -15307,7 +24987,72 @@ func (db *DB) Stats() map[string]string {
 			stats["treedb.cache.vlog_template."+k] = v
 		}
 	}
+	growStats := valuelog.GrowBufferStatsSnapshot()
+	stats["treedb.cache.vlog_decode_buffer_grow.calls_total"] = fmt.Sprintf("%d", growStats.CallsTotal)
+	stats["treedb.cache.vlog_decode_buffer_grow.realloc_calls_total"] = fmt.Sprintf("%d", growStats.ReallocCallsTotal)
+	stats["treedb.cache.vlog_decode_buffer_grow.requested_bytes_total"] = fmt.Sprintf("%d", growStats.RequestedBytesTotal)
+	stats["treedb.cache.vlog_decode_buffer_grow.allocated_bytes_total"] = fmt.Sprintf("%d", growStats.AllocatedBytesTotal)
+	stats["treedb.cache.vlog_decode_buffer_grow.copied_bytes_total"] = fmt.Sprintf("%d", growStats.CopiedBytesTotal)
+	stats["treedb.cache.vlog_decode_buffer_grow.capacity_waste_bytes_total"] = fmt.Sprintf("%d", growStats.CapacityWasteBytesTotal)
+	stats["treedb.cache.vlog_decode_buffer_grow.read_append_compressed_fallback.calls_total"] = fmt.Sprintf("%d", growStats.ReadAppendCompressedFallbackCallsTotal)
+	stats["treedb.cache.vlog_decode_buffer_grow.read_append_compressed_fallback.requested_bytes_total"] = fmt.Sprintf("%d", growStats.ReadAppendCompressedFallbackRequestedBytesTotal)
+	stats["treedb.cache.vlog_decode_buffer_grow.read_append_compressed_fallback.dst_present_calls_total"] = fmt.Sprintf("%d", growStats.ReadAppendCompressedFallbackDstPresentCallsTotal)
+	stats["treedb.cache.vlog_decode_buffer_grow.read_append_compressed_fallback.dst_fit_calls_total"] = fmt.Sprintf("%d", growStats.ReadAppendCompressedFallbackDstFitCallsTotal)
+	stats["treedb.cache.vlog_decode_buffer_grow.read_append_compressed_fallback.dst_fit_requested_bytes_total"] = fmt.Sprintf("%d", growStats.ReadAppendCompressedFallbackDstFitRequestedBytesTotal)
+	stats["treedb.cache.vlog_decode_buffer_grow.read_append_payload.calls_total"] = fmt.Sprintf("%d", growStats.ReadAppendPayloadCallsTotal)
+	stats["treedb.cache.vlog_decode_buffer_grow.read_append_payload.requested_bytes_total"] = fmt.Sprintf("%d", growStats.ReadAppendPayloadRequestedBytesTotal)
+	stats["treedb.cache.vlog_decode_buffer_grow.read_append_current_mmap_direct_decode.calls_total"] = fmt.Sprintf("%d", growStats.ReadAppendCurrentMmapDirectDecodeCallsTotal)
+	stats["treedb.cache.vlog_decode_buffer_grow.read_append_current_mmap_direct_decode.requested_bytes_total"] = fmt.Sprintf("%d", growStats.ReadAppendCurrentMmapDirectDecodeRequestedBytesTotal)
+	if growStats.CallsTotal > 0 {
+		stats["treedb.cache.vlog_decode_buffer_grow.realloc_rate"] = fmt.Sprintf("%.6f", float64(growStats.ReallocCallsTotal)/float64(growStats.CallsTotal))
+	}
+	if growStats.ReallocCallsTotal > 0 {
+		stats["treedb.cache.vlog_decode_buffer_grow.avg_allocated_bytes_per_realloc"] = fmt.Sprintf("%.3f", float64(growStats.AllocatedBytesTotal)/float64(growStats.ReallocCallsTotal))
+		stats["treedb.cache.vlog_decode_buffer_grow.avg_copied_bytes_per_realloc"] = fmt.Sprintf("%.3f", float64(growStats.CopiedBytesTotal)/float64(growStats.ReallocCallsTotal))
+	}
+	if growStats.RequestedBytesTotal > 0 {
+		stats["treedb.cache.vlog_decode_buffer_grow.overalloc_ratio"] = fmt.Sprintf("%.6f", float64(growStats.AllocatedBytesTotal)/float64(growStats.RequestedBytesTotal))
+	}
+	cacheVlogMmap := cacheVlogMmapStatsSnapshot(db.valueLogReader)
 	if db.valueLogReader != nil {
+		remaps, deadMappings := db.valueLogReader.RemapStats()
+		stats["treedb.cache.vlog_mmap.remaps"] = fmt.Sprintf("%d", remaps)
+		stats["treedb.cache.vlog_mmap.dead_mappings"] = fmt.Sprintf("%d", deadMappings)
+		stats["treedb.cache.vlog_mmap.dead_mappings.cap_base"] = fmt.Sprintf("%d", valuelog.MaxDeadMappings)
+		stats["treedb.cache.vlog_mmap.max_mapped_sealed_segments"] = fmt.Sprintf("%d", valuelog.MaxMappedSealedSegments)
+		stats["treedb.cache.vlog_mmap.max_mapped_sealed_bytes"] = fmt.Sprintf("%d", valuelog.MaxMappedSealedBytes)
+		zombieSegments, zombieBytes, zombiePinnedSegments, zombiePinnedBytes, zombieUnpinnedSegments, zombieUnpinnedBytes := db.valueLogReader.ZombieStats()
+		stats["treedb.cache.vlog_zombie.segments"] = fmt.Sprintf("%d", zombieSegments)
+		stats["treedb.cache.vlog_zombie.bytes"] = fmt.Sprintf("%d", zombieBytes)
+		stats["treedb.cache.vlog_zombie.pinned_segments"] = fmt.Sprintf("%d", zombiePinnedSegments)
+		stats["treedb.cache.vlog_zombie.pinned_bytes"] = fmt.Sprintf("%d", zombiePinnedBytes)
+		stats["treedb.cache.vlog_zombie.unpinned_segments"] = fmt.Sprintf("%d", zombieUnpinnedSegments)
+		stats["treedb.cache.vlog_zombie.unpinned_bytes"] = fmt.Sprintf("%d", zombieUnpinnedBytes)
+		stats["treedb.process.memory.vlog_zombie_bytes_estimate"] = fmt.Sprintf("%d", zombieBytes)
+		stats["treedb.process.memory.vlog_zombie_pinned_bytes_estimate"] = fmt.Sprintf("%d", zombiePinnedBytes)
+		stats["treedb.process.memory.vlog_zombie_unpinned_bytes_estimate"] = fmt.Sprintf("%d", zombieUnpinnedBytes)
+		stats["treedb.cache.vlog_mmap.active_segments"] = fmt.Sprintf("%d", cacheVlogMmap.activeSegments)
+		stats["treedb.cache.vlog_mmap.active_bytes"] = fmt.Sprintf("%d", cacheVlogMmap.activeBytes)
+		stats["treedb.cache.vlog_mmap.current_segments"] = fmt.Sprintf("%d", cacheVlogMmap.currentSegments)
+		stats["treedb.cache.vlog_mmap.current_bytes"] = fmt.Sprintf("%d", cacheVlogMmap.currentBytes)
+		stats["treedb.cache.vlog_mmap.sealed_segments"] = fmt.Sprintf("%d", cacheVlogMmap.sealedSegments)
+		stats["treedb.cache.vlog_mmap.sealed_bytes"] = fmt.Sprintf("%d", cacheVlogMmap.sealedBytes)
+		stats["treedb.cache.vlog_mmap.dead_bytes"] = fmt.Sprintf("%d", cacheVlogMmap.deadBytes)
+		sealedDeniedCountCap, sealedDeniedBytesCap := db.valueLogReader.SealedMapDeniedByReasonStats()
+		stats["treedb.cache.vlog_mmap.sealed_map_denied.count_cap"] = fmt.Sprintf("%d", sealedDeniedCountCap)
+		stats["treedb.cache.vlog_mmap.sealed_map_denied.bytes_cap"] = fmt.Sprintf("%d", sealedDeniedBytesCap)
+		stats["treedb.cache.vlog_mmap.sealed_map_denied"] = fmt.Sprintf("%d", sealedDeniedCountCap+sealedDeniedBytesCap)
+
+		mmapHits, mmapMissOutOfRange, mmapMissNoMapping, mmapMissDeadCap, mmapFallbackReadAt := db.valueLogReader.MmapReadStats()
+		stats["treedb.cache.vlog_mmap.read.hits"] = fmt.Sprintf("%d", mmapHits)
+		stats["treedb.cache.vlog_mmap.read.miss_out_of_range"] = fmt.Sprintf("%d", mmapMissOutOfRange)
+		stats["treedb.cache.vlog_mmap.read.miss_no_mapping"] = fmt.Sprintf("%d", mmapMissNoMapping)
+		stats["treedb.cache.vlog_mmap.read.miss_dead_mapping_cap"] = fmt.Sprintf("%d", mmapMissDeadCap)
+		stats["treedb.cache.vlog_mmap.read.fallback_readat"] = fmt.Sprintf("%d", mmapFallbackReadAt)
+		if total := mmapHits + mmapFallbackReadAt; total > 0 {
+			stats["treedb.cache.vlog_mmap.read.hit_ratio"] = fmt.Sprintf("%.6f", float64(mmapHits)/float64(total))
+		}
+
 		hits, misses, entries, capacity := db.valueLogReader.TemplateDefCacheStats()
 		stats["treedb.cache.vlog_template_def_cache.hits"] = fmt.Sprintf("%d", hits)
 		stats["treedb.cache.vlog_template_def_cache.misses"] = fmt.Sprintf("%d", misses)
@@ -15317,6 +25062,33 @@ func (db *DB) Stats() map[string]string {
 			stats["treedb.cache.vlog_template_def_cache.hit_ratio"] = fmt.Sprintf("%.6f", float64(hits)/float64(total))
 		}
 	}
+	stats["treedb.process.memory.vlog_mmap_backend_active_bytes"] = fmt.Sprintf("%d", backendVlogMmap.activeBytes)
+	stats["treedb.process.memory.vlog_mmap_backend_current_bytes"] = fmt.Sprintf("%d", backendVlogMmap.currentBytes)
+	stats["treedb.process.memory.vlog_mmap_backend_sealed_bytes"] = fmt.Sprintf("%d", backendVlogMmap.sealedBytes)
+	stats["treedb.process.memory.vlog_mmap_backend_dead_bytes"] = fmt.Sprintf("%d", backendVlogMmap.deadBytes)
+	stats["treedb.process.memory.vlog_mmap_backend_active_segments"] = fmt.Sprintf("%d", backendVlogMmap.activeSegments)
+	stats["treedb.process.memory.vlog_mmap_backend_current_segments"] = fmt.Sprintf("%d", backendVlogMmap.currentSegments)
+	stats["treedb.process.memory.vlog_mmap_backend_sealed_segments"] = fmt.Sprintf("%d", backendVlogMmap.sealedSegments)
+	stats["treedb.process.memory.vlog_mmap_cache_active_bytes"] = fmt.Sprintf("%d", cacheVlogMmap.activeBytes)
+	stats["treedb.process.memory.vlog_mmap_cache_current_bytes"] = fmt.Sprintf("%d", cacheVlogMmap.currentBytes)
+	stats["treedb.process.memory.vlog_mmap_cache_sealed_bytes"] = fmt.Sprintf("%d", cacheVlogMmap.sealedBytes)
+	stats["treedb.process.memory.vlog_mmap_cache_dead_bytes"] = fmt.Sprintf("%d", cacheVlogMmap.deadBytes)
+	stats["treedb.process.memory.vlog_mmap_cache_active_segments"] = fmt.Sprintf("%d", cacheVlogMmap.activeSegments)
+	stats["treedb.process.memory.vlog_mmap_cache_current_segments"] = fmt.Sprintf("%d", cacheVlogMmap.currentSegments)
+	stats["treedb.process.memory.vlog_mmap_cache_sealed_segments"] = fmt.Sprintf("%d", cacheVlogMmap.sealedSegments)
+	stats["treedb.process.memory.vlog_mmap_active_bytes"] = fmt.Sprintf("%d", cacheVlogMmap.activeBytes+backendVlogMmap.activeBytes)
+	stats["treedb.process.memory.vlog_mmap_current_bytes"] = fmt.Sprintf("%d", cacheVlogMmap.currentBytes+backendVlogMmap.currentBytes)
+	stats["treedb.process.memory.vlog_mmap_sealed_bytes"] = fmt.Sprintf("%d", cacheVlogMmap.sealedBytes+backendVlogMmap.sealedBytes)
+	stats["treedb.process.memory.vlog_mmap_dead_bytes"] = fmt.Sprintf("%d", cacheVlogMmap.deadBytes+backendVlogMmap.deadBytes)
+	stats["treedb.process.memory.vlog_mmap_active_segments"] = fmt.Sprintf("%d", cacheVlogMmap.activeSegments+backendVlogMmap.activeSegments)
+	stats["treedb.process.memory.vlog_mmap_current_segments"] = fmt.Sprintf("%d", cacheVlogMmap.currentSegments+backendVlogMmap.currentSegments)
+	stats["treedb.process.memory.vlog_mmap_sealed_segments"] = fmt.Sprintf("%d", cacheVlogMmap.sealedSegments+backendVlogMmap.sealedSegments)
+	stats["treedb.process.memory.peak_vlog_mmap_active_bytes"] = fmt.Sprintf("%d", db.processPeakVlogMmapActiveBytes.Load())
+	stats["treedb.process.memory.peak_vlog_mmap_current_bytes"] = fmt.Sprintf("%d", db.processPeakVlogMmapCurrentBytes.Load())
+	stats["treedb.process.memory.peak_vlog_mmap_sealed_bytes"] = fmt.Sprintf("%d", db.processPeakVlogMmapSealedBytes.Load())
+	stats["treedb.process.memory.peak_vlog_mmap_active_segments"] = fmt.Sprintf("%d", db.processPeakVlogMmapActiveSegments.Load())
+	stats["treedb.process.memory.peak_vlog_mmap_current_segments"] = fmt.Sprintf("%d", db.processPeakVlogMmapCurrentSegments.Load())
+	stats["treedb.process.memory.peak_vlog_mmap_sealed_segments"] = fmt.Sprintf("%d", db.processPeakVlogMmapSealedSegments.Load())
 	stats["treedb.cache.vlog_dict.pause_remaining_bytes"] = fmt.Sprintf("%d", db.valueLogDictPauseRemaining.Load())
 	stats["treedb.cache.vlog_dict.incompressible_hold_remaining_bytes"] = fmt.Sprintf("%d", db.valueLogDictIncompressibleHoldRemaining.Load())
 	stats["treedb.cache.vlog_dict.incompressible_hits"] = fmt.Sprintf("%d", db.valueLogDictIncompressibleHits.Load())
@@ -15372,6 +25144,92 @@ func (db *DB) Stats() map[string]string {
 			stats["treedb.cache.vlog_block.ratio."+suffix] = fmt.Sprintf("%.6f", ratio)
 		}
 		stats["treedb.cache.vlog_block.ratio.samples."+suffix] = fmt.Sprintf("%d", blockRatioSamples[codecIdx])
+	}
+	var (
+		writeSnap          vlogWriteModeSnapshot
+		payloadKindSnap    vlogPayloadKindSnapshot
+		payloadSplitSnap   vlogPayloadSplitSnapshot
+		outerLeafCodecSnap vlogOuterLeafCodecSnapshot
+	)
+	for i := range db.lanes {
+		laneSnap := snapshotLaneVlogWriteMode(&db.lanes[i])
+		kindSnap := snapshotLaneVlogPayloadKind(&db.lanes[i])
+		splitSnap := snapshotLaneVlogPayloadSplit(&db.lanes[i])
+		outerCodecSnap := snapshotLaneVlogOuterLeafCodec(&db.lanes[i])
+		for mode := 0; mode < vlogCompressionWriteModeCount; mode++ {
+			writeSnap.RawBytes[mode] += laneSnap.RawBytes[mode]
+			writeSnap.StoredBytes[mode] += laneSnap.StoredBytes[mode]
+			writeSnap.Frames[mode] += laneSnap.Frames[mode]
+			for bucket := 0; bucket < vlogPayloadBucketCount; bucket++ {
+				writeSnap.BucketRawBytes[mode][bucket] += laneSnap.BucketRawBytes[mode][bucket]
+				writeSnap.BucketStoredBytes[mode][bucket] += laneSnap.BucketStoredBytes[mode][bucket]
+				writeSnap.BucketFrames[mode][bucket] += laneSnap.BucketFrames[mode][bucket]
+			}
+		}
+		for kind := 0; kind < vlogPayloadKindCount; kind++ {
+			payloadKindSnap.RawBytes[kind] += kindSnap.RawBytes[kind]
+			payloadKindSnap.StoredBytes[kind] += kindSnap.StoredBytes[kind]
+			payloadKindSnap.Frames[kind] += kindSnap.Frames[kind]
+		}
+		for kind := 0; kind < vlogPayloadSplitKindCount; kind++ {
+			payloadSplitSnap.RawBytes[kind] += splitSnap.RawBytes[kind]
+			payloadSplitSnap.StoredBytes[kind] += splitSnap.StoredBytes[kind]
+			payloadSplitSnap.Records[kind] += splitSnap.Records[kind]
+		}
+		for kind := 0; kind < vlogOuterLeafCodecKindCount; kind++ {
+			outerLeafCodecSnap.RawBytes[kind] += outerCodecSnap.RawBytes[kind]
+			outerLeafCodecSnap.StoredBytes[kind] += outerCodecSnap.StoredBytes[kind]
+			outerLeafCodecSnap.Frames[kind] += outerCodecSnap.Frames[kind]
+		}
+	}
+	for mode := 0; mode < vlogCompressionWriteModeCount; mode++ {
+		suffix := vlogWriteModeSuffix(vlogCompressionWriteMode(mode))
+		stats["treedb.cache.vlog_write_mode.raw_bytes."+suffix] = fmt.Sprintf("%d", writeSnap.RawBytes[mode])
+		stats["treedb.cache.vlog_write_mode.stored_bytes."+suffix] = fmt.Sprintf("%d", writeSnap.StoredBytes[mode])
+		stats["treedb.cache.vlog_write_mode.frames."+suffix] = fmt.Sprintf("%d", writeSnap.Frames[mode])
+		if writeSnap.RawBytes[mode] > 0 {
+			stats["treedb.cache.vlog_write_mode.stored_ratio."+suffix] = fmt.Sprintf("%.6f", float64(writeSnap.StoredBytes[mode])/float64(writeSnap.RawBytes[mode]))
+		}
+		for bucket := 0; bucket < vlogPayloadBucketCount; bucket++ {
+			bucketSuffix := vlogPayloadBucketSuffix(bucket)
+			stats["treedb.cache.vlog_write_mode.bucket.raw_bytes."+suffix+"."+bucketSuffix] = fmt.Sprintf("%d", writeSnap.BucketRawBytes[mode][bucket])
+			stats["treedb.cache.vlog_write_mode.bucket.stored_bytes."+suffix+"."+bucketSuffix] = fmt.Sprintf("%d", writeSnap.BucketStoredBytes[mode][bucket])
+			stats["treedb.cache.vlog_write_mode.bucket.frames."+suffix+"."+bucketSuffix] = fmt.Sprintf("%d", writeSnap.BucketFrames[mode][bucket])
+			if writeSnap.BucketRawBytes[mode][bucket] > 0 {
+				key := "treedb.cache.vlog_write_mode.bucket.stored_ratio." + suffix + "." + bucketSuffix
+				stats[key] = fmt.Sprintf("%.6f", float64(writeSnap.BucketStoredBytes[mode][bucket])/float64(writeSnap.BucketRawBytes[mode][bucket]))
+			}
+		}
+	}
+	for kind := 0; kind < vlogPayloadKindCount; kind++ {
+		suffix := vlogPayloadKindSuffix(vlogPayloadKind(kind))
+		stats["treedb.cache.vlog_payload_kind.raw_bytes."+suffix] = fmt.Sprintf("%d", payloadKindSnap.RawBytes[kind])
+		stats["treedb.cache.vlog_payload_kind.stored_bytes."+suffix] = fmt.Sprintf("%d", payloadKindSnap.StoredBytes[kind])
+		stats["treedb.cache.vlog_payload_kind.frames."+suffix] = fmt.Sprintf("%d", payloadKindSnap.Frames[kind])
+		if payloadKindSnap.RawBytes[kind] > 0 {
+			key := "treedb.cache.vlog_payload_kind.stored_ratio." + suffix
+			stats[key] = fmt.Sprintf("%.6f", float64(payloadKindSnap.StoredBytes[kind])/float64(payloadKindSnap.RawBytes[kind]))
+		}
+	}
+	for kind := 0; kind < vlogPayloadSplitKindCount; kind++ {
+		suffix := vlogPayloadSplitSuffix(vlogPayloadSplitKind(kind))
+		stats["treedb.cache.vlog_payload_split.raw_bytes."+suffix] = fmt.Sprintf("%d", payloadSplitSnap.RawBytes[kind])
+		stats["treedb.cache.vlog_payload_split.stored_bytes."+suffix] = fmt.Sprintf("%d", payloadSplitSnap.StoredBytes[kind])
+		stats["treedb.cache.vlog_payload_split.records."+suffix] = fmt.Sprintf("%d", payloadSplitSnap.Records[kind])
+		if payloadSplitSnap.RawBytes[kind] > 0 {
+			key := "treedb.cache.vlog_payload_split.stored_ratio." + suffix
+			stats[key] = fmt.Sprintf("%.6f", float64(payloadSplitSnap.StoredBytes[kind])/float64(payloadSplitSnap.RawBytes[kind]))
+		}
+	}
+	for kind := 0; kind < vlogOuterLeafCodecKindCount; kind++ {
+		suffix := vlogOuterLeafCodecSuffix(vlogOuterLeafCodecKind(kind))
+		stats["treedb.cache.vlog_outer_leaf_codec.raw_bytes."+suffix] = fmt.Sprintf("%d", outerLeafCodecSnap.RawBytes[kind])
+		stats["treedb.cache.vlog_outer_leaf_codec.stored_bytes."+suffix] = fmt.Sprintf("%d", outerLeafCodecSnap.StoredBytes[kind])
+		stats["treedb.cache.vlog_outer_leaf_codec.frames."+suffix] = fmt.Sprintf("%d", outerLeafCodecSnap.Frames[kind])
+		if outerLeafCodecSnap.RawBytes[kind] > 0 {
+			key := "treedb.cache.vlog_outer_leaf_codec.stored_ratio." + suffix
+			stats[key] = fmt.Sprintf("%.6f", float64(outerLeafCodecSnap.StoredBytes[kind])/float64(outerLeafCodecSnap.RawBytes[kind]))
+		}
 	}
 	if normalizeVlogCompressionMode(db.valueLogCompressionMode) == vlogCompressionAuto {
 		var autoSnap vlogCompressionSelectorStats
@@ -15551,7 +25409,7 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 	if err := db.ensureBackendRange(); err != nil {
 		return nil, err
 	}
-	if err := db.flushDeferredValueLogForBackendRead(); err != nil {
+	if err := db.flushValueLogForBackendRead(); err != nil {
 		return nil, err
 	}
 
@@ -15919,7 +25777,7 @@ func (it *concatUnsafeIterator) Domain() (start, end []byte) { return nil, nil }
 
 func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
 	db.noteRead()
-	if err := db.flushDeferredValueLogForBackendRead(); err != nil {
+	if err := db.flushValueLogForBackendRead(); err != nil {
 		return nil, err
 	}
 
@@ -16111,6 +25969,7 @@ type Batch struct {
 	ptrCopyArena       []byte
 	ptrCopyArenaChunks [][]byte
 	ptrCopyBytes       int
+	arenaInFlightBytes int64
 	ptrValueIdxs       []int
 	walBuf             []logRecord
 	shardIdxs          []int
@@ -16121,16 +25980,15 @@ type Batch struct {
 	shardIdxSets       [][]int
 	maxEntries         int
 
-	closed         bool
+	closed bool
+	// SetView/DeleteView keep caller-owned bytes until Write/Close, so memtables
+	// must not borrow the batch arena when any view op is present.
+	hasViewOps     bool
 	streamEligible bool
 	streamTried    bool
 	firstKey       []byte
 	lastKey        []byte
 	batchRange     keyRange
-	dictID         uint64
-	dictIDValid    bool
-	dictBytes      []byte
-	dictBytesValid bool
 }
 
 func (db *DB) NewBatch() *Batch {
@@ -16154,6 +26012,89 @@ func (db *DB) NewBatchWithSize(size int) *Batch {
 		copyArenaCap:   db.batchCopyArenaInitCap(reserveHint),
 		streamEligible: true,
 	}
+}
+
+func clampAppendOnlyEntryHint(entries int) int {
+	if entries < appendOnlyEntryHintMinEntries {
+		return appendOnlyEntryHintMinEntries
+	}
+	if entries > appendOnlyEntryHintMaxEntries {
+		return appendOnlyEntryHintMaxEntries
+	}
+	return entries
+}
+
+func (db *DB) observeAppendOnlyMutableEntries(entries int) {
+	if db == nil {
+		return
+	}
+	n := clampAppendOnlyEntryHint(entries)
+	for {
+		old := int(db.appendOnlyEntryHint.Load())
+		next := n
+		if old > 0 {
+			if n > old {
+				// Grow faster so sustained larger mutables avoid repeated regrowth.
+				next = (old*3 + n + 1) / 4
+			} else {
+				// Decay to recent smaller mutables to avoid pinning high-water entry
+				// slices through rotate/checkpoint-heavy workloads.
+				next = (old*7 + n + 3) / 8
+			}
+		}
+		next = clampAppendOnlyEntryHint(next)
+		if next == old {
+			return
+		}
+		if db.appendOnlyEntryHint.CompareAndSwap(int32(old), int32(next)) {
+			return
+		}
+	}
+}
+
+func appendOnlyEntriesToCapacity(entries, estimatedBytesPerEntry int) int {
+	if entries <= 0 {
+		return 0
+	}
+	if estimatedBytesPerEntry <= 0 {
+		estimatedBytesPerEntry = appendOnlyEstimatedBytesPerEntryDefault
+	}
+	maxInt := int(^uint(0) >> 1)
+	if entries > maxInt/estimatedBytesPerEntry {
+		return maxInt
+	}
+	return entries * estimatedBytesPerEntry
+}
+
+func (db *DB) appendOnlyMemtableCapacityHint(capacity, estimatedBytesPerEntry int) int {
+	if db == nil || capacity <= 0 {
+		return capacity
+	}
+	// Keep append-only preallocation aligned with the *effective* mutable flush
+	// threshold under process pressure. Without this, we can still preallocate
+	// near static memtableCap even after pressure logic has lowered rotation
+	// thresholds, inflating peak RSS during restore workloads.
+	if threshold := db.mutableFlushThreshold(); threshold > 0 {
+		if effectiveCap := memtableCapacity(threshold); effectiveCap > 0 && effectiveCap < capacity {
+			capacity = effectiveCap
+		}
+	}
+	hintEntries := int(db.appendOnlyEntryHint.Load())
+	if hintEntries <= 0 {
+		return capacity
+	}
+	hintEntries = clampAppendOnlyEntryHint(hintEntries)
+	hintCapacity := appendOnlyEntriesToCapacity(hintEntries, estimatedBytesPerEntry)
+	if hintCapacity < minMemtablePrealloc {
+		hintCapacity = minMemtablePrealloc
+	}
+	if hintCapacity > capacity {
+		hintCapacity = capacity
+	}
+	if hintCapacity <= 0 {
+		return capacity
+	}
+	return hintCapacity
 }
 
 func (db *DB) batchEntriesCapHint(minCap int) int {
@@ -16220,6 +26161,9 @@ func (db *DB) batchCopyArenaInitCap(sizeHint int) int {
 	if base > batchCopyArenaInitMax {
 		base = batchCopyArenaInitMax
 	}
+	if maxChunk := currentBatchCopyArenaMaxChunk(); maxChunk > 0 && base > maxChunk {
+		base = maxChunk
+	}
 	return base
 }
 
@@ -16232,6 +26176,9 @@ func (db *DB) observeBatchCopyBytes(n int) {
 	}
 	if n > batchCopyArenaInitMax {
 		n = batchCopyArenaInitMax
+	}
+	if maxChunk := currentBatchCopyArenaMaxChunk(); maxChunk > 0 && n > maxChunk {
+		n = maxChunk
 	}
 	for {
 		old := int(db.batchCopyBytesHint.Load())
@@ -16257,6 +26204,69 @@ func (db *DB) observeBatchCopyBytes(n int) {
 		if db.batchCopyBytesHint.CompareAndSwap(int32(old), int32(next)) {
 			return
 		}
+	}
+}
+
+func (db *DB) noteBatchArenaChunkAlloc(kind batchArenaKind, requestedCap, classCap int) {
+	if db == nil {
+		return
+	}
+	if requestedCap > 0 {
+		db.batchArenaAllocRequestedBytes.Add(uint64(requestedCap))
+	}
+	if classCap > 0 {
+		db.batchArenaAllocClassBytes.Add(uint64(classCap))
+		switch kind {
+		case batchArenaKindMain:
+			db.batchArenaMainAllocClassBytes.Add(uint64(classCap))
+		case batchArenaKindPtr:
+			db.batchArenaPtrAllocClassBytes.Add(uint64(classCap))
+		}
+	}
+}
+
+func (db *DB) noteBatchArenaChunkFinalize(kind batchArenaKind, used, classCap int) {
+	if db == nil || classCap <= 0 {
+		return
+	}
+	if used < 0 {
+		used = 0
+	}
+	if used > classCap {
+		used = classCap
+	}
+	db.batchArenaUsedBytes.Add(uint64(used))
+	db.batchArenaTailWasteBytes.Add(uint64(classCap - used))
+	switch kind {
+	case batchArenaKindMain:
+		db.batchArenaMainUsedBytes.Add(uint64(used))
+		db.batchArenaMainTailWasteBytes.Add(uint64(classCap - used))
+	case batchArenaKindPtr:
+		db.batchArenaPtrUsedBytes.Add(uint64(used))
+		db.batchArenaPtrTailWasteBytes.Add(uint64(classCap - used))
+	}
+}
+
+func (db *DB) noteBatchArenaTailCompact(copiedBytes, classCap int) {
+	if db == nil || classCap <= 0 {
+		return
+	}
+	if copiedBytes < 0 {
+		copiedBytes = 0
+	}
+	if copiedBytes > classCap {
+		copiedBytes = classCap
+	}
+	saved := classCap - copiedBytes
+	if saved < 0 {
+		saved = 0
+	}
+	db.batchArenaTailCompactRuns.Add(1)
+	if copiedBytes > 0 {
+		db.batchArenaTailCompactCopied.Add(uint64(copiedBytes))
+	}
+	if saved > 0 {
+		db.batchArenaTailCompactSaved.Add(uint64(saved))
 	}
 }
 
@@ -16297,6 +26307,10 @@ func (db *DB) putBatchEntries(entries []batch.Entry) {
 	if cap(entries) > batchEntriesPoolMaxRetain {
 		return
 	}
+	if !shouldRetainBatchAuxPoolEntries(currentPoolPressureSnapshot().level) {
+		batchEntriesPoolDropUnderPressureTotal.Add(1)
+		return
+	}
 	full := entries[:cap(entries)]
 	clear(full)
 	db.batchEntriesPool.Put(getBatchEntrySliceRef(full[:0]))
@@ -16333,6 +26347,10 @@ func (db *DB) putBatchShardEntries(entries []batch.Entry) {
 	if cap(entries) > batchEntriesPoolMaxRetain {
 		return
 	}
+	if !shouldRetainBatchAuxPoolEntries(currentPoolPressureSnapshot().level) {
+		batchShardEntriesPoolDropUnderPressureTotal.Add(1)
+		return
+	}
 	full := entries[:cap(entries)]
 	clear(full)
 	db.batchShardEntriesPool.Put(getBatchEntrySliceRef(full[:0]))
@@ -16362,6 +26380,10 @@ func (db *DB) putBatchIntSlice(idxs []int) {
 		return
 	}
 	if cap(idxs) > batchIntSlicePoolMaxRetain {
+		return
+	}
+	if !shouldRetainBatchAuxPoolEntries(currentPoolPressureSnapshot().level) {
+		batchIntPoolDropUnderPressureTotal.Add(1)
 		return
 	}
 	db.batchIntPool.Put(idxs[:0])
@@ -16402,6 +26424,9 @@ func (b *Batch) Reset() {
 	}
 	b.recycleCopyArenaChunks()
 	b.recyclePtrCopyArenaChunks()
+	if b.arenaInFlightBytes > 0 {
+		b.subArenaInFlightBytes(b.arenaInFlightBytes)
+	}
 	if b.db != nil {
 		b.copyArenaCap = b.db.batchCopyArenaInitCap(0)
 	}
@@ -16409,13 +26434,10 @@ func (b *Batch) Reset() {
 	b.walBuf = b.walBuf[:0]
 	b.streamEligible = true
 	b.streamTried = false
+	b.hasViewOps = false
 	b.firstKey = nil
 	b.lastKey = nil
 	b.batchRange = keyRange{}
-	b.dictID = 0
-	b.dictIDValid = false
-	b.dictBytes = nil
-	b.dictBytesValid = false
 	b.maxEntries = 0
 	if b.ptrValueIdxs != nil {
 		b.ptrValueIdxs = b.ptrValueIdxs[:0]
@@ -16448,7 +26470,13 @@ func (b *Batch) drainCopyArenaChunks() [][]byte {
 	if b == nil {
 		return nil
 	}
+	if b.db != nil && cap(b.copyArena) > 0 {
+		b.db.noteBatchArenaChunkFinalize(batchArenaKindMain, len(b.copyArena), cap(b.copyArena))
+	}
 	chunks := b.copyArenaChunks
+	if bytes := batchArenaChunksCapBytes(chunks); bytes > 0 {
+		b.subArenaInFlightBytes(bytes)
+	}
 	b.copyArenaChunks = nil
 	b.copyArena = nil
 	b.copyBytes = 0
@@ -16470,7 +26498,13 @@ func (b *Batch) drainPtrCopyArenaChunks() [][]byte {
 	if b == nil {
 		return nil
 	}
+	if b.db != nil && cap(b.ptrCopyArena) > 0 {
+		b.db.noteBatchArenaChunkFinalize(batchArenaKindPtr, len(b.ptrCopyArena), cap(b.ptrCopyArena))
+	}
 	chunks := b.ptrCopyArenaChunks
+	if bytes := batchArenaChunksCapBytes(chunks); bytes > 0 {
+		b.subArenaInFlightBytes(bytes)
+	}
 	b.ptrCopyArenaChunks = nil
 	b.ptrCopyArena = nil
 	b.ptrCopyBytes = 0
@@ -16497,19 +26531,47 @@ func (b *Batch) updateBatchCopyHint() {
 	}
 }
 
+func (b *Batch) addArenaInFlightBytes(n int) {
+	if b == nil || n <= 0 {
+		return
+	}
+	b.arenaInFlightBytes += int64(n)
+	cur := batchArenaInFlightBytes.Add(int64(n))
+	noteBatchArenaInFlightBytesMax(cur)
+}
+
+func (b *Batch) subArenaInFlightBytes(n int64) {
+	if b == nil || n <= 0 {
+		return
+	}
+	if n > b.arenaInFlightBytes {
+		n = b.arenaInFlightBytes
+	}
+	if n <= 0 {
+		return
+	}
+	b.arenaInFlightBytes -= n
+	if next := batchArenaInFlightBytes.Add(-n); next < 0 {
+		batchArenaInFlightBytes.Store(0)
+	}
+}
+
 func (b *Batch) arenaCopy(n int) []byte {
-	return b.arenaCopyInto(&b.copyArena, &b.copyArenaChunks, &b.copyBytes, n, b.copyArenaCap)
+	return b.arenaCopyInto(batchArenaKindMain, &b.copyArena, &b.copyArenaChunks, &b.copyBytes, n, b.copyArenaCap)
 }
 
 func (b *Batch) arenaCopyPtr(n int) []byte {
-	return b.arenaCopyInto(&b.ptrCopyArena, &b.ptrCopyArenaChunks, &b.ptrCopyBytes, n, 0)
+	return b.arenaCopyInto(batchArenaKindPtr, &b.ptrCopyArena, &b.ptrCopyArenaChunks, &b.ptrCopyBytes, n, 0)
 }
 
-func (b *Batch) arenaCopyInto(arena *[]byte, chunks *[][]byte, copyBytes *int, n int, initialCap int) []byte {
+func (b *Batch) arenaCopyInto(kind batchArenaKind, arena *[]byte, chunks *[][]byte, copyBytes *int, n int, initialCap int) []byte {
 	if n == 0 {
 		return nil
 	}
 	if cap(*arena)-len(*arena) < n {
+		if b != nil && b.db != nil && cap(*arena) > 0 {
+			b.db.noteBatchArenaChunkFinalize(kind, len(*arena), cap(*arena))
+		}
 		chunkCap := cap(*arena) * 2
 		if chunkCap < batchCopyArenaMinChunk {
 			chunkCap = batchCopyArenaMinChunk
@@ -16531,9 +26593,18 @@ func (b *Batch) arenaCopyInto(arena *[]byte, chunks *[][]byte, copyBytes *int, n
 		if n <= batchCopyArenaMaxRetain && chunkCap > batchCopyArenaMaxRetain {
 			chunkCap = batchCopyArenaMaxRetain
 		}
+		if maxChunk := currentBatchCopyArenaMaxChunk(); maxChunk > 0 && chunkCap > maxChunk && n <= maxChunk {
+			chunkCap = maxChunk
+		}
 		// Switch to a fresh chunk when exhausted so existing entry slices keep
 		// their backing arrays without per-op allocations.
 		chunk := getBatchArena(chunkCap)
+		if cap(chunk) > 0 {
+			b.addArenaInFlightBytes(cap(chunk))
+		}
+		if b != nil && b.db != nil {
+			b.db.noteBatchArenaChunkAlloc(kind, chunkCap, cap(chunk))
+		}
 		*arena = chunk[:0]
 		*chunks = append(*chunks, *arena)
 	}
@@ -16544,18 +26615,30 @@ func (b *Batch) arenaCopyInto(arena *[]byte, chunks *[][]byte, copyBytes *int, n
 }
 
 func (b *Batch) cloneKey(key []byte) []byte {
+	batchArenaCopyKeyCallsTotal.Add(1)
+	if len(key) > 0 {
+		batchArenaCopyKeyBytesTotal.Add(uint64(len(key)))
+	}
 	dst := b.arenaCopy(len(key))
 	copy(dst, key)
 	return dst
 }
 
 func (b *Batch) cloneValue(value []byte) []byte {
+	batchArenaCopyValueCallsTotal.Add(1)
+	if len(value) > 0 {
+		batchArenaCopyValueBytesTotal.Add(uint64(len(value)))
+	}
 	dst := b.arenaCopy(len(value))
 	copy(dst, value)
 	return dst
 }
 
 func (b *Batch) cloneKeyValue(key, value []byte) ([]byte, []byte) {
+	batchArenaCopyKeyValueCallsTotal.Add(1)
+	if n := len(key) + len(value); n > 0 {
+		batchArenaCopyKeyValueBytesTotal.Add(uint64(n))
+	}
 	buf := b.arenaCopy(len(key) + len(value))
 	keyCopy := buf[:len(key):len(key)]
 	copy(keyCopy, key)
@@ -16565,9 +26648,139 @@ func (b *Batch) cloneKeyValue(key, value []byte) ([]byte, []byte) {
 }
 
 func (b *Batch) clonePtrValue(value []byte) []byte {
+	batchArenaCopyPtrValueCallsTotal.Add(1)
+	if len(value) > 0 {
+		batchArenaCopyPtrValueBytesTotal.Add(uint64(len(value)))
+	}
 	dst := b.arenaCopyPtr(len(value))
 	copy(dst, value)
 	return dst
+}
+
+func shouldCompactBatchArenaTailWithPolicy(used, classCap, minWaste, maxFillNumerator, maxFillDenominator int) bool {
+	if classCap < batchArenaTailCompactMinCap || used <= 0 || used >= classCap {
+		return false
+	}
+	waste := classCap - used
+	if waste < minWaste {
+		return false
+	}
+	return used*maxFillDenominator <= classCap*maxFillNumerator
+}
+
+func shouldCompactBatchArenaTail(used, classCap int) bool {
+	return shouldCompactBatchArenaTailWithPolicy(
+		used,
+		classCap,
+		batchArenaTailCompactMinWaste,
+		batchArenaTailCompactMaxFillNumerator,
+		batchArenaTailCompactMaxFillDenominator,
+	)
+}
+
+func (b *Batch) shouldCompactArenaTail(used, classCap int) bool {
+	minWaste := batchArenaTailCompactMinWaste
+	maxFillNumerator := batchArenaTailCompactMaxFillNumerator
+	maxFillDenominator := batchArenaTailCompactMaxFillDenominator
+	if b != nil && b.db != nil && b.db.memtableViewTelemetry.deferredViewsCurrent.Load() > 0 {
+		if minWaste > batchArenaTailCompactPinnedMinWaste {
+			minWaste = batchArenaTailCompactPinnedMinWaste
+		}
+		maxFillNumerator = batchArenaTailCompactPinnedMaxFillNumerator
+		maxFillDenominator = batchArenaTailCompactPinnedMaxFillDenominator
+	}
+	return shouldCompactBatchArenaTailWithPolicy(used, classCap, minWaste, maxFillNumerator, maxFillDenominator)
+}
+
+func sliceAliasesArenaTail(s, tail []byte) bool {
+	if len(s) == 0 || len(tail) == 0 {
+		return false
+	}
+	sPtr := uintptr(unsafe.Pointer(unsafe.SliceData(s)))
+	tPtr := uintptr(unsafe.Pointer(unsafe.SliceData(tail)))
+	if sPtr < tPtr {
+		return false
+	}
+	offset := sPtr - tPtr
+	if offset > uintptr(len(tail)) {
+		return false
+	}
+	return uintptr(len(s)) <= uintptr(len(tail))-offset
+}
+
+func (b *Batch) releaseCompactedBatchArenaTail(kind batchArenaKind, chunks *[][]byte, arena *[]byte, copiedBytes int) {
+	if b == nil || chunks == nil || arena == nil || len(*chunks) == 0 || cap(*arena) == 0 {
+		return
+	}
+	used := len(*arena)
+	classCap := cap(*arena)
+	last := len(*chunks) - 1
+	tailChunk := (*chunks)[last]
+	if tailChunk != nil {
+		b.subArenaInFlightBytes(int64(cap(tailChunk)))
+		putBatchArena(tailChunk)
+	}
+	(*chunks)[last] = nil
+	*chunks = (*chunks)[:last]
+	if b.db != nil {
+		b.db.noteBatchArenaChunkFinalize(kind, used, classCap)
+		b.db.noteBatchArenaTailCompact(copiedBytes, classCap)
+	}
+	*arena = nil
+}
+
+func (b *Batch) compactUnderfilledMainArenaTail() {
+	if b == nil || len(b.entries) == 0 || cap(b.copyArena) == 0 || len(b.copyArenaChunks) == 0 {
+		return
+	}
+	tail := b.copyArena
+	if !b.shouldCompactArenaTail(len(tail), cap(tail)) {
+		return
+	}
+	copiedBytes := 0
+	for i := range b.entries {
+		op := &b.entries[i]
+		if len(op.Key) > 0 && sliceAliasesArenaTail(op.Key, tail) {
+			op.Key = bytes.Clone(op.Key)
+			copiedBytes += len(op.Key)
+		}
+		if len(op.Value) > 0 && sliceAliasesArenaTail(op.Value, tail) {
+			op.Value = bytes.Clone(op.Value)
+			copiedBytes += len(op.Value)
+		}
+	}
+	if copiedBytes == 0 {
+		return
+	}
+	b.releaseCompactedBatchArenaTail(batchArenaKindMain, &b.copyArenaChunks, &b.copyArena, copiedBytes)
+}
+
+func (b *Batch) compactUnderfilledPtrArenaTail() {
+	if b == nil || len(b.entries) == 0 || cap(b.ptrCopyArena) == 0 || len(b.ptrCopyArenaChunks) == 0 {
+		return
+	}
+	tail := b.ptrCopyArena
+	if !b.shouldCompactArenaTail(len(tail), cap(tail)) {
+		return
+	}
+	copiedBytes := 0
+	for i := range b.entries {
+		op := &b.entries[i]
+		if len(op.Value) == 0 || !sliceAliasesArenaTail(op.Value, tail) {
+			continue
+		}
+		op.Value = bytes.Clone(op.Value)
+		copiedBytes += len(op.Value)
+	}
+	if copiedBytes == 0 {
+		return
+	}
+	b.releaseCompactedBatchArenaTail(batchArenaKindPtr, &b.ptrCopyArenaChunks, &b.ptrCopyArena, copiedBytes)
+}
+
+func (b *Batch) maybeCompactUnderfilledArenaTails() {
+	b.compactUnderfilledMainArenaTail()
+	b.compactUnderfilledPtrArenaTail()
 }
 
 func (b *Batch) shouldCopyValueToPtrArena(key, value []byte) bool {
@@ -16592,6 +26805,9 @@ func (b *Batch) Set(key, value []byte) error {
 	if value == nil {
 		return ErrValueNil
 	}
+	batchSetCallsTotal.Add(1)
+	batchSetBytesTotal.Add(uint64(len(key) + len(value)))
+	maybeRecordBatchSetCallerSample(len(key) + len(value))
 
 	idx := len(b.entries)
 	var keyCopy, valCopy []byte
@@ -16650,6 +26866,8 @@ func (b *Batch) SetView(key, value []byte) error {
 	if value == nil {
 		return ErrValueNil
 	}
+	batchSetViewCallsTotal.Add(1)
+	batchSetViewBytesTotal.Add(uint64(len(key) + len(value)))
 
 	if b.backend != nil {
 		b.batchRange.add(key)
@@ -16676,6 +26894,7 @@ func (b *Batch) SetView(key, value []byte) error {
 		Key:   key,
 		Value: value,
 	})
+	b.hasViewOps = true
 	b.noteEntryAppend()
 	b.size += len(key) + len(value)
 
@@ -16757,6 +26976,7 @@ func (b *Batch) DeleteView(key []byte) error {
 		Type: batch.OpDelete,
 		Key:  key,
 	})
+	b.hasViewOps = true
 	b.noteEntryAppend()
 	b.size += len(key)
 
@@ -16822,12 +27042,29 @@ const (
 	batchCopyArenaUnsizedInit   = 8 << 10
 	batchCopyArenaBytesPerEntry = 192
 	batchCopyArenaInitMax       = 2 << 20
-	// Avoid retaining 4MiB chunks in the pool/leases; they are easy to
-	// underfill (e.g. a ~2MiB batch spills into a second chunk) and can inflate
-	// peak RSS during restore workloads.
-	batchCopyArenaMaxRetain    = 2 << 20
-	batchEntriesPoolMaxRetain  = 16 << 10
-	batchIntSlicePoolMaxRetain = 16 << 10
+	// Keep retained batch-copy chunks bounded to 1MiB. Larger chunks are often
+	// underfilled in restore-heavy traffic and can disproportionately inflate
+	// peak RSS when multiple memtable views pin retired arenas.
+	batchCopyArenaMaxRetain     = 1 << 20
+	batchArenaTailCompactMinCap = 256 << 10
+	// Only compact tails with meaningful waste so we avoid churn on tiny chunks.
+	batchArenaTailCompactMinWaste = 256 << 10
+	// Under deferred-view pressure, compact earlier so retired memtable leases
+	// don't pin large half-used tail chunks for iterator lifetimes.
+	batchArenaTailCompactPinnedMinWaste = 128 << 10
+	// Require at least 50% slack in the tail chunk before compacting borrowed
+	// slices. This keeps the path focused on pathological underfill.
+	batchArenaTailCompactMaxFillNumerator   = 1
+	batchArenaTailCompactMaxFillDenominator = 2
+	// Under deferred-view pressure, compact tails once fill is at most 75%.
+	batchArenaTailCompactPinnedMaxFillNumerator   = 3
+	batchArenaTailCompactPinnedMaxFillDenominator = 4
+	batchEntriesPoolMaxRetain                     = 16 << 10
+	batchIntSlicePoolMaxRetain                    = 16 << 10
+	// When deferred iterator views pin retired memtables, reduce retained
+	// batch-arena headroom to limit extra lease growth under that pressure.
+	batchArenaDeferredPressureThresholdBytes = int64(512 << 20)
+	batchArenaDeferredPressureHardCapDivisor = int64(2)
 )
 
 func batchCopyArenaInitCapForEntries(entries int) int {
@@ -16924,38 +27161,6 @@ func (b *Batch) Write() error {
 
 func (b *Batch) WriteSync() error {
 	return b.write(true)
-}
-
-func (b *Batch) freezeDictID(ctx context.Context) error {
-	if b.dictIDValid {
-		return nil
-	}
-	if b.db == nil {
-		return nil
-	}
-	dictID, err := b.db.currentDictID(ctx)
-	if err != nil {
-		return err
-	}
-	b.dictID = dictID
-	b.dictIDValid = true
-	return nil
-}
-
-func (b *Batch) ensureDictBytes(ctx context.Context) ([]byte, error) {
-	if b.dictBytesValid {
-		return b.dictBytes, nil
-	}
-	if b.db == nil {
-		return nil, nil
-	}
-	dictBytes, err := b.db.dictBytes(ctx, b.dictID)
-	if err != nil {
-		return nil, err
-	}
-	b.dictBytes = dictBytes
-	b.dictBytesValid = true
-	return dictBytes, nil
 }
 
 func (b *Batch) write(sync bool) error {
@@ -17159,12 +27364,8 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 		}
 		shardAdds[idx] += add
 	}
-	touchedMems := make([]memtable.Table, 0, shardCount)
-	for i, count := range shardCounts {
-		if count > 0 {
-			touchedMems = append(touchedMems, b.db.mutableShards[i].mem)
-		}
-	}
+	retainMainMems := make([]memtable.Table, 0, shardCount)
+	retainMainSeen := make(map[memtable.Table]struct{}, shardCount)
 	for i, add := range shardAdds {
 		if add == 0 {
 			continue
@@ -17176,6 +27377,27 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 		if over {
 			b.db.writeMu.RUnlock()
 			return ErrMemtableFull
+		}
+	}
+	prospectiveRetainBytes := batchArenaChunksCapBytes(b.copyArenaChunks) + batchArenaChunksCapBytes(b.ptrCopyArenaChunks)
+	allowBatchArenaBorrow, preflightBlocked := shouldBorrowBatchArenaBytesForWriteWithHardCap(
+		prospectiveRetainBytes,
+		b.db.currentBatchArenaRetainedHardCapEffectiveBytes(),
+	)
+	// SetView/DeleteView callers provide externally-owned slices that are only
+	// guaranteed immutable until Write/Close returns. Do not retain or steal
+	// those slices into memtables.
+	if b.hasViewOps {
+		allowBatchArenaBorrow = false
+		batchArenaBorrowViewOpsBlockedTotal.Add(1)
+	}
+	if !allowBatchArenaBorrow {
+		batchArenaBorrowBlockedTotal.Add(1)
+		if preflightBlocked {
+			batchArenaBorrowPreflightBlockedTotal.Add(1)
+			if prospectiveRetainBytes > 0 {
+				batchArenaBorrowPreflightBlockedBytesTotal.Add(uint64(prospectiveRetainBytes))
+			}
 		}
 	}
 
@@ -17275,10 +27497,6 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 	}
 
 	if !allDeletes && allowPointers && eligibleCount > 0 {
-		if err := b.freezeDictID(context.Background()); err != nil {
-			b.db.writeMu.RUnlock()
-			return err
-		}
 		if multiLanePointers {
 			type laneValueLogBatch struct {
 				laneID      int
@@ -17355,7 +27573,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 				wg.Add(1)
 				go func(batch *laneValueLogBatch) {
 					defer wg.Done()
-					batch.ptrs, batch.err = b.db.appendValueLog(&b.db.lanes[batch.laneID], b.dictID, nil, batch.records, durability)
+					batch.ptrs, batch.err = b.db.appendValueLogForRecords(&b.db.lanes[batch.laneID], batch.records, durability)
 				}(lb)
 			}
 			wg.Wait()
@@ -17439,7 +27657,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 					}
 				}
 			}
-			ptrs, buildErr = b.db.appendValueLog(lane, b.dictID, nil, valueRecords, durability)
+			ptrs, buildErr = b.db.appendValueLogForRecords(lane, valueRecords, durability)
 			if buildErr != nil {
 				b.db.writeMu.RUnlock()
 				return buildErr
@@ -17505,6 +27723,13 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 		}
 	}
 
+	if !allDeletes {
+		// Before borrowing batch arena chunks into memtables, compact
+		// pathologically underfilled tail chunks by cloning only the aliased
+		// entry slices. This converts a large retained tail into tight slices.
+		b.maybeCompactUnderfilledArenaTails()
+	}
+
 	if allDeletes {
 		shardIdxSets := b.shardIdxSets
 		if cap(shardIdxSets) < shardCount {
@@ -17541,7 +27766,18 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 			}
 			shard := &b.db.mutableShards[i]
 			shard.mu.Lock()
-			useSteal := cachedBatchWriteUsesSteal(shard.mem)
+			useSteal, stealSuppressedDeferred := cachedBatchWriteUseSteal(b.db, shard.mem)
+			useSteal = allowBatchArenaBorrow && useSteal
+			if stealSuppressedDeferred && allowBatchArenaBorrow {
+				batchArenaStealSuppressedDeferredTotal.Add(1)
+				batchArenaStealSuppressedDeferredEntriesTotal.Add(uint64(len(idxs)))
+			}
+			if useSteal && cachedBatchWriteNeedsBatchArenaRetention(shard.mem) {
+				if _, ok := retainMainSeen[shard.mem]; !ok {
+					retainMainSeen[shard.mem] = struct{}{}
+					retainMainMems = append(retainMainMems, shard.mem)
+				}
+			}
 			if b.streamEligible {
 				first := b.entries[idxs[0]].Key
 				last := first
@@ -17605,7 +27841,18 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 			shard := &b.db.mutableShards[i]
 			shard.mu.Lock()
 			useStream := b.streamEligible
-			useSteal := cachedBatchWriteUsesSteal(shard.mem)
+			useSteal, stealSuppressedDeferred := cachedBatchWriteUseSteal(b.db, shard.mem)
+			useSteal = allowBatchArenaBorrow && useSteal
+			if stealSuppressedDeferred && allowBatchArenaBorrow {
+				batchArenaStealSuppressedDeferredTotal.Add(1)
+				batchArenaStealSuppressedDeferredEntriesTotal.Add(uint64(len(entries)))
+			}
+			if useSteal && cachedBatchWriteNeedsBatchArenaRetention(shard.mem) {
+				if _, ok := retainMainSeen[shard.mem]; !ok {
+					retainMainSeen[shard.mem] = struct{}{}
+					retainMainMems = append(retainMainMems, shard.mem)
+				}
+			}
 			storeInlinePtrValues := !b.db.memtableValueLogPointers
 			if useStream && useSteal {
 				if applier, ok := shard.mem.(memtable.TrustedSortedBatchApplier); ok {
@@ -17617,7 +27864,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 						if op.Type == batch.OpDelete {
 							memtableBatchDelete(shard.mem, true, op.Key)
 						} else {
-							memtableBatchSet(shard.mem, true, storeInlinePtrValues, op)
+							memtableBatchSet(shard.mem, true, allowBatchArenaBorrow, storeInlinePtrValues, op)
 						}
 					}
 				}
@@ -17633,7 +27880,23 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 					if op.Type == batch.OpDelete {
 						memtableBatchDelete(shard.mem, useSteal, op.Key)
 					} else {
-						memtableBatchSet(shard.mem, useSteal, storeInlinePtrValues, op)
+						borrowed := false
+						if allowBatchArenaBorrow && !useSteal {
+							if _, ok := shard.mem.(memtable.ValueBorrower); ok {
+								if op.IsPtr {
+									borrowed = storeInlinePtrValues && len(op.Value) > 0
+								} else {
+									borrowed = len(op.Value) > 0
+								}
+							}
+						}
+						memtableBatchSet(shard.mem, useSteal, allowBatchArenaBorrow, storeInlinePtrValues, op)
+						if borrowed {
+							if _, ok := retainMainSeen[shard.mem]; !ok {
+								retainMainSeen[shard.mem] = struct{}{}
+								retainMainMems = append(retainMainMems, shard.mem)
+							}
+						}
 					}
 					if useStream {
 						// Preserve sorted-run accounting even when we avoid Steal.
@@ -17672,7 +27935,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 	mainChunks := b.drainCopyArenaChunks()
 	retainPtrArena := false
 	ptrTouchedMems := make([]memtable.Table, 0, len(b.ptrValueIdxs))
-	if len(b.ptrValueIdxs) > 0 {
+	if allowBatchArenaBorrow && len(b.ptrValueIdxs) > 0 {
 		seenPtrMems := make(map[memtable.Table]struct{}, len(b.ptrValueIdxs))
 		for _, idx := range b.ptrValueIdxs {
 			if idx < 0 || idx >= len(b.entries) || idx >= len(shardIdxs) {
@@ -17703,7 +27966,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 		b.ptrValueIdxs = b.ptrValueIdxs[:0]
 	}
 	ptrChunks := b.drainPtrCopyArenaChunks()
-	b.db.retainBatchArenaChunksForMemtables(mainChunks, touchedMems)
+	b.db.retainBatchArenaChunksForMemtables(mainChunks, retainMainMems)
 	if retainPtrArena {
 		b.db.retainBatchArenaChunksForMemtables(ptrChunks, ptrTouchedMems)
 	} else {
@@ -17766,6 +28029,65 @@ func listNonEmptyLogSegments(walDir string) (segments []logSegmentInfo, nonEmpty
 	return segments, nonEmptyBytes
 }
 
+func ensureNoLegacyMixedWALValueSegments(walDir string) error {
+	entries, err := os.ReadDir(walDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		for _, pattern := range []string{"value-*.log", "vlog-*.log"} {
+			matched, err := filepath.Match(pattern, entry.Name())
+			if err != nil {
+				return err
+			}
+			if matched {
+				return fmt.Errorf("cachingdb: legacy value-log segments found in %s; rebuild required for split wal/value_vlog layout", walDir)
+			}
+		}
+	}
+	return nil
+}
+
+func listNonEmptySplitLogSegments(walDir, valueLogDir, leafLogDir string) (segments []logSegmentInfo, nonEmptyBytes int64) {
+	walSegments, walBytes := listNonEmptyLogSegments(walDir)
+	for _, seg := range walSegments {
+		if seg.valueLog {
+			continue
+		}
+		segments = append(segments, seg)
+	}
+	nonEmptyBytes += walBytes
+	for _, dir := range []string{valueLogDir, leafLogDir} {
+		vlogSegments, vlogBytes := listNonEmptyLogSegments(dir)
+		for _, seg := range vlogSegments {
+			if !seg.valueLog {
+				continue
+			}
+			segments = append(segments, seg)
+		}
+		nonEmptyBytes += vlogBytes
+	}
+	sort.Slice(segments, func(i, j int) bool {
+		if segments[i].lane != segments[j].lane {
+			return segments[i].lane < segments[j].lane
+		}
+		if segments[i].seq != segments[j].seq {
+			return segments[i].seq < segments[j].seq
+		}
+		if segments[i].valueLog != segments[j].valueLog {
+			return !segments[i].valueLog && segments[j].valueLog
+		}
+		return segments[i].path < segments[j].path
+	})
+	return segments, nonEmptyBytes
+}
+
 func maxValueLogRIDFromSegments(segments []logSegmentInfo) (uint64, error) {
 	var maxRID uint64
 	for _, seg := range segments {
@@ -17785,7 +28107,7 @@ func maxValueLogRIDFromSegments(segments []logSegmentInfo) (uint64, error) {
 		}
 		reader.DisableValueDecode()
 		for {
-			rid, _, _, err := reader.ReadNext()
+			rid, _, err := reader.ReadNextMeta()
 			if err == nil {
 				if rid > maxRID {
 					maxRID = rid

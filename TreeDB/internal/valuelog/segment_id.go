@@ -12,6 +12,8 @@ const (
 
 	maxLaneID     = (1 << laneBits) - 1
 	maxSegmentSeq = (1 << seqBits) - 1
+	// ReservedLeafLogLaneID is the dedicated lane used for outer-leaf storage.
+	ReservedLeafLogLaneID = maxLaneID
 )
 
 var ErrSegmentIDRange = errors.New("valuelog: segment id out of range")

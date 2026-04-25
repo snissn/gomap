@@ -20,15 +20,20 @@ const (
 	DefaultTrainDictBytes      = 32 << 10
 	DefaultTrainMinRecords     = 64
 	DefaultTrainMaxRecordBytes = 64 << 10
-	DefaultTrainQueue          = 128
-	DefaultTrainDedupWindow    = 16
+	// Keep enough buffered samples to bootstrap a first dict during short,
+	// front-end-heavy ingest windows without dropping most candidates.
+	DefaultTrainQueue           = 512
+	DefaultTrainDedupWindow     = 16
+	DefaultTrainMaxHistoryBytes = 128 << 10
 
 	// Bootstrap defaults. These are intentionally smaller than the steady-state
 	// TrainBytes/DictBytes targets so dict compression becomes active quickly,
 	// reducing sensitivity to TrainBytes tuning.
-	DefaultTrainBootstrapBytes      = 128 << 10
-	DefaultTrainBootstrapDictBytes  = 8 << 10
-	DefaultTrainBootstrapMinRecords = 16
+	DefaultTrainBootstrapBytes     = 32 << 10
+	DefaultTrainBootstrapDictBytes = 8 << 10
+	// Keep bootstrap record count high enough to evaluate K candidates beyond
+	// tiny groups on large-value streams.
+	DefaultTrainBootstrapMinRecords = 32
 
 	// Adaptive gating constants for dict+K refresh.
 	MinProfileBytes       = 64 << 20 // 64 MiB
@@ -132,6 +137,7 @@ type Trainer struct {
 
 	candidateK            []int
 	candidateHistoryBytes []int
+	candidateDictBytes    []int
 	ioNsPerStoredByte     atomic.Uint64
 	encodeNsPerRawByte    float64
 	decodeNsPerRawByte    float64
@@ -267,7 +273,7 @@ func NewTrainer(opts TrainConfig, cfg Config, readOnly bool, metricsEnabled bool
 	return trainer
 }
 
-func (t *Trainer) SetAutotuneCandidates(candidateK, candidateHistoryBytes []int) {
+func (t *Trainer) SetAutotuneCandidates(candidateK, candidateHistoryBytes, candidateDictBytes []int) {
 	if t == nil {
 		return
 	}
@@ -276,6 +282,9 @@ func (t *Trainer) SetAutotuneCandidates(candidateK, candidateHistoryBytes []int)
 	}
 	if len(candidateHistoryBytes) > 0 {
 		t.candidateHistoryBytes = append([]int(nil), candidateHistoryBytes...)
+	}
+	if len(candidateDictBytes) > 0 {
+		t.candidateDictBytes = append([]int(nil), candidateDictBytes...)
 	}
 }
 
@@ -555,60 +564,79 @@ func (t *Trainer) train(samples [][]byte, dictBytes int, level zstd.EncoderLevel
 
 	t.trainCount.Add(1)
 
-	const (
-		minHistoryBytes = 8
-		maxHistoryBytes = 40 << 10
-	)
+	const minHistoryBytes = 8
 	if dictBytes <= 0 {
 		dictBytes = DefaultTrainDictBytes
 	}
-	if dictBytes > maxHistoryBytes {
-		dictBytes = maxHistoryBytes
+	maxHistoryBytes := dictBytes
+	if maxHistoryBytes < minHistoryBytes {
+		maxHistoryBytes = minHistoryBytes
 	}
-	if dictBytes > rawTotal {
-		dictBytes = rawTotal
-	}
-	if dictBytes < minHistoryBytes {
-		return
+	if maxHistoryBytes > DefaultTrainMaxHistoryBytes {
+		maxHistoryBytes = DefaultTrainMaxHistoryBytes
 	}
 
-	candidates := make([]int, 0, 4)
+	historyCandidates := make([]int, 0, 8)
 	if len(t.candidateHistoryBytes) > 0 {
 		seen := make(map[int]struct{}, len(t.candidateHistoryBytes))
 		for _, v := range t.candidateHistoryBytes {
 			if v <= 0 {
 				continue
 			}
-			if dictBytes > 0 && v > dictBytes {
+			if v > DefaultTrainMaxHistoryBytes {
 				continue
 			}
 			if _, ok := seen[v]; ok {
 				continue
 			}
 			seen[v] = struct{}{}
-			candidates = append(candidates, v)
+			historyCandidates = append(historyCandidates, v)
+			if v > maxHistoryBytes {
+				maxHistoryBytes = v
+			}
 		}
 	} else {
-		if dictBytes >= 16<<10 {
-			candidates = append(candidates, 16<<10)
-		}
-		if dictBytes >= 32<<10 {
-			candidates = append(candidates, 32<<10)
-		}
-		if dictBytes >= 40<<10 {
-			candidates = append(candidates, 40<<10)
+		for _, v := range []int{16 << 10, 32 << 10, 40 << 10} {
+			if v > maxHistoryBytes {
+				continue
+			}
+			historyCandidates = append(historyCandidates, v)
 		}
 		isStd := dictBytes == 16<<10 || dictBytes == 32<<10 || dictBytes == 40<<10
-		if !isStd {
-			candidates = append(candidates, dictBytes)
+		if !isStd && dictBytes <= maxHistoryBytes {
+			historyCandidates = append(historyCandidates, dictBytes)
 		}
 	}
-	if len(candidates) == 0 {
-		candidates = append(candidates, dictBytes)
+	if len(historyCandidates) == 0 {
+		historyCandidates = append(historyCandidates, dictBytes)
+	}
+
+	dictCandidates := make([]int, 0, 4)
+	if len(t.candidateDictBytes) > 0 {
+		seen := make(map[int]struct{}, len(t.candidateDictBytes))
+		for _, v := range t.candidateDictBytes {
+			if v < minHistoryBytes {
+				continue
+			}
+			if _, ok := seen[v]; ok {
+				continue
+			}
+			seen[v] = struct{}{}
+			dictCandidates = append(dictCandidates, v)
+		}
+	}
+	if len(dictCandidates) == 0 {
+		dictCandidates = append(dictCandidates, dictBytes)
+	}
+	if maxHistoryBytes > rawTotal {
+		maxHistoryBytes = rawTotal
+	}
+	if maxHistoryBytes < minHistoryBytes {
+		return
 	}
 
 	// Build a single max-sized history buffer and slice it for smaller candidates.
-	maxCandidate := candidates[len(candidates)-1]
+	maxCandidate := maxHistoryBytes
 	if maxCandidate > rawTotal {
 		maxCandidate = rawTotal
 	}
@@ -634,8 +662,8 @@ func (t *Trainer) train(samples [][]byte, dictBytes int, level zstd.EncoderLevel
 		fromCache bool
 	}
 	ioNsPerStoredByte := math.Float64frombits(t.ioNsPerStoredByte.Load())
-	candProfiles := make([]dictCandidate, 0, len(candidates))
-	for _, historyBytes := range candidates {
+	candProfiles := make([]dictCandidate, 0, len(historyCandidates)*len(dictCandidates))
+	for _, historyBytes := range historyCandidates {
 		if historyBytes <= 0 {
 			continue
 		}
@@ -657,18 +685,24 @@ func (t *Trainer) train(samples [][]byte, dictBytes int, level zstd.EncoderLevel
 			dictHash = xxhash.Sum64(dict)
 			t.storeCachedDict(cacheKey, dictHash, dict)
 		}
-		profile := ChooseKForDictOptions(dict, validSamples, ChooseKOptions{
-			CandidateK:         t.candidateK,
-			IoNsPerStoredByte:  ioNsPerStoredByte,
-			EncodeNsPerRawByte: t.encodeNsPerRawByte,
-			DecodeNsPerRawByte: t.decodeNsPerRawByte,
-		})
-		if profile == nil || len(profile.Dict) == 0 {
-			continue
+		for _, dictCandidateBytes := range dictCandidates {
+			shaped, err := shapeAndValidateDict(dict, dictCandidateBytes, level)
+			if err != nil || len(shaped) == 0 {
+				continue
+			}
+			profile := ChooseKForDictOptions(shaped, validSamples, ChooseKOptions{
+				CandidateK:         t.candidateK,
+				IoNsPerStoredByte:  ioNsPerStoredByte,
+				EncodeNsPerRawByte: t.encodeNsPerRawByte,
+				DecodeNsPerRawByte: t.decodeNsPerRawByte,
+			})
+			if profile == nil || len(profile.Dict) == 0 {
+				continue
+			}
+			profile.DictHash = xxhash.Sum64(shaped)
+			profile.HistoryBytes = historyBytes
+			candProfiles = append(candProfiles, dictCandidate{profile: profile, fromCache: fromCache && len(shaped) == len(dict)})
 		}
-		profile.DictHash = dictHash
-		profile.HistoryBytes = historyBytes
-		candProfiles = append(candProfiles, dictCandidate{profile: profile, fromCache: fromCache})
 	}
 	if len(candProfiles) == 0 {
 		return
@@ -804,7 +838,12 @@ func (t *Trainer) train(samples [][]byte, dictBytes int, level zstd.EncoderLevel
 		}
 	}
 
-	enc, err := zstd.NewWriter(nil, zstd.WithEncoderLevel(level), zstd.WithEncoderCRC(false), zstd.WithEncoderDict(bestProfile.Dict))
+	enc, err := zstd.NewWriter(nil,
+		zstd.WithEncoderLevel(level),
+		zstd.WithEncoderCRC(false),
+		zstd.WithEncoderConcurrency(1),
+		zstd.WithEncoderDict(bestProfile.Dict),
+	)
 	if err != nil {
 		log.Printf("treedb: dict training encode setup failed stream=%d err=%v", slabID, err)
 		return
@@ -875,8 +914,33 @@ func buildAndValidateDict(dictID uint32, samples [][]byte, history []byte, level
 	return dict, nil
 }
 
+func shapeAndValidateDict(dict []byte, dictBytes int, level zstd.EncoderLevel) ([]byte, error) {
+	if len(dict) == 0 {
+		return nil, fmt.Errorf("empty dict")
+	}
+	if dictBytes <= 0 {
+		return nil, fmt.Errorf("invalid dict size %d", dictBytes)
+	}
+	shaped := dict
+	if len(dict) > dictBytes {
+		shaped = append([]byte(nil), dict[:dictBytes]...)
+	} else if len(dict) < dictBytes {
+		shaped = make([]byte, dictBytes)
+		copy(shaped, dict)
+	}
+	if err := validateDict(shaped, level); err != nil {
+		return nil, err
+	}
+	return shaped, nil
+}
+
 func validateDict(dict []byte, level zstd.EncoderLevel) error {
-	enc, err := zstd.NewWriter(nil, zstd.WithEncoderLevel(level), zstd.WithEncoderCRC(false), zstd.WithEncoderDict(dict))
+	enc, err := zstd.NewWriter(nil,
+		zstd.WithEncoderLevel(level),
+		zstd.WithEncoderCRC(false),
+		zstd.WithEncoderConcurrency(1),
+		zstd.WithEncoderDict(dict),
+	)
 	if err != nil {
 		return err
 	}
@@ -1144,6 +1208,11 @@ func (t *Trainer) acceptProfile(profile *ActiveProfile) {
 	t.lastRejectReason.Store("")
 	if first && (t.bootstrapBytes < t.targetBytes || t.bootstrapMinRecords < t.minRecords || t.bootstrapDictBytes < t.dictBytes) {
 		t.upgradePending.Store(true)
+		// Bootstrap training uses a small sample window to get an initial dict
+		// quickly. Once the first profile is accepted, continue collecting so the
+		// trainer can run a fuller follow-up pass and potentially improve dict
+		// size/history/K from steady-state data.
+		t.collecting.Store(true)
 	}
 	if v := t.onAccept.Load(); v != nil {
 		if fn, ok := v.(func(*ActiveProfile)); ok && fn != nil {

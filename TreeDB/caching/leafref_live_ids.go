@@ -75,6 +75,14 @@ func isValueLogFileNotFound(err error) bool {
 }
 
 func collectLeafRefValueLogLiveIDs(ctx context.Context, p pageGetter, rootID uint64, reader tree.SlabReader, live map[uint32]struct{}) error {
+	return collectLeafRefNestedValueLogLiveIDsWithMode(ctx, p, rootID, reader, live, true)
+}
+
+func collectLeafRefNestedValueLogLiveIDs(ctx context.Context, p pageGetter, rootID uint64, reader tree.SlabReader, live map[uint32]struct{}) error {
+	return collectLeafRefNestedValueLogLiveIDsWithMode(ctx, p, rootID, reader, live, false)
+}
+
+func collectLeafRefNestedValueLogLiveIDsWithMode(ctx context.Context, p pageGetter, rootID uint64, reader tree.SlabReader, live map[uint32]struct{}, includeLeafLogIDs bool) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -83,9 +91,11 @@ func collectLeafRefValueLogLiveIDs(ctx context.Context, p pageGetter, rootID uin
 			return fmt.Errorf("checksum mismatch on page %d", pageID)
 		}
 		return nil
-	}, func(ptr page.ValuePtr) error {
-		live[ptr.FileID] = struct{}{}
-		return collectNestedLeafPageValueLogLiveIDs(ctx, ptr, reader, live)
+	}, func(ptr page.LeafLogPtr) error {
+		if includeLeafLogIDs {
+			live[ptr.ValueLogFileID()] = struct{}{}
+		}
+		return collectNestedLeafPageValueLogLiveIDs(ctx, ptr.ValuePtr(), reader, live)
 	})
 }
 

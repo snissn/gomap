@@ -1013,7 +1013,7 @@ func (it *Iterator) loadNode(pageID uint64) (node.Node, error) {
 		if cap(it.leafRefScratch) != page.PageSize {
 			it.leafRefScratch = make([]byte, 0, page.PageSize)
 		}
-		data, err := it.slabAppender.ReadUnsafeAppend(ptr, it.leafRefScratch[:0])
+		data, err := it.slabAppender.ReadUnsafeAppend(ptr.ValuePtr(), it.leafRefScratch[:0])
 		if err != nil {
 			return node.Node{}, err
 		}
@@ -1021,16 +1021,17 @@ func (it *Iterator) loadNode(pageID uint64) (node.Node, error) {
 			return node.Node{}, fmt.Errorf("invalid leaf page size %d for page %d", len(data), pageID)
 		}
 		n := node.NewNodeView(data)
-		if !n.VerifyChecksum() {
+		if it.tree.shouldVerifyLeafRefChecksum() && !n.VerifyChecksum() {
 			return node.Node{}, fmt.Errorf("checksum mismatch on page %d", pageID)
 		}
 		if n.Type() != page.PageTypeLeaf {
 			return node.Node{}, fmt.Errorf("invalid page type %d at page %d", n.Type(), pageID)
 		}
+		noteOuterLeafLoad(ptr.ValuePtr(), len(data), true)
 		it.leafRefScratch = data[:0]
 		return n, nil
 	}
-	return it.tree.loadNodeView(pageID, it.verifyAlways)
+	return it.tree.loadNodeViewWithLoadKind(pageID, it.verifyAlways, true)
 }
 
 func (it *Iterator) ensurePointerLoaded() bool {

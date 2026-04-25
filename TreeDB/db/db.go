@@ -2,6 +2,7 @@ package db
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -16,6 +17,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/adaptive"
 	"github.com/snissn/gomap/TreeDB/internal/bulk"
 	"github.com/snissn/gomap/TreeDB/internal/compression"
+	"github.com/snissn/gomap/TreeDB/internal/keyupdate"
 	"github.com/snissn/gomap/TreeDB/internal/lockfile"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/lifecycle"
@@ -40,10 +42,12 @@ const (
 )
 
 type DBState struct {
-	CommitSeq        uint64
-	RootPageID       uint64
-	SystemRootPageID uint64
-	ValueLogSet      *valuelog.Set
+	CommitSeq                  uint64
+	RootPageID                 uint64
+	SystemRootPageID           uint64
+	ValueLogSet                *valuelog.Set
+	LeafGenerations            *leafGenerationView
+	LeafGenerationStateVersion uint64
 }
 
 // snapshotView is the coherent publication unit for snapshot acquisition.
@@ -56,14 +60,20 @@ type snapshotView struct {
 }
 
 type DB struct {
-	valueLogManager    *valuelog.Manager
-	snapshotViewRO     atomic.Pointer[snapshotView]
-	snapshotAcquireRO  [snapshotAcquireShardCount]atomic.Int32
-	valueLogRefTracker *valueLogRefTracker
-	leafPageLog        LeafPageLog
-	lock               *lockfile.Lock
-	adaptive           *adaptive.Controller
-	pruner             pruneWorker
+	valueLogManager                *valuelog.Manager
+	snapshotViewRO                 atomic.Pointer[snapshotView]
+	snapshotAcquireRO              [snapshotAcquireShardCount]atomic.Int32
+	valueLogRefTracker             *valueLogRefTracker
+	leafPageLog                    LeafPageLog
+	leafGenerationManifest         *leafGenerationManifest
+	leafGenerationPendingMu        sync.Mutex
+	leafGenerationPendingFileIDs   []uint32
+	leafGenerationPendingSet       map[uint32]struct{}
+	leafGenerationPendingCommitSeq map[uint32]uint64
+	lock                           *lockfile.Lock
+	adaptive                       *adaptive.Controller
+	pruner                         pruneWorker
+	leafGenerationPins             leafGenerationPinTracker
 
 	// idx is the current index generation (pager + MVCC lifecycle state).
 	idx atomic.Pointer[indexGen]
@@ -83,25 +93,34 @@ type DB struct {
 
 	readOnly bool
 
-	keepRecent                 uint64
-	policy                     WritePolicy
-	valueLogCompression        ValueLogCompressionMode
-	valueLogBlockCodec         ValueLogBlockCodec
-	valueLogDomainThresholds   []ValueLogDomainThreshold
-	leafFillTargetPPM          uint32
-	internalFillTargetPPM      uint32
-	leafPrefixCompression      bool
-	indexColumnarLeaves        bool
-	indexPackedValuePtr        bool
-	indexInternalBaseDelta     bool
-	indexOuterLeavesInValueLog bool
-	indexAdaptiveLeafEncoding  bool
-	piggybackCompaction        bool
-	maintenanceOpsPerCoalesce  int
+	keepRecent                     uint64
+	policy                         WritePolicy
+	valueLogCompression            ValueLogCompressionMode
+	valueLogAutoPolicy             ValueLogAutoPolicy
+	valueLogBlockCodec             ValueLogBlockCodec
+	valueLogDictLookup             valuelog.DictLookup
+	valueLogDictCurrentForClass    func(context.Context, string) (uint64, error)
+	valueLogDictLeafPayloadMode    func(context.Context, uint64) (bool, bool, error)
+	valueLogDictPut                func(context.Context, []byte) (uint64, error)
+	valueLogDictSetCurrentForClass func(context.Context, string, uint64) error
+	valueLogDictSetLeafPayloadMode func(context.Context, uint64, bool) error
+	valueLogDomainThresholds       []ValueLogDomainThreshold
+	leafFillTargetPPM              uint32
+	internalFillTargetPPM          uint32
+	leafPrefixCompression          bool
+	indexColumnarLeaves            bool
+	indexPackedValuePtr            bool
+	indexInternalBaseDelta         bool
+	indexOuterLeavesInValueLog     bool
+	indexAdaptiveLeafEncoding      bool
+	piggybackCompaction            bool
+	maintenanceOpsPerCoalesce      int
+	zipperParallelMergeSource      zipper.ParallelMergePressureSource
 
 	mu               sync.RWMutex
 	writeMu          sync.RWMutex
 	commitMu         sync.Mutex
+	updateLocks      keyupdate.Locks
 	maintenanceMu    sync.Mutex
 	combineMu        sync.RWMutex
 	combineReqCh     chan *commitCombineReq
@@ -109,15 +128,33 @@ type DB struct {
 	combineDoneCh    chan struct{}
 	vacuumInProgress atomic.Bool
 	vacuum           vacuumRecorder
-	leafRefState     atomic.Uint32
 	meta             page.MetaPageBody
 	metaPageID       uint64
 
 	state atomic.Pointer[DBState]
 
+	// readRetryRefresh* deduplicates read-triggered value-log refreshes
+	// (ErrFileNotFound retry path) so concurrent readers share one refresh scan.
+	readRetryRefreshMu            sync.Mutex
+	readRetryRefreshInFlight      bool
+	readRetryRefreshDone          chan struct{}
+	readRetryRefreshErr           error
+	readRetryRefreshEpoch         atomic.Uint64
+	readRetryRefreshLeaderCount   atomic.Uint64
+	readRetryRefreshFollowerCount atomic.Uint64
+	readRetryRefreshSkippedEpoch  atomic.Uint64
+
 	notifyError func(error)
 	bgErrMu     sync.Mutex
 	bgErr       error
+
+	leafGenerationLiveStatsMu        sync.RWMutex
+	leafGenerationLiveStatsCache     leafGenerationLiveStatsCache
+	leafGenerationSubtreeStatsMu     sync.RWMutex
+	leafGenerationSubtreeStatsByPage map[uint64]leafGenerationSubtreeStats
+	leafGenerationRecordLengthMu     sync.RWMutex
+	leafGenerationRecordLengthByFile map[uint32]*leafGenerationRecordLengthIndex
+	leafGenerationStateVersion       uint64
 
 	rewritePlanLiveBytesMu    sync.RWMutex
 	rewritePlanLiveBytesCache valueLogRewriteLiveBytesCache
@@ -132,7 +169,10 @@ type DB struct {
 	// testFailFinalizeCommit forces finalizeCommitLocked to fail before writing
 	// the next meta page. Used by crash-safety tests.
 	testFailFinalizeCommit atomic.Bool
-	closing                atomic.Bool
+	// testFailWriteMeta forces writeMeta to fail before mutating the target meta
+	// page so tests can exercise pre-publish cleanup paths.
+	testFailWriteMeta atomic.Bool
+	closing           atomic.Bool
 }
 
 type valueLogRewriteLiveBytesKey struct {
@@ -149,6 +189,19 @@ type valueLogRewriteLiveBytesCache struct {
 	liveByID map[uint32]int64
 }
 
+type treeReachabilityCacheKey struct {
+	commitSeq           uint64
+	rootID              uint64
+	systemRoot          uint64
+	leafGenerationStamp uint64
+}
+
+type leafGenerationLiveStatsCache struct {
+	key   treeReachabilityCacheKey
+	stats leafGenerationLiveScanStats
+	ok    bool
+}
+
 const (
 	defaultChunkSize                 = 256 * 1024
 	defaultMaintenanceOpsPerCoalesce = 400_000
@@ -157,6 +210,41 @@ const (
 const snapshotShardHintUnset = -1
 
 var errTestFinalizeCommitFailpoint = errors.New("treedb: finalize commit failpoint")
+var errTestWriteMetaFailpoint = errors.New("treedb: write meta failpoint")
+
+type finalizeCommitError struct {
+	err                        error
+	cleanupCreatedSegmentsSafe bool
+}
+
+func (e *finalizeCommitError) Error() string {
+	if e == nil || e.err == nil {
+		return ""
+	}
+	return e.err.Error()
+}
+
+func (e *finalizeCommitError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.err
+}
+
+func wrapFinalizeCommitError(err error, cleanupCreatedSegmentsSafe bool) error {
+	if err == nil {
+		return nil
+	}
+	return &finalizeCommitError{
+		err:                        err,
+		cleanupCreatedSegmentsSafe: cleanupCreatedSegmentsSafe,
+	}
+}
+
+func finalizeCommitErrorAllowsCreatedSegmentCleanup(err error) bool {
+	var commitErr *finalizeCommitError
+	return errors.As(err, &commitErr) && commitErr.cleanupCreatedSegmentsSafe
+}
 
 // DurabilityMode configures cached-mode durability semantics.
 //
@@ -221,6 +309,19 @@ const (
 	ValueLogAutoSize
 )
 
+// ValueLogDictClassMode controls whether dictionary state is shared across all
+// value-log payloads or split by payload class.
+type ValueLogDictClassMode uint8
+
+const (
+	// ValueLogDictClassSingle keeps one shared dictionary stream for all
+	// value-log payloads.
+	ValueLogDictClassSingle ValueLogDictClassMode = iota
+	// ValueLogDictClassSplitOuterLeaf keeps separate dictionary streams for
+	// outer-leaf payloads and single-value payloads.
+	ValueLogDictClassSplitOuterLeaf
+)
+
 // ValueLogGenerationPolicy controls generation-aware value-log placement.
 // PR1 scaffolding: behavior remains legacy append-only until allocator/rewrite
 // phases land; this policy is currently configuration + observability only.
@@ -244,6 +345,11 @@ const (
 type ValueLogGenerationConfig struct {
 	// Policy selects generation behavior. Off preserves current behavior.
 	Policy ValueLogGenerationPolicy
+	// LeafSegmentTargetBytes configures target segment size for leaf_vlog
+	// generations when outer leaves are stored out-of-line.
+	//
+	// 0 uses the implementation default leaf-generation target.
+	LeafSegmentTargetBytes int64
 	// HotSegmentTargetBytes configures target segment size for hot generation.
 	// 0 uses implementation default.
 	HotSegmentTargetBytes int64
@@ -268,6 +374,11 @@ type ValueLogGenerationConfig struct {
 	// RewriteTriggerChurnPerSec triggers rewrite when churn rate exceeds
 	// threshold (0 disables).
 	RewriteTriggerChurnPerSec int64
+	// RewriteMinSegmentAge gates online rewrite to source segments that are at
+	// least this old.
+	//
+	// 0 uses the implementation default.
+	RewriteMinSegmentAge time.Duration
 }
 
 // ValueLogDomainThreshold overrides inline-vs-pointer placement policy for keys
@@ -306,6 +417,9 @@ type ValueLogOptions struct {
 	IncompressibleProbeIntervalBytes int
 	// AutoPolicy controls auto-mode bias (throughput, balanced, size).
 	AutoPolicy ValueLogAutoPolicy
+	// DictClassMode controls dictionary-state partitioning:
+	// 0=single (default shared dict stream), 1=split_outer_leaf.
+	DictClassMode ValueLogDictClassMode
 
 	// PointerThreshold controls when value-log pointers are used.
 	// Values <= 0 use a default threshold. In cached mode, relaxed durability
@@ -345,6 +459,25 @@ type ValueLogOptions struct {
 
 	// DictLookup provides dictionary bytes for value-log decoding.
 	DictLookup valuelog.DictLookup
+	// DictCurrentForClass resolves the current dictionary ID for a payload class.
+	// Offline/maintenance rewrite uses this to seed class-specific rewrite codecs.
+	DictCurrentForClass func(context.Context, string) (uint64, error)
+	// DictLeafPayloadMode reports whether a published leaf dictionary expects raw
+	// 4KiB leaf pages (useRawPages=true) or compact split-leaf payloads
+	// (useRawPages=false). The returned ok flag is false when no explicit mode is
+	// recorded and callers should fall back to legacy defaults.
+	DictLeafPayloadMode func(context.Context, uint64) (useRawPages bool, ok bool, err error)
+	// DictPut persists dictionary bytes and returns the stable dictionary ID.
+	// Offline/maintenance rewrite may use this to bootstrap a class-specific dict
+	// before rewriting into dict-compressed frames.
+	DictPut func(context.Context, []byte) (uint64, error)
+	// DictSetCurrentForClass marks a dictionary ID as the current dict for the
+	// provided payload class. Rewrite bootstrap uses this after publishing a new
+	// class-specific dict.
+	DictSetCurrentForClass func(context.Context, string, uint64) error
+	// DictSetLeafPayloadMode records whether a published leaf dictionary expects
+	// raw 4KiB leaf pages or compact split-leaf payloads.
+	DictSetLeafPayloadMode func(context.Context, uint64, bool) error
 
 	// DictTrain configures background dictionary training for value-log frame
 	// compression in cached mode.
@@ -406,6 +539,9 @@ type ValueLogOptions struct {
 	TemplateConfig template.Config
 	// TemplateReadStrict controls strict template decode behavior.
 	TemplateReadStrict bool
+	// TemplateStore provides template routing/definition lookups for template
+	// encoding (for example in offline rewrite prepass experiments).
+	TemplateStore template.Store
 	// TemplateLookup provides template definition bytes for value-log decoding.
 	TemplateLookup valuelog.TemplateLookup
 	// TemplateDecodeOptions controls decode caps for template payloads.
@@ -651,17 +787,24 @@ type Options struct {
 }
 
 type Snapshot struct {
-	db          *DB
-	idx         *indexGen
-	state       *DBState
-	vlogManager *valuelog.Manager
-	vlogPinned  bool
-	registryID  int64
-	reader      valueReader
-	tree        tree.Tree
-	closed      atomic.Bool
-	treePager   *pager.Pager
-	treeRoot    uint64
+	db                *DB
+	idx               *indexGen
+	state             *DBState
+	vlogManager       *valuelog.Manager
+	vlogPinned        bool
+	leafGenerationIDs []uint64
+	// leafGenerationPinnedIDs mirrors the generation IDs retained by this
+	// snapshot for stats/debugging. Release follows leafGenerationPinSet or
+	// leafGenerationRefs when those optimized paths are present.
+	leafGenerationPinnedIDs []uint64
+	leafGenerationRefs      []*leafGenerationPinRef
+	leafGenerationPinSet    *leafGenerationPinSet
+	registryID              int64
+	reader                  valueReader
+	tree                    tree.Tree
+	closed                  atomic.Bool
+	treePager               *pager.Pager
+	treeRoot                uint64
 	// registryShardHint is used to route reader registrations to a stable fast
 	// registry shard for this snapshot object across operations.
 	registryShardHint int
@@ -741,6 +884,31 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 		}
 		registryID, snap.registryShardHint = idx.registry.RegisterWithHint(state.CommitSeq, snap.registryShardHint)
 	}
+	if state.LeafGenerations != nil {
+		snap.leafGenerationIDs = state.LeafGenerations.GenerationOrder
+		if state.LeafGenerations.PinSet != nil {
+			snap.leafGenerationPinSet = state.LeafGenerations.PinSet
+			if db.retainLeafGenerationPinSet(snap.leafGenerationPinSet) {
+				snap.leafGenerationPinnedIDs = snap.leafGenerationIDs
+			} else {
+				snap.leafGenerationPinnedIDs = nil
+			}
+			snap.leafGenerationRefs = snap.leafGenerationRefs[:0]
+		} else if len(state.LeafGenerations.PinRefs) == len(state.LeafGenerations.GenerationOrder) && len(state.LeafGenerations.PinRefs) > 0 {
+			snap.leafGenerationRefs = append(snap.leafGenerationRefs[:0], state.LeafGenerations.PinRefs...)
+			db.pinLeafGenerationRefs(snap.leafGenerationRefs)
+			snap.leafGenerationPinnedIDs = snap.leafGenerationIDs
+		} else {
+			snap.leafGenerationRefs = snap.leafGenerationRefs[:0]
+			db.pinLeafGenerationIDs(snap.leafGenerationIDs)
+			snap.leafGenerationPinnedIDs = snap.leafGenerationIDs
+		}
+	} else {
+		snap.leafGenerationIDs = nil
+		snap.leafGenerationPinnedIDs = nil
+		snap.leafGenerationRefs = snap.leafGenerationRefs[:0]
+		snap.leafGenerationPinSet = nil
+	}
 
 	snap.db = db
 	snap.idx = idx
@@ -768,6 +936,27 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 	return snap
 }
 
+func (s *Snapshot) releaseLeafGenerationPins() {
+	if s == nil {
+		return
+	}
+	if s.db != nil {
+		switch {
+		case s.leafGenerationPinSet != nil:
+			s.db.releaseLeafGenerationPinSet(s.leafGenerationPinSet)
+		case len(s.leafGenerationRefs) > 0:
+			s.db.unpinLeafGenerationRefs(s.leafGenerationRefs)
+		case len(s.leafGenerationIDs) > 0:
+			s.db.unpinLeafGenerationIDs(s.leafGenerationIDs)
+		}
+	}
+	s.leafGenerationIDs = nil
+	s.leafGenerationPinnedIDs = nil
+	s.leafGenerationPinSet = nil
+	clear(s.leafGenerationRefs)
+	s.leafGenerationRefs = s.leafGenerationRefs[:0]
+}
+
 // Close releases the snapshot.
 func (s *Snapshot) Close() error {
 	if s == nil {
@@ -793,6 +982,7 @@ func (s *Snapshot) Close() error {
 			}
 		}
 	}
+	s.releaseLeafGenerationPins()
 	if s.db != nil {
 		s.db.snapPool.Put(s)
 	}
@@ -803,6 +993,13 @@ func (s *Snapshot) Close() error {
 func Open(opts Options) (*DB, error) {
 	if opts.Dir == "" {
 		return nil, errors.New("db dir required")
+	}
+	if !opts.IgnoreFormatConfig {
+		if cfg, ok, err := LoadFormatConfig(opts.Dir); err != nil {
+			return nil, err
+		} else if ok {
+			cfg.ApplyIndexFormatToOptions(&opts)
+		}
 	}
 	if opts.ChunkSize == 0 {
 		opts.ChunkSize = defaultChunkSize
@@ -859,9 +1056,16 @@ func Open(opts Options) (*DB, error) {
 		return nil, err
 	}
 	warnInsecureDir(opts.Dir, opts.NotifyError)
+	if err := ensureNoLegacyMixedWALValueSegments(opts.Dir); err != nil {
+		return nil, err
+	}
 
 	if opts.ReadOnly {
 		return openReadOnly(opts)
+	}
+
+	if err := ensureStorageLayoutDirs(opts.Dir); err != nil {
+		return nil, err
 	}
 
 	lock, err := lockfile.Acquire(filepath.Join(opts.Dir, "LOCK"))
@@ -935,6 +1139,9 @@ func validateOptions(opts Options) error {
 	if opts.ValueLog.Generational.HotSegmentTargetBytes < 0 {
 		return fmt.Errorf("treedb: invalid value-log generational hot segment target bytes %d", opts.ValueLog.Generational.HotSegmentTargetBytes)
 	}
+	if opts.ValueLog.Generational.LeafSegmentTargetBytes < 0 {
+		return fmt.Errorf("treedb: invalid value-log generational leaf segment target bytes %d", opts.ValueLog.Generational.LeafSegmentTargetBytes)
+	}
 	if opts.ValueLog.Generational.WarmSegmentTargetBytes < 0 {
 		return fmt.Errorf("treedb: invalid value-log generational warm segment target bytes %d", opts.ValueLog.Generational.WarmSegmentTargetBytes)
 	}
@@ -952,6 +1159,9 @@ func validateOptions(opts Options) error {
 	}
 	if opts.ValueLog.Generational.RewriteTriggerChurnPerSec < 0 {
 		return fmt.Errorf("treedb: invalid value-log generational rewrite trigger churn/sec %d", opts.ValueLog.Generational.RewriteTriggerChurnPerSec)
+	}
+	if opts.ValueLog.Generational.RewriteMinSegmentAge < 0 {
+		return fmt.Errorf("treedb: invalid value-log generational rewrite min segment age %s", opts.ValueLog.Generational.RewriteMinSegmentAge)
 	}
 	seenDomains := make(map[string]struct{}, len(opts.ValueLog.DomainInlineThresholds))
 	for i := range opts.ValueLog.DomainInlineThresholds {
@@ -1003,9 +1213,14 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	}
 	p.SetVerifyOnRead(opts.VerifyOnRead)
 
-	valueLogDir := filepath.Join(opts.Dir, "wal")
-	vm, err := valuelog.NewManager(valueLogDir)
+	layout := resolveStorageLayout(opts.Dir)
+	vm, err := valuelog.NewManager(layout.valueVLogDir)
 	if err != nil {
+		p.Close()
+		return nil, err
+	}
+	if err := vm.AddScanDir(layout.leafVLogDir); err != nil {
+		_ = vm.Close()
 		p.Close()
 		return nil, err
 	}
@@ -1024,29 +1239,36 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	adaptiveCtrl, inlineThreshold := resolveInlineThresholdAndAdaptive(opts)
 
 	db := &DB{
-		valueLogManager:            vm,
-		valueLogRefTracker:         newValueLogRefTracker(),
-		lock:                       lock,
-		adaptive:                   adaptiveCtrl,
-		keepRecent:                 opts.KeepRecent,
-		valueLogCompression:        opts.ValueLog.Compression,
-		valueLogBlockCodec:         opts.ValueLog.BlockCodec,
-		valueLogDomainThresholds:   NormalizeValueLogDomainThresholds(opts.ValueLog.DomainInlineThresholds),
-		leafFillTargetPPM:          opts.LeafFillTargetPPM,
-		internalFillTargetPPM:      opts.InternalFillTargetPPM,
-		leafPrefixCompression:      opts.LeafPrefixCompression,
-		indexColumnarLeaves:        opts.IndexColumnarLeaves,
-		indexPackedValuePtr:        opts.IndexPackedValuePtr,
-		indexInternalBaseDelta:     opts.IndexInternalBaseDelta,
-		indexOuterLeavesInValueLog: opts.IndexOuterLeavesInValueLog,
-		indexAdaptiveLeafEncoding:  opts.IndexAdaptiveLeafEncoding,
-		piggybackCompaction:        !opts.DisablePiggybackCompaction,
-		maintenanceOpsPerCoalesce:  opts.MaintenanceOpsPerCoalesce,
-		dir:                        opts.Dir,
-		chunkSize:                  opts.ChunkSize,
-		preferAppendAlloc:          opts.PreferAppendAlloc,
-		freelistRegionPages:        opts.FreelistRegionPages,
-		freelistRegionRadius:       opts.FreelistRegionRadius,
+		valueLogManager:                vm,
+		valueLogRefTracker:             newValueLogRefTracker(),
+		lock:                           lock,
+		adaptive:                       adaptiveCtrl,
+		keepRecent:                     opts.KeepRecent,
+		valueLogCompression:            opts.ValueLog.Compression,
+		valueLogAutoPolicy:             opts.ValueLog.AutoPolicy,
+		valueLogBlockCodec:             opts.ValueLog.BlockCodec,
+		valueLogDictLookup:             opts.ValueLog.DictLookup,
+		valueLogDictCurrentForClass:    opts.ValueLog.DictCurrentForClass,
+		valueLogDictLeafPayloadMode:    opts.ValueLog.DictLeafPayloadMode,
+		valueLogDictPut:                opts.ValueLog.DictPut,
+		valueLogDictSetCurrentForClass: opts.ValueLog.DictSetCurrentForClass,
+		valueLogDictSetLeafPayloadMode: opts.ValueLog.DictSetLeafPayloadMode,
+		valueLogDomainThresholds:       NormalizeValueLogDomainThresholds(opts.ValueLog.DomainInlineThresholds),
+		leafFillTargetPPM:              opts.LeafFillTargetPPM,
+		internalFillTargetPPM:          opts.InternalFillTargetPPM,
+		leafPrefixCompression:          opts.LeafPrefixCompression,
+		indexColumnarLeaves:            opts.IndexColumnarLeaves,
+		indexPackedValuePtr:            opts.IndexPackedValuePtr,
+		indexInternalBaseDelta:         opts.IndexInternalBaseDelta,
+		indexOuterLeavesInValueLog:     opts.IndexOuterLeavesInValueLog,
+		indexAdaptiveLeafEncoding:      opts.IndexAdaptiveLeafEncoding,
+		piggybackCompaction:            !opts.DisablePiggybackCompaction,
+		maintenanceOpsPerCoalesce:      opts.MaintenanceOpsPerCoalesce,
+		dir:                            opts.Dir,
+		chunkSize:                      opts.ChunkSize,
+		preferAppendAlloc:              opts.PreferAppendAlloc,
+		freelistRegionPages:            opts.FreelistRegionPages,
+		freelistRegionRadius:           opts.FreelistRegionRadius,
 		policy: WritePolicy{
 			InlineThreshold: inlineThreshold,
 			FlushThreshold:  opts.FlushThreshold,
@@ -1079,7 +1301,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	}
 
 	if opts.Durability != DurabilityWALOffRelaxed {
-		segments, err := listWALSegments(opts.Dir)
+		segments, err := listRecoverySegments(opts.Dir)
 		if err != nil {
 			db.Close()
 			return nil, err
@@ -1100,13 +1322,23 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		db.Close()
 		return nil, err
 	}
+	if opts.IndexOuterLeavesInValueLog {
+		manifest, err := loadOrCreateLeafGenerationManifest(layout.leafVLogDir, db.meta.CommitSeq, false)
+		if err != nil {
+			db.Close()
+			return nil, err
+		}
+		db.leafGenerationManifest = manifest
+	}
 
 	// Initialize State after recovery so log cleanup can proceed without pinning.
 	initialState := &DBState{
-		CommitSeq:        db.meta.CommitSeq,
-		RootPageID:       db.meta.UserRootPageID,
-		SystemRootPageID: db.meta.SystemRootPageID,
-		ValueLogSet:      vm.CurrentSet(),
+		CommitSeq:                  db.meta.CommitSeq,
+		RootPageID:                 db.meta.UserRootPageID,
+		SystemRootPageID:           db.meta.SystemRootPageID,
+		ValueLogSet:                vm.CurrentSet(),
+		LeafGenerations:            db.currentLeafGenerationView(),
+		LeafGenerationStateVersion: db.leafGenerationStateVersion,
 	}
 	db.state.Store(initialState)
 	db.publishSnapshotView(gen, initialState, vm)
@@ -1341,7 +1573,7 @@ func (db *DB) rootPageValid(p *pager.Pager, pageID uint64) bool {
 		if db == nil || db.valueLogManager == nil {
 			return false
 		}
-		data, err := db.valueLogManager.ReadUnsafe(ptr)
+		data, err := db.valueLogManager.ReadUnsafe(ptr.ValuePtr())
 		if err != nil {
 			return false
 		}
@@ -1430,6 +1662,9 @@ func (db *DB) writeMeta(pageID uint64, meta page.MetaPageBody) error {
 	if idx == nil || idx.pager == nil {
 		return errors.New("missing pager")
 	}
+	if db.testFailWriteMeta.Load() {
+		return errTestWriteMetaFailpoint
+	}
 
 	data, err := idx.pager.GetForWrite(pageID)
 	if err != nil {
@@ -1445,26 +1680,33 @@ func (db *DB) writeMeta(pageID uint64, meta page.MetaPageBody) error {
 }
 
 type finalizeCommitPost struct {
-	oldState     *DBState
-	metrics      adaptive.Metrics
-	vlogRefDelta *valueLogRefDelta
-	commitSeq    uint64
-	kickPrune    bool
-	doPrune      bool
-	debug        bool
-	sync         bool
-	start        time.Time
-	durSync1     time.Duration
-	durMeta      time.Duration
-	durSync2     time.Duration
+	oldState                          *DBState
+	metrics                           adaptive.Metrics
+	vlogRefDelta                      *valueLogRefDelta
+	commitSeq                         uint64
+	kickPrune                         bool
+	doPrune                           bool
+	debug                             bool
+	sync                              bool
+	start                             time.Time
+	durSync1                          time.Duration
+	durMeta                           time.Duration
+	durSync2                          time.Duration
+	persistLeafGenerationManifest     bool
+	persistLeafGenerationManifestView *leafGenerationManifest
+	persistLeafGenerationRawFileIDs   []uint32
+	drainLeafGenerationPending        bool
 }
 
 // finalizeCommitLocked performs the durability-critical publish path.
 // Callers that already hold commit serialization may run post work after
 // releasing the serialization lock.
-func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired []uint64, sync bool, metrics adaptive.Metrics, touchedValueLogSegments []uint32, forceValueLogRefresh bool, vlogRefDelta *valueLogRefDelta) (finalizeCommitPost, error) {
+func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired []uint64, sync bool, metrics adaptive.Metrics, touchedValueLogSegments []uint32, forceValueLogRefresh bool, vlogRefDelta *valueLogRefDelta, leafManifest *leafGenerationManifest, leafManifestRawFileIDs []uint32) (finalizeCommitPost, error) {
 	post := finalizeCommitPost{
 		metrics: metrics,
+	}
+	prePublishErr := func(err error) error {
+		return wrapFinalizeCommitError(err, true)
 	}
 	if db.readOnly {
 		return post, ErrReadOnly
@@ -1479,11 +1721,11 @@ func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired [
 	if db.indexOuterLeavesInValueLog && db.leafPageLog != nil {
 		if sync {
 			if err := db.leafPageLog.Sync(); err != nil {
-				return post, err
+				return post, prePublishErr(err)
 			}
 		} else {
 			if err := db.leafPageLog.Flush(); err != nil {
-				return post, err
+				return post, prePublishErr(err)
 			}
 		}
 	}
@@ -1503,7 +1745,7 @@ func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired [
 	if sync {
 		t0 := time.Now()
 		if err := idx.pager.Sync(); err != nil {
-			return post, err
+			return post, prePublishErr(err)
 		}
 		if debugTiming {
 			durSync1 = time.Since(t0)
@@ -1529,14 +1771,27 @@ func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired [
 	db.mu.Unlock()
 	watermarkHold += time.Since(holdStart)
 
+	leafPageSegmentRegistered := false
+	leafPageSegmentFileID := uint32(0)
 	if db.testFailFinalizeCommit.Load() {
-		return post, errTestFinalizeCommitFailpoint
+		return post, prePublishErr(errTestFinalizeCommitFailpoint)
+	}
+	if forceValueLogRefresh && db.valueLogManager != nil {
+		path, fileID, ok := db.currentLeafPageLogSegment()
+		if ok {
+			leafPageSegmentFileID = fileID
+		}
+		registered, err := db.ensureLeafPageLogSegmentRegisteredAt(path, fileID, 0)
+		if err != nil {
+			return post, prePublishErr(err)
+		}
+		leafPageSegmentRegistered = registered
 	}
 
 	// 3. Write Meta - No DB Lock
 	t0 := time.Now()
 	if err := db.writeMeta(targetPageID, nextMeta); err != nil {
-		return post, err
+		return post, prePublishErr(err)
 	}
 	if debugTiming {
 		durMeta = time.Since(t0)
@@ -1564,7 +1819,21 @@ func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired [
 	post.oldState = db.state.Load()
 	var valueLogSet *valuelog.Set
 	if db.valueLogManager != nil {
-		if forceValueLogRefresh || len(touchedValueLogSegments) > 0 {
+		needRefresh := false
+		if len(touchedValueLogSegments) > 0 {
+			for _, id := range touchedValueLogSegments {
+				if !db.valueLogManager.HasSegment(id) {
+					needRefresh = true
+					break
+				}
+			}
+		}
+		if forceValueLogRefresh && !leafPageSegmentRegistered {
+			// If no registration path is available, force one refresh as a
+			// safety fallback before publishing the new state.
+			needRefresh = true
+		}
+		if needRefresh {
 			if err := db.valueLogManager.Refresh(); err != nil {
 				db.mu.Unlock()
 				return post, err
@@ -1574,16 +1843,45 @@ func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired [
 			valueLogSet = db.valueLogManager.CurrentSetNoRefresh()
 		}
 	}
+	leafGenerationView := db.currentLeafGenerationView()
+	if leafManifest != nil {
+		db.leafGenerationManifest = leafManifest
+		post.persistLeafGenerationManifest = true
+		post.persistLeafGenerationManifestView = leafManifest
+		post.persistLeafGenerationRawFileIDs = append(post.persistLeafGenerationRawFileIDs[:0], leafManifestRawFileIDs...)
+		leafGenerationView = newLeafGenerationView(leafManifest)
+	}
+	if leafPageSegmentRegistered && leafPageSegmentFileID != 0 {
+		db.queueLeafGenerationWritableFileIDAtCommit(leafPageSegmentFileID, nextMeta.CommitSeq)
+	}
+	if db.indexOuterLeavesInValueLog && db.leafPageLog != nil {
+		stagedLeafManifest, changed, err := db.stagedLeafGenerationManifestWithPending(db.leafGenerationManifest, 0, nextMeta.CommitSeq)
+		if err != nil {
+			db.mu.Unlock()
+			return post, err
+		}
+		if changed {
+			leafGenerationView = newLeafGenerationView(stagedLeafManifest)
+		}
+	}
 	newState := &DBState{
 		CommitSeq:        nextMeta.CommitSeq,
 		RootPageID:       nextMeta.UserRootPageID,
 		SystemRootPageID: nextMeta.SystemRootPageID,
 		ValueLogSet:      valueLogSet,
+		LeafGenerations:  leafGenerationView,
+	}
+	if leafGenerationView != nil {
+		db.leafGenerationStateVersion++
+		newState.LeafGenerationStateVersion = db.leafGenerationStateVersion
 	}
 	db.state.Store(newState)
 	db.publishSnapshotView(idx, newState, db.valueLogManager)
 	post.commitSeq = nextMeta.CommitSeq
 	post.vlogRefDelta = vlogRefDelta
+	if db.indexOuterLeavesInValueLog && db.leafPageLog != nil {
+		post.drainLeafGenerationPending = true
+	}
 	db.mu.Unlock()
 	watermarkHold += time.Since(holdStart)
 	db.observePublishWatermark(watermarkWait, watermarkHold, watermarkWait+watermarkHold)
@@ -1605,6 +1903,9 @@ func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired [
 func (db *DB) finalizeCommitPostWork(post finalizeCommitPost) {
 	var durPrune time.Duration
 
+	if post.vlogRefDelta != nil {
+		defer releaseValueLogRefDelta(post.vlogRefDelta)
+	}
 	if db.valueLogRefTracker != nil {
 		if post.vlogRefDelta != nil {
 			if err := db.valueLogRefTracker.applyDelta(post.commitSeq, post.vlogRefDelta); err != nil {
@@ -1630,6 +1931,30 @@ func (db *DB) finalizeCommitPostWork(post finalizeCommitPost) {
 	if post.oldState != nil {
 		_ = db.valueLogManager.Release(post.oldState.ValueLogSet)
 	}
+	if post.persistLeafGenerationManifest || post.drainLeafGenerationPending {
+		var (
+			persistErr error
+			pendingErr error
+		)
+		db.commitMu.Lock()
+		currentCommitSeq := db.meta.CommitSeq
+		currentManifest := db.leafGenerationManifest
+		if post.persistLeafGenerationManifest && currentManifest == post.persistLeafGenerationManifestView {
+			persistErr = db.persistLeafGenerationManifestAndRecordLengthIndexes(post.persistLeafGenerationManifestView, post.persistLeafGenerationRawFileIDs)
+		}
+		if post.drainLeafGenerationPending {
+			pendingErr = db.noteLeafGenerationPendingFileIDs(0, currentCommitSeq)
+		}
+		db.commitMu.Unlock()
+		if persistErr != nil {
+			// The commit is already durable and published at this point. Returning
+			// this error to the caller would make retry behavior unsafe.
+			db.reportError(persistErr)
+		}
+		if pendingErr != nil {
+			db.reportError(pendingErr)
+		}
+	}
 
 	if db.adaptive != nil {
 		db.adaptive.RecordCommit(post.metrics)
@@ -1649,8 +1974,8 @@ func (db *DB) finalizeCommitPostWork(post finalizeCommitPost) {
 }
 
 // finalizeCommit handles durability and state updates.
-func (db *DB) finalizeCommit(newRootID uint64, sysRootID uint64, retired []uint64, sync bool, metrics adaptive.Metrics, touchedValueLogSegments []uint32, forceValueLogRefresh bool, vlogRefDelta *valueLogRefDelta) error {
-	post, err := db.finalizeCommitLocked(newRootID, sysRootID, retired, sync, metrics, touchedValueLogSegments, forceValueLogRefresh, vlogRefDelta)
+func (db *DB) finalizeCommit(newRootID uint64, sysRootID uint64, retired []uint64, sync bool, metrics adaptive.Metrics, touchedValueLogSegments []uint32, forceValueLogRefresh bool, vlogRefDelta *valueLogRefDelta, leafManifest *leafGenerationManifest, leafManifestRawFileIDs []uint32) error {
+	post, err := db.finalizeCommitLocked(newRootID, sysRootID, retired, sync, metrics, touchedValueLogSegments, forceValueLogRefresh, vlogRefDelta, leafManifest, leafManifestRawFileIDs)
 	if err != nil {
 		return err
 	}
@@ -1682,7 +2007,7 @@ func (db *DB) Commit(newRootID uint64) error {
 	sysRoot := db.meta.SystemRootPageID
 	db.mu.RUnlock()
 
-	return db.finalizeCommit(newRootID, sysRoot, nil, true, adaptive.Metrics{}, nil, true, nil)
+	return db.finalizeCommit(newRootID, sysRoot, nil, true, adaptive.Metrics{}, nil, true, nil, nil, nil)
 }
 
 // Prune reclaims pages from the graveyard.
@@ -1818,6 +2143,21 @@ func (db *DB) Zipper() *zipper.Zipper {
 	}
 	return idx.zipper
 }
+
+// SetZipperParallelMergePressureSource installs an optional pressure signal for
+// future zipper generations and the current live zipper.
+func (db *DB) SetZipperParallelMergePressureSource(src zipper.ParallelMergePressureSource) {
+	if db == nil {
+		return
+	}
+	db.idxMu.Lock()
+	db.zipperParallelMergeSource = src
+	if idx := db.idx.Load(); idx != nil && idx.zipper != nil {
+		idx.zipper.SetParallelMergePressureSource(src)
+	}
+	db.idxMu.Unlock()
+}
+
 func (db *DB) InlineThreshold() int {
 	if db == nil {
 		return page.DefaultInlineThreshold
@@ -1850,11 +2190,18 @@ func (db *DB) publishSnapshotView(idx *indexGen, state *DBState, vm *valuelog.Ma
 		db.snapshotViewRO.Store(nil)
 		return
 	}
+	old := db.snapshotViewRO.Load()
+	if old != nil && old.state != nil && old.state.LeafGenerations != nil && old.state.LeafGenerations != state.LeafGenerations {
+		db.markLeafGenerationPinSetStale(old.state.LeafGenerations.PinSet)
+	}
 	db.snapshotViewRO.Store(&snapshotView{
 		idx:         idx,
 		state:       state,
 		vlogManager: vm,
 	})
+	if state.LeafGenerations != nil && db.snapshotAcquireInFlight() == 0 {
+		db.leafGenerationPins.pruneInactiveGenerationIDs(state.LeafGenerations.GenerationOrder)
+	}
 }
 
 func (db *DB) clearSnapshotView() {
@@ -1882,10 +2229,55 @@ func (db *DB) RefreshValueLogSet() error {
 	}
 
 	newState := &DBState{
-		CommitSeq:        oldState.CommitSeq,
-		RootPageID:       oldState.RootPageID,
-		SystemRootPageID: oldState.SystemRootPageID,
-		ValueLogSet:      db.valueLogManager.CurrentSetNoRefresh(),
+		CommitSeq:                  oldState.CommitSeq,
+		RootPageID:                 oldState.RootPageID,
+		SystemRootPageID:           oldState.SystemRootPageID,
+		ValueLogSet:                db.valueLogManager.CurrentSetNoRefresh(),
+		LeafGenerations:            oldState.LeafGenerations,
+		LeafGenerationStateVersion: oldState.LeafGenerationStateVersion,
+	}
+	db.state.Store(newState)
+	db.publishSnapshotView(db.idx.Load(), newState, db.valueLogManager)
+
+	if oldState.ValueLogSet != nil {
+		return db.valueLogManager.Release(oldState.ValueLogSet)
+	}
+	return nil
+}
+
+// publishValueLogSetNoRefresh publishes a new DBState using the currently
+// registered value-log set, avoiding a filesystem scan when possible.
+func (db *DB) publishValueLogSetNoRefresh() error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	if db.valueLogManager == nil {
+		return nil
+	}
+	oldState := db.state.Load()
+	if oldState == nil {
+		return nil
+	}
+
+	valueLogSet := db.valueLogManager.CurrentSetNoRefresh()
+	if valueLogSet == nil || len(valueLogSet.Files) == 0 {
+		// Safety fallback: discover segments created out-of-process.
+		if valueLogSet != nil {
+			_ = db.valueLogManager.Release(valueLogSet)
+		}
+		if err := db.valueLogManager.Refresh(); err != nil {
+			return err
+		}
+		valueLogSet = db.valueLogManager.CurrentSetNoRefresh()
+	}
+
+	newState := &DBState{
+		CommitSeq:                  oldState.CommitSeq,
+		RootPageID:                 oldState.RootPageID,
+		SystemRootPageID:           oldState.SystemRootPageID,
+		ValueLogSet:                valueLogSet,
+		LeafGenerations:            oldState.LeafGenerations,
+		LeafGenerationStateVersion: oldState.LeafGenerationStateVersion,
 	}
 	db.state.Store(newState)
 	db.publishSnapshotView(db.idx.Load(), newState, db.valueLogManager)
@@ -1958,7 +2350,7 @@ func (db *DB) CompactIndex() error {
 	db.mu.Unlock()
 
 	// Commit new root and retire the old tree pages.
-	return db.finalizeCommit(newRoot, sysRoot, retired, true, adaptive.Metrics{}, nil, true, nil)
+	return db.finalizeCommit(newRoot, sysRoot, retired, true, adaptive.Metrics{}, nil, true, nil, nil, nil)
 }
 
 type pagerAllocator struct {

@@ -19,13 +19,11 @@ func TestValueLogDictCollectBudget_ScalesForTinyValues(t *testing.T) {
 		records   int
 		want      int
 	}{
-		// ceil(128KiB/16B)=8192; old cap=2048 would under-collect and delay the
-		// first dict publication for large-batch tiny-value workloads.
-		{name: "16B", valueSize: 16, records: 9000, want: 8192},
-		// ceil(128KiB/8B)=16384 hits the hard cap (and still bootstraps).
-		{name: "8B", valueSize: 8, records: 20000, want: 16384},
-		// Smaller than 8B would exceed the cap; ensure we still return the cap.
-		{name: "4B_capped", valueSize: 4, records: 20000, want: 16384},
+		// ceil(32KiB/16B)=2048 keeps bootstrap work bounded while still training
+		// quickly for tiny-value streams.
+		{name: "16B", valueSize: 16, records: 9000, want: 2048},
+		{name: "8B", valueSize: 8, records: 20000, want: 4096},
+		{name: "4B", valueSize: 4, records: 20000, want: 8192},
 	}
 
 	for _, tc := range cases {
