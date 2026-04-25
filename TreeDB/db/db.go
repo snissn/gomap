@@ -15,6 +15,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/adaptive"
 	"github.com/snissn/gomap/TreeDB/internal/bulk"
 	"github.com/snissn/gomap/TreeDB/internal/compression"
+	"github.com/snissn/gomap/TreeDB/internal/keyupdate"
 	"github.com/snissn/gomap/TreeDB/internal/lockfile"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/lifecycle"
@@ -117,6 +118,7 @@ type DB struct {
 	mu               sync.RWMutex
 	writeMu          sync.RWMutex
 	commitMu         sync.Mutex
+	updateLocks      keyupdate.Locks
 	maintenanceMu    sync.Mutex
 	combineMu        sync.RWMutex
 	combineReqCh     chan *commitCombineReq
