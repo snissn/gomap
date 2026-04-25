@@ -7507,7 +7507,11 @@ func memtableBatchSet(mt memtable.Table, useSteal bool, allowBorrow bool, storeI
 		}
 		if allowBorrow {
 			if borrower, ok := mt.(memtable.ValueBorrower); ok && len(memVal) > 0 {
-				borrower.SetEntryBorrowValue(op.Key, memVal, op.ValuePtr, node.FlagPointer)
+				if stableBorrower, ok := mt.(memtable.StableValueBorrower); ok {
+					stableBorrower.SetEntryBorrowStableValue(op.Key, memVal, op.ValuePtr, node.FlagPointer)
+				} else {
+					borrower.SetEntryBorrowValue(op.Key, memVal, op.ValuePtr, node.FlagPointer)
+				}
 				return
 			}
 		}
@@ -7520,7 +7524,11 @@ func memtableBatchSet(mt memtable.Table, useSteal bool, allowBorrow bool, storeI
 	}
 	if allowBorrow {
 		if borrower, ok := mt.(memtable.ValueBorrower); ok && len(op.Value) > 0 {
-			borrower.SetEntryBorrowValue(op.Key, op.Value, page.ValuePtr{}, node.FlagInline)
+			if stableBorrower, ok := mt.(memtable.StableValueBorrower); ok {
+				stableBorrower.SetEntryBorrowStableValue(op.Key, op.Value, page.ValuePtr{}, node.FlagInline)
+			} else {
+				borrower.SetEntryBorrowValue(op.Key, op.Value, page.ValuePtr{}, node.FlagInline)
+			}
 			return
 		}
 	}
@@ -20510,7 +20518,11 @@ func (db *DB) setDirect(key, value []byte, sync bool) error {
 		if borrower, ok := shard.mem.(memtable.ValueBorrower); ok && len(memVal) > 0 {
 			owned := shard.appendOnlyDirectValueArena.alloc(len(memVal))
 			copy(owned, memVal)
-			borrower.SetEntryBorrowValue(key, owned, ptr, node.FlagPointer)
+			if stableBorrower, ok := shard.mem.(memtable.StableValueBorrower); ok {
+				stableBorrower.SetEntryBorrowStableValue(key, owned, ptr, node.FlagPointer)
+			} else {
+				borrower.SetEntryBorrowValue(key, owned, ptr, node.FlagPointer)
+			}
 		} else {
 			shard.mem.SetEntry(key, memVal, ptr, node.FlagPointer)
 		}
@@ -20518,7 +20530,11 @@ func (db *DB) setDirect(key, value []byte, sync bool) error {
 		if borrower, ok := shard.mem.(memtable.ValueBorrower); ok && len(value) > 0 {
 			owned := shard.appendOnlyDirectValueArena.alloc(len(value))
 			copy(owned, value)
-			borrower.SetEntryBorrowValue(key, owned, page.ValuePtr{}, node.FlagInline)
+			if stableBorrower, ok := shard.mem.(memtable.StableValueBorrower); ok {
+				stableBorrower.SetEntryBorrowStableValue(key, owned, page.ValuePtr{}, node.FlagInline)
+			} else {
+				borrower.SetEntryBorrowValue(key, owned, page.ValuePtr{}, node.FlagInline)
+			}
 		} else {
 			shard.mem.SetEntry(key, value, page.ValuePtr{}, node.FlagInline)
 		}

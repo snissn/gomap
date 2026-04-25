@@ -227,6 +227,58 @@ func TestAppendOnlyCopiedValueAfterBorrowDoesNotReuseAliasedPayload(t *testing.T
 	}
 }
 
+func TestAppendOnlyBorrowStableRepeatedValueReusesPayloadAlias(t *testing.T) {
+	m := &AppendOnly{
+		entries: make([]appendOnlyEntry, 1024),
+		ordered: true,
+		lastIdx: -1,
+	}
+	value1 := []byte("same borrowed value")
+	value2 := []byte("same borrowed value")
+
+	m.SetEntryBorrowStableValue([]byte("k1"), value1, page.ValuePtr{}, node.FlagInline)
+	m.SetEntryBorrowStableValue([]byte("k2"), value2, page.ValuePtr{}, node.FlagInline)
+
+	if got := len(m.values); got != 1 {
+		t.Fatalf("values=%d want=1", got)
+	}
+	if got := cap(m.values); got != appendOnlyMinInitialEntries {
+		t.Fatalf("value cap=%d want %d; borrowed first payload should not dense-preallocate to entry cap", got, appendOnlyMinInitialEntries)
+	}
+	if m.entries[0].payloadIndex == 0 || m.entries[0].payloadIndex != m.entries[1].payloadIndex {
+		t.Fatalf("payload indices=(%d,%d), want shared non-zero index", m.entries[0].payloadIndex, m.entries[1].payloadIndex)
+	}
+	got, deleted, ok := m.Get([]byte("k2"))
+	if !ok || deleted || string(got) != "same borrowed value" {
+		t.Fatalf("Get(k2)=(%q,%v,%v), want borrowed value,false,true", string(got), deleted, ok)
+	}
+}
+
+func TestAppendOnlyBorrowValueKeepsDistinctAliases(t *testing.T) {
+	m := NewAppendOnlyWithCapacity(0)
+	value1 := []byte("same borrowed value")
+	value2 := []byte("same borrowed value")
+
+	m.SetEntryBorrowValue([]byte("k1"), value1, page.ValuePtr{}, node.FlagInline)
+	m.SetEntryBorrowValue([]byte("k2"), value2, page.ValuePtr{}, node.FlagInline)
+
+	if got := len(m.values); got != 2 {
+		t.Fatalf("values=%d want=2", got)
+	}
+	if m.entries[0].payloadIndex == 0 || m.entries[0].payloadIndex == m.entries[1].payloadIndex {
+		t.Fatalf("payload indices=(%d,%d), want distinct non-zero indices", m.entries[0].payloadIndex, m.entries[1].payloadIndex)
+	}
+	value2[0] = 'X'
+	got, deleted, ok := m.Get([]byte("k2"))
+	if !ok || deleted || string(got) != "Xame borrowed value" {
+		t.Fatalf("Get(k2)=(%q,%v,%v), want mutated second borrowed value,false,true", string(got), deleted, ok)
+	}
+	got, deleted, ok = m.Get([]byte("k1"))
+	if !ok || deleted || string(got) != "same borrowed value" {
+		t.Fatalf("Get(k1)=(%q,%v,%v), want first borrowed value,false,true", string(got), deleted, ok)
+	}
+}
+
 func TestAppendOnlyApplyBorrowValueSortedBatch_CopiesKeysBorrowsValues(t *testing.T) {
 	m := NewAppendOnlyWithCapacity(0)
 	key := []byte("k-short")

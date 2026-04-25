@@ -108,6 +108,12 @@ type ValueBorrower interface {
 	SetEntryBorrowValue(key, value []byte, ptr page.ValuePtr, flags byte)
 }
 
+// StableValueBorrower marks memtables that can retain immutable value storage
+// and may canonicalize equal adjacent values to reduce payload metadata.
+type StableValueBorrower interface {
+	SetEntryBorrowStableValue(key, value []byte, ptr page.ValuePtr, flags byte)
+}
+
 // StableUnsafeIteratorTable marks memtable implementations whose
 // iterator.UnsafeIterator key/value views (from UnsafeKey/UnsafeValue/UnsafeEntry)
 // are backed by storage that outlives the iterator itself.
