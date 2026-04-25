@@ -114,9 +114,8 @@ func (m *BTree) ApplyCopySortedBatchIndicesTrusted(entries []batchpkg.Entry, idx
 		if op.Key == nil {
 			continue
 		}
-		keyCopy := m.arena.Copy(op.Key)
+		keyCopy, entry := m.copyKeyEntryFromBatchOpLocked(op, storeInlinePtrValues)
 		keyStr := bytesToStringNoCopy(keyCopy)
-		entry := m.btreeEntryCopyFromBatchOpLocked(op, storeInlinePtrValues)
 		prev, replaced := m.setMaybeSortedLoadLocked(keyStr, entry)
 		m.recordSetLocked(keyStr, len(keyCopy), entry, prev, replaced)
 		if onKey != nil {
@@ -153,23 +152,25 @@ func (m *BTree) applyStealSortedBatch(entries []batchpkg.Entry, idxs []int, onKe
 	}
 }
 
-func (m *BTree) btreeEntryCopyFromBatchOpLocked(op batchpkg.Entry, storeInlinePtrValues bool) btreeEntry {
+func (m *BTree) copyKeyEntryFromBatchOpLocked(op batchpkg.Entry, storeInlinePtrValues bool) ([]byte, btreeEntry) {
 	switch {
 	case op.Type == batchpkg.OpDelete:
-		return btreeEntry{flags: node.FlagTombstone}
+		return m.arena.Copy(op.Key), btreeEntry{flags: node.FlagTombstone}
 	case op.IsPtr:
 		value := op.Value
 		if !storeInlinePtrValues {
 			value = nil
 		}
-		return btreeEntry{
-			value: m.copyPointerValueLocked(op.ValuePtr, value),
+		keyCopy, ptrValue := m.copyKeyPointerValueLocked(op.Key, op.ValuePtr, value)
+		return keyCopy, btreeEntry{
+			value: ptrValue,
 			flags: node.FlagPointer,
 		}
 	default:
 		value := canonicalizeBTreeInlineValue(op.Value)
-		return btreeEntry{
-			value: m.copyInlineValueLocked(value),
+		keyCopy, valueCopy := m.copyKeyInlineValueLocked(op.Key, value)
+		return keyCopy, btreeEntry{
+			value: valueCopy,
 			flags: node.FlagInline,
 		}
 	}
@@ -223,8 +224,7 @@ func (m *BTree) PutWithCallback(key, value []byte, cb func(k, v []byte) error) e
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	keyStored := m.arena.Copy(key)
-	valStored := m.copyInlineValueLocked(canonicalizeBTreeInlineValue(value))
+	keyStored, valStored := m.copyKeyInlineValueLocked(key, canonicalizeBTreeInlineValue(value))
 	keyStr := bytesToStringNoCopy(keyStored)
 	entry := btreeEntry{value: valStored, flags: node.FlagInline}
 	prev, replaced := m.setMaybeLoadLocked(keyStr, entry)
@@ -243,18 +243,19 @@ func (m *BTree) SetEntry(key, value []byte, ptr page.ValuePtr, flags byte) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	keyCopy := m.arena.Copy(key)
-	keyStr := bytesToStringNoCopy(keyCopy)
 	entry := btreeEntry{flags: normalizeBTreeEntryFlags(flags)}
+	var keyCopy []byte
 	switch {
 	case entry.flags&node.FlagTombstone != 0:
+		keyCopy = m.arena.Copy(key)
 		entry.value = nil
 	case entry.flags&node.FlagPointer != 0:
-		entry.value = m.copyPointerValueLocked(ptr, value)
+		keyCopy, entry.value = m.copyKeyPointerValueLocked(key, ptr, value)
 	default:
 		value = canonicalizeBTreeInlineValue(value)
-		entry.value = m.copyInlineValueLocked(value)
+		keyCopy, entry.value = m.copyKeyInlineValueLocked(key, value)
 	}
+	keyStr := bytesToStringNoCopy(keyCopy)
 	prev, replaced := m.setMaybeLoadLocked(keyStr, entry)
 	m.recordSetLocked(keyStr, len(keyCopy), entry, prev, replaced)
 }
@@ -745,12 +746,43 @@ func (m *BTree) copyInlineValueLocked(value []byte) []byte {
 	return stored
 }
 
+func (m *BTree) copyKeyInlineValueLocked(key, value []byte) ([]byte, []byte) {
+	if len(value) == 0 {
+		return m.arena.Copy(key), nil
+	}
+	if len(value) <= btreeInlineValueDedupeMax && bytes.Equal(value, m.lastInline) {
+		return m.arena.Copy(key), m.lastInline
+	}
+	buf := m.arena.alloc(len(key) + len(value))
+	keyCopy := buf[:len(key):len(key)]
+	valueCopy := buf[len(key):]
+	copy(keyCopy, key)
+	copy(valueCopy, value)
+	if len(valueCopy) <= btreeInlineValueDedupeMax {
+		m.lastInline = valueCopy
+	} else {
+		m.lastInline = nil
+	}
+	return keyCopy, valueCopy
+}
+
 func (m *BTree) copyPointerValueLocked(ptr page.ValuePtr, value []byte) []byte {
 	value = canonicalizeBTreeInlineValue(value)
 	stored := m.arena.alloc(page.ValuePtrSize + len(value))
 	ptr.Encode(stored[:page.ValuePtrSize])
 	copy(stored[page.ValuePtrSize:], value)
 	return stored
+}
+
+func (m *BTree) copyKeyPointerValueLocked(key []byte, ptr page.ValuePtr, value []byte) ([]byte, []byte) {
+	value = canonicalizeBTreeInlineValue(value)
+	buf := m.arena.alloc(len(key) + page.ValuePtrSize + len(value))
+	keyCopy := buf[:len(key):len(key)]
+	ptrValue := buf[len(key):]
+	copy(keyCopy, key)
+	ptr.Encode(ptrValue[:page.ValuePtrSize])
+	copy(ptrValue[page.ValuePtrSize:], value)
+	return keyCopy, ptrValue
 }
 
 func (m *BTree) btreeEntryFromBatchOpLocked(op batchpkg.Entry) btreeEntry {
