@@ -1035,7 +1035,7 @@ func TestFlushLaneOnce_FallsBackFromPointerViewForUnstableIterators(t *testing.T
 }
 
 func TestFlushLaneOnce_DeleteHeavyParallelStreamsWithoutEntryRuns(t *testing.T) {
-	for _, mode := range []string{"append_only", "hash_sorted"} {
+	for _, mode := range []string{"append_only", "hash_sorted", "btree"} {
 		t.Run(mode, func(t *testing.T) {
 			testFlushLaneOnceDeleteHeavyParallelStreamsWithoutEntryRuns(t, mode)
 		})
@@ -1104,13 +1104,15 @@ func TestFlushStreamingDeleteOps(t *testing.T) {
 	if deleteOps, ok := deleteHeavyStreamingDeleteOps([]flushUnit{{mem: btree}}, btree.Len()); !ok || deleteOps != 3 {
 		t.Fatalf("BTree deleteHeavyStreamingDeleteOps=(%d,%t), want (3,true)", deleteOps, ok)
 	}
-	if _, ok := stableFlushStreamingPlan([]flushUnit{{mem: btree}}, btree.Len()); ok {
-		t.Fatal("BTree generic stable plan should stay materialized; delete-heavy path handles BTree separately")
+	if planDeleteOps, ok := stableFlushStreamingPlan([]flushUnit{{mem: btree}}, btree.Len()); !ok {
+		t.Fatal("expected BTree memtable to qualify for stable streaming plan")
+	} else if planDeleteOps != 3 {
+		t.Fatalf("BTree stable plan deleteOps=%d want=3", planDeleteOps)
 	}
 }
 
 func TestFlushLaneOnce_StableParallelStreamsWithoutEntryRuns(t *testing.T) {
-	for _, mode := range []string{"append_only", "hash_sorted"} {
+	for _, mode := range []string{"append_only", "hash_sorted", "btree"} {
 		t.Run(mode, func(t *testing.T) {
 			testFlushLaneOnceStableParallelStreamsWithoutEntryRuns(t, mode)
 		})
