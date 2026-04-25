@@ -411,8 +411,8 @@ func TestBatchWrite_SortedBatchRotatesSingleRoutedShard(t *testing.T) {
 			t.Fatalf("queue route mode[%d]=%d want %d", i, mode, memtableRouteRanged)
 		}
 	}
-	if route := cache.currentMutableRoute.Load(); route != nil {
-		t.Fatalf("expected current mutable route to clear after routed rotation, got entries=%d", len(route.normalizedEntries()))
+	if route := cache.currentMutableRoute.Load(); route == nil {
+		t.Fatal("expected current mutable route to stay active while routed queue is pending")
 	}
 
 	var routedKey []byte
