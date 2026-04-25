@@ -7239,9 +7239,9 @@ const appendOnlyEstimatedBytesPerEntryDefault = 96
 const maxAppendOnlyMemLeases = 32
 
 // maxBTreeMemLeases bounds strong references to recycled BTree memtables.
-// Each retained BTree can hold arena chunks, so keep this much smaller than
-// append-only leasing.
-const maxBTreeMemLeases = 8
+// Keep enough leases for the default sharded rotation path; per-memtable BTree
+// arena retention is separately capped in the memtable package.
+const maxBTreeMemLeases = 16
 
 func updateInt64Max(dst *atomic.Int64, value int64) {
 	for {
@@ -7892,6 +7892,23 @@ func (db *DB) trimBTreeMemLeases(maxLeases int) {
 	}
 }
 
+func btreeMemLeaseKeepForShardCount(shards int) int {
+	if shards <= 0 {
+		shards = defaultMemtableShards()
+	}
+	if shards > maxBTreeMemLeases {
+		return maxBTreeMemLeases
+	}
+	return shards
+}
+
+func (db *DB) btreeMemLeaseKeep() int {
+	if db == nil {
+		return btreeMemLeaseKeepForShardCount(0)
+	}
+	return btreeMemLeaseKeepForShardCount(len(db.mutableShards))
+}
+
 func (db *DB) trimMutableShardAppendOnlyDirectArenas(checkpoint bool) {
 	if db == nil || len(db.mutableShards) == 0 {
 		return
@@ -7951,13 +7968,12 @@ func (db *DB) trimRetainedArenasAfterFlush(checkpoint bool) {
 	entryTarget := postFlushEntrySliceTargetBytes
 	leaseKeepPerBucket := postFlushEntrySliceLeaseKeepPerBucket
 	appendOnlyLeaseKeep := postFlushAppendOnlyMemLeaseKeep
-	btreeLeaseKeep := maxBTreeMemLeases / 2
+	btreeLeaseKeep := db.btreeMemLeaseKeep()
 	if checkpoint {
 		batchTarget = postCheckpointBatchArenaTargetBytes
 		entryTarget = postCheckpointEntrySliceTargetBytes
 		leaseKeepPerBucket = postCheckpointEntrySliceLeaseKeepPerBucket
 		appendOnlyLeaseKeep = postCheckpointAppendOnlyMemLeaseKeep
-		btreeLeaseKeep = maxBTreeMemLeases / 4
 	}
 	if budget := currentBatchArenaRetentionBudgetBytes(); budget >= 0 && budget < batchTarget {
 		batchTarget = budget
