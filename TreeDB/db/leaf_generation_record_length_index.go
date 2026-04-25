@@ -19,6 +19,10 @@ const (
 	leafGenerationRecordLengthIndexMagic      = "TLGI"
 	leafGenerationRecordLengthIndexVersion    = 1
 	leafGenerationRecordLengthIndexSuffix     = ".lenidx"
+	// Live leaf-log writers add records in offset order. Preallocating one
+	// modest segment's worth of record metadata avoids repeated growth while
+	// keeping retained per-file index memory bounded.
+	leafGenerationRecordLengthIndexLiveInitialCap = 4096
 )
 
 type leafGenerationRecordLengthIndex struct {
@@ -66,6 +70,13 @@ func (idx *leafGenerationRecordLengthIndex) clone() *leafGenerationRecordLengthI
 	return &leafGenerationRecordLengthIndex{
 		offsets: append([]uint32(nil), idx.offsets...),
 		lengths: append([]uint32(nil), idx.lengths...),
+	}
+}
+
+func newLiveLeafGenerationRecordLengthIndex() *leafGenerationRecordLengthIndex {
+	return &leafGenerationRecordLengthIndex{
+		offsets: make([]uint32, 0, leafGenerationRecordLengthIndexLiveInitialCap),
+		lengths: make([]uint32, 0, leafGenerationRecordLengthIndexLiveInitialCap),
 	}
 }
 
@@ -316,7 +327,7 @@ func (db *DB) noteLeafGenerationRecordLengthRaw(rawFileID uint32, offset uint64,
 	}
 	idx := db.leafGenerationRecordLengthByFile[rawFileID]
 	if idx == nil {
-		idx = &leafGenerationRecordLengthIndex{}
+		idx = newLiveLeafGenerationRecordLengthIndex()
 		db.leafGenerationRecordLengthByFile[rawFileID] = idx
 	}
 	idx.add(offset, recordLen)

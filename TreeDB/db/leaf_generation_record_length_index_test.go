@@ -62,3 +62,24 @@ func TestLeafGenerationRecordLengthIndex_NoteRawAllowsOffsetZero(t *testing.T) {
 		t.Fatalf("lookup(0)=(%d,%v), want (64,true)", got, ok)
 	}
 }
+
+func TestLeafGenerationRecordLengthIndex_NoteRawPreallocatesLiveIndex(t *testing.T) {
+	db := &DB{}
+	db.noteLeafGenerationRecordLengthRaw(11, 4, 96)
+
+	db.leafGenerationRecordLengthMu.RLock()
+	idx := db.leafGenerationRecordLengthByFile[11]
+	db.leafGenerationRecordLengthMu.RUnlock()
+	if idx == nil {
+		t.Fatal("expected live record-length index")
+	}
+	if got, wantMin := cap(idx.offsets), leafGenerationRecordLengthIndexLiveInitialCap; got < wantMin {
+		t.Fatalf("offset capacity=%d want >= %d", got, wantMin)
+	}
+	if got, wantMin := cap(idx.lengths), leafGenerationRecordLengthIndexLiveInitialCap; got < wantMin {
+		t.Fatalf("length capacity=%d want >= %d", got, wantMin)
+	}
+	if got, ok := idx.lookup(4); !ok || got != 96 {
+		t.Fatalf("lookup(4)=(%d,%v), want (96,true)", got, ok)
+	}
+}
