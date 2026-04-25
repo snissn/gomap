@@ -85,6 +85,28 @@ func (s *Store) GetCurrent(_ context.Context) (uint64, error) {
 	return binary.BigEndian.Uint64(val), nil
 }
 
+// GetCurrentForClass returns the current dictionary ID for a payload class.
+// Empty class and aliases "single"/"default" fall back to the legacy global
+// current marker.
+func (s *Store) GetCurrentForClass(ctx context.Context, class string) (uint64, error) {
+	if s == nil || s.backend == nil {
+		return 0, errStoreUnavailable
+	}
+	key := currentKeyForClass(class)
+	val, err := s.backend.Get(key)
+	if err != nil {
+		return 0, err
+	}
+	if val == nil {
+		// Backward compatibility: fall back to legacy global current marker.
+		return s.GetCurrent(ctx)
+	}
+	if len(val) != 8 {
+		return 0, fmt.Errorf("dictdb: invalid current size %d", len(val))
+	}
+	return binary.BigEndian.Uint64(val), nil
+}
+
 // PutDictBytes inserts dict bytes (deduped by hash) and returns its dictID.
 func (s *Store) PutDictBytes(ctx context.Context, dictBytes []byte) (uint64, error) {
 	if s == nil || s.backend == nil {
@@ -208,6 +230,31 @@ func (s *Store) SetCurrent(ctx context.Context, dictID uint64) error {
 	return s.backend.SetSync(currentKey(), buf)
 }
 
+// SetCurrentForClass marks dictID as the current dictionary for a payload class.
+// Empty class and aliases "single"/"default" use the legacy global current key.
+// A dictID of 0 clears the class marker via DeleteSync.
+func (s *Store) SetCurrentForClass(ctx context.Context, class string, dictID uint64) error {
+	if s == nil || s.backend == nil {
+		return errStoreUnavailable
+	}
+	key := currentKeyForClass(class)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if dictID == 0 {
+		return s.backend.DeleteSync(key)
+	}
+	val, err := s.backend.Get(bytesKey(dictID))
+	if err != nil {
+		return err
+	}
+	if val == nil {
+		return fmt.Errorf("dictdb: dict %d not found", dictID)
+	}
+	buf := make([]byte, 8)
+	binary.BigEndian.PutUint64(buf, dictID)
+	return s.backend.SetSync(key, buf)
+}
+
 // SetK stores the preferred frame group size (K) for dictID.
 func (s *Store) SetK(ctx context.Context, dictID uint64, k int) error {
 	if s == nil || s.backend == nil {
@@ -256,6 +303,55 @@ func (s *Store) GetK(ctx context.Context, dictID uint64) (int, error) {
 	return k, nil
 }
 
+// GetLeafPayloadMode reports whether dictID expects raw 4KiB leaf pages or
+// compact split-leaf payloads. ok=false means no explicit mode is recorded.
+func (s *Store) GetLeafPayloadMode(_ context.Context, dictID uint64) (useRawPages bool, ok bool, err error) {
+	if s == nil || s.backend == nil {
+		return false, false, errStoreUnavailable
+	}
+	if dictID == 0 {
+		return false, false, nil
+	}
+	val, err := s.backend.Get(leafPayloadModeKey(dictID))
+	if err != nil {
+		return false, false, err
+	}
+	if len(val) == 0 {
+		return false, false, nil
+	}
+	switch string(val) {
+	case "raw":
+		return true, true, nil
+	case "compact":
+		return false, true, nil
+	default:
+		return false, false, fmt.Errorf("dictdb: invalid leaf payload mode %q", string(val))
+	}
+}
+
+// SetLeafPayloadMode records whether dictID expects raw 4KiB leaf pages or
+// compact split-leaf payloads during rewrite.
+func (s *Store) SetLeafPayloadMode(_ context.Context, dictID uint64, useRawPages bool) error {
+	if s == nil || s.backend == nil {
+		return errStoreUnavailable
+	}
+	if dictID == 0 {
+		return nil
+	}
+	val, err := s.backend.Get(bytesKey(dictID))
+	if err != nil {
+		return err
+	}
+	if val == nil {
+		return fmt.Errorf("dictdb: dict %d not found", dictID)
+	}
+	mode := []byte("compact")
+	if useRawPages {
+		mode = []byte("raw")
+	}
+	return s.backend.SetSync(leafPayloadModeKey(dictID), mode)
+}
+
 // GetDictBytes returns the dictionary bytes for dictID.
 func (s *Store) GetDictBytes(_ context.Context, dictID uint64) ([]byte, error) {
 	if s == nil || s.backend == nil {
@@ -292,8 +388,23 @@ func kKey(dictID uint64) []byte {
 	return buf
 }
 
+func leafPayloadModeKey(dictID uint64) []byte {
+	buf := make([]byte, len("leafmode/")+8)
+	copy(buf, "leafmode/")
+	binary.BigEndian.PutUint64(buf[len("leafmode/"):], dictID)
+	return buf
+}
+
 func currentKey() []byte {
 	return []byte("current")
+}
+
+func currentKeyForClass(class string) []byte {
+	class = strings.TrimSpace(strings.ToLower(class))
+	if class == "" || class == "single" || class == "default" {
+		return currentKey()
+	}
+	return []byte("current/" + class)
 }
 
 func (s *Store) ensureValueLogWriterLocked() (*valuelog.Writer, error) {
@@ -306,11 +417,11 @@ func (s *Store) ensureValueLogWriterLocked() (*valuelog.Writer, error) {
 	if s.dir == "" {
 		return nil, fmt.Errorf("dictdb: missing backend dir")
 	}
-	walDir := filepath.Join(s.dir, "wal")
-	if err := os.MkdirAll(walDir, 0700); err != nil {
+	valueLogDir := db.ValueLogDirPath(s.dir)
+	if err := os.MkdirAll(valueLogDir, 0700); err != nil {
 		return nil, err
 	}
-	seq, err := nextValueLogSeq(walDir, 0)
+	seq, err := nextValueLogSeq(valueLogDir, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -318,7 +429,7 @@ func (s *Store) ensureValueLogWriterLocked() (*valuelog.Writer, error) {
 	if err != nil {
 		return nil, err
 	}
-	path := filepath.Join(walDir, fmt.Sprintf("value-l%d-%06d.log", 0, seq))
+	path := filepath.Join(valueLogDir, fmt.Sprintf("value-l%d-%06d.log", 0, seq))
 	writer, err := valuelog.NewWriter(path, fileID)
 	if err != nil {
 		return nil, err

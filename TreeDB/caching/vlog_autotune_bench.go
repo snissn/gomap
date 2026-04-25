@@ -291,7 +291,8 @@ func benchOptionsForMode(mode VlogAutotuneBenchMode, fixedK int) Options {
 		ValueLogCompressionAutotune: valuelog.AutotuneOptions{
 			Mode:                   autotuneMode,
 			CandidateK:             candidateK,
-			CandidateHistoryBytes:  []int{16 << 10, 32 << 10, 40 << 10},
+			CandidateHistoryBytes:  []int{64 << 10, 96 << 10, 128 << 10},
+			CandidateDictBytes:     []int{40 << 10, 64 << 10, 96 << 10},
 			MinGainToSwitch:        0.05,
 			MinDwellFrames:         256,
 			SampleStride:           2,

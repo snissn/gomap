@@ -10,6 +10,8 @@ A TreeDB deployment uses:
 
 - `index.db` (paged B+Tree index and metadata),
 - value-log segments (`value-l*.log`),
+- optional split outer-leaf value-log segments under `leaf_vlog/value-l*.log`
+  when `IndexOuterLeavesInValueLog` is enabled,
 - commit-log segments (`commit-l*.log`),
 - optional side-store DBs (`dictdb`, `templatedb`) using their own `index.db` files.
 
@@ -301,6 +303,47 @@ bytes FramePayload
 - If `FrameFlags` indicates compression, frame payload is decoded first.
 - `DictID` selects dictionary for dict-compressed payloads.
 
+### 7.2 Compact split-leaf payload format
+
+When TreeDB writes outer leaf pages into the split `leaf_vlog` directory, it
+may store them in a compact canonical payload format instead of persisting the
+entire raw `4096`-byte page image. This format is used only for split
+`leaf_vlog` segments, not for generic lane-255 value-log files in `value_vlog`.
+
+Compact payload layout:
+
+```text
+u8  Magic[8]        // 8a 4c 46 50 47 01 91 3c
+u16 PrefixLenLE
+u16 SuffixLenLE
+bytes Prefix[PrefixLen]
+bytes Suffix[SuffixLen]
+```
+
+Semantics:
+
+- `Prefix` is the live byte range from the start of the page through the end of
+  the top metadata/directory region.
+- `Suffix` is the live byte range from the first heap byte through the end of
+  the page.
+- The bytes between them are the free gap of the slotted page and are omitted
+  from the stored payload.
+
+Reconstruction rules:
+
+- decoder allocates a full `4096`-byte page buffer,
+- copies `Prefix` at the start,
+- copies `Suffix` at the end,
+- zero-fills the omitted middle gap.
+
+Encoding rules:
+
+- only valid leaf pages may use this compact format,
+- the canonical compact encoding zero-fills the omitted gap and recomputes the
+  page checksum before storing `Prefix` and `Suffix`,
+- if compact encoding is not smaller than the raw page, TreeDB stores the raw
+  page payload instead.
+
 ## 8. Commit-Log Segment Format
 
 Commit-log file is a sequence of segments.
@@ -354,5 +397,6 @@ Current canonical names:
 
 - commit log: `commit-l<lane>-<seq>.log`
 - value log: `value-l<lane>-<seq>.log`
+- split leaf log: `leaf_vlog/value-l<lane>-<seq>.log`
 
 Recovery parser also accepts legacy names (`commit-`, `value-`, `wal-`, `vlog-`) for backward compatibility during pre-alpha evolution.

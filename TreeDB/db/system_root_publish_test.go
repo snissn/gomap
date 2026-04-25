@@ -345,20 +345,6 @@ func TestPublishSystemRootIterator_StatsExposeWarmFallbackCounters(t *testing.T)
 	}
 }
 
-func TestSelectSystemRootPublishPlan_EmptySystemRootUsesColdBuild(t *testing.T) {
-	plan := selectSystemRootPublishPlan(false)
-	if plan != systemRootPublishPlanColdBuild {
-		t.Fatalf("plan=%v want %v", plan, systemRootPublishPlanColdBuild)
-	}
-}
-
-func TestSelectSystemRootPublishPlan_NonEmptySystemRootUsesWarmFallback(t *testing.T) {
-	plan := selectSystemRootPublishPlan(true)
-	if plan != systemRootPublishPlanWarmFallbackRebuild {
-		t.Fatalf("plan=%v want %v", plan, systemRootPublishPlanWarmFallbackRebuild)
-	}
-}
-
 func TestPublishSystemRootIterator_WarmSparseDelta_PreservesSomePages(t *testing.T) {
 	dir := t.TempDir()
 	db, err := Open(Options{Dir: dir})

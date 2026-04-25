@@ -47,6 +47,14 @@ A `Profile` is a named preset for a small set of **policy** knobs:
 - Durability / integrity checks (journal, sync policy, read checksums)
 - Background work (checkpoint / pruning) that can affect latency and
   benchmark stability
+- For `fast` / `wal_on_fast`, the common value-log compression policy used by
+  current `run_celestia` deployments:
+  - `ValueLog.Compression = auto`
+  - `ValueLog.BlockCodec = snappy`
+  - `ValueLog.AutoPolicy = balanced`
+  - `ValueLog.CompressionAutotune = medium`
+  - dict incompressible hold / probe defaults tuned for long-running ingest
+    (`64MiB` / `32MiB`)
 
 Profiles intentionally avoid setting most throughput/capacity knobs (like
 `FlushThreshold`) because those are highly workload dependent.
@@ -86,6 +94,12 @@ Behavior:
   - `IndexColumnarLeaves = true`
   - `IndexPackedValuePtr = true`
   - `IndexInternalBaseDelta = false` (incompatible with leaf refs)
+- Pins the current Celestia-style value-log compression defaults:
+  - `ValueLog.Compression = auto`
+  - `ValueLog.AutoPolicy = balanced`
+  - block codec stays on the default `snappy`
+  - compression autotune defaults to `medium`
+  - dict incompressible hold/probe defaults become `64MiB` / `32MiB`
 - Leaves background maintenance enabled by default.
 
 Notes:
@@ -110,6 +124,8 @@ Behavior:
   - `ValueLog.ReadIntegrity = IntegritySkipChecksums`
 - Prefers append allocation (`PreferAppendAlloc=true`)
 - Enables the same index optimization bundle as `ProfileFast`.
+- Enables the same Celestia-style value-log compression defaults as
+  `ProfileFast`.
 
 Use when you want:
 
@@ -142,6 +158,48 @@ Not recommended for production.
 
 Profiles are just helpers. You can always override any option after applying a
 profile.
+
+### Downstream wrappers should start from profiles
+
+If you are wrapping TreeDB in another project (for example a cosmos-db or
+cometbft-db adapter), start from `OptionsFor(...)` / `ApplyProfile(...)` or the
+standard downstream helper in `TreeDB/integration/kvstoreadapter`. That keeps
+the high-level intent aligned as TreeDB evolves and avoids copying profile/env
+parsing glue into each downstream wrapper.
+
+Recommended surface area for most wrappers:
+
+- Pick a profile first: `durable`, `fast`, or `wal_on_fast`
+- Expose a small set of main knobs:
+  - durability/profile
+  - value-log pointer threshold
+  - value-log compression mode / auto policy
+  - maintenance mode / background rewrite policy
+  - index optimization bundle / outer leaves in vlog
+- Keep advanced compression training/autotune/dict knobs as explicit escape
+  hatches, not primary tuning inputs
+
+Minimal helper usage:
+
+```go
+import (
+	treedb "github.com/snissn/gomap/TreeDB"
+	treedbkv "github.com/snissn/gomap/TreeDB/integration/kvstoreadapter"
+)
+
+opened, err := treedbkv.Open(treedbkv.OpenConfig{
+	ParentDir:                   dir,
+	Name:                        "application",
+	AdapterName:                 "TreeDB",
+	DefaultProfile:              treedb.ProfileWALOnFast,
+	DefaultKeepRecent:           1,
+	DefaultAdaptiveMemtableBase: "hash_sorted",
+})
+if err != nil {
+	return err
+}
+defer opened.DB.Close()
+```
 
 ### Booleans are not tri-state
 

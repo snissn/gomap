@@ -108,6 +108,7 @@ func collectValueLogRefDeltaFromIterator(iter iterator.UnsafeIterator) (*valueLo
 	if iter == nil {
 		return nil, nil
 	}
+	defer iter.Close()
 	delta := newValueLogRefDelta()
 	for iter.Valid() {
 		if fileID, ok := orderedRootEntryValueLogFileID(iter); ok {
@@ -312,12 +313,12 @@ func (db *DB) publishOrderedRootIterator(baseRoot uint64, iter iterator.UnsafeIt
 				}
 				retired = append(retired, pageIDs...)
 				buildIter = targetTable.NewIterator(nil, nil)
+			case orderedRootPublishPlanColdBuild:
+				err = errors.New("ordered root warm publish selected cold build for a non-empty base root")
+				return
 			default:
-				if vlogRefDelta != nil {
-					vlogRefDelta = nil
-				}
-				retired = append(retired, pageIDs...)
-				buildIter = targetTable.NewIterator(nil, nil)
+				err = errors.New("ordered root warm publish selected unknown plan")
+				return
 			}
 		}
 	} else {
@@ -390,6 +391,9 @@ func (db *DB) PublishOrderedRootIterator(baseRoot uint64, iter iterator.UnsafeIt
 	if db == nil {
 		return 0, ErrClosed
 	}
+	if db.closing.Load() {
+		return 0, ErrClosed
+	}
 	if iter == nil {
 		return 0, errors.New("nil ordered root iterator")
 	}
@@ -419,7 +423,7 @@ func (db *DB) PublishOrderedRootIterator(baseRoot uint64, iter iterator.UnsafeIt
 		return 0, errors.New("concurrent modification detected during ordered root publish")
 	}
 
-	if err := db.finalizeCommit(userRoot, systemRoot, retired, false, metrics, nil, true, nil); err != nil {
+	if err := db.finalizeCommit(userRoot, systemRoot, retired, false, metrics, nil, true, nil, nil, nil); err != nil {
 		return 0, err
 	}
 	return newRoot, nil
@@ -430,6 +434,9 @@ func (db *DB) PublishOrderedRootIterator(baseRoot uint64, iter iterator.UnsafeIt
 // iterators and become durable when the grouped commit finalizes.
 func (db *DB) PublishOrderedRootGroup(systemIter iterator.UnsafeIterator, ordered []OrderedRootPublishInput) (uint64, []uint64, error) {
 	if db == nil {
+		return 0, nil, ErrClosed
+	}
+	if db.closing.Load() {
 		return 0, nil, ErrClosed
 	}
 
@@ -483,7 +490,7 @@ func (db *DB) PublishOrderedRootGroup(systemIter iterator.UnsafeIterator, ordere
 		return 0, nil, errors.New("concurrent modification detected during ordered root group publish")
 	}
 
-	if err := db.finalizeCommit(userRoot, newSystemRoot, retired, false, merged, nil, true, vlogRefDelta); err != nil {
+	if err := db.finalizeCommit(userRoot, newSystemRoot, retired, false, merged, nil, true, vlogRefDelta, nil, nil); err != nil {
 		return 0, nil, err
 	}
 	if systemIter != nil {

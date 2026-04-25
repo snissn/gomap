@@ -14,14 +14,6 @@ type systemRootPublishStats struct {
 	warmRewrittenPages      uint64
 }
 
-type systemRootPublishPlan uint8
-
-const (
-	systemRootPublishPlanColdBuild systemRootPublishPlan = iota
-	systemRootPublishPlanWarmFallbackRebuild
-	systemRootPublishPlanWarmNativeApply
-)
-
 func (db *DB) systemRootPublishStatsSnapshot() systemRootPublishStats {
 	if db == nil {
 		return systemRootPublishStats{}
@@ -35,15 +27,6 @@ func (db *DB) systemRootPublishStatsSnapshot() systemRootPublishStats {
 	}
 }
 
-func selectSystemRootPublishPlan(hasExistingEntries bool) systemRootPublishPlan {
-	if !hasExistingEntries {
-		return systemRootPublishPlanColdBuild
-	}
-	// R4 scaffolding: until warm native apply exists, non-empty steady-state
-	// system-root publishes explicitly select rebuild fallback.
-	return systemRootPublishPlanWarmFallbackRebuild
-}
-
 const defaultSystemRootWarmMaxDeltaOps = 256
 
 func (db *DB) systemRootWarmMaxDeltaOps() int {
@@ -51,17 +34,6 @@ func (db *DB) systemRootWarmMaxDeltaOps() int {
 		return db.testSystemRootWarmMaxDeltaOps
 	}
 	return defaultSystemRootWarmMaxDeltaOps
-}
-
-func selectSystemRootWarmPublishPlan(hasExistingEntries bool, deltaOps int, maxDeltaOps int) systemRootPublishPlan {
-	switch selectOrderedRootWarmPublishPlan(hasExistingEntries, deltaOps, maxDeltaOps) {
-	case orderedRootPublishPlanColdBuild:
-		return systemRootPublishPlanColdBuild
-	case orderedRootPublishPlanWarmNativeApply:
-		return systemRootPublishPlanWarmNativeApply
-	default:
-		return systemRootPublishPlanWarmFallbackRebuild
-	}
 }
 
 func systemRootOrderedPublishOptions(db *DB) orderedRootPublishOptions {
@@ -79,6 +51,9 @@ func systemRootOrderedPublishOptions(db *DB) orderedRootPublishOptions {
 // preserved across the commit.
 func (db *DB) PublishSystemRootIterator(iter iterator.UnsafeIterator) (uint64, error) {
 	if db == nil {
+		return 0, ErrClosed
+	}
+	if db.closing.Load() {
 		return 0, ErrClosed
 	}
 	if iter == nil {
@@ -114,7 +89,7 @@ func (db *DB) PublishSystemRootIterator(iter iterator.UnsafeIterator) (uint64, e
 		return 0, errors.New("concurrent modification detected during system root publish")
 	}
 
-	if err := db.finalizeCommit(userRoot, newSystemRoot, retired, false, metrics, nil, true, vlogRefDelta); err != nil {
+	if err := db.finalizeCommit(userRoot, newSystemRoot, retired, false, metrics, nil, true, vlogRefDelta, nil, nil); err != nil {
 		return 0, err
 	}
 	return newSystemRoot, nil

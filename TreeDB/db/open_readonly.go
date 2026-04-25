@@ -13,6 +13,9 @@ import (
 )
 
 func openReadOnly(opts Options) (*DB, error) {
+	if err := ensureNoLegacyMixedWALValueSegments(opts.Dir); err != nil {
+		return nil, err
+	}
 	var lock *lockfile.Lock
 	lockPath := filepath.Join(opts.Dir, "LOCK")
 	if l, err := lockfile.AcquireShared(lockPath); err == nil {
@@ -37,9 +40,15 @@ func openReadOnly(opts Options) (*DB, error) {
 	}
 	p.SetVerifyOnRead(opts.VerifyOnRead)
 
-	valueLogDir := filepath.Join(opts.Dir, "wal")
-	vm, err := valuelog.NewManager(valueLogDir)
+	layout := resolveStorageLayout(opts.Dir)
+	vm, err := valuelog.NewManager(layout.valueVLogDir)
 	if err != nil {
+		_ = p.Close()
+		_ = lock.Close()
+		return nil, err
+	}
+	if err := vm.AddScanDir(layout.leafVLogDir); err != nil {
+		_ = vm.Close()
 		_ = p.Close()
 		_ = lock.Close()
 		return nil, err
@@ -57,29 +66,36 @@ func openReadOnly(opts Options) (*DB, error) {
 
 	adaptiveCtrl, inlineThreshold := resolveInlineThresholdAndAdaptive(opts)
 	db := &DB{
-		readOnly:                   true,
-		valueLogManager:            vm,
-		lock:                       lock,
-		adaptive:                   adaptiveCtrl,
-		keepRecent:                 opts.KeepRecent,
-		valueLogCompression:        opts.ValueLog.Compression,
-		valueLogBlockCodec:         opts.ValueLog.BlockCodec,
-		valueLogDomainThresholds:   NormalizeValueLogDomainThresholds(opts.ValueLog.DomainInlineThresholds),
-		leafPrefixCompression:      opts.LeafPrefixCompression,
-		indexColumnarLeaves:        opts.IndexColumnarLeaves,
-		indexPackedValuePtr:        opts.IndexPackedValuePtr,
-		indexInternalBaseDelta:     opts.IndexInternalBaseDelta,
-		indexOuterLeavesInValueLog: opts.IndexOuterLeavesInValueLog,
-		indexAdaptiveLeafEncoding:  opts.IndexAdaptiveLeafEncoding,
-		leafFillTargetPPM:          opts.LeafFillTargetPPM,
-		internalFillTargetPPM:      opts.InternalFillTargetPPM,
-		piggybackCompaction:        !opts.DisablePiggybackCompaction,
-		maintenanceOpsPerCoalesce:  opts.MaintenanceOpsPerCoalesce,
-		dir:                        opts.Dir,
-		chunkSize:                  opts.ChunkSize,
-		preferAppendAlloc:          opts.PreferAppendAlloc,
-		freelistRegionPages:        opts.FreelistRegionPages,
-		freelistRegionRadius:       opts.FreelistRegionRadius,
+		readOnly:                       true,
+		valueLogManager:                vm,
+		lock:                           lock,
+		adaptive:                       adaptiveCtrl,
+		keepRecent:                     opts.KeepRecent,
+		valueLogCompression:            opts.ValueLog.Compression,
+		valueLogAutoPolicy:             opts.ValueLog.AutoPolicy,
+		valueLogBlockCodec:             opts.ValueLog.BlockCodec,
+		valueLogDictLookup:             opts.ValueLog.DictLookup,
+		valueLogDictCurrentForClass:    opts.ValueLog.DictCurrentForClass,
+		valueLogDictLeafPayloadMode:    opts.ValueLog.DictLeafPayloadMode,
+		valueLogDictPut:                opts.ValueLog.DictPut,
+		valueLogDictSetCurrentForClass: opts.ValueLog.DictSetCurrentForClass,
+		valueLogDictSetLeafPayloadMode: opts.ValueLog.DictSetLeafPayloadMode,
+		valueLogDomainThresholds:       NormalizeValueLogDomainThresholds(opts.ValueLog.DomainInlineThresholds),
+		leafPrefixCompression:          opts.LeafPrefixCompression,
+		indexColumnarLeaves:            opts.IndexColumnarLeaves,
+		indexPackedValuePtr:            opts.IndexPackedValuePtr,
+		indexInternalBaseDelta:         opts.IndexInternalBaseDelta,
+		indexOuterLeavesInValueLog:     opts.IndexOuterLeavesInValueLog,
+		indexAdaptiveLeafEncoding:      opts.IndexAdaptiveLeafEncoding,
+		leafFillTargetPPM:              opts.LeafFillTargetPPM,
+		internalFillTargetPPM:          opts.InternalFillTargetPPM,
+		piggybackCompaction:            !opts.DisablePiggybackCompaction,
+		maintenanceOpsPerCoalesce:      opts.MaintenanceOpsPerCoalesce,
+		dir:                            opts.Dir,
+		chunkSize:                      opts.ChunkSize,
+		preferAppendAlloc:              opts.PreferAppendAlloc,
+		freelistRegionPages:            opts.FreelistRegionPages,
+		freelistRegionRadius:           opts.FreelistRegionRadius,
 		policy: WritePolicy{
 			InlineThreshold: inlineThreshold,
 			FlushThreshold:  opts.FlushThreshold,
@@ -100,12 +116,22 @@ func openReadOnly(opts Options) (*DB, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	if opts.IndexOuterLeavesInValueLog {
+		manifest, err := loadOrCreateLeafGenerationManifest(layout.leafVLogDir, db.meta.CommitSeq, true)
+		if err != nil {
+			_ = db.Close()
+			return nil, err
+		}
+		db.leafGenerationManifest = manifest
+	}
 
 	initialState := &DBState{
-		CommitSeq:        db.meta.CommitSeq,
-		RootPageID:       db.meta.UserRootPageID,
-		SystemRootPageID: db.meta.SystemRootPageID,
-		ValueLogSet:      vm.CurrentSet(),
+		CommitSeq:                  db.meta.CommitSeq,
+		RootPageID:                 db.meta.UserRootPageID,
+		SystemRootPageID:           db.meta.SystemRootPageID,
+		ValueLogSet:                vm.CurrentSet(),
+		LeafGenerations:            db.currentLeafGenerationView(),
+		LeafGenerationStateVersion: db.leafGenerationStateVersion,
 	}
 	db.state.Store(initialState)
 	db.publishSnapshotView(gen, initialState, vm)
@@ -115,6 +141,9 @@ func openReadOnly(opts Options) (*DB, error) {
 }
 
 func openReadOnlyNoLock(opts Options) (*DB, error) {
+	if err := ensureNoLegacyMixedWALValueSegments(opts.Dir); err != nil {
+		return nil, err
+	}
 	idxPath := filepath.Join(opts.Dir, indexFileName)
 	if _, err := os.Stat(idxPath); err != nil {
 		return nil, err
@@ -129,9 +158,14 @@ func openReadOnlyNoLock(opts Options) (*DB, error) {
 	}
 	p.SetVerifyOnRead(opts.VerifyOnRead)
 
-	valueLogDir := filepath.Join(opts.Dir, "wal")
-	vm, err := valuelog.NewManager(valueLogDir)
+	layout := resolveStorageLayout(opts.Dir)
+	vm, err := valuelog.NewManager(layout.valueVLogDir)
 	if err != nil {
+		_ = p.Close()
+		return nil, err
+	}
+	if err := vm.AddScanDir(layout.leafVLogDir); err != nil {
+		_ = vm.Close()
 		_ = p.Close()
 		return nil, err
 	}
@@ -148,28 +182,35 @@ func openReadOnlyNoLock(opts Options) (*DB, error) {
 
 	adaptiveCtrl, inlineThreshold := resolveInlineThresholdAndAdaptive(opts)
 	db := &DB{
-		readOnly:                   true,
-		valueLogManager:            vm,
-		adaptive:                   adaptiveCtrl,
-		keepRecent:                 opts.KeepRecent,
-		valueLogCompression:        opts.ValueLog.Compression,
-		valueLogBlockCodec:         opts.ValueLog.BlockCodec,
-		valueLogDomainThresholds:   NormalizeValueLogDomainThresholds(opts.ValueLog.DomainInlineThresholds),
-		leafPrefixCompression:      opts.LeafPrefixCompression,
-		indexColumnarLeaves:        opts.IndexColumnarLeaves,
-		indexPackedValuePtr:        opts.IndexPackedValuePtr,
-		indexInternalBaseDelta:     opts.IndexInternalBaseDelta,
-		indexOuterLeavesInValueLog: opts.IndexOuterLeavesInValueLog,
-		indexAdaptiveLeafEncoding:  opts.IndexAdaptiveLeafEncoding,
-		leafFillTargetPPM:          opts.LeafFillTargetPPM,
-		internalFillTargetPPM:      opts.InternalFillTargetPPM,
-		piggybackCompaction:        !opts.DisablePiggybackCompaction,
-		maintenanceOpsPerCoalesce:  opts.MaintenanceOpsPerCoalesce,
-		dir:                        opts.Dir,
-		chunkSize:                  opts.ChunkSize,
-		preferAppendAlloc:          opts.PreferAppendAlloc,
-		freelistRegionPages:        opts.FreelistRegionPages,
-		freelistRegionRadius:       opts.FreelistRegionRadius,
+		readOnly:                       true,
+		valueLogManager:                vm,
+		adaptive:                       adaptiveCtrl,
+		keepRecent:                     opts.KeepRecent,
+		valueLogCompression:            opts.ValueLog.Compression,
+		valueLogAutoPolicy:             opts.ValueLog.AutoPolicy,
+		valueLogBlockCodec:             opts.ValueLog.BlockCodec,
+		valueLogDictLookup:             opts.ValueLog.DictLookup,
+		valueLogDictCurrentForClass:    opts.ValueLog.DictCurrentForClass,
+		valueLogDictLeafPayloadMode:    opts.ValueLog.DictLeafPayloadMode,
+		valueLogDictPut:                opts.ValueLog.DictPut,
+		valueLogDictSetCurrentForClass: opts.ValueLog.DictSetCurrentForClass,
+		valueLogDictSetLeafPayloadMode: opts.ValueLog.DictSetLeafPayloadMode,
+		valueLogDomainThresholds:       NormalizeValueLogDomainThresholds(opts.ValueLog.DomainInlineThresholds),
+		leafPrefixCompression:          opts.LeafPrefixCompression,
+		indexColumnarLeaves:            opts.IndexColumnarLeaves,
+		indexPackedValuePtr:            opts.IndexPackedValuePtr,
+		indexInternalBaseDelta:         opts.IndexInternalBaseDelta,
+		indexOuterLeavesInValueLog:     opts.IndexOuterLeavesInValueLog,
+		indexAdaptiveLeafEncoding:      opts.IndexAdaptiveLeafEncoding,
+		leafFillTargetPPM:              opts.LeafFillTargetPPM,
+		internalFillTargetPPM:          opts.InternalFillTargetPPM,
+		piggybackCompaction:            !opts.DisablePiggybackCompaction,
+		maintenanceOpsPerCoalesce:      opts.MaintenanceOpsPerCoalesce,
+		dir:                            opts.Dir,
+		chunkSize:                      opts.ChunkSize,
+		preferAppendAlloc:              opts.PreferAppendAlloc,
+		freelistRegionPages:            opts.FreelistRegionPages,
+		freelistRegionRadius:           opts.FreelistRegionRadius,
 		policy: WritePolicy{
 			InlineThreshold: inlineThreshold,
 			FlushThreshold:  opts.FlushThreshold,
@@ -190,12 +231,22 @@ func openReadOnlyNoLock(opts Options) (*DB, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	if opts.IndexOuterLeavesInValueLog {
+		manifest, err := loadOrCreateLeafGenerationManifest(layout.leafVLogDir, db.meta.CommitSeq, true)
+		if err != nil {
+			_ = db.Close()
+			return nil, err
+		}
+		db.leafGenerationManifest = manifest
+	}
 
 	initialState := &DBState{
-		CommitSeq:        db.meta.CommitSeq,
-		RootPageID:       db.meta.UserRootPageID,
-		SystemRootPageID: db.meta.SystemRootPageID,
-		ValueLogSet:      vm.CurrentSet(),
+		CommitSeq:                  db.meta.CommitSeq,
+		RootPageID:                 db.meta.UserRootPageID,
+		SystemRootPageID:           db.meta.SystemRootPageID,
+		ValueLogSet:                vm.CurrentSet(),
+		LeafGenerations:            db.currentLeafGenerationView(),
+		LeafGenerationStateVersion: db.leafGenerationStateVersion,
 	}
 	db.state.Store(initialState)
 	db.publishSnapshotView(gen, initialState, vm)

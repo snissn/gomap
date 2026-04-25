@@ -71,7 +71,7 @@ func TestValueLogRewriteOnline_DoesNotLoseConcurrentWrites(t *testing.T) {
 	)
 
 	dir := t.TempDir()
-	walDir := filepath.Join(dir, "wal")
+	walDir := filepath.Join(dir, "value_vlog")
 	if err := os.MkdirAll(walDir, 0o755); err != nil {
 		t.Fatalf("mkdir wal: %v", err)
 	}

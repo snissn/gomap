@@ -1,6 +1,6 @@
-# Collections Native Fast-Path Baseline — 2026-03-09
+# Collections Native Fast-Path Baseline — 2026-04-25
 
-Status: frozen pre-`R0` baseline for `#768`.
+Status: refreshed pre-`R0` baseline for `#768` after `#939` / `#1045`.
 
 This note freezes the main-based rewrite baseline before any native collections
 implementation lands on `origin/main`.
@@ -10,7 +10,7 @@ implementation lands on `origin/main`.
 - Issue:
   - `#768`
 - Baseline date:
-  - `2026-03-09`
+  - `2026-04-25`
 - Operator:
   - `Codex`
 - Repo path:
@@ -24,11 +24,11 @@ implementation lands on `origin/main`.
 - Oracle branch HEAD:
   - `75dfe0b038f56846d62db5f94dd174957bc266fb`
 - Main execution base branch:
-  - `pr/native-fastpath-prep-main-sync`
+  - `pr/native-fastpath-prep-main-sync-v2`
 - Exact `origin/main` commit:
-  - `510e0775441bfe434db488293cc8c486a0687d61`
-- Prep branch HEAD:
-  - `8ac8e9fa8f9f6c704df3b2ffb3a10fad7a6bba88`
+  - `0aafde7b0967cc1124d9c39ef943f018a018ce17`
+- Prep branch HEAD at capture time:
+  - `0878f274` (`pr/native-fastpath-prep-main-sync-v2` rebased onto current `main`; docs-only refresh follows)
 
 ## Host / Runtime Freeze
 
@@ -41,7 +41,7 @@ implementation lands on `origin/main`.
 - RAM:
   - `31 GiB`
 - OS / kernel:
-  - `Linux 6.8.0-101-generic`
+  - `Linux 6.8.0-110-generic`
 - Go version:
   - `go1.25.7 linux/amd64`
 - `GOMAXPROCS`:
@@ -170,21 +170,21 @@ OUT=$(mktemp -d /tmp/gomap_nf_r0_oracle_collections_XXXXXX)
 ## Artifact Checklist
 
 - Raw TreeDB `fast` write/read/scan:
-  - `/tmp/gomap_nf_r0_fast_reads_Dhbyye`
+  - `/tmp/gomap_nf_r0_refresh_fast_reads_cNSdKi`
 - Raw TreeDB `fast` batch delete:
-  - `/tmp/gomap_nf_r0_fast_batchdel_lAbtNv`
+  - `/tmp/gomap_nf_r0_refresh_fast_batchdel_NH5zvV`
 - Raw TreeDB `fast` random delete:
-  - `/tmp/gomap_nf_r0_fast_randdel_pHLzoE`
+  - `/tmp/gomap_nf_r0_refresh_fast_randdel_VuLFVx`
 - Raw TreeDB `wal_on_fast` write/read/scan:
-  - `/tmp/gomap_nf_r0_wal_reads_oKxA4A`
+  - `/tmp/gomap_nf_r0_refresh_wal_reads_hQU99o`
 - Raw TreeDB `wal_on_fast` batch delete:
-  - `/tmp/gomap_nf_r0_wal_batchdel_pa43x7`
+  - `/tmp/gomap_nf_r0_refresh_wal_batchdel_pmtr3T`
 - Raw TreeDB `wal_on_fast` random delete:
-  - `/tmp/gomap_nf_r0_wal_randdel_o1ocsy`
+  - `/tmp/gomap_nf_r0_refresh_wal_randdel_1hqJV8`
 - Deferred-work `flushdrain`:
-  - `/tmp/gomap_nf_r0_flushdrain_3TnpGR`
+  - `/tmp/gomap_nf_r0_refresh_flushdrain_Z5F5y8`
 - Oracle collection bundle:
-  - `/tmp/gomap_nf_r0_oracle_collections_rN21oI`
+  - `/tmp/gomap_nf_r0_refresh_oracle_collections_H1D2CW`
 - Native collection bundle:
   - `N/A before R0 native harness bring-up`
 
@@ -192,34 +192,34 @@ OUT=$(mktemp -d /tmp/gomap_nf_r0_oracle_collections_XXXXXX)
 
 | Test | Profile | Mode | Ops/s | Notes |
 |---|---|---|---:|---|
-| `write_seq` | `fast` | `settled` | `4,031,942` | from split write/read/scan bundle |
-| `write_rand` | `fast` | `settled` | `4,493,563` | from split write/read/scan bundle |
-| `batch_write` | `fast` | `settled` | `9,705,907` | front-end ingest metric |
-| `batch_random` | `fast` | `settled` | `6,077,775` | from split write/read/scan bundle |
-| `batch_delete` | `fast` | `settled` | `3,841,001` | from dedicated delete bundle |
-| `delete_rand` | `fast` | `settled` | `2,715,551` | from dedicated delete bundle |
-| `random_read` | `fast` | `settled` | `398,290` | read-hit enforced |
-| `random_read_parallel_acquire_snapshot` | `fast` | `settled` | `1,734,152` | read-hit enforced |
-| `full_scan` | `fast` | `settled` | `5,307,532` | from split write/read/scan bundle |
-| `prefix_scan` | `fast` | `settled` | `7,440,457` | from split write/read/scan bundle |
-| `write_seq` | `wal_on_fast` | `settled` | `2,138,133` | from split write/read/scan bundle |
-| `write_rand` | `wal_on_fast` | `settled` | `2,268,787` | from split write/read/scan bundle |
-| `batch_write` | `wal_on_fast` | `settled` | `4,429,032` | front-end ingest metric |
-| `batch_random` | `wal_on_fast` | `settled` | `3,565,677` | from split write/read/scan bundle |
-| `batch_delete` | `wal_on_fast` | `settled` | `2,155,866` | from dedicated delete bundle |
-| `delete_rand` | `wal_on_fast` | `settled` | `1,473,112` | from dedicated delete bundle |
-| `random_read` | `wal_on_fast` | `settled` | `393,391` | read-hit enforced |
-| `random_read_parallel_acquire_snapshot` | `wal_on_fast` | `settled` | `1,683,064` | read-hit enforced |
-| `full_scan` | `wal_on_fast` | `settled` | `4,603,395` | from split write/read/scan bundle |
-| `prefix_scan` | `wal_on_fast` | `settled` | `7,355,856` | from split write/read/scan bundle |
+| `write_seq` | `fast` | `settled` | `3,003,976` | from split write/read/scan bundle |
+| `write_rand` | `fast` | `settled` | `2,188,608` | from split write/read/scan bundle |
+| `batch_write` | `fast` | `settled` | `3,692,736` | front-end ingest metric |
+| `batch_random` | `fast` | `settled` | `3,483,067` | from split write/read/scan bundle |
+| `batch_delete` | `fast` | `settled` | `4,033,929` | from dedicated delete bundle |
+| `delete_rand` | `fast` | `settled` | `2,083,692` | from dedicated delete bundle |
+| `random_read` | `fast` | `settled` | `194,849` | read-hit enforced |
+| `random_read_parallel_acquire_snapshot` | `fast` | `settled` | `1,199,506` | read-hit enforced |
+| `full_scan` | `fast` | `settled` | `4,368,804` | from split write/read/scan bundle |
+| `prefix_scan` | `fast` | `settled` | `4,962,865` | from split write/read/scan bundle |
+| `write_seq` | `wal_on_fast` | `settled` | `2,046,008` | from split write/read/scan bundle |
+| `write_rand` | `wal_on_fast` | `settled` | `1,641,822` | from split write/read/scan bundle |
+| `batch_write` | `wal_on_fast` | `settled` | `4,736,166` | front-end ingest metric |
+| `batch_random` | `wal_on_fast` | `settled` | `2,400,011` | from split write/read/scan bundle |
+| `batch_delete` | `wal_on_fast` | `settled` | `2,912,325` | from dedicated delete bundle |
+| `delete_rand` | `wal_on_fast` | `settled` | `1,776,003` | from dedicated delete bundle |
+| `random_read` | `wal_on_fast` | `settled` | `191,534` | read-hit enforced |
+| `random_read_parallel_acquire_snapshot` | `wal_on_fast` | `settled` | `1,156,664` | read-hit enforced |
+| `full_scan` | `wal_on_fast` | `settled` | `4,019,991` | from split write/read/scan bundle |
+| `prefix_scan` | `wal_on_fast` | `settled` | `4,998,973` | from split write/read/scan bundle |
 
 ## Reference Metrics Table: Deferred Work
 
 | Measurement | Profile | Baseline | Notes |
 |---|---|---:|---|
-| `flushdrain random_write` | `wal_on_fast` | `1,587,822` | suite output |
-| `flushdrain random_read` | `wal_on_fast` | `349,762` | suite output |
-| `flushdrain checkpoint before random_read` | `wal_on_fast` | `604.06ms` | checkpoint boundary cost |
+| `flushdrain random_write` | `wal_on_fast` | `1,408,119` | suite output |
+| `flushdrain random_read` | `wal_on_fast` | `300,840` | suite output |
+| `flushdrain checkpoint before random_read` | `wal_on_fast` | `503.68ms` | checkpoint boundary cost |
 | `checkpoint-focused batch ingest` | `wal_on_fast` | `N/A before R0` | native collections harness absent on prep branch |
 
 ## Reference Architectural Counters
@@ -237,9 +237,9 @@ OUT=$(mktemp -d /tmp/gomap_nf_r0_oracle_collections_XXXXXX)
 
 | Benchmark | Path | Mode | Batch size | ns/op | docs/s | B/op | allocs/op | Notes |
 |---|---|---|---:|---:|---:|---:|---:|---|
-| `BenchmarkCollectionInsertBatchProvidedID` | `oracle` | `mixed` | `256` | `341810` | `~748,954` | `160313` | `1057` | oracle branch focused bundle |
-| `BenchmarkCollectionInsertBatchWithSecondaryIndexes` | `oracle` | `mixed` | `256` | `2255457` | `~113,499` | `1327973` | `12776` | oracle branch focused bundle |
-| `BenchmarkCollectionInsertBatchCheckpointWithSecondaryIndexes` | `oracle` | `settled/checkpoint` | `256` | `270517600` | `~946` | `3514877` | `13740` | oracle branch focused bundle |
+| `BenchmarkCollectionInsertBatchProvidedID` | `oracle` | `mixed` | `256` | `334101` | `~766,235` | `160323` | `1060` | oracle branch focused bundle |
+| `BenchmarkCollectionInsertBatchWithSecondaryIndexes` | `oracle` | `mixed` | `256` | `2074550` | `~123,400` | `1278306` | `12712` | oracle branch focused bundle |
+| `BenchmarkCollectionInsertBatchCheckpointWithSecondaryIndexes` | `oracle` | `settled/checkpoint` | `256` | `98776827` | `~2,592` | `2603097` | `14263` | oracle branch focused bundle |
 | `BenchmarkCollectionInsertBatchProvidedID` | `native` | `mixed` | `256` | `N/A before R0` | `N/A before R0` | `N/A before R0` | `N/A before R0` | native harness absent on prep branch |
 | `BenchmarkCollectionInsertBatchWithSecondaryIndexes` | `native` | `mixed` | `256` | `N/A before R0` | `N/A before R0` | `N/A before R0` | `N/A before R0` | native harness absent on prep branch |
 | `BenchmarkCollectionInsertBatchCheckpointWithSecondaryIndexes` | `native` | `settled/checkpoint` | `256` | `N/A before R0` | `N/A before R0` | `N/A before R0` | `N/A before R0` | native harness absent on prep branch |
@@ -266,11 +266,11 @@ OUT=$(mktemp -d /tmp/gomap_nf_r0_oracle_collections_XXXXXX)
 - Oracle branch name:
   - `pr/688-phase52-root-domain-lifecycle`
 - Native execution branch:
-  - `pr/native-fastpath-prep-main-sync`
+  - `pr/native-fastpath-prep-main-sync-v2`
 - Proof baseline was captured from the oracle branch:
-  - focused oracle collection bundle at `/tmp/gomap_nf_r0_oracle_collections_rN21oI`
+  - focused oracle collection bundle at `/tmp/gomap_nf_r0_refresh_oracle_collections_H1D2CW`
 - Proof main-based baseline was captured from current execution base:
-  - raw TreeDB anchor bundles under `/tmp/gomap_nf_r0_*`
+  - raw TreeDB anchor bundles under `/tmp/gomap_nf_r0_refresh_*`
 
 ## Go / No-Go
 

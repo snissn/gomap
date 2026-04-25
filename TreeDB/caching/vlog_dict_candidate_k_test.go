@@ -13,7 +13,7 @@ func TestValueLogDictCandidateK_DefaultForcePointers(t *testing.T) {
 		valueLogDictMaxK:      valuelog.MaxFrameK,
 	}
 	got := db.valueLogDictCandidateK()
-	want := []int{8, 16, 32}
+	want := []int{8, 16, 32, 64, 96, 128}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("valueLogDictCandidateK force pointers: got=%v want=%v", got, want)
 	}
@@ -47,7 +47,7 @@ func TestValueLogDictCandidateK_ForcePointersRemapsImplicitDefaultCandidateSet(t
 		},
 	}
 	got := db.valueLogDictCandidateK()
-	want := []int{8, 16, 32}
+	want := []int{8, 16, 32, 64, 96, 128}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("valueLogDictCandidateK remap default: got=%v want=%v", got, want)
 	}
@@ -65,5 +65,27 @@ func TestValueLogDictCandidateK_ForcePointersKeepsExplicitDefaultCandidateSet(t 
 	want := []int{1, 2, 4, 8, 16, 32}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("valueLogDictCandidateK explicit default: got=%v want=%v", got, want)
+	}
+}
+
+func TestValueLogDictTrainerIOCost_SizePolicyDisablesIOCostModel(t *testing.T) {
+	db := &DB{
+		valueLogAutoPolicy:      uint8(vlogAutoSize),
+		valueLogAutotuneOptions: valuelog.AutotuneOptions{Mode: valuelog.AutotuneMedium},
+	}
+	db.valueLogAutotuneMetrics.seed(0.25, 7.5)
+	if got := db.valueLogDictTrainerIOCost(); got != 0 {
+		t.Fatalf("valueLogDictTrainerIOCost size policy: got=%f want=0", got)
+	}
+}
+
+func TestValueLogDictTrainerIOCost_ThroughputPolicyUsesIOCostModel(t *testing.T) {
+	db := &DB{
+		valueLogAutoPolicy:      uint8(vlogAutoThroughput),
+		valueLogAutotuneOptions: valuelog.AutotuneOptions{Mode: valuelog.AutotuneMedium},
+	}
+	db.valueLogAutotuneMetrics.seed(0.25, 7.5)
+	if got := db.valueLogDictTrainerIOCost(); got <= 0 {
+		t.Fatalf("valueLogDictTrainerIOCost throughput policy: got=%f want>0", got)
 	}
 }

@@ -228,6 +228,28 @@ func TestClosedDB_DeleteSync(t *testing.T) {
 	})
 }
 
+func TestClosedDB_Update(t *testing.T) {
+	runClosedDBMethod(t, "Update", func(d *DB) {
+		err := d.Update([]byte("k"), func([]byte) (UpdateResult, error) {
+			return SetUpdate([]byte("v")), nil
+		})
+		if !errors.Is(err, ErrClosed) {
+			t.Fatalf("Update err=%v want %v", err, ErrClosed)
+		}
+	})
+}
+
+func TestClosedDB_UpdateSync(t *testing.T) {
+	runClosedDBMethod(t, "UpdateSync", func(d *DB) {
+		err := d.UpdateSync([]byte("k"), func([]byte) (UpdateResult, error) {
+			return SetUpdate([]byte("v")), nil
+		})
+		if !errors.Is(err, ErrClosed) {
+			t.Fatalf("UpdateSync err=%v want %v", err, ErrClosed)
+		}
+	})
+}
+
 func TestClosedDB_Iterator(t *testing.T) {
 	runClosedDBMethod(t, "Iterator", func(d *DB) {
 		it, err := d.Iterator(nil, nil)
@@ -272,6 +294,39 @@ func TestClosedDB_ReverseIteratorWithOptions(t *testing.T) {
 		}
 		if it != nil {
 			t.Fatalf("ReverseIteratorWithOptions() returned iterator on closed DB")
+		}
+	})
+}
+
+func TestClosedDB_PublishSystemRootIterator(t *testing.T) {
+	runClosedDBMethod(t, "PublishSystemRootIterator", func(d *DB) {
+		table := mustFrozenSystemMemtable(t, "sys/k", "v")
+		iter := table.NewIterator(nil, nil)
+		defer iter.Close()
+		_, err := d.PublishSystemRootIterator(iter)
+		if !errors.Is(err, ErrClosed) {
+			t.Fatalf("PublishSystemRootIterator err=%v want %v", err, ErrClosed)
+		}
+	})
+}
+
+func TestClosedDB_PublishOrderedRootIterator(t *testing.T) {
+	runClosedDBMethod(t, "PublishOrderedRootIterator", func(d *DB) {
+		table := mustFrozenSystemMemtable(t, "root/k", "v")
+		iter := table.NewIterator(nil, nil)
+		defer iter.Close()
+		_, err := d.PublishOrderedRootIterator(0, iter)
+		if !errors.Is(err, ErrClosed) {
+			t.Fatalf("PublishOrderedRootIterator err=%v want %v", err, ErrClosed)
+		}
+	})
+}
+
+func TestClosedDB_PublishOrderedRootGroup(t *testing.T) {
+	runClosedDBMethod(t, "PublishOrderedRootGroup", func(d *DB) {
+		_, _, err := d.PublishOrderedRootGroup(nil, nil)
+		if !errors.Is(err, ErrClosed) {
+			t.Fatalf("PublishOrderedRootGroup err=%v want %v", err, ErrClosed)
 		}
 	})
 }

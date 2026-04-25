@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sort"
 	"sync"
+	"sync/atomic"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
@@ -24,6 +25,9 @@ import (
 //
 // Mutable memtables are intentionally ignored so that writes after AcquireSnapshot
 // are not visible through the snapshot.
+//
+// Snapshot pointers are single-use: after Close returns, callers must discard the
+// pointer and treat further use as invalid.
 type Snapshot struct {
 	db              *DB
 	view            *memtableView
@@ -34,8 +38,34 @@ type Snapshot struct {
 	rootIterator    rootDomainSnapshot
 	publishedRoots  *publishedRootSet
 
-	closeOnce sync.Once
-	closeErr  error
+	closed atomic.Bool
+}
+
+type ownedReadScratch struct {
+	buf []byte
+}
+
+var ownedReadScratchPool = sync.Pool{
+	New: func() any {
+		return &ownedReadScratch{buf: make([]byte, 0, page.PageSize)}
+	},
+}
+
+func getOwnedReadScratch() *ownedReadScratch {
+	scratch, _ := ownedReadScratchPool.Get().(*ownedReadScratch)
+	if scratch == nil || cap(scratch.buf) != page.PageSize {
+		return &ownedReadScratch{buf: make([]byte, 0, page.PageSize)}
+	}
+	scratch.buf = scratch.buf[:0]
+	return scratch
+}
+
+func putOwnedReadScratch(scratch *ownedReadScratch) {
+	if scratch == nil || cap(scratch.buf) != page.PageSize {
+		return
+	}
+	scratch.buf = scratch.buf[:0]
+	ownedReadScratchPool.Put(scratch)
 }
 
 type backendSnapshotProvider interface {
@@ -122,29 +152,6 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 	}
 	if snap.publishedRoots == nil {
 		db.rootPublishStats.backendFallbacks.Add(1)
-		rootRef := publishedRootRef{lookup: backendSnapshotLookup{snapshot: backendSnap}}
-		systemRef := publishedRootRef{}
-		if state := backendSnap.State(); state != nil {
-			rootRef.rootID = state.RootPageID
-			systemRef.rootID = state.SystemRootPageID
-			if state.SystemRootPageID != 0 {
-				systemRef.lookup = backendSnapshotLookup{snapshot: backendSnap, rootID: state.SystemRootPageID}
-			}
-		}
-		pointCount := len(db.mutableShards)
-		if pointCount == 0 && view != nil {
-			pointCount = len(view.rootSnapshotShards)
-		}
-		pointShards := make([]publishedRootRef, pointCount)
-		for i := range pointShards {
-			pointShards[i] = rootRef
-		}
-		snap.publishedRoots = &publishedRootSet{
-			generation:  snap.rootVersion,
-			pointShards: pointShards,
-			system:      systemRef,
-			iterator:    rootRef,
-		}
 	}
 	return snap
 }
@@ -167,32 +174,77 @@ func (s *Snapshot) Close() error {
 	if s == nil {
 		return nil
 	}
-	s.closeOnce.Do(func() {
-		var errs []error
-		if s.backend != nil {
-			errs = append(errs, s.backend.Close())
-			s.backend = nil
-		}
-		if s.view != nil && s.db != nil {
-			s.db.releaseMemtableView(s.view)
-			s.view = nil
-		}
-		s.rootPointShards = nil
-		s.rootSystem = rootDomainSnapshot{}
-		s.rootIterator = rootDomainSnapshot{}
-		s.publishedRoots = nil
-		s.rootVersion = 0
-		s.closeErr = errors.Join(errs...)
-	})
-	return s.closeErr
+	if !s.closed.CompareAndSwap(false, true) {
+		return nil
+	}
+
+	var err error
+	if s.backend != nil {
+		err = s.backend.Close()
+		s.backend = nil
+	}
+	if s.view != nil && s.db != nil {
+		s.db.releaseMemtableView(s.view)
+		s.view = nil
+	}
+	s.rootPointShards = nil
+	s.rootSystem = rootDomainSnapshot{}
+	s.rootIterator = rootDomainSnapshot{}
+	s.publishedRoots = nil
+	s.rootVersion = 0
+	s.db = nil
+	return err
 }
 
 func (s *Snapshot) lookupQueueEntry(key []byte) (val []byte, ptr page.ValuePtr, flags byte, found bool) {
+	val, ptr, flags, found, _ = s.lookupRootDomainEntry(key)
+	return val, ptr, flags, found
+}
+
+func (s *Snapshot) lookupRootDomainEntry(key []byte) (val []byte, ptr page.ValuePtr, flags byte, found bool, source rootDomainEntrySource) {
 	if s == nil {
-		return nil, page.ValuePtr{}, 0, false
+		return nil, page.ValuePtr{}, 0, false, rootDomainEntrySourceNone
 	}
 	snap := rootDomainSnapshotFromCachedSnapshot(s, key)
+	return snap.getEntryWithSource(key)
+}
+
+func (s *Snapshot) lookupCachedRootDomainEntry(key []byte) (val []byte, ptr page.ValuePtr, flags byte, found bool) {
+	if s == nil || len(s.rootPointShards) == 0 {
+		return nil, page.ValuePtr{}, 0, false
+	}
+	shardIdx := 0
+	if s.db != nil {
+		shardIdx = s.db.shardIndex(key)
+	}
+	if shardIdx < 0 || shardIdx >= len(s.rootPointShards) {
+		return nil, page.ValuePtr{}, 0, false
+	}
+	snap := s.rootPointShards[shardIdx]
+	snap.published = nil
+	snap.publishedRootID = 0
 	return snap.getEntry(key)
+}
+
+func recordSnapshotRootDomainRead(source rootDomainEntrySource, pointer bool, bytes int) {
+	if source == rootDomainEntrySourcePublished {
+		snapshotReadBackendHitsTotal.Add(1)
+		if bytes > 0 {
+			snapshotReadBackendBytesTotal.Add(uint64(bytes))
+		}
+		return
+	}
+	if pointer {
+		snapshotReadQueuePointerHitsTotal.Add(1)
+		if bytes > 0 {
+			snapshotReadQueuePointerBytesTotal.Add(uint64(bytes))
+		}
+		return
+	}
+	snapshotReadQueueInlineHitsTotal.Add(1)
+	if bytes > 0 {
+		snapshotReadQueueInlineBytesTotal.Add(uint64(bytes))
+	}
 }
 
 func (s *Snapshot) iteratorSources(start, end []byte, reverse bool) ([]merging.IteratorSource, error) {
@@ -271,7 +323,7 @@ func (s *Snapshot) ReverseIterator(start, end []byte) (merging.Iterator, error) 
 }
 
 func (s *Snapshot) GetAppend(key, dst []byte) ([]byte, error) {
-	val, ptr, flags, found := s.lookupQueueEntry(key)
+	val, ptr, flags, found, source := s.lookupRootDomainEntry(key)
 	if found {
 		if flags&node.FlagTombstone != 0 {
 			return dst, tree.ErrKeyNotFound
@@ -280,29 +332,91 @@ func (s *Snapshot) GetAppend(key, dst []byte) ([]byte, error) {
 			if s.db == nil {
 				return dst, errors.New("caching snapshot: value-log reader unavailable")
 			}
+			oldLen := len(dst)
 			out, err := s.db.readValueLogAppend(key, ptr, dst)
 			if err != nil {
 				return dst, err
 			}
+			recordSnapshotRootDomainRead(source, true, len(out)-oldLen)
 			return out, nil
 		}
 		if val == nil {
+			recordSnapshotRootDomainRead(source, false, 0)
 			return dst, nil
 		}
+		recordSnapshotRootDomainRead(source, false, len(val))
 		return append(dst, val...), nil
 	}
 
 	if s == nil || s.backend == nil || s.db == nil {
 		return dst, tree.ErrKeyNotFound
 	}
-	if err := s.db.flushDeferredValueLogForBackendRead(); err != nil {
+	if err := s.db.flushValueLogForBackendRead(); err != nil {
 		return dst, err
 	}
-	return s.backend.GetAppend(key, dst)
+	oldLen := len(dst)
+	out, err := s.backend.GetAppend(key, dst)
+	if err != nil {
+		return dst, err
+	}
+	snapshotReadBackendHitsTotal.Add(1)
+	if n := len(out) - oldLen; n > 0 {
+		snapshotReadBackendBytesTotal.Add(uint64(n))
+	}
+	return out, nil
 }
 
 func (s *Snapshot) Get(key []byte) ([]byte, error) {
-	return s.GetAppend(key, nil)
+	val, ptr, flags, found, source := s.lookupRootDomainEntry(key)
+	if found {
+		if flags&node.FlagTombstone != 0 {
+			return nil, tree.ErrKeyNotFound
+		}
+		if flags&node.FlagPointer != 0 {
+			if s.db == nil {
+				return nil, errors.New("caching snapshot: value-log reader unavailable")
+			}
+			scratch := getOwnedReadScratch()
+			defer putOwnedReadScratch(scratch)
+
+			out, err := s.db.readValueLogAppend(key, ptr, scratch.buf[:0])
+			if err != nil {
+				return nil, err
+			}
+			recordSnapshotRootDomainRead(source, true, len(out))
+			if len(out) == 0 {
+				return nil, nil
+			}
+			maybeRecordSnapshotGetCallerSample(len(out))
+			return ownedReadResult(out, scratch), nil
+		}
+		recordSnapshotRootDomainRead(source, false, len(val))
+		if len(val) == 0 {
+			return nil, nil
+		}
+		maybeRecordSnapshotGetCallerSample(len(val))
+		owned := make([]byte, len(val))
+		copy(owned, val)
+		return owned, nil
+	}
+
+	if s == nil || s.backend == nil || s.db == nil {
+		return nil, tree.ErrKeyNotFound
+	}
+	if err := s.db.flushValueLogForBackendRead(); err != nil {
+		return nil, err
+	}
+	out, err := s.backend.Get(key)
+	if err != nil {
+		return nil, err
+	}
+	snapshotReadBackendHitsTotal.Add(1)
+	if len(out) == 0 {
+		return nil, nil
+	}
+	snapshotReadBackendBytesTotal.Add(uint64(len(out)))
+	maybeRecordSnapshotGetCallerSample(len(out))
+	return out, nil
 }
 
 func (s *Snapshot) GetUnsafe(key []byte) ([]byte, error) {
@@ -326,14 +440,18 @@ func (s *Snapshot) GetUnsafe(key []byte) ([]byte, error) {
 	if s == nil || s.backend == nil || s.db == nil {
 		return nil, tree.ErrKeyNotFound
 	}
-	if err := s.db.flushDeferredValueLogForBackendRead(); err != nil {
+	if err := s.db.flushValueLogForBackendRead(); err != nil {
 		return nil, err
 	}
 	return s.backend.GetUnsafe(key)
 }
 
 func (s *Snapshot) Has(key []byte) (bool, error) {
-	_, _, flags, found := s.lookupQueueEntry(key)
+	_, _, flags, found := s.lookupCachedRootDomainEntry(key)
+	if found {
+		return flags&node.FlagTombstone == 0, nil
+	}
+	_, _, flags, found = s.lookupQueueEntry(key)
 	if found {
 		return flags&node.FlagTombstone == 0, nil
 	}
@@ -503,7 +621,7 @@ func (s *Snapshot) GetEntry(key []byte) (node.LeafEntry, error) {
 	if s == nil || s.backend == nil || s.db == nil {
 		return node.LeafEntry{}, tree.ErrKeyNotFound
 	}
-	if err := s.db.flushDeferredValueLogForBackendRead(); err != nil {
+	if err := s.db.flushValueLogForBackendRead(); err != nil {
 		return node.LeafEntry{}, err
 	}
 	return s.backend.GetEntry(key)
@@ -524,7 +642,7 @@ func (s *Snapshot) GetEntryExact(key []byte) (node.LeafEntry, error) {
 	if s == nil || s.backend == nil || s.db == nil {
 		return node.LeafEntry{}, tree.ErrKeyNotFound
 	}
-	if err := s.db.flushDeferredValueLogForBackendRead(); err != nil {
+	if err := s.db.flushValueLogForBackendRead(); err != nil {
 		return node.LeafEntry{}, err
 	}
 	return s.backend.GetEntryExact(key)

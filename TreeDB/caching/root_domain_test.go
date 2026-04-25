@@ -530,9 +530,9 @@ func TestRotateMutableShardsLocked_UpdatesRootDomainStates(t *testing.T) {
 		mutableShards: []memShard{
 			{mem: mutable, rng: keyRange{valid: true, min: []byte("k"), max: []byte("k")}},
 		},
-		memtableMode:    memtable.ModeAppendOnly,
 		rootPointStates: []rootDomainState{{mutable: mutable}},
 	}
+	db.storeMemtableMode(memtable.ModeAppendOnly)
 	db.bpCond = sync.NewCond(&db.bpMu)
 
 	db.mu.Lock()
@@ -559,6 +559,37 @@ func TestRotateMutableShardsLocked_UpdatesRootDomainStates(t *testing.T) {
 		t.Fatalf("iterator immutables=%d want 1", got)
 	}
 	assertRootDomainVisibleValue(t, db.rootIteratorState.snapshot(), "k", "v")
+}
+
+func TestPromoteRootDomainMutableLocked_SkipsEmptySealedMemtable(t *testing.T) {
+	t.Parallel()
+
+	mutable, err := memtable.NewWithCapacityMode(0, memtable.ModeAppendOnly)
+	if err != nil {
+		t.Fatalf("new mutable: %v", err)
+	}
+	next, err := memtable.NewWithCapacityMode(0, memtable.ModeAppendOnly)
+	if err != nil {
+		t.Fatalf("new next mutable: %v", err)
+	}
+
+	db := &DB{
+		mutableShards: []memShard{{mem: mutable}},
+		rootPointStates: []rootDomainState{
+			{mutable: mutable},
+		},
+	}
+	db.promoteRootDomainMutableLocked(0, mutable, next)
+
+	if got := len(db.rootPointStates[0].immutables); got != 0 {
+		t.Fatalf("root point immutables=%d want 0", got)
+	}
+	if got := len(db.rootIteratorState.immutables); got != 0 {
+		t.Fatalf("iterator immutables=%d want 0", got)
+	}
+	if db.rootPointStates[0].mutable != next {
+		t.Fatal("expected replacement mutable to be installed")
+	}
 }
 
 func TestRemoveQueuedUnitsLocked_TrimsRootDomainStates(t *testing.T) {

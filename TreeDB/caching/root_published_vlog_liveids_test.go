@@ -177,7 +177,7 @@ func TestPruneRetainedValueLogs_PublishedNonSystemRootsKeepClosedSegment(t *test
 		t.Fatalf("publishInstalledRootSet: %v", err)
 	}
 
-	db.pruneRetainedValueLogs()
+	db.pruneRetainedValueLogs(false)
 	if !db.valueLogRetained(path) {
 		t.Fatalf("expected retained path %q to remain pinned by published non-system root", path)
 	}

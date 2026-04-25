@@ -1,6 +1,7 @@
 package template
 
 import (
+	"bytes"
 	"context"
 	"sync/atomic"
 	"testing"
@@ -184,5 +185,45 @@ func TestEngineStartupColdGateLimitsCandidateLookups_DefaultConfig(t *testing.T)
 	// startup cold gate (probes only).
 	if got := store.getCandidates.Load(); got > 80 {
 		t.Fatalf("candidate lookups too high: got=%d", got)
+	}
+}
+
+func TestEncodeMaskTemplateSparse_DoesNotMutateInput(t *testing.T) {
+	base := []byte("prefix-0000-suffix")
+	varPositions := []uint16{7, 8, 9, 10}
+	mask := buildMaskFromPositions(varPositions, len(base))
+	def := TemplateDef{
+		Kind:         TemplateMask,
+		Base:         append([]byte(nil), base...),
+		Mask:         mask,
+		VarPositions: append([]uint16(nil), varPositions...),
+	}
+	value := []byte("prefix-9876-suffix")
+	valueBefore := append([]byte(nil), value...)
+
+	templateID := uint64(42)
+	payload := encodeMaskTemplate(value, def, templateID, true)
+	if len(payload) == 0 {
+		t.Fatalf("expected sparse mask payload")
+	}
+	if !bytes.Equal(value, valueBefore) {
+		t.Fatalf("encodeMaskTemplate mutated input value")
+	}
+
+	defBytes, err := EncodeTemplateDef(def, Config{})
+	if err != nil {
+		t.Fatalf("encode template def: %v", err)
+	}
+	decoded, err := DecodePayload(payload, func(id uint64) ([]byte, error) {
+		if id != templateID {
+			return nil, ErrMissingTemplate
+		}
+		return defBytes, nil
+	}, DecodeOptions{MaxDecodedBytes: 1 << 20, MaxGaps: 64})
+	if err != nil {
+		t.Fatalf("decode payload: %v", err)
+	}
+	if !bytes.Equal(decoded, valueBefore) {
+		t.Fatalf("decoded mismatch: got=%q want=%q", decoded, valueBefore)
 	}
 }

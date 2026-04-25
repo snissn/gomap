@@ -3,6 +3,7 @@ package caching
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"sync/atomic"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -111,6 +112,14 @@ type backendOrderedRootPublisher interface {
 type backendGroupedOrderedRootPublisher interface {
 	PublishOrderedRootGroup(systemIter iterator.UnsafeIterator, ordered []backenddb.OrderedRootPublishInput) (uint64, []uint64, error)
 }
+
+type rootDomainEntrySource uint8
+
+const (
+	rootDomainEntrySourceNone rootDomainEntrySource = iota
+	rootDomainEntrySourceCached
+	rootDomainEntrySourcePublished
+)
 
 func (db *DB) ensureRootDomainStatesLocked() {
 	if db == nil {
@@ -425,6 +434,10 @@ func (db *DB) publishInstalledRootSetLocked(set *publishedRootSet) error {
 		db.rootPublishStats.nativeSystemPublishes.Add(1)
 		group.systemRootPageID = newSystemRootID
 		cloned.system.rootID = newSystemRootID
+		group.system = rootDomainSnapshot{
+			publishedRootID: newSystemRootID,
+			published:       cloned.system.lookup,
+		}
 	}
 	if publisher, ok := db.backend.(backendOrderedRootPublisher); ok && !rootDomainSnapshotNeedsPublish(group.system) {
 		if err := publishGroupedNonSystemRootsLocked(publisher, group, cloned); err != nil {
@@ -500,6 +513,10 @@ func (db *DB) publishInstalledRootSet(set *publishedRootSet) error {
 		db.mu.Unlock()
 		group.systemRootPageID = newSystemRootID
 		cloned.system.rootID = newSystemRootID
+		group.system = rootDomainSnapshot{
+			publishedRootID: newSystemRootID,
+			published:       cloned.system.lookup,
+		}
 	}
 	if publisher, ok := db.backend.(backendOrderedRootPublisher); ok && !rootDomainSnapshotNeedsPublish(group.system) {
 		if err := publishGroupedNonSystemRootsUnlocked(publisher, group, cloned); err != nil {
@@ -560,6 +577,18 @@ func publishGroupedMixedRoots(publisher backendGroupedOrderedRootPublisher, grou
 		return err
 	}
 	ordered := make([]backenddb.OrderedRootPublishInput, 0, len(group.pointShards)+1)
+	backendOwnsIterators := false
+	defer func() {
+		if backendOwnsIterators {
+			return
+		}
+		_ = systemIter.Close()
+		for idx := range ordered {
+			if ordered[idx].Iter != nil {
+				_ = ordered[idx].Iter.Close()
+			}
+		}
+	}()
 	pointIdxs := make([]int, 0, len(group.pointShards))
 	includeIterator := false
 	for i := range group.pointShards {
@@ -587,16 +616,17 @@ func publishGroupedMixedRoots(publisher backendGroupedOrderedRootPublisher, grou
 		})
 		includeIterator = true
 	}
+	backendOwnsIterators = true
 	newSystemRootID, rootIDs, err := publisher.PublishOrderedRootGroup(systemIter, ordered)
 	if err != nil {
 		return err
 	}
+	if len(rootIDs) != len(ordered) {
+		return fmt.Errorf("grouped ordered root publish returned %d root IDs for %d ordered roots", len(rootIDs), len(ordered))
+	}
 	cloned.system.rootID = newSystemRootID
 	cursor := 0
 	for _, pointIdx := range pointIdxs {
-		if cursor >= len(rootIDs) {
-			break
-		}
 		if pointIdx < len(cloned.pointShards) {
 			cloned.pointShards[pointIdx].rootID = rootIDs[cursor]
 		}
@@ -689,7 +719,7 @@ func (db *DB) promoteRootDomainMutableLocked(shardIdx int, sealed, next memtable
 	if shardIdx < 0 || shardIdx >= len(db.rootPointStates) {
 		return
 	}
-	if sealed != nil {
+	if sealed != nil && sealed.Len() != 0 {
 		db.rootPointStates[shardIdx].immutables = append(db.rootPointStates[shardIdx].immutables, sealed)
 		db.rootIteratorState.immutables = append(db.rootIteratorState.immutables, sealed)
 	}
@@ -847,6 +877,15 @@ func rootDomainSystemSnapshotFromCachedSnapshot(s *Snapshot) rootDomainSnapshot 
 		}
 		if s.publishedRoots.system.rootID != 0 {
 			snap.publishedRootID = s.publishedRoots.system.rootID
+		}
+		return snap
+	}
+	if s.backend != nil {
+		if state := s.backend.State(); state != nil {
+			snap.publishedRootID = state.SystemRootPageID
+			if state.SystemRootPageID != 0 {
+				snap.published = backendSnapshotLookup{snapshot: s.backend, rootID: state.SystemRootPageID}
+			}
 		}
 	}
 	return snap
@@ -1086,20 +1125,28 @@ func (s *rootDomainState) sealMutable(next memtable.Table) {
 }
 
 func (s rootDomainSnapshot) getEntry(key []byte) (val []byte, ptr page.ValuePtr, flags byte, found bool) {
+	val, ptr, flags, found, _ = s.getEntryWithSource(key)
+	return val, ptr, flags, found
+}
+
+func (s rootDomainSnapshot) getEntryWithSource(key []byte) (val []byte, ptr page.ValuePtr, flags byte, found bool, source rootDomainEntrySource) {
 	if s.mutable != nil {
 		if val, ptr, flags, found = s.mutable.GetEntry(key); found {
-			return val, ptr, flags, true
+			return val, ptr, flags, true, rootDomainEntrySourceCached
 		}
 	}
 	for idx := len(s.immutables) - 1; idx >= 0; idx-- {
 		if val, ptr, flags, found = s.immutables[idx].GetEntry(key); found {
-			return val, ptr, flags, true
+			return val, ptr, flags, true, rootDomainEntrySourceCached
 		}
 	}
 	if s.published != nil {
-		return s.published.GetEntry(key)
+		val, ptr, flags, found = s.published.GetEntry(key)
+		if found {
+			return val, ptr, flags, true, rootDomainEntrySourcePublished
+		}
 	}
-	return nil, page.ValuePtr{}, 0, false
+	return nil, page.ValuePtr{}, 0, false, rootDomainEntrySourceNone
 }
 
 func (s rootDomainSnapshot) visibleValue(key []byte) ([]byte, bool) {
