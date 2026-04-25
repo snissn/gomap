@@ -27367,6 +27367,7 @@ type Batch struct {
 	lastCopiedValue    []byte
 	arenaInFlightBytes int64
 	ptrValueIdxs       []int
+	ridBuf             []uint64
 	walBuf             []logRecord
 	shardIdxs          []int
 	eligibleIdxs       []int
@@ -27857,6 +27858,9 @@ func (b *Batch) Reset() {
 		b.copyArenaCap = b.db.batchCopyArenaInitCap(0)
 	}
 	b.size = 0
+	if b.ridBuf != nil {
+		b.ridBuf = b.ridBuf[:0]
+	}
 	b.walBuf = b.walBuf[:0]
 	b.streamEligible = true
 	b.streamTried = false
@@ -29233,8 +29237,14 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 		if durability == journalDurabilitySync {
 			defer b.db.releaseLaneSync(lane)
 		}
-		if !b.db.disableJournal {
-			rids = make([]uint64, len(b.entries))
+		if !b.db.disableJournal && allowPointers {
+			if cap(b.ridBuf) < len(b.entries) {
+				b.ridBuf = make([]uint64, len(b.entries))
+			} else {
+				b.ridBuf = b.ridBuf[:len(b.entries)]
+				clear(b.ridBuf)
+			}
+			rids = b.ridBuf
 		}
 	}
 
@@ -30343,6 +30353,7 @@ func (b *Batch) Close() error {
 	b.recycleCopyArenaChunks()
 	b.recyclePtrCopyArenaChunks()
 	b.entries = nil
+	b.ridBuf = nil
 	b.walBuf = nil
 	b.shardIdxs = nil
 	b.eligibleIdxs = nil
