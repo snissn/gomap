@@ -1,9 +1,12 @@
 package memtable
 
 import (
+	"bytes"
 	"fmt"
 	"testing"
 	"time"
+
+	batchpkg "github.com/snissn/gomap/TreeDB/batch"
 )
 
 func TestMemtableCRUD(t *testing.T) {
@@ -86,5 +89,38 @@ func TestMemtableIteratorBlocksWritesUntilClose(t *testing.T) {
 	case <-done:
 	case <-time.After(2 * time.Second):
 		t.Fatalf("writer did not proceed after iterator closed")
+	}
+}
+
+func TestMemtableApplyStealSortedBatchIndicesTrusted(t *testing.T) {
+	m := New()
+	entries := []batchpkg.Entry{
+		{Type: batchpkg.OpPut, Key: []byte("ignore"), Value: []byte("skip")},
+		{Type: batchpkg.OpPut, Key: []byte("a"), Value: []byte("va")},
+		{Type: batchpkg.OpPut, Key: []byte("b"), Value: []byte("vb")},
+	}
+
+	var seen []string
+	m.ApplyStealSortedBatchIndicesTrusted(entries, []int{1, 2}, func(key []byte) {
+		seen = append(seen, string(key))
+	})
+
+	if _, _, ok := m.Get([]byte("ignore")); ok {
+		t.Fatal("ignored entry was applied")
+	}
+	for _, tc := range []struct {
+		key  string
+		want string
+	}{
+		{"a", "va"},
+		{"b", "vb"},
+	} {
+		got, deleted, ok := m.Get([]byte(tc.key))
+		if !ok || deleted || !bytes.Equal(got, []byte(tc.want)) {
+			t.Fatalf("Get(%q)=(%q,%v,%v), want (%q,false,true)", tc.key, got, deleted, ok, tc.want)
+		}
+	}
+	if want := []string{"a", "b"}; !equalStrings(seen, want) {
+		t.Fatalf("onKey saw %v want %v", seen, want)
 	}
 }

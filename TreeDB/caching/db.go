@@ -29906,27 +29906,25 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 				if applier, ok := shard.mem.(memtable.TrustedSortedBatchBorrowValueIndexApplier); ok {
 					borrowedValues = memtableBatchBorrowsValuesIdxs(shard.mem, true, storeInlinePtrValues, b.entries, idxs)
 					applier.ApplyBorrowValueSortedBatchIndicesTrusted(b.entries, idxs, storeInlinePtrValues, nil)
-				} else if applier, ok := shard.mem.(memtable.SortedBatchBorrowValueApplier); ok {
-					entries := materializeShardEntries(i, idxs)
-					borrowedValues = memtableBatchBorrowsValues(shard.mem, true, storeInlinePtrValues, entries)
-					applier.ApplyBorrowValueSortedBatch(entries, storeInlinePtrValues, nil)
 				} else {
-					entries := materializeShardEntries(i, idxs)
 					if applier, ok := shard.mem.(memtable.TrustedSortedBatchBorrowValueApplier); ok {
+						entries := materializeShardEntries(i, idxs)
 						borrowedValues = memtableBatchBorrowsValues(shard.mem, true, storeInlinePtrValues, entries)
 						applier.ApplyBorrowValueSortedBatchTrusted(entries, storeInlinePtrValues, nil)
 					} else if applier, ok := shard.mem.(memtable.SortedBatchBorrowValueApplier); ok {
+						entries := materializeShardEntries(i, idxs)
 						borrowedValues = memtableBatchBorrowsValues(shard.mem, true, storeInlinePtrValues, entries)
 						applier.ApplyBorrowValueSortedBatch(entries, storeInlinePtrValues, nil)
 					} else {
-						for _, op := range entries {
+						borrowedValues = memtableBatchBorrowsValuesIdxs(shard.mem, true, storeInlinePtrValues, b.entries, idxs)
+						for _, entryIdx := range idxs {
+							op := b.entries[entryIdx]
 							if op.Type == batch.OpDelete {
 								memtableBatchDelete(shard.mem, false, op.Key)
 							} else {
 								memtableBatchSet(shard.mem, false, true, storeInlinePtrValues, op)
 							}
 						}
-						borrowedValues = memtableBatchBorrowsValues(shard.mem, true, storeInlinePtrValues, entries)
 					}
 				}
 				if borrowedValues {
@@ -29965,8 +29963,8 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 					}
 				}
 			} else {
-				entries := materializeShardEntries(i, idxs)
-				for _, op := range entries {
+				for _, entryIdx := range idxs {
+					op := b.entries[entryIdx]
 					if op.Type == batch.OpDelete {
 						memtableBatchDelete(shard.mem, useSteal, op.Key)
 					} else {

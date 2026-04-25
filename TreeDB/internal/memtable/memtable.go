@@ -315,6 +315,56 @@ func (m *Memtable) ApplyStealSortedBatch(entries []batchpkg.Entry, onKey func(ke
 	}
 }
 
+func (m *Memtable) ApplyStealSortedBatchIndicesTrusted(entries []batchpkg.Entry, idxs []int, onKey func(key []byte)) {
+	if len(idxs) == 0 {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	first := entries[idxs[0]]
+	last := m.sl.LastKey()
+	if first.Key != nil && (last == nil || bytes.Compare(first.Key, last) > 0) {
+		for _, idx := range idxs {
+			op := entries[idx]
+			if op.Type == batchpkg.OpDelete {
+				m.sl.AppendDelete(op.Key)
+			} else if op.IsPtr {
+				if len(op.Value) > 0 {
+					buf := make([]byte, page.ValuePtrSize+len(op.Value))
+					op.ValuePtr.Encode(buf[:page.ValuePtrSize])
+					copy(buf[page.ValuePtrSize:], op.Value)
+					_ = m.sl.AppendWithCallback(op.Key, buf, node.FlagPointer, nil)
+				} else {
+					var buf [page.ValuePtrSize]byte
+					op.ValuePtr.Encode(buf[:])
+					_ = m.sl.AppendWithCallback(op.Key, buf[:], node.FlagPointer, nil)
+				}
+			} else {
+				m.sl.Append(op.Key, op.Value)
+			}
+			if onKey != nil {
+				onKey(op.Key)
+			}
+		}
+		return
+	}
+
+	for _, idx := range idxs {
+		op := entries[idx]
+		if op.Type == batchpkg.OpDelete {
+			m.sl.Delete(op.Key)
+		} else if op.IsPtr {
+			m.sl.PutEntry(op.Key, op.Value, op.ValuePtr, node.FlagPointer)
+		} else {
+			m.sl.Put(op.Key, op.Value)
+		}
+		if onKey != nil {
+			onKey(op.Key)
+		}
+	}
+}
+
 // SetSteal - SkipList copies data, so Steal is same as Set.
 func (m *Memtable) SetSteal(key, value []byte) {
 	m.Set(key, value)
