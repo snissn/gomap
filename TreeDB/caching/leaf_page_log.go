@@ -182,9 +182,12 @@ func (db *DB) drainPreparedLeafPageValueLogQueue(l *lane) {
 		}
 		queue := l.leafAppendQueue
 		batch = append(batch, queue[:n]...)
-		copy(queue, queue[n:])
-		clear(queue[len(queue)-n:])
-		l.leafAppendQueue = queue[:len(queue)-n]
+		clear(queue[:n])
+		if n == len(queue) {
+			l.leafAppendQueue = nil
+		} else {
+			l.leafAppendQueue = queue[n:]
+		}
 		l.leafAppendMu.Unlock()
 
 		retainPaths := db.appendPreparedLeafPageValueLogBatchMuHeld(l, batch, nil)

@@ -298,11 +298,16 @@ func (w *Writer) AppendBatch(records []Record) error {
 	return w.writeSegment(buf)
 }
 
+// AppendBatchFunc appends count records supplied by recordAt. recordAt must be
+// deterministic for each index for the duration of the call.
 func (w *Writer) AppendBatchFunc(count int, recordAt func(int) Record) error {
 	_, err := w.AppendBatchFuncWithSize(count, recordAt)
 	return err
 }
 
+// AppendBatchFuncWithSize appends count records supplied by recordAt and
+// returns the bytes written. recordAt may be called more than once for the same
+// index and must return the same Record each time during this call.
 func (w *Writer) AppendBatchFuncWithSize(count int, recordAt func(int) Record) (int64, error) {
 	if count == 0 {
 		return 0, nil
