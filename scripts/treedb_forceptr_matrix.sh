@@ -147,6 +147,19 @@ def parse_size(s):
     mul = {"KiB": 1024, "MiB": 1024**2, "GiB": 1024**3}[unit]
     return int(n * mul)
 
+def parse_dir_usage(line, prefix):
+    if not line.startswith(prefix):
+        return None, None
+    m_total = re.search(r"\btotal=([0-9.]+)\s*([KMG]iB)", line)
+    if not m_total:
+        return None, None
+    total = parse_size(f"{m_total.group(1)} {m_total.group(2)}")
+    m_value = re.search(r"\bvalue=([0-9.]+)\s*([KMG]iB)", line)
+    value = None
+    if m_value:
+        value = parse_size(f"{m_value.group(1)} {m_value.group(2)}")
+    return total, value
+
 def fmt_bytes(n):
     if not n:
         return "-"
@@ -202,16 +215,35 @@ def parse_run(text):
                 sz = line.split(":", 1)[1].strip()
                 out["disk"]["dictdb_index"] = parse_size(sz)
             elif line.startswith("maindb/wal:"):
-                # maindb/wal: total=1.2 GiB files=1 value=1.2 GiB
-                m2 = re.search(r"total=([0-9.]+)\s*([KMG]iB).*value=([0-9.]+)\s*([KMG]iB)", line)
-                if m2:
-                    out["disk"]["maindb_wal_total"] = parse_size(f"{m2.group(1)} {m2.group(2)}")
-                    out["disk"]["maindb_wal_value"] = parse_size(f"{m2.group(3)} {m2.group(4)}")
+                total, value = parse_dir_usage(line, "maindb/wal:")
+                if total is not None:
+                    out["disk"]["maindb_wal_total"] = total
+                if value is not None:
+                    out["disk"]["maindb_wal_value"] = value
+            elif line.startswith("maindb/value_vlog:"):
+                total, value = parse_dir_usage(line, "maindb/value_vlog:")
+                if total is not None:
+                    out["disk"]["maindb_value_vlog_total"] = total
+                if value is not None:
+                    out["disk"]["maindb_value_vlog_value"] = value
+            elif line.startswith("maindb/leaf_vlog:"):
+                total, value = parse_dir_usage(line, "maindb/leaf_vlog:")
+                if total is not None:
+                    out["disk"]["maindb_leaf_vlog_total"] = total
+                if value is not None:
+                    out["disk"]["maindb_leaf_vlog_value"] = value
             elif line.startswith("dictdb/wal:"):
-                m2 = re.search(r"total=([0-9.]+)\s*([KMG]iB).*value=([0-9.]+)\s*([KMG]iB)", line)
-                if m2:
-                    out["disk"]["dictdb_wal_total"] = parse_size(f"{m2.group(1)} {m2.group(2)}")
-                    out["disk"]["dictdb_wal_value"] = parse_size(f"{m2.group(3)} {m2.group(4)}")
+                total, value = parse_dir_usage(line, "dictdb/wal:")
+                if total is not None:
+                    out["disk"]["dictdb_wal_total"] = total
+                if value is not None:
+                    out["disk"]["dictdb_wal_value"] = value
+            elif line.startswith("dictdb/value_vlog:"):
+                total, value = parse_dir_usage(line, "dictdb/value_vlog:")
+                if total is not None:
+                    out["disk"]["dictdb_value_vlog_total"] = total
+                if value is not None:
+                    out["disk"]["dictdb_value_vlog_value"] = value
             if line == "```":
                 break
     return out
@@ -238,7 +270,7 @@ lines.append("")
 for profile in profiles:
     lines.append(f"## Profile: {profile}")
     lines.append("")
-    header = ["variant"] + tests + ["index.db", "wal(total)", "dict/index.db"]
+    header = ["variant"] + tests + ["index.db", "external(total)", "dict/index.db"]
     lines.append("| " + " | ".join(header) + " |")
     lines.append("|" + "|".join(["---"] + ["---:"] * (len(header) - 1)) + "|")
     for variant in variants:
@@ -252,7 +284,8 @@ for profile in profiles:
             v = ops.get(t)
             row.append(f"{v:,}" if isinstance(v, int) else "-")
         row.append(fmt_bytes(disk.get("maindb_index")))
-        row.append(fmt_bytes(disk.get("maindb_wal_total")))
+        external_total = sum(int(disk.get(k, 0) or 0) for k in ("maindb_wal_total", "maindb_value_vlog_total", "maindb_leaf_vlog_total"))
+        row.append(fmt_bytes(external_total if external_total > 0 else None))
         row.append(fmt_bytes(disk.get("dictdb_index")))
         lines.append("| " + " | ".join(row) + " |")
     lines.append("")

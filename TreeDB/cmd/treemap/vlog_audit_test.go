@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
+	"math"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -11,6 +13,7 @@ import (
 
 	treedb "github.com/snissn/gomap/TreeDB"
 	treedbdb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/limits"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 )
 
@@ -18,7 +21,7 @@ func TestCollectValueLogAudit_WiresDictLookupFromRoot(t *testing.T) {
 	dir := t.TempDir()
 	buildDictCompressedDBForAudit(t, dir)
 
-	report, err := collectValueLogAudit(dir, treedbdb.ValueLogRewriteOnlineOptions{}, valueLogRIDAuditOptions{})
+	report, err := collectValueLogAudit(dir, treedbdb.ValueLogRewriteOnlineOptions{}, valueLogRIDAuditOptions{}, valueLogFrameScanAuditOptions{})
 	if err != nil {
 		t.Fatalf("collectValueLogAudit(root): %v", err)
 	}
@@ -46,7 +49,7 @@ func TestCollectValueLogAudit_AcceptsMainDBDir(t *testing.T) {
 	dir := t.TempDir()
 	buildDictCompressedDBForAudit(t, dir)
 
-	report, err := collectValueLogAudit(filepath.Join(dir, "maindb"), treedbdb.ValueLogRewriteOnlineOptions{}, valueLogRIDAuditOptions{})
+	report, err := collectValueLogAudit(filepath.Join(dir, "maindb"), treedbdb.ValueLogRewriteOnlineOptions{}, valueLogRIDAuditOptions{}, valueLogFrameScanAuditOptions{})
 	if err != nil {
 		t.Fatalf("collectValueLogAudit(maindb): %v", err)
 	}
@@ -64,6 +67,42 @@ func TestCollectValueLogAudit_AcceptsMainDBDir(t *testing.T) {
 	}
 	if got := report.Stats["cosmos.db.type"]; got != "treedb" {
 		t.Fatalf("unexpected stats db type from maindb path: %q", got)
+	}
+}
+
+func TestCollectValueLogAudit_IncludesLeafLogSegments(t *testing.T) {
+	dir := t.TempDir()
+	buildDictCompressedDBForAudit(t, dir)
+
+	leafDir := treedbdb.LeafLogDirPath(filepath.Join(dir, "maindb"))
+	if err := os.MkdirAll(leafDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(leaf log): %v", err)
+	}
+	fileID := mustEncodeAuditFileID(t, 255, 1)
+	w, err := valuelog.NewWriter(filepath.Join(leafDir, "value-l255-000001.log"), fileID)
+	if err != nil {
+		t.Fatalf("NewWriter(leaf log): %v", err)
+	}
+	if _, err := w.Append(0, nil, 9001, bytes.Repeat([]byte("leaf"), 1024)); err != nil {
+		_ = w.Close()
+		t.Fatalf("Append(leaf log): %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close(leaf log): %v", err)
+	}
+
+	report, err := collectValueLogAudit(dir, treedbdb.ValueLogRewriteOnlineOptions{}, valueLogRIDAuditOptions{}, valueLogFrameScanAuditOptions{})
+	if err != nil {
+		t.Fatalf("collectValueLogAudit(with leaf_vlog): %v", err)
+	}
+	if report.LeafLogDir != leafDir {
+		t.Fatalf("LeafLogDir=%q want %q", report.LeafLogDir, leafDir)
+	}
+	if report.SegmentsOnDisk < 2 {
+		t.Fatalf("expected combined value+leaf segments, got segments=%d", report.SegmentsOnDisk)
+	}
+	if report.RIDScan.MaxRID < 9001 {
+		t.Fatalf("expected RID scan to include leaf_vlog record, got %+v", report.RIDScan)
 	}
 }
 
@@ -112,6 +151,28 @@ func TestScanValueLogRIDs_ReportsTruncatedSegments(t *testing.T) {
 	}
 	if report.TruncatedSegments != 1 {
 		t.Fatalf("TruncatedSegments=%d want 1", report.TruncatedSegments)
+	}
+}
+
+func TestScanValueLogFrames_RejectsOversizedRecordLength(t *testing.T) {
+	if limits.MaxRecordSize <= 0 {
+		t.Skip("record size cap disabled")
+	}
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "value-l0-000001.log")
+	header := make([]byte, valuelog.HeaderSize)
+	binary.LittleEndian.PutUint32(header[16:20], ^uint32(0))
+	if err := os.WriteFile(path, header, 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	report, err := scanValueLogFrames([]valueLogSegmentAudit{{Name: filepath.Base(path), Path: path, Bytes: int64(len(header))}}, valueLogFrameScanAuditOptions{Enabled: true})
+	if !errors.Is(err, valuelog.ErrRecordTooLarge) {
+		t.Fatalf("scanValueLogFrames error=%v want %v", err, valuelog.ErrRecordTooLarge)
+	}
+	if report != nil {
+		t.Fatalf("scanValueLogFrames report=%+v want nil on oversized record", report)
 	}
 }
 
@@ -173,6 +234,148 @@ func TestScanValueLogRIDs_MaxTrackedRIDs(t *testing.T) {
 		MaxTrackedRIDs: 1,
 	}); err == nil {
 		t.Fatal("expected max tracked RIDs error")
+	}
+}
+
+func TestCollectValueLogAudit_FrameScanIncludesModeAndLengthBreakdown(t *testing.T) {
+	dir := t.TempDir()
+	buildDictCompressedDBForAudit(t, dir)
+
+	report, err := collectValueLogAudit(dir, treedbdb.ValueLogRewriteOnlineOptions{}, valueLogRIDAuditOptions{}, valueLogFrameScanAuditOptions{
+		Enabled:    true,
+		TopLengths: 8,
+	})
+	if err != nil {
+		t.Fatalf("collectValueLogAudit(frame scan): %v", err)
+	}
+	if report.FrameScan == nil {
+		t.Fatalf("expected frame scan report")
+	}
+	if report.FrameScan.RecordsTotal == 0 {
+		t.Fatalf("expected non-zero frame scan records")
+	}
+	dictMode, ok := report.FrameScan.Modes["grouped_dict"]
+	if !ok || dictMode.Frames == 0 || dictMode.Subrecords == 0 {
+		t.Fatalf("expected grouped_dict mode stats, got=%+v", report.FrameScan.Modes)
+	}
+	found16K := false
+	for _, row := range report.FrameScan.TopRecordLengthsByBytes {
+		if row.Length == 16<<10 && row.Records > 0 && row.Bytes > 0 && row.StoredBytes > 0 {
+			found16K = true
+			break
+		}
+	}
+	if !found16K {
+		t.Fatalf("expected 16KiB record length in top lengths, got=%+v", report.FrameScan.TopRecordLengthsByBytes)
+	}
+}
+
+func TestScanValueLogFrames_FocusModeBreakdownByRecordLength(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "value-l0-000001.log")
+	fileID := mustEncodeAuditFileID(t, 0, 1)
+	w, err := valuelog.NewWriter(path, fileID)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	if _, err := w.Append(0, nil, 1, bytes.Repeat([]byte{0x11}, 4096)); err != nil {
+		_ = w.Close()
+		t.Fatalf("Append(4KiB): %v", err)
+	}
+	if _, err := w.Append(0, nil, 2, bytes.Repeat([]byte{0x22}, 43008)); err != nil {
+		_ = w.Close()
+		t.Fatalf("Append(43KiB): %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	scan, err := scanValueLogFrames([]valueLogSegmentAudit{{
+		Name:  filepath.Base(path),
+		Path:  path,
+		Bytes: 0,
+	}}, valueLogFrameScanAuditOptions{Enabled: true, TopLengths: 8})
+	if err != nil {
+		t.Fatalf("scanValueLogFrames: %v", err)
+	}
+	if scan.PageLike4096Records != 1 || scan.PageLike4096Bytes != 4096 || scan.PageLike4096StoredBytes != 4096 {
+		t.Fatalf("unexpected 4KiB focus totals: records=%d bytes=%d stored=%d", scan.PageLike4096Records, scan.PageLike4096Bytes, scan.PageLike4096StoredBytes)
+	}
+	pageMode, ok := scan.PageLike4096Modes["raw_ungrouped"]
+	if !ok {
+		pageMode, ok = scan.PageLike4096Modes["grouped_raw"]
+	}
+	if !ok {
+		t.Fatalf("expected raw_ungrouped or grouped_raw mode for 4KiB focus, got=%+v", scan.PageLike4096Modes)
+	}
+	if pageMode.Records != 1 || pageMode.RawPayloadBytes != 4096 || pageMode.StoredPayloadBytes != 4096 {
+		t.Fatalf("unexpected 4KiB mode totals: %+v", pageMode)
+	}
+	if scan.Large40To48KRecords != 1 || scan.Large40To48KBytes != 43008 || scan.Large40To48KStoredBytes != 43008 {
+		t.Fatalf("unexpected 40-48KiB focus totals: records=%d bytes=%d stored=%d", scan.Large40To48KRecords, scan.Large40To48KBytes, scan.Large40To48KStoredBytes)
+	}
+	largeMode, ok := scan.Large40To48KModes["raw_ungrouped"]
+	if !ok {
+		largeMode, ok = scan.Large40To48KModes["grouped_raw"]
+	}
+	if !ok {
+		t.Fatalf("expected raw_ungrouped or grouped_raw mode for 40-48KiB focus, got=%+v", scan.Large40To48KModes)
+	}
+	if largeMode.Records != 1 || largeMode.RawPayloadBytes != 43008 || largeMode.StoredPayloadBytes != 43008 {
+		t.Fatalf("unexpected 40-48KiB mode totals: %+v", largeMode)
+	}
+}
+
+func TestApportionStoredBytesByRaw_ConservesTotals(t *testing.T) {
+	raw := []int64{43008, 43008, 4096}
+	shares := apportionStoredBytesByRaw(raw, 1000)
+	if len(shares) != len(raw) {
+		t.Fatalf("shares len=%d want=%d", len(shares), len(raw))
+	}
+	var sum int64
+	for _, n := range shares {
+		sum += n
+	}
+	if sum != 1000 {
+		t.Fatalf("sum(shares)=%d want=1000", sum)
+	}
+	if shares[0] != shares[1] {
+		t.Fatalf("expected equal shares for equal raw lengths, got %d vs %d", shares[0], shares[1])
+	}
+	if shares[2] >= shares[0] {
+		t.Fatalf("expected smaller share for 4KiB value, got shares=%v", shares)
+	}
+	// Allocation should be independent of record order.
+	ordered := apportionStoredBytesByRaw([]int64{100, 1, 1}, 1)
+	if ordered[0] != 1 {
+		t.Fatalf("expected largest record to receive leftover byte, got shares=%v", ordered)
+	}
+	reordered := apportionStoredBytesByRaw([]int64{1, 1, 100}, 1)
+	if reordered[2] != 1 {
+		t.Fatalf("expected largest reordered record to receive leftover byte, got shares=%v", reordered)
+	}
+
+	zeroRaw := apportionStoredBytesByRaw([]int64{0, 0}, 7)
+	if len(zeroRaw) != 2 || zeroRaw[0] != 0 || zeroRaw[1] != 7 {
+		t.Fatalf("zero-raw apportion unexpected: %v", zeroRaw)
+	}
+
+	// Large-value apportioning must avoid integer overflow and conserve totals.
+	largeRaw := []int64{math.MaxInt32, math.MaxInt32 - 1, 1}
+	largeStored := int64(math.MaxInt64 - 12345)
+	largeShares := apportionStoredBytesByRaw(largeRaw, largeStored)
+	if len(largeShares) != len(largeRaw) {
+		t.Fatalf("large shares len=%d want=%d", len(largeShares), len(largeRaw))
+	}
+	var largeSum int64
+	for _, n := range largeShares {
+		if n < 0 {
+			t.Fatalf("expected non-negative large share, got %d in %v", n, largeShares)
+		}
+		largeSum += n
+	}
+	if largeSum != largeStored {
+		t.Fatalf("sum(large shares)=%d want=%d shares=%v", largeSum, largeStored, largeShares)
 	}
 }
 

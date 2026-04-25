@@ -156,7 +156,7 @@ func testDeleteMostKeysCollapsesRootWithPointerValues(t *testing.T) {
 	val := bytes.Repeat([]byte("y"), 256)
 	const total = 5000
 
-	walDir := filepath.Join(dir, "wal")
+	walDir := filepath.Join(dir, "value_vlog")
 	if err := os.MkdirAll(walDir, 0o755); err != nil {
 		t.Fatalf("mkdir wal: %v", err)
 	}

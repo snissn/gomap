@@ -23,6 +23,8 @@ import (
 	treedb "github.com/snissn/gomap/TreeDB"
 	treedbdb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/dictdb"
+	"github.com/snissn/gomap/TreeDB/internal/templatedb"
+	"github.com/snissn/gomap/TreeDB/template"
 )
 
 const usageText = `Usage:
@@ -31,6 +33,7 @@ const usageText = `Usage:
 Commands:
   info            Print stats and fragmentation report
   stats           Print stats
+  backend-stats   Print backend stats without cache-layer side effects
   frag            Print fragmentation report
   verify          Full scan verification (counts items)
   checkpoint       Force a durable checkpoint (requires -rw)
@@ -40,6 +43,9 @@ Commands:
   vlog-audit      Audit value-log filesystem, GC, and rewrite-plan state (requires -rw)
   vlog-gc         Delete unreferenced value-log segments (requires -rw)
   vlog-rewrite    Rewrite value-log segments and shrink via swap (requires -rw)
+  leafgen-plan    Print explicit leaf-generation pack plan
+  leafgen-pack    Pack sealed leaf generations by id (requires -rw)
+  leafgen-gc      Delete fully unreachable sealed leaf generations (requires -rw)
   get             Get a single key
   keys            List keys in a range/prefix
   scan            Scan keys and values in a range/prefix (requires -allow-values)
@@ -78,6 +84,8 @@ func main() {
 		runInfo(dir, args)
 	case "stats":
 		runStats(dir, args)
+	case "backend-stats":
+		runBackendStats(dir, args)
 	case "frag":
 		runFrag(dir, args)
 	case "verify":
@@ -96,6 +104,12 @@ func main() {
 		runVlogGC(dir, args)
 	case "vlog-rewrite":
 		runVlogRewrite(dir, args)
+	case "leafgen-plan":
+		runLeafGenerationPlan(dir, args)
+	case "leafgen-pack":
+		runLeafGenerationPack(dir, args)
+	case "leafgen-gc":
+		runLeafGenerationGC(dir, args)
 	case "get":
 		runGet(dir, args)
 	case "keys":
@@ -396,6 +410,19 @@ func runStats(dir string, args []string) {
 	printStats(db.Stats())
 }
 
+func runBackendStats(dir string, args []string) {
+	fs := flag.NewFlagSet("backend-stats", flag.ExitOnError)
+	rw := fs.Bool("rw", false, "Open backend read-write (unsafe; may replay WAL or repair files)")
+	_ = fs.Parse(args)
+
+	backend, cleanup, err := treedb.OpenBackend(treedb.Options{Dir: dir, ReadOnly: !*rw})
+	if err != nil {
+		fatalf("Failed to open backend DB: %v", err)
+	}
+	defer func() { _ = cleanup() }()
+	printStats(backend.Stats())
+}
+
 func runFrag(dir string, args []string) {
 	fs := flag.NewFlagSet("frag", flag.ExitOnError)
 	rw := fs.Bool("rw", false, "Open read-write (unsafe; may replay WAL or repair files)")
@@ -592,30 +619,223 @@ func resolveMainDBDir(dir string) string {
 	}
 	return dir
 }
+
+type templateBackendKV struct {
+	db *treedbdb.DB
+}
+
+func (kv templateBackendKV) Get(key []byte) ([]byte, error) {
+	if kv.db == nil {
+		return nil, nil
+	}
+	return kv.db.Get(key)
+}
+
+func (kv templateBackendKV) SetSync(key, value []byte) error {
+	if kv.db == nil {
+		return nil
+	}
+	return kv.db.SetSync(key, value)
+}
+
+func (kv templateBackendKV) DeleteSync(key []byte) error {
+	if kv.db == nil {
+		return nil
+	}
+	return kv.db.DeleteSync(key)
+}
+
+func (kv templateBackendKV) NewBatch() templatedb.Batch {
+	if kv.db == nil {
+		return nil
+	}
+	return kv.db.NewBatch()
+}
+
+func parseTemplateModeFlag(v string) (template.Mode, error) {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "", "off", "false", "0":
+		return template.TemplateOff, nil
+	case "prepass":
+		return template.TemplatePrepass, nil
+	case "only", "template-only":
+		return template.TemplateOnly, nil
+	default:
+		return template.TemplateOff, fmt.Errorf("invalid -template-mode %q (want off|prepass|only)", v)
+	}
+}
+
 func runVlogRewrite(dir string, args []string) {
 	fs := flag.NewFlagSet("vlog-rewrite", flag.ExitOnError)
 	rw := fs.Bool("rw", false, "Open read-write (required; may replay WAL or repair files)")
+	templateModeFlag := fs.String("template-mode", "off", "Template compression mode during rewrite: off|prepass|only")
+	templateMinSavingsBytes := fs.Int("template-min-savings-bytes", 0, "Template encode minimum byte savings (0=default)")
+	templateColdSearchAfter := fs.Int("template-cold-search-after", 0, "Template cold-search threshold (0=default)")
+	templateColdSearchProbeEvery := fs.Int("template-cold-search-probe-every", 0, "Template cold-search probe cadence (0=default)")
 	_ = fs.Parse(args)
 
 	if !*rw {
 		fatalf("vlog-rewrite requires -rw")
 	}
+	templateMode, err := parseTemplateModeFlag(*templateModeFlag)
+	if err != nil {
+		fatalf("%v", err)
+	}
 
 	rootDir := resolveTreeDBRootDir(dir)
 	opts := treedb.Options{Dir: rootDir}
 	applyPersistedFormatConfig(dir, &opts)
+	opts.ValueLog.TemplateMode = templateMode
+	if *templateMinSavingsBytes > 0 {
+		opts.ValueLog.TemplateConfig.MinSavingsBytes = *templateMinSavingsBytes
+	}
+	if *templateColdSearchAfter > 0 {
+		opts.ValueLog.TemplateConfig.ColdSearchAfter = *templateColdSearchAfter
+	}
+	if *templateColdSearchProbeEvery > 0 {
+		opts.ValueLog.TemplateConfig.ColdSearchProbeEvery = *templateColdSearchProbeEvery
+	}
+
+	var closers []func() error
+	defer func() {
+		for i := len(closers) - 1; i >= 0; i-- {
+			_ = closers[i]()
+		}
+	}()
+
+	// Mirror vlog-gc dict lookup wiring so rewrite can decode/validate dict
+	// frames and, when applicable, reuse dict bytes during rewrite re-encoding.
+	dictDir := filepath.Join(rootDir, "dictdb")
+	dictIndexPath := filepath.Join(dictDir, "index.db")
+	if _, err := os.Stat(dictIndexPath); err == nil {
+		dictOpts := treedbdb.Options{Dir: dictDir, ReadOnly: false}
+		applyPersistedFormatConfig(dictDir, &dictOpts)
+		dictOpts.DisableBackgroundPrune = true
+		dictOpts.ValueLog.Compression = treedbdb.ValueLogCompressionOff
+		dictBackend, err := treedbdb.Open(dictOpts)
+		if err != nil {
+			fatalf("dictdb open: %v", err)
+		}
+		store := dictdb.New(dictBackend)
+		opts.ValueLog.DictLookup = func(dictID uint64) ([]byte, error) {
+			return store.GetDictBytes(context.Background(), dictID)
+		}
+		opts.ValueLog.DictCurrentForClass = func(ctx context.Context, class string) (uint64, error) {
+			return store.GetCurrentForClass(ctx, class)
+		}
+		opts.ValueLog.DictLeafPayloadMode = func(ctx context.Context, dictID uint64) (bool, bool, error) {
+			return store.GetLeafPayloadMode(ctx, dictID)
+		}
+		opts.ValueLog.DictPut = func(ctx context.Context, dictBytes []byte) (uint64, error) {
+			return store.PutDictBytes(ctx, dictBytes)
+		}
+		opts.ValueLog.DictSetCurrentForClass = func(ctx context.Context, class string, dictID uint64) error {
+			return store.SetCurrentForClass(ctx, class, dictID)
+		}
+		opts.ValueLog.DictSetLeafPayloadMode = func(ctx context.Context, dictID uint64, useRawPages bool) error {
+			return store.SetLeafPayloadMode(ctx, dictID, useRawPages)
+		}
+		closers = append(closers, dictBackend.Close)
+	} else if !os.IsNotExist(err) {
+		fatalf("stat dictdb index: %v", err)
+	}
+
+	templateDir := filepath.Join(rootDir, "templatedb")
+	templateIndexPath := filepath.Join(templateDir, "index.db")
+	if _, err := os.Stat(templateIndexPath); err == nil {
+		templateReadOnly := templateMode == template.TemplateOff
+		templateOpts := treedbdb.Options{Dir: templateDir, ReadOnly: templateReadOnly}
+		applyPersistedFormatConfig(templateDir, &templateOpts)
+		templateOpts.DisableBackgroundPrune = true
+		templateOpts.ValueLog.Compression = treedbdb.ValueLogCompressionOff
+		templateOpts.ValueLog.TemplateMode = template.TemplateOff
+		templateOpts.ValueLog.TemplateLookup = nil
+		templateOpts.ValueLog.TemplateStore = nil
+
+		templateBackend, err := treedbdb.Open(templateOpts)
+		if err != nil {
+			fatalf("templatedb open: %v", err)
+		}
+		closers = append(closers, templateBackend.Close)
+		store := templatedb.New(templateBackendKV{db: templateBackend}, templatedb.Config{})
+		opts.ValueLog.TemplateLookup = func(templateID uint64) ([]byte, error) {
+			return store.GetTemplateDef(context.Background(), templateID)
+		}
+		if templateMode != template.TemplateOff {
+			opts.ValueLog.TemplateStore = store
+		}
+		tcfg := template.NormalizeConfig(opts.ValueLog.TemplateConfig)
+		opts.ValueLog.TemplateDecodeOptions = template.DecodeOptions{
+			MaxDecodedBytes: tcfg.MaxDecodedBytes,
+			MaxGaps:         tcfg.MaxGaps,
+			DefCacheSize:    tcfg.DefCacheSize,
+		}
+	} else if !os.IsNotExist(err) {
+		fatalf("stat templatedb index: %v", err)
+	} else if templateMode != template.TemplateOff {
+		fatalf("template-mode=%s requested but templatedb/index.db was not found in %s", *templateModeFlag, templateDir)
+	}
+
 	stats, err := treedb.ValueLogRewriteOffline(opts)
 	if err != nil {
 		fatalf("ValueLogRewriteOffline error: %v", err)
 	}
 
-	fmt.Printf("vlog-rewrite: segments_before=%d segments_after=%d bytes_before=%d bytes_after=%d records=%d\n",
+	fmt.Printf(
+		"vlog-rewrite: segments_before=%d segments_after=%d bytes_before=%d bytes_after=%d records=%d template_attempted=%d template_kept=%d template_input_bytes=%d template_output_bytes=%d\n",
 		stats.SegmentsBefore,
 		stats.SegmentsAfter,
 		stats.BytesBefore,
 		stats.BytesAfter,
 		stats.RecordsCopied,
+		stats.TemplateRecordsAttempted,
+		stats.TemplateRecordsKept,
+		stats.TemplateInputBytes,
+		stats.TemplateOutputBytes,
 	)
+
+	if stats.TemplatePointerRecordsAttempted > 0 || stats.TemplatePointerInputBytes > 0 || len(stats.TemplatePointerReasons) > 0 {
+		fmt.Printf(
+			"vlog-rewrite-template-class: class=pointer_value attempted=%d kept=%d input_bytes=%d output_bytes=%d reasons=%s\n",
+			stats.TemplatePointerRecordsAttempted,
+			stats.TemplatePointerRecordsKept,
+			stats.TemplatePointerInputBytes,
+			stats.TemplatePointerOutputBytes,
+			formatTemplateReasonCounts(stats.TemplatePointerReasons),
+		)
+	}
+	if stats.TemplateOuterLeafRecordsAttempted > 0 || stats.TemplateOuterLeafInputBytes > 0 || len(stats.TemplateOuterLeafReasons) > 0 {
+		fmt.Printf(
+			"vlog-rewrite-template-class: class=outer_leaf attempted=%d kept=%d input_bytes=%d output_bytes=%d reasons=%s\n",
+			stats.TemplateOuterLeafRecordsAttempted,
+			stats.TemplateOuterLeafRecordsKept,
+			stats.TemplateOuterLeafInputBytes,
+			stats.TemplateOuterLeafOutputBytes,
+			formatTemplateReasonCounts(stats.TemplateOuterLeafReasons),
+		)
+	}
+}
+
+func formatTemplateReasonCounts(reasons map[string]uint64) string {
+	if len(reasons) == 0 {
+		return "-"
+	}
+	keys := make([]string, 0, len(reasons))
+	for k, v := range reasons {
+		if k == "" || v == 0 {
+			continue
+		}
+		keys = append(keys, k)
+	}
+	if len(keys) == 0 {
+		return "-"
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, k := range keys {
+		parts = append(parts, fmt.Sprintf("%s:%d", k, reasons[k]))
+	}
+	return strings.Join(parts, ",")
 }
 
 func runGet(dir string, args []string) {

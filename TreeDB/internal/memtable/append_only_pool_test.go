@@ -324,15 +324,15 @@ func TestAppendOnlyResetRetainedArenaBounded(t *testing.T) {
 	}
 }
 
-func TestAppendOnlyUnorderedAppendDefersLatestRebuild(t *testing.T) {
+func TestAppendOnlyUnorderedAppendBuildsLatestIndexImmediately(t *testing.T) {
 	m := NewAppendOnlyWithCapacity(0)
 	m.Set([]byte("b"), []byte("v1"))
 	m.Set([]byte("a"), []byte("v2")) // force unordered path
 	if m.ordered {
 		t.Fatalf("expected unordered memtable")
 	}
-	if !m.latestDirty {
-		t.Fatalf("expected latest index to be dirty after order break")
+	if m.latestDirty {
+		t.Fatalf("expected latest index to stay clean after order break")
 	}
 
 	it := m.NewIterator(nil, nil)
@@ -351,7 +351,7 @@ func TestAppendOnlyUnorderedAppendDefersLatestRebuild(t *testing.T) {
 
 	m.Set([]byte("b"), []byte("v3"))
 	if m.latestDirty {
-		t.Fatalf("expected unordered append to keep latest index clean after rebuild")
+		t.Fatalf("expected unordered append to keep latest index clean")
 	}
 	if m.snapCount != 0 {
 		t.Fatalf("expected snapshot invalidation after append; got snapCount=%d", m.snapCount)
@@ -391,8 +391,8 @@ func TestAppendOnlyUnorderedReverseIteratorDoesNotCacheSharedSnapshot(t *testing
 	if m.ordered {
 		t.Fatalf("expected unordered memtable")
 	}
-	if !m.latestDirty {
-		t.Fatalf("expected latest index to be dirty after order break")
+	if m.latestDirty {
+		t.Fatalf("expected latest index to stay clean after order break")
 	}
 
 	it := m.NewReverseIterator(nil, nil)
@@ -411,7 +411,7 @@ func TestAppendOnlyUnorderedReverseIteratorDoesNotCacheSharedSnapshot(t *testing
 
 	m.Set([]byte("b"), []byte("v3"))
 	if m.latestDirty {
-		t.Fatalf("expected unordered append to keep latest index clean after reverse rebuild")
+		t.Fatalf("expected unordered append to keep latest index clean")
 	}
 	if m.snapCount != 0 {
 		t.Fatalf("expected snapshot invalidation after append; got snapCount=%d", m.snapCount)
@@ -442,6 +442,19 @@ func TestAppendOnlyResetDoesNotPoolStolenValueSlices(t *testing.T) {
 	m.Set([]byte("k-new"), newVal)
 	if string(external) != "external-immutable" {
 		t.Fatalf("stolen caller value was mutated via pooled reuse: got %q", external)
+	}
+}
+
+func TestAppendOnlyResetDoesNotPoolBorrowedValueSlices(t *testing.T) {
+	m := NewAppendOnlyWithCapacity(0)
+	external := []byte("borrowed-immutable")
+	m.SetEntryBorrowValue([]byte("k-borrow"), external, page.ValuePtr{}, node.FlagInline)
+	m.Reset()
+
+	newVal := []byte("replacement-value")
+	m.Set([]byte("k-new"), newVal)
+	if string(external) != "borrowed-immutable" {
+		t.Fatalf("borrowed caller value was mutated via pooled reuse: got %q", external)
 	}
 }
 

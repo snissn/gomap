@@ -104,6 +104,14 @@ type backendSystemRootPublisher interface {
 	PublishSystemRootIterator(iter iterator.UnsafeIterator) (uint64, error)
 }
 
+type rootDomainEntrySource uint8
+
+const (
+	rootDomainEntrySourceNone rootDomainEntrySource = iota
+	rootDomainEntrySourceCached
+	rootDomainEntrySourcePublished
+)
+
 func (db *DB) ensureRootDomainStatesLocked() {
 	if db == nil {
 		return
@@ -520,7 +528,7 @@ func (db *DB) promoteRootDomainMutableLocked(shardIdx int, sealed, next memtable
 	if shardIdx < 0 || shardIdx >= len(db.rootPointStates) {
 		return
 	}
-	if sealed != nil {
+	if sealed != nil && sealed.Len() != 0 {
 		db.rootPointStates[shardIdx].immutables = append(db.rootPointStates[shardIdx].immutables, sealed)
 		db.rootIteratorState.immutables = append(db.rootIteratorState.immutables, sealed)
 	}
@@ -678,6 +686,15 @@ func rootDomainSystemSnapshotFromCachedSnapshot(s *Snapshot) rootDomainSnapshot 
 		}
 		if s.publishedRoots.system.rootID != 0 {
 			snap.publishedRootID = s.publishedRoots.system.rootID
+		}
+		return snap
+	}
+	if s.backend != nil {
+		if state := s.backend.State(); state != nil {
+			snap.publishedRootID = state.SystemRootPageID
+			if state.SystemRootPageID != 0 {
+				snap.published = backendSnapshotLookup{snapshot: s.backend, rootID: state.SystemRootPageID}
+			}
 		}
 	}
 	return snap
@@ -917,20 +934,28 @@ func (s *rootDomainState) sealMutable(next memtable.Table) {
 }
 
 func (s rootDomainSnapshot) getEntry(key []byte) (val []byte, ptr page.ValuePtr, flags byte, found bool) {
+	val, ptr, flags, found, _ = s.getEntryWithSource(key)
+	return val, ptr, flags, found
+}
+
+func (s rootDomainSnapshot) getEntryWithSource(key []byte) (val []byte, ptr page.ValuePtr, flags byte, found bool, source rootDomainEntrySource) {
 	if s.mutable != nil {
 		if val, ptr, flags, found = s.mutable.GetEntry(key); found {
-			return val, ptr, flags, true
+			return val, ptr, flags, true, rootDomainEntrySourceCached
 		}
 	}
 	for idx := len(s.immutables) - 1; idx >= 0; idx-- {
 		if val, ptr, flags, found = s.immutables[idx].GetEntry(key); found {
-			return val, ptr, flags, true
+			return val, ptr, flags, true, rootDomainEntrySourceCached
 		}
 	}
 	if s.published != nil {
-		return s.published.GetEntry(key)
+		val, ptr, flags, found = s.published.GetEntry(key)
+		if found {
+			return val, ptr, flags, true, rootDomainEntrySourcePublished
+		}
 	}
-	return nil, page.ValuePtr{}, 0, false
+	return nil, page.ValuePtr{}, 0, false, rootDomainEntrySourceNone
 }
 
 func (s rootDomainSnapshot) visibleValue(key []byte) ([]byte, bool) {

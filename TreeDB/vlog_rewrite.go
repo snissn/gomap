@@ -7,13 +7,7 @@ import (
 )
 
 // ValueLogRewriteStats summarizes value-log rewrite compaction results.
-type ValueLogRewriteStats struct {
-	SegmentsBefore int
-	SegmentsAfter  int
-	BytesBefore    int64
-	BytesAfter     int64
-	RecordsCopied  int
-}
+type ValueLogRewriteStats = treedbdb.ValueLogRewriteStats
 
 // ValueLogRewriteOnlineOptions controls online rewrite batching behavior.
 type ValueLogRewriteOnlineOptions = treedbdb.ValueLogRewriteOnlineOptions
@@ -89,6 +83,9 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 			// no retained paths yet; pass a non-empty slice to activate the
 			// backend rewrite's active-segment protection.
 			backendOpts.ProtectedPaths = []string{""}
+		}
+		if backendOpts.ReserveRIDs == nil {
+			backendOpts.ReserveRIDs = db.cached.ReserveValueLogRIDs
 		}
 	}
 	stats, err := db.backend.ValueLogRewriteOnline(ctx, backendOpts)

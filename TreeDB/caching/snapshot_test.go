@@ -41,7 +41,7 @@ func TestAcquireSnapshot_NotifyErrorOnRotateFailure(t *testing.T) {
 	}
 
 	// Force the snapshot rotation path to fail inside newMutableMemtableWithCapacityMode.
-	cached.memtableMode = memtable.Mode(255)
+	cached.storeMemtableMode(memtable.Mode(255))
 
 	if snap := cached.AcquireSnapshot(); snap != nil {
 		_ = snap.Close()
@@ -165,5 +165,88 @@ func TestAcquireSnapshot_CapturesPublishedRootDomainVersion(t *testing.T) {
 
 	if snap2.rootVersion <= snap1.rootVersion {
 		t.Fatalf("rootVersion did not advance: snap1=%d snap2=%d", snap1.rootVersion, snap2.rootVersion)
+	}
+}
+
+func TestAcquireSnapshot_AllocsBoundedAfterWarmPath(t *testing.T) {
+	if testRaceEnabled {
+		t.Skip("AllocsPerRun is not stable under -race")
+	}
+	dir, err := os.MkdirTemp("", "treedb-snapshot-allocs-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+
+	backend, err := db.Open(db.Options{Dir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer backend.Close()
+
+	cached, err := Open(dir, backend, Options{FlushThreshold: 1024 * 1024})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cached.Close()
+
+	warm := cached.AcquireSnapshot()
+	if warm == nil {
+		t.Fatal("warm AcquireSnapshot=nil")
+	}
+	if err := warm.Close(); err != nil {
+		t.Fatalf("warm Close: %v", err)
+	}
+
+	allocs := testing.AllocsPerRun(1000, func() {
+		snap := cached.AcquireSnapshot()
+		if snap == nil {
+			t.Fatal("AcquireSnapshot=nil")
+		}
+		if err := snap.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	})
+	if allocs > 1.1 {
+		t.Fatalf("AcquireSnapshot allocs/run=%f, want <= 1.1 after warm path", allocs)
+	}
+}
+
+func TestSnapshotClose_Idempotent(t *testing.T) {
+	dir, err := os.MkdirTemp("", "treedb-snapshot-close-idempotent-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+
+	backend, err := db.Open(db.Options{Dir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer backend.Close()
+
+	cached, err := Open(dir, backend, Options{FlushThreshold: 1024 * 1024})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cached.Close()
+
+	snap := cached.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("AcquireSnapshot=nil")
+	}
+	if err := snap.Close(); err != nil {
+		t.Fatalf("first Close: %v", err)
+	}
+	if err := snap.Close(); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+
+	next := cached.AcquireSnapshot()
+	if next == nil {
+		t.Fatal("second AcquireSnapshot=nil")
+	}
+	if err := next.Close(); err != nil {
+		t.Fatalf("close second snapshot: %v", err)
 	}
 }

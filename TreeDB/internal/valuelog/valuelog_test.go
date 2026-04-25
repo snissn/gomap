@@ -202,6 +202,79 @@ func TestValueLogAppendRead(t *testing.T) {
 	}
 }
 
+func TestValueLogReaderReadNextMeta(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "value-000001.log")
+
+	writer, err := NewWriter(path, page.ValueLogFileID(1))
+	if err != nil {
+		t.Fatalf("new writer: %v", err)
+	}
+	ptrs, err := writer.AppendFrame(0, nil, []Record{
+		{RID: 1, Value: []byte("alpha")},
+		{RID: 2, Value: []byte("beta")},
+	})
+	if err != nil {
+		_ = writer.Close()
+		t.Fatalf("append frame: %v", err)
+	}
+	ptr3, err := writer.Append(0, nil, 3, []byte("gamma"))
+	if err != nil {
+		_ = writer.Close()
+		t.Fatalf("append: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	reader, err := NewReader(path, page.ValueLogFileID(1))
+	if err != nil {
+		t.Fatalf("new reader: %v", err)
+	}
+	rid1, gotPtr1, err := reader.ReadNextMeta()
+	if err != nil {
+		_ = reader.Close()
+		t.Fatalf("read next meta: %v", err)
+	}
+	if rid1 != 1 {
+		_ = reader.Close()
+		t.Fatalf("rid1 mismatch")
+	}
+	rid2, gotPtr2, err := reader.ReadNextMeta()
+	if err != nil {
+		_ = reader.Close()
+		t.Fatalf("read next meta: %v", err)
+	}
+	if rid2 != 2 {
+		_ = reader.Close()
+		t.Fatalf("rid2 mismatch")
+	}
+	rid3, gotPtr3, err := reader.ReadNextMeta()
+	if err != nil {
+		_ = reader.Close()
+		t.Fatalf("read next meta: %v", err)
+	}
+	if rid3 != 3 {
+		_ = reader.Close()
+		t.Fatalf("rid3 mismatch")
+	}
+	if _, _, err := reader.ReadNextMeta(); !errors.Is(err, io.EOF) {
+		_ = reader.Close()
+		t.Fatalf("expected EOF, got %v", err)
+	}
+	_ = reader.Close()
+
+	if gotPtr1 != ptrs[0] {
+		t.Fatalf("ptr1 mismatch")
+	}
+	if gotPtr2 != ptrs[1] {
+		t.Fatalf("ptr2 mismatch")
+	}
+	if gotPtr3 != ptr3 {
+		t.Fatalf("ptr3 mismatch")
+	}
+}
+
 func TestValueLogManager_MmapReadAppend(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("mmap not supported on windows")
@@ -413,16 +486,12 @@ func TestValueLogManager_MmapReadAppendCompressedGroupedCache(t *testing.T) {
 		}
 	}
 
-	f.cacheMu.Lock()
-	defer f.cacheMu.Unlock()
-	if f.cacheFlags&FrameFlagCompressed == 0 {
-		t.Fatalf("expected compressed frame cache flags, got=%d", f.cacheFlags)
+	hits, misses, entries, capacity := f.groupedFrameCacheStats()
+	if entries == 0 {
+		t.Fatalf("expected grouped-frame cache entries > 0 for compressed frame reads (capacity=%d)", capacity)
 	}
-	if f.cacheK != len(records) {
-		t.Fatalf("cacheK=%d want=%d", f.cacheK, len(records))
-	}
-	if len(f.cacheRaw) == 0 {
-		t.Fatalf("expected cached decoded raw payload for compressed frame")
+	if hits == 0 {
+		t.Fatalf("expected grouped-frame cache hits > 0 for repeated compressed frame reads (misses=%d entries=%d capacity=%d)", misses, entries, capacity)
 	}
 }
 
@@ -730,6 +799,92 @@ func TestValueLogManager_GroupedFrameCache_MaxRawBytesSkipsOversize(t *testing.T
 	}
 	if misses < 2 {
 		t.Fatalf("expected misses on both reads for oversized frame, got=%d", misses)
+	}
+}
+
+func TestValueLogManager_ReadUnsafeTo_CompressedGroupedFallbackUsesCache(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("mmap not supported on windows")
+	}
+
+	// Force file-read fallback so this test exercises the non-mmap path.
+	withMappedSealedBudget(t, 0)
+
+	dir := t.TempDir()
+	fileID, err := EncodeFileID(0, 1)
+	if err != nil {
+		t.Fatalf("encode file id: %v", err)
+	}
+	path := filepath.Join(dir, "value-l0-000001.log")
+
+	writer, err := NewWriter(path, fileID)
+	if err != nil {
+		t.Fatalf("new writer: %v", err)
+	}
+	writer.SetBlockCompression(BlockCodecSnappy, true)
+	ptrs, want := appendCompressedFrameForCacheTests(t, writer, 0, 4)
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	m, err := NewManager(dir)
+	if err != nil {
+		t.Fatalf("new manager: %v", err)
+	}
+	defer func() { _ = m.Close() }()
+	m.SetDisableReadChecksum(true)
+	m.SetGroupedFrameCacheEntries(4)
+
+	f := m.files[fileID]
+	if f == nil {
+		t.Fatalf("missing opened file for id=%d", fileID)
+	}
+
+	dst := make([]byte, 0, 512)
+	got0, used0, err := m.ReadUnsafeTo(ptrs[0], dst[:0])
+	if err != nil {
+		t.Fatalf("read unsafe to first: %v", err)
+	}
+	if !used0 {
+		t.Fatalf("expected first read to use dst")
+	}
+	if !bytes.Equal(got0, want[0]) {
+		t.Fatalf("first value mismatch: got=%q want=%q", got0, want[0])
+	}
+
+	hits0, misses0, entries0, _ := f.groupedFrameCacheStats()
+	if misses0 == 0 {
+		t.Fatalf("expected first compressed grouped read to miss cache")
+	}
+	if entries0 == 0 {
+		t.Fatalf("expected first compressed grouped read to populate cache")
+	}
+
+	got1, used1, err := m.ReadUnsafeTo(ptrs[1], dst[:0])
+	if err != nil {
+		t.Fatalf("read unsafe to second: %v", err)
+	}
+	if !used1 {
+		t.Fatalf("expected second read to use dst")
+	}
+	if !bytes.Equal(got1, want[1]) {
+		t.Fatalf("second value mismatch: got=%q want=%q", got1, want[1])
+	}
+
+	hits1, misses1, entries1, _ := f.groupedFrameCacheStats()
+	if hits1 <= hits0 {
+		t.Fatalf("expected second read to hit grouped cache: hits before=%d after=%d", hits0, hits1)
+	}
+	if misses1 != misses0 {
+		t.Fatalf("unexpected cache miss increase on second read: before=%d after=%d", misses0, misses1)
+	}
+	if entries1 == 0 {
+		t.Fatalf("expected grouped cache entries to remain populated")
+	}
+
+	_, _, missNoMapping, _, fallbacks := m.MmapReadStats()
+	if missNoMapping == 0 || fallbacks == 0 {
+		t.Fatalf("expected fallback path stats to reflect no-mmap reads: miss_no_mapping=%d fallbacks=%d", missNoMapping, fallbacks)
 	}
 }
 
@@ -1207,6 +1362,135 @@ func TestFramePreparer_KeepPolicySkipsCompression(t *testing.T) {
 	}
 }
 
+func buildLargeDictCompressionFixture(t *testing.T, dictID uint64) ([]byte, []Record) {
+	t.Helper()
+	const payloadSize = 43 << 10
+	makePayload := func(variant int) []byte {
+		prefix := []byte(fmt.Sprintf("{\"bucket\":\"state\",\"variant\":%d,\"payload\":\"", variant))
+		suffix := []byte("\"}")
+		chunk := []byte("ibc/client/07-tendermint/consensusStates/00000000000000000000|")
+		out := make([]byte, 0, payloadSize)
+		out = append(out, prefix...)
+		for len(out)+len(suffix) < payloadSize {
+			out = append(out, chunk...)
+		}
+		out = out[:payloadSize-len(suffix)]
+		out = append(out, suffix...)
+		// Keep values very compressible while ensuring record-to-record variance.
+		out[payloadSize-64] = byte('a' + (variant % 26))
+		out[payloadSize-63] = byte('0' + (variant % 10))
+		return out
+	}
+
+	samples := make([][]byte, 32)
+	history := make([]byte, 0, 8<<10)
+	for i := range samples {
+		s := makePayload(i)
+		samples[i] = s
+		if len(history) < cap(history) {
+			need := cap(history) - len(history)
+			if need > len(s) {
+				need = len(s)
+			}
+			history = append(history, s[:need]...)
+		}
+	}
+	if len(history) < 8 {
+		history = append(history, bytes.Repeat([]byte("x"), 8-len(history))...)
+	}
+
+	dict, err := zstd.BuildDict(zstd.BuildDictOptions{
+		ID:       uint32(dictID),
+		Contents: samples,
+		History:  history,
+		Offsets:  [3]int{1, 4, 8},
+		Level:    zstd.SpeedFastest,
+	})
+	if err != nil {
+		t.Fatalf("BuildDict: %v", err)
+	}
+
+	records := []Record{
+		{RID: 1, Value: append([]byte(nil), samples[0]...)},
+		{RID: 2, Value: append([]byte(nil), samples[1]...)},
+	}
+	return dict, records
+}
+
+func TestFramePreparer_KeepPolicyLargeDictOverride(t *testing.T) {
+	const dictID = uint64(19)
+	dict, records := buildLargeDictCompressionFixture(t, dictID)
+
+	prep := NewFramePreparer()
+	prep.SetDictFrameEncoderOptions(zstd.SpeedFastest, false)
+	// Deliberately pessimistic keep policy: small payloads should skip.
+	prep.SetKeepPolicy(0.01, 100.0, 0.0)
+
+	body, stats, err := prep.PrepareFrame(dictID, dict, records)
+	if err != nil {
+		t.Fatalf("PrepareFrame: %v", err)
+	}
+	if !stats.Attempted {
+		t.Fatalf("expected large dict payload to probe compression")
+	}
+	if !stats.Kept {
+		t.Fatalf("expected strong large-payload ratio to stay compressed")
+	}
+	hdr, _, _, _, err := DecodeFrame(body)
+	if err != nil {
+		t.Fatalf("DecodeFrame: %v", err)
+	}
+	if hdr.Flags&FrameFlagCompressed == 0 {
+		t.Fatalf("expected compressed frame body")
+	}
+}
+
+func TestWriter_DictLargePayloadBackoffProbe(t *testing.T) {
+	const dictID = uint64(23)
+	dict, compressible := buildLargeDictCompressionFixture(t, dictID)
+
+	w := NewWriterWithSink(io.Discard, page.ValueLogFileID(1))
+	w.SetDictFrameEncoderOptions(zstd.SpeedFastest, false)
+	// Keep policy should not prevent large dict probes.
+	w.SetKeepPolicy(0.01, 100.0, 0.0)
+
+	incompressible := make([]Record, len(compressible))
+	rng := rand.New(rand.NewSource(4242))
+	for i := range incompressible {
+		payload := make([]byte, len(compressible[i].Value))
+		if _, err := rng.Read(payload); err != nil {
+			t.Fatalf("rng read: %v", err)
+		}
+		incompressible[i] = Record{RID: uint64(i + 1), Value: payload}
+	}
+
+	dst := make([]page.ValuePtr, len(compressible))
+	_, stats1, err := w.AppendFrameWithStatsInto(dictID, dict, incompressible, dst)
+	if err != nil {
+		t.Fatalf("append incompressible: %v", err)
+	}
+	if !stats1.Attempted {
+		t.Fatalf("expected initial incompressible frame to attempt compression")
+	}
+	if stats1.Kept {
+		t.Fatalf("expected incompressible frame to fall back to raw")
+	}
+	if w.skipRemain == 0 {
+		t.Fatalf("expected backoff skip window after no-benefit attempt")
+	}
+
+	_, stats2, err := w.AppendFrameWithStatsInto(dictID, dict, compressible, dst)
+	if err != nil {
+		t.Fatalf("append compressible: %v", err)
+	}
+	if !stats2.Attempted {
+		t.Fatalf("expected large payload to probe during backoff")
+	}
+	if !stats2.Kept {
+		t.Fatalf("expected compressible large payload to remain compressed")
+	}
+}
+
 func TestReadAtLargeValueLengthHintOmitted(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "value-000001.log")
@@ -1412,6 +1696,150 @@ func TestEncodeFrameSkipsCompressionWithoutDict(t *testing.T) {
 	}
 	if !bytes.Equal(payload, value) {
 		t.Fatalf("payload mismatch")
+	}
+}
+
+func TestDecodeFrameValueBounds(t *testing.T) {
+	records := []Record{
+		{RID: 1, Value: []byte("alpha")},
+		{RID: 2, Value: []byte("beta")},
+		{RID: 3, Value: []byte("gamma")},
+	}
+	body, header, err := EncodeFrame(0, nil, records)
+	if err != nil {
+		t.Fatalf("encode frame: %v", err)
+	}
+
+	gotHeader, start, end, rawLen, payload, err := decodeFrameValueBounds(body, 1)
+	if err != nil {
+		t.Fatalf("decode bounds: %v", err)
+	}
+	if gotHeader != header {
+		t.Fatalf("header mismatch: got=%+v want=%+v", gotHeader, header)
+	}
+	if start != uint32(len(records[0].Value)) {
+		t.Fatalf("unexpected start: got=%d", start)
+	}
+	if end != uint32(len(records[0].Value)+len(records[1].Value)) {
+		t.Fatalf("unexpected end: got=%d", end)
+	}
+	wantRawLen := uint32(len(records[0].Value) + len(records[1].Value) + len(records[2].Value))
+	if rawLen != wantRawLen {
+		t.Fatalf("unexpected rawLen: got=%d want=%d", rawLen, wantRawLen)
+	}
+	if !bytes.Equal(payload[start:end], records[1].Value) {
+		t.Fatalf("payload slice mismatch: got=%q want=%q", payload[start:end], records[1].Value)
+	}
+}
+
+func TestDecodeFrameValueBoundsCompressed(t *testing.T) {
+	const dictID = 7
+	samples := make([][]byte, 16)
+	for i := range samples {
+		samples[i] = []byte(fmt.Sprintf("{\"kind\":\"frame\",\"id\":%d,\"payload\":\"%s\"}", i, bytes.Repeat([]byte("z"), 192)))
+	}
+	history := make([]byte, 0, 8<<10)
+	for i := range samples {
+		if len(history) >= cap(history) {
+			break
+		}
+		need := cap(history) - len(history)
+		sample := samples[i]
+		if len(sample) > need {
+			sample = sample[:need]
+		}
+		history = append(history, sample...)
+	}
+	if len(history) < 8 {
+		history = append(history, bytes.Repeat([]byte("x"), 8-len(history))...)
+	}
+	dict, err := zstd.BuildDict(zstd.BuildDictOptions{
+		ID:       uint32(dictID),
+		Contents: samples,
+		History:  history,
+		Offsets:  [3]int{1, 4, 8},
+		Level:    zstd.SpeedFastest,
+	})
+	if err != nil {
+		t.Fatalf("BuildDict: %v", err)
+	}
+	if len(dict) == 0 {
+		t.Fatalf("BuildDict: empty dict")
+	}
+
+	records := []Record{
+		{RID: 1, Value: append([]byte(nil), samples[0]...)},
+		{RID: 2, Value: append([]byte(nil), samples[1]...)},
+		{RID: 3, Value: append([]byte(nil), samples[2]...)},
+	}
+	body, header, err := EncodeFrameWithOptions(dictID, dict, records, zstd.SpeedFastest, false)
+	if err != nil {
+		t.Fatalf("EncodeFrameWithOptions: %v", err)
+	}
+	if header.Flags&FrameFlagCompressed == 0 {
+		t.Fatalf("expected compressed frame")
+	}
+
+	gotHeader, start, end, rawLen, payload, err := decodeFrameValueBounds(body, 1)
+	if err != nil {
+		t.Fatalf("decode bounds: %v", err)
+	}
+	if gotHeader != header {
+		t.Fatalf("header mismatch: got=%+v want=%+v", gotHeader, header)
+	}
+	wantStart := uint32(len(records[0].Value))
+	if start != wantStart {
+		t.Fatalf("unexpected start: got=%d want=%d", start, wantStart)
+	}
+	wantEnd := wantStart + uint32(len(records[1].Value))
+	if end != wantEnd {
+		t.Fatalf("unexpected end: got=%d want=%d", end, wantEnd)
+	}
+	wantRawLen := uint32(len(records[0].Value) + len(records[1].Value) + len(records[2].Value))
+	if rawLen != wantRawLen {
+		t.Fatalf("unexpected rawLen: got=%d want=%d", rawLen, wantRawLen)
+	}
+	if len(payload) == 0 {
+		t.Fatalf("expected compressed payload bytes")
+	}
+}
+
+func TestDecodeFrameValueBoundsRejectsCorruptInputs(t *testing.T) {
+	body, _, err := EncodeFrame(0, nil, []Record{
+		{RID: 1, Value: []byte("alpha")},
+		{RID: 2, Value: []byte("beta")},
+	})
+	if err != nil {
+		t.Fatalf("encode frame: %v", err)
+	}
+
+	if _, _, _, _, _, err := decodeFrameValueBounds(body, 2); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("expected ErrCorrupt for bad subIndex, got %v", err)
+	}
+
+	badRID := append([]byte(nil), body...)
+	ridOff := FrameHeaderSize + 8
+	for i := 0; i < 8; i++ {
+		badRID[ridOff+i] = 0
+	}
+	if _, _, _, _, _, err := decodeFrameValueBounds(badRID, 0); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("expected ErrCorrupt for zero rid, got %v", err)
+	}
+
+	badOffsets := append([]byte(nil), body...)
+	offsetOff := FrameHeaderSize + (2 * 8)
+	binary.LittleEndian.PutUint32(badOffsets[offsetOff+8:offsetOff+12], 1)
+	if _, _, _, _, _, err := decodeFrameValueBounds(badOffsets, 0); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("expected ErrCorrupt for non-monotonic offsets, got %v", err)
+	}
+
+	truncated := append([]byte(nil), body...)
+	if len(truncated) == 0 {
+		t.Fatal("encoded frame body is unexpectedly empty")
+	}
+	truncated = truncated[:len(truncated)-1]
+	if _, _, _, _, _, err := decodeFrameValueBounds(truncated, 0); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("expected ErrCorrupt for truncated payload, got %v", err)
 	}
 }
 

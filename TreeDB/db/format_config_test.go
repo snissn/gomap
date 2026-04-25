@@ -123,3 +123,34 @@ func TestLoadFormatConfig_UnsupportedVersion(t *testing.T) {
 		t.Fatalf("expected ok=false for unsupported format.json version")
 	}
 }
+
+func TestOpen_AppliesPersistedIndexFormatConfig(t *testing.T) {
+	dir := t.TempDir()
+
+	writer, err := Open(Options{
+		Dir:                        dir,
+		IndexOuterLeavesInValueLog: true,
+		LeafPrefixCompression:      true,
+		IndexColumnarLeaves:        true,
+		IndexPackedValuePtr:        true,
+	})
+	if err != nil {
+		t.Fatalf("initial open: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("initial close: %v", err)
+	}
+
+	reopen, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("reopen without explicit format flags: %v", err)
+	}
+	defer reopen.Close()
+
+	if !reopen.indexOuterLeavesInValueLog {
+		t.Fatalf("indexOuterLeavesInValueLog=false, want true from persisted format config")
+	}
+	if reopen.leafGenerationManifest == nil {
+		t.Fatalf("leafGenerationManifest=nil, want manifest loaded from persisted format config")
+	}
+}

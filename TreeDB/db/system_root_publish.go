@@ -66,7 +66,7 @@ func (db *DB) PublishSystemRootIterator(iter iterator.UnsafeIterator) (uint64, e
 		return 0, errors.New("concurrent modification detected during system root publish")
 	}
 
-	if err := db.finalizeCommit(userRoot, newSystemRoot, retired, false, adaptive.Metrics{}, nil, true, nil); err != nil {
+	if err := db.finalizeCommit(userRoot, newSystemRoot, retired, false, adaptive.Metrics{}, nil, true, nil, nil, nil); err != nil {
 		return 0, err
 	}
 	return newSystemRoot, nil

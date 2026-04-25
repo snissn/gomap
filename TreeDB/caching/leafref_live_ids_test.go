@@ -24,7 +24,7 @@ func (errorSlabReader) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
 }
 
 func TestCollectLeafRefValueLogLiveIDs_RespectsCanceledContext(t *testing.T) {
-	ptr := page.ValuePtr{FileID: page.ValueLogFileID(1), Offset: 0}
+	ptr := page.LeafLogPtr{FileID: 1, Offset: 0}
 	rootID, err := page.EncodeLeafRef(ptr)
 	if err != nil {
 		t.Fatalf("EncodeLeafRef: %v", err)
