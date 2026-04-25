@@ -335,6 +335,59 @@ func TestDB_FlushValueLogLaneDrainsPreparingLeafAppend(t *testing.T) {
 	writer = nil
 }
 
+func TestDB_DrainPreparedLeafPageValueLogQueueBarrierReleasesQueuedTailOnBatchError(t *testing.T) {
+	db := &DB{closeCh: make(chan struct{})}
+	leaf := lane{id: leafLogLaneID}
+	requests := make([]*leafPageAppendRequest, leafPageAppendBatchMax+1)
+	for i := range requests {
+		req := &leafPageAppendRequest{}
+		req.wg.Add(1)
+		requests[i] = req
+	}
+
+	leaf.leafAppendMu.Lock()
+	leaf.leafAppendDraining = true
+	leaf.leafAppendQueue = append(leaf.leafAppendQueue, requests...)
+	leaf.leafAppendMu.Unlock()
+
+	leaf.vlogMu.Lock()
+	err := db.drainPreparedLeafPageValueLogQueueBarrierMuHeld(&leaf)
+	leaf.vlogMu.Unlock()
+	if !errors.Is(err, errWALUnavailable) {
+		t.Fatalf("drainPreparedLeafPageValueLogQueueBarrierMuHeld error=%v want %v", err, errWALUnavailable)
+	}
+
+	leaf.leafAppendMu.Lock()
+	queued := len(leaf.leafAppendQueue)
+	draining := leaf.leafAppendDraining
+	leaf.leafAppendMu.Unlock()
+	if queued != 0 || draining {
+		t.Fatalf("queued=%d draining=%v, want empty queue and no active drainer", queued, draining)
+	}
+
+	waitLeafPageAppendRequestDone(t, requests[0])
+	waitLeafPageAppendRequestDone(t, requests[len(requests)-1])
+	for _, idx := range []int{0, len(requests) - 1} {
+		if !errors.Is(requests[idx].err, errWALUnavailable) {
+			t.Fatalf("request %d err=%v want %v", idx, requests[idx].err, errWALUnavailable)
+		}
+	}
+}
+
+func waitLeafPageAppendRequestDone(t *testing.T, req *leafPageAppendRequest) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() {
+		req.wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("leaf append request was not released")
+	}
+}
+
 func TestDB_AppendPreparedLeafPageValueLog_BatchesQueuedPreparedAppends(t *testing.T) {
 	dir := t.TempDir()
 	fileID, err := valuelog.EncodeFileID(uint32(leafLogLaneID), 1)

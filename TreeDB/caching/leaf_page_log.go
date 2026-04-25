@@ -243,6 +243,7 @@ func (db *DB) drainPreparedLeafPageValueLogQueueBarrierMuHeld(l *lane) error {
 			}
 		}
 		if firstErr != nil {
+			finishQueuedLeafPageAppendRequests(l, firstErr)
 			return firstErr
 		}
 	}
@@ -347,6 +348,30 @@ func finishLeafPageAppendBatch(batch []*leafPageAppendRequest, err error) {
 		batch[i].retainPath = ""
 		batch[i].totalBytes = 0
 		batch[i].err = err
+	}
+}
+
+func finishQueuedLeafPageAppendRequests(l *lane, err error) {
+	if l == nil || err == nil {
+		return
+	}
+	l.leafAppendMu.Lock()
+	queued := l.leafAppendQueue
+	if len(queued) > 0 {
+		l.leafAppendQueue = nil
+	} else {
+		l.leafAppendQueue = l.leafAppendQueue[:0]
+	}
+	l.leafAppendDraining = false
+	broadcastLeafAppendLocked(l)
+	l.leafAppendMu.Unlock()
+
+	finishLeafPageAppendBatch(queued, err)
+	for i := range queued {
+		if queued[i] != nil {
+			queued[i].wg.Done()
+			queued[i] = nil
+		}
 	}
 }
 
