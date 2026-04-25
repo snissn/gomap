@@ -20339,8 +20339,8 @@ func (db *DB) Set(key, value []byte) error {
 		return ErrValueNil
 	}
 	db.waitForCheckpoint()
-	unlock := db.lockUpdateKey(key)
-	defer unlock()
+	updateMu := db.lockUpdateKey(key)
+	defer unlockUpdateKey(updateMu)
 	return db.set(key, value, false)
 }
 
@@ -20352,8 +20352,8 @@ func (db *DB) SetSync(key, value []byte) error {
 		return ErrValueNil
 	}
 	db.waitForCheckpoint()
-	unlock := db.lockUpdateKey(key)
-	defer unlock()
+	updateMu := db.lockUpdateKey(key)
+	defer unlockUpdateKey(updateMu)
 	return db.set(key, value, true)
 }
 
@@ -20379,9 +20379,9 @@ func (db *DB) update(key []byte, fn backenddb.UpdateFunc, syncWrite bool) error 
 	db.waitForCheckpoint()
 
 	for {
-		unlock := db.lockUpdateKey(key)
+		updateMu := db.lockUpdateKey(key)
 		old, err := db.getForUpdate(key)
-		unlock()
+		unlockUpdateKey(updateMu)
 		if err != nil {
 			return err
 		}
@@ -20398,31 +20398,31 @@ func (db *DB) update(key []byte, fn backenddb.UpdateFunc, syncWrite bool) error 
 			return fmt.Errorf("treedb: unknown update op %d", result.Op)
 		}
 
-		unlock = db.lockUpdateKey(key)
+		updateMu = db.lockUpdateKey(key)
 		latest, err := db.getForUpdate(key)
 		if err != nil {
-			unlock()
+			unlockUpdateKey(updateMu)
 			return err
 		}
 		if !sameUpdateValue(observed, latest) {
-			unlock()
+			unlockUpdateKey(updateMu)
 			continue
 		}
 
 		switch result.Op {
 		case backenddb.UpdateNoop:
-			unlock()
+			unlockUpdateKey(updateMu)
 			return nil
 		case backenddb.UpdateSet:
 			err = db.set(key, result.Value, syncWrite)
-			unlock()
+			unlockUpdateKey(updateMu)
 			return err
 		case backenddb.UpdateDelete:
 			err = db.delete(key, syncWrite)
-			unlock()
+			unlockUpdateKey(updateMu)
 			return err
 		default:
-			unlock()
+			unlockUpdateKey(updateMu)
 			return fmt.Errorf("treedb: unknown update op %d", result.Op)
 		}
 	}
@@ -20702,8 +20702,8 @@ func (db *DB) Delete(key []byte) error {
 		return ErrKeyEmpty
 	}
 	db.waitForCheckpoint()
-	unlock := db.lockUpdateKey(key)
-	defer unlock()
+	updateMu := db.lockUpdateKey(key)
+	defer unlockUpdateKey(updateMu)
 	return db.delete(key, false)
 }
 
@@ -21323,16 +21323,22 @@ func (db *DB) DeleteSync(key []byte) error {
 		return ErrKeyEmpty
 	}
 	db.waitForCheckpoint()
-	unlock := db.lockUpdateKey(key)
-	defer unlock()
+	updateMu := db.lockUpdateKey(key)
+	defer unlockUpdateKey(updateMu)
 	return db.delete(key, true)
 }
 
-func (db *DB) lockUpdateKey(key []byte) func() {
+func (db *DB) lockUpdateKey(key []byte) *sync.Mutex {
 	if db == nil {
-		return func() {}
+		return nil
 	}
-	return db.updateLocks.Lock(key)
+	return db.updateLocks.LockMutex(key)
+}
+
+func unlockUpdateKey(mu *sync.Mutex) {
+	if mu != nil {
+		mu.Unlock()
+	}
 }
 
 func (db *DB) delete(key []byte, sync bool) error {
