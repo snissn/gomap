@@ -19,10 +19,12 @@ const (
 	leafGenerationRecordLengthIndexMagic      = "TLGI"
 	leafGenerationRecordLengthIndexVersion    = 1
 	leafGenerationRecordLengthIndexSuffix     = ".lenidx"
-	// Live leaf-log writers add records in offset order. Preallocating one
-	// modest segment's worth of record metadata avoids repeated growth while
-	// keeping retained per-file index memory bounded.
-	leafGenerationRecordLengthIndexLiveInitialCap = 4096
+	// Live leaf-log writers add records in offset order. Avoid a large first-use
+	// allocation because many small rotated files can keep their cached indexes
+	// for process lifetime; grow to one modest segment's worth only after the file
+	// has enough records to prove it is not a tiny segment.
+	leafGenerationRecordLengthIndexLivePreallocTrigger = 64
+	leafGenerationRecordLengthIndexLivePreallocCap     = 4096
 )
 
 type leafGenerationRecordLengthIndex struct {
@@ -74,10 +76,7 @@ func (idx *leafGenerationRecordLengthIndex) clone() *leafGenerationRecordLengthI
 }
 
 func newLiveLeafGenerationRecordLengthIndex() *leafGenerationRecordLengthIndex {
-	return &leafGenerationRecordLengthIndex{
-		offsets: make([]uint32, 0, leafGenerationRecordLengthIndexLiveInitialCap),
-		lengths: make([]uint32, 0, leafGenerationRecordLengthIndexLiveInitialCap),
-	}
+	return &leafGenerationRecordLengthIndex{}
 }
 
 func (idx *leafGenerationRecordLengthIndex) lookup(offset uint64) (uint32, bool) {
@@ -142,6 +141,7 @@ func (idx *leafGenerationRecordLengthIndex) add(offset uint64, length uint32) bo
 	off32 := uint32(offset)
 	n := len(idx.offsets)
 	if n == 0 || idx.offsets[n-1] < off32 {
+		idx.reserveLiveAppendCapacity(n + 1)
 		idx.offsets = append(idx.offsets, off32)
 		idx.lengths = append(idx.lengths, length)
 		return true
@@ -156,6 +156,7 @@ func (idx *leafGenerationRecordLengthIndex) add(offset uint64, length uint32) bo
 		idx.lengths[i] = length
 		return true
 	}
+	idx.reserveLiveAppendCapacity(n + 1)
 	idx.offsets = append(idx.offsets, 0)
 	copy(idx.offsets[i+1:], idx.offsets[i:])
 	idx.offsets[i] = off32
@@ -163,6 +164,25 @@ func (idx *leafGenerationRecordLengthIndex) add(offset uint64, length uint32) bo
 	copy(idx.lengths[i+1:], idx.lengths[i:])
 	idx.lengths[i] = length
 	return true
+}
+
+func (idx *leafGenerationRecordLengthIndex) reserveLiveAppendCapacity(nextLen int) {
+	if idx == nil || nextLen <= cap(idx.offsets) && nextLen <= cap(idx.lengths) {
+		return
+	}
+	target := nextLen
+	if nextLen > leafGenerationRecordLengthIndexLivePreallocTrigger && target < leafGenerationRecordLengthIndexLivePreallocCap {
+		target = leafGenerationRecordLengthIndexLivePreallocCap
+	}
+	if target <= cap(idx.offsets) && target <= cap(idx.lengths) {
+		return
+	}
+	offsets := make([]uint32, len(idx.offsets), target)
+	copy(offsets, idx.offsets)
+	lengths := make([]uint32, len(idx.lengths), target)
+	copy(lengths, idx.lengths)
+	idx.offsets = offsets
+	idx.lengths = lengths
 }
 
 func leafGenerationRecordLengthIndexPath(rootDir string, rawFileID uint32) string {

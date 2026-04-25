@@ -63,7 +63,7 @@ func TestLeafGenerationRecordLengthIndex_NoteRawAllowsOffsetZero(t *testing.T) {
 	}
 }
 
-func TestLeafGenerationRecordLengthIndex_NoteRawPreallocatesLiveIndex(t *testing.T) {
+func TestLeafGenerationRecordLengthIndex_NoteRawStartsSmallForTinyLiveIndex(t *testing.T) {
 	db := &DB{}
 	db.noteLeafGenerationRecordLengthRaw(11, 4, 96)
 
@@ -73,13 +73,36 @@ func TestLeafGenerationRecordLengthIndex_NoteRawPreallocatesLiveIndex(t *testing
 	if idx == nil {
 		t.Fatal("expected live record-length index")
 	}
-	if got, wantMin := cap(idx.offsets), leafGenerationRecordLengthIndexLiveInitialCap; got < wantMin {
-		t.Fatalf("offset capacity=%d want >= %d", got, wantMin)
+	if got, wantMax := cap(idx.offsets), leafGenerationRecordLengthIndexLivePreallocTrigger; got > wantMax {
+		t.Fatalf("offset capacity=%d want <= %d for tiny live index", got, wantMax)
 	}
-	if got, wantMin := cap(idx.lengths), leafGenerationRecordLengthIndexLiveInitialCap; got < wantMin {
-		t.Fatalf("length capacity=%d want >= %d", got, wantMin)
+	if got, wantMax := cap(idx.lengths), leafGenerationRecordLengthIndexLivePreallocTrigger; got > wantMax {
+		t.Fatalf("length capacity=%d want <= %d for tiny live index", got, wantMax)
 	}
 	if got, ok := idx.lookup(4); !ok || got != 96 {
 		t.Fatalf("lookup(4)=(%d,%v), want (96,true)", got, ok)
+	}
+}
+
+func TestLeafGenerationRecordLengthIndex_NoteRawPreallocatesAfterSustainedUse(t *testing.T) {
+	db := &DB{}
+	for i := 0; i < leafGenerationRecordLengthIndexLivePreallocTrigger+1; i++ {
+		db.noteLeafGenerationRecordLengthRaw(12, uint64(i*128), 96)
+	}
+
+	db.leafGenerationRecordLengthMu.RLock()
+	idx := db.leafGenerationRecordLengthByFile[12]
+	db.leafGenerationRecordLengthMu.RUnlock()
+	if idx == nil {
+		t.Fatal("expected live record-length index")
+	}
+	if got, wantMin := cap(idx.offsets), leafGenerationRecordLengthIndexLivePreallocCap; got < wantMin {
+		t.Fatalf("offset capacity=%d want >= %d", got, wantMin)
+	}
+	if got, wantMin := cap(idx.lengths), leafGenerationRecordLengthIndexLivePreallocCap; got < wantMin {
+		t.Fatalf("length capacity=%d want >= %d", got, wantMin)
+	}
+	if got, ok := idx.lookup(uint64(leafGenerationRecordLengthIndexLivePreallocTrigger * 128)); !ok || got != 96 {
+		t.Fatalf("lookup(last)=(%d,%v), want (96,true)", got, ok)
 	}
 }
