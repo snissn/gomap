@@ -56,8 +56,13 @@ const (
 	defaultAdaptiveCapEnabled       = true
 	defaultMaxMappedSealed          = 8
 	defaultMaxMappedSealedBytes     = 64 << 20
-	defaultMaxMappedLeafSealed      = defaultMaxMappedSealed * 4
-	defaultMaxMappedLeafSealedBytes = defaultMaxMappedSealedBytes * 4
+	// Leaf-log segments back outer index leaves, so falling back to pread on
+	// sealed leaf logs directly slows point reads and scans. Keep the generic
+	// value-log budget conservative, but give leaf logs enough mmap headroom for
+	// benchmark-scale and production read working sets by default. Operators can
+	// still lower this with TREEDB_VLOG_MAX_MAPPED_LEAF_SEALED_*.
+	defaultMaxMappedLeafSealed      = 512
+	defaultMaxMappedLeafSealedBytes = 4 << 30
 )
 
 var (
