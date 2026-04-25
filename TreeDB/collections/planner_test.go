@@ -147,6 +147,109 @@ func TestInsertBatchPlanner_FailFastDuplicatesBeforePayloadConstruction(t *testi
 	}
 }
 
+func TestInsertBatchPlanner_RejectsPersistedDocumentIDBeforePayloadConstruction(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	primary := newCollectionRunTable(1)
+	primary.SetSteal([]byte("u1"), []byte(`{"email":"seed@example.com"}`))
+	primary.Freeze()
+	_, rootIDs, err := d.PublishOrderedRootGroup(nil, []backenddb.OrderedRootPublishInput{{
+		Iter: primary.NewIterator(nil, nil),
+	}})
+	if err != nil {
+		t.Fatalf("publish primary seed: %v", err)
+	}
+
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("expected snapshot")
+	}
+	defer func() { _ = snap.Close() }()
+
+	builds := 0
+	planner := insertBatchPlanner{
+		collection: "users",
+		buildPrimaryVal: func(_, document []byte) ([]byte, error) {
+			builds++
+			return bytes.Clone(document), nil
+		},
+	}
+	_, err = planner.planInsertBatchWithPreflight(
+		[][]byte{[]byte("u1"), []byte("u2")},
+		[][]byte{[]byte(`{"email":"dup@example.com"}`), []byte(`{"email":"new@example.com"}`)},
+		insertBatchPreflight{
+			snapshot:      snap,
+			primaryRootID: rootIDs[0],
+		},
+	)
+	if err == nil || !strings.Contains(err.Error(), "document already exists") {
+		t.Fatalf("err=%v want persisted document conflict", err)
+	}
+	if builds != 0 {
+		t.Fatalf("payload builds=%d want 0", builds)
+	}
+}
+
+func TestInsertBatchPlanner_RejectsPersistedUniqueValueBeforePayloadConstruction(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	seedKey, err := indexEntryKey([]byte("s:seed@example.com"), []byte("seed"))
+	if err != nil {
+		t.Fatalf("seed index key: %v", err)
+	}
+	secondary := newCollectionRunTable(1)
+	secondary.SetSteal(seedKey, nil)
+	secondary.Freeze()
+	_, rootIDs, err := d.PublishOrderedRootGroup(nil, []backenddb.OrderedRootPublishInput{{
+		Iter: secondary.NewIterator(nil, nil),
+	}})
+	if err != nil {
+		t.Fatalf("publish secondary seed: %v", err)
+	}
+
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("expected snapshot")
+	}
+	defer func() { _ = snap.Close() }()
+
+	builds := 0
+	planner := insertBatchPlanner{
+		collection: "users",
+		indexes: []indexDefinition{
+			{name: "email", field: "email", unique: true},
+		},
+		buildPrimaryVal: func(_, document []byte) ([]byte, error) {
+			builds++
+			return bytes.Clone(document), nil
+		},
+	}
+	_, err = planner.planInsertBatchWithPreflight(
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"email":"seed@example.com"}`)},
+		insertBatchPreflight{
+			snapshot: snap,
+			uniqueIndexRootIDs: map[string]uint64{
+				"email": rootIDs[0],
+			},
+		},
+	)
+	if err == nil || !strings.Contains(err.Error(), "unique index") {
+		t.Fatalf("err=%v want persisted unique conflict", err)
+	}
+	if builds != 0 {
+		t.Fatalf("payload builds=%d want 0", builds)
+	}
+}
+
 func TestInsertBatchPlanner_PublishesRunsThroughGroupedOrderedRootPublisher(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {

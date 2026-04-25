@@ -13,6 +13,7 @@ import (
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
+	"github.com/snissn/gomap/TreeDB/tree"
 )
 
 const documentIndexStateVersion = 1
@@ -91,7 +92,21 @@ type groupedRootPublisher interface {
 	PublishOrderedRootGroup(systemIter iterator.UnsafeIterator, ordered []backenddb.OrderedRootPublishInput) (uint64, []uint64, error)
 }
 
+type rootSnapshotProbe interface {
+	IteratorAtRoot(rootID uint64, start, end []byte) (iterator.UnsafeIterator, error)
+}
+
+type insertBatchPreflight struct {
+	snapshot           rootSnapshotProbe
+	primaryRootID      uint64
+	uniqueIndexRootIDs map[string]uint64
+}
+
 func (p insertBatchPlanner) planInsertBatch(ids, documents [][]byte) (*insertBatchPlan, error) {
+	return p.planInsertBatchWithPreflight(ids, documents, insertBatchPreflight{})
+}
+
+func (p insertBatchPlanner) planInsertBatchWithPreflight(ids, documents [][]byte, preflight insertBatchPreflight) (*insertBatchPlan, error) {
 	if len(documents) == 0 {
 		return &insertBatchPlan{}, nil
 	}
@@ -141,6 +156,12 @@ func (p insertBatchPlanner) planInsertBatch(ids, documents [][]byte) (*insertBat
 	if err != nil {
 		return nil, err
 	}
+	if err := preflight.checkDocumentConflicts(items); err != nil {
+		return nil, err
+	}
+	if err := preflight.checkUniqueConflicts(uniqueProbeRuns); err != nil {
+		return nil, err
+	}
 
 	plan := &insertBatchPlan{
 		resultIDs:       resultIDs,
@@ -158,6 +179,44 @@ func (p insertBatchPlanner) planInsertBatch(ids, documents [][]byte) (*insertBat
 		}
 	}
 	return plan, nil
+}
+
+func (p insertBatchPreflight) checkDocumentConflicts(items []insertBatchItem) error {
+	if p.snapshot == nil || p.primaryRootID == 0 {
+		return nil
+	}
+	for i := range items {
+		exists, err := rootHasExactKey(p.snapshot, p.primaryRootID, items[i].id)
+		if err != nil {
+			return err
+		}
+		if exists {
+			return errors.New("collections: document already exists")
+		}
+	}
+	return nil
+}
+
+func (p insertBatchPreflight) checkUniqueConflicts(runs []collectionUniqueProbeRun) error {
+	if p.snapshot == nil || len(p.uniqueIndexRootIDs) == 0 {
+		return nil
+	}
+	for _, run := range runs {
+		rootID := p.uniqueIndexRootIDs[run.indexName]
+		if rootID == 0 {
+			continue
+		}
+		for _, prefix := range run.prefixes {
+			exists, err := rootHasPrefix(p.snapshot, rootID, prefix)
+			if err != nil {
+				return err
+			}
+			if exists {
+				return fmt.Errorf("collections: unique index %q conflict", run.indexName)
+			}
+		}
+	}
+	return nil
 }
 
 func clonePrimaryDocument(_, document []byte) ([]byte, error) {
@@ -538,6 +597,56 @@ func indexValuePrefix(encodedValue []byte) ([]byte, error) {
 	out = binary.BigEndian.AppendUint16(out, uint16(len(encodedValue)))
 	out = append(out, encodedValue...)
 	return out, nil
+}
+
+func rootHasExactKey(snapshot rootSnapshotProbe, rootID uint64, key []byte) (bool, error) {
+	if snapshot == nil || rootID == 0 {
+		return false, nil
+	}
+	it, err := snapshot.IteratorAtRoot(rootID, key, prefixEnd(key))
+	if errors.Is(err, tree.ErrKeyNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = it.Close() }()
+	if !it.Valid() {
+		return false, it.Error()
+	}
+	return bytes.Equal(it.UnsafeKey(), key), it.Error()
+}
+
+func rootHasPrefix(snapshot rootSnapshotProbe, rootID uint64, prefix []byte) (bool, error) {
+	if snapshot == nil || rootID == 0 {
+		return false, nil
+	}
+	it, err := snapshot.IteratorAtRoot(rootID, prefix, prefixEnd(prefix))
+	if errors.Is(err, tree.ErrKeyNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = it.Close() }()
+	if !it.Valid() {
+		return false, it.Error()
+	}
+	return true, it.Error()
+}
+
+func prefixEnd(prefix []byte) []byte {
+	if len(prefix) == 0 {
+		return nil
+	}
+	out := bytes.Clone(prefix)
+	for i := len(out) - 1; i >= 0; i-- {
+		if out[i] != 0xff {
+			out[i]++
+			return out[:i+1]
+		}
+	}
+	return nil
 }
 
 func (plan *insertBatchPlan) publishRootRuns(publisher groupedRootPublisher, baseRootIDs map[string]uint64) ([]uint64, error) {
