@@ -13,7 +13,6 @@ import (
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
-	"github.com/snissn/gomap/TreeDB/tree"
 )
 
 const documentIndexStateVersion = 1
@@ -93,7 +92,8 @@ type groupedRootPublisher interface {
 }
 
 type rootSnapshotProbe interface {
-	IteratorAtRoot(rootID uint64, start, end []byte) (iterator.UnsafeIterator, error)
+	HasManyAtRoot(rootID uint64, keys [][]byte) ([]bool, error)
+	HasPrefixesAtRoot(rootID uint64, prefixes [][]byte) ([]bool, error)
 }
 
 type insertBatchPreflight struct {
@@ -185,12 +185,16 @@ func (p insertBatchPreflight) checkDocumentConflicts(items []insertBatchItem) er
 	if p.snapshot == nil || p.primaryRootID == 0 {
 		return nil
 	}
+	keys := make([][]byte, len(items))
 	for i := range items {
-		exists, err := rootHasExactKey(p.snapshot, p.primaryRootID, items[i].id)
-		if err != nil {
-			return err
-		}
-		if exists {
+		keys[i] = items[i].id
+	}
+	exists, err := p.snapshot.HasManyAtRoot(p.primaryRootID, keys)
+	if err != nil {
+		return err
+	}
+	for _, ok := range exists {
+		if ok {
 			return errors.New("collections: document already exists")
 		}
 	}
@@ -206,12 +210,12 @@ func (p insertBatchPreflight) checkUniqueConflicts(runs []collectionUniqueProbeR
 		if rootID == 0 {
 			continue
 		}
-		for _, prefix := range run.prefixes {
-			exists, err := rootHasPrefix(p.snapshot, rootID, prefix)
-			if err != nil {
-				return err
-			}
-			if exists {
+		exists, err := p.snapshot.HasPrefixesAtRoot(rootID, run.prefixes)
+		if err != nil {
+			return err
+		}
+		for _, ok := range exists {
+			if ok {
 				return fmt.Errorf("collections: unique index %q conflict", run.indexName)
 			}
 		}
@@ -648,42 +652,6 @@ func indexValuePrefix(encodedValue []byte) ([]byte, error) {
 	out = binary.BigEndian.AppendUint16(out, uint16(len(encodedValue)))
 	out = append(out, encodedValue...)
 	return out, nil
-}
-
-func rootHasExactKey(snapshot rootSnapshotProbe, rootID uint64, key []byte) (bool, error) {
-	if snapshot == nil || rootID == 0 {
-		return false, nil
-	}
-	it, err := snapshot.IteratorAtRoot(rootID, key, prefixEnd(key))
-	if errors.Is(err, tree.ErrKeyNotFound) {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	defer func() { _ = it.Close() }()
-	if !it.Valid() {
-		return false, it.Error()
-	}
-	return bytes.Equal(it.UnsafeKey(), key), it.Error()
-}
-
-func rootHasPrefix(snapshot rootSnapshotProbe, rootID uint64, prefix []byte) (bool, error) {
-	if snapshot == nil || rootID == 0 {
-		return false, nil
-	}
-	it, err := snapshot.IteratorAtRoot(rootID, prefix, prefixEnd(prefix))
-	if errors.Is(err, tree.ErrKeyNotFound) {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	defer func() { _ = it.Close() }()
-	if !it.Valid() {
-		return false, it.Error()
-	}
-	return true, it.Error()
 }
 
 func prefixEnd(prefix []byte) []byte {

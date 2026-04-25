@@ -1,6 +1,8 @@
 package db
 
 import (
+	"errors"
+
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/tree"
@@ -34,4 +36,34 @@ func (s *Snapshot) IteratorAtRootWithOptions(rootID uint64, start, end []byte, o
 		return nil, err
 	}
 	return tr.IteratorWithOptions(start, end, opts), nil
+}
+
+func (s *Snapshot) HasManyAtRoot(rootID uint64, keys [][]byte) ([]bool, error) {
+	out := make([]bool, len(keys))
+	if len(keys) == 0 {
+		return out, nil
+	}
+	tr, err := s.treeAtRoot(rootID)
+	if errors.Is(err, tree.ErrKeyNotFound) {
+		return out, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return tr.HasMany(keys)
+}
+
+func (s *Snapshot) HasPrefixesAtRoot(rootID uint64, prefixes [][]byte) ([]bool, error) {
+	out := make([]bool, len(prefixes))
+	if len(prefixes) == 0 {
+		return out, nil
+	}
+	tr, err := s.treeAtRoot(rootID)
+	if errors.Is(err, tree.ErrKeyNotFound) {
+		return out, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return tr.HasPrefixes(prefixes)
 }

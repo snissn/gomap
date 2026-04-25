@@ -250,6 +250,60 @@ func TestInsertBatchPlanner_RejectsPersistedUniqueValueBeforePayloadConstruction
 	}
 }
 
+func TestInsertBatchPlanner_PreflightUsesRootBatchProbes(t *testing.T) {
+	probe := &recordingRootSnapshotProbe{}
+	builds := 0
+	planner := insertBatchPlanner{
+		collection: "users",
+		indexes: []indexDefinition{
+			{name: "email", field: "email", unique: true},
+		},
+		buildPrimaryVal: func(_, document []byte) ([]byte, error) {
+			builds++
+			return bytes.Clone(document), nil
+		},
+	}
+
+	_, err := planner.planInsertBatchWithPreflight(
+		[][]byte{[]byte("u1"), []byte("u2")},
+		[][]byte{
+			[]byte(`{"email":"ada@example.com"}`),
+			[]byte(`{"email":"grace@example.com"}`),
+		},
+		insertBatchPreflight{
+			snapshot:      probe,
+			primaryRootID: 42,
+			uniqueIndexRootIDs: map[string]uint64{
+				"email": 77,
+			},
+		},
+	)
+	if err != nil {
+		t.Fatalf("plan insert batch: %v", err)
+	}
+	if got, want := probe.hasManyCalls, 1; got != want {
+		t.Fatalf("HasManyAtRoot calls=%d want %d", got, want)
+	}
+	if got, want := probe.hasPrefixesCalls, 1; got != want {
+		t.Fatalf("HasPrefixesAtRoot calls=%d want %d", got, want)
+	}
+	if got, want := probe.lastHasManyRootID, uint64(42); got != want {
+		t.Fatalf("HasManyAtRoot root=%d want %d", got, want)
+	}
+	if got, want := probe.lastHasPrefixesRootID, uint64(77); got != want {
+		t.Fatalf("HasPrefixesAtRoot root=%d want %d", got, want)
+	}
+	if got, want := byteMatrixStrings(probe.lastHasManyKeys), []string{"u1", "u2"}; !equalStrings(got, want) {
+		t.Fatalf("HasManyAtRoot keys=%q want %q", got, want)
+	}
+	if got, want := len(probe.lastHasPrefixesPrefixes), 2; got != want {
+		t.Fatalf("HasPrefixesAtRoot prefixes=%d want %d", got, want)
+	}
+	if builds != 2 {
+		t.Fatalf("payload builds=%d want 2", builds)
+	}
+}
+
 func TestInsertBatchPlanner_PublishesRunsThroughGroupedOrderedRootPublisher(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
@@ -330,6 +384,29 @@ type runEntry struct {
 	value []byte
 }
 
+type recordingRootSnapshotProbe struct {
+	hasManyCalls            int
+	hasPrefixesCalls        int
+	lastHasManyRootID       uint64
+	lastHasPrefixesRootID   uint64
+	lastHasManyKeys         [][]byte
+	lastHasPrefixesPrefixes [][]byte
+}
+
+func (p *recordingRootSnapshotProbe) HasManyAtRoot(rootID uint64, keys [][]byte) ([]bool, error) {
+	p.hasManyCalls++
+	p.lastHasManyRootID = rootID
+	p.lastHasManyKeys = cloneByteMatrix(keys)
+	return make([]bool, len(keys)), nil
+}
+
+func (p *recordingRootSnapshotProbe) HasPrefixesAtRoot(rootID uint64, prefixes [][]byte) ([]bool, error) {
+	p.hasPrefixesCalls++
+	p.lastHasPrefixesRootID = rootID
+	p.lastHasPrefixesPrefixes = cloneByteMatrix(prefixes)
+	return make([]bool, len(prefixes)), nil
+}
+
 func mustFindRun(t *testing.T, plan *insertBatchPlan, kind collectionRootKind, indexName string) collectionRootRun {
 	t.Helper()
 	for _, run := range plan.runs {
@@ -400,4 +477,32 @@ func entryKeys(entries []runEntry) [][]byte {
 		keys[i] = entries[i].key
 	}
 	return keys
+}
+
+func cloneByteMatrix(in [][]byte) [][]byte {
+	out := make([][]byte, len(in))
+	for i := range in {
+		out[i] = bytes.Clone(in[i])
+	}
+	return out
+}
+
+func byteMatrixStrings(in [][]byte) []string {
+	out := make([]string, len(in))
+	for i := range in {
+		out[i] = string(in[i])
+	}
+	return out
+}
+
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
