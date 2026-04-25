@@ -281,20 +281,20 @@ func TestInsertBatchPlanner_PreflightUsesRootBatchProbes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("plan insert batch: %v", err)
 	}
-	if got, want := probe.hasManyCalls, 1; got != want {
-		t.Fatalf("HasManyAtRoot calls=%d want %d", got, want)
+	if got, want := probe.hasAnySortedCalls, 1; got != want {
+		t.Fatalf("HasAnySortedAtRoot calls=%d want %d", got, want)
 	}
 	if got, want := probe.hasPrefixesCalls, 1; got != want {
 		t.Fatalf("HasPrefixesAtRoot calls=%d want %d", got, want)
 	}
-	if got, want := probe.lastHasManyRootID, uint64(42); got != want {
-		t.Fatalf("HasManyAtRoot root=%d want %d", got, want)
+	if got, want := probe.lastHasAnySortedRootID, uint64(42); got != want {
+		t.Fatalf("HasAnySortedAtRoot root=%d want %d", got, want)
 	}
 	if got, want := probe.lastHasPrefixesRootID, uint64(77); got != want {
 		t.Fatalf("HasPrefixesAtRoot root=%d want %d", got, want)
 	}
-	if got, want := byteMatrixStrings(probe.lastHasManyKeys), []string{"u1", "u2"}; !equalStrings(got, want) {
-		t.Fatalf("HasManyAtRoot keys=%q want %q", got, want)
+	if got, want := byteMatrixStrings(probe.lastHasAnySortedKeys), []string{"u1", "u2"}; !equalStrings(got, want) {
+		t.Fatalf("HasAnySortedAtRoot keys=%q want %q", got, want)
 	}
 	if got, want := len(probe.lastHasPrefixesPrefixes), 2; got != want {
 		t.Fatalf("HasPrefixesAtRoot prefixes=%d want %d", got, want)
@@ -385,19 +385,19 @@ type runEntry struct {
 }
 
 type recordingRootSnapshotProbe struct {
-	hasManyCalls            int
+	hasAnySortedCalls       int
 	hasPrefixesCalls        int
-	lastHasManyRootID       uint64
+	lastHasAnySortedRootID  uint64
 	lastHasPrefixesRootID   uint64
-	lastHasManyKeys         [][]byte
+	lastHasAnySortedKeys    [][]byte
 	lastHasPrefixesPrefixes [][]byte
 }
 
-func (p *recordingRootSnapshotProbe) HasManyAtRoot(rootID uint64, keys [][]byte) ([]bool, error) {
-	p.hasManyCalls++
-	p.lastHasManyRootID = rootID
-	p.lastHasManyKeys = cloneByteMatrix(keys)
-	return make([]bool, len(keys)), nil
+func (p *recordingRootSnapshotProbe) HasAnySortedAtRoot(rootID uint64, keys [][]byte) (bool, error) {
+	p.hasAnySortedCalls++
+	p.lastHasAnySortedRootID = rootID
+	p.lastHasAnySortedKeys = cloneByteMatrix(keys)
+	return false, nil
 }
 
 func (p *recordingRootSnapshotProbe) HasPrefixesAtRoot(rootID uint64, prefixes [][]byte) ([]bool, error) {

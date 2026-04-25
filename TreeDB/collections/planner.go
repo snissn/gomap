@@ -94,7 +94,7 @@ type groupedRootPublisher interface {
 }
 
 type rootSnapshotProbe interface {
-	HasManyAtRoot(rootID uint64, keys [][]byte) ([]bool, error)
+	HasAnySortedAtRoot(rootID uint64, keys [][]byte) (bool, error)
 	HasPrefixesAtRoot(rootID uint64, prefixes [][]byte) ([]bool, error)
 }
 
@@ -142,7 +142,8 @@ func (p insertBatchPlanner) planInsertBatchWithPreflight(ids, documents [][]byte
 		resultIDs[i] = id
 	}
 
-	if err := rejectDuplicateDocumentIDs(items); err != nil {
+	primaryOrder := sortedItemOrderByKey(items, func(item *insertBatchItem) []byte { return item.id })
+	if err := rejectDuplicateDocumentIDs(items, primaryOrder); err != nil {
 		return nil, err
 	}
 
@@ -158,7 +159,7 @@ func (p insertBatchPlanner) planInsertBatchWithPreflight(ids, documents [][]byte
 	if err != nil {
 		return nil, err
 	}
-	if err := preflight.checkDocumentConflicts(items); err != nil {
+	if err := preflight.checkDocumentConflicts(items, primaryOrder); err != nil {
 		return nil, err
 	}
 	if err := preflight.checkUniqueConflicts(uniqueProbeRuns); err != nil {
@@ -169,7 +170,7 @@ func (p insertBatchPlanner) planInsertBatchWithPreflight(ids, documents [][]byte
 		resultIDs:       resultIDs,
 		uniqueProbeRuns: uniqueProbeRuns,
 	}
-	if err := p.emitPrimaryRun(plan, items); err != nil {
+	if err := p.emitPrimaryRun(plan, items, primaryOrder); err != nil {
 		return nil, err
 	}
 	if len(runtimes) > 0 {
@@ -183,22 +184,20 @@ func (p insertBatchPlanner) planInsertBatchWithPreflight(ids, documents [][]byte
 	return plan, nil
 }
 
-func (p insertBatchPreflight) checkDocumentConflicts(items []insertBatchItem) error {
+func (p insertBatchPreflight) checkDocumentConflicts(items []insertBatchItem, order []int) error {
 	if p.snapshot == nil || p.primaryRootID == 0 {
 		return nil
 	}
-	keys := make([][]byte, len(items))
-	for i := range items {
-		keys[i] = items[i].id
+	keys := make([][]byte, len(order))
+	for i, idx := range order {
+		keys[i] = items[idx].id
 	}
-	exists, err := p.snapshot.HasManyAtRoot(p.primaryRootID, keys)
+	exists, err := p.snapshot.HasAnySortedAtRoot(p.primaryRootID, keys)
 	if err != nil {
 		return err
 	}
-	for _, ok := range exists {
-		if ok {
-			return errors.New("collections: document already exists")
-		}
+	if exists {
+		return errors.New("collections: document already exists")
 	}
 	return nil
 }
@@ -229,14 +228,7 @@ func borrowPrimaryDocument(_, document []byte) ([]byte, error) {
 	return document, nil
 }
 
-func rejectDuplicateDocumentIDs(items []insertBatchItem) error {
-	order := make([]int, len(items))
-	for i := range order {
-		order[i] = i
-	}
-	sort.Slice(order, func(i, j int) bool {
-		return bytes.Compare(items[order[i]].id, items[order[j]].id) < 0
-	})
+func rejectDuplicateDocumentIDs(items []insertBatchItem, order []int) error {
 	for i := 1; i < len(order); i++ {
 		if bytes.Equal(items[order[i-1]].id, items[order[i]].id) {
 			return errors.New("collections: duplicate document id in batch")
@@ -333,8 +325,7 @@ func buildUniqueProbeRuns(candidates []uniqueProbeCandidate) ([]collectionUnique
 	return runs, nil
 }
 
-func (p insertBatchPlanner) emitPrimaryRun(plan *insertBatchPlan, items []insertBatchItem) error {
-	order := sortedItemOrderByKey(items, func(item *insertBatchItem) []byte { return item.id })
+func (p insertBatchPlanner) emitPrimaryRun(plan *insertBatchPlan, items []insertBatchItem, order []int) error {
 	table := newCollectionRunTable(len(items))
 	for _, idx := range order {
 		value, err := p.buildPrimaryVal(items[idx].id, items[idx].document)

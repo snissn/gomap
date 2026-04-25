@@ -97,6 +97,36 @@ func TestSnapshot_HasManyAtRootAndHasPrefixesAtRoot(t *testing.T) {
 		t.Fatalf("HasManyAtRoot mismatch: got=%v want=%v", hasMany, want)
 	}
 
+	hasAnySorted, err := snap.HasAnySortedAtRoot(rootIDs[0], [][]byte{
+		[]byte("acct/alice/doc-0"),
+		[]byte("acct/bob/doc-1"),
+		[]byte("acct/carol/doc-1"),
+	})
+	if err != nil {
+		t.Fatalf("HasAnySortedAtRoot: %v", err)
+	}
+	if !hasAnySorted {
+		t.Fatalf("HasAnySortedAtRoot got false want true")
+	}
+
+	hasAnySorted, err = snap.HasAnySortedAtRoot(rootIDs[0], [][]byte{
+		[]byte("acct/alice/doc-0"),
+		[]byte("acct/carol/doc-1"),
+	})
+	if err != nil {
+		t.Fatalf("HasAnySortedAtRoot miss: %v", err)
+	}
+	if hasAnySorted {
+		t.Fatalf("HasAnySortedAtRoot miss got true want false")
+	}
+
+	if _, err := snap.HasAnySortedAtRoot(rootIDs[0], [][]byte{
+		[]byte("acct/bob/doc-1"),
+		[]byte("acct/alice/doc-1"),
+	}); err == nil {
+		t.Fatalf("HasAnySortedAtRoot unsorted keys got nil error")
+	}
+
 	hasPrefixes, err := snap.HasPrefixesAtRoot(rootIDs[0], [][]byte{
 		[]byte("acct/alice/"),
 		[]byte("acct/bob/"),
@@ -115,6 +145,14 @@ func TestSnapshot_HasManyAtRootAndHasPrefixesAtRoot(t *testing.T) {
 	}
 	if want := []bool{false}; !reflect.DeepEqual(missingRootHasMany, want) {
 		t.Fatalf("HasManyAtRoot missing root mismatch: got=%v want=%v", missingRootHasMany, want)
+	}
+
+	missingRootHasAnySorted, err := snap.HasAnySortedAtRoot(0, [][]byte{[]byte("acct/alice/doc-1")})
+	if err != nil {
+		t.Fatalf("HasAnySortedAtRoot missing root: %v", err)
+	}
+	if missingRootHasAnySorted {
+		t.Fatalf("HasAnySortedAtRoot missing root got true want false")
 	}
 
 	missingRootHasPrefixes, err := snap.HasPrefixesAtRoot(0, [][]byte{[]byte("acct/alice/")})

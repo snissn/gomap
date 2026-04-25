@@ -728,6 +728,70 @@ func (t *Tree) HasMany(keys [][]byte) ([]bool, error) {
 	return out, nil
 }
 
+func (t *Tree) HasAnySorted(keys [][]byte) (bool, error) {
+	if len(keys) == 0 {
+		return false, nil
+	}
+	for i := 1; i < len(keys); i++ {
+		if compareTreeKey(keys[i-1], keys[i]) > 0 {
+			return false, errors.New("keys must be sorted")
+		}
+	}
+
+	scanLimit := len(keys) * 4
+	if scanLimit < 1024 {
+		scanLimit = 1024
+	}
+
+	it := t.IteratorWithOptions(keys[0], nil, IteratorOptions{Mode: IteratorModeKeysOnly})
+	defer func() { _ = it.Close() }()
+	targetIdx := 0
+	scanned := 0
+	limitExceeded := false
+	for targetIdx < len(keys) {
+		if !it.Valid() {
+			if err := it.Error(); err != nil {
+				return false, err
+			}
+			return false, nil
+		}
+		curr := it.UnsafeKey()
+		switch cmp := compareTreeKey(curr, keys[targetIdx]); {
+		case cmp == 0:
+			return true, it.Error()
+		case cmp < 0:
+			scanned++
+			if scanned > scanLimit {
+				limitExceeded = true
+				goto fallback
+			}
+			it.Next()
+		default:
+			for targetIdx < len(keys) && compareTreeKey(keys[targetIdx], curr) < 0 {
+				targetIdx++
+			}
+		}
+	}
+
+fallback:
+	if err := it.Error(); err != nil {
+		return false, err
+	}
+	if !limitExceeded {
+		return false, nil
+	}
+	for ; targetIdx < len(keys); targetIdx++ {
+		ok, err := t.Has(keys[targetIdx])
+		if err != nil {
+			return false, err
+		}
+		if ok {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func (t *Tree) HasPrefixes(prefixes [][]byte) ([]bool, error) {
 	out := make([]bool, len(prefixes))
 	if len(prefixes) == 0 {
