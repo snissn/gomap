@@ -15230,11 +15230,17 @@ func (db *DB) maybeRunPeriodicVlogGenerationMaintenance(runGC bool) bool {
 	now := time.Now()
 	quiet := db.foregroundActivityQuietFor(now, vlogGenerationMaintenanceQuietWindow, vlogForegroundReadQuietWindow)
 	leafPackAdmission := db.foregroundLeafPackAdmission(now)
-	if !quiet && !leafPackAdmission.allowed &&
+	hotLeafPackOnly := !runGC &&
+		envBool(envEnableLeafGenerationPackMaintenance) &&
+		db.indexOuterLeavesInValueLog &&
+		leafPackAdmission.allowed
+	if !quiet && !hotLeafPackOnly &&
 		!db.vlogGenerationCheckpointKickPending.Load() &&
 		!db.vlogGenerationDeferredMaintenancePending.Load() &&
 		!db.vlogGenerationDeferredMaintenanceDue(now) {
-		db.observeVlogGenerationLeafPackAdmissionSkip(leafPackAdmission.reason)
+		if envBool(envEnableLeafGenerationPackMaintenance) {
+			db.observeVlogGenerationLeafPackAdmissionSkip(leafPackAdmission.reason)
+		}
 		return false
 	}
 	db.maybeRunVlogGenerationMaintenance(runGC)
