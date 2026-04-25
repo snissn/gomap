@@ -25,6 +25,10 @@ type commitWriter interface {
 	Close() error
 }
 
+type commitBatchFuncWriter interface {
+	AppendBatchFunc(count int, recordAt func(int) commitlog.Record) error
+}
+
 type valueWriter interface {
 	Append(dictID uint64, dict []byte, rid uint64, value []byte) (page.ValuePtr, error)
 	AppendFrame(dictID uint64, dict []byte, records []valuelog.Record) ([]page.ValuePtr, error)

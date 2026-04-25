@@ -164,6 +164,7 @@ var flushMergeParallelAppliedOpsTotal atomic.Uint64
 var batchEntriesPoolDropUnderPressureTotal atomic.Uint64
 var batchShardEntriesPoolDropUnderPressureTotal atomic.Uint64
 var batchIntPoolDropUnderPressureTotal atomic.Uint64
+var batchWALRecordPoolDropUnderPressureTotal atomic.Uint64
 var appendOnlyDirectArenaPoolHitChunksTotal atomic.Uint64
 var appendOnlyDirectArenaPoolHitBytesTotal atomic.Uint64
 var appendOnlyDirectArenaRetainedHitChunksTotal atomic.Uint64
@@ -6249,6 +6250,7 @@ type DB struct {
 	batchEntriesPool              sync.Pool
 	batchShardEntriesPool         sync.Pool
 	batchIntPool                  sync.Pool
+	batchWALRecordPool            sync.Pool
 
 	// memtables is an RCU-style snapshot of (mutable, queue, queueRanges).
 	// Readers load it atomically to avoid holding db.mu around memtable access.
@@ -10979,6 +10981,22 @@ func (db *DB) logBatchSize(records []logRecord) int64 {
 	return int64(total)
 }
 
+func (db *DB) logBatchEntriesSize(entries []batch.Entry, rids []uint64) int64 {
+	if len(entries) == 0 {
+		return 0
+	}
+	total := commitLogSegmentHeaderBytes + commitLogBatchHeaderBytes
+	for i := range entries {
+		op := &entries[i]
+		valueLen := 0
+		if op.Type == batch.OpPut && (rids == nil || i >= len(rids) || rids[i] == 0) {
+			valueLen = len(op.Value)
+		}
+		total += commitLogRecordHeaderBytes + len(op.Key) + valueLen
+	}
+	return int64(total)
+}
+
 func (db *DB) assignCommitSeq(records []logRecord) {
 	if len(records) == 0 {
 		return
@@ -10986,6 +11004,20 @@ func (db *DB) assignCommitSeq(records []logRecord) {
 	seq := db.nextCommitSeq.Add(1)
 	for i := range records {
 		records[i].Seq = seq
+	}
+}
+
+func logRecordForBatchEntry(op *batch.Entry, rid uint64, seq uint64) logRecord {
+	switch op.Type {
+	case batch.OpDelete:
+		return logRecord{Op: logOpDelete, Key: op.Key, Seq: seq}
+	case batch.OpPut:
+		if rid != 0 {
+			return logRecord{Op: logOpSetRID, Key: op.Key, RID: rid, Seq: seq}
+		}
+		return logRecord{Op: logOpSetInline, Key: op.Key, Value: op.Value, Seq: seq}
+	default:
+		return logRecord{Seq: seq}
 	}
 }
 
@@ -13425,6 +13457,57 @@ func (db *DB) appendWAL(l *lane, records []logRecord, durability journalDurabili
 	}
 }
 
+func (db *DB) appendWALBatchEntries(l *lane, entries []batch.Entry, rids []uint64, durability journalDurability) error {
+	if db.disableJournal {
+		return nil
+	}
+	if len(entries) == 0 {
+		return nil
+	}
+	if l == nil {
+		return errWALUnavailable
+	}
+	select {
+	case <-db.closeCh:
+		return errWALClosed
+	default:
+	}
+	db.walAckMu.Lock()
+	if db.walErr != nil {
+		err := db.walErr
+		db.walAckMu.Unlock()
+		return err
+	}
+	db.walAckMu.Unlock()
+
+	ridAt := func(i int) uint64 {
+		if rids != nil && i < len(rids) {
+			return rids[i]
+		}
+		return 0
+	}
+	if len(entries) == 1 {
+		record := logRecordForBatchEntry(&entries[0], ridAt(0), 0)
+		return db.appendWALOneChecked(l, record, durability)
+	}
+
+	seq := db.nextCommitSeq.Add(1)
+	switch durability {
+	case journalDurabilitySync:
+		records := db.getBatchWALRecords(len(entries))
+		for i := range entries {
+			records = append(records, logRecordForBatchEntry(&entries[i], ridAt(i), seq))
+		}
+		err := db.appendWALDirect(l, records, true)
+		db.putBatchWALRecords(records)
+		return err
+	case journalDurabilityFlush:
+		return db.appendWALInlineEntries(l, entries, rids, seq, true)
+	default:
+		return db.appendWALInlineEntries(l, entries, rids, seq, false)
+	}
+}
+
 func (db *DB) appendWALOne(l *lane, record logRecord, durability journalDurability) error {
 	if db.disableJournal {
 		return nil
@@ -14913,6 +14996,75 @@ func (db *DB) appendWALInline(l *lane, records []logRecord, flush bool) error {
 		err = w.AppendBatch(records)
 		totalBytes = db.logBatchSize(records)
 	}
+	if err == nil && flush {
+		err = w.Flush()
+	}
+	l.walMu.Unlock()
+
+	if err != nil {
+		db.walAckMu.Lock()
+		if db.walErr == nil {
+			db.walErr = err
+		}
+		db.walAckMu.Unlock()
+		return err
+	}
+
+	if totalBytes > 0 {
+		l.walLiveBytes.Add(totalBytes)
+	}
+	return nil
+}
+
+func (db *DB) appendWALInlineEntries(l *lane, entries []batch.Entry, rids []uint64, seq uint64, flush bool) error {
+	if l == nil {
+		return errWALUnavailable
+	}
+	if len(entries) == 0 {
+		return nil
+	}
+	if len(entries) == 1 {
+		record := logRecordForBatchEntry(&entries[0], 0, seq)
+		if rids != nil && len(rids) > 0 {
+			record = logRecordForBatchEntry(&entries[0], rids[0], seq)
+		}
+		return db.appendWALInlineOne(l, record, flush)
+	}
+
+	var (
+		totalBytes int64
+		err        error
+	)
+
+	ridAt := func(i int) uint64 {
+		if rids != nil && i < len(rids) {
+			return rids[i]
+		}
+		return 0
+	}
+	recordAt := func(i int) logRecord {
+		return logRecordForBatchEntry(&entries[i], ridAt(i), seq)
+	}
+
+	l.walMu.Lock()
+	w := l.wal
+	if w == nil {
+		l.walMu.Unlock()
+		return errWALUnavailable
+	}
+	if fw, ok := w.(commitBatchFuncWriter); ok {
+		err = fw.AppendBatchFunc(len(entries), func(i int) logRecord {
+			return recordAt(i)
+		})
+	} else {
+		records := db.getBatchWALRecords(len(entries))
+		for i := range entries {
+			records = append(records, recordAt(i))
+		}
+		err = w.AppendBatch(records)
+		db.putBatchWALRecords(records)
+	}
+	totalBytes = db.logBatchEntriesSize(entries, rids)
 	if err == nil && flush {
 		err = w.Flush()
 	}
@@ -25361,6 +25513,7 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.batch_pool.drop_under_pressure.entries_total"] = fmt.Sprintf("%d", batchEntriesPoolDropUnderPressureTotal.Load())
 	stats["treedb.cache.batch_pool.drop_under_pressure.shard_entries_total"] = fmt.Sprintf("%d", batchShardEntriesPoolDropUnderPressureTotal.Load())
 	stats["treedb.cache.batch_pool.drop_under_pressure.int_slices_total"] = fmt.Sprintf("%d", batchIntPoolDropUnderPressureTotal.Load())
+	stats["treedb.cache.batch_pool.drop_under_pressure.wal_records_total"] = fmt.Sprintf("%d", batchWALRecordPoolDropUnderPressureTotal.Load())
 	stats["treedb.process.append_only_direct_arena.retain_max_bytes_effective"] = fmt.Sprintf("%d", appendOnlyRetainBytes)
 	stats["treedb.process.append_only_direct_arena.retain_max_chunks_effective"] = fmt.Sprintf("%d", appendOnlyRetainChunks)
 	stats["treedb.process.append_only_direct_arena.pool_hit_chunks_total"] = fmt.Sprintf("%d", appendOnlyDirectArenaPoolHitChunksTotal.Load())
@@ -25372,6 +25525,7 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.process.batch_pool.drop_under_pressure.entries_total"] = fmt.Sprintf("%d", batchEntriesPoolDropUnderPressureTotal.Load())
 	stats["treedb.process.batch_pool.drop_under_pressure.shard_entries_total"] = fmt.Sprintf("%d", batchShardEntriesPoolDropUnderPressureTotal.Load())
 	stats["treedb.process.batch_pool.drop_under_pressure.int_slices_total"] = fmt.Sprintf("%d", batchIntPoolDropUnderPressureTotal.Load())
+	stats["treedb.process.batch_pool.drop_under_pressure.wal_records_total"] = fmt.Sprintf("%d", batchWALRecordPoolDropUnderPressureTotal.Load())
 	stats["treedb.process.memory.pool_pressure_level"] = poolPressureLevelString(poolPressure.level)
 	stats["treedb.process.memory.pool_pressure_used_bytes"] = fmt.Sprintf("%d", poolPressure.usedBytes)
 	stats["treedb.process.memory.heap_alloc_bytes"] = fmt.Sprintf("%d", poolPressure.heapAllocBytes)
@@ -27407,6 +27561,7 @@ type Batch struct {
 	hasViewOps     bool
 	streamEligible bool
 	streamTried    bool
+	preferWALBuf   bool
 	firstKey       []byte
 	lastKey        []byte
 	batchRange     keyRange
@@ -27829,6 +27984,41 @@ func (db *DB) putBatchIntSlice(idxs []int) {
 	db.batchIntPool.Put(idxs[:0])
 }
 
+func (db *DB) getBatchWALRecords(minCap int) []logRecord {
+	if minCap < 0 {
+		minCap = 0
+	}
+	if db != nil {
+		if pooled := db.batchWALRecordPool.Get(); pooled != nil {
+			if records, ok := pooled.([]logRecord); ok {
+				if cap(records) >= minCap {
+					return records[:0]
+				}
+				if c := cap(records); c > 0 && c <= batchWALRecordPoolMaxRetain {
+					db.batchWALRecordPool.Put(records[:0])
+				}
+			}
+		}
+	}
+	return make([]logRecord, 0, minCap)
+}
+
+func (db *DB) putBatchWALRecords(records []logRecord) {
+	if db == nil || cap(records) == 0 {
+		return
+	}
+	if cap(records) > batchWALRecordPoolMaxRetain {
+		return
+	}
+	if !shouldRetainBatchAuxPoolEntries(currentPoolPressureSnapshot().level) {
+		batchWALRecordPoolDropUnderPressureTotal.Add(1)
+		return
+	}
+	full := records[:cap(records)]
+	clear(full)
+	db.batchWALRecordPool.Put(full[:0])
+}
+
 // Reset clears the batch for reuse without closing it.
 //
 // This intentionally keeps internal buffers to avoid per-batch allocations in
@@ -27883,9 +28073,12 @@ func (b *Batch) Reset() {
 	if b.ridBuf != nil {
 		b.ridBuf = b.ridBuf[:0]
 	}
-	b.walBuf = b.walBuf[:0]
+	if b.walBuf != nil {
+		b.walBuf = b.walBuf[:0]
+	}
 	b.streamEligible = true
 	b.streamTried = false
+	b.preferWALBuf = true
 	b.hasViewOps = false
 	b.firstKey = nil
 	b.lastKey = nil
@@ -28687,6 +28880,7 @@ const (
 	batchArenaTailCompactPinnedMaxFillDenominator = 4
 	batchEntriesPoolMaxRetain                     = 16 << 10
 	batchIntSlicePoolMaxRetain                    = 16 << 10
+	batchWALRecordPoolMaxRetain                   = 16 << 10
 	// When deferred iterator views pin retired memtables, reduce retained
 	// batch-arena headroom to limit extra lease growth under that pressure.
 	batchArenaDeferredPressureThresholdBytes = int64(512 << 20)
@@ -29473,25 +29667,27 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 	}
 
 	if !b.db.disableJournal {
-		records := b.walBuf[:0]
-		if cap(records) < len(b.entries) {
-			records = make([]logRecord, 0, len(b.entries))
-		}
-		for i := range b.entries {
-			op := &b.entries[i]
-			switch op.Type {
-			case batch.OpDelete:
-				records = append(records, logRecord{Op: logOpDelete, Key: op.Key})
-			case batch.OpPut:
-				if rids != nil && rids[i] != 0 {
-					records = append(records, logRecord{Op: logOpSetRID, Key: op.Key, RID: rids[i]})
-				} else {
-					records = append(records, logRecord{Op: logOpSetInline, Key: op.Key, Value: op.Value})
+		if b.preferWALBuf {
+			records := b.walBuf[:0]
+			if cap(records) < len(b.entries) {
+				if cap(records) > 0 {
+					b.db.putBatchWALRecords(records)
 				}
+				records = b.db.getBatchWALRecords(len(b.entries))
 			}
-		}
-		b.walBuf = records
-		if err := b.db.appendWAL(lane, records, durability); err != nil {
+			for i := range b.entries {
+				rid := uint64(0)
+				if rids != nil && i < len(rids) {
+					rid = rids[i]
+				}
+				records = append(records, logRecordForBatchEntry(&b.entries[i], rid, 0))
+			}
+			b.walBuf = records
+			if err := b.db.appendWAL(lane, records, durability); err != nil {
+				unlockWrite()
+				return err
+			}
+		} else if err := b.db.appendWALBatchEntries(lane, b.entries, rids, durability); err != nil {
 			unlockWrite()
 			return err
 		}
@@ -30374,6 +30570,9 @@ func (b *Batch) Close() error {
 	}
 	b.recycleCopyArenaChunks()
 	b.recyclePtrCopyArenaChunks()
+	if b.db != nil && b.walBuf != nil {
+		b.db.putBatchWALRecords(b.walBuf)
+	}
 	b.entries = nil
 	b.ridBuf = nil
 	b.walBuf = nil
@@ -30388,6 +30587,7 @@ func (b *Batch) Close() error {
 	b.firstKey = nil
 	b.lastKey = nil
 	b.lastCopiedValue = nil
+	b.preferWALBuf = false
 	b.ptrValueIdxs = nil
 	return nil
 }
