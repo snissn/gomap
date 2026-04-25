@@ -151,6 +151,8 @@ github.com/snissn/tidwall-btree v0.0.0-20260424182822-a686a2602ef3 h1:5vdZVtYxBG
 github.com/snissn/tidwall-btree v0.0.0-20260424182822-a686a2602ef3/go.mod h1:jBbTdUWhSZClZWoDg54VnvV7/54modSOzDN7VXftj1A=
 github.com/snissn/tidwall-btree v0.0.0-20260425000122-ae56bc3ce28e h1:Ebvlf1n568bldiC2vKVZKhzAlQdWVFtaWGiyiNXShn8=
 github.com/snissn/tidwall-btree v0.0.0-20260425000122-ae56bc3ce28e/go.mod h1:jBbTdUWhSZClZWoDg54VnvV7/54modSOzDN7VXftj1A=
+github.com/snissn/tidwall-btree v0.0.0-20260425032128-4cc08e17e610 h1:43lxYtj5uSs6CcQuGAT7/xY5BXAeyW/F1LpG2qpXZqI=
+github.com/snissn/tidwall-btree v0.0.0-20260425032128-4cc08e17e610/go.mod h1:jBbTdUWhSZClZWoDg54VnvV7/54modSOzDN7VXftj1A=
 github.com/stretchr/testify v1.11.1 h1:7s2iGBzp5EwR7/aIZr8ao5+dra3wiQyKjjFuvgVKu7U=
 github.com/stretchr/testify v1.11.1/go.mod h1:wZwfW3scLgRK+23gO65QZefKpKQRnfz6sD981Nm4B6U=
 github.com/syndtr/goleveldb v1.0.1-0.20210819022825-2ae1ddf74ef7 h1:epCh84lMvA70Z7CTTCmYQn2CKbY8j86K7/FAIr141uY=
