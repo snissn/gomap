@@ -756,19 +756,25 @@ func (m *BTree) setMaybeLoadLocked(key string, entry btreeEntry) (btreeEntry, bo
 	if !m.hasLast || key > m.lastKey {
 		return m.tree.Load(key, entry)
 	}
-	m.noteNonAppendSetLocked()
-	return m.tree.Set(key, entry)
+	prev, replaced := m.tree.Set(key, entry)
+	if !replaced {
+		m.noteNonAppendInsertLocked()
+	}
+	return prev, replaced
 }
 
 func (m *BTree) setMaybeSortedLoadLocked(key string, entry btreeEntry) (btreeEntry, bool) {
 	if !m.hasLast || key > m.lastKey {
 		return m.tree.Load(key, entry)
 	}
-	m.noteNonAppendSetLocked()
-	return m.tree.Set(key, entry)
+	prev, replaced := m.tree.Set(key, entry)
+	if !replaced {
+		m.noteNonAppendInsertLocked()
+	}
+	return prev, replaced
 }
 
-func (m *BTree) noteNonAppendSetLocked() {
+func (m *BTree) noteNonAppendInsertLocked() {
 	if m.reuseBothSplitInsertCapacity || m.tree.Len() < btreeAdaptiveBothSplitMinEntries {
 		return
 	}

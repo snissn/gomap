@@ -184,6 +184,31 @@ func TestBTreeAdaptiveBothSplitCapacityStaysDisabledForAppendOnly(t *testing.T) 
 	}
 }
 
+func TestBTreeAdaptiveBothSplitCapacityIgnoresNonAppendReplacements(t *testing.T) {
+	m := NewBTreeWithDegree(2)
+	key := func(i int) []byte {
+		return []byte{byte(i >> 8), byte(i)}
+	}
+
+	for i := 0; i < btreeAdaptiveBothSplitMinEntries; i++ {
+		m.Set(key(2048+i*2), []byte{byte(i)})
+	}
+	existingLowKey := key(2048)
+	for i := 0; i < btreeAdaptiveBothSplitMinNonAppend*2; i++ {
+		m.Set(existingLowKey, []byte{byte(i)})
+	}
+	if m.reuseBothSplitInsertCapacity || m.nonAppendSetCount != 0 {
+		t.Fatalf("adaptive state after replacements enabled=%v nonAppend=%d, want false,0", m.reuseBothSplitInsertCapacity, m.nonAppendSetCount)
+	}
+
+	for i := 0; i < btreeAdaptiveBothSplitMinNonAppend; i++ {
+		m.Set(key(i*2+1), []byte{byte(i)})
+	}
+	if !m.reuseBothSplitInsertCapacity {
+		t.Fatal("adaptive split sibling capacity did not enable after true non-append inserts")
+	}
+}
+
 func TestBTreePointerEmptySliceCanonicalizesToNil(t *testing.T) {
 	ptr := page.ValuePtr{Offset: 21, Length: 34, FileID: 5}
 
