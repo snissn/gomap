@@ -14,6 +14,8 @@ import (
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
+	"github.com/snissn/gomap/TreeDB/node"
+	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/tree"
 )
 
@@ -126,13 +128,13 @@ func (m *CollectionManager) CreateCollection(meta *CollectionMeta) (*CollectionM
 		if existing != nil && !sameCollectionMeta(existing.meta, normalized) {
 			return nil, fmt.Errorf("collections: existing schema for %q is incompatible", normalized.Name)
 		}
-		table, err := buildSystemTargetTable(current, map[string][]byte{
+		iter, err := buildSystemTargetIterator(current, map[string][]byte{
 			systemCollectionMetaKey(normalized.Name): encoded,
 		})
 		if err != nil {
 			return nil, err
 		}
-		return table.NewIterator(nil, nil), nil
+		return iter, nil
 	})
 	if err != nil {
 		return nil, err
@@ -652,11 +654,7 @@ func (c *Collection) buildRootDescriptorSystemIterator(rootNames []string, baseR
 	for i, rootName := range rootNames {
 		updates[systemCollectionRootKey(rootName)] = encodeRootID(rootIDs[i])
 	}
-	table, err := buildSystemTargetTable(current, updates)
-	if err != nil {
-		return nil, err
-	}
-	return table.NewIterator(nil, nil), nil
+	return buildSystemTargetIterator(current, updates)
 }
 
 func (c *Collection) buildSchemaAndRootDescriptorSystemIterator(
@@ -699,11 +697,7 @@ func (c *Collection) buildSchemaAndRootDescriptorSystemIterator(
 	for i, rootName := range rootNames {
 		updates[systemCollectionRootKey(rootName)] = encodeRootID(rootIDs[i])
 	}
-	table, err := buildSystemTargetTable(current, updates)
-	if err != nil {
-		return nil, err
-	}
-	return table.NewIterator(nil, nil), nil
+	return buildSystemTargetIterator(current, updates)
 }
 
 func loadDeleteIndexState(snap *backenddb.Snapshot, catalog *collectionCatalog, documentID, document []byte, runtimes []indexRuntime, opts collectionOptions) (documentIndexState, error) {
@@ -880,32 +874,147 @@ func getSystemValue(snap *backenddb.Snapshot, key string) ([]byte, bool, error) 
 	return bytes.Clone(entry.Value), true, nil
 }
 
-func buildSystemTargetTable(snap *backenddb.Snapshot, updates map[string][]byte) (memtable.Table, error) {
-	table := memtable.NewHashSorted()
+type systemTargetEntry struct {
+	key   []byte
+	value []byte
+}
+
+type systemTargetIterator struct {
+	entries []systemTargetEntry
+	idx     int
+}
+
+func (it *systemTargetIterator) Valid() bool {
+	return it != nil && it.idx >= 0 && it.idx < len(it.entries)
+}
+
+func (it *systemTargetIterator) Next() {
+	if it != nil && it.idx < len(it.entries) {
+		it.idx++
+	}
+}
+
+func (it *systemTargetIterator) Seek(key []byte) {
+	if it == nil {
+		return
+	}
+	it.idx = sort.Search(len(it.entries), func(i int) bool {
+		return bytes.Compare(it.entries[i].key, key) >= 0
+	})
+}
+
+func (it *systemTargetIterator) UnsafeKey() []byte {
+	if !it.Valid() {
+		return nil
+	}
+	return it.entries[it.idx].key
+}
+
+func (it *systemTargetIterator) UnsafeValue() []byte {
+	if !it.Valid() {
+		return nil
+	}
+	return it.entries[it.idx].value
+}
+
+func (it *systemTargetIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
+	if !it.Valid() {
+		return nil, page.ValuePtr{}, node.FlagInline
+	}
+	return it.entries[it.idx].value, page.ValuePtr{}, node.FlagInline
+}
+
+func (it *systemTargetIterator) Key() []byte {
+	return it.UnsafeKey()
+}
+
+func (it *systemTargetIterator) Value() []byte {
+	return it.UnsafeValue()
+}
+
+func (it *systemTargetIterator) KeyCopy(dst []byte) []byte {
+	if !it.Valid() {
+		return dst
+	}
+	return append(dst, it.entries[it.idx].key...)
+}
+
+func (it *systemTargetIterator) ValueCopy(dst []byte) []byte {
+	if !it.Valid() {
+		return dst
+	}
+	return append(dst, it.entries[it.idx].value...)
+}
+
+func (it *systemTargetIterator) IsDeleted() bool {
+	return false
+}
+
+func (it *systemTargetIterator) Error() error {
+	return nil
+}
+
+func (it *systemTargetIterator) Close() error {
+	return nil
+}
+
+func (it *systemTargetIterator) Domain() (start, end []byte) {
+	return nil, nil
+}
+
+func buildSystemTargetIterator(snap *backenddb.Snapshot, updates map[string][]byte) (iterator.UnsafeIterator, error) {
+	updateEntries := make([]systemTargetEntry, 0, len(updates))
+	for key, value := range updates {
+		updateEntries = append(updateEntries, systemTargetEntry{
+			key:   []byte(key),
+			value: bytes.Clone(value),
+		})
+	}
+	sort.Slice(updateEntries, func(i, j int) bool {
+		return bytes.Compare(updateEntries[i].key, updateEntries[j].key) < 0
+	})
+
+	entries := make([]systemTargetEntry, 0, len(updateEntries))
+	updateIdx := 0
 	if snap != nil && snap.State() != nil && snap.State().SystemRootPageID != 0 {
 		it, err := snap.IteratorAtRoot(snap.State().SystemRootPageID, nil, nil)
 		if err != nil && !errors.Is(err, tree.ErrKeyNotFound) {
 			return nil, err
 		}
 		if err == nil {
+			defer func() { _ = it.Close() }()
 			for it.Valid() {
-				if !it.IsDeleted() {
-					table.Set(bytes.Clone(it.UnsafeKey()), bytes.Clone(it.UnsafeValue()))
+				if it.IsDeleted() {
+					it.Next()
+					continue
+				}
+				currKey := it.UnsafeKey()
+				for updateIdx < len(updateEntries) && bytes.Compare(updateEntries[updateIdx].key, currKey) < 0 {
+					entries = append(entries, updateEntries[updateIdx])
+					updateIdx++
+				}
+				if updateIdx < len(updateEntries) && bytes.Equal(updateEntries[updateIdx].key, currKey) {
+					entries = append(entries, updateEntries[updateIdx])
+					updateIdx++
+				} else {
+					entries = append(entries, systemTargetEntry{
+						key:   bytes.Clone(currKey),
+						value: it.ValueCopy(nil),
+					})
 				}
 				it.Next()
 			}
 			iterErr := it.Error()
-			_ = it.Close()
 			if iterErr != nil {
 				return nil, iterErr
 			}
 		}
 	}
-	for key, value := range updates {
-		table.Set([]byte(key), bytes.Clone(value))
+	for updateIdx < len(updateEntries) {
+		entries = append(entries, updateEntries[updateIdx])
+		updateIdx++
 	}
-	table.Freeze()
-	return table, nil
+	return &systemTargetIterator{entries: entries}, nil
 }
 
 func encodeCollectionMeta(meta CollectionMeta) ([]byte, error) {
