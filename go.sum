@@ -147,8 +147,8 @@ github.com/rogpeppe/go-internal v1.13.1 h1:KvO1DLK/DRN07sQ1LQKScxyZJuNnedQ5/wKSR
 github.com/rogpeppe/go-internal v1.13.1/go.mod h1:uMEvuHeurkdAXX61udpOXGD/AzZDWNMNyH2VO9fmH0o=
 github.com/snissn/compress v1.18.2-snissn.0.0.20260204222835-33fc0851d88e h1:l7jLklDDpTMHvsUEmzIudcHa3AF+c8eKNmsiyL4k5lw=
 github.com/snissn/compress v1.18.2-snissn.0.0.20260204222835-33fc0851d88e/go.mod h1:p4xiZN07JMUF5xuybNGkG+pozT12MAblxCx36z+PIYM=
-github.com/snissn/tidwall-btree v0.0.0-20260425042550-37a697ea0697 h1:A5FGe0lGDFQSC2WBgEEj4kaZIYc1GdcsGQIOEtRGQZU=
-github.com/snissn/tidwall-btree v0.0.0-20260425042550-37a697ea0697/go.mod h1:9VLqM88NjmfbvZ7QU+b4c77gS3geqcdPI246o73U8EM=
+github.com/snissn/tidwall-btree v0.0.0-20260425043652-2603faf577f6 h1:kso5+wWdtri0+5BafknR8ntYMow+XMN9BnEkZVCM7sM=
+github.com/snissn/tidwall-btree v0.0.0-20260425043652-2603faf577f6/go.mod h1:9VLqM88NjmfbvZ7QU+b4c77gS3geqcdPI246o73U8EM=
 github.com/stretchr/testify v1.11.1 h1:7s2iGBzp5EwR7/aIZr8ao5+dra3wiQyKjjFuvgVKu7U=
 github.com/stretchr/testify v1.11.1/go.mod h1:wZwfW3scLgRK+23gO65QZefKpKQRnfz6sD981Nm4B6U=
 github.com/syndtr/goleveldb v1.0.1-0.20210819022825-2ae1ddf74ef7 h1:epCh84lMvA70Z7CTTCmYQn2CKbY8j86K7/FAIr141uY=
