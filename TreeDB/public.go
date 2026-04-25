@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -25,6 +26,16 @@ import (
 
 // Options configures TreeDB. It is re-exported from TreeDB/db for convenience.
 type Options = db.Options
+
+type MaintenancePhase = caching.MaintenancePhase
+
+const (
+	MaintenancePhaseSteady  = caching.MaintenancePhaseSteady
+	MaintenancePhaseRestore = caching.MaintenancePhaseRestore
+	MaintenancePhaseCatchUp = caching.MaintenancePhaseCatchUp
+)
+
+var errVacuumUnsupported = db.ErrVacuumUnsupported
 
 const (
 	defaultChunkSize     = 256 * 1024
@@ -70,6 +81,41 @@ type getManyPlanner interface {
 	GetManyParallelPlan(keyCount int) (workers int, parallel bool)
 }
 
+// UpdateOp describes the write produced by an Update callback.
+type UpdateOp = db.UpdateOp
+
+const (
+	// UpdateNoop leaves the key unchanged.
+	UpdateNoop = db.UpdateNoop
+	// UpdateSet replaces the key with Value.
+	UpdateSet = db.UpdateSet
+	// UpdateDelete removes the key.
+	UpdateDelete = db.UpdateDelete
+)
+
+// UpdateResult is returned by an Update callback.
+type UpdateResult = db.UpdateResult
+
+// SetUpdate returns an Update result that replaces the key with value.
+func SetUpdate(value []byte) UpdateResult {
+	return db.SetUpdate(value)
+}
+
+// DeleteUpdate returns an Update result that removes the key.
+func DeleteUpdate() UpdateResult {
+	return db.DeleteUpdate()
+}
+
+// NoopUpdate returns an Update result that leaves the key unchanged.
+func NoopUpdate() UpdateResult {
+	return db.NoopUpdate()
+}
+
+// UpdateFunc transforms the current value for a key into a mutation. The old
+// value is nil when the key is absent and is a safe copy when present. The
+// callback may be retried if the key changes before the mutation commits.
+type UpdateFunc = db.UpdateFunc
+
 // DB is the public TreeDB handle (cached mode by default; read-only opens skip caching).
 type DB struct {
 	cached         *caching.DB
@@ -103,15 +149,18 @@ type maintenanceCoordinator struct {
 	waitMax   atomic.Int64
 
 	gcRuns     atomic.Uint64
+	leafGCRuns atomic.Uint64
 	vacuumRuns atomic.Uint64
 
 	lastGCAt     atomic.Int64
+	lastLeafGCAt atomic.Int64
 	lastVacuumAt atomic.Int64
 }
 
 const (
 	maintenanceOpNone int32 = iota
 	maintenanceOpGC
+	maintenanceOpLeafGC
 	maintenanceOpVacuum
 	maintenanceOpOther
 )
@@ -120,6 +169,8 @@ func maintenanceOpCode(op string) int32 {
 	switch op {
 	case "gc":
 		return maintenanceOpGC
+	case "leaf-gc":
+		return maintenanceOpLeafGC
 	case "vacuum":
 		return maintenanceOpVacuum
 	case "":
@@ -133,6 +184,8 @@ func maintenanceActiveLabel(code int32) string {
 	switch code {
 	case maintenanceOpGC:
 		return "gc"
+	case maintenanceOpLeafGC:
+		return "leaf-gc"
 	case maintenanceOpVacuum:
 		return "vacuum"
 	case maintenanceOpOther:
@@ -178,6 +231,18 @@ func writePathStatsInto(stats map[string]string, info writePathInfo) {
 	stats["treedb.write_path.redo_log"] = info.redoLog
 }
 
+func forceTemplateCompressionOff(opts *Options) {
+	if opts == nil {
+		return
+	}
+	// Template compression remains experimental; keep runtime paths disabled so
+	// normal TreeDB opens only exercise dict/block/off value-log compression.
+	opts.ValueLog.TemplateMode = template.TemplateOff
+	opts.ValueLog.TemplateReadStrict = false
+	opts.ValueLog.TemplateLookup = nil
+	opts.ValueLog.TemplateDecodeOptions = template.DecodeOptions{}
+}
+
 func (db *DB) ensureOpen() error {
 	if db == nil || (db.cached == nil && db.backend == nil) {
 		return ErrClosed
@@ -209,6 +274,9 @@ func (db *DB) beginFullScanMaintenance(op string) (time.Duration, func(success b
 			case "gc":
 				db.maintenance.gcRuns.Add(1)
 				db.maintenance.lastGCAt.Store(now)
+			case "leaf-gc":
+				db.maintenance.leafGCRuns.Add(1)
+				db.maintenance.lastLeafGCAt.Store(now)
 			case "vacuum":
 				db.maintenance.vacuumRuns.Add(1)
 				db.maintenance.lastVacuumAt.Store(now)
@@ -228,8 +296,10 @@ func maintenanceStatsInto(stats map[string]string, m *maintenanceCoordinator) {
 	waitTotal := time.Duration(m.waitTotal.Load())
 	waitMax := time.Duration(m.waitMax.Load())
 	gcRuns := m.gcRuns.Load()
+	leafGCRuns := m.leafGCRuns.Load()
 	vacuumRuns := m.vacuumRuns.Load()
 	lastGCAt := m.lastGCAt.Load()
+	lastLeafGCAt := m.lastLeafGCAt.Load()
 	lastVacuumAt := m.lastVacuumAt.Load()
 
 	stats["treedb.maintenance.full_scan.active"] = active
@@ -237,11 +307,17 @@ func maintenanceStatsInto(stats map[string]string, m *maintenanceCoordinator) {
 	stats["treedb.maintenance.full_scan.wait_total_ms"] = fmt.Sprintf("%.3f", float64(waitTotal)/float64(time.Millisecond))
 	stats["treedb.maintenance.full_scan.wait_max_ms"] = fmt.Sprintf("%.3f", float64(waitMax)/float64(time.Millisecond))
 	stats["treedb.maintenance.full_scan.gc_runs"] = fmt.Sprintf("%d", gcRuns)
+	stats["treedb.maintenance.full_scan.leaf_gc_runs"] = fmt.Sprintf("%d", leafGCRuns)
 	stats["treedb.maintenance.full_scan.vacuum_runs"] = fmt.Sprintf("%d", vacuumRuns)
 	if lastGCAt > 0 {
 		stats["treedb.maintenance.full_scan.last_gc_unix_nano"] = fmt.Sprintf("%d", lastGCAt)
 	} else {
 		stats["treedb.maintenance.full_scan.last_gc_unix_nano"] = "0"
+	}
+	if lastLeafGCAt > 0 {
+		stats["treedb.maintenance.full_scan.last_leaf_gc_unix_nano"] = fmt.Sprintf("%d", lastLeafGCAt)
+	} else {
+		stats["treedb.maintenance.full_scan.last_leaf_gc_unix_nano"] = "0"
 	}
 	if lastVacuumAt > 0 {
 		stats["treedb.maintenance.full_scan.last_vacuum_unix_nano"] = fmt.Sprintf("%d", lastVacuumAt)
@@ -302,10 +378,23 @@ func Open(opts Options) (*DB, error) {
 	}
 
 	applyEnvMaintenanceOverrides(&opts)
+	forceTemplateCompressionOff(&opts)
 
 	writePath := writePathFromOptions(opts)
 	if envBool(envWritePathLog) {
-		fmt.Fprintf(os.Stderr, "treedb write_path mode=%s value_store=%s redo_log=%s\n", writePath.mode, writePath.valueStore, writePath.redoLog)
+		effectivePolicy := opts.ValueLog.Generational.Policy
+		if effectivePolicy == ValueLogGenerationDefault {
+			effectivePolicy = ValueLogGenerationHotWarmCold
+		}
+		fmt.Fprintf(
+			os.Stderr,
+			"treedb write_path mode=%s value_store=%s redo_log=%s vlog_generation_policy_raw=%d vlog_generation_policy_effective=%d\n",
+			writePath.mode,
+			writePath.valueStore,
+			writePath.redoLog,
+			opts.ValueLog.Generational.Policy,
+			effectivePolicy,
+		)
 	}
 
 	layout, err := resolveOpenDirLayout(opts.Dir, opts.DisableSideStores)
@@ -323,12 +412,30 @@ func Open(opts Options) (*DB, error) {
 	// This is intentionally limited to index encoding flags; runtime policies
 	// (like value-log compression) remain controlled by opts/env unless the
 	// caller opts out via IgnoreFormatConfig.
+	var persistedFormat *db.FormatConfig
 	if !opts.IgnoreFormatConfig {
 		if cfg, ok, err := db.LoadFormatConfig(maindbDir); err != nil {
 			return nil, err
 		} else if ok {
 			cfg.ApplyIndexFormatToOptions(&opts)
+			persistedFormat = &cfg
 		}
+	}
+
+	// Apply runtime-only index/cache overrides after loading persisted format.json
+	// so downstream apps can toggle safe behavior without plumbing new CLI flags.
+	//
+	// Index format knobs (leaf encoding, outer leaf refs, etc) are persisted per-DB
+	// in format.json; allowing env overrides to conflict with on-disk format can
+	// corrupt format.json and/or make existing pages unreadable. For safety, reject
+	// conflicting format overrides when format.json is present.
+	applyEnvIndexRuntimeOverrides(&opts)
+	if persistedFormat != nil {
+		if err := validateEnvIndexFormatOverrides(*persistedFormat, maindbDir); err != nil {
+			return nil, err
+		}
+	} else {
+		applyEnvIndexFormatOverrides(&opts)
 	}
 
 	// Keep opts.DisableSideStores consistent with the resolved layout.
@@ -547,6 +654,7 @@ func Open(opts Options) (*DB, error) {
 		ValueLogIncompressibleProbeBytes:         opts.ValueLog.IncompressibleProbeIntervalBytes,
 		ValueLogAutoPolicy:                       uint8(opts.ValueLog.AutoPolicy),
 		ValueLogGenerationPolicy:                 uint8(opts.ValueLog.Generational.Policy),
+		ValueLogGenerationLeafSegmentTargetBytes: opts.ValueLog.Generational.LeafSegmentTargetBytes,
 		ValueLogGenerationHotSegmentTargetBytes:  opts.ValueLog.Generational.HotSegmentTargetBytes,
 		ValueLogGenerationWarmSegmentTargetBytes: opts.ValueLog.Generational.WarmSegmentTargetBytes,
 		ValueLogGenerationColdSegmentTargetBytes: opts.ValueLog.Generational.ColdSegmentTargetBytes,
@@ -555,9 +663,11 @@ func Open(opts Options) (*DB, error) {
 		ValueLogRewriteTriggerStaleRatioPPM:      opts.ValueLog.Generational.RewriteTriggerStaleRatioPPM,
 		ValueLogRewriteTriggerTotalBytes:         opts.ValueLog.Generational.RewriteTriggerTotalBytes,
 		ValueLogRewriteTriggerChurnPerSec:        opts.ValueLog.Generational.RewriteTriggerChurnPerSec,
+		ValueLogRewriteMinSegmentAge:             opts.ValueLog.Generational.RewriteMinSegmentAge,
 		ForceValueLogPointers:                    opts.ValueLog.ForcePointers,
 		ValueLogDictTrain:                        opts.ValueLog.DictTrain,
 		ValueLogDictMaxK:                         opts.ValueLog.DictMaxK,
+		ValueLogDictClassMode:                    uint8(opts.ValueLog.DictClassMode),
 		ValueLogDictFrameEncodeLevel:             opts.ValueLog.DictFrameEncodeLevel,
 		ValueLogDictFrameEnableEntropy:           opts.ValueLog.DictFrameEnableEntropy,
 		ValueLogDictAdaptiveRatio:                opts.ValueLog.DictAdaptiveRatio,
@@ -660,19 +770,43 @@ const (
 	//   - Dict training enabled (TrainBytes > 0), and
 	//   - Side stores enabled (dictdb), and
 	//   - Split value log enabled (value pointers used).
-	envVlogDictEnable            = "TREEDB_VLOG_DICT_ENABLE"                    // bool
-	envVlogDictTrainBytes        = "TREEDB_VLOG_DICT_TRAIN_BYTES"               // int
-	envVlogDictBytes             = "TREEDB_VLOG_DICT_BYTES"                     // int
-	envVlogDictMinRecords        = "TREEDB_VLOG_DICT_MIN_RECORDS"               // int
-	envVlogDictMaxRecordBytes    = "TREEDB_VLOG_DICT_MAX_RECORD_BYTES"          // int
-	envVlogDictSampleStride      = "TREEDB_VLOG_DICT_SAMPLE_STRIDE"             // int
-	envVlogDictDedupWindow       = "TREEDB_VLOG_DICT_DEDUP_WINDOW"              // int
-	envVlogDictTrainLevel        = "TREEDB_VLOG_DICT_TRAIN_LEVEL"               // int
-	envVlogDictMaxK              = "TREEDB_VLOG_DICT_MAX_K"                     // int
-	envVlogDictZstdLevel         = "TREEDB_VLOG_DICT_ZSTD_LEVEL"                // fastest|default|better|best|int
-	envVlogDictEntropy           = "TREEDB_VLOG_DICT_ENTROPY"                   // bool
-	envVlogDictAdaptiveRatio     = "TREEDB_VLOG_DICT_ADAPTIVE_RATIO"            // float64
-	envVlogDictMinPayloadSavings = "TREEDB_VLOG_DICT_MIN_PAYLOAD_SAVINGS_RATIO" // float64
+	envVlogDictEnable                  = "TREEDB_VLOG_DICT_ENABLE"                     // bool
+	envVlogDictTrainBytes              = "TREEDB_VLOG_DICT_TRAIN_BYTES"                // int
+	envVlogDictBytes                   = "TREEDB_VLOG_DICT_BYTES"                      // int
+	envVlogDictMinRecords              = "TREEDB_VLOG_DICT_MIN_RECORDS"                // int
+	envVlogDictMaxRecordBytes          = "TREEDB_VLOG_DICT_MAX_RECORD_BYTES"           // int
+	envVlogDictSampleStride            = "TREEDB_VLOG_DICT_SAMPLE_STRIDE"              // int
+	envVlogDictDedupWindow             = "TREEDB_VLOG_DICT_DEDUP_WINDOW"               // int
+	envVlogDictTrainLevel              = "TREEDB_VLOG_DICT_TRAIN_LEVEL"                // int
+	envVlogDictMaxK                    = "TREEDB_VLOG_DICT_MAX_K"                      // int
+	envVlogDictClassMode               = "TREEDB_VLOG_DICT_CLASS_MODE"                 // single|split_outer_leaf
+	envVlogDictZstdLevel               = "TREEDB_VLOG_DICT_ZSTD_LEVEL"                 // fastest|default|better|best|int
+	envVlogDictEntropy                 = "TREEDB_VLOG_DICT_ENTROPY"                    // bool
+	envVlogDictAdaptiveRatio           = "TREEDB_VLOG_DICT_ADAPTIVE_RATIO"             // float64
+	envVlogDictMinPayloadSavings       = "TREEDB_VLOG_DICT_MIN_PAYLOAD_SAVINGS_RATIO"  // float64
+	envVlogMaxRetainedBytes            = "TREEDB_VLOG_MAX_RETAINED_BYTES"              // int64
+	envVlogMaxRetainedBytesHard        = "TREEDB_VLOG_MAX_RETAINED_BYTES_HARD"         // int64
+	envVlogRewriteBudgetBytesPerSec    = "TREEDB_VLOG_REWRITE_BUDGET_BYTES_PER_SEC"    // int64
+	envVlogRewriteBudgetRecordsPerSec  = "TREEDB_VLOG_REWRITE_BUDGET_RECORDS_PER_SEC"  // int
+	envVlogRewriteTriggerTotalBytes    = "TREEDB_VLOG_REWRITE_TRIGGER_TOTAL_BYTES"     // int64
+	envVlogRewriteTriggerStaleRatioPPM = "TREEDB_VLOG_REWRITE_TRIGGER_STALE_RATIO_PPM" // uint32
+	envVlogRewriteTriggerChurnPerSec   = "TREEDB_VLOG_REWRITE_TRIGGER_CHURN_PER_SEC"   // int64
+)
+
+// Index/cache override knobs (applied on top of Options + profile defaults).
+//
+// These are intentionally env-driven to allow isolating correctness/perf issues
+// in real workloads without plumbing new CLI flags through multiple repos.
+const (
+	envVerifyOnRead               = "TREEDB_VERIFY_ON_READ"                  // bool
+	envPreferAppendAlloc          = "TREEDB_PREFER_APPEND_ALLOC"             // bool
+	envDisablePiggybackCompaction = "TREEDB_DISABLE_PIGGYBACK_COMPACTION"    // bool
+	envLeafPrefixCompression      = "TREEDB_LEAF_PREFIX_COMPRESSION"         // bool
+	envIndexColumnarLeaves        = "TREEDB_INDEX_COLUMNAR_LEAVES"           // bool
+	envIndexPackedValuePtr        = "TREEDB_INDEX_PACKED_VALUE_PTR"          // bool
+	envIndexInternalBaseDelta     = "TREEDB_INDEX_INTERNAL_BASE_DELTA"       // bool
+	envIndexOuterLeavesInValueLog = "TREEDB_INDEX_OUTER_LEAVES_IN_VALUE_LOG" // bool
+	envIndexAdaptiveLeafEncoding  = "TREEDB_INDEX_ADAPTIVE_LEAF_ENCODING"    // bool
 )
 
 func applyEnvMaintenanceOverrides(opts *Options) {
@@ -766,6 +900,17 @@ func applyEnvMaintenanceOverrides(opts *Options) {
 	if v, ok := envInt(envVlogDictMaxK); ok {
 		opts.ValueLog.DictMaxK = v
 	}
+	if v, ok := envString(envVlogDictClassMode); ok {
+		mode := strings.ToLower(strings.TrimSpace(v))
+		switch mode {
+		case "single", "default":
+			opts.ValueLog.DictClassMode = ValueLogDictClassSingle
+		case "split_outer_leaf", "split-outer-leaf", "split", "outer_leaf_split":
+			opts.ValueLog.DictClassMode = ValueLogDictClassSplitOuterLeaf
+		default:
+			log.Printf("treedb: unsupported %s=%q; keeping existing ValueLog.DictClassMode", envVlogDictClassMode, v)
+		}
+	}
 	if v, ok := envString(envVlogDictZstdLevel); ok {
 		if level, ok := parseZstdEncoderLevel(v); ok {
 			opts.ValueLog.DictFrameEncodeLevel = level
@@ -779,6 +924,98 @@ func applyEnvMaintenanceOverrides(opts *Options) {
 	}
 	if v, ok := envFloat64(envVlogDictMinPayloadSavings); ok {
 		opts.ValueLog.DictMinPayloadSavingsRatio = v
+	}
+	if v, ok := envInt64(envVlogMaxRetainedBytes); ok {
+		opts.ValueLog.MaxRetainedBytes = v
+	}
+	if v, ok := envInt64(envVlogMaxRetainedBytesHard); ok {
+		opts.ValueLog.MaxRetainedBytesHard = v
+	}
+	if v, ok := envInt64(envVlogRewriteBudgetBytesPerSec); ok {
+		opts.ValueLog.Generational.RewriteBudgetBytesPerSec = v
+	}
+	if v, ok := envInt(envVlogRewriteBudgetRecordsPerSec); ok {
+		opts.ValueLog.Generational.RewriteBudgetRecordsPerSec = v
+	}
+	if v, ok := envInt64(envVlogRewriteTriggerTotalBytes); ok {
+		opts.ValueLog.Generational.RewriteTriggerTotalBytes = v
+	}
+	if v, ok := envInt64(envVlogRewriteTriggerStaleRatioPPM); ok {
+		if v < 0 {
+			v = 0
+		}
+		maxUint32Int64 := int64(^uint32(0))
+		if v > maxUint32Int64 {
+			v = maxUint32Int64
+		}
+		opts.ValueLog.Generational.RewriteTriggerStaleRatioPPM = uint32(v)
+	}
+	if v, ok := envInt64(envVlogRewriteTriggerChurnPerSec); ok {
+		opts.ValueLog.Generational.RewriteTriggerChurnPerSec = v
+	}
+}
+
+func applyEnvIndexRuntimeOverrides(opts *Options) {
+	if opts == nil {
+		return
+	}
+
+	if v, ok := envBoolSet(envVerifyOnRead); ok {
+		opts.VerifyOnRead = v
+	}
+	if v, ok := envBoolSet(envPreferAppendAlloc); ok {
+		opts.PreferAppendAlloc = v
+	}
+	if v, ok := envBoolSet(envDisablePiggybackCompaction); ok {
+		opts.DisablePiggybackCompaction = v
+	}
+}
+
+func validateEnvIndexFormatOverrides(cfg db.FormatConfig, mainDir string) error {
+	formatPath := filepath.Join(mainDir, "format.json")
+	if v, ok := envBoolSet(envLeafPrefixCompression); ok && v != cfg.LeafPrefixCompression {
+		return fmt.Errorf("treedb: %s=%t conflicts with %s (leaf_prefix_compression=%t); rebuild the DB directory to change index format", envLeafPrefixCompression, v, formatPath, cfg.LeafPrefixCompression)
+	}
+	if v, ok := envBoolSet(envIndexColumnarLeaves); ok && v != cfg.IndexColumnarLeaves {
+		return fmt.Errorf("treedb: %s=%t conflicts with %s (index_columnar_leaves=%t); rebuild the DB directory to change index format", envIndexColumnarLeaves, v, formatPath, cfg.IndexColumnarLeaves)
+	}
+	if v, ok := envBoolSet(envIndexPackedValuePtr); ok && v != cfg.IndexPackedValuePtr {
+		return fmt.Errorf("treedb: %s=%t conflicts with %s (index_packed_valueptr=%t); rebuild the DB directory to change index format", envIndexPackedValuePtr, v, formatPath, cfg.IndexPackedValuePtr)
+	}
+	if v, ok := envBoolSet(envIndexInternalBaseDelta); ok && v != cfg.IndexInternalBaseDelta {
+		return fmt.Errorf("treedb: %s=%t conflicts with %s (index_internal_base_delta=%t); rebuild the DB directory to change index format", envIndexInternalBaseDelta, v, formatPath, cfg.IndexInternalBaseDelta)
+	}
+	if v, ok := envBoolSet(envIndexOuterLeavesInValueLog); ok && v != cfg.IndexOuterLeavesInValueLog {
+		return fmt.Errorf("treedb: %s=%t conflicts with %s (index_outer_leaves_in_vlog=%t); rebuild the DB directory to change index format", envIndexOuterLeavesInValueLog, v, formatPath, cfg.IndexOuterLeavesInValueLog)
+	}
+	if v, ok := envBoolSet(envIndexAdaptiveLeafEncoding); ok && v != cfg.IndexAdaptiveLeafEncoding {
+		return fmt.Errorf("treedb: %s=%t conflicts with %s (index_adaptive_leaf_encoding=%t); rebuild the DB directory to change index format", envIndexAdaptiveLeafEncoding, v, formatPath, cfg.IndexAdaptiveLeafEncoding)
+	}
+	return nil
+}
+
+func applyEnvIndexFormatOverrides(opts *Options) {
+	if opts == nil {
+		return
+	}
+
+	if v, ok := envBoolSet(envLeafPrefixCompression); ok {
+		opts.LeafPrefixCompression = v
+	}
+	if v, ok := envBoolSet(envIndexColumnarLeaves); ok {
+		opts.IndexColumnarLeaves = v
+	}
+	if v, ok := envBoolSet(envIndexPackedValuePtr); ok {
+		opts.IndexPackedValuePtr = v
+	}
+	if v, ok := envBoolSet(envIndexInternalBaseDelta); ok {
+		opts.IndexInternalBaseDelta = v
+	}
+	if v, ok := envBoolSet(envIndexOuterLeavesInValueLog); ok {
+		opts.IndexOuterLeavesInValueLog = v
+	}
+	if v, ok := envBoolSet(envIndexAdaptiveLeafEncoding); ok {
+		opts.IndexAdaptiveLeafEncoding = v
 	}
 }
 
@@ -865,6 +1102,22 @@ func envInt(name string) (int, bool) {
 		return 0, false
 	}
 	parsed, err := strconv.Atoi(val)
+	if err != nil {
+		return 0, false
+	}
+	return parsed, true
+}
+
+func envInt64(name string) (int64, bool) {
+	val, ok := os.LookupEnv(name)
+	if !ok {
+		return 0, false
+	}
+	val = strings.TrimSpace(val)
+	if val == "" {
+		return 0, false
+	}
+	parsed, err := strconv.ParseInt(val, 10, 64)
 	if err != nil {
 		return 0, false
 	}
@@ -980,7 +1233,13 @@ func (db *DB) closeMaintenance() error {
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		if e := db.VacuumIndexOnline(ctx); e != nil {
-			err = errors.Join(err, e)
+			if errors.Is(e, errVacuumUnsupported) {
+				if logEnabled {
+					log.Printf("treedb: close vacuum index online skipped: %v", e)
+				}
+			} else {
+				err = errors.Join(err, e)
+			}
 		}
 		cancel()
 		if logEnabled {
@@ -1159,6 +1418,42 @@ func (db *DB) SetSync(key, value []byte) error {
 	return db.backend.SetSync(key, value)
 }
 
+// Update applies fn to the current value for key and writes the returned
+// mutation without forcing an fsync boundary.
+//
+// Concurrent Update calls for the same key on the same DB handle do not lose
+// each other's changes: if the key changes while fn is running, Update retries
+// with the newer value. Point Set/Delete calls on the same handle participate in
+// the same single-key commit serialization but remain unconditional writes.
+// Because fn may be retried, it should avoid externally visible side effects.
+func (db *DB) Update(key []byte, fn UpdateFunc) error {
+	if err := db.ensureOpen(); err != nil {
+		return err
+	}
+	if db.cached != nil {
+		return db.cached.Update(key, fn)
+	}
+	return db.backend.Update(key, fn)
+}
+
+// UpdateSync applies fn to the current value for key and writes the returned
+// mutation with a sync durability boundary. With DurabilityWALOnRelaxed or
+// DurabilityWALOffRelaxed enabled, Sync operations are crash-consistent only
+// (no fsync) and may not survive power loss.
+//
+// Concurrent UpdateSync/Update calls for the same key on the same DB handle do
+// not lose each other's changes. Because fn may be retried, it should avoid
+// externally visible side effects.
+func (db *DB) UpdateSync(key []byte, fn UpdateFunc) error {
+	if err := db.ensureOpen(); err != nil {
+		return err
+	}
+	if db.cached != nil {
+		return db.cached.UpdateSync(key, fn)
+	}
+	return db.backend.UpdateSync(key, fn)
+}
+
 // Delete removes a key without forcing an fsync boundary.
 func (db *DB) Delete(key []byte) error {
 	if err := db.ensureOpen(); err != nil {
@@ -1319,6 +1614,20 @@ func (db *DB) DurabilityMode() string {
 		return ""
 	}
 	return db.durabilityMode
+}
+
+func (db *DB) MaintenancePhase() MaintenancePhase {
+	if db == nil || db.cached == nil {
+		return MaintenancePhaseSteady
+	}
+	return db.cached.MaintenancePhase()
+}
+
+func (db *DB) SetMaintenancePhase(phase MaintenancePhase) {
+	if db == nil || db.cached == nil {
+		return
+	}
+	db.cached.SetMaintenancePhase(phase)
 }
 
 // Print dumps best-effort debug output for the underlying backend.

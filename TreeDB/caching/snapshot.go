@@ -3,6 +3,7 @@ package caching
 import (
 	"errors"
 	"sync"
+	"sync/atomic"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/node"
@@ -20,13 +21,42 @@ import (
 //
 // Mutable memtables are intentionally ignored so that writes after AcquireSnapshot
 // are not visible through the snapshot.
+//
+// Snapshot pointers are single-use: after Close returns, callers must discard the
+// pointer and treat further use as invalid.
 type Snapshot struct {
 	db      *DB
 	view    *memtableView
 	backend *backenddb.Snapshot
 
-	closeOnce sync.Once
-	closeErr  error
+	closed atomic.Bool
+}
+
+type ownedReadScratch struct {
+	buf []byte
+}
+
+var ownedReadScratchPool = sync.Pool{
+	New: func() any {
+		return &ownedReadScratch{buf: make([]byte, 0, page.PageSize)}
+	},
+}
+
+func getOwnedReadScratch() *ownedReadScratch {
+	scratch, _ := ownedReadScratchPool.Get().(*ownedReadScratch)
+	if scratch == nil || cap(scratch.buf) != page.PageSize {
+		return &ownedReadScratch{buf: make([]byte, 0, page.PageSize)}
+	}
+	scratch.buf = scratch.buf[:0]
+	return scratch
+}
+
+func putOwnedReadScratch(scratch *ownedReadScratch) {
+	if scratch == nil || cap(scratch.buf) != page.PageSize {
+		return
+	}
+	scratch.buf = scratch.buf[:0]
+	ownedReadScratchPool.Put(scratch)
 }
 
 type backendSnapshotProvider interface {
@@ -99,7 +129,11 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 		return nil
 	}
 
-	return &Snapshot{db: db, view: view, backend: backendSnap}
+	return &Snapshot{
+		db:      db,
+		view:    view,
+		backend: backendSnap,
+	}
 }
 
 func (s *Snapshot) Pager() *pager.Pager {
@@ -120,19 +154,21 @@ func (s *Snapshot) Close() error {
 	if s == nil {
 		return nil
 	}
-	s.closeOnce.Do(func() {
-		var errs []error
-		if s.backend != nil {
-			errs = append(errs, s.backend.Close())
-			s.backend = nil
-		}
-		if s.view != nil && s.db != nil {
-			s.db.releaseMemtableView(s.view)
-			s.view = nil
-		}
-		s.closeErr = errors.Join(errs...)
-	})
-	return s.closeErr
+	if !s.closed.CompareAndSwap(false, true) {
+		return nil
+	}
+
+	var err error
+	if s.backend != nil {
+		err = s.backend.Close()
+		s.backend = nil
+	}
+	if s.view != nil && s.db != nil {
+		s.db.releaseMemtableView(s.view)
+		s.view = nil
+	}
+	s.db = nil
+	return err
 }
 
 func (s *Snapshot) lookupQueueEntry(key []byte) (val []byte, ptr page.ValuePtr, flags byte, found bool) {
@@ -167,14 +203,24 @@ func (s *Snapshot) GetAppend(key, dst []byte) ([]byte, error) {
 			if s.db == nil {
 				return dst, errors.New("caching snapshot: value-log reader unavailable")
 			}
+			oldLen := len(dst)
 			out, err := s.db.readValueLogAppend(key, ptr, dst)
 			if err != nil {
 				return dst, err
 			}
+			snapshotReadQueuePointerHitsTotal.Add(1)
+			if n := len(out) - oldLen; n > 0 {
+				snapshotReadQueuePointerBytesTotal.Add(uint64(n))
+			}
 			return out, nil
 		}
 		if val == nil {
+			snapshotReadQueueInlineHitsTotal.Add(1)
 			return dst, nil
+		}
+		snapshotReadQueueInlineHitsTotal.Add(1)
+		if len(val) > 0 {
+			snapshotReadQueueInlineBytesTotal.Add(uint64(len(val)))
 		}
 		return append(dst, val...), nil
 	}
@@ -182,14 +228,72 @@ func (s *Snapshot) GetAppend(key, dst []byte) ([]byte, error) {
 	if s == nil || s.backend == nil || s.db == nil {
 		return dst, tree.ErrKeyNotFound
 	}
-	if err := s.db.flushDeferredValueLogForBackendRead(); err != nil {
+	if err := s.db.flushValueLogForBackendRead(); err != nil {
 		return dst, err
 	}
-	return s.backend.GetAppend(key, dst)
+	oldLen := len(dst)
+	out, err := s.backend.GetAppend(key, dst)
+	if err != nil {
+		return dst, err
+	}
+	snapshotReadBackendHitsTotal.Add(1)
+	if n := len(out) - oldLen; n > 0 {
+		snapshotReadBackendBytesTotal.Add(uint64(n))
+	}
+	return out, nil
 }
 
 func (s *Snapshot) Get(key []byte) ([]byte, error) {
-	return s.GetAppend(key, nil)
+	val, ptr, flags, found := s.lookupQueueEntry(key)
+	if found {
+		if flags&node.FlagTombstone != 0 {
+			return nil, tree.ErrKeyNotFound
+		}
+		if flags&node.FlagPointer != 0 {
+			if s.db == nil {
+				return nil, errors.New("caching snapshot: value-log reader unavailable")
+			}
+			scratch := getOwnedReadScratch()
+			defer putOwnedReadScratch(scratch)
+
+			out, err := s.db.readValueLogAppend(key, ptr, scratch.buf[:0])
+			if err != nil {
+				return nil, err
+			}
+			snapshotReadQueuePointerHitsTotal.Add(1)
+			if len(out) == 0 {
+				return nil, nil
+			}
+			snapshotReadQueuePointerBytesTotal.Add(uint64(len(out)))
+			return ownedReadResult(out, scratch), nil
+		}
+		snapshotReadQueueInlineHitsTotal.Add(1)
+		if len(val) == 0 {
+			return nil, nil
+		}
+		snapshotReadQueueInlineBytesTotal.Add(uint64(len(val)))
+		owned := make([]byte, len(val))
+		copy(owned, val)
+		return owned, nil
+	}
+
+	if s == nil || s.backend == nil || s.db == nil {
+		return nil, tree.ErrKeyNotFound
+	}
+	if err := s.db.flushValueLogForBackendRead(); err != nil {
+		return nil, err
+	}
+	out, err := s.backend.Get(key)
+	if err != nil {
+		return nil, err
+	}
+	snapshotReadBackendHitsTotal.Add(1)
+	if len(out) == 0 {
+		return nil, nil
+	}
+	snapshotReadBackendBytesTotal.Add(uint64(len(out)))
+	maybeRecordSnapshotGetCallerSample(len(out))
+	return out, nil
 }
 
 func (s *Snapshot) GetUnsafe(key []byte) ([]byte, error) {
@@ -213,7 +317,7 @@ func (s *Snapshot) GetUnsafe(key []byte) ([]byte, error) {
 	if s == nil || s.backend == nil || s.db == nil {
 		return nil, tree.ErrKeyNotFound
 	}
-	if err := s.db.flushDeferredValueLogForBackendRead(); err != nil {
+	if err := s.db.flushValueLogForBackendRead(); err != nil {
 		return nil, err
 	}
 	return s.backend.GetUnsafe(key)
@@ -245,7 +349,7 @@ func (s *Snapshot) GetEntry(key []byte) (node.LeafEntry, error) {
 	if s == nil || s.backend == nil || s.db == nil {
 		return node.LeafEntry{}, tree.ErrKeyNotFound
 	}
-	if err := s.db.flushDeferredValueLogForBackendRead(); err != nil {
+	if err := s.db.flushValueLogForBackendRead(); err != nil {
 		return node.LeafEntry{}, err
 	}
 	return s.backend.GetEntry(key)
@@ -266,7 +370,7 @@ func (s *Snapshot) GetEntryExact(key []byte) (node.LeafEntry, error) {
 	if s == nil || s.backend == nil || s.db == nil {
 		return node.LeafEntry{}, tree.ErrKeyNotFound
 	}
-	if err := s.db.flushDeferredValueLogForBackendRead(); err != nil {
+	if err := s.db.flushValueLogForBackendRead(); err != nil {
 		return node.LeafEntry{}, err
 	}
 	return s.backend.GetEntryExact(key)

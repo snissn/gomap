@@ -62,11 +62,14 @@ func TestUnifiedWAL_ValueLogFlow(t *testing.T) {
 func TestUnifiedWAL_CrashRecoveryMissingCommit(t *testing.T) {
 	dir := t.TempDir()
 	walDir := filepath.Join(dir, "wal")
-	if err := os.MkdirAll(walDir, 0755); err != nil {
-		t.Fatalf("mkdir wal: %v", err)
+	valueLogDir := filepath.Join(dir, "value_vlog")
+	for _, path := range []string{walDir, valueLogDir} {
+		if err := os.MkdirAll(path, 0755); err != nil {
+			t.Fatalf("mkdir log dir %s: %v", path, err)
+		}
 	}
 
-	valuePath := filepath.Join(walDir, "value-l0-000001.log")
+	valuePath := filepath.Join(valueLogDir, "value-l0-000001.log")
 	writer, err := valuelog.NewWriter(valuePath, page.ValueLogFileID(1))
 	if err != nil {
 		t.Fatalf("valuelog.NewWriter: %v", err)

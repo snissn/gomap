@@ -237,11 +237,15 @@ func (p *FramePreparer) PrepareFrameInto(dst []byte, dictID uint64, dict []byte,
 		if rawPayloadBytes == 0 {
 			return p.buildRawFrameBody(dst, dictID, records, &offsets, rawPayloadBytes, false, 0)
 		}
+		forceDictProbe := shouldForceDictProbe(rawPayloadBytes)
 		if p.skipRemain > 0 {
+			if !shouldProbeLargeDictDuringBackoff(p.skipRemain, rawPayloadBytes) {
+				p.skipRemain--
+				return p.buildRawFrameBody(dst, dictID, records, &offsets, rawPayloadBytes, false, 0)
+			}
 			p.skipRemain--
-			return p.buildRawFrameBody(dst, dictID, records, &offsets, rawPayloadBytes, false, 0)
 		}
-		if p.shouldSkipCompression(rawPayloadBytes) {
+		if p.shouldSkipCompression(rawPayloadBytes) && !forceDictProbe {
 			return p.buildRawFrameBody(dst, dictID, records, &offsets, rawPayloadBytes, false, 0)
 		}
 
@@ -270,6 +274,9 @@ func (p *FramePreparer) PrepareFrameInto(dst []byte, dictID uint64, dict []byte,
 		keepCompressed := false
 		if encodeErr == nil {
 			keepCompressed = p.shouldKeepCompressed(rawPayloadBytes, len(encoded), encodeNs)
+			if !keepCompressed && shouldForceKeepLargeDictCompressed(rawPayloadBytes, len(encoded)) {
+				keepCompressed = true
+			}
 		}
 		if encodeErr != nil && !errors.Is(encodeErr, errEncodedTooLarge) {
 			return nil, FrameStats{}, encodeErr

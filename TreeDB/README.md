@@ -102,8 +102,8 @@ db, err := treedb.Open(opts)
 Profiles are intended to make intent explicit:
 
 - `ProfileDurable`: safest defaults (recommended).
-- `ProfileFast`: relax durability/integrity knobs for throughput and enables leaf pages in the value log + index optimizations (`LeafPrefixCompression`, `IndexColumnarLeaves`, `IndexPackedValuePtr`).
-- `ProfileWALOnFast`: fast ingest profile that keeps WAL on, relaxes durability checks, and enables the same leaf-vlog + index optimizations.
+- `ProfileFast`: relax durability/integrity knobs for throughput, enables leaf pages in the value log + index optimizations (`LeafPrefixCompression`, `IndexColumnarLeaves`, `IndexPackedValuePtr`), and pins the current run_celestia-style value-log compression defaults (`auto` + balanced policy + snappy block codec + medium autotune).
+- `ProfileWALOnFast`: fast ingest profile that keeps WAL on, relaxes durability checks, and enables the same leaf-vlog, index optimization, and value-log compression defaults.
 - `ProfileBench`: deterministic benchmarking profile (not production); includes `ProfileFast` index optimizations.
 
 Note: WAL-off is selected via `opts.Durability = treedb.DurabilityWALOffRelaxed`.
@@ -111,6 +111,10 @@ The value log remains enabled in cached mode, so large values can still go
 through `wal/` even when WAL is off.
 
 Details: `docs/TREEDB_WRITE_PATHS.md`.
+
+If you are integrating TreeDB behind a Cosmos/Comet-style wrapper, use
+`TreeDB/integration/kvstoreadapter` to standardize profile/env/default handling
+instead of re-copying the open-path glue in each downstream repo.
 
 ## Leaf Pages in the Value Log
 

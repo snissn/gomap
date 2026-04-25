@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -27,7 +28,7 @@ func collectLeafRefIDsFromRoot(t *testing.T, d *DB, rootID uint64) map[uint64]st
 			return fmt.Errorf("checksum mismatch on page %d", pageID)
 		}
 		return nil
-	}, func(ptr page.ValuePtr) error {
+	}, func(ptr page.LeafLogPtr) error {
 		id, err := page.EncodeLeafRef(ptr)
 		if err != nil {
 			return err
@@ -40,6 +41,19 @@ func collectLeafRefIDsFromRoot(t *testing.T, d *DB, rootID uint64) map[uint64]st
 	}
 	return out
 }
+
+type countingLeafPageLog struct {
+	inner   LeafPageLog
+	appends atomic.Uint64
+}
+
+func (l *countingLeafPageLog) AppendLeafPage(leafPage []byte) (page.LeafLogPtr, error) {
+	l.appends.Add(1)
+	return l.inner.AppendLeafPage(leafPage)
+}
+
+func (l *countingLeafPageLog) Flush() error { return l.inner.Flush() }
+func (l *countingLeafPageLog) Sync() error  { return l.inner.Sync() }
 
 func TestVacuumIndexOnline_ShrinksAndPreservesData(t *testing.T) {
 	if runtime.GOOS == "windows" {
@@ -100,6 +114,97 @@ func TestVacuumIndexOnline_ShrinksAndPreservesData(t *testing.T) {
 	}
 	if !bytes.Equal(got, value) {
 		t.Fatalf("value mismatch")
+	}
+}
+
+func TestVacuumIndexOnline_OuterLeavesInValueLog_DoesNotRewriteLeafPages(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("online vacuum not supported on windows")
+	}
+	dir := t.TempDir()
+
+	d, err := Open(Options{
+		Dir:                        dir,
+		KeepRecent:                 1,
+		Durability:                 DurabilityWALOffRelaxed,
+		IndexOuterLeavesInValueLog: true,
+		PreferAppendAlloc:          true,
+	})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	baseLeafLog := &registeredLeafPageLog{db: d, dir: dir}
+	if err := baseLeafLog.ensureWriter(); err != nil {
+		t.Fatalf("ensure leaf writer: %v", err)
+	}
+	leafLog := &countingLeafPageLog{inner: baseLeafLog}
+	d.SetLeafPageLog(leafLog)
+
+	val := bytes.Repeat([]byte("v"), 64)
+	for version := 1; version <= 24; version++ {
+		b := d.NewBatch()
+		for i := 0; i < 256; i++ {
+			key := []byte(fmt.Sprintf("s/k:store/n/%08d/%08d", version, i))
+			val[0] = byte(version)
+			if err := b.Set(key, val); err != nil {
+				t.Fatalf("set version=%d key=%d: %v", version, i, err)
+			}
+		}
+		if err := b.WriteSync(); err != nil {
+			t.Fatalf("writesync version=%d: %v", version, err)
+		}
+		_ = b.Close()
+	}
+
+	stBefore := d.State()
+	if stBefore == nil {
+		t.Fatalf("missing state before vacuum")
+	}
+	beforeRefs := collectLeafRefIDsFromRoot(t, d, stBefore.RootPageID)
+	if len(beforeRefs) == 0 {
+		t.Fatalf("expected outer-leaf refs before vacuum")
+	}
+
+	// Reset after initial population; we only want to observe what vacuum does.
+	leafLog.appends.Store(0)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := d.VacuumIndexOnline(ctx); err != nil {
+		t.Fatalf("vacuum: %v", err)
+	}
+	if got := leafLog.appends.Load(); got != 0 {
+		t.Fatalf("vacuum rewrote outer leaf pages: leaf_page_appends=%d want 0", got)
+	}
+
+	stAfter := d.State()
+	if stAfter == nil {
+		t.Fatalf("missing state after vacuum")
+	}
+	afterRefs := collectLeafRefIDsFromRoot(t, d, stAfter.RootPageID)
+	if len(afterRefs) == 0 {
+		t.Fatalf("expected outer-leaf refs after vacuum")
+	}
+	if len(afterRefs) != len(beforeRefs) {
+		t.Fatalf("leafref count changed across vacuum: before=%d after=%d", len(beforeRefs), len(afterRefs))
+	}
+
+	for _, version := range []int{1, 12, 24} {
+		for _, idx := range []int{0, 127, 255} {
+			key := []byte(fmt.Sprintf("s/k:store/n/%08d/%08d", version, idx))
+			got, err := d.Get(key)
+			if err != nil {
+				t.Fatalf("get version=%d key=%d after vacuum: %v", version, idx, err)
+			}
+			if len(got) != len(val) {
+				t.Fatalf("value length mismatch version=%d key=%d: got=%d want=%d", version, idx, len(got), len(val))
+			}
+			if got[0] != byte(version) {
+				t.Fatalf("value content mismatch version=%d key=%d: got[0]=%d want=%d", version, idx, got[0], byte(version))
+			}
+		}
 	}
 }
 

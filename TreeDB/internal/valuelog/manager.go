@@ -21,8 +21,10 @@ import (
 )
 
 const (
-	defaultGroupedFrameCacheEntries     = 4
-	defaultGroupedFrameCacheMaxRawBytes = 4 << 20
+	// Keep grouped-frame cache modest by default so restore workloads with many
+	// open segments do not retain large decoded-raw payloads per file.
+	defaultGroupedFrameCacheEntries     = 2
+	defaultGroupedFrameCacheMaxRawBytes = 1 << 20
 )
 
 type groupedFrameCacheEntry struct {
@@ -31,17 +33,28 @@ type groupedFrameCacheEntry struct {
 	k         int
 	offsets   [MaxFrameK + 1]uint32
 	raw       []byte
+	rawPooled bool
 	used      uint64
 }
+
+type sealedLazyMmapDenyReason uint8
+
+const (
+	sealedLazyMmapDenyNone sealedLazyMmapDenyReason = iota
+	sealedLazyMmapDenyCountCap
+	sealedLazyMmapDenyBytesCap
+)
 
 // File represents a value-log segment on disk.
 type File struct {
 	ID                 uint32
 	Path               string
 	File               *os.File
+	manager            *Manager
 	RefCount           atomic.Int64
 	IsZombie           atomic.Bool
 	retryDeletePending atomic.Bool
+	currentWritable    atomic.Bool
 	dictLookup         DictLookup
 	templateLookup     TemplateLookup
 	templateDecodeOpts templ.DecodeOptions
@@ -72,13 +85,39 @@ type File struct {
 
 	// mmapData holds the current read-only mapping. Readers load it without locks.
 	mmapData atomic.Value // stores []byte (may be nil slice)
+	fileSize atomic.Int64 // last known on-disk size; 0 means unknown
 
 	remapMu        sync.Mutex
 	remapRequested atomic.Bool
 
-	deadMappings      [][]byte
-	remapCount        atomic.Uint64
-	deadMappingsCount atomic.Uint64
+	deadMappings           [][]byte
+	deadMappedBytes        atomic.Uint64
+	remapCount             atomic.Uint64
+	deadMappingsCount      atomic.Uint64
+	sealedMapDeniedByCount atomic.Uint64
+	sealedMapDeniedByBytes atomic.Uint64
+	sealedLazyMmapDenied   atomic.Bool
+	// Deny-budget snapshot used to preserve cheap deny fast-paths while still
+	// allowing recovery when global sealed mmap budgets are raised.
+	sealedLazyMmapDeniedCountCap atomic.Int64
+	sealedLazyMmapDeniedBytesCap atomic.Int64
+	mmapReadHits                 atomic.Uint64
+	mmapReadMissNoMapping        atomic.Uint64
+	// mmapReadMissOutOfRange counts reads that miss because the requested record
+	// range is not currently covered by the active mmap.
+	mmapReadMissOutOfRange atomic.Uint64
+	// mmapReadMissDeadMappingCap counts fallback reads where remap growth is
+	// skipped because the dead-mapping budget is exhausted.
+	mmapReadMissDeadMappingCap atomic.Uint64
+	// mmapReadFallbackReadAt counts reads that ultimately fall back to ReadAt.
+	mmapReadFallbackReadAt atomic.Uint64
+}
+
+func (f *File) allowsCompactLeafPayload() bool {
+	if f == nil {
+		return false
+	}
+	return allowsCompactLeafLogPayload(f.ID, f.Path)
 }
 
 func openFile(path string, id uint32, dictLookup DictLookup, templateLookup TemplateLookup, templateOpts templ.DecodeOptions, templateCache *templateDefCache) (*File, error) {
@@ -98,7 +137,11 @@ func openFile(path string, id uint32, dictLookup DictLookup, templateLookup Temp
 		groupedFrameCacheMaxRaw:  defaultGroupedFrameCacheMaxRawBytes,
 	}
 	vf.mmapData.Store([]byte(nil))
-	vf.maybeScheduleRemap()
+	if info, err := f.Stat(); err == nil {
+		if sz := info.Size(); sz > 0 {
+			vf.fileSize.Store(sz)
+		}
+	}
 	return vf, nil
 }
 
@@ -147,7 +190,11 @@ func (f *File) setCacheRawLocked(raw []byte, pooled bool) {
 }
 
 func (f *File) stashDecodeScratchLocked(buf []byte) {
-	if cap(buf) == 0 || cap(buf) > maxDecodeScratchKeep {
+	if cap(buf) == 0 {
+		return
+	}
+	if cap(buf) > maxDecodeScratchKeep {
+		putDecodeScratch(buf)
 		return
 	}
 	buf = buf[:0]
@@ -182,7 +229,11 @@ func (f *File) takeDecodeScratch(minCap int) []byte {
 }
 
 func (f *File) releaseDecodeScratch(buf []byte) {
-	if cap(buf) == 0 || cap(buf) > maxDecodeScratchKeep {
+	if cap(buf) == 0 {
+		return
+	}
+	if cap(buf) > maxDecodeScratchKeep {
+		putDecodeScratch(buf)
 		return
 	}
 	buf = buf[:0]
@@ -205,8 +256,12 @@ func (f *File) releaseDecodeScratch(buf []byte) {
 
 func (f *File) clearGroupedFrameCacheLocked() {
 	for i := range f.groupedFrameCache {
+		if f.groupedFrameCache[i].rawPooled {
+			f.stashDecodeScratchLocked(f.groupedFrameCache[i].raw)
+		}
 		f.groupedFrameCache[i].raw = nil
 		f.groupedFrameCache[i].k = 0
+		f.groupedFrameCache[i].rawPooled = false
 	}
 	f.groupedFrameCache = nil
 	f.groupedFrameCacheClock = 0
@@ -227,47 +282,72 @@ func (f *File) setGroupedFrameCacheEntries(entries int) {
 	f.groupedFrameCacheMisses = 0
 }
 
-func (f *File) groupedFrameCacheLookup(start int64, verifyCRC bool, subIndex int) (raw []byte, valStart, valEnd, rawLen uint32, ok bool) {
+func (f *File) groupedFrameCacheReadTo(start int64, verifyCRC bool, subIndex int, dst []byte) (out []byte, usedDst bool, err error, hit bool) {
 	f.cacheMu.Lock()
-	defer f.cacheMu.Unlock()
 	if f.groupedFrameCacheEntries <= 0 {
-		return nil, 0, 0, 0, false
+		f.cacheMu.Unlock()
+		return nil, false, nil, false
 	}
 	if len(f.groupedFrameCache) == 0 {
 		f.groupedFrameCacheMisses++
-		return nil, 0, 0, 0, false
+		f.cacheMu.Unlock()
+		return nil, false, nil, false
 	}
 	for i := range f.groupedFrameCache {
 		e := &f.groupedFrameCache[i]
 		if e.k <= 0 || e.start != start || e.verifyCRC != verifyCRC || subIndex < 0 || subIndex >= e.k {
 			continue
 		}
-		valStart = e.offsets[subIndex]
-		valEnd = e.offsets[subIndex+1]
-		rawLen = e.offsets[e.k]
+		valStart := e.offsets[subIndex]
+		valEnd := e.offsets[subIndex+1]
+		rawLen := e.offsets[e.k]
 		if valEnd < valStart || valEnd > rawLen || uint32(len(e.raw)) != rawLen {
 			continue
 		}
 		f.groupedFrameCacheClock++
 		e.used = f.groupedFrameCacheClock
 		f.groupedFrameCacheHits++
-		return e.raw, valStart, valEnd, rawLen, true
+		val := e.raw[valStart:valEnd]
+		if f.templateLookup != nil && templ.IsEncodedPayload(val) {
+			// Copy payload while holding cacheMu so callers do not race with cache
+			// entry eviction/reuse after unlock.
+			encoded := append([]byte(nil), val...)
+			f.cacheMu.Unlock()
+			decoded, decErr := templ.DecodePayloadAppend(nil, encoded, func(id uint64) (templ.TemplateDef, error) {
+				return resolveTemplateDef(id, f.templateLookup, f.templateDefCache)
+			}, f.templateDecodeOpts)
+			if decErr != nil {
+				return nil, false, decErr, true
+			}
+			return decoded, false, nil, true
+		}
+		if dst != nil && cap(dst) >= len(val) {
+			out := dst[:len(val)]
+			copy(out, val)
+			f.cacheMu.Unlock()
+			return out, true, nil, true
+		}
+		out := make([]byte, len(val))
+		copy(out, val)
+		f.cacheMu.Unlock()
+		return out, false, nil, true
 	}
 	f.groupedFrameCacheMisses++
-	return nil, 0, 0, 0, false
+	f.cacheMu.Unlock()
+	return nil, false, nil, false
 }
 
-func (f *File) groupedFrameCacheStore(start int64, verifyCRC bool, k int, offsets [MaxFrameK + 1]uint32, raw []byte) {
+func (f *File) groupedFrameCacheStore(start int64, verifyCRC bool, k int, offsets [MaxFrameK + 1]uint32, raw []byte, pooled bool) bool {
 	if k <= 0 || len(raw) == 0 {
-		return
+		return false
 	}
 	f.cacheMu.Lock()
 	defer f.cacheMu.Unlock()
 	if f.groupedFrameCacheEntries <= 0 {
-		return
+		return false
 	}
 	if f.groupedFrameCacheMaxRaw > 0 && len(raw) > f.groupedFrameCacheMaxRaw {
-		return
+		return false
 	}
 
 	f.groupedFrameCacheClock++
@@ -276,11 +356,15 @@ func (f *File) groupedFrameCacheStore(start int64, verifyCRC bool, k int, offset
 	for i := range f.groupedFrameCache {
 		e := &f.groupedFrameCache[i]
 		if e.k > 0 && e.start == start && e.verifyCRC == verifyCRC {
+			if e.rawPooled {
+				f.stashDecodeScratchLocked(e.raw)
+			}
 			e.k = k
 			e.offsets = offsets
 			e.raw = raw
+			e.rawPooled = pooled
 			e.used = used
-			return
+			return true
 		}
 	}
 
@@ -299,14 +383,19 @@ func (f *File) groupedFrameCacheStore(start int64, verifyCRC bool, k int, offset
 		}
 	}
 
+	if idx >= 0 && idx < len(f.groupedFrameCache) && f.groupedFrameCache[idx].rawPooled {
+		f.stashDecodeScratchLocked(f.groupedFrameCache[idx].raw)
+	}
 	f.groupedFrameCache[idx] = groupedFrameCacheEntry{
 		start:     start,
 		verifyCRC: verifyCRC,
 		k:         k,
 		offsets:   offsets,
 		raw:       raw,
+		rawPooled: pooled,
 		used:      used,
 	}
+	return true
 }
 
 func (f *File) groupedFrameCacheStats() (hits, misses uint64, entries, capacity int) {
@@ -362,6 +451,7 @@ func (f *File) Close() error {
 	}
 	f.deadMappings = nil
 	f.deadMappingsCount.Store(0)
+	f.deadMappedBytes.Store(0)
 	f.mmapData.Store([]byte(nil))
 	f.remapMu.Unlock()
 
@@ -372,9 +462,38 @@ func (f *File) Read(ptr page.ValuePtr, verifyCRC bool) ([]byte, error) {
 	if f == nil || f.File == nil {
 		return nil, errors.New("valuelog: nil file")
 	}
-	if val, err, ok := f.readViaMmap(ptr, verifyCRC); ok {
-		return val, err
+	if err := f.ensureCurrentWritableReadable(); err != nil {
+		return nil, err
 	}
+	if val, err, ok := f.readViaMmap(ptr, verifyCRC); ok {
+		f.mmapReadHits.Add(1)
+		if err != nil {
+			return nil, err
+		}
+		val, _, _, err = maybeDecodeLeafLogPayloadTo(f.ID, f.Path, val, nil)
+		if err != nil {
+			return nil, err
+		}
+		return val, nil
+	}
+	data, _ := f.mmapData.Load().([]byte)
+	if data != nil && deadMappingsCapExhausted(f.deadMappingsCount.Load(), len(data)) {
+		f.mmapReadMissDeadMappingCap.Add(1)
+	}
+	if !verifyCRC {
+		if val, _, err, ok := f.readGroupedCompressedFromFileTo(ptr, nil); ok {
+			f.mmapReadFallbackReadAt.Add(1)
+			if err != nil {
+				return nil, err
+			}
+			val, _, _, err = maybeDecodeLeafLogPayloadTo(f.ID, f.Path, val, nil)
+			if err != nil {
+				return nil, err
+			}
+			return val, nil
+		}
+	}
+	f.mmapReadFallbackReadAt.Add(1)
 	return ReadAtWithDict(f.File, ptr, verifyCRC, f.dictLookup, f.templateLookup, f.templateDefCache, f.templateDecodeOpts)
 }
 
@@ -382,25 +501,338 @@ func (f *File) ReadUnsafe(ptr page.ValuePtr, verifyCRC bool) ([]byte, error) {
 	if f == nil || f.File == nil {
 		return nil, errors.New("valuelog: nil file")
 	}
-	if val, err, ok := f.readViaMmapView(ptr, verifyCRC); ok {
-		return val, err
+	if err := f.ensureCurrentWritableReadable(); err != nil {
+		return nil, err
 	}
-	f.remapToFileSize()
 	if val, err, ok := f.readViaMmapView(ptr, verifyCRC); ok {
-		return val, err
+		f.mmapReadHits.Add(1)
+		if err != nil {
+			return nil, err
+		}
+		val, _, _, err = maybeDecodeLeafLogPayloadTo(f.ID, f.Path, val, nil)
+		if err != nil {
+			return nil, err
+		}
+		return val, nil
 	}
+	if !f.usesPersistentMmap() {
+		if f.tryEnableSealedLazyMmap() {
+			if val, err, ok := f.readViaMmapView(ptr, verifyCRC); ok {
+				f.mmapReadHits.Add(1)
+				if err != nil {
+					return nil, err
+				}
+				val, _, _, err = maybeDecodeLeafLogPayloadTo(f.ID, f.Path, val, nil)
+				if err != nil {
+					return nil, err
+				}
+				return val, nil
+			}
+		}
+		f.mmapReadFallbackReadAt.Add(1)
+		return ReadAtWithDict(f.File, ptr, verifyCRC, f.dictLookup, f.templateLookup, f.templateDefCache, f.templateDecodeOpts)
+	}
+	// Avoid per-read Stat/lock churn once we have exhausted the dead-mapping
+	// budget: remapToFileSize won't be able to grow the mapping safely again.
+	data, _ := f.mmapData.Load().([]byte)
+	if !deadMappingsCapExhausted(f.deadMappingsCount.Load(), len(data)) {
+		f.remapToFileSize()
+		if val, err, ok := f.readViaMmapView(ptr, verifyCRC); ok {
+			f.mmapReadHits.Add(1)
+			if err != nil {
+				return nil, err
+			}
+			val, _, _, err = maybeDecodeLeafLogPayloadTo(f.ID, f.Path, val, nil)
+			if err != nil {
+				return nil, err
+			}
+			return val, nil
+		}
+	} else {
+		f.mmapReadMissDeadMappingCap.Add(1)
+	}
+	f.mmapReadFallbackReadAt.Add(1)
 	return ReadAtWithDict(f.File, ptr, verifyCRC, f.dictLookup, f.templateLookup, f.templateDefCache, f.templateDecodeOpts)
+}
+
+// ReadUnsafeTo is like ReadUnsafe, but it may return a slice backed by dst
+// when dst has enough capacity for the decoded value. Callers must keep dst
+// alive and avoid reusing it while they use the returned slice when usedDst is true.
+func (f *File) ReadUnsafeTo(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte, bool, error) {
+	if f == nil || f.File == nil {
+		return nil, false, errors.New("valuelog: nil file")
+	}
+	if err := f.ensureCurrentWritableReadable(); err != nil {
+		return nil, false, err
+	}
+	if val, usedDst, err, ok := f.readViaMmapViewTo(ptr, verifyCRC, dst); ok {
+		f.mmapReadHits.Add(1)
+		if err != nil {
+			return nil, false, err
+		}
+		val, compactUsedDst, compactDecoded, err := maybeDecodeLeafLogPayloadTo(f.ID, f.Path, val, dst)
+		if err != nil {
+			return nil, false, err
+		}
+		if compactDecoded {
+			return val, compactUsedDst, nil
+		}
+		return val, usedDst, nil
+	}
+	if !f.usesPersistentMmap() {
+		if f.tryEnableSealedLazyMmap() {
+			if val, usedDst, err, ok := f.readViaMmapViewTo(ptr, verifyCRC, dst); ok {
+				f.mmapReadHits.Add(1)
+				if err != nil {
+					return nil, false, err
+				}
+				val, compactUsedDst, compactDecoded, err := maybeDecodeLeafLogPayloadTo(f.ID, f.Path, val, dst)
+				if err != nil {
+					return nil, false, err
+				}
+				if compactDecoded {
+					return val, compactUsedDst, nil
+				}
+				return val, usedDst, nil
+			}
+		}
+		f.mmapReadFallbackReadAt.Add(1)
+		if !verifyCRC {
+			if val, usedDst, err, ok := f.readGroupedCompressedFromFileTo(ptr, dst); ok {
+				if err != nil {
+					return nil, false, err
+				}
+				val, compactUsedDst, compactDecoded, err := maybeDecodeLeafLogPayloadTo(f.ID, f.Path, val, dst)
+				if err != nil {
+					return nil, false, err
+				}
+				if compactDecoded {
+					return val, compactUsedDst, nil
+				}
+				return val, usedDst, nil
+			}
+		}
+		return ReadAtWithDictTo(f.File, ptr, verifyCRC, f.dictLookup, f.templateLookup, f.templateDefCache, f.templateDecodeOpts, dst)
+	}
+	// Avoid per-read Stat/lock churn once we have exhausted the dead-mapping
+	// budget: remapToFileSize won't be able to grow the mapping safely again.
+	data, _ := f.mmapData.Load().([]byte)
+	if !deadMappingsCapExhausted(f.deadMappingsCount.Load(), len(data)) {
+		f.remapToFileSize()
+		if val, usedDst, err, ok := f.readViaMmapViewTo(ptr, verifyCRC, dst); ok {
+			f.mmapReadHits.Add(1)
+			if err != nil {
+				return nil, false, err
+			}
+			val, compactUsedDst, compactDecoded, err := maybeDecodeLeafLogPayloadTo(f.ID, f.Path, val, dst)
+			if err != nil {
+				return nil, false, err
+			}
+			if compactDecoded {
+				return val, compactUsedDst, nil
+			}
+			return val, usedDst, nil
+		}
+	} else {
+		f.mmapReadMissDeadMappingCap.Add(1)
+	}
+	f.mmapReadFallbackReadAt.Add(1)
+	if !verifyCRC {
+		if val, usedDst, err, ok := f.readGroupedCompressedFromFileTo(ptr, dst); ok {
+			if err != nil {
+				return nil, false, err
+			}
+			val, compactUsedDst, compactDecoded, err := maybeDecodeLeafLogPayloadTo(f.ID, f.Path, val, dst)
+			if err != nil {
+				return nil, false, err
+			}
+			if compactDecoded {
+				return val, compactUsedDst, nil
+			}
+			return val, usedDst, nil
+		}
+	}
+	return ReadAtWithDictTo(f.File, ptr, verifyCRC, f.dictLookup, f.templateLookup, f.templateDefCache, f.templateDecodeOpts, dst)
+}
+
+// readGroupedCompressedFromFileTo handles grouped+compressed reads on the
+// non-mmap fallback path while reusing File grouped-frame cache entries.
+//
+// ok=false means the caller should fall back to the generic ReadAtWithDictTo
+// decoder path (for non-grouped / uncompressed / checksum-verified cases).
+func (f *File) readGroupedCompressedFromFileTo(ptr page.ValuePtr, dst []byte) ([]byte, bool, error, bool) {
+	if f == nil || f.File == nil {
+		return nil, false, errors.New("valuelog: nil file"), true
+	}
+	if ptr.Offset < 4 || !page.ValuePtrIsGrouped(ptr) {
+		return nil, false, nil, false
+	}
+
+	start := int64(ptr.Offset - 4)
+	var header [HeaderSize]byte
+	if _, err := f.File.ReadAt(header[:], start); err != nil {
+		return nil, false, err, true
+	}
+	if header[4] != Version {
+		return nil, false, ErrCorrupt, true
+	}
+	if header[5]&recordFlagGrouped == 0 {
+		return nil, false, nil, false
+	}
+	valueLen := binary.LittleEndian.Uint32(header[16:20])
+	if recordSizeExceedsMax(valueLen) {
+		return nil, false, ErrRecordTooLarge, true
+	}
+	expectedLen := uint32(headerWithoutCRC) + valueLen
+	if !page.ValuePtrRecordLengthHintMatches(ptr, expectedLen) {
+		return nil, false, ErrCorrupt, true
+	}
+	if int(valueLen) < FrameHeaderSize {
+		return nil, false, ErrCorrupt, true
+	}
+
+	frameOff := start + HeaderSize
+	var frameHeader [FrameHeaderSize]byte
+	if _, err := f.File.ReadAt(frameHeader[:], frameOff); err != nil {
+		return nil, false, err, true
+	}
+	if frameHeader[0] != FrameVersion {
+		return nil, false, ErrCorrupt, true
+	}
+	k := int(frameHeader[2])
+	if k <= 0 || k > MaxFrameK {
+		return nil, false, ErrCorrupt, true
+	}
+	if frameHeader[1]&FrameFlagCompressed == 0 {
+		return nil, false, nil, false
+	}
+
+	subIndex := int(page.ValuePtrSubIndex(ptr))
+	if subIndex < 0 || subIndex >= k {
+		return nil, false, ErrCorrupt, true
+	}
+	if out, usedDst, err, hit := f.groupedFrameCacheReadTo(start, false, subIndex, dst); hit {
+		return out, usedDst, err, true
+	}
+
+	ridBytes := k * 8
+	offsetBytes := (k + 1) * 4
+	prefixLen := FrameHeaderSize + ridBytes + offsetBytes
+	if int(valueLen) < prefixLen {
+		return nil, false, ErrCorrupt, true
+	}
+
+	off := FrameHeaderSize + ridBytes
+	const maxPrefixLen = FrameHeaderSize + (MaxFrameK * 8) + ((MaxFrameK + 1) * 4)
+	var prefix [maxPrefixLen]byte
+	if _, err := f.File.ReadAt(prefix[:prefixLen], frameOff); err != nil {
+		return nil, false, err, true
+	}
+
+	var offsets [MaxFrameK + 1]uint32
+	prev := uint32(0)
+	for i := 0; i < k+1; i++ {
+		cur := binary.LittleEndian.Uint32(prefix[off : off+4])
+		if cur < prev {
+			return nil, false, ErrCorrupt, true
+		}
+		offsets[i] = cur
+		prev = cur
+		off += 4
+	}
+	rawLen := offsets[k]
+	if limits.MaxRecordSize > 0 && int64(rawLen) > limits.MaxRecordSize {
+		return nil, false, ErrRecordTooLarge, true
+	}
+	valStart := offsets[subIndex]
+	valEnd := offsets[subIndex+1]
+	if valEnd < valStart || valEnd > rawLen {
+		return nil, false, ErrCorrupt, true
+	}
+
+	frame := FrameHeader{
+		Version:  frameHeader[0],
+		Flags:    frameHeader[1],
+		K:        uint8(k),
+		Reserved: frameHeader[3],
+		DictID:   binary.LittleEndian.Uint64(frameHeader[4:12]),
+	}
+
+	framePayloadLen := int(valueLen) - prefixLen
+	if framePayloadLen < 0 {
+		return nil, false, ErrCorrupt, true
+	}
+	payloadScratch := getDecodeScratch(framePayloadLen)
+	framePayload := payloadScratch[:framePayloadLen]
+	if _, err := f.File.ReadAt(framePayload, frameOff+int64(prefixLen)); err != nil {
+		putDecodeScratch(payloadScratch)
+		return nil, false, err, true
+	}
+
+	raw := f.takeDecodeScratch(int(rawLen))
+	pooledRaw := true
+	raw, err := decodeFramePayloadTo(frame, framePayload, f.dictLookup, rawLen, raw)
+	putDecodeScratch(payloadScratch)
+	if err != nil {
+		if pooledRaw {
+			f.releaseDecodeScratch(raw)
+		}
+		return nil, false, err, true
+	}
+	if uint32(len(raw)) != rawLen {
+		if pooledRaw {
+			f.releaseDecodeScratch(raw)
+		}
+		return nil, false, ErrCorrupt, true
+	}
+	val := raw[valStart:valEnd]
+	if f.templateLookup != nil && templ.IsEncodedPayload(val) {
+		encoded := append([]byte(nil), val...)
+		cachedRaw := f.groupedFrameCacheStore(start, false, k, offsets, raw, pooledRaw)
+		if pooledRaw && !cachedRaw {
+			f.releaseDecodeScratch(raw)
+		}
+		decoded, err := templ.DecodePayloadAppend(nil, encoded, func(id uint64) (templ.TemplateDef, error) {
+			return resolveTemplateDef(id, f.templateLookup, f.templateDefCache)
+		}, f.templateDecodeOpts)
+		if err != nil {
+			return nil, false, err, true
+		}
+		return decoded, false, nil, true
+	}
+
+	if dst != nil && cap(dst) >= len(val) {
+		out := dst[:len(val)]
+		copy(out, val)
+		cachedRaw := f.groupedFrameCacheStore(start, false, k, offsets, raw, pooledRaw)
+		if pooledRaw && !cachedRaw {
+			f.releaseDecodeScratch(raw)
+		}
+		return out, true, nil, true
+	}
+	out := make([]byte, len(val))
+	copy(out, val)
+	cachedRaw := f.groupedFrameCacheStore(start, false, k, offsets, raw, pooledRaw)
+	if pooledRaw && !cachedRaw {
+		f.releaseDecodeScratch(raw)
+	}
+	return out, false, nil, true
 }
 
 func (f *File) ReadAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte, error) {
 	if f == nil || f.File == nil {
 		return nil, errors.New("valuelog: nil file")
 	}
+	if err := f.ensureCurrentWritableReadable(); err != nil {
+		return nil, err
+	}
 	if val, err, ok := f.readViaMmapAppend(ptr, verifyCRC, dst); ok {
+		f.mmapReadHits.Add(1)
 		return val, err
 	}
 	// Fast path (bench/unsafe reads): grouped + uncompressed + no CRC.
 	if !verifyCRC && page.ValuePtrIsGrouped(ptr) && ptr.Offset >= 4 {
+		f.mmapReadFallbackReadAt.Add(1)
 		start := int64(ptr.Offset - 4)
 
 		// Read header to discover the frame length/flags.
@@ -459,15 +891,9 @@ func (f *File) ReadAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte
 		}
 		fFlags := frameHeader[1]
 		if fFlags&FrameFlagCompressed != 0 {
-			// Fallback to the full decoder (will allocate).
-			val, err := ReadAtWithDict(f.File, ptr, verifyCRC, f.dictLookup, f.templateLookup, f.templateDefCache, f.templateDecodeOpts)
-			if err != nil {
-				return nil, err
-			}
-			oldLen := len(dst)
-			dst = grow(dst, len(val))
-			copy(dst[oldLen:], val)
-			return dst, nil
+			// Fallback to the full decoder path. Prefer decode-to-tail so hot
+			// append callers can reuse dst capacity and avoid per-read allocs.
+			return f.appendDecodedRecordTo(ptr, verifyCRC, dst)
 		}
 		ridBytes := k * 8
 		offsetBytes := (k + 1) * 4
@@ -524,11 +950,34 @@ func (f *File) ReadAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte
 	}
 
 	// Slow path: use existing decoder and append.
-	val, err := ReadAtWithDict(f.File, ptr, verifyCRC, f.dictLookup, f.templateLookup, f.templateDefCache, f.templateDecodeOpts)
+	f.mmapReadFallbackReadAt.Add(1)
+	return f.appendDecodedRecordTo(ptr, verifyCRC, dst)
+}
+
+func (f *File) appendDecodedRecordTo(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte, error) {
+	if f == nil || f.File == nil {
+		return nil, errors.New("valuelog: nil file")
+	}
+	oldLen := len(dst)
+	var tail []byte
+	if oldLen <= cap(dst) {
+		tail = dst[oldLen:cap(dst)]
+	}
+	val, usedDst, err := ReadAtWithDictTo(f.File, ptr, verifyCRC, f.dictLookup, f.templateLookup, f.templateDefCache, f.templateDecodeOpts, tail[:0])
 	if err != nil {
 		return nil, err
 	}
-	oldLen := len(dst)
+	if usedDst {
+		return dst[:oldLen+len(val)], nil
+	}
+	noteGrowReadAppendCompressedFallback(len(val))
+	noteGrowReadAppendCompressedFallbackDst(dst, len(val))
+	// When the caller started with an empty destination, ReadAtWithDictTo has
+	// already produced the decoded value as a standalone slice. Returning it
+	// directly avoids a second allocation+copy in the compressed fallback path.
+	if oldLen == 0 {
+		return val, nil
+	}
 	dst = grow(dst, len(val))
 	copy(dst[oldLen:], val)
 	return dst, nil
@@ -540,16 +989,21 @@ func (f *File) ReadUnsafeAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) (
 
 func (f *File) appendPayloadFromFile(dst []byte, off int64, payloadLen int) ([]byte, error) {
 	oldLen := len(dst)
+	noteGrowReadAppendPayload(payloadLen)
 	dst = grow(dst, payloadLen)
 	payload := dst[oldLen : oldLen+payloadLen]
 	if _, err := f.File.ReadAt(payload, off); err != nil {
 		return nil, err
 	}
 	if f.templateLookup == nil || !templ.IsEncodedPayload(payload) {
-		return dst, nil
+		return appendMaybeDecodeLeafLogPayload(f.ID, f.Path, dst[:oldLen], payload)
 	}
 	encoded := append([]byte(nil), payload...)
-	return appendDecodedTemplatePayload(dst[:oldLen], encoded, f.templateLookup, f.templateDefCache, f.templateDecodeOpts)
+	decoded, err := appendDecodedTemplatePayload(dst[:oldLen], encoded, f.templateLookup, f.templateDefCache, f.templateDecodeOpts)
+	if err != nil {
+		return nil, err
+	}
+	return appendMaybeDecodeLeafLogPayload(f.ID, f.Path, decoded[:oldLen], decoded[oldLen:])
 }
 
 // Set is an immutable snapshot of value-log files for snapshot isolation.
@@ -557,6 +1011,13 @@ type Set struct {
 	Files               map[uint32]*File
 	RefCount            atomic.Int64
 	disableReadChecksum bool
+}
+
+func (s *Set) ReadChecksumEnabled() bool {
+	if s == nil {
+		return true
+	}
+	return !s.disableReadChecksum
 }
 
 func (s *Set) Read(ptr page.ValuePtr) ([]byte, error) {
@@ -573,6 +1034,14 @@ func (s *Set) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
 		return nil, &fileNotFoundError{id: ptr.FileID, inSnapshot: true}
 	}
 	return f.ReadUnsafe(ptr, !s.disableReadChecksum)
+}
+
+func (s *Set) ReadUnsafeTo(ptr page.ValuePtr, dst []byte) ([]byte, bool, error) {
+	f, ok := s.Files[ptr.FileID]
+	if !ok {
+		return nil, false, &fileNotFoundError{id: ptr.FileID, inSnapshot: true}
+	}
+	return f.ReadUnsafeTo(ptr, !s.disableReadChecksum, dst)
 }
 
 func (s *Set) ReadAppend(ptr page.ValuePtr, dst []byte) ([]byte, error) {
@@ -625,24 +1094,32 @@ func (s *Set) ReadUnsafeAppendBatch(ptrs []page.ValuePtr, dst [][]byte) ([][]byt
 }
 
 type Manager struct {
-	dir string
+	dir           string
+	extraScanDirs []string
 
 	mu    sync.RWMutex
 	files map[uint32]*File
+	// currentWritableByLane tracks the one segment per lane that may still grow
+	// and therefore is allowed to remap aggressively for zero-copy unsafe views.
+	currentWritableByLane map[uint32]uint32
 
-	disableReadChecksum      bool
-	dictLookup               DictLookup
-	templateLookup           TemplateLookup
-	templateDecodeOpts       templ.DecodeOptions
-	templateDefCache         *templateDefCache
-	groupedFrameCacheEntries int
-	groupedFrameCacheMaxRaw  int
+	refreshScans atomic.Uint64
+
+	disableReadChecksum        bool
+	dictLookup                 DictLookup
+	templateLookup             TemplateLookup
+	templateDecodeOpts         templ.DecodeOptions
+	templateDefCache           *templateDefCache
+	groupedFrameCacheEntries   int
+	groupedFrameCacheMaxRaw    int
+	currentWritableReadBarrier atomic.Value
 }
 
 func NewManager(dir string) (*Manager, error) {
 	m := &Manager{
 		dir:                      dir,
 		files:                    make(map[uint32]*File),
+		currentWritableByLane:    make(map[uint32]uint32),
 		groupedFrameCacheEntries: defaultGroupedFrameCacheEntries,
 		groupedFrameCacheMaxRaw:  defaultGroupedFrameCacheMaxRawBytes,
 	}
@@ -656,6 +1133,53 @@ func (m *Manager) SetDisableReadChecksum(disable bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.disableReadChecksum = disable
+}
+
+// SetCurrentWritableReadBarrier installs an optional callback that is invoked
+// before reading a segment still marked currentWritable. Cached mode uses this
+// to flush the owning writer so backend-internal tree reads do not observe EOF
+// from still-buffered grouped records.
+func (m *Manager) SetCurrentWritableReadBarrier(fn func(fileID uint32) error) {
+	if m == nil {
+		return
+	}
+	if fn == nil {
+		var cleared func(fileID uint32) error
+		m.currentWritableReadBarrier.Store(cleared)
+		return
+	}
+	m.currentWritableReadBarrier.Store(fn)
+}
+
+func (m *Manager) currentWritableBarrier() func(uint32) error {
+	if m == nil {
+		return nil
+	}
+	if v := m.currentWritableReadBarrier.Load(); v != nil {
+		if fn, ok := v.(func(uint32) error); ok {
+			return fn
+		}
+	}
+	return nil
+}
+
+func (f *File) ensureCurrentWritableReadable() error {
+	if f == nil || !f.currentWritable.Load() || f.manager == nil {
+		return nil
+	}
+	if barrier := f.manager.currentWritableBarrier(); barrier != nil {
+		return barrier(f.ID)
+	}
+	return nil
+}
+
+func (m *Manager) ReadChecksumEnabled() bool {
+	if m == nil {
+		return true
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return !m.disableReadChecksum
 }
 
 func (m *Manager) SetDictLookup(lookup DictLookup) {
@@ -720,29 +1244,87 @@ func (m *Manager) Close() error {
 func (m *Manager) SegmentPath(id uint32) string {
 	seg := page.ValueLogSegmentID(id)
 	lane, seq := DecodeSegmentID(seg)
-	return filepath.Join(m.dir, fmt.Sprintf("value-l%d-%06d.log", lane, seq))
+	name := fmt.Sprintf("value-l%d-%06d.log", lane, seq)
+	if m == nil {
+		return name
+	}
+	m.mu.RLock()
+	if f := m.files[id]; f != nil && strings.TrimSpace(f.Path) != "" {
+		path := f.Path
+		m.mu.RUnlock()
+		return path
+	}
+	rootDir := m.dir
+	m.mu.RUnlock()
+	return filepath.Join(rootDir, name)
+}
+
+// HasSegment reports whether id is already registered and not marked zombie.
+func (m *Manager) HasSegment(id uint32) bool {
+	if m == nil {
+		return false
+	}
+	m.mu.RLock()
+	f := m.files[id]
+	m.mu.RUnlock()
+	return f != nil && !f.IsZombie.Load()
+}
+
+// RefreshScanCount returns the number of directory scans performed by Refresh().
+// This is used in tests and profiling to guard against accidental rescan loops.
+func (m *Manager) RefreshScanCount() uint64 {
+	if m == nil {
+		return 0
+	}
+	return m.refreshScans.Load()
 }
 
 // Refresh scans the directory and registers any new segments.
 func (m *Manager) Refresh() error {
-	segments, err := currentScanSegmentPaths()(m.dir)
-	if err != nil {
-		return err
+	m.refreshScans.Add(1)
+	dirs := []string{m.dir}
+	m.mu.RLock()
+	if len(m.extraScanDirs) > 0 {
+		dirs = append(dirs, m.extraScanDirs...)
 	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	for _, seg := range segments {
-		if err := m.registerSegmentLocked(seg.path, seg.id); err != nil {
-			if errors.Is(err, os.ErrNotExist) {
-				// Online rewrite/GC can delete a segment after listSegments() sees it
-				// but before we open it. Treat that as a benign refresh race and
-				// keep scanning the remaining segments.
-				continue
-			}
+	m.mu.RUnlock()
+	for _, dir := range dirs {
+		segments, err := currentScanSegmentPaths()(dir)
+		if err != nil {
 			return err
 		}
+		m.mu.Lock()
+		for _, seg := range segments {
+			if err := m.registerSegmentLocked(seg.path, seg.id); err != nil {
+				if errors.Is(err, os.ErrNotExist) {
+					// Online rewrite/GC can delete a segment after listSegments() sees it
+					// but before we open it. Treat that as a benign refresh race and
+					// keep scanning the remaining segments.
+					continue
+				}
+				m.mu.Unlock()
+				return err
+			}
+		}
+		m.mu.Unlock()
 	}
 	return nil
+}
+
+func (m *Manager) AddScanDir(dir string) error {
+	if m == nil || dir == "" || dir == m.dir {
+		return nil
+	}
+	m.mu.Lock()
+	for _, existing := range m.extraScanDirs {
+		if existing == dir {
+			m.mu.Unlock()
+			return nil
+		}
+	}
+	m.extraScanDirs = append(m.extraScanDirs, dir)
+	m.mu.Unlock()
+	return m.Refresh()
 }
 
 // RegisterSegment registers a newly created segment without scanning the
@@ -766,10 +1348,81 @@ func (m *Manager) registerSegmentLocked(path string, id uint32) error {
 	if err != nil {
 		return err
 	}
+	f.manager = m
 	f.setGroupedFrameCacheEntries(m.groupedFrameCacheEntries)
 	f.setGroupedFrameCacheMaxRawBytes(m.groupedFrameCacheMaxRaw)
 	m.files[id] = f
 	return nil
+}
+
+// PromoteCurrentWritable marks fileID as the current writable segment for its
+// lane and seals the previous current segment in that lane.
+func (m *Manager) PromoteCurrentWritable(fileID uint32) error {
+	if m == nil {
+		return nil
+	}
+	lane, _ := DecodeFileID(fileID)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.currentWritableByLane == nil {
+		m.currentWritableByLane = make(map[uint32]uint32)
+	}
+	f, ok := m.files[fileID]
+	if !ok {
+		return &fileNotFoundError{id: fileID}
+	}
+	if prevID, ok := m.currentWritableByLane[lane]; ok && prevID != 0 && prevID != fileID {
+		if prev := m.files[prevID]; prev != nil {
+			prev.remapMu.Lock()
+			prev.currentWritable.Store(false)
+			if data, _ := prev.mmapData.Load().([]byte); len(data) > 0 {
+				if m.allowDemotedCurrentMmapLocked(prev, fileID) {
+					prev.sealedLazyMmapDenied.Store(false)
+					prev.sealedLazyMmapDeniedCountCap.Store(0)
+					prev.sealedLazyMmapDeniedBytesCap.Store(0)
+				} else {
+					prev.retirePersistentMmapToDeadLocked()
+				}
+			}
+			prev.remapMu.Unlock()
+		}
+	}
+	f.currentWritable.Store(true)
+	m.currentWritableByLane[lane] = fileID
+	return nil
+}
+
+// RewriteLaneHint returns a best-effort lane/start-seq hint for creating new
+// rewrite segments without scanning the filesystem.
+//
+// It considers all currently tracked segments (including zombies) to avoid
+// immediate lane/seq reuse while deletes are pending.
+func (m *Manager) RewriteLaneHint() (lane uint32, startSeq uint32, ok bool) {
+	if m == nil {
+		return 0, 0, false
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	const lanes = 256
+	var used [lanes]bool
+	var maxSeq [lanes]uint32
+	for id := range m.files {
+		l, s := DecodeFileID(id)
+		if l >= lanes {
+			continue
+		}
+		used[l] = true
+		if s > maxSeq[l] {
+			maxSeq[l] = s
+		}
+	}
+	for l := uint32(lanes - 1); l > 0; l-- {
+		if !used[l] {
+			return l, 0, true
+		}
+	}
+	return 0, maxSeq[0], true
 }
 
 // CurrentSet returns a snapshot of the current value-log files.
@@ -822,6 +1475,14 @@ func (m *Manager) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
 		return nil, err
 	}
 	return f.ReadUnsafe(ptr, !m.disableReadChecksum)
+}
+
+func (m *Manager) ReadUnsafeTo(ptr page.ValuePtr, dst []byte) ([]byte, bool, error) {
+	f, err := m.fileFor(ptr.FileID)
+	if err != nil {
+		return nil, false, err
+	}
+	return f.ReadUnsafeTo(ptr, !m.disableReadChecksum, dst)
 }
 
 func (m *Manager) ReadAppend(ptr page.ValuePtr, dst []byte) ([]byte, error) {
@@ -1007,14 +1668,292 @@ func (m *Manager) EvictSegment(id uint32) error {
 	return f.Close()
 }
 
+// RemapStats reports aggregate remap executions and tracked dead mappings.
 func (m *Manager) RemapStats() (remaps uint64, deadMappings uint64) {
+	if m == nil {
+		return 0, 0
+	}
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	for _, f := range m.files {
+		if f == nil {
+			continue
+		}
 		remaps += f.remapCount.Load()
 		deadMappings += f.deadMappingsCount.Load()
 	}
 	return remaps, deadMappings
+}
+
+func valueLogFileSizeBestEffort(f *File) uint64 {
+	if f == nil {
+		return 0
+	}
+	if known := f.fileSize.Load(); known > 0 {
+		return uint64(known)
+	}
+	if data, _ := f.mmapData.Load().([]byte); len(data) > 0 {
+		return uint64(len(data))
+	}
+	if f.Path != "" {
+		if info, err := os.Stat(f.Path); err == nil && info.Size() > 0 {
+			return uint64(info.Size())
+		}
+	}
+	return 0
+}
+
+func valueLogFileSizeNoStat(f *File) uint64 {
+	if f == nil {
+		return 0
+	}
+	if known := f.fileSize.Load(); known > 0 {
+		return uint64(known)
+	}
+	if data, _ := f.mmapData.Load().([]byte); len(data) > 0 {
+		return uint64(len(data))
+	}
+	return 0
+}
+
+// SizeBestEffort returns the current best-effort segment size in bytes.
+// It prefers cached size/mmap metadata and only falls back to stat when needed.
+func (f *File) SizeBestEffort() int64 {
+	return int64(valueLogFileSizeBestEffort(f))
+}
+
+// ZombieStats reports tracked zombie segments and their approximate byte totals.
+// A zombie remains on disk until all snapshots release it (RefCount reaches 0).
+func (m *Manager) ZombieStats() (segments uint64, bytes uint64, pinnedSegments uint64, pinnedBytes uint64, unpinnedSegments uint64, unpinnedBytes uint64) {
+	if m == nil {
+		return 0, 0, 0, 0, 0, 0
+	}
+	m.mu.RLock()
+	for _, f := range m.files {
+		if f == nil || !f.IsZombie.Load() {
+			continue
+		}
+		segments++
+		// Keep ZombieStats lock-friendly: avoid filesystem stats while the
+		// manager lock is held and rely on cached segment sizes only.
+		size := valueLogFileSizeNoStat(f)
+		bytes += size
+		if f.RefCount.Load() > 0 {
+			pinnedSegments++
+			pinnedBytes += size
+			continue
+		}
+		unpinnedSegments++
+		unpinnedBytes += size
+	}
+	m.mu.RUnlock()
+	return segments, bytes, pinnedSegments, pinnedBytes, unpinnedSegments, unpinnedBytes
+}
+
+// MmapResidencyStats reports aggregate mmap residency split by segment type:
+// current writable segments, sealed segments, and dead mappings/bytes.
+func (m *Manager) MmapResidencyStats() (currentSegments uint64, currentBytes uint64, sealedSegments uint64, sealedBytes uint64, deadMappings uint64, deadBytes uint64) {
+	if m == nil {
+		return 0, 0, 0, 0, 0, 0
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, f := range m.files {
+		if f == nil {
+			continue
+		}
+		data, _ := f.mmapData.Load().([]byte)
+		if len(data) > 0 {
+			if f.currentWritable.Load() {
+				currentSegments++
+				currentBytes += uint64(len(data))
+			} else {
+				sealedSegments++
+				sealedBytes += uint64(len(data))
+			}
+		}
+		deadMappings += f.deadMappingsCount.Load()
+		deadBytes += f.deadMappedBytes.Load()
+	}
+	return currentSegments, currentBytes, sealedSegments, sealedBytes, deadMappings, deadBytes
+}
+
+// SealedMapDeniedStats reports the total sealed-lazy-map deny count.
+func (m *Manager) SealedMapDeniedStats() uint64 {
+	byCount, byBytes := m.SealedMapDeniedByReasonStats()
+	return byCount + byBytes
+}
+
+// SealedMapDeniedCount is an alias for SealedMapDeniedStats.
+func (m *Manager) SealedMapDeniedCount() uint64 {
+	return m.SealedMapDeniedStats()
+}
+
+// SealedMapDeniedByReasonStats reports sealed lazy-map denials split by budget:
+// count-cap denials and byte-cap denials.
+func (m *Manager) SealedMapDeniedByReasonStats() (countCap uint64, bytesCap uint64) {
+	if m == nil {
+		return 0, 0
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, f := range m.files {
+		if f == nil {
+			continue
+		}
+		countCap += f.sealedMapDeniedByCount.Load()
+		bytesCap += f.sealedMapDeniedByBytes.Load()
+	}
+	return countCap, bytesCap
+}
+
+func (m *Manager) allowSealedLazyMmapLocked(target *File, targetSize int64) (bool, sealedLazyMmapDenyReason) {
+	if m == nil || target == nil {
+		return false, sealedLazyMmapDenyCountCap
+	}
+	targetIsLeaf := isLeafLogFileID(target.ID)
+	maxSegments := MaxMappedSealedSegments
+	maxBytes := MaxMappedSealedBytes
+	if targetIsLeaf {
+		maxSegments = MaxMappedLeafSealedSegments
+		maxBytes = MaxMappedLeafSealedBytes
+	}
+	if maxSegments <= 0 {
+		return false, sealedLazyMmapDenyCountCap
+	}
+	if target.currentWritable.Load() {
+		return true, sealedLazyMmapDenyNone
+	}
+	targetData, _ := target.mmapData.Load().([]byte)
+	targetMapped := len(targetData) > 0
+	mappedSealed := 0
+	var mappedSealedBytes uint64
+	for _, f := range m.files {
+		if f == nil || f.currentWritable.Load() {
+			continue
+		}
+		if isLeafLogFileID(f.ID) != targetIsLeaf {
+			continue
+		}
+		data, _ := f.mmapData.Load().([]byte)
+		if len(data) > 0 {
+			mappedSealed++
+			mappedSealedBytes += uint64(len(data))
+			if !targetMapped && mappedSealed >= maxSegments {
+				return false, sealedLazyMmapDenyCountCap
+			}
+		}
+	}
+	if maxBytes > 0 {
+		targetBytes := uint64(targetSize)
+		if targetBytes == 0 {
+			if known := target.fileSize.Load(); known > 0 {
+				targetBytes = uint64(known)
+			} else if info, err := target.File.Stat(); err == nil {
+				if sz := info.Size(); sz > 0 {
+					targetBytes = uint64(sz)
+					target.fileSize.Store(sz)
+				}
+			}
+		}
+		if targetBytes > 0 {
+			limit := uint64(maxBytes)
+			if targetMapped {
+				currentBytes := uint64(len(targetData))
+				if targetBytes > currentBytes {
+					projected := targetBytes
+					if mappedSealedBytes > currentBytes {
+						projected += mappedSealedBytes - currentBytes
+					}
+					if projected > limit {
+						return false, sealedLazyMmapDenyBytesCap
+					}
+				}
+			} else if mappedSealedBytes+targetBytes > limit {
+				return false, sealedLazyMmapDenyBytesCap
+			}
+		}
+	}
+	return true, sealedLazyMmapDenyNone
+}
+
+func (m *Manager) allowDemotedCurrentMmapLocked(target *File, nextCurrentID uint32) bool {
+	if m == nil || target == nil {
+		return false
+	}
+	targetIsLeaf := isLeafLogFileID(target.ID)
+	maxSegments := MaxMappedSealedSegments
+	maxBytes := MaxMappedSealedBytes
+	if targetIsLeaf {
+		maxSegments = MaxMappedLeafSealedSegments
+		maxBytes = MaxMappedLeafSealedBytes
+	}
+	if maxSegments <= 0 {
+		return false
+	}
+	mappedSealed := 0
+	var mappedSealedBytes uint64
+	targetData, _ := target.mmapData.Load().([]byte)
+	targetMapped := len(targetData) > 0
+	for _, f := range m.files {
+		if f == nil || f == target || f.ID == nextCurrentID || f.currentWritable.Load() {
+			continue
+		}
+		if isLeafLogFileID(f.ID) != targetIsLeaf {
+			continue
+		}
+		data, _ := f.mmapData.Load().([]byte)
+		if len(data) == 0 {
+			continue
+		}
+		mappedSealed++
+		mappedSealedBytes += uint64(len(data))
+	}
+	projectedMappedSealed := mappedSealed
+	if targetMapped {
+		projectedMappedSealed++
+	}
+	if projectedMappedSealed > maxSegments {
+		return false
+	}
+	if maxBytes > 0 {
+		targetBytes := uint64(len(targetData))
+		if known := target.fileSize.Load(); known > int64(targetBytes) {
+			targetBytes = uint64(known)
+		} else if target.File != nil {
+			if info, err := target.File.Stat(); err == nil {
+				if sz := info.Size(); sz > int64(targetBytes) {
+					targetBytes = uint64(sz)
+					target.fileSize.Store(sz)
+				}
+			}
+		}
+		limit := uint64(maxBytes)
+		if targetMapped {
+			if mappedSealedBytes+targetBytes > limit {
+				return false
+			}
+		} else if mappedSealedBytes+targetBytes > limit {
+			return false
+		}
+	}
+	return true
+}
+
+func (m *Manager) MmapReadStats() (hits uint64, missesOutOfRange uint64, missesNoMapping uint64, missesDeadMappingCap uint64, fallbacksReadAt uint64) {
+	if m == nil {
+		return 0, 0, 0, 0, 0
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, f := range m.files {
+		hits += f.mmapReadHits.Load()
+		missesOutOfRange += f.mmapReadMissOutOfRange.Load()
+		missesNoMapping += f.mmapReadMissNoMapping.Load()
+		missesDeadMappingCap += f.mmapReadMissDeadMappingCap.Load()
+		fallbacksReadAt += f.mmapReadFallbackReadAt.Load()
+	}
+	return hits, missesOutOfRange, missesNoMapping, missesDeadMappingCap, fallbacksReadAt
 }
 
 func (m *Manager) TemplateDefCacheStats() (hits, misses uint64, entries, capacity int) {
@@ -1141,7 +2080,7 @@ func listSegments(dir string) ([]segmentInfo, error) {
 		return nil, err
 	}
 
-	var segments []segmentInfo
+	segments := make([]segmentInfo, 0, len(entries))
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
@@ -1149,40 +2088,33 @@ func listSegments(dir string) ([]segmentInfo, error) {
 		name := entry.Name()
 		const prefix = "value-"
 		const suffix = ".log"
-		if !strings.HasPrefix(name, prefix) || !strings.HasSuffix(name, suffix) {
+		if len(name) <= len(prefix)+len(suffix) || !strings.HasPrefix(name, prefix) || !strings.HasSuffix(name, suffix) {
 			continue
 		}
-
-		parseLaneSeq := func(rest string) (uint32, uint32, bool) {
-			parts := strings.SplitN(rest, "-", 2)
-			if len(parts) != 2 {
-				return 0, 0, false
-			}
-			lane, err := strconv.ParseUint(parts[0], 10, 32)
-			if err != nil {
-				return 0, 0, false
-			}
-			seq, err := strconv.ParseUint(parts[1], 10, 32)
-			if err != nil {
-				return 0, 0, false
-			}
-			return uint32(lane), uint32(seq), true
-		}
-
 		var (
-			id  uint32
-			err error
+			id uint32
+			ok bool
 		)
-		core := strings.TrimSuffix(strings.TrimPrefix(name, prefix), suffix)
-		if strings.HasPrefix(core, "l") {
-			lane, seq, ok := parseLaneSeq(strings.TrimPrefix(core, "l"))
-			if !ok {
+		core := name[len(prefix) : len(name)-len(suffix)]
+		if len(core) == 0 {
+			continue
+		}
+		if core[0] == 'l' {
+			laneSeq := core[1:]
+			dash := strings.IndexByte(laneSeq, '-')
+			if dash <= 0 || dash >= len(laneSeq)-1 {
 				continue
 			}
-			id, err = EncodeFileID(lane, seq)
+			lane, err := strconv.ParseUint(laneSeq[:dash], 10, 32)
 			if err != nil {
 				continue
 			}
+			seq, err := strconv.ParseUint(laneSeq[dash+1:], 10, 32)
+			if err != nil {
+				continue
+			}
+			id, err = EncodeFileID(uint32(lane), uint32(seq))
+			ok = err == nil
 		} else {
 			seq, parseErr := strconv.ParseUint(core, 10, 32)
 			if parseErr != nil {
@@ -1193,6 +2125,10 @@ func listSegments(dir string) ([]segmentInfo, error) {
 				continue
 			}
 			id = page.ValueLogFileID(uint32(seq))
+			ok = true
+		}
+		if !ok {
+			continue
 		}
 
 		segments = append(segments, segmentInfo{

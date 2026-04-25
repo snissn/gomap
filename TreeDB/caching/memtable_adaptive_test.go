@@ -27,6 +27,7 @@ func TestAdaptiveMemtableMode_SwitchesAfterWarmupRotation(t *testing.T) {
 	defer db.Close()
 
 	b := db.NewBatch()
+	defer b.Close()
 	rng := rand.New(rand.NewSource(1))
 	value := make([]byte, 8<<10) // 8KiB
 	for i := 0; i < adaptiveMinWrites*2; i++ {
@@ -151,19 +152,31 @@ func TestAdaptiveMemtableMode_DefaultAdaptiveOverwriteHeavySwitchesToHashSorted(
 	}
 	defer db.Close()
 
+	b := db.NewBatch()
+	defer b.Close()
+	rng := rand.New(rand.NewSource(1))
 	const uniqueKeys = adaptiveMinWrites + 1200
 	value := make([]byte, 8<<10) // 8KiB
+	keys := make([][16]byte, uniqueKeys)
 
 	for i := 0; i < uniqueKeys; i++ {
-		var key [16]byte
-		binary.BigEndian.PutUint64(key[8:16], uint64(i))
-		// First write introduces a new key; second write is an overwrite.
-		if err := db.Set(key[:], value); err != nil {
-			t.Fatalf("Set(first %d): %v", i, err)
+		binary.BigEndian.PutUint64(keys[i][0:8], rng.Uint64())
+		binary.BigEndian.PutUint64(keys[i][8:16], uint64(i))
+		if err := b.Set(keys[i][:], value); err != nil {
+			t.Fatalf("Batch.Set(first %d): %v", i, err)
 		}
-		if err := db.Set(key[:], value); err != nil {
-			t.Fatalf("Set(overwrite %d): %v", i, err)
+	}
+	for i := range keys {
+		j := rng.Intn(uniqueKeys)
+		keys[i], keys[j] = keys[j], keys[i]
+	}
+	for i := 0; i < uniqueKeys; i++ {
+		if err := b.Set(keys[i][:], value); err != nil {
+			t.Fatalf("Batch.Set(overwrite %d): %v", i, err)
 		}
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("Batch.Write: %v", err)
 	}
 
 	stats := db.Stats()

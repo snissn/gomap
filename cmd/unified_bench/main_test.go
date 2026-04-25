@@ -20,6 +20,30 @@ type errorBatchReaderDB struct {
 	readBatchCalls int
 }
 
+type fixedNameDB struct {
+	name string
+}
+
+func (d *fixedNameDB) Name() string {
+	return d.name
+}
+
+func (d *fixedNameDB) Close() error {
+	return nil
+}
+
+func (d *fixedNameDB) Get(key []byte) ([]byte, error) {
+	return nil, nil
+}
+
+func (d *fixedNameDB) Set(key, value []byte) error {
+	return nil
+}
+
+func (d *fixedNameDB) Delete(key []byte) error {
+	return nil
+}
+
 func (d *errorBatchReaderDB) Name() string {
 	return "ReadBatchSentinel"
 }
@@ -509,6 +533,45 @@ func TestRunBenchmark_RandomReadParallelAcquireSnapshot_UsesSnapshots(t *testing
 	}
 }
 
+func TestRunBenchmark_TreeDBPerfCapturesSnapshotMetrics(t *testing.T) {
+	run, err := runBenchmark(BenchConfig{
+		Keys:         256,
+		ValueSize:    16,
+		BatchSize:    64,
+		RangeQueries: 0,
+		RangeSpan:    0,
+		DBsArg:       "treedb",
+		TestsArg:     "sequential_write,random_read_parallel_acquire_snapshot",
+		KeepDir:      false,
+		Progress:     false,
+		ReadWorkers:  4,
+		SeedUsed:     1,
+	})
+	if err != nil {
+		t.Fatalf("runBenchmark: %v", err)
+	}
+	perTest, ok := run.TreeDBPerf["random_read_parallel_acquire_snapshot"]
+	if !ok {
+		t.Fatalf("expected TreeDB perf entry for snapshot benchmark")
+	}
+	perf, ok := perTest["TreeDB"]
+	if !ok {
+		t.Fatalf("expected TreeDB perf metrics for snapshot benchmark")
+	}
+	if perf.Snapshot.AcquireCalls == 0 {
+		t.Fatalf("expected snapshot acquire calls > 0, got 0")
+	}
+	if perf.Snapshot.CloseCalls == 0 {
+		t.Fatalf("expected snapshot close calls > 0, got 0")
+	}
+	if perf.Snapshot.AcquireTotalNanos == 0 {
+		t.Fatalf("expected snapshot acquire time > 0")
+	}
+	if perf.Snapshot.CloseTotalNanos == 0 {
+		t.Fatalf("expected snapshot close time > 0")
+	}
+}
+
 func TestNormalizeTests_ReadRandomBatchAliases(t *testing.T) {
 	got := normalizeTests(parseList("read_rand_batch,read_random_batch,random_read_batch"))
 	want := []string{"random_read_batch"}
@@ -956,6 +1019,21 @@ func TestRunBenchmark_KeyShapePrefix4RejectsOverflow(t *testing.T) {
 	}
 }
 
+func TestClampWarmupKeyCount(t *testing.T) {
+	if got := clampWarmupKeyCount(benchKeyShapeBE8Prefix4, uint64(math.MaxUint32)-3, 10); got != 4 {
+		t.Fatalf("prefix4 clamp mismatch: got %d want 4", got)
+	}
+	if got := clampWarmupKeyCount(benchKeyShapeBE8Prefix4, uint64(math.MaxUint32)+1, 10); got != 0 {
+		t.Fatalf("prefix4 out-of-range base should clamp to 0, got %d", got)
+	}
+	if got := clampWarmupKeyCount(benchKeyShapeBE8, math.MaxUint64-8, 16); got != 9 {
+		t.Fatalf("be8 clamp mismatch near max uint64: got %d want 9", got)
+	}
+	if got := clampWarmupKeyCount(benchKeyShapeBE8, 100, 32); got != 32 {
+		t.Fatalf("be8 in-range should preserve warmup count, got %d", got)
+	}
+}
+
 func TestMakeWriteValuePool_RepeatNotAllIdentical(t *testing.T) {
 	values, err := makeWriteValuePool(1, "repeat", 128, 32)
 	if err != nil {
@@ -1033,6 +1111,252 @@ func TestParseTreeDBVlogCompressionVariant(t *testing.T) {
 	}
 }
 
+func TestRenderKeptDirsString_SortsAndUsesWrapperNames(t *testing.T) {
+	got := renderKeptDirsString([]*DBInstance{
+		{Name: "zeta", Wrapper: &fixedNameDB{name: "B DB"}, Dir: "/tmp/b"},
+		{Name: "alpha", Wrapper: &fixedNameDB{name: "A DB"}, Dir: "/tmp/a"},
+		{Name: "missing_dir", Wrapper: &fixedNameDB{name: "Skip DB"}, Dir: ""},
+		{Name: "fallback_only", Wrapper: nil, Dir: "/tmp/fallback"},
+		nil,
+	})
+	want := "" +
+		"A DB: /tmp/a\n" +
+		"B DB: /tmp/b\n" +
+		"fallback_only: /tmp/fallback\n"
+	if got != want {
+		t.Fatalf("renderKeptDirsString mismatch\n--- got ---\n%s--- want ---\n%s", got, want)
+	}
+}
+
+func TestRenderMarkdownSingle_KeepDirIncludesKeptSection(t *testing.T) {
+	run := BenchRun{
+		Config: BenchConfig{
+			Keys:         100,
+			ValueSize:    16,
+			BatchSize:    10,
+			RangeQueries: 0,
+			RangeSpan:    0,
+			KeepDir:      true,
+		},
+		Instances: []*DBInstance{
+			{Name: "fake", Wrapper: &fixedNameDB{name: "FakeDB"}, Dir: "/tmp/bench-fake"},
+		},
+		TestOrder: []string{"batch_write"},
+		DisplayNames: map[string]string{
+			"batch_write": "Batch Write",
+		},
+		Results: map[string]map[string]float64{
+			"batch_write": {
+				"FakeDB": 1234,
+			},
+		},
+	}
+
+	md := renderMarkdownSingle(run)
+	if !strings.Contains(md, "## Kept Data Directories") {
+		t.Fatalf("expected kept directories section, got:\n%s", md)
+	}
+	if !strings.Contains(md, "FakeDB: /tmp/bench-fake") {
+		t.Fatalf("expected kept directory line in markdown, got:\n%s", md)
+	}
+}
+
+func TestRenderMarkdownSingle_IncludesTreeDBPerfSections(t *testing.T) {
+	run := BenchRun{
+		Config: BenchConfig{
+			Keys:      100,
+			ValueSize: 16,
+			BatchSize: 10,
+		},
+		Instances: []*DBInstance{
+			{Name: "treedb", Wrapper: &fixedNameDB{name: "TreeDB"}, Dir: "/tmp/bench-treedb"},
+		},
+		TestOrder: []string{"random_read_parallel_acquire_snapshot"},
+		DisplayNames: map[string]string{
+			"random_read_parallel_acquire_snapshot": "Random Read (Parallel, Snapshot Per Key)",
+		},
+		Results: map[string]map[string]float64{
+			"random_read_parallel_acquire_snapshot": {
+				"TreeDB": 1234,
+			},
+		},
+		TreeDBPerf: map[string]map[string]treeDBPerfMetrics{
+			"random_read_parallel_acquire_snapshot": {
+				"TreeDB": {
+					Mmap: treeDBMmapPerfMetrics{
+						Hits:           7,
+						MissNoMapping:  2,
+						FallbackReadAt: 3,
+						HitRatio:       0.7,
+					},
+					Snapshot: treeDBSnapshotPerfMetrics{
+						AcquireCalls:      4,
+						AcquireTotalNanos: 8_000,
+						AcquireAvgMicros:  2,
+						CloseCalls:        4,
+						CloseTotalNanos:   12_000,
+						CloseAvgMicros:    3,
+					},
+					LeafGenerationsPinnedAfter: 1,
+					LeafPinsTotalAfter:         4,
+				},
+			},
+		},
+		TreeDBStats: map[string]map[string]string{
+			"TreeDB": {
+				"treedb.cache.vlog_mmap.read.hits":          "7",
+				"treedb.cache.vlog_mmap.read.hit_ratio":     "0.700000",
+				"treedb.leaf_generation.generations.pinned": "1",
+				"treedb.leaf_generation.pins.total":         "4",
+			},
+		},
+	}
+
+	md := renderMarkdownSingle(run)
+	if !strings.Contains(md, "## TreeDB Perf Instrumentation") {
+		t.Fatalf("expected TreeDB perf section, got:\n%s", md)
+	}
+	if !strings.Contains(md, "snapshot.acquire.calls=4") {
+		t.Fatalf("expected snapshot metrics in markdown, got:\n%s", md)
+	}
+	if !strings.Contains(md, "vlog_mmap.read.hits.delta=7") {
+		t.Fatalf("expected mmap metrics in markdown, got:\n%s", md)
+	}
+	if !strings.Contains(md, "## TreeDB Selected Stats (End of Run)") {
+		t.Fatalf("expected TreeDB selected stats section, got:\n%s", md)
+	}
+	if !strings.Contains(md, "leaf_generation.pins.total: 4") {
+		t.Fatalf("expected selected stats in markdown, got:\n%s", md)
+	}
+}
+
+func TestRenderMarkdownSweep_KeepDirIncludesKeptSection(t *testing.T) {
+	makeRun := func(keys int, dir string) BenchRun {
+		return BenchRun{
+			Config: BenchConfig{
+				Keys:         keys,
+				ValueSize:    16,
+				BatchSize:    10,
+				RangeQueries: 0,
+				RangeSpan:    0,
+				KeepDir:      true,
+			},
+			Instances: []*DBInstance{
+				{Name: "fake", Wrapper: &fixedNameDB{name: "FakeDB"}, Dir: dir},
+			},
+			TestOrder: []string{"batch_write"},
+			DisplayNames: map[string]string{
+				"batch_write": "Batch Write",
+			},
+			Results: map[string]map[string]float64{
+				"batch_write": {
+					"FakeDB": 1234,
+				},
+			},
+		}
+	}
+
+	md := renderMarkdownSweep([]BenchRun{
+		makeRun(100, "/tmp/bench-fake-100"),
+		makeRun(200, "/tmp/bench-fake-200"),
+	})
+	if !strings.Contains(md, "## Kept Data Directories") {
+		t.Fatalf("expected kept directories section, got:\n%s", md)
+	}
+	if !strings.Contains(md, "keys=100") || !strings.Contains(md, "keys=200") {
+		t.Fatalf("expected keyed kept-directory subsections, got:\n%s", md)
+	}
+	if !strings.Contains(md, "FakeDB: /tmp/bench-fake-100") || !strings.Contains(md, "FakeDB: /tmp/bench-fake-200") {
+		t.Fatalf("expected kept directory rows, got:\n%s", md)
+	}
+}
+
+func TestRenderTreeDBSelectedStatsString_SkipsDBsWithoutSelectedKeys(t *testing.T) {
+	instances := []*DBInstance{
+		{Name: "tree", Wrapper: &fixedNameDB{name: "TreeDB"}},
+		{Name: "other", Wrapper: &fixedNameDB{name: "OtherDB"}},
+	}
+	stats := map[string]map[string]string{
+		"TreeDB": {
+			"treedb.cache.vlog_mmap.read.hits": "7",
+		},
+		"OtherDB": {
+			"unrelated.stat": "1",
+		},
+	}
+
+	got := renderTreeDBSelectedStatsString(instances, stats)
+	if !strings.Contains(got, "TreeDB:\n") {
+		t.Fatalf("expected TreeDB stats, got:\n%s", got)
+	}
+	if strings.Contains(got, "OtherDB:\n") {
+		t.Fatalf("expected OtherDB to be omitted, got:\n%s", got)
+	}
+}
+
+func TestRenderMarkdownSweep_IncludesTreeDBPerfAndStatsSections(t *testing.T) {
+	makeRun := func(keys int, hits uint64, pinned int64) BenchRun {
+		return BenchRun{
+			Config: BenchConfig{
+				Keys:         keys,
+				ValueSize:    16,
+				BatchSize:    10,
+				RangeQueries: 0,
+				RangeSpan:    0,
+			},
+			Instances: []*DBInstance{
+				{Name: "tree", Wrapper: &fixedNameDB{name: "TreeDB"}},
+			},
+			TestOrder: []string{"random_read_parallel"},
+			DisplayNames: map[string]string{
+				"random_read_parallel": "Random Read (Parallel)",
+			},
+			Results: map[string]map[string]float64{
+				"random_read_parallel": {
+					"TreeDB": 1234,
+				},
+			},
+			TreeDBPerf: map[string]map[string]treeDBPerfMetrics{
+				"random_read_parallel": {
+					"TreeDB": {
+						Mmap: treeDBMmapPerfMetrics{
+							Hits:           hits,
+							FallbackReadAt: 1,
+							HitRatio:       0.5,
+						},
+					},
+				},
+			},
+			TreeDBStats: map[string]map[string]string{
+				"TreeDB": {
+					"treedb.cache.vlog_mmap.read.hits":          "7",
+					"treedb.leaf_generation.generations.pinned": formatInt(int(pinned)),
+				},
+			},
+		}
+	}
+
+	md := renderMarkdownSweep([]BenchRun{
+		makeRun(100, 7, 1),
+		makeRun(200, 9, 2),
+	})
+	if !strings.Contains(md, "## TreeDB Perf Instrumentation") {
+		t.Fatalf("expected TreeDB perf section, got:\n%s", md)
+	}
+	if !strings.Contains(md, "keys=100") || !strings.Contains(md, "keys=200") {
+		t.Fatalf("expected keyed perf/stats subsections, got:\n%s", md)
+	}
+	if !strings.Contains(md, "vlog_mmap.read.hits.delta=7") || !strings.Contains(md, "vlog_mmap.read.hits.delta=9") {
+		t.Fatalf("expected sweep perf details, got:\n%s", md)
+	}
+	if !strings.Contains(md, "## TreeDB Selected Stats (End of Run)") {
+		t.Fatalf("expected TreeDB selected stats section, got:\n%s", md)
+	}
+	if !strings.Contains(md, "leaf_generation.generations.pinned: 1") || !strings.Contains(md, "leaf_generation.generations.pinned: 2") {
+		t.Fatalf("expected sweep selected stats details, got:\n%s", md)
+	}
+}
+
 func TestRunFlushDrainSuite_ShortKeys(t *testing.T) {
 	cfg := BenchConfig{
 		Keys:                   1,
@@ -1065,6 +1389,18 @@ func TestWriteBenchprofArtifacts_WritesJSONAndMarkdown(t *testing.T) {
 				},
 				"prefix_scan": {
 					"TreeDB": 1200,
+				},
+			},
+			TreeDBPerf: map[string]map[string]treeDBPerfMetrics{
+				"full_scan": {
+					"TreeDB": {
+						Mmap: treeDBMmapPerfMetrics{Hits: 10, FallbackReadAt: 2, HitRatio: 0.833333},
+					},
+				},
+			},
+			TreeDBStats: map[string]map[string]string{
+				"TreeDB": {
+					"treedb.cache.vlog_mmap.read.hits": "10",
 				},
 			},
 		},
@@ -1106,6 +1442,60 @@ func TestWriteBenchprofArtifacts_WritesJSONAndMarkdown(t *testing.T) {
 	}
 	if got := parsed.Runs[0].Results["full_scan"]["TreeDB"]; got != 1000 {
 		t.Fatalf("unexpected full_scan value: %v", got)
+	}
+	if got := parsed.Runs[0].TreeDBPerf["full_scan"]["TreeDB"].Mmap.Hits; got != 10 {
+		t.Fatalf("unexpected TreeDB perf mmap hits: %v", got)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("unmarshal raw json: %v", err)
+	}
+	runsValue, ok := raw["runs"].([]any)
+	if !ok || len(runsValue) != 1 {
+		t.Fatalf("expected 1 raw run in json, got %#v", raw["runs"])
+	}
+	runValue, ok := runsValue[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected raw run object, got %#v", runsValue[0])
+	}
+	if _, ok := runValue["treedb_stats"]; ok {
+		t.Fatalf("expected treedb_stats to be omitted from benchprof json, got: %#v", runValue["treedb_stats"])
+	}
+}
+
+func TestComputeTreeDBPerfMetrics_SaturatesCounterRegression(t *testing.T) {
+	metrics := computeTreeDBPerfMetrics(
+		treeDBSelectedStats{
+			mmapHits:           11,
+			mmapMissOutOfRange: 13,
+			mmapMissNoMapping:  17,
+			mmapMissDeadCap:    19,
+			mmapFallbackReadAt: 23,
+			leafGenerationsPin: 5,
+			leafPinsTotal:      7,
+		},
+		treeDBSelectedStats{
+			mmapHits:           3,
+			mmapMissOutOfRange: 2,
+			mmapMissNoMapping:  1,
+			mmapMissDeadCap:    18,
+			mmapFallbackReadAt: 4,
+			leafGenerationsPin: 2,
+			leafPinsTotal:      9,
+		},
+		treeDBSnapshotPerfMetrics{},
+	)
+	if metrics.Mmap.Hits != 0 || metrics.Mmap.MissOutOfRange != 0 || metrics.Mmap.MissNoMapping != 0 || metrics.Mmap.FallbackReadAt != 0 {
+		t.Fatalf("expected saturating mmap deltas, got %+v", metrics.Mmap)
+	}
+	if metrics.Mmap.MissDeadMapCap != 0 {
+		t.Fatalf("expected saturating dead-map delta, got %d", metrics.Mmap.MissDeadMapCap)
+	}
+	if metrics.LeafGenerationsPinnedAfter != 2 {
+		t.Fatalf("expected after-value leaf generations pinned, got %d", metrics.LeafGenerationsPinnedAfter)
+	}
+	if metrics.LeafPinsTotalAfter != 9 {
+		t.Fatalf("expected after-value leaf pins total, got %d", metrics.LeafPinsTotalAfter)
 	}
 }
 
@@ -1269,5 +1659,109 @@ func TestRunBenchmark_ContentionAfterSnapshotsBeforeAllocsPostProcessing(t *test
 	}
 	if mutexAfterIdx > allocAfterIdx {
 		t.Fatalf("expected mutex_after before allocs_after, events=%v", events)
+	}
+}
+
+func TestRenderTreeDBDiskUsageString_EmitsValueLogWithoutWAL(t *testing.T) {
+	out := renderTreeDBDiskUsageString(map[string]treeDBDiskUsage{
+		"treedb": {
+			MainValueLog: walDiskUsage{
+				TotalFiles: 1,
+				TotalBytes: 2048,
+				ValueBytes: 1536,
+			},
+		},
+	})
+	if !strings.Contains(out, "maindb/value_vlog:") {
+		t.Fatalf("expected value_vlog line, got:\n%s", out)
+	}
+	if strings.Contains(out, "maindb/wal:") {
+		t.Fatalf("did not expect wal line when wal usage is empty, got:\n%s", out)
+	}
+}
+
+func TestComputeTreeDBDiskUsage_IncludesLeafVLog(t *testing.T) {
+	dir := t.TempDir()
+	mainDir := filepath.Join(dir, "maindb")
+	if err := os.MkdirAll(filepath.Join(mainDir, "leaf_vlog"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(leaf_vlog): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(mainDir, "leaf_vlog", "value-l255-000001.log"), bytes.Repeat([]byte("x"), 321), 0o644); err != nil {
+		t.Fatalf("WriteFile(leaf_vlog): %v", err)
+	}
+
+	usage, err := computeTreeDBDiskUsage(dir)
+	if err != nil {
+		t.Fatalf("computeTreeDBDiskUsage: %v", err)
+	}
+	if usage.MainLeafLog.TotalFiles != 1 {
+		t.Fatalf("MainLeafLog.TotalFiles=%d want 1", usage.MainLeafLog.TotalFiles)
+	}
+	if usage.MainLeafLog.TotalBytes != 321 {
+		t.Fatalf("MainLeafLog.TotalBytes=%d want 321", usage.MainLeafLog.TotalBytes)
+	}
+}
+
+func TestRenderTreeDBDiskUsageString_EmitsLeafLog(t *testing.T) {
+	out := renderTreeDBDiskUsageString(map[string]treeDBDiskUsage{
+		"treedb": {
+			MainLeafLog: walDiskUsage{
+				TotalFiles: 1,
+				TotalBytes: 3072,
+				ValueBytes: 3072,
+			},
+		},
+	})
+	if !strings.Contains(out, "maindb/leaf_vlog:") {
+		t.Fatalf("expected leaf_vlog line, got:\n%s", out)
+	}
+}
+
+func TestRenderTreeDBVlogRewriteString_EmitsValueLogWithoutWAL(t *testing.T) {
+	out := renderTreeDBVlogRewriteString(map[string]treeDBVlogRewriteReport{
+		"treedb": {
+			BeforeUsage: dirDiskUsage{TotalBytes: 4096},
+			AfterUsage:  dirDiskUsage{TotalBytes: 2048},
+			BeforeTree: treeDBDiskUsage{
+				MainValueLog: walDiskUsage{TotalBytes: 4096},
+			},
+			AfterTree: treeDBDiskUsage{
+				MainValueLog: walDiskUsage{TotalBytes: 2048},
+			},
+			SegmentsBefore: 2,
+			SegmentsAfter:  1,
+			BytesBefore:    4096,
+			BytesAfter:     2048,
+			RecordsCopied:  7,
+		},
+	})
+	if !strings.Contains(out, "maindb/value_vlog: 4 KiB -> 2 KiB") {
+		t.Fatalf("expected value_vlog rewrite line, got:\n%s", out)
+	}
+	if strings.Contains(out, "maindb/wal:") {
+		t.Fatalf("did not expect wal line when wal usage is empty, got:\n%s", out)
+	}
+}
+
+func TestRenderTreeDBVlogRewriteString_EmitsLeafLog(t *testing.T) {
+	out := renderTreeDBVlogRewriteString(map[string]treeDBVlogRewriteReport{
+		"treedb": {
+			BeforeUsage: dirDiskUsage{TotalBytes: 8192},
+			AfterUsage:  dirDiskUsage{TotalBytes: 4096},
+			BeforeTree: treeDBDiskUsage{
+				MainLeafLog: walDiskUsage{TotalBytes: 6144},
+			},
+			AfterTree: treeDBDiskUsage{
+				MainLeafLog: walDiskUsage{TotalBytes: 2048},
+			},
+			SegmentsBefore: 3,
+			SegmentsAfter:  1,
+			BytesBefore:    6144,
+			BytesAfter:     2048,
+			RecordsCopied:  5,
+		},
+	})
+	if !strings.Contains(out, "maindb/leaf_vlog: 6 KiB -> 2 KiB") {
+		t.Fatalf("expected leaf_vlog rewrite line, got:\n%s", out)
 	}
 }

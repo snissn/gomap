@@ -297,6 +297,7 @@ func TestCachingDB_AutoCheckpoint_SizeTrigger_TrimsWAL(t *testing.T) {
 	if got := db.effectiveWALBytes(); got < 1<<20 {
 		t.Fatalf("expected WAL bytes >= 1MiB, got %d", got)
 	}
+	db.autoCheckpointMaxWALBytes.Store(1 << 20)
 	db.autoCheckpointSizeArmed.Store(true)
 	db.maybeAutoCheckpoint(1<<20, autoCheckpointModeSize)
 
@@ -352,8 +353,6 @@ func TestCachingDB_AutoCheckpoint_SizeTrigger_SeedsExistingWAL(t *testing.T) {
 	}
 	defer func() { _ = db.Close() }()
 	db.testSkipVlogCheckpointKick = true
-
-	db.StartAutoCheckpoint(0, 1<<20 /* 1MiB */, 0)
 
 	if err := db.Set([]byte("k"), []byte("v")); err != nil {
 		t.Fatalf("Set: %v", err)

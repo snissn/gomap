@@ -55,17 +55,29 @@ type Interface interface {
 // Batch accumulates writes and deletes before committing them.
 type Batch struct {
 	entries         []Entry
+	arenaChunks     [][]byte
 	byteSize        int
 	inlineThreshold int
 	thresholdForKey func([]byte) int
-	touchedValueLog map[uint32]struct{}
-	sorted          bool
-	lastKey         []byte
-	closed          bool
-	reader          ValueReader
+	// Small-set fast path: most batches touch <=4 value-log segments.
+	touchedValueLogSmall    [4]uint32
+	touchedValueLogSmallLen int
+	touchedValueLog         map[uint32]struct{}
+	hasValueLogPointers     bool
+	sorted                  bool
+	lastKey                 []byte
+	closed                  bool
+	reader                  ValueReader
 }
 
 const maxBatchPoolCap = 1 << 16
+
+const (
+	// Store key/value copies in chunks so Set/Delete avoid per-entry allocations.
+	batchArenaDefaultChunkCap = 64 << 10
+	// Avoid retaining huge arenas in the sync.Pool after spikes.
+	batchArenaMaxRetainCap = 1 << 20
+)
 
 var batchPool = sync.Pool{
 	New: func() any {
@@ -120,18 +132,26 @@ func (b *Batch) Reset() {
 
 func (b *Batch) resetLocked() {
 	if b.entries != nil {
+		// Avoid holding onto key/value copies from previous uses.
+		clear(b.entries)
 		b.entries = b.entries[:0]
 	}
 	if len(b.touchedValueLog) > 0 {
 		clear(b.touchedValueLog)
 	}
+	b.touchedValueLog = nil
+	b.touchedValueLogSmallLen = 0
+	b.hasValueLogPointers = false
 	b.byteSize = 0
 	b.sorted = true
 	b.lastKey = nil
+	b.resetArenaLocked()
 }
 
 func (b *Batch) resetForPool() {
 	if b.entries != nil {
+		// SortedEntries clears the compacted tail, so clearing len is sufficient
+		// here while avoiding O(cap) work for large pooled batches.
 		clear(b.entries)
 		if cap(b.entries) > maxBatchPoolCap {
 			b.entries = nil
@@ -140,13 +160,46 @@ func (b *Batch) resetForPool() {
 		}
 	}
 	b.byteSize = 0
-	if len(b.touchedValueLog) > 1024 {
-		b.touchedValueLog = nil
-	} else if len(b.touchedValueLog) > 0 {
+	if len(b.touchedValueLog) > 0 {
 		clear(b.touchedValueLog)
 	}
+	b.touchedValueLog = nil
+	b.touchedValueLogSmallLen = 0
+	b.hasValueLogPointers = false
 	b.sorted = true
 	b.lastKey = nil
+	b.resetArenaLocked()
+}
+
+func (b *Batch) resetArenaLocked() {
+	if len(b.arenaChunks) == 0 {
+		return
+	}
+	keepIdx := -1
+	keepCap := 0
+	for i := range b.arenaChunks {
+		chunkCap := cap(b.arenaChunks[i])
+		if chunkCap > batchArenaMaxRetainCap {
+			continue
+		}
+		if keepIdx < 0 || chunkCap > keepCap {
+			keepIdx = i
+			keepCap = chunkCap
+		}
+	}
+	if keepIdx < 0 {
+		for i := range b.arenaChunks {
+			b.arenaChunks[i] = nil
+		}
+		b.arenaChunks = nil
+		return
+	}
+	keep := b.arenaChunks[keepIdx][:0]
+	for i := 1; i < len(b.arenaChunks); i++ {
+		b.arenaChunks[i] = nil
+	}
+	b.arenaChunks[0] = keep
+	b.arenaChunks = b.arenaChunks[:1]
 }
 
 // Close returns the batch to the pool.
@@ -190,6 +243,85 @@ func (b *Batch) noteKeyOrder(key []byte) {
 		return
 	}
 	b.lastKey = key
+}
+
+func (b *Batch) ensureArenaChunk(minFree int) {
+	if minFree <= 0 {
+		return
+	}
+	last := -1
+	if n := len(b.arenaChunks); n > 0 {
+		last = n - 1
+		chunk := b.arenaChunks[last]
+		if cap(chunk)-len(chunk) >= minFree {
+			return
+		}
+	}
+	chunkCap := batchArenaDefaultChunkCap
+	if last >= 0 {
+		prevCap := cap(b.arenaChunks[last])
+		if prevCap > chunkCap {
+			chunkCap = prevCap
+		}
+		// Grow arena chunks geometrically (bounded) to reduce repeated chunk
+		// allocations on large batches with many small entries.
+		if prevCap >= batchArenaDefaultChunkCap && prevCap < batchArenaMaxRetainCap {
+			next := prevCap << 1
+			if next > batchArenaMaxRetainCap {
+				next = batchArenaMaxRetainCap
+			}
+			if next > chunkCap {
+				chunkCap = next
+			}
+		}
+	}
+	if chunkCap < minFree {
+		chunkCap = minFree
+	}
+	b.arenaChunks = append(b.arenaChunks, make([]byte, 0, chunkCap))
+}
+
+func (b *Batch) arenaCopy(src []byte) []byte {
+	if len(src) == 0 {
+		return []byte{}
+	}
+	b.ensureArenaChunk(len(src))
+	last := len(b.arenaChunks) - 1
+	chunk := b.arenaChunks[last]
+	off := len(chunk)
+	chunk = chunk[:off+len(src)]
+	copy(chunk[off:], src)
+	b.arenaChunks[last] = chunk
+	// Match make([]byte, n) semantics (cap==len) to avoid accidental append
+	// writing into the arena.
+	return chunk[off : off+len(src) : off+len(src)]
+}
+
+func (b *Batch) arenaCopyPair(key, value []byte) ([]byte, []byte) {
+	if len(key) == 0 {
+		// Preserve non-nil empty semantics for callers that pass empty slices.
+		if len(value) == 0 {
+			return []byte{}, []byte{}
+		}
+		return []byte{}, b.arenaCopy(value)
+	}
+	if len(value) == 0 {
+		return b.arenaCopy(key), []byte{}
+	}
+
+	total := len(key) + len(value)
+	b.ensureArenaChunk(total)
+	last := len(b.arenaChunks) - 1
+	chunk := b.arenaChunks[last]
+	off := len(chunk)
+	chunk = chunk[:off+total]
+	copy(chunk[off:], key)
+	copy(chunk[off+len(key):], value)
+	b.arenaChunks[last] = chunk
+
+	k := chunk[off : off+len(key) : off+len(key)]
+	v := chunk[off+len(key) : off+total : off+total]
+	return k, v
 }
 
 // Reserve grows internal buffers to accommodate roughly n entries without
@@ -248,22 +380,22 @@ func (b *Batch) Set(key, value []byte) error {
 		return ErrKeyEmpty
 	}
 
-	// Copy key to ensure immutability
-	k := make([]byte, len(key))
-	copy(k, key)
+	// Enforce inline threshold before copying into the arena so rejected values
+	// do not consume batch-retained memory.
+	if len(value) > b.inlineThresholdForKey(key) {
+		return ErrValueTooLarge
+	}
+
+	// Copy key/value to ensure immutability (reduce per-entry allocations by
+	// copying into a per-batch arena).
+	k, valCopy := b.arenaCopyPair(key, value)
 
 	entry := Entry{
 		Type: OpPut,
 		Key:  k,
 	}
 
-	// Check threshold
-	if len(value) > b.inlineThresholdForKey(key) {
-		return ErrValueTooLarge
-	}
 	// Store inline
-	valCopy := make([]byte, len(value))
-	copy(valCopy, value)
 	entry.Value = valCopy
 
 	b.entries = append(b.entries, entry)
@@ -305,9 +437,7 @@ func (b *Batch) SetPointer(key []byte, ptr page.ValuePtr) error {
 		return fmt.Errorf("invalid value-log pointer: file %d", ptr.FileID)
 	}
 
-	// Copy key
-	k := make([]byte, len(key))
-	copy(k, key)
+	k := b.arenaCopy(key)
 
 	entry := Entry{
 		Type:     OpPut,
@@ -316,6 +446,7 @@ func (b *Batch) SetPointer(key []byte, ptr page.ValuePtr) error {
 		IsPtr:    true,
 	}
 	b.entries = append(b.entries, entry)
+	b.hasValueLogPointers = true
 	b.noteTouchedValueLog(ptr)
 	b.noteKeyOrder(entry.Key)
 	return nil
@@ -329,6 +460,48 @@ func (b *Batch) SetPointer(key []byte, ptr page.ValuePtr) error {
 // best-effort optimization used by higher-level layers (e.g. cached flush
 // streaming).
 func (b *Batch) SetPointerView(key []byte, ptr page.ValuePtr) error {
+	return b.setPointerViewInternal(key, ptr, true)
+}
+
+// SetPointerViewNoTouch is an internal-performance helper that records a
+// pointer Put without copying key bytes and without tracking touched value-log
+// segments. Callers must separately provide touched segment hints when commit
+// publication needs them.
+func (b *Batch) SetPointerViewNoTouch(key []byte, ptr page.ValuePtr) error {
+	return b.setPointerViewInternal(key, ptr, false)
+}
+
+// AppendPointerViewNoTouchTrustedSorted appends a pointer Put without input
+// validation, touched-segment tracking, or key-order checks. Caller must
+// guarantee: batch is open, key is non-empty, ptr is a value-log pointer, and
+// appended keys are already non-decreasing.
+func (b *Batch) AppendPointerViewNoTouchTrustedSorted(key []byte, ptr page.ValuePtr) {
+	if b == nil {
+		return
+	}
+	b.entries = append(b.entries, Entry{
+		Type:     OpPut,
+		Key:      key,
+		ValuePtr: ptr,
+		IsPtr:    true,
+	})
+	b.hasValueLogPointers = true
+	if b.sorted {
+		b.lastKey = key
+	}
+}
+
+// NoteTouchedValueLogFileID is an internal helper that records a touched
+// value-log segment without appending a batch entry.
+func (b *Batch) NoteTouchedValueLogFileID(fileID uint32) {
+	if b == nil || !page.IsValueLogFileID(fileID) {
+		return
+	}
+	b.hasValueLogPointers = true
+	b.noteTouchedValueLogFileID(fileID)
+}
+
+func (b *Batch) setPointerViewInternal(key []byte, ptr page.ValuePtr, noteTouched bool) error {
 	if err := b.ensureOpen(); err != nil {
 		return err
 	}
@@ -344,7 +517,10 @@ func (b *Batch) SetPointerView(key []byte, ptr page.ValuePtr) error {
 		ValuePtr: ptr,
 		IsPtr:    true,
 	})
-	b.noteTouchedValueLog(ptr)
+	b.hasValueLogPointers = true
+	if noteTouched {
+		b.noteTouchedValueLog(ptr)
+	}
 	b.noteKeyOrder(key)
 	return nil
 }
@@ -358,9 +534,7 @@ func (b *Batch) Delete(key []byte) error {
 		return ErrKeyEmpty
 	}
 
-	// Copy key
-	k := make([]byte, len(key))
-	copy(k, key)
+	k := b.arenaCopy(key)
 
 	b.entries = append(b.entries, Entry{
 		Type: OpDelete,
@@ -413,6 +587,7 @@ func (b *Batch) SetOps(ops []Entry) error {
 			if !page.IsValueLogFileID(op.ValuePtr.FileID) {
 				return fmt.Errorf("invalid value-log pointer in SetOps: file %d", op.ValuePtr.FileID)
 			}
+			b.hasValueLogPointers = true
 			b.noteTouchedValueLog(op.ValuePtr)
 		}
 		b.noteKeyOrder(op.Key)
@@ -437,6 +612,7 @@ func (b *Batch) SortedEntries() []Entry {
 	}
 
 	// Compact in place: keep only the last entry for each key
+	oldLen := len(b.entries)
 	out := b.entries[:0]
 	for i := 0; i < len(b.entries); i++ {
 		// If next is same key, skip this one (it's overwritten by next)
@@ -445,6 +621,8 @@ func (b *Batch) SortedEntries() []Entry {
 		}
 		out = append(out, b.entries[i])
 	}
+	// Clear the now-unused tail to avoid pinning batch arenas via stale pointers.
+	clear(b.entries[len(out):oldLen])
 	b.entries = out
 	if len(b.entries) > 0 {
 		b.lastKey = b.entries[len(b.entries)-1].Key
@@ -474,17 +652,32 @@ func (b *Batch) HasValueLogPointers() bool {
 	if b == nil {
 		return false
 	}
-	return len(b.touchedValueLog) > 0
+	return b.hasValueLogPointers
 }
 
 // TouchedValueLogSegments reports the value-log segments that were touched by
 // pointer puts in this batch. The returned slice is sorted for deterministic
 // commit/publish behavior.
+//
+// In the small-set fast path, the returned slice aliases internal batch
+// storage and remains valid only until the batch is mutated, reset, or
+// released. Callers must treat the result as read-only.
 func (b *Batch) TouchedValueLogSegments() []uint32 {
-	if b == nil || len(b.touchedValueLog) == 0 {
+	if b == nil {
 		return nil
 	}
-	out := make([]uint32, 0, len(b.touchedValueLog))
+	if b.touchedValueLogSmallLen == 0 && len(b.touchedValueLog) == 0 {
+		return nil
+	}
+	if len(b.touchedValueLog) == 0 {
+		out := b.touchedValueLogSmall[:b.touchedValueLogSmallLen]
+		if len(out) > 1 {
+			sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+		}
+		return out[:len(out):len(out)]
+	}
+	out := make([]uint32, 0, b.touchedValueLogSmallLen+len(b.touchedValueLog))
+	out = append(out, b.touchedValueLogSmall[:b.touchedValueLogSmallLen]...)
 	for id := range b.touchedValueLog {
 		out = append(out, id)
 	}
@@ -496,8 +689,26 @@ func (b *Batch) noteTouchedValueLog(ptr page.ValuePtr) {
 	if !page.IsValueLogFileID(ptr.FileID) {
 		return
 	}
-	if b.touchedValueLog == nil {
-		b.touchedValueLog = make(map[uint32]struct{}, 4)
+	b.noteTouchedValueLogFileID(ptr.FileID)
+}
+
+func (b *Batch) noteTouchedValueLogFileID(id uint32) {
+	for i := 0; i < b.touchedValueLogSmallLen; i++ {
+		if b.touchedValueLogSmall[i] == id {
+			return
+		}
 	}
-	b.touchedValueLog[ptr.FileID] = struct{}{}
+	if b.touchedValueLog == nil && b.touchedValueLogSmallLen < len(b.touchedValueLogSmall) {
+		b.touchedValueLogSmall[b.touchedValueLogSmallLen] = id
+		b.touchedValueLogSmallLen++
+		return
+	}
+	if b.touchedValueLog == nil {
+		b.touchedValueLog = make(map[uint32]struct{}, b.touchedValueLogSmallLen+4)
+		for i := 0; i < b.touchedValueLogSmallLen; i++ {
+			b.touchedValueLog[b.touchedValueLogSmall[i]] = struct{}{}
+		}
+		b.touchedValueLogSmallLen = 0
+	}
+	b.touchedValueLog[id] = struct{}{}
 }

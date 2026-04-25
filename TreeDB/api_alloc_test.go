@@ -136,6 +136,9 @@ func TestGet_SafeCopy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if cap(got) != len(got) {
+		t.Fatalf("Get should cap result to length: len=%d cap=%d", len(got), cap(got))
+	}
 
 	// Mutate the returned slice
 	got[0] = 'X'
@@ -147,6 +150,9 @@ func TestGet_SafeCopy(t *testing.T) {
 	}
 	if string(got2) != "original" {
 		t.Fatalf("DB corrupted by modification of Get result")
+	}
+	if cap(got2) != len(got2) {
+		t.Fatalf("Get should cap result to length: len=%d cap=%d", len(got2), cap(got2))
 	}
 }
 

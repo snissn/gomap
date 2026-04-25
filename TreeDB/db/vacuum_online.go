@@ -83,6 +83,27 @@ func (r *vacuumRecorder) RecordOps(ops map[string]batch.Entry) {
 	}
 }
 
+func (r *vacuumRecorder) RecordEntries(entries []batch.Entry) {
+	if !r.active.Load() || len(entries) == 0 {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.active.Load() {
+		return
+	}
+	if r.ops == nil {
+		r.ops = make(map[string]batch.Entry, len(entries))
+	}
+	for i := range entries {
+		entry := entries[i]
+		if len(entry.Key) == 0 {
+			continue
+		}
+		r.ops[string(entry.Key)] = vacuumRecordCopyEntry(entry)
+	}
+}
+
 func (r *vacuumRecorder) Drain() map[string]batch.Entry {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -180,6 +201,10 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 	newZ.SetLeafPageReader(db.valueLogManager)
 	newZ.SetLeafPageLog(db.leafPageLog)
 	newZ.SetOuterLeavesInValueLog(db.indexOuterLeavesInValueLog)
+	db.idxMu.Lock()
+	parallelMergePressureSource := db.zipperParallelMergeSource
+	db.idxMu.Unlock()
+	newZ.SetParallelMergePressureSource(parallelMergePressureSource)
 
 	db.vacuum.Start()
 	defer db.vacuum.Stop()
@@ -187,24 +212,68 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 	// Build a fresh user tree from a stable snapshot.
 	baseSnap := db.AcquireSnapshot()
 	var newRoot uint64
-	baseIter := baseSnap.tree.IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
-	buildOpts := bulk.BuildOptions{
-		LeafPrefixCompression: db.leafPrefixCompression,
-		LeafColumnar:          db.indexColumnarLeaves,
-		PackedValuePtr:        db.indexPackedValuePtr,
-		InternalBaseDelta:     db.indexInternalBaseDelta,
-	}
 	if db.indexOuterLeavesInValueLog {
 		if db.leafPageLog == nil {
-			_ = baseIter.Close()
 			_ = baseSnap.Close()
 			cleanupNewPager()
 			return fmt.Errorf("vacuum: leaf page log not configured")
 		}
-		buildOpts.LeafPageLog = db.leafPageLog
+
+		baseState := baseSnap.State()
+		basePager := baseSnap.Pager()
+		if baseState == nil || basePager == nil {
+			_ = baseSnap.Close()
+			cleanupNewPager()
+			return errors.New("vacuum: missing base snapshot state")
+		}
+		if _, ok := page.DecodeLeafRef(baseState.RootPageID); ok {
+			// Common case for very small DBs: user root is already a leafref.
+			// Reuse it directly and only vacuum the pager-backed metadata.
+			newRoot = baseState.RootPageID
+		} else {
+			// During initial open (before the cached layer wires LeafPageLog), the
+			// user tree root can still be a pager-backed leaf page. Handle that
+			// transitional state by cloning the pager tree as-is.
+			rootData, err := basePager.Get(baseState.RootPageID)
+			if err != nil {
+				_ = baseSnap.Close()
+				cleanupNewPager()
+				return err
+			}
+			rootNode := node.NewNode(rootData)
+			if rootNode.Type() == page.PageTypeLeaf {
+				newRoot, err = vacuumClonePagerTreeWithLeafRefs(basePager, baseState.RootPageID, newAlloc, newPager)
+				if err != nil {
+					_ = baseSnap.Close()
+					cleanupNewPager()
+					return err
+				}
+			} else {
+				leafChildren, err := vacuumCollectLeafRefChildren(basePager, baseState.RootPageID)
+				if err != nil {
+					_ = baseSnap.Close()
+					cleanupNewPager()
+					return err
+				}
+				newRoot, err = vacuumBuildInternalTreeFromChildren(newPager, newAlloc, leafChildren, db.indexInternalBaseDelta)
+				if err != nil {
+					_ = baseSnap.Close()
+					cleanupNewPager()
+					return err
+				}
+			}
+		}
+	} else {
+		baseIter := baseSnap.tree.IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
+		buildOpts := bulk.BuildOptions{
+			LeafPrefixCompression: db.leafPrefixCompression,
+			LeafColumnar:          db.indexColumnarLeaves,
+			PackedValuePtr:        db.indexPackedValuePtr,
+			InternalBaseDelta:     db.indexInternalBaseDelta,
+		}
+		newRoot, err = bulk.BuildWithOptions(baseIter, newAlloc, newPager, buildOpts)
+		_ = baseIter.Close()
 	}
-	newRoot, err = bulk.BuildWithOptions(baseIter, newAlloc, newPager, buildOpts)
-	_ = baseIter.Close()
 	_ = baseSnap.Close()
 	if err != nil {
 		cleanupNewPager()
@@ -435,14 +504,17 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 		db.meta = nextMeta
 		db.metaPageID = MetaPage0ID
 		newState := &DBState{
-			CommitSeq:        nextMeta.CommitSeq,
-			RootPageID:       nextMeta.UserRootPageID,
-			SystemRootPageID: nextMeta.SystemRootPageID,
-			ValueLogSet:      db.valueLogManager.CurrentSet(),
+			CommitSeq:                  nextMeta.CommitSeq,
+			RootPageID:                 nextMeta.UserRootPageID,
+			SystemRootPageID:           nextMeta.SystemRootPageID,
+			ValueLogSet:                db.valueLogManager.CurrentSetNoRefresh(),
+			LeafGenerations:            oldState.LeafGenerations,
+			LeafGenerationStateVersion: oldState.LeafGenerationStateVersion,
 		}
 		db.state.Store(newState)
 		db.publishSnapshotView(newGen, newState, db.valueLogManager)
 		db.mu.Unlock()
+		db.clearLeafGenerationReachabilityCaches()
 
 		db.writeMu.Unlock()
 
@@ -519,6 +591,237 @@ type vacuumCloneCtx struct {
 		Alloc(hint uint64) (uint64, error)
 	}
 	remap map[uint64]uint64
+}
+
+type vacuumLeafChild struct {
+	key     []byte
+	childID uint64
+}
+
+func vacuumCollectLeafRefChildren(p *pager.Pager, rootID uint64) ([]vacuumLeafChild, error) {
+	if p == nil {
+		return nil, errors.New("vacuum: missing pager")
+	}
+	if rootID == 0 {
+		return nil, errors.New("vacuum: missing root id")
+	}
+	if _, ok := page.DecodeLeafRef(rootID); ok {
+		return nil, errors.New("vacuum: leafref root should be handled by caller")
+	}
+
+	out := make([]vacuumLeafChild, 0, 1024)
+	var walk func(uint64) error
+	walk = func(id uint64) error {
+		if _, ok := page.DecodeLeafRef(id); ok {
+			return nil
+		}
+		data, err := p.Get(id)
+		if err != nil {
+			return err
+		}
+		n := node.NewNode(data)
+		switch n.Type() {
+		case page.PageTypeInternal:
+			count := n.Count()
+			for i := uint16(0); i < count; i++ {
+				keyView, childID, err := n.GetInternalEntryView(i)
+				if err != nil {
+					return err
+				}
+				if _, ok := page.DecodeLeafRef(childID); ok {
+					out = append(out, vacuumLeafChild{
+						key:     append([]byte(nil), keyView...),
+						childID: childID,
+					})
+					continue
+				}
+				if err := walk(childID); err != nil {
+					return err
+				}
+			}
+			return nil
+		case page.PageTypeLeaf:
+			// In outer-leaf-in-vlog mode, leaves should be leafrefs, not pager pages.
+			return fmt.Errorf("vacuum: unexpected pager-backed leaf page %d while collecting leafrefs", id)
+		default:
+			return fmt.Errorf("vacuum: unexpected page type %d at page %d", n.Type(), id)
+		}
+	}
+	if err := walk(rootID); err != nil {
+		return nil, err
+	}
+	if len(out) == 0 {
+		return nil, errors.New("vacuum: collected zero leafref children")
+	}
+	return out, nil
+}
+
+func vacuumBuildInternalTreeFromChildren(p *pager.Pager, alloc interface {
+	Alloc(hint uint64) (uint64, error)
+}, children []vacuumLeafChild, internalBaseDelta bool) (uint64, error) {
+	if p == nil || alloc == nil {
+		return 0, errors.New("vacuum: missing pager/allocator")
+	}
+	if len(children) == 0 {
+		return 0, errors.New("vacuum: missing children")
+	}
+
+	type levelBuilder struct {
+		builder  *node.Builder
+		startKey []byte
+	}
+	var levels []*levelBuilder
+
+	newBuilder := func() (*node.Builder, error) {
+		buf := make([]byte, page.PageSize)
+		var b *node.Builder
+		if internalBaseDelta {
+			b = node.NewBuilderWithOptions(buf, page.PageTypeInternal, node.BuilderOptions{InternalBaseDelta: true})
+		} else {
+			b = node.NewBuilder(buf, page.PageTypeInternal)
+		}
+		pid, err := alloc.Alloc(0)
+		if err != nil {
+			return nil, err
+		}
+		b.SetPageID(pid)
+		return b, nil
+	}
+
+	ensureLevel := func(lvl int) error {
+		for len(levels) <= lvl {
+			b, err := newBuilder()
+			if err != nil {
+				return err
+			}
+			levels = append(levels, &levelBuilder{builder: b})
+		}
+		return nil
+	}
+	if err := ensureLevel(0); err != nil {
+		return 0, err
+	}
+
+	var flush func(int) error
+	flush = func(lvl int) error {
+		lb := levels[lvl]
+		n := lb.builder.Finish()
+		childID := lb.builder.PageID()
+		if err := p.Write(childID, n.Data()); err != nil {
+			return err
+		}
+
+		if err := ensureLevel(lvl + 1); err != nil {
+			return err
+		}
+		parent := levels[lvl+1]
+		key := lb.startKey
+		if key == nil {
+			key = []byte{}
+		}
+		if parent.startKey == nil {
+			parent.startKey = append([]byte(nil), key...)
+		}
+
+		err := parent.builder.AddInternalChild(key, childID)
+		if err == node.ErrNodeFull {
+			if err := flush(lvl + 1); err != nil {
+				return err
+			}
+			parent = levels[lvl+1]
+			if parent.startKey == nil {
+				parent.startKey = append([]byte(nil), key...)
+			}
+			if err := parent.builder.AddInternalChild(key, childID); err != nil {
+				return err
+			}
+		} else if err != nil {
+			return err
+		}
+
+		// Reset this level.
+		b, err := newBuilder()
+		if err != nil {
+			return err
+		}
+		lb.builder = b
+		lb.startKey = nil
+		return nil
+	}
+
+	for _, child := range children {
+		key := child.key
+		childID := child.childID
+		lb := levels[0]
+		if lb.startKey == nil {
+			lb.startKey = append([]byte(nil), key...)
+		}
+		err := lb.builder.AddInternalChild(key, childID)
+		if err == node.ErrNodeFull {
+			if err := flush(0); err != nil {
+				return 0, err
+			}
+			lb = levels[0]
+			if lb.startKey == nil {
+				lb.startKey = append([]byte(nil), key...)
+			}
+			err = lb.builder.AddInternalChild(key, childID)
+		}
+		if err != nil {
+			return 0, err
+		}
+	}
+
+	// Finalize all levels (same promotion logic as bulk builder).
+	currID := uint64(0)
+	for i := 0; i < len(levels); i++ {
+		lb := levels[i]
+		n := lb.builder.Finish()
+		childID := lb.builder.PageID()
+		if err := p.Write(childID, n.Data()); err != nil {
+			return 0, err
+		}
+		currID = childID
+
+		if i < len(levels)-1 {
+			parent := levels[i+1]
+			key := lb.startKey
+			if key == nil {
+				key = []byte{}
+			}
+			if parent.startKey == nil {
+				parent.startKey = append([]byte(nil), key...)
+			}
+			err := parent.builder.AddInternalChild(key, currID)
+			if err == node.ErrNodeFull {
+				if err := flush(i + 1); err != nil {
+					return 0, err
+				}
+				parent = levels[i+1]
+				if parent.startKey == nil {
+					parent.startKey = append([]byte(nil), key...)
+				}
+				if err := parent.builder.AddInternalChild(key, currID); err != nil {
+					return 0, err
+				}
+			} else if err != nil {
+				return 0, err
+			}
+		}
+	}
+
+	// Reduce root if possible.
+	if len(levels) > 1 {
+		root := levels[len(levels)-1].builder.Finish()
+		if root.Count() == 1 {
+			childID, err := root.GetInternalChildID(0)
+			if err == nil {
+				return childID, nil
+			}
+		}
+	}
+
+	return currID, nil
 }
 
 func vacuumClonePagerTreeWithLeafRefs(oldPager *pager.Pager, rootID uint64, alloc interface {

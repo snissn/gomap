@@ -49,17 +49,121 @@ type stubLeafPageLog struct {
 	next uint32
 }
 
-func (l *stubLeafPageLog) AppendLeafPage(_ []byte) (page.ValuePtr, error) {
+func (l *stubLeafPageLog) AppendLeafPage(_ []byte) (page.LeafLogPtr, error) {
 	if l.next == 0 {
 		l.next = 4
 	}
-	ptr := page.ValuePtr{
-		FileID: page.ValueLogFileID(1),
+	ptr := page.LeafLogPtr{
+		FileID: 1,
 		Offset: uint64(l.next),
-		Length: 0,
 	}
 	l.next += 4096 + 32
 	return ptr, nil
+}
+
+type memoryLeafPageStore struct {
+	z *Zipper
+
+	next  uint32
+	pages map[uint64][]byte
+
+	readCalls  int
+	sawCache   int
+	sawNoCache int
+}
+
+func newMemoryLeafPageStore(z *Zipper) *memoryLeafPageStore {
+	return &memoryLeafPageStore{
+		z:     z,
+		pages: make(map[uint64][]byte),
+	}
+}
+
+func (s *memoryLeafPageStore) AppendLeafPage(leafPage []byte) (page.LeafLogPtr, error) {
+	if s.z != nil {
+		s.z.leafRefCacheMu.RLock()
+		if s.z.leafRefCache != nil {
+			s.sawCache++
+		} else {
+			s.sawNoCache++
+		}
+		s.z.leafRefCacheMu.RUnlock()
+	}
+	if s.next == 0 {
+		s.next = 4
+	}
+	ptr := page.LeafLogPtr{
+		FileID: 1,
+		Offset: uint64(s.next),
+	}
+	s.next += 4096 + 32
+	key, err := page.EncodeLeafRef(ptr)
+	if err != nil {
+		return page.LeafLogPtr{}, err
+	}
+	s.pages[key] = append([]byte(nil), leafPage...)
+	return ptr, nil
+}
+
+func (s *memoryLeafPageStore) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
+	s.readCalls++
+	leafPtr, err := page.LeafLogPtrFromValuePtr(ptr)
+	if err != nil {
+		return nil, err
+	}
+	key, err := page.EncodeLeafRef(leafPtr)
+	if err != nil {
+		return nil, err
+	}
+	data, ok := s.pages[key]
+	if !ok {
+		return nil, io.EOF
+	}
+	return data, nil
+}
+
+func (s *memoryLeafPageStore) resetObservations() {
+	s.readCalls = 0
+	s.sawCache = 0
+	s.sawNoCache = 0
+}
+
+func buildOuterLeafInternalRoot(t *testing.T, z *Zipper) uint64 {
+	t.Helper()
+
+	rootID, err := z.pager.Alloc(1)
+	if err != nil {
+		t.Fatalf("alloc root: %v", err)
+	}
+	data, err := z.pager.Get(rootID)
+	if err != nil {
+		t.Fatalf("get root: %v", err)
+	}
+	n := node.NewNode(data)
+	n.SetPageID(rootID)
+	n.SetType(page.PageTypeLeaf)
+	n.UpdateChecksum()
+
+	b := batch.New(panicValueReader{}, page.DefaultInlineThreshold)
+	defer func() { _ = b.Close() }()
+	for i := 0; i < 200; i++ {
+		key := []byte(fmt.Sprintf("key-%03d", i))
+		val := []byte(fmt.Sprintf("val-%03d", i))
+		b.Set(key, val)
+	}
+
+	newRootID, _, _, err := z.Apply(rootID, b)
+	if err != nil {
+		t.Fatalf("build root apply: %v", err)
+	}
+	rootData, err := z.pager.Get(newRootID)
+	if err != nil {
+		t.Fatalf("get new root: %v", err)
+	}
+	if got := node.NewNode(rootData).Type(); got != page.PageTypeInternal {
+		t.Fatalf("new root type=%d want %d", got, page.PageTypeInternal)
+	}
+	return newRootID
 }
 
 func TestZipperLeafRefCacheAvoidsUnflushedReads(t *testing.T) {
@@ -95,9 +199,12 @@ func TestZipperLeafRefCacheAvoidsUnflushedReads(t *testing.T) {
 		t.Fatalf("persistLeafPage: %v", err)
 	}
 
-	loaded, fromPager, err := z.loadNode(leafID)
+	loaded, fromPager, leafScratch, leafScratchRef, err := z.loadNode(leafID, nil)
 	if err != nil {
 		t.Fatalf("loadNode: %v", err)
+	}
+	if leafScratchRef {
+		putLeafPageScratch(leafScratch)
 	}
 	if fromPager {
 		t.Fatalf("fromPager=%t want false", fromPager)
@@ -107,6 +214,84 @@ func TestZipperLeafRefCacheAvoidsUnflushedReads(t *testing.T) {
 	}
 	if got := reader.calls.Load(); got != 0 {
 		t.Fatalf("leafPageReader calls=%d want 0", got)
+	}
+}
+
+func TestZipperApply_NonMaintenanceRestorePathDoesNotInstallLeafRefCache(t *testing.T) {
+	dir := t.TempDir()
+	p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+
+	alloc := &MockAllocator{p: p}
+	z := New(p, alloc)
+	z.SetOuterLeavesInValueLog(true)
+	store := newMemoryLeafPageStore(z)
+	z.SetLeafPageLog(store)
+	z.SetLeafPageReader(store)
+
+	rootID := buildOuterLeafInternalRoot(t, z)
+	store.resetObservations()
+
+	b := batch.New(panicValueReader{}, page.DefaultInlineThreshold)
+	defer func() { _ = b.Close() }()
+	b.Set([]byte("key-050"), []byte("updated"))
+
+	if _, _, _, err := z.Apply(rootID, b); err != nil {
+		t.Fatalf("Apply failed: %v", err)
+	}
+	if store.readCalls == 0 {
+		t.Fatalf("expected restore path to read existing outer leaf refs")
+	}
+	if store.sawNoCache == 0 {
+		t.Fatalf("expected fresh outer leaf writes to observe no in-flight cache on non-maintenance apply")
+	}
+	if store.sawCache != 0 {
+		t.Fatalf("saw cache on non-maintenance apply: sawCache=%d sawNoCache=%d", store.sawCache, store.sawNoCache)
+	}
+	if z.leafRefCache != nil {
+		t.Fatalf("leafRefCache not cleared after Apply")
+	}
+}
+
+func TestZipperApply_MaintenanceRestorePathInstallsLeafRefCache(t *testing.T) {
+	dir := t.TempDir()
+	p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+
+	alloc := &MockAllocator{p: p}
+	z := New(p, alloc)
+	z.SetOuterLeavesInValueLog(true)
+	store := newMemoryLeafPageStore(z)
+	z.SetLeafPageLog(store)
+	z.SetLeafPageReader(store)
+
+	rootID := buildOuterLeafInternalRoot(t, z)
+	store.resetObservations()
+
+	b := batch.New(panicValueReader{}, page.DefaultInlineThreshold)
+	defer func() { _ = b.Close() }()
+	b.Delete([]byte("key-050"))
+
+	if _, _, _, err := z.Apply(rootID, b); err != nil {
+		t.Fatalf("Apply failed: %v", err)
+	}
+	if store.readCalls == 0 {
+		t.Fatalf("expected restore path to read existing outer leaf refs")
+	}
+	if store.sawCache == 0 {
+		t.Fatalf("expected maintenance apply to install the in-flight outer leaf cache")
+	}
+	if store.sawNoCache != 0 {
+		t.Fatalf("unexpected cache miss observation during maintenance apply: sawCache=%d sawNoCache=%d", store.sawCache, store.sawNoCache)
+	}
+	if z.leafRefCache != nil {
+		t.Fatalf("leafRefCache not cleared after Apply")
 	}
 }
 
@@ -247,11 +432,11 @@ func TestCoalesceInternalChildren_SkipsLeafRefsWhenOuterLeavesInValueLog(t *test
 	z := New(p, alloc)
 	z.SetOuterLeavesInValueLog(true)
 
-	leftID, err := page.EncodeLeafRef(page.ValuePtr{FileID: page.ValueLogFileID(1), Offset: 4})
+	leftID, err := page.EncodeLeafRef(page.LeafLogPtr{FileID: 1, Offset: 4})
 	if err != nil {
 		t.Fatalf("EncodeLeafRef left: %v", err)
 	}
-	rightID, err := page.EncodeLeafRef(page.ValuePtr{FileID: page.ValueLogFileID(1), Offset: 4096})
+	rightID, err := page.EncodeLeafRef(page.LeafLogPtr{FileID: 1, Offset: 4096})
 	if err != nil {
 		t.Fatalf("EncodeLeafRef right: %v", err)
 	}
@@ -319,7 +504,7 @@ func TestCoalesceLeafChildrenPrefixCompression(t *testing.T) {
 		{key: []byte("b0"), child: rightID},
 	}
 
-	out, _, err := z.coalesceLeafChildren(entries, nil, &adaptive.Metrics{})
+	out, _, err := z.coalesceLeafChildren(entries, nil, &adaptive.Metrics{}, nil)
 	if err != nil {
 		t.Fatalf("coalesceLeafChildren: %v", err)
 	}
@@ -378,80 +563,121 @@ func TestShortestSeparatorBE8Bounds(t *testing.T) {
 	}
 }
 
-func TestMergeLeaf_ReturnsGrownSplitKeyArenaToPool(t *testing.T) {
-	dir := t.TempDir()
-	p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer p.Close()
+func TestMergeLeaf_SplitKeysDoNotAliasBatchKeys(t *testing.T) {
+	z := New(nil, nil)
+	z.SetOuterLeavesInValueLog(true)
+	z.SetLeafPageLog(&stubLeafPageLog{})
 
-	alloc := &MockAllocator{p: p}
-	z := New(p, alloc)
-
-	rootID, err := p.Alloc(1)
-	if err != nil {
-		t.Fatalf("alloc root: %v", err)
-	}
-	data, err := p.Get(rootID)
-	if err != nil {
-		t.Fatalf("get root: %v", err)
-	}
-	n := node.NewNode(data)
-	n.SetPageID(rootID)
-	n.SetType(page.PageTypeLeaf)
-	n.UpdateChecksum()
-
-	prevHook := TestHookPutLeafSplitKeyArena
-	var maxReturnedCap atomic.Int64
-	TestHookPutLeafSplitKeyArena = func(capacity int) {
-		for {
-			cur := maxReturnedCap.Load()
-			if int64(capacity) <= cur {
-				return
-			}
-			if maxReturnedCap.CompareAndSwap(cur, int64(capacity)) {
-				return
-			}
-		}
-	}
-	t.Cleanup(func() {
-		TestHookPutLeafSplitKeyArena = prevHook
-	})
-
-	b := batch.New(panicValueReader{}, page.DefaultInlineThreshold)
-	defer func() { _ = b.Close() }()
+	oldData := make([]byte, page.PageSize)
+	oldNode := node.NewNode(oldData)
+	oldNode.SetType(page.PageTypeLeaf)
+	oldNode.UpdateChecksum()
 
 	prefix := bytes.Repeat([]byte{'k'}, 1022)
 	value := bytes.Repeat([]byte("v"), 8)
+	ops := make([]batch.Entry, 0, 240)
 	for i := 0; i < 240; i++ {
 		key := make([]byte, len(prefix)+2)
 		copy(key, prefix)
 		binary.BigEndian.PutUint16(key[len(prefix):], uint16(i))
-		b.Set(key, value)
+		ops = append(ops, batch.Entry{Type: batch.OpPut, Key: key, Value: value})
 	}
 
-	newRootID, _, _, err := z.Apply(rootID, b)
+	builder := z.newLeafBuilder(make([]byte, page.PageSize), ops)
+	builder.SetPageID(0)
+	scratch := newMergeScratch()
+
+	var metrics adaptive.Metrics
+	_, splits, err := z.mergeLeaf(oldNode, builder, ops, &metrics, scratch, false)
 	if err != nil {
-		t.Fatalf("Apply failed: %v", err)
+		t.Fatalf("mergeLeaf failed: %v", err)
+	}
+	if len(splits) == 0 {
+		t.Fatalf("expected large keys to force at least one split")
 	}
 
-	tr := tree.New(p, panicValueReader{}, newRootID)
-	for _, idx := range []int{0, 120, 239} {
-		key := make([]byte, len(prefix)+2)
-		copy(key, prefix)
-		binary.BigEndian.PutUint16(key[len(prefix):], uint16(idx))
-		gotVal, getErr := tr.Get(key)
-		if getErr != nil {
-			t.Fatalf("Get(%d) failed: %v", idx, getErr)
-		}
-		if !bytes.Equal(gotVal, value) {
-			t.Fatalf("Get(%d) value mismatch: got=%q want=%q", idx, gotVal, value)
+	wantKeys := make([][]byte, len(splits))
+	for i := range splits {
+		wantKeys[i] = append([]byte(nil), splits[i].Key...)
+	}
+
+	for i := range ops {
+		for j := range ops[i].Key {
+			ops[i].Key[j] ^= 0xff
 		}
 	}
 
-	got := int(maxReturnedCap.Load())
-	if got <= leafSplitKeyArenaInitCap {
-		t.Fatalf("expected returned split-key arena cap > %d after growth, got %d", leafSplitKeyArenaInitCap, got)
+	for i := range splits {
+		if !bytes.Equal(splits[i].Key, wantKeys[i]) {
+			t.Fatalf("split key %d mutated with source key buffer", i)
+		}
 	}
+}
+
+func TestApplyScratch_ReusedAcrossAcquireRelease(t *testing.T) {
+	z := New(nil, nil)
+
+	first := z.acquireApplyScratch()
+	key := first.cloneSplitKey([]byte("split-key"))
+	if string(key) != "split-key" {
+		t.Fatalf("cloneSplitKey returned %q", key)
+	}
+	z.releaseApplyScratch(first)
+
+	second := z.acquireApplyScratch()
+	if second != first {
+		t.Fatalf("expected apply scratch reuse, got different instance")
+	}
+	if got := len(second.splitKeyArena); got != 0 {
+		t.Fatalf("len(splitKeyArena)=%d want 0 after reset", got)
+	}
+	z.releaseApplyScratch(second)
+}
+
+func TestApplyScratch_TrimsOversizedArena(t *testing.T) {
+	z := New(nil, nil)
+
+	s := z.acquireApplyScratch()
+	s.splitKeyArena = make([]byte, 0, mergeSplitKeyArenaKeepCap+1024)
+	z.releaseApplyScratch(s)
+
+	reused := z.acquireApplyScratch()
+	if cap(reused.splitKeyArena) > mergeSplitKeyArenaKeepCap {
+		t.Fatalf("cap(splitKeyArena)=%d exceeds keep cap %d", cap(reused.splitKeyArena), mergeSplitKeyArenaKeepCap)
+	}
+	z.releaseApplyScratch(reused)
+}
+
+func TestApplyScratch_ReusesOuterLeafBuildPages(t *testing.T) {
+	z := New(nil, nil)
+
+	first := z.acquireApplyScratch()
+	p := first.acquireOuterLeafBuildPage()
+	first.releaseOuterLeafBuildPage(p)
+	z.releaseApplyScratch(first)
+
+	second := z.acquireApplyScratch()
+	reused := second.acquireOuterLeafBuildPage()
+	if reused != p {
+		t.Fatalf("expected outer-leaf build page reuse across apply scratch lifecycle")
+	}
+	second.releaseOuterLeafBuildPage(reused)
+	z.releaseApplyScratch(second)
+}
+
+func TestApplyScratch_TrimsOversizedOuterLeafBuildPageCache(t *testing.T) {
+	z := New(nil, nil)
+
+	s := z.acquireApplyScratch()
+	s.outerLeafBuildPages = make([]*outerLeafBuildPage, 0, mergeOuterLeafPageKeepCap+32)
+	for i := 0; i < mergeOuterLeafPageKeepCap+16; i++ {
+		s.outerLeafBuildPages = append(s.outerLeafBuildPages, &outerLeafBuildPage{})
+	}
+	z.releaseApplyScratch(s)
+
+	reused := z.acquireApplyScratch()
+	if cap(reused.outerLeafBuildPages) > mergeOuterLeafPageKeepCap {
+		t.Fatalf("cap(outerLeafBuildPages)=%d exceeds keep cap %d", cap(reused.outerLeafBuildPages), mergeOuterLeafPageKeepCap)
+	}
+	z.releaseApplyScratch(reused)
 }

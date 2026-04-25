@@ -43,7 +43,13 @@ func (db *DB) valueLogAutotuneCandidate(profile *compression.ActiveProfile, k in
 }
 
 func (db *DB) valueLogAutotuneScore(profile *vlogAutotuneProfile, ioNsPerStoredByte float64) float64 {
-	if profile == nil || ioNsPerStoredByte <= 0 || profile.TotalRatio <= 0 {
+	if profile == nil || profile.TotalRatio <= 0 {
+		return 0
+	}
+	if normalizeVlogAutoPolicy(db.valueLogAutoPolicy) == vlogAutoSize {
+		return 1.0 / profile.TotalRatio
+	}
+	if ioNsPerStoredByte <= 0 {
 		return 0
 	}
 	encodeNsPerRaw := 0.0
@@ -62,6 +68,7 @@ func (db *DB) valueLogAutotuneShouldSwitch(candidate *vlogAutotuneProfile, ioNsP
 		return false
 	}
 	opts := db.valueLogAutotuneOptions
+	policy := normalizeVlogAutoPolicy(db.valueLogAutoPolicy)
 	if opts.Mode == valuelog.AutotuneOff {
 		return true
 	}
@@ -74,7 +81,7 @@ func (db *DB) valueLogAutotuneShouldSwitch(candidate *vlogAutotuneProfile, ioNsP
 			}
 		}
 	}
-	if opts.MinGainToSwitch > 0 && ioNsPerStoredByte > 0 {
+	if opts.MinGainToSwitch > 0 && (policy == vlogAutoSize || ioNsPerStoredByte > 0) {
 		current, _ := db.valueLogAutotuneLastProfile.Load().(*vlogAutotuneProfile)
 		currentScore := db.valueLogAutotuneScore(current, ioNsPerStoredByte)
 		candidateScore := db.valueLogAutotuneScore(candidate, ioNsPerStoredByte)
