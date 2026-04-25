@@ -299,28 +299,33 @@ func (w *Writer) AppendBatch(records []Record) error {
 }
 
 func (w *Writer) AppendBatchFunc(count int, recordAt func(int) Record) error {
+	_, err := w.AppendBatchFuncWithSize(count, recordAt)
+	return err
+}
+
+func (w *Writer) AppendBatchFuncWithSize(count int, recordAt func(int) Record) (int64, error) {
 	if count == 0 {
-		return nil
+		return 0, nil
 	}
 	if count < 0 || count > int(^uint32(0)) {
-		return ErrRecordTooLarge
+		return 0, ErrRecordTooLarge
 	}
 	if recordAt == nil {
-		return ErrCorrupt
+		return 0, ErrCorrupt
 	}
 
 	total := int64(batchHeaderSize)
 	first := recordAt(0)
 	if err := validateRecord(&first); err != nil {
-		return err
+		return 0, err
 	}
 	if len(first.Key) > int(^uint16(0)) || len(first.Value) > int(^uint32(0)) {
-		return ErrRecordTooLarge
+		return 0, ErrRecordTooLarge
 	}
 	firstKeyLen := uint16(len(first.Key))
 	firstValLen := uint32(len(first.Value))
 	if recordSizeExceedsMax(firstKeyLen, firstValLen) {
-		return ErrRecordTooLarge
+		return 0, ErrRecordTooLarge
 	}
 	batchSeq := first.Seq
 	total += int64(recordHeaderSize) + int64(len(first.Key)) + int64(len(first.Value))
@@ -328,29 +333,29 @@ func (w *Writer) AppendBatchFunc(count int, recordAt func(int) Record) error {
 	for i := 1; i < count; i++ {
 		r := recordAt(i)
 		if err := validateRecord(&r); err != nil {
-			return err
+			return 0, err
 		}
 		if r.Seq != batchSeq {
-			return ErrMixedBatchSeq
+			return 0, ErrMixedBatchSeq
 		}
 		if len(r.Key) > int(^uint16(0)) {
-			return ErrRecordTooLarge
+			return 0, ErrRecordTooLarge
 		}
 		if len(r.Value) > int(^uint32(0)) {
-			return ErrRecordTooLarge
+			return 0, ErrRecordTooLarge
 		}
 		keyLen := uint16(len(r.Key))
 		valLen := uint32(len(r.Value))
 		if recordSizeExceedsMax(keyLen, valLen) {
-			return ErrRecordTooLarge
+			return 0, ErrRecordTooLarge
 		}
 		total += int64(recordHeaderSize) + int64(len(r.Key)) + int64(len(r.Value))
 	}
 	if w.maxSegmentSize > 0 && total > w.maxSegmentSize {
-		return ErrRecordTooLarge
+		return 0, ErrRecordTooLarge
 	}
 	if total > int64(int(^uint(0)>>1)) {
-		return ErrRecordTooLarge
+		return 0, ErrRecordTooLarge
 	}
 
 	if cap(w.scratch) < int(total) {
@@ -376,7 +381,10 @@ func (w *Writer) AppendBatchFunc(count int, recordAt func(int) Record) error {
 		off += recordHeaderSize + len(r.Key) + len(r.Value)
 	}
 
-	return w.writeSegment(buf)
+	if err := w.writeSegment(buf); err != nil {
+		return 0, err
+	}
+	return int64(segmentHeaderSize) + total, nil
 }
 
 func (w *Writer) writeSegment(payload []byte) error {

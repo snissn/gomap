@@ -86,11 +86,20 @@ func TestCommitLogWriteReadBatchFunc(t *testing.T) {
 		{Op: OpSetInline, Key: []byte("k2"), Value: []byte("v2"), Seq: 7},
 		{Op: OpDelete, Key: []byte("k3"), Seq: 7},
 	}
-	if err := writer.AppendBatchFunc(len(records), func(i int) Record {
+	written, err := writer.AppendBatchFuncWithSize(len(records), func(i int) Record {
 		return records[i]
-	}); err != nil {
+	})
+	if err != nil {
 		_ = writer.Close()
 		t.Fatalf("append func: %v", err)
+	}
+	wantWritten := int64(segmentHeaderSize + batchHeaderSize)
+	for _, record := range records {
+		wantWritten += int64(recordHeaderSize + len(record.Key) + len(record.Value))
+	}
+	if written != wantWritten {
+		_ = writer.Close()
+		t.Fatalf("written bytes=%d want %d", written, wantWritten)
 	}
 	if err := writer.Close(); err != nil {
 		t.Fatalf("close: %v", err)

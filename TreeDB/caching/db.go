@@ -15052,19 +15052,28 @@ func (db *DB) appendWALInlineEntries(l *lane, entries []batch.Entry, rids []uint
 		l.walMu.Unlock()
 		return errWALUnavailable
 	}
-	if fw, ok := w.(commitBatchFuncWriter); ok {
+	if sw, ok := w.(commitBatchFuncSizeWriter); ok {
+		totalBytes, err = sw.AppendBatchFuncWithSize(len(entries), func(i int) logRecord {
+			return recordAt(i)
+		})
+	} else if fw, ok := w.(commitBatchFuncWriter); ok {
 		err = fw.AppendBatchFunc(len(entries), func(i int) logRecord {
 			return recordAt(i)
 		})
+		if err == nil {
+			totalBytes = db.logBatchEntriesSize(entries, rids)
+		}
 	} else {
 		records := db.getBatchWALRecords(len(entries))
 		for i := range entries {
 			records = append(records, recordAt(i))
 		}
 		err = w.AppendBatch(records)
+		if err == nil {
+			totalBytes = db.logBatchEntriesSize(entries, rids)
+		}
 		db.putBatchWALRecords(records)
 	}
-	totalBytes = db.logBatchEntriesSize(entries, rids)
 	if err == nil && flush {
 		err = w.Flush()
 	}
