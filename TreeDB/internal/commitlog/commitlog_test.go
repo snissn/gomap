@@ -127,6 +127,37 @@ func TestCommitLogWriteReadBatchFunc(t *testing.T) {
 	}
 }
 
+func TestCommitLogAppendBatchFuncCallsRecordAtOncePerIndex(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "commit.log")
+
+	writer, err := NewWriter(path)
+	if err != nil {
+		t.Fatalf("new writer: %v", err)
+	}
+	records := []Record{
+		{Op: OpSetRID, Key: []byte("k1"), RID: 11, Seq: 7},
+		{Op: OpSetInline, Key: []byte("k2"), Value: []byte("v2"), Seq: 7},
+		{Op: OpDelete, Key: []byte("k3"), Seq: 7},
+	}
+	calls := make([]int, len(records))
+	_, err = writer.AppendBatchFuncWithSize(len(records), func(i int) Record {
+		calls[i]++
+		return records[i]
+	})
+	if closeErr := writer.Close(); err == nil && closeErr != nil {
+		err = closeErr
+	}
+	if err != nil {
+		t.Fatalf("append func: %v", err)
+	}
+	for i, calls := range calls {
+		if calls != 1 {
+			t.Fatalf("recordAt(%d) called %d times, want 1", i, calls)
+		}
+	}
+}
+
 func TestCommitLogWriteReadBatchCompressed(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "commit.log")

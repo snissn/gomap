@@ -24169,6 +24169,7 @@ func (db *DB) getMemtable(key []byte) ([]byte, bool, error) {
 		return nil, false, nil
 	}
 
+	keyRouted := keyInMutableRoute(mutableRoute, key)
 	checkedHashMutable := false
 	if len(mutables) > 0 {
 		var (
@@ -24187,10 +24188,16 @@ func (db *DB) getMemtable(key []byte) ([]byte, bool, error) {
 			return routeVal, routeFound, routeErr
 		}
 	}
+	if !keyRouted && len(mutables) > 0 && !checkedHashMutable {
+		val, found, err := checkMutable(hashIdx)
+		if err != nil || found {
+			return val, found, err
+		}
+	}
 	if val, found, err := checkQueue(true); err != nil || found {
 		return val, found, err
 	}
-	if len(mutables) > 0 && !checkedHashMutable {
+	if keyRouted && len(mutables) > 0 && !checkedHashMutable {
 		val, found, err := checkMutable(hashIdx)
 		if err != nil || found {
 			return val, found, err
@@ -24312,6 +24319,7 @@ func (db *DB) getMemtableAppend(key, dst []byte) ([]byte, bool, error) {
 		return dst, false, nil
 	}
 
+	keyRouted := keyInMutableRoute(mutableRoute, key)
 	checkedHashMutable := false
 	if len(mutables) > 0 {
 		var (
@@ -24330,10 +24338,16 @@ func (db *DB) getMemtableAppend(key, dst []byte) ([]byte, bool, error) {
 			return routeOut, routeFound, routeErr
 		}
 	}
+	if !keyRouted && len(mutables) > 0 && !checkedHashMutable {
+		out, found, err := checkMutableAppend(hashIdx)
+		if err != nil || found {
+			return out, found, err
+		}
+	}
 	if out, found, err := checkQueueAppend(true); err != nil || found {
 		return out, found, err
 	}
-	if len(mutables) > 0 && !checkedHashMutable {
+	if keyRouted && len(mutables) > 0 && !checkedHashMutable {
 		out, found, err := checkMutableAppend(hashIdx)
 		if err != nil || found {
 			return out, found, err
@@ -24633,6 +24647,7 @@ func (db *DB) Has(key []byte) (bool, error) {
 		return false, false
 	}
 
+	keyRouted := keyInMutableRoute(mutableRoute, key)
 	checkedHashMutable := false
 	if len(mutables) > 0 {
 		var (
@@ -24650,10 +24665,16 @@ func (db *DB) Has(key []byte) (bool, error) {
 			return routeHas, nil
 		}
 	}
+	if !keyRouted && len(mutables) > 0 && !checkedHashMutable {
+		has, found := checkMutableHas(hashIdx)
+		if found {
+			return has, nil
+		}
+	}
 	if has, found := checkQueueHas(true); found {
 		return has, nil
 	}
-	if len(mutables) > 0 && !checkedHashMutable {
+	if keyRouted && len(mutables) > 0 && !checkedHashMutable {
 		has, found := checkMutableHas(hashIdx)
 		if found {
 			return has, nil

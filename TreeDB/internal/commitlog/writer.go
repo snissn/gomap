@@ -44,6 +44,7 @@ type Writer struct {
 	f              *os.File
 	bw             *bufio.Writer
 	scratch        []byte
+	recordScratch  []Record
 	encScratch     []byte
 	headerBuf      [segmentHeaderSize]byte
 	rawLenPrefix   [4]byte
@@ -298,16 +299,15 @@ func (w *Writer) AppendBatch(records []Record) error {
 	return w.writeSegment(buf)
 }
 
-// AppendBatchFunc appends count records supplied by recordAt. recordAt must be
-// deterministic for each index for the duration of the call.
+// AppendBatchFunc appends count records supplied by recordAt. recordAt is called
+// exactly once per index.
 func (w *Writer) AppendBatchFunc(count int, recordAt func(int) Record) error {
 	_, err := w.AppendBatchFuncWithSize(count, recordAt)
 	return err
 }
 
 // AppendBatchFuncWithSize appends count records supplied by recordAt and
-// returns the bytes written. recordAt may be called more than once for the same
-// index and must return the same Record each time during this call.
+// returns the bytes written. recordAt is called exactly once per index.
 func (w *Writer) AppendBatchFuncWithSize(count int, recordAt func(int) Record) (int64, error) {
 	if count == 0 {
 		return 0, nil
@@ -319,8 +319,20 @@ func (w *Writer) AppendBatchFuncWithSize(count int, recordAt func(int) Record) (
 		return 0, ErrCorrupt
 	}
 
+	if cap(w.recordScratch) < count {
+		w.recordScratch = make([]Record, count)
+	}
+	records := w.recordScratch[:count]
+	defer func() {
+		clear(records)
+		w.recordScratch = records[:0]
+	}()
+	for i := 0; i < count; i++ {
+		records[i] = recordAt(i)
+	}
+
 	total := int64(batchHeaderSize)
-	first := recordAt(0)
+	first := records[0]
 	if err := validateRecord(&first); err != nil {
 		return 0, err
 	}
@@ -336,7 +348,7 @@ func (w *Writer) AppendBatchFuncWithSize(count int, recordAt func(int) Record) (
 	total += int64(recordHeaderSize) + int64(len(first.Key)) + int64(len(first.Value))
 
 	for i := 1; i < count; i++ {
-		r := recordAt(i)
+		r := records[i]
 		if err := validateRecord(&r); err != nil {
 			return 0, err
 		}
@@ -373,7 +385,7 @@ func (w *Writer) AppendBatchFuncWithSize(count int, recordAt func(int) Record) (
 
 	off := batchHeaderSize
 	for i := 0; i < count; i++ {
-		r := recordAt(i)
+		r := records[i]
 		keyLen := uint16(len(r.Key))
 		valLen := uint32(len(r.Value))
 		buf[off] = r.Op

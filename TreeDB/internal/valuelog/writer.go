@@ -1083,7 +1083,7 @@ func (w *Writer) AppendRawRecord(raw []byte, length uint32) (page.ValuePtr, erro
 		return page.ValuePtr{}, errors.New("valuelog: nil writer")
 	}
 	if len(raw) < 4 {
-		return page.ValuePtr{}, errors.New("valuelog: empty record")
+		return page.ValuePtr{}, errors.New("valuelog: raw record too short")
 	}
 	expected := uint32(len(raw) - 4)
 	if !page.ValuePtrRecordLengthHintMatches(page.ValuePtr{Length: length}, expected) {
@@ -1109,7 +1109,7 @@ func (w *Writer) AppendRawRecordBuffered(raw []byte, length uint32) (page.ValueP
 		return page.ValuePtr{}, errors.New("valuelog: nil writer")
 	}
 	if len(raw) < 4 {
-		return page.ValuePtr{}, errors.New("valuelog: empty record")
+		return page.ValuePtr{}, errors.New("valuelog: raw record too short")
 	}
 	expected := uint32(len(raw) - 4)
 	if !page.ValuePtrRecordLengthHintMatches(page.ValuePtr{Length: length}, expected) {

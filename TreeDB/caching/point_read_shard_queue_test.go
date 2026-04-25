@@ -596,6 +596,10 @@ func TestPointReads_RangedQueueShadowsHashMutableFallback(t *testing.T) {
 		queueShardIDs:   []uint16{uint16(routeShard)},
 		queueRouteModes: []uint8{memtableRouteRanged},
 		queueRanges:     []keyRange{rng},
+		mutableRoute: &mutableRouteState{
+			shardID: uint16(routeShard),
+			rng:     cloneRange(rng),
+		},
 	})
 	db.mutableBytes.Store(1)
 
@@ -621,5 +625,72 @@ func TestPointReads_RangedQueueShadowsHashMutableFallback(t *testing.T) {
 	}
 	if has {
 		t.Fatalf("Has returned true from stale hash mutable; want ranged queue tombstone")
+	}
+}
+
+func TestPointReads_HashMutableShadowsRangedQueueWhenKeyNotCurrentlyRouted(t *testing.T) {
+	const shards = 8
+
+	db := &DB{
+		backend:          panicBackend{},
+		mutableShards:    make([]memShard, shards),
+		mutableShardMask: shards - 1,
+	}
+
+	var rawKey [8]byte
+	binary.BigEndian.PutUint64(rawKey[:], 42)
+	key := append([]byte(nil), rawKey[:]...)
+	hashShard := db.shardIndex(key)
+	routeShard := (hashShard + 1) % shards
+
+	mutables := make([]memtable.Table, shards)
+	for shard := 0; shard < shards; shard++ {
+		mt, err := memtable.NewWithCapacityMode(0, memtable.ModeHashSorted)
+		if err != nil {
+			t.Fatalf("new mutable memtable: %v", err)
+		}
+		mutables[shard] = mt
+	}
+	mutables[hashShard].SetEntry(key, []byte("fresh-hash"), page.ValuePtr{}, node.FlagInline)
+
+	routed, err := memtable.NewWithCapacityMode(0, memtable.ModeHashSorted)
+	if err != nil {
+		t.Fatalf("new routed queue memtable: %v", err)
+	}
+	routed.SetEntry(key, []byte("stale-ranged"), page.ValuePtr{}, node.FlagInline)
+	rng := keyRange{}
+	rng.add(key)
+
+	db.memtables.Store(&memtableView{
+		mutables:        mutables,
+		queue:           []memtable.Table{routed},
+		queueShardIDs:   []uint16{uint16(routeShard)},
+		queueRouteModes: []uint8{memtableRouteRanged},
+		queueRanges:     []keyRange{rng},
+	})
+	db.mutableBytes.Store(1)
+
+	val, found, err := db.getMemtable(key)
+	if err != nil {
+		t.Fatalf("getMemtable: %v", err)
+	}
+	if !found || string(val) != "fresh-hash" {
+		t.Fatalf("getMemtable = (%q,%v), want fresh hash mutable", string(val), found)
+	}
+
+	out, found, err := db.getMemtableAppend(key, []byte("prefix:"))
+	if err != nil || !found {
+		t.Fatalf("getMemtableAppend found=%v err=%v, want fresh hash mutable", found, err)
+	}
+	if string(out) != "prefix:fresh-hash" {
+		t.Fatalf("getMemtableAppend=%q want prefix:fresh-hash", out)
+	}
+
+	has, err := db.Has(key)
+	if err != nil {
+		t.Fatalf("Has: %v", err)
+	}
+	if !has {
+		t.Fatalf("Has returned false from older ranged queue; want fresh hash mutable")
 	}
 }
