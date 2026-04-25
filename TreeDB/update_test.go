@@ -150,6 +150,38 @@ func TestUpdateSetDeleteNoop(t *testing.T) {
 	}
 }
 
+func TestUpdatePreservesEmptyValuePresence(t *testing.T) {
+	opts := treedb.OptionsFor(treedb.ProfileFast, t.TempDir())
+	db, err := treedb.Open(opts)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+
+	key := []byte("empty")
+	if err := db.Set(key, []byte{}); err != nil {
+		t.Fatalf("Set empty: %v", err)
+	}
+	if err := db.Update(key, func(old []byte) (treedb.UpdateResult, error) {
+		if old == nil {
+			t.Fatalf("old = nil, want non-nil empty slice for present empty value")
+		}
+		if len(old) != 0 {
+			t.Fatalf("old len=%d, want 0", len(old))
+		}
+		return treedb.SetUpdate([]byte("present-empty")), nil
+	}); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	got, err := db.Get(key)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if !bytes.Equal(got, []byte("present-empty")) {
+		t.Fatalf("value got=%q want present-empty", got)
+	}
+}
+
 func TestUpdateSyncPointerValuePersistsAfterCheckpointReopen(t *testing.T) {
 	dir := t.TempDir()
 	opts := treedb.OptionsFor(treedb.ProfileFast, dir)

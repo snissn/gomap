@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	batchpkg "github.com/snissn/gomap/TreeDB/batch"
+	"github.com/snissn/gomap/TreeDB/tree"
 )
 
 // ErrNilUpdateFunc indicates a nil callback was passed to Update.
@@ -79,7 +80,7 @@ func (db *DB) update(key []byte, fn UpdateFunc, syncWrite bool) error {
 	unlock := db.lockUpdateKey(key)
 	defer unlock()
 
-	old, err := db.Get(key)
+	old, err := db.getForUpdate(key)
 	if err != nil {
 		return err
 	}
@@ -107,4 +108,16 @@ func (db *DB) lockUpdateKey(key []byte) func() {
 		return func() {}
 	}
 	return db.updateLocks.Lock(key)
+}
+
+func (db *DB) getForUpdate(key []byte) ([]byte, error) {
+	dst := make([]byte, 0)
+	old, err := db.GetAppend(key, dst)
+	if err == tree.ErrKeyNotFound {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return old[:len(old):len(old)], nil
 }

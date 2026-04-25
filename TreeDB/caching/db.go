@@ -19301,7 +19301,7 @@ func (db *DB) update(key []byte, fn backenddb.UpdateFunc, syncWrite bool) error 
 	unlock := db.lockUpdateKey(key)
 	defer unlock()
 
-	old, err := db.Get(key)
+	old, err := db.getForUpdate(key)
 	if err != nil {
 		return err
 	}
@@ -19322,6 +19322,18 @@ func (db *DB) update(key []byte, fn backenddb.UpdateFunc, syncWrite bool) error 
 	default:
 		return fmt.Errorf("treedb: unknown update op %d", result.Op)
 	}
+}
+
+func (db *DB) getForUpdate(key []byte) ([]byte, error) {
+	dst := make([]byte, 0)
+	old, err := db.GetAppend(key, dst)
+	if err == tree.ErrKeyNotFound {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return old[:len(old):len(old)], nil
 }
 
 func (db *DB) flushAllMemtablesForSync(sync bool) error {

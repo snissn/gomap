@@ -1,6 +1,7 @@
 package db
 
 import (
+	"bytes"
 	"strconv"
 	"sync"
 	"testing"
@@ -66,5 +67,36 @@ func TestUpdateConcurrentCounterNoLostUpdates(t *testing.T) {
 	}
 	if want := workers * increments; n != want {
 		t.Fatalf("counter=%d want=%d", n, want)
+	}
+}
+
+func TestUpdatePreservesEmptyValuePresence(t *testing.T) {
+	d, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer d.Close()
+
+	key := []byte("empty")
+	if err := d.Set(key, []byte{}); err != nil {
+		t.Fatalf("Set empty: %v", err)
+	}
+	if err := d.Update(key, func(old []byte) (UpdateResult, error) {
+		if old == nil {
+			t.Fatalf("old = nil, want non-nil empty slice for present empty value")
+		}
+		if len(old) != 0 {
+			t.Fatalf("old len=%d, want 0", len(old))
+		}
+		return SetUpdate([]byte("present-empty")), nil
+	}); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	got, err := d.Get(key)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if !bytes.Equal(got, []byte("present-empty")) {
+		t.Fatalf("value got=%q want present-empty", got)
 	}
 }
