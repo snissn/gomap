@@ -2,8 +2,12 @@ package db
 
 import (
 	"context"
+	"errors"
 	"reflect"
+	"strconv"
 	"testing"
+
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
 )
 
 func TestPublishOrderedRootIterator_WarmSparseDelta_PreservesPages(t *testing.T) {
@@ -301,6 +305,144 @@ func TestPublishOrderedRootGroup_PersistsSystemAndOrderedRoots(t *testing.T) {
 	}
 	if got := string(entry.Value); got != "iv" {
 		t.Fatalf("reopen iter value=%q want %q", got, "iv")
+	}
+}
+
+func TestPublishOrderedRootGroupWithSystemBuilder_PersistsSystemDescriptorWithOrderedRootIDs(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+
+	if err := db.Set([]byte("user/a"), []byte("uv")); err != nil {
+		t.Fatalf("set user key: %v", err)
+	}
+	before := db.State()
+	if before == nil {
+		t.Fatal("expected backend state")
+	}
+
+	primaryTable := mustFrozenSystemMemtable(t, "doc/u1", "document")
+	indexTable := mustFrozenSystemMemtable(t, "idx/email/u1", "")
+	var builderRootIDs []uint64
+	newSystemRoot, rootIDs, err := db.PublishOrderedRootGroupWithSystemBuilder([]OrderedRootPublishInput{
+		{BaseRoot: 0, Iter: primaryTable.NewIterator(nil, nil)},
+		{BaseRoot: 0, Iter: indexTable.NewIterator(nil, nil)},
+	}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		builderRootIDs = append([]uint64(nil), rootIDs...)
+		return mustFrozenSystemMemtable(t,
+			"sys/collections/users/primary", strconv.FormatUint(rootIDs[0], 10),
+			"sys/collections/users/email_idx", strconv.FormatUint(rootIDs[1], 10),
+		).NewIterator(nil, nil), nil
+	})
+	if err != nil {
+		t.Fatalf("publish ordered root group with system builder: %v", err)
+	}
+	if len(rootIDs) != 2 {
+		t.Fatalf("rootIDs=%d want 2", len(rootIDs))
+	}
+	if !reflect.DeepEqual(builderRootIDs, rootIDs) {
+		t.Fatalf("builder root IDs=%v want %v", builderRootIDs, rootIDs)
+	}
+	after := db.State()
+	if after == nil {
+		t.Fatal("expected backend state after publish")
+	}
+	if after.RootPageID != before.RootPageID {
+		t.Fatalf("user root changed: got %d want %d", after.RootPageID, before.RootPageID)
+	}
+	if after.SystemRootPageID != newSystemRoot {
+		t.Fatalf("system root changed: got %d want %d", after.SystemRootPageID, newSystemRoot)
+	}
+
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("expected snapshot")
+	}
+	defer snap.Close()
+	sysEntry, err := snap.GetEntryAtRoot(newSystemRoot, []byte("sys/collections/users/primary"))
+	if err != nil {
+		t.Fatalf("GetEntryAtRoot(system primary descriptor): %v", err)
+	}
+	if got, want := string(sysEntry.Value), strconv.FormatUint(rootIDs[0], 10); got != want {
+		t.Fatalf("primary descriptor root=%q want %q", got, want)
+	}
+	sysEntry, err = snap.GetEntryAtRoot(newSystemRoot, []byte("sys/collections/users/email_idx"))
+	if err != nil {
+		t.Fatalf("GetEntryAtRoot(system index descriptor): %v", err)
+	}
+	if got, want := string(sysEntry.Value), strconv.FormatUint(rootIDs[1], 10); got != want {
+		t.Fatalf("index descriptor root=%q want %q", got, want)
+	}
+	entry, err := snap.GetEntryAtRoot(rootIDs[0], []byte("doc/u1"))
+	if err != nil {
+		t.Fatalf("GetEntryAtRoot(primary): %v", err)
+	}
+	if got := string(entry.Value); got != "document" {
+		t.Fatalf("primary value=%q want %q", got, "document")
+	}
+	entry, err = snap.GetEntryAtRoot(rootIDs[1], []byte("idx/email/u1"))
+	if err != nil {
+		t.Fatalf("GetEntryAtRoot(index): %v", err)
+	}
+	if got := string(entry.Value); got != "" {
+		t.Fatalf("index value=%q want empty", got)
+	}
+}
+
+func TestPublishOrderedRootGroupWithSystemBuilder_ErrorLeavesMetaRootsUnchanged(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+
+	if err := db.Set([]byte("user/a"), []byte("uv")); err != nil {
+		t.Fatalf("set user key: %v", err)
+	}
+	before := db.State()
+	if before == nil {
+		t.Fatal("expected backend state")
+	}
+
+	var builderRootIDs []uint64
+	_, _, err = db.PublishOrderedRootGroupWithSystemBuilder([]OrderedRootPublishInput{{
+		BaseRoot: 0,
+		Iter:     mustFrozenSystemMemtable(t, "doc/u1", "document").NewIterator(nil, nil),
+	}}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		builderRootIDs = append([]uint64(nil), rootIDs...)
+		return nil, errors.New("system descriptor build failed")
+	})
+	if err == nil {
+		t.Fatal("expected system builder error")
+	}
+	if len(builderRootIDs) != 1 || builderRootIDs[0] == 0 {
+		t.Fatalf("builder root IDs=%v want one non-zero root", builderRootIDs)
+	}
+	after := db.State()
+	if after == nil {
+		t.Fatal("expected backend state after failed publish")
+	}
+	if after.CommitSeq != before.CommitSeq {
+		t.Fatalf("commit seq changed after failed publish: got %d want %d", after.CommitSeq, before.CommitSeq)
+	}
+	if after.RootPageID != before.RootPageID {
+		t.Fatalf("user root changed after failed publish: got %d want %d", after.RootPageID, before.RootPageID)
+	}
+	if after.SystemRootPageID != before.SystemRootPageID {
+		t.Fatalf("system root changed after failed publish: got %d want %d", after.SystemRootPageID, before.SystemRootPageID)
+	}
+
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("expected snapshot")
+	}
+	defer snap.Close()
+	if _, err := snap.GetEntryAtRoot(after.SystemRootPageID, []byte("sys/collections/users/primary")); err == nil {
+		t.Fatal("unexpected system descriptor after failed publish")
 	}
 }
 

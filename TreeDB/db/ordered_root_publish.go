@@ -43,6 +43,12 @@ type OrderedRootPublishInput struct {
 	Iter     iterator.UnsafeIterator
 }
 
+// OrderedRootGroupSystemBuilder builds a target system-root iterator after the
+// non-system roots in a group have been built. The rootIDs slice is ordered to
+// match the OrderedRootPublishInput slice passed to
+// PublishOrderedRootGroupWithSystemBuilder.
+type OrderedRootGroupSystemBuilder func(rootIDs []uint64) (iterator.UnsafeIterator, error)
+
 func selectOrderedRootWarmPublishPlan(hasExistingEntries bool, deltaOps int, maxDeltaOps int) orderedRootPublishPlan {
 	if !hasExistingEntries {
 		return orderedRootPublishPlanColdBuild
@@ -439,6 +445,24 @@ func (db *DB) PublishOrderedRootIterator(baseRoot uint64, iter iterator.UnsafeIt
 // group in one backend commit. Non-system roots are built from ordered
 // iterators and become durable when the grouped commit finalizes.
 func (db *DB) PublishOrderedRootGroup(systemIter iterator.UnsafeIterator, ordered []OrderedRootPublishInput) (uint64, []uint64, error) {
+	return db.publishOrderedRootGroup(systemIter, ordered, nil)
+}
+
+// PublishOrderedRootGroupWithSystemBuilder builds non-system roots first, then
+// calls buildSystemIter with the produced root IDs and commits the system root
+// plus all non-system roots in one backend commit. This is intended for callers
+// whose system descriptors must store the new root IDs produced by the group.
+func (db *DB) PublishOrderedRootGroupWithSystemBuilder(ordered []OrderedRootPublishInput, buildSystemIter OrderedRootGroupSystemBuilder) (uint64, []uint64, error) {
+	if buildSystemIter == nil {
+		return 0, nil, errors.New("nil ordered root group system builder")
+	}
+	return db.publishOrderedRootGroup(nil, ordered, buildSystemIter)
+}
+
+func (db *DB) publishOrderedRootGroup(systemIter iterator.UnsafeIterator, ordered []OrderedRootPublishInput, buildSystemIter OrderedRootGroupSystemBuilder) (uint64, []uint64, error) {
+	if systemIter != nil && buildSystemIter != nil {
+		return 0, nil, errors.New("ordered root group cannot use both system iterator and system builder")
+	}
 	if db == nil {
 		return 0, nil, ErrClosed
 	}
@@ -492,6 +516,26 @@ func (db *DB) PublishOrderedRootGroup(systemIter iterator.UnsafeIterator, ordere
 		rootIDs[idx] = rootID
 		retired = append(retired, rootRetired...)
 		mergeOrderedRootPublishMetrics(&merged, metrics)
+	}
+
+	if buildSystemIter != nil {
+		builtRootIDs := append([]uint64(nil), rootIDs...)
+		iter, err := buildSystemIter(builtRootIDs)
+		if err != nil {
+			return 0, nil, err
+		}
+		if iter == nil {
+			return 0, nil, errors.New("nil system root iterator")
+		}
+		rootID, rootRetired, metrics, publishStats, refDelta, err := db.publishOrderedRootIterator(baseSystemRoot, iter, opts, true)
+		if err != nil {
+			return 0, nil, err
+		}
+		newSystemRoot = rootID
+		retired = append(retired, rootRetired...)
+		mergeOrderedRootPublishMetrics(&merged, metrics)
+		systemStats = publishStats
+		vlogRefDelta = refDelta
 	}
 
 	db.mu.RLock()
