@@ -230,34 +230,43 @@ func (c *Collection) InsertBatch(ids, documents [][]byte) ([][]byte, error) {
 		primaryRootID:      catalog.rootID(collectionPrimaryRootName(c.meta.Name)),
 		uniqueIndexRootIDs: uniqueIndexRootIDs(catalog),
 	})
-	_ = snap.Close()
 	if err != nil {
+		_ = snap.Close()
 		return nil, err
 	}
 	if len(plan.runs) == 0 {
+		_ = snap.Close()
 		return cloneIDBatch(plan.resultIDs), nil
 	}
 
-	ordered := make([]backenddb.OrderedRootPublishInput, 0, len(plan.runs))
+	baseRootIDs := make(map[string]uint64, len(plan.runs))
+	for _, run := range plan.runs {
+		baseRootIDs[run.name] = catalog.rootID(run.name)
+	}
+	_ = snap.Close()
+
+	ordered := make([]backenddb.OrderedRootDeltaPublishInput, 0, len(plan.runs))
 	iterators := make([]iterator.UnsafeIterator, 0, len(plan.runs))
 	defer func() {
 		for _, it := range iterators {
 			_ = it.Close()
 		}
 	}()
-	baseRootIDs := make(map[string]uint64, len(plan.runs))
 	for _, run := range plan.runs {
-		baseRootIDs[run.name] = catalog.rootID(run.name)
 		iter := run.table.NewIterator(nil, nil)
 		iterators = append(iterators, iter)
-		ordered = append(ordered, backenddb.OrderedRootPublishInput{
+		ordered = append(ordered, backenddb.OrderedRootDeltaPublishInput{
 			BaseRoot: baseRootIDs[run.name],
 			Iter:     iter,
 		})
 	}
 
-	_, rootIDs, err := c.db.PublishOrderedRootGroupWithSystemBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
-		return c.buildInsertSystemIterator(plan, baseRootIDs, rootIDs)
+	rootNames := make([]string, len(plan.runs))
+	for i, run := range plan.runs {
+		rootNames[i] = run.name
+	}
+	_, rootIDs, err := c.db.PublishOrderedRootDeltaGroupWithSystemBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		return c.buildRootDescriptorSystemIterator(rootNames, baseRootIDs, rootIDs)
 	})
 	if err != nil {
 		return nil, err
@@ -268,8 +277,137 @@ func (c *Collection) InsertBatch(ids, documents [][]byte) ([][]byte, error) {
 	return cloneIDBatch(plan.resultIDs), nil
 }
 
-func (c *Collection) buildInsertSystemIterator(plan *insertBatchPlan, baseRootIDs map[string]uint64, rootIDs []uint64) (iterator.UnsafeIterator, error) {
-	if len(rootIDs) != len(plan.runs) {
+func (c *Collection) Delete(documentID []byte) error {
+	if c == nil {
+		return errCollectionNil
+	}
+	if c.db == nil {
+		return errors.New("collections: db is nil")
+	}
+	if len(documentID) == 0 {
+		return errors.New("collections: document id cannot be empty")
+	}
+
+	snap := c.db.AcquireSnapshot()
+	if snap == nil {
+		return backenddb.ErrClosed
+	}
+	catalog, err := loadCollectionCatalog(snap, c.meta.Name)
+	if err != nil {
+		_ = snap.Close()
+		return err
+	}
+	if catalog == nil {
+		_ = snap.Close()
+		return errCollectionNotFound
+	}
+	c.meta = catalog.meta
+
+	primaryRoot := catalog.rootID(collectionPrimaryRootName(c.meta.Name))
+	if primaryRoot == 0 {
+		_ = snap.Close()
+		return nil
+	}
+	entry, err := snap.GetEntryAtRoot(primaryRoot, documentID)
+	if errors.Is(err, tree.ErrKeyNotFound) {
+		_ = snap.Close()
+		return nil
+	}
+	if err != nil {
+		_ = snap.Close()
+		return err
+	}
+
+	runtimes, err := (insertBatchPlanner{
+		collection: c.meta.Name,
+		indexes:    plannerIndexes(c.meta.Indexes),
+	}).indexRuntimes()
+	if err != nil {
+		_ = snap.Close()
+		return err
+	}
+	var state documentIndexState
+	if len(runtimes) > 0 {
+		state, err = loadDeleteIndexState(snap, catalog, documentID, entry.Value, runtimes, collectionOptions{
+			allowArrayValuesInIndex: c.meta.Options.AllowArrayValuesInIndex,
+		})
+		if err != nil {
+			_ = snap.Close()
+			return err
+		}
+	}
+
+	rootNames := []string{collectionPrimaryRootName(c.meta.Name)}
+	baseRootIDs := map[string]uint64{
+		rootNames[0]: primaryRoot,
+	}
+	deltaTables := make([]memtable.Table, 0, 2+len(runtimes))
+	deltaTables = append(deltaTables, buildDeleteRootDeltaTable([][]byte{documentID}))
+
+	if len(runtimes) > 0 {
+		stateRootName := collectionIndexStateRootName(c.meta.Name)
+		stateRootID := catalog.rootID(stateRootName)
+		if stateRootID != 0 {
+			rootNames = append(rootNames, stateRootName)
+			baseRootIDs[stateRootName] = stateRootID
+			deltaTables = append(deltaTables, buildDeleteRootDeltaTable([][]byte{documentID}))
+		}
+		for _, runtime := range runtimes {
+			deleteKeys, err := secondaryDeleteKeysForDocument(runtime, state, documentID)
+			if err != nil {
+				_ = snap.Close()
+				return err
+			}
+			rootName := collectionSecondaryRootName(c.meta.Name, runtime.def.name)
+			rootID := catalog.rootID(rootName)
+			if rootID == 0 || len(deleteKeys) == 0 {
+				continue
+			}
+			rootNames = append(rootNames, rootName)
+			baseRootIDs[rootName] = rootID
+			deltaTables = append(deltaTables, buildDeleteRootDeltaTable(deleteKeys))
+		}
+	}
+	_ = snap.Close()
+
+	ordered := make([]backenddb.OrderedRootDeltaPublishInput, 0, len(rootNames))
+	iterators := make([]iterator.UnsafeIterator, 0, len(rootNames))
+	defer func() {
+		for _, it := range iterators {
+			_ = it.Close()
+		}
+	}()
+	for i, rootName := range rootNames {
+		iter := deltaTables[i].NewIterator(nil, nil)
+		iterators = append(iterators, iter)
+		ordered = append(ordered, backenddb.OrderedRootDeltaPublishInput{
+			BaseRoot: baseRootIDs[rootName],
+			Iter:     iter,
+		})
+	}
+	_, rootIDs, err := c.db.PublishOrderedRootDeltaGroupWithSystemBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		return c.buildRootDescriptorSystemIterator(rootNames, baseRootIDs, rootIDs)
+	})
+	if err != nil {
+		return err
+	}
+	if len(rootIDs) != len(rootNames) {
+		return errors.New("collections: ordered root publish returned unexpected root count")
+	}
+	return nil
+}
+
+func buildDeleteRootDeltaTable(deleteKeys [][]byte) memtable.Table {
+	table := newCollectionRunTable(len(deleteKeys))
+	for _, key := range deleteKeys {
+		table.DeleteSteal(bytes.Clone(key))
+	}
+	table.Freeze()
+	return table
+}
+
+func (c *Collection) buildRootDescriptorSystemIterator(rootNames []string, baseRootIDs map[string]uint64, rootIDs []uint64) (iterator.UnsafeIterator, error) {
+	if len(rootIDs) != len(rootNames) {
 		return nil, errors.New("collections: ordered root publish returned unexpected root count")
 	}
 	current := c.db.AcquireSnapshot()
@@ -284,20 +422,53 @@ func (c *Collection) buildInsertSystemIterator(plan *insertBatchPlan, baseRootID
 	if catalog == nil {
 		return nil, errCollectionNotFound
 	}
-	for _, run := range plan.runs {
-		if got, want := catalog.rootID(run.name), baseRootIDs[run.name]; got != want {
-			return nil, fmt.Errorf("collections: concurrent root modification detected for %q", run.name)
+	for _, rootName := range rootNames {
+		if got, want := catalog.rootID(rootName), baseRootIDs[rootName]; got != want {
+			return nil, fmt.Errorf("collections: concurrent root modification detected for %q", rootName)
 		}
 	}
-	updates := make(map[string][]byte, len(plan.runs))
-	for i, run := range plan.runs {
-		updates[systemCollectionRootKey(run.name)] = encodeRootID(rootIDs[i])
+	updates := make(map[string][]byte, len(rootNames))
+	for i, rootName := range rootNames {
+		updates[systemCollectionRootKey(rootName)] = encodeRootID(rootIDs[i])
 	}
 	table, err := buildSystemTargetTable(current, updates)
 	if err != nil {
 		return nil, err
 	}
 	return table.NewIterator(nil, nil), nil
+}
+
+func loadDeleteIndexState(snap *backenddb.Snapshot, catalog *collectionCatalog, documentID, document []byte, runtimes []indexRuntime, opts collectionOptions) (documentIndexState, error) {
+	if catalog == nil || len(runtimes) == 0 {
+		return nil, nil
+	}
+	stateRoot := catalog.rootID(collectionIndexStateRootName(catalog.meta.Name))
+	if stateRoot != 0 {
+		entry, err := snap.GetEntryAtRoot(stateRoot, documentID)
+		if err == nil {
+			return decodeDocumentIndexState(entry.Value)
+		}
+		if err != nil && !errors.Is(err, tree.ErrKeyNotFound) {
+			return nil, err
+		}
+	}
+	return indexStateForDocument(document, runtimes, opts)
+}
+
+func secondaryDeleteKeysForDocument(runtime indexRuntime, state documentIndexState, documentID []byte) ([][]byte, error) {
+	values := state[runtime.def.name]
+	if len(values) == 0 {
+		return nil, nil
+	}
+	out := make([][]byte, 0, len(values))
+	for _, encoded := range values {
+		key, err := indexEntryKey(encoded, documentID)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, key)
+	}
+	return out, nil
 }
 
 func (c *Collection) Get(documentID []byte) ([]byte, error) {

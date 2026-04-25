@@ -491,6 +491,57 @@ func encodeDocumentIndexState(state documentIndexState) ([]byte, error) {
 	return out, nil
 }
 
+func decodeDocumentIndexState(raw []byte) (documentIndexState, error) {
+	if len(raw) == 0 {
+		return nil, errors.New("collections: empty index state")
+	}
+	if raw[0] != documentIndexStateVersion {
+		return nil, fmt.Errorf("collections: unsupported index state version %d", raw[0])
+	}
+	pos := 1
+	if len(raw)-pos < 2 {
+		return nil, errors.New("collections: malformed index state")
+	}
+	count := int(binary.BigEndian.Uint16(raw[pos:]))
+	pos += 2
+	state := make(documentIndexState, count)
+	for i := 0; i < count; i++ {
+		if len(raw)-pos < 2 {
+			return nil, errors.New("collections: malformed index state name length")
+		}
+		nameLen := int(binary.BigEndian.Uint16(raw[pos:]))
+		pos += 2
+		if nameLen == 0 || len(raw)-pos < nameLen {
+			return nil, errors.New("collections: malformed index state name")
+		}
+		name := string(raw[pos : pos+nameLen])
+		pos += nameLen
+		if len(raw)-pos < 2 {
+			return nil, errors.New("collections: malformed index state value count")
+		}
+		valueCount := int(binary.BigEndian.Uint16(raw[pos:]))
+		pos += 2
+		values := make([][]byte, 0, valueCount)
+		for j := 0; j < valueCount; j++ {
+			if len(raw)-pos < 2 {
+				return nil, errors.New("collections: malformed index state value length")
+			}
+			valueLen := int(binary.BigEndian.Uint16(raw[pos:]))
+			pos += 2
+			if valueLen == 0 || len(raw)-pos < valueLen {
+				return nil, errors.New("collections: malformed index state value")
+			}
+			values = append(values, bytes.Clone(raw[pos:pos+valueLen]))
+			pos += valueLen
+		}
+		state[name] = normalizeEncodedIndexValues(values)
+	}
+	if pos != len(raw) {
+		return nil, errors.New("collections: trailing index state bytes")
+	}
+	return state, nil
+}
+
 func normalizeEncodedIndexValues(values [][]byte) [][]byte {
 	if len(values) == 0 {
 		return nil
