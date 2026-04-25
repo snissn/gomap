@@ -338,34 +338,44 @@ func (db *DB) Has(key []byte) (bool, error) {
 
 // Set sets the value for a key.
 func (db *DB) Set(key, value []byte) error {
-	if handled, err := db.writeViaCommitCombiner(key, value, false, false); handled {
+	unlock := db.lockUpdateKey(key)
+	defer unlock()
+	return db.setPoint(key, value, false)
+}
+
+func (db *DB) setPoint(key, value []byte, sync bool) error {
+	if handled, err := db.writeViaCommitCombiner(key, value, false, sync); handled {
 		return err
 	}
-	return db.writeSingleKV(key, value, false, false)
+	return db.writeSingleKV(key, value, false, sync)
 }
 
 // SetSync sets the value and syncs to disk.
 func (db *DB) SetSync(key, value []byte) error {
-	if handled, err := db.writeViaCommitCombiner(key, value, false, true); handled {
-		return err
-	}
-	return db.writeSingleKV(key, value, false, true)
+	unlock := db.lockUpdateKey(key)
+	defer unlock()
+	return db.setPoint(key, value, true)
 }
 
 // Delete removes a key.
 func (db *DB) Delete(key []byte) error {
-	if handled, err := db.writeViaCommitCombiner(key, nil, true, false); handled {
+	unlock := db.lockUpdateKey(key)
+	defer unlock()
+	return db.deletePoint(key, false)
+}
+
+func (db *DB) deletePoint(key []byte, sync bool) error {
+	if handled, err := db.writeViaCommitCombiner(key, nil, true, sync); handled {
 		return err
 	}
-	return db.writeSingleKV(key, nil, true, false)
+	return db.writeSingleKV(key, nil, true, sync)
 }
 
 // DeleteSync removes a key and syncs.
 func (db *DB) DeleteSync(key []byte) error {
-	if handled, err := db.writeViaCommitCombiner(key, nil, true, true); handled {
-		return err
-	}
-	return db.writeSingleKV(key, nil, true, true)
+	unlock := db.lockUpdateKey(key)
+	defer unlock()
+	return db.deletePoint(key, true)
 }
 
 // DBIterator wraps tree.Iterator and holds a Snapshot.

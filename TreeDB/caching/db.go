@@ -30,6 +30,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/compression"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/internal/keyupdate"
 	"github.com/snissn/gomap/TreeDB/internal/limits"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/merging"
@@ -6134,12 +6135,13 @@ type memtableViewLifecycleTelemetry struct {
 }
 
 type DB struct {
-	mu      sync.RWMutex
-	flushMu sync.Mutex
-	writeMu sync.RWMutex
-	statsMu sync.Mutex // Re-introduce global statsMu for isolation
-	bpMu    sync.Mutex
-	bpCond  *sync.Cond
+	mu          sync.RWMutex
+	flushMu     sync.Mutex
+	writeMu     sync.RWMutex
+	updateLocks keyupdate.Locks
+	statsMu     sync.Mutex // Re-introduce global statsMu for isolation
+	bpMu        sync.Mutex
+	bpCond      *sync.Cond
 
 	// Commit workers removed; backend commits are synchronous.
 
@@ -19257,6 +19259,8 @@ func (db *DB) Set(key, value []byte) error {
 		return ErrValueNil
 	}
 	db.waitForCheckpoint()
+	unlock := db.lockUpdateKey(key)
+	defer unlock()
 	return db.set(key, value, false)
 }
 
@@ -19268,7 +19272,56 @@ func (db *DB) SetSync(key, value []byte) error {
 		return ErrValueNil
 	}
 	db.waitForCheckpoint()
+	unlock := db.lockUpdateKey(key)
+	defer unlock()
 	return db.set(key, value, true)
+}
+
+// Update applies fn to the current value for key and writes the returned
+// mutation without forcing an fsync boundary.
+func (db *DB) Update(key []byte, fn backenddb.UpdateFunc) error {
+	return db.update(key, fn, false)
+}
+
+// UpdateSync applies fn to the current value for key and writes the returned
+// mutation with a sync durability boundary.
+func (db *DB) UpdateSync(key []byte, fn backenddb.UpdateFunc) error {
+	return db.update(key, fn, true)
+}
+
+func (db *DB) update(key []byte, fn backenddb.UpdateFunc, syncWrite bool) error {
+	if len(key) == 0 {
+		return ErrKeyEmpty
+	}
+	if fn == nil {
+		return backenddb.ErrNilUpdateFunc
+	}
+	db.waitForCheckpoint()
+
+	unlock := db.lockUpdateKey(key)
+	defer unlock()
+
+	old, err := db.Get(key)
+	if err != nil {
+		return err
+	}
+	result, err := fn(old)
+	if err != nil {
+		return err
+	}
+	switch result.Op {
+	case backenddb.UpdateNoop:
+		return nil
+	case backenddb.UpdateSet:
+		if result.Value == nil {
+			return ErrValueNil
+		}
+		return db.set(key, result.Value, syncWrite)
+	case backenddb.UpdateDelete:
+		return db.delete(key, syncWrite)
+	default:
+		return fmt.Errorf("treedb: unknown update op %d", result.Op)
+	}
 }
 
 func (db *DB) flushAllMemtablesForSync(sync bool) error {
@@ -19509,6 +19562,8 @@ func (db *DB) Delete(key []byte) error {
 		return ErrKeyEmpty
 	}
 	db.waitForCheckpoint()
+	unlock := db.lockUpdateKey(key)
+	defer unlock()
 	return db.delete(key, false)
 }
 
@@ -20120,7 +20175,16 @@ func (db *DB) DeleteSync(key []byte) error {
 		return ErrKeyEmpty
 	}
 	db.waitForCheckpoint()
+	unlock := db.lockUpdateKey(key)
+	defer unlock()
 	return db.delete(key, true)
+}
+
+func (db *DB) lockUpdateKey(key []byte) func() {
+	if db == nil {
+		return func() {}
+	}
+	return db.updateLocks.Lock(key)
 }
 
 func (db *DB) delete(key []byte, sync bool) error {

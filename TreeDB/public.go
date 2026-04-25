@@ -82,43 +82,38 @@ type getManyPlanner interface {
 }
 
 // UpdateOp describes the write produced by an Update callback.
-type UpdateOp uint8
+type UpdateOp = db.UpdateOp
 
 const (
 	// UpdateNoop leaves the key unchanged.
-	UpdateNoop UpdateOp = iota
+	UpdateNoop = db.UpdateNoop
 	// UpdateSet replaces the key with Value.
-	UpdateSet
+	UpdateSet = db.UpdateSet
 	// UpdateDelete removes the key.
-	UpdateDelete
+	UpdateDelete = db.UpdateDelete
 )
 
 // UpdateResult is returned by an Update callback.
-type UpdateResult struct {
-	Op    UpdateOp
-	Value []byte
-}
+type UpdateResult = db.UpdateResult
 
 // SetUpdate returns an Update result that replaces the key with value.
 func SetUpdate(value []byte) UpdateResult {
-	return UpdateResult{Op: UpdateSet, Value: value}
+	return db.SetUpdate(value)
 }
 
 // DeleteUpdate returns an Update result that removes the key.
 func DeleteUpdate() UpdateResult {
-	return UpdateResult{Op: UpdateDelete}
+	return db.DeleteUpdate()
 }
 
 // NoopUpdate returns an Update result that leaves the key unchanged.
 func NoopUpdate() UpdateResult {
-	return UpdateResult{Op: UpdateNoop}
+	return db.NoopUpdate()
 }
 
 // UpdateFunc transforms the current value for a key into a mutation. The old
 // value is nil when the key is absent and is a safe copy when present.
-type UpdateFunc func(old []byte) (UpdateResult, error)
-
-const updateLockStripes = 256
+type UpdateFunc = db.UpdateFunc
 
 // DB is the public TreeDB handle (cached mode by default; read-only opens skip caching).
 type DB struct {
@@ -133,7 +128,6 @@ type DB struct {
 	bgErr          error
 	durabilityMode string
 	dir            string
-	updateLocks    [updateLockStripes]sync.Mutex
 	maintenance    maintenanceCoordinator
 }
 
@@ -1428,12 +1422,18 @@ func (db *DB) SetSync(key, value []byte) error {
 //
 // Concurrent Update calls for the same key on the same DB handle are serialized
 // around the read-modify-write sequence, so callbacks observe prior committed
-// Update results and do not lose each other's changes. Direct Set/Delete calls
-// remain unconditional writes and are not coordinated with this logical update
-// contract. The callback runs while the key update lock is held, so it should
-// avoid long-running work or recursive Update calls for the same key.
+// Update results and do not lose each other's changes. Point Set/Delete calls on
+// the same handle participate in the same single-key serialization but remain
+// unconditional writes. The callback runs while the key update lock is held, so
+// it should avoid long-running work or recursive Update calls for the same key.
 func (db *DB) Update(key []byte, fn UpdateFunc) error {
-	return db.update(key, fn, false)
+	if err := db.ensureOpen(); err != nil {
+		return err
+	}
+	if db.cached != nil {
+		return db.cached.Update(key, fn)
+	}
+	return db.backend.Update(key, fn)
 }
 
 // UpdateSync applies fn to the current value for key and writes the returned
@@ -1445,64 +1445,13 @@ func (db *DB) Update(key []byte, fn UpdateFunc) error {
 // serialized around the read-modify-write sequence. The callback runs while the
 // key update lock is held.
 func (db *DB) UpdateSync(key []byte, fn UpdateFunc) error {
-	return db.update(key, fn, true)
-}
-
-func (db *DB) update(key []byte, fn UpdateFunc, syncWrite bool) error {
 	if err := db.ensureOpen(); err != nil {
 		return err
 	}
-	if len(key) == 0 {
-		return caching.ErrKeyEmpty
+	if db.cached != nil {
+		return db.cached.UpdateSync(key, fn)
 	}
-	if fn == nil {
-		return errors.New("treedb: nil update function")
-	}
-
-	lock := db.updateLock(key)
-	lock.Lock()
-	defer lock.Unlock()
-
-	old, err := db.Get(key)
-	if err != nil {
-		return err
-	}
-	result, err := fn(old)
-	if err != nil {
-		return err
-	}
-	switch result.Op {
-	case UpdateNoop:
-		return nil
-	case UpdateSet:
-		if result.Value == nil {
-			return caching.ErrValueNil
-		}
-		if syncWrite {
-			return db.SetSync(key, result.Value)
-		}
-		return db.Set(key, result.Value)
-	case UpdateDelete:
-		if syncWrite {
-			return db.DeleteSync(key)
-		}
-		return db.Delete(key)
-	default:
-		return fmt.Errorf("treedb: unknown update op %d", result.Op)
-	}
-}
-
-func (db *DB) updateLock(key []byte) *sync.Mutex {
-	return &db.updateLocks[updateLockIndex(key)]
-}
-
-func updateLockIndex(key []byte) uint32 {
-	h := uint32(2166136261)
-	for _, b := range key {
-		h ^= uint32(b)
-		h *= 16777619
-	}
-	return h & (updateLockStripes - 1)
+	return db.backend.UpdateSync(key, fn)
 }
 
 // Delete removes a key without forcing an fsync boundary.

@@ -86,7 +86,8 @@ Mechanisms:
 - mutexes/RWMutex/condvars for critical sections and barriers.
 
 Key lock families:
-- public DB: `updateLocks[]` for single-key `Update`/`UpdateSync` read-modify-write serialization,
+- cached and backend DB: `updateLocks[]` for single-key `Update`/`UpdateSync`
+  read-modify-write serialization,
 - cached DB global: `mu`, `writeMu`, `flushMu`, `checkpointMu`, `laneMu`, `bpMu`,
 - cached per shard/lane: shard `mu`, lane `walMu`, lane `vlogMu`, `flushLaneMu[]`, `walFastMu`,
 - backend DB: `mu`, `writeMu`, `commitMu`, `idxMu`, plus worker-local mutexes.
@@ -188,16 +189,18 @@ Workers:
 - background index vacuum (public wrapper),
 - dictionary profile application loop.
 
-### 3.11 Public single-key update serialization
+### 3.11 Single-key update serialization
 
 Mechanism:
-- `DB.Update` and `DB.UpdateSync` hash the requested key into a fixed set of
-  per-handle mutex stripes before running the public `Get` + callback +
-  `Set`/`Delete` sequence.
+- cached and backend `DB.Update`/`DB.UpdateSync` hash the requested key into a
+  fixed set of per-handle mutex stripes before running the `Get` + callback +
+  point-write sequence.
 
 Effects:
 - concurrent logical updates to the same key on the same `DB` handle are
   serialized,
+- point `Set`/`SetSync`/`Delete`/`DeleteSync` calls use the same single-key
+  coordinator on the same handle,
 - callers can implement conflict-safe single-key mutations, such as
   set-membership add/remove, without an external global lock,
 - unrelated keys usually proceed independently, subject to stripe collisions and
@@ -205,8 +208,8 @@ Effects:
 
 Limits:
 - this is not a multi-key transaction mechanism,
-- direct `Set`/`Delete` calls remain unconditional writes and are not
-  compare-and-swap checked against concurrent `Update` callbacks,
+- point `Set`/`Delete` calls remain unconditional writes,
+- batch writes do not acquire the single-key update coordinator,
 - the update callback runs while the stripe lock is held and should not recurse
   into `Update` for the same key/stripe.
 
@@ -231,8 +234,8 @@ Limits:
 ### 4.2 Lock-order constraints that must hold
 
 Current order constraints:
-- public `Update`/`UpdateSync` take an update stripe lock before entering public
-  read/write APIs; lower layers must not call back into public update locks.
+- cached/backend `Update`/`UpdateSync` and point writes take an update stripe
+  lock before entering lower write paths.
 - `flushMu` before `checkpointMu` when both are needed.
 - `Checkpoint` acquires `flushMu` then `writeMu`.
 - `Close` mirrors `flushMu` then `writeMu` to avoid deadlock with auto-checkpoint.
