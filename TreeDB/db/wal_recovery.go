@@ -25,9 +25,8 @@ type logSegment struct {
 	fileID   uint32
 }
 
-func listWALSegments(dir string) ([]logSegment, error) {
-	walDir := filepath.Join(dir, "wal")
-	entries, err := os.ReadDir(walDir)
+func listSegmentsInDir(segDir string) ([]logSegment, error) {
+	entries, err := os.ReadDir(segDir)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
@@ -49,7 +48,7 @@ func listWALSegments(dir string) ([]logSegment, error) {
 		seg := logSegment{
 			seq:      seq,
 			lane:     lane,
-			path:     filepath.Join(walDir, name),
+			path:     filepath.Join(segDir, name),
 			valueLog: valueLog,
 		}
 		if info, err := entry.Info(); err == nil {
@@ -73,6 +72,59 @@ func listWALSegments(dir string) ([]logSegment, error) {
 			return segments[i].lane < segments[j].lane
 		}
 		return segments[i].seq < segments[j].seq
+	})
+	return segments, nil
+}
+
+func listWALSegments(dir string) ([]logSegment, error) {
+	return listSegmentsInDir(resolveStorageLayout(dir).walDir)
+}
+
+func listValueLogSegments(dir string) ([]logSegment, error) {
+	layout := resolveStorageLayout(dir)
+	all := make([]logSegment, 0)
+	for _, segDir := range []string{layout.valueVLogDir, layout.leafVLogDir} {
+		segments, err := listSegmentsInDir(segDir)
+		if err != nil {
+			return nil, err
+		}
+		for _, seg := range segments {
+			if !seg.valueLog {
+				continue
+			}
+			all = append(all, seg)
+		}
+	}
+	sort.Slice(all, func(i, j int) bool {
+		if all[i].lane != all[j].lane {
+			return all[i].lane < all[j].lane
+		}
+		return all[i].seq < all[j].seq
+	})
+	return all, nil
+}
+
+func listRecoverySegments(dir string) ([]logSegment, error) {
+	walSegments, err := listWALSegments(dir)
+	if err != nil {
+		return nil, err
+	}
+	vlogSegments, err := listValueLogSegments(dir)
+	if err != nil {
+		return nil, err
+	}
+	segments := append(walSegments, vlogSegments...)
+	sort.Slice(segments, func(i, j int) bool {
+		if segments[i].lane != segments[j].lane {
+			return segments[i].lane < segments[j].lane
+		}
+		if segments[i].seq != segments[j].seq {
+			return segments[i].seq < segments[j].seq
+		}
+		if segments[i].valueLog != segments[j].valueLog {
+			return !segments[i].valueLog && segments[j].valueLog
+		}
+		return segments[i].path < segments[j].path
 	})
 	return segments, nil
 }
@@ -188,7 +240,7 @@ func scanValueLogSegments(segments []logSegment, dictLookup valuelog.DictLookup)
 		reader.ValidateDicts()
 		reader.SetDictLookup(dictLookup)
 		for {
-			rid, _, ptr, err := reader.ReadNext()
+			rid, ptr, err := reader.ReadNextMeta()
 			if err == nil {
 				if _, exists := ridMap[rid]; exists {
 					_ = reader.Close()
@@ -374,9 +426,14 @@ func newReplayInlineAppender(db *DB, segments []logSegment, ridMap map[uint64]pa
 		// segments within the same cap used by the write path.
 		maxSegmentBytes = int64(^uint32(0)) - 4
 	}
-	writer := newRewriteWriter(filepath.Join(db.dir, "wal"), 0, maxLane0Seq, maxSegmentBytes)
+	layout := resolveStorageLayout(db.dir)
+	writer := newRewriteWriter(layout.valueVLogDir, 0, maxLane0Seq, maxSegmentBytes)
+	if db.indexOuterLeavesInValueLog {
+		writer.ConfigureLeafLog(layout.leafVLogDir, rewriteLeafLogLaneID, maxRewriteLaneSeq(segments, rewriteLeafLogLaneID))
+	}
 	writer.blockCompression = db.valueLogCompression != ValueLogCompressionOff
 	writer.blockCodec = valuelogBlockCodecFromDB(db.valueLogBlockCodec)
+	writer.leafBlockCodec = leafPageBlockCodecFromOptions(db.valueLogCompression, db.valueLogAutoPolicy, db.valueLogBlockCodec, db.indexOuterLeavesInValueLog)
 	return &replayInlineAppender{
 		writer:  writer,
 		nextRID: maxRID + 1,
@@ -400,21 +457,28 @@ func (a *replayInlineAppender) append(value []byte) (page.ValuePtr, error) {
 	return ptr, nil
 }
 
-func (a *replayInlineAppender) AppendLeafPage(leafPage []byte) (page.ValuePtr, error) {
+func (a *replayInlineAppender) AppendLeafPage(leafPage []byte) (page.LeafLogPtr, error) {
 	if a == nil || a.writer == nil {
-		return page.ValuePtr{}, fmt.Errorf("commitlog: replay value-log appender unavailable")
+		return page.LeafLogPtr{}, fmt.Errorf("commitlog: replay value-log appender unavailable")
 	}
 	if a.nextRID == 0 {
-		return page.ValuePtr{}, fmt.Errorf("value-log rid space exhausted")
+		return page.LeafLogPtr{}, fmt.Errorf("value-log rid space exhausted")
 	}
 	rid := a.nextRID
 	a.nextRID++
-	ptr, err := a.writer.appendValue(rid, leafPage)
+	leafPtr, err := a.writer.appendLeafPageWithRID(rid, leafPage)
 	if err != nil {
-		return page.ValuePtr{}, err
+		return page.LeafLogPtr{}, err
 	}
 	a.dirty = true
-	return ptr, nil
+	return leafPtr, nil
+}
+
+func (a *replayInlineAppender) LastLeafPageRecordLength() uint32 {
+	if a == nil || a.writer == nil {
+		return 0
+	}
+	return a.writer.LastLeafPageRecordLength()
 }
 
 func (a *replayInlineAppender) Flush() error {

@@ -12,7 +12,7 @@ import (
 
 var (
 	reBatchWrite = regexp.MustCompile(`Batch Write / .* = ([0-9][0-9,]*(?:\.[0-9]+)?)`)
-	reWALValue   = regexp.MustCompile(`maindb/wal:[^\n]*\bvalue=([0-9]+(?:\.[0-9]+)?\s*[A-Za-z]+)`)
+	reValueLog   = regexp.MustCompile(`maindb/(?:value_vlog|wal):[^\n]*\bvalue=([0-9]+(?:\.[0-9]+)?\s*[A-Za-z]+)`)
 )
 
 type runMetrics struct {
@@ -30,7 +30,7 @@ func main() {
 	flag.StringVar(&offLogPath, "off-log", "", "path to unified_bench output for treedb_vlog_off")
 	flag.StringVar(&autoLogPath, "auto-log", "", "path to unified_bench output for treedb_vlog_auto")
 	flag.Float64Var(&minThroughputFrac, "min-throughput-frac", 0.95, "minimum allowed auto/off batch-write throughput fraction")
-	flag.Float64Var(&maxSizeFrac, "max-size-frac", 1.02, "maximum allowed auto/off WAL value-bytes fraction")
+	flag.Float64Var(&maxSizeFrac, "max-size-frac", 1.02, "maximum allowed auto/off value-log bytes fraction")
 	flag.Parse()
 
 	if offLogPath == "" || autoLogPath == "" {
@@ -61,7 +61,7 @@ func main() {
 	sizeFrac := auto.WALValue / off.WALValue
 
 	fmt.Printf("incompressible gate: off_ops=%.0f auto_ops=%.0f throughput_frac=%.4f (min=%.4f)\n", off.OpsPerSec, auto.OpsPerSec, throughputFrac, minThroughputFrac)
-	fmt.Printf("incompressible gate: off_wal_value=%.0f auto_wal_value=%.0f size_frac=%.4f (max=%.4f)\n", off.WALValue, auto.WALValue, sizeFrac, maxSizeFrac)
+	fmt.Printf("incompressible gate: off_value_log=%.0f auto_value_log=%.0f size_frac=%.4f (max=%.4f)\n", off.WALValue, auto.WALValue, sizeFrac, maxSizeFrac)
 
 	fail := false
 	if throughputFrac < minThroughputFrac {
@@ -94,13 +94,13 @@ func parseMetrics(path string) (runMetrics, error) {
 		return runMetrics{}, fmt.Errorf("parse ops: %w", err)
 	}
 
-	walMatch := reWALValue.FindStringSubmatch(s)
+	walMatch := reValueLog.FindStringSubmatch(s)
 	if len(walMatch) != 2 {
-		return runMetrics{}, fmt.Errorf("missing maindb/wal value bytes")
+		return runMetrics{}, fmt.Errorf("missing TreeDB value-log bytes")
 	}
 	walBytes, err := parseBytesToken(walMatch[1])
 	if err != nil {
-		return runMetrics{}, fmt.Errorf("parse wal value bytes: %w", err)
+		return runMetrics{}, fmt.Errorf("parse value-log bytes: %w", err)
 	}
 
 	return runMetrics{OpsPerSec: ops, WALValue: walBytes}, nil

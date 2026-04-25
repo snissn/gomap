@@ -86,7 +86,7 @@ func wireSideStoreLookups(rootDir string, opts *Options) (func() error, error) {
 			}
 			dictOpts := *opts
 			dictOpts.Dir = dictDir
-			dictOpts.ReadOnly = true
+			dictOpts.ReadOnly = opts.ReadOnly
 			dictOpts.ChunkSize = dictChunk
 			dictOpts.DisableBackgroundPrune = true
 			dictOpts.IgnoreFormatConfig = false
@@ -106,6 +106,31 @@ func wireSideStoreLookups(rootDir string, opts *Options) (func() error, error) {
 			store := dictdb.New(dictBackend)
 			opts.ValueLog.DictLookup = func(dictID uint64) ([]byte, error) {
 				return store.GetDictBytes(context.Background(), dictID)
+			}
+			if opts.ValueLog.DictCurrentForClass == nil {
+				opts.ValueLog.DictCurrentForClass = func(ctx context.Context, class string) (uint64, error) {
+					return store.GetCurrentForClass(ctx, class)
+				}
+			}
+			if opts.ValueLog.DictLeafPayloadMode == nil {
+				opts.ValueLog.DictLeafPayloadMode = func(ctx context.Context, dictID uint64) (bool, bool, error) {
+					return store.GetLeafPayloadMode(ctx, dictID)
+				}
+			}
+			if !dictOpts.ReadOnly && opts.ValueLog.DictPut == nil {
+				opts.ValueLog.DictPut = func(ctx context.Context, dictBytes []byte) (uint64, error) {
+					return store.PutDictBytes(ctx, dictBytes)
+				}
+			}
+			if !dictOpts.ReadOnly && opts.ValueLog.DictSetCurrentForClass == nil {
+				opts.ValueLog.DictSetCurrentForClass = func(ctx context.Context, class string, dictID uint64) error {
+					return store.SetCurrentForClass(ctx, class, dictID)
+				}
+			}
+			if !dictOpts.ReadOnly && opts.ValueLog.DictSetLeafPayloadMode == nil {
+				opts.ValueLog.DictSetLeafPayloadMode = func(ctx context.Context, dictID uint64, useRawPages bool) error {
+					return store.SetLeafPayloadMode(ctx, dictID, useRawPages)
+				}
 			}
 		}
 	}
@@ -129,7 +154,8 @@ func wireSideStoreLookups(rootDir string, opts *Options) (func() error, error) {
 			}
 			templateOpts := *opts
 			templateOpts.Dir = templateDir
-			templateOpts.ReadOnly = true
+			templateReadOnly := opts.ReadOnly || opts.ValueLog.TemplateMode == template.TemplateOff
+			templateOpts.ReadOnly = templateReadOnly
 			templateOpts.ChunkSize = templateChunk
 			templateOpts.DisableBackgroundPrune = true
 			templateOpts.IgnoreFormatConfig = false
@@ -147,6 +173,9 @@ func wireSideStoreLookups(rootDir string, opts *Options) (func() error, error) {
 			}
 			closers = append(closers, templateBackend.Close)
 			store := templatedb.New(templateBackendKV{db: templateBackend}, templatedb.Config{})
+			if !templateReadOnly && opts.ValueLog.TemplateMode != template.TemplateOff && opts.ValueLog.TemplateStore == nil {
+				opts.ValueLog.TemplateStore = store
+			}
 
 			if opts.ValueLog.TemplateDecodeOptions == (template.DecodeOptions{}) {
 				tcfg := template.NormalizeConfig(opts.ValueLog.TemplateConfig)

@@ -62,7 +62,7 @@ func TestDisableWAL_ReopenDoesNotReuseValueLogRIDs(t *testing.T) {
 	writeSession('a')
 	writeSession('b')
 
-	segments, _ := listNonEmptyLogSegments(filepath.Join(dir, "wal"))
+	segments, _ := listNonEmptyLogSegments(filepath.Join(dir, "value_vlog"))
 	dups := duplicateValueLogRIDCount(t, segments)
 	if dups != 0 {
 		t.Fatalf("expected no duplicate RIDs after reopen, got %d", dups)
@@ -105,7 +105,7 @@ func TestDisableWAL_OnlineRewriteDoesNotReuseValueLogRIDs(t *testing.T) {
 		t.Fatalf("Checkpoint seed: %v", err)
 	}
 
-	segments, _ := listNonEmptyLogSegments(filepath.Join(dir, "wal"))
+	segments, _ := listNonEmptyLogSegments(filepath.Join(dir, "value_vlog"))
 	var sourceID uint32
 	for _, seg := range segments {
 		if seg.valueLog {
@@ -155,7 +155,7 @@ func TestDisableWAL_OnlineRewriteDoesNotReuseValueLogRIDs(t *testing.T) {
 		t.Fatalf("Checkpoint after rewrite: %v", err)
 	}
 
-	segments, _ = listNonEmptyLogSegments(filepath.Join(dir, "wal"))
+	segments, _ = listNonEmptyLogSegments(filepath.Join(dir, "value_vlog"))
 	dups := duplicateValueLogRIDCount(t, segments)
 	if dups != 0 {
 		t.Fatalf("expected no duplicate RIDs after online rewrite, got %d", dups)

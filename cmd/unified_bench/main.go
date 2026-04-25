@@ -86,6 +86,7 @@ var (
 	checkpointEveryOps              = flag.Int("checkpoint-every-ops", 0, "Force a best-effort durability checkpoint every N ops during write-heavy tests (0=disabled; DBs that support Checkpoint())")
 	checkpointEveryBytes            = flag.Int64("checkpoint-every-bytes", 0, "Force a best-effort durability checkpoint every N approx bytes during write-heavy tests (0=disabled; DBs that support Checkpoint())")
 	batchWriteSteadyCheckpointBytes = flag.Int64("batch-write-steady-checkpoint-bytes", 64<<20, "batch_write_steady: default periodic checkpoint interval in bytes when checkpoint-every-* flags are unset (0 disables)")
+	batchWriteDictWarmup            = flag.Bool("batch-write-dict-warmup", false, "Enable pre-measurement dict warmup writes for batch_write* (TreeDB dict mode); off by default to keep measured runs on empty DB state")
 
 	flushdrainCheckpointMax = flag.Duration("flushdrain-checkpoint-max", 0, "Abort flushdrain suite if checkpoint-before-random_read exceeds this duration (0=disabled)")
 
@@ -164,6 +165,7 @@ type BenchConfig struct {
 	CheckpointEveryOps              int
 	CheckpointEveryBytes            int64
 	BatchWriteSteadyCheckpointBytes int64
+	BatchWriteDictWarmup            bool
 
 	SettleBeforeScans bool
 
@@ -197,8 +199,44 @@ type BenchRun struct {
 	VacuumIndexBytes    map[string]map[string][2]uint64 // [0]=before, [1]=after (best-effort; treedb only)
 	TreeDBDiskUsage     map[string]treeDBDiskUsage
 	TreeDBVlogRewrite   map[string]treeDBVlogRewriteReport
+	TreeDBPerf          map[string]map[string]treeDBPerfMetrics
 	TreeDBStats         map[string]map[string]string
 	DiskUsage           map[string]dirDiskUsage
+}
+
+type treeDBPerfMetrics struct {
+	Mmap                       treeDBMmapPerfMetrics     `json:"mmap,omitempty"`
+	Snapshot                   treeDBSnapshotPerfMetrics `json:"snapshot,omitempty"`
+	LeafGenerationsPinnedAfter int64                     `json:"leaf_generations_pinned_after,omitempty"`
+	LeafPinsTotalAfter         int64                     `json:"leaf_pins_total_after,omitempty"`
+}
+
+type treeDBMmapPerfMetrics struct {
+	Hits           uint64  `json:"hits,omitempty"`
+	MissOutOfRange uint64  `json:"miss_out_of_range,omitempty"`
+	MissNoMapping  uint64  `json:"miss_no_mapping,omitempty"`
+	MissDeadMapCap uint64  `json:"miss_dead_mapping_cap,omitempty"`
+	FallbackReadAt uint64  `json:"fallback_readat,omitempty"`
+	HitRatio       float64 `json:"hit_ratio,omitempty"`
+}
+
+type treeDBSnapshotPerfMetrics struct {
+	AcquireCalls      uint64  `json:"acquire_calls,omitempty"`
+	AcquireTotalNanos uint64  `json:"acquire_total_nanos,omitempty"`
+	AcquireAvgMicros  float64 `json:"acquire_avg_micros,omitempty"`
+	CloseCalls        uint64  `json:"close_calls,omitempty"`
+	CloseTotalNanos   uint64  `json:"close_total_nanos,omitempty"`
+	CloseAvgMicros    float64 `json:"close_avg_micros,omitempty"`
+}
+
+type treeDBSelectedStats struct {
+	mmapHits           uint64
+	mmapMissOutOfRange uint64
+	mmapMissNoMapping  uint64
+	mmapMissDeadCap    uint64
+	mmapFallbackReadAt uint64
+	leafGenerationsPin int64
+	leafPinsTotal      int64
 }
 
 type benchprofExport struct {
@@ -207,9 +245,10 @@ type benchprofExport struct {
 }
 
 type benchprofExportRun struct {
-	Keys    int                           `json:"keys"`
-	Profile string                        `json:"profile,omitempty"`
-	Results map[string]map[string]float64 `json:"results,omitempty"`
+	Keys       int                                     `json:"keys"`
+	Profile    string                                  `json:"profile,omitempty"`
+	Results    map[string]map[string]float64           `json:"results,omitempty"`
+	TreeDBPerf map[string]map[string]treeDBPerfMetrics `json:"treedb_perf,omitempty"`
 }
 
 type scanDiag struct {
@@ -245,9 +284,12 @@ type walDiskUsage struct {
 type treeDBDiskUsage struct {
 	MainIndexBytes uint64
 	MainWAL        walDiskUsage
+	MainValueLog   walDiskUsage
+	MainLeafLog    walDiskUsage
 
 	DictIndexBytes uint64
 	DictWAL        walDiskUsage
+	DictValueLog   walDiskUsage
 }
 
 type treeDBVlogRewriteReport struct {
@@ -313,6 +355,28 @@ func (s benchKeyShape) validate(maxKey uint64) error {
 		return fmt.Errorf("-key-shape=be8_prefix4 max key %d exceeds uint32 range", maxKey)
 	}
 	return nil
+}
+
+func (s benchKeyShape) maxKey() uint64 {
+	if s == benchKeyShapeBE8Prefix4 {
+		return uint64(math.MaxUint32)
+	}
+	return math.MaxUint64
+}
+
+func clampWarmupKeyCount(shape benchKeyShape, warmupBase uint64, warmupKeys int) int {
+	if warmupKeys <= 0 {
+		return 0
+	}
+	maxKey := shape.maxKey()
+	if warmupBase > maxKey {
+		return 0
+	}
+	remaining := maxKey - warmupBase + 1
+	if uint64(warmupKeys) > remaining {
+		return int(remaining)
+	}
+	return warmupKeys
 }
 
 func main() {
@@ -411,6 +475,7 @@ func main() {
 		CheckpointEveryOps:               *checkpointEveryOps,
 		CheckpointEveryBytes:             *checkpointEveryBytes,
 		BatchWriteSteadyCheckpointBytes:  *batchWriteSteadyCheckpointBytes,
+		BatchWriteDictWarmup:             *batchWriteDictWarmup,
 		SettleBeforeScans:                *settleBeforeScans,
 		TreeDBCacheStatsBeforeReads:      *treedbCacheStatsBeforeReads,
 		TreeDBCacheStatsAfterTests:       *treedbCacheStatsAfterTests,
@@ -668,6 +733,13 @@ func main() {
 			fmt.Println("TreeDB ValueLog Rewrite (After Run)")
 			fmt.Print(renderTreeDBVlogRewriteString(run.TreeDBVlogRewrite))
 		}
+		if run.Config.KeepDir {
+			if kept := strings.TrimSpace(renderKeptDirsString(run.Instances)); kept != "" {
+				fmt.Println()
+				fmt.Println("Kept Data Directories")
+				fmt.Print(kept)
+			}
+		}
 		if hasArtifacts {
 			runBenchprof(*profileDir)
 		}
@@ -721,6 +793,13 @@ func main() {
 				fmt.Println()
 				fmt.Println("TreeDB ValueLog Rewrite (After Run)")
 				fmt.Print(renderTreeDBVlogRewriteString(run.TreeDBVlogRewrite))
+			}
+			if run.Config.KeepDir {
+				if kept := strings.TrimSpace(renderKeptDirsString(run.Instances)); kept != "" {
+					fmt.Println()
+					fmt.Println("Kept Data Directories")
+					fmt.Print(kept)
+				}
 			}
 		}
 	case "markdown":
@@ -974,9 +1053,10 @@ func writeBenchprofArtifacts(dir string, runs []BenchRun) error {
 	}
 	for _, run := range runs {
 		out.Runs = append(out.Runs, benchprofExportRun{
-			Keys:    run.Config.Keys,
-			Profile: strings.TrimSpace(run.Config.Profile),
-			Results: run.Results,
+			Keys:       run.Config.Keys,
+			Profile:    strings.TrimSpace(run.Config.Profile),
+			Results:    run.Results,
+			TreeDBPerf: run.TreeDBPerf,
 		})
 	}
 
@@ -1021,12 +1101,109 @@ func printTreeDBCacheStats(w io.Writer, inst *DBInstance, prefix string) {
 		"treedb.cache.queue_len",
 		"treedb.cache.queue_backlog_bytes",
 		"treedb.cache.flush_threshold_bytes",
+		"treedb.cache.mutable_flush_threshold_base_bytes",
+		"treedb.cache.mutable_flush_threshold_effective_bytes",
 		"treedb.cache.max_queued_memtables",
 		"treedb.cache.flush_bps_ewma",
 		"treedb.cache.stats.backend_write_batches_total",
 		"treedb.cache.wal_bytes_estimate",
 		"treedb.cache.vlog_retained_bytes_estimate",
 		"treedb.cache.materialization.lag_age_ms",
+		"treedb.cache.batch_arena.pool_budget_bytes",
+		"treedb.cache.batch_arena.pool_budget_effective_bytes",
+		"treedb.cache.batch_arena.pool_bytes_estimate",
+		"treedb.cache.batch_arena.pool_bytes_global_max_estimate",
+		"treedb.cache.batch_arena.in_flight_bytes_estimate",
+		"treedb.cache.batch_arena.in_flight_bytes_global_max_estimate",
+		"treedb.cache.batch_arena.leased_bytes",
+		"treedb.cache.batch_arena.leased_bytes_max",
+		"treedb.cache.batch_arena.leased_bytes_global_estimate",
+		"treedb.cache.batch_arena.leased_bytes_global_max_estimate",
+		"treedb.cache.batch_arena.retained_bytes_global_estimate",
+		"treedb.cache.batch_arena.retained_bytes_global_max_estimate",
+		"treedb.cache.batch_arena.alloc_requested_bytes_total",
+		"treedb.cache.batch_arena.alloc_class_bytes_total",
+		"treedb.cache.batch_arena.used_bytes_total",
+		"treedb.cache.batch_arena.tail_waste_bytes_total",
+		"treedb.cache.batch_arena.tail_compact_runs_total",
+		"treedb.cache.batch_arena.tail_compact_copied_bytes_total",
+		"treedb.cache.batch_arena.tail_compact_saved_bytes_total",
+		"treedb.cache.batch_arena.pool_skip_zero_budget_total",
+		"treedb.cache.batch_arena.pool_drop_bytes_total",
+		"treedb.cache.batch_arena.pool_drop_hard_cap_bytes_total",
+		"treedb.cache.batch_arena.borrow_blocked_total",
+		"treedb.cache.batch_arena.borrow_preflight_blocked_total",
+		"treedb.cache.batch_arena.borrow_preflight_blocked_bytes_total",
+		"treedb.cache.batch_arena.steal_suppressed_deferred_total",
+		"treedb.cache.batch_arena.steal_suppressed_deferred_entries_total",
+		"treedb.cache.entry_slice.pool_budget_bytes",
+		"treedb.cache.entry_slice.pool_budget_effective_bytes",
+		"treedb.cache.entry_slice.retained_bytes_estimate",
+		"treedb.cache.entry_slice.trim_runs_total",
+		"treedb.cache.entry_slice.trim_drop_bytes_total",
+		"treedb.cache.entry_slice.get.lease_hits_total",
+		"treedb.cache.entry_slice.get.lease_hit_bytes_total",
+		"treedb.cache.entry_slice.get.pool_hits_total",
+		"treedb.cache.entry_slice.get.pool_hit_bytes_total",
+		"treedb.cache.entry_slice.get.fresh_alloc_total",
+		"treedb.cache.entry_slice.get.fresh_alloc_bytes_total",
+		"treedb.cache.entry_slice.put.lease_total",
+		"treedb.cache.entry_slice.put.lease_bytes_total",
+		"treedb.cache.entry_slice.put.pool_total",
+		"treedb.cache.entry_slice.put.pool_bytes_total",
+		"treedb.cache.entry_slice.put.drop_budget_total",
+		"treedb.cache.entry_slice.put.drop_budget_bytes_total",
+		"treedb.cache.flush_merge.shadowed_ops_total",
+		"treedb.cache.flush_merge.applied_ops_total",
+		"treedb.cache.flush_merge.shadowed_per_applied",
+		"treedb.cache.flush_merge.deferred.shadowed_ops_total",
+		"treedb.cache.flush_merge.deferred.applied_ops_total",
+		"treedb.cache.flush_merge.deferred.shadowed_per_applied",
+		"treedb.cache.flush_merge.parallel.shadowed_ops_total",
+		"treedb.cache.flush_merge.parallel.applied_ops_total",
+		"treedb.cache.flush_merge.parallel.shadowed_per_applied",
+		"treedb.cache.append_only.mutable_from_lease_total",
+		"treedb.cache.append_only.mutable_from_pool_total",
+		"treedb.cache.append_only.mutable_new_alloc_total",
+		"treedb.cache.append_only.mutable_new_alloc_with_queue_total",
+		"treedb.cache.append_only.mutable_new_alloc_queue_bytes_sum",
+		"treedb.cache.append_only_direct_arena.retain_max_bytes_effective",
+		"treedb.cache.append_only_direct_arena.retain_max_chunks_effective",
+		"treedb.cache.append_only_direct_arena.pool_hit_chunks_total",
+		"treedb.cache.append_only_direct_arena.pool_hit_bytes_total",
+		"treedb.cache.append_only_direct_arena.retained_hit_chunks_total",
+		"treedb.cache.append_only_direct_arena.retained_hit_bytes_total",
+		"treedb.cache.append_only_direct_arena.fresh_alloc_chunks_total",
+		"treedb.cache.append_only_direct_arena.fresh_alloc_bytes_total",
+		"treedb.process.memory.pool_pressure_level",
+		"treedb.process.memory.rss_bytes",
+		"treedb.process.memory.rss_hwm_bytes",
+		"treedb.process.memory.rss_minus_heap_inuse_bytes",
+		"treedb.process.memory.rss_minus_total_sys_bytes",
+		"treedb.process.memory.peak_rss_bytes",
+		"treedb.process.memory.peak_heap_alloc_bytes",
+		"treedb.process.memory.peak_heap_inuse_bytes",
+		"treedb.process.memory.peak_total_sys_bytes",
+		"treedb.process.memory.heap_alloc_bytes",
+		"treedb.process.memory.heap_inuse_bytes",
+		"treedb.process.memory.heap_sys_bytes",
+		"treedb.process.memory.heap_idle_unreleased_bytes",
+		"treedb.process.memory.gomemlimit_bytes",
+		"treedb.process.memory.pool_pressure_normal_samples_total",
+		"treedb.process.memory.pool_pressure_high_samples_total",
+		"treedb.process.memory.pool_pressure_critical_samples_total",
+		"treedb.process.memory.vlog_mmap_active_bytes",
+		"treedb.process.memory.vlog_mmap_current_bytes",
+		"treedb.process.memory.vlog_mmap_sealed_bytes",
+		"treedb.process.memory.vlog_mmap_active_segments",
+		"treedb.process.memory.vlog_mmap_current_segments",
+		"treedb.process.memory.vlog_mmap_sealed_segments",
+		"treedb.process.memory.peak_vlog_mmap_active_bytes",
+		"treedb.process.memory.peak_vlog_mmap_current_bytes",
+		"treedb.process.memory.peak_vlog_mmap_sealed_bytes",
+		"treedb.process.memory.peak_vlog_mmap_active_segments",
+		"treedb.process.memory.peak_vlog_mmap_current_segments",
+		"treedb.process.memory.peak_vlog_mmap_sealed_segments",
 		"treedb.cache.vlog_auto.frames.off",
 		"treedb.cache.vlog_auto.frames.dict",
 		"treedb.cache.vlog_auto.frames.block_snappy",
@@ -1036,6 +1213,62 @@ func printTreeDBCacheStats(w io.Writer, inst *DBInstance, prefix string) {
 		"treedb.cache.vlog_auto.hold_enters",
 		"treedb.cache.vlog_auto.hold_exits",
 		"treedb.cache.vlog_auto.bypass_bytes",
+		"treedb.cache.vlog_write_mode.raw_bytes.off",
+		"treedb.cache.vlog_write_mode.raw_bytes.block",
+		"treedb.cache.vlog_write_mode.raw_bytes.dict",
+		"treedb.cache.vlog_write_mode.stored_bytes.off",
+		"treedb.cache.vlog_write_mode.stored_bytes.block",
+		"treedb.cache.vlog_write_mode.stored_bytes.dict",
+		"treedb.cache.vlog_write_mode.stored_ratio.off",
+		"treedb.cache.vlog_write_mode.stored_ratio.block",
+		"treedb.cache.vlog_write_mode.stored_ratio.dict",
+		"treedb.cache.vlog_write_mode.frames.off",
+		"treedb.cache.vlog_write_mode.frames.block",
+		"treedb.cache.vlog_write_mode.frames.dict",
+		"treedb.cache.vlog_payload_kind.raw_bytes.single_value",
+		"treedb.cache.vlog_payload_kind.raw_bytes.outer_leaf",
+		"treedb.cache.vlog_payload_kind.raw_bytes.mixed",
+		"treedb.cache.vlog_payload_kind.stored_bytes.single_value",
+		"treedb.cache.vlog_payload_kind.stored_bytes.outer_leaf",
+		"treedb.cache.vlog_payload_kind.stored_bytes.mixed",
+		"treedb.cache.vlog_payload_kind.stored_ratio.single_value",
+		"treedb.cache.vlog_payload_kind.stored_ratio.outer_leaf",
+		"treedb.cache.vlog_payload_kind.stored_ratio.mixed",
+		"treedb.cache.vlog_payload_kind.frames.single_value",
+		"treedb.cache.vlog_payload_kind.frames.outer_leaf",
+		"treedb.cache.vlog_payload_kind.frames.mixed",
+		"treedb.cache.vlog_payload_split.raw_bytes.single_value",
+		"treedb.cache.vlog_payload_split.raw_bytes.outer_leaf",
+		"treedb.cache.vlog_payload_split.stored_bytes.single_value",
+		"treedb.cache.vlog_payload_split.stored_bytes.outer_leaf",
+		"treedb.cache.vlog_payload_split.stored_ratio.single_value",
+		"treedb.cache.vlog_payload_split.stored_ratio.outer_leaf",
+		"treedb.cache.vlog_payload_split.records.single_value",
+		"treedb.cache.vlog_payload_split.records.outer_leaf",
+		"treedb.cache.vlog_outer_leaf_codec.raw_bytes.none",
+		"treedb.cache.vlog_outer_leaf_codec.raw_bytes.snappy",
+		"treedb.cache.vlog_outer_leaf_codec.raw_bytes.lz4",
+		"treedb.cache.vlog_outer_leaf_codec.raw_bytes.legacy_page",
+		"treedb.cache.vlog_outer_leaf_codec.raw_bytes.unknown",
+		"treedb.cache.vlog_outer_leaf_codec.raw_bytes.mixed",
+		"treedb.cache.vlog_outer_leaf_codec.stored_bytes.none",
+		"treedb.cache.vlog_outer_leaf_codec.stored_bytes.snappy",
+		"treedb.cache.vlog_outer_leaf_codec.stored_bytes.lz4",
+		"treedb.cache.vlog_outer_leaf_codec.stored_bytes.legacy_page",
+		"treedb.cache.vlog_outer_leaf_codec.stored_bytes.unknown",
+		"treedb.cache.vlog_outer_leaf_codec.stored_bytes.mixed",
+		"treedb.cache.vlog_outer_leaf_codec.stored_ratio.none",
+		"treedb.cache.vlog_outer_leaf_codec.stored_ratio.snappy",
+		"treedb.cache.vlog_outer_leaf_codec.stored_ratio.lz4",
+		"treedb.cache.vlog_outer_leaf_codec.stored_ratio.legacy_page",
+		"treedb.cache.vlog_outer_leaf_codec.stored_ratio.unknown",
+		"treedb.cache.vlog_outer_leaf_codec.stored_ratio.mixed",
+		"treedb.cache.vlog_outer_leaf_codec.frames.none",
+		"treedb.cache.vlog_outer_leaf_codec.frames.snappy",
+		"treedb.cache.vlog_outer_leaf_codec.frames.lz4",
+		"treedb.cache.vlog_outer_leaf_codec.frames.legacy_page",
+		"treedb.cache.vlog_outer_leaf_codec.frames.unknown",
+		"treedb.cache.vlog_outer_leaf_codec.frames.mixed",
 		"treedb.cache.vlog_block.k.count.snappy",
 		"treedb.cache.vlog_block.k.avg.snappy",
 		"treedb.cache.vlog_block.k.max.snappy",
@@ -1065,12 +1298,39 @@ func printTreeDBCacheStats(w io.Writer, inst *DBInstance, prefix string) {
 		"treedb.cache.vlog_io.syscalls",
 		"treedb.cache.vlog_io.bytes",
 		"treedb.cache.vlog_io.bytes_per_syscall",
+		"treedb.cache.vlog_mmap.remaps",
+		"treedb.cache.vlog_mmap.dead_mappings",
+		"treedb.cache.vlog_mmap.dead_mappings.cap_base",
+		"treedb.cache.vlog_mmap.read.hits",
+		"treedb.cache.vlog_mmap.read.miss_out_of_range",
+		"treedb.cache.vlog_mmap.read.miss_no_mapping",
+		"treedb.cache.vlog_mmap.read.miss_dead_mapping_cap",
+		"treedb.cache.vlog_mmap.read.fallback_readat",
+		"treedb.cache.vlog_mmap.read.hit_ratio",
 		"treedb.cache.vlog_generation.enabled",
 		"treedb.cache.vlog_generation.policy",
 		"treedb.cache.vlog_generation.scheduler_state",
 		"treedb.cache.vlog_generation.scheduler_last_reason",
+		"treedb.cache.vlog_generation.maintenance_phase",
+		"treedb.cache.vlog_generation.maintenance.attempts",
+		"treedb.cache.vlog_generation.maintenance.acquired",
+		"treedb.cache.vlog_generation.maintenance.collisions",
+		"treedb.cache.vlog_generation.maintenance.skip.wal_on_periodic",
+		"treedb.cache.vlog_generation.maintenance.skip.maintenance_phase",
+		"treedb.cache.vlog_generation.maintenance.skip.stage_gate",
+		"treedb.cache.vlog_generation.maintenance.skip.stage_gate_not_due",
+		"treedb.cache.vlog_generation.maintenance.skip.stage_gate_due_reserved",
+		"treedb.cache.vlog_generation.maintenance.skip.age_blocked_gate",
+		"treedb.cache.vlog_generation.maintenance.skip.priority_pending",
+		"treedb.cache.vlog_generation.maintenance.skip.quiet_window",
+		"treedb.cache.vlog_generation.maintenance.skip.before_first_checkpoint",
+		"treedb.cache.vlog_generation.maintenance.skip.checkpoint_inflight",
 		"treedb.cache.vlog_generation.churn_bytes_total",
 		"treedb.cache.vlog_generation.churn_bytes_per_sec",
+		"treedb.cache.vlog_generation.rewrite_trigger.stale_ratio_ppm",
+		"treedb.cache.vlog_generation.rewrite_trigger.total_bytes",
+		"treedb.cache.vlog_generation.rewrite_trigger.churn_per_sec",
+		"treedb.cache.vlog_generation.rewrite.min_segment_age_ms",
 		"treedb.cache.vlog_generation.bytes.live.total",
 		"treedb.cache.vlog_generation.bytes.live.hot",
 		"treedb.cache.vlog_generation.bytes.live.warm",
@@ -1084,14 +1344,129 @@ func printTreeDBCacheStats(w io.Writer, inst *DBInstance, prefix string) {
 		"treedb.cache.vlog_generation.segments.hot",
 		"treedb.cache.vlog_generation.segments.warm",
 		"treedb.cache.vlog_generation.segments.cold",
+		"treedb.cache.vlog_generation.rewrite.queue_len",
+		"treedb.cache.vlog_generation.rewrite.queue_loaded",
+		"treedb.cache.vlog_generation.rewrite.queue_run_segment_cap",
+		"treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.limiter",
+		"treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.by_budget",
+		"treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.per_segment_budget_bytes",
+		"treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.checkpoint_kick",
+		"treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.limiter.checkpoint_kick",
+		"treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.by_budget.checkpoint_kick",
+		"treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.per_segment_budget_bytes.checkpoint_kick",
+		"treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.fresh_plan",
+		"treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.limiter.fresh_plan",
+		"treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.by_budget.fresh_plan",
+		"treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.per_segment_budget_bytes.fresh_plan",
+		"treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.decisions",
+		"treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.decisions.fresh_plan",
+		"treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.limiter_count.budget_tokens",
+		"treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.limiter_count.debt_drain_cap",
+		"treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.limiter_count.checkpoint_kick_safety",
+		"treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.limiter_count.fresh_plan_queue_threshold.fresh_plan",
+		"treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.limiter_count.fresh_plan_cap.fresh_plan",
+		"treedb.cache.vlog_generation.rewrite.queue_config.resume_max_segments",
+		"treedb.cache.vlog_generation.rewrite.queue_config.debt_drain_max_segments",
+		"treedb.cache.vlog_generation.rewrite.queue_config.fresh_plan_debt_drain_min_segments",
+		"treedb.cache.vlog_generation.rewrite.queue_config.fresh_plan_debt_drain_max_segments",
+		"treedb.cache.vlog_generation.rewrite.ledger_segments",
+		"treedb.cache.vlog_generation.rewrite.ledger_bytes_total",
+		"treedb.cache.vlog_generation.rewrite.ledger_bytes_live",
+		"treedb.cache.vlog_generation.rewrite.ledger_bytes_stale",
+		"treedb.cache.vlog_generation.rewrite.ledger_stale_ratio_ppm",
+		"treedb.cache.vlog_generation.rewrite.stage_pending",
+		"treedb.cache.vlog_generation.rewrite.stage_observed_unix_nano",
+		"treedb.cache.vlog_generation.rewrite.penalties_active",
+		"treedb.cache.vlog_generation.rewrite.age_blocked_until_unix_nano",
+		"treedb.cache.vlog_generation.rewrite.age_blocked_remaining_ms",
+		"treedb.cache.vlog_generation.rewrite.plan_runs",
+		"treedb.cache.vlog_generation.rewrite.plan_canceled",
+		"treedb.cache.vlog_generation.rewrite.plan_errors",
+		"treedb.cache.vlog_generation.rewrite.plan_empty",
+		"treedb.cache.vlog_generation.rewrite.plan_empty.age_blocked",
+		"treedb.cache.vlog_generation.rewrite.plan_empty.no_selection",
+		"treedb.cache.vlog_generation.rewrite.plan_selected",
+		"treedb.cache.vlog_generation.rewrite.plan_selected_segments_total",
+		"treedb.cache.vlog_generation.rewrite.plan_selected_bytes_total",
+		"treedb.cache.vlog_generation.rewrite.plan_selected_bytes_live",
+		"treedb.cache.vlog_generation.rewrite.plan_selected_bytes_stale",
 		"treedb.cache.vlog_generation.rewrite.bytes_in",
 		"treedb.cache.vlog_generation.rewrite.bytes_out",
+		"treedb.cache.vlog_generation.rewrite.value_records_copied",
+		"treedb.cache.vlog_generation.rewrite.value_bytes_copied",
+		"treedb.cache.vlog_generation.rewrite.leafref_records_copied",
+		"treedb.cache.vlog_generation.rewrite.leafref_bytes_copied",
+		"treedb.cache.vlog_generation.rewrite.reclaim_ratio",
+		"treedb.cache.vlog_generation.rewrite.output_ratio",
+		"treedb.cache.vlog_generation.rewrite.processed_stale_ratio",
+		"treedb.cache.vlog_generation.rewrite.exec.bytes_in_per_sec",
+		"treedb.cache.vlog_generation.rewrite.exec.bytes_out_per_sec",
+		"treedb.cache.vlog_generation.rewrite.exec.reclaimed_bytes_per_sec",
+		"treedb.cache.vlog_generation.rewrite.exec.reclaimed_vs_churn_ratio",
+		"treedb.cache.vlog_generation.rewrite.no_reclaim_runs",
+		"treedb.cache.vlog_generation.rewrite.no_reclaim_stale_bytes",
+		"treedb.cache.vlog_generation.rewrite.canceled_runs",
+		"treedb.cache.vlog_generation.rewrite.deadline_runs",
+		"treedb.cache.vlog_generation.rewrite.ineffective_runs",
+		"treedb.cache.vlog_generation.rewrite_budget.consumed_bytes_per_sec",
+		"treedb.cache.vlog_generation.rewrite_budget.consumed_share_of_budget_pct",
+		"treedb.cache.vlog_generation.rewrite_budget.bytes_per_sec",
+		"treedb.cache.vlog_generation.rewrite_budget.records_per_sec",
+		"treedb.cache.vlog_generation.rewrite_budget.tokens_bytes",
+		"treedb.cache.vlog_generation.rewrite_budget.tokens_cap_bytes",
+		"treedb.cache.vlog_generation.rewrite_budget.tokens_utilization_pct",
+		"treedb.cache.vlog_generation.rewrite_budget.consumed_bytes_total",
 		"treedb.cache.vlog_generation.rewrite.runs",
 		"treedb.cache.vlog_generation.gc.deleted_segments",
 		"treedb.cache.vlog_generation.gc.deleted_bytes",
+		"treedb.cache.vlog_generation.gc.last_observed_source.segments",
+		"treedb.cache.vlog_generation.gc.last_observed_source.segments_referenced",
+		"treedb.cache.vlog_generation.gc.last_observed_source.segments_active",
+		"treedb.cache.vlog_generation.gc.last_observed_source.segments_protected",
+		"treedb.cache.vlog_generation.gc.last_observed_source.segments_eligible",
+		"treedb.cache.vlog_generation.gc.last_observed_source.segments_deleted",
+		"treedb.cache.vlog_generation.gc.last_observed_source.segments_pending",
+		"treedb.cache.vlog_generation.gc.last_observed_source.segments_protected_retained",
+		"treedb.cache.vlog_generation.gc.last_observed_source.segments_protected_in_use",
+		"treedb.cache.vlog_generation.gc.last_observed_source.segments_protected_overlap",
+		"treedb.cache.vlog_generation.gc.last_observed_source.segments_protected_other",
+		"treedb.cache.vlog_generation.gc.last_observed_source.bytes",
+		"treedb.cache.vlog_generation.gc.last_observed_source.bytes_referenced",
+		"treedb.cache.vlog_generation.gc.last_observed_source.bytes_active",
+		"treedb.cache.vlog_generation.gc.last_observed_source.bytes_protected",
+		"treedb.cache.vlog_generation.gc.last_observed_source.bytes_eligible",
+		"treedb.cache.vlog_generation.gc.last_observed_source.bytes_deleted",
+		"treedb.cache.vlog_generation.gc.last_observed_source.bytes_pending",
+		"treedb.cache.vlog_generation.gc.last_observed_source.bytes_protected_retained",
+		"treedb.cache.vlog_generation.gc.last_observed_source.bytes_protected_in_use",
+		"treedb.cache.vlog_generation.gc.last_observed_source.bytes_protected_overlap",
+		"treedb.cache.vlog_generation.gc.last_observed_source.bytes_protected_other",
 		"treedb.cache.vlog_generation.gc.runs",
+		"treedb.cache.vlog_retained_prune.runs",
+		"treedb.cache.vlog_retained_prune.forced_runs",
+		"treedb.cache.vlog_retained_prune.schedule_requests",
+		"treedb.cache.vlog_retained_prune.schedule_forced_requests",
+		"treedb.cache.vlog_retained_prune.schedule_skip.closing",
+		"treedb.cache.vlog_retained_prune.schedule_skip.inflight",
+		"treedb.cache.vlog_retained_prune.schedule_skip.no_closed_bytes",
+		"treedb.cache.vlog_retained_prune.schedule_skip.below_pressure",
+		"treedb.cache.vlog_retained_prune.schedule_skip.min_interval",
+		"treedb.cache.vlog_retained_prune.force_pending",
+		"treedb.cache.vlog_retained_prune.closed_bytes",
+		"treedb.cache.vlog_retained_prune.removed_segments",
+		"treedb.cache.vlog_retained_prune.removed_bytes",
+		"treedb.cache.vlog_retained_prune.in_use_skipped_segments",
+		"treedb.cache.vlog_retained_prune.in_use_skipped_bytes",
+		"treedb.cache.vlog_retained_prune.live_skipped_segments",
+		"treedb.cache.vlog_retained_prune.live_skipped_bytes",
+		"treedb.cache.vlog_retained_prune.zombie_marked_segments",
+		"treedb.cache.vlog_retained_prune.zombie_marked_bytes",
 		"treedb.cache.vlog_generation.vacuum.runs",
 		"treedb.cache.vlog_generation.vacuum.failures",
+		"treedb.cache.vlog_generation.checkpoint_kick.pending",
+		"treedb.cache.vlog_generation.checkpoint_kick.runs",
+		"treedb.cache.vlog_generation.checkpoint_kick.rewrite_runs",
+		"treedb.cache.vlog_generation.checkpoint_kick.gc_runs",
 		"treedb.cache.vlog_generation.remap.successes",
 		"treedb.cache.vlog_generation.remap.failures",
 		"treedb.vlog.outer_leaf_block_cache.policy",
@@ -1104,6 +1479,15 @@ func printTreeDBCacheStats(w io.Writer, inst *DBInstance, prefix string) {
 		"treedb.vlog.outer_leaf_block_cache.put_admitted",
 		"treedb.vlog.outer_leaf_block_cache.put_duplicate_drops",
 		"treedb.vlog.outer_leaf_block_cache.put_lock_contention",
+		"treedb.vlog.mmap_remaps",
+		"treedb.vlog.mmap_dead_mappings",
+		"treedb.vlog.mmap_dead_mappings.cap_base",
+		"treedb.vlog.mmap_read.hits",
+		"treedb.vlog.mmap_read.miss_out_of_range",
+		"treedb.vlog.mmap_read.miss_no_mapping",
+		"treedb.vlog.mmap_read.miss_dead_mapping_cap",
+		"treedb.vlog.mmap_read.fallback_readat",
+		"treedb.vlog.mmap_read.hit_ratio",
 	}
 
 	fmt.Fprintf(w, "%s (%s):", prefix, inst.Wrapper.Name())
@@ -1299,6 +1683,120 @@ func newPeriodicCheckpoint(cfg BenchConfig) *periodicCheckpoint {
 	}
 }
 
+func parseUint64StatValue(stats map[string]string, keys ...string) (uint64, bool) {
+	if stats == nil {
+		return 0, false
+	}
+	for _, key := range keys {
+		raw, ok := stats[key]
+		if !ok {
+			continue
+		}
+		v, err := strconv.ParseUint(strings.TrimSpace(raw), 10, 64)
+		if err == nil {
+			return v, true
+		}
+	}
+	return 0, false
+}
+
+func parseInt64StatValue(stats map[string]string, keys ...string) (int64, bool) {
+	if stats == nil {
+		return 0, false
+	}
+	for _, key := range keys {
+		raw, ok := stats[key]
+		if !ok {
+			continue
+		}
+		v, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
+		if err == nil {
+			return v, true
+		}
+	}
+	return 0, false
+}
+
+func snapshotSelectedTreeDBStats(db kvstore.DB) treeDBSelectedStats {
+	sp, ok := db.(kvstore.StatsProvider)
+	if !ok {
+		return treeDBSelectedStats{}
+	}
+	stats := sp.Stats()
+	var snap treeDBSelectedStats
+	snap.mmapHits, _ = parseUint64StatValue(stats,
+		"treedb.cache.vlog_mmap.read.hits",
+		"treedb.vlog.mmap_read.hits",
+	)
+	snap.mmapMissOutOfRange, _ = parseUint64StatValue(stats,
+		"treedb.cache.vlog_mmap.read.miss_out_of_range",
+		"treedb.vlog.mmap_read.miss_out_of_range",
+	)
+	snap.mmapMissNoMapping, _ = parseUint64StatValue(stats,
+		"treedb.cache.vlog_mmap.read.miss_no_mapping",
+		"treedb.vlog.mmap_read.miss_no_mapping",
+	)
+	snap.mmapMissDeadCap, _ = parseUint64StatValue(stats,
+		"treedb.cache.vlog_mmap.read.miss_dead_mapping_cap",
+		"treedb.vlog.mmap_read.miss_dead_mapping_cap",
+	)
+	snap.mmapFallbackReadAt, _ = parseUint64StatValue(stats,
+		"treedb.cache.vlog_mmap.read.fallback_readat",
+		"treedb.vlog.mmap_read.fallback_readat",
+	)
+	snap.leafGenerationsPin, _ = parseInt64StatValue(stats, "treedb.leaf_generation.generations.pinned")
+	snap.leafPinsTotal, _ = parseInt64StatValue(stats, "treedb.leaf_generation.pins.total")
+	return snap
+}
+
+func computeTreeDBPerfMetrics(before, after treeDBSelectedStats, snapshot treeDBSnapshotPerfMetrics) treeDBPerfMetrics {
+	m := treeDBPerfMetrics{
+		Mmap: treeDBMmapPerfMetrics{
+			Hits:           saturatingUint64Delta(after.mmapHits, before.mmapHits),
+			MissOutOfRange: saturatingUint64Delta(after.mmapMissOutOfRange, before.mmapMissOutOfRange),
+			MissNoMapping:  saturatingUint64Delta(after.mmapMissNoMapping, before.mmapMissNoMapping),
+			MissDeadMapCap: saturatingUint64Delta(after.mmapMissDeadCap, before.mmapMissDeadCap),
+			FallbackReadAt: saturatingUint64Delta(after.mmapFallbackReadAt, before.mmapFallbackReadAt),
+		},
+		Snapshot:                   snapshot,
+		LeafGenerationsPinnedAfter: after.leafGenerationsPin,
+		LeafPinsTotalAfter:         after.leafPinsTotal,
+	}
+	totalReads := m.Mmap.Hits + m.Mmap.FallbackReadAt
+	if totalReads > 0 {
+		m.Mmap.HitRatio = float64(m.Mmap.Hits) / float64(totalReads)
+	}
+	if m.Snapshot.AcquireCalls > 0 {
+		m.Snapshot.AcquireAvgMicros = float64(m.Snapshot.AcquireTotalNanos) / float64(m.Snapshot.AcquireCalls) / 1_000.0
+	}
+	if m.Snapshot.CloseCalls > 0 {
+		m.Snapshot.CloseAvgMicros = float64(m.Snapshot.CloseTotalNanos) / float64(m.Snapshot.CloseCalls) / 1_000.0
+	}
+	return m
+}
+
+func saturatingUint64Delta(after, before uint64) uint64 {
+	if after < before {
+		return 0
+	}
+	return after - before
+}
+
+func treeDBPerfMetricsEmpty(m treeDBPerfMetrics) bool {
+	return m.Mmap.Hits == 0 &&
+		m.Mmap.MissOutOfRange == 0 &&
+		m.Mmap.MissNoMapping == 0 &&
+		m.Mmap.MissDeadMapCap == 0 &&
+		m.Mmap.FallbackReadAt == 0 &&
+		m.Mmap.HitRatio == 0 &&
+		m.Snapshot.AcquireCalls == 0 &&
+		m.Snapshot.AcquireTotalNanos == 0 &&
+		m.Snapshot.CloseCalls == 0 &&
+		m.Snapshot.CloseTotalNanos == 0 &&
+		m.LeafGenerationsPinnedAfter == 0 &&
+		m.LeafPinsTotalAfter == 0
+}
+
 func (p *periodicCheckpoint) Add(db kvstore.DB, opsDelta int, bytesDelta int64) error {
 	if p == nil {
 		return nil
@@ -1401,6 +1899,8 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 	checkpointDurations := make(map[string]map[string]time.Duration)
 	vacuumDurations := make(map[string]map[string]time.Duration)
 	vacuumIndexBytes := make(map[string]map[string][2]uint64)
+	treeDBPerf := make(map[string]map[string]treeDBPerfMetrics)
+	snapshotPerfByTest := make(map[string]map[string]treeDBSnapshotPerfMetrics)
 
 	// dataset_write_* mirrors op-geth's Write1M when -keys=1_000_000 and -valsize=32 (32B keys).
 	datasetKeySize := 32
@@ -1487,12 +1987,6 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 		if err != nil {
 			return 0, fmt.Errorf("%s values: %w", testLabel, err)
 		}
-		start := time.Now()
-		pc := newPeriodicCheckpoint(cfg)
-		if steady && pc == nil && cfg.BatchWriteSteadyCheckpointBytes > 0 {
-			pc = &periodicCheckpoint{everyBytes: cfg.BatchWriteSteadyCheckpointBytes}
-		}
-		perOpBytes := int64(8 + cfg.ValueSize)
 		total := cfg.Keys
 		valPos := 0
 		// Keep the precomputed-key optimization bounded so very large runs do
@@ -1545,6 +2039,151 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				_ = batch.Close()
 			}
 		}()
+
+		treeDBDictPublished := func() bool {
+			sp, ok := db.(kvstore.StatsProvider)
+			if !ok {
+				return false
+			}
+			stats := sp.Stats()
+			raw := strings.TrimSpace(stats["treedb.cache.vlog_dict.last_applied_dict_id"])
+			if raw == "" {
+				return false
+			}
+			v, err := strconv.ParseUint(raw, 10, 64)
+			return err == nil && v != 0
+		}
+		shouldWarmupDictBatchWrite := func() bool {
+			if !cfg.BatchWriteDictWarmup {
+				return false
+			}
+			if total <= 0 {
+				return false
+			}
+			if _, ok := db.(*treedbadapter.DB); !ok {
+				return false
+			}
+			mode, _, err := parseTreeDBVlogCompressionMode(*treedbVlogCompression)
+			if err == nil && mode == treedb.ValueLogCompressionDict {
+				return true
+			}
+			name := strings.ToLower(strings.TrimSpace(db.Name()))
+			return strings.Contains(name, "vlog=dict") || strings.Contains(name, "vlog_dict=on")
+		}
+		if shouldWarmupDictBatchWrite() {
+			warmupKeys := total / 4
+			if warmupKeys < cfg.BatchSize {
+				warmupKeys = cfg.BatchSize
+			}
+			if warmupKeys > total {
+				warmupKeys = total
+			}
+			if warmupKeys > 128_000 {
+				warmupKeys = 128_000
+			}
+			// Keep warmup writes disjoint from measured keys so throughput/IO
+			// remains comparable across modes.
+			warmupBase := uint64(cfg.Keys) * 2
+			if uint64(cfg.Keys) > math.MaxUint64/2 {
+				warmupBase = math.MaxUint64
+			}
+			warmupKeys = clampWarmupKeyCount(keyShape, warmupBase, warmupKeys)
+			var warmupKeyBytes []byte
+			if precomputeKeys && warmupKeys > 0 {
+				warmupKeyBytes = make([]byte, warmupKeys*8)
+				for j := 0; j < warmupKeys; j++ {
+					encodeKey(warmupKeyBytes[j*8:(j+1)*8], uint64(j)+warmupBase)
+				}
+			}
+			for i := 0; i < warmupKeys; i += cfg.BatchSize {
+				if batch == nil {
+					if err := openBatch(); err != nil {
+						return 0, fmt.Errorf("%s warmup: new batch: %w", testLabel, err)
+					}
+				} else if resetBatch != nil {
+					resetBatch()
+				} else {
+					if err := batch.Close(); err != nil {
+						return 0, fmt.Errorf("%s warmup: close: %w", testLabel, err)
+					}
+					batch = nil
+					if err := openBatch(); err != nil {
+						return 0, fmt.Errorf("%s warmup: new batch: %w", testLabel, err)
+					}
+				}
+
+				end := i + cfg.BatchSize
+				if end > warmupKeys {
+					end = warmupKeys
+				}
+				if setView != nil {
+					if precomputeKeys {
+						for j := i; j < end; j++ {
+							keyView := warmupKeyBytes[j*8 : (j+1)*8]
+							value := values[valPos%len(values)]
+							valPos++
+							if err := setView(keyView, value); err != nil {
+								return 0, fmt.Errorf("%s warmup: set: %w", testLabel, err)
+							}
+						}
+					} else {
+						// SetView is zero-copy: keep keys in a stable owned slab until commit.
+						need := (end - i) * 8
+						keysView := make([]byte, need)
+						for j := i; j < end; j++ {
+							off := (j - i) * 8
+							keyView := keysView[off : off+8]
+							encodeKey(keyView, uint64(j)+warmupBase)
+							value := values[valPos%len(values)]
+							valPos++
+							if err := setView(keyView, value); err != nil {
+								return 0, fmt.Errorf("%s warmup: set: %w", testLabel, err)
+							}
+						}
+					}
+				} else {
+					for j := i; j < end; j++ {
+						var keyView []byte
+						if precomputeKeys {
+							keyView = warmupKeyBytes[j*8 : (j+1)*8]
+						} else {
+							var key [8]byte
+							encodeKey(key[:], uint64(j)+warmupBase)
+							keyView = key[:]
+						}
+						value := values[valPos%len(values)]
+						valPos++
+						if err := batch.Set(keyView, value); err != nil {
+							return 0, fmt.Errorf("%s warmup: set: %w", testLabel, err)
+						}
+					}
+				}
+				if err := batch.Commit(); err != nil {
+					return 0, fmt.Errorf("%s warmup: commit: %w", testLabel, err)
+				}
+				if resetBatch == nil {
+					if err := batch.Close(); err != nil {
+						return 0, fmt.Errorf("%s warmup: close: %w", testLabel, err)
+					}
+					batch = nil
+				}
+				if treeDBDictPublished() {
+					break
+				}
+			}
+			deadline := time.Now().Add(5 * time.Second)
+			for !treeDBDictPublished() && time.Now().Before(deadline) {
+				time.Sleep(5 * time.Millisecond)
+			}
+			valPos = 0
+		}
+
+		start := time.Now()
+		pc := newPeriodicCheckpoint(cfg)
+		if steady && pc == nil && cfg.BatchWriteSteadyCheckpointBytes > 0 {
+			pc = &periodicCheckpoint{everyBytes: cfg.BatchWriteSteadyCheckpointBytes}
+		}
+		perOpBytes := int64(8 + cfg.ValueSize)
 		for i := 0; i < total; i += cfg.BatchSize {
 			if i&8191 == 0 {
 				if err := guard.Checkpoint(); err != nil {
@@ -1637,6 +2276,20 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			}
 		}
 		return float64(total) / time.Since(start).Seconds(), nil
+	}
+	recordSnapshotPerf := func(testName string, db kvstore.DB, perf treeDBSnapshotPerfMetrics) {
+		if db == nil {
+			return
+		}
+		if perf.AcquireCalls == 0 && perf.CloseCalls == 0 {
+			return
+		}
+		perDB := snapshotPerfByTest[testName]
+		if perDB == nil {
+			perDB = make(map[string]treeDBSnapshotPerfMetrics)
+			snapshotPerfByTest[testName] = perDB
+		}
+		perDB[db.Name()] = perf
 	}
 	testFuncs := map[string]TestFunc{
 		"vacuum_index": func(db kvstore.DB, _ *rand.Rand) (float64, error) {
@@ -2321,6 +2974,10 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				GetAppend(key, dst []byte) ([]byte, error)
 			})
 			baseSeed := testSeed(cfg.SeedUsed, "random_read_parallel")
+			var snapshotAcquireCalls atomic.Uint64
+			var snapshotAcquireNanos atomic.Uint64
+			var snapshotCloseCalls atomic.Uint64
+			var snapshotCloseNanos atomic.Uint64
 
 			runWorker := func(workerRng *rand.Rand, stop *atomic.Bool) error {
 				getter := interface {
@@ -2329,14 +2986,23 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				workerAppendGetter := appendGetter
 				var closeSnapshot func() error
 				if hasSnapshotter {
+					acquireStarted := time.Now()
 					snap, err := snapshotter.AcquireReadSnapshot()
 					if err != nil && !errors.Is(err, kvstore.ErrUnsupported) {
 						return err
 					}
 					if err == nil {
+						snapshotAcquireCalls.Add(1)
+						snapshotAcquireNanos.Add(uint64(time.Since(acquireStarted)))
 						getter = snap
 						workerAppendGetter = snap
-						closeSnapshot = snap.Close
+						closeSnapshot = func() error {
+							closeStarted := time.Now()
+							err := snap.Close()
+							snapshotCloseCalls.Add(1)
+							snapshotCloseNanos.Add(uint64(time.Since(closeStarted)))
+							return err
+						}
 					} else if !hasAppendGetter {
 						workerAppendGetter = nil
 					}
@@ -2389,6 +3055,12 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				if err := runWorker(rng, nil); err != nil {
 					return 0, fmt.Errorf("random_read_parallel: %w", err)
 				}
+				recordSnapshotPerf("random_read_parallel", db, treeDBSnapshotPerfMetrics{
+					AcquireCalls:      snapshotAcquireCalls.Load(),
+					AcquireTotalNanos: snapshotAcquireNanos.Load(),
+					CloseCalls:        snapshotCloseCalls.Load(),
+					CloseTotalNanos:   snapshotCloseNanos.Load(),
+				})
 				return float64(cfg.Keys) / time.Since(start).Seconds(), nil
 			}
 
@@ -2418,6 +3090,12 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				return 0, fmt.Errorf("random_read_parallel: %w", err)
 			default:
 			}
+			recordSnapshotPerf("random_read_parallel", db, treeDBSnapshotPerfMetrics{
+				AcquireCalls:      snapshotAcquireCalls.Load(),
+				AcquireTotalNanos: snapshotAcquireNanos.Load(),
+				CloseCalls:        snapshotCloseCalls.Load(),
+				CloseTotalNanos:   snapshotCloseNanos.Load(),
+			})
 			totalOps := float64(cfg.Keys) * float64(workers)
 			return totalOps / time.Since(start).Seconds(), nil
 		},
@@ -2448,6 +3126,10 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				return 0, fmt.Errorf("random_read_parallel_acquire_snapshot probe close: %w", err)
 			}
 			baseSeed := testSeed(cfg.SeedUsed, "random_read_parallel_acquire_snapshot")
+			var snapshotAcquireCalls atomic.Uint64
+			var snapshotAcquireNanos atomic.Uint64
+			var snapshotCloseCalls atomic.Uint64
+			var snapshotCloseNanos atomic.Uint64
 
 			runWorker := func(workerRng *rand.Rand, stop *atomic.Bool) error {
 				var k [8]byte
@@ -2463,12 +3145,18 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 					}
 					encodeKey(k[:], uint64(workerRng.Intn(cfg.Keys)))
 
+					acquireStarted := time.Now()
 					snap, err := snapshotter.AcquireReadSnapshot()
 					if err != nil {
 						return err
 					}
+					snapshotAcquireCalls.Add(1)
+					snapshotAcquireNanos.Add(uint64(time.Since(acquireStarted)))
 					nextBuf, getErr := snap.GetAppend(k[:], buf[:0])
+					closeStarted := time.Now()
 					closeErr := snap.Close()
+					snapshotCloseCalls.Add(1)
+					snapshotCloseNanos.Add(uint64(time.Since(closeStarted)))
 					if closeErr != nil {
 						return fmt.Errorf("random_read_parallel_acquire_snapshot close: %w", closeErr)
 					}
@@ -2496,6 +3184,12 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				if err := runWorker(rng, nil); err != nil {
 					return 0, fmt.Errorf("random_read_parallel_acquire_snapshot: %w", err)
 				}
+				recordSnapshotPerf("random_read_parallel_acquire_snapshot", db, treeDBSnapshotPerfMetrics{
+					AcquireCalls:      snapshotAcquireCalls.Load(),
+					AcquireTotalNanos: snapshotAcquireNanos.Load(),
+					CloseCalls:        snapshotCloseCalls.Load(),
+					CloseTotalNanos:   snapshotCloseNanos.Load(),
+				})
 				return float64(cfg.Keys) / time.Since(start).Seconds(), nil
 			}
 
@@ -2525,6 +3219,12 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				return 0, fmt.Errorf("random_read_parallel_acquire_snapshot: %w", err)
 			default:
 			}
+			recordSnapshotPerf("random_read_parallel_acquire_snapshot", db, treeDBSnapshotPerfMetrics{
+				AcquireCalls:      snapshotAcquireCalls.Load(),
+				AcquireTotalNanos: snapshotAcquireNanos.Load(),
+				CloseCalls:        snapshotCloseCalls.Load(),
+				CloseTotalNanos:   snapshotCloseNanos.Load(),
+			})
 			totalOps := float64(cfg.Keys) * float64(workers)
 			return totalOps / time.Since(start).Seconds(), nil
 		},
@@ -3160,6 +3860,11 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				return BenchRun{}, err
 			}
 
+			var treeStatsBefore treeDBSelectedStats
+			if isTreeDBInstance(inst) {
+				treeStatsBefore = snapshotSelectedTreeDBStats(inst.Wrapper)
+			}
+
 			// Create a fresh PRNG for each DB so they get the same sequence
 			rng := rand.New(rand.NewSource(seed))
 
@@ -3308,6 +4013,20 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				return BenchRun{}, fmt.Errorf("test %s on %s: %w", testName, inst.Name, runErr)
 			}
 
+			if isTreeDBInstance(inst) {
+				treeStatsAfter := snapshotSelectedTreeDBStats(inst.Wrapper)
+				snapshotPerf := snapshotPerfByTest[testName][inst.Wrapper.Name()]
+				metrics := computeTreeDBPerfMetrics(treeStatsBefore, treeStatsAfter, snapshotPerf)
+				if !treeDBPerfMetricsEmpty(metrics) {
+					perDB := treeDBPerf[testName]
+					if perDB == nil {
+						perDB = make(map[string]treeDBPerfMetrics)
+						treeDBPerf[testName] = perDB
+					}
+					perDB[inst.Wrapper.Name()] = metrics
+				}
+			}
+
 			results[testName][inst.Wrapper.Name()] = opsPerSec
 
 			// Update live table cell
@@ -3416,7 +4135,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 		}
 		if isTreeDBInstance(inst) {
 			if usage, err := computeTreeDBDiskUsage(inst.Dir); err == nil {
-				if usage.MainIndexBytes > 0 || usage.MainWAL.TotalBytes > 0 || usage.DictIndexBytes > 0 || usage.DictWAL.TotalBytes > 0 {
+				if usage.MainIndexBytes > 0 || usage.MainWAL.TotalBytes > 0 || usage.MainValueLog.TotalBytes > 0 || usage.MainLeafLog.TotalBytes > 0 || usage.DictIndexBytes > 0 || usage.DictWAL.TotalBytes > 0 || usage.DictValueLog.TotalBytes > 0 {
 					treedbDisk[inst.Wrapper.Name()] = usage
 				}
 			}
@@ -3437,6 +4156,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 		VacuumIndexBytes:    vacuumIndexBytes,
 		TreeDBDiskUsage:     treedbDisk,
 		TreeDBVlogRewrite:   treedbRewrite,
+		TreeDBPerf:          treeDBPerf,
 		TreeDBStats:         treedbStats,
 		DiskUsage:           diskUsage,
 	}, nil
@@ -3577,6 +4297,14 @@ func computeTreeDBDiskUsage(rootDir string) (treeDBDiskUsage, error) {
 	if u, err := computeWalDiskUsage(mainWAL); err == nil {
 		out.MainWAL = u
 	}
+	mainValueLog := filepath.Join(rootDir, "maindb", "value_vlog")
+	if u, err := computeWalDiskUsage(mainValueLog); err == nil {
+		out.MainValueLog = u
+	}
+	mainLeafLog := filepath.Join(rootDir, "maindb", "leaf_vlog")
+	if u, err := computeWalDiskUsage(mainLeafLog); err == nil {
+		out.MainLeafLog = u
+	}
 
 	dictIndex := filepath.Join(rootDir, "dictdb", "index.db")
 	if st, err := os.Stat(dictIndex); err == nil {
@@ -3587,6 +4315,10 @@ func computeTreeDBDiskUsage(rootDir string) (treeDBDiskUsage, error) {
 	dictWAL := filepath.Join(rootDir, "dictdb", "wal")
 	if u, err := computeWalDiskUsage(dictWAL); err == nil {
 		out.DictWAL = u
+	}
+	dictValueLog := filepath.Join(rootDir, "dictdb", "value_vlog")
+	if u, err := computeWalDiskUsage(dictValueLog); err == nil {
+		out.DictValueLog = u
 	}
 
 	return out, nil
@@ -3641,11 +4373,23 @@ func renderTreeDBDiskUsageString(usage map[string]treeDBDiskUsage) string {
 			sb.WriteString(walLine("  maindb/wal: ", u.MainWAL))
 			sb.WriteByte('\n')
 		}
+		if u.MainValueLog.TotalFiles > 0 || u.MainValueLog.TotalBytes > 0 {
+			sb.WriteString(walLine("  maindb/value_vlog: ", u.MainValueLog))
+			sb.WriteByte('\n')
+		}
+		if u.MainLeafLog.TotalFiles > 0 || u.MainLeafLog.TotalBytes > 0 {
+			sb.WriteString(walLine("  maindb/leaf_vlog: ", u.MainLeafLog))
+			sb.WriteByte('\n')
+		}
 		if u.DictIndexBytes > 0 {
 			sb.WriteString(fmt.Sprintf("  dictdb/index.db: %s\n", formatBytes(u.DictIndexBytes)))
 		}
 		if u.DictWAL.TotalFiles > 0 || u.DictWAL.TotalBytes > 0 {
 			sb.WriteString(walLine("  dictdb/wal: ", u.DictWAL))
+			sb.WriteByte('\n')
+		}
+		if u.DictValueLog.TotalFiles > 0 || u.DictValueLog.TotalBytes > 0 {
+			sb.WriteString(walLine("  dictdb/value_vlog: ", u.DictValueLog))
 			sb.WriteByte('\n')
 		}
 	}
@@ -3687,6 +4431,12 @@ func renderTreeDBVlogRewriteString(reports map[string]treeDBVlogRewriteReport) s
 		}
 		if rep.BeforeTree.MainWAL.TotalBytes > 0 || rep.AfterTree.MainWAL.TotalBytes > 0 {
 			sb.WriteString(fmt.Sprintf("  maindb/wal: %s -> %s\n", formatBytes(rep.BeforeTree.MainWAL.TotalBytes), formatBytes(rep.AfterTree.MainWAL.TotalBytes)))
+		}
+		if rep.BeforeTree.MainValueLog.TotalBytes > 0 || rep.AfterTree.MainValueLog.TotalBytes > 0 {
+			sb.WriteString(fmt.Sprintf("  maindb/value_vlog: %s -> %s\n", formatBytes(rep.BeforeTree.MainValueLog.TotalBytes), formatBytes(rep.AfterTree.MainValueLog.TotalBytes)))
+		}
+		if rep.BeforeTree.MainLeafLog.TotalBytes > 0 || rep.AfterTree.MainLeafLog.TotalBytes > 0 {
+			sb.WriteString(fmt.Sprintf("  maindb/leaf_vlog: %s -> %s\n", formatBytes(rep.BeforeTree.MainLeafLog.TotalBytes), formatBytes(rep.AfterTree.MainLeafLog.TotalBytes)))
 		}
 		sb.WriteString(fmt.Sprintf("  vlog-rewrite: segments %d -> %d bytes %s -> %s records=%d\n",
 			rep.SegmentsBefore, rep.SegmentsAfter,
@@ -3747,6 +4497,54 @@ func renderNonTreeDBDiskUsageString(usage map[string]dirDiskUsage, treedbUsage m
 		}
 		u := usage[name]
 		sb.WriteString(fmt.Sprintf("%s: total=%s files=%d", name, formatBytes(u.TotalBytes), u.TotalFiles))
+		sb.WriteByte('\n')
+	}
+	return sb.String()
+}
+
+type keptDirEntry struct {
+	name string
+	dir  string
+}
+
+func renderKeptDirsString(instances []*DBInstance) string {
+	if len(instances) == 0 {
+		return ""
+	}
+	rows := make([]keptDirEntry, 0, len(instances))
+	for _, inst := range instances {
+		if inst == nil {
+			continue
+		}
+		dir := strings.TrimSpace(inst.Dir)
+		if dir == "" {
+			continue
+		}
+		name := strings.TrimSpace(inst.Name)
+		if inst.Wrapper != nil {
+			if wrapperName := strings.TrimSpace(inst.Wrapper.Name()); wrapperName != "" {
+				name = wrapperName
+			}
+		}
+		if name == "" {
+			name = "(unnamed)"
+		}
+		rows = append(rows, keptDirEntry{name: name, dir: dir})
+	}
+	if len(rows) == 0 {
+		return ""
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		if rows[i].name == rows[j].name {
+			return rows[i].dir < rows[j].dir
+		}
+		return rows[i].name < rows[j].name
+	})
+	var sb strings.Builder
+	for _, row := range rows {
+		sb.WriteString(row.name)
+		sb.WriteString(": ")
+		sb.WriteString(row.dir)
 		sb.WriteByte('\n')
 	}
 	return sb.String()
@@ -3850,7 +4648,149 @@ func renderMarkdownSingle(run BenchRun) string {
 		sb.WriteString(renderTreeDBVlogRewriteString(run.TreeDBVlogRewrite))
 		sb.WriteString("```\n")
 	}
+	if perf := strings.TrimSpace(renderTreeDBPerfString(run.Instances, run.TestOrder, run.DisplayNames, run.TreeDBPerf)); perf != "" {
+		sb.WriteString("\n")
+		sb.WriteString("## TreeDB Perf Instrumentation\n\n")
+		sb.WriteString("```text\n")
+		sb.WriteString(perf)
+		sb.WriteString("\n```\n")
+	}
+	if stats := strings.TrimSpace(renderTreeDBSelectedStatsString(run.Instances, run.TreeDBStats)); stats != "" {
+		sb.WriteString("\n")
+		sb.WriteString("## TreeDB Selected Stats (End of Run)\n\n")
+		sb.WriteString("```text\n")
+		sb.WriteString(stats)
+		sb.WriteString("\n```\n")
+	}
+	if run.Config.KeepDir {
+		if kept := strings.TrimSpace(renderKeptDirsString(run.Instances)); kept != "" {
+			sb.WriteString("\n")
+			sb.WriteString("## Kept Data Directories\n\n")
+			sb.WriteString("```text\n")
+			sb.WriteString(kept)
+			sb.WriteString("\n```\n")
+		}
+	}
 	return sb.String()
+}
+
+func renderTreeDBPerfString(instances []*DBInstance, finalTestOrder []string, displayNames map[string]string, perf map[string]map[string]treeDBPerfMetrics) string {
+	if len(perf) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	for _, testName := range finalTestOrder {
+		perDB := perf[testName]
+		if len(perDB) == 0 {
+			continue
+		}
+		label := displayNames[testName]
+		if strings.TrimSpace(label) == "" {
+			label = testName
+		}
+		wroteHeader := false
+		for _, inst := range instances {
+			if inst == nil || inst.Wrapper == nil {
+				continue
+			}
+			dbName := inst.Wrapper.Name()
+			m, ok := perDB[dbName]
+			if !ok || treeDBPerfMetricsEmpty(m) {
+				continue
+			}
+			if wroteHeader {
+				sb.WriteByte('\n')
+			}
+			wroteHeader = true
+			sb.WriteString(label)
+			sb.WriteString(" / ")
+			sb.WriteString(dbName)
+			sb.WriteByte('\n')
+			if m.Snapshot.AcquireCalls > 0 || m.Snapshot.CloseCalls > 0 {
+				sb.WriteString(fmt.Sprintf("  snapshot.acquire.calls=%d total_ms=%.3f avg_us=%.3f\n",
+					m.Snapshot.AcquireCalls,
+					float64(m.Snapshot.AcquireTotalNanos)/1_000_000.0,
+					m.Snapshot.AcquireAvgMicros,
+				))
+				sb.WriteString(fmt.Sprintf("  snapshot.close.calls=%d total_ms=%.3f avg_us=%.3f\n",
+					m.Snapshot.CloseCalls,
+					float64(m.Snapshot.CloseTotalNanos)/1_000_000.0,
+					m.Snapshot.CloseAvgMicros,
+				))
+			}
+			mmapTotal := m.Mmap.Hits + m.Mmap.FallbackReadAt
+			if mmapTotal > 0 || m.Mmap.MissOutOfRange > 0 || m.Mmap.MissNoMapping > 0 || m.Mmap.MissDeadMapCap > 0 {
+				sb.WriteString(fmt.Sprintf("  vlog_mmap.read.hits.delta=%d miss_out_of_range.delta=%d miss_no_mapping.delta=%d miss_dead_mapping_cap.delta=%d fallback_readat.delta=%d hit_ratio.delta=%.6f\n",
+					m.Mmap.Hits,
+					m.Mmap.MissOutOfRange,
+					m.Mmap.MissNoMapping,
+					m.Mmap.MissDeadMapCap,
+					m.Mmap.FallbackReadAt,
+					m.Mmap.HitRatio,
+				))
+			}
+			sb.WriteString(fmt.Sprintf("  leaf_generation.generations.pinned.after=%d leaf_generation.pins.total.after=%d\n",
+				m.LeafGenerationsPinnedAfter,
+				m.LeafPinsTotalAfter,
+			))
+		}
+		if wroteHeader {
+			sb.WriteByte('\n')
+		}
+	}
+	return strings.TrimSpace(sb.String())
+}
+
+func renderTreeDBSelectedStatsString(instances []*DBInstance, treeStats map[string]map[string]string) string {
+	if len(treeStats) == 0 {
+		return ""
+	}
+	keys := []struct {
+		label string
+		alts  []string
+	}{
+		{label: "vlog_mmap.read.hits", alts: []string{"treedb.cache.vlog_mmap.read.hits", "treedb.vlog.mmap_read.hits"}},
+		{label: "vlog_mmap.read.miss_out_of_range", alts: []string{"treedb.cache.vlog_mmap.read.miss_out_of_range", "treedb.vlog.mmap_read.miss_out_of_range"}},
+		{label: "vlog_mmap.read.miss_no_mapping", alts: []string{"treedb.cache.vlog_mmap.read.miss_no_mapping", "treedb.vlog.mmap_read.miss_no_mapping"}},
+		{label: "vlog_mmap.read.miss_dead_mapping_cap", alts: []string{"treedb.cache.vlog_mmap.read.miss_dead_mapping_cap", "treedb.vlog.mmap_read.miss_dead_mapping_cap"}},
+		{label: "vlog_mmap.read.fallback_readat", alts: []string{"treedb.cache.vlog_mmap.read.fallback_readat", "treedb.vlog.mmap_read.fallback_readat"}},
+		{label: "vlog_mmap.read.hit_ratio", alts: []string{"treedb.cache.vlog_mmap.read.hit_ratio", "treedb.vlog.mmap_read.hit_ratio"}},
+		{label: "leaf_generation.generations.pinned", alts: []string{"treedb.leaf_generation.generations.pinned"}},
+		{label: "leaf_generation.pins.total", alts: []string{"treedb.leaf_generation.pins.total"}},
+	}
+	var sb strings.Builder
+	for _, inst := range instances {
+		if inst == nil || inst.Wrapper == nil {
+			continue
+		}
+		dbName := inst.Wrapper.Name()
+		stats := treeStats[dbName]
+		if len(stats) == 0 {
+			continue
+		}
+		var dbSB strings.Builder
+		foundSelectedStat := false
+		for _, key := range keys {
+			for _, alt := range key.alts {
+				if value, ok := stats[alt]; ok {
+					dbSB.WriteString("  ")
+					dbSB.WriteString(key.label)
+					dbSB.WriteString(": ")
+					dbSB.WriteString(value)
+					dbSB.WriteByte('\n')
+					foundSelectedStat = true
+					break
+				}
+			}
+		}
+		if !foundSelectedStat {
+			continue
+		}
+		sb.WriteString(dbName)
+		sb.WriteString(":\n")
+		sb.WriteString(dbSB.String())
+	}
+	return strings.TrimSpace(sb.String())
 }
 
 func renderMarkdownSweep(runs []BenchRun) string {
@@ -3959,6 +4899,75 @@ func renderMarkdownSweep(runs []BenchRun) string {
 			sb.WriteString("```text\n")
 			sb.WriteString(renderTreeDBVlogRewriteString(run.TreeDBVlogRewrite))
 			sb.WriteString("```\n\n")
+		}
+	}
+
+	anyPerf := false
+	for _, run := range runs {
+		if strings.TrimSpace(renderTreeDBPerfString(run.Instances, run.TestOrder, run.DisplayNames, run.TreeDBPerf)) != "" {
+			anyPerf = true
+			break
+		}
+	}
+	if anyPerf {
+		sb.WriteString("## TreeDB Perf Instrumentation\n\n")
+		for _, run := range runs {
+			perf := strings.TrimSpace(renderTreeDBPerfString(run.Instances, run.TestOrder, run.DisplayNames, run.TreeDBPerf))
+			if perf == "" {
+				continue
+			}
+			sb.WriteString(fmt.Sprintf("keys=%s\n\n", formatInt(run.Config.Keys)))
+			sb.WriteString("```text\n")
+			sb.WriteString(perf)
+			sb.WriteString("\n```\n\n")
+		}
+	}
+
+	anyTreeStats := false
+	for _, run := range runs {
+		if strings.TrimSpace(renderTreeDBSelectedStatsString(run.Instances, run.TreeDBStats)) != "" {
+			anyTreeStats = true
+			break
+		}
+	}
+	if anyTreeStats {
+		sb.WriteString("## TreeDB Selected Stats (End of Run)\n\n")
+		for _, run := range runs {
+			stats := strings.TrimSpace(renderTreeDBSelectedStatsString(run.Instances, run.TreeDBStats))
+			if stats == "" {
+				continue
+			}
+			sb.WriteString(fmt.Sprintf("keys=%s\n\n", formatInt(run.Config.Keys)))
+			sb.WriteString("```text\n")
+			sb.WriteString(stats)
+			sb.WriteString("\n```\n\n")
+		}
+	}
+
+	anyKept := false
+	for _, run := range runs {
+		if !run.Config.KeepDir {
+			continue
+		}
+		if strings.TrimSpace(renderKeptDirsString(run.Instances)) != "" {
+			anyKept = true
+			break
+		}
+	}
+	if anyKept {
+		sb.WriteString("## Kept Data Directories\n\n")
+		for _, run := range runs {
+			if !run.Config.KeepDir {
+				continue
+			}
+			kept := strings.TrimSpace(renderKeptDirsString(run.Instances))
+			if kept == "" {
+				continue
+			}
+			sb.WriteString(fmt.Sprintf("keys=%s\n\n", formatInt(run.Config.Keys)))
+			sb.WriteString("```text\n")
+			sb.WriteString(kept)
+			sb.WriteString("\n```\n\n")
 		}
 	}
 

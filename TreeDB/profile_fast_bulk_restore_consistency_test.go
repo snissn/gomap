@@ -23,8 +23,10 @@ func bulkRestoreKey(i int) []byte {
 	return k
 }
 
-func TestProfileFast_BulkRestoreMaintainsKeyValueParity(t *testing.T) {
-	opts := OptionsFor(ProfileFast, t.TempDir())
+func runBulkRestoreMaintainsKeyValueParity(t *testing.T, profile Profile) {
+	t.Helper()
+
+	opts := OptionsFor(profile, t.TempDir())
 	opts.FlushThreshold = 1 << 20 // 1MiB to force frequent rotations/flushes.
 	opts.ValueLog.ForcePointers = true
 	opts.ValueLog.Generational.Policy = ValueLogGenerationOff
@@ -260,5 +262,153 @@ func TestProfileFast_BulkRestoreMaintainsKeyValueParity(t *testing.T) {
 		if !bytes.Equal(got, want) {
 			t.Fatalf("reopen get i=%d: value mismatch got_len=%d want_len=%d", i, len(got), len(want))
 		}
+	}
+}
+
+func TestProfileFast_BulkRestoreMaintainsKeyValueParity(t *testing.T) {
+	for _, profile := range []Profile{ProfileFast, ProfileWALOnFast} {
+		profile := profile
+		t.Run(string(profile), func(t *testing.T) {
+			runBulkRestoreMaintainsKeyValueParity(t, profile)
+		})
+	}
+}
+
+func TestProfileFast_BulkRestoreRemainsReadableBeforeCheckpointBarrier(t *testing.T) {
+	for _, profile := range []Profile{ProfileFast, ProfileWALOnFast} {
+		profile := profile
+		t.Run(string(profile), func(t *testing.T) {
+			opts := OptionsFor(profile, t.TempDir())
+			opts.FlushThreshold = 1 << 20
+			opts.ValueLog.Generational.Policy = ValueLogGenerationOff
+			opts.BackgroundIndexVacuumInterval = -1
+			opts.DisableBackgroundPrune = true
+
+			db, err := Open(opts)
+			if err != nil {
+				t.Fatalf("open: %v", err)
+			}
+			defer func() { _ = db.Close() }()
+
+			const (
+				keys      = 50_000
+				batchSize = 2_000
+			)
+
+			live := make([][]byte, keys)
+			b := db.NewBatch()
+			if b == nil {
+				t.Fatal("NewBatch returned nil")
+			}
+			defer func() {
+				if b != nil {
+					_ = b.Close()
+				}
+			}()
+
+			commitBatch := func(createNew bool) {
+				t.Helper()
+				if b == nil {
+					return
+				}
+				if err := b.Write(); err != nil {
+					t.Fatalf("batch write: %v", err)
+				}
+				_ = b.Close()
+				b = nil
+				if createNew {
+					b = db.NewBatch()
+					if b == nil {
+						t.Fatal("NewBatch returned nil")
+					}
+				}
+			}
+
+			for i := 0; i < keys; i++ {
+				key := bulkRestoreKey(i)
+				val := bulkRestoreValue(1, i)
+				live[i] = val
+				if err := b.Set(key, val); err != nil {
+					t.Fatalf("set i=%d: %v", i, err)
+				}
+				if (i+1)%batchSize == 0 {
+					commitBatch(i+1 < keys)
+				}
+			}
+			commitBatch(false)
+
+			for i := 0; i < keys; i += 257 {
+				got, err := db.Get(bulkRestoreKey(i))
+				if err != nil {
+					t.Fatalf("post-restore immediate get i=%d: %v", i, err)
+				}
+				if !bytes.Equal(got, live[i]) {
+					t.Fatalf("post-restore immediate get i=%d mismatch got_len=%d want_len=%d", i, len(got), len(live[i]))
+				}
+			}
+
+			churn := db.NewBatch()
+			if churn == nil {
+				t.Fatal("NewBatch returned nil for churn")
+			}
+			defer func() {
+				if churn != nil {
+					_ = churn.Close()
+				}
+			}()
+			for i := 0; i < keys; i++ {
+				key := bulkRestoreKey(i)
+				switch {
+				case i%7 == 0:
+					if err := churn.Delete(key); err != nil {
+						t.Fatalf("delete i=%d: %v", i, err)
+					}
+					live[i] = nil
+				case i%3 == 0:
+					val := bulkRestoreValue(2, i)
+					if err := churn.Set(key, val); err != nil {
+						t.Fatalf("overwrite i=%d: %v", i, err)
+					}
+					live[i] = val
+				}
+				if (i+1)%batchSize == 0 {
+					if err := churn.Write(); err != nil {
+						t.Fatalf("churn write i=%d: %v", i, err)
+					}
+					_ = churn.Close()
+					churn = nil
+					if i+1 < keys {
+						churn = db.NewBatch()
+						if churn == nil {
+							t.Fatal("NewBatch returned nil for churn rotation")
+						}
+					}
+				}
+			}
+			if churn != nil {
+				if err := churn.Write(); err != nil {
+					t.Fatalf("final churn write: %v", err)
+				}
+				_ = churn.Close()
+				churn = nil
+			}
+
+			for i := 0; i < keys; i += 257 {
+				got, err := db.Get(bulkRestoreKey(i))
+				if err != nil {
+					t.Fatalf("post-churn pre-checkpoint get i=%d: %v", i, err)
+				}
+				want := live[i]
+				if want == nil {
+					if got != nil {
+						t.Fatalf("post-churn pre-checkpoint get i=%d got value len=%d want missing", i, len(got))
+					}
+					continue
+				}
+				if !bytes.Equal(got, want) {
+					t.Fatalf("post-churn pre-checkpoint get i=%d mismatch got_len=%d want_len=%d", i, len(got), len(want))
+				}
+			}
+		})
 	}
 }

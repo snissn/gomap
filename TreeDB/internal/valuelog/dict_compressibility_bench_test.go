@@ -388,7 +388,10 @@ func buildBenchDict(dictID uint32, samples [][]byte) ([]byte, error) {
 			ID:       dictID,
 			Contents: samples,
 			History:  history,
-			Level:    zstd.SpeedFastest,
+			// Match the runtime trainer: zero repeat offsets can produce dicts
+			// that fail validation even when BuildDict returns bytes.
+			Offsets: [3]int{1, 4, 8},
+			Level:   zstd.SpeedFastest,
 		})
 	}()
 	if err != nil {

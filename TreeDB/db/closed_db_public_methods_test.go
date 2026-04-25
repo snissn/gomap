@@ -228,6 +228,28 @@ func TestClosedDB_DeleteSync(t *testing.T) {
 	})
 }
 
+func TestClosedDB_Update(t *testing.T) {
+	runClosedDBMethod(t, "Update", func(d *DB) {
+		err := d.Update([]byte("k"), func([]byte) (UpdateResult, error) {
+			return SetUpdate([]byte("v")), nil
+		})
+		if !errors.Is(err, ErrClosed) {
+			t.Fatalf("Update err=%v want %v", err, ErrClosed)
+		}
+	})
+}
+
+func TestClosedDB_UpdateSync(t *testing.T) {
+	runClosedDBMethod(t, "UpdateSync", func(d *DB) {
+		err := d.UpdateSync([]byte("k"), func([]byte) (UpdateResult, error) {
+			return SetUpdate([]byte("v")), nil
+		})
+		if !errors.Is(err, ErrClosed) {
+			t.Fatalf("UpdateSync err=%v want %v", err, ErrClosed)
+		}
+	})
+}
+
 func TestClosedDB_Iterator(t *testing.T) {
 	runClosedDBMethod(t, "Iterator", func(d *DB) {
 		it, err := d.Iterator(nil, nil)

@@ -33,7 +33,7 @@ func TestReverseIterator_PropagatesRotateError(t *testing.T) {
 	defer db.Close()
 
 	setMutable(db, []byte("k"), []byte("v"))
-	db.memtableMode = memtable.Mode(255)
+	db.storeMemtableMode(memtable.Mode(255))
 
 	it, err := db.ReverseIterator(nil, nil)
 	if it != nil {

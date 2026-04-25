@@ -2,40 +2,46 @@ package page
 
 import "fmt"
 
-// LeafRef encodes a value-log pointer for a B+Tree leaf page into a uint64 so it
-// can be stored in InternalEntry.ChildPageID without changing the internal page
-// wire format.
+// LeafRef encodes a leaf-log pointer into a uint64 so it can be stored in
+// InternalEntry.ChildPageID without changing the internal page wire format.
 //
-// Layout (little-endian on disk via u64 encoding, but treated as numeric here):
-//   high 32 bits: ValuePtr.FileID (must be a value-log file id)
-//   low  32 bits: ValuePtr.Offset (must fit in u32)
+// Layout:
+//   bit 63:      leaf-ref marker
+//   bits 32..62: LeafLogPtr.FileID (raw leaf-log file id; must fit in 31 bits)
+//   bits  0..31: LeafLogPtr.Offset (must fit in u32)
 //
-// LeafRef pointers intentionally omit ValuePtr.Length/sub-index. Leaf pages are
-// stored as single-record grouped frames (K=1), so the reader can reconstruct a
-// stable ValuePtr with grouped flag and zero record-length hint.
+// The marker keeps LeafRef ids disjoint from normal pager page ids while
+// keeping file identity typed at the API level instead of smuggling class bits
+// through ValuePtr.FileID.
+
+const leafRefMarker uint64 = uint64(1) << 63
 
 var leafRefPtrLength = ValuePtrMarkGrouped(0, 0)
 
-// EncodeLeafRef encodes ptr as a LeafRef id.
-func EncodeLeafRef(ptr ValuePtr) (uint64, error) {
-	if !IsValueLogFileID(ptr.FileID) {
-		return 0, fmt.Errorf("page: leafref requires value-log file id, got %d", ptr.FileID)
+func EncodeLeafRef(ptr LeafLogPtr) (uint64, error) {
+	if ptr.FileID&(1<<31) != 0 {
+		return 0, fmt.Errorf("page: leafref file id overflows 31 bits: %d", ptr.FileID)
 	}
 	if ptr.Offset > uint64(^uint32(0)) {
 		return 0, fmt.Errorf("page: leafref offset overflows u32: %d", ptr.Offset)
 	}
-	return (uint64(ptr.FileID) << 32) | uint64(uint32(ptr.Offset)), nil
+	return leafRefMarker | (uint64(ptr.FileID) << 32) | uint64(uint32(ptr.Offset)), nil
 }
 
-// DecodeLeafRef decodes a LeafRef id into a ValuePtr.
-func DecodeLeafRef(id uint64) (ValuePtr, bool) {
-	fileID := uint32(id >> 32)
-	if !IsValueLogFileID(fileID) {
-		return ValuePtr{}, false
-	}
-	return ValuePtr{
+func IsLeafRefID(id uint64) bool {
+	return id&leafRefMarker != 0
+}
+
+func DecodeLeafRefID(id uint64) LeafLogPtr {
+	return LeafLogPtr{
 		Offset: uint64(uint32(id)),
-		Length: leafRefPtrLength,
-		FileID: fileID,
-	}, true
+		FileID: uint32((id >> 32) & ((uint64(1) << 31) - 1)),
+	}
+}
+
+func DecodeLeafRef(id uint64) (LeafLogPtr, bool) {
+	if !IsLeafRefID(id) {
+		return LeafLogPtr{}, false
+	}
+	return DecodeLeafRefID(id), true
 }

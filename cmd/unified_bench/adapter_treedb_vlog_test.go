@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"testing"
 
 	treedb "github.com/snissn/gomap/TreeDB"
@@ -27,8 +28,9 @@ func TestBuildTreeDBOptions_DefaultVlogCompressionAuto(t *testing.T) {
 	defer restoreTreeDBFlagState(saved)
 
 	*treedbVlogCompression = "default"
+	*treedbVlogCompressionAutotune = "default"
 
-	opts, _, err := buildTreeDBOptions("")
+	opts, rep, err := buildTreeDBOptions("")
 	if err != nil {
 		t.Fatalf("buildTreeDBOptions: %v", err)
 	}
@@ -37,6 +39,12 @@ func TestBuildTreeDBOptions_DefaultVlogCompressionAuto(t *testing.T) {
 	}
 	if opts.ValueLog.AutoPolicy != treedb.ValueLogAutoBalanced {
 		t.Fatalf("unexpected default auto policy: %v", opts.ValueLog.AutoPolicy)
+	}
+	if opts.ValueLog.CompressionAutotune.Mode != treedb.AutotuneUnset {
+		t.Fatalf("unexpected default autotune mode: %v", opts.ValueLog.CompressionAutotune.Mode)
+	}
+	if got := rep.formatText(""); !strings.Contains(got, "vlog.compression_autotune=default (effective=medium)") {
+		t.Fatalf("resolved options missing default autotune note: %q", got)
 	}
 }
 
@@ -113,6 +121,50 @@ func TestBuildTreeDBOptions_VlogAutoPolicyFlag(t *testing.T) {
 	}
 }
 
+func TestBuildTreeDBOptions_VlogDictClassModeFlag(t *testing.T) {
+	saved := saveTreeDBFlagState()
+	defer restoreTreeDBFlagState(saved)
+
+	*treedbVlogDictClassMode = "split_outer_leaf"
+	opts, rep, err := buildTreeDBOptions("")
+	if err != nil {
+		t.Fatalf("buildTreeDBOptions: %v", err)
+	}
+	if opts.ValueLog.DictClassMode != treedb.ValueLogDictClassSplitOuterLeaf {
+		t.Fatalf("unexpected dict class mode: %v", opts.ValueLog.DictClassMode)
+	}
+	if got := rep.formatText(""); !strings.Contains(got, "vlog.dict_class_mode=split_outer_leaf") {
+		t.Fatalf("resolved options missing split class mode: %q", got)
+	}
+}
+
+func TestBuildTreeDBOptions_VlogRewriteMinSegmentAgeFlag(t *testing.T) {
+	saved := saveTreeDBFlagState()
+	defer restoreTreeDBFlagState(saved)
+
+	*treedbVlogRewriteMinSegmentAgeMS = 5000
+	opts, rep, err := buildTreeDBOptions("")
+	if err != nil {
+		t.Fatalf("buildTreeDBOptions: %v", err)
+	}
+	if got := opts.ValueLog.Generational.RewriteMinSegmentAge.Milliseconds(); got != 5000 {
+		t.Fatalf("unexpected rewrite min segment age ms: got=%d want=5000", got)
+	}
+	if got := rep.formatText(""); !strings.Contains(got, "vlog.rewrite_min_segment_age_ms=5000") {
+		t.Fatalf("resolved options missing rewrite min segment age: %q", got)
+	}
+}
+
+func TestBuildTreeDBOptions_InvalidVlogDictClassMode(t *testing.T) {
+	saved := saveTreeDBFlagState()
+	defer restoreTreeDBFlagState(saved)
+
+	*treedbVlogDictClassMode = "bad_mode"
+	if _, _, err := buildTreeDBOptions(""); err == nil {
+		t.Fatalf("expected error for invalid dict class mode")
+	}
+}
+
 func TestBuildTreeDBOptions_InvalidVlogAutoPolicy(t *testing.T) {
 	oldPolicy := *treedbVlogAutoPolicy
 	defer func() { *treedbVlogAutoPolicy = oldPolicy }()
@@ -124,10 +176,10 @@ func TestBuildTreeDBOptions_InvalidVlogAutoPolicy(t *testing.T) {
 
 func TestResolvedTreeDBVlogTrainDefaults(t *testing.T) {
 	train, dict := resolvedTreeDBVlogTrainDefaults(0, 0)
-	if train != 4<<20 {
+	if train != 1<<20 {
 		t.Fatalf("expected default train bytes, got %d", train)
 	}
-	if dict != 40<<10 {
+	if dict != 32<<10 {
 		t.Fatalf("expected default dict bytes, got %d", dict)
 	}
 

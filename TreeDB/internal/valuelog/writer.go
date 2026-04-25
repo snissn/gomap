@@ -21,10 +21,17 @@ import (
 const headerWithoutCRC = HeaderSize - 4
 
 // defaultBufferSize controls the default per-writer buffering in file-backed
-// value-log writers (bufio + append buffer + scratch). A smaller default keeps
+// value-log writers (bufio + append buffer). A smaller default keeps
 // heap high-watermarks reasonable when workloads open many concurrent writers
 // (e.g. sharded cached mode under state-sync restore).
 const defaultBufferSize = 4 << 20
+
+const (
+	// Retain up to one normal writer buffer of scratch across explicit flush-style
+	// boundaries, but trim larger transient spikes back down once the writer cools.
+	writerScratchKeepCap = defaultBufferSize
+	writerScratchTrimCap = writerScratchKeepCap * 2
+)
 
 var syncDirFn = syncDir
 
@@ -140,6 +147,55 @@ func (w *Writer) flushAppendBuf() error {
 	}
 	w.appendBuf = w.appendBuf[:0]
 	return nil
+}
+
+func (w *Writer) flushNoTrim() error {
+	if w == nil {
+		return nil
+	}
+	if err := w.flushAppendBuf(); err != nil {
+		return err
+	}
+	if w.bw != nil {
+		if err := w.bw.Flush(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func trimTransientWriterScratch(buf []byte) []byte {
+	if cap(buf) == 0 {
+		return nil
+	}
+	if cap(buf) <= writerScratchTrimCap {
+		return buf[:0]
+	}
+	return make([]byte, 0, writerScratchKeepCap)
+}
+
+func (w *Writer) trimTransientScratchBuffers() {
+	if w == nil {
+		return
+	}
+	w.scratch = trimTransientWriterScratch(w.scratch)
+	w.rawScratch = trimTransientWriterScratch(w.rawScratch)
+	w.encScratch = trimTransientWriterScratch(w.encScratch)
+	w.blockScratch = trimTransientWriterScratch(w.blockScratch)
+	w.encLimiter.buf = nil
+	w.encLimiter.limit = 0
+}
+
+func (w *Writer) releaseTransientScratchBuffers() {
+	if w == nil {
+		return
+	}
+	w.scratch = nil
+	w.rawScratch = nil
+	w.encScratch = nil
+	w.blockScratch = nil
+	w.encLimiter.buf = nil
+	w.encLimiter.limit = 0
 }
 
 func (w *Writer) writeBytes(buf []byte) error {
@@ -366,7 +422,6 @@ func NewWriter(path string, fileID uint32) (*Writer, error) {
 		rawWritevMinAvgBytes:  defaultRawWritevMinAvgBytes,
 		rawWritevMinBatchRecs: defaultRawWritevMinBatchRecords,
 		appendBuf:             make([]byte, 0, defaultBufferSize),
-		scratch:               make([]byte, 0, defaultBufferSize),
 		prefixBuf:             make([]byte, 0, FrameHeaderSize+(MaxFrameK*8)+((MaxFrameK+1)*4)),
 		dictFrameEncodeLevel:  zstd.SpeedFastest,
 		blockCodec:            BlockCodecSnappy,
@@ -383,7 +438,6 @@ func newWriterWithSink(sink io.Writer, fileID uint32) *Writer {
 		appendMax:             0,
 		rawWritevMinAvgBytes:  defaultRawWritevMinAvgBytes,
 		rawWritevMinBatchRecs: defaultRawWritevMinBatchRecords,
-		scratch:               make([]byte, 0, defaultBufferSize),
 		prefixBuf:             make([]byte, 0, FrameHeaderSize+(MaxFrameK*8)+((MaxFrameK+1)*4)),
 		dictFrameEncodeLevel:  zstd.SpeedFastest,
 		blockCodec:            BlockCodecSnappy,
@@ -583,16 +637,25 @@ func (w *Writer) Size() int64 {
 	return w.size
 }
 
-func (w *Writer) Flush() error {
+// PendingBytes reports bytes accepted by the writer but not yet flushed to the
+// underlying file descriptor. For file-backed writers this is the append-buffer
+// tail that same-process readers cannot see through ReadAt until flushed.
+func (w *Writer) PendingBytes() int {
 	if w == nil {
-		return nil
+		return 0
 	}
-	if err := w.flushAppendBuf(); err != nil {
+	pending := len(w.appendBuf)
+	if w.bw != nil {
+		pending += w.bw.Buffered()
+	}
+	return pending
+}
+
+func (w *Writer) Flush() error {
+	if err := w.flushNoTrim(); err != nil {
 		return err
 	}
-	if w.bw != nil {
-		return w.bw.Flush()
-	}
+	w.trimTransientScratchBuffers()
 	return nil
 }
 
@@ -604,7 +667,7 @@ func (w *Writer) RotateTo(path string, fileID uint32) error {
 	if w.f == nil {
 		if w.bw != nil {
 			// Preserve sink semantics for tests before switching to file-backed.
-			if err := w.bw.Flush(); err != nil {
+			if err := w.flushNoTrim(); err != nil {
 				return err
 			}
 		}
@@ -632,11 +695,11 @@ func (w *Writer) RotateTo(path string, fileID uint32) error {
 		} else {
 			w.appendBuf = w.appendBuf[:0]
 		}
-		w.scratch = w.scratch[:0]
+		w.trimTransientScratchBuffers()
 		return nil
 	}
 
-	if err := w.Flush(); err != nil {
+	if err := w.flushNoTrim(); err != nil {
 		return err
 	}
 	if w.syncFn != nil {
@@ -673,10 +736,10 @@ func (w *Writer) RotateTo(path string, fileID uint32) error {
 	w.size = info.Size()
 	w.fileID = fileID
 	w.appendBuf = w.appendBuf[:0]
-	w.scratch = w.scratch[:0]
 	if err := old.Close(); err != nil {
 		return err
 	}
+	w.trimTransientScratchBuffers()
 	return nil
 }
 
@@ -1303,11 +1366,15 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 
 		// If recent probes show compression yields no benefit, temporarily skip
 		// zstd. We periodically probe again so we can adapt if data changes.
+		forceDictProbe := shouldForceDictProbe(rawPayloadBytes)
 		if w.skipRemain > 0 {
+			if !shouldProbeLargeDictDuringBackoff(w.skipRemain, rawPayloadBytes) {
+				w.skipRemain--
+				return writeRaw(false, 0)
+			}
 			w.skipRemain--
-			return writeRaw(false, 0)
 		}
-		if w.shouldSkipCompression(rawPayloadBytes) {
+		if w.shouldSkipCompression(rawPayloadBytes) && !forceDictProbe {
 			return writeRaw(false, 0)
 		}
 
@@ -1432,7 +1499,11 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 			codecs.encPool.Put(enc)
 
 			encodedLen := len(w.appendBuf) - encodedStart
-			if !w.shouldKeepCompressed(rawPayloadBytes, encodedLen, encodeNs) {
+			keepCompressed := w.shouldKeepCompressed(rawPayloadBytes, encodedLen, encodeNs)
+			if !keepCompressed && shouldForceKeepLargeDictCompressed(rawPayloadBytes, encodedLen) {
+				keepCompressed = true
+			}
+			if !keepCompressed {
 				w.appendBuf = w.appendBuf[:recordStart]
 				if w.noBenefit < 0xff {
 					w.noBenefit++
@@ -1554,6 +1625,9 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 		keepCompressed := false
 		if encodeErr == nil {
 			keepCompressed = w.shouldKeepCompressed(rawPayloadBytes, len(encoded), encodeNs)
+			if !keepCompressed && shouldForceKeepLargeDictCompressed(rawPayloadBytes, len(encoded)) {
+				keepCompressed = true
+			}
 		}
 		if encodeErr != nil && !errors.Is(encodeErr, errEncodedTooLarge) {
 			return nil, FrameStats{}, encodeErr
@@ -2057,22 +2131,34 @@ func (w *Writer) Sync() error {
 	if w == nil || w.f == nil {
 		return nil
 	}
-	if err := w.Flush(); err != nil {
+	if err := w.flushNoTrim(); err != nil {
 		return err
 	}
 	if w.syncFn != nil {
-		return w.syncFn(w.f)
+		if err := w.syncFn(w.f); err != nil {
+			return err
+		}
+		w.trimTransientScratchBuffers()
+		return nil
 	}
-	return w.f.Sync()
+	if err := w.f.Sync(); err != nil {
+		return err
+	}
+	w.trimTransientScratchBuffers()
+	return nil
 }
 
 func (w *Writer) Close() error {
 	if w == nil || w.f == nil {
 		return nil
 	}
-	if err := w.Flush(); err != nil {
+	if err := w.flushNoTrim(); err != nil {
 		_ = w.f.Close()
 		return err
 	}
-	return w.f.Close()
+	if err := w.f.Close(); err != nil {
+		return err
+	}
+	w.releaseTransientScratchBuffers()
+	return nil
 }

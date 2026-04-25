@@ -6,6 +6,8 @@ import (
 	"os"
 	"sort"
 	"strings"
+
+	treedb "github.com/snissn/gomap/TreeDB"
 )
 
 var (
@@ -22,12 +24,8 @@ var profiles map[string]Profile
 func init() {
 	applyFast := func(isSet map[string]bool) {
 		// TreeDB
-		setBoolIfUnset("treedb-disable-wal", true, isSet, treedbDisableWAL)
-		setBoolIfUnset("treedb-relaxed-sync", true, isSet, treedbRelaxedSync)
-		setBoolIfUnset("treedb-disable-read-checksum", true, isSet, treedbDisableReadChecksum)
+		applyTreeDBProfileIfUnset(treedb.ProfileFast, isSet)
 		setBoolIfUnset("treedb-allow-unsafe", true, isSet, treedbAllowUnsafe)
-		setBoolIfUnset("treedb-index-optimizations", true, isSet, treedbIndexOptimizations)
-		setStringIfUnset("treedb-vlog-auto-policy", "throughput", isSet, treedbVlogAutoPolicy)
 
 		// Badger
 		setBoolIfUnset("badger-nosync", true, isSet, badgerNoSync)
@@ -51,12 +49,8 @@ func init() {
 
 	applyWALOnFast := func(isSet map[string]bool) {
 		// TreeDB: keep WAL enabled, but relax durability and read integrity.
-		setBoolIfUnset("treedb-disable-wal", false, isSet, treedbDisableWAL)
-		setBoolIfUnset("treedb-relaxed-sync", true, isSet, treedbRelaxedSync)
-		setBoolIfUnset("treedb-disable-read-checksum", true, isSet, treedbDisableReadChecksum)
+		applyTreeDBProfileIfUnset(treedb.ProfileWALOnFast, isSet)
 		setBoolIfUnset("treedb-allow-unsafe", true, isSet, treedbAllowUnsafe)
-		setBoolIfUnset("treedb-index-optimizations", true, isSet, treedbIndexOptimizations)
-		setStringIfUnset("treedb-vlog-auto-policy", "throughput", isSet, treedbVlogAutoPolicy)
 
 		// Other DBs: match "fast" behavior (nosync).
 		setBoolIfUnset("badger-nosync", true, isSet, badgerNoSync)
@@ -70,11 +64,11 @@ func init() {
 
 	profiles = map[string]Profile{
 		"fast": {
-			Description: "Maximize throughput: disables fsync for supported DBs; for TreeDB also disables WAL, enables -treedb-index-optimizations, and sets throughput-biased value-log auto policy. UNSAFE for production data.",
+			Description: "Maximize throughput: disables fsync for supported DBs; for TreeDB this mirrors treedb.ProfileFast (WAL off, relaxed read integrity, append-friendly index allocation, Celestia-aligned auto/snappy/balanced value-log compression). UNSAFE for production data.",
 			Apply:       applyFast,
 		},
 		"wal_on_fast": {
-			Description: "TreeDB fast WAL-on profile: relaxed durability + disabled read checksums (WAL on, fsync/checksums off), enables -treedb-index-optimizations, and sets throughput-biased value-log auto policy.",
+			Description: "TreeDB fast WAL-on profile: mirrors treedb.ProfileWALOnFast (WAL on, relaxed sync/read integrity, append-friendly index allocation, Celestia-aligned auto/snappy/balanced value-log compression).",
 			Apply:       applyWALOnFast,
 		},
 		"unsafe": { // Alias for fast
@@ -118,6 +112,44 @@ func init() {
 	}
 }
 
+func applyTreeDBProfileIfUnset(profile treedb.Profile, isSet map[string]bool) {
+	opts := treedb.OptionsFor(profile, "")
+
+	switch opts.Durability {
+	case treedb.DurabilityWALOffRelaxed:
+		setBoolIfUnset("treedb-disable-wal", true, isSet, treedbDisableWAL)
+		setBoolIfUnset("treedb-relaxed-sync", true, isSet, treedbRelaxedSync)
+	case treedb.DurabilityWALOnRelaxed:
+		setBoolIfUnset("treedb-disable-wal", false, isSet, treedbDisableWAL)
+		setBoolIfUnset("treedb-relaxed-sync", true, isSet, treedbRelaxedSync)
+	default:
+		setBoolIfUnset("treedb-disable-wal", false, isSet, treedbDisableWAL)
+		setBoolIfUnset("treedb-relaxed-sync", false, isSet, treedbRelaxedSync)
+	}
+	setBoolIfUnset("treedb-disable-read-checksum", opts.ValueLog.ReadIntegrity == treedb.IntegritySkipChecksums, isSet, treedbDisableReadChecksum)
+	setBoolIfUnset("treedb-index-optimizations",
+		opts.LeafPrefixCompression && opts.IndexColumnarLeaves && opts.IndexPackedValuePtr,
+		isSet,
+		treedbIndexOptimizations,
+	)
+	setBoolIfUnset("treedb-index-outer-leaves-in-vlog", opts.IndexOuterLeavesInValueLog, isSet, treedbIndexOuterLeavesInVlog)
+	setBoolIfUnset("treedb-prefer-append-alloc", opts.PreferAppendAlloc, isSet, treedbPreferAppendAlloc)
+	profileCompression := formatTreeDBProfileVlogCompressionFlagValue(opts.ValueLog.Compression)
+	setStringIfUnset("treedb-vlog-compression", profileCompression, isSet, treedbVlogCompression)
+	setStringIfUnset("treedb-vlog-block-codec", formatTreeDBVlogBlockCodec(opts.ValueLog.BlockCodec), isSet, treedbVlogBlockCodec)
+	setStringIfUnset("treedb-vlog-auto-policy", formatTreeDBVlogAutoPolicy(opts.ValueLog.AutoPolicy), isSet, treedbVlogAutoPolicy)
+	setStringIfUnset("treedb-vlog-compression-autotune", formatTreeDBVlogCompressionAutotune(opts.ValueLog.CompressionAutotune.Mode), isSet, treedbVlogCompressionAutotune)
+	setIntIfUnset("treedb-vlog-dict-incompressible-hold-bytes", opts.ValueLog.DictIncompressibleHoldBytes, isSet, treedbVlogDictIncompressibleHoldBytes)
+	setIntIfUnset("treedb-vlog-dict-probe-interval-bytes", opts.ValueLog.DictProbeIntervalBytes, isSet, treedbVlogDictProbeIntervalBytes)
+}
+
+func formatTreeDBProfileVlogCompressionFlagValue(mode treedb.ValueLogCompressionMode) string {
+	if mode == treedb.ValueLogCompressionAuto {
+		return "default"
+	}
+	return formatTreeDBVlogCompressionFlagValue(mode)
+}
+
 func setBoolIfUnset(name string, val bool, isSet map[string]bool, target *bool) {
 	if !isSet[name] {
 		*target = val
@@ -154,7 +186,38 @@ func applyProfile(name string, isSet map[string]bool) error {
 	return nil
 }
 
+func stderrSupportsANSI() bool {
+	if fi, err := os.Stderr.Stat(); err == nil {
+		return (fi.Mode()&os.ModeCharDevice) != 0 && strings.ToLower(strings.TrimSpace(os.Getenv("TERM"))) != "dumb"
+	}
+	return false
+}
+
+func styleUsageText(text string, bold bool) string {
+	if !bold {
+		return text
+	}
+	return "\x1b[1m" + text + "\x1b[0m"
+}
+
+func treeDBUsageGroup(name string) string {
+	switch name {
+	case "treedb-disable-wal", "treedb-relaxed-sync", "treedb-disable-read-checksum", "treedb-allow-unsafe":
+		return "TreeDB Unsafe Knobs"
+	case "treedb-vlog-compression", "treedb-vlog-block-codec", "treedb-vlog-auto-policy", "treedb-vlog-generation-policy",
+		"treedb-vlog-compression-autotune", "treedb-vlog-dict-class-mode", "treedb-vlog-rewrite-after-run":
+		return "TreeDB Compression Knobs"
+	case "treedb-flush-threshold", "treedb-chunk-size", "treedb-maintenance-mode", "treedb-memtable-mode",
+		"treedb-index-optimizations", "treedb-index-outer-leaves-in-vlog", "treedb-prefer-append-alloc",
+		"treedb-force-value-pointers", "treedb-value-log-threshold", "treedb-disable-piggyback-compaction":
+		return "TreeDB Main Knobs"
+	default:
+		return "TreeDB Advanced Tuning"
+	}
+}
+
 func customUsage() {
+	useANSI := stderrSupportsANSI()
 	fmt.Fprintf(os.Stderr, "Usage: %s [flags]\n\n", os.Args[0])
 	fmt.Fprintf(os.Stderr, "Unified Benchmark Runner for GoMap DBs\n\n")
 	fmt.Fprintf(os.Stderr, "Profiles (-profile):\n")
@@ -167,15 +230,19 @@ func customUsage() {
 		fmt.Fprintf(os.Stderr, "  %-10s %s\n", k, profiles[k].Description)
 	}
 	fmt.Fprintf(os.Stderr, "\n")
+	fmt.Fprintf(os.Stderr, "TreeDB flags are grouped into main knobs, compression knobs, advanced tuning, and unsafe knobs.\n")
+	fmt.Fprintf(os.Stderr, "In most runs, start with -profile plus the TreeDB main knobs and leave advanced tuning alone.\n\n")
 
 	// Group flags
 	groups := map[string][]*flag.Flag{
-		"General":         {},
-		"Workload":        {},
-		"Tuning":          {},
-		"TreeDB Specific": {},
-		"Profiling":       {},
-		"Safety/Limits":   {},
+		"General":                  {},
+		"Workload":                 {},
+		"TreeDB Main Knobs":        {},
+		"TreeDB Compression Knobs": {},
+		"TreeDB Advanced Tuning":   {},
+		"TreeDB Unsafe Knobs":      {},
+		"Profiling":                {},
+		"Safety/Limits":            {},
 	}
 
 	flag.VisitAll(func(f *flag.Flag) {
@@ -184,7 +251,8 @@ func customUsage() {
 			return
 		}
 		if strings.HasPrefix(f.Name, "treedb-") {
-			groups["TreeDB Specific"] = append(groups["TreeDB Specific"], f)
+			groupName := treeDBUsageGroup(f.Name)
+			groups[groupName] = append(groups[groupName], f)
 		} else if strings.Contains(f.Name, "profile") || f.Name == "trace" {
 			groups["Profiling"] = append(groups["Profiling"], f)
 		} else if strings.HasPrefix(f.Name, "max-") || strings.HasPrefix(f.Name, "checkpoint-") {
@@ -196,18 +264,18 @@ func customUsage() {
 		}
 	})
 
-	groupOrder := []string{"General", "Workload", "Tuning", "TreeDB Specific", "Safety/Limits", "Profiling"}
+	groupOrder := []string{"General", "Workload", "TreeDB Main Knobs", "TreeDB Compression Knobs", "TreeDB Advanced Tuning", "TreeDB Unsafe Knobs", "Safety/Limits", "Profiling"}
 	for _, gName := range groupOrder {
 		flags := groups[gName]
 		if len(flags) == 0 {
 			continue
 		}
-		fmt.Fprintf(os.Stderr, "%s Flags:\n", gName)
+		fmt.Fprintf(os.Stderr, "%s:\n", styleUsageText(gName, useANSI))
 		// Sort flags in group
 		sort.Slice(flags, func(i, j int) bool { return flags[i].Name < flags[j].Name })
 		for _, f := range flags {
 			// standard flag print
-			s := fmt.Sprintf("  -%s", f.Name) // Two spaces as indent
+			s := fmt.Sprintf("  %s", styleUsageText("-"+f.Name, useANSI)) // Two spaces as indent
 			name, usage := flag.UnquoteUsage(f)
 			if len(name) > 0 {
 				s += " " + name
