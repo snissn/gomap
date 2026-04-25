@@ -1,6 +1,7 @@
 package caching
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
@@ -119,6 +120,31 @@ func buildSparseLeafPageForLeafLogTest(t *testing.T) []byte {
 	return buf
 }
 
+func requireLeafLogTestPagesEqual(t *testing.T, want, got []byte) {
+	t.Helper()
+	wantNode := node.NewNodeView(want)
+	gotNode := node.NewNodeView(got)
+	if wantNode.Type() != gotNode.Type() {
+		t.Fatalf("page types differ: got=%d want=%d", gotNode.Type(), wantNode.Type())
+	}
+	if wantNode.Count() != gotNode.Count() {
+		t.Fatalf("page counts differ: got=%d want=%d", gotNode.Count(), wantNode.Count())
+	}
+	for i := uint16(0); i < wantNode.Count(); i++ {
+		wantKey, wantVal, wantPtr, wantFlags, err := wantNode.GetLeafEntryView(i)
+		if err != nil {
+			t.Fatalf("want GetLeafEntryView(%d): %v", i, err)
+		}
+		gotKey, gotVal, gotPtr, gotFlags, err := gotNode.GetLeafEntryView(i)
+		if err != nil {
+			t.Fatalf("got GetLeafEntryView(%d): %v", i, err)
+		}
+		if !bytes.Equal(gotKey, wantKey) || !bytes.Equal(gotVal, wantVal) || gotPtr != wantPtr || gotFlags != wantFlags {
+			t.Fatalf("leaf entry %d mismatch", i)
+		}
+	}
+}
+
 func TestCachingLeafPageLog_AppendLeafPageCompactsSparseLeafPayload(t *testing.T) {
 	dir := t.TempDir()
 	fileID, err := valuelog.EncodeFileID(uint32(leafLogLaneID), 1)
@@ -151,4 +177,77 @@ func TestCachingLeafPageLog_AppendLeafPageCompactsSparseLeafPayload(t *testing.T
 	if info.Size() >= int64(valuelog.HeaderSize+page.PageSize) {
 		t.Fatalf("file size=%d want compact leaf payload smaller than raw %d", info.Size(), valuelog.HeaderSize+page.PageSize)
 	}
+}
+
+func TestDB_AppendPreparedLeafPageValueLog_AppendsAndReturnsUnlocked(t *testing.T) {
+	dir := t.TempDir()
+	fileID, err := valuelog.EncodeFileID(uint32(leafLogLaneID), 1)
+	if err != nil {
+		t.Fatalf("EncodeFileID: %v", err)
+	}
+	leafDir := filepath.Join(dir, "leaf_vlog")
+	if err := os.MkdirAll(leafDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q): %v", leafDir, err)
+	}
+	path := filepath.Join(leafDir, "value-l255-000001.log")
+	writer, err := valuelog.NewWriter(path, fileID)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	defer func() {
+		if writer != nil {
+			_ = writer.Close()
+		}
+	}()
+
+	db := &DB{
+		closeCh:                 make(chan struct{}),
+		valueLogCompressionMode: uint8(vlogCompressionOff),
+	}
+	leaf := lane{id: leafLogLaneID, vlog: writer}
+	leafPage := buildSparseLeafPageForLeafLogTest(t)
+
+	leaf.vlogMu.Lock()
+	ptr, retainPath, stats, compacted, payloadLen, totalBytes, err := db.appendPreparedLeafPageValueLog(&leaf, 1, leafPage)
+	if err != nil {
+		t.Fatalf("appendPreparedLeafPageValueLog: %v", err)
+	}
+	if !leaf.vlogMu.TryLock() {
+		t.Fatalf("appendPreparedLeafPageValueLog returned with vlogMu locked")
+	}
+	leaf.vlogMu.Unlock()
+	if retainPath != "" {
+		t.Fatalf("retainPath=%q want empty", retainPath)
+	}
+	if !compacted {
+		t.Fatalf("expected sparse leaf page to compact")
+	}
+	if payloadLen != stats.RawPayloadBytes || payloadLen >= len(leafPage) {
+		t.Fatalf("payloadLen=%d stats.RawPayloadBytes=%d raw=%d", payloadLen, stats.RawPayloadBytes, len(leafPage))
+	}
+	if totalBytes <= 0 {
+		t.Fatalf("totalBytes=%d want > 0", totalBytes)
+	}
+	if got := leaf.backendReadDirtySeq.Load(); got != 1 {
+		t.Fatalf("backendReadDirtySeq=%d want 1", got)
+	}
+
+	if err := writer.Close(); err != nil {
+		t.Fatalf("Close writer: %v", err)
+	}
+	writer = nil
+
+	mgr, err := valuelog.NewManager(dir)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	defer func() { _ = mgr.Close() }()
+	if err := mgr.RegisterSegment(path, fileID); err != nil {
+		t.Fatalf("RegisterSegment(%q): %v", path, err)
+	}
+	got, err := mgr.ReadUnsafe(ptr)
+	if err != nil {
+		t.Fatalf("ReadUnsafe: %v", err)
+	}
+	requireLeafLogTestPagesEqual(t, leafPage, got)
 }
