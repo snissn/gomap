@@ -2,6 +2,7 @@ package memtable
 
 import (
 	"bytes"
+	"runtime"
 	"sync"
 	"testing"
 	"unsafe"
@@ -12,15 +13,30 @@ import (
 )
 
 func TestBTreeEntryLayoutCompact(t *testing.T) {
-	if got, wantMax := unsafe.Sizeof(btreeEntry{}), uintptr(32); got > wantMax {
+	if got, wantMax := unsafe.Sizeof(btreeEntry{}), uintptr(16); got > wantMax {
 		t.Fatalf("btreeEntry size=%d, want <= %d", got, wantMax)
 	}
 	type btreeMapPair struct {
 		value btreeEntry
 		key   string
 	}
-	if got, wantMax := unsafe.Sizeof(btreeMapPair{}), uintptr(48); got > wantMax {
+	if got, wantMax := unsafe.Sizeof(btreeMapPair{}), uintptr(32); got > wantMax {
 		t.Fatalf("btree map pair size=%d, want <= %d", got, wantMax)
+	}
+}
+
+func TestBTreeCompactEntryKeepsBorrowedValueAlive(t *testing.T) {
+	m := NewBTree()
+	key := []byte("borrowed")
+	value := []byte("borrowed-value")
+	m.SetEntrySteal(key, value, page.ValuePtr{}, node.FlagInline)
+	value = nil
+	for i := 0; i < 3; i++ {
+		runtime.GC()
+	}
+	got, deleted, ok := m.Get(key)
+	if !ok || deleted || string(got) != "borrowed-value" {
+		t.Fatalf("Get()=(%q,%v,%v), want (borrowed-value,false,true)", string(got), deleted, ok)
 	}
 }
 
@@ -690,6 +706,72 @@ func TestBTreeApplyCopySortedBatchIndicesTrustedCopiesKeyValue(t *testing.T) {
 	}
 	if want := []string{"a", "b"}; !equalStrings(seen, want) {
 		t.Fatalf("onKey saw %v want %v", seen, want)
+	}
+}
+
+func TestBTreeApplyCopySortedBatchIndicesTrustedKeepsOwnedLastKey(t *testing.T) {
+	m := NewBTree()
+	key := []byte("m")
+	entries := []batchpkg.Entry{{
+		Type:  batchpkg.OpPut,
+		Key:   key,
+		Value: []byte("value-m"),
+	}}
+
+	m.ApplyCopySortedBatchIndicesTrusted(entries, []int{0}, false, nil)
+	key[0] = 'z'
+	if got, want := m.lastKey, "m"; got != want {
+		t.Fatalf("lastKey=%q want %q after caller key mutation", got, want)
+	}
+	m.Set([]byte("n"), []byte("value-n"))
+	if got, _, ok := m.Get([]byte("m")); !ok || string(got) != "value-m" {
+		t.Fatalf("Get(m)=(%q,%v), want value-m,true", string(got), ok)
+	}
+	if got, _, ok := m.Get([]byte("n")); !ok || string(got) != "value-n" {
+		t.Fatalf("Get(n)=(%q,%v), want value-n,true", string(got), ok)
+	}
+}
+
+func TestBTreeApplyStealSortedBatchTrustedDuplicateFallsBack(t *testing.T) {
+	m := NewBTree()
+	entries := []batchpkg.Entry{
+		{Type: batchpkg.OpPut, Key: []byte("a"), Value: []byte("old")},
+		{Type: batchpkg.OpPut, Key: []byte("a"), Value: []byte("new")},
+		{Type: batchpkg.OpPut, Key: []byte("b"), Value: []byte("value-b")},
+	}
+
+	m.ApplyStealSortedBatchTrusted(entries, nil)
+	if got := m.Len(); got != 2 {
+		t.Fatalf("Len()=%d want 2", got)
+	}
+	if got, _, ok := m.Get([]byte("a")); !ok || string(got) != "new" {
+		t.Fatalf("Get(a)=(%q,%v), want new,true", string(got), ok)
+	}
+	if got, _, ok := m.Get([]byte("b")); !ok || string(got) != "value-b" {
+		t.Fatalf("Get(b)=(%q,%v), want value-b,true", string(got), ok)
+	}
+}
+
+func TestBTreeApplyStealSortedBatchTrustedNilKeyFallsBack(t *testing.T) {
+	m := NewBTree()
+	entries := []batchpkg.Entry{
+		{Type: batchpkg.OpPut, Key: []byte("a"), Value: []byte("value-a")},
+		{Type: batchpkg.OpPut, Key: nil, Value: []byte("skip")},
+		{Type: batchpkg.OpPut, Key: []byte("b"), Value: []byte("value-b")},
+	}
+
+	m.ApplyStealSortedBatchTrusted(entries, nil)
+	if got := m.Len(); got != 2 {
+		t.Fatalf("Len()=%d want 2", got)
+	}
+	if _, _, ok := m.Get(nil); ok {
+		t.Fatal("nil key was applied")
+	}
+	if got, _, ok := m.Get([]byte("a")); !ok || string(got) != "value-a" {
+		t.Fatalf("Get(a)=(%q,%v), want value-a,true", string(got), ok)
+	}
+	if got, _, ok := m.Get([]byte("b")); !ok || string(got) != "value-b" {
+		t.Fatalf("Get(b)=(%q,%v), want value-b,true", string(got), ok)
 	}
 }
 

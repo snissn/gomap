@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"unsafe"
 
 	batchpkg "github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
@@ -27,6 +28,7 @@ const btreeAdaptiveBothSplitMinEntries = 512
 const btreeAdaptiveBothSplitMinNonAppend = 64
 const btreeLeafItemArenaRetainChunks = 256
 const btreeNodeArenaRetainChunks = 256
+const btreeLoadSortedMinBatchEntries = 256
 
 var btreeArenaChunkPools [btreeArenaPoolClassCount]sync.Pool
 var btreeArenaPoolBytes atomic.Int64
@@ -38,18 +40,40 @@ var btreeArenaPoolNumGC = func() uint64 {
 }
 
 type btreeEntry struct {
-	value []byte // inline bytes (if pointer, may store inline tail bytes)
-	flags byte
+	valuePtr unsafe.Pointer // inline bytes (if pointer, may store inline tail bytes)
+	valueLen uint32
+	flags    byte
+}
+
+func newBTreeEntry(flags byte, value []byte) btreeEntry {
+	if len(value) == 0 {
+		return btreeEntry{flags: flags}
+	}
+	if uint64(len(value)) > uint64(^uint32(0)) {
+		panic("treedb: btree entry value too large")
+	}
+	return btreeEntry{
+		valuePtr: unsafe.Pointer(unsafe.SliceData(value)),
+		valueLen: uint32(len(value)),
+		flags:    flags,
+	}
+}
+
+func (entry btreeEntry) valueBytes() []byte {
+	if entry.valueLen == 0 {
+		return nil
+	}
+	return unsafe.Slice((*byte)(entry.valuePtr), int(entry.valueLen))
 }
 
 func btreeEntryValue(entry btreeEntry) []byte {
 	if entry.flags&node.FlagPointer != 0 {
-		return btreePointerInlineValue(entry.value)
+		return btreePointerInlineValue(entry.valueBytes())
 	}
 	if entry.flags&node.FlagTombstone != 0 {
 		return nil
 	}
-	return entry.value
+	return entry.valueBytes()
 }
 
 func btreePointerInlineValue(value []byte) []byte {
@@ -60,10 +84,11 @@ func btreePointerInlineValue(value []byte) []byte {
 }
 
 func btreeEntryValuePtr(entry btreeEntry) page.ValuePtr {
-	if entry.flags&node.FlagPointer == 0 || len(entry.value) < page.ValuePtrSize {
+	value := entry.valueBytes()
+	if entry.flags&node.FlagPointer == 0 || len(value) < page.ValuePtrSize {
 		return page.ValuePtr{}
 	}
-	return page.DecodeValuePtr(entry.value[:page.ValuePtrSize])
+	return page.DecodeValuePtr(value[:page.ValuePtrSize])
 }
 
 func canonicalizeBTreeInlineValue(value []byte) []byte {
@@ -75,14 +100,14 @@ func canonicalizeBTreeInlineValue(value []byte) []byte {
 
 // btreeEntryPayloadSize tracks the logical value payload bytes contributing to
 // memtable flush thresholds, not the fixed in-memory struct footprint.
-func btreeEntryPayloadSize(flags byte, value []byte) int {
-	if flags&node.FlagPointer != 0 {
-		return len(value)
+func btreeEntryPayloadSize(entry btreeEntry) int {
+	if entry.flags&node.FlagPointer != 0 {
+		return int(entry.valueLen)
 	}
-	if flags&node.FlagTombstone != 0 {
+	if entry.flags&node.FlagTombstone != 0 {
 		return 0
 	}
-	return len(value)
+	return int(entry.valueLen)
 }
 
 func normalizeBTreeEntryFlags(flags byte) byte {
@@ -134,6 +159,9 @@ func (m *BTree) ApplyCopySortedBatchIndicesTrusted(entries []batchpkg.Entry, idx
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	if m.applyCopySortedBatchLoadSortedLocked(entries, idxs, storeInlinePtrValues, onKey) {
+		return
+	}
 	for _, idx := range idxs {
 		op := entries[idx]
 		if op.Key == nil {
@@ -153,6 +181,9 @@ func (m *BTree) applyStealSortedBatch(entries []batchpkg.Entry, idxs []int, onKe
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	if m.applyStealSortedBatchLoadSortedLocked(entries, idxs, onKey) {
+		return
+	}
 	apply := func(op batchpkg.Entry) {
 		if op.Key == nil {
 			return
@@ -177,6 +208,129 @@ func (m *BTree) applyStealSortedBatch(entries []batchpkg.Entry, idxs []int, onKe
 	}
 }
 
+func (m *BTree) applyStealSortedBatchLoadSortedLocked(entries []batchpkg.Entry, idxs []int, onKey func(key []byte)) bool {
+	n := btreeSortedBatchLen(entries, idxs)
+	if n == 0 {
+		return true
+	}
+	if n < btreeLoadSortedMinBatchEntries {
+		return false
+	}
+	if !m.canApplySortedBatchLoadSortedLocked(entries, idxs) {
+		return false
+	}
+	var addedSize int64
+	var addedDeletes int
+	var lastKey string
+	m.tree.LoadSortedItemsTrusted(n, func(i int) (string, btreeEntry) {
+		op := btreeSortedBatchEntryAt(entries, idxs, i)
+		keyStr := bytesToStringNoCopy(op.Key)
+		entry := m.btreeEntryFromBatchOpLocked(op)
+		if onKey == nil {
+			addedSize += int64(len(op.Key) + btreeEntryPayloadSize(entry))
+			if entry.flags&node.FlagTombstone != 0 {
+				addedDeletes++
+			}
+			lastKey = keyStr
+		} else {
+			m.recordSetLocked(keyStr, len(op.Key), entry, btreeEntry{}, false)
+		}
+		if onKey != nil {
+			onKey(op.Key)
+		}
+		return keyStr, entry
+	})
+	if onKey == nil {
+		m.sizeBytes += addedSize
+		m.deleteCount += addedDeletes
+		m.lastKey = lastKey
+		m.hasLast = true
+	}
+	return true
+}
+
+func (m *BTree) applyCopySortedBatchLoadSortedLocked(entries []batchpkg.Entry, idxs []int, storeInlinePtrValues bool, onKey func(key []byte)) bool {
+	n := btreeSortedBatchLen(entries, idxs)
+	if n == 0 {
+		return true
+	}
+	if n < btreeLoadSortedMinBatchEntries {
+		return false
+	}
+	if !m.canApplySortedBatchLoadSortedLocked(entries, idxs) {
+		return false
+	}
+	var addedSize int64
+	var addedDeletes int
+	var lastKey string
+	m.tree.LoadSortedItemsTrusted(n, func(i int) (string, btreeEntry) {
+		op := btreeSortedBatchEntryAt(entries, idxs, i)
+		keyCopy, entry := m.copyKeyEntryFromBatchOpLocked(op, storeInlinePtrValues)
+		keyStr := bytesToStringNoCopy(keyCopy)
+		if onKey == nil {
+			addedSize += int64(len(keyCopy) + btreeEntryPayloadSize(entry))
+			if entry.flags&node.FlagTombstone != 0 {
+				addedDeletes++
+			}
+			lastKey = keyStr
+		} else {
+			m.recordSetLocked(keyStr, len(keyCopy), entry, btreeEntry{}, false)
+		}
+		if onKey != nil {
+			onKey(op.Key)
+		}
+		return keyStr, entry
+	})
+	if onKey == nil {
+		m.sizeBytes += addedSize
+		m.deleteCount += addedDeletes
+		m.lastKey = lastKey
+		m.hasLast = true
+	}
+	return true
+}
+
+func (m *BTree) canApplySortedBatchLoadSortedLocked(entries []batchpkg.Entry, idxs []int) bool {
+	first := btreeSortedBatchEntryAt(entries, idxs, 0)
+	if first.Key == nil {
+		return false
+	}
+	prev := bytesToStringNoCopy(first.Key)
+	if m.hasLast && prev <= m.lastKey {
+		return false
+	}
+	if idxs != nil {
+		return true
+	}
+	n := btreeSortedBatchLen(entries, idxs)
+	for i := 1; i < n; i++ {
+		op := btreeSortedBatchEntryAt(entries, idxs, i)
+		if op.Key == nil {
+			return false
+		}
+		key := bytesToStringNoCopy(op.Key)
+		if key <= prev {
+			return false
+		}
+		prev = key
+	}
+	return true
+}
+
+func btreeSortedBatchLen(entries []batchpkg.Entry, idxs []int) int {
+	if idxs == nil {
+		return len(entries)
+	}
+	return len(idxs)
+}
+
+func btreeSortedBatchEntryAt(entries []batchpkg.Entry, idxs []int, i int) batchpkg.Entry {
+	if idxs == nil {
+		return entries[i]
+	}
+	return entries[idxs[i]]
+}
+
 func (m *BTree) copyKeyEntryFromBatchOpLocked(op batchpkg.Entry, storeInlinePtrValues bool) ([]byte, btreeEntry) {
 	switch {
 	case op.Type == batchpkg.OpDelete:
@@ -187,17 +341,11 @@ func (m *BTree) copyKeyEntryFromBatchOpLocked(op batchpkg.Entry, storeInlinePtrV
 			value = nil
 		}
 		keyCopy, ptrValue := m.copyKeyPointerValueLocked(op.Key, op.ValuePtr, value)
-		return keyCopy, btreeEntry{
-			value: ptrValue,
-			flags: node.FlagPointer,
-		}
+		return keyCopy, newBTreeEntry(node.FlagPointer, ptrValue)
 	default:
 		value := canonicalizeBTreeInlineValue(op.Value)
 		keyCopy, valueCopy := m.copyKeyInlineValueLocked(op.Key, value)
-		return keyCopy, btreeEntry{
-			value: valueCopy,
-			flags: node.FlagInline,
-		}
+		return keyCopy, newBTreeEntry(node.FlagInline, valueCopy)
 	}
 }
 
@@ -270,7 +418,7 @@ func (m *BTree) PutWithCallback(key, value []byte, cb func(k, v []byte) error) e
 
 	keyStored, valStored := m.copyKeyInlineValueLocked(key, canonicalizeBTreeInlineValue(value))
 	keyStr := bytesToStringNoCopy(keyStored)
-	entry := btreeEntry{value: valStored, flags: node.FlagInline}
+	entry := newBTreeEntry(node.FlagInline, valStored)
 	prev, replaced := m.setMaybeLoadLocked(keyStr, entry)
 	m.recordSetLocked(keyStr, len(keyStored), entry, prev, replaced)
 	return nil
@@ -287,17 +435,21 @@ func (m *BTree) SetEntry(key, value []byte, ptr page.ValuePtr, flags byte) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	entry := btreeEntry{flags: normalizeBTreeEntryFlags(flags)}
+	entryFlags := normalizeBTreeEntryFlags(flags)
+	entry := btreeEntry{flags: entryFlags}
 	var keyCopy []byte
 	switch {
-	case entry.flags&node.FlagTombstone != 0:
+	case entryFlags&node.FlagTombstone != 0:
 		keyCopy = m.arena.Copy(key)
-		entry.value = nil
-	case entry.flags&node.FlagPointer != 0:
-		keyCopy, entry.value = m.copyKeyPointerValueLocked(key, ptr, value)
+	case entryFlags&node.FlagPointer != 0:
+		var ptrValue []byte
+		keyCopy, ptrValue = m.copyKeyPointerValueLocked(key, ptr, value)
+		entry = newBTreeEntry(entryFlags, ptrValue)
 	default:
 		value = canonicalizeBTreeInlineValue(value)
-		keyCopy, entry.value = m.copyKeyInlineValueLocked(key, value)
+		var valueCopy []byte
+		keyCopy, valueCopy = m.copyKeyInlineValueLocked(key, value)
+		entry = newBTreeEntry(entryFlags, valueCopy)
 	}
 	keyStr := bytesToStringNoCopy(keyCopy)
 	prev, replaced := m.setMaybeLoadLocked(keyStr, entry)
@@ -313,14 +465,14 @@ func (m *BTree) SetEntrySteal(key, value []byte, ptr page.ValuePtr, flags byte) 
 	defer m.mu.Unlock()
 
 	keyStr := bytesToStringNoCopy(key)
-	entry := btreeEntry{flags: normalizeBTreeEntryFlags(flags)}
+	entryFlags := normalizeBTreeEntryFlags(flags)
+	entry := btreeEntry{flags: entryFlags}
 	switch {
-	case entry.flags&node.FlagTombstone != 0:
-		entry.value = nil
-	case entry.flags&node.FlagPointer != 0:
-		entry.value = m.copyPointerValueLocked(ptr, value)
+	case entryFlags&node.FlagTombstone != 0:
+	case entryFlags&node.FlagPointer != 0:
+		entry = newBTreeEntry(entryFlags, m.copyPointerValueLocked(ptr, value))
 	default:
-		entry.value = canonicalizeBTreeInlineValue(value)
+		entry = newBTreeEntry(entryFlags, canonicalizeBTreeInlineValue(value))
 	}
 	prev, replaced := m.setMaybeLoadLocked(keyStr, entry)
 	m.recordSetLocked(keyStr, len(key), entry, prev, replaced)
@@ -862,23 +1014,17 @@ func (m *BTree) btreeEntryFromBatchOpLocked(op batchpkg.Entry) btreeEntry {
 	case op.Type == batchpkg.OpDelete:
 		return btreeEntry{flags: node.FlagTombstone}
 	case op.IsPtr:
-		return btreeEntry{
-			value: m.copyPointerValueLocked(op.ValuePtr, op.Value),
-			flags: node.FlagPointer,
-		}
+		return newBTreeEntry(node.FlagPointer, m.copyPointerValueLocked(op.ValuePtr, op.Value))
 	default:
-		return btreeEntry{
-			value: canonicalizeBTreeInlineValue(op.Value),
-			flags: node.FlagInline,
-		}
+		return newBTreeEntry(node.FlagInline, canonicalizeBTreeInlineValue(op.Value))
 	}
 }
 
 func (m *BTree) recordSetLocked(key string, keyLen int, entry, prev btreeEntry, replaced bool) {
-	newSize := btreeEntryPayloadSize(entry.flags, entry.value)
+	newSize := btreeEntryPayloadSize(entry)
 	newDelete := entry.flags&node.FlagTombstone != 0
 	if replaced {
-		oldSize := btreeEntryPayloadSize(prev.flags, prev.value)
+		oldSize := btreeEntryPayloadSize(prev)
 		m.sizeBytes += int64(newSize - oldSize)
 		oldDelete := prev.flags&node.FlagTombstone != 0
 		switch {
