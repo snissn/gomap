@@ -516,6 +516,16 @@ func (db *DB) buildValueLogRefDelta(p *pager.Pager, rootID uint64, baseSeq uint6
 	return delta, nil
 }
 
+func (db *DB) newNoopValueLogRefDeltaIfTrackable(baseSeq uint64) *valueLogRefDelta {
+	if db == nil || db.valueLogRefTracker == nil || !db.valueLogRefTracker.canTrack(baseSeq) {
+		return nil
+	}
+	if db.indexOuterLeavesInValueLog {
+		return nil
+	}
+	return newValueLogRefDelta()
+}
+
 func lookupValueLogRefAtKey(tr *tree.Tree, key []byte) (uint32, bool, error) {
 	if tr == nil {
 		return 0, false, nil

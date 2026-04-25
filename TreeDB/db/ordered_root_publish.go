@@ -405,6 +405,7 @@ func (db *DB) PublishOrderedRootIterator(baseRoot uint64, iter iterator.UnsafeIt
 	db.mu.RLock()
 	userRoot := db.meta.UserRootPageID
 	systemRoot := db.meta.SystemRootPageID
+	baseSeq := db.meta.CommitSeq
 	db.mu.RUnlock()
 
 	newRoot, retired, metrics, _, _, err := db.publishOrderedRootIterator(baseRoot, iter, systemRootOrderedPublishOptions(db), false)
@@ -420,9 +421,17 @@ func (db *DB) PublishOrderedRootIterator(baseRoot uint64, iter iterator.UnsafeIt
 		return 0, errors.New("concurrent modification detected during ordered root publish")
 	}
 
-	if err := db.finalizeCommit(userRoot, systemRoot, retired, false, metrics, nil, true, nil, nil, nil); err != nil {
+	vlogRefDelta := db.newNoopValueLogRefDeltaIfTrackable(baseSeq)
+	defer func() {
+		if vlogRefDelta != nil {
+			releaseValueLogRefDelta(vlogRefDelta)
+		}
+	}()
+
+	if err := db.finalizeCommit(userRoot, systemRoot, retired, false, metrics, nil, true, vlogRefDelta, nil, nil); err != nil {
 		return 0, err
 	}
+	vlogRefDelta = nil
 	return newRoot, nil
 }
 
@@ -447,6 +456,7 @@ func (db *DB) PublishOrderedRootGroup(systemIter iterator.UnsafeIterator, ordere
 	db.mu.RLock()
 	userRoot := db.meta.UserRootPageID
 	baseSystemRoot := db.meta.SystemRootPageID
+	baseSeq := db.meta.CommitSeq
 	db.mu.RUnlock()
 
 	opts := systemRootOrderedPublishOptions(db)
@@ -455,6 +465,11 @@ func (db *DB) PublishOrderedRootGroup(systemIter iterator.UnsafeIterator, ordere
 	var merged adaptive.Metrics
 	var systemStats orderedRootPublishStats
 	var vlogRefDelta *valueLogRefDelta
+	defer func() {
+		if vlogRefDelta != nil {
+			releaseValueLogRefDelta(vlogRefDelta)
+		}
+	}()
 
 	if systemIter != nil {
 		rootID, rootRetired, metrics, publishStats, refDelta, err := db.publishOrderedRootIterator(baseSystemRoot, systemIter, opts, true)
@@ -487,9 +502,13 @@ func (db *DB) PublishOrderedRootGroup(systemIter iterator.UnsafeIterator, ordere
 		return 0, nil, errors.New("concurrent modification detected during ordered root group publish")
 	}
 
+	if vlogRefDelta == nil {
+		vlogRefDelta = db.newNoopValueLogRefDeltaIfTrackable(baseSeq)
+	}
 	if err := db.finalizeCommit(userRoot, newSystemRoot, retired, false, merged, nil, true, vlogRefDelta, nil, nil); err != nil {
 		return 0, nil, err
 	}
+	vlogRefDelta = nil
 	if systemIter != nil {
 		db.systemRootWarmPublishAttempts.Add(systemStats.warmAttempts)
 		db.systemRootWarmNativeApplyAttempts.Add(systemStats.warmNativeApplyAttempts)

@@ -357,3 +357,121 @@ func TestPublishOrderedRootGroup_SystemWarmApplyUpdatesValueLogRefTrackerInline(
 		t.Fatalf("incremental/full-scan mismatch: incremental=%v full=%v", incRefs, fullRefs)
 	}
 }
+
+func TestPublishOrderedRootIterator_NonSystemWarmApplyPreservesValueLogRefTracker(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+
+	livePtr := appendPointersInNewSegment(t, dir, 0, 31, 50_000, 1, func(int) []byte {
+		return []byte("live-user-pointer")
+	})[0]
+	b := db.NewBatch().(*Batch)
+	if err := b.SetPointer([]byte("user/live"), livePtr); err != nil {
+		t.Fatalf("SetPointer(user/live): %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("write live pointer: %v", err)
+	}
+	_ = b.Close()
+
+	oldPtr := appendPointersInNewSegment(t, dir, 0, 32, 60_000, 1, func(int) []byte {
+		return []byte("old-non-system-pointer")
+	})[0]
+	newPtr := appendPointersInNewSegment(t, dir, 0, 33, 70_000, 1, func(int) []byte {
+		return []byte("new-non-system-pointer")
+	})[0]
+
+	baseRoot, err := db.PublishOrderedRootIterator(0, mustFrozenSystemPointerMemtable(t, "root/p", oldPtr).NewIterator(nil, nil))
+	if err != nil {
+		t.Fatalf("publish initial non-system root: %v", err)
+	}
+	if _, err := db.referencedValueLogSegments(context.Background()); err != nil {
+		t.Fatalf("refresh value-log refs: %v", err)
+	}
+
+	newRoot, err := db.PublishOrderedRootIterator(baseRoot, mustFrozenSystemPointerMemtable(t, "root/p", newPtr).NewIterator(nil, nil))
+	if err != nil {
+		t.Fatalf("warm publish non-system root: %v", err)
+	}
+	if newRoot == baseRoot {
+		t.Fatalf("expected warm publish to produce a new root")
+	}
+
+	assertValueLogRefTrackerMatchesFullScan(t, db)
+}
+
+func TestPublishOrderedRootGroup_NonSystemWarmApplyPreservesValueLogRefTracker(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+
+	livePtr := appendPointersInNewSegment(t, dir, 0, 41, 80_000, 1, func(int) []byte {
+		return []byte("group-live-user-pointer")
+	})[0]
+	b := db.NewBatch().(*Batch)
+	if err := b.SetPointer([]byte("user/live"), livePtr); err != nil {
+		t.Fatalf("SetPointer(user/live): %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("write live pointer: %v", err)
+	}
+	_ = b.Close()
+
+	oldPtr := appendPointersInNewSegment(t, dir, 0, 42, 90_000, 1, func(int) []byte {
+		return []byte("old-group-non-system-pointer")
+	})[0]
+	newPtr := appendPointersInNewSegment(t, dir, 0, 43, 100_000, 1, func(int) []byte {
+		return []byte("new-group-non-system-pointer")
+	})[0]
+
+	baseRoot, err := db.PublishOrderedRootIterator(0, mustFrozenSystemPointerMemtable(t, "root/p", oldPtr).NewIterator(nil, nil))
+	if err != nil {
+		t.Fatalf("publish initial non-system root: %v", err)
+	}
+	if _, err := db.referencedValueLogSegments(context.Background()); err != nil {
+		t.Fatalf("refresh value-log refs: %v", err)
+	}
+
+	_, rootIDs, err := db.PublishOrderedRootGroup(nil, []OrderedRootPublishInput{{
+		BaseRoot: baseRoot,
+		Iter:     mustFrozenSystemPointerMemtable(t, "root/p", newPtr).NewIterator(nil, nil),
+	}})
+	if err != nil {
+		t.Fatalf("warm publish non-system root group: %v", err)
+	}
+	if len(rootIDs) != 1 {
+		t.Fatalf("rootIDs len=%d want 1", len(rootIDs))
+	}
+	if rootIDs[0] == baseRoot {
+		t.Fatalf("expected grouped warm publish to produce a new root")
+	}
+
+	assertValueLogRefTrackerMatchesFullScan(t, db)
+}
+
+func assertValueLogRefTrackerMatchesFullScan(t *testing.T, db *DB) {
+	t.Helper()
+	seq := db.currentCommitSeq()
+	incRefs, ok := db.valueLogRefTracker.referencedSet(seq)
+	if !ok {
+		t.Fatalf("expected incremental ref set for seq=%d", seq)
+	}
+	fullCounts, fullSeq, err := db.scanValueLogRefCounts(context.Background())
+	if err != nil {
+		t.Fatalf("scanValueLogRefCounts: %v", err)
+	}
+	if fullSeq != seq {
+		t.Fatalf("scan seq mismatch: got=%d want=%d", fullSeq, seq)
+	}
+	fullRefs := valueLogRefSetFromCounts(fullCounts)
+	if !reflect.DeepEqual(incRefs, fullRefs) {
+		t.Fatalf("incremental/full-scan mismatch: incremental=%v full=%v", incRefs, fullRefs)
+	}
+}
