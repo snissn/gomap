@@ -81,6 +81,45 @@ type getManyPlanner interface {
 	GetManyParallelPlan(keyCount int) (workers int, parallel bool)
 }
 
+// UpdateOp describes the write produced by an Update callback.
+type UpdateOp uint8
+
+const (
+	// UpdateNoop leaves the key unchanged.
+	UpdateNoop UpdateOp = iota
+	// UpdateSet replaces the key with Value.
+	UpdateSet
+	// UpdateDelete removes the key.
+	UpdateDelete
+)
+
+// UpdateResult is returned by an Update callback.
+type UpdateResult struct {
+	Op    UpdateOp
+	Value []byte
+}
+
+// SetUpdate returns an Update result that replaces the key with value.
+func SetUpdate(value []byte) UpdateResult {
+	return UpdateResult{Op: UpdateSet, Value: value}
+}
+
+// DeleteUpdate returns an Update result that removes the key.
+func DeleteUpdate() UpdateResult {
+	return UpdateResult{Op: UpdateDelete}
+}
+
+// NoopUpdate returns an Update result that leaves the key unchanged.
+func NoopUpdate() UpdateResult {
+	return UpdateResult{Op: UpdateNoop}
+}
+
+// UpdateFunc transforms the current value for a key into a mutation. The old
+// value is nil when the key is absent and is a safe copy when present.
+type UpdateFunc func(old []byte) (UpdateResult, error)
+
+const updateLockStripes = 256
+
 // DB is the public TreeDB handle (cached mode by default; read-only opens skip caching).
 type DB struct {
 	cached         *caching.DB
@@ -94,6 +133,7 @@ type DB struct {
 	bgErr          error
 	durabilityMode string
 	dir            string
+	updateLocks    [updateLockStripes]sync.Mutex
 	maintenance    maintenanceCoordinator
 }
 
@@ -1381,6 +1421,88 @@ func (db *DB) SetSync(key, value []byte) error {
 		return db.cached.SetSync(key, value)
 	}
 	return db.backend.SetSync(key, value)
+}
+
+// Update applies fn to the current value for key and writes the returned
+// mutation without forcing an fsync boundary.
+//
+// Concurrent Update calls for the same key on the same DB handle are serialized
+// around the read-modify-write sequence, so callbacks observe prior committed
+// Update results and do not lose each other's changes. Direct Set/Delete calls
+// remain unconditional writes and are not coordinated with this logical update
+// contract. The callback runs while the key update lock is held, so it should
+// avoid long-running work or recursive Update calls for the same key.
+func (db *DB) Update(key []byte, fn UpdateFunc) error {
+	return db.update(key, fn, false)
+}
+
+// UpdateSync applies fn to the current value for key and writes the returned
+// mutation with a sync durability boundary. With DurabilityWALOnRelaxed or
+// DurabilityWALOffRelaxed enabled, Sync operations are crash-consistent only
+// (no fsync) and may not survive power loss.
+//
+// Concurrent UpdateSync/Update calls for the same key on the same DB handle are
+// serialized around the read-modify-write sequence. The callback runs while the
+// key update lock is held.
+func (db *DB) UpdateSync(key []byte, fn UpdateFunc) error {
+	return db.update(key, fn, true)
+}
+
+func (db *DB) update(key []byte, fn UpdateFunc, syncWrite bool) error {
+	if err := db.ensureOpen(); err != nil {
+		return err
+	}
+	if len(key) == 0 {
+		return caching.ErrKeyEmpty
+	}
+	if fn == nil {
+		return errors.New("treedb: nil update function")
+	}
+
+	lock := db.updateLock(key)
+	lock.Lock()
+	defer lock.Unlock()
+
+	old, err := db.Get(key)
+	if err != nil {
+		return err
+	}
+	result, err := fn(old)
+	if err != nil {
+		return err
+	}
+	switch result.Op {
+	case UpdateNoop:
+		return nil
+	case UpdateSet:
+		if result.Value == nil {
+			return caching.ErrValueNil
+		}
+		if syncWrite {
+			return db.SetSync(key, result.Value)
+		}
+		return db.Set(key, result.Value)
+	case UpdateDelete:
+		if syncWrite {
+			return db.DeleteSync(key)
+		}
+		return db.Delete(key)
+	default:
+		return fmt.Errorf("treedb: unknown update op %d", result.Op)
+	}
+}
+
+func (db *DB) updateLock(key []byte) *sync.Mutex {
+	return &db.updateLocks[updateLockIndex(key)]
+}
+
+func updateLockIndex(key []byte) uint32 {
+	h := uint32(2166136261)
+	for _, b := range key {
+		h ^= uint32(b)
+		h *= 16777619
+	}
+	return h & (updateLockStripes - 1)
 }
 
 // Delete removes a key without forcing an fsync boundary.

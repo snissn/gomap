@@ -39,6 +39,16 @@ When the cached layer is enabled (default `treedb.Open` behavior):
 
 - `Set`, `Delete` are non-sync writes.
 - `SetSync`, `DeleteSync` request sync durability boundary subject to durability mode.
+- `Update`, `UpdateSync` are single-key read-modify-write helpers. The callback
+  receives the current value as a safe copy, or `nil` when the key is absent, and
+  returns `Set`, `Delete`, or `Noop` intent through `UpdateResult`.
+- Concurrent `Update`/`UpdateSync` calls for the same key on the same `DB`
+  handle are serialized around the read-modify-write sequence. This prevents
+  lost updates for logical single-key mutations such as set-membership updates
+  when all competing writers use the update primitive.
+- Direct `Set`/`SetSync`/`Delete`/`DeleteSync` calls are still unconditional
+  writes; they are not compare-and-swap checked against concurrent `Update`
+  callbacks. Multi-key atomicity remains outside this contract.
 
 ### 3.2 Batches
 

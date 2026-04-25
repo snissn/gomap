@@ -86,6 +86,7 @@ Mechanisms:
 - mutexes/RWMutex/condvars for critical sections and barriers.
 
 Key lock families:
+- public DB: `updateLocks[]` for single-key `Update`/`UpdateSync` read-modify-write serialization,
 - cached DB global: `mu`, `writeMu`, `flushMu`, `checkpointMu`, `laneMu`, `bpMu`,
 - cached per shard/lane: shard `mu`, lane `walMu`, lane `vlogMu`, `flushLaneMu[]`, `walFastMu`,
 - backend DB: `mu`, `writeMu`, `commitMu`, `idxMu`, plus worker-local mutexes.
@@ -187,6 +188,28 @@ Workers:
 - background index vacuum (public wrapper),
 - dictionary profile application loop.
 
+### 3.11 Public single-key update serialization
+
+Mechanism:
+- `DB.Update` and `DB.UpdateSync` hash the requested key into a fixed set of
+  per-handle mutex stripes before running the public `Get` + callback +
+  `Set`/`Delete` sequence.
+
+Effects:
+- concurrent logical updates to the same key on the same `DB` handle are
+  serialized,
+- callers can implement conflict-safe single-key mutations, such as
+  set-membership add/remove, without an external global lock,
+- unrelated keys usually proceed independently, subject to stripe collisions and
+  the lower cached/backend write-path locks.
+
+Limits:
+- this is not a multi-key transaction mechanism,
+- direct `Set`/`Delete` calls remain unconditional writes and are not
+  compare-and-swap checked against concurrent `Update` callbacks,
+- the update callback runs while the stripe lock is held and should not recurse
+  into `Update` for the same key/stripe.
+
 ## 4. Lock and Barrier Topology
 
 ### 4.1 Cached layer lock roles
@@ -208,6 +231,8 @@ Workers:
 ### 4.2 Lock-order constraints that must hold
 
 Current order constraints:
+- public `Update`/`UpdateSync` take an update stripe lock before entering public
+  read/write APIs; lower layers must not call back into public update locks.
 - `flushMu` before `checkpointMu` when both are needed.
 - `Checkpoint` acquires `flushMu` then `writeMu`.
 - `Close` mirrors `flushMu` then `writeMu` to avoid deadlock with auto-checkpoint.
@@ -443,6 +468,7 @@ A compatible implementation SHOULD preserve:
 ## 10. Existing Concurrency-Relevant Tests
 
 Representative coverage includes:
+- `TreeDB/update_test.go`,
 - `TreeDB/db/concurrent_write_test.go`,
 - `TreeDB/db/race_test.go`,
 - `TreeDB/db/vacuum_panic_test.go`,
