@@ -20528,11 +20528,12 @@ func (db *DB) update(key []byte, fn backenddb.UpdateFunc, syncWrite bool) error 
 	if fn == nil {
 		return backenddb.ErrNilUpdateFunc
 	}
+	stableKey := cloneUpdateKey(key)
 	db.waitForCheckpoint()
 
 	for {
-		updateMu := db.lockUpdateKey(key)
-		old, err := db.getForUpdate(key)
+		updateMu := db.lockUpdateKey(stableKey)
+		old, err := db.getForUpdate(stableKey)
 		unlockUpdateKey(updateMu)
 		if err != nil {
 			return err
@@ -20550,8 +20551,8 @@ func (db *DB) update(key []byte, fn backenddb.UpdateFunc, syncWrite bool) error 
 			return fmt.Errorf("treedb: unknown update op %d", result.Op)
 		}
 
-		updateMu = db.lockUpdateKey(key)
-		latest, err := db.getForUpdate(key)
+		updateMu = db.lockUpdateKey(stableKey)
+		latest, err := db.getForUpdate(stableKey)
 		if err != nil {
 			unlockUpdateKey(updateMu)
 			return err
@@ -20566,11 +20567,11 @@ func (db *DB) update(key []byte, fn backenddb.UpdateFunc, syncWrite bool) error 
 			unlockUpdateKey(updateMu)
 			return nil
 		case backenddb.UpdateSet:
-			err = db.set(key, result.Value, syncWrite)
+			err = db.set(stableKey, result.Value, syncWrite)
 			unlockUpdateKey(updateMu)
 			return err
 		case backenddb.UpdateDelete:
-			err = db.delete(key, syncWrite)
+			err = db.delete(stableKey, syncWrite)
 			unlockUpdateKey(updateMu)
 			return err
 		default:
@@ -20578,6 +20579,10 @@ func (db *DB) update(key []byte, fn backenddb.UpdateFunc, syncWrite bool) error 
 			return fmt.Errorf("treedb: unknown update op %d", result.Op)
 		}
 	}
+}
+
+func cloneUpdateKey(key []byte) []byte {
+	return append([]byte{}, key...)
 }
 
 func (db *DB) getForUpdate(key []byte) ([]byte, error) {
