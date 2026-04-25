@@ -321,7 +321,7 @@ func (c *Collection) InsertBatch(ids, documents [][]byte) ([][]byte, error) {
 	}
 	if len(plan.runs) == 0 {
 		_ = snap.Close()
-		return cloneIDBatch(plan.resultIDs), nil
+		return plan.resultIDs, nil
 	}
 
 	baseRootIDs := make(map[string]uint64, len(plan.runs))
@@ -359,7 +359,7 @@ func (c *Collection) InsertBatch(ids, documents [][]byte) ([][]byte, error) {
 	if len(rootIDs) != len(plan.runs) {
 		return nil, errors.New("collections: ordered root publish returned unexpected root count")
 	}
-	return cloneIDBatch(plan.resultIDs), nil
+	return plan.resultIDs, nil
 }
 
 func (c *Collection) Delete(documentID []byte) error {
@@ -1095,17 +1095,6 @@ func decodeRootID(raw []byte) (uint64, error) {
 		return 0, errors.New("malformed root id")
 	}
 	return binary.BigEndian.Uint64(raw), nil
-}
-
-func cloneIDBatch(ids [][]byte) [][]byte {
-	if len(ids) == 0 {
-		return nil
-	}
-	out := make([][]byte, len(ids))
-	for i := range ids {
-		out[i] = bytes.Clone(ids[i])
-	}
-	return out
 }
 
 func ValidateCollectionName(name string) error {

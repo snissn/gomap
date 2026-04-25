@@ -93,6 +93,50 @@ func TestCollectionInsertBatchBridge_RoundTripWithSecondaryIndexes(t *testing.T)
 	}
 }
 
+func TestCollectionInsertBatchBridge_ReturnedIDsAndDocumentsAreOwned(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+
+	inputID := []byte("u1")
+	inputDocument := []byte(`{"name":"ada"}`)
+	ids, err := col.InsertBatch(
+		[][]byte{inputID},
+		[][]byte{inputDocument},
+	)
+	if err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+	inputID[0] = 'x'
+	inputDocument[9] = 'x'
+	if len(ids) != 1 || !bytes.Equal(ids[0], []byte("u1")) {
+		t.Fatalf("returned ids=%q want owned u1", ids)
+	}
+
+	ids[0][0] = 'z'
+	got, err := col.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("get original id after mutating returned id: %v", err)
+	}
+	if want := []byte(`{"name":"ada"}`); !bytes.Equal(got, want) {
+		t.Fatalf("original id value=%q want %q", got, want)
+	}
+	if got, err := col.Get([]byte("z1")); err != nil || got != nil {
+		t.Fatalf("mutated returned id lookup got=%q err=%v want missing", got, err)
+	}
+}
+
 func TestCollectionInsertBatchBridge_ReopenUsesPersistedRootDescriptors(t *testing.T) {
 	dir := t.TempDir()
 	d, err := backenddb.Open(backenddb.Options{Dir: dir})

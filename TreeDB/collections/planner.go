@@ -13,6 +13,8 @@ import (
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
+	"github.com/snissn/gomap/TreeDB/node"
+	"github.com/snissn/gomap/TreeDB/page"
 )
 
 const documentIndexStateVersion = 1
@@ -123,7 +125,7 @@ func (p insertBatchPlanner) planInsertBatchWithPreflight(ids, documents [][]byte
 		p.indexStateRoot = p.collection + "/index-state"
 	}
 	if p.buildPrimaryVal == nil {
-		p.buildPrimaryVal = clonePrimaryDocument
+		p.buildPrimaryVal = borrowPrimaryDocument
 	}
 
 	items := make([]insertBatchItem, len(documents))
@@ -137,7 +139,7 @@ func (p insertBatchPlanner) planInsertBatchWithPreflight(ids, documents [][]byte
 			id:       id,
 			document: documents[i],
 		}
-		resultIDs[i] = bytes.Clone(id)
+		resultIDs[i] = id
 	}
 
 	if err := rejectDuplicateDocumentIDs(items); err != nil {
@@ -223,8 +225,8 @@ func (p insertBatchPreflight) checkUniqueConflicts(runs []collectionUniqueProbeR
 	return nil
 }
 
-func clonePrimaryDocument(_, document []byte) ([]byte, error) {
-	return bytes.Clone(document), nil
+func borrowPrimaryDocument(_, document []byte) ([]byte, error) {
+	return document, nil
 }
 
 func rejectDuplicateDocumentIDs(items []insertBatchItem) error {
@@ -340,7 +342,7 @@ func (p insertBatchPlanner) emitPrimaryRun(plan *insertBatchPlan, items []insert
 			return err
 		}
 		plan.stats.payloadBuilds++
-		table.SetSteal(bytes.Clone(items[idx].id), value)
+		setCollectionRunValue(table, items[idx].id, value)
 	}
 	table.Freeze()
 	plan.runs = append(plan.runs, collectionRootRun{
@@ -349,6 +351,10 @@ func (p insertBatchPlanner) emitPrimaryRun(plan *insertBatchPlan, items []insert
 		table: table,
 	})
 	return nil
+}
+
+func setCollectionRunValue(table memtable.Table, key, value []byte) {
+	table.SetEntrySteal(key, value, page.ValuePtr{}, node.FlagInline)
 }
 
 func (p insertBatchPlanner) emitIndexStateRun(plan *insertBatchPlan, items []insertBatchItem) error {
