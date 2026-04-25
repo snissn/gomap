@@ -88,9 +88,12 @@ type report struct {
 
 var benchmarkSpecs = []benchmarkSpec{
 	{Name: "BenchmarkCollectionInsertProvidedID", Section: "Document Path", Description: "Insert documents with caller-provided IDs into the primary collection root."},
+	{Name: "BenchmarkCollectionInsertBatchProvidedID", Section: "Batch Ingest Path", Description: "Insert documents with caller-provided IDs through the collection batch API; ops/sec is documents/sec."},
 	{Name: "BenchmarkCollectionGetByID", Section: "Document Path", Description: "Lookup documents by primary `_id` from the dedicated primary root."},
 	{Name: "BenchmarkCollectionDeleteByID", Section: "Document Path", Description: "Delete pre-existing documents from the primary root without secondary index maintenance."},
 	{Name: "BenchmarkCollectionInsertWithSecondaryIndexes", Section: "Document Path", Description: "Insert documents while maintaining both unique and non-unique secondary indexes."},
+	{Name: "BenchmarkCollectionInsertBatchWithSecondaryIndexes", Section: "Batch Ingest Path", Description: "Batch insert documents while maintaining unique and non-unique secondary indexes; ops/sec is documents/sec."},
+	{Name: "BenchmarkCollectionInsertBatchCheckpointWithSecondaryIndexes", Section: "Batch Ingest Path", Description: "Batch insert indexed documents and force a sync boundary after each batch; ops/sec is documents/sec."},
 	{Name: "BenchmarkCollectionDeleteWithSecondaryIndexes", Section: "Document Path", Description: "Delete documents while removing postings from unique and non-unique secondary indexes."},
 	{Name: "BenchmarkSecondaryLookupUnique", Section: "Secondary Index Path", Description: "Resolve a unique secondary index lookup to document IDs."},
 	{Name: "BenchmarkSecondaryLookupNonUnique", Section: "Secondary Index Path", Description: "Resolve a non-unique secondary index lookup that returns multiple document IDs."},
@@ -397,7 +400,7 @@ func aggregateSamples(samples []benchmarkSample) map[string]benchmarkAggregate {
 }
 
 func buildSections(aggregates map[string]benchmarkAggregate) []reportSection {
-	sectionOrder := []string{"Document Path", "Secondary Index Path", "Maintenance", "Other"}
+	sectionOrder := []string{"Document Path", "Batch Ingest Path", "Secondary Index Path", "Maintenance", "Other"}
 	sections := make(map[string][]benchmarkAggregate, len(sectionOrder))
 	seen := make(map[string]struct{}, len(aggregates))
 
