@@ -178,23 +178,24 @@ type appendOnlyValueArena struct {
 type AppendOnly struct {
 	mu sync.RWMutex
 
-	entries        []appendOnlyEntry
-	keys           []string
-	values         []string
-	lastValueAlias bool
-	ptrPayloads    []appendOnlyPointerPayload
-	baseEntriesLen int
-	growEntriesLen int
-	latest         map[string]int
-	latestInline   map[appendOnlyInlineMapKey]int
-	latest64       map[uint64]int
-	snapshot       []*appendOnlyEntry
-	indexBuf       []int
-	valueArena     appendOnlyValueArena
-	count          int
-	deleteCount    int
-	snapCount      int
-	sizeBytes      int64
+	entries              []appendOnlyEntry
+	keys                 []string
+	values               []string
+	lastValueAlias       bool
+	lastValueStableAlias bool
+	ptrPayloads          []appendOnlyPointerPayload
+	baseEntriesLen       int
+	growEntriesLen       int
+	latest               map[string]int
+	latestInline         map[appendOnlyInlineMapKey]int
+	latest64             map[uint64]int
+	snapshot             []*appendOnlyEntry
+	indexBuf             []int
+	valueArena           appendOnlyValueArena
+	count                int
+	deleteCount          int
+	snapCount            int
+	sizeBytes            int64
 
 	ordered     bool
 	latestDirty bool
@@ -1314,11 +1315,13 @@ func (m *AppendOnly) appendValueBytesLocked(value []byte, borrowed bool, dedupeB
 			if len(m.values) != 0 {
 				idx := m.appendValueLocked(appendOnlyStringFromBytes(value))
 				m.lastValueAlias = true
+				m.lastValueStableAlias = true
 				return idx
 			}
 		}
 		idx := m.appendValueLockedSmall(appendOnlyStringFromBytes(value))
 		m.lastValueAlias = true
+		m.lastValueStableAlias = dedupeBorrowed
 		return idx
 	}
 	if idx := m.recentValueIndexLocked(value, false); idx != 0 {
@@ -1327,10 +1330,12 @@ func (m *AppendOnly) appendValueBytesLocked(value []byte, borrowed bool, dedupeB
 	if len(m.values) == 0 {
 		idx := m.appendValueLockedSmall(appendOnlyArenaStringCopy(&m.valueArena, value))
 		m.lastValueAlias = false
+		m.lastValueStableAlias = false
 		return idx
 	}
 	idx := m.appendValueLocked(appendOnlyArenaStringCopy(&m.valueArena, value))
 	m.lastValueAlias = false
+	m.lastValueStableAlias = false
 	return idx
 }
 
@@ -1339,6 +1344,9 @@ func (m *AppendOnly) recentValueIndexLocked(value []byte, allowAlias bool) uint3
 		return 0
 	}
 	if m.lastValueAlias && !allowAlias {
+		return 0
+	}
+	if m.lastValueAlias && !m.lastValueStableAlias {
 		return 0
 	}
 	idx := len(m.values) - 1
@@ -2109,6 +2117,7 @@ func (m *AppendOnly) resetLockedWithPolicy(capacity, estimatedBytesPerEntry, ent
 		m.values = m.values[:0]
 	}
 	m.lastValueAlias = false
+	m.lastValueStableAlias = false
 	if !retainObserved || cap(m.ptrPayloads) > maxRetainedEntries {
 		putAppendOnlyPtrPayloads(m.ptrPayloads)
 		m.ptrPayloads = nil
@@ -2225,12 +2234,14 @@ func (m *AppendOnly) replaceValuesSlice(length int) {
 	if length == 0 {
 		m.values = nil
 		m.lastValueAlias = false
+		m.lastValueStableAlias = false
 		putAppendOnlyValues(prev)
 		return
 	}
 	m.values = getAppendOnlyValues(length)
 	m.values = m.values[:0]
 	m.lastValueAlias = false
+	m.lastValueStableAlias = false
 	putAppendOnlyValues(prev)
 }
 

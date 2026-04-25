@@ -254,6 +254,31 @@ func TestAppendOnlyBorrowStableRepeatedValueReusesPayloadAlias(t *testing.T) {
 	}
 }
 
+func TestAppendOnlyBorrowStableValueDoesNotReuseUnstableBorrowAlias(t *testing.T) {
+	m := NewAppendOnlyWithCapacity(0)
+	unstable := []byte("same borrowed value")
+	stable := []byte("same borrowed value")
+
+	m.SetEntryBorrowValue([]byte("unstable"), unstable, page.ValuePtr{}, node.FlagInline)
+	m.SetEntryBorrowStableValue([]byte("stable"), stable, page.ValuePtr{}, node.FlagInline)
+
+	if got := len(m.values); got != 2 {
+		t.Fatalf("values=%d want=2", got)
+	}
+	if m.entries[0].payloadIndex == 0 || m.entries[0].payloadIndex == m.entries[1].payloadIndex {
+		t.Fatalf("payload indices=(%d,%d), want distinct non-zero indices", m.entries[0].payloadIndex, m.entries[1].payloadIndex)
+	}
+	unstable[0] = 'X'
+	got, deleted, ok := m.Get([]byte("unstable"))
+	if !ok || deleted || string(got) != "Xame borrowed value" {
+		t.Fatalf("Get(unstable)=(%q,%v,%v), want mutated unstable value,false,true", string(got), deleted, ok)
+	}
+	got, deleted, ok = m.Get([]byte("stable"))
+	if !ok || deleted || string(got) != "same borrowed value" {
+		t.Fatalf("Get(stable)=(%q,%v,%v), want stable value,false,true", string(got), deleted, ok)
+	}
+}
+
 func TestAppendOnlyReuseStableValueDoesNotRetainCaller(t *testing.T) {
 	m := NewAppendOnlyWithCapacity(0)
 	first := []byte("same stable value")
