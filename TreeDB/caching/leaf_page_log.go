@@ -186,7 +186,7 @@ func (db *DB) appendPreparedLeafPageValueLogBatchMuHeld(l *lane, batch []*leafPa
 	}
 	db.setVlogWriterMode(l, w, vlogWriteOff, db.valueLogBlockCodec)
 
-	startSize := w.Size()
+	totalBytes := int64(0)
 	flushedBoundary := false
 	noteRetainPath := func() {
 		if l.vlogPath == "" || l.vlogPath == l.vlogRetainedPath {
@@ -225,6 +225,10 @@ func (db *DB) appendPreparedLeafPageValueLogBatchMuHeld(l *lane, batch []*leafPa
 			break
 		}
 		req.totalBytes = w.Size() - before
+		if req.totalBytes > 0 {
+			totalBytes += req.totalBytes
+			l.vlogLiveBytes.Add(req.totalBytes)
+		}
 		noteRetainPath()
 		if db.shouldFlushDeferredValueLogValue(vlogWriteOff, req.raw) {
 			flushedBoundary = true
@@ -239,10 +243,6 @@ func (db *DB) appendPreparedLeafPageValueLogBatchMuHeld(l *lane, batch []*leafPa
 				}
 			}
 		}
-	}
-	totalBytes := int64(0)
-	if err == nil {
-		totalBytes = w.Size() - startSize
 	}
 	if err == nil {
 		db.markLaneValueLogBoundary(l, totalBytes, flushedBoundary, false)
@@ -265,8 +265,8 @@ func finishLeafPageAppendBatch(batch []*leafPageAppendRequest, err error) {
 	}
 }
 
-func (db *DB) observeLeafPageValueLogAppend(l *lane, ptr page.ValuePtr, retainPath string, stats valuelog.FrameStats, compacted bool, finalWriteMode vlogCompressionWriteMode, finalBlockCodec valuelog.BlockCodec, payloadLen int, totalBytes int64, probeCompression bool, selectorStart time.Time) (page.ValuePtr, string, error) {
-	if totalBytes > 0 {
+func (db *DB) observeLeafPageValueLogAppend(l *lane, ptr page.ValuePtr, retainPath string, stats valuelog.FrameStats, compacted bool, finalWriteMode vlogCompressionWriteMode, finalBlockCodec valuelog.BlockCodec, payloadLen int, totalBytes int64, accountLiveBytes bool, probeCompression bool, selectorStart time.Time) (page.ValuePtr, string, error) {
+	if accountLiveBytes && totalBytes > 0 {
 		l.vlogLiveBytes.Add(totalBytes)
 	}
 	db.valueLogDictFrames.total.Add(1)
@@ -376,7 +376,7 @@ func (db *DB) appendLeafPageValueLog(l *lane, rid uint64, leafPage []byte) (page
 		if err != nil {
 			return page.ValuePtr{}, "", err
 		}
-		return db.observeLeafPageValueLogAppend(l, ptr, retainPath, stats, compacted, finalWriteMode, finalBlockCodec, payloadLen, totalBytes, probeCompression, selectorStart)
+		return db.observeLeafPageValueLogAppend(l, ptr, retainPath, stats, compacted, finalWriteMode, finalBlockCodec, payloadLen, totalBytes, false, probeCompression, selectorStart)
 	}
 	db.setVlogWriterMode(l, w, finalWriteMode, finalBlockCodec)
 	startSize := w.Size()
@@ -408,7 +408,7 @@ func (db *DB) appendLeafPageValueLog(l *lane, rid uint64, leafPage []byte) (page
 	if err != nil {
 		return page.ValuePtr{}, "", err
 	}
-	return db.observeLeafPageValueLogAppend(l, ptr, retainPath, stats, compacted, finalWriteMode, finalBlockCodec, payloadLen, totalBytes, probeCompression, selectorStart)
+	return db.observeLeafPageValueLogAppend(l, ptr, retainPath, stats, compacted, finalWriteMode, finalBlockCodec, payloadLen, totalBytes, true, probeCompression, selectorStart)
 }
 
 func (l *cachingLeafPageLog) AppendLeafPage(leafPage []byte) (page.LeafLogPtr, error) {
