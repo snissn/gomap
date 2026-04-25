@@ -19298,29 +19298,53 @@ func (db *DB) update(key []byte, fn backenddb.UpdateFunc, syncWrite bool) error 
 	}
 	db.waitForCheckpoint()
 
-	unlock := db.lockUpdateKey(key)
-	defer unlock()
+	for {
+		unlock := db.lockUpdateKey(key)
+		old, err := db.getForUpdate(key)
+		unlock()
+		if err != nil {
+			return err
+		}
+		observed := cloneUpdateValue(old)
 
-	old, err := db.getForUpdate(key)
-	if err != nil {
-		return err
-	}
-	result, err := fn(old)
-	if err != nil {
-		return err
-	}
-	switch result.Op {
-	case backenddb.UpdateNoop:
-		return nil
-	case backenddb.UpdateSet:
-		if result.Value == nil {
+		result, err := fn(old)
+		if err != nil {
+			return err
+		}
+		if result.Op == backenddb.UpdateSet && result.Value == nil {
 			return ErrValueNil
 		}
-		return db.set(key, result.Value, syncWrite)
-	case backenddb.UpdateDelete:
-		return db.delete(key, syncWrite)
-	default:
-		return fmt.Errorf("treedb: unknown update op %d", result.Op)
+		if result.Op != backenddb.UpdateNoop && result.Op != backenddb.UpdateSet && result.Op != backenddb.UpdateDelete {
+			return fmt.Errorf("treedb: unknown update op %d", result.Op)
+		}
+
+		unlock = db.lockUpdateKey(key)
+		latest, err := db.getForUpdate(key)
+		if err != nil {
+			unlock()
+			return err
+		}
+		if !sameUpdateValue(observed, latest) {
+			unlock()
+			continue
+		}
+
+		switch result.Op {
+		case backenddb.UpdateNoop:
+			unlock()
+			return nil
+		case backenddb.UpdateSet:
+			err = db.set(key, result.Value, syncWrite)
+			unlock()
+			return err
+		case backenddb.UpdateDelete:
+			err = db.delete(key, syncWrite)
+			unlock()
+			return err
+		default:
+			unlock()
+			return fmt.Errorf("treedb: unknown update op %d", result.Op)
+		}
 	}
 }
 
@@ -19334,6 +19358,20 @@ func (db *DB) getForUpdate(key []byte) ([]byte, error) {
 		return nil, err
 	}
 	return old[:len(old):len(old)], nil
+}
+
+func cloneUpdateValue(value []byte) []byte {
+	if value == nil {
+		return nil
+	}
+	return append([]byte{}, value...)
+}
+
+func sameUpdateValue(a, b []byte) bool {
+	if (a == nil) != (b == nil) {
+		return false
+	}
+	return bytes.Equal(a, b)
 }
 
 func (db *DB) flushAllMemtablesForSync(sync bool) error {

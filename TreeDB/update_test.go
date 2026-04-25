@@ -7,6 +7,7 @@ import (
 	"sort"
 	"sync"
 	"testing"
+	"time"
 
 	treedb "github.com/snissn/gomap/TreeDB"
 )
@@ -179,6 +180,64 @@ func TestUpdatePreservesEmptyValuePresence(t *testing.T) {
 	}
 	if !bytes.Equal(got, []byte("present-empty")) {
 		t.Fatalf("value got=%q want present-empty", got)
+	}
+}
+
+func TestUpdateCallbackCanReenterSameKeyWithoutDeadlock(t *testing.T) {
+	opts := treedb.OptionsFor(treedb.ProfileFast, t.TempDir())
+	db, err := treedb.Open(opts)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+
+	key := []byte("reentrant")
+	if err := db.Set(key, []byte("seed")); err != nil {
+		t.Fatalf("Set seed: %v", err)
+	}
+
+	done := make(chan error, 1)
+	calls := 0
+	go func() {
+		done <- db.Update(key, func(old []byte) (treedb.UpdateResult, error) {
+			calls++
+			switch string(old) {
+			case "seed":
+				if err := db.Update(key, func(innerOld []byte) (treedb.UpdateResult, error) {
+					if !bytes.Equal(innerOld, []byte("seed")) {
+						return treedb.UpdateResult{}, fmt.Errorf("inner old = %q, want seed", innerOld)
+					}
+					return treedb.SetUpdate([]byte("inner")), nil
+				}); err != nil {
+					return treedb.UpdateResult{}, err
+				}
+				return treedb.NoopUpdate(), nil
+			case "inner":
+				return treedb.SetUpdate([]byte("outer")), nil
+			default:
+				return treedb.UpdateResult{}, fmt.Errorf("outer old = %q, want seed or inner", old)
+			}
+		})
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Update: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Update deadlocked during reentrant same-key callback")
+	}
+
+	if calls != 2 {
+		t.Fatalf("outer callback calls=%d want 2", calls)
+	}
+	got, err := db.Get(key)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if !bytes.Equal(got, []byte("outer")) {
+		t.Fatalf("value got=%q want outer", got)
 	}
 }
 

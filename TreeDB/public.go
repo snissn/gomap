@@ -112,7 +112,8 @@ func NoopUpdate() UpdateResult {
 }
 
 // UpdateFunc transforms the current value for a key into a mutation. The old
-// value is nil when the key is absent and is a safe copy when present.
+// value is nil when the key is absent and is a safe copy when present. The
+// callback may be retried if the key changes before the mutation commits.
 type UpdateFunc = db.UpdateFunc
 
 // DB is the public TreeDB handle (cached mode by default; read-only opens skip caching).
@@ -1420,12 +1421,11 @@ func (db *DB) SetSync(key, value []byte) error {
 // Update applies fn to the current value for key and writes the returned
 // mutation without forcing an fsync boundary.
 //
-// Concurrent Update calls for the same key on the same DB handle are serialized
-// around the read-modify-write sequence, so callbacks observe prior committed
-// Update results and do not lose each other's changes. Point Set/Delete calls on
-// the same handle participate in the same single-key serialization but remain
-// unconditional writes. The callback runs while the key update lock is held, so
-// it should avoid long-running work or recursive Update calls for the same key.
+// Concurrent Update calls for the same key on the same DB handle do not lose
+// each other's changes: if the key changes while fn is running, Update retries
+// with the newer value. Point Set/Delete calls on the same handle participate in
+// the same single-key commit serialization but remain unconditional writes.
+// Because fn may be retried, it should avoid externally visible side effects.
 func (db *DB) Update(key []byte, fn UpdateFunc) error {
 	if err := db.ensureOpen(); err != nil {
 		return err
@@ -1441,9 +1441,9 @@ func (db *DB) Update(key []byte, fn UpdateFunc) error {
 // DurabilityWALOffRelaxed enabled, Sync operations are crash-consistent only
 // (no fsync) and may not survive power loss.
 //
-// Concurrent UpdateSync/Update calls for the same key on the same DB handle are
-// serialized around the read-modify-write sequence. The callback runs while the
-// key update lock is held.
+// Concurrent UpdateSync/Update calls for the same key on the same DB handle do
+// not lose each other's changes. Because fn may be retried, it should avoid
+// externally visible side effects.
 func (db *DB) UpdateSync(key []byte, fn UpdateFunc) error {
 	if err := db.ensureOpen(); err != nil {
 		return err

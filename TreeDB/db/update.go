@@ -1,6 +1,7 @@
 package db
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 
@@ -48,7 +49,8 @@ func NoopUpdate() UpdateResult {
 }
 
 // UpdateFunc transforms the current value for a key into a mutation. The old
-// value is nil when the key is absent and is a safe copy when present.
+// value is nil when the key is absent and is a safe copy when present. The
+// callback may be retried if the key changes before the mutation commits.
 type UpdateFunc func(old []byte) (UpdateResult, error)
 
 // Update applies fn to the current value for key and writes the returned
@@ -77,29 +79,53 @@ func (db *DB) update(key []byte, fn UpdateFunc, syncWrite bool) error {
 		return ErrReadOnly
 	}
 
-	unlock := db.lockUpdateKey(key)
-	defer unlock()
+	for {
+		unlock := db.lockUpdateKey(key)
+		old, err := db.getForUpdate(key)
+		unlock()
+		if err != nil {
+			return err
+		}
+		observed := cloneUpdateValue(old)
 
-	old, err := db.getForUpdate(key)
-	if err != nil {
-		return err
-	}
-	result, err := fn(old)
-	if err != nil {
-		return err
-	}
-	switch result.Op {
-	case UpdateNoop:
-		return nil
-	case UpdateSet:
-		if result.Value == nil {
+		result, err := fn(old)
+		if err != nil {
+			return err
+		}
+		if result.Op == UpdateSet && result.Value == nil {
 			return ErrUpdateValueNil
 		}
-		return db.setPoint(key, result.Value, syncWrite)
-	case UpdateDelete:
-		return db.deletePoint(key, syncWrite)
-	default:
-		return fmt.Errorf("treedb: unknown update op %d", result.Op)
+		if result.Op != UpdateNoop && result.Op != UpdateSet && result.Op != UpdateDelete {
+			return fmt.Errorf("treedb: unknown update op %d", result.Op)
+		}
+
+		unlock = db.lockUpdateKey(key)
+		latest, err := db.getForUpdate(key)
+		if err != nil {
+			unlock()
+			return err
+		}
+		if !sameUpdateValue(observed, latest) {
+			unlock()
+			continue
+		}
+
+		switch result.Op {
+		case UpdateNoop:
+			unlock()
+			return nil
+		case UpdateSet:
+			err = db.setPoint(key, result.Value, syncWrite)
+			unlock()
+			return err
+		case UpdateDelete:
+			err = db.deletePoint(key, syncWrite)
+			unlock()
+			return err
+		default:
+			unlock()
+			return fmt.Errorf("treedb: unknown update op %d", result.Op)
+		}
 	}
 }
 
@@ -120,4 +146,18 @@ func (db *DB) getForUpdate(key []byte) ([]byte, error) {
 		return nil, err
 	}
 	return old[:len(old):len(old)], nil
+}
+
+func cloneUpdateValue(value []byte) []byte {
+	if value == nil {
+		return nil
+	}
+	return append([]byte{}, value...)
+}
+
+func sameUpdateValue(a, b []byte) bool {
+	if (a == nil) != (b == nil) {
+		return false
+	}
+	return bytes.Equal(a, b)
 }

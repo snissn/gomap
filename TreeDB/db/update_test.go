@@ -2,9 +2,11 @@ package db
 
 import (
 	"bytes"
+	"fmt"
 	"strconv"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestUpdateConcurrentCounterNoLostUpdates(t *testing.T) {
@@ -98,5 +100,62 @@ func TestUpdatePreservesEmptyValuePresence(t *testing.T) {
 	}
 	if !bytes.Equal(got, []byte("present-empty")) {
 		t.Fatalf("value got=%q want present-empty", got)
+	}
+}
+
+func TestUpdateCallbackCanReenterSameKeyWithoutDeadlock(t *testing.T) {
+	d, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer d.Close()
+
+	key := []byte("reentrant")
+	if err := d.Set(key, []byte("seed")); err != nil {
+		t.Fatalf("Set seed: %v", err)
+	}
+
+	done := make(chan error, 1)
+	calls := 0
+	go func() {
+		done <- d.Update(key, func(old []byte) (UpdateResult, error) {
+			calls++
+			switch string(old) {
+			case "seed":
+				if err := d.Update(key, func(innerOld []byte) (UpdateResult, error) {
+					if !bytes.Equal(innerOld, []byte("seed")) {
+						return UpdateResult{}, fmt.Errorf("inner old = %q, want seed", innerOld)
+					}
+					return SetUpdate([]byte("inner")), nil
+				}); err != nil {
+					return UpdateResult{}, err
+				}
+				return NoopUpdate(), nil
+			case "inner":
+				return SetUpdate([]byte("outer")), nil
+			default:
+				return UpdateResult{}, fmt.Errorf("outer old = %q, want seed or inner", old)
+			}
+		})
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Update: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Update deadlocked during reentrant same-key callback")
+	}
+
+	if calls != 2 {
+		t.Fatalf("outer callback calls=%d want 2", calls)
+	}
+	got, err := d.Get(key)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if !bytes.Equal(got, []byte("outer")) {
+		t.Fatalf("value got=%q want outer", got)
 	}
 }
