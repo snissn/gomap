@@ -24,7 +24,7 @@ stable main-based baseline and a stable oracle reference.
 - Oracle branch:
   - `...`
 - Main execution base branch:
-  - `pr/native-fastpath-prep-main-sync`
+  - `pr/native-fastpath-prep-main-sync-v2`
 - Exact `origin/main` commit:
   - `...`
 - Prep branch HEAD:
@@ -289,7 +289,7 @@ the main-based branch.
 - Oracle branch name:
   - `...`
 - Native execution branch:
-  - `pr/native-fastpath-prep-main-sync`
+  - `pr/native-fastpath-prep-main-sync-v2`
 - Proof baseline was captured from the oracle branch:
   - `...`
 - Proof main-based baseline was captured from current execution base:
