@@ -2,6 +2,7 @@ package memtable
 
 import (
 	"bytes"
+	"sync"
 	"testing"
 	"unsafe"
 
@@ -181,6 +182,31 @@ func TestBTreeAdaptiveBothSplitCapacityStaysDisabledForAppendOnly(t *testing.T) 
 	}
 	if m.reuseBothSplitInsertCapacity {
 		t.Fatal("adaptive split sibling capacity enabled for append-only inserts")
+	}
+}
+
+func TestBTreeAdaptiveBothSplitCapacityIgnoresNonAppendReplacements(t *testing.T) {
+	m := NewBTreeWithDegree(2)
+	key := func(i int) []byte {
+		return []byte{byte(i >> 8), byte(i)}
+	}
+
+	for i := 0; i < btreeAdaptiveBothSplitMinEntries; i++ {
+		m.Set(key(2048+i*2), []byte{byte(i)})
+	}
+	existingLowKey := key(2048)
+	for i := 0; i < btreeAdaptiveBothSplitMinNonAppend*2; i++ {
+		m.Set(existingLowKey, []byte{byte(i)})
+	}
+	if m.reuseBothSplitInsertCapacity || m.nonAppendSetCount != 0 {
+		t.Fatalf("adaptive state after replacements enabled=%v nonAppend=%d, want false,0", m.reuseBothSplitInsertCapacity, m.nonAppendSetCount)
+	}
+
+	for i := 0; i < btreeAdaptiveBothSplitMinNonAppend; i++ {
+		m.Set(key(i*2+1), []byte{byte(i)})
+	}
+	if !m.reuseBothSplitInsertCapacity {
+		t.Fatal("adaptive split sibling capacity did not enable after true non-append inserts")
 	}
 }
 
@@ -434,7 +460,7 @@ func TestBTreeArenaPoolClasses(t *testing.T) {
 }
 
 func TestBTreeArenaReusesReleasedChunk(t *testing.T) {
-	btreeArenaPoolBytes.Store(0)
+	resetBTreeArenaPoolForTest(t)
 	a := &btreeArena{
 		maxChunkSize:     btreeArenaChunkSize,
 		initialChunkSize: btreeArenaInitialChunkSize,
@@ -457,6 +483,46 @@ func TestBTreeArenaReusesReleasedChunk(t *testing.T) {
 		t.Fatalf("reused chunk cap=%d want %d", cap(reused), cap(released))
 	}
 	putBTreeArenaChunk(reused)
+}
+
+func TestBTreeArenaPoolAccountingMissResetsAfterGC(t *testing.T) {
+	resetBTreeArenaPoolForTest(t)
+	var fakeNumGC uint64 = 7
+	btreeArenaPoolNumGC = func() uint64 { return fakeNumGC }
+
+	btreeArenaPoolBytes.Store(1234)
+	btreeArenaPoolLastGC.Store(fakeNumGC)
+	fakeNumGC++
+	_ = getBTreeArenaChunk(64 << 10)
+
+	if got := btreeArenaPoolBytes.Load(); got != 0 {
+		t.Fatalf("btreeArenaPoolBytes after GC miss=%d want 0", got)
+	}
+	if got := btreeArenaPoolLastGC.Load(); got != fakeNumGC {
+		t.Fatalf("btreeArenaPoolLastGC=%d want %d", got, fakeNumGC)
+	}
+}
+
+func TestPutBTreeArenaChunkBudgetResetsAfterGC(t *testing.T) {
+	resetBTreeArenaPoolForTest(t)
+	var fakeNumGC uint64 = 11
+	btreeArenaPoolNumGC = func() uint64 { return fakeNumGC }
+
+	_, classSize, ok := btreeArenaClassForLen(64 << 10)
+	if !ok {
+		t.Fatal("btreeArenaClassForLen failed")
+	}
+	btreeArenaPoolBytes.Store(btreeArenaPoolBudgetBytes)
+	btreeArenaPoolLastGC.Store(fakeNumGC)
+	fakeNumGC++
+	putBTreeArenaChunk(make([]byte, classSize))
+
+	if got := btreeArenaPoolBytes.Load(); got != int64(classSize) {
+		t.Fatalf("btreeArenaPoolBytes after GC-aware put=%d want %d", got, classSize)
+	}
+	if got := btreeArenaPoolLastGC.Load(); got != fakeNumGC {
+		t.Fatalf("btreeArenaPoolLastGC=%d want %d", got, fakeNumGC)
+	}
 }
 
 func TestBTreeIteratorUnsafeEntry_ForInlinePointerAndTombstone(t *testing.T) {
@@ -661,6 +727,24 @@ func equalInts(a, b []int) bool {
 		}
 	}
 	return true
+}
+
+func resetBTreeArenaPoolForTest(t *testing.T) {
+	t.Helper()
+	prevNumGC := btreeArenaPoolNumGC
+	for i := range btreeArenaChunkPools {
+		btreeArenaChunkPools[i] = sync.Pool{}
+	}
+	btreeArenaPoolBytes.Store(0)
+	btreeArenaPoolLastGC.Store(0)
+	t.Cleanup(func() {
+		btreeArenaPoolNumGC = prevNumGC
+		for i := range btreeArenaChunkPools {
+			btreeArenaChunkPools[i] = sync.Pool{}
+		}
+		btreeArenaPoolBytes.Store(0)
+		btreeArenaPoolLastGC.Store(0)
+	})
 }
 
 func arenaChunkSizes(a *btreeArena) []int {

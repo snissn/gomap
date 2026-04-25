@@ -362,3 +362,108 @@ func TestDB_AppendPreparedLeafPageValueLog_BatchesQueuedPreparedAppends(t *testi
 		requireLeafLogTestPagesEqual(t, leafPage, got)
 	}
 }
+
+func TestDB_AppendPreparedLeafPageValueLog_BatchRotationMarksDirtyBoundary(t *testing.T) {
+	dir := t.TempDir()
+	fileID, err := valuelog.EncodeFileID(uint32(leafLogLaneID), 1)
+	if err != nil {
+		t.Fatalf("EncodeFileID: %v", err)
+	}
+	leafDir := filepath.Join(dir, "leaf_vlog")
+	if err := os.MkdirAll(leafDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q): %v", leafDir, err)
+	}
+	path := filepath.Join(leafDir, "value-l255-000001.log")
+	writer, err := valuelog.NewWriter(path, fileID)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	defer func() {
+		if writer != nil {
+			_ = writer.Close()
+		}
+	}()
+	if _, err := writer.Append(0, nil, 99, bytes.Repeat([]byte("seed"), 32<<10)); err != nil {
+		t.Fatalf("seed append: %v", err)
+	}
+	startSize := writer.Size()
+
+	db := &DB{
+		closeCh:                 make(chan struct{}),
+		valueLogCompressionMode: uint8(vlogCompressionOff),
+		valueLogDir:             leafDir,
+		valueLogMaxSegmentBytes: startSize + 1,
+	}
+	leaf := lane{id: leafLogLaneID, vlog: writer, vlogSeq: 1, vlogPath: path}
+	leafPage := buildSparseLeafPageForLeafLogTest(t)
+
+	const requests = 2
+	ptrs := make([]page.ValuePtr, requests)
+	totalBytes := make([]int64, requests)
+	errs := make(chan error, requests)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+
+	leaf.vlogMu.Lock()
+	for i := 0; i < requests; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			ptr, _, _, _, _, bytesWritten, err := db.appendPreparedLeafPageValueLogQueued(&leaf, uint64(i+1), leafPage)
+			ptrs[i] = ptr
+			totalBytes[i] = bytesWritten
+			errs <- err
+		}(i)
+	}
+	close(start)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		leaf.leafAppendMu.Lock()
+		queued := len(leaf.leafAppendQueue)
+		draining := leaf.leafAppendDraining
+		leaf.leafAppendMu.Unlock()
+		if queued == requests && draining {
+			break
+		}
+		if time.Now().After(deadline) {
+			leaf.vlogMu.Unlock()
+			t.Fatalf("queued prepared appends=%d draining=%v want %d queued and draining", queued, draining, requests)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	leaf.vlogMu.Unlock()
+
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("appendPreparedLeafPageValueLogQueued: %v", err)
+		}
+	}
+	if ptrs[0].FileID == ptrs[1].FileID {
+		t.Fatalf("expected queued batch to rotate between records, got file_id=%d", ptrs[0].FileID)
+	}
+	if totalBytes[0] <= 0 || totalBytes[1] <= 0 {
+		t.Fatalf("totalBytes=%v want both > 0", totalBytes)
+	}
+	currentSegmentBytes := int64(0)
+	for i, ptr := range ptrs {
+		if ptr.FileID != fileID {
+			currentSegmentBytes = totalBytes[i]
+		}
+	}
+	if currentSegmentBytes <= 0 {
+		t.Fatalf("did not find current-segment bytes, ptrs=%+v totalBytes=%v firstFileID=%d", ptrs, totalBytes, fileID)
+	}
+	if got := leaf.backendReadDirtySeq.Load(); got != 1 {
+		t.Fatalf("backendReadDirtySeq=%d want 1 after rotating batch", got)
+	}
+	if !leaf.vlogDirty.Load() {
+		t.Fatal("vlogDirty=false want true after rotating batch")
+	}
+	if got := leaf.vlogLiveBytes.Load(); got != currentSegmentBytes {
+		t.Fatalf("current segment live bytes=%d want current request bytes %d", got, currentSegmentBytes)
+	}
+}
