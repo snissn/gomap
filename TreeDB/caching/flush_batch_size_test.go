@@ -100,6 +100,10 @@ func TestFlushBackendEntriesCapForOpsReducesNearPureDeletePasses(t *testing.T) {
 	if got := db.flushBackendEntriesCapForOps(10_000, 2_499, false); got != 313 {
 		t.Fatalf("non-delete-heavy cap=%d want 313", got)
 	}
+	maxInt := int(^uint(0) >> 1)
+	if got := db.flushBackendEntriesCapForOps(maxInt, maxInt/4+1, false); got <= 0 {
+		t.Fatalf("overflow-safe delete-heavy cap=%d want positive", got)
+	}
 }
 
 func TestWaitForStopSelfHealsStaleBacklogBytes(t *testing.T) {

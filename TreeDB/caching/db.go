@@ -3893,6 +3893,15 @@ func (db *DB) flushValueLogLane(l *lane) error {
 			l.vlogMu.Unlock()
 			return errWALUnavailable
 		}
+		if err := db.drainPreparedLeafPageValueLogQueueBarrierMuHeld(l); err != nil {
+			l.vlogMu.Unlock()
+			return err
+		}
+		w = l.vlog
+		if w == nil {
+			l.vlogMu.Unlock()
+			return errWALUnavailable
+		}
 		// Always take vlogMu first so flush acts as a write barrier for in-flight appends.
 		if !l.vlogDirty.Load() {
 			if pending, ok := w.(interface{ PendingBytes() int }); !ok || pending.PendingBytes() == 0 {
@@ -3946,6 +3955,15 @@ func (db *DB) syncValueLogLane(l *lane) error {
 		l.vlogMu.Lock()
 		waited := time.Since(waitStart)
 		w := l.vlog
+		if w == nil {
+			l.vlogMu.Unlock()
+			return errWALUnavailable
+		}
+		if err := db.drainPreparedLeafPageValueLogQueueBarrierMuHeld(l); err != nil {
+			l.vlogMu.Unlock()
+			return err
+		}
+		w = l.vlog
 		if w == nil {
 			l.vlogMu.Unlock()
 			return errWALUnavailable
@@ -7110,7 +7128,7 @@ func (db *DB) flushBackendEntriesCapForOps(totalOps int, deleteOps int, sync boo
 			} else if maxBatches > 4 {
 				maxBatches = 4
 			}
-		case deleteOps >= (totalOps+3)/4:
+		case deleteOps >= ceilQuarter(totalOps):
 			if maxBatches > 4 {
 				maxBatches = 4
 			}
@@ -11841,12 +11859,20 @@ func flushStreamingDeleteOps(units []flushUnit, totalLen int) (int, bool) {
 			break
 		}
 	}
-	// OperationMix may include superseded append-log entries; the cap planner is
-	// bounded by iterator-visible ops.
+	// OperationMix may include superseded append-log entries; cap deleteOps to
+	// totalLen, the queued Len() total gathered for these flush units.
 	if deleteOps > totalLen {
 		deleteOps = totalLen
 	}
 	return deleteOps, true
+}
+
+func ceilQuarter(n int) int {
+	q := n / 4
+	if n%4 != 0 {
+		q++
+	}
+	return q
 }
 
 func deleteHeavyStreamingDeleteOps(units []flushUnit, totalLen int) (int, bool) {
@@ -11854,7 +11880,7 @@ func deleteHeavyStreamingDeleteOps(units []flushUnit, totalLen int) (int, bool) 
 	if !ok {
 		return 0, false
 	}
-	return deleteOps, deleteOps >= (totalLen+3)/4
+	return deleteOps, deleteOps >= ceilQuarter(totalLen)
 }
 
 func closeOpMergeSources(sources []opMergeSource) error {

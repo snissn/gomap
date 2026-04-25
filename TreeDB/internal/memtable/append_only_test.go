@@ -203,6 +203,30 @@ func TestAppendOnlyDifferentSmallValuesKeepSeparatePayloads(t *testing.T) {
 	}
 }
 
+func TestAppendOnlyCopiedValueAfterBorrowDoesNotReuseAliasedPayload(t *testing.T) {
+	m := NewAppendOnlyWithCapacity(0)
+	borrowed := []byte("same-value")
+
+	m.SetEntryBorrowValue([]byte("borrowed"), borrowed, page.ValuePtr{}, node.FlagInline)
+	m.Set([]byte("copied"), []byte("same-value"))
+
+	if got := len(m.values); got != 2 {
+		t.Fatalf("values=%d want=2", got)
+	}
+	if m.entries[0].payloadIndex == 0 || m.entries[0].payloadIndex == m.entries[1].payloadIndex {
+		t.Fatalf("payload indices=(%d,%d), want distinct non-zero indices", m.entries[0].payloadIndex, m.entries[1].payloadIndex)
+	}
+	borrowed[0] = 'X'
+	gotBorrowed, deleted, ok := m.Get([]byte("borrowed"))
+	if !ok || deleted || string(gotBorrowed) != "Xame-value" {
+		t.Fatalf("Get(borrowed)=(%q,%v,%v), want mutated borrowed value,false,true", string(gotBorrowed), deleted, ok)
+	}
+	gotCopied, deleted, ok := m.Get([]byte("copied"))
+	if !ok || deleted || string(gotCopied) != "same-value" {
+		t.Fatalf("Get(copied)=(%q,%v,%v), want same-value,false,true", string(gotCopied), deleted, ok)
+	}
+}
+
 func TestAppendOnlyApplyBorrowValueSortedBatch_CopiesKeysBorrowsValues(t *testing.T) {
 	m := NewAppendOnlyWithCapacity(0)
 	key := []byte("k-short")

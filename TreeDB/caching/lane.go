@@ -83,6 +83,8 @@ type lane struct {
 	vlogQueueDriftLastAtNs         int64
 	vlogQueueDriftCurrentNs        uint64
 	leafAppendMu                   sync.Mutex
+	leafAppendCond                 *sync.Cond
+	leafAppendPreparing            int
 	leafAppendDraining             bool
 	leafAppendQueue                []*leafPageAppendRequest
 	vlogDirty                      atomic.Bool

@@ -14,19 +14,18 @@ require (
 	github.com/nutsdb/nutsdb v1.1.0
 	github.com/pierrec/lz4/v4 v4.1.22
 	github.com/snissn/compress v1.18.2-snissn.0.0.20260204222835-33fc0851d88e
+	github.com/snissn/tidwall-btree v0.0.0-20260425042550-37a697ea0697
 	github.com/stretchr/testify v1.11.1
 	github.com/syndtr/goleveldb v1.0.1-0.20210819022825-2ae1ddf74ef7
-	github.com/tidwall/btree v1.8.1
 	github.com/tidwall/buntdb v1.3.2
 	github.com/tidwall/match v1.1.1
 	github.com/tidwall/redcon v1.6.2
+	github.com/yuin/goldmark v1.7.13
 	github.com/zeebo/xxh3 v1.0.2
 	go.etcd.io/bbolt v1.4.3
 	golang.org/x/sys v0.35.0
 	gonum.org/v1/plot v0.16.0
 )
-
-replace github.com/tidwall/btree => github.com/snissn/tidwall-btree v0.0.0-20260425032128-4cc08e17e610
 
 require (
 	codeberg.org/go-fonts/liberation v0.5.0 // indirect
@@ -68,13 +67,13 @@ require (
 	github.com/prometheus/common v0.42.0 // indirect
 	github.com/prometheus/procfs v0.9.0 // indirect
 	github.com/rogpeppe/go-internal v1.13.1 // indirect
+	github.com/tidwall/btree v1.6.0 // indirect
 	github.com/tidwall/gjson v1.14.3 // indirect
 	github.com/tidwall/grect v0.1.4 // indirect
 	github.com/tidwall/pretty v1.2.0 // indirect
 	github.com/tidwall/rtred v0.1.2 // indirect
 	github.com/tidwall/tinyqueue v0.1.1 // indirect
 	github.com/xujiajun/utils v0.0.0-20220904132955-5f7c5b914235 // indirect
-	github.com/yuin/goldmark v1.7.13 // indirect
 	go.opentelemetry.io/auto/sdk v1.1.0 // indirect
 	go.opentelemetry.io/otel v1.37.0 // indirect
 	go.opentelemetry.io/otel/metric v1.37.0 // indirect

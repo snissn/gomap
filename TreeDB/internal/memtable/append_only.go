@@ -181,6 +181,7 @@ type AppendOnly struct {
 	entries        []appendOnlyEntry
 	keys           []string
 	values         []string
+	lastValueAlias bool
 	ptrPayloads    []appendOnlyPointerPayload
 	baseEntriesLen int
 	growEntriesLen int
@@ -1238,19 +1239,25 @@ func (m *AppendOnly) appendValueBytesLocked(value []byte, borrowed bool) uint32 
 		return 0
 	}
 	if borrowed {
-		return m.appendValueLocked(appendOnlyStringFromBytes(value))
+		idx := m.appendValueLocked(appendOnlyStringFromBytes(value))
+		m.lastValueAlias = true
+		return idx
 	}
 	if idx := m.recentValueIndexLocked(value); idx != 0 {
 		return idx
 	}
 	if len(m.values) == 0 {
-		return m.appendValueLockedSmall(appendOnlyArenaStringCopy(&m.valueArena, value))
+		idx := m.appendValueLockedSmall(appendOnlyArenaStringCopy(&m.valueArena, value))
+		m.lastValueAlias = false
+		return idx
 	}
-	return m.appendValueLocked(appendOnlyArenaStringCopy(&m.valueArena, value))
+	idx := m.appendValueLocked(appendOnlyArenaStringCopy(&m.valueArena, value))
+	m.lastValueAlias = false
+	return idx
 }
 
 func (m *AppendOnly) recentValueIndexLocked(value []byte) uint32 {
-	if len(value) == 0 || len(value) > appendOnlyRecentValueDedupeMaxLen || len(m.values) == 0 {
+	if len(value) == 0 || len(value) > appendOnlyRecentValueDedupeMaxLen || len(m.values) == 0 || m.lastValueAlias {
 		return 0
 	}
 	idx := len(m.values) - 1
@@ -1997,6 +2004,7 @@ func (m *AppendOnly) resetLockedWithPolicy(capacity, estimatedBytesPerEntry, ent
 		clear(m.values)
 		m.values = m.values[:0]
 	}
+	m.lastValueAlias = false
 	if !retainObserved || cap(m.ptrPayloads) > maxRetainedEntries {
 		putAppendOnlyPtrPayloads(m.ptrPayloads)
 		m.ptrPayloads = nil
@@ -2112,11 +2120,13 @@ func (m *AppendOnly) replaceValuesSlice(length int) {
 	prev := m.values
 	if length == 0 {
 		m.values = nil
+		m.lastValueAlias = false
 		putAppendOnlyValues(prev)
 		return
 	}
 	m.values = getAppendOnlyValues(length)
 	m.values = m.values[:0]
+	m.lastValueAlias = false
 	putAppendOnlyValues(prev)
 }
 

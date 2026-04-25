@@ -254,6 +254,87 @@ func TestDB_AppendPreparedLeafPageValueLog_AppendsAndReturnsUnlocked(t *testing.
 	requireLeafLogTestPagesEqual(t, leafPage, got)
 }
 
+func TestDB_FlushValueLogLaneDrainsPreparingLeafAppend(t *testing.T) {
+	dir := t.TempDir()
+	fileID, err := valuelog.EncodeFileID(uint32(leafLogLaneID), 1)
+	if err != nil {
+		t.Fatalf("EncodeFileID: %v", err)
+	}
+	leafDir := filepath.Join(dir, "leaf_vlog")
+	if err := os.MkdirAll(leafDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q): %v", leafDir, err)
+	}
+	path := filepath.Join(leafDir, "value-l255-000001.log")
+	writer, err := valuelog.NewWriter(path, fileID)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	defer func() {
+		if writer != nil {
+			_ = writer.Close()
+		}
+	}()
+
+	db := &DB{
+		closeCh:                 make(chan struct{}),
+		valueLogCompressionMode: uint8(vlogCompressionOff),
+	}
+	leaf := lane{id: leafLogLaneID, vlog: writer}
+	leafPage := buildSparseLeafPageForLeafLogTest(t)
+	raw, stats, compacted, ptrLength, err := valuelog.PrepareCompactLeafPageRecord(nil, 1, leafPage)
+	if err != nil {
+		t.Fatalf("PrepareCompactLeafPageRecord: %v", err)
+	}
+	req := &leafPageAppendRequest{
+		raw:        raw,
+		ptrLength:  ptrLength,
+		stats:      stats,
+		compacted:  compacted,
+		payloadLen: stats.RawPayloadBytes,
+	}
+	req.wg.Add(1)
+
+	leaf.vlogMu.Lock()
+	leaf.leafAppendMu.Lock()
+	leaf.leafAppendPreparing = 1
+	leaf.leafAppendMu.Unlock()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- db.flushValueLogLane(&leaf)
+	}()
+	leaf.vlogMu.Unlock()
+
+	leaf.leafAppendMu.Lock()
+	leaf.leafAppendPreparing--
+	leaf.leafAppendQueue = append(leaf.leafAppendQueue, req)
+	broadcastLeafAppendLocked(&leaf)
+	leaf.leafAppendMu.Unlock()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("flushValueLogLane: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("flushValueLogLane did not drain preparing leaf append")
+	}
+	req.wg.Wait()
+	if req.err != nil {
+		t.Fatalf("prepared append error: %v", req.err)
+	}
+	if req.ptr.FileID == 0 || req.totalBytes <= 0 {
+		t.Fatalf("prepared append ptr=%+v totalBytes=%d, want written record", req.ptr, req.totalBytes)
+	}
+	if got, want := leaf.backendReadFlushedSeq.Load(), leaf.backendReadDirtySeq.Load(); got != want {
+		t.Fatalf("backendReadFlushedSeq=%d want dirty seq %d after flush", got, want)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("Close writer: %v", err)
+	}
+	writer = nil
+}
+
 func TestDB_AppendPreparedLeafPageValueLog_BatchesQueuedPreparedAppends(t *testing.T) {
 	dir := t.TempDir()
 	fileID, err := valuelog.EncodeFileID(uint32(leafLogLaneID), 1)
