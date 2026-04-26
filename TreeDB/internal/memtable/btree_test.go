@@ -271,7 +271,7 @@ func TestBTreeApplyStealSortedBatchIndicesTrusted(t *testing.T) {
 	}
 
 	var seen []string
-	m.ApplyStealSortedBatchIndicesTrusted(entries, []int{1, 2, 3}, func(key []byte) {
+	m.applyStealSortedBatchIndicesTrusted(entries, []int{1, 2, 3}, func(key []byte) {
 		seen = append(seen, string(key))
 	})
 

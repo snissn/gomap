@@ -15,7 +15,7 @@ import (
 const btreeDefaultDegree = 32
 const btreeUseLoadFastPath = false
 const btreeArenaChunkSize = 1 << 20
-const btreeInlineValueDedupeMax = 1 << 20
+const btreeInlineValueDedupeMax = btreeArenaChunkSize
 
 type btreeEntry struct {
 	value []byte // inline bytes (if pointer, may store inline tail bytes)
@@ -86,7 +86,7 @@ func (m *BTree) ApplyStealSortedBatchTrusted(entries []batchpkg.Entry, onKey fun
 	m.applyStealSortedBatch(entries, nil, onKey)
 }
 
-func (m *BTree) ApplyStealSortedBatchIndicesTrusted(entries []batchpkg.Entry, idxs []int, onKey func(key []byte)) {
+func (m *BTree) applyStealSortedBatchIndicesTrusted(entries []batchpkg.Entry, idxs []int, onKey func(key []byte)) {
 	m.applyStealSortedBatch(entries, idxs, onKey)
 }
 
