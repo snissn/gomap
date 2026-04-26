@@ -1,6 +1,7 @@
 package caching
 
 import (
+	"bytes"
 	"encoding/binary"
 	"math/rand"
 	"testing"
@@ -407,6 +408,73 @@ func TestAdaptiveMemtableMode_DefaultAdaptiveStartsWarmup(t *testing.T) {
 	}
 	if got := stats["treedb.cache.memtable_warmup_active"]; got != "true" {
 		t.Fatalf("expected default adaptive mode to start with warmup active, got %q", got)
+	}
+}
+
+func TestAdaptiveSequentialSetRotatesFullShardEpoch(t *testing.T) {
+	dir := t.TempDir()
+	backend := NewMockBackend()
+
+	db, err := Open(dir, backend, Options{
+		AllowUnsafe:              true,
+		DisableWAL:               true,
+		FlushThreshold:           256 << 10,
+		MaxQueuedMemtables:       -1,
+		MemtableMode:             "adaptive",
+		MemtableShards:           8,
+		ValueLogPointerThreshold: 1 << 20,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	flushLocked := true
+	db.flushMu.Lock()
+	defer func() {
+		if flushLocked {
+			db.flushMu.Unlock()
+		}
+		if err := db.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	}()
+
+	value := bytes.Repeat([]byte("v"), 128)
+	rotated := false
+	for i := 0; i < adaptiveMinWrites*8; i++ {
+		var key [8]byte
+		binary.BigEndian.PutUint64(key[:], uint64(i))
+		if err := db.Set(key[:], value); err != nil {
+			t.Fatalf("Set(%d): %v", i, err)
+		}
+		db.mu.RLock()
+		rotated = len(db.queue) > 0
+		db.mu.RUnlock()
+		if rotated {
+			break
+		}
+	}
+
+	db.mu.RLock()
+	queueLen := len(db.queue)
+	queueShardIDs := append([]uint16(nil), db.queueShardIDs...)
+	db.mu.RUnlock()
+	db.flushMu.Unlock()
+	flushLocked = false
+
+	if !rotated {
+		t.Fatal("expected sequential writes to rotate a mutable epoch")
+	}
+	if queueLen != len(db.mutableShards) {
+		t.Fatalf("queued shards=%d want %d; shardIDs=%v", queueLen, len(db.mutableShards), queueShardIDs)
+	}
+	seen := make(map[uint16]struct{}, len(queueShardIDs))
+	for _, shardID := range queueShardIDs {
+		seen[shardID] = struct{}{}
+	}
+	for shardID := range db.mutableShards {
+		if _, ok := seen[uint16(shardID)]; !ok {
+			t.Fatalf("missing queued shard %d; shardIDs=%v", shardID, queueShardIDs)
+		}
 	}
 }
 

@@ -219,6 +219,95 @@ func (m *HashSorted) ApplyStealSortedBatchTrusted(entries []batchpkg.Entry, onKe
 	m.applyStealSortedBatch(entries, onKey, true)
 }
 
+func (m *HashSorted) ApplyStealSortedBatchIndicesTrusted(entries []batchpkg.Entry, idxs []int, onKey func(key []byte)) {
+	if len(idxs) == 0 {
+		return
+	}
+	var chunks []hashSortedIndexWork
+
+	m.mu.Lock()
+	if m.canAppendIndicesAfterMaxLocked(entries, idxs) {
+		keys := make([]string, 0, len(idxs))
+		keyBytes := 0
+		for _, idx := range idxs {
+			op := entries[idx]
+			if keyStored, n, ok := m.setEntryNewStealNoChunkLocked(op); ok {
+				keys = append(keys, keyStored)
+				keyBytes += n
+			}
+			if onKey != nil {
+				onKey(op.Key)
+			}
+		}
+		if chunk, seq := m.noteNewKeysBatchLocked(keys, keyBytes); seq != 0 {
+			chunks = append(chunks, hashSortedIndexWork{mt: m, seq: seq, keys: chunk, sorted: true})
+		}
+	} else {
+		for _, idx := range idxs {
+			op := entries[idx]
+			if op.Type == batchpkg.OpDelete {
+				if chunk, seq := m.setEntryLocked(op.Key, nil, page.ValuePtr{}, node.FlagTombstone, true); seq != 0 {
+					chunks = append(chunks, hashSortedIndexWork{mt: m, seq: seq, keys: chunk})
+				}
+			} else if op.IsPtr {
+				if chunk, seq := m.setEntryLocked(op.Key, nil, op.ValuePtr, node.FlagPointer, true); seq != 0 {
+					chunks = append(chunks, hashSortedIndexWork{mt: m, seq: seq, keys: chunk})
+				}
+			} else {
+				if chunk, seq := m.setEntryLocked(op.Key, op.Value, page.ValuePtr{}, node.FlagInline, true); seq != 0 {
+					chunks = append(chunks, hashSortedIndexWork{mt: m, seq: seq, keys: chunk})
+				}
+			}
+			if onKey != nil {
+				onKey(op.Key)
+			}
+		}
+	}
+	m.mu.Unlock()
+
+	for _, c := range chunks {
+		c.mt.indexer.enqueue(c.mt, c.seq, c.keys, c.sorted)
+	}
+}
+
+func (m *HashSorted) ApplyCopySortedBatchIndicesTrusted(entries []batchpkg.Entry, idxs []int, storeInlinePtrValues bool, onKey func(key []byte)) {
+	if len(idxs) == 0 {
+		return
+	}
+	var chunks []hashSortedIndexWork
+
+	m.mu.Lock()
+	for _, idx := range idxs {
+		op := entries[idx]
+		switch {
+		case op.Type == batchpkg.OpDelete:
+			if chunk, seq := m.setEntryLocked(op.Key, nil, page.ValuePtr{}, node.FlagTombstone, false); seq != 0 {
+				chunks = append(chunks, hashSortedIndexWork{mt: m, seq: seq, keys: chunk})
+			}
+		case op.IsPtr:
+			value := op.Value
+			if !storeInlinePtrValues {
+				value = nil
+			}
+			if chunk, seq := m.setEntryLocked(op.Key, value, op.ValuePtr, node.FlagPointer, false); seq != 0 {
+				chunks = append(chunks, hashSortedIndexWork{mt: m, seq: seq, keys: chunk})
+			}
+		default:
+			if chunk, seq := m.setEntryLocked(op.Key, op.Value, page.ValuePtr{}, node.FlagInline, false); seq != 0 {
+				chunks = append(chunks, hashSortedIndexWork{mt: m, seq: seq, keys: chunk})
+			}
+		}
+		if onKey != nil {
+			onKey(op.Key)
+		}
+	}
+	m.mu.Unlock()
+
+	for _, c := range chunks {
+		c.mt.indexer.enqueue(c.mt, c.seq, c.keys, c.sorted)
+	}
+}
+
 func (m *HashSorted) applyStealSortedBatch(entries []batchpkg.Entry, onKey func(key []byte), trustedOrder bool) {
 	var chunks []hashSortedIndexWork
 
@@ -1027,6 +1116,23 @@ func (m *HashSorted) canAppendAfterMaxLocked(entries []batchpkg.Entry) bool {
 		return false
 	}
 	return strings.Compare(bytesToStringNoCopy(entries[0].Key), m.maxKey) > 0
+}
+
+func (m *HashSorted) canAppendIndicesAfterMaxLocked(entries []batchpkg.Entry, idxs []int) bool {
+	if len(idxs) == 0 {
+		return false
+	}
+	first := entries[idxs[0]]
+	if first.Key == nil {
+		return false
+	}
+	if len(m.items) == 0 {
+		return true
+	}
+	if !m.hasMaxKey {
+		return false
+	}
+	return strings.Compare(bytesToStringNoCopy(first.Key), m.maxKey) > 0
 }
 
 func (m *HashSorted) updateMaxKeyLocked(key string) {

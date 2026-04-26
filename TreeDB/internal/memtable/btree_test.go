@@ -336,6 +336,19 @@ func TestBTreeSetEntryCopiesKeyValue(t *testing.T) {
 	}
 }
 
+func TestBTreeResetDropsOversizedFirstArenaChunk(t *testing.T) {
+	m := NewBTree()
+	value := make([]byte, btreeArenaChunkSize+1)
+	m.Set([]byte("large"), value)
+	if len(m.arena.chunks) == 0 || cap(m.arena.chunks[0]) <= btreeArenaChunkSize {
+		t.Fatalf("first arena chunk cap=%d want > %d", cap(m.arena.chunks[0]), btreeArenaChunkSize)
+	}
+	m.Reset()
+	if got := len(m.arena.chunks); got != 0 {
+		t.Fatalf("arena chunks after Reset=%d want 0 for oversized first chunk", got)
+	}
+}
+
 func TestBTreeOperationMixTracksCurrentDeletes(t *testing.T) {
 	m := NewBTree()
 	m.Set([]byte("a"), []byte("va"))
@@ -616,6 +629,29 @@ func TestBTreeApplyStealSortedBatchIndicesTrusted(t *testing.T) {
 	}
 	if got := m.Len(); got != 3 {
 		t.Fatalf("Len()=%d want 3", got)
+	}
+}
+
+func TestBTreeApplyStealSortedBatchIndicesTrustedEmptyIndexListNoops(t *testing.T) {
+	for _, idxs := range [][]int{nil, []int{}} {
+		m := NewBTree()
+		seen := false
+		m.ApplyStealSortedBatchIndicesTrusted([]batchpkg.Entry{{
+			Type:  batchpkg.OpPut,
+			Key:   []byte("unexpected"),
+			Value: []byte("value"),
+		}}, idxs, func([]byte) {
+			seen = true
+		})
+		if seen {
+			t.Fatal("onKey called for empty index list")
+		}
+		if got := m.Len(); got != 0 {
+			t.Fatalf("Len()=%d want 0", got)
+		}
+		if _, _, ok := m.Get([]byte("unexpected")); ok {
+			t.Fatal("empty index list applied entry")
+		}
 	}
 }
 

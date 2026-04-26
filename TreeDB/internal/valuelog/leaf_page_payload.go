@@ -249,7 +249,11 @@ func allowsCompactLeafLogPayload(fileID uint32, path string) bool {
 }
 
 func maybeDecodeLeafLogPayloadTo(fileID uint32, path string, payload, dst []byte) ([]byte, bool, bool, error) {
-	if !allowsCompactLeafLogPayload(fileID, path) {
+	return maybeDecodeLeafLogPayloadAllowed(allowsCompactLeafLogPayload(fileID, path), payload, dst)
+}
+
+func maybeDecodeLeafLogPayloadAllowed(allowCompact bool, payload, dst []byte) ([]byte, bool, bool, error) {
+	if !allowCompact {
 		return payload, false, false, nil
 	}
 	out, usedDst, decoded, err := decodeCompactLeafLogPayloadTo(payload, dst)
@@ -263,7 +267,11 @@ func maybeDecodeLeafLogPayloadTo(fileID uint32, path string, payload, dst []byte
 }
 
 func appendMaybeDecodeLeafLogPayload(fileID uint32, path string, dst, payload []byte) ([]byte, error) {
-	if !allowsCompactLeafLogPayload(fileID, path) {
+	return appendMaybeDecodeLeafLogPayloadAllowed(allowsCompactLeafLogPayload(fileID, path), dst, payload)
+}
+
+func appendMaybeDecodeLeafLogPayloadAllowed(allowCompact bool, dst, payload []byte) ([]byte, error) {
+	if !allowCompact {
 		if len(payload) == 0 {
 			return dst, nil
 		}

@@ -94,9 +94,10 @@ type SortedBatchApplier interface {
 //
 // Callers should only use this when they know the entries are already in
 // increasing key order and the borrowed values will remain immutable for the
-// memtable lifetime.
+// memtable lifetime. It returns true when any caller-owned value storage was
+// retained by the memtable.
 type SortedBatchBorrowValueApplier interface {
-	ApplyBorrowValueSortedBatch(entries []batchpkg.Entry, storeInlinePtrValues bool, onKey func(key []byte))
+	ApplyBorrowValueSortedBatch(entries []batchpkg.Entry, storeInlinePtrValues bool, onKey func(key []byte)) bool
 }
 
 // ValueBorrower marks memtables that can safely retain caller-owned value
@@ -106,6 +107,20 @@ type SortedBatchBorrowValueApplier interface {
 // retired or reset.
 type ValueBorrower interface {
 	SetEntryBorrowValue(key, value []byte, ptr page.ValuePtr, flags byte)
+}
+
+// StableValueBorrower marks memtables that can retain immutable value storage
+// and may canonicalize equal adjacent values to reduce payload metadata. It
+// returns true when the provided value storage was retained.
+type StableValueBorrower interface {
+	SetEntryBorrowStableValue(key, value []byte, ptr page.ValuePtr, flags byte) bool
+}
+
+// StableValueReuser appends an entry by reusing an already-retained matching
+// value without retaining the caller's value slice. It returns false when the
+// caller must fall back to the normal copy/borrow path.
+type StableValueReuser interface {
+	SetEntryReuseStableValue(key, value []byte, ptr page.ValuePtr, flags byte) bool
 }
 
 // StableUnsafeIteratorTable marks memtable implementations whose
@@ -154,9 +169,10 @@ type TrustedSortedBatchCopyIndexApplier interface {
 
 // TrustedSortedBatchBorrowValueApplier is an optional fast path for callers
 // that already guarantee strictly increasing keys and immutable borrowed value
-// slices.
+// slices. It returns true when any caller-owned value storage was retained by
+// the memtable.
 type TrustedSortedBatchBorrowValueApplier interface {
-	ApplyBorrowValueSortedBatchTrusted(entries []batchpkg.Entry, storeInlinePtrValues bool, onKey func(key []byte))
+	ApplyBorrowValueSortedBatchTrusted(entries []batchpkg.Entry, storeInlinePtrValues bool, onKey func(key []byte)) bool
 }
 
 // TrustedSortedBatchIndexApplier is an optional fast path for callers that
@@ -172,7 +188,7 @@ type TrustedSortedBatchIndexApplier interface {
 // TrustedSortedBatchBorrowValueApplier but consumes a sorted index list into a
 // shared batch entry slice.
 type TrustedSortedBatchBorrowValueIndexApplier interface {
-	ApplyBorrowValueSortedBatchIndicesTrusted(entries []batchpkg.Entry, idxs []int, storeInlinePtrValues bool, onKey func(key []byte))
+	ApplyBorrowValueSortedBatchIndicesTrusted(entries []batchpkg.Entry, idxs []int, storeInlinePtrValues bool, onKey func(key []byte)) bool
 }
 
 type Memtable struct {
@@ -289,6 +305,56 @@ func (m *Memtable) ApplyStealSortedBatch(entries []batchpkg.Entry, onKey func(ke
 	}
 
 	for _, op := range entries {
+		if op.Type == batchpkg.OpDelete {
+			m.sl.Delete(op.Key)
+		} else if op.IsPtr {
+			m.sl.PutEntry(op.Key, op.Value, op.ValuePtr, node.FlagPointer)
+		} else {
+			m.sl.Put(op.Key, op.Value)
+		}
+		if onKey != nil {
+			onKey(op.Key)
+		}
+	}
+}
+
+func (m *Memtable) ApplyStealSortedBatchIndicesTrusted(entries []batchpkg.Entry, idxs []int, onKey func(key []byte)) {
+	if len(idxs) == 0 {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	first := entries[idxs[0]]
+	last := m.sl.LastKey()
+	if first.Key != nil && (last == nil || bytes.Compare(first.Key, last) > 0) {
+		for _, idx := range idxs {
+			op := entries[idx]
+			if op.Type == batchpkg.OpDelete {
+				m.sl.AppendDelete(op.Key)
+			} else if op.IsPtr {
+				if len(op.Value) > 0 {
+					buf := make([]byte, page.ValuePtrSize+len(op.Value))
+					op.ValuePtr.Encode(buf[:page.ValuePtrSize])
+					copy(buf[page.ValuePtrSize:], op.Value)
+					_ = m.sl.AppendWithCallback(op.Key, buf, node.FlagPointer, nil)
+				} else {
+					var buf [page.ValuePtrSize]byte
+					op.ValuePtr.Encode(buf[:])
+					_ = m.sl.AppendWithCallback(op.Key, buf[:], node.FlagPointer, nil)
+				}
+			} else {
+				m.sl.Append(op.Key, op.Value)
+			}
+			if onKey != nil {
+				onKey(op.Key)
+			}
+		}
+		return
+	}
+
+	for _, idx := range idxs {
+		op := entries[idx]
 		if op.Type == batchpkg.OpDelete {
 			m.sl.Delete(op.Key)
 		} else if op.IsPtr {

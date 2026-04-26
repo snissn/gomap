@@ -79,14 +79,24 @@ func (db *DB) noteLeafGenerationRecordLength(ptr page.ValuePtr) {
 // outside vlogMu. The caller must hold l.vlogMu; this helper releases it while
 // preparing the record and returns with the mutex unlocked.
 func (db *DB) appendPreparedLeafPageValueLog(l *lane, rid uint64, leafPage []byte) (page.ValuePtr, string, valuelog.FrameStats, bool, int, int64, error) {
+	l.leafAppendMu.Lock()
+	l.leafAppendPreparing++
+	l.leafAppendMu.Unlock()
 	l.vlogMu.Unlock()
-	return db.appendPreparedLeafPageValueLogQueued(l, rid, leafPage)
+	return db.appendPreparedLeafPageValueLogQueuedMarked(l, rid, leafPage, true)
 }
 
 func (db *DB) appendPreparedLeafPageValueLogQueued(l *lane, rid uint64, leafPage []byte) (page.ValuePtr, string, valuelog.FrameStats, bool, int, int64, error) {
+	return db.appendPreparedLeafPageValueLogQueuedMarked(l, rid, leafPage, false)
+}
+
+func (db *DB) appendPreparedLeafPageValueLogQueuedMarked(l *lane, rid uint64, leafPage []byte, markedPreparing bool) (page.ValuePtr, string, valuelog.FrameStats, bool, int, int64, error) {
 	bufp := getPreparedLeafPageRecordBuffer()
 	raw, stats, compacted, ptrLength, err := valuelog.PrepareCompactLeafPageRecord((*bufp)[:0], rid, leafPage)
 	if err != nil {
+		if markedPreparing {
+			finishLeafPageAppendPreparing(l)
+		}
 		putPreparedLeafPageRecordBuffer(bufp)
 		return page.ValuePtr{}, "", valuelog.FrameStats{}, false, 0, 0, err
 	}
@@ -103,11 +113,15 @@ func (db *DB) appendPreparedLeafPageValueLogQueued(l *lane, rid uint64, leafPage
 
 	leader := false
 	l.leafAppendMu.Lock()
+	if markedPreparing && l.leafAppendPreparing > 0 {
+		l.leafAppendPreparing--
+	}
 	if !l.leafAppendDraining {
 		l.leafAppendDraining = true
 		leader = true
 	}
 	l.leafAppendQueue = append(l.leafAppendQueue, req)
+	broadcastLeafAppendLocked(l)
 	l.leafAppendMu.Unlock()
 
 	if leader {
@@ -120,6 +134,31 @@ func (db *DB) appendPreparedLeafPageValueLogQueued(l *lane, rid uint64, leafPage
 		return page.ValuePtr{}, "", valuelog.FrameStats{}, false, 0, 0, req.err
 	}
 	return req.ptr, req.retainPath, req.stats, req.compacted, req.payloadLen, req.totalBytes, nil
+}
+
+func finishLeafPageAppendPreparing(l *lane) {
+	if l == nil {
+		return
+	}
+	l.leafAppendMu.Lock()
+	if l.leafAppendPreparing > 0 {
+		l.leafAppendPreparing--
+	}
+	broadcastLeafAppendLocked(l)
+	l.leafAppendMu.Unlock()
+}
+
+func leafAppendCondLocked(l *lane) *sync.Cond {
+	if l.leafAppendCond == nil {
+		l.leafAppendCond = sync.NewCond(&l.leafAppendMu)
+	}
+	return l.leafAppendCond
+}
+
+func broadcastLeafAppendLocked(l *lane) {
+	if l != nil && l.leafAppendCond != nil {
+		l.leafAppendCond.Broadcast()
+	}
 }
 
 // drainPreparedLeafPageValueLogQueue lets one contended caller append several
@@ -159,6 +198,53 @@ func (db *DB) drainPreparedLeafPageValueLogQueue(l *lane) {
 		}
 		for i := range batch {
 			batch[i].wg.Done()
+		}
+	}
+}
+
+func (db *DB) drainPreparedLeafPageValueLogQueueBarrierMuHeld(l *lane) error {
+	batch := make([]*leafPageAppendRequest, 0, leafPageAppendBatchMax)
+	for {
+		batch = batch[:0]
+
+		l.leafAppendMu.Lock()
+		for l.leafAppendPreparing > 0 && len(l.leafAppendQueue) == 0 {
+			leafAppendCondLocked(l).Wait()
+		}
+		if len(l.leafAppendQueue) == 0 {
+			if l.leafAppendPreparing == 0 {
+				l.leafAppendDraining = false
+			}
+			l.leafAppendMu.Unlock()
+			return nil
+		}
+		n := len(l.leafAppendQueue)
+		if n > leafPageAppendBatchMax {
+			n = leafPageAppendBatchMax
+		}
+		queue := l.leafAppendQueue
+		batch = append(batch, queue[:n]...)
+		copy(queue, queue[n:])
+		clear(queue[len(queue)-n:])
+		l.leafAppendQueue = queue[:len(queue)-n]
+		l.leafAppendMu.Unlock()
+
+		retainPaths := db.appendPreparedLeafPageValueLogBatchMuHeld(l, batch, nil)
+		for _, path := range retainPaths {
+			db.markValueLogRetain(path)
+		}
+		var firstErr error
+		for i := range batch {
+			if batch[i] != nil && batch[i].err != nil && firstErr == nil {
+				firstErr = batch[i].err
+			}
+			if batch[i] != nil {
+				batch[i].wg.Done()
+			}
+		}
+		if firstErr != nil {
+			finishQueuedLeafPageAppendRequests(l, firstErr)
+			return firstErr
 		}
 	}
 }
@@ -262,6 +348,30 @@ func finishLeafPageAppendBatch(batch []*leafPageAppendRequest, err error) {
 		batch[i].retainPath = ""
 		batch[i].totalBytes = 0
 		batch[i].err = err
+	}
+}
+
+func finishQueuedLeafPageAppendRequests(l *lane, err error) {
+	if l == nil || err == nil {
+		return
+	}
+	l.leafAppendMu.Lock()
+	queued := l.leafAppendQueue
+	if len(queued) > 0 {
+		l.leafAppendQueue = nil
+	} else {
+		l.leafAppendQueue = l.leafAppendQueue[:0]
+	}
+	l.leafAppendDraining = false
+	broadcastLeafAppendLocked(l)
+	l.leafAppendMu.Unlock()
+
+	finishLeafPageAppendBatch(queued, err)
+	for i := range queued {
+		if queued[i] != nil {
+			queued[i].wg.Done()
+			queued[i] = nil
+		}
 	}
 }
 

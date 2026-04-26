@@ -163,6 +163,54 @@ func TestAppendOnlyDirectWriterArena_SkipsPointerOnlyMemtableValues(t *testing.T
 	}
 }
 
+func TestAppendOnlyDirectWriterArena_ReusesStableRepeatedValuesWithoutArenaGrowth(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(dir, NewMockBackend(), Options{
+		AllowUnsafe:              true,
+		DisableWAL:               true,
+		MemtableMode:             "append_only",
+		MemtableShards:           1,
+		FlushThreshold:           1 << 30,
+		ValueLogPointerThreshold: 1 << 20,
+	})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+
+	want := bytes.Repeat([]byte{0x77}, 128)
+	for i := 0; i < 512; i++ {
+		key := []byte{byte(i >> 8), byte(i)}
+		value := append([]byte(nil), want...)
+		if err := db.Set(key, value); err != nil {
+			t.Fatalf("set %d: %v", i, err)
+		}
+		value[0] = 0
+	}
+
+	shard := &db.mutableShards[0]
+	shard.mu.Lock()
+	activeChunks := len(shard.appendOnlyDirectValueArena.active)
+	curPos := shard.appendOnlyDirectValueArena.curPos
+	shard.mu.Unlock()
+	if activeChunks != 1 {
+		t.Fatalf("active direct writer chunks=%d want=1", activeChunks)
+	}
+	if curPos != len(want) {
+		t.Fatalf("direct writer arena position=%d want=%d; repeated stable values should reuse the first copy", curPos, len(want))
+	}
+
+	for _, key := range [][]byte{{0, 0}, {0, 1}, {1, 255}} {
+		got, err := db.Get(key)
+		if err != nil {
+			t.Fatalf("get %x: %v", key, err)
+		}
+		if !bytes.Equal(got, want) {
+			t.Fatalf("get %x=%x want=%x", key, got, want)
+		}
+	}
+}
+
 func TestAppendOnlyDirectWriterArena_ReusesRetainedChunksOnReset(t *testing.T) {
 	dir := t.TempDir()
 	db, err := Open(dir, NewMockBackend(), Options{

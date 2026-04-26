@@ -86,6 +86,8 @@ Mechanisms:
 - mutexes/RWMutex/condvars for critical sections and barriers.
 
 Key lock families:
+- cached and backend DB: `updateLocks[]` for single-key `Update`/`UpdateSync`
+  read-modify-write serialization,
 - cached DB global: `mu`, `writeMu`, `flushMu`, `checkpointMu`, `laneMu`, `bpMu`,
 - cached per shard/lane: shard `mu`, lane `walMu`, lane `vlogMu`, `flushLaneMu[]`, `walFastMu`,
 - backend DB: `mu`, `writeMu`, `commitMu`, `idxMu`, plus worker-local mutexes.
@@ -187,6 +189,33 @@ Workers:
 - background index vacuum (public wrapper),
 - dictionary profile application loop.
 
+### 3.11 Single-key update serialization
+
+Mechanism:
+- cached and backend `DB.Update`/`DB.UpdateSync` hash the requested key into a
+  fixed set of per-handle mutex stripes around the read/validate/commit
+  phases. The callback runs outside the stripe lock, and the commit phase
+  retries if the key changed while the callback was running.
+
+Effects:
+- concurrent logical updates to the same key on the same `DB` handle are
+  serialized,
+- point `Set`/`SetSync`/`Delete`/`DeleteSync` calls use the same single-key
+  coordinator on the same handle,
+- callers can implement conflict-safe single-key mutations, such as
+  set-membership add/remove, without an external global lock,
+- unrelated keys usually proceed independently, subject to stripe collisions and
+  the lower cached/backend write-path locks.
+
+Limits:
+- this is not a multi-key transaction mechanism,
+- point `Set`/`Delete` calls remain unconditional writes,
+- batch writes do not acquire the single-key update coordinator,
+- the update callback may be retried, so it should avoid externally visible
+  side effects; same-key recursive `Update` calls are not blocked by the stripe
+  lock but can still force retries or non-termination if callbacks keep changing
+  the observed value.
+
 ## 4. Lock and Barrier Topology
 
 ### 4.1 Cached layer lock roles
@@ -208,6 +237,8 @@ Workers:
 ### 4.2 Lock-order constraints that must hold
 
 Current order constraints:
+- cached/backend `Update`/`UpdateSync` and point writes take an update stripe
+  lock before entering lower write paths.
 - `flushMu` before `checkpointMu` when both are needed.
 - `Checkpoint` acquires `flushMu` then `writeMu`.
 - `Close` mirrors `flushMu` then `writeMu` to avoid deadlock with auto-checkpoint.
@@ -443,6 +474,7 @@ A compatible implementation SHOULD preserve:
 ## 10. Existing Concurrency-Relevant Tests
 
 Representative coverage includes:
+- `TreeDB/update_test.go`,
 - `TreeDB/db/concurrent_write_test.go`,
 - `TreeDB/db/race_test.go`,
 - `TreeDB/db/vacuum_panic_test.go`,

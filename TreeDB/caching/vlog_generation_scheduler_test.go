@@ -2354,6 +2354,47 @@ func TestVlogGenerationMaintenance_PeriodicPassRunsLeafPackUnderSteadyForeground
 	}
 }
 
+func TestVlogGenerationMaintenance_PeriodicGCSkipsDuringForegroundActivity(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+	backend, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	recorder := &rewriteBudgetRecordingBackend{
+		DB:         backend,
+		gcResponse: backenddb.ValueLogGCStats{SegmentsEligible: 1, BytesEligible: 1024},
+	}
+	db, err := Open(t.TempDir(), recorder, Options{
+		AllowUnsafe:                true,
+		DisableWAL:                 true,
+		IndexOuterLeavesInValueLog: true,
+		ValueLogGenerationPolicy:   uint8(backenddb.ValueLogGenerationHotWarmCold),
+		ForceValueLogPointers:      true,
+	})
+	if err != nil {
+		t.Fatalf("open cachingdb: %v", err)
+	}
+	defer func() {
+		if err := db.Close(); err != nil {
+			t.Fatalf("close cachingdb: %v", err)
+		}
+	}()
+
+	now := time.Now()
+	db.lastForegroundWriteUnixNano.Store(now.Add(-500 * time.Millisecond).UnixNano())
+	db.lastForegroundReadUnixNano.Store(now.Add(-2 * vlogForegroundReadQuietWindow).UnixNano())
+
+	if ran := db.maybeRunPeriodicVlogGenerationMaintenance(true); ran {
+		t.Fatal("expected periodic GC maintenance to skip while foreground writes are inside the long quiet window")
+	}
+	if _, calls := recorder.recordedGC(); calls != 0 {
+		t.Fatalf("periodic GC calls=%d want 0", calls)
+	}
+	if got := db.vlogGenerationMaintenanceAcquired.Load(); got != 0 {
+		t.Fatalf("maintenance acquired=%d want 0", got)
+	}
+}
+
 func TestVlogGenerationMaintenance_PeriodicPassSkipsLeafPackOnWriteBurst(t *testing.T) {
 	prepareDirectSchedulerTest(t)
 	t.Setenv(envEnableLeafGenerationPackMaintenance, "1")

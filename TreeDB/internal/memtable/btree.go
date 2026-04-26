@@ -12,7 +12,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
-	btree "github.com/tidwall/btree"
+	btree "github.com/snissn/tidwall-btree"
 )
 
 const btreeDefaultDegree = 32
@@ -25,6 +25,8 @@ const btreeArenaPoolClassCount = btreeArenaPoolMaxShift - btreeArenaPoolMinShift
 const btreeArenaPoolBudgetBytes = 64 << 20
 const btreeAdaptiveBothSplitMinEntries = 512
 const btreeAdaptiveBothSplitMinNonAppend = 64
+const btreeLeafItemArenaRetainChunks = 256
+const btreeNodeArenaRetainChunks = 256
 
 var btreeArenaChunkPools [btreeArenaPoolClassCount]sync.Pool
 var btreeArenaPoolBytes atomic.Int64
@@ -122,6 +124,9 @@ func (m *BTree) ApplyStealSortedBatchTrusted(entries []batchpkg.Entry, onKey fun
 }
 
 func (m *BTree) ApplyStealSortedBatchIndicesTrusted(entries []batchpkg.Entry, idxs []int, onKey func(key []byte)) {
+	if len(idxs) == 0 {
+		return
+	}
 	m.applyStealSortedBatch(entries, idxs, onKey)
 }
 
@@ -212,8 +217,12 @@ func NewBTreeWithDegree(degree int) *BTree {
 
 func newBTreeMap(degree int) *btree.Map[string, btreeEntry] {
 	return btree.NewMapWithOptions[string, btreeEntry](degree, btree.MapOptions{
-		ReuseRightSplitCapacity:  true,
-		ReuseSplitInsertCapacity: true,
+		ReuseRightSplitCapacity:   true,
+		ReuseSplitInsertCapacity:  true,
+		LeafItemArena:             true,
+		LeafItemArenaRetainChunks: btreeLeafItemArenaRetainChunks,
+		NodeArena:                 true,
+		NodeArenaRetainChunks:     btreeNodeArenaRetainChunks,
 	})
 }
 
@@ -906,6 +915,15 @@ func (a *btreeArena) resetKeepFirstChunk() {
 		return
 	}
 	first := a.chunks[0]
+	if a.maxChunkSize > 0 && cap(first) > a.maxChunkSize {
+		for i := range a.chunks {
+			putBTreeArenaChunk(a.chunks[i])
+			a.chunks[i] = nil
+		}
+		a.chunks = nil
+		a.offset = 0
+		return
+	}
 	first = first[:cap(first)]
 	for i := 1; i < len(a.chunks); i++ {
 		putBTreeArenaChunk(a.chunks[i])

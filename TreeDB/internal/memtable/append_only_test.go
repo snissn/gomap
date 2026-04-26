@@ -203,6 +203,143 @@ func TestAppendOnlyDifferentSmallValuesKeepSeparatePayloads(t *testing.T) {
 	}
 }
 
+func TestAppendOnlyCopiedValueAfterBorrowDoesNotReuseAliasedPayload(t *testing.T) {
+	m := NewAppendOnlyWithCapacity(0)
+	borrowed := []byte("same-value")
+
+	m.SetEntryBorrowValue([]byte("borrowed"), borrowed, page.ValuePtr{}, node.FlagInline)
+	m.Set([]byte("copied"), []byte("same-value"))
+
+	if got := len(m.values); got != 2 {
+		t.Fatalf("values=%d want=2", got)
+	}
+	if m.entries[0].payloadIndex == 0 || m.entries[0].payloadIndex == m.entries[1].payloadIndex {
+		t.Fatalf("payload indices=(%d,%d), want distinct non-zero indices", m.entries[0].payloadIndex, m.entries[1].payloadIndex)
+	}
+	borrowed[0] = 'X'
+	gotBorrowed, deleted, ok := m.Get([]byte("borrowed"))
+	if !ok || deleted || string(gotBorrowed) != "Xame-value" {
+		t.Fatalf("Get(borrowed)=(%q,%v,%v), want mutated borrowed value,false,true", string(gotBorrowed), deleted, ok)
+	}
+	gotCopied, deleted, ok := m.Get([]byte("copied"))
+	if !ok || deleted || string(gotCopied) != "same-value" {
+		t.Fatalf("Get(copied)=(%q,%v,%v), want same-value,false,true", string(gotCopied), deleted, ok)
+	}
+}
+
+func TestAppendOnlyBorrowStableRepeatedValueReusesPayloadAlias(t *testing.T) {
+	m := &AppendOnly{
+		entries: make([]appendOnlyEntry, 1024),
+		ordered: true,
+		lastIdx: -1,
+	}
+	value1 := []byte("same borrowed value")
+	value2 := []byte("same borrowed value")
+
+	if !m.SetEntryBorrowStableValue([]byte("k1"), value1, page.ValuePtr{}, node.FlagInline) {
+		t.Fatal("first stable borrow should retain caller value storage")
+	}
+	if m.SetEntryBorrowStableValue([]byte("k2"), value2, page.ValuePtr{}, node.FlagInline) {
+		t.Fatal("repeated stable borrow should reuse the previous payload without retaining caller storage")
+	}
+
+	if got := len(m.values); got != 1 {
+		t.Fatalf("values=%d want=1", got)
+	}
+	if got := cap(m.values); got != appendOnlyMinInitialEntries {
+		t.Fatalf("value cap=%d want %d; borrowed first payload should not dense-preallocate to entry cap", got, appendOnlyMinInitialEntries)
+	}
+	if m.entries[0].payloadIndex == 0 || m.entries[0].payloadIndex != m.entries[1].payloadIndex {
+		t.Fatalf("payload indices=(%d,%d), want shared non-zero index", m.entries[0].payloadIndex, m.entries[1].payloadIndex)
+	}
+	got, deleted, ok := m.Get([]byte("k2"))
+	if !ok || deleted || string(got) != "same borrowed value" {
+		t.Fatalf("Get(k2)=(%q,%v,%v), want borrowed value,false,true", string(got), deleted, ok)
+	}
+}
+
+func TestAppendOnlyBorrowStableValueDoesNotReuseUnstableBorrowAlias(t *testing.T) {
+	m := NewAppendOnlyWithCapacity(0)
+	unstable := []byte("same borrowed value")
+	stable := []byte("same borrowed value")
+
+	m.SetEntryBorrowValue([]byte("unstable"), unstable, page.ValuePtr{}, node.FlagInline)
+	if !m.SetEntryBorrowStableValue([]byte("stable"), stable, page.ValuePtr{}, node.FlagInline) {
+		t.Fatal("stable borrow after unstable alias should retain caller value storage")
+	}
+
+	if got := len(m.values); got != 2 {
+		t.Fatalf("values=%d want=2", got)
+	}
+	if m.entries[0].payloadIndex == 0 || m.entries[0].payloadIndex == m.entries[1].payloadIndex {
+		t.Fatalf("payload indices=(%d,%d), want distinct non-zero indices", m.entries[0].payloadIndex, m.entries[1].payloadIndex)
+	}
+	unstable[0] = 'X'
+	got, deleted, ok := m.Get([]byte("unstable"))
+	if !ok || deleted || string(got) != "Xame borrowed value" {
+		t.Fatalf("Get(unstable)=(%q,%v,%v), want mutated unstable value,false,true", string(got), deleted, ok)
+	}
+	got, deleted, ok = m.Get([]byte("stable"))
+	if !ok || deleted || string(got) != "same borrowed value" {
+		t.Fatalf("Get(stable)=(%q,%v,%v), want stable value,false,true", string(got), deleted, ok)
+	}
+}
+
+func TestAppendOnlyReuseStableValueDoesNotRetainCaller(t *testing.T) {
+	m := NewAppendOnlyWithCapacity(0)
+	first := []byte("same stable value")
+	m.SetEntryBorrowStableValue([]byte("k1"), first, page.ValuePtr{}, node.FlagInline)
+
+	second := []byte("same stable value")
+	if !m.SetEntryReuseStableValue([]byte("k2"), second, page.ValuePtr{}, node.FlagInline) {
+		t.Fatalf("expected stable value reuse")
+	}
+	second[0] = 'X'
+
+	if got := len(m.values); got != 1 {
+		t.Fatalf("values=%d want=1", got)
+	}
+	if m.entries[0].payloadIndex == 0 || m.entries[0].payloadIndex != m.entries[1].payloadIndex {
+		t.Fatalf("payload indices=(%d,%d), want shared non-zero index", m.entries[0].payloadIndex, m.entries[1].payloadIndex)
+	}
+	got, deleted, ok := m.Get([]byte("k2"))
+	if !ok || deleted || string(got) != "same stable value" {
+		t.Fatalf("Get(k2)=(%q,%v,%v), want stable value,false,true", string(got), deleted, ok)
+	}
+
+	if m.SetEntryReuseStableValue([]byte("k3"), []byte("different"), page.ValuePtr{}, node.FlagInline) {
+		t.Fatalf("unexpected stable value reuse for different payload")
+	}
+	if _, _, ok := m.Get([]byte("k3")); ok {
+		t.Fatalf("different payload should not be appended by failed reuse")
+	}
+}
+
+func TestAppendOnlyBorrowValueKeepsDistinctAliases(t *testing.T) {
+	m := NewAppendOnlyWithCapacity(0)
+	value1 := []byte("same borrowed value")
+	value2 := []byte("same borrowed value")
+
+	m.SetEntryBorrowValue([]byte("k1"), value1, page.ValuePtr{}, node.FlagInline)
+	m.SetEntryBorrowValue([]byte("k2"), value2, page.ValuePtr{}, node.FlagInline)
+
+	if got := len(m.values); got != 2 {
+		t.Fatalf("values=%d want=2", got)
+	}
+	if m.entries[0].payloadIndex == 0 || m.entries[0].payloadIndex == m.entries[1].payloadIndex {
+		t.Fatalf("payload indices=(%d,%d), want distinct non-zero indices", m.entries[0].payloadIndex, m.entries[1].payloadIndex)
+	}
+	value2[0] = 'X'
+	got, deleted, ok := m.Get([]byte("k2"))
+	if !ok || deleted || string(got) != "Xame borrowed value" {
+		t.Fatalf("Get(k2)=(%q,%v,%v), want mutated second borrowed value,false,true", string(got), deleted, ok)
+	}
+	got, deleted, ok = m.Get([]byte("k1"))
+	if !ok || deleted || string(got) != "same borrowed value" {
+		t.Fatalf("Get(k1)=(%q,%v,%v), want first borrowed value,false,true", string(got), deleted, ok)
+	}
+}
+
 func TestAppendOnlyApplyBorrowValueSortedBatch_CopiesKeysBorrowsValues(t *testing.T) {
 	m := NewAppendOnlyWithCapacity(0)
 	key := []byte("k-short")

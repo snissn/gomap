@@ -23,6 +23,7 @@ var (
 	ErrCorrupt        = errors.New("commitlog: corrupt record")
 	ErrRecordTooLarge = errors.New("commitlog: record too large")
 	ErrMixedBatchSeq  = errors.New("commitlog: mixed batch sequence")
+	ErrNilRecordFunc  = errors.New("commitlog: nil record function")
 )
 
 type Record struct {
