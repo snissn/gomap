@@ -180,6 +180,27 @@ func TestBTreeInlineEmptySliceCanonicalizesToNil(t *testing.T) {
 	})
 }
 
+func TestBTreeSetEntryDedupesRepeatedCopiedInlineValues(t *testing.T) {
+	m := NewBTree()
+	value := []byte("same-value")
+
+	m.SetEntry([]byte("a"), value, page.ValuePtr{}, node.FlagInline)
+	value[0] = 'X'
+	m.SetEntry([]byte("b"), []byte("same-value"), page.ValuePtr{}, node.FlagInline)
+
+	gotA, _, _, ok := m.GetEntry([]byte("a"))
+	if !ok || string(gotA) != "same-value" {
+		t.Fatalf("GetEntry(a)=(%q,%v), want same-value,true", string(gotA), ok)
+	}
+	gotB, _, _, ok := m.GetEntry([]byte("b"))
+	if !ok || string(gotB) != "same-value" {
+		t.Fatalf("GetEntry(b)=(%q,%v), want same-value,true", string(gotB), ok)
+	}
+	if len(gotA) == 0 || len(gotB) == 0 || &gotA[0] != &gotB[0] {
+		t.Fatal("repeated copied inline values did not share BTree-owned storage")
+	}
+}
+
 func TestBTreeIteratorUnsafeEntry_ForInlinePointerAndTombstone(t *testing.T) {
 	ptrWant := page.ValuePtr{Offset: 99, Length: 123, FileID: 7}
 	m := NewBTree()
@@ -237,4 +258,65 @@ func TestBTreeIteratorUnsafeEntry_ForInlinePointerAndTombstone(t *testing.T) {
 
 	assertIter(t, "forward", m.NewIterator(nil, nil), []string{"a-inline", "b-pointer", "c-tomb"})
 	assertIter(t, "reverse", m.NewReverseIterator(nil, nil), []string{"c-tomb", "b-pointer", "a-inline"})
+}
+
+func TestBTreeApplyStealSortedBatchIndicesTrusted(t *testing.T) {
+	m := NewBTree()
+	ptr := page.ValuePtr{Offset: 7, Length: 11, FileID: 2}
+	entries := []batchpkg.Entry{
+		{Type: batchpkg.OpPut, Key: []byte("ignore"), Value: []byte("skip")},
+		{Type: batchpkg.OpPut, Key: []byte("a"), Value: []byte("va")},
+		{Type: batchpkg.OpDelete, Key: []byte("b")},
+		{Type: batchpkg.OpPut, Key: []byte("c"), Value: []byte("tail"), ValuePtr: ptr, IsPtr: true},
+	}
+
+	var seen []string
+	m.applyStealSortedBatchIndicesTrusted(entries, []int{1, 2, 3}, func(key []byte) {
+		seen = append(seen, string(key))
+	})
+
+	if got, del, ok := m.Get([]byte("a")); !ok || del || string(got) != "va" {
+		t.Fatalf("Get(a)=(%q,%v,%v), want (va,false,true)", string(got), del, ok)
+	}
+	if got, del, ok := m.Get([]byte("b")); !ok || !del || got != nil {
+		t.Fatalf("Get(b)=(%v,%v,%v), want (nil,true,true)", got, del, ok)
+	}
+	if got, gotPtr, flags, ok := m.GetEntry([]byte("c")); !ok || string(got) != "tail" || gotPtr != ptr || flags != node.FlagPointer {
+		t.Fatalf("GetEntry(c)=(%q,%+v,%d,%v), want (tail,%+v,%d,true)", string(got), gotPtr, flags, ok, ptr, node.FlagPointer)
+	}
+	if _, _, ok := m.Get([]byte("ignore")); ok {
+		t.Fatal("ignored entry was applied")
+	}
+	if want := []string{"a", "b", "c"}; !equalStrings(seen, want) {
+		t.Fatalf("onKey saw %v want %v", seen, want)
+	}
+	if got := m.Len(); got != 3 {
+		t.Fatalf("Len()=%d want 3", got)
+	}
+}
+
+func TestBTreeApplyStealSortedBatchIndicesTrustedPanicsOnBadIndex(t *testing.T) {
+	m := NewBTree()
+	entries := []batchpkg.Entry{
+		{Type: batchpkg.OpPut, Key: []byte("a"), Value: []byte("va")},
+	}
+
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("expected panic for out-of-range trusted batch index")
+		}
+	}()
+	m.applyStealSortedBatchIndicesTrusted(entries, []int{1}, nil)
+}
+
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
