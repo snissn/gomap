@@ -13,15 +13,51 @@ import (
 )
 
 func TestBTreeEntryLayoutCompact(t *testing.T) {
-	if got, wantMax := unsafe.Sizeof(btreeEntry{}), uintptr(16); got > wantMax {
+	if got, wantMax := unsafe.Sizeof(btreeEntry{}), uintptr(8); got > wantMax {
 		t.Fatalf("btreeEntry size=%d, want <= %d", got, wantMax)
 	}
 	type btreeMapPair struct {
 		value btreeEntry
 		key   string
 	}
-	if got, wantMax := unsafe.Sizeof(btreeMapPair{}), uintptr(32); got > wantMax {
+	if got, wantMax := unsafe.Sizeof(btreeMapPair{}), uintptr(24); got > wantMax {
 		t.Fatalf("btree map pair size=%d, want <= %d", got, wantMax)
+	}
+}
+
+func TestBTreePackedEntryReusesInlineArenaRef(t *testing.T) {
+	m := NewBTree()
+
+	m.Set([]byte("a"), []byte("same-value"))
+	m.Set([]byte("b"), []byte("same-value"))
+	m.Set([]byte("c"), []byte("same-value"))
+
+	a, ok := m.tree.Get("a")
+	if !ok {
+		t.Fatal("missing key a")
+	}
+	if a.isExternal() {
+		t.Fatal("copied inline value used external entry")
+	}
+	if got, want := a.valueRef().length, uint32(len("same-value")); got != want {
+		t.Fatalf("entry value length=%d want %d", got, want)
+	}
+	for _, key := range []string{"b", "c"} {
+		got, ok := m.tree.Get(key)
+		if !ok {
+			t.Fatalf("missing key %s", key)
+		}
+		if got != a {
+			t.Fatalf("entry for key %s did not reuse packed arena ref", key)
+		}
+	}
+
+	m.Reset()
+	if m.lastInline != nil || m.lastInlineRef != (btreeArenaRef{}) {
+		t.Fatal("last inline value retained across reset")
+	}
+	if len(m.externalValues) != 0 {
+		t.Fatalf("external values after reset=%d, want 0", len(m.externalValues))
 	}
 }
 
