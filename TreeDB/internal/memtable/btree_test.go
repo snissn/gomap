@@ -295,6 +295,20 @@ func TestBTreeApplyStealSortedBatchIndicesTrusted(t *testing.T) {
 	}
 }
 
+func TestBTreeApplyStealSortedBatchIndicesTrustedPanicsOnBadIndex(t *testing.T) {
+	m := NewBTree()
+	entries := []batchpkg.Entry{
+		{Type: batchpkg.OpPut, Key: []byte("a"), Value: []byte("va")},
+	}
+
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("expected panic for out-of-range trusted batch index")
+		}
+	}()
+	m.applyStealSortedBatchIndicesTrusted(entries, []int{1}, nil)
+}
+
 func equalStrings(a, b []string) bool {
 	if len(a) != len(b) {
 		return false

@@ -114,6 +114,9 @@ func (m *BTree) applyStealSortedBatch(entries []batchpkg.Entry, idxs []int, onKe
 		return
 	}
 	for _, idx := range idxs {
+		if idx < 0 || idx >= len(entries) {
+			panic("memtable: trusted sorted batch index out of range")
+		}
 		apply(entries[idx])
 	}
 }
