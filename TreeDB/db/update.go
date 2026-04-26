@@ -13,7 +13,7 @@ import (
 var ErrNilUpdateFunc = errors.New("treedb: nil update function")
 
 // ErrUpdateValueNil indicates an Update callback requested Set with a nil value.
-var ErrUpdateValueNil = errors.New("value cannot be nil")
+var ErrUpdateValueNil = errors.New("treedb: value cannot be nil")
 
 // UpdateOp describes the write produced by an Update callback.
 type UpdateOp uint8
@@ -78,10 +78,11 @@ func (db *DB) update(key []byte, fn UpdateFunc, syncWrite bool) error {
 	if db.readOnly {
 		return ErrReadOnly
 	}
+	stableKey := cloneUpdateKey(key)
 
 	for {
-		unlock := db.lockUpdateKey(key)
-		old, err := db.getForUpdate(key)
+		unlock := db.lockUpdateKey(stableKey)
+		old, err := db.getForUpdate(stableKey)
 		unlock()
 		if err != nil {
 			return err
@@ -99,8 +100,8 @@ func (db *DB) update(key []byte, fn UpdateFunc, syncWrite bool) error {
 			return fmt.Errorf("treedb: unknown update op %d", result.Op)
 		}
 
-		unlock = db.lockUpdateKey(key)
-		latest, err := db.getForUpdate(key)
+		unlock = db.lockUpdateKey(stableKey)
+		latest, err := db.getForUpdate(stableKey)
 		if err != nil {
 			unlock()
 			return err
@@ -115,11 +116,11 @@ func (db *DB) update(key []byte, fn UpdateFunc, syncWrite bool) error {
 			unlock()
 			return nil
 		case UpdateSet:
-			err = db.setPoint(key, result.Value, syncWrite)
+			err = db.setPoint(stableKey, result.Value, syncWrite)
 			unlock()
 			return err
 		case UpdateDelete:
-			err = db.deletePoint(key, syncWrite)
+			err = db.deletePoint(stableKey, syncWrite)
 			unlock()
 			return err
 		default:
@@ -127,6 +128,10 @@ func (db *DB) update(key []byte, fn UpdateFunc, syncWrite bool) error {
 			return fmt.Errorf("treedb: unknown update op %d", result.Op)
 		}
 	}
+}
+
+func cloneUpdateKey(key []byte) []byte {
+	return append([]byte{}, key...)
 }
 
 func (db *DB) lockUpdateKey(key []byte) func() {
