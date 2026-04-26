@@ -811,6 +811,90 @@ func TestBTreeApplyStealSortedBatchTrustedNilKeyFallsBack(t *testing.T) {
 	}
 }
 
+func TestBTreeBatchLoadSortedStats(t *testing.T) {
+	ResetBTreeBatchLoadSortedStats()
+	t.Cleanup(ResetBTreeBatchLoadSortedStats)
+
+	m := NewBTree()
+	hit := btreeStatsEntries('a', btreeLoadSortedMinBatchEntries)
+	m.ApplyStealSortedBatchTrusted(hit, nil)
+
+	small := btreeStatsEntries('b', btreeLoadSortedMinBatchEntries-1)
+	m.ApplyCopySortedBatchIndicesTrusted(small, btreeStatsIndexes(len(small)), false, nil)
+
+	overlap := btreeStatsEntries('a', btreeLoadSortedMinBatchEntries)
+	m.ApplyStealSortedBatchTrusted(overlap, nil)
+
+	nonIncreasing := btreeStatsEntries('c', btreeLoadSortedMinBatchEntries)
+	nonIncreasing[17].Key = nonIncreasing[16].Key
+	m.ApplyStealSortedBatchTrusted(nonIncreasing, nil)
+
+	nilKey := btreeStatsEntries('d', btreeLoadSortedMinBatchEntries)
+	nilKey[23].Key = nil
+	m.ApplyStealSortedBatchTrusted(nilKey, nil)
+
+	stats := BTreeBatchLoadSortedStatsSnapshot()
+	if got, want := stats.Attempts, uint64(5); got != want {
+		t.Fatalf("Attempts=%d want %d", got, want)
+	}
+	if got, want := stats.AttemptEntries, uint64(btreeLoadSortedMinBatchEntries*4+btreeLoadSortedMinBatchEntries-1); got != want {
+		t.Fatalf("AttemptEntries=%d want %d", got, want)
+	}
+	if got, want := stats.Hits, uint64(1); got != want {
+		t.Fatalf("Hits=%d want %d", got, want)
+	}
+	if got, want := stats.HitEntries, uint64(btreeLoadSortedMinBatchEntries); got != want {
+		t.Fatalf("HitEntries=%d want %d", got, want)
+	}
+	if got, want := stats.StealAttempts, uint64(4); got != want {
+		t.Fatalf("StealAttempts=%d want %d", got, want)
+	}
+	if got, want := stats.StealHits, uint64(1); got != want {
+		t.Fatalf("StealHits=%d want %d", got, want)
+	}
+	if got, want := stats.CopyAttempts, uint64(1); got != want {
+		t.Fatalf("CopyAttempts=%d want %d", got, want)
+	}
+	if got, want := stats.CopyHits, uint64(0); got != want {
+		t.Fatalf("CopyHits=%d want %d", got, want)
+	}
+	if got, want := stats.FallbackTooSmall, uint64(1); got != want {
+		t.Fatalf("FallbackTooSmall=%d want %d", got, want)
+	}
+	if got, want := stats.FallbackTooSmallEntries, uint64(btreeLoadSortedMinBatchEntries-1); got != want {
+		t.Fatalf("FallbackTooSmallEntries=%d want %d", got, want)
+	}
+	if got, want := stats.FallbackOverlapLast, uint64(1); got != want {
+		t.Fatalf("FallbackOverlapLast=%d want %d", got, want)
+	}
+	if got, want := stats.FallbackNonIncreasing, uint64(1); got != want {
+		t.Fatalf("FallbackNonIncreasing=%d want %d", got, want)
+	}
+	if got, want := stats.FallbackNilKey, uint64(1); got != want {
+		t.Fatalf("FallbackNilKey=%d want %d", got, want)
+	}
+}
+
+func btreeStatsEntries(prefix byte, n int) []batchpkg.Entry {
+	entries := make([]batchpkg.Entry, n)
+	for i := range entries {
+		entries[i] = batchpkg.Entry{
+			Type:  batchpkg.OpPut,
+			Key:   []byte{prefix, byte(i >> 8), byte(i)},
+			Value: []byte("value"),
+		}
+	}
+	return entries
+}
+
+func btreeStatsIndexes(n int) []int {
+	idxs := make([]int, n)
+	for i := range idxs {
+		idxs[i] = i
+	}
+	return idxs
+}
+
 func TestBTreeApplyCopySortedBatchIndicesTrustedPointerTail(t *testing.T) {
 	ptr := page.ValuePtr{Offset: 7, Length: 11, FileID: 2}
 

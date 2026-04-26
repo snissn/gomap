@@ -43,6 +43,154 @@ const (
 	btreeEntryMaxOffset   = 1<<btreeEntryOffsetBits - 1
 )
 
+// BTreeBatchLoadSortedStats reports process-wide BTree memtable sorted-load
+// fast-path decisions. The counters are cumulative and intended for benchmark
+// deltas; they are not reset by individual memtable resets.
+type BTreeBatchLoadSortedStats struct {
+	Attempts                     uint64
+	AttemptEntries               uint64
+	Hits                         uint64
+	HitEntries                   uint64
+	CopyAttempts                 uint64
+	CopyHits                     uint64
+	StealAttempts                uint64
+	StealHits                    uint64
+	FallbackTooSmall             uint64
+	FallbackTooSmallEntries      uint64
+	FallbackNilKey               uint64
+	FallbackNilKeyEntries        uint64
+	FallbackOverlapLast          uint64
+	FallbackOverlapLastEntries   uint64
+	FallbackNonIncreasing        uint64
+	FallbackNonIncreasingEntries uint64
+}
+
+type btreeBatchLoadSortedCounters struct {
+	attempts                     atomic.Uint64
+	attemptEntries               atomic.Uint64
+	hits                         atomic.Uint64
+	hitEntries                   atomic.Uint64
+	copyAttempts                 atomic.Uint64
+	copyHits                     atomic.Uint64
+	stealAttempts                atomic.Uint64
+	stealHits                    atomic.Uint64
+	fallbackTooSmall             atomic.Uint64
+	fallbackTooSmallEntries      atomic.Uint64
+	fallbackNilKey               atomic.Uint64
+	fallbackNilKeyEntries        atomic.Uint64
+	fallbackOverlapLast          atomic.Uint64
+	fallbackOverlapLastEntries   atomic.Uint64
+	fallbackNonIncreasing        atomic.Uint64
+	fallbackNonIncreasingEntries atomic.Uint64
+}
+
+var btreeBatchLoadSortedCountersGlobal btreeBatchLoadSortedCounters
+
+// ResetBTreeBatchLoadSortedStats clears process-wide BTree sorted-load counters.
+// It is primarily useful for tests and standalone benchmark harnesses.
+func ResetBTreeBatchLoadSortedStats() {
+	c := &btreeBatchLoadSortedCountersGlobal
+	c.attempts.Store(0)
+	c.attemptEntries.Store(0)
+	c.hits.Store(0)
+	c.hitEntries.Store(0)
+	c.copyAttempts.Store(0)
+	c.copyHits.Store(0)
+	c.stealAttempts.Store(0)
+	c.stealHits.Store(0)
+	c.fallbackTooSmall.Store(0)
+	c.fallbackTooSmallEntries.Store(0)
+	c.fallbackNilKey.Store(0)
+	c.fallbackNilKeyEntries.Store(0)
+	c.fallbackOverlapLast.Store(0)
+	c.fallbackOverlapLastEntries.Store(0)
+	c.fallbackNonIncreasing.Store(0)
+	c.fallbackNonIncreasingEntries.Store(0)
+}
+
+// BTreeBatchLoadSortedStatsSnapshot returns process-wide BTree sorted-load
+// counters. Use deltas between snapshots when multiple DBs may share a process.
+func BTreeBatchLoadSortedStatsSnapshot() BTreeBatchLoadSortedStats {
+	c := &btreeBatchLoadSortedCountersGlobal
+	return BTreeBatchLoadSortedStats{
+		Attempts:                     c.attempts.Load(),
+		AttemptEntries:               c.attemptEntries.Load(),
+		Hits:                         c.hits.Load(),
+		HitEntries:                   c.hitEntries.Load(),
+		CopyAttempts:                 c.copyAttempts.Load(),
+		CopyHits:                     c.copyHits.Load(),
+		StealAttempts:                c.stealAttempts.Load(),
+		StealHits:                    c.stealHits.Load(),
+		FallbackTooSmall:             c.fallbackTooSmall.Load(),
+		FallbackTooSmallEntries:      c.fallbackTooSmallEntries.Load(),
+		FallbackNilKey:               c.fallbackNilKey.Load(),
+		FallbackNilKeyEntries:        c.fallbackNilKeyEntries.Load(),
+		FallbackOverlapLast:          c.fallbackOverlapLast.Load(),
+		FallbackOverlapLastEntries:   c.fallbackOverlapLastEntries.Load(),
+		FallbackNonIncreasing:        c.fallbackNonIncreasing.Load(),
+		FallbackNonIncreasingEntries: c.fallbackNonIncreasingEntries.Load(),
+	}
+}
+
+type btreeBatchLoadSortedKind uint8
+
+const (
+	btreeBatchLoadSortedKindSteal btreeBatchLoadSortedKind = iota
+	btreeBatchLoadSortedKindCopy
+)
+
+type btreeBatchLoadSortedReject uint8
+
+const (
+	btreeBatchLoadSortedRejectNone btreeBatchLoadSortedReject = iota
+	btreeBatchLoadSortedRejectTooSmall
+	btreeBatchLoadSortedRejectNilKey
+	btreeBatchLoadSortedRejectOverlapLast
+	btreeBatchLoadSortedRejectNonIncreasing
+)
+
+func recordBTreeBatchLoadSortedAttempt(kind btreeBatchLoadSortedKind, n int) {
+	c := &btreeBatchLoadSortedCountersGlobal
+	c.attempts.Add(1)
+	c.attemptEntries.Add(uint64(n))
+	switch kind {
+	case btreeBatchLoadSortedKindCopy:
+		c.copyAttempts.Add(1)
+	case btreeBatchLoadSortedKindSteal:
+		c.stealAttempts.Add(1)
+	}
+}
+
+func recordBTreeBatchLoadSortedHit(kind btreeBatchLoadSortedKind, n int) {
+	c := &btreeBatchLoadSortedCountersGlobal
+	c.hits.Add(1)
+	c.hitEntries.Add(uint64(n))
+	switch kind {
+	case btreeBatchLoadSortedKindCopy:
+		c.copyHits.Add(1)
+	case btreeBatchLoadSortedKindSteal:
+		c.stealHits.Add(1)
+	}
+}
+
+func recordBTreeBatchLoadSortedReject(reason btreeBatchLoadSortedReject, n int) {
+	c := &btreeBatchLoadSortedCountersGlobal
+	switch reason {
+	case btreeBatchLoadSortedRejectTooSmall:
+		c.fallbackTooSmall.Add(1)
+		c.fallbackTooSmallEntries.Add(uint64(n))
+	case btreeBatchLoadSortedRejectNilKey:
+		c.fallbackNilKey.Add(1)
+		c.fallbackNilKeyEntries.Add(uint64(n))
+	case btreeBatchLoadSortedRejectOverlapLast:
+		c.fallbackOverlapLast.Add(1)
+		c.fallbackOverlapLastEntries.Add(uint64(n))
+	case btreeBatchLoadSortedRejectNonIncreasing:
+		c.fallbackNonIncreasing.Add(1)
+		c.fallbackNonIncreasingEntries.Add(uint64(n))
+	}
+}
+
 var btreeArenaChunkPools [btreeArenaPoolClassCount]sync.Pool
 var btreeArenaPoolBytes atomic.Int64
 var btreeArenaPoolLastGC atomic.Uint64
@@ -298,12 +446,16 @@ func (m *BTree) applyStealSortedBatchLoadSortedLocked(entries []batchpkg.Entry, 
 	if n == 0 {
 		return true
 	}
+	recordBTreeBatchLoadSortedAttempt(btreeBatchLoadSortedKindSteal, n)
 	if n < btreeLoadSortedMinBatchEntries {
+		recordBTreeBatchLoadSortedReject(btreeBatchLoadSortedRejectTooSmall, n)
 		return false
 	}
-	if !m.canApplySortedBatchLoadSortedLocked(entries, idxs) {
+	if reason := m.canApplySortedBatchLoadSortedLocked(entries, idxs); reason != btreeBatchLoadSortedRejectNone {
+		recordBTreeBatchLoadSortedReject(reason, n)
 		return false
 	}
+	recordBTreeBatchLoadSortedHit(btreeBatchLoadSortedKindSteal, n)
 	var addedSize int64
 	var addedDeletes int
 	var lastKey string
@@ -339,12 +491,16 @@ func (m *BTree) applyCopySortedBatchLoadSortedLocked(entries []batchpkg.Entry, i
 	if n == 0 {
 		return true
 	}
+	recordBTreeBatchLoadSortedAttempt(btreeBatchLoadSortedKindCopy, n)
 	if n < btreeLoadSortedMinBatchEntries {
+		recordBTreeBatchLoadSortedReject(btreeBatchLoadSortedRejectTooSmall, n)
 		return false
 	}
-	if !m.canApplySortedBatchLoadSortedLocked(entries, idxs) {
+	if reason := m.canApplySortedBatchLoadSortedLocked(entries, idxs); reason != btreeBatchLoadSortedRejectNone {
+		recordBTreeBatchLoadSortedReject(reason, n)
 		return false
 	}
+	recordBTreeBatchLoadSortedHit(btreeBatchLoadSortedKindCopy, n)
 	var addedSize int64
 	var addedDeletes int
 	var lastKey string
@@ -375,31 +531,31 @@ func (m *BTree) applyCopySortedBatchLoadSortedLocked(entries []batchpkg.Entry, i
 	return true
 }
 
-func (m *BTree) canApplySortedBatchLoadSortedLocked(entries []batchpkg.Entry, idxs []int) bool {
+func (m *BTree) canApplySortedBatchLoadSortedLocked(entries []batchpkg.Entry, idxs []int) btreeBatchLoadSortedReject {
 	first := btreeSortedBatchEntryAt(entries, idxs, 0)
 	if first.Key == nil {
-		return false
+		return btreeBatchLoadSortedRejectNilKey
 	}
 	prev := bytesToStringNoCopy(first.Key)
 	if m.hasLast && prev <= m.lastKey {
-		return false
+		return btreeBatchLoadSortedRejectOverlapLast
 	}
 	if idxs != nil {
-		return true
+		return btreeBatchLoadSortedRejectNone
 	}
 	n := btreeSortedBatchLen(entries, idxs)
 	for i := 1; i < n; i++ {
 		op := btreeSortedBatchEntryAt(entries, idxs, i)
 		if op.Key == nil {
-			return false
+			return btreeBatchLoadSortedRejectNilKey
 		}
 		key := bytesToStringNoCopy(op.Key)
 		if key <= prev {
-			return false
+			return btreeBatchLoadSortedRejectNonIncreasing
 		}
 		prev = key
 	}
-	return true
+	return btreeBatchLoadSortedRejectNone
 }
 
 func btreeSortedBatchLen(entries []batchpkg.Entry, idxs []int) int {

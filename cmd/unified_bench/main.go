@@ -223,10 +223,11 @@ type BenchRun struct {
 }
 
 type treeDBPerfMetrics struct {
-	Mmap                       treeDBMmapPerfMetrics     `json:"mmap,omitempty"`
-	Snapshot                   treeDBSnapshotPerfMetrics `json:"snapshot,omitempty"`
-	LeafGenerationsPinnedAfter int64                     `json:"leaf_generations_pinned_after,omitempty"`
-	LeafPinsTotalAfter         int64                     `json:"leaf_pins_total_after,omitempty"`
+	Mmap                       treeDBMmapPerfMetrics        `json:"mmap,omitempty"`
+	Snapshot                   treeDBSnapshotPerfMetrics    `json:"snapshot,omitempty"`
+	BTreeSortedLoad            treeDBBTreeSortedLoadMetrics `json:"btree_sorted_load,omitempty"`
+	LeafGenerationsPinnedAfter int64                        `json:"leaf_generations_pinned_after,omitempty"`
+	LeafPinsTotalAfter         int64                        `json:"leaf_pins_total_after,omitempty"`
 }
 
 type treeDBMmapPerfMetrics struct {
@@ -247,14 +248,51 @@ type treeDBSnapshotPerfMetrics struct {
 	CloseAvgMicros    float64 `json:"close_avg_micros,omitempty"`
 }
 
+type treeDBBTreeSortedLoadMetrics struct {
+	Attempts                     uint64  `json:"attempts,omitempty"`
+	AttemptEntries               uint64  `json:"attempt_entries,omitempty"`
+	Hits                         uint64  `json:"hits,omitempty"`
+	HitEntries                   uint64  `json:"hit_entries,omitempty"`
+	HitRatio                     float64 `json:"hit_ratio,omitempty"`
+	HitEntryRatio                float64 `json:"hit_entry_ratio,omitempty"`
+	CopyAttempts                 uint64  `json:"copy_attempts,omitempty"`
+	CopyHits                     uint64  `json:"copy_hits,omitempty"`
+	StealAttempts                uint64  `json:"steal_attempts,omitempty"`
+	StealHits                    uint64  `json:"steal_hits,omitempty"`
+	FallbackTooSmall             uint64  `json:"fallback_too_small,omitempty"`
+	FallbackTooSmallEntries      uint64  `json:"fallback_too_small_entries,omitempty"`
+	FallbackNilKey               uint64  `json:"fallback_nil_key,omitempty"`
+	FallbackNilKeyEntries        uint64  `json:"fallback_nil_key_entries,omitempty"`
+	FallbackOverlapLast          uint64  `json:"fallback_overlap_last,omitempty"`
+	FallbackOverlapLastEntries   uint64  `json:"fallback_overlap_last_entries,omitempty"`
+	FallbackNonIncreasing        uint64  `json:"fallback_non_increasing,omitempty"`
+	FallbackNonIncreasingEntries uint64  `json:"fallback_non_increasing_entries,omitempty"`
+}
+
 type treeDBSelectedStats struct {
-	mmapHits           uint64
-	mmapMissOutOfRange uint64
-	mmapMissNoMapping  uint64
-	mmapMissDeadCap    uint64
-	mmapFallbackReadAt uint64
-	leafGenerationsPin int64
-	leafPinsTotal      int64
+	mmapHits                                    uint64
+	mmapMissOutOfRange                          uint64
+	mmapMissNoMapping                           uint64
+	mmapMissDeadCap                             uint64
+	mmapFallbackReadAt                          uint64
+	btreeSortedLoadAttempts                     uint64
+	btreeSortedLoadAttemptEntries               uint64
+	btreeSortedLoadHits                         uint64
+	btreeSortedLoadHitEntries                   uint64
+	btreeSortedLoadCopyAttempts                 uint64
+	btreeSortedLoadCopyHits                     uint64
+	btreeSortedLoadStealAttempts                uint64
+	btreeSortedLoadStealHits                    uint64
+	btreeSortedLoadFallbackTooSmall             uint64
+	btreeSortedLoadFallbackTooSmallEntries      uint64
+	btreeSortedLoadFallbackNilKey               uint64
+	btreeSortedLoadFallbackNilKeyEntries        uint64
+	btreeSortedLoadFallbackOverlapLast          uint64
+	btreeSortedLoadFallbackOverlapLastEntries   uint64
+	btreeSortedLoadFallbackNonIncreasing        uint64
+	btreeSortedLoadFallbackNonIncreasingEntries uint64
+	leafGenerationsPin                          int64
+	leafPinsTotal                               int64
 }
 
 type benchprofExport struct {
@@ -1120,6 +1158,22 @@ func printTreeDBCacheStats(w io.Writer, inst *DBInstance, prefix string) {
 		"treedb.cache.memtable_stats.current_seq_run",
 		"treedb.cache.memtable_stats.delete_writes",
 		"treedb.cache.memtable_stats.delete_write_pct",
+		"treedb.cache.memtable_btree.sorted_load.attempts",
+		"treedb.cache.memtable_btree.sorted_load.attempt_entries",
+		"treedb.cache.memtable_btree.sorted_load.hits",
+		"treedb.cache.memtable_btree.sorted_load.hit_entries",
+		"treedb.cache.memtable_btree.sorted_load.copy_attempts",
+		"treedb.cache.memtable_btree.sorted_load.copy_hits",
+		"treedb.cache.memtable_btree.sorted_load.steal_attempts",
+		"treedb.cache.memtable_btree.sorted_load.steal_hits",
+		"treedb.cache.memtable_btree.sorted_load.fallback_too_small",
+		"treedb.cache.memtable_btree.sorted_load.fallback_too_small_entries",
+		"treedb.cache.memtable_btree.sorted_load.fallback_nil_key",
+		"treedb.cache.memtable_btree.sorted_load.fallback_nil_key_entries",
+		"treedb.cache.memtable_btree.sorted_load.fallback_overlap_last",
+		"treedb.cache.memtable_btree.sorted_load.fallback_overlap_last_entries",
+		"treedb.cache.memtable_btree.sorted_load.fallback_non_increasing",
+		"treedb.cache.memtable_btree.sorted_load.fallback_non_increasing_entries",
 		"treedb.cache.queue_len",
 		"treedb.cache.queue_backlog_bytes",
 		"treedb.cache.flush_threshold_bytes",
@@ -1770,6 +1824,22 @@ func snapshotSelectedTreeDBStats(db kvstore.DB) treeDBSelectedStats {
 		"treedb.cache.vlog_mmap.read.fallback_readat",
 		"treedb.vlog.mmap_read.fallback_readat",
 	)
+	snap.btreeSortedLoadAttempts, _ = parseUint64StatValue(stats, "treedb.cache.memtable_btree.sorted_load.attempts")
+	snap.btreeSortedLoadAttemptEntries, _ = parseUint64StatValue(stats, "treedb.cache.memtable_btree.sorted_load.attempt_entries")
+	snap.btreeSortedLoadHits, _ = parseUint64StatValue(stats, "treedb.cache.memtable_btree.sorted_load.hits")
+	snap.btreeSortedLoadHitEntries, _ = parseUint64StatValue(stats, "treedb.cache.memtable_btree.sorted_load.hit_entries")
+	snap.btreeSortedLoadCopyAttempts, _ = parseUint64StatValue(stats, "treedb.cache.memtable_btree.sorted_load.copy_attempts")
+	snap.btreeSortedLoadCopyHits, _ = parseUint64StatValue(stats, "treedb.cache.memtable_btree.sorted_load.copy_hits")
+	snap.btreeSortedLoadStealAttempts, _ = parseUint64StatValue(stats, "treedb.cache.memtable_btree.sorted_load.steal_attempts")
+	snap.btreeSortedLoadStealHits, _ = parseUint64StatValue(stats, "treedb.cache.memtable_btree.sorted_load.steal_hits")
+	snap.btreeSortedLoadFallbackTooSmall, _ = parseUint64StatValue(stats, "treedb.cache.memtable_btree.sorted_load.fallback_too_small")
+	snap.btreeSortedLoadFallbackTooSmallEntries, _ = parseUint64StatValue(stats, "treedb.cache.memtable_btree.sorted_load.fallback_too_small_entries")
+	snap.btreeSortedLoadFallbackNilKey, _ = parseUint64StatValue(stats, "treedb.cache.memtable_btree.sorted_load.fallback_nil_key")
+	snap.btreeSortedLoadFallbackNilKeyEntries, _ = parseUint64StatValue(stats, "treedb.cache.memtable_btree.sorted_load.fallback_nil_key_entries")
+	snap.btreeSortedLoadFallbackOverlapLast, _ = parseUint64StatValue(stats, "treedb.cache.memtable_btree.sorted_load.fallback_overlap_last")
+	snap.btreeSortedLoadFallbackOverlapLastEntries, _ = parseUint64StatValue(stats, "treedb.cache.memtable_btree.sorted_load.fallback_overlap_last_entries")
+	snap.btreeSortedLoadFallbackNonIncreasing, _ = parseUint64StatValue(stats, "treedb.cache.memtable_btree.sorted_load.fallback_non_increasing")
+	snap.btreeSortedLoadFallbackNonIncreasingEntries, _ = parseUint64StatValue(stats, "treedb.cache.memtable_btree.sorted_load.fallback_non_increasing_entries")
 	snap.leafGenerationsPin, _ = parseInt64StatValue(stats, "treedb.leaf_generation.generations.pinned")
 	snap.leafPinsTotal, _ = parseInt64StatValue(stats, "treedb.leaf_generation.pins.total")
 	return snap
@@ -1784,6 +1854,24 @@ func computeTreeDBPerfMetrics(before, after treeDBSelectedStats, snapshot treeDB
 			MissDeadMapCap: saturatingUint64Delta(after.mmapMissDeadCap, before.mmapMissDeadCap),
 			FallbackReadAt: saturatingUint64Delta(after.mmapFallbackReadAt, before.mmapFallbackReadAt),
 		},
+		BTreeSortedLoad: treeDBBTreeSortedLoadMetrics{
+			Attempts:                     saturatingUint64Delta(after.btreeSortedLoadAttempts, before.btreeSortedLoadAttempts),
+			AttemptEntries:               saturatingUint64Delta(after.btreeSortedLoadAttemptEntries, before.btreeSortedLoadAttemptEntries),
+			Hits:                         saturatingUint64Delta(after.btreeSortedLoadHits, before.btreeSortedLoadHits),
+			HitEntries:                   saturatingUint64Delta(after.btreeSortedLoadHitEntries, before.btreeSortedLoadHitEntries),
+			CopyAttempts:                 saturatingUint64Delta(after.btreeSortedLoadCopyAttempts, before.btreeSortedLoadCopyAttempts),
+			CopyHits:                     saturatingUint64Delta(after.btreeSortedLoadCopyHits, before.btreeSortedLoadCopyHits),
+			StealAttempts:                saturatingUint64Delta(after.btreeSortedLoadStealAttempts, before.btreeSortedLoadStealAttempts),
+			StealHits:                    saturatingUint64Delta(after.btreeSortedLoadStealHits, before.btreeSortedLoadStealHits),
+			FallbackTooSmall:             saturatingUint64Delta(after.btreeSortedLoadFallbackTooSmall, before.btreeSortedLoadFallbackTooSmall),
+			FallbackTooSmallEntries:      saturatingUint64Delta(after.btreeSortedLoadFallbackTooSmallEntries, before.btreeSortedLoadFallbackTooSmallEntries),
+			FallbackNilKey:               saturatingUint64Delta(after.btreeSortedLoadFallbackNilKey, before.btreeSortedLoadFallbackNilKey),
+			FallbackNilKeyEntries:        saturatingUint64Delta(after.btreeSortedLoadFallbackNilKeyEntries, before.btreeSortedLoadFallbackNilKeyEntries),
+			FallbackOverlapLast:          saturatingUint64Delta(after.btreeSortedLoadFallbackOverlapLast, before.btreeSortedLoadFallbackOverlapLast),
+			FallbackOverlapLastEntries:   saturatingUint64Delta(after.btreeSortedLoadFallbackOverlapLastEntries, before.btreeSortedLoadFallbackOverlapLastEntries),
+			FallbackNonIncreasing:        saturatingUint64Delta(after.btreeSortedLoadFallbackNonIncreasing, before.btreeSortedLoadFallbackNonIncreasing),
+			FallbackNonIncreasingEntries: saturatingUint64Delta(after.btreeSortedLoadFallbackNonIncreasingEntries, before.btreeSortedLoadFallbackNonIncreasingEntries),
+		},
 		Snapshot:                   snapshot,
 		LeafGenerationsPinnedAfter: after.leafGenerationsPin,
 		LeafPinsTotalAfter:         after.leafPinsTotal,
@@ -1797,6 +1885,12 @@ func computeTreeDBPerfMetrics(before, after treeDBSelectedStats, snapshot treeDB
 	}
 	if m.Snapshot.CloseCalls > 0 {
 		m.Snapshot.CloseAvgMicros = float64(m.Snapshot.CloseTotalNanos) / float64(m.Snapshot.CloseCalls) / 1_000.0
+	}
+	if m.BTreeSortedLoad.Attempts > 0 {
+		m.BTreeSortedLoad.HitRatio = float64(m.BTreeSortedLoad.Hits) / float64(m.BTreeSortedLoad.Attempts)
+	}
+	if m.BTreeSortedLoad.AttemptEntries > 0 {
+		m.BTreeSortedLoad.HitEntryRatio = float64(m.BTreeSortedLoad.HitEntries) / float64(m.BTreeSortedLoad.AttemptEntries)
 	}
 	return m
 }
@@ -1819,8 +1913,30 @@ func treeDBPerfMetricsEmpty(m treeDBPerfMetrics) bool {
 		m.Snapshot.AcquireTotalNanos == 0 &&
 		m.Snapshot.CloseCalls == 0 &&
 		m.Snapshot.CloseTotalNanos == 0 &&
+		treeDBBTreeSortedLoadMetricsEmpty(m.BTreeSortedLoad) &&
 		m.LeafGenerationsPinnedAfter == 0 &&
 		m.LeafPinsTotalAfter == 0
+}
+
+func treeDBBTreeSortedLoadMetricsEmpty(m treeDBBTreeSortedLoadMetrics) bool {
+	return m.Attempts == 0 &&
+		m.AttemptEntries == 0 &&
+		m.Hits == 0 &&
+		m.HitEntries == 0 &&
+		m.HitRatio == 0 &&
+		m.HitEntryRatio == 0 &&
+		m.CopyAttempts == 0 &&
+		m.CopyHits == 0 &&
+		m.StealAttempts == 0 &&
+		m.StealHits == 0 &&
+		m.FallbackTooSmall == 0 &&
+		m.FallbackTooSmallEntries == 0 &&
+		m.FallbackNilKey == 0 &&
+		m.FallbackNilKeyEntries == 0 &&
+		m.FallbackOverlapLast == 0 &&
+		m.FallbackOverlapLastEntries == 0 &&
+		m.FallbackNonIncreasing == 0 &&
+		m.FallbackNonIncreasingEntries == 0
 }
 
 func (p *periodicCheckpoint) Add(db kvstore.DB, opsDelta int, bytesDelta int64) error {
@@ -4898,6 +5014,33 @@ func renderTreeDBPerfString(instances []*DBInstance, finalTestOrder []string, di
 					m.Mmap.MissDeadMapCap,
 					m.Mmap.FallbackReadAt,
 					m.Mmap.HitRatio,
+				))
+			}
+			if !treeDBBTreeSortedLoadMetricsEmpty(m.BTreeSortedLoad) {
+				b := m.BTreeSortedLoad
+				sb.WriteString(fmt.Sprintf("  memtable_btree.sorted_load.attempts.delta=%d attempt_entries.delta=%d hits.delta=%d hit_entries.delta=%d hit_ratio.delta=%.6f hit_entry_ratio.delta=%.6f\n",
+					b.Attempts,
+					b.AttemptEntries,
+					b.Hits,
+					b.HitEntries,
+					b.HitRatio,
+					b.HitEntryRatio,
+				))
+				sb.WriteString(fmt.Sprintf("  memtable_btree.sorted_load.copy_attempts.delta=%d copy_hits.delta=%d steal_attempts.delta=%d steal_hits.delta=%d\n",
+					b.CopyAttempts,
+					b.CopyHits,
+					b.StealAttempts,
+					b.StealHits,
+				))
+				sb.WriteString(fmt.Sprintf("  memtable_btree.sorted_load.fallback_too_small.delta=%d entries.delta=%d fallback_nil_key.delta=%d entries.delta=%d fallback_overlap_last.delta=%d entries.delta=%d fallback_non_increasing.delta=%d entries.delta=%d\n",
+					b.FallbackTooSmall,
+					b.FallbackTooSmallEntries,
+					b.FallbackNilKey,
+					b.FallbackNilKeyEntries,
+					b.FallbackOverlapLast,
+					b.FallbackOverlapLastEntries,
+					b.FallbackNonIncreasing,
+					b.FallbackNonIncreasingEntries,
 				))
 			}
 			sb.WriteString(fmt.Sprintf("  leaf_generation.generations.pinned.after=%d leaf_generation.pins.total.after=%d\n",
