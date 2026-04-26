@@ -14,7 +14,7 @@ require (
 	github.com/nutsdb/nutsdb v1.1.0
 	github.com/pierrec/lz4/v4 v4.1.22
 	github.com/snissn/compress v1.18.2-snissn.0.0.20260204222835-33fc0851d88e
-	github.com/snissn/tidwall-btree v0.0.0-20260425204640-e60487468da5
+	github.com/snissn/tidwall-btree v0.0.0-20260426021948-f1c4a0746701
 	github.com/stretchr/testify v1.11.1
 	github.com/syndtr/goleveldb v1.0.1-0.20210819022825-2ae1ddf74ef7
 	github.com/tidwall/buntdb v1.3.2
