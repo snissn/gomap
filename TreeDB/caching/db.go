@@ -164,6 +164,7 @@ var flushMergeParallelAppliedOpsTotal atomic.Uint64
 var batchEntriesPoolDropUnderPressureTotal atomic.Uint64
 var batchShardEntriesPoolDropUnderPressureTotal atomic.Uint64
 var batchIntPoolDropUnderPressureTotal atomic.Uint64
+var batchWALRecordPoolDropUnderPressureTotal atomic.Uint64
 var appendOnlyDirectArenaPoolHitChunksTotal atomic.Uint64
 var appendOnlyDirectArenaPoolHitBytesTotal atomic.Uint64
 var appendOnlyDirectArenaRetainedHitChunksTotal atomic.Uint64
@@ -1941,7 +1942,9 @@ const (
 	appendOnlyEntryHintMinEntries                                  = 128
 	appendOnlyEntryHintMaxEntries                                  = 1 << 20
 	adaptiveMinWrites                                              = 1024
+	adaptiveTailSequentialWriteMin                                 = 8 * adaptiveMinWrites
 	adaptiveSequentialWritePct                                     = 0.85
+	adaptiveDeleteWritePct                                         = 0.50
 	adaptiveRangeIteratorPct                                       = 0.40
 	adaptiveOverwriteWritePct                                      = 0.25
 	adaptiveBTreeMinIteratorSamplesDefault                         = 0
@@ -2809,6 +2812,10 @@ type backendBatchReserveHint interface {
 	Reserve(int)
 }
 
+type backendBatchResetter interface {
+	Reset()
+}
+
 type backendBatchSetViewer interface {
 	SetView(key, value []byte) error
 }
@@ -2834,10 +2841,28 @@ func reserveBackendBatchOps(backendBatch batch.Interface, n int) {
 	}
 }
 
+func (db *DB) recycleBackendBatch(backendBatch *batch.Interface, sizeHint, reserveHint int) error {
+	if db == nil || backendBatch == nil || *backendBatch == nil {
+		return errors.New("cachingdb: missing backend batch")
+	}
+	if r, ok := (*backendBatch).(backendBatchResetter); ok {
+		r.Reset()
+		return nil
+	}
+	if err := (*backendBatch).Close(); err != nil {
+		return err
+	}
+	next := db.newBackendBatchWithSize(sizeHint)
+	reserveBackendBatchOps(next, reserveHint)
+	*backendBatch = next
+	return nil
+}
+
 func (db *DB) flushDeferredValueLogMemtable(
 	iter iterator.UnsafeIterator,
 	backendBatch batch.Interface,
 	memLen int,
+	stableUnsafe bool,
 	sync bool,
 	laneID int,
 ) (int, error) {
@@ -2890,7 +2915,7 @@ func (db *DB) flushDeferredValueLogMemtable(
 	}
 
 	for iter.Valid() {
-		key := iter.UnsafeKey()
+		key := stableIteratorKey(iter, stableUnsafe)
 		if iter.IsDeleted() {
 			var err error
 			if dv != nil {
@@ -3080,12 +3105,12 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 		if len(unitRuns[i]) == 0 {
 			continue
 		}
-		it := newOpRunIter(unitRuns[i])
-		if !it.Valid() {
+		source := newOpRunIter(unitRuns[i])
+		if !source.Valid() {
 			continue
 		}
 		priority := len(unitRuns) - 1 - i
-		heap = append(heap, opMergeItem{iter: it, priority: priority, key: it.Key()})
+		heap = append(heap, opMergeItem{source: source, priority: priority, key: source.Key()})
 	}
 	for i := len(heap)/2 - 1; i >= 0; i-- {
 		(&heap).down(i, len(heap))
@@ -3232,9 +3257,9 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 			if next != nil && bytes.Equal(next.key, currentKey) {
 				shadowed := heap.pop()
 				shadowedOps++
-				shadowed.iter.Next()
-				if shadowed.iter.Valid() {
-					shadowed.key = shadowed.iter.Key()
+				shadowed.source.Next()
+				if shadowed.source.Valid() {
+					shadowed.key = shadowed.source.Key()
 					heap.push(shadowed)
 				}
 				continue
@@ -3242,7 +3267,7 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 			break
 		}
 
-		entry := top.iter.Entry()
+		entry := top.source.Entry()
 		switch {
 		case entry.Type == batch.OpDelete:
 			if err := flushInlinePointerGroup(); err != nil {
@@ -3295,9 +3320,9 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 			}
 		}
 
-		top.iter.Next()
-		if top.iter.Valid() {
-			top.key = top.iter.Key()
+		top.source.Next()
+		if top.source.Valid() {
+			top.key = top.source.Key()
 			heap.push(top)
 		}
 	}
@@ -3870,6 +3895,15 @@ func (db *DB) flushValueLogLane(l *lane) error {
 			l.vlogMu.Unlock()
 			return errWALUnavailable
 		}
+		if err := db.drainPreparedLeafPageValueLogQueueBarrierMuHeld(l); err != nil {
+			l.vlogMu.Unlock()
+			return err
+		}
+		w = l.vlog
+		if w == nil {
+			l.vlogMu.Unlock()
+			return errWALUnavailable
+		}
 		// Always take vlogMu first so flush acts as a write barrier for in-flight appends.
 		if !l.vlogDirty.Load() {
 			if pending, ok := w.(interface{ PendingBytes() int }); !ok || pending.PendingBytes() == 0 {
@@ -3923,6 +3957,15 @@ func (db *DB) syncValueLogLane(l *lane) error {
 		l.vlogMu.Lock()
 		waited := time.Since(waitStart)
 		w := l.vlog
+		if w == nil {
+			l.vlogMu.Unlock()
+			return errWALUnavailable
+		}
+		if err := db.drainPreparedLeafPageValueLogQueueBarrierMuHeld(l); err != nil {
+			l.vlogMu.Unlock()
+			return err
+		}
+		w = l.vlog
 		if w == nil {
 			l.vlogMu.Unlock()
 			return errWALUnavailable
@@ -5686,15 +5729,33 @@ func hashKey(key []byte) uint64 {
 	return xxhash.Sum64(key)
 }
 
-func (db *DB) shardIndex(key []byte) int {
+func (db *DB) hashShardIndex(key []byte) int {
 	if len(db.mutableShards) <= 1 {
 		return 0
 	}
 	return int(hashKey(key) & db.mutableShardMask)
 }
 
+func (db *DB) shardIndex(key []byte) int {
+	return db.hashShardIndex(key)
+}
+
 func (db *DB) shardForKey(key []byte) *memShard {
-	return &db.mutableShards[db.shardIndex(key)]
+	return &db.mutableShards[db.hashShardIndex(key)]
+}
+
+func (db *DB) shardIndexForWrite(key []byte) int {
+	if len(db.mutableShards) <= 1 {
+		return 0
+	}
+	if shardID, ok := mutableRouteShardForWrite(db.currentMutableRoute.Load(), key); ok {
+		return shardID
+	}
+	return db.hashShardIndex(key)
+}
+
+func (db *DB) shardForWriteKey(key []byte) *memShard {
+	return &db.mutableShards[db.shardIndexForWrite(key)]
 }
 
 func (db *DB) laneForShardIndex(shardID int) int {
@@ -6155,10 +6216,13 @@ type DB struct {
 	mutableShards                 []memShard
 	mutableShardMask              uint64
 	mutableBytes                  atomic.Int64
+	mutableEntries                atomic.Int64
 	mutableThreshold              atomic.Int64
 	rotatePending                 atomic.Bool
+	currentMutableRoute           atomic.Pointer[mutableRouteState]
 	queue                         []memtable.Table
 	queueShardIDs                 []uint16
+	queueRouteModes               []uint8
 	queueLaneIDs                  []uint16
 	queueIDs                      []uint64
 	queueEnqueueNS                []int64
@@ -6186,11 +6250,15 @@ type DB struct {
 	batchEntriesPool              sync.Pool
 	batchShardEntriesPool         sync.Pool
 	batchIntPool                  sync.Pool
+	batchWALRecordPool            sync.Pool
 
 	// memtables is an RCU-style snapshot of (mutable, queue, queueRanges).
 	// Readers load it atomically to avoid holding db.mu around memtable access.
 	memtables                        atomic.Pointer[memtableView]
 	hashSortedIndexer                *memtable.HashSortedIndexer
+	btreeMemLeaseMu                  sync.Mutex
+	btreeMemLeases                   []*memtable.BTree
+	btreeMemLeaseHitTotal            atomic.Uint64
 	appendOnlyMemPool                sync.Pool
 	appendOnlyMemLeaseMu             sync.Mutex
 	appendOnlyMemLeases              []*memtable.AppendOnly
@@ -7050,9 +7118,24 @@ func (db *DB) flushBackendEntriesCapForOps(totalOps int, deleteOps int, sync boo
 	// commits amplify work dramatically when deletes touch a large fraction of the
 	// keyspace. Favor fewer commits in that case.
 	if maxBatches > 0 && deleteOps > 0 && totalOps > 0 {
-		// Deterministic "delete-heavy" trigger: deletes are at least 25% of ops.
-		if deleteOps*4 >= totalOps && maxBatches > 4 {
-			maxBatches = 4
+		switch {
+		case deleteOps >= totalOps-totalOps/10:
+			// Near-pure delete flushes rewrite most touched leaves on every commit.
+			// Use two passes only while the resulting batch cap stays within a
+			// bounded multiple of the configured per-batch cap; larger flushes keep
+			// the existing four-pass delete-heavy behavior instead of trading away
+			// memory headroom for fewer applies.
+			maxInt := int(^uint(0) >> 1)
+			twoPassBounded := capEntries > maxInt/8 || totalOps <= capEntries*8
+			if twoPassBounded && maxBatches > 2 {
+				maxBatches = 2
+			} else if maxBatches > 4 {
+				maxBatches = 4
+			}
+		case deleteOps >= ceilQuarter(totalOps):
+			if maxBatches > 4 {
+				maxBatches = 4
+			}
 		}
 	}
 	if maxBatches > 0 {
@@ -7077,13 +7160,58 @@ type keyRange struct {
 	max   []byte
 }
 
+const (
+	memtableRouteHashed uint8 = iota
+	memtableRouteRanged
+)
+
+type mutableRouteEntry struct {
+	shardID uint16
+	rng     keyRange
+}
+
+type mutableRouteState struct {
+	shardID uint16
+	rng     keyRange
+	entries []mutableRouteEntry
+}
+
 type memShard struct {
 	mu                         sync.Mutex
 	mem                        memtable.Table
 	rng                        keyRange
 	bytes                      int64
+	entries                    int
 	stats                      memtableStats
 	appendOnlyDirectValueArena appendOnlyDirectValueArena
+}
+
+func (db *DB) updateMutableShardAccountingLocked(shard *memShard, newBytes int64, newEntries int) {
+	if db == nil || shard == nil {
+		return
+	}
+	if delta := newBytes - shard.bytes; delta != 0 {
+		db.mutableBytes.Add(delta)
+	}
+	if delta := newEntries - shard.entries; delta != 0 {
+		db.mutableEntries.Add(int64(delta))
+	}
+	shard.bytes = newBytes
+	shard.entries = newEntries
+}
+
+func (db *DB) clearMutableShardAccountingLocked(shard *memShard) {
+	if db == nil || shard == nil {
+		return
+	}
+	if shard.bytes != 0 {
+		db.mutableBytes.Add(-shard.bytes)
+	}
+	if shard.entries != 0 {
+		db.mutableEntries.Add(-int64(shard.entries))
+	}
+	shard.bytes = 0
+	shard.entries = 0
 }
 
 // memtableView is an immutable snapshot of the in-memory layers.
@@ -7092,7 +7220,9 @@ type memtableView struct {
 	mutables                 []memtable.Table
 	queue                    []memtable.Table
 	queueShardIDs            []uint16
+	queueRouteModes          []uint8
 	queueRanges              []keyRange
+	mutableRoute             *mutableRouteState
 	refs                     atomic.Int64
 	retiredMems              []memtable.Table
 	deferredRetiredMemtables atomic.Int64
@@ -7109,6 +7239,11 @@ const appendOnlyEstimatedBytesPerEntryDefault = 96
 // rotate/checkpoint-heavy write workloads, which regresses entry-slice reuse
 // and increases allocation churn.
 const maxAppendOnlyMemLeases = 32
+
+// maxBTreeMemLeases bounds strong references to recycled BTree memtables.
+// Keep enough leases for the default sharded rotation path; per-memtable BTree
+// arena retention is separately capped in the memtable package.
+const maxBTreeMemLeases = 16
 
 func updateInt64Max(dst *atomic.Int64, value int64) {
 	for {
@@ -7376,7 +7511,11 @@ func memtableBatchSet(mt memtable.Table, useSteal bool, allowBorrow bool, storeI
 		}
 		if allowBorrow {
 			if borrower, ok := mt.(memtable.ValueBorrower); ok && len(memVal) > 0 {
-				borrower.SetEntryBorrowValue(op.Key, memVal, op.ValuePtr, node.FlagPointer)
+				if stableBorrower, ok := mt.(memtable.StableValueBorrower); ok {
+					stableBorrower.SetEntryBorrowStableValue(op.Key, memVal, op.ValuePtr, node.FlagPointer)
+				} else {
+					borrower.SetEntryBorrowValue(op.Key, memVal, op.ValuePtr, node.FlagPointer)
+				}
 				return
 			}
 		}
@@ -7389,11 +7528,65 @@ func memtableBatchSet(mt memtable.Table, useSteal bool, allowBorrow bool, storeI
 	}
 	if allowBorrow {
 		if borrower, ok := mt.(memtable.ValueBorrower); ok && len(op.Value) > 0 {
-			borrower.SetEntryBorrowValue(op.Key, op.Value, page.ValuePtr{}, node.FlagInline)
+			if stableBorrower, ok := mt.(memtable.StableValueBorrower); ok {
+				stableBorrower.SetEntryBorrowStableValue(op.Key, op.Value, page.ValuePtr{}, node.FlagInline)
+			} else {
+				borrower.SetEntryBorrowValue(op.Key, op.Value, page.ValuePtr{}, node.FlagInline)
+			}
 			return
 		}
 	}
 	mt.Set(op.Key, op.Value)
+}
+
+func memtableBatchBorrowsValues(mt memtable.Table, allowBorrow bool, storeInlinePtrValues bool, entries []batch.Entry) bool {
+	if !allowBorrow || len(entries) == 0 {
+		return false
+	}
+	if _, ok := mt.(memtable.ValueBorrower); !ok {
+		return false
+	}
+	for i := range entries {
+		op := entries[i]
+		if op.Type == batch.OpDelete {
+			continue
+		}
+		if op.IsPtr {
+			if storeInlinePtrValues && len(op.Value) > 0 {
+				return true
+			}
+			continue
+		}
+		if len(op.Value) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func memtableBatchBorrowsValuesIdxs(mt memtable.Table, allowBorrow bool, storeInlinePtrValues bool, entries []batch.Entry, idxs []int) bool {
+	if !allowBorrow || len(idxs) == 0 {
+		return false
+	}
+	if _, ok := mt.(memtable.ValueBorrower); !ok {
+		return false
+	}
+	for _, idx := range idxs {
+		op := entries[idx]
+		if op.Type == batch.OpDelete {
+			continue
+		}
+		if op.IsPtr {
+			if storeInlinePtrValues && len(op.Value) > 0 {
+				return true
+			}
+			continue
+		}
+		if len(op.Value) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func getBatchArenaLease(refs int, chunks [][]byte) *batchArenaLease {
@@ -7589,6 +7782,35 @@ func (db *DB) putAppendOnlyMemLease(mt *memtable.AppendOnly) bool {
 	return true
 }
 
+func (db *DB) popBTreeMemLease() *memtable.BTree {
+	if db == nil {
+		return nil
+	}
+	db.btreeMemLeaseMu.Lock()
+	defer db.btreeMemLeaseMu.Unlock()
+	n := len(db.btreeMemLeases)
+	if n == 0 {
+		return nil
+	}
+	mt := db.btreeMemLeases[n-1]
+	db.btreeMemLeases[n-1] = nil
+	db.btreeMemLeases = db.btreeMemLeases[:n-1]
+	return mt
+}
+
+func (db *DB) putBTreeMemLease(mt *memtable.BTree) bool {
+	if db == nil || mt == nil {
+		return false
+	}
+	db.btreeMemLeaseMu.Lock()
+	defer db.btreeMemLeaseMu.Unlock()
+	if len(db.btreeMemLeases) >= maxBTreeMemLeases {
+		return false
+	}
+	db.btreeMemLeases = append(db.btreeMemLeases, mt)
+	return true
+}
+
 func (db *DB) recycleMemtables(mems []memtable.Table) {
 	if db == nil || len(mems) == 0 {
 		return
@@ -7596,14 +7818,18 @@ func (db *DB) recycleMemtables(mems []memtable.Table) {
 	resetCapacity := db.checkpointRotateCapacity()
 	estimate := appendOnlyEstimatedBytesPerEntryDefault
 	appendOnlyResetCapacity := db.appendOnlyMemtableCapacityHint(resetCapacity, estimate)
+	entryHint := db.appendOnlyEntryHintEntries()
 	for _, mt := range mems {
 		switch typed := mt.(type) {
 		case *memtable.AppendOnly:
-			typed.ResetWithCapacityHard(appendOnlyResetCapacity, estimate)
+			typed.ResetWithCapacityHardAndEntryHint(appendOnlyResetCapacity, estimate, entryHint)
 			db.releaseAppendOnlyDirectArenaLeaseForMemtable(typed)
 			if !db.putAppendOnlyMemLease(typed) {
 				db.appendOnlyMemPool.Put(typed)
 			}
+		case *memtable.BTree:
+			typed.Reset()
+			db.putBTreeMemLease(typed)
 		}
 	}
 }
@@ -7639,6 +7865,50 @@ func (db *DB) trimAppendOnlyMemLeases(maxLeases int, resetCapacity int) {
 			db.appendOnlyMemPool.Put(dropped[i])
 		}
 	}
+}
+
+func (db *DB) trimBTreeMemLeases(maxLeases int) {
+	if db == nil {
+		return
+	}
+	if maxLeases < 0 {
+		maxLeases = 0
+	}
+	var dropped []*memtable.BTree
+	db.btreeMemLeaseMu.Lock()
+	if n := len(db.btreeMemLeases); n > maxLeases {
+		drop := n - maxLeases
+		dropped = append(dropped, db.btreeMemLeases[:drop]...)
+		copy(db.btreeMemLeases, db.btreeMemLeases[drop:])
+		for i := n - drop; i < n; i++ {
+			db.btreeMemLeases[i] = nil
+		}
+		db.btreeMemLeases = db.btreeMemLeases[:n-drop]
+	}
+	db.btreeMemLeaseMu.Unlock()
+
+	for i := range dropped {
+		if dropped[i] != nil {
+			dropped[i].Reset()
+		}
+	}
+}
+
+func btreeMemLeaseKeepForShardCount(shards int) int {
+	if shards <= 0 {
+		shards = defaultMemtableShards()
+	}
+	if shards > maxBTreeMemLeases {
+		return maxBTreeMemLeases
+	}
+	return shards
+}
+
+func (db *DB) btreeMemLeaseKeep() int {
+	if db == nil {
+		return btreeMemLeaseKeepForShardCount(0)
+	}
+	return btreeMemLeaseKeepForShardCount(len(db.mutableShards))
 }
 
 func (db *DB) trimMutableShardAppendOnlyDirectArenas(checkpoint bool) {
@@ -7700,6 +7970,7 @@ func (db *DB) trimRetainedArenasAfterFlush(checkpoint bool) {
 	entryTarget := postFlushEntrySliceTargetBytes
 	leaseKeepPerBucket := postFlushEntrySliceLeaseKeepPerBucket
 	appendOnlyLeaseKeep := postFlushAppendOnlyMemLeaseKeep
+	btreeLeaseKeep := db.btreeMemLeaseKeep()
 	if checkpoint {
 		batchTarget = postCheckpointBatchArenaTargetBytes
 		entryTarget = postCheckpointEntrySliceTargetBytes
@@ -7729,20 +8000,32 @@ func (db *DB) trimRetainedArenasAfterFlush(checkpoint bool) {
 
 	db.trimMutableShardAppendOnlyDirectArenas(checkpoint)
 	db.trimAppendOnlyMemLeases(appendOnlyLeaseKeep, db.checkpointRotateCapacity())
+	db.trimBTreeMemLeases(btreeLeaseKeep)
 }
 
 func (db *DB) newMutableMemtableWithCapacityMode(capacity int, mode memtable.Mode) (memtable.Table, error) {
+	if db != nil && mode == memtable.ModeBTree {
+		if mt := db.popBTreeMemLease(); mt != nil {
+			db.btreeMemLeaseHitTotal.Add(1)
+			mt.Reset()
+			return mt, nil
+		}
+		return memtable.NewBTree(), nil
+	}
 	if db != nil && mode == memtable.ModeAppendOnly {
 		estimate := appendOnlyEstimatedBytesPerEntryDefault
+		entryHint := db.appendOnlyEntryHintEntries()
 		if mt := db.popAppendOnlyMemLease(); mt != nil {
 			db.appendOnlyMemLeaseHitTotal.Add(1)
-			mt.ResetWithCapacity(capacity, estimate)
+			mt.ResetWithCapacityAndEntryHint(capacity, estimate, entryHint)
+			db.setAppendOnlyPredictiveGrowthHint(mt, capacity)
 			return mt, nil
 		}
 		if v := db.appendOnlyMemPool.Get(); v != nil {
 			if mt, ok := v.(*memtable.AppendOnly); ok && mt != nil {
 				db.appendOnlyMemPoolHitTotal.Add(1)
-				mt.ResetWithCapacity(capacity, estimate)
+				mt.ResetWithCapacityAndEntryHint(capacity, estimate, entryHint)
+				db.setAppendOnlyPredictiveGrowthHint(mt, capacity)
 				return mt, nil
 			}
 		}
@@ -7753,9 +8036,18 @@ func (db *DB) newMutableMemtableWithCapacityMode(capacity int, mode memtable.Mod
 			db.appendOnlyMemNewAllocQueueBytes.Add(uint64(backlog))
 		}
 		db.appendOnlyMemNewAllocTotal.Add(1)
-		return memtable.NewAppendOnlyWithCapacityEstimatedEntryBytes(capacity, estimate), nil
+		mt := memtable.NewAppendOnlyWithCapacityEstimatedEntryBytesAndHint(capacity, estimate, entryHint)
+		db.setAppendOnlyPredictiveGrowthHint(mt, capacity)
+		return mt, nil
 	}
 	return memtable.NewWithCapacityModeAndIndexer(capacity, mode, db.hashSortedIndexer)
+}
+
+func (db *DB) setAppendOnlyPredictiveGrowthHint(mt *memtable.AppendOnly, capacity int) {
+	if db == nil || mt == nil {
+		return
+	}
+	mt.SetPredictiveGrowthHint(capacity, &db.appendOnlyEntryHint, db.observeAppendOnlyMutableEntries)
 }
 
 // publishMemtablesLocked publishes a new memtable snapshot.
@@ -7779,11 +8071,17 @@ func (db *DB) publishMemtablesLocked() {
 		copy(qs, db.queueShardIDs)
 		view.queueShardIDs = qs
 	}
+	if len(db.queueRouteModes) > 0 {
+		qm := make([]uint8, len(db.queueRouteModes))
+		copy(qm, db.queueRouteModes)
+		view.queueRouteModes = qm
+	}
 	if len(db.queueRanges) > 0 {
 		qr := make([]keyRange, len(db.queueRanges))
 		copy(qr, db.queueRanges)
 		view.queueRanges = qr
 	}
+	view.mutableRoute = cloneMutableRoute(db.currentMutableRoute.Load())
 	view.refs.Store(1)
 	retired := db.pendingRetiredMems
 	db.pendingRetiredMems = nil
@@ -7814,12 +8112,243 @@ func (db *DB) ensureQueueLaneIDsLocked() {
 	db.queueLaneIDs = append(db.queueLaneIDs, make([]uint16, missing)...)
 }
 
+func (db *DB) setCurrentMutableRouteLocked(shardID int, rng keyRange) {
+	if db == nil {
+		return
+	}
+	if shardID < 0 || shardID >= len(db.mutableShards) || !rng.valid {
+		db.currentMutableRoute.Store(nil)
+		return
+	}
+	rng = cloneRange(rng)
+	db.currentMutableRoute.Store(&mutableRouteState{
+		shardID: uint16(shardID),
+		rng:     cloneRange(rng),
+		entries: []mutableRouteEntry{{
+			shardID: uint16(shardID),
+			rng:     rng,
+		}},
+	})
+}
+
+func (db *DB) clearCurrentMutableRouteLocked() {
+	if db == nil {
+		return
+	}
+	db.currentMutableRoute.Store(nil)
+}
+
+func (db *DB) hasQueuedRangedMemtablesLocked() bool {
+	if db == nil {
+		return false
+	}
+	for _, mode := range db.queueRouteModes {
+		if mode == memtableRouteRanged {
+			return true
+		}
+	}
+	return false
+}
+
+func (db *DB) routeMutableHasEntriesLocked(route *mutableRouteState) bool {
+	if db == nil || route == nil {
+		return false
+	}
+	for _, shardID := range route.shardIDs() {
+		if shardID < 0 || shardID >= len(db.mutableShards) {
+			continue
+		}
+		shard := &db.mutableShards[shardID]
+		shard.mu.Lock()
+		hasEntries := shard.entries > 0 || shard.bytes > 0 || shard.rng.valid || shard.mem.Len() > 0
+		shard.mu.Unlock()
+		if hasEntries {
+			return true
+		}
+	}
+	return false
+}
+
+func (db *DB) clearInactiveMutableRouteLocked() {
+	if db == nil {
+		return
+	}
+	route := db.currentMutableRoute.Load()
+	if route == nil || db.hasQueuedRangedMemtablesLocked() || db.routeMutableHasEntriesLocked(route) {
+		return
+	}
+	db.currentMutableRoute.Store(nil)
+}
+
+func (db *DB) extendCurrentMutableRouteLocked(first, last []byte) *mutableRouteState {
+	if db == nil || len(first) == 0 || len(last) == 0 {
+		return db.currentMutableRoute.Load()
+	}
+	route := cloneMutableRoute(db.currentMutableRoute.Load())
+	if route == nil {
+		return nil
+	}
+	rng := keyRange{}
+	rng.add(first)
+	rng.add(last)
+	route = route.withEntryRange(int(route.shardID), rng)
+	db.currentMutableRoute.Store(route)
+	return route
+}
+
+func (db *DB) pickMutableRouteShardsLocked(target int, avoid map[int]struct{}) []int {
+	if target <= 0 || len(db.mutableShards) == 0 {
+		return nil
+	}
+	if target > len(db.mutableShards) {
+		target = len(db.mutableShards)
+	}
+	type shardUsage struct {
+		idx   int
+		bytes int64
+	}
+	usages := make([]shardUsage, 0, len(db.mutableShards))
+	for i := range db.mutableShards {
+		if _, skip := avoid[i]; skip {
+			continue
+		}
+		shard := &db.mutableShards[i]
+		shard.mu.Lock()
+		bytes := shard.bytes
+		shard.mu.Unlock()
+		usages = append(usages, shardUsage{idx: i, bytes: bytes})
+	}
+	sort.Slice(usages, func(i, j int) bool {
+		if usages[i].bytes == usages[j].bytes {
+			return usages[i].idx < usages[j].idx
+		}
+		return usages[i].bytes < usages[j].bytes
+	})
+	out := make([]int, 0, target)
+	for _, usage := range usages {
+		out = append(out, usage.idx)
+		if len(out) == target {
+			break
+		}
+	}
+	return out
+}
+
+func (db *DB) mutableRouteShardTargetLocked(entryCount int) int {
+	if len(db.mutableShards) <= 1 {
+		return len(db.mutableShards)
+	}
+	return 1
+}
+
+func (db *DB) canStartMutableRouteSetLocked() bool {
+	if db == nil {
+		return false
+	}
+	return len(db.queue) == 0 && db.queueBacklogBytes.Load() == 0
+}
+
+func routeEntriesForSortedBatch(entries []batch.Entry, shardIDs []int) []mutableRouteEntry {
+	if len(entries) == 0 || len(shardIDs) == 0 {
+		return nil
+	}
+	if len(shardIDs) > len(entries) {
+		shardIDs = shardIDs[:len(entries)]
+	}
+	out := make([]mutableRouteEntry, 0, len(shardIDs))
+	n := len(entries)
+	for i, shardID := range shardIDs {
+		start := (i * n) / len(shardIDs)
+		end := ((i + 1) * n) / len(shardIDs)
+		if start >= end {
+			continue
+		}
+		rng := keyRange{}
+		rng.add(entries[start].Key)
+		rng.add(entries[end-1].Key)
+		if !rng.valid {
+			continue
+		}
+		out = append(out, mutableRouteEntry{
+			shardID: uint16(shardID),
+			rng:     cloneRange(rng),
+		})
+	}
+	return out
+}
+
+func (db *DB) ensureMutableRouteForSortedBatchLocked(entries []batch.Entry) (bool, error) {
+	if db == nil || len(entries) == 0 || len(db.mutableShards) == 0 {
+		return false, nil
+	}
+	firstKey := entries[0].Key
+	lastKey := entries[len(entries)-1].Key
+	if len(firstKey) == 0 || len(lastKey) == 0 {
+		return false, nil
+	}
+	route := cloneMutableRoute(db.currentMutableRoute.Load())
+	if route == nil && !db.canStartMutableRouteSetLocked() {
+		return false, nil
+	}
+	target := db.mutableRouteShardTargetLocked(len(entries))
+	if target <= 0 {
+		return false, nil
+	}
+	shardIDs := route.shardIDs()
+	if len(shardIDs) > target {
+		shardIDs = append([]int(nil), shardIDs[:target]...)
+	}
+	if len(shardIDs) < target {
+		avoid := make(map[int]struct{}, len(shardIDs))
+		for _, shardID := range shardIDs {
+			avoid[shardID] = struct{}{}
+		}
+		shardIDs = append(shardIDs, db.pickMutableRouteShardsLocked(target-len(shardIDs), avoid)...)
+	}
+	if len(shardIDs) == 0 {
+		return false, nil
+	}
+	for _, shardID := range shardIDs {
+		if shardID < 0 || shardID >= len(db.mutableShards) {
+			continue
+		}
+		shard := &db.mutableShards[shardID]
+		shard.mu.Lock()
+		occupied := shard.bytes > 0 || shard.rng.valid || shard.mem.Len() > 0
+		shard.mu.Unlock()
+		if occupied && (route == nil || !route.hasShard(shardID)) {
+			if err := db.rotateMutableShardsSelectedLocked([]int{shardID}, -1, true, nil); err != nil {
+				return false, err
+			}
+		}
+	}
+	route = cloneMutableRoute(db.currentMutableRoute.Load())
+	if route == nil {
+		route = &mutableRouteState{}
+	}
+	for _, entry := range routeEntriesForSortedBatch(entries, shardIDs) {
+		route = route.withEntryRange(int(entry.shardID), entry.rng)
+	}
+	db.currentMutableRoute.Store(route)
+	db.publishMemtablesLocked()
+	return true, nil
+}
+
+func queueRouteModeForMutableRoute(route *mutableRouteState, shardID int) uint8 {
+	if route != nil && route.hasShard(shardID) {
+		return memtableRouteRanged
+	}
+	return memtableRouteHashed
+}
+
 type memtableStats struct {
 	writes          atomic.Uint64
 	seqWrites       atomic.Uint64
 	overwriteWrites atomic.Uint64
+	deleteWrites    atomic.Uint64
 	iterators       atomic.Uint64
 	rangeIters      atomic.Uint64
+	currentSeqRun   atomic.Uint64
 	lastKeyMu       sync.Mutex
 	lastKey         []byte
 	hasLastKey      bool
@@ -7832,6 +8361,8 @@ const (
 	adaptiveDecisionBTreeRange
 	adaptiveDecisionBTreeBlockedMinIters
 	adaptiveDecisionAppendSequential
+	adaptiveDecisionAppendDeletes
+	adaptiveDecisionAppendWriteHeavy
 	adaptiveDecisionHashMixed
 )
 
@@ -7845,6 +8376,10 @@ func adaptiveDecisionReasonString(v uint32) string {
 		return "btree_blocked_min_iters"
 	case adaptiveDecisionAppendSequential:
 		return "append_sequential"
+	case adaptiveDecisionAppendDeletes:
+		return "append_deletes"
+	case adaptiveDecisionAppendWriteHeavy:
+		return "append_write_heavy"
 	case adaptiveDecisionHashMixed:
 		return "hash_mixed"
 	default:
@@ -7982,6 +8517,199 @@ func cloneRange(r keyRange) keyRange {
 	return r
 }
 
+func (route *mutableRouteState) normalizedEntries() []mutableRouteEntry {
+	if route == nil {
+		return nil
+	}
+	if len(route.entries) > 0 {
+		return route.entries
+	}
+	if !route.rng.valid {
+		return nil
+	}
+	return []mutableRouteEntry{{
+		shardID: route.shardID,
+		rng:     route.rng,
+	}}
+}
+
+func (route *mutableRouteState) shardIDs() []int {
+	entries := route.normalizedEntries()
+	if len(entries) == 0 {
+		return nil
+	}
+	out := make([]int, 0, len(entries))
+	for _, entry := range entries {
+		shardID := int(entry.shardID)
+		seen := false
+		for _, existing := range out {
+			if existing == shardID {
+				seen = true
+				break
+			}
+		}
+		if !seen {
+			out = append(out, shardID)
+		}
+	}
+	return out
+}
+
+func (route *mutableRouteState) hasShard(shardID int) bool {
+	for _, entry := range route.normalizedEntries() {
+		if int(entry.shardID) == shardID {
+			return true
+		}
+	}
+	return false
+}
+
+func (route *mutableRouteState) withEntryRange(shardID int, rng keyRange) *mutableRouteState {
+	if shardID < 0 || !rng.valid {
+		return route
+	}
+	if route == nil {
+		route = &mutableRouteState{}
+	}
+	entries := route.normalizedEntries()
+	next := &mutableRouteState{}
+	next.entries = make([]mutableRouteEntry, 0, len(entries)+1)
+	merged := cloneRange(rng)
+	for _, entry := range entries {
+		if int(entry.shardID) == shardID {
+			merged.add(entry.rng.min)
+			merged.add(entry.rng.max)
+			continue
+		}
+		next.entries = append(next.entries, mutableRouteEntry{
+			shardID: entry.shardID,
+			rng:     cloneRange(entry.rng),
+		})
+	}
+	next.entries = append(next.entries, mutableRouteEntry{
+		shardID: uint16(shardID),
+		rng:     cloneRange(merged),
+	})
+	for i, entry := range next.entries {
+		if i == 0 {
+			next.rng = cloneRange(entry.rng)
+		} else {
+			next.rng.add(entry.rng.min)
+			next.rng.add(entry.rng.max)
+		}
+	}
+	last := next.entries[len(next.entries)-1]
+	next.shardID = last.shardID
+	return next
+}
+
+func (route *mutableRouteState) withoutShards(shardIDs map[int]struct{}) *mutableRouteState {
+	if route == nil || len(shardIDs) == 0 {
+		return route
+	}
+	entries := route.normalizedEntries()
+	if len(entries) == 0 {
+		return nil
+	}
+	next := &mutableRouteState{entries: make([]mutableRouteEntry, 0, len(entries))}
+	for _, entry := range entries {
+		if _, remove := shardIDs[int(entry.shardID)]; remove {
+			continue
+		}
+		next.entries = append(next.entries, mutableRouteEntry{
+			shardID: entry.shardID,
+			rng:     cloneRange(entry.rng),
+		})
+	}
+	if len(next.entries) == 0 {
+		return nil
+	}
+	for i, entry := range next.entries {
+		if i == 0 {
+			next.rng = cloneRange(entry.rng)
+		} else {
+			next.rng.add(entry.rng.min)
+			next.rng.add(entry.rng.max)
+		}
+	}
+	next.shardID = next.entries[len(next.entries)-1].shardID
+	return next
+}
+
+func cloneMutableRoute(route *mutableRouteState) *mutableRouteState {
+	if route == nil {
+		return nil
+	}
+	cloned := &mutableRouteState{
+		shardID: route.shardID,
+		rng:     cloneRange(route.rng),
+	}
+	if len(route.entries) > 0 {
+		cloned.entries = make([]mutableRouteEntry, len(route.entries))
+		for i := range route.entries {
+			cloned.entries[i] = mutableRouteEntry{
+				shardID: route.entries[i].shardID,
+				rng:     cloneRange(route.entries[i].rng),
+			}
+		}
+	}
+	if !cloned.rng.valid {
+		return nil
+	}
+	return cloned
+}
+
+func keyInRange(r keyRange, key []byte) bool {
+	if !r.valid {
+		return false
+	}
+	if r.min != nil && bytes.Compare(key, r.min) < 0 {
+		return false
+	}
+	if r.max != nil && bytes.Compare(key, r.max) > 0 {
+		return false
+	}
+	return true
+}
+
+func keyInMutableRoute(route *mutableRouteState, key []byte) bool {
+	return forEachMutableRouteShardForKey(route, key, func(int) bool {
+		return true
+	})
+}
+
+func forEachMutableRouteShardForKey(route *mutableRouteState, key []byte, visit func(int) bool) bool {
+	entries := route.normalizedEntries()
+	for i := len(entries) - 1; i >= 0; i-- {
+		entry := entries[i]
+		if !keyInRange(entry.rng, key) {
+			continue
+		}
+		if visit(int(entry.shardID)) {
+			return true
+		}
+	}
+	return false
+}
+
+func mutableRouteShardForWrite(route *mutableRouteState, key []byte) (int, bool) {
+	var shardID int
+	found := forEachMutableRouteShardForKey(route, key, func(idx int) bool {
+		shardID = idx
+		return true
+	})
+	return shardID, found
+}
+
+func containsShardID(shardIDs []int, shardID int) bool {
+	for _, idx := range shardIDs {
+		if idx == shardID {
+			return true
+		}
+	}
+	return false
+}
+
 func (db *DB) snapshotMutableRange() keyRange {
 	var out keyRange
 	for i := range db.mutableShards {
@@ -8008,6 +8736,8 @@ func (db *DB) snapshotMutableRange() keyRange {
 
 func (db *DB) resetMutableShardsLocked(nextMode memtable.Mode, reuse bool) error {
 	db.mutableBytes.Store(0)
+	db.mutableEntries.Store(0)
+	db.clearCurrentMutableRouteLocked()
 	for i := range db.mutableShards {
 		shard := &db.mutableShards[i]
 		shard.mu.Lock()
@@ -8015,6 +8745,9 @@ func (db *DB) resetMutableShardsLocked(nextMode memtable.Mode, reuse bool) error
 		if reuse {
 			if r, ok := any(shard.mem).(interface{ Reset() }); ok {
 				r.Reset()
+				if mt, ok := shard.mem.(*memtable.AppendOnly); ok {
+					db.setAppendOnlyPredictiveGrowthHint(mt, db.memtableCap)
+				}
 				shard.appendOnlyDirectValueArena.recycleActive()
 				reused = true
 			}
@@ -8031,67 +8764,142 @@ func (db *DB) resetMutableShardsLocked(nextMode memtable.Mode, reuse bool) error
 		}
 		shard.rng = keyRange{}
 		shard.bytes = 0
+		shard.entries = 0
 		shard.mu.Unlock()
 	}
-	db.memtableStats.writes.Store(0)
-	db.memtableStats.seqWrites.Store(0)
-	db.memtableStats.overwriteWrites.Store(0)
-	db.memtableStats.iterators.Store(0)
-	db.memtableStats.rangeIters.Store(0)
-	db.memtableStats.lastKeyMu.Lock()
-	db.memtableStats.hasLastKey = false
-	db.memtableStats.lastKeyMu.Unlock()
+	db.resetAdaptiveMemtableStatsLocked()
 	db.updateAdaptiveObservationLocked()
 	db.updateMutableThresholdLocked()
 	db.publishMemtablesLocked()
 	return nil
 }
 
+func (db *DB) resetAdaptiveMemtableStatsLocked() {
+	db.memtableStats.writes.Store(0)
+	db.memtableStats.seqWrites.Store(0)
+	db.memtableStats.overwriteWrites.Store(0)
+	db.memtableStats.deleteWrites.Store(0)
+	db.memtableStats.iterators.Store(0)
+	db.memtableStats.rangeIters.Store(0)
+	db.memtableStats.currentSeqRun.Store(0)
+	db.memtableStats.lastKeyMu.Lock()
+	db.memtableStats.hasLastKey = false
+	db.memtableStats.lastKeyMu.Unlock()
+}
+
 func (db *DB) noteWriteKey(key []byte) {
+	db.noteWriteKeyKind(key, false)
+}
+
+func (db *DB) noteDeleteKey(key []byte) {
+	db.noteWriteKeyKind(key, true)
+}
+
+func (db *DB) noteDeleteBatch(count int) {
+	db.noteWriteBatchWithDeletes(count, count)
+}
+
+func (db *DB) noteWriteBatchWithDeletes(count, deleteCount int) {
+	if !db.memtableAdaptive || !db.memtableAdaptiveObserve.Load() || count <= 0 {
+		return
+	}
+	if deleteCount < 0 {
+		deleteCount = 0
+	}
+	if deleteCount > count {
+		deleteCount = count
+	}
+	stats := &db.memtableStats
+	stats.writes.Add(uint64(count))
+	if deleteCount > 0 {
+		stats.deleteWrites.Add(uint64(deleteCount))
+	}
+	stats.lastKeyMu.Lock()
+	stats.hasLastKey = false
+	stats.lastKeyMu.Unlock()
+	stats.currentSeqRun.Store(0)
+}
+
+func (db *DB) noteWriteKeyKind(key []byte, delete bool) {
 	if !db.memtableAdaptive || !db.memtableAdaptiveObserve.Load() {
 		return
 	}
 	stats := &db.memtableStats
 	stats.writes.Add(1)
+	if delete {
+		stats.deleteWrites.Add(1)
+	}
 	if len(key) == 0 {
 		stats.lastKeyMu.Lock()
 		stats.hasLastKey = false
 		stats.lastKeyMu.Unlock()
+		stats.currentSeqRun.Store(0)
 		return
 	}
 	stats.lastKeyMu.Lock()
 	defer stats.lastKeyMu.Unlock()
+	curRun := uint64(1)
 	if stats.hasLastKey {
 		if bytes.Equal(stats.lastKey, key) {
 			stats.overwriteWrites.Add(1)
 		} else if bytes.Compare(stats.lastKey, key) < 0 {
 			stats.seqWrites.Add(1)
+			curRun = stats.currentSeqRun.Load() + 1
 		}
 	}
 	stats.lastKey = append(stats.lastKey[:0], key...)
 	stats.hasLastKey = true
+	stats.currentSeqRun.Store(curRun)
 }
 
 // noteWriteSortedRun records a strictly increasing key run in one shot.
 func (db *DB) noteWriteSortedRun(first, last []byte, count int) {
+	db.noteWriteSortedRunWithDeletes(first, last, count, 0)
+}
+
+func (db *DB) noteDeleteSortedRun(first, last []byte, count int) {
+	db.noteWriteSortedRunWithDeletes(first, last, count, count)
+}
+
+func (db *DB) noteWriteSortedRunKind(first, last []byte, count int, delete bool) {
+	deleteCount := 0
+	if delete {
+		deleteCount = count
+	}
+	db.noteWriteSortedRunWithDeletes(first, last, count, deleteCount)
+}
+
+func (db *DB) noteWriteSortedRunWithDeletes(first, last []byte, count, deleteCount int) {
 	if !db.memtableAdaptive || !db.memtableAdaptiveObserve.Load() || count <= 0 {
 		return
 	}
+	if deleteCount < 0 {
+		deleteCount = 0
+	}
+	if deleteCount > count {
+		deleteCount = count
+	}
 	stats := &db.memtableStats
 	stats.writes.Add(uint64(count))
+	if deleteCount > 0 {
+		stats.deleteWrites.Add(uint64(deleteCount))
+	}
 	if len(last) == 0 {
 		stats.lastKeyMu.Lock()
 		stats.hasLastKey = false
 		stats.lastKeyMu.Unlock()
+		stats.currentSeqRun.Store(0)
 		return
 	}
 	seqAdds := uint64(0)
+	currentRun := uint64(count)
 	if count > 1 {
 		seqAdds += uint64(count - 1)
 	}
 	stats.lastKeyMu.Lock()
 	if len(first) > 0 && stats.hasLastKey && bytes.Compare(stats.lastKey, first) < 0 {
 		seqAdds++
+		currentRun = stats.currentSeqRun.Load() + uint64(count)
 	}
 	stats.lastKey = append(stats.lastKey[:0], last...)
 	stats.hasLastKey = true
@@ -8099,6 +8907,66 @@ func (db *DB) noteWriteSortedRun(first, last []byte, count int) {
 	if seqAdds > 0 {
 		stats.seqWrites.Add(seqAdds)
 	}
+	stats.currentSeqRun.Store(currentRun)
+}
+
+func (db *DB) shouldRotateForTailSequentialRecovery() bool {
+	if db == nil || !db.memtableAdaptive {
+		return false
+	}
+	writes := db.memtableStats.writes.Load()
+	if writes < adaptiveMinWrites {
+		return false
+	}
+	currentSeqRun := db.memtableStats.currentSeqRun.Load()
+	if currentSeqRun < adaptiveMinWrites {
+		return false
+	}
+	overwriteWrites := db.memtableStats.overwriteWrites.Load()
+	if overwriteWrites == 0 {
+		return true
+	}
+	return float64(overwriteWrites)/float64(writes) < adaptiveOverwriteWritePct
+}
+
+func (db *DB) shouldRotateForDeleteHeavyRecovery() bool {
+	if db == nil || !db.memtableAdaptive {
+		return false
+	}
+	if db.currentMemtableMode() == memtable.ModeAppendOnly {
+		return false
+	}
+	writes := db.memtableStats.writes.Load()
+	if writes < adaptiveMinWrites {
+		return false
+	}
+	deleteWrites := db.memtableStats.deleteWrites.Load()
+	if deleteWrites == 0 {
+		return false
+	}
+	return float64(deleteWrites)/float64(writes) >= adaptiveDeleteWritePct
+}
+
+func (db *DB) mutableNeedsSequentialRecovery() bool {
+	if db == nil {
+		return false
+	}
+	for i := range db.mutableShards {
+		shard := &db.mutableShards[i]
+		shard.mu.Lock()
+		needsRecovery := false
+		switch mt := shard.mem.(type) {
+		case *memtable.AppendOnly:
+			needsRecovery = !mt.Ordered()
+		default:
+			needsRecovery = true
+		}
+		shard.mu.Unlock()
+		if needsRecovery {
+			return true
+		}
+	}
+	return false
 }
 
 func (db *DB) noteIterator(start, end []byte) {
@@ -8172,7 +9040,7 @@ func (db *DB) noteAdaptiveMemtableDecision(
 		db.memtableAdaptiveDecisionBTreeTotal.Add(1)
 	case adaptiveDecisionBTreeBlockedMinIters:
 		db.memtableAdaptiveDecisionBTreeBlockedMinItersTotal.Add(1)
-	case adaptiveDecisionAppendSequential:
+	case adaptiveDecisionAppendSequential, adaptiveDecisionAppendDeletes, adaptiveDecisionAppendWriteHeavy:
 		db.memtableAdaptiveDecisionAppendTotal.Add(1)
 	case adaptiveDecisionHashMixed:
 		db.memtableAdaptiveDecisionHashTotal.Add(1)
@@ -8184,8 +9052,10 @@ func (db *DB) chooseAdaptiveMemtableModeLocked() memtable.Mode {
 	writes := db.memtableStats.writes.Load()
 	seqWrites := db.memtableStats.seqWrites.Load()
 	overwriteWrites := db.memtableStats.overwriteWrites.Load()
+	deleteWrites := db.memtableStats.deleteWrites.Load()
 	iters := db.memtableStats.iterators.Load()
 	rangeIters := db.memtableStats.rangeIters.Load()
+	currentSeqRun := db.memtableStats.currentSeqRun.Load()
 
 	// Default to configured mode if not enough data
 	if writes < adaptiveMinWrites {
@@ -8196,6 +9066,7 @@ func (db *DB) chooseAdaptiveMemtableModeLocked() memtable.Mode {
 
 	seqWritePct := float64(seqWrites) / float64(writes)
 	overwriteWritePct := float64(overwriteWrites) / float64(writes)
+	deleteWritePct := float64(deleteWrites) / float64(writes)
 	rangeIterPct := 0.0
 	if iters > 0 {
 		rangeIterPct = float64(rangeIters) / float64(iters)
@@ -8213,13 +9084,30 @@ func (db *DB) chooseAdaptiveMemtableModeLocked() memtable.Mode {
 		}
 	}
 
-	// 2) Mostly increasing writes with low overwrite pressure favor append-only.
-	if seqWritePct >= adaptiveSequentialWritePct && overwriteWritePct < adaptiveOverwriteWritePct {
+	// 2) Tombstone-heavy writes are append-friendly. Hash-sorted coalescing helps
+	// overwrite-heavy puts, but delete-heavy batches are cheaper as append-only
+	// tombstones and can be deduplicated at flush boundaries.
+	if deleteWritePct >= adaptiveDeleteWritePct {
+		db.noteAdaptiveMemtableDecision(memtable.ModeAppendOnly, adaptiveDecisionAppendDeletes, writes, seqWrites, overwriteWrites, iters, rangeIters, rangeIterPct)
+		return memtable.ModeAppendOnly
+	}
+
+	// 3) Write-heavy, low-overwrite traffic is append-friendly even when keys are
+	// not sequential. Hash-sorted coalescing only pays for itself once overwrites
+	// are common or reads/iterators are actively shaping the workload.
+	if iters == 0 && overwriteWritePct < adaptiveOverwriteWritePct {
+		db.noteAdaptiveMemtableDecision(memtable.ModeAppendOnly, adaptiveDecisionAppendWriteHeavy, writes, seqWrites, overwriteWrites, iters, rangeIters, rangeIterPct)
+		return memtable.ModeAppendOnly
+	}
+
+	// 4) Mostly increasing writes with low overwrite pressure favor append-only.
+	if (seqWritePct >= adaptiveSequentialWritePct || currentSeqRun >= adaptiveTailSequentialWriteMin) &&
+		overwriteWritePct < adaptiveOverwriteWritePct {
 		db.noteAdaptiveMemtableDecision(memtable.ModeAppendOnly, adaptiveDecisionAppendSequential, writes, seqWrites, overwriteWrites, iters, rangeIters, rangeIterPct)
 		return memtable.ModeAppendOnly
 	}
 
-	// 3) Overwrite-heavy or mixed-write traffic defaults to hash-sorted.
+	// 5) Overwrite-heavy or read-shaped mixed-write traffic defaults to hash-sorted.
 	if btreeBlockedByMinIters {
 		db.noteAdaptiveMemtableDecision(memtable.ModeHashSorted, adaptiveDecisionBTreeBlockedMinIters, writes, seqWrites, overwriteWrites, iters, rangeIters, rangeIterPct)
 		return memtable.ModeHashSorted
@@ -8229,11 +9117,23 @@ func (db *DB) chooseAdaptiveMemtableModeLocked() memtable.Mode {
 }
 
 func (db *DB) updateAdaptiveObservationLocked() {
-	observe := db.memtableAdaptive
-	if observe && !db.memtableWarmupActive && db.currentMemtableMode() == memtable.ModeAppendOnly {
-		observe = false
+	// Keep observing across every adaptive memtable mode so the next rotation is
+	// driven by the immediately preceding workload instead of stale history from
+	// before append-only became active.
+	db.memtableAdaptiveObserve.Store(db.memtableAdaptive)
+}
+
+func (db *DB) prepareNextMemtableModeLocked(forcedMode *memtable.Mode) {
+	if forcedMode != nil {
+		db.storeMemtableMode(*forcedMode)
+		db.updateAdaptiveObservationLocked()
+	} else if db.memtableAdaptive {
+		db.applyAdaptiveMemtableModeLocked()
 	}
-	db.memtableAdaptiveObserve.Store(observe)
+	if db.memtableWarmupActive {
+		db.memtableWarmupActive = false
+		db.updateAdaptiveObservationLocked()
+	}
 }
 
 func (db *DB) applyAdaptiveMemtableModeLocked() memtable.Mode {
@@ -8913,6 +9813,13 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		flushLaneMu:                          make([]sync.Mutex, len(lanes)),
 	}
 	db.storeMemtableMode(mode)
+	if mode == memtable.ModeAppendOnly {
+		for i := range db.mutableShards {
+			if mt, ok := db.mutableShards[i].mem.(*memtable.AppendOnly); ok {
+				db.setAppendOnlyPredictiveGrowthHint(mt, warmupCap)
+			}
+		}
+	}
 	if opts.IndexOuterLeavesInValueLog {
 		db.leafLog.id = leafLogLaneID
 		db.leafLog.vlogSeq = maxLeafVlogSeq
@@ -9126,6 +10033,7 @@ func (job flushBuildJob) run(closeCh <-chan struct{}) {
 	}
 
 	iter := job.mem.NewIterator(nil, nil)
+	stableUnsafe := stableUnsafeIteratorSlices(job.mem)
 
 	send := func(ops []batch.Entry) bool {
 		for {
@@ -9144,22 +10052,23 @@ func (job flushBuildJob) run(closeCh <-chan struct{}) {
 	ops = ops[:0]
 	for iter.Valid() {
 		val, ptr, flags := iter.UnsafeEntry()
+		key := stableIteratorKey(iter, stableUnsafe)
 		if flags&node.FlagTombstone != 0 {
 			ops = append(ops, batch.Entry{
 				Type: batch.OpDelete,
-				Key:  iter.UnsafeKey(),
+				Key:  key,
 			})
 		} else if flags&node.FlagPointer != 0 {
 			ops = append(ops, batch.Entry{
 				Type:     batch.OpPut,
-				Key:      iter.UnsafeKey(),
+				Key:      key,
 				ValuePtr: ptr,
 				IsPtr:    true,
 			})
 		} else {
 			ops = append(ops, batch.Entry{
 				Type:  batch.OpPut,
-				Key:   iter.UnsafeKey(),
+				Key:   key,
 				Value: val,
 			})
 		}
@@ -10072,6 +10981,22 @@ func (db *DB) logBatchSize(records []logRecord) int64 {
 	return int64(total)
 }
 
+func (db *DB) logBatchEntriesSize(entries []batch.Entry, rids []uint64) int64 {
+	if len(entries) == 0 {
+		return 0
+	}
+	total := commitLogSegmentHeaderBytes + commitLogBatchHeaderBytes
+	for i := range entries {
+		op := &entries[i]
+		valueLen := 0
+		if op.Type == batch.OpPut && (rids == nil || i >= len(rids) || rids[i] == 0) {
+			valueLen = len(op.Value)
+		}
+		total += commitLogRecordHeaderBytes + len(op.Key) + valueLen
+	}
+	return int64(total)
+}
+
 func (db *DB) assignCommitSeq(records []logRecord) {
 	if len(records) == 0 {
 		return
@@ -10079,6 +11004,20 @@ func (db *DB) assignCommitSeq(records []logRecord) {
 	seq := db.nextCommitSeq.Add(1)
 	for i := range records {
 		records[i].Seq = seq
+	}
+}
+
+func logRecordForBatchEntry(op *batch.Entry, rid uint64, seq uint64) logRecord {
+	switch op.Type {
+	case batch.OpDelete:
+		return logRecord{Op: logOpDelete, Key: op.Key, Seq: seq}
+	case batch.OpPut:
+		if rid != 0 {
+			return logRecord{Op: logOpSetRID, Key: op.Key, RID: rid, Seq: seq}
+		}
+		return logRecord{Op: logOpSetInline, Key: op.Key, Value: op.Value, Seq: seq}
+	default:
+		return logRecord{Seq: seq}
 	}
 }
 
@@ -10617,6 +11556,7 @@ func collectOpsInto(mem memtable.Table, dst []batch.Entry) (int, error) {
 		return 0, errors.New("cachingdb: nil memtable")
 	}
 	iter := mem.NewIterator(nil, nil)
+	stableUnsafe := stableUnsafeIteratorSlices(mem)
 	defer func() { _ = iter.Close() }()
 
 	i := 0
@@ -10625,22 +11565,23 @@ func collectOpsInto(mem memtable.Table, dst []batch.Entry) (int, error) {
 			return 0, fmt.Errorf("cachingdb: collectOpsInto overflow (have=%d need>=%d)", len(dst), i+1)
 		}
 		val, ptr, flags := iter.UnsafeEntry()
+		key := stableIteratorKey(iter, stableUnsafe)
 		if flags&node.FlagTombstone != 0 {
 			dst[i] = batch.Entry{
 				Type: batch.OpDelete,
-				Key:  iter.UnsafeKey(),
+				Key:  key,
 			}
 		} else if flags&node.FlagPointer != 0 {
 			dst[i] = batch.Entry{
 				Type:     batch.OpPut,
-				Key:      iter.UnsafeKey(),
+				Key:      key,
 				ValuePtr: ptr,
 				IsPtr:    true,
 			}
 		} else {
 			dst[i] = batch.Entry{
 				Type:  batch.OpPut,
-				Key:   iter.UnsafeKey(),
+				Key:   key,
 				Value: val,
 			}
 		}
@@ -10704,8 +11645,84 @@ func (it *opRunIter) Key() []byte {
 	return it.runs[it.runIdx][it.idx].Key
 }
 
+func (*opRunIter) Close() error { return nil }
+
+type iteratorOpSource struct {
+	iter         iterator.UnsafeIterator
+	stableUnsafe bool
+}
+
+func newIteratorOpSource(iter iterator.UnsafeIterator, stableUnsafe bool) *iteratorOpSource {
+	return &iteratorOpSource{iter: iter, stableUnsafe: stableUnsafe}
+}
+
+func (it *iteratorOpSource) Valid() bool {
+	return it != nil && it.iter != nil && it.iter.Valid()
+}
+
+func (it *iteratorOpSource) Next() {
+	if it == nil || it.iter == nil {
+		return
+	}
+	it.iter.Next()
+}
+
+func (it *iteratorOpSource) Entry() batch.Entry {
+	if it == nil || it.iter == nil || !it.iter.Valid() {
+		return batch.Entry{}
+	}
+	val, ptr, flags := it.iter.UnsafeEntry()
+	key := stableIteratorKey(it.iter, it.stableUnsafe)
+	if !it.stableUnsafe {
+		key = append([]byte(nil), key...)
+		if val != nil {
+			val = append([]byte(nil), val...)
+		}
+	}
+	switch {
+	case flags&node.FlagTombstone != 0:
+		return batch.Entry{Type: batch.OpDelete, Key: key}
+	case flags&node.FlagPointer != 0:
+		return batch.Entry{Type: batch.OpPut, Key: key, ValuePtr: ptr, IsPtr: true}
+	default:
+		return batch.Entry{Type: batch.OpPut, Key: key, Value: val}
+	}
+}
+
+func (it *iteratorOpSource) Key() []byte {
+	if it == nil || it.iter == nil || !it.iter.Valid() {
+		return nil
+	}
+	key := stableIteratorKey(it.iter, it.stableUnsafe)
+	if !it.stableUnsafe {
+		key = append([]byte(nil), key...)
+	}
+	return key
+}
+
+func (it *iteratorOpSource) Close() error {
+	if it == nil || it.iter == nil {
+		return nil
+	}
+	err := it.iter.Error()
+	cerr := it.iter.Close()
+	if err == nil {
+		err = cerr
+	}
+	it.iter = nil
+	return err
+}
+
+type opMergeSource interface {
+	Valid() bool
+	Next()
+	Entry() batch.Entry
+	Key() []byte
+	Close() error
+}
+
 type opMergeItem struct {
-	iter     *opRunIter
+	source   opMergeSource
 	priority int
 	key      []byte
 }
@@ -10798,7 +11815,7 @@ func buildOpRuns(mem memtable.Table, chunkCap int) ([][]batch.Entry, int, error)
 	stableUnsafe := stableUnsafeIteratorSlices(mem)
 	for iter.Valid() {
 		val, ptr, flags := iter.UnsafeEntry()
-		key := iter.UnsafeKey()
+		key := stableIteratorKey(iter, stableUnsafe)
 		if !stableUnsafe {
 			key = append([]byte(nil), key...)
 		}
@@ -10846,6 +11863,95 @@ func stableUnsafeIteratorSlices(mem memtable.Table) bool {
 		return stable.StableUnsafeIteratorSlices()
 	}
 	return false
+}
+
+func stableIteratorKey(iter iterator.UnsafeIterator, stableUnsafe bool) []byte {
+	if stableUnsafe {
+		if stableKey, ok := iter.(iterator.StableKeyViewIterator); ok {
+			return stableKey.UnsafeStableKey()
+		}
+	}
+	return iter.UnsafeKey()
+}
+
+func stableFlushStreamingSources(units []flushUnit) bool {
+	if len(units) == 0 {
+		return false
+	}
+	for i := range units {
+		if units[i].mem == nil || !stableUnsafeIteratorSlices(units[i].mem) {
+			return false
+		}
+	}
+	return true
+}
+
+func stableFlushStreamingPlan(units []flushUnit, totalLen int) (int, bool) {
+	if !stableFlushStreamingSources(units) {
+		return 0, false
+	}
+	deleteOps, ok := flushStreamingDeleteOps(units, totalLen)
+	if !ok {
+		return 0, false
+	}
+	return deleteOps, true
+}
+
+func flushStreamingDeleteOps(units []flushUnit, totalLen int) (int, bool) {
+	if len(units) == 0 || totalLen <= 0 {
+		return 0, false
+	}
+	deleteOps := 0
+	for i := range units {
+		provider, ok := units[i].mem.(memtable.OperationMixProvider)
+		if !ok {
+			return 0, false
+		}
+		mix := provider.OperationMix()
+		if mix.Deletes <= 0 {
+			continue
+		}
+		deleteOps += mix.Deletes
+		if deleteOps < 0 {
+			deleteOps = totalLen
+			break
+		}
+	}
+	// OperationMix may include superseded append-log entries; cap deleteOps to
+	// totalLen, the queued Len() total gathered for these flush units.
+	if deleteOps > totalLen {
+		deleteOps = totalLen
+	}
+	return deleteOps, true
+}
+
+func ceilQuarter(n int) int {
+	q := n / 4
+	if n%4 != 0 {
+		q++
+	}
+	return q
+}
+
+func deleteHeavyStreamingDeleteOps(units []flushUnit, totalLen int) (int, bool) {
+	deleteOps, ok := flushStreamingDeleteOps(units, totalLen)
+	if !ok {
+		return 0, false
+	}
+	return deleteOps, deleteOps >= ceilQuarter(totalLen)
+}
+
+func closeOpMergeSources(sources []opMergeSource) error {
+	var firstErr error
+	for _, source := range sources {
+		if source == nil {
+			continue
+		}
+		if err := source.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
 }
 
 type walFastItem struct {
@@ -11063,7 +12169,7 @@ func (db *DB) enqueueDomainIngress(op domainIngressOp, key, value []byte, sync b
 		sync:  sync,
 		done:  make(chan error, 1),
 	}
-	shardID := db.shardIndex(key)
+	shardID := db.hashShardIndex(key)
 	workerID := shardID % len(db.domainIngressCh)
 	ch := db.domainIngressCh[workerID]
 	select {
@@ -12348,6 +13454,57 @@ func (db *DB) appendWAL(l *lane, records []logRecord, durability journalDurabili
 		return db.appendWALInline(l, records, true)
 	default:
 		return db.appendWALInline(l, records, false)
+	}
+}
+
+func (db *DB) appendWALBatchEntries(l *lane, entries []batch.Entry, rids []uint64, durability journalDurability) error {
+	if db.disableJournal {
+		return nil
+	}
+	if len(entries) == 0 {
+		return nil
+	}
+	if l == nil {
+		return errWALUnavailable
+	}
+	select {
+	case <-db.closeCh:
+		return errWALClosed
+	default:
+	}
+	db.walAckMu.Lock()
+	if db.walErr != nil {
+		err := db.walErr
+		db.walAckMu.Unlock()
+		return err
+	}
+	db.walAckMu.Unlock()
+
+	ridAt := func(i int) uint64 {
+		if rids != nil && i < len(rids) {
+			return rids[i]
+		}
+		return 0
+	}
+	if len(entries) == 1 {
+		record := logRecordForBatchEntry(&entries[0], ridAt(0), 0)
+		return db.appendWALOneChecked(l, record, durability)
+	}
+
+	seq := db.nextCommitSeq.Add(1)
+	switch durability {
+	case journalDurabilitySync:
+		records := db.getBatchWALRecords(len(entries))
+		for i := range entries {
+			records = append(records, logRecordForBatchEntry(&entries[i], ridAt(i), seq))
+		}
+		err := db.appendWALDirect(l, records, true)
+		db.putBatchWALRecords(records)
+		return err
+	case journalDurabilityFlush:
+		return db.appendWALInlineEntries(l, entries, rids, seq, true)
+	default:
+		return db.appendWALInlineEntries(l, entries, rids, seq, false)
 	}
 }
 
@@ -13859,6 +15016,84 @@ func (db *DB) appendWALInline(l *lane, records []logRecord, flush bool) error {
 	return nil
 }
 
+func (db *DB) appendWALInlineEntries(l *lane, entries []batch.Entry, rids []uint64, seq uint64, flush bool) error {
+	if l == nil {
+		return errWALUnavailable
+	}
+	if len(entries) == 0 {
+		return nil
+	}
+	if len(entries) == 1 {
+		record := logRecordForBatchEntry(&entries[0], 0, seq)
+		if rids != nil && len(rids) > 0 {
+			record = logRecordForBatchEntry(&entries[0], rids[0], seq)
+		}
+		return db.appendWALInlineOne(l, record, flush)
+	}
+
+	var (
+		totalBytes int64
+		err        error
+	)
+
+	ridAt := func(i int) uint64 {
+		if rids != nil && i < len(rids) {
+			return rids[i]
+		}
+		return 0
+	}
+	recordAt := func(i int) logRecord {
+		return logRecordForBatchEntry(&entries[i], ridAt(i), seq)
+	}
+
+	l.walMu.Lock()
+	w := l.wal
+	if w == nil {
+		l.walMu.Unlock()
+		return errWALUnavailable
+	}
+	if sw, ok := w.(commitBatchFuncSizeWriter); ok {
+		totalBytes, err = sw.AppendBatchFuncWithSize(len(entries), func(i int) logRecord {
+			return recordAt(i)
+		})
+	} else if fw, ok := w.(commitBatchFuncWriter); ok {
+		err = fw.AppendBatchFunc(len(entries), func(i int) logRecord {
+			return recordAt(i)
+		})
+		if err == nil {
+			totalBytes = db.logBatchEntriesSize(entries, rids)
+		}
+	} else {
+		records := db.getBatchWALRecords(len(entries))
+		for i := range entries {
+			records = append(records, recordAt(i))
+		}
+		err = w.AppendBatch(records)
+		if err == nil {
+			totalBytes = db.logBatchEntriesSize(entries, rids)
+		}
+		db.putBatchWALRecords(records)
+	}
+	if err == nil && flush {
+		err = w.Flush()
+	}
+	l.walMu.Unlock()
+
+	if err != nil {
+		db.walAckMu.Lock()
+		if db.walErr == nil {
+			db.walErr = err
+		}
+		db.walAckMu.Unlock()
+		return err
+	}
+
+	if totalBytes > 0 {
+		l.walLiveBytes.Add(totalBytes)
+	}
+	return nil
+}
+
 func (db *DB) appendWALInlineOne(l *lane, record logRecord, flush bool) error {
 	if l == nil {
 		return errWALUnavailable
@@ -14182,11 +15417,17 @@ func (db *DB) maybeRunPeriodicVlogGenerationMaintenance(runGC bool) bool {
 	now := time.Now()
 	quiet := db.foregroundActivityQuietFor(now, vlogGenerationMaintenanceQuietWindow, vlogForegroundReadQuietWindow)
 	leafPackAdmission := db.foregroundLeafPackAdmission(now)
-	if !quiet && !leafPackAdmission.allowed &&
+	hotLeafPackOnly := !runGC &&
+		envBool(envEnableLeafGenerationPackMaintenance) &&
+		db.indexOuterLeavesInValueLog &&
+		leafPackAdmission.allowed
+	if !quiet && !hotLeafPackOnly &&
 		!db.vlogGenerationCheckpointKickPending.Load() &&
 		!db.vlogGenerationDeferredMaintenancePending.Load() &&
 		!db.vlogGenerationDeferredMaintenanceDue(now) {
-		db.observeVlogGenerationLeafPackAdmissionSkip(leafPackAdmission.reason)
+		if envBool(envEnableLeafGenerationPackMaintenance) {
+			db.observeVlogGenerationLeafPackAdmissionSkip(leafPackAdmission.reason)
+		}
 		return false
 	}
 	db.maybeRunVlogGenerationMaintenance(runGC)
@@ -19259,8 +20500,8 @@ func (db *DB) Set(key, value []byte) error {
 		return ErrValueNil
 	}
 	db.waitForCheckpoint()
-	unlock := db.lockUpdateKey(key)
-	defer unlock()
+	updateMu := db.lockUpdateKey(key)
+	defer unlockUpdateKey(updateMu)
 	return db.set(key, value, false)
 }
 
@@ -19272,8 +20513,8 @@ func (db *DB) SetSync(key, value []byte) error {
 		return ErrValueNil
 	}
 	db.waitForCheckpoint()
-	unlock := db.lockUpdateKey(key)
-	defer unlock()
+	updateMu := db.lockUpdateKey(key)
+	defer unlockUpdateKey(updateMu)
 	return db.set(key, value, true)
 }
 
@@ -19296,12 +20537,13 @@ func (db *DB) update(key []byte, fn backenddb.UpdateFunc, syncWrite bool) error 
 	if fn == nil {
 		return backenddb.ErrNilUpdateFunc
 	}
+	stableKey := cloneUpdateKey(key)
 	db.waitForCheckpoint()
 
 	for {
-		unlock := db.lockUpdateKey(key)
-		old, err := db.getForUpdate(key)
-		unlock()
+		updateMu := db.lockUpdateKey(stableKey)
+		old, err := db.getForUpdate(stableKey)
+		unlockUpdateKey(updateMu)
 		if err != nil {
 			return err
 		}
@@ -19318,34 +20560,38 @@ func (db *DB) update(key []byte, fn backenddb.UpdateFunc, syncWrite bool) error 
 			return fmt.Errorf("treedb: unknown update op %d", result.Op)
 		}
 
-		unlock = db.lockUpdateKey(key)
-		latest, err := db.getForUpdate(key)
+		updateMu = db.lockUpdateKey(stableKey)
+		latest, err := db.getForUpdate(stableKey)
 		if err != nil {
-			unlock()
+			unlockUpdateKey(updateMu)
 			return err
 		}
 		if !sameUpdateValue(observed, latest) {
-			unlock()
+			unlockUpdateKey(updateMu)
 			continue
 		}
 
 		switch result.Op {
 		case backenddb.UpdateNoop:
-			unlock()
+			unlockUpdateKey(updateMu)
 			return nil
 		case backenddb.UpdateSet:
-			err = db.set(key, result.Value, syncWrite)
-			unlock()
+			err = db.set(stableKey, result.Value, syncWrite)
+			unlockUpdateKey(updateMu)
 			return err
 		case backenddb.UpdateDelete:
-			err = db.delete(key, syncWrite)
-			unlock()
+			err = db.delete(stableKey, syncWrite)
+			unlockUpdateKey(updateMu)
 			return err
 		default:
-			unlock()
+			unlockUpdateKey(updateMu)
 			return fmt.Errorf("treedb: unknown update op %d", result.Op)
 		}
 	}
+}
+
+func cloneUpdateKey(key []byte) []byte {
+	return append([]byte{}, key...)
 }
 
 func (db *DB) getForUpdate(key []byte) ([]byte, error) {
@@ -19438,8 +20684,8 @@ func (db *DB) setDirect(key, value []byte, sync bool) error {
 	var retainPath string
 	usePointer := false
 	debugPtr := db.debugFlushPointers
-
-	shard := db.shardForKey(key)
+	shardIdx := db.shardIndexForWrite(key)
+	shard := &db.mutableShards[shardIdx]
 
 	durability := journalDurabilityNone
 	if sync {
@@ -19481,7 +20727,7 @@ func (db *DB) setDirect(key, value []byte, sync bool) error {
 
 	var lane *lane
 	if allowPointers || !db.disableJournal {
-		l, err := db.pickLane(durability == journalDurabilitySync, db.laneForShardIndex(db.shardIndex(key)))
+		l, err := db.pickLane(durability == journalDurabilitySync, db.laneForShardIndex(shardIdx))
 		if err != nil {
 			db.writeMu.RUnlock()
 			return err
@@ -19554,27 +20800,14 @@ func (db *DB) setDirect(key, value []byte, sync bool) error {
 		if !db.memtableValueLogPointers {
 			memVal = value
 		}
-		if borrower, ok := shard.mem.(memtable.ValueBorrower); ok && len(memVal) > 0 {
-			owned := shard.appendOnlyDirectValueArena.alloc(len(memVal))
-			copy(owned, memVal)
-			borrower.SetEntryBorrowValue(key, owned, ptr, node.FlagPointer)
-		} else {
-			shard.mem.SetEntry(key, memVal, ptr, node.FlagPointer)
-		}
+		db.setDirectMemtableEntryLocked(shard, key, memVal, ptr, node.FlagPointer)
 	} else {
-		if borrower, ok := shard.mem.(memtable.ValueBorrower); ok && len(value) > 0 {
-			owned := shard.appendOnlyDirectValueArena.alloc(len(value))
-			copy(owned, value)
-			borrower.SetEntryBorrowValue(key, owned, page.ValuePtr{}, node.FlagInline)
-		} else {
-			shard.mem.SetEntry(key, value, page.ValuePtr{}, node.FlagInline)
-		}
+		db.setDirectMemtableEntryLocked(shard, key, value, page.ValuePtr{}, node.FlagInline)
 	}
 	shard.rng.add(key)
 	newBytes := shard.mem.Size()
-	delta := newBytes - shard.bytes
-	shard.bytes = newBytes
-	db.mutableBytes.Add(delta)
+	newEntries := shard.mem.Len()
+	db.updateMutableShardAccountingLocked(shard, newBytes, newEntries)
 	shard.mu.Unlock()
 	db.noteWriteKey(key)
 
@@ -19592,7 +20825,7 @@ func (db *DB) setDirect(key, value []byte, sync bool) error {
 	}
 
 	if needRotate {
-		if err := db.maybeRotateMemtable(true); err != nil {
+		if err := db.maybeRotateMutableShards(true, []int{shardIdx}); err != nil {
 			return err
 		}
 	}
@@ -19607,13 +20840,36 @@ func (db *DB) setDirect(key, value []byte, sync bool) error {
 	return nil
 }
 
+func (db *DB) setDirectMemtableEntryLocked(shard *memShard, key, value []byte, ptr page.ValuePtr, flags byte) {
+	if len(value) > 0 {
+		// Direct Set callers do not promise stable value ownership. Reuse is only
+		// allowed when the memtable can append by referring to an existing payload.
+		if reuser, ok := shard.mem.(memtable.StableValueReuser); ok {
+			if reuser.SetEntryReuseStableValue(key, value, ptr, flags) {
+				return
+			}
+		}
+		if borrower, ok := shard.mem.(memtable.ValueBorrower); ok {
+			owned := shard.appendOnlyDirectValueArena.alloc(len(value))
+			copy(owned, value)
+			if stableBorrower, ok := shard.mem.(memtable.StableValueBorrower); ok {
+				stableBorrower.SetEntryBorrowStableValue(key, owned, ptr, flags)
+			} else {
+				borrower.SetEntryBorrowValue(key, owned, ptr, flags)
+			}
+			return
+		}
+	}
+	shard.mem.SetEntry(key, value, ptr, flags)
+}
+
 func (db *DB) Delete(key []byte) error {
 	if len(key) == 0 {
 		return ErrKeyEmpty
 	}
 	db.waitForCheckpoint()
-	unlock := db.lockUpdateKey(key)
-	defer unlock()
+	updateMu := db.lockUpdateKey(key)
+	defer unlockUpdateKey(updateMu)
 	return db.delete(key, false)
 }
 
@@ -19648,7 +20904,7 @@ func (db *DB) DeleteRange(start, end []byte) error {
 				return ErrMemtableFull
 			}
 			for {
-				shard := db.shardForKey(key)
+				shard := db.shardForWriteKey(key)
 				shard.mu.Lock()
 				if db.shardExceedsLimit(shard, int64(len(key))) {
 					shard.mu.Unlock()
@@ -19666,11 +20922,10 @@ func (db *DB) DeleteRange(start, end []byte) error {
 				}
 				shard.rng.add(key)
 				newBytes := shard.mem.Size()
-				delta := newBytes - shard.bytes
-				shard.bytes = newBytes
-				db.mutableBytes.Add(delta)
+				newEntries := shard.mem.Len()
+				db.updateMutableShardAccountingLocked(shard, newBytes, newEntries)
 				shard.mu.Unlock()
-				db.noteWriteKey(key)
+				db.noteDeleteKey(key)
 				if db.mutableBytes.Load() > db.mutableFlushThreshold() {
 					db.mu.Lock()
 					if db.mutableBytes.Load() > db.mutableFlushThreshold() {
@@ -19714,7 +20969,7 @@ func (db *DB) DeleteRange(start, end []byte) error {
 					db.mu.Unlock()
 				}
 			}
-			shard := db.shardForKey(key)
+			shard := db.shardForWriteKey(key)
 			shard.mu.Lock()
 			exceeds := db.shardExceedsLimit(shard, int64(len(key)))
 			shard.mu.Unlock()
@@ -19874,6 +21129,7 @@ func (db *DB) DeleteRange(start, end []byte) error {
 			db.queueRetiredMemtablesLocked(db.queue)
 			db.queue = nil
 			db.queueShardIDs = nil
+			db.queueRouteModes = nil
 			db.queueLaneIDs = nil
 			db.queueIDs = nil
 			db.queueEnqueueNS = nil
@@ -19936,6 +21192,7 @@ func (db *DB) DeleteRange(start, end []byte) error {
 			db.queueRetiredMemtablesLocked(db.queue)
 			db.queue = nil
 			db.queueShardIDs = nil
+			db.queueRouteModes = nil
 			db.queueLaneIDs = nil
 			db.queueIDs = nil
 			db.queueEnqueueNS = nil
@@ -20006,6 +21263,7 @@ func (db *DB) DeleteRange(start, end []byte) error {
 			db.ensureQueueLaneIDsLocked()
 			dstQueue := db.queue[:0]
 			dstShardIDs := db.queueShardIDs[:0]
+			dstRouteModes := db.queueRouteModes[:0]
 			dstLaneIDs := db.queueLaneIDs[:0]
 			dstIDs := db.queueIDs[:0]
 			dstEnqueueNS := db.queueEnqueueNS[:0]
@@ -20027,6 +21285,11 @@ func (db *DB) DeleteRange(start, end []byte) error {
 					dstShardIDs = append(dstShardIDs, db.queueShardIDs[i])
 				} else {
 					dstShardIDs = append(dstShardIDs, 0)
+				}
+				if i < len(db.queueRouteModes) {
+					dstRouteModes = append(dstRouteModes, db.queueRouteModes[i])
+				} else {
+					dstRouteModes = append(dstRouteModes, memtableRouteHashed)
 				}
 				if i < len(db.queueLaneIDs) {
 					dstLaneIDs = append(dstLaneIDs, db.queueLaneIDs[i])
@@ -20057,6 +21320,7 @@ func (db *DB) DeleteRange(start, end []byte) error {
 			}
 			db.queue = dstQueue
 			db.queueShardIDs = dstShardIDs
+			db.queueRouteModes = dstRouteModes
 			db.queueLaneIDs = dstLaneIDs
 			db.queueIDs = dstIDs
 			db.queueEnqueueNS = dstEnqueueNS
@@ -20126,7 +21390,7 @@ func (db *DB) DeleteRange(start, end []byte) error {
 
 		db.mu.Lock()
 		applyDelete := func(key []byte) error {
-			shard := db.shardForKey(key)
+			shard := db.shardForWriteKey(key)
 			shard.mu.Lock()
 			if db.shardExceedsLimit(shard, int64(len(key))) {
 				shard.mu.Unlock()
@@ -20135,10 +21399,10 @@ func (db *DB) DeleteRange(start, end []byte) error {
 			shard.mem.Delete(key)
 			shard.rng.add(key)
 			newBytes := shard.mem.Size()
-			delta := newBytes - shard.bytes
-			shard.bytes = newBytes
-			db.mutableBytes.Add(delta)
+			newEntries := shard.mem.Len()
+			db.updateMutableShardAccountingLocked(shard, newBytes, newEntries)
 			shard.mu.Unlock()
+			db.noteDeleteKey(key)
 			if db.mutableBytes.Load() > db.mutableFlushThreshold() {
 				if err := db.rotateMemtableLocked(true); err != nil {
 					return err
@@ -20225,16 +21489,22 @@ func (db *DB) DeleteSync(key []byte) error {
 		return ErrKeyEmpty
 	}
 	db.waitForCheckpoint()
-	unlock := db.lockUpdateKey(key)
-	defer unlock()
+	updateMu := db.lockUpdateKey(key)
+	defer unlockUpdateKey(updateMu)
 	return db.delete(key, true)
 }
 
-func (db *DB) lockUpdateKey(key []byte) func() {
+func (db *DB) lockUpdateKey(key []byte) *sync.Mutex {
 	if db == nil {
-		return func() {}
+		return nil
 	}
-	return db.updateLocks.Lock(key)
+	return db.updateLocks.LockMutex(key)
+}
+
+func unlockUpdateKey(mu *sync.Mutex) {
+	if mu != nil {
+		mu.Unlock()
+	}
 }
 
 func (db *DB) delete(key []byte, sync bool) error {
@@ -20248,8 +21518,8 @@ func (db *DB) deleteDirect(key []byte, sync bool) error {
 	db.writeMu.RLock()
 	needRotate := false
 	needSyncBarrier := false
-
-	shard := db.shardForKey(key)
+	shardIdx := db.shardIndexForWrite(key)
+	shard := &db.mutableShards[shardIdx]
 	shard.mu.Lock()
 	if db.shardExceedsLimit(shard, int64(len(key))) {
 		shard.mu.Unlock()
@@ -20267,7 +21537,7 @@ func (db *DB) deleteDirect(key []byte, sync bool) error {
 				durability = journalDurabilitySync
 			}
 		}
-		lane, err := db.pickLane(durability == journalDurabilitySync, db.laneForShardIndex(db.shardIndex(key)))
+		lane, err := db.pickLane(durability == journalDurabilitySync, db.laneForShardIndex(shardIdx))
 		if err != nil {
 			db.writeMu.RUnlock()
 			return err
@@ -20286,11 +21556,10 @@ func (db *DB) deleteDirect(key []byte, sync bool) error {
 	shard.mem.Delete(key)
 	shard.rng.add(key)
 	newBytes := shard.mem.Size()
-	delta := newBytes - shard.bytes
-	shard.bytes = newBytes
-	db.mutableBytes.Add(delta)
+	newEntries := shard.mem.Len()
+	db.updateMutableShardAccountingLocked(shard, newBytes, newEntries)
 	shard.mu.Unlock()
-	db.noteWriteKey(key)
+	db.noteDeleteKey(key)
 
 	// 3. Threshold
 	if db.mutableBytes.Load() > db.mutableFlushThreshold() {
@@ -20302,7 +21571,7 @@ func (db *DB) deleteDirect(key []byte, sync bool) error {
 	db.writeMu.RUnlock()
 
 	if needRotate {
-		if err := db.maybeRotateMemtable(true); err != nil {
+		if err := db.maybeRotateMutableShards(true, []int{shardIdx}); err != nil {
 			return err
 		}
 	}
@@ -20348,13 +21617,8 @@ func (db *DB) rotateMemtableLockedWithCapacity(triggerFlush bool, newCapacity in
 	if newCapacity < 0 {
 		newCapacity = db.memtableCap
 	}
-	if db.memtableAdaptive {
-		db.applyAdaptiveMemtableModeLocked()
-	}
-	if db.memtableWarmupActive {
-		db.memtableWarmupActive = false
-		db.updateAdaptiveObservationLocked()
-	}
+	db.prepareNextMemtableModeLocked(nil)
+	activeRoute := cloneMutableRoute(db.currentMutableRoute.Load())
 	if debugRotate {
 		db.debugMemtableRotatef(
 			"event=start path=with_capacity trigger_flush=%t new_capacity=%d mode=%s mutable_bytes=%d queue_len=%d queue_backlog_bytes=%d",
@@ -20367,6 +21631,7 @@ func (db *DB) rotateMemtableLockedWithCapacity(triggerFlush bool, newCapacity in
 		)
 	}
 	db.mutableBytes.Store(0)
+	db.mutableEntries.Store(0)
 	enqueueNS := time.Now().UnixNano()
 	for i := range db.mutableShards {
 		shard := &db.mutableShards[i]
@@ -20377,6 +21642,9 @@ func (db *DB) rotateMemtableLockedWithCapacity(triggerFlush bool, newCapacity in
 			oldMode = debugMemtableModeLabel(shard.mem)
 		}
 		oldShardBytes := shard.bytes
+		if _, ok := shard.mem.(*memtable.AppendOnly); ok {
+			db.observeAppendOnlyMutableEntries(oldLen)
+		}
 		db.retainMutableShardAppendOnlyArenaLocked(i, shard)
 		shard.mem.Freeze()
 		memBytes := shard.mem.Size()
@@ -20385,6 +21653,7 @@ func (db *DB) rotateMemtableLockedWithCapacity(triggerFlush bool, newCapacity in
 		if enqueueShard {
 			db.queue = append(db.queue, shard.mem)
 			db.queueShardIDs = append(db.queueShardIDs, uint16(i))
+			db.queueRouteModes = append(db.queueRouteModes, queueRouteModeForMutableRoute(activeRoute, i))
 			db.queueLaneIDs = append(db.queueLaneIDs, uint16(queueLaneID))
 			db.queueIDs = append(db.queueIDs, db.nextQueueID.Add(1))
 			db.queueEnqueueNS = append(db.queueEnqueueNS, enqueueNS)
@@ -20404,6 +21673,7 @@ func (db *DB) rotateMemtableLockedWithCapacity(triggerFlush bool, newCapacity in
 		shard.mem = mt
 		shard.rng = keyRange{}
 		shard.bytes = 0
+		shard.entries = 0
 		if debugRotate {
 			db.debugMemtableRotatef(
 				"event=shard path=with_capacity shard=%d lane=%d old_mode=%s old_len=%d old_size=%d old_bytes=%d new_mode=%s new_capacity=%d queue_len=%d queue_backlog_bytes=%d",
@@ -20424,6 +21694,7 @@ func (db *DB) rotateMemtableLockedWithCapacity(triggerFlush bool, newCapacity in
 	if len(retiredMems) > 0 {
 		db.pendingRetiredMems = append(db.pendingRetiredMems, retiredMems...)
 	}
+	db.resetAdaptiveMemtableStatsLocked()
 	db.updateMutableThresholdLocked()
 	db.publishMemtablesLocked()
 	if debugRotate {
@@ -20508,6 +21779,19 @@ func (db *DB) maybeRotateMemtable(triggerFlush bool) error {
 	return db.rotateMemtableIfNeeded(triggerFlush)
 }
 
+func (db *DB) forceRotateMemtableToMode(triggerFlush bool, mode memtable.Mode) error {
+	if db == nil {
+		return nil
+	}
+	if !db.rotatePending.CompareAndSwap(false, true) {
+		return nil
+	}
+	defer db.rotatePending.Store(false)
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	return db.rotateMutableShardsLockedWithMode(-1, triggerFlush, &mode)
+}
+
 // rotateMutableShardsLocked rotates the current mutable shards into the queue
 // while holding db.mu (write) and the affected shard locks.
 //
@@ -20515,18 +21799,17 @@ func (db *DB) maybeRotateMemtable(triggerFlush bool) error {
 // for establishing durable boundaries and trimming old segments. This avoids
 // requiring a global writer barrier around WAL rotation.
 func (db *DB) rotateMutableShardsLocked(newCapacity int, triggerFlush bool) error {
+	return db.rotateMutableShardsLockedWithMode(newCapacity, triggerFlush, nil)
+}
+
+func (db *DB) rotateMutableShardsLockedWithMode(newCapacity int, triggerFlush bool, forcedMode *memtable.Mode) error {
 	debugRotate := debugMemtableRotateOn()
 	retiredMems := make([]memtable.Table, 0, len(db.mutableShards))
 	if newCapacity < 0 {
 		newCapacity = db.memtableCap
 	}
-	if db.memtableAdaptive {
-		db.applyAdaptiveMemtableModeLocked()
-	}
-	if db.memtableWarmupActive {
-		db.memtableWarmupActive = false
-		db.updateAdaptiveObservationLocked()
-	}
+	db.prepareNextMemtableModeLocked(forcedMode)
+	activeRoute := cloneMutableRoute(db.currentMutableRoute.Load())
 	var walPaths []string
 	if !db.disableJournal {
 		walPaths = db.currentWALPaths()
@@ -20564,16 +21847,14 @@ func (db *DB) rotateMutableShardsLocked(newCapacity int, triggerFlush bool) erro
 		if debugRotate {
 			oldMode = debugMemtableModeLabel(shard.mem)
 		}
+		oldShardBytes := shard.bytes
 		if _, ok := shard.mem.(*memtable.AppendOnly); ok {
 			db.observeAppendOnlyMutableEntries(oldLen)
 		}
-		oldShardBytes := shard.bytes
 
-		// Remove this shard's contribution from the global byte counter before
-		// resetting it, since writers may still be updating other shards.
-		if shard.bytes != 0 {
-			db.mutableBytes.Add(-shard.bytes)
-		}
+		// Remove this shard's contribution before resetting it, since writers may
+		// still be updating other shards.
+		db.clearMutableShardAccountingLocked(shard)
 
 		// Freeze and enqueue the old mutable shard.
 		db.retainMutableShardAppendOnlyArenaLocked(i, shard)
@@ -20584,6 +21865,7 @@ func (db *DB) rotateMutableShardsLocked(newCapacity int, triggerFlush bool) erro
 		if enqueueShard {
 			db.queue = append(db.queue, shard.mem)
 			db.queueShardIDs = append(db.queueShardIDs, uint16(i))
+			db.queueRouteModes = append(db.queueRouteModes, queueRouteModeForMutableRoute(activeRoute, i))
 			db.queueLaneIDs = append(db.queueLaneIDs, uint16(queueLaneID))
 			db.queueIDs = append(db.queueIDs, db.nextQueueID.Add(1))
 			db.queueEnqueueNS = append(db.queueEnqueueNS, enqueueNS)
@@ -20602,6 +21884,7 @@ func (db *DB) rotateMutableShardsLocked(newCapacity int, triggerFlush bool) erro
 		shard.mem = mt
 		shard.rng = keyRange{}
 		shard.bytes = 0
+		shard.entries = 0
 		if debugRotate {
 			db.debugMemtableRotatef(
 				"event=shard path=mutable_shards shard=%d lane=%d old_mode=%s old_len=%d old_size=%d old_bytes=%d new_mode=%s new_capacity=%d queue_len=%d queue_backlog_bytes=%d",
@@ -20621,7 +21904,7 @@ func (db *DB) rotateMutableShardsLocked(newCapacity int, triggerFlush bool) erro
 	if len(retiredMems) > 0 {
 		db.pendingRetiredMems = append(db.pendingRetiredMems, retiredMems...)
 	}
-
+	db.resetAdaptiveMemtableStatsLocked()
 	db.updateMutableThresholdLocked()
 	db.publishMemtablesLocked()
 	if debugRotate {
@@ -20644,6 +21927,172 @@ func (db *DB) rotateMutableShardsLocked(newCapacity int, triggerFlush bool) erro
 	db.bpCond.Broadcast()
 	db.bpMu.Unlock()
 	return nil
+}
+
+func (db *DB) rotateMutableShardsSelectedLocked(shardIDs []int, newCapacity int, triggerFlush bool, forcedMode *memtable.Mode) error {
+	if len(shardIDs) == 0 {
+		return nil
+	}
+	if newCapacity < 0 {
+		newCapacity = db.memtableCap
+	}
+	db.prepareNextMemtableModeLocked(forcedMode)
+	nextMode := db.currentMemtableMode()
+	activeRoute := cloneMutableRoute(db.currentMutableRoute.Load())
+	retiredMems := make([]memtable.Table, 0, len(shardIDs))
+	enqueueNS := time.Now().UnixNano()
+	sortedShardIDs := append([]int(nil), shardIDs...)
+	sort.Ints(sortedShardIDs)
+	writeAt := 0
+	for _, shardID := range sortedShardIDs {
+		if shardID < 0 || shardID >= len(db.mutableShards) {
+			continue
+		}
+		if writeAt > 0 && sortedShardIDs[writeAt-1] == shardID {
+			continue
+		}
+		sortedShardIDs[writeAt] = shardID
+		writeAt++
+	}
+	sortedShardIDs = sortedShardIDs[:writeAt]
+
+	for _, shardID := range sortedShardIDs {
+		shard := &db.mutableShards[shardID]
+		shard.mu.Lock()
+		oldLen := shard.mem.Len()
+		if _, ok := shard.mem.(*memtable.AppendOnly); ok {
+			db.observeAppendOnlyMutableEntries(oldLen)
+		}
+		db.clearMutableShardAccountingLocked(shard)
+		db.retainMutableShardAppendOnlyArenaLocked(shardID, shard)
+		shard.mem.Freeze()
+		memBytes := shard.mem.Size()
+		queueLaneID := db.laneForShardIndex(shardID)
+		enqueueShard := memBytes > 0 || oldLen > 0
+		if enqueueShard {
+			db.queue = append(db.queue, shard.mem)
+			db.queueShardIDs = append(db.queueShardIDs, uint16(shardID))
+			db.queueRouteModes = append(db.queueRouteModes, queueRouteModeForMutableRoute(activeRoute, shardID))
+			db.queueLaneIDs = append(db.queueLaneIDs, uint16(queueLaneID))
+			db.queueIDs = append(db.queueIDs, db.nextQueueID.Add(1))
+			db.queueEnqueueNS = append(db.queueEnqueueNS, enqueueNS)
+			db.queueBacklogBytes.Add(memBytes)
+			db.queueRanges = append(db.queueRanges, shard.rng)
+			db.queueWALPaths = append(db.queueWALPaths, db.currentWALPaths())
+			if db.valueLogEnabled() {
+				db.queueValueLogPaths = append(db.queueValueLogPaths, db.currentValueLogPaths())
+			} else {
+				db.queueValueLogPaths = append(db.queueValueLogPaths, nil)
+			}
+		} else {
+			retiredMems = append(retiredMems, shard.mem)
+		}
+		mt, err := db.newMutableMemtableWithCapacityMode(newCapacity, nextMode)
+		if err != nil {
+			shard.mu.Unlock()
+			return err
+		}
+		shard.mem = mt
+		shard.rng = keyRange{}
+		shard.bytes = 0
+		shard.entries = 0
+		shard.mu.Unlock()
+	}
+	if len(retiredMems) > 0 {
+		db.pendingRetiredMems = append(db.pendingRetiredMems, retiredMems...)
+	}
+	db.resetAdaptiveMemtableStatsLocked()
+	db.updateMutableThresholdLocked()
+	db.publishMemtablesLocked()
+	if triggerFlush {
+		select {
+		case db.flushCh <- struct{}{}:
+		default:
+		}
+	}
+	db.bpMu.Lock()
+	db.bpCond.Broadcast()
+	db.bpMu.Unlock()
+	return nil
+}
+
+func (db *DB) selectMutableShardsToRotateLocked(candidates []int) []int {
+	threshold := db.mutableFlushThreshold()
+	totalBytes := db.mutableBytes.Load()
+	if totalBytes <= threshold {
+		return nil
+	}
+	type shardUsage struct {
+		idx   int
+		bytes int64
+	}
+	var usages []shardUsage
+	seen := make(map[int]struct{}, len(candidates))
+	addUsage := func(idx int) {
+		if idx < 0 || idx >= len(db.mutableShards) {
+			return
+		}
+		if _, ok := seen[idx]; ok {
+			return
+		}
+		seen[idx] = struct{}{}
+		shard := &db.mutableShards[idx]
+		shard.mu.Lock()
+		bytes := shard.bytes
+		shard.mu.Unlock()
+		if bytes <= 0 {
+			return
+		}
+		usages = append(usages, shardUsage{idx: idx, bytes: bytes})
+	}
+	for _, idx := range candidates {
+		addUsage(idx)
+	}
+	for idx := range db.mutableShards {
+		addUsage(idx)
+	}
+	if len(usages) == 0 {
+		return nil
+	}
+	sort.Slice(usages, func(i, j int) bool {
+		if usages[i].bytes == usages[j].bytes {
+			return usages[i].idx < usages[j].idx
+		}
+		return usages[i].bytes > usages[j].bytes
+	})
+	remaining := totalBytes
+	selected := make([]int, 0, len(usages))
+	for _, usage := range usages {
+		selected = append(selected, usage.idx)
+		remaining -= usage.bytes
+		if remaining <= threshold {
+			break
+		}
+	}
+	return selected
+}
+
+func (db *DB) maybeRotateMutableShards(triggerFlush bool, candidates []int) error {
+	if db.mutableBytes.Load() <= db.mutableFlushThreshold() {
+		return nil
+	}
+	if !db.rotatePending.CompareAndSwap(false, true) {
+		return nil
+	}
+	defer db.rotatePending.Store(false)
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	if db.mutableBytes.Load() <= db.mutableFlushThreshold() {
+		return nil
+	}
+	if db.shouldRotateForTailSequentialRecovery() {
+		return db.rotateMutableShardsLocked(-1, triggerFlush)
+	}
+	selected := db.selectMutableShardsToRotateLocked(candidates)
+	if len(selected) == 0 {
+		return nil
+	}
+	return db.rotateMutableShardsSelectedLocked(selected, -1, triggerFlush, nil)
 }
 
 func (db *DB) cleanupLaneWALWriters(l *lane) {
@@ -21264,6 +22713,7 @@ func (db *DB) removeQueuedUnitsLocked(removeIDs map[uint64]struct{}, units []flu
 
 	dstQueue := db.queue[:0]
 	dstShardIDs := db.queueShardIDs[:0]
+	dstRouteModes := db.queueRouteModes[:0]
 	dstLaneIDs := db.queueLaneIDs[:0]
 	dstIDs := db.queueIDs[:0]
 	dstEnqueueNS := db.queueEnqueueNS[:0]
@@ -21283,6 +22733,11 @@ func (db *DB) removeQueuedUnitsLocked(removeIDs map[uint64]struct{}, units []flu
 		dstQueue = append(dstQueue, mem)
 		if i < len(db.queueShardIDs) {
 			dstShardIDs = append(dstShardIDs, db.queueShardIDs[i])
+		}
+		if i < len(db.queueRouteModes) {
+			dstRouteModes = append(dstRouteModes, db.queueRouteModes[i])
+		} else {
+			dstRouteModes = append(dstRouteModes, memtableRouteHashed)
 		}
 		if i < len(db.queueLaneIDs) {
 			dstLaneIDs = append(dstLaneIDs, db.queueLaneIDs[i])
@@ -21310,6 +22765,7 @@ func (db *DB) removeQueuedUnitsLocked(removeIDs map[uint64]struct{}, units []flu
 
 	db.queue = dstQueue
 	db.queueShardIDs = dstShardIDs
+	db.queueRouteModes = dstRouteModes
 	db.queueLaneIDs = dstLaneIDs
 	db.queueIDs = dstIDs
 	db.queueEnqueueNS = dstEnqueueNS
@@ -21320,6 +22776,7 @@ func (db *DB) removeQueuedUnitsLocked(removeIDs map[uint64]struct{}, units []flu
 	if len(db.queue) == 0 {
 		db.materializationLastDrainUnixNano.Store(time.Now().UnixNano())
 	}
+	db.clearInactiveMutableRouteLocked()
 	db.publishMemtablesLocked()
 }
 
@@ -21376,7 +22833,6 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 		if chunkCap < 0 {
 			chunkCap = 8192
 		}
-
 		type buildResult struct {
 			idx       int
 			runs      [][]batch.Entry
@@ -21384,110 +22840,127 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 			err       error
 		}
 
-		jobs := make(chan int, len(units))
-		results := make(chan buildResult, len(units))
-		closeCh := db.closeCh
-
-		for i := range units {
-			jobs <- i
-		}
-		close(jobs)
-
-		workers := db.flushBuildConcurrency
-		if workers <= 0 {
-			workers = 1
-		}
-		if db.flushBuildAutoConcurrency && totalLen > 0 {
-			// Small inline-heavy entries are typically memory-copy bound; high
-			// worker counts can over-parallelize and add scheduler overhead.
-			// Keep wider concurrency for larger entries where per-entry work is
-			// heavier (pointer/value encoding and compression).
-			bytesPerEntry := totalBytes / int64(totalLen)
-			switch {
-			case bytesPerEntry <= 64:
-				if workers > 4 {
-					workers = 4
-				}
-			case bytesPerEntry <= 256:
-				if workers > 6 {
-					workers = 6
-				}
+		streamSources := false
+		if deleteOps, ok := deleteHeavyStreamingDeleteOps(units, totalLen); ok {
+			streamSources = true
+			backendEntriesCap = db.flushBackendEntriesCapForOps(totalLen, deleteOps, sync)
+		} else if deleteOps, ok := stableFlushStreamingPlan(units, totalLen); ok {
+			streamSources = true
+			if deleteOps > 0 {
+				backendEntriesCap = db.flushBackendEntriesCapForOps(totalLen, deleteOps, sync)
 			}
 		}
-		if workers > len(units) {
-			workers = len(units)
-		}
 
-		done := make(chan struct{}, workers)
-		for w := 0; w < workers; w++ {
-			go func() {
-				defer func() { done <- struct{}{} }()
-				for idx := range jobs {
-					select {
-					case <-closeCh:
-						results <- buildResult{idx: idx, err: errDBClosing}
-						continue
-					default:
+		var unitRuns [][][]batch.Entry
+		if !streamSources {
+			unitRuns = getUnitRuns(len(units))
+			defer func() {
+				for i := range unitRuns {
+					for _, run := range unitRuns[i] {
+						putEntrySlice(run)
 					}
-					runs, deleteOps, err := buildOpRuns(units[idx].mem, chunkCap)
-					results <- buildResult{idx: idx, runs: runs, deleteOps: deleteOps, err: err}
+					putEntryRuns(unitRuns[i])
 				}
+				putUnitRuns(unitRuns)
 			}()
-		}
+			unitDeleteOps := make([]int, len(units))
+			jobs := make(chan int, len(units))
+			results := make(chan buildResult, len(units))
+			closeCh := db.closeCh
 
-		go func() {
-			for i := 0; i < workers; i++ {
-				<-done
+			for i := range units {
+				jobs <- i
 			}
-			close(results)
-		}()
+			close(jobs)
 
-		unitRuns := getUnitRuns(len(units))
-		defer func() {
-			for i := range unitRuns {
-				for _, run := range unitRuns[i] {
-					putEntrySlice(run)
-				}
-				putEntryRuns(unitRuns[i])
+			workers := db.flushBuildConcurrency
+			if workers <= 0 {
+				workers = 1
 			}
-			putUnitRuns(unitRuns)
-		}()
-		unitDeleteOps := make([]int, len(units))
-		failed := false
-		for res := range results {
-			if res.err != nil {
-				if !failed {
-					db.reportError(fmt.Errorf("cachingdb: flush build failed: %w", res.err))
+			if db.flushBuildAutoConcurrency && totalLen > 0 {
+				// Small inline-heavy entries are typically memory-copy bound; high
+				// worker counts can over-parallelize and add scheduler overhead.
+				// Keep wider concurrency for larger entries where per-entry work is
+				// heavier (pointer/value encoding and compression).
+				bytesPerEntry := totalBytes / int64(totalLen)
+				switch {
+				case bytesPerEntry <= 64:
+					if workers > 4 {
+						workers = 4
+					}
+				case bytesPerEntry <= 256:
+					if workers > 6 {
+						workers = 6
+					}
 				}
-				failed = true
-				for _, run := range res.runs {
-					putEntrySlice(run)
+			}
+			if workers > len(units) {
+				workers = len(units)
+			}
+
+			done := make(chan struct{}, workers)
+			for w := 0; w < workers; w++ {
+				go func() {
+					defer func() { done <- struct{}{} }()
+					for idx := range jobs {
+						select {
+						case <-closeCh:
+							results <- buildResult{idx: idx, err: errDBClosing}
+							continue
+						default:
+						}
+						runs, deleteOps, err := buildOpRuns(units[idx].mem, chunkCap)
+						results <- buildResult{idx: idx, runs: runs, deleteOps: deleteOps, err: err}
+					}
+				}()
+			}
+
+			go func() {
+				for i := 0; i < workers; i++ {
+					<-done
 				}
-				putEntryRuns(res.runs)
-				continue
+				close(results)
+			}()
+
+			failed := false
+			for res := range results {
+				if res.err != nil {
+					if !failed {
+						db.reportError(fmt.Errorf("cachingdb: flush build failed: %w", res.err))
+					}
+					failed = true
+					for _, run := range res.runs {
+						putEntrySlice(run)
+					}
+					putEntryRuns(res.runs)
+					continue
+				}
+				if failed {
+					for _, run := range res.runs {
+						putEntrySlice(run)
+					}
+					putEntryRuns(res.runs)
+					continue
+				}
+				unitRuns[res.idx] = res.runs
+				unitDeleteOps[res.idx] = res.deleteOps
 			}
 			if failed {
-				for _, run := range res.runs {
-					putEntrySlice(run)
-				}
-				putEntryRuns(res.runs)
-				continue
+				return false
 			}
-			unitRuns[res.idx] = res.runs
-			unitDeleteOps[res.idx] = res.deleteOps
-		}
-		if failed {
-			return false
-		}
 
-		// Adaptive micro-batching: delete-heavy flushes are expensive to apply in
-		// many intermediate commits (each commit re-writes leaf pages, copying
-		// surviving values). Count deletes and tighten the commit cap in that case.
-		deleteOps := 0
-		for _, n := range unitDeleteOps {
-			deleteOps += n
+			// Adaptive micro-batching: delete-heavy flushes are expensive to apply
+			// in many intermediate commits (each commit re-writes leaf pages,
+			// copying surviving values). The materialized path counts the actual
+			// iterator-visible tombstone mix while building runs.
+			deleteOps := 0
+			for _, n := range unitDeleteOps {
+				deleteOps += n
+			}
+			if deleteOps > 0 {
+				backendEntriesCap = db.flushBackendEntriesCapForOps(totalLen, deleteOps, sync)
+			}
 		}
-		backendEntriesCap = db.flushBackendEntriesCapForOps(totalLen, deleteOps, sync)
 
 		reserveChunkOps := totalLen
 		if reserveChunkOps > backendEntriesCap {
@@ -21507,6 +22980,12 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 		psv, _ := backendBatch.(backendBatchPointerSetterView)
 		ps, _ := backendBatch.(backendBatchPointerSetter)
 		var single [1]batch.Entry
+		reloadBackendBatchMethods := func() {
+			sv, _ = backendBatch.(backendBatchSetViewer)
+			dv, _ = backendBatch.(backendBatchDeleteViewer)
+			psv, _ = backendBatch.(backendBatchPointerSetterView)
+			ps, _ = backendBatch.(backendBatchPointerSetter)
+		}
 
 		// Best-effort: ensure value-log bytes are flushed before we start committing
 		// pointers into the index when we expect to emit multiple backend commits.
@@ -21529,33 +23008,47 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 			// the flush. Write the intermediate chunks without fsync to avoid
 			// repeated pager sync work.
 			err := backendBatch.Write()
-			cerr := backendBatch.Close()
-			if err == nil {
-				err = cerr
-			}
 			if err != nil {
 				return err
 			}
-			backendBatch = db.newBackendBatchWithSize(sizeHint)
-			reserveBackendBatchOps(backendBatch, reserveChunkOps)
-			sv, _ = backendBatch.(backendBatchSetViewer)
-			dv, _ = backendBatch.(backendBatchDeleteViewer)
-			psv, _ = backendBatch.(backendBatchPointerSetterView)
-			ps, _ = backendBatch.(backendBatchPointerSetter)
+			if err := db.recycleBackendBatch(&backendBatch, sizeHint, reserveChunkOps); err != nil {
+				return err
+			}
+			reloadBackendBatchMethods()
 			backendPendingOps = 0
 			return nil
 		}
 
-		heap := getOpMergeHeap(len(unitRuns))
+		heap := getOpMergeHeap(len(units))
 		defer func() { putOpMergeHeap(heap) }()
-		for i := range unitRuns {
-			if len(unitRuns[i]) == 0 {
+		sources := make([]opMergeSource, 0, len(units))
+		sourcesClosed := false
+		defer func() {
+			if !sourcesClosed {
+				_ = closeOpMergeSources(sources)
+			}
+		}()
+		for i := range units {
+			priority := len(units) - 1 - i
+			var source opMergeSource
+			if streamSources {
+				iter := units[i].mem.NewIterator(nil, nil)
+				source = newIteratorOpSource(iter, stableUnsafeIteratorSlices(units[i].mem))
+			} else {
+				if len(unitRuns[i]) == 0 {
+					continue
+				}
+				source = newOpRunIter(unitRuns[i])
+			}
+			if source.Valid() {
+				sources = append(sources, source)
+				heap = append(heap, opMergeItem{source: source, priority: priority, key: source.Key()})
 				continue
 			}
-			it := newOpRunIter(unitRuns[i])
-			if it.Valid() {
-				priority := len(unitRuns) - 1 - i
-				heap = append(heap, opMergeItem{iter: it, priority: priority, key: it.Key()})
+			if err := source.Close(); err != nil {
+				db.reportError(fmt.Errorf("cachingdb: flush failed (iter close): %w", err))
+				_ = backendBatch.Close()
+				return false
 			}
 		}
 		for i := len(heap)/2 - 1; i >= 0; i-- {
@@ -21573,9 +23066,9 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 				if next != nil && bytes.Equal(next.key, currentKey) {
 					shadowed := heap.pop()
 					shadowedOps++
-					shadowed.iter.Next()
-					if shadowed.iter.Valid() {
-						shadowed.key = shadowed.iter.Key()
+					shadowed.source.Next()
+					if shadowed.source.Valid() {
+						shadowed.key = shadowed.source.Key()
 						heap.push(shadowed)
 					}
 					continue
@@ -21583,7 +23076,7 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 				break
 			}
 
-			entry := top.iter.Entry()
+			entry := top.source.Entry()
 			var (
 				err     error
 				applied bool
@@ -21629,12 +23122,18 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 				}
 			}
 
-			top.iter.Next()
-			if top.iter.Valid() {
-				top.key = top.iter.Key()
+			top.source.Next()
+			if top.source.Valid() {
+				top.key = top.source.Key()
 				heap.push(top)
 			}
 		}
+		if err := closeOpMergeSources(sources); err != nil {
+			db.reportError(fmt.Errorf("cachingdb: flush failed (iter close): %w", err))
+			_ = backendBatch.Close()
+			return false
+		}
+		sourcesClosed = true
 		if shadowedOps > 0 {
 			flushMergeShadowedOpsTotal.Add(uint64(shadowedOps))
 			flushMergeParallelShadowedOpsTotal.Add(uint64(shadowedOps))
@@ -21786,6 +23285,12 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 		psv, _ := backendBatch.(backendBatchPointerSetterView)
 		ps, _ := backendBatch.(backendBatchPointerSetter)
 		var single [1]batch.Entry
+		reloadBackendBatchMethods := func() {
+			sv, _ = backendBatch.(backendBatchSetViewer)
+			dv, _ = backendBatch.(backendBatchDeleteViewer)
+			psv, _ = backendBatch.(backendBatchPointerSetterView)
+			ps, _ = backendBatch.(backendBatchPointerSetter)
+		}
 
 		// Best-effort: ensure value-log bytes are flushed before we start committing
 		// pointers into the index when we expect to emit multiple backend commits.
@@ -21810,19 +23315,13 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 			// the flush. Write the intermediate chunks without fsync to avoid
 			// repeated pager sync work.
 			err := backendBatch.Write()
-			cerr := backendBatch.Close()
-			if err == nil {
-				err = cerr
-			}
 			if err != nil {
 				return err
 			}
-			backendBatch = db.newBackendBatchWithSize(sizeHint)
-			reserveBackendBatchOps(backendBatch, reserveChunkOps)
-			sv, _ = backendBatch.(backendBatchSetViewer)
-			dv, _ = backendBatch.(backendBatchDeleteViewer)
-			psv, _ = backendBatch.(backendBatchPointerSetterView)
-			ps, _ = backendBatch.(backendBatchPointerSetter)
+			if err := db.recycleBackendBatch(&backendBatch, sizeHint, reserveChunkOps); err != nil {
+				return err
+			}
+			reloadBackendBatchMethods()
 			backendPendingOps = 0
 			return nil
 		}
@@ -21830,7 +23329,7 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 			stableUnsafe := stableUnsafeIteratorSlices(unit.mem)
 			iter := unit.mem.NewIterator(nil, nil)
 			for iter.Valid() {
-				key := iter.UnsafeKey()
+				key := stableIteratorKey(iter, stableUnsafe)
 				val, ptr, flags := iter.UnsafeEntry()
 				if flags&node.FlagTombstone != 0 {
 					var err error
@@ -22119,12 +23618,13 @@ func (db *DB) flushOneLocked(sync bool) bool {
 		reserveBackendBatchOps(backendBatch, reserveChunkOps)
 		vlogFlushed := false
 		backendPendingOps := 0
+		stableUnsafe := stableUnsafeIteratorSlices(mem)
 		iter := mem.NewIterator(nil, nil) // Returns iterator.UnsafeIterator
 
 		if db.deferredValueLogEnabled() {
 			t0 := time.Now()
 			var err error
-			backendPendingOps, err = db.flushDeferredValueLogMemtable(iter, backendBatch, memLen, sync, laneID)
+			backendPendingOps, err = db.flushDeferredValueLogMemtable(iter, backendBatch, memLen, stableUnsafe, sync, laneID)
 			if err != nil {
 				db.reportError(fmt.Errorf("cachingdb: flush failed (defer vlog): %w", err))
 				_ = iter.Close()
@@ -22174,6 +23674,12 @@ func (db *DB) flushOneLocked(sync bool) bool {
 			psv, _ := backendBatch.(backendBatchPointerSetterView)
 			ps, _ := backendBatch.(backendBatchPointerSetter)
 			var single [1]batch.Entry
+			reloadBackendBatchMethods := func() {
+				sv, _ = backendBatch.(backendBatchSetViewer)
+				dv, _ = backendBatch.(backendBatchDeleteViewer)
+				psv, _ = backendBatch.(backendBatchPointerSetterView)
+				ps, _ = backendBatch.(backendBatchPointerSetter)
+			}
 
 			flushBackendChunk := func() error {
 				if !chunkBackend || backendPendingOps < backendEntriesCap {
@@ -22185,27 +23691,20 @@ func (db *DB) flushOneLocked(sync bool) bool {
 				// repeated pager sync work.
 				db.backendWriteBatchesTotal.Add(1)
 				err := backendBatch.Write()
-				cerr := backendBatch.Close()
-				if err == nil {
-					err = cerr
-				}
 				durBackendWrite += time.Since(tw)
 				if err != nil {
 					return err
 				}
-				backendBatch = db.newBackendBatchWithSize(sizeHint)
-				reserveBackendBatchOps(backendBatch, reserveChunkOps)
-				sv, _ = backendBatch.(backendBatchSetViewer)
-				dv, _ = backendBatch.(backendBatchDeleteViewer)
-				psv, _ = backendBatch.(backendBatchPointerSetterView)
-				ps, _ = backendBatch.(backendBatchPointerSetter)
+				if err := db.recycleBackendBatch(&backendBatch, sizeHint, reserveChunkOps); err != nil {
+					return err
+				}
+				reloadBackendBatchMethods()
 				backendPendingOps = 0
 				return nil
 			}
 
-			stableUnsafe := stableUnsafeIteratorSlices(mem)
 			for iter.Valid() {
-				key := iter.UnsafeKey()
+				key := stableIteratorKey(iter, stableUnsafe)
 				val, ptr, flags := iter.UnsafeEntry()
 				if flags&node.FlagTombstone != 0 {
 					var err error
@@ -22374,6 +23873,9 @@ func (db *DB) flushOneLocked(sync bool) bool {
 	if len(db.queueShardIDs) > 0 {
 		db.queueShardIDs = db.queueShardIDs[1:]
 	}
+	if len(db.queueRouteModes) > 0 {
+		db.queueRouteModes = db.queueRouteModes[1:]
+	}
 	if len(db.queueLaneIDs) > 0 {
 		db.queueLaneIDs = db.queueLaneIDs[1:]
 	}
@@ -22396,6 +23898,7 @@ func (db *DB) flushOneLocked(sync bool) bool {
 	if len(db.queue) == 0 {
 		db.materializationLastDrainUnixNano.Store(time.Now().UnixNano())
 	}
+	db.clearInactiveMutableRouteLocked()
 	db.publishMemtablesLocked()
 
 	deletable := make([]string, 0, len(walPaths))
@@ -22466,17 +23969,25 @@ func (db *DB) flushOneLocked(sync bool) bool {
 //
 // Safety notes:
 //   - We require an empty immutable queue.
-//   - We require global mutable bytes to be zero.
+//   - We require global mutable bytes and entries to be zero. Bytes alone are
+//     not a complete shadowing guard because tombstone-heavy updates can shrink
+//     byte accounting while entries still exist.
 //   - We additionally check the target mutable shard length to avoid races where
 //     mutableBytes is transiently zero while an old view still has entries.
+//   - Routed mutable ranges bypass the hash shard; if a key is currently routed,
+//     do not bypass because the hash shard can be empty while the routed shard
+//     still owns the newest value.
 func (db *DB) canBypassMemtableRead(view *memtableView, key []byte) bool {
-	if view == nil || len(view.queue) != 0 || db.mutableBytes.Load() != 0 {
+	if view == nil || len(view.queue) != 0 || db.queueBacklogBytes.Load() != 0 || db.mutableBytes.Load() != 0 || db.mutableEntries.Load() != 0 {
+		return false
+	}
+	if keyInMutableRoute(view.mutableRoute, key) {
 		return false
 	}
 	if len(view.mutables) == 0 {
 		return true
 	}
-	idx := db.shardIndex(key)
+	idx := db.hashShardIndex(key)
 	if idx >= len(view.mutables) {
 		return true
 	}
@@ -22494,8 +24005,13 @@ func (db *DB) canBypassMemtableReadMany(view *memtableView, keys [][]byte) bool 
 	if len(keys) == 0 {
 		return true
 	}
-	if view == nil || len(view.queue) != 0 || db.mutableBytes.Load() != 0 {
+	if view == nil || len(view.queue) != 0 || db.queueBacklogBytes.Load() != 0 || db.mutableBytes.Load() != 0 || db.mutableEntries.Load() != 0 {
 		return false
+	}
+	for _, key := range keys {
+		if keyInMutableRoute(view.mutableRoute, key) {
+			return false
+		}
 	}
 	n := len(view.mutables)
 	if n == 0 {
@@ -22506,7 +24022,7 @@ func (db *DB) canBypassMemtableReadMany(view *memtableView, keys [][]byte) bool 
 	if n <= 64 {
 		var checkedBits uint64
 		for _, key := range keys {
-			idx := db.shardIndex(key)
+			idx := db.hashShardIndex(key)
 			if idx >= n {
 				continue
 			}
@@ -22525,7 +24041,7 @@ func (db *DB) canBypassMemtableReadMany(view *memtableView, keys [][]byte) bool 
 
 	checked := make([]bool, n)
 	for _, key := range keys {
-		idx := db.shardIndex(key)
+		idx := db.hashShardIndex(key)
 		if idx >= n || checked[idx] {
 			continue
 		}
@@ -22544,14 +24060,20 @@ func (db *DB) getMemtable(key []byte) ([]byte, bool, error) {
 		defer db.releaseMemtableView(view)
 	}
 	var (
-		mutables      []memtable.Table
-		queue         []memtable.Table
-		queueShardIDs []uint16
+		mutables        []memtable.Table
+		queue           []memtable.Table
+		queueShardIDs   []uint16
+		queueRouteModes []uint8
+		queueRanges     []keyRange
+		mutableRoute    *mutableRouteState
 	)
 	if view != nil {
 		mutables = view.mutables
 		queue = view.queue
 		queueShardIDs = view.queueShardIDs
+		queueRouteModes = view.queueRouteModes
+		queueRanges = view.queueRanges
+		mutableRoute = view.mutableRoute
 	} else {
 		// Defensive fallback: should not happen after Open(), but keep safe
 		// behavior for zero-value DBs and tests.
@@ -22564,6 +24086,9 @@ func (db *DB) getMemtable(key []byte) ([]byte, bool, error) {
 		}
 		queue = append([]memtable.Table(nil), db.queue...)
 		queueShardIDs = append([]uint16(nil), db.queueShardIDs...)
+		queueRouteModes = append([]uint8(nil), db.queueRouteModes...)
+		queueRanges = append([]keyRange(nil), db.queueRanges...)
+		mutableRoute = cloneMutableRoute(db.currentMutableRoute.Load())
 		db.mu.RUnlock()
 	}
 
@@ -22571,11 +24096,56 @@ func (db *DB) getMemtable(key []byte) ([]byte, bool, error) {
 		return nil, false, nil
 	}
 
-	// check mutable
+	hashIdx := 0
 	if len(mutables) > 0 {
-		idx := db.shardIndex(key)
-		if idx < len(mutables) && mutables[idx] != nil {
-			val, ptr, flags, found := mutables[idx].GetEntry(key)
+		hashIdx = db.hashShardIndex(key)
+	}
+
+	checkMutable := func(idx int) ([]byte, bool, error) {
+		if idx < 0 || idx >= len(mutables) || mutables[idx] == nil {
+			return nil, false, nil
+		}
+		val, ptr, flags, found := mutables[idx].GetEntry(key)
+		if found {
+			if flags&node.FlagTombstone != 0 {
+				return nil, true, nil
+			}
+			if flags&node.FlagPointer != 0 {
+				if val == nil {
+					readVal, err := db.readValueLog(key, ptr)
+					if err != nil {
+						return nil, true, err
+					}
+					return readVal, true, nil
+				}
+				return val, true, nil
+			}
+			if val == nil {
+				return []byte{}, true, nil
+			}
+			return val, true, nil
+		}
+		return nil, false, nil
+	}
+
+	checkQueue := func(rangedOnly bool) ([]byte, bool, error) {
+		for i := len(queue) - 1; i >= 0; i-- {
+			routeMode := memtableRouteHashed
+			if len(queueRouteModes) > i {
+				routeMode = queueRouteModes[i]
+			}
+			isRanged := routeMode == memtableRouteRanged
+			if rangedOnly != isRanged {
+				continue
+			}
+			if isRanged {
+				if len(queueRanges) > i && !keyInRange(queueRanges[i], key) {
+					continue
+				}
+			} else if len(queueShardIDs) > i && int(queueShardIDs[i]) != hashIdx {
+				continue
+			}
+			val, ptr, flags, found := queue[i].GetEntry(key)
 			if found {
 				if flags&node.FlagTombstone != 0 {
 					return nil, true, nil
@@ -22596,39 +24166,44 @@ func (db *DB) getMemtable(key []byte) ([]byte, bool, error) {
 				return val, true, nil
 			}
 		}
+		return nil, false, nil
 	}
 
-	// check queue backwards (newest first)
-	shardIdx := 0
+	keyRouted := keyInMutableRoute(mutableRoute, key)
+	checkedHashMutable := false
 	if len(mutables) > 0 {
-		shardIdx = db.shardIndex(key)
-	}
-	for i := len(queue) - 1; i >= 0; i-- {
-		if len(queueShardIDs) > i && int(queueShardIDs[i]) != shardIdx {
-			continue
-		}
-		val, ptr, flags, found := queue[i].GetEntry(key)
-		if found {
-			if flags&node.FlagTombstone != 0 {
-				return nil, true, nil
+		var (
+			routeVal   []byte
+			routeFound bool
+			routeErr   error
+		)
+		forEachMutableRouteShardForKey(mutableRoute, key, func(idx int) bool {
+			if idx == hashIdx {
+				checkedHashMutable = true
 			}
-			if flags&node.FlagPointer != 0 {
-				if val == nil {
-					readVal, err := db.readValueLog(key, ptr)
-					if err != nil {
-						return nil, true, err
-					}
-					return readVal, true, nil
-				}
-				return val, true, nil
-			}
-			if val == nil {
-				return []byte{}, true, nil
-			}
-			return val, true, nil
+			routeVal, routeFound, routeErr = checkMutable(idx)
+			return routeErr != nil || routeFound
+		})
+		if routeErr != nil || routeFound {
+			return routeVal, routeFound, routeErr
 		}
 	}
-	return nil, false, nil
+	if !keyRouted && len(mutables) > 0 && !checkedHashMutable {
+		val, found, err := checkMutable(hashIdx)
+		if err != nil || found {
+			return val, found, err
+		}
+	}
+	if val, found, err := checkQueue(true); err != nil || found {
+		return val, found, err
+	}
+	if keyRouted && len(mutables) > 0 && !checkedHashMutable {
+		val, found, err := checkMutable(hashIdx)
+		if err != nil || found {
+			return val, found, err
+		}
+	}
+	return checkQueue(false)
 }
 
 func (db *DB) getMemtableAppend(key, dst []byte) ([]byte, bool, error) {
@@ -22637,14 +24212,20 @@ func (db *DB) getMemtableAppend(key, dst []byte) ([]byte, bool, error) {
 		defer db.releaseMemtableView(view)
 	}
 	var (
-		mutables      []memtable.Table
-		queue         []memtable.Table
-		queueShardIDs []uint16
+		mutables        []memtable.Table
+		queue           []memtable.Table
+		queueShardIDs   []uint16
+		queueRouteModes []uint8
+		queueRanges     []keyRange
+		mutableRoute    *mutableRouteState
 	)
 	if view != nil {
 		mutables = view.mutables
 		queue = view.queue
 		queueShardIDs = view.queueShardIDs
+		queueRouteModes = view.queueRouteModes
+		queueRanges = view.queueRanges
+		mutableRoute = view.mutableRoute
 	} else {
 		db.mu.RLock()
 		if len(db.mutableShards) > 0 {
@@ -22655,6 +24236,9 @@ func (db *DB) getMemtableAppend(key, dst []byte) ([]byte, bool, error) {
 		}
 		queue = append([]memtable.Table(nil), db.queue...)
 		queueShardIDs = append([]uint16(nil), db.queueShardIDs...)
+		queueRouteModes = append([]uint8(nil), db.queueRouteModes...)
+		queueRanges = append([]keyRange(nil), db.queueRanges...)
+		mutableRoute = cloneMutableRoute(db.currentMutableRoute.Load())
 		db.mu.RUnlock()
 	}
 
@@ -22662,11 +24246,56 @@ func (db *DB) getMemtableAppend(key, dst []byte) ([]byte, bool, error) {
 		return dst, false, nil
 	}
 
-	// check mutable
+	hashIdx := 0
 	if len(mutables) > 0 {
-		idx := db.shardIndex(key)
-		if idx < len(mutables) && mutables[idx] != nil {
-			val, ptr, flags, found := mutables[idx].GetEntry(key)
+		hashIdx = db.hashShardIndex(key)
+	}
+
+	checkMutableAppend := func(idx int) ([]byte, bool, error) {
+		if idx < 0 || idx >= len(mutables) || mutables[idx] == nil {
+			return dst, false, nil
+		}
+		val, ptr, flags, found := mutables[idx].GetEntry(key)
+		if found {
+			if flags&node.FlagTombstone != 0 {
+				return dst, true, tree.ErrKeyNotFound
+			}
+			if flags&node.FlagPointer != 0 {
+				if val == nil {
+					out, err := db.readValueLogAppend(key, ptr, dst)
+					if err != nil {
+						return dst, true, err
+					}
+					return out, true, nil
+				}
+				return append(dst, val...), true, nil
+			}
+			if val == nil {
+				return dst, true, nil
+			}
+			return append(dst, val...), true, nil
+		}
+		return dst, false, nil
+	}
+
+	checkQueueAppend := func(rangedOnly bool) ([]byte, bool, error) {
+		for i := len(queue) - 1; i >= 0; i-- {
+			routeMode := memtableRouteHashed
+			if len(queueRouteModes) > i {
+				routeMode = queueRouteModes[i]
+			}
+			isRanged := routeMode == memtableRouteRanged
+			if rangedOnly != isRanged {
+				continue
+			}
+			if isRanged {
+				if len(queueRanges) > i && !keyInRange(queueRanges[i], key) {
+					continue
+				}
+			} else if len(queueShardIDs) > i && int(queueShardIDs[i]) != hashIdx {
+				continue
+			}
+			val, ptr, flags, found := queue[i].GetEntry(key)
 			if found {
 				if flags&node.FlagTombstone != 0 {
 					return dst, true, tree.ErrKeyNotFound
@@ -22687,39 +24316,44 @@ func (db *DB) getMemtableAppend(key, dst []byte) ([]byte, bool, error) {
 				return append(dst, val...), true, nil
 			}
 		}
+		return dst, false, nil
 	}
 
-	// check queue backwards (newest first)
-	shardIdx := 0
+	keyRouted := keyInMutableRoute(mutableRoute, key)
+	checkedHashMutable := false
 	if len(mutables) > 0 {
-		shardIdx = db.shardIndex(key)
-	}
-	for i := len(queue) - 1; i >= 0; i-- {
-		if len(queueShardIDs) > i && int(queueShardIDs[i]) != shardIdx {
-			continue
-		}
-		val, ptr, flags, found := queue[i].GetEntry(key)
-		if found {
-			if flags&node.FlagTombstone != 0 {
-				return dst, true, tree.ErrKeyNotFound
+		var (
+			routeOut   []byte
+			routeFound bool
+			routeErr   error
+		)
+		forEachMutableRouteShardForKey(mutableRoute, key, func(idx int) bool {
+			if idx == hashIdx {
+				checkedHashMutable = true
 			}
-			if flags&node.FlagPointer != 0 {
-				if val == nil {
-					out, err := db.readValueLogAppend(key, ptr, dst)
-					if err != nil {
-						return dst, true, err
-					}
-					return out, true, nil
-				}
-				return append(dst, val...), true, nil
-			}
-			if val == nil {
-				return dst, true, nil
-			}
-			return append(dst, val...), true, nil
+			routeOut, routeFound, routeErr = checkMutableAppend(idx)
+			return routeErr != nil || routeFound
+		})
+		if routeErr != nil || routeFound {
+			return routeOut, routeFound, routeErr
 		}
 	}
-	return dst, false, nil
+	if !keyRouted && len(mutables) > 0 && !checkedHashMutable {
+		out, found, err := checkMutableAppend(hashIdx)
+		if err != nil || found {
+			return out, found, err
+		}
+	}
+	if out, found, err := checkQueueAppend(true); err != nil || found {
+		return out, found, err
+	}
+	if keyRouted && len(mutables) > 0 && !checkedHashMutable {
+		out, found, err := checkMutableAppend(hashIdx)
+		if err != nil || found {
+			return out, found, err
+		}
+	}
+	return checkQueueAppend(false)
 }
 
 type backendManyGetter interface {
@@ -22942,14 +24576,20 @@ func (db *DB) Has(key []byte) (bool, error) {
 		defer db.releaseMemtableView(view)
 	}
 	var (
-		mutables      []memtable.Table
-		queue         []memtable.Table
-		queueShardIDs []uint16
+		mutables        []memtable.Table
+		queue           []memtable.Table
+		queueShardIDs   []uint16
+		queueRouteModes []uint8
+		queueRanges     []keyRange
+		mutableRoute    *mutableRouteState
 	)
 	if view != nil {
 		mutables = view.mutables
 		queue = view.queue
 		queueShardIDs = view.queueShardIDs
+		queueRouteModes = view.queueRouteModes
+		queueRanges = view.queueRanges
+		mutableRoute = view.mutableRoute
 	} else {
 		db.mu.RLock()
 		if len(db.mutableShards) > 0 {
@@ -22960,31 +24600,88 @@ func (db *DB) Has(key []byte) (bool, error) {
 		}
 		queue = append([]memtable.Table(nil), db.queue...)
 		queueShardIDs = append([]uint16(nil), db.queueShardIDs...)
+		queueRouteModes = append([]uint8(nil), db.queueRouteModes...)
+		queueRanges = append([]keyRange(nil), db.queueRanges...)
+		mutableRoute = cloneMutableRoute(db.currentMutableRoute.Load())
 		db.mu.RUnlock()
 	}
 
+	hashIdx := 0
 	if len(mutables) > 0 {
-		idx := db.shardIndex(key)
-		if idx < len(mutables) && mutables[idx] != nil {
-			_, deleted, found := mutables[idx].Get(key)
-			if found {
-				return !deleted, nil
-			}
-		}
+		hashIdx = db.hashShardIndex(key)
 	}
 
-	idx := 0
-	if len(mutables) > 0 {
-		idx = db.shardIndex(key)
-	}
-	for i := len(queue) - 1; i >= 0; i-- {
-		if len(queueShardIDs) > i && int(queueShardIDs[i]) != idx {
-			continue
+	checkMutableHas := func(idx int) (bool, bool) {
+		if idx < 0 || idx >= len(mutables) || mutables[idx] == nil {
+			return false, false
 		}
-		_, deleted, found := queue[i].Get(key)
+		_, deleted, found := mutables[idx].Get(key)
 		if found {
-			return !deleted, nil
+			return !deleted, true
 		}
+		return false, false
+	}
+
+	checkQueueHas := func(rangedOnly bool) (bool, bool) {
+		for i := len(queue) - 1; i >= 0; i-- {
+			routeMode := memtableRouteHashed
+			if len(queueRouteModes) > i {
+				routeMode = queueRouteModes[i]
+			}
+			isRanged := routeMode == memtableRouteRanged
+			if rangedOnly != isRanged {
+				continue
+			}
+			if isRanged {
+				if len(queueRanges) > i && !keyInRange(queueRanges[i], key) {
+					continue
+				}
+			} else if len(queueShardIDs) > i && int(queueShardIDs[i]) != hashIdx {
+				continue
+			}
+			_, deleted, found := queue[i].Get(key)
+			if found {
+				return !deleted, true
+			}
+		}
+		return false, false
+	}
+
+	keyRouted := keyInMutableRoute(mutableRoute, key)
+	checkedHashMutable := false
+	if len(mutables) > 0 {
+		var (
+			routeHas   bool
+			routeFound bool
+		)
+		forEachMutableRouteShardForKey(mutableRoute, key, func(idx int) bool {
+			if idx == hashIdx {
+				checkedHashMutable = true
+			}
+			routeHas, routeFound = checkMutableHas(idx)
+			return routeFound
+		})
+		if routeFound {
+			return routeHas, nil
+		}
+	}
+	if !keyRouted && len(mutables) > 0 && !checkedHashMutable {
+		has, found := checkMutableHas(hashIdx)
+		if found {
+			return has, nil
+		}
+	}
+	if has, found := checkQueueHas(true); found {
+		return has, nil
+	}
+	if keyRouted && len(mutables) > 0 && !checkedHashMutable {
+		has, found := checkMutableHas(hashIdx)
+		if found {
+			return has, nil
+		}
+	}
+	if has, found := checkQueueHas(false); found {
+		return has, nil
 	}
 
 	return db.backend.Has(key)
@@ -23453,8 +25150,10 @@ func (db *DB) Stats() map[string]string {
 	memWrites := db.memtableStats.writes.Load()
 	memSeqWrites := db.memtableStats.seqWrites.Load()
 	memOverwriteWrites := db.memtableStats.overwriteWrites.Load()
+	memDeleteWrites := db.memtableStats.deleteWrites.Load()
 	memIters := db.memtableStats.iterators.Load()
 	memRangeIters := db.memtableStats.rangeIters.Load()
+	memCurrentSeqRun := db.memtableStats.currentSeqRun.Load()
 	memAdaptiveDecisionTotal := db.memtableAdaptiveDecisionTotal.Load()
 	memAdaptiveDecisionReason := db.memtableAdaptiveDecisionReason.Load()
 	memAdaptiveDecisionMode := db.memtableAdaptiveDecisionMode.Load()
@@ -23487,15 +25186,35 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.memtable_stats.writes"] = fmt.Sprintf("%d", memWrites)
 	stats["treedb.cache.memtable_stats.seq_writes"] = fmt.Sprintf("%d", memSeqWrites)
 	stats["treedb.cache.memtable_stats.overwrite_writes"] = fmt.Sprintf("%d", memOverwriteWrites)
+	stats["treedb.cache.memtable_stats.delete_writes"] = fmt.Sprintf("%d", memDeleteWrites)
 	if memWrites > 0 {
 		stats["treedb.cache.memtable_stats.seq_write_pct"] = fmt.Sprintf("%.4f", float64(memSeqWrites)/float64(memWrites))
 		stats["treedb.cache.memtable_stats.overwrite_write_pct"] = fmt.Sprintf("%.4f", float64(memOverwriteWrites)/float64(memWrites))
+		stats["treedb.cache.memtable_stats.delete_write_pct"] = fmt.Sprintf("%.4f", float64(memDeleteWrites)/float64(memWrites))
 	}
 	stats["treedb.cache.memtable_stats.iterators"] = fmt.Sprintf("%d", memIters)
 	stats["treedb.cache.memtable_stats.range_iterators"] = fmt.Sprintf("%d", memRangeIters)
+	stats["treedb.cache.memtable_stats.current_seq_run"] = fmt.Sprintf("%d", memCurrentSeqRun)
 	if memIters > 0 {
 		stats["treedb.cache.memtable_stats.range_iter_pct"] = fmt.Sprintf("%.4f", float64(memRangeIters)/float64(memIters))
 	}
+	btreeBatchStats := memtable.BTreeBatchLoadSortedStatsSnapshot()
+	stats["treedb.cache.memtable_btree.sorted_load.attempts"] = fmt.Sprintf("%d", btreeBatchStats.Attempts)
+	stats["treedb.cache.memtable_btree.sorted_load.attempt_entries"] = fmt.Sprintf("%d", btreeBatchStats.AttemptEntries)
+	stats["treedb.cache.memtable_btree.sorted_load.hits"] = fmt.Sprintf("%d", btreeBatchStats.Hits)
+	stats["treedb.cache.memtable_btree.sorted_load.hit_entries"] = fmt.Sprintf("%d", btreeBatchStats.HitEntries)
+	stats["treedb.cache.memtable_btree.sorted_load.copy_attempts"] = fmt.Sprintf("%d", btreeBatchStats.CopyAttempts)
+	stats["treedb.cache.memtable_btree.sorted_load.copy_hits"] = fmt.Sprintf("%d", btreeBatchStats.CopyHits)
+	stats["treedb.cache.memtable_btree.sorted_load.steal_attempts"] = fmt.Sprintf("%d", btreeBatchStats.StealAttempts)
+	stats["treedb.cache.memtable_btree.sorted_load.steal_hits"] = fmt.Sprintf("%d", btreeBatchStats.StealHits)
+	stats["treedb.cache.memtable_btree.sorted_load.fallback_too_small"] = fmt.Sprintf("%d", btreeBatchStats.FallbackTooSmall)
+	stats["treedb.cache.memtable_btree.sorted_load.fallback_too_small_entries"] = fmt.Sprintf("%d", btreeBatchStats.FallbackTooSmallEntries)
+	stats["treedb.cache.memtable_btree.sorted_load.fallback_nil_key"] = fmt.Sprintf("%d", btreeBatchStats.FallbackNilKey)
+	stats["treedb.cache.memtable_btree.sorted_load.fallback_nil_key_entries"] = fmt.Sprintf("%d", btreeBatchStats.FallbackNilKeyEntries)
+	stats["treedb.cache.memtable_btree.sorted_load.fallback_overlap_last"] = fmt.Sprintf("%d", btreeBatchStats.FallbackOverlapLast)
+	stats["treedb.cache.memtable_btree.sorted_load.fallback_overlap_last_entries"] = fmt.Sprintf("%d", btreeBatchStats.FallbackOverlapLastEntries)
+	stats["treedb.cache.memtable_btree.sorted_load.fallback_non_increasing"] = fmt.Sprintf("%d", btreeBatchStats.FallbackNonIncreasing)
+	stats["treedb.cache.memtable_btree.sorted_load.fallback_non_increasing_entries"] = fmt.Sprintf("%d", btreeBatchStats.FallbackNonIncreasingEntries)
 	stats["treedb.cache.memtable_adaptive.btree_min_iterator_samples_effective"] = fmt.Sprintf("%d", db.adaptiveBTreeMinIteratorSamples())
 	stats["treedb.cache.memtable_adaptive.decision_total"] = fmt.Sprintf("%d", memAdaptiveDecisionTotal)
 	stats["treedb.cache.memtable_adaptive.last_reason"] = adaptiveDecisionReasonString(memAdaptiveDecisionReason)
@@ -23846,6 +25565,7 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.batch_pool.drop_under_pressure.entries_total"] = fmt.Sprintf("%d", batchEntriesPoolDropUnderPressureTotal.Load())
 	stats["treedb.cache.batch_pool.drop_under_pressure.shard_entries_total"] = fmt.Sprintf("%d", batchShardEntriesPoolDropUnderPressureTotal.Load())
 	stats["treedb.cache.batch_pool.drop_under_pressure.int_slices_total"] = fmt.Sprintf("%d", batchIntPoolDropUnderPressureTotal.Load())
+	stats["treedb.cache.batch_pool.drop_under_pressure.wal_records_total"] = fmt.Sprintf("%d", batchWALRecordPoolDropUnderPressureTotal.Load())
 	stats["treedb.process.append_only_direct_arena.retain_max_bytes_effective"] = fmt.Sprintf("%d", appendOnlyRetainBytes)
 	stats["treedb.process.append_only_direct_arena.retain_max_chunks_effective"] = fmt.Sprintf("%d", appendOnlyRetainChunks)
 	stats["treedb.process.append_only_direct_arena.pool_hit_chunks_total"] = fmt.Sprintf("%d", appendOnlyDirectArenaPoolHitChunksTotal.Load())
@@ -23857,6 +25577,7 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.process.batch_pool.drop_under_pressure.entries_total"] = fmt.Sprintf("%d", batchEntriesPoolDropUnderPressureTotal.Load())
 	stats["treedb.process.batch_pool.drop_under_pressure.shard_entries_total"] = fmt.Sprintf("%d", batchShardEntriesPoolDropUnderPressureTotal.Load())
 	stats["treedb.process.batch_pool.drop_under_pressure.int_slices_total"] = fmt.Sprintf("%d", batchIntPoolDropUnderPressureTotal.Load())
+	stats["treedb.process.batch_pool.drop_under_pressure.wal_records_total"] = fmt.Sprintf("%d", batchWALRecordPoolDropUnderPressureTotal.Load())
 	stats["treedb.process.memory.pool_pressure_level"] = poolPressureLevelString(poolPressure.level)
 	stats["treedb.process.memory.pool_pressure_used_bytes"] = fmt.Sprintf("%d", poolPressure.usedBytes)
 	stats["treedb.process.memory.heap_alloc_bytes"] = fmt.Sprintf("%d", poolPressure.heapAllocBytes)
@@ -24938,6 +26659,8 @@ func (db *DB) Stats() map[string]string {
 		stats["treedb.cache.vlog_mmap.dead_mappings.cap_base"] = fmt.Sprintf("%d", valuelog.MaxDeadMappings)
 		stats["treedb.cache.vlog_mmap.max_mapped_sealed_segments"] = fmt.Sprintf("%d", valuelog.MaxMappedSealedSegments)
 		stats["treedb.cache.vlog_mmap.max_mapped_sealed_bytes"] = fmt.Sprintf("%d", valuelog.MaxMappedSealedBytes)
+		stats["treedb.cache.vlog_mmap.max_mapped_leaf_sealed_segments"] = fmt.Sprintf("%d", valuelog.MaxMappedLeafSealedSegments)
+		stats["treedb.cache.vlog_mmap.max_mapped_leaf_sealed_bytes"] = fmt.Sprintf("%d", valuelog.MaxMappedLeafSealedBytes)
 		zombieSegments, zombieBytes, zombiePinnedSegments, zombiePinnedBytes, zombieUnpinnedSegments, zombieUnpinnedBytes := db.valueLogReader.ZombieStats()
 		stats["treedb.cache.vlog_zombie.segments"] = fmt.Sprintf("%d", zombieSegments)
 		stats["treedb.cache.vlog_zombie.bytes"] = fmt.Sprintf("%d", zombieBytes)
@@ -25869,8 +27592,10 @@ type Batch struct {
 	ptrCopyArena       []byte
 	ptrCopyArenaChunks [][]byte
 	ptrCopyBytes       int
+	lastCopiedValue    []byte
 	arenaInFlightBytes int64
 	ptrValueIdxs       []int
+	ridBuf             []uint64
 	walBuf             []logRecord
 	shardIdxs          []int
 	eligibleIdxs       []int
@@ -25878,6 +27603,8 @@ type Batch struct {
 	shardCnts          []int
 	shardEntries       [][]batch.Entry
 	shardIdxSets       [][]int
+	retainMainMems     []memtable.Table
+	ptrTouchedMems     []memtable.Table
 	maxEntries         int
 
 	closed bool
@@ -25886,6 +27613,7 @@ type Batch struct {
 	hasViewOps     bool
 	streamEligible bool
 	streamTried    bool
+	preferWALBuf   bool
 	firstKey       []byte
 	lastKey        []byte
 	batchRange     keyRange
@@ -25914,14 +27642,18 @@ func (db *DB) NewBatchWithSize(size int) *Batch {
 	}
 }
 
-func clampAppendOnlyEntryHint(entries int) int {
-	if entries < appendOnlyEntryHintMinEntries {
+func clampAppendOnlyEntryHint64(entries int64) int {
+	if entries < int64(appendOnlyEntryHintMinEntries) {
 		return appendOnlyEntryHintMinEntries
 	}
-	if entries > appendOnlyEntryHintMaxEntries {
+	if entries > int64(appendOnlyEntryHintMaxEntries) {
 		return appendOnlyEntryHintMaxEntries
 	}
-	return entries
+	return int(entries)
+}
+
+func clampAppendOnlyEntryHint(entries int) int {
+	return clampAppendOnlyEntryHint64(int64(entries))
 }
 
 func (db *DB) observeAppendOnlyMutableEntries(entries int) {
@@ -25929,27 +27661,41 @@ func (db *DB) observeAppendOnlyMutableEntries(entries int) {
 		return
 	}
 	n := clampAppendOnlyEntryHint(entries)
+	n64 := int64(n)
 	for {
-		old := int(db.appendOnlyEntryHint.Load())
-		next := n
+		old32 := db.appendOnlyEntryHint.Load()
+		old := int64(old32)
+		next := n64
 		if old > 0 {
-			if n > old {
+			if n64 > old {
 				// Grow faster so sustained larger mutables avoid repeated regrowth.
-				next = (old*3 + n + 1) / 4
+				next = (old*3 + n64 + 1) / 4
 			} else {
 				// Decay to recent smaller mutables to avoid pinning high-water entry
 				// slices through rotate/checkpoint-heavy workloads.
-				next = (old*7 + n + 3) / 8
+				next = (old*7 + n64 + 3) / 8
 			}
 		}
-		next = clampAppendOnlyEntryHint(next)
+		nextClamped := clampAppendOnlyEntryHint64(next)
+		next = int64(nextClamped)
 		if next == old {
 			return
 		}
-		if db.appendOnlyEntryHint.CompareAndSwap(int32(old), int32(next)) {
+		if db.appendOnlyEntryHint.CompareAndSwap(old32, int32(nextClamped)) {
 			return
 		}
 	}
+}
+
+func (db *DB) appendOnlyEntryHintEntries() int {
+	if db == nil {
+		return 0
+	}
+	hint := db.appendOnlyEntryHint.Load()
+	if hint <= 0 {
+		return 0
+	}
+	return clampAppendOnlyEntryHint64(int64(hint))
 }
 
 func appendOnlyEntriesToCapacity(entries, estimatedBytesPerEntry int) int {
@@ -25979,12 +27725,13 @@ func (db *DB) appendOnlyMemtableCapacityHint(capacity, estimatedBytesPerEntry in
 			capacity = effectiveCap
 		}
 	}
-	hintEntries := int(db.appendOnlyEntryHint.Load())
+	hintEntries32 := db.appendOnlyEntryHint.Load()
+	hintEntries := int64(hintEntries32)
 	if hintEntries <= 0 {
 		return capacity
 	}
-	hintEntries = clampAppendOnlyEntryHint(hintEntries)
-	hintCapacity := appendOnlyEntriesToCapacity(hintEntries, estimatedBytesPerEntry)
+	hintEntriesClamped := clampAppendOnlyEntryHint64(hintEntries)
+	hintCapacity := appendOnlyEntriesToCapacity(hintEntriesClamped, estimatedBytesPerEntry)
 	if hintCapacity < minMemtablePrealloc {
 		hintCapacity = minMemtablePrealloc
 	}
@@ -26289,6 +28036,41 @@ func (db *DB) putBatchIntSlice(idxs []int) {
 	db.batchIntPool.Put(idxs[:0])
 }
 
+func (db *DB) getBatchWALRecords(minCap int) []logRecord {
+	if minCap < 0 {
+		minCap = 0
+	}
+	if db != nil {
+		if pooled := db.batchWALRecordPool.Get(); pooled != nil {
+			if records, ok := pooled.([]logRecord); ok {
+				if cap(records) >= minCap {
+					return records[:0]
+				}
+				if c := cap(records); c > 0 && c <= batchWALRecordPoolMaxRetain {
+					db.batchWALRecordPool.Put(records[:0])
+				}
+			}
+		}
+	}
+	return make([]logRecord, 0, minCap)
+}
+
+func (db *DB) putBatchWALRecords(records []logRecord) {
+	if db == nil || cap(records) == 0 {
+		return
+	}
+	if cap(records) > batchWALRecordPoolMaxRetain {
+		return
+	}
+	if !shouldRetainBatchAuxPoolEntries(currentPoolPressureSnapshot().level) {
+		batchWALRecordPoolDropUnderPressureTotal.Add(1)
+		return
+	}
+	full := records[:cap(records)]
+	clear(full)
+	db.batchWALRecordPool.Put(full[:0])
+}
+
 // Reset clears the batch for reuse without closing it.
 //
 // This intentionally keeps internal buffers to avoid per-batch allocations in
@@ -26322,21 +28104,37 @@ func (b *Batch) Reset() {
 	if b.shardIdxSets != nil {
 		b.shardIdxSets = b.shardIdxSets[:0]
 	}
-	b.recycleCopyArenaChunks()
+	if b.retainMainMems != nil {
+		b.retainMainMems = b.retainMainMems[:0]
+	}
+	if b.ptrTouchedMems != nil {
+		b.ptrTouchedMems = b.ptrTouchedMems[:0]
+	}
+	retainedCopyArena := b.retainCopyArenaChunkOnReset()
+	if !retainedCopyArena {
+		b.recycleCopyArenaChunks()
+	}
 	b.recyclePtrCopyArenaChunks()
-	if b.arenaInFlightBytes > 0 {
+	if !retainedCopyArena && b.arenaInFlightBytes > 0 {
 		b.subArenaInFlightBytes(b.arenaInFlightBytes)
 	}
 	if b.db != nil {
 		b.copyArenaCap = b.db.batchCopyArenaInitCap(0)
 	}
 	b.size = 0
-	b.walBuf = b.walBuf[:0]
+	if b.ridBuf != nil {
+		b.ridBuf = b.ridBuf[:0]
+	}
+	if b.walBuf != nil {
+		b.walBuf = b.walBuf[:0]
+	}
 	b.streamEligible = true
 	b.streamTried = false
+	b.preferWALBuf = true
 	b.hasViewOps = false
 	b.firstKey = nil
 	b.lastKey = nil
+	b.lastCopiedValue = nil
 	b.batchRange = keyRange{}
 	b.maxEntries = 0
 	if b.ptrValueIdxs != nil {
@@ -26380,6 +28178,7 @@ func (b *Batch) drainCopyArenaChunks() [][]byte {
 	b.copyArenaChunks = nil
 	b.copyArena = nil
 	b.copyBytes = 0
+	b.lastCopiedValue = nil
 	return chunks
 }
 
@@ -26392,6 +28191,84 @@ func (b *Batch) recycleCopyArenaChunks() {
 		return
 	}
 	putBatchArenas(chunks)
+}
+
+func (b *Batch) retainCopyArenaChunkOnReset() bool {
+	if b == nil || len(b.copyArenaChunks) == 0 || cap(b.copyArena) == 0 {
+		return false
+	}
+	maxRetain := batchCopyArenaMaxRetain
+	if maxChunk := currentBatchCopyArenaMaxChunk(); maxChunk > 0 && maxChunk < maxRetain {
+		maxRetain = maxChunk
+	}
+	if cap(b.copyArena) > maxRetain {
+		return false
+	}
+	if b.db != nil {
+		b.db.noteBatchArenaChunkFinalize(batchArenaKindMain, len(b.copyArena), cap(b.copyArena))
+	}
+	last := len(b.copyArenaChunks) - 1
+	retained := b.copyArenaChunks[last]
+	if cap(retained) == 0 {
+		retained = b.copyArena[:0]
+	} else {
+		retained = retained[:0]
+	}
+	var droppedBytes int64
+	for i := range b.copyArenaChunks {
+		if i == last {
+			continue
+		}
+		if chunk := b.copyArenaChunks[i]; chunk != nil {
+			droppedBytes += int64(cap(chunk))
+			putBatchArena(chunk)
+			b.copyArenaChunks[i] = nil
+		}
+	}
+	if droppedBytes > 0 {
+		b.subArenaInFlightBytes(droppedBytes)
+	}
+	b.copyArenaChunks[0] = retained
+	for i := 1; i < len(b.copyArenaChunks); i++ {
+		b.copyArenaChunks[i] = nil
+	}
+	b.copyArenaChunks = b.copyArenaChunks[:1]
+	b.copyArena = retained
+	b.copyBytes = 0
+	b.lastCopiedValue = nil
+	return true
+}
+
+func (b *Batch) reclaimOwnedCopyArenaChunks(chunks [][]byte) {
+	if b == nil || len(chunks) == 0 {
+		return
+	}
+	maxRetain := batchCopyArenaMaxRetain
+	if maxChunk := currentBatchCopyArenaMaxChunk(); maxChunk > 0 && maxChunk < maxRetain {
+		maxRetain = maxChunk
+	}
+	last := len(chunks) - 1
+	retained := chunks[last]
+	if cap(retained) == 0 || cap(retained) > maxRetain {
+		putBatchArenas(chunks)
+		return
+	}
+	for i := 0; i < last; i++ {
+		if chunks[i] != nil {
+			putBatchArena(chunks[i])
+			chunks[i] = nil
+		}
+	}
+	retained = retained[:0]
+	chunks[0] = retained
+	for i := 1; i < len(chunks); i++ {
+		chunks[i] = nil
+	}
+	b.copyArena = retained
+	b.copyArenaChunks = chunks[:1]
+	b.copyBytes = 0
+	b.lastCopiedValue = nil
+	b.addArenaInFlightBytes(cap(retained))
 }
 
 func (b *Batch) drainPtrCopyArenaChunks() [][]byte {
@@ -26529,8 +28406,12 @@ func (b *Batch) cloneValue(value []byte) []byte {
 	if len(value) > 0 {
 		batchArenaCopyValueBytesTotal.Add(uint64(len(value)))
 	}
+	if val, ok := b.reuseLastCopiedValue(value); ok {
+		return val
+	}
 	dst := b.arenaCopy(len(value))
 	copy(dst, value)
+	b.rememberLastCopiedValue(dst)
 	return dst
 }
 
@@ -26539,12 +28420,46 @@ func (b *Batch) cloneKeyValue(key, value []byte) ([]byte, []byte) {
 	if n := len(key) + len(value); n > 0 {
 		batchArenaCopyKeyValueBytesTotal.Add(uint64(n))
 	}
+	if valCopy, ok := b.reuseLastCopiedValue(value); ok {
+		keyCopy := b.arenaCopy(len(key))
+		copy(keyCopy, key)
+		return keyCopy, valCopy
+	}
 	buf := b.arenaCopy(len(key) + len(value))
 	keyCopy := buf[:len(key):len(key)]
 	copy(keyCopy, key)
 	valCopy := buf[len(key):]
 	copy(valCopy, value)
+	b.rememberLastCopiedValue(valCopy)
 	return keyCopy, valCopy
+}
+
+func (b *Batch) reuseLastCopiedValue(value []byte) ([]byte, bool) {
+	if b == nil || len(value) == 0 || len(value) > batchCopyValueDedupeMax {
+		return nil, false
+	}
+	last := b.lastCopiedValue
+	if len(last) != len(value) {
+		return nil, false
+	}
+	if len(value) > 1 && (last[0] != value[0] || last[len(last)-1] != value[len(value)-1]) {
+		return nil, false
+	}
+	if !bytes.Equal(last, value) {
+		return nil, false
+	}
+	return last, true
+}
+
+func (b *Batch) rememberLastCopiedValue(value []byte) {
+	if b == nil {
+		return
+	}
+	if len(value) == 0 || len(value) > batchCopyValueDedupeMax {
+		b.lastCopiedValue = nil
+		return
+	}
+	b.lastCopiedValue = value
 }
 
 func (b *Batch) clonePtrValue(value []byte) []byte {
@@ -26625,6 +28540,9 @@ func (b *Batch) releaseCompactedBatchArenaTail(kind batchArenaKind, chunks *[][]
 	if b.db != nil {
 		b.db.noteBatchArenaChunkFinalize(kind, used, classCap)
 		b.db.noteBatchArenaTailCompact(copiedBytes, classCap)
+	}
+	if kind == batchArenaKindMain {
+		b.lastCopiedValue = nil
 	}
 	*arena = nil
 }
@@ -26802,6 +28720,58 @@ func (b *Batch) SetView(key, value []byte) error {
 	return nil
 }
 
+// SetStealView records a Put without copying key/value bytes. Unlike SetView,
+// the DB may retain key/value references beyond Write or Close.
+//
+// Callers must treat key/value as transferred and immutable after this call:
+// do not mutate, reuse, or repurpose their backing arrays in any way that
+// could affect stored data.
+func (b *Batch) SetStealView(key, value []byte) error {
+	if b.closed {
+		return ErrBatchClosed
+	}
+	if len(key) == 0 {
+		return ErrKeyEmpty
+	}
+	if value == nil {
+		return ErrValueNil
+	}
+
+	if b.backend != nil {
+		b.batchRange.add(key)
+		b.size += len(key) + len(value)
+		if ssv, ok := b.backend.(interface{ SetStealView(key, value []byte) error }); ok {
+			return ssv.SetStealView(key, value)
+		}
+		if sv, ok := b.backend.(interface{ SetView(key, value []byte) error }); ok {
+			return sv.SetView(key, value)
+		}
+		return b.backend.Set(key, value)
+	}
+
+	if b.streamEligible {
+		if b.firstKey == nil {
+			b.firstKey = key
+			b.lastKey = key
+		} else {
+			if bytes.Compare(key, b.lastKey) <= 0 {
+				b.streamEligible = false
+			}
+			b.lastKey = key
+		}
+	}
+	b.entries = append(b.entries, batch.Entry{
+		Type:  batch.OpPut,
+		Key:   key,
+		Value: value,
+	})
+	b.noteEntryAppend()
+	b.size += len(key) + len(value)
+
+	b.maybeSwitchToStreaming()
+	return nil
+}
+
 func (b *Batch) Delete(key []byte) error {
 	if b.closed {
 		return ErrBatchClosed
@@ -26942,6 +28912,7 @@ const (
 	batchCopyArenaUnsizedInit   = 8 << 10
 	batchCopyArenaBytesPerEntry = 192
 	batchCopyArenaInitMax       = 2 << 20
+	batchCopyValueDedupeMax     = 1 << 20
 	// Keep retained batch-copy chunks bounded to 1MiB. Larger chunks are often
 	// underfilled in restore-heavy traffic and can disproportionately inflate
 	// peak RSS when multiple memtable views pin retired arenas.
@@ -26961,6 +28932,7 @@ const (
 	batchArenaTailCompactPinnedMaxFillDenominator = 4
 	batchEntriesPoolMaxRetain                     = 16 << 10
 	batchIntSlicePoolMaxRetain                    = 16 << 10
+	batchWALRecordPoolMaxRetain                   = 16 << 10
 	// When deferred iterator views pin retired memtables, reduce retained
 	// batch-arena headroom to limit extra lease growth under that pressure.
 	batchArenaDeferredPressureThresholdBytes = int64(512 << 20)
@@ -27063,11 +29035,98 @@ func (b *Batch) WriteSync() error {
 	return b.write(true)
 }
 
+func (b *Batch) isDeleteOnly() bool {
+	if b == nil || len(b.entries) == 0 {
+		return false
+	}
+	for i := range b.entries {
+		if b.entries[i].Type != batch.OpDelete {
+			return false
+		}
+	}
+	return true
+}
+
+func (b *Batch) trySkipDeleteOnlyWriteOnEmptyDB() (bool, error) {
+	if b == nil || b.db == nil || !b.db.disableJournal || b.backend != nil || !b.isDeleteOnly() {
+		return false, nil
+	}
+
+	// When WAL is disabled and there is no durable or in-memory state, delete-only
+	// batches against missing keys are true no-ops. Validate backend emptiness under
+	// flush exclusion so direct backend bypass writes cannot race this check.
+	if b.db.mutableBytes.Load() != 0 {
+		return false, nil
+	}
+	b.db.mu.RLock()
+	if len(b.db.queue) != 0 || (b.db.backendRangeKnown && b.db.backendRange.valid) {
+		b.db.mu.RUnlock()
+		return false, nil
+	}
+	cachedEmpty := b.db.backendRangeKnown
+	b.db.mu.RUnlock()
+
+	b.db.flushMu.Lock()
+	defer b.db.flushMu.Unlock()
+	b.db.writeMu.Lock()
+	defer b.db.writeMu.Unlock()
+
+	if b.db.mutableBytes.Load() != 0 {
+		return false, nil
+	}
+	b.db.mu.Lock()
+	queueLen := len(b.db.queue)
+	known := b.db.backendRangeKnown
+	actualBackendRange := b.db.backendRange
+	b.db.mu.Unlock()
+
+	if queueLen != 0 || (known && actualBackendRange.valid) {
+		return false, nil
+	}
+	if !known && !cachedEmpty {
+		var err error
+		actualBackendRange, known, err = b.db.computeBackendRange()
+		if err != nil {
+			return false, err
+		}
+
+		b.db.mu.Lock()
+		if known {
+			b.db.backendRangeKnown = true
+			b.db.backendRange = keyRange{}
+			if actualBackendRange.valid {
+				b.db.backendRange.add(actualBackendRange.min)
+				b.db.backendRange.add(actualBackendRange.max)
+			}
+		} else {
+			b.db.backendRangeKnown = false
+			b.db.backendRange = keyRange{}
+		}
+		queueLen = len(b.db.queue)
+		b.db.mu.Unlock()
+	}
+
+	if !known || actualBackendRange.valid || queueLen != 0 || b.db.mutableBytes.Load() != 0 {
+		return false, nil
+	}
+
+	b.updateBatchEntryHint()
+	b.updateBatchCopyHint()
+	b.Reset()
+	return true, nil
+}
+
 func (b *Batch) write(sync bool) error {
 	if b.closed {
 		return ErrBatchClosed
 	}
 	b.db.waitForCheckpoint()
+
+	if ok, err := b.trySkipDeleteOnlyWriteOnEmptyDB(); err != nil {
+		return err
+	} else if ok {
+		return nil
+	}
 
 	if b.backend != nil {
 		var err error
@@ -27217,8 +29276,44 @@ func (b *Batch) tryWriteWALOffStreamBypass(sync bool) (bool, error) {
 }
 
 func (b *Batch) writeRegular(syncWrite bool) error {
-	b.db.writeMu.RLock()
+	routeSortedBatch := false
+	if b.db != nil &&
+		len(b.db.mutableShards) > 1 &&
+		b.streamEligible &&
+		!b.hasViewOps &&
+		len(b.entries) >= 256 {
+		routeSortedBatch = true
+		for i := range b.entries {
+			if b.entries[i].Type != batch.OpPut {
+				routeSortedBatch = false
+				break
+			}
+		}
+	}
+
+	if routeSortedBatch {
+		b.db.writeMu.Lock()
+	} else {
+		b.db.writeMu.RLock()
+	}
+	unlockWrite := func() {
+		if routeSortedBatch {
+			b.db.writeMu.Unlock()
+		} else {
+			b.db.writeMu.RUnlock()
+		}
+	}
+	if routeSortedBatch {
+		b.db.mu.Lock()
+		_, err := b.db.ensureMutableRouteForSortedBatchLocked(b.entries)
+		b.db.mu.Unlock()
+		if err != nil {
+			unlockWrite()
+			return err
+		}
+	}
 	needRotate := false
+	needForcedRotate := false
 	needSyncBarrier := false
 
 	// 1. Memtable capacity pre-check
@@ -27240,6 +29335,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 		clear(shardCounts)
 	}
 	b.shardCnts = shardCounts
+	touchedShardIdxs := make([]int, 0, shardCount)
 
 	shardIdxs := b.shardIdxs
 	if cap(shardIdxs) < len(b.entries) {
@@ -27249,14 +29345,20 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 		shardIdxs = shardIdxs[:len(b.entries)]
 	}
 	b.shardIdxs = shardIdxs
+	deleteCount := 0
 	allDeletes := true
 	for i := range b.entries {
 		op := &b.entries[i]
-		if op.Type != batch.OpDelete {
+		if op.Type == batch.OpDelete {
+			deleteCount++
+		} else {
 			allDeletes = false
 		}
-		idx := b.db.shardIndex(op.Key)
+		idx := b.db.shardIndexForWrite(op.Key)
 		shardIdxs[i] = idx
+		if shardCounts[idx] == 0 {
+			touchedShardIdxs = append(touchedShardIdxs, idx)
+		}
 		shardCounts[idx]++
 		add := int64(len(op.Key))
 		if op.Type == batch.OpPut {
@@ -27264,8 +29366,20 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 		}
 		shardAdds[idx] += add
 	}
-	retainMainMems := make([]memtable.Table, 0, shardCount)
-	retainMainSeen := make(map[memtable.Table]struct{}, shardCount)
+	retainMainMems := b.retainMainMems
+	if cap(retainMainMems) < shardCount {
+		retainMainMems = make([]memtable.Table, 0, shardCount)
+	} else {
+		retainMainMems = retainMainMems[:0]
+	}
+	globalSortedRun := b.streamEligible && len(b.entries) > 0
+	var globalSortedFirst, globalSortedLast []byte
+	globalSortedCount := 0
+	if globalSortedRun {
+		globalSortedFirst = b.entries[0].Key
+		globalSortedLast = b.entries[len(b.entries)-1].Key
+		globalSortedCount = len(b.entries)
+	}
 	for i, add := range shardAdds {
 		if add == 0 {
 			continue
@@ -27275,7 +29389,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 		over := b.db.shardExceedsLimit(shard, add)
 		shard.mu.Unlock()
 		if over {
-			b.db.writeMu.RUnlock()
+			unlockWrite()
 			return ErrMemtableFull
 		}
 	}
@@ -27384,15 +29498,21 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 	if needLaneForPointers || needLaneForJournal {
 		l, err := b.db.pickLane(durability == journalDurabilitySync, -1)
 		if err != nil {
-			b.db.writeMu.RUnlock()
+			unlockWrite()
 			return err
 		}
 		lane = l
 		if durability == journalDurabilitySync {
 			defer b.db.releaseLaneSync(lane)
 		}
-		if !b.db.disableJournal {
-			rids = make([]uint64, len(b.entries))
+		if !b.db.disableJournal && allowPointers {
+			if cap(b.ridBuf) < len(b.entries) {
+				b.ridBuf = make([]uint64, len(b.entries))
+			} else {
+				b.ridBuf = b.ridBuf[:len(b.entries)]
+				clear(b.ridBuf)
+			}
+			rids = b.ridBuf
 		}
 	}
 
@@ -27481,7 +29601,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 			for _, laneID := range activeLaneIDs {
 				lb := &laneBatches[laneID]
 				if lb.err != nil {
-					b.db.writeMu.RUnlock()
+					unlockWrite()
 					return lb.err
 				}
 			}
@@ -27530,13 +29650,13 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 			)
 			valueRecords, groups, outerArena, buildErr := b.db.buildOuterLeafValueRecords(keys, values)
 			if buildErr != nil {
-				b.db.writeMu.RUnlock()
+				unlockWrite()
 				return buildErr
 			}
 			if len(valueRecords) == 0 {
 				putValueLogRecordsNoClear(valueRecords)
 				putOuterLeafArena(outerArena)
-				b.db.writeMu.RUnlock()
+				unlockWrite()
 				return fmt.Errorf("cachingdb: empty value-log record set for %d eligible ops", eligibleCount)
 			}
 			defer putValueLogRecordsNoClear(valueRecords)
@@ -27548,7 +29668,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 				if rids != nil {
 					group := groups[i]
 					if group.start < 0 || group.end < group.start || group.end > len(eligibleIdxs) {
-						b.db.writeMu.RUnlock()
+						unlockWrite()
 						return fmt.Errorf("cachingdb: value-log group out of range [%d,%d) len=%d", group.start, group.end, len(eligibleIdxs))
 					}
 					for srcPos := group.start; srcPos < group.end; srcPos++ {
@@ -27559,12 +29679,12 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 			}
 			ptrs, buildErr = b.db.appendValueLogForRecords(lane, valueRecords, durability)
 			if buildErr != nil {
-				b.db.writeMu.RUnlock()
+				unlockWrite()
 				return buildErr
 			}
 			if len(ptrs) != len(groups) {
 				putValueLogPtrs(ptrs)
-				b.db.writeMu.RUnlock()
+				unlockWrite()
 				return fmt.Errorf("cachingdb: value-log pointer group count mismatch expected=%d got=%d", len(groups), len(ptrs))
 			}
 			defer putValueLogPtrs(ptrs)
@@ -27574,7 +29694,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 				ptr := ptrs[i]
 				group := groups[i]
 				if group.start < 0 || group.end < group.start || group.end > len(eligibleIdxs) {
-					b.db.writeMu.RUnlock()
+					unlockWrite()
 					return fmt.Errorf("cachingdb: value-log pointer group out of range [%d,%d) len=%d", group.start, group.end, len(eligibleIdxs))
 				}
 				for srcPos := group.start; srcPos < group.end; srcPos++ {
@@ -27599,26 +29719,28 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 	}
 
 	if !b.db.disableJournal {
-		records := b.walBuf[:0]
-		if cap(records) < len(b.entries) {
-			records = make([]logRecord, 0, len(b.entries))
-		}
-		for i := range b.entries {
-			op := &b.entries[i]
-			switch op.Type {
-			case batch.OpDelete:
-				records = append(records, logRecord{Op: logOpDelete, Key: op.Key})
-			case batch.OpPut:
-				if rids != nil && rids[i] != 0 {
-					records = append(records, logRecord{Op: logOpSetRID, Key: op.Key, RID: rids[i]})
-				} else {
-					records = append(records, logRecord{Op: logOpSetInline, Key: op.Key, Value: op.Value})
+		if b.preferWALBuf {
+			records := b.walBuf[:0]
+			if cap(records) < len(b.entries) {
+				if cap(records) > 0 {
+					b.db.putBatchWALRecords(records)
 				}
+				records = b.db.getBatchWALRecords(len(b.entries))
 			}
-		}
-		b.walBuf = records
-		if err := b.db.appendWAL(lane, records, durability); err != nil {
-			b.db.writeMu.RUnlock()
+			for i := range b.entries {
+				rid := uint64(0)
+				if rids != nil && i < len(rids) {
+					rid = rids[i]
+				}
+				records = append(records, logRecordForBatchEntry(&b.entries[i], rid, 0))
+			}
+			b.walBuf = records
+			if err := b.db.appendWAL(lane, records, durability); err != nil {
+				unlockWrite()
+				return err
+			}
+		} else if err := b.db.appendWALBatchEntries(lane, b.entries, rids, durability); err != nil {
+			unlockWrite()
 			return err
 		}
 	}
@@ -27666,6 +29788,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 			}
 			shard := &b.db.mutableShards[i]
 			shard.mu.Lock()
+			retainMain := false
 			useSteal, stealSuppressedDeferred := cachedBatchWriteUseSteal(b.db, shard.mem)
 			useSteal = allowBatchArenaBorrow && useSteal
 			if stealSuppressedDeferred && allowBatchArenaBorrow {
@@ -27673,10 +29796,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 				batchArenaStealSuppressedDeferredEntriesTotal.Add(uint64(len(idxs)))
 			}
 			if useSteal && cachedBatchWriteNeedsBatchArenaRetention(shard.mem) {
-				if _, ok := retainMainSeen[shard.mem]; !ok {
-					retainMainSeen[shard.mem] = struct{}{}
-					retainMainMems = append(retainMainMems, shard.mem)
-				}
+				retainMain = true
 			}
 			if b.streamEligible {
 				first := b.entries[idxs[0]].Key
@@ -27690,93 +29810,171 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 				if len(idxs) > 1 {
 					shard.rng.add(last)
 				}
-				b.db.noteWriteSortedRun(first, last, len(idxs))
 			} else {
 				for _, entryIdx := range idxs {
 					key := b.entries[entryIdx].Key
 					memtableBatchDelete(shard.mem, useSteal, key)
 					shard.rng.add(key)
-					b.db.noteWriteKey(key)
 				}
 			}
 			newBytes := shard.mem.Size()
-			delta := newBytes - shard.bytes
-			shard.bytes = newBytes
-			b.db.mutableBytes.Add(delta)
+			newEntries := shard.mem.Len()
+			b.db.updateMutableShardAccountingLocked(shard, newBytes, newEntries)
 			shard.mu.Unlock()
+			if retainMain {
+				retainMainMems = append(retainMainMems, shard.mem)
+			}
 		}
 	} else {
-		shardEntries := b.shardEntries
-		if cap(shardEntries) < shardCount {
-			shardEntries = make([][]batch.Entry, shardCount)
+		shardIdxSets := b.shardIdxSets
+		if cap(shardIdxSets) < shardCount {
+			shardIdxSets = make([][]int, shardCount)
 		} else {
-			shardEntries = shardEntries[:shardCount]
-			for i := range shardEntries {
-				shardEntries[i] = shardEntries[i][:0]
+			shardIdxSets = shardIdxSets[:shardCount]
+			for i := range shardIdxSets {
+				shardIdxSets[i] = shardIdxSets[i][:0]
 			}
 		}
-		b.shardEntries = shardEntries
+		b.shardIdxSets = shardIdxSets
 		for i, count := range shardCounts {
-			if count > 0 {
-				entries := shardEntries[i]
-				if cap(entries) < count {
-					entries = b.db.getBatchShardEntries(count)
-				} else {
-					entries = entries[:0]
-				}
-				shardEntries[i] = entries
+			if count <= 0 {
+				continue
 			}
+			idxs := shardIdxSets[i]
+			if cap(idxs) < count {
+				idxs = b.db.getBatchIntSlice(count)
+			} else {
+				idxs = idxs[:0]
+			}
+			shardIdxSets[i] = idxs
 		}
-		for i, op := range b.entries {
+		for i := range b.entries {
 			idx := shardIdxs[i]
-			shardEntries[idx] = append(shardEntries[idx], op)
+			shardIdxSets[idx] = append(shardIdxSets[idx], i)
+		}
+
+		shardEntries := b.shardEntries
+		shardEntriesInit := false
+		materializeShardEntries := func(shardID int, idxs []int) []batch.Entry {
+			if !shardEntriesInit {
+				if cap(shardEntries) < shardCount {
+					shardEntries = make([][]batch.Entry, shardCount)
+				} else {
+					shardEntries = shardEntries[:shardCount]
+					for i := range shardEntries {
+						shardEntries[i] = shardEntries[i][:0]
+					}
+				}
+				shardEntriesInit = true
+				b.shardEntries = shardEntries
+			}
+			entries := shardEntries[shardID]
+			if cap(entries) < len(idxs) {
+				entries = b.db.getBatchShardEntries(len(idxs))
+			} else {
+				entries = entries[:0]
+			}
+			for _, entryIdx := range idxs {
+				entries = append(entries, b.entries[entryIdx])
+			}
+			shardEntries[shardID] = entries
+			return entries
 		}
 
 		// 3. Memtable Update
-		for i := range shardEntries {
-			entries := shardEntries[i]
-			if len(entries) == 0 {
+		for i := range shardIdxSets {
+			idxs := shardIdxSets[i]
+			if len(idxs) == 0 {
 				continue
 			}
 			shard := &b.db.mutableShards[i]
 			shard.mu.Lock()
+			retainMain := false
 			useStream := b.streamEligible
 			useSteal, stealSuppressedDeferred := cachedBatchWriteUseSteal(b.db, shard.mem)
 			useSteal = allowBatchArenaBorrow && useSteal
 			if stealSuppressedDeferred && allowBatchArenaBorrow {
 				batchArenaStealSuppressedDeferredTotal.Add(1)
-				batchArenaStealSuppressedDeferredEntriesTotal.Add(uint64(len(entries)))
+				batchArenaStealSuppressedDeferredEntriesTotal.Add(uint64(len(idxs)))
 			}
 			if useSteal && cachedBatchWriteNeedsBatchArenaRetention(shard.mem) {
-				if _, ok := retainMainSeen[shard.mem]; !ok {
-					retainMainSeen[shard.mem] = struct{}{}
-					retainMainMems = append(retainMainMems, shard.mem)
-				}
+				retainMain = true
 			}
 			storeInlinePtrValues := !b.db.memtableValueLogPointers
-			if useStream && useSteal {
-				if applier, ok := shard.mem.(memtable.TrustedSortedBatchApplier); ok {
-					applier.ApplyStealSortedBatchTrusted(entries, nil)
-				} else if applier, ok := shard.mem.(memtable.SortedBatchApplier); ok {
-					applier.ApplyStealSortedBatch(entries, nil)
+			firstKey := b.entries[idxs[0]].Key
+			lastKey := b.entries[idxs[len(idxs)-1]].Key
+			handledCopyStream := false
+			if useStream && !useSteal {
+				if applier, ok := shard.mem.(memtable.TrustedSortedBatchCopyIndexApplier); ok {
+					applier.ApplyCopySortedBatchIndicesTrusted(b.entries, idxs, storeInlinePtrValues, nil)
+					shard.rng.add(firstKey)
+					if len(idxs) > 1 {
+						shard.rng.add(lastKey)
+					}
+					handledCopyStream = true
+				}
+			}
+			if handledCopyStream {
+				// Applied by a copy-owning sorted index fast path above.
+			} else if useStream && useSteal {
+				if applier, ok := shard.mem.(memtable.TrustedSortedBatchIndexApplier); ok {
+					applier.ApplyStealSortedBatchIndicesTrusted(b.entries, idxs, nil)
 				} else {
-					for _, op := range entries {
-						if op.Type == batch.OpDelete {
-							memtableBatchDelete(shard.mem, true, op.Key)
-						} else {
-							memtableBatchSet(shard.mem, true, allowBatchArenaBorrow, storeInlinePtrValues, op)
+					entries := materializeShardEntries(i, idxs)
+					if applier, ok := shard.mem.(memtable.TrustedSortedBatchApplier); ok {
+						applier.ApplyStealSortedBatchTrusted(entries, nil)
+					} else if applier, ok := shard.mem.(memtable.SortedBatchApplier); ok {
+						applier.ApplyStealSortedBatch(entries, nil)
+					} else {
+						for _, op := range entries {
+							if op.Type == batch.OpDelete {
+								memtableBatchDelete(shard.mem, true, op.Key)
+							} else {
+								memtableBatchSet(shard.mem, true, allowBatchArenaBorrow, storeInlinePtrValues, op)
+							}
 						}
 					}
 				}
-				first := entries[0].Key
-				last := entries[len(entries)-1].Key
-				shard.rng.add(first)
-				if len(entries) > 1 {
-					shard.rng.add(last)
+				shard.rng.add(firstKey)
+				if len(idxs) > 1 {
+					shard.rng.add(lastKey)
 				}
-				b.db.noteWriteSortedRun(first, last, len(entries))
-			} else {
-				for _, op := range entries {
+			} else if useStream && allowBatchArenaBorrow {
+				borrowedValues := false
+				if applier, ok := shard.mem.(memtable.TrustedSortedBatchBorrowValueIndexApplier); ok {
+					borrowedValues = memtableBatchBorrowsValuesIdxs(shard.mem, true, storeInlinePtrValues, b.entries, idxs)
+					applier.ApplyBorrowValueSortedBatchIndicesTrusted(b.entries, idxs, storeInlinePtrValues, nil)
+				} else {
+					if applier, ok := shard.mem.(memtable.TrustedSortedBatchBorrowValueApplier); ok {
+						entries := materializeShardEntries(i, idxs)
+						borrowedValues = memtableBatchBorrowsValues(shard.mem, true, storeInlinePtrValues, entries)
+						applier.ApplyBorrowValueSortedBatchTrusted(entries, storeInlinePtrValues, nil)
+					} else if applier, ok := shard.mem.(memtable.SortedBatchBorrowValueApplier); ok {
+						entries := materializeShardEntries(i, idxs)
+						borrowedValues = memtableBatchBorrowsValues(shard.mem, true, storeInlinePtrValues, entries)
+						applier.ApplyBorrowValueSortedBatch(entries, storeInlinePtrValues, nil)
+					} else {
+						borrowedValues = memtableBatchBorrowsValuesIdxs(shard.mem, true, storeInlinePtrValues, b.entries, idxs)
+						for _, entryIdx := range idxs {
+							op := b.entries[entryIdx]
+							if op.Type == batch.OpDelete {
+								memtableBatchDelete(shard.mem, false, op.Key)
+							} else {
+								memtableBatchSet(shard.mem, false, true, storeInlinePtrValues, op)
+							}
+						}
+					}
+				}
+				if borrowedValues {
+					retainMain = true
+				}
+				shard.rng.add(firstKey)
+				if len(idxs) > 1 {
+					shard.rng.add(lastKey)
+				}
+			} else if !useStream {
+				for _, entryIdx := range idxs {
+					op := b.entries[entryIdx]
 					if op.Type == batch.OpDelete {
 						memtableBatchDelete(shard.mem, useSteal, op.Key)
 					} else {
@@ -27792,35 +29990,65 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 						}
 						memtableBatchSet(shard.mem, useSteal, allowBatchArenaBorrow, storeInlinePtrValues, op)
 						if borrowed {
-							if _, ok := retainMainSeen[shard.mem]; !ok {
-								retainMainSeen[shard.mem] = struct{}{}
-								retainMainMems = append(retainMainMems, shard.mem)
-							}
+							retainMain = true
 						}
 					}
-					if useStream {
-						// Preserve sorted-run accounting even when we avoid Steal.
-						continue
-					}
 					shard.rng.add(op.Key)
-					b.db.noteWriteKey(op.Key)
-				}
-				if useStream {
-					first := entries[0].Key
-					last := entries[len(entries)-1].Key
-					shard.rng.add(first)
-					if len(entries) > 1 {
-						shard.rng.add(last)
+					if op.Type == batch.OpDelete {
+						b.db.noteDeleteKey(op.Key)
+					} else {
+						b.db.noteWriteKey(op.Key)
 					}
-					b.db.noteWriteSortedRun(first, last, len(entries))
+				}
+			} else {
+				for _, entryIdx := range idxs {
+					op := b.entries[entryIdx]
+					if op.Type == batch.OpDelete {
+						memtableBatchDelete(shard.mem, useSteal, op.Key)
+					} else {
+						borrowed := false
+						if allowBatchArenaBorrow && !useSteal {
+							if _, ok := shard.mem.(memtable.ValueBorrower); ok {
+								if op.IsPtr {
+									borrowed = storeInlinePtrValues && len(op.Value) > 0
+								} else {
+									borrowed = len(op.Value) > 0
+								}
+							}
+						}
+						memtableBatchSet(shard.mem, useSteal, allowBatchArenaBorrow, storeInlinePtrValues, op)
+						if borrowed {
+							retainMain = true
+						}
+					}
+				}
+				shard.rng.add(firstKey)
+				if len(idxs) > 1 {
+					shard.rng.add(lastKey)
 				}
 			}
 			newBytes := shard.mem.Size()
-			delta := newBytes - shard.bytes
-			shard.bytes = newBytes
-			b.db.mutableBytes.Add(delta)
+			newEntries := shard.mem.Len()
+			b.db.updateMutableShardAccountingLocked(shard, newBytes, newEntries)
+			var retainedMain memtable.Table
+			if retainMain {
+				retainedMain = shard.mem
+			}
 			shard.mu.Unlock()
+			if retainedMain != nil {
+				retainMainMems = append(retainMainMems, retainedMain)
+			}
 		}
+	}
+	if globalSortedRun {
+		b.db.noteWriteSortedRunWithDeletes(globalSortedFirst, globalSortedLast, globalSortedCount, deleteCount)
+	} else if allDeletes {
+		b.db.noteDeleteBatch(len(b.entries))
+	}
+	if b.db.shouldRotateForDeleteHeavyRecovery() {
+		needForcedRotate = true
+	} else if globalSortedRun && b.db.shouldRotateForTailSequentialRecovery() && b.db.mutableNeedsSequentialRecovery() {
+		needForcedRotate = true
 	}
 
 	// 3. Threshold Check
@@ -27834,12 +30062,17 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 	b.updateBatchCopyHint()
 	mainChunks := b.drainCopyArenaChunks()
 	retainPtrArena := false
-	ptrTouchedMems := make([]memtable.Table, 0, len(b.ptrValueIdxs))
+	ptrTouchedMems := b.ptrTouchedMems
+	if cap(ptrTouchedMems) < len(b.ptrValueIdxs) {
+		ptrTouchedMems = make([]memtable.Table, 0, len(b.ptrValueIdxs))
+	} else {
+		ptrTouchedMems = ptrTouchedMems[:0]
+	}
 	if allowBatchArenaBorrow && len(b.ptrValueIdxs) > 0 {
 		seenPtrMems := make(map[memtable.Table]struct{}, len(b.ptrValueIdxs))
 		for _, idx := range b.ptrValueIdxs {
 			if idx < 0 || idx >= len(b.entries) || idx >= len(shardIdxs) {
-				b.db.writeMu.RUnlock()
+				unlockWrite()
 				return fmt.Errorf("cachingdb: ptr value entry index %d out of range", idx)
 			}
 			if b.entries[idx].Value == nil {
@@ -27848,7 +30081,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 			retainPtrArena = true
 			shardIdx := shardIdxs[idx]
 			if shardIdx < 0 || shardIdx >= len(b.db.mutableShards) {
-				b.db.writeMu.RUnlock()
+				unlockWrite()
 				return fmt.Errorf("cachingdb: ptr value shard index %d out of range for entry %d", shardIdx, idx)
 			}
 			mt := b.db.mutableShards[shardIdx].mem
@@ -27862,21 +30095,37 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 			ptrTouchedMems = append(ptrTouchedMems, mt)
 		}
 	}
+	b.retainMainMems = retainMainMems
+	b.ptrTouchedMems = ptrTouchedMems
 	if b.ptrValueIdxs != nil {
 		b.ptrValueIdxs = b.ptrValueIdxs[:0]
 	}
 	ptrChunks := b.drainPtrCopyArenaChunks()
-	b.db.retainBatchArenaChunksForMemtables(mainChunks, retainMainMems)
+	if len(retainMainMems) > 0 {
+		b.db.retainBatchArenaChunksForMemtables(mainChunks, retainMainMems)
+	} else {
+		b.reclaimOwnedCopyArenaChunks(mainChunks)
+	}
 	if retainPtrArena {
 		b.db.retainBatchArenaChunksForMemtables(ptrChunks, ptrTouchedMems)
 	} else {
 		putBatchArenas(ptrChunks)
 	}
-	b.db.writeMu.RUnlock()
+	unlockWrite()
 
-	if needRotate {
-		if err := b.db.maybeRotateMemtable(true); err != nil {
+	if needForcedRotate {
+		if err := b.db.forceRotateMemtableToMode(true, memtable.ModeAppendOnly); err != nil {
 			return err
+		}
+	} else if needRotate {
+		if b.db.currentMutableRoute.Load() != nil || len(touchedShardIdxs) <= 1 {
+			if err := b.db.maybeRotateMutableShards(true, touchedShardIdxs); err != nil {
+				return err
+			}
+		} else {
+			if err := b.db.maybeRotateMemtable(true); err != nil {
+				return err
+			}
 		}
 	}
 	if needSyncBarrier {
@@ -28163,11 +30412,13 @@ func (b *Batch) writeBypass(sync bool) (err error) {
 	mutableRange := b.db.snapshotMutableRange()
 
 	var (
-		mutables      []memtable.Table
-		queue         []memtable.Table
-		queueShardIDs []uint16
-		queueRanges   []keyRange
-		overlaps      bool
+		mutables        []memtable.Table
+		queue           []memtable.Table
+		queueShardIDs   []uint16
+		queueRouteModes []uint8
+		queueRanges     []keyRange
+		mutableRoute    *mutableRouteState
+		overlaps        bool
 	)
 	view := b.db.retainMemtableView()
 	if view != nil {
@@ -28180,7 +30431,9 @@ func (b *Batch) writeBypass(sync bool) (err error) {
 		mutables = view.mutables
 		queue = view.queue
 		queueShardIDs = view.queueShardIDs
+		queueRouteModes = view.queueRouteModes
 		queueRanges = view.queueRanges
+		mutableRoute = view.mutableRoute
 	} else {
 		// Defensive fallback: should not happen after Open(), but keep safe
 		// behavior for zero-value DBs and tests.
@@ -28196,9 +30449,13 @@ func (b *Batch) writeBypass(sync bool) (err error) {
 		if len(b.db.queueShardIDs) > 0 {
 			queueShardIDs = append([]uint16(nil), b.db.queueShardIDs...)
 		}
+		if len(b.db.queueRouteModes) > 0 {
+			queueRouteModes = append([]uint8(nil), b.db.queueRouteModes...)
+		}
 		if len(b.db.queueRanges) > 0 {
 			queueRanges = append([]keyRange(nil), b.db.queueRanges...)
 		}
+		mutableRoute = cloneMutableRoute(b.db.currentMutableRoute.Load())
 	}
 	b.db.mu.RUnlock()
 
@@ -28219,18 +30476,45 @@ func (b *Batch) writeBypass(sync bool) (err error) {
 		// Slow path: verify no individual key exists in memory (handles sparse overlap).
 		for _, op := range b.entries {
 			key := op.Key
+			hashIdx := 0
 			if len(mutables) > 0 {
-				idx := b.db.shardIndex(key)
-				if idx < len(mutables) && mutables[idx] != nil {
-					if _, _, found := mutables[idx].Get(key); found {
+				hashIdx = b.db.hashShardIndex(key)
+			}
+			checkedHashMutable := false
+			if len(mutables) > 0 {
+				routeFound := false
+				forEachMutableRouteShardForKey(mutableRoute, key, func(idx int) bool {
+					if idx == hashIdx {
+						checkedHashMutable = true
+					}
+					if idx >= 0 && idx < len(mutables) && mutables[idx] != nil {
+						_, _, routeFound = mutables[idx].Get(key)
+					}
+					return routeFound
+				})
+				if routeFound {
+					return b.writeRegular(sync)
+				}
+			}
+			if len(mutables) > 0 && !checkedHashMutable {
+				if hashIdx < len(mutables) && mutables[hashIdx] != nil {
+					if _, _, found := mutables[hashIdx].Get(key); found {
 						return b.writeRegular(sync)
 					}
 				}
 			}
 			for i := len(queue) - 1; i >= 0; i-- {
-				if len(queueShardIDs) > i && len(mutables) > 0 {
-					idx := b.db.shardIndex(key)
-					if int(queueShardIDs[i]) != idx {
+				routeMode := memtableRouteHashed
+				if len(queueRouteModes) > i {
+					routeMode = queueRouteModes[i]
+				}
+				switch routeMode {
+				case memtableRouteRanged:
+					if len(queueRanges) > i && !keyInRange(queueRanges[i], key) {
+						continue
+					}
+				default:
+					if len(queueShardIDs) > i && int(queueShardIDs[i]) != hashIdx {
 						continue
 					}
 				}
@@ -28352,7 +30636,11 @@ func (b *Batch) Close() error {
 	}
 	b.recycleCopyArenaChunks()
 	b.recyclePtrCopyArenaChunks()
+	if b.db != nil && b.walBuf != nil {
+		b.db.putBatchWALRecords(b.walBuf)
+	}
 	b.entries = nil
+	b.ridBuf = nil
 	b.walBuf = nil
 	b.shardIdxs = nil
 	b.eligibleIdxs = nil
@@ -28360,8 +30648,12 @@ func (b *Batch) Close() error {
 	b.shardCnts = nil
 	b.shardEntries = nil
 	b.shardIdxSets = nil
+	b.retainMainMems = nil
+	b.ptrTouchedMems = nil
 	b.firstKey = nil
 	b.lastKey = nil
+	b.lastCopiedValue = nil
+	b.preferWALBuf = false
 	b.ptrValueIdxs = nil
 	return nil
 }

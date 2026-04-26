@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"sync"
 
 	batchpkg "github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/tree"
@@ -78,11 +79,12 @@ func (db *DB) update(key []byte, fn UpdateFunc, syncWrite bool) error {
 	if db.readOnly {
 		return ErrReadOnly
 	}
+	stableKey := cloneUpdateKey(key)
 
 	for {
-		unlock := db.lockUpdateKey(key)
-		old, err := db.getForUpdate(key)
-		unlock()
+		updateMu := db.lockUpdateKey(stableKey)
+		old, err := db.getForUpdate(stableKey)
+		unlockUpdateKey(updateMu)
 		if err != nil {
 			return err
 		}
@@ -99,41 +101,51 @@ func (db *DB) update(key []byte, fn UpdateFunc, syncWrite bool) error {
 			return fmt.Errorf("treedb: unknown update op %d", result.Op)
 		}
 
-		unlock = db.lockUpdateKey(key)
-		latest, err := db.getForUpdate(key)
+		updateMu = db.lockUpdateKey(stableKey)
+		latest, err := db.getForUpdate(stableKey)
 		if err != nil {
-			unlock()
+			unlockUpdateKey(updateMu)
 			return err
 		}
 		if !sameUpdateValue(observed, latest) {
-			unlock()
+			unlockUpdateKey(updateMu)
 			continue
 		}
 
 		switch result.Op {
 		case UpdateNoop:
-			unlock()
+			unlockUpdateKey(updateMu)
 			return nil
 		case UpdateSet:
-			err = db.setPoint(key, result.Value, syncWrite)
-			unlock()
+			err = db.setPoint(stableKey, result.Value, syncWrite)
+			unlockUpdateKey(updateMu)
 			return err
 		case UpdateDelete:
-			err = db.deletePoint(key, syncWrite)
-			unlock()
+			err = db.deletePoint(stableKey, syncWrite)
+			unlockUpdateKey(updateMu)
 			return err
 		default:
-			unlock()
+			unlockUpdateKey(updateMu)
 			return fmt.Errorf("treedb: unknown update op %d", result.Op)
 		}
 	}
 }
 
-func (db *DB) lockUpdateKey(key []byte) func() {
+func cloneUpdateKey(key []byte) []byte {
+	return append([]byte{}, key...)
+}
+
+func (db *DB) lockUpdateKey(key []byte) *sync.Mutex {
 	if db == nil {
-		return func() {}
+		return nil
 	}
-	return db.updateLocks.Lock(key)
+	return db.updateLocks.LockMutex(key)
+}
+
+func unlockUpdateKey(mu *sync.Mutex) {
+	if mu != nil {
+		mu.Unlock()
+	}
 }
 
 func (db *DB) getForUpdate(key []byte) ([]byte, error) {

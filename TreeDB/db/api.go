@@ -338,8 +338,8 @@ func (db *DB) Has(key []byte) (bool, error) {
 
 // Set sets the value for a key.
 func (db *DB) Set(key, value []byte) error {
-	unlock := db.lockUpdateKey(key)
-	defer unlock()
+	updateMu := db.lockUpdateKey(key)
+	defer unlockUpdateKey(updateMu)
 	return db.setPoint(key, value, false)
 }
 
@@ -352,15 +352,15 @@ func (db *DB) setPoint(key, value []byte, sync bool) error {
 
 // SetSync sets the value and syncs to disk.
 func (db *DB) SetSync(key, value []byte) error {
-	unlock := db.lockUpdateKey(key)
-	defer unlock()
+	updateMu := db.lockUpdateKey(key)
+	defer unlockUpdateKey(updateMu)
 	return db.setPoint(key, value, true)
 }
 
 // Delete removes a key.
 func (db *DB) Delete(key []byte) error {
-	unlock := db.lockUpdateKey(key)
-	defer unlock()
+	updateMu := db.lockUpdateKey(key)
+	defer unlockUpdateKey(updateMu)
 	return db.deletePoint(key, false)
 }
 
@@ -373,8 +373,8 @@ func (db *DB) deletePoint(key []byte, sync bool) error {
 
 // DeleteSync removes a key and syncs.
 func (db *DB) DeleteSync(key []byte) error {
-	unlock := db.lockUpdateKey(key)
-	defer unlock()
+	updateMu := db.lockUpdateKey(key)
+	defer unlockUpdateKey(updateMu)
 	return db.deletePoint(key, true)
 }
 
@@ -606,6 +606,8 @@ func (db *DB) Stats() map[string]string {
 		stats["treedb.vlog.mmap_dead_mappings.cap_base"] = fmt.Sprintf("%d", valuelog.MaxDeadMappings)
 		stats["treedb.vlog.mmap_max_mapped_sealed_segments"] = fmt.Sprintf("%d", valuelog.MaxMappedSealedSegments)
 		stats["treedb.vlog.mmap_max_mapped_sealed_bytes"] = fmt.Sprintf("%d", valuelog.MaxMappedSealedBytes)
+		stats["treedb.vlog.mmap_max_mapped_leaf_sealed_segments"] = fmt.Sprintf("%d", valuelog.MaxMappedLeafSealedSegments)
+		stats["treedb.vlog.mmap_max_mapped_leaf_sealed_bytes"] = fmt.Sprintf("%d", valuelog.MaxMappedLeafSealedBytes)
 		currentSegments, currentBytes, sealedSegments, sealedBytes, _, deadBytes := db.valueLogManager.MmapResidencyStats()
 		stats["treedb.vlog.mmap_active_segments"] = fmt.Sprintf("%d", currentSegments+sealedSegments)
 		stats["treedb.vlog.mmap_active_bytes"] = fmt.Sprintf("%d", currentBytes+sealedBytes)

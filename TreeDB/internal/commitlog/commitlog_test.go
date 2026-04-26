@@ -73,6 +73,91 @@ func TestCommitLogWriteReadBatch(t *testing.T) {
 	_ = reader.Close()
 }
 
+func TestCommitLogWriteReadBatchFunc(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "commit.log")
+
+	writer, err := NewWriter(path)
+	if err != nil {
+		t.Fatalf("new writer: %v", err)
+	}
+	records := []Record{
+		{Op: OpSetRID, Key: []byte("k1"), RID: 11, Seq: 7},
+		{Op: OpSetInline, Key: []byte("k2"), Value: []byte("v2"), Seq: 7},
+		{Op: OpDelete, Key: []byte("k3"), Seq: 7},
+	}
+	written, err := writer.AppendBatchFuncWithSize(len(records), func(i int) Record {
+		return records[i]
+	})
+	if err != nil {
+		_ = writer.Close()
+		t.Fatalf("append func: %v", err)
+	}
+	wantWritten := int64(segmentHeaderSize + batchHeaderSize)
+	for _, record := range records {
+		wantWritten += int64(recordHeaderSize + len(record.Key) + len(record.Value))
+	}
+	if written != wantWritten {
+		_ = writer.Close()
+		t.Fatalf("written bytes=%d want %d", written, wantWritten)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	reader, err := NewReader(path)
+	if err != nil {
+		t.Fatalf("new reader: %v", err)
+	}
+	got, err := reader.ReadBatch()
+	if err != nil {
+		_ = reader.Close()
+		t.Fatalf("read batch: %v", err)
+	}
+	defer reader.Close()
+	if len(got) != len(records) {
+		t.Fatalf("record count: got %d want %d", len(got), len(records))
+	}
+	for i := range records {
+		if got[i].Op != records[i].Op || string(got[i].Key) != string(records[i].Key) ||
+			string(got[i].Value) != string(records[i].Value) || got[i].RID != records[i].RID ||
+			got[i].Seq != records[i].Seq {
+			t.Fatalf("record %d got %+v want %+v", i, got[i], records[i])
+		}
+	}
+}
+
+func TestCommitLogAppendBatchFuncCallsRecordAtOncePerIndex(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "commit.log")
+
+	writer, err := NewWriter(path)
+	if err != nil {
+		t.Fatalf("new writer: %v", err)
+	}
+	records := []Record{
+		{Op: OpSetRID, Key: []byte("k1"), RID: 11, Seq: 7},
+		{Op: OpSetInline, Key: []byte("k2"), Value: []byte("v2"), Seq: 7},
+		{Op: OpDelete, Key: []byte("k3"), Seq: 7},
+	}
+	calls := make([]int, len(records))
+	_, err = writer.AppendBatchFuncWithSize(len(records), func(i int) Record {
+		calls[i]++
+		return records[i]
+	})
+	if closeErr := writer.Close(); err == nil && closeErr != nil {
+		err = closeErr
+	}
+	if err != nil {
+		t.Fatalf("append func: %v", err)
+	}
+	for i, calls := range calls {
+		if calls != 1 {
+			t.Fatalf("recordAt(%d) called %d times, want 1", i, calls)
+		}
+	}
+}
+
 func TestCommitLogWriteReadBatchCompressed(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "commit.log")

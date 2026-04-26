@@ -19,6 +19,12 @@ const (
 	leafGenerationRecordLengthIndexMagic      = "TLGI"
 	leafGenerationRecordLengthIndexVersion    = 1
 	leafGenerationRecordLengthIndexSuffix     = ".lenidx"
+	// Live leaf-log writers add records in offset order. Avoid a large first-use
+	// allocation because many small rotated files can keep their cached indexes
+	// for process lifetime; grow to one modest segment's worth only after the file
+	// has enough records to prove it is not a tiny segment.
+	leafGenerationRecordLengthIndexLivePreallocTrigger = 64
+	leafGenerationRecordLengthIndexLivePreallocCap     = 4096
 )
 
 type leafGenerationRecordLengthIndex struct {
@@ -67,6 +73,10 @@ func (idx *leafGenerationRecordLengthIndex) clone() *leafGenerationRecordLengthI
 		offsets: append([]uint32(nil), idx.offsets...),
 		lengths: append([]uint32(nil), idx.lengths...),
 	}
+}
+
+func newLiveLeafGenerationRecordLengthIndex() *leafGenerationRecordLengthIndex {
+	return &leafGenerationRecordLengthIndex{}
 }
 
 func (idx *leafGenerationRecordLengthIndex) lookup(offset uint64) (uint32, bool) {
@@ -131,6 +141,7 @@ func (idx *leafGenerationRecordLengthIndex) add(offset uint64, length uint32) bo
 	off32 := uint32(offset)
 	n := len(idx.offsets)
 	if n == 0 || idx.offsets[n-1] < off32 {
+		idx.reserveLiveAppendCapacity(n + 1)
 		idx.offsets = append(idx.offsets, off32)
 		idx.lengths = append(idx.lengths, length)
 		return true
@@ -145,6 +156,7 @@ func (idx *leafGenerationRecordLengthIndex) add(offset uint64, length uint32) bo
 		idx.lengths[i] = length
 		return true
 	}
+	idx.reserveLiveAppendCapacity(n + 1)
 	idx.offsets = append(idx.offsets, 0)
 	copy(idx.offsets[i+1:], idx.offsets[i:])
 	idx.offsets[i] = off32
@@ -152,6 +164,39 @@ func (idx *leafGenerationRecordLengthIndex) add(offset uint64, length uint32) bo
 	copy(idx.lengths[i+1:], idx.lengths[i:])
 	idx.lengths[i] = length
 	return true
+}
+
+func (idx *leafGenerationRecordLengthIndex) reserveLiveAppendCapacity(nextLen int) {
+	if idx == nil || nextLen <= leafGenerationRecordLengthIndexLivePreallocTrigger {
+		return
+	}
+	if nextLen <= cap(idx.offsets) && nextLen <= cap(idx.lengths) {
+		return
+	}
+	current := cap(idx.offsets)
+	if cap(idx.lengths) > current {
+		current = cap(idx.lengths)
+	}
+	target := leafGenerationRecordLengthIndexLivePreallocCap
+	if current > 0 {
+		maxInt := int(^uint(0) >> 1)
+		grown := nextLen
+		if current <= maxInt/2 {
+			grown = current * 2
+		}
+		if target < grown {
+			target = grown
+		}
+	}
+	if target < nextLen {
+		target = nextLen
+	}
+	offsets := make([]uint32, len(idx.offsets), target)
+	copy(offsets, idx.offsets)
+	lengths := make([]uint32, len(idx.lengths), target)
+	copy(lengths, idx.lengths)
+	idx.offsets = offsets
+	idx.lengths = lengths
 }
 
 func leafGenerationRecordLengthIndexPath(rootDir string, rawFileID uint32) string {
@@ -316,7 +361,7 @@ func (db *DB) noteLeafGenerationRecordLengthRaw(rawFileID uint32, offset uint64,
 	}
 	idx := db.leafGenerationRecordLengthByFile[rawFileID]
 	if idx == nil {
-		idx = &leafGenerationRecordLengthIndex{}
+		idx = newLiveLeafGenerationRecordLengthIndex()
 		db.leafGenerationRecordLengthByFile[rawFileID] = idx
 	}
 	idx.add(offset, recordLen)

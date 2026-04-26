@@ -87,6 +87,18 @@ type SortedBatchApplier interface {
 	ApplyStealSortedBatch(entries []batchpkg.Entry, onKey func(key []byte))
 }
 
+// SortedBatchBorrowValueApplier is an optional fast path for applying a
+// strictly-increasing batch under a single memtable lock while borrowing value
+// slices from the caller. Keys must still be copied into memtable-owned
+// storage.
+//
+// Callers should only use this when they know the entries are already in
+// increasing key order and the borrowed values will remain immutable for the
+// memtable lifetime.
+type SortedBatchBorrowValueApplier interface {
+	ApplyBorrowValueSortedBatch(entries []batchpkg.Entry, storeInlinePtrValues bool, onKey func(key []byte))
+}
+
 // ValueBorrower marks memtables that can safely retain caller-owned value
 // slices while still copying keys into their own storage.
 //
@@ -94,6 +106,19 @@ type SortedBatchApplier interface {
 // retired or reset.
 type ValueBorrower interface {
 	SetEntryBorrowValue(key, value []byte, ptr page.ValuePtr, flags byte)
+}
+
+// StableValueBorrower marks memtables that can retain immutable value storage
+// and may canonicalize equal adjacent values to reduce payload metadata.
+type StableValueBorrower interface {
+	SetEntryBorrowStableValue(key, value []byte, ptr page.ValuePtr, flags byte)
+}
+
+// StableValueReuser appends an entry by reusing an already-retained matching
+// value without retaining the caller's value slice. It returns false when the
+// caller must fall back to the normal copy/borrow path.
+type StableValueReuser interface {
+	SetEntryReuseStableValue(key, value []byte, ptr page.ValuePtr, flags byte) bool
 }
 
 // StableUnsafeIteratorTable marks memtable implementations whose
@@ -110,11 +135,57 @@ type StableUnsafeIteratorTable interface {
 	StableUnsafeIteratorSlices() bool
 }
 
+// OperationMix describes the operation mix currently retained by a memtable.
+// It is a performance-planning hint, not a correctness contract: implementations
+// may count superseded append-log entries when their iterators later collapse
+// multiple writes to the latest value for a key.
+type OperationMix struct {
+	Entries int
+	Deletes int
+}
+
+// OperationMixProvider marks memtables that can report their write-buffer
+// operation mix without forcing an iterator materialization pass.
+type OperationMixProvider interface {
+	OperationMix() OperationMix
+}
+
 // TrustedSortedBatchApplier is an optional fast path for callers that already
 // guarantee strictly increasing keys (for example, stream-qualified batch
 // writes partitioned by shard while preserving source order).
 type TrustedSortedBatchApplier interface {
 	ApplyStealSortedBatchTrusted(entries []batchpkg.Entry, onKey func(key []byte))
+}
+
+// TrustedSortedBatchCopyIndexApplier consumes a sorted index list into a shared
+// batch entry slice while copying keys into memtable-owned storage. Pointer
+// ValuePtr bytes are always copied, and inline tail bytes for pointer entries
+// are copied only when storeInlinePtrValues is true.
+type TrustedSortedBatchCopyIndexApplier interface {
+	ApplyCopySortedBatchIndicesTrusted(entries []batchpkg.Entry, idxs []int, storeInlinePtrValues bool, onKey func(key []byte))
+}
+
+// TrustedSortedBatchBorrowValueApplier is an optional fast path for callers
+// that already guarantee strictly increasing keys and immutable borrowed value
+// slices.
+type TrustedSortedBatchBorrowValueApplier interface {
+	ApplyBorrowValueSortedBatchTrusted(entries []batchpkg.Entry, storeInlinePtrValues bool, onKey func(key []byte))
+}
+
+// TrustedSortedBatchIndexApplier is an optional fast path for callers that
+// already guarantee strictly increasing keys and can provide a sorted index
+// list into a shared batch entry slice. This avoids materializing per-shard
+// []batch.Entry views when the memtable can consume the original batch slice
+// directly.
+type TrustedSortedBatchIndexApplier interface {
+	ApplyStealSortedBatchIndicesTrusted(entries []batchpkg.Entry, idxs []int, onKey func(key []byte))
+}
+
+// TrustedSortedBatchBorrowValueIndexApplier is like
+// TrustedSortedBatchBorrowValueApplier but consumes a sorted index list into a
+// shared batch entry slice.
+type TrustedSortedBatchBorrowValueIndexApplier interface {
+	ApplyBorrowValueSortedBatchIndicesTrusted(entries []batchpkg.Entry, idxs []int, storeInlinePtrValues bool, onKey func(key []byte))
 }
 
 type Memtable struct {
@@ -231,6 +302,56 @@ func (m *Memtable) ApplyStealSortedBatch(entries []batchpkg.Entry, onKey func(ke
 	}
 
 	for _, op := range entries {
+		if op.Type == batchpkg.OpDelete {
+			m.sl.Delete(op.Key)
+		} else if op.IsPtr {
+			m.sl.PutEntry(op.Key, op.Value, op.ValuePtr, node.FlagPointer)
+		} else {
+			m.sl.Put(op.Key, op.Value)
+		}
+		if onKey != nil {
+			onKey(op.Key)
+		}
+	}
+}
+
+func (m *Memtable) ApplyStealSortedBatchIndicesTrusted(entries []batchpkg.Entry, idxs []int, onKey func(key []byte)) {
+	if len(idxs) == 0 {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	first := entries[idxs[0]]
+	last := m.sl.LastKey()
+	if first.Key != nil && (last == nil || bytes.Compare(first.Key, last) > 0) {
+		for _, idx := range idxs {
+			op := entries[idx]
+			if op.Type == batchpkg.OpDelete {
+				m.sl.AppendDelete(op.Key)
+			} else if op.IsPtr {
+				if len(op.Value) > 0 {
+					buf := make([]byte, page.ValuePtrSize+len(op.Value))
+					op.ValuePtr.Encode(buf[:page.ValuePtrSize])
+					copy(buf[page.ValuePtrSize:], op.Value)
+					_ = m.sl.AppendWithCallback(op.Key, buf, node.FlagPointer, nil)
+				} else {
+					var buf [page.ValuePtrSize]byte
+					op.ValuePtr.Encode(buf[:])
+					_ = m.sl.AppendWithCallback(op.Key, buf[:], node.FlagPointer, nil)
+				}
+			} else {
+				m.sl.Append(op.Key, op.Value)
+			}
+			if onKey != nil {
+				onKey(op.Key)
+			}
+		}
+		return
+	}
+
+	for _, idx := range idxs {
+		op := entries[idx]
 		if op.Type == batchpkg.OpDelete {
 			m.sl.Delete(op.Key)
 		} else if op.IsPtr {

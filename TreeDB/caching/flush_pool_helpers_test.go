@@ -14,9 +14,14 @@ import (
 )
 
 type pointerBatch struct {
+	backend             *viewCountingBackend
 	entries             []batch.Entry
 	reserveCalls        int
 	lastReserve         int
+	resetCalls          int
+	writeCalls          int
+	writeSyncCalls      int
+	closeCalls          int
 	setCalls            int
 	setViewCalls        int
 	deleteCalls         int
@@ -31,7 +36,7 @@ type viewCountingBackend struct {
 }
 
 func (b *viewCountingBackend) NewBatch() batch.Interface {
-	pb := &pointerBatch{}
+	pb := &pointerBatch{backend: b}
 	b.batches = append(b.batches, pb)
 	return pb
 }
@@ -107,11 +112,26 @@ func (b *pointerBatch) SetOps(ops []batch.Entry) error {
 	return nil
 }
 
-func (b *pointerBatch) Write() error { return nil }
+func (b *pointerBatch) Write() error {
+	b.writeCalls++
+	return nil
+}
 
-func (b *pointerBatch) WriteSync() error { return nil }
+func (b *pointerBatch) WriteSync() error {
+	b.writeSyncCalls++
+	return nil
+}
 
-func (b *pointerBatch) Close() error { return nil }
+func (b *pointerBatch) Close() error {
+	b.closeCalls++
+	return nil
+}
+
+func (b *pointerBatch) Reset() {
+	b.resetCalls++
+	clear(b.entries)
+	b.entries = b.entries[:0]
+}
 
 func (b *pointerBatch) Replay(fn func(batch.Entry) error) error {
 	for _, e := range b.entries {
@@ -160,14 +180,14 @@ func TestPutUnitRunsClearsReferences(t *testing.T) {
 func TestPutOpMergeHeapClearsReferences(t *testing.T) {
 	h := make(opMergeHeap, 1, 2)
 	h[0] = opMergeItem{
-		iter:     &opRunIter{valid: true},
+		source:   &opRunIter{valid: true},
 		priority: 7,
 		key:      []byte("k"),
 	}
 
 	putOpMergeHeap(h)
 
-	if h[0].iter != nil || h[0].priority != 0 || h[0].key != nil {
+	if h[0].source != nil || h[0].priority != 0 || h[0].key != nil {
 		t.Fatalf("heap item not cleared: %+v", h[0])
 	}
 }
@@ -363,7 +383,7 @@ func TestFlushDeferredValueLogMemtableReservesBackendBatch(t *testing.T) {
 	db := &DB{valueLogThreshold: page.DefaultInlineThreshold}
 	const reserveHint = 7
 
-	if emitted, err := db.flushDeferredValueLogMemtable(iter, backendBatch, reserveHint, false, 0); err != nil {
+	if emitted, err := db.flushDeferredValueLogMemtable(iter, backendBatch, reserveHint, stableUnsafeIteratorSlices(mt), false, 0); err != nil {
 		_ = iter.Close()
 		t.Fatalf("flushDeferredValueLogMemtable: %v", err)
 	} else if emitted != 2 {
@@ -845,6 +865,29 @@ func TestAppendOnlyMemtableLeaseReuse(t *testing.T) {
 	}
 }
 
+func TestBTreeMemtableLeaseReuse(t *testing.T) {
+	db := &DB{}
+	mt := memtable.NewBTree()
+	mt.Set([]byte("key"), []byte("value"))
+
+	db.recycleMemtables([]memtable.Table{mt})
+
+	got, err := db.newMutableMemtableWithCapacityMode(0, memtable.ModeBTree)
+	if err != nil {
+		t.Fatalf("newMutableMemtableWithCapacityMode: %v", err)
+	}
+	gotBTree, ok := got.(*memtable.BTree)
+	if !ok {
+		t.Fatalf("expected BTree memtable, got %T", got)
+	}
+	if gotBTree != mt {
+		t.Fatalf("expected leased BTree memtable reuse")
+	}
+	if _, _, ok := gotBTree.Get([]byte("key")); ok {
+		t.Fatal("leased BTree memtable retained old key")
+	}
+}
+
 func TestFlushLaneOnce_UsesViewMethodsForInlineEntries_SerialAndParallel(t *testing.T) {
 	t.Run("serial", func(t *testing.T) {
 		testFlushLaneOnceUsesViewMethodsForInlineEntries(t, false, true, true)
@@ -988,6 +1031,277 @@ func TestFlushLaneOnce_FallsBackFromPointerViewForUnstableIterators(t *testing.T
 	}
 	if setPointerCalls != 1 {
 		t.Fatalf("backend SetPointer calls=%d, want 1", setPointerCalls)
+	}
+}
+
+func TestFlushLaneOnce_DeleteHeavyParallelStreamsWithoutEntryRuns(t *testing.T) {
+	for _, mode := range []string{"append_only", "hash_sorted", "btree"} {
+		t.Run(mode, func(t *testing.T) {
+			testFlushLaneOnceDeleteHeavyParallelStreamsWithoutEntryRuns(t, mode)
+		})
+	}
+}
+
+func TestStableFlushStreamingSources(t *testing.T) {
+	appendOnly := memtable.NewAppendOnlyWithCapacity(0)
+	hashSorted, err := memtable.NewWithCapacityMode(0, memtable.ModeHashSorted)
+	if err != nil {
+		t.Fatalf("NewWithCapacityMode: %v", err)
+	}
+	btree, err := memtable.NewWithCapacityMode(0, memtable.ModeBTree)
+	if err != nil {
+		t.Fatalf("NewWithCapacityMode btree: %v", err)
+	}
+
+	if !stableFlushStreamingSources([]flushUnit{{mem: appendOnly}, {mem: hashSorted}, {mem: btree}}) {
+		t.Fatal("expected stable memtables to qualify for streaming")
+	}
+	if stableFlushStreamingSources(nil) {
+		t.Fatal("nil unit list should not qualify for streaming")
+	}
+	if stableFlushStreamingSources([]flushUnit{{mem: nil}}) {
+		t.Fatal("nil memtable should not qualify for streaming")
+	}
+	if stableFlushStreamingSources([]flushUnit{{mem: unstableIteratorMemtable{Table: appendOnly}}}) {
+		t.Fatal("unstable iterator memtable should not qualify for streaming")
+	}
+}
+
+func TestFlushStreamingDeleteOps(t *testing.T) {
+	mt := memtable.NewAppendOnlyWithCapacity(0)
+	mt.Set([]byte("a"), []byte("va"))
+	mt.Delete([]byte("b"))
+	mt.Freeze()
+
+	deleteOps, ok := flushStreamingDeleteOps([]flushUnit{{mem: mt}}, mt.Len())
+	if !ok {
+		t.Fatal("expected append-only memtable to report delete mix")
+	}
+	if deleteOps != 1 {
+		t.Fatalf("deleteOps=%d want=1", deleteOps)
+	}
+	if planDeleteOps, ok := stableFlushStreamingPlan([]flushUnit{{mem: mt}}, mt.Len()); !ok {
+		t.Fatal("expected append-only memtable to qualify for stable streaming plan")
+	} else if planDeleteOps != deleteOps {
+		t.Fatalf("stable plan deleteOps=%d want=%d", planDeleteOps, deleteOps)
+	}
+
+	if _, ok := flushStreamingDeleteOps([]flushUnit{{mem: unstableIteratorMemtable{Table: mt}}}, mt.Len()); ok {
+		t.Fatal("unstable wrapper without operation mix should not report delete mix")
+	}
+	btree, err := memtable.NewWithCapacityMode(0, memtable.ModeBTree)
+	if err != nil {
+		t.Fatalf("NewWithCapacityMode btree: %v", err)
+	}
+	btree.Set([]byte("a"), []byte("va"))
+	btree.Delete([]byte("b"))
+	btree.Delete([]byte("c"))
+	btree.Delete([]byte("d"))
+	btree.Freeze()
+	if deleteOps, ok := flushStreamingDeleteOps([]flushUnit{{mem: btree}}, btree.Len()); !ok || deleteOps != 3 {
+		t.Fatalf("BTree flushStreamingDeleteOps=(%d,%t), want (3,true)", deleteOps, ok)
+	}
+	if deleteOps, ok := deleteHeavyStreamingDeleteOps([]flushUnit{{mem: btree}}, btree.Len()); !ok || deleteOps != 3 {
+		t.Fatalf("BTree deleteHeavyStreamingDeleteOps=(%d,%t), want (3,true)", deleteOps, ok)
+	}
+	if planDeleteOps, ok := stableFlushStreamingPlan([]flushUnit{{mem: btree}}, btree.Len()); !ok {
+		t.Fatal("expected BTree memtable to qualify for stable streaming plan")
+	} else if planDeleteOps != 3 {
+		t.Fatalf("BTree stable plan deleteOps=%d want=3", planDeleteOps)
+	}
+}
+
+func TestFlushLaneOnce_StableParallelStreamsWithoutEntryRuns(t *testing.T) {
+	for _, mode := range []string{"append_only", "hash_sorted", "btree"} {
+		t.Run(mode, func(t *testing.T) {
+			testFlushLaneOnceStableParallelStreamsWithoutEntryRuns(t, mode)
+		})
+	}
+}
+
+func testFlushLaneOnceStableParallelStreamsWithoutEntryRuns(t *testing.T, mode string) {
+	t.Helper()
+	lockEntrySlicePoolStateForTest(t)
+
+	dir := t.TempDir()
+	backend := &viewCountingBackend{MockBackend: NewMockBackend()}
+	db, err := Open(dir, backend, Options{
+		FlushThreshold:         1 << 60,
+		MemtableShards:         1,
+		MemtableMode:           mode,
+		MaxQueuedMemtables:     -1,
+		FlushBuildConcurrency:  2,
+		FlushBuildMinEntries:   1,
+		FlushBuildMinUnits:     2,
+		FlushBuildChunkCap:     2,
+		FlushBackendMaxEntries: -1,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	oldProcs := runtime.GOMAXPROCS(2)
+	defer runtime.GOMAXPROCS(oldProcs)
+
+	const (
+		unitCount      = 2
+		entriesPerUnit = 4
+	)
+	for unit := 0; unit < unitCount; unit++ {
+		for i := 0; i < entriesPerUnit; i++ {
+			key := []byte{byte('a' + unit), byte('0' + i)}
+			if err := db.Set(key, []byte("value")); err != nil {
+				t.Fatalf("Set unit %d entry %d: %v", unit, i, err)
+			}
+		}
+		db.mu.Lock()
+		if err := db.rotateMemtableLocked(false); err != nil {
+			db.mu.Unlock()
+			t.Fatalf("rotateMemtableLocked unit %d: %v", unit, err)
+		}
+		db.mu.Unlock()
+	}
+
+	beforeGets := entrySliceFreshAllocTotal.Load() + entrySliceLeaseHitTotal.Load() + entrySlicePoolHitTotal.Load()
+	if !db.flushLaneOnce(false, 0) {
+		t.Fatal("flushLaneOnce returned false")
+	}
+	afterGets := entrySliceFreshAllocTotal.Load() + entrySliceLeaseHitTotal.Load() + entrySlicePoolHitTotal.Load()
+	if afterGets != beforeGets {
+		t.Fatalf("entry slice gets changed by stable streaming flush: before=%d after=%d", beforeGets, afterGets)
+	}
+
+	setCalls, setViewCalls, deleteCalls, deleteViewCalls := backend.totals()
+	if setCalls != 0 {
+		t.Fatalf("backend Set calls=%d, want 0", setCalls)
+	}
+	if deleteCalls != 0 {
+		t.Fatalf("backend Delete calls=%d, want 0", deleteCalls)
+	}
+	if setViewCalls != unitCount*entriesPerUnit {
+		t.Fatalf("backend SetView calls=%d want=%d", setViewCalls, unitCount*entriesPerUnit)
+	}
+	if deleteViewCalls != 0 {
+		t.Fatalf("backend DeleteView calls=%d, want 0", deleteViewCalls)
+	}
+}
+
+func testFlushLaneOnceDeleteHeavyParallelStreamsWithoutEntryRuns(t *testing.T, mode string) {
+	t.Helper()
+	lockEntrySlicePoolStateForTest(t)
+
+	dir := t.TempDir()
+	backend := &viewCountingBackend{MockBackend: NewMockBackend()}
+	db, err := Open(dir, backend, Options{
+		FlushThreshold:         1 << 60,
+		MemtableShards:         1,
+		MemtableMode:           mode,
+		MaxQueuedMemtables:     -1,
+		FlushBuildConcurrency:  2,
+		FlushBuildMinEntries:   1,
+		FlushBuildMinUnits:     2,
+		FlushBuildChunkCap:     2,
+		FlushBackendMaxEntries: -1,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	oldProcs := runtime.GOMAXPROCS(2)
+	defer runtime.GOMAXPROCS(oldProcs)
+
+	for unit := 0; unit < 2; unit++ {
+		for i := 0; i < 4; i++ {
+			key := []byte{byte('z' - i), byte('0' + unit)}
+			if err := db.Delete(key); err != nil {
+				t.Fatalf("Delete unit %d entry %d: %v", unit, i, err)
+			}
+		}
+		db.mu.Lock()
+		if err := db.rotateMemtableLocked(false); err != nil {
+			db.mu.Unlock()
+			t.Fatalf("rotateMemtableLocked unit %d: %v", unit, err)
+		}
+		db.mu.Unlock()
+	}
+
+	beforeGets := entrySliceFreshAllocTotal.Load() + entrySliceLeaseHitTotal.Load() + entrySlicePoolHitTotal.Load()
+	if !db.flushLaneOnce(false, 0) {
+		t.Fatal("flushLaneOnce returned false")
+	}
+	afterGets := entrySliceFreshAllocTotal.Load() + entrySliceLeaseHitTotal.Load() + entrySlicePoolHitTotal.Load()
+	if afterGets != beforeGets {
+		t.Fatalf("entry slice gets changed by delete-heavy streaming flush: before=%d after=%d", beforeGets, afterGets)
+	}
+
+	_, _, deleteCalls, deleteViewCalls := backend.totals()
+	if deleteCalls != 0 {
+		t.Fatalf("backend Delete calls=%d, want 0", deleteCalls)
+	}
+	if deleteViewCalls != 8 {
+		t.Fatalf("backend DeleteView calls=%d, want 8", deleteViewCalls)
+	}
+}
+
+func TestFlushLaneOnce_ReusesResettableBackendBatchAcrossChunks(t *testing.T) {
+	dir := t.TempDir()
+	backend := &viewCountingBackend{MockBackend: NewMockBackend()}
+	db, err := Open(dir, backend, Options{
+		FlushThreshold:         1 << 60,
+		MemtableShards:         1,
+		MemtableMode:           "hash_sorted",
+		MaxQueuedMemtables:     -1,
+		AllowUnsafe:            true,
+		FlushBackendMaxEntries: 2,
+		FlushBuildConcurrency:  2,
+		FlushBuildMinEntries:   1,
+		FlushBuildMinUnits:     2,
+		FlushBuildChunkCap:     2,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	oldProcs := runtime.GOMAXPROCS(2)
+	defer runtime.GOMAXPROCS(oldProcs)
+
+	for unit := 0; unit < 3; unit++ {
+		for i := 0; i < 2; i++ {
+			key := []byte{byte('a' + unit), byte('0' + i)}
+			if err := db.Set(key, []byte("value")); err != nil {
+				t.Fatalf("Set unit %d entry %d: %v", unit, i, err)
+			}
+		}
+		db.mu.Lock()
+		if err := db.rotateMemtableLocked(false); err != nil {
+			db.mu.Unlock()
+			t.Fatalf("rotateMemtableLocked unit %d: %v", unit, err)
+		}
+		db.mu.Unlock()
+	}
+
+	if !db.flushLaneOnce(false, 0) {
+		t.Fatal("flushLaneOnce returned false")
+	}
+
+	if got := len(backend.batches); got != 1 {
+		t.Fatalf("backend batch creations=%d want 1", got)
+	}
+	pb := backend.batches[0]
+	if got := pb.writeCalls; got < 3 {
+		t.Fatalf("backend batch writes=%d want >=3 for chunked flush", got)
+	}
+	if got := pb.resetCalls; got < 2 {
+		t.Fatalf("backend batch resets=%d want >=2 after intermediate chunk commits", got)
+	}
+	if got := pb.closeCalls; got != 1 {
+		t.Fatalf("backend batch closes=%d want 1", got)
+	}
+	if got := pb.reserveCalls; got != 1 {
+		t.Fatalf("backend batch reserveCalls=%d want 1", got)
 	}
 }
 

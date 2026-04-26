@@ -2,9 +2,12 @@ package memtable
 
 import (
 	"encoding/binary"
+	"fmt"
 	"testing"
 	"time"
+	"unsafe"
 
+	batchpkg "github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -32,10 +35,29 @@ func TestAppendOnlyNextCapacityGrowthPolicy(t *testing.T) {
 	}
 }
 
+func TestAppendOnlyEntryPayloadIndexAllowsLargeSideBuffers(t *testing.T) {
+	var ent appendOnlyEntry
+	const payloadIndex = uint32(1<<31 | 12345)
+	const flags = node.FlagPointer | byte(0x40)
+
+	appendOnlyEntrySetPayloadIndex(&ent, payloadIndex)
+	copy(ent.inlineKey[:], []byte("long-key"))
+	appendOnlyEntrySetKeyIndex(&ent, 1)
+	appendOnlyEntrySetFlags(&ent, flags)
+
+	if got := appendOnlyEntryPayloadIndex(&ent); got != payloadIndex {
+		t.Fatalf("payload index=%d want=%d", got, payloadIndex)
+	}
+	if got := appendOnlyEntryFlags(&ent); got != flags {
+		t.Fatalf("flags=%d want=%d", got, flags)
+	}
+}
+
 func TestAppendOnlyInlineGrowthSkipsIntermediateDoublingBelowCutoff(t *testing.T) {
 	mt := &AppendOnly{
 		entries:        make([]appendOnlyEntry, appendOnlyMinInitialEntries),
 		baseEntriesLen: appendOnlyMinInitialEntries,
+		growEntriesLen: appendOnlyMinInitialEntries,
 		ordered:        true,
 		lastIdx:        -1,
 	}
@@ -90,6 +112,22 @@ func TestAppendOnlyInitialEntriesForCapacity(t *testing.T) {
 	})
 }
 
+func TestAppendOnlyEntryHintDoesNotRaiseInitialCapacityBeyondBudget(t *testing.T) {
+	capacity := appendOnlyMinInitialEntries * appendOnlyEstimatedBytesPerEntryPointer
+	hint := appendOnlyMaxInitialEntries
+
+	m := NewAppendOnlyWithCapacityEstimatedEntryBytesAndHint(capacity, appendOnlyEstimatedBytesPerEntryPointer, hint)
+	if got := len(m.entries); got != appendOnlyMinInitialEntries {
+		t.Fatalf("initial len(entries)=%d want %d", got, appendOnlyMinInitialEntries)
+	}
+	if got := m.baseEntriesLen; got != appendOnlyMinInitialEntries {
+		t.Fatalf("baseEntriesLen=%d want %d", got, appendOnlyMinInitialEntries)
+	}
+	if got := m.growEntriesLen; got != hint {
+		t.Fatalf("growEntriesLen=%d want hint floor %d", got, hint)
+	}
+}
+
 func TestAppendOnlyCRUD(t *testing.T) {
 	m := NewAppendOnlyWithCapacity(0)
 
@@ -106,6 +144,412 @@ func TestAppendOnlyCRUD(t *testing.T) {
 	val, del, ok = m.Get([]byte("k2"))
 	if !ok || !del || val != nil {
 		t.Fatalf("Get(k2) = (%v,%v,%v), want (nil,true,true)", val, del, ok)
+	}
+}
+
+func TestAppendOnlyRepeatedSmallValueReusesPayloadCopy(t *testing.T) {
+	m := NewAppendOnlyWithCapacity(0)
+	value1 := []byte("same repeated value")
+	value2 := []byte("same repeated value")
+
+	m.Set([]byte("k1"), value1)
+	value1[0] = 'X'
+	m.Set([]byte("k2"), value2)
+	value2[0] = 'Y'
+
+	if got := len(m.values); got != 1 {
+		t.Fatalf("values=%d want=1", got)
+	}
+	if got := cap(m.values); got > appendOnlyMinInitialEntries {
+		t.Fatalf("value cap=%d want <=%d for single repeated payload", got, appendOnlyMinInitialEntries)
+	}
+	if m.entries[0].payloadIndex == 0 || m.entries[0].payloadIndex != m.entries[1].payloadIndex {
+		t.Fatalf("payload indices=(%d,%d), want shared non-zero index", m.entries[0].payloadIndex, m.entries[1].payloadIndex)
+	}
+	for _, key := range []string{"k1", "k2"} {
+		got, deleted, ok := m.Get([]byte(key))
+		if !ok || deleted || string(got) != "same repeated value" {
+			t.Fatalf("Get(%s)=(%q,%v,%v), want same repeated value,false,true", key, string(got), deleted, ok)
+		}
+	}
+
+	it := m.NewIterator(nil, nil)
+	defer func() { _ = it.Close() }()
+	for _, key := range []string{"k1", "k2"} {
+		if !it.Valid() || string(it.Key()) != key {
+			t.Fatalf("iterator key=%q valid=%v, want %s", string(it.Key()), it.Valid(), key)
+		}
+		if got := string(it.Value()); got != "same repeated value" {
+			t.Fatalf("iterator value for %s=%q, want same repeated value", key, got)
+		}
+		it.Next()
+	}
+	if it.Valid() {
+		t.Fatal("iterator should be exhausted")
+	}
+}
+
+func TestAppendOnlyDifferentSmallValuesKeepSeparatePayloads(t *testing.T) {
+	m := NewAppendOnlyWithCapacity(0)
+
+	m.Set([]byte("k1"), []byte("first value"))
+	m.Set([]byte("k2"), []byte("second value"))
+
+	if got := len(m.values); got != 2 {
+		t.Fatalf("values=%d want=2", got)
+	}
+	if m.entries[0].payloadIndex == m.entries[1].payloadIndex {
+		t.Fatalf("payload indices=(%d,%d), want distinct indices", m.entries[0].payloadIndex, m.entries[1].payloadIndex)
+	}
+}
+
+func TestAppendOnlyCopiedValueAfterBorrowDoesNotReuseAliasedPayload(t *testing.T) {
+	m := NewAppendOnlyWithCapacity(0)
+	borrowed := []byte("same-value")
+
+	m.SetEntryBorrowValue([]byte("borrowed"), borrowed, page.ValuePtr{}, node.FlagInline)
+	m.Set([]byte("copied"), []byte("same-value"))
+
+	if got := len(m.values); got != 2 {
+		t.Fatalf("values=%d want=2", got)
+	}
+	if m.entries[0].payloadIndex == 0 || m.entries[0].payloadIndex == m.entries[1].payloadIndex {
+		t.Fatalf("payload indices=(%d,%d), want distinct non-zero indices", m.entries[0].payloadIndex, m.entries[1].payloadIndex)
+	}
+	borrowed[0] = 'X'
+	gotBorrowed, deleted, ok := m.Get([]byte("borrowed"))
+	if !ok || deleted || string(gotBorrowed) != "Xame-value" {
+		t.Fatalf("Get(borrowed)=(%q,%v,%v), want mutated borrowed value,false,true", string(gotBorrowed), deleted, ok)
+	}
+	gotCopied, deleted, ok := m.Get([]byte("copied"))
+	if !ok || deleted || string(gotCopied) != "same-value" {
+		t.Fatalf("Get(copied)=(%q,%v,%v), want same-value,false,true", string(gotCopied), deleted, ok)
+	}
+}
+
+func TestAppendOnlyBorrowStableRepeatedValueReusesPayloadAlias(t *testing.T) {
+	m := &AppendOnly{
+		entries: make([]appendOnlyEntry, 1024),
+		ordered: true,
+		lastIdx: -1,
+	}
+	value1 := []byte("same borrowed value")
+	value2 := []byte("same borrowed value")
+
+	m.SetEntryBorrowStableValue([]byte("k1"), value1, page.ValuePtr{}, node.FlagInline)
+	m.SetEntryBorrowStableValue([]byte("k2"), value2, page.ValuePtr{}, node.FlagInline)
+
+	if got := len(m.values); got != 1 {
+		t.Fatalf("values=%d want=1", got)
+	}
+	if got := cap(m.values); got != appendOnlyMinInitialEntries {
+		t.Fatalf("value cap=%d want %d; borrowed first payload should not dense-preallocate to entry cap", got, appendOnlyMinInitialEntries)
+	}
+	if m.entries[0].payloadIndex == 0 || m.entries[0].payloadIndex != m.entries[1].payloadIndex {
+		t.Fatalf("payload indices=(%d,%d), want shared non-zero index", m.entries[0].payloadIndex, m.entries[1].payloadIndex)
+	}
+	got, deleted, ok := m.Get([]byte("k2"))
+	if !ok || deleted || string(got) != "same borrowed value" {
+		t.Fatalf("Get(k2)=(%q,%v,%v), want borrowed value,false,true", string(got), deleted, ok)
+	}
+}
+
+func TestAppendOnlyBorrowStableValueDoesNotReuseUnstableBorrowAlias(t *testing.T) {
+	m := NewAppendOnlyWithCapacity(0)
+	unstable := []byte("same borrowed value")
+	stable := []byte("same borrowed value")
+
+	m.SetEntryBorrowValue([]byte("unstable"), unstable, page.ValuePtr{}, node.FlagInline)
+	m.SetEntryBorrowStableValue([]byte("stable"), stable, page.ValuePtr{}, node.FlagInline)
+
+	if got := len(m.values); got != 2 {
+		t.Fatalf("values=%d want=2", got)
+	}
+	if m.entries[0].payloadIndex == 0 || m.entries[0].payloadIndex == m.entries[1].payloadIndex {
+		t.Fatalf("payload indices=(%d,%d), want distinct non-zero indices", m.entries[0].payloadIndex, m.entries[1].payloadIndex)
+	}
+	unstable[0] = 'X'
+	got, deleted, ok := m.Get([]byte("unstable"))
+	if !ok || deleted || string(got) != "Xame borrowed value" {
+		t.Fatalf("Get(unstable)=(%q,%v,%v), want mutated unstable value,false,true", string(got), deleted, ok)
+	}
+	got, deleted, ok = m.Get([]byte("stable"))
+	if !ok || deleted || string(got) != "same borrowed value" {
+		t.Fatalf("Get(stable)=(%q,%v,%v), want stable value,false,true", string(got), deleted, ok)
+	}
+}
+
+func TestAppendOnlyReuseStableValueDoesNotRetainCaller(t *testing.T) {
+	m := NewAppendOnlyWithCapacity(0)
+	first := []byte("same stable value")
+	m.SetEntryBorrowStableValue([]byte("k1"), first, page.ValuePtr{}, node.FlagInline)
+
+	second := []byte("same stable value")
+	if !m.SetEntryReuseStableValue([]byte("k2"), second, page.ValuePtr{}, node.FlagInline) {
+		t.Fatalf("expected stable value reuse")
+	}
+	second[0] = 'X'
+
+	if got := len(m.values); got != 1 {
+		t.Fatalf("values=%d want=1", got)
+	}
+	if m.entries[0].payloadIndex == 0 || m.entries[0].payloadIndex != m.entries[1].payloadIndex {
+		t.Fatalf("payload indices=(%d,%d), want shared non-zero index", m.entries[0].payloadIndex, m.entries[1].payloadIndex)
+	}
+	got, deleted, ok := m.Get([]byte("k2"))
+	if !ok || deleted || string(got) != "same stable value" {
+		t.Fatalf("Get(k2)=(%q,%v,%v), want stable value,false,true", string(got), deleted, ok)
+	}
+
+	if m.SetEntryReuseStableValue([]byte("k3"), []byte("different"), page.ValuePtr{}, node.FlagInline) {
+		t.Fatalf("unexpected stable value reuse for different payload")
+	}
+	if _, _, ok := m.Get([]byte("k3")); ok {
+		t.Fatalf("different payload should not be appended by failed reuse")
+	}
+}
+
+func TestAppendOnlyBorrowValueKeepsDistinctAliases(t *testing.T) {
+	m := NewAppendOnlyWithCapacity(0)
+	value1 := []byte("same borrowed value")
+	value2 := []byte("same borrowed value")
+
+	m.SetEntryBorrowValue([]byte("k1"), value1, page.ValuePtr{}, node.FlagInline)
+	m.SetEntryBorrowValue([]byte("k2"), value2, page.ValuePtr{}, node.FlagInline)
+
+	if got := len(m.values); got != 2 {
+		t.Fatalf("values=%d want=2", got)
+	}
+	if m.entries[0].payloadIndex == 0 || m.entries[0].payloadIndex == m.entries[1].payloadIndex {
+		t.Fatalf("payload indices=(%d,%d), want distinct non-zero indices", m.entries[0].payloadIndex, m.entries[1].payloadIndex)
+	}
+	value2[0] = 'X'
+	got, deleted, ok := m.Get([]byte("k2"))
+	if !ok || deleted || string(got) != "Xame borrowed value" {
+		t.Fatalf("Get(k2)=(%q,%v,%v), want mutated second borrowed value,false,true", string(got), deleted, ok)
+	}
+	got, deleted, ok = m.Get([]byte("k1"))
+	if !ok || deleted || string(got) != "same borrowed value" {
+		t.Fatalf("Get(k1)=(%q,%v,%v), want first borrowed value,false,true", string(got), deleted, ok)
+	}
+}
+
+func TestAppendOnlyApplyBorrowValueSortedBatch_CopiesKeysBorrowsValues(t *testing.T) {
+	m := NewAppendOnlyWithCapacity(0)
+	key := []byte("k-short")
+	value := []byte("borrowed-value")
+
+	m.ApplyBorrowValueSortedBatch([]batchpkg.Entry{{
+		Type:  batchpkg.OpPut,
+		Key:   key,
+		Value: value,
+	}}, false, nil)
+
+	if m.count != 1 {
+		t.Fatalf("count=%d want=1", m.count)
+	}
+	ent := &m.entries[0]
+	got := m.appendOnlyEntryValue(ent)
+	if len(got) != len(value) {
+		t.Fatalf("value len=%d want=%d", len(got), len(value))
+	}
+	if unsafe.SliceData(got) != unsafe.SliceData(value) {
+		t.Fatal("expected borrowed value storage to alias caller slice")
+	}
+	if len(m.valueArena.chunks) != 0 {
+		t.Fatalf("valueArena chunks=%d want=0 for inline borrowed value", len(m.valueArena.chunks))
+	}
+
+	key[0] = 'z'
+	if gotKey := string(m.appendOnlyEntryKey(ent)); gotKey != "k-short" {
+		t.Fatalf("stored key changed after caller mutation: got=%q want=%q", gotKey, "k-short")
+	}
+	gotValue, deleted, ok := m.Get([]byte("k-short"))
+	if !ok || deleted || string(gotValue) != "borrowed-value" {
+		t.Fatalf("Get(k-short)=(%q,%v,%v) want=(borrowed-value,false,true)", string(gotValue), deleted, ok)
+	}
+}
+
+func TestAppendOnlyApplyBorrowValueSortedBatchTrusted_PreservesOrderedFastPath(t *testing.T) {
+	m := NewAppendOnlyWithCapacityEstimatedEntryBytes(appendOnlyMinInitialEntries*appendOnlyEstimatedBytesPerEntryPointer, appendOnlyEstimatedBytesPerEntryPointer)
+	entries := make([]batchpkg.Entry, appendOnlyMinInitialEntries*4)
+	value := []byte("borrowed-value")
+	callbacks := 0
+	for i := range entries {
+		var key [8]byte
+		binary.BigEndian.PutUint64(key[:], uint64(i+1))
+		entries[i] = batchpkg.Entry{Type: batchpkg.OpPut, Key: append([]byte(nil), key[:]...), Value: value}
+	}
+
+	m.ApplyBorrowValueSortedBatchTrusted(entries, false, func(key []byte) {
+		callbacks++
+	})
+
+	if callbacks != len(entries) {
+		t.Fatalf("callbacks=%d want=%d", callbacks, len(entries))
+	}
+	if !m.ordered {
+		t.Fatal("expected ordered append-only memtable after trusted sorted batch")
+	}
+	if !m.hasLast || m.lastIdx != len(entries)-1 {
+		t.Fatalf("last state hasLast=%v lastIdx=%d want lastIdx=%d", m.hasLast, m.lastIdx, len(entries)-1)
+	}
+	if m.count != len(entries) {
+		t.Fatalf("count=%d want=%d", m.count, len(entries))
+	}
+	if m.latest != nil || m.latest64 != nil {
+		t.Fatalf("trusted ordered batch should not materialize latest maps: latest=%v latest64=%v", m.latest != nil, m.latest64 != nil)
+	}
+
+	lastKey := entries[len(entries)-1].Key
+	got, deleted, ok := m.Get(lastKey)
+	if !ok || deleted || string(got) != string(value) {
+		t.Fatalf("Get(last)=(%q,%v,%v) want=(%q,false,true)", string(got), deleted, ok, string(value))
+	}
+}
+
+func TestAppendOnlyApplyBorrowValueSortedBatchIndicesTrusted_PreservesOrderedFastPath(t *testing.T) {
+	m := NewAppendOnlyWithCapacityEstimatedEntryBytes(appendOnlyMinInitialEntries*appendOnlyEstimatedBytesPerEntryPointer, appendOnlyEstimatedBytesPerEntryPointer)
+	entries := make([]batchpkg.Entry, appendOnlyMinInitialEntries*4)
+	value := []byte("borrowed-value")
+	idxs := make([]int, 0, len(entries)/2)
+	callbacks := 0
+	lastSelected := -1
+	for i := range entries {
+		var key [8]byte
+		binary.BigEndian.PutUint64(key[:], uint64(i+1))
+		entries[i] = batchpkg.Entry{Type: batchpkg.OpPut, Key: append([]byte(nil), key[:]...), Value: value}
+		if i%2 == 0 {
+			idxs = append(idxs, i)
+			lastSelected = i
+		}
+	}
+
+	m.ApplyBorrowValueSortedBatchIndicesTrusted(entries, idxs, false, func(key []byte) {
+		callbacks++
+	})
+
+	if callbacks != len(idxs) {
+		t.Fatalf("callbacks=%d want=%d", callbacks, len(idxs))
+	}
+	if !m.ordered {
+		t.Fatal("expected ordered append-only memtable after trusted sorted batch indices")
+	}
+	if !m.hasLast || m.lastIdx != len(idxs)-1 {
+		t.Fatalf("last state hasLast=%v lastIdx=%d want lastIdx=%d", m.hasLast, m.lastIdx, len(idxs)-1)
+	}
+	if m.count != len(idxs) {
+		t.Fatalf("count=%d want=%d", m.count, len(idxs))
+	}
+	lastKey := entries[lastSelected].Key
+	got, deleted, ok := m.Get(lastKey)
+	if !ok || deleted || string(got) != string(value) {
+		t.Fatalf("Get(lastSelected)=(%q,%v,%v) want=(%q,false,true)", string(got), deleted, ok, string(value))
+	}
+}
+
+func TestAppendOnlyApplyBorrowValueSortedBatchTrusted_FallsBackWhenBatchStartsBeforeLastKey(t *testing.T) {
+	m := NewAppendOnlyWithCapacity(0)
+	var highKey [8]byte
+	binary.BigEndian.PutUint64(highKey[:], 10)
+	m.Set(highKey[:], []byte("ten"))
+
+	var keyOne [8]byte
+	var keyTwo [8]byte
+	binary.BigEndian.PutUint64(keyOne[:], 1)
+	binary.BigEndian.PutUint64(keyTwo[:], 2)
+	m.ApplyBorrowValueSortedBatchTrusted([]batchpkg.Entry{
+		{Type: batchpkg.OpPut, Key: keyOne[:], Value: []byte("one")},
+		{Type: batchpkg.OpPut, Key: keyTwo[:], Value: []byte("two")},
+	}, false, nil)
+
+	if m.ordered {
+		t.Fatal("expected fallback trusted batch to mark memtable unordered")
+	}
+	if !m.latestDirty {
+		t.Fatal("expected unordered fallback to defer latest index materialization")
+	}
+	if m.latest != nil || m.latest64 != nil {
+		t.Fatal("expected unordered fallback to keep latest index unmaterialized before read")
+	}
+
+	if got, deleted, ok := m.Get(keyOne[:]); !ok || deleted || string(got) != "one" {
+		t.Fatalf("Get(keyOne)=(%q,%v,%v) want=(one,false,true)", string(got), deleted, ok)
+	}
+	if m.latestDirty {
+		t.Fatal("expected first point read to materialize latest index")
+	}
+	if got, deleted, ok := m.Get(highKey[:]); !ok || deleted || string(got) != "ten" {
+		t.Fatalf("Get(highKey)=(%q,%v,%v) want=(ten,false,true)", string(got), deleted, ok)
+	}
+}
+
+func TestAppendOnlyApplyBorrowValueSortedBatchIndicesTrusted_FallsBackWhenBatchStartsBeforeLastKey(t *testing.T) {
+	m := NewAppendOnlyWithCapacity(0)
+	var highKey [8]byte
+	binary.BigEndian.PutUint64(highKey[:], 10)
+	m.Set(highKey[:], []byte("ten"))
+
+	entries := []batchpkg.Entry{
+		{Type: batchpkg.OpPut, Key: func() []byte { var k [8]byte; binary.BigEndian.PutUint64(k[:], 1); return append([]byte(nil), k[:]...) }(), Value: []byte("one")},
+		{Type: batchpkg.OpPut, Key: func() []byte { var k [8]byte; binary.BigEndian.PutUint64(k[:], 2); return append([]byte(nil), k[:]...) }(), Value: []byte("two")},
+	}
+	m.ApplyBorrowValueSortedBatchIndicesTrusted(entries, []int{0, 1}, false, nil)
+
+	if m.ordered {
+		t.Fatal("expected fallback trusted batch indices to mark memtable unordered")
+	}
+	if !m.latestDirty {
+		t.Fatal("expected unordered fallback to defer latest index materialization")
+	}
+	if m.latest != nil || m.latest64 != nil {
+		t.Fatal("expected unordered fallback to keep latest index unmaterialized before read")
+	}
+
+	if got, deleted, ok := m.Get(entries[0].Key); !ok || deleted || string(got) != "one" {
+		t.Fatalf("Get(entries[0])=(%q,%v,%v) want=(one,false,true)", string(got), deleted, ok)
+	}
+	if m.latestDirty {
+		t.Fatal("expected first point read to materialize latest index")
+	}
+	if got, deleted, ok := m.Get(highKey[:]); !ok || deleted || string(got) != "ten" {
+		t.Fatalf("Get(highKey)=(%q,%v,%v) want=(ten,false,true)", string(got), deleted, ok)
+	}
+}
+
+func TestAppendOnlyFirstPayloadKeepsValueSideBufferSmall(t *testing.T) {
+	m := &AppendOnly{
+		entries: make([]appendOnlyEntry, 1024),
+		ordered: true,
+		lastIdx: -1,
+	}
+
+	m.Set([]byte("k-short"), []byte("value"))
+
+	if got := cap(m.values); got != appendOnlyMinInitialEntries {
+		t.Fatalf("value cap=%d want %d", got, appendOnlyMinInitialEntries)
+	}
+	if got := len(m.values); got != 1 {
+		t.Fatalf("value len=%d want=1", got)
+	}
+}
+
+func TestAppendOnlyDistinctPayloadsGrowValueSideBufferToDenseFloor(t *testing.T) {
+	m := &AppendOnly{
+		entries: make([]appendOnlyEntry, 1024),
+		ordered: true,
+		lastIdx: -1,
+	}
+
+	for i := 0; i <= appendOnlyMinInitialEntries; i++ {
+		m.Set([]byte(fmt.Sprintf("k%03d", i)), []byte(fmt.Sprintf("value-%03d", i)))
+	}
+
+	if got := cap(m.values); got != cap(m.entries) {
+		t.Fatalf("value cap=%d want entry cap=%d", got, cap(m.entries))
+	}
+	if got := len(m.values); got != appendOnlyMinInitialEntries+1 {
+		t.Fatalf("value len=%d want=%d", got, appendOnlyMinInitialEntries+1)
 	}
 }
 
@@ -140,6 +584,60 @@ func TestAppendOnlyIteratorSortedLatest(t *testing.T) {
 
 	if it.Valid() {
 		t.Fatalf("iterator should be exhausted")
+	}
+}
+
+func TestAppendOnlySetEntryPreservesExtraFlagBits(t *testing.T) {
+	m := NewAppendOnlyWithCapacity(0)
+	ptr := page.ValuePtr{Offset: 7, Length: 11, FileID: 3}
+	const extra = byte(0x40)
+
+	m.SetEntry([]byte("b-ptr"), []byte("tail"), ptr, node.FlagPointer|extra)
+	m.SetEntrySteal([]byte("a-del"), nil, page.ValuePtr{}, node.FlagTombstone|extra)
+
+	_, gotPtr, flags, ok := m.GetEntry([]byte("b-ptr"))
+	if !ok {
+		t.Fatalf("GetEntry(ptr) missing")
+	}
+	if gotPtr != ptr {
+		t.Fatalf("ptr=%+v want=%+v", gotPtr, ptr)
+	}
+	if flags != node.FlagPointer|extra {
+		t.Fatalf("ptr flags=%#x want=%#x", flags, node.FlagPointer|extra)
+	}
+
+	_, _, flags, ok = m.GetEntry([]byte("a-del"))
+	if !ok {
+		t.Fatalf("GetEntry(del) missing")
+	}
+	if flags != node.FlagTombstone|extra {
+		t.Fatalf("del flags=%#x want=%#x", flags, node.FlagTombstone|extra)
+	}
+
+	it := m.NewIterator(nil, nil)
+	defer func() { _ = it.Close() }()
+	seen := 0
+	for ; it.Valid(); it.Next() {
+		key := string(it.UnsafeKey())
+		_, gotPtr, gotFlags := it.UnsafeEntry()
+		switch key {
+		case "a-del":
+			if gotFlags != node.FlagTombstone|extra {
+				t.Fatalf("iterator del flags=%#x want=%#x", gotFlags, node.FlagTombstone|extra)
+			}
+			seen++
+		case "b-ptr":
+			if gotPtr != ptr {
+				t.Fatalf("iterator ptr=%+v want=%+v", gotPtr, ptr)
+			}
+			if gotFlags != node.FlagPointer|extra {
+				t.Fatalf("iterator ptr flags=%#x want=%#x", gotFlags, node.FlagPointer|extra)
+			}
+			seen++
+		}
+	}
+	if seen != 2 {
+		t.Fatalf("iterator saw %d flagged entries, want 2", seen)
 	}
 }
 
@@ -300,15 +798,35 @@ func TestAppendOnlyGetBuildsLatestIndexOnFirstPointRead(t *testing.T) {
 		latestSize func(m *AppendOnly) int
 	}{
 		{
-			name: "non-8-byte",
+			name: "short-inline",
 			makeKey: func(v uint64) []byte {
 				return []byte{byte('a' + v)}
+			},
+			latestIdx: func(m *AppendOnly, key []byte) (int, bool) {
+				inlineKey, ok := appendOnlyInlineMapKeyFromBytes(key)
+				if !ok || m.latestInline == nil {
+					return 0, false
+				}
+				idx, ok := m.latestInline[inlineKey]
+				return idx, ok
+			},
+			latestSize: func(m *AppendOnly) int {
+				if m.latestInline == nil {
+					return 0
+				}
+				return len(m.latestInline)
+			},
+		},
+		{
+			name: "long-string",
+			makeKey: func(v uint64) []byte {
+				return []byte(fmt.Sprintf("long-key-%08d", v))
 			},
 			latestIdx: func(m *AppendOnly, key []byte) (int, bool) {
 				if m.latest == nil {
 					return 0, false
 				}
-				idx, ok := m.latest[appendOnlyKeyString(key)]
+				idx, ok := m.latest[appendOnlyLookupKeyString(key)]
 				return idx, ok
 			},
 			latestSize: func(m *AppendOnly) int {
@@ -360,22 +878,22 @@ func TestAppendOnlyGetBuildsLatestIndexOnFirstPointRead(t *testing.T) {
 			if ordered {
 				t.Fatalf("expected memtable to become unordered")
 			}
-			if dirty {
-				t.Fatalf("expected latest index to stay clean after order break")
+			if !dirty {
+				t.Fatalf("expected latest index to be dirty after order break")
 			}
 			m.mu.RLock()
 			latestSizeBeforeGet := kk.latestSize(m)
-			idxBeforeGet, okBeforeGet := kk.latestIdx(m, lo)
+			_, okBeforeGet := kk.latestIdx(m, lo)
 			countBeforeGet := m.count
 			m.mu.RUnlock()
-			if latestSizeBeforeGet < 2 {
-				t.Fatalf("expected latest index to be materialized on order break, size=%d", latestSizeBeforeGet)
+			if latestSizeBeforeGet != 0 {
+				t.Fatalf("expected latest index to remain unmaterialized on order break, size=%d", latestSizeBeforeGet)
 			}
-			if !okBeforeGet {
-				t.Fatalf("expected latest index lookup to succeed immediately after order break")
+			if okBeforeGet {
+				t.Fatalf("expected latest index lookup to miss before first read")
 			}
-			if idxBeforeGet != countBeforeGet-1 {
-				t.Fatalf("latest index before Get=%d want %d", idxBeforeGet, countBeforeGet-1)
+			if countBeforeGet != 2 {
+				t.Fatalf("count before Get=%d want 2", countBeforeGet)
 			}
 
 			if got, del, ok := m.Get(lo); !ok || del || string(got) != "lo" {
@@ -457,6 +975,196 @@ func TestAppendOnlyGet_EmptyKey_IncrementalLatestIndex(t *testing.T) {
 	if got, ptr, flags, ok := m.GetEntry([]byte{}); !ok || string(got) != "empty" || ptr != (page.ValuePtr{}) || flags != node.FlagInline {
 		t.Fatalf("GetEntry(empty key) = (%q,%+v,%d,%v), want (empty,zero,%d,true)", string(got), ptr, flags, ok, node.FlagInline)
 	}
+
+	m.Delete([]byte{})
+	if got, del, ok := m.Get([]byte{}); !ok || !del || got != nil {
+		t.Fatalf("Get(empty key after delete) = (%v,%v,%v), want (nil,true,true)", got, del, ok)
+	}
+	if got, ptr, flags, ok := m.GetEntry([]byte{}); !ok || got != nil || ptr != (page.ValuePtr{}) || flags != node.FlagTombstone {
+		t.Fatalf("GetEntry(empty key after delete) = (%v,%+v,%d,%v), want (nil,zero,%d,true)", got, ptr, flags, ok, node.FlagTombstone)
+	}
+	m.mu.RLock()
+	ent := &m.entries[m.count-1]
+	inlineLen := appendOnlyEntryInlineKeyLen(ent)
+	keyIndex := appendOnlyEntryKeyIndex(ent)
+	encodedKey := m.appendOnlyEntryKey(ent)
+	m.mu.RUnlock()
+	if inlineLen != 0 || keyIndex == 0 {
+		t.Fatalf("empty key entry encoding inlineLen=%d keyIndex=%d, want side-key encoding", inlineLen, keyIndex)
+	}
+	if encodedKey == nil || len(encodedKey) != 0 {
+		t.Fatalf("encoded empty key = %v len=%d, want non-nil empty key", encodedKey, len(encodedKey))
+	}
+}
+
+func TestAppendOnlyApplyBorrowValueSortedBatchTrusted_EmptyKeyPointer(t *testing.T) {
+	m := NewAppendOnlyWithCapacity(0)
+	ptr := page.ValuePtr{Offset: 7, Length: 11, FileID: 3}
+
+	m.ApplyBorrowValueSortedBatchTrusted([]batchpkg.Entry{
+		{Type: batchpkg.OpPut, Key: []byte{}, Value: []byte("empty-ptr"), IsPtr: true, ValuePtr: ptr},
+		{Type: batchpkg.OpPut, Key: []byte("a"), Value: []byte("a")},
+	}, true, nil)
+
+	if !m.ordered {
+		t.Fatal("expected empty-key trusted batch to stay ordered")
+	}
+	got, gotPtr, flags, ok := m.GetEntry([]byte{})
+	if !ok || string(got) != "empty-ptr" || gotPtr != ptr || flags != node.FlagPointer {
+		t.Fatalf("GetEntry(empty key pointer) = (%q,%+v,%d,%v), want (empty-ptr,%+v,%d,true)", string(got), gotPtr, flags, ok, ptr, node.FlagPointer)
+	}
+
+	it := m.NewIterator(nil, nil)
+	defer it.Close()
+	if !it.Valid() {
+		t.Fatal("expected iterator to start at empty key")
+	}
+	if gotKey := it.UnsafeKey(); gotKey == nil || len(gotKey) != 0 {
+		t.Fatalf("iterator empty key = %v len=%d, want non-nil empty key", gotKey, len(gotKey))
+	}
+	got, gotPtr, flags = it.UnsafeEntry()
+	if string(got) != "empty-ptr" || gotPtr != ptr || flags != node.FlagPointer {
+		t.Fatalf("iterator empty entry = (%q,%+v,%d), want (empty-ptr,%+v,%d)", string(got), gotPtr, flags, ptr, node.FlagPointer)
+	}
+}
+
+func TestAppendOnlyLatestIndexShortInlineKeysSurviveEntryGrowth(t *testing.T) {
+	m := NewAppendOnlyWithCapacityEstimatedEntryBytes(
+		appendOnlyMinInitialEntries*appendOnlyEstimatedBytesPerEntryPointer,
+		appendOnlyEstimatedBytesPerEntryPointer,
+	)
+
+	m.Set([]byte("b"), []byte("first"))
+	m.Set([]byte("a"), []byte("target"))
+	if got, del, ok := m.Get([]byte("a")); !ok || del || string(got) != "target" {
+		t.Fatalf("precondition Get(a) = (%q,%v,%v), want (target,false,true)", string(got), del, ok)
+	}
+
+	for i := 0; i < appendOnlyMinInitialEntries; i++ {
+		key := []byte(fmt.Sprintf("long-growth-key-%08d", i))
+		m.Set(key, []byte("growth"))
+	}
+
+	if got, del, ok := m.Get([]byte("a")); !ok || del || string(got) != "target" {
+		t.Fatalf("Get(a) after growth = (%q,%v,%v), want (target,false,true)", string(got), del, ok)
+	}
+}
+
+func TestAppendOnlyMutableIteratorShortInlineKeyStableAfterClose(t *testing.T) {
+	m := NewAppendOnlyWithCapacity(0)
+	m.Set([]byte("b"), []byte("first"))
+	m.Set([]byte("a"), []byte("target"))
+	arenaChunks := len(m.valueArena.chunks)
+	arenaPos := m.valueArena.curPos
+
+	it := m.NewIterator(nil, nil)
+	if len(m.valueArena.chunks) != arenaChunks || m.valueArena.curPos != arenaPos {
+		t.Fatalf("mutable iterator copied inline keys into memtable arena")
+	}
+	if !it.Valid() {
+		t.Fatal("iterator unexpectedly invalid")
+	}
+	key := it.UnsafeKey()
+	if got := string(key); got != "a" {
+		t.Fatalf("iterator key=%q want a", got)
+	}
+	if err := it.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if got := string(key); got != "a" {
+		t.Fatalf("iterator key after close=%q want a", got)
+	}
+}
+
+func TestAppendOnlyOrderedIteratorShortInlineKeyStableAfterCloseAndGrowth(t *testing.T) {
+	m := NewAppendOnlyWithCapacityEstimatedEntryBytes(
+		appendOnlyMinInitialEntries*appendOnlyEstimatedBytesPerEntryPointer,
+		appendOnlyEstimatedBytesPerEntryPointer,
+	)
+	m.Set([]byte("a"), []byte("target"))
+	m.Set([]byte("long-growth-key"), []byte("growth"))
+
+	it := m.NewIterator(nil, nil)
+	if !it.Valid() {
+		t.Fatal("iterator unexpectedly invalid")
+	}
+	key := it.UnsafeKey()
+	if got := string(key); got != "a" {
+		t.Fatalf("iterator key=%q want a", got)
+	}
+	if err := it.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	for i := 0; i < appendOnlyMinInitialEntries; i++ {
+		growthKey := []byte(fmt.Sprintf("long-growth-key-%08d", i))
+		m.Set(growthKey, []byte("growth"))
+	}
+	if got := string(key); got != "a" {
+		t.Fatalf("iterator key after close+growth=%q want a", got)
+	}
+}
+
+func TestAppendOnlyIteratorLongKeyDoesNotExposeIndexStorage(t *testing.T) {
+	m := NewAppendOnlyWithCapacity(0)
+	const (
+		targetKey = "long-key-a"
+		otherKey  = "long-key-b"
+	)
+	m.Set([]byte(otherKey), []byte("other"))
+	m.Set([]byte(targetKey), []byte("target")) // force unordered latest-index path
+
+	it := m.NewIterator(nil, nil)
+	if !it.Valid() {
+		t.Fatal("iterator unexpectedly invalid")
+	}
+	key := it.UnsafeKey()
+	if got := string(key); got != targetKey {
+		t.Fatalf("iterator key=%q want %q", got, targetKey)
+	}
+	key[0] = 'X'
+	if err := it.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	if got, del, ok := m.Get([]byte(targetKey)); !ok || del || string(got) != "target" {
+		t.Fatalf("Get(%q) after iterator key mutation = (%q,%v,%v), want (target,false,true)", targetKey, got, del, ok)
+	}
+	if _, _, ok := m.Get([]byte("Xong-key-a")); ok {
+		t.Fatalf("mutating iterator key created lookup hit for corrupted key")
+	}
+}
+
+func TestAppendOnlyIteratorUnsafeStableKeyUsesTrustedNoCopyView(t *testing.T) {
+	m := NewAppendOnlyWithCapacity(0)
+	const (
+		targetKey = "long-key-a"
+		otherKey  = "long-key-b"
+	)
+	m.Set([]byte(otherKey), []byte("other"))
+	m.Set([]byte(targetKey), []byte("target")) // force unordered latest-index path
+
+	it := m.NewIterator(nil, nil)
+	stableIt, ok := it.(interface{ UnsafeStableKey() []byte })
+	if !ok {
+		t.Fatal("append-only iterator does not expose trusted stable key view")
+	}
+	if !it.Valid() {
+		t.Fatal("iterator unexpectedly invalid")
+	}
+	key := stableIt.UnsafeStableKey()
+	if got := string(key); got != targetKey {
+		t.Fatalf("stable iterator key=%q want %q", got, targetKey)
+	}
+	if err := it.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if got := string(key); got != targetKey {
+		t.Fatalf("stable iterator key after close=%q want %q", got, targetKey)
+	}
+	if got, del, ok := m.Get([]byte(targetKey)); !ok || del || string(got) != "target" {
+		t.Fatalf("Get(%q) after stable key view = (%q,%v,%v), want (target,false,true)", targetKey, got, del, ok)
+	}
 }
 
 var appendOnlyGetBenchSink []byte
@@ -483,6 +1191,7 @@ func benchmarkAppendOnlyGetOrderedVsReverseScan(b *testing.B, count int) {
 	reverse.ordered = false
 	reverse.latestDirty = true
 	clear(reverse.latest)
+	clear(reverse.latestInline)
 	clear(reverse.latest64)
 	reverse.mu.Unlock()
 

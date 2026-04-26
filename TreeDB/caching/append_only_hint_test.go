@@ -1,9 +1,14 @@
 package caching
 
 import (
+	"encoding/binary"
+	"fmt"
+	"reflect"
 	"runtime"
 	"testing"
 	"time"
+
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
 )
 
 func TestAppendOnlyEntryHint_AdaptiveDecayAndCapacityClamp(t *testing.T) {
@@ -53,6 +58,31 @@ func TestAppendOnlyEntriesToCapacity_OverflowSafe(t *testing.T) {
 	if got := appendOnlyEntriesToCapacity(0, appendOnlyEstimatedBytesPerEntryDefault); got != 0 {
 		t.Fatalf("zero entries capacity=%d want 0", got)
 	}
+}
+
+func TestTrimAppendOnlyMemLeasesIgnoresStaleEntryHint(t *testing.T) {
+	var cache DB
+	cache.appendOnlyEntryHint.Store(2048)
+
+	mt := memtable.NewAppendOnlyWithCapacityEstimatedEntryBytes(4<<10, appendOnlyEstimatedBytesPerEntryDefault)
+	for i := 0; i < 2048; i++ {
+		mt.Delete([]byte(fmt.Sprintf("trim-key-%08d", i)))
+	}
+	grownCap := appendOnlyEntriesCapForTest(mt)
+	if grownCap < 2048 {
+		t.Fatalf("test setup cap(entries)=%d want >=2048", grownCap)
+	}
+
+	cache.appendOnlyMemLeases = []*memtable.AppendOnly{mt}
+	cache.trimAppendOnlyMemLeases(0, 4<<10)
+
+	if got := appendOnlyEntriesCapForTest(mt); got >= grownCap {
+		t.Fatalf("trim retained stale hinted cap(entries)=%d, before=%d", got, grownCap)
+	}
+}
+
+func appendOnlyEntriesCapForTest(mt *memtable.AppendOnly) int {
+	return reflect.ValueOf(mt).Elem().FieldByName("entries").Cap()
 }
 
 func TestAppendOnlyEntryHint_CapacityTracksPressureScaledMutableThreshold(t *testing.T) {
@@ -120,5 +150,58 @@ func TestAppendOnlyEntryHint_CapacityTracksPressureScaledMutableThreshold(t *tes
 
 	if !(critical < high && high < normal) {
 		t.Fatalf("expected stricter caps under pressure: normal=%d high=%d critical=%d", normal, high, critical)
+	}
+}
+
+func TestAppendOnlyPredictiveHintUpdatesSharedEntryHint(t *testing.T) {
+	db := &DB{backend: NewMockBackend()}
+	const capacity = 128 << 10
+
+	before := db.appendOnlyEntryHintEntries()
+	raw, err := db.newMutableMemtableWithCapacityMode(capacity, memtable.ModeAppendOnly)
+	if err != nil {
+		t.Fatalf("newMutableMemtableWithCapacityMode: %v", err)
+	}
+	mt, ok := raw.(*memtable.AppendOnly)
+	if !ok {
+		t.Fatalf("expected append-only memtable, got %T", raw)
+	}
+
+	for i := 0; i < 1<<10; i++ {
+		var key [8]byte
+		binary.BigEndian.PutUint64(key[:], uint64(i+1))
+		mt.Delete(key[:])
+	}
+
+	if got := int(db.appendOnlyEntryHint.Load()); got <= before {
+		t.Fatalf("shared entry hint=%d want > %d after predictive observation", got, before)
+	}
+}
+
+func TestAppendOnlyOpenSeedsPredictiveHintOnInitialMutables(t *testing.T) {
+	backend := NewMockBackend()
+	db, err := Open(t.TempDir(), backend, Options{
+		AllowUnsafe:    true,
+		DisableWAL:     true,
+		MemtableMode:   "append_only",
+		MemtableShards: 1,
+		FlushThreshold: 128 << 10,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	mt, ok := db.mutableShards[0].mem.(*memtable.AppendOnly)
+	if !ok {
+		t.Fatalf("initial mutable type=%T want *memtable.AppendOnly", db.mutableShards[0].mem)
+	}
+	for i := 0; i < 1<<10; i++ {
+		var key [8]byte
+		binary.BigEndian.PutUint64(key[:], uint64(i+1))
+		mt.Delete(key[:])
+	}
+	if got := int(db.appendOnlyEntryHint.Load()); got == 0 {
+		t.Fatalf("expected initial mutable predictive observation")
 	}
 }

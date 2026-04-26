@@ -2,12 +2,21 @@ package caching
 
 import (
 	"bytes"
+	"encoding/binary"
 	"path/filepath"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
 )
+
+func batchFollowupBE8Key(i uint64) []byte {
+	key := make([]byte, 8)
+	binary.BigEndian.PutUint64(key, i)
+	return key
+}
 
 func statUint64Followup(t *testing.T, stats map[string]string, key string) uint64 {
 	t.Helper()
@@ -115,6 +124,160 @@ func TestBatchWrite_DeleteOnlyFastPath_SortedAndUnsorted(t *testing.T) {
 	t.Run("unsorted", func(t *testing.T) { run(t, []string{"b", "a"}) })
 }
 
+func TestBatchWrite_UnsortedBatchDoesNotMaterializeShardEntries(t *testing.T) {
+	cache, err := Open(t.TempDir(), NewMockBackend(), Options{
+		DisableWAL:     true,
+		AllowUnsafe:    true,
+		FlushThreshold: 1 << 30,
+		MemtableMode:   "btree",
+		MemtableShards: 4,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer cache.Close()
+
+	b := cache.NewBatchWithSize(3)
+	defer func() { _ = b.Close() }()
+	for _, key := range []string{"c", "a", "b"} {
+		if err := b.Set([]byte(key), []byte("v-"+key)); err != nil {
+			t.Fatalf("Set(%q): %v", key, err)
+		}
+	}
+	if b.streamEligible {
+		t.Fatal("test batch unexpectedly stream eligible")
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if cap(b.shardEntries) != 0 {
+		t.Fatalf("unsorted write materialized shard entries: cap=%d", cap(b.shardEntries))
+	}
+	for _, key := range []string{"a", "b", "c"} {
+		got, err := cache.Get([]byte(key))
+		if err != nil {
+			t.Fatalf("Get(%q): %v", key, err)
+		}
+		want := []byte("v-" + key)
+		if !bytes.Equal(got, want) {
+			t.Fatalf("Get(%q)=%q want %q", key, got, want)
+		}
+	}
+}
+
+func TestBatchWrite_DeleteOnlyEmptyDBNoOp_WALOff(t *testing.T) {
+	run := func(t *testing.T, useView bool) {
+		t.Helper()
+		dir := t.TempDir()
+		backend := NewMockBackend()
+		cache, err := Open(dir, backend, Options{
+			DisableWAL:     true,
+			AllowUnsafe:    true,
+			FlushThreshold: 1 << 20,
+		})
+		if err != nil {
+			t.Fatalf("Open: %v", err)
+		}
+		defer cache.Close()
+
+		b := cache.NewBatch()
+		for _, key := range []string{"k3", "k1", "k2"} {
+			var err error
+			if useView {
+				err = b.DeleteView([]byte(key))
+			} else {
+				err = b.Delete([]byte(key))
+			}
+			if err != nil {
+				_ = b.Close()
+				t.Fatalf("Delete(%q): %v", key, err)
+			}
+		}
+		if err := b.Write(); err != nil {
+			_ = b.Close()
+			t.Fatalf("Write: %v", err)
+		}
+		_ = b.Close()
+
+		if got := backend.writeCalls; got != 0 {
+			t.Fatalf("backend write calls=%d want 0", got)
+		}
+		if got := cache.mutableBytes.Load(); got != 0 {
+			t.Fatalf("mutableBytes=%d want 0", got)
+		}
+
+		cache.mu.RLock()
+		queueLen := len(cache.queue)
+		backendRangeKnown := cache.backendRangeKnown
+		backendRangeValid := cache.backendRange.valid
+		cache.mu.RUnlock()
+
+		if queueLen != 0 {
+			t.Fatalf("queue len=%d want 0", queueLen)
+		}
+		if !backendRangeKnown || backendRangeValid {
+			t.Fatalf("backend range known=%t valid=%t want known empty backend", backendRangeKnown, backendRangeValid)
+		}
+
+		for i := range cache.mutableShards {
+			shard := &cache.mutableShards[i]
+			shard.mu.Lock()
+			got := shard.mem.Len()
+			shard.mu.Unlock()
+			if got != 0 {
+				t.Fatalf("mutable shard %d len=%d want 0", i, got)
+			}
+		}
+	}
+
+	t.Run("delete", func(t *testing.T) { run(t, false) })
+	t.Run("delete_view", func(t *testing.T) { run(t, true) })
+}
+
+func TestBatchWrite_DeleteOnlyEmptyDBNoOp_LockOrder(t *testing.T) {
+	dir := t.TempDir()
+	backend := NewMockBackend()
+	cache, err := Open(dir, backend, Options{
+		DisableWAL:     true,
+		AllowUnsafe:    true,
+		FlushThreshold: 1 << 20,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer cache.Close()
+
+	b := cache.NewBatch()
+	if err := b.Delete([]byte("missing")); err != nil {
+		_ = b.Close()
+		t.Fatalf("Delete: %v", err)
+	}
+
+	cache.flushMu.Lock()
+	done := make(chan error, 1)
+	go func() {
+		done <- b.Write()
+	}()
+
+	// Give the writer goroutine a brief chance to reach any attempted writeMu
+	// acquisition. The success path should not wait for the full blocked write.
+	time.Sleep(10 * time.Millisecond)
+	heldWriteMu := !cache.writeMu.TryLock()
+	if !heldWriteMu {
+		cache.writeMu.Unlock()
+	}
+	cache.flushMu.Unlock()
+
+	if err := <-done; err != nil {
+		_ = b.Close()
+		t.Fatalf("Write: %v", err)
+	}
+	_ = b.Close()
+	if heldWriteMu {
+		t.Fatalf("delete-only empty DB fast path acquired writeMu before flushMu")
+	}
+}
+
 func TestBatchWrite_DeleteOnlyFastPath_WALOnWritesDeleteOpsOnly(t *testing.T) {
 	dir := t.TempDir()
 	backend, err := db.Open(db.Options{Dir: dir})
@@ -151,5 +314,269 @@ func TestBatchWrite_DeleteOnlyFastPath_WALOnWritesDeleteOpsOnly(t *testing.T) {
 	}
 	if deleteOps != 3 {
 		t.Fatalf("delete ops=%d want 3", deleteOps)
+	}
+}
+
+func TestBatchWrite_SortedBatchCreatesSingleMutableRoute(t *testing.T) {
+	dir := t.TempDir()
+	backend, err := db.Open(db.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("backend open: %v", err)
+	}
+	cache, err := Open(dir, backend, Options{
+		AllowUnsafe:                true,
+		DisableWAL:                 true,
+		RelaxedSync:                true,
+		MemtableMode:               "append_only",
+		MemtableShards:             8,
+		FlushThreshold:             1 << 30,
+		IndexOuterLeavesInValueLog: true,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer cache.Close()
+
+	b := cache.NewBatchWithSize(512)
+	defer func() { _ = b.Close() }()
+	for i := uint64(0); i < 512; i++ {
+		key := batchFollowupBE8Key(i)
+		value := append([]byte("v-"), key...)
+		if err := b.Set(key, value); err != nil {
+			t.Fatalf("Set(%d): %v", i, err)
+		}
+	}
+	if err := b.WriteSync(); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	route := cache.currentMutableRoute.Load()
+	if route == nil {
+		t.Fatal("expected current mutable route after sorted batch")
+	}
+	routeEntries := route.normalizedEntries()
+	if len(routeEntries) != 1 {
+		t.Fatalf("route entries=%d want 1", len(routeEntries))
+	}
+
+	var crossShardKey []byte
+	crossShardRoute := -1
+	for _, entry := range routeEntries {
+		for i := uint64(0); i < 512; i++ {
+			key := batchFollowupBE8Key(i)
+			if !keyInRange(entry.rng, key) {
+				continue
+			}
+			if cache.hashShardIndex(key) != int(entry.shardID) {
+				crossShardKey = key
+				crossShardRoute = int(entry.shardID)
+				break
+			}
+		}
+		if crossShardKey != nil {
+			break
+		}
+	}
+	if crossShardKey == nil {
+		t.Fatal("expected at least one routed key whose hash shard differs from route shard")
+	}
+
+	if got := cache.shardIndexForWrite(crossShardKey); got != crossShardRoute {
+		t.Fatalf("shardIndexForWrite=%d want route shard %d", got, crossShardRoute)
+	}
+	if _, _, found := cache.mutableShards[cache.hashShardIndex(crossShardKey)].mem.Get(crossShardKey); found {
+		t.Fatal("hashed shard unexpectedly owns routed key")
+	}
+	if _, _, found := cache.mutableShards[crossShardRoute].mem.Get(crossShardKey); !found {
+		t.Fatal("route shard does not own routed key")
+	}
+
+	got, err := cache.Get(crossShardKey)
+	if err != nil {
+		t.Fatalf("Get(routed): %v", err)
+	}
+	if want := append([]byte("v-"), crossShardKey...); !bytes.Equal(got, want) {
+		t.Fatalf("Get(routed)=%q want %q", got, want)
+	}
+}
+
+func TestBatchWrite_SortedBatchRotatesSingleRoutedShard(t *testing.T) {
+	dir := t.TempDir()
+	backend, err := db.Open(db.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("backend open: %v", err)
+	}
+	cache, err := Open(dir, backend, Options{
+		AllowUnsafe:                true,
+		DisableWAL:                 true,
+		RelaxedSync:                true,
+		MemtableMode:               "append_only",
+		MemtableShards:             8,
+		FlushThreshold:             1 << 10,
+		IndexOuterLeavesInValueLog: true,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer cache.Close()
+
+	b := cache.NewBatchWithSize(512)
+	defer func() { _ = b.Close() }()
+	value := bytes.Repeat([]byte("x"), 128)
+	for i := uint64(0); i < 512; i++ {
+		key := batchFollowupBE8Key(i)
+		if err := b.Set(key, value); err != nil {
+			t.Fatalf("Set(%d): %v", i, err)
+		}
+	}
+	cache.flushMu.Lock()
+	defer cache.flushMu.Unlock()
+	if err := b.WriteSync(); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	cache.mu.RLock()
+	queueLen := len(cache.queue)
+	queueShardIDs := append([]uint16(nil), cache.queueShardIDs...)
+	queueRouteModes := append([]uint8(nil), cache.queueRouteModes...)
+	cache.mu.RUnlock()
+
+	if queueLen != 1 {
+		t.Fatalf("queue len=%d want 1", queueLen)
+	}
+	if len(queueRouteModes) != queueLen {
+		t.Fatalf("queue route modes len=%d want %d", len(queueRouteModes), queueLen)
+	}
+	for i, mode := range queueRouteModes {
+		if mode != memtableRouteRanged {
+			t.Fatalf("queue route mode[%d]=%d want %d", i, mode, memtableRouteRanged)
+		}
+	}
+	if route := cache.currentMutableRoute.Load(); route == nil {
+		t.Fatal("expected current mutable route to stay active while routed queue is pending")
+	}
+
+	var routedKey []byte
+	for _, queuedShardID := range queueShardIDs {
+		queuedShard := int(queuedShardID)
+		for i := uint64(0); i < 512; i++ {
+			key := batchFollowupBE8Key(i)
+			if cache.hashShardIndex(key) != queuedShard {
+				routedKey = key
+				break
+			}
+		}
+		if routedKey != nil {
+			break
+		}
+	}
+	if routedKey == nil {
+		t.Fatal("expected queued routed key whose hash shard differs from queued shard")
+	}
+
+	got, err := cache.Get(routedKey)
+	if err != nil {
+		t.Fatalf("Get(queued routed): %v", err)
+	}
+	if !bytes.Equal(got, value) {
+		t.Fatalf("Get(queued routed) len=%d want %d", len(got), len(value))
+	}
+}
+
+func TestFlushOneLockedDequeuesQueueRouteModes(t *testing.T) {
+	backend := NewMockBackend()
+	cache, err := Open(t.TempDir(), backend, Options{
+		AllowUnsafe:        true,
+		DisableWAL:         true,
+		RelaxedSync:        true,
+		MemtableMode:       "append_only",
+		MemtableShards:     8,
+		FlushThreshold:     1 << 30,
+		MaxQueuedMemtables: -1,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer cache.Close()
+
+	cache.flushMu.Lock()
+	defer cache.flushMu.Unlock()
+
+	first, err := memtable.NewWithCapacityMode(0, memtable.ModeHashSorted)
+	if err != nil {
+		t.Fatalf("new first memtable: %v", err)
+	}
+	second, err := memtable.NewWithCapacityMode(0, memtable.ModeHashSorted)
+	if err != nil {
+		t.Fatalf("new second memtable: %v", err)
+	}
+
+	first.Set([]byte("hashed-first"), []byte("hashed-value"))
+
+	const routedShard = 3
+	var routedKey []byte
+	for i := uint64(0); ; i++ {
+		key := batchFollowupBE8Key(i)
+		if cache.hashShardIndex(key) != routedShard {
+			routedKey = key
+			break
+		}
+	}
+	value := bytes.Repeat([]byte("x"), 128)
+	second.Set(routedKey, value)
+	first.Freeze()
+	second.Freeze()
+
+	routedRange := keyRange{}
+	routedRange.add(routedKey)
+
+	cache.mu.Lock()
+	cache.queue = []memtable.Table{first, second}
+	cache.queueShardIDs = []uint16{0, routedShard}
+	cache.queueRouteModes = []uint8{memtableRouteHashed, memtableRouteRanged}
+	cache.queueLaneIDs = []uint16{0, 0}
+	cache.queueIDs = []uint64{1, 2}
+	cache.queueEnqueueNS = []int64{time.Now().UnixNano(), time.Now().UnixNano()}
+	cache.queueRanges = []keyRange{{}, routedRange}
+	cache.queueWALPaths = nil
+	cache.queueValueLogPaths = nil
+	cache.queueBacklogBytes.Store(first.Size() + second.Size())
+	cache.publishMemtablesLocked()
+	if len(cache.queue) != 2 {
+		cache.mu.Unlock()
+		t.Fatalf("queue len before flush=%d want 2", len(cache.queue))
+	}
+	if len(cache.queueRouteModes) != len(cache.queue) {
+		cache.mu.Unlock()
+		t.Fatalf("queue route modes len=%d want %d", len(cache.queueRouteModes), len(cache.queue))
+	}
+	if cache.queueRouteModes[0] != memtableRouteHashed || cache.queueRouteModes[1] != memtableRouteRanged {
+		modes := append([]uint8(nil), cache.queueRouteModes...)
+		cache.mu.Unlock()
+		t.Fatalf("queue route modes before flush=%v want [%d %d]", modes, memtableRouteHashed, memtableRouteRanged)
+	}
+	cache.mu.Unlock()
+
+	if !cache.flushOneLocked(false) {
+		t.Fatal("flushOneLocked returned false")
+	}
+
+	cache.mu.RLock()
+	queueLen := len(cache.queue)
+	queueRouteModes := append([]uint8(nil), cache.queueRouteModes...)
+	cache.mu.RUnlock()
+	if queueLen != 1 {
+		t.Fatalf("queue len after one flush=%d want 1", queueLen)
+	}
+	if len(queueRouteModes) != 1 || queueRouteModes[0] != memtableRouteRanged {
+		t.Fatalf("queue route modes after one flush=%v want [%d]", queueRouteModes, memtableRouteRanged)
+	}
+
+	got, err := cache.Get(routedKey)
+	if err != nil {
+		t.Fatalf("Get(routed after one flush): %v", err)
+	}
+	if !bytes.Equal(got, value) {
+		t.Fatalf("Get(routed after one flush) len=%d want %d", len(got), len(value))
 	}
 }

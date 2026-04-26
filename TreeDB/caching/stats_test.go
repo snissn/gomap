@@ -1,6 +1,7 @@
 package caching
 
 import (
+	"encoding/binary"
 	"math/rand"
 	"sync"
 	"testing"
@@ -58,6 +59,11 @@ func TestAtomicStats(t *testing.T) {
 	expectedIters := uint64(workers * iterations)
 	if got := db.memtableStats.iterators.Load(); got != expectedIters {
 		t.Errorf("concurrent iterators = %d, want %d", got, expectedIters)
+	}
+
+	db.noteDeleteKey([]byte("delete-key"))
+	if got := db.memtableStats.deleteWrites.Load(); got != 1 {
+		t.Errorf("delete writes = %d, want 1", got)
 	}
 }
 
@@ -143,6 +149,35 @@ func TestChooseAdaptiveMode(t *testing.T) {
 	if got := db.chooseAdaptiveMemtableModeLocked(); got != memtable.ModeHashSorted {
 		t.Errorf("overwrite mode = %v, want %v", got, memtable.ModeHashSorted)
 	}
+
+	// 5. Delete-heavy traffic -> AppendOnly. Tombstones are cheap to append and
+	// can be coalesced during flush; hash-sorted insertion is wasted churn here.
+	db.memtableStats.writes.Store(adaptiveMinWrites)
+	db.memtableStats.seqWrites.Store(0)
+	db.memtableStats.overwriteWrites.Store(0)
+	db.memtableStats.deleteWrites.Store(adaptiveMinWrites)
+	db.memtableStats.iterators.Store(0)
+	db.memtableStats.rangeIters.Store(0)
+	if got := db.chooseAdaptiveMemtableModeLocked(); got != memtable.ModeAppendOnly {
+		t.Errorf("delete-heavy mode = %v, want %v", got, memtable.ModeAppendOnly)
+	}
+	if got := adaptiveDecisionReasonString(db.memtableAdaptiveDecisionReason.Load()); got != "append_deletes" {
+		t.Errorf("delete-heavy reason=%q want append_deletes", got)
+	}
+
+	// 6. Low-overwrite write-heavy traffic -> AppendOnly even when not sequential.
+	db.memtableStats.writes.Store(adaptiveMinWrites)
+	db.memtableStats.seqWrites.Store(0)
+	db.memtableStats.overwriteWrites.Store(0)
+	db.memtableStats.deleteWrites.Store(0)
+	db.memtableStats.iterators.Store(0)
+	db.memtableStats.rangeIters.Store(0)
+	if got := db.chooseAdaptiveMemtableModeLocked(); got != memtable.ModeAppendOnly {
+		t.Errorf("write-heavy mode = %v, want %v", got, memtable.ModeAppendOnly)
+	}
+	if got := adaptiveDecisionReasonString(db.memtableAdaptiveDecisionReason.Load()); got != "append_write_heavy" {
+		t.Errorf("write-heavy reason=%q want append_write_heavy", got)
+	}
 }
 
 func TestChooseAdaptiveMode_BTreeMinIteratorSamplesOverride(t *testing.T) {
@@ -178,6 +213,64 @@ func TestChooseAdaptiveMode_BTreeMinIteratorSamplesOverride(t *testing.T) {
 	}
 }
 
+func TestAdaptiveObservationContinuesInAppendOnly(t *testing.T) {
+	db := newAdaptiveStatsDB(memtable.ModeAppendOnly)
+	db.memtableWarmupActive = false
+
+	db.updateAdaptiveObservationLocked()
+	if !db.memtableAdaptiveObserve.Load() {
+		t.Fatalf("expected adaptive observation to remain enabled in append_only mode")
+	}
+
+	db.noteWriteKey([]byte("a"))
+	db.noteWriteKey([]byte("b"))
+	db.noteIterator([]byte("a"), []byte("c"))
+
+	if got := db.memtableStats.writes.Load(); got != 2 {
+		t.Fatalf("writes=%d want 2", got)
+	}
+	if got := db.memtableStats.seqWrites.Load(); got != 1 {
+		t.Fatalf("seqWrites=%d want 1", got)
+	}
+	if got := db.memtableStats.iterators.Load(); got != 1 {
+		t.Fatalf("iterators=%d want 1", got)
+	}
+	if got := db.memtableStats.rangeIters.Load(); got != 1 {
+		t.Fatalf("rangeIters=%d want 1", got)
+	}
+}
+
+func TestChooseAdaptiveMode_LowOverwriteMixedWritesPreferAppendOnly(t *testing.T) {
+	db := newAdaptiveStatsDB(memtable.ModeAppendOnly)
+
+	for i := adaptiveTailSequentialWriteMin - 1; i >= 0; i-- {
+		var key [8]byte
+		binary.BigEndian.PutUint64(key[:], uint64(i))
+		db.noteWriteKey(key[:])
+	}
+	if got := db.chooseAdaptiveMemtableModeLocked(); got != memtable.ModeAppendOnly {
+		t.Fatalf("descending low-overwrite phase mode=%v want %v", got, memtable.ModeAppendOnly)
+	}
+}
+
+func TestShouldRotateForDeleteHeavyRecovery(t *testing.T) {
+	db := newAdaptiveStatsDB(memtable.ModeHashSorted)
+	for i := 0; i < adaptiveMinWrites; i++ {
+		var key [8]byte
+		binary.BigEndian.PutUint64(key[:], uint64(i))
+		db.noteDeleteKey(key[:])
+	}
+
+	if !db.shouldRotateForDeleteHeavyRecovery() {
+		t.Fatal("expected delete-heavy adaptive stats to request append-only recovery from hash_sorted")
+	}
+
+	db.storeMemtableMode(memtable.ModeAppendOnly)
+	if db.shouldRotateForDeleteHeavyRecovery() {
+		t.Fatal("did not expect delete-heavy recovery when already in append_only mode")
+	}
+}
+
 func TestNoteWriteSortedRunMatchesPerKey_NoPrior(t *testing.T) {
 	perKey := newAdaptiveStatsDB(0)
 	perKey.noteWriteKey([]byte("a"))
@@ -188,6 +281,55 @@ func TestNoteWriteSortedRunMatchesPerKey_NoPrior(t *testing.T) {
 	run.noteWriteSortedRun([]byte("a"), []byte("c"), 3)
 
 	assertStatsEquivalent(t, perKey, run)
+}
+
+func TestNoteDeleteSortedRunMatchesPerKey(t *testing.T) {
+	perKey := newAdaptiveStatsDB(0)
+	perKey.noteDeleteKey([]byte("a"))
+	perKey.noteDeleteKey([]byte("b"))
+	perKey.noteDeleteKey([]byte("c"))
+
+	run := newAdaptiveStatsDB(0)
+	run.noteDeleteSortedRun([]byte("a"), []byte("c"), 3)
+
+	assertStatsEquivalent(t, perKey, run)
+}
+
+func TestNoteDeleteBatchRecordsDeleteCountWithoutOrderTracking(t *testing.T) {
+	db := newAdaptiveStatsDB(0)
+	db.noteWriteKey([]byte("prior"))
+	db.noteDeleteBatch(7)
+
+	if got := db.memtableStats.writes.Load(); got != 8 {
+		t.Fatalf("writes=%d want 8", got)
+	}
+	if got := db.memtableStats.deleteWrites.Load(); got != 7 {
+		t.Fatalf("deleteWrites=%d want 7", got)
+	}
+	if got := db.memtableStats.currentSeqRun.Load(); got != 0 {
+		t.Fatalf("currentSeqRun=%d want 0", got)
+	}
+	db.memtableStats.lastKeyMu.Lock()
+	hasLast := db.memtableStats.hasLastKey
+	db.memtableStats.lastKeyMu.Unlock()
+	if hasLast {
+		t.Fatal("expected aggregate delete batch to clear last-key tracking")
+	}
+}
+
+func TestNoteWriteSortedRunWithDeletesRecordsMixedDeleteCount(t *testing.T) {
+	db := newAdaptiveStatsDB(0)
+	db.noteWriteSortedRunWithDeletes([]byte("a"), []byte("d"), 4, 2)
+
+	if got := db.memtableStats.writes.Load(); got != 4 {
+		t.Fatalf("writes=%d want 4", got)
+	}
+	if got := db.memtableStats.deleteWrites.Load(); got != 2 {
+		t.Fatalf("deleteWrites=%d want 2", got)
+	}
+	if got := db.memtableStats.seqWrites.Load(); got != 3 {
+		t.Fatalf("seqWrites=%d want 3", got)
+	}
 }
 
 func TestNoteWriteSortedRunMatchesPerKey_WithPriorSmaller(t *testing.T) {
@@ -228,6 +370,12 @@ func assertStatsEquivalent(t *testing.T, want, got *DB) {
 	}
 	if w, g := want.memtableStats.overwriteWrites.Load(), got.memtableStats.overwriteWrites.Load(); w != g {
 		t.Fatalf("overwriteWrites mismatch: want=%d got=%d", w, g)
+	}
+	if w, g := want.memtableStats.deleteWrites.Load(), got.memtableStats.deleteWrites.Load(); w != g {
+		t.Fatalf("deleteWrites mismatch: want=%d got=%d", w, g)
+	}
+	if w, g := want.memtableStats.currentSeqRun.Load(), got.memtableStats.currentSeqRun.Load(); w != g {
+		t.Fatalf("currentSeqRun mismatch: want=%d got=%d", w, g)
 	}
 
 	want.memtableStats.lastKeyMu.Lock()

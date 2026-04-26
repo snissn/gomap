@@ -25,3 +25,10 @@ type UnsafeIterator interface {
 	Close() error
 	Domain() (start, end []byte)
 }
+
+// StableKeyViewIterator is an internal fast-path extension for callers that
+// already know the iterator's backing table provides stable immutable storage.
+// The returned key is not defensively copied and must not be mutated.
+type StableKeyViewIterator interface {
+	UnsafeStableKey() []byte
+}

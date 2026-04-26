@@ -2,12 +2,79 @@ package memtable
 
 import (
 	"bytes"
+	"runtime"
+	"sync"
 	"testing"
+	"unsafe"
 
 	batchpkg "github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 )
+
+func TestBTreeEntryLayoutCompact(t *testing.T) {
+	if got, wantMax := unsafe.Sizeof(btreeEntry{}), uintptr(8); got > wantMax {
+		t.Fatalf("btreeEntry size=%d, want <= %d", got, wantMax)
+	}
+	type btreeMapPair struct {
+		value btreeEntry
+		key   string
+	}
+	if got, wantMax := unsafe.Sizeof(btreeMapPair{}), uintptr(24); got > wantMax {
+		t.Fatalf("btree map pair size=%d, want <= %d", got, wantMax)
+	}
+}
+
+func TestBTreePackedEntryReusesInlineArenaRef(t *testing.T) {
+	m := NewBTree()
+
+	m.Set([]byte("a"), []byte("same-value"))
+	m.Set([]byte("b"), []byte("same-value"))
+	m.Set([]byte("c"), []byte("same-value"))
+
+	a, ok := m.tree.Get("a")
+	if !ok {
+		t.Fatal("missing key a")
+	}
+	if a.isExternal() {
+		t.Fatal("copied inline value used external entry")
+	}
+	if got, want := a.valueRef().length, uint32(len("same-value")); got != want {
+		t.Fatalf("entry value length=%d want %d", got, want)
+	}
+	for _, key := range []string{"b", "c"} {
+		got, ok := m.tree.Get(key)
+		if !ok {
+			t.Fatalf("missing key %s", key)
+		}
+		if got != a {
+			t.Fatalf("entry for key %s did not reuse packed arena ref", key)
+		}
+	}
+
+	m.Reset()
+	if m.lastInline != nil || m.lastInlineRef != (btreeArenaRef{}) {
+		t.Fatal("last inline value retained across reset")
+	}
+	if len(m.externalValues) != 0 {
+		t.Fatalf("external values after reset=%d, want 0", len(m.externalValues))
+	}
+}
+
+func TestBTreeCompactEntryKeepsBorrowedValueAlive(t *testing.T) {
+	m := NewBTree()
+	key := []byte("borrowed")
+	value := []byte("borrowed-value")
+	m.SetEntrySteal(key, value, page.ValuePtr{}, node.FlagInline)
+	value = nil
+	for i := 0; i < 3; i++ {
+		runtime.GC()
+	}
+	got, deleted, ok := m.Get(key)
+	if !ok || deleted || string(got) != "borrowed-value" {
+		t.Fatalf("Get()=(%q,%v,%v), want (borrowed-value,false,true)", string(got), deleted, ok)
+	}
+}
 
 func TestBTreeGetEntry_PointersAndTombstones(t *testing.T) {
 	m := NewBTree()
@@ -99,6 +166,102 @@ func TestBTreeSetEntryPreservesExtraFlagBits(t *testing.T) {
 	}
 }
 
+func TestBTreeSetEntryAppendFastPathMixedUpdates(t *testing.T) {
+	m := NewBTreeWithDegree(2)
+	key := func(i int) []byte {
+		return []byte{byte(i >> 8), byte(i)}
+	}
+
+	for i := 0; i < 128; i++ {
+		m.Set(key(i), []byte{byte(i)})
+	}
+	m.Set(key(64), []byte("overwrite"))
+	m.Delete(key(127))
+	m.Set(key(128), []byte("new-max"))
+	m.Set(key(1), []byte("low-overwrite"))
+
+	if got := m.Len(); got != 129 {
+		t.Fatalf("Len()=%d want 129", got)
+	}
+	if got, del, ok := m.Get(key(64)); !ok || del || string(got) != "overwrite" {
+		t.Fatalf("Get(64)=(%q,%v,%v), want overwrite,false,true", string(got), del, ok)
+	}
+	if got, del, ok := m.Get(key(127)); !ok || !del || got != nil {
+		t.Fatalf("Get(127)=(%v,%v,%v), want nil,true,true", got, del, ok)
+	}
+	if got, del, ok := m.Get(key(128)); !ok || del || string(got) != "new-max" {
+		t.Fatalf("Get(128)=(%q,%v,%v), want new-max,false,true", string(got), del, ok)
+	}
+	if got, del, ok := m.Get(key(1)); !ok || del || string(got) != "low-overwrite" {
+		t.Fatalf("Get(1)=(%q,%v,%v), want low-overwrite,false,true", string(got), del, ok)
+	}
+}
+
+func TestBTreeAdaptiveBothSplitCapacityEnablesForNonAppendInserts(t *testing.T) {
+	m := NewBTreeWithDegree(2)
+	key := func(i int) []byte {
+		return []byte{byte(i >> 8), byte(i)}
+	}
+
+	for i := 0; i < btreeAdaptiveBothSplitMinEntries; i++ {
+		m.Set(key(2048+i*2), []byte{byte(i)})
+	}
+	if m.reuseBothSplitInsertCapacity {
+		t.Fatal("adaptive split sibling capacity enabled during append-only load")
+	}
+
+	for i := 0; i < btreeAdaptiveBothSplitMinNonAppend; i++ {
+		m.Set(key(i*2+1), []byte{byte(i)})
+	}
+	if !m.reuseBothSplitInsertCapacity {
+		t.Fatal("adaptive split sibling capacity did not enable after non-append inserts")
+	}
+
+	m.Reset()
+	if m.reuseBothSplitInsertCapacity || m.nonAppendSetCount != 0 {
+		t.Fatalf("adaptive state after reset enabled=%v nonAppend=%d, want false,0", m.reuseBothSplitInsertCapacity, m.nonAppendSetCount)
+	}
+}
+
+func TestBTreeAdaptiveBothSplitCapacityStaysDisabledForAppendOnly(t *testing.T) {
+	m := NewBTreeWithDegree(2)
+	key := func(i int) []byte {
+		return []byte{byte(i >> 8), byte(i)}
+	}
+
+	for i := 0; i < btreeAdaptiveBothSplitMinEntries+btreeAdaptiveBothSplitMinNonAppend+128; i++ {
+		m.Set(key(i), []byte{byte(i)})
+	}
+	if m.reuseBothSplitInsertCapacity {
+		t.Fatal("adaptive split sibling capacity enabled for append-only inserts")
+	}
+}
+
+func TestBTreeAdaptiveBothSplitCapacityIgnoresNonAppendReplacements(t *testing.T) {
+	m := NewBTreeWithDegree(2)
+	key := func(i int) []byte {
+		return []byte{byte(i >> 8), byte(i)}
+	}
+
+	for i := 0; i < btreeAdaptiveBothSplitMinEntries; i++ {
+		m.Set(key(2048+i*2), []byte{byte(i)})
+	}
+	existingLowKey := key(2048)
+	for i := 0; i < btreeAdaptiveBothSplitMinNonAppend*2; i++ {
+		m.Set(existingLowKey, []byte{byte(i)})
+	}
+	if m.reuseBothSplitInsertCapacity || m.nonAppendSetCount != 0 {
+		t.Fatalf("adaptive state after replacements enabled=%v nonAppend=%d, want false,0", m.reuseBothSplitInsertCapacity, m.nonAppendSetCount)
+	}
+
+	for i := 0; i < btreeAdaptiveBothSplitMinNonAppend; i++ {
+		m.Set(key(i*2+1), []byte{byte(i)})
+	}
+	if !m.reuseBothSplitInsertCapacity {
+		t.Fatal("adaptive split sibling capacity did not enable after true non-append inserts")
+	}
+}
+
 func TestBTreePointerEmptySliceCanonicalizesToNil(t *testing.T) {
 	ptr := page.ValuePtr{Offset: 21, Length: 34, FileID: 5}
 
@@ -180,6 +343,253 @@ func TestBTreeInlineEmptySliceCanonicalizesToNil(t *testing.T) {
 	})
 }
 
+func TestBTreeSetEntryDedupesRepeatedCopiedInlineValues(t *testing.T) {
+	m := NewBTree()
+	value := []byte("same-value")
+
+	m.SetEntry([]byte("a"), value, page.ValuePtr{}, node.FlagInline)
+	value[0] = 'X'
+	m.SetEntry([]byte("b"), []byte("same-value"), page.ValuePtr{}, node.FlagInline)
+
+	gotA, _, _, ok := m.GetEntry([]byte("a"))
+	if !ok || string(gotA) != "same-value" {
+		t.Fatalf("GetEntry(a)=(%q,%v), want same-value,true", string(gotA), ok)
+	}
+	gotB, _, _, ok := m.GetEntry([]byte("b"))
+	if !ok || string(gotB) != "same-value" {
+		t.Fatalf("GetEntry(b)=(%q,%v), want same-value,true", string(gotB), ok)
+	}
+	if len(gotA) == 0 || len(gotB) == 0 || &gotA[0] != &gotB[0] {
+		t.Fatal("repeated copied inline values did not share BTree-owned storage")
+	}
+}
+
+func TestBTreeSetEntryCopiesKeyValue(t *testing.T) {
+	m := NewBTree()
+	key := []byte("key")
+	value := []byte("value")
+
+	m.SetEntry(key, value, page.ValuePtr{}, node.FlagInline)
+
+	got, _, _, ok := m.GetEntry([]byte("key"))
+	if !ok || string(got) != "value" {
+		t.Fatalf("GetEntry(key)=(%q,%v), want value,true", string(got), ok)
+	}
+	if unsafe.SliceData(got) == unsafe.SliceData(value) {
+		t.Fatal("SetEntry value aliases caller storage")
+	}
+	key[0] = 'z'
+	value[0] = 'X'
+	if got, _, ok := m.Get([]byte("key")); !ok || string(got) != "value" {
+		t.Fatalf("stored entry changed after caller mutation: got=(%q,%v)", string(got), ok)
+	}
+	if _, _, ok := m.Get([]byte("zey")); ok {
+		t.Fatal("stored key aliases caller storage")
+	}
+}
+
+func TestBTreeResetDropsOversizedFirstArenaChunk(t *testing.T) {
+	m := NewBTree()
+	value := make([]byte, btreeArenaChunkSize+1)
+	m.Set([]byte("large"), value)
+	if len(m.arena.chunks) == 0 || cap(m.arena.chunks[0]) <= btreeArenaChunkSize {
+		t.Fatalf("first arena chunk cap=%d want > %d", cap(m.arena.chunks[0]), btreeArenaChunkSize)
+	}
+	m.Reset()
+	if got := len(m.arena.chunks); got != 0 {
+		t.Fatalf("arena chunks after Reset=%d want 0 for oversized first chunk", got)
+	}
+}
+
+func TestBTreeOperationMixTracksCurrentDeletes(t *testing.T) {
+	m := NewBTree()
+	m.Set([]byte("a"), []byte("va"))
+	m.Delete([]byte("b"))
+	m.Delete([]byte("c"))
+
+	if got := m.OperationMix(); got.Entries != 3 || got.Deletes != 2 {
+		t.Fatalf("OperationMix after inserts=%+v, want entries=3 deletes=2", got)
+	}
+
+	m.Set([]byte("b"), []byte("vb"))
+	m.Delete([]byte("a"))
+	if got := m.OperationMix(); got.Entries != 3 || got.Deletes != 2 {
+		t.Fatalf("OperationMix after replacements=%+v, want entries=3 deletes=2", got)
+	}
+
+	m.Reset()
+	if got := m.OperationMix(); got.Entries != 0 || got.Deletes != 0 {
+		t.Fatalf("OperationMix after reset=%+v, want zero", got)
+	}
+}
+
+func TestBTreeArenaUsesSmallInitialChunkThenGrows(t *testing.T) {
+	a := &btreeArena{
+		maxChunkSize:     256,
+		initialChunkSize: 32,
+	}
+
+	if got := len(a.Copy(make([]byte, 8))); got != 8 {
+		t.Fatalf("first copy len=%d want 8", got)
+	}
+	if got := arenaChunkSizes(a); !equalInts(got, []int{32}) {
+		t.Fatalf("chunks after first copy=%v want [32]", got)
+	}
+
+	a.Copy(make([]byte, 25))
+	if got := arenaChunkSizes(a); !equalInts(got, []int{32, 64}) {
+		t.Fatalf("chunks after second copy=%v want [32 64]", got)
+	}
+
+	a.Copy(make([]byte, 50))
+	if got := arenaChunkSizes(a); !equalInts(got, []int{32, 64, 128}) {
+		t.Fatalf("chunks after third copy=%v want [32 64 128]", got)
+	}
+
+	a.Copy(make([]byte, 100))
+	if got := arenaChunkSizes(a); !equalInts(got, []int{32, 64, 128, 256}) {
+		t.Fatalf("chunks after capped growth=%v want [32 64 128 256]", got)
+	}
+}
+
+func TestBTreeArenaLargeAllocationCanExceedInitialChunk(t *testing.T) {
+	a := &btreeArena{
+		maxChunkSize:     256,
+		initialChunkSize: 32,
+	}
+
+	got := a.Copy(make([]byte, 96))
+	if len(got) != 96 {
+		t.Fatalf("large copy len=%d want 96", len(got))
+	}
+	if sizes := arenaChunkSizes(a); !equalInts(sizes, []int{96}) {
+		t.Fatalf("chunks=%v want [96]", sizes)
+	}
+
+	got = a.Copy(make([]byte, 300))
+	if len(got) != 300 {
+		t.Fatalf("oversized copy len=%d want 300", len(got))
+	}
+	if sizes := arenaChunkSizes(a); !equalInts(sizes, []int{96, 300}) {
+		t.Fatalf("chunks=%v want [96 300]", sizes)
+	}
+}
+
+func TestBTreeResetKeepsFirstArenaChunk(t *testing.T) {
+	m := NewBTree()
+	m.Set([]byte("key"), []byte("value"))
+	if len(m.arena.chunks) != 1 {
+		t.Fatalf("chunks after first set=%d want 1", len(m.arena.chunks))
+	}
+	first := &m.arena.chunks[0][0]
+	if got := len(m.arena.chunks[0]); got != btreeArenaInitialChunkSize {
+		t.Fatalf("first chunk size=%d want %d", got, btreeArenaInitialChunkSize)
+	}
+	if m.arena.offset == 0 {
+		t.Fatal("arena offset is zero after set")
+	}
+
+	m.Reset()
+	if len(m.arena.chunks) != 1 {
+		t.Fatalf("chunks after reset=%d want 1", len(m.arena.chunks))
+	}
+	if got := len(m.arena.chunks[0]); got != btreeArenaInitialChunkSize {
+		t.Fatalf("retained chunk size=%d want %d", got, btreeArenaInitialChunkSize)
+	}
+	if got := &m.arena.chunks[0][0]; got != first {
+		t.Fatal("reset did not retain first arena chunk")
+	}
+	if got := m.arena.offset; got != 0 {
+		t.Fatalf("offset after reset=%d want 0", got)
+	}
+}
+
+func TestBTreeArenaPoolClasses(t *testing.T) {
+	tests := []struct {
+		size      int
+		classSize int
+		ok        bool
+	}{
+		{size: (64 << 10) - 1, ok: false},
+		{size: 64 << 10, classSize: 64 << 10, ok: true},
+		{size: (64 << 10) + 1, classSize: 128 << 10, ok: true},
+		{size: 1 << 20, classSize: 1 << 20, ok: true},
+		{size: (1 << 20) + 1, ok: false},
+	}
+	for _, tt := range tests {
+		_, gotClass, gotOK := btreeArenaClassForLen(tt.size)
+		if gotOK != tt.ok || gotClass != tt.classSize {
+			t.Fatalf("btreeArenaClassForLen(%d)=(%d,%t), want (%d,%t)", tt.size, gotClass, gotOK, tt.classSize, tt.ok)
+		}
+	}
+}
+
+func TestBTreeArenaReusesReleasedChunk(t *testing.T) {
+	resetBTreeArenaPoolForTest(t)
+	a := &btreeArena{
+		maxChunkSize:     btreeArenaChunkSize,
+		initialChunkSize: btreeArenaInitialChunkSize,
+	}
+	a.Copy(make([]byte, btreeArenaInitialChunkSize))
+	a.Copy(make([]byte, btreeArenaInitialChunkSize+1))
+	if got := len(a.chunks); got != 2 {
+		t.Fatalf("chunks before reset=%d want 2", got)
+	}
+	released := a.chunks[1]
+	a.resetKeepFirstChunk()
+	if got := len(a.chunks); got != 1 {
+		t.Fatalf("chunks after reset=%d want 1", got)
+	}
+	if got := btreeArenaPoolBytes.Load(); got < int64(cap(released)) {
+		t.Fatalf("pooled bytes=%d want at least %d", got, cap(released))
+	}
+	reused := getBTreeArenaChunk(cap(released))
+	if cap(reused) != cap(released) {
+		t.Fatalf("reused chunk cap=%d want %d", cap(reused), cap(released))
+	}
+	putBTreeArenaChunk(reused)
+}
+
+func TestBTreeArenaPoolAccountingMissResetsAfterGC(t *testing.T) {
+	resetBTreeArenaPoolForTest(t)
+	var fakeNumGC uint64 = 7
+	btreeArenaPoolNumGC = func() uint64 { return fakeNumGC }
+
+	btreeArenaPoolBytes.Store(1234)
+	btreeArenaPoolLastGC.Store(fakeNumGC)
+	fakeNumGC++
+	_ = getBTreeArenaChunk(64 << 10)
+
+	if got := btreeArenaPoolBytes.Load(); got != 0 {
+		t.Fatalf("btreeArenaPoolBytes after GC miss=%d want 0", got)
+	}
+	if got := btreeArenaPoolLastGC.Load(); got != fakeNumGC {
+		t.Fatalf("btreeArenaPoolLastGC=%d want %d", got, fakeNumGC)
+	}
+}
+
+func TestPutBTreeArenaChunkBudgetResetsAfterGC(t *testing.T) {
+	resetBTreeArenaPoolForTest(t)
+	var fakeNumGC uint64 = 11
+	btreeArenaPoolNumGC = func() uint64 { return fakeNumGC }
+
+	_, classSize, ok := btreeArenaClassForLen(64 << 10)
+	if !ok {
+		t.Fatal("btreeArenaClassForLen failed")
+	}
+	btreeArenaPoolBytes.Store(btreeArenaPoolBudgetBytes)
+	btreeArenaPoolLastGC.Store(fakeNumGC)
+	fakeNumGC++
+	putBTreeArenaChunk(make([]byte, classSize))
+
+	if got := btreeArenaPoolBytes.Load(); got != int64(classSize) {
+		t.Fatalf("btreeArenaPoolBytes after GC-aware put=%d want %d", got, classSize)
+	}
+	if got := btreeArenaPoolLastGC.Load(); got != fakeNumGC {
+		t.Fatalf("btreeArenaPoolLastGC=%d want %d", got, fakeNumGC)
+	}
+}
+
 func TestBTreeIteratorUnsafeEntry_ForInlinePointerAndTombstone(t *testing.T) {
 	ptrWant := page.ValuePtr{Offset: 99, Length: 123, FileID: 7}
 	m := NewBTree()
@@ -237,4 +647,348 @@ func TestBTreeIteratorUnsafeEntry_ForInlinePointerAndTombstone(t *testing.T) {
 
 	assertIter(t, "forward", m.NewIterator(nil, nil), []string{"a-inline", "b-pointer", "c-tomb"})
 	assertIter(t, "reverse", m.NewReverseIterator(nil, nil), []string{"c-tomb", "b-pointer", "a-inline"})
+}
+
+func TestBTreeApplyStealSortedBatchIndicesTrusted(t *testing.T) {
+	m := NewBTree()
+	ptr := page.ValuePtr{Offset: 7, Length: 11, FileID: 2}
+	entries := []batchpkg.Entry{
+		{Type: batchpkg.OpPut, Key: []byte("ignore"), Value: []byte("skip")},
+		{Type: batchpkg.OpPut, Key: []byte("a"), Value: []byte("va")},
+		{Type: batchpkg.OpDelete, Key: []byte("b")},
+		{Type: batchpkg.OpPut, Key: []byte("c"), Value: []byte("tail"), ValuePtr: ptr, IsPtr: true},
+	}
+
+	var seen []string
+	m.ApplyStealSortedBatchIndicesTrusted(entries, []int{1, 2, 3}, func(key []byte) {
+		seen = append(seen, string(key))
+	})
+
+	if got, del, ok := m.Get([]byte("a")); !ok || del || string(got) != "va" {
+		t.Fatalf("Get(a)=(%q,%v,%v), want (va,false,true)", string(got), del, ok)
+	}
+	if got, del, ok := m.Get([]byte("b")); !ok || !del || got != nil {
+		t.Fatalf("Get(b)=(%v,%v,%v), want (nil,true,true)", got, del, ok)
+	}
+	if got, gotPtr, flags, ok := m.GetEntry([]byte("c")); !ok || string(got) != "tail" || gotPtr != ptr || flags != node.FlagPointer {
+		t.Fatalf("GetEntry(c)=(%q,%+v,%d,%v), want (tail,%+v,%d,true)", string(got), gotPtr, flags, ok, ptr, node.FlagPointer)
+	}
+	if _, _, ok := m.Get([]byte("ignore")); ok {
+		t.Fatal("ignored entry was applied")
+	}
+	if want := []string{"a", "b", "c"}; !equalStrings(seen, want) {
+		t.Fatalf("onKey saw %v want %v", seen, want)
+	}
+	if got := m.Len(); got != 3 {
+		t.Fatalf("Len()=%d want 3", got)
+	}
+}
+
+func TestBTreeApplyStealSortedBatchIndicesTrustedEmptyIndexListNoops(t *testing.T) {
+	for _, idxs := range [][]int{nil, []int{}} {
+		m := NewBTree()
+		seen := false
+		m.ApplyStealSortedBatchIndicesTrusted([]batchpkg.Entry{{
+			Type:  batchpkg.OpPut,
+			Key:   []byte("unexpected"),
+			Value: []byte("value"),
+		}}, idxs, func([]byte) {
+			seen = true
+		})
+		if seen {
+			t.Fatal("onKey called for empty index list")
+		}
+		if got := m.Len(); got != 0 {
+			t.Fatalf("Len()=%d want 0", got)
+		}
+		if _, _, ok := m.Get([]byte("unexpected")); ok {
+			t.Fatal("empty index list applied entry")
+		}
+	}
+}
+
+func TestBTreeApplyCopySortedBatchIndicesTrustedCopiesKeyValue(t *testing.T) {
+	m := NewBTree()
+	key := []byte("a")
+	value := []byte("value-a")
+	entries := []batchpkg.Entry{
+		{Type: batchpkg.OpPut, Key: []byte("ignore"), Value: []byte("skip")},
+		{Type: batchpkg.OpPut, Key: key, Value: value},
+		{Type: batchpkg.OpDelete, Key: []byte("b")},
+	}
+
+	var seen []string
+	m.ApplyCopySortedBatchIndicesTrusted(entries, []int{1, 2}, false, func(key []byte) {
+		seen = append(seen, string(key))
+	})
+
+	got, _, _, ok := m.GetEntry([]byte("a"))
+	if !ok || string(got) != "value-a" {
+		t.Fatalf("GetEntry(a)=(%q,%v), want value-a,true", string(got), ok)
+	}
+	if unsafe.SliceData(got) == unsafe.SliceData(value) {
+		t.Fatal("copy sorted batch value aliases caller storage")
+	}
+	key[0] = 'z'
+	value[0] = 'X'
+	if got, _, ok := m.Get([]byte("a")); !ok || string(got) != "value-a" {
+		t.Fatalf("stored entry changed after caller mutation: got=(%q,%v)", string(got), ok)
+	}
+	if _, _, ok := m.Get([]byte("ignore")); ok {
+		t.Fatal("ignored entry was applied")
+	}
+	if got, del, ok := m.Get([]byte("b")); !ok || !del || got != nil {
+		t.Fatalf("Get(b)=(%v,%v,%v), want (nil,true,true)", got, del, ok)
+	}
+	if want := []string{"a", "b"}; !equalStrings(seen, want) {
+		t.Fatalf("onKey saw %v want %v", seen, want)
+	}
+}
+
+func TestBTreeApplyCopySortedBatchIndicesTrustedKeepsOwnedLastKey(t *testing.T) {
+	m := NewBTree()
+	key := []byte("m")
+	entries := []batchpkg.Entry{{
+		Type:  batchpkg.OpPut,
+		Key:   key,
+		Value: []byte("value-m"),
+	}}
+
+	m.ApplyCopySortedBatchIndicesTrusted(entries, []int{0}, false, nil)
+	key[0] = 'z'
+	if got, want := m.lastKey, "m"; got != want {
+		t.Fatalf("lastKey=%q want %q after caller key mutation", got, want)
+	}
+	m.Set([]byte("n"), []byte("value-n"))
+	if got, _, ok := m.Get([]byte("m")); !ok || string(got) != "value-m" {
+		t.Fatalf("Get(m)=(%q,%v), want value-m,true", string(got), ok)
+	}
+	if got, _, ok := m.Get([]byte("n")); !ok || string(got) != "value-n" {
+		t.Fatalf("Get(n)=(%q,%v), want value-n,true", string(got), ok)
+	}
+}
+
+func TestBTreeApplyStealSortedBatchTrustedDuplicateFallsBack(t *testing.T) {
+	m := NewBTree()
+	entries := []batchpkg.Entry{
+		{Type: batchpkg.OpPut, Key: []byte("a"), Value: []byte("old")},
+		{Type: batchpkg.OpPut, Key: []byte("a"), Value: []byte("new")},
+		{Type: batchpkg.OpPut, Key: []byte("b"), Value: []byte("value-b")},
+	}
+
+	m.ApplyStealSortedBatchTrusted(entries, nil)
+	if got := m.Len(); got != 2 {
+		t.Fatalf("Len()=%d want 2", got)
+	}
+	if got, _, ok := m.Get([]byte("a")); !ok || string(got) != "new" {
+		t.Fatalf("Get(a)=(%q,%v), want new,true", string(got), ok)
+	}
+	if got, _, ok := m.Get([]byte("b")); !ok || string(got) != "value-b" {
+		t.Fatalf("Get(b)=(%q,%v), want value-b,true", string(got), ok)
+	}
+}
+
+func TestBTreeApplyStealSortedBatchTrustedNilKeyFallsBack(t *testing.T) {
+	m := NewBTree()
+	entries := []batchpkg.Entry{
+		{Type: batchpkg.OpPut, Key: []byte("a"), Value: []byte("value-a")},
+		{Type: batchpkg.OpPut, Key: nil, Value: []byte("skip")},
+		{Type: batchpkg.OpPut, Key: []byte("b"), Value: []byte("value-b")},
+	}
+
+	m.ApplyStealSortedBatchTrusted(entries, nil)
+	if got := m.Len(); got != 2 {
+		t.Fatalf("Len()=%d want 2", got)
+	}
+	if _, _, ok := m.Get(nil); ok {
+		t.Fatal("nil key was applied")
+	}
+	if got, _, ok := m.Get([]byte("a")); !ok || string(got) != "value-a" {
+		t.Fatalf("Get(a)=(%q,%v), want value-a,true", string(got), ok)
+	}
+	if got, _, ok := m.Get([]byte("b")); !ok || string(got) != "value-b" {
+		t.Fatalf("Get(b)=(%q,%v), want value-b,true", string(got), ok)
+	}
+}
+
+func TestBTreeBatchLoadSortedStats(t *testing.T) {
+	ResetBTreeBatchLoadSortedStats()
+	t.Cleanup(ResetBTreeBatchLoadSortedStats)
+
+	m := NewBTree()
+	hit := btreeStatsEntries('a', btreeLoadSortedMinBatchEntries)
+	m.ApplyStealSortedBatchTrusted(hit, nil)
+
+	small := btreeStatsEntries('b', btreeLoadSortedMinBatchEntries-1)
+	m.ApplyCopySortedBatchIndicesTrusted(small, btreeStatsIndexes(len(small)), false, nil)
+
+	overlap := btreeStatsEntries('a', btreeLoadSortedMinBatchEntries)
+	m.ApplyStealSortedBatchTrusted(overlap, nil)
+
+	nonIncreasing := btreeStatsEntries('c', btreeLoadSortedMinBatchEntries)
+	nonIncreasing[17].Key = nonIncreasing[16].Key
+	m.ApplyStealSortedBatchTrusted(nonIncreasing, nil)
+
+	nilKey := btreeStatsEntries('d', btreeLoadSortedMinBatchEntries)
+	nilKey[23].Key = nil
+	m.ApplyStealSortedBatchTrusted(nilKey, nil)
+
+	stats := BTreeBatchLoadSortedStatsSnapshot()
+	if got, want := stats.Attempts, uint64(5); got != want {
+		t.Fatalf("Attempts=%d want %d", got, want)
+	}
+	if got, want := stats.AttemptEntries, uint64(btreeLoadSortedMinBatchEntries*4+btreeLoadSortedMinBatchEntries-1); got != want {
+		t.Fatalf("AttemptEntries=%d want %d", got, want)
+	}
+	if got, want := stats.Hits, uint64(1); got != want {
+		t.Fatalf("Hits=%d want %d", got, want)
+	}
+	if got, want := stats.HitEntries, uint64(btreeLoadSortedMinBatchEntries); got != want {
+		t.Fatalf("HitEntries=%d want %d", got, want)
+	}
+	if got, want := stats.StealAttempts, uint64(4); got != want {
+		t.Fatalf("StealAttempts=%d want %d", got, want)
+	}
+	if got, want := stats.StealHits, uint64(1); got != want {
+		t.Fatalf("StealHits=%d want %d", got, want)
+	}
+	if got, want := stats.CopyAttempts, uint64(1); got != want {
+		t.Fatalf("CopyAttempts=%d want %d", got, want)
+	}
+	if got, want := stats.CopyHits, uint64(0); got != want {
+		t.Fatalf("CopyHits=%d want %d", got, want)
+	}
+	if got, want := stats.FallbackTooSmall, uint64(1); got != want {
+		t.Fatalf("FallbackTooSmall=%d want %d", got, want)
+	}
+	if got, want := stats.FallbackTooSmallEntries, uint64(btreeLoadSortedMinBatchEntries-1); got != want {
+		t.Fatalf("FallbackTooSmallEntries=%d want %d", got, want)
+	}
+	if got, want := stats.FallbackOverlapLast, uint64(1); got != want {
+		t.Fatalf("FallbackOverlapLast=%d want %d", got, want)
+	}
+	if got, want := stats.FallbackNonIncreasing, uint64(1); got != want {
+		t.Fatalf("FallbackNonIncreasing=%d want %d", got, want)
+	}
+	if got, want := stats.FallbackNilKey, uint64(1); got != want {
+		t.Fatalf("FallbackNilKey=%d want %d", got, want)
+	}
+}
+
+func btreeStatsEntries(prefix byte, n int) []batchpkg.Entry {
+	entries := make([]batchpkg.Entry, n)
+	for i := range entries {
+		entries[i] = batchpkg.Entry{
+			Type:  batchpkg.OpPut,
+			Key:   []byte{prefix, byte(i >> 8), byte(i)},
+			Value: []byte("value"),
+		}
+	}
+	return entries
+}
+
+func btreeStatsIndexes(n int) []int {
+	idxs := make([]int, n)
+	for i := range idxs {
+		idxs[i] = i
+	}
+	return idxs
+}
+
+func TestBTreeApplyCopySortedBatchIndicesTrustedPointerTail(t *testing.T) {
+	ptr := page.ValuePtr{Offset: 7, Length: 11, FileID: 2}
+
+	t.Run("omits inline tail", func(t *testing.T) {
+		m := NewBTree()
+		tail := []byte("tail")
+		entries := []batchpkg.Entry{{
+			Type:     batchpkg.OpPut,
+			Key:      []byte("ptr"),
+			Value:    tail,
+			ValuePtr: ptr,
+			IsPtr:    true,
+		}}
+
+		m.ApplyCopySortedBatchIndicesTrusted(entries, []int{0}, false, nil)
+		got, gotPtr, flags, ok := m.GetEntry([]byte("ptr"))
+		if !ok || got != nil || gotPtr != ptr || flags != node.FlagPointer {
+			t.Fatalf("GetEntry(ptr)=(%v,%+v,%d,%v), want (nil,%+v,%d,true)", got, gotPtr, flags, ok, ptr, node.FlagPointer)
+		}
+	})
+
+	t.Run("copies inline tail", func(t *testing.T) {
+		m := NewBTree()
+		tail := []byte("tail")
+		entries := []batchpkg.Entry{{
+			Type:     batchpkg.OpPut,
+			Key:      []byte("ptr"),
+			Value:    tail,
+			ValuePtr: ptr,
+			IsPtr:    true,
+		}}
+
+		m.ApplyCopySortedBatchIndicesTrusted(entries, []int{0}, true, nil)
+		got, gotPtr, flags, ok := m.GetEntry([]byte("ptr"))
+		if !ok || string(got) != "tail" || gotPtr != ptr || flags != node.FlagPointer {
+			t.Fatalf("GetEntry(ptr)=(%q,%+v,%d,%v), want (tail,%+v,%d,true)", string(got), gotPtr, flags, ok, ptr, node.FlagPointer)
+		}
+		if unsafe.SliceData(got) == unsafe.SliceData(tail) {
+			t.Fatal("copy sorted batch pointer tail aliases caller storage")
+		}
+		tail[0] = 'X'
+		got, gotPtr, flags, ok = m.GetEntry([]byte("ptr"))
+		if !ok || string(got) != "tail" || gotPtr != ptr || flags != node.FlagPointer {
+			t.Fatalf("GetEntry(ptr) after caller mutation=(%q,%+v,%d,%v), want (tail,%+v,%d,true)", string(got), gotPtr, flags, ok, ptr, node.FlagPointer)
+		}
+	})
+}
+
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func equalInts(a, b []int) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func resetBTreeArenaPoolForTest(t *testing.T) {
+	t.Helper()
+	prevNumGC := btreeArenaPoolNumGC
+	for i := range btreeArenaChunkPools {
+		btreeArenaChunkPools[i] = sync.Pool{}
+	}
+	btreeArenaPoolBytes.Store(0)
+	btreeArenaPoolLastGC.Store(0)
+	t.Cleanup(func() {
+		btreeArenaPoolNumGC = prevNumGC
+		for i := range btreeArenaChunkPools {
+			btreeArenaChunkPools[i] = sync.Pool{}
+		}
+		btreeArenaPoolBytes.Store(0)
+		btreeArenaPoolLastGC.Store(0)
+	})
+}
+
+func arenaChunkSizes(a *btreeArena) []int {
+	sizes := make([]int, len(a.chunks))
+	for i, chunk := range a.chunks {
+		sizes[i] = len(chunk)
+	}
+	return sizes
 }

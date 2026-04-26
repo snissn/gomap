@@ -87,6 +87,7 @@ var (
 	checkpointEveryBytes            = flag.Int64("checkpoint-every-bytes", 0, "Force a best-effort durability checkpoint every N approx bytes during write-heavy tests (0=disabled; DBs that support Checkpoint())")
 	batchWriteSteadyCheckpointBytes = flag.Int64("batch-write-steady-checkpoint-bytes", 64<<20, "batch_write_steady: default periodic checkpoint interval in bytes when checkpoint-every-* flags are unset (0 disables)")
 	batchWriteDictWarmup            = flag.Bool("batch-write-dict-warmup", false, "Enable pre-measurement dict warmup writes for batch_write* (TreeDB dict mode); off by default to keep measured runs on empty DB state")
+	gcBetweenTests                  = flag.Bool("gc-between-tests", false, "Force runtime.GC after each benchmark test to reduce cross-test harness heap carryover")
 
 	flushdrainCheckpointMax = flag.Duration("flushdrain-checkpoint-max", 0, "Abort flushdrain suite if checkpoint-before-random_read exceeds this duration (0=disabled)")
 
@@ -108,6 +109,22 @@ type DBInstance struct {
 	Name    string
 	Wrapper kvstore.DB
 	Dir     string
+}
+
+type batcherWithSize interface {
+	NewBatchWithSize(size int) (kvstore.Batch, error)
+}
+
+type batchSetView interface {
+	SetView(key, value []byte) error
+}
+
+type batchDeleteView interface {
+	DeleteView(key []byte) error
+}
+
+type resettableBatch interface {
+	Reset()
 }
 
 type BenchConfig struct {
@@ -166,6 +183,7 @@ type BenchConfig struct {
 	CheckpointEveryBytes            int64
 	BatchWriteSteadyCheckpointBytes int64
 	BatchWriteDictWarmup            bool
+	GCBetweenTests                  bool
 
 	SettleBeforeScans bool
 
@@ -205,10 +223,11 @@ type BenchRun struct {
 }
 
 type treeDBPerfMetrics struct {
-	Mmap                       treeDBMmapPerfMetrics     `json:"mmap,omitempty"`
-	Snapshot                   treeDBSnapshotPerfMetrics `json:"snapshot,omitempty"`
-	LeafGenerationsPinnedAfter int64                     `json:"leaf_generations_pinned_after,omitempty"`
-	LeafPinsTotalAfter         int64                     `json:"leaf_pins_total_after,omitempty"`
+	Mmap                       treeDBMmapPerfMetrics        `json:"mmap,omitempty"`
+	Snapshot                   treeDBSnapshotPerfMetrics    `json:"snapshot,omitempty"`
+	BTreeSortedLoad            treeDBBTreeSortedLoadMetrics `json:"btree_sorted_load,omitempty"`
+	LeafGenerationsPinnedAfter int64                        `json:"leaf_generations_pinned_after,omitempty"`
+	LeafPinsTotalAfter         int64                        `json:"leaf_pins_total_after,omitempty"`
 }
 
 type treeDBMmapPerfMetrics struct {
@@ -229,14 +248,51 @@ type treeDBSnapshotPerfMetrics struct {
 	CloseAvgMicros    float64 `json:"close_avg_micros,omitempty"`
 }
 
+type treeDBBTreeSortedLoadMetrics struct {
+	Attempts                     uint64  `json:"attempts,omitempty"`
+	AttemptEntries               uint64  `json:"attempt_entries,omitempty"`
+	Hits                         uint64  `json:"hits,omitempty"`
+	HitEntries                   uint64  `json:"hit_entries,omitempty"`
+	HitRatio                     float64 `json:"hit_ratio,omitempty"`
+	HitEntryRatio                float64 `json:"hit_entry_ratio,omitempty"`
+	CopyAttempts                 uint64  `json:"copy_attempts,omitempty"`
+	CopyHits                     uint64  `json:"copy_hits,omitempty"`
+	StealAttempts                uint64  `json:"steal_attempts,omitempty"`
+	StealHits                    uint64  `json:"steal_hits,omitempty"`
+	FallbackTooSmall             uint64  `json:"fallback_too_small,omitempty"`
+	FallbackTooSmallEntries      uint64  `json:"fallback_too_small_entries,omitempty"`
+	FallbackNilKey               uint64  `json:"fallback_nil_key,omitempty"`
+	FallbackNilKeyEntries        uint64  `json:"fallback_nil_key_entries,omitempty"`
+	FallbackOverlapLast          uint64  `json:"fallback_overlap_last,omitempty"`
+	FallbackOverlapLastEntries   uint64  `json:"fallback_overlap_last_entries,omitempty"`
+	FallbackNonIncreasing        uint64  `json:"fallback_non_increasing,omitempty"`
+	FallbackNonIncreasingEntries uint64  `json:"fallback_non_increasing_entries,omitempty"`
+}
+
 type treeDBSelectedStats struct {
-	mmapHits           uint64
-	mmapMissOutOfRange uint64
-	mmapMissNoMapping  uint64
-	mmapMissDeadCap    uint64
-	mmapFallbackReadAt uint64
-	leafGenerationsPin int64
-	leafPinsTotal      int64
+	mmapHits                                    uint64
+	mmapMissOutOfRange                          uint64
+	mmapMissNoMapping                           uint64
+	mmapMissDeadCap                             uint64
+	mmapFallbackReadAt                          uint64
+	btreeSortedLoadAttempts                     uint64
+	btreeSortedLoadAttemptEntries               uint64
+	btreeSortedLoadHits                         uint64
+	btreeSortedLoadHitEntries                   uint64
+	btreeSortedLoadCopyAttempts                 uint64
+	btreeSortedLoadCopyHits                     uint64
+	btreeSortedLoadStealAttempts                uint64
+	btreeSortedLoadStealHits                    uint64
+	btreeSortedLoadFallbackTooSmall             uint64
+	btreeSortedLoadFallbackTooSmallEntries      uint64
+	btreeSortedLoadFallbackNilKey               uint64
+	btreeSortedLoadFallbackNilKeyEntries        uint64
+	btreeSortedLoadFallbackOverlapLast          uint64
+	btreeSortedLoadFallbackOverlapLastEntries   uint64
+	btreeSortedLoadFallbackNonIncreasing        uint64
+	btreeSortedLoadFallbackNonIncreasingEntries uint64
+	leafGenerationsPin                          int64
+	leafPinsTotal                               int64
 }
 
 type benchprofExport struct {
@@ -476,6 +532,7 @@ func main() {
 		CheckpointEveryBytes:             *checkpointEveryBytes,
 		BatchWriteSteadyCheckpointBytes:  *batchWriteSteadyCheckpointBytes,
 		BatchWriteDictWarmup:             *batchWriteDictWarmup,
+		GCBetweenTests:                   *gcBetweenTests,
 		SettleBeforeScans:                *settleBeforeScans,
 		TreeDBCacheStatsBeforeReads:      *treedbCacheStatsBeforeReads,
 		TreeDBCacheStatsAfterTests:       *treedbCacheStatsAfterTests,
@@ -1098,6 +1155,25 @@ func printTreeDBCacheStats(w io.Writer, inst *DBInstance, prefix string) {
 	keys := []string{
 		"treedb.cache.memtable_mode",
 		"treedb.cache.memtable_mode_config",
+		"treedb.cache.memtable_stats.current_seq_run",
+		"treedb.cache.memtable_stats.delete_writes",
+		"treedb.cache.memtable_stats.delete_write_pct",
+		"treedb.cache.memtable_btree.sorted_load.attempts",
+		"treedb.cache.memtable_btree.sorted_load.attempt_entries",
+		"treedb.cache.memtable_btree.sorted_load.hits",
+		"treedb.cache.memtable_btree.sorted_load.hit_entries",
+		"treedb.cache.memtable_btree.sorted_load.copy_attempts",
+		"treedb.cache.memtable_btree.sorted_load.copy_hits",
+		"treedb.cache.memtable_btree.sorted_load.steal_attempts",
+		"treedb.cache.memtable_btree.sorted_load.steal_hits",
+		"treedb.cache.memtable_btree.sorted_load.fallback_too_small",
+		"treedb.cache.memtable_btree.sorted_load.fallback_too_small_entries",
+		"treedb.cache.memtable_btree.sorted_load.fallback_nil_key",
+		"treedb.cache.memtable_btree.sorted_load.fallback_nil_key_entries",
+		"treedb.cache.memtable_btree.sorted_load.fallback_overlap_last",
+		"treedb.cache.memtable_btree.sorted_load.fallback_overlap_last_entries",
+		"treedb.cache.memtable_btree.sorted_load.fallback_non_increasing",
+		"treedb.cache.memtable_btree.sorted_load.fallback_non_increasing_entries",
 		"treedb.cache.queue_len",
 		"treedb.cache.queue_backlog_bytes",
 		"treedb.cache.flush_threshold_bytes",
@@ -1301,6 +1377,10 @@ func printTreeDBCacheStats(w io.Writer, inst *DBInstance, prefix string) {
 		"treedb.cache.vlog_mmap.remaps",
 		"treedb.cache.vlog_mmap.dead_mappings",
 		"treedb.cache.vlog_mmap.dead_mappings.cap_base",
+		"treedb.cache.vlog_mmap.max_mapped_sealed_segments",
+		"treedb.cache.vlog_mmap.max_mapped_sealed_bytes",
+		"treedb.cache.vlog_mmap.max_mapped_leaf_sealed_segments",
+		"treedb.cache.vlog_mmap.max_mapped_leaf_sealed_bytes",
 		"treedb.cache.vlog_mmap.read.hits",
 		"treedb.cache.vlog_mmap.read.miss_out_of_range",
 		"treedb.cache.vlog_mmap.read.miss_no_mapping",
@@ -1744,6 +1824,22 @@ func snapshotSelectedTreeDBStats(db kvstore.DB) treeDBSelectedStats {
 		"treedb.cache.vlog_mmap.read.fallback_readat",
 		"treedb.vlog.mmap_read.fallback_readat",
 	)
+	snap.btreeSortedLoadAttempts, _ = parseUint64StatValue(stats, "treedb.cache.memtable_btree.sorted_load.attempts")
+	snap.btreeSortedLoadAttemptEntries, _ = parseUint64StatValue(stats, "treedb.cache.memtable_btree.sorted_load.attempt_entries")
+	snap.btreeSortedLoadHits, _ = parseUint64StatValue(stats, "treedb.cache.memtable_btree.sorted_load.hits")
+	snap.btreeSortedLoadHitEntries, _ = parseUint64StatValue(stats, "treedb.cache.memtable_btree.sorted_load.hit_entries")
+	snap.btreeSortedLoadCopyAttempts, _ = parseUint64StatValue(stats, "treedb.cache.memtable_btree.sorted_load.copy_attempts")
+	snap.btreeSortedLoadCopyHits, _ = parseUint64StatValue(stats, "treedb.cache.memtable_btree.sorted_load.copy_hits")
+	snap.btreeSortedLoadStealAttempts, _ = parseUint64StatValue(stats, "treedb.cache.memtable_btree.sorted_load.steal_attempts")
+	snap.btreeSortedLoadStealHits, _ = parseUint64StatValue(stats, "treedb.cache.memtable_btree.sorted_load.steal_hits")
+	snap.btreeSortedLoadFallbackTooSmall, _ = parseUint64StatValue(stats, "treedb.cache.memtable_btree.sorted_load.fallback_too_small")
+	snap.btreeSortedLoadFallbackTooSmallEntries, _ = parseUint64StatValue(stats, "treedb.cache.memtable_btree.sorted_load.fallback_too_small_entries")
+	snap.btreeSortedLoadFallbackNilKey, _ = parseUint64StatValue(stats, "treedb.cache.memtable_btree.sorted_load.fallback_nil_key")
+	snap.btreeSortedLoadFallbackNilKeyEntries, _ = parseUint64StatValue(stats, "treedb.cache.memtable_btree.sorted_load.fallback_nil_key_entries")
+	snap.btreeSortedLoadFallbackOverlapLast, _ = parseUint64StatValue(stats, "treedb.cache.memtable_btree.sorted_load.fallback_overlap_last")
+	snap.btreeSortedLoadFallbackOverlapLastEntries, _ = parseUint64StatValue(stats, "treedb.cache.memtable_btree.sorted_load.fallback_overlap_last_entries")
+	snap.btreeSortedLoadFallbackNonIncreasing, _ = parseUint64StatValue(stats, "treedb.cache.memtable_btree.sorted_load.fallback_non_increasing")
+	snap.btreeSortedLoadFallbackNonIncreasingEntries, _ = parseUint64StatValue(stats, "treedb.cache.memtable_btree.sorted_load.fallback_non_increasing_entries")
 	snap.leafGenerationsPin, _ = parseInt64StatValue(stats, "treedb.leaf_generation.generations.pinned")
 	snap.leafPinsTotal, _ = parseInt64StatValue(stats, "treedb.leaf_generation.pins.total")
 	return snap
@@ -1758,6 +1854,24 @@ func computeTreeDBPerfMetrics(before, after treeDBSelectedStats, snapshot treeDB
 			MissDeadMapCap: saturatingUint64Delta(after.mmapMissDeadCap, before.mmapMissDeadCap),
 			FallbackReadAt: saturatingUint64Delta(after.mmapFallbackReadAt, before.mmapFallbackReadAt),
 		},
+		BTreeSortedLoad: treeDBBTreeSortedLoadMetrics{
+			Attempts:                     saturatingUint64Delta(after.btreeSortedLoadAttempts, before.btreeSortedLoadAttempts),
+			AttemptEntries:               saturatingUint64Delta(after.btreeSortedLoadAttemptEntries, before.btreeSortedLoadAttemptEntries),
+			Hits:                         saturatingUint64Delta(after.btreeSortedLoadHits, before.btreeSortedLoadHits),
+			HitEntries:                   saturatingUint64Delta(after.btreeSortedLoadHitEntries, before.btreeSortedLoadHitEntries),
+			CopyAttempts:                 saturatingUint64Delta(after.btreeSortedLoadCopyAttempts, before.btreeSortedLoadCopyAttempts),
+			CopyHits:                     saturatingUint64Delta(after.btreeSortedLoadCopyHits, before.btreeSortedLoadCopyHits),
+			StealAttempts:                saturatingUint64Delta(after.btreeSortedLoadStealAttempts, before.btreeSortedLoadStealAttempts),
+			StealHits:                    saturatingUint64Delta(after.btreeSortedLoadStealHits, before.btreeSortedLoadStealHits),
+			FallbackTooSmall:             saturatingUint64Delta(after.btreeSortedLoadFallbackTooSmall, before.btreeSortedLoadFallbackTooSmall),
+			FallbackTooSmallEntries:      saturatingUint64Delta(after.btreeSortedLoadFallbackTooSmallEntries, before.btreeSortedLoadFallbackTooSmallEntries),
+			FallbackNilKey:               saturatingUint64Delta(after.btreeSortedLoadFallbackNilKey, before.btreeSortedLoadFallbackNilKey),
+			FallbackNilKeyEntries:        saturatingUint64Delta(after.btreeSortedLoadFallbackNilKeyEntries, before.btreeSortedLoadFallbackNilKeyEntries),
+			FallbackOverlapLast:          saturatingUint64Delta(after.btreeSortedLoadFallbackOverlapLast, before.btreeSortedLoadFallbackOverlapLast),
+			FallbackOverlapLastEntries:   saturatingUint64Delta(after.btreeSortedLoadFallbackOverlapLastEntries, before.btreeSortedLoadFallbackOverlapLastEntries),
+			FallbackNonIncreasing:        saturatingUint64Delta(after.btreeSortedLoadFallbackNonIncreasing, before.btreeSortedLoadFallbackNonIncreasing),
+			FallbackNonIncreasingEntries: saturatingUint64Delta(after.btreeSortedLoadFallbackNonIncreasingEntries, before.btreeSortedLoadFallbackNonIncreasingEntries),
+		},
 		Snapshot:                   snapshot,
 		LeafGenerationsPinnedAfter: after.leafGenerationsPin,
 		LeafPinsTotalAfter:         after.leafPinsTotal,
@@ -1771,6 +1885,12 @@ func computeTreeDBPerfMetrics(before, after treeDBSelectedStats, snapshot treeDB
 	}
 	if m.Snapshot.CloseCalls > 0 {
 		m.Snapshot.CloseAvgMicros = float64(m.Snapshot.CloseTotalNanos) / float64(m.Snapshot.CloseCalls) / 1_000.0
+	}
+	if m.BTreeSortedLoad.Attempts > 0 {
+		m.BTreeSortedLoad.HitRatio = float64(m.BTreeSortedLoad.Hits) / float64(m.BTreeSortedLoad.Attempts)
+	}
+	if m.BTreeSortedLoad.AttemptEntries > 0 {
+		m.BTreeSortedLoad.HitEntryRatio = float64(m.BTreeSortedLoad.HitEntries) / float64(m.BTreeSortedLoad.AttemptEntries)
 	}
 	return m
 }
@@ -1793,8 +1913,30 @@ func treeDBPerfMetricsEmpty(m treeDBPerfMetrics) bool {
 		m.Snapshot.AcquireTotalNanos == 0 &&
 		m.Snapshot.CloseCalls == 0 &&
 		m.Snapshot.CloseTotalNanos == 0 &&
+		treeDBBTreeSortedLoadMetricsEmpty(m.BTreeSortedLoad) &&
 		m.LeafGenerationsPinnedAfter == 0 &&
 		m.LeafPinsTotalAfter == 0
+}
+
+func treeDBBTreeSortedLoadMetricsEmpty(m treeDBBTreeSortedLoadMetrics) bool {
+	return m.Attempts == 0 &&
+		m.AttemptEntries == 0 &&
+		m.Hits == 0 &&
+		m.HitEntries == 0 &&
+		m.HitRatio == 0 &&
+		m.HitEntryRatio == 0 &&
+		m.CopyAttempts == 0 &&
+		m.CopyHits == 0 &&
+		m.StealAttempts == 0 &&
+		m.StealHits == 0 &&
+		m.FallbackTooSmall == 0 &&
+		m.FallbackTooSmallEntries == 0 &&
+		m.FallbackNilKey == 0 &&
+		m.FallbackNilKeyEntries == 0 &&
+		m.FallbackOverlapLast == 0 &&
+		m.FallbackOverlapLastEntries == 0 &&
+		m.FallbackNonIncreasing == 0 &&
+		m.FallbackNonIncreasingEntries == 0
 }
 
 func (p *periodicCheckpoint) Add(db kvstore.DB, opsDelta int, bytesDelta int64) error {
@@ -2000,14 +2142,13 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				encodeKey(keyBytes[j*8:(j+1)*8], uint64(j+cfg.Keys))
 			}
 		}
-		type batcherWithSize interface {
-			NewBatchWithSize(size int) (kvstore.Batch, error)
-		}
-		type batchSetView interface {
-			SetView(key, value []byte) error
-		}
-		type resettableBatch interface {
-			Reset()
+		var batchKeyBytes []byte
+		batchKeySlab := func(entries int) []byte {
+			need := entries * 8
+			if cap(batchKeyBytes) < need {
+				batchKeyBytes = make([]byte, need)
+			}
+			return batchKeyBytes[:need]
 		}
 		var (
 			batch      kvstore.Batch
@@ -2128,8 +2269,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 						}
 					} else {
 						// SetView is zero-copy: keep keys in a stable owned slab until commit.
-						need := (end - i) * 8
-						keysView := make([]byte, need)
+						keysView := batchKeySlab(end - i)
 						for j := i; j < end; j++ {
 							off := (j - i) * 8
 							keyView := keysView[off : off+8]
@@ -2224,9 +2364,8 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 					}
 				} else {
 					// Keep the zero-copy SetView path for large key counts by using
-					// one owned key slab per batch (stable beyond Commit()).
-					need := (end - i) * 8
-					keysView := make([]byte, need)
+					// one reused owned key slab per batch (stable until Commit()).
+					keysView := batchKeySlab(end - i)
 					for j := i; j < end; j++ {
 						off := (j - i) * 8
 						keyView := keysView[off : off+8]
@@ -2628,6 +2767,36 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			start := time.Now()
 			pc := newPeriodicCheckpoint(cfg)
 			perOpBytes := int64(8)
+			var (
+				batch      kvstore.Batch
+				deleteView func(key []byte) error
+				resetBatch func()
+			)
+			openBatch := func() error {
+				var err error
+				if bs, ok := batcher.(batcherWithSize); ok {
+					batch, err = bs.NewBatchWithSize(batchSize)
+				} else {
+					batch, err = batcher.NewBatch()
+				}
+				if err != nil {
+					return err
+				}
+				deleteView = nil
+				if dv, ok := batch.(batchDeleteView); ok {
+					deleteView = dv.DeleteView
+				}
+				resetBatch = nil
+				if rb, ok := batch.(resettableBatch); ok {
+					resetBatch = rb.Reset
+				}
+				return nil
+			}
+			defer func() {
+				if batch != nil {
+					_ = batch.Close()
+				}
+			}()
 
 			for i := 0; i < total; i += batchSize {
 				if i&8191 == 0 {
@@ -2635,9 +2804,21 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 						return 0, err
 					}
 				}
-				batch, err := batcher.NewBatch()
-				if err != nil {
-					return 0, fmt.Errorf("batch_delete: new batch: %w", err)
+				if batch == nil {
+					if err := openBatch(); err != nil {
+						return 0, fmt.Errorf("batch_delete: new batch: %w", err)
+					}
+				} else if resetBatch != nil {
+					resetBatch()
+				} else {
+					closeErr := batch.Close()
+					batch = nil
+					if closeErr != nil {
+						return 0, fmt.Errorf("batch_delete: close: %w", closeErr)
+					}
+					if err := openBatch(); err != nil {
+						return 0, fmt.Errorf("batch_delete: new batch: %w", err)
+					}
 				}
 
 				end := i + batchSize
@@ -2647,17 +2828,25 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				for j := i; j < end; j++ {
 					offset := j * keySize
 					key := allKeys[offset : offset+keySize]
-					if err := batch.Delete(key); err != nil {
-						_ = batch.Close()
+					var err error
+					if deleteView != nil {
+						err = deleteView(key)
+					} else {
+						err = batch.Delete(key)
+					}
+					if err != nil {
 						return 0, fmt.Errorf("batch_delete: delete: %w", err)
 					}
 				}
 				if err := batch.Commit(); err != nil {
-					_ = batch.Close()
 					return 0, fmt.Errorf("batch_delete: commit: %w", err)
 				}
-				if err := batch.Close(); err != nil {
-					return 0, fmt.Errorf("batch_delete: close: %w", err)
+				if resetBatch == nil {
+					closeErr := batch.Close()
+					batch = nil
+					if closeErr != nil {
+						return 0, fmt.Errorf("batch_delete: close: %w", closeErr)
+					}
 				}
 				if err := pc.Add(db, end-i, int64(end-i)*perOpBytes); err != nil {
 					return 0, fmt.Errorf("batch_delete checkpoint: %w", err)
@@ -2679,8 +2868,56 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			perOpBytes := int64(8 + cfg.ValueSize)
 			total := cfg.Keys
 			batchSize := 100 // Pathological: small enough to hurt if not buffered, sequential to trigger streaming
-			var k [8]byte
 			valPos := 0
+			// Keep the precomputed-key optimization bounded so very large runs do
+			// not retain a huge contiguous key buffer for the whole benchmark.
+			const maxPrecomputedKeyBytes = 128 << 20 // 128 MiB
+			precomputeKeys := total > 0 && total <= maxPrecomputedKeyBytes/8
+			var keyBytes []byte
+			if precomputeKeys {
+				keyBytes = make([]byte, total*8)
+				for j := 0; j < total; j++ {
+					encodeKey(keyBytes[j*8:(j+1)*8], uint64(j))
+				}
+			}
+			var batchKeyBytes []byte
+			batchKeySlab := func(entries int) []byte {
+				need := entries * 8
+				if cap(batchKeyBytes) < need {
+					batchKeyBytes = make([]byte, need)
+				}
+				return batchKeyBytes[:need]
+			}
+			var (
+				batch      kvstore.Batch
+				setView    func(key, value []byte) error
+				resetBatch func()
+			)
+			openBatch := func() error {
+				var err error
+				if bs, ok := batcher.(batcherWithSize); ok {
+					batch, err = bs.NewBatchWithSize(batchSize)
+				} else {
+					batch, err = batcher.NewBatch()
+				}
+				if err != nil {
+					return err
+				}
+				setView = nil
+				if sv, ok := batch.(batchSetView); ok {
+					setView = sv.SetView
+				}
+				resetBatch = nil
+				if rb, ok := batch.(resettableBatch); ok {
+					resetBatch = rb.Reset
+				}
+				return nil
+			}
+			defer func() {
+				if batch != nil {
+					_ = batch.Close()
+				}
+			}()
 
 			for i := 0; i < total; i += batchSize {
 				if i&8191 == 0 {
@@ -2688,30 +2925,77 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 						return 0, err
 					}
 				}
-				batch, err := batcher.NewBatch()
-				if err != nil {
-					return 0, fmt.Errorf("batch_small_seq: new batch: %w", err)
+				if batch == nil {
+					if err := openBatch(); err != nil {
+						return 0, fmt.Errorf("batch_small_seq: new batch: %w", err)
+					}
+				} else if resetBatch != nil {
+					resetBatch()
+				} else {
+					closeErr := batch.Close()
+					batch = nil
+					if closeErr != nil {
+						return 0, fmt.Errorf("batch_small_seq: close: %w", closeErr)
+					}
+					if err := openBatch(); err != nil {
+						return 0, fmt.Errorf("batch_small_seq: new batch: %w", err)
+					}
 				}
 
 				end := i + batchSize
 				if end > total {
 					end = total
 				}
-				for j := i; j < end; j++ {
-					encodeKey(k[:], uint64(j)) // Sequential
-					value := values[valPos%len(values)]
-					valPos++
-					if err := batch.Set(k[:], value); err != nil {
-						_ = batch.Close()
-						return 0, fmt.Errorf("batch_small_seq: set: %w", err)
+				if setView != nil {
+					if precomputeKeys {
+						for j := i; j < end; j++ {
+							keyView := keyBytes[j*8 : (j+1)*8]
+							value := values[valPos%len(values)]
+							valPos++
+							if err := setView(keyView, value); err != nil {
+								return 0, fmt.Errorf("batch_small_seq: set: %w", err)
+							}
+						}
+					} else {
+						// SetView is zero-copy: keep keys in a stable owned slab until commit.
+						keysView := batchKeySlab(end - i)
+						for j := i; j < end; j++ {
+							off := (j - i) * 8
+							keyView := keysView[off : off+8]
+							encodeKey(keyView, uint64(j))
+							value := values[valPos%len(values)]
+							valPos++
+							if err := setView(keyView, value); err != nil {
+								return 0, fmt.Errorf("batch_small_seq: set: %w", err)
+							}
+						}
+					}
+				} else {
+					for j := i; j < end; j++ {
+						var keyView []byte
+						if precomputeKeys {
+							keyView = keyBytes[j*8 : (j+1)*8]
+						} else {
+							var key [8]byte
+							encodeKey(key[:], uint64(j))
+							keyView = key[:]
+						}
+						value := values[valPos%len(values)]
+						valPos++
+						if err := batch.Set(keyView, value); err != nil {
+							return 0, fmt.Errorf("batch_small_seq: set: %w", err)
+						}
 					}
 				}
 				if err := batch.Commit(); err != nil {
-					_ = batch.Close()
 					return 0, fmt.Errorf("batch_small_seq: commit: %w", err)
 				}
-				if err := batch.Close(); err != nil {
-					return 0, fmt.Errorf("batch_small_seq: close: %w", err)
+				if resetBatch == nil {
+					closeErr := batch.Close()
+					batch = nil
+					if closeErr != nil {
+						return 0, fmt.Errorf("batch_small_seq: close: %w", closeErr)
+					}
 				}
 				if err := pc.Add(db, end-i, int64(end-i)*perOpBytes); err != nil {
 					return 0, fmt.Errorf("batch_small_seq checkpoint: %w", err)
@@ -4037,6 +4321,9 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				printTreeDBCacheStats(os.Stderr, inst, "post-"+testName+" treedb.cache")
 			}
 		}
+		if cfg.GCBetweenTests {
+			runtime.GC()
+		}
 	}
 
 	// Final clear of live table
@@ -4727,6 +5014,33 @@ func renderTreeDBPerfString(instances []*DBInstance, finalTestOrder []string, di
 					m.Mmap.MissDeadMapCap,
 					m.Mmap.FallbackReadAt,
 					m.Mmap.HitRatio,
+				))
+			}
+			if !treeDBBTreeSortedLoadMetricsEmpty(m.BTreeSortedLoad) {
+				b := m.BTreeSortedLoad
+				sb.WriteString(fmt.Sprintf("  memtable_btree.sorted_load.attempts.delta=%d attempt_entries.delta=%d hits.delta=%d hit_entries.delta=%d hit_ratio.delta=%.6f hit_entry_ratio.delta=%.6f\n",
+					b.Attempts,
+					b.AttemptEntries,
+					b.Hits,
+					b.HitEntries,
+					b.HitRatio,
+					b.HitEntryRatio,
+				))
+				sb.WriteString(fmt.Sprintf("  memtable_btree.sorted_load.copy_attempts.delta=%d copy_hits.delta=%d steal_attempts.delta=%d steal_hits.delta=%d\n",
+					b.CopyAttempts,
+					b.CopyHits,
+					b.StealAttempts,
+					b.StealHits,
+				))
+				sb.WriteString(fmt.Sprintf("  memtable_btree.sorted_load.fallback_too_small.delta=%d entries.delta=%d fallback_nil_key.delta=%d entries.delta=%d fallback_overlap_last.delta=%d entries.delta=%d fallback_non_increasing.delta=%d entries.delta=%d\n",
+					b.FallbackTooSmall,
+					b.FallbackTooSmallEntries,
+					b.FallbackNilKey,
+					b.FallbackNilKeyEntries,
+					b.FallbackOverlapLast,
+					b.FallbackOverlapLastEntries,
+					b.FallbackNonIncreasing,
+					b.FallbackNonIncreasingEntries,
 				))
 			}
 			sb.WriteString(fmt.Sprintf("  leaf_generation.generations.pinned.after=%d leaf_generation.pins.total.after=%d\n",

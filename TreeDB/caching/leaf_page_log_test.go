@@ -1,11 +1,14 @@
 package caching
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
@@ -119,6 +122,31 @@ func buildSparseLeafPageForLeafLogTest(t *testing.T) []byte {
 	return buf
 }
 
+func requireLeafLogTestPagesEqual(t *testing.T, want, got []byte) {
+	t.Helper()
+	wantNode := node.NewNodeView(want)
+	gotNode := node.NewNodeView(got)
+	if wantNode.Type() != gotNode.Type() {
+		t.Fatalf("page types differ: got=%d want=%d", gotNode.Type(), wantNode.Type())
+	}
+	if wantNode.Count() != gotNode.Count() {
+		t.Fatalf("page counts differ: got=%d want=%d", gotNode.Count(), wantNode.Count())
+	}
+	for i := uint16(0); i < wantNode.Count(); i++ {
+		wantKey, wantVal, wantPtr, wantFlags, err := wantNode.GetLeafEntryView(i)
+		if err != nil {
+			t.Fatalf("want GetLeafEntryView(%d): %v", i, err)
+		}
+		gotKey, gotVal, gotPtr, gotFlags, err := gotNode.GetLeafEntryView(i)
+		if err != nil {
+			t.Fatalf("got GetLeafEntryView(%d): %v", i, err)
+		}
+		if !bytes.Equal(gotKey, wantKey) || !bytes.Equal(gotVal, wantVal) || gotPtr != wantPtr || gotFlags != wantFlags {
+			t.Fatalf("leaf entry %d mismatch", i)
+		}
+	}
+}
+
 func TestCachingLeafPageLog_AppendLeafPageCompactsSparseLeafPayload(t *testing.T) {
 	dir := t.TempDir()
 	fileID, err := valuelog.EncodeFileID(uint32(leafLogLaneID), 1)
@@ -150,5 +178,426 @@ func TestCachingLeafPageLog_AppendLeafPageCompactsSparseLeafPayload(t *testing.T
 	}
 	if info.Size() >= int64(valuelog.HeaderSize+page.PageSize) {
 		t.Fatalf("file size=%d want compact leaf payload smaller than raw %d", info.Size(), valuelog.HeaderSize+page.PageSize)
+	}
+}
+
+func TestDB_AppendPreparedLeafPageValueLog_AppendsAndReturnsUnlocked(t *testing.T) {
+	dir := t.TempDir()
+	fileID, err := valuelog.EncodeFileID(uint32(leafLogLaneID), 1)
+	if err != nil {
+		t.Fatalf("EncodeFileID: %v", err)
+	}
+	leafDir := filepath.Join(dir, "leaf_vlog")
+	if err := os.MkdirAll(leafDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q): %v", leafDir, err)
+	}
+	path := filepath.Join(leafDir, "value-l255-000001.log")
+	writer, err := valuelog.NewWriter(path, fileID)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	defer func() {
+		if writer != nil {
+			_ = writer.Close()
+		}
+	}()
+
+	db := &DB{
+		closeCh:                 make(chan struct{}),
+		valueLogCompressionMode: uint8(vlogCompressionOff),
+	}
+	leaf := lane{id: leafLogLaneID, vlog: writer}
+	leafPage := buildSparseLeafPageForLeafLogTest(t)
+
+	leaf.vlogMu.Lock()
+	ptr, retainPath, stats, compacted, payloadLen, totalBytes, err := db.appendPreparedLeafPageValueLog(&leaf, 1, leafPage)
+	if err != nil {
+		t.Fatalf("appendPreparedLeafPageValueLog: %v", err)
+	}
+	if !leaf.vlogMu.TryLock() {
+		t.Fatalf("appendPreparedLeafPageValueLog returned with vlogMu locked")
+	}
+	leaf.vlogMu.Unlock()
+	if retainPath != "" {
+		t.Fatalf("retainPath=%q want empty", retainPath)
+	}
+	if !compacted {
+		t.Fatalf("expected sparse leaf page to compact")
+	}
+	if payloadLen != stats.RawPayloadBytes || payloadLen >= len(leafPage) {
+		t.Fatalf("payloadLen=%d stats.RawPayloadBytes=%d raw=%d", payloadLen, stats.RawPayloadBytes, len(leafPage))
+	}
+	if totalBytes <= 0 {
+		t.Fatalf("totalBytes=%d want > 0", totalBytes)
+	}
+	if got := leaf.backendReadDirtySeq.Load(); got != 1 {
+		t.Fatalf("backendReadDirtySeq=%d want 1", got)
+	}
+
+	if err := writer.Close(); err != nil {
+		t.Fatalf("Close writer: %v", err)
+	}
+	writer = nil
+
+	mgr, err := valuelog.NewManager(dir)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	defer func() { _ = mgr.Close() }()
+	if err := mgr.RegisterSegment(path, fileID); err != nil {
+		t.Fatalf("RegisterSegment(%q): %v", path, err)
+	}
+	got, err := mgr.ReadUnsafe(ptr)
+	if err != nil {
+		t.Fatalf("ReadUnsafe: %v", err)
+	}
+	requireLeafLogTestPagesEqual(t, leafPage, got)
+}
+
+func TestDB_FlushValueLogLaneDrainsPreparingLeafAppend(t *testing.T) {
+	dir := t.TempDir()
+	fileID, err := valuelog.EncodeFileID(uint32(leafLogLaneID), 1)
+	if err != nil {
+		t.Fatalf("EncodeFileID: %v", err)
+	}
+	leafDir := filepath.Join(dir, "leaf_vlog")
+	if err := os.MkdirAll(leafDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q): %v", leafDir, err)
+	}
+	path := filepath.Join(leafDir, "value-l255-000001.log")
+	writer, err := valuelog.NewWriter(path, fileID)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	defer func() {
+		if writer != nil {
+			_ = writer.Close()
+		}
+	}()
+
+	db := &DB{
+		closeCh:                 make(chan struct{}),
+		valueLogCompressionMode: uint8(vlogCompressionOff),
+	}
+	leaf := lane{id: leafLogLaneID, vlog: writer}
+	leafPage := buildSparseLeafPageForLeafLogTest(t)
+	raw, stats, compacted, ptrLength, err := valuelog.PrepareCompactLeafPageRecord(nil, 1, leafPage)
+	if err != nil {
+		t.Fatalf("PrepareCompactLeafPageRecord: %v", err)
+	}
+	req := &leafPageAppendRequest{
+		raw:        raw,
+		ptrLength:  ptrLength,
+		stats:      stats,
+		compacted:  compacted,
+		payloadLen: stats.RawPayloadBytes,
+	}
+	req.wg.Add(1)
+
+	leaf.vlogMu.Lock()
+	leaf.leafAppendMu.Lock()
+	leaf.leafAppendPreparing = 1
+	leaf.leafAppendMu.Unlock()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- db.flushValueLogLane(&leaf)
+	}()
+	leaf.vlogMu.Unlock()
+
+	leaf.leafAppendMu.Lock()
+	leaf.leafAppendPreparing--
+	leaf.leafAppendQueue = append(leaf.leafAppendQueue, req)
+	broadcastLeafAppendLocked(&leaf)
+	leaf.leafAppendMu.Unlock()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("flushValueLogLane: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("flushValueLogLane did not drain preparing leaf append")
+	}
+	req.wg.Wait()
+	if req.err != nil {
+		t.Fatalf("prepared append error: %v", req.err)
+	}
+	if req.ptr.FileID == 0 || req.totalBytes <= 0 {
+		t.Fatalf("prepared append ptr=%+v totalBytes=%d, want written record", req.ptr, req.totalBytes)
+	}
+	if got, want := leaf.backendReadFlushedSeq.Load(), leaf.backendReadDirtySeq.Load(); got != want {
+		t.Fatalf("backendReadFlushedSeq=%d want dirty seq %d after flush", got, want)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("Close writer: %v", err)
+	}
+	writer = nil
+}
+
+func TestDB_DrainPreparedLeafPageValueLogQueueBarrierReleasesQueuedTailOnBatchError(t *testing.T) {
+	db := &DB{closeCh: make(chan struct{})}
+	leaf := lane{id: leafLogLaneID}
+	requests := make([]*leafPageAppendRequest, leafPageAppendBatchMax+1)
+	for i := range requests {
+		req := &leafPageAppendRequest{}
+		req.wg.Add(1)
+		requests[i] = req
+	}
+
+	leaf.leafAppendMu.Lock()
+	leaf.leafAppendDraining = true
+	leaf.leafAppendQueue = append(leaf.leafAppendQueue, requests...)
+	leaf.leafAppendMu.Unlock()
+
+	leaf.vlogMu.Lock()
+	err := db.drainPreparedLeafPageValueLogQueueBarrierMuHeld(&leaf)
+	leaf.vlogMu.Unlock()
+	if !errors.Is(err, errWALUnavailable) {
+		t.Fatalf("drainPreparedLeafPageValueLogQueueBarrierMuHeld error=%v want %v", err, errWALUnavailable)
+	}
+
+	leaf.leafAppendMu.Lock()
+	queued := len(leaf.leafAppendQueue)
+	draining := leaf.leafAppendDraining
+	leaf.leafAppendMu.Unlock()
+	if queued != 0 || draining {
+		t.Fatalf("queued=%d draining=%v, want empty queue and no active drainer", queued, draining)
+	}
+
+	waitLeafPageAppendRequestDone(t, requests[0])
+	waitLeafPageAppendRequestDone(t, requests[len(requests)-1])
+	for _, idx := range []int{0, len(requests) - 1} {
+		if !errors.Is(requests[idx].err, errWALUnavailable) {
+			t.Fatalf("request %d err=%v want %v", idx, requests[idx].err, errWALUnavailable)
+		}
+	}
+}
+
+func waitLeafPageAppendRequestDone(t *testing.T, req *leafPageAppendRequest) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() {
+		req.wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("leaf append request was not released")
+	}
+}
+
+func TestDB_AppendPreparedLeafPageValueLog_BatchesQueuedPreparedAppends(t *testing.T) {
+	dir := t.TempDir()
+	fileID, err := valuelog.EncodeFileID(uint32(leafLogLaneID), 1)
+	if err != nil {
+		t.Fatalf("EncodeFileID: %v", err)
+	}
+	leafDir := filepath.Join(dir, "leaf_vlog")
+	if err := os.MkdirAll(leafDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q): %v", leafDir, err)
+	}
+	path := filepath.Join(leafDir, "value-l255-000001.log")
+	writer, err := valuelog.NewWriter(path, fileID)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	defer func() {
+		if writer != nil {
+			_ = writer.Close()
+		}
+	}()
+
+	db := &DB{
+		closeCh:                 make(chan struct{}),
+		valueLogCompressionMode: uint8(vlogCompressionOff),
+	}
+	var preUnlockHooks atomic.Int32
+	db.testBeforeVlogUnlock = func(laneID int) {
+		if laneID == leafLogLaneID {
+			preUnlockHooks.Add(1)
+		}
+	}
+
+	leaf := lane{id: leafLogLaneID, vlog: writer}
+	leafPage := buildSparseLeafPageForLeafLogTest(t)
+	const requests = 8
+	ptrs := make([]page.ValuePtr, requests)
+	errs := make(chan error, requests)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+
+	leaf.vlogMu.Lock()
+	for i := 0; i < requests; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			ptr, _, _, _, _, _, err := db.appendPreparedLeafPageValueLogQueued(&leaf, uint64(i+1), leafPage)
+			ptrs[i] = ptr
+			errs <- err
+		}(i)
+	}
+	close(start)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		leaf.leafAppendMu.Lock()
+		queued := len(leaf.leafAppendQueue)
+		draining := leaf.leafAppendDraining
+		leaf.leafAppendMu.Unlock()
+		if queued == requests && draining {
+			break
+		}
+		if time.Now().After(deadline) {
+			leaf.vlogMu.Unlock()
+			t.Fatalf("queued prepared appends=%d draining=%v want %d queued and draining", queued, draining, requests)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	leaf.vlogMu.Unlock()
+
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("appendPreparedLeafPageValueLogQueued: %v", err)
+		}
+	}
+	if got := preUnlockHooks.Load(); got != 1 {
+		t.Fatalf("pre-unlock hooks=%d want 1 batched writer lock", got)
+	}
+	if got := leaf.backendReadDirtySeq.Load(); got != 1 {
+		t.Fatalf("backendReadDirtySeq=%d want 1 batched boundary", got)
+	}
+
+	if err := writer.Close(); err != nil {
+		t.Fatalf("Close writer: %v", err)
+	}
+	writer = nil
+
+	mgr, err := valuelog.NewManager(dir)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	defer func() { _ = mgr.Close() }()
+	if err := mgr.RegisterSegment(path, fileID); err != nil {
+		t.Fatalf("RegisterSegment(%q): %v", path, err)
+	}
+	for i, ptr := range ptrs {
+		if ptr.FileID == 0 {
+			t.Fatalf("ptr[%d] is empty", i)
+		}
+		got, err := mgr.ReadUnsafe(ptr)
+		if err != nil {
+			t.Fatalf("ReadUnsafe(%d): %v", i, err)
+		}
+		requireLeafLogTestPagesEqual(t, leafPage, got)
+	}
+}
+
+func TestDB_AppendPreparedLeafPageValueLog_BatchRotationMarksDirtyBoundary(t *testing.T) {
+	dir := t.TempDir()
+	fileID, err := valuelog.EncodeFileID(uint32(leafLogLaneID), 1)
+	if err != nil {
+		t.Fatalf("EncodeFileID: %v", err)
+	}
+	leafDir := filepath.Join(dir, "leaf_vlog")
+	if err := os.MkdirAll(leafDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q): %v", leafDir, err)
+	}
+	path := filepath.Join(leafDir, "value-l255-000001.log")
+	writer, err := valuelog.NewWriter(path, fileID)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	defer func() {
+		if writer != nil {
+			_ = writer.Close()
+		}
+	}()
+	if _, err := writer.Append(0, nil, 99, bytes.Repeat([]byte("seed"), 32<<10)); err != nil {
+		t.Fatalf("seed append: %v", err)
+	}
+	startSize := writer.Size()
+
+	db := &DB{
+		closeCh:                 make(chan struct{}),
+		valueLogCompressionMode: uint8(vlogCompressionOff),
+		valueLogDir:             leafDir,
+		valueLogMaxSegmentBytes: startSize + 1,
+	}
+	leaf := lane{id: leafLogLaneID, vlog: writer, vlogSeq: 1, vlogPath: path}
+	leafPage := buildSparseLeafPageForLeafLogTest(t)
+
+	const requests = 2
+	ptrs := make([]page.ValuePtr, requests)
+	totalBytes := make([]int64, requests)
+	errs := make(chan error, requests)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+
+	leaf.vlogMu.Lock()
+	for i := 0; i < requests; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			ptr, _, _, _, _, bytesWritten, err := db.appendPreparedLeafPageValueLogQueued(&leaf, uint64(i+1), leafPage)
+			ptrs[i] = ptr
+			totalBytes[i] = bytesWritten
+			errs <- err
+		}(i)
+	}
+	close(start)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		leaf.leafAppendMu.Lock()
+		queued := len(leaf.leafAppendQueue)
+		draining := leaf.leafAppendDraining
+		leaf.leafAppendMu.Unlock()
+		if queued == requests && draining {
+			break
+		}
+		if time.Now().After(deadline) {
+			leaf.vlogMu.Unlock()
+			t.Fatalf("queued prepared appends=%d draining=%v want %d queued and draining", queued, draining, requests)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	leaf.vlogMu.Unlock()
+
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("appendPreparedLeafPageValueLogQueued: %v", err)
+		}
+	}
+	if ptrs[0].FileID == ptrs[1].FileID {
+		t.Fatalf("expected queued batch to rotate between records, got file_id=%d", ptrs[0].FileID)
+	}
+	if totalBytes[0] <= 0 || totalBytes[1] <= 0 {
+		t.Fatalf("totalBytes=%v want both > 0", totalBytes)
+	}
+	currentSegmentBytes := int64(0)
+	for i, ptr := range ptrs {
+		if ptr.FileID != fileID {
+			currentSegmentBytes = totalBytes[i]
+		}
+	}
+	if currentSegmentBytes <= 0 {
+		t.Fatalf("did not find current-segment bytes, ptrs=%+v totalBytes=%v firstFileID=%d", ptrs, totalBytes, fileID)
+	}
+	if got := leaf.backendReadDirtySeq.Load(); got != 1 {
+		t.Fatalf("backendReadDirtySeq=%d want 1 after rotating batch", got)
+	}
+	if !leaf.vlogDirty.Load() {
+		t.Fatal("vlogDirty=false want true after rotating batch")
+	}
+	if got := leaf.vlogLiveBytes.Load(); got != currentSegmentBytes {
+		t.Fatalf("current segment live bytes=%d want current request bytes %d", got, currentSegmentBytes)
 	}
 }

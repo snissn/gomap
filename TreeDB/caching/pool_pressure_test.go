@@ -299,6 +299,7 @@ func TestBatchAuxPoolsSkipRetentionUnderCriticalPressure(t *testing.T) {
 	savedEntriesDrop := batchEntriesPoolDropUnderPressureTotal.Load()
 	savedShardEntriesDrop := batchShardEntriesPoolDropUnderPressureTotal.Load()
 	savedIntDrop := batchIntPoolDropUnderPressureTotal.Load()
+	savedWALRecordDrop := batchWALRecordPoolDropUnderPressureTotal.Load()
 	t.Cleanup(func() {
 		poolPressureNow = savedNow
 		poolPressureReadMemStats = savedReadMemStats
@@ -306,6 +307,7 @@ func TestBatchAuxPoolsSkipRetentionUnderCriticalPressure(t *testing.T) {
 		batchEntriesPoolDropUnderPressureTotal.Store(savedEntriesDrop)
 		batchShardEntriesPoolDropUnderPressureTotal.Store(savedShardEntriesDrop)
 		batchIntPoolDropUnderPressureTotal.Store(savedIntDrop)
+		batchWALRecordPoolDropUnderPressureTotal.Store(savedWALRecordDrop)
 		resetPoolPressureStateForTest()
 	})
 
@@ -324,11 +326,13 @@ func TestBatchAuxPoolsSkipRetentionUnderCriticalPressure(t *testing.T) {
 	batchEntriesPoolDropUnderPressureTotal.Store(0)
 	batchShardEntriesPoolDropUnderPressureTotal.Store(0)
 	batchIntPoolDropUnderPressureTotal.Store(0)
+	batchWALRecordPoolDropUnderPressureTotal.Store(0)
 
 	db := &DB{}
 	db.putBatchEntries(make([]batch.Entry, 0, 32))
 	db.putBatchShardEntries(make([]batch.Entry, 0, 32))
 	db.putBatchIntSlice(make([]int, 0, 32))
+	db.putBatchWALRecords(make([]logRecord, 0, 32))
 
 	if got := batchEntriesPoolDropUnderPressureTotal.Load(); got != 1 {
 		t.Fatalf("entries pool drop total=%d want 1", got)
@@ -338,6 +342,9 @@ func TestBatchAuxPoolsSkipRetentionUnderCriticalPressure(t *testing.T) {
 	}
 	if got := batchIntPoolDropUnderPressureTotal.Load(); got != 1 {
 		t.Fatalf("int pool drop total=%d want 1", got)
+	}
+	if got := batchWALRecordPoolDropUnderPressureTotal.Load(); got != 1 {
+		t.Fatalf("wal records pool drop total=%d want 1", got)
 	}
 }
 

@@ -62,3 +62,93 @@ func TestLeafGenerationRecordLengthIndex_NoteRawAllowsOffsetZero(t *testing.T) {
 		t.Fatalf("lookup(0)=(%d,%v), want (64,true)", got, ok)
 	}
 }
+
+func TestLeafGenerationRecordLengthIndex_NoteRawStartsSmallForTinyLiveIndex(t *testing.T) {
+	db := &DB{}
+	db.noteLeafGenerationRecordLengthRaw(11, 4, 96)
+
+	db.leafGenerationRecordLengthMu.RLock()
+	idx := db.leafGenerationRecordLengthByFile[11]
+	db.leafGenerationRecordLengthMu.RUnlock()
+	if idx == nil {
+		t.Fatal("expected live record-length index")
+	}
+	if got, wantMax := cap(idx.offsets), leafGenerationRecordLengthIndexLivePreallocTrigger; got > wantMax {
+		t.Fatalf("offset capacity=%d want <= %d for tiny live index", got, wantMax)
+	}
+	if got, wantMax := cap(idx.lengths), leafGenerationRecordLengthIndexLivePreallocTrigger; got > wantMax {
+		t.Fatalf("length capacity=%d want <= %d for tiny live index", got, wantMax)
+	}
+	if got, ok := idx.lookup(4); !ok || got != 96 {
+		t.Fatalf("lookup(4)=(%d,%v), want (96,true)", got, ok)
+	}
+}
+
+func TestLeafGenerationRecordLengthIndex_NoteRawPreallocatesAfterSustainedUse(t *testing.T) {
+	db := &DB{}
+	for i := 0; i < leafGenerationRecordLengthIndexLivePreallocTrigger+1; i++ {
+		db.noteLeafGenerationRecordLengthRaw(12, uint64(i*128), 96)
+	}
+
+	db.leafGenerationRecordLengthMu.RLock()
+	idx := db.leafGenerationRecordLengthByFile[12]
+	db.leafGenerationRecordLengthMu.RUnlock()
+	if idx == nil {
+		t.Fatal("expected live record-length index")
+	}
+	if got, wantMin := cap(idx.offsets), leafGenerationRecordLengthIndexLivePreallocCap; got < wantMin {
+		t.Fatalf("offset capacity=%d want >= %d", got, wantMin)
+	}
+	if got, wantMin := cap(idx.lengths), leafGenerationRecordLengthIndexLivePreallocCap; got < wantMin {
+		t.Fatalf("length capacity=%d want >= %d", got, wantMin)
+	}
+	if got, ok := idx.lookup(uint64(leafGenerationRecordLengthIndexLivePreallocTrigger * 128)); !ok || got != 96 {
+		t.Fatalf("lookup(last)=(%d,%v), want (96,true)", got, ok)
+	}
+}
+
+func TestLeafGenerationRecordLengthIndex_ReserveSkipsTinyGrowth(t *testing.T) {
+	idx := &leafGenerationRecordLengthIndex{
+		offsets: make([]uint32, 4, 4),
+		lengths: make([]uint32, 4, 4),
+	}
+	offsetPtr := &idx.offsets[0]
+	lengthPtr := &idx.lengths[0]
+
+	idx.reserveLiveAppendCapacity(5)
+	if got, want := cap(idx.offsets), 4; got != want {
+		t.Fatalf("offset capacity after tiny reserve=%d want %d", got, want)
+	}
+	if got, want := cap(idx.lengths), 4; got != want {
+		t.Fatalf("length capacity after tiny reserve=%d want %d", got, want)
+	}
+	if &idx.offsets[0] != offsetPtr {
+		t.Fatal("tiny reserve reallocated offsets")
+	}
+	if &idx.lengths[0] != lengthPtr {
+		t.Fatal("tiny reserve reallocated lengths")
+	}
+
+	idx.reserveLiveAppendCapacity(leafGenerationRecordLengthIndexLivePreallocTrigger + 1)
+	if got, wantMin := cap(idx.offsets), leafGenerationRecordLengthIndexLivePreallocCap; got < wantMin {
+		t.Fatalf("offset capacity after sustained reserve=%d want >= %d", got, wantMin)
+	}
+	if got, wantMin := cap(idx.lengths), leafGenerationRecordLengthIndexLivePreallocCap; got < wantMin {
+		t.Fatalf("length capacity after sustained reserve=%d want >= %d", got, wantMin)
+	}
+}
+
+func TestLeafGenerationRecordLengthIndex_ReserveGrowsGeometricallyAfterPrealloc(t *testing.T) {
+	idx := &leafGenerationRecordLengthIndex{
+		offsets: make([]uint32, leafGenerationRecordLengthIndexLivePreallocCap, leafGenerationRecordLengthIndexLivePreallocCap),
+		lengths: make([]uint32, leafGenerationRecordLengthIndexLivePreallocCap, leafGenerationRecordLengthIndexLivePreallocCap),
+	}
+
+	idx.reserveLiveAppendCapacity(leafGenerationRecordLengthIndexLivePreallocCap + 1)
+	if got, wantMin := cap(idx.offsets), leafGenerationRecordLengthIndexLivePreallocCap*2; got < wantMin {
+		t.Fatalf("offset capacity after full prealloc reserve=%d want >= %d", got, wantMin)
+	}
+	if got, wantMin := cap(idx.lengths), leafGenerationRecordLengthIndexLivePreallocCap*2; got < wantMin {
+		t.Fatalf("length capacity after full prealloc reserve=%d want >= %d", got, wantMin)
+	}
+}
