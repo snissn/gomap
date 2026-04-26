@@ -7499,7 +7499,7 @@ func memtableBatchDelete(mt memtable.Table, useSteal bool, key []byte) {
 // memtableBatchSet applies a cached batch write while preserving the ownership
 // rules selected by cachedBatchWriteUsesSteal. Pointer entries may still keep
 // inline bytes in memtables that do not use value-log pointers internally.
-func memtableBatchSet(mt memtable.Table, useSteal bool, allowBorrow bool, storeInlinePtrValues bool, op batch.Entry) {
+func memtableBatchSet(mt memtable.Table, useSteal bool, allowBorrow bool, storeInlinePtrValues bool, op batch.Entry) bool {
 	if op.IsPtr {
 		memVal := []byte(nil)
 		if storeInlinePtrValues {
@@ -7507,85 +7507,36 @@ func memtableBatchSet(mt memtable.Table, useSteal bool, allowBorrow bool, storeI
 		}
 		if useSteal {
 			mt.SetEntrySteal(op.Key, memVal, op.ValuePtr, node.FlagPointer)
-			return
+			return false
 		}
 		if allowBorrow {
 			if borrower, ok := mt.(memtable.ValueBorrower); ok && len(memVal) > 0 {
 				if stableBorrower, ok := mt.(memtable.StableValueBorrower); ok {
-					stableBorrower.SetEntryBorrowStableValue(op.Key, memVal, op.ValuePtr, node.FlagPointer)
+					return stableBorrower.SetEntryBorrowStableValue(op.Key, memVal, op.ValuePtr, node.FlagPointer)
 				} else {
 					borrower.SetEntryBorrowValue(op.Key, memVal, op.ValuePtr, node.FlagPointer)
 				}
-				return
+				return true
 			}
 		}
 		mt.SetEntry(op.Key, memVal, op.ValuePtr, node.FlagPointer)
-		return
+		return false
 	}
 	if useSteal {
 		mt.SetSteal(op.Key, op.Value)
-		return
+		return false
 	}
 	if allowBorrow {
 		if borrower, ok := mt.(memtable.ValueBorrower); ok && len(op.Value) > 0 {
 			if stableBorrower, ok := mt.(memtable.StableValueBorrower); ok {
-				stableBorrower.SetEntryBorrowStableValue(op.Key, op.Value, page.ValuePtr{}, node.FlagInline)
+				return stableBorrower.SetEntryBorrowStableValue(op.Key, op.Value, page.ValuePtr{}, node.FlagInline)
 			} else {
 				borrower.SetEntryBorrowValue(op.Key, op.Value, page.ValuePtr{}, node.FlagInline)
 			}
-			return
+			return true
 		}
 	}
 	mt.Set(op.Key, op.Value)
-}
-
-func memtableBatchBorrowsValues(mt memtable.Table, allowBorrow bool, storeInlinePtrValues bool, entries []batch.Entry) bool {
-	if !allowBorrow || len(entries) == 0 {
-		return false
-	}
-	if _, ok := mt.(memtable.ValueBorrower); !ok {
-		return false
-	}
-	for i := range entries {
-		op := entries[i]
-		if op.Type == batch.OpDelete {
-			continue
-		}
-		if op.IsPtr {
-			if storeInlinePtrValues && len(op.Value) > 0 {
-				return true
-			}
-			continue
-		}
-		if len(op.Value) > 0 {
-			return true
-		}
-	}
-	return false
-}
-
-func memtableBatchBorrowsValuesIdxs(mt memtable.Table, allowBorrow bool, storeInlinePtrValues bool, entries []batch.Entry, idxs []int) bool {
-	if !allowBorrow || len(idxs) == 0 {
-		return false
-	}
-	if _, ok := mt.(memtable.ValueBorrower); !ok {
-		return false
-	}
-	for _, idx := range idxs {
-		op := entries[idx]
-		if op.Type == batch.OpDelete {
-			continue
-		}
-		if op.IsPtr {
-			if storeInlinePtrValues && len(op.Value) > 0 {
-				return true
-			}
-			continue
-		}
-		if len(op.Value) > 0 {
-			return true
-		}
-	}
 	return false
 }
 
@@ -29904,25 +29855,21 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 			} else if useStream && allowBatchArenaBorrow {
 				borrowedValues := false
 				if applier, ok := shard.mem.(memtable.TrustedSortedBatchBorrowValueIndexApplier); ok {
-					borrowedValues = memtableBatchBorrowsValuesIdxs(shard.mem, true, storeInlinePtrValues, b.entries, idxs)
-					applier.ApplyBorrowValueSortedBatchIndicesTrusted(b.entries, idxs, storeInlinePtrValues, nil)
+					borrowedValues = applier.ApplyBorrowValueSortedBatchIndicesTrusted(b.entries, idxs, storeInlinePtrValues, nil)
 				} else {
 					if applier, ok := shard.mem.(memtable.TrustedSortedBatchBorrowValueApplier); ok {
 						entries := materializeShardEntries(i, idxs)
-						borrowedValues = memtableBatchBorrowsValues(shard.mem, true, storeInlinePtrValues, entries)
-						applier.ApplyBorrowValueSortedBatchTrusted(entries, storeInlinePtrValues, nil)
+						borrowedValues = applier.ApplyBorrowValueSortedBatchTrusted(entries, storeInlinePtrValues, nil)
 					} else if applier, ok := shard.mem.(memtable.SortedBatchBorrowValueApplier); ok {
 						entries := materializeShardEntries(i, idxs)
-						borrowedValues = memtableBatchBorrowsValues(shard.mem, true, storeInlinePtrValues, entries)
-						applier.ApplyBorrowValueSortedBatch(entries, storeInlinePtrValues, nil)
+						borrowedValues = applier.ApplyBorrowValueSortedBatch(entries, storeInlinePtrValues, nil)
 					} else {
-						borrowedValues = memtableBatchBorrowsValuesIdxs(shard.mem, true, storeInlinePtrValues, b.entries, idxs)
 						for _, entryIdx := range idxs {
 							op := b.entries[entryIdx]
 							if op.Type == batch.OpDelete {
 								memtableBatchDelete(shard.mem, false, op.Key)
 							} else {
-								memtableBatchSet(shard.mem, false, true, storeInlinePtrValues, op)
+								borrowedValues = memtableBatchSet(shard.mem, false, true, storeInlinePtrValues, op) || borrowedValues
 							}
 						}
 					}
@@ -29940,18 +29887,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 					if op.Type == batch.OpDelete {
 						memtableBatchDelete(shard.mem, useSteal, op.Key)
 					} else {
-						borrowed := false
-						if allowBatchArenaBorrow && !useSteal {
-							if _, ok := shard.mem.(memtable.ValueBorrower); ok {
-								if op.IsPtr {
-									borrowed = storeInlinePtrValues && len(op.Value) > 0
-								} else {
-									borrowed = len(op.Value) > 0
-								}
-							}
-						}
-						memtableBatchSet(shard.mem, useSteal, allowBatchArenaBorrow, storeInlinePtrValues, op)
-						if borrowed {
+						if memtableBatchSet(shard.mem, useSteal, allowBatchArenaBorrow, storeInlinePtrValues, op) {
 							retainMain = true
 						}
 					}
@@ -29968,18 +29904,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 					if op.Type == batch.OpDelete {
 						memtableBatchDelete(shard.mem, useSteal, op.Key)
 					} else {
-						borrowed := false
-						if allowBatchArenaBorrow && !useSteal {
-							if _, ok := shard.mem.(memtable.ValueBorrower); ok {
-								if op.IsPtr {
-									borrowed = storeInlinePtrValues && len(op.Value) > 0
-								} else {
-									borrowed = len(op.Value) > 0
-								}
-							}
-						}
-						memtableBatchSet(shard.mem, useSteal, allowBatchArenaBorrow, storeInlinePtrValues, op)
-						if borrowed {
+						if memtableBatchSet(shard.mem, useSteal, allowBatchArenaBorrow, storeInlinePtrValues, op) {
 							retainMain = true
 						}
 					}

@@ -14,7 +14,7 @@ import (
 var ErrNilUpdateFunc = errors.New("treedb: nil update function")
 
 // ErrUpdateValueNil indicates an Update callback requested Set with a nil value.
-var ErrUpdateValueNil = errors.New("value cannot be nil")
+var ErrUpdateValueNil = errors.New("treedb: value cannot be nil")
 
 // UpdateOp describes the write produced by an Update callback.
 type UpdateOp uint8

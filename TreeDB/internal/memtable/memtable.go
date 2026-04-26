@@ -94,9 +94,10 @@ type SortedBatchApplier interface {
 //
 // Callers should only use this when they know the entries are already in
 // increasing key order and the borrowed values will remain immutable for the
-// memtable lifetime.
+// memtable lifetime. It returns true when any caller-owned value storage was
+// retained by the memtable.
 type SortedBatchBorrowValueApplier interface {
-	ApplyBorrowValueSortedBatch(entries []batchpkg.Entry, storeInlinePtrValues bool, onKey func(key []byte))
+	ApplyBorrowValueSortedBatch(entries []batchpkg.Entry, storeInlinePtrValues bool, onKey func(key []byte)) bool
 }
 
 // ValueBorrower marks memtables that can safely retain caller-owned value
@@ -109,9 +110,10 @@ type ValueBorrower interface {
 }
 
 // StableValueBorrower marks memtables that can retain immutable value storage
-// and may canonicalize equal adjacent values to reduce payload metadata.
+// and may canonicalize equal adjacent values to reduce payload metadata. It
+// returns true when the provided value storage was retained.
 type StableValueBorrower interface {
-	SetEntryBorrowStableValue(key, value []byte, ptr page.ValuePtr, flags byte)
+	SetEntryBorrowStableValue(key, value []byte, ptr page.ValuePtr, flags byte) bool
 }
 
 // StableValueReuser appends an entry by reusing an already-retained matching
@@ -167,9 +169,10 @@ type TrustedSortedBatchCopyIndexApplier interface {
 
 // TrustedSortedBatchBorrowValueApplier is an optional fast path for callers
 // that already guarantee strictly increasing keys and immutable borrowed value
-// slices.
+// slices. It returns true when any caller-owned value storage was retained by
+// the memtable.
 type TrustedSortedBatchBorrowValueApplier interface {
-	ApplyBorrowValueSortedBatchTrusted(entries []batchpkg.Entry, storeInlinePtrValues bool, onKey func(key []byte))
+	ApplyBorrowValueSortedBatchTrusted(entries []batchpkg.Entry, storeInlinePtrValues bool, onKey func(key []byte)) bool
 }
 
 // TrustedSortedBatchIndexApplier is an optional fast path for callers that
@@ -185,7 +188,7 @@ type TrustedSortedBatchIndexApplier interface {
 // TrustedSortedBatchBorrowValueApplier but consumes a sorted index list into a
 // shared batch entry slice.
 type TrustedSortedBatchBorrowValueIndexApplier interface {
-	ApplyBorrowValueSortedBatchIndicesTrusted(entries []batchpkg.Entry, idxs []int, storeInlinePtrValues bool, onKey func(key []byte))
+	ApplyBorrowValueSortedBatchIndicesTrusted(entries []batchpkg.Entry, idxs []int, storeInlinePtrValues bool, onKey func(key []byte)) bool
 }
 
 type Memtable struct {

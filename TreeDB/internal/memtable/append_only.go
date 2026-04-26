@@ -1071,7 +1071,13 @@ func (m *AppendOnly) appendKeyLocked(key string) uint32 {
 }
 
 func (m *AppendOnly) appendEntryLocked(key, value []byte, ptr page.ValuePtr, flags byte, steal bool, borrowValue bool, dedupeBorrowedValue bool) appendOnlyObserveEvent {
+	observeEvent, _ := m.appendEntryLockedRetained(key, value, ptr, flags, steal, borrowValue, dedupeBorrowedValue)
+	return observeEvent
+}
+
+func (m *AppendOnly) appendEntryLockedRetained(key, value []byte, ptr page.ValuePtr, flags byte, steal bool, borrowValue bool, dedupeBorrowedValue bool) (appendOnlyObserveEvent, bool) {
 	var observeEvent appendOnlyObserveEvent
+	retainedValue := false
 	grewEntries := false
 	if m.count == len(m.entries) {
 		if m.predictEntryHintSource != nil {
@@ -1118,6 +1124,7 @@ func (m *AppendOnly) appendEntryLocked(key, value []byte, ptr page.ValuePtr, fla
 			payloadValueLen = len(value)
 			if steal || borrowValue {
 				payloadValue = appendOnlyStringFromBytes(value)
+				retainedValue = borrowValue
 			} else {
 				payloadValue = appendOnlyArenaStringCopy(&m.valueArena, value)
 			}
@@ -1125,7 +1132,9 @@ func (m *AppendOnly) appendEntryLocked(key, value []byte, ptr page.ValuePtr, fla
 		appendOnlyEntrySetPayloadIndex(ent, m.appendPtrPayloadLocked(payloadValue, ptr))
 	} else if len(value) > 0 {
 		payloadValueLen = len(value)
-		appendOnlyEntrySetPayloadIndex(ent, m.appendValueBytesLocked(value, steal || borrowValue, borrowValue && dedupeBorrowedValue))
+		payloadIndex, retained := m.appendValueBytesLockedRetained(value, steal || borrowValue, borrowValue && dedupeBorrowedValue)
+		appendOnlyEntrySetPayloadIndex(ent, payloadIndex)
+		retainedValue = retainedValue || (borrowValue && retained)
 	}
 	k := m.appendOnlyEntryKey(ent)
 	m.sizeBytes += int64(len(k) + entryValueSize(flags, payloadValueLen))
@@ -1136,27 +1145,27 @@ func (m *AppendOnly) appendEntryLocked(key, value []byte, ptr page.ValuePtr, fla
 	if !m.hasLast {
 		m.lastIdx = idx
 		m.hasLast = true
-		return observeEvent
+		return observeEvent, retainedValue
 	}
 	if m.ordered {
 		prev := m.appendOnlyEntryKey(&m.entries[m.lastIdx])
 		cmp := bytes.Compare(k, prev)
 		if cmp > 0 {
 			m.lastIdx = idx
-			return observeEvent
+			return observeEvent, retainedValue
 		}
 		m.ordered = false
 		// Keep the write path purely append-only. The latest-key index is only
 		// materialized if a read or iterator needs the unordered view.
 		m.latestDirty = true
 		m.clearSnapshotLocked()
-		return observeEvent
+		return observeEvent, retainedValue
 	}
 	if !m.latestDirty {
 		m.updateLatestIndexLocked(k, idx)
 	}
 	m.clearSnapshotLocked()
-	return observeEvent
+	return observeEvent, retainedValue
 }
 
 func (m *AppendOnly) appendEntryReuseStableValueLocked(key []byte, payloadIndex uint32, valueLen int, flags byte) appendOnlyObserveEvent {
@@ -1238,7 +1247,13 @@ func (m *AppendOnly) canAppendTrustedOrderedBatchLocked(firstKey []byte) bool {
 }
 
 func (m *AppendOnly) appendEntryTrustedOrderedLocked(key, value []byte, ptr page.ValuePtr, flags byte, steal bool, borrowValue bool, dedupeBorrowedValue bool) appendOnlyObserveEvent {
+	observeEvent, _ := m.appendEntryTrustedOrderedLockedRetained(key, value, ptr, flags, steal, borrowValue, dedupeBorrowedValue)
+	return observeEvent
+}
+
+func (m *AppendOnly) appendEntryTrustedOrderedLockedRetained(key, value []byte, ptr page.ValuePtr, flags byte, steal bool, borrowValue bool, dedupeBorrowedValue bool) (appendOnlyObserveEvent, bool) {
 	var observeEvent appendOnlyObserveEvent
+	retainedValue := false
 	grewEntries := false
 	if m.count == len(m.entries) {
 		if m.predictEntryHintSource != nil {
@@ -1285,6 +1300,7 @@ func (m *AppendOnly) appendEntryTrustedOrderedLocked(key, value []byte, ptr page
 			payloadValueLen = len(value)
 			if steal || borrowValue {
 				payloadValue = appendOnlyStringFromBytes(value)
+				retainedValue = borrowValue
 			} else {
 				payloadValue = appendOnlyArenaStringCopy(&m.valueArena, value)
 			}
@@ -1292,7 +1308,9 @@ func (m *AppendOnly) appendEntryTrustedOrderedLocked(key, value []byte, ptr page
 		appendOnlyEntrySetPayloadIndex(ent, m.appendPtrPayloadLocked(payloadValue, ptr))
 	} else if len(value) > 0 {
 		payloadValueLen = len(value)
-		appendOnlyEntrySetPayloadIndex(ent, m.appendValueBytesLocked(value, steal || borrowValue, borrowValue && dedupeBorrowedValue))
+		payloadIndex, retained := m.appendValueBytesLockedRetained(value, steal || borrowValue, borrowValue && dedupeBorrowedValue)
+		appendOnlyEntrySetPayloadIndex(ent, payloadIndex)
+		retainedValue = retainedValue || (borrowValue && retained)
 	}
 	m.sizeBytes += int64(len(key) + entryValueSize(flags, payloadValueLen))
 	if appendOnlyShouldPredictHint(m.count) {
@@ -1300,43 +1318,48 @@ func (m *AppendOnly) appendEntryTrustedOrderedLocked(key, value []byte, ptr page
 	}
 	m.lastIdx = idx
 	m.hasLast = true
-	return observeEvent
+	return observeEvent, retainedValue
 }
 
 func (m *AppendOnly) appendValueBytesLocked(value []byte, borrowed bool, dedupeBorrowed bool) uint32 {
+	idx, _ := m.appendValueBytesLockedRetained(value, borrowed, dedupeBorrowed)
+	return idx
+}
+
+func (m *AppendOnly) appendValueBytesLockedRetained(value []byte, borrowed bool, dedupeBorrowed bool) (uint32, bool) {
 	if len(value) == 0 {
-		return 0
+		return 0, false
 	}
 	if borrowed {
 		if dedupeBorrowed {
 			if idx := m.recentValueIndexLocked(value, true); idx != 0 {
-				return idx
+				return idx, false
 			}
 			if len(m.values) != 0 {
 				idx := m.appendValueLocked(appendOnlyStringFromBytes(value))
 				m.lastValueAlias = true
 				m.lastValueStableAlias = true
-				return idx
+				return idx, true
 			}
 		}
 		idx := m.appendValueLockedSmall(appendOnlyStringFromBytes(value))
 		m.lastValueAlias = true
 		m.lastValueStableAlias = dedupeBorrowed
-		return idx
+		return idx, true
 	}
 	if idx := m.recentValueIndexLocked(value, false); idx != 0 {
-		return idx
+		return idx, false
 	}
 	if len(m.values) == 0 {
 		idx := m.appendValueLockedSmall(appendOnlyArenaStringCopy(&m.valueArena, value))
 		m.lastValueAlias = false
 		m.lastValueStableAlias = false
-		return idx
+		return idx, false
 	}
 	idx := m.appendValueLocked(appendOnlyArenaStringCopy(&m.valueArena, value))
 	m.lastValueAlias = false
 	m.lastValueStableAlias = false
-	return idx
+	return idx, false
 }
 
 func (m *AppendOnly) recentValueIndexLocked(value []byte, allowAlias bool) uint32 {
@@ -1449,11 +1472,12 @@ func (m *AppendOnly) SetEntryBorrowValue(key, value []byte, ptr page.ValuePtr, f
 	observeEvent.emit()
 }
 
-func (m *AppendOnly) SetEntryBorrowStableValue(key, value []byte, ptr page.ValuePtr, flags byte) {
+func (m *AppendOnly) SetEntryBorrowStableValue(key, value []byte, ptr page.ValuePtr, flags byte) bool {
 	m.mu.Lock()
-	observeEvent := m.appendEntryLocked(key, value, ptr, flags, false, true, true)
+	observeEvent, retained := m.appendEntryLockedRetained(key, value, ptr, flags, false, true, true)
 	m.mu.Unlock()
 	observeEvent.emit()
+	return retained
 }
 
 func (m *AppendOnly) SetEntryReuseStableValue(key, value []byte, ptr page.ValuePtr, flags byte) bool {
@@ -1517,20 +1541,20 @@ func (m *AppendOnly) ApplyStealSortedBatchTrusted(entries []batchpkg.Entry, onKe
 	m.applyStealBatchTrusted(entries, onKey)
 }
 
-func (m *AppendOnly) ApplyBorrowValueSortedBatch(entries []batchpkg.Entry, storeInlinePtrValues bool, onKey func(key []byte)) {
-	m.applyBorrowValueBatch(entries, storeInlinePtrValues, onKey)
+func (m *AppendOnly) ApplyBorrowValueSortedBatch(entries []batchpkg.Entry, storeInlinePtrValues bool, onKey func(key []byte)) bool {
+	return m.applyBorrowValueBatch(entries, storeInlinePtrValues, onKey)
 }
 
-func (m *AppendOnly) ApplyBorrowValueSortedBatchTrusted(entries []batchpkg.Entry, storeInlinePtrValues bool, onKey func(key []byte)) {
-	m.applyBorrowValueBatchTrusted(entries, storeInlinePtrValues, onKey)
+func (m *AppendOnly) ApplyBorrowValueSortedBatchTrusted(entries []batchpkg.Entry, storeInlinePtrValues bool, onKey func(key []byte)) bool {
+	return m.applyBorrowValueBatchTrusted(entries, storeInlinePtrValues, onKey)
 }
 
 func (m *AppendOnly) ApplyStealSortedBatchIndicesTrusted(entries []batchpkg.Entry, idxs []int, onKey func(key []byte)) {
 	m.applyStealBatchIndicesTrusted(entries, idxs, onKey)
 }
 
-func (m *AppendOnly) ApplyBorrowValueSortedBatchIndicesTrusted(entries []batchpkg.Entry, idxs []int, storeInlinePtrValues bool, onKey func(key []byte)) {
-	m.applyBorrowValueBatchIndicesTrusted(entries, idxs, storeInlinePtrValues, onKey)
+func (m *AppendOnly) ApplyBorrowValueSortedBatchIndicesTrusted(entries []batchpkg.Entry, idxs []int, storeInlinePtrValues bool, onKey func(key []byte)) bool {
+	return m.applyBorrowValueBatchIndicesTrusted(entries, idxs, storeInlinePtrValues, onKey)
 }
 
 func (m *AppendOnly) applyStealBatch(entries []batchpkg.Entry, onKey func(key []byte)) {
@@ -1655,9 +1679,10 @@ func (m *AppendOnly) applyStealBatchIndicesTrusted(entries []batchpkg.Entry, idx
 	observeEvent.emit()
 }
 
-func (m *AppendOnly) applyBorrowValueBatch(entries []batchpkg.Entry, storeInlinePtrValues bool, onKey func(key []byte)) {
+func (m *AppendOnly) applyBorrowValueBatch(entries []batchpkg.Entry, storeInlinePtrValues bool, onKey func(key []byte)) bool {
 	m.mu.Lock()
 	var observeEvent appendOnlyObserveEvent
+	retainedValues := false
 	for i := range entries {
 		op := entries[i]
 		switch {
@@ -1668,9 +1693,13 @@ func (m *AppendOnly) applyBorrowValueBatch(entries []batchpkg.Entry, storeInline
 			if storeInlinePtrValues {
 				memVal = op.Value
 			}
-			observeEvent.recordEvent(m.appendEntryLocked(op.Key, memVal, op.ValuePtr, node.FlagPointer, false, len(memVal) > 0, true))
+			event, retained := m.appendEntryLockedRetained(op.Key, memVal, op.ValuePtr, node.FlagPointer, false, len(memVal) > 0, true)
+			observeEvent.recordEvent(event)
+			retainedValues = retainedValues || retained
 		default:
-			observeEvent.recordEvent(m.appendEntryLocked(op.Key, op.Value, page.ValuePtr{}, node.FlagInline, false, len(op.Value) > 0, true))
+			event, retained := m.appendEntryLockedRetained(op.Key, op.Value, page.ValuePtr{}, node.FlagInline, false, len(op.Value) > 0, true)
+			observeEvent.recordEvent(event)
+			retainedValues = retainedValues || retained
 		}
 		if onKey != nil {
 			onKey(op.Key)
@@ -1678,11 +1707,13 @@ func (m *AppendOnly) applyBorrowValueBatch(entries []batchpkg.Entry, storeInline
 	}
 	m.mu.Unlock()
 	observeEvent.emit()
+	return retainedValues
 }
 
-func (m *AppendOnly) applyBorrowValueBatchTrusted(entries []batchpkg.Entry, storeInlinePtrValues bool, onKey func(key []byte)) {
+func (m *AppendOnly) applyBorrowValueBatchTrusted(entries []batchpkg.Entry, storeInlinePtrValues bool, onKey func(key []byte)) bool {
 	m.mu.Lock()
 	var observeEvent appendOnlyObserveEvent
+	retainedValues := false
 	if len(entries) > 0 && m.canAppendTrustedOrderedBatchLocked(entries[0].Key) {
 		for i := range entries {
 			op := entries[i]
@@ -1694,9 +1725,13 @@ func (m *AppendOnly) applyBorrowValueBatchTrusted(entries []batchpkg.Entry, stor
 				if storeInlinePtrValues {
 					memVal = op.Value
 				}
-				observeEvent.recordEvent(m.appendEntryTrustedOrderedLocked(op.Key, memVal, op.ValuePtr, node.FlagPointer, false, len(memVal) > 0, true))
+				event, retained := m.appendEntryTrustedOrderedLockedRetained(op.Key, memVal, op.ValuePtr, node.FlagPointer, false, len(memVal) > 0, true)
+				observeEvent.recordEvent(event)
+				retainedValues = retainedValues || retained
 			default:
-				observeEvent.recordEvent(m.appendEntryTrustedOrderedLocked(op.Key, op.Value, page.ValuePtr{}, node.FlagInline, false, len(op.Value) > 0, true))
+				event, retained := m.appendEntryTrustedOrderedLockedRetained(op.Key, op.Value, page.ValuePtr{}, node.FlagInline, false, len(op.Value) > 0, true)
+				observeEvent.recordEvent(event)
+				retainedValues = retainedValues || retained
 			}
 			if onKey != nil {
 				onKey(op.Key)
@@ -1704,7 +1739,7 @@ func (m *AppendOnly) applyBorrowValueBatchTrusted(entries []batchpkg.Entry, stor
 		}
 		m.mu.Unlock()
 		observeEvent.emit()
-		return
+		return retainedValues
 	}
 	for i := range entries {
 		op := entries[i]
@@ -1716,9 +1751,13 @@ func (m *AppendOnly) applyBorrowValueBatchTrusted(entries []batchpkg.Entry, stor
 			if storeInlinePtrValues {
 				memVal = op.Value
 			}
-			observeEvent.recordEvent(m.appendEntryLocked(op.Key, memVal, op.ValuePtr, node.FlagPointer, false, len(memVal) > 0, true))
+			event, retained := m.appendEntryLockedRetained(op.Key, memVal, op.ValuePtr, node.FlagPointer, false, len(memVal) > 0, true)
+			observeEvent.recordEvent(event)
+			retainedValues = retainedValues || retained
 		default:
-			observeEvent.recordEvent(m.appendEntryLocked(op.Key, op.Value, page.ValuePtr{}, node.FlagInline, false, len(op.Value) > 0, true))
+			event, retained := m.appendEntryLockedRetained(op.Key, op.Value, page.ValuePtr{}, node.FlagInline, false, len(op.Value) > 0, true)
+			observeEvent.recordEvent(event)
+			retainedValues = retainedValues || retained
 		}
 		if onKey != nil {
 			onKey(op.Key)
@@ -1726,11 +1765,13 @@ func (m *AppendOnly) applyBorrowValueBatchTrusted(entries []batchpkg.Entry, stor
 	}
 	m.mu.Unlock()
 	observeEvent.emit()
+	return retainedValues
 }
 
-func (m *AppendOnly) applyBorrowValueBatchIndices(entries []batchpkg.Entry, idxs []int, storeInlinePtrValues bool, onKey func(key []byte)) {
+func (m *AppendOnly) applyBorrowValueBatchIndices(entries []batchpkg.Entry, idxs []int, storeInlinePtrValues bool, onKey func(key []byte)) bool {
 	m.mu.Lock()
 	var observeEvent appendOnlyObserveEvent
+	retainedValues := false
 	for _, idx := range idxs {
 		op := entries[idx]
 		switch {
@@ -1741,9 +1782,13 @@ func (m *AppendOnly) applyBorrowValueBatchIndices(entries []batchpkg.Entry, idxs
 			if storeInlinePtrValues {
 				memVal = op.Value
 			}
-			observeEvent.recordEvent(m.appendEntryLocked(op.Key, memVal, op.ValuePtr, node.FlagPointer, false, len(memVal) > 0, true))
+			event, retained := m.appendEntryLockedRetained(op.Key, memVal, op.ValuePtr, node.FlagPointer, false, len(memVal) > 0, true)
+			observeEvent.recordEvent(event)
+			retainedValues = retainedValues || retained
 		default:
-			observeEvent.recordEvent(m.appendEntryLocked(op.Key, op.Value, page.ValuePtr{}, node.FlagInline, false, len(op.Value) > 0, true))
+			event, retained := m.appendEntryLockedRetained(op.Key, op.Value, page.ValuePtr{}, node.FlagInline, false, len(op.Value) > 0, true)
+			observeEvent.recordEvent(event)
+			retainedValues = retainedValues || retained
 		}
 		if onKey != nil {
 			onKey(op.Key)
@@ -1751,11 +1796,13 @@ func (m *AppendOnly) applyBorrowValueBatchIndices(entries []batchpkg.Entry, idxs
 	}
 	m.mu.Unlock()
 	observeEvent.emit()
+	return retainedValues
 }
 
-func (m *AppendOnly) applyBorrowValueBatchIndicesTrusted(entries []batchpkg.Entry, idxs []int, storeInlinePtrValues bool, onKey func(key []byte)) {
+func (m *AppendOnly) applyBorrowValueBatchIndicesTrusted(entries []batchpkg.Entry, idxs []int, storeInlinePtrValues bool, onKey func(key []byte)) bool {
 	m.mu.Lock()
 	var observeEvent appendOnlyObserveEvent
+	retainedValues := false
 	if len(idxs) > 0 && m.canAppendTrustedOrderedBatchLocked(entries[idxs[0]].Key) {
 		for _, idx := range idxs {
 			op := entries[idx]
@@ -1767,9 +1814,13 @@ func (m *AppendOnly) applyBorrowValueBatchIndicesTrusted(entries []batchpkg.Entr
 				if storeInlinePtrValues {
 					memVal = op.Value
 				}
-				observeEvent.recordEvent(m.appendEntryTrustedOrderedLocked(op.Key, memVal, op.ValuePtr, node.FlagPointer, false, len(memVal) > 0, true))
+				event, retained := m.appendEntryTrustedOrderedLockedRetained(op.Key, memVal, op.ValuePtr, node.FlagPointer, false, len(memVal) > 0, true)
+				observeEvent.recordEvent(event)
+				retainedValues = retainedValues || retained
 			default:
-				observeEvent.recordEvent(m.appendEntryTrustedOrderedLocked(op.Key, op.Value, page.ValuePtr{}, node.FlagInline, false, len(op.Value) > 0, true))
+				event, retained := m.appendEntryTrustedOrderedLockedRetained(op.Key, op.Value, page.ValuePtr{}, node.FlagInline, false, len(op.Value) > 0, true)
+				observeEvent.recordEvent(event)
+				retainedValues = retainedValues || retained
 			}
 			if onKey != nil {
 				onKey(op.Key)
@@ -1777,7 +1828,7 @@ func (m *AppendOnly) applyBorrowValueBatchIndicesTrusted(entries []batchpkg.Entr
 		}
 		m.mu.Unlock()
 		observeEvent.emit()
-		return
+		return retainedValues
 	}
 	for _, idx := range idxs {
 		op := entries[idx]
@@ -1789,9 +1840,13 @@ func (m *AppendOnly) applyBorrowValueBatchIndicesTrusted(entries []batchpkg.Entr
 			if storeInlinePtrValues {
 				memVal = op.Value
 			}
-			observeEvent.recordEvent(m.appendEntryLocked(op.Key, memVal, op.ValuePtr, node.FlagPointer, false, len(memVal) > 0, true))
+			event, retained := m.appendEntryLockedRetained(op.Key, memVal, op.ValuePtr, node.FlagPointer, false, len(memVal) > 0, true)
+			observeEvent.recordEvent(event)
+			retainedValues = retainedValues || retained
 		default:
-			observeEvent.recordEvent(m.appendEntryLocked(op.Key, op.Value, page.ValuePtr{}, node.FlagInline, false, len(op.Value) > 0, true))
+			event, retained := m.appendEntryLockedRetained(op.Key, op.Value, page.ValuePtr{}, node.FlagInline, false, len(op.Value) > 0, true)
+			observeEvent.recordEvent(event)
+			retainedValues = retainedValues || retained
 		}
 		if onKey != nil {
 			onKey(op.Key)
@@ -1799,6 +1854,7 @@ func (m *AppendOnly) applyBorrowValueBatchIndicesTrusted(entries []batchpkg.Entr
 	}
 	m.mu.Unlock()
 	observeEvent.emit()
+	return retainedValues
 }
 
 func (m *AppendOnly) orderedLookupEntryLocked(key []byte) *appendOnlyEntry {

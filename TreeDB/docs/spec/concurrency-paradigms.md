@@ -193,8 +193,9 @@ Workers:
 
 Mechanism:
 - cached and backend `DB.Update`/`DB.UpdateSync` hash the requested key into a
-  fixed set of per-handle mutex stripes before running the `Get` + callback +
-  point-write sequence.
+  fixed set of per-handle mutex stripes around the read/validate/commit
+  phases. The callback runs outside the stripe lock, and the commit phase
+  retries if the key changed while the callback was running.
 
 Effects:
 - concurrent logical updates to the same key on the same `DB` handle are
@@ -210,8 +211,10 @@ Limits:
 - this is not a multi-key transaction mechanism,
 - point `Set`/`Delete` calls remain unconditional writes,
 - batch writes do not acquire the single-key update coordinator,
-- the update callback runs while the stripe lock is held and should not recurse
-  into `Update` for the same key/stripe.
+- the update callback may be retried, so it should avoid externally visible
+  side effects; same-key recursive `Update` calls are not blocked by the stripe
+  lock but can still force retries or non-termination if callbacks keep changing
+  the observed value.
 
 ## 4. Lock and Barrier Topology
 

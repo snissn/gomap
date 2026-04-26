@@ -236,8 +236,12 @@ func TestAppendOnlyBorrowStableRepeatedValueReusesPayloadAlias(t *testing.T) {
 	value1 := []byte("same borrowed value")
 	value2 := []byte("same borrowed value")
 
-	m.SetEntryBorrowStableValue([]byte("k1"), value1, page.ValuePtr{}, node.FlagInline)
-	m.SetEntryBorrowStableValue([]byte("k2"), value2, page.ValuePtr{}, node.FlagInline)
+	if !m.SetEntryBorrowStableValue([]byte("k1"), value1, page.ValuePtr{}, node.FlagInline) {
+		t.Fatal("first stable borrow should retain caller value storage")
+	}
+	if m.SetEntryBorrowStableValue([]byte("k2"), value2, page.ValuePtr{}, node.FlagInline) {
+		t.Fatal("repeated stable borrow should reuse the previous payload without retaining caller storage")
+	}
 
 	if got := len(m.values); got != 1 {
 		t.Fatalf("values=%d want=1", got)
@@ -260,7 +264,9 @@ func TestAppendOnlyBorrowStableValueDoesNotReuseUnstableBorrowAlias(t *testing.T
 	stable := []byte("same borrowed value")
 
 	m.SetEntryBorrowValue([]byte("unstable"), unstable, page.ValuePtr{}, node.FlagInline)
-	m.SetEntryBorrowStableValue([]byte("stable"), stable, page.ValuePtr{}, node.FlagInline)
+	if !m.SetEntryBorrowStableValue([]byte("stable"), stable, page.ValuePtr{}, node.FlagInline) {
+		t.Fatal("stable borrow after unstable alias should retain caller value storage")
+	}
 
 	if got := len(m.values); got != 2 {
 		t.Fatalf("values=%d want=2", got)
