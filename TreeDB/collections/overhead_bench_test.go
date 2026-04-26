@@ -1,0 +1,241 @@
+package collections
+
+import (
+	"bytes"
+	"fmt"
+	"os"
+	"strconv"
+	"strings"
+	"testing"
+)
+
+const (
+	overheadBenchDefaultBatchSize = 8000
+	overheadBenchCities           = 64
+)
+
+var overheadBenchPayload = []byte(`{"name":"ada","city":"hnl","email":"ada@example.com","pad":"0123456789012345678901234567890123456789"}`)
+
+func overheadBenchBatchSize(b *testing.B) int {
+	b.Helper()
+
+	raw := strings.TrimSpace(os.Getenv("TREEDB_COLLECTION_BENCH_BATCH_SIZE"))
+	if raw == "" {
+		return overheadBenchDefaultBatchSize
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n <= 0 {
+		b.Fatalf("unsupported TREEDB_COLLECTION_BENCH_BATCH_SIZE=%q", raw)
+	}
+	return n
+}
+
+func overheadBenchDocumentID(n int) []byte {
+	return []byte(fmt.Sprintf("u-%09d", n))
+}
+
+func overheadBenchIndexedDocument(n int) []byte {
+	return []byte(fmt.Sprintf(
+		`{"name":"user-%09d","email":"user-%09d@example.com","city":"city-%02d","pad":"01234567890123456789"}`,
+		n,
+		n,
+		n%overheadBenchCities,
+	))
+}
+
+func overheadBenchDocumentBatch(count int, indexed bool) ([][]byte, [][]byte) {
+	ids := make([][]byte, count)
+	docs := make([][]byte, count)
+	for i := 0; i < count; i++ {
+		ids[i] = overheadBenchDocumentID(i)
+		if indexed {
+			docs[i] = overheadBenchIndexedDocument(i)
+		} else {
+			docs[i] = overheadBenchPayload
+		}
+	}
+	return ids, docs
+}
+
+func overheadBenchIndexedPlanner() insertBatchPlanner {
+	return insertBatchPlanner{
+		collection: "users",
+		indexes: []indexDefinition{
+			{name: "email_idx", field: "email", unique: true},
+			{name: "city_idx", field: "city"},
+		},
+	}
+}
+
+func BenchmarkCollectionOverheadPlanNoIndex(b *testing.B) {
+	batchSize := overheadBenchBatchSize(b)
+	ids, docs := overheadBenchDocumentBatch(batchSize, false)
+	planner := insertBatchPlanner{collection: "users"}
+
+	b.ReportAllocs()
+	b.ReportMetric(float64(batchSize), "target_docs/batch")
+	b.ResetTimer()
+	for planned := 0; planned < b.N; {
+		n := batchSize
+		if remaining := b.N - planned; remaining < n {
+			n = remaining
+		}
+		if _, err := planner.planInsertBatch(ids[:n], docs[:n]); err != nil {
+			b.Fatalf("plan no-index batch: %v", err)
+		}
+		planned += n
+	}
+}
+
+func BenchmarkCollectionOverheadPlanIndexed(b *testing.B) {
+	batchSize := overheadBenchBatchSize(b)
+	ids, docs := overheadBenchDocumentBatch(batchSize, true)
+	planner := overheadBenchIndexedPlanner()
+
+	b.ReportAllocs()
+	b.ReportMetric(float64(batchSize), "target_docs/batch")
+	b.ResetTimer()
+	for planned := 0; planned < b.N; {
+		n := batchSize
+		if remaining := b.N - planned; remaining < n {
+			n = remaining
+		}
+		if _, err := planner.planInsertBatch(ids[:n], docs[:n]); err != nil {
+			b.Fatalf("plan indexed batch: %v", err)
+		}
+		planned += n
+	}
+}
+
+func BenchmarkCollectionOverheadIndexStateJSONExtraction(b *testing.B) {
+	batchSize := overheadBenchBatchSize(b)
+	_, docs := overheadBenchDocumentBatch(batchSize, true)
+	planner := overheadBenchIndexedPlanner()
+	runtimes, err := planner.indexRuntimes()
+	if err != nil {
+		b.Fatalf("index runtimes: %v", err)
+	}
+
+	b.ReportAllocs()
+	b.ReportMetric(float64(len(runtimes)), "indexes/doc")
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		state, err := indexStateForDocument(docs[i%batchSize], runtimes, collectionOptions{})
+		if err != nil {
+			b.Fatalf("extract index state: %v", err)
+		}
+		if len(state) != len(runtimes) {
+			b.Fatalf("index state len=%d want=%d", len(state), len(runtimes))
+		}
+	}
+}
+
+func BenchmarkCollectionOverheadPlanIndexedPrecomputedState(b *testing.B) {
+	batchSize := overheadBenchBatchSize(b)
+	ids, docs := overheadBenchDocumentBatch(batchSize, true)
+	planner := overheadBenchIndexedPlanner()
+	runtimes, err := planner.indexRuntimes()
+	if err != nil {
+		b.Fatalf("index runtimes: %v", err)
+	}
+	states := make([]documentIndexState, len(docs))
+	for i := range docs {
+		state, err := indexStateForDocument(docs[i], runtimes, collectionOptions{})
+		if err != nil {
+			b.Fatalf("precompute index state: %v", err)
+		}
+		states[i] = state
+	}
+
+	b.ReportAllocs()
+	b.ReportMetric(float64(batchSize), "target_docs/batch")
+	b.ResetTimer()
+	for planned := 0; planned < b.N; {
+		n := batchSize
+		if remaining := b.N - planned; remaining < n {
+			n = remaining
+		}
+		if err := overheadBenchPlanIndexedPrecomputedState(planner, runtimes, ids[:n], docs[:n], states[:n]); err != nil {
+			b.Fatalf("plan indexed precomputed batch: %v", err)
+		}
+		planned += n
+	}
+}
+
+func overheadBenchPlanIndexedPrecomputedState(
+	planner insertBatchPlanner,
+	runtimes []indexRuntime,
+	ids, documents [][]byte,
+	states []documentIndexState,
+) error {
+	if len(ids) != len(documents) || len(ids) != len(states) {
+		return fmt.Errorf("collections: precomputed batch length mismatch")
+	}
+	if planner.primaryRoot == "" {
+		planner.primaryRoot = planner.collection + "/primary"
+	}
+	if planner.indexStateRoot == "" {
+		planner.indexStateRoot = planner.collection + "/index-state"
+	}
+	if planner.buildPrimaryVal == nil {
+		planner.buildPrimaryVal = borrowPrimaryDocument
+	}
+
+	items := make([]insertBatchItem, len(documents))
+	resultIDs := make([][]byte, len(documents))
+	for i := range documents {
+		if len(ids[i]) == 0 {
+			return fmt.Errorf("collections: document id cannot be empty")
+		}
+		id := bytes.Clone(ids[i])
+		items[i] = insertBatchItem{
+			id:       id,
+			document: documents[i],
+			state:    states[i],
+		}
+		resultIDs[i] = id
+	}
+
+	primaryOrder := sortedItemOrderByKey(items, func(item *insertBatchItem) []byte { return item.id })
+	if err := rejectDuplicateDocumentIDs(items, primaryOrder); err != nil {
+		return err
+	}
+	uniqueProbes := make([]uniqueProbeCandidate, 0, len(items))
+	for i := range items {
+		for _, runtime := range runtimes {
+			if !runtime.def.unique {
+				continue
+			}
+			for _, encoded := range items[i].state[runtime.def.name] {
+				prefix, err := indexValuePrefix(encoded)
+				if err != nil {
+					return err
+				}
+				uniqueProbes = append(uniqueProbes, uniqueProbeCandidate{
+					indexName:  runtime.def.name,
+					prefix:     prefix,
+					documentID: items[i].id,
+				})
+			}
+		}
+	}
+	uniqueProbeRuns, err := buildUniqueProbeRuns(uniqueProbes)
+	if err != nil {
+		return err
+	}
+
+	plan := &insertBatchPlan{
+		resultIDs:       resultIDs,
+		uniqueProbeRuns: uniqueProbeRuns,
+	}
+	if err := planner.emitPrimaryRun(plan, items, primaryOrder); err != nil {
+		return err
+	}
+	if err := planner.emitIndexStateRun(plan, items); err != nil {
+		return err
+	}
+	if err := planner.emitSecondaryRuns(plan, items, runtimes); err != nil {
+		return err
+	}
+	return nil
+}

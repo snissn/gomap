@@ -101,6 +101,10 @@ var benchmarkSpecs = []benchmarkSpec{
 	{Name: "BenchmarkSecondaryLookupNonUnique", Section: "Secondary Index Path", Description: "Resolve a non-unique secondary index lookup that returns multiple document IDs."},
 	{Name: "BenchmarkSecondaryUpsertFieldChange", Section: "Secondary Index Path", Description: "Rewrite a document so an indexed field changes and postings move to the new value."},
 	{Name: "BenchmarkCollectionCreateIndexBackfillExistingDocs", Section: "Secondary Index Path", Description: "Build a new secondary index and backfill it from an existing primary collection root."},
+	{Name: "BenchmarkCollectionOverheadPlanNoIndex", Section: "Overhead Breakdown", Description: "Plan a no-index collection batch without publishing it; isolates collection planner overhead from backend root publish."},
+	{Name: "BenchmarkCollectionOverheadPlanIndexed", Section: "Overhead Breakdown", Description: "Plan an indexed collection batch without publishing it; includes JSON index extraction, index-state encoding, and secondary run construction."},
+	{Name: "BenchmarkCollectionOverheadIndexStateJSONExtraction", Section: "Overhead Breakdown", Description: "Extract indexed values from JSON documents and encode index-state values, without planner run construction or backend publish."},
+	{Name: "BenchmarkCollectionOverheadPlanIndexedPrecomputedState", Section: "Overhead Breakdown", Description: "Plan an indexed collection batch using precomputed index state, approximating the non-JSON indexed planner cost."},
 }
 
 var benchmarkNameRE = regexp.MustCompile(`^(Benchmark\S+)-(\d+)$`)
@@ -405,7 +409,7 @@ func aggregateSamples(samples []benchmarkSample) map[string]benchmarkAggregate {
 }
 
 func buildSections(aggregates map[string]benchmarkAggregate) []reportSection {
-	sectionOrder := []string{"Document Path", "Batch Ingest Path", "Secondary Index Path", "Maintenance", "Other"}
+	sectionOrder := []string{"Document Path", "Batch Ingest Path", "Secondary Index Path", "Overhead Breakdown", "Maintenance", "Other"}
 	sections := make(map[string][]benchmarkAggregate, len(sectionOrder))
 	seen := make(map[string]struct{}, len(aggregates))
 

@@ -352,7 +352,7 @@ func (p insertBatchPlanner) emitIndexStateRun(plan *insertBatchPlan, items []ins
 	order := sortedItemOrderByKey(items, func(item *insertBatchItem) []byte { return item.id })
 	table := newCollectionRunTable(len(items))
 	for _, idx := range order {
-		raw, err := encodeDocumentIndexState(items[idx].state)
+		raw, err := encodeNormalizedDocumentIndexState(items[idx].state)
 		if err != nil {
 			return err
 		}
@@ -448,7 +448,7 @@ func indexStateForDocument(document []byte, runtimes []indexRuntime, opts collec
 			}
 			encoded = append(encoded, next)
 		}
-		encoded = normalizeEncodedIndexValues(encoded)
+		encoded = normalizeOwnedEncodedIndexValues(encoded)
 		if len(encoded) > 0 {
 			state[runtime.def.name] = encoded
 		}
@@ -457,6 +457,14 @@ func indexStateForDocument(document []byte, runtimes []indexRuntime, opts collec
 }
 
 func encodeDocumentIndexState(state documentIndexState) ([]byte, error) {
+	return encodeDocumentIndexStateWithOptions(state, true)
+}
+
+func encodeNormalizedDocumentIndexState(state documentIndexState) ([]byte, error) {
+	return encodeDocumentIndexStateWithOptions(state, false)
+}
+
+func encodeDocumentIndexStateWithOptions(state documentIndexState, normalizeValues bool) ([]byte, error) {
 	if state == nil {
 		state = make(documentIndexState)
 	}
@@ -465,7 +473,16 @@ func encodeDocumentIndexState(state documentIndexState) ([]byte, error) {
 		if indexName == "" {
 			return nil, errors.New("collections: index state name cannot be empty")
 		}
-		state[indexName] = normalizeEncodedIndexValues(values)
+		if normalizeValues {
+			values = normalizeEncodedIndexValues(values)
+		} else {
+			values = filterEmptyEncodedIndexValues(values)
+		}
+		if len(values) == 0 {
+			delete(state, indexName)
+			continue
+		}
+		state[indexName] = values
 		names = append(names, indexName)
 	}
 	sort.Strings(names)
@@ -566,6 +583,41 @@ func normalizeEncodedIndexValues(values [][]byte) [][]byte {
 			continue
 		}
 		out = append(out, value)
+	}
+	return out
+}
+
+func normalizeOwnedEncodedIndexValues(values [][]byte) [][]byte {
+	values = filterEmptyEncodedIndexValues(values)
+	if len(values) == 0 {
+		return nil
+	}
+	sort.Slice(values, func(i, j int) bool {
+		return bytes.Compare(values[i], values[j]) < 0
+	})
+	out := values[:1]
+	for _, value := range values[1:] {
+		if bytes.Equal(value, out[len(out)-1]) {
+			continue
+		}
+		out = append(out, value)
+	}
+	return out
+}
+
+func filterEmptyEncodedIndexValues(values [][]byte) [][]byte {
+	if len(values) == 0 {
+		return nil
+	}
+	out := values[:0]
+	for _, value := range values {
+		if len(value) == 0 {
+			continue
+		}
+		out = append(out, value)
+	}
+	if len(out) == 0 {
+		return nil
 	}
 	return out
 }

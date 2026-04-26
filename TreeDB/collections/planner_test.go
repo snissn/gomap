@@ -112,6 +112,24 @@ func TestInsertBatchPlanner_PreservesCallerVisibleResultOrdering(t *testing.T) {
 	}
 }
 
+func TestEncodeNormalizedDocumentIndexStateMatchesConservativeEncoder(t *testing.T) {
+	state := documentIndexState{
+		"city":  {[]byte("s:hnl")},
+		"email": {[]byte("s:ada@example.com")},
+	}
+	want, err := encodeDocumentIndexState(cloneDocumentIndexState(state))
+	if err != nil {
+		t.Fatalf("encode conservative index state: %v", err)
+	}
+	got, err := encodeNormalizedDocumentIndexState(cloneDocumentIndexState(state))
+	if err != nil {
+		t.Fatalf("encode normalized index state: %v", err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("normalized encoding mismatch\n got: %x\nwant: %x", got, want)
+	}
+}
+
 func TestInsertBatchPlanner_FailFastDuplicatesBeforePayloadConstruction(t *testing.T) {
 	builds := 0
 	planner := insertBatchPlanner{

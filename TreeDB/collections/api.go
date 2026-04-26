@@ -558,7 +558,7 @@ func buildCreateIndexBackfillPlan(
 		} else {
 			delete(merged, newRuntime.def.name)
 		}
-		rawState, err := encodeDocumentIndexState(merged)
+		rawState, err := encodeNormalizedDocumentIndexState(merged)
 		if err != nil {
 			return nil, err
 		}
