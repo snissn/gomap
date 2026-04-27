@@ -12,9 +12,13 @@ BENCH_ENGINE="${TREEDB_COLLECTION_BENCH_ENGINE:-production_fast}"
 BATCH_SIZE="${TREEDB_COLLECTION_BENCH_BATCH_SIZE:-8000}"
 DATA_OUTER="${TREEDB_COLLECTION_DATA_OUTER_LEAVES_IN_VLOG:-true}"
 INDEX_OUTER="${TREEDB_COLLECTION_INDEX_OUTER_LEAVES_IN_VLOG:-false}"
-PAGER_SYNC_CONCURRENCY="${TREEDB_COLLECTION_PAGER_SYNC_CONCURRENCY:-}"
+PAGER_SYNC_CONCURRENCY="$(printf '%s' "${TREEDB_COLLECTION_PAGER_SYNC_CONCURRENCY:-}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
 if [[ "$PAGER_SYNC_CONCURRENCY" == "0" ]]; then
   PAGER_SYNC_CONCURRENCY=""
+fi
+PAGER_SYNC_CONCURRENCY_LABEL="${PAGER_SYNC_CONCURRENCY:-profile/default}"
+if [[ "$DATA_OUTER" == "-" && "$INDEX_OUTER" == "-" ]]; then
+  PAGER_SYNC_CONCURRENCY_LABEL="-"
 fi
 GO_TEST_TAGS="${GO_TEST_TAGS:-}"
 TIMED_CPU_PROFILE="${TREEDB_COLLECTION_TIMED_CPU_PROFILE:-false}"
@@ -89,7 +93,7 @@ echo "running focused collections benchmarks into: $OUT_DIR"
 echo "benchmark engine: $BENCH_ENGINE"
 echo "collection batch size: $BATCH_SIZE"
 echo "storage policy: $STORAGE_POLICY_LABEL"
-echo "pager sync concurrency: ${PAGER_SYNC_CONCURRENCY:-profile/default}"
+echo "pager sync concurrency: $PAGER_SYNC_CONCURRENCY_LABEL"
 echo "execution path: $PATH_LABEL"
 echo "cpu profile mode: $(is_true "$TIMED_CPU_PROFILE" && echo "timed benchmark window" || echo "whole go test process")"
 if [[ -n "$GO_TEST_TAGS" ]]; then
@@ -111,6 +115,7 @@ if [[ ! -d "$ROOT/TreeDB/collections" ]]; then
     -execution-path "$PATH_LABEL" \
     -benchmark-engine "$BENCH_ENGINE" \
     -storage-policy "$STORAGE_POLICY_LABEL" \
+    -pager-sync-concurrency "$PAGER_SYNC_CONCURRENCY_LABEL" \
     -collection-batch-size "$BATCH_SIZE" \
     -bench-pattern "$BENCH_REGEX" \
     -count "$COUNT" \
@@ -135,6 +140,7 @@ else
     -execution-path "$PATH_LABEL" \
     -benchmark-engine "$BENCH_ENGINE" \
     -storage-policy "$STORAGE_POLICY_LABEL" \
+    -pager-sync-concurrency "$PAGER_SYNC_CONCURRENCY_LABEL" \
     -collection-batch-size "$BATCH_SIZE" \
     -bench-pattern "$BENCH_REGEX" \
     -count "$COUNT"
@@ -173,7 +179,7 @@ cat >"$OUT_DIR/README.md" <<EOF
 - execution path: \`$PATH_LABEL\`
 - benchmark engine: \`$BENCH_ENGINE\`
 - storage policy: \`$STORAGE_POLICY_LABEL\`
-- pager sync concurrency: \`${PAGER_SYNC_CONCURRENCY:-profile/default}\`
+- pager sync concurrency: \`$PAGER_SYNC_CONCURRENCY_LABEL\`
 - collection batch size: \`$BATCH_SIZE\`
 - benchmark regex: \`$BENCH_REGEX\`
 - benchmark count: \`$COUNT\`

@@ -23,6 +23,7 @@ type matrixRow struct {
 	Engine                 string
 	DataOuterLeavesInVLog  string
 	IndexOuterLeavesInVLog string
+	PagerSyncConcurrency   string
 	ReportMarkdownPath     string
 	ReportJSONPath         string
 }
@@ -165,7 +166,7 @@ func readMatrixIndex(path string) ([]matrixRow, error) {
 	for i, name := range records[0] {
 		header[name] = i
 	}
-	required := []string{"cell", "engine", "data_outer_leaves_in_vlog", "index_outer_leaves_in_vlog", "report_md", "report_json"}
+	required := []string{"cell", "engine", "data_outer_leaves_in_vlog", "index_outer_leaves_in_vlog", "pager_sync_concurrency", "report_md", "report_json"}
 	for _, name := range required {
 		if _, ok := header[name]; !ok {
 			return nil, fmt.Errorf("matrix index missing %q column", name)
@@ -182,6 +183,7 @@ func readMatrixIndex(path string) ([]matrixRow, error) {
 			Engine:                 field(record, header["engine"]),
 			DataOuterLeavesInVLog:  field(record, header["data_outer_leaves_in_vlog"]),
 			IndexOuterLeavesInVLog: field(record, header["index_outer_leaves_in_vlog"]),
+			PagerSyncConcurrency:   field(record, header["pager_sync_concurrency"]),
 			ReportMarkdownPath:     field(record, header["report_md"]),
 			ReportJSONPath:         field(record, header["report_json"]),
 		})
@@ -277,7 +279,7 @@ func metricPtr(metrics map[string]float64, name string) *float64 {
 
 func renderTSV(rows []summaryRow) string {
 	var sb strings.Builder
-	sb.WriteString("cell\tengine\tdata_outer_leaves_in_vlog\tindex_outer_leaves_in_vlog\tbenchmark\tns_per_op\tbytes_per_op\tallocs_per_op\tinsert_ns/doc\tsync_ns/doc\tper_item_key_probe_fallback_count\tper_item_prefix_probe_fallback_count\treport_md\n")
+	sb.WriteString("cell\tengine\tdata_outer_leaves_in_vlog\tindex_outer_leaves_in_vlog\tpager_sync_concurrency\tbenchmark\tns_per_op\tbytes_per_op\tallocs_per_op\tinsert_ns/doc\tsync_ns/doc\tper_item_key_probe_fallback_count\tper_item_prefix_probe_fallback_count\treport_md\n")
 	for _, row := range rows {
 		sb.WriteString(row.Cell)
 		sb.WriteByte('\t')
@@ -286,6 +288,8 @@ func renderTSV(rows []summaryRow) string {
 		sb.WriteString(row.DataOuterLeavesInVLog)
 		sb.WriteByte('\t')
 		sb.WriteString(row.IndexOuterLeavesInVLog)
+		sb.WriteByte('\t')
+		sb.WriteString(row.PagerSyncConcurrency)
 		sb.WriteByte('\t')
 		sb.WriteString(row.Benchmark)
 		sb.WriteByte('\t')
@@ -311,7 +315,7 @@ func renderTSV(rows []summaryRow) string {
 
 func renderUserStoryTSV(rows []userStoryRow) string {
 	var sb strings.Builder
-	sb.WriteString("cell\tengine\tdata_outer_leaves_in_vlog\tindex_outer_leaves_in_vlog\tstory\tbenchmark\tdocs_per_batch\tdocs_per_sec\tms_per_batch\tinsert_ms_per_batch\tsync_ms_per_batch\tbatches_per_sec\tns_per_doc\treport_md\n")
+	sb.WriteString("cell\tengine\tdata_outer_leaves_in_vlog\tindex_outer_leaves_in_vlog\tpager_sync_concurrency\tstory\tbenchmark\tdocs_per_batch\tdocs_per_sec\tms_per_batch\tinsert_ms_per_batch\tsync_ms_per_batch\tbatches_per_sec\tns_per_doc\treport_md\n")
 	for _, row := range rows {
 		sb.WriteString(row.Cell)
 		sb.WriteByte('\t')
@@ -320,6 +324,8 @@ func renderUserStoryTSV(rows []userStoryRow) string {
 		sb.WriteString(row.DataOuterLeavesInVLog)
 		sb.WriteByte('\t')
 		sb.WriteString(row.IndexOuterLeavesInVLog)
+		sb.WriteByte('\t')
+		sb.WriteString(row.PagerSyncConcurrency)
 		sb.WriteByte('\t')
 		sb.WriteString(row.Story)
 		sb.WriteByte('\t')
@@ -374,8 +380,8 @@ func renderMarkdown(rows []summaryRow, outDir string) (string, error) {
 	if len(userStoryRows) > 0 {
 		sb.WriteString("## User-Facing Throughput\n\n")
 		sb.WriteString("Batch benchmark ops are documents, so this section reports the indexed ingest story as docs/sec, batch latency, and batches/sec. Diagnostic JSON/planner rows are separated below.\n\n")
-		sb.WriteString("| Cell | Engine | Data vlog | Index vlog | Story | Docs/batch | Docs/sec | ms/batch | insert ms/batch | sync ms/batch | batches/sec | ns/doc | Report |\n")
-		sb.WriteString("| --- | --- | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |\n")
+		sb.WriteString("| Cell | Engine | Data vlog | Index vlog | Pager sync | Story | Docs/batch | Docs/sec | ms/batch | insert ms/batch | sync ms/batch | batches/sec | ns/doc | Report |\n")
+		sb.WriteString("| --- | --- | ---: | ---: | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |\n")
 		for _, row := range userStoryRows {
 			reportPath := relativeReportPath(outDir, row.ReportMarkdownPath)
 			sb.WriteString("| `")
@@ -386,6 +392,9 @@ func renderMarkdown(rows []summaryRow, outDir string) (string, error) {
 			sb.WriteString(escapeTableCell(row.DataOuterLeavesInVLog))
 			sb.WriteString("` | `")
 			sb.WriteString(escapeTableCell(row.IndexOuterLeavesInVLog))
+			sb.WriteString("` | ")
+			sb.WriteString("`")
+			sb.WriteString(escapeTableCell(row.PagerSyncConcurrency))
 			sb.WriteString("` | ")
 			sb.WriteString(escapeTableCell(row.Story))
 			sb.WriteString(" | ")
@@ -412,14 +421,16 @@ func renderMarkdown(rows []summaryRow, outDir string) (string, error) {
 	if len(diagnosticRows) > 0 {
 		sb.WriteString("## Diagnostic Rows\n\n")
 		sb.WriteString("These rows are not user stories. They isolate JSON/data extraction and non-JSON planner cost so future optimization can quarantine JSON work separately from TreeDB publish/index maintenance.\n\n")
-		sb.WriteString("| Cell | Engine | Diagnostic | ns/doc | B/doc | allocs/doc | Report |\n")
-		sb.WriteString("| --- | --- | --- | ---: | ---: | ---: | --- |\n")
+		sb.WriteString("| Cell | Engine | Pager sync | Diagnostic | ns/doc | B/doc | allocs/doc | Report |\n")
+		sb.WriteString("| --- | --- | --- | --- | ---: | ---: | ---: | --- |\n")
 		for _, row := range diagnosticRows {
 			reportPath := relativeReportPath(outDir, row.ReportMarkdownPath)
 			sb.WriteString("| `")
 			sb.WriteString(escapeTableCell(row.Cell))
 			sb.WriteString("` | `")
 			sb.WriteString(escapeTableCell(row.Engine))
+			sb.WriteString("` | `")
+			sb.WriteString(escapeTableCell(row.PagerSyncConcurrency))
 			sb.WriteString("` | `")
 			sb.WriteString(escapeTableCell(row.Benchmark))
 			sb.WriteString("` | ")
@@ -435,8 +446,8 @@ func renderMarkdown(rows []summaryRow, outDir string) (string, error) {
 		sb.WriteString("\n")
 	}
 	sb.WriteString("## Raw Matrix\n\n")
-	sb.WriteString("| Cell | Engine | Data vlog | Index vlog | Benchmark | ns/op | B/op | allocs/op | insert ns/doc | sync ns/doc | Key fallbacks | Prefix fallbacks | Report |\n")
-	sb.WriteString("| --- | --- | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |\n")
+	sb.WriteString("| Cell | Engine | Data vlog | Index vlog | Pager sync | Benchmark | ns/op | B/op | allocs/op | insert ns/doc | sync ns/doc | Key fallbacks | Prefix fallbacks | Report |\n")
+	sb.WriteString("| --- | --- | ---: | ---: | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |\n")
 	for _, row := range rows {
 		reportPath := relativeReportPath(outDir, row.ReportMarkdownPath)
 		sb.WriteString("| `")
@@ -447,6 +458,8 @@ func renderMarkdown(rows []summaryRow, outDir string) (string, error) {
 		sb.WriteString(escapeTableCell(row.DataOuterLeavesInVLog))
 		sb.WriteString("` | `")
 		sb.WriteString(escapeTableCell(row.IndexOuterLeavesInVLog))
+		sb.WriteString("` | `")
+		sb.WriteString(escapeTableCell(row.PagerSyncConcurrency))
 		sb.WriteString("` | `")
 		sb.WriteString(escapeTableCell(row.Benchmark))
 		sb.WriteString("` | ")

@@ -11,10 +11,11 @@ PATH_LABEL="${PATH_LABEL_ENV:-native-fastpath}"
 COUNT="${COUNT:-1}"
 BENCHTIME="${BENCHTIME:-1s}"
 BATCH_SIZE="${TREEDB_COLLECTION_BENCH_BATCH_SIZE:-8000}"
-PAGER_SYNC_CONCURRENCY="${TREEDB_COLLECTION_PAGER_SYNC_CONCURRENCY:-}"
+PAGER_SYNC_CONCURRENCY="$(printf '%s' "${TREEDB_COLLECTION_PAGER_SYNC_CONCURRENCY:-}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
 if [[ "$PAGER_SYNC_CONCURRENCY" == "0" ]]; then
   PAGER_SYNC_CONCURRENCY=""
 fi
+PAGER_SYNC_CONCURRENCY_LABEL="${PAGER_SYNC_CONCURRENCY:-profile/default}"
 BENCH_REGEX="${BENCH_REGEX:-Benchmark(CollectionInsertBatchWithSecondaryIndexes|CollectionInsertBatchCheckpointWithSecondaryIndexes|CollectionOverheadIndexStateJSONExtraction|CollectionOverheadPlanIndexedPrecomputedState)$}"
 INCLUDE_SQLITE="${TREEDB_COLLECTION_INCLUDE_SQLITE:-false}"
 SQLITE_ENGINE="${TREEDB_COLLECTION_SQLITE_ENGINE:-sqlite_wal_normal}"
@@ -95,8 +96,8 @@ INDEX_TSV="$OUT_DIR/matrix_index.tsv"
 PROFILE_INDEX_TSV="$OUT_DIR/profile_index.tsv"
 SUMMARY_MD="$OUT_DIR/README.md"
 
-printf "cell\tengine\tdata_outer_leaves_in_vlog\tindex_outer_leaves_in_vlog\treport_md\treport_json\tcpu_profile\tmem_profile\n" >"$INDEX_TSV"
-printf "cell\tengine\tdata_outer_leaves_in_vlog\tindex_outer_leaves_in_vlog\tbenchmark\tcpu_profile_mode\treport_md\treport_json\tcpu_profile\tmem_profile\tcpu_top\tmem_top\n" >"$PROFILE_INDEX_TSV"
+printf "cell\tengine\tdata_outer_leaves_in_vlog\tindex_outer_leaves_in_vlog\tpager_sync_concurrency\treport_md\treport_json\tcpu_profile\tmem_profile\n" >"$INDEX_TSV"
+printf "cell\tengine\tdata_outer_leaves_in_vlog\tindex_outer_leaves_in_vlog\tpager_sync_concurrency\tbenchmark\tcpu_profile_mode\treport_md\treport_json\tcpu_profile\tmem_profile\tcpu_top\tmem_top\n" >"$PROFILE_INDEX_TSV"
 
 echo "running collections benchmark matrix into: $OUT_DIR"
 echo "matrix: $MATRIX"
@@ -105,7 +106,7 @@ echo "benchmark regex: $BENCH_REGEX"
 echo "benchmark count: $COUNT"
 echo "benchmark time: $BENCHTIME"
 echo "batch size: $BATCH_SIZE"
-echo "pager sync concurrency: ${PAGER_SYNC_CONCURRENCY:-profile/default}"
+echo "pager sync concurrency: $PAGER_SYNC_CONCURRENCY_LABEL"
 echo "profile bench captures: $PROFILE_BENCHES"
 if is_true "$PROFILE_BENCHES"; then
   echo "profile benchmark list: $PROFILE_BENCH_LIST"
@@ -143,6 +144,7 @@ run_profile_benches() {
   local bench_list=$6
   local go_tags=${7:-}
   local cgo_enabled=${8:-}
+  local pager_sync_concurrency_label=${9:-$PAGER_SYNC_CONCURRENCY_LABEL}
   local benches=()
 
   read -r -a benches <<<"$bench_list"
@@ -173,11 +175,12 @@ run_profile_benches() {
     echo "==> $cell profile $bench"
     env "${env_args[@]}" scripts/bench_collections_report.sh
 
-    printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
+    printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
       "$cell" \
       "$engine" \
       "$data_outer" \
       "$index_outer" \
+      "$pager_sync_concurrency_label" \
       "$bench" \
       "whole_go_test_process" \
       "$profile_dir/collections_report.md" \
@@ -221,11 +224,12 @@ run_timed_profile_benches() {
     echo "==> $cell timed CPU profile $bench"
     env "${env_args[@]}" scripts/bench_collections_report.sh
 
-    printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
+    printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
       "$cell" \
       "$engine" \
       "$data_outer" \
       "$index_outer" \
+      "$PAGER_SYNC_CONCURRENCY_LABEL" \
       "$bench" \
       "timed_benchmark_window" \
       "$profile_dir/collections_report.md" \
@@ -254,11 +258,12 @@ for row in "${MATRIX_ROWS[@]}"; do
     TREEDB_COLLECTION_PAGER_SYNC_CONCURRENCY="$PAGER_SYNC_CONCURRENCY" \
     scripts/bench_collections_report.sh
 
-  printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
+  printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
     "$cell" \
     "$engine" \
     "$data_outer" \
     "$index_outer" \
+    "$PAGER_SYNC_CONCURRENCY_LABEL" \
     "$cell_dir/collections_report.md" \
     "$cell_dir/collections_report.json" \
     "$cell_dir/collections_cpu.pprof" \
@@ -286,13 +291,15 @@ if is_true "$INCLUDE_SQLITE"; then
     TREEDB_COLLECTION_BENCH_BATCH_SIZE="$BATCH_SIZE" \
     TREEDB_COLLECTION_DATA_OUTER_LEAVES_IN_VLOG="-" \
     TREEDB_COLLECTION_INDEX_OUTER_LEAVES_IN_VLOG="-" \
+    TREEDB_COLLECTION_PAGER_SYNC_CONCURRENCY="" \
     GO_TEST_TAGS="sqlite_bench" \
     CGO_ENABLED="$SQLITE_CGO_ENABLED" \
     scripts/bench_collections_report.sh
 
-  printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
+  printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
     "$cell" \
     "$SQLITE_ENGINE" \
+    "-" \
     "-" \
     "-" \
     "$cell_dir/collections_report.md" \
@@ -301,7 +308,7 @@ if is_true "$INCLUDE_SQLITE"; then
     "$cell_dir/collections_mem.pprof" >>"$INDEX_TSV"
 
   if is_true "$PROFILE_BENCHES"; then
-    run_profile_benches "$cell" "$SQLITE_ENGINE" "-" "-" "sqlite" "$SQLITE_PROFILE_BENCH_LIST" "sqlite_bench" "$SQLITE_CGO_ENABLED"
+    run_profile_benches "$cell" "$SQLITE_ENGINE" "-" "-" "sqlite" "$SQLITE_PROFILE_BENCH_LIST" "sqlite_bench" "$SQLITE_CGO_ENABLED" "-"
   fi
 fi
 
@@ -322,6 +329,7 @@ cat >"$SUMMARY_MD" <<EOF
 - benchmark count: \`$COUNT\`
 - benchmark time: \`$BENCHTIME\`
 - collection batch size: \`$BATCH_SIZE\`
+- pager sync concurrency: \`$PAGER_SYNC_CONCURRENCY_LABEL\`
 - focused profile captures: \`$PROFILE_BENCHES\`
 - focused profile count: \`$PROFILE_COUNT\`
 - focused profile benchmark time: \`$PROFILE_BENCHTIME\`

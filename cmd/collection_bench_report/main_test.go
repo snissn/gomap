@@ -109,17 +109,18 @@ func TestBuildReportAndRenderMarkdown(t *testing.T) {
 	}
 
 	rep := &report{
-		GeneratedAt:         "2026-03-05T00:00:00Z",
-		Status:              "ok",
-		ExecutionPath:       "oracle",
-		BenchmarkEngine:     "cached",
-		StoragePolicy:       "data_outer=true,index_outer=false",
-		Worktree:            "/tmp/oracle",
-		Branch:              "pr/oracle",
-		Commit:              "deadbeef",
-		CollectionBatchSize: 8000,
-		RawJSONPath:         "/tmp/collections_bench.json",
-		Sections:            buildSections(aggregates),
+		GeneratedAt:          "2026-03-05T00:00:00Z",
+		Status:               "ok",
+		ExecutionPath:        "oracle",
+		BenchmarkEngine:      "cached",
+		StoragePolicy:        "data_outer=true,index_outer=false",
+		PagerSyncConcurrency: "profile/default",
+		Worktree:             "/tmp/oracle",
+		Branch:               "pr/oracle",
+		Commit:               "deadbeef",
+		CollectionBatchSize:  8000,
+		RawJSONPath:          "/tmp/collections_bench.json",
+		Sections:             buildSections(aggregates),
 	}
 	md := renderMarkdown(rep)
 	if !strings.Contains(md, "- execution path: `oracle`") {
@@ -133,6 +134,9 @@ func TestBuildReportAndRenderMarkdown(t *testing.T) {
 	}
 	if !strings.Contains(md, "- storage policy: `data_outer=true,index_outer=false`") {
 		t.Fatalf("markdown missing storage policy:\n%s", md)
+	}
+	if !strings.Contains(md, "- pager sync concurrency: `profile/default`") {
+		t.Fatalf("markdown missing pager sync concurrency:\n%s", md)
 	}
 	if !strings.Contains(md, "## Document Path") {
 		t.Fatalf("markdown missing document section:\n%s", md)
