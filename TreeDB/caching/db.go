@@ -22991,11 +22991,15 @@ func (db *DB) GetMany(keys [][]byte) ([][]byte, error) {
 	// observably empty, so we can delegate to backend single-snapshot GetMany.
 	view := db.retainMemtableView()
 	bypass := db.canBypassMemtableReadMany(view, keys)
+	if bypass {
+		if view != nil {
+			db.releaseMemtableView(view)
+			view = nil
+		}
+		return db.backendGetMany(keys)
+	}
 	if view != nil {
 		defer db.releaseMemtableView(view)
-	}
-	if bypass {
-		return db.backendGetMany(keys)
 	}
 	if view != nil && len(view.rootPointShards) > 0 {
 		return db.getManyFromPublishedRootPointShards(view, keys)
@@ -23146,23 +23150,15 @@ func (db *DB) HasMany(keys [][]byte) ([]bool, error) {
 }
 
 func (db *DB) HasPrefixes(prefixes [][]byte) ([]bool, error) {
-	out := make([]bool, len(prefixes))
-	for i, prefix := range prefixes {
-		it, err := db.Iterator(prefix, nil)
-		if err != nil {
-			return nil, err
-		}
-		if it.Valid() {
-			out[i] = bytes.HasPrefix(it.Key(), prefix)
-		}
-		iterErr := it.Error()
-		closeErr := it.Close()
-		if iterErr != nil {
-			return nil, iterErr
-		}
-		if closeErr != nil {
-			return nil, closeErr
-		}
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		return nil, backenddb.ErrClosed
+	}
+	defer snap.Close()
+
+	out, err := snap.HasPrefixes(prefixes)
+	if err != nil {
+		return nil, err
 	}
 	return out, nil
 }
