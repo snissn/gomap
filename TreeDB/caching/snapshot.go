@@ -142,10 +142,6 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 		snap.rootPointShards = view.rootSnapshotShards
 		snap.rootIterator = view.rootIterator
 	}
-	snap.rootPublished = backendSnapshotLookup{snapshot: backendSnap}
-	if state := backendSnap.State(); state != nil {
-		snap.rootPublishedRootID = state.RootPageID
-	}
 	return snap
 }
 

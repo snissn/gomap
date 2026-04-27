@@ -70,6 +70,26 @@ func TestRootDomainSnapshot_GetEntryNewestWinsAcrossRuns(t *testing.T) {
 	assertRootDomainVisibleValue(t, snap, "d", "mutable-d")
 }
 
+func TestRootDomainSnapshot_GetEntryNewestImmutableWins(t *testing.T) {
+	t.Parallel()
+
+	snap := rootDomainSnapshot{
+		published: newRootDomainTestTable(t,
+			rootDomainTestOp{key: "k", value: "published"},
+		),
+		immutables: []memtable.Table{
+			newRootDomainTestTable(t,
+				rootDomainTestOp{key: "k", value: "older"},
+			),
+			newRootDomainTestTable(t,
+				rootDomainTestOp{key: "k", value: "newer"},
+			),
+		},
+	}
+
+	assertRootDomainVisibleValue(t, snap, "k", "newer")
+}
+
 func TestRootDomainSnapshot_TombstoneHidesOlderRuns(t *testing.T) {
 	t.Parallel()
 
@@ -285,7 +305,7 @@ func TestRootDomainSnapshotFromMemtableView_UsesPublishedShardAndIteratorSnapsho
 	assertRootDomainVisibleValue(t, iter, "b", "iter-b")
 }
 
-func TestRootDomainSnapshotFromCachedSnapshot_IncludesPublishedBackendState(t *testing.T) {
+func TestRootDomainSnapshotFromCachedSnapshot_ExcludesBackendFallback(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
@@ -307,10 +327,47 @@ func TestRootDomainSnapshotFromCachedSnapshot_IncludesPublishedBackendState(t *t
 
 	snap := &Snapshot{backend: backendSnap}
 	rootSnap := rootDomainSnapshotFromCachedSnapshot(snap, []byte("k"))
-	if got, want := rootSnap.publishedRootID, backendSnap.State().RootPageID; got != want {
-		t.Fatalf("publishedRootID=%d want %d", got, want)
+	if rootSnap.published != nil {
+		t.Fatal("expected root-domain snapshot to exclude backend fallback lookup")
 	}
-	assertRootDomainVisibleValue(t, rootSnap, "k", "backend-v")
+	if rootSnap.publishedRootID != 0 {
+		t.Fatalf("publishedRootID=%d want 0", rootSnap.publishedRootID)
+	}
+	if rootSnap.hasVisibleKey([]byte("k")) {
+		t.Fatal("backend key should be handled by snapshot backend fallback, not root-domain lookup")
+	}
+}
+
+func TestPublishRootDomainSnapshotsLocked_FiltersIteratorRangesWithNilQueueEntries(t *testing.T) {
+	t.Parallel()
+
+	first := newRootDomainTestTable(t, rootDomainTestOp{key: "a", value: "a"})
+	second := newRootDomainTestTable(t, rootDomainTestOp{key: "b", value: "b"})
+	db := &DB{
+		mutableShards: []memShard{{}},
+		queue:         []memtable.Table{first, nil, second},
+		queueRanges: []keyRange{
+			{valid: true, min: []byte("a"), max: []byte("a")},
+			{valid: true, min: []byte("nil"), max: []byte("nil")},
+			{valid: true, min: []byte("b"), max: []byte("b")},
+		},
+		rootPointStates: []rootDomainState{{}},
+		rootIteratorState: rootDomainState{
+			immutables: []memtable.Table{first, second},
+		},
+	}
+	view := &memtableView{queue: db.queue, queueRanges: db.queueRanges}
+
+	db.publishRootDomainSnapshotsLocked(view)
+	if got, want := len(view.rootIterator.immutables), 2; got != want {
+		t.Fatalf("iterator runs=%d want %d", got, want)
+	}
+	if got, want := len(view.rootIteratorRanges), 2; got != want {
+		t.Fatalf("iterator ranges=%d want %d", got, want)
+	}
+	if string(view.rootIteratorRanges[0].min) != "a" || string(view.rootIteratorRanges[1].min) != "b" {
+		t.Fatalf("unexpected filtered ranges: %+v", view.rootIteratorRanges)
+	}
 }
 
 func TestRawIteratorRootDomainSnapshot_CopiesQueuedRunsAndRanges(t *testing.T) {
@@ -638,6 +695,7 @@ func BenchmarkRootDomainSnapshotVisibleValue(b *testing.B) {
 func BenchmarkRootDomainStateSealMutable(b *testing.B) {
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
+		b.StopTimer()
 		mutable, err := memtable.NewWithCapacityMode(0, memtable.ModeAppendOnly)
 		if err != nil {
 			b.Fatalf("new mutable: %v", err)
@@ -648,7 +706,9 @@ func BenchmarkRootDomainStateSealMutable(b *testing.B) {
 		if err != nil {
 			b.Fatalf("new next mutable: %v", err)
 		}
+		b.StartTimer()
 		state.sealMutable(next)
+		b.StopTimer()
 		if len(state.immutables) != 1 {
 			b.Fatalf("immutables=%d want 1", len(state.immutables))
 		}
