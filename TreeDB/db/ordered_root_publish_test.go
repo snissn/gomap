@@ -1197,6 +1197,64 @@ func TestPublishOrderedRootDeltaGroupWithSystemDeltaBuilder_InvalidatesValueLogR
 	}
 }
 
+func TestPublishOrderedRootDeltaGroupWithSystemBuilder_InvalidatesValueLogRefTrackerForNonSystemDelta(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+
+	livePtr := appendPointersInNewSegment(t, dir, 0, 53, 130_000, 1, func(int) []byte {
+		return []byte("live-user-pointer-before-non-system-delta")
+	})[0]
+	b := db.NewBatch().(*Batch)
+	if err := b.SetPointer([]byte("user/live"), livePtr); err != nil {
+		t.Fatalf("SetPointer(user/live): %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("write live pointer: %v", err)
+	}
+	_ = b.Close()
+
+	oldPtr := appendPointersInNewSegment(t, dir, 0, 54, 140_000, 1, func(int) []byte {
+		return []byte("old-non-system-delta-pointer")
+	})[0]
+	newPtr := appendPointersInNewSegment(t, dir, 0, 55, 150_000, 1, func(int) []byte {
+		return []byte("new-non-system-delta-pointer")
+	})[0]
+	baseRoot, err := db.PublishOrderedRootIterator(0, mustFrozenSystemPointerMemtable(t, "root/p", oldPtr).NewIterator(nil, nil))
+	if err != nil {
+		t.Fatalf("publish initial non-system root: %v", err)
+	}
+
+	if _, err := db.referencedValueLogSegments(context.Background()); err != nil {
+		t.Fatalf("refresh value-log refs: %v", err)
+	}
+	beforeSeq := db.currentCommitSeq()
+	if _, ok := db.valueLogRefTracker.referencedSet(beforeSeq); !ok {
+		t.Fatalf("expected incremental ref set before non-system delta at seq=%d", beforeSeq)
+	}
+
+	_, _, err = db.PublishOrderedRootDeltaGroupWithSystemBuilder([]OrderedRootDeltaPublishInput{{
+		BaseRoot: baseRoot,
+		Iter:     mustFrozenSystemPointerMemtable(t, "root/p", newPtr).NewIterator(nil, nil),
+	}}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		if len(rootIDs) != 1 {
+			t.Fatalf("rootIDs len=%d want 1", len(rootIDs))
+		}
+		return mustFrozenSystemMemtable(t, "sys/root", strconv.FormatUint(rootIDs[0], 10)).NewIterator(nil, nil), nil
+	})
+	if err != nil {
+		t.Fatalf("publish non-system delta group: %v", err)
+	}
+
+	afterSeq := db.currentCommitSeq()
+	if refs, ok := db.valueLogRefTracker.referencedSet(afterSeq); ok {
+		t.Fatalf("value-log ref tracker stayed valid after untracked non-system delta: refs=%v", refs)
+	}
+}
+
 func assertValueLogRefTrackerMatchesFullScan(t *testing.T, db *DB) {
 	t.Helper()
 	seq := db.currentCommitSeq()

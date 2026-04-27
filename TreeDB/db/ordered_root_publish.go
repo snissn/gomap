@@ -749,6 +749,15 @@ func (db *DB) PublishOrderedRootDeltaGroupWithSystemBuilder(ordered []OrderedRoo
 	retired = append(retired, rootRetired...)
 	mergeOrderedRootPublishMetrics(&merged, metrics)
 	vlogRefDelta := refDelta
+	if len(ordered) > 0 {
+		// Non-system roots were applied from deltas, so this commit has no
+		// exact value-log ref delta for their pointer changes. Keep GC
+		// reachability conservative by invalidating the tracker after commit.
+		if vlogRefDelta != nil {
+			releaseValueLogRefDelta(vlogRefDelta)
+		}
+		vlogRefDelta = nil
+	}
 	defer func() {
 		if vlogRefDelta != nil {
 			releaseValueLogRefDelta(vlogRefDelta)
@@ -763,7 +772,7 @@ func (db *DB) PublishOrderedRootDeltaGroupWithSystemBuilder(ordered []OrderedRoo
 		return 0, nil, errors.New("concurrent modification detected during ordered root group publish")
 	}
 
-	if vlogRefDelta == nil {
+	if len(ordered) == 0 && vlogRefDelta == nil {
 		vlogRefDelta = db.newNoopValueLogRefDeltaIfTrackable(baseSeq)
 	}
 	if err := db.finalizeCommit(userRoot, newSystemRoot, retired, false, merged, nil, true, vlogRefDelta, nil, nil); err != nil {

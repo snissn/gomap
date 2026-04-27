@@ -9,6 +9,17 @@ import (
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
 
+func TestCollectionGetNilDBReturnsError(t *testing.T) {
+	col := &Collection{}
+	_, err := col.Get([]byte("u1"))
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "db is nil") {
+		t.Fatalf("Get nil db error=%v", err)
+	}
+}
+
 func TestCollectionInsertBatchBridge_RoundTripWithSecondaryIndexes(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {

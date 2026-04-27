@@ -1461,6 +1461,9 @@ func (c *Collection) Get(documentID []byte) ([]byte, error) {
 	if c == nil {
 		return nil, errCollectionNil
 	}
+	if c.db == nil {
+		return nil, errors.New("collections: db is nil")
+	}
 	if len(documentID) == 0 {
 		return nil, errors.New("collections: document id cannot be empty")
 	}
