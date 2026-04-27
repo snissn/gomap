@@ -68,19 +68,8 @@ func TestInsertBatchPlanner_EmitsRootLocalRunsForPrimaryIndexStateAndSecondaryRo
 	}
 	assertSortedEntries(t, cityEntries)
 
-	if got, want := len(plan.uniqueProbeRuns), 1; got != want {
-		t.Fatalf("unique probe runs=%d want %d", got, want)
-	}
-	if got, want := plan.uniqueProbeRuns[0].indexName, "email"; got != want {
-		t.Fatalf("unique probe index=%q want %q", got, want)
-	}
-	if got, want := len(plan.uniqueProbeRuns[0].prefixes), 2; got != want {
-		t.Fatalf("unique probe prefixes=%d want %d", got, want)
-	}
-	for _, prefix := range plan.uniqueProbeRuns[0].prefixes {
-		if bytes.Contains(prefix, []byte("u1")) || bytes.Contains(prefix, []byte("u2")) {
-			t.Fatalf("unique probe prefix contains a document id: %q", prefix)
-		}
+	if got := len(plan.uniqueProbeRuns); got != 0 {
+		t.Fatalf("unique probe runs=%d want 0 without persisted unique roots", got)
 	}
 }
 
@@ -158,6 +147,53 @@ func TestBuildUniqueProbeRunsMatchesEncodedPrefixOrdering(t *testing.T) {
 	})
 	if !byteMatrixEqual(runs[0].prefixes, want) {
 		t.Fatalf("prefix order mismatch\n got: %q\nwant: %q", runs[0].prefixes, want)
+	}
+}
+
+func TestInsertBatchPlanner_BuildsUniqueProbePrefixesOnlyForPersistedRoots(t *testing.T) {
+	planner := insertBatchPlanner{
+		collection: "users",
+		indexes: []indexDefinition{
+			{name: "email", field: "email", unique: true},
+			{name: "username", field: "username", unique: true},
+		},
+	}
+	probe := &recordingRootSnapshotProbe{}
+	plan, err := planner.planInsertBatchWithPreflight(
+		[][]byte{[]byte("u1"), []byte("u2")},
+		[][]byte{
+			[]byte(`{"email":"ada@example.com","username":"ada"}`),
+			[]byte(`{"email":"grace@example.com","username":"grace"}`),
+		},
+		insertBatchPreflight{
+			snapshot: probe,
+			uniqueIndexRootIDs: map[string]uint64{
+				"email": 77,
+			},
+		},
+	)
+	if err != nil {
+		t.Fatalf("plan insert batch: %v", err)
+	}
+	if got, want := len(plan.uniqueProbeRuns), 1; got != want {
+		t.Fatalf("unique probe runs=%d want %d", got, want)
+	}
+	if got, want := plan.uniqueProbeRuns[0].indexName, "email"; got != want {
+		t.Fatalf("unique probe index=%q want %q", got, want)
+	}
+	if got, want := len(plan.uniqueProbeRuns[0].prefixes), 2; got != want {
+		t.Fatalf("unique probe prefixes=%d want %d", got, want)
+	}
+	for _, prefix := range plan.uniqueProbeRuns[0].prefixes {
+		if bytes.Contains(prefix, []byte("u1")) || bytes.Contains(prefix, []byte("u2")) {
+			t.Fatalf("unique probe prefix contains a document id: %q", prefix)
+		}
+	}
+	if got, want := probe.hasPrefixesCalls, 1; got != want {
+		t.Fatalf("HasPrefixesAtRoot calls=%d want %d", got, want)
+	}
+	if got, want := probe.lastHasPrefixesRootID, uint64(77); got != want {
+		t.Fatalf("HasPrefixesAtRoot root=%d want %d", got, want)
 	}
 }
 
@@ -314,10 +350,10 @@ func TestInsertBatchPlanner_PreflightUsesRootBatchProbes(t *testing.T) {
 	}
 
 	_, err := planner.planInsertBatchWithPreflight(
-		[][]byte{[]byte("u1"), []byte("u2")},
+		[][]byte{[]byte("u2"), []byte("u1")},
 		[][]byte{
-			[]byte(`{"email":"ada@example.com"}`),
 			[]byte(`{"email":"grace@example.com"}`),
+			[]byte(`{"email":"ada@example.com"}`),
 		},
 		insertBatchPreflight{
 			snapshot:      probe,

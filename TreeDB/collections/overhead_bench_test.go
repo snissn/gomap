@@ -243,14 +243,13 @@ func overheadBenchPlanIndexedPrecomputedState(
 			}
 		}
 	}
-	uniqueProbeRuns, err := buildUniqueProbeRuns(uniqueProbes)
-	if err != nil {
+	sortUniqueProbeCandidates(uniqueProbes)
+	if err := rejectDuplicateUniqueProbeCandidates(uniqueProbes); err != nil {
 		return err
 	}
 
 	plan := &insertBatchPlan{
-		resultIDs:       resultIDs,
-		uniqueProbeRuns: uniqueProbeRuns,
+		resultIDs: resultIDs,
 	}
 	if err := planner.emitPrimaryRun(plan, items, primaryOrder); err != nil {
 		return err
