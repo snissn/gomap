@@ -87,10 +87,14 @@ const (
 	ProfileBench Profile = "bench"
 )
 
+const fastProfileChunkSize = 4 << 20
+
 // OptionsFor returns a copy of Options pre-filled for the given Profile.
 //
 // The returned Options still follow TreeDB's normal defaulting rules for fields
-// left as zero values (e.g. ChunkSize, KeepRecent, backpressure thresholds).
+// left as zero values unless the selected profile intentionally owns that knob
+// (e.g. fast profiles set ChunkSize; KeepRecent and backpressure thresholds
+// still use normal defaults).
 func OptionsFor(profile Profile, dir string) Options {
 	opts := Options{Dir: dir}
 	ApplyProfile(&opts, profile)
@@ -162,6 +166,9 @@ func applyRunCelestiaVLogCompressionProfile(opts *Options) {
 }
 
 func applyFastPagerSyncProfile(opts *Options) {
+	if opts.ChunkSize == 0 {
+		opts.ChunkSize = fastProfileChunkSize
+	}
 	if opts.PagerSyncConcurrency == 0 {
 		opts.PagerSyncConcurrency = 4
 	}

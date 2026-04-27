@@ -12,6 +12,7 @@ BENCH_ENGINE="${TREEDB_COLLECTION_BENCH_ENGINE:-production_fast}"
 BATCH_SIZE="${TREEDB_COLLECTION_BENCH_BATCH_SIZE:-8000}"
 DATA_OUTER="${TREEDB_COLLECTION_DATA_OUTER_LEAVES_IN_VLOG:-true}"
 INDEX_OUTER="${TREEDB_COLLECTION_INDEX_OUTER_LEAVES_IN_VLOG:-false}"
+CHUNK_SIZE="${TREEDB_COLLECTION_CHUNK_SIZE:-}"
 PAGER_SYNC_CONCURRENCY="${TREEDB_COLLECTION_PAGER_SYNC_CONCURRENCY:-}"
 if [[ "$PAGER_SYNC_CONCURRENCY" == "0" ]]; then
   PAGER_SYNC_CONCURRENCY=""
@@ -88,6 +89,7 @@ echo "running focused collections benchmarks into: $OUT_DIR"
 echo "benchmark engine: $BENCH_ENGINE"
 echo "collection batch size: $BATCH_SIZE"
 echo "storage policy: $STORAGE_POLICY_LABEL"
+echo "pager chunk size: ${CHUNK_SIZE:-profile/default}"
 echo "pager sync concurrency: ${PAGER_SYNC_CONCURRENCY:-profile/default}"
 echo "execution path: $PATH_LABEL"
 echo "cpu profile mode: $(is_true "$TIMED_CPU_PROFILE" && echo "timed benchmark window" || echo "whole go test process")"
@@ -114,7 +116,7 @@ if [[ ! -d "$ROOT/TreeDB/collections" ]]; then
     -count "$COUNT" \
     -unavailable-reason "N/A before R0 harness bring-up"
 else
-  TREEDB_COLLECTION_BENCH_ENGINE="$BENCH_ENGINE" TREEDB_COLLECTION_BENCH_BATCH_SIZE="$BATCH_SIZE" TREEDB_COLLECTION_DATA_OUTER_LEAVES_IN_VLOG="$DATA_OUTER" TREEDB_COLLECTION_INDEX_OUTER_LEAVES_IN_VLOG="$INDEX_OUTER" TREEDB_COLLECTION_PAGER_SYNC_CONCURRENCY="$PAGER_SYNC_CONCURRENCY" GOWORK=off "${cmd[@]}" | tee "$RAW_JSON"
+  TREEDB_COLLECTION_BENCH_ENGINE="$BENCH_ENGINE" TREEDB_COLLECTION_BENCH_BATCH_SIZE="$BATCH_SIZE" TREEDB_COLLECTION_DATA_OUTER_LEAVES_IN_VLOG="$DATA_OUTER" TREEDB_COLLECTION_INDEX_OUTER_LEAVES_IN_VLOG="$INDEX_OUTER" TREEDB_COLLECTION_CHUNK_SIZE="$CHUNK_SIZE" TREEDB_COLLECTION_PAGER_SYNC_CONCURRENCY="$PAGER_SYNC_CONCURRENCY" GOWORK=off "${cmd[@]}" | tee "$RAW_JSON"
 
   if is_true "$TIMED_CPU_PROFILE" && [[ ! -s "$CPU_PROFILE" ]]; then
     echo "timed CPU profile was requested but no profile was written to $CPU_PROFILE; use a timed-profile benchmark" >&2
@@ -148,6 +150,7 @@ cat >"$OUT_DIR/README.md" <<EOF
 - execution path: \`$PATH_LABEL\`
 - benchmark engine: \`$BENCH_ENGINE\`
 - storage policy: \`$STORAGE_POLICY_LABEL\`
+- pager chunk size: \`${CHUNK_SIZE:-profile/default}\`
 - pager sync concurrency: \`${PAGER_SYNC_CONCURRENCY:-profile/default}\`
 - collection batch size: \`$BATCH_SIZE\`
 - benchmark regex: \`$BENCH_REGEX\`
@@ -167,6 +170,7 @@ cat >"$OUT_DIR/README.md" <<EOF
 - backend-direct fast/control override: \`TREEDB_COLLECTION_BENCH_ENGINE=backend_direct_fast TREEDB_COLLECTION_DATA_OUTER_LEAVES_IN_VLOG=false TREEDB_COLLECTION_INDEX_OUTER_LEAVES_IN_VLOG=false scripts/bench_collections_report.sh\`
 - data-root outer-leaf override: \`TREEDB_COLLECTION_DATA_OUTER_LEAVES_IN_VLOG=true scripts/bench_collections_report.sh\`
 - index-root outer-leaf override: \`TREEDB_COLLECTION_INDEX_OUTER_LEAVES_IN_VLOG=false scripts/bench_collections_report.sh\`
+- pager chunk size override: \`TREEDB_COLLECTION_CHUNK_SIZE=65536 scripts/bench_collections_report.sh\`
 - pager sync concurrency override: \`TREEDB_COLLECTION_PAGER_SYNC_CONCURRENCY=4 scripts/bench_collections_report.sh\`
 - batch-size override: \`TREEDB_COLLECTION_BENCH_BATCH_SIZE=8000 scripts/bench_collections_report.sh\`
 - oracle-path override: \`TREEDB_COLLECTION_PATH_LABEL=oracle scripts/bench_collections_report.sh\`

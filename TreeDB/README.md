@@ -102,8 +102,8 @@ db, err := treedb.Open(opts)
 Profiles are intended to make intent explicit:
 
 - `ProfileDurable`: safest defaults (recommended).
-- `ProfileFast`: relax durability/integrity knobs for throughput, enables leaf pages in the value log + index optimizations (`LeafPrefixCompression`, `IndexColumnarLeaves`, `IndexPackedValuePtr`), enables moderate pager sync parallelism, and pins the current run_celestia-style value-log compression defaults (`auto` + balanced policy + snappy block codec + medium autotune).
-- `ProfileWALOnFast`: fast ingest profile that keeps WAL on, relaxes durability checks, and enables the same leaf-vlog, index optimization, pager sync, and value-log compression defaults.
+- `ProfileFast`: relax durability/integrity knobs for throughput, enables leaf pages in the value log + index optimizations (`LeafPrefixCompression`, `IndexColumnarLeaves`, `IndexPackedValuePtr`), uses a 4 MiB pager chunk size with moderate pager sync parallelism, and pins the current run_celestia-style value-log compression defaults (`auto` + balanced policy + snappy block codec + medium autotune).
+- `ProfileWALOnFast`: fast ingest profile that keeps WAL on, relaxes durability checks, and enables the same leaf-vlog, index optimization, pager chunk/sync, and value-log compression defaults.
 - `ProfileBench`: deterministic benchmarking profile (not production); includes `ProfileFast` index optimizations.
 
 Note: WAL-off is selected via `opts.Durability = treedb.DurabilityWALOffRelaxed`.
