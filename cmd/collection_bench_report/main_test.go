@@ -142,3 +142,15 @@ func TestBuildReportUnavailable(t *testing.T) {
 		t.Fatalf("markdown missing unavailable explanation:\n%s", md)
 	}
 }
+
+func TestMarkdownToHTMLDocRendersGFMTables(t *testing.T) {
+	t.Parallel()
+
+	html, err := markdownToHTMLDoc("| name | value |\n| --- | ---: |\n| docs | 42 |\n")
+	if err != nil {
+		t.Fatalf("markdownToHTMLDoc: %v", err)
+	}
+	if !strings.Contains(string(html), "<table>") {
+		t.Fatalf("expected rendered HTML table, got:\n%s", html)
+	}
+}

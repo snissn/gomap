@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/yuin/goldmark"
+	"github.com/yuin/goldmark/extension"
 )
 
 type config struct {
@@ -580,7 +581,7 @@ func formatIntWithCommas(value int64) string {
 
 func markdownToHTMLDoc(markdown string) ([]byte, error) {
 	var body bytes.Buffer
-	md := goldmark.New()
+	md := goldmark.New(goldmark.WithExtensions(extension.GFM))
 	if err := md.Convert([]byte(markdown), &body); err != nil {
 		return nil, err
 	}

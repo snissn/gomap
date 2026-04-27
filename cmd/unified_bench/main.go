@@ -399,7 +399,7 @@ func main() {
 	if err := applyProfileArtifactDir(*profileDir, isSet); err != nil {
 		log.Fatalf("profile-dir: %v", err)
 	}
-	if *profileDir != "" {
+	if strings.TrimSpace(*profileDir) != "" {
 		if err := validateBenchprofExecutionPath(*pathLabel); err != nil {
 			log.Fatalf("profile-dir: %v", err)
 		}
