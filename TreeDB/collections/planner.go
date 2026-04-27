@@ -370,7 +370,7 @@ func (p insertBatchPlanner) emitIndexStateRun(plan *insertBatchPlan, items []ins
 		if err != nil {
 			return err
 		}
-		table.SetSteal(bytes.Clone(items[idx].id), raw)
+		table.SetSteal(items[idx].id, raw)
 	}
 	table.Freeze()
 	plan.runs = append(plan.runs, collectionRootRun{
