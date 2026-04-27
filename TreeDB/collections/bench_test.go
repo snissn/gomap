@@ -199,13 +199,8 @@ func openBenchmarkCollection(b *testing.B, name string, indexes ...collections.I
 func benchmarkSyncBoundary(b *testing.B, backend *backenddb.DB) {
 	b.Helper()
 
-	batch := backend.NewBatch()
-	if err := batch.WriteSync(); err != nil {
-		_ = batch.Close()
+	if err := backend.Checkpoint(); err != nil {
 		b.Fatalf("sync boundary: %v", err)
-	}
-	if err := batch.Close(); err != nil {
-		b.Fatalf("close sync boundary batch: %v", err)
 	}
 }
 

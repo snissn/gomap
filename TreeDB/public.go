@@ -1686,12 +1686,7 @@ func (db *DB) Checkpoint() error {
 	if db.cached != nil {
 		return db.cached.Checkpoint()
 	}
-	b := db.backend.NewBatch()
-	if err := b.WriteSync(); err != nil {
-		_ = b.Close()
-		return err
-	}
-	return b.Close()
+	return db.backend.Checkpoint()
 }
 
 // CompactIndex performs an in-place index vacuum (bulk rebuild) on the backend.
