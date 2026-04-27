@@ -1,10 +1,12 @@
 package db
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"path/filepath"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -2053,6 +2055,67 @@ func (s *Snapshot) GetUnsafe(key []byte) ([]byte, error) {
 
 func (s *Snapshot) Has(key []byte) (bool, error) {
 	return s.tree.Has(key)
+}
+
+func (s *Snapshot) HasMany(keys [][]byte) ([]bool, error) {
+	out := make([]bool, len(keys))
+	for i, key := range keys {
+		ok, err := s.tree.Has(key)
+		if err != nil {
+			return nil, err
+		}
+		out[i] = ok
+	}
+	return out, nil
+}
+
+func (s *Snapshot) HasPrefixes(prefixes [][]byte) ([]bool, error) {
+	out := make([]bool, len(prefixes))
+	if len(prefixes) == 0 {
+		return out, nil
+	}
+
+	type prefixProbeRef struct {
+		prefix []byte
+		idx    int
+	}
+	refs := make([]prefixProbeRef, len(prefixes))
+	for i, prefix := range prefixes {
+		refs[i] = prefixProbeRef{prefix: prefix, idx: i}
+	}
+	sort.Slice(refs, func(i, j int) bool {
+		return bytes.Compare(refs[i].prefix, refs[j].prefix) < 0
+	})
+
+	unique := make([][]byte, 0, len(refs))
+	groupStarts := make([]int, 0, len(refs))
+	for i, ref := range refs {
+		if len(unique) == 0 || !bytes.Equal(ref.prefix, unique[len(unique)-1]) {
+			unique = append(unique, ref.prefix)
+			groupStarts = append(groupStarts, i)
+		}
+	}
+
+	for i, prefix := range unique {
+		it := s.tree.IteratorWithOptions(prefix, nil, tree.IteratorOptions{Mode: tree.IteratorModeKeysOnly})
+		ok := it.Valid() && bytes.HasPrefix(it.UnsafeKey(), prefix) && !it.IsDeleted()
+		err := it.Error()
+		_ = it.Close()
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			continue
+		}
+		groupEnd := len(refs)
+		if i+1 < len(groupStarts) {
+			groupEnd = groupStarts[i+1]
+		}
+		for _, ref := range refs[groupStarts[i]:groupEnd] {
+			out[ref.idx] = true
+		}
+	}
+	return out, nil
 }
 
 // GetEntry returns the persisted leaf entry for key.

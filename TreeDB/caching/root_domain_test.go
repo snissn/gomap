@@ -662,6 +662,109 @@ func TestRemoveQueuedUnitsLocked_TrimsRootDomainStates(t *testing.T) {
 	}
 }
 
+func TestRootDomainSnapshot_HasPrefixesSortedExactness(t *testing.T) {
+	t.Parallel()
+
+	snap := rootDomainSnapshot{
+		publishedRootID: 66,
+		published: newRootDomainTestTable(t,
+			rootDomainTestOp{key: "uniq/alice/doc-1", value: "published-alice"},
+			rootDomainTestOp{key: "uniq/bob/doc-1", value: "published-bob"},
+			rootDomainTestOp{key: "uniq/nested/doc-1", value: "published-nested"},
+		),
+		immutables: []memtable.Table{
+			newRootDomainTestTable(t,
+				rootDomainTestOp{key: "uniq/alice/doc-1", tombstone: true},
+			),
+		},
+		mutable: newRootDomainTestTable(t,
+			rootDomainTestOp{key: "uniq/carol/doc-2", value: "mutable-carol"},
+			rootDomainTestOp{key: "uniq/nested/deep/doc-3", value: "mutable-nested"},
+		),
+	}
+
+	prefixes := [][]byte{
+		[]byte("uniq/alice/"),
+		[]byte("uniq/bob/"),
+		[]byte("uniq/carol/"),
+		[]byte("uniq/dan/"),
+		[]byte("uniq/nested/"),
+		[]byte("uniq/nested/deep/"),
+	}
+	got := make([]bool, len(prefixes))
+	if err := snap.hasPrefixesSorted(prefixes, got); err != nil {
+		t.Fatalf("hasPrefixesSorted: %v", err)
+	}
+
+	want := []bool{false, true, true, false, true, true}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("prefix visibility mismatch: got=%v want=%v", got, want)
+	}
+}
+
+func TestRootDomainSnapshot_HasPrefixesSortedUsesOneIteratorPerSource(t *testing.T) {
+	t.Parallel()
+
+	published := &countingTable{inner: newRootDomainTestTable(t,
+		rootDomainTestOp{key: "acct/a/doc-1", value: "published-a"},
+	)}
+	immutable := &countingTable{inner: newRootDomainTestTable(t,
+		rootDomainTestOp{key: "acct/b/doc-1", value: "immutable-b"},
+	)}
+	mutable := &countingTable{inner: newRootDomainTestTable(t,
+		rootDomainTestOp{key: "acct/c/doc-1", value: "mutable-c"},
+	)}
+
+	snap := rootDomainSnapshot{
+		publishedRootID: 77,
+		published:       published,
+		immutables:      []memtable.Table{immutable},
+		mutable:         mutable,
+	}
+	prefixes := [][]byte{
+		[]byte("acct/a/"),
+		[]byte("acct/b/"),
+		[]byte("acct/c/"),
+	}
+	got := make([]bool, len(prefixes))
+	if err := snap.hasPrefixesSorted(prefixes, got); err != nil {
+		t.Fatalf("hasPrefixesSorted: %v", err)
+	}
+	if !reflect.DeepEqual(got, []bool{true, true, true}) {
+		t.Fatalf("prefix visibility mismatch: got=%v", got)
+	}
+	if mutable.iterCalls != 1 || immutable.iterCalls != 1 || published.iterCalls != 1 {
+		t.Fatalf("expected one iterator per source, got mutable=%d immutable=%d published=%d", mutable.iterCalls, immutable.iterCalls, published.iterCalls)
+	}
+	if mutable.getEntryCalls != 0 || immutable.getEntryCalls != 0 || published.getEntryCalls != 0 {
+		t.Fatalf("expected no GetEntry calls, got mutable=%d immutable=%d published=%d", mutable.getEntryCalls, immutable.getEntryCalls, published.getEntryCalls)
+	}
+}
+
+func TestRootDomainSnapshot_HasPrefixesSortedSkipsTombstonedFirstMatch(t *testing.T) {
+	t.Parallel()
+
+	snap := rootDomainSnapshot{
+		publishedRootID: 88,
+		published: newRootDomainTestTable(t,
+			rootDomainTestOp{key: "uniq/alice/doc-1", value: "published-doc-1"},
+			rootDomainTestOp{key: "uniq/alice/doc-2", value: "published-doc-2"},
+		),
+		mutable: newRootDomainTestTable(t,
+			rootDomainTestOp{key: "uniq/alice/doc-1", tombstone: true},
+		),
+	}
+
+	prefixes := [][]byte{[]byte("uniq/alice/")}
+	got := make([]bool, 1)
+	if err := snap.hasPrefixesSorted(prefixes, got); err != nil {
+		t.Fatalf("hasPrefixesSorted: %v", err)
+	}
+	if !got[0] {
+		t.Fatal("expected later visible key under prefix to keep probe true")
+	}
+}
+
 func BenchmarkRootDomainSnapshotVisibleValue(b *testing.B) {
 	published, err := newRootDomainTable(rootDomainTestOp{key: "a", value: "published-a"})
 	if err != nil {
@@ -764,6 +867,58 @@ func BenchmarkPublishMemtablesLocked_RootDomainBuild(b *testing.B) {
 			b.Fatalf("root iterator immutables=%d want %d", got, len(db.queue))
 		}
 		db.releaseMemtableView(view)
+	}
+}
+
+func BenchmarkRootDomainSnapshotHasPrefixesSorted(b *testing.B) {
+	published, err := newRootDomainTable(
+		rootDomainTestOp{key: "uniq/00/doc", value: "published-00"},
+		rootDomainTestOp{key: "uniq/01/doc", value: "published-01"},
+		rootDomainTestOp{key: "uniq/02/doc", value: "published-02"},
+		rootDomainTestOp{key: "uniq/03/doc", value: "published-03"},
+	)
+	if err != nil {
+		b.Fatalf("new published table: %v", err)
+	}
+	immutable, err := newRootDomainTable(
+		rootDomainTestOp{key: "uniq/04/doc", value: "immutable-04"},
+		rootDomainTestOp{key: "uniq/05/doc", value: "immutable-05"},
+	)
+	if err != nil {
+		b.Fatalf("new immutable table: %v", err)
+	}
+	mutable, err := newRootDomainTable(
+		rootDomainTestOp{key: "uniq/06/doc", value: "mutable-06"},
+		rootDomainTestOp{key: "uniq/07/doc", value: "mutable-07"},
+	)
+	if err != nil {
+		b.Fatalf("new mutable table: %v", err)
+	}
+	snap := rootDomainSnapshot{
+		published:  published,
+		immutables: []memtable.Table{immutable},
+		mutable:    mutable,
+	}
+	prefixes := [][]byte{
+		[]byte("uniq/00/"),
+		[]byte("uniq/01/"),
+		[]byte("uniq/02/"),
+		[]byte("uniq/03/"),
+		[]byte("uniq/04/"),
+		[]byte("uniq/05/"),
+		[]byte("uniq/06/"),
+		[]byte("uniq/07/"),
+	}
+	out := make([]bool, len(prefixes))
+
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		for j := range out {
+			out[j] = false
+		}
+		if err := snap.hasPrefixesSorted(prefixes, out); err != nil {
+			b.Fatalf("hasPrefixesSorted: %v", err)
+		}
 	}
 }
 

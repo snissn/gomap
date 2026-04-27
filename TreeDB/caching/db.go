@@ -6362,6 +6362,7 @@ type DB struct {
 	memtableCap                                       int
 	memtableMode                                      atomic.Uint32
 	memtableStats                                     memtableStats
+	rootDomainProbeStats                              rootDomainProbeStats
 	memtableAdaptive                                  bool
 	memtableAdaptiveObserve                           atomic.Bool
 	memtableAdaptiveBTreeMinIters                     uint64
@@ -22617,6 +22618,118 @@ func (db *DB) canBypassMemtableReadMany(view *memtableView, keys [][]byte) bool 
 	return true
 }
 
+type getManyProbeRef struct {
+	key   []byte
+	idx   int
+	shard int
+}
+
+func copyGetManyValueToRefs(out [][]byte, refs []getManyProbeRef, val []byte) {
+	if val == nil {
+		return
+	}
+	for _, ref := range refs {
+		cpy := make([]byte, len(val))
+		copy(cpy, val)
+		out[ref.idx] = cpy
+	}
+}
+
+func (db *DB) getManyFromPublishedRootPointShards(view *memtableView, keys [][]byte) ([][]byte, error) {
+	out := make([][]byte, len(keys))
+	if view == nil || len(view.rootPointShards) == 0 {
+		return out, nil
+	}
+	refs := make([]getManyProbeRef, len(keys))
+	for i, key := range keys {
+		shard := 0
+		if len(view.rootPointShards) > 1 {
+			shard = db.shardIndex(key)
+		}
+		refs[i] = getManyProbeRef{key: key, idx: i, shard: shard}
+	}
+	sort.Slice(refs, func(i, j int) bool {
+		if refs[i].shard != refs[j].shard {
+			return refs[i].shard < refs[j].shard
+		}
+		return bytes.Compare(refs[i].key, refs[j].key) < 0
+	})
+
+	unique := make([]getManyProbeRef, 0, len(refs))
+	groupStarts := make([]int, 0, len(refs))
+	for i, ref := range refs {
+		if len(unique) == 0 || ref.shard != unique[len(unique)-1].shard || !bytes.Equal(ref.key, unique[len(unique)-1].key) {
+			unique = append(unique, ref)
+			groupStarts = append(groupStarts, i)
+		}
+	}
+	db.noteRootDomainGetManyNative(len(keys), len(unique))
+
+	results := make([]rootDomainProbeResult, len(unique))
+	start := 0
+	for start < len(unique) {
+		end := start + 1
+		shard := unique[start].shard
+		for end < len(unique) && unique[end].shard == shard {
+			end++
+		}
+		if shard >= 0 && shard < len(view.rootPointShards) {
+			if err := view.rootPointShards[shard].getManySortedRefs(unique[start:end], results[start:end]); err != nil {
+				return nil, err
+			}
+		}
+		start = end
+	}
+
+	backendIdx := make([]int, 0, len(unique))
+	backendKeys := make([][]byte, 0, len(unique))
+	for i, res := range results {
+		groupEnd := len(refs)
+		if i+1 < len(groupStarts) {
+			groupEnd = groupStarts[i+1]
+		}
+		groupRefs := refs[groupStarts[i]:groupEnd]
+		switch {
+		case !res.found:
+			backendIdx = append(backendIdx, i)
+			backendKeys = append(backendKeys, unique[i].key)
+		case res.flags&node.FlagTombstone != 0:
+		case res.flags&node.FlagPointer != 0:
+			if res.val != nil {
+				copyGetManyValueToRefs(out, groupRefs, res.val)
+				break
+			}
+			readVal, err := db.readValueLog(unique[i].key, res.ptr)
+			if err != nil {
+				return nil, err
+			}
+			copyGetManyValueToRefs(out, groupRefs, readVal)
+		case res.val == nil:
+			copyGetManyValueToRefs(out, groupRefs, []byte{})
+		default:
+			copyGetManyValueToRefs(out, groupRefs, res.val)
+		}
+	}
+	if len(backendKeys) > 0 {
+		db.noteRootDomainGetManyBackendFallback(len(backendKeys))
+		backendVals, err := db.backendGetMany(backendKeys)
+		if err != nil {
+			return nil, err
+		}
+		if len(backendVals) != len(backendKeys) {
+			return nil, fmt.Errorf("cachingdb: backend GetMany returned %d values for %d keys", len(backendVals), len(backendKeys))
+		}
+		for i, uniqueIdx := range backendIdx {
+			groupEnd := len(refs)
+			if uniqueIdx+1 < len(groupStarts) {
+				groupEnd = groupStarts[uniqueIdx+1]
+			}
+			copyGetManyValueToRefs(out, refs[groupStarts[uniqueIdx]:groupEnd], backendVals[i])
+		}
+	}
+	return out, nil
+}
+
 func (db *DB) getMemtable(key []byte) ([]byte, bool, error) {
 	view := db.retainMemtableView()
 	if view != nil {
@@ -22843,12 +22956,20 @@ func (db *DB) GetMany(keys [][]byte) ([][]byte, error) {
 	// observably empty, so we can delegate to backend single-snapshot GetMany.
 	view := db.retainMemtableView()
 	bypass := db.canBypassMemtableReadMany(view, keys)
-	if view != nil {
-		db.releaseMemtableView(view)
-	}
 	if bypass {
+		if view != nil {
+			db.releaseMemtableView(view)
+			view = nil
+		}
 		return db.backendGetMany(keys)
 	}
+	if view != nil {
+		defer db.releaseMemtableView(view)
+	}
+	if view != nil && len(view.rootPointShards) > 0 {
+		return db.getManyFromPublishedRootPointShards(view, keys)
+	}
+	db.noteRootDomainGetManyFallback(len(keys))
 
 	out := make([][]byte, len(keys))
 	backendIdx := make([]int, 0, len(keys))
@@ -22959,6 +23080,52 @@ func (db *DB) Has(key []byte) (bool, error) {
 		return flags&node.FlagTombstone == 0, nil
 	}
 	return db.backend.Has(key)
+}
+
+func (db *DB) HasMany(keys [][]byte) ([]bool, error) {
+	out := make([]bool, len(keys))
+	if len(keys) == 0 {
+		return out, nil
+	}
+	provider, ok := db.backend.(backendSnapshotProvider)
+	if !ok {
+		for i, key := range keys {
+			exists, err := db.Has(key)
+			if err != nil {
+				return nil, err
+			}
+			out[i] = exists
+		}
+		return out, nil
+	}
+	view := db.retainMemtableView()
+	if view != nil {
+		defer db.releaseMemtableView(view)
+	}
+	backendSnap := provider.AcquireSnapshot()
+	if backendSnap == nil {
+		return nil, backenddb.ErrClosed
+	}
+	defer backendSnap.Close()
+	snap := &Snapshot{db: db, backend: backendSnap}
+	if view != nil {
+		snap.rootPointShards = view.rootPointShards
+	}
+	return snap.HasMany(keys)
+}
+
+func (db *DB) HasPrefixes(prefixes [][]byte) ([]bool, error) {
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		return nil, backenddb.ErrClosed
+	}
+	defer snap.Close()
+
+	out, err := snap.HasPrefixes(prefixes)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (db *DB) maybeRunLeafGenerationPackMaintenance(runGC bool, quiet bool, admission leafGenerationPackMaintenanceAdmission, opts vlogGenerationMaintenanceOptions) (attempted bool, ran bool, err error) {
@@ -23467,6 +23634,7 @@ func (db *DB) Stats() map[string]string {
 	if memIters > 0 {
 		stats["treedb.cache.memtable_stats.range_iter_pct"] = fmt.Sprintf("%.4f", float64(memRangeIters)/float64(memIters))
 	}
+	db.rootDomainProbeStats.appendStats(stats)
 	stats["treedb.cache.memtable_adaptive.btree_min_iterator_samples_effective"] = fmt.Sprintf("%d", db.adaptiveBTreeMinIteratorSamples())
 	stats["treedb.cache.memtable_adaptive.decision_total"] = fmt.Sprintf("%d", memAdaptiveDecisionTotal)
 	stats["treedb.cache.memtable_adaptive.last_reason"] = adaptiveDecisionReasonString(memAdaptiveDecisionReason)

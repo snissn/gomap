@@ -2,6 +2,7 @@ package caching
 
 import (
 	"encoding/binary"
+	"fmt"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/batch"
@@ -15,6 +16,8 @@ type countingTable struct {
 	inner         memtable.Table
 	getCalls      int
 	getEntryCalls int
+	iterCalls     int
+	reverseCalls  int
 }
 
 func (t *countingTable) Set(key, value []byte) { t.inner.Set(key, value) }
@@ -44,9 +47,11 @@ func (t *countingTable) GetEntry(key []byte) (val []byte, ptr page.ValuePtr, fla
 func (t *countingTable) Size() int64 { return t.inner.Size() }
 func (t *countingTable) Len() int    { return t.inner.Len() }
 func (t *countingTable) NewIterator(start, end []byte) iterator.UnsafeIterator {
+	t.iterCalls++
 	return t.inner.NewIterator(start, end)
 }
 func (t *countingTable) NewReverseIterator(start, end []byte) iterator.UnsafeIterator {
+	t.reverseCalls++
 	return t.inner.NewReverseIterator(start, end)
 }
 func (t *countingTable) Freeze() { t.inner.Freeze() }
@@ -82,6 +87,7 @@ type countingBackend struct {
 	getCalls       int
 	getAppendCalls int
 	getManyCalls   int
+	lastGetMany    [][]byte
 }
 
 func (b *countingBackend) Get(_ []byte) ([]byte, error) {
@@ -96,6 +102,10 @@ func (b *countingBackend) GetAppend(_ []byte, dst []byte) ([]byte, error) {
 
 func (b *countingBackend) GetMany(keys [][]byte) ([][]byte, error) {
 	b.getManyCalls++
+	b.lastGetMany = make([][]byte, len(keys))
+	for i := range keys {
+		b.lastGetMany[i] = append([]byte(nil), keys[i]...)
+	}
 	out := make([][]byte, len(keys))
 	for i := range keys {
 		out[i] = []byte("backend")
@@ -370,8 +380,8 @@ func TestPointReads_EmptyMemtableBypassGuardChecksMutableLen(t *testing.T) {
 	if len(gotMany) != 1 || string(gotMany[0]) != "v" {
 		t.Fatalf("unexpected GetMany value: %#v", gotMany)
 	}
-	if ct.getEntryCalls <= callsAfterGet {
-		t.Fatalf("expected memtable GetEntry to be consulted by GetMany")
+	if ct.getEntryCalls <= callsAfterGet && ct.iterCalls == 0 {
+		t.Fatalf("expected GetMany to consult the mutable memtable")
 	}
 
 	gotAppend, err := db.GetAppend(key, []byte("p:"))
@@ -383,5 +393,312 @@ func TestPointReads_EmptyMemtableBypassGuardChecksMutableLen(t *testing.T) {
 	}
 	if ct.getEntryCalls < 2 {
 		t.Fatalf("expected memtable GetEntry to be consulted by GetAppend")
+	}
+}
+
+func TestGetMany_ConsultsOnlyTouchedPublishedRootPointShards(t *testing.T) {
+	const shards = 8
+	const firstTarget = 1
+	const secondTarget = 5
+
+	db := &DB{
+		backend:          panicBackend{},
+		mutableShards:    make([]memShard, shards),
+		mutableShardMask: shards - 1,
+	}
+
+	var keyA, keyB [8]byte
+	for i := uint64(0); ; i++ {
+		binary.BigEndian.PutUint64(keyA[:], i)
+		if db.shardIndex(keyA[:]) == firstTarget {
+			break
+		}
+	}
+	for i := uint64(0); ; i++ {
+		binary.BigEndian.PutUint64(keyB[:], i)
+		if db.shardIndex(keyB[:]) == secondTarget {
+			break
+		}
+	}
+	wantKeyA := append([]byte(nil), keyA[:]...)
+	wantKeyB := append([]byte(nil), keyB[:]...)
+
+	tables := make([]*countingTable, shards)
+	shardsSnap := make([]rootDomainSnapshot, shards)
+	for shard := 0; shard < shards; shard++ {
+		mt, err := memtable.NewWithCapacityMode(0, memtable.ModeHashSorted)
+		if err != nil {
+			t.Fatalf("new memtable: %v", err)
+		}
+		ct := &countingTable{inner: mt}
+		tables[shard] = ct
+		shardsSnap[shard].immutables = []memtable.Table{ct}
+	}
+	tables[firstTarget].SetEntry(wantKeyA, []byte("va"), page.ValuePtr{}, node.FlagInline)
+	tables[secondTarget].SetEntry(wantKeyB, []byte("vb"), page.ValuePtr{}, node.FlagInline)
+
+	db.memtables.Store(&memtableView{
+		rootPointShards: shardsSnap,
+	})
+
+	got, err := db.GetMany([][]byte{wantKeyA, wantKeyB})
+	if err != nil {
+		t.Fatalf("GetMany: %v", err)
+	}
+	if len(got) != 2 || string(got[0]) != "va" || string(got[1]) != "vb" {
+		t.Fatalf("unexpected GetMany values: %#v", got)
+	}
+	for shard, ct := range tables {
+		switch shard {
+		case firstTarget, secondTarget:
+			if ct.iterCalls == 0 {
+				t.Fatalf("expected shard %d iterator calls > 0", shard)
+			}
+			if ct.getEntryCalls != 0 {
+				t.Fatalf("expected shard %d GetEntry calls = 0, got %d", shard, ct.getEntryCalls)
+			}
+		default:
+			if ct.iterCalls != 0 {
+				t.Fatalf("expected shard %d iterator calls = 0, got %d", shard, ct.iterCalls)
+			}
+			if ct.getEntryCalls != 0 {
+				t.Fatalf("expected shard %d GetEntry calls = 0, got %d", shard, ct.getEntryCalls)
+			}
+		}
+	}
+}
+
+func TestGetMany_DedupesRepeatedKeysWithinShard(t *testing.T) {
+	db := &DB{
+		backend:          panicBackend{},
+		mutableShards:    make([]memShard, 1),
+		mutableShardMask: 0,
+	}
+
+	mt, err := memtable.NewWithCapacityMode(0, memtable.ModeHashSorted)
+	if err != nil {
+		t.Fatalf("new memtable: %v", err)
+	}
+	ct := &countingTable{inner: mt}
+	key := []byte("k")
+	ct.SetEntry(key, []byte("v"), page.ValuePtr{}, node.FlagInline)
+	db.memtables.Store(&memtableView{
+		rootPointShards: []rootDomainSnapshot{
+			{immutables: []memtable.Table{ct}},
+		},
+	})
+
+	got, err := db.GetMany([][]byte{key, key, key})
+	if err != nil {
+		t.Fatalf("GetMany: %v", err)
+	}
+	if len(got) != 3 || string(got[0]) != "v" || string(got[1]) != "v" || string(got[2]) != "v" {
+		t.Fatalf("unexpected GetMany values: %#v", got)
+	}
+	if ct.iterCalls != 1 {
+		t.Fatalf("expected one iterator probe, got %d", ct.iterCalls)
+	}
+	if ct.getEntryCalls != 0 {
+		t.Fatalf("expected no GetEntry probes, got %d", ct.getEntryCalls)
+	}
+}
+
+func TestGetMany_UsesPublishedRootPointShardsAsAuthority(t *testing.T) {
+	db := &DB{
+		backend:          panicBackend{},
+		mutableShards:    make([]memShard, 1),
+		mutableShardMask: 0,
+	}
+
+	mt, err := memtable.NewWithCapacityMode(0, memtable.ModeHashSorted)
+	if err != nil {
+		t.Fatalf("new memtable: %v", err)
+	}
+	ct := &countingTable{inner: mt}
+	key := []byte("k")
+	ct.SetEntry(key, []byte("root"), page.ValuePtr{}, node.FlagInline)
+
+	db.memtables.Store(&memtableView{
+		mutables: []memtable.Table{
+			newRootDomainTestTable(t, rootDomainTestOp{key: "k", value: "wrong-mutable"}),
+		},
+		queue: []memtable.Table{
+			newRootDomainTestTable(t, rootDomainTestOp{key: "k", value: "wrong-queue"}),
+		},
+		queueShardIDs: []uint16{0},
+		rootPointShards: []rootDomainSnapshot{
+			{immutables: []memtable.Table{ct}},
+		},
+	})
+
+	got, err := db.GetMany([][]byte{key})
+	if err != nil {
+		t.Fatalf("GetMany: %v", err)
+	}
+	if len(got) != 1 || string(got[0]) != "root" {
+		t.Fatalf("unexpected GetMany value: %#v", got)
+	}
+	if ct.iterCalls == 0 {
+		t.Fatal("expected published root-point shard iterator to be consulted")
+	}
+	if ct.getEntryCalls != 0 {
+		t.Fatalf("expected no GetEntry probes, got %d", ct.getEntryCalls)
+	}
+}
+
+func TestGetMany_DuplicateHitsReuseSingleProbeWithoutResultAliasing(t *testing.T) {
+	db := &DB{
+		backend:          panicBackend{},
+		mutableShards:    make([]memShard, 1),
+		mutableShardMask: 0,
+	}
+
+	mt, err := memtable.NewWithCapacityMode(0, memtable.ModeHashSorted)
+	if err != nil {
+		t.Fatalf("new memtable: %v", err)
+	}
+	ct := &countingTable{inner: mt}
+	key := []byte("k")
+	ct.SetEntry(key, []byte("value"), page.ValuePtr{}, node.FlagInline)
+	db.memtables.Store(&memtableView{
+		rootPointShards: []rootDomainSnapshot{
+			{immutables: []memtable.Table{ct}},
+		},
+	})
+
+	got, err := db.GetMany([][]byte{key, key, key})
+	if err != nil {
+		t.Fatalf("GetMany: %v", err)
+	}
+	if len(got) != 3 || string(got[0]) != "value" || string(got[1]) != "value" || string(got[2]) != "value" {
+		t.Fatalf("unexpected GetMany values: %#v", got)
+	}
+	if ct.iterCalls != 1 {
+		t.Fatalf("expected one iterator probe, got %d", ct.iterCalls)
+	}
+	got[0][0] = 'X'
+	if string(got[1]) != "value" || string(got[2]) != "value" {
+		t.Fatalf("duplicate outputs must not alias: %#v", got)
+	}
+}
+
+func TestGetMany_DuplicateMissesCollapseToSingleBackendKey(t *testing.T) {
+	backend := &countingBackend{}
+	db := &DB{
+		backend:          backend,
+		mutableShards:    make([]memShard, 1),
+		mutableShardMask: 0,
+	}
+
+	mt, err := memtable.NewWithCapacityMode(0, memtable.ModeHashSorted)
+	if err != nil {
+		t.Fatalf("new memtable: %v", err)
+	}
+	mt.Set([]byte("other"), []byte("v"))
+	db.memtables.Store(&memtableView{
+		rootPointShards: []rootDomainSnapshot{
+			{immutables: []memtable.Table{mt}},
+		},
+	})
+
+	key := []byte("missing")
+	got, err := db.GetMany([][]byte{key, key, key})
+	if err != nil {
+		t.Fatalf("GetMany: %v", err)
+	}
+	if len(got) != 3 || string(got[0]) != "backend" || string(got[1]) != "backend" || string(got[2]) != "backend" {
+		t.Fatalf("unexpected GetMany values: %#v", got)
+	}
+	if backend.getManyCalls != 1 {
+		t.Fatalf("expected one backend GetMany call, got %d", backend.getManyCalls)
+	}
+	if len(backend.lastGetMany) != 1 || string(backend.lastGetMany[0]) != "missing" {
+		t.Fatalf("expected one deduped backend key, got %#v", backend.lastGetMany)
+	}
+}
+
+func BenchmarkGetMany_PublishedRootPointShards(b *testing.B) {
+	cases := []struct {
+		name string
+		keys [][]byte
+	}{
+		{
+			name: "distinct8",
+			keys: [][]byte{
+				[]byte("k0"), []byte("k1"), []byte("k2"), []byte("k3"),
+				[]byte("k4"), []byte("k5"), []byte("k6"), []byte("k7"),
+			},
+		},
+		{
+			name: "duplicate64",
+			keys: func() [][]byte {
+				keys := make([][]byte, 64)
+				for i := range keys {
+					keys[i] = []byte("k0")
+				}
+				return keys
+			}(),
+		},
+		{
+			name: "duplicate256_hit",
+			keys: func() [][]byte {
+				keys := make([][]byte, 256)
+				for i := range keys {
+					keys[i] = []byte("k0")
+				}
+				return keys
+			}(),
+		},
+		{
+			name: "duplicate256_miss",
+			keys: func() [][]byte {
+				keys := make([][]byte, 256)
+				for i := range keys {
+					keys[i] = []byte("missing")
+				}
+				return keys
+			}(),
+		},
+	}
+
+	for _, tc := range cases {
+		b.Run(tc.name, func(b *testing.B) {
+			var backend BackendDB = &panicBackend{}
+			if tc.name == "duplicate256_miss" {
+				backend = &countingBackend{}
+			}
+			db := &DB{
+				backend:          backend,
+				mutableShards:    make([]memShard, 1),
+				mutableShardMask: 0,
+			}
+
+			mt, err := memtable.NewWithCapacityMode(0, memtable.ModeHashSorted)
+			if err != nil {
+				b.Fatalf("new memtable: %v", err)
+			}
+			ct := &countingTable{inner: mt}
+			for i := 0; i < 8; i++ {
+				key := []byte(fmt.Sprintf("k%d", i))
+				ct.SetEntry(key, []byte("v"), page.ValuePtr{}, node.FlagInline)
+			}
+			db.memtables.Store(&memtableView{
+				rootPointShards: []rootDomainSnapshot{
+					{immutables: []memtable.Table{ct}},
+				},
+			})
+
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				got, err := db.GetMany(tc.keys)
+				if err != nil {
+					b.Fatalf("GetMany: %v", err)
+				}
+				if len(got) != len(tc.keys) {
+					b.Fatalf("len(GetMany)=%d want %d", len(got), len(tc.keys))
+				}
+			}
+		})
 	}
 }
