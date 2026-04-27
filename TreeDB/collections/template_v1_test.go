@@ -315,6 +315,54 @@ func TestTemplateV1EncoderResetEmitsTemplateAgain(t *testing.T) {
 	}
 }
 
+func TestPrepareTemplateV1InsertDocumentsSkipsFallbackTemplateRecord(t *testing.T) {
+	var encoder TemplateV1Encoder
+	doc1, err := encoder.EncodeDocument([]string{"email", "city"}, []any{"ada@example.com", "hnl"})
+	if err != nil {
+		t.Fatalf("encode doc1: %v", err)
+	}
+	_, records, resolver, err := prepareTemplateV1InsertDocuments([][]byte{doc1}, nil)
+	if err != nil {
+		t.Fatalf("prepare doc1: %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("doc1 publish records=%d want 1", len(records))
+	}
+
+	var repeatEncoder TemplateV1Encoder
+	doc2, err := repeatEncoder.EncodeDocument([]string{"email", "city"}, []any{"grace@example.com", "hnl"})
+	if err != nil {
+		t.Fatalf("encode doc2: %v", err)
+	}
+	prepared, records, repeatResolver, err := prepareTemplateV1InsertDocuments([][]byte{doc2}, resolver)
+	if err != nil {
+		t.Fatalf("prepare doc2 with fallback: %v", err)
+	}
+	if len(records) != 0 {
+		t.Fatalf("doc2 publish records=%d want 0 for existing fallback template", len(records))
+	}
+	root, err := parseTemplateV1StoredDocument(prepared[0])
+	if err != nil {
+		t.Fatalf("parse prepared doc2: %v", err)
+	}
+	if _, err := repeatResolver.lookupTemplateV1(root.templateID); err != nil {
+		t.Fatalf("lookup prepared doc2 template: %v", err)
+	}
+
+	var newShapeEncoder TemplateV1Encoder
+	doc3, err := newShapeEncoder.EncodeDocument([]string{"email", "city", "name"}, []any{"katherine@example.com", "hnl", "katherine"})
+	if err != nil {
+		t.Fatalf("encode doc3: %v", err)
+	}
+	_, records, _, err = prepareTemplateV1InsertDocuments([][]byte{doc3}, resolver)
+	if err != nil {
+		t.Fatalf("prepare doc3 with fallback: %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("doc3 publish records=%d want 1 for new template shape", len(records))
+	}
+}
+
 func TestTemplateV1CompactDocumentRequiresKnownTemplate(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {

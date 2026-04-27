@@ -30,6 +30,12 @@ const (
 	templateV1KindArray
 )
 
+var (
+	errTemplateV1MissingResolver     = errors.New("collections: missing template-v1 resolver")
+	errTemplateV1MissingTemplateRoot = errors.New("collections: missing template-v1 template root")
+	errTemplateV1TemplateNotFound    = errors.New("collections: template-v1 template not found")
+)
+
 type templateV1Record struct {
 	id  [32]byte
 	raw []byte
@@ -119,25 +125,30 @@ func collectionOptionsWithTemplateV1Resolver(opts collectionOptions, snap *backe
 func prepareTemplateV1InsertDocuments(documents [][]byte, fallback templateV1Resolver) ([][]byte, []templateV1Record, templateV1Resolver, error) {
 	prepared := make([][]byte, len(documents))
 	records := make([]templateV1Record, 0)
-	resolver := &templateV1MemoryResolver{templates: make(map[string]*templateV1Template)}
+	resolver := &templateV1MemoryResolver{}
 	totalStoredBytes := 0
-	parsed := make([][]byte, len(documents))
 	for i, document := range documents {
 		stored, docRecords, err := parseTemplateV1InsertDocument(document)
 		if err != nil {
 			return nil, nil, nil, err
 		}
 		totalStoredBytes += len(stored)
-		parsed[i] = stored
+		prepared[i] = stored
 		for _, record := range docRecords {
 			if err := resolver.addRecord(record); err != nil {
 				return nil, nil, nil, err
 			}
-			records = append(records, record)
+			publish, err := shouldPublishTemplateV1Record(record, fallback)
+			if err != nil {
+				return nil, nil, nil, err
+			}
+			if publish {
+				records = append(records, record)
+			}
 		}
 	}
 	arena := make([]byte, 0, totalStoredBytes)
-	for i, stored := range parsed {
+	for i, stored := range prepared {
 		start := len(arena)
 		arena = append(arena, stored...)
 		prepared[i] = arena[start:len(arena):len(arena)]
@@ -153,6 +164,23 @@ func prepareTemplateV1InsertDocuments(documents [][]byte, fallback templateV1Res
 		return nil, nil, nil, err
 	}
 	return prepared, records, composite, nil
+}
+
+func shouldPublishTemplateV1Record(record templateV1Record, fallback templateV1Resolver) (bool, error) {
+	if fallback == nil {
+		return true, nil
+	}
+	existing, err := fallback.lookupTemplateV1(record.id)
+	if err == nil {
+		if !equalStringSlices(existing.fields, record.tpl.fields) {
+			return false, errors.New("collections: template-v1 template id collision")
+		}
+		return false, nil
+	}
+	if errors.Is(err, errTemplateV1TemplateNotFound) || errors.Is(err, errTemplateV1MissingTemplateRoot) {
+		return true, nil
+	}
+	return false, err
 }
 
 func parseTemplateV1InsertDocument(raw []byte) ([]byte, []templateV1Record, error) {
@@ -218,7 +246,7 @@ func validateTemplateV1PreparedDocuments(documents [][]byte, resolver templateV1
 
 func validateTemplateV1StoredDocumentTemplates(document []byte, resolver templateV1Resolver) error {
 	if resolver == nil {
-		return errors.New("collections: missing template-v1 resolver")
+		return errTemplateV1MissingResolver
 	}
 	root, err := parseTemplateV1StoredDocument(document)
 	if err != nil {
@@ -257,18 +285,18 @@ func (r *templateV1MemoryResolver) addRecord(record templateV1Record) error {
 
 func (r *templateV1MemoryResolver) lookupTemplateV1(id [32]byte) (*templateV1Template, error) {
 	if r == nil {
-		return nil, errors.New("collections: missing template-v1 resolver")
+		return nil, errTemplateV1MissingResolver
 	}
 	tpl := r.templates[string(id[:])]
 	if tpl == nil {
-		return nil, errors.New("collections: template-v1 template not found")
+		return nil, errTemplateV1TemplateNotFound
 	}
 	return tpl, nil
 }
 
 func (r *templateV1CompositeResolver) lookupTemplateV1(id [32]byte) (*templateV1Template, error) {
 	if r == nil {
-		return nil, errors.New("collections: missing template-v1 resolver")
+		return nil, errTemplateV1MissingResolver
 	}
 	if r.memory != nil && r.memory.templates != nil {
 		if tpl := r.memory.templates[string(id[:])]; tpl != nil {
@@ -278,12 +306,12 @@ func (r *templateV1CompositeResolver) lookupTemplateV1(id [32]byte) (*templateV1
 	if r.fallback != nil {
 		return r.fallback.lookupTemplateV1(id)
 	}
-	return nil, errors.New("collections: template-v1 template not found")
+	return nil, errTemplateV1TemplateNotFound
 }
 
 func (r *templateV1SnapshotResolver) lookupTemplateV1(id [32]byte) (*templateV1Template, error) {
 	if r == nil || r.snap == nil || r.rootID == 0 {
-		return nil, errors.New("collections: missing template-v1 template root")
+		return nil, errTemplateV1MissingTemplateRoot
 	}
 	key := string(id[:])
 	if tpl := r.cache[key]; tpl != nil {
@@ -291,7 +319,7 @@ func (r *templateV1SnapshotResolver) lookupTemplateV1(id [32]byte) (*templateV1T
 	}
 	entry, err := r.snap.GetEntryAtRoot(r.rootID, id[:])
 	if errors.Is(err, tree.ErrKeyNotFound) {
-		return nil, errors.New("collections: template-v1 template not found")
+		return nil, errTemplateV1TemplateNotFound
 	}
 	if err != nil {
 		return nil, err
@@ -617,7 +645,7 @@ func parseTemplateV1StoredDocument(raw []byte) (templateV1ObjectRef, error) {
 
 func templateV1OrderedIndexStateForDocumentWithArena(document []byte, runtimes []indexRuntime, opts collectionOptions, encoder *indexEncodeArena) (orderedDocumentIndexState, error) {
 	if opts.templateResolver == nil {
-		return nil, errors.New("collections: missing template-v1 resolver")
+		return nil, errTemplateV1MissingResolver
 	}
 	root, err := parseTemplateV1StoredDocument(document)
 	if err != nil {
@@ -655,24 +683,108 @@ func templateV1RootIndexStateForDocumentWithArena(root templateV1ObjectRef, runt
 	state := encoder.appendState(len(runtimes))
 	pos := 0
 	for _, field := range tpl.fields {
-		start := pos
-		if err := skipTemplateV1Value(root.values, &pos, opts.templateResolver); err != nil {
-			return nil, true, err
-		}
-		value := root.values[start:pos:pos]
-		for runtimeIdx, runtime := range runtimes {
-			if runtime.path[0] != field {
-				continue
-			}
-			if err := appendTemplateV1IndexValueToState(state, runtimeIdx, runtime, value, opts, encoder); err != nil {
+		runtimeIdx := templateV1RootFieldFirstRuntime(field, runtimes)
+		if runtimeIdx < 0 {
+			if err := skipTemplateV1Value(root.values, &pos, opts.templateResolver); err != nil {
 				return nil, true, err
 			}
+			continue
+		}
+		if err := appendTemplateV1RootFieldIndexValues(state, field, runtimeIdx, root.values, &pos, runtimes, opts, encoder); err != nil {
+			return nil, true, err
 		}
 	}
 	if pos != len(root.values) {
 		return nil, true, errors.New("collections: trailing template-v1 object values")
 	}
 	return state, true, nil
+}
+
+func templateV1RootFieldFirstRuntime(field string, runtimes []indexRuntime) int {
+	for runtimeIdx, runtime := range runtimes {
+		if runtime.path[0] == field {
+			return runtimeIdx
+		}
+	}
+	return -1
+}
+
+func appendTemplateV1RootFieldIndexValues(state orderedDocumentIndexState, field string, firstRuntimeIdx int, raw []byte, pos *int, runtimes []indexRuntime, opts collectionOptions, encoder *indexEncodeArena) error {
+	if pos == nil || *pos >= len(raw) {
+		return errors.New("collections: malformed template-v1 value")
+	}
+	valueStart := *pos
+	kind := raw[*pos]
+	*pos = *pos + 1
+	switch kind {
+	case templateV1KindNull:
+		return nil
+	case templateV1KindFalse:
+		return appendTemplateV1ScalarIndexValueToRootStates(state, field, firstRuntimeIdx, runtimes, encoder, "b:0")
+	case templateV1KindTrue:
+		return appendTemplateV1ScalarIndexValueToRootStates(state, field, firstRuntimeIdx, runtimes, encoder, "b:1")
+	case templateV1KindFloat64:
+		if len(raw)-*pos < 8 {
+			return errors.New("collections: malformed template-v1 number")
+		}
+		v := math.Float64frombits(binary.BigEndian.Uint64(raw[*pos:]))
+		*pos += 8
+		start := len(encoder.buf)
+		encoder.buf = append(encoder.buf, "n:"...)
+		encoder.buf = strconv.AppendFloat(encoder.buf, v, 'g', -1, 64)
+		next := encoder.buf[start:len(encoder.buf):len(encoder.buf)]
+		appendTemplateV1EncodedIndexValueToRootStates(state, field, firstRuntimeIdx, runtimes, encoder, next)
+		return nil
+	case templateV1KindString:
+		n, err := readTemplateV1Uvarint(raw, pos)
+		if err != nil {
+			return err
+		}
+		if n > uint64(len(raw)-*pos) {
+			return errors.New("collections: malformed template-v1 string")
+		}
+		valueEnd := *pos + int(n)
+		start := len(encoder.buf)
+		encoder.buf = append(encoder.buf, "s:"...)
+		encoder.buf = append(encoder.buf, raw[*pos:valueEnd]...)
+		*pos = valueEnd
+		next := encoder.buf[start:len(encoder.buf):len(encoder.buf)]
+		appendTemplateV1EncodedIndexValueToRootStates(state, field, firstRuntimeIdx, runtimes, encoder, next)
+		return nil
+	default:
+		*pos = valueStart
+		if err := skipTemplateV1Value(raw, pos, opts.templateResolver); err != nil {
+			return err
+		}
+		value := raw[valueStart:*pos:*pos]
+		for runtimeIdx := firstRuntimeIdx; runtimeIdx < len(runtimes); runtimeIdx++ {
+			runtime := runtimes[runtimeIdx]
+			if runtimeIdx != firstRuntimeIdx && runtime.path[0] != field {
+				continue
+			}
+			if err := appendTemplateV1IndexValueToState(state, runtimeIdx, runtime, value, opts, encoder); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+}
+
+func appendTemplateV1ScalarIndexValueToRootStates(state orderedDocumentIndexState, field string, firstRuntimeIdx int, runtimes []indexRuntime, encoder *indexEncodeArena, encoded string) error {
+	start := len(encoder.buf)
+	encoder.buf = append(encoder.buf, encoded...)
+	next := encoder.buf[start:len(encoder.buf):len(encoder.buf)]
+	appendTemplateV1EncodedIndexValueToRootStates(state, field, firstRuntimeIdx, runtimes, encoder, next)
+	return nil
+}
+
+func appendTemplateV1EncodedIndexValueToRootStates(state orderedDocumentIndexState, field string, firstRuntimeIdx int, runtimes []indexRuntime, encoder *indexEncodeArena, encoded []byte) {
+	state[firstRuntimeIdx] = encoder.appendSingleValueRef(encoded)
+	for runtimeIdx := firstRuntimeIdx + 1; runtimeIdx < len(runtimes); runtimeIdx++ {
+		if runtimes[runtimeIdx].path[0] == field {
+			state[runtimeIdx] = encoder.appendSingleValueRef(encoded)
+		}
+	}
 }
 
 func appendTemplateV1IndexValueToState(state orderedDocumentIndexState, runtimeIdx int, runtime indexRuntime, value []byte, opts collectionOptions, encoder *indexEncodeArena) error {
