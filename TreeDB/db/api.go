@@ -685,6 +685,12 @@ func (db *DB) Stats() map[string]string {
 	// Backend DB path currently doesn't track queue drift; emit a stable default
 	// for suite compatibility and fail-closed checks that require key presence.
 	stats["treedb.publish.watermark.lag_drift_bytes_per_sec"] = "0.000"
+	warmPublishStats := db.systemRootPublishStatsSnapshot()
+	stats["treedb.publish.system_root.warm_attempts"] = fmt.Sprintf("%d", warmPublishStats.warmAttempts)
+	stats["treedb.publish.system_root.warm_native_apply_attempts"] = fmt.Sprintf("%d", warmPublishStats.warmNativeApplyAttempts)
+	stats["treedb.publish.system_root.warm_rebuild_fallbacks"] = fmt.Sprintf("%d", warmPublishStats.warmRebuildFallbacks)
+	stats["treedb.publish.system_root.warm_preserved_pages"] = fmt.Sprintf("%d", warmPublishStats.warmPreservedPages)
+	stats["treedb.publish.system_root.warm_rewritten_pages"] = fmt.Sprintf("%d", warmPublishStats.warmRewrittenPages)
 
 	pruneStatsInto(stats, &db.pruner)
 

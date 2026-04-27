@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
 )
 
 const maxRootGroupTestShardKeySearchAttempts = 1 << 20
@@ -260,6 +261,222 @@ func TestAcquireSnapshot_PinsInstalledPublishedRootSetIncludingSystem(t *testing
 	}
 	if systemB.publishedRootID != 322 {
 		t.Fatalf("systemB published id=%d want 322", systemB.publishedRootID)
+	}
+}
+
+func TestAcquireSnapshot_PinsGroupedWarmPublishAcrossNonSystemRoots(t *testing.T) {
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	defer backend.Close()
+	oldPointTable := newRootDomainTestTable(t, rootDomainTestOp{key: "primary/doc", value: "old-p"})
+	oldPointRootID, err := backend.PublishOrderedRootIterator(0, oldPointTable.NewIterator(nil, nil))
+	if err != nil {
+		t.Fatalf("publish old point root: %v", err)
+	}
+	oldIterTable := newRootDomainTestTable(t, rootDomainTestOp{key: "iter/a", value: "old-i"})
+	oldIterRootID, err := backend.PublishOrderedRootIterator(0, oldIterTable.NewIterator(nil, nil))
+	if err != nil {
+		t.Fatalf("publish old iterator root: %v", err)
+	}
+	db := &DB{
+		backend:          backend,
+		mutableShards:    make([]memShard, 1),
+		mutableShardMask: 0,
+		rootPointStates: []rootDomainState{{
+			published:       oldPointTable,
+			publishedRootID: oldPointRootID,
+		}},
+		rootIteratorState: rootDomainState{
+			published:       oldIterTable,
+			publishedRootID: oldIterRootID,
+		},
+	}
+	setA := &publishedRootSet{
+		generation: 1,
+		pointShards: []publishedRootRef{
+			{lookup: oldPointTable, rootID: oldPointRootID},
+		},
+		iterator: publishedRootRef{
+			lookup: oldIterTable, rootID: oldIterRootID,
+		},
+	}
+	setB := &publishedRootSet{
+		generation: 2,
+		pointShards: []publishedRootRef{
+			{lookup: newRootDomainTestTable(t, rootDomainTestOp{key: "primary/doc", value: "new-p"}), rootID: oldPointRootID},
+		},
+		iterator: publishedRootRef{
+			lookup: newRootDomainTestTable(t, rootDomainTestOp{key: "iter/a", value: "new-i"}), rootID: oldIterRootID,
+		},
+	}
+
+	db.mu.Lock()
+	db.installPublishedRootSetLocked(setA)
+	db.mu.Unlock()
+
+	snapA := db.AcquireSnapshot()
+	if snapA == nil {
+		t.Fatal("expected snapshot A")
+	}
+	defer snapA.Close()
+
+	db.mu.Lock()
+	db.rootPointStates[0].immutables = []memtable.Table{
+		newRootDomainTestTable(t, rootDomainTestOp{key: "primary/doc", value: "new-p"}),
+	}
+	db.rootIteratorState.immutables = []memtable.Table{
+		newRootDomainTestTable(t, rootDomainTestOp{key: "iter/a", value: "new-i"}),
+	}
+	db.mu.Unlock()
+
+	if err := db.publishInstalledRootSet(setB); err != nil {
+		t.Fatalf("publishInstalledRootSet: %v", err)
+	}
+
+	snapB := db.AcquireSnapshot()
+	if snapB == nil {
+		t.Fatal("expected snapshot B")
+	}
+	defer snapB.Close()
+
+	rootA := rootDomainSnapshotFromCachedSnapshot(snapA, []byte("primary/doc"))
+	iterA := rootDomainIteratorSnapshotFromCachedSnapshot(snapA)
+	assertRootDomainVisibleValue(t, rootA, "primary/doc", "old-p")
+	assertRootDomainVisibleValue(t, iterA, "iter/a", "old-i")
+
+	rootB := rootDomainSnapshotFromCachedSnapshot(snapB, []byte("primary/doc"))
+	iterB := rootDomainIteratorSnapshotFromCachedSnapshot(snapB)
+	assertRootDomainVisibleValue(t, rootB, "primary/doc", "new-p")
+	assertRootDomainVisibleValue(t, iterB, "iter/a", "new-i")
+	if rootB.publishedRootID == rootA.publishedRootID {
+		t.Fatal("expected point root id to advance")
+	}
+	if iterB.publishedRootID == iterA.publishedRootID {
+		t.Fatal("expected iterator root id to advance")
+	}
+}
+
+func TestAcquireSnapshot_PinsGroupedWarmPublishAcrossMixedSystemAndNonSystemRoots(t *testing.T) {
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	defer backend.Close()
+
+	oldSystemTable := newRootDomainTestTable(t, rootDomainTestOp{key: "sys/catalog", value: "old-s"})
+	oldSystemRootID, err := backend.PublishSystemRootIterator(oldSystemTable.NewIterator(nil, nil))
+	if err != nil {
+		t.Fatalf("publish old system root: %v", err)
+	}
+	oldPointTable := newRootDomainTestTable(t, rootDomainTestOp{key: "primary/doc", value: "old-p"})
+	oldPointRootID, err := backend.PublishOrderedRootIterator(0, oldPointTable.NewIterator(nil, nil))
+	if err != nil {
+		t.Fatalf("publish old point root: %v", err)
+	}
+	oldIterTable := newRootDomainTestTable(t, rootDomainTestOp{key: "iter/a", value: "old-i"})
+	oldIterRootID, err := backend.PublishOrderedRootIterator(0, oldIterTable.NewIterator(nil, nil))
+	if err != nil {
+		t.Fatalf("publish old iterator root: %v", err)
+	}
+	db := &DB{
+		backend:          backend,
+		mutableShards:    make([]memShard, 1),
+		mutableShardMask: 0,
+		rootPointStates: []rootDomainState{{
+			published:       oldPointTable,
+			publishedRootID: oldPointRootID,
+		}},
+		rootSystemState: rootDomainState{
+			published:       oldSystemTable,
+			publishedRootID: oldSystemRootID,
+		},
+		rootIteratorState: rootDomainState{
+			published:       oldIterTable,
+			publishedRootID: oldIterRootID,
+		},
+	}
+	setA := &publishedRootSet{
+		generation: 1,
+		pointShards: []publishedRootRef{
+			{lookup: oldPointTable, rootID: oldPointRootID},
+		},
+		system: publishedRootRef{
+			lookup: oldSystemTable, rootID: oldSystemRootID,
+		},
+		iterator: publishedRootRef{
+			lookup: oldIterTable, rootID: oldIterRootID,
+		},
+	}
+	setB := &publishedRootSet{
+		generation: 2,
+		pointShards: []publishedRootRef{
+			{lookup: newRootDomainTestTable(t, rootDomainTestOp{key: "primary/doc", value: "new-p"}), rootID: oldPointRootID},
+		},
+		system: publishedRootRef{
+			lookup: newRootDomainTestTable(t, rootDomainTestOp{key: "sys/catalog", value: "new-s"}), rootID: oldSystemRootID,
+		},
+		iterator: publishedRootRef{
+			lookup: newRootDomainTestTable(t, rootDomainTestOp{key: "iter/a", value: "new-i"}), rootID: oldIterRootID,
+		},
+	}
+
+	db.mu.Lock()
+	db.installPublishedRootSetLocked(setA)
+	db.mu.Unlock()
+
+	snapA := db.AcquireSnapshot()
+	if snapA == nil {
+		t.Fatal("expected snapshot A")
+	}
+	defer snapA.Close()
+
+	db.mu.Lock()
+	db.rootPointStates[0].immutables = []memtable.Table{
+		newRootDomainTestTable(t, rootDomainTestOp{key: "primary/doc", value: "new-p"}),
+	}
+	db.rootSystemState.immutables = []memtable.Table{
+		newRootDomainTestTable(t, rootDomainTestOp{key: "sys/catalog", value: "new-s"}),
+	}
+	db.rootIteratorState.immutables = []memtable.Table{
+		newRootDomainTestTable(t, rootDomainTestOp{key: "iter/a", value: "new-i"}),
+	}
+	db.mu.Unlock()
+
+	if err := db.publishInstalledRootSet(setB); err != nil {
+		t.Fatalf("publishInstalledRootSet: %v", err)
+	}
+
+	snapB := db.AcquireSnapshot()
+	if snapB == nil {
+		t.Fatal("expected snapshot B")
+	}
+	defer snapB.Close()
+
+	systemA := rootDomainSystemSnapshotFromCachedSnapshot(snapA)
+	rootA := rootDomainSnapshotFromCachedSnapshot(snapA, []byte("primary/doc"))
+	iterA := rootDomainIteratorSnapshotFromCachedSnapshot(snapA)
+	assertRootDomainVisibleValue(t, systemA, "sys/catalog", "old-s")
+	assertRootDomainVisibleValue(t, rootA, "primary/doc", "old-p")
+	assertRootDomainVisibleValue(t, iterA, "iter/a", "old-i")
+
+	systemB := rootDomainSystemSnapshotFromCachedSnapshot(snapB)
+	rootB := rootDomainSnapshotFromCachedSnapshot(snapB, []byte("primary/doc"))
+	iterB := rootDomainIteratorSnapshotFromCachedSnapshot(snapB)
+	assertRootDomainVisibleValue(t, systemB, "sys/catalog", "new-s")
+	assertRootDomainVisibleValue(t, rootB, "primary/doc", "new-p")
+	assertRootDomainVisibleValue(t, iterB, "iter/a", "new-i")
+	if systemB.publishedRootID == systemA.publishedRootID {
+		t.Fatal("expected system root id to advance")
+	}
+	if rootB.publishedRootID == rootA.publishedRootID {
+		t.Fatal("expected point root id to advance")
+	}
+	if iterB.publishedRootID == iterA.publishedRootID {
+		t.Fatal("expected iterator root id to advance")
 	}
 }
 

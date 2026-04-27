@@ -38,6 +38,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
+	"github.com/snissn/gomap/TreeDB/pager"
 	"github.com/snissn/gomap/TreeDB/template"
 	"github.com/snissn/gomap/TreeDB/tree"
 	"github.com/snissn/gomap/TreeDB/zipper"
@@ -4364,6 +4365,9 @@ func (db *DB) collectValueLogLiveIDsUntil(lastWrite int64) (map[uint32]struct{},
 			state := snap.State()
 			p := snap.Pager()
 			if state != nil && p != nil {
+				db.mu.RLock()
+				publishedRoots := clonePublishedRootSet(db.rootPublishedSet)
+				db.mu.RUnlock()
 				reader := newCachedLiveScanReader(valueReaderForBackendState(state), db.valueLogReader)
 				leafCtx, leafCancel := db.foregroundWriteResumeContext(lastWrite, 0)
 				defer leafCancel()
@@ -4401,6 +4405,13 @@ func (db *DB) collectValueLogLiveIDsUntil(lastWrite int64) (map[uint32]struct{},
 					_ = snap.Close()
 					return nil, err
 				}
+				if err := db.collectPublishedRootValueLogLiveIDsUntil(leafCtx, p, reader, publishedRoots, state.RootPageID, state.SystemRootPageID, live, lastWrite); err != nil {
+					if errors.Is(err, context.Canceled) {
+						err = errForegroundWritesResumed
+					}
+					_ = snap.Close()
+					return nil, err
+				}
 			}
 			if err := snap.Close(); err != nil {
 				return nil, err
@@ -4426,6 +4437,38 @@ func (db *DB) collectValueLogLiveIDsUntil(lastWrite int64) (map[uint32]struct{},
 	}
 
 	return live, nil
+}
+
+func (db *DB) collectPublishedRootValueLogLiveIDsUntil(ctx context.Context, p *pager.Pager, reader tree.SlabReader, published *publishedRootSet, userRootID, systemRootID uint64, live map[uint32]struct{}, lastWrite int64) error {
+	if db == nil || p == nil || reader == nil || published == nil || live == nil {
+		return nil
+	}
+	seenRoots := make(map[uint64]struct{}, len(published.pointShards)+1)
+	scanRoot := func(rootID uint64) error {
+		if rootID == 0 || rootID == userRootID || rootID == systemRootID {
+			return nil
+		}
+		if _, ok := seenRoots[rootID]; ok {
+			return nil
+		}
+		seenRoots[rootID] = struct{}{}
+		if err := db.collectIteratorValueLogLiveIDsUntil(tree.New(p, reader, rootID).IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection}), live, lastWrite); err != nil {
+			return err
+		}
+		if db.foregroundWritesResumedSince(lastWrite) {
+			return errForegroundWritesResumed
+		}
+		return collectLeafRefValueLogLiveIDs(ctx, p, rootID, reader, live)
+	}
+	for i := range published.pointShards {
+		if err := scanRoot(published.pointShards[i].rootID); err != nil {
+			return err
+		}
+	}
+	if err := scanRoot(published.iterator.rootID); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (db *DB) collectIteratorValueLogLiveIDs(it iterator.UnsafeIterator, live map[uint32]struct{}) error {

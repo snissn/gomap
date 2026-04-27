@@ -298,6 +298,39 @@ func TestClosedDB_ReverseIteratorWithOptions(t *testing.T) {
 	})
 }
 
+func TestClosedDB_PublishSystemRootIterator(t *testing.T) {
+	runClosedDBMethod(t, "PublishSystemRootIterator", func(d *DB) {
+		table := mustFrozenSystemMemtable(t, "sys/k", "v")
+		iter := table.NewIterator(nil, nil)
+		defer iter.Close()
+		_, err := d.PublishSystemRootIterator(iter)
+		if !errors.Is(err, ErrClosed) {
+			t.Fatalf("PublishSystemRootIterator err=%v want %v", err, ErrClosed)
+		}
+	})
+}
+
+func TestClosedDB_PublishOrderedRootIterator(t *testing.T) {
+	runClosedDBMethod(t, "PublishOrderedRootIterator", func(d *DB) {
+		table := mustFrozenSystemMemtable(t, "root/k", "v")
+		iter := table.NewIterator(nil, nil)
+		defer iter.Close()
+		_, err := d.PublishOrderedRootIterator(0, iter)
+		if !errors.Is(err, ErrClosed) {
+			t.Fatalf("PublishOrderedRootIterator err=%v want %v", err, ErrClosed)
+		}
+	})
+}
+
+func TestClosedDB_PublishOrderedRootGroup(t *testing.T) {
+	runClosedDBMethod(t, "PublishOrderedRootGroup", func(d *DB) {
+		_, _, err := d.PublishOrderedRootGroup(nil, nil)
+		if !errors.Is(err, ErrClosed) {
+			t.Fatalf("PublishOrderedRootGroup err=%v want %v", err, ErrClosed)
+		}
+	})
+}
+
 func TestClosedDB_Stats(t *testing.T) {
 	runClosedDBMethod(t, "Stats", func(d *DB) {
 		_ = d.Stats()

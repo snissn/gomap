@@ -3,6 +3,7 @@ package caching
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"sync/atomic"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -105,6 +106,14 @@ type backendStateProvider interface {
 
 type backendSystemRootPublisher interface {
 	PublishSystemRootIterator(iter iterator.UnsafeIterator) (uint64, error)
+}
+
+type backendOrderedRootPublisher interface {
+	PublishOrderedRootIterator(baseRoot uint64, iter iterator.UnsafeIterator) (uint64, error)
+}
+
+type backendGroupedOrderedRootPublisher interface {
+	PublishOrderedRootGroup(systemIter iterator.UnsafeIterator, ordered []backenddb.OrderedRootPublishInput) (uint64, []uint64, error)
 }
 
 type rootDomainEntrySource uint8
@@ -419,7 +428,7 @@ func (db *DB) publishInstalledRootSet(set *publishedRootSet) error {
 	}
 	group := db.buildRootPublishGroupLocked(cloned)
 	hook := db.rootPublishHook
-	publisher, hasPublisher := db.backend.(backendSystemRootPublisher)
+	systemPublisher, hasSystemPublisher := db.backend.(backendSystemRootPublisher)
 	db.mu.Unlock()
 
 	if hook != nil {
@@ -431,7 +440,18 @@ func (db *DB) publishInstalledRootSet(set *publishedRootSet) error {
 			return err
 		}
 	}
-	if hasPublisher && rootDomainSnapshotNeedsPublish(group.system) {
+	if publisher, ok := db.backend.(backendGroupedOrderedRootPublisher); ok && rootDomainSnapshotNeedsPublish(group.system) && rootPublishGroupNeedsNonSystemPublish(group) {
+		if err := publishGroupedMixedRootsUnlocked(publisher, group, cloned); err != nil {
+			db.mu.Lock()
+			db.rootPublishStats.publishFailures.Add(1)
+			db.rootPublishRetryPending = true
+			db.mu.Unlock()
+			return err
+		}
+		db.mu.Lock()
+		db.rootPublishStats.nativeSystemPublishes.Add(1)
+		db.mu.Unlock()
+	} else if hasSystemPublisher && rootDomainSnapshotNeedsPublish(group.system) {
 		iter, err := group.system.publishIterator(nil, nil)
 		if err != nil {
 			db.mu.Lock()
@@ -440,7 +460,7 @@ func (db *DB) publishInstalledRootSet(set *publishedRootSet) error {
 			db.mu.Unlock()
 			return err
 		}
-		newSystemRootID, err := publisher.PublishSystemRootIterator(iter)
+		newSystemRootID, err := systemPublisher.PublishSystemRootIterator(iter)
 		if err != nil {
 			db.mu.Lock()
 			db.rootPublishStats.publishFailures.Add(1)
@@ -454,6 +474,18 @@ func (db *DB) publishInstalledRootSet(set *publishedRootSet) error {
 		group.systemRootPageID = newSystemRootID
 		cloned.system.rootID = newSystemRootID
 		cloned.system.lookup = nil
+		group.system = rootDomainSnapshot{
+			publishedRootID: newSystemRootID,
+		}
+	}
+	if publisher, ok := db.backend.(backendOrderedRootPublisher); ok && !rootDomainSnapshotNeedsPublish(group.system) {
+		if err := publishGroupedNonSystemRootsUnlocked(publisher, group, cloned); err != nil {
+			db.mu.Lock()
+			db.rootPublishStats.publishFailures.Add(1)
+			db.rootPublishRetryPending = true
+			db.mu.Unlock()
+			return err
+		}
 	}
 
 	db.mu.Lock()
@@ -472,6 +504,138 @@ func (db *DB) publishInstalledRootSet(set *publishedRootSet) error {
 	if db.rootPublishRetryPending {
 		db.rootPublishStats.retrySuccesses.Add(1)
 		db.rootPublishRetryPending = false
+	}
+	return nil
+}
+
+func rootPublishGroupNeedsNonSystemPublish(group *rootPublishGroup) bool {
+	if group == nil {
+		return false
+	}
+	for i := range group.pointShards {
+		if rootDomainSnapshotNeedsPublish(group.pointShards[i]) {
+			return true
+		}
+	}
+	return rootDomainSnapshotNeedsPublish(group.iterator)
+}
+
+func publishGroupedMixedRootsLocked(publisher backendGroupedOrderedRootPublisher, group *rootPublishGroup, cloned *publishedRootSet) error {
+	return publishGroupedMixedRoots(publisher, group, cloned)
+}
+
+func publishGroupedMixedRootsUnlocked(publisher backendGroupedOrderedRootPublisher, group *rootPublishGroup, cloned *publishedRootSet) error {
+	return publishGroupedMixedRoots(publisher, group, cloned)
+}
+
+func publishGroupedMixedRoots(publisher backendGroupedOrderedRootPublisher, group *rootPublishGroup, cloned *publishedRootSet) error {
+	if publisher == nil || group == nil || cloned == nil {
+		return nil
+	}
+	systemIter, err := group.system.publishIterator(nil, nil)
+	if err != nil {
+		return err
+	}
+	ordered := make([]backenddb.OrderedRootPublishInput, 0, len(group.pointShards)+1)
+	backendOwnsIterators := false
+	defer func() {
+		if backendOwnsIterators {
+			return
+		}
+		_ = systemIter.Close()
+		for idx := range ordered {
+			if ordered[idx].Iter != nil {
+				_ = ordered[idx].Iter.Close()
+			}
+		}
+	}()
+	pointIdxs := make([]int, 0, len(group.pointShards))
+	includeIterator := false
+	for i := range group.pointShards {
+		if !rootDomainSnapshotNeedsPublish(group.pointShards[i]) {
+			continue
+		}
+		iter, err := group.pointShards[i].publishIterator(nil, nil)
+		if err != nil {
+			return err
+		}
+		ordered = append(ordered, backenddb.OrderedRootPublishInput{
+			BaseRoot: group.pointShards[i].publishedRootID,
+			Iter:     iter,
+		})
+		pointIdxs = append(pointIdxs, i)
+	}
+	if rootDomainSnapshotNeedsPublish(group.iterator) {
+		iter, err := group.iterator.publishIterator(nil, nil)
+		if err != nil {
+			return err
+		}
+		ordered = append(ordered, backenddb.OrderedRootPublishInput{
+			BaseRoot: group.iterator.publishedRootID,
+			Iter:     iter,
+		})
+		includeIterator = true
+	}
+	backendOwnsIterators = true
+	newSystemRootID, rootIDs, err := publisher.PublishOrderedRootGroup(systemIter, ordered)
+	if err != nil {
+		return err
+	}
+	if len(rootIDs) != len(ordered) {
+		return fmt.Errorf("grouped ordered root publish returned %d root IDs for %d ordered roots", len(rootIDs), len(ordered))
+	}
+	cloned.system.rootID = newSystemRootID
+	cursor := 0
+	for _, pointIdx := range pointIdxs {
+		if pointIdx < len(cloned.pointShards) {
+			cloned.pointShards[pointIdx].rootID = rootIDs[cursor]
+		}
+		cursor++
+	}
+	if includeIterator && cursor < len(rootIDs) {
+		cloned.iterator.rootID = rootIDs[cursor]
+	}
+	return nil
+}
+
+func publishGroupedNonSystemRootsLocked(publisher backendOrderedRootPublisher, group *rootPublishGroup, cloned *publishedRootSet) error {
+	return publishGroupedNonSystemRoots(publisher, group, cloned)
+}
+
+func publishGroupedNonSystemRootsUnlocked(publisher backendOrderedRootPublisher, group *rootPublishGroup, cloned *publishedRootSet) error {
+	return publishGroupedNonSystemRoots(publisher, group, cloned)
+}
+
+func publishGroupedNonSystemRoots(publisher backendOrderedRootPublisher, group *rootPublishGroup, cloned *publishedRootSet) error {
+	if publisher == nil || group == nil || cloned == nil {
+		return nil
+	}
+	for i := range group.pointShards {
+		if !rootDomainSnapshotNeedsPublish(group.pointShards[i]) {
+			continue
+		}
+		iter, err := group.pointShards[i].publishIterator(nil, nil)
+		if err != nil {
+			return err
+		}
+		newRootID, err := publisher.PublishOrderedRootIterator(group.pointShards[i].publishedRootID, iter)
+		if err != nil {
+			return err
+		}
+		if i < len(cloned.pointShards) {
+			cloned.pointShards[i].rootID = newRootID
+		}
+	}
+	if rootDomainSnapshotNeedsPublish(group.iterator) {
+		iter, err := group.iterator.publishIterator(nil, nil)
+		if err != nil {
+			return err
+		}
+		newIteratorRootID, err := publisher.PublishOrderedRootIterator(group.iterator.publishedRootID, iter)
+		if err != nil {
+			return err
+		}
+		cloned.iterator.rootID = newIteratorRootID
 	}
 	return nil
 }

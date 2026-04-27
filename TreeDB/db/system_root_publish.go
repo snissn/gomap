@@ -3,11 +3,48 @@ package db
 import (
 	"errors"
 
-	"github.com/snissn/gomap/TreeDB/internal/adaptive"
-	"github.com/snissn/gomap/TreeDB/internal/bulk"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
-	"github.com/snissn/gomap/TreeDB/tree"
 )
+
+type systemRootPublishStats struct {
+	warmAttempts            uint64
+	warmNativeApplyAttempts uint64
+	warmRebuildFallbacks    uint64
+	warmPreservedPages      uint64
+	warmRewrittenPages      uint64
+}
+
+func (db *DB) systemRootPublishStatsSnapshot() systemRootPublishStats {
+	if db == nil {
+		return systemRootPublishStats{}
+	}
+	return systemRootPublishStats{
+		warmAttempts:            db.systemRootWarmPublishAttempts.Load(),
+		warmNativeApplyAttempts: db.systemRootWarmNativeApplyAttempts.Load(),
+		warmRebuildFallbacks:    db.systemRootWarmPublishRebuildFallbacks.Load(),
+		warmPreservedPages:      db.systemRootWarmPreservedPages.Load(),
+		warmRewrittenPages:      db.systemRootWarmRewrittenPages.Load(),
+	}
+}
+
+const defaultSystemRootWarmMaxDeltaOps = 256
+
+func (db *DB) systemRootWarmMaxDeltaOps() int {
+	if db != nil && db.testSystemRootWarmMaxDeltaOps > 0 {
+		return db.testSystemRootWarmMaxDeltaOps
+	}
+	return defaultSystemRootWarmMaxDeltaOps
+}
+
+func systemRootOrderedPublishOptions(db *DB) orderedRootPublishOptions {
+	return orderedRootPublishOptions{
+		maxWarmDeltaOps:       db.systemRootWarmMaxDeltaOps(),
+		leafPrefixCompression: db.leafPrefixCompression,
+		leafColumnar:          db.indexColumnarLeaves,
+		packedValuePtr:        db.indexPackedValuePtr,
+		internalBaseDelta:     db.indexInternalBaseDelta,
+	}
+}
 
 // PublishSystemRootIterator builds and commits a new system root from an
 // ordered iterator without detached-batch replay. The current user root is
@@ -16,10 +53,12 @@ func (db *DB) PublishSystemRootIterator(iter iterator.UnsafeIterator) (uint64, e
 	if db == nil {
 		return 0, ErrClosed
 	}
+	if db.closing.Load() {
+		return 0, ErrClosed
+	}
 	if iter == nil {
 		return 0, errors.New("nil system root iterator")
 	}
-	defer iter.Close()
 
 	db.writeMu.Lock()
 	defer db.writeMu.Unlock()
@@ -27,47 +66,37 @@ func (db *DB) PublishSystemRootIterator(iter iterator.UnsafeIterator) (uint64, e
 	if db.readOnly {
 		return 0, ErrReadOnly
 	}
-	idx := db.idx.Load()
-	if idx == nil {
-		return 0, errors.New("missing index")
-	}
-
 	db.mu.RLock()
-	state := db.state.Load()
 	userRoot := db.meta.UserRootPageID
-	systemRoot := db.meta.SystemRootPageID
+	baseSystemRoot := db.meta.SystemRootPageID
 	db.mu.RUnlock()
 
-	retired := make([]uint64, 0)
-	if systemRoot != 0 {
-		sysTree := tree.New(idx.pager, newValueReader(state.ValueLogSet), systemRoot)
-		pageIDs, err := sysTree.CollectPageIDs()
-		if err != nil {
-			return 0, err
-		}
-		retired = append(retired, pageIDs...)
-	}
-
-	newSystemRoot, err := bulk.BuildWithOptions(iter, &pagerAllocator{p: idx.pager}, idx.pager, bulk.BuildOptions{
-		LeafPrefixCompression: db.leafPrefixCompression,
-		LeafColumnar:          db.indexColumnarLeaves,
-		PackedValuePtr:        db.indexPackedValuePtr,
-		InternalBaseDelta:     db.indexInternalBaseDelta,
-	})
+	newSystemRoot, retired, metrics, publishStats, vlogRefDelta, err := db.publishOrderedRootIterator(baseSystemRoot, iter, systemRootOrderedPublishOptions(db), true)
 	if err != nil {
 		return 0, err
 	}
+	defer func() {
+		if vlogRefDelta != nil {
+			releaseValueLogRefDelta(vlogRefDelta)
+		}
+	}()
+	db.systemRootWarmPublishAttempts.Add(publishStats.warmAttempts)
+	db.systemRootWarmNativeApplyAttempts.Add(publishStats.warmNativeApplyAttempts)
+	db.systemRootWarmPublishRebuildFallbacks.Add(publishStats.warmRebuildFallbacks)
+	db.systemRootWarmPreservedPages.Add(publishStats.warmPreservedPages)
+	db.systemRootWarmRewrittenPages.Add(publishStats.warmRewrittenPages)
 
 	db.mu.Lock()
 	curUserRoot := db.meta.UserRootPageID
 	curSystemRoot := db.meta.SystemRootPageID
 	db.mu.Unlock()
-	if curUserRoot != userRoot || curSystemRoot != systemRoot {
+	if curUserRoot != userRoot || curSystemRoot != baseSystemRoot {
 		return 0, errors.New("concurrent modification detected during system root publish")
 	}
 
-	if err := db.finalizeCommit(userRoot, newSystemRoot, retired, false, adaptive.Metrics{}, nil, true, nil, nil, nil); err != nil {
+	if err := db.finalizeCommit(userRoot, newSystemRoot, retired, false, metrics, nil, true, vlogRefDelta, nil, nil); err != nil {
 		return 0, err
 	}
+	vlogRefDelta = nil
 	return newSystemRoot, nil
 }
