@@ -23,6 +23,9 @@ func (b *panicBatchSystemPublishBackend) State() *backenddb.DBState {
 }
 
 func (b *panicBatchSystemPublishBackend) PublishSystemRootIterator(iter iterator.UnsafeIterator) (uint64, error) {
+	if iter != nil {
+		defer iter.Close()
+	}
 	if b.values == nil {
 		b.values = make(map[string]string)
 	}

@@ -20439,7 +20439,11 @@ func (db *DB) rotateMemtableLockedWithCapacity(triggerFlush bool, newCapacity in
 			return err
 		}
 		shard.mem = mt
-		db.promoteRootDomainMutableLocked(i, oldMem, mt)
+		var sealed memtable.Table
+		if enqueueShard {
+			sealed = oldMem
+		}
+		db.promoteRootDomainMutableLocked(i, sealed, mt)
 		shard.rng = keyRange{}
 		shard.bytes = 0
 		if debugRotate {
@@ -20639,7 +20643,11 @@ func (db *DB) rotateMutableShardsLocked(newCapacity int, triggerFlush bool) erro
 			return err
 		}
 		shard.mem = mt
-		db.promoteRootDomainMutableLocked(i, oldMem, mt)
+		var sealed memtable.Table
+		if enqueueShard {
+			sealed = oldMem
+		}
+		db.promoteRootDomainMutableLocked(i, sealed, mt)
 		shard.rng = keyRange{}
 		shard.bytes = 0
 		if debugRotate {
@@ -22524,10 +22532,15 @@ func (db *DB) flushOneLocked(sync bool) bool {
 //   - We additionally check the target mutable shard length to avoid races where
 //     mutableBytes is transiently zero while an old view still has entries.
 func (db *DB) canBypassMemtableRead(view *memtableView, key []byte) bool {
+	snap, haveSnapshot := livePointRootDomainSnapshot(view, db, key)
+	return db.canBypassMemtableReadWithSnapshot(view, key, snap, haveSnapshot)
+}
+
+func (db *DB) canBypassMemtableReadWithSnapshot(view *memtableView, key []byte, snap rootDomainSnapshot, haveSnapshot bool) bool {
 	if view == nil || db.mutableBytes.Load() != 0 {
 		return false
 	}
-	if snap, ok := livePointRootDomainSnapshot(view, db, key); ok {
+	if haveSnapshot {
 		return !rootDomainSnapshotHasInMemoryState(snap)
 	}
 	if len(view.queue) != 0 {
@@ -22695,8 +22708,10 @@ func (db *DB) getManyFromPublishedRootPointShards(view *memtableView, keys [][]b
 		for end < len(unique) && unique[end].shard == shard {
 			end++
 		}
-		if err := view.rootPointShards[shard].getManySortedRefs(unique[start:end], results[start:end]); err != nil {
-			return nil, err
+		if shard >= 0 && shard < len(view.rootPointShards) {
+			if err := view.rootPointShards[shard].getManySortedRefs(unique[start:end], results[start:end]); err != nil {
+				return nil, err
+			}
 		}
 		start = end
 	}
@@ -22754,10 +22769,8 @@ func (db *DB) getMemtable(key []byte) ([]byte, bool, error) {
 	view := db.retainMemtableView()
 	if view != nil {
 		defer db.releaseMemtableView(view)
-	}
-	if view != nil {
 		snap, haveSnapshot := livePointRootDomainSnapshot(view, db, key)
-		if db.canBypassMemtableRead(view, key) {
+		if db.canBypassMemtableReadWithSnapshot(view, key, snap, haveSnapshot) {
 			return nil, false, nil
 		}
 		if haveSnapshot {
@@ -22781,41 +22794,38 @@ func (db *DB) getMemtable(key []byte) ([]byte, bool, error) {
 				}
 				return val, true, nil
 			}
+			return nil, false, nil
 		}
-		return nil, false, nil
-	} else {
-		val, ptr, flags, found := db.rawPointRootDomainEntry(key)
-		if found {
-			if flags&node.FlagTombstone != 0 {
-				return nil, true, nil
-			}
-			if flags&node.FlagPointer != 0 {
-				if val == nil {
-					readVal, err := db.readValueLog(key, ptr)
-					if err != nil {
-						return nil, true, err
-					}
-					return readVal, true, nil
-				}
-				return val, true, nil
-			}
+	}
+	val, ptr, flags, found := db.rawPointRootDomainEntry(key)
+	if found {
+		if flags&node.FlagTombstone != 0 {
+			return nil, true, nil
+		}
+		if flags&node.FlagPointer != 0 {
 			if val == nil {
-				return []byte{}, true, nil
+				readVal, err := db.readValueLog(key, ptr)
+				if err != nil {
+					return nil, true, err
+				}
+				return readVal, true, nil
 			}
 			return val, true, nil
 		}
-		return nil, false, nil
+		if val == nil {
+			return []byte{}, true, nil
+		}
+		return val, true, nil
 	}
+	return nil, false, nil
 }
 
 func (db *DB) getMemtableAppend(key, dst []byte) ([]byte, bool, error) {
 	view := db.retainMemtableView()
 	if view != nil {
 		defer db.releaseMemtableView(view)
-	}
-	if view != nil {
 		snap, haveSnapshot := livePointRootDomainSnapshot(view, db, key)
-		if db.canBypassMemtableRead(view, key) {
+		if db.canBypassMemtableReadWithSnapshot(view, key, snap, haveSnapshot) {
 			return dst, false, nil
 		}
 		if haveSnapshot {
@@ -22839,31 +22849,30 @@ func (db *DB) getMemtableAppend(key, dst []byte) ([]byte, bool, error) {
 				}
 				return append(dst, val...), true, nil
 			}
+			return dst, false, nil
 		}
-		return dst, false, nil
-	} else {
-		val, ptr, flags, found := db.rawPointRootDomainEntry(key)
-		if found {
-			if flags&node.FlagTombstone != 0 {
-				return dst, true, tree.ErrKeyNotFound
-			}
-			if flags&node.FlagPointer != 0 {
-				if val == nil {
-					out, err := db.readValueLogAppend(key, ptr, dst)
-					if err != nil {
-						return dst, true, err
-					}
-					return out, true, nil
-				}
-				return append(dst, val...), true, nil
-			}
+	}
+	val, ptr, flags, found := db.rawPointRootDomainEntry(key)
+	if found {
+		if flags&node.FlagTombstone != 0 {
+			return dst, true, tree.ErrKeyNotFound
+		}
+		if flags&node.FlagPointer != 0 {
 			if val == nil {
-				return dst, true, nil
+				out, err := db.readValueLogAppend(key, ptr, dst)
+				if err != nil {
+					return dst, true, err
+				}
+				return out, true, nil
 			}
 			return append(dst, val...), true, nil
 		}
-		return dst, false, nil
+		if val == nil {
+			return dst, true, nil
+		}
+		return append(dst, val...), true, nil
 	}
+	return dst, false, nil
 }
 
 type backendManyGetter interface {
@@ -23088,23 +23097,74 @@ func (db *DB) Has(key []byte) (bool, error) {
 	view := db.retainMemtableView()
 	if view != nil {
 		defer db.releaseMemtableView(view)
-	}
-	if view != nil {
 		snap, haveSnapshot := livePointRootDomainSnapshot(view, db, key)
 		if haveSnapshot {
 			_, _, flags, found := snap.getEntry(key)
 			if found {
 				return flags&node.FlagTombstone == 0, nil
 			}
+			return db.backend.Has(key)
 		}
-		return db.backend.Has(key)
-	} else {
-		_, _, flags, found := db.rawPointRootDomainEntry(key)
-		if found {
-			return flags&node.FlagTombstone == 0, nil
-		}
-		return db.backend.Has(key)
 	}
+	_, _, flags, found := db.rawPointRootDomainEntry(key)
+	if found {
+		return flags&node.FlagTombstone == 0, nil
+	}
+	return db.backend.Has(key)
+}
+
+func (db *DB) HasMany(keys [][]byte) ([]bool, error) {
+	out := make([]bool, len(keys))
+	if len(keys) == 0 {
+		return out, nil
+	}
+	provider, ok := db.backend.(backendSnapshotProvider)
+	if !ok {
+		for i, key := range keys {
+			exists, err := db.Has(key)
+			if err != nil {
+				return nil, err
+			}
+			out[i] = exists
+		}
+		return out, nil
+	}
+	view := db.retainMemtableView()
+	if view != nil {
+		defer db.releaseMemtableView(view)
+	}
+	backendSnap := provider.AcquireSnapshot()
+	if backendSnap == nil {
+		return nil, backenddb.ErrClosed
+	}
+	defer backendSnap.Close()
+	snap := &Snapshot{db: db, backend: backendSnap}
+	if view != nil {
+		snap.rootPointShards = view.rootPointShards
+	}
+	return snap.HasMany(keys)
+}
+
+func (db *DB) HasPrefixes(prefixes [][]byte) ([]bool, error) {
+	out := make([]bool, len(prefixes))
+	for i, prefix := range prefixes {
+		it, err := db.Iterator(prefix, nil)
+		if err != nil {
+			return nil, err
+		}
+		if it.Valid() {
+			out[i] = bytes.HasPrefix(it.Key(), prefix)
+		}
+		iterErr := it.Error()
+		closeErr := it.Close()
+		if iterErr != nil {
+			return nil, iterErr
+		}
+		if closeErr != nil {
+			return nil, closeErr
+		}
+	}
+	return out, nil
 }
 
 func (db *DB) maybeRunLeafGenerationPackMaintenance(runGC bool, quiet bool, admission leafGenerationPackMaintenanceAdmission, opts vlogGenerationMaintenanceOptions) (attempted bool, ran bool, err error) {

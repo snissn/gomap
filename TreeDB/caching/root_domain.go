@@ -87,7 +87,10 @@ type rootDomainPublishStats struct {
 	batchReplayFallbacks  uint64
 }
 
-var errStalePublishedRootGeneration = errors.New("caching: stale published root generation")
+var (
+	errStalePublishedRootGeneration = errors.New("caching: stale published root generation")
+	errInvalidPublishedRootSet      = errors.New("caching: invalid published root set")
+)
 
 type rootDomainProbeResult struct {
 	val   []byte
@@ -167,10 +170,15 @@ func (db *DB) resyncRootDomainQueuedRunsLocked() {
 		return
 	}
 	if len(db.queueShardIDs) != len(db.queue) {
-		for i := range db.rootPointStates {
-			db.rootPointStates[i].immutables = append(db.rootPointStates[i].immutables, db.queue...)
+		for _, mt := range db.queue {
+			if mt == nil {
+				continue
+			}
+			for i := range db.rootPointStates {
+				db.rootPointStates[i].immutables = append(db.rootPointStates[i].immutables, mt)
+			}
+			db.rootIteratorState.immutables = append(db.rootIteratorState.immutables, mt)
 		}
-		db.rootIteratorState.immutables = append(db.rootIteratorState.immutables, db.queue...)
 		return
 	}
 	for idx, mt := range db.queue {
@@ -212,7 +220,7 @@ func (db *DB) publishRootDomainSnapshotsLocked(view *memtableView) {
 	view.rootSystem.mutable = nil
 	view.rootIterator = db.rootIteratorState.snapshot()
 	view.rootIterator.mutable = nil
-	view.rootIteratorRanges = view.queueRanges
+	view.rootIteratorRanges = rootDomainQueueRangesForTables(view.queue, view.queueRanges)
 	if db.rootPublishedSet != nil {
 		view.publishedRoots = clonePublishedRootSet(db.rootPublishedSet)
 	} else {
@@ -311,11 +319,19 @@ func (db *DB) validatePublishedRootSetLocked(set *publishedRootSet) error {
 	if db == nil {
 		return nil
 	}
+	db.ensureRootDomainStatesLocked()
 	if set != nil && db.rootPublishedSet != nil &&
 		set.generation != 0 && db.rootPublishedSet.generation != 0 &&
 		set.generation < db.rootPublishedSet.generation {
 		db.rootPublishStats.staleRejects.Add(1)
 		return errStalePublishedRootGeneration
+	}
+	if set != nil {
+		switch len(set.pointShards) {
+		case 0, 1, len(db.rootPointStates):
+		default:
+			return errInvalidPublishedRootSet
+		}
 	}
 	return nil
 }
@@ -536,6 +552,7 @@ func (db *DB) promoteRootDomainMutableLocked(shardIdx int, sealed, next memtable
 }
 
 type backendSnapshotLookup struct {
+	db       *DB
 	snapshot *backenddb.Snapshot
 	rootID   uint64
 }
@@ -544,14 +561,19 @@ func (l backendSnapshotLookup) GetEntry(key []byte) (val []byte, ptr page.ValueP
 	if l.snapshot == nil {
 		return nil, page.ValuePtr{}, 0, false
 	}
+	if l.db != nil {
+		if err := l.db.flushValueLogForBackendRead(); err != nil {
+			return nil, page.ValuePtr{}, 0, false
+		}
+	}
 	var (
-		entry node.LeafEntry
-		err   error
+		out []byte
+		err error
 	)
 	if l.rootID != 0 {
-		entry, err = l.snapshot.GetEntryAtRoot(l.rootID, key)
+		out, err = l.snapshot.GetAtRoot(l.rootID, key)
 	} else {
-		entry, err = l.snapshot.GetEntry(key)
+		out, err = l.snapshot.Get(key)
 	}
 	if err != nil {
 		if errors.Is(err, tree.ErrKeyNotFound) {
@@ -559,12 +581,17 @@ func (l backendSnapshotLookup) GetEntry(key []byte) (val []byte, ptr page.ValueP
 		}
 		return nil, page.ValuePtr{}, 0, false
 	}
-	return entry.Value, entry.ValuePtr, entry.Flags, true
+	return out, page.ValuePtr{}, node.FlagInline, true
 }
 
 func (l backendSnapshotLookup) Iterator(start, end []byte) (iterator.UnsafeIterator, error) {
 	if l.snapshot == nil {
 		return nil, backenddb.ErrClosed
+	}
+	if l.db != nil {
+		if err := l.db.flushValueLogForBackendRead(); err != nil {
+			return nil, err
+		}
 	}
 	if l.rootID != 0 {
 		return l.snapshot.IteratorAtRoot(l.rootID, start, end)
@@ -609,7 +636,7 @@ func rootDomainSnapshotFromMemtableView(view *memtableView, shardIdx int, includ
 		if mt == nil {
 			continue
 		}
-		if shardIdx >= 0 && len(view.queueShardIDs) > idx && int(view.queueShardIDs[idx]) != shardIdx {
+		if len(view.queueShardIDs) > idx && int(view.queueShardIDs[idx]) != shardIdx {
 			continue
 		}
 		snap.immutables = append(snap.immutables, mt)
@@ -681,22 +708,119 @@ func rootDomainSystemSnapshotFromCachedSnapshot(s *Snapshot) rootDomainSnapshot 
 	}
 	snap := s.rootSystem
 	if s.publishedRoots != nil {
-		if s.publishedRoots.system.lookup != nil {
-			snap.published = s.publishedRoots.system.lookup
+		ref := s.publishedRoots.system
+		if ref.rootID != 0 {
+			snap.publishedRootID = ref.rootID
 		}
-		if s.publishedRoots.system.rootID != 0 {
-			snap.publishedRootID = s.publishedRoots.system.rootID
+		if ref.lookup != nil {
+			snap.published = ref.lookup
+			return snap
 		}
-		return snap
 	}
 	if s.backend != nil {
-		if state := s.backend.State(); state != nil {
-			snap.publishedRootID = state.SystemRootPageID
-			if state.SystemRootPageID != 0 {
-				snap.published = backendSnapshotLookup{snapshot: s.backend, rootID: state.SystemRootPageID}
-			}
+		rootID := snap.publishedRootID
+		if state := s.backend.State(); state != nil && rootID == 0 {
+			rootID = state.SystemRootPageID
+			snap.publishedRootID = rootID
+		}
+		if rootID != 0 {
+			snap.published = backendSnapshotLookup{db: s.db, snapshot: s.backend, rootID: rootID}
 		}
 	}
+	return snap
+}
+
+func rootDomainSnapshotBackendRootID(s *Snapshot, fallback uint64) uint64 {
+	if fallback != 0 {
+		return fallback
+	}
+	if s == nil || s.backend == nil {
+		return 0
+	}
+	if state := s.backend.State(); state != nil {
+		return state.RootPageID
+	}
+	return 0
+}
+
+func rootDomainPointPublishedRef(set *publishedRootSet, shardIdx int) publishedRootRef {
+	if set == nil {
+		return publishedRootRef{}
+	}
+	switch {
+	case shardIdx >= 0 && shardIdx < len(set.pointShards):
+		return set.pointShards[shardIdx]
+	case len(set.pointShards) == 1:
+		return set.pointShards[0]
+	default:
+		return publishedRootRef{}
+	}
+}
+
+func rootDomainApplyPublishedRef(s *Snapshot, snap *rootDomainSnapshot, ref publishedRootRef) bool {
+	if snap == nil {
+		return false
+	}
+	if ref.rootID != 0 {
+		snap.publishedRootID = ref.rootID
+	}
+	if ref.lookup != nil {
+		snap.published = ref.lookup
+		return true
+	}
+	if s != nil && s.backend != nil && snap.publishedRootID != 0 {
+		snap.published = backendSnapshotLookup{db: s.db, snapshot: s.backend, rootID: snap.publishedRootID}
+		return true
+	}
+	return false
+}
+
+func rootDomainApplyBackendFallback(s *Snapshot, snap *rootDomainSnapshot) {
+	if snap == nil || s == nil || s.backend == nil {
+		return
+	}
+	rootID := rootDomainSnapshotBackendRootID(s, snap.publishedRootID)
+	if rootID != 0 {
+		snap.publishedRootID = rootID
+	}
+	snap.published = backendSnapshotLookup{db: s.db, snapshot: s.backend, rootID: rootID}
+}
+
+func rootDomainIteratorPublishedRef(set *publishedRootSet) publishedRootRef {
+	if set == nil {
+		return publishedRootRef{}
+	}
+	return set.iterator
+}
+
+func rootDomainSnapshotFromCachedSnapshot(s *Snapshot, key []byte) rootDomainSnapshot {
+	if s == nil {
+		return rootDomainSnapshot{}
+	}
+	shardIdx := 0
+	if s.db != nil {
+		shardIdx = s.db.shardIndex(key)
+	}
+	var snap rootDomainSnapshot
+	if shardIdx >= 0 && shardIdx < len(s.rootPointShards) {
+		snap = s.rootPointShards[shardIdx]
+	}
+	if rootDomainApplyPublishedRef(s, &snap, rootDomainPointPublishedRef(s.publishedRoots, shardIdx)) {
+		return snap
+	}
+	rootDomainApplyBackendFallback(s, &snap)
+	return snap
+}
+
+func rootDomainIteratorSnapshotFromCachedSnapshot(s *Snapshot) rootDomainSnapshot {
+	if s == nil {
+		return rootDomainSnapshot{}
+	}
+	snap := s.rootIterator
+	if rootDomainApplyPublishedRef(s, &snap, rootDomainIteratorPublishedRef(s.publishedRoots)) {
+		return snap
+	}
+	rootDomainApplyBackendFallback(s, &snap)
 	return snap
 }
 
@@ -726,6 +850,23 @@ func liveIteratorRootDomainSnapshot(view *memtableView) (rootDomainSnapshot, boo
 		return view.rootIterator, true
 	}
 	return rootDomainSnapshot{}, false
+}
+
+func rootDomainQueueRangesForTables(queue []memtable.Table, ranges []keyRange) []keyRange {
+	if len(queue) == 0 || len(ranges) == 0 {
+		return nil
+	}
+	out := make([]keyRange, 0, len(queue))
+	for idx, mt := range queue {
+		if mt == nil {
+			continue
+		}
+		if idx >= len(ranges) {
+			return nil
+		}
+		out = append(out, ranges[idx])
+	}
+	return out
 }
 
 // rawPointRootDomainEntry is the low-level stale-window fallback for point
@@ -781,130 +922,6 @@ func (db *DB) rawIteratorRootDomainSnapshot() (rootDomainSnapshot, []keyRange) {
 		ranges = append([]keyRange(nil), db.queueRanges...)
 	}
 	return snap, ranges
-}
-
-func populateRootDomainSnapshots(view *memtableView) {
-	if view == nil {
-		return
-	}
-	if len(view.queue) > 0 {
-		view.rootIterator = rootDomainSnapshot{immutables: view.queue}
-		view.rootIteratorRanges = view.queueRanges
-	} else {
-		view.rootIterator = rootDomainSnapshot{}
-		view.rootIteratorRanges = nil
-	}
-	if len(view.mutables) == 0 {
-		view.rootPointShards = nil
-		view.rootSnapshotShards = nil
-		return
-	}
-	points := make([]rootDomainSnapshot, len(view.mutables))
-	snapshots := make([]rootDomainSnapshot, len(view.mutables))
-	for idx := range view.mutables {
-		points[idx].mutable = view.mutables[idx]
-	}
-	if len(view.queue) == 0 {
-		view.rootPointShards = points
-		view.rootSnapshotShards = snapshots
-		return
-	}
-	if len(view.queueShardIDs) != len(view.queue) {
-		for idx := range points {
-			points[idx].immutables = view.queue
-			snapshots[idx].immutables = view.queue
-		}
-		view.rootPointShards = points
-		view.rootSnapshotShards = snapshots
-		return
-	}
-	counts := make([]int, len(points))
-	for idx, mt := range view.queue {
-		if mt == nil {
-			continue
-		}
-		shardIdx := int(view.queueShardIDs[idx])
-		if shardIdx < 0 || shardIdx >= len(counts) {
-			continue
-		}
-		counts[shardIdx]++
-	}
-	runs := make([][]memtable.Table, len(points))
-	for idx, count := range counts {
-		if count > 0 {
-			runs[idx] = make([]memtable.Table, 0, count)
-		}
-	}
-	for idx, mt := range view.queue {
-		if mt == nil {
-			continue
-		}
-		shardIdx := int(view.queueShardIDs[idx])
-		if shardIdx < 0 || shardIdx >= len(runs) {
-			continue
-		}
-		runs[shardIdx] = append(runs[shardIdx], mt)
-	}
-	for idx := range points {
-		points[idx].immutables = runs[idx]
-		snapshots[idx].immutables = runs[idx]
-	}
-	view.rootPointShards = points
-	view.rootSnapshotShards = snapshots
-}
-
-func rootDomainSnapshotFromCachedSnapshot(s *Snapshot, key []byte) rootDomainSnapshot {
-	if s == nil {
-		return rootDomainSnapshot{}
-	}
-	shardIdx := 0
-	if s.db != nil {
-		shardIdx = s.db.shardIndex(key)
-	}
-	var snap rootDomainSnapshot
-	if shardIdx >= 0 && shardIdx < len(s.rootPointShards) {
-		snap = s.rootPointShards[shardIdx]
-	}
-	if s.publishedRoots != nil {
-		ref := publishedRootRef{}
-		switch {
-		case shardIdx >= 0 && shardIdx < len(s.publishedRoots.pointShards):
-			ref = s.publishedRoots.pointShards[shardIdx]
-		case len(s.publishedRoots.pointShards) == 1:
-			ref = s.publishedRoots.pointShards[0]
-		}
-		if ref.lookup != nil {
-			snap.published = ref.lookup
-			snap.publishedRootID = ref.rootID
-			return snap
-		}
-	}
-	if s.backend != nil {
-		snap.published = backendSnapshotLookup{snapshot: s.backend}
-		if state := s.backend.State(); state != nil {
-			snap.publishedRootID = state.RootPageID
-		}
-	}
-	return snap
-}
-
-func rootDomainIteratorSnapshotFromCachedSnapshot(s *Snapshot) rootDomainSnapshot {
-	if s == nil {
-		return rootDomainSnapshot{}
-	}
-	snap := s.rootIterator
-	if s.publishedRoots != nil && s.publishedRoots.iterator.lookup != nil {
-		snap.published = s.publishedRoots.iterator.lookup
-		snap.publishedRootID = s.publishedRoots.iterator.rootID
-		return snap
-	}
-	if s.backend != nil {
-		snap.published = backendSnapshotLookup{snapshot: s.backend}
-		if state := s.backend.State(); state != nil {
-			snap.publishedRootID = state.RootPageID
-		}
-	}
-	return snap
 }
 
 func (s *rootDomainState) snapshot() rootDomainSnapshot {
@@ -971,42 +988,6 @@ func (s rootDomainSnapshot) hasVisibleKey(key []byte) bool {
 	return ok
 }
 
-func probeRootDomainTableSorted(mt memtable.Table, keys [][]byte, out []rootDomainProbeResult) error {
-	if mt == nil || len(keys) == 0 {
-		return nil
-	}
-	it := mt.NewIterator(keys[0], nil)
-	defer func() { _ = it.Close() }()
-
-	keyIdx := 0
-	for keyIdx < len(keys) && it.Valid() {
-		for keyIdx < len(keys) && out[keyIdx].found {
-			keyIdx++
-		}
-		if keyIdx >= len(keys) {
-			break
-		}
-		cmp := bytes.Compare(it.UnsafeKey(), keys[keyIdx])
-		switch {
-		case cmp < 0:
-			it.Next()
-		case cmp > 0:
-			keyIdx++
-		default:
-			val, ptr, flags := it.UnsafeEntry()
-			out[keyIdx] = rootDomainProbeResult{
-				val:   val,
-				ptr:   ptr,
-				flags: flags,
-				found: true,
-			}
-			keyIdx++
-			it.Next()
-		}
-	}
-	return it.Error()
-}
-
 func probeRootDomainTableSortedRefs(mt memtable.Table, refs []getManyProbeRef, out []rootDomainProbeResult) error {
 	if mt == nil || len(refs) == 0 {
 		return nil
@@ -1041,24 +1022,6 @@ func probeRootDomainTableSortedRefs(mt memtable.Table, refs []getManyProbeRef, o
 		}
 	}
 	return it.Error()
-}
-
-func (s rootDomainSnapshot) getManySorted(keys [][]byte, out []rootDomainProbeResult) error {
-	if len(keys) == 0 {
-		return nil
-	}
-	if len(keys) != len(out) {
-		return errors.New("cachingdb: root-domain sorted probe input/output length mismatch")
-	}
-	if err := probeRootDomainTableSorted(s.mutable, keys, out); err != nil {
-		return err
-	}
-	for idx := len(s.immutables) - 1; idx >= 0; idx-- {
-		if err := probeRootDomainTableSorted(s.immutables[idx], keys, out); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func (s rootDomainSnapshot) getManySortedRefs(refs []getManyProbeRef, out []rootDomainProbeResult) error {
@@ -1188,14 +1151,15 @@ func (h rootDomainUnsafeMergeHeap) peek() *rootDomainUnsafeMergeItem {
 }
 
 type rootDomainUnsafeIterator struct {
-	all    []iterator.UnsafeIterator
-	h      rootDomainUnsafeMergeHeap
-	cur    rootDomainUnsafeMergeItem
-	hasCur bool
-	valid  bool
-	err    error
-	start  []byte
-	end    []byte
+	all        []iterator.UnsafeIterator
+	priorities []int
+	h          rootDomainUnsafeMergeHeap
+	cur        rootDomainUnsafeMergeItem
+	hasCur     bool
+	valid      bool
+	err        error
+	start      []byte
+	end        []byte
 }
 
 func newRootDomainUnsafeIterator(sources []merging.IteratorSource, start, end []byte) iterator.UnsafeIterator {
@@ -1206,13 +1170,15 @@ func newRootDomainUnsafeIterator(sources []merging.IteratorSource, start, end []
 		return sources[0].Iter
 	}
 	it := &rootDomainUnsafeIterator{
-		all:   make([]iterator.UnsafeIterator, 0, len(sources)),
-		h:     make(rootDomainUnsafeMergeHeap, 0, len(sources)),
-		start: start,
-		end:   end,
+		all:        make([]iterator.UnsafeIterator, 0, len(sources)),
+		priorities: make([]int, 0, len(sources)),
+		h:          make(rootDomainUnsafeMergeHeap, 0, len(sources)),
+		start:      start,
+		end:        end,
 	}
 	for _, src := range sources {
 		it.all = append(it.all, src.Iter)
+		it.priorities = append(it.priorities, src.Priority)
 		if src.Iter != nil && src.Iter.Valid() {
 			it.h = append(it.h, rootDomainUnsafeMergeItem{
 				iter:     src.Iter,
@@ -1301,15 +1267,20 @@ func (it *rootDomainUnsafeIterator) Seek(key []byte) {
 	it.cur = rootDomainUnsafeMergeItem{}
 	it.hasCur = false
 	it.valid = false
-	for _, src := range it.all {
+	for idx, src := range it.all {
 		if src == nil {
 			continue
 		}
 		src.Seek(key)
 		if src.Valid() {
+			priority := idx
+			if idx < len(it.priorities) {
+				priority = it.priorities[idx]
+			}
 			it.h.push(rootDomainUnsafeMergeItem{
-				iter: src,
-				key:  src.UnsafeKey(),
+				iter:     src,
+				priority: priority,
+				key:      src.UnsafeKey(),
 			})
 		}
 	}

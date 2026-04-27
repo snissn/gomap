@@ -3,6 +3,7 @@ package caching
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -33,7 +34,7 @@ type Snapshot struct {
 	view            *memtableView
 	backend         *backenddb.Snapshot
 	rootVersion     uint64
-	rootPointShards []rootDomainSnapshot
+	rootPointShards []rootDomainSnapshot // snapshot point roots; mutable runs are intentionally excluded
 	rootSystem      rootDomainSnapshot
 	rootIterator    rootDomainSnapshot
 	publishedRoots  *publishedRootSet
@@ -118,10 +119,29 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 		db.mu.Unlock()
 	}
 
-	var viewPublishedRoots *publishedRootSet
+	var (
+		viewRootVersion     uint64
+		viewRootPointShards []rootDomainSnapshot
+		viewRootSystem      rootDomainSnapshot
+		viewRootIterator    rootDomainSnapshot
+		viewPublishedRoots  *publishedRootSet
+	)
 	if view != nil {
+		viewRootVersion = view.rootVersion
+		viewRootPointShards = view.rootSnapshotShards
+		viewRootSystem = view.rootSystem
+		viewRootIterator = view.rootIterator
 		viewPublishedRoots = view.publishedRoots
-		if len(view.queue) == 0 && viewPublishedRoots == nil {
+		if len(view.queue) == 0 {
+			if viewPublishedRoots == nil {
+				viewRootVersion = 0
+				viewRootPointShards = nil
+				viewRootSystem = rootDomainSnapshot{}
+				viewRootIterator = rootDomainSnapshot{}
+			} else {
+				viewRootPointShards = append([]rootDomainSnapshot(nil), view.rootSnapshotShards...)
+				viewPublishedRoots = clonePublishedRootSet(view.publishedRoots)
+			}
 			db.releaseMemtableView(view)
 			view = nil
 		}
@@ -143,13 +163,11 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 	}
 
 	snap := &Snapshot{db: db, view: view, backend: backendSnap}
-	if view != nil {
-		snap.rootVersion = view.rootVersion
-		snap.rootPointShards = view.rootSnapshotShards
-		snap.rootSystem = view.rootSystem
-		snap.rootIterator = view.rootIterator
-		snap.publishedRoots = viewPublishedRoots
-	}
+	snap.rootVersion = viewRootVersion
+	snap.rootPointShards = viewRootPointShards
+	snap.rootSystem = viewRootSystem
+	snap.rootIterator = viewRootIterator
+	snap.publishedRoots = viewPublishedRoots
 	if snap.publishedRoots == nil {
 		db.rootPublishStats.backendFallbacks.Add(1)
 	}
@@ -591,15 +609,43 @@ func (s *Snapshot) HasPrefixes(prefixes [][]byte) ([]bool, error) {
 	if err := rootDomainIteratorSnapshotFromCachedSnapshot(s).hasPrefixesSorted(unique, probe); err != nil {
 		return nil, err
 	}
+	backendIdx := make([]int, 0, len(unique))
+	backendPrefixes := make([][]byte, 0, len(unique))
 	for i, ok := range probe {
-		if !ok {
-			continue
-		}
 		groupEnd := len(refs)
 		if i+1 < len(groupStarts) {
 			groupEnd = groupStarts[i+1]
 		}
+		if !ok {
+			backendIdx = append(backendIdx, i)
+			backendPrefixes = append(backendPrefixes, unique[i])
+			continue
+		}
 		for _, ref := range refs[groupStarts[i]:groupEnd] {
+			out[ref.idx] = true
+		}
+	}
+	s.db.noteRootDomainSnapshotHasPrefixesFallback(len(backendPrefixes))
+	if len(backendPrefixes) == 0 {
+		return out, nil
+	}
+	backendOut, err := s.backend.HasPrefixes(backendPrefixes)
+	if err != nil {
+		return nil, err
+	}
+	if len(backendOut) != len(backendPrefixes) {
+		return nil, fmt.Errorf("cachingdb: backend HasPrefixes returned %d values for %d prefixes", len(backendOut), len(backendPrefixes))
+	}
+	for i, ok := range backendOut {
+		if !ok {
+			continue
+		}
+		uniqueIdx := backendIdx[i]
+		groupEnd := len(refs)
+		if uniqueIdx+1 < len(groupStarts) {
+			groupEnd = groupStarts[uniqueIdx+1]
+		}
+		for _, ref := range refs[groupStarts[uniqueIdx]:groupEnd] {
 			out[ref.idx] = true
 		}
 	}
