@@ -66,6 +66,7 @@ type AppendOnly struct {
 
 	entries        []appendOnlyEntry
 	baseEntriesLen int
+	growEntriesLen int
 	latest         map[string]int
 	latest64       map[uint64]int
 	snapshot       []*appendOnlyEntry
@@ -206,15 +207,48 @@ func appendOnlyInitialEntriesForCapacity(capacity, estimatedBytesPerEntry int) i
 	return n
 }
 
+func appendOnlyGrowthEntriesForHint(baseEntries, entryHint int) int {
+	n := baseEntries
+	if n < appendOnlyMinInitialEntries {
+		n = appendOnlyMinInitialEntries
+	}
+	if n > appendOnlyMaxInitialEntries {
+		n = appendOnlyMaxInitialEntries
+	}
+	if entryHint <= 0 {
+		return n
+	}
+	if entryHint < appendOnlyMinInitialEntries {
+		entryHint = appendOnlyMinInitialEntries
+	}
+	if entryHint > appendOnlyMaxInitialEntries {
+		entryHint = appendOnlyMaxInitialEntries
+	}
+	if entryHint > n {
+		n = entryHint
+	}
+	return n
+}
+
 func NewAppendOnlyWithCapacity(capacity int) *AppendOnly {
 	return NewAppendOnlyWithCapacityEstimatedEntryBytes(capacity, appendOnlyEstimatedBytesPerEntryPointer)
 }
 
 func NewAppendOnlyWithCapacityEstimatedEntryBytes(capacity, estimatedBytesPerEntry int) *AppendOnly {
-	n := appendOnlyInitialEntriesForCapacity(capacity, estimatedBytesPerEntry)
+	return NewAppendOnlyWithCapacityEstimatedEntryBytesAndHint(capacity, estimatedBytesPerEntry, 0)
+}
+
+// NewAppendOnlyWithCapacityEstimatedEntryBytesAndHint creates an append-only
+// memtable using the capacity-derived baseline plus entryHint as the expected
+// upcoming entry count. The hint does not allocate entries immediately; it only
+// influences the next growth jump and bounded reuse after reset.
+func NewAppendOnlyWithCapacityEstimatedEntryBytesAndHint(capacity, estimatedBytesPerEntry, entryHint int) *AppendOnly {
+	baseEntries := appendOnlyInitialEntriesForCapacity(capacity, estimatedBytesPerEntry)
+	growEntries := appendOnlyGrowthEntriesForHint(baseEntries, entryHint)
 	return &AppendOnly{
-		entries:        getAppendOnlyEntries(n),
-		baseEntriesLen: n,
+		entries:        getAppendOnlyEntries(baseEntries),
+		baseEntriesLen: baseEntries,
+		growEntriesLen: growEntries,
 		count:          0,
 		ordered:        true,
 		hasLast:        false,
@@ -544,6 +578,9 @@ func (m *AppendOnly) updateLatestIndexLocked(key []byte, idx int) {
 func (m *AppendOnly) appendEntryLocked(key, value []byte, ptr page.ValuePtr, flags byte, steal bool, borrowValue bool) {
 	if m.count == len(m.entries) {
 		nextCap := appendOnlyNextCapacity(len(m.entries))
+		if nextCap < m.growEntriesLen {
+			nextCap = m.growEntriesLen
+		}
 		prev := m.entries
 		grown := getAppendOnlyEntries(nextCap)
 		copy(grown, m.entries[:m.count])
@@ -893,7 +930,7 @@ func (m *AppendOnly) Reset() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.waitIteratorLeasesLocked()
-	m.resetLockedWithPolicy(0, 0, true)
+	m.resetLockedWithPolicy(0, 0, 0, true)
 }
 
 // ResetWithCapacity resets the memtable and, when needed, shrinks retained
@@ -903,11 +940,22 @@ func (m *AppendOnly) ResetWithCapacity(capacity, estimatedBytesPerEntry int) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.waitIteratorLeasesLocked()
-	m.resetLockedWithPolicy(capacity, estimatedBytesPerEntry, true)
+	m.resetLockedWithPolicy(capacity, estimatedBytesPerEntry, 0, true)
+}
+
+// ResetWithCapacityAndEntryHint resets the memtable like ResetWithCapacity, but
+// also records entryHint as the expected upcoming entry count. The hint is used
+// to influence the next growth jump and the ceiling for retained buffer reuse.
+// It does not cause reset to allocate entries immediately.
+func (m *AppendOnly) ResetWithCapacityAndEntryHint(capacity, estimatedBytesPerEntry, entryHint int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.waitIteratorLeasesLocked()
+	m.resetLockedWithPolicy(capacity, estimatedBytesPerEntry, entryHint, true)
 }
 
 func (m *AppendOnly) resetLocked(capacity, estimatedBytesPerEntry int) {
-	m.resetLockedWithPolicy(capacity, estimatedBytesPerEntry, true)
+	m.resetLockedWithPolicy(capacity, estimatedBytesPerEntry, 0, true)
 }
 
 // ResetWithCapacityHard resets and clamps retained internal buffers to the
@@ -916,10 +964,21 @@ func (m *AppendOnly) ResetWithCapacityHard(capacity, estimatedBytesPerEntry int)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.waitIteratorLeasesLocked()
-	m.resetLockedWithPolicy(capacity, estimatedBytesPerEntry, false)
+	m.resetLockedWithPolicy(capacity, estimatedBytesPerEntry, 0, false)
 }
 
-func (m *AppendOnly) resetLockedWithPolicy(capacity, estimatedBytesPerEntry int, retainObserved bool) {
+// ResetWithCapacityHardAndEntryHint resets the memtable like
+// ResetWithCapacityHard, but records entryHint as the expected upcoming entry
+// count for the next growth jump. The hint does not allocate entries during
+// reset and hard reset still drops observed spike retention.
+func (m *AppendOnly) ResetWithCapacityHardAndEntryHint(capacity, estimatedBytesPerEntry, entryHint int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.waitIteratorLeasesLocked()
+	m.resetLockedWithPolicy(capacity, estimatedBytesPerEntry, entryHint, false)
+}
+
+func (m *AppendOnly) resetLockedWithPolicy(capacity, estimatedBytesPerEntry, entryHint int, retainObserved bool) {
 	desiredEntries := m.baseEntriesLen
 	if capacity > 0 {
 		desiredEntries = appendOnlyInitialEntriesForCapacity(capacity, estimatedBytesPerEntry)
@@ -927,10 +986,15 @@ func (m *AppendOnly) resetLockedWithPolicy(capacity, estimatedBytesPerEntry int,
 	}
 	if desiredEntries <= 0 {
 		desiredEntries = appendOnlyMinInitialEntries
+		m.baseEntriesLen = desiredEntries
 	}
+	// Hints should improve the next growth jump and warm-retention ceiling, but
+	// reset itself must not allocate just to satisfy the hint.
+	growthEntries := appendOnlyGrowthEntriesForHint(desiredEntries, entryHint)
+	m.growEntriesLen = growthEntries
 
 	oldCount := m.count
-	maxRetainedEntries := appendOnlyMaxReuseEntries(desiredEntries)
+	maxRetainedEntries := appendOnlyMaxReuseEntries(growthEntries)
 	retainedEntries := desiredEntries
 	if retainObserved && oldCount > retainedEntries {
 		retainedEntries = oldCount

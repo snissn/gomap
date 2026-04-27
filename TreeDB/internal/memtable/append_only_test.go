@@ -36,6 +36,7 @@ func TestAppendOnlyInlineGrowthSkipsIntermediateDoublingBelowCutoff(t *testing.T
 	mt := &AppendOnly{
 		entries:        make([]appendOnlyEntry, appendOnlyMinInitialEntries),
 		baseEntriesLen: appendOnlyMinInitialEntries,
+		growEntriesLen: appendOnlyMinInitialEntries,
 		ordered:        true,
 		lastIdx:        -1,
 	}
@@ -88,6 +89,22 @@ func TestAppendOnlyInitialEntriesForCapacity(t *testing.T) {
 			t.Fatalf("min clamp entries=%d want=%d", got, appendOnlyMinInitialEntries)
 		}
 	})
+}
+
+func TestAppendOnlyEntryHintDoesNotRaiseInitialCapacityBeyondBudget(t *testing.T) {
+	capacity := appendOnlyMinInitialEntries * appendOnlyEstimatedBytesPerEntryPointer
+	hint := appendOnlyMaxInitialEntries
+
+	m := NewAppendOnlyWithCapacityEstimatedEntryBytesAndHint(capacity, appendOnlyEstimatedBytesPerEntryPointer, hint)
+	if got := len(m.entries); got != appendOnlyMinInitialEntries {
+		t.Fatalf("initial len(entries)=%d want %d", got, appendOnlyMinInitialEntries)
+	}
+	if got := m.baseEntriesLen; got != appendOnlyMinInitialEntries {
+		t.Fatalf("baseEntriesLen=%d want %d", got, appendOnlyMinInitialEntries)
+	}
+	if got := m.growEntriesLen; got != hint {
+		t.Fatalf("growEntriesLen=%d want hint floor %d", got, hint)
+	}
 }
 
 func TestAppendOnlyCRUD(t *testing.T) {
