@@ -75,6 +75,11 @@ func (db *DB) PublishSystemRootIterator(iter iterator.UnsafeIterator) (uint64, e
 	if err != nil {
 		return 0, err
 	}
+	defer func() {
+		if vlogRefDelta != nil {
+			releaseValueLogRefDelta(vlogRefDelta)
+		}
+	}()
 	db.systemRootWarmPublishAttempts.Add(publishStats.warmAttempts)
 	db.systemRootWarmNativeApplyAttempts.Add(publishStats.warmNativeApplyAttempts)
 	db.systemRootWarmPublishRebuildFallbacks.Add(publishStats.warmRebuildFallbacks)
@@ -92,5 +97,6 @@ func (db *DB) PublishSystemRootIterator(iter iterator.UnsafeIterator) (uint64, e
 	if err := db.finalizeCommit(userRoot, newSystemRoot, retired, false, metrics, nil, true, vlogRefDelta, nil, nil); err != nil {
 		return 0, err
 	}
+	vlogRefDelta = nil
 	return newSystemRoot, nil
 }
