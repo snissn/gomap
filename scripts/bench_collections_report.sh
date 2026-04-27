@@ -13,6 +13,7 @@ BATCH_SIZE="${TREEDB_COLLECTION_BENCH_BATCH_SIZE:-8000}"
 DATA_OUTER="${TREEDB_COLLECTION_DATA_OUTER_LEAVES_IN_VLOG:-true}"
 INDEX_OUTER="${TREEDB_COLLECTION_INDEX_OUTER_LEAVES_IN_VLOG:-false}"
 GO_TEST_TAGS="${GO_TEST_TAGS:-}"
+TIMED_CPU_PROFILE="${TREEDB_COLLECTION_TIMED_CPU_PROFILE:-false}"
 STORAGE_POLICY_LABEL="data_outer=${DATA_OUTER},index_outer=${INDEX_OUTER}"
 PATH_LABEL="${TREEDB_COLLECTION_PATH_LABEL:-}"
 
@@ -27,6 +28,13 @@ WORKTREE="$ROOT"
 
 mkdir -p "$OUT_DIR"
 HARNESS_UNAVAILABLE=0
+
+is_true() {
+  case "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" in
+    1|true|yes|y|on) return 0 ;;
+    *) return 1 ;;
+  esac
+}
 
 write_pprof_top() {
   local profile=$1
@@ -59,9 +67,14 @@ cmd+=(
   -benchmem
   -count "$COUNT"
   -json
-  -cpuprofile "$CPU_PROFILE"
   -memprofile "$MEM_PROFILE"
 )
+if is_true "$TIMED_CPU_PROFILE"; then
+  export TREEDB_COLLECTION_TIMED_CPU_PROFILE_PATH="$CPU_PROFILE"
+else
+  unset TREEDB_COLLECTION_TIMED_CPU_PROFILE_PATH
+  cmd+=(-cpuprofile "$CPU_PROFILE")
+fi
 
 if [[ -n "$BENCHTIME" ]]; then
   cmd+=(-benchtime "$BENCHTIME")
@@ -72,6 +85,7 @@ echo "benchmark engine: $BENCH_ENGINE"
 echo "collection batch size: $BATCH_SIZE"
 echo "storage policy: $STORAGE_POLICY_LABEL"
 echo "execution path: $PATH_LABEL"
+echo "cpu profile mode: $(is_true "$TIMED_CPU_PROFILE" && echo "timed benchmark window" || echo "whole go test process")"
 if [[ -n "$GO_TEST_TAGS" ]]; then
   echo "go test tags: $GO_TEST_TAGS"
 fi
@@ -98,6 +112,11 @@ if [[ ! -d "$ROOT/TreeDB/collections" ]]; then
 else
   TREEDB_COLLECTION_BENCH_ENGINE="$BENCH_ENGINE" TREEDB_COLLECTION_BENCH_BATCH_SIZE="$BATCH_SIZE" TREEDB_COLLECTION_DATA_OUTER_LEAVES_IN_VLOG="$DATA_OUTER" TREEDB_COLLECTION_INDEX_OUTER_LEAVES_IN_VLOG="$INDEX_OUTER" GOWORK=off "${cmd[@]}" | tee "$RAW_JSON"
 
+  if is_true "$TIMED_CPU_PROFILE" && [[ ! -s "$CPU_PROFILE" ]]; then
+    echo "timed CPU profile was requested but no profile was written to $CPU_PROFILE; use a timed-profile benchmark" >&2
+    exit 1
+  fi
+
   write_pprof_top "$CPU_PROFILE" "$CPU_TOP" -top
   write_pprof_top "$MEM_PROFILE" "$MEM_TOP" -top -sample_index=alloc_space
 
@@ -119,6 +138,7 @@ if [[ "$HARNESS_UNAVAILABLE" == "1" ]]; then
   ARTIFACT_LINES="- benchmark harness: unavailable (N/A before R0 harness bring-up)
 - raw benchmark json: unavailable
 - cpu profile: unavailable
+- cpu profile mode: unavailable
 - memory profile: unavailable
 - cpu profile top: unavailable
 - allocation profile top: unavailable
@@ -128,6 +148,7 @@ if [[ "$HARNESS_UNAVAILABLE" == "1" ]]; then
 else
   ARTIFACT_LINES="- raw benchmark json: \`$RAW_JSON\`
 - cpu profile: \`$CPU_PROFILE\`
+- cpu profile mode: \`$(is_true "$TIMED_CPU_PROFILE" && echo "timed benchmark window" || echo "whole go test process")\`
 - memory profile: \`$MEM_PROFILE\`
 - cpu profile top: \`$CPU_TOP\`
 - allocation profile top: \`$MEM_TOP\`
@@ -163,10 +184,13 @@ $ARTIFACT_LINES
 - oracle-path override: \`TREEDB_COLLECTION_PATH_LABEL=oracle scripts/bench_collections_report.sh\`
 - production matrix runner: \`TREEDB_COLLECTION_PATH_LABEL=native-fastpath scripts/bench_collections_matrix.sh\`
 - sqlite comparison override: \`CGO_ENABLED=1 TREEDB_COLLECTION_PATH_LABEL=sqlite TREEDB_COLLECTION_BENCH_ENGINE=sqlite_wal_normal GO_TEST_TAGS=sqlite_bench BENCH_REGEX='BenchmarkSQLite(InsertBatchWithSecondaryIndexes|InsertBatchCheckpointWithSecondaryIndexes)$' scripts/bench_collections_report.sh\`
+- timed CPU profile override: \`TREEDB_COLLECTION_TIMED_CPU_PROFILE=true BENCH_REGEX='^BenchmarkCollectionTimedProfileInsertBatchWithSecondaryIndexes$' BENCHTIME=240000x COUNT=1 scripts/bench_collections_report.sh\`
 
 ## Profile Caveat
 
 The \`go test\` CPU and allocation profiles cover the whole benchmark process. Timed benchmark rows remain the source of truth for \`ns/op\`, \`B/op\`, and \`allocs/op\`; the pprof top files are coarse attribution aids and can include setup or off-timer document generation work.
+
+When \`TREEDB_COLLECTION_TIMED_CPU_PROFILE=true\` is used with one of the \`BenchmarkCollectionTimedProfile...\` benchmarks, \`collections_cpu.pprof\` is started after benchmark setup/document-batch generation and stopped before post-benchmark reporting. The script passes the concrete path through \`TREEDB_COLLECTION_TIMED_CPU_PROFILE_PATH\`. That mode is intended for CPU attribution only; allocation accounting still comes from the timed benchmark row.
 EOF
 
 echo "markdown report: $OUT_DIR/collections_report.md"
