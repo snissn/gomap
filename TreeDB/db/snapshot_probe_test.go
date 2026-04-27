@@ -239,6 +239,53 @@ func TestSnapshot_HasAnySortedAtRootRecordsPerItemFallback(t *testing.T) {
 	}
 }
 
+func TestSnapshot_HasAnySortedAtRootFallbackDedupesDuplicateKeys(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	_, rootIDs, err := db.PublishOrderedRootGroup(nil, []OrderedRootPublishInput{{
+		Iter: mustFrozenSystemMemtable(t, systemRangeKVs(1100, nil)...).NewIterator(nil, nil),
+	}})
+	if err != nil {
+		t.Fatalf("publish root: %v", err)
+	}
+	if len(rootIDs) != 1 {
+		t.Fatalf("root IDs len=%d want 1", len(rootIDs))
+	}
+
+	before := db.rootProbeStatsSnapshot()
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("AcquireSnapshot returned nil")
+	}
+	defer func() { _ = snap.Close() }()
+
+	got, err := snap.HasAnySortedAtRoot(rootIDs[0], [][]byte{
+		[]byte("sys/0000/missing"),
+		[]byte("sys/1050/missing"),
+		[]byte("sys/1050/missing"),
+		[]byte("sys/1051"),
+	})
+	if err != nil {
+		t.Fatalf("HasAnySortedAtRoot: %v", err)
+	}
+	if !got {
+		t.Fatalf("HasAnySortedAtRoot got false want true")
+	}
+
+	after := db.rootProbeStatsSnapshot()
+	if delta := after.keyFallbackCalls - before.keyFallbackCalls; delta != 1 {
+		t.Fatalf("key fallback calls delta=%d want 1", delta)
+	}
+	if delta := after.keyFallbackItems - before.keyFallbackItems; delta != 2 {
+		t.Fatalf("key fallback items delta=%d want 2", delta)
+	}
+}
+
 func TestSnapshotRootProbesSkipTombstones(t *testing.T) {
 	dir := t.TempDir()
 	db, err := Open(Options{Dir: dir})
