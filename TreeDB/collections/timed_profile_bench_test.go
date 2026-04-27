@@ -117,9 +117,9 @@ func benchmarkTimedProfileIndexedInsertBatch(b *testing.B, checkpoint bool) {
 			benchmarkSyncBoundary(b, backend)
 		}
 	}
-	b.StopTimer()
 	stopProfile()
 	profileActive = false
+	b.StopTimer()
 	benchmarkReportNativeProbeFallbackDeltas(b, backend, startKeyFallback, startPrefixFallback)
 }
 
