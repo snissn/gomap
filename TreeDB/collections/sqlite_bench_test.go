@@ -61,8 +61,10 @@ func openBenchmarkSQLiteDB(tb testing.TB, name string) *sql.DB {
 	return db
 }
 
-func benchmarkSQLiteDocumentBatch(start, count int) ([]string, []string) {
-	rawIDs, rawDocs := benchmarkDocumentBatch(start, count, true)
+func benchmarkSQLiteDocumentBatch(tb testing.TB, start, count int) ([]string, []string) {
+	tb.Helper()
+
+	rawIDs, rawDocs := benchmarkDocumentBatch(tb, start, count, true)
 	ids := make([]string, count)
 	docs := make([]string, count)
 	for i := range rawIDs {
@@ -117,7 +119,7 @@ func checkpointSQLiteWAL(tb testing.TB, db *sql.DB) {
 
 func TestSQLiteBenchmarkSchemaExtractsIndexedFields(t *testing.T) {
 	db := openBenchmarkSQLiteDB(t, "schema_extract")
-	ids, docs := benchmarkSQLiteDocumentBatch(0, 1)
+	ids, docs := benchmarkSQLiteDocumentBatch(t, 0, 1)
 	insertSQLiteDocumentBatch(t, db, ids, docs)
 
 	var email, city string
@@ -145,7 +147,7 @@ func BenchmarkSQLiteInsertBatchWithSecondaryIndexes(b *testing.B) {
 		if remaining := b.N - inserted; remaining < batchSize {
 			batchSize = remaining
 		}
-		ids, docs := benchmarkSQLiteDocumentBatch(inserted, batchSize)
+		ids, docs := benchmarkSQLiteDocumentBatch(b, inserted, batchSize)
 		b.StartTimer()
 
 		insertSQLiteDocumentBatch(b, db, ids, docs)
@@ -168,7 +170,7 @@ func BenchmarkSQLiteInsertBatchCheckpointWithSecondaryIndexes(b *testing.B) {
 		if remaining := b.N - inserted; remaining < batchSize {
 			batchSize = remaining
 		}
-		ids, docs := benchmarkSQLiteDocumentBatch(inserted, batchSize)
+		ids, docs := benchmarkSQLiteDocumentBatch(b, inserted, batchSize)
 		b.StartTimer()
 
 		insertStart := time.Now()
