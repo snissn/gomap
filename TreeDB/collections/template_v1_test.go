@@ -112,6 +112,38 @@ func TestTemplateV1CollectionInsertBatchIndexesAndTemplateRoot(t *testing.T) {
 	}
 }
 
+func TestTemplateV1UniqueIndexSkipsNullValues(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatTemplateV1,
+		},
+		Indexes: []IndexDefinition{{Name: "email", Field: "email", Unique: true}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+
+	doc1 := mustTemplateV1Document(t, []string{"email", "city"}, []any{nil, "hnl"})
+	doc2 := mustTemplateV1Document(t, []string{"email", "city"}, []any{nil, "sea"})
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1"), []byte("u2")},
+		[][]byte{doc1, doc2},
+	); err != nil {
+		t.Fatalf("insert null unique values: %v", err)
+	}
+}
+
 func TestTemplateV1CollectionReopenFindAndDelete(t *testing.T) {
 	dir := t.TempDir()
 	d, err := backenddb.Open(backenddb.Options{Dir: dir})

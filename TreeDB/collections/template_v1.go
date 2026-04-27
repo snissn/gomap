@@ -632,6 +632,9 @@ func templateV1OrderedIndexStateForDocumentWithArena(document []byte, runtimes [
 		if !found || len(value) == 0 {
 			continue
 		}
+		if value[0] == templateV1KindNull {
+			continue
+		}
 		if value[0] == templateV1KindArray {
 			if !runtime.def.multiKey && !opts.allowArrayValuesInIndex {
 				return nil, errors.New("collections: array value not allowed for index")
