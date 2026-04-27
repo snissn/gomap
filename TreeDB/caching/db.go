@@ -20415,7 +20415,11 @@ func (db *DB) rotateMemtableLockedWithCapacity(triggerFlush bool, newCapacity in
 			return err
 		}
 		shard.mem = mt
-		db.promoteRootDomainMutableLocked(i, oldMem, mt)
+		var sealed memtable.Table
+		if enqueueShard {
+			sealed = oldMem
+		}
+		db.promoteRootDomainMutableLocked(i, sealed, mt)
 		shard.rng = keyRange{}
 		shard.bytes = 0
 		if debugRotate {
@@ -20615,7 +20619,11 @@ func (db *DB) rotateMutableShardsLocked(newCapacity int, triggerFlush bool) erro
 			return err
 		}
 		shard.mem = mt
-		db.promoteRootDomainMutableLocked(i, oldMem, mt)
+		var sealed memtable.Table
+		if enqueueShard {
+			sealed = oldMem
+		}
+		db.promoteRootDomainMutableLocked(i, sealed, mt)
 		shard.rng = keyRange{}
 		shard.bytes = 0
 		if debugRotate {

@@ -86,10 +86,15 @@ func (db *DB) resyncRootDomainQueuedRunsLocked() {
 		return
 	}
 	if len(db.queueShardIDs) != len(db.queue) {
-		for i := range db.rootPointStates {
-			db.rootPointStates[i].immutables = append(db.rootPointStates[i].immutables, db.queue...)
+		for _, mt := range db.queue {
+			if mt == nil {
+				continue
+			}
+			for i := range db.rootPointStates {
+				db.rootPointStates[i].immutables = append(db.rootPointStates[i].immutables, mt)
+			}
+			db.rootIteratorState.immutables = append(db.rootIteratorState.immutables, mt)
 		}
-		db.rootIteratorState.immutables = append(db.rootIteratorState.immutables, db.queue...)
 		return
 	}
 	for idx, mt := range db.queue {
