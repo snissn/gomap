@@ -23,6 +23,16 @@ const (
 	orderedRootPublishPlanWarmNativeApply
 )
 
+// orderedRootDeltaBatchInlineThreshold is intentionally not the page/value-log
+// placement threshold. These batches are transient root-local mutation streams
+// consumed by zipper.Apply; they do not decide durable value placement. Large
+// collection documents must remain valid here because the destination ordered
+// root policy decides whether rebuilt leaves live in pager pages or value-log
+// LeafRefs. Pointer entries still flow through SetPointer, and non-stable inline
+// iterators may copy values into this short-lived batch, so callers should keep
+// delta streams bounded rather than using this as a bulk-load accumulator.
+var orderedRootDeltaBatchInlineThreshold = int(^uint(0) >> 1)
+
 type orderedRootPublishStats struct {
 	warmAttempts            uint64
 	warmNativeApplyAttempts uint64
@@ -69,6 +79,28 @@ type OrderedRootDeltaPublishInput struct {
 	BaseRoot      uint64
 	Iter          iterator.UnsafeIterator
 	StoragePolicy OrderedRootStoragePolicy
+}
+
+func closeUnconsumedOrderedRootPublishIterators(ordered []OrderedRootPublishInput, consumed []bool) {
+	for idx := range ordered {
+		if idx < len(consumed) && consumed[idx] {
+			continue
+		}
+		if ordered[idx].Iter != nil {
+			_ = ordered[idx].Iter.Close()
+		}
+	}
+}
+
+func closeUnconsumedOrderedRootDeltaPublishIterators(ordered []OrderedRootDeltaPublishInput, consumed []bool) {
+	for idx := range ordered {
+		if idx < len(consumed) && consumed[idx] {
+			continue
+		}
+		if ordered[idx].Iter != nil {
+			_ = ordered[idx].Iter.Close()
+		}
+	}
 }
 
 // OrderedRootGroupSystemBuilder builds a target system-root iterator after the
@@ -213,7 +245,7 @@ func orderedRootBatchPut(delta *batch.Batch, iter iterator.UnsafeIterator, borro
 }
 
 func orderedRootDeltaBatchFromIterator(iter iterator.UnsafeIterator) (*batch.Batch, error) {
-	delta := batch.New(nil, page.DefaultInlineThreshold)
+	delta := batch.New(nil, orderedRootDeltaBatchInlineThreshold)
 	if hint, ok := iter.(orderedRootLenHintIterator); ok {
 		delta.Reserve(hint.Len())
 	}
@@ -306,7 +338,7 @@ func (db *DB) publishOrderedRootDeltaIterator(baseRoot uint64, iter iterator.Uns
 }
 
 func buildOrderedRootDeltaBatch(baseIter, targetIter iterator.UnsafeIterator, trackRefs bool) (*batch.Batch, int, *valueLogRefDelta, error) {
-	delta := batch.New(nil, page.DefaultInlineThreshold)
+	delta := batch.New(nil, orderedRootDeltaBatchInlineThreshold)
 	baseValid := baseIter.Valid()
 	targetValid := targetIter.Valid()
 	deltaOps := 0
@@ -691,6 +723,8 @@ func (db *DB) PublishOrderedRootDeltaGroupWithSystemBuilder(ordered []OrderedRoo
 
 	systemOpts := systemRootOrderedPublishOptions(db)
 	rootIDs := make([]uint64, len(ordered))
+	orderedConsumed := make([]bool, len(ordered))
+	defer closeUnconsumedOrderedRootDeltaPublishIterators(ordered, orderedConsumed)
 	var retired []uint64
 	var merged adaptive.Metrics
 	for idx := range ordered {
@@ -698,6 +732,7 @@ func (db *DB) PublishOrderedRootDeltaGroupWithSystemBuilder(ordered []OrderedRoo
 		if err != nil {
 			return 0, nil, err
 		}
+		orderedConsumed[idx] = true
 		rootID, rootRetired, metrics, err := db.publishOrderedRootDeltaIterator(ordered[idx].BaseRoot, ordered[idx].Iter, opts)
 		if err != nil {
 			return 0, nil, err
@@ -722,6 +757,15 @@ func (db *DB) PublishOrderedRootDeltaGroupWithSystemBuilder(ordered []OrderedRoo
 	retired = append(retired, rootRetired...)
 	mergeOrderedRootPublishMetrics(&merged, metrics)
 	vlogRefDelta := refDelta
+	if len(ordered) > 0 {
+		// Non-system roots were applied from deltas, so this commit has no
+		// exact value-log ref delta for their pointer changes. Keep GC
+		// reachability conservative by invalidating the tracker after commit.
+		if vlogRefDelta != nil {
+			releaseValueLogRefDelta(vlogRefDelta)
+		}
+		vlogRefDelta = nil
+	}
 	defer func() {
 		if vlogRefDelta != nil {
 			releaseValueLogRefDelta(vlogRefDelta)
@@ -736,7 +780,7 @@ func (db *DB) PublishOrderedRootDeltaGroupWithSystemBuilder(ordered []OrderedRoo
 		return 0, nil, errors.New("concurrent modification detected during ordered root group publish")
 	}
 
-	if vlogRefDelta == nil {
+	if len(ordered) == 0 && vlogRefDelta == nil {
 		vlogRefDelta = db.newNoopValueLogRefDeltaIfTrackable(baseSeq)
 	}
 	if err := db.finalizeCommit(userRoot, newSystemRoot, retired, false, merged, nil, true, vlogRefDelta, nil, nil); err != nil {
@@ -771,11 +815,12 @@ func (db *DB) PublishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered []Order
 	db.mu.RLock()
 	userRoot := db.meta.UserRootPageID
 	baseSystemRoot := db.meta.SystemRootPageID
-	baseSeq := db.meta.CommitSeq
 	db.mu.RUnlock()
 
 	systemOpts := systemRootOrderedPublishOptions(db)
 	rootIDs := make([]uint64, len(ordered))
+	orderedConsumed := make([]bool, len(ordered))
+	defer closeUnconsumedOrderedRootDeltaPublishIterators(ordered, orderedConsumed)
 	var retired []uint64
 	var merged adaptive.Metrics
 	for idx := range ordered {
@@ -783,6 +828,7 @@ func (db *DB) PublishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered []Order
 		if err != nil {
 			return 0, nil, err
 		}
+		orderedConsumed[idx] = true
 		rootID, rootRetired, metrics, err := db.publishOrderedRootDeltaIterator(ordered[idx].BaseRoot, ordered[idx].Iter, opts)
 		if err != nil {
 			return 0, nil, err
@@ -815,16 +861,13 @@ func (db *DB) PublishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered []Order
 		return 0, nil, errors.New("concurrent modification detected during ordered root group publish")
 	}
 
-	vlogRefDelta := db.newNoopValueLogRefDeltaIfTrackable(baseSeq)
-	defer func() {
-		if vlogRefDelta != nil {
-			releaseValueLogRefDelta(vlogRefDelta)
-		}
-	}()
+	// The system root was applied as a delta, so we do not have an exact
+	// value-log ref delta for system-root pointer changes. Passing nil keeps the
+	// tracker conservative by invalidating it after commit.
+	var vlogRefDelta *valueLogRefDelta
 	if err := db.finalizeCommit(userRoot, newSystemRoot, retired, false, merged, nil, true, vlogRefDelta, nil, nil); err != nil {
 		return 0, nil, err
 	}
-	vlogRefDelta = nil
 	return newSystemRoot, rootIDs, nil
 }
 
@@ -877,11 +920,14 @@ func (db *DB) publishOrderedRootGroup(systemIter iterator.UnsafeIterator, ordere
 	}
 
 	rootIDs := make([]uint64, len(ordered))
+	orderedConsumed := make([]bool, len(ordered))
+	defer closeUnconsumedOrderedRootPublishIterators(ordered, orderedConsumed)
 	for idx := range ordered {
 		opts, err := db.orderedRootPublishOptionsForPolicy(ordered[idx].StoragePolicy)
 		if err != nil {
 			return 0, nil, err
 		}
+		orderedConsumed[idx] = true
 		rootID, rootRetired, metrics, _, _, err := db.publishOrderedRootIterator(ordered[idx].BaseRoot, ordered[idx].Iter, opts, false)
 		if err != nil {
 			return 0, nil, err
