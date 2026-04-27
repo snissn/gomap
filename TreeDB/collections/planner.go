@@ -194,9 +194,13 @@ func (p insertBatchPlanner) planInsertBatchWithPreflight(ids, documents [][]byte
 
 func cloneBatchDocumentIDs(ids [][]byte) ([][]byte, error) {
 	total := 0
+	maxInt := int(^uint(0) >> 1)
 	for _, id := range ids {
 		if len(id) == 0 {
 			return nil, errors.New("collections: document id cannot be empty")
+		}
+		if len(id) > maxInt-total {
+			return nil, errors.New("collections: total document id bytes exceed maximum supported size")
 		}
 		total += len(id)
 	}

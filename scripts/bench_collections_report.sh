@@ -135,7 +135,7 @@ $ARTIFACT_LINES
 - batch-size override: \`TREEDB_COLLECTION_BENCH_BATCH_SIZE=8000 scripts/bench_collections_report.sh\`
 - oracle-path override: \`TREEDB_COLLECTION_PATH_LABEL=oracle scripts/bench_collections_report.sh\`
 - production matrix runner: \`TREEDB_COLLECTION_PATH_LABEL=native-fastpath scripts/bench_collections_matrix.sh\`
-- sqlite comparison override: \`TREEDB_COLLECTION_PATH_LABEL=sqlite TREEDB_COLLECTION_BENCH_ENGINE=sqlite_wal_normal GO_TEST_TAGS=sqlite_bench BENCH_REGEX='BenchmarkSQLite(InsertBatchWithSecondaryIndexes|InsertBatchCheckpointWithSecondaryIndexes)$' scripts/bench_collections_report.sh\`
+- sqlite comparison override: \`CGO_ENABLED=1 TREEDB_COLLECTION_PATH_LABEL=sqlite TREEDB_COLLECTION_BENCH_ENGINE=sqlite_wal_normal GO_TEST_TAGS=sqlite_bench BENCH_REGEX='BenchmarkSQLite(InsertBatchWithSecondaryIndexes|InsertBatchCheckpointWithSecondaryIndexes)$' scripts/bench_collections_report.sh\`
 EOF
 
 echo "markdown report: $OUT_DIR/collections_report.md"

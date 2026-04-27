@@ -96,6 +96,10 @@ if is_true "$INCLUDE_SQLITE"; then
   echo "sqlite cell: $SQLITE_CELL"
   echo "sqlite benchmark regex: $SQLITE_BENCH_REGEX"
   echo "sqlite CGO_ENABLED: $SQLITE_CGO_ENABLED"
+  if ! is_true "$SQLITE_CGO_ENABLED"; then
+    echo "SQLite comparison requires CGO because sqlite benchmarks use the sqlite_bench && cgo build tags; set TREEDB_COLLECTION_SQLITE_CGO_ENABLED=1 or TREEDB_COLLECTION_INCLUDE_SQLITE=false" >&2
+    exit 2
+  fi
   if ! command -v cc >/dev/null 2>&1 && ! command -v gcc >/dev/null 2>&1 && ! command -v clang >/dev/null 2>&1; then
     echo "SQLite comparison requires a C compiler for github.com/mattn/go-sqlite3; install cc/gcc/clang or set TREEDB_COLLECTION_INCLUDE_SQLITE=false" >&2
     exit 2
