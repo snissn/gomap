@@ -398,42 +398,12 @@ func (db *DB) publishInstalledRootSetLocked(set *publishedRootSet) error {
 	if db == nil {
 		return nil
 	}
-	cloned := clonePublishedRootSet(set)
-	if err := db.validatePublishedRootSetLocked(cloned); err != nil {
-		return err
-	}
-	group := db.buildRootPublishGroupLocked(cloned)
-	if db.rootPublishHook != nil {
-		if err := db.rootPublishHook(group); err != nil {
-			db.rootPublishStats.publishFailures.Add(1)
-			db.rootPublishRetryPending = true
-			return err
-		}
-	}
-	if publisher, ok := db.backend.(backendSystemRootPublisher); ok && rootDomainSnapshotNeedsPublish(group.system) {
-		iter, err := group.system.publishIterator(nil, nil)
-		if err != nil {
-			db.rootPublishStats.publishFailures.Add(1)
-			db.rootPublishRetryPending = true
-			return err
-		}
-		newSystemRootID, err := publisher.PublishSystemRootIterator(iter)
-		if err != nil {
-			db.rootPublishStats.publishFailures.Add(1)
-			db.rootPublishRetryPending = true
-			return err
-		}
-		db.rootPublishStats.nativeSystemPublishes.Add(1)
-		group.systemRootPageID = newSystemRootID
-		cloned.system.rootID = newSystemRootID
-	}
-	db.applyPublishedRootSetLocked(cloned)
-	db.clearDirtyRootPublishGroupLocked()
-	if db.rootPublishRetryPending {
-		db.rootPublishStats.retrySuccesses.Add(1)
-		db.rootPublishRetryPending = false
-	}
-	return nil
+	// Keep the locked-call contract for tests/internal callers, but run hooks and
+	// backend publication through the out-of-lock path used by production flushes.
+	db.mu.Unlock()
+	err := db.publishInstalledRootSet(set)
+	db.mu.Lock()
+	return err
 }
 
 func (db *DB) publishInstalledRootSet(set *publishedRootSet) error {
