@@ -159,11 +159,15 @@ func (p insertBatchPlanner) planInsertBatchWithPreflight(ids, documents [][]byte
 	if err != nil {
 		return nil, err
 	}
-	uniqueProbeRuns, err := buildUniqueProbeRuns(uniqueProbes)
-	if err != nil {
+	sortUniqueProbeCandidates(uniqueProbes)
+	if err := rejectDuplicateUniqueProbeCandidates(uniqueProbes); err != nil {
 		return nil, err
 	}
-	if err := preflight.checkDocumentConflicts(items, primaryOrder); err != nil {
+	if err := preflight.checkDocumentConflicts(items, primaryOrder, resultIDs); err != nil {
+		return nil, err
+	}
+	uniqueProbeRuns, err := buildUniqueProbeRunsForPreflight(uniqueProbes, preflight)
+	if err != nil {
 		return nil, err
 	}
 	if err := preflight.checkUniqueConflicts(uniqueProbeRuns); err != nil {
@@ -188,13 +192,16 @@ func (p insertBatchPlanner) planInsertBatchWithPreflight(ids, documents [][]byte
 	return plan, nil
 }
 
-func (p insertBatchPreflight) checkDocumentConflicts(items []insertBatchItem, order []int) error {
+func (p insertBatchPreflight) checkDocumentConflicts(items []insertBatchItem, order []int, sortedIDs [][]byte) error {
 	if p.snapshot == nil || p.primaryRootID == 0 {
 		return nil
 	}
-	keys := make([][]byte, len(items))
-	for i := range items {
-		keys[i] = items[orderedItemIndex(order, i)].id
+	keys := sortedIDs
+	if order != nil || len(keys) != len(items) {
+		keys = make([][]byte, len(items))
+		for i := range items {
+			keys[i] = items[orderedItemIndex(order, i)].id
+		}
 	}
 	exists, err := p.snapshot.HasAnySortedAtRoot(p.primaryRootID, keys)
 	if err != nil {
@@ -290,10 +297,7 @@ func (p insertBatchPlanner) planIndexStateAndUniqueProbes(items []insertBatchIte
 	return uniqueProbes, nil
 }
 
-func buildUniqueProbeRuns(candidates []uniqueProbeCandidate) ([]collectionUniqueProbeRun, error) {
-	if len(candidates) == 0 {
-		return nil, nil
-	}
+func sortUniqueProbeCandidates(candidates []uniqueProbeCandidate) {
 	sort.Slice(candidates, func(i, j int) bool {
 		if candidates[i].indexName != candidates[j].indexName {
 			return candidates[i].indexName < candidates[j].indexName
@@ -303,7 +307,42 @@ func buildUniqueProbeRuns(candidates []uniqueProbeCandidate) ([]collectionUnique
 		}
 		return bytes.Compare(candidates[i].documentID, candidates[j].documentID) < 0
 	})
+}
 
+func rejectDuplicateUniqueProbeCandidates(candidates []uniqueProbeCandidate) error {
+	for i := 1; i < len(candidates); i++ {
+		candidate := &candidates[i]
+		prev := &candidates[i-1]
+		if candidate.indexName == prev.indexName &&
+			bytes.Equal(candidate.encodedValue, prev.encodedValue) &&
+			!bytes.Equal(candidate.documentID, prev.documentID) {
+			return fmt.Errorf("collections: unique index %q conflict", candidate.indexName)
+		}
+	}
+	return nil
+}
+
+func buildUniqueProbeRuns(candidates []uniqueProbeCandidate) ([]collectionUniqueProbeRun, error) {
+	sortUniqueProbeCandidates(candidates)
+	if err := rejectDuplicateUniqueProbeCandidates(candidates); err != nil {
+		return nil, err
+	}
+	return buildUniqueProbeRunsFromSorted(candidates, nil)
+}
+
+func buildUniqueProbeRunsForPreflight(candidates []uniqueProbeCandidate, preflight insertBatchPreflight) ([]collectionUniqueProbeRun, error) {
+	if preflight.snapshot == nil || len(preflight.uniqueIndexRootIDs) == 0 {
+		return nil, nil
+	}
+	return buildUniqueProbeRunsFromSorted(candidates, func(indexName string) bool {
+		return preflight.uniqueIndexRootIDs[indexName] != 0
+	})
+}
+
+func buildUniqueProbeRunsFromSorted(candidates []uniqueProbeCandidate, includeIndex func(indexName string) bool) ([]collectionUniqueProbeRun, error) {
+	if len(candidates) == 0 {
+		return nil, nil
+	}
 	runs := make([]collectionUniqueProbeRun, 0)
 	for start := 0; start < len(candidates); {
 		indexName := candidates[start].indexName
@@ -311,17 +350,16 @@ func buildUniqueProbeRuns(candidates []uniqueProbeCandidate) ([]collectionUnique
 		for end < len(candidates) && candidates[end].indexName == indexName {
 			end++
 		}
+		if includeIndex != nil && !includeIndex(indexName) {
+			start = end
+			continue
+		}
 		run := collectionUniqueProbeRun{
 			indexName: indexName,
 			prefixes:  make([][]byte, 0, end-start),
 		}
 		for i := start; i < end; i++ {
 			candidate := &candidates[i]
-			if i > start &&
-				bytes.Equal(candidate.encodedValue, candidates[i-1].encodedValue) &&
-				!bytes.Equal(candidate.documentID, candidates[i-1].documentID) {
-				return nil, fmt.Errorf("collections: unique index %q conflict", candidate.indexName)
-			}
 			if len(run.prefixes) == 0 || !bytes.Equal(candidate.encodedValue, candidates[i-1].encodedValue) {
 				prefix, err := indexValuePrefix(candidate.encodedValue)
 				if err != nil {
