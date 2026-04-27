@@ -12,6 +12,9 @@ COUNT="${COUNT:-1}"
 BENCHTIME="${BENCHTIME:-1s}"
 BATCH_SIZE="${TREEDB_COLLECTION_BENCH_BATCH_SIZE:-8000}"
 PAGER_SYNC_CONCURRENCY="${TREEDB_COLLECTION_PAGER_SYNC_CONCURRENCY:-}"
+if [[ "$PAGER_SYNC_CONCURRENCY" == "0" ]]; then
+  PAGER_SYNC_CONCURRENCY=""
+fi
 BENCH_REGEX="${BENCH_REGEX:-Benchmark(CollectionInsertBatchWithSecondaryIndexes|CollectionInsertBatchCheckpointWithSecondaryIndexes|CollectionOverheadIndexStateJSONExtraction|CollectionOverheadPlanIndexedPrecomputedState)$}"
 INCLUDE_SQLITE="${TREEDB_COLLECTION_INCLUDE_SQLITE:-false}"
 SQLITE_ENGINE="${TREEDB_COLLECTION_SQLITE_ENGINE:-sqlite_wal_normal}"
