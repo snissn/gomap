@@ -18,8 +18,21 @@ if [[ "$PAGER_SYNC_CONCURRENCY" == "0" ]]; then
   PAGER_SYNC_CONCURRENCY=""
 fi
 PAGER_SYNC_CONCURRENCY_LABEL="${PAGER_SYNC_CONCURRENCY:-profile/default}"
-VLOG_DICT_TRAINER="$(printf '%s' "${TREEDB_COLLECTION_VLOG_DICT_TRAINER:-}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
-VLOG_DICT_TRAINER_LABEL="${VLOG_DICT_TRAINER:-enabled}"
+VLOG_DICT_TRAINER_RAW="$(printf '%s' "${TREEDB_COLLECTION_VLOG_DICT_TRAINER:-}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+case "$(printf '%s' "$VLOG_DICT_TRAINER_RAW" | tr '[:upper:]' '[:lower:]')" in
+  ""|default|profile/default|enabled|on|true|1)
+    VLOG_DICT_TRAINER="enabled"
+    VLOG_DICT_TRAINER_LABEL="enabled"
+    ;;
+  disabled|off|false|0)
+    VLOG_DICT_TRAINER="disabled"
+    VLOG_DICT_TRAINER_LABEL="disabled"
+    ;;
+  *)
+    VLOG_DICT_TRAINER="$VLOG_DICT_TRAINER_RAW"
+    VLOG_DICT_TRAINER_LABEL="$VLOG_DICT_TRAINER_RAW"
+    ;;
+esac
 BENCH_REGEX="${BENCH_REGEX:-Benchmark(CollectionInsertBatchWithSecondaryIndexes|CollectionInsertBatchCheckpointWithSecondaryIndexes|CollectionOverheadIndexStateJSONExtraction|CollectionOverheadPlanIndexedPrecomputedState)$}"
 INCLUDE_SQLITE="${TREEDB_COLLECTION_INCLUDE_SQLITE:-false}"
 SQLITE_ENGINE="${TREEDB_COLLECTION_SQLITE_ENGINE:-sqlite_wal_normal}"
@@ -120,7 +133,11 @@ echo "benchmark time: $BENCHTIME"
 echo "batch size: $BATCH_SIZE"
 echo "pager chunk size: $CHUNK_SIZE_LABEL"
 echo "pager sync concurrency: $PAGER_SYNC_CONCURRENCY_LABEL"
-echo "value-log dict trainer: $VLOG_DICT_TRAINER_LABEL"
+if [[ "$MATRIX" == "trainer" ]]; then
+  echo "default value-log dict trainer: mixed(enabled,disabled)"
+else
+  echo "default value-log dict trainer: $VLOG_DICT_TRAINER_LABEL"
+fi
 echo "profile bench captures: $PROFILE_BENCHES"
 if is_true "$PROFILE_BENCHES"; then
   echo "profile benchmark list: $PROFILE_BENCH_LIST"
@@ -375,7 +392,7 @@ cat >"$SUMMARY_MD" <<EOF
 - collection batch size: \`$BATCH_SIZE\`
 - pager chunk size: \`$CHUNK_SIZE_LABEL\`
 - pager sync concurrency: \`$PAGER_SYNC_CONCURRENCY_LABEL\`
-- value-log dict trainer: \`$VLOG_DICT_TRAINER_LABEL\`
+- default value-log dict trainer: \`$(if [[ "$MATRIX" == "trainer" ]]; then echo "mixed(enabled,disabled)"; else echo "$VLOG_DICT_TRAINER_LABEL"; fi)\`
 - focused profile captures: \`$PROFILE_BENCHES\`
 - focused profile count: \`$PROFILE_COUNT\`
 - focused profile benchmark time: \`$PROFILE_BENCHTIME\`

@@ -19,8 +19,21 @@ if [[ "$PAGER_SYNC_CONCURRENCY" == "0" ]]; then
   PAGER_SYNC_CONCURRENCY=""
 fi
 PAGER_SYNC_CONCURRENCY_LABEL="${PAGER_SYNC_CONCURRENCY:-profile/default}"
-VLOG_DICT_TRAINER="$(printf '%s' "${TREEDB_COLLECTION_VLOG_DICT_TRAINER:-}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
-VLOG_DICT_TRAINER_LABEL="${VLOG_DICT_TRAINER:-enabled}"
+VLOG_DICT_TRAINER_RAW="$(printf '%s' "${TREEDB_COLLECTION_VLOG_DICT_TRAINER:-}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+case "$(printf '%s' "$VLOG_DICT_TRAINER_RAW" | tr '[:upper:]' '[:lower:]')" in
+  ""|default|profile/default|enabled|on|true|1)
+    VLOG_DICT_TRAINER="enabled"
+    VLOG_DICT_TRAINER_LABEL="enabled"
+    ;;
+  disabled|off|false|0)
+    VLOG_DICT_TRAINER="disabled"
+    VLOG_DICT_TRAINER_LABEL="disabled"
+    ;;
+  *)
+    VLOG_DICT_TRAINER="$VLOG_DICT_TRAINER_RAW"
+    VLOG_DICT_TRAINER_LABEL="$VLOG_DICT_TRAINER_RAW"
+    ;;
+esac
 if [[ "$DATA_OUTER" == "-" && "$INDEX_OUTER" == "-" ]]; then
   CHUNK_SIZE_LABEL="-"
   PAGER_SYNC_CONCURRENCY_LABEL="-"

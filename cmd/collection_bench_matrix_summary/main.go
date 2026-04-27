@@ -180,7 +180,7 @@ func readMatrixIndex(path string) ([]matrixRow, error) {
 		if len(record) == 0 || strings.TrimSpace(record[0]) == "" {
 			continue
 		}
-		vlogDictTrainer := "unknown"
+		vlogDictTrainer := "enabled"
 		if idx, ok := header["vlog_dict_trainer"]; ok {
 			vlogDictTrainer = field(record, idx)
 		}
