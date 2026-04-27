@@ -64,6 +64,9 @@ func TestApplyProfile_FastSetsPolicyBools(t *testing.T) {
 	if opts.PagerSyncConcurrency != 4 {
 		t.Fatalf("expected PagerSyncConcurrency=4 for fast profile, got %d", opts.PagerSyncConcurrency)
 	}
+	if opts.ChunkSize != fastProfileChunkSize {
+		t.Fatalf("expected ChunkSize=%d for fast profile, got %d", fastProfileChunkSize, opts.ChunkSize)
+	}
 }
 
 func TestApplyProfile_WALOnFastKeepsWALOn(t *testing.T) {
@@ -118,6 +121,9 @@ func TestApplyProfile_WALOnFastKeepsWALOn(t *testing.T) {
 	if opts.PagerSyncConcurrency != 4 {
 		t.Fatalf("expected PagerSyncConcurrency=4 for wal_on_fast profile, got %d", opts.PagerSyncConcurrency)
 	}
+	if opts.ChunkSize != fastProfileChunkSize {
+		t.Fatalf("expected ChunkSize=%d for wal_on_fast profile, got %d", fastProfileChunkSize, opts.ChunkSize)
+	}
 }
 
 func TestApplyProfile_BenchDisablesBackgroundDefaults(t *testing.T) {
@@ -151,6 +157,9 @@ func TestApplyProfile_BenchDisablesBackgroundDefaults(t *testing.T) {
 	if opts.IndexInternalBaseDelta {
 		t.Fatalf("expected IndexInternalBaseDelta=false for bench profile (incompatible with outer leaves in value log)")
 	}
+	if opts.ChunkSize != fastProfileChunkSize {
+		t.Fatalf("expected ChunkSize=%d for bench profile, got %d", fastProfileChunkSize, opts.ChunkSize)
+	}
 }
 
 func TestApplyProfile_DurableKeepsIndexOptimizationsDisabled(t *testing.T) {
@@ -181,6 +190,7 @@ func TestApplyProfile_DoesNotOverrideNonZeroNumericFields(t *testing.T) {
 		BackgroundCheckpointInterval:     7 * time.Second,
 		BackgroundCheckpointIdleDuration: 3 * time.Second,
 		MaxWALBytes:                      123,
+		ChunkSize:                        2 << 20,
 		PagerSyncConcurrency:             2,
 	}
 	ApplyProfile(&opts, ProfileBench)
@@ -193,6 +203,9 @@ func TestApplyProfile_DoesNotOverrideNonZeroNumericFields(t *testing.T) {
 	}
 	if opts.MaxWALBytes != 123 {
 		t.Fatalf("MaxWALBytes overridden: got %d", opts.MaxWALBytes)
+	}
+	if opts.ChunkSize != 2<<20 {
+		t.Fatalf("ChunkSize overridden: got %d", opts.ChunkSize)
 	}
 	if opts.PagerSyncConcurrency != 2 {
 		t.Fatalf("PagerSyncConcurrency overridden: got %d", opts.PagerSyncConcurrency)

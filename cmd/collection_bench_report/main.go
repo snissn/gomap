@@ -32,6 +32,7 @@ type config struct {
 	count                int
 	benchmarkEngine      string
 	storagePolicy        string
+	pagerChunkSize       string
 	pagerSyncConcurrency string
 	collectionBatchSize  int
 	unavailableReason    string
@@ -84,6 +85,7 @@ type report struct {
 	ExecutionPath        string          `json:"execution_path,omitempty"`
 	BenchmarkEngine      string          `json:"benchmark_engine,omitempty"`
 	StoragePolicy        string          `json:"storage_policy,omitempty"`
+	PagerChunkSize       string          `json:"pager_chunk_size,omitempty"`
 	PagerSyncConcurrency string          `json:"pager_sync_concurrency,omitempty"`
 	Worktree             string          `json:"worktree,omitempty"`
 	Branch               string          `json:"branch,omitempty"`
@@ -191,6 +193,7 @@ func parseFlagsFrom(args []string) (config, error) {
 	fs.IntVar(&cfg.count, "count", 0, "Optional benchmark count to include in report metadata")
 	fs.StringVar(&cfg.benchmarkEngine, "benchmark-engine", "", "Optional benchmark engine label to include in report metadata")
 	fs.StringVar(&cfg.storagePolicy, "storage-policy", "", "Optional collection root storage-policy label to include in report metadata")
+	fs.StringVar(&cfg.pagerChunkSize, "pager-chunk-size", "", "Optional pager chunk size label to include in report metadata")
 	fs.StringVar(&cfg.pagerSyncConcurrency, "pager-sync-concurrency", "", "Optional pager sync concurrency label to include in report metadata")
 	fs.IntVar(&cfg.collectionBatchSize, "collection-batch-size", 0, "Optional collection benchmark batch size to include in report metadata")
 	fs.StringVar(&cfg.unavailableReason, "unavailable-reason", "", "Emit an explicit unavailable report instead of parsing benchmark input")
@@ -228,6 +231,7 @@ func buildReport(cfg config) (*report, error) {
 			ExecutionPath:        cfg.executionPath,
 			BenchmarkEngine:      cfg.benchmarkEngine,
 			StoragePolicy:        cfg.storagePolicy,
+			PagerChunkSize:       cfg.pagerChunkSize,
 			PagerSyncConcurrency: cfg.pagerSyncConcurrency,
 			Worktree:             cfg.worktree,
 			Branch:               cfg.branch,
@@ -262,6 +266,7 @@ func buildReport(cfg config) (*report, error) {
 		ExecutionPath:        cfg.executionPath,
 		BenchmarkEngine:      cfg.benchmarkEngine,
 		StoragePolicy:        cfg.storagePolicy,
+		PagerChunkSize:       cfg.pagerChunkSize,
 		PagerSyncConcurrency: cfg.pagerSyncConcurrency,
 		Worktree:             cfg.worktree,
 		Branch:               cfg.branch,
@@ -509,6 +514,9 @@ func renderMarkdown(rep *report) string {
 	}
 	if rep.StoragePolicy != "" {
 		sb.WriteString(fmt.Sprintf("- storage policy: `%s`\n", rep.StoragePolicy))
+	}
+	if rep.PagerChunkSize != "" {
+		sb.WriteString(fmt.Sprintf("- pager chunk size: `%s`\n", rep.PagerChunkSize))
 	}
 	if rep.PagerSyncConcurrency != "" {
 		sb.WriteString(fmt.Sprintf("- pager sync concurrency: `%s`\n", rep.PagerSyncConcurrency))

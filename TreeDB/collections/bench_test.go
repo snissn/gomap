@@ -82,6 +82,20 @@ func benchmarkIntEnv(tb testing.TB, name string, def int) int {
 	return v
 }
 
+func benchmarkInt64Env(tb testing.TB, name string, def int64) int64 {
+	tb.Helper()
+
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return def
+	}
+	v, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || v < 0 {
+		tb.Fatalf("unsupported %s=%q", name, raw)
+	}
+	return v
+}
+
 func benchmarkRootStoragePolicy(outerLeavesInVLog bool) collections.RootStoragePolicy {
 	if outerLeavesInVLog {
 		return collections.RootStorageCompressed
@@ -160,6 +174,17 @@ func TestBenchmarkCollectionStoragePolicyDefaultsProductionMainline(t *testing.T
 	}
 }
 
+func TestBenchmarkCollectionChunkSizeEnv(t *testing.T) {
+	t.Setenv("TREEDB_COLLECTION_CHUNK_SIZE", "")
+	if got := benchmarkInt64Env(t, "TREEDB_COLLECTION_CHUNK_SIZE", 0); got != 0 {
+		t.Fatalf("default chunk size override=%d want 0", got)
+	}
+	t.Setenv("TREEDB_COLLECTION_CHUNK_SIZE", "65536")
+	if got := benchmarkInt64Env(t, "TREEDB_COLLECTION_CHUNK_SIZE", 0); got != 65536 {
+		t.Fatalf("chunk size override=%d want 65536", got)
+	}
+}
+
 func openBenchmarkBackend(b *testing.B, dir string) (*backenddb.DB, func() error) {
 	b.Helper()
 
@@ -167,6 +192,9 @@ func openBenchmarkBackend(b *testing.B, dir string) (*backenddb.DB, func() error
 	opts := treedb.OptionsFor(benchmarkTreeDBProfile(b), dir)
 	opts.IndexOuterLeavesInValueLog = dataOuter || indexOuter
 	opts.IndexInternalBaseDelta = !opts.IndexOuterLeavesInValueLog
+	if chunkSize := benchmarkInt64Env(b, "TREEDB_COLLECTION_CHUNK_SIZE", 0); chunkSize > 0 {
+		opts.ChunkSize = chunkSize
+	}
 	if syncConcurrency := benchmarkIntEnv(b, "TREEDB_COLLECTION_PAGER_SYNC_CONCURRENCY", 0); syncConcurrency > 0 {
 		opts.PagerSyncConcurrency = syncConcurrency
 	}
