@@ -107,9 +107,9 @@ func TestMatrixSummaryRendersBenchmarkMetrics(t *testing.T) {
 	}
 	indexPath := filepath.Join(dir, "matrix_index.tsv")
 	index := strings.Join([]string{
-		"cell\tengine\tdata_outer_leaves_in_vlog\tindex_outer_leaves_in_vlog\tpager_sync_concurrency\treport_md\treport_json\tcpu_profile\tmem_profile",
-		"production_fast_data_vlog_index_leaf\tproduction_fast\ttrue\tfalse\tprofile/default\t" + reportMarkdown + "\t" + reportJSON + "\t/cpu.pprof\t/mem.pprof",
-		sqliteCell + "\twal_custom\t-\t-\t-\t" + sqliteReportMarkdown + "\t" + sqliteReportJSON + "\t/sqlite-cpu.pprof\t/sqlite-mem.pprof",
+		"cell\tengine\tdata_outer_leaves_in_vlog\tindex_outer_leaves_in_vlog\tpager_chunk_size\tpager_sync_concurrency\treport_md\treport_json\tcpu_profile\tmem_profile",
+		"production_fast_data_vlog_index_leaf\tproduction_fast\ttrue\tfalse\tprofile/default\tprofile/default\t" + reportMarkdown + "\t" + reportJSON + "\t/cpu.pprof\t/mem.pprof",
+		sqliteCell + "\twal_custom\t-\t-\t-\t-\t" + sqliteReportMarkdown + "\t" + sqliteReportJSON + "\t/sqlite-cpu.pprof\t/sqlite-mem.pprof",
 		"",
 	}, "\n")
 	if err := os.WriteFile(indexPath, []byte(index), 0o644); err != nil {
@@ -132,6 +132,7 @@ func TestMatrixSummaryRendersBenchmarkMetrics(t *testing.T) {
 		"22.5",
 		"insert ms/batch",
 		"sync ms/batch",
+		"Pager chunk",
 		"Pager sync",
 		"`profile/default`",
 		"64",
@@ -159,13 +160,13 @@ func TestMatrixSummaryRendersBenchmarkMetrics(t *testing.T) {
 		t.Fatalf("read tsv: %v", err)
 	}
 	gotTSV := string(tsv)
-	if !strings.Contains(gotTSV, "profile/default\tBenchmarkCollectionInsertBatchWithSecondaryIndexes\t2812.5\t1980\t30\t-\t-\t0\t0\t") {
+	if !strings.Contains(gotTSV, "profile/default\tprofile/default\tBenchmarkCollectionInsertBatchWithSecondaryIndexes\t2812.5\t1980\t30\t-\t-\t0\t0\t") {
 		t.Fatalf("tsv missing raw numeric row:\n%s", gotTSV)
 	}
-	if !strings.Contains(gotTSV, "-\tBenchmarkSQLiteInsertBatchWithSecondaryIndexes\t4100\t2048\t32\t-\t-\t") {
+	if !strings.Contains(gotTSV, "-\t-\tBenchmarkSQLiteInsertBatchWithSecondaryIndexes\t4100\t2048\t32\t-\t-\t") {
 		t.Fatalf("tsv missing sqlite numeric row:\n%s", gotTSV)
 	}
-	if !strings.Contains(gotTSV, "profile/default\tBenchmarkCollectionInsertBatchCheckpointWithSecondaryIndexes\t8000\t2000\t30\t2500\t5500\t0\t0\t") {
+	if !strings.Contains(gotTSV, "profile/default\tprofile/default\tBenchmarkCollectionInsertBatchCheckpointWithSecondaryIndexes\t8000\t2000\t30\t2500\t5500\t0\t0\t") {
 		t.Fatalf("tsv missing checkpoint split row:\n%s", gotTSV)
 	}
 	if strings.Contains(gotTSV, "2,812") {
@@ -176,13 +177,13 @@ func TestMatrixSummaryRendersBenchmarkMetrics(t *testing.T) {
 		t.Fatalf("read user story tsv: %v", err)
 	}
 	gotUserStoryTSV := string(userStoryTSV)
-	if !strings.Contains(gotUserStoryTSV, "profile/default\tbulk indexed insert\tBenchmarkCollectionInsertBatchWithSecondaryIndexes\t8000\t355555.55555555556\t22.5\t-\t-\t44.44444444444444\t2812.5\t") {
+	if !strings.Contains(gotUserStoryTSV, "profile/default\tprofile/default\tbulk indexed insert\tBenchmarkCollectionInsertBatchWithSecondaryIndexes\t8000\t355555.55555555556\t22.5\t-\t-\t44.44444444444444\t2812.5\t") {
 		t.Fatalf("user story tsv missing collection throughput row:\n%s", gotUserStoryTSV)
 	}
-	if !strings.Contains(gotUserStoryTSV, "profile/default\tcheckpointed indexed insert\tBenchmarkCollectionInsertBatchCheckpointWithSecondaryIndexes\t8000\t125000\t64\t20\t44\t15.625\t8000\t") {
+	if !strings.Contains(gotUserStoryTSV, "profile/default\tprofile/default\tcheckpointed indexed insert\tBenchmarkCollectionInsertBatchCheckpointWithSecondaryIndexes\t8000\t125000\t64\t20\t44\t15.625\t8000\t") {
 		t.Fatalf("user story tsv missing checkpoint split row:\n%s", gotUserStoryTSV)
 	}
-	if !strings.Contains(gotUserStoryTSV, "-\tbulk indexed insert\tBenchmarkSQLiteInsertBatchWithSecondaryIndexes\t8000\t243902.43902439025\t32.8\t-\t-\t30.48780487804878\t4100\t") {
+	if !strings.Contains(gotUserStoryTSV, "-\t-\tbulk indexed insert\tBenchmarkSQLiteInsertBatchWithSecondaryIndexes\t8000\t243902.43902439025\t32.8\t-\t-\t30.48780487804878\t4100\t") {
 		t.Fatalf("user story tsv missing sqlite throughput row:\n%s", gotUserStoryTSV)
 	}
 }
@@ -207,8 +208,8 @@ func TestMatrixSummaryFailsOnUnavailableReport(t *testing.T) {
 	}
 	indexPath := filepath.Join(dir, "matrix_index.tsv")
 	index := strings.Join([]string{
-		"cell\tengine\tdata_outer_leaves_in_vlog\tindex_outer_leaves_in_vlog\tpager_sync_concurrency\treport_md\treport_json\tcpu_profile\tmem_profile",
-		"production_fast_data_vlog_index_leaf\tproduction_fast\ttrue\tfalse\tprofile/default\t" + reportMarkdown + "\t" + reportJSON + "\t/cpu.pprof\t/mem.pprof",
+		"cell\tengine\tdata_outer_leaves_in_vlog\tindex_outer_leaves_in_vlog\tpager_chunk_size\tpager_sync_concurrency\treport_md\treport_json\tcpu_profile\tmem_profile",
+		"production_fast_data_vlog_index_leaf\tproduction_fast\ttrue\tfalse\tprofile/default\tprofile/default\t" + reportMarkdown + "\t" + reportJSON + "\t/cpu.pprof\t/mem.pprof",
 		"",
 	}, "\n")
 	if err := os.WriteFile(indexPath, []byte(index), 0o644); err != nil {
@@ -254,8 +255,8 @@ func TestMatrixSummaryFailsOnMissingExpectedBenchmark(t *testing.T) {
 	}
 	indexPath := filepath.Join(dir, "matrix_index.tsv")
 	index := strings.Join([]string{
-		"cell\tengine\tdata_outer_leaves_in_vlog\tindex_outer_leaves_in_vlog\tpager_sync_concurrency\treport_md\treport_json\tcpu_profile\tmem_profile",
-		"production_fast_data_vlog_index_leaf\tproduction_fast\ttrue\tfalse\tprofile/default\t" + reportMarkdown + "\t" + reportJSON + "\t/cpu.pprof\t/mem.pprof",
+		"cell\tengine\tdata_outer_leaves_in_vlog\tindex_outer_leaves_in_vlog\tpager_chunk_size\tpager_sync_concurrency\treport_md\treport_json\tcpu_profile\tmem_profile",
+		"production_fast_data_vlog_index_leaf\tproduction_fast\ttrue\tfalse\tprofile/default\tprofile/default\t" + reportMarkdown + "\t" + reportJSON + "\t/cpu.pprof\t/mem.pprof",
 		"",
 	}, "\n")
 	if err := os.WriteFile(indexPath, []byte(index), 0o644); err != nil {

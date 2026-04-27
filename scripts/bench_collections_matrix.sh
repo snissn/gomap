@@ -98,8 +98,8 @@ INDEX_TSV="$OUT_DIR/matrix_index.tsv"
 PROFILE_INDEX_TSV="$OUT_DIR/profile_index.tsv"
 SUMMARY_MD="$OUT_DIR/README.md"
 
-printf "cell\tengine\tdata_outer_leaves_in_vlog\tindex_outer_leaves_in_vlog\tpager_sync_concurrency\treport_md\treport_json\tcpu_profile\tmem_profile\n" >"$INDEX_TSV"
-printf "cell\tengine\tdata_outer_leaves_in_vlog\tindex_outer_leaves_in_vlog\tpager_sync_concurrency\tbenchmark\tcpu_profile_mode\treport_md\treport_json\tcpu_profile\tmem_profile\tcpu_top\tmem_top\n" >"$PROFILE_INDEX_TSV"
+printf "cell\tengine\tdata_outer_leaves_in_vlog\tindex_outer_leaves_in_vlog\tpager_chunk_size\tpager_sync_concurrency\treport_md\treport_json\tcpu_profile\tmem_profile\n" >"$INDEX_TSV"
+printf "cell\tengine\tdata_outer_leaves_in_vlog\tindex_outer_leaves_in_vlog\tpager_chunk_size\tpager_sync_concurrency\tbenchmark\tcpu_profile_mode\treport_md\treport_json\tcpu_profile\tmem_profile\tcpu_top\tmem_top\n" >"$PROFILE_INDEX_TSV"
 
 echo "running collections benchmark matrix into: $OUT_DIR"
 echo "matrix: $MATRIX"
@@ -148,6 +148,10 @@ run_profile_benches() {
   local go_tags=${7:-}
   local cgo_enabled=${8:-}
   local pager_sync_concurrency_label=${9:-$PAGER_SYNC_CONCURRENCY_LABEL}
+  local pager_chunk_size_label="$CHUNK_SIZE_LABEL"
+  if [[ "$pager_sync_concurrency_label" == "-" ]]; then
+    pager_chunk_size_label="-"
+  fi
   local benches=()
 
   read -r -a benches <<<"$bench_list"
@@ -179,11 +183,12 @@ run_profile_benches() {
     echo "==> $cell profile $bench"
     env "${env_args[@]}" scripts/bench_collections_report.sh
 
-    printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
+    printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
       "$cell" \
       "$engine" \
       "$data_outer" \
       "$index_outer" \
+      "$pager_chunk_size_label" \
       "$pager_sync_concurrency_label" \
       "$bench" \
       "whole_go_test_process" \
@@ -229,11 +234,12 @@ run_timed_profile_benches() {
     echo "==> $cell timed CPU profile $bench"
     env "${env_args[@]}" scripts/bench_collections_report.sh
 
-    printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
+    printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
       "$cell" \
       "$engine" \
       "$data_outer" \
       "$index_outer" \
+      "$CHUNK_SIZE_LABEL" \
       "$PAGER_SYNC_CONCURRENCY_LABEL" \
       "$bench" \
       "timed_benchmark_window" \
@@ -264,11 +270,12 @@ for row in "${MATRIX_ROWS[@]}"; do
     TREEDB_COLLECTION_PAGER_SYNC_CONCURRENCY="$PAGER_SYNC_CONCURRENCY" \
     scripts/bench_collections_report.sh
 
-  printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
+  printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
     "$cell" \
     "$engine" \
     "$data_outer" \
     "$index_outer" \
+    "$CHUNK_SIZE_LABEL" \
     "$PAGER_SYNC_CONCURRENCY_LABEL" \
     "$cell_dir/collections_report.md" \
     "$cell_dir/collections_report.json" \
@@ -303,9 +310,10 @@ if is_true "$INCLUDE_SQLITE"; then
     CGO_ENABLED="$SQLITE_CGO_ENABLED" \
     scripts/bench_collections_report.sh
 
-  printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
+  printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
     "$cell" \
     "$SQLITE_ENGINE" \
+    "-" \
     "-" \
     "-" \
     "-" \
