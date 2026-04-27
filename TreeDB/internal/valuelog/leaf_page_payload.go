@@ -33,17 +33,16 @@ func MaybeCompactLeafLogPayload(leafPage []byte) ([]byte, bool, error) {
 	}
 
 	suffixStart := len(leafPage) - suffixLen
-	var canonical [page.PageSize]byte
-	copy(canonical[:prefixLen], leafPage[:prefixLen])
-	copy(canonical[suffixStart:], leafPage[suffixStart:])
-	page.UpdateChecksum(canonical[:])
-
 	payload := make([]byte, compactLen)
 	copy(payload[:len(compactLeafPagePayloadMagic)], compactLeafPagePayloadMagic[:])
 	binary.LittleEndian.PutUint16(payload[len(compactLeafPagePayloadMagic):len(compactLeafPagePayloadMagic)+2], uint16(prefixLen))
 	binary.LittleEndian.PutUint16(payload[len(compactLeafPagePayloadMagic)+2:compactLeafPagePayloadHeaderSize], uint16(suffixLen))
-	copy(payload[compactLeafPagePayloadHeaderSize:compactLeafPagePayloadHeaderSize+prefixLen], canonical[:prefixLen])
-	copy(payload[compactLeafPagePayloadHeaderSize+prefixLen:], canonical[suffixStart:])
+	prefix := payload[compactLeafPagePayloadHeaderSize : compactLeafPagePayloadHeaderSize+prefixLen]
+	suffix := payload[compactLeafPagePayloadHeaderSize+prefixLen:]
+	copy(prefix, leafPage[:prefixLen])
+	copy(suffix, leafPage[suffixStart:])
+	sum := page.CalculateChecksumWithZeroGap(prefix, page.PageSize-prefixLen-suffixLen, suffix)
+	binary.LittleEndian.PutUint32(prefix[8:12], sum)
 	return payload, true, nil
 }
 

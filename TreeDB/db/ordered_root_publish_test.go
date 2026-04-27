@@ -1,10 +1,49 @@
 package db
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"reflect"
+	"strconv"
 	"testing"
+
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
+	"github.com/snissn/gomap/TreeDB/page"
 )
+
+type closeCountingUnsafeIterator struct {
+	closes int
+}
+
+func (it *closeCountingUnsafeIterator) Valid() bool { return false }
+func (it *closeCountingUnsafeIterator) Next()       {}
+func (it *closeCountingUnsafeIterator) Seek([]byte) {}
+func (it *closeCountingUnsafeIterator) UnsafeKey() []byte {
+	return nil
+}
+func (it *closeCountingUnsafeIterator) UnsafeValue() []byte {
+	return nil
+}
+func (it *closeCountingUnsafeIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
+	return nil, page.ValuePtr{}, 0
+}
+func (it *closeCountingUnsafeIterator) Key() []byte   { return nil }
+func (it *closeCountingUnsafeIterator) Value() []byte { return nil }
+func (it *closeCountingUnsafeIterator) KeyCopy(dst []byte) []byte {
+	return dst
+}
+func (it *closeCountingUnsafeIterator) ValueCopy(dst []byte) []byte {
+	return dst
+}
+func (it *closeCountingUnsafeIterator) IsDeleted() bool { return false }
+func (it *closeCountingUnsafeIterator) Error() error    { return nil }
+func (it *closeCountingUnsafeIterator) Close() error {
+	it.closes++
+	return nil
+}
+func (it *closeCountingUnsafeIterator) Domain() ([]byte, []byte) { return nil, nil }
 
 func TestPublishOrderedRootIterator_WarmSparseDelta_PreservesPages(t *testing.T) {
 	dir := t.TempDir()
@@ -304,6 +343,665 @@ func TestPublishOrderedRootGroup_PersistsSystemAndOrderedRoots(t *testing.T) {
 	}
 }
 
+func TestPublishOrderedRootGroup_ClosesUnconsumedIteratorsOnPolicyError(t *testing.T) {
+	db, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+
+	first := &closeCountingUnsafeIterator{}
+	second := &closeCountingUnsafeIterator{}
+	_, _, err = db.PublishOrderedRootGroup(nil, []OrderedRootPublishInput{
+		{Iter: first, StoragePolicy: OrderedRootStoragePolicy(255)},
+		{Iter: second, StoragePolicy: OrderedRootStoragePagerLeaves},
+	})
+	if err == nil {
+		t.Fatal("expected publish error")
+	}
+	if first.closes != 1 {
+		t.Fatalf("first iterator closes=%d want 1", first.closes)
+	}
+	if second.closes != 1 {
+		t.Fatalf("second iterator closes=%d want 1", second.closes)
+	}
+}
+
+func TestPublishOrderedRootDeltaGroups_CloseUnconsumedIteratorsOnPolicyError(t *testing.T) {
+	db, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+
+	builderCalled := false
+	buildSystemIter := func([]uint64) (iterator.UnsafeIterator, error) {
+		builderCalled = true
+		return nil, nil
+	}
+	for name, publish := range map[string]func([]OrderedRootDeltaPublishInput) error{
+		"system builder": func(ordered []OrderedRootDeltaPublishInput) error {
+			_, _, err := db.PublishOrderedRootDeltaGroupWithSystemBuilder(ordered, buildSystemIter)
+			return err
+		},
+		"system delta builder": func(ordered []OrderedRootDeltaPublishInput) error {
+			_, _, err := db.PublishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered, buildSystemIter)
+			return err
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			builderCalled = false
+			first := &closeCountingUnsafeIterator{}
+			second := &closeCountingUnsafeIterator{}
+			err := publish([]OrderedRootDeltaPublishInput{
+				{Iter: first, StoragePolicy: OrderedRootStoragePolicy(255)},
+				{Iter: second, StoragePolicy: OrderedRootStoragePagerLeaves},
+			})
+			if err == nil {
+				t.Fatal("expected publish error")
+			}
+			if builderCalled {
+				t.Fatal("system builder should not run after policy error")
+			}
+			if first.closes != 1 {
+				t.Fatalf("first iterator closes=%d want 1", first.closes)
+			}
+			if second.closes != 1 {
+				t.Fatalf("second iterator closes=%d want 1", second.closes)
+			}
+		})
+	}
+}
+
+func TestPublishOrderedRootGroup_UsesPerRootStoragePolicy(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir, IndexOuterLeavesInValueLog: true})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	leafLog := newRewriteWriter(ValueLogDirPath(dir), 0, 0, 64<<20)
+	db.SetLeafPageLog(leafLog)
+	defer func() {
+		_ = leafLog.Close()
+		_ = db.Close()
+	}()
+
+	compressedTable := mustFrozenSystemMemtable(t, "doc/u1", "document")
+	fastTable := mustFrozenSystemMemtable(t, "idx/email/u1", "")
+	_, rootIDs, err := db.PublishOrderedRootGroup(nil, []OrderedRootPublishInput{
+		{BaseRoot: 0, Iter: compressedTable.NewIterator(nil, nil), StoragePolicy: OrderedRootStorageValueLogLeaves},
+		{BaseRoot: 0, Iter: fastTable.NewIterator(nil, nil), StoragePolicy: OrderedRootStoragePagerLeaves},
+	})
+	if err != nil {
+		t.Fatalf("publish ordered root group: %v", err)
+	}
+	if len(rootIDs) != 2 {
+		t.Fatalf("rootIDs=%d want 2", len(rootIDs))
+	}
+	if _, ok := page.DecodeLeafRef(rootIDs[0]); !ok {
+		t.Fatalf("compressed root id=%d, want leaf ref", rootIDs[0])
+	}
+	if _, ok := page.DecodeLeafRef(rootIDs[1]); ok {
+		t.Fatalf("fast root id=%d, want pager page", rootIDs[1])
+	}
+
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("expected snapshot")
+	}
+	defer snap.Close()
+	entry, err := snap.GetEntryAtRoot(rootIDs[0], []byte("doc/u1"))
+	if err != nil {
+		t.Fatalf("GetEntryAtRoot(compressed): %v", err)
+	}
+	if got := string(entry.Value); got != "document" {
+		t.Fatalf("compressed value=%q want document", got)
+	}
+	entry, err = snap.GetEntryAtRoot(rootIDs[1], []byte("idx/email/u1"))
+	if err != nil {
+		t.Fatalf("GetEntryAtRoot(fast): %v", err)
+	}
+	if got := string(entry.Value); got != "" {
+		t.Fatalf("fast index value=%q want empty", got)
+	}
+}
+
+func TestPublishOrderedRootDeltaGroupWithSystemBuilder_UsesPerRootStoragePolicy(t *testing.T) {
+	t.Run("pager leaves override value-log default", func(t *testing.T) {
+		dir := t.TempDir()
+		db, err := Open(Options{Dir: dir, IndexOuterLeavesInValueLog: true})
+		if err != nil {
+			t.Fatalf("open db: %v", err)
+		}
+		leafLog := newRewriteWriter(ValueLogDirPath(dir), 0, 0, 64<<20)
+		db.SetLeafPageLog(leafLog)
+		defer func() {
+			_ = leafLog.Close()
+			_ = db.Close()
+		}()
+
+		_, baseRootIDs, err := db.PublishOrderedRootGroup(nil, []OrderedRootPublishInput{{
+			BaseRoot:      0,
+			Iter:          mustFrozenSystemMemtable(t, "doc/a", "va").NewIterator(nil, nil),
+			StoragePolicy: OrderedRootStoragePagerLeaves,
+		}})
+		if err != nil {
+			t.Fatalf("publish base root: %v", err)
+		}
+
+		_, rootIDs, err := db.PublishOrderedRootDeltaGroupWithSystemBuilder([]OrderedRootDeltaPublishInput{{
+			BaseRoot:      baseRootIDs[0],
+			Iter:          mustFrozenSystemMemtable(t, "doc/b", "vb").NewIterator(nil, nil),
+			StoragePolicy: OrderedRootStoragePagerLeaves,
+		}}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+			return mustFrozenSystemMemtable(t, "sys/root", strconv.FormatUint(rootIDs[0], 10)).NewIterator(nil, nil), nil
+		})
+		if err != nil {
+			t.Fatalf("publish delta root: %v", err)
+		}
+		if _, ok := page.DecodeLeafRef(rootIDs[0]); ok {
+			t.Fatalf("delta root id=%d, want pager page", rootIDs[0])
+		}
+
+		snap := db.AcquireSnapshot()
+		if snap == nil {
+			t.Fatal("expected snapshot")
+		}
+		defer snap.Close()
+		for key, want := range map[string]string{"doc/a": "va", "doc/b": "vb"} {
+			entry, err := snap.GetEntryAtRoot(rootIDs[0], []byte(key))
+			if err != nil {
+				t.Fatalf("GetEntryAtRoot(%s): %v", key, err)
+			}
+			if got := string(entry.Value); got != want {
+				t.Fatalf("%s=%q want %q", key, got, want)
+			}
+		}
+	})
+
+	t.Run("value-log leaves override pager default", func(t *testing.T) {
+		dir := t.TempDir()
+		db, err := Open(Options{Dir: dir})
+		if err != nil {
+			t.Fatalf("open db: %v", err)
+		}
+		leafLog := newRewriteWriter(ValueLogDirPath(dir), 0, 0, 64<<20)
+		db.SetLeafPageLog(leafLog)
+		defer func() {
+			_ = leafLog.Close()
+			_ = db.Close()
+		}()
+
+		_, baseRootIDs, err := db.PublishOrderedRootGroup(nil, []OrderedRootPublishInput{{
+			BaseRoot:      0,
+			Iter:          mustFrozenSystemMemtable(t, "doc/a", "va").NewIterator(nil, nil),
+			StoragePolicy: OrderedRootStorageValueLogLeaves,
+		}})
+		if err != nil {
+			t.Fatalf("publish base root: %v", err)
+		}
+
+		_, rootIDs, err := db.PublishOrderedRootDeltaGroupWithSystemBuilder([]OrderedRootDeltaPublishInput{{
+			BaseRoot:      baseRootIDs[0],
+			Iter:          mustFrozenSystemMemtable(t, "doc/b", "vb").NewIterator(nil, nil),
+			StoragePolicy: OrderedRootStorageValueLogLeaves,
+		}}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+			return mustFrozenSystemMemtable(t, "sys/root", strconv.FormatUint(rootIDs[0], 10)).NewIterator(nil, nil), nil
+		})
+		if err != nil {
+			t.Fatalf("publish delta root: %v", err)
+		}
+		if _, ok := page.DecodeLeafRef(rootIDs[0]); !ok {
+			t.Fatalf("delta root id=%d, want leaf ref", rootIDs[0])
+		}
+
+		snap := db.AcquireSnapshot()
+		if snap == nil {
+			t.Fatal("expected snapshot")
+		}
+		defer snap.Close()
+		for key, want := range map[string]string{"doc/a": "va", "doc/b": "vb"} {
+			entry, err := snap.GetEntryAtRoot(rootIDs[0], []byte(key))
+			if err != nil {
+				t.Fatalf("GetEntryAtRoot(%s): %v", key, err)
+			}
+			if got := string(entry.Value); got != want {
+				t.Fatalf("%s=%q want %q", key, got, want)
+			}
+		}
+	})
+}
+
+func TestPublishOrderedRootGroupWithSystemBuilder_PersistsSystemDescriptorWithOrderedRootIDs(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+
+	if err := db.Set([]byte("user/a"), []byte("uv")); err != nil {
+		t.Fatalf("set user key: %v", err)
+	}
+	before := db.State()
+	if before == nil {
+		t.Fatal("expected backend state")
+	}
+
+	primaryTable := mustFrozenSystemMemtable(t, "doc/u1", "document")
+	indexTable := mustFrozenSystemMemtable(t, "idx/email/u1", "")
+	var builderRootIDs []uint64
+	newSystemRoot, rootIDs, err := db.PublishOrderedRootGroupWithSystemBuilder([]OrderedRootPublishInput{
+		{BaseRoot: 0, Iter: primaryTable.NewIterator(nil, nil)},
+		{BaseRoot: 0, Iter: indexTable.NewIterator(nil, nil)},
+	}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		builderRootIDs = append([]uint64(nil), rootIDs...)
+		return mustFrozenSystemMemtable(t,
+			"sys/collections/users/primary", strconv.FormatUint(rootIDs[0], 10),
+			"sys/collections/users/email_idx", strconv.FormatUint(rootIDs[1], 10),
+		).NewIterator(nil, nil), nil
+	})
+	if err != nil {
+		t.Fatalf("publish ordered root group with system builder: %v", err)
+	}
+	if len(rootIDs) != 2 {
+		t.Fatalf("rootIDs=%d want 2", len(rootIDs))
+	}
+	if !reflect.DeepEqual(builderRootIDs, rootIDs) {
+		t.Fatalf("builder root IDs=%v want %v", builderRootIDs, rootIDs)
+	}
+	after := db.State()
+	if after == nil {
+		t.Fatal("expected backend state after publish")
+	}
+	if after.RootPageID != before.RootPageID {
+		t.Fatalf("user root changed: got %d want %d", after.RootPageID, before.RootPageID)
+	}
+	if after.SystemRootPageID != newSystemRoot {
+		t.Fatalf("system root changed: got %d want %d", after.SystemRootPageID, newSystemRoot)
+	}
+
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("expected snapshot")
+	}
+	defer snap.Close()
+	sysEntry, err := snap.GetEntryAtRoot(newSystemRoot, []byte("sys/collections/users/primary"))
+	if err != nil {
+		t.Fatalf("GetEntryAtRoot(system primary descriptor): %v", err)
+	}
+	if got, want := string(sysEntry.Value), strconv.FormatUint(rootIDs[0], 10); got != want {
+		t.Fatalf("primary descriptor root=%q want %q", got, want)
+	}
+	sysEntry, err = snap.GetEntryAtRoot(newSystemRoot, []byte("sys/collections/users/email_idx"))
+	if err != nil {
+		t.Fatalf("GetEntryAtRoot(system index descriptor): %v", err)
+	}
+	if got, want := string(sysEntry.Value), strconv.FormatUint(rootIDs[1], 10); got != want {
+		t.Fatalf("index descriptor root=%q want %q", got, want)
+	}
+	entry, err := snap.GetEntryAtRoot(rootIDs[0], []byte("doc/u1"))
+	if err != nil {
+		t.Fatalf("GetEntryAtRoot(primary): %v", err)
+	}
+	if got := string(entry.Value); got != "document" {
+		t.Fatalf("primary value=%q want %q", got, "document")
+	}
+	entry, err = snap.GetEntryAtRoot(rootIDs[1], []byte("idx/email/u1"))
+	if err != nil {
+		t.Fatalf("GetEntryAtRoot(index): %v", err)
+	}
+	if got := string(entry.Value); got != "" {
+		t.Fatalf("index value=%q want empty", got)
+	}
+}
+
+func TestPublishOrderedRootDeltaGroupWithSystemBuilder_PreservesOmittedBaseEntries(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	baseRoot, err := db.PublishOrderedRootIterator(0, mustFrozenSystemMemtable(t,
+		"root/a", "va",
+		"root/b", "vb",
+	).NewIterator(nil, nil))
+	if err != nil {
+		t.Fatalf("publish base root: %v", err)
+	}
+
+	delta := mustFrozenSystemMemtable(t,
+		"root/b", "vb2",
+		"root/c", "vc",
+	)
+	newSystemRoot, rootIDs, err := db.PublishOrderedRootDeltaGroupWithSystemBuilder([]OrderedRootDeltaPublishInput{{
+		BaseRoot: baseRoot,
+		Iter:     delta.NewIterator(nil, nil),
+	}}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		if len(rootIDs) != 1 || rootIDs[0] == 0 {
+			t.Fatalf("rootIDs=%v want one non-zero root", rootIDs)
+		}
+		return mustFrozenSystemMemtable(t, "sys/collections/users/primary", strconv.FormatUint(rootIDs[0], 10)).NewIterator(nil, nil), nil
+	})
+	if err != nil {
+		t.Fatalf("publish delta group: %v", err)
+	}
+	if newSystemRoot == 0 || len(rootIDs) != 1 || rootIDs[0] == 0 {
+		t.Fatalf("newSystemRoot=%d rootIDs=%v", newSystemRoot, rootIDs)
+	}
+
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("expected snapshot")
+	}
+	defer func() { _ = snap.Close() }()
+	for key, want := range map[string]string{
+		"root/a": "va",
+		"root/b": "vb2",
+		"root/c": "vc",
+	} {
+		entry, err := snap.GetEntryAtRoot(rootIDs[0], []byte(key))
+		if err != nil {
+			t.Fatalf("GetEntryAtRoot(%s): %v", key, err)
+		}
+		if got := string(entry.Value); got != want {
+			t.Fatalf("%s=%q want %q", key, got, want)
+		}
+	}
+}
+
+func TestPublishOrderedRootDeltaGroupWithSystemBuilder_AppliesDeletes(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	baseRoot, err := db.PublishOrderedRootIterator(0, mustFrozenSystemMemtable(t,
+		"root/a", "va",
+		"root/b", "vb",
+	).NewIterator(nil, nil))
+	if err != nil {
+		t.Fatalf("publish base root: %v", err)
+	}
+	delta, err := memtable.NewWithCapacityMode(0, memtable.ModeHashSorted)
+	if err != nil {
+		t.Fatalf("new delta table: %v", err)
+	}
+	delta.Delete([]byte("root/b"))
+	delta.Freeze()
+
+	_, rootIDs, err := db.PublishOrderedRootDeltaGroupWithSystemBuilder([]OrderedRootDeltaPublishInput{{
+		BaseRoot: baseRoot,
+		Iter:     delta.NewIterator(nil, nil),
+	}}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		return mustFrozenSystemMemtable(t, "sys/collections/users/primary", strconv.FormatUint(rootIDs[0], 10)).NewIterator(nil, nil), nil
+	})
+	if err != nil {
+		t.Fatalf("publish delta group: %v", err)
+	}
+
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("expected snapshot")
+	}
+	defer func() { _ = snap.Close() }()
+	entry, err := snap.GetEntryAtRoot(rootIDs[0], []byte("root/a"))
+	if err != nil {
+		t.Fatalf("GetEntryAtRoot(root/a): %v", err)
+	}
+	if got, want := string(entry.Value), "va"; got != want {
+		t.Fatalf("root/a=%q want %q", got, want)
+	}
+	if _, err := snap.GetEntryAtRoot(rootIDs[0], []byte("root/b")); err == nil {
+		t.Fatal("root/b still exists after delta delete")
+	}
+}
+
+func TestPublishOrderedRootDeltaGroupWithSystemBuilder_AcceptsLargeDeltaValueLogLeafValue(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	leafLog := newRewriteWriter(ValueLogDirPath(dir), 0, 0, 64<<20)
+	db.SetLeafPageLog(leafLog)
+	defer func() {
+		_ = leafLog.Close()
+		_ = db.Close()
+	}()
+
+	_, baseRootIDs, err := db.PublishOrderedRootGroup(nil, []OrderedRootPublishInput{{
+		BaseRoot:      0,
+		Iter:          mustFrozenSystemMemtable(t, "doc/a", "small").NewIterator(nil, nil),
+		StoragePolicy: OrderedRootStorageValueLogLeaves,
+	}})
+	if err != nil {
+		t.Fatalf("publish base root: %v", err)
+	}
+	if len(baseRootIDs) != 1 {
+		t.Fatalf("base roots=%d want 1", len(baseRootIDs))
+	}
+
+	largeValue := bytes.Repeat([]byte("x"), page.DefaultInlineThreshold+1024)
+	delta, err := memtable.NewWithCapacityMode(0, memtable.ModeHashSorted)
+	if err != nil {
+		t.Fatalf("new delta table: %v", err)
+	}
+	delta.Set([]byte("doc/large"), largeValue)
+	delta.Freeze()
+
+	_, rootIDs, err := db.PublishOrderedRootDeltaGroupWithSystemDeltaBuilder([]OrderedRootDeltaPublishInput{{
+		BaseRoot:      baseRootIDs[0],
+		Iter:          delta.NewIterator(nil, nil),
+		StoragePolicy: OrderedRootStorageValueLogLeaves,
+	}}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		return mustFrozenSystemMemtable(t, "sys/root", strconv.FormatUint(rootIDs[0], 10)).NewIterator(nil, nil), nil
+	})
+	if err != nil {
+		t.Fatalf("publish large value delta: %v", err)
+	}
+	if len(rootIDs) != 1 {
+		t.Fatalf("rootIDs=%d want 1", len(rootIDs))
+	}
+
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("expected snapshot")
+	}
+	defer func() { _ = snap.Close() }()
+	entry, err := snap.GetEntryAtRoot(rootIDs[0], []byte("doc/large"))
+	if err != nil {
+		t.Fatalf("GetEntryAtRoot(doc/large): %v", err)
+	}
+	if !bytes.Equal(entry.Value, largeValue) {
+		t.Fatalf("large value mismatch: got %d bytes want %d", len(entry.Value), len(largeValue))
+	}
+}
+
+func TestOrderedRootDeltaBatchFromIterator_StableIteratorUsesViews(t *testing.T) {
+	key := []byte("root/a")
+	value := []byte("value-a")
+	iter := &stableRootDeltaIterator{
+		entries: []stableRootDeltaEntry{{key: key, value: value}},
+	}
+
+	delta, err := orderedRootDeltaBatchFromIterator(iter)
+	if err != nil {
+		t.Fatalf("orderedRootDeltaBatchFromIterator: %v", err)
+	}
+	defer func() { _ = delta.Close() }()
+
+	entries := delta.SortedEntries()
+	if len(entries) != 1 {
+		t.Fatalf("entries len=%d want 1", len(entries))
+	}
+	if got := string(entries[0].Key); got != string(key) {
+		t.Fatalf("key=%q want %q", got, key)
+	}
+	if got := string(entries[0].Value); got != string(value) {
+		t.Fatalf("value=%q want %q", got, value)
+	}
+	if &entries[0].Key[0] != &key[0] {
+		t.Fatal("stable iterator key was copied into batch arena")
+	}
+	if &entries[0].Value[0] != &value[0] {
+		t.Fatal("stable iterator value was copied into batch arena")
+	}
+}
+
+type stableRootDeltaEntry struct {
+	key   []byte
+	value []byte
+}
+
+type stableRootDeltaIterator struct {
+	entries []stableRootDeltaEntry
+	idx     int
+}
+
+func (it *stableRootDeltaIterator) StableUnsafeIteratorSlices() bool { return true }
+
+func (it *stableRootDeltaIterator) Len() int {
+	if it == nil {
+		return 0
+	}
+	return len(it.entries)
+}
+
+func (it *stableRootDeltaIterator) Valid() bool {
+	return it != nil && it.idx >= 0 && it.idx < len(it.entries)
+}
+
+func (it *stableRootDeltaIterator) Next() {
+	if it != nil && it.idx < len(it.entries) {
+		it.idx++
+	}
+}
+
+func (it *stableRootDeltaIterator) Seek(key []byte) {
+	it.idx = len(it.entries)
+	for i := range it.entries {
+		if string(it.entries[i].key) >= string(key) {
+			it.idx = i
+			return
+		}
+	}
+}
+
+func (it *stableRootDeltaIterator) UnsafeKey() []byte {
+	if !it.Valid() {
+		return nil
+	}
+	return it.entries[it.idx].key
+}
+
+func (it *stableRootDeltaIterator) UnsafeValue() []byte {
+	if !it.Valid() {
+		return nil
+	}
+	return it.entries[it.idx].value
+}
+
+func (it *stableRootDeltaIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
+	return it.UnsafeValue(), page.ValuePtr{}, 0
+}
+
+func (it *stableRootDeltaIterator) Key() []byte {
+	return it.UnsafeKey()
+}
+
+func (it *stableRootDeltaIterator) Value() []byte {
+	return it.UnsafeValue()
+}
+
+func (it *stableRootDeltaIterator) KeyCopy(dst []byte) []byte {
+	if !it.Valid() {
+		return dst
+	}
+	return append(dst, it.entries[it.idx].key...)
+}
+
+func (it *stableRootDeltaIterator) ValueCopy(dst []byte) []byte {
+	if !it.Valid() {
+		return dst
+	}
+	return append(dst, it.entries[it.idx].value...)
+}
+
+func (it *stableRootDeltaIterator) IsDeleted() bool {
+	return false
+}
+
+func (it *stableRootDeltaIterator) Error() error {
+	return nil
+}
+
+func (it *stableRootDeltaIterator) Close() error {
+	return nil
+}
+
+func (it *stableRootDeltaIterator) Domain() (start, end []byte) {
+	return nil, nil
+}
+
+func TestPublishOrderedRootGroupWithSystemBuilder_ErrorLeavesMetaRootsUnchanged(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+
+	if err := db.Set([]byte("user/a"), []byte("uv")); err != nil {
+		t.Fatalf("set user key: %v", err)
+	}
+	before := db.State()
+	if before == nil {
+		t.Fatal("expected backend state")
+	}
+
+	var builderRootIDs []uint64
+	_, _, err = db.PublishOrderedRootGroupWithSystemBuilder([]OrderedRootPublishInput{{
+		BaseRoot: 0,
+		Iter:     mustFrozenSystemMemtable(t, "doc/u1", "document").NewIterator(nil, nil),
+	}}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		builderRootIDs = append([]uint64(nil), rootIDs...)
+		return nil, errors.New("system descriptor build failed")
+	})
+	if err == nil {
+		t.Fatal("expected system builder error")
+	}
+	if len(builderRootIDs) != 1 || builderRootIDs[0] == 0 {
+		t.Fatalf("builder root IDs=%v want one non-zero root", builderRootIDs)
+	}
+	after := db.State()
+	if after == nil {
+		t.Fatal("expected backend state after failed publish")
+	}
+	if after.CommitSeq != before.CommitSeq {
+		t.Fatalf("commit seq changed after failed publish: got %d want %d", after.CommitSeq, before.CommitSeq)
+	}
+	if after.RootPageID != before.RootPageID {
+		t.Fatalf("user root changed after failed publish: got %d want %d", after.RootPageID, before.RootPageID)
+	}
+	if after.SystemRootPageID != before.SystemRootPageID {
+		t.Fatalf("system root changed after failed publish: got %d want %d", after.SystemRootPageID, before.SystemRootPageID)
+	}
+
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("expected snapshot")
+	}
+	defer snap.Close()
+	if _, err := snap.GetEntryAtRoot(after.SystemRootPageID, []byte("sys/collections/users/primary")); err == nil {
+		t.Fatal("unexpected system descriptor after failed publish")
+	}
+}
+
 func TestPublishOrderedRootGroup_SystemWarmApplyUpdatesValueLogRefTrackerInline(t *testing.T) {
 	dir := t.TempDir()
 	db, err := Open(Options{Dir: dir})
@@ -454,6 +1152,107 @@ func TestPublishOrderedRootGroup_NonSystemWarmApplyPreservesValueLogRefTracker(t
 	}
 
 	assertValueLogRefTrackerMatchesFullScan(t, db)
+}
+
+func TestPublishOrderedRootDeltaGroupWithSystemDeltaBuilder_InvalidatesValueLogRefTracker(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+
+	livePtr := appendPointersInNewSegment(t, dir, 0, 51, 110_000, 1, func(int) []byte {
+		return []byte("live-user-pointer-before-system-delta")
+	})[0]
+	b := db.NewBatch().(*Batch)
+	if err := b.SetPointer([]byte("user/live"), livePtr); err != nil {
+		t.Fatalf("SetPointer(user/live): %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("write live pointer: %v", err)
+	}
+	_ = b.Close()
+
+	if _, err := db.referencedValueLogSegments(context.Background()); err != nil {
+		t.Fatalf("refresh value-log refs: %v", err)
+	}
+	beforeSeq := db.currentCommitSeq()
+	if _, ok := db.valueLogRefTracker.referencedSet(beforeSeq); !ok {
+		t.Fatalf("expected incremental ref set before system delta at seq=%d", beforeSeq)
+	}
+
+	systemPtr := appendPointersInNewSegment(t, dir, 0, 52, 120_000, 1, func(int) []byte {
+		return []byte("system-pointer-delta")
+	})[0]
+	if _, _, err := db.PublishOrderedRootDeltaGroupWithSystemDeltaBuilder(nil, func([]uint64) (iterator.UnsafeIterator, error) {
+		return mustFrozenSystemPointerMemtable(t, "sys/p", systemPtr).NewIterator(nil, nil), nil
+	}); err != nil {
+		t.Fatalf("publish system delta group: %v", err)
+	}
+
+	afterSeq := db.currentCommitSeq()
+	if refs, ok := db.valueLogRefTracker.referencedSet(afterSeq); ok {
+		t.Fatalf("value-log ref tracker stayed valid after untracked system delta: refs=%v", refs)
+	}
+}
+
+func TestPublishOrderedRootDeltaGroupWithSystemBuilder_InvalidatesValueLogRefTrackerForNonSystemDelta(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+
+	livePtr := appendPointersInNewSegment(t, dir, 0, 53, 130_000, 1, func(int) []byte {
+		return []byte("live-user-pointer-before-non-system-delta")
+	})[0]
+	b := db.NewBatch().(*Batch)
+	if err := b.SetPointer([]byte("user/live"), livePtr); err != nil {
+		t.Fatalf("SetPointer(user/live): %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("write live pointer: %v", err)
+	}
+	_ = b.Close()
+
+	oldPtr := appendPointersInNewSegment(t, dir, 0, 54, 140_000, 1, func(int) []byte {
+		return []byte("old-non-system-delta-pointer")
+	})[0]
+	newPtr := appendPointersInNewSegment(t, dir, 0, 55, 150_000, 1, func(int) []byte {
+		return []byte("new-non-system-delta-pointer")
+	})[0]
+	baseRoot, err := db.PublishOrderedRootIterator(0, mustFrozenSystemPointerMemtable(t, "root/p", oldPtr).NewIterator(nil, nil))
+	if err != nil {
+		t.Fatalf("publish initial non-system root: %v", err)
+	}
+
+	if _, err := db.referencedValueLogSegments(context.Background()); err != nil {
+		t.Fatalf("refresh value-log refs: %v", err)
+	}
+	beforeSeq := db.currentCommitSeq()
+	if _, ok := db.valueLogRefTracker.referencedSet(beforeSeq); !ok {
+		t.Fatalf("expected incremental ref set before non-system delta at seq=%d", beforeSeq)
+	}
+
+	_, _, err = db.PublishOrderedRootDeltaGroupWithSystemBuilder([]OrderedRootDeltaPublishInput{{
+		BaseRoot: baseRoot,
+		Iter:     mustFrozenSystemPointerMemtable(t, "root/p", newPtr).NewIterator(nil, nil),
+	}}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		if len(rootIDs) != 1 {
+			t.Fatalf("rootIDs len=%d want 1", len(rootIDs))
+		}
+		return mustFrozenSystemMemtable(t, "sys/root", strconv.FormatUint(rootIDs[0], 10)).NewIterator(nil, nil), nil
+	})
+	if err != nil {
+		t.Fatalf("publish non-system delta group: %v", err)
+	}
+
+	afterSeq := db.currentCommitSeq()
+	if refs, ok := db.valueLogRefTracker.referencedSet(afterSeq); ok {
+		t.Fatalf("value-log ref tracker stayed valid after untracked non-system delta: refs=%v", refs)
+	}
 }
 
 func assertValueLogRefTrackerMatchesFullScan(t *testing.T, db *DB) {

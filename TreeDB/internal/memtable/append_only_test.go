@@ -90,6 +90,29 @@ func TestAppendOnlyInitialEntriesForCapacity(t *testing.T) {
 	})
 }
 
+func TestAppendOnlyInitialEntriesForCount(t *testing.T) {
+	t.Run("exact-count", func(t *testing.T) {
+		got := appendOnlyInitialEntriesForCount(200)
+		if got != 200 {
+			t.Fatalf("entry count=%d want=%d", got, 200)
+		}
+	})
+
+	t.Run("minimum-clamp", func(t *testing.T) {
+		got := appendOnlyInitialEntriesForCount(1)
+		if got != appendOnlyMinInitialEntries {
+			t.Fatalf("min clamp entries=%d want=%d", got, appendOnlyMinInitialEntries)
+		}
+	})
+
+	t.Run("maximum-clamp", func(t *testing.T) {
+		got := appendOnlyInitialEntriesForCount(appendOnlyMaxInitialEntries + 1)
+		if got != appendOnlyMaxInitialEntries {
+			t.Fatalf("max clamp entries=%d want=%d", got, appendOnlyMaxInitialEntries)
+		}
+	})
+}
+
 func TestAppendOnlyCRUD(t *testing.T) {
 	m := NewAppendOnlyWithCapacity(0)
 

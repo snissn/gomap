@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"testing"
+
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
 )
 
 func newClosedDBForPublicMethodTest(t *testing.T) *DB {
@@ -327,6 +329,22 @@ func TestClosedDB_PublishOrderedRootGroup(t *testing.T) {
 		_, _, err := d.PublishOrderedRootGroup(nil, nil)
 		if !errors.Is(err, ErrClosed) {
 			t.Fatalf("PublishOrderedRootGroup err=%v want %v", err, ErrClosed)
+		}
+	})
+}
+
+func TestClosedDB_PublishOrderedRootDeltaGroupWithSystemBuilder(t *testing.T) {
+	runClosedDBMethod(t, "PublishOrderedRootDeltaGroupWithSystemBuilder", func(d *DB) {
+		table := mustFrozenSystemMemtable(t, "root/k", "v")
+		iter := table.NewIterator(nil, nil)
+		defer iter.Close()
+		_, _, err := d.PublishOrderedRootDeltaGroupWithSystemBuilder([]OrderedRootDeltaPublishInput{{
+			Iter: iter,
+		}}, func([]uint64) (iterator.UnsafeIterator, error) {
+			return mustFrozenSystemMemtable(t, "sys/k", "v").NewIterator(nil, nil), nil
+		})
+		if !errors.Is(err, ErrClosed) {
+			t.Fatalf("PublishOrderedRootDeltaGroupWithSystemBuilder err=%v want %v", err, ErrClosed)
 		}
 	})
 }

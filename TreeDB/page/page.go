@@ -69,6 +69,7 @@ type ValuePtr struct {
 // CRC32C Table using Castagnoli polynomial.
 var crcTable = crc32.MakeTable(crc32.Castagnoli)
 var checksumZeroField = [4]byte{}
+var checksumZeroBlock = [1024]byte{}
 
 // Checksum returns the CRC32C checksum of data.
 func Checksum(data []byte) uint32 {
@@ -85,6 +86,38 @@ func CalculateChecksum(data []byte) uint32 {
 	sum := crc32.Update(0, crcTable, data[0:8])
 	sum = crc32.Update(sum, crcTable, checksumZeroField[:])
 	sum = crc32.Update(sum, crcTable, data[12:])
+	return sum
+}
+
+// CalculateChecksumWithZeroGap computes the checksum for a logical page made of
+// prefix + zero-filled gap + suffix. The prefix must include the checksum field
+// at bytes 8-11, which is treated as zero.
+func CalculateChecksumWithZeroGap(prefix []byte, gapLen int, suffix []byte) uint32 {
+	if len(prefix) < PageHeaderSize {
+		panic("page: checksum zero-gap prefix is shorter than page header")
+	}
+	if gapLen < 0 {
+		panic("page: checksum zero-gap length is negative")
+	}
+	sum := crc32.Update(0, crcTable, prefix[0:8])
+	sum = crc32.Update(sum, crcTable, checksumZeroField[:])
+	sum = crc32.Update(sum, crcTable, prefix[12:])
+	sum = updateChecksumZeroes(sum, gapLen)
+	if len(suffix) > 0 {
+		sum = crc32.Update(sum, crcTable, suffix)
+	}
+	return sum
+}
+
+func updateChecksumZeroes(sum uint32, count int) uint32 {
+	for count > 0 {
+		n := count
+		if n > len(checksumZeroBlock) {
+			n = len(checksumZeroBlock)
+		}
+		sum = crc32.Update(sum, crcTable, checksumZeroBlock[:n])
+		count -= n
+	}
 	return sum
 }
 

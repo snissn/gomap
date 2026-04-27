@@ -206,12 +206,33 @@ func appendOnlyInitialEntriesForCapacity(capacity, estimatedBytesPerEntry int) i
 	return n
 }
 
+func appendOnlyInitialEntriesForCount(entries int) int {
+	if entries < appendOnlyMinInitialEntries {
+		return appendOnlyMinInitialEntries
+	}
+	if entries > appendOnlyMaxInitialEntries {
+		return appendOnlyMaxInitialEntries
+	}
+	return entries
+}
+
 func NewAppendOnlyWithCapacity(capacity int) *AppendOnly {
 	return NewAppendOnlyWithCapacityEstimatedEntryBytes(capacity, appendOnlyEstimatedBytesPerEntryPointer)
 }
 
 func NewAppendOnlyWithCapacityEstimatedEntryBytes(capacity, estimatedBytesPerEntry int) *AppendOnly {
 	n := appendOnlyInitialEntriesForCapacity(capacity, estimatedBytesPerEntry)
+	return newAppendOnlyWithInitialEntries(n)
+}
+
+// NewAppendOnlyWithEntryCapacity creates an append-only table sized for an
+// expected entry count instead of a byte-capacity estimate.
+func NewAppendOnlyWithEntryCapacity(entries int) *AppendOnly {
+	n := appendOnlyInitialEntriesForCount(entries)
+	return newAppendOnlyWithInitialEntries(n)
+}
+
+func newAppendOnlyWithInitialEntries(n int) *AppendOnly {
 	return &AppendOnly{
 		entries:        getAppendOnlyEntries(n),
 		baseEntriesLen: n,
@@ -896,6 +917,37 @@ func (m *AppendOnly) Reset() {
 	m.resetLockedWithPolicy(0, 0, true)
 }
 
+// Release returns large internal buffers to package pools when the table is no
+// longer needed. Unlike Reset, it does not retain warm capacity on the table
+// itself, so callers should only use it for short-lived tables they will drop.
+func (m *AppendOnly) Release() {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.waitIteratorLeasesLocked()
+
+	entries := m.entries
+	m.entries = nil
+	m.baseEntriesLen = 0
+	m.latest = nil
+	m.latest64 = nil
+	m.snapshot = nil
+	m.indexBuf = nil
+	m.valueArena.reset()
+	m.valueArena.dropRetained()
+	m.count = 0
+	m.snapCount = 0
+	m.sizeBytes = 0
+	m.ordered = true
+	m.latestDirty = false
+	m.frozen = false
+	m.hasLast = false
+	m.lastIdx = -1
+	putAppendOnlyEntries(entries)
+}
+
 // ResetWithCapacity resets the memtable and, when needed, shrinks retained
 // internal buffers toward the capacity-derived baseline. Unlike Reset, callers
 // provide a capacity estimate so post-spike entry retention can decay.
@@ -1184,6 +1236,15 @@ func (it *appendOnlyIterator) len() int {
 	}
 	return len(it.entries)
 }
+
+func (it *appendOnlyIterator) Len() int {
+	if it == nil {
+		return 0
+	}
+	return it.len()
+}
+
+func (*appendOnlyIterator) StableUnsafeIteratorSlices() bool { return true }
 
 func (it *appendOnlyIterator) entryAt(idx int) *appendOnlyEntry {
 	if idx < 0 {

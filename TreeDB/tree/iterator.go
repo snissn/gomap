@@ -998,7 +998,7 @@ func (it *Iterator) Seek(key []byte) {
 }
 
 func (it *Iterator) IsDeleted() bool {
-	return false
+	return it != nil && it.valid && it.flags&node.FlagTombstone != 0
 }
 
 func (it *Iterator) Domain() (start, end []byte) {

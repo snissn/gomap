@@ -43,6 +43,8 @@ func systemRootOrderedPublishOptions(db *DB) orderedRootPublishOptions {
 		leafColumnar:          db.indexColumnarLeaves,
 		packedValuePtr:        db.indexPackedValuePtr,
 		internalBaseDelta:     db.indexInternalBaseDelta,
+		outerLeavesInValueLog: db.indexOuterLeavesInValueLog,
+		leafPageLog:           db.leafPageLog,
 	}
 }
 

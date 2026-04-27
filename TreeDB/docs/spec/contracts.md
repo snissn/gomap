@@ -127,3 +127,24 @@ When opened read-only:
 - write operations must fail,
 - no mutating recovery steps run,
 - no background maintenance mutates on-disk state.
+
+## 9. Collections Native Fast Path
+
+Collections runtime code uses the native ordered-root publish path as the
+default execution path. The historical oracle branch is an external comparison
+artifact only; it is not a runtime selector or dependency in the collections
+package.
+
+Collection root physical policy is explicit per root:
+
+- document/data roots are the production-mainline roots and benchmark defaults
+  prioritize value-log-backed outer leaves,
+- collection index-state roots follow the collection data-root policy,
+- secondary index roots support both pager-backed fast mode and value-log-backed
+  compressed mode,
+- benchmark artifacts must label the storage-policy cell being measured.
+
+Native collection writes must publish primary, index-state, secondary, and root
+descriptor updates through grouped ordered-root publish primitives. They must not
+route the steady-state runtime path through oracle selectors, detached replay,
+overlay state, or other translation-only hooks.

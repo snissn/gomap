@@ -1,12 +1,10 @@
 package db
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"path/filepath"
-	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -144,9 +142,15 @@ type DB struct {
 	readRetryRefreshFollowerCount atomic.Uint64
 	readRetryRefreshSkippedEpoch  atomic.Uint64
 
-	notifyError func(error)
-	bgErrMu     sync.Mutex
-	bgErr       error
+	notifyError  func(error)
+	bgErrMu      sync.Mutex
+	bgErr        error
+	closeHooksMu sync.Mutex
+	closeHooks   []func() error
+	// closeHooksClosed is set when close hook draining begins. Close hooks run
+	// while writes are still available, so registrations after that point would
+	// otherwise be silently lost.
+	closeHooksClosed bool
 
 	leafGenerationLiveStatsMu        sync.RWMutex
 	leafGenerationLiveStatsCache     leafGenerationLiveStatsCache
@@ -1376,7 +1380,68 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	return db, nil
 }
 
+// RegisterCloseHook registers a callback that runs before Close marks the DB as
+// closing, while normal write/publish APIs are still available.
+func (db *DB) RegisterCloseHook(hook func() error) func() {
+	if db == nil || hook == nil {
+		return func() {}
+	}
+	db.closeHooksMu.Lock()
+	if db.closeHooksClosed || db.closing.Load() {
+		db.closeHooksMu.Unlock()
+		return func() {}
+	}
+	idx := len(db.closeHooks)
+	db.closeHooks = append(db.closeHooks, hook)
+	db.closeHooksMu.Unlock()
+
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			db.closeHooksMu.Lock()
+			if idx >= 0 && idx < len(db.closeHooks) && db.closeHooks[idx] != nil {
+				db.closeHooks[idx] = nil
+			}
+			db.closeHooksMu.Unlock()
+		})
+	}
+}
+
+// RunCloseHooks runs and clears registered close hooks. Wrappers that own a
+// backend DB should call this before they start closing resources required by
+// backend publish APIs.
+func (db *DB) RunCloseHooks() error {
+	if db == nil {
+		return nil
+	}
+	db.closeHooksMu.Lock()
+	if db.closeHooksClosed {
+		db.closeHooksMu.Unlock()
+		return nil
+	}
+	db.closeHooksClosed = true
+	hooks := append([]func() error(nil), db.closeHooks...)
+	clear(db.closeHooks)
+	db.closeHooks = nil
+	db.closeHooksMu.Unlock()
+
+	var errs []error
+	for _, hook := range hooks {
+		if hook == nil {
+			continue
+		}
+		if err := hook(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
 func (db *DB) Close() error {
+	var errs []error
+	if err := db.RunCloseHooks(); err != nil {
+		errs = append(errs, err)
+	}
 	db.closing.Store(true)
 	db.stopCommitCombiner()
 	db.pruner.Stop()
@@ -1392,7 +1457,6 @@ func (db *DB) Close() error {
 	db.lock = nil
 	db.mu.Unlock()
 
-	var errs []error
 	drainDeadline := time.Now().Add(closeSnapshotDrainTimeout)
 	for db.snapshotAcquireInFlight() > 0 {
 		if time.Now().After(drainDeadline) {
@@ -1728,8 +1792,9 @@ func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired [
 	}
 
 	// Ensure value-log-backed leaf pages are flushed before we publish an index
-	// commit that references them.
-	if db.indexOuterLeavesInValueLog && db.leafPageLog != nil {
+	// commit that references them. Per-root storage policies can use the leaf
+	// page log even when the DB-level default stores outer leaves in index pages.
+	if db.leafPageLog != nil {
 		if sync {
 			if err := db.leafPageLog.Sync(); err != nil {
 				return post, prePublishErr(err)
@@ -1865,7 +1930,7 @@ func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired [
 	if leafPageSegmentRegistered && leafPageSegmentFileID != 0 {
 		db.queueLeafGenerationWritableFileIDAtCommit(leafPageSegmentFileID, nextMeta.CommitSeq)
 	}
-	if db.indexOuterLeavesInValueLog && db.leafPageLog != nil {
+	if db.leafPageLog != nil {
 		stagedLeafManifest, changed, err := db.stagedLeafGenerationManifestWithPending(db.leafGenerationManifest, 0, nextMeta.CommitSeq)
 		if err != nil {
 			db.mu.Unlock()
@@ -1890,7 +1955,7 @@ func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired [
 	db.publishSnapshotView(idx, newState, db.valueLogManager)
 	post.commitSeq = nextMeta.CommitSeq
 	post.vlogRefDelta = vlogRefDelta
-	if db.indexOuterLeavesInValueLog && db.leafPageLog != nil {
+	if db.leafPageLog != nil {
 		post.drainLeafGenerationPending = true
 	}
 	db.mu.Unlock()
@@ -2069,64 +2134,11 @@ func (s *Snapshot) Has(key []byte) (bool, error) {
 }
 
 func (s *Snapshot) HasMany(keys [][]byte) ([]bool, error) {
-	out := make([]bool, len(keys))
-	for i, key := range keys {
-		ok, err := s.tree.Has(key)
-		if err != nil {
-			return nil, err
-		}
-		out[i] = ok
-	}
-	return out, nil
+	return s.tree.HasMany(keys)
 }
 
 func (s *Snapshot) HasPrefixes(prefixes [][]byte) ([]bool, error) {
-	out := make([]bool, len(prefixes))
-	if len(prefixes) == 0 {
-		return out, nil
-	}
-
-	type prefixProbeRef struct {
-		prefix []byte
-		idx    int
-	}
-	refs := make([]prefixProbeRef, len(prefixes))
-	for i, prefix := range prefixes {
-		refs[i] = prefixProbeRef{prefix: prefix, idx: i}
-	}
-	sort.Slice(refs, func(i, j int) bool {
-		return bytes.Compare(refs[i].prefix, refs[j].prefix) < 0
-	})
-
-	unique := make([][]byte, 0, len(refs))
-	groupStarts := make([]int, 0, len(refs))
-	for i, ref := range refs {
-		if len(unique) == 0 || !bytes.Equal(ref.prefix, unique[len(unique)-1]) {
-			unique = append(unique, ref.prefix)
-			groupStarts = append(groupStarts, i)
-		}
-	}
-
-	for i, prefix := range unique {
-		it := s.tree.IteratorWithOptions(prefix, nil, tree.IteratorOptions{Mode: tree.IteratorModeKeysOnly})
-		ok := it.Valid() && bytes.HasPrefix(it.UnsafeKey(), prefix) && !it.IsDeleted()
-		err := it.Error()
-		_ = it.Close()
-		if err != nil {
-			return nil, err
-		}
-		if !ok {
-			continue
-		}
-		groupEnd := len(refs)
-		if i+1 < len(groupStarts) {
-			groupEnd = groupStarts[i+1]
-		}
-		for _, ref := range refs[groupStarts[i]:groupEnd] {
-			out[ref.idx] = true
-		}
-	}
-	return out, nil
+	return s.tree.HasPrefixes(prefixes)
 }
 
 // GetEntry returns the persisted leaf entry for key.

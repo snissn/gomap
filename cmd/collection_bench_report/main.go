@@ -22,16 +22,18 @@ import (
 )
 
 type config struct {
-	inputPath         string
-	outDir            string
-	branch            string
-	commit            string
-	worktree          string
-	executionPath     string
-	benchPattern      string
-	count             int
-	benchmarkEngine   string
-	unavailableReason string
+	inputPath           string
+	outDir              string
+	branch              string
+	commit              string
+	worktree            string
+	executionPath       string
+	benchPattern        string
+	count               int
+	benchmarkEngine     string
+	storagePolicy       string
+	collectionBatchSize int
+	unavailableReason   string
 }
 
 type jsonEvent struct {
@@ -73,30 +75,40 @@ type reportSection struct {
 }
 
 type report struct {
-	GeneratedAt       string          `json:"generated_at"`
-	Status            string          `json:"status"`
-	UnavailableReason string          `json:"unavailable_reason,omitempty"`
-	ExecutionPath     string          `json:"execution_path,omitempty"`
-	BenchmarkEngine   string          `json:"benchmark_engine,omitempty"`
-	Worktree          string          `json:"worktree,omitempty"`
-	Branch            string          `json:"branch,omitempty"`
-	Commit            string          `json:"commit,omitempty"`
-	BenchPattern      string          `json:"bench_pattern,omitempty"`
-	Count             int             `json:"count,omitempty"`
-	RawJSONPath       string          `json:"raw_json_path,omitempty"`
-	Sections          []reportSection `json:"sections"`
+	GeneratedAt         string          `json:"generated_at"`
+	Status              string          `json:"status"`
+	UnavailableReason   string          `json:"unavailable_reason,omitempty"`
+	ExecutionPath       string          `json:"execution_path,omitempty"`
+	BenchmarkEngine     string          `json:"benchmark_engine,omitempty"`
+	StoragePolicy       string          `json:"storage_policy,omitempty"`
+	Worktree            string          `json:"worktree,omitempty"`
+	Branch              string          `json:"branch,omitempty"`
+	Commit              string          `json:"commit,omitempty"`
+	BenchPattern        string          `json:"bench_pattern,omitempty"`
+	Count               int             `json:"count,omitempty"`
+	CollectionBatchSize int             `json:"collection_batch_size,omitempty"`
+	RawJSONPath         string          `json:"raw_json_path,omitempty"`
+	Sections            []reportSection `json:"sections"`
 }
 
 var benchmarkSpecs = []benchmarkSpec{
 	{Name: "BenchmarkCollectionInsertProvidedID", Section: "Document Path", Description: "Insert documents with caller-provided IDs into the primary collection root."},
+	{Name: "BenchmarkCollectionInsertBatchProvidedID", Section: "Batch Ingest Path", Description: "Insert documents with caller-provided IDs through the collection batch API; ops/sec is documents/sec."},
 	{Name: "BenchmarkCollectionGetByID", Section: "Document Path", Description: "Lookup documents by primary `_id` from the dedicated primary root."},
+	{Name: "BenchmarkCollectionGetByIDParallel", Section: "Document Path", Description: "Parallel lookup of documents by primary `_id` from the dedicated primary root."},
 	{Name: "BenchmarkCollectionDeleteByID", Section: "Document Path", Description: "Delete pre-existing documents from the primary root without secondary index maintenance."},
 	{Name: "BenchmarkCollectionInsertWithSecondaryIndexes", Section: "Document Path", Description: "Insert documents while maintaining both unique and non-unique secondary indexes."},
+	{Name: "BenchmarkCollectionInsertBatchWithSecondaryIndexes", Section: "Batch Ingest Path", Description: "Batch insert documents while maintaining unique and non-unique secondary indexes; ops/sec is documents/sec."},
+	{Name: "BenchmarkCollectionInsertBatchCheckpointWithSecondaryIndexes", Section: "Batch Ingest Path", Description: "Batch insert indexed documents and force a sync boundary after each batch; ops/sec is documents/sec."},
 	{Name: "BenchmarkCollectionDeleteWithSecondaryIndexes", Section: "Document Path", Description: "Delete documents while removing postings from unique and non-unique secondary indexes."},
 	{Name: "BenchmarkSecondaryLookupUnique", Section: "Secondary Index Path", Description: "Resolve a unique secondary index lookup to document IDs."},
 	{Name: "BenchmarkSecondaryLookupNonUnique", Section: "Secondary Index Path", Description: "Resolve a non-unique secondary index lookup that returns multiple document IDs."},
 	{Name: "BenchmarkSecondaryUpsertFieldChange", Section: "Secondary Index Path", Description: "Rewrite a document so an indexed field changes and postings move to the new value."},
 	{Name: "BenchmarkCollectionCreateIndexBackfillExistingDocs", Section: "Secondary Index Path", Description: "Build a new secondary index and backfill it from an existing primary collection root."},
+	{Name: "BenchmarkCollectionOverheadPlanNoIndex", Section: "Overhead Breakdown", Description: "Plan a no-index collection batch without publishing it; isolates collection planner overhead from backend root publish."},
+	{Name: "BenchmarkCollectionOverheadPlanIndexed", Section: "Overhead Breakdown", Description: "Plan an indexed collection batch without publishing it; includes JSON index extraction, index-state encoding, and secondary run construction."},
+	{Name: "BenchmarkCollectionOverheadIndexStateJSONExtraction", Section: "Overhead Breakdown", Description: "Extract indexed values from JSON documents and encode index-state values, without planner run construction or backend publish."},
+	{Name: "BenchmarkCollectionOverheadPlanIndexedPrecomputedState", Section: "Overhead Breakdown", Description: "Plan an indexed collection batch using precomputed index state, approximating the non-JSON indexed planner cost."},
 }
 
 var benchmarkNameRE = regexp.MustCompile(`^(Benchmark\S+)-(\d+)$`)
@@ -170,6 +182,8 @@ func parseFlagsFrom(args []string) (config, error) {
 	fs.StringVar(&cfg.benchPattern, "bench-pattern", "", "Optional benchmark regex to include in report metadata")
 	fs.IntVar(&cfg.count, "count", 0, "Optional benchmark count to include in report metadata")
 	fs.StringVar(&cfg.benchmarkEngine, "benchmark-engine", "", "Optional benchmark engine label to include in report metadata")
+	fs.StringVar(&cfg.storagePolicy, "storage-policy", "", "Optional collection root storage-policy label to include in report metadata")
+	fs.IntVar(&cfg.collectionBatchSize, "collection-batch-size", 0, "Optional collection benchmark batch size to include in report metadata")
 	fs.StringVar(&cfg.unavailableReason, "unavailable-reason", "", "Emit an explicit unavailable report instead of parsing benchmark input")
 	if err := fs.Parse(args); err != nil {
 		return config{}, err
@@ -199,17 +213,19 @@ func validateExecutionPath(path string) error {
 func buildReport(cfg config) (*report, error) {
 	if cfg.unavailableReason != "" {
 		return &report{
-			GeneratedAt:       time.Now().UTC().Format(time.RFC3339),
-			Status:            "unavailable",
-			UnavailableReason: cfg.unavailableReason,
-			ExecutionPath:     cfg.executionPath,
-			BenchmarkEngine:   cfg.benchmarkEngine,
-			Worktree:          cfg.worktree,
-			Branch:            cfg.branch,
-			Commit:            cfg.commit,
-			BenchPattern:      cfg.benchPattern,
-			Count:             cfg.count,
-			Sections:          []reportSection{},
+			GeneratedAt:         time.Now().UTC().Format(time.RFC3339),
+			Status:              "unavailable",
+			UnavailableReason:   cfg.unavailableReason,
+			ExecutionPath:       cfg.executionPath,
+			BenchmarkEngine:     cfg.benchmarkEngine,
+			StoragePolicy:       cfg.storagePolicy,
+			Worktree:            cfg.worktree,
+			Branch:              cfg.branch,
+			Commit:              cfg.commit,
+			BenchPattern:        cfg.benchPattern,
+			Count:               cfg.count,
+			CollectionBatchSize: cfg.collectionBatchSize,
+			Sections:            []reportSection{},
 		}, nil
 	}
 
@@ -231,17 +247,19 @@ func buildReport(cfg config) (*report, error) {
 	sections := buildSections(aggregates)
 
 	return &report{
-		GeneratedAt:     time.Now().UTC().Format(time.RFC3339),
-		Status:          "ok",
-		ExecutionPath:   cfg.executionPath,
-		BenchmarkEngine: cfg.benchmarkEngine,
-		Worktree:        cfg.worktree,
-		Branch:          cfg.branch,
-		Commit:          cfg.commit,
-		BenchPattern:    cfg.benchPattern,
-		Count:           cfg.count,
-		RawJSONPath:     cfg.inputPath,
-		Sections:        sections,
+		GeneratedAt:         time.Now().UTC().Format(time.RFC3339),
+		Status:              "ok",
+		ExecutionPath:       cfg.executionPath,
+		BenchmarkEngine:     cfg.benchmarkEngine,
+		StoragePolicy:       cfg.storagePolicy,
+		Worktree:            cfg.worktree,
+		Branch:              cfg.branch,
+		Commit:              cfg.commit,
+		BenchPattern:        cfg.benchPattern,
+		Count:               cfg.count,
+		CollectionBatchSize: cfg.collectionBatchSize,
+		RawJSONPath:         cfg.inputPath,
+		Sections:            sections,
 	}, nil
 }
 
@@ -398,7 +416,7 @@ func aggregateSamples(samples []benchmarkSample) map[string]benchmarkAggregate {
 }
 
 func buildSections(aggregates map[string]benchmarkAggregate) []reportSection {
-	sectionOrder := []string{"Document Path", "Secondary Index Path", "Maintenance", "Other"}
+	sectionOrder := []string{"Document Path", "Batch Ingest Path", "Secondary Index Path", "Overhead Breakdown", "Maintenance", "Other"}
 	sections := make(map[string][]benchmarkAggregate, len(sectionOrder))
 	seen := make(map[string]struct{}, len(aggregates))
 
@@ -451,6 +469,9 @@ func renderMarkdown(rep *report) string {
 	if rep.BenchmarkEngine != "" {
 		sb.WriteString(fmt.Sprintf("- benchmark engine: `%s`\n", rep.BenchmarkEngine))
 	}
+	if rep.StoragePolicy != "" {
+		sb.WriteString(fmt.Sprintf("- storage policy: `%s`\n", rep.StoragePolicy))
+	}
 	if rep.Worktree != "" {
 		sb.WriteString(fmt.Sprintf("- worktree: `%s`\n", rep.Worktree))
 	}
@@ -465,6 +486,9 @@ func renderMarkdown(rep *report) string {
 	}
 	if rep.Count > 0 {
 		sb.WriteString(fmt.Sprintf("- benchmark count: `%d`\n", rep.Count))
+	}
+	if rep.CollectionBatchSize > 0 {
+		sb.WriteString(fmt.Sprintf("- collection batch size: `%d`\n", rep.CollectionBatchSize))
 	}
 	if rep.RawJSONPath != "" {
 		sb.WriteString(fmt.Sprintf("- raw benchmark json: `%s`\n", rep.RawJSONPath))

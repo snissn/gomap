@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 	"sync/atomic"
 
@@ -713,4 +714,150 @@ func (t *Tree) Has(key []byte) (bool, error) {
 	}
 
 	return false, errors.New("tree too deep")
+}
+
+func (t *Tree) HasMany(keys [][]byte) ([]bool, error) {
+	out := make([]bool, len(keys))
+	for i, key := range keys {
+		ok, err := t.Has(key)
+		if err != nil {
+			return nil, err
+		}
+		out[i] = ok
+	}
+	return out, nil
+}
+
+func (t *Tree) HasAnySorted(keys [][]byte) (bool, error) {
+	if len(keys) == 0 {
+		return false, nil
+	}
+	for i := 1; i < len(keys); i++ {
+		if compareTreeKey(keys[i-1], keys[i]) > 0 {
+			return false, errors.New("HasAnySorted: keys must be sorted in ascending compareTreeKey order (8-byte keys are compared as big-endian uint64)")
+		}
+	}
+
+	scanLimit := len(keys) * 4
+	if scanLimit < 1024 {
+		scanLimit = 1024
+	}
+
+	it := t.IteratorWithOptions(keys[0], nil, IteratorOptions{Mode: IteratorModeKeysOnly})
+	defer func() { _ = it.Close() }()
+	targetIdx := 0
+	scanned := 0
+	limitExceeded := false
+	for targetIdx < len(keys) {
+		if !it.Valid() {
+			if err := it.Error(); err != nil {
+				return false, err
+			}
+			return false, nil
+		}
+		curr := it.UnsafeKey()
+		switch cmp := compareTreeKey(curr, keys[targetIdx]); {
+		case cmp == 0:
+			if !it.IsDeleted() {
+				return true, it.Error()
+			}
+			target := keys[targetIdx]
+			for targetIdx < len(keys) && compareTreeKey(keys[targetIdx], target) == 0 {
+				targetIdx++
+			}
+			it.Next()
+		case cmp < 0:
+			scanned++
+			if scanned > scanLimit {
+				limitExceeded = true
+				goto fallback
+			}
+			it.Next()
+		default:
+			for targetIdx < len(keys) && compareTreeKey(keys[targetIdx], curr) < 0 {
+				targetIdx++
+			}
+		}
+	}
+
+fallback:
+	if err := it.Error(); err != nil {
+		return false, err
+	}
+	if !limitExceeded {
+		return false, nil
+	}
+	for ; targetIdx < len(keys); targetIdx++ {
+		ok, err := t.Has(keys[targetIdx])
+		if err != nil {
+			return false, err
+		}
+		if ok {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (t *Tree) HasPrefixes(prefixes [][]byte) ([]bool, error) {
+	out := make([]bool, len(prefixes))
+	if len(prefixes) == 0 {
+		return out, nil
+	}
+
+	type prefixProbeRef struct {
+		prefix []byte
+		idx    int
+	}
+	refs := make([]prefixProbeRef, len(prefixes))
+	for i, prefix := range prefixes {
+		refs[i] = prefixProbeRef{prefix: prefix, idx: i}
+	}
+	sort.Slice(refs, func(i, j int) bool {
+		return compareTreeKey(refs[i].prefix, refs[j].prefix) < 0
+	})
+
+	it := t.IteratorWithOptions(refs[0].prefix, nil, IteratorOptions{Mode: IteratorModeKeysOnly})
+	defer func() { _ = it.Close() }()
+	for start := 0; start < len(refs); {
+		prefix := refs[start].prefix
+		end := start + 1
+		for end < len(refs) && bytes.Equal(refs[end].prefix, prefix) {
+			end++
+		}
+
+		it.Seek(prefix)
+		found := false
+		for {
+			if !it.Valid() {
+				if err := it.Error(); err != nil {
+					return nil, err
+				}
+				return out, nil
+			}
+			curr := it.UnsafeKey()
+			if compareTreeKey(curr, prefix) < 0 {
+				it.Seek(prefix)
+				continue
+			}
+			if !bytes.HasPrefix(curr, prefix) {
+				break
+			}
+			if !it.IsDeleted() {
+				found = true
+				break
+			}
+			it.Next()
+		}
+		if found {
+			for _, ref := range refs[start:end] {
+				out[ref.idx] = true
+			}
+		}
+		start = end
+	}
+	if err := it.Error(); err != nil {
+		return nil, err
+	}
+	return out, nil
 }

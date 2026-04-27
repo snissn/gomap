@@ -179,7 +179,8 @@ COUNT=1 \
 ```bash
 NATIVE_WORKTREE=/home/mikers/dev/snissn/gomap
 
-TREEDB_COLLECTION_BENCH_ENGINE=cached \
+TREEDB_COLLECTION_BENCH_ENGINE=backend_direct_fast \
+TREEDB_COLLECTION_BENCH_BATCH_SIZE=8000 \
 BENCHTIME=1s \
 COUNT=1 \
 (cd "$NATIVE_WORKTREE" && git rev-parse HEAD && scripts/bench_collections_report.sh)
