@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/TreeDB/collections"
@@ -124,6 +125,16 @@ func benchmarkReportNativeProbeFallbackDeltas(b *testing.B, backend *backenddb.D
 	if prefixDelta != 0 {
 		b.Fatalf("per_item_prefix_probe_fallback_count=%d want 0", prefixDelta)
 	}
+}
+
+func benchmarkReportCheckpointSplit(b *testing.B, docs int, insertElapsed, syncElapsed time.Duration) {
+	b.Helper()
+
+	if docs <= 0 {
+		return
+	}
+	b.ReportMetric(float64(insertElapsed.Nanoseconds())/float64(docs), "insert_ns/doc")
+	b.ReportMetric(float64(syncElapsed.Nanoseconds())/float64(docs), "sync_ns/doc")
 }
 
 func TestBenchmarkCollectionStoragePolicyDefaultsProductionMainline(t *testing.T) {
@@ -404,6 +415,8 @@ func BenchmarkCollectionInsertBatchCheckpointWithSecondaryIndexes(b *testing.B) 
 	backend, collection := openBenchmarkCollection(b, "bench_insert_batch_checkpoint_secondary", secondaryIndexes()...)
 	targetBatchSize := benchmarkBatchSize(b)
 	startKeyFallback, startPrefixFallback := benchmarkNativeProbeFallbackCounters(b, backend)
+	var insertElapsed time.Duration
+	var syncElapsed time.Duration
 
 	b.ReportAllocs()
 	b.ReportMetric(float64(targetBatchSize), "target_docs/checkpoint")
@@ -417,13 +430,18 @@ func BenchmarkCollectionInsertBatchCheckpointWithSecondaryIndexes(b *testing.B) 
 		ids, docs := benchmarkDocumentBatch(inserted, batchSize, true)
 		b.StartTimer()
 
+		insertStart := time.Now()
 		if _, err := collection.InsertBatch(ids, docs); err != nil {
 			b.Fatalf("insert batch with secondary indexes: %v", err)
 		}
+		insertElapsed += time.Since(insertStart)
+		syncStart := time.Now()
 		benchmarkSyncBoundary(b, backend)
+		syncElapsed += time.Since(syncStart)
 		inserted += batchSize
 	}
 	b.StopTimer()
+	benchmarkReportCheckpointSplit(b, b.N, insertElapsed, syncElapsed)
 	benchmarkReportNativeProbeFallbackDeltas(b, backend, startKeyFallback, startPrefixFallback)
 }
 

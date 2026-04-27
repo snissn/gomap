@@ -361,7 +361,7 @@ cat >>"$SUMMARY_MD" <<'EOF'
 
 The production matrix keeps collection data roots in value-log outer-leaf mode and varies index roots between inline outer leaves and value-log outer leaves. The `production_fast` and `production_wal_on_fast` engines keep the cached no-WAL and WAL-on fast paths visible without changing the collection storage policy.
 
-The focused default benchmark set keeps JSON extraction overhead, non-JSON indexed planning overhead, indexed batch apply, and indexed checkpoint apply in the same artifact so regressions can be separated into JSON cost, planner cost, root publish cost, and durability-boundary cost.
+The focused default benchmark set keeps JSON extraction overhead, non-JSON indexed planning overhead, indexed batch apply, and indexed checkpoint apply in the same artifact so regressions can be separated into JSON cost, planner cost, root publish cost, and durability-boundary cost. Checkpointed rows report `insert_ns/doc` and `sync_ns/doc`, and the user-story TSV renders those as insert/sync milliseconds per batch.
 
 Set `TREEDB_COLLECTION_PROFILE_BENCHES=true` to add per-benchmark profile bundles for indexed ingest and checkpointed indexed ingest. `profile_index.tsv` lists the report, CPU profile mode, CPU profile, allocation profile, and pprof top files for each focused capture. These `go test` profiles cover the whole benchmark process; timed benchmark rows remain the source of truth, and pprof top output should be read as coarse attribution because setup or off-timer document generation can appear.
 

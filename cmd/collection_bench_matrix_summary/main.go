@@ -50,6 +50,8 @@ type summaryRow struct {
 	BytesPerOp          float64
 	AllocsPerOp         float64
 	CollectionBatchSize int
+	InsertNsPerDoc      *float64
+	SyncNsPerDoc        *float64
 	KeyFallbacks        *float64
 	PrefixFallbacks     *float64
 }
@@ -213,6 +215,8 @@ func buildSummaryRows(rows []matrixRow) ([]summaryRow, error) {
 				BytesPerOp:          benchmark.MeanBytesPerOp,
 				AllocsPerOp:         benchmark.MeanAllocsPerOp,
 				CollectionBatchSize: report.CollectionBatchSize,
+				InsertNsPerDoc:      metricPtr(benchmark.MeanMetrics, "insert_ns/doc"),
+				SyncNsPerDoc:        metricPtr(benchmark.MeanMetrics, "sync_ns/doc"),
 				KeyFallbacks:        metricPtr(benchmark.MeanMetrics, "per_item_key_probe_fallback_count"),
 				PrefixFallbacks:     metricPtr(benchmark.MeanMetrics, "per_item_prefix_probe_fallback_count"),
 			})
@@ -273,7 +277,7 @@ func metricPtr(metrics map[string]float64, name string) *float64 {
 
 func renderTSV(rows []summaryRow) string {
 	var sb strings.Builder
-	sb.WriteString("cell\tengine\tdata_outer_leaves_in_vlog\tindex_outer_leaves_in_vlog\tbenchmark\tns_per_op\tbytes_per_op\tallocs_per_op\tper_item_key_probe_fallback_count\tper_item_prefix_probe_fallback_count\treport_md\n")
+	sb.WriteString("cell\tengine\tdata_outer_leaves_in_vlog\tindex_outer_leaves_in_vlog\tbenchmark\tns_per_op\tbytes_per_op\tallocs_per_op\tinsert_ns/doc\tsync_ns/doc\tper_item_key_probe_fallback_count\tper_item_prefix_probe_fallback_count\treport_md\n")
 	for _, row := range rows {
 		sb.WriteString(row.Cell)
 		sb.WriteByte('\t')
@@ -291,6 +295,10 @@ func renderTSV(rows []summaryRow) string {
 		sb.WriteByte('\t')
 		sb.WriteString(formatTSVFloat(row.AllocsPerOp))
 		sb.WriteByte('\t')
+		sb.WriteString(formatOptionalTSVFloat(row.InsertNsPerDoc))
+		sb.WriteByte('\t')
+		sb.WriteString(formatOptionalTSVFloat(row.SyncNsPerDoc))
+		sb.WriteByte('\t')
 		sb.WriteString(formatOptionalTSVFloat(row.KeyFallbacks))
 		sb.WriteByte('\t')
 		sb.WriteString(formatOptionalTSVFloat(row.PrefixFallbacks))
@@ -303,7 +311,7 @@ func renderTSV(rows []summaryRow) string {
 
 func renderUserStoryTSV(rows []userStoryRow) string {
 	var sb strings.Builder
-	sb.WriteString("cell\tengine\tdata_outer_leaves_in_vlog\tindex_outer_leaves_in_vlog\tstory\tbenchmark\tdocs_per_batch\tdocs_per_sec\tms_per_batch\tbatches_per_sec\tns_per_doc\treport_md\n")
+	sb.WriteString("cell\tengine\tdata_outer_leaves_in_vlog\tindex_outer_leaves_in_vlog\tstory\tbenchmark\tdocs_per_batch\tdocs_per_sec\tms_per_batch\tinsert_ms_per_batch\tsync_ms_per_batch\tbatches_per_sec\tns_per_doc\treport_md\n")
 	for _, row := range rows {
 		sb.WriteString(row.Cell)
 		sb.WriteByte('\t')
@@ -323,6 +331,10 @@ func renderUserStoryTSV(rows []userStoryRow) string {
 		sb.WriteByte('\t')
 		sb.WriteString(formatTSVFloat(row.MSPerBatch))
 		sb.WriteByte('\t')
+		sb.WriteString(formatOptionalTSVFloat(optionalMetricPerBatchMS(row.InsertNsPerDoc, row.CollectionBatchSize)))
+		sb.WriteByte('\t')
+		sb.WriteString(formatOptionalTSVFloat(optionalMetricPerBatchMS(row.SyncNsPerDoc, row.CollectionBatchSize)))
+		sb.WriteByte('\t')
 		sb.WriteString(formatTSVFloat(row.BatchesSec))
 		sb.WriteByte('\t')
 		sb.WriteString(formatTSVFloat(row.NsPerOp))
@@ -331,6 +343,14 @@ func renderUserStoryTSV(rows []userStoryRow) string {
 		sb.WriteByte('\n')
 	}
 	return sb.String()
+}
+
+func optionalMetricPerBatchMS(nsPerDoc *float64, batchSize int) *float64 {
+	if nsPerDoc == nil || batchSize <= 0 {
+		return nil
+	}
+	value := *nsPerDoc * float64(batchSize) / 1e6
+	return &value
 }
 
 func formatOptionalTSVFloat(value *float64) string {
@@ -354,8 +374,8 @@ func renderMarkdown(rows []summaryRow, outDir string) (string, error) {
 	if len(userStoryRows) > 0 {
 		sb.WriteString("## User-Facing Throughput\n\n")
 		sb.WriteString("Batch benchmark ops are documents, so this section reports the indexed ingest story as docs/sec, batch latency, and batches/sec. Diagnostic JSON/planner rows are separated below.\n\n")
-		sb.WriteString("| Cell | Engine | Data vlog | Index vlog | Story | Docs/batch | Docs/sec | ms/batch | batches/sec | ns/doc | Report |\n")
-		sb.WriteString("| --- | --- | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: | --- |\n")
+		sb.WriteString("| Cell | Engine | Data vlog | Index vlog | Story | Docs/batch | Docs/sec | ms/batch | insert ms/batch | sync ms/batch | batches/sec | ns/doc | Report |\n")
+		sb.WriteString("| --- | --- | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |\n")
 		for _, row := range userStoryRows {
 			reportPath := relativeReportPath(outDir, row.ReportMarkdownPath)
 			sb.WriteString("| `")
@@ -374,6 +394,10 @@ func renderMarkdown(rows []summaryRow, outDir string) (string, error) {
 			sb.WriteString(formatThroughput(row.DocsPerSec))
 			sb.WriteString(" | ")
 			sb.WriteString(formatFloat(row.MSPerBatch))
+			sb.WriteString(" | ")
+			sb.WriteString(formatOptionalFloat(optionalMetricPerBatchMS(row.InsertNsPerDoc, row.CollectionBatchSize)))
+			sb.WriteString(" | ")
+			sb.WriteString(formatOptionalFloat(optionalMetricPerBatchMS(row.SyncNsPerDoc, row.CollectionBatchSize)))
 			sb.WriteString(" | ")
 			sb.WriteString(formatFloat(row.BatchesSec))
 			sb.WriteString(" | ")
@@ -411,8 +435,8 @@ func renderMarkdown(rows []summaryRow, outDir string) (string, error) {
 		sb.WriteString("\n")
 	}
 	sb.WriteString("## Raw Matrix\n\n")
-	sb.WriteString("| Cell | Engine | Data vlog | Index vlog | Benchmark | ns/op | B/op | allocs/op | Key fallbacks | Prefix fallbacks | Report |\n")
-	sb.WriteString("| --- | --- | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: | --- |\n")
+	sb.WriteString("| Cell | Engine | Data vlog | Index vlog | Benchmark | ns/op | B/op | allocs/op | insert ns/doc | sync ns/doc | Key fallbacks | Prefix fallbacks | Report |\n")
+	sb.WriteString("| --- | --- | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |\n")
 	for _, row := range rows {
 		reportPath := relativeReportPath(outDir, row.ReportMarkdownPath)
 		sb.WriteString("| `")
@@ -431,6 +455,10 @@ func renderMarkdown(rows []summaryRow, outDir string) (string, error) {
 		sb.WriteString(formatFloat(row.BytesPerOp))
 		sb.WriteString(" | ")
 		sb.WriteString(formatFloat(row.AllocsPerOp))
+		sb.WriteString(" | ")
+		sb.WriteString(formatOptionalFloat(row.InsertNsPerDoc))
+		sb.WriteString(" | ")
+		sb.WriteString(formatOptionalFloat(row.SyncNsPerDoc))
 		sb.WriteString(" | ")
 		sb.WriteString(formatOptionalFloat(row.KeyFallbacks))
 		sb.WriteString(" | ")
