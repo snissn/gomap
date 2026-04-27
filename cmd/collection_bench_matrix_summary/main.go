@@ -199,7 +199,7 @@ func buildSummaryRows(rows []matrixRow) ([]summaryRow, error) {
 }
 
 func expectedBenchmarkNames(row matrixRow) []string {
-	if strings.HasPrefix(row.Engine, "sqlite") {
+	if isSQLiteMatrixRow(row) {
 		return []string{
 			"BenchmarkSQLiteInsertBatchWithSecondaryIndexes",
 			"BenchmarkSQLiteInsertBatchCheckpointWithSecondaryIndexes",
@@ -211,6 +211,12 @@ func expectedBenchmarkNames(row matrixRow) []string {
 		"BenchmarkCollectionInsertBatchWithSecondaryIndexes",
 		"BenchmarkCollectionInsertBatchCheckpointWithSecondaryIndexes",
 	}
+}
+
+func isSQLiteMatrixRow(row matrixRow) bool {
+	// The matrix runner normalizes SQLite cells to the sqlite_* namespace even
+	// when TREEDB_COLLECTION_SQLITE_ENGINE uses a custom engine label.
+	return row.Cell == "sqlite" || strings.HasPrefix(row.Cell, "sqlite_") || strings.HasPrefix(row.Engine, "sqlite")
 }
 
 func loadBenchmarkReport(path string) (map[string]benchmarkAggregate, error) {

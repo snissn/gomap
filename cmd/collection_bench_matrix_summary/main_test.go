@@ -57,7 +57,8 @@ func TestMatrixSummaryRendersBenchmarkMetrics(t *testing.T) {
 }`), 0o644); err != nil {
 		t.Fatalf("write report json: %v", err)
 	}
-	sqliteCellDir := filepath.Join(dir, "sqlite_wal_normal")
+	sqliteCell := "sqlite_wal_custom"
+	sqliteCellDir := filepath.Join(dir, sqliteCell)
 	if err := os.MkdirAll(sqliteCellDir, 0o755); err != nil {
 		t.Fatalf("mkdir sqlite cell: %v", err)
 	}
@@ -99,7 +100,7 @@ func TestMatrixSummaryRendersBenchmarkMetrics(t *testing.T) {
 	index := strings.Join([]string{
 		"cell\tengine\tdata_outer_leaves_in_vlog\tindex_outer_leaves_in_vlog\treport_md\treport_json\tcpu_profile\tmem_profile",
 		"production_fast_data_vlog_index_leaf\tproduction_fast\ttrue\tfalse\t" + reportMarkdown + "\t" + reportJSON + "\t/cpu.pprof\t/mem.pprof",
-		"sqlite_wal_normal\tsqlite_wal_normal\t-\t-\t" + sqliteReportMarkdown + "\t" + sqliteReportJSON + "\t/sqlite-cpu.pprof\t/sqlite-mem.pprof",
+		sqliteCell + "\twal_custom\t-\t-\t" + sqliteReportMarkdown + "\t" + sqliteReportJSON + "\t/sqlite-cpu.pprof\t/sqlite-mem.pprof",
 		"",
 	}, "\n")
 	if err := os.WriteFile(indexPath, []byte(index), 0o644); err != nil {
@@ -122,7 +123,7 @@ func TestMatrixSummaryRendersBenchmarkMetrics(t *testing.T) {
 		"30",
 		"0",
 		"[report](production_fast_data_vlog_index_leaf/collections_report.md)",
-		"[report](sqlite_wal_normal/collections_report.md)",
+		"[report](sqlite_wal_custom/collections_report.md)",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("markdown missing %q:\n%s", want, got)
