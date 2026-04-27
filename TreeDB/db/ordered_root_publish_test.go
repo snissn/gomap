@@ -310,6 +310,165 @@ func TestPublishOrderedRootGroup_PersistsSystemAndOrderedRoots(t *testing.T) {
 	}
 }
 
+func TestPublishOrderedRootGroup_UsesPerRootStoragePolicy(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir, IndexOuterLeavesInValueLog: true})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	leafLog := newRewriteWriter(ValueLogDirPath(dir), 0, 0, 64<<20)
+	db.SetLeafPageLog(leafLog)
+	defer func() {
+		_ = leafLog.Close()
+		_ = db.Close()
+	}()
+
+	compressedTable := mustFrozenSystemMemtable(t, "doc/u1", "document")
+	fastTable := mustFrozenSystemMemtable(t, "idx/email/u1", "")
+	_, rootIDs, err := db.PublishOrderedRootGroup(nil, []OrderedRootPublishInput{
+		{BaseRoot: 0, Iter: compressedTable.NewIterator(nil, nil), StoragePolicy: OrderedRootStorageValueLogLeaves},
+		{BaseRoot: 0, Iter: fastTable.NewIterator(nil, nil), StoragePolicy: OrderedRootStoragePagerLeaves},
+	})
+	if err != nil {
+		t.Fatalf("publish ordered root group: %v", err)
+	}
+	if len(rootIDs) != 2 {
+		t.Fatalf("rootIDs=%d want 2", len(rootIDs))
+	}
+	if _, ok := page.DecodeLeafRef(rootIDs[0]); !ok {
+		t.Fatalf("compressed root id=%d, want leaf ref", rootIDs[0])
+	}
+	if _, ok := page.DecodeLeafRef(rootIDs[1]); ok {
+		t.Fatalf("fast root id=%d, want pager page", rootIDs[1])
+	}
+
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("expected snapshot")
+	}
+	defer snap.Close()
+	entry, err := snap.GetEntryAtRoot(rootIDs[0], []byte("doc/u1"))
+	if err != nil {
+		t.Fatalf("GetEntryAtRoot(compressed): %v", err)
+	}
+	if got := string(entry.Value); got != "document" {
+		t.Fatalf("compressed value=%q want document", got)
+	}
+	entry, err = snap.GetEntryAtRoot(rootIDs[1], []byte("idx/email/u1"))
+	if err != nil {
+		t.Fatalf("GetEntryAtRoot(fast): %v", err)
+	}
+	if got := string(entry.Value); got != "" {
+		t.Fatalf("fast index value=%q want empty", got)
+	}
+}
+
+func TestPublishOrderedRootDeltaGroupWithSystemBuilder_UsesPerRootStoragePolicy(t *testing.T) {
+	t.Run("pager leaves override value-log default", func(t *testing.T) {
+		dir := t.TempDir()
+		db, err := Open(Options{Dir: dir, IndexOuterLeavesInValueLog: true})
+		if err != nil {
+			t.Fatalf("open db: %v", err)
+		}
+		leafLog := newRewriteWriter(ValueLogDirPath(dir), 0, 0, 64<<20)
+		db.SetLeafPageLog(leafLog)
+		defer func() {
+			_ = leafLog.Close()
+			_ = db.Close()
+		}()
+
+		_, baseRootIDs, err := db.PublishOrderedRootGroup(nil, []OrderedRootPublishInput{{
+			BaseRoot:      0,
+			Iter:          mustFrozenSystemMemtable(t, "doc/a", "va").NewIterator(nil, nil),
+			StoragePolicy: OrderedRootStoragePagerLeaves,
+		}})
+		if err != nil {
+			t.Fatalf("publish base root: %v", err)
+		}
+
+		_, rootIDs, err := db.PublishOrderedRootDeltaGroupWithSystemBuilder([]OrderedRootDeltaPublishInput{{
+			BaseRoot:      baseRootIDs[0],
+			Iter:          mustFrozenSystemMemtable(t, "doc/b", "vb").NewIterator(nil, nil),
+			StoragePolicy: OrderedRootStoragePagerLeaves,
+		}}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+			return mustFrozenSystemMemtable(t, "sys/root", strconv.FormatUint(rootIDs[0], 10)).NewIterator(nil, nil), nil
+		})
+		if err != nil {
+			t.Fatalf("publish delta root: %v", err)
+		}
+		if _, ok := page.DecodeLeafRef(rootIDs[0]); ok {
+			t.Fatalf("delta root id=%d, want pager page", rootIDs[0])
+		}
+
+		snap := db.AcquireSnapshot()
+		if snap == nil {
+			t.Fatal("expected snapshot")
+		}
+		defer snap.Close()
+		for key, want := range map[string]string{"doc/a": "va", "doc/b": "vb"} {
+			entry, err := snap.GetEntryAtRoot(rootIDs[0], []byte(key))
+			if err != nil {
+				t.Fatalf("GetEntryAtRoot(%s): %v", key, err)
+			}
+			if got := string(entry.Value); got != want {
+				t.Fatalf("%s=%q want %q", key, got, want)
+			}
+		}
+	})
+
+	t.Run("value-log leaves override pager default", func(t *testing.T) {
+		dir := t.TempDir()
+		db, err := Open(Options{Dir: dir})
+		if err != nil {
+			t.Fatalf("open db: %v", err)
+		}
+		leafLog := newRewriteWriter(ValueLogDirPath(dir), 0, 0, 64<<20)
+		db.SetLeafPageLog(leafLog)
+		defer func() {
+			_ = leafLog.Close()
+			_ = db.Close()
+		}()
+
+		_, baseRootIDs, err := db.PublishOrderedRootGroup(nil, []OrderedRootPublishInput{{
+			BaseRoot:      0,
+			Iter:          mustFrozenSystemMemtable(t, "doc/a", "va").NewIterator(nil, nil),
+			StoragePolicy: OrderedRootStorageValueLogLeaves,
+		}})
+		if err != nil {
+			t.Fatalf("publish base root: %v", err)
+		}
+
+		_, rootIDs, err := db.PublishOrderedRootDeltaGroupWithSystemBuilder([]OrderedRootDeltaPublishInput{{
+			BaseRoot:      baseRootIDs[0],
+			Iter:          mustFrozenSystemMemtable(t, "doc/b", "vb").NewIterator(nil, nil),
+			StoragePolicy: OrderedRootStorageValueLogLeaves,
+		}}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+			return mustFrozenSystemMemtable(t, "sys/root", strconv.FormatUint(rootIDs[0], 10)).NewIterator(nil, nil), nil
+		})
+		if err != nil {
+			t.Fatalf("publish delta root: %v", err)
+		}
+		if _, ok := page.DecodeLeafRef(rootIDs[0]); !ok {
+			t.Fatalf("delta root id=%d, want leaf ref", rootIDs[0])
+		}
+
+		snap := db.AcquireSnapshot()
+		if snap == nil {
+			t.Fatal("expected snapshot")
+		}
+		defer snap.Close()
+		for key, want := range map[string]string{"doc/a": "va", "doc/b": "vb"} {
+			entry, err := snap.GetEntryAtRoot(rootIDs[0], []byte(key))
+			if err != nil {
+				t.Fatalf("GetEntryAtRoot(%s): %v", key, err)
+			}
+			if got := string(entry.Value); got != want {
+				t.Fatalf("%s=%q want %q", key, got, want)
+			}
+		}
+	})
+}
+
 func TestPublishOrderedRootGroupWithSystemBuilder_PersistsSystemDescriptorWithOrderedRootIDs(t *testing.T) {
 	dir := t.TempDir()
 	db, err := Open(Options{Dir: dir})

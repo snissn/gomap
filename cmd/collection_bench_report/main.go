@@ -30,6 +30,7 @@ type config struct {
 	benchPattern        string
 	count               int
 	benchmarkEngine     string
+	storagePolicy       string
 	collectionBatchSize int
 	unavailableReason   string
 }
@@ -78,6 +79,7 @@ type report struct {
 	UnavailableReason   string          `json:"unavailable_reason,omitempty"`
 	ExecutionPath       string          `json:"execution_path,omitempty"`
 	BenchmarkEngine     string          `json:"benchmark_engine,omitempty"`
+	StoragePolicy       string          `json:"storage_policy,omitempty"`
 	Worktree            string          `json:"worktree,omitempty"`
 	Branch              string          `json:"branch,omitempty"`
 	Commit              string          `json:"commit,omitempty"`
@@ -92,6 +94,7 @@ var benchmarkSpecs = []benchmarkSpec{
 	{Name: "BenchmarkCollectionInsertProvidedID", Section: "Document Path", Description: "Insert documents with caller-provided IDs into the primary collection root."},
 	{Name: "BenchmarkCollectionInsertBatchProvidedID", Section: "Batch Ingest Path", Description: "Insert documents with caller-provided IDs through the collection batch API; ops/sec is documents/sec."},
 	{Name: "BenchmarkCollectionGetByID", Section: "Document Path", Description: "Lookup documents by primary `_id` from the dedicated primary root."},
+	{Name: "BenchmarkCollectionGetByIDParallel", Section: "Document Path", Description: "Parallel lookup of documents by primary `_id` from the dedicated primary root."},
 	{Name: "BenchmarkCollectionDeleteByID", Section: "Document Path", Description: "Delete pre-existing documents from the primary root without secondary index maintenance."},
 	{Name: "BenchmarkCollectionInsertWithSecondaryIndexes", Section: "Document Path", Description: "Insert documents while maintaining both unique and non-unique secondary indexes."},
 	{Name: "BenchmarkCollectionInsertBatchWithSecondaryIndexes", Section: "Batch Ingest Path", Description: "Batch insert documents while maintaining unique and non-unique secondary indexes; ops/sec is documents/sec."},
@@ -178,6 +181,7 @@ func parseFlagsFrom(args []string) (config, error) {
 	fs.StringVar(&cfg.benchPattern, "bench-pattern", "", "Optional benchmark regex to include in report metadata")
 	fs.IntVar(&cfg.count, "count", 0, "Optional benchmark count to include in report metadata")
 	fs.StringVar(&cfg.benchmarkEngine, "benchmark-engine", "", "Optional benchmark engine label to include in report metadata")
+	fs.StringVar(&cfg.storagePolicy, "storage-policy", "", "Optional collection root storage-policy label to include in report metadata")
 	fs.IntVar(&cfg.collectionBatchSize, "collection-batch-size", 0, "Optional collection benchmark batch size to include in report metadata")
 	fs.StringVar(&cfg.unavailableReason, "unavailable-reason", "", "Emit an explicit unavailable report instead of parsing benchmark input")
 	if err := fs.Parse(args); err != nil {
@@ -213,6 +217,7 @@ func buildReport(cfg config) (*report, error) {
 			UnavailableReason:   cfg.unavailableReason,
 			ExecutionPath:       cfg.executionPath,
 			BenchmarkEngine:     cfg.benchmarkEngine,
+			StoragePolicy:       cfg.storagePolicy,
 			Worktree:            cfg.worktree,
 			Branch:              cfg.branch,
 			Commit:              cfg.commit,
@@ -245,6 +250,7 @@ func buildReport(cfg config) (*report, error) {
 		Status:              "ok",
 		ExecutionPath:       cfg.executionPath,
 		BenchmarkEngine:     cfg.benchmarkEngine,
+		StoragePolicy:       cfg.storagePolicy,
 		Worktree:            cfg.worktree,
 		Branch:              cfg.branch,
 		Commit:              cfg.commit,
@@ -461,6 +467,9 @@ func renderMarkdown(rep *report) string {
 	}
 	if rep.BenchmarkEngine != "" {
 		sb.WriteString(fmt.Sprintf("- benchmark engine: `%s`\n", rep.BenchmarkEngine))
+	}
+	if rep.StoragePolicy != "" {
+		sb.WriteString(fmt.Sprintf("- storage policy: `%s`\n", rep.StoragePolicy))
 	}
 	if rep.Worktree != "" {
 		sb.WriteString(fmt.Sprintf("- worktree: `%s`\n", rep.Worktree))

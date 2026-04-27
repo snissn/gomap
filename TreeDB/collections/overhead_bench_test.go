@@ -31,16 +31,40 @@ func overheadBenchBatchSize(b *testing.B) int {
 }
 
 func overheadBenchDocumentID(n int) []byte {
-	return []byte(fmt.Sprintf("u-%09d", n))
+	out := make([]byte, 0, len("u-")+9)
+	out = append(out, "u-"...)
+	return appendOverheadBenchZeroPaddedInt(out, n, 9)
 }
 
 func overheadBenchIndexedDocument(n int) []byte {
-	return []byte(fmt.Sprintf(
-		`{"name":"user-%09d","email":"user-%09d@example.com","city":"city-%02d","pad":"01234567890123456789"}`,
-		n,
-		n,
-		n%overheadBenchCities,
-	))
+	out := make([]byte, 0, 112)
+	out = append(out, `{"name":"user-`...)
+	out = appendOverheadBenchZeroPaddedInt(out, n, 9)
+	out = append(out, `","email":"user-`...)
+	out = appendOverheadBenchZeroPaddedInt(out, n, 9)
+	out = append(out, `@example.com","city":"city-`...)
+	out = appendOverheadBenchZeroPaddedInt(out, n%overheadBenchCities, 2)
+	out = append(out, `","pad":"01234567890123456789"}`...)
+	return out
+}
+
+func appendOverheadBenchZeroPaddedInt(dst []byte, n, width int) []byte {
+	var scratch [20]byte
+	pos := len(scratch)
+	if n == 0 {
+		pos--
+		scratch[pos] = '0'
+	} else {
+		for n > 0 {
+			pos--
+			scratch[pos] = byte('0' + n%10)
+			n /= 10
+		}
+	}
+	for pad := width - (len(scratch) - pos); pad > 0; pad-- {
+		dst = append(dst, '0')
+	}
+	return append(dst, scratch[pos:]...)
 }
 
 func overheadBenchDocumentBatch(count int, indexed bool) ([][]byte, [][]byte) {
@@ -80,9 +104,11 @@ func BenchmarkCollectionOverheadPlanNoIndex(b *testing.B) {
 		if remaining := b.N - planned; remaining < n {
 			n = remaining
 		}
-		if _, err := planner.planInsertBatch(ids[:n], docs[:n]); err != nil {
+		plan, err := planner.planInsertBatch(ids[:n], docs[:n])
+		if err != nil {
 			b.Fatalf("plan no-index batch: %v", err)
 		}
+		resetCollectionRunTables(plan.runs)
 		planned += n
 	}
 }
@@ -100,9 +126,11 @@ func BenchmarkCollectionOverheadPlanIndexed(b *testing.B) {
 		if remaining := b.N - planned; remaining < n {
 			n = remaining
 		}
-		if _, err := planner.planInsertBatch(ids[:n], docs[:n]); err != nil {
+		plan, err := planner.planInsertBatch(ids[:n], docs[:n])
+		if err != nil {
 			b.Fatalf("plan indexed batch: %v", err)
 		}
+		resetCollectionRunTables(plan.runs)
 		planned += n
 	}
 }
@@ -207,14 +235,10 @@ func overheadBenchPlanIndexedPrecomputedState(
 				continue
 			}
 			for _, encoded := range items[i].state[runtime.def.name] {
-				prefix, err := indexValuePrefix(encoded)
-				if err != nil {
-					return err
-				}
 				uniqueProbes = append(uniqueProbes, uniqueProbeCandidate{
-					indexName:  runtime.def.name,
-					prefix:     prefix,
-					documentID: items[i].id,
+					indexName:    runtime.def.name,
+					encodedValue: encoded,
+					documentID:   items[i].id,
 				})
 			}
 		}
@@ -231,11 +255,12 @@ func overheadBenchPlanIndexedPrecomputedState(
 	if err := planner.emitPrimaryRun(plan, items, primaryOrder); err != nil {
 		return err
 	}
-	if err := planner.emitIndexStateRun(plan, items); err != nil {
+	if err := planner.emitIndexStateRun(plan, items, runtimes); err != nil {
 		return err
 	}
 	if err := planner.emitSecondaryRuns(plan, items, runtimes); err != nil {
 		return err
 	}
+	resetCollectionRunTables(plan.runs)
 	return nil
 }

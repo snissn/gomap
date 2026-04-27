@@ -134,3 +134,34 @@ Coverage:
   - `TestReverseIterator_IncludesCachedWrites_SnapshotIsolated`
 - `kvstore/adapters/treedb/read_snapshot_cached_writes_test.go`
 - Unified-bench correctness guardrail: `cmd/unified_bench/read_snapshot_guardrail_test.go` and `BenchConfig.ReadRequireHit`
+
+## 11. Collections Native Fast Path
+
+Invariant:
+- Collections use the native ordered-root publish path by default.
+- The runtime collections package has no oracle-path selector and no detached
+  replay or overlay translation hook.
+- Collection benchmark defaults measure the production-mainline storage cell:
+  data roots with outer leaves in the value log and secondary indexes in pager
+  leaves unless explicitly overridden.
+
+Coverage:
+- `TreeDB/collections/native_default_test.go`:
+  - `TestCollectionsRuntimeHasNoOracleOrTranslationSelectors`
+- `TreeDB/collections/bench_test.go`:
+  - `TestBenchmarkCollectionStoragePolicyDefaultsProductionMainline`
+- `TreeDB/db/ordered_root_publish_test.go`:
+  - `TestPublishOrderedRootGroup_UsesPerRootStoragePolicy`
+  - `TestPublishOrderedRootDeltaGroupWithSystemBuilder_UsesPerRootStoragePolicy`
+- `TreeDB/collections/api_test.go`:
+  - `TestCollectionSingleInsertMatchesSingleItemBatch`
+  - `TestCollectionSingleInsertRejectsUniqueConflictAtomically`
+  - `TestCollectionSingleDocumentReopenUsesPersistedRootDescriptors`
+
+Benchmark verification for collection cutover must include the full storage
+matrix:
+
+- `data_outer=true,index_outer=false` (production-mainline priority),
+- `data_outer=true,index_outer=true` (fully compressed),
+- `data_outer=false,index_outer=false` (fast/control),
+- `data_outer=false,index_outer=true` (low-priority compatibility cell).

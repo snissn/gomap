@@ -52,6 +52,21 @@ func compactLeafPayloadBenchmarkFixture(b *testing.B) (uint32, string, []byte) {
 	return fileID, path, payload
 }
 
+func BenchmarkMaybeCompactLeafLogPayload(b *testing.B) {
+	leaf := buildSparseLeafPageForPayloadBench(b)
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		payload, compacted, err := MaybeCompactLeafLogPayload(leaf)
+		if err != nil {
+			b.Fatalf("MaybeCompactLeafLogPayload: %v", err)
+		}
+		if !compacted {
+			b.Fatal("expected sparse leaf fixture to compact")
+		}
+		leafPagePayloadBenchSink = payload
+	}
+}
+
 func BenchmarkAppendMaybeDecodeLeafLogPayload(b *testing.B) {
 	fileID, path, payload := compactLeafPayloadBenchmarkFixture(b)
 

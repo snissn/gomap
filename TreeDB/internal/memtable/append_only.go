@@ -917,6 +917,37 @@ func (m *AppendOnly) Reset() {
 	m.resetLockedWithPolicy(0, 0, true)
 }
 
+// Release returns large internal buffers to package pools when the table is no
+// longer needed. Unlike Reset, it does not retain warm capacity on the table
+// itself, so callers should only use it for short-lived tables they will drop.
+func (m *AppendOnly) Release() {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.waitIteratorLeasesLocked()
+
+	entries := m.entries
+	m.entries = nil
+	m.baseEntriesLen = 0
+	m.latest = nil
+	m.latest64 = nil
+	m.snapshot = nil
+	m.indexBuf = nil
+	m.valueArena.reset()
+	m.valueArena.dropRetained()
+	m.count = 0
+	m.snapCount = 0
+	m.sizeBytes = 0
+	m.ordered = true
+	m.latestDirty = false
+	m.frozen = false
+	m.hasLast = false
+	m.lastIdx = -1
+	putAppendOnlyEntries(entries)
+}
+
 // ResetWithCapacity resets the memtable and, when needed, shrinks retained
 // internal buffers toward the capacity-derived baseline. Unlike Reset, callers
 // provide a capacity estimate so post-spike entry retention can decay.

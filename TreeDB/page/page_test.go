@@ -131,6 +131,26 @@ func TestUpdateChecksum(t *testing.T) {
 	}
 }
 
+func TestCalculateChecksumWithZeroGap(t *testing.T) {
+	canonical := make([]byte, PageSize)
+	for i := range canonical {
+		canonical[i] = byte((i*31 + 7) & 0xff)
+	}
+	prefixLen := 96
+	suffixLen := 384
+	gapLen := PageSize - prefixLen - suffixLen
+	for i := prefixLen; i < PageSize-suffixLen; i++ {
+		canonical[i] = 0
+	}
+	binary.LittleEndian.PutUint32(canonical[8:12], 0xdeadbeef)
+
+	want := CalculateChecksum(canonical)
+	got := CalculateChecksumWithZeroGap(canonical[:prefixLen], gapLen, canonical[PageSize-suffixLen:])
+	if got != want {
+		t.Fatalf("CalculateChecksumWithZeroGap=0x%x want 0x%x", got, want)
+	}
+}
+
 func TestUnsafeCastHeader(t *testing.T) {
 	// Note: This test assumes LittleEndian machine.
 	// If running on BigEndian, this test might fail or require adjustment if UnsafeCastHeader is used.

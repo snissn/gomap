@@ -139,6 +139,21 @@ func TestSnapshot_HasManyAtRootAndHasPrefixesAtRoot(t *testing.T) {
 		t.Fatalf("HasPrefixesAtRoot mismatch: got=%v want=%v", hasPrefixes, want)
 	}
 
+	hasPrefixes, err = snap.HasPrefixesAtRoot(rootIDs[0], [][]byte{
+		[]byte("acct/bob/"),
+		[]byte("acct/alice/doc-1"),
+		[]byte("acct/alice/"),
+		[]byte("acct/alice/"),
+		[]byte("acct/"),
+		[]byte("acct/zoe/"),
+	})
+	if err != nil {
+		t.Fatalf("HasPrefixesAtRoot unordered/duplicate: %v", err)
+	}
+	if want := []bool{true, true, true, true, true, false}; !reflect.DeepEqual(hasPrefixes, want) {
+		t.Fatalf("HasPrefixesAtRoot unordered/duplicate mismatch: got=%v want=%v", hasPrefixes, want)
+	}
+
 	missingRootHasMany, err := snap.HasManyAtRoot(0, [][]byte{[]byte("acct/alice/doc-1")})
 	if err != nil {
 		t.Fatalf("HasManyAtRoot missing root: %v", err)

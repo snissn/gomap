@@ -39,9 +39,9 @@ func benchmarkTreeDBProfile(b *testing.B) treedb.Profile {
 	b.Helper()
 
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("TREEDB_COLLECTION_BENCH_ENGINE"))) {
-	case "", "backend_direct_fast", "backend_direct", "cached", "fast":
+	case "", "production_fast", "backend_direct_fast", "backend_direct", "cached", "fast":
 		return treedb.ProfileFast
-	case "backend_direct_wal_on_fast", "wal_on_fast":
+	case "production_wal_on_fast", "backend_direct_wal_on_fast", "wal_on_fast":
 		return treedb.ProfileWALOnFast
 	case "durable":
 		return treedb.ProfileDurable
@@ -53,17 +53,56 @@ func benchmarkTreeDBProfile(b *testing.B) treedb.Profile {
 	}
 }
 
+func benchmarkBoolEnv(tb testing.TB, name string, def bool) bool {
+	tb.Helper()
+
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return def
+	}
+	v, err := strconv.ParseBool(raw)
+	if err != nil {
+		tb.Fatalf("unsupported %s=%q", name, raw)
+	}
+	return v
+}
+
+func benchmarkRootStoragePolicy(outerLeavesInVLog bool) collections.RootStoragePolicy {
+	if outerLeavesInVLog {
+		return collections.RootStorageCompressed
+	}
+	return collections.RootStorageFast
+}
+
+func benchmarkCollectionStoragePolicy(tb testing.TB) (dataOuter, indexOuter bool) {
+	tb.Helper()
+
+	dataOuter = benchmarkBoolEnv(tb, "TREEDB_COLLECTION_DATA_OUTER_LEAVES_IN_VLOG", true)
+	indexOuter = benchmarkBoolEnv(tb, "TREEDB_COLLECTION_INDEX_OUTER_LEAVES_IN_VLOG", false)
+	return dataOuter, indexOuter
+}
+
+func TestBenchmarkCollectionStoragePolicyDefaultsProductionMainline(t *testing.T) {
+	t.Setenv("TREEDB_COLLECTION_DATA_OUTER_LEAVES_IN_VLOG", "")
+	t.Setenv("TREEDB_COLLECTION_INDEX_OUTER_LEAVES_IN_VLOG", "")
+	dataOuter, indexOuter := benchmarkCollectionStoragePolicy(t)
+	if !dataOuter || indexOuter {
+		t.Fatalf("benchmark storage defaults data_outer=%t index_outer=%t want production-mainline data_outer=true index_outer=false", dataOuter, indexOuter)
+	}
+}
+
 func openBenchmarkBackend(b *testing.B, dir string) (*backenddb.DB, func() error) {
 	b.Helper()
 
+	dataOuter, indexOuter := benchmarkCollectionStoragePolicy(b)
 	opts := treedb.OptionsFor(benchmarkTreeDBProfile(b), dir)
-	// Native collections currently run on the backend-root API, not the cached
-	// public wrapper. Backend direct opens do not wire the cached leaf-page log
-	// required by IndexOuterLeavesInValueLog, so keep the other fast-profile
-	// knobs while using backend-native leaf storage.
-	opts.IndexOuterLeavesInValueLog = false
-	opts.IndexInternalBaseDelta = true
-	backend, cleanup, err := treedb.OpenBackend(opts)
+	opts.IndexOuterLeavesInValueLog = dataOuter || indexOuter
+	opts.IndexInternalBaseDelta = !opts.IndexOuterLeavesInValueLog
+	open := treedb.OpenBackend
+	if opts.IndexOuterLeavesInValueLog {
+		open = treedb.OpenBackendWithCachedLeafLog
+	}
+	backend, cleanup, err := open(opts)
 	if err != nil {
 		b.Fatalf("open backend: %v", err)
 	}
@@ -81,8 +120,16 @@ func openBenchmarkCollection(b *testing.B, name string, indexes ...collections.I
 	})
 
 	manager := collections.NewCollectionManager(backend)
+	dataOuter, indexOuter := benchmarkCollectionStoragePolicy(b)
+	for i := range indexes {
+		indexes[i].StoragePolicy = benchmarkRootStoragePolicy(indexOuter)
+	}
 	if _, err := manager.CreateCollection(&collections.CollectionMeta{
-		Name:    name,
+		Name: name,
+		Options: collections.CollectionOptions{
+			DataRootStoragePolicy:   benchmarkRootStoragePolicy(dataOuter),
+			IndexStateStoragePolicy: benchmarkRootStoragePolicy(dataOuter),
+		},
 		Indexes: indexes,
 	}); err != nil {
 		b.Fatalf("create collection: %v", err)
@@ -107,17 +154,41 @@ func benchmarkSyncBoundary(b *testing.B, backend *backenddb.DB) {
 	}
 }
 
+func appendZeroPaddedInt(dst []byte, n, width int) []byte {
+	var scratch [20]byte
+	pos := len(scratch)
+	if n == 0 {
+		pos--
+		scratch[pos] = '0'
+	} else {
+		for n > 0 {
+			pos--
+			scratch[pos] = byte('0' + n%10)
+			n /= 10
+		}
+	}
+	for pad := width - (len(scratch) - pos); pad > 0; pad-- {
+		dst = append(dst, '0')
+	}
+	return append(dst, scratch[pos:]...)
+}
+
 func benchmarkDocumentID(n int) []byte {
-	return []byte(fmt.Sprintf("u-%09d", n))
+	out := make([]byte, 0, len("u-")+9)
+	out = append(out, "u-"...)
+	return appendZeroPaddedInt(out, n, 9)
 }
 
 func benchmarkIndexedDocument(n int) []byte {
-	return []byte(fmt.Sprintf(
-		`{"name":"user-%09d","email":"user-%09d@example.com","city":"city-%02d","pad":"01234567890123456789"}`,
-		n,
-		n,
-		n%collectionBenchCities,
-	))
+	out := make([]byte, 0, 112)
+	out = append(out, `{"name":"user-`...)
+	out = appendZeroPaddedInt(out, n, 9)
+	out = append(out, `","email":"user-`...)
+	out = appendZeroPaddedInt(out, n, 9)
+	out = append(out, `@example.com","city":"city-`...)
+	out = appendZeroPaddedInt(out, n%collectionBenchCities, 2)
+	out = append(out, `","pad":"01234567890123456789"}`...)
+	return out
 }
 
 func benchmarkDocumentBatch(start, count int, indexed bool) ([][]byte, [][]byte) {
@@ -209,6 +280,24 @@ func BenchmarkCollectionGetByID(b *testing.B) {
 			b.Fatalf("get: %v", err)
 		}
 	}
+}
+
+func BenchmarkCollectionGetByIDParallel(b *testing.B) {
+	backend, collection := openBenchmarkCollection(b, "bench_get_parallel")
+	ids := seedBenchmarkCollection(b, collection, 0, collectionBenchSeedDocs, false)
+	benchmarkSyncBoundary(b, backend)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		i := 0
+		for pb.Next() {
+			if _, err := collection.Get(ids[i%len(ids)]); err != nil {
+				b.Errorf("parallel get: %v", err)
+			}
+			i++
+		}
+	})
 }
 
 func BenchmarkCollectionDeleteByID(b *testing.B) {
@@ -348,7 +437,14 @@ func BenchmarkCollectionCreateIndexBackfillExistingDocs(b *testing.B) {
 		}
 		backend, cleanup := openBenchmarkBackend(b, dir)
 		manager := collections.NewCollectionManager(backend)
-		if _, err := manager.CreateCollection(&collections.CollectionMeta{Name: "bench_backfill"}); err != nil {
+		dataOuter, indexOuter := benchmarkCollectionStoragePolicy(b)
+		if _, err := manager.CreateCollection(&collections.CollectionMeta{
+			Name: "bench_backfill",
+			Options: collections.CollectionOptions{
+				DataRootStoragePolicy:   benchmarkRootStoragePolicy(dataOuter),
+				IndexStateStoragePolicy: benchmarkRootStoragePolicy(dataOuter),
+			},
+		}); err != nil {
 			_ = cleanup()
 			_ = os.RemoveAll(dir)
 			b.Fatalf("create collection: %v", err)
@@ -363,7 +459,12 @@ func BenchmarkCollectionCreateIndexBackfillExistingDocs(b *testing.B) {
 		benchmarkSyncBoundary(b, backend)
 		b.StartTimer()
 
-		if _, err := collection.CreateIndex(collections.IndexDefinition{Name: "email_idx", Field: "email", Unique: true}); err != nil {
+		if _, err := collection.CreateIndex(collections.IndexDefinition{
+			Name:          "email_idx",
+			Field:         "email",
+			Unique:        true,
+			StoragePolicy: benchmarkRootStoragePolicy(indexOuter),
+		}); err != nil {
 			b.Fatalf("create index with backfill: %v", err)
 		}
 

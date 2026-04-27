@@ -29,13 +29,16 @@ const (
 
 type collectionOptions struct {
 	allowArrayValuesInIndex bool
+	dataStoragePolicy       backenddb.OrderedRootStoragePolicy
+	indexStateStoragePolicy backenddb.OrderedRootStoragePolicy
 }
 
 type indexDefinition struct {
-	name     string
-	field    string
-	unique   bool
-	multiKey bool
+	name          string
+	field         string
+	unique        bool
+	multiKey      bool
+	storagePolicy backenddb.OrderedRootStoragePolicy
 }
 
 type insertBatchPlanner struct {
@@ -59,10 +62,11 @@ type insertBatchPlanStats struct {
 }
 
 type collectionRootRun struct {
-	name      string
-	kind      collectionRootKind
-	indexName string
-	table     memtable.Table
+	name          string
+	kind          collectionRootKind
+	indexName     string
+	table         memtable.Table
+	storagePolicy backenddb.OrderedRootStoragePolicy
 }
 
 type collectionUniqueProbeRun struct {
@@ -82,9 +86,9 @@ type indexRuntime struct {
 }
 
 type uniqueProbeCandidate struct {
-	indexName  string
-	prefix     []byte
-	documentID []byte
+	indexName    string
+	encodedValue []byte
+	documentID   []byte
 }
 
 type documentIndexState map[string][][]byte
@@ -174,7 +178,7 @@ func (p insertBatchPlanner) planInsertBatchWithPreflight(ids, documents [][]byte
 		return nil, err
 	}
 	if len(runtimes) > 0 {
-		if err := p.emitIndexStateRun(plan, items); err != nil {
+		if err := p.emitIndexStateRun(plan, items, runtimes); err != nil {
 			return nil, err
 		}
 		if err := p.emitSecondaryRuns(plan, items, runtimes); err != nil {
@@ -188,9 +192,9 @@ func (p insertBatchPreflight) checkDocumentConflicts(items []insertBatchItem, or
 	if p.snapshot == nil || p.primaryRootID == 0 {
 		return nil
 	}
-	keys := make([][]byte, len(order))
-	for i, idx := range order {
-		keys[i] = items[idx].id
+	keys := make([][]byte, len(items))
+	for i := range items {
+		keys[i] = items[orderedItemIndex(order, i)].id
 	}
 	exists, err := p.snapshot.HasAnySortedAtRoot(p.primaryRootID, keys)
 	if err != nil {
@@ -229,8 +233,8 @@ func borrowPrimaryDocument(_, document []byte) ([]byte, error) {
 }
 
 func rejectDuplicateDocumentIDs(items []insertBatchItem, order []int) error {
-	for i := 1; i < len(order); i++ {
-		if bytes.Equal(items[order[i-1]].id, items[order[i]].id) {
+	for i := 1; i < len(items); i++ {
+		if bytes.Equal(items[orderedItemIndex(order, i-1)].id, items[orderedItemIndex(order, i)].id) {
 			return errors.New("collections: duplicate document id in batch")
 		}
 	}
@@ -275,14 +279,10 @@ func (p insertBatchPlanner) planIndexStateAndUniqueProbes(items []insertBatchIte
 				continue
 			}
 			for _, encoded := range state[runtime.def.name] {
-				prefix, err := indexValuePrefix(encoded)
-				if err != nil {
-					return nil, err
-				}
 				uniqueProbes = append(uniqueProbes, uniqueProbeCandidate{
-					indexName:  runtime.def.name,
-					prefix:     prefix,
-					documentID: items[i].id,
+					indexName:    runtime.def.name,
+					encodedValue: encoded,
+					documentID:   items[i].id,
 				})
 			}
 		}
@@ -298,36 +298,48 @@ func buildUniqueProbeRuns(candidates []uniqueProbeCandidate) ([]collectionUnique
 		if candidates[i].indexName != candidates[j].indexName {
 			return candidates[i].indexName < candidates[j].indexName
 		}
-		if cmp := bytes.Compare(candidates[i].prefix, candidates[j].prefix); cmp != 0 {
+		if cmp := compareIndexValuePrefixEncoded(candidates[i].encodedValue, candidates[j].encodedValue); cmp != 0 {
 			return cmp < 0
 		}
 		return bytes.Compare(candidates[i].documentID, candidates[j].documentID) < 0
 	})
 
 	runs := make([]collectionUniqueProbeRun, 0)
-	var cur *collectionUniqueProbeRun
-	for i := range candidates {
-		candidate := &candidates[i]
-		if i > 0 &&
-			candidate.indexName == candidates[i-1].indexName &&
-			bytes.Equal(candidate.prefix, candidates[i-1].prefix) &&
-			!bytes.Equal(candidate.documentID, candidates[i-1].documentID) {
-			return nil, fmt.Errorf("collections: unique index %q conflict", candidate.indexName)
+	for start := 0; start < len(candidates); {
+		indexName := candidates[start].indexName
+		end := start + 1
+		for end < len(candidates) && candidates[end].indexName == indexName {
+			end++
 		}
-		if cur == nil || cur.indexName != candidate.indexName {
-			runs = append(runs, collectionUniqueProbeRun{indexName: candidate.indexName})
-			cur = &runs[len(runs)-1]
+		run := collectionUniqueProbeRun{
+			indexName: indexName,
+			prefixes:  make([][]byte, 0, end-start),
 		}
-		if len(cur.prefixes) == 0 || !bytes.Equal(cur.prefixes[len(cur.prefixes)-1], candidate.prefix) {
-			cur.prefixes = append(cur.prefixes, bytes.Clone(candidate.prefix))
+		for i := start; i < end; i++ {
+			candidate := &candidates[i]
+			if i > start &&
+				bytes.Equal(candidate.encodedValue, candidates[i-1].encodedValue) &&
+				!bytes.Equal(candidate.documentID, candidates[i-1].documentID) {
+				return nil, fmt.Errorf("collections: unique index %q conflict", candidate.indexName)
+			}
+			if len(run.prefixes) == 0 || !bytes.Equal(candidate.encodedValue, candidates[i-1].encodedValue) {
+				prefix, err := indexValuePrefix(candidate.encodedValue)
+				if err != nil {
+					return nil, err
+				}
+				run.prefixes = append(run.prefixes, prefix)
+			}
 		}
+		runs = append(runs, run)
+		start = end
 	}
 	return runs, nil
 }
 
 func (p insertBatchPlanner) emitPrimaryRun(plan *insertBatchPlan, items []insertBatchItem, order []int) error {
 	table := newCollectionRunTable(len(items))
-	for _, idx := range order {
+	for i := range items {
+		idx := orderedItemIndex(order, i)
 		value, err := p.buildPrimaryVal(items[idx].id, items[idx].document)
 		if err != nil {
 			return err
@@ -337,9 +349,10 @@ func (p insertBatchPlanner) emitPrimaryRun(plan *insertBatchPlan, items []insert
 	}
 	table.Freeze()
 	plan.runs = append(plan.runs, collectionRootRun{
-		name:  p.primaryRoot,
-		kind:  collectionRootPrimary,
-		table: table,
+		name:          p.primaryRoot,
+		kind:          collectionRootPrimary,
+		table:         table,
+		storagePolicy: p.options.dataStoragePolicy,
 	})
 	return nil
 }
@@ -348,11 +361,12 @@ func setCollectionRunValue(table memtable.Table, key, value []byte) {
 	table.SetEntrySteal(key, value, page.ValuePtr{}, node.FlagInline)
 }
 
-func (p insertBatchPlanner) emitIndexStateRun(plan *insertBatchPlan, items []insertBatchItem) error {
+func (p insertBatchPlanner) emitIndexStateRun(plan *insertBatchPlan, items []insertBatchItem, runtimes []indexRuntime) error {
 	order := sortedItemOrderByKey(items, func(item *insertBatchItem) []byte { return item.id })
 	table := newCollectionRunTable(len(items))
-	for _, idx := range order {
-		raw, err := encodeNormalizedDocumentIndexState(items[idx].state)
+	for i := range items {
+		idx := orderedItemIndex(order, i)
+		raw, err := encodeRuntimeOrderedDocumentIndexState(items[idx].state, runtimes)
 		if err != nil {
 			return err
 		}
@@ -360,16 +374,46 @@ func (p insertBatchPlanner) emitIndexStateRun(plan *insertBatchPlan, items []ins
 	}
 	table.Freeze()
 	plan.runs = append(plan.runs, collectionRootRun{
-		name:  p.indexStateRoot,
-		kind:  collectionRootIndexState,
-		table: table,
+		name:          p.indexStateRoot,
+		kind:          collectionRootIndexState,
+		table:         table,
+		storagePolicy: p.options.indexStateStoragePolicy,
 	})
 	return nil
 }
 
 func (p insertBatchPlanner) emitSecondaryRuns(plan *insertBatchPlan, items []insertBatchItem, runtimes []indexRuntime) error {
 	for _, runtime := range runtimes {
-		keys := make([][]byte, 0, len(items))
+		entryCount, alreadySorted, err := secondaryEntryOrderStats(items, runtime.def.name)
+		if err != nil {
+			return err
+		}
+		if entryCount == 0 {
+			continue
+		}
+		if alreadySorted {
+			table := newCollectionRunTable(entryCount)
+			for i := range items {
+				for _, encoded := range items[i].state[runtime.def.name] {
+					key, err := indexEntryKey(encoded, items[i].id)
+					if err != nil {
+						return err
+					}
+					table.SetSteal(key, nil)
+				}
+			}
+			table.Freeze()
+			plan.runs = append(plan.runs, collectionRootRun{
+				name:          p.collection + "/index/" + runtime.def.name,
+				kind:          collectionRootSecondary,
+				indexName:     runtime.def.name,
+				table:         table,
+				storagePolicy: runtime.def.storagePolicy,
+			})
+			continue
+		}
+
+		keys := make([][]byte, 0, entryCount)
 		for i := range items {
 			for _, encoded := range items[i].state[runtime.def.name] {
 				key, err := indexEntryKey(encoded, items[i].id)
@@ -391,13 +435,34 @@ func (p insertBatchPlanner) emitSecondaryRuns(plan *insertBatchPlan, items []ins
 		}
 		table.Freeze()
 		plan.runs = append(plan.runs, collectionRootRun{
-			name:      p.collection + "/index/" + runtime.def.name,
-			kind:      collectionRootSecondary,
-			indexName: runtime.def.name,
-			table:     table,
+			name:          p.collection + "/index/" + runtime.def.name,
+			kind:          collectionRootSecondary,
+			indexName:     runtime.def.name,
+			table:         table,
+			storagePolicy: runtime.def.storagePolicy,
 		})
 	}
 	return nil
+}
+
+func secondaryEntryOrderStats(items []insertBatchItem, indexName string) (entryCount int, alreadySorted bool, err error) {
+	alreadySorted = true
+	var lastValue []byte
+	var lastDocumentID []byte
+	for i := range items {
+		for _, encoded := range items[i].state[indexName] {
+			if len(encoded) > 65535 {
+				return 0, false, errors.New("collections: index key too large")
+			}
+			if entryCount > 0 && compareIndexEntryKeyParts(lastValue, lastDocumentID, encoded, items[i].id) > 0 {
+				alreadySorted = false
+			}
+			lastValue = encoded
+			lastDocumentID = items[i].id
+			entryCount++
+		}
+	}
+	return entryCount, alreadySorted, nil
 }
 
 func newCollectionRunTable(entries int) memtable.Table {
@@ -407,15 +472,58 @@ func newCollectionRunTable(entries int) memtable.Table {
 	return memtable.NewAppendOnlyWithEntryCapacity(entries)
 }
 
-func sortedItemOrderByKey(items []insertBatchItem, keyFn func(*insertBatchItem) []byte) []int {
-	order := make([]int, len(items))
-	for i := range order {
-		order[i] = i
+func resetCollectionRunTables(runs []collectionRootRun) {
+	for _, run := range runs {
+		resetCollectionRunTable(run.table)
 	}
-	sort.Slice(order, func(i, j int) bool {
-		return bytes.Compare(keyFn(&items[order[i]]), keyFn(&items[order[j]])) < 0
-	})
-	return order
+}
+
+func resetCollectionTables(tables []memtable.Table) {
+	for _, table := range tables {
+		resetCollectionRunTable(table)
+	}
+}
+
+func resetCollectionRunTable(table memtable.Table) {
+	type releaser interface {
+		Release()
+	}
+	type resetter interface {
+		Reset()
+	}
+	if table == nil {
+		return
+	}
+	if r, ok := table.(releaser); ok {
+		r.Release()
+		return
+	}
+	if r, ok := table.(resetter); ok {
+		r.Reset()
+	}
+}
+
+func sortedItemOrderByKey(items []insertBatchItem, keyFn func(*insertBatchItem) []byte) []int {
+	for i := 1; i < len(items); i++ {
+		if bytes.Compare(keyFn(&items[i-1]), keyFn(&items[i])) > 0 {
+			order := make([]int, len(items))
+			for i := range order {
+				order[i] = i
+			}
+			sort.Slice(order, func(i, j int) bool {
+				return bytes.Compare(keyFn(&items[order[i]]), keyFn(&items[order[j]])) < 0
+			})
+			return order
+		}
+	}
+	return nil
+}
+
+func orderedItemIndex(order []int, pos int) int {
+	if order == nil {
+		return pos
+	}
+	return order[pos]
 }
 
 func indexStateForDocument(document []byte, runtimes []indexRuntime, opts collectionOptions) (documentIndexState, error) {
@@ -464,6 +572,51 @@ func encodeNormalizedDocumentIndexState(state documentIndexState) ([]byte, error
 	return encodeDocumentIndexStateWithOptions(state, false)
 }
 
+func encodeRuntimeOrderedDocumentIndexState(state documentIndexState, runtimes []indexRuntime) ([]byte, error) {
+	if state == nil {
+		state = make(documentIndexState)
+	}
+	count := 0
+	size := 1 + 2
+	for _, runtime := range runtimes {
+		indexName := runtime.def.name
+		values := filterEmptyEncodedIndexValues(state[indexName])
+		if len(values) == 0 {
+			continue
+		}
+		if len(indexName) > 65535 {
+			return nil, errors.New("collections: index state name too long")
+		}
+		size += 2 + len(indexName) + 2
+		for _, value := range values {
+			if len(value) > 65535 {
+				return nil, errors.New("collections: index state value too large")
+			}
+			size += 2 + len(value)
+		}
+		count++
+	}
+
+	out := make([]byte, 0, size)
+	out = append(out, documentIndexStateVersion)
+	out = binary.BigEndian.AppendUint16(out, uint16(count))
+	for _, runtime := range runtimes {
+		indexName := runtime.def.name
+		values := filterEmptyEncodedIndexValues(state[indexName])
+		if len(values) == 0 {
+			continue
+		}
+		out = binary.BigEndian.AppendUint16(out, uint16(len(indexName)))
+		out = append(out, indexName...)
+		out = binary.BigEndian.AppendUint16(out, uint16(len(values)))
+		for _, value := range values {
+			out = binary.BigEndian.AppendUint16(out, uint16(len(value)))
+			out = append(out, value...)
+		}
+	}
+	return out, nil
+}
+
 func encodeDocumentIndexStateWithOptions(state documentIndexState, normalizeValues bool) ([]byte, error) {
 	if state == nil {
 		state = make(documentIndexState)
@@ -487,21 +640,30 @@ func encodeDocumentIndexStateWithOptions(state documentIndexState, normalizeValu
 	}
 	sort.Strings(names)
 
-	out := make([]byte, 0, 32)
-	out = append(out, documentIndexStateVersion)
-	out = binary.BigEndian.AppendUint16(out, uint16(len(names)))
+	size := 1 + 2
 	for _, indexName := range names {
 		values := state[indexName]
 		if len(indexName) > 65535 {
 			return nil, errors.New("collections: index state name too long")
 		}
-		out = binary.BigEndian.AppendUint16(out, uint16(len(indexName)))
-		out = append(out, indexName...)
-		out = binary.BigEndian.AppendUint16(out, uint16(len(values)))
+		size += 2 + len(indexName) + 2
 		for _, value := range values {
 			if len(value) > 65535 {
 				return nil, errors.New("collections: index state value too large")
 			}
+			size += 2 + len(value)
+		}
+	}
+
+	out := make([]byte, 0, size)
+	out = append(out, documentIndexStateVersion)
+	out = binary.BigEndian.AppendUint16(out, uint16(len(names)))
+	for _, indexName := range names {
+		values := state[indexName]
+		out = binary.BigEndian.AppendUint16(out, uint16(len(indexName)))
+		out = append(out, indexName...)
+		out = binary.BigEndian.AppendUint16(out, uint16(len(values)))
+		for _, value := range values {
 			out = binary.BigEndian.AppendUint16(out, uint16(len(value)))
 			out = append(out, value...)
 		}
@@ -667,7 +829,10 @@ func extractIndexPathValue(document any, path []string) (any, bool) {
 func encodeIndexScalar(value any) ([]byte, error) {
 	switch v := value.(type) {
 	case string:
-		return append([]byte("s:"), []byte(v)...), nil
+		out := make([]byte, 0, 2+len(v))
+		out = append(out, "s:"...)
+		out = append(out, v...)
+		return out, nil
 	case bool:
 		if v {
 			return []byte("b:1"), nil
@@ -683,21 +848,40 @@ func encodeIndexScalar(value any) ([]byte, error) {
 }
 
 func indexEntryKey(encodedValue, documentID []byte) ([]byte, error) {
-	prefix, err := indexValuePrefix(encodedValue)
+	key := make([]byte, 0, 2+len(encodedValue)+len(documentID))
+	key, err := appendIndexValuePrefix(key, encodedValue)
 	if err != nil {
 		return nil, err
 	}
-	key := make([]byte, 0, len(prefix)+len(documentID))
-	key = append(key, prefix...)
 	key = append(key, documentID...)
 	return key, nil
 }
 
 func indexValuePrefix(encodedValue []byte) ([]byte, error) {
+	return appendIndexValuePrefix(make([]byte, 0, 2+len(encodedValue)), encodedValue)
+}
+
+func compareIndexValuePrefixEncoded(a, b []byte) int {
+	if len(a) < len(b) {
+		return -1
+	}
+	if len(a) > len(b) {
+		return 1
+	}
+	return bytes.Compare(a, b)
+}
+
+func compareIndexEntryKeyParts(aValue, aDocumentID, bValue, bDocumentID []byte) int {
+	if cmp := compareIndexValuePrefixEncoded(aValue, bValue); cmp != 0 {
+		return cmp
+	}
+	return bytes.Compare(aDocumentID, bDocumentID)
+}
+
+func appendIndexValuePrefix(out []byte, encodedValue []byte) ([]byte, error) {
 	if len(encodedValue) > 65535 {
 		return nil, errors.New("collections: index key too large")
 	}
-	out := make([]byte, 0, 2+len(encodedValue))
 	out = binary.BigEndian.AppendUint16(out, uint16(len(encodedValue)))
 	out = append(out, encodedValue...)
 	return out, nil
@@ -738,8 +922,9 @@ func (plan *insertBatchPlan) publishRootRuns(publisher groupedRootPublisher, bas
 		iter := run.table.NewIterator(nil, nil)
 		iterators = append(iterators, iter)
 		ordered = append(ordered, backenddb.OrderedRootPublishInput{
-			BaseRoot: baseRootIDs[run.name],
-			Iter:     iter,
+			BaseRoot:      baseRootIDs[run.name],
+			Iter:          iter,
+			StoragePolicy: run.storagePolicy,
 		})
 	}
 	_, rootIDs, err := publisher.PublishOrderedRootGroup(nil, ordered)

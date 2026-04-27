@@ -458,6 +458,36 @@ func TestAppendOnlyResetDoesNotPoolBorrowedValueSlices(t *testing.T) {
 	}
 }
 
+func TestAppendOnlyReleaseDropsOwnedBuffers(t *testing.T) {
+	m := NewAppendOnlyWithEntryCapacity(256)
+	m.SetSteal([]byte("a"), []byte("v1"))
+	m.SetSteal([]byte("b"), []byte("v2"))
+	m.Freeze()
+	it := m.NewIterator(nil, nil)
+	if err := it.Close(); err != nil {
+		t.Fatalf("iterator close: %v", err)
+	}
+
+	m.Release()
+	if m.entries != nil {
+		t.Fatalf("release retained entries with cap=%d", cap(m.entries))
+	}
+	if m.snapshot != nil {
+		t.Fatalf("release retained snapshot with cap=%d", cap(m.snapshot))
+	}
+	if m.indexBuf != nil {
+		t.Fatalf("release retained index buffer with cap=%d", cap(m.indexBuf))
+	}
+	if m.count != 0 || m.sizeBytes != 0 || m.frozen {
+		t.Fatalf("release left table state count=%d size=%d frozen=%t", m.count, m.sizeBytes, m.frozen)
+	}
+
+	m.SetSteal([]byte("c"), []byte("v3"))
+	if value, deleted, ok := m.Get([]byte("c")); !ok || deleted || string(value) != "v3" {
+		t.Fatalf("table not reusable after release: value=%q deleted=%t ok=%t", value, deleted, ok)
+	}
+}
+
 func TestAppendOnlyResetKeepsSnapshotBuffersWarm(t *testing.T) {
 	m := NewAppendOnlyWithCapacity(0)
 	// Force unordered mode and a non-empty latest snapshot/index buffer.

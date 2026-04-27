@@ -142,9 +142,11 @@ type DB struct {
 	readRetryRefreshFollowerCount atomic.Uint64
 	readRetryRefreshSkippedEpoch  atomic.Uint64
 
-	notifyError func(error)
-	bgErrMu     sync.Mutex
-	bgErr       error
+	notifyError  func(error)
+	bgErrMu      sync.Mutex
+	bgErr        error
+	closeHooksMu sync.Mutex
+	closeHooks   []func() error
 
 	leafGenerationLiveStatsMu        sync.RWMutex
 	leafGenerationLiveStatsCache     leafGenerationLiveStatsCache
@@ -1374,7 +1376,63 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	return db, nil
 }
 
+// RegisterCloseHook registers a callback that runs before Close marks the DB as
+// closing, while normal write/publish APIs are still available.
+func (db *DB) RegisterCloseHook(hook func() error) func() {
+	if db == nil || hook == nil {
+		return func() {}
+	}
+	db.closeHooksMu.Lock()
+	if db.closing.Load() {
+		db.closeHooksMu.Unlock()
+		return func() {}
+	}
+	idx := len(db.closeHooks)
+	db.closeHooks = append(db.closeHooks, hook)
+	db.closeHooksMu.Unlock()
+
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			db.closeHooksMu.Lock()
+			if idx >= 0 && idx < len(db.closeHooks) && db.closeHooks[idx] != nil {
+				db.closeHooks[idx] = nil
+			}
+			db.closeHooksMu.Unlock()
+		})
+	}
+}
+
+// RunCloseHooks runs and clears registered close hooks. Wrappers that own a
+// backend DB should call this before they start closing resources required by
+// backend publish APIs.
+func (db *DB) RunCloseHooks() error {
+	if db == nil {
+		return nil
+	}
+	db.closeHooksMu.Lock()
+	hooks := append([]func() error(nil), db.closeHooks...)
+	clear(db.closeHooks)
+	db.closeHooks = nil
+	db.closeHooksMu.Unlock()
+
+	var errs []error
+	for _, hook := range hooks {
+		if hook == nil {
+			continue
+		}
+		if err := hook(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
 func (db *DB) Close() error {
+	var errs []error
+	if err := db.RunCloseHooks(); err != nil {
+		errs = append(errs, err)
+	}
 	db.closing.Store(true)
 	db.stopCommitCombiner()
 	db.pruner.Stop()
@@ -1390,7 +1448,6 @@ func (db *DB) Close() error {
 	db.lock = nil
 	db.mu.Unlock()
 
-	var errs []error
 	drainDeadline := time.Now().Add(closeSnapshotDrainTimeout)
 	for db.snapshotAcquireInFlight() > 0 {
 		if time.Now().After(drainDeadline) {
@@ -1726,8 +1783,9 @@ func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired [
 	}
 
 	// Ensure value-log-backed leaf pages are flushed before we publish an index
-	// commit that references them.
-	if db.indexOuterLeavesInValueLog && db.leafPageLog != nil {
+	// commit that references them. Per-root storage policies can use the leaf
+	// page log even when the DB-level default stores outer leaves in index pages.
+	if db.leafPageLog != nil {
 		if sync {
 			if err := db.leafPageLog.Sync(); err != nil {
 				return post, prePublishErr(err)
@@ -1863,7 +1921,7 @@ func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired [
 	if leafPageSegmentRegistered && leafPageSegmentFileID != 0 {
 		db.queueLeafGenerationWritableFileIDAtCommit(leafPageSegmentFileID, nextMeta.CommitSeq)
 	}
-	if db.indexOuterLeavesInValueLog && db.leafPageLog != nil {
+	if db.leafPageLog != nil {
 		stagedLeafManifest, changed, err := db.stagedLeafGenerationManifestWithPending(db.leafGenerationManifest, 0, nextMeta.CommitSeq)
 		if err != nil {
 			db.mu.Unlock()
@@ -1888,7 +1946,7 @@ func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired [
 	db.publishSnapshotView(idx, newState, db.valueLogManager)
 	post.commitSeq = nextMeta.CommitSeq
 	post.vlogRefDelta = vlogRefDelta
-	if db.indexOuterLeavesInValueLog && db.leafPageLog != nil {
+	if db.leafPageLog != nil {
 		post.drainLeafGenerationPending = true
 	}
 	db.mu.Unlock()

@@ -810,33 +810,46 @@ func (t *Tree) HasPrefixes(prefixes [][]byte) ([]bool, error) {
 		return compareTreeKey(refs[i].prefix, refs[j].prefix) < 0
 	})
 
-	unique := make([][]byte, 0, len(refs))
-	groupStarts := make([]int, 0, len(refs))
-	for i, ref := range refs {
-		if len(unique) == 0 || !bytes.Equal(ref.prefix, unique[len(unique)-1]) {
-			unique = append(unique, ref.prefix)
-			groupStarts = append(groupStarts, i)
+	it := t.IteratorWithOptions(refs[0].prefix, nil, IteratorOptions{Mode: IteratorModeKeysOnly})
+	defer func() { _ = it.Close() }()
+	for start := 0; start < len(refs); {
+		prefix := refs[start].prefix
+		end := start + 1
+		for end < len(refs) && bytes.Equal(refs[end].prefix, prefix) {
+			end++
 		}
-	}
 
-	for i, prefix := range unique {
-		it := t.IteratorWithOptions(prefix, nil, IteratorOptions{Mode: IteratorModeKeysOnly})
-		ok := it.Valid() && bytes.HasPrefix(it.UnsafeKey(), prefix) && !it.IsDeleted()
-		err := it.Error()
-		_ = it.Close()
-		if err != nil {
-			return nil, err
+		found := false
+		for {
+			if !it.Valid() {
+				if err := it.Error(); err != nil {
+					return nil, err
+				}
+				return out, nil
+			}
+			curr := it.UnsafeKey()
+			if compareTreeKey(curr, prefix) < 0 {
+				it.Seek(prefix)
+				continue
+			}
+			if !bytes.HasPrefix(curr, prefix) {
+				break
+			}
+			if !it.IsDeleted() {
+				found = true
+				break
+			}
+			it.Next()
 		}
-		if !ok {
-			continue
+		if found {
+			for _, ref := range refs[start:end] {
+				out[ref.idx] = true
+			}
 		}
-		groupEnd := len(refs)
-		if i+1 < len(groupStarts) {
-			groupEnd = groupStarts[i+1]
-		}
-		for _, ref := range refs[groupStarts[i]:groupEnd] {
-			out[ref.idx] = true
-		}
+		start = end
+	}
+	if err := it.Error(); err != nil {
+		return nil, err
 	}
 	return out, nil
 }

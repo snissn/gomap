@@ -5850,6 +5850,10 @@ type BackendDB interface {
 	Stats() map[string]string
 }
 
+type backendCloseHookRunner interface {
+	RunCloseHooks() error
+}
+
 type backendValueLogRewriter interface {
 	ValueLogRewriteOnline(ctx context.Context, opts backenddb.ValueLogRewriteOnlineOptions) (backenddb.ValueLogRewriteStats, error)
 }
@@ -19131,6 +19135,11 @@ func (db *DB) flushSomeBlocking(sync bool, maxMemtables int, maxDuration time.Du
 
 func (db *DB) Close() error {
 	var errs []error
+	if runner, ok := db.backend.(backendCloseHookRunner); ok {
+		if err := runner.RunCloseHooks(); err != nil {
+			errs = append(errs, err)
+		}
+	}
 	hadMemtables := false
 	db.closing.Store(true)
 	db.clearBackendValueLogReadBarrier()

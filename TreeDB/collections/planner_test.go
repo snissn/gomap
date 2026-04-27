@@ -2,6 +2,7 @@ package collections
 
 import (
 	"bytes"
+	"sort"
 	"strings"
 	"testing"
 
@@ -127,6 +128,36 @@ func TestEncodeNormalizedDocumentIndexStateMatchesConservativeEncoder(t *testing
 	}
 	if !bytes.Equal(got, want) {
 		t.Fatalf("normalized encoding mismatch\n got: %x\nwant: %x", got, want)
+	}
+}
+
+func TestBuildUniqueProbeRunsMatchesEncodedPrefixOrdering(t *testing.T) {
+	candidates := []uniqueProbeCandidate{
+		{indexName: "email", encodedValue: []byte("s:zz"), documentID: []byte("u3")},
+		{indexName: "email", encodedValue: []byte("s:a"), documentID: []byte("u1")},
+		{indexName: "email", encodedValue: []byte("s:bbbb"), documentID: []byte("u2")},
+	}
+	runs, err := buildUniqueProbeRuns(candidates)
+	if err != nil {
+		t.Fatalf("build unique probe runs: %v", err)
+	}
+	if got, want := len(runs), 1; got != want {
+		t.Fatalf("runs=%d want %d", got, want)
+	}
+
+	want := make([][]byte, 0, len(candidates))
+	for _, candidate := range candidates {
+		prefix, err := indexValuePrefix(candidate.encodedValue)
+		if err != nil {
+			t.Fatalf("index value prefix: %v", err)
+		}
+		want = append(want, prefix)
+	}
+	sort.Slice(want, func(i, j int) bool {
+		return bytes.Compare(want[i], want[j]) < 0
+	})
+	if !byteMatrixEqual(runs[0].prefixes, want) {
+		t.Fatalf("prefix order mismatch\n got: %q\nwant: %q", runs[0].prefixes, want)
 	}
 }
 
@@ -503,6 +534,18 @@ func cloneByteMatrix(in [][]byte) [][]byte {
 		out[i] = bytes.Clone(in[i])
 	}
 	return out
+}
+
+func byteMatrixEqual(a, b [][]byte) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if !bytes.Equal(a[i], b[i]) {
+			return false
+		}
+	}
+	return true
 }
 
 func byteMatrixStrings(in [][]byte) []string {

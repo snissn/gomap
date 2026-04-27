@@ -55,3 +55,19 @@ func OpenBackend(opts Options) (*db.DB, func() error, error) {
 
 	return backend, cleanup, nil
 }
+
+// OpenBackendWithCachedLeafLog opens TreeDB through the cached layer and returns
+// the underlying backend. This is for native-root callers that need backend root
+// APIs while also requiring cached-layer wiring such as the leaf-page value log
+// used by IndexOuterLeavesInValueLog.
+func OpenBackendWithCachedLeafLog(opts Options) (*db.DB, func() error, error) {
+	database, err := Open(opts)
+	if err != nil {
+		return nil, nil, err
+	}
+	if database.backend == nil {
+		_ = database.Close()
+		return nil, nil, db.ErrClosed
+	}
+	return database.backend, database.Close, nil
+}
