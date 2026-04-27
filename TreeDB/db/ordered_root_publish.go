@@ -23,6 +23,14 @@ const (
 	orderedRootPublishPlanWarmNativeApply
 )
 
+// orderedRootDeltaBatchInlineThreshold is intentionally not the page/value-log
+// placement threshold. These batches are transient root-local mutation streams
+// consumed by zipper.Apply; they do not decide durable value placement. Large
+// collection documents must remain valid here because the destination ordered
+// root policy decides whether rebuilt leaves live in pager pages or value-log
+// LeafRefs. Pointer entries still flow through SetPointer, and non-stable inline
+// iterators may copy values into this short-lived batch, so callers should keep
+// delta streams bounded rather than using this as a bulk-load accumulator.
 var orderedRootDeltaBatchInlineThreshold = int(^uint(0) >> 1)
 
 type orderedRootPublishStats struct {
