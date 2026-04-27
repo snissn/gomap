@@ -14,6 +14,16 @@ BATCH_SIZE="${TREEDB_COLLECTION_BENCH_BATCH_SIZE:-8000}"
 BENCH_REGEX="${BENCH_REGEX:-Benchmark(CollectionInsertBatchWithSecondaryIndexes|CollectionInsertBatchCheckpointWithSecondaryIndexes|CollectionOverheadIndexStateJSONExtraction|CollectionOverheadPlanIndexedPrecomputedState)$}"
 INCLUDE_SQLITE="${TREEDB_COLLECTION_INCLUDE_SQLITE:-false}"
 SQLITE_ENGINE="${TREEDB_COLLECTION_SQLITE_ENGINE:-sqlite_wal_normal}"
+SQLITE_CELL_LABEL="${TREEDB_COLLECTION_SQLITE_CELL:-$SQLITE_ENGINE}"
+SQLITE_CELL_LABEL="$(printf '%s' "$SQLITE_CELL_LABEL" | tr -c '[:alnum:]_.-' '_')"
+if [[ -z "$SQLITE_CELL_LABEL" ]]; then
+  SQLITE_CELL_LABEL="sqlite"
+fi
+if [[ "$SQLITE_CELL_LABEL" == sqlite_* ]]; then
+  SQLITE_CELL="$SQLITE_CELL_LABEL"
+else
+  SQLITE_CELL="sqlite_$SQLITE_CELL_LABEL"
+fi
 SQLITE_BENCH_REGEX="${TREEDB_COLLECTION_SQLITE_BENCH_REGEX:-BenchmarkSQLite(InsertBatchWithSecondaryIndexes|InsertBatchCheckpointWithSecondaryIndexes)$}"
 SQLITE_CGO_ENABLED="${TREEDB_COLLECTION_SQLITE_CGO_ENABLED:-1}"
 BRANCH="$(git rev-parse --abbrev-ref HEAD)"
@@ -83,6 +93,7 @@ echo "batch size: $BATCH_SIZE"
 echo "include sqlite: $INCLUDE_SQLITE"
 if is_true "$INCLUDE_SQLITE"; then
   echo "sqlite engine: $SQLITE_ENGINE"
+  echo "sqlite cell: $SQLITE_CELL"
   echo "sqlite benchmark regex: $SQLITE_BENCH_REGEX"
   echo "sqlite CGO_ENABLED: $SQLITE_CGO_ENABLED"
   if ! command -v cc >/dev/null 2>&1 && ! command -v gcc >/dev/null 2>&1 && ! command -v clang >/dev/null 2>&1; then
@@ -119,7 +130,7 @@ for row in "${MATRIX_ROWS[@]}"; do
 done
 
 if is_true "$INCLUDE_SQLITE"; then
-  cell="sqlite_wal_normal"
+  cell="$SQLITE_CELL"
   cell_dir="$OUT_DIR/$cell"
   echo
   echo "==> $cell"
@@ -189,12 +200,12 @@ done
 
 if is_true "$INCLUDE_SQLITE"; then
   printf "| \`%s\` | \`%s\` | \`%s\` | \`%s\` | [%s](%s) |\n" \
-    "sqlite_wal_normal" \
+    "$SQLITE_CELL" \
     "$SQLITE_ENGINE" \
     "-" \
     "-" \
-    "sqlite_wal_normal" \
-    "sqlite_wal_normal/collections_report.md" >>"$SUMMARY_MD"
+    "$SQLITE_CELL" \
+    "$SQLITE_CELL/collections_report.md" >>"$SUMMARY_MD"
 fi
 
 cat >>"$SUMMARY_MD" <<'EOF'
