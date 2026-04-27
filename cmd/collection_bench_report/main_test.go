@@ -68,6 +68,7 @@ func TestBuildReportAndRenderMarkdown(t *testing.T) {
 		`{"Action":"output","Output":"BenchmarkCollectionInsertProvidedID-12\t1000\t2000 ns/op\t128 B/op\t4 allocs/op\n"}`,
 		`{"Action":"output","Output":"BenchmarkCollectionInsertProvidedID-12\t900\t2200 ns/op\t136 B/op\t5 allocs/op\n"}`,
 		`{"Action":"output","Output":"BenchmarkCollectionInsertBatchWithSecondaryIndexes-12\t700\t3200 ns/op\t256 B/op\t7 allocs/op\t8000 target_docs/batch\t0 per_item_key_probe_fallback_count\t0 per_item_prefix_probe_fallback_count\n"}`,
+		`{"Action":"output","Output":"BenchmarkCollectionInsertBatchCheckpointWithSecondaryIndexes-12\t500\t8000 ns/op\t260 B/op\t8 allocs/op\t8000 target_docs/checkpoint\t2500 insert_ns/doc\t5500 sync_ns/doc\t0 per_item_key_probe_fallback_count\t0 per_item_prefix_probe_fallback_count\n"}`,
 		`{"Action":"output","Output":"BenchmarkSQLiteInsertBatchWithSecondaryIndexes-12\t650\t3500 ns/op\t300 B/op\t9 allocs/op\t8000 target_docs/batch\n"}`,
 		`{"Action":"output","Output":"BenchmarkSecondaryLookupNonUnique-12\t5000\t450 ns/op\t96 B/op\t2 allocs/op\n"}`,
 		`{"Action":"output","Output":"BenchmarkCollectionDeleteWithSecondaryIndexes-12\t"}`,
@@ -79,7 +80,7 @@ func TestBuildReportAndRenderMarkdown(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parseBenchmarkSamples: %v", err)
 	}
-	if got, want := len(samples), 6; got != want {
+	if got, want := len(samples), 7; got != want {
 		t.Fatalf("len(samples)=%d want %d", got, want)
 	}
 
@@ -97,6 +98,13 @@ func TestBuildReportAndRenderMarkdown(t *testing.T) {
 	}
 	if got, want := indexedBatch.MeanMetrics["per_item_key_probe_fallback_count"], 0.0; got != want {
 		t.Fatalf("indexed batch per_item_key_probe_fallback_count=%v want %v", got, want)
+	}
+	checkpointBatch := aggregates["BenchmarkCollectionInsertBatchCheckpointWithSecondaryIndexes"]
+	if got, want := checkpointBatch.MeanMetrics["insert_ns/doc"], 2500.0; got != want {
+		t.Fatalf("checkpoint insert_ns/doc=%v want %v", got, want)
+	}
+	if got, want := checkpointBatch.MeanMetrics["sync_ns/doc"], 5500.0; got != want {
+		t.Fatalf("checkpoint sync_ns/doc=%v want %v", got, want)
 	}
 
 	rep := &report{
@@ -133,6 +141,9 @@ func TestBuildReportAndRenderMarkdown(t *testing.T) {
 	}
 	if !strings.Contains(md, "`target_docs/batch`") {
 		t.Fatalf("markdown missing custom metric column:\n%s", md)
+	}
+	if !strings.Contains(md, "`insert_ns/doc`") || !strings.Contains(md, "`sync_ns/doc`") {
+		t.Fatalf("markdown missing checkpoint split metric columns:\n%s", md)
 	}
 	if !strings.Contains(md, "`per_item_key_probe_fallback_count`") {
 		t.Fatalf("markdown missing native fallback metric column:\n%s", md)
