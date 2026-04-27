@@ -95,7 +95,8 @@ type documentIndexState map[string][][]byte
 type orderedDocumentIndexState [][][]byte
 
 type indexEncodeArena struct {
-	buf []byte
+	buf       []byte
+	valueRefs [][]byte
 }
 
 type groupedRootPublisher interface {
@@ -303,7 +304,10 @@ func (p insertBatchPlanner) planIndexStateAndUniqueProbes(items []insertBatchIte
 		return nil, nil
 	}
 	uniqueProbes := make([]uniqueProbeCandidate, 0, len(items))
-	encoder := indexEncodeArena{buf: make([]byte, 0, estimateBatchIndexEncodeArenaBytes(items, len(runtimes)))}
+	encoder := indexEncodeArena{
+		buf:       make([]byte, 0, estimateBatchIndexEncodeArenaBytes(items, len(runtimes))),
+		valueRefs: make([][]byte, 0, estimateBatchIndexValueRefCount(items, len(runtimes))),
+	}
 	for i := range items {
 		state, err := orderedIndexStateForDocumentWithArena(items[i].document, runtimes, p.options, &encoder)
 		if err != nil {
@@ -671,7 +675,10 @@ func indexStateForDocument(document []byte, runtimes []indexRuntime, opts collec
 }
 
 func orderedIndexStateForDocument(document []byte, runtimes []indexRuntime, opts collectionOptions) (orderedDocumentIndexState, error) {
-	encoder := indexEncodeArena{buf: make([]byte, 0, estimateDocumentIndexEncodeArenaBytes(len(runtimes)))}
+	encoder := indexEncodeArena{
+		buf:       make([]byte, 0, estimateDocumentIndexEncodeArenaBytes(len(runtimes))),
+		valueRefs: make([][]byte, 0, len(runtimes)),
+	}
 	return orderedIndexStateForDocumentWithArena(document, runtimes, opts, &encoder)
 }
 
@@ -680,7 +687,10 @@ func orderedIndexStateForDocumentWithArena(document []byte, runtimes []indexRunt
 		return nil, nil
 	}
 	if encoder == nil {
-		encoder = &indexEncodeArena{buf: make([]byte, 0, estimateDocumentIndexEncodeArenaBytes(len(runtimes)))}
+		encoder = &indexEncodeArena{
+			buf:       make([]byte, 0, estimateDocumentIndexEncodeArenaBytes(len(runtimes))),
+			valueRefs: make([][]byte, 0, len(runtimes)),
+		}
 	}
 	var decoded any
 	if err := json.Unmarshal(document, &decoded); err != nil {
@@ -696,26 +706,56 @@ func orderedIndexStateForDocumentWithArena(document []byte, runtimes []indexRunt
 		if !found || value == nil {
 			continue
 		}
-		values, err := normalizeIndexValues(value, runtime.def.multiKey, opts.allowArrayValuesInIndex)
+
+		if arr, ok := value.([]any); ok {
+			if !runtime.def.multiKey && !opts.allowArrayValuesInIndex {
+				return nil, errors.New("collections: array value not allowed for index")
+			}
+			switch len(arr) {
+			case 0:
+				continue
+			case 1:
+				var next []byte
+				var err error
+				encoder.buf, next, err = appendIndexScalar(encoder.buf, arr[0])
+				if err != nil {
+					return nil, err
+				}
+				state[runtimeIdx] = encoder.appendSingleValueRef(next)
+				continue
+			}
+			encoded := make([][]byte, 0, len(arr))
+			for _, scalar := range arr {
+				var next []byte
+				var err error
+				encoder.buf, next, err = appendIndexScalar(encoder.buf, scalar)
+				if err != nil {
+					return nil, err
+				}
+				encoded = append(encoded, next)
+			}
+			encoded = normalizeOwnedEncodedIndexValues(encoded)
+			if len(encoded) > 0 {
+				state[runtimeIdx] = encoded
+			}
+			continue
+		}
+
+		var next []byte
+		var err error
+		encoder.buf, next, err = appendIndexScalar(encoder.buf, value)
 		if err != nil {
 			return nil, err
 		}
-		encoded := make([][]byte, 0, len(values))
-		for _, scalar := range values {
-			var next []byte
-			var err error
-			encoder.buf, next, err = appendIndexScalar(encoder.buf, scalar)
-			if err != nil {
-				return nil, err
-			}
-			encoded = append(encoded, next)
-		}
-		encoded = normalizeOwnedEncodedIndexValues(encoded)
-		if len(encoded) > 0 {
-			state[runtimeIdx] = encoded
-		}
+		state[runtimeIdx] = encoder.appendSingleValueRef(next)
 	}
 	return state, nil
+}
+
+func (a *indexEncodeArena) appendSingleValueRef(value []byte) [][]byte {
+	start := len(a.valueRefs)
+	a.valueRefs = append(a.valueRefs, value)
+	return a.valueRefs[start:len(a.valueRefs):len(a.valueRefs)]
 }
 
 func estimateDocumentIndexEncodeArenaBytes(runtimeCount int) int {
@@ -734,6 +774,18 @@ func estimateBatchIndexEncodeArenaBytes(items []insertBatchItem, runtimeCount in
 	const maxInitialArenaBytes = 4 << 20
 	if total > maxInitialArenaBytes {
 		return maxInitialArenaBytes
+	}
+	return total
+}
+
+func estimateBatchIndexValueRefCount(items []insertBatchItem, runtimeCount int) int {
+	if len(items) == 0 || runtimeCount <= 0 {
+		return 0
+	}
+	total := len(items) * runtimeCount
+	const maxInitialRefs = 1 << 20
+	if total > maxInitialRefs {
+		return maxInitialRefs
 	}
 	return total
 }
@@ -952,8 +1004,8 @@ func normalizeEncodedIndexValues(values [][]byte) [][]byte {
 
 func normalizeOwnedEncodedIndexValues(values [][]byte) [][]byte {
 	values = filterEmptyEncodedIndexValues(values)
-	if len(values) == 0 {
-		return nil
+	if len(values) <= 1 {
+		return values
 	}
 	sort.Slice(values, func(i, j int) bool {
 		return bytes.Compare(values[i], values[j]) < 0
@@ -983,19 +1035,6 @@ func filterEmptyEncodedIndexValues(values [][]byte) [][]byte {
 		return nil
 	}
 	return out
-}
-
-func normalizeIndexValues(value any, multiKey, allowArray bool) ([]any, error) {
-	if arr, ok := value.([]any); ok {
-		if !multiKey && !allowArray {
-			return nil, errors.New("collections: array value not allowed for index")
-		}
-		if len(arr) == 0 {
-			return nil, nil
-		}
-		return arr, nil
-	}
-	return []any{value}, nil
 }
 
 func splitIndexPath(path string) []string {
