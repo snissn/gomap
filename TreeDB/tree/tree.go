@@ -792,8 +792,8 @@ fallback:
 		return false, stats, nil
 	}
 	stats.FallbackCalls = 1
-	stats.FallbackItems = uint64(len(keys) - targetIdx)
 	for ; targetIdx < len(keys); targetIdx++ {
+		stats.FallbackItems++
 		ok, err := t.Has(keys[targetIdx])
 		if err != nil {
 			return false, stats, err

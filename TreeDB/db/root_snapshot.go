@@ -65,7 +65,7 @@ func (s *Snapshot) HasAnySortedAtRoot(rootID uint64, keys [][]byte) (bool, error
 		return false, err
 	}
 	ok, stats, err := tr.HasAnySortedWithStats(keys)
-	if stats.FallbackCalls != 0 && s != nil {
+	if stats.FallbackCalls != 0 {
 		s.db.noteRootProbeKeyFallback(stats)
 	}
 	return ok, err
@@ -84,7 +84,7 @@ func (s *Snapshot) HasPrefixesAtRoot(rootID uint64, prefixes [][]byte) ([]bool, 
 		return nil, err
 	}
 	out, stats, err := tr.HasPrefixesWithStats(prefixes)
-	if stats.FallbackCalls != 0 && s != nil {
+	if stats.FallbackCalls != 0 {
 		s.db.noteRootProbePrefixFallback(stats)
 	}
 	return out, err

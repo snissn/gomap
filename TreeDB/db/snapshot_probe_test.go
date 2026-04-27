@@ -206,13 +206,14 @@ func TestSnapshot_HasAnySortedAtRootRecordsPerItemFallback(t *testing.T) {
 
 	got, err := snap.HasAnySortedAtRoot(rootIDs[0], [][]byte{
 		[]byte("sys/0000/missing"),
+		[]byte("sys/1050"),
 		[]byte("sys/9999"),
 	})
 	if err != nil {
 		t.Fatalf("HasAnySortedAtRoot: %v", err)
 	}
-	if got {
-		t.Fatalf("HasAnySortedAtRoot got true want false")
+	if !got {
+		t.Fatalf("HasAnySortedAtRoot got false want true")
 	}
 
 	after := db.rootProbeStatsSnapshot()
