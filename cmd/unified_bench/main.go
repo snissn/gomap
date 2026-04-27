@@ -66,7 +66,7 @@ var (
 	cpuProfile         = flag.String("cpuprofile", "", "write cpu profile to file")
 	cpuProfileTestsArg = flag.String("cpuprofile-tests", "", "Comma-separated list of tests to profile when -cpuprofile is set (default: all selected tests)")
 	profileDir         = flag.String("profile-dir", "", "Write profiling artifacts to this directory (enables defaults for -cpuprofile, -allocsprofile, -checkpoint-cpuprofile, -blockprofile, -mutexprofile, -trace unless explicitly set)")
-	pathLabel          = flag.String("path-label", "", "Optional benchmark execution-path label for profile-dir artifacts (oracle|native-fastpath)")
+	pathLabel          = flag.String("path-label", "", "Benchmark execution-path label required with -profile-dir (oracle|native-fastpath)")
 	allocsProfile      = flag.String("allocsprofile", "", "write per-test allocation delta profile prefix to file")
 	allocsProfileTests = flag.String("allocsprofile-tests", "", "Comma-separated list of tests to profile when -allocsprofile is set (default: all selected tests)")
 	allocsProfileRate  = flag.Int("allocsprofilerate", 512*1024, "runtime.MemProfileRate sampling rate in bytes for -allocsprofile")
@@ -398,6 +398,11 @@ func main() {
 	}
 	if err := applyProfileArtifactDir(*profileDir, isSet); err != nil {
 		log.Fatalf("profile-dir: %v", err)
+	}
+	if strings.TrimSpace(*profileDir) != "" {
+		if err := validateBenchprofExecutionPath(*pathLabel); err != nil {
+			log.Fatalf("profile-dir: %v", err)
+		}
 	}
 
 	seedUsed := *seed
@@ -1048,11 +1053,8 @@ func writeBenchprofArtifacts(dir, executionPath string, runs []BenchRun) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("mkdir %q: %w", dir, err)
 	}
-	if executionPath == "" {
-		return fmt.Errorf("execution path is required for profile-dir artifacts; hidden or implied path labels are forbidden")
-	}
-	if executionPath != "oracle" && executionPath != "native-fastpath" {
-		return fmt.Errorf("invalid execution path %q: mixed-path labels are forbidden", executionPath)
+	if err := validateBenchprofExecutionPath(executionPath); err != nil {
+		return err
 	}
 
 	out := benchprofExport{
@@ -1090,6 +1092,19 @@ func writeBenchprofArtifacts(dir, executionPath string, runs []BenchRun) error {
 		return fmt.Errorf("write benchprof_results.md: %w", err)
 	}
 	return nil
+}
+
+func validateBenchprofExecutionPath(executionPath string) error {
+	if executionPath == "" {
+		return fmt.Errorf("execution path is required for profile-dir artifacts; hidden or implied path labels are forbidden")
+	}
+	if executionPath == "oracle" || executionPath == "native-fastpath" {
+		return nil
+	}
+	if strings.ContainsAny(executionPath, ",+") {
+		return fmt.Errorf("invalid execution path %q: mixed-path labels are forbidden; expected one of oracle|native-fastpath", executionPath)
+	}
+	return fmt.Errorf("invalid execution path %q: expected one of oracle|native-fastpath", executionPath)
 }
 
 func printTreeDBCacheStats(w io.Writer, inst *DBInstance, prefix string) {

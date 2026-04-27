@@ -1,6 +1,7 @@
 package db
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"reflect"
@@ -11,6 +12,38 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/page"
 )
+
+type closeCountingUnsafeIterator struct {
+	closes int
+}
+
+func (it *closeCountingUnsafeIterator) Valid() bool { return false }
+func (it *closeCountingUnsafeIterator) Next()       {}
+func (it *closeCountingUnsafeIterator) Seek([]byte) {}
+func (it *closeCountingUnsafeIterator) UnsafeKey() []byte {
+	return nil
+}
+func (it *closeCountingUnsafeIterator) UnsafeValue() []byte {
+	return nil
+}
+func (it *closeCountingUnsafeIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
+	return nil, page.ValuePtr{}, 0
+}
+func (it *closeCountingUnsafeIterator) Key() []byte   { return nil }
+func (it *closeCountingUnsafeIterator) Value() []byte { return nil }
+func (it *closeCountingUnsafeIterator) KeyCopy(dst []byte) []byte {
+	return dst
+}
+func (it *closeCountingUnsafeIterator) ValueCopy(dst []byte) []byte {
+	return dst
+}
+func (it *closeCountingUnsafeIterator) IsDeleted() bool { return false }
+func (it *closeCountingUnsafeIterator) Error() error    { return nil }
+func (it *closeCountingUnsafeIterator) Close() error {
+	it.closes++
+	return nil
+}
+func (it *closeCountingUnsafeIterator) Domain() ([]byte, []byte) { return nil, nil }
 
 func TestPublishOrderedRootIterator_WarmSparseDelta_PreservesPages(t *testing.T) {
 	dir := t.TempDir()
@@ -307,6 +340,76 @@ func TestPublishOrderedRootGroup_PersistsSystemAndOrderedRoots(t *testing.T) {
 	}
 	if got := string(entry.Value); got != "iv" {
 		t.Fatalf("reopen iter value=%q want %q", got, "iv")
+	}
+}
+
+func TestPublishOrderedRootGroup_ClosesUnconsumedIteratorsOnPolicyError(t *testing.T) {
+	db, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+
+	first := &closeCountingUnsafeIterator{}
+	second := &closeCountingUnsafeIterator{}
+	_, _, err = db.PublishOrderedRootGroup(nil, []OrderedRootPublishInput{
+		{Iter: first, StoragePolicy: OrderedRootStoragePolicy(255)},
+		{Iter: second, StoragePolicy: OrderedRootStoragePagerLeaves},
+	})
+	if err == nil {
+		t.Fatal("expected publish error")
+	}
+	if first.closes != 1 {
+		t.Fatalf("first iterator closes=%d want 1", first.closes)
+	}
+	if second.closes != 1 {
+		t.Fatalf("second iterator closes=%d want 1", second.closes)
+	}
+}
+
+func TestPublishOrderedRootDeltaGroups_CloseUnconsumedIteratorsOnPolicyError(t *testing.T) {
+	db, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+
+	builderCalled := false
+	buildSystemIter := func([]uint64) (iterator.UnsafeIterator, error) {
+		builderCalled = true
+		return nil, nil
+	}
+	for name, publish := range map[string]func([]OrderedRootDeltaPublishInput) error{
+		"system builder": func(ordered []OrderedRootDeltaPublishInput) error {
+			_, _, err := db.PublishOrderedRootDeltaGroupWithSystemBuilder(ordered, buildSystemIter)
+			return err
+		},
+		"system delta builder": func(ordered []OrderedRootDeltaPublishInput) error {
+			_, _, err := db.PublishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered, buildSystemIter)
+			return err
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			builderCalled = false
+			first := &closeCountingUnsafeIterator{}
+			second := &closeCountingUnsafeIterator{}
+			err := publish([]OrderedRootDeltaPublishInput{
+				{Iter: first, StoragePolicy: OrderedRootStoragePolicy(255)},
+				{Iter: second, StoragePolicy: OrderedRootStoragePagerLeaves},
+			})
+			if err == nil {
+				t.Fatal("expected publish error")
+			}
+			if builderCalled {
+				t.Fatal("system builder should not run after policy error")
+			}
+			if first.closes != 1 {
+				t.Fatalf("first iterator closes=%d want 1", first.closes)
+			}
+			if second.closes != 1 {
+				t.Fatalf("second iterator closes=%d want 1", second.closes)
+			}
+		})
 	}
 }
 
@@ -658,6 +761,67 @@ func TestPublishOrderedRootDeltaGroupWithSystemBuilder_AppliesDeletes(t *testing
 	}
 }
 
+func TestPublishOrderedRootDeltaGroupWithSystemBuilder_AcceptsLargeDeltaValueLogLeafValue(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	leafLog := newRewriteWriter(ValueLogDirPath(dir), 0, 0, 64<<20)
+	db.SetLeafPageLog(leafLog)
+	defer func() {
+		_ = leafLog.Close()
+		_ = db.Close()
+	}()
+
+	_, baseRootIDs, err := db.PublishOrderedRootGroup(nil, []OrderedRootPublishInput{{
+		BaseRoot:      0,
+		Iter:          mustFrozenSystemMemtable(t, "doc/a", "small").NewIterator(nil, nil),
+		StoragePolicy: OrderedRootStorageValueLogLeaves,
+	}})
+	if err != nil {
+		t.Fatalf("publish base root: %v", err)
+	}
+	if len(baseRootIDs) != 1 {
+		t.Fatalf("base roots=%d want 1", len(baseRootIDs))
+	}
+
+	largeValue := bytes.Repeat([]byte("x"), page.DefaultInlineThreshold+1024)
+	delta, err := memtable.NewWithCapacityMode(0, memtable.ModeHashSorted)
+	if err != nil {
+		t.Fatalf("new delta table: %v", err)
+	}
+	delta.Set([]byte("doc/large"), largeValue)
+	delta.Freeze()
+
+	_, rootIDs, err := db.PublishOrderedRootDeltaGroupWithSystemDeltaBuilder([]OrderedRootDeltaPublishInput{{
+		BaseRoot:      baseRootIDs[0],
+		Iter:          delta.NewIterator(nil, nil),
+		StoragePolicy: OrderedRootStorageValueLogLeaves,
+	}}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		return mustFrozenSystemMemtable(t, "sys/root", strconv.FormatUint(rootIDs[0], 10)).NewIterator(nil, nil), nil
+	})
+	if err != nil {
+		t.Fatalf("publish large value delta: %v", err)
+	}
+	if len(rootIDs) != 1 {
+		t.Fatalf("rootIDs=%d want 1", len(rootIDs))
+	}
+
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("expected snapshot")
+	}
+	defer func() { _ = snap.Close() }()
+	entry, err := snap.GetEntryAtRoot(rootIDs[0], []byte("doc/large"))
+	if err != nil {
+		t.Fatalf("GetEntryAtRoot(doc/large): %v", err)
+	}
+	if !bytes.Equal(entry.Value, largeValue) {
+		t.Fatalf("large value mismatch: got %d bytes want %d", len(entry.Value), len(largeValue))
+	}
+}
+
 func TestOrderedRootDeltaBatchFromIterator_StableIteratorUsesViews(t *testing.T) {
 	key := []byte("root/a")
 	value := []byte("value-a")
@@ -988,6 +1152,107 @@ func TestPublishOrderedRootGroup_NonSystemWarmApplyPreservesValueLogRefTracker(t
 	}
 
 	assertValueLogRefTrackerMatchesFullScan(t, db)
+}
+
+func TestPublishOrderedRootDeltaGroupWithSystemDeltaBuilder_InvalidatesValueLogRefTracker(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+
+	livePtr := appendPointersInNewSegment(t, dir, 0, 51, 110_000, 1, func(int) []byte {
+		return []byte("live-user-pointer-before-system-delta")
+	})[0]
+	b := db.NewBatch().(*Batch)
+	if err := b.SetPointer([]byte("user/live"), livePtr); err != nil {
+		t.Fatalf("SetPointer(user/live): %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("write live pointer: %v", err)
+	}
+	_ = b.Close()
+
+	if _, err := db.referencedValueLogSegments(context.Background()); err != nil {
+		t.Fatalf("refresh value-log refs: %v", err)
+	}
+	beforeSeq := db.currentCommitSeq()
+	if _, ok := db.valueLogRefTracker.referencedSet(beforeSeq); !ok {
+		t.Fatalf("expected incremental ref set before system delta at seq=%d", beforeSeq)
+	}
+
+	systemPtr := appendPointersInNewSegment(t, dir, 0, 52, 120_000, 1, func(int) []byte {
+		return []byte("system-pointer-delta")
+	})[0]
+	if _, _, err := db.PublishOrderedRootDeltaGroupWithSystemDeltaBuilder(nil, func([]uint64) (iterator.UnsafeIterator, error) {
+		return mustFrozenSystemPointerMemtable(t, "sys/p", systemPtr).NewIterator(nil, nil), nil
+	}); err != nil {
+		t.Fatalf("publish system delta group: %v", err)
+	}
+
+	afterSeq := db.currentCommitSeq()
+	if refs, ok := db.valueLogRefTracker.referencedSet(afterSeq); ok {
+		t.Fatalf("value-log ref tracker stayed valid after untracked system delta: refs=%v", refs)
+	}
+}
+
+func TestPublishOrderedRootDeltaGroupWithSystemBuilder_InvalidatesValueLogRefTrackerForNonSystemDelta(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+
+	livePtr := appendPointersInNewSegment(t, dir, 0, 53, 130_000, 1, func(int) []byte {
+		return []byte("live-user-pointer-before-non-system-delta")
+	})[0]
+	b := db.NewBatch().(*Batch)
+	if err := b.SetPointer([]byte("user/live"), livePtr); err != nil {
+		t.Fatalf("SetPointer(user/live): %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("write live pointer: %v", err)
+	}
+	_ = b.Close()
+
+	oldPtr := appendPointersInNewSegment(t, dir, 0, 54, 140_000, 1, func(int) []byte {
+		return []byte("old-non-system-delta-pointer")
+	})[0]
+	newPtr := appendPointersInNewSegment(t, dir, 0, 55, 150_000, 1, func(int) []byte {
+		return []byte("new-non-system-delta-pointer")
+	})[0]
+	baseRoot, err := db.PublishOrderedRootIterator(0, mustFrozenSystemPointerMemtable(t, "root/p", oldPtr).NewIterator(nil, nil))
+	if err != nil {
+		t.Fatalf("publish initial non-system root: %v", err)
+	}
+
+	if _, err := db.referencedValueLogSegments(context.Background()); err != nil {
+		t.Fatalf("refresh value-log refs: %v", err)
+	}
+	beforeSeq := db.currentCommitSeq()
+	if _, ok := db.valueLogRefTracker.referencedSet(beforeSeq); !ok {
+		t.Fatalf("expected incremental ref set before non-system delta at seq=%d", beforeSeq)
+	}
+
+	_, _, err = db.PublishOrderedRootDeltaGroupWithSystemBuilder([]OrderedRootDeltaPublishInput{{
+		BaseRoot: baseRoot,
+		Iter:     mustFrozenSystemPointerMemtable(t, "root/p", newPtr).NewIterator(nil, nil),
+	}}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		if len(rootIDs) != 1 {
+			t.Fatalf("rootIDs len=%d want 1", len(rootIDs))
+		}
+		return mustFrozenSystemMemtable(t, "sys/root", strconv.FormatUint(rootIDs[0], 10)).NewIterator(nil, nil), nil
+	})
+	if err != nil {
+		t.Fatalf("publish non-system delta group: %v", err)
+	}
+
+	afterSeq := db.currentCommitSeq()
+	if refs, ok := db.valueLogRefTracker.referencedSet(afterSeq); ok {
+		t.Fatalf("value-log ref tracker stayed valid after untracked non-system delta: refs=%v", refs)
+	}
 }
 
 func assertValueLogRefTrackerMatchesFullScan(t *testing.T, db *DB) {
