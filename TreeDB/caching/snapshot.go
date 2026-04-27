@@ -31,7 +31,7 @@ type Snapshot struct {
 	view                *memtableView
 	backend             *backenddb.Snapshot
 	rootVersion         uint64
-	rootPointShards     []rootDomainSnapshot
+	rootPointShards     []rootDomainSnapshot // snapshot point roots; mutable runs are intentionally excluded
 	rootIterator        rootDomainSnapshot
 	rootPublished       rootDomainLookup
 	rootPublishedRootID uint64
