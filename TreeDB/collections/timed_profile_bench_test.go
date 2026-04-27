@@ -6,6 +6,7 @@ import (
 	"runtime/pprof"
 	"strings"
 	"testing"
+	"time"
 )
 
 const (
@@ -91,6 +92,8 @@ func benchmarkTimedProfileIndexedInsertBatch(b *testing.B, checkpoint bool) {
 	backend, collection := openBenchmarkCollection(b, "bench_timed_profile_insert_batch_secondary", secondaryIndexes()...)
 	batches := benchmarkDocumentBatches(0, b.N, targetBatchSize, true)
 	startKeyFallback, startPrefixFallback := benchmarkNativeProbeFallbackCounters(b, backend)
+	var insertElapsed time.Duration
+	var syncElapsed time.Duration
 
 	metricName := "target_docs/batch"
 	if checkpoint {
@@ -110,16 +113,27 @@ func benchmarkTimedProfileIndexedInsertBatch(b *testing.B, checkpoint bool) {
 
 	b.StartTimer()
 	for _, batch := range batches {
+		if checkpoint {
+			insertStart := time.Now()
+			if _, err := collection.InsertBatch(batch.ids, batch.docs); err != nil {
+				b.Fatalf("timed profile insert batch with secondary indexes: %v", err)
+			}
+			insertElapsed += time.Since(insertStart)
+			syncStart := time.Now()
+			benchmarkSyncBoundary(b, backend)
+			syncElapsed += time.Since(syncStart)
+			continue
+		}
 		if _, err := collection.InsertBatch(batch.ids, batch.docs); err != nil {
 			b.Fatalf("timed profile insert batch with secondary indexes: %v", err)
-		}
-		if checkpoint {
-			benchmarkSyncBoundary(b, backend)
 		}
 	}
 	stopProfile()
 	profileActive = false
 	b.StopTimer()
+	if checkpoint {
+		benchmarkReportCheckpointSplit(b, b.N, insertElapsed, syncElapsed)
+	}
 	benchmarkReportNativeProbeFallbackDeltas(b, backend, startKeyFallback, startPrefixFallback)
 }
 

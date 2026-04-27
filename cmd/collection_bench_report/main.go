@@ -595,6 +595,8 @@ func benchmarkMetricColumns(benchmarks []benchmarkAggregate) []string {
 	preferred := []string{
 		"target_docs/batch",
 		"target_docs/checkpoint",
+		"insert_ns/doc",
+		"sync_ns/doc",
 		"indexes/doc",
 		"per_item_key_probe_fallback_count",
 		"per_item_prefix_probe_fallback_count",

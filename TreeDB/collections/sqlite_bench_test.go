@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"path/filepath"
 	"testing"
+	"time"
 
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -155,6 +156,8 @@ func BenchmarkSQLiteInsertBatchWithSecondaryIndexes(b *testing.B) {
 func BenchmarkSQLiteInsertBatchCheckpointWithSecondaryIndexes(b *testing.B) {
 	db := openBenchmarkSQLiteDB(b, "bench_insert_batch_checkpoint_secondary")
 	targetBatchSize := benchmarkBatchSize(b)
+	var insertElapsed time.Duration
+	var syncElapsed time.Duration
 
 	b.ReportAllocs()
 	b.ReportMetric(float64(targetBatchSize), "target_docs/checkpoint")
@@ -168,8 +171,14 @@ func BenchmarkSQLiteInsertBatchCheckpointWithSecondaryIndexes(b *testing.B) {
 		ids, docs := benchmarkSQLiteDocumentBatch(inserted, batchSize)
 		b.StartTimer()
 
+		insertStart := time.Now()
 		insertSQLiteDocumentBatch(b, db, ids, docs)
+		insertElapsed += time.Since(insertStart)
+		syncStart := time.Now()
 		checkpointSQLiteWAL(b, db)
+		syncElapsed += time.Since(syncStart)
 		inserted += batchSize
 	}
+	b.StopTimer()
+	benchmarkReportCheckpointSplit(b, b.N, insertElapsed, syncElapsed)
 }

@@ -48,9 +48,16 @@ func TestMatrixSummaryRendersBenchmarkMetrics(t *testing.T) {
         },
         {
           "name": "BenchmarkCollectionInsertBatchCheckpointWithSecondaryIndexes",
-          "mean_ns_per_op": 4250,
-          "mean_bytes_per_op": 2048,
-          "mean_allocs_per_op": 31
+          "mean_ns_per_op": 8000,
+          "mean_bytes_per_op": 2000,
+          "mean_allocs_per_op": 30,
+          "mean_metrics": {
+            "target_docs/checkpoint": 8000,
+            "insert_ns/doc": 2500,
+            "sync_ns/doc": 5500,
+            "per_item_key_probe_fallback_count": 0,
+            "per_item_prefix_probe_fallback_count": 0
+          }
         }
       ]
     }
@@ -120,8 +127,13 @@ func TestMatrixSummaryRendersBenchmarkMetrics(t *testing.T) {
 	for _, want := range []string{
 		"## User-Facing Throughput",
 		"bulk indexed insert",
+		"checkpointed indexed insert",
 		"355,556",
 		"22.5",
+		"insert ms/batch",
+		"sync ms/batch",
+		"64",
+		"44",
 		"44.44",
 		"## Diagnostic Rows",
 		"These rows are not user stories.",
@@ -145,11 +157,14 @@ func TestMatrixSummaryRendersBenchmarkMetrics(t *testing.T) {
 		t.Fatalf("read tsv: %v", err)
 	}
 	gotTSV := string(tsv)
-	if !strings.Contains(gotTSV, "BenchmarkCollectionInsertBatchWithSecondaryIndexes\t2812.5\t1980\t30\t0\t0\t") {
+	if !strings.Contains(gotTSV, "BenchmarkCollectionInsertBatchWithSecondaryIndexes\t2812.5\t1980\t30\t-\t-\t0\t0\t") {
 		t.Fatalf("tsv missing raw numeric row:\n%s", gotTSV)
 	}
 	if !strings.Contains(gotTSV, "BenchmarkSQLiteInsertBatchWithSecondaryIndexes\t4100\t2048\t32\t-\t-\t") {
 		t.Fatalf("tsv missing sqlite numeric row:\n%s", gotTSV)
+	}
+	if !strings.Contains(gotTSV, "BenchmarkCollectionInsertBatchCheckpointWithSecondaryIndexes\t8000\t2000\t30\t2500\t5500\t0\t0\t") {
+		t.Fatalf("tsv missing checkpoint split row:\n%s", gotTSV)
 	}
 	if strings.Contains(gotTSV, "2,812") {
 		t.Fatalf("tsv should not contain comma-formatted numbers:\n%s", gotTSV)
@@ -159,10 +174,13 @@ func TestMatrixSummaryRendersBenchmarkMetrics(t *testing.T) {
 		t.Fatalf("read user story tsv: %v", err)
 	}
 	gotUserStoryTSV := string(userStoryTSV)
-	if !strings.Contains(gotUserStoryTSV, "bulk indexed insert\tBenchmarkCollectionInsertBatchWithSecondaryIndexes\t8000\t355555.55555555556\t22.5\t44.44444444444444\t2812.5\t") {
+	if !strings.Contains(gotUserStoryTSV, "bulk indexed insert\tBenchmarkCollectionInsertBatchWithSecondaryIndexes\t8000\t355555.55555555556\t22.5\t-\t-\t44.44444444444444\t2812.5\t") {
 		t.Fatalf("user story tsv missing collection throughput row:\n%s", gotUserStoryTSV)
 	}
-	if !strings.Contains(gotUserStoryTSV, "bulk indexed insert\tBenchmarkSQLiteInsertBatchWithSecondaryIndexes\t8000\t243902.43902439025\t32.8\t30.48780487804878\t4100\t") {
+	if !strings.Contains(gotUserStoryTSV, "checkpointed indexed insert\tBenchmarkCollectionInsertBatchCheckpointWithSecondaryIndexes\t8000\t125000\t64\t20\t44\t15.625\t8000\t") {
+		t.Fatalf("user story tsv missing checkpoint split row:\n%s", gotUserStoryTSV)
+	}
+	if !strings.Contains(gotUserStoryTSV, "bulk indexed insert\tBenchmarkSQLiteInsertBatchWithSecondaryIndexes\t8000\t243902.43902439025\t32.8\t-\t-\t30.48780487804878\t4100\t") {
 		t.Fatalf("user story tsv missing sqlite throughput row:\n%s", gotUserStoryTSV)
 	}
 }
