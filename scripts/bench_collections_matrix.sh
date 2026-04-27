@@ -26,6 +26,11 @@ else
 fi
 SQLITE_BENCH_REGEX="${TREEDB_COLLECTION_SQLITE_BENCH_REGEX:-BenchmarkSQLite(InsertBatchWithSecondaryIndexes|InsertBatchCheckpointWithSecondaryIndexes)$}"
 SQLITE_CGO_ENABLED="${TREEDB_COLLECTION_SQLITE_CGO_ENABLED:-1}"
+PROFILE_BENCHES="${TREEDB_COLLECTION_PROFILE_BENCHES:-false}"
+PROFILE_BENCH_LIST="${TREEDB_COLLECTION_PROFILE_BENCH_LIST:-BenchmarkCollectionInsertBatchWithSecondaryIndexes BenchmarkCollectionInsertBatchCheckpointWithSecondaryIndexes}"
+SQLITE_PROFILE_BENCH_LIST="${TREEDB_COLLECTION_SQLITE_PROFILE_BENCH_LIST:-BenchmarkSQLiteInsertBatchWithSecondaryIndexes BenchmarkSQLiteInsertBatchCheckpointWithSecondaryIndexes}"
+PROFILE_COUNT="${TREEDB_COLLECTION_PROFILE_COUNT:-1}"
+PROFILE_BENCHTIME="${TREEDB_COLLECTION_PROFILE_BENCHTIME:-$BENCHTIME}"
 BRANCH="$(git rev-parse --abbrev-ref HEAD)"
 COMMIT="$(git rev-parse --short HEAD)"
 WORKTREE="$ROOT"
@@ -79,9 +84,11 @@ esac
 
 mkdir -p "$OUT_DIR"
 INDEX_TSV="$OUT_DIR/matrix_index.tsv"
+PROFILE_INDEX_TSV="$OUT_DIR/profile_index.tsv"
 SUMMARY_MD="$OUT_DIR/README.md"
 
 printf "cell\tengine\tdata_outer_leaves_in_vlog\tindex_outer_leaves_in_vlog\treport_md\treport_json\tcpu_profile\tmem_profile\n" >"$INDEX_TSV"
+printf "cell\tengine\tdata_outer_leaves_in_vlog\tindex_outer_leaves_in_vlog\tbenchmark\treport_md\treport_json\tcpu_profile\tmem_profile\tcpu_top\tmem_top\n" >"$PROFILE_INDEX_TSV"
 
 echo "running collections benchmark matrix into: $OUT_DIR"
 echo "matrix: $MATRIX"
@@ -90,6 +97,12 @@ echo "benchmark regex: $BENCH_REGEX"
 echo "benchmark count: $COUNT"
 echo "benchmark time: $BENCHTIME"
 echo "batch size: $BATCH_SIZE"
+echo "profile bench captures: $PROFILE_BENCHES"
+if is_true "$PROFILE_BENCHES"; then
+  echo "profile benchmark list: $PROFILE_BENCH_LIST"
+  echo "profile count: $PROFILE_COUNT"
+  echo "profile benchmark time: $PROFILE_BENCHTIME"
+fi
 echo "include sqlite: $INCLUDE_SQLITE"
 if is_true "$INCLUDE_SQLITE"; then
   echo "sqlite engine: $SQLITE_ENGINE"
@@ -105,6 +118,59 @@ if is_true "$INCLUDE_SQLITE"; then
     exit 2
   fi
 fi
+
+run_profile_benches() {
+  local cell=$1
+  local engine=$2
+  local data_outer=$3
+  local index_outer=$4
+  local path_label=$5
+  local bench_list=$6
+  local go_tags=${7:-}
+  local cgo_enabled=${8:-}
+  local benches=()
+
+  read -r -a benches <<<"$bench_list"
+  for bench in "${benches[@]}"; do
+    if [[ -z "$bench" ]]; then
+      continue
+    fi
+    local profile_dir="$OUT_DIR/$cell/profiles/$bench"
+    local env_args=(
+      "OUT_DIR=$profile_dir"
+      "BENCH_REGEX=^${bench}$"
+      "COUNT=$PROFILE_COUNT"
+      "BENCHTIME=$PROFILE_BENCHTIME"
+      "TREEDB_COLLECTION_PATH_LABEL=$path_label"
+      "TREEDB_COLLECTION_BENCH_ENGINE=$engine"
+      "TREEDB_COLLECTION_BENCH_BATCH_SIZE=$BATCH_SIZE"
+      "TREEDB_COLLECTION_DATA_OUTER_LEAVES_IN_VLOG=$data_outer"
+      "TREEDB_COLLECTION_INDEX_OUTER_LEAVES_IN_VLOG=$index_outer"
+    )
+    if [[ -n "$go_tags" ]]; then
+      env_args+=("GO_TEST_TAGS=$go_tags")
+    fi
+    if [[ -n "$cgo_enabled" ]]; then
+      env_args+=("CGO_ENABLED=$cgo_enabled")
+    fi
+    echo
+    echo "==> $cell profile $bench"
+    env "${env_args[@]}" scripts/bench_collections_report.sh
+
+    printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
+      "$cell" \
+      "$engine" \
+      "$data_outer" \
+      "$index_outer" \
+      "$bench" \
+      "$profile_dir/collections_report.md" \
+      "$profile_dir/collections_report.json" \
+      "$profile_dir/collections_cpu.pprof" \
+      "$profile_dir/collections_mem.pprof" \
+      "$profile_dir/collections_cpu_top.txt" \
+      "$profile_dir/collections_mem_top.txt" >>"$PROFILE_INDEX_TSV"
+  done
+}
 
 for row in "${MATRIX_ROWS[@]}"; do
   read -r cell engine data_outer index_outer <<<"$row"
@@ -131,6 +197,10 @@ for row in "${MATRIX_ROWS[@]}"; do
     "$cell_dir/collections_report.json" \
     "$cell_dir/collections_cpu.pprof" \
     "$cell_dir/collections_mem.pprof" >>"$INDEX_TSV"
+
+  if is_true "$PROFILE_BENCHES"; then
+    run_profile_benches "$cell" "$engine" "$data_outer" "$index_outer" "$PATH_LABEL" "$PROFILE_BENCH_LIST"
+  fi
 done
 
 if is_true "$INCLUDE_SQLITE"; then
@@ -160,6 +230,10 @@ if is_true "$INCLUDE_SQLITE"; then
     "$cell_dir/collections_report.json" \
     "$cell_dir/collections_cpu.pprof" \
     "$cell_dir/collections_mem.pprof" >>"$INDEX_TSV"
+
+  if is_true "$PROFILE_BENCHES"; then
+    run_profile_benches "$cell" "$SQLITE_ENGINE" "-" "-" "sqlite" "$SQLITE_PROFILE_BENCH_LIST" "sqlite_bench" "$SQLITE_CGO_ENABLED"
+  fi
 fi
 
 GOWORK=off go run ./cmd/collection_bench_matrix_summary \
@@ -179,9 +253,13 @@ cat >"$SUMMARY_MD" <<EOF
 - benchmark count: \`$COUNT\`
 - benchmark time: \`$BENCHTIME\`
 - collection batch size: \`$BATCH_SIZE\`
+- focused profile captures: \`$PROFILE_BENCHES\`
+- focused profile count: \`$PROFILE_COUNT\`
+- focused profile benchmark time: \`$PROFILE_BENCHTIME\`
 - include sqlite: \`$INCLUDE_SQLITE\`
 - sqlite benchmark regex: \`$SQLITE_BENCH_REGEX\`
 - matrix index: \`$INDEX_TSV\`
+- focused profile index: \`$PROFILE_INDEX_TSV\`
 - matrix summary markdown: \`$OUT_DIR/collections_matrix_summary.md\`
 - matrix summary tsv: \`$OUT_DIR/collections_matrix_summary.tsv\`
 - user-story throughput tsv: \`$OUT_DIR/collections_user_story_summary.tsv\`
@@ -220,6 +298,8 @@ cat >>"$SUMMARY_MD" <<'EOF'
 The production matrix keeps collection data roots in value-log outer-leaf mode and varies index roots between inline outer leaves and value-log outer leaves. The `production_fast` and `production_wal_on_fast` engines keep the cached no-WAL and WAL-on fast paths visible without changing the collection storage policy.
 
 The focused default benchmark set keeps JSON extraction overhead, non-JSON indexed planning overhead, indexed batch apply, and indexed checkpoint apply in the same artifact so regressions can be separated into JSON cost, planner cost, root publish cost, and durability-boundary cost.
+
+Set `TREEDB_COLLECTION_PROFILE_BENCHES=true` to add per-benchmark profile bundles for indexed ingest and checkpointed indexed ingest. `profile_index.tsv` lists the report, CPU profile, allocation profile, and pprof top files for each focused capture. These `go test` profiles cover the whole benchmark process; timed benchmark rows remain the source of truth, and pprof top output should be read as coarse attribution because setup or off-timer document generation can appear.
 
 Set `TREEDB_COLLECTION_INCLUDE_SQLITE=true` to append a SQLite comparison cell. The SQLite cell uses the CGO-backed `github.com/mattn/go-sqlite3` driver, WAL mode, `synchronous=NORMAL`, memory temp store, a large page cache, disabled WAL autocheckpoint, generated JSON columns for `email` and `city`, and unique/non-unique indexes on those generated columns. That keeps document generation outside the timed section while SQLite still pays JSON extraction and secondary-index maintenance during insert.
 EOF
