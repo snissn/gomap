@@ -173,6 +173,13 @@ func TestAppendOnlyApplyStealEntryFuncStopsOnError(t *testing.T) {
 	}
 }
 
+func TestAppendOnlyApplyStealEntryFuncRejectsNilEmitter(t *testing.T) {
+	m := NewAppendOnlyWithEntryCapacity(3)
+	if err := m.ApplyStealEntryFunc(1, nil); err == nil {
+		t.Fatalf("ApplyStealEntryFunc with nil emitter returned nil")
+	}
+}
+
 func TestAppendOnlyIteratorSortedLatest(t *testing.T) {
 	m := NewAppendOnlyWithCapacity(0)
 

@@ -3,6 +3,7 @@ package memtable
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"math/bits"
 	"sort"
 	"sync"
@@ -711,7 +712,7 @@ func (m *AppendOnly) ApplyStealEntryFunc(count int, emit func(i int) (key, value
 		return nil
 	}
 	if emit == nil {
-		return nil
+		return errors.New("memtable: nil entry emitter")
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()

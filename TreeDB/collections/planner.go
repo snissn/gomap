@@ -468,7 +468,7 @@ func (p insertBatchPlanner) emitSecondaryRuns(plan *insertBatchPlan, items []ins
 					if valuePos < len(values) {
 						encoded := values[valuePos]
 						valuePos++
-						key, err := indexEntryKey(encoded, items[itemPos].id)
+						key, err = indexEntryKey(encoded, items[itemPos].id)
 						return key, nil, err
 					}
 					itemPos++
