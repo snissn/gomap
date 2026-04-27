@@ -1,6 +1,7 @@
 package db
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"reflect"
@@ -655,6 +656,67 @@ func TestPublishOrderedRootDeltaGroupWithSystemBuilder_AppliesDeletes(t *testing
 	}
 	if _, err := snap.GetEntryAtRoot(rootIDs[0], []byte("root/b")); err == nil {
 		t.Fatal("root/b still exists after delta delete")
+	}
+}
+
+func TestPublishOrderedRootDeltaGroupWithSystemBuilder_AcceptsLargeDeltaValueLogLeafValue(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	leafLog := newRewriteWriter(ValueLogDirPath(dir), 0, 0, 64<<20)
+	db.SetLeafPageLog(leafLog)
+	defer func() {
+		_ = leafLog.Close()
+		_ = db.Close()
+	}()
+
+	_, baseRootIDs, err := db.PublishOrderedRootGroup(nil, []OrderedRootPublishInput{{
+		BaseRoot:      0,
+		Iter:          mustFrozenSystemMemtable(t, "doc/a", "small").NewIterator(nil, nil),
+		StoragePolicy: OrderedRootStorageValueLogLeaves,
+	}})
+	if err != nil {
+		t.Fatalf("publish base root: %v", err)
+	}
+	if len(baseRootIDs) != 1 {
+		t.Fatalf("base roots=%d want 1", len(baseRootIDs))
+	}
+
+	largeValue := bytes.Repeat([]byte("x"), page.DefaultInlineThreshold+1024)
+	delta, err := memtable.NewWithCapacityMode(0, memtable.ModeHashSorted)
+	if err != nil {
+		t.Fatalf("new delta table: %v", err)
+	}
+	delta.Set([]byte("doc/large"), largeValue)
+	delta.Freeze()
+
+	_, rootIDs, err := db.PublishOrderedRootDeltaGroupWithSystemDeltaBuilder([]OrderedRootDeltaPublishInput{{
+		BaseRoot:      baseRootIDs[0],
+		Iter:          delta.NewIterator(nil, nil),
+		StoragePolicy: OrderedRootStorageValueLogLeaves,
+	}}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		return mustFrozenSystemMemtable(t, "sys/root", strconv.FormatUint(rootIDs[0], 10)).NewIterator(nil, nil), nil
+	})
+	if err != nil {
+		t.Fatalf("publish large value delta: %v", err)
+	}
+	if len(rootIDs) != 1 {
+		t.Fatalf("rootIDs=%d want 1", len(rootIDs))
+	}
+
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("expected snapshot")
+	}
+	defer func() { _ = snap.Close() }()
+	entry, err := snap.GetEntryAtRoot(rootIDs[0], []byte("doc/large"))
+	if err != nil {
+		t.Fatalf("GetEntryAtRoot(doc/large): %v", err)
+	}
+	if !bytes.Equal(entry.Value, largeValue) {
+		t.Fatalf("large value mismatch: got %d bytes want %d", len(entry.Value), len(largeValue))
 	}
 }
 

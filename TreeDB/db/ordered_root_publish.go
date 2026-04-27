@@ -23,6 +23,8 @@ const (
 	orderedRootPublishPlanWarmNativeApply
 )
 
+var orderedRootDeltaBatchInlineThreshold = int(^uint(0) >> 1)
+
 type orderedRootPublishStats struct {
 	warmAttempts            uint64
 	warmNativeApplyAttempts uint64
@@ -213,7 +215,7 @@ func orderedRootBatchPut(delta *batch.Batch, iter iterator.UnsafeIterator, borro
 }
 
 func orderedRootDeltaBatchFromIterator(iter iterator.UnsafeIterator) (*batch.Batch, error) {
-	delta := batch.New(nil, page.DefaultInlineThreshold)
+	delta := batch.New(nil, orderedRootDeltaBatchInlineThreshold)
 	if hint, ok := iter.(orderedRootLenHintIterator); ok {
 		delta.Reserve(hint.Len())
 	}
@@ -306,7 +308,7 @@ func (db *DB) publishOrderedRootDeltaIterator(baseRoot uint64, iter iterator.Uns
 }
 
 func buildOrderedRootDeltaBatch(baseIter, targetIter iterator.UnsafeIterator, trackRefs bool) (*batch.Batch, int, *valueLogRefDelta, error) {
-	delta := batch.New(nil, page.DefaultInlineThreshold)
+	delta := batch.New(nil, orderedRootDeltaBatchInlineThreshold)
 	baseValid := baseIter.Valid()
 	targetValid := targetIter.Valid()
 	deltaOps := 0
