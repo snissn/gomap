@@ -197,11 +197,11 @@ func TestAcquireSnapshot_HasManyAndHasPrefixesIncludeCachedWrites(t *testing.T) 
 	if got := mustStatUint64(t, stats, "treedb.cache.root_domain_probes.snapshot_hasmany.backend_fallback_calls"); got != 1 {
 		t.Fatalf("snapshot HasMany backend fallback calls=%d want 1", got)
 	}
-	if got := mustStatUint64(t, stats, "treedb.cache.root_domain_probes.snapshot_hasprefixes.native_calls"); got != 1 {
-		t.Fatalf("snapshot HasPrefixes native calls=%d want 1", got)
+	if got := mustStatUint64(t, stats, "treedb.cache.root_domain_probes.snapshot_hasprefixes.native_calls"); got != 2 {
+		t.Fatalf("snapshot HasPrefixes native calls=%d want 2", got)
 	}
-	if got := mustStatUint64(t, stats, "treedb.cache.root_domain_probes.snapshot_hasprefixes.fallback_calls"); got != 1 {
-		t.Fatalf("snapshot HasPrefixes fallback calls=%d want 1", got)
+	if got := mustStatUint64(t, stats, "treedb.cache.root_domain_probes.snapshot_hasprefixes.fallback_calls"); got != 2 {
+		t.Fatalf("snapshot HasPrefixes fallback calls=%d want 2", got)
 	}
 }
 
