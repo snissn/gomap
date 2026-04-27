@@ -82,6 +82,50 @@ func benchmarkCollectionStoragePolicy(tb testing.TB) (dataOuter, indexOuter bool
 	return dataOuter, indexOuter
 }
 
+func benchmarkStatUint64(tb testing.TB, stats map[string]string, key string) uint64 {
+	tb.Helper()
+
+	raw, ok := stats[key]
+	if !ok {
+		tb.Fatalf("missing benchmark stat %q", key)
+	}
+	n, err := strconv.ParseUint(raw, 10, 64)
+	if err != nil {
+		tb.Fatalf("parse benchmark stat %q=%q: %v", key, raw, err)
+	}
+	return n
+}
+
+func benchmarkNativeProbeFallbackCounters(tb testing.TB, backend *backenddb.DB) (key, prefix uint64) {
+	tb.Helper()
+
+	stats := backend.Stats()
+	return benchmarkStatUint64(tb, stats, "treedb.native_fastpath.per_item_key_probe_fallback_count"),
+		benchmarkStatUint64(tb, stats, "treedb.native_fastpath.per_item_prefix_probe_fallback_count")
+}
+
+func benchmarkReportNativeProbeFallbackDeltas(b *testing.B, backend *backenddb.DB, startKey, startPrefix uint64) {
+	b.Helper()
+
+	endKey, endPrefix := benchmarkNativeProbeFallbackCounters(b, backend)
+	if endKey < startKey {
+		b.Fatalf("per_item_key_probe_fallback_count moved backwards: start=%d end=%d", startKey, endKey)
+	}
+	if endPrefix < startPrefix {
+		b.Fatalf("per_item_prefix_probe_fallback_count moved backwards: start=%d end=%d", startPrefix, endPrefix)
+	}
+	keyDelta := endKey - startKey
+	prefixDelta := endPrefix - startPrefix
+	b.ReportMetric(float64(keyDelta), "per_item_key_probe_fallback_count")
+	b.ReportMetric(float64(prefixDelta), "per_item_prefix_probe_fallback_count")
+	if keyDelta != 0 {
+		b.Fatalf("per_item_key_probe_fallback_count=%d want 0", keyDelta)
+	}
+	if prefixDelta != 0 {
+		b.Fatalf("per_item_prefix_probe_fallback_count=%d want 0", prefixDelta)
+	}
+}
+
 func TestBenchmarkCollectionStoragePolicyDefaultsProductionMainline(t *testing.T) {
 	t.Setenv("TREEDB_COLLECTION_DATA_OUTER_LEAVES_IN_VLOG", "")
 	t.Setenv("TREEDB_COLLECTION_INDEX_OUTER_LEAVES_IN_VLOG", "")
@@ -246,8 +290,9 @@ func BenchmarkCollectionInsertProvidedID(b *testing.B) {
 }
 
 func BenchmarkCollectionInsertBatchProvidedID(b *testing.B) {
-	_, collection := openBenchmarkCollection(b, "bench_insert_batch_provided")
+	backend, collection := openBenchmarkCollection(b, "bench_insert_batch_provided")
 	targetBatchSize := benchmarkBatchSize(b)
+	startKeyFallback, startPrefixFallback := benchmarkNativeProbeFallbackCounters(b, backend)
 
 	b.ReportAllocs()
 	b.ReportMetric(float64(targetBatchSize), "target_docs/batch")
@@ -266,6 +311,8 @@ func BenchmarkCollectionInsertBatchProvidedID(b *testing.B) {
 		}
 		inserted += batchSize
 	}
+	b.StopTimer()
+	benchmarkReportNativeProbeFallbackDeltas(b, backend, startKeyFallback, startPrefixFallback)
 }
 
 func BenchmarkCollectionGetByID(b *testing.B) {
@@ -328,8 +375,9 @@ func BenchmarkCollectionInsertWithSecondaryIndexes(b *testing.B) {
 }
 
 func BenchmarkCollectionInsertBatchWithSecondaryIndexes(b *testing.B) {
-	_, collection := openBenchmarkCollection(b, "bench_insert_batch_secondary", secondaryIndexes()...)
+	backend, collection := openBenchmarkCollection(b, "bench_insert_batch_secondary", secondaryIndexes()...)
 	targetBatchSize := benchmarkBatchSize(b)
+	startKeyFallback, startPrefixFallback := benchmarkNativeProbeFallbackCounters(b, backend)
 
 	b.ReportAllocs()
 	b.ReportMetric(float64(targetBatchSize), "target_docs/batch")
@@ -348,11 +396,14 @@ func BenchmarkCollectionInsertBatchWithSecondaryIndexes(b *testing.B) {
 		}
 		inserted += batchSize
 	}
+	b.StopTimer()
+	benchmarkReportNativeProbeFallbackDeltas(b, backend, startKeyFallback, startPrefixFallback)
 }
 
 func BenchmarkCollectionInsertBatchCheckpointWithSecondaryIndexes(b *testing.B) {
 	backend, collection := openBenchmarkCollection(b, "bench_insert_batch_checkpoint_secondary", secondaryIndexes()...)
 	targetBatchSize := benchmarkBatchSize(b)
+	startKeyFallback, startPrefixFallback := benchmarkNativeProbeFallbackCounters(b, backend)
 
 	b.ReportAllocs()
 	b.ReportMetric(float64(targetBatchSize), "target_docs/checkpoint")
@@ -372,6 +423,8 @@ func BenchmarkCollectionInsertBatchCheckpointWithSecondaryIndexes(b *testing.B) 
 		benchmarkSyncBoundary(b, backend)
 		inserted += batchSize
 	}
+	b.StopTimer()
+	benchmarkReportNativeProbeFallbackDeltas(b, backend, startKeyFallback, startPrefixFallback)
 }
 
 func BenchmarkCollectionDeleteWithSecondaryIndexes(b *testing.B) {

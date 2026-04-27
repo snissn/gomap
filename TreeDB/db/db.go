@@ -178,6 +178,11 @@ type DB struct {
 	systemRootWarmPreservedPages          atomic.Uint64
 	systemRootWarmRewrittenPages          atomic.Uint64
 
+	rootProbeKeyFallbackCalls    atomic.Uint64
+	rootProbeKeyFallbackItems    atomic.Uint64
+	rootProbePrefixFallbackCalls atomic.Uint64
+	rootProbePrefixFallbackItems atomic.Uint64
+
 	// testFailFinalizeCommit forces finalizeCommitLocked to fail before writing
 	// the next meta page. Used by crash-safety tests.
 	testFailFinalizeCommit        atomic.Bool

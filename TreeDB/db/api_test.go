@@ -284,6 +284,18 @@ func TestStatsIncludesWatermarkLagDriftMetric(t *testing.T) {
 	if _, ok := stats["treedb.publish.system_root.warm_rebuild_fallbacks"]; !ok {
 		t.Fatalf("missing treedb.publish.system_root.warm_rebuild_fallbacks")
 	}
+	if _, ok := stats["treedb.root_probe.has_any_sorted.fallback_items"]; !ok {
+		t.Fatalf("missing treedb.root_probe.has_any_sorted.fallback_items")
+	}
+	if _, ok := stats["treedb.root_probe.has_prefixes.fallback_items"]; !ok {
+		t.Fatalf("missing treedb.root_probe.has_prefixes.fallback_items")
+	}
+	if _, ok := stats["treedb.native_fastpath.per_item_key_probe_fallback_count"]; !ok {
+		t.Fatalf("missing treedb.native_fastpath.per_item_key_probe_fallback_count")
+	}
+	if _, ok := stats["treedb.native_fastpath.per_item_prefix_probe_fallback_count"]; !ok {
+		t.Fatalf("missing treedb.native_fastpath.per_item_prefix_probe_fallback_count")
+	}
 	if _, ok := stats["treedb.process.read_path.backend_tree.get_append_inline_hits_total"]; !ok {
 		t.Fatalf("missing treedb.process.read_path.backend_tree.get_append_inline_hits_total")
 	}

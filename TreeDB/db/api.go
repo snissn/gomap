@@ -691,6 +691,13 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.publish.system_root.warm_rebuild_fallbacks"] = fmt.Sprintf("%d", warmPublishStats.warmRebuildFallbacks)
 	stats["treedb.publish.system_root.warm_preserved_pages"] = fmt.Sprintf("%d", warmPublishStats.warmPreservedPages)
 	stats["treedb.publish.system_root.warm_rewritten_pages"] = fmt.Sprintf("%d", warmPublishStats.warmRewrittenPages)
+	rootProbeStats := db.rootProbeStatsSnapshot()
+	stats["treedb.root_probe.has_any_sorted.fallback_calls"] = fmt.Sprintf("%d", rootProbeStats.keyFallbackCalls)
+	stats["treedb.root_probe.has_any_sorted.fallback_items"] = fmt.Sprintf("%d", rootProbeStats.keyFallbackItems)
+	stats["treedb.root_probe.has_prefixes.fallback_calls"] = fmt.Sprintf("%d", rootProbeStats.prefixFallbackCalls)
+	stats["treedb.root_probe.has_prefixes.fallback_items"] = fmt.Sprintf("%d", rootProbeStats.prefixFallbackItems)
+	stats["treedb.native_fastpath.per_item_key_probe_fallback_count"] = fmt.Sprintf("%d", rootProbeStats.keyFallbackItems)
+	stats["treedb.native_fastpath.per_item_prefix_probe_fallback_count"] = fmt.Sprintf("%d", rootProbeStats.prefixFallbackItems)
 
 	pruneStatsInto(stats, &db.pruner)
 
