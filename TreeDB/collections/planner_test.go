@@ -197,7 +197,7 @@ func TestOrderedIndexStateForDocumentJSONRootFastPathPreservesFieldSemantics(t *
 	if err != nil {
 		t.Fatalf("index runtimes: %v", err)
 	}
-	state, err := orderedIndexStateForDocument([]byte(`{"email":"first","a*b":"literal","email":"second","axb":"wild"}`), runtimes, collectionOptions{})
+	state, err := orderedIndexStateForDocument([]byte(`{"email":"first","a\u002ab":"escaped","a*b":"literal","email":"second","axb":"wild"}`), runtimes, collectionOptions{})
 	if err != nil {
 		t.Fatalf("root fast path index state: %v", err)
 	}
@@ -206,6 +206,23 @@ func TestOrderedIndexStateForDocumentJSONRootFastPathPreservesFieldSemantics(t *
 	}
 	if got, want := state.valuesAt(1), [][]byte{[]byte("s:literal")}; !byteMatrixEqual(got, want) {
 		t.Fatalf("literal field values=%q want %q", got, want)
+	}
+}
+
+func TestOrderedIndexStateForDocumentJSONRootFastPathUnescapesStringValues(t *testing.T) {
+	planner := insertBatchPlanner{
+		indexes: []indexDefinition{{name: "email", field: "email"}},
+	}
+	runtimes, err := planner.indexRuntimes()
+	if err != nil {
+		t.Fatalf("index runtimes: %v", err)
+	}
+	state, err := orderedIndexStateForDocument([]byte(`{"email":"ada\n@example.com"}`), runtimes, collectionOptions{})
+	if err != nil {
+		t.Fatalf("root fast path index state: %v", err)
+	}
+	if got, want := state.valuesAt(0), [][]byte{[]byte("s:ada\n@example.com")}; !byteMatrixEqual(got, want) {
+		t.Fatalf("escaped string values=%q want %q", got, want)
 	}
 }
 
