@@ -1508,12 +1508,33 @@ func TestWriteBenchprofArtifacts_InvalidExecutionPath(t *testing.T) {
 		},
 	}}
 
-	for _, path := range []string{"mixed", "oracle,native-fastpath", "native-fastpath+legacy"} {
+	for _, path := range []string{"oracle,native-fastpath", "native-fastpath+legacy"} {
 		if err := writeBenchprofArtifacts(dir, path, runs); err == nil {
 			t.Fatalf("expected invalid execution path %q to fail", path)
 		} else if !strings.Contains(err.Error(), "mixed-path labels are forbidden") {
 			t.Fatalf("unexpected error for %q: %v", path, err)
 		}
+	}
+}
+
+func TestWriteBenchprofArtifacts_InvalidExecutionPathListsAllowedValues(t *testing.T) {
+	dir := t.TempDir()
+	runs := []BenchRun{{
+		Config: BenchConfig{Keys: 1, Profile: "fast"},
+		Results: map[string]map[string]float64{
+			"full_scan": {"TreeDB": 1},
+		},
+	}}
+
+	err := writeBenchprofArtifacts(dir, "foo", runs)
+	if err == nil {
+		t.Fatal("expected invalid execution path to fail")
+	}
+	if !strings.Contains(err.Error(), "expected one of oracle|native-fastpath") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if strings.Contains(err.Error(), "mixed-path labels are forbidden") {
+		t.Fatalf("non-mixed invalid label reported as mixed: %v", err)
 	}
 }
 

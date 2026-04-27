@@ -8,18 +8,22 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 )
 
+const maxRootGroupTestShardKeySearchAttempts = 1 << 20
+
 func rootGroupTestShardKey(t *testing.T, db *DB, shard int) []byte {
 	t.Helper()
 	if db == nil {
 		t.Fatal("nil db")
 	}
 	var key [8]byte
-	for i := uint64(0); ; i++ {
+	for i := uint64(0); i < maxRootGroupTestShardKeySearchAttempts; i++ {
 		binary.BigEndian.PutUint64(key[:], i)
 		if db.shardIndex(key[:]) == shard {
 			return append([]byte(nil), key[:]...)
 		}
 	}
+	t.Fatalf("rootGroupTestShardKey: could not find key for shard %d after %d attempts", shard, maxRootGroupTestShardKeySearchAttempts)
+	return nil
 }
 
 func TestRootDomainSnapshotFromCachedSnapshot_UsesPerRootPublishedView(t *testing.T) {
@@ -75,6 +79,34 @@ func TestRootDomainIteratorSnapshotFromCachedSnapshot_UsesPinnedPublishedSet(t *
 	assertRootDomainVisibleValue(t, iterSnap, "iter/a", "published-a")
 }
 
+func TestRootDomainSnapshotFromCachedSnapshot_PreservesPinnedRootIDWithoutLookup(t *testing.T) {
+	db := &DB{
+		mutableShards:    make([]memShard, 1),
+		mutableShardMask: 0,
+	}
+	snap := &Snapshot{
+		db: db,
+		publishedRoots: &publishedRootSet{
+			pointShards: []publishedRootRef{{rootID: 404}},
+			iterator:    publishedRootRef{rootID: 405},
+			system:      publishedRootRef{rootID: 406},
+		},
+	}
+
+	point := rootDomainSnapshotFromCachedSnapshot(snap, []byte("k"))
+	if point.publishedRootID != 404 {
+		t.Fatalf("point published id=%d want 404", point.publishedRootID)
+	}
+	iter := rootDomainIteratorSnapshotFromCachedSnapshot(snap)
+	if iter.publishedRootID != 405 {
+		t.Fatalf("iterator published id=%d want 405", iter.publishedRootID)
+	}
+	system := rootDomainSystemSnapshotFromCachedSnapshot(snap)
+	if system.publishedRootID != 406 {
+		t.Fatalf("system published id=%d want 406", system.publishedRootID)
+	}
+}
+
 func TestAcquireSnapshot_PinsInstalledPublishedRootSet(t *testing.T) {
 	dir := t.TempDir()
 	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
@@ -123,6 +155,9 @@ func TestAcquireSnapshot_PinsInstalledPublishedRootSet(t *testing.T) {
 		t.Fatal("expected snapshot A")
 	}
 	defer snapA.Close()
+	if snapA.view != nil {
+		t.Fatal("expected snapshot A to copy published roots without retaining empty memtable view")
+	}
 
 	db.mu.Lock()
 	db.installPublishedRootSetLocked(setB)
@@ -133,6 +168,9 @@ func TestAcquireSnapshot_PinsInstalledPublishedRootSet(t *testing.T) {
 		t.Fatal("expected snapshot B")
 	}
 	defer snapB.Close()
+	if snapB.view != nil {
+		t.Fatal("expected snapshot B to copy published roots without retaining empty memtable view")
+	}
 
 	rootA0 := rootDomainSnapshotFromCachedSnapshot(snapA, key0)
 	rootA1 := rootDomainSnapshotFromCachedSnapshot(snapA, key1)
