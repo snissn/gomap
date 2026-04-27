@@ -160,6 +160,34 @@ func TestBuildReportAndRenderMarkdown(t *testing.T) {
 	}
 }
 
+func TestAggregateSamplesAveragesMetricsOverReportingSamples(t *testing.T) {
+	aggregates := aggregateSamples([]benchmarkSample{
+		{
+			Name:    "BenchmarkCollectionInsertBatchWithSecondaryIndexes",
+			NsPerOp: 1000,
+			Metrics: map[string]float64{
+				"conditionally_reported": 10,
+				"shared":                 2,
+			},
+		},
+		{
+			Name:    "BenchmarkCollectionInsertBatchWithSecondaryIndexes",
+			NsPerOp: 3000,
+			Metrics: map[string]float64{
+				"shared": 4,
+			},
+		},
+	})
+
+	got := aggregates["BenchmarkCollectionInsertBatchWithSecondaryIndexes"].MeanMetrics
+	if got["conditionally_reported"] != 10 {
+		t.Fatalf("conditionally_reported=%v want 10", got["conditionally_reported"])
+	}
+	if got["shared"] != 3 {
+		t.Fatalf("shared=%v want 3", got["shared"])
+	}
+}
+
 func TestBuildReportUnavailable(t *testing.T) {
 	rep, err := buildReport(config{
 		outDir:            t.TempDir(),
