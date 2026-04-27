@@ -124,3 +124,25 @@ func TestMatrixSummaryRendersBenchmarkMetrics(t *testing.T) {
 		t.Fatalf("user story tsv missing sqlite throughput row:\n%s", gotUserStoryTSV)
 	}
 }
+
+func TestBuildUserStoryRowsSkipsMissingBatchSize(t *testing.T) {
+	rows := []summaryRow{
+		{
+			Benchmark: "BenchmarkCollectionInsertBatchWithSecondaryIndexes",
+			NsPerOp:   2500,
+		},
+		{
+			Benchmark:           "BenchmarkCollectionInsertBatchWithSecondaryIndexes",
+			NsPerOp:             2500,
+			CollectionBatchSize: 8000,
+		},
+	}
+
+	got := buildUserStoryRows(rows)
+	if len(got) != 1 {
+		t.Fatalf("user story rows=%d want 1", len(got))
+	}
+	if got[0].CollectionBatchSize != 8000 {
+		t.Fatalf("batch size=%d want 8000", got[0].CollectionBatchSize)
+	}
+}

@@ -421,22 +421,19 @@ func renderMarkdown(rows []summaryRow, outDir string) (string, error) {
 
 func relativeReportPath(outDir, reportPath string) string {
 	if rel, err := filepath.Rel(outDir, reportPath); err == nil {
-		return rel
+		return filepath.ToSlash(rel)
 	}
-	return reportPath
+	return filepath.ToSlash(reportPath)
 }
 
 func buildUserStoryRows(rows []summaryRow) []userStoryRow {
 	out := make([]userStoryRow, 0, len(rows))
 	for _, row := range rows {
 		story, ok := userStoryLabel(row.Benchmark)
-		if !ok || row.NsPerOp <= 0 {
+		if !ok || row.NsPerOp <= 0 || row.CollectionBatchSize <= 0 {
 			continue
 		}
 		batchSize := row.CollectionBatchSize
-		if batchSize <= 0 {
-			batchSize = 1
-		}
 		docsPerSec := 1e9 / row.NsPerOp
 		out = append(out, userStoryRow{
 			summaryRow: row,
@@ -445,9 +442,6 @@ func buildUserStoryRows(rows []summaryRow) []userStoryRow {
 			MSPerBatch: float64(batchSize) * row.NsPerOp / 1e6,
 			BatchesSec: docsPerSec / float64(batchSize),
 		})
-		if out[len(out)-1].CollectionBatchSize <= 0 {
-			out[len(out)-1].CollectionBatchSize = batchSize
-		}
 	}
 	return out
 }
