@@ -231,7 +231,7 @@ func loadBenchmarkReport(path string) (loadedReport, error) {
 		return loadedReport{}, fmt.Errorf("parse report %s: %w", path, err)
 	}
 	if rep.Status != "ok" {
-		return loadedReport{CollectionBatchSize: rep.CollectionBatchSize, Benchmarks: nil}, nil
+		return loadedReport{}, fmt.Errorf("report %s status %q; matrix summary requires ok reports", path, rep.Status)
 	}
 	out := make(map[string]benchmarkAggregate)
 	for _, section := range rep.Sections {
