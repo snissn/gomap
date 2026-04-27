@@ -1,0 +1,113 @@
+package db
+
+import (
+	"bytes"
+	"sync/atomic"
+	"testing"
+
+	"github.com/snissn/gomap/TreeDB/page"
+)
+
+type checkpointTestLeafPageLog struct {
+	flushes atomic.Uint64
+	syncs   atomic.Uint64
+}
+
+func (l *checkpointTestLeafPageLog) AppendLeafPage([]byte) (page.LeafLogPtr, error) {
+	return page.LeafLogPtr{}, nil
+}
+
+func (l *checkpointTestLeafPageLog) Flush() error {
+	l.flushes.Add(1)
+	return nil
+}
+
+func (l *checkpointTestLeafPageLog) Sync() error {
+	l.syncs.Add(1)
+	return nil
+}
+
+func TestCheckpointSyncBoundaryDoesNotAdvanceCommitSeq(t *testing.T) {
+	dir := t.TempDir()
+	d, err := Open(Options{
+		Dir:       dir,
+		ChunkSize: 64 * 1024,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	b := d.NewBatch()
+	if err := b.Set([]byte("k"), []byte("v")); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if err := b.Close(); err != nil {
+		t.Fatalf("Close batch: %v", err)
+	}
+	state := d.State()
+	if state == nil {
+		t.Fatal("missing state after write")
+	}
+	seq := state.CommitSeq
+
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	if got := d.State().CommitSeq; got != seq {
+		t.Fatalf("Checkpoint advanced CommitSeq: got=%d want=%d", got, seq)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	reopened, err := Open(Options{
+		Dir:       dir,
+		ChunkSize: 64 * 1024,
+	})
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer reopened.Close()
+	got, err := reopened.Get([]byte("k"))
+	if err != nil {
+		t.Fatalf("Get after reopen: %v", err)
+	}
+	if !bytes.Equal(got, []byte("v")) {
+		t.Fatalf("Get after reopen=%q want %q", got, []byte("v"))
+	}
+}
+
+func TestEmptyBatchWriteSyncUsesCheckpointBoundary(t *testing.T) {
+	d, err := Open(Options{
+		Dir:       t.TempDir(),
+		ChunkSize: 64 * 1024,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer d.Close()
+
+	leafLog := &checkpointTestLeafPageLog{}
+	d.SetLeafPageLog(leafLog)
+	seq := d.State().CommitSeq
+
+	b := d.NewBatch()
+	if err := b.WriteSync(); err != nil {
+		t.Fatalf("WriteSync: %v", err)
+	}
+	if err := b.Close(); err != nil {
+		t.Fatalf("Close batch: %v", err)
+	}
+	if got := d.State().CommitSeq; got != seq {
+		t.Fatalf("empty WriteSync advanced CommitSeq: got=%d want=%d", got, seq)
+	}
+	if got := leafLog.syncs.Load(); got != 1 {
+		t.Fatalf("leaf log syncs=%d want 1", got)
+	}
+	if got := leafLog.flushes.Load(); got != 0 {
+		t.Fatalf("leaf log flushes=%d want 0", got)
+	}
+}

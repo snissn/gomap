@@ -5850,6 +5850,28 @@ type BackendDB interface {
 	Stats() map[string]string
 }
 
+type backendCheckpointer interface {
+	Checkpoint() error
+}
+
+func backendSyncBoundary(backend BackendDB) error {
+	if backend == nil {
+		return errors.New("cachingdb: missing backend")
+	}
+	if checkpointer, ok := backend.(backendCheckpointer); ok {
+		return checkpointer.Checkpoint()
+	}
+	b := backend.NewBatch()
+	if b == nil {
+		return errors.New("cachingdb: missing backend batch")
+	}
+	err := b.WriteSync()
+	if cerr := b.Close(); err == nil {
+		err = cerr
+	}
+	return err
+}
+
 type backendCloseHookRunner interface {
 	RunCloseHooks() error
 }
@@ -18835,17 +18857,18 @@ func (db *DB) Checkpoint() error {
 	// New logic: perform sync write only if not relaxedSync
 	var commitErr error
 	if nonEmptyBytes > 0 {
-		backendBatch := db.backend.NewBatch()
 		if db.relaxedSync {
+			backendBatch := db.backend.NewBatch()
 			// If relaxed sync, just write the batch without forcing sync
 			commitErr = backendBatch.Write()
+			cerr := backendBatch.Close()
+			if commitErr == nil {
+				commitErr = cerr
+			}
 		} else {
-			// Otherwise, force sync
-			commitErr = backendBatch.WriteSync()
-		}
-		cerr := backendBatch.Close()
-		if commitErr == nil {
-			commitErr = cerr
+			// Otherwise, force a backend durability boundary without publishing
+			// an artificial same-root commit.
+			commitErr = backendSyncBoundary(db.backend)
 		}
 		if commitErr != nil {
 			return commitErr
@@ -19281,13 +19304,9 @@ func (db *DB) Close() error {
 	}
 
 	if walBytes > 0 && !hadMemtables {
-		backendBatch := db.backend.NewBatch()
 		db.flushMu.Lock()
-		err := backendBatch.WriteSync()
+		err := backendSyncBoundary(db.backend)
 		db.flushMu.Unlock()
-		if cerr := backendBatch.Close(); cerr != nil && err == nil {
-			err = cerr
-		}
 		if err != nil {
 			errs = append(errs, err)
 		}
