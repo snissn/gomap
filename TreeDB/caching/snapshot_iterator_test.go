@@ -14,6 +14,7 @@ func TestSnapshotIterator_QueueValueOverridesPublishedAndTombstoneHidesPublished
 	if err != nil {
 		t.Fatalf("open backend: %v", err)
 	}
+	defer backend.Close()
 
 	if err := backend.SetSync([]byte("a"), []byte("backend_a")); err != nil {
 		t.Fatalf("backend set a: %v", err)
@@ -53,7 +54,6 @@ func TestSnapshotIterator_QueueValueOverridesPublishedAndTombstoneHidesPublished
 	if err != nil {
 		t.Fatalf("snapshot iterator: %v", err)
 	}
-	defer it.Close()
 
 	if err := db.Set([]byte("d"), []byte("post_open_queue")); err != nil {
 		t.Fatalf("post-open queued set: %v", err)
@@ -101,6 +101,7 @@ func TestSnapshotReverseIterator_QueueValueOverridesPublishedAndTombstoneHidesPu
 	if err != nil {
 		t.Fatalf("open backend: %v", err)
 	}
+	defer backend.Close()
 
 	if err := backend.SetSync([]byte("a"), []byte("backend_a")); err != nil {
 		t.Fatalf("backend set a: %v", err)
@@ -140,7 +141,6 @@ func TestSnapshotReverseIterator_QueueValueOverridesPublishedAndTombstoneHidesPu
 	if err != nil {
 		t.Fatalf("snapshot reverse iterator: %v", err)
 	}
-	defer it.Close()
 
 	if err := db.Set([]byte("d"), []byte("post_open_queue")); err != nil {
 		t.Fatalf("post-open queued set: %v", err)
