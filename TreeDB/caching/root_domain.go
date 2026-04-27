@@ -537,13 +537,13 @@ func (l backendSnapshotLookup) GetEntry(key []byte) (val []byte, ptr page.ValueP
 		}
 	}
 	var (
-		out []byte
-		err error
+		entry node.LeafEntry
+		err   error
 	)
 	if l.rootID != 0 {
-		out, err = l.snapshot.GetAtRoot(l.rootID, key)
+		entry, err = l.snapshot.GetEntryAtRoot(l.rootID, key)
 	} else {
-		out, err = l.snapshot.Get(key)
+		entry, err = l.snapshot.GetEntry(key)
 	}
 	if err != nil {
 		if errors.Is(err, tree.ErrKeyNotFound) {
@@ -551,7 +551,37 @@ func (l backendSnapshotLookup) GetEntry(key []byte) (val []byte, ptr page.ValueP
 		}
 		return nil, page.ValuePtr{}, 0, false
 	}
-	return out, page.ValuePtr{}, node.FlagInline, true
+	return entry.Value, entry.ValuePtr, entry.Flags, true
+}
+
+func (l backendSnapshotLookup) GetValueAppend(key, dst []byte) ([]byte, error) {
+	if l.snapshot == nil {
+		return dst, backenddb.ErrClosed
+	}
+	if l.db != nil {
+		if err := l.db.flushValueLogForBackendRead(); err != nil {
+			return dst, err
+		}
+	}
+	if l.rootID != 0 {
+		return l.snapshot.GetAppendAtRoot(l.rootID, key, dst)
+	}
+	return l.snapshot.GetAppend(key, dst)
+}
+
+func (l backendSnapshotLookup) GetValueUnsafe(key []byte) ([]byte, error) {
+	if l.snapshot == nil {
+		return nil, backenddb.ErrClosed
+	}
+	if l.db != nil {
+		if err := l.db.flushValueLogForBackendRead(); err != nil {
+			return nil, err
+		}
+	}
+	if l.rootID != 0 {
+		return l.snapshot.GetUnsafeAtRoot(l.rootID, key)
+	}
+	return l.snapshot.GetUnsafe(key)
 }
 
 func (l backendSnapshotLookup) Iterator(start, end []byte) (iterator.UnsafeIterator, error) {
