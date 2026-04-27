@@ -131,6 +131,36 @@ func TestUpdateChecksum(t *testing.T) {
 	}
 }
 
+func TestUpdateChecksumPrefixSuffixMatchesFullPage(t *testing.T) {
+	full := make([]byte, PageSize)
+	for i := range full {
+		full[i] = byte((i * 17) & 0xff)
+	}
+	prefixLen := 320
+	suffixLen := 192
+	suffixStart := len(full) - suffixLen
+
+	canonical := make([]byte, len(full))
+	copy(canonical[:prefixLen], full[:prefixLen])
+	copy(canonical[suffixStart:], full[suffixStart:])
+	want := UpdateChecksum(canonical)
+
+	prefix := append([]byte(nil), full[:prefixLen]...)
+	suffix := append([]byte(nil), full[suffixStart:]...)
+	got := UpdateChecksumPrefixSuffix(prefix, suffix, len(full))
+	if got != want {
+		t.Fatalf("UpdateChecksumPrefixSuffix returned 0x%x, want 0x%x", got, want)
+	}
+	if binary.LittleEndian.Uint32(prefix[8:12]) != want {
+		t.Fatalf("prefix checksum field = 0x%x, want 0x%x", binary.LittleEndian.Uint32(prefix[8:12]), want)
+	}
+	copy(canonical[:prefixLen], prefix)
+	copy(canonical[suffixStart:], suffix)
+	if !VerifyChecksumNonMutating(canonical) {
+		t.Fatalf("sparse checksum should verify after prefix/suffix update")
+	}
+}
+
 func TestUnsafeCastHeader(t *testing.T) {
 	// Note: This test assumes LittleEndian machine.
 	// If running on BigEndian, this test might fail or require adjustment if UnsafeCastHeader is used.
