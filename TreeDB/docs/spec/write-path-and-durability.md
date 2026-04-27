@@ -119,8 +119,8 @@ These bound uncheckpointed log growth in long-running workloads.
 Profiles map high-level intent to durability/integrity bundles:
 
 - `ProfileDurable`: durable mode + checksum verification.
-- `ProfileFast`: WAL off relaxed + checksum skip + index optimization bundle + the current run_celestia value-log compression defaults (`auto` / balanced / snappy / medium autotune).
-- `ProfileWALOnFast`: WAL on relaxed + checksum skip + the same index + value-log compression bundle.
+- `ProfileFast`: WAL off relaxed + checksum skip + index optimization bundle + moderate pager sync parallelism + the current run_celestia value-log compression defaults (`auto` / balanced / snappy / medium autotune).
+- `ProfileWALOnFast`: WAL on relaxed + checksum skip + the same index + pager sync + value-log compression bundle.
 - `ProfileBench`: fast profile plus disabled background checkpoint/prune triggers for determinism.
 
 ## 9. Required Invariants
