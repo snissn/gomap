@@ -11,6 +11,7 @@ PATH_LABEL="${PATH_LABEL_ENV:-native-fastpath}"
 COUNT="${COUNT:-1}"
 BENCHTIME="${BENCHTIME:-1s}"
 BATCH_SIZE="${TREEDB_COLLECTION_BENCH_BATCH_SIZE:-8000}"
+PAGER_SYNC_CONCURRENCY="${TREEDB_COLLECTION_PAGER_SYNC_CONCURRENCY:-}"
 BENCH_REGEX="${BENCH_REGEX:-Benchmark(CollectionInsertBatchWithSecondaryIndexes|CollectionInsertBatchCheckpointWithSecondaryIndexes|CollectionOverheadIndexStateJSONExtraction|CollectionOverheadPlanIndexedPrecomputedState)$}"
 INCLUDE_SQLITE="${TREEDB_COLLECTION_INCLUDE_SQLITE:-false}"
 SQLITE_ENGINE="${TREEDB_COLLECTION_SQLITE_ENGINE:-sqlite_wal_normal}"
@@ -101,6 +102,7 @@ echo "benchmark regex: $BENCH_REGEX"
 echo "benchmark count: $COUNT"
 echo "benchmark time: $BENCHTIME"
 echo "batch size: $BATCH_SIZE"
+echo "pager sync concurrency: ${PAGER_SYNC_CONCURRENCY:-profile/default}"
 echo "profile bench captures: $PROFILE_BENCHES"
 if is_true "$PROFILE_BENCHES"; then
   echo "profile benchmark list: $PROFILE_BENCH_LIST"
@@ -156,6 +158,7 @@ run_profile_benches() {
       "TREEDB_COLLECTION_BENCH_BATCH_SIZE=$BATCH_SIZE"
       "TREEDB_COLLECTION_DATA_OUTER_LEAVES_IN_VLOG=$data_outer"
       "TREEDB_COLLECTION_INDEX_OUTER_LEAVES_IN_VLOG=$index_outer"
+      "TREEDB_COLLECTION_PAGER_SYNC_CONCURRENCY=$PAGER_SYNC_CONCURRENCY"
     )
     if [[ -n "$go_tags" ]]; then
       env_args+=("GO_TEST_TAGS=$go_tags")
@@ -209,6 +212,7 @@ run_timed_profile_benches() {
       "TREEDB_COLLECTION_BENCH_BATCH_SIZE=$BATCH_SIZE"
       "TREEDB_COLLECTION_DATA_OUTER_LEAVES_IN_VLOG=$data_outer"
       "TREEDB_COLLECTION_INDEX_OUTER_LEAVES_IN_VLOG=$index_outer"
+      "TREEDB_COLLECTION_PAGER_SYNC_CONCURRENCY=$PAGER_SYNC_CONCURRENCY"
     )
     echo
     echo "==> $cell timed CPU profile $bench"
@@ -244,6 +248,7 @@ for row in "${MATRIX_ROWS[@]}"; do
     TREEDB_COLLECTION_BENCH_BATCH_SIZE="$BATCH_SIZE" \
     TREEDB_COLLECTION_DATA_OUTER_LEAVES_IN_VLOG="$data_outer" \
     TREEDB_COLLECTION_INDEX_OUTER_LEAVES_IN_VLOG="$index_outer" \
+    TREEDB_COLLECTION_PAGER_SYNC_CONCURRENCY="$PAGER_SYNC_CONCURRENCY" \
     scripts/bench_collections_report.sh
 
   printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
@@ -362,6 +367,8 @@ cat >>"$SUMMARY_MD" <<'EOF'
 The production matrix keeps collection data roots in value-log outer-leaf mode and varies index roots between inline outer leaves and value-log outer leaves. The `production_fast` and `production_wal_on_fast` engines keep the cached no-WAL and WAL-on fast paths visible without changing the collection storage policy.
 
 The focused default benchmark set keeps JSON extraction overhead, non-JSON indexed planning overhead, indexed batch apply, and indexed checkpoint apply in the same artifact so regressions can be separated into JSON cost, planner cost, root publish cost, and durability-boundary cost. Checkpointed rows report `insert_ns/doc` and `sync_ns/doc`, and the user-story TSV renders those as insert/sync milliseconds per batch.
+
+Set `TREEDB_COLLECTION_PAGER_SYNC_CONCURRENCY=N` to compare pager sync parallelism on checkpoint-heavy rows. Leaving it unset uses the selected TreeDB profile default.
 
 Set `TREEDB_COLLECTION_PROFILE_BENCHES=true` to add per-benchmark profile bundles for indexed ingest and checkpointed indexed ingest. `profile_index.tsv` lists the report, CPU profile mode, CPU profile, allocation profile, and pprof top files for each focused capture. These `go test` profiles cover the whole benchmark process; timed benchmark rows remain the source of truth, and pprof top output should be read as coarse attribution because setup or off-timer document generation can appear.
 

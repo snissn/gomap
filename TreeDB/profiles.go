@@ -161,10 +161,17 @@ func applyRunCelestiaVLogCompressionProfile(opts *Options) {
 	}
 }
 
+func applyFastPagerSyncProfile(opts *Options) {
+	if opts.PagerSyncConcurrency == 0 {
+		opts.PagerSyncConcurrency = 4
+	}
+}
+
 func applyFastProfile(opts *Options) {
 	opts.Durability = DurabilityWALOffRelaxed
 	opts.ValueLog.ReadIntegrity = IntegritySkipChecksums
 	opts.IndexOuterLeavesInValueLog = true
+	applyFastPagerSyncProfile(opts)
 	applyRunCelestiaVLogCompressionProfile(opts)
 	if opts.ValueLog.DictIncompressibleHoldBytes == 0 {
 		opts.ValueLog.DictIncompressibleHoldBytes = 64 << 20
@@ -185,6 +192,7 @@ func applyWALOnFastProfile(opts *Options) {
 	opts.Durability = DurabilityWALOnRelaxed
 	opts.ValueLog.ReadIntegrity = IntegritySkipChecksums
 	opts.IndexOuterLeavesInValueLog = true
+	applyFastPagerSyncProfile(opts)
 	applyRunCelestiaVLogCompressionProfile(opts)
 	if opts.ValueLog.DictIncompressibleHoldBytes == 0 {
 		opts.ValueLog.DictIncompressibleHoldBytes = 64 << 20
