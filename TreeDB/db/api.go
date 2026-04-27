@@ -504,6 +504,20 @@ func (db *DB) IteratorWithOptions(start, end []byte, opts IteratorOptions) (iter
 	return &DBIterator{snap: snap, iter: it}, nil
 }
 
+// Iterator returns an iterator bound to an existing snapshot.
+func (s *Snapshot) Iterator(start, end []byte) (iterator.UnsafeIterator, error) {
+	return s.IteratorWithOptions(start, end, IteratorOptions{})
+}
+
+// IteratorWithOptions returns an iterator bound to an existing snapshot with
+// explicit value materialization controls.
+func (s *Snapshot) IteratorWithOptions(start, end []byte, opts IteratorOptions) (iterator.UnsafeIterator, error) {
+	if s == nil || s.closed.Load() {
+		return nil, ErrClosed
+	}
+	return s.tree.IteratorWithOptions(start, end, opts), nil
+}
+
 // ReverseIterator returns a reverse iterator.
 func (db *DB) ReverseIterator(start, end []byte) (iterator.UnsafeIterator, error) {
 	return db.ReverseIteratorWithOptions(start, end, IteratorOptions{})
@@ -518,6 +532,20 @@ func (db *DB) ReverseIteratorWithOptions(start, end []byte, opts IteratorOptions
 	}
 	it := snap.tree.ReverseIteratorWithOptions(start, end, opts)
 	return &DBIterator{snap: snap, iter: it}, nil
+}
+
+// ReverseIterator returns a reverse iterator bound to an existing snapshot.
+func (s *Snapshot) ReverseIterator(start, end []byte) (iterator.UnsafeIterator, error) {
+	return s.ReverseIteratorWithOptions(start, end, IteratorOptions{})
+}
+
+// ReverseIteratorWithOptions returns a reverse iterator bound to an existing
+// snapshot with explicit value materialization controls.
+func (s *Snapshot) ReverseIteratorWithOptions(start, end []byte, opts IteratorOptions) (iterator.UnsafeIterator, error) {
+	if s == nil || s.closed.Load() {
+		return nil, ErrClosed
+	}
+	return s.tree.ReverseIteratorWithOptions(start, end, opts), nil
 }
 
 // Stats returns database statistics.

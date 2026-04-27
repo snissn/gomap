@@ -392,6 +392,14 @@ Do not advance a phase unless all of the following are true.
 - phases that claim to remove a forbidden translation path do not advance while
   the relevant fallback counter remains materially non-zero.
 
+Where the phase touches a collection benchmark family with a direct raw TreeDB
+analog, the PR notes must also state:
+
+- the raw TreeDB anchor being tracked,
+- whether the phase is expected to improve parity or preserve it,
+- whether the collection benchmark moved closer to or farther from the raw
+  anchor.
+
 ## 8. Noise Margin Discipline
 
 Use one small documented noise margin for raw TreeDB anchors.
@@ -423,7 +431,9 @@ Pause the rewrite and re-evaluate if any of the following happens:
 3. the native path starts depending on oracle-derived or transitional helpers
    for correctness,
 4. focused profiles are still dominated by forbidden translation paths after the
-   phase that was supposed to remove them.
+   phase that was supposed to remove them,
+5. no-index collection write or read benchmarks move materially farther away
+   from their raw TreeDB anchors for two consecutive relevant phases.
 
 In that case, update the proposal or roadmap before more implementation work.
 
@@ -436,6 +446,7 @@ Before flipping the native path to default, require:
 - one full raw TreeDB anchor sweep under `wal_on_fast`,
 - one deferred-work `flushdrain` sweep,
 - one full collection benchmark report bundle,
+- focused no-index single-read and parallel-read collection captures,
 - explicit confirmation that the native path no longer depends on oracle-derived
   or transitional execution helpers.
 

@@ -6,6 +6,8 @@ import (
 	"sync/atomic"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/internal/merging"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/pager"
@@ -25,9 +27,14 @@ import (
 // Snapshot pointers are single-use: after Close returns, callers must discard the
 // pointer and treat further use as invalid.
 type Snapshot struct {
-	db      *DB
-	view    *memtableView
-	backend *backenddb.Snapshot
+	db                  *DB
+	view                *memtableView
+	backend             *backenddb.Snapshot
+	rootVersion         uint64
+	rootPointShards     []rootDomainSnapshot // snapshot point roots; mutable runs are intentionally excluded
+	rootIterator        rootDomainSnapshot
+	rootPublished       rootDomainLookup
+	rootPublishedRootID uint64
 
 	closed atomic.Bool
 }
@@ -129,11 +136,13 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 		return nil
 	}
 
-	return &Snapshot{
-		db:      db,
-		view:    view,
-		backend: backendSnap,
+	snap := &Snapshot{db: db, view: view, backend: backendSnap}
+	if view != nil {
+		snap.rootVersion = view.rootVersion
+		snap.rootPointShards = view.rootSnapshotShards
+		snap.rootIterator = view.rootIterator
 	}
+	return snap
 }
 
 func (s *Snapshot) Pager() *pager.Pager {
@@ -167,34 +176,126 @@ func (s *Snapshot) Close() error {
 		s.db.releaseMemtableView(s.view)
 		s.view = nil
 	}
+	s.rootPointShards = nil
+	s.rootIterator = rootDomainSnapshot{}
+	s.rootPublished = nil
+	s.rootPublishedRootID = 0
+	s.rootVersion = 0
 	s.db = nil
 	return err
 }
 
 func (s *Snapshot) lookupQueueEntry(key []byte) (val []byte, ptr page.ValuePtr, flags byte, found bool) {
-	if s == nil || s.view == nil || len(s.view.queue) == 0 || s.db == nil {
-		return nil, page.ValuePtr{}, 0, false
+	val, ptr, flags, found, _ = s.lookupRootDomainEntry(key)
+	return val, ptr, flags, found
+}
+
+func (s *Snapshot) lookupRootDomainEntry(key []byte) (val []byte, ptr page.ValuePtr, flags byte, found bool, source rootDomainEntrySource) {
+	if s == nil {
+		return nil, page.ValuePtr{}, 0, false, rootDomainEntrySourceNone
 	}
-	queue := s.view.queue
-	queueShardIDs := s.view.queueShardIDs
-	shardIdx := s.db.shardIndex(key)
-	// The frozen queue stores entries in chronological order with newer
-	// memtables appended at higher indices. Scan from the end so key lookups see
-	// the newest queued entry first.
-	for i := len(queue) - 1; i >= 0; i-- {
-		if len(queueShardIDs) > i && int(queueShardIDs[i]) != shardIdx {
-			continue
+	snap := rootDomainSnapshotFromCachedSnapshot(s, key)
+	return snap.getEntryWithSource(key)
+}
+
+func recordSnapshotRootDomainRead(source rootDomainEntrySource, pointer bool, bytes int) {
+	if source == rootDomainEntrySourcePublished {
+		snapshotReadBackendHitsTotal.Add(1)
+		if bytes > 0 {
+			snapshotReadBackendBytesTotal.Add(uint64(bytes))
 		}
-		val, ptr, flags, found = queue[i].GetEntry(key)
-		if found {
-			return val, ptr, flags, true
-		}
+		return
 	}
-	return nil, page.ValuePtr{}, 0, false
+	if pointer {
+		snapshotReadQueuePointerHitsTotal.Add(1)
+		if bytes > 0 {
+			snapshotReadQueuePointerBytesTotal.Add(uint64(bytes))
+		}
+		return
+	}
+	snapshotReadQueueInlineHitsTotal.Add(1)
+	if bytes > 0 {
+		snapshotReadQueueInlineBytesTotal.Add(uint64(bytes))
+	}
+}
+
+func (s *Snapshot) iteratorSources(start, end []byte, reverse bool) ([]merging.IteratorSource, error) {
+	if s == nil || s.backend == nil {
+		return nil, backenddb.ErrClosed
+	}
+	queue := s.rootIterator.immutables
+	sources := make([]merging.IteratorSource, 0, len(queue)+1)
+	prio := 0
+	for idx := len(queue) - 1; idx >= 0; idx-- {
+		var qIter iterator.UnsafeIterator
+		if reverse {
+			qIter = queue[idx].NewReverseIterator(start, end)
+		} else {
+			qIter = queue[idx].NewIterator(start, end)
+		}
+		if s.db != nil && s.db.memtableValueLogPointers {
+			qIter = newValueLogIterator(qIter, func(key []byte, ptr page.ValuePtr) ([]byte, error) {
+				return s.db.readValueLog(key, ptr)
+			})
+		}
+		sources = append(sources, merging.IteratorSource{Iter: qIter, Priority: prio})
+		prio++
+	}
+	var (
+		diskIter iterator.UnsafeIterator
+		err      error
+	)
+	if reverse {
+		diskIter, err = s.backend.ReverseIterator(start, end)
+	} else {
+		diskIter, err = s.backend.Iterator(start, end)
+	}
+	if err != nil {
+		for i := range sources {
+			if sources[i].Iter != nil {
+				_ = sources[i].Iter.Close()
+			}
+		}
+		return nil, err
+	}
+	sources = append(sources, merging.IteratorSource{Iter: diskIter, Priority: prio})
+	return sources, nil
+}
+
+// Iterator returns a stable iterator over the snapshot's queued memtables plus
+// its backend snapshot.
+func (s *Snapshot) Iterator(start, end []byte) (merging.Iterator, error) {
+	sources, err := s.iteratorSources(start, end, false)
+	if err != nil {
+		return nil, err
+	}
+	if len(sources) == 0 {
+		return &emptyIterator{start: start, end: end}, nil
+	}
+	if len(sources) == 1 {
+		return newSingleSourceIterator(sources[0].Iter, start, end), nil
+	}
+	return merging.NewMergingIterator(sources, start, end), nil
+}
+
+// ReverseIterator returns a stable reverse iterator over the snapshot's queued
+// memtables plus its backend snapshot.
+func (s *Snapshot) ReverseIterator(start, end []byte) (merging.Iterator, error) {
+	sources, err := s.iteratorSources(start, end, true)
+	if err != nil {
+		return nil, err
+	}
+	if len(sources) == 0 {
+		return &emptyIterator{start: start, end: end}, nil
+	}
+	if len(sources) == 1 {
+		return newSingleSourceIterator(sources[0].Iter, start, end), nil
+	}
+	return merging.NewReverseMergingIterator(sources, start, end), nil
 }
 
 func (s *Snapshot) GetAppend(key, dst []byte) ([]byte, error) {
-	val, ptr, flags, found := s.lookupQueueEntry(key)
+	val, ptr, flags, found, source := s.lookupRootDomainEntry(key)
 	if found {
 		if flags&node.FlagTombstone != 0 {
 			return dst, tree.ErrKeyNotFound
@@ -208,20 +309,14 @@ func (s *Snapshot) GetAppend(key, dst []byte) ([]byte, error) {
 			if err != nil {
 				return dst, err
 			}
-			snapshotReadQueuePointerHitsTotal.Add(1)
-			if n := len(out) - oldLen; n > 0 {
-				snapshotReadQueuePointerBytesTotal.Add(uint64(n))
-			}
+			recordSnapshotRootDomainRead(source, true, len(out)-oldLen)
 			return out, nil
 		}
 		if val == nil {
-			snapshotReadQueueInlineHitsTotal.Add(1)
+			recordSnapshotRootDomainRead(source, false, 0)
 			return dst, nil
 		}
-		snapshotReadQueueInlineHitsTotal.Add(1)
-		if len(val) > 0 {
-			snapshotReadQueueInlineBytesTotal.Add(uint64(len(val)))
-		}
+		recordSnapshotRootDomainRead(source, false, len(val))
 		return append(dst, val...), nil
 	}
 
@@ -244,7 +339,7 @@ func (s *Snapshot) GetAppend(key, dst []byte) ([]byte, error) {
 }
 
 func (s *Snapshot) Get(key []byte) ([]byte, error) {
-	val, ptr, flags, found := s.lookupQueueEntry(key)
+	val, ptr, flags, found, source := s.lookupRootDomainEntry(key)
 	if found {
 		if flags&node.FlagTombstone != 0 {
 			return nil, tree.ErrKeyNotFound
@@ -260,18 +355,18 @@ func (s *Snapshot) Get(key []byte) ([]byte, error) {
 			if err != nil {
 				return nil, err
 			}
-			snapshotReadQueuePointerHitsTotal.Add(1)
+			recordSnapshotRootDomainRead(source, true, len(out))
 			if len(out) == 0 {
 				return nil, nil
 			}
-			snapshotReadQueuePointerBytesTotal.Add(uint64(len(out)))
+			maybeRecordSnapshotGetCallerSample(len(out))
 			return ownedReadResult(out, scratch), nil
 		}
-		snapshotReadQueueInlineHitsTotal.Add(1)
+		recordSnapshotRootDomainRead(source, false, len(val))
 		if len(val) == 0 {
 			return nil, nil
 		}
-		snapshotReadQueueInlineBytesTotal.Add(uint64(len(val)))
+		maybeRecordSnapshotGetCallerSample(len(val))
 		owned := make([]byte, len(val))
 		copy(owned, val)
 		return owned, nil

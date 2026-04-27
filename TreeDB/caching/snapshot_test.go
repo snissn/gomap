@@ -118,6 +118,56 @@ func TestIteratorSnapshotIsolation(t *testing.T) {
 	}
 }
 
+func TestAcquireSnapshot_CapturesPublishedRootDomainVersion(t *testing.T) {
+	dir, err := os.MkdirTemp("", "treedb-root-domain-version-")
+	if err != nil {
+		t.Fatalf("mktemp: %v", err)
+	}
+	defer os.RemoveAll(dir)
+
+	backend, err := db.Open(db.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	defer backend.Close()
+
+	cached, err := Open(dir, backend, Options{
+		DisableWAL:     true,
+		AllowUnsafe:    true,
+		FlushThreshold: 1 << 30,
+		MemtableShards: 2,
+	})
+	if err != nil {
+		t.Fatalf("open cached: %v", err)
+	}
+	defer cached.Close()
+
+	if err := cached.Set([]byte("a"), []byte("va")); err != nil {
+		t.Fatalf("set a: %v", err)
+	}
+	snap1 := cached.AcquireSnapshot()
+	if snap1 == nil {
+		t.Fatal("expected snapshot")
+	}
+	defer snap1.Close()
+	if snap1.rootVersion == 0 {
+		t.Fatal("expected non-zero rootVersion")
+	}
+
+	if err := cached.Set([]byte("b"), []byte("vb")); err != nil {
+		t.Fatalf("set b: %v", err)
+	}
+	snap2 := cached.AcquireSnapshot()
+	if snap2 == nil {
+		t.Fatal("expected second snapshot")
+	}
+	defer snap2.Close()
+
+	if snap2.rootVersion <= snap1.rootVersion {
+		t.Fatalf("rootVersion did not advance: snap1=%d snap2=%d", snap1.rootVersion, snap2.rootVersion)
+	}
+}
+
 func TestAcquireSnapshot_AllocsBoundedAfterWarmPath(t *testing.T) {
 	if testRaceEnabled {
 		t.Skip("AllocsPerRun is not stable under -race")

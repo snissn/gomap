@@ -530,18 +530,33 @@ operations.
 
 Capture focused single-document benchmarks only after batch path is stable.
 
+This phase MUST include the benchmark coverage needed for final parity
+decisions:
+
+- no-index single-document write,
+- no-index single-document read,
+- no-index parallel point-read throughput.
+
 Unified-bench alignment gate for this phase:
 
 - no material regression beyond documented noise on:
   - `write_rand`
   - `delete_rand`
   - `random_read`
+  - `random_read_parallel_acquire_snapshot`
 - collection single-document benchmarks should move toward the same direction as
-  the corresponding raw TreeDB point-operation anchors.
+  the corresponding raw TreeDB point-operation anchors,
+- no-index single-document write must be evaluated against the comparable raw
+  point-write anchor,
+- no-index single-document read must be evaluated against `random_read`,
+- no-index parallel point-read must be evaluated against
+  `random_read_parallel_acquire_snapshot`.
 
 ### Exit criteria
 
 - single-document APIs are native-path clean,
+- the collection benchmark suite contains the no-index point-read and parallel
+  point-read coverage required for final cutover decisions,
 - remaining oracle-dependent behavior is external comparison only.
 
 ## R7. Default Flip and Cleanup
@@ -731,12 +746,18 @@ The rewrite is not done until all of the following are true:
 
 1. no-index collection batch ingest is within `2x` of raw cached TreeDB batch
    write throughput on the same harness,
-2. indexed collection batch ingest is within `4x` of no-index collection batch
+2. no-index collection single-document write is within `3x` of the comparable
+   raw cached TreeDB point-write anchor on the same harness,
+3. no-index collection single-document read is within `2x` of raw cached TreeDB
+   `random_read` on the same harness,
+4. no-index collection parallel point-read throughput is within `2x` of raw
+   cached TreeDB `random_read_parallel_acquire_snapshot` on the same harness,
+5. indexed collection batch ingest is within `4x` of no-index collection batch
    ingest on the same harness,
-3. focused profiles for the native path are dominated by engine and hardware
+6. focused profiles for the native path are dominated by engine and hardware
    work such as page building, compression, checksums, memory copies, allocator,
    and IO,
-4. focused profiles are no longer dominated by:
+7. focused profiles are no longer dominated by:
    - B-tree restaging,
    - iterator-to-entry conversion,
    - detached-batch replay,
