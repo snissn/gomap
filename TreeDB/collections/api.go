@@ -709,6 +709,10 @@ func (c *Collection) insertOneNoIndex(id, document []byte) ([]byte, error) {
 		_ = snap.Close()
 		return nil, err
 	}
+	if plannerOptions.documentFormat != DocumentFormatJSON {
+		_ = snap.Close()
+		return c.insertOneViaBatch(id, document)
+	}
 	plannerOptions = collectionOptionsWithTemplateV1Resolver(plannerOptions, snap, catalog)
 	baseSystemRoot := snapshotSystemRoot(snap)
 

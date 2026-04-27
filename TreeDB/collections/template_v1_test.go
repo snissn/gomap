@@ -320,6 +320,70 @@ func TestTemplateV1CompactDocumentRequiresKnownTemplate(t *testing.T) {
 	}
 }
 
+func TestTemplateV1UnbufferedSingleInsertUsesTemplateRoot(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatTemplateV1,
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	col.writeDomain = nil
+
+	doc := mustTemplateV1Document(t, []string{"email", "city"}, []any{"ada@example.com", "hnl"})
+	if _, err := col.Insert([]byte("u1"), doc); err != nil {
+		t.Fatalf("single insert: %v", err)
+	}
+	got, err := col.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("get u1: %v", err)
+	}
+	if bytes.Equal(got, doc) {
+		t.Fatalf("unbuffered single insert stored template envelope")
+	}
+	if !bytes.HasPrefix(got, []byte(templateV1StoredMagic)) {
+		t.Fatalf("stored u1 prefix=%q want template-v1 stored magic", got[:min(len(got), len(templateV1StoredMagic))])
+	}
+
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("expected snapshot")
+	}
+	catalog, err := loadCollectionCatalog(snap, "users")
+	if err != nil {
+		_ = snap.Close()
+		t.Fatalf("load catalog: %v", err)
+	}
+	templateRoot := catalog.rootID(collectionTemplateRootName("users"))
+	if templateRoot == 0 {
+		_ = snap.Close()
+		t.Fatal("template root was not persisted")
+	}
+	stored, err := parseTemplateV1StoredDocument(got)
+	if err != nil {
+		_ = snap.Close()
+		t.Fatalf("parse stored doc: %v", err)
+	}
+	resolver := &templateV1SnapshotResolver{snap: snap, rootID: templateRoot, cache: make(map[string]*templateV1Template)}
+	if _, err := resolver.lookupTemplateV1(stored.templateID); err != nil {
+		_ = snap.Close()
+		t.Fatalf("lookup template: %v", err)
+	}
+	_ = snap.Close()
+}
+
 func TestTemplateV1CreateIndexBackfillsFromTemplateRoot(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
