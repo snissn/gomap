@@ -119,8 +119,8 @@ $ARTIFACT_LINES
 - production fast override: \`TREEDB_COLLECTION_BENCH_ENGINE=production_fast scripts/bench_collections_report.sh\`
 - production WAL-on-fast override: \`TREEDB_COLLECTION_BENCH_ENGINE=production_wal_on_fast scripts/bench_collections_report.sh\`
 - backend-direct fast/control override: \`TREEDB_COLLECTION_BENCH_ENGINE=backend_direct_fast TREEDB_COLLECTION_DATA_OUTER_LEAVES_IN_VLOG=false TREEDB_COLLECTION_INDEX_OUTER_LEAVES_IN_VLOG=false scripts/bench_collections_report.sh\`
-- data-root outer-leaf override: \`TREEDB_COLLECTION_DATA_OUTER_LEAVES_IN_VLOG=true scripts/bench_collections_report.sh\`
-- index-root outer-leaf override: \`TREEDB_COLLECTION_INDEX_OUTER_LEAVES_IN_VLOG=false scripts/bench_collections_report.sh\`
+- data-root pager-leaf override: \`TREEDB_COLLECTION_DATA_OUTER_LEAVES_IN_VLOG=false scripts/bench_collections_report.sh\`
+- index-root outer-leaf override: \`TREEDB_COLLECTION_INDEX_OUTER_LEAVES_IN_VLOG=true scripts/bench_collections_report.sh\`
 - batch-size override: \`TREEDB_COLLECTION_BENCH_BATCH_SIZE=8000 scripts/bench_collections_report.sh\`
 - oracle-path override: \`TREEDB_COLLECTION_PATH_LABEL=oracle scripts/bench_collections_report.sh\`
 EOF

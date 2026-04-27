@@ -73,6 +73,28 @@ type OrderedRootDeltaPublishInput struct {
 	StoragePolicy OrderedRootStoragePolicy
 }
 
+func closeUnconsumedOrderedRootPublishIterators(ordered []OrderedRootPublishInput, consumed []bool) {
+	for idx := range ordered {
+		if idx < len(consumed) && consumed[idx] {
+			continue
+		}
+		if ordered[idx].Iter != nil {
+			_ = ordered[idx].Iter.Close()
+		}
+	}
+}
+
+func closeUnconsumedOrderedRootDeltaPublishIterators(ordered []OrderedRootDeltaPublishInput, consumed []bool) {
+	for idx := range ordered {
+		if idx < len(consumed) && consumed[idx] {
+			continue
+		}
+		if ordered[idx].Iter != nil {
+			_ = ordered[idx].Iter.Close()
+		}
+	}
+}
+
 // OrderedRootGroupSystemBuilder builds a target system-root iterator after the
 // non-system roots in a group have been built. The rootIDs slice is ordered to
 // match the OrderedRootPublishInput slice passed to
@@ -693,6 +715,8 @@ func (db *DB) PublishOrderedRootDeltaGroupWithSystemBuilder(ordered []OrderedRoo
 
 	systemOpts := systemRootOrderedPublishOptions(db)
 	rootIDs := make([]uint64, len(ordered))
+	orderedConsumed := make([]bool, len(ordered))
+	defer closeUnconsumedOrderedRootDeltaPublishIterators(ordered, orderedConsumed)
 	var retired []uint64
 	var merged adaptive.Metrics
 	for idx := range ordered {
@@ -700,6 +724,7 @@ func (db *DB) PublishOrderedRootDeltaGroupWithSystemBuilder(ordered []OrderedRoo
 		if err != nil {
 			return 0, nil, err
 		}
+		orderedConsumed[idx] = true
 		rootID, rootRetired, metrics, err := db.publishOrderedRootDeltaIterator(ordered[idx].BaseRoot, ordered[idx].Iter, opts)
 		if err != nil {
 			return 0, nil, err
@@ -777,6 +802,8 @@ func (db *DB) PublishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered []Order
 
 	systemOpts := systemRootOrderedPublishOptions(db)
 	rootIDs := make([]uint64, len(ordered))
+	orderedConsumed := make([]bool, len(ordered))
+	defer closeUnconsumedOrderedRootDeltaPublishIterators(ordered, orderedConsumed)
 	var retired []uint64
 	var merged adaptive.Metrics
 	for idx := range ordered {
@@ -784,6 +811,7 @@ func (db *DB) PublishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered []Order
 		if err != nil {
 			return 0, nil, err
 		}
+		orderedConsumed[idx] = true
 		rootID, rootRetired, metrics, err := db.publishOrderedRootDeltaIterator(ordered[idx].BaseRoot, ordered[idx].Iter, opts)
 		if err != nil {
 			return 0, nil, err
@@ -875,11 +903,14 @@ func (db *DB) publishOrderedRootGroup(systemIter iterator.UnsafeIterator, ordere
 	}
 
 	rootIDs := make([]uint64, len(ordered))
+	orderedConsumed := make([]bool, len(ordered))
+	defer closeUnconsumedOrderedRootPublishIterators(ordered, orderedConsumed)
 	for idx := range ordered {
 		opts, err := db.orderedRootPublishOptionsForPolicy(ordered[idx].StoragePolicy)
 		if err != nil {
 			return 0, nil, err
 		}
+		orderedConsumed[idx] = true
 		rootID, rootRetired, metrics, _, _, err := db.publishOrderedRootIterator(ordered[idx].BaseRoot, ordered[idx].Iter, opts, false)
 		if err != nil {
 			return 0, nil, err

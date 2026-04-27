@@ -13,6 +13,38 @@ import (
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
+type closeCountingUnsafeIterator struct {
+	closes int
+}
+
+func (it *closeCountingUnsafeIterator) Valid() bool { return false }
+func (it *closeCountingUnsafeIterator) Next()       {}
+func (it *closeCountingUnsafeIterator) Seek([]byte) {}
+func (it *closeCountingUnsafeIterator) UnsafeKey() []byte {
+	return nil
+}
+func (it *closeCountingUnsafeIterator) UnsafeValue() []byte {
+	return nil
+}
+func (it *closeCountingUnsafeIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
+	return nil, page.ValuePtr{}, 0
+}
+func (it *closeCountingUnsafeIterator) Key() []byte   { return nil }
+func (it *closeCountingUnsafeIterator) Value() []byte { return nil }
+func (it *closeCountingUnsafeIterator) KeyCopy(dst []byte) []byte {
+	return dst
+}
+func (it *closeCountingUnsafeIterator) ValueCopy(dst []byte) []byte {
+	return dst
+}
+func (it *closeCountingUnsafeIterator) IsDeleted() bool { return false }
+func (it *closeCountingUnsafeIterator) Error() error    { return nil }
+func (it *closeCountingUnsafeIterator) Close() error {
+	it.closes++
+	return nil
+}
+func (it *closeCountingUnsafeIterator) Domain() ([]byte, []byte) { return nil, nil }
+
 func TestPublishOrderedRootIterator_WarmSparseDelta_PreservesPages(t *testing.T) {
 	dir := t.TempDir()
 	db, err := Open(Options{Dir: dir})
@@ -308,6 +340,76 @@ func TestPublishOrderedRootGroup_PersistsSystemAndOrderedRoots(t *testing.T) {
 	}
 	if got := string(entry.Value); got != "iv" {
 		t.Fatalf("reopen iter value=%q want %q", got, "iv")
+	}
+}
+
+func TestPublishOrderedRootGroup_ClosesUnconsumedIteratorsOnPolicyError(t *testing.T) {
+	db, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+
+	first := &closeCountingUnsafeIterator{}
+	second := &closeCountingUnsafeIterator{}
+	_, _, err = db.PublishOrderedRootGroup(nil, []OrderedRootPublishInput{
+		{Iter: first, StoragePolicy: OrderedRootStoragePolicy(255)},
+		{Iter: second, StoragePolicy: OrderedRootStoragePagerLeaves},
+	})
+	if err == nil {
+		t.Fatal("expected publish error")
+	}
+	if first.closes != 1 {
+		t.Fatalf("first iterator closes=%d want 1", first.closes)
+	}
+	if second.closes != 1 {
+		t.Fatalf("second iterator closes=%d want 1", second.closes)
+	}
+}
+
+func TestPublishOrderedRootDeltaGroups_CloseUnconsumedIteratorsOnPolicyError(t *testing.T) {
+	db, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+
+	builderCalled := false
+	buildSystemIter := func([]uint64) (iterator.UnsafeIterator, error) {
+		builderCalled = true
+		return nil, nil
+	}
+	for name, publish := range map[string]func([]OrderedRootDeltaPublishInput) error{
+		"system builder": func(ordered []OrderedRootDeltaPublishInput) error {
+			_, _, err := db.PublishOrderedRootDeltaGroupWithSystemBuilder(ordered, buildSystemIter)
+			return err
+		},
+		"system delta builder": func(ordered []OrderedRootDeltaPublishInput) error {
+			_, _, err := db.PublishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered, buildSystemIter)
+			return err
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			builderCalled = false
+			first := &closeCountingUnsafeIterator{}
+			second := &closeCountingUnsafeIterator{}
+			err := publish([]OrderedRootDeltaPublishInput{
+				{Iter: first, StoragePolicy: OrderedRootStoragePolicy(255)},
+				{Iter: second, StoragePolicy: OrderedRootStoragePagerLeaves},
+			})
+			if err == nil {
+				t.Fatal("expected publish error")
+			}
+			if builderCalled {
+				t.Fatal("system builder should not run after policy error")
+			}
+			if first.closes != 1 {
+				t.Fatalf("first iterator closes=%d want 1", first.closes)
+			}
+			if second.closes != 1 {
+				t.Fatalf("second iterator closes=%d want 1", second.closes)
+			}
+		})
 	}
 }
 
