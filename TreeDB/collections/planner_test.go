@@ -186,6 +186,43 @@ func TestOrderedIndexStateForDocumentHandlesScalarAndArrayValues(t *testing.T) {
 	}
 }
 
+func TestOrderedIndexStateForDocumentJSONRootFastPathPreservesFieldSemantics(t *testing.T) {
+	planner := insertBatchPlanner{
+		indexes: []indexDefinition{
+			{name: "email", field: "email"},
+			{name: "literal", field: "a*b"},
+		},
+	}
+	runtimes, err := planner.indexRuntimes()
+	if err != nil {
+		t.Fatalf("index runtimes: %v", err)
+	}
+	state, err := orderedIndexStateForDocument([]byte(`{"email":"first","a*b":"literal","email":"second","axb":"wild"}`), runtimes, collectionOptions{})
+	if err != nil {
+		t.Fatalf("root fast path index state: %v", err)
+	}
+	if got, want := state.valuesAt(0), [][]byte{[]byte("s:second")}; !byteMatrixEqual(got, want) {
+		t.Fatalf("duplicate email values=%q want %q", got, want)
+	}
+	if got, want := state.valuesAt(1), [][]byte{[]byte("s:literal")}; !byteMatrixEqual(got, want) {
+		t.Fatalf("literal field values=%q want %q", got, want)
+	}
+}
+
+func TestOrderedIndexStateForDocumentJSONRootFastPathRejectsOutOfRangeNumber(t *testing.T) {
+	planner := insertBatchPlanner{
+		indexes: []indexDefinition{{name: "score", field: "score"}},
+	}
+	runtimes, err := planner.indexRuntimes()
+	if err != nil {
+		t.Fatalf("index runtimes: %v", err)
+	}
+	_, err = orderedIndexStateForDocument([]byte(`{"score":1e999}`), runtimes, collectionOptions{})
+	if err == nil || !strings.Contains(err.Error(), "unsupported indexed JSON number") {
+		t.Fatalf("err=%v want unsupported indexed JSON number", err)
+	}
+}
+
 func TestBuildUniqueProbeRunsMatchesEncodedPrefixOrdering(t *testing.T) {
 	candidates := []uniqueProbeCandidate{
 		{indexName: "email", encodedValue: []byte("s:zz"), documentID: []byte("u3")},

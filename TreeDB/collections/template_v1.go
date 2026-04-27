@@ -623,6 +623,9 @@ func templateV1OrderedIndexStateForDocumentWithArena(document []byte, runtimes [
 	if err != nil {
 		return nil, err
 	}
+	if state, ok, err := templateV1RootIndexStateForDocumentWithArena(root, runtimes, opts, encoder); ok || err != nil {
+		return state, err
+	}
 	state := make(orderedDocumentIndexState, len(runtimes))
 	for runtimeIdx, runtime := range runtimes {
 		value, found, err := templateV1ExtractPathValue(root, runtime.path, opts.templateResolver)
@@ -632,32 +635,73 @@ func templateV1OrderedIndexStateForDocumentWithArena(document []byte, runtimes [
 		if !found || len(value) == 0 {
 			continue
 		}
-		if value[0] == templateV1KindNull {
-			continue
-		}
-		if value[0] == templateV1KindArray {
-			if !runtime.def.multiKey && !opts.allowArrayValuesInIndex {
-				return nil, errors.New("collections: array value not allowed for index")
-			}
-			encoded, err := templateV1AppendArrayIndexValues(value, encoder)
-			if err != nil {
-				return nil, err
-			}
-			if len(encoded) == 1 {
-				state[runtimeIdx] = encoder.appendSingleValueRef(encoded[0])
-			} else if len(encoded) > 1 {
-				state[runtimeIdx] = normalizeOwnedEncodedIndexValues(encoded)
-			}
-			continue
-		}
-		var next []byte
-		encoder.buf, next, err = appendTemplateV1IndexScalar(encoder.buf, value)
-		if err != nil {
+		if err := appendTemplateV1IndexValueToState(state, runtimeIdx, runtime, value, opts, encoder); err != nil {
 			return nil, err
 		}
-		state[runtimeIdx] = encoder.appendSingleValueRef(next)
 	}
 	return state, nil
+}
+
+func templateV1RootIndexStateForDocumentWithArena(root templateV1ObjectRef, runtimes []indexRuntime, opts collectionOptions, encoder *indexEncodeArena) (orderedDocumentIndexState, bool, error) {
+	for _, runtime := range runtimes {
+		if len(runtime.path) != 1 {
+			return nil, false, nil
+		}
+	}
+	tpl, err := opts.templateResolver.lookupTemplateV1(root.templateID)
+	if err != nil {
+		return nil, true, err
+	}
+	state := make(orderedDocumentIndexState, len(runtimes))
+	pos := 0
+	for _, field := range tpl.fields {
+		start := pos
+		if err := skipTemplateV1Value(root.values, &pos, opts.templateResolver); err != nil {
+			return nil, true, err
+		}
+		value := root.values[start:pos:pos]
+		for runtimeIdx, runtime := range runtimes {
+			if runtime.path[0] != field {
+				continue
+			}
+			if err := appendTemplateV1IndexValueToState(state, runtimeIdx, runtime, value, opts, encoder); err != nil {
+				return nil, true, err
+			}
+		}
+	}
+	if pos != len(root.values) {
+		return nil, true, errors.New("collections: trailing template-v1 object values")
+	}
+	return state, true, nil
+}
+
+func appendTemplateV1IndexValueToState(state orderedDocumentIndexState, runtimeIdx int, runtime indexRuntime, value []byte, opts collectionOptions, encoder *indexEncodeArena) error {
+	if len(value) == 0 || value[0] == templateV1KindNull {
+		return nil
+	}
+	if value[0] == templateV1KindArray {
+		if !runtime.def.multiKey && !opts.allowArrayValuesInIndex {
+			return errors.New("collections: array value not allowed for index")
+		}
+		encoded, err := templateV1AppendArrayIndexValues(value, encoder)
+		if err != nil {
+			return err
+		}
+		if len(encoded) == 1 {
+			state[runtimeIdx] = encoder.appendSingleValueRef(encoded[0])
+		} else if len(encoded) > 1 {
+			state[runtimeIdx] = normalizeOwnedEncodedIndexValues(encoded)
+		}
+		return nil
+	}
+	var next []byte
+	var err error
+	encoder.buf, next, err = appendTemplateV1IndexScalar(encoder.buf, value)
+	if err != nil {
+		return err
+	}
+	state[runtimeIdx] = encoder.appendSingleValueRef(next)
+	return nil
 }
 
 func templateV1ExtractPathValue(root templateV1ObjectRef, path []string, resolver templateV1Resolver) ([]byte, bool, error) {

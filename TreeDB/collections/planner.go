@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
+	"github.com/tidwall/gjson"
 )
 
 const documentIndexStateVersion = 1
@@ -764,6 +766,9 @@ func orderedIndexStateForDocumentWithArena(document []byte, runtimes []indexRunt
 	default:
 		return nil, fmt.Errorf("collections: unsupported document format %q", opts.documentFormat)
 	}
+	if state, ok, err := orderedJSONRootIndexStateForDocumentGJSON(document, runtimes, opts, encoder); ok || err != nil {
+		return state, err
+	}
 	var decoded any
 	if err := json.Unmarshal(document, &decoded); err != nil {
 		return nil, fmt.Errorf("collections: index extraction requires JSON document: %w", err)
@@ -822,6 +827,111 @@ func orderedIndexStateForDocumentWithArena(document []byte, runtimes []indexRunt
 		state[runtimeIdx] = encoder.appendSingleValueRef(next)
 	}
 	return state, nil
+}
+
+func orderedJSONRootIndexStateForDocumentGJSON(document []byte, runtimes []indexRuntime, opts collectionOptions, encoder *indexEncodeArena) (orderedDocumentIndexState, bool, error) {
+	if len(runtimes) == 0 {
+		return nil, true, nil
+	}
+	for _, runtime := range runtimes {
+		if len(runtime.path) != 1 {
+			return nil, false, nil
+		}
+	}
+	if !json.Valid(document) {
+		return nil, true, errors.New("collections: index extraction requires JSON document: invalid JSON")
+	}
+	root := gjson.ParseBytes(document)
+	if !root.IsObject() {
+		return nil, true, errors.New("collections: index extraction requires JSON object document")
+	}
+	var stackValues [8]gjson.Result
+	var values []gjson.Result
+	if len(runtimes) <= len(stackValues) {
+		values = stackValues[:len(runtimes)]
+	} else {
+		values = make([]gjson.Result, len(runtimes))
+	}
+	root.ForEach(func(key, value gjson.Result) bool {
+		for runtimeIdx, runtime := range runtimes {
+			if runtime.path[0] == key.Str {
+				values[runtimeIdx] = value
+			}
+		}
+		return true
+	})
+	state := make(orderedDocumentIndexState, len(runtimes))
+	for runtimeIdx, runtime := range runtimes {
+		if err := appendGJSONIndexValueToState(state, runtimeIdx, runtime, values[runtimeIdx], opts, encoder); err != nil {
+			return nil, true, err
+		}
+	}
+	return state, true, nil
+}
+
+func appendGJSONArrayIndexValues(value gjson.Result, encoder *indexEncodeArena) ([][]byte, error) {
+	var values [][]byte
+	var first []byte
+	count := 0
+	var encodeErr error
+	value.ForEach(func(_, elem gjson.Result) bool {
+		var next []byte
+		encoder.buf, next, encodeErr = appendGJSONIndexScalar(encoder.buf, elem)
+		if encodeErr != nil {
+			return false
+		}
+		count++
+		if count == 1 {
+			first = next
+			return true
+		}
+		if count == 2 {
+			values = make([][]byte, 0, 4)
+			values = append(values, first)
+		}
+		values = append(values, next)
+		return true
+	})
+	if encodeErr != nil {
+		return nil, encodeErr
+	}
+	switch count {
+	case 0:
+		return nil, nil
+	case 1:
+		return [][]byte{first}, nil
+	default:
+		return values, nil
+	}
+}
+
+func appendGJSONIndexValueToState(state orderedDocumentIndexState, runtimeIdx int, runtime indexRuntime, value gjson.Result, opts collectionOptions, encoder *indexEncodeArena) error {
+	if value.Type == gjson.Null {
+		return nil
+	}
+	if value.IsArray() {
+		if !runtime.def.multiKey && !opts.allowArrayValuesInIndex {
+			return errors.New("collections: array value not allowed for index")
+		}
+		encoded, err := appendGJSONArrayIndexValues(value, encoder)
+		if err != nil {
+			return err
+		}
+		if len(encoded) == 1 {
+			state[runtimeIdx] = encoder.appendSingleValueRef(encoded[0])
+		} else if len(encoded) > 1 {
+			state[runtimeIdx] = normalizeOwnedEncodedIndexValues(encoded)
+		}
+		return nil
+	}
+	var next []byte
+	var err error
+	encoder.buf, next, err = appendGJSONIndexScalar(encoder.buf, value)
+	if err != nil {
+		return err
+	}
+	state[runtimeIdx] = encoder.appendSingleValueRef(next)
+	return nil
 }
 
 func (a *indexEncodeArena) appendSingleValueRef(value []byte) [][]byte {
@@ -1167,6 +1277,30 @@ func appendIndexScalar(dst []byte, value any) ([]byte, []byte, error) {
 		dst = append(dst, "z:"...)
 	default:
 		return dst, nil, fmt.Errorf("collections: unsupported indexed value type %T", value)
+	}
+	return dst, dst[start:len(dst):len(dst)], nil
+}
+
+func appendGJSONIndexScalar(dst []byte, value gjson.Result) ([]byte, []byte, error) {
+	start := len(dst)
+	switch value.Type {
+	case gjson.String:
+		dst = append(dst, "s:"...)
+		dst = append(dst, value.Str...)
+	case gjson.True:
+		dst = append(dst, "b:1"...)
+	case gjson.False:
+		dst = append(dst, "b:0"...)
+	case gjson.Number:
+		if math.IsInf(value.Num, 0) {
+			return dst, nil, fmt.Errorf("collections: unsupported indexed JSON number %q", value.Raw)
+		}
+		dst = append(dst, "n:"...)
+		dst = strconv.AppendFloat(dst, value.Num, 'g', -1, 64)
+	case gjson.Null:
+		dst = append(dst, "z:"...)
+	default:
+		return dst, nil, fmt.Errorf("collections: unsupported indexed JSON value type %s", value.Type)
 	}
 	return dst, dst[start:len(dst):len(dst)], nil
 }

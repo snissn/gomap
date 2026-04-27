@@ -529,3 +529,47 @@ func TestTemplateV1NestedIndexExtraction(t *testing.T) {
 		t.Fatalf("nested values=%q want %q", got, want)
 	}
 }
+
+func TestTemplateV1RootIndexExtraction(t *testing.T) {
+	doc := mustTemplateV1Document(t,
+		[]string{"profile", "email", "city"},
+		[]any{
+			map[string]any{"age": float64(42)},
+			"ada@example.com",
+			"hnl",
+		},
+	)
+	stored, records, err := parseTemplateV1InsertEnvelope(doc)
+	if err != nil {
+		t.Fatalf("parse template envelope: %v", err)
+	}
+	resolver := &templateV1MemoryResolver{}
+	for _, record := range records {
+		if err := resolver.addRecord(record); err != nil {
+			t.Fatalf("add template record: %v", err)
+		}
+	}
+	planner := insertBatchPlanner{
+		indexes: []indexDefinition{
+			{name: "email", field: "email"},
+			{name: "city", field: "city"},
+		},
+	}
+	runtimes, err := planner.indexRuntimes()
+	if err != nil {
+		t.Fatalf("index runtimes: %v", err)
+	}
+	state, err := orderedIndexStateForDocument(stored, runtimes, collectionOptions{
+		documentFormat:   DocumentFormatTemplateV1,
+		templateResolver: resolver,
+	})
+	if err != nil {
+		t.Fatalf("extract root index state: %v", err)
+	}
+	if got, want := state.valuesAt(0), [][]byte{[]byte("s:ada@example.com")}; !byteMatrixEqual(got, want) {
+		t.Fatalf("email values=%q want %q", got, want)
+	}
+	if got, want := state.valuesAt(1), [][]byte{[]byte("s:hnl")}; !byteMatrixEqual(got, want) {
+		t.Fatalf("city values=%q want %q", got, want)
+	}
+}
