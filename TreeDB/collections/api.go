@@ -1191,6 +1191,7 @@ func buildCreateIndexBackfillPlan(
 	plan := &createIndexBackfillPlan{
 		baseRootIDs: make(map[string]uint64, 2),
 	}
+	plan.baseRootIDs[primaryRootName] = primaryRootID
 	if primaryRootID == 0 {
 		return plan, nil
 	}
@@ -1358,6 +1359,9 @@ func (c *Collection) buildRootDescriptorSystemDeltaIterator(expectedSystemRoot u
 		if catalog == nil {
 			return nil, errCollectionNotFound
 		}
+		if !sameCollectionMeta(catalog.meta, c.meta) {
+			return nil, fmt.Errorf("collections: concurrent schema modification detected for %q", c.meta.Name)
+		}
 		for _, rootName := range rootNames {
 			if got, want := catalog.rootID(rootName), baseRootIDs[rootName]; got != want {
 				return nil, fmt.Errorf("collections: concurrent root modification detected for %q", rootName)
@@ -1395,6 +1399,12 @@ func (c *Collection) buildSchemaAndRootDescriptorSystemIterator(
 	}
 	if !sameCollectionMeta(catalog.meta, baseMeta) {
 		return nil, fmt.Errorf("collections: concurrent schema modification detected for %q", baseMeta.Name)
+	}
+	primaryRootName := collectionPrimaryRootName(baseMeta.Name)
+	if baseRootID, ok := baseRootIDs[primaryRootName]; ok {
+		if got := catalog.rootID(primaryRootName); got != baseRootID {
+			return nil, fmt.Errorf("collections: concurrent root modification detected for %q", primaryRootName)
+		}
 	}
 	for _, rootName := range rootNames {
 		if got, want := catalog.rootID(rootName), baseRootIDs[rootName]; got != want {
