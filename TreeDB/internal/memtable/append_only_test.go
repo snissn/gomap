@@ -2,6 +2,7 @@ package memtable
 
 import (
 	"encoding/binary"
+	"fmt"
 	"testing"
 	"time"
 
@@ -36,6 +37,7 @@ func TestAppendOnlyInlineGrowthSkipsIntermediateDoublingBelowCutoff(t *testing.T
 	mt := &AppendOnly{
 		entries:        make([]appendOnlyEntry, appendOnlyMinInitialEntries),
 		baseEntriesLen: appendOnlyMinInitialEntries,
+		growEntriesLen: appendOnlyMinInitialEntries,
 		ordered:        true,
 		lastIdx:        -1,
 	}
@@ -140,6 +142,39 @@ func TestAppendOnlyIteratorSortedLatest(t *testing.T) {
 
 	if it.Valid() {
 		t.Fatalf("iterator should be exhausted")
+	}
+}
+
+func TestAppendOnlyDefersLatestIndexUntilLookup(t *testing.T) {
+	m := NewAppendOnlyWithCapacity(0)
+
+	var k2 [8]byte
+	var k1 [8]byte
+	binary.BigEndian.PutUint64(k2[:], 2)
+	binary.BigEndian.PutUint64(k1[:], 1)
+
+	m.Set(k2[:], []byte("v2"))
+	m.Set(k1[:], []byte("v1"))
+
+	if m.ordered {
+		t.Fatalf("expected out-of-order append to mark memtable unordered")
+	}
+	if !m.latestDirty {
+		t.Fatalf("expected latest index to remain dirty until a lookup needs it")
+	}
+	if len(m.latest) != 0 || len(m.latest64) != 0 {
+		t.Fatalf("expected no latest index materialized yet; latest=%d latest64=%d", len(m.latest), len(m.latest64))
+	}
+
+	val, del, ok := m.Get(k1[:])
+	if !ok || del || string(val) != "v1" {
+		t.Fatalf("Get(k1) = (%q,%v,%v), want (v1,false,true)", string(val), del, ok)
+	}
+	if m.latestDirty {
+		t.Fatalf("expected lookup to rebuild the latest index")
+	}
+	if len(m.latest64) != 2 {
+		t.Fatalf("latest64 size = %d, want 2", len(m.latest64))
 	}
 }
 
@@ -308,7 +343,7 @@ func TestAppendOnlyGetBuildsLatestIndexOnFirstPointRead(t *testing.T) {
 				if m.latest == nil {
 					return 0, false
 				}
-				idx, ok := m.latest[appendOnlyKeyString(key)]
+				idx, ok := m.latest[string(key)]
 				return idx, ok
 			},
 			latestSize: func(m *AppendOnly) int {
@@ -360,22 +395,18 @@ func TestAppendOnlyGetBuildsLatestIndexOnFirstPointRead(t *testing.T) {
 			if ordered {
 				t.Fatalf("expected memtable to become unordered")
 			}
-			if dirty {
-				t.Fatalf("expected latest index to stay clean after order break")
+			if !dirty {
+				t.Fatalf("expected latest index to stay dirty after order break")
 			}
 			m.mu.RLock()
 			latestSizeBeforeGet := kk.latestSize(m)
 			idxBeforeGet, okBeforeGet := kk.latestIdx(m, lo)
-			countBeforeGet := m.count
 			m.mu.RUnlock()
-			if latestSizeBeforeGet < 2 {
-				t.Fatalf("expected latest index to be materialized on order break, size=%d", latestSizeBeforeGet)
+			if latestSizeBeforeGet != 0 {
+				t.Fatalf("expected no latest index materialized before first point read, size=%d", latestSizeBeforeGet)
 			}
-			if !okBeforeGet {
-				t.Fatalf("expected latest index lookup to succeed immediately after order break")
-			}
-			if idxBeforeGet != countBeforeGet-1 {
-				t.Fatalf("latest index before Get=%d want %d", idxBeforeGet, countBeforeGet-1)
+			if okBeforeGet {
+				t.Fatalf("expected latest index lookup to miss before first point read, got idx=%d", idxBeforeGet)
 			}
 
 			if got, del, ok := m.Get(lo); !ok || del || string(got) != "lo" {
@@ -456,6 +487,28 @@ func TestAppendOnlyGet_EmptyKey_IncrementalLatestIndex(t *testing.T) {
 	}
 	if got, ptr, flags, ok := m.GetEntry([]byte{}); !ok || string(got) != "empty" || ptr != (page.ValuePtr{}) || flags != node.FlagInline {
 		t.Fatalf("GetEntry(empty key) = (%q,%+v,%d,%v), want (empty,zero,%d,true)", string(got), ptr, flags, ok, node.FlagInline)
+	}
+}
+
+func TestAppendOnlyLatestIndexShortInlineKeysSurviveEntryGrowth(t *testing.T) {
+	m := NewAppendOnlyWithCapacityEstimatedEntryBytes(
+		appendOnlyMinInitialEntries*appendOnlyEstimatedBytesPerEntryPointer,
+		appendOnlyEstimatedBytesPerEntryPointer,
+	)
+
+	m.Set([]byte("b"), []byte("first"))
+	m.Set([]byte("a"), []byte("target"))
+	if got, del, ok := m.Get([]byte("a")); !ok || del || string(got) != "target" {
+		t.Fatalf("precondition Get(a) = (%q,%v,%v), want (target,false,true)", string(got), del, ok)
+	}
+
+	for i := 0; i < appendOnlyMinInitialEntries; i++ {
+		key := []byte(fmt.Sprintf("long-growth-key-%08d", i))
+		m.Set(key, []byte("growth"))
+	}
+
+	if got, del, ok := m.Get([]byte("a")); !ok || del || string(got) != "target" {
+		t.Fatalf("Get(a) after growth = (%q,%v,%v), want (target,false,true)", string(got), del, ok)
 	}
 }
 
