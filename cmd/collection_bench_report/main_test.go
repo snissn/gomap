@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -122,6 +123,19 @@ func TestBuildReportUnavailable(t *testing.T) {
 	}
 	if got, want := rep.UnavailableReason, "N/A before R0 harness bring-up"; got != want {
 		t.Fatalf("unavailableReason=%q want %q", got, want)
+	}
+	if rep.Sections == nil {
+		t.Fatal("unavailable report sections should be an empty slice, not nil")
+	}
+	data, err := json.Marshal(rep)
+	if err != nil {
+		t.Fatalf("marshal report: %v", err)
+	}
+	if strings.Contains(string(data), `"sections":null`) {
+		t.Fatalf("unavailable report encoded null sections: %s", data)
+	}
+	if !strings.Contains(string(data), `"sections":[]`) {
+		t.Fatalf("unavailable report missing empty sections array: %s", data)
 	}
 	md := renderMarkdown(rep)
 	if !strings.Contains(md, "This branch does not currently contain a runnable collections benchmark harness.") {

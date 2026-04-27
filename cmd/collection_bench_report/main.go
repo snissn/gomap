@@ -208,7 +208,7 @@ func buildReport(cfg config) (*report, error) {
 			Commit:            cfg.commit,
 			BenchPattern:      cfg.benchPattern,
 			Count:             cfg.count,
-			Sections:          nil,
+			Sections:          []reportSection{},
 		}, nil
 	}
 

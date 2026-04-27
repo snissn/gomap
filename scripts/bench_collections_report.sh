@@ -19,6 +19,7 @@ COMMIT="$(git rev-parse --short HEAD)"
 WORKTREE="$ROOT"
 
 mkdir -p "$OUT_DIR"
+HARNESS_UNAVAILABLE=0
 
 cmd=(
   go test ./TreeDB/collections
@@ -45,6 +46,7 @@ if [[ -z "$PATH_LABEL" ]]; then
 fi
 
 if [[ ! -d "$ROOT/TreeDB/collections" ]]; then
+  HARNESS_UNAVAILABLE=1
   GOWORK=off go run ./cmd/collection_bench_report \
     -out-dir "$OUT_DIR" \
     -branch "$BRANCH" \
@@ -70,6 +72,23 @@ else
     -count "$COUNT"
 fi
 
+if [[ "$HARNESS_UNAVAILABLE" == "1" ]]; then
+  ARTIFACT_LINES="- benchmark harness: unavailable (N/A before R0 harness bring-up)
+- raw benchmark json: unavailable
+- cpu profile: unavailable
+- memory profile: unavailable
+- markdown report: \`$OUT_DIR/collections_report.md\`
+- html report: \`$OUT_DIR/collections_report.html\`
+- json report: \`$OUT_DIR/collections_report.json\`"
+else
+  ARTIFACT_LINES="- raw benchmark json: \`$RAW_JSON\`
+- cpu profile: \`$CPU_PROFILE\`
+- memory profile: \`$MEM_PROFILE\`
+- markdown report: \`$OUT_DIR/collections_report.md\`
+- html report: \`$OUT_DIR/collections_report.html\`
+- json report: \`$OUT_DIR/collections_report.json\`"
+fi
+
 cat >"$OUT_DIR/README.md" <<EOF
 # Focused Collections Benchmark Bundle
 
@@ -81,12 +100,7 @@ cat >"$OUT_DIR/README.md" <<EOF
 - benchmark engine: \`$BENCH_ENGINE\`
 - benchmark regex: \`$BENCH_REGEX\`
 - benchmark count: \`$COUNT\`
-- raw benchmark json: \`$RAW_JSON\`
-- cpu profile: \`$CPU_PROFILE\`
-- memory profile: \`$MEM_PROFILE\`
-- markdown report: \`$OUT_DIR/collections_report.md\`
-- html report: \`$OUT_DIR/collections_report.html\`
-- json report: \`$OUT_DIR/collections_report.json\`
+$ARTIFACT_LINES
 - backend-direct override: \`TREEDB_COLLECTION_BENCH_ENGINE=backend_direct scripts/bench_collections_report.sh\`
 - oracle-path override: \`TREEDB_COLLECTION_PATH_LABEL=oracle scripts/bench_collections_report.sh\`
 EOF
