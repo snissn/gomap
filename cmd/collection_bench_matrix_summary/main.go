@@ -180,21 +180,24 @@ func readMatrixIndex(path string) ([]matrixRow, error) {
 		if len(record) == 0 || strings.TrimSpace(record[0]) == "" {
 			continue
 		}
-		vlogDictTrainer := "enabled"
-		if idx, ok := header["vlog_dict_trainer"]; ok {
-			vlogDictTrainer = field(record, idx)
-		}
-		rows = append(rows, matrixRow{
+		row := matrixRow{
 			Cell:                   field(record, header["cell"]),
 			Engine:                 field(record, header["engine"]),
 			DataOuterLeavesInVLog:  field(record, header["data_outer_leaves_in_vlog"]),
 			IndexOuterLeavesInVLog: field(record, header["index_outer_leaves_in_vlog"]),
 			PagerChunkSize:         field(record, header["pager_chunk_size"]),
 			PagerSyncConcurrency:   field(record, header["pager_sync_concurrency"]),
-			VLogDictTrainer:        vlogDictTrainer,
 			ReportMarkdownPath:     field(record, header["report_md"]),
 			ReportJSONPath:         field(record, header["report_json"]),
-		})
+		}
+		if idx, ok := header["vlog_dict_trainer"]; ok {
+			row.VLogDictTrainer = field(record, idx)
+		} else if isSQLiteMatrixRow(row) {
+			row.VLogDictTrainer = "-"
+		} else {
+			row.VLogDictTrainer = "enabled"
+		}
+		rows = append(rows, row)
 	}
 	return rows, nil
 }

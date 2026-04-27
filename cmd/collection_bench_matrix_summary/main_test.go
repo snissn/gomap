@@ -190,6 +190,34 @@ func TestMatrixSummaryRendersBenchmarkMetrics(t *testing.T) {
 	}
 }
 
+func TestReadMatrixIndexDefaultsLegacyTrainerColumn(t *testing.T) {
+	dir := t.TempDir()
+	indexPath := filepath.Join(dir, "matrix_index.tsv")
+	index := strings.Join([]string{
+		"cell\tengine\tdata_outer_leaves_in_vlog\tindex_outer_leaves_in_vlog\tpager_chunk_size\tpager_sync_concurrency\treport_md\treport_json\tcpu_profile\tmem_profile",
+		"production_fast_data_vlog_index_leaf\tproduction_fast\ttrue\tfalse\tprofile/default\tprofile/default\t/treedb.md\t/treedb.json\t/cpu.pprof\t/mem.pprof",
+		"sqlite_wal_custom\twal_custom\t-\t-\t-\t-\t/sqlite.md\t/sqlite.json\t/sqlite-cpu.pprof\t/sqlite-mem.pprof",
+		"",
+	}, "\n")
+	if err := os.WriteFile(indexPath, []byte(index), 0o644); err != nil {
+		t.Fatalf("write matrix index: %v", err)
+	}
+
+	rows, err := readMatrixIndex(indexPath)
+	if err != nil {
+		t.Fatalf("read matrix index: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("rows=%d want 2", len(rows))
+	}
+	if rows[0].VLogDictTrainer != "enabled" {
+		t.Fatalf("treedb legacy trainer default=%q want enabled", rows[0].VLogDictTrainer)
+	}
+	if rows[1].VLogDictTrainer != "-" {
+		t.Fatalf("sqlite legacy trainer default=%q want -", rows[1].VLogDictTrainer)
+	}
+}
+
 func TestMatrixSummaryFailsOnUnavailableReport(t *testing.T) {
 	dir := t.TempDir()
 	cellDir := filepath.Join(dir, "production_fast_data_vlog_index_leaf")
