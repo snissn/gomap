@@ -1,7 +1,6 @@
 package collections
 
 import (
-	"bytes"
 	"fmt"
 	"os"
 	"strconv"
@@ -209,19 +208,18 @@ func overheadBenchPlanIndexedPrecomputedState(
 		planner.buildPrimaryVal = borrowPrimaryDocument
 	}
 
+	resultIDs, err := cloneBatchDocumentIDs(ids)
+	if err != nil {
+		return err
+	}
 	items := make([]insertBatchItem, len(documents))
-	resultIDs := make([][]byte, len(documents))
 	for i := range documents {
-		if len(ids[i]) == 0 {
-			return fmt.Errorf("collections: document id cannot be empty")
-		}
-		id := bytes.Clone(ids[i])
+		id := resultIDs[i]
 		items[i] = insertBatchItem{
 			id:       id,
 			document: documents[i],
 			state:    states[i],
 		}
-		resultIDs[i] = id
 	}
 
 	primaryOrder := sortedItemOrderByKey(items, func(item *insertBatchItem) []byte { return item.id })

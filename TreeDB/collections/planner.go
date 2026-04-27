@@ -133,18 +133,17 @@ func (p insertBatchPlanner) planInsertBatchWithPreflight(ids, documents [][]byte
 		p.buildPrimaryVal = borrowPrimaryDocument
 	}
 
+	resultIDs, err := cloneBatchDocumentIDs(ids)
+	if err != nil {
+		return nil, err
+	}
 	items := make([]insertBatchItem, len(documents))
-	resultIDs := make([][]byte, len(documents))
 	for i := range documents {
-		if len(ids[i]) == 0 {
-			return nil, errors.New("collections: document id cannot be empty")
-		}
-		id := bytes.Clone(ids[i])
+		id := resultIDs[i]
 		items[i] = insertBatchItem{
 			id:       id,
 			document: documents[i],
 		}
-		resultIDs[i] = id
 	}
 
 	primaryOrder := sortedItemOrderByKey(items, func(item *insertBatchItem) []byte { return item.id })
@@ -191,6 +190,24 @@ func (p insertBatchPlanner) planInsertBatchWithPreflight(ids, documents [][]byte
 		}
 	}
 	return plan, nil
+}
+
+func cloneBatchDocumentIDs(ids [][]byte) ([][]byte, error) {
+	total := 0
+	for _, id := range ids {
+		if len(id) == 0 {
+			return nil, errors.New("collections: document id cannot be empty")
+		}
+		total += len(id)
+	}
+	out := make([][]byte, len(ids))
+	arena := make([]byte, 0, total)
+	for i, id := range ids {
+		start := len(arena)
+		arena = append(arena, id...)
+		out[i] = arena[start:len(arena):len(arena)]
+	}
+	return out, nil
 }
 
 func (p insertBatchPreflight) checkDocumentConflicts(items []insertBatchItem, order []int, presortedIDs [][]byte) error {
@@ -429,14 +446,23 @@ func applyCollectionRunEntries(table memtable.Table, count int, emit func(i int)
 
 func (p insertBatchPlanner) emitIndexStateRun(plan *insertBatchPlan, items []insertBatchItem, runtimes []indexRuntime) error {
 	order := sortedItemOrderByKey(items, func(item *insertBatchItem) []byte { return item.id })
+	counts := make([]int, len(items))
+	valueBytes := 0
+	for i := range items {
+		idx := orderedItemIndex(order, i)
+		count, size, err := runtimeOrderedDocumentIndexStateStats(items[idx].state, runtimes)
+		if err != nil {
+			return err
+		}
+		counts[i] = count
+		valueBytes += size
+	}
 	table := newCollectionRunTable(len(items))
+	valueArena := make([]byte, 0, valueBytes)
 	if err := applyCollectionRunEntries(table, len(items), func(i int) (key, value []byte, err error) {
 		idx := orderedItemIndex(order, i)
-		raw, err := encodeRuntimeOrderedDocumentIndexState(items[idx].state, runtimes)
-		if err != nil {
-			return nil, nil, err
-		}
-		return items[idx].id, raw, nil
+		valueArena, value = appendRuntimeOrderedDocumentIndexState(valueArena, items[idx].state, runtimes, counts[i])
+		return items[idx].id, value, nil
 	}); err != nil {
 		return err
 	}
@@ -688,6 +714,16 @@ func encodeNormalizedDocumentIndexState(state documentIndexState) ([]byte, error
 }
 
 func encodeRuntimeOrderedDocumentIndexState(state orderedDocumentIndexState, runtimes []indexRuntime) ([]byte, error) {
+	count, size, err := runtimeOrderedDocumentIndexStateStats(state, runtimes)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]byte, 0, size)
+	_, encoded := appendRuntimeOrderedDocumentIndexState(out, state, runtimes, count)
+	return encoded, nil
+}
+
+func runtimeOrderedDocumentIndexStateStats(state orderedDocumentIndexState, runtimes []indexRuntime) (int, int, error) {
 	count := 0
 	size := 1 + 2
 	for runtimeIdx, runtime := range runtimes {
@@ -697,36 +733,39 @@ func encodeRuntimeOrderedDocumentIndexState(state orderedDocumentIndexState, run
 			continue
 		}
 		if len(indexName) > 65535 {
-			return nil, errors.New("collections: index state name too long")
+			return 0, 0, errors.New("collections: index state name too long")
 		}
 		size += 2 + len(indexName) + 2
 		for _, value := range values {
 			if len(value) > 65535 {
-				return nil, errors.New("collections: index state value too large")
+				return 0, 0, errors.New("collections: index state value too large")
 			}
 			size += 2 + len(value)
 		}
 		count++
 	}
+	return count, size, nil
+}
 
-	out := make([]byte, 0, size)
-	out = append(out, documentIndexStateVersion)
-	out = binary.BigEndian.AppendUint16(out, uint16(count))
+func appendRuntimeOrderedDocumentIndexState(dst []byte, state orderedDocumentIndexState, runtimes []indexRuntime, count int) ([]byte, []byte) {
+	start := len(dst)
+	dst = append(dst, documentIndexStateVersion)
+	dst = binary.BigEndian.AppendUint16(dst, uint16(count))
 	for runtimeIdx, runtime := range runtimes {
 		indexName := runtime.def.name
 		values := filterEmptyEncodedIndexValues(state.valuesAt(runtimeIdx))
 		if len(values) == 0 {
 			continue
 		}
-		out = binary.BigEndian.AppendUint16(out, uint16(len(indexName)))
-		out = append(out, indexName...)
-		out = binary.BigEndian.AppendUint16(out, uint16(len(values)))
+		dst = binary.BigEndian.AppendUint16(dst, uint16(len(indexName)))
+		dst = append(dst, indexName...)
+		dst = binary.BigEndian.AppendUint16(dst, uint16(len(values)))
 		for _, value := range values {
-			out = binary.BigEndian.AppendUint16(out, uint16(len(value)))
-			out = append(out, value...)
+			dst = binary.BigEndian.AppendUint16(dst, uint16(len(value)))
+			dst = append(dst, value...)
 		}
 	}
-	return out, nil
+	return dst, dst[start:len(dst):len(dst)]
 }
 
 func encodeDocumentIndexStateWithOptions(state documentIndexState, normalizeValues bool) ([]byte, error) {

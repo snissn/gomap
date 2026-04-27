@@ -798,19 +798,18 @@ func (c *Collection) insertBatchNoIndex(
 		return nil, fmt.Errorf("collections: caller-provided batch ids length mismatch")
 	}
 
+	resultIDs, err := cloneBatchDocumentIDs(ids)
+	if err != nil {
+		_ = snap.Close()
+		return nil, err
+	}
 	entries := make([]noIndexBatchEntry, len(documents))
-	resultIDs := make([][]byte, len(documents))
 	for i := range documents {
-		if len(ids[i]) == 0 {
-			_ = snap.Close()
-			return nil, errors.New("collections: document id cannot be empty")
-		}
-		id := bytes.Clone(ids[i])
+		id := resultIDs[i]
 		entries[i] = noIndexBatchEntry{
 			id:       id,
 			document: documents[i],
 		}
-		resultIDs[i] = id
 	}
 	sort.Slice(entries, func(i, j int) bool {
 		return bytes.Compare(entries[i].id, entries[j].id) < 0
