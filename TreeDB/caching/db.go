@@ -7673,9 +7673,9 @@ func (db *DB) recycleMemtables(mems []memtable.Table) {
 	}
 }
 
-func (db *DB) trimAppendOnlyMemLeases(maxLeases int, resetCapacity int) {
+func (db *DB) trimAppendOnlyMemLeases(maxLeases int, resetCapacity int) int {
 	if db == nil {
-		return
+		return 0
 	}
 	if maxLeases < 0 {
 		maxLeases = 0
@@ -7694,16 +7694,19 @@ func (db *DB) trimAppendOnlyMemLeases(maxLeases int, resetCapacity int) {
 	db.appendOnlyMemLeaseMu.Unlock()
 
 	if len(dropped) == 0 {
-		return
+		return 0
 	}
 	effectiveResetCapacity := db.appendOnlyMemtableCapacityHint(resetCapacity, appendOnlyEstimatedBytesPerEntryDefault)
+	returned := 0
 	for i := range dropped {
 		if dropped[i] != nil {
 			dropped[i].ResetWithCapacityHard(effectiveResetCapacity, appendOnlyEstimatedBytesPerEntryDefault)
 			db.releaseAppendOnlyDirectArenaLeaseForMemtable(dropped[i])
 			db.appendOnlyMemPool.Put(dropped[i])
+			returned++
 		}
 	}
+	return returned
 }
 
 func (db *DB) trimMutableShardAppendOnlyDirectArenas(checkpoint bool) {
