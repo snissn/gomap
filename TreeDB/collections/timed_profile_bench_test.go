@@ -128,9 +128,9 @@ func benchmarkTimedProfileIndexedInsertBatch(b *testing.B, checkpoint bool) {
 			b.Fatalf("timed profile insert batch with secondary indexes: %v", err)
 		}
 	}
+	b.StopTimer()
 	stopProfile()
 	profileActive = false
-	b.StopTimer()
 	if checkpoint {
 		benchmarkReportCheckpointSplit(b, b.N, insertElapsed, syncElapsed)
 	}
