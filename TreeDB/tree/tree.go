@@ -745,7 +745,7 @@ func (t *Tree) HasAnySortedWithStats(keys [][]byte) (bool, ProbeFallbackStats, e
 	}
 	for i := 1; i < len(keys); i++ {
 		if compareTreeKey(keys[i-1], keys[i]) > 0 {
-			return false, stats, errors.New("keys must be sorted")
+			return false, stats, errors.New("HasAnySorted: keys must be sorted in ascending compareTreeKey order (8-byte keys are compared as big-endian uint64)")
 		}
 	}
 
@@ -769,7 +769,14 @@ func (t *Tree) HasAnySortedWithStats(keys [][]byte) (bool, ProbeFallbackStats, e
 		curr := it.UnsafeKey()
 		switch cmp := compareTreeKey(curr, keys[targetIdx]); {
 		case cmp == 0:
-			return true, stats, it.Error()
+			if !it.IsDeleted() {
+				return true, stats, it.Error()
+			}
+			target := keys[targetIdx]
+			for targetIdx < len(keys) && compareTreeKey(keys[targetIdx], target) == 0 {
+				targetIdx++
+			}
+			it.Next()
 		case cmp < 0:
 			scanned++
 			if scanned > scanLimit {
@@ -838,6 +845,7 @@ func (t *Tree) HasPrefixesWithStats(prefixes [][]byte) ([]bool, ProbeFallbackSta
 			end++
 		}
 
+		it.Seek(prefix)
 		found := false
 		for {
 			if !it.Valid() {
