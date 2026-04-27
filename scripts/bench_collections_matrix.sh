@@ -31,6 +31,10 @@ PROFILE_BENCH_LIST="${TREEDB_COLLECTION_PROFILE_BENCH_LIST:-BenchmarkCollectionI
 SQLITE_PROFILE_BENCH_LIST="${TREEDB_COLLECTION_SQLITE_PROFILE_BENCH_LIST:-BenchmarkSQLiteInsertBatchWithSecondaryIndexes BenchmarkSQLiteInsertBatchCheckpointWithSecondaryIndexes}"
 PROFILE_COUNT="${TREEDB_COLLECTION_PROFILE_COUNT:-1}"
 PROFILE_BENCHTIME="${TREEDB_COLLECTION_PROFILE_BENCHTIME:-$BENCHTIME}"
+TIMED_PROFILE_BENCHES="${TREEDB_COLLECTION_TIMED_PROFILE_BENCHES:-false}"
+TIMED_PROFILE_BENCH_LIST="${TREEDB_COLLECTION_TIMED_PROFILE_BENCH_LIST:-BenchmarkCollectionTimedProfileInsertBatchWithSecondaryIndexes BenchmarkCollectionTimedProfileInsertBatchCheckpointWithSecondaryIndexes}"
+TIMED_PROFILE_COUNT="${TREEDB_COLLECTION_TIMED_PROFILE_COUNT:-1}"
+TIMED_PROFILE_DOCS="${TREEDB_COLLECTION_TIMED_PROFILE_DOCS:-240000}"
 BRANCH="$(git rev-parse --abbrev-ref HEAD)"
 COMMIT="$(git rev-parse --short HEAD)"
 WORKTREE="$ROOT"
@@ -88,7 +92,7 @@ PROFILE_INDEX_TSV="$OUT_DIR/profile_index.tsv"
 SUMMARY_MD="$OUT_DIR/README.md"
 
 printf "cell\tengine\tdata_outer_leaves_in_vlog\tindex_outer_leaves_in_vlog\treport_md\treport_json\tcpu_profile\tmem_profile\n" >"$INDEX_TSV"
-printf "cell\tengine\tdata_outer_leaves_in_vlog\tindex_outer_leaves_in_vlog\tbenchmark\treport_md\treport_json\tcpu_profile\tmem_profile\tcpu_top\tmem_top\n" >"$PROFILE_INDEX_TSV"
+printf "cell\tengine\tdata_outer_leaves_in_vlog\tindex_outer_leaves_in_vlog\tbenchmark\tcpu_profile_mode\treport_md\treport_json\tcpu_profile\tmem_profile\tcpu_top\tmem_top\n" >"$PROFILE_INDEX_TSV"
 
 echo "running collections benchmark matrix into: $OUT_DIR"
 echo "matrix: $MATRIX"
@@ -102,6 +106,12 @@ if is_true "$PROFILE_BENCHES"; then
   echo "profile benchmark list: $PROFILE_BENCH_LIST"
   echo "profile count: $PROFILE_COUNT"
   echo "profile benchmark time: $PROFILE_BENCHTIME"
+fi
+echo "timed CPU profile captures: $TIMED_PROFILE_BENCHES"
+if is_true "$TIMED_PROFILE_BENCHES"; then
+  echo "timed CPU profile benchmark list: $TIMED_PROFILE_BENCH_LIST"
+  echo "timed CPU profile count: $TIMED_PROFILE_COUNT"
+  echo "timed CPU profile docs: $TIMED_PROFILE_DOCS"
 fi
 echo "include sqlite: $INCLUDE_SQLITE"
 if is_true "$INCLUDE_SQLITE"; then
@@ -153,12 +163,60 @@ run_profile_benches() {
     echo "==> $cell profile $bench"
     env "${env_args[@]}" scripts/bench_collections_report.sh
 
-    printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
+    printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
       "$cell" \
       "$engine" \
       "$data_outer" \
       "$index_outer" \
       "$bench" \
+      "whole_go_test_process" \
+      "$profile_dir/collections_report.md" \
+      "$profile_dir/collections_report.json" \
+      "$profile_dir/collections_cpu.pprof" \
+      "$profile_dir/collections_mem.pprof" \
+      "$profile_dir/collections_cpu_top.txt" \
+      "$profile_dir/collections_mem_top.txt" >>"$PROFILE_INDEX_TSV"
+  done
+}
+
+run_timed_profile_benches() {
+  local cell=$1
+  local engine=$2
+  local data_outer=$3
+  local index_outer=$4
+  local path_label=$5
+  local bench_list=$6
+  local benches=()
+
+  read -r -a benches <<<"$bench_list"
+  for bench in "${benches[@]}"; do
+    if [[ -z "$bench" ]]; then
+      continue
+    fi
+    local profile_dir="$OUT_DIR/$cell/timed_profiles/$bench"
+    local env_args=(
+      "OUT_DIR=$profile_dir"
+      "BENCH_REGEX=^${bench}$"
+      "COUNT=$TIMED_PROFILE_COUNT"
+      "BENCHTIME=${TIMED_PROFILE_DOCS}x"
+      "TREEDB_COLLECTION_TIMED_CPU_PROFILE=true"
+      "TREEDB_COLLECTION_PATH_LABEL=$path_label"
+      "TREEDB_COLLECTION_BENCH_ENGINE=$engine"
+      "TREEDB_COLLECTION_BENCH_BATCH_SIZE=$BATCH_SIZE"
+      "TREEDB_COLLECTION_DATA_OUTER_LEAVES_IN_VLOG=$data_outer"
+      "TREEDB_COLLECTION_INDEX_OUTER_LEAVES_IN_VLOG=$index_outer"
+    )
+    echo
+    echo "==> $cell timed CPU profile $bench"
+    env "${env_args[@]}" scripts/bench_collections_report.sh
+
+    printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
+      "$cell" \
+      "$engine" \
+      "$data_outer" \
+      "$index_outer" \
+      "$bench" \
+      "timed_benchmark_window" \
       "$profile_dir/collections_report.md" \
       "$profile_dir/collections_report.json" \
       "$profile_dir/collections_cpu.pprof" \
@@ -196,6 +254,9 @@ for row in "${MATRIX_ROWS[@]}"; do
 
   if is_true "$PROFILE_BENCHES"; then
     run_profile_benches "$cell" "$engine" "$data_outer" "$index_outer" "$PATH_LABEL" "$PROFILE_BENCH_LIST"
+  fi
+  if is_true "$TIMED_PROFILE_BENCHES"; then
+    run_timed_profile_benches "$cell" "$engine" "$data_outer" "$index_outer" "$PATH_LABEL" "$TIMED_PROFILE_BENCH_LIST"
   fi
 done
 
@@ -252,6 +313,9 @@ cat >"$SUMMARY_MD" <<EOF
 - focused profile captures: \`$PROFILE_BENCHES\`
 - focused profile count: \`$PROFILE_COUNT\`
 - focused profile benchmark time: \`$PROFILE_BENCHTIME\`
+- timed CPU profile captures: \`$TIMED_PROFILE_BENCHES\`
+- timed CPU profile count: \`$TIMED_PROFILE_COUNT\`
+- timed CPU profile docs: \`$TIMED_PROFILE_DOCS\`
 - include sqlite: \`$INCLUDE_SQLITE\`
 - sqlite benchmark regex: \`$SQLITE_BENCH_REGEX\`
 - matrix index: \`$INDEX_TSV\`
@@ -295,7 +359,9 @@ The production matrix keeps collection data roots in value-log outer-leaf mode a
 
 The focused default benchmark set keeps JSON extraction overhead, non-JSON indexed planning overhead, indexed batch apply, and indexed checkpoint apply in the same artifact so regressions can be separated into JSON cost, planner cost, root publish cost, and durability-boundary cost.
 
-Set `TREEDB_COLLECTION_PROFILE_BENCHES=true` to add per-benchmark profile bundles for indexed ingest and checkpointed indexed ingest. `profile_index.tsv` lists the report, CPU profile, allocation profile, and pprof top files for each focused capture. These `go test` profiles cover the whole benchmark process; timed benchmark rows remain the source of truth, and pprof top output should be read as coarse attribution because setup or off-timer document generation can appear.
+Set `TREEDB_COLLECTION_PROFILE_BENCHES=true` to add per-benchmark profile bundles for indexed ingest and checkpointed indexed ingest. `profile_index.tsv` lists the report, CPU profile mode, CPU profile, allocation profile, and pprof top files for each focused capture. These `go test` profiles cover the whole benchmark process; timed benchmark rows remain the source of truth, and pprof top output should be read as coarse attribution because setup or off-timer document generation can appear.
+
+Set `TREEDB_COLLECTION_TIMED_PROFILE_BENCHES=true` to add timed-window CPU profile bundles for indexed ingest and checkpointed indexed ingest. Those captures run fixed-document `BenchmarkCollectionTimedProfile...` variants with prebuilt document batches and `TREEDB_COLLECTION_TIMED_CPU_PROFILE=true`, so `collections_cpu.pprof` excludes benchmark setup and off-timer document generation. Use these captures when deciding whether the next optimization target is TreeDB publish/index maintenance, JSON extraction, or expected storage-engine work.
 
 Set `TREEDB_COLLECTION_INCLUDE_SQLITE=true` to append a SQLite comparison cell. The SQLite cell uses the CGO-backed `github.com/mattn/go-sqlite3` driver, WAL mode, `synchronous=NORMAL`, memory temp store, a large page cache, disabled WAL autocheckpoint, generated JSON columns for `email` and `city`, and unique/non-unique indexes on those generated columns. That keeps document generation outside the timed section while SQLite still pays JSON extraction and secondary-index maintenance during insert.
 EOF
