@@ -799,14 +799,19 @@ fallback:
 		return false, stats, nil
 	}
 	stats.FallbackCalls = 1
-	for ; targetIdx < len(keys); targetIdx++ {
+	for targetIdx < len(keys) {
+		target := keys[targetIdx]
 		stats.FallbackItems++
-		ok, err := t.Has(keys[targetIdx])
+		ok, err := t.Has(target)
 		if err != nil {
 			return false, stats, err
 		}
 		if ok {
 			return true, stats, nil
+		}
+		targetIdx++
+		for targetIdx < len(keys) && compareTreeKey(keys[targetIdx], target) == 0 {
+			targetIdx++
 		}
 	}
 	return false, stats, nil
