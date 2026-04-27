@@ -78,6 +78,14 @@ func (db *DB) noteRootDomainSnapshotHasPrefixesNative(requested, unique int) {
 	db.rootDomainProbeStats.snapshotHasPrefixesNativeUnique.Add(uint64(unique))
 }
 
+func (db *DB) noteRootDomainSnapshotHasPrefixesFallback(unique int) {
+	if db == nil || unique <= 0 {
+		return
+	}
+	db.rootDomainProbeStats.snapshotHasPrefixesFallbackCalls.Add(1)
+	db.rootDomainProbeStats.snapshotHasPrefixesFallbackUnique.Add(uint64(unique))
+}
+
 func (stats *rootDomainProbeStats) appendStats(out map[string]string) {
 	if stats == nil || out == nil {
 		return
