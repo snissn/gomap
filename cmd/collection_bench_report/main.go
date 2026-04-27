@@ -363,6 +363,7 @@ func aggregateSamples(samples []benchmarkSample) map[string]benchmarkAggregate {
 		sumBytes   float64
 		sumAllocs  float64
 		sumMetrics map[string]float64
+		metricRuns map[string]int
 		minNs      float64
 		maxNs      float64
 	}
@@ -397,8 +398,10 @@ func aggregateSamples(samples []benchmarkSample) map[string]benchmarkAggregate {
 		for name, value := range sample.Metrics {
 			if entry.sumMetrics == nil {
 				entry.sumMetrics = make(map[string]float64)
+				entry.metricRuns = make(map[string]int)
 			}
 			entry.sumMetrics[name] += value
+			entry.metricRuns[name]++
 		}
 		if sample.NsPerOp < entry.minNs {
 			entry.minNs = sample.NsPerOp
@@ -418,7 +421,11 @@ func aggregateSamples(samples []benchmarkSample) map[string]benchmarkAggregate {
 		}
 		meanMetrics := make(map[string]float64, len(entry.sumMetrics))
 		for name, value := range entry.sumMetrics {
-			meanMetrics[name] = value / sampleCount
+			metricCount := entry.metricRuns[name]
+			if metricCount == 0 {
+				continue
+			}
+			meanMetrics[name] = value / float64(metricCount)
 		}
 		if len(meanMetrics) == 0 {
 			meanMetrics = nil
