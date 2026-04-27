@@ -33,6 +33,11 @@ type ReadPathStats struct {
 	GetAppendPointerBytesTotal uint64
 }
 
+type ProbeFallbackStats struct {
+	FallbackCalls uint64
+	FallbackItems uint64
+}
+
 var treeGetAppendInlineHitsTotal atomic.Uint64
 var treeGetAppendInlineBytesTotal atomic.Uint64
 var treeGetAppendPointerHitsTotal atomic.Uint64
@@ -729,12 +734,18 @@ func (t *Tree) HasMany(keys [][]byte) ([]bool, error) {
 }
 
 func (t *Tree) HasAnySorted(keys [][]byte) (bool, error) {
+	ok, _, err := t.HasAnySortedWithStats(keys)
+	return ok, err
+}
+
+func (t *Tree) HasAnySortedWithStats(keys [][]byte) (bool, ProbeFallbackStats, error) {
+	var stats ProbeFallbackStats
 	if len(keys) == 0 {
-		return false, nil
+		return false, stats, nil
 	}
 	for i := 1; i < len(keys); i++ {
 		if compareTreeKey(keys[i-1], keys[i]) > 0 {
-			return false, errors.New("keys must be sorted")
+			return false, stats, errors.New("keys must be sorted")
 		}
 	}
 
@@ -751,14 +762,14 @@ func (t *Tree) HasAnySorted(keys [][]byte) (bool, error) {
 	for targetIdx < len(keys) {
 		if !it.Valid() {
 			if err := it.Error(); err != nil {
-				return false, err
+				return false, stats, err
 			}
-			return false, nil
+			return false, stats, nil
 		}
 		curr := it.UnsafeKey()
 		switch cmp := compareTreeKey(curr, keys[targetIdx]); {
 		case cmp == 0:
-			return true, it.Error()
+			return true, stats, it.Error()
 		case cmp < 0:
 			scanned++
 			if scanned > scanLimit {
@@ -775,27 +786,35 @@ func (t *Tree) HasAnySorted(keys [][]byte) (bool, error) {
 
 fallback:
 	if err := it.Error(); err != nil {
-		return false, err
+		return false, stats, err
 	}
 	if !limitExceeded {
-		return false, nil
+		return false, stats, nil
 	}
+	stats.FallbackCalls = 1
+	stats.FallbackItems = uint64(len(keys) - targetIdx)
 	for ; targetIdx < len(keys); targetIdx++ {
 		ok, err := t.Has(keys[targetIdx])
 		if err != nil {
-			return false, err
+			return false, stats, err
 		}
 		if ok {
-			return true, nil
+			return true, stats, nil
 		}
 	}
-	return false, nil
+	return false, stats, nil
 }
 
 func (t *Tree) HasPrefixes(prefixes [][]byte) ([]bool, error) {
+	out, _, err := t.HasPrefixesWithStats(prefixes)
+	return out, err
+}
+
+func (t *Tree) HasPrefixesWithStats(prefixes [][]byte) ([]bool, ProbeFallbackStats, error) {
+	var stats ProbeFallbackStats
 	out := make([]bool, len(prefixes))
 	if len(prefixes) == 0 {
-		return out, nil
+		return out, stats, nil
 	}
 
 	type prefixProbeRef struct {
@@ -823,9 +842,9 @@ func (t *Tree) HasPrefixes(prefixes [][]byte) ([]bool, error) {
 		for {
 			if !it.Valid() {
 				if err := it.Error(); err != nil {
-					return nil, err
+					return nil, stats, err
 				}
-				return out, nil
+				return out, stats, nil
 			}
 			curr := it.UnsafeKey()
 			if compareTreeKey(curr, prefix) < 0 {
@@ -849,7 +868,7 @@ func (t *Tree) HasPrefixes(prefixes [][]byte) ([]bool, error) {
 		start = end
 	}
 	if err := it.Error(); err != nil {
-		return nil, err
+		return nil, stats, err
 	}
-	return out, nil
+	return out, stats, nil
 }

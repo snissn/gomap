@@ -178,3 +178,59 @@ func TestSnapshot_HasManyAtRootAndHasPrefixesAtRoot(t *testing.T) {
 		t.Fatalf("HasPrefixesAtRoot missing root mismatch: got=%v want=%v", missingRootHasPrefixes, want)
 	}
 }
+
+func TestSnapshot_HasAnySortedAtRootRecordsPerItemFallback(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	_, rootIDs, err := db.PublishOrderedRootGroup(nil, []OrderedRootPublishInput{{
+		Iter: mustFrozenSystemMemtable(t, systemRangeKVs(1100, nil)...).NewIterator(nil, nil),
+	}})
+	if err != nil {
+		t.Fatalf("publish root: %v", err)
+	}
+	if len(rootIDs) != 1 {
+		t.Fatalf("root IDs len=%d want 1", len(rootIDs))
+	}
+
+	before := db.rootProbeStatsSnapshot()
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("AcquireSnapshot returned nil")
+	}
+	defer func() { _ = snap.Close() }()
+
+	got, err := snap.HasAnySortedAtRoot(rootIDs[0], [][]byte{
+		[]byte("sys/0000/missing"),
+		[]byte("sys/9999"),
+	})
+	if err != nil {
+		t.Fatalf("HasAnySortedAtRoot: %v", err)
+	}
+	if got {
+		t.Fatalf("HasAnySortedAtRoot got true want false")
+	}
+
+	after := db.rootProbeStatsSnapshot()
+	if delta := after.keyFallbackCalls - before.keyFallbackCalls; delta != 1 {
+		t.Fatalf("key fallback calls delta=%d want 1", delta)
+	}
+	if delta := after.keyFallbackItems - before.keyFallbackItems; delta != 1 {
+		t.Fatalf("key fallback items delta=%d want 1", delta)
+	}
+	if delta := after.prefixFallbackItems - before.prefixFallbackItems; delta != 0 {
+		t.Fatalf("prefix fallback items delta=%d want 0", delta)
+	}
+
+	stats := db.Stats()
+	if got := stats["treedb.native_fastpath.per_item_key_probe_fallback_count"]; got != "1" {
+		t.Fatalf("per_item_key_probe_fallback_count=%q want 1", got)
+	}
+	if got := stats["treedb.native_fastpath.per_item_prefix_probe_fallback_count"]; got != "0" {
+		t.Fatalf("per_item_prefix_probe_fallback_count=%q want 0", got)
+	}
+}
