@@ -146,3 +146,40 @@ func TestBuildUserStoryRowsSkipsMissingBatchSize(t *testing.T) {
 		t.Fatalf("batch size=%d want 8000", got[0].CollectionBatchSize)
 	}
 }
+
+func TestMatrixSummaryFailsOnUnavailableReport(t *testing.T) {
+	dir := t.TempDir()
+	cellDir := filepath.Join(dir, "production_fast_data_vlog_index_leaf")
+	if err := os.MkdirAll(cellDir, 0o755); err != nil {
+		t.Fatalf("mkdir cell: %v", err)
+	}
+	reportJSON := filepath.Join(cellDir, "collections_report.json")
+	reportMarkdown := filepath.Join(cellDir, "collections_report.md")
+	if err := os.WriteFile(reportMarkdown, []byte("# report\n"), 0o644); err != nil {
+		t.Fatalf("write report md: %v", err)
+	}
+	if err := os.WriteFile(reportJSON, []byte(`{
+  "status": "unavailable",
+  "unavailable_reason": "N/A before harness bring-up",
+  "sections": []
+}`), 0o644); err != nil {
+		t.Fatalf("write report json: %v", err)
+	}
+	indexPath := filepath.Join(dir, "matrix_index.tsv")
+	index := strings.Join([]string{
+		"cell\tengine\tdata_outer_leaves_in_vlog\tindex_outer_leaves_in_vlog\treport_md\treport_json\tcpu_profile\tmem_profile",
+		"production_fast_data_vlog_index_leaf\tproduction_fast\ttrue\tfalse\t" + reportMarkdown + "\t" + reportJSON + "\t/cpu.pprof\t/mem.pprof",
+		"",
+	}, "\n")
+	if err := os.WriteFile(indexPath, []byte(index), 0o644); err != nil {
+		t.Fatalf("write matrix index: %v", err)
+	}
+
+	err := run(config{matrixIndexPath: indexPath, outDir: dir})
+	if err == nil {
+		t.Fatal("run got nil error for unavailable report")
+	}
+	if !strings.Contains(err.Error(), `status "unavailable"`) {
+		t.Fatalf("error=%q want unavailable status", err)
+	}
+}
