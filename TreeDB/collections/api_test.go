@@ -299,6 +299,81 @@ func TestCollectionSingleInsertBufferedNoIndexRejectsBufferedDuplicate(t *testin
 	}
 }
 
+func TestCollectionSingleInsertBufferedNoIndexRejectsConcurrentSchemaChange(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	writerMgr := NewCollectionManager(d)
+	if _, err := writerMgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	writer, err := writerMgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open writer: %v", err)
+	}
+	if _, err := writer.Insert([]byte("u1"), []byte(`{"email":"ada@example.com"}`)); err != nil {
+		t.Fatalf("buffer insert: %v", err)
+	}
+
+	indexMgr := NewCollectionManager(d)
+	indexer, err := indexMgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open indexer: %v", err)
+	}
+	if _, err := indexer.CreateIndex(IndexDefinition{Name: "email", Field: "email", Unique: true}); err != nil {
+		t.Fatalf("create index: %v", err)
+	}
+
+	if _, err := writer.Insert([]byte("u2"), []byte(`{"email":"grace@example.com"}`)); err == nil || !strings.Contains(err.Error(), "concurrent schema modification") {
+		t.Fatalf("insert after schema change err=%v want concurrent schema modification", err)
+	}
+	if err := writer.Flush(); err == nil || !strings.Contains(err.Error(), "concurrent schema modification") {
+		t.Fatalf("flush after schema change err=%v want concurrent schema modification", err)
+	}
+}
+
+func TestCollectionSingleInsertBufferedNoIndexRejectsConcurrentPrimaryRootChange(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	leftMgr := NewCollectionManager(d)
+	if _, err := leftMgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	left, err := leftMgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open left writer: %v", err)
+	}
+	if _, err := left.Insert([]byte("u1"), []byte(`{"name":"ada"}`)); err != nil {
+		t.Fatalf("left buffer insert: %v", err)
+	}
+
+	rightMgr := NewCollectionManager(d)
+	right, err := rightMgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open right writer: %v", err)
+	}
+	if _, err := right.Insert([]byte("u2"), []byte(`{"name":"grace"}`)); err != nil {
+		t.Fatalf("right insert: %v", err)
+	}
+	if err := right.Flush(); err != nil {
+		t.Fatalf("right flush: %v", err)
+	}
+
+	if _, err := left.Insert([]byte("u3"), []byte(`{"name":"katherine"}`)); err == nil || !strings.Contains(err.Error(), "concurrent root modification") {
+		t.Fatalf("insert after root change err=%v want concurrent root modification", err)
+	}
+	if err := left.Flush(); err == nil || !strings.Contains(err.Error(), "concurrent root modification") {
+		t.Fatalf("flush after root change err=%v want concurrent root modification", err)
+	}
+}
+
 func TestCollectionInsertBatchBridge_ReopenUsesPersistedRootDescriptors(t *testing.T) {
 	dir := t.TempDir()
 	d, err := backenddb.Open(backenddb.Options{Dir: dir})

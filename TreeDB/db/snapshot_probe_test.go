@@ -3,6 +3,9 @@ package db
 import (
 	"reflect"
 	"testing"
+
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
 )
 
 func TestSnapshot_HasManyAndHasPrefixes(t *testing.T) {
@@ -176,5 +179,83 @@ func TestSnapshot_HasManyAtRootAndHasPrefixesAtRoot(t *testing.T) {
 	}
 	if want := []bool{false}; !reflect.DeepEqual(missingRootHasPrefixes, want) {
 		t.Fatalf("HasPrefixesAtRoot missing root mismatch: got=%v want=%v", missingRootHasPrefixes, want)
+	}
+}
+
+func TestSnapshotRootProbesSkipTombstones(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	baseRoot, err := db.PublishOrderedRootIterator(0, mustFrozenSystemMemtable(t,
+		"acct/alice/doc-1", "v1",
+		"acct/alice/doc-2", "v2",
+		"acct/bob/doc-1", "v3",
+	).NewIterator(nil, nil))
+	if err != nil {
+		t.Fatalf("publish base root: %v", err)
+	}
+	delta, err := memtable.NewWithCapacityMode(0, memtable.ModeHashSorted)
+	if err != nil {
+		t.Fatalf("new delta table: %v", err)
+	}
+	delta.Delete([]byte("acct/alice/doc-1"))
+	delta.Delete([]byte("acct/bob/doc-1"))
+	delta.Freeze()
+	_, rootIDs, err := db.PublishOrderedRootDeltaGroupWithSystemBuilder([]OrderedRootDeltaPublishInput{{
+		BaseRoot: baseRoot,
+		Iter:     delta.NewIterator(nil, nil),
+	}}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		return mustFrozenSystemMemtable(t, "sys/probe-root", "updated").NewIterator(nil, nil), nil
+	})
+	if err != nil {
+		t.Fatalf("publish delete root: %v", err)
+	}
+	if len(rootIDs) != 1 {
+		t.Fatalf("root IDs len=%d want 1", len(rootIDs))
+	}
+	rootID := rootIDs[0]
+
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("AcquireSnapshot returned nil")
+	}
+	defer func() { _ = snap.Close() }()
+
+	hasAnyDeleted, err := snap.HasAnySortedAtRoot(rootID, [][]byte{
+		[]byte("acct/alice/doc-1"),
+		[]byte("acct/bob/doc-1"),
+	})
+	if err != nil {
+		t.Fatalf("HasAnySortedAtRoot deleted keys: %v", err)
+	}
+	if hasAnyDeleted {
+		t.Fatalf("HasAnySortedAtRoot reported tombstoned exact match")
+	}
+
+	hasAnyLive, err := snap.HasAnySortedAtRoot(rootID, [][]byte{
+		[]byte("acct/alice/doc-1"),
+		[]byte("acct/alice/doc-2"),
+	})
+	if err != nil {
+		t.Fatalf("HasAnySortedAtRoot live key: %v", err)
+	}
+	if !hasAnyLive {
+		t.Fatalf("HasAnySortedAtRoot missed visible key after tombstone")
+	}
+
+	hasPrefixes, err := snap.HasPrefixesAtRoot(rootID, [][]byte{
+		[]byte("acct/alice/doc-1"),
+		[]byte("acct/alice/"),
+		[]byte("acct/bob/"),
+	})
+	if err != nil {
+		t.Fatalf("HasPrefixesAtRoot tombstones: %v", err)
+	}
+	if want := []bool{false, true, false}; !reflect.DeepEqual(hasPrefixes, want) {
+		t.Fatalf("HasPrefixesAtRoot tombstone mismatch: got=%v want=%v", hasPrefixes, want)
 	}
 }

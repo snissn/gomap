@@ -758,7 +758,14 @@ func (t *Tree) HasAnySorted(keys [][]byte) (bool, error) {
 		curr := it.UnsafeKey()
 		switch cmp := compareTreeKey(curr, keys[targetIdx]); {
 		case cmp == 0:
-			return true, it.Error()
+			if !it.IsDeleted() {
+				return true, it.Error()
+			}
+			target := keys[targetIdx]
+			for targetIdx < len(keys) && compareTreeKey(keys[targetIdx], target) == 0 {
+				targetIdx++
+			}
+			it.Next()
 		case cmp < 0:
 			scanned++
 			if scanned > scanLimit {
@@ -819,6 +826,7 @@ func (t *Tree) HasPrefixes(prefixes [][]byte) ([]bool, error) {
 			end++
 		}
 
+		it.Seek(prefix)
 		found := false
 		for {
 			if !it.Valid() {
