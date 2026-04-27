@@ -2091,6 +2091,64 @@ func (db *DB) Commit(newRootID uint64) error {
 	return db.finalizeCommit(newRootID, sysRoot, nil, true, adaptive.Metrics{}, nil, true, nil, nil, nil)
 }
 
+// Checkpoint forces a durable boundary for previously-published backend state.
+//
+// Unlike Commit, this does not publish a new root or advance CommitSeq. It is
+// intended for callers that already made writes visible with relaxed durability
+// and now need those writes durable on disk.
+func (db *DB) Checkpoint() error {
+	if db == nil || db.closing.Load() {
+		return ErrClosed
+	}
+	if db.readOnly {
+		return ErrReadOnly
+	}
+
+	db.writeMu.Lock()
+	defer db.writeMu.Unlock()
+
+	idx := db.idx.Load()
+	if idx == nil || idx.pager == nil {
+		return errors.New("missing index")
+	}
+	debugTiming := commitTimingEnabled()
+	var (
+		start      time.Time
+		durLeafLog time.Duration
+		durPager   time.Duration
+	)
+	if debugTiming {
+		start = time.Now()
+	}
+	if db.leafPageLog != nil {
+		if debugTiming {
+			t0 := time.Now()
+			if err := db.leafPageLog.Sync(); err != nil {
+				return err
+			}
+			durLeafLog = time.Since(t0)
+		} else if err := db.leafPageLog.Sync(); err != nil {
+			return err
+		}
+	}
+	if debugTiming {
+		t1 := time.Now()
+		if err := idx.pager.Sync(); err != nil {
+			return err
+		}
+		durPager = time.Since(t1)
+		commitTimingPrintf(
+			"treedb: checkpoint_timing leaf_log=%s pager=%s total=%s\n",
+			durLeafLog,
+			durPager,
+			time.Since(start),
+		)
+	} else if err := idx.pager.Sync(); err != nil {
+		return err
+	}
+	return nil
+}
+
 // Prune reclaims pages from the graveyard.
 func (db *DB) Prune() {
 	if db.readOnly {

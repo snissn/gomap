@@ -155,6 +155,9 @@ func (b *Batch) write(sync bool) error {
 	if b.db.readOnly {
 		return ErrReadOnly
 	}
+	if sync && b.batch != nil && len(b.batch.SortedEntries()) == 0 {
+		return b.db.Checkpoint()
+	}
 	for attempt := 0; attempt < optimisticWriteMaxAttempts; attempt++ {
 		committed, err := b.writeOptimistic(sync)
 		if err != nil {
