@@ -47,25 +47,27 @@ type benchmarkSpec struct {
 }
 
 type benchmarkSample struct {
-	Name        string  `json:"name"`
-	Iterations  int64   `json:"iterations"`
-	NsPerOp     float64 `json:"ns_per_op"`
-	BytesPerOp  float64 `json:"bytes_per_op"`
-	AllocsPerOp float64 `json:"allocs_per_op"`
+	Name        string             `json:"name"`
+	Iterations  int64              `json:"iterations"`
+	NsPerOp     float64            `json:"ns_per_op"`
+	BytesPerOp  float64            `json:"bytes_per_op"`
+	AllocsPerOp float64            `json:"allocs_per_op"`
+	Metrics     map[string]float64 `json:"metrics,omitempty"`
 }
 
 type benchmarkAggregate struct {
-	Name            string            `json:"name"`
-	Section         string            `json:"section"`
-	Description     string            `json:"description"`
-	Samples         int               `json:"samples"`
-	MeanNsPerOp     float64           `json:"mean_ns_per_op"`
-	MinNsPerOp      float64           `json:"min_ns_per_op"`
-	MaxNsPerOp      float64           `json:"max_ns_per_op"`
-	MeanBytesPerOp  float64           `json:"mean_bytes_per_op"`
-	MeanAllocsPerOp float64           `json:"mean_allocs_per_op"`
-	OpsPerSec       float64           `json:"ops_per_sec"`
-	Runs            []benchmarkSample `json:"runs"`
+	Name            string             `json:"name"`
+	Section         string             `json:"section"`
+	Description     string             `json:"description"`
+	Samples         int                `json:"samples"`
+	MeanNsPerOp     float64            `json:"mean_ns_per_op"`
+	MinNsPerOp      float64            `json:"min_ns_per_op"`
+	MaxNsPerOp      float64            `json:"max_ns_per_op"`
+	MeanBytesPerOp  float64            `json:"mean_bytes_per_op"`
+	MeanAllocsPerOp float64            `json:"mean_allocs_per_op"`
+	MeanMetrics     map[string]float64 `json:"mean_metrics,omitempty"`
+	OpsPerSec       float64            `json:"ops_per_sec"`
+	Runs            []benchmarkSample  `json:"runs"`
 }
 
 type reportSection struct {
@@ -338,6 +340,11 @@ func parseBenchmarkLine(line string) (benchmarkSample, bool) {
 			sample.BytesPerOp = value
 		case "allocs/op":
 			sample.AllocsPerOp = value
+		default:
+			if sample.Metrics == nil {
+				sample.Metrics = make(map[string]float64)
+			}
+			sample.Metrics[fields[i+1]] = value
 		}
 	}
 	return sample, true
@@ -345,13 +352,14 @@ func parseBenchmarkLine(line string) (benchmarkSample, bool) {
 
 func aggregateSamples(samples []benchmarkSample) map[string]benchmarkAggregate {
 	type running struct {
-		spec      benchmarkSpec
-		runs      []benchmarkSample
-		sumNs     float64
-		sumBytes  float64
-		sumAllocs float64
-		minNs     float64
-		maxNs     float64
+		spec       benchmarkSpec
+		runs       []benchmarkSample
+		sumNs      float64
+		sumBytes   float64
+		sumAllocs  float64
+		sumMetrics map[string]float64
+		minNs      float64
+		maxNs      float64
 	}
 
 	specByName := make(map[string]benchmarkSpec, len(benchmarkSpecs))
@@ -381,6 +389,12 @@ func aggregateSamples(samples []benchmarkSample) map[string]benchmarkAggregate {
 		entry.sumNs += sample.NsPerOp
 		entry.sumBytes += sample.BytesPerOp
 		entry.sumAllocs += sample.AllocsPerOp
+		for name, value := range sample.Metrics {
+			if entry.sumMetrics == nil {
+				entry.sumMetrics = make(map[string]float64)
+			}
+			entry.sumMetrics[name] += value
+		}
 		if sample.NsPerOp < entry.minNs {
 			entry.minNs = sample.NsPerOp
 		}
@@ -397,6 +411,13 @@ func aggregateSamples(samples []benchmarkSample) map[string]benchmarkAggregate {
 		if meanNs > 0 {
 			opsPerSec = 1e9 / meanNs
 		}
+		meanMetrics := make(map[string]float64, len(entry.sumMetrics))
+		for name, value := range entry.sumMetrics {
+			meanMetrics[name] = value / sampleCount
+		}
+		if len(meanMetrics) == 0 {
+			meanMetrics = nil
+		}
 		result[name] = benchmarkAggregate{
 			Name:            name,
 			Section:         entry.spec.Section,
@@ -407,6 +428,7 @@ func aggregateSamples(samples []benchmarkSample) map[string]benchmarkAggregate {
 			MaxNsPerOp:      entry.maxNs,
 			MeanBytesPerOp:  entry.sumBytes / sampleCount,
 			MeanAllocsPerOp: entry.sumAllocs / sampleCount,
+			MeanMetrics:     meanMetrics,
 			OpsPerSec:       opsPerSec,
 			Runs:            entry.runs,
 		}
@@ -502,9 +524,21 @@ func renderMarkdown(rep *report) string {
 	}
 
 	for _, section := range rep.Sections {
+		metricColumns := benchmarkMetricColumns(section.Benchmarks)
 		sb.WriteString(fmt.Sprintf("## %s\n\n", section.Title))
-		sb.WriteString("| Benchmark | Description | Samples | Ops/sec | ns/op | B/op | allocs/op |\n")
-		sb.WriteString("| --- | --- | ---: | ---: | ---: | ---: | ---: |\n")
+		sb.WriteString("| Benchmark | Description | Samples | Ops/sec | ns/op | B/op | allocs/op")
+		for _, metric := range metricColumns {
+			sb.WriteString(" | ")
+			sb.WriteString("`")
+			sb.WriteString(metric)
+			sb.WriteString("`")
+		}
+		sb.WriteString(" |\n")
+		sb.WriteString("| --- | --- | ---: | ---: | ---: | ---: | ---:")
+		for range metricColumns {
+			sb.WriteString(" | ---:")
+		}
+		sb.WriteString(" |\n")
 		for _, benchmark := range section.Benchmarks {
 			sb.WriteString("| ")
 			sb.WriteString(fmt.Sprintf("`%s`", benchmark.Name))
@@ -520,11 +554,54 @@ func renderMarkdown(rep *report) string {
 			sb.WriteString(formatFloat(benchmark.MeanBytesPerOp))
 			sb.WriteString(" | ")
 			sb.WriteString(formatFloat(benchmark.MeanAllocsPerOp))
+			for _, metric := range metricColumns {
+				sb.WriteString(" | ")
+				value, ok := benchmark.MeanMetrics[metric]
+				if ok {
+					sb.WriteString(formatFloat(value))
+				} else {
+					sb.WriteString("-")
+				}
+			}
 			sb.WriteString(" |\n")
 		}
 		sb.WriteString("\n")
 	}
 	return sb.String()
+}
+
+func benchmarkMetricColumns(benchmarks []benchmarkAggregate) []string {
+	seen := make(map[string]struct{})
+	for _, benchmark := range benchmarks {
+		for name := range benchmark.MeanMetrics {
+			seen[name] = struct{}{}
+		}
+	}
+	if len(seen) == 0 {
+		return nil
+	}
+	preferred := []string{
+		"target_docs/batch",
+		"target_docs/checkpoint",
+		"indexes/doc",
+		"per_item_key_probe_fallback_count",
+		"per_item_prefix_probe_fallback_count",
+		"warm_native_apply",
+		"warm_rebuild_fallback",
+	}
+	out := make([]string, 0, len(seen))
+	for _, name := range preferred {
+		if _, ok := seen[name]; ok {
+			out = append(out, name)
+			delete(seen, name)
+		}
+	}
+	rest := make([]string, 0, len(seen))
+	for name := range seen {
+		rest = append(rest, name)
+	}
+	sort.Strings(rest)
+	return append(out, rest...)
 }
 
 func escapeTableCell(value string) string {
