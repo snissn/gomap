@@ -61,6 +61,9 @@ func TestApplyProfile_FastSetsPolicyBools(t *testing.T) {
 	if opts.IndexInternalBaseDelta {
 		t.Fatalf("expected IndexInternalBaseDelta=false for fast profile (incompatible with outer leaves in value log)")
 	}
+	if opts.PagerSyncConcurrency != 4 {
+		t.Fatalf("expected PagerSyncConcurrency=4 for fast profile, got %d", opts.PagerSyncConcurrency)
+	}
 }
 
 func TestApplyProfile_WALOnFastKeepsWALOn(t *testing.T) {
@@ -111,6 +114,9 @@ func TestApplyProfile_WALOnFastKeepsWALOn(t *testing.T) {
 	}
 	if opts.IndexInternalBaseDelta {
 		t.Fatalf("expected IndexInternalBaseDelta=false for wal_on_fast profile (incompatible with outer leaves in value log)")
+	}
+	if opts.PagerSyncConcurrency != 4 {
+		t.Fatalf("expected PagerSyncConcurrency=4 for wal_on_fast profile, got %d", opts.PagerSyncConcurrency)
 	}
 }
 
@@ -175,6 +181,7 @@ func TestApplyProfile_DoesNotOverrideNonZeroNumericFields(t *testing.T) {
 		BackgroundCheckpointInterval:     7 * time.Second,
 		BackgroundCheckpointIdleDuration: 3 * time.Second,
 		MaxWALBytes:                      123,
+		PagerSyncConcurrency:             2,
 	}
 	ApplyProfile(&opts, ProfileBench)
 
@@ -186,6 +193,9 @@ func TestApplyProfile_DoesNotOverrideNonZeroNumericFields(t *testing.T) {
 	}
 	if opts.MaxWALBytes != 123 {
 		t.Fatalf("MaxWALBytes overridden: got %d", opts.MaxWALBytes)
+	}
+	if opts.PagerSyncConcurrency != 2 {
+		t.Fatalf("PagerSyncConcurrency overridden: got %d", opts.PagerSyncConcurrency)
 	}
 }
 

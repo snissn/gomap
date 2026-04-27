@@ -68,6 +68,20 @@ func benchmarkBoolEnv(tb testing.TB, name string, def bool) bool {
 	return v
 }
 
+func benchmarkIntEnv(tb testing.TB, name string, def int) int {
+	tb.Helper()
+
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return def
+	}
+	v, err := strconv.Atoi(raw)
+	if err != nil || v < 0 {
+		tb.Fatalf("unsupported %s=%q", name, raw)
+	}
+	return v
+}
+
 func benchmarkRootStoragePolicy(outerLeavesInVLog bool) collections.RootStoragePolicy {
 	if outerLeavesInVLog {
 		return collections.RootStorageCompressed
@@ -153,6 +167,9 @@ func openBenchmarkBackend(b *testing.B, dir string) (*backenddb.DB, func() error
 	opts := treedb.OptionsFor(benchmarkTreeDBProfile(b), dir)
 	opts.IndexOuterLeavesInValueLog = dataOuter || indexOuter
 	opts.IndexInternalBaseDelta = !opts.IndexOuterLeavesInValueLog
+	if syncConcurrency := benchmarkIntEnv(b, "TREEDB_COLLECTION_PAGER_SYNC_CONCURRENCY", 0); syncConcurrency > 0 {
+		opts.PagerSyncConcurrency = syncConcurrency
+	}
 	open := treedb.OpenBackend
 	if opts.IndexOuterLeavesInValueLog {
 		open = treedb.OpenBackendWithCachedLeafLog

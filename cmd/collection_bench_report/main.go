@@ -22,18 +22,19 @@ import (
 )
 
 type config struct {
-	inputPath           string
-	outDir              string
-	branch              string
-	commit              string
-	worktree            string
-	executionPath       string
-	benchPattern        string
-	count               int
-	benchmarkEngine     string
-	storagePolicy       string
-	collectionBatchSize int
-	unavailableReason   string
+	inputPath            string
+	outDir               string
+	branch               string
+	commit               string
+	worktree             string
+	executionPath        string
+	benchPattern         string
+	count                int
+	benchmarkEngine      string
+	storagePolicy        string
+	pagerSyncConcurrency string
+	collectionBatchSize  int
+	unavailableReason    string
 }
 
 type jsonEvent struct {
@@ -77,20 +78,21 @@ type reportSection struct {
 }
 
 type report struct {
-	GeneratedAt         string          `json:"generated_at"`
-	Status              string          `json:"status"`
-	UnavailableReason   string          `json:"unavailable_reason,omitempty"`
-	ExecutionPath       string          `json:"execution_path,omitempty"`
-	BenchmarkEngine     string          `json:"benchmark_engine,omitempty"`
-	StoragePolicy       string          `json:"storage_policy,omitempty"`
-	Worktree            string          `json:"worktree,omitempty"`
-	Branch              string          `json:"branch,omitempty"`
-	Commit              string          `json:"commit,omitempty"`
-	BenchPattern        string          `json:"bench_pattern,omitempty"`
-	Count               int             `json:"count,omitempty"`
-	CollectionBatchSize int             `json:"collection_batch_size,omitempty"`
-	RawJSONPath         string          `json:"raw_json_path,omitempty"`
-	Sections            []reportSection `json:"sections"`
+	GeneratedAt          string          `json:"generated_at"`
+	Status               string          `json:"status"`
+	UnavailableReason    string          `json:"unavailable_reason,omitempty"`
+	ExecutionPath        string          `json:"execution_path,omitempty"`
+	BenchmarkEngine      string          `json:"benchmark_engine,omitempty"`
+	StoragePolicy        string          `json:"storage_policy,omitempty"`
+	PagerSyncConcurrency string          `json:"pager_sync_concurrency,omitempty"`
+	Worktree             string          `json:"worktree,omitempty"`
+	Branch               string          `json:"branch,omitempty"`
+	Commit               string          `json:"commit,omitempty"`
+	BenchPattern         string          `json:"bench_pattern,omitempty"`
+	Count                int             `json:"count,omitempty"`
+	CollectionBatchSize  int             `json:"collection_batch_size,omitempty"`
+	RawJSONPath          string          `json:"raw_json_path,omitempty"`
+	Sections             []reportSection `json:"sections"`
 }
 
 var benchmarkSpecs = []benchmarkSpec{
@@ -189,6 +191,7 @@ func parseFlagsFrom(args []string) (config, error) {
 	fs.IntVar(&cfg.count, "count", 0, "Optional benchmark count to include in report metadata")
 	fs.StringVar(&cfg.benchmarkEngine, "benchmark-engine", "", "Optional benchmark engine label to include in report metadata")
 	fs.StringVar(&cfg.storagePolicy, "storage-policy", "", "Optional collection root storage-policy label to include in report metadata")
+	fs.StringVar(&cfg.pagerSyncConcurrency, "pager-sync-concurrency", "", "Optional pager sync concurrency label to include in report metadata")
 	fs.IntVar(&cfg.collectionBatchSize, "collection-batch-size", 0, "Optional collection benchmark batch size to include in report metadata")
 	fs.StringVar(&cfg.unavailableReason, "unavailable-reason", "", "Emit an explicit unavailable report instead of parsing benchmark input")
 	if err := fs.Parse(args); err != nil {
@@ -219,19 +222,20 @@ func validateExecutionPath(path string) error {
 func buildReport(cfg config) (*report, error) {
 	if cfg.unavailableReason != "" {
 		return &report{
-			GeneratedAt:         time.Now().UTC().Format(time.RFC3339),
-			Status:              "unavailable",
-			UnavailableReason:   cfg.unavailableReason,
-			ExecutionPath:       cfg.executionPath,
-			BenchmarkEngine:     cfg.benchmarkEngine,
-			StoragePolicy:       cfg.storagePolicy,
-			Worktree:            cfg.worktree,
-			Branch:              cfg.branch,
-			Commit:              cfg.commit,
-			BenchPattern:        cfg.benchPattern,
-			Count:               cfg.count,
-			CollectionBatchSize: cfg.collectionBatchSize,
-			Sections:            []reportSection{},
+			GeneratedAt:          time.Now().UTC().Format(time.RFC3339),
+			Status:               "unavailable",
+			UnavailableReason:    cfg.unavailableReason,
+			ExecutionPath:        cfg.executionPath,
+			BenchmarkEngine:      cfg.benchmarkEngine,
+			StoragePolicy:        cfg.storagePolicy,
+			PagerSyncConcurrency: cfg.pagerSyncConcurrency,
+			Worktree:             cfg.worktree,
+			Branch:               cfg.branch,
+			Commit:               cfg.commit,
+			BenchPattern:         cfg.benchPattern,
+			Count:                cfg.count,
+			CollectionBatchSize:  cfg.collectionBatchSize,
+			Sections:             []reportSection{},
 		}, nil
 	}
 
@@ -253,19 +257,20 @@ func buildReport(cfg config) (*report, error) {
 	sections := buildSections(aggregates)
 
 	return &report{
-		GeneratedAt:         time.Now().UTC().Format(time.RFC3339),
-		Status:              "ok",
-		ExecutionPath:       cfg.executionPath,
-		BenchmarkEngine:     cfg.benchmarkEngine,
-		StoragePolicy:       cfg.storagePolicy,
-		Worktree:            cfg.worktree,
-		Branch:              cfg.branch,
-		Commit:              cfg.commit,
-		BenchPattern:        cfg.benchPattern,
-		Count:               cfg.count,
-		CollectionBatchSize: cfg.collectionBatchSize,
-		RawJSONPath:         cfg.inputPath,
-		Sections:            sections,
+		GeneratedAt:          time.Now().UTC().Format(time.RFC3339),
+		Status:               "ok",
+		ExecutionPath:        cfg.executionPath,
+		BenchmarkEngine:      cfg.benchmarkEngine,
+		StoragePolicy:        cfg.storagePolicy,
+		PagerSyncConcurrency: cfg.pagerSyncConcurrency,
+		Worktree:             cfg.worktree,
+		Branch:               cfg.branch,
+		Commit:               cfg.commit,
+		BenchPattern:         cfg.benchPattern,
+		Count:                cfg.count,
+		CollectionBatchSize:  cfg.collectionBatchSize,
+		RawJSONPath:          cfg.inputPath,
+		Sections:             sections,
 	}, nil
 }
 
@@ -504,6 +509,9 @@ func renderMarkdown(rep *report) string {
 	}
 	if rep.StoragePolicy != "" {
 		sb.WriteString(fmt.Sprintf("- storage policy: `%s`\n", rep.StoragePolicy))
+	}
+	if rep.PagerSyncConcurrency != "" {
+		sb.WriteString(fmt.Sprintf("- pager sync concurrency: `%s`\n", rep.PagerSyncConcurrency))
 	}
 	if rep.Worktree != "" {
 		sb.WriteString(fmt.Sprintf("- worktree: `%s`\n", rep.Worktree))

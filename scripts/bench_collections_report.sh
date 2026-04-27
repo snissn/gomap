@@ -12,6 +12,14 @@ BENCH_ENGINE="${TREEDB_COLLECTION_BENCH_ENGINE:-production_fast}"
 BATCH_SIZE="${TREEDB_COLLECTION_BENCH_BATCH_SIZE:-8000}"
 DATA_OUTER="${TREEDB_COLLECTION_DATA_OUTER_LEAVES_IN_VLOG:-true}"
 INDEX_OUTER="${TREEDB_COLLECTION_INDEX_OUTER_LEAVES_IN_VLOG:-false}"
+PAGER_SYNC_CONCURRENCY="$(printf '%s' "${TREEDB_COLLECTION_PAGER_SYNC_CONCURRENCY:-}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+if [[ "$PAGER_SYNC_CONCURRENCY" == "0" ]]; then
+  PAGER_SYNC_CONCURRENCY=""
+fi
+PAGER_SYNC_CONCURRENCY_LABEL="${PAGER_SYNC_CONCURRENCY:-profile/default}"
+if [[ "$DATA_OUTER" == "-" && "$INDEX_OUTER" == "-" ]]; then
+  PAGER_SYNC_CONCURRENCY_LABEL="-"
+fi
 GO_TEST_TAGS="${GO_TEST_TAGS:-}"
 TIMED_CPU_PROFILE="${TREEDB_COLLECTION_TIMED_CPU_PROFILE:-false}"
 STORAGE_POLICY_LABEL="data_outer=${DATA_OUTER},index_outer=${INDEX_OUTER}"
@@ -85,6 +93,7 @@ echo "running focused collections benchmarks into: $OUT_DIR"
 echo "benchmark engine: $BENCH_ENGINE"
 echo "collection batch size: $BATCH_SIZE"
 echo "storage policy: $STORAGE_POLICY_LABEL"
+echo "pager sync concurrency: $PAGER_SYNC_CONCURRENCY_LABEL"
 echo "execution path: $PATH_LABEL"
 echo "cpu profile mode: $(is_true "$TIMED_CPU_PROFILE" && echo "timed benchmark window" || echo "whole go test process")"
 if [[ -n "$GO_TEST_TAGS" ]]; then
@@ -106,12 +115,13 @@ if [[ ! -d "$ROOT/TreeDB/collections" ]]; then
     -execution-path "$PATH_LABEL" \
     -benchmark-engine "$BENCH_ENGINE" \
     -storage-policy "$STORAGE_POLICY_LABEL" \
+    -pager-sync-concurrency "$PAGER_SYNC_CONCURRENCY_LABEL" \
     -collection-batch-size "$BATCH_SIZE" \
     -bench-pattern "$BENCH_REGEX" \
     -count "$COUNT" \
     -unavailable-reason "N/A before R0 harness bring-up"
 else
-  TREEDB_COLLECTION_BENCH_ENGINE="$BENCH_ENGINE" TREEDB_COLLECTION_BENCH_BATCH_SIZE="$BATCH_SIZE" TREEDB_COLLECTION_DATA_OUTER_LEAVES_IN_VLOG="$DATA_OUTER" TREEDB_COLLECTION_INDEX_OUTER_LEAVES_IN_VLOG="$INDEX_OUTER" GOWORK=off "${cmd[@]}" | tee "$RAW_JSON"
+  TREEDB_COLLECTION_BENCH_ENGINE="$BENCH_ENGINE" TREEDB_COLLECTION_BENCH_BATCH_SIZE="$BATCH_SIZE" TREEDB_COLLECTION_DATA_OUTER_LEAVES_IN_VLOG="$DATA_OUTER" TREEDB_COLLECTION_INDEX_OUTER_LEAVES_IN_VLOG="$INDEX_OUTER" TREEDB_COLLECTION_PAGER_SYNC_CONCURRENCY="$PAGER_SYNC_CONCURRENCY" GOWORK=off "${cmd[@]}" | tee "$RAW_JSON"
 
   if is_true "$TIMED_CPU_PROFILE" && [[ ! -s "$CPU_PROFILE" ]]; then
     echo "timed CPU profile was requested but no profile was written to $CPU_PROFILE; use a timed-profile benchmark" >&2
@@ -130,6 +140,7 @@ else
     -execution-path "$PATH_LABEL" \
     -benchmark-engine "$BENCH_ENGINE" \
     -storage-policy "$STORAGE_POLICY_LABEL" \
+    -pager-sync-concurrency "$PAGER_SYNC_CONCURRENCY_LABEL" \
     -collection-batch-size "$BATCH_SIZE" \
     -bench-pattern "$BENCH_REGEX" \
     -count "$COUNT"
@@ -168,6 +179,7 @@ cat >"$OUT_DIR/README.md" <<EOF
 - execution path: \`$PATH_LABEL\`
 - benchmark engine: \`$BENCH_ENGINE\`
 - storage policy: \`$STORAGE_POLICY_LABEL\`
+- pager sync concurrency: \`$PAGER_SYNC_CONCURRENCY_LABEL\`
 - collection batch size: \`$BATCH_SIZE\`
 - benchmark regex: \`$BENCH_REGEX\`
 - benchmark count: \`$COUNT\`
@@ -181,6 +193,7 @@ $ARTIFACT_LINES
 - backend-direct fast/control override: \`TREEDB_COLLECTION_BENCH_ENGINE=backend_direct_fast TREEDB_COLLECTION_DATA_OUTER_LEAVES_IN_VLOG=false TREEDB_COLLECTION_INDEX_OUTER_LEAVES_IN_VLOG=false scripts/bench_collections_report.sh\`
 - data-root pager-leaf override: \`TREEDB_COLLECTION_DATA_OUTER_LEAVES_IN_VLOG=false scripts/bench_collections_report.sh\`
 - index-root outer-leaf override: \`TREEDB_COLLECTION_INDEX_OUTER_LEAVES_IN_VLOG=true scripts/bench_collections_report.sh\`
+- pager sync concurrency override: \`TREEDB_COLLECTION_PAGER_SYNC_CONCURRENCY=4 scripts/bench_collections_report.sh\`
 - batch-size override: \`TREEDB_COLLECTION_BENCH_BATCH_SIZE=8000 scripts/bench_collections_report.sh\`
 - oracle-path override: \`TREEDB_COLLECTION_PATH_LABEL=oracle scripts/bench_collections_report.sh\`
 - production matrix runner: \`TREEDB_COLLECTION_PATH_LABEL=native-fastpath scripts/bench_collections_matrix.sh\`
