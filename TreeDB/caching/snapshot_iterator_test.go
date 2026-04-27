@@ -405,6 +405,16 @@ func TestSnapshot_HasDoesNotFallBackToViewWhenNoCapturedRuns(t *testing.T) {
 			mutableShardMask: 0,
 		},
 		backend: backendSnap,
+		publishedRoots: &publishedRootSet{
+			pointShards: []publishedRootRef{{
+				lookup: backendSnapshotLookup{snapshot: backendSnap},
+				rootID: backendSnap.State().RootPageID,
+			}},
+			iterator: publishedRootRef{
+				lookup: backendSnapshotLookup{snapshot: backendSnap},
+				rootID: backendSnap.State().RootPageID,
+			},
+		},
 		view: &memtableView{
 			rootSnapshotShards: []rootDomainSnapshot{
 				{
@@ -449,6 +459,16 @@ func TestSnapshot_IteratorDoesNotFallBackToViewWhenNoCapturedRuns(t *testing.T) 
 			mutableShardMask: 0,
 		},
 		backend: backendSnap,
+		publishedRoots: &publishedRootSet{
+			pointShards: []publishedRootRef{{
+				lookup: backendSnapshotLookup{snapshot: backendSnap},
+				rootID: backendSnap.State().RootPageID,
+			}},
+			iterator: publishedRootRef{
+				lookup: backendSnapshotLookup{snapshot: backendSnap},
+				rootID: backendSnap.State().RootPageID,
+			},
+		},
 		view: &memtableView{
 			rootIterator: rootDomainSnapshot{
 				immutables: []memtable.Table{

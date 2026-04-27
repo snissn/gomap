@@ -7,6 +7,7 @@ import (
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
+	"github.com/snissn/gomap/TreeDB/internal/merging"
 	"github.com/snissn/gomap/TreeDB/node"
 )
 
@@ -115,6 +116,26 @@ func TestRootDomainSnapshot_TombstoneHidesOlderRuns(t *testing.T) {
 	}
 	if snap.hasVisibleKey([]byte("x")) {
 		t.Fatal("expected tombstoned key to be invisible")
+	}
+}
+
+func TestRootDomainUnsafeIteratorSeekPreservesSourcePriority(t *testing.T) {
+	t.Parallel()
+
+	older := newRootDomainTestTable(t, rootDomainTestOp{key: "k", value: "older"}).NewIterator(nil, nil)
+	newer := newRootDomainTestTable(t, rootDomainTestOp{key: "k", value: "newer"}).NewIterator(nil, nil)
+	it := newRootDomainUnsafeIterator([]merging.IteratorSource{
+		{Iter: older, Priority: 1},
+		{Iter: newer, Priority: 0},
+	}, nil, nil)
+	defer it.Close()
+
+	it.Seek([]byte("k"))
+	if !it.Valid() {
+		t.Fatal("expected iterator hit after seek")
+	}
+	if got, want := string(it.UnsafeValue()), "newer"; got != want {
+		t.Fatalf("seek value=%q want %q", got, want)
 	}
 }
 
@@ -305,7 +326,7 @@ func TestRootDomainSnapshotFromMemtableView_UsesPublishedShardAndIteratorSnapsho
 	assertRootDomainVisibleValue(t, iter, "b", "iter-b")
 }
 
-func TestRootDomainSnapshotFromCachedSnapshot_ExcludesBackendFallback(t *testing.T) {
+func TestRootDomainSnapshotFromCachedSnapshot_UsesBackendFallbackLookup(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
@@ -327,15 +348,13 @@ func TestRootDomainSnapshotFromCachedSnapshot_ExcludesBackendFallback(t *testing
 
 	snap := &Snapshot{backend: backendSnap}
 	rootSnap := rootDomainSnapshotFromCachedSnapshot(snap, []byte("k"))
-	if rootSnap.published != nil {
-		t.Fatal("expected root-domain snapshot to exclude backend fallback lookup")
+	if rootSnap.published == nil {
+		t.Fatal("expected backend fallback lookup")
 	}
-	if rootSnap.publishedRootID != 0 {
-		t.Fatalf("publishedRootID=%d want 0", rootSnap.publishedRootID)
+	if rootSnap.publishedRootID == 0 {
+		t.Fatal("expected backend published root id")
 	}
-	if rootSnap.hasVisibleKey([]byte("k")) {
-		t.Fatal("backend key should be handled by snapshot backend fallback, not root-domain lookup")
-	}
+	assertRootDomainVisibleValue(t, rootSnap, "k", "backend-v")
 }
 
 func TestPublishRootDomainSnapshotsLocked_FiltersIteratorRangesWithNilQueueEntries(t *testing.T) {
@@ -616,6 +635,37 @@ func TestRotateMutableShardsLocked_UpdatesRootDomainStates(t *testing.T) {
 		t.Fatalf("iterator immutables=%d want 1", got)
 	}
 	assertRootDomainVisibleValue(t, db.rootIteratorState.snapshot(), "k", "v")
+}
+
+func TestPromoteRootDomainMutableLocked_SkipsEmptySealedMemtable(t *testing.T) {
+	t.Parallel()
+
+	mutable, err := memtable.NewWithCapacityMode(0, memtable.ModeAppendOnly)
+	if err != nil {
+		t.Fatalf("new mutable: %v", err)
+	}
+	next, err := memtable.NewWithCapacityMode(0, memtable.ModeAppendOnly)
+	if err != nil {
+		t.Fatalf("new next mutable: %v", err)
+	}
+
+	db := &DB{
+		mutableShards: []memShard{{mem: mutable}},
+		rootPointStates: []rootDomainState{
+			{mutable: mutable},
+		},
+	}
+	db.promoteRootDomainMutableLocked(0, mutable, next)
+
+	if got := len(db.rootPointStates[0].immutables); got != 0 {
+		t.Fatalf("root point immutables=%d want 0", got)
+	}
+	if got := len(db.rootIteratorState.immutables); got != 0 {
+		t.Fatalf("iterator immutables=%d want 0", got)
+	}
+	if db.rootPointStates[0].mutable != next {
+		t.Fatal("expected replacement mutable to be installed")
+	}
 }
 
 func TestRemoveQueuedUnitsLocked_TrimsRootDomainStates(t *testing.T) {

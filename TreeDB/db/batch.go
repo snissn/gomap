@@ -74,6 +74,9 @@ func (db *DB) newBatchWithEntryReserve(entries int) batch.Interface {
 }
 
 func (db *DB) newBatchWithReserveHint(reserveHint int) batch.Interface {
+	if db != nil && db.testBatchCreateHook != nil {
+		db.testBatchCreateHook()
+	}
 	threshold := db.InlineThreshold()
 	domains := db.valueLogDomainThresholds
 	if reserveHint < 0 {

@@ -169,6 +169,7 @@ type DB struct {
 	// testFailFinalizeCommit forces finalizeCommitLocked to fail before writing
 	// the next meta page. Used by crash-safety tests.
 	testFailFinalizeCommit atomic.Bool
+	testBatchCreateHook    func()
 	// testFailWriteMeta forces writeMeta to fail before mutating the target meta
 	// page so tests can exercise pre-publish cleanup paths.
 	testFailWriteMeta atomic.Bool
