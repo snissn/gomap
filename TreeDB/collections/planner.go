@@ -19,6 +19,17 @@ import (
 
 const documentIndexStateVersion = 1
 
+const (
+	// Most benchmarked scalar index values are short strings ("city-00",
+	// emails, booleans, or numeric tags). This is only an initial arena hint;
+	// larger values still append correctly and grow the arena as needed.
+	indexEncodeArenaScalarGuessBytes = 20
+	// Keep the speculative batch arena bounded. If a batch needs more encoded
+	// value bytes, append growth preserves earlier slices and avoids a large
+	// upfront allocation.
+	indexEncodeArenaMaxInitialBytes = 4 << 20
+)
+
 type collectionRootKind uint8
 
 const (
@@ -366,7 +377,11 @@ func buildUniqueProbeRuns(candidates []uniqueProbeCandidate) ([]collectionUnique
 func estimateUniqueProbePrefixBytes(candidates []uniqueProbeCandidate) int {
 	total := 0
 	for _, candidate := range candidates {
-		total += 2 + len(candidate.encodedValue)
+		add := 2 + len(candidate.encodedValue)
+		if add > indexEncodeArenaMaxInitialBytes-total {
+			return indexEncodeArenaMaxInitialBytes
+		}
+		total += add
 	}
 	return total
 }
@@ -762,20 +777,24 @@ func estimateDocumentIndexEncodeArenaBytes(runtimeCount int) int {
 	if runtimeCount <= 0 {
 		return 0
 	}
-	const encodedScalarGuess = 20
-	return runtimeCount * encodedScalarGuess
+	if runtimeCount > indexEncodeArenaMaxInitialBytes/indexEncodeArenaScalarGuessBytes {
+		return indexEncodeArenaMaxInitialBytes
+	}
+	return runtimeCount * indexEncodeArenaScalarGuessBytes
 }
 
 func estimateBatchIndexEncodeArenaBytes(items []insertBatchItem, runtimeCount int) int {
 	if len(items) == 0 || runtimeCount <= 0 {
 		return 0
 	}
-	total := len(items) * estimateDocumentIndexEncodeArenaBytes(runtimeCount)
-	const maxInitialArenaBytes = 4 << 20
-	if total > maxInitialArenaBytes {
-		return maxInitialArenaBytes
+	perDocument := estimateDocumentIndexEncodeArenaBytes(runtimeCount)
+	if perDocument == 0 {
+		return 0
 	}
-	return total
+	if len(items) > indexEncodeArenaMaxInitialBytes/perDocument {
+		return indexEncodeArenaMaxInitialBytes
+	}
+	return len(items) * perDocument
 }
 
 func estimateBatchIndexValueRefCount(items []insertBatchItem, runtimeCount int) int {

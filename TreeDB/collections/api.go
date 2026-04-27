@@ -1550,7 +1550,7 @@ func (c *Collection) FindByIndex(indexName, value string) ([][]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	_, prefix, err := appendIndexValuePrefixSlice(arena, encoded)
+	arena, prefix, err := appendIndexValuePrefixSlice(arena, encoded)
 	if err != nil {
 		return nil, err
 	}
