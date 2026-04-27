@@ -70,6 +70,7 @@ cmd+=(
   -memprofile "$MEM_PROFILE"
 )
 if is_true "$TIMED_CPU_PROFILE"; then
+  rm -f "$CPU_PROFILE" "$CPU_TOP"
   export TREEDB_COLLECTION_TIMED_CPU_PROFILE_PATH="$CPU_PROFILE"
 else
   unset TREEDB_COLLECTION_TIMED_CPU_PROFILE_PATH

@@ -8,6 +8,12 @@ import (
 	"testing"
 )
 
+const (
+	timedCPUProfilePathEnv                = "TREEDB_COLLECTION_TIMED_CPU_PROFILE_PATH"
+	maxUnprofiledTimedProfilePrebuiltDocs = 100_000
+	maxProfiledTimedProfilePrebuiltDocs   = 1_000_000
+)
+
 type timedCollectionBatch struct {
 	ids  [][]byte
 	docs [][]byte
@@ -33,7 +39,7 @@ func benchmarkDocumentBatches(start, total, targetBatchSize int, indexed bool) [
 func startTimedCollectionCPUProfile(b *testing.B) func() {
 	b.Helper()
 
-	profilePath := strings.TrimSpace(os.Getenv("TREEDB_COLLECTION_TIMED_CPU_PROFILE_PATH"))
+	profilePath := strings.TrimSpace(os.Getenv(timedCPUProfilePathEnv))
 	if profilePath == "" {
 		return func() {}
 	}
@@ -64,9 +70,25 @@ func startTimedCollectionCPUProfile(b *testing.B) func() {
 	}
 }
 
+func requireSafeTimedProfileBatchPrebuild(b *testing.B) {
+	b.Helper()
+
+	if strings.TrimSpace(os.Getenv(timedCPUProfilePathEnv)) != "" {
+		if b.N <= maxProfiledTimedProfilePrebuiltDocs {
+			return
+		}
+		b.Fatalf("timed-profile benchmark would prebuild %d documents outside the timed section; use a fixed-iteration -benchtime below %d docs", b.N, maxProfiledTimedProfilePrebuiltDocs)
+	}
+	if b.N <= maxUnprofiledTimedProfilePrebuiltDocs {
+		return
+	}
+	b.Skipf("skipping timed-profile benchmark with no %s: prebuilding %d documents outside the timed section is only allowed for small unprofiled runs", timedCPUProfilePathEnv, b.N)
+}
+
 func benchmarkTimedProfileIndexedInsertBatch(b *testing.B, checkpoint bool) {
-	backend, collection := openBenchmarkCollection(b, "bench_timed_profile_insert_batch_secondary", secondaryIndexes()...)
 	targetBatchSize := benchmarkBatchSize(b)
+	requireSafeTimedProfileBatchPrebuild(b)
+	backend, collection := openBenchmarkCollection(b, "bench_timed_profile_insert_batch_secondary", secondaryIndexes()...)
 	batches := benchmarkDocumentBatches(0, b.N, targetBatchSize, true)
 	startKeyFallback, startPrefixFallback := benchmarkNativeProbeFallbackCounters(b, backend)
 
