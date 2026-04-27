@@ -1406,7 +1406,7 @@ func TestWriteBenchprofArtifacts_WritesJSONAndMarkdown(t *testing.T) {
 		},
 	}
 
-	if err := writeBenchprofArtifacts(dir, runs); err != nil {
+	if err := writeBenchprofArtifacts(dir, "native-fastpath", runs); err != nil {
 		t.Fatalf("writeBenchprofArtifacts: %v", err)
 	}
 
@@ -1417,6 +1417,13 @@ func TestWriteBenchprofArtifacts_WritesJSONAndMarkdown(t *testing.T) {
 	}
 	if _, err := os.Stat(mdPath); err != nil {
 		t.Fatalf("expected markdown output: %v", err)
+	}
+	mdData, err := os.ReadFile(mdPath)
+	if err != nil {
+		t.Fatalf("read markdown: %v", err)
+	}
+	if !strings.Contains(string(mdData), "- execution path: `native-fastpath`") {
+		t.Fatalf("markdown missing execution path label:\n%s", string(mdData))
 	}
 
 	var parsed benchprofExport
@@ -1429,6 +1436,9 @@ func TestWriteBenchprofArtifacts_WritesJSONAndMarkdown(t *testing.T) {
 	}
 	if len(parsed.Runs) != 1 {
 		t.Fatalf("expected 1 run in json, got %d", len(parsed.Runs))
+	}
+	if got, want := parsed.Runs[0].ExecutionPath, "native-fastpath"; got != want {
+		t.Fatalf("unexpected execution path: got %q want %q", got, want)
 	}
 	if got := parsed.Runs[0].Results["full_scan"]["TreeDB"]; got != 1000 {
 		t.Fatalf("unexpected full_scan value: %v", got)
@@ -1486,6 +1496,61 @@ func TestComputeTreeDBPerfMetrics_SaturatesCounterRegression(t *testing.T) {
 	}
 	if metrics.LeafPinsTotalAfter != 9 {
 		t.Fatalf("expected after-value leaf pins total, got %d", metrics.LeafPinsTotalAfter)
+	}
+}
+
+func TestWriteBenchprofArtifacts_InvalidExecutionPath(t *testing.T) {
+	dir := t.TempDir()
+	runs := []BenchRun{{
+		Config: BenchConfig{Keys: 1, Profile: "fast"},
+		Results: map[string]map[string]float64{
+			"full_scan": {"TreeDB": 1},
+		},
+	}}
+
+	for _, path := range []string{"oracle,native-fastpath", "native-fastpath+legacy"} {
+		if err := writeBenchprofArtifacts(dir, path, runs); err == nil {
+			t.Fatalf("expected invalid execution path %q to fail", path)
+		} else if !strings.Contains(err.Error(), "mixed-path labels are forbidden") {
+			t.Fatalf("unexpected error for %q: %v", path, err)
+		}
+	}
+}
+
+func TestWriteBenchprofArtifacts_InvalidExecutionPathListsAllowedValues(t *testing.T) {
+	dir := t.TempDir()
+	runs := []BenchRun{{
+		Config: BenchConfig{Keys: 1, Profile: "fast"},
+		Results: map[string]map[string]float64{
+			"full_scan": {"TreeDB": 1},
+		},
+	}}
+
+	err := writeBenchprofArtifacts(dir, "foo", runs)
+	if err == nil {
+		t.Fatal("expected invalid execution path to fail")
+	}
+	if !strings.Contains(err.Error(), "expected one of oracle|native-fastpath") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if strings.Contains(err.Error(), "mixed-path labels are forbidden") {
+		t.Fatalf("non-mixed invalid label reported as mixed: %v", err)
+	}
+}
+
+func TestWriteBenchprofArtifacts_RequiresExecutionPath(t *testing.T) {
+	dir := t.TempDir()
+	runs := []BenchRun{{
+		Config: BenchConfig{Keys: 1, Profile: "fast"},
+		Results: map[string]map[string]float64{
+			"full_scan": {"TreeDB": 1},
+		},
+	}}
+
+	if err := writeBenchprofArtifacts(dir, "", runs); err == nil {
+		t.Fatal("expected missing execution path to fail")
+	} else if !strings.Contains(err.Error(), "execution path is required") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

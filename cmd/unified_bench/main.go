@@ -66,6 +66,7 @@ var (
 	cpuProfile         = flag.String("cpuprofile", "", "write cpu profile to file")
 	cpuProfileTestsArg = flag.String("cpuprofile-tests", "", "Comma-separated list of tests to profile when -cpuprofile is set (default: all selected tests)")
 	profileDir         = flag.String("profile-dir", "", "Write profiling artifacts to this directory (enables defaults for -cpuprofile, -allocsprofile, -checkpoint-cpuprofile, -blockprofile, -mutexprofile, -trace unless explicitly set)")
+	pathLabel          = flag.String("path-label", "", "Benchmark execution-path label required with -profile-dir (oracle|native-fastpath)")
 	allocsProfile      = flag.String("allocsprofile", "", "write per-test allocation delta profile prefix to file")
 	allocsProfileTests = flag.String("allocsprofile-tests", "", "Comma-separated list of tests to profile when -allocsprofile is set (default: all selected tests)")
 	allocsProfileRate  = flag.Int("allocsprofilerate", 512*1024, "runtime.MemProfileRate sampling rate in bytes for -allocsprofile")
@@ -245,10 +246,11 @@ type benchprofExport struct {
 }
 
 type benchprofExportRun struct {
-	Keys       int                                     `json:"keys"`
-	Profile    string                                  `json:"profile,omitempty"`
-	Results    map[string]map[string]float64           `json:"results,omitempty"`
-	TreeDBPerf map[string]map[string]treeDBPerfMetrics `json:"treedb_perf,omitempty"`
+	Keys          int                                     `json:"keys"`
+	Profile       string                                  `json:"profile,omitempty"`
+	ExecutionPath string                                  `json:"execution_path,omitempty"`
+	Results       map[string]map[string]float64           `json:"results,omitempty"`
+	TreeDBPerf    map[string]map[string]treeDBPerfMetrics `json:"treedb_perf,omitempty"`
 }
 
 type scanDiag struct {
@@ -396,6 +398,11 @@ func main() {
 	}
 	if err := applyProfileArtifactDir(*profileDir, isSet); err != nil {
 		log.Fatalf("profile-dir: %v", err)
+	}
+	if strings.TrimSpace(*profileDir) != "" {
+		if err := validateBenchprofExecutionPath(*pathLabel); err != nil {
+			log.Fatalf("profile-dir: %v", err)
+		}
 	}
 
 	seedUsed := *seed
@@ -1029,7 +1036,7 @@ func maybeWriteBenchprofArtifacts(dir string, runs []BenchRun) bool {
 	if dir == "" || len(runs) == 0 {
 		return false
 	}
-	if err := writeBenchprofArtifacts(dir, runs); err != nil {
+	if err := writeBenchprofArtifacts(dir, strings.TrimSpace(*pathLabel), runs); err != nil {
 		log.Printf("benchprof artifacts: %v", err)
 		return false
 	}
@@ -1042,9 +1049,12 @@ func runBenchprof(dir string) {
 	}
 }
 
-func writeBenchprofArtifacts(dir string, runs []BenchRun) error {
+func writeBenchprofArtifacts(dir, executionPath string, runs []BenchRun) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("mkdir %q: %w", dir, err)
+	}
+	if err := validateBenchprofExecutionPath(executionPath); err != nil {
+		return err
 	}
 
 	out := benchprofExport{
@@ -1053,10 +1063,11 @@ func writeBenchprofArtifacts(dir string, runs []BenchRun) error {
 	}
 	for _, run := range runs {
 		out.Runs = append(out.Runs, benchprofExportRun{
-			Keys:       run.Config.Keys,
-			Profile:    strings.TrimSpace(run.Config.Profile),
-			Results:    run.Results,
-			TreeDBPerf: run.TreeDBPerf,
+			Keys:          run.Config.Keys,
+			Profile:       strings.TrimSpace(run.Config.Profile),
+			ExecutionPath: executionPath,
+			Results:       run.Results,
+			TreeDBPerf:    run.TreeDBPerf,
 		})
 	}
 
@@ -1074,10 +1085,26 @@ func writeBenchprofArtifacts(dir string, runs []BenchRun) error {
 	} else {
 		md = renderMarkdownSweep(runs)
 	}
+	if executionPath != "" {
+		md = fmt.Sprintf("- execution path: `%s`\n\n%s", executionPath, md)
+	}
 	if err := os.WriteFile(filepath.Join(dir, "benchprof_results.md"), []byte(md), 0o644); err != nil {
 		return fmt.Errorf("write benchprof_results.md: %w", err)
 	}
 	return nil
+}
+
+func validateBenchprofExecutionPath(executionPath string) error {
+	if executionPath == "" {
+		return fmt.Errorf("execution path is required for profile-dir artifacts; hidden or implied path labels are forbidden")
+	}
+	if executionPath == "oracle" || executionPath == "native-fastpath" {
+		return nil
+	}
+	if strings.ContainsAny(executionPath, ",+") {
+		return fmt.Errorf("invalid execution path %q: mixed-path labels are forbidden; expected one of oracle|native-fastpath", executionPath)
+	}
+	return fmt.Errorf("invalid execution path %q: expected one of oracle|native-fastpath", executionPath)
 }
 
 func printTreeDBCacheStats(w io.Writer, inst *DBInstance, prefix string) {
