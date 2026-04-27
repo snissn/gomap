@@ -18,6 +18,21 @@ if [[ "$PAGER_SYNC_CONCURRENCY" == "0" ]]; then
   PAGER_SYNC_CONCURRENCY=""
 fi
 PAGER_SYNC_CONCURRENCY_LABEL="${PAGER_SYNC_CONCURRENCY:-profile/default}"
+VLOG_DICT_TRAINER_RAW="$(printf '%s' "${TREEDB_COLLECTION_VLOG_DICT_TRAINER:-}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+case "$(printf '%s' "$VLOG_DICT_TRAINER_RAW" | tr '[:upper:]' '[:lower:]')" in
+  ""|default|profile/default|enabled|on|true|1)
+    VLOG_DICT_TRAINER="enabled"
+    VLOG_DICT_TRAINER_LABEL="enabled"
+    ;;
+  disabled|off|false|0)
+    VLOG_DICT_TRAINER="disabled"
+    VLOG_DICT_TRAINER_LABEL="disabled"
+    ;;
+  *)
+    VLOG_DICT_TRAINER="$VLOG_DICT_TRAINER_RAW"
+    VLOG_DICT_TRAINER_LABEL="$VLOG_DICT_TRAINER_RAW"
+    ;;
+esac
 BENCH_REGEX="${BENCH_REGEX:-Benchmark(CollectionInsertBatchWithSecondaryIndexes|CollectionInsertBatchCheckpointWithSecondaryIndexes|CollectionOverheadIndexStateJSONExtraction|CollectionOverheadPlanIndexedPrecomputedState)$}"
 INCLUDE_SQLITE="${TREEDB_COLLECTION_INCLUDE_SQLITE:-false}"
 SQLITE_ENGINE="${TREEDB_COLLECTION_SQLITE_ENGINE:-sqlite_wal_normal}"
@@ -87,8 +102,16 @@ case "$MATRIX" in
       PATH_LABEL="sqlite"
     fi
     ;;
+  trainer)
+    MATRIX_ROWS=(
+      "production_fast_data_vlog_index_leaf_trainer_enabled production_fast true false enabled"
+      "production_fast_data_vlog_index_leaf_trainer_disabled production_fast true false disabled"
+      "production_fast_data_vlog_index_vlog_trainer_enabled production_fast true true enabled"
+      "production_fast_data_vlog_index_vlog_trainer_disabled production_fast true true disabled"
+    )
+    ;;
   *)
-    echo "unknown TREEDB_COLLECTION_MATRIX=$MATRIX (want production, full, quick, or sqlite)" >&2
+    echo "unknown TREEDB_COLLECTION_MATRIX=$MATRIX (want production, full, quick, trainer, or sqlite)" >&2
     exit 2
     ;;
 esac
@@ -98,8 +121,8 @@ INDEX_TSV="$OUT_DIR/matrix_index.tsv"
 PROFILE_INDEX_TSV="$OUT_DIR/profile_index.tsv"
 SUMMARY_MD="$OUT_DIR/README.md"
 
-printf "cell\tengine\tdata_outer_leaves_in_vlog\tindex_outer_leaves_in_vlog\tpager_chunk_size\tpager_sync_concurrency\treport_md\treport_json\tcpu_profile\tmem_profile\n" >"$INDEX_TSV"
-printf "cell\tengine\tdata_outer_leaves_in_vlog\tindex_outer_leaves_in_vlog\tpager_chunk_size\tpager_sync_concurrency\tbenchmark\tcpu_profile_mode\treport_md\treport_json\tcpu_profile\tmem_profile\tcpu_top\tmem_top\n" >"$PROFILE_INDEX_TSV"
+printf "cell\tengine\tdata_outer_leaves_in_vlog\tindex_outer_leaves_in_vlog\tpager_chunk_size\tpager_sync_concurrency\tvlog_dict_trainer\treport_md\treport_json\tcpu_profile\tmem_profile\n" >"$INDEX_TSV"
+printf "cell\tengine\tdata_outer_leaves_in_vlog\tindex_outer_leaves_in_vlog\tpager_chunk_size\tpager_sync_concurrency\tvlog_dict_trainer\tbenchmark\tcpu_profile_mode\treport_md\treport_json\tcpu_profile\tmem_profile\tcpu_top\tmem_top\n" >"$PROFILE_INDEX_TSV"
 
 echo "running collections benchmark matrix into: $OUT_DIR"
 echo "matrix: $MATRIX"
@@ -110,6 +133,11 @@ echo "benchmark time: $BENCHTIME"
 echo "batch size: $BATCH_SIZE"
 echo "pager chunk size: $CHUNK_SIZE_LABEL"
 echo "pager sync concurrency: $PAGER_SYNC_CONCURRENCY_LABEL"
+if [[ "$MATRIX" == "trainer" ]]; then
+  echo "default value-log dict trainer: mixed(enabled,disabled)"
+else
+  echo "default value-log dict trainer: $VLOG_DICT_TRAINER_LABEL"
+fi
 echo "profile bench captures: $PROFILE_BENCHES"
 if is_true "$PROFILE_BENCHES"; then
   echo "profile benchmark list: $PROFILE_BENCH_LIST"
@@ -148,9 +176,13 @@ run_profile_benches() {
   local go_tags=${7:-}
   local cgo_enabled=${8:-}
   local pager_sync_concurrency_label=${9:-$PAGER_SYNC_CONCURRENCY_LABEL}
+  local trainer_label=${10:-$VLOG_DICT_TRAINER_LABEL}
   local pager_chunk_size_label="$CHUNK_SIZE_LABEL"
+  local trainer_env="$trainer_label"
   if [[ "$pager_sync_concurrency_label" == "-" ]]; then
     pager_chunk_size_label="-"
+    trainer_label="-"
+    trainer_env=""
   fi
   local benches=()
 
@@ -172,6 +204,7 @@ run_profile_benches() {
       "TREEDB_COLLECTION_DATA_OUTER_LEAVES_IN_VLOG=$data_outer"
       "TREEDB_COLLECTION_INDEX_OUTER_LEAVES_IN_VLOG=$index_outer"
       "TREEDB_COLLECTION_PAGER_SYNC_CONCURRENCY=$PAGER_SYNC_CONCURRENCY"
+      "TREEDB_COLLECTION_VLOG_DICT_TRAINER=$trainer_env"
     )
     if [[ -n "$go_tags" ]]; then
       env_args+=("GO_TEST_TAGS=$go_tags")
@@ -183,13 +216,14 @@ run_profile_benches() {
     echo "==> $cell profile $bench"
     env "${env_args[@]}" scripts/bench_collections_report.sh
 
-    printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
+    printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
       "$cell" \
       "$engine" \
       "$data_outer" \
       "$index_outer" \
       "$pager_chunk_size_label" \
       "$pager_sync_concurrency_label" \
+      "$trainer_label" \
       "$bench" \
       "whole_go_test_process" \
       "$profile_dir/collections_report.md" \
@@ -208,7 +242,12 @@ run_timed_profile_benches() {
   local index_outer=$4
   local path_label=$5
   local bench_list=$6
+  local trainer_label=${7:-$VLOG_DICT_TRAINER_LABEL}
+  local trainer_env="$trainer_label"
   local benches=()
+  if [[ "$trainer_label" == "-" ]]; then
+    trainer_env=""
+  fi
 
   read -r -a benches <<<"$bench_list"
   for bench in "${benches[@]}"; do
@@ -229,18 +268,20 @@ run_timed_profile_benches() {
       "TREEDB_COLLECTION_DATA_OUTER_LEAVES_IN_VLOG=$data_outer"
       "TREEDB_COLLECTION_INDEX_OUTER_LEAVES_IN_VLOG=$index_outer"
       "TREEDB_COLLECTION_PAGER_SYNC_CONCURRENCY=$PAGER_SYNC_CONCURRENCY"
+      "TREEDB_COLLECTION_VLOG_DICT_TRAINER=$trainer_env"
     )
     echo
     echo "==> $cell timed CPU profile $bench"
     env "${env_args[@]}" scripts/bench_collections_report.sh
 
-    printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
+    printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
       "$cell" \
       "$engine" \
       "$data_outer" \
       "$index_outer" \
       "$CHUNK_SIZE_LABEL" \
       "$PAGER_SYNC_CONCURRENCY_LABEL" \
+      "$trainer_label" \
       "$bench" \
       "timed_benchmark_window" \
       "$profile_dir/collections_report.md" \
@@ -253,7 +294,8 @@ run_timed_profile_benches() {
 }
 
 for row in "${MATRIX_ROWS[@]}"; do
-  read -r cell engine data_outer index_outer <<<"$row"
+  read -r cell engine data_outer index_outer row_trainer <<<"$row"
+  row_trainer="${row_trainer:-$VLOG_DICT_TRAINER_LABEL}"
   cell_dir="$OUT_DIR/$cell"
   echo
   echo "==> $cell"
@@ -268,25 +310,27 @@ for row in "${MATRIX_ROWS[@]}"; do
     TREEDB_COLLECTION_DATA_OUTER_LEAVES_IN_VLOG="$data_outer" \
     TREEDB_COLLECTION_INDEX_OUTER_LEAVES_IN_VLOG="$index_outer" \
     TREEDB_COLLECTION_PAGER_SYNC_CONCURRENCY="$PAGER_SYNC_CONCURRENCY" \
+    TREEDB_COLLECTION_VLOG_DICT_TRAINER="$row_trainer" \
     scripts/bench_collections_report.sh
 
-  printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
+  printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
     "$cell" \
     "$engine" \
     "$data_outer" \
     "$index_outer" \
     "$CHUNK_SIZE_LABEL" \
     "$PAGER_SYNC_CONCURRENCY_LABEL" \
+    "$row_trainer" \
     "$cell_dir/collections_report.md" \
     "$cell_dir/collections_report.json" \
     "$cell_dir/collections_cpu.pprof" \
     "$cell_dir/collections_mem.pprof" >>"$INDEX_TSV"
 
   if is_true "$PROFILE_BENCHES"; then
-    run_profile_benches "$cell" "$engine" "$data_outer" "$index_outer" "$PATH_LABEL" "$PROFILE_BENCH_LIST"
+    run_profile_benches "$cell" "$engine" "$data_outer" "$index_outer" "$PATH_LABEL" "$PROFILE_BENCH_LIST" "" "" "$PAGER_SYNC_CONCURRENCY_LABEL" "$row_trainer"
   fi
   if is_true "$TIMED_PROFILE_BENCHES"; then
-    run_timed_profile_benches "$cell" "$engine" "$data_outer" "$index_outer" "$PATH_LABEL" "$TIMED_PROFILE_BENCH_LIST"
+    run_timed_profile_benches "$cell" "$engine" "$data_outer" "$index_outer" "$PATH_LABEL" "$TIMED_PROFILE_BENCH_LIST" "$row_trainer"
   fi
 done
 
@@ -306,13 +350,15 @@ if is_true "$INCLUDE_SQLITE"; then
     TREEDB_COLLECTION_DATA_OUTER_LEAVES_IN_VLOG="-" \
     TREEDB_COLLECTION_INDEX_OUTER_LEAVES_IN_VLOG="-" \
     TREEDB_COLLECTION_PAGER_SYNC_CONCURRENCY="" \
+    TREEDB_COLLECTION_VLOG_DICT_TRAINER="" \
     GO_TEST_TAGS="sqlite_bench" \
     CGO_ENABLED="$SQLITE_CGO_ENABLED" \
     scripts/bench_collections_report.sh
 
-  printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
+  printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
     "$cell" \
     "$SQLITE_ENGINE" \
+    "-" \
     "-" \
     "-" \
     "-" \
@@ -323,7 +369,7 @@ if is_true "$INCLUDE_SQLITE"; then
     "$cell_dir/collections_mem.pprof" >>"$INDEX_TSV"
 
   if is_true "$PROFILE_BENCHES"; then
-    run_profile_benches "$cell" "$SQLITE_ENGINE" "-" "-" "sqlite" "$SQLITE_PROFILE_BENCH_LIST" "sqlite_bench" "$SQLITE_CGO_ENABLED" "-"
+    run_profile_benches "$cell" "$SQLITE_ENGINE" "-" "-" "sqlite" "$SQLITE_PROFILE_BENCH_LIST" "sqlite_bench" "$SQLITE_CGO_ENABLED" "-" "-"
   fi
 fi
 
@@ -346,6 +392,7 @@ cat >"$SUMMARY_MD" <<EOF
 - collection batch size: \`$BATCH_SIZE\`
 - pager chunk size: \`$CHUNK_SIZE_LABEL\`
 - pager sync concurrency: \`$PAGER_SYNC_CONCURRENCY_LABEL\`
+- default value-log dict trainer: \`$(if [[ "$MATRIX" == "trainer" ]]; then echo "mixed(enabled,disabled)"; else echo "$VLOG_DICT_TRAINER_LABEL"; fi)\`
 - focused profile captures: \`$PROFILE_BENCHES\`
 - focused profile count: \`$PROFILE_COUNT\`
 - focused profile benchmark time: \`$PROFILE_BENCHTIME\`
@@ -362,25 +409,28 @@ cat >"$SUMMARY_MD" <<EOF
 
 ## Cells
 
-| Cell | Engine | Data outer leaves in vlog | Index outer leaves in vlog | Report |
-| --- | --- | --- | --- | --- |
+| Cell | Engine | Data outer leaves in vlog | Index outer leaves in vlog | VLog dict trainer | Report |
+| --- | --- | --- | --- | --- | --- |
 EOF
 
 for row in "${MATRIX_ROWS[@]}"; do
-  read -r cell engine data_outer index_outer <<<"$row"
-  printf "| \`%s\` | \`%s\` | \`%s\` | \`%s\` | [%s](%s) |\n" \
+  read -r cell engine data_outer index_outer row_trainer <<<"$row"
+  row_trainer="${row_trainer:-$VLOG_DICT_TRAINER_LABEL}"
+  printf "| \`%s\` | \`%s\` | \`%s\` | \`%s\` | \`%s\` | [%s](%s) |\n" \
     "$cell" \
     "$engine" \
     "$data_outer" \
     "$index_outer" \
+    "$row_trainer" \
     "$cell" \
     "$cell/collections_report.md" >>"$SUMMARY_MD"
 done
 
 if is_true "$INCLUDE_SQLITE"; then
-  printf "| \`%s\` | \`%s\` | \`%s\` | \`%s\` | [%s](%s) |\n" \
+  printf "| \`%s\` | \`%s\` | \`%s\` | \`%s\` | \`%s\` | [%s](%s) |\n" \
     "$SQLITE_CELL" \
     "$SQLITE_ENGINE" \
+    "-" \
     "-" \
     "-" \
     "$SQLITE_CELL" \
@@ -398,6 +448,8 @@ The focused default benchmark set keeps JSON extraction overhead, non-JSON index
 Set `TREEDB_COLLECTION_PAGER_SYNC_CONCURRENCY=N` to compare pager sync parallelism on checkpoint-heavy rows. Leaving it unset uses the selected TreeDB profile default.
 
 Set `TREEDB_COLLECTION_CHUNK_SIZE=N` to compare pager mmap chunk-size granularity on checkpoint-heavy rows. Leaving it unset uses the selected TreeDB profile/default chunk size. This is useful when the checkpoint split points at dirty-page `msync` cost rather than JSON extraction or collection planning.
+
+Set `TREEDB_COLLECTION_MATRIX=trainer` to run paired production-fast cells with value-log dictionary training enabled and disabled. The disabled cells pass `TREEDB_COLLECTION_VLOG_DICT_TRAINER=disabled`, which leaves the profile's value-log compression policy intact but sets `ValueLog.DictTrain.TrainBytes=-1` so background trainer allocation pressure can be evaluated separately from JSON extraction and collection planner cost.
 
 Set `TREEDB_COLLECTION_PROFILE_BENCHES=true` to add per-benchmark profile bundles for indexed ingest and checkpointed indexed ingest. `profile_index.tsv` lists the report, CPU profile mode, CPU profile, allocation profile, and pprof top files for each focused capture. These `go test` profiles cover the whole benchmark process; timed benchmark rows remain the source of truth, and pprof top output should be read as coarse attribution because setup or off-timer document generation can appear.
 
