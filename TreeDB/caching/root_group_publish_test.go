@@ -966,6 +966,9 @@ func TestPublishInstalledRootSet_PublishesSystemDescriptorRunToBackend(t *testin
 	if got := db.rootPublishedSet.system.rootID; got != after.SystemRootPageID {
 		t.Fatalf("installed system root id=%d want %d", got, after.SystemRootPageID)
 	}
+	if db.rootPublishedSet.system.lookup != nil {
+		t.Fatal("expected updated system root to clear stale published lookup")
+	}
 
 	snap := backend.AcquireSnapshot()
 	if snap == nil {
@@ -1016,6 +1019,9 @@ func TestPublishInstalledRootSet_PublishesSystemDescriptorRunWithoutBackendBatch
 	}
 	if got, want := db.rootPublishedSet.system.rootID, backend.state.SystemRootPageID; got != want {
 		t.Fatalf("installed system root id=%d want %d", got, want)
+	}
+	if db.rootPublishedSet.system.lookup != nil {
+		t.Fatal("expected updated system root to clear stale published lookup")
 	}
 	stats := db.rootDomainPublishStatsSnapshot()
 	if stats.nativeSystemPublishes != 1 {

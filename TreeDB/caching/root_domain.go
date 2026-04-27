@@ -453,6 +453,7 @@ func (db *DB) publishInstalledRootSet(set *publishedRootSet) error {
 		db.mu.Unlock()
 		group.systemRootPageID = newSystemRootID
 		cloned.system.rootID = newSystemRootID
+		cloned.system.lookup = nil
 	}
 
 	db.mu.Lock()
