@@ -950,9 +950,12 @@ func (plan *insertBatchPlan) publishRootRuns(publisher groupedRootPublisher, bas
 	}
 	ordered := make([]backenddb.OrderedRootPublishInput, 0, len(plan.runs))
 	iterators := make([]iterator.UnsafeIterator, 0, len(plan.runs))
+	iteratorsOwned := true
 	defer func() {
-		for _, it := range iterators {
-			_ = it.Close()
+		if iteratorsOwned {
+			for _, it := range iterators {
+				_ = it.Close()
+			}
 		}
 	}()
 	for _, run := range plan.runs {
@@ -967,6 +970,8 @@ func (plan *insertBatchPlan) publishRootRuns(publisher groupedRootPublisher, bas
 			StoragePolicy: run.storagePolicy,
 		})
 	}
+	// PublishOrderedRootGroup owns and closes iterators once they are handed off.
+	iteratorsOwned = false
 	_, rootIDs, err := publisher.PublishOrderedRootGroup(nil, ordered)
 	if err != nil {
 		return nil, err
