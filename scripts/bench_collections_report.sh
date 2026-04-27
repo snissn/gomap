@@ -31,6 +31,7 @@ COMMIT="$(git rev-parse --short HEAD)"
 WORKTREE="$ROOT"
 
 mkdir -p "$OUT_DIR"
+HARNESS_UNAVAILABLE=0
 
 is_true() {
   case "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" in
@@ -101,6 +102,7 @@ if [[ -z "$PATH_LABEL" ]]; then
 fi
 
 if [[ ! -d "$ROOT/TreeDB/collections" ]]; then
+  HARNESS_UNAVAILABLE=1
   GOWORK=off go run ./cmd/collection_bench_report \
     -out-dir "$OUT_DIR" \
     -branch "$BRANCH" \
@@ -138,6 +140,27 @@ else
     -count "$COUNT"
 fi
 
+if [[ "$HARNESS_UNAVAILABLE" == "1" ]]; then
+  ARTIFACT_LINES="- benchmark harness: unavailable (N/A before R0 harness bring-up)
+- raw benchmark json: unavailable
+- cpu profile: unavailable
+- memory profile: unavailable
+- cpu profile top: unavailable
+- allocation profile top: unavailable
+- markdown report: \`$OUT_DIR/collections_report.md\`
+- html report: \`$OUT_DIR/collections_report.html\`
+- json report: \`$OUT_DIR/collections_report.json\`"
+else
+  ARTIFACT_LINES="- raw benchmark json: \`$RAW_JSON\`
+- cpu profile: \`$CPU_PROFILE\`
+- memory profile: \`$MEM_PROFILE\`
+- cpu profile top: \`$CPU_TOP\`
+- allocation profile top: \`$MEM_TOP\`
+- markdown report: \`$OUT_DIR/collections_report.md\`
+- html report: \`$OUT_DIR/collections_report.html\`
+- json report: \`$OUT_DIR/collections_report.json\`"
+fi
+
 cat >"$OUT_DIR/README.md" <<EOF
 # Focused Collections Benchmark Bundle
 
@@ -153,20 +176,16 @@ cat >"$OUT_DIR/README.md" <<EOF
 - benchmark regex: \`$BENCH_REGEX\`
 - benchmark count: \`$COUNT\`
 - go test tags: \`${GO_TEST_TAGS:-none}\`
-- raw benchmark json: \`$RAW_JSON\`
-- cpu profile: \`$CPU_PROFILE\`
 - cpu profile mode: \`$(is_true "$TIMED_CPU_PROFILE" && echo "timed benchmark window" || echo "whole go test process")\`
-- memory profile: \`$MEM_PROFILE\`
-- cpu profile top: \`$CPU_TOP\`
-- allocation profile top: \`$MEM_TOP\`
-- markdown report: \`$OUT_DIR/collections_report.md\`
-- html report: \`$OUT_DIR/collections_report.html\`
-- json report: \`$OUT_DIR/collections_report.json\`
+$ARTIFACT_LINES
+- backend-direct override: \`TREEDB_COLLECTION_BENCH_ENGINE=backend_direct scripts/bench_collections_report.sh\`
+- backend-direct fast override: \`TREEDB_COLLECTION_BENCH_ENGINE=backend_direct_fast scripts/bench_collections_report.sh\`
+- backend-direct WAL-on-fast override: \`TREEDB_COLLECTION_BENCH_ENGINE=backend_direct_wal_on_fast scripts/bench_collections_report.sh\`
 - production fast override: \`TREEDB_COLLECTION_BENCH_ENGINE=production_fast scripts/bench_collections_report.sh\`
 - production WAL-on-fast override: \`TREEDB_COLLECTION_BENCH_ENGINE=production_wal_on_fast scripts/bench_collections_report.sh\`
 - backend-direct fast/control override: \`TREEDB_COLLECTION_BENCH_ENGINE=backend_direct_fast TREEDB_COLLECTION_DATA_OUTER_LEAVES_IN_VLOG=false TREEDB_COLLECTION_INDEX_OUTER_LEAVES_IN_VLOG=false scripts/bench_collections_report.sh\`
-- data-root outer-leaf override: \`TREEDB_COLLECTION_DATA_OUTER_LEAVES_IN_VLOG=true scripts/bench_collections_report.sh\`
-- index-root outer-leaf override: \`TREEDB_COLLECTION_INDEX_OUTER_LEAVES_IN_VLOG=false scripts/bench_collections_report.sh\`
+- data-root pager-leaf override: \`TREEDB_COLLECTION_DATA_OUTER_LEAVES_IN_VLOG=false scripts/bench_collections_report.sh\`
+- index-root outer-leaf override: \`TREEDB_COLLECTION_INDEX_OUTER_LEAVES_IN_VLOG=true scripts/bench_collections_report.sh\`
 - pager sync concurrency override: \`TREEDB_COLLECTION_PAGER_SYNC_CONCURRENCY=4 scripts/bench_collections_report.sh\`
 - batch-size override: \`TREEDB_COLLECTION_BENCH_BATCH_SIZE=8000 scripts/bench_collections_report.sh\`
 - oracle-path override: \`TREEDB_COLLECTION_PATH_LABEL=oracle scripts/bench_collections_report.sh\`
