@@ -19,11 +19,31 @@ PATH_LABEL="${TREEDB_COLLECTION_PATH_LABEL:-}"
 RAW_JSON="$OUT_DIR/collections_bench.json"
 CPU_PROFILE="$OUT_DIR/collections_cpu.pprof"
 MEM_PROFILE="$OUT_DIR/collections_mem.pprof"
+CPU_TOP="$OUT_DIR/collections_cpu_top.txt"
+MEM_TOP="$OUT_DIR/collections_mem_top.txt"
 BRANCH="$(git rev-parse --abbrev-ref HEAD)"
 COMMIT="$(git rev-parse --short HEAD)"
 WORKTREE="$ROOT"
 
 mkdir -p "$OUT_DIR"
+
+write_pprof_top() {
+  local profile=$1
+  local dest=$2
+  shift 2
+  if [[ ! -s "$profile" ]]; then
+    return 0
+  fi
+  if ! go tool pprof "$@" "$profile" >"$dest.tmp" 2>"$dest.err"; then
+    {
+      echo "go tool pprof failed for $profile"
+      cat "$dest.err"
+    } >"$dest"
+  else
+    mv "$dest.tmp" "$dest"
+  fi
+  rm -f "$dest.tmp" "$dest.err"
+}
 
 cmd=(
   go test
@@ -76,6 +96,9 @@ if [[ ! -d "$ROOT/TreeDB/collections" ]]; then
 else
   TREEDB_COLLECTION_BENCH_ENGINE="$BENCH_ENGINE" TREEDB_COLLECTION_BENCH_BATCH_SIZE="$BATCH_SIZE" TREEDB_COLLECTION_DATA_OUTER_LEAVES_IN_VLOG="$DATA_OUTER" TREEDB_COLLECTION_INDEX_OUTER_LEAVES_IN_VLOG="$INDEX_OUTER" GOWORK=off "${cmd[@]}" | tee "$RAW_JSON"
 
+  write_pprof_top "$CPU_PROFILE" "$CPU_TOP" -top
+  write_pprof_top "$MEM_PROFILE" "$MEM_TOP" -top -sample_index=alloc_space
+
   GOWORK=off go run ./cmd/collection_bench_report \
     -in "$RAW_JSON" \
     -out-dir "$OUT_DIR" \
@@ -107,6 +130,8 @@ cat >"$OUT_DIR/README.md" <<EOF
 - raw benchmark json: \`$RAW_JSON\`
 - cpu profile: \`$CPU_PROFILE\`
 - memory profile: \`$MEM_PROFILE\`
+- cpu profile top: \`$CPU_TOP\`
+- allocation profile top: \`$MEM_TOP\`
 - markdown report: \`$OUT_DIR/collections_report.md\`
 - html report: \`$OUT_DIR/collections_report.html\`
 - json report: \`$OUT_DIR/collections_report.json\`
@@ -119,8 +144,18 @@ cat >"$OUT_DIR/README.md" <<EOF
 - oracle-path override: \`TREEDB_COLLECTION_PATH_LABEL=oracle scripts/bench_collections_report.sh\`
 - production matrix runner: \`TREEDB_COLLECTION_PATH_LABEL=native-fastpath scripts/bench_collections_matrix.sh\`
 - sqlite comparison override: \`TREEDB_COLLECTION_PATH_LABEL=sqlite TREEDB_COLLECTION_BENCH_ENGINE=sqlite_wal_normal GO_TEST_TAGS=sqlite_bench BENCH_REGEX='BenchmarkSQLite(InsertBatchWithSecondaryIndexes|InsertBatchCheckpointWithSecondaryIndexes)$' scripts/bench_collections_report.sh\`
+
+## Profile Caveat
+
+The \`go test\` CPU and allocation profiles cover the whole benchmark process. Timed benchmark rows remain the source of truth for \`ns/op\`, \`B/op\`, and \`allocs/op\`; the pprof top files are coarse attribution aids and can include setup or off-timer document generation work.
 EOF
 
 echo "markdown report: $OUT_DIR/collections_report.md"
 echo "html report:     $OUT_DIR/collections_report.html"
 echo "bundle index:    $OUT_DIR/README.md"
+if [[ -s "$CPU_TOP" ]]; then
+  echo "cpu top:         $CPU_TOP"
+fi
+if [[ -s "$MEM_TOP" ]]; then
+  echo "allocation top:  $MEM_TOP"
+fi
