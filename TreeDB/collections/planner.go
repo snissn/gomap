@@ -118,6 +118,7 @@ type orderedDocumentIndexState [][][]byte
 
 type indexEncodeArena struct {
 	buf       []byte
+	states    [][][]byte
 	valueRefs [][]byte
 }
 
@@ -344,6 +345,7 @@ func (p insertBatchPlanner) planIndexStateAndUniqueProbes(items []insertBatchIte
 	uniqueProbes := make([]uniqueProbeCandidate, 0, len(items))
 	encoder := indexEncodeArena{
 		buf:       make([]byte, 0, estimateBatchIndexEncodeArenaBytes(items, len(runtimes))),
+		states:    make([][][]byte, 0, estimateBatchIndexValueRefCount(items, len(runtimes))),
 		valueRefs: make([][]byte, 0, estimateBatchIndexValueRefCount(items, len(runtimes))),
 	}
 	for i := range items {
@@ -777,7 +779,7 @@ func orderedIndexStateForDocumentWithArena(document []byte, runtimes []indexRunt
 	if !ok {
 		return nil, errors.New("collections: index extraction requires JSON object document")
 	}
-	state := make(orderedDocumentIndexState, len(runtimes))
+	state := encoder.appendState(len(runtimes))
 	for runtimeIdx, runtime := range runtimes {
 		value, found := extractIndexPathValue(obj, runtime.path)
 		if !found || value == nil {
@@ -838,7 +840,7 @@ func orderedJSONRootIndexStateForDocumentGJSON(document []byte, runtimes []index
 			return nil, false, nil
 		}
 	}
-	if !json.Valid(document) {
+	if !gjson.ValidBytes(document) {
 		return nil, true, errors.New("collections: index extraction requires JSON document: invalid JSON")
 	}
 	root := gjson.ParseBytes(document)
@@ -860,7 +862,7 @@ func orderedJSONRootIndexStateForDocumentGJSON(document []byte, runtimes []index
 		}
 		return true
 	})
-	state := make(orderedDocumentIndexState, len(runtimes))
+	state := encoder.appendState(len(runtimes))
 	for runtimeIdx, runtime := range runtimes {
 		if err := appendGJSONIndexValueToState(state, runtimeIdx, runtime, values[runtimeIdx], opts, encoder); err != nil {
 			return nil, true, err
@@ -938,6 +940,29 @@ func (a *indexEncodeArena) appendSingleValueRef(value []byte) [][]byte {
 	start := len(a.valueRefs)
 	a.valueRefs = append(a.valueRefs, value)
 	return a.valueRefs[start:len(a.valueRefs):len(a.valueRefs)]
+}
+
+func (a *indexEncodeArena) appendState(runtimeCount int) orderedDocumentIndexState {
+	if runtimeCount <= 0 {
+		return nil
+	}
+	if a.states == nil {
+		return make(orderedDocumentIndexState, runtimeCount)
+	}
+	start := len(a.states)
+	end := start + runtimeCount
+	if end > cap(a.states) {
+		nextCap := cap(a.states) * 2
+		if nextCap < end {
+			nextCap = end
+		}
+		next := make([][][]byte, end, nextCap)
+		copy(next, a.states)
+		a.states = next
+	} else {
+		a.states = a.states[:end]
+	}
+	return a.states[start:end:end]
 }
 
 func estimateDocumentIndexEncodeArenaBytes(runtimeCount int) int {

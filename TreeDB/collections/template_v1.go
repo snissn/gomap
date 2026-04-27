@@ -626,7 +626,7 @@ func templateV1OrderedIndexStateForDocumentWithArena(document []byte, runtimes [
 	if state, ok, err := templateV1RootIndexStateForDocumentWithArena(root, runtimes, opts, encoder); ok || err != nil {
 		return state, err
 	}
-	state := make(orderedDocumentIndexState, len(runtimes))
+	state := encoder.appendState(len(runtimes))
 	for runtimeIdx, runtime := range runtimes {
 		value, found, err := templateV1ExtractPathValue(root, runtime.path, opts.templateResolver)
 		if err != nil {
@@ -652,7 +652,7 @@ func templateV1RootIndexStateForDocumentWithArena(root templateV1ObjectRef, runt
 	if err != nil {
 		return nil, true, err
 	}
-	state := make(orderedDocumentIndexState, len(runtimes))
+	state := encoder.appendState(len(runtimes))
 	pos := 0
 	for _, field := range tpl.fields {
 		start := pos

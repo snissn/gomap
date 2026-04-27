@@ -223,6 +223,20 @@ func TestOrderedIndexStateForDocumentJSONRootFastPathRejectsOutOfRangeNumber(t *
 	}
 }
 
+func TestOrderedIndexStateForDocumentJSONRootFastPathRejectsInvalidJSON(t *testing.T) {
+	planner := insertBatchPlanner{
+		indexes: []indexDefinition{{name: "email", field: "email"}},
+	}
+	runtimes, err := planner.indexRuntimes()
+	if err != nil {
+		t.Fatalf("index runtimes: %v", err)
+	}
+	_, err = orderedIndexStateForDocument([]byte(`{"email":"ada"`), runtimes, collectionOptions{})
+	if err == nil || !strings.Contains(err.Error(), "invalid JSON") {
+		t.Fatalf("err=%v want invalid JSON", err)
+	}
+}
+
 func TestBuildUniqueProbeRunsMatchesEncodedPrefixOrdering(t *testing.T) {
 	candidates := []uniqueProbeCandidate{
 		{indexName: "email", encodedValue: []byte("s:zz"), documentID: []byte("u3")},
