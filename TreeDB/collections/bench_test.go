@@ -111,6 +111,21 @@ func benchmarkCollectionStoragePolicy(tb testing.TB) (dataOuter, indexOuter bool
 	return dataOuter, indexOuter
 }
 
+func benchmarkCollectionDocumentFormat(tb testing.TB) collections.DocumentFormat {
+	tb.Helper()
+
+	raw := strings.TrimSpace(os.Getenv("TREEDB_COLLECTION_DOCUMENT_FORMAT"))
+	switch strings.ToLower(raw) {
+	case "", "json":
+		return collections.DocumentFormatJSON
+	case string(collections.DocumentFormatTemplateV1):
+		return collections.DocumentFormatTemplateV1
+	default:
+		tb.Fatalf("unsupported TREEDB_COLLECTION_DOCUMENT_FORMAT=%q", raw)
+		return collections.DocumentFormatJSON
+	}
+}
+
 func benchmarkStatUint64(tb testing.TB, stats map[string]string, key string) uint64 {
 	tb.Helper()
 
@@ -221,12 +236,14 @@ func openBenchmarkCollection(b *testing.B, name string, indexes ...collections.I
 
 	manager := collections.NewCollectionManager(backend)
 	dataOuter, indexOuter := benchmarkCollectionStoragePolicy(b)
+	documentFormat := benchmarkCollectionDocumentFormat(b)
 	for i := range indexes {
 		indexes[i].StoragePolicy = benchmarkRootStoragePolicy(indexOuter)
 	}
 	if _, err := manager.CreateCollection(&collections.CollectionMeta{
 		Name: name,
 		Options: collections.CollectionOptions{
+			DocumentFormat:          documentFormat,
 			DataRootStoragePolicy:   benchmarkRootStoragePolicy(dataOuter),
 			IndexStateStoragePolicy: benchmarkRootStoragePolicy(dataOuter),
 		},
@@ -286,13 +303,48 @@ func benchmarkIndexedDocument(n int) []byte {
 	return out
 }
 
-func benchmarkDocumentBatch(start, count int, indexed bool) ([][]byte, [][]byte) {
+func benchmarkTemplateDocument(tb testing.TB, encoder *collections.TemplateV1Encoder, n int, indexed bool) []byte {
+	tb.Helper()
+	if encoder == nil {
+		encoder = &collections.TemplateV1Encoder{}
+	}
+	if indexed {
+		doc, err := encoder.EncodeDocument(
+			[]string{"name", "email", "city", "pad"},
+			[]any{
+				fmt.Sprintf("user-%09d", n),
+				fmt.Sprintf("user-%09d@example.com", n),
+				fmt.Sprintf("city-%02d", n%collectionBenchCities),
+				"01234567890123456789",
+			},
+		)
+		if err != nil {
+			tb.Fatalf("encode template-v1 benchmark document: %v", err)
+		}
+		return doc
+	}
+	doc, err := encoder.EncodeDocument(
+		[]string{"name", "city", "email", "pad"},
+		[]any{"ada", "hnl", "ada@example.com", "0123456789012345678901234567890123456789"},
+	)
+	if err != nil {
+		tb.Fatalf("encode template-v1 benchmark payload: %v", err)
+	}
+	return doc
+}
+
+func benchmarkDocumentBatch(tb testing.TB, start, count int, indexed bool) ([][]byte, [][]byte) {
+	tb.Helper()
+	documentFormat := benchmarkCollectionDocumentFormat(tb)
 	ids := make([][]byte, count)
 	docs := make([][]byte, count)
+	var templateEncoder collections.TemplateV1Encoder
 	for i := 0; i < count; i++ {
 		docNum := start + i
 		ids[i] = benchmarkDocumentID(docNum)
-		if indexed {
+		if documentFormat == collections.DocumentFormatTemplateV1 {
+			docs[i] = benchmarkTemplateDocument(tb, &templateEncoder, docNum, indexed)
+		} else if indexed {
 			docs[i] = benchmarkIndexedDocument(docNum)
 		} else {
 			docs[i] = collectionBenchPayload
@@ -311,7 +363,7 @@ func seedBenchmarkCollection(b *testing.B, collection *collections.Collection, s
 		if remaining := count - inserted; remaining < batchSize {
 			batchSize = remaining
 		}
-		ids, docs := benchmarkDocumentBatch(start+inserted, batchSize, indexed)
+		ids, docs := benchmarkDocumentBatch(b, start+inserted, batchSize, indexed)
 		if _, err := collection.InsertBatch(ids, docs); err != nil {
 			b.Fatalf("seed insert batch: %v", err)
 		}
@@ -329,7 +381,7 @@ func secondaryIndexes() []collections.IndexDefinition {
 
 func BenchmarkCollectionInsertProvidedID(b *testing.B) {
 	_, collection := openBenchmarkCollection(b, "bench_insert_provided")
-	ids, docs := benchmarkDocumentBatch(0, b.N, false)
+	ids, docs := benchmarkDocumentBatch(b, 0, b.N, false)
 
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -354,7 +406,7 @@ func BenchmarkCollectionInsertBatchProvidedID(b *testing.B) {
 		if remaining := b.N - inserted; remaining < batchSize {
 			batchSize = remaining
 		}
-		ids, docs := benchmarkDocumentBatch(inserted, batchSize, false)
+		ids, docs := benchmarkDocumentBatch(b, inserted, batchSize, false)
 		b.StartTimer()
 
 		if _, err := collection.InsertBatch(ids, docs); err != nil {
@@ -414,7 +466,7 @@ func BenchmarkCollectionDeleteByID(b *testing.B) {
 
 func BenchmarkCollectionInsertWithSecondaryIndexes(b *testing.B) {
 	_, collection := openBenchmarkCollection(b, "bench_insert_secondary", secondaryIndexes()...)
-	ids, docs := benchmarkDocumentBatch(0, b.N, true)
+	ids, docs := benchmarkDocumentBatch(b, 0, b.N, true)
 
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -439,7 +491,7 @@ func BenchmarkCollectionInsertBatchWithSecondaryIndexes(b *testing.B) {
 		if remaining := b.N - inserted; remaining < batchSize {
 			batchSize = remaining
 		}
-		ids, docs := benchmarkDocumentBatch(inserted, batchSize, true)
+		ids, docs := benchmarkDocumentBatch(b, inserted, batchSize, true)
 		b.StartTimer()
 
 		if _, err := collection.InsertBatch(ids, docs); err != nil {
@@ -467,7 +519,7 @@ func BenchmarkCollectionInsertBatchCheckpointWithSecondaryIndexes(b *testing.B) 
 		if remaining := b.N - inserted; remaining < batchSize {
 			batchSize = remaining
 		}
-		ids, docs := benchmarkDocumentBatch(inserted, batchSize, true)
+		ids, docs := benchmarkDocumentBatch(b, inserted, batchSize, true)
 		b.StartTimer()
 
 		insertStart := time.Now()

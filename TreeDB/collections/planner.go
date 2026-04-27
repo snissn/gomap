@@ -38,12 +38,15 @@ type collectionRootKind uint8
 
 const (
 	collectionRootPrimary collectionRootKind = iota + 1
+	collectionRootTemplate
 	collectionRootIndexState
 	collectionRootSecondary
 )
 
 type collectionOptions struct {
 	allowArrayValuesInIndex bool
+	documentFormat          DocumentFormat
+	templateResolver        templateV1Resolver
 	dataStoragePolicy       backenddb.OrderedRootStoragePolicy
 	indexStateStoragePolicy backenddb.OrderedRootStoragePolicy
 }
@@ -59,6 +62,7 @@ type indexDefinition struct {
 type insertBatchPlanner struct {
 	collection      string
 	primaryRoot     string
+	templateRoot    string
 	indexStateRoot  string
 	indexes         []indexDefinition
 	options         collectionOptions
@@ -69,6 +73,7 @@ type insertBatchPlan struct {
 	resultIDs       [][]byte
 	runs            []collectionRootRun
 	uniqueProbeRuns []collectionUniqueProbeRun
+	templateRecords []templateV1Record
 	stats           insertBatchPlanStats
 }
 
@@ -146,23 +151,33 @@ func (p insertBatchPlanner) planInsertBatchWithPreflight(ids, documents [][]byte
 	if p.primaryRoot == "" {
 		p.primaryRoot = p.collection + "/primary"
 	}
+	if p.templateRoot == "" {
+		p.templateRoot = p.collection + "/templates"
+	}
 	if len(p.indexes) > 0 && p.indexStateRoot == "" {
 		p.indexStateRoot = p.collection + "/index-state"
 	}
 	if p.buildPrimaryVal == nil {
 		p.buildPrimaryVal = borrowPrimaryDocument
 	}
+	preparedDocuments, templateRecords, templateResolver, err := prepareInsertDocuments(documents, p.options)
+	if err != nil {
+		return nil, err
+	}
+	if templateResolver != nil {
+		p.options.templateResolver = templateResolver
+	}
 
 	resultIDs, err := cloneBatchDocumentIDs(ids)
 	if err != nil {
 		return nil, err
 	}
-	items := make([]insertBatchItem, len(documents))
-	for i := range documents {
+	items := make([]insertBatchItem, len(preparedDocuments))
+	for i := range preparedDocuments {
 		id := resultIDs[i]
 		items[i] = insertBatchItem{
 			id:       id,
-			document: documents[i],
+			document: preparedDocuments[i],
 		}
 	}
 
@@ -197,6 +212,12 @@ func (p insertBatchPlanner) planInsertBatchWithPreflight(ids, documents [][]byte
 	plan := &insertBatchPlan{
 		resultIDs:       resultIDs,
 		uniqueProbeRuns: uniqueProbeRuns,
+		templateRecords: templateRecords,
+	}
+	if len(templateRecords) > 0 {
+		if err := p.emitTemplateRun(plan, templateRecords); err != nil {
+			return nil, err
+		}
 	}
 	if err := p.emitPrimaryRun(plan, items, primaryOrder); err != nil {
 		return nil, err
@@ -460,6 +481,31 @@ func (p insertBatchPlanner) emitPrimaryRun(plan *insertBatchPlan, items []insert
 	return nil
 }
 
+func (p insertBatchPlanner) emitTemplateRun(plan *insertBatchPlan, records []templateV1Record) error {
+	if len(records) == 0 {
+		return nil
+	}
+	sortTemplateV1Records(records)
+	records, err := dedupeTemplateV1Records(records)
+	if err != nil {
+		return err
+	}
+	table := newCollectionRunTable(len(records))
+	if err := applyCollectionRunEntries(table, len(records), func(i int) (key, value []byte, err error) {
+		return records[i].id[:], records[i].raw, nil
+	}); err != nil {
+		return err
+	}
+	table.Freeze()
+	plan.runs = append(plan.runs, collectionRootRun{
+		name:          p.templateRoot,
+		kind:          collectionRootTemplate,
+		table:         table,
+		storagePolicy: p.options.dataStoragePolicy,
+	})
+	return nil
+}
+
 func setCollectionRunValue(table memtable.Table, key, value []byte) {
 	table.SetEntrySteal(key, value, page.ValuePtr{}, node.FlagInline)
 }
@@ -710,6 +756,13 @@ func orderedIndexStateForDocumentWithArena(document []byte, runtimes []indexRunt
 			buf:       make([]byte, 0, estimateDocumentIndexEncodeArenaBytes(len(runtimes))),
 			valueRefs: make([][]byte, 0, len(runtimes)),
 		}
+	}
+	switch normalizedDocumentFormat(opts.documentFormat) {
+	case DocumentFormatJSON:
+	case DocumentFormatTemplateV1:
+		return templateV1OrderedIndexStateForDocumentWithArena(document, runtimes, opts, encoder)
+	default:
+		return nil, fmt.Errorf("collections: unsupported document format %q", opts.documentFormat)
 	}
 	var decoded any
 	if err := json.Unmarshal(document, &decoded); err != nil {

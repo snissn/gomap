@@ -47,6 +47,26 @@ func overheadBenchIndexedDocument(n int) []byte {
 	return out
 }
 
+func overheadBenchTemplateIndexedDocument(b testing.TB, encoder *TemplateV1Encoder, n int) []byte {
+	b.Helper()
+	if encoder == nil {
+		encoder = &TemplateV1Encoder{}
+	}
+	doc, err := encoder.EncodeDocument(
+		[]string{"name", "email", "city", "pad"},
+		[]any{
+			fmt.Sprintf("user-%09d", n),
+			fmt.Sprintf("user-%09d@example.com", n),
+			fmt.Sprintf("city-%02d", n%overheadBenchCities),
+			"01234567890123456789",
+		},
+	)
+	if err != nil {
+		b.Fatalf("encode template-v1 indexed document: %v", err)
+	}
+	return doc
+}
+
 func appendOverheadBenchZeroPaddedInt(dst []byte, n, width int) []byte {
 	var scratch [20]byte
 	pos := len(scratch)
@@ -80,6 +100,29 @@ func overheadBenchDocumentBatch(count int, indexed bool) ([][]byte, [][]byte) {
 	return ids, docs
 }
 
+func overheadBenchTemplateDocumentBatch(b testing.TB, count int, indexed bool) ([][]byte, [][]byte) {
+	b.Helper()
+	ids := make([][]byte, count)
+	docs := make([][]byte, count)
+	var templateEncoder TemplateV1Encoder
+	for i := 0; i < count; i++ {
+		ids[i] = overheadBenchDocumentID(i)
+		if indexed {
+			docs[i] = overheadBenchTemplateIndexedDocument(b, &templateEncoder, i)
+		} else {
+			doc, err := templateEncoder.EncodeDocument(
+				[]string{"name", "city", "email", "pad"},
+				[]any{"ada", "hnl", "ada@example.com", "0123456789012345678901234567890123456789"},
+			)
+			if err != nil {
+				b.Fatalf("encode template-v1 payload: %v", err)
+			}
+			docs[i] = doc
+		}
+	}
+	return ids, docs
+}
+
 func overheadBenchIndexedPlanner() insertBatchPlanner {
 	return insertBatchPlanner{
 		collection: "users",
@@ -88,6 +131,12 @@ func overheadBenchIndexedPlanner() insertBatchPlanner {
 			{name: "city_idx", field: "city"},
 		},
 	}
+}
+
+func overheadBenchTemplateIndexedPlanner() insertBatchPlanner {
+	planner := overheadBenchIndexedPlanner()
+	planner.options.documentFormat = DocumentFormatTemplateV1
+	return planner
 }
 
 func requireOverheadBenchIndexStateValues(b *testing.B, state orderedDocumentIndexState, runtimes []indexRuntime) {
@@ -152,6 +201,28 @@ func BenchmarkCollectionOverheadPlanIndexed(b *testing.B) {
 	}
 }
 
+func BenchmarkCollectionOverheadPlanIndexedTemplateV1(b *testing.B) {
+	batchSize := overheadBenchBatchSize(b)
+	ids, docs := overheadBenchTemplateDocumentBatch(b, batchSize, true)
+	planner := overheadBenchTemplateIndexedPlanner()
+
+	b.ReportAllocs()
+	b.ReportMetric(float64(batchSize), "target_docs/batch")
+	b.ResetTimer()
+	for planned := 0; planned < b.N; {
+		n := batchSize
+		if remaining := b.N - planned; remaining < n {
+			n = remaining
+		}
+		plan, err := planner.planInsertBatch(ids[:n], docs[:n])
+		if err != nil {
+			b.Fatalf("plan template-v1 indexed batch: %v", err)
+		}
+		resetCollectionRunTables(plan.runs)
+		planned += n
+	}
+}
+
 func BenchmarkCollectionOverheadIndexStateJSONExtraction(b *testing.B) {
 	batchSize := overheadBenchBatchSize(b)
 	_, docs := overheadBenchDocumentBatch(batchSize, true)
@@ -175,6 +246,49 @@ func BenchmarkCollectionOverheadIndexStateJSONExtraction(b *testing.B) {
 		state, err := orderedIndexStateForDocument(docs[i%batchSize], runtimes, collectionOptions{})
 		if err != nil {
 			b.Fatalf("extract index state: %v", err)
+		}
+		_ = state
+	}
+}
+
+func BenchmarkCollectionOverheadIndexStateTemplateV1Extraction(b *testing.B) {
+	batchSize := overheadBenchBatchSize(b)
+	_, docs := overheadBenchTemplateDocumentBatch(b, batchSize, true)
+	planner := overheadBenchTemplateIndexedPlanner()
+	runtimes, err := planner.indexRuntimes()
+	if err != nil {
+		b.Fatalf("index runtimes: %v", err)
+	}
+	storedDocs := make([][]byte, len(docs))
+	resolver := &templateV1MemoryResolver{}
+	for i, doc := range docs {
+		stored, records, err := parseTemplateV1InsertDocument(doc)
+		if err != nil {
+			b.Fatalf("parse template-v1 document: %v", err)
+		}
+		storedDocs[i] = stored
+		for _, record := range records {
+			if err := resolver.addRecord(record); err != nil {
+				b.Fatalf("add template-v1 record: %v", err)
+			}
+		}
+	}
+	opts := collectionOptions{documentFormat: DocumentFormatTemplateV1, templateResolver: resolver}
+	for _, doc := range storedDocs {
+		state, err := orderedIndexStateForDocument(doc, runtimes, opts)
+		if err != nil {
+			b.Fatalf("validate template-v1 index extraction inputs: %v", err)
+		}
+		requireOverheadBenchIndexStateValues(b, state, runtimes)
+	}
+
+	b.ReportAllocs()
+	b.ReportMetric(float64(len(runtimes)), "indexes/doc")
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		state, err := orderedIndexStateForDocument(storedDocs[i%batchSize], runtimes, opts)
+		if err != nil {
+			b.Fatalf("extract template-v1 index state: %v", err)
 		}
 		_ = state
 	}

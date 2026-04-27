@@ -31,6 +31,7 @@ type config struct {
 	benchPattern         string
 	count                int
 	benchmarkEngine      string
+	documentFormat       string
 	storagePolicy        string
 	pagerChunkSize       string
 	pagerSyncConcurrency string
@@ -84,6 +85,7 @@ type report struct {
 	UnavailableReason    string          `json:"unavailable_reason,omitempty"`
 	ExecutionPath        string          `json:"execution_path,omitempty"`
 	BenchmarkEngine      string          `json:"benchmark_engine,omitempty"`
+	DocumentFormat       string          `json:"document_format,omitempty"`
 	StoragePolicy        string          `json:"storage_policy,omitempty"`
 	PagerChunkSize       string          `json:"pager_chunk_size,omitempty"`
 	PagerSyncConcurrency string          `json:"pager_sync_concurrency,omitempty"`
@@ -117,7 +119,9 @@ var benchmarkSpecs = []benchmarkSpec{
 	{Name: "BenchmarkCollectionCreateIndexBackfillExistingDocs", Section: "Secondary Index Path", Description: "Build a new secondary index and backfill it from an existing primary collection root."},
 	{Name: "BenchmarkCollectionOverheadPlanNoIndex", Section: "Overhead Breakdown", Description: "Plan a no-index collection batch without publishing it; isolates collection planner overhead from backend root publish."},
 	{Name: "BenchmarkCollectionOverheadPlanIndexed", Section: "Overhead Breakdown", Description: "Plan an indexed collection batch without publishing it; includes JSON index extraction, index-state encoding, and secondary run construction."},
+	{Name: "BenchmarkCollectionOverheadPlanIndexedTemplateV1", Section: "Overhead Breakdown", Description: "Plan an indexed template-v1 collection batch without publishing it; includes template document preparation, template-root records, index extraction, index-state encoding, and secondary run construction."},
 	{Name: "BenchmarkCollectionOverheadIndexStateJSONExtraction", Section: "Overhead Breakdown", Description: "Extract indexed values from JSON documents and encode index-state values, without planner run construction or backend publish."},
+	{Name: "BenchmarkCollectionOverheadIndexStateTemplateV1Extraction", Section: "Overhead Breakdown", Description: "Extract indexed values from compact template-v1 documents through a template resolver and encode index-state values, without planner run construction or backend publish."},
 	{Name: "BenchmarkCollectionOverheadPlanIndexedPrecomputedState", Section: "Overhead Breakdown", Description: "Plan an indexed collection batch using precomputed index state, approximating the non-JSON indexed planner cost."},
 }
 
@@ -192,6 +196,7 @@ func parseFlagsFrom(args []string) (config, error) {
 	fs.StringVar(&cfg.benchPattern, "bench-pattern", "", "Optional benchmark regex to include in report metadata")
 	fs.IntVar(&cfg.count, "count", 0, "Optional benchmark count to include in report metadata")
 	fs.StringVar(&cfg.benchmarkEngine, "benchmark-engine", "", "Optional benchmark engine label to include in report metadata")
+	fs.StringVar(&cfg.documentFormat, "document-format", "", "Optional collection document-format label to include in report metadata")
 	fs.StringVar(&cfg.storagePolicy, "storage-policy", "", "Optional collection root storage-policy label to include in report metadata")
 	fs.StringVar(&cfg.pagerChunkSize, "pager-chunk-size", "", "Optional pager chunk size label to include in report metadata")
 	fs.StringVar(&cfg.pagerSyncConcurrency, "pager-sync-concurrency", "", "Optional pager sync concurrency label to include in report metadata")
@@ -230,6 +235,7 @@ func buildReport(cfg config) (*report, error) {
 			UnavailableReason:    cfg.unavailableReason,
 			ExecutionPath:        cfg.executionPath,
 			BenchmarkEngine:      cfg.benchmarkEngine,
+			DocumentFormat:       cfg.documentFormat,
 			StoragePolicy:        cfg.storagePolicy,
 			PagerChunkSize:       cfg.pagerChunkSize,
 			PagerSyncConcurrency: cfg.pagerSyncConcurrency,
@@ -265,6 +271,7 @@ func buildReport(cfg config) (*report, error) {
 		Status:               "ok",
 		ExecutionPath:        cfg.executionPath,
 		BenchmarkEngine:      cfg.benchmarkEngine,
+		DocumentFormat:       cfg.documentFormat,
 		StoragePolicy:        cfg.storagePolicy,
 		PagerChunkSize:       cfg.pagerChunkSize,
 		PagerSyncConcurrency: cfg.pagerSyncConcurrency,
@@ -511,6 +518,9 @@ func renderMarkdown(rep *report) string {
 	}
 	if rep.BenchmarkEngine != "" {
 		sb.WriteString(fmt.Sprintf("- benchmark engine: `%s`\n", rep.BenchmarkEngine))
+	}
+	if rep.DocumentFormat != "" {
+		sb.WriteString(fmt.Sprintf("- document format: `%s`\n", rep.DocumentFormat))
 	}
 	if rep.StoragePolicy != "" {
 		sb.WriteString(fmt.Sprintf("- storage policy: `%s`\n", rep.StoragePolicy))

@@ -71,6 +71,7 @@ func TestBuildReportAndRenderMarkdown(t *testing.T) {
 		`{"Action":"output","Output":"BenchmarkCollectionInsertBatchWithSecondaryIndexes-12\t700\t3200 ns/op\t256 B/op\t7 allocs/op\t8000 target_docs/batch\t0 per_item_key_probe_fallback_count\t0 per_item_prefix_probe_fallback_count\n"}`,
 		`{"Action":"output","Output":"BenchmarkCollectionInsertBatchCheckpointWithSecondaryIndexes-12\t500\t8000 ns/op\t260 B/op\t8 allocs/op\t8000 target_docs/checkpoint\t2500 insert_ns/doc\t5500 sync_ns/doc\t0 per_item_key_probe_fallback_count\t0 per_item_prefix_probe_fallback_count\n"}`,
 		`{"Action":"output","Output":"BenchmarkSQLiteInsertBatchWithSecondaryIndexes-12\t650\t3500 ns/op\t300 B/op\t9 allocs/op\t8000 target_docs/batch\n"}`,
+		`{"Action":"output","Output":"BenchmarkCollectionOverheadIndexStateTemplateV1Extraction-12\t1200\t250 ns/op\t144 B/op\t3 allocs/op\n"}`,
 		`{"Action":"output","Output":"BenchmarkSecondaryLookupNonUnique-12\t5000\t450 ns/op\t96 B/op\t2 allocs/op\n"}`,
 		`{"Action":"output","Output":"BenchmarkCollectionDeleteWithSecondaryIndexes-12\t"}`,
 		`{"Action":"output","Output":"123\t9000 ns/op\t512 B/op\t8 allocs/op\n"}`,
@@ -81,7 +82,7 @@ func TestBuildReportAndRenderMarkdown(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parseBenchmarkSamples: %v", err)
 	}
-	if got, want := len(samples), 7; got != want {
+	if got, want := len(samples), 8; got != want {
 		t.Fatalf("len(samples)=%d want %d", got, want)
 	}
 
@@ -113,6 +114,7 @@ func TestBuildReportAndRenderMarkdown(t *testing.T) {
 		Status:               "ok",
 		ExecutionPath:        "oracle",
 		BenchmarkEngine:      "cached",
+		DocumentFormat:       "json",
 		StoragePolicy:        "data_outer=true,index_outer=false",
 		PagerChunkSize:       "profile/default",
 		PagerSyncConcurrency: "profile/default",
@@ -129,6 +131,9 @@ func TestBuildReportAndRenderMarkdown(t *testing.T) {
 	}
 	if !strings.Contains(md, "- worktree: `/tmp/oracle`") {
 		t.Fatalf("markdown missing worktree:\n%s", md)
+	}
+	if !strings.Contains(md, "- document format: `json`") {
+		t.Fatalf("markdown missing document format:\n%s", md)
 	}
 	if !strings.Contains(md, "- collection batch size: `8000`") {
 		t.Fatalf("markdown missing collection batch size:\n%s", md)
@@ -165,6 +170,9 @@ func TestBuildReportAndRenderMarkdown(t *testing.T) {
 	}
 	if !strings.Contains(md, "`BenchmarkSQLiteInsertBatchWithSecondaryIndexes`") {
 		t.Fatalf("markdown missing sqlite benchmark row:\n%s", md)
+	}
+	if !strings.Contains(md, "`BenchmarkCollectionOverheadIndexStateTemplateV1Extraction`") {
+		t.Fatalf("markdown missing template-v1 overhead benchmark row:\n%s", md)
 	}
 }
 
@@ -204,6 +212,7 @@ func TestBuildReportUnavailable(t *testing.T) {
 		worktree:          "/tmp/native",
 		executionPath:     "native-fastpath",
 		benchmarkEngine:   "cached",
+		documentFormat:    "template-v1",
 		unavailableReason: "N/A before R0 harness bring-up",
 	})
 	if err != nil {
@@ -214,6 +223,9 @@ func TestBuildReportUnavailable(t *testing.T) {
 	}
 	if got, want := rep.UnavailableReason, "N/A before R0 harness bring-up"; got != want {
 		t.Fatalf("unavailableReason=%q want %q", got, want)
+	}
+	if got, want := rep.DocumentFormat, "template-v1"; got != want {
+		t.Fatalf("documentFormat=%q want %q", got, want)
 	}
 	if rep.Sections == nil {
 		t.Fatal("unavailable report sections should be an empty slice, not nil")

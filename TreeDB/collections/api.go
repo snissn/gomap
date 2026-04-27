@@ -47,6 +47,10 @@ func backendRootStoragePolicy(policy RootStoragePolicy) (backenddb.OrderedRootSt
 }
 
 func collectionPlannerOptions(meta CollectionMeta) (collectionOptions, error) {
+	documentFormat, err := normalizeDocumentFormat(meta.Options.DocumentFormat)
+	if err != nil {
+		return collectionOptions{}, err
+	}
 	dataPolicy, err := backendRootStoragePolicy(meta.Options.DataRootStoragePolicy)
 	if err != nil {
 		return collectionOptions{}, err
@@ -57,6 +61,7 @@ func collectionPlannerOptions(meta CollectionMeta) (collectionOptions, error) {
 	}
 	return collectionOptions{
 		allowArrayValuesInIndex: meta.Options.AllowArrayValuesInIndex,
+		documentFormat:          documentFormat,
 		dataStoragePolicy:       dataPolicy,
 		indexStateStoragePolicy: indexStatePolicy,
 	}, nil
@@ -86,8 +91,17 @@ const (
 	RootStorageCompressed RootStoragePolicy = "compressed"
 )
 
+type DocumentFormat string
+
+const (
+	DocumentFormatDefault    DocumentFormat = ""
+	DocumentFormatJSON       DocumentFormat = "json"
+	DocumentFormatTemplateV1 DocumentFormat = "template-v1"
+)
+
 type CollectionOptions struct {
 	AllowArrayValuesInIndex bool              `json:"allow_array_values_in_index,omitempty"`
+	DocumentFormat          DocumentFormat    `json:"document_format,omitempty"`
 	DataRootStoragePolicy   RootStoragePolicy `json:"data_root_storage_policy,omitempty"`
 	IndexStateStoragePolicy RootStoragePolicy `json:"index_state_storage_policy,omitempty"`
 }
@@ -341,6 +355,7 @@ func (c *Collection) CreateIndex(def IndexDefinition) (*CollectionMeta, error) {
 		_ = snap.Close()
 		return nil, err
 	}
+	baseOptions = collectionOptionsWithTemplateV1Resolver(baseOptions, snap, catalog)
 	newMeta, normalizedDef, err := addIndexToCollectionMeta(baseMeta, def)
 	if err != nil {
 		_ = snap.Close()
@@ -447,7 +462,7 @@ func (c *Collection) insertOneNoIndexBuffered(id, document []byte) ([]byte, erro
 		domain.mu.Unlock()
 		return nil, err
 	}
-	if indexed {
+	if indexed || plannerOptions.documentFormat != DocumentFormatJSON {
 		domain.mu.Unlock()
 		return c.insertOneViaBatch(id, document)
 	}
@@ -694,6 +709,7 @@ func (c *Collection) insertOneNoIndex(id, document []byte) ([]byte, error) {
 		_ = snap.Close()
 		return nil, err
 	}
+	plannerOptions = collectionOptionsWithTemplateV1Resolver(plannerOptions, snap, catalog)
 	baseSystemRoot := snapshotSystemRoot(snap)
 
 	rootName := collectionPrimaryRootName(c.meta.Name)
@@ -777,15 +793,17 @@ func (c *Collection) InsertBatch(ids, documents [][]byte) ([][]byte, error) {
 		_ = snap.Close()
 		return nil, err
 	}
+	plannerOptions = collectionOptionsWithTemplateV1Resolver(plannerOptions, snap, catalog)
 	baseSystemRoot := snapshotSystemRoot(snap)
 
-	if len(c.meta.Indexes) == 0 {
+	if len(c.meta.Indexes) == 0 && plannerOptions.documentFormat == DocumentFormatJSON {
 		return c.insertBatchNoIndex(catalog, snap, baseSystemRoot, plannerOptions, ids, documents)
 	}
 
 	planner := insertBatchPlanner{
 		collection:     c.meta.Name,
 		primaryRoot:    collectionPrimaryRootName(c.meta.Name),
+		templateRoot:   collectionTemplateRootName(c.meta.Name),
 		indexStateRoot: collectionIndexStateRootName(c.meta.Name),
 		indexes:        plannerIndexes(c.meta.Indexes),
 		options:        plannerOptions,
@@ -965,6 +983,7 @@ func (c *Collection) Delete(documentID []byte) error {
 		_ = snap.Close()
 		return err
 	}
+	plannerOptions = collectionOptionsWithTemplateV1Resolver(plannerOptions, snap, catalog)
 	baseSystemRoot := snapshotSystemRoot(snap)
 
 	primaryRoot := catalog.rootID(collectionPrimaryRootName(c.meta.Name))
@@ -1833,6 +1852,15 @@ func normalizeCollectionMeta(meta CollectionMeta) (CollectionMeta, error) {
 	if _, err := backendRootStoragePolicy(meta.Options.IndexStateStoragePolicy); err != nil {
 		return CollectionMeta{}, err
 	}
+	documentFormat, err := normalizeDocumentFormat(meta.Options.DocumentFormat)
+	if err != nil {
+		return CollectionMeta{}, err
+	}
+	if documentFormat == DocumentFormatJSON {
+		meta.Options.DocumentFormat = DocumentFormatDefault
+	} else {
+		meta.Options.DocumentFormat = documentFormat
+	}
 	indexes := append([]IndexDefinition(nil), meta.Indexes...)
 	sort.SliceStable(indexes, func(i, j int) bool {
 		return indexes[i].Name < indexes[j].Name
@@ -1953,6 +1981,9 @@ func findIndex(indexes []IndexDefinition, name string) (IndexDefinition, bool) {
 
 func collectionRootNames(meta CollectionMeta) []string {
 	out := []string{collectionPrimaryRootName(meta.Name)}
+	if normalizedDocumentFormat(meta.Options.DocumentFormat) == DocumentFormatTemplateV1 {
+		out = append(out, collectionTemplateRootName(meta.Name))
+	}
 	if len(meta.Indexes) > 0 {
 		out = append(out, collectionIndexStateRootName(meta.Name))
 	}
@@ -1964,6 +1995,10 @@ func collectionRootNames(meta CollectionMeta) []string {
 
 func collectionPrimaryRootName(collection string) string {
 	return collection + "/primary"
+}
+
+func collectionTemplateRootName(collection string) string {
+	return collection + "/templates"
 }
 
 func collectionIndexStateRootName(collection string) string {
