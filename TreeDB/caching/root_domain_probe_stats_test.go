@@ -299,11 +299,11 @@ func TestRootDomainProbeStats_SnapshotHasManyAndHasPrefixes(t *testing.T) {
 		if got := statUint64(t, stats, statHasPrefixesNativeUnique); got != 2 {
 			t.Fatalf("native unique=%d want 2", got)
 		}
-		if got := statUint64(t, stats, statHasPrefixesFallbackCalls); got != 0 {
-			t.Fatalf("fallback calls=%d want 0", got)
+		if got := statUint64(t, stats, statHasPrefixesFallbackCalls); got != 1 {
+			t.Fatalf("fallback calls=%d want 1", got)
 		}
-		if got := statUint64(t, stats, statHasPrefixesFallbackUnique); got != 0 {
-			t.Fatalf("fallback unique=%d want 0", got)
+		if got := statUint64(t, stats, statHasPrefixesFallbackUnique); got != 1 {
+			t.Fatalf("fallback unique=%d want 1", got)
 		}
 	})
 }

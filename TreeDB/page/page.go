@@ -93,8 +93,11 @@ func CalculateChecksum(data []byte) uint32 {
 // prefix + zero-filled gap + suffix. The prefix must include the checksum field
 // at bytes 8-11, which is treated as zero.
 func CalculateChecksumWithZeroGap(prefix []byte, gapLen int, suffix []byte) uint32 {
-	if len(prefix) < PageHeaderSize || gapLen < 0 {
-		return 0
+	if len(prefix) < PageHeaderSize {
+		panic("page: checksum zero-gap prefix is shorter than page header")
+	}
+	if gapLen < 0 {
+		panic("page: checksum zero-gap length is negative")
 	}
 	sum := crc32.Update(0, crcTable, prefix[0:8])
 	sum = crc32.Update(sum, crcTable, checksumZeroField[:])

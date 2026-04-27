@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/yuin/goldmark"
+	"github.com/yuin/goldmark/extension"
 )
 
 type config struct {
@@ -226,7 +227,7 @@ func buildReport(cfg config) (*report, error) {
 			BenchPattern:        cfg.benchPattern,
 			Count:               cfg.count,
 			CollectionBatchSize: cfg.collectionBatchSize,
-			Sections:            nil,
+			Sections:            []reportSection{},
 		}, nil
 	}
 
@@ -681,7 +682,7 @@ func formatIntWithCommas(value int64) string {
 
 func markdownToHTMLDoc(markdown string) ([]byte, error) {
 	var body bytes.Buffer
-	md := goldmark.New()
+	md := goldmark.New(goldmark.WithExtensions(extension.GFM))
 	if err := md.Convert([]byte(markdown), &body); err != nil {
 		return nil, err
 	}

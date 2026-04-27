@@ -1399,6 +1399,9 @@ func (db *DB) HasMany(keys [][]byte) ([]bool, error) {
 	if err := db.ensureOpen(); err != nil {
 		return nil, err
 	}
+	if db.cached != nil {
+		return db.cached.HasMany(keys)
+	}
 	snap := db.AcquireSnapshot()
 	if snap == nil {
 		return nil, ErrClosed
@@ -1411,6 +1414,9 @@ func (db *DB) HasMany(keys [][]byte) ([]bool, error) {
 func (db *DB) HasPrefixes(prefixes [][]byte) ([]bool, error) {
 	if err := db.ensureOpen(); err != nil {
 		return nil, err
+	}
+	if db.cached != nil {
+		return db.cached.HasPrefixes(prefixes)
 	}
 	snap := db.AcquireSnapshot()
 	if snap == nil {
