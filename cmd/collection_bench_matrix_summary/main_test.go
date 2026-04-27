@@ -34,10 +34,22 @@ func TestMatrixSummaryRendersBenchmarkMetrics(t *testing.T) {
           }
         },
         {
+          "name": "BenchmarkCollectionOverheadIndexStateJSONExtraction",
+          "mean_ns_per_op": 1412.5,
+          "mean_bytes_per_op": 872,
+          "mean_allocs_per_op": 24
+        },
+        {
           "name": "BenchmarkCollectionOverheadPlanIndexedPrecomputedState",
           "mean_ns_per_op": 596.5,
           "mean_bytes_per_op": 398,
           "mean_allocs_per_op": 5
+        },
+        {
+          "name": "BenchmarkCollectionInsertBatchCheckpointWithSecondaryIndexes",
+          "mean_ns_per_op": 4250,
+          "mean_bytes_per_op": 2048,
+          "mean_allocs_per_op": 31
         }
       ]
     }
@@ -122,5 +134,55 @@ func TestMatrixSummaryFailsOnUnavailableReport(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), `status "unavailable"`) {
 		t.Fatalf("error=%q want unavailable status", err)
+	}
+}
+
+func TestMatrixSummaryFailsOnMissingExpectedBenchmark(t *testing.T) {
+	dir := t.TempDir()
+	cellDir := filepath.Join(dir, "production_fast_data_vlog_index_leaf")
+	if err := os.MkdirAll(cellDir, 0o755); err != nil {
+		t.Fatalf("mkdir cell: %v", err)
+	}
+	reportJSON := filepath.Join(cellDir, "collections_report.json")
+	reportMarkdown := filepath.Join(cellDir, "collections_report.md")
+	if err := os.WriteFile(reportMarkdown, []byte("# report\n"), 0o644); err != nil {
+		t.Fatalf("write report md: %v", err)
+	}
+	if err := os.WriteFile(reportJSON, []byte(`{
+  "status": "ok",
+  "sections": [
+    {
+      "benchmarks": [
+        {
+          "name": "BenchmarkCollectionInsertBatchWithSecondaryIndexes",
+          "mean_ns_per_op": 2812.5,
+          "mean_bytes_per_op": 1980,
+          "mean_allocs_per_op": 30
+        }
+      ]
+    }
+  ]
+}`), 0o644); err != nil {
+		t.Fatalf("write report json: %v", err)
+	}
+	indexPath := filepath.Join(dir, "matrix_index.tsv")
+	index := strings.Join([]string{
+		"cell\tengine\tdata_outer_leaves_in_vlog\tindex_outer_leaves_in_vlog\treport_md\treport_json\tcpu_profile\tmem_profile",
+		"production_fast_data_vlog_index_leaf\tproduction_fast\ttrue\tfalse\t" + reportMarkdown + "\t" + reportJSON + "\t/cpu.pprof\t/mem.pprof",
+		"",
+	}, "\n")
+	if err := os.WriteFile(indexPath, []byte(index), 0o644); err != nil {
+		t.Fatalf("write matrix index: %v", err)
+	}
+
+	err := run(config{matrixIndexPath: indexPath, outDir: dir})
+	if err == nil {
+		t.Fatal("run got nil error for missing expected benchmark")
+	}
+	if !strings.Contains(err.Error(), `missing benchmark "BenchmarkCollectionOverheadIndexStateJSONExtraction"`) {
+		t.Fatalf("error=%q want missing benchmark", err)
+	}
+	if !strings.Contains(err.Error(), reportJSON) {
+		t.Fatalf("error=%q want report path", err)
 	}
 }

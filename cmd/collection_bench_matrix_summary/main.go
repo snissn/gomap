@@ -180,7 +180,7 @@ func buildSummaryRows(rows []matrixRow) ([]summaryRow, error) {
 		for _, name := range benchmarkOrder {
 			benchmark, ok := benchmarks[name]
 			if !ok {
-				continue
+				return nil, fmt.Errorf("report %s missing benchmark %q for matrix cell %q", row.ReportJSONPath, name, row.Cell)
 			}
 			out = append(out, summaryRow{
 				matrixRow:       row,
