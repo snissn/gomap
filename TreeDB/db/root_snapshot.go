@@ -24,6 +24,30 @@ func (s *Snapshot) GetEntryAtRoot(rootID uint64, key []byte) (node.LeafEntry, er
 	return tr.GetEntry(key)
 }
 
+func (s *Snapshot) GetAtRoot(rootID uint64, key []byte) ([]byte, error) {
+	tr, err := s.treeAtRoot(rootID)
+	if err != nil {
+		return nil, err
+	}
+	return tr.Get(key)
+}
+
+func (s *Snapshot) GetAppendAtRoot(rootID uint64, key, dst []byte) ([]byte, error) {
+	tr, err := s.treeAtRoot(rootID)
+	if err != nil {
+		return dst, err
+	}
+	return tr.GetAppend(key, dst)
+}
+
+func (s *Snapshot) GetUnsafeAtRoot(rootID uint64, key []byte) ([]byte, error) {
+	tr, err := s.treeAtRoot(rootID)
+	if err != nil {
+		return nil, err
+	}
+	return tr.GetUnsafe(key)
+}
+
 func (s *Snapshot) IteratorAtRoot(rootID uint64, start, end []byte) (iterator.UnsafeIterator, error) {
 	return s.IteratorAtRootWithOptions(rootID, start, end, IteratorOptions{})
 }
