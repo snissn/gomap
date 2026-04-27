@@ -166,7 +166,7 @@ func (p insertBatchPlanner) planInsertBatchWithPreflight(ids, documents [][]byte
 	if err := preflight.checkDocumentConflicts(items, primaryOrder, resultIDs); err != nil {
 		return nil, err
 	}
-	uniqueProbeRuns, err := buildUniqueProbeRunsForPreflight(uniqueProbes, preflight)
+	uniqueProbeRuns, err := buildUniqueProbeRunsForPreflightFromSorted(uniqueProbes, preflight)
 	if err != nil {
 		return nil, err
 	}
@@ -192,11 +192,13 @@ func (p insertBatchPlanner) planInsertBatchWithPreflight(ids, documents [][]byte
 	return plan, nil
 }
 
-func (p insertBatchPreflight) checkDocumentConflicts(items []insertBatchItem, order []int, sortedIDs [][]byte) error {
+func (p insertBatchPreflight) checkDocumentConflicts(items []insertBatchItem, order []int, presortedIDs [][]byte) error {
 	if p.snapshot == nil || p.primaryRootID == 0 {
 		return nil
 	}
-	keys := sortedIDs
+	// sortedItemOrderByKey returns nil only when items are already sorted by ID,
+	// so the caller-owned presortedIDs slice is safe to reuse only in that case.
+	keys := presortedIDs
 	if order != nil || len(keys) != len(items) {
 		keys = make([][]byte, len(items))
 		for i := range items {
@@ -330,7 +332,7 @@ func buildUniqueProbeRuns(candidates []uniqueProbeCandidate) ([]collectionUnique
 	return buildUniqueProbeRunsFromSorted(candidates, nil)
 }
 
-func buildUniqueProbeRunsForPreflight(candidates []uniqueProbeCandidate, preflight insertBatchPreflight) ([]collectionUniqueProbeRun, error) {
+func buildUniqueProbeRunsForPreflightFromSorted(candidates []uniqueProbeCandidate, preflight insertBatchPreflight) ([]collectionUniqueProbeRun, error) {
 	if preflight.snapshot == nil || len(preflight.uniqueIndexRootIDs) == 0 {
 		return nil, nil
 	}
