@@ -706,6 +706,25 @@ func (m *AppendOnly) ApplyStealSortedBatchTrusted(entries []batchpkg.Entry, onKe
 	m.applyStealBatch(entries, onKey)
 }
 
+func (m *AppendOnly) ApplyStealEntryFunc(count int, emit func(i int) (key, value []byte, ptr page.ValuePtr, flags byte, err error)) error {
+	if count <= 0 {
+		return nil
+	}
+	if emit == nil {
+		return nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for i := 0; i < count; i++ {
+		key, value, ptr, flags, err := emit(i)
+		if err != nil {
+			return err
+		}
+		m.appendEntryLocked(key, value, ptr, flags, true, false)
+	}
+	return nil
+}
+
 func (m *AppendOnly) applyStealBatch(entries []batchpkg.Entry, onKey func(key []byte)) {
 	m.mu.Lock()
 	for i := range entries {

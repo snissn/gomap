@@ -378,14 +378,16 @@ func buildUniqueProbeRunsFromSorted(candidates []uniqueProbeCandidate, includeIn
 
 func (p insertBatchPlanner) emitPrimaryRun(plan *insertBatchPlan, items []insertBatchItem, order []int) error {
 	table := newCollectionRunTable(len(items))
-	for i := range items {
+	if err := applyCollectionRunEntries(table, len(items), func(i int) (key, value []byte, err error) {
 		idx := orderedItemIndex(order, i)
-		value, err := p.buildPrimaryVal(items[idx].id, items[idx].document)
+		value, err = p.buildPrimaryVal(items[idx].id, items[idx].document)
 		if err != nil {
-			return err
+			return nil, nil, err
 		}
 		plan.stats.payloadBuilds++
-		setCollectionRunValue(table, items[idx].id, value)
+		return items[idx].id, value, nil
+	}); err != nil {
+		return err
 	}
 	table.Freeze()
 	plan.runs = append(plan.runs, collectionRootRun{
@@ -401,16 +403,41 @@ func setCollectionRunValue(table memtable.Table, key, value []byte) {
 	table.SetEntrySteal(key, value, page.ValuePtr{}, node.FlagInline)
 }
 
-func (p insertBatchPlanner) emitIndexStateRun(plan *insertBatchPlan, items []insertBatchItem, runtimes []indexRuntime) error {
-	order := sortedItemOrderByKey(items, func(item *insertBatchItem) []byte { return item.id })
-	table := newCollectionRunTable(len(items))
-	for i := range items {
-		idx := orderedItemIndex(order, i)
-		raw, err := encodeRuntimeOrderedDocumentIndexState(items[idx].state, runtimes)
+func applyCollectionRunEntries(table memtable.Table, count int, emit func(i int) (key, value []byte, err error)) error {
+	if count <= 0 {
+		return nil
+	}
+	if appender, ok := table.(memtable.StealEntryFuncApplier); ok {
+		return appender.ApplyStealEntryFunc(count, func(i int) (key, value []byte, ptr page.ValuePtr, flags byte, err error) {
+			key, value, err = emit(i)
+			if err != nil {
+				return nil, nil, page.ValuePtr{}, 0, err
+			}
+			return key, value, page.ValuePtr{}, node.FlagInline, nil
+		})
+	}
+	for i := 0; i < count; i++ {
+		key, value, err := emit(i)
 		if err != nil {
 			return err
 		}
-		table.SetSteal(items[idx].id, raw)
+		setCollectionRunValue(table, key, value)
+	}
+	return nil
+}
+
+func (p insertBatchPlanner) emitIndexStateRun(plan *insertBatchPlan, items []insertBatchItem, runtimes []indexRuntime) error {
+	order := sortedItemOrderByKey(items, func(item *insertBatchItem) []byte { return item.id })
+	table := newCollectionRunTable(len(items))
+	if err := applyCollectionRunEntries(table, len(items), func(i int) (key, value []byte, err error) {
+		idx := orderedItemIndex(order, i)
+		raw, err := encodeRuntimeOrderedDocumentIndexState(items[idx].state, runtimes)
+		if err != nil {
+			return nil, nil, err
+		}
+		return items[idx].id, raw, nil
+	}); err != nil {
+		return err
 	}
 	table.Freeze()
 	plan.runs = append(plan.runs, collectionRootRun{
@@ -433,14 +460,23 @@ func (p insertBatchPlanner) emitSecondaryRuns(plan *insertBatchPlan, items []ins
 		}
 		if alreadySorted {
 			table := newCollectionRunTable(entryCount)
-			for i := range items {
-				for _, encoded := range items[i].state[runtime.def.name] {
-					key, err := indexEntryKey(encoded, items[i].id)
-					if err != nil {
-						return err
+			itemPos := 0
+			valuePos := 0
+			if err := applyCollectionRunEntries(table, entryCount, func(_ int) (key, value []byte, err error) {
+				for itemPos < len(items) {
+					values := items[itemPos].state[runtime.def.name]
+					if valuePos < len(values) {
+						encoded := values[valuePos]
+						valuePos++
+						key, err := indexEntryKey(encoded, items[itemPos].id)
+						return key, nil, err
 					}
-					table.SetSteal(key, nil)
+					itemPos++
+					valuePos = 0
 				}
+				return nil, nil, errors.New("collections: secondary index entry count mismatch")
+			}); err != nil {
+				return err
 			}
 			table.Freeze()
 			plan.runs = append(plan.runs, collectionRootRun{
@@ -470,8 +506,10 @@ func (p insertBatchPlanner) emitSecondaryRuns(plan *insertBatchPlan, items []ins
 			return bytes.Compare(keys[i], keys[j]) < 0
 		})
 		table := newCollectionRunTable(len(keys))
-		for _, key := range keys {
-			table.SetSteal(key, nil)
+		if err := applyCollectionRunEntries(table, len(keys), func(i int) (key, value []byte, err error) {
+			return keys[i], nil, nil
+		}); err != nil {
+			return err
 		}
 		table.Freeze()
 		plan.runs = append(plan.runs, collectionRootRun{
