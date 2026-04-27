@@ -57,6 +57,8 @@ var benchmarkOrder = []string{
 	"BenchmarkCollectionOverheadPlanIndexedPrecomputedState",
 	"BenchmarkCollectionInsertBatchWithSecondaryIndexes",
 	"BenchmarkCollectionInsertBatchCheckpointWithSecondaryIndexes",
+	"BenchmarkSQLiteInsertBatchWithSecondaryIndexes",
+	"BenchmarkSQLiteInsertBatchCheckpointWithSecondaryIndexes",
 }
 
 func main() {
@@ -177,7 +179,7 @@ func buildSummaryRows(rows []matrixRow) ([]summaryRow, error) {
 		if err != nil {
 			return nil, err
 		}
-		for _, name := range benchmarkOrder {
+		for _, name := range expectedBenchmarkNames(row) {
 			benchmark, ok := benchmarks[name]
 			if !ok {
 				return nil, fmt.Errorf("report %s missing benchmark %q for matrix cell %q", row.ReportJSONPath, name, row.Cell)
@@ -194,6 +196,27 @@ func buildSummaryRows(rows []matrixRow) ([]summaryRow, error) {
 		}
 	}
 	return out, nil
+}
+
+func expectedBenchmarkNames(row matrixRow) []string {
+	if isSQLiteMatrixRow(row) {
+		return []string{
+			"BenchmarkSQLiteInsertBatchWithSecondaryIndexes",
+			"BenchmarkSQLiteInsertBatchCheckpointWithSecondaryIndexes",
+		}
+	}
+	return []string{
+		"BenchmarkCollectionOverheadIndexStateJSONExtraction",
+		"BenchmarkCollectionOverheadPlanIndexedPrecomputedState",
+		"BenchmarkCollectionInsertBatchWithSecondaryIndexes",
+		"BenchmarkCollectionInsertBatchCheckpointWithSecondaryIndexes",
+	}
+}
+
+func isSQLiteMatrixRow(row matrixRow) bool {
+	// The matrix runner normalizes SQLite cells to the sqlite_* namespace even
+	// when TREEDB_COLLECTION_SQLITE_ENGINE uses a custom engine label.
+	return row.Cell == "sqlite" || strings.HasPrefix(row.Cell, "sqlite_") || strings.HasPrefix(row.Engine, "sqlite")
 }
 
 func loadBenchmarkReport(path string) (map[string]benchmarkAggregate, error) {

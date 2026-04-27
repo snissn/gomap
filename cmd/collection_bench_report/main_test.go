@@ -52,11 +52,24 @@ func TestParseFlagsRequiresExecutionPath(t *testing.T) {
 	}
 }
 
+func TestParseFlagsAllowsSQLiteExecutionPath(t *testing.T) {
+	t.Parallel()
+
+	if _, err := parseFlagsFrom([]string{
+		"-out-dir", t.TempDir(),
+		"-execution-path", "sqlite",
+		"-unavailable-reason", "sqlite comparison disabled",
+	}); err != nil {
+		t.Fatalf("sqlite execution path rejected: %v", err)
+	}
+}
+
 func TestBuildReportAndRenderMarkdown(t *testing.T) {
 	input := strings.NewReader(strings.Join([]string{
 		`{"Action":"output","Output":"BenchmarkCollectionInsertProvidedID-12\t1000\t2000 ns/op\t128 B/op\t4 allocs/op\n"}`,
 		`{"Action":"output","Output":"BenchmarkCollectionInsertProvidedID-12\t900\t2200 ns/op\t136 B/op\t5 allocs/op\n"}`,
 		`{"Action":"output","Output":"BenchmarkCollectionInsertBatchWithSecondaryIndexes-12\t700\t3200 ns/op\t256 B/op\t7 allocs/op\t8000 target_docs/batch\t0 per_item_key_probe_fallback_count\t0 per_item_prefix_probe_fallback_count\n"}`,
+		`{"Action":"output","Output":"BenchmarkSQLiteInsertBatchWithSecondaryIndexes-12\t650\t3500 ns/op\t300 B/op\t9 allocs/op\t8000 target_docs/batch\n"}`,
 		`{"Action":"output","Output":"BenchmarkSecondaryLookupNonUnique-12\t5000\t450 ns/op\t96 B/op\t2 allocs/op\n"}`,
 		`{"Action":"output","Output":"BenchmarkCollectionDeleteWithSecondaryIndexes-12\t"}`,
 		`{"Action":"output","Output":"123\t9000 ns/op\t512 B/op\t8 allocs/op\n"}`,
@@ -67,7 +80,7 @@ func TestBuildReportAndRenderMarkdown(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parseBenchmarkSamples: %v", err)
 	}
-	if got, want := len(samples), 5; got != want {
+	if got, want := len(samples), 6; got != want {
 		t.Fatalf("len(samples)=%d want %d", got, want)
 	}
 
@@ -127,6 +140,12 @@ func TestBuildReportAndRenderMarkdown(t *testing.T) {
 	}
 	if !strings.Contains(md, "`BenchmarkCollectionInsertBatchWithSecondaryIndexes`") {
 		t.Fatalf("markdown missing indexed batch benchmark row:\n%s", md)
+	}
+	if !strings.Contains(md, "## SQLite Comparison") {
+		t.Fatalf("markdown missing sqlite section:\n%s", md)
+	}
+	if !strings.Contains(md, "`BenchmarkSQLiteInsertBatchWithSecondaryIndexes`") {
+		t.Fatalf("markdown missing sqlite benchmark row:\n%s", md)
 	}
 }
 

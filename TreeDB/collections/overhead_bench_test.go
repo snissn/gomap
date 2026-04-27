@@ -1,7 +1,6 @@
 package collections
 
 import (
-	"bytes"
 	"fmt"
 	"os"
 	"strconv"
@@ -91,6 +90,24 @@ func overheadBenchIndexedPlanner() insertBatchPlanner {
 	}
 }
 
+func requireOverheadBenchIndexStateValues(b *testing.B, state orderedDocumentIndexState, runtimes []indexRuntime) {
+	b.Helper()
+	if len(state) != len(runtimes) {
+		b.Fatalf("index state len=%d want=%d", len(state), len(runtimes))
+	}
+	for runtimeIdx, runtime := range runtimes {
+		values := state.valuesAt(runtimeIdx)
+		if len(values) == 0 {
+			b.Fatalf("index %q extracted no values", runtime.def.name)
+		}
+		for valueIdx, value := range values {
+			if len(value) == 0 {
+				b.Fatalf("index %q value %d is empty", runtime.def.name, valueIdx)
+			}
+		}
+	}
+}
+
 func BenchmarkCollectionOverheadPlanNoIndex(b *testing.B) {
 	batchSize := overheadBenchBatchSize(b)
 	ids, docs := overheadBenchDocumentBatch(batchSize, false)
@@ -143,18 +160,23 @@ func BenchmarkCollectionOverheadIndexStateJSONExtraction(b *testing.B) {
 	if err != nil {
 		b.Fatalf("index runtimes: %v", err)
 	}
+	for _, doc := range docs {
+		state, err := orderedIndexStateForDocument(doc, runtimes, collectionOptions{})
+		if err != nil {
+			b.Fatalf("validate index extraction inputs: %v", err)
+		}
+		requireOverheadBenchIndexStateValues(b, state, runtimes)
+	}
 
 	b.ReportAllocs()
 	b.ReportMetric(float64(len(runtimes)), "indexes/doc")
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		state, err := indexStateForDocument(docs[i%batchSize], runtimes, collectionOptions{})
+		state, err := orderedIndexStateForDocument(docs[i%batchSize], runtimes, collectionOptions{})
 		if err != nil {
 			b.Fatalf("extract index state: %v", err)
 		}
-		if len(state) != len(runtimes) {
-			b.Fatalf("index state len=%d want=%d", len(state), len(runtimes))
-		}
+		_ = state
 	}
 }
 
@@ -166,12 +188,13 @@ func BenchmarkCollectionOverheadPlanIndexedPrecomputedState(b *testing.B) {
 	if err != nil {
 		b.Fatalf("index runtimes: %v", err)
 	}
-	states := make([]documentIndexState, len(docs))
+	states := make([]orderedDocumentIndexState, len(docs))
 	for i := range docs {
-		state, err := indexStateForDocument(docs[i], runtimes, collectionOptions{})
+		state, err := orderedIndexStateForDocument(docs[i], runtimes, collectionOptions{})
 		if err != nil {
 			b.Fatalf("precompute index state: %v", err)
 		}
+		requireOverheadBenchIndexStateValues(b, state, runtimes)
 		states[i] = state
 	}
 
@@ -194,7 +217,7 @@ func overheadBenchPlanIndexedPrecomputedState(
 	planner insertBatchPlanner,
 	runtimes []indexRuntime,
 	ids, documents [][]byte,
-	states []documentIndexState,
+	states []orderedDocumentIndexState,
 ) error {
 	if len(ids) != len(documents) || len(ids) != len(states) {
 		return fmt.Errorf("collections: precomputed batch length mismatch")
@@ -209,19 +232,18 @@ func overheadBenchPlanIndexedPrecomputedState(
 		planner.buildPrimaryVal = borrowPrimaryDocument
 	}
 
+	resultIDs, err := cloneBatchDocumentIDs(ids)
+	if err != nil {
+		return err
+	}
 	items := make([]insertBatchItem, len(documents))
-	resultIDs := make([][]byte, len(documents))
 	for i := range documents {
-		if len(ids[i]) == 0 {
-			return fmt.Errorf("collections: document id cannot be empty")
-		}
-		id := bytes.Clone(ids[i])
+		id := resultIDs[i]
 		items[i] = insertBatchItem{
 			id:       id,
 			document: documents[i],
 			state:    states[i],
 		}
-		resultIDs[i] = id
 	}
 
 	primaryOrder := sortedItemOrderByKey(items, func(item *insertBatchItem) []byte { return item.id })
@@ -230,11 +252,11 @@ func overheadBenchPlanIndexedPrecomputedState(
 	}
 	uniqueProbes := make([]uniqueProbeCandidate, 0, len(items))
 	for i := range items {
-		for _, runtime := range runtimes {
+		for runtimeIdx, runtime := range runtimes {
 			if !runtime.def.unique {
 				continue
 			}
-			for _, encoded := range items[i].state[runtime.def.name] {
+			for _, encoded := range items[i].state.valuesAt(runtimeIdx) {
 				uniqueProbes = append(uniqueProbes, uniqueProbeCandidate{
 					indexName:    runtime.def.name,
 					encodedValue: encoded,

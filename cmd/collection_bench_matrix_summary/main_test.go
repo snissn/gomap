@@ -57,10 +57,50 @@ func TestMatrixSummaryRendersBenchmarkMetrics(t *testing.T) {
 }`), 0o644); err != nil {
 		t.Fatalf("write report json: %v", err)
 	}
+	sqliteCell := "sqlite_wal_custom"
+	sqliteCellDir := filepath.Join(dir, sqliteCell)
+	if err := os.MkdirAll(sqliteCellDir, 0o755); err != nil {
+		t.Fatalf("mkdir sqlite cell: %v", err)
+	}
+	sqliteReportJSON := filepath.Join(sqliteCellDir, "collections_report.json")
+	sqliteReportMarkdown := filepath.Join(sqliteCellDir, "collections_report.md")
+	if err := os.WriteFile(sqliteReportMarkdown, []byte("# sqlite report\n"), 0o644); err != nil {
+		t.Fatalf("write sqlite report md: %v", err)
+	}
+	if err := os.WriteFile(sqliteReportJSON, []byte(`{
+  "status": "ok",
+  "sections": [
+    {
+      "benchmarks": [
+        {
+          "name": "BenchmarkSQLiteInsertBatchWithSecondaryIndexes",
+          "mean_ns_per_op": 4100,
+          "mean_bytes_per_op": 2048,
+          "mean_allocs_per_op": 32,
+          "mean_metrics": {
+            "target_docs/batch": 8000
+          }
+        },
+        {
+          "name": "BenchmarkSQLiteInsertBatchCheckpointWithSecondaryIndexes",
+          "mean_ns_per_op": 8200,
+          "mean_bytes_per_op": 4096,
+          "mean_allocs_per_op": 40,
+          "mean_metrics": {
+            "target_docs/batch": 8000
+          }
+        }
+      ]
+    }
+  ]
+}`), 0o644); err != nil {
+		t.Fatalf("write sqlite report json: %v", err)
+	}
 	indexPath := filepath.Join(dir, "matrix_index.tsv")
 	index := strings.Join([]string{
 		"cell\tengine\tdata_outer_leaves_in_vlog\tindex_outer_leaves_in_vlog\treport_md\treport_json\tcpu_profile\tmem_profile",
 		"production_fast_data_vlog_index_leaf\tproduction_fast\ttrue\tfalse\t" + reportMarkdown + "\t" + reportJSON + "\t/cpu.pprof\t/mem.pprof",
+		sqliteCell + "\twal_custom\t-\t-\t" + sqliteReportMarkdown + "\t" + sqliteReportJSON + "\t/sqlite-cpu.pprof\t/sqlite-mem.pprof",
 		"",
 	}, "\n")
 	if err := os.WriteFile(indexPath, []byte(index), 0o644); err != nil {
@@ -78,10 +118,12 @@ func TestMatrixSummaryRendersBenchmarkMetrics(t *testing.T) {
 	for _, want := range []string{
 		"`production_fast_data_vlog_index_leaf`",
 		"`BenchmarkCollectionInsertBatchWithSecondaryIndexes`",
+		"`BenchmarkSQLiteInsertBatchWithSecondaryIndexes`",
 		"2,812.5",
 		"30",
 		"0",
 		"[report](production_fast_data_vlog_index_leaf/collections_report.md)",
+		"[report](sqlite_wal_custom/collections_report.md)",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("markdown missing %q:\n%s", want, got)
@@ -94,6 +136,9 @@ func TestMatrixSummaryRendersBenchmarkMetrics(t *testing.T) {
 	gotTSV := string(tsv)
 	if !strings.Contains(gotTSV, "BenchmarkCollectionInsertBatchWithSecondaryIndexes\t2812.5\t1980\t30\t0\t0\t") {
 		t.Fatalf("tsv missing raw numeric row:\n%s", gotTSV)
+	}
+	if !strings.Contains(gotTSV, "BenchmarkSQLiteInsertBatchWithSecondaryIndexes\t4100\t2048\t32\t-\t-\t") {
+		t.Fatalf("tsv missing sqlite numeric row:\n%s", gotTSV)
 	}
 	if strings.Contains(gotTSV, "2,812") {
 		t.Fatalf("tsv should not contain comma-formatted numbers:\n%s", gotTSV)

@@ -1940,6 +1940,37 @@ func runRewriteQueueMaintenanceForTest(db *DB) {
 	})
 }
 
+func expireVlogGenerationRewritePenaltiesForTest(t *testing.T, db *DB, ids ...uint32) {
+	t.Helper()
+	db.vlogGenerationRewriteQueueMu.Lock()
+	defer db.vlogGenerationRewriteQueueMu.Unlock()
+	if err := db.loadVlogGenerationRewriteQueueLocked(); err != nil {
+		t.Fatalf("load rewrite penalties: %v", err)
+	}
+	expiredAt := time.Now().Add(-time.Second).UnixNano()
+	for _, id := range ids {
+		penalty, ok := db.vlogGenerationRewritePenalties[id]
+		if !ok {
+			t.Fatalf("rewrite penalty for segment %d missing", id)
+		}
+		penalty.CooldownUntilUnixNano = expiredAt
+		db.vlogGenerationRewritePenalties[id] = penalty
+	}
+	if err := saveValueLogGenerationRewriteState(
+		db.valueLogGenerationStatePath(),
+		append([]uint32(nil), db.vlogGenerationRewriteQueue...),
+		append([]backenddb.ValueLogRewritePlanSegment(nil), db.vlogGenerationRewriteLedger...),
+		append([]backenddb.ValueLogRewritePlanChunk(nil), db.vlogGenerationRewriteChunkLedger...),
+		db.vlogGenerationRewriteChunkBytes,
+		db.vlogGenerationRewriteHistory,
+		db.vlogGenerationRewritePenalties,
+		db.vlogGenerationRewriteStagePending,
+		db.vlogGenerationRewriteStageObservedUnixNano,
+	); err != nil {
+		t.Fatalf("persist expired rewrite penalties: %v", err)
+	}
+}
+
 func TestLeafGenerationPackMaintenance_RequiresExplicitEnv(t *testing.T) {
 	backend, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
@@ -4940,7 +4971,7 @@ func TestVlogGenerationRewriteQueue_FreshBypassThenExpiredRetryPrefersImprovedSt
 		t.Fatalf("queue after fresh bypass=%v want=%v", got, want)
 	}
 
-	time.Sleep(30 * time.Millisecond)
+	expireVlogGenerationRewritePenaltiesForTest(t, db, 11, 22)
 	db.vlogGenerationRewriteBudgetTokensBytes.Store(64)
 	db.vlogGenerationLastRewriteUnixNano.Store(time.Now().Add(-2 * vlogGenerationRewriteResumeMinInterval).UnixNano())
 	forceVlogMaintenanceIdle(db)
