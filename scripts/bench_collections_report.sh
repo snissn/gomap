@@ -19,9 +19,12 @@ if [[ "$PAGER_SYNC_CONCURRENCY" == "0" ]]; then
   PAGER_SYNC_CONCURRENCY=""
 fi
 PAGER_SYNC_CONCURRENCY_LABEL="${PAGER_SYNC_CONCURRENCY:-profile/default}"
+VLOG_DICT_TRAINER="$(printf '%s' "${TREEDB_COLLECTION_VLOG_DICT_TRAINER:-}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+VLOG_DICT_TRAINER_LABEL="${VLOG_DICT_TRAINER:-enabled}"
 if [[ "$DATA_OUTER" == "-" && "$INDEX_OUTER" == "-" ]]; then
   CHUNK_SIZE_LABEL="-"
   PAGER_SYNC_CONCURRENCY_LABEL="-"
+  VLOG_DICT_TRAINER_LABEL="-"
 fi
 GO_TEST_TAGS="${GO_TEST_TAGS:-}"
 TIMED_CPU_PROFILE="${TREEDB_COLLECTION_TIMED_CPU_PROFILE:-false}"
@@ -98,6 +101,7 @@ echo "collection batch size: $BATCH_SIZE"
 echo "storage policy: $STORAGE_POLICY_LABEL"
 echo "pager chunk size: $CHUNK_SIZE_LABEL"
 echo "pager sync concurrency: $PAGER_SYNC_CONCURRENCY_LABEL"
+echo "value-log dict trainer: $VLOG_DICT_TRAINER_LABEL"
 echo "execution path: $PATH_LABEL"
 echo "cpu profile mode: $(is_true "$TIMED_CPU_PROFILE" && echo "timed benchmark window" || echo "whole go test process")"
 if [[ -n "$GO_TEST_TAGS" ]]; then
@@ -121,12 +125,13 @@ if [[ ! -d "$ROOT/TreeDB/collections" ]]; then
     -storage-policy "$STORAGE_POLICY_LABEL" \
     -pager-chunk-size "$CHUNK_SIZE_LABEL" \
     -pager-sync-concurrency "$PAGER_SYNC_CONCURRENCY_LABEL" \
+    -vlog-dict-trainer "$VLOG_DICT_TRAINER_LABEL" \
     -collection-batch-size "$BATCH_SIZE" \
     -bench-pattern "$BENCH_REGEX" \
     -count "$COUNT" \
     -unavailable-reason "N/A before R0 harness bring-up"
 else
-  TREEDB_COLLECTION_BENCH_ENGINE="$BENCH_ENGINE" TREEDB_COLLECTION_BENCH_BATCH_SIZE="$BATCH_SIZE" TREEDB_COLLECTION_DATA_OUTER_LEAVES_IN_VLOG="$DATA_OUTER" TREEDB_COLLECTION_INDEX_OUTER_LEAVES_IN_VLOG="$INDEX_OUTER" TREEDB_COLLECTION_CHUNK_SIZE="$CHUNK_SIZE" TREEDB_COLLECTION_PAGER_SYNC_CONCURRENCY="$PAGER_SYNC_CONCURRENCY" GOWORK=off "${cmd[@]}" | tee "$RAW_JSON"
+  TREEDB_COLLECTION_BENCH_ENGINE="$BENCH_ENGINE" TREEDB_COLLECTION_BENCH_BATCH_SIZE="$BATCH_SIZE" TREEDB_COLLECTION_DATA_OUTER_LEAVES_IN_VLOG="$DATA_OUTER" TREEDB_COLLECTION_INDEX_OUTER_LEAVES_IN_VLOG="$INDEX_OUTER" TREEDB_COLLECTION_CHUNK_SIZE="$CHUNK_SIZE" TREEDB_COLLECTION_PAGER_SYNC_CONCURRENCY="$PAGER_SYNC_CONCURRENCY" TREEDB_COLLECTION_VLOG_DICT_TRAINER="$VLOG_DICT_TRAINER" GOWORK=off "${cmd[@]}" | tee "$RAW_JSON"
 
   if is_true "$TIMED_CPU_PROFILE" && [[ ! -s "$CPU_PROFILE" ]]; then
     echo "timed CPU profile was requested but no profile was written to $CPU_PROFILE; use a timed-profile benchmark" >&2
@@ -147,6 +152,7 @@ else
     -storage-policy "$STORAGE_POLICY_LABEL" \
     -pager-chunk-size "$CHUNK_SIZE_LABEL" \
     -pager-sync-concurrency "$PAGER_SYNC_CONCURRENCY_LABEL" \
+    -vlog-dict-trainer "$VLOG_DICT_TRAINER_LABEL" \
     -collection-batch-size "$BATCH_SIZE" \
     -bench-pattern "$BENCH_REGEX" \
     -count "$COUNT"
@@ -187,6 +193,7 @@ cat >"$OUT_DIR/README.md" <<EOF
 - storage policy: \`$STORAGE_POLICY_LABEL\`
 - pager chunk size: \`$CHUNK_SIZE_LABEL\`
 - pager sync concurrency: \`$PAGER_SYNC_CONCURRENCY_LABEL\`
+- value-log dict trainer: \`$VLOG_DICT_TRAINER_LABEL\`
 - collection batch size: \`$BATCH_SIZE\`
 - benchmark regex: \`$BENCH_REGEX\`
 - benchmark count: \`$COUNT\`
@@ -202,6 +209,7 @@ $ARTIFACT_LINES
 - index-root outer-leaf override: \`TREEDB_COLLECTION_INDEX_OUTER_LEAVES_IN_VLOG=true scripts/bench_collections_report.sh\`
 - pager chunk size override: \`TREEDB_COLLECTION_CHUNK_SIZE=65536 scripts/bench_collections_report.sh\`
 - pager sync concurrency override: \`TREEDB_COLLECTION_PAGER_SYNC_CONCURRENCY=4 scripts/bench_collections_report.sh\`
+- value-log dict trainer override: \`TREEDB_COLLECTION_VLOG_DICT_TRAINER=disabled scripts/bench_collections_report.sh\`
 - batch-size override: \`TREEDB_COLLECTION_BENCH_BATCH_SIZE=8000 scripts/bench_collections_report.sh\`
 - oracle-path override: \`TREEDB_COLLECTION_PATH_LABEL=oracle scripts/bench_collections_report.sh\`
 - production matrix runner: \`TREEDB_COLLECTION_PATH_LABEL=native-fastpath scripts/bench_collections_matrix.sh\`

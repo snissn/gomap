@@ -54,6 +54,30 @@ func benchmarkTreeDBProfile(b *testing.B) treedb.Profile {
 	}
 }
 
+func benchmarkValueLogDictTrainerMode(tb testing.TB) string {
+	tb.Helper()
+
+	raw := strings.ToLower(strings.TrimSpace(os.Getenv("TREEDB_COLLECTION_VLOG_DICT_TRAINER")))
+	switch raw {
+	case "", "default", "profile/default", "enabled", "on", "true", "1":
+		return "enabled"
+	case "disabled", "off", "false", "0":
+		return "disabled"
+	default:
+		tb.Fatalf("unsupported TREEDB_COLLECTION_VLOG_DICT_TRAINER=%q", os.Getenv("TREEDB_COLLECTION_VLOG_DICT_TRAINER"))
+		return "enabled"
+	}
+}
+
+func applyBenchmarkValueLogDictTrainerMode(tb testing.TB, opts *treedb.Options) {
+	tb.Helper()
+
+	switch benchmarkValueLogDictTrainerMode(tb) {
+	case "disabled":
+		opts.ValueLog.DictTrain.TrainBytes = -1
+	}
+}
+
 func benchmarkBoolEnv(tb testing.TB, name string, def bool) bool {
 	tb.Helper()
 
@@ -185,11 +209,35 @@ func TestBenchmarkCollectionChunkSizeEnv(t *testing.T) {
 	}
 }
 
+func TestBenchmarkValueLogDictTrainerModeEnv(t *testing.T) {
+	t.Setenv("TREEDB_COLLECTION_VLOG_DICT_TRAINER", "")
+	if got := benchmarkValueLogDictTrainerMode(t); got != "enabled" {
+		t.Fatalf("default trainer mode=%q want enabled", got)
+	}
+	t.Setenv("TREEDB_COLLECTION_VLOG_DICT_TRAINER", "disabled")
+	if got := benchmarkValueLogDictTrainerMode(t); got != "disabled" {
+		t.Fatalf("disabled trainer mode=%q want disabled", got)
+	}
+}
+
+func TestApplyBenchmarkValueLogDictTrainerModeDisablesTraining(t *testing.T) {
+	opts := treedb.OptionsFor(treedb.ProfileFast, t.TempDir())
+	if opts.ValueLog.DictTrain.TrainBytes < 0 {
+		t.Fatalf("fast profile unexpectedly disables dict training: %d", opts.ValueLog.DictTrain.TrainBytes)
+	}
+	t.Setenv("TREEDB_COLLECTION_VLOG_DICT_TRAINER", "disabled")
+	applyBenchmarkValueLogDictTrainerMode(t, &opts)
+	if got := opts.ValueLog.DictTrain.TrainBytes; got != -1 {
+		t.Fatalf("DictTrain.TrainBytes=%d want -1", got)
+	}
+}
+
 func openBenchmarkBackend(b *testing.B, dir string) (*backenddb.DB, func() error) {
 	b.Helper()
 
 	dataOuter, indexOuter := benchmarkCollectionStoragePolicy(b)
 	opts := treedb.OptionsFor(benchmarkTreeDBProfile(b), dir)
+	applyBenchmarkValueLogDictTrainerMode(b, &opts)
 	opts.IndexOuterLeavesInValueLog = dataOuter || indexOuter
 	opts.IndexInternalBaseDelta = !opts.IndexOuterLeavesInValueLog
 	if chunkSize := benchmarkInt64Env(b, "TREEDB_COLLECTION_CHUNK_SIZE", 0); chunkSize > 0 {

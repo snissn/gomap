@@ -34,6 +34,7 @@ type config struct {
 	storagePolicy        string
 	pagerChunkSize       string
 	pagerSyncConcurrency string
+	vlogDictTrainer      string
 	collectionBatchSize  int
 	unavailableReason    string
 }
@@ -87,6 +88,7 @@ type report struct {
 	StoragePolicy        string          `json:"storage_policy,omitempty"`
 	PagerChunkSize       string          `json:"pager_chunk_size,omitempty"`
 	PagerSyncConcurrency string          `json:"pager_sync_concurrency,omitempty"`
+	VLogDictTrainer      string          `json:"vlog_dict_trainer,omitempty"`
 	Worktree             string          `json:"worktree,omitempty"`
 	Branch               string          `json:"branch,omitempty"`
 	Commit               string          `json:"commit,omitempty"`
@@ -195,6 +197,7 @@ func parseFlagsFrom(args []string) (config, error) {
 	fs.StringVar(&cfg.storagePolicy, "storage-policy", "", "Optional collection root storage-policy label to include in report metadata")
 	fs.StringVar(&cfg.pagerChunkSize, "pager-chunk-size", "", "Optional pager chunk size label to include in report metadata")
 	fs.StringVar(&cfg.pagerSyncConcurrency, "pager-sync-concurrency", "", "Optional pager sync concurrency label to include in report metadata")
+	fs.StringVar(&cfg.vlogDictTrainer, "vlog-dict-trainer", "", "Optional value-log dict trainer label to include in report metadata")
 	fs.IntVar(&cfg.collectionBatchSize, "collection-batch-size", 0, "Optional collection benchmark batch size to include in report metadata")
 	fs.StringVar(&cfg.unavailableReason, "unavailable-reason", "", "Emit an explicit unavailable report instead of parsing benchmark input")
 	if err := fs.Parse(args); err != nil {
@@ -233,6 +236,7 @@ func buildReport(cfg config) (*report, error) {
 			StoragePolicy:        cfg.storagePolicy,
 			PagerChunkSize:       cfg.pagerChunkSize,
 			PagerSyncConcurrency: cfg.pagerSyncConcurrency,
+			VLogDictTrainer:      cfg.vlogDictTrainer,
 			Worktree:             cfg.worktree,
 			Branch:               cfg.branch,
 			Commit:               cfg.commit,
@@ -268,6 +272,7 @@ func buildReport(cfg config) (*report, error) {
 		StoragePolicy:        cfg.storagePolicy,
 		PagerChunkSize:       cfg.pagerChunkSize,
 		PagerSyncConcurrency: cfg.pagerSyncConcurrency,
+		VLogDictTrainer:      cfg.vlogDictTrainer,
 		Worktree:             cfg.worktree,
 		Branch:               cfg.branch,
 		Commit:               cfg.commit,
@@ -520,6 +525,9 @@ func renderMarkdown(rep *report) string {
 	}
 	if rep.PagerSyncConcurrency != "" {
 		sb.WriteString(fmt.Sprintf("- pager sync concurrency: `%s`\n", rep.PagerSyncConcurrency))
+	}
+	if rep.VLogDictTrainer != "" {
+		sb.WriteString(fmt.Sprintf("- value-log dict trainer: `%s`\n", rep.VLogDictTrainer))
 	}
 	if rep.Worktree != "" {
 		sb.WriteString(fmt.Sprintf("- worktree: `%s`\n", rep.Worktree))

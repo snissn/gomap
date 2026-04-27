@@ -116,6 +116,7 @@ func TestBuildReportAndRenderMarkdown(t *testing.T) {
 		StoragePolicy:        "data_outer=true,index_outer=false",
 		PagerChunkSize:       "profile/default",
 		PagerSyncConcurrency: "profile/default",
+		VLogDictTrainer:      "enabled",
 		Worktree:             "/tmp/oracle",
 		Branch:               "pr/oracle",
 		Commit:               "deadbeef",
@@ -141,6 +142,9 @@ func TestBuildReportAndRenderMarkdown(t *testing.T) {
 	}
 	if !strings.Contains(md, "- pager sync concurrency: `profile/default`") {
 		t.Fatalf("markdown missing pager sync concurrency:\n%s", md)
+	}
+	if !strings.Contains(md, "- value-log dict trainer: `enabled`") {
+		t.Fatalf("markdown missing value-log dict trainer:\n%s", md)
 	}
 	if !strings.Contains(md, "## Document Path") {
 		t.Fatalf("markdown missing document section:\n%s", md)
