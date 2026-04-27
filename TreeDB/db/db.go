@@ -147,6 +147,10 @@ type DB struct {
 	bgErr        error
 	closeHooksMu sync.Mutex
 	closeHooks   []func() error
+	// closeHooksClosed is set when close hook draining begins. Close hooks run
+	// while writes are still available, so registrations after that point would
+	// otherwise be silently lost.
+	closeHooksClosed bool
 
 	leafGenerationLiveStatsMu        sync.RWMutex
 	leafGenerationLiveStatsCache     leafGenerationLiveStatsCache
@@ -1388,7 +1392,7 @@ func (db *DB) RegisterCloseHook(hook func() error) func() {
 		return func() {}
 	}
 	db.closeHooksMu.Lock()
-	if db.closing.Load() {
+	if db.closeHooksClosed || db.closing.Load() {
 		db.closeHooksMu.Unlock()
 		return func() {}
 	}
@@ -1416,6 +1420,11 @@ func (db *DB) RunCloseHooks() error {
 		return nil
 	}
 	db.closeHooksMu.Lock()
+	if db.closeHooksClosed {
+		db.closeHooksMu.Unlock()
+		return nil
+	}
+	db.closeHooksClosed = true
 	hooks := append([]func() error(nil), db.closeHooks...)
 	clear(db.closeHooks)
 	db.closeHooks = nil
