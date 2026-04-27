@@ -486,16 +486,20 @@ func (c *Collection) ensureWriteDomainLocked(domain *collectionWriteDomain) (*co
 	if domain == nil {
 		return nil, collectionOptions{}, false, errors.New("collections: missing write domain")
 	}
-	if domain.loaded && domain.count > 0 {
-		options, err := collectionPlannerOptions(domain.meta)
-		if err != nil {
-			return nil, collectionOptions{}, false, err
-		}
-		return domain.catalog, options, len(domain.meta.Indexes) > 0, nil
-	}
 	currentSystemRoot := uint64(0)
 	if state := c.db.State(); state != nil {
 		currentSystemRoot = state.SystemRootPageID
+	}
+	if domain.loaded && domain.count > 0 {
+		catalog, err := c.revalidateBufferedWriteDomainLocked(domain, currentSystemRoot)
+		if err != nil {
+			return nil, collectionOptions{}, false, err
+		}
+		options, err := collectionPlannerOptions(catalog.meta)
+		if err != nil {
+			return nil, collectionOptions{}, false, err
+		}
+		return catalog, options, len(catalog.meta.Indexes) > 0, nil
 	}
 	if domain.loaded && domain.count == 0 && domain.baseSystemRoot == currentSystemRoot {
 		options, err := collectionPlannerOptions(domain.meta)
@@ -535,6 +539,55 @@ func (c *Collection) ensureWriteDomainLocked(domain *collectionWriteDomain) (*co
 	return catalog, options, len(catalog.meta.Indexes) > 0, nil
 }
 
+func (c *Collection) revalidateBufferedWriteDomainLocked(domain *collectionWriteDomain, currentSystemRoot uint64) (*collectionCatalog, error) {
+	if c == nil || c.db == nil {
+		return nil, errors.New("collections: db is nil")
+	}
+	if domain == nil {
+		return nil, errors.New("collections: missing write domain")
+	}
+	if domain.catalog == nil {
+		return nil, errCollectionNotFound
+	}
+	if domain.baseSystemRoot == currentSystemRoot {
+		return domain.catalog, nil
+	}
+
+	snap := c.db.AcquireSnapshot()
+	if snap == nil {
+		return nil, backenddb.ErrClosed
+	}
+	catalog, err := loadCollectionCatalog(snap, domain.meta.Name)
+	baseSystemRoot := snapshotSystemRoot(snap)
+	_ = snap.Close()
+	if err != nil {
+		return nil, err
+	}
+	if catalog == nil {
+		return nil, errCollectionNotFound
+	}
+	if !sameCollectionMeta(catalog.meta, domain.meta) {
+		return nil, fmt.Errorf("collections: concurrent schema modification detected for %q", domain.meta.Name)
+	}
+
+	rootName := collectionPrimaryRootName(domain.meta.Name)
+	if rootID := catalog.rootID(rootName); rootID != domain.primaryRoot {
+		return nil, fmt.Errorf("collections: concurrent root modification detected for %q", domain.meta.Name)
+	}
+	options, err := collectionPlannerOptions(catalog.meta)
+	if err != nil {
+		return nil, err
+	}
+	domain.meta = catalog.meta
+	domain.catalog = catalog
+	domain.baseSystemRoot = baseSystemRoot
+	domain.primaryRoot = catalog.rootID(rootName)
+	domain.storagePolicy = options.dataStoragePolicy
+	c.meta = catalog.meta
+	c.rememberCatalogAtSystemRoot(baseSystemRoot, catalog)
+	return catalog, nil
+}
+
 func (c *Collection) persistedDocumentExists(rootID uint64, id []byte) (bool, error) {
 	snap := c.db.AcquireSnapshot()
 	if snap == nil {
@@ -566,7 +619,15 @@ func (c *Collection) flushBufferedNoIndexLocked(domain *collectionWriteDomain) e
 	if domain.catalog == nil {
 		return errCollectionNotFound
 	}
-	meta := domain.meta
+	currentSystemRoot := uint64(0)
+	if state := c.db.State(); state != nil {
+		currentSystemRoot = state.SystemRootPageID
+	}
+	catalog, err := c.revalidateBufferedWriteDomainLocked(domain, currentSystemRoot)
+	if err != nil {
+		return err
+	}
+	meta := catalog.meta
 	if len(meta.Indexes) > 0 {
 		return errors.New("collections: buffered no-index writes cannot be flushed into indexed schema")
 	}
@@ -592,16 +653,16 @@ func (c *Collection) flushBufferedNoIndexLocked(domain *collectionWriteDomain) e
 	if len(rootIDs) != 1 {
 		return errors.New("collections: ordered root publish returned unexpected root count")
 	}
-	catalog := cloneCatalogWithRootUpdates(domain.catalog, meta, []string{rootName}, rootIDs)
+	nextCatalog := cloneCatalogWithRootUpdates(domain.catalog, meta, []string{rootName}, rootIDs)
 	domain.loaded = true
 	domain.meta = meta
-	domain.catalog = catalog
+	domain.catalog = nextCatalog
 	domain.baseSystemRoot = newSystemRoot
 	domain.primaryRoot = rootIDs[0]
 	domain.table = newCollectionRunTable(0)
 	domain.count = 0
 	c.meta = meta
-	c.rememberCatalogAtSystemRoot(newSystemRoot, catalog)
+	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	resetCollectionRunTable(table)
 	return nil
 }
@@ -1129,6 +1190,7 @@ func buildCreateIndexBackfillPlan(
 	plan := &createIndexBackfillPlan{
 		baseRootIDs: make(map[string]uint64, 2),
 	}
+	plan.baseRootIDs[primaryRootName] = primaryRootID
 	if primaryRootID == 0 {
 		return plan, nil
 	}
@@ -1296,6 +1358,9 @@ func (c *Collection) buildRootDescriptorSystemDeltaIterator(expectedSystemRoot u
 		if catalog == nil {
 			return nil, errCollectionNotFound
 		}
+		if !sameCollectionMeta(catalog.meta, c.meta) {
+			return nil, fmt.Errorf("collections: concurrent schema modification detected for %q", c.meta.Name)
+		}
 		for _, rootName := range rootNames {
 			if got, want := catalog.rootID(rootName), baseRootIDs[rootName]; got != want {
 				return nil, fmt.Errorf("collections: concurrent root modification detected for %q", rootName)
@@ -1333,6 +1398,12 @@ func (c *Collection) buildSchemaAndRootDescriptorSystemIterator(
 	}
 	if !sameCollectionMeta(catalog.meta, baseMeta) {
 		return nil, fmt.Errorf("collections: concurrent schema modification detected for %q", baseMeta.Name)
+	}
+	primaryRootName := collectionPrimaryRootName(baseMeta.Name)
+	if baseRootID, ok := baseRootIDs[primaryRootName]; ok {
+		if got := catalog.rootID(primaryRootName); got != baseRootID {
+			return nil, fmt.Errorf("collections: concurrent root modification detected for %q", primaryRootName)
+		}
 	}
 	for _, rootName := range rootNames {
 		if got, want := catalog.rootID(rootName), baseRootIDs[rootName]; got != want {
@@ -1388,6 +1459,9 @@ func secondaryDeleteKeysForDocument(runtime indexRuntime, state documentIndexSta
 func (c *Collection) Get(documentID []byte) ([]byte, error) {
 	if c == nil {
 		return nil, errCollectionNil
+	}
+	if c.db == nil {
+		return nil, errors.New("collections: db is nil")
 	}
 	if len(documentID) == 0 {
 		return nil, errors.New("collections: document id cannot be empty")
