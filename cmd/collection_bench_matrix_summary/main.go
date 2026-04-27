@@ -28,8 +28,9 @@ type matrixRow struct {
 }
 
 type report struct {
-	Status   string `json:"status"`
-	Sections []struct {
+	Status              string `json:"status"`
+	CollectionBatchSize int    `json:"collection_batch_size,omitempty"`
+	Sections            []struct {
 		Benchmarks []benchmarkAggregate `json:"benchmarks"`
 	} `json:"sections"`
 }
@@ -44,12 +45,26 @@ type benchmarkAggregate struct {
 
 type summaryRow struct {
 	matrixRow
-	Benchmark       string
-	NsPerOp         float64
-	BytesPerOp      float64
-	AllocsPerOp     float64
-	KeyFallbacks    *float64
-	PrefixFallbacks *float64
+	Benchmark           string
+	NsPerOp             float64
+	BytesPerOp          float64
+	AllocsPerOp         float64
+	CollectionBatchSize int
+	KeyFallbacks        *float64
+	PrefixFallbacks     *float64
+}
+
+type loadedReport struct {
+	CollectionBatchSize int
+	Benchmarks          map[string]benchmarkAggregate
+}
+
+type userStoryRow struct {
+	summaryRow
+	Story      string
+	DocsPerSec float64
+	MSPerBatch float64
+	BatchesSec float64
 }
 
 var benchmarkOrder = []string{
@@ -107,6 +122,10 @@ func run(cfg config) error {
 	if err := os.WriteFile(tsvPath, []byte(renderTSV(summaryRows)), 0o644); err != nil {
 		return fmt.Errorf("write tsv: %w", err)
 	}
+	userStoryPath := filepath.Join(cfg.outDir, "collections_user_story_summary.tsv")
+	if err := os.WriteFile(userStoryPath, []byte(renderUserStoryTSV(buildUserStoryRows(summaryRows))), 0o644); err != nil {
+		return fmt.Errorf("write user story tsv: %w", err)
+	}
 	mdPath := filepath.Join(cfg.outDir, "collections_matrix_summary.md")
 	md, err := renderMarkdown(summaryRows, cfg.outDir)
 	if err != nil {
@@ -116,6 +135,7 @@ func run(cfg config) error {
 		return fmt.Errorf("write markdown: %w", err)
 	}
 	fmt.Printf("wrote matrix summary tsv: %s\n", tsvPath)
+	fmt.Printf("wrote user story tsv:     %s\n", userStoryPath)
 	fmt.Printf("wrote matrix summary md:  %s\n", mdPath)
 	return nil
 }
@@ -175,23 +195,24 @@ func field(record []string, idx int) string {
 func buildSummaryRows(rows []matrixRow) ([]summaryRow, error) {
 	out := make([]summaryRow, 0, len(rows)*len(benchmarkOrder))
 	for _, row := range rows {
-		benchmarks, err := loadBenchmarkReport(row.ReportJSONPath)
+		report, err := loadBenchmarkReport(row.ReportJSONPath)
 		if err != nil {
 			return nil, err
 		}
 		for _, name := range expectedBenchmarkNames(row) {
-			benchmark, ok := benchmarks[name]
+			benchmark, ok := report.Benchmarks[name]
 			if !ok {
 				return nil, fmt.Errorf("report %s missing benchmark %q for matrix cell %q", row.ReportJSONPath, name, row.Cell)
 			}
 			out = append(out, summaryRow{
-				matrixRow:       row,
-				Benchmark:       name,
-				NsPerOp:         benchmark.MeanNsPerOp,
-				BytesPerOp:      benchmark.MeanBytesPerOp,
-				AllocsPerOp:     benchmark.MeanAllocsPerOp,
-				KeyFallbacks:    metricPtr(benchmark.MeanMetrics, "per_item_key_probe_fallback_count"),
-				PrefixFallbacks: metricPtr(benchmark.MeanMetrics, "per_item_prefix_probe_fallback_count"),
+				matrixRow:           row,
+				Benchmark:           name,
+				NsPerOp:             benchmark.MeanNsPerOp,
+				BytesPerOp:          benchmark.MeanBytesPerOp,
+				AllocsPerOp:         benchmark.MeanAllocsPerOp,
+				CollectionBatchSize: report.CollectionBatchSize,
+				KeyFallbacks:        metricPtr(benchmark.MeanMetrics, "per_item_key_probe_fallback_count"),
+				PrefixFallbacks:     metricPtr(benchmark.MeanMetrics, "per_item_prefix_probe_fallback_count"),
 			})
 		}
 	}
@@ -219,17 +240,17 @@ func isSQLiteMatrixRow(row matrixRow) bool {
 	return row.Cell == "sqlite" || strings.HasPrefix(row.Cell, "sqlite_") || strings.HasPrefix(row.Engine, "sqlite")
 }
 
-func loadBenchmarkReport(path string) (map[string]benchmarkAggregate, error) {
+func loadBenchmarkReport(path string) (loadedReport, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("read report %s: %w", path, err)
+		return loadedReport{}, fmt.Errorf("read report %s: %w", path, err)
 	}
 	var rep report
 	if err := json.Unmarshal(raw, &rep); err != nil {
-		return nil, fmt.Errorf("parse report %s: %w", path, err)
+		return loadedReport{}, fmt.Errorf("parse report %s: %w", path, err)
 	}
 	if rep.Status != "ok" {
-		return nil, fmt.Errorf("report %s status %q; matrix summary requires ok reports", path, rep.Status)
+		return loadedReport{}, fmt.Errorf("report %s status %q; matrix summary requires ok reports", path, rep.Status)
 	}
 	out := make(map[string]benchmarkAggregate)
 	for _, section := range rep.Sections {
@@ -237,7 +258,7 @@ func loadBenchmarkReport(path string) (map[string]benchmarkAggregate, error) {
 			out[benchmark.Name] = benchmark
 		}
 	}
-	return out, nil
+	return loadedReport{CollectionBatchSize: rep.CollectionBatchSize, Benchmarks: out}, nil
 }
 
 func metricPtr(metrics map[string]float64, name string) *float64 {
@@ -278,6 +299,38 @@ func renderTSV(rows []summaryRow) string {
 	return sb.String()
 }
 
+func renderUserStoryTSV(rows []userStoryRow) string {
+	var sb strings.Builder
+	sb.WriteString("cell\tengine\tdata_outer_leaves_in_vlog\tindex_outer_leaves_in_vlog\tstory\tbenchmark\tdocs_per_batch\tdocs_per_sec\tms_per_batch\tbatches_per_sec\tns_per_doc\treport_md\n")
+	for _, row := range rows {
+		sb.WriteString(row.Cell)
+		sb.WriteByte('\t')
+		sb.WriteString(row.Engine)
+		sb.WriteByte('\t')
+		sb.WriteString(row.DataOuterLeavesInVLog)
+		sb.WriteByte('\t')
+		sb.WriteString(row.IndexOuterLeavesInVLog)
+		sb.WriteByte('\t')
+		sb.WriteString(row.Story)
+		sb.WriteByte('\t')
+		sb.WriteString(row.Benchmark)
+		sb.WriteByte('\t')
+		sb.WriteString(strconv.Itoa(row.CollectionBatchSize))
+		sb.WriteByte('\t')
+		sb.WriteString(formatTSVFloat(row.DocsPerSec))
+		sb.WriteByte('\t')
+		sb.WriteString(formatTSVFloat(row.MSPerBatch))
+		sb.WriteByte('\t')
+		sb.WriteString(formatTSVFloat(row.BatchesSec))
+		sb.WriteByte('\t')
+		sb.WriteString(formatTSVFloat(row.NsPerOp))
+		sb.WriteByte('\t')
+		sb.WriteString(row.ReportMarkdownPath)
+		sb.WriteByte('\n')
+	}
+	return sb.String()
+}
+
 func formatOptionalTSVFloat(value *float64) string {
 	if value == nil {
 		return "-"
@@ -295,13 +348,71 @@ func formatTSVFloat(value float64) string {
 func renderMarkdown(rows []summaryRow, outDir string) (string, error) {
 	var sb strings.Builder
 	sb.WriteString("# Collections Benchmark Matrix Summary\n\n")
+	userStoryRows := buildUserStoryRows(rows)
+	if len(userStoryRows) > 0 {
+		sb.WriteString("## User-Facing Throughput\n\n")
+		sb.WriteString("Batch benchmark ops are documents, so this section reports the indexed ingest story as docs/sec, batch latency, and batches/sec. Diagnostic JSON/planner rows are separated below.\n\n")
+		sb.WriteString("| Cell | Engine | Data vlog | Index vlog | Story | Docs/batch | Docs/sec | ms/batch | batches/sec | ns/doc | Report |\n")
+		sb.WriteString("| --- | --- | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: | --- |\n")
+		for _, row := range userStoryRows {
+			reportPath := relativeReportPath(outDir, row.ReportMarkdownPath)
+			sb.WriteString("| `")
+			sb.WriteString(escapeTableCell(row.Cell))
+			sb.WriteString("` | `")
+			sb.WriteString(escapeTableCell(row.Engine))
+			sb.WriteString("` | `")
+			sb.WriteString(escapeTableCell(row.DataOuterLeavesInVLog))
+			sb.WriteString("` | `")
+			sb.WriteString(escapeTableCell(row.IndexOuterLeavesInVLog))
+			sb.WriteString("` | ")
+			sb.WriteString(escapeTableCell(row.Story))
+			sb.WriteString(" | ")
+			sb.WriteString(formatIntWithCommas(int64(row.CollectionBatchSize)))
+			sb.WriteString(" | ")
+			sb.WriteString(formatThroughput(row.DocsPerSec))
+			sb.WriteString(" | ")
+			sb.WriteString(formatFloat(row.MSPerBatch))
+			sb.WriteString(" | ")
+			sb.WriteString(formatFloat(row.BatchesSec))
+			sb.WriteString(" | ")
+			sb.WriteString(formatFloat(row.NsPerOp))
+			sb.WriteString(" | [report](")
+			sb.WriteString(markdownLinkPath(reportPath))
+			sb.WriteString(") |\n")
+		}
+		sb.WriteString("\n")
+	}
+	diagnosticRows := buildDiagnosticRows(rows)
+	if len(diagnosticRows) > 0 {
+		sb.WriteString("## Diagnostic Rows\n\n")
+		sb.WriteString("These rows are not user stories. They isolate JSON/data extraction and non-JSON planner cost so future optimization can quarantine JSON work separately from TreeDB publish/index maintenance.\n\n")
+		sb.WriteString("| Cell | Engine | Diagnostic | ns/doc | B/doc | allocs/doc | Report |\n")
+		sb.WriteString("| --- | --- | --- | ---: | ---: | ---: | --- |\n")
+		for _, row := range diagnosticRows {
+			reportPath := relativeReportPath(outDir, row.ReportMarkdownPath)
+			sb.WriteString("| `")
+			sb.WriteString(escapeTableCell(row.Cell))
+			sb.WriteString("` | `")
+			sb.WriteString(escapeTableCell(row.Engine))
+			sb.WriteString("` | `")
+			sb.WriteString(escapeTableCell(row.Benchmark))
+			sb.WriteString("` | ")
+			sb.WriteString(formatFloat(row.NsPerOp))
+			sb.WriteString(" | ")
+			sb.WriteString(formatFloat(row.BytesPerOp))
+			sb.WriteString(" | ")
+			sb.WriteString(formatFloat(row.AllocsPerOp))
+			sb.WriteString(" | [report](")
+			sb.WriteString(markdownLinkPath(reportPath))
+			sb.WriteString(") |\n")
+		}
+		sb.WriteString("\n")
+	}
+	sb.WriteString("## Raw Matrix\n\n")
 	sb.WriteString("| Cell | Engine | Data vlog | Index vlog | Benchmark | ns/op | B/op | allocs/op | Key fallbacks | Prefix fallbacks | Report |\n")
 	sb.WriteString("| --- | --- | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: | --- |\n")
 	for _, row := range rows {
-		reportPath := row.ReportMarkdownPath
-		if rel, err := filepath.Rel(outDir, row.ReportMarkdownPath); err == nil {
-			reportPath = rel
-		}
+		reportPath := relativeReportPath(outDir, row.ReportMarkdownPath)
 		sb.WriteString("| `")
 		sb.WriteString(escapeTableCell(row.Cell))
 		sb.WriteString("` | `")
@@ -329,6 +440,63 @@ func renderMarkdown(rows []summaryRow, outDir string) (string, error) {
 	return sb.String(), nil
 }
 
+func relativeReportPath(outDir, reportPath string) string {
+	if rel, err := filepath.Rel(outDir, reportPath); err == nil {
+		return filepath.ToSlash(rel)
+	}
+	return filepath.ToSlash(reportPath)
+}
+
+func buildUserStoryRows(rows []summaryRow) []userStoryRow {
+	out := make([]userStoryRow, 0, len(rows))
+	for _, row := range rows {
+		story, ok := userStoryLabel(row.Benchmark)
+		if !ok || row.NsPerOp <= 0 || row.CollectionBatchSize <= 0 {
+			continue
+		}
+		batchSize := row.CollectionBatchSize
+		docsPerSec := 1e9 / row.NsPerOp
+		out = append(out, userStoryRow{
+			summaryRow: row,
+			Story:      story,
+			DocsPerSec: docsPerSec,
+			MSPerBatch: float64(batchSize) * row.NsPerOp / 1e6,
+			BatchesSec: docsPerSec / float64(batchSize),
+		})
+	}
+	return out
+}
+
+func userStoryLabel(benchmark string) (string, bool) {
+	switch benchmark {
+	case "BenchmarkCollectionInsertBatchWithSecondaryIndexes", "BenchmarkSQLiteInsertBatchWithSecondaryIndexes":
+		return "bulk indexed insert", true
+	case "BenchmarkCollectionInsertBatchCheckpointWithSecondaryIndexes", "BenchmarkSQLiteInsertBatchCheckpointWithSecondaryIndexes":
+		return "checkpointed indexed insert", true
+	default:
+		return "", false
+	}
+}
+
+func buildDiagnosticRows(rows []summaryRow) []summaryRow {
+	out := make([]summaryRow, 0, len(rows))
+	for _, row := range rows {
+		if isDiagnosticBenchmark(row.Benchmark) {
+			out = append(out, row)
+		}
+	}
+	return out
+}
+
+func isDiagnosticBenchmark(benchmark string) bool {
+	switch benchmark {
+	case "BenchmarkCollectionOverheadIndexStateJSONExtraction", "BenchmarkCollectionOverheadPlanIndexedPrecomputedState":
+		return true
+	default:
+		return false
+	}
+}
+
 func markdownLinkPath(path string) string {
 	return strings.ReplaceAll(path, " ", "%20")
 }
@@ -342,6 +510,13 @@ func formatOptionalFloat(value *float64) string {
 		return "-"
 	}
 	return formatFloat(*value)
+}
+
+func formatThroughput(value float64) string {
+	if math.IsNaN(value) || math.IsInf(value, 0) {
+		return "-"
+	}
+	return formatIntWithCommas(int64(math.Round(value)))
 }
 
 func formatFloat(value float64) string {

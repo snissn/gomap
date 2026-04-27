@@ -184,6 +184,7 @@ cat >"$SUMMARY_MD" <<EOF
 - matrix index: \`$INDEX_TSV\`
 - matrix summary markdown: \`$OUT_DIR/collections_matrix_summary.md\`
 - matrix summary tsv: \`$OUT_DIR/collections_matrix_summary.tsv\`
+- user-story throughput tsv: \`$OUT_DIR/collections_user_story_summary.tsv\`
 
 ## Cells
 
