@@ -35,6 +35,18 @@ func TestMatrixSummaryRendersBenchmarkMetrics(t *testing.T) {
           }
         },
         {
+          "name": "BenchmarkCollectionOverheadIndexStateJSONExtraction",
+          "mean_ns_per_op": 1412.5,
+          "mean_bytes_per_op": 872,
+          "mean_allocs_per_op": 24
+        },
+        {
+          "name": "BenchmarkCollectionOverheadPlanIndexedPrecomputedState",
+          "mean_ns_per_op": 596.5,
+          "mean_bytes_per_op": 398,
+          "mean_allocs_per_op": 5
+        },
+        {
           "name": "BenchmarkCollectionInsertBatchCheckpointWithSecondaryIndexes",
           "mean_ns_per_op": 8000,
           "mean_bytes_per_op": 2000,
@@ -46,19 +58,28 @@ func TestMatrixSummaryRendersBenchmarkMetrics(t *testing.T) {
             "per_item_key_probe_fallback_count": 0,
             "per_item_prefix_probe_fallback_count": 0
           }
-        },
-        {
-          "name": "BenchmarkCollectionOverheadPlanIndexedPrecomputedState",
-          "mean_ns_per_op": 596.5,
-          "mean_bytes_per_op": 398,
-          "mean_allocs_per_op": 5
-        },
-        {
-          "name": "BenchmarkCollectionOverheadIndexStateJSONExtraction",
-          "mean_ns_per_op": 1412.5,
-          "mean_bytes_per_op": 872,
-          "mean_allocs_per_op": 24
-        },
+        }
+      ]
+    }
+  ]
+}`), 0o644); err != nil {
+		t.Fatalf("write report json: %v", err)
+	}
+	sqliteCellDir := filepath.Join(dir, "sqlite_wal_normal")
+	if err := os.MkdirAll(sqliteCellDir, 0o755); err != nil {
+		t.Fatalf("mkdir sqlite cell: %v", err)
+	}
+	sqliteReportJSON := filepath.Join(sqliteCellDir, "collections_report.json")
+	sqliteReportMarkdown := filepath.Join(sqliteCellDir, "collections_report.md")
+	if err := os.WriteFile(sqliteReportMarkdown, []byte("# sqlite report\n"), 0o644); err != nil {
+		t.Fatalf("write sqlite report md: %v", err)
+	}
+	if err := os.WriteFile(sqliteReportJSON, []byte(`{
+  "status": "ok",
+  "collection_batch_size": 8000,
+  "sections": [
+    {
+      "benchmarks": [
         {
           "name": "BenchmarkSQLiteInsertBatchWithSecondaryIndexes",
           "mean_ns_per_op": 4100,
@@ -67,17 +88,27 @@ func TestMatrixSummaryRendersBenchmarkMetrics(t *testing.T) {
           "mean_metrics": {
             "target_docs/batch": 8000
           }
+        },
+        {
+          "name": "BenchmarkSQLiteInsertBatchCheckpointWithSecondaryIndexes",
+          "mean_ns_per_op": 8200,
+          "mean_bytes_per_op": 4096,
+          "mean_allocs_per_op": 40,
+          "mean_metrics": {
+            "target_docs/batch": 8000
+          }
         }
       ]
     }
   ]
 }`), 0o644); err != nil {
-		t.Fatalf("write report json: %v", err)
+		t.Fatalf("write sqlite report json: %v", err)
 	}
 	indexPath := filepath.Join(dir, "matrix_index.tsv")
 	index := strings.Join([]string{
 		"cell\tengine\tdata_outer_leaves_in_vlog\tindex_outer_leaves_in_vlog\treport_md\treport_json\tcpu_profile\tmem_profile",
 		"production_fast_data_vlog_index_leaf\tproduction_fast\ttrue\tfalse\t" + reportMarkdown + "\t" + reportJSON + "\t/cpu.pprof\t/mem.pprof",
+		"sqlite_wal_normal\tsqlite_wal_normal\t-\t-\t" + sqliteReportMarkdown + "\t" + sqliteReportJSON + "\t/sqlite-cpu.pprof\t/sqlite-mem.pprof",
 		"",
 	}, "\n")
 	if err := os.WriteFile(indexPath, []byte(index), 0o644); err != nil {
@@ -114,6 +145,7 @@ func TestMatrixSummaryRendersBenchmarkMetrics(t *testing.T) {
 		"30",
 		"0",
 		"[report](production_fast_data_vlog_index_leaf/collections_report.md)",
+		"[report](sqlite_wal_normal/collections_report.md)",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("markdown missing %q:\n%s", want, got)
@@ -129,6 +161,9 @@ func TestMatrixSummaryRendersBenchmarkMetrics(t *testing.T) {
 	}
 	if !strings.Contains(gotTSV, "BenchmarkCollectionInsertBatchCheckpointWithSecondaryIndexes\t8000\t2000\t30\t2500\t5500\t0\t0\t") {
 		t.Fatalf("tsv missing checkpoint split row:\n%s", gotTSV)
+	}
+	if !strings.Contains(gotTSV, "BenchmarkSQLiteInsertBatchWithSecondaryIndexes\t4100\t2048\t32\t-\t-\t") {
+		t.Fatalf("tsv missing sqlite numeric row:\n%s", gotTSV)
 	}
 	if strings.Contains(gotTSV, "2,812") {
 		t.Fatalf("tsv should not contain comma-formatted numbers:\n%s", gotTSV)
@@ -205,5 +240,55 @@ func TestMatrixSummaryFailsOnUnavailableReport(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), `status "unavailable"`) {
 		t.Fatalf("error=%q want unavailable status", err)
+	}
+}
+
+func TestMatrixSummaryFailsOnMissingExpectedBenchmark(t *testing.T) {
+	dir := t.TempDir()
+	cellDir := filepath.Join(dir, "production_fast_data_vlog_index_leaf")
+	if err := os.MkdirAll(cellDir, 0o755); err != nil {
+		t.Fatalf("mkdir cell: %v", err)
+	}
+	reportJSON := filepath.Join(cellDir, "collections_report.json")
+	reportMarkdown := filepath.Join(cellDir, "collections_report.md")
+	if err := os.WriteFile(reportMarkdown, []byte("# report\n"), 0o644); err != nil {
+		t.Fatalf("write report md: %v", err)
+	}
+	if err := os.WriteFile(reportJSON, []byte(`{
+  "status": "ok",
+  "sections": [
+    {
+      "benchmarks": [
+        {
+          "name": "BenchmarkCollectionInsertBatchWithSecondaryIndexes",
+          "mean_ns_per_op": 2812.5,
+          "mean_bytes_per_op": 1980,
+          "mean_allocs_per_op": 30
+        }
+      ]
+    }
+  ]
+}`), 0o644); err != nil {
+		t.Fatalf("write report json: %v", err)
+	}
+	indexPath := filepath.Join(dir, "matrix_index.tsv")
+	index := strings.Join([]string{
+		"cell\tengine\tdata_outer_leaves_in_vlog\tindex_outer_leaves_in_vlog\treport_md\treport_json\tcpu_profile\tmem_profile",
+		"production_fast_data_vlog_index_leaf\tproduction_fast\ttrue\tfalse\t" + reportMarkdown + "\t" + reportJSON + "\t/cpu.pprof\t/mem.pprof",
+		"",
+	}, "\n")
+	if err := os.WriteFile(indexPath, []byte(index), 0o644); err != nil {
+		t.Fatalf("write matrix index: %v", err)
+	}
+
+	err := run(config{matrixIndexPath: indexPath, outDir: dir})
+	if err == nil {
+		t.Fatal("run got nil error for missing expected benchmark")
+	}
+	if !strings.Contains(err.Error(), `missing benchmark "BenchmarkCollectionOverheadIndexStateJSONExtraction"`) {
+		t.Fatalf("error=%q want missing benchmark", err)
+	}
+	if !strings.Contains(err.Error(), reportJSON) {
+		t.Fatalf("error=%q want report path", err)
 	}
 }
