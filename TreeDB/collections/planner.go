@@ -28,6 +28,10 @@ const (
 	// value bytes, append growth preserves earlier slices and avoids a large
 	// upfront allocation.
 	indexEncodeArenaMaxInitialBytes = 4 << 20
+	// One-value index states share a planner-owned [][]byte backing array.
+	// 128K slice headers is enough for the current native benchmark batches
+	// while keeping speculative header memory around 3 MiB on 64-bit platforms.
+	indexEncodeArenaMaxInitialValueRefs = 128 << 10
 )
 
 type collectionRootKind uint8
@@ -801,12 +805,13 @@ func estimateBatchIndexValueRefCount(items []insertBatchItem, runtimeCount int) 
 	if len(items) == 0 || runtimeCount <= 0 {
 		return 0
 	}
-	total := len(items) * runtimeCount
-	const maxInitialRefs = 1 << 20
-	if total > maxInitialRefs {
-		return maxInitialRefs
+	if runtimeCount > indexEncodeArenaMaxInitialValueRefs {
+		return indexEncodeArenaMaxInitialValueRefs
 	}
-	return total
+	if len(items) > indexEncodeArenaMaxInitialValueRefs/runtimeCount {
+		return indexEncodeArenaMaxInitialValueRefs
+	}
+	return len(items) * runtimeCount
 }
 
 func documentIndexStateFromOrdered(state orderedDocumentIndexState, runtimes []indexRuntime) documentIndexState {
