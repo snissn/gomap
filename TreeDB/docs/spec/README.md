@@ -67,6 +67,28 @@ Given pre-alpha status, this is a living spec that tracks implementation.
 - `TreeDB/docs/spec/verification.md`
   - invariants mapped to tests and benchmark harnesses.
 
+## Design Proposals (Non-Normative)
+
+- `TreeDB/docs/spec/collections-native-fastpath-proposal.md`
+  - draft target architecture for rewriting the cached collections execution
+    path around native root domains, vectorized probes, and native grouped
+    publish.
+- `TreeDB/docs/spec/collections-native-fastpath-roadmap.md`
+  - draft implementation roadmap for the native cached collections rewrite,
+    including PR slices, acceptance criteria, and performance gates.
+- `TreeDB/docs/spec/collections-native-fastpath-execution-playbook.md`
+  - pre-execution operating guide for the rewrite, including frozen benchmark
+    inputs, artifact discipline, PR deliverables, and go/no-go checks.
+- `TreeDB/docs/spec/collections-native-fastpath-baseline-template.md`
+  - baseline capture template for freezing the main-based rewrite starting
+    point, benchmark commands, artifacts, and gate policy.
+- `TreeDB/docs/spec/collections-native-fastpath-pr-note-template.md`
+  - required PR note template for rewrite phases, including benchmark tables,
+    artifact references, and go/no-go decisions.
+- `TreeDB/docs/spec/collections-native-fastpath-baseline-2026-04-25.md`
+  - refreshed pre-`R0` baseline note for issue `#768`, including exact
+    main/oracle SHAs, artifact dirs, commands, and benchmark baselines.
+
 ## Relationship to Existing Docs
 
 The legacy TreeDB docs in `docs/TREEDB_*.md` remain useful supporting material.
