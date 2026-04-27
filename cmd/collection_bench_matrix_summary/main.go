@@ -206,7 +206,7 @@ func loadBenchmarkReport(path string) (map[string]benchmarkAggregate, error) {
 		return nil, fmt.Errorf("parse report %s: %w", path, err)
 	}
 	if rep.Status != "ok" {
-		return nil, nil
+		return nil, fmt.Errorf("report %s status %q; matrix summary requires ok reports", path, rep.Status)
 	}
 	out := make(map[string]benchmarkAggregate)
 	for _, section := range rep.Sections {
