@@ -101,6 +101,8 @@ var benchmarkSpecs = []benchmarkSpec{
 	{Name: "BenchmarkCollectionInsertWithSecondaryIndexes", Section: "Document Path", Description: "Insert documents while maintaining both unique and non-unique secondary indexes."},
 	{Name: "BenchmarkCollectionInsertBatchWithSecondaryIndexes", Section: "Batch Ingest Path", Description: "Batch insert documents while maintaining unique and non-unique secondary indexes; ops/sec is documents/sec."},
 	{Name: "BenchmarkCollectionInsertBatchCheckpointWithSecondaryIndexes", Section: "Batch Ingest Path", Description: "Batch insert indexed documents and force a sync boundary after each batch; ops/sec is documents/sec."},
+	{Name: "BenchmarkSQLiteInsertBatchWithSecondaryIndexes", Section: "SQLite Comparison", Description: "SQLite WAL/NORMAL batch insert using generated JSON columns plus unique and non-unique secondary indexes; ops/sec is documents/sec."},
+	{Name: "BenchmarkSQLiteInsertBatchCheckpointWithSecondaryIndexes", Section: "SQLite Comparison", Description: "SQLite WAL/NORMAL batch insert with an explicit WAL checkpoint after each batch; ops/sec is documents/sec."},
 	{Name: "BenchmarkCollectionDeleteWithSecondaryIndexes", Section: "Document Path", Description: "Delete documents while removing postings from unique and non-unique secondary indexes."},
 	{Name: "BenchmarkSecondaryLookupUnique", Section: "Secondary Index Path", Description: "Resolve a unique secondary index lookup to document IDs."},
 	{Name: "BenchmarkSecondaryLookupNonUnique", Section: "Secondary Index Path", Description: "Resolve a non-unique secondary index lookup that returns multiple document IDs."},
@@ -179,7 +181,7 @@ func parseFlagsFrom(args []string) (config, error) {
 	fs.StringVar(&cfg.branch, "branch", "", "Optional git branch name to include in report metadata")
 	fs.StringVar(&cfg.commit, "commit", "", "Optional git commit to include in report metadata")
 	fs.StringVar(&cfg.worktree, "worktree", "", "Optional worktree path to include in report metadata")
-	fs.StringVar(&cfg.executionPath, "execution-path", "", "Execution-path label (oracle|native-fastpath)")
+	fs.StringVar(&cfg.executionPath, "execution-path", "", "Execution-path label (oracle|native-fastpath|sqlite)")
 	fs.StringVar(&cfg.benchPattern, "bench-pattern", "", "Optional benchmark regex to include in report metadata")
 	fs.IntVar(&cfg.count, "count", 0, "Optional benchmark count to include in report metadata")
 	fs.StringVar(&cfg.benchmarkEngine, "benchmark-engine", "", "Optional benchmark engine label to include in report metadata")
@@ -205,10 +207,10 @@ func validateExecutionPath(path string) error {
 	if path == "" {
 		return fmt.Errorf("-execution-path is required; hidden or implied path labels are forbidden")
 	}
-	if path == "oracle" || path == "native-fastpath" {
+	if path == "oracle" || path == "native-fastpath" || path == "sqlite" {
 		return nil
 	}
-	return fmt.Errorf("-execution-path must be oracle or native-fastpath; mixed-path labels are forbidden (got %q)", path)
+	return fmt.Errorf("-execution-path must be oracle, native-fastpath, or sqlite; mixed-path labels are forbidden (got %q)", path)
 }
 
 func buildReport(cfg config) (*report, error) {
@@ -437,7 +439,7 @@ func aggregateSamples(samples []benchmarkSample) map[string]benchmarkAggregate {
 }
 
 func buildSections(aggregates map[string]benchmarkAggregate) []reportSection {
-	sectionOrder := []string{"Document Path", "Batch Ingest Path", "Secondary Index Path", "Overhead Breakdown", "Maintenance", "Other"}
+	sectionOrder := []string{"Document Path", "Batch Ingest Path", "SQLite Comparison", "Secondary Index Path", "Overhead Breakdown", "Maintenance", "Other"}
 	sections := make(map[string][]benchmarkAggregate, len(sectionOrder))
 	seen := make(map[string]struct{}, len(aggregates))
 

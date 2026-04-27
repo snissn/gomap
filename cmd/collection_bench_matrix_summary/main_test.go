@@ -38,6 +38,15 @@ func TestMatrixSummaryRendersBenchmarkMetrics(t *testing.T) {
           "mean_ns_per_op": 596.5,
           "mean_bytes_per_op": 398,
           "mean_allocs_per_op": 5
+        },
+        {
+          "name": "BenchmarkSQLiteInsertBatchWithSecondaryIndexes",
+          "mean_ns_per_op": 4100,
+          "mean_bytes_per_op": 2048,
+          "mean_allocs_per_op": 32,
+          "mean_metrics": {
+            "target_docs/batch": 8000
+          }
         }
       ]
     }
@@ -66,6 +75,7 @@ func TestMatrixSummaryRendersBenchmarkMetrics(t *testing.T) {
 	for _, want := range []string{
 		"`production_fast_data_vlog_index_leaf`",
 		"`BenchmarkCollectionInsertBatchWithSecondaryIndexes`",
+		"`BenchmarkSQLiteInsertBatchWithSecondaryIndexes`",
 		"2,812.5",
 		"30",
 		"0",

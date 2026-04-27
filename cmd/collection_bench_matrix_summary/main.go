@@ -57,6 +57,8 @@ var benchmarkOrder = []string{
 	"BenchmarkCollectionOverheadPlanIndexedPrecomputedState",
 	"BenchmarkCollectionInsertBatchWithSecondaryIndexes",
 	"BenchmarkCollectionInsertBatchCheckpointWithSecondaryIndexes",
+	"BenchmarkSQLiteInsertBatchWithSecondaryIndexes",
+	"BenchmarkSQLiteInsertBatchCheckpointWithSecondaryIndexes",
 }
 
 func main() {
