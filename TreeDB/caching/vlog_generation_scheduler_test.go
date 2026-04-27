@@ -4942,7 +4942,7 @@ func TestVlogGenerationRewriteQueue_FreshBypassThenExpiredRetryPrefersImprovedSt
 			{FileID: 11, BytesTotal: 128, BytesLive: 84, BytesStale: 44, StaleRatio: 44.0 / 128.0},
 			{FileID: 22, BytesTotal: 128, BytesLive: 104, BytesStale: 24, StaleRatio: 24.0 / 128.0},
 		},
-		time.Now().Add(20*time.Millisecond),
+		time.Now().Add(time.Minute),
 		0,
 	); err != nil {
 		t.Fatalf("record cooled penalties: %v", err)
