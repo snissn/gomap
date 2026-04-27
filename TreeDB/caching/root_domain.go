@@ -473,9 +473,9 @@ func (db *DB) publishInstalledRootSet(set *publishedRootSet) error {
 		db.mu.Unlock()
 		group.systemRootPageID = newSystemRootID
 		cloned.system.rootID = newSystemRootID
+		cloned.system.lookup = nil
 		group.system = rootDomainSnapshot{
 			publishedRootID: newSystemRootID,
-			published:       cloned.system.lookup,
 		}
 	}
 	if publisher, ok := db.backend.(backendOrderedRootPublisher); ok && !rootDomainSnapshotNeedsPublish(group.system) {
