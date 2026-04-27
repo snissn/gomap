@@ -90,6 +90,24 @@ func overheadBenchIndexedPlanner() insertBatchPlanner {
 	}
 }
 
+func requireOverheadBenchIndexStateValues(b *testing.B, state orderedDocumentIndexState, runtimes []indexRuntime) {
+	b.Helper()
+	if len(state) != len(runtimes) {
+		b.Fatalf("index state len=%d want=%d", len(state), len(runtimes))
+	}
+	for runtimeIdx, runtime := range runtimes {
+		values := state.valuesAt(runtimeIdx)
+		if len(values) == 0 {
+			b.Fatalf("index %q extracted no values", runtime.def.name)
+		}
+		for valueIdx, value := range values {
+			if len(value) == 0 {
+				b.Fatalf("index %q value %d is empty", runtime.def.name, valueIdx)
+			}
+		}
+	}
+}
+
 func BenchmarkCollectionOverheadPlanNoIndex(b *testing.B) {
 	batchSize := overheadBenchBatchSize(b)
 	ids, docs := overheadBenchDocumentBatch(batchSize, false)
@@ -142,6 +160,13 @@ func BenchmarkCollectionOverheadIndexStateJSONExtraction(b *testing.B) {
 	if err != nil {
 		b.Fatalf("index runtimes: %v", err)
 	}
+	for _, doc := range docs {
+		state, err := orderedIndexStateForDocument(doc, runtimes, collectionOptions{})
+		if err != nil {
+			b.Fatalf("validate index extraction inputs: %v", err)
+		}
+		requireOverheadBenchIndexStateValues(b, state, runtimes)
+	}
 
 	b.ReportAllocs()
 	b.ReportMetric(float64(len(runtimes)), "indexes/doc")
@@ -151,9 +176,7 @@ func BenchmarkCollectionOverheadIndexStateJSONExtraction(b *testing.B) {
 		if err != nil {
 			b.Fatalf("extract index state: %v", err)
 		}
-		if len(state) != len(runtimes) {
-			b.Fatalf("index state len=%d want=%d", len(state), len(runtimes))
-		}
+		_ = state
 	}
 }
 
@@ -171,6 +194,7 @@ func BenchmarkCollectionOverheadPlanIndexedPrecomputedState(b *testing.B) {
 		if err != nil {
 			b.Fatalf("precompute index state: %v", err)
 		}
+		requireOverheadBenchIndexStateValues(b, state, runtimes)
 		states[i] = state
 	}
 
