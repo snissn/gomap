@@ -2,6 +2,7 @@ package memtable
 
 import (
 	"encoding/binary"
+	"errors"
 	"testing"
 	"time"
 
@@ -129,6 +130,53 @@ func TestAppendOnlyCRUD(t *testing.T) {
 	val, del, ok = m.Get([]byte("k2"))
 	if !ok || !del || val != nil {
 		t.Fatalf("Get(k2) = (%v,%v,%v), want (nil,true,true)", val, del, ok)
+	}
+}
+
+func TestAppendOnlyApplyStealEntryFunc(t *testing.T) {
+	m := NewAppendOnlyWithEntryCapacity(3)
+	err := m.ApplyStealEntryFunc(3, func(i int) (key, value []byte, ptr page.ValuePtr, flags byte, err error) {
+		return []byte{byte('a' + i)}, []byte{byte('v' + i)}, page.ValuePtr{}, node.FlagInline, nil
+	})
+	if err != nil {
+		t.Fatalf("ApplyStealEntryFunc: %v", err)
+	}
+	for i := 0; i < 3; i++ {
+		key := []byte{byte('a' + i)}
+		value, _, flags, found := m.GetEntry(key)
+		if !found {
+			t.Fatalf("missing key %q", key)
+		}
+		if flags != node.FlagInline {
+			t.Fatalf("key %q flags=%08b want inline", key, flags)
+		}
+		if got, want := string(value), string([]byte{byte('v' + i)}); got != want {
+			t.Fatalf("key %q value=%q want=%q", key, got, want)
+		}
+	}
+}
+
+func TestAppendOnlyApplyStealEntryFuncStopsOnError(t *testing.T) {
+	m := NewAppendOnlyWithEntryCapacity(3)
+	errStop := errors.New("stop")
+	err := m.ApplyStealEntryFunc(3, func(i int) (key, value []byte, ptr page.ValuePtr, flags byte, err error) {
+		if i == 1 {
+			return nil, nil, page.ValuePtr{}, 0, errStop
+		}
+		return []byte{byte('a' + i)}, []byte{byte('v' + i)}, page.ValuePtr{}, node.FlagInline, nil
+	})
+	if !errors.Is(err, errStop) {
+		t.Fatalf("ApplyStealEntryFunc err=%v want %v", err, errStop)
+	}
+	if got := m.Len(); got != 1 {
+		t.Fatalf("Len=%d want 1", got)
+	}
+}
+
+func TestAppendOnlyApplyStealEntryFuncRejectsNilEmitter(t *testing.T) {
+	m := NewAppendOnlyWithEntryCapacity(3)
+	if err := m.ApplyStealEntryFunc(1, nil); err == nil {
+		t.Fatalf("ApplyStealEntryFunc with nil emitter returned nil")
 	}
 }
 

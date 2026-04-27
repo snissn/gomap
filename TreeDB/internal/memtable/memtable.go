@@ -87,6 +87,12 @@ type SortedBatchApplier interface {
 	ApplyStealSortedBatch(entries []batchpkg.Entry, onKey func(key []byte))
 }
 
+// StealEntryFuncApplier is an optional fast path for building short-lived
+// append-only tables by emitting owned entries under one table lock.
+type StealEntryFuncApplier interface {
+	ApplyStealEntryFunc(count int, emit func(i int) (key, value []byte, ptr page.ValuePtr, flags byte, err error)) error
+}
+
 // ValueBorrower marks memtables that can safely retain caller-owned value
 // slices while still copying keys into their own storage.
 //
