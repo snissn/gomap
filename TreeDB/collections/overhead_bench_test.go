@@ -148,7 +148,7 @@ func BenchmarkCollectionOverheadIndexStateJSONExtraction(b *testing.B) {
 	b.ReportMetric(float64(len(runtimes)), "indexes/doc")
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		state, err := indexStateForDocument(docs[i%batchSize], runtimes, collectionOptions{})
+		state, err := orderedIndexStateForDocument(docs[i%batchSize], runtimes, collectionOptions{})
 		if err != nil {
 			b.Fatalf("extract index state: %v", err)
 		}
@@ -166,9 +166,9 @@ func BenchmarkCollectionOverheadPlanIndexedPrecomputedState(b *testing.B) {
 	if err != nil {
 		b.Fatalf("index runtimes: %v", err)
 	}
-	states := make([]documentIndexState, len(docs))
+	states := make([]orderedDocumentIndexState, len(docs))
 	for i := range docs {
-		state, err := indexStateForDocument(docs[i], runtimes, collectionOptions{})
+		state, err := orderedIndexStateForDocument(docs[i], runtimes, collectionOptions{})
 		if err != nil {
 			b.Fatalf("precompute index state: %v", err)
 		}
@@ -194,7 +194,7 @@ func overheadBenchPlanIndexedPrecomputedState(
 	planner insertBatchPlanner,
 	runtimes []indexRuntime,
 	ids, documents [][]byte,
-	states []documentIndexState,
+	states []orderedDocumentIndexState,
 ) error {
 	if len(ids) != len(documents) || len(ids) != len(states) {
 		return fmt.Errorf("collections: precomputed batch length mismatch")
@@ -230,11 +230,11 @@ func overheadBenchPlanIndexedPrecomputedState(
 	}
 	uniqueProbes := make([]uniqueProbeCandidate, 0, len(items))
 	for i := range items {
-		for _, runtime := range runtimes {
+		for runtimeIdx, runtime := range runtimes {
 			if !runtime.def.unique {
 				continue
 			}
-			for _, encoded := range items[i].state[runtime.def.name] {
+			for _, encoded := range items[i].state.valuesAt(runtimeIdx) {
 				uniqueProbes = append(uniqueProbes, uniqueProbeCandidate{
 					indexName:    runtime.def.name,
 					encodedValue: encoded,

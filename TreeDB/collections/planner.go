@@ -77,7 +77,7 @@ type collectionUniqueProbeRun struct {
 type insertBatchItem struct {
 	id       []byte
 	document []byte
-	state    documentIndexState
+	state    orderedDocumentIndexState
 }
 
 type indexRuntime struct {
@@ -92,6 +92,7 @@ type uniqueProbeCandidate struct {
 }
 
 type documentIndexState map[string][][]byte
+type orderedDocumentIndexState [][][]byte
 
 type groupedRootPublisher interface {
 	PublishOrderedRootGroup(systemIter iterator.UnsafeIterator, ordered []backenddb.OrderedRootPublishInput) (uint64, []uint64, error)
@@ -278,16 +279,16 @@ func (p insertBatchPlanner) planIndexStateAndUniqueProbes(items []insertBatchIte
 	}
 	uniqueProbes := make([]uniqueProbeCandidate, 0, len(items))
 	for i := range items {
-		state, err := indexStateForDocument(items[i].document, runtimes, p.options)
+		state, err := orderedIndexStateForDocument(items[i].document, runtimes, p.options)
 		if err != nil {
 			return nil, err
 		}
 		items[i].state = state
-		for _, runtime := range runtimes {
+		for runtimeIdx, runtime := range runtimes {
 			if !runtime.def.unique {
 				continue
 			}
-			for _, encoded := range state[runtime.def.name] {
+			for _, encoded := range state.valuesAt(runtimeIdx) {
 				uniqueProbes = append(uniqueProbes, uniqueProbeCandidate{
 					indexName:    runtime.def.name,
 					encodedValue: encoded,
@@ -450,8 +451,8 @@ func (p insertBatchPlanner) emitIndexStateRun(plan *insertBatchPlan, items []ins
 }
 
 func (p insertBatchPlanner) emitSecondaryRuns(plan *insertBatchPlan, items []insertBatchItem, runtimes []indexRuntime) error {
-	for _, runtime := range runtimes {
-		entryCount, alreadySorted, err := secondaryEntryOrderStats(items, runtime.def.name)
+	for runtimeIdx, runtime := range runtimes {
+		entryCount, keyBytes, alreadySorted, err := secondaryEntryOrderStats(items, runtimeIdx)
 		if err != nil {
 			return err
 		}
@@ -460,15 +461,16 @@ func (p insertBatchPlanner) emitSecondaryRuns(plan *insertBatchPlan, items []ins
 		}
 		if alreadySorted {
 			table := newCollectionRunTable(entryCount)
+			keyArena := make([]byte, 0, keyBytes)
 			itemPos := 0
 			valuePos := 0
 			if err := applyCollectionRunEntries(table, entryCount, func(_ int) (key, value []byte, err error) {
 				for itemPos < len(items) {
-					values := items[itemPos].state[runtime.def.name]
+					values := items[itemPos].state.valuesAt(runtimeIdx)
 					if valuePos < len(values) {
 						encoded := values[valuePos]
 						valuePos++
-						key, err = indexEntryKey(encoded, items[itemPos].id)
+						keyArena, key, err = appendIndexEntryKey(keyArena, encoded, items[itemPos].id)
 						return key, nil, err
 					}
 					itemPos++
@@ -490,9 +492,11 @@ func (p insertBatchPlanner) emitSecondaryRuns(plan *insertBatchPlan, items []ins
 		}
 
 		keys := make([][]byte, 0, entryCount)
+		keyArena := make([]byte, 0, keyBytes)
 		for i := range items {
-			for _, encoded := range items[i].state[runtime.def.name] {
-				key, err := indexEntryKey(encoded, items[i].id)
+			for _, encoded := range items[i].state.valuesAt(runtimeIdx) {
+				var key []byte
+				keyArena, key, err = appendIndexEntryKey(keyArena, encoded, items[i].id)
 				if err != nil {
 					return err
 				}
@@ -523,14 +527,14 @@ func (p insertBatchPlanner) emitSecondaryRuns(plan *insertBatchPlan, items []ins
 	return nil
 }
 
-func secondaryEntryOrderStats(items []insertBatchItem, indexName string) (entryCount int, alreadySorted bool, err error) {
+func secondaryEntryOrderStats(items []insertBatchItem, runtimeIdx int) (entryCount int, keyBytes int, alreadySorted bool, err error) {
 	alreadySorted = true
 	var lastValue []byte
 	var lastDocumentID []byte
 	for i := range items {
-		for _, encoded := range items[i].state[indexName] {
+		for _, encoded := range items[i].state.valuesAt(runtimeIdx) {
 			if len(encoded) > 65535 {
-				return 0, false, errors.New("collections: index key too large")
+				return 0, 0, false, errors.New("collections: index key too large")
 			}
 			if entryCount > 0 && compareIndexEntryKeyParts(lastValue, lastDocumentID, encoded, items[i].id) > 0 {
 				alreadySorted = false
@@ -538,9 +542,10 @@ func secondaryEntryOrderStats(items []insertBatchItem, indexName string) (entryC
 			lastValue = encoded
 			lastDocumentID = items[i].id
 			entryCount++
+			keyBytes += 2 + len(encoded) + len(items[i].id)
 		}
 	}
-	return entryCount, alreadySorted, nil
+	return entryCount, keyBytes, alreadySorted, nil
 }
 
 func newCollectionRunTable(entries int) memtable.Table {
@@ -604,7 +609,22 @@ func orderedItemIndex(order []int, pos int) int {
 	return order[pos]
 }
 
+func (s orderedDocumentIndexState) valuesAt(index int) [][]byte {
+	if index < 0 || index >= len(s) {
+		return nil
+	}
+	return s[index]
+}
+
 func indexStateForDocument(document []byte, runtimes []indexRuntime, opts collectionOptions) (documentIndexState, error) {
+	ordered, err := orderedIndexStateForDocument(document, runtimes, opts)
+	if err != nil {
+		return nil, err
+	}
+	return documentIndexStateFromOrdered(ordered, runtimes), nil
+}
+
+func orderedIndexStateForDocument(document []byte, runtimes []indexRuntime, opts collectionOptions) (orderedDocumentIndexState, error) {
 	if len(runtimes) == 0 {
 		return nil, nil
 	}
@@ -616,8 +636,8 @@ func indexStateForDocument(document []byte, runtimes []indexRuntime, opts collec
 	if !ok {
 		return nil, errors.New("collections: index extraction requires JSON object document")
 	}
-	state := make(documentIndexState, len(runtimes))
-	for _, runtime := range runtimes {
+	state := make(orderedDocumentIndexState, len(runtimes))
+	for runtimeIdx, runtime := range runtimes {
 		value, found := extractIndexPathValue(obj, runtime.path)
 		if !found || value == nil {
 			continue
@@ -636,10 +656,27 @@ func indexStateForDocument(document []byte, runtimes []indexRuntime, opts collec
 		}
 		encoded = normalizeOwnedEncodedIndexValues(encoded)
 		if len(encoded) > 0 {
-			state[runtime.def.name] = encoded
+			state[runtimeIdx] = encoded
 		}
 	}
 	return state, nil
+}
+
+func documentIndexStateFromOrdered(state orderedDocumentIndexState, runtimes []indexRuntime) documentIndexState {
+	if len(state) == 0 {
+		return nil
+	}
+	out := make(documentIndexState, len(state))
+	for i, values := range state {
+		if len(values) == 0 || i >= len(runtimes) {
+			continue
+		}
+		out[runtimes[i].def.name] = values
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func encodeDocumentIndexState(state documentIndexState) ([]byte, error) {
@@ -650,15 +687,12 @@ func encodeNormalizedDocumentIndexState(state documentIndexState) ([]byte, error
 	return encodeDocumentIndexStateWithOptions(state, false)
 }
 
-func encodeRuntimeOrderedDocumentIndexState(state documentIndexState, runtimes []indexRuntime) ([]byte, error) {
-	if state == nil {
-		state = make(documentIndexState)
-	}
+func encodeRuntimeOrderedDocumentIndexState(state orderedDocumentIndexState, runtimes []indexRuntime) ([]byte, error) {
 	count := 0
 	size := 1 + 2
-	for _, runtime := range runtimes {
+	for runtimeIdx, runtime := range runtimes {
 		indexName := runtime.def.name
-		values := filterEmptyEncodedIndexValues(state[indexName])
+		values := filterEmptyEncodedIndexValues(state.valuesAt(runtimeIdx))
 		if len(values) == 0 {
 			continue
 		}
@@ -678,9 +712,9 @@ func encodeRuntimeOrderedDocumentIndexState(state documentIndexState, runtimes [
 	out := make([]byte, 0, size)
 	out = append(out, documentIndexStateVersion)
 	out = binary.BigEndian.AppendUint16(out, uint16(count))
-	for _, runtime := range runtimes {
+	for runtimeIdx, runtime := range runtimes {
 		indexName := runtime.def.name
-		values := filterEmptyEncodedIndexValues(state[indexName])
+		values := filterEmptyEncodedIndexValues(state.valuesAt(runtimeIdx))
 		if len(values) == 0 {
 			continue
 		}
@@ -927,12 +961,21 @@ func encodeIndexScalar(value any) ([]byte, error) {
 
 func indexEntryKey(encodedValue, documentID []byte) ([]byte, error) {
 	key := make([]byte, 0, 2+len(encodedValue)+len(documentID))
-	key, err := appendIndexValuePrefix(key, encodedValue)
+	key, out, err := appendIndexEntryKey(key, encodedValue, documentID)
 	if err != nil {
 		return nil, err
 	}
-	key = append(key, documentID...)
-	return key, nil
+	return out, nil
+}
+
+func appendIndexEntryKey(dst, encodedValue, documentID []byte) ([]byte, []byte, error) {
+	start := len(dst)
+	dst, err := appendIndexValuePrefix(dst, encodedValue)
+	if err != nil {
+		return dst, nil, err
+	}
+	dst = append(dst, documentID...)
+	return dst, dst[start:len(dst):len(dst)], nil
 }
 
 func indexValuePrefix(encodedValue []byte) ([]byte, error) {
