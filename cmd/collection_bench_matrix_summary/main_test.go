@@ -20,6 +20,7 @@ func TestMatrixSummaryRendersBenchmarkMetrics(t *testing.T) {
 	}
 	if err := os.WriteFile(reportJSON, []byte(`{
   "status": "ok",
+  "collection_batch_size": 8000,
   "sections": [
     {
       "benchmarks": [
@@ -69,6 +70,7 @@ func TestMatrixSummaryRendersBenchmarkMetrics(t *testing.T) {
 	}
 	if err := os.WriteFile(sqliteReportJSON, []byte(`{
   "status": "ok",
+  "collection_batch_size": 8000,
   "sections": [
     {
       "benchmarks": [
@@ -116,6 +118,15 @@ func TestMatrixSummaryRendersBenchmarkMetrics(t *testing.T) {
 	}
 	got := string(md)
 	for _, want := range []string{
+		"## User-Facing Throughput",
+		"bulk indexed insert",
+		"355,556",
+		"22.5",
+		"44.44",
+		"## Diagnostic Rows",
+		"These rows are not user stories.",
+		"`BenchmarkCollectionOverheadIndexStateJSONExtraction`",
+		"## Raw Matrix",
 		"`production_fast_data_vlog_index_leaf`",
 		"`BenchmarkCollectionInsertBatchWithSecondaryIndexes`",
 		"`BenchmarkSQLiteInsertBatchWithSecondaryIndexes`",
@@ -142,6 +153,17 @@ func TestMatrixSummaryRendersBenchmarkMetrics(t *testing.T) {
 	}
 	if strings.Contains(gotTSV, "2,812") {
 		t.Fatalf("tsv should not contain comma-formatted numbers:\n%s", gotTSV)
+	}
+	userStoryTSV, err := os.ReadFile(filepath.Join(dir, "collections_user_story_summary.tsv"))
+	if err != nil {
+		t.Fatalf("read user story tsv: %v", err)
+	}
+	gotUserStoryTSV := string(userStoryTSV)
+	if !strings.Contains(gotUserStoryTSV, "bulk indexed insert\tBenchmarkCollectionInsertBatchWithSecondaryIndexes\t8000\t355555.55555555556\t22.5\t44.44444444444444\t2812.5\t") {
+		t.Fatalf("user story tsv missing collection throughput row:\n%s", gotUserStoryTSV)
+	}
+	if !strings.Contains(gotUserStoryTSV, "bulk indexed insert\tBenchmarkSQLiteInsertBatchWithSecondaryIndexes\t8000\t243902.43902439025\t32.8\t30.48780487804878\t4100\t") {
+		t.Fatalf("user story tsv missing sqlite throughput row:\n%s", gotUserStoryTSV)
 	}
 }
 
