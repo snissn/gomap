@@ -199,10 +199,10 @@ func buildSummaryRows(rows []matrixRow) ([]summaryRow, error) {
 		if err != nil {
 			return nil, err
 		}
-		for _, name := range benchmarkOrder {
+		for _, name := range expectedBenchmarkNames(row) {
 			benchmark, ok := report.Benchmarks[name]
 			if !ok {
-				continue
+				return nil, fmt.Errorf("report %s missing benchmark %q for matrix cell %q", row.ReportJSONPath, name, row.Cell)
 			}
 			out = append(out, summaryRow{
 				matrixRow:           row,
@@ -217,6 +217,21 @@ func buildSummaryRows(rows []matrixRow) ([]summaryRow, error) {
 		}
 	}
 	return out, nil
+}
+
+func expectedBenchmarkNames(row matrixRow) []string {
+	if strings.HasPrefix(row.Engine, "sqlite") {
+		return []string{
+			"BenchmarkSQLiteInsertBatchWithSecondaryIndexes",
+			"BenchmarkSQLiteInsertBatchCheckpointWithSecondaryIndexes",
+		}
+	}
+	return []string{
+		"BenchmarkCollectionOverheadIndexStateJSONExtraction",
+		"BenchmarkCollectionOverheadPlanIndexedPrecomputedState",
+		"BenchmarkCollectionInsertBatchWithSecondaryIndexes",
+		"BenchmarkCollectionInsertBatchCheckpointWithSecondaryIndexes",
+	}
 }
 
 func loadBenchmarkReport(path string) (loadedReport, error) {
