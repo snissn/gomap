@@ -72,6 +72,8 @@ var benchmarkOrder = []string{
 	"BenchmarkCollectionOverheadPlanIndexedPrecomputedState",
 	"BenchmarkCollectionInsertBatchWithSecondaryIndexes",
 	"BenchmarkCollectionInsertBatchCheckpointWithSecondaryIndexes",
+	"BenchmarkCollectionTimedProfileInsertBatchWithSecondaryIndexes",
+	"BenchmarkCollectionTimedProfileInsertBatchCheckpointWithSecondaryIndexes",
 	"BenchmarkSQLiteInsertBatchWithSecondaryIndexes",
 	"BenchmarkSQLiteInsertBatchCheckpointWithSecondaryIndexes",
 }
@@ -469,9 +471,9 @@ func buildUserStoryRows(rows []summaryRow) []userStoryRow {
 
 func userStoryLabel(benchmark string) (string, bool) {
 	switch benchmark {
-	case "BenchmarkCollectionInsertBatchWithSecondaryIndexes", "BenchmarkSQLiteInsertBatchWithSecondaryIndexes":
+	case "BenchmarkCollectionInsertBatchWithSecondaryIndexes", "BenchmarkCollectionTimedProfileInsertBatchWithSecondaryIndexes", "BenchmarkSQLiteInsertBatchWithSecondaryIndexes":
 		return "bulk indexed insert", true
-	case "BenchmarkCollectionInsertBatchCheckpointWithSecondaryIndexes", "BenchmarkSQLiteInsertBatchCheckpointWithSecondaryIndexes":
+	case "BenchmarkCollectionInsertBatchCheckpointWithSecondaryIndexes", "BenchmarkCollectionTimedProfileInsertBatchCheckpointWithSecondaryIndexes", "BenchmarkSQLiteInsertBatchCheckpointWithSecondaryIndexes":
 		return "checkpointed indexed insert", true
 	default:
 		return "", false
