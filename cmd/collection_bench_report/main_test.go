@@ -114,6 +114,7 @@ func TestBuildReportAndRenderMarkdown(t *testing.T) {
 		ExecutionPath:        "oracle",
 		BenchmarkEngine:      "cached",
 		StoragePolicy:        "data_outer=true,index_outer=false",
+		PagerChunkSize:       "profile/default",
 		PagerSyncConcurrency: "profile/default",
 		Worktree:             "/tmp/oracle",
 		Branch:               "pr/oracle",
@@ -134,6 +135,9 @@ func TestBuildReportAndRenderMarkdown(t *testing.T) {
 	}
 	if !strings.Contains(md, "- storage policy: `data_outer=true,index_outer=false`") {
 		t.Fatalf("markdown missing storage policy:\n%s", md)
+	}
+	if !strings.Contains(md, "- pager chunk size: `profile/default`") {
+		t.Fatalf("markdown missing pager chunk size:\n%s", md)
 	}
 	if !strings.Contains(md, "- pager sync concurrency: `profile/default`") {
 		t.Fatalf("markdown missing pager sync concurrency:\n%s", md)

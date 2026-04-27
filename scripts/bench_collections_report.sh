@@ -119,6 +119,7 @@ if [[ ! -d "$ROOT/TreeDB/collections" ]]; then
     -execution-path "$PATH_LABEL" \
     -benchmark-engine "$BENCH_ENGINE" \
     -storage-policy "$STORAGE_POLICY_LABEL" \
+    -pager-chunk-size "$CHUNK_SIZE_LABEL" \
     -pager-sync-concurrency "$PAGER_SYNC_CONCURRENCY_LABEL" \
     -collection-batch-size "$BATCH_SIZE" \
     -bench-pattern "$BENCH_REGEX" \
@@ -144,6 +145,7 @@ else
     -execution-path "$PATH_LABEL" \
     -benchmark-engine "$BENCH_ENGINE" \
     -storage-policy "$STORAGE_POLICY_LABEL" \
+    -pager-chunk-size "$CHUNK_SIZE_LABEL" \
     -pager-sync-concurrency "$PAGER_SYNC_CONCURRENCY_LABEL" \
     -collection-batch-size "$BATCH_SIZE" \
     -bench-pattern "$BENCH_REGEX" \
