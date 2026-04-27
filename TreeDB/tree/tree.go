@@ -734,7 +734,7 @@ func (t *Tree) HasAnySorted(keys [][]byte) (bool, error) {
 	}
 	for i := 1; i < len(keys); i++ {
 		if compareTreeKey(keys[i-1], keys[i]) > 0 {
-			return false, errors.New("keys must be sorted")
+			return false, errors.New("HasAnySorted: keys must be sorted in ascending compareTreeKey order (8-byte keys are compared as big-endian uint64)")
 		}
 	}
 

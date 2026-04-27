@@ -771,7 +771,6 @@ func (db *DB) PublishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered []Order
 	db.mu.RLock()
 	userRoot := db.meta.UserRootPageID
 	baseSystemRoot := db.meta.SystemRootPageID
-	baseSeq := db.meta.CommitSeq
 	db.mu.RUnlock()
 
 	systemOpts := systemRootOrderedPublishOptions(db)
@@ -815,16 +814,13 @@ func (db *DB) PublishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered []Order
 		return 0, nil, errors.New("concurrent modification detected during ordered root group publish")
 	}
 
-	vlogRefDelta := db.newNoopValueLogRefDeltaIfTrackable(baseSeq)
-	defer func() {
-		if vlogRefDelta != nil {
-			releaseValueLogRefDelta(vlogRefDelta)
-		}
-	}()
+	// The system root was applied as a delta, so we do not have an exact
+	// value-log ref delta for system-root pointer changes. Passing nil keeps the
+	// tracker conservative by invalidating it after commit.
+	var vlogRefDelta *valueLogRefDelta
 	if err := db.finalizeCommit(userRoot, newSystemRoot, retired, false, merged, nil, true, vlogRefDelta, nil, nil); err != nil {
 		return 0, nil, err
 	}
-	vlogRefDelta = nil
 	return newSystemRoot, rootIDs, nil
 }
 

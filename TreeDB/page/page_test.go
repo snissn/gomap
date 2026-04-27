@@ -151,6 +151,25 @@ func TestCalculateChecksumWithZeroGap(t *testing.T) {
 	}
 }
 
+func TestCalculateChecksumWithZeroGapPanicsOnInvalidInput(t *testing.T) {
+	assertPanic := func(name string, fn func()) {
+		t.Helper()
+		defer func() {
+			if recover() == nil {
+				t.Fatalf("%s did not panic", name)
+			}
+		}()
+		fn()
+	}
+
+	assertPanic("short prefix", func() {
+		_ = CalculateChecksumWithZeroGap(make([]byte, PageHeaderSize-1), 0, nil)
+	})
+	assertPanic("negative gap", func() {
+		_ = CalculateChecksumWithZeroGap(make([]byte, PageHeaderSize), -1, nil)
+	})
+}
+
 func TestUnsafeCastHeader(t *testing.T) {
 	// Note: This test assumes LittleEndian machine.
 	// If running on BigEndian, this test might fail or require adjustment if UnsafeCastHeader is used.

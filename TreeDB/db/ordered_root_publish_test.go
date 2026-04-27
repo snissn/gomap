@@ -990,6 +990,49 @@ func TestPublishOrderedRootGroup_NonSystemWarmApplyPreservesValueLogRefTracker(t
 	assertValueLogRefTrackerMatchesFullScan(t, db)
 }
 
+func TestPublishOrderedRootDeltaGroupWithSystemDeltaBuilder_InvalidatesValueLogRefTracker(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+
+	livePtr := appendPointersInNewSegment(t, dir, 0, 51, 110_000, 1, func(int) []byte {
+		return []byte("live-user-pointer-before-system-delta")
+	})[0]
+	b := db.NewBatch().(*Batch)
+	if err := b.SetPointer([]byte("user/live"), livePtr); err != nil {
+		t.Fatalf("SetPointer(user/live): %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("write live pointer: %v", err)
+	}
+	_ = b.Close()
+
+	if _, err := db.referencedValueLogSegments(context.Background()); err != nil {
+		t.Fatalf("refresh value-log refs: %v", err)
+	}
+	beforeSeq := db.currentCommitSeq()
+	if _, ok := db.valueLogRefTracker.referencedSet(beforeSeq); !ok {
+		t.Fatalf("expected incremental ref set before system delta at seq=%d", beforeSeq)
+	}
+
+	systemPtr := appendPointersInNewSegment(t, dir, 0, 52, 120_000, 1, func(int) []byte {
+		return []byte("system-pointer-delta")
+	})[0]
+	if _, _, err := db.PublishOrderedRootDeltaGroupWithSystemDeltaBuilder(nil, func([]uint64) (iterator.UnsafeIterator, error) {
+		return mustFrozenSystemPointerMemtable(t, "sys/p", systemPtr).NewIterator(nil, nil), nil
+	}); err != nil {
+		t.Fatalf("publish system delta group: %v", err)
+	}
+
+	afterSeq := db.currentCommitSeq()
+	if refs, ok := db.valueLogRefTracker.referencedSet(afterSeq); ok {
+		t.Fatalf("value-log ref tracker stayed valid after untracked system delta: refs=%v", refs)
+	}
+}
+
 func assertValueLogRefTrackerMatchesFullScan(t *testing.T, db *DB) {
 	t.Helper()
 	seq := db.currentCommitSeq()
