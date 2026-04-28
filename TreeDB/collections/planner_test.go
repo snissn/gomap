@@ -120,6 +120,38 @@ func TestEncodeNormalizedDocumentIndexStateMatchesConservativeEncoder(t *testing
 	}
 }
 
+func TestAppendIndexScalarEncodesIntoArena(t *testing.T) {
+	var arena []byte
+	tests := []struct {
+		name  string
+		value any
+		want  string
+	}{
+		{name: "string", value: "ada", want: "s:ada"},
+		{name: "bool true", value: true, want: "b:1"},
+		{name: "bool false", value: false, want: "b:0"},
+		{name: "number", value: float64(42.5), want: "n:42.5"},
+		{name: "null", value: nil, want: "z:"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			before := len(arena)
+			var encoded []byte
+			var err error
+			arena, encoded, err = appendIndexScalar(arena, tc.value)
+			if err != nil {
+				t.Fatalf("append index scalar: %v", err)
+			}
+			if got := string(encoded); got != tc.want {
+				t.Fatalf("encoded=%q want %q", got, tc.want)
+			}
+			if !bytes.Equal(encoded, arena[before:]) {
+				t.Fatalf("encoded slice is not backed by arena tail")
+			}
+		})
+	}
+}
+
 func TestBuildUniqueProbeRunsMatchesEncodedPrefixOrdering(t *testing.T) {
 	candidates := []uniqueProbeCandidate{
 		{indexName: "email", encodedValue: []byte("s:zz"), documentID: []byte("u3")},

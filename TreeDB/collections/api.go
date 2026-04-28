@@ -1545,11 +1545,12 @@ func (c *Collection) FindByIndex(indexName, value string) ([][]byte, error) {
 	if rootID == 0 {
 		return nil, nil
 	}
-	encoded, err := encodeIndexScalar(value)
+	var arena []byte
+	arena, encoded, err := appendIndexScalar(arena, value)
 	if err != nil {
 		return nil, err
 	}
-	prefix, err := indexValuePrefix(encoded)
+	arena, prefix, err := appendIndexValuePrefixSlice(arena, encoded)
 	if err != nil {
 		return nil, err
 	}

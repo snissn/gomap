@@ -19,6 +19,17 @@ import (
 
 const documentIndexStateVersion = 1
 
+const (
+	// Most benchmarked scalar index values are short strings ("city-00",
+	// emails, booleans, or numeric tags). This is only an initial arena hint;
+	// larger values still append correctly and grow the arena as needed.
+	indexEncodeArenaScalarGuessBytes = 20
+	// Keep the speculative batch arena bounded. If a batch needs more encoded
+	// value bytes, append growth preserves earlier slices and avoids a large
+	// upfront allocation.
+	indexEncodeArenaMaxInitialBytes = 4 << 20
+)
+
 type collectionRootKind uint8
 
 const (
@@ -93,6 +104,10 @@ type uniqueProbeCandidate struct {
 
 type documentIndexState map[string][][]byte
 type orderedDocumentIndexState [][][]byte
+
+type indexEncodeArena struct {
+	buf []byte
+}
 
 type groupedRootPublisher interface {
 	PublishOrderedRootGroup(systemIter iterator.UnsafeIterator, ordered []backenddb.OrderedRootPublishInput) (uint64, []uint64, error)
@@ -299,8 +314,9 @@ func (p insertBatchPlanner) planIndexStateAndUniqueProbes(items []insertBatchIte
 		return nil, nil
 	}
 	uniqueProbes := make([]uniqueProbeCandidate, 0, len(items))
+	encoder := indexEncodeArena{buf: make([]byte, 0, estimateBatchIndexEncodeArenaBytes(items, len(runtimes)))}
 	for i := range items {
-		state, err := orderedIndexStateForDocument(items[i].document, runtimes, p.options)
+		state, err := orderedIndexStateForDocumentWithArena(items[i].document, runtimes, p.options, &encoder)
 		if err != nil {
 			return nil, err
 		}
@@ -354,6 +370,18 @@ func buildUniqueProbeRuns(candidates []uniqueProbeCandidate) ([]collectionUnique
 	return buildUniqueProbeRunsFromSorted(candidates, nil)
 }
 
+func estimateUniqueProbePrefixBytes(candidates []uniqueProbeCandidate) int {
+	total := 0
+	for _, candidate := range candidates {
+		add := 2 + len(candidate.encodedValue)
+		if add > indexEncodeArenaMaxInitialBytes-total {
+			return indexEncodeArenaMaxInitialBytes
+		}
+		total += add
+	}
+	return total
+}
+
 func buildUniqueProbeRunsForPreflightFromSorted(candidates []uniqueProbeCandidate, preflight insertBatchPreflight) ([]collectionUniqueProbeRun, error) {
 	if preflight.snapshot == nil || len(preflight.uniqueIndexRootIDs) == 0 {
 		return nil, nil
@@ -368,6 +396,7 @@ func buildUniqueProbeRunsFromSorted(candidates []uniqueProbeCandidate, includeIn
 		return nil, nil
 	}
 	runs := make([]collectionUniqueProbeRun, 0)
+	prefixArena := make([]byte, 0, estimateUniqueProbePrefixBytes(candidates))
 	for start := 0; start < len(candidates); {
 		indexName := candidates[start].indexName
 		end := start + 1
@@ -385,7 +414,9 @@ func buildUniqueProbeRunsFromSorted(candidates []uniqueProbeCandidate, includeIn
 		for i := start; i < end; i++ {
 			candidate := &candidates[i]
 			if len(run.prefixes) == 0 || !bytes.Equal(candidate.encodedValue, candidates[i-1].encodedValue) {
-				prefix, err := indexValuePrefix(candidate.encodedValue)
+				var prefix []byte
+				var err error
+				prefixArena, prefix, err = appendIndexValuePrefixSlice(prefixArena, candidate.encodedValue)
 				if err != nil {
 					return nil, err
 				}
@@ -655,8 +686,16 @@ func indexStateForDocument(document []byte, runtimes []indexRuntime, opts collec
 }
 
 func orderedIndexStateForDocument(document []byte, runtimes []indexRuntime, opts collectionOptions) (orderedDocumentIndexState, error) {
+	encoder := indexEncodeArena{buf: make([]byte, 0, estimateDocumentIndexEncodeArenaBytes(len(runtimes)))}
+	return orderedIndexStateForDocumentWithArena(document, runtimes, opts, &encoder)
+}
+
+func orderedIndexStateForDocumentWithArena(document []byte, runtimes []indexRuntime, opts collectionOptions, encoder *indexEncodeArena) (orderedDocumentIndexState, error) {
 	if len(runtimes) == 0 {
 		return nil, nil
+	}
+	if encoder == nil {
+		encoder = &indexEncodeArena{buf: make([]byte, 0, estimateDocumentIndexEncodeArenaBytes(len(runtimes)))}
 	}
 	var decoded any
 	if err := json.Unmarshal(document, &decoded); err != nil {
@@ -678,7 +717,9 @@ func orderedIndexStateForDocument(document []byte, runtimes []indexRuntime, opts
 		}
 		encoded := make([][]byte, 0, len(values))
 		for _, scalar := range values {
-			next, err := encodeIndexScalar(scalar)
+			var next []byte
+			var err error
+			encoder.buf, next, err = appendIndexScalar(encoder.buf, scalar)
 			if err != nil {
 				return nil, err
 			}
@@ -690,6 +731,30 @@ func orderedIndexStateForDocument(document []byte, runtimes []indexRuntime, opts
 		}
 	}
 	return state, nil
+}
+
+func estimateDocumentIndexEncodeArenaBytes(runtimeCount int) int {
+	if runtimeCount <= 0 {
+		return 0
+	}
+	if runtimeCount > indexEncodeArenaMaxInitialBytes/indexEncodeArenaScalarGuessBytes {
+		return indexEncodeArenaMaxInitialBytes
+	}
+	return runtimeCount * indexEncodeArenaScalarGuessBytes
+}
+
+func estimateBatchIndexEncodeArenaBytes(items []insertBatchItem, runtimeCount int) int {
+	if len(items) == 0 || runtimeCount <= 0 {
+		return 0
+	}
+	perDocument := estimateDocumentIndexEncodeArenaBytes(runtimeCount)
+	if perDocument == 0 {
+		return 0
+	}
+	if len(items) > indexEncodeArenaMaxInitialBytes/perDocument {
+		return indexEncodeArenaMaxInitialBytes
+	}
+	return len(items) * perDocument
 }
 
 func documentIndexStateFromOrdered(state orderedDocumentIndexState, runtimes []indexRuntime) documentIndexState {
@@ -982,24 +1047,31 @@ func extractIndexPathValue(document any, path []string) (any, bool) {
 }
 
 func encodeIndexScalar(value any) ([]byte, error) {
+	_, encoded, err := appendIndexScalar(nil, value)
+	return encoded, err
+}
+
+func appendIndexScalar(dst []byte, value any) ([]byte, []byte, error) {
+	start := len(dst)
 	switch v := value.(type) {
 	case string:
-		out := make([]byte, 0, 2+len(v))
-		out = append(out, "s:"...)
-		out = append(out, v...)
-		return out, nil
+		dst = append(dst, "s:"...)
+		dst = append(dst, v...)
 	case bool:
 		if v {
-			return []byte("b:1"), nil
+			dst = append(dst, "b:1"...)
+		} else {
+			dst = append(dst, "b:0"...)
 		}
-		return []byte("b:0"), nil
 	case float64:
-		return []byte("n:" + strconv.FormatFloat(v, 'g', -1, 64)), nil
+		dst = append(dst, "n:"...)
+		dst = strconv.AppendFloat(dst, v, 'g', -1, 64)
 	case nil:
-		return []byte("z:"), nil
+		dst = append(dst, "z:"...)
 	default:
-		return nil, fmt.Errorf("collections: unsupported indexed value type %T", value)
+		return dst, nil, fmt.Errorf("collections: unsupported indexed value type %T", value)
 	}
+	return dst, dst[start:len(dst):len(dst)], nil
 }
 
 func indexEntryKey(encodedValue, documentID []byte) ([]byte, error) {
@@ -1022,7 +1094,8 @@ func appendIndexEntryKey(dst, encodedValue, documentID []byte) ([]byte, []byte, 
 }
 
 func indexValuePrefix(encodedValue []byte) ([]byte, error) {
-	return appendIndexValuePrefix(make([]byte, 0, 2+len(encodedValue)), encodedValue)
+	_, prefix, err := appendIndexValuePrefixSlice(make([]byte, 0, 2+len(encodedValue)), encodedValue)
+	return prefix, err
 }
 
 func compareIndexValuePrefixEncoded(a, b []byte) int {
@@ -1049,6 +1122,15 @@ func appendIndexValuePrefix(out []byte, encodedValue []byte) ([]byte, error) {
 	out = binary.BigEndian.AppendUint16(out, uint16(len(encodedValue)))
 	out = append(out, encodedValue...)
 	return out, nil
+}
+
+func appendIndexValuePrefixSlice(dst []byte, encodedValue []byte) ([]byte, []byte, error) {
+	start := len(dst)
+	next, err := appendIndexValuePrefix(dst, encodedValue)
+	if err != nil {
+		return next, nil, err
+	}
+	return next, next[start:len(next):len(next)], nil
 }
 
 func prefixEnd(prefix []byte) []byte {
