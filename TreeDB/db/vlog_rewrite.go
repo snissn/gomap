@@ -2536,14 +2536,12 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 	stats.BytesBefore = beforeBytes
 
 	reader := newValueReader(state.ValueLogSet)
-	rewriteUsesLeafLog := opts.IndexOuterLeavesInValueLog
-	if !rewriteUsesLeafLog {
-		rewriteUsesLeafLog, err = valueLogRewriteCollectionRootsUseLeafLog(d.Pager(), reader, state.SystemRootPageID)
-		if err != nil {
-			_ = d.Close()
-			return stats, err
-		}
+	collectionRootLeafLogUsage, collectionRootsUseLeafLog, err := valueLogRewriteCollectionRootLeafLogUsage(d.Pager(), reader, state.SystemRootPageID)
+	if err != nil {
+		_ = d.Close()
+		return stats, err
 	}
+	rewriteUsesLeafLog := opts.IndexOuterLeavesInValueLog || collectionRootsUseLeafLog
 
 	var lane, startSeq uint32
 	if rewriteUsesLeafLog {
@@ -2690,9 +2688,13 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 		return buildTreeFromIterator(iter, useLeafLog)
 	}
 	buildCollectionTree := func(root uint64) (uint64, error) {
-		useLeafLog, err := valueLogRewriteCollectionRootUsesLeafLog(d.Pager(), root)
-		if err != nil {
-			return 0, err
+		useLeafLog, ok := collectionRootLeafLogUsage[root]
+		if !ok {
+			var err error
+			useLeafLog, err = valueLogRewriteCollectionRootUsesLeafLog(d.Pager(), root)
+			if err != nil {
+				return 0, err
+			}
 		}
 		return buildTree(root, useLeafLog)
 	}
@@ -2821,21 +2823,27 @@ func valueLogRewriteCollectionRoots(oldPager *pager.Pager, reader tree.SlabReade
 	}, "vlog-rewrite: rewrite collection root")
 }
 
-func valueLogRewriteCollectionRootsUseLeafLog(oldPager *pager.Pager, reader tree.SlabReader, systemRootID uint64) (bool, error) {
+func valueLogRewriteCollectionRootLeafLogUsage(oldPager *pager.Pager, reader tree.SlabReader, systemRootID uint64) (map[uint64]bool, bool, error) {
 	descriptors, err := vacuumCollectCollectionRootDescriptors(oldPager, reader, systemRootID)
 	if err != nil {
-		return false, fmt.Errorf("vlog-rewrite: collect collection root descriptors: %w", err)
+		return nil, false, fmt.Errorf("vlog-rewrite: collect collection root descriptors: %w", err)
 	}
+	usage := make(map[uint64]bool, len(descriptors))
+	anyLeafLog := false
 	for _, descriptor := range descriptors {
+		if _, ok := usage[descriptor.rootID]; ok {
+			continue
+		}
 		useLeafLog, err := valueLogRewriteCollectionRootUsesLeafLog(oldPager, descriptor.rootID)
 		if err != nil {
-			return false, fmt.Errorf("vlog-rewrite: inspect collection root %q storage: %w", string(descriptor.key), err)
+			return nil, false, fmt.Errorf("vlog-rewrite: inspect collection root %q storage: %w", string(descriptor.key), err)
 		}
+		usage[descriptor.rootID] = useLeafLog
 		if useLeafLog {
-			return true, nil
+			anyLeafLog = true
 		}
 	}
-	return false, nil
+	return usage, anyLeafLog, nil
 }
 
 func valueLogRewriteCollectionRootUsesLeafLog(oldPager *pager.Pager, rootID uint64) (bool, error) {
