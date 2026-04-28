@@ -5,7 +5,10 @@ import (
 	"fmt"
 )
 
-const minBSONDocumentSize = 5
+const (
+	minBSONDocumentSize     = 5
+	initialReplyDocumentCap = 16
+)
 
 type Reply struct {
 	ResponseFlags int32
@@ -31,7 +34,7 @@ func ParseReply(body []byte) (Reply, error) {
 	if numberReturned > len(rem)/minBSONDocumentSize {
 		return Reply{}, fmt.Errorf("%w: OP_REPLY document count exceeds remaining body size", ErrMalformed)
 	}
-	r.Documents = make([]Document, 0, numberReturned)
+	r.Documents = make([]Document, 0, min(numberReturned, initialReplyDocumentCap))
 	for i := 0; i < numberReturned; i++ {
 		doc, next, err := readDocument(rem)
 		if err != nil {
