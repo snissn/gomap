@@ -219,6 +219,98 @@ func TestValueLogGC_KeepsSegmentMadeReachableBySystemDescriptorOnly(t *testing.T
 	}
 }
 
+func TestValueLogGC_RemovesSegmentAfterSystemDescriptorRemoval(t *testing.T) {
+	dir := t.TempDir()
+	d, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	referenced := appendPointersInNewSegment(t, dir, 0, 1, 40_000, 1, func(int) []byte {
+		return bytes.Repeat([]byte("removed-descriptor-live|"), 64)
+	})[0]
+	appendPointersInNewSegment(t, dir, 0, 2, 50_000, 1, func(int) []byte {
+		return bytes.Repeat([]byte("active-head|"), 64)
+	})
+	referencedPath := valueLogSegmentPath(t, dir, referenced.FileID)
+
+	collectionRoot := publishCollectionPointerRoot(t, d, maintenanceTestCollectionRootKey, referenced)
+	refs, err := d.referencedValueLogSegments(context.Background())
+	if err != nil {
+		t.Fatalf("prime value-log ref tracker: %v", err)
+	}
+	if _, ok := refs[referenced.FileID]; !ok {
+		t.Fatalf("expected primed refs to include descriptor-referenced segment %d", referenced.FileID)
+	}
+	if _, ok := d.valueLogRefTracker.referencedSet(d.currentCommitSeq()); !ok {
+		t.Fatal("expected primed value-log ref tracker")
+	}
+	if _, err := d.PublishSystemRootIterator(mustFrozenRawMemtable(t, "sys/after", encodeMaintenanceRootID(collectionRoot)).NewIterator(nil, nil)); err != nil {
+		t.Fatalf("remove collection descriptor: %v", err)
+	}
+	if _, ok := d.valueLogRefTracker.referencedSet(d.currentCommitSeq()); ok {
+		t.Fatal("expected descriptor removal to invalidate value-log ref tracker")
+	}
+
+	stats, err := d.ValueLogGC(context.Background(), ValueLogGCOptions{})
+	if err != nil {
+		t.Fatalf("ValueLogGC: %v", err)
+	}
+	if stats.SegmentsDeleted == 0 {
+		t.Fatalf("expected GC to delete removed-descriptor segment, stats=%+v", stats)
+	}
+	if _, err := os.Stat(referencedPath); err == nil || !os.IsNotExist(err) {
+		t.Fatalf("expected removed-descriptor segment to be deleted, err=%v", err)
+	}
+}
+
+func TestValueLogGC_RemovesSegmentAfterGroupedSystemDescriptorRemoval(t *testing.T) {
+	dir := t.TempDir()
+	d, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	referenced := appendPointersInNewSegment(t, dir, 0, 1, 60_000, 1, func(int) []byte {
+		return bytes.Repeat([]byte("grouped-removed-descriptor-live|"), 64)
+	})[0]
+	appendPointersInNewSegment(t, dir, 0, 2, 70_000, 1, func(int) []byte {
+		return bytes.Repeat([]byte("active-head|"), 64)
+	})
+	referencedPath := valueLogSegmentPath(t, dir, referenced.FileID)
+
+	collectionRoot := publishCollectionPointerRoot(t, d, maintenanceTestCollectionRootKey, referenced)
+	refs, err := d.referencedValueLogSegments(context.Background())
+	if err != nil {
+		t.Fatalf("prime value-log ref tracker: %v", err)
+	}
+	if _, ok := refs[referenced.FileID]; !ok {
+		t.Fatalf("expected primed refs to include descriptor-referenced segment %d", referenced.FileID)
+	}
+	if _, ok := d.valueLogRefTracker.referencedSet(d.currentCommitSeq()); !ok {
+		t.Fatal("expected primed value-log ref tracker")
+	}
+	if _, _, err := d.PublishOrderedRootGroup(mustFrozenRawMemtable(t, "sys/after", encodeMaintenanceRootID(collectionRoot)).NewIterator(nil, nil), nil); err != nil {
+		t.Fatalf("remove collection descriptor via grouped system publish: %v", err)
+	}
+	if _, ok := d.valueLogRefTracker.referencedSet(d.currentCommitSeq()); ok {
+		t.Fatal("expected grouped descriptor removal to invalidate value-log ref tracker")
+	}
+
+	stats, err := d.ValueLogGC(context.Background(), ValueLogGCOptions{})
+	if err != nil {
+		t.Fatalf("ValueLogGC: %v", err)
+	}
+	if stats.SegmentsDeleted == 0 {
+		t.Fatalf("expected GC to delete grouped removed-descriptor segment, stats=%+v", stats)
+	}
+	if _, err := os.Stat(referencedPath); err == nil || !os.IsNotExist(err) {
+		t.Fatalf("expected grouped removed-descriptor segment to be deleted, err=%v", err)
+	}
+}
+
 func TestValueLogRewritePlanningCountsCollectionRootPointers(t *testing.T) {
 	dir := t.TempDir()
 	d, err := Open(Options{Dir: dir})

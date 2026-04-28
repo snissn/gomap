@@ -39,6 +39,7 @@ type orderedRootPublishStats struct {
 	warmRebuildFallbacks                   uint64
 	warmPreservedPages                     uint64
 	warmRewrittenPages                     uint64
+	collectionRootDescriptorBaseContains   bool
 	collectionRootDescriptorTargetContains bool
 }
 
@@ -208,10 +209,21 @@ func materializeOrderedRootTable(iter iterator.UnsafeIterator) (memtable.Table, 
 func orderedRootTableContainsCollectionRootDescriptor(table memtable.Table) (bool, error) {
 	iter := table.NewIterator(collectionRootDescriptorPrefixBytes, collectionRootDescriptorPrefixEnd())
 	defer func() { _ = iter.Close() }()
+	return orderedRootIteratorContainsCollectionRootDescriptor(iter)
+}
+
+func orderedRootIteratorContainsCollectionRootDescriptor(iter iterator.UnsafeIterator) (bool, error) {
+	if iter == nil {
+		return false, nil
+	}
 	if iter.Valid() && bytes.HasPrefix(iter.UnsafeKey(), collectionRootDescriptorPrefixBytes) {
 		return true, nil
 	}
 	return false, iter.Error()
+}
+
+func (s orderedRootPublishStats) collectionRootDescriptorReachabilityMayChange() bool {
+	return s.collectionRootDescriptorBaseContains || s.collectionRootDescriptorTargetContains
 }
 
 func orderedRootEntryEqual(baseIter, targetIter iterator.UnsafeIterator) bool {
@@ -482,6 +494,14 @@ func (db *DB) publishOrderedRootIterator(baseRoot uint64, iter iterator.UnsafeIt
 		rootTree := tree.New(idx.pager, newValueReader(state.ValueLogSet), baseRoot)
 		collectBasePageIDs := func() ([]uint64, error) {
 			return rootTree.CollectPageIDs()
+		}
+		if trackValueLogRefs {
+			baseDescriptorIter := rootTree.Iterator(collectionRootDescriptorPrefixBytes, collectionRootDescriptorPrefixEnd())
+			stats.collectionRootDescriptorBaseContains, err = orderedRootIteratorContainsCollectionRootDescriptor(baseDescriptorIter)
+			_ = baseDescriptorIter.Close()
+			if err != nil {
+				return
+			}
 		}
 
 		baseProbe := rootTree.Iterator(nil, nil)
@@ -985,7 +1005,7 @@ func (db *DB) publishOrderedRootGroup(systemIter iterator.UnsafeIterator, ordere
 		return 0, nil, errors.New("concurrent modification detected during ordered root group publish")
 	}
 
-	forceRefTrackerRebuild := systemStats.collectionRootDescriptorTargetContains
+	forceRefTrackerRebuild := systemStats.collectionRootDescriptorReachabilityMayChange()
 	if forceRefTrackerRebuild {
 		// Collection descriptors make non-system roots part of value-log
 		// reachability. The system-root ref delta alone is not an exact commit
