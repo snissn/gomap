@@ -2621,9 +2621,8 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 		}
 	}
 
-	buildTree := func(root uint64) (uint64, error) {
-		iter := tree.New(d.Pager(), newValueReader(state.ValueLogSet), root).
-			IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
+	reader := newValueReader(state.ValueLogSet)
+	buildTreeFromIterator := func(iter iteratorWithEntry) (uint64, error) {
 		rewriter := &rewriteIterator{
 			inner:               iter,
 			ptrMap:              ptrMap,
@@ -2676,8 +2675,28 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 		stats.TemplateOuterLeafReasons = copyTemplateReasonMap(writer.templateClassReasonCounts(rewriteTemplateClassOuterLeaf))
 		return newRoot, nil
 	}
+	buildTree := func(root uint64) (uint64, error) {
+		iter := tree.New(d.Pager(), reader, root).
+			IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
+		return buildTreeFromIterator(iter)
+	}
 
-	sysRoot, err := buildTree(state.SystemRootPageID)
+	collectionRootReplacements, err := valueLogRewriteCollectionRoots(d.Pager(), reader, state.SystemRootPageID, buildTree)
+	if err != nil {
+		_ = newPager.Close()
+		_ = d.Close()
+		return stats, err
+	}
+
+	var sysIter iteratorWithEntry = tree.New(d.Pager(), reader, state.SystemRootPageID).
+		IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
+	if len(collectionRootReplacements) > 0 {
+		sysIter = &vacuumSystemRootRewriteIterator{
+			base:         sysIter,
+			replacements: collectionRootReplacements,
+		}
+	}
+	sysRoot, err := buildTreeFromIterator(sysIter)
 	if err != nil {
 		_ = newPager.Close()
 		_ = d.Close()
@@ -2771,6 +2790,49 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 	stats.BytesAfter = afterBytes
 
 	return stats, nil
+}
+
+func valueLogRewriteCollectionRoots(oldPager *pager.Pager, reader tree.SlabReader, systemRootID uint64, buildTree func(uint64) (uint64, error)) ([]vacuumCollectionRootReplacement, error) {
+	if buildTree == nil {
+		return nil, errors.New("vlog-rewrite: missing collection root builder")
+	}
+	descriptors, err := vacuumCollectCollectionRootDescriptors(oldPager, reader, systemRootID)
+	if err != nil || len(descriptors) == 0 {
+		return nil, err
+	}
+
+	replacements := make([]vacuumCollectionRootReplacement, 0, len(descriptors))
+	rootRemap := make(map[uint64]uint64, len(descriptors))
+	for _, descriptor := range descriptors {
+		oldRoot := descriptor.rootID
+		newRoot := oldRoot
+		if oldRoot != 0 {
+			if existing, ok := rootRemap[oldRoot]; ok {
+				newRoot = existing
+			} else {
+				newRoot, err = buildTree(oldRoot)
+				if err != nil {
+					return nil, fmt.Errorf("vlog-rewrite: rewrite collection root %q: %w", string(descriptor.key), err)
+				}
+				rootRemap[oldRoot] = newRoot
+			}
+		}
+		if newRoot != oldRoot {
+			encoded := make([]byte, 8)
+			binary.BigEndian.PutUint64(encoded, newRoot)
+			replacements = append(replacements, vacuumCollectionRootReplacement{
+				key:   descriptor.key,
+				value: encoded,
+			})
+		}
+	}
+	if len(replacements) == 0 {
+		return nil, nil
+	}
+	sort.Slice(replacements, func(i, j int) bool {
+		return bytes.Compare(replacements[i].key, replacements[j].key) < 0
+	})
+	return replacements, nil
 }
 
 type rewriteCreatedSegment struct {
