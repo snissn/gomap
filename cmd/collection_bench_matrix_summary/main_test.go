@@ -60,6 +60,15 @@ func TestMatrixSummaryRendersBenchmarkMetrics(t *testing.T) {
           "mean_allocs_per_op": 5
         },
         {
+          "name": "BenchmarkCollectionMixedReadWritePrimary",
+          "mean_ns_per_op": 1000,
+          "mean_bytes_per_op": 512,
+          "mean_allocs_per_op": 5,
+          "mean_metrics": {
+            "writer_docs/sec": 12345
+          }
+        },
+        {
           "name": "BenchmarkCollectionInsertBatchCheckpointWithSecondaryIndexes",
           "mean_ns_per_op": 8000,
           "mean_bytes_per_op": 2000,
@@ -149,7 +158,7 @@ func TestMatrixSummaryRendersBenchmarkMetrics(t *testing.T) {
 		t.Fatalf("write matrix index: %v", err)
 	}
 
-	if err := run(config{matrixIndexPath: indexPath, outDir: dir}); err != nil {
+	if err := run(config{matrixIndexPath: indexPath, outDir: dir, availableBenchmarks: true}); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 	md, err := os.ReadFile(filepath.Join(dir, "collections_matrix_summary.md"))
@@ -180,12 +189,14 @@ func TestMatrixSummaryRendersBenchmarkMetrics(t *testing.T) {
 		"`BenchmarkCollectionOverheadIndexStateTemplateV1Extraction`",
 		"`BenchmarkCollectionOverheadPlanIndexedTemplateV1`",
 		"## Raw Matrix",
-		"| Cell | Engine | Format | Data vlog | Index vlog | Pager chunk | Pager sync | Benchmark | ns/op | ops/sec | B/op | allocs/op | insert ns/doc | insert docs/sec | sync ns/doc | sync docs/sec | Key fallbacks | Prefix fallbacks | Report |",
+		"| Cell | Engine | Format | Data vlog | Index vlog | Pager chunk | Pager sync | Benchmark | ns/op | ops/sec | B/op | allocs/op | insert ns/doc | insert docs/sec | sync ns/doc | sync docs/sec | writer docs/sec | Key fallbacks | Prefix fallbacks | Report |",
 		"`production_fast_data_vlog_index_leaf`",
 		"`BenchmarkCollectionInsertBatchWithSecondaryIndexes`",
+		"`BenchmarkCollectionMixedReadWritePrimary`",
 		"`BenchmarkSQLiteInsertBatchWithSecondaryIndexes`",
 		"`BenchmarkSQLiteNativeColumnsInsertBatchWithSecondaryIndexes`",
 		"`native-columns`",
+		"12,345",
 		"2,812.5",
 		"30",
 		"0",
@@ -201,16 +212,19 @@ func TestMatrixSummaryRendersBenchmarkMetrics(t *testing.T) {
 		t.Fatalf("read tsv: %v", err)
 	}
 	gotTSV := string(tsv)
-	if !strings.Contains(gotTSV, "template-v1\ttrue\tfalse\tprofile/default\tprofile/default\tBenchmarkCollectionInsertBatchWithSecondaryIndexes\t2812.5\t355555.55555555556\t1980\t30\t-\t-\t-\t-\t0\t0\t") {
+	if !strings.Contains(gotTSV, "template-v1\ttrue\tfalse\tprofile/default\tprofile/default\tBenchmarkCollectionInsertBatchWithSecondaryIndexes\t2812.5\t355555.55555555556\t1980\t30\t-\t-\t-\t-\t-\t0\t0\t") {
 		t.Fatalf("tsv missing raw numeric row:\n%s", gotTSV)
 	}
-	if !strings.Contains(gotTSV, "json\t-\t-\t-\t-\tBenchmarkSQLiteInsertBatchWithSecondaryIndexes\t4100\t243902.43902439025\t2048\t32\t-\t-\t-\t-\t") {
+	if !strings.Contains(gotTSV, "template-v1\ttrue\tfalse\tprofile/default\tprofile/default\tBenchmarkCollectionMixedReadWritePrimary\t1000\t1000000\t512\t5\t-\t-\t-\t-\t12345\t-\t-\t") {
+		t.Fatalf("tsv missing mixed writer throughput row:\n%s", gotTSV)
+	}
+	if !strings.Contains(gotTSV, "json\t-\t-\t-\t-\tBenchmarkSQLiteInsertBatchWithSecondaryIndexes\t4100\t243902.43902439025\t2048\t32\t-\t-\t-\t-\t-\t-\t-\t") {
 		t.Fatalf("tsv missing sqlite numeric row:\n%s", gotTSV)
 	}
-	if !strings.Contains(gotTSV, "native-columns\t-\t-\t-\t-\tBenchmarkSQLiteNativeColumnsInsertBatchWithSecondaryIndexes\t3000\t333333.3333333333\t1500\t25\t-\t-\t-\t-\t") {
+	if !strings.Contains(gotTSV, "native-columns\t-\t-\t-\t-\tBenchmarkSQLiteNativeColumnsInsertBatchWithSecondaryIndexes\t3000\t333333.3333333333\t1500\t25\t-\t-\t-\t-\t-\t-\t-\t") {
 		t.Fatalf("tsv missing sqlite native-columns numeric row:\n%s", gotTSV)
 	}
-	if !strings.Contains(gotTSV, "template-v1\ttrue\tfalse\tprofile/default\tprofile/default\tBenchmarkCollectionInsertBatchCheckpointWithSecondaryIndexes\t8000\t125000\t2000\t30\t2500\t400000\t5500\t181818.18181818182\t0\t0\t") {
+	if !strings.Contains(gotTSV, "template-v1\ttrue\tfalse\tprofile/default\tprofile/default\tBenchmarkCollectionInsertBatchCheckpointWithSecondaryIndexes\t8000\t125000\t2000\t30\t2500\t400000\t5500\t181818.18181818182\t-\t0\t0\t") {
 		t.Fatalf("tsv missing checkpoint split row:\n%s", gotTSV)
 	}
 	if strings.Contains(gotTSV, "2,812") {

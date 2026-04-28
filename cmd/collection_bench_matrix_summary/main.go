@@ -63,6 +63,7 @@ type summaryRow struct {
 	CollectionBatchSize int
 	InsertNsPerDoc      *float64
 	SyncNsPerDoc        *float64
+	WriterDocsPerSec    *float64
 	KeyFallbacks        *float64
 	PrefixFallbacks     *float64
 }
@@ -336,6 +337,7 @@ func buildSummaryRow(row matrixRow, collectionBatchSize int, name string, benchm
 		CollectionBatchSize: collectionBatchSize,
 		InsertNsPerDoc:      metricPtr(benchmark.MeanMetrics, "insert_ns/doc"),
 		SyncNsPerDoc:        metricPtr(benchmark.MeanMetrics, "sync_ns/doc"),
+		WriterDocsPerSec:    metricPtr(benchmark.MeanMetrics, "writer_docs/sec"),
 		KeyFallbacks:        metricPtr(benchmark.MeanMetrics, "per_item_key_probe_fallback_count"),
 		PrefixFallbacks:     metricPtr(benchmark.MeanMetrics, "per_item_prefix_probe_fallback_count"),
 	}
@@ -417,7 +419,7 @@ func metricPtr(metrics map[string]float64, name string) *float64 {
 
 func renderTSV(rows []summaryRow) string {
 	var sb strings.Builder
-	sb.WriteString("cell\tengine\tdocument_format\tdata_outer_leaves_in_vlog\tindex_outer_leaves_in_vlog\tpager_chunk_size\tpager_sync_concurrency\tbenchmark\tns_per_op\tops_per_sec\tbytes_per_op\tallocs_per_op\tinsert_ns/doc\tinsert_docs_per_sec\tsync_ns/doc\tsync_docs_per_sec\tper_item_key_probe_fallback_count\tper_item_prefix_probe_fallback_count\treport_md\n")
+	sb.WriteString("cell\tengine\tdocument_format\tdata_outer_leaves_in_vlog\tindex_outer_leaves_in_vlog\tpager_chunk_size\tpager_sync_concurrency\tbenchmark\tns_per_op\tops_per_sec\tbytes_per_op\tallocs_per_op\tinsert_ns/doc\tinsert_docs_per_sec\tsync_ns/doc\tsync_docs_per_sec\twriter_docs/sec\tper_item_key_probe_fallback_count\tper_item_prefix_probe_fallback_count\treport_md\n")
 	for _, row := range rows {
 		sb.WriteString(row.Cell)
 		sb.WriteByte('\t')
@@ -450,6 +452,8 @@ func renderTSV(rows []summaryRow) string {
 		sb.WriteString(formatOptionalTSVFloat(row.SyncNsPerDoc))
 		sb.WriteByte('\t')
 		sb.WriteString(formatOptionalTSVFloat(optionalOpsPerSecFromNs(row.SyncNsPerDoc)))
+		sb.WriteByte('\t')
+		sb.WriteString(formatOptionalTSVFloat(row.WriterDocsPerSec))
 		sb.WriteByte('\t')
 		sb.WriteString(formatOptionalTSVFloat(row.KeyFallbacks))
 		sb.WriteByte('\t')
@@ -624,8 +628,8 @@ func renderMarkdown(rows []summaryRow, outDir string) (string, error) {
 		sb.WriteString("\n")
 	}
 	sb.WriteString("## Raw Matrix\n\n")
-	sb.WriteString("| Cell | Engine | Format | Data vlog | Index vlog | Pager chunk | Pager sync | Benchmark | ns/op | ops/sec | B/op | allocs/op | insert ns/doc | insert docs/sec | sync ns/doc | sync docs/sec | Key fallbacks | Prefix fallbacks | Report |\n")
-	sb.WriteString("| --- | --- | --- | ---: | ---: | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |\n")
+	sb.WriteString("| Cell | Engine | Format | Data vlog | Index vlog | Pager chunk | Pager sync | Benchmark | ns/op | ops/sec | B/op | allocs/op | insert ns/doc | insert docs/sec | sync ns/doc | sync docs/sec | writer docs/sec | Key fallbacks | Prefix fallbacks | Report |\n")
+	sb.WriteString("| --- | --- | --- | ---: | ---: | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |\n")
 	for _, row := range rows {
 		reportPath := relativeReportPath(outDir, row.ReportMarkdownPath)
 		sb.WriteString("| `")
@@ -660,6 +664,8 @@ func renderMarkdown(rows []summaryRow, outDir string) (string, error) {
 		sb.WriteString(formatOptionalFloat(row.SyncNsPerDoc))
 		sb.WriteString(" | ")
 		sb.WriteString(formatOptionalFloat(optionalOpsPerSecFromNs(row.SyncNsPerDoc)))
+		sb.WriteString(" | ")
+		sb.WriteString(formatOptionalFloat(row.WriterDocsPerSec))
 		sb.WriteString(" | ")
 		sb.WriteString(formatOptionalFloat(row.KeyFallbacks))
 		sb.WriteString(" | ")
