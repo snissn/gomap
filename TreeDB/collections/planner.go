@@ -195,11 +195,14 @@ func (p insertBatchPlanner) planInsertBatchWithPreflight(ids, documents [][]byte
 
 	primaryOrder := sortedItemOrderByKey(items, func(item *insertBatchItem) []byte { return item.id })
 	// Keep ID cloning, item assembly, and primary-order sorting outside this phase.
-	duplicatePreflightDuration, err := runDuplicateDocumentPreflight(preflight, items, primaryOrder, resultIDs)
-	if err != nil {
+	phaseStart = time.Now()
+	if err := rejectDuplicateDocumentIDs(items, primaryOrder); err != nil {
 		return nil, err
 	}
-	stats.DuplicateDocumentPreflight = duplicatePreflightDuration
+	if err := preflight.checkDocumentConflicts(items, primaryOrder, resultIDs); err != nil {
+		return nil, err
+	}
+	stats.DuplicateDocumentPreflight = time.Since(phaseStart)
 
 	runtimes, err := p.indexRuntimes()
 	if err != nil {
@@ -302,22 +305,6 @@ func (p insertBatchPreflight) checkDocumentConflicts(items []insertBatchItem, or
 		return errors.New("collections: document already exists")
 	}
 	return nil
-}
-
-func runDuplicateDocumentPreflight(
-	preflight insertBatchPreflight,
-	items []insertBatchItem,
-	order []int,
-	presortedIDs [][]byte,
-) (time.Duration, error) {
-	phaseStart := time.Now()
-	if err := rejectDuplicateDocumentIDs(items, order); err != nil {
-		return time.Since(phaseStart), err
-	}
-	if err := preflight.checkDocumentConflicts(items, order, presortedIDs); err != nil {
-		return time.Since(phaseStart), err
-	}
-	return time.Since(phaseStart), nil
 }
 
 func (p insertBatchPreflight) checkUniqueConflicts(runs []collectionUniqueProbeRun) error {
