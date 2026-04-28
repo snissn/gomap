@@ -236,6 +236,69 @@ func TestMatrixSummaryRendersBenchmarkMetrics(t *testing.T) {
 	}
 }
 
+func TestMatrixSummaryAllowsLegacySQLiteReportsWithoutNativeColumns(t *testing.T) {
+	dir := t.TempDir()
+	sqliteCell := "sqlite_wal_normal"
+	sqliteCellDir := filepath.Join(dir, sqliteCell)
+	if err := os.MkdirAll(sqliteCellDir, 0o755); err != nil {
+		t.Fatalf("mkdir sqlite cell: %v", err)
+	}
+	sqliteReportMarkdown := filepath.Join(sqliteCellDir, "collections_report.md")
+	if err := os.WriteFile(sqliteReportMarkdown, []byte("# sqlite report\n"), 0o644); err != nil {
+		t.Fatalf("write sqlite report md: %v", err)
+	}
+	sqliteReportJSON := filepath.Join(sqliteCellDir, "collections_report.json")
+	if err := os.WriteFile(sqliteReportJSON, []byte(`{
+  "status": "ok",
+  "document_format": "json",
+  "collection_batch_size": 8000,
+  "sections": [
+    {
+      "benchmarks": [
+        {
+          "name": "BenchmarkSQLiteInsertBatchWithSecondaryIndexes",
+          "mean_ns_per_op": 4100,
+          "mean_bytes_per_op": 2048,
+          "mean_allocs_per_op": 32
+        },
+        {
+          "name": "BenchmarkSQLiteInsertBatchCheckpointWithSecondaryIndexes",
+          "mean_ns_per_op": 8200,
+          "mean_bytes_per_op": 4096,
+          "mean_allocs_per_op": 40
+        }
+      ]
+    }
+  ]
+}`), 0o644); err != nil {
+		t.Fatalf("write sqlite report json: %v", err)
+	}
+	indexPath := filepath.Join(dir, "matrix_index.tsv")
+	index := strings.Join([]string{
+		"cell\tengine\tdocument_format\tdata_outer_leaves_in_vlog\tindex_outer_leaves_in_vlog\tpager_chunk_size\tpager_sync_concurrency\treport_md\treport_json\tcpu_profile\tmem_profile",
+		sqliteCell + "\tsqlite_wal_normal\tjson\t-\t-\t-\t-\t" + sqliteReportMarkdown + "\t" + sqliteReportJSON + "\t/sqlite-cpu.pprof\t/sqlite-mem.pprof",
+		"",
+	}, "\n")
+	if err := os.WriteFile(indexPath, []byte(index), 0o644); err != nil {
+		t.Fatalf("write matrix index: %v", err)
+	}
+
+	if err := run(config{matrixIndexPath: indexPath, outDir: dir}); err != nil {
+		t.Fatalf("run legacy sqlite report: %v", err)
+	}
+	tsv, err := os.ReadFile(filepath.Join(dir, "collections_matrix_summary.tsv"))
+	if err != nil {
+		t.Fatalf("read tsv: %v", err)
+	}
+	got := string(tsv)
+	if !strings.Contains(got, "BenchmarkSQLiteInsertBatchWithSecondaryIndexes") {
+		t.Fatalf("legacy sqlite summary missing json row:\n%s", got)
+	}
+	if strings.Contains(got, "BenchmarkSQLiteNativeColumns") {
+		t.Fatalf("legacy sqlite summary should not synthesize native-columns rows:\n%s", got)
+	}
+}
+
 func TestMatrixSummaryFailsOnUnavailableReport(t *testing.T) {
 	dir := t.TempDir()
 	cellDir := filepath.Join(dir, "production_fast_data_vlog_index_leaf")

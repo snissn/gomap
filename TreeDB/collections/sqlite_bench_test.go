@@ -16,7 +16,6 @@ import (
 const (
 	sqliteInsertIndexedDocumentSQL              = `INSERT INTO documents(id, document) VALUES (?, ?)`
 	sqliteInsertNativeColumnsIndexedDocumentSQL = `INSERT INTO documents(id, name, email, city, pad) VALUES (?, ?, ?, ?, ?)`
-	sqliteBenchmarkIndexedPad                   = "01234567890123456789"
 )
 
 func openBenchmarkSQLiteDB(tb testing.TB, name string) *sql.DB {
@@ -132,7 +131,7 @@ func benchmarkSQLiteNativeColumnsDocumentBatch(tb testing.TB, start, count int) 
 			name:  benchmarkSQLiteUserName(docNum),
 			email: benchmarkSQLiteUserEmail(docNum),
 			city:  benchmarkSQLiteCity(docNum),
-			pad:   sqliteBenchmarkIndexedPad,
+			pad:   collectionBenchIndexedPad,
 		}
 	}
 	return docs
@@ -253,7 +252,6 @@ func TestSQLiteBenchmarkSchemaExtractsIndexedFields(t *testing.T) {
 }
 
 func TestSQLiteNativeColumnsBenchmarkSchemaStoresIndexedFields(t *testing.T) {
-	t.Setenv("TREEDB_COLLECTION_DOCUMENT_FORMAT", "template-v1")
 	db := openBenchmarkSQLiteNativeColumnsDB(t, "native_columns_schema")
 	docs := benchmarkSQLiteNativeColumnsDocumentBatch(t, 0, 1)
 	insertSQLiteNativeColumnsDocumentBatch(t, db, docs)
@@ -271,8 +269,8 @@ func TestSQLiteNativeColumnsBenchmarkSchemaStoresIndexedFields(t *testing.T) {
 	if want := "city-00"; city != want {
 		t.Fatalf("city=%q want %q", city, want)
 	}
-	if pad != sqliteBenchmarkIndexedPad {
-		t.Fatalf("pad=%q want %q", pad, sqliteBenchmarkIndexedPad)
+	if pad != collectionBenchIndexedPad {
+		t.Fatalf("pad=%q want %q", pad, collectionBenchIndexedPad)
 	}
 
 	var id string

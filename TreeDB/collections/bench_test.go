@@ -18,6 +18,7 @@ const (
 	collectionBenchSeedDocs         = 4096
 	collectionBenchCities           = 64
 	collectionBenchBackfill         = 1024
+	collectionBenchIndexedPad       = "01234567890123456789"
 )
 
 var collectionBenchPayload = []byte(`{"name":"ada","city":"hnl","email":"ada@example.com","pad":"0123456789012345678901234567890123456789"}`)
@@ -299,7 +300,9 @@ func benchmarkIndexedDocument(n int) []byte {
 	out = appendZeroPaddedInt(out, n, 9)
 	out = append(out, `@example.com","city":"city-`...)
 	out = appendZeroPaddedInt(out, n%collectionBenchCities, 2)
-	out = append(out, `","pad":"01234567890123456789"}`...)
+	out = append(out, `","pad":"`...)
+	out = append(out, collectionBenchIndexedPad...)
+	out = append(out, `"}`...)
 	return out
 }
 
@@ -315,7 +318,7 @@ func benchmarkTemplateDocument(tb testing.TB, encoder *collections.TemplateV1Enc
 				fmt.Sprintf("user-%09d", n),
 				fmt.Sprintf("user-%09d@example.com", n),
 				fmt.Sprintf("city-%02d", n%collectionBenchCities),
-				"01234567890123456789",
+				collectionBenchIndexedPad,
 			},
 		)
 		if err != nil {
