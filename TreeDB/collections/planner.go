@@ -194,6 +194,12 @@ func (p insertBatchPlanner) planInsertBatchWithPreflight(ids, documents [][]byte
 	}
 
 	primaryOrder := sortedItemOrderByKey(items, func(item *insertBatchItem) []byte { return item.id })
+	// Keep ID cloning, item assembly, and primary-order sorting outside this phase.
+	duplicatePreflightDuration, err := runDuplicateDocumentPreflight(preflight, items, primaryOrder, resultIDs)
+	if err != nil {
+		return nil, err
+	}
+	stats.DuplicateDocumentPreflight = duplicatePreflightDuration
 
 	runtimes, err := p.indexRuntimes()
 	if err != nil {
@@ -205,12 +211,6 @@ func (p insertBatchPlanner) planInsertBatchWithPreflight(ids, documents [][]byte
 	if err != nil {
 		return nil, err
 	}
-	// Keep ID cloning, item assembly, and primary-order sorting outside this phase.
-	duplicatePreflightDuration, err := runDuplicateDocumentPreflight(preflight, items, primaryOrder, resultIDs)
-	if err != nil {
-		return nil, err
-	}
-	stats.DuplicateDocumentPreflight = duplicatePreflightDuration
 	phaseStart = time.Now()
 	sortUniqueProbeCandidates(uniqueProbes)
 	if err := rejectDuplicateUniqueProbeCandidates(uniqueProbes); err != nil {
