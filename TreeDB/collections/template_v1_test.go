@@ -16,6 +16,15 @@ func mustTemplateV1Document(t *testing.T, fields []string, values []any) []byte 
 	return doc
 }
 
+func TestEncodeTemplateV1DocumentRejectsInvalidFieldSlices(t *testing.T) {
+	if _, err := EncodeTemplateV1Document([]string{"email", "email"}, []any{"ada@example.com", "grace@example.com"}); err == nil {
+		t.Fatal("expected duplicate field error")
+	}
+	if _, err := EncodeTemplateV1Document([]string{"email"}, []any{}); err == nil {
+		t.Fatal("expected field/value length mismatch error")
+	}
+}
+
 func TestTemplateV1CollectionInsertBatchIndexesAndTemplateRoot(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
@@ -363,6 +372,37 @@ func TestPrepareTemplateV1InsertDocumentsSkipsFallbackTemplateRecord(t *testing.
 	}
 }
 
+type countingMissingTemplateV1Resolver struct {
+	lookups int
+}
+
+func (r *countingMissingTemplateV1Resolver) lookupTemplateV1([32]byte) (*templateV1Template, error) {
+	r.lookups++
+	return nil, errTemplateV1TemplateNotFound
+}
+
+func TestPrepareTemplateV1InsertDocumentsDedupesBatchTemplateRecords(t *testing.T) {
+	doc1, err := EncodeTemplateV1Document([]string{"email", "city"}, []any{"ada@example.com", "hnl"})
+	if err != nil {
+		t.Fatalf("encode doc1: %v", err)
+	}
+	doc2, err := EncodeTemplateV1Document([]string{"email", "city"}, []any{"grace@example.com", "sea"})
+	if err != nil {
+		t.Fatalf("encode doc2: %v", err)
+	}
+	fallback := &countingMissingTemplateV1Resolver{}
+	_, records, _, err := prepareTemplateV1InsertDocuments([][]byte{doc1, doc2}, fallback)
+	if err != nil {
+		t.Fatalf("prepare duplicate template records: %v", err)
+	}
+	if got, want := len(records), 1; got != want {
+		t.Fatalf("publish records=%d want %d", got, want)
+	}
+	if got, want := fallback.lookups, 1; got != want {
+		t.Fatalf("fallback lookups=%d want %d", got, want)
+	}
+}
+
 func TestTemplateV1CompactDocumentRequiresKnownTemplate(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
@@ -558,7 +598,7 @@ func TestTemplateV1NestedIndexExtraction(t *testing.T) {
 	}
 	resolver := &templateV1MemoryResolver{}
 	for _, record := range records {
-		if err := resolver.addRecord(record); err != nil {
+		if _, err := resolver.addRecord(record); err != nil {
 			t.Fatalf("add template record: %v", err)
 		}
 	}
@@ -593,7 +633,7 @@ func TestTemplateV1RootIndexExtraction(t *testing.T) {
 	}
 	resolver := &templateV1MemoryResolver{}
 	for _, record := range records {
-		if err := resolver.addRecord(record); err != nil {
+		if _, err := resolver.addRecord(record); err != nil {
 			t.Fatalf("add template record: %v", err)
 		}
 	}
