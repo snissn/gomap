@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"runtime"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
@@ -40,6 +41,10 @@ func TestVacuumIndexOffline_PreservesPointerBackedCollectionRootDescriptor(t *te
 }
 
 func TestVacuumIndexOnline_PreservesPointerBackedCollectionRootDescriptor(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("online vacuum unsupported on windows")
+	}
+
 	dir := t.TempDir()
 	opts := vacuumPointerDescriptorOptions(dir)
 	d := openVacuumPointerDescriptorFixture(t, opts)
