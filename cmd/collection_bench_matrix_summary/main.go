@@ -869,6 +869,7 @@ type diskUsageKey struct {
 	Cell                   string
 	Engine                 string
 	DocumentFormat         string
+	BenchmarkFamily        string
 	DataOuterLeavesInVLog  string
 	IndexOuterLeavesInVLog string
 	PagerChunkSize         string
@@ -958,6 +959,7 @@ func diskUsageGroupKey(row summaryRow, story string) diskUsageKey {
 		Cell:                   row.Cell,
 		Engine:                 row.Engine,
 		DocumentFormat:         row.DocumentFormat,
+		BenchmarkFamily:        benchmarkBaseName(row.Benchmark),
 		DataOuterLeavesInVLog:  row.DataOuterLeavesInVLog,
 		IndexOuterLeavesInVLog: row.IndexOuterLeavesInVLog,
 		PagerChunkSize:         row.PagerChunkSize,

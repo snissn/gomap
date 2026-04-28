@@ -52,6 +52,19 @@ func TestMatrixSummaryRendersBenchmarkMetrics(t *testing.T) {
           }
         },
         {
+          "name": "BenchmarkCollectionShapeInsertBatchSingleStringJSON/indexes_0",
+          "mean_ns_per_op": 900,
+          "mean_bytes_per_op": 480,
+          "mean_allocs_per_op": 4,
+          "mean_metrics": {
+            "target_docs/batch": 8000,
+            "indexes/doc": 0,
+            "stored_docs": 8000,
+            "disk_total_bytes": 160000,
+            "disk_bytes/doc": 20
+          }
+        },
+        {
           "name": "BenchmarkCollectionShapeInsertBatch/indexes_2",
           "mean_ns_per_op": 1500,
           "mean_bytes_per_op": 768,
