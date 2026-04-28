@@ -610,6 +610,89 @@ func TestValueLogRewriteOffline_RewritesCollectionLeafRefRoot(t *testing.T) {
 	}
 }
 
+func TestValueLogRewriteOffline_RewritesCollectionLeafRefRootWithPagerDefault(t *testing.T) {
+	dir := t.TempDir()
+	opts := Options{
+		Dir:                    dir,
+		Durability:             DurabilityWALOffRelaxed,
+		DisableBackgroundPrune: true,
+		LeafPrefixCompression:  true,
+		IndexColumnarLeaves:    true,
+		IndexPackedValuePtr:    true,
+	}
+	db, err := Open(opts)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	leafLog := newRewriteWriter(ValueLogDirPath(dir), 0, 0, 64<<20)
+	leafLog.ConfigureLeafLog(LeafLogDirPath(dir), rewriteLeafLogLaneID, 0)
+	db.SetLeafPageLog(leafLog)
+
+	const descriptorKey = "collections/root/users/pager-default-primary"
+	docValue := bytes.Repeat([]byte("collection-leafref-pager-default|"), 24)
+	_, rootIDs, err := db.PublishOrderedRootGroupWithSystemBuilder([]OrderedRootPublishInput{{
+		BaseRoot:      0,
+		Iter:          mustFrozenRawMemtable(t, "doc/p", docValue).NewIterator(nil, nil),
+		StoragePolicy: OrderedRootStorageValueLogLeaves,
+	}}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		if len(rootIDs) != 1 {
+			return nil, fmt.Errorf("rootIDs=%d want 1", len(rootIDs))
+		}
+		return mustFrozenRawMemtable(t, descriptorKey, encodeMaintenanceRootID(rootIDs[0])).NewIterator(nil, nil), nil
+	})
+	if err != nil {
+		t.Fatalf("publish collection leaf-ref root: %v", err)
+	}
+	oldRoot := rootIDs[0]
+	oldLeafPtr, ok := page.DecodeLeafRef(oldRoot)
+	if !ok {
+		t.Fatalf("collection root=%d want leaf ref", oldRoot)
+	}
+	oldLeafPath := leafLogSegmentPath(t, dir, oldLeafPtr.FileID)
+	if err := leafLog.Sync(); err != nil {
+		t.Fatalf("sync leaf log: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close before rewrite: %v", err)
+	}
+	if err := leafLog.Close(); err != nil {
+		t.Fatalf("close leaf log: %v", err)
+	}
+
+	stats, err := ValueLogRewriteOffline(opts)
+	if err != nil {
+		t.Fatalf("ValueLogRewriteOffline: %v", err)
+	}
+	if stats.RecordsCopied == 0 {
+		t.Fatalf("expected collection leaf-ref records to be copied, stats=%+v", stats)
+	}
+	if _, err := os.Stat(oldLeafPath); err == nil || !os.IsNotExist(err) {
+		t.Fatalf("expected old collection leaf segment removed, err=%v", err)
+	}
+
+	reopen, err := Open(opts)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer closeNoErr(t, reopen)
+
+	newRoot := readCollectionRootID(t, reopen, descriptorKey)
+	if newRoot == oldRoot {
+		t.Fatalf("collection descriptor still points at old leaf-ref root %d", oldRoot)
+	}
+	newLeafPtr, ok := page.DecodeLeafRef(newRoot)
+	if !ok {
+		t.Fatalf("rewritten collection root=%d want leaf ref", newRoot)
+	}
+	if lane, _ := valuelog.DecodeFileID(newLeafPtr.FileID); lane != rewriteLeafLogLaneID {
+		t.Fatalf("rewritten collection leaf file lane=%d want %d", lane, rewriteLeafLogLaneID)
+	}
+	got := readCollectionRootValue(t, reopen, descriptorKey, []byte("doc/p"))
+	if !bytes.Equal(got, docValue) {
+		t.Fatalf("collection leaf-ref value mismatch after rewrite")
+	}
+}
+
 func TestValueLogRewriteOffline_PreservesCollectionRootStoragePolicy(t *testing.T) {
 	dir := t.TempDir()
 	opts := Options{
