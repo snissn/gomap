@@ -10,9 +10,10 @@ import (
 const collectionRootDescriptorPrefix = vacuumCollectionRootDescriptorPrefix
 
 var collectionRootDescriptorPrefixBytes = vacuumCollectionRootDescriptorPrefixBytes
+var collectionRootDescriptorPrefixEndBytes = vacuumCollectionRootDescriptorPrefixEnd()
 
 func collectionRootDescriptorPrefixEnd() []byte {
-	return vacuumCollectionRootDescriptorPrefixEnd()
+	return collectionRootDescriptorPrefixEndBytes
 }
 
 type maintenanceRootKind uint8

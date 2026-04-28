@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
@@ -216,6 +217,52 @@ func TestValueLogGC_KeepsSegmentMadeReachableBySystemDescriptorOnly(t *testing.T
 	}
 	if _, err := os.Stat(referencedPath); err != nil {
 		t.Fatalf("expected descriptor-referenced segment %d to remain: %v", referenced.FileID, err)
+	}
+}
+
+func TestValueLogRefTracker_PreservesFastPathForUnchangedCollectionDescriptors(t *testing.T) {
+	dir := t.TempDir()
+	d, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	referenced := appendPointersInNewSegment(t, dir, 0, 1, 35_000, 1, func(int) []byte {
+		return bytes.Repeat([]byte("unchanged-descriptor-live|"), 64)
+	})[0]
+	collectionRoot := publishCollectionPointerRoot(t, d, maintenanceTestCollectionRootKey, referenced)
+	if _, err := d.referencedValueLogSegments(context.Background()); err != nil {
+		t.Fatalf("prime value-log ref tracker: %v", err)
+	}
+	if _, ok := d.valueLogRefTracker.referencedSet(d.currentCommitSeq()); !ok {
+		t.Fatal("expected primed value-log ref tracker")
+	}
+
+	if _, err := d.PublishSystemRootIterator(mustFrozenRawMemtable(t,
+		maintenanceTestCollectionRootKey, encodeMaintenanceRootID(collectionRoot),
+		"sys/unchanged", "value",
+	).NewIterator(nil, nil)); err != nil {
+		t.Fatalf("publish unchanged collection descriptor: %v", err)
+	}
+	seq := d.currentCommitSeq()
+	incRefs, ok := d.valueLogRefTracker.referencedSet(seq)
+	if !ok {
+		t.Fatal("expected unchanged descriptor publish to preserve value-log ref tracker")
+	}
+	if _, ok := incRefs[referenced.FileID]; !ok {
+		t.Fatalf("expected incremental refs to include descriptor-referenced segment %d", referenced.FileID)
+	}
+	fullCounts, fullSeq, err := d.scanValueLogRefCounts(context.Background())
+	if err != nil {
+		t.Fatalf("scanValueLogRefCounts: %v", err)
+	}
+	if fullSeq != seq {
+		t.Fatalf("scan seq mismatch: got=%d want=%d", fullSeq, seq)
+	}
+	fullRefs := valueLogRefSetFromCounts(fullCounts)
+	if !reflect.DeepEqual(incRefs, fullRefs) {
+		t.Fatalf("incremental/full-scan mismatch: incremental=%v full=%v", incRefs, fullRefs)
 	}
 }
 

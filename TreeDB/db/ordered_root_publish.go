@@ -34,13 +34,13 @@ const (
 var orderedRootDeltaBatchInlineThreshold = int(^uint(0) >> 1)
 
 type orderedRootPublishStats struct {
-	warmAttempts                           uint64
-	warmNativeApplyAttempts                uint64
-	warmRebuildFallbacks                   uint64
-	warmPreservedPages                     uint64
-	warmRewrittenPages                     uint64
-	collectionRootDescriptorBaseContains   bool
-	collectionRootDescriptorTargetContains bool
+	warmAttempts                          uint64
+	warmNativeApplyAttempts               uint64
+	warmRebuildFallbacks                  uint64
+	warmPreservedPages                    uint64
+	warmRewrittenPages                    uint64
+	collectionRootDescriptorBaseEntries   []orderedRootCollectionDescriptorEntry
+	collectionRootDescriptorTargetEntries []orderedRootCollectionDescriptorEntry
 }
 
 type orderedRootPublishOptions struct {
@@ -206,24 +206,67 @@ func materializeOrderedRootTable(iter iterator.UnsafeIterator) (memtable.Table, 
 	return table, nil
 }
 
-func orderedRootTableContainsCollectionRootDescriptor(table memtable.Table) (bool, error) {
-	iter := table.NewIterator(collectionRootDescriptorPrefixBytes, collectionRootDescriptorPrefixEnd())
-	defer func() { _ = iter.Close() }()
-	return orderedRootIteratorContainsCollectionRootDescriptor(iter)
+type orderedRootCollectionDescriptorEntry struct {
+	key   []byte
+	val   []byte
+	ptr   page.ValuePtr
+	flags byte
 }
 
-func orderedRootIteratorContainsCollectionRootDescriptor(iter iterator.UnsafeIterator) (bool, error) {
+func orderedRootTableCollectionRootDescriptorEntries(table memtable.Table) ([]orderedRootCollectionDescriptorEntry, error) {
+	iter := table.NewIterator(collectionRootDescriptorPrefixBytes, collectionRootDescriptorPrefixEnd())
+	defer func() { _ = iter.Close() }()
+	return orderedRootIteratorCollectionRootDescriptorEntries(iter)
+}
+
+func orderedRootIteratorCollectionRootDescriptorEntries(iter iterator.UnsafeIterator) ([]orderedRootCollectionDescriptorEntry, error) {
 	if iter == nil {
-		return false, nil
+		return nil, nil
 	}
-	if iter.Valid() && bytes.HasPrefix(iter.UnsafeKey(), collectionRootDescriptorPrefixBytes) {
-		return true, nil
+	var out []orderedRootCollectionDescriptorEntry
+	for iter.Valid() {
+		key := iter.UnsafeKey()
+		if !bytes.HasPrefix(key, collectionRootDescriptorPrefixBytes) {
+			break
+		}
+		val, ptr, flags := iter.UnsafeEntry()
+		entry := orderedRootCollectionDescriptorEntry{
+			key:   append([]byte(nil), key...),
+			ptr:   ptr,
+			flags: flags,
+		}
+		if flags&node.FlagPointer == 0 {
+			entry.val = append([]byte(nil), val...)
+		}
+		out = append(out, entry)
+		iter.Next()
 	}
-	return false, iter.Error()
+	return out, iter.Error()
+}
+
+func orderedRootCollectionRootDescriptorEntriesEqual(a, b []orderedRootCollectionDescriptorEntry) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if !bytes.Equal(a[i].key, b[i].key) || a[i].flags != b[i].flags {
+			return false
+		}
+		if a[i].flags&node.FlagPointer != 0 {
+			if a[i].ptr != b[i].ptr {
+				return false
+			}
+			continue
+		}
+		if !bytes.Equal(a[i].val, b[i].val) {
+			return false
+		}
+	}
+	return true
 }
 
 func (s orderedRootPublishStats) collectionRootDescriptorReachabilityMayChange() bool {
-	return s.collectionRootDescriptorBaseContains || s.collectionRootDescriptorTargetContains
+	return !orderedRootCollectionRootDescriptorEntriesEqual(s.collectionRootDescriptorBaseEntries, s.collectionRootDescriptorTargetEntries)
 }
 
 func orderedRootEntryEqual(baseIter, targetIter iterator.UnsafeIterator) bool {
@@ -497,7 +540,7 @@ func (db *DB) publishOrderedRootIterator(baseRoot uint64, iter iterator.UnsafeIt
 		}
 		if trackValueLogRefs {
 			baseDescriptorIter := rootTree.Iterator(collectionRootDescriptorPrefixBytes, collectionRootDescriptorPrefixEnd())
-			stats.collectionRootDescriptorBaseContains, err = orderedRootIteratorContainsCollectionRootDescriptor(baseDescriptorIter)
+			stats.collectionRootDescriptorBaseEntries, err = orderedRootIteratorCollectionRootDescriptorEntries(baseDescriptorIter)
 			_ = baseDescriptorIter.Close()
 			if err != nil {
 				return
@@ -519,7 +562,7 @@ func (db *DB) publishOrderedRootIterator(baseRoot uint64, iter iterator.UnsafeIt
 			return
 		}
 		if trackValueLogRefs {
-			stats.collectionRootDescriptorTargetContains, err = orderedRootTableContainsCollectionRootDescriptor(targetTable)
+			stats.collectionRootDescriptorTargetEntries, err = orderedRootTableCollectionRootDescriptorEntries(targetTable)
 			if err != nil {
 				return
 			}
@@ -597,7 +640,7 @@ func (db *DB) publishOrderedRootIterator(baseRoot uint64, iter iterator.UnsafeIt
 				err = materializeErr
 				return
 			}
-			stats.collectionRootDescriptorTargetContains, err = orderedRootTableContainsCollectionRootDescriptor(targetTable)
+			stats.collectionRootDescriptorTargetEntries, err = orderedRootTableCollectionRootDescriptorEntries(targetTable)
 			if err != nil {
 				return
 			}
