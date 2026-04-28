@@ -32,11 +32,13 @@ there is no dead value-log payload for rewrite or GC to remove. The next matrix
 needs explicit update/delete/churn workloads to evaluate compaction value.
 
 SQLite `VACUUM` did reclaim meaningful space. SQLite JSON two-index data moved
-from `150,289,067 B` to `132,618,923 B`, and SQLite native columns moved from
-`110,616,576 B` to `98,480,128 B`. After vacuum, SQLite JSON is still much
-larger than both TreeDB default and TreeDB index-vlog layouts. SQLite native
-columns after vacuum are closer to default TreeDB disk size, but still larger
-than TreeDB with index outer leaves in the value log.
+from `134,714,709 B` to `118,872,747 B`, and SQLite native columns moved from
+`112,710,997 B` to `100,324,693 B`. These totals are not directly comparable to
+TreeDB totals because the Go benchmark rows stored different document counts.
+The comparable normalized numbers are SQLite JSON at `231.40 B/doc` after
+vacuum, SQLite native columns at `156.40 B/doc` after vacuum, and TreeDB
+template-v1 with index outer leaves in the value log at `104.90 B/doc` after
+rewrite/GC.
 
 Template-v1 is still a strong read-path improvement over JSON. Primary reads at
 two indexes are `1,295.67 ns/op` (`771,803 ops/sec`, `4,862 B/op`,
@@ -136,17 +138,17 @@ profile, and trace output.
 TreeDB measurements run value-log rewrite, checkpoint, then value-log GC and
 checkpoint. SQLite measurements run `VACUUM` and a WAL checkpoint.
 
-| Engine/format | Layout | Maintenance | ns/op | ops/sec | GC ns/op | GC ops/sec | Before bytes | After bytes | After GC bytes | Delta after GC |
-| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| TreeDB JSON | default index leaves | vlog rewrite + GC | 97,042,875 | 10.30 | 332,028 | 3,011.79 | 153,688,757 | 153,689,087 | 153,689,087 | +330 |
-| TreeDB template-v1 | default index leaves | vlog rewrite + GC | 123,363,986 | 8.11 | 369,680 | 2,705.04 | 198,803,276 | 198,803,606 | 198,803,606 | +330 |
-| TreeDB JSON | index outer leaves in value log | vlog rewrite + GC | 141,203,000 | 7.08 | 344,917 | 2,899.25 | 104,923,856 | 104,924,289 | 104,924,289 | +433 |
-| TreeDB template-v1 | index outer leaves in value log | vlog rewrite + GC | 137,128,125 | 7.29 | 332,194 | 3,010.29 | 104,862,258 | 104,862,588 | 104,862,588 | +330 |
+| Engine/format | Layout | Stored docs | Maintenance | ns/op | ops/sec | GC ns/op | GC ops/sec | Before bytes | After bytes | After GC bytes | After GC B/doc | Delta after GC |
+| --- | --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| TreeDB JSON | default index leaves | 1,000,000 | vlog rewrite + GC | 97,042,875 | 10.30 | 332,028 | 3,011.79 | 153,688,757 | 153,689,087 | 153,689,087 | 153.69 | +330 |
+| TreeDB template-v1 | default index leaves | 1,281,732 | vlog rewrite + GC | 123,363,986 | 8.11 | 369,680 | 2,705.04 | 198,803,276 | 198,803,606 | 198,803,606 | 155.10 | +330 |
+| TreeDB JSON | index outer leaves in value log | 981,699 | vlog rewrite + GC | 141,203,000 | 7.08 | 344,917 | 2,899.25 | 104,923,856 | 104,924,289 | 104,924,289 | 106.90 | +433 |
+| TreeDB template-v1 | index outer leaves in value log | 1,000,000 | vlog rewrite + GC | 137,128,125 | 7.29 | 332,194 | 3,010.29 | 104,862,258 | 104,862,588 | 104,862,588 | 104.90 | +330 |
 
-| Engine/format | Maintenance | ns/op | ops/sec | Before bytes | After bytes | Delta bytes | Before B/doc | After B/doc |
-| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| SQLite JSON | VACUUM | 228,219,291 | 4.38 | 150,289,067 | 132,618,923 | -17,670,144 | 262.30 | 231.40 |
-| SQLite native columns | VACUUM | 178,198,028 | 5.61 | 110,616,576 | 98,480,128 | -12,136,448 | 175.77 | 156.50 |
+| Engine/format | Stored docs | Maintenance | ns/op | ops/sec | Before bytes | After bytes | Delta bytes | Before B/doc | After B/doc |
+| --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| SQLite JSON | 513,627 | VACUUM | 247,588,889 | 4.04 | 134,714,709 | 118,872,747 | -15,841,963 | 262.30 | 231.40 |
+| SQLite native columns | 641,271 | VACUUM | 199,786,611 | 5.01 | 112,710,997 | 100,324,693 | -12,386,304 | 175.77 | 156.40 |
 
 ## Disk Usage Comparison
 
@@ -159,7 +161,7 @@ checkpoint. SQLite measurements run `VACUUM` and a WAL checkpoint.
 | SQLite JSON | before VACUUM, two indexes | 262.30 | 146.30 | 116.00 |
 | SQLite JSON | after VACUUM, two indexes | 231.40 | - | - |
 | SQLite native columns | before VACUUM, two indexes | 175.77 | 100.00 | 75.77 |
-| SQLite native columns | after VACUUM, two indexes | 156.50 | - | - |
+| SQLite native columns | after VACUUM, two indexes | 156.40 | - | - |
 
 ## Reads and Mixed Read/Write
 
@@ -217,10 +219,12 @@ Unified bench used `keys=100000`, `valsize=128`, `batchsize=8000`,
 
 The index-vlog layout is promising for disk usage. It reduces two-index TreeDB
 disk usage to roughly `105 B/doc`, below SQLite native columns even after
-VACUUM. The cost is lower write throughput, so the next focused profile should
-compare default and index-vlog two-index insert profiles to find whether the
-extra time is in value-log append, publish/root delta construction, or readback
-of outer leaves.
+VACUUM at `156.40 B/doc`. The raw SQLite total can be lower in the maintenance
+table because that benchmark row stored about `641k` documents rather than
+TreeDB template-v1 index-vlog's `1M` documents. The cost is lower write
+throughput, so the next focused profile should compare default and index-vlog
+two-index insert profiles to find whether the extra time is in value-log append,
+publish/root delta construction, or readback of outer leaves.
 
 The value-log rewrite result is not evidence that rewrite is ineffective. It is
 evidence that this insert-only matrix is the wrong workload for reclaim analysis.
