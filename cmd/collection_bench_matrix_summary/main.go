@@ -694,8 +694,8 @@ func renderMarkdown(rows []summaryRow, outDir string) (string, error) {
 	if len(diskUsageRows) > 0 {
 		sb.WriteString("## Disk Usage\n\n")
 		sb.WriteString("Disk rows use benchmark-reported end-of-run bytes after an untimed flush/checkpoint. Collection/index splits use engine-reported object bytes when available; otherwise they derive index bytes from the per-doc delta against the matching zero-index row.\n\n")
-		sb.WriteString("| Cell | Engine | Format | Data vlog | Index vlog | Pager chunk | Pager sync | Story | Indexes/doc | Stored docs | Total disk | Total B/doc | Collection disk | Collection B/doc | Index disk | Index B/doc | Split | Report |\n")
-		sb.WriteString("| --- | --- | --- | ---: | ---: | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |\n")
+		sb.WriteString("| Cell | Engine | Format | Data vlog | Index vlog | Pager chunk | Pager sync | Story | Benchmark | Indexes/doc | Stored docs | Total disk | Total B/doc | Collection disk | Collection B/doc | Index disk | Index B/doc | Split | Report |\n")
+		sb.WriteString("| --- | --- | --- | ---: | ---: | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |\n")
 		for _, row := range diskUsageRows {
 			reportPath := relativeReportPath(outDir, row.ReportMarkdownPath)
 			sb.WriteString("| `")
@@ -714,7 +714,9 @@ func renderMarkdown(rows []summaryRow, outDir string) (string, error) {
 			sb.WriteString(escapeTableCell(row.PagerSyncConcurrency))
 			sb.WriteString("` | ")
 			sb.WriteString(escapeTableCell(row.Story))
-			sb.WriteString(" | ")
+			sb.WriteString(" | `")
+			sb.WriteString(escapeTableCell(row.Benchmark))
+			sb.WriteString("` | ")
 			sb.WriteString(formatFloat(row.IndexesPerDocValue))
 			sb.WriteString(" | ")
 			sb.WriteString(formatFloat(row.StoredDocsValue))

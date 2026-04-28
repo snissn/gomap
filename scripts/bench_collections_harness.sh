@@ -393,7 +393,7 @@ cat >"$OUT_DIR/README.md" <<EOF
 - unified index: \`$UNIFIED_INDEX_TSV\`
 
 Latency columns in the generated reports include adjacent throughput columns, for example \`ns/op\` with \`ops/sec\` and \`insert ns/doc\` with \`insert docs/sec\`.
-Insert-shape benchmark rows also include untimed end-of-run disk metrics, and the disk summary compares total, collection, and index bytes using per-doc deltas against matching zero-index baselines.
+Insert benchmark rows may also include untimed end-of-run disk metrics, and the disk summary compares total, collection, and index bytes using per-doc deltas against matching zero-index baselines.
 
 ## Cells
 

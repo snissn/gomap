@@ -81,8 +81,6 @@ func benchmarkCollectionShapeInsertBatch(b *testing.B, indexCount int, checkpoin
 		metricName = "target_docs/checkpoint"
 	}
 	b.ReportAllocs()
-	b.ReportMetric(float64(targetBatchSize), metricName)
-	b.ReportMetric(float64(indexCount), "indexes/doc")
 	b.ResetTimer()
 	for inserted := 0; inserted < b.N; {
 		b.StopTimer()
@@ -146,8 +144,6 @@ func benchmarkCollectionShapeSingleStringInsertBatch(b *testing.B, indexCount in
 		metricName = "target_docs/checkpoint"
 	}
 	b.ReportAllocs()
-	b.ReportMetric(float64(targetBatchSize), metricName)
-	b.ReportMetric(float64(indexCount), "indexes/doc")
 	b.ResetTimer()
 	for inserted := 0; inserted < b.N; {
 		b.StopTimer()

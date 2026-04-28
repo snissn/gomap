@@ -489,7 +489,6 @@ func BenchmarkCollectionInsertBatchProvidedID(b *testing.B) {
 	startKeyFallback, startPrefixFallback := benchmarkNativeProbeFallbackCounters(b, backend)
 
 	b.ReportAllocs()
-	b.ReportMetric(float64(targetBatchSize), "target_docs/batch")
 	b.ResetTimer()
 	for inserted := 0; inserted < b.N; {
 		b.StopTimer()
@@ -506,6 +505,7 @@ func BenchmarkCollectionInsertBatchProvidedID(b *testing.B) {
 		inserted += batchSize
 	}
 	b.StopTimer()
+	b.ReportMetric(float64(targetBatchSize), "target_docs/batch")
 	benchmarkReportNativeProbeFallbackDeltas(b, backend, startKeyFallback, startPrefixFallback)
 }
 
@@ -574,7 +574,6 @@ func BenchmarkCollectionInsertBatchWithSecondaryIndexes(b *testing.B) {
 	startKeyFallback, startPrefixFallback := benchmarkNativeProbeFallbackCounters(b, backend)
 
 	b.ReportAllocs()
-	b.ReportMetric(float64(targetBatchSize), "target_docs/batch")
 	b.ResetTimer()
 	for inserted := 0; inserted < b.N; {
 		b.StopTimer()
@@ -605,7 +604,6 @@ func BenchmarkCollectionInsertBatchCheckpointWithSecondaryIndexes(b *testing.B) 
 	var syncElapsed time.Duration
 
 	b.ReportAllocs()
-	b.ReportMetric(float64(targetBatchSize), "target_docs/checkpoint")
 	b.ResetTimer()
 	for inserted := 0; inserted < b.N; {
 		b.StopTimer()

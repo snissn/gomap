@@ -388,7 +388,6 @@ func BenchmarkSQLiteInsertBatchWithSecondaryIndexes(b *testing.B) {
 	targetBatchSize := benchmarkBatchSize(b)
 
 	b.ReportAllocs()
-	b.ReportMetric(float64(targetBatchSize), "target_docs/batch")
 	b.ResetTimer()
 	for inserted := 0; inserted < b.N; {
 		b.StopTimer()
@@ -415,7 +414,6 @@ func BenchmarkSQLiteInsertBatchCheckpointWithSecondaryIndexes(b *testing.B) {
 	var syncElapsed time.Duration
 
 	b.ReportAllocs()
-	b.ReportMetric(float64(targetBatchSize), "target_docs/checkpoint")
 	b.ResetTimer()
 	for inserted := 0; inserted < b.N; {
 		b.StopTimer()
@@ -446,7 +444,6 @@ func BenchmarkSQLiteNativeColumnsInsertBatchWithSecondaryIndexes(b *testing.B) {
 	targetBatchSize := benchmarkBatchSize(b)
 
 	b.ReportAllocs()
-	b.ReportMetric(float64(targetBatchSize), "target_docs/batch")
 	b.ResetTimer()
 	for inserted := 0; inserted < b.N; {
 		b.StopTimer()
@@ -473,7 +470,6 @@ func BenchmarkSQLiteNativeColumnsInsertBatchCheckpointWithSecondaryIndexes(b *te
 	var syncElapsed time.Duration
 
 	b.ReportAllocs()
-	b.ReportMetric(float64(targetBatchSize), "target_docs/checkpoint")
 	b.ResetTimer()
 	for inserted := 0; inserted < b.N; {
 		b.StopTimer()
@@ -510,8 +506,6 @@ func benchmarkSQLiteShapeInsertBatchJSON(b *testing.B, indexCount int, checkpoin
 		metricName = "target_docs/checkpoint"
 	}
 	b.ReportAllocs()
-	b.ReportMetric(float64(indexCount), "indexes/doc")
-	b.ReportMetric(float64(targetBatchSize), metricName)
 	b.ResetTimer()
 	for inserted := 0; inserted < b.N; {
 		b.StopTimer()
@@ -554,8 +548,6 @@ func benchmarkSQLiteShapeInsertBatchNativeColumns(b *testing.B, indexCount int, 
 		metricName = "target_docs/checkpoint"
 	}
 	b.ReportAllocs()
-	b.ReportMetric(float64(indexCount), "indexes/doc")
-	b.ReportMetric(float64(targetBatchSize), metricName)
 	b.ResetTimer()
 	for inserted := 0; inserted < b.N; {
 		b.StopTimer()

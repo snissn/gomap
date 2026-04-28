@@ -75,8 +75,9 @@ profiles for the existing fixed-document indexed insert/checkpoint benchmarks.
 The default collection storage policy remains production-oriented:
 `data_outer=true,index_outer=false`.
 
-Insert-shape benchmark rows report end-of-run disk bytes after an untimed
-flush/checkpoint. The matrix summary includes a disk-usage section that compares
-total bytes, collection bytes, and index bytes; when an engine does not expose a
-direct object split, index bytes are derived from the per-doc delta against the
-matching zero-index row.
+Collection insert benchmark rows, including the collection-shape inserts and the
+fixed indexed insert/checkpoint variants used for timed profiling, report
+end-of-run disk bytes after an untimed flush/checkpoint. The matrix summary
+includes a disk-usage section that compares total bytes, collection bytes, and
+index bytes; when an engine does not expose a direct object split, index bytes
+are derived from the per-doc delta against the matching zero-index row.

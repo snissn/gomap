@@ -101,7 +101,6 @@ func benchmarkTimedProfileIndexedInsertBatch(b *testing.B, checkpoint bool) {
 		metricName = "target_docs/checkpoint"
 	}
 	b.ReportAllocs()
-	b.ReportMetric(float64(targetBatchSize), metricName)
 	b.ResetTimer()
 	b.StopTimer()
 	stopProfile := startTimedCollectionCPUProfile(b)

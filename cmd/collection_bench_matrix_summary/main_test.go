@@ -242,7 +242,7 @@ func TestMatrixSummaryRendersBenchmarkMetrics(t *testing.T) {
 		"44",
 		"44.44",
 		"## Disk Usage",
-		"| Cell | Engine | Format | Data vlog | Index vlog | Pager chunk | Pager sync | Story | Indexes/doc | Stored docs | Total disk | Total B/doc | Collection disk | Collection B/doc | Index disk | Index B/doc | Split | Report |",
+		"| Cell | Engine | Format | Data vlog | Index vlog | Pager chunk | Pager sync | Story | Benchmark | Indexes/doc | Stored docs | Total disk | Total B/doc | Collection disk | Collection B/doc | Index disk | Index B/doc | Split | Report |",
 		"`zero_index_delta`",
 		"`reported`",
 		"2,400,000",
