@@ -124,6 +124,74 @@ lower-level hooks when a measured workload needs them.
      TreeDB writes, and response encoding so format work is driven by measured
      bottlenecks.
 
+## Wire Protocol Library Survey
+
+Decision: implement a small TreeDB-owned wire protocol layer for the MVP. Do
+not depend on a third-party MongoDB wire protocol package for the first
+prototype. If we add a MongoDB dependency, prefer the public
+`go.mongodb.org/mongo-driver/v2/bson` package for BSON documents and ObjectId
+helpers, not the driver's internal wire protocol package.
+
+Sources checked:
+
+- MongoDB wire protocol reference:
+  <https://www.mongodb.com/docs/manual/reference/mongodb-wire-protocol/>
+- MongoDB handshake spec:
+  <https://specifications.readthedocs.io/en/latest/mongodb-handshake/handshake/>
+- Official Go driver internal `wiremessage` package:
+  <https://pkg.go.dev/go.mongodb.org/mongo-driver/v2/x/mongo/driver/wiremessage>
+- Official Go driver public `bson` package:
+  <https://pkg.go.dev/go.mongodb.org/mongo-driver/v2/bson>
+- FerretDB extracted wire package:
+  <https://pkg.go.dev/github.com/FerretDB/wire>
+- Teleport MongoDB proxy protocol package:
+  <https://pkg.go.dev/github.com/zmb3/teleport/lib/srv/db/mongodb/protocol>
+- Cybergarage `go-mongo` server package:
+  <https://pkg.go.dev/github.com/cybergarage/go-mongo/mongo>
+
+Findings:
+
+- Modern MongoDB command traffic is centered on `OP_MSG`, and MongoDB 5.1
+  removes the old CRUD opcodes in favor of `OP_MSG`. However, driver handshakes
+  can still start with legacy `isMaster` over `OP_QUERY` before switching to
+  `OP_MSG` when `maxWireVersion` indicates support. The MVP therefore needs
+  `OP_QUERY` handshake support plus `OP_REPLY`, not only `OP_MSG`.
+- The official Go driver's `wiremessage` package has the low-level constants and
+  append/read helpers we would want, but its docs say it is internal,
+  experimental, and has no backward-compatibility guarantee. It is useful as a
+  reference, not a dependency boundary.
+- FerretDB/wire is the closest standalone fit: it reads/writes messages and
+  covers `OP_MSG`, `OP_QUERY`, and `OP_REPLY`. Its README currently says "Please
+  do not use it yet", and the latest module declares Go 1.24 while this repo is
+  still `go 1.23.0`. It is worth re-evaluating later, but not as the MVP
+  foundation.
+- Teleport's protocol package covers the right message subset for a proxy, but
+  it is embedded in a large proxy product tree rather than published as a small
+  standalone protocol module. Pulling it in would import product assumptions we
+  do not need.
+- Cybergarage/go-mongo exposes server/message-handler abstractions, but it is a
+  broader server framework with low import adoption. For this effort, it is more
+  useful as prior art than as an initial dependency.
+
+Direct MVP wire scope:
+
+- Read and validate the 16-byte standard message header.
+- Enforce a conservative maximum message length.
+- Support `OP_QUERY` only for initial `hello` / `isMaster` handshake, and reply
+  with `OP_REPLY`.
+- Support `OP_MSG` for normal commands, including kind 0 body sections and kind
+  1 document sequences.
+- Do not advertise compression; reject or close on `OP_COMPRESSED` until a
+  benchmark or driver compatibility test requires it.
+- Populate response headers with `responseTo` set to the client request ID.
+- Use `bson.Raw` / `RawValue` for command parsing and response construction
+  where the public driver BSON API is sufficient.
+
+Revisit this decision if FerretDB/wire becomes explicitly supported for external
+use, if direct wire parsing starts to sprawl beyond the small subset above, or if
+driver compatibility tests expose edge cases that a maintained protocol package
+already handles cleanly.
+
 ## Document Identity Mapping
 
 MVP decision: MongoDB `_id` should be the TreeDB collection primary key. This
@@ -220,10 +288,12 @@ Metrics to record for every run:
 
 ## Todo
 
-- [ ] Survey Go MongoDB wire protocol libraries and decide whether to use one or
+- [x] Survey Go MongoDB wire protocol libraries and decide whether to use one or
       implement the small OP_MSG subset directly.
 - [ ] Write a short compatibility matrix for commands, query operators, update
       operators, and BSON types.
+- [ ] Prototype the small TreeDB-owned wire layer with OP_QUERY handshake,
+      OP_REPLY handshake response, and OP_MSG command request/response tests.
 - [ ] Define the initial BSON-to-TreeDB document encoding.
 - [ ] Define canonical `_id` primary-key encoding, generated ObjectId behavior,
       and `_id` immutability tests.
@@ -251,3 +321,7 @@ Metrics to record for every run:
 - 2026-04-28: Decided the MVP should map MongoDB `_id` to the TreeDB collection
   primary key, with remaining work focused on canonical key encoding and
   benchmark validation of key-size/write-locality costs.
+- 2026-04-28: Completed the Go wire-protocol package survey. Decision: implement
+  a small TreeDB-owned wire layer for `OP_QUERY` handshake, `OP_REPLY`, and
+  `OP_MSG`; use public BSON APIs where helpful, but avoid internal/unstable or
+  not-yet-supported wire protocol dependencies for the MVP.
