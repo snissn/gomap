@@ -1479,63 +1479,83 @@ func secondaryDeleteKeysForDocument(runtime indexRuntime, state documentIndexSta
 	return out, nil
 }
 
+// Get returns an owned copy of the document for documentID.
+//
+// Missing documents return (nil, nil), matching the existing collection API.
 func (c *Collection) Get(documentID []byte) ([]byte, error) {
+	out, found, err := c.GetInto(documentID, nil)
+	if err != nil || !found {
+		return nil, err
+	}
+	if cap(out) == len(out) {
+		return out, nil
+	}
+	owned := make([]byte, len(out))
+	copy(owned, out)
+	return owned, nil
+}
+
+// GetInto appends the document for documentID into dst[:0].
+//
+// The returned slice is owned by the caller. Missing documents return
+// (dst[:0], false, nil).
+func (c *Collection) GetInto(documentID []byte, dst []byte) ([]byte, bool, error) {
 	if c == nil {
-		return nil, errCollectionNil
+		return dst[:0], false, errCollectionNil
 	}
 	if c.db == nil {
-		return nil, errors.New("collections: db is nil")
+		return dst[:0], false, errors.New("collections: db is nil")
 	}
 	if len(documentID) == 0 {
-		return nil, errors.New("collections: document id cannot be empty")
+		return dst[:0], false, errors.New("collections: document id cannot be empty")
 	}
-	if value, found := c.getBufferedDocument(documentID); found {
-		return value, nil
+	if value, buffered, found := c.getBufferedDocumentInto(documentID, dst); buffered {
+		return value, found, nil
 	}
 	snap := c.db.AcquireSnapshot()
 	if snap == nil {
-		return nil, backenddb.ErrClosed
+		return dst[:0], false, backenddb.ErrClosed
 	}
 	defer func() { _ = snap.Close() }()
 	catalog, err := c.catalogForSnapshot(snap)
 	if err != nil {
-		return nil, err
+		return dst[:0], false, err
 	}
 	if catalog == nil {
-		return nil, errCollectionNotFound
+		return dst[:0], false, errCollectionNotFound
 	}
 	primaryRoot := catalog.rootID(collectionPrimaryRootName(c.meta.Name))
 	if primaryRoot == 0 {
-		return nil, nil
+		return dst[:0], false, nil
 	}
-	entry, err := snap.GetEntryAtRoot(primaryRoot, documentID)
+	out, err := snap.GetAppendAtRoot(primaryRoot, documentID, dst[:0])
 	if errors.Is(err, tree.ErrKeyNotFound) {
-		return nil, nil
+		return dst[:0], false, nil
 	}
 	if err != nil {
-		return nil, err
+		return dst[:0], false, err
 	}
-	return bytes.Clone(entry.Value), nil
+	return out, true, nil
 }
 
-func (c *Collection) getBufferedDocument(documentID []byte) ([]byte, bool) {
+func (c *Collection) getBufferedDocumentInto(documentID []byte, dst []byte) ([]byte, bool, bool) {
 	if c == nil || c.writeDomain == nil {
-		return nil, false
+		return nil, false, false
 	}
 	domain := c.writeDomain
 	domain.mu.RLock()
 	defer domain.mu.RUnlock()
 	if domain.count == 0 || domain.table == nil {
-		return nil, false
+		return nil, false, false
 	}
 	value, _, flags, found := domain.table.GetEntry(documentID)
 	if !found {
-		return nil, false
+		return nil, false, false
 	}
 	if flags&node.FlagTombstone != 0 {
-		return nil, true
+		return dst[:0], true, false
 	}
-	return bytes.Clone(value), true
+	return append(dst[:0], value...), true, true
 }
 
 func (c *Collection) FindByIndex(indexName, value string) ([][]byte, error) {

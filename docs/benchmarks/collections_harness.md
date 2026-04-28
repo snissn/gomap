@@ -17,6 +17,7 @@ The default run captures:
 
 - JSON collection shape benchmarks.
 - `template-v1` collection shape benchmarks.
+- primary read shapes for both `Get` and reusable-buffer `GetInto`.
 - per-cell `collections_report.{json,md,html}`.
 - per-cell `collections_cpu.pprof`, `collections_mem.pprof`, and pprof top text.
 - top-level `collections_matrix_summary.{tsv,md,html}`.

@@ -97,6 +97,8 @@ var benchmarkOrder = []string{
 	"BenchmarkCollectionTimedProfileInsertBatchCheckpointWithSecondaryIndexes",
 	"BenchmarkCollectionShapeReadPrimary",
 	"BenchmarkCollectionShapeReadPrimaryParallel",
+	"BenchmarkCollectionShapeReadPrimaryInto",
+	"BenchmarkCollectionShapeReadPrimaryIntoParallel",
 	"BenchmarkCollectionMixedReadWritePrimary",
 	"BenchmarkCollectionMixedReadWriteSecondaryUnique",
 	"BenchmarkSQLiteShapeInsertBatchJSON",
