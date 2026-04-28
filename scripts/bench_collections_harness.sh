@@ -135,6 +135,27 @@ printf "cell\tengine\tdocument_format\tdata_outer_leaves_in_vlog\tindex_outer_le
 printf "cell\tengine\tdocument_format\tbenchmark\tcpu_profile_mode\treport_md\treport_json\tcpu_profile\tmem_profile\tcpu_top\tmem_top\n" >"$PROFILE_INDEX_TSV"
 printf "cell\tprofile\tkeys\tvalsize\tbatchsize\ttests\tprofile_dir\tbenchprof_md\tinsights_md\tinsights_html\n" >"$UNIFIED_INDEX_TSV"
 
+regex_escape_segment() {
+  printf '%s' "$1" | sed -e 's/[][\\.^$*+?{}()|]/\\&/g'
+}
+
+bench_regex_for_go_test() {
+  local bench=$1
+  local out=""
+  local parts=()
+  local part
+  local escaped
+  IFS='/' read -r -a parts <<<"$bench"
+  for part in "${parts[@]}"; do
+    escaped=$(regex_escape_segment "$part")
+    if [[ -n "$out" ]]; then
+      out+="/"
+    fi
+    out+="^${escaped}$"
+  done
+  printf '%s' "$out"
+}
+
 echo "running collections harness into: $OUT_DIR"
 echo "worktree: $WORKTREE"
 echo "branch: $BRANCH"
@@ -186,10 +207,12 @@ run_profile_cell_benches() {
   read -r -a benches <<<"$PROFILE_BENCH_LIST"
   for bench in "${benches[@]}"; do
     local profile_dir="$OUT_DIR/$cell/profiles/$(printf '%s' "$bench" | tr '/ ' '__')"
+    local bench_regex
+    bench_regex=$(bench_regex_for_go_test "$bench")
     echo
     echo "==> profile $cell $bench"
     OUT_DIR="$profile_dir" \
-      BENCH_REGEX="^${bench}$" \
+      BENCH_REGEX="$bench_regex" \
       COUNT="$PROFILE_COUNT" \
       BENCHTIME="$PROFILE_BENCHTIME" \
       TREEDB_COLLECTION_PATH_LABEL="$PATH_LABEL" \
@@ -219,10 +242,12 @@ run_timed_profile_cell_benches() {
   read -r -a benches <<<"$TIMED_PROFILE_BENCH_LIST"
   for bench in "${benches[@]}"; do
     local profile_dir="$OUT_DIR/$cell/timed_profiles/$bench"
+    local bench_regex
+    bench_regex=$(bench_regex_for_go_test "$bench")
     echo
     echo "==> timed profile $cell $bench"
     OUT_DIR="$profile_dir" \
-      BENCH_REGEX="^${bench}$" \
+      BENCH_REGEX="$bench_regex" \
       COUNT=1 \
       BENCHTIME="${TIMED_PROFILE_DOCS}x" \
       TREEDB_COLLECTION_TIMED_CPU_PROFILE=true \
