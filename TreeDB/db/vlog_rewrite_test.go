@@ -610,6 +610,106 @@ func TestValueLogRewriteOffline_RewritesCollectionLeafRefRoot(t *testing.T) {
 	}
 }
 
+func TestValueLogRewriteOffline_PreservesCollectionRootStoragePolicy(t *testing.T) {
+	dir := t.TempDir()
+	opts := Options{
+		Dir:                        dir,
+		Durability:                 DurabilityWALOffRelaxed,
+		DisableBackgroundPrune:     true,
+		IndexOuterLeavesInValueLog: true,
+		LeafPrefixCompression:      true,
+		IndexColumnarLeaves:        true,
+		IndexPackedValuePtr:        true,
+	}
+	db, err := Open(opts)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	leafLog := newRewriteWriter(ValueLogDirPath(dir), 0, 0, 64<<20)
+	leafLog.ConfigureLeafLog(LeafLogDirPath(dir), rewriteLeafLogLaneID, 0)
+	db.SetLeafPageLog(leafLog)
+
+	ptr := appendPointersInNewSegment(t, dir, 0, 1, 700_000, 1, func(int) []byte {
+		return bytes.Repeat([]byte("collection-mixed-policy-live|"), 32)
+	})[0]
+	indexDescriptorKey := "collections/root/users/by-email"
+	_, rootIDs, err := db.PublishOrderedRootGroupWithSystemBuilder([]OrderedRootPublishInput{
+		{
+			BaseRoot:      0,
+			Iter:          mustFrozenSystemPointerMemtable(t, "doc/p", ptr).NewIterator(nil, nil),
+			StoragePolicy: OrderedRootStorageValueLogLeaves,
+		},
+		{
+			BaseRoot:      0,
+			Iter:          mustFrozenRawMemtable(t, "idx/email/a", "").NewIterator(nil, nil),
+			StoragePolicy: OrderedRootStoragePagerLeaves,
+		},
+	}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		if len(rootIDs) != 2 {
+			return nil, fmt.Errorf("rootIDs=%d want 2", len(rootIDs))
+		}
+		return mustFrozenRawMemtable(t,
+			maintenanceTestCollectionRootKey, encodeMaintenanceRootID(rootIDs[0]),
+			indexDescriptorKey, encodeMaintenanceRootID(rootIDs[1]),
+		).NewIterator(nil, nil), nil
+	})
+	if err != nil {
+		t.Fatalf("publish mixed collection roots: %v", err)
+	}
+	if _, ok := page.DecodeLeafRef(rootIDs[0]); !ok {
+		t.Fatalf("primary root=%d want leaf ref", rootIDs[0])
+	}
+	if _, ok := page.DecodeLeafRef(rootIDs[1]); ok {
+		t.Fatalf("index root=%d want pager root", rootIDs[1])
+	}
+
+	if err := leafLog.Sync(); err != nil {
+		t.Fatalf("sync leaf log: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close before rewrite: %v", err)
+	}
+	if err := leafLog.Close(); err != nil {
+		t.Fatalf("close leaf log: %v", err)
+	}
+
+	if _, err := ValueLogRewriteOffline(opts); err != nil {
+		t.Fatalf("ValueLogRewriteOffline: %v", err)
+	}
+
+	reopen, err := Open(opts)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer closeNoErr(t, reopen)
+
+	primaryRoot := readCollectionRootID(t, reopen, maintenanceTestCollectionRootKey)
+	if _, ok := page.DecodeLeafRef(primaryRoot); !ok {
+		t.Fatalf("rewritten primary root=%d want leaf ref", primaryRoot)
+	}
+	indexRoot := readCollectionRootID(t, reopen, indexDescriptorKey)
+	if _, ok := page.DecodeLeafRef(indexRoot); ok {
+		t.Fatalf("rewritten index root=%d want pager root", indexRoot)
+	}
+	got := readCollectionRootValue(t, reopen, maintenanceTestCollectionRootKey, []byte("doc/p"))
+	want := bytes.Repeat([]byte("collection-mixed-policy-live|"), 32)
+	if !bytes.Equal(got, want) {
+		t.Fatalf("collection mixed-policy value mismatch after rewrite")
+	}
+	snap := reopen.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("expected snapshot")
+	}
+	defer snap.Close()
+	idxVal, err := snap.GetAtRoot(indexRoot, []byte("idx/email/a"))
+	if err != nil {
+		t.Fatalf("read collection index root: %v", err)
+	}
+	if len(idxVal) != 0 {
+		t.Fatalf("collection index value=%q want empty", string(idxVal))
+	}
+}
+
 func TestValueLogRewriteOffline_RejectsPendingCommitLog(t *testing.T) {
 	dir := t.TempDir()
 

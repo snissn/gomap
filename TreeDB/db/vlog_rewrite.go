@@ -2622,7 +2622,7 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 	}
 
 	reader := newValueReader(state.ValueLogSet)
-	buildTreeFromIterator := func(iter iteratorWithEntry) (uint64, error) {
+	buildTreeFromIterator := func(iter iteratorWithEntry, useLeafLog bool) (uint64, error) {
 		rewriter := &rewriteIterator{
 			inner:               iter,
 			ptrMap:              ptrMap,
@@ -2644,7 +2644,7 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 			PackedValuePtr:        opts.IndexPackedValuePtr,
 			InternalBaseDelta:     opts.IndexInternalBaseDelta,
 		}
-		if opts.IndexOuterLeavesInValueLog {
+		if useLeafLog {
 			buildOpts.LeafPageLog = writer
 		}
 		newRoot, err := bulk.BuildWithOptions(rewriter, alloc, newPager, buildOpts)
@@ -2675,13 +2675,20 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 		stats.TemplateOuterLeafReasons = copyTemplateReasonMap(writer.templateClassReasonCounts(rewriteTemplateClassOuterLeaf))
 		return newRoot, nil
 	}
-	buildTree := func(root uint64) (uint64, error) {
+	buildTree := func(root uint64, useLeafLog bool) (uint64, error) {
 		iter := tree.New(d.Pager(), reader, root).
 			IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
-		return buildTreeFromIterator(iter)
+		return buildTreeFromIterator(iter, useLeafLog)
+	}
+	buildCollectionTree := func(root uint64) (uint64, error) {
+		useLeafLog, err := valueLogRewriteCollectionRootUsesLeafLog(d.Pager(), root)
+		if err != nil {
+			return 0, err
+		}
+		return buildTree(root, useLeafLog)
 	}
 
-	collectionRootReplacements, err := valueLogRewriteCollectionRoots(d.Pager(), reader, state.SystemRootPageID, buildTree)
+	collectionRootReplacements, err := valueLogRewriteCollectionRoots(d.Pager(), reader, state.SystemRootPageID, buildCollectionTree)
 	if err != nil {
 		_ = newPager.Close()
 		_ = d.Close()
@@ -2696,14 +2703,14 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 			replacements: collectionRootReplacements,
 		}
 	}
-	sysRoot, err := buildTreeFromIterator(sysIter)
+	sysRoot, err := buildTreeFromIterator(sysIter, opts.IndexOuterLeavesInValueLog)
 	if err != nil {
 		_ = newPager.Close()
 		_ = d.Close()
 		return stats, err
 	}
 
-	userRoot, err := buildTree(state.RootPageID)
+	userRoot, err := buildTree(state.RootPageID, opts.IndexOuterLeavesInValueLog)
 	if err != nil {
 		_ = newPager.Close()
 		_ = d.Close()
@@ -2833,6 +2840,20 @@ func valueLogRewriteCollectionRoots(oldPager *pager.Pager, reader tree.SlabReade
 		return bytes.Compare(replacements[i].key, replacements[j].key) < 0
 	})
 	return replacements, nil
+}
+
+func valueLogRewriteCollectionRootUsesLeafLog(oldPager *pager.Pager, rootID uint64) (bool, error) {
+	if rootID == 0 {
+		return false, nil
+	}
+	if _, ok := page.DecodeLeafRef(rootID); ok {
+		return true, nil
+	}
+	_, allLeafRefs, err := vacuumCollectLeafRefChildrenIfComplete(oldPager, rootID)
+	if err != nil {
+		return false, err
+	}
+	return allLeafRefs, nil
 }
 
 type rewriteCreatedSegment struct {
