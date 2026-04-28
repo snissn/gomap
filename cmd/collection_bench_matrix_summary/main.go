@@ -56,16 +56,24 @@ type benchmarkAggregate struct {
 
 type summaryRow struct {
 	matrixRow
-	Benchmark           string
-	NsPerOp             float64
-	BytesPerOp          float64
-	AllocsPerOp         float64
-	CollectionBatchSize int
-	InsertNsPerDoc      *float64
-	SyncNsPerDoc        *float64
-	WriterDocsPerSec    *float64
-	KeyFallbacks        *float64
-	PrefixFallbacks     *float64
+	Benchmark             string
+	NsPerOp               float64
+	BytesPerOp            float64
+	AllocsPerOp           float64
+	CollectionBatchSize   int
+	InsertNsPerDoc        *float64
+	SyncNsPerDoc          *float64
+	WriterDocsPerSec      *float64
+	KeyFallbacks          *float64
+	PrefixFallbacks       *float64
+	IndexesPerDoc         *float64
+	StoredDocs            *float64
+	DiskTotalBytes        *float64
+	DiskBytesPerDoc       *float64
+	CollectionDiskBytes   *float64
+	CollectionDiskBPerDoc *float64
+	IndexDiskBytes        *float64
+	IndexDiskBPerDoc      *float64
 }
 
 type loadedReport struct {
@@ -80,6 +88,20 @@ type userStoryRow struct {
 	DocsPerSec float64
 	MSPerBatch float64
 	BatchesSec float64
+}
+
+type diskUsageRow struct {
+	summaryRow
+	Story                      string
+	SplitSource                string
+	IndexesPerDocValue         float64
+	StoredDocsValue            float64
+	DiskTotalBytesValue        float64
+	DiskBytesPerDocValue       float64
+	CollectionDiskBytesValue   *float64
+	CollectionDiskBPerDocValue *float64
+	IndexDiskBytesValue        *float64
+	IndexDiskBPerDocValue      *float64
 }
 
 var benchmarkOrder = []string{
@@ -164,6 +186,10 @@ func run(cfg config) error {
 	if err := os.WriteFile(userStoryPath, []byte(renderUserStoryTSV(buildUserStoryRows(summaryRows))), 0o644); err != nil {
 		return fmt.Errorf("write user story tsv: %w", err)
 	}
+	diskUsagePath := filepath.Join(cfg.outDir, "collections_disk_usage_summary.tsv")
+	if err := os.WriteFile(diskUsagePath, []byte(renderDiskUsageTSV(buildDiskUsageRows(summaryRows))), 0o644); err != nil {
+		return fmt.Errorf("write disk usage tsv: %w", err)
+	}
 	mdPath := filepath.Join(cfg.outDir, "collections_matrix_summary.md")
 	md, err := renderMarkdown(summaryRows, cfg.outDir)
 	if err != nil {
@@ -182,6 +208,7 @@ func run(cfg config) error {
 	}
 	fmt.Printf("wrote matrix summary tsv: %s\n", tsvPath)
 	fmt.Printf("wrote user story tsv:     %s\n", userStoryPath)
+	fmt.Printf("wrote disk usage tsv:     %s\n", diskUsagePath)
 	fmt.Printf("wrote matrix summary md:  %s\n", mdPath)
 	fmt.Printf("wrote matrix summary html: %s\n", htmlPath)
 	return nil
@@ -329,17 +356,25 @@ func buildSummaryRow(row matrixRow, collectionBatchSize int, name string, benchm
 	benchmarkRow := row
 	benchmarkRow.DocumentFormat = documentFormatForBenchmark(benchmarkRow.DocumentFormat, name)
 	return summaryRow{
-		matrixRow:           benchmarkRow,
-		Benchmark:           name,
-		NsPerOp:             benchmark.MeanNsPerOp,
-		BytesPerOp:          benchmark.MeanBytesPerOp,
-		AllocsPerOp:         benchmark.MeanAllocsPerOp,
-		CollectionBatchSize: collectionBatchSize,
-		InsertNsPerDoc:      metricPtr(benchmark.MeanMetrics, "insert_ns/doc"),
-		SyncNsPerDoc:        metricPtr(benchmark.MeanMetrics, "sync_ns/doc"),
-		WriterDocsPerSec:    metricPtr(benchmark.MeanMetrics, "writer_docs/sec"),
-		KeyFallbacks:        metricPtr(benchmark.MeanMetrics, "per_item_key_probe_fallback_count"),
-		PrefixFallbacks:     metricPtr(benchmark.MeanMetrics, "per_item_prefix_probe_fallback_count"),
+		matrixRow:             benchmarkRow,
+		Benchmark:             name,
+		NsPerOp:               benchmark.MeanNsPerOp,
+		BytesPerOp:            benchmark.MeanBytesPerOp,
+		AllocsPerOp:           benchmark.MeanAllocsPerOp,
+		CollectionBatchSize:   collectionBatchSize,
+		InsertNsPerDoc:        metricPtr(benchmark.MeanMetrics, "insert_ns/doc"),
+		SyncNsPerDoc:          metricPtr(benchmark.MeanMetrics, "sync_ns/doc"),
+		WriterDocsPerSec:      metricPtr(benchmark.MeanMetrics, "writer_docs/sec"),
+		KeyFallbacks:          metricPtr(benchmark.MeanMetrics, "per_item_key_probe_fallback_count"),
+		PrefixFallbacks:       metricPtr(benchmark.MeanMetrics, "per_item_prefix_probe_fallback_count"),
+		IndexesPerDoc:         metricPtr(benchmark.MeanMetrics, "indexes/doc"),
+		StoredDocs:            metricPtr(benchmark.MeanMetrics, "stored_docs"),
+		DiskTotalBytes:        metricPtr(benchmark.MeanMetrics, "disk_total_bytes"),
+		DiskBytesPerDoc:       metricPtr(benchmark.MeanMetrics, "disk_bytes/doc"),
+		CollectionDiskBytes:   metricPtr(benchmark.MeanMetrics, "collection_disk_bytes"),
+		CollectionDiskBPerDoc: metricPtr(benchmark.MeanMetrics, "collection_disk_bytes/doc"),
+		IndexDiskBytes:        metricPtr(benchmark.MeanMetrics, "index_disk_bytes"),
+		IndexDiskBPerDoc:      metricPtr(benchmark.MeanMetrics, "index_disk_bytes/doc"),
 	}
 }
 
@@ -419,7 +454,7 @@ func metricPtr(metrics map[string]float64, name string) *float64 {
 
 func renderTSV(rows []summaryRow) string {
 	var sb strings.Builder
-	sb.WriteString("cell\tengine\tdocument_format\tdata_outer_leaves_in_vlog\tindex_outer_leaves_in_vlog\tpager_chunk_size\tpager_sync_concurrency\tbenchmark\tns_per_op\tops_per_sec\tbytes_per_op\tallocs_per_op\tinsert_ns/doc\tinsert_docs_per_sec\tsync_ns/doc\tsync_docs_per_sec\twriter_docs_per_sec\tper_item_key_probe_fallback_count\tper_item_prefix_probe_fallback_count\treport_md\n")
+	sb.WriteString("cell\tengine\tdocument_format\tdata_outer_leaves_in_vlog\tindex_outer_leaves_in_vlog\tpager_chunk_size\tpager_sync_concurrency\tbenchmark\tns_per_op\tops_per_sec\tbytes_per_op\tallocs_per_op\tinsert_ns/doc\tinsert_docs_per_sec\tsync_ns/doc\tsync_docs_per_sec\twriter_docs_per_sec\tper_item_key_probe_fallback_count\tper_item_prefix_probe_fallback_count\tindexes/doc\tstored_docs\tdisk_total_bytes\tdisk_bytes/doc\tcollection_disk_bytes\tcollection_disk_bytes/doc\tindex_disk_bytes\tindex_disk_bytes/doc\treport_md\n")
 	for _, row := range rows {
 		sb.WriteString(row.Cell)
 		sb.WriteByte('\t')
@@ -458,6 +493,22 @@ func renderTSV(rows []summaryRow) string {
 		sb.WriteString(formatOptionalTSVFloat(row.KeyFallbacks))
 		sb.WriteByte('\t')
 		sb.WriteString(formatOptionalTSVFloat(row.PrefixFallbacks))
+		sb.WriteByte('\t')
+		sb.WriteString(formatOptionalTSVFloat(row.IndexesPerDoc))
+		sb.WriteByte('\t')
+		sb.WriteString(formatOptionalTSVFloat(row.StoredDocs))
+		sb.WriteByte('\t')
+		sb.WriteString(formatOptionalTSVFloat(row.DiskTotalBytes))
+		sb.WriteByte('\t')
+		sb.WriteString(formatOptionalTSVFloat(row.DiskBytesPerDoc))
+		sb.WriteByte('\t')
+		sb.WriteString(formatOptionalTSVFloat(row.CollectionDiskBytes))
+		sb.WriteByte('\t')
+		sb.WriteString(formatOptionalTSVFloat(row.CollectionDiskBPerDoc))
+		sb.WriteByte('\t')
+		sb.WriteString(formatOptionalTSVFloat(row.IndexDiskBytes))
+		sb.WriteByte('\t')
+		sb.WriteString(formatOptionalTSVFloat(row.IndexDiskBPerDoc))
 		sb.WriteByte('\t')
 		sb.WriteString(row.ReportMarkdownPath)
 		sb.WriteByte('\n')
@@ -500,6 +551,52 @@ func renderUserStoryTSV(rows []userStoryRow) string {
 		sb.WriteString(formatOptionalTSVFloat(optionalMetricPerBatchMS(row.SyncNsPerDoc, row.CollectionBatchSize)))
 		sb.WriteByte('\t')
 		sb.WriteString(formatTSVFloat(row.BatchesSec))
+		sb.WriteByte('\t')
+		sb.WriteString(row.ReportMarkdownPath)
+		sb.WriteByte('\n')
+	}
+	return sb.String()
+}
+
+func renderDiskUsageTSV(rows []diskUsageRow) string {
+	var sb strings.Builder
+	sb.WriteString("cell\tengine\tdocument_format\tdata_outer_leaves_in_vlog\tindex_outer_leaves_in_vlog\tpager_chunk_size\tpager_sync_concurrency\tstory\tbenchmark\tindexes/doc\tstored_docs\tdisk_total_bytes\tdisk_bytes/doc\tcollection_disk_bytes\tcollection_disk_bytes/doc\tindex_disk_bytes\tindex_disk_bytes/doc\tsplit_source\treport_md\n")
+	for _, row := range rows {
+		sb.WriteString(row.Cell)
+		sb.WriteByte('\t')
+		sb.WriteString(row.Engine)
+		sb.WriteByte('\t')
+		sb.WriteString(row.DocumentFormat)
+		sb.WriteByte('\t')
+		sb.WriteString(row.DataOuterLeavesInVLog)
+		sb.WriteByte('\t')
+		sb.WriteString(row.IndexOuterLeavesInVLog)
+		sb.WriteByte('\t')
+		sb.WriteString(row.PagerChunkSize)
+		sb.WriteByte('\t')
+		sb.WriteString(row.PagerSyncConcurrency)
+		sb.WriteByte('\t')
+		sb.WriteString(row.Story)
+		sb.WriteByte('\t')
+		sb.WriteString(row.Benchmark)
+		sb.WriteByte('\t')
+		sb.WriteString(formatTSVFloat(row.IndexesPerDocValue))
+		sb.WriteByte('\t')
+		sb.WriteString(formatTSVFloat(row.StoredDocsValue))
+		sb.WriteByte('\t')
+		sb.WriteString(formatTSVFloat(row.DiskTotalBytesValue))
+		sb.WriteByte('\t')
+		sb.WriteString(formatTSVFloat(row.DiskBytesPerDocValue))
+		sb.WriteByte('\t')
+		sb.WriteString(formatOptionalTSVFloat(row.CollectionDiskBytesValue))
+		sb.WriteByte('\t')
+		sb.WriteString(formatOptionalTSVFloat(row.CollectionDiskBPerDocValue))
+		sb.WriteByte('\t')
+		sb.WriteString(formatOptionalTSVFloat(row.IndexDiskBytesValue))
+		sb.WriteByte('\t')
+		sb.WriteString(formatOptionalTSVFloat(row.IndexDiskBPerDocValue))
+		sb.WriteByte('\t')
+		sb.WriteString(row.SplitSource)
 		sb.WriteByte('\t')
 		sb.WriteString(row.ReportMarkdownPath)
 		sb.WriteByte('\n')
@@ -593,6 +690,56 @@ func renderMarkdown(rows []summaryRow, outDir string) (string, error) {
 		}
 		sb.WriteString("\n")
 	}
+	diskUsageRows := buildDiskUsageRows(rows)
+	if len(diskUsageRows) > 0 {
+		sb.WriteString("## Disk Usage\n\n")
+		sb.WriteString("Disk rows use benchmark-reported end-of-run bytes after an untimed flush/checkpoint. Collection/index splits use engine-reported object bytes when available; otherwise they derive index bytes from the per-doc delta against the matching zero-index row.\n\n")
+		sb.WriteString("| Cell | Engine | Format | Data vlog | Index vlog | Pager chunk | Pager sync | Story | Benchmark | Indexes/doc | Stored docs | Total disk | Total B/doc | Collection disk | Collection B/doc | Index disk | Index B/doc | Split | Report |\n")
+		sb.WriteString("| --- | --- | --- | ---: | ---: | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |\n")
+		for _, row := range diskUsageRows {
+			reportPath := relativeReportPath(outDir, row.ReportMarkdownPath)
+			sb.WriteString("| `")
+			sb.WriteString(escapeTableCell(row.Cell))
+			sb.WriteString("` | `")
+			sb.WriteString(escapeTableCell(row.Engine))
+			sb.WriteString("` | `")
+			sb.WriteString(escapeTableCell(row.DocumentFormat))
+			sb.WriteString("` | `")
+			sb.WriteString(escapeTableCell(row.DataOuterLeavesInVLog))
+			sb.WriteString("` | `")
+			sb.WriteString(escapeTableCell(row.IndexOuterLeavesInVLog))
+			sb.WriteString("` | `")
+			sb.WriteString(escapeTableCell(row.PagerChunkSize))
+			sb.WriteString("` | `")
+			sb.WriteString(escapeTableCell(row.PagerSyncConcurrency))
+			sb.WriteString("` | ")
+			sb.WriteString(escapeTableCell(row.Story))
+			sb.WriteString(" | `")
+			sb.WriteString(escapeTableCell(row.Benchmark))
+			sb.WriteString("` | ")
+			sb.WriteString(formatFloat(row.IndexesPerDocValue))
+			sb.WriteString(" | ")
+			sb.WriteString(formatFloat(row.StoredDocsValue))
+			sb.WriteString(" | ")
+			sb.WriteString(formatByteCount(row.DiskTotalBytesValue))
+			sb.WriteString(" | ")
+			sb.WriteString(formatFloat(row.DiskBytesPerDocValue))
+			sb.WriteString(" | ")
+			sb.WriteString(formatOptionalByteCount(row.CollectionDiskBytesValue))
+			sb.WriteString(" | ")
+			sb.WriteString(formatOptionalFloat(row.CollectionDiskBPerDocValue))
+			sb.WriteString(" | ")
+			sb.WriteString(formatOptionalByteCount(row.IndexDiskBytesValue))
+			sb.WriteString(" | ")
+			sb.WriteString(formatOptionalFloat(row.IndexDiskBPerDocValue))
+			sb.WriteString(" | `")
+			sb.WriteString(escapeTableCell(row.SplitSource))
+			sb.WriteString("` | [report](")
+			sb.WriteString(markdownLinkPath(reportPath))
+			sb.WriteString(") |\n")
+		}
+		sb.WriteString("\n")
+	}
 	diagnosticRows := buildDiagnosticRows(rows)
 	if len(diagnosticRows) > 0 {
 		sb.WriteString("## Diagnostic Rows\n\n")
@@ -628,8 +775,8 @@ func renderMarkdown(rows []summaryRow, outDir string) (string, error) {
 		sb.WriteString("\n")
 	}
 	sb.WriteString("## Raw Matrix\n\n")
-	sb.WriteString("| Cell | Engine | Format | Data vlog | Index vlog | Pager chunk | Pager sync | Benchmark | ns/op | ops/sec | B/op | allocs/op | insert ns/doc | insert docs/sec | sync ns/doc | sync docs/sec | writer docs/sec | Key fallbacks | Prefix fallbacks | Report |\n")
-	sb.WriteString("| --- | --- | --- | ---: | ---: | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |\n")
+	sb.WriteString("| Cell | Engine | Format | Data vlog | Index vlog | Pager chunk | Pager sync | Benchmark | ns/op | ops/sec | B/op | allocs/op | insert ns/doc | insert docs/sec | sync ns/doc | sync docs/sec | writer docs/sec | Key fallbacks | Prefix fallbacks | indexes/doc | stored docs | disk total | disk B/doc | collection disk | collection B/doc | index disk | index B/doc | Report |\n")
+	sb.WriteString("| --- | --- | --- | ---: | ---: | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |\n")
 	for _, row := range rows {
 		reportPath := relativeReportPath(outDir, row.ReportMarkdownPath)
 		sb.WriteString("| `")
@@ -670,6 +817,22 @@ func renderMarkdown(rows []summaryRow, outDir string) (string, error) {
 		sb.WriteString(formatOptionalFloat(row.KeyFallbacks))
 		sb.WriteString(" | ")
 		sb.WriteString(formatOptionalFloat(row.PrefixFallbacks))
+		sb.WriteString(" | ")
+		sb.WriteString(formatOptionalFloat(row.IndexesPerDoc))
+		sb.WriteString(" | ")
+		sb.WriteString(formatOptionalFloat(row.StoredDocs))
+		sb.WriteString(" | ")
+		sb.WriteString(formatOptionalByteCount(row.DiskTotalBytes))
+		sb.WriteString(" | ")
+		sb.WriteString(formatOptionalFloat(row.DiskBytesPerDoc))
+		sb.WriteString(" | ")
+		sb.WriteString(formatOptionalByteCount(row.CollectionDiskBytes))
+		sb.WriteString(" | ")
+		sb.WriteString(formatOptionalFloat(row.CollectionDiskBPerDoc))
+		sb.WriteString(" | ")
+		sb.WriteString(formatOptionalByteCount(row.IndexDiskBytes))
+		sb.WriteString(" | ")
+		sb.WriteString(formatOptionalFloat(row.IndexDiskBPerDoc))
 		sb.WriteString(" | [report](")
 		sb.WriteString(markdownLinkPath(reportPath))
 		sb.WriteString(") |\n")
@@ -702,6 +865,109 @@ func buildUserStoryRows(rows []summaryRow) []userStoryRow {
 		})
 	}
 	return out
+}
+
+type diskUsageKey struct {
+	Cell                   string
+	Engine                 string
+	DocumentFormat         string
+	BenchmarkFamily        string
+	DataOuterLeavesInVLog  string
+	IndexOuterLeavesInVLog string
+	PagerChunkSize         string
+	PagerSyncConcurrency   string
+	Story                  string
+}
+
+func buildDiskUsageRows(rows []summaryRow) []diskUsageRow {
+	candidates := make([]summaryRow, 0, len(rows))
+	baselines := make(map[diskUsageKey]summaryRow)
+	for _, row := range rows {
+		story, ok := userStoryLabel(row.Benchmark)
+		if !ok || row.DiskTotalBytes == nil || row.StoredDocs == nil || row.IndexesPerDoc == nil || *row.StoredDocs <= 0 {
+			continue
+		}
+		candidates = append(candidates, row)
+		if *row.IndexesPerDoc == 0 {
+			key := diskUsageGroupKey(row, story)
+			rowBPerDoc, rowOK := summaryRowDiskBytesPerDoc(row)
+			existing, hasExisting := baselines[key]
+			existingBPerDoc, existingOK := summaryRowDiskBytesPerDoc(existing)
+			if rowOK && (!hasExisting || !existingOK || rowBPerDoc < existingBPerDoc) {
+				baselines[key] = row
+			}
+		}
+	}
+
+	out := make([]diskUsageRow, 0, len(candidates))
+	for _, row := range candidates {
+		story, _ := userStoryLabel(row.Benchmark)
+		totalBytes := *row.DiskTotalBytes
+		storedDocs := *row.StoredDocs
+		totalBPerDoc := totalBytes / storedDocs
+		if row.DiskBytesPerDoc != nil {
+			totalBPerDoc = *row.DiskBytesPerDoc
+		}
+		usageRow := diskUsageRow{
+			summaryRow:                 row,
+			Story:                      story,
+			IndexesPerDocValue:         *row.IndexesPerDoc,
+			StoredDocsValue:            storedDocs,
+			DiskTotalBytesValue:        totalBytes,
+			DiskBytesPerDocValue:       totalBPerDoc,
+			CollectionDiskBytesValue:   row.CollectionDiskBytes,
+			CollectionDiskBPerDocValue: row.CollectionDiskBPerDoc,
+			IndexDiskBytesValue:        row.IndexDiskBytes,
+			IndexDiskBPerDocValue:      row.IndexDiskBPerDoc,
+			SplitSource:                "reported",
+		}
+		if usageRow.CollectionDiskBytesValue == nil || usageRow.IndexDiskBytesValue == nil {
+			baseline, ok := baselines[diskUsageGroupKey(row, story)]
+			collectionBPerDoc, ok := summaryRowDiskBytesPerDoc(baseline)
+			if !ok {
+				usageRow.SplitSource = "total_only"
+				out = append(out, usageRow)
+				continue
+			}
+			indexBPerDoc := totalBPerDoc - collectionBPerDoc
+			if indexBPerDoc < 0 {
+				indexBPerDoc = 0
+			}
+			collectionBytes := collectionBPerDoc * storedDocs
+			indexBytes := indexBPerDoc * storedDocs
+			usageRow.CollectionDiskBytesValue = &collectionBytes
+			usageRow.CollectionDiskBPerDocValue = &collectionBPerDoc
+			usageRow.IndexDiskBytesValue = &indexBytes
+			usageRow.IndexDiskBPerDocValue = &indexBPerDoc
+			usageRow.SplitSource = "zero_index_delta"
+		}
+		out = append(out, usageRow)
+	}
+	return out
+}
+
+func summaryRowDiskBytesPerDoc(row summaryRow) (float64, bool) {
+	if row.DiskBytesPerDoc != nil {
+		return *row.DiskBytesPerDoc, true
+	}
+	if row.DiskTotalBytes == nil || row.StoredDocs == nil || *row.StoredDocs <= 0 {
+		return 0, false
+	}
+	return *row.DiskTotalBytes / *row.StoredDocs, true
+}
+
+func diskUsageGroupKey(row summaryRow, story string) diskUsageKey {
+	return diskUsageKey{
+		Cell:                   row.Cell,
+		Engine:                 row.Engine,
+		DocumentFormat:         row.DocumentFormat,
+		BenchmarkFamily:        benchmarkBaseName(row.Benchmark),
+		DataOuterLeavesInVLog:  row.DataOuterLeavesInVLog,
+		IndexOuterLeavesInVLog: row.IndexOuterLeavesInVLog,
+		PagerChunkSize:         row.PagerChunkSize,
+		PagerSyncConcurrency:   row.PagerSyncConcurrency,
+		Story:                  story,
+	}
 }
 
 func userStoryLabel(benchmark string) (string, bool) {
@@ -797,6 +1063,17 @@ func formatOptionalFloat(value *float64) string {
 		return "-"
 	}
 	return formatFloat(*value)
+}
+
+func formatOptionalByteCount(value *float64) string {
+	if value == nil {
+		return "-"
+	}
+	return formatByteCount(*value)
+}
+
+func formatByteCount(value float64) string {
+	return formatFloat(value)
 }
 
 func formatThroughput(value float64) string {

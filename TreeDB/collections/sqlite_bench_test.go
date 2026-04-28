@@ -275,6 +275,66 @@ func checkpointSQLiteWAL(tb testing.TB, db *sql.DB) {
 	}
 }
 
+func benchmarkReportSQLiteDiskUsage(b *testing.B, db *sql.DB, docs int) {
+	b.Helper()
+
+	if docs <= 0 {
+		return
+	}
+	checkpointSQLiteWAL(b, db)
+	totalBytes := benchmarkSQLiteMainDiskBytes(b, db)
+	benchmarkReportDiskUsage(b, docs, totalBytes)
+	if collectionBytes, indexBytes, ok := benchmarkSQLiteObjectDiskUsage(db); ok {
+		b.ReportMetric(float64(collectionBytes), "collection_disk_bytes")
+		b.ReportMetric(float64(collectionBytes)/float64(docs), "collection_disk_bytes/doc")
+		b.ReportMetric(float64(indexBytes), "index_disk_bytes")
+		b.ReportMetric(float64(indexBytes)/float64(docs), "index_disk_bytes/doc")
+	}
+}
+
+func benchmarkSQLiteMainDiskBytes(tb testing.TB, db *sql.DB) uint64 {
+	tb.Helper()
+
+	var pageSize uint64
+	if err := db.QueryRow(`PRAGMA page_size`).Scan(&pageSize); err != nil {
+		tb.Fatalf("sqlite page_size: %v", err)
+	}
+	var pageCount uint64
+	if err := db.QueryRow(`PRAGMA page_count`).Scan(&pageCount); err != nil {
+		tb.Fatalf("sqlite page_count: %v", err)
+	}
+	return pageSize * pageCount
+}
+
+func benchmarkSQLiteObjectDiskUsage(db *sql.DB) (collectionBytes, indexBytes uint64, ok bool) {
+	rows, err := db.Query(`SELECT name, SUM(pgsize) FROM dbstat GROUP BY name`)
+	if err != nil {
+		return 0, 0, false
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var name string
+		var bytes sql.NullInt64
+		if err := rows.Scan(&name, &bytes); err != nil {
+			return 0, 0, false
+		}
+		if !bytes.Valid || bytes.Int64 <= 0 {
+			continue
+		}
+		switch {
+		case name == "documents" || strings.HasPrefix(name, "sqlite_autoindex_documents_"):
+			collectionBytes += uint64(bytes.Int64)
+		case strings.HasPrefix(name, "documents_"):
+			indexBytes += uint64(bytes.Int64)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return 0, 0, false
+	}
+	return collectionBytes, indexBytes, collectionBytes > 0 || indexBytes > 0
+}
+
 func TestSQLiteBenchmarkSchemaExtractsIndexedFields(t *testing.T) {
 	db := openBenchmarkSQLiteDB(t, "schema_extract")
 	ids, docs := benchmarkSQLiteDocumentBatch(t, 0, 1)
@@ -328,7 +388,6 @@ func BenchmarkSQLiteInsertBatchWithSecondaryIndexes(b *testing.B) {
 	targetBatchSize := benchmarkBatchSize(b)
 
 	b.ReportAllocs()
-	b.ReportMetric(float64(targetBatchSize), "target_docs/batch")
 	b.ResetTimer()
 	for inserted := 0; inserted < b.N; {
 		b.StopTimer()
@@ -342,6 +401,10 @@ func BenchmarkSQLiteInsertBatchWithSecondaryIndexes(b *testing.B) {
 		insertSQLiteDocumentBatch(b, db, ids, docs)
 		inserted += batchSize
 	}
+	b.StopTimer()
+	b.ReportMetric(float64(targetBatchSize), "target_docs/batch")
+	b.ReportMetric(2, "indexes/doc")
+	benchmarkReportSQLiteDiskUsage(b, db, b.N)
 }
 
 func BenchmarkSQLiteInsertBatchCheckpointWithSecondaryIndexes(b *testing.B) {
@@ -351,7 +414,6 @@ func BenchmarkSQLiteInsertBatchCheckpointWithSecondaryIndexes(b *testing.B) {
 	var syncElapsed time.Duration
 
 	b.ReportAllocs()
-	b.ReportMetric(float64(targetBatchSize), "target_docs/checkpoint")
 	b.ResetTimer()
 	for inserted := 0; inserted < b.N; {
 		b.StopTimer()
@@ -371,7 +433,10 @@ func BenchmarkSQLiteInsertBatchCheckpointWithSecondaryIndexes(b *testing.B) {
 		inserted += batchSize
 	}
 	b.StopTimer()
+	b.ReportMetric(float64(targetBatchSize), "target_docs/checkpoint")
+	b.ReportMetric(2, "indexes/doc")
 	benchmarkReportCheckpointSplit(b, b.N, insertElapsed, syncElapsed)
+	benchmarkReportSQLiteDiskUsage(b, db, b.N)
 }
 
 func BenchmarkSQLiteNativeColumnsInsertBatchWithSecondaryIndexes(b *testing.B) {
@@ -379,7 +444,6 @@ func BenchmarkSQLiteNativeColumnsInsertBatchWithSecondaryIndexes(b *testing.B) {
 	targetBatchSize := benchmarkBatchSize(b)
 
 	b.ReportAllocs()
-	b.ReportMetric(float64(targetBatchSize), "target_docs/batch")
 	b.ResetTimer()
 	for inserted := 0; inserted < b.N; {
 		b.StopTimer()
@@ -393,6 +457,10 @@ func BenchmarkSQLiteNativeColumnsInsertBatchWithSecondaryIndexes(b *testing.B) {
 		insertSQLiteNativeColumnsDocumentBatch(b, db, docs)
 		inserted += batchSize
 	}
+	b.StopTimer()
+	b.ReportMetric(float64(targetBatchSize), "target_docs/batch")
+	b.ReportMetric(2, "indexes/doc")
+	benchmarkReportSQLiteDiskUsage(b, db, b.N)
 }
 
 func BenchmarkSQLiteNativeColumnsInsertBatchCheckpointWithSecondaryIndexes(b *testing.B) {
@@ -402,7 +470,6 @@ func BenchmarkSQLiteNativeColumnsInsertBatchCheckpointWithSecondaryIndexes(b *te
 	var syncElapsed time.Duration
 
 	b.ReportAllocs()
-	b.ReportMetric(float64(targetBatchSize), "target_docs/checkpoint")
 	b.ResetTimer()
 	for inserted := 0; inserted < b.N; {
 		b.StopTimer()
@@ -422,7 +489,10 @@ func BenchmarkSQLiteNativeColumnsInsertBatchCheckpointWithSecondaryIndexes(b *te
 		inserted += batchSize
 	}
 	b.StopTimer()
+	b.ReportMetric(float64(targetBatchSize), "target_docs/checkpoint")
+	b.ReportMetric(2, "indexes/doc")
 	benchmarkReportCheckpointSplit(b, b.N, insertElapsed, syncElapsed)
+	benchmarkReportSQLiteDiskUsage(b, db, b.N)
 }
 
 func benchmarkSQLiteShapeInsertBatchJSON(b *testing.B, indexCount int, checkpoint bool) {
@@ -436,8 +506,6 @@ func benchmarkSQLiteShapeInsertBatchJSON(b *testing.B, indexCount int, checkpoin
 		metricName = "target_docs/checkpoint"
 	}
 	b.ReportAllocs()
-	b.ReportMetric(float64(indexCount), "indexes/doc")
-	b.ReportMetric(float64(targetBatchSize), metricName)
 	b.ResetTimer()
 	for inserted := 0; inserted < b.N; {
 		b.StopTimer()
@@ -461,9 +529,12 @@ func benchmarkSQLiteShapeInsertBatchJSON(b *testing.B, indexCount int, checkpoin
 		inserted += batchSize
 	}
 	b.StopTimer()
+	b.ReportMetric(float64(indexCount), "indexes/doc")
+	b.ReportMetric(float64(targetBatchSize), metricName)
 	if checkpoint {
 		benchmarkReportCheckpointSplit(b, b.N, insertElapsed, syncElapsed)
 	}
+	benchmarkReportSQLiteDiskUsage(b, db, b.N)
 }
 
 func benchmarkSQLiteShapeInsertBatchNativeColumns(b *testing.B, indexCount int, checkpoint bool) {
@@ -477,8 +548,6 @@ func benchmarkSQLiteShapeInsertBatchNativeColumns(b *testing.B, indexCount int, 
 		metricName = "target_docs/checkpoint"
 	}
 	b.ReportAllocs()
-	b.ReportMetric(float64(indexCount), "indexes/doc")
-	b.ReportMetric(float64(targetBatchSize), metricName)
 	b.ResetTimer()
 	for inserted := 0; inserted < b.N; {
 		b.StopTimer()
@@ -502,9 +571,12 @@ func benchmarkSQLiteShapeInsertBatchNativeColumns(b *testing.B, indexCount int, 
 		inserted += batchSize
 	}
 	b.StopTimer()
+	b.ReportMetric(float64(indexCount), "indexes/doc")
+	b.ReportMetric(float64(targetBatchSize), metricName)
 	if checkpoint {
 		benchmarkReportCheckpointSplit(b, b.N, insertElapsed, syncElapsed)
 	}
+	benchmarkReportSQLiteDiskUsage(b, db, b.N)
 }
 
 func BenchmarkSQLiteShapeInsertBatchJSON(b *testing.B) {

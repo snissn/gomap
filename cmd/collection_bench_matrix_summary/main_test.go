@@ -31,8 +31,50 @@ func TestMatrixSummaryRendersBenchmarkMetrics(t *testing.T) {
           "mean_bytes_per_op": 1980,
           "mean_allocs_per_op": 30,
           "mean_metrics": {
+            "disk_bytes/doc": 100,
+            "disk_total_bytes": 1600000,
             "per_item_key_probe_fallback_count": 0,
-            "per_item_prefix_probe_fallback_count": 0
+            "per_item_prefix_probe_fallback_count": 0,
+            "stored_docs": 16000
+          }
+        },
+        {
+          "name": "BenchmarkCollectionShapeInsertBatch/indexes_0",
+          "mean_ns_per_op": 1000,
+          "mean_bytes_per_op": 512,
+          "mean_allocs_per_op": 5,
+          "mean_metrics": {
+            "target_docs/batch": 8000,
+            "indexes/doc": 0,
+            "stored_docs": 8000,
+            "disk_total_bytes": 800000,
+            "disk_bytes/doc": 100
+          }
+        },
+        {
+          "name": "BenchmarkCollectionShapeInsertBatchSingleStringJSON/indexes_0",
+          "mean_ns_per_op": 900,
+          "mean_bytes_per_op": 480,
+          "mean_allocs_per_op": 4,
+          "mean_metrics": {
+            "target_docs/batch": 8000,
+            "indexes/doc": 0,
+            "stored_docs": 8000,
+            "disk_total_bytes": 160000,
+            "disk_bytes/doc": 20
+          }
+        },
+        {
+          "name": "BenchmarkCollectionShapeInsertBatch/indexes_2",
+          "mean_ns_per_op": 1500,
+          "mean_bytes_per_op": 768,
+          "mean_allocs_per_op": 6,
+          "mean_metrics": {
+            "target_docs/batch": 8000,
+            "indexes/doc": 2,
+            "stored_docs": 16000,
+            "disk_total_bytes": 2400000,
+            "disk_bytes/doc": 150
           }
         },
         {
@@ -113,6 +155,23 @@ func TestMatrixSummaryRendersBenchmarkMetrics(t *testing.T) {
           }
         },
         {
+          "name": "BenchmarkSQLiteShapeInsertBatchJSON/indexes_2",
+          "mean_ns_per_op": 4400,
+          "mean_bytes_per_op": 2048,
+          "mean_allocs_per_op": 32,
+          "mean_metrics": {
+            "target_docs/batch": 8000,
+            "indexes/doc": 2,
+            "stored_docs": 16000,
+            "disk_total_bytes": 3200000,
+            "disk_bytes/doc": 200,
+            "collection_disk_bytes": 1800000,
+            "collection_disk_bytes/doc": 112.5,
+            "index_disk_bytes": 1400000,
+            "index_disk_bytes/doc": 87.5
+          }
+        },
+        {
           "name": "BenchmarkSQLiteInsertBatchCheckpointWithSecondaryIndexes",
           "mean_ns_per_op": 8200,
           "mean_bytes_per_op": 4096,
@@ -182,6 +241,13 @@ func TestMatrixSummaryRendersBenchmarkMetrics(t *testing.T) {
 		"64",
 		"44",
 		"44.44",
+		"## Disk Usage",
+		"| Cell | Engine | Format | Data vlog | Index vlog | Pager chunk | Pager sync | Story | Benchmark | Indexes/doc | Stored docs | Total disk | Total B/doc | Collection disk | Collection B/doc | Index disk | Index B/doc | Split | Report |",
+		"`zero_index_delta`",
+		"`reported`",
+		"2,400,000",
+		"800,000",
+		"1,400,000",
 		"## Diagnostic Rows",
 		"| Cell | Engine | Format | Pager chunk | Pager sync | Diagnostic | ns/doc | ops/sec | B/doc | allocs/doc | Report |",
 		"These rows are not user stories.",
@@ -189,11 +255,13 @@ func TestMatrixSummaryRendersBenchmarkMetrics(t *testing.T) {
 		"`BenchmarkCollectionOverheadIndexStateTemplateV1Extraction`",
 		"`BenchmarkCollectionOverheadPlanIndexedTemplateV1`",
 		"## Raw Matrix",
-		"| Cell | Engine | Format | Data vlog | Index vlog | Pager chunk | Pager sync | Benchmark | ns/op | ops/sec | B/op | allocs/op | insert ns/doc | insert docs/sec | sync ns/doc | sync docs/sec | writer docs/sec | Key fallbacks | Prefix fallbacks | Report |",
+		"| Cell | Engine | Format | Data vlog | Index vlog | Pager chunk | Pager sync | Benchmark | ns/op | ops/sec | B/op | allocs/op | insert ns/doc | insert docs/sec | sync ns/doc | sync docs/sec | writer docs/sec | Key fallbacks | Prefix fallbacks | indexes/doc | stored docs | disk total | disk B/doc | collection disk | collection B/doc | index disk | index B/doc | Report |",
 		"`production_fast_data_vlog_index_leaf`",
 		"`BenchmarkCollectionInsertBatchWithSecondaryIndexes`",
+		"`BenchmarkCollectionShapeInsertBatch/indexes_2`",
 		"`BenchmarkCollectionMixedReadWritePrimary`",
 		"`BenchmarkSQLiteInsertBatchWithSecondaryIndexes`",
+		"`BenchmarkSQLiteShapeInsertBatchJSON/indexes_2`",
 		"`BenchmarkSQLiteNativeColumnsInsertBatchWithSecondaryIndexes`",
 		"`native-columns`",
 		"12,345",
@@ -252,6 +320,17 @@ func TestMatrixSummaryRendersBenchmarkMetrics(t *testing.T) {
 	}
 	if !strings.Contains(gotUserStoryTSV, "native-columns\t-\t-\t-\t-\tcheckpointed indexed insert\tBenchmarkSQLiteNativeColumnsInsertBatchCheckpointWithSecondaryIndexes\t8000\t7000\t142857.14285714287\t56\t16\t40\t17.857142857142858\t") {
 		t.Fatalf("user story tsv missing sqlite native-columns checkpoint row:\n%s", gotUserStoryTSV)
+	}
+	diskUsageTSV, err := os.ReadFile(filepath.Join(dir, "collections_disk_usage_summary.tsv"))
+	if err != nil {
+		t.Fatalf("read disk usage tsv: %v", err)
+	}
+	gotDiskUsageTSV := string(diskUsageTSV)
+	if !strings.Contains(gotDiskUsageTSV, "template-v1\ttrue\tfalse\tprofile/default\tprofile/default\tbulk indexed insert\tBenchmarkCollectionShapeInsertBatch/indexes_2\t2\t16000\t2400000\t150\t1600000\t100\t800000\t50\tzero_index_delta\t") {
+		t.Fatalf("disk usage tsv missing TreeDB zero-index delta row:\n%s", gotDiskUsageTSV)
+	}
+	if !strings.Contains(gotDiskUsageTSV, "json\t-\t-\t-\t-\tbulk indexed insert\tBenchmarkSQLiteShapeInsertBatchJSON/indexes_2\t2\t16000\t3200000\t200\t1800000\t112.5\t1400000\t87.5\treported\t") {
+		t.Fatalf("disk usage tsv missing SQLite reported split row:\n%s", gotDiskUsageTSV)
 	}
 }
 
