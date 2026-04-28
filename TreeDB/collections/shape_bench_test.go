@@ -150,13 +150,16 @@ func benchmarkCollectionShapeInsertBatch(b *testing.B, indexCount int, checkpoin
 		if _, err := collection.InsertBatch(ids, docs); err != nil {
 			b.Fatalf("shape insert batch indexes=%d: %v", indexCount, err)
 		}
+		insertElapsed += time.Since(insertStart)
+		b.StopTimer()
 		addCollectionInsertStats(&insertStats, collection.LastInsertStats())
 		batches++
-		insertElapsed += time.Since(insertStart)
 		if checkpoint {
+			b.StartTimer()
 			syncStart := time.Now()
 			benchmarkSyncBoundary(b, backend)
 			syncElapsed += time.Since(syncStart)
+			b.StopTimer()
 		}
 		inserted += batchSize
 	}
@@ -217,13 +220,16 @@ func benchmarkCollectionShapeSingleStringInsertBatch(b *testing.B, indexCount in
 		if _, err := collection.InsertBatch(ids, docs); err != nil {
 			b.Fatalf("single-string insert batch indexes=%d: %v", indexCount, err)
 		}
+		insertElapsed += time.Since(insertStart)
+		b.StopTimer()
 		addCollectionInsertStats(&insertStats, collection.LastInsertStats())
 		batches++
-		insertElapsed += time.Since(insertStart)
 		if checkpoint {
+			b.StartTimer()
 			syncStart := time.Now()
 			benchmarkSyncBoundary(b, backend)
 			syncElapsed += time.Since(syncStart)
+			b.StopTimer()
 		}
 		inserted += batchSize
 	}
