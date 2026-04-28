@@ -35,7 +35,11 @@ Use this command when you need the full TreeDB-vs-SQLite collection matrix,
 including the index-leaf-in-value-log probes, maintenance compaction rows, and
 raw `unified_bench` TreeDB anchors:
 
+Because this command enables `--include-sqlite`, ensure CGO is enabled and a
+working C compiler/toolchain is available on the host.
+
 ```bash
+set -o pipefail
 OUT="/tmp/gomap_collections_$(date +%Y%m%d_%H%M%S)"
 mkdir -p "$OUT"
 TREEDB_COLLECTION_HARNESS_REPORT_VLOG_REWRITE=true \
@@ -50,6 +54,10 @@ scripts/bench_collections_harness.sh \
   --unified-keys 100000 \
   2>&1 | tee "$OUT/harness_stdout.log"
 ```
+
+The `set -o pipefail` line preserves the harness exit status through `tee`, so
+missing SQLite prerequisites or other failures do not look like successful full
+matrix runs.
 
 The harness writes `$OUT/README.md` with the branch, commit, command settings,
 and artifact paths. Keep that file with any benchmark notes so later reviewers
