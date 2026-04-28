@@ -46,8 +46,8 @@ func TestMatrixSummaryRendersBenchmarkMetrics(t *testing.T) {
           "mean_metrics": {
             "target_docs/batch": 8000,
             "indexes/doc": 0,
-            "stored_docs": 16000,
-            "disk_total_bytes": 1600000,
+            "stored_docs": 8000,
+            "disk_total_bytes": 800000,
             "disk_bytes/doc": 100
           }
         },

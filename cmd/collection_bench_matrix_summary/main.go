@@ -454,7 +454,7 @@ func metricPtr(metrics map[string]float64, name string) *float64 {
 
 func renderTSV(rows []summaryRow) string {
 	var sb strings.Builder
-	sb.WriteString("cell\tengine\tdocument_format\tdata_outer_leaves_in_vlog\tindex_outer_leaves_in_vlog\tpager_chunk_size\tpager_sync_concurrency\tbenchmark\tns_per_op\tops_per_sec\tbytes_per_op\tallocs_per_op\tinsert_ns/doc\tinsert_docs_per_sec\tsync_ns/doc\tsync_docs_per_sec\twriter_docs_per_sec\tper_item_key_probe_fallback_count\tper_item_prefix_probe_fallback_count\tindexes_per_doc\tstored_docs\tdisk_total_bytes\tdisk_bytes_per_doc\tcollection_disk_bytes\tcollection_disk_bytes_per_doc\tindex_disk_bytes\tindex_disk_bytes_per_doc\treport_md\n")
+	sb.WriteString("cell\tengine\tdocument_format\tdata_outer_leaves_in_vlog\tindex_outer_leaves_in_vlog\tpager_chunk_size\tpager_sync_concurrency\tbenchmark\tns_per_op\tops_per_sec\tbytes_per_op\tallocs_per_op\tinsert_ns/doc\tinsert_docs_per_sec\tsync_ns/doc\tsync_docs_per_sec\twriter_docs_per_sec\tper_item_key_probe_fallback_count\tper_item_prefix_probe_fallback_count\tindexes/doc\tstored_docs\tdisk_total_bytes\tdisk_bytes/doc\tcollection_disk_bytes\tcollection_disk_bytes/doc\tindex_disk_bytes\tindex_disk_bytes/doc\treport_md\n")
 	for _, row := range rows {
 		sb.WriteString(row.Cell)
 		sb.WriteByte('\t')
@@ -560,7 +560,7 @@ func renderUserStoryTSV(rows []userStoryRow) string {
 
 func renderDiskUsageTSV(rows []diskUsageRow) string {
 	var sb strings.Builder
-	sb.WriteString("cell\tengine\tdocument_format\tdata_outer_leaves_in_vlog\tindex_outer_leaves_in_vlog\tpager_chunk_size\tpager_sync_concurrency\tstory\tbenchmark\tindexes_per_doc\tstored_docs\tdisk_total_bytes\tdisk_bytes_per_doc\tcollection_disk_bytes\tcollection_disk_bytes_per_doc\tindex_disk_bytes\tindex_disk_bytes_per_doc\tsplit_source\treport_md\n")
+	sb.WriteString("cell\tengine\tdocument_format\tdata_outer_leaves_in_vlog\tindex_outer_leaves_in_vlog\tpager_chunk_size\tpager_sync_concurrency\tstory\tbenchmark\tindexes/doc\tstored_docs\tdisk_total_bytes\tdisk_bytes/doc\tcollection_disk_bytes\tcollection_disk_bytes/doc\tindex_disk_bytes\tindex_disk_bytes/doc\tsplit_source\treport_md\n")
 	for _, row := range rows {
 		sb.WriteString(row.Cell)
 		sb.WriteByte('\t')
@@ -693,7 +693,7 @@ func renderMarkdown(rows []summaryRow, outDir string) (string, error) {
 	diskUsageRows := buildDiskUsageRows(rows)
 	if len(diskUsageRows) > 0 {
 		sb.WriteString("## Disk Usage\n\n")
-		sb.WriteString("Disk rows use benchmark-reported end-of-run bytes after an untimed flush/checkpoint. Collection/index splits use engine-reported object bytes when available; otherwise they derive index bytes as the delta from the matching zero-index row.\n\n")
+		sb.WriteString("Disk rows use benchmark-reported end-of-run bytes after an untimed flush/checkpoint. Collection/index splits use engine-reported object bytes when available; otherwise they derive index bytes from the per-doc delta against the matching zero-index row.\n\n")
 		sb.WriteString("| Cell | Engine | Format | Data vlog | Index vlog | Pager chunk | Pager sync | Story | Indexes/doc | Stored docs | Total disk | Total B/doc | Collection disk | Collection B/doc | Index disk | Index B/doc | Split | Report |\n")
 		sb.WriteString("| --- | --- | --- | ---: | ---: | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |\n")
 		for _, row := range diskUsageRows {
@@ -887,7 +887,10 @@ func buildDiskUsageRows(rows []summaryRow) []diskUsageRow {
 		candidates = append(candidates, row)
 		if *row.IndexesPerDoc == 0 {
 			key := diskUsageGroupKey(row, story)
-			if existing, ok := baselines[key]; !ok || *row.DiskTotalBytes < *existing.DiskTotalBytes {
+			rowBPerDoc, rowOK := summaryRowDiskBytesPerDoc(row)
+			existing, hasExisting := baselines[key]
+			existingBPerDoc, existingOK := summaryRowDiskBytesPerDoc(existing)
+			if rowOK && (!hasExisting || !existingOK || rowBPerDoc < existingBPerDoc) {
 				baselines[key] = row
 			}
 		}
@@ -917,18 +920,18 @@ func buildDiskUsageRows(rows []summaryRow) []diskUsageRow {
 		}
 		if usageRow.CollectionDiskBytesValue == nil || usageRow.IndexDiskBytesValue == nil {
 			baseline, ok := baselines[diskUsageGroupKey(row, story)]
-			if !ok || baseline.DiskTotalBytes == nil {
+			collectionBPerDoc, ok := summaryRowDiskBytesPerDoc(baseline)
+			if !ok {
 				usageRow.SplitSource = "total_only"
 				out = append(out, usageRow)
 				continue
 			}
-			collectionBytes := *baseline.DiskTotalBytes
-			indexBytes := totalBytes - collectionBytes
-			if indexBytes < 0 {
-				indexBytes = 0
+			indexBPerDoc := totalBPerDoc - collectionBPerDoc
+			if indexBPerDoc < 0 {
+				indexBPerDoc = 0
 			}
-			collectionBPerDoc := collectionBytes / storedDocs
-			indexBPerDoc := indexBytes / storedDocs
+			collectionBytes := collectionBPerDoc * storedDocs
+			indexBytes := indexBPerDoc * storedDocs
 			usageRow.CollectionDiskBytesValue = &collectionBytes
 			usageRow.CollectionDiskBPerDocValue = &collectionBPerDoc
 			usageRow.IndexDiskBytesValue = &indexBytes
@@ -938,6 +941,16 @@ func buildDiskUsageRows(rows []summaryRow) []diskUsageRow {
 		out = append(out, usageRow)
 	}
 	return out
+}
+
+func summaryRowDiskBytesPerDoc(row summaryRow) (float64, bool) {
+	if row.DiskBytesPerDoc != nil {
+		return *row.DiskBytesPerDoc, true
+	}
+	if row.DiskTotalBytes == nil || row.StoredDocs == nil || *row.StoredDocs <= 0 {
+		return 0, false
+	}
+	return *row.DiskTotalBytes / *row.StoredDocs, true
 }
 
 func diskUsageGroupKey(row summaryRow, story string) diskUsageKey {

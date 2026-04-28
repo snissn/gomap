@@ -13,7 +13,6 @@ import (
 	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
-	"github.com/snissn/gomap/TreeDB/page"
 )
 
 const (
@@ -201,6 +200,9 @@ func benchmarkReportTreeDBDiskUsage(b *testing.B, backend *backenddb.DB, docs in
 	if backend == nil {
 		return
 	}
+	if docs <= 0 {
+		return
+	}
 	if err := backend.Checkpoint(); err != nil {
 		b.Fatalf("checkpoint before TreeDB disk usage stats: %v", err)
 	}
@@ -217,12 +219,29 @@ func benchmarkTreeDBDiskUsageBytes(backend *backenddb.DB) (uint64, error) {
 		return 0, nil
 	}
 	indexPath := filepath.Clean(filepath.Join(dir, "index.db"))
-	total := backend.Pager().PageCount() * uint64(page.PageSize)
+	indexBytes, err := benchmarkFileUsageBytes(indexPath)
+	if err != nil {
+		return 0, err
+	}
 	otherBytes, err := benchmarkDirectoryUsageBytes(dir, indexPath)
 	if err != nil {
 		return 0, err
 	}
-	return total + otherBytes, nil
+	return indexBytes + otherBytes, nil
+}
+
+func benchmarkFileUsageBytes(path string) (uint64, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	if !info.Mode().IsRegular() || info.Size() <= 0 {
+		return 0, nil
+	}
+	return uint64(info.Size()), nil
 }
 
 func benchmarkDirectoryUsageBytes(root, skipPath string) (uint64, error) {

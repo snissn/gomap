@@ -78,4 +78,5 @@ The default collection storage policy remains production-oriented:
 Insert-shape benchmark rows report end-of-run disk bytes after an untimed
 flush/checkpoint. The matrix summary includes a disk-usage section that compares
 total bytes, collection bytes, and index bytes; when an engine does not expose a
-direct object split, index bytes are derived from the matching zero-index row.
+direct object split, index bytes are derived from the per-doc delta against the
+matching zero-index row.
