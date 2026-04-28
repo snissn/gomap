@@ -82,6 +82,27 @@ type leafRefRewriteCtx struct {
 	readRefreshRetried bool
 }
 
+type leafRefRewritePageAppender struct {
+	ctx *leafRefRewriteCtx
+}
+
+func (a *leafRefRewritePageAppender) AppendLeafPage(leafPage []byte) (page.LeafLogPtr, error) {
+	if a == nil || a.ctx == nil || a.ctx.writer == nil || a.ctx.ridAlloc == nil {
+		return page.LeafLogPtr{}, errors.New("vlog-rewrite: missing leaf-ref rewrite appender state")
+	}
+	rid, err := a.ctx.ridAlloc.Next()
+	if err != nil {
+		return page.LeafLogPtr{}, err
+	}
+	ptr, err := a.ctx.writer.appendLeafPageWithRID(rid, leafPage)
+	if err != nil {
+		return page.LeafLogPtr{}, err
+	}
+	a.ctx.copied++
+	a.ctx.copiedBytes += int64(len(leafPage))
+	return ptr, nil
+}
+
 type leafRefRewriteRunStats struct {
 	InternalPagesVisited int
 	SubtreesPruned       int
@@ -441,7 +462,7 @@ func (c *leafRefRewriteCtx) rebuildSystemRootWithCollectionRootReplacements(root
 		LeafColumnar:          c.db.indexColumnarLeaves,
 		PackedValuePtr:        c.db.indexPackedValuePtr,
 		InternalBaseDelta:     c.db.indexInternalBaseDelta && !c.db.indexOuterLeavesInValueLog,
-		LeafPageLog:           c.writer,
+		LeafPageLog:           &leafRefRewritePageAppender{ctx: c},
 	})
 	if err != nil {
 		return rootID, err

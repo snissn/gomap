@@ -534,16 +534,27 @@ func TestLeafGenerationPack_RewritesCollectionLeafRefRoot(t *testing.T) {
 	if _, err := db.LeafGenerationPlan(context.Background(), LeafGenerationPlanOptions{Force: true}); err != nil {
 		t.Fatalf("LeafGenerationPlan before pack: %v", err)
 	}
+	nextRID := uint64(10_000)
+	reservedRIDs := 0
 	stats, err := db.LeafGenerationPack(context.Background(), LeafGenerationPackOptions{
 		GenerationIDs: []uint64{gen.GenerationID},
 		Sync:          true,
 		Force:         true,
+		ReserveRIDs: func(count int) (uint64, error) {
+			start := nextRID
+			nextRID += uint64(count)
+			reservedRIDs += count
+			return start, nil
+		},
 	})
 	if err != nil {
 		t.Fatalf("LeafGenerationPack: %v", err)
 	}
-	if got := stats.LeafPagesCopied; got == 0 {
-		t.Fatalf("LeafPagesCopied=%d, want > 0", got)
+	if got := stats.LeafPagesCopied; got < 2 {
+		t.Fatalf("LeafPagesCopied=%d, want >= 2 for collection and system roots", got)
+	}
+	if reservedRIDs < stats.LeafPagesCopied {
+		t.Fatalf("ReserveRIDs reserved %d records, want at least LeafPagesCopied=%d", reservedRIDs, stats.LeafPagesCopied)
 	}
 
 	newRoot := readCollectionRootID(t, db, descriptorKey)
