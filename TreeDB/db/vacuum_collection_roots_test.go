@@ -18,7 +18,7 @@ const (
 	vacuumTestDocumentValue     = "document"
 )
 
-func TestVacuumIndexOffline_PreservesPointerBackedCollectionRootDescriptor(t *testing.T) {
+func TestVacuumIndexOffline_PreservesCollectionRootFromPointerBackedDescriptor(t *testing.T) {
 	dir := t.TempDir()
 	opts := vacuumPointerDescriptorOptions(dir)
 	d := openVacuumPointerDescriptorFixture(t, opts)
@@ -40,7 +40,7 @@ func TestVacuumIndexOffline_PreservesPointerBackedCollectionRootDescriptor(t *te
 	verifyVacuumCollectionRootDescriptor(t, reopened, vacuumTestCollectionRootKey)
 }
 
-func TestVacuumIndexOnline_PreservesPointerBackedCollectionRootDescriptor(t *testing.T) {
+func TestVacuumIndexOnline_PreservesCollectionRootFromPointerBackedDescriptor(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("online vacuum unsupported on windows")
 	}

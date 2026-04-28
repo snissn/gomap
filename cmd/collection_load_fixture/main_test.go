@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	treedb "github.com/snissn/gomap/TreeDB"
@@ -169,6 +170,9 @@ func TestVacuumIndexOfflinePreservesTemplateV1TwoIndexDatabase(t *testing.T) {
 }
 
 func TestVacuumIndexOnlinePreservesTemplateV1TwoIndexDatabase(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("online vacuum unsupported on windows")
+	}
 	if testing.Short() {
 		t.Skip("loads a large enough fixture to exercise multi-batch collection roots")
 	}
