@@ -126,17 +126,21 @@ func prepareTemplateV1InsertDocuments(documents [][]byte, fallback templateV1Res
 	prepared := make([][]byte, len(documents))
 	records := make([]templateV1Record, 0)
 	resolver := &templateV1MemoryResolver{}
-	totalStoredBytes := 0
 	for i, document := range documents {
 		stored, docRecords, err := parseTemplateV1InsertDocument(document)
 		if err != nil {
 			return nil, nil, nil, err
 		}
-		totalStoredBytes += len(stored)
+		// Keep compact stored bytes borrowed like JSON documents; publish consumes
+		// the prepared batch synchronously before InsertBatch returns.
 		prepared[i] = stored
 		for _, record := range docRecords {
-			if err := resolver.addRecord(record); err != nil {
+			added, err := resolver.addRecord(record)
+			if err != nil {
 				return nil, nil, nil, err
+			}
+			if !added {
+				continue
 			}
 			publish, err := shouldPublishTemplateV1Record(record, fallback)
 			if err != nil {
@@ -147,17 +151,17 @@ func prepareTemplateV1InsertDocuments(documents [][]byte, fallback templateV1Res
 			}
 		}
 	}
-	arena := make([]byte, 0, totalStoredBytes)
-	for i, stored := range prepared {
-		start := len(arena)
-		arena = append(arena, stored...)
-		prepared[i] = arena[start:len(arena):len(arena)]
-	}
 	if fallback == nil {
 		if err := validateTemplateV1PreparedDocuments(prepared, resolver); err != nil {
 			return nil, nil, nil, err
 		}
 		return prepared, records, resolver, nil
+	}
+	if len(resolver.templates) == 0 {
+		if err := validateTemplateV1PreparedDocuments(prepared, fallback); err != nil {
+			return nil, nil, nil, err
+		}
+		return prepared, records, fallback, nil
 	}
 	composite := &templateV1CompositeResolver{memory: resolver, fallback: fallback}
 	if err := validateTemplateV1PreparedDocuments(prepared, composite); err != nil {
@@ -268,19 +272,19 @@ func validateTemplateV1StoredDocumentTemplates(document []byte, resolver templat
 	return nil
 }
 
-func (r *templateV1MemoryResolver) addRecord(record templateV1Record) error {
+func (r *templateV1MemoryResolver) addRecord(record templateV1Record) (bool, error) {
 	if r.templates == nil {
 		r.templates = make(map[string]*templateV1Template)
 	}
 	key := string(record.id[:])
 	if existing := r.templates[key]; existing != nil {
 		if !equalStringSlices(existing.fields, record.tpl.fields) {
-			return errors.New("collections: template-v1 template id collision")
+			return false, errors.New("collections: template-v1 template id collision")
 		}
-		return nil
+		return false, nil
 	}
 	r.templates[key] = record.tpl
-	return nil
+	return true, nil
 }
 
 func (r *templateV1MemoryResolver) lookupTemplateV1(id [32]byte) (*templateV1Template, error) {
@@ -363,17 +367,7 @@ func dedupeTemplateV1Records(records []templateV1Record) ([]templateV1Record, er
 }
 
 func EncodeTemplateV1Document(fields []string, values []any) ([]byte, error) {
-	if len(fields) != len(values) {
-		return nil, errors.New("collections: template-v1 field/value length mismatch")
-	}
-	obj := make(map[string]any, len(fields))
-	for i, field := range fields {
-		if _, exists := obj[field]; exists {
-			return nil, fmt.Errorf("collections: duplicate template-v1 field %q", field)
-		}
-		obj[field] = values[i]
-	}
-	return encodeTemplateV1ObjectMap(obj)
+	return encodeTemplateV1FieldsWithRecordFilter(fields, values, nil)
 }
 
 type TemplateV1Encoder struct {
@@ -385,20 +379,10 @@ func (e *TemplateV1Encoder) Reset() {
 }
 
 func (e *TemplateV1Encoder) EncodeDocument(fields []string, values []any) ([]byte, error) {
-	if len(fields) != len(values) {
-		return nil, errors.New("collections: template-v1 field/value length mismatch")
-	}
-	obj := make(map[string]any, len(fields))
-	for i, field := range fields {
-		if _, exists := obj[field]; exists {
-			return nil, fmt.Errorf("collections: duplicate template-v1 field %q", field)
+	return encodeTemplateV1FieldsWithRecordFilter(fields, values, func(record templateV1Record) bool {
+		if e.emitted == nil {
+			e.emitted = make(map[string]struct{})
 		}
-		obj[field] = values[i]
-	}
-	if e.emitted == nil {
-		e.emitted = make(map[string]struct{})
-	}
-	return encodeTemplateV1ObjectMapWithRecordFilter(obj, func(record templateV1Record) bool {
 		key := string(record.id[:])
 		if _, exists := e.emitted[key]; exists {
 			return false
@@ -421,26 +405,74 @@ func EncodeTemplateV1DocumentJSON(raw []byte) ([]byte, error) {
 }
 
 func encodeTemplateV1ObjectMap(obj map[string]any) ([]byte, error) {
-	return encodeTemplateV1ObjectMapWithRecordFilter(obj, func(templateV1Record) bool { return true })
+	return encodeTemplateV1ObjectMapWithRecordFilter(obj, nil)
 }
 
 func encodeTemplateV1ObjectMapWithRecordFilter(obj map[string]any, includeRecord func(templateV1Record) bool) ([]byte, error) {
-	state := &templateV1BuildState{records: make(map[string]templateV1Record)}
+	var state templateV1BuildState
 	root, err := state.encodeObject(obj)
 	if err != nil {
 		return nil, err
 	}
-	records := make([]templateV1Record, 0, len(state.records))
-	for _, record := range state.records {
-		if includeRecord == nil || includeRecord(record) {
-			records = append(records, record)
+	return encodeTemplateV1RootWithRecords(root, &state, includeRecord)
+}
+
+func encodeTemplateV1FieldsWithRecordFilter(fields []string, values []any, includeRecord func(templateV1Record) bool) ([]byte, error) {
+	if len(fields) != len(values) {
+		return nil, errors.New("collections: template-v1 field/value length mismatch")
+	}
+	var state templateV1BuildState
+	root, err := state.encodeFields(fields, values)
+	if err != nil {
+		return nil, err
+	}
+	return encodeTemplateV1RootWithRecords(root, &state, includeRecord)
+}
+
+func encodeTemplateV1RootWithRecords(root []byte, state *templateV1BuildState, includeRecord func(templateV1Record) bool) ([]byte, error) {
+	if state == nil || !state.hasRecord {
+		return root, nil
+	}
+	if len(state.records) == 0 {
+		record := state.firstRecord
+		if includeRecord != nil && !includeRecord(record) {
+			return root, nil
 		}
+		return encodeTemplateV1RootWithSingleRecord(root, record), nil
+	}
+
+	var stackRecords [4]templateV1Record
+	records := stackRecords[:0]
+	records = append(records, state.firstRecord)
+	records = append(records, state.records...)
+	if includeRecord != nil {
+		selected := records[:0]
+		for _, record := range records {
+			if includeRecord(record) {
+				selected = append(selected, record)
+			}
+		}
+		records = selected
 	}
 	sortTemplateV1Records(records)
 	if len(records) == 0 {
 		return root, nil
 	}
+	return encodeTemplateV1RootWithRecordSlice(root, records), nil
+}
 
+func encodeTemplateV1RootWithSingleRecord(root []byte, record templateV1Record) []byte {
+	out := make([]byte, 0, len(templateV1InputMagic)+binary.MaxVarintLen64+32+binary.MaxVarintLen64+len(record.raw)+len(root))
+	out = append(out, templateV1InputMagic...)
+	out = binary.AppendUvarint(out, 1)
+	out = append(out, record.id[:]...)
+	out = binary.AppendUvarint(out, uint64(len(record.raw)))
+	out = append(out, record.raw...)
+	out = append(out, root...)
+	return out
+}
+
+func encodeTemplateV1RootWithRecordSlice(root []byte, records []templateV1Record) []byte {
 	out := make([]byte, 0, len(templateV1InputMagic)+len(root)+len(records)*48)
 	out = append(out, templateV1InputMagic...)
 	out = binary.AppendUvarint(out, uint64(len(records)))
@@ -450,11 +482,81 @@ func encodeTemplateV1ObjectMapWithRecordFilter(obj map[string]any, includeRecord
 		out = append(out, record.raw...)
 	}
 	out = append(out, root...)
-	return out, nil
+	return out
 }
 
 type templateV1BuildState struct {
-	records map[string]templateV1Record
+	firstRecord templateV1Record
+	hasRecord   bool
+	records     []templateV1Record
+}
+
+func (s *templateV1BuildState) addRecord(record templateV1Record) {
+	if !s.hasRecord {
+		s.firstRecord = record
+		s.hasRecord = true
+		return
+	}
+	if s.firstRecord.id == record.id {
+		return
+	}
+	for _, existing := range s.records {
+		if existing.id == record.id {
+			return
+		}
+	}
+	s.records = append(s.records, record)
+}
+
+func (s *templateV1BuildState) encodeFields(fields []string, values []any) ([]byte, error) {
+	var stackOrder [16]int
+	order := stackOrder[:0]
+	if len(fields) <= len(stackOrder) {
+		order = stackOrder[:len(fields)]
+	} else {
+		order = make([]int, len(fields))
+	}
+	for i := range order {
+		order[i] = i
+	}
+	sort.Slice(order, func(i, j int) bool {
+		return fields[order[i]] < fields[order[j]]
+	})
+
+	var stackFields [16]string
+	sortedFields := stackFields[:0]
+	if len(fields) <= len(stackFields) {
+		sortedFields = stackFields[:len(fields)]
+	} else {
+		sortedFields = make([]string, len(fields))
+	}
+	for sortedPos, sourcePos := range order {
+		field := fields[sourcePos]
+		if err := validateTemplateV1FieldName(field); err != nil {
+			return nil, err
+		}
+		if sortedPos > 0 && sortedFields[sortedPos-1] == field {
+			return nil, fmt.Errorf("collections: duplicate template-v1 field %q", field)
+		}
+		sortedFields[sortedPos] = field
+	}
+
+	record, err := buildTemplateV1Record(sortedFields)
+	if err != nil {
+		return nil, err
+	}
+	s.addRecord(record)
+	out := make([]byte, 0, len(templateV1StoredMagic)+32+len(fields)*8)
+	out = append(out, templateV1StoredMagic...)
+	out = append(out, record.id[:]...)
+	for _, sourcePos := range order {
+		field := fields[sourcePos]
+		out, err = s.appendValue(out, values[sourcePos])
+		if err != nil {
+			return nil, fmt.Errorf("collections: template-v1 field %q: %w", field, err)
+		}
+	}
+	return out, nil
 }
 
 func (s *templateV1BuildState) encodeObject(obj map[string]any) ([]byte, error) {
@@ -470,7 +572,7 @@ func (s *templateV1BuildState) encodeObject(obj map[string]any) ([]byte, error) 
 	if err != nil {
 		return nil, err
 	}
-	s.records[string(record.id[:])] = record
+	s.addRecord(record)
 	out := make([]byte, 0, len(templateV1StoredMagic)+32+len(fields)*8)
 	out = append(out, templateV1StoredMagic...)
 	out = append(out, record.id[:]...)
@@ -496,7 +598,7 @@ func (s *templateV1BuildState) appendObjectValue(dst []byte, obj map[string]any)
 	if err != nil {
 		return nil, err
 	}
-	s.records[string(record.id[:])] = record
+	s.addRecord(record)
 	dst = append(dst, templateV1KindObject)
 	dst = append(dst, record.id[:]...)
 	for _, field := range fields {
@@ -579,11 +681,9 @@ func buildTemplateV1Record(fields []string) (templateV1Record, error) {
 		raw = append(raw, field...)
 	}
 	id := sha256.Sum256(raw)
-	copiedFields := append([]string(nil), fields...)
 	return templateV1Record{
 		id:  id,
 		raw: raw,
-		tpl: &templateV1Template{id: id, fields: copiedFields},
 	}, nil
 }
 

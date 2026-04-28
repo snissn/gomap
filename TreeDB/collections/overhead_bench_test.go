@@ -15,6 +15,35 @@ const (
 
 var overheadBenchPayload = []byte(`{"name":"ada","city":"hnl","email":"ada@example.com","pad":"0123456789012345678901234567890123456789"}`)
 
+var templateV1BenchmarkSink []byte
+
+func BenchmarkTemplateV1EncodeDocument(b *testing.B) {
+	fields := []string{"name", "email", "city", "pad"}
+	values := []any{"ada", "ada@example.com", "hnl", "0123456789012345678901234567890123456789"}
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		doc, err := EncodeTemplateV1Document(fields, values)
+		if err != nil {
+			b.Fatalf("encode template-v1 document: %v", err)
+		}
+		templateV1BenchmarkSink = doc
+	}
+}
+
+func BenchmarkTemplateV1EncoderEncodeDocumentRepeatedShape(b *testing.B) {
+	fields := []string{"name", "email", "city", "pad"}
+	values := []any{"ada", "ada@example.com", "hnl", "0123456789012345678901234567890123456789"}
+	var encoder TemplateV1Encoder
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		doc, err := encoder.EncodeDocument(fields, values)
+		if err != nil {
+			b.Fatalf("encode template-v1 document: %v", err)
+		}
+		templateV1BenchmarkSink = doc
+	}
+}
+
 func overheadBenchBatchSize(b *testing.B) int {
 	b.Helper()
 
@@ -268,7 +297,7 @@ func BenchmarkCollectionOverheadIndexStateTemplateV1Extraction(b *testing.B) {
 		}
 		storedDocs[i] = stored
 		for _, record := range records {
-			if err := resolver.addRecord(record); err != nil {
+			if _, err := resolver.addRecord(record); err != nil {
 				b.Fatalf("add template-v1 record: %v", err)
 			}
 		}
