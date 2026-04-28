@@ -53,6 +53,9 @@ MVP BSON/document support:
 - BSON object, string, bool, integer, double, null, array, and nested document
   values preserved on round trip.
 - Clear rejection for unsupported BSON types rather than lossy conversion.
+- The initial gateway may translate BSON into an existing collection document
+  format, but it should measure that cost directly before treating re-encoding
+  as acceptable.
 
 ## Non-Goals For The First PR Stack
 
@@ -94,6 +97,10 @@ lower-level hooks when a measured workload needs them.
    - Preserve enough type information for round trips and indexed scalar
      comparisons.
    - Define unsupported-type behavior before benchmarks begin.
+   - Keep the storage boundary explicit: start with JSON or template-v1 where it
+     is sufficient, but plan a native BSON collection document format if
+     benchmarks show BSON re-encoding or BSON-to-JSON conversion is a material
+     ingest, update, read, or index-extraction bottleneck.
 
 3. Query planner
    - Map `_id` equality to primary lookup.
@@ -111,6 +118,30 @@ lower-level hooks when a measured workload needs them.
    - Use the same document corpus and operation mix for TreeDB and MongoDB.
    - Track ops/sec, p50/p95/p99 latency, disk bytes after load, disk bytes after
      checkpoint/vacuum/compact, and correctness verification.
+   - Attribute time spent in BSON decode, document re-encoding, index extraction,
+     TreeDB writes, and response encoding so format work is driven by measured
+     bottlenecks.
+
+## Collection Document Format Expansion
+
+TreeDB collections currently have JSON and template-v1 document formats. The
+MongoDB gateway should explicitly evaluate whether BSON deserves to become a
+third collection document format, for example `DocumentFormatBSON`.
+
+Do not assume BSON storage is required for the first gateway milestone. It adds
+format surface area, type-ordering rules, index extraction logic, and migration
+pressure. It becomes high priority if benchmarks show that repeated
+BSON-to-JSON, JSON-to-BSON, or BSON-to-template-v1 conversion is a material part
+of end-to-end cost.
+
+If benchmark evidence supports it, a BSON document format should aim to:
+
+- store raw or lightly normalized BSON bytes in the primary collection root.
+- extract secondary index values directly from BSON without converting to JSON.
+- preserve MongoDB scalar typing and ordering semantics where the MVP query
+  subset depends on them.
+- return stored BSON to the wire protocol with minimal re-encoding.
+- coexist with JSON and template-v1 in the document-format benchmark matrix.
 
 ## Benchmark Questions
 
@@ -131,6 +162,8 @@ Metrics to record for every run:
 
 - total operations/sec.
 - p50, p95, and p99 latency by operation type.
+- BSON decode, document re-encode, index extraction, and response encode time
+  where instrumentation can measure them without distorting the benchmark.
 - database directory bytes.
 - index/data split where available.
 - TreeDB leaf-vlog, value-vlog, and `index.db` bytes.
@@ -141,6 +174,9 @@ Metrics to record for every run:
 
 - Should the gateway store raw BSON bytes, canonical JSON, or a typed internal
   document encoding?
+- If raw BSON storage is useful, should it be a collection-level document format
+  beside JSON and template-v1, or a gateway-local optimization hidden behind the
+  existing collection API?
 - Should `_id` be the TreeDB collection primary key, or should it live as a
   normal field with an internal primary key?
 - Which BSON types need indexed ordering in the MVP?
@@ -157,6 +193,11 @@ Metrics to record for every run:
 - [ ] Write a short compatibility matrix for commands, query operators, update
       operators, and BSON types.
 - [ ] Define the initial BSON-to-TreeDB document encoding.
+- [ ] Instrument BSON decode, document re-encoding, index extraction, and
+      response encoding so the benchmark can prove whether a native BSON
+      collection format is needed.
+- [ ] If re-encoding is material, draft `DocumentFormatBSON` alongside the
+      existing JSON and template-v1 collection formats.
 - [ ] Prototype driver handshake with the official MongoDB Go driver.
 - [ ] Implement `insert` and `_id` lookup against TreeDB collections.
 - [ ] Implement single-field index creation and indexed `find`.
@@ -171,3 +212,5 @@ Metrics to record for every run:
 - 2026-04-28: Created the planning folder and initial spec. Agreed framing:
   pursue a MongoDB-compatible gateway/subset for product exploration and
   benchmarking, not a claim of full MongoDB compatibility.
+- 2026-04-28: Added native BSON collection-format planning as a benchmark-driven
+  follow-up if BSON re-encoding proves expensive relative to TreeDB operations.
