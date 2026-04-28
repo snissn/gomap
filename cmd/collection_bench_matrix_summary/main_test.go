@@ -60,6 +60,15 @@ func TestMatrixSummaryRendersBenchmarkMetrics(t *testing.T) {
           "mean_allocs_per_op": 5
         },
         {
+          "name": "BenchmarkCollectionMixedReadWritePrimary",
+          "mean_ns_per_op": 1000,
+          "mean_bytes_per_op": 512,
+          "mean_allocs_per_op": 5,
+          "mean_metrics": {
+            "writer_docs/sec": 12345
+          }
+        },
+        {
           "name": "BenchmarkCollectionInsertBatchCheckpointWithSecondaryIndexes",
           "mean_ns_per_op": 8000,
           "mean_bytes_per_op": 2000,
@@ -149,7 +158,7 @@ func TestMatrixSummaryRendersBenchmarkMetrics(t *testing.T) {
 		t.Fatalf("write matrix index: %v", err)
 	}
 
-	if err := run(config{matrixIndexPath: indexPath, outDir: dir}); err != nil {
+	if err := run(config{matrixIndexPath: indexPath, outDir: dir, availableBenchmarks: true}); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 	md, err := os.ReadFile(filepath.Join(dir, "collections_matrix_summary.md"))
@@ -174,16 +183,20 @@ func TestMatrixSummaryRendersBenchmarkMetrics(t *testing.T) {
 		"44",
 		"44.44",
 		"## Diagnostic Rows",
+		"| Cell | Engine | Format | Pager chunk | Pager sync | Diagnostic | ns/doc | ops/sec | B/doc | allocs/doc | Report |",
 		"These rows are not user stories.",
 		"`BenchmarkCollectionOverheadIndexStateJSONExtraction`",
 		"`BenchmarkCollectionOverheadIndexStateTemplateV1Extraction`",
 		"`BenchmarkCollectionOverheadPlanIndexedTemplateV1`",
 		"## Raw Matrix",
+		"| Cell | Engine | Format | Data vlog | Index vlog | Pager chunk | Pager sync | Benchmark | ns/op | ops/sec | B/op | allocs/op | insert ns/doc | insert docs/sec | sync ns/doc | sync docs/sec | writer docs/sec | Key fallbacks | Prefix fallbacks | Report |",
 		"`production_fast_data_vlog_index_leaf`",
 		"`BenchmarkCollectionInsertBatchWithSecondaryIndexes`",
+		"`BenchmarkCollectionMixedReadWritePrimary`",
 		"`BenchmarkSQLiteInsertBatchWithSecondaryIndexes`",
 		"`BenchmarkSQLiteNativeColumnsInsertBatchWithSecondaryIndexes`",
 		"`native-columns`",
+		"12,345",
 		"2,812.5",
 		"30",
 		"0",
@@ -199,16 +212,22 @@ func TestMatrixSummaryRendersBenchmarkMetrics(t *testing.T) {
 		t.Fatalf("read tsv: %v", err)
 	}
 	gotTSV := string(tsv)
-	if !strings.Contains(gotTSV, "template-v1\ttrue\tfalse\tprofile/default\tprofile/default\tBenchmarkCollectionInsertBatchWithSecondaryIndexes\t2812.5\t1980\t30\t-\t-\t0\t0\t") {
+	if !strings.Contains(gotTSV, "writer_docs_per_sec") || strings.Contains(strings.SplitN(gotTSV, "\n", 2)[0], "writer_docs/sec") {
+		t.Fatalf("tsv should use normalized writer throughput column:\n%s", gotTSV)
+	}
+	if !strings.Contains(gotTSV, "template-v1\ttrue\tfalse\tprofile/default\tprofile/default\tBenchmarkCollectionInsertBatchWithSecondaryIndexes\t2812.5\t355555.55555555556\t1980\t30\t-\t-\t-\t-\t-\t0\t0\t") {
 		t.Fatalf("tsv missing raw numeric row:\n%s", gotTSV)
 	}
-	if !strings.Contains(gotTSV, "json\t-\t-\t-\t-\tBenchmarkSQLiteInsertBatchWithSecondaryIndexes\t4100\t2048\t32\t-\t-\t") {
+	if !strings.Contains(gotTSV, "template-v1\ttrue\tfalse\tprofile/default\tprofile/default\tBenchmarkCollectionMixedReadWritePrimary\t1000\t1000000\t512\t5\t-\t-\t-\t-\t12345\t-\t-\t") {
+		t.Fatalf("tsv missing mixed writer throughput row:\n%s", gotTSV)
+	}
+	if !strings.Contains(gotTSV, "json\t-\t-\t-\t-\tBenchmarkSQLiteInsertBatchWithSecondaryIndexes\t4100\t243902.43902439025\t2048\t32\t-\t-\t-\t-\t-\t-\t-\t") {
 		t.Fatalf("tsv missing sqlite numeric row:\n%s", gotTSV)
 	}
-	if !strings.Contains(gotTSV, "native-columns\t-\t-\t-\t-\tBenchmarkSQLiteNativeColumnsInsertBatchWithSecondaryIndexes\t3000\t1500\t25\t-\t-\t") {
+	if !strings.Contains(gotTSV, "native-columns\t-\t-\t-\t-\tBenchmarkSQLiteNativeColumnsInsertBatchWithSecondaryIndexes\t3000\t333333.3333333333\t1500\t25\t-\t-\t-\t-\t-\t-\t-\t") {
 		t.Fatalf("tsv missing sqlite native-columns numeric row:\n%s", gotTSV)
 	}
-	if !strings.Contains(gotTSV, "template-v1\ttrue\tfalse\tprofile/default\tprofile/default\tBenchmarkCollectionInsertBatchCheckpointWithSecondaryIndexes\t8000\t2000\t30\t2500\t5500\t0\t0\t") {
+	if !strings.Contains(gotTSV, "template-v1\ttrue\tfalse\tprofile/default\tprofile/default\tBenchmarkCollectionInsertBatchCheckpointWithSecondaryIndexes\t8000\t125000\t2000\t30\t2500\t400000\t5500\t181818.18181818182\t-\t0\t0\t") {
 		t.Fatalf("tsv missing checkpoint split row:\n%s", gotTSV)
 	}
 	if strings.Contains(gotTSV, "2,812") {
@@ -219,19 +238,19 @@ func TestMatrixSummaryRendersBenchmarkMetrics(t *testing.T) {
 		t.Fatalf("read user story tsv: %v", err)
 	}
 	gotUserStoryTSV := string(userStoryTSV)
-	if !strings.Contains(gotUserStoryTSV, "template-v1\ttrue\tfalse\tprofile/default\tprofile/default\tbulk indexed insert\tBenchmarkCollectionInsertBatchWithSecondaryIndexes\t8000\t355555.55555555556\t22.5\t-\t-\t44.44444444444444\t2812.5\t") {
+	if !strings.Contains(gotUserStoryTSV, "template-v1\ttrue\tfalse\tprofile/default\tprofile/default\tbulk indexed insert\tBenchmarkCollectionInsertBatchWithSecondaryIndexes\t8000\t2812.5\t355555.55555555556\t22.5\t-\t-\t44.44444444444444\t") {
 		t.Fatalf("user story tsv missing collection throughput row:\n%s", gotUserStoryTSV)
 	}
-	if !strings.Contains(gotUserStoryTSV, "template-v1\ttrue\tfalse\tprofile/default\tprofile/default\tcheckpointed indexed insert\tBenchmarkCollectionInsertBatchCheckpointWithSecondaryIndexes\t8000\t125000\t64\t20\t44\t15.625\t8000\t") {
+	if !strings.Contains(gotUserStoryTSV, "template-v1\ttrue\tfalse\tprofile/default\tprofile/default\tcheckpointed indexed insert\tBenchmarkCollectionInsertBatchCheckpointWithSecondaryIndexes\t8000\t8000\t125000\t64\t20\t44\t15.625\t") {
 		t.Fatalf("user story tsv missing checkpoint split row:\n%s", gotUserStoryTSV)
 	}
-	if !strings.Contains(gotUserStoryTSV, "json\t-\t-\t-\t-\tbulk indexed insert\tBenchmarkSQLiteInsertBatchWithSecondaryIndexes\t8000\t243902.43902439025\t32.8\t-\t-\t30.48780487804878\t4100\t") {
+	if !strings.Contains(gotUserStoryTSV, "json\t-\t-\t-\t-\tbulk indexed insert\tBenchmarkSQLiteInsertBatchWithSecondaryIndexes\t8000\t4100\t243902.43902439025\t32.8\t-\t-\t30.48780487804878\t") {
 		t.Fatalf("user story tsv missing sqlite throughput row:\n%s", gotUserStoryTSV)
 	}
-	if !strings.Contains(gotUserStoryTSV, "native-columns\t-\t-\t-\t-\tbulk indexed insert\tBenchmarkSQLiteNativeColumnsInsertBatchWithSecondaryIndexes\t8000\t333333.3333333333\t24\t-\t-\t41.666666666666664\t3000\t") {
+	if !strings.Contains(gotUserStoryTSV, "native-columns\t-\t-\t-\t-\tbulk indexed insert\tBenchmarkSQLiteNativeColumnsInsertBatchWithSecondaryIndexes\t8000\t3000\t333333.3333333333\t24\t-\t-\t41.666666666666664\t") {
 		t.Fatalf("user story tsv missing sqlite native-columns throughput row:\n%s", gotUserStoryTSV)
 	}
-	if !strings.Contains(gotUserStoryTSV, "native-columns\t-\t-\t-\t-\tcheckpointed indexed insert\tBenchmarkSQLiteNativeColumnsInsertBatchCheckpointWithSecondaryIndexes\t8000\t142857.14285714287\t56\t16\t40\t17.857142857142858\t7000\t") {
+	if !strings.Contains(gotUserStoryTSV, "native-columns\t-\t-\t-\t-\tcheckpointed indexed insert\tBenchmarkSQLiteNativeColumnsInsertBatchCheckpointWithSecondaryIndexes\t8000\t7000\t142857.14285714287\t56\t16\t40\t17.857142857142858\t") {
 		t.Fatalf("user story tsv missing sqlite native-columns checkpoint row:\n%s", gotUserStoryTSV)
 	}
 }
@@ -296,6 +315,20 @@ func TestMatrixSummaryAllowsLegacySQLiteReportsWithoutNativeColumns(t *testing.T
 	}
 	if strings.Contains(got, "BenchmarkSQLiteNativeColumns") {
 		t.Fatalf("legacy sqlite summary should not synthesize native-columns rows:\n%s", got)
+	}
+}
+
+func TestDocumentFormatForSQLiteShapeNativeColumns(t *testing.T) {
+	for _, benchmark := range []string{
+		"BenchmarkSQLiteShapeInsertBatchNativeColumns/indexes_2",
+		"BenchmarkSQLiteShapeInsertBatchCheckpointNativeColumns/indexes_2",
+		"BenchmarkSQLiteShapeReadPrimaryNativeColumns/indexes_2",
+		"BenchmarkSQLiteShapeSecondaryLookupNativeColumns/unique",
+	} {
+		defaultFormat := "json"
+		if got := documentFormatForBenchmark(defaultFormat, benchmark); got != "native-columns" {
+			t.Fatalf("documentFormatForBenchmark(%q, %q)=%q want native-columns", defaultFormat, benchmark, got)
+		}
 	}
 }
 

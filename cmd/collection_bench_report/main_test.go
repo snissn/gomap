@@ -139,8 +139,14 @@ func TestBuildReportAndRenderMarkdown(t *testing.T) {
 	if !strings.Contains(md, "- collection batch size: `8000`") {
 		t.Fatalf("markdown missing collection batch size:\n%s", md)
 	}
+	if !strings.Contains(md, "- throughput columns are derived from adjacent latency columns as `1e9/ns`") {
+		t.Fatalf("markdown missing throughput derivation note:\n%s", md)
+	}
 	if !strings.Contains(md, "- storage policy: `data_outer=true,index_outer=false`") {
 		t.Fatalf("markdown missing storage policy:\n%s", md)
+	}
+	if !strings.Contains(md, "| Benchmark | Description | Samples | ns/op | Ops/sec | B/op | allocs/op") {
+		t.Fatalf("markdown missing adjacent latency/throughput header:\n%s", md)
 	}
 	if !strings.Contains(md, "- pager chunk size: `profile/default`") {
 		t.Fatalf("markdown missing pager chunk size:\n%s", md)
@@ -159,6 +165,12 @@ func TestBuildReportAndRenderMarkdown(t *testing.T) {
 	}
 	if !strings.Contains(md, "`insert_ns/doc`") || !strings.Contains(md, "`sync_ns/doc`") {
 		t.Fatalf("markdown missing checkpoint split metric columns:\n%s", md)
+	}
+	if !strings.Contains(md, "`insert_docs/sec`") || !strings.Contains(md, "`sync_docs/sec`") {
+		t.Fatalf("markdown missing checkpoint split throughput columns:\n%s", md)
+	}
+	if !strings.Contains(md, "400,000") || !strings.Contains(md, "181,818.18") {
+		t.Fatalf("markdown missing checkpoint split throughput values:\n%s", md)
 	}
 	if !strings.Contains(md, "`per_item_key_probe_fallback_count`") {
 		t.Fatalf("markdown missing native fallback metric column:\n%s", md)
