@@ -5,6 +5,8 @@ import (
 	"fmt"
 )
 
+const minBSONDocumentSize = 5
+
 type Reply struct {
 	ResponseFlags int32
 	CursorID      int64
@@ -26,6 +28,9 @@ func ParseReply(body []byte) (Reply, error) {
 		return Reply{}, fmt.Errorf("%w: negative OP_REPLY document count", ErrMalformed)
 	}
 	rem := body[20:]
+	if numberReturned > len(rem)/minBSONDocumentSize {
+		return Reply{}, fmt.Errorf("%w: OP_REPLY document count exceeds remaining body size", ErrMalformed)
+	}
 	r.Documents = make([]Document, 0, numberReturned)
 	for i := 0; i < numberReturned; i++ {
 		doc, next, err := readDocument(rem)

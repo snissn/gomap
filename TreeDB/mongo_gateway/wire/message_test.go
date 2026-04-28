@@ -103,6 +103,18 @@ func TestQueryHandshakeReplyRoundTrip(t *testing.T) {
 	}
 }
 
+func TestParseReplyRejectsImpossibleDocumentCount(t *testing.T) {
+	body := appendInt32(nil, 0)     // responseFlags
+	body = appendInt64(body, 0)     // cursorID
+	body = appendInt32(body, 0)     // startingFrom
+	body = appendInt32(body, 1<<30) // numberReturned
+
+	_, err := ParseReply(body)
+	if !errors.Is(err, ErrMalformed) {
+		t.Fatalf("ParseReply err=%v want ErrMalformed", err)
+	}
+}
+
 func TestMsgBodyRoundTrip(t *testing.T) {
 	commandDoc := mustDocument(t, bson.D{
 		{Key: "ping", Value: int32(1)},

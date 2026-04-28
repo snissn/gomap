@@ -1,6 +1,6 @@
 # MongoDB-Compatible Gateway Plan
 
-Status: planning and work log only. No compatibility code lives here yet.
+Status: planning, work log, and early wire-protocol prototype.
 
 This folder tracks the product expansion effort to expose TreeDB collections
 through a MongoDB-compatible gateway. The near-term goal is not to claim full
@@ -26,14 +26,16 @@ Full compatibility is a long-term product, not an MVP.
 The first milestone should be a gateway that common MongoDB drivers can connect
 to and use for simple collection workflows.
 
-Required MVP operations:
+Required MVP operations use MongoDB command names. Common drivers expose helper
+methods such as `insertOne` / `insertMany`, `updateOne`, and `deleteOne` /
+`deleteMany` on top of these commands.
 
 - `hello` / `isMaster` enough for driver handshake.
-- `insert` / `insertOne` / `insertMany`.
+- `insert`.
 - `find` with simple predicates.
-- `getMore` and cursor close for bounded result sets.
-- `update` / `updateOne` with `$set`.
-- `delete` / `deleteOne` / `deleteMany`.
+- `getMore` and `killCursors` for bounded result sets.
+- `update` with `$set`.
+- `delete`.
 - `createIndexes` and `dropIndexes`.
 - `listCollections` and `listIndexes`.
 
