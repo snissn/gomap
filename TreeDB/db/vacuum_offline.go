@@ -97,30 +97,31 @@ func vacuumIndexOffline(opts Options, fail vacuumFailpoint) error {
 	}
 
 	alloc := &pagerAllocator{p: newPager}
+	reader := newValueReader(state.ValueLogSet)
 
-	sysIter := tree.New(d.Pager(), newValueReader(state.ValueLogSet), state.SystemRootPageID).
-		IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
-	sysRoot, err := bulk.BuildWithOptions(sysIter, alloc, newPager, bulk.BuildOptions{
-		LeafPrefixCompression: opts.LeafPrefixCompression,
-		LeafColumnar:          opts.IndexColumnarLeaves,
-		PackedValuePtr:        opts.IndexPackedValuePtr,
-		InternalBaseDelta:     opts.IndexInternalBaseDelta,
-	})
-	_ = sysIter.Close()
+	collectionRootReplacements, err := vacuumRewriteCollectionRoots(d.Pager(), reader, state.SystemRootPageID, alloc, newPager)
 	if err != nil {
 		_ = newPager.Close()
 		_ = d.Close()
 		return err
 	}
 
-	userIter := tree.New(d.Pager(), newValueReader(state.ValueLogSet), state.RootPageID).
-		IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
-	userRoot, err := bulk.BuildWithOptions(userIter, alloc, newPager, bulk.BuildOptions{
+	buildOpts := bulk.BuildOptions{
 		LeafPrefixCompression: opts.LeafPrefixCompression,
 		LeafColumnar:          opts.IndexColumnarLeaves,
 		PackedValuePtr:        opts.IndexPackedValuePtr,
 		InternalBaseDelta:     opts.IndexInternalBaseDelta,
-	})
+	}
+	sysRoot, err := vacuumBuildSystemRoot(d.Pager(), reader, state.SystemRootPageID, alloc, newPager, buildOpts, collectionRootReplacements)
+	if err != nil {
+		_ = newPager.Close()
+		_ = d.Close()
+		return err
+	}
+
+	userIter := tree.New(d.Pager(), reader, state.RootPageID).
+		IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
+	userRoot, err := bulk.BuildWithOptions(userIter, alloc, newPager, buildOpts)
 	_ = userIter.Close()
 	if err != nil {
 		_ = newPager.Close()

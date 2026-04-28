@@ -87,7 +87,7 @@ Behavior:
 - Disables or relaxes safety knobs:
   - `Durability = DurabilityWALOffRelaxed` (WAL off + relaxed sync)
   - `ValueLog.ReadIntegrity = IntegritySkipChecksums`
-- Prefers append allocation for throughput under churn (`PreferAppendAlloc=true`)
+- Uses normal page reuse (`PreferAppendAlloc=false` by default)
 - Enables leaf pages in the value log (`IndexOuterLeavesInValueLog = true`)
 - Enables index optimization bundle:
   - `LeafPrefixCompression = true`
@@ -122,7 +122,7 @@ Behavior:
 - Keeps WAL on while relaxing durability checks:
   - `Durability = DurabilityWALOnRelaxed`
   - `ValueLog.ReadIntegrity = IntegritySkipChecksums`
-- Prefers append allocation (`PreferAppendAlloc=true`)
+- Uses normal page reuse (`PreferAppendAlloc=false` by default)
 - Enables the same index optimization bundle as `ProfileFast`.
 - Enables the same Celestia-style value-log compression defaults as
   `ProfileFast`.

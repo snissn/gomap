@@ -2,11 +2,13 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"os"
 	"path/filepath"
 	"testing"
 
+	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/TreeDB/collections"
 )
 
@@ -30,11 +32,26 @@ func TestParseConfigDefaultsToInspectableTwoIndexTemplateFixture(t *testing.T) {
 	if !cfg.Checkpoint || !cfg.ReopenVerify {
 		t.Fatalf("checkpoint=%t reopen_verify=%t want both true", cfg.Checkpoint, cfg.ReopenVerify)
 	}
+	if cfg.KeepRecent != 1 {
+		t.Fatalf("keep_recent=%d want 1", cfg.KeepRecent)
+	}
+	if cfg.PreferAppendAlloc {
+		t.Fatal("expected prefer append allocation to be disabled by default")
+	}
+	if cfg.IndexVacuum != indexVacuumModeNone {
+		t.Fatalf("index vacuum mode=%q want none", cfg.IndexVacuum)
+	}
 }
 
 func TestParseConfigRejectsExplicitEmptyFormat(t *testing.T) {
 	if _, err := parseConfig([]string{"-format", ""}, io.Discard); err == nil {
 		t.Fatal("expected explicit empty -format to fail")
+	}
+}
+
+func TestParseConfigRejectsInvalidIndexVacuumMode(t *testing.T) {
+	if _, err := parseConfig([]string{"-index-vacuum", "sometimes"}, io.Discard); err == nil {
+		t.Fatal("expected invalid -index-vacuum to fail")
 	}
 }
 
@@ -65,6 +82,9 @@ func TestRunFixtureKeepsTemplateV1TwoIndexDatabase(t *testing.T) {
 	if summary.DiskUsageFinal.TotalBytes == 0 {
 		t.Fatal("expected final disk usage")
 	}
+	if summary.IndexStorageFinal.IndexDBBytes == 0 {
+		t.Fatal("expected final index storage summary")
+	}
 	if _, err := os.Stat(filepath.Join(dir, "maindb", "index.db")); err != nil {
 		t.Fatalf("expected kept maindb/index.db: %v", err)
 	}
@@ -91,6 +111,100 @@ func TestRunFixtureKeepsTemplateV1ThreeIndexDatabase(t *testing.T) {
 	}
 	if summary.Verify.Samples == 0 {
 		t.Fatal("expected reopen verification samples")
+	}
+}
+
+func TestVacuumIndexOfflinePreservesTemplateV1TwoIndexDatabase(t *testing.T) {
+	if testing.Short() {
+		t.Skip("loads a large enough fixture to exercise multi-batch collection roots")
+	}
+
+	dir := filepath.Join(t.TempDir(), "fixture")
+	cfg, err := parseConfig([]string{
+		"-dir", dir,
+		"-docs", "100000",
+		"-batch-size", "80",
+		"-verify-samples", "16",
+		"-progress=false",
+	}, io.Discard)
+	if err != nil {
+		t.Fatalf("parse config: %v", err)
+	}
+
+	summary, err := runFixture(cfg)
+	if err != nil {
+		t.Fatalf("run fixture: %v", err)
+	}
+	if summary.IndexCount != 2 {
+		t.Fatalf("index count=%d want 2", summary.IndexCount)
+	}
+
+	indexPath := filepath.Join(dir, "maindb", "index.db")
+	beforeVacuum := regularFileSize(t, indexPath)
+	if beforeVacuum == 0 {
+		t.Fatal("expected non-empty index.db before vacuum")
+	}
+
+	if samples, err := verifyReopen(cfg); err != nil {
+		t.Fatalf("pre-vacuum smoke verify: %v", err)
+	} else if samples == 0 {
+		t.Fatal("expected pre-vacuum smoke verification samples")
+	}
+
+	if err := treedb.VacuumIndexOffline(treedb.Options{Dir: dir}); err != nil {
+		t.Fatalf("vacuum index offline: %v", err)
+	}
+
+	afterVacuum := regularFileSize(t, indexPath)
+	if afterVacuum == 0 {
+		t.Fatal("expected non-empty index.db after vacuum")
+	}
+	t.Logf("index.db vacuum size: before=%d after=%d", beforeVacuum, afterVacuum)
+
+	if samples, err := verifyReopen(cfg); err != nil {
+		t.Fatalf("post-vacuum smoke verify: %v", err)
+	} else if samples == 0 {
+		t.Fatal("expected post-vacuum smoke verification samples")
+	}
+}
+
+func TestVacuumIndexOnlinePreservesTemplateV1TwoIndexDatabase(t *testing.T) {
+	if testing.Short() {
+		t.Skip("loads a large enough fixture to exercise multi-batch collection roots")
+	}
+
+	dir := filepath.Join(t.TempDir(), "fixture")
+	cfg, err := parseConfig([]string{
+		"-dir", dir,
+		"-docs", "100000",
+		"-batch-size", "80",
+		"-verify-samples", "16",
+		"-progress=false",
+	}, io.Discard)
+	if err != nil {
+		t.Fatalf("parse config: %v", err)
+	}
+
+	if _, err := runFixture(cfg); err != nil {
+		t.Fatalf("run fixture: %v", err)
+	}
+
+	backend, cleanup, err := openBackend(cfg)
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	if err := backend.VacuumIndexOnline(context.Background()); err != nil {
+		_ = cleanup()
+		t.Fatalf("vacuum index online: %v", err)
+	}
+	if err := cleanup(); err != nil {
+		t.Fatalf("close backend: %v", err)
+	}
+
+	if samples, err := verifyReopen(cfg); err != nil {
+		t.Fatalf("post-online-vacuum smoke verify: %v", err)
+	} else if samples == 0 {
+		t.Fatal("expected post-online-vacuum smoke verification samples")
 	}
 }
 
@@ -141,4 +255,16 @@ func TestTemplateV1StoredDocumentExtractsInputEnvelope(t *testing.T) {
 	if !bytes.Equal(again, stored) {
 		t.Fatal("stored document conversion changed an already-stored payload")
 	}
+}
+
+func regularFileSize(t *testing.T, path string) int64 {
+	t.Helper()
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat %s: %v", path, err)
+	}
+	if !info.Mode().IsRegular() {
+		t.Fatalf("%s is not a regular file", path)
+	}
+	return info.Size()
 }

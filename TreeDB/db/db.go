@@ -30,7 +30,7 @@ import (
 const (
 	MetaPage0ID = 0
 	MetaPage1ID = 1
-	KeepRecent  = 10000
+	KeepRecent  = 1
 
 	closeSnapshotDrainTimeout = 10 * time.Second
 	closeSnapshotDrainSleep   = 500 * time.Microsecond
@@ -593,7 +593,7 @@ type Options struct {
 	//
 	// Values <= 0 use a default of 64KiB.
 	TemplateDBChunkSize int64
-	KeepRecent          uint64 // Default 10000
+	KeepRecent          uint64 // Default 1
 	// PagerSyncConcurrency controls how many goroutines may msync dirty chunks
 	// in parallel during Sync. Values <= 0 use the default (1).
 	PagerSyncConcurrency int
@@ -1025,7 +1025,7 @@ func Open(opts Options) (*DB, error) {
 		opts.ChunkSize = defaultChunkSize
 	}
 	if opts.KeepRecent == 0 {
-		opts.KeepRecent = 10000
+		opts.KeepRecent = KeepRecent
 	}
 	if opts.LeafFillTargetPPM == 0 {
 		opts.LeafFillTargetPPM = 1_000_000

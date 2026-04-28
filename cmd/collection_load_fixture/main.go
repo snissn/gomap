@@ -28,6 +28,9 @@ const (
 	defaultDocs              = 1_000_000
 	defaultBatchSize         = 8_000
 	defaultCollectionName    = "bench_shape_insert_2"
+	indexVacuumModeNone      = "none"
+	indexVacuumModeOnline    = "online"
+	indexVacuumModeOffline   = "offline"
 	collectionFixtureCities  = 64
 	collectionFixturePad     = "01234567890123456789"
 	maxFixtureTopFileEntries = 20
@@ -45,13 +48,20 @@ type config struct {
 	DataOuterLeavesInValueLog  bool
 	IndexOuterLeavesInValueLog bool
 	ChunkSize                  int64
+	KeepRecent                 uint64
+	PreferAppendAlloc          bool
 	PagerSyncConcurrency       int
+	DisableBackgroundPrune     bool
+	PruneInterval              time.Duration
+	PruneMaxPages              int
+	PruneMaxDuration           time.Duration
 	Checkpoint                 bool
 	CheckpointEachBatch        bool
 	ReopenVerify               bool
 	VerifySamples              int
 	ValueLogRewrite            bool
 	ValueLogGC                 bool
+	IndexVacuum                string
 	Progress                   bool
 	JSONOutput                 bool
 	CPUProfile                 string
@@ -126,40 +136,85 @@ type rewriteSummary struct {
 	GCBytesDeleted        int64         `json:"gc_bytes_deleted,omitempty"`
 }
 
+type indexStorageSummary struct {
+	IndexDBBytes                uint64 `json:"index_db_bytes,omitempty"`
+	PagesTotal                  uint64 `json:"pages_total,omitempty"`
+	KeepRecent                  uint64 `json:"keep_recent,omitempty"`
+	PreferAppendAlloc           bool   `json:"prefer_append_alloc"`
+	FreelistReclaimablePages    uint64 `json:"freelist_reclaimable_pages,omitempty"`
+	FreelistAllocPagesTotal     uint64 `json:"freelist_alloc_pages_total,omitempty"`
+	FreelistAppendPagesTotal    uint64 `json:"freelist_append_pages_total,omitempty"`
+	FreelistReusePagesTotal     uint64 `json:"freelist_reuse_pages_total,omitempty"`
+	FreelistFreePagesTotal      uint64 `json:"freelist_free_pages_total,omitempty"`
+	GraveyardBatches            uint64 `json:"graveyard_batches,omitempty"`
+	GraveyardPages              uint64 `json:"graveyard_pages,omitempty"`
+	CollectionRoots             uint64 `json:"collection_roots,omitempty"`
+	CollectionLeafRefRoots      uint64 `json:"collection_leafref_roots,omitempty"`
+	CollectionPagerRoots        uint64 `json:"collection_pager_roots,omitempty"`
+	CollectionRootPages         uint64 `json:"collection_root_pages,omitempty"`
+	CollectionRootLeafPages     uint64 `json:"collection_root_leaf_pages,omitempty"`
+	CollectionRootInternalPages uint64 `json:"collection_root_internal_pages,omitempty"`
+	CollectionRootDuplicateRefs uint64 `json:"collection_root_duplicate_refs,omitempty"`
+	PruneEnabled                bool   `json:"prune_enabled"`
+	PruneRuns                   uint64 `json:"prune_runs,omitempty"`
+	PrunePagesFreed             uint64 `json:"prune_pages_freed,omitempty"`
+}
+
+type indexVacuumSummary struct {
+	Mode               string              `json:"mode"`
+	Enabled            bool                `json:"enabled"`
+	Timing             timingSummary       `json:"timing,omitempty"`
+	DiskBytesBefore    uint64              `json:"disk_bytes_before,omitempty"`
+	DiskBytesAfter     uint64              `json:"disk_bytes_after,omitempty"`
+	IndexDBBytesBefore uint64              `json:"index_db_bytes_before,omitempty"`
+	IndexDBBytesAfter  uint64              `json:"index_db_bytes_after,omitempty"`
+	StorageBefore      indexStorageSummary `json:"storage_before,omitempty"`
+	StorageAfter       indexStorageSummary `json:"storage_after,omitempty"`
+}
+
 type verifySummary struct {
 	Enabled bool `json:"enabled"`
 	Samples int  `json:"samples,omitempty"`
 }
 
 type loadSummary struct {
-	GeneratedAt                string             `json:"generated_at"`
-	Dir                        string             `json:"dir"`
-	CreatedTempDir             bool               `json:"created_temp_dir,omitempty"`
-	Collection                 string             `json:"collection"`
-	DocumentFormat             string             `json:"document_format"`
-	Profile                    string             `json:"profile"`
-	Docs                       int                `json:"docs"`
-	BatchSize                  int                `json:"batch_size"`
-	Batches                    int                `json:"batches"`
-	IndexCount                 int                `json:"index_count"`
-	DataOuterLeavesInValueLog  bool               `json:"data_outer_leaves_in_value_log"`
-	IndexOuterLeavesInValueLog bool               `json:"index_outer_leaves_in_value_log"`
-	ChunkSize                  int64              `json:"chunk_size,omitempty"`
-	PagerSyncConcurrency       int                `json:"pager_sync_concurrency,omitempty"`
-	WallTiming                 timingSummary      `json:"wall_timing"`
-	GenerationTiming           timingSummary      `json:"generation_timing"`
-	InsertTiming               timingSummary      `json:"insert_timing"`
-	CheckpointTiming           timingSummary      `json:"checkpoint_timing,omitempty"`
-	InsertPhases               insertPhaseSummary `json:"insert_phases"`
-	DiskUsageBeforeMaintenance diskUsageSummary   `json:"disk_usage_before_maintenance"`
-	DiskUsageFinal             diskUsageSummary   `json:"disk_usage_final"`
-	Rewrite                    rewriteSummary     `json:"rewrite,omitempty"`
-	Verify                     verifySummary      `json:"verify"`
-	CPUProfile                 string             `json:"cpu_profile,omitempty"`
-	MemProfile                 string             `json:"mem_profile,omitempty"`
-	GoVersion                  string             `json:"go_version"`
-	GOOS                       string             `json:"goos"`
-	GOARCH                     string             `json:"goarch"`
+	GeneratedAt                   string              `json:"generated_at"`
+	Dir                           string              `json:"dir"`
+	CreatedTempDir                bool                `json:"created_temp_dir,omitempty"`
+	Collection                    string              `json:"collection"`
+	DocumentFormat                string              `json:"document_format"`
+	Profile                       string              `json:"profile"`
+	Docs                          int                 `json:"docs"`
+	BatchSize                     int                 `json:"batch_size"`
+	Batches                       int                 `json:"batches"`
+	IndexCount                    int                 `json:"index_count"`
+	DataOuterLeavesInValueLog     bool                `json:"data_outer_leaves_in_value_log"`
+	IndexOuterLeavesInValueLog    bool                `json:"index_outer_leaves_in_value_log"`
+	ChunkSize                     int64               `json:"chunk_size,omitempty"`
+	KeepRecent                    uint64              `json:"keep_recent"`
+	PreferAppendAlloc             bool                `json:"prefer_append_alloc"`
+	PagerSyncConcurrency          int                 `json:"pager_sync_concurrency,omitempty"`
+	DisableBackgroundPrune        bool                `json:"disable_background_prune,omitempty"`
+	PruneInterval                 string              `json:"prune_interval,omitempty"`
+	PruneMaxPages                 int                 `json:"prune_max_pages,omitempty"`
+	PruneMaxDuration              string              `json:"prune_max_duration,omitempty"`
+	WallTiming                    timingSummary       `json:"wall_timing"`
+	GenerationTiming              timingSummary       `json:"generation_timing"`
+	InsertTiming                  timingSummary       `json:"insert_timing"`
+	CheckpointTiming              timingSummary       `json:"checkpoint_timing,omitempty"`
+	InsertPhases                  insertPhaseSummary  `json:"insert_phases"`
+	IndexStorageBeforeMaintenance indexStorageSummary `json:"index_storage_before_maintenance"`
+	DiskUsageBeforeMaintenance    diskUsageSummary    `json:"disk_usage_before_maintenance"`
+	DiskUsageFinal                diskUsageSummary    `json:"disk_usage_final"`
+	Rewrite                       rewriteSummary      `json:"rewrite,omitempty"`
+	IndexVacuum                   indexVacuumSummary  `json:"index_vacuum,omitempty"`
+	IndexStorageFinal             indexStorageSummary `json:"index_storage_final"`
+	Verify                        verifySummary       `json:"verify"`
+	CPUProfile                    string              `json:"cpu_profile,omitempty"`
+	MemProfile                    string              `json:"mem_profile,omitempty"`
+	GoVersion                     string              `json:"go_version"`
+	GOOS                          string              `json:"goos"`
+	GOARCH                        string              `json:"goarch"`
 }
 
 func main() {
@@ -198,10 +253,13 @@ func parseConfig(args []string, output io.Writer) (config, error) {
 		Profile:                    treedb.ProfileFast,
 		DataOuterLeavesInValueLog:  true,
 		IndexOuterLeavesInValueLog: true,
+		KeepRecent:                 1,
+		PreferAppendAlloc:          false,
 		Checkpoint:                 true,
 		ReopenVerify:               true,
 		VerifySamples:              8,
 		ValueLogGC:                 true,
+		IndexVacuum:                indexVacuumModeNone,
 		Progress:                   true,
 	}
 	var documentFormat string
@@ -222,13 +280,20 @@ func parseConfig(args []string, output io.Writer) (config, error) {
 	fs.BoolVar(&cfg.DataOuterLeavesInValueLog, "data-outer-leaves-in-vlog", cfg.DataOuterLeavesInValueLog, "store collection primary/index-state outer leaves through the value log")
 	fs.BoolVar(&cfg.IndexOuterLeavesInValueLog, "index-outer-leaves-in-vlog", cfg.IndexOuterLeavesInValueLog, "store secondary-index outer leaves through the value log")
 	fs.Int64Var(&cfg.ChunkSize, "chunk-size", 0, "override TreeDB pager chunk size in bytes")
+	fs.Uint64Var(&cfg.KeepRecent, "keep-recent", cfg.KeepRecent, "TreeDB index page versions to retain before page reuse")
+	fs.BoolVar(&cfg.PreferAppendAlloc, "prefer-append-alloc", cfg.PreferAppendAlloc, "append new index pages instead of reusing the freelist")
 	fs.IntVar(&cfg.PagerSyncConcurrency, "pager-sync-concurrency", 0, "override TreeDB pager sync concurrency")
+	fs.BoolVar(&cfg.DisableBackgroundPrune, "disable-background-prune", false, "disable background page pruning and prune on the commit path")
+	fs.DurationVar(&cfg.PruneInterval, "prune-interval", 0, "TreeDB background prune interval (0 uses engine default)")
+	fs.IntVar(&cfg.PruneMaxPages, "prune-max-pages", 0, "TreeDB max pages freed per prune tick (0 uses engine default; <0 unlimited)")
+	fs.DurationVar(&cfg.PruneMaxDuration, "prune-max-duration", 0, "TreeDB max prune duration per tick (0 uses engine default; <0 unlimited)")
 	fs.BoolVar(&cfg.Checkpoint, "checkpoint", cfg.Checkpoint, "checkpoint after loading")
 	fs.BoolVar(&cfg.CheckpointEachBatch, "checkpoint-each-batch", false, "checkpoint after every batch")
 	fs.BoolVar(&cfg.ReopenVerify, "reopen-verify", cfg.ReopenVerify, "close, reopen, and verify sampled primary/index reads")
 	fs.IntVar(&cfg.VerifySamples, "verify-samples", cfg.VerifySamples, "sample count for -reopen-verify")
 	fs.BoolVar(&cfg.ValueLogRewrite, "vlog-rewrite", false, "run TreeDB online value-log rewrite after loading")
 	fs.BoolVar(&cfg.ValueLogGC, "vlog-gc", cfg.ValueLogGC, "run value-log GC after -vlog-rewrite")
+	fs.StringVar(&cfg.IndexVacuum, "index-vacuum", cfg.IndexVacuum, "run index vacuum after loading: none, online, or offline")
 	fs.BoolVar(&cfg.Progress, "progress", cfg.Progress, "print load progress to stderr")
 	fs.BoolVar(&cfg.JSONOutput, "json", false, "print summary as JSON")
 	fs.StringVar(&cfg.CPUProfile, "cpuprofile", "", "write CPU profile to this path")
@@ -264,11 +329,25 @@ func parseConfig(args []string, output io.Writer) (config, error) {
 	if cfg.ChunkSize < 0 {
 		return cfg, fmt.Errorf("-chunk-size must be >= 0")
 	}
+	if cfg.KeepRecent == 0 {
+		return cfg, fmt.Errorf("-keep-recent must be > 0")
+	}
 	if cfg.PagerSyncConcurrency < 0 {
 		return cfg, fmt.Errorf("-pager-sync-concurrency must be >= 0")
 	}
+	if cfg.PruneInterval < 0 {
+		return cfg, fmt.Errorf("-prune-interval must be >= 0")
+	}
 	if cfg.VerifySamples < 0 {
 		return cfg, fmt.Errorf("-verify-samples must be >= 0")
+	}
+	cfg.IndexVacuum = strings.ToLower(strings.TrimSpace(cfg.IndexVacuum))
+	switch cfg.IndexVacuum {
+	case "", indexVacuumModeNone:
+		cfg.IndexVacuum = indexVacuumModeNone
+	case indexVacuumModeOnline, indexVacuumModeOffline:
+	default:
+		return cfg, fmt.Errorf("unsupported -index-vacuum %q; use none, online, or offline", cfg.IndexVacuum)
 	}
 	return cfg, nil
 }
@@ -388,6 +467,10 @@ func runFixture(cfg config) (loadSummary, error) {
 		checkpointElapsed += time.Since(checkpointStart)
 	}
 
+	beforeIndexStorage, err := captureIndexStorageSummary(cfg, backend)
+	if err != nil {
+		return loadSummary{}, err
+	}
 	beforeMaintenance, err := directoryUsage(cfg.Dir, cfg.Docs)
 	if err != nil {
 		return loadSummary{}, err
@@ -396,13 +479,19 @@ func runFixture(cfg config) (loadSummary, error) {
 	if err != nil {
 		return loadSummary{}, err
 	}
+	indexVacuum, finalIndexStorage, err := maybeVacuumIndex(cfg, backend, cleanup, &closed)
+	if err != nil {
+		return loadSummary{}, err
+	}
 	wallElapsed := time.Since(wallStart)
 
-	if err := cleanup(); err != nil {
+	if !closed {
+		if err := cleanup(); err != nil {
+			closed = true
+			return loadSummary{}, fmt.Errorf("close backend: %w", err)
+		}
 		closed = true
-		return loadSummary{}, fmt.Errorf("close backend: %w", err)
 	}
-	closed = true
 
 	verify := verifySummary{Enabled: cfg.ReopenVerify}
 	if cfg.ReopenVerify {
@@ -422,34 +511,43 @@ func runFixture(cfg config) (loadSummary, error) {
 	}
 
 	return loadSummary{
-		GeneratedAt:                time.Now().UTC().Format(time.RFC3339),
-		Dir:                        cfg.Dir,
-		CreatedTempDir:             cfg.createdTempDir,
-		Collection:                 cfg.Collection,
-		DocumentFormat:             string(cfg.DocumentFormat),
-		Profile:                    string(cfg.Profile),
-		Docs:                       cfg.Docs,
-		BatchSize:                  cfg.BatchSize,
-		Batches:                    batches,
-		IndexCount:                 cfg.IndexCount,
-		DataOuterLeavesInValueLog:  cfg.DataOuterLeavesInValueLog,
-		IndexOuterLeavesInValueLog: cfg.IndexOuterLeavesInValueLog,
-		ChunkSize:                  cfg.ChunkSize,
-		PagerSyncConcurrency:       cfg.PagerSyncConcurrency,
-		WallTiming:                 timing(wallElapsed, cfg.Docs),
-		GenerationTiming:           timing(generationElapsed, cfg.Docs),
-		InsertTiming:               timing(insertElapsed, cfg.Docs),
-		CheckpointTiming:           timing(checkpointElapsed, cfg.Docs),
-		InsertPhases:               summarizeInsertPhases(insertStats, secondaryRuns, cfg.Docs, batches),
-		DiskUsageBeforeMaintenance: beforeMaintenance,
-		DiskUsageFinal:             finalUsage,
-		Rewrite:                    rewrite,
-		Verify:                     verify,
-		CPUProfile:                 cfg.CPUProfile,
-		MemProfile:                 cfg.MemProfile,
-		GoVersion:                  runtime.Version(),
-		GOOS:                       runtime.GOOS,
-		GOARCH:                     runtime.GOARCH,
+		GeneratedAt:                   time.Now().UTC().Format(time.RFC3339),
+		Dir:                           cfg.Dir,
+		CreatedTempDir:                cfg.createdTempDir,
+		Collection:                    cfg.Collection,
+		DocumentFormat:                string(cfg.DocumentFormat),
+		Profile:                       string(cfg.Profile),
+		Docs:                          cfg.Docs,
+		BatchSize:                     cfg.BatchSize,
+		Batches:                       batches,
+		IndexCount:                    cfg.IndexCount,
+		DataOuterLeavesInValueLog:     cfg.DataOuterLeavesInValueLog,
+		IndexOuterLeavesInValueLog:    cfg.IndexOuterLeavesInValueLog,
+		ChunkSize:                     cfg.ChunkSize,
+		KeepRecent:                    cfg.KeepRecent,
+		PreferAppendAlloc:             cfg.PreferAppendAlloc,
+		PagerSyncConcurrency:          cfg.PagerSyncConcurrency,
+		DisableBackgroundPrune:        cfg.DisableBackgroundPrune,
+		PruneInterval:                 durationString(cfg.PruneInterval),
+		PruneMaxPages:                 cfg.PruneMaxPages,
+		PruneMaxDuration:              durationString(cfg.PruneMaxDuration),
+		WallTiming:                    timing(wallElapsed, cfg.Docs),
+		GenerationTiming:              timing(generationElapsed, cfg.Docs),
+		InsertTiming:                  timing(insertElapsed, cfg.Docs),
+		CheckpointTiming:              timing(checkpointElapsed, cfg.Docs),
+		InsertPhases:                  summarizeInsertPhases(insertStats, secondaryRuns, cfg.Docs, batches),
+		IndexStorageBeforeMaintenance: beforeIndexStorage,
+		DiskUsageBeforeMaintenance:    beforeMaintenance,
+		DiskUsageFinal:                finalUsage,
+		Rewrite:                       rewrite,
+		IndexVacuum:                   indexVacuum,
+		IndexStorageFinal:             finalIndexStorage,
+		Verify:                        verify,
+		CPUProfile:                    cfg.CPUProfile,
+		MemProfile:                    cfg.MemProfile,
+		GoVersion:                     runtime.Version(),
+		GOOS:                          runtime.GOOS,
+		GOARCH:                        runtime.GOARCH,
 	}, nil
 }
 
@@ -491,11 +589,23 @@ func openBackend(cfg config) (*backenddb.DB, func() error, error) {
 	opts := treedb.OptionsFor(cfg.Profile, cfg.Dir)
 	opts.IndexOuterLeavesInValueLog = cfg.DataOuterLeavesInValueLog || cfg.IndexOuterLeavesInValueLog
 	opts.IndexInternalBaseDelta = !opts.IndexOuterLeavesInValueLog
+	opts.KeepRecent = cfg.KeepRecent
+	opts.PreferAppendAlloc = cfg.PreferAppendAlloc
+	opts.DisableBackgroundPrune = cfg.DisableBackgroundPrune
 	if cfg.ChunkSize > 0 {
 		opts.ChunkSize = cfg.ChunkSize
 	}
 	if cfg.PagerSyncConcurrency > 0 {
 		opts.PagerSyncConcurrency = cfg.PagerSyncConcurrency
+	}
+	if cfg.PruneInterval > 0 {
+		opts.PruneInterval = cfg.PruneInterval
+	}
+	if cfg.PruneMaxPages != 0 {
+		opts.PruneMaxPages = cfg.PruneMaxPages
+	}
+	if cfg.PruneMaxDuration != 0 {
+		opts.PruneMaxDuration = cfg.PruneMaxDuration
 	}
 	open := treedb.OpenBackend
 	if opts.IndexOuterLeavesInValueLog {
@@ -776,6 +886,179 @@ func maybeRewriteValueLog(cfg config, backend *backenddb.DB, beforeBytes uint64)
 	return out, nil
 }
 
+func maybeVacuumIndex(cfg config, backend *backenddb.DB, cleanup func() error, closed *bool) (indexVacuumSummary, indexStorageSummary, error) {
+	out := indexVacuumSummary{
+		Mode:    cfg.IndexVacuum,
+		Enabled: cfg.IndexVacuum != indexVacuumModeNone,
+	}
+	if cfg.IndexVacuum == indexVacuumModeNone {
+		finalStorage, err := captureIndexStorageSummary(cfg, backend)
+		return out, finalStorage, err
+	}
+
+	beforeDisk, err := directoryUsage(cfg.Dir, cfg.Docs)
+	if err != nil {
+		return out, indexStorageSummary{}, err
+	}
+	beforeStorage, err := captureIndexStorageSummary(cfg, backend)
+	if err != nil {
+		return out, indexStorageSummary{}, err
+	}
+	out.DiskBytesBefore = beforeDisk.TotalBytes
+	out.IndexDBBytesBefore = beforeStorage.IndexDBBytes
+	out.StorageBefore = beforeStorage
+
+	start := time.Now()
+	switch cfg.IndexVacuum {
+	case indexVacuumModeOnline:
+		if err := backend.VacuumIndexOnline(context.Background()); err != nil {
+			return out, indexStorageSummary{}, fmt.Errorf("index vacuum online: %w", err)
+		}
+		if err := backend.Checkpoint(); err != nil {
+			return out, indexStorageSummary{}, fmt.Errorf("checkpoint after online index vacuum: %w", err)
+		}
+	case indexVacuumModeOffline:
+		if cleanup == nil || closed == nil {
+			return out, indexStorageSummary{}, errors.New("offline index vacuum requires backend cleanup state")
+		}
+		if err := cleanup(); err != nil {
+			*closed = true
+			return out, indexStorageSummary{}, fmt.Errorf("close backend before offline index vacuum: %w", err)
+		}
+		*closed = true
+		opts := treedb.Options{
+			Dir:        cfg.Dir,
+			KeepRecent: cfg.KeepRecent,
+		}
+		if cfg.ChunkSize > 0 {
+			opts.ChunkSize = cfg.ChunkSize
+		}
+		if err := treedb.VacuumIndexOffline(opts); err != nil {
+			return out, indexStorageSummary{}, fmt.Errorf("index vacuum offline: %w", err)
+		}
+	default:
+		return out, indexStorageSummary{}, fmt.Errorf("unsupported index vacuum mode %q", cfg.IndexVacuum)
+	}
+	out.Timing = timing(time.Since(start), 1)
+
+	var afterStorage indexStorageSummary
+	if cfg.IndexVacuum == indexVacuumModeOffline {
+		afterStorage, err = captureIndexStorageSummaryReopen(cfg)
+	} else {
+		afterStorage, err = captureIndexStorageSummary(cfg, backend)
+	}
+	if err != nil {
+		return out, indexStorageSummary{}, err
+	}
+	afterDisk, err := directoryUsage(cfg.Dir, cfg.Docs)
+	if err != nil {
+		return out, indexStorageSummary{}, err
+	}
+	out.DiskBytesAfter = afterDisk.TotalBytes
+	out.IndexDBBytesAfter = afterStorage.IndexDBBytes
+	out.StorageAfter = afterStorage
+	return out, afterStorage, nil
+}
+
+func captureIndexStorageSummaryReopen(cfg config) (indexStorageSummary, error) {
+	backend, cleanup, err := openBackend(cfg)
+	if err != nil {
+		return indexStorageSummary{}, fmt.Errorf("capture index storage reopen: %w", err)
+	}
+	defer func() { _ = cleanup() }()
+	return captureIndexStorageSummary(cfg, backend)
+}
+
+func captureIndexStorageSummary(cfg config, backend *backenddb.DB) (indexStorageSummary, error) {
+	if backend == nil {
+		return indexStorageSummary{}, errors.New("capture index storage: missing backend")
+	}
+	stats := backend.Stats()
+	frag, err := backend.FragmentationReport()
+	if err != nil {
+		return indexStorageSummary{}, fmt.Errorf("fragmentation report: %w", err)
+	}
+	merged := make(map[string]string, len(stats)+len(frag))
+	for k, v := range frag {
+		merged[k] = v
+	}
+	for k, v := range stats {
+		merged[k] = v
+	}
+
+	indexBytes, err := indexDBSize(cfg.Dir)
+	if err != nil {
+		return indexStorageSummary{}, err
+	}
+
+	return indexStorageSummary{
+		IndexDBBytes:                indexBytes,
+		PagesTotal:                  statUint(merged, "treedb.pages.total"),
+		KeepRecent:                  statUint(merged, "treedb.keep_recent"),
+		PreferAppendAlloc:           statBool(merged, "treedb.prefer_append_alloc"),
+		FreelistReclaimablePages:    statUint(merged, "treedb.freelist.reclaimable_pages"),
+		FreelistAllocPagesTotal:     statUint(merged, "treedb.freelist.alloc_pages_total"),
+		FreelistAppendPagesTotal:    statUint(merged, "treedb.freelist.append_alloc_pages_total"),
+		FreelistReusePagesTotal:     statUint(merged, "treedb.freelist.reuse_alloc_pages_total"),
+		FreelistFreePagesTotal:      statUint(merged, "treedb.freelist.free_pages_total"),
+		GraveyardBatches:            statUint(merged, "treedb.graveyard.batches"),
+		GraveyardPages:              statUint(merged, "treedb.graveyard.pages"),
+		CollectionRoots:             statUint(merged, "treedb.collection_roots.count"),
+		CollectionLeafRefRoots:      statUint(merged, "treedb.collection_roots.leafref_roots"),
+		CollectionPagerRoots:        statUint(merged, "treedb.collection_roots.pager_roots"),
+		CollectionRootPages:         statUint(merged, "treedb.collection_roots.pages"),
+		CollectionRootLeafPages:     statUint(merged, "treedb.collection_roots.pages.leaf"),
+		CollectionRootInternalPages: statUint(merged, "treedb.collection_roots.pages.internal"),
+		CollectionRootDuplicateRefs: statUint(merged, "treedb.collection_roots.pages.duplicate_refs"),
+		PruneEnabled:                statBool(merged, "treedb.prune.enabled"),
+		PruneRuns:                   statUint(merged, "treedb.prune.runs"),
+		PrunePagesFreed:             statUint(merged, "treedb.prune.pages_freed"),
+	}, nil
+}
+
+func indexDBSize(root string) (uint64, error) {
+	for _, path := range []string{
+		filepath.Join(root, "maindb", "index.db"),
+		filepath.Join(root, "index.db"),
+	} {
+		info, err := os.Stat(path)
+		if err == nil {
+			if !info.Mode().IsRegular() {
+				return 0, fmt.Errorf("%s is not a regular file", path)
+			}
+			return uint64(info.Size()), nil
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return 0, fmt.Errorf("stat index.db %s: %w", path, err)
+		}
+	}
+	return 0, fmt.Errorf("index.db not found under %s", root)
+}
+
+func statUint(stats map[string]string, key string) uint64 {
+	raw := strings.TrimSpace(stats[key])
+	if raw == "" {
+		return 0
+	}
+	n, err := strconv.ParseUint(raw, 10, 64)
+	if err != nil {
+		return 0
+	}
+	return n
+}
+
+func statBool(stats map[string]string, key string) bool {
+	raw := strings.TrimSpace(stats[key])
+	if raw == "" {
+		return false
+	}
+	v, err := strconv.ParseBool(raw)
+	if err != nil {
+		return false
+	}
+	return v
+}
+
 func verifyReopen(cfg config) (int, error) {
 	backend, cleanup, err := openBackend(cfg)
 	if err != nil {
@@ -977,6 +1260,13 @@ func timing(d time.Duration, ops int) timingSummary {
 	return out
 }
 
+func durationString(d time.Duration) string {
+	if d == 0 {
+		return ""
+	}
+	return d.String()
+}
+
 func startCPUProfile(path string) (func(), error) {
 	if strings.TrimSpace(path) == "" {
 		return func() {}, nil
@@ -1028,6 +1318,8 @@ func printHumanSummary(w io.Writer, summary loadSummary) {
 	fmt.Fprintf(w, "collection: %s\n", summary.Collection)
 	fmt.Fprintf(w, "shape: format=%s indexes=%d data_outer_leaves_in_vlog=%t index_outer_leaves_in_vlog=%t profile=%s\n",
 		summary.DocumentFormat, summary.IndexCount, summary.DataOuterLeavesInValueLog, summary.IndexOuterLeavesInValueLog, summary.Profile)
+	fmt.Fprintf(w, "index policy: keep_recent=%d prefer_append_alloc=%t background_prune=%t\n",
+		summary.KeepRecent, summary.PreferAppendAlloc, !summary.DisableBackgroundPrune)
 	fmt.Fprintf(w, "loaded: docs=%d batches=%d batch_size=%d\n", summary.Docs, summary.Batches, summary.BatchSize)
 	printTiming(w, "wall", summary.WallTiming)
 	printTiming(w, "document generation", summary.GenerationTiming)
@@ -1035,6 +1327,7 @@ func printHumanSummary(w io.Writer, summary loadSummary) {
 	if summary.CheckpointTiming.Seconds > 0 {
 		printTiming(w, "checkpoint", summary.CheckpointTiming)
 	}
+	printIndexStorageSummary(w, "index before maintenance", summary.IndexStorageBeforeMaintenance)
 	fmt.Fprintf(w, "disk before maintenance: %s total, %.2f bytes/doc, %d files\n",
 		humanBytes(summary.DiskUsageBeforeMaintenance.TotalBytes), summary.DiskUsageBeforeMaintenance.BytesPerDoc, summary.DiskUsageBeforeMaintenance.FileCount)
 	if summary.Rewrite.Enabled {
@@ -1045,6 +1338,16 @@ func printHumanSummary(w io.Writer, summary loadSummary) {
 			summary.Rewrite.RecordsCopied,
 			humanBytes(uint64(max(summary.Rewrite.ValueBytesCopied, 0))))
 	}
+	if summary.IndexVacuum.Enabled {
+		fmt.Fprintf(w, "index vacuum %s: before=%s after=%s index.db_before=%s index.db_after=%s\n",
+			summary.IndexVacuum.Mode,
+			humanBytes(summary.IndexVacuum.DiskBytesBefore),
+			humanBytes(summary.IndexVacuum.DiskBytesAfter),
+			humanBytes(summary.IndexVacuum.IndexDBBytesBefore),
+			humanBytes(summary.IndexVacuum.IndexDBBytesAfter))
+		printTiming(w, "index vacuum", summary.IndexVacuum.Timing)
+	}
+	printIndexStorageSummary(w, "index final", summary.IndexStorageFinal)
 	fmt.Fprintf(w, "disk final: %s total, %.2f bytes/doc, %d files\n",
 		humanBytes(summary.DiskUsageFinal.TotalBytes), summary.DiskUsageFinal.BytesPerDoc, summary.DiskUsageFinal.FileCount)
 	if summary.Verify.Enabled {
@@ -1062,6 +1365,22 @@ func printHumanSummary(w io.Writer, summary loadSummary) {
 	if summary.MemProfile != "" {
 		fmt.Fprintf(w, "heap profile: %s\n", summary.MemProfile)
 	}
+}
+
+func printIndexStorageSummary(w io.Writer, label string, s indexStorageSummary) {
+	if s.IndexDBBytes == 0 && s.PagesTotal == 0 {
+		return
+	}
+	fmt.Fprintf(w, "%s: index.db=%s pages=%d collection_root_pages=%d freelist_reclaimable=%d graveyard_pages=%d append_alloc=%d reuse_alloc=%d prune_freed=%d\n",
+		label,
+		humanBytes(s.IndexDBBytes),
+		s.PagesTotal,
+		s.CollectionRootPages,
+		s.FreelistReclaimablePages,
+		s.GraveyardPages,
+		s.FreelistAppendPagesTotal,
+		s.FreelistReusePagesTotal,
+		s.PrunePagesFreed)
 }
 
 func printTiming(w io.Writer, label string, t timingSummary) {

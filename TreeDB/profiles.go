@@ -93,8 +93,8 @@ const fastProfileChunkSize = 4 << 20
 //
 // The returned Options still follow TreeDB's normal defaulting rules for fields
 // left as zero values unless the selected profile intentionally owns that knob
-// (e.g. fast profiles set ChunkSize; KeepRecent and backpressure thresholds
-// still use normal defaults).
+// (e.g. fast profiles set ChunkSize; KeepRecent, allocator policy, and
+// backpressure thresholds still use normal defaults).
 func OptionsFor(profile Profile, dir string) Options {
 	opts := Options{Dir: dir}
 	ApplyProfile(&opts, profile)
@@ -187,11 +187,6 @@ func applyFastProfile(opts *Options) {
 		opts.ValueLog.DictProbeIntervalBytes = 32 << 20
 	}
 
-	// Prefer appending new pages for throughput under churn unless caller opted
-	// out. This can trade disk growth for write speed.
-	if !opts.PreferAppendAlloc {
-		opts.PreferAppendAlloc = true
-	}
 	applyIndexOptimizationsProfile(opts)
 }
 
@@ -208,8 +203,6 @@ func applyWALOnFastProfile(opts *Options) {
 		opts.ValueLog.DictProbeIntervalBytes = 32 << 20
 	}
 
-	// Prefer appending new pages for throughput under churn.
-	opts.PreferAppendAlloc = true
 	applyIndexOptimizationsProfile(opts)
 }
 

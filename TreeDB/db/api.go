@@ -568,10 +568,26 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.commit_seq"] = fmt.Sprintf("%d", state.CommitSeq)
 	stats["treedb.root_page"] = fmt.Sprintf("%d", state.RootPageID)
 	stats["treedb.system_root_page"] = fmt.Sprintf("%d", state.SystemRootPageID)
+	stats["treedb.keep_recent"] = fmt.Sprintf("%d", db.keepRecent)
+	stats["treedb.prefer_append_alloc"] = fmt.Sprintf("%t", db.preferAppendAlloc)
+	stats["treedb.freelist_region_pages"] = fmt.Sprintf("%d", db.freelistRegionPages)
+	stats["treedb.freelist_region_radius"] = fmt.Sprintf("%d", db.freelistRegionRadius)
 
 	writeLeafGenerationMetrics(stats, db.collectLeafGenerationMetrics(state.ValueLogSet, snap.leafGenerationPinnedIDs))
 
 	stats["treedb.pages.total"] = fmt.Sprintf("%d", idx.pager.PageCount())
+	if fs, err := idx.allocator.Stats(idx.pager.PageCount()); err == nil {
+		stats["treedb.freelist.reclaimable_pages"] = fmt.Sprintf("%d", fs.ReclaimablePages())
+		stats["treedb.freelist.alloc_pages_total"] = fmt.Sprintf("%d", fs.AllocPages)
+		stats["treedb.freelist.append_alloc_pages_total"] = fmt.Sprintf("%d", fs.AppendAllocPages)
+		stats["treedb.freelist.reuse_alloc_pages_total"] = fmt.Sprintf("%d", fs.ReuseAllocPages)
+		stats["treedb.freelist.free_pages_total"] = fmt.Sprintf("%d", fs.FreePages)
+	} else {
+		stats["treedb.freelist.error"] = err.Error()
+	}
+	graveyard := idx.graveyard.Stats()
+	stats["treedb.graveyard.batches"] = fmt.Sprintf("%d", graveyard.Batches)
+	stats["treedb.graveyard.pages"] = fmt.Sprintf("%d", graveyard.Pages)
 	// PR1 generational scaffolding (backend/read-only path). Cached mode exports
 	// richer live counters; backend path reports stable defaults.
 	stats["treedb.vlog_generation.enabled"] = "false"

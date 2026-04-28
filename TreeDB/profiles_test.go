@@ -25,8 +25,8 @@ func TestApplyProfile_FastSetsPolicyBools(t *testing.T) {
 	if !opts.IndexOuterLeavesInValueLog {
 		t.Fatalf("expected IndexOuterLeavesInValueLog=true for fast profile")
 	}
-	if !opts.PreferAppendAlloc {
-		t.Fatalf("expected PreferAppendAlloc=true for fast profile")
+	if opts.PreferAppendAlloc {
+		t.Fatalf("expected PreferAppendAlloc=false for fast profile")
 	}
 	if opts.ValueLog.Compression != ValueLogCompressionAuto {
 		t.Fatalf("expected ValueLog.Compression=ValueLogCompressionAuto for fast profile, got %v", opts.ValueLog.Compression)
@@ -82,8 +82,8 @@ func TestApplyProfile_WALOnFastKeepsWALOn(t *testing.T) {
 	if !opts.IndexOuterLeavesInValueLog {
 		t.Fatalf("expected IndexOuterLeavesInValueLog=true for wal_on_fast profile")
 	}
-	if !opts.PreferAppendAlloc {
-		t.Fatalf("expected PreferAppendAlloc=true for wal_on_fast profile")
+	if opts.PreferAppendAlloc {
+		t.Fatalf("expected PreferAppendAlloc=false for wal_on_fast profile")
 	}
 	if opts.ValueLog.Compression != ValueLogCompressionAuto {
 		t.Fatalf("expected ValueLog.Compression=ValueLogCompressionAuto for wal_on_fast profile, got %v", opts.ValueLog.Compression)
