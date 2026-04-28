@@ -259,7 +259,7 @@ run_timed_profile_benches() {
   done
 }
 
-for row in "${MATRIX_ROWS[@]}"; do
+for row in ${MATRIX_ROWS[@]+"${MATRIX_ROWS[@]}"}; do
   read -r cell engine data_outer index_outer <<<"$row"
   cell_dir="$OUT_DIR/$cell"
   echo
@@ -378,7 +378,7 @@ cat >"$SUMMARY_MD" <<EOF
 | --- | --- | --- | --- | --- | --- |
 EOF
 
-for row in "${MATRIX_ROWS[@]}"; do
+for row in ${MATRIX_ROWS[@]+"${MATRIX_ROWS[@]}"}; do
   read -r cell engine data_outer index_outer <<<"$row"
   printf "| \`%s\` | \`%s\` | \`%s\` | \`%s\` | \`%s\` | [%s](%s) |\n" \
     "$cell" \
