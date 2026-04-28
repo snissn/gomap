@@ -85,6 +85,8 @@ var benchmarkOrder = []string{
 	"BenchmarkCollectionTimedProfileInsertBatchCheckpointWithSecondaryIndexes",
 	"BenchmarkSQLiteInsertBatchWithSecondaryIndexes",
 	"BenchmarkSQLiteInsertBatchCheckpointWithSecondaryIndexes",
+	"BenchmarkSQLiteNativeColumnsInsertBatchWithSecondaryIndexes",
+	"BenchmarkSQLiteNativeColumnsInsertBatchCheckpointWithSecondaryIndexes",
 }
 
 func main() {
@@ -232,8 +234,10 @@ func buildSummaryRows(rows []matrixRow) ([]summaryRow, error) {
 			if !ok {
 				return nil, fmt.Errorf("report %s missing benchmark %q for matrix cell %q", row.ReportJSONPath, name, row.Cell)
 			}
+			benchmarkRow := row
+			benchmarkRow.DocumentFormat = documentFormatForBenchmark(benchmarkRow.DocumentFormat, name)
 			out = append(out, summaryRow{
-				matrixRow:           row,
+				matrixRow:           benchmarkRow,
 				Benchmark:           name,
 				NsPerOp:             benchmark.MeanNsPerOp,
 				BytesPerOp:          benchmark.MeanBytesPerOp,
@@ -254,6 +258,8 @@ func expectedBenchmarkNames(row matrixRow) []string {
 		return []string{
 			"BenchmarkSQLiteInsertBatchWithSecondaryIndexes",
 			"BenchmarkSQLiteInsertBatchCheckpointWithSecondaryIndexes",
+			"BenchmarkSQLiteNativeColumnsInsertBatchWithSecondaryIndexes",
+			"BenchmarkSQLiteNativeColumnsInsertBatchCheckpointWithSecondaryIndexes",
 		}
 	}
 	return []string{
@@ -270,6 +276,16 @@ func isSQLiteMatrixRow(row matrixRow) bool {
 	// The matrix runner normalizes SQLite cells to the sqlite_* namespace even
 	// when TREEDB_COLLECTION_SQLITE_ENGINE uses a custom engine label.
 	return row.Cell == "sqlite" || strings.HasPrefix(row.Cell, "sqlite_") || strings.HasPrefix(row.Engine, "sqlite")
+}
+
+func documentFormatForBenchmark(format, benchmark string) string {
+	if strings.HasPrefix(benchmark, "BenchmarkSQLiteNativeColumns") {
+		return "native-columns"
+	}
+	if strings.TrimSpace(format) == "" {
+		return "json"
+	}
+	return format
 }
 
 func loadBenchmarkReport(path string) (loadedReport, error) {
@@ -557,9 +573,15 @@ func buildUserStoryRows(rows []summaryRow) []userStoryRow {
 
 func userStoryLabel(benchmark string) (string, bool) {
 	switch benchmark {
-	case "BenchmarkCollectionInsertBatchWithSecondaryIndexes", "BenchmarkCollectionTimedProfileInsertBatchWithSecondaryIndexes", "BenchmarkSQLiteInsertBatchWithSecondaryIndexes":
+	case "BenchmarkCollectionInsertBatchWithSecondaryIndexes",
+		"BenchmarkCollectionTimedProfileInsertBatchWithSecondaryIndexes",
+		"BenchmarkSQLiteInsertBatchWithSecondaryIndexes",
+		"BenchmarkSQLiteNativeColumnsInsertBatchWithSecondaryIndexes":
 		return "bulk indexed insert", true
-	case "BenchmarkCollectionInsertBatchCheckpointWithSecondaryIndexes", "BenchmarkCollectionTimedProfileInsertBatchCheckpointWithSecondaryIndexes", "BenchmarkSQLiteInsertBatchCheckpointWithSecondaryIndexes":
+	case "BenchmarkCollectionInsertBatchCheckpointWithSecondaryIndexes",
+		"BenchmarkCollectionTimedProfileInsertBatchCheckpointWithSecondaryIndexes",
+		"BenchmarkSQLiteInsertBatchCheckpointWithSecondaryIndexes",
+		"BenchmarkSQLiteNativeColumnsInsertBatchCheckpointWithSecondaryIndexes":
 		return "checkpointed indexed insert", true
 	default:
 		return "", false

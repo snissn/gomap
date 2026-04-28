@@ -111,6 +111,26 @@ func TestMatrixSummaryRendersBenchmarkMetrics(t *testing.T) {
           "mean_metrics": {
             "target_docs/batch": 8000
           }
+        },
+        {
+          "name": "BenchmarkSQLiteNativeColumnsInsertBatchWithSecondaryIndexes",
+          "mean_ns_per_op": 3000,
+          "mean_bytes_per_op": 1500,
+          "mean_allocs_per_op": 25,
+          "mean_metrics": {
+            "target_docs/batch": 8000
+          }
+        },
+        {
+          "name": "BenchmarkSQLiteNativeColumnsInsertBatchCheckpointWithSecondaryIndexes",
+          "mean_ns_per_op": 7000,
+          "mean_bytes_per_op": 3000,
+          "mean_allocs_per_op": 35,
+          "mean_metrics": {
+            "target_docs/checkpoint": 8000,
+            "insert_ns/doc": 2000,
+            "sync_ns/doc": 5000
+          }
         }
       ]
     }
@@ -162,6 +182,8 @@ func TestMatrixSummaryRendersBenchmarkMetrics(t *testing.T) {
 		"`production_fast_data_vlog_index_leaf`",
 		"`BenchmarkCollectionInsertBatchWithSecondaryIndexes`",
 		"`BenchmarkSQLiteInsertBatchWithSecondaryIndexes`",
+		"`BenchmarkSQLiteNativeColumnsInsertBatchWithSecondaryIndexes`",
+		"`native-columns`",
 		"2,812.5",
 		"30",
 		"0",
@@ -183,6 +205,9 @@ func TestMatrixSummaryRendersBenchmarkMetrics(t *testing.T) {
 	if !strings.Contains(gotTSV, "json\t-\t-\t-\t-\tBenchmarkSQLiteInsertBatchWithSecondaryIndexes\t4100\t2048\t32\t-\t-\t") {
 		t.Fatalf("tsv missing sqlite numeric row:\n%s", gotTSV)
 	}
+	if !strings.Contains(gotTSV, "native-columns\t-\t-\t-\t-\tBenchmarkSQLiteNativeColumnsInsertBatchWithSecondaryIndexes\t3000\t1500\t25\t-\t-\t") {
+		t.Fatalf("tsv missing sqlite native-columns numeric row:\n%s", gotTSV)
+	}
 	if !strings.Contains(gotTSV, "template-v1\ttrue\tfalse\tprofile/default\tprofile/default\tBenchmarkCollectionInsertBatchCheckpointWithSecondaryIndexes\t8000\t2000\t30\t2500\t5500\t0\t0\t") {
 		t.Fatalf("tsv missing checkpoint split row:\n%s", gotTSV)
 	}
@@ -202,6 +227,12 @@ func TestMatrixSummaryRendersBenchmarkMetrics(t *testing.T) {
 	}
 	if !strings.Contains(gotUserStoryTSV, "json\t-\t-\t-\t-\tbulk indexed insert\tBenchmarkSQLiteInsertBatchWithSecondaryIndexes\t8000\t243902.43902439025\t32.8\t-\t-\t30.48780487804878\t4100\t") {
 		t.Fatalf("user story tsv missing sqlite throughput row:\n%s", gotUserStoryTSV)
+	}
+	if !strings.Contains(gotUserStoryTSV, "native-columns\t-\t-\t-\t-\tbulk indexed insert\tBenchmarkSQLiteNativeColumnsInsertBatchWithSecondaryIndexes\t8000\t333333.3333333333\t24\t-\t-\t41.666666666666664\t3000\t") {
+		t.Fatalf("user story tsv missing sqlite native-columns throughput row:\n%s", gotUserStoryTSV)
+	}
+	if !strings.Contains(gotUserStoryTSV, "native-columns\t-\t-\t-\t-\tcheckpointed indexed insert\tBenchmarkSQLiteNativeColumnsInsertBatchCheckpointWithSecondaryIndexes\t8000\t142857.14285714287\t56\t16\t40\t17.857142857142858\t7000\t") {
+		t.Fatalf("user story tsv missing sqlite native-columns checkpoint row:\n%s", gotUserStoryTSV)
 	}
 }
 

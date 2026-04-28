@@ -32,11 +32,11 @@ if [[ "$SQLITE_CELL_LABEL" == sqlite_* ]]; then
 else
   SQLITE_CELL="sqlite_$SQLITE_CELL_LABEL"
 fi
-SQLITE_BENCH_REGEX="${TREEDB_COLLECTION_SQLITE_BENCH_REGEX:-BenchmarkSQLite(InsertBatchWithSecondaryIndexes|InsertBatchCheckpointWithSecondaryIndexes)$}"
+SQLITE_BENCH_REGEX="${TREEDB_COLLECTION_SQLITE_BENCH_REGEX:-BenchmarkSQLite(InsertBatchWithSecondaryIndexes|InsertBatchCheckpointWithSecondaryIndexes|NativeColumnsInsertBatchWithSecondaryIndexes|NativeColumnsInsertBatchCheckpointWithSecondaryIndexes)$}"
 SQLITE_CGO_ENABLED="${TREEDB_COLLECTION_SQLITE_CGO_ENABLED:-1}"
 PROFILE_BENCHES="${TREEDB_COLLECTION_PROFILE_BENCHES:-false}"
 PROFILE_BENCH_LIST="${TREEDB_COLLECTION_PROFILE_BENCH_LIST:-BenchmarkCollectionInsertBatchWithSecondaryIndexes BenchmarkCollectionInsertBatchCheckpointWithSecondaryIndexes}"
-SQLITE_PROFILE_BENCH_LIST="${TREEDB_COLLECTION_SQLITE_PROFILE_BENCH_LIST:-BenchmarkSQLiteInsertBatchWithSecondaryIndexes BenchmarkSQLiteInsertBatchCheckpointWithSecondaryIndexes}"
+SQLITE_PROFILE_BENCH_LIST="${TREEDB_COLLECTION_SQLITE_PROFILE_BENCH_LIST:-BenchmarkSQLiteInsertBatchWithSecondaryIndexes BenchmarkSQLiteInsertBatchCheckpointWithSecondaryIndexes BenchmarkSQLiteNativeColumnsInsertBatchWithSecondaryIndexes BenchmarkSQLiteNativeColumnsInsertBatchCheckpointWithSecondaryIndexes}"
 PROFILE_COUNT="${TREEDB_COLLECTION_PROFILE_COUNT:-1}"
 PROFILE_BENCHTIME="${TREEDB_COLLECTION_PROFILE_BENCHTIME:-$BENCHTIME}"
 TIMED_PROFILE_BENCHES="${TREEDB_COLLECTION_TIMED_PROFILE_BENCHES:-false}"
@@ -419,7 +419,7 @@ Set `TREEDB_COLLECTION_PROFILE_BENCHES=true` to add per-benchmark profile bundle
 
 Set `TREEDB_COLLECTION_TIMED_PROFILE_BENCHES=true` to add timed-window CPU profile bundles for indexed ingest and checkpointed indexed ingest. Those captures run fixed-document `BenchmarkCollectionTimedProfile...` variants with prebuilt document batches and `TREEDB_COLLECTION_TIMED_CPU_PROFILE=true`, so `collections_cpu.pprof` excludes benchmark setup and off-timer document generation. Use these captures when deciding whether the next optimization target is TreeDB publish/index maintenance, JSON extraction, or expected storage-engine work.
 
-Set `TREEDB_COLLECTION_INCLUDE_SQLITE=true` to append a SQLite comparison cell. The SQLite cell uses the CGO-backed `github.com/mattn/go-sqlite3` driver, WAL mode, `synchronous=NORMAL`, memory temp store, a large page cache, disabled WAL autocheckpoint, generated JSON columns for `email` and `city`, and unique/non-unique indexes on those generated columns. That keeps document generation outside the timed section while SQLite still pays JSON extraction and secondary-index maintenance during insert.
+Set `TREEDB_COLLECTION_INCLUDE_SQLITE=true` to append a SQLite comparison cell. The SQLite cell uses the CGO-backed `github.com/mattn/go-sqlite3` driver, WAL mode, `synchronous=NORMAL`, memory temp store, a large page cache, and disabled WAL autocheckpoint. It includes both a JSON-document table with stored generated columns for `email` and `city` plus native indexes, and a native-column table with `id`, `name`, `email`, `city`, and `pad` stored directly plus the same unique/non-unique secondary indexes. That keeps document or field generation outside the timed section while showing both SQLite-with-JSON-extraction and best-case SQLite native-column throughput.
 EOF
 
 echo
