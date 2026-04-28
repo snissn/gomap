@@ -299,6 +299,19 @@ func TestMatrixSummaryAllowsLegacySQLiteReportsWithoutNativeColumns(t *testing.T
 	}
 }
 
+func TestDocumentFormatForSQLiteShapeNativeColumns(t *testing.T) {
+	for _, benchmark := range []string{
+		"BenchmarkSQLiteShapeInsertBatchNativeColumns/indexes_2",
+		"BenchmarkSQLiteShapeInsertBatchCheckpointNativeColumns/indexes_2",
+		"BenchmarkSQLiteShapeReadPrimaryNativeColumns/indexes_2",
+		"BenchmarkSQLiteShapeSecondaryLookupNativeColumns/unique",
+	} {
+		if got := documentFormatForBenchmark("json", benchmark); got != "native-columns" {
+			t.Fatalf("documentFormatForBenchmark(%q)=%q want native-columns", benchmark, got)
+		}
+	}
+}
+
 func TestMatrixSummaryFailsOnUnavailableReport(t *testing.T) {
 	dir := t.TempDir()
 	cellDir := filepath.Join(dir, "production_fast_data_vlog_index_leaf")

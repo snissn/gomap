@@ -261,8 +261,8 @@ func benchmarkCollectionMixedReadWrite(b *testing.B, secondaryRead bool) {
 	b.ReportAllocs()
 	b.ReportMetric(float64(seedDocs), "seed_docs")
 	b.ReportMetric(float64(writeBatchSize), "writer_docs/batch")
-	start := time.Now()
 	b.ResetTimer()
+	start := time.Now()
 
 	go func() {
 		defer wg.Done()
@@ -329,10 +329,11 @@ func benchmarkCollectionMixedReadWrite(b *testing.B, secondaryRead bool) {
 		})
 	}
 
+	end := time.Now()
 	b.StopTimer()
 	stop.Store(true)
 	wg.Wait()
-	elapsed := time.Since(start)
+	elapsed := end.Sub(start)
 	select {
 	case err := <-errCh:
 		b.Fatalf("mixed writer: %v", err)

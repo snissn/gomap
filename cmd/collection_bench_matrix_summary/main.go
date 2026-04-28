@@ -182,7 +182,7 @@ func run(cfg config) error {
 	fmt.Printf("wrote matrix summary tsv: %s\n", tsvPath)
 	fmt.Printf("wrote user story tsv:     %s\n", userStoryPath)
 	fmt.Printf("wrote matrix summary md:  %s\n", mdPath)
-	fmt.Printf("wrote matrix summary html:%s\n", htmlPath)
+	fmt.Printf("wrote matrix summary html: %s\n", htmlPath)
 	return nil
 }
 
@@ -375,7 +375,9 @@ func isSQLiteMatrixRow(row matrixRow) bool {
 }
 
 func documentFormatForBenchmark(format, benchmark string) string {
-	if strings.HasPrefix(benchmark, "BenchmarkSQLiteNativeColumns") {
+	base := benchmarkBaseName(benchmark)
+	if strings.HasPrefix(base, "BenchmarkSQLiteNativeColumns") ||
+		(strings.HasPrefix(base, "BenchmarkSQLiteShape") && strings.Contains(base, "NativeColumns")) {
 		return "native-columns"
 	}
 	if strings.TrimSpace(format) == "" {

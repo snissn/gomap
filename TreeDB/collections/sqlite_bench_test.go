@@ -448,13 +448,15 @@ func benchmarkSQLiteShapeInsertBatchJSON(b *testing.B, indexCount int, checkpoin
 		ids, docs := benchmarkSQLiteDocumentBatch(b, inserted, batchSize)
 		b.StartTimer()
 
-		insertStart := time.Now()
-		insertSQLiteDocumentBatch(b, db, ids, docs)
-		insertElapsed += time.Since(insertStart)
 		if checkpoint {
+			insertStart := time.Now()
+			insertSQLiteDocumentBatch(b, db, ids, docs)
+			insertElapsed += time.Since(insertStart)
 			syncStart := time.Now()
 			checkpointSQLiteWAL(b, db)
 			syncElapsed += time.Since(syncStart)
+		} else {
+			insertSQLiteDocumentBatch(b, db, ids, docs)
 		}
 		inserted += batchSize
 	}
@@ -487,13 +489,15 @@ func benchmarkSQLiteShapeInsertBatchNativeColumns(b *testing.B, indexCount int, 
 		docs := benchmarkSQLiteNativeColumnsDocumentBatch(b, inserted, batchSize)
 		b.StartTimer()
 
-		insertStart := time.Now()
-		insertSQLiteNativeColumnsDocumentBatch(b, db, docs)
-		insertElapsed += time.Since(insertStart)
 		if checkpoint {
+			insertStart := time.Now()
+			insertSQLiteNativeColumnsDocumentBatch(b, db, docs)
+			insertElapsed += time.Since(insertStart)
 			syncStart := time.Now()
 			checkpointSQLiteWAL(b, db)
 			syncElapsed += time.Since(syncStart)
+		} else {
+			insertSQLiteNativeColumnsDocumentBatch(b, db, docs)
 		}
 		inserted += batchSize
 	}
@@ -664,6 +668,10 @@ func benchmarkSQLiteShapeSecondaryLookupJSON(b *testing.B, unique bool) {
 				b.Fatalf("sqlite nonunique JSON scan: %v", err)
 			}
 		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			b.Fatalf("sqlite nonunique JSON rows: %v", err)
+		}
 		if err := rows.Close(); err != nil {
 			b.Fatalf("sqlite nonunique JSON close: %v", err)
 		}
@@ -706,6 +714,10 @@ func benchmarkSQLiteShapeSecondaryLookupNativeColumns(b *testing.B, unique bool)
 				_ = rows.Close()
 				b.Fatalf("sqlite nonunique native scan: %v", err)
 			}
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			b.Fatalf("sqlite nonunique native rows: %v", err)
 		}
 		if err := rows.Close(); err != nil {
 			b.Fatalf("sqlite nonunique native close: %v", err)
