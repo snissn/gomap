@@ -1,6 +1,7 @@
 package collections_test
 
 import (
+	"context"
 	"fmt"
 	"io/fs"
 	"os"
@@ -211,6 +212,65 @@ func benchmarkReportTreeDBDiskUsage(b *testing.B, backend *backenddb.DB, docs in
 		b.Fatalf("TreeDB disk usage stats: %v", err)
 	}
 	benchmarkReportDiskUsage(b, docs, totalBytes)
+	benchmarkReportTreeDBValueLogRewrite(b, backend, docs, totalBytes)
+}
+
+func benchmarkReportTreeDBValueLogRewrite(b *testing.B, backend *backenddb.DB, docs int, beforeTotalBytes uint64) {
+	b.Helper()
+
+	if docs <= 0 || !benchmarkBoolEnv(b, "TREEDB_COLLECTION_REPORT_VLOG_REWRITE", false) {
+		return
+	}
+	rewriteStart := time.Now()
+	rewriteStats, err := backend.ValueLogRewriteOnline(context.Background(), backenddb.ValueLogRewriteOnlineOptions{})
+	if err != nil {
+		b.Fatalf("TreeDB value-log rewrite: %v", err)
+	}
+	rewriteElapsed := time.Since(rewriteStart)
+	if err := backend.Checkpoint(); err != nil {
+		b.Fatalf("checkpoint after TreeDB value-log rewrite: %v", err)
+	}
+	afterRewriteBytes, err := benchmarkTreeDBDiskUsageBytes(backend)
+	if err != nil {
+		b.Fatalf("TreeDB disk usage after value-log rewrite: %v", err)
+	}
+
+	gcStart := time.Now()
+	gcStats, err := backend.ValueLogGC(context.Background(), backenddb.ValueLogGCOptions{})
+	if err != nil {
+		b.Fatalf("TreeDB value-log GC after rewrite: %v", err)
+	}
+	gcElapsed := time.Since(gcStart)
+	if err := backend.Checkpoint(); err != nil {
+		b.Fatalf("checkpoint after TreeDB value-log GC: %v", err)
+	}
+	afterGCBytes, err := benchmarkTreeDBDiskUsageBytes(backend)
+	if err != nil {
+		b.Fatalf("TreeDB disk usage after value-log GC: %v", err)
+	}
+
+	b.ReportMetric(float64(rewriteElapsed.Nanoseconds()), "vlog_rewrite_ns/op")
+	b.ReportMetric(float64(beforeTotalBytes), "vlog_rewrite_disk_total_bytes_before")
+	b.ReportMetric(float64(afterRewriteBytes), "vlog_rewrite_disk_total_bytes_after")
+	b.ReportMetric(float64(int64(afterRewriteBytes)-int64(beforeTotalBytes)), "vlog_rewrite_disk_total_bytes_delta")
+	b.ReportMetric(float64(afterRewriteBytes)/float64(docs), "vlog_rewrite_disk_bytes/doc_after")
+	b.ReportMetric(float64(rewriteStats.SegmentsBefore), "vlog_rewrite_segments_before")
+	b.ReportMetric(float64(rewriteStats.SegmentsAfter), "vlog_rewrite_segments_after")
+	b.ReportMetric(float64(rewriteStats.BytesBefore), "vlog_rewrite_value_bytes_before")
+	b.ReportMetric(float64(rewriteStats.BytesAfter), "vlog_rewrite_value_bytes_after")
+	b.ReportMetric(float64(rewriteStats.RecordsCopied), "vlog_rewrite_records_copied")
+	b.ReportMetric(float64(rewriteStats.ValueRecordsCopied), "vlog_rewrite_value_records_copied")
+	b.ReportMetric(float64(rewriteStats.ValueBytesCopied), "vlog_rewrite_value_bytes_copied")
+	b.ReportMetric(float64(rewriteStats.TemplateRecordsAttempted), "vlog_rewrite_template_records_attempted")
+	b.ReportMetric(float64(rewriteStats.TemplateRecordsKept), "vlog_rewrite_template_records_kept")
+	b.ReportMetric(float64(rewriteStats.TemplateInputBytes), "vlog_rewrite_template_input_bytes")
+	b.ReportMetric(float64(rewriteStats.TemplateOutputBytes), "vlog_rewrite_template_output_bytes")
+	b.ReportMetric(float64(gcElapsed.Nanoseconds()), "vlog_gc_ns/op")
+	b.ReportMetric(float64(afterGCBytes), "vlog_rewrite_gc_disk_total_bytes_after")
+	b.ReportMetric(float64(int64(afterGCBytes)-int64(beforeTotalBytes)), "vlog_rewrite_gc_disk_total_bytes_delta")
+	b.ReportMetric(float64(afterGCBytes)/float64(docs), "vlog_rewrite_gc_disk_bytes/doc_after")
+	b.ReportMetric(float64(gcStats.SegmentsDeleted), "vlog_gc_segments_deleted")
+	b.ReportMetric(float64(gcStats.BytesDeleted), "vlog_gc_bytes_deleted")
 }
 
 func benchmarkTreeDBDiskUsageBytes(backend *backenddb.DB) (uint64, error) {

@@ -290,6 +290,34 @@ func benchmarkReportSQLiteDiskUsage(b *testing.B, db *sql.DB, docs int) {
 		b.ReportMetric(float64(indexBytes), "index_disk_bytes")
 		b.ReportMetric(float64(indexBytes)/float64(docs), "index_disk_bytes/doc")
 	}
+	benchmarkReportSQLiteVacuum(b, db, docs, totalBytes)
+}
+
+func benchmarkReportSQLiteVacuum(b *testing.B, db *sql.DB, docs int, beforeTotalBytes uint64) {
+	b.Helper()
+
+	if docs <= 0 || !benchmarkBoolEnv(b, "TREEDB_COLLECTION_REPORT_SQLITE_VACUUM", false) {
+		return
+	}
+	vacuumStart := time.Now()
+	if _, err := db.Exec(`VACUUM`); err != nil {
+		b.Fatalf("sqlite vacuum: %v", err)
+	}
+	vacuumElapsed := time.Since(vacuumStart)
+	checkpointSQLiteWAL(b, db)
+	afterTotalBytes := benchmarkSQLiteMainDiskBytes(b, db)
+
+	b.ReportMetric(float64(vacuumElapsed.Nanoseconds()), "sqlite_vacuum_ns/op")
+	b.ReportMetric(float64(beforeTotalBytes), "sqlite_vacuum_disk_total_bytes_before")
+	b.ReportMetric(float64(afterTotalBytes), "sqlite_vacuum_disk_total_bytes_after")
+	b.ReportMetric(float64(int64(afterTotalBytes)-int64(beforeTotalBytes)), "sqlite_vacuum_disk_total_bytes_delta")
+	b.ReportMetric(float64(afterTotalBytes)/float64(docs), "sqlite_vacuum_disk_bytes/doc_after")
+	if collectionBytes, indexBytes, ok := benchmarkSQLiteObjectDiskUsage(db); ok {
+		b.ReportMetric(float64(collectionBytes), "sqlite_vacuum_collection_disk_bytes_after")
+		b.ReportMetric(float64(collectionBytes)/float64(docs), "sqlite_vacuum_collection_disk_bytes/doc_after")
+		b.ReportMetric(float64(indexBytes), "sqlite_vacuum_index_disk_bytes_after")
+		b.ReportMetric(float64(indexBytes)/float64(docs), "sqlite_vacuum_index_disk_bytes/doc_after")
+	}
 }
 
 func benchmarkSQLiteMainDiskBytes(tb testing.TB, db *sql.DB) uint64 {
