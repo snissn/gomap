@@ -26,6 +26,7 @@ require (
 	github.com/yuin/goldmark v1.7.13
 	github.com/zeebo/xxh3 v1.0.2
 	go.etcd.io/bbolt v1.4.3
+	go.mongodb.org/mongo-driver/v2 v2.6.0
 	golang.org/x/sys v0.35.0
 	gonum.org/v1/plot v0.16.0
 )

@@ -179,8 +179,8 @@ Direct MVP wire scope:
 - Enforce a conservative maximum message length.
 - Support `OP_QUERY` only for initial `hello` / `isMaster` handshake, and reply
   with `OP_REPLY`.
-- Support `OP_MSG` for normal commands, including kind 0 body sections and kind
-  1 document sequences.
+- Support `OP_MSG` for normal commands with exactly one kind 0 body section.
+  Add kind 1 document sequences only when bulk payloads require them.
 - Do not advertise compression; reject or close on `OP_COMPRESSED` until a
   benchmark or driver compatibility test requires it.
 - Populate response headers with `responseTo` set to the client request ID.
@@ -292,7 +292,7 @@ Metrics to record for every run:
       implement the small OP_MSG subset directly.
 - [ ] Write a short compatibility matrix for commands, query operators, update
       operators, and BSON types.
-- [ ] Prototype the small TreeDB-owned wire layer with OP_QUERY handshake,
+- [x] Prototype the small TreeDB-owned wire layer with OP_QUERY handshake,
       OP_REPLY handshake response, and OP_MSG command request/response tests.
 - [ ] Define the initial BSON-to-TreeDB document encoding.
 - [ ] Define canonical `_id` primary-key encoding, generated ObjectId behavior,
@@ -325,3 +325,8 @@ Metrics to record for every run:
   a small TreeDB-owned wire layer for `OP_QUERY` handshake, `OP_REPLY`, and
   `OP_MSG`; use public BSON APIs where helpful, but avoid internal/unstable or
   not-yet-supported wire protocol dependencies for the MVP.
+- 2026-04-28: Added `TreeDB/mongo_gateway/wire`, a focused protocol-framing
+  package that validates message headers, handles OP_QUERY handshake parsing,
+  builds OP_REPLY responses, parses/builds single-body OP_MSG messages, rejects
+  checksum-bearing and document-sequence OP_MSGs until needed, and uses the
+  official driver v2 `bson.Raw` type for BSON document validation.
