@@ -154,20 +154,19 @@ func (db *DB) estimateValueLogLiveBytesByChunk(ctx context.Context, chunkBytes i
 		liveByChunk := make(map[valueLogChunkKey]int64)
 		var seenGroupedRecords map[groupedRecordKey]struct{}
 
-		userIter := snap.tree.IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
-		if err := db.collectValueLogLiveBytesByChunk(ctx, userIter, liveByChunk, &seenGroupedRecords, snap.state.ValueLogSet, chunkBytes); err != nil {
-			_ = userIter.Close()
+		roots, err := maintenanceRootsForSnapshot(snap)
+		if err != nil {
 			return nil, err
 		}
-		_ = userIter.Close()
-
-		sysIter := tree.New(snap.idx.pager, newValueReader(snap.state.ValueLogSet), snap.state.SystemRootPageID).
-			IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
-		if err := db.collectValueLogLiveBytesByChunk(ctx, sysIter, liveByChunk, &seenGroupedRecords, snap.state.ValueLogSet, chunkBytes); err != nil {
-			_ = sysIter.Close()
-			return nil, err
+		for _, root := range roots {
+			iter := tree.New(snap.idx.pager, &snap.reader, root.rootID).
+				IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
+			if err := db.collectValueLogLiveBytesByChunk(ctx, iter, liveByChunk, &seenGroupedRecords, snap.state.ValueLogSet, chunkBytes); err != nil {
+				_ = iter.Close()
+				return nil, err
+			}
+			_ = iter.Close()
 		}
-		_ = sysIter.Close()
 
 		return liveByChunk, nil
 	}

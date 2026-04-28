@@ -532,15 +532,16 @@ func trainRewriteLeafDictFromLiveLeafRefs(d *DB, state *DBState, cfg compression
 	if d == nil || state == nil || d.valueLogManager == nil {
 		return nil, nil
 	}
-	roots := make([]uint64, 0, 2)
-	if state.RootPageID != 0 {
-		roots = append(roots, state.RootPageID)
+	maintenanceRoots, err := collectMaintenanceRoots(d.Pager(), newValueReader(state.ValueLogSet), state)
+	if err != nil {
+		return nil, err
 	}
-	if state.SystemRootPageID != 0 {
-		roots = append(roots, state.SystemRootPageID)
-	}
-	if len(roots) == 0 {
+	if len(maintenanceRoots) == 0 {
 		return nil, nil
+	}
+	roots := make([]uint64, 0, len(maintenanceRoots))
+	for _, root := range maintenanceRoots {
+		roots = append(roots, root.rootID)
 	}
 	targetBytes := rewriteLeafDictTrainBytes(cfg)
 	minRecords := rewriteLeafDictMinRecords(cfg)
@@ -1128,20 +1129,19 @@ func (db *DB) estimateValueLogLiveBytesBySegment(ctx context.Context) (_ map[uin
 		// workloads will vastly over-count live bytes and mask stale segments.
 		var seenGroupedRecords map[groupedRecordKey]struct{}
 
-		userIter := snap.tree.IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
-		if err := db.collectValueLogLiveBytes(ctx, userIter, liveByID, &seenGroupedRecords, snap.state.ValueLogSet); err != nil {
-			_ = userIter.Close()
+		roots, err := maintenanceRootsForSnapshot(snap)
+		if err != nil {
 			return nil, err
 		}
-		_ = userIter.Close()
-
-		sysIter := tree.New(snap.idx.pager, newValueReader(snap.state.ValueLogSet), snap.state.SystemRootPageID).
-			IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
-		if err := db.collectValueLogLiveBytes(ctx, sysIter, liveByID, &seenGroupedRecords, snap.state.ValueLogSet); err != nil {
-			_ = sysIter.Close()
-			return nil, err
+		for _, root := range roots {
+			iter := tree.New(snap.idx.pager, &snap.reader, root.rootID).
+				IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
+			if err := db.collectValueLogLiveBytes(ctx, iter, liveByID, &seenGroupedRecords, snap.state.ValueLogSet); err != nil {
+				_ = iter.Close()
+				return nil, err
+			}
+			_ = iter.Close()
 		}
-		_ = sysIter.Close()
 
 		if cacheable {
 			db.storeCachedValueLogLiveBytes(cacheKey, liveByID)

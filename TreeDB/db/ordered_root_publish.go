@@ -34,11 +34,12 @@ const (
 var orderedRootDeltaBatchInlineThreshold = int(^uint(0) >> 1)
 
 type orderedRootPublishStats struct {
-	warmAttempts            uint64
-	warmNativeApplyAttempts uint64
-	warmRebuildFallbacks    uint64
-	warmPreservedPages      uint64
-	warmRewrittenPages      uint64
+	warmAttempts                           uint64
+	warmNativeApplyAttempts                uint64
+	warmRebuildFallbacks                   uint64
+	warmPreservedPages                     uint64
+	warmRewrittenPages                     uint64
+	collectionRootDescriptorTargetContains bool
 }
 
 type orderedRootPublishOptions struct {
@@ -202,6 +203,15 @@ func materializeOrderedRootTable(iter iterator.UnsafeIterator) (memtable.Table, 
 	}
 	table.Freeze()
 	return table, nil
+}
+
+func orderedRootTableContainsCollectionRootDescriptor(table memtable.Table) (bool, error) {
+	iter := table.NewIterator(collectionRootDescriptorPrefixBytes, collectionRootDescriptorPrefixEnd())
+	defer func() { _ = iter.Close() }()
+	if iter.Valid() && bytes.HasPrefix(iter.UnsafeKey(), collectionRootDescriptorPrefixBytes) {
+		return true, nil
+	}
+	return false, iter.Error()
 }
 
 func orderedRootEntryEqual(baseIter, targetIter iterator.UnsafeIterator) bool {
@@ -488,6 +498,12 @@ func (db *DB) publishOrderedRootIterator(baseRoot uint64, iter iterator.UnsafeIt
 			err = materializeErr
 			return
 		}
+		if trackValueLogRefs {
+			stats.collectionRootDescriptorTargetContains, err = orderedRootTableContainsCollectionRootDescriptor(targetTable)
+			if err != nil {
+				return
+			}
+		}
 		if !hasExistingEntries {
 			if trackValueLogRefs {
 				vlogRefDelta, err = collectValueLogRefDeltaFromIterator(targetTable.NewIterator(nil, nil))
@@ -559,6 +575,10 @@ func (db *DB) publishOrderedRootIterator(baseRoot uint64, iter iterator.UnsafeIt
 			targetTable, materializeErr := materializeOrderedRootTable(iter)
 			if materializeErr != nil {
 				err = materializeErr
+				return
+			}
+			stats.collectionRootDescriptorTargetContains, err = orderedRootTableContainsCollectionRootDescriptor(targetTable)
+			if err != nil {
 				return
 			}
 			vlogRefDelta, err = collectValueLogRefDeltaFromIterator(targetTable.NewIterator(nil, nil))
@@ -965,7 +985,18 @@ func (db *DB) publishOrderedRootGroup(systemIter iterator.UnsafeIterator, ordere
 		return 0, nil, errors.New("concurrent modification detected during ordered root group publish")
 	}
 
-	if vlogRefDelta == nil {
+	forceRefTrackerRebuild := len(ordered) > 0 && systemStats.collectionRootDescriptorTargetContains
+	if forceRefTrackerRebuild {
+		// A non-system root became reachable from a collection descriptor. The
+		// system-root ref delta alone is not an exact commit delta for those
+		// newly reachable roots, so force the tracker to rebuild from the full
+		// maintenance root set.
+		if vlogRefDelta != nil {
+			releaseValueLogRefDelta(vlogRefDelta)
+		}
+		vlogRefDelta = nil
+	}
+	if vlogRefDelta == nil && !forceRefTrackerRebuild {
 		vlogRefDelta = db.newNoopValueLogRefDeltaIfTrackable(baseSeq)
 	}
 	if err := db.finalizeCommit(userRoot, newSystemRoot, retired, false, merged, nil, true, vlogRefDelta, nil, nil); err != nil {

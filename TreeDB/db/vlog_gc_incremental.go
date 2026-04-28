@@ -25,12 +25,13 @@ const (
 	valueLogRefCountsFileName = "vlog_ref_counts.meta"
 	// valueLogRefCountsVersion is the on-disk version for vlog_ref_counts.meta.
 	//
-	// Version 4 tracks only value_vlog references reachable from logical
-	// value pointers. leaf_vlog reachability is owned by leaf-generation GC and
-	// intentionally excluded here. Older metadata is intentionally treated as
-	// stale/corrupt and rebuilt from a full scan. TreeDB is still pre-alpha, so
-	// we do not preserve old vlog_ref_counts.meta encodings yet.
-	valueLogRefCountsVersion = uint32(4)
+	// Version 5 tracks value_vlog references reachable from the user tree,
+	// system tree, and collection root trees. leaf_vlog reachability is owned by
+	// leaf-generation GC and intentionally excluded here. Older metadata is
+	// intentionally treated as stale/corrupt and rebuilt from a full scan.
+	// TreeDB is still pre-alpha, so we do not preserve old
+	// vlog_ref_counts.meta encodings yet.
+	valueLogRefCountsVersion = uint32(5)
 )
 
 var (
@@ -452,22 +453,21 @@ func (db *DB) scanValueLogRefCounts(ctx context.Context) (map[uint32]uint64, uin
 	commitSeq := snap.state.CommitSeq
 	counts := make(map[uint32]uint64)
 
-	userIter := snap.tree.IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
-	if err := collectValueLogRefCounts(ctx, db, userIter, counts); err != nil {
-		_ = userIter.Close()
+	roots, err := maintenanceRootsForSnapshot(snap)
+	if err != nil {
 		_ = snap.Close()
 		return nil, 0, err
 	}
-	_ = userIter.Close()
-
-	sysIter := tree.New(snap.idx.pager, newValueReader(snap.state.ValueLogSet), snap.state.SystemRootPageID).
-		IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
-	if err := collectValueLogRefCounts(ctx, db, sysIter, counts); err != nil {
-		_ = sysIter.Close()
-		_ = snap.Close()
-		return nil, 0, err
+	for _, root := range roots {
+		iter := tree.New(snap.idx.pager, &snap.reader, root.rootID).
+			IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
+		if err := collectValueLogRefCounts(ctx, db, iter, counts); err != nil {
+			_ = iter.Close()
+			_ = snap.Close()
+			return nil, 0, err
+		}
+		_ = iter.Close()
 	}
-	_ = sysIter.Close()
 
 	if err := snap.Close(); err != nil {
 		return nil, 0, err
