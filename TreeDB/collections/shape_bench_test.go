@@ -233,6 +233,61 @@ func BenchmarkCollectionShapeReadPrimaryParallel(b *testing.B) {
 	}
 }
 
+func benchmarkCollectionShapeReadPrimaryInto(b *testing.B, indexCount int, parallel bool) {
+	backend, collection := openBenchmarkCollection(b, fmt.Sprintf("bench_shape_read_into_%d", indexCount), collectionShapeIndexes(indexCount)...)
+	ids := seedBenchmarkCollection(b, collection, 0, collectionBenchSeedDocs, true)
+	benchmarkSyncBoundary(b, backend)
+
+	b.ReportAllocs()
+	b.ReportMetric(float64(indexCount), "indexes/doc")
+	b.ResetTimer()
+	if parallel {
+		b.RunParallel(func(pb *testing.PB) {
+			i := 0
+			buf := make([]byte, 0, 8<<10)
+			for pb.Next() {
+				got, found, err := collection.GetInto(ids[i%len(ids)], buf)
+				if err != nil {
+					b.Errorf("shape parallel primary read into indexes=%d: %v", indexCount, err)
+				}
+				if !found {
+					b.Errorf("shape parallel primary read into indexes=%d: document not found", indexCount)
+				}
+				buf = got
+				i++
+			}
+		})
+		return
+	}
+	buf := make([]byte, 0, 8<<10)
+	for i := 0; i < b.N; i++ {
+		got, found, err := collection.GetInto(ids[i%len(ids)], buf)
+		if err != nil {
+			b.Fatalf("shape primary read into indexes=%d: %v", indexCount, err)
+		}
+		if !found {
+			b.Fatalf("shape primary read into indexes=%d: document not found", indexCount)
+		}
+		buf = got
+	}
+}
+
+func BenchmarkCollectionShapeReadPrimaryInto(b *testing.B) {
+	for _, indexCount := range []int{0, 2} {
+		b.Run(fmt.Sprintf("indexes_%d", indexCount), func(b *testing.B) {
+			benchmarkCollectionShapeReadPrimaryInto(b, indexCount, false)
+		})
+	}
+}
+
+func BenchmarkCollectionShapeReadPrimaryIntoParallel(b *testing.B) {
+	for _, indexCount := range []int{0, 2} {
+		b.Run(fmt.Sprintf("indexes_%d", indexCount), func(b *testing.B) {
+			benchmarkCollectionShapeReadPrimaryInto(b, indexCount, true)
+		})
+	}
+}
+
 func benchmarkCollectionMixedReadWrite(b *testing.B, secondaryRead bool) {
 	indexes := collectionShapeIndexes(2)
 	collectionName := "bench_shape_mixed_read_write"
