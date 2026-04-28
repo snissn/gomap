@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -796,11 +797,12 @@ func verifyReopen(cfg config) (int, error) {
 		if len(got) == 0 {
 			return 0, fmt.Errorf("reopen verify get %s returned an empty document", id)
 		}
-		if cfg.DocumentFormat == collections.DocumentFormatJSON {
-			want := indexedJSONDocument(n)
-			if !bytes.Equal(got, want) {
-				return 0, fmt.Errorf("reopen verify get %s returned unexpected JSON document", id)
-			}
+		want, err := expectedStoredDocument(cfg.DocumentFormat, n)
+		if err != nil {
+			return 0, fmt.Errorf("reopen verify expected document %s: %w", id, err)
+		}
+		if !bytes.Equal(got, want) {
+			return 0, fmt.Errorf("reopen verify get %s returned unexpected document content", id)
 		}
 		if cfg.IndexCount >= 1 {
 			email := fmt.Sprintf("user-%09d@example.com", n)
@@ -822,8 +824,67 @@ func verifyReopen(cfg config) (int, error) {
 				return 0, fmt.Errorf("reopen verify city index %s did not include %s", city, id)
 			}
 		}
+		if cfg.IndexCount >= 3 {
+			name := fmt.Sprintf("user-%09d", n)
+			ids, err := collection.FindByIndex("name_idx", name)
+			if err != nil {
+				return 0, fmt.Errorf("reopen verify name index %s: %w", name, err)
+			}
+			if !containsDocumentID(ids, id) {
+				return 0, fmt.Errorf("reopen verify name index %s did not include %s", name, id)
+			}
+		}
 	}
 	return len(samples), nil
+}
+
+func expectedStoredDocument(format collections.DocumentFormat, n int) ([]byte, error) {
+	if format == collections.DocumentFormatJSON {
+		return indexedJSONDocument(n), nil
+	}
+	doc, err := document(format, &collections.TemplateV1Encoder{}, n)
+	if err != nil {
+		return nil, err
+	}
+	return templateV1StoredDocument(doc)
+}
+
+func templateV1StoredDocument(raw []byte) ([]byte, error) {
+	const (
+		inputMagic  = "TD1I"
+		storedMagic = "TD1D"
+	)
+	if bytes.HasPrefix(raw, []byte(storedMagic)) {
+		return raw, nil
+	}
+	if !bytes.HasPrefix(raw, []byte(inputMagic)) {
+		return nil, errors.New("template-v1 document is missing input envelope")
+	}
+	pos := len(inputMagic)
+	templateCount, n := binary.Uvarint(raw[pos:])
+	if n <= 0 {
+		return nil, errors.New("template-v1 document has malformed template count")
+	}
+	pos += n
+	for i := uint64(0); i < templateCount; i++ {
+		if len(raw)-pos < 32 {
+			return nil, errors.New("template-v1 document has malformed template id")
+		}
+		pos += 32
+		recordLen, n := binary.Uvarint(raw[pos:])
+		if n <= 0 {
+			return nil, errors.New("template-v1 document has malformed template length")
+		}
+		pos += n
+		if recordLen > uint64(len(raw)-pos) {
+			return nil, errors.New("template-v1 document has truncated template record")
+		}
+		pos += int(recordLen)
+	}
+	if !bytes.HasPrefix(raw[pos:], []byte(storedMagic)) {
+		return nil, errors.New("template-v1 document is missing stored payload")
+	}
+	return raw[pos:], nil
 }
 
 func containsDocumentID(ids [][]byte, want []byte) bool {

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"io"
 	"os"
 	"path/filepath"
@@ -69,6 +70,30 @@ func TestRunFixtureKeepsTemplateV1TwoIndexDatabase(t *testing.T) {
 	}
 }
 
+func TestRunFixtureKeepsTemplateV1ThreeIndexDatabase(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "fixture")
+	cfg, err := parseConfig([]string{
+		"-dir", dir,
+		"-docs", "16",
+		"-batch-size", "5",
+		"-indexes", "3",
+		"-progress=false",
+	}, io.Discard)
+	if err != nil {
+		t.Fatalf("parse config: %v", err)
+	}
+	summary, err := runFixture(cfg)
+	if err != nil {
+		t.Fatalf("run fixture: %v", err)
+	}
+	if summary.IndexCount != 3 {
+		t.Fatalf("index count=%d want 3", summary.IndexCount)
+	}
+	if summary.Verify.Samples == 0 {
+		t.Fatal("expected reopen verification samples")
+	}
+}
+
 func TestRunFixtureRejectsNonEmptyDirectoryUnlessReset(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "sentinel"), []byte("x"), 0o644); err != nil {
@@ -90,5 +115,30 @@ func TestContainsDocumentID(t *testing.T) {
 	}
 	if containsDocumentID(ids, []byte("u-000000002")) {
 		t.Fatal("unexpected non-matching id")
+	}
+}
+
+func TestTemplateV1StoredDocumentExtractsInputEnvelope(t *testing.T) {
+	var encoder collections.TemplateV1Encoder
+	raw, err := document(collections.DocumentFormatTemplateV1, &encoder, 7)
+	if err != nil {
+		t.Fatalf("document: %v", err)
+	}
+	stored, err := templateV1StoredDocument(raw)
+	if err != nil {
+		t.Fatalf("stored document: %v", err)
+	}
+	if !bytes.HasPrefix(stored, []byte("TD1D")) {
+		t.Fatalf("stored document prefix=%q want TD1D", string(stored[:4]))
+	}
+	if bytes.HasPrefix(stored, []byte("TD1I")) {
+		t.Fatal("expected template-v1 input envelope to be stripped")
+	}
+	again, err := templateV1StoredDocument(stored)
+	if err != nil {
+		t.Fatalf("stored document idempotence: %v", err)
+	}
+	if !bytes.Equal(again, stored) {
+		t.Fatal("stored document conversion changed an already-stored payload")
 	}
 }
