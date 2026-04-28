@@ -836,6 +836,10 @@ func (c *Collection) InsertBatch(ids, documents [][]byte) ([][]byte, error) {
 		return nil, errors.New("collections: db is nil")
 	}
 	if len(documents) == 0 {
+		c.setLastInsertStats(CollectionInsertStats{
+			Documents: 0,
+			Indexes:   len(c.meta.Indexes),
+		})
 		return nil, nil
 	}
 	if err := c.flushBufferedNoIndex(); err != nil {

@@ -160,6 +160,24 @@ func TestCollectionInsertBatchStatsExposeIndexRunShape(t *testing.T) {
 	if got := again.SecondaryRuns[0].IndexName; got == "mutated" {
 		t.Fatal("LastInsertStats did not return an owned secondary-run slice")
 	}
+	if ids, err := col.InsertBatch(nil, nil); err != nil {
+		t.Fatalf("empty insert batch: %v", err)
+	} else if ids != nil {
+		t.Fatalf("empty insert ids=%v want nil", ids)
+	}
+	empty := col.LastInsertStats()
+	if got, want := empty.Documents, 0; got != want {
+		t.Fatalf("empty stats documents=%d want %d", got, want)
+	}
+	if got, want := empty.Indexes, 2; got != want {
+		t.Fatalf("empty stats indexes=%d want %d", got, want)
+	}
+	if got := empty.Runs; got != 0 {
+		t.Fatalf("empty stats runs=%d want 0", got)
+	}
+	if got := len(empty.SecondaryRuns); got != 0 {
+		t.Fatalf("empty stats secondary runs=%d want 0", got)
+	}
 }
 
 func TestCollectionInsertBatchStatsExposeNoIndexFastPath(t *testing.T) {
