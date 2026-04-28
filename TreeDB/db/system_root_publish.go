@@ -87,6 +87,12 @@ func (db *DB) PublishSystemRootIterator(iter iterator.UnsafeIterator) (uint64, e
 	db.systemRootWarmPublishRebuildFallbacks.Add(publishStats.warmRebuildFallbacks)
 	db.systemRootWarmPreservedPages.Add(publishStats.warmPreservedPages)
 	db.systemRootWarmRewrittenPages.Add(publishStats.warmRewrittenPages)
+	if publishStats.collectionRootDescriptorTargetContains {
+		if vlogRefDelta != nil {
+			releaseValueLogRefDelta(vlogRefDelta)
+		}
+		vlogRefDelta = nil
+	}
 
 	db.mu.Lock()
 	curUserRoot := db.meta.UserRootPageID

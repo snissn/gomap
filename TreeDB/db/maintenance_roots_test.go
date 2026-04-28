@@ -170,6 +170,55 @@ func TestValueLogGC_KeepsSegmentReferencedOnlyByCollectionRoot(t *testing.T) {
 	}
 }
 
+func TestValueLogGC_KeepsSegmentMadeReachableBySystemDescriptorOnly(t *testing.T) {
+	dir := t.TempDir()
+	d, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	unreferenced := appendPointersInNewSegment(t, dir, 0, 1, 10_000, 1, func(int) []byte {
+		return bytes.Repeat([]byte("unreferenced|"), 64)
+	})[0]
+	referenced := appendPointersInNewSegment(t, dir, 0, 2, 20_000, 1, func(int) []byte {
+		return bytes.Repeat([]byte("descriptor-live|"), 64)
+	})[0]
+	appendPointersInNewSegment(t, dir, 0, 3, 30_000, 1, func(int) []byte {
+		return bytes.Repeat([]byte("active-head|"), 64)
+	})
+	unreferencedPath := valueLogSegmentPath(t, dir, unreferenced.FileID)
+	referencedPath := valueLogSegmentPath(t, dir, referenced.FileID)
+
+	collectionRoot, err := d.PublishOrderedRootIterator(0, mustFrozenSystemPointerMemtable(t, "doc/p", referenced).NewIterator(nil, nil))
+	if err != nil {
+		t.Fatalf("publish unattached collection root: %v", err)
+	}
+	if _, err := d.referencedValueLogSegments(context.Background()); err != nil {
+		t.Fatalf("prime value-log ref tracker: %v", err)
+	}
+	if _, ok := d.valueLogRefTracker.referencedSet(d.currentCommitSeq()); !ok {
+		t.Fatal("expected primed value-log ref tracker")
+	}
+	if _, err := d.PublishSystemRootIterator(mustFrozenRawMemtable(t, maintenanceTestCollectionRootKey, encodeMaintenanceRootID(collectionRoot)).NewIterator(nil, nil)); err != nil {
+		t.Fatalf("publish system descriptor: %v", err)
+	}
+
+	stats, err := d.ValueLogGC(context.Background(), ValueLogGCOptions{})
+	if err != nil {
+		t.Fatalf("ValueLogGC: %v", err)
+	}
+	if stats.SegmentsDeleted == 0 {
+		t.Fatalf("expected GC to delete an unreferenced segment, stats=%+v", stats)
+	}
+	if _, err := os.Stat(unreferencedPath); err == nil || !os.IsNotExist(err) {
+		t.Fatalf("expected unreferenced segment to be removed, err=%v", err)
+	}
+	if _, err := os.Stat(referencedPath); err != nil {
+		t.Fatalf("expected descriptor-referenced segment %d to remain: %v", referenced.FileID, err)
+	}
+}
+
 func TestValueLogRewritePlanningCountsCollectionRootPointers(t *testing.T) {
 	dir := t.TempDir()
 	d, err := Open(Options{Dir: dir})

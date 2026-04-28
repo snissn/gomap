@@ -985,11 +985,11 @@ func (db *DB) publishOrderedRootGroup(systemIter iterator.UnsafeIterator, ordere
 		return 0, nil, errors.New("concurrent modification detected during ordered root group publish")
 	}
 
-	forceRefTrackerRebuild := len(ordered) > 0 && systemStats.collectionRootDescriptorTargetContains
+	forceRefTrackerRebuild := systemStats.collectionRootDescriptorTargetContains
 	if forceRefTrackerRebuild {
-		// A non-system root became reachable from a collection descriptor. The
-		// system-root ref delta alone is not an exact commit delta for those
-		// newly reachable roots, so force the tracker to rebuild from the full
+		// Collection descriptors make non-system roots part of value-log
+		// reachability. The system-root ref delta alone is not an exact commit
+		// delta for those roots, so force the tracker to rebuild from the full
 		// maintenance root set.
 		if vlogRefDelta != nil {
 			releaseValueLogRefDelta(vlogRefDelta)
