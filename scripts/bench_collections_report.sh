@@ -5,11 +5,12 @@ ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$ROOT"
 
 OUT_DIR="${OUT_DIR:-$(mktemp -d /tmp/gomap_collections_report_XXXXXX)}"
-BENCH_REGEX="${BENCH_REGEX:-Benchmark(CollectionInsertProvidedID|CollectionInsertBatchProvidedID|CollectionGetByID|CollectionGetByIDParallel|CollectionDeleteByID|CollectionInsertWithSecondaryIndexes|CollectionInsertBatchWithSecondaryIndexes|CollectionInsertBatchCheckpointWithSecondaryIndexes|CollectionDeleteWithSecondaryIndexes|SecondaryLookupUnique|SecondaryLookupNonUnique|SecondaryUpsertFieldChange|CollectionCreateIndexBackfillExistingDocs|CollectionOverheadPlanNoIndex|CollectionOverheadPlanIndexed|CollectionOverheadIndexStateJSONExtraction|CollectionOverheadPlanIndexedPrecomputedState)}"
+BENCH_REGEX="${BENCH_REGEX:-Benchmark(CollectionInsertProvidedID|CollectionInsertBatchProvidedID|CollectionGetByID|CollectionGetByIDParallel|CollectionDeleteByID|CollectionInsertWithSecondaryIndexes|CollectionInsertBatchWithSecondaryIndexes|CollectionInsertBatchCheckpointWithSecondaryIndexes|CollectionDeleteWithSecondaryIndexes|SecondaryLookupUnique|SecondaryLookupNonUnique|SecondaryUpsertFieldChange|CollectionCreateIndexBackfillExistingDocs|CollectionOverheadPlanNoIndex|CollectionOverheadPlanIndexed|CollectionOverheadPlanIndexedTemplateV1|CollectionOverheadIndexStateJSONExtraction|CollectionOverheadIndexStateTemplateV1Extraction|CollectionOverheadPlanIndexedPrecomputedState)}"
 COUNT="${COUNT:-3}"
 BENCHTIME="${BENCHTIME:-}"
 BENCH_ENGINE="${TREEDB_COLLECTION_BENCH_ENGINE:-production_fast}"
 BATCH_SIZE="${TREEDB_COLLECTION_BENCH_BATCH_SIZE:-8000}"
+DOCUMENT_FORMAT="${TREEDB_COLLECTION_DOCUMENT_FORMAT:-json}"
 DATA_OUTER="${TREEDB_COLLECTION_DATA_OUTER_LEAVES_IN_VLOG:-true}"
 INDEX_OUTER="${TREEDB_COLLECTION_INDEX_OUTER_LEAVES_IN_VLOG:-false}"
 CHUNK_SIZE="$(printf '%s' "${TREEDB_COLLECTION_CHUNK_SIZE:-}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
@@ -95,6 +96,7 @@ fi
 echo "running focused collections benchmarks into: $OUT_DIR"
 echo "benchmark engine: $BENCH_ENGINE"
 echo "collection batch size: $BATCH_SIZE"
+echo "document format: $DOCUMENT_FORMAT"
 echo "storage policy: $STORAGE_POLICY_LABEL"
 echo "pager chunk size: $CHUNK_SIZE_LABEL"
 echo "pager sync concurrency: $PAGER_SYNC_CONCURRENCY_LABEL"
@@ -118,6 +120,7 @@ if [[ ! -d "$ROOT/TreeDB/collections" ]]; then
     -worktree "$WORKTREE" \
     -execution-path "$PATH_LABEL" \
     -benchmark-engine "$BENCH_ENGINE" \
+    -document-format "$DOCUMENT_FORMAT" \
     -storage-policy "$STORAGE_POLICY_LABEL" \
     -pager-chunk-size "$CHUNK_SIZE_LABEL" \
     -pager-sync-concurrency "$PAGER_SYNC_CONCURRENCY_LABEL" \
@@ -126,7 +129,7 @@ if [[ ! -d "$ROOT/TreeDB/collections" ]]; then
     -count "$COUNT" \
     -unavailable-reason "N/A before R0 harness bring-up"
 else
-  TREEDB_COLLECTION_BENCH_ENGINE="$BENCH_ENGINE" TREEDB_COLLECTION_BENCH_BATCH_SIZE="$BATCH_SIZE" TREEDB_COLLECTION_DATA_OUTER_LEAVES_IN_VLOG="$DATA_OUTER" TREEDB_COLLECTION_INDEX_OUTER_LEAVES_IN_VLOG="$INDEX_OUTER" TREEDB_COLLECTION_CHUNK_SIZE="$CHUNK_SIZE" TREEDB_COLLECTION_PAGER_SYNC_CONCURRENCY="$PAGER_SYNC_CONCURRENCY" GOWORK=off "${cmd[@]}" | tee "$RAW_JSON"
+  TREEDB_COLLECTION_BENCH_ENGINE="$BENCH_ENGINE" TREEDB_COLLECTION_BENCH_BATCH_SIZE="$BATCH_SIZE" TREEDB_COLLECTION_DOCUMENT_FORMAT="$DOCUMENT_FORMAT" TREEDB_COLLECTION_DATA_OUTER_LEAVES_IN_VLOG="$DATA_OUTER" TREEDB_COLLECTION_INDEX_OUTER_LEAVES_IN_VLOG="$INDEX_OUTER" TREEDB_COLLECTION_CHUNK_SIZE="$CHUNK_SIZE" TREEDB_COLLECTION_PAGER_SYNC_CONCURRENCY="$PAGER_SYNC_CONCURRENCY" GOWORK=off "${cmd[@]}" | tee "$RAW_JSON"
 
   if is_true "$TIMED_CPU_PROFILE" && [[ ! -s "$CPU_PROFILE" ]]; then
     echo "timed CPU profile was requested but no profile was written to $CPU_PROFILE; use a timed-profile benchmark" >&2
@@ -144,6 +147,7 @@ else
     -worktree "$WORKTREE" \
     -execution-path "$PATH_LABEL" \
     -benchmark-engine "$BENCH_ENGINE" \
+    -document-format "$DOCUMENT_FORMAT" \
     -storage-policy "$STORAGE_POLICY_LABEL" \
     -pager-chunk-size "$CHUNK_SIZE_LABEL" \
     -pager-sync-concurrency "$PAGER_SYNC_CONCURRENCY_LABEL" \
@@ -184,6 +188,7 @@ cat >"$OUT_DIR/README.md" <<EOF
 - commit: \`$COMMIT\`
 - execution path: \`$PATH_LABEL\`
 - benchmark engine: \`$BENCH_ENGINE\`
+- document format: \`$DOCUMENT_FORMAT\`
 - storage policy: \`$STORAGE_POLICY_LABEL\`
 - pager chunk size: \`$CHUNK_SIZE_LABEL\`
 - pager sync concurrency: \`$PAGER_SYNC_CONCURRENCY_LABEL\`
@@ -203,6 +208,7 @@ $ARTIFACT_LINES
 - pager chunk size override: \`TREEDB_COLLECTION_CHUNK_SIZE=65536 scripts/bench_collections_report.sh\`
 - pager sync concurrency override: \`TREEDB_COLLECTION_PAGER_SYNC_CONCURRENCY=4 scripts/bench_collections_report.sh\`
 - batch-size override: \`TREEDB_COLLECTION_BENCH_BATCH_SIZE=8000 scripts/bench_collections_report.sh\`
+- template-v1 document-format override: \`TREEDB_COLLECTION_DOCUMENT_FORMAT=template-v1 scripts/bench_collections_report.sh\`
 - oracle-path override: \`TREEDB_COLLECTION_PATH_LABEL=oracle scripts/bench_collections_report.sh\`
 - production matrix runner: \`TREEDB_COLLECTION_PATH_LABEL=native-fastpath scripts/bench_collections_matrix.sh\`
 - sqlite comparison override: \`CGO_ENABLED=1 TREEDB_COLLECTION_PATH_LABEL=sqlite TREEDB_COLLECTION_BENCH_ENGINE=sqlite_wal_normal GO_TEST_TAGS=sqlite_bench BENCH_REGEX='BenchmarkSQLite(InsertBatchWithSecondaryIndexes|InsertBatchCheckpointWithSecondaryIndexes)$' scripts/bench_collections_report.sh\`

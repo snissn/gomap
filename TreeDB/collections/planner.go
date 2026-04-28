@@ -6,15 +6,18 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
 
+	"github.com/buger/jsonparser"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
+	"github.com/tidwall/gjson"
 )
 
 const documentIndexStateVersion = 1
@@ -38,12 +41,15 @@ type collectionRootKind uint8
 
 const (
 	collectionRootPrimary collectionRootKind = iota + 1
+	collectionRootTemplate
 	collectionRootIndexState
 	collectionRootSecondary
 )
 
 type collectionOptions struct {
 	allowArrayValuesInIndex bool
+	documentFormat          DocumentFormat
+	templateResolver        templateV1Resolver
 	dataStoragePolicy       backenddb.OrderedRootStoragePolicy
 	indexStateStoragePolicy backenddb.OrderedRootStoragePolicy
 }
@@ -59,6 +65,7 @@ type indexDefinition struct {
 type insertBatchPlanner struct {
 	collection      string
 	primaryRoot     string
+	templateRoot    string
 	indexStateRoot  string
 	indexes         []indexDefinition
 	options         collectionOptions
@@ -69,6 +76,7 @@ type insertBatchPlan struct {
 	resultIDs       [][]byte
 	runs            []collectionRootRun
 	uniqueProbeRuns []collectionUniqueProbeRun
+	templateRecords []templateV1Record
 	stats           insertBatchPlanStats
 }
 
@@ -111,6 +119,7 @@ type orderedDocumentIndexState [][][]byte
 
 type indexEncodeArena struct {
 	buf       []byte
+	states    [][][]byte
 	valueRefs [][]byte
 }
 
@@ -146,23 +155,33 @@ func (p insertBatchPlanner) planInsertBatchWithPreflight(ids, documents [][]byte
 	if p.primaryRoot == "" {
 		p.primaryRoot = p.collection + "/primary"
 	}
+	if p.templateRoot == "" {
+		p.templateRoot = p.collection + "/templates"
+	}
 	if len(p.indexes) > 0 && p.indexStateRoot == "" {
 		p.indexStateRoot = p.collection + "/index-state"
 	}
 	if p.buildPrimaryVal == nil {
 		p.buildPrimaryVal = borrowPrimaryDocument
 	}
+	preparedDocuments, templateRecords, templateResolver, err := prepareInsertDocuments(documents, p.options)
+	if err != nil {
+		return nil, err
+	}
+	if templateResolver != nil {
+		p.options.templateResolver = templateResolver
+	}
 
 	resultIDs, err := cloneBatchDocumentIDs(ids)
 	if err != nil {
 		return nil, err
 	}
-	items := make([]insertBatchItem, len(documents))
-	for i := range documents {
+	items := make([]insertBatchItem, len(preparedDocuments))
+	for i := range preparedDocuments {
 		id := resultIDs[i]
 		items[i] = insertBatchItem{
 			id:       id,
-			document: documents[i],
+			document: preparedDocuments[i],
 		}
 	}
 
@@ -197,6 +216,12 @@ func (p insertBatchPlanner) planInsertBatchWithPreflight(ids, documents [][]byte
 	plan := &insertBatchPlan{
 		resultIDs:       resultIDs,
 		uniqueProbeRuns: uniqueProbeRuns,
+		templateRecords: templateRecords,
+	}
+	if len(templateRecords) > 0 {
+		if err := p.emitTemplateRun(plan, templateRecords); err != nil {
+			return nil, err
+		}
 	}
 	if err := p.emitPrimaryRun(plan, items, primaryOrder); err != nil {
 		return nil, err
@@ -321,6 +346,7 @@ func (p insertBatchPlanner) planIndexStateAndUniqueProbes(items []insertBatchIte
 	uniqueProbes := make([]uniqueProbeCandidate, 0, len(items))
 	encoder := indexEncodeArena{
 		buf:       make([]byte, 0, estimateBatchIndexEncodeArenaBytes(items, len(runtimes))),
+		states:    make([][][]byte, 0, estimateBatchIndexValueRefCount(items, len(runtimes))),
 		valueRefs: make([][]byte, 0, estimateBatchIndexValueRefCount(items, len(runtimes))),
 	}
 	for i := range items {
@@ -454,6 +480,31 @@ func (p insertBatchPlanner) emitPrimaryRun(plan *insertBatchPlan, items []insert
 	plan.runs = append(plan.runs, collectionRootRun{
 		name:          p.primaryRoot,
 		kind:          collectionRootPrimary,
+		table:         table,
+		storagePolicy: p.options.dataStoragePolicy,
+	})
+	return nil
+}
+
+func (p insertBatchPlanner) emitTemplateRun(plan *insertBatchPlan, records []templateV1Record) error {
+	if len(records) == 0 {
+		return nil
+	}
+	sortTemplateV1Records(records)
+	records, err := dedupeTemplateV1Records(records)
+	if err != nil {
+		return err
+	}
+	table := newCollectionRunTable(len(records))
+	if err := applyCollectionRunEntries(table, len(records), func(i int) (key, value []byte, err error) {
+		return records[i].id[:], records[i].raw, nil
+	}); err != nil {
+		return err
+	}
+	table.Freeze()
+	plan.runs = append(plan.runs, collectionRootRun{
+		name:          p.templateRoot,
+		kind:          collectionRootTemplate,
 		table:         table,
 		storagePolicy: p.options.dataStoragePolicy,
 	})
@@ -711,6 +762,16 @@ func orderedIndexStateForDocumentWithArena(document []byte, runtimes []indexRunt
 			valueRefs: make([][]byte, 0, len(runtimes)),
 		}
 	}
+	switch normalizedDocumentFormat(opts.documentFormat) {
+	case DocumentFormatJSON:
+	case DocumentFormatTemplateV1:
+		return templateV1OrderedIndexStateForDocumentWithArena(document, runtimes, opts, encoder)
+	default:
+		return nil, fmt.Errorf("collections: unsupported document format %q", opts.documentFormat)
+	}
+	if state, ok, err := orderedJSONRootIndexStateForDocumentFastPath(document, runtimes, opts, encoder); ok || err != nil {
+		return state, err
+	}
 	var decoded any
 	if err := json.Unmarshal(document, &decoded); err != nil {
 		return nil, fmt.Errorf("collections: index extraction requires JSON document: %w", err)
@@ -719,7 +780,7 @@ func orderedIndexStateForDocumentWithArena(document []byte, runtimes []indexRunt
 	if !ok {
 		return nil, errors.New("collections: index extraction requires JSON object document")
 	}
-	state := make(orderedDocumentIndexState, len(runtimes))
+	state := encoder.appendState(len(runtimes))
 	for runtimeIdx, runtime := range runtimes {
 		value, found := extractIndexPathValue(obj, runtime.path)
 		if !found || value == nil {
@@ -771,10 +832,219 @@ func orderedIndexStateForDocumentWithArena(document []byte, runtimes []indexRunt
 	return state, nil
 }
 
+func orderedJSONRootIndexStateForDocumentFastPath(document []byte, runtimes []indexRuntime, opts collectionOptions, encoder *indexEncodeArena) (orderedDocumentIndexState, bool, error) {
+	if len(runtimes) == 0 {
+		return nil, true, nil
+	}
+	for _, runtime := range runtimes {
+		if len(runtime.path) != 1 {
+			return nil, false, nil
+		}
+	}
+	if !gjson.ValidBytes(document) {
+		return nil, true, errors.New("collections: index extraction requires JSON document: invalid JSON")
+	}
+	if !jsonDocumentLooksObject(document) {
+		return nil, true, errors.New("collections: index extraction requires JSON object document")
+	}
+	var stackValues [8]jsonParserIndexValue
+	var values []jsonParserIndexValue
+	if len(runtimes) <= len(stackValues) {
+		values = stackValues[:len(runtimes)]
+	} else {
+		values = make([]jsonParserIndexValue, len(runtimes))
+	}
+	if err := jsonparser.ObjectEach(document, func(key, value []byte, dataType jsonparser.ValueType, _ int) error {
+		for runtimeIdx, runtime := range runtimes {
+			if runtimeRootFieldEqual(runtime, key) {
+				values[runtimeIdx] = jsonParserIndexValue{
+					raw:       value,
+					valueType: dataType,
+				}
+			}
+		}
+		return nil
+	}); err != nil {
+		return nil, true, fmt.Errorf("collections: index extraction requires JSON document: %w", err)
+	}
+	state := encoder.appendState(len(runtimes))
+	for runtimeIdx, runtime := range runtimes {
+		if err := appendJSONParserIndexValueToState(state, runtimeIdx, runtime, values[runtimeIdx], opts, encoder); err != nil {
+			return nil, true, err
+		}
+	}
+	return state, true, nil
+}
+
+type jsonParserIndexValue struct {
+	raw       []byte
+	valueType jsonparser.ValueType
+}
+
+func jsonDocumentLooksObject(document []byte) bool {
+	for _, c := range document {
+		switch c {
+		case ' ', '\n', '\r', '\t':
+			continue
+		case '{':
+			return true
+		default:
+			return false
+		}
+	}
+	return false
+}
+
+func runtimeRootFieldEqual(runtime indexRuntime, key []byte) bool {
+	return string(key) == runtime.path[0]
+}
+
+func appendJSONParserArrayIndexValues(value []byte, encoder *indexEncodeArena) ([][]byte, error) {
+	var values [][]byte
+	var first []byte
+	count := 0
+	var encodeErr error
+	_, err := jsonparser.ArrayEach(value, func(elem []byte, dataType jsonparser.ValueType, _ int, elemErr error) {
+		if encodeErr != nil {
+			return
+		}
+		if elemErr != nil {
+			encodeErr = elemErr
+			return
+		}
+		var next []byte
+		encoder.buf, next, encodeErr = appendJSONParserIndexScalar(encoder.buf, elem, dataType)
+		if encodeErr != nil {
+			return
+		}
+		count++
+		if count == 1 {
+			first = next
+			return
+		}
+		if count == 2 {
+			values = make([][]byte, 0, 4)
+			values = append(values, first)
+		}
+		values = append(values, next)
+	})
+	if err != nil {
+		return nil, err
+	}
+	if encodeErr != nil {
+		return nil, encodeErr
+	}
+	switch count {
+	case 0:
+		return nil, nil
+	case 1:
+		return [][]byte{first}, nil
+	default:
+		return values, nil
+	}
+}
+
+func appendJSONParserIndexValueToState(state orderedDocumentIndexState, runtimeIdx int, runtime indexRuntime, value jsonParserIndexValue, opts collectionOptions, encoder *indexEncodeArena) error {
+	switch value.valueType {
+	case jsonparser.NotExist, jsonparser.Null:
+		return nil
+	case jsonparser.Array:
+		if !runtime.def.multiKey && !opts.allowArrayValuesInIndex {
+			return errors.New("collections: array value not allowed for index")
+		}
+		encoded, err := appendJSONParserArrayIndexValues(value.raw, encoder)
+		if err != nil {
+			return err
+		}
+		if len(encoded) == 1 {
+			state[runtimeIdx] = encoder.appendSingleValueRef(encoded[0])
+		} else if len(encoded) > 1 {
+			state[runtimeIdx] = normalizeOwnedEncodedIndexValues(encoded)
+		}
+		return nil
+	default:
+		var next []byte
+		var err error
+		encoder.buf, next, err = appendJSONParserIndexScalar(encoder.buf, value.raw, value.valueType)
+		if err != nil {
+			return err
+		}
+		state[runtimeIdx] = encoder.appendSingleValueRef(next)
+		return nil
+	}
+}
+
+func appendJSONParserIndexScalar(dst []byte, raw []byte, valueType jsonparser.ValueType) ([]byte, []byte, error) {
+	start := len(dst)
+	switch valueType {
+	case jsonparser.String:
+		dst = append(dst, "s:"...)
+		if bytes.IndexByte(raw, '\\') == -1 {
+			dst = append(dst, raw...)
+			break
+		}
+		unescaped, err := jsonparser.Unescape(raw, dst[len(dst):cap(dst)])
+		if err != nil {
+			return dst, nil, err
+		}
+		if cap(dst)-len(dst) >= len(raw) {
+			dst = dst[:len(dst)+len(unescaped)]
+		} else {
+			dst = append(dst, unescaped...)
+		}
+	case jsonparser.Boolean:
+		if len(raw) == 4 && raw[0] == 't' && raw[1] == 'r' && raw[2] == 'u' && raw[3] == 'e' {
+			dst = append(dst, "b:1"...)
+		} else if len(raw) == 5 && raw[0] == 'f' && raw[1] == 'a' && raw[2] == 'l' && raw[3] == 's' && raw[4] == 'e' {
+			dst = append(dst, "b:0"...)
+		} else {
+			return dst, nil, fmt.Errorf("collections: unsupported indexed JSON boolean %q", raw)
+		}
+	case jsonparser.Number:
+		num, err := jsonparser.ParseFloat(raw)
+		if err != nil || math.IsInf(num, 0) {
+			if err != nil {
+				return dst, nil, fmt.Errorf("collections: unsupported indexed JSON number %q: %w", raw, err)
+			}
+			return dst, nil, fmt.Errorf("collections: unsupported indexed JSON number %q", raw)
+		}
+		dst = append(dst, "n:"...)
+		dst = strconv.AppendFloat(dst, num, 'g', -1, 64)
+	case jsonparser.Null:
+		dst = append(dst, "z:"...)
+	default:
+		return dst, nil, fmt.Errorf("collections: unsupported indexed JSON value type %s", valueType)
+	}
+	return dst, dst[start:len(dst):len(dst)], nil
+}
+
 func (a *indexEncodeArena) appendSingleValueRef(value []byte) [][]byte {
 	start := len(a.valueRefs)
 	a.valueRefs = append(a.valueRefs, value)
 	return a.valueRefs[start:len(a.valueRefs):len(a.valueRefs)]
+}
+
+func (a *indexEncodeArena) appendState(runtimeCount int) orderedDocumentIndexState {
+	if runtimeCount <= 0 {
+		return nil
+	}
+	if a.states == nil {
+		return make(orderedDocumentIndexState, runtimeCount)
+	}
+	start := len(a.states)
+	end := start + runtimeCount
+	if end > cap(a.states) {
+		nextCap := cap(a.states) * 2
+		if nextCap < end {
+			nextCap = end
+		}
+		next := make([][][]byte, end, nextCap)
+		copy(next, a.states)
+		a.states = next
+	} else {
+		a.states = a.states[:end]
+	}
+	return a.states[start:end:end]
 }
 
 func estimateDocumentIndexEncodeArenaBytes(runtimeCount int) int {

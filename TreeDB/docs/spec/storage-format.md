@@ -65,6 +65,13 @@ Notes:
   `page.MetaPageBody.ActiveSlabTail` for binary compatibility.
 - Current TreeDB value storage uses persistent value-log segments and `ValuePtr` references.
 
+## 3.1 Collection Document Payloads
+
+Collection document payload encodings are defined separately in
+`TreeDB/docs/spec/collections-document-formats.md`. In particular,
+template-v1 collections store compact `TD1D` primary documents and persist the
+template ID map in the collection-local `<collection>/templates` ordered root.
+
 ## 4. Value Pointer Encoding (`page.ValuePtr`)
 
 Base struct:

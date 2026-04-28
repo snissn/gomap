@@ -5,6 +5,7 @@ go 1.23.0
 require (
 	github.com/akrylysov/pogreb v0.10.2
 	github.com/bmatsuo/lmdb-go v1.8.0
+	github.com/buger/jsonparser v1.1.2
 	github.com/cespare/xxhash/v2 v2.3.0
 	github.com/cockroachdb/pebble v1.1.5
 	github.com/dgraph-io/badger/v4 v4.8.0
@@ -19,6 +20,7 @@ require (
 	github.com/syndtr/goleveldb v1.0.1-0.20210819022825-2ae1ddf74ef7
 	github.com/tidwall/btree v1.8.1
 	github.com/tidwall/buntdb v1.3.2
+	github.com/tidwall/gjson v1.14.3
 	github.com/tidwall/match v1.1.1
 	github.com/tidwall/redcon v1.6.2
 	github.com/yuin/goldmark v1.7.13
@@ -68,7 +70,6 @@ require (
 	github.com/prometheus/common v0.42.0 // indirect
 	github.com/prometheus/procfs v0.9.0 // indirect
 	github.com/rogpeppe/go-internal v1.13.1 // indirect
-	github.com/tidwall/gjson v1.14.3 // indirect
 	github.com/tidwall/grect v0.1.4 // indirect
 	github.com/tidwall/pretty v1.2.0 // indirect
 	github.com/tidwall/rtred v0.1.2 // indirect

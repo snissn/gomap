@@ -20,7 +20,8 @@ type timedCollectionBatch struct {
 	docs [][]byte
 }
 
-func benchmarkDocumentBatches(start, total, targetBatchSize int, indexed bool) []timedCollectionBatch {
+func benchmarkDocumentBatches(tb testing.TB, start, total, targetBatchSize int, indexed bool) []timedCollectionBatch {
+	tb.Helper()
 	if total <= 0 {
 		return nil
 	}
@@ -30,7 +31,7 @@ func benchmarkDocumentBatches(start, total, targetBatchSize int, indexed bool) [
 		if remaining := total - generated; remaining < batchSize {
 			batchSize = remaining
 		}
-		ids, docs := benchmarkDocumentBatch(start+generated, batchSize, indexed)
+		ids, docs := benchmarkDocumentBatch(tb, start+generated, batchSize, indexed)
 		batches = append(batches, timedCollectionBatch{ids: ids, docs: docs})
 		generated += batchSize
 	}
@@ -90,7 +91,7 @@ func benchmarkTimedProfileIndexedInsertBatch(b *testing.B, checkpoint bool) {
 	targetBatchSize := benchmarkBatchSize(b)
 	requireSafeTimedProfileBatchPrebuild(b)
 	backend, collection := openBenchmarkCollection(b, "bench_timed_profile_insert_batch_secondary", secondaryIndexes()...)
-	batches := benchmarkDocumentBatches(0, b.N, targetBatchSize, true)
+	batches := benchmarkDocumentBatches(b, 0, b.N, targetBatchSize, true)
 	startKeyFallback, startPrefixFallback := benchmarkNativeProbeFallbackCounters(b, backend)
 	var insertElapsed time.Duration
 	var syncElapsed time.Duration

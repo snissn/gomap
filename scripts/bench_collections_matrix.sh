@@ -11,6 +11,7 @@ PATH_LABEL="${PATH_LABEL_ENV:-native-fastpath}"
 COUNT="${COUNT:-1}"
 BENCHTIME="${BENCHTIME:-1s}"
 BATCH_SIZE="${TREEDB_COLLECTION_BENCH_BATCH_SIZE:-8000}"
+DOCUMENT_FORMAT="${TREEDB_COLLECTION_DOCUMENT_FORMAT:-json}"
 CHUNK_SIZE="$(printf '%s' "${TREEDB_COLLECTION_CHUNK_SIZE:-}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
 CHUNK_SIZE_LABEL="${CHUNK_SIZE:-profile/default}"
 PAGER_SYNC_CONCURRENCY="$(printf '%s' "${TREEDB_COLLECTION_PAGER_SYNC_CONCURRENCY:-}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
@@ -18,7 +19,7 @@ if [[ "$PAGER_SYNC_CONCURRENCY" == "0" ]]; then
   PAGER_SYNC_CONCURRENCY=""
 fi
 PAGER_SYNC_CONCURRENCY_LABEL="${PAGER_SYNC_CONCURRENCY:-profile/default}"
-BENCH_REGEX="${BENCH_REGEX:-Benchmark(CollectionInsertBatchWithSecondaryIndexes|CollectionInsertBatchCheckpointWithSecondaryIndexes|CollectionOverheadIndexStateJSONExtraction|CollectionOverheadPlanIndexedPrecomputedState)$}"
+BENCH_REGEX="${BENCH_REGEX:-Benchmark(CollectionInsertBatchWithSecondaryIndexes|CollectionInsertBatchCheckpointWithSecondaryIndexes|CollectionOverheadIndexStateJSONExtraction|CollectionOverheadIndexStateTemplateV1Extraction|CollectionOverheadPlanIndexedTemplateV1|CollectionOverheadPlanIndexedPrecomputedState)$}"
 INCLUDE_SQLITE="${TREEDB_COLLECTION_INCLUDE_SQLITE:-false}"
 SQLITE_ENGINE="${TREEDB_COLLECTION_SQLITE_ENGINE:-sqlite_wal_normal}"
 SQLITE_CELL_LABEL="${TREEDB_COLLECTION_SQLITE_CELL:-$SQLITE_ENGINE}"
@@ -98,8 +99,8 @@ INDEX_TSV="$OUT_DIR/matrix_index.tsv"
 PROFILE_INDEX_TSV="$OUT_DIR/profile_index.tsv"
 SUMMARY_MD="$OUT_DIR/README.md"
 
-printf "cell\tengine\tdata_outer_leaves_in_vlog\tindex_outer_leaves_in_vlog\tpager_chunk_size\tpager_sync_concurrency\treport_md\treport_json\tcpu_profile\tmem_profile\n" >"$INDEX_TSV"
-printf "cell\tengine\tdata_outer_leaves_in_vlog\tindex_outer_leaves_in_vlog\tpager_chunk_size\tpager_sync_concurrency\tbenchmark\tcpu_profile_mode\treport_md\treport_json\tcpu_profile\tmem_profile\tcpu_top\tmem_top\n" >"$PROFILE_INDEX_TSV"
+printf "cell\tengine\tdocument_format\tdata_outer_leaves_in_vlog\tindex_outer_leaves_in_vlog\tpager_chunk_size\tpager_sync_concurrency\treport_md\treport_json\tcpu_profile\tmem_profile\n" >"$INDEX_TSV"
+printf "cell\tengine\tdocument_format\tdata_outer_leaves_in_vlog\tindex_outer_leaves_in_vlog\tpager_chunk_size\tpager_sync_concurrency\tbenchmark\tcpu_profile_mode\treport_md\treport_json\tcpu_profile\tmem_profile\tcpu_top\tmem_top\n" >"$PROFILE_INDEX_TSV"
 
 echo "running collections benchmark matrix into: $OUT_DIR"
 echo "matrix: $MATRIX"
@@ -108,6 +109,7 @@ echo "benchmark regex: $BENCH_REGEX"
 echo "benchmark count: $COUNT"
 echo "benchmark time: $BENCHTIME"
 echo "batch size: $BATCH_SIZE"
+echo "document format: $DOCUMENT_FORMAT"
 echo "pager chunk size: $CHUNK_SIZE_LABEL"
 echo "pager sync concurrency: $PAGER_SYNC_CONCURRENCY_LABEL"
 echo "profile bench captures: $PROFILE_BENCHES"
@@ -148,6 +150,7 @@ run_profile_benches() {
   local go_tags=${7:-}
   local cgo_enabled=${8:-}
   local pager_sync_concurrency_label=${9:-$PAGER_SYNC_CONCURRENCY_LABEL}
+  local document_format=${10:-$DOCUMENT_FORMAT}
   local pager_chunk_size_label="$CHUNK_SIZE_LABEL"
   if [[ "$pager_sync_concurrency_label" == "-" ]]; then
     pager_chunk_size_label="-"
@@ -168,6 +171,7 @@ run_profile_benches() {
       "TREEDB_COLLECTION_PATH_LABEL=$path_label"
       "TREEDB_COLLECTION_BENCH_ENGINE=$engine"
       "TREEDB_COLLECTION_BENCH_BATCH_SIZE=$BATCH_SIZE"
+      "TREEDB_COLLECTION_DOCUMENT_FORMAT=$document_format"
       "TREEDB_COLLECTION_CHUNK_SIZE=$CHUNK_SIZE"
       "TREEDB_COLLECTION_DATA_OUTER_LEAVES_IN_VLOG=$data_outer"
       "TREEDB_COLLECTION_INDEX_OUTER_LEAVES_IN_VLOG=$index_outer"
@@ -183,9 +187,10 @@ run_profile_benches() {
     echo "==> $cell profile $bench"
     env "${env_args[@]}" scripts/bench_collections_report.sh
 
-    printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
+    printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
       "$cell" \
       "$engine" \
+      "$document_format" \
       "$data_outer" \
       "$index_outer" \
       "$pager_chunk_size_label" \
@@ -225,6 +230,7 @@ run_timed_profile_benches() {
       "TREEDB_COLLECTION_PATH_LABEL=$path_label"
       "TREEDB_COLLECTION_BENCH_ENGINE=$engine"
       "TREEDB_COLLECTION_BENCH_BATCH_SIZE=$BATCH_SIZE"
+      "TREEDB_COLLECTION_DOCUMENT_FORMAT=$DOCUMENT_FORMAT"
       "TREEDB_COLLECTION_CHUNK_SIZE=$CHUNK_SIZE"
       "TREEDB_COLLECTION_DATA_OUTER_LEAVES_IN_VLOG=$data_outer"
       "TREEDB_COLLECTION_INDEX_OUTER_LEAVES_IN_VLOG=$index_outer"
@@ -234,9 +240,10 @@ run_timed_profile_benches() {
     echo "==> $cell timed CPU profile $bench"
     env "${env_args[@]}" scripts/bench_collections_report.sh
 
-    printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
+    printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
       "$cell" \
       "$engine" \
+      "$DOCUMENT_FORMAT" \
       "$data_outer" \
       "$index_outer" \
       "$CHUNK_SIZE_LABEL" \
@@ -264,15 +271,17 @@ for row in "${MATRIX_ROWS[@]}"; do
     TREEDB_COLLECTION_PATH_LABEL="$PATH_LABEL" \
     TREEDB_COLLECTION_BENCH_ENGINE="$engine" \
     TREEDB_COLLECTION_BENCH_BATCH_SIZE="$BATCH_SIZE" \
+    TREEDB_COLLECTION_DOCUMENT_FORMAT="$DOCUMENT_FORMAT" \
     TREEDB_COLLECTION_CHUNK_SIZE="$CHUNK_SIZE" \
     TREEDB_COLLECTION_DATA_OUTER_LEAVES_IN_VLOG="$data_outer" \
     TREEDB_COLLECTION_INDEX_OUTER_LEAVES_IN_VLOG="$index_outer" \
     TREEDB_COLLECTION_PAGER_SYNC_CONCURRENCY="$PAGER_SYNC_CONCURRENCY" \
     scripts/bench_collections_report.sh
 
-  printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
+  printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
     "$cell" \
     "$engine" \
+    "$DOCUMENT_FORMAT" \
     "$data_outer" \
     "$index_outer" \
     "$CHUNK_SIZE_LABEL" \
@@ -302,6 +311,7 @@ if is_true "$INCLUDE_SQLITE"; then
     TREEDB_COLLECTION_PATH_LABEL="sqlite" \
     TREEDB_COLLECTION_BENCH_ENGINE="$SQLITE_ENGINE" \
     TREEDB_COLLECTION_BENCH_BATCH_SIZE="$BATCH_SIZE" \
+    TREEDB_COLLECTION_DOCUMENT_FORMAT="json" \
     TREEDB_COLLECTION_CHUNK_SIZE="" \
     TREEDB_COLLECTION_DATA_OUTER_LEAVES_IN_VLOG="-" \
     TREEDB_COLLECTION_INDEX_OUTER_LEAVES_IN_VLOG="-" \
@@ -310,9 +320,10 @@ if is_true "$INCLUDE_SQLITE"; then
     CGO_ENABLED="$SQLITE_CGO_ENABLED" \
     scripts/bench_collections_report.sh
 
-  printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
+  printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
     "$cell" \
     "$SQLITE_ENGINE" \
+    "json" \
     "-" \
     "-" \
     "-" \
@@ -323,7 +334,7 @@ if is_true "$INCLUDE_SQLITE"; then
     "$cell_dir/collections_mem.pprof" >>"$INDEX_TSV"
 
   if is_true "$PROFILE_BENCHES"; then
-    run_profile_benches "$cell" "$SQLITE_ENGINE" "-" "-" "sqlite" "$SQLITE_PROFILE_BENCH_LIST" "sqlite_bench" "$SQLITE_CGO_ENABLED" "-"
+    run_profile_benches "$cell" "$SQLITE_ENGINE" "-" "-" "sqlite" "$SQLITE_PROFILE_BENCH_LIST" "sqlite_bench" "$SQLITE_CGO_ENABLED" "-" "json"
   fi
 fi
 
@@ -344,6 +355,7 @@ cat >"$SUMMARY_MD" <<EOF
 - benchmark count: \`$COUNT\`
 - benchmark time: \`$BENCHTIME\`
 - collection batch size: \`$BATCH_SIZE\`
+- document format: \`$DOCUMENT_FORMAT\`
 - pager chunk size: \`$CHUNK_SIZE_LABEL\`
 - pager sync concurrency: \`$PAGER_SYNC_CONCURRENCY_LABEL\`
 - focused profile captures: \`$PROFILE_BENCHES\`
@@ -362,15 +374,16 @@ cat >"$SUMMARY_MD" <<EOF
 
 ## Cells
 
-| Cell | Engine | Data outer leaves in vlog | Index outer leaves in vlog | Report |
-| --- | --- | --- | --- | --- |
+| Cell | Engine | Document format | Data outer leaves in vlog | Index outer leaves in vlog | Report |
+| --- | --- | --- | --- | --- | --- |
 EOF
 
 for row in "${MATRIX_ROWS[@]}"; do
   read -r cell engine data_outer index_outer <<<"$row"
-  printf "| \`%s\` | \`%s\` | \`%s\` | \`%s\` | [%s](%s) |\n" \
+  printf "| \`%s\` | \`%s\` | \`%s\` | \`%s\` | \`%s\` | [%s](%s) |\n" \
     "$cell" \
     "$engine" \
+    "$DOCUMENT_FORMAT" \
     "$data_outer" \
     "$index_outer" \
     "$cell" \
@@ -378,9 +391,10 @@ for row in "${MATRIX_ROWS[@]}"; do
 done
 
 if is_true "$INCLUDE_SQLITE"; then
-  printf "| \`%s\` | \`%s\` | \`%s\` | \`%s\` | [%s](%s) |\n" \
+  printf "| \`%s\` | \`%s\` | \`%s\` | \`%s\` | \`%s\` | [%s](%s) |\n" \
     "$SQLITE_CELL" \
     "$SQLITE_ENGINE" \
+    "json" \
     "-" \
     "-" \
     "$SQLITE_CELL" \
@@ -394,6 +408,8 @@ cat >>"$SUMMARY_MD" <<'EOF'
 The production matrix keeps collection data roots in value-log outer-leaf mode and varies index roots between inline outer leaves and value-log outer leaves. The `production_fast` and `production_wal_on_fast` engines keep the cached no-WAL and WAL-on fast paths visible without changing the collection storage policy.
 
 The focused default benchmark set keeps JSON extraction overhead, non-JSON indexed planning overhead, indexed batch apply, and indexed checkpoint apply in the same artifact so regressions can be separated into JSON cost, planner cost, root publish cost, and durability-boundary cost. Checkpointed rows report `insert_ns/doc` and `sync_ns/doc`, and the user-story TSV renders those as insert/sync milliseconds per batch.
+
+Set `TREEDB_COLLECTION_DOCUMENT_FORMAT=template-v1` to run the collection ingest rows with the template-v1 document format instead of JSON. Matrix reports include a `document_format` column, and the default diagnostic rows include both JSON extraction and template-v1 extraction/planning probes so JSON overhead stays quarantined from TreeDB publish/index maintenance.
 
 Set `TREEDB_COLLECTION_PAGER_SYNC_CONCURRENCY=N` to compare pager sync parallelism on checkpoint-heavy rows. Leaving it unset uses the selected TreeDB profile default.
 

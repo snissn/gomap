@@ -165,3 +165,26 @@ matrix:
 - `data_outer=true,index_outer=true` (fully compressed),
 - `data_outer=false,index_outer=false` (fast/control),
 - `data_outer=false,index_outer=true` (low-priority compatibility cell).
+
+## 12. Collections Document Formats
+
+Invariant:
+- Template-v1 collections persist their template ID map in the collection-local
+  `<collection>/templates` TreeDB ordered root.
+- Template-v1 primary documents store compact `TD1D` bytes and resolve template
+  IDs from the current batch or from the persisted template root.
+- Secondary indexes, deletes, reopens, and index backfills use the template root
+  instead of JSON parsing.
+
+Coverage:
+- `TreeDB/collections/template_v1_test.go`:
+  - `TestTemplateV1CollectionInsertBatchIndexesAndTemplateRoot`
+  - `TestTemplateV1CollectionReopenFindAndDelete`
+  - `TestTemplateV1EncoderReusesPersistedTemplateRoot`
+  - `TestTemplateV1EncoderResetEmitsTemplateAgain`
+  - `TestTemplateV1CreateIndexBackfillsFromTemplateRoot`
+  - `TestTemplateV1MultiKeyIndex`
+  - `TestTemplateV1NestedIndexExtraction`
+- `TreeDB/collections/overhead_bench_test.go`:
+  - `BenchmarkCollectionOverheadPlanIndexedTemplateV1`
+  - `BenchmarkCollectionOverheadIndexStateTemplateV1Extraction`
