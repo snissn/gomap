@@ -82,3 +82,13 @@ func TestRunFixtureRejectsNonEmptyDirectoryUnlessReset(t *testing.T) {
 		t.Fatal("expected non-empty fixture dir to fail without -reset")
 	}
 }
+
+func TestContainsDocumentID(t *testing.T) {
+	ids := [][]byte{[]byte("u-000000001"), []byte("u-000000064")}
+	if !containsDocumentID(ids, []byte("u-000000064")) {
+		t.Fatal("expected matching id")
+	}
+	if containsDocumentID(ids, []byte("u-000000002")) {
+		t.Fatal("unexpected non-matching id")
+	}
+}

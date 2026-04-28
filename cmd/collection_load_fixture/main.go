@@ -818,12 +818,21 @@ func verifyReopen(cfg config) (int, error) {
 			if err != nil {
 				return 0, fmt.Errorf("reopen verify city index %s: %w", city, err)
 			}
-			if len(ids) == 0 {
-				return 0, fmt.Errorf("reopen verify city index %s returned no rows", city)
+			if !containsDocumentID(ids, id) {
+				return 0, fmt.Errorf("reopen verify city index %s did not include %s", city, id)
 			}
 		}
 	}
 	return len(samples), nil
+}
+
+func containsDocumentID(ids [][]byte, want []byte) bool {
+	for _, id := range ids {
+		if bytes.Equal(id, want) {
+			return true
+		}
+	}
+	return false
 }
 
 func sampleDocumentNumbers(docs, sampleCount int) []int {
