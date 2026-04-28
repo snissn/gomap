@@ -366,6 +366,8 @@ cat >"$OUT_DIR/README.md" <<EOF
 - profile index: \`$PROFILE_INDEX_TSV\`
 - unified index: \`$UNIFIED_INDEX_TSV\`
 
+Latency columns in the generated reports include adjacent throughput columns, for example \`ns/op\` with \`ops/sec\` and \`insert ns/doc\` with \`insert docs/sec\`.
+
 ## Cells
 
 - JSON collection shapes: \`$OUT_DIR/collections_json_shapes/collections_report.md\`

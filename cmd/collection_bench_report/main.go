@@ -99,6 +99,12 @@ type report struct {
 	Sections             []reportSection `json:"sections"`
 }
 
+type metricDisplayColumn struct {
+	Label      string
+	Source     string
+	Throughput bool
+}
+
 var benchmarkSpecs = []benchmarkSpec{
 	{Name: "BenchmarkCollectionInsertProvidedID", Section: "Document Path", Description: "Insert documents with caller-provided IDs into the primary collection root."},
 	{Name: "BenchmarkCollectionInsertBatchProvidedID", Section: "Batch Ingest Path", Description: "Insert documents with caller-provided IDs through the collection batch API; ops/sec is documents/sec."},
@@ -586,7 +592,7 @@ func renderMarkdown(rep *report) string {
 	if rep.RawJSONPath != "" {
 		sb.WriteString(fmt.Sprintf("- raw benchmark json: `%s`\n", rep.RawJSONPath))
 	}
-	sb.WriteString("- ops/sec is derived from the mean `ns/op` across captured benchmark runs\n\n")
+	sb.WriteString("- throughput columns are derived from adjacent latency columns as `1e9/ns`\n\n")
 
 	if rep.Status == "unavailable" {
 		sb.WriteString("## Availability\n\n")
@@ -596,13 +602,13 @@ func renderMarkdown(rep *report) string {
 	}
 
 	for _, section := range rep.Sections {
-		metricColumns := benchmarkMetricColumns(section.Benchmarks)
+		metricColumns := benchmarkMetricDisplayColumns(benchmarkMetricColumns(section.Benchmarks))
 		sb.WriteString(fmt.Sprintf("## %s\n\n", section.Title))
-		sb.WriteString("| Benchmark | Description | Samples | Ops/sec | ns/op | B/op | allocs/op")
+		sb.WriteString("| Benchmark | Description | Samples | ns/op | Ops/sec | B/op | allocs/op")
 		for _, metric := range metricColumns {
 			sb.WriteString(" | ")
 			sb.WriteString("`")
-			sb.WriteString(metric)
+			sb.WriteString(metric.Label)
 			sb.WriteString("`")
 		}
 		sb.WriteString(" |\n")
@@ -619,16 +625,16 @@ func renderMarkdown(rep *report) string {
 			sb.WriteString(" | ")
 			sb.WriteString(strconv.Itoa(benchmark.Samples))
 			sb.WriteString(" | ")
-			sb.WriteString(formatFloat(benchmark.OpsPerSec))
-			sb.WriteString(" | ")
 			sb.WriteString(formatFloat(benchmark.MeanNsPerOp))
+			sb.WriteString(" | ")
+			sb.WriteString(formatFloat(benchmark.OpsPerSec))
 			sb.WriteString(" | ")
 			sb.WriteString(formatFloat(benchmark.MeanBytesPerOp))
 			sb.WriteString(" | ")
 			sb.WriteString(formatFloat(benchmark.MeanAllocsPerOp))
 			for _, metric := range metricColumns {
 				sb.WriteString(" | ")
-				value, ok := benchmark.MeanMetrics[metric]
+				value, ok := metricDisplayValue(benchmark.MeanMetrics, metric)
 				if ok {
 					sb.WriteString(formatFloat(value))
 				} else {
@@ -679,6 +685,49 @@ func benchmarkMetricColumns(benchmarks []benchmarkAggregate) []string {
 	}
 	sort.Strings(rest)
 	return append(out, rest...)
+}
+
+func benchmarkMetricDisplayColumns(metrics []string) []metricDisplayColumn {
+	out := make([]metricDisplayColumn, 0, len(metrics))
+	for _, metric := range metrics {
+		out = append(out, metricDisplayColumn{
+			Label:  metric,
+			Source: metric,
+		})
+		if throughputLabel, ok := throughputMetricLabel(metric); ok {
+			out = append(out, metricDisplayColumn{
+				Label:      throughputLabel,
+				Source:     metric,
+				Throughput: true,
+			})
+		}
+	}
+	return out
+}
+
+func throughputMetricLabel(metric string) (string, bool) {
+	switch metric {
+	case "insert_ns/doc":
+		return "insert_docs/sec", true
+	case "sync_ns/doc":
+		return "sync_docs/sec", true
+	default:
+		return "", false
+	}
+}
+
+func metricDisplayValue(metrics map[string]float64, column metricDisplayColumn) (float64, bool) {
+	value, ok := metrics[column.Source]
+	if !ok {
+		return 0, false
+	}
+	if !column.Throughput {
+		return value, true
+	}
+	if value <= 0 {
+		return 0, false
+	}
+	return 1e9 / value, true
 }
 
 func escapeTableCell(value string) string {
