@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
@@ -13,6 +14,7 @@ import (
 const (
 	HeaderLen               = 16
 	DefaultMaxMessageLength = 48_000_000
+	maxInt32                = int64(1<<31 - 1)
 )
 
 type OpCode int32
@@ -69,15 +71,22 @@ func AppendHeader(dst []byte, h Header) []byte {
 	return dst
 }
 
-func AppendMessage(dst []byte, requestID, responseTo int32, opCode OpCode, body []byte) []byte {
+func AppendMessage(dst []byte, requestID, responseTo int32, opCode OpCode, body []byte) ([]byte, error) {
+	messageLength := HeaderLen + len(body)
+	if int64(messageLength) > maxInt32 {
+		return nil, fmt.Errorf("%w: length=%d exceeds int32 max", ErrMessageTooLarge, messageLength)
+	}
+	if messageLength > DefaultMaxMessageLength {
+		return nil, fmt.Errorf("%w: length=%d max=%d", ErrMessageTooLarge, messageLength, DefaultMaxMessageLength)
+	}
 	h := Header{
-		MessageLength: int32(HeaderLen + len(body)),
+		MessageLength: int32(messageLength),
 		RequestID:     requestID,
 		ResponseTo:    responseTo,
 		OpCode:        opCode,
 	}
 	dst = AppendHeader(dst, h)
-	return append(dst, body...)
+	return append(dst, body...), nil
 }
 
 func ReadMessage(r io.Reader, maxMessageLength int32) (Header, []byte, error) {
@@ -167,6 +176,13 @@ func readCString(src []byte) (string, []byte, error) {
 		return "", nil, fmt.Errorf("%w: missing cstring terminator", ErrMalformed)
 	}
 	return string(src[:idx]), src[idx+1:], nil
+}
+
+func validateCString(value string) error {
+	if strings.ContainsRune(value, 0) {
+		return fmt.Errorf("%w: cstring contains NUL", ErrMalformed)
+	}
+	return nil
 }
 
 func appendCString(dst []byte, value string) []byte {

@@ -19,7 +19,10 @@ func mustDocument(tb testing.TB, doc bson.D) Document {
 
 func TestReadMessageRoundTrip(t *testing.T) {
 	body := []byte{1, 2, 3, 4}
-	wireBytes := AppendMessage(nil, 42, 7, OpMsg, body)
+	wireBytes, err := AppendMessage(nil, 42, 7, OpMsg, body)
+	if err != nil {
+		t.Fatalf("AppendMessage: %v", err)
+	}
 
 	h, gotBody, err := ReadMessage(bytes.NewReader(wireBytes), 0)
 	if err != nil {
@@ -37,10 +40,20 @@ func TestReadMessageRoundTrip(t *testing.T) {
 }
 
 func TestReadMessageRejectsOversized(t *testing.T) {
-	wireBytes := AppendMessage(nil, 1, 0, OpMsg, []byte{1, 2, 3, 4})
-	_, _, err := ReadMessage(bytes.NewReader(wireBytes), HeaderLen+2)
+	wireBytes, err := AppendMessage(nil, 1, 0, OpMsg, []byte{1, 2, 3, 4})
+	if err != nil {
+		t.Fatalf("AppendMessage: %v", err)
+	}
+	_, _, err = ReadMessage(bytes.NewReader(wireBytes), HeaderLen+2)
 	if !errors.Is(err, ErrMessageTooLarge) {
 		t.Fatalf("ReadMessage err=%v want ErrMessageTooLarge", err)
+	}
+}
+
+func TestAppendMessageRejectsLargeBody(t *testing.T) {
+	_, err := AppendMessage(nil, 1, 0, OpMsg, make([]byte, DefaultMaxMessageLength))
+	if !errors.Is(err, ErrMessageTooLarge) {
+		t.Fatalf("AppendMessage err=%v want ErrMessageTooLarge", err)
 	}
 }
 
@@ -184,6 +197,18 @@ func TestParseMsgRejectsChecksumPresent(t *testing.T) {
 	}
 }
 
+func TestParseMsgRejectsMoreToComeUntilSupported(t *testing.T) {
+	commandDoc := mustDocument(t, bson.D{{Key: "ping", Value: int32(1)}})
+	body := appendInt32(nil, int32(MsgFlagMoreToCome))
+	body = append(body, MsgSectionBody)
+	body = append(body, commandDoc...)
+
+	_, err := ParseMsg(body)
+	if !errors.Is(err, ErrUnsupported) {
+		t.Fatalf("ParseMsg err=%v want ErrUnsupported", err)
+	}
+}
+
 func TestParseMsgRejectsUnknownRequiredFlag(t *testing.T) {
 	commandDoc := mustDocument(t, bson.D{{Key: "ping", Value: int32(1)}})
 	body := appendInt32(nil, 1<<2)
@@ -193,5 +218,13 @@ func TestParseMsgRejectsUnknownRequiredFlag(t *testing.T) {
 	_, err := ParseMsg(body)
 	if !errors.Is(err, ErrMalformed) {
 		t.Fatalf("ParseMsg err=%v want ErrMalformed", err)
+	}
+}
+
+func TestAppendQueryRejectsCStringNUL(t *testing.T) {
+	queryDoc := mustDocument(t, bson.D{{Key: "isMaster", Value: int32(1)}})
+	_, err := AppendQueryMessage(nil, 1, 0, 0, "admin\x00.$cmd", 0, -1, queryDoc, nil)
+	if !errors.Is(err, ErrMalformed) {
+		t.Fatalf("AppendQueryMessage err=%v want ErrMalformed", err)
 	}
 }

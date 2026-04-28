@@ -53,6 +53,9 @@ func ParseReply(body []byte) (Reply, error) {
 }
 
 func AppendReplyBody(dst []byte, responseFlags int32, cursorID int64, startingFrom int32, docs ...Document) ([]byte, error) {
+	if int64(len(docs)) > maxInt32 {
+		return nil, fmt.Errorf("%w: OP_REPLY document count exceeds int32 max", ErrMessageTooLarge)
+	}
 	for _, doc := range docs {
 		if err := ValidateDocument(doc); err != nil {
 			return nil, err
@@ -73,5 +76,5 @@ func AppendReplyMessage(dst []byte, requestID, responseTo int32, responseFlags i
 	if err != nil {
 		return nil, err
 	}
-	return AppendMessage(dst, requestID, responseTo, OpReply, body), nil
+	return AppendMessage(dst, requestID, responseTo, OpReply, body)
 }

@@ -65,7 +65,7 @@ func AppendMsgMessage(dst []byte, requestID, responseTo int32, flags MsgFlag, do
 	if err != nil {
 		return nil, err
 	}
-	return AppendMessage(dst, requestID, responseTo, OpMsg, body), nil
+	return AppendMessage(dst, requestID, responseTo, OpMsg, body)
 }
 
 func validateMsgFlags(flags MsgFlag) error {
@@ -75,6 +75,9 @@ func validateMsgFlags(flags MsgFlag) error {
 	}
 	if flags&MsgFlagChecksumPresent != 0 {
 		return fmt.Errorf("%w: OP_MSG checksum", ErrUnsupported)
+	}
+	if flags&MsgFlagMoreToCome != 0 {
+		return fmt.Errorf("%w: OP_MSG moreToCome", ErrUnsupported)
 	}
 	return nil
 }

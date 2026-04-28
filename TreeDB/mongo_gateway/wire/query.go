@@ -57,6 +57,9 @@ func ParseQuery(body []byte) (Query, error) {
 }
 
 func AppendQueryBody(dst []byte, flags int32, fullCollectionName string, numberToSkip, numberToReturn int32, query Document, returnFieldsSelector Document) ([]byte, error) {
+	if err := validateCString(fullCollectionName); err != nil {
+		return nil, err
+	}
 	if err := ValidateDocument(query); err != nil {
 		return nil, err
 	}
@@ -81,5 +84,5 @@ func AppendQueryMessage(dst []byte, requestID, responseTo int32, flags int32, fu
 	if err != nil {
 		return nil, err
 	}
-	return AppendMessage(dst, requestID, responseTo, OpQuery, body), nil
+	return AppendMessage(dst, requestID, responseTo, OpQuery, body)
 }
