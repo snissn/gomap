@@ -21,13 +21,13 @@ The default run captures:
   in the value log.
 - indexed insert phase metrics such as prepare, index-state extraction,
   preflight, run build, secondary-run shape, and publish time.
-- optional TreeDB value-log rewrite plus follow-up GC disk size metrics.
 - per-cell `collections_report.{json,md,html}`.
 - per-cell `collections_cpu.pprof`, `collections_mem.pprof`, and pprof top text.
 - top-level `collections_matrix_summary.{tsv,md,html}`.
 - top-level `collections_user_story_summary.tsv`.
 - top-level `collections_disk_usage_summary.tsv`.
-- top-level `collections_maintenance_summary.tsv`.
+- top-level `collections_maintenance_summary.tsv` when maintenance metrics are
+  enabled.
 
 ## Optional Baselines
 
@@ -56,6 +56,21 @@ scripts/bench_collections_harness.sh \
 The unified anchors run TreeDB `fast` and `wal_on_fast` with `-profile-dir`, so
 each anchor emits `benchprof_results.{json,md}` plus `insights.{json,md,html}`
 and per-test pprof artifacts.
+
+Add maintenance compaction metrics:
+
+```bash
+TREEDB_COLLECTION_HARNESS_REPORT_VLOG_REWRITE=true \
+TREEDB_COLLECTION_HARNESS_REPORT_SQLITE_VACUUM=true \
+scripts/bench_collections_harness.sh \
+  --out /tmp/gomap_collections_harness \
+  --include-sqlite
+```
+
+TreeDB maintenance rows run value-log rewrite, checkpoint, then value-log GC and
+checkpoint after the timed benchmark iteration. SQLite maintenance rows run
+`VACUUM` and a WAL checkpoint. These metrics are opt-in because they add
+substantial untimed I/O and can perturb cache state between cells.
 
 ## Focused Profiles
 

@@ -55,6 +55,8 @@ state writes, and publish/root work rather than raw B-tree throughput.
 
 ```sh
 OUT="/tmp/gomap_collections_1075_20260427_204054"
+TREEDB_COLLECTION_HARNESS_REPORT_VLOG_REWRITE=true \
+TREEDB_COLLECTION_HARNESS_REPORT_SQLITE_VACUUM=true \
 scripts/bench_collections_harness.sh \
   --out "$OUT" \
   --count 3 \
@@ -241,4 +243,3 @@ SQLite should remain a sanity baseline, not the target ceiling. TreeDB is alread
 faster for the indexed insert shapes, faster for these primary-read shapes, much
 faster for nonunique secondary lookups, and smaller on disk with the index-vlog
 layout.
-
