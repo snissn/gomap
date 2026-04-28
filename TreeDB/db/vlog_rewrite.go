@@ -2651,7 +2651,7 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 			LeafPrefixCompression: opts.LeafPrefixCompression,
 			LeafColumnar:          opts.IndexColumnarLeaves,
 			PackedValuePtr:        opts.IndexPackedValuePtr,
-			InternalBaseDelta:     opts.IndexInternalBaseDelta,
+			InternalBaseDelta:     opts.IndexInternalBaseDelta && !useLeafLog,
 		}
 		if useLeafLog {
 			buildOpts.LeafPageLog = writer
