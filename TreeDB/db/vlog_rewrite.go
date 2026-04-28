@@ -2804,42 +2804,12 @@ func valueLogRewriteCollectionRoots(oldPager *pager.Pager, reader tree.SlabReade
 		return nil, errors.New("vlog-rewrite: missing collection root builder")
 	}
 	descriptors, err := vacuumCollectCollectionRootDescriptors(oldPager, reader, systemRootID)
-	if err != nil || len(descriptors) == 0 {
-		return nil, err
+	if err != nil {
+		return nil, fmt.Errorf("vlog-rewrite: collect collection root descriptors: %w", err)
 	}
-
-	replacements := make([]vacuumCollectionRootReplacement, 0, len(descriptors))
-	rootRemap := make(map[uint64]uint64, len(descriptors))
-	for _, descriptor := range descriptors {
-		oldRoot := descriptor.rootID
-		newRoot := oldRoot
-		if oldRoot != 0 {
-			if existing, ok := rootRemap[oldRoot]; ok {
-				newRoot = existing
-			} else {
-				newRoot, err = buildTree(oldRoot)
-				if err != nil {
-					return nil, fmt.Errorf("vlog-rewrite: rewrite collection root %q: %w", string(descriptor.key), err)
-				}
-				rootRemap[oldRoot] = newRoot
-			}
-		}
-		if newRoot != oldRoot {
-			encoded := make([]byte, 8)
-			binary.BigEndian.PutUint64(encoded, newRoot)
-			replacements = append(replacements, vacuumCollectionRootReplacement{
-				key:   descriptor.key,
-				value: encoded,
-			})
-		}
-	}
-	if len(replacements) == 0 {
-		return nil, nil
-	}
-	sort.Slice(replacements, func(i, j int) bool {
-		return bytes.Compare(replacements[i].key, replacements[j].key) < 0
-	})
-	return replacements, nil
+	return vacuumRewriteCollectionRootDescriptors(descriptors, func(descriptor vacuumCollectionRootDescriptor) (uint64, error) {
+		return buildTree(descriptor.rootID)
+	}, "vlog-rewrite: rewrite collection root")
 }
 
 func valueLogRewriteCollectionRootUsesLeafLog(oldPager *pager.Pager, rootID uint64) (bool, error) {
