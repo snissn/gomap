@@ -94,8 +94,8 @@ type CollectionInsertStats struct {
 	Runs                 int
 	PrepareDocuments     time.Duration
 	IndexStateExtraction time.Duration
-	// DuplicateDocumentPreflight includes batch ID cloning/order setup,
-	// duplicate-ID detection, and existing-document conflict checks.
+	// DuplicateDocumentPreflight includes duplicate-ID detection and
+	// existing-document conflict checks.
 	DuplicateDocumentPreflight time.Duration
 	UniqueIndexPreflight       time.Duration
 	TemplateRunBuild           time.Duration
@@ -953,7 +953,6 @@ func (c *Collection) insertBatchNoIndex(
 		Documents: len(documents),
 		Indexes:   len(c.meta.Indexes),
 	}
-	phaseStart := time.Now()
 	resultIDs, err := cloneBatchDocumentIDs(ids)
 	if err != nil {
 		_ = snap.Close()
@@ -970,6 +969,7 @@ func (c *Collection) insertBatchNoIndex(
 	sort.Slice(entries, func(i, j int) bool {
 		return bytes.Compare(entries[i].id, entries[j].id) < 0
 	})
+	phaseStart := time.Now()
 	for i := 1; i < len(entries); i++ {
 		if bytes.Equal(entries[i-1].id, entries[i].id) {
 			_ = snap.Close()

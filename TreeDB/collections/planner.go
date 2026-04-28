@@ -180,7 +180,6 @@ func (p insertBatchPlanner) planInsertBatchWithPreflight(ids, documents [][]byte
 		p.options.templateResolver = templateResolver
 	}
 
-	phaseStart = time.Now()
 	resultIDs, err := cloneBatchDocumentIDs(ids)
 	if err != nil {
 		return nil, err
@@ -195,6 +194,7 @@ func (p insertBatchPlanner) planInsertBatchWithPreflight(ids, documents [][]byte
 	}
 
 	primaryOrder := sortedItemOrderByKey(items, func(item *insertBatchItem) []byte { return item.id })
+	phaseStart = time.Now()
 	if err := rejectDuplicateDocumentIDs(items, primaryOrder); err != nil {
 		return nil, err
 	}
