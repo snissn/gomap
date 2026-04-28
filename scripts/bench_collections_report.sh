@@ -211,7 +211,7 @@ $ARTIFACT_LINES
 - template-v1 document-format override: \`TREEDB_COLLECTION_DOCUMENT_FORMAT=template-v1 scripts/bench_collections_report.sh\`
 - oracle-path override: \`TREEDB_COLLECTION_PATH_LABEL=oracle scripts/bench_collections_report.sh\`
 - production matrix runner: \`TREEDB_COLLECTION_PATH_LABEL=native-fastpath scripts/bench_collections_matrix.sh\`
-- sqlite comparison override: \`CGO_ENABLED=1 TREEDB_COLLECTION_PATH_LABEL=sqlite TREEDB_COLLECTION_BENCH_ENGINE=sqlite_wal_normal GO_TEST_TAGS=sqlite_bench BENCH_REGEX='BenchmarkSQLite(InsertBatchWithSecondaryIndexes|InsertBatchCheckpointWithSecondaryIndexes)$' scripts/bench_collections_report.sh\`
+- sqlite comparison override: \`CGO_ENABLED=1 TREEDB_COLLECTION_PATH_LABEL=sqlite TREEDB_COLLECTION_BENCH_ENGINE=sqlite_wal_normal GO_TEST_TAGS=sqlite_bench BENCH_REGEX='BenchmarkSQLite(InsertBatchWithSecondaryIndexes|InsertBatchCheckpointWithSecondaryIndexes|NativeColumnsInsertBatchWithSecondaryIndexes|NativeColumnsInsertBatchCheckpointWithSecondaryIndexes)$' scripts/bench_collections_report.sh\`
 - timed CPU profile override: \`TREEDB_COLLECTION_TIMED_CPU_PROFILE=true BENCH_REGEX='^BenchmarkCollectionTimedProfileInsertBatchWithSecondaryIndexes$' BENCHTIME=240000x COUNT=1 scripts/bench_collections_report.sh\`
 
 ## Profile Caveat

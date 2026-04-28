@@ -85,6 +85,8 @@ var benchmarkOrder = []string{
 	"BenchmarkCollectionTimedProfileInsertBatchCheckpointWithSecondaryIndexes",
 	"BenchmarkSQLiteInsertBatchWithSecondaryIndexes",
 	"BenchmarkSQLiteInsertBatchCheckpointWithSecondaryIndexes",
+	"BenchmarkSQLiteNativeColumnsInsertBatchWithSecondaryIndexes",
+	"BenchmarkSQLiteNativeColumnsInsertBatchCheckpointWithSecondaryIndexes",
 }
 
 func main() {
@@ -227,29 +229,42 @@ func buildSummaryRows(rows []matrixRow) ([]summaryRow, error) {
 				row.DocumentFormat = "json"
 			}
 		}
-		for _, name := range expectedBenchmarkNames(row) {
+		for _, name := range requiredBenchmarkNames(row) {
 			benchmark, ok := report.Benchmarks[name]
 			if !ok {
 				return nil, fmt.Errorf("report %s missing benchmark %q for matrix cell %q", row.ReportJSONPath, name, row.Cell)
 			}
-			out = append(out, summaryRow{
-				matrixRow:           row,
-				Benchmark:           name,
-				NsPerOp:             benchmark.MeanNsPerOp,
-				BytesPerOp:          benchmark.MeanBytesPerOp,
-				AllocsPerOp:         benchmark.MeanAllocsPerOp,
-				CollectionBatchSize: report.CollectionBatchSize,
-				InsertNsPerDoc:      metricPtr(benchmark.MeanMetrics, "insert_ns/doc"),
-				SyncNsPerDoc:        metricPtr(benchmark.MeanMetrics, "sync_ns/doc"),
-				KeyFallbacks:        metricPtr(benchmark.MeanMetrics, "per_item_key_probe_fallback_count"),
-				PrefixFallbacks:     metricPtr(benchmark.MeanMetrics, "per_item_prefix_probe_fallback_count"),
-			})
+			out = append(out, buildSummaryRow(row, report.CollectionBatchSize, name, benchmark))
+		}
+		for _, name := range optionalBenchmarkNames(row) {
+			benchmark, ok := report.Benchmarks[name]
+			if !ok {
+				continue
+			}
+			out = append(out, buildSummaryRow(row, report.CollectionBatchSize, name, benchmark))
 		}
 	}
 	return out, nil
 }
 
-func expectedBenchmarkNames(row matrixRow) []string {
+func buildSummaryRow(row matrixRow, collectionBatchSize int, name string, benchmark benchmarkAggregate) summaryRow {
+	benchmarkRow := row
+	benchmarkRow.DocumentFormat = documentFormatForBenchmark(benchmarkRow.DocumentFormat, name)
+	return summaryRow{
+		matrixRow:           benchmarkRow,
+		Benchmark:           name,
+		NsPerOp:             benchmark.MeanNsPerOp,
+		BytesPerOp:          benchmark.MeanBytesPerOp,
+		AllocsPerOp:         benchmark.MeanAllocsPerOp,
+		CollectionBatchSize: collectionBatchSize,
+		InsertNsPerDoc:      metricPtr(benchmark.MeanMetrics, "insert_ns/doc"),
+		SyncNsPerDoc:        metricPtr(benchmark.MeanMetrics, "sync_ns/doc"),
+		KeyFallbacks:        metricPtr(benchmark.MeanMetrics, "per_item_key_probe_fallback_count"),
+		PrefixFallbacks:     metricPtr(benchmark.MeanMetrics, "per_item_prefix_probe_fallback_count"),
+	}
+}
+
+func requiredBenchmarkNames(row matrixRow) []string {
 	if isSQLiteMatrixRow(row) {
 		return []string{
 			"BenchmarkSQLiteInsertBatchWithSecondaryIndexes",
@@ -266,10 +281,30 @@ func expectedBenchmarkNames(row matrixRow) []string {
 	}
 }
 
+func optionalBenchmarkNames(row matrixRow) []string {
+	if isSQLiteMatrixRow(row) {
+		return []string{
+			"BenchmarkSQLiteNativeColumnsInsertBatchWithSecondaryIndexes",
+			"BenchmarkSQLiteNativeColumnsInsertBatchCheckpointWithSecondaryIndexes",
+		}
+	}
+	return nil
+}
+
 func isSQLiteMatrixRow(row matrixRow) bool {
 	// The matrix runner normalizes SQLite cells to the sqlite_* namespace even
 	// when TREEDB_COLLECTION_SQLITE_ENGINE uses a custom engine label.
 	return row.Cell == "sqlite" || strings.HasPrefix(row.Cell, "sqlite_") || strings.HasPrefix(row.Engine, "sqlite")
+}
+
+func documentFormatForBenchmark(format, benchmark string) string {
+	if strings.HasPrefix(benchmark, "BenchmarkSQLiteNativeColumns") {
+		return "native-columns"
+	}
+	if strings.TrimSpace(format) == "" {
+		return "json"
+	}
+	return format
 }
 
 func loadBenchmarkReport(path string) (loadedReport, error) {
@@ -557,9 +592,15 @@ func buildUserStoryRows(rows []summaryRow) []userStoryRow {
 
 func userStoryLabel(benchmark string) (string, bool) {
 	switch benchmark {
-	case "BenchmarkCollectionInsertBatchWithSecondaryIndexes", "BenchmarkCollectionTimedProfileInsertBatchWithSecondaryIndexes", "BenchmarkSQLiteInsertBatchWithSecondaryIndexes":
+	case "BenchmarkCollectionInsertBatchWithSecondaryIndexes",
+		"BenchmarkCollectionTimedProfileInsertBatchWithSecondaryIndexes",
+		"BenchmarkSQLiteInsertBatchWithSecondaryIndexes",
+		"BenchmarkSQLiteNativeColumnsInsertBatchWithSecondaryIndexes":
 		return "bulk indexed insert", true
-	case "BenchmarkCollectionInsertBatchCheckpointWithSecondaryIndexes", "BenchmarkCollectionTimedProfileInsertBatchCheckpointWithSecondaryIndexes", "BenchmarkSQLiteInsertBatchCheckpointWithSecondaryIndexes":
+	case "BenchmarkCollectionInsertBatchCheckpointWithSecondaryIndexes",
+		"BenchmarkCollectionTimedProfileInsertBatchCheckpointWithSecondaryIndexes",
+		"BenchmarkSQLiteInsertBatchCheckpointWithSecondaryIndexes",
+		"BenchmarkSQLiteNativeColumnsInsertBatchCheckpointWithSecondaryIndexes":
 		return "checkpointed indexed insert", true
 	default:
 		return "", false

@@ -71,6 +71,7 @@ func TestBuildReportAndRenderMarkdown(t *testing.T) {
 		`{"Action":"output","Output":"BenchmarkCollectionInsertBatchWithSecondaryIndexes-12\t700\t3200 ns/op\t256 B/op\t7 allocs/op\t8000 target_docs/batch\t0 per_item_key_probe_fallback_count\t0 per_item_prefix_probe_fallback_count\n"}`,
 		`{"Action":"output","Output":"BenchmarkCollectionInsertBatchCheckpointWithSecondaryIndexes-12\t500\t8000 ns/op\t260 B/op\t8 allocs/op\t8000 target_docs/checkpoint\t2500 insert_ns/doc\t5500 sync_ns/doc\t0 per_item_key_probe_fallback_count\t0 per_item_prefix_probe_fallback_count\n"}`,
 		`{"Action":"output","Output":"BenchmarkSQLiteInsertBatchWithSecondaryIndexes-12\t650\t3500 ns/op\t300 B/op\t9 allocs/op\t8000 target_docs/batch\n"}`,
+		`{"Action":"output","Output":"BenchmarkSQLiteNativeColumnsInsertBatchWithSecondaryIndexes-12\t700\t3000 ns/op\t280 B/op\t8 allocs/op\t8000 target_docs/batch\n"}`,
 		`{"Action":"output","Output":"BenchmarkCollectionOverheadIndexStateTemplateV1Extraction-12\t1200\t250 ns/op\t144 B/op\t3 allocs/op\n"}`,
 		`{"Action":"output","Output":"BenchmarkSecondaryLookupNonUnique-12\t5000\t450 ns/op\t96 B/op\t2 allocs/op\n"}`,
 		`{"Action":"output","Output":"BenchmarkCollectionDeleteWithSecondaryIndexes-12\t"}`,
@@ -82,7 +83,7 @@ func TestBuildReportAndRenderMarkdown(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parseBenchmarkSamples: %v", err)
 	}
-	if got, want := len(samples), 8; got != want {
+	if got, want := len(samples), 9; got != want {
 		t.Fatalf("len(samples)=%d want %d", got, want)
 	}
 
@@ -170,6 +171,9 @@ func TestBuildReportAndRenderMarkdown(t *testing.T) {
 	}
 	if !strings.Contains(md, "`BenchmarkSQLiteInsertBatchWithSecondaryIndexes`") {
 		t.Fatalf("markdown missing sqlite benchmark row:\n%s", md)
+	}
+	if !strings.Contains(md, "`BenchmarkSQLiteNativeColumnsInsertBatchWithSecondaryIndexes`") {
+		t.Fatalf("markdown missing sqlite native-columns benchmark row:\n%s", md)
 	}
 	if !strings.Contains(md, "`BenchmarkCollectionOverheadIndexStateTemplateV1Extraction`") {
 		t.Fatalf("markdown missing template-v1 overhead benchmark row:\n%s", md)
