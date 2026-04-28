@@ -663,7 +663,21 @@ func benchmarkMetricColumns(benchmarks []benchmarkAggregate) []string {
 		"target_docs/checkpoint",
 		"insert_ns/doc",
 		"sync_ns/doc",
+		"prepare_ns/doc",
+		"index_state_extract_ns/doc",
+		"duplicate_preflight_ns/doc",
+		"unique_preflight_ns/doc",
+		"template_run_ns/doc",
+		"primary_run_ns/doc",
+		"index_state_run_ns/doc",
+		"secondary_runs_ns/doc",
+		"publish_ns/doc",
 		"indexes/doc",
+		"roots/batch",
+		"secondary_entries/doc",
+		"secondary_key_bytes/doc",
+		"secondary_sorted_runs/batch",
+		"secondary_unsorted_runs/batch",
 		"stored_docs",
 		"disk_total_bytes",
 		"disk_bytes/doc",
@@ -719,7 +733,14 @@ func throughputMetricLabel(metric string) (string, bool) {
 	case "sync_ns/doc":
 		return "sync_docs/sec", true
 	default:
-		return "", false
+		switch {
+		case strings.HasSuffix(metric, "_ns/doc"):
+			return strings.TrimSuffix(metric, "_ns/doc") + "_docs/sec", true
+		case strings.HasSuffix(metric, "_ns/op"):
+			return strings.TrimSuffix(metric, "_ns/op") + "_ops/sec", true
+		default:
+			return "", false
+		}
 	}
 }
 

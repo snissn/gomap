@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 	"unicode/utf8"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -81,6 +82,42 @@ type Collection struct {
 	catalogMu         sync.RWMutex
 	catalogSystemRoot uint64
 	catalog           *collectionCatalog
+	insertStatsMu     sync.RWMutex
+	lastInsertStats   CollectionInsertStats
+}
+
+// CollectionInsertStats captures phase timings and counters from the most
+// recent successful InsertBatch call on a Collection handle.
+type CollectionInsertStats struct {
+	Documents            int
+	Indexes              int
+	Runs                 int
+	PrepareDocuments     time.Duration
+	IndexStateExtraction time.Duration
+	// DuplicateDocumentPreflight includes duplicate-ID detection and
+	// existing-document conflict checks.
+	DuplicateDocumentPreflight time.Duration
+	UniqueIndexPreflight       time.Duration
+	TemplateRunBuild           time.Duration
+	PrimaryRunBuild            time.Duration
+	IndexStateRunBuild         time.Duration
+	SecondaryRunBuild          time.Duration
+	Publish                    time.Duration
+	SecondaryEntries           int
+	SecondaryKeyBytes          int
+	SecondarySortedRuns        int
+	SecondaryUnsortedRuns      int
+	SecondaryRuns              []CollectionSecondaryRunStats
+}
+
+// CollectionSecondaryRunStats captures per-secondary-index run construction
+// counters from an InsertBatch call.
+type CollectionSecondaryRunStats struct {
+	IndexName     string
+	Entries       int
+	KeyBytes      int
+	AlreadySorted bool
+	Build         time.Duration
 }
 
 type RootStoragePolicy string
@@ -162,6 +199,33 @@ func NewCollectionManager(database *backenddb.DB) *CollectionManager {
 		manager.closeUnregister = database.RegisterCloseHook(manager.FlushAll)
 	}
 	return manager
+}
+
+// LastInsertStats returns phase timings and counters from the most recent
+// successful InsertBatch call on this Collection handle.
+func (c *Collection) LastInsertStats() CollectionInsertStats {
+	if c == nil {
+		return CollectionInsertStats{}
+	}
+	c.insertStatsMu.RLock()
+	defer c.insertStatsMu.RUnlock()
+	return cloneCollectionInsertStats(c.lastInsertStats)
+}
+
+func (c *Collection) setLastInsertStats(stats CollectionInsertStats) {
+	if c == nil {
+		return
+	}
+	c.insertStatsMu.Lock()
+	c.lastInsertStats = cloneCollectionInsertStats(stats)
+	c.insertStatsMu.Unlock()
+}
+
+func cloneCollectionInsertStats(stats CollectionInsertStats) CollectionInsertStats {
+	if len(stats.SecondaryRuns) > 0 {
+		stats.SecondaryRuns = append([]CollectionSecondaryRunStats(nil), stats.SecondaryRuns...)
+	}
+	return stats
 }
 
 func (m *CollectionManager) writeDomainForCollection(name string) *collectionWriteDomain {
@@ -772,6 +836,10 @@ func (c *Collection) InsertBatch(ids, documents [][]byte) ([][]byte, error) {
 		return nil, errors.New("collections: db is nil")
 	}
 	if len(documents) == 0 {
+		c.setLastInsertStats(CollectionInsertStats{
+			Documents: 0,
+			Indexes:   len(c.meta.Indexes),
+		})
 		return nil, nil
 	}
 	if err := c.flushBufferedNoIndex(); err != nil {
@@ -823,6 +891,7 @@ func (c *Collection) InsertBatch(ids, documents [][]byte) ([][]byte, error) {
 	}
 	if len(plan.runs) == 0 {
 		_ = snap.Close()
+		c.setLastInsertStats(plan.stats.CollectionInsertStats)
 		return plan.resultIDs, nil
 	}
 
@@ -854,9 +923,11 @@ func (c *Collection) InsertBatch(ids, documents [][]byte) ([][]byte, error) {
 	for i, run := range plan.runs {
 		rootNames[i] = run.name
 	}
+	publishStart := time.Now()
 	newSystemRoot, rootIDs, err := c.db.PublishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
 		return c.buildRootDescriptorSystemDeltaIterator(baseSystemRoot, rootNames, baseRootIDs, rootIDs)
 	})
+	plan.stats.Publish = time.Since(publishStart)
 	if err != nil {
 		return nil, err
 	}
@@ -866,6 +937,7 @@ func (c *Collection) InsertBatch(ids, documents [][]byte) ([][]byte, error) {
 	nextCatalog := cloneCatalogWithRootUpdates(catalog, c.meta, rootNames, rootIDs)
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
+	c.setLastInsertStats(plan.stats.CollectionInsertStats)
 	return plan.resultIDs, nil
 }
 
@@ -881,6 +953,10 @@ func (c *Collection) insertBatchNoIndex(
 		return nil, fmt.Errorf("collections: caller-provided batch ids length mismatch")
 	}
 
+	stats := CollectionInsertStats{
+		Documents: len(documents),
+		Indexes:   len(c.meta.Indexes),
+	}
 	resultIDs, err := cloneBatchDocumentIDs(ids)
 	if err != nil {
 		_ = snap.Close()
@@ -897,6 +973,7 @@ func (c *Collection) insertBatchNoIndex(
 	sort.Slice(entries, func(i, j int) bool {
 		return bytes.Compare(entries[i].id, entries[j].id) < 0
 	})
+	phaseStart := time.Now()
 	for i := 1; i < len(entries); i++ {
 		if bytes.Equal(entries[i-1].id, entries[i].id) {
 			_ = snap.Close()
@@ -921,13 +998,16 @@ func (c *Collection) insertBatchNoIndex(
 			return nil, errors.New("collections: document already exists")
 		}
 	}
+	stats.DuplicateDocumentPreflight = time.Since(phaseStart)
 	_ = snap.Close()
 
+	phaseStart = time.Now()
 	table := newCollectionRunTable(len(entries))
 	for i := range entries {
 		setCollectionRunValue(table, entries[i].id, entries[i].document)
 	}
 	table.Freeze()
+	stats.PrimaryRunBuild = time.Since(phaseStart)
 	iter := table.NewIterator(nil, nil)
 	defer func() {
 		_ = iter.Close()
@@ -935,6 +1015,7 @@ func (c *Collection) insertBatchNoIndex(
 	}()
 
 	baseRootIDs := map[string]uint64{rootName: baseRoot}
+	publishStart := time.Now()
 	newSystemRoot, rootIDs, err := c.db.PublishOrderedRootDeltaGroupWithSystemDeltaBuilder([]backenddb.OrderedRootDeltaPublishInput{{
 		BaseRoot:      baseRoot,
 		Iter:          iter,
@@ -942,15 +1023,18 @@ func (c *Collection) insertBatchNoIndex(
 	}}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
 		return c.buildRootDescriptorSystemDeltaIterator(baseSystemRoot, []string{rootName}, baseRootIDs, rootIDs)
 	})
+	stats.Publish = time.Since(publishStart)
 	if err != nil {
 		return nil, err
 	}
 	if len(rootIDs) != 1 {
 		return nil, errors.New("collections: ordered root publish returned unexpected root count")
 	}
+	stats.Runs = 1
 	nextCatalog := cloneCatalogWithRootUpdates(catalog, c.meta, []string{rootName}, rootIDs)
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
+	c.setLastInsertStats(stats)
 	return resultIDs, nil
 }
 
