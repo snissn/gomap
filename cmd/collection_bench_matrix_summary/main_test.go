@@ -308,8 +308,9 @@ func TestDocumentFormatForSQLiteShapeNativeColumns(t *testing.T) {
 		"BenchmarkSQLiteShapeReadPrimaryNativeColumns/indexes_2",
 		"BenchmarkSQLiteShapeSecondaryLookupNativeColumns/unique",
 	} {
-		if got := documentFormatForBenchmark("json", benchmark); got != "native-columns" {
-			t.Fatalf("documentFormatForBenchmark(%q)=%q want native-columns", benchmark, got)
+		defaultFormat := "json"
+		if got := documentFormatForBenchmark(defaultFormat, benchmark); got != "native-columns" {
+			t.Fatalf("documentFormatForBenchmark(%q, %q)=%q want native-columns", defaultFormat, benchmark, got)
 		}
 	}
 }

@@ -271,7 +271,7 @@ run_sqlite_cell() {
     TREEDB_COLLECTION_DATA_OUTER_LEAVES_IN_VLOG="-" \
     TREEDB_COLLECTION_INDEX_OUTER_LEAVES_IN_VLOG="-" \
     GO_TEST_TAGS="sqlite_bench" \
-    CGO_ENABLED="$SQLITE_CGO_ENABLED" \
+    CGO_ENABLED=1 \
     scripts/bench_collections_report.sh
 
   printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \

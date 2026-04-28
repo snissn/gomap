@@ -330,6 +330,7 @@ func benchmarkCollectionMixedReadWrite(b *testing.B, secondaryRead bool) {
 	}
 
 	end := time.Now()
+	writerDocsAtEnd := writerDocs.Load()
 	b.StopTimer()
 	stop.Store(true)
 	wg.Wait()
@@ -340,7 +341,7 @@ func benchmarkCollectionMixedReadWrite(b *testing.B, secondaryRead bool) {
 	default:
 	}
 	if elapsed > 0 {
-		b.ReportMetric(float64(writerDocs.Load())/elapsed.Seconds(), "writer_docs/sec")
+		b.ReportMetric(float64(writerDocsAtEnd)/elapsed.Seconds(), "writer_docs/sec")
 	}
 }
 
