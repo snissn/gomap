@@ -12,6 +12,13 @@ BENCH_ENGINE="${TREEDB_COLLECTION_BENCH_ENGINE:-production_fast}"
 PATH_LABEL="${TREEDB_COLLECTION_PATH_LABEL:-native-fastpath}"
 DATA_OUTER="${TREEDB_COLLECTION_DATA_OUTER_LEAVES_IN_VLOG:-true}"
 INDEX_OUTER="${TREEDB_COLLECTION_INDEX_OUTER_LEAVES_IN_VLOG:-false}"
+CHUNK_SIZE="$(printf '%s' "${TREEDB_COLLECTION_CHUNK_SIZE:-}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+CHUNK_SIZE_LABEL="${CHUNK_SIZE:-profile/default}"
+PAGER_SYNC_CONCURRENCY="$(printf '%s' "${TREEDB_COLLECTION_PAGER_SYNC_CONCURRENCY:-}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+if [[ "$PAGER_SYNC_CONCURRENCY" == "0" ]]; then
+  PAGER_SYNC_CONCURRENCY=""
+fi
+PAGER_SYNC_CONCURRENCY_LABEL="${PAGER_SYNC_CONCURRENCY:-profile/default}"
 INCLUDE_SQLITE="${TREEDB_COLLECTION_HARNESS_INCLUDE_SQLITE:-false}"
 INCLUDE_UNIFIED="${TREEDB_COLLECTION_HARNESS_INCLUDE_UNIFIED:-false}"
 PROFILE_BENCHES="${TREEDB_COLLECTION_HARNESS_PROFILE_BENCHES:-false}"
@@ -136,6 +143,8 @@ echo "engine: $BENCH_ENGINE"
 echo "count: $COUNT"
 echo "benchtime: $BENCHTIME"
 echo "batch size: $BATCH_SIZE"
+echo "pager chunk size: $CHUNK_SIZE_LABEL"
+echo "pager sync concurrency: $PAGER_SYNC_CONCURRENCY_LABEL"
 echo "include sqlite: $INCLUDE_SQLITE"
 echo "include unified: $INCLUDE_UNIFIED"
 
@@ -155,13 +164,15 @@ run_collection_cell() {
     TREEDB_COLLECTION_BENCH_ENGINE="$BENCH_ENGINE" \
     TREEDB_COLLECTION_BENCH_BATCH_SIZE="$BATCH_SIZE" \
     TREEDB_COLLECTION_DOCUMENT_FORMAT="$document_format" \
+    TREEDB_COLLECTION_CHUNK_SIZE="$CHUNK_SIZE" \
     TREEDB_COLLECTION_DATA_OUTER_LEAVES_IN_VLOG="$DATA_OUTER" \
     TREEDB_COLLECTION_INDEX_OUTER_LEAVES_IN_VLOG="$INDEX_OUTER" \
+    TREEDB_COLLECTION_PAGER_SYNC_CONCURRENCY="$PAGER_SYNC_CONCURRENCY" \
     scripts/bench_collections_report.sh
 
   printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
     "$cell" "$BENCH_ENGINE" "$document_format" "$DATA_OUTER" "$INDEX_OUTER" \
-    "profile/default" "profile/default" \
+    "$CHUNK_SIZE_LABEL" "$PAGER_SYNC_CONCURRENCY_LABEL" \
     "$cell_dir/collections_report.md" \
     "$cell_dir/collections_report.json" \
     "$cell_dir/collections_cpu.pprof" \
@@ -185,8 +196,10 @@ run_profile_cell_benches() {
       TREEDB_COLLECTION_BENCH_ENGINE="$BENCH_ENGINE" \
       TREEDB_COLLECTION_BENCH_BATCH_SIZE="$BATCH_SIZE" \
       TREEDB_COLLECTION_DOCUMENT_FORMAT="$document_format" \
+      TREEDB_COLLECTION_CHUNK_SIZE="$CHUNK_SIZE" \
       TREEDB_COLLECTION_DATA_OUTER_LEAVES_IN_VLOG="$DATA_OUTER" \
       TREEDB_COLLECTION_INDEX_OUTER_LEAVES_IN_VLOG="$INDEX_OUTER" \
+      TREEDB_COLLECTION_PAGER_SYNC_CONCURRENCY="$PAGER_SYNC_CONCURRENCY" \
       scripts/bench_collections_report.sh
     printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
       "$cell" "$BENCH_ENGINE" "$document_format" "$bench" "whole_go_test_process" \
@@ -217,8 +230,10 @@ run_timed_profile_cell_benches() {
       TREEDB_COLLECTION_BENCH_ENGINE="$BENCH_ENGINE" \
       TREEDB_COLLECTION_BENCH_BATCH_SIZE="$BATCH_SIZE" \
       TREEDB_COLLECTION_DOCUMENT_FORMAT="$document_format" \
+      TREEDB_COLLECTION_CHUNK_SIZE="$CHUNK_SIZE" \
       TREEDB_COLLECTION_DATA_OUTER_LEAVES_IN_VLOG="$DATA_OUTER" \
       TREEDB_COLLECTION_INDEX_OUTER_LEAVES_IN_VLOG="$INDEX_OUTER" \
+      TREEDB_COLLECTION_PAGER_SYNC_CONCURRENCY="$PAGER_SYNC_CONCURRENCY" \
       scripts/bench_collections_report.sh
     printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
       "$cell" "$BENCH_ENGINE" "$document_format" "$bench" "timed_benchmark_window" \
@@ -334,6 +349,8 @@ cat >"$OUT_DIR/README.md" <<EOF
 - benchmark count: \`$COUNT\`
 - benchmark time: \`$BENCHTIME\`
 - collection batch size: \`$BATCH_SIZE\`
+- pager chunk size: \`$CHUNK_SIZE_LABEL\`
+- pager sync concurrency: \`$PAGER_SYNC_CONCURRENCY_LABEL\`
 - include sqlite: \`$INCLUDE_SQLITE\`
 - include unified bench: \`$INCLUDE_UNIFIED\`
 - profile benches: \`$PROFILE_BENCHES\`
