@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -491,6 +492,89 @@ func TestLeafGenerationPack_MovesSparseSealedGeneration(t *testing.T) {
 	}
 	if err := waitForPathRemoval(path1, 5*time.Second); err != nil {
 		t.Fatalf("waitForPathRemoval(%s): %v", path1, err)
+	}
+}
+
+func TestLeafGenerationPack_RewritesCollectionLeafRefRoot(t *testing.T) {
+	db, leafLog, dir := openLeafGenerationPackTestDB(t)
+
+	const descriptorKey = "collections/root/pack/users/primary"
+	const docKey = "doc/collection"
+	docValue := bytes.Repeat([]byte("collection-leaf-pack|"), 16)
+	_, rootIDs, err := db.PublishOrderedRootGroupWithSystemBuilder([]OrderedRootPublishInput{{
+		BaseRoot:      0,
+		Iter:          mustFrozenRawMemtable(t, docKey, docValue).NewIterator(nil, nil),
+		StoragePolicy: OrderedRootStorageValueLogLeaves,
+	}}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		if len(rootIDs) != 1 {
+			return nil, fmt.Errorf("rootIDs=%d want 1", len(rootIDs))
+		}
+		return mustFrozenRawMemtable(t, descriptorKey, encodeMaintenanceRootID(rootIDs[0])).NewIterator(nil, nil), nil
+	})
+	if err != nil {
+		t.Fatalf("publish collection leaf-ref root: %v", err)
+	}
+	oldRoot := rootIDs[0]
+	oldLeafPtr, ok := page.DecodeLeafRef(oldRoot)
+	if !ok {
+		t.Fatalf("collection root=%d want leaf ref", oldRoot)
+	}
+	oldLeafPath := leafLogSegmentPath(t, dir, oldLeafPtr.FileID)
+	rawFileID := page.ValueLogSegmentID(oldLeafPtr.FileID)
+	if err := leafLog.Sync(); err != nil {
+		t.Fatalf("sync leaf log: %v", err)
+	}
+	if err := leafLog.rotateLeaf(); err != nil {
+		t.Fatalf("rotate leaf log: %v", err)
+	}
+	writeLeafGenerationKeys(t, db, "pack-after", 1, 'z')
+
+	manifest := loadLeafGenerationManifestOrFatal(t, dir)
+	gen := findLeafGenerationByFileID(t, manifest, rawFileID)
+	if _, err := db.LeafGenerationPlan(context.Background(), LeafGenerationPlanOptions{Force: true}); err != nil {
+		t.Fatalf("LeafGenerationPlan before pack: %v", err)
+	}
+	stats, err := db.LeafGenerationPack(context.Background(), LeafGenerationPackOptions{
+		GenerationIDs: []uint64{gen.GenerationID},
+		Sync:          true,
+		Force:         true,
+	})
+	if err != nil {
+		t.Fatalf("LeafGenerationPack: %v", err)
+	}
+	if got := stats.LeafPagesCopied; got == 0 {
+		t.Fatalf("LeafPagesCopied=%d, want > 0", got)
+	}
+
+	newRoot := readCollectionRootID(t, db, descriptorKey)
+	if newRoot == oldRoot {
+		t.Fatalf("collection descriptor still points at old leaf-ref root %d", oldRoot)
+	}
+	newLeafPtr, ok := page.DecodeLeafRef(newRoot)
+	if !ok {
+		t.Fatalf("rewritten collection root=%d want leaf ref", newRoot)
+	}
+	if newLeafPtr.FileID == oldLeafPtr.FileID && newLeafPtr.Offset == oldLeafPtr.Offset {
+		t.Fatalf("collection leaf ref was not moved: %v", newLeafPtr)
+	}
+	got := readCollectionRootValue(t, db, descriptorKey, []byte(docKey))
+	if !bytes.Equal(got, docValue) {
+		t.Fatalf("collection value mismatch after pack")
+	}
+
+	planAfter, err := db.LeafGenerationPlan(context.Background(), LeafGenerationPlanOptions{Force: true})
+	if err != nil {
+		t.Fatalf("LeafGenerationPlan after pack: %v", err)
+	}
+	entryAfter := findLeafGenerationPlanEntry(t, planAfter, gen.GenerationID)
+	if got := entryAfter.BytesLive; got != 0 {
+		t.Fatalf("generation %d BytesLive=%d, want 0 after collection pack", gen.GenerationID, got)
+	}
+	if _, err := db.LeafGenerationGC(context.Background(), LeafGenerationGCOptions{}); err != nil {
+		t.Fatalf("LeafGenerationGC: %v", err)
+	}
+	if err := waitForPathRemoval(oldLeafPath, 5*time.Second); err != nil {
+		t.Fatalf("waitForPathRemoval(%s): %v", oldLeafPath, err)
 	}
 }
 

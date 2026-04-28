@@ -173,7 +173,7 @@ func (db *DB) leafGenerationPackLocked(ctx context.Context, opts LeafGenerationP
 	stats.InternalPagesVisited = rewriteStats.InternalPagesVisited
 	stats.SubtreesPruned = rewriteStats.SubtreesPruned
 	if err != nil {
-		return stats, err
+		return stats, fmt.Errorf("leaf generation pack: rewrite leaf refs: %w", err)
 	}
 	createdIDs, err := writer.createdFileIDs()
 	if err != nil {
