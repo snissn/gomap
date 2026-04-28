@@ -87,13 +87,15 @@ type Collection struct {
 }
 
 // CollectionInsertStats captures phase timings and counters from the most
-// recent InsertBatch call on a Collection handle.
+// recent successful InsertBatch call on a Collection handle.
 type CollectionInsertStats struct {
-	Documents                  int
-	Indexes                    int
-	Runs                       int
-	PrepareDocuments           time.Duration
-	IndexStateExtraction       time.Duration
+	Documents            int
+	Indexes              int
+	Runs                 int
+	PrepareDocuments     time.Duration
+	IndexStateExtraction time.Duration
+	// DuplicateDocumentPreflight includes batch ID cloning/order setup,
+	// duplicate-ID detection, and existing-document conflict checks.
 	DuplicateDocumentPreflight time.Duration
 	UniqueIndexPreflight       time.Duration
 	TemplateRunBuild           time.Duration
@@ -200,7 +202,7 @@ func NewCollectionManager(database *backenddb.DB) *CollectionManager {
 }
 
 // LastInsertStats returns phase timings and counters from the most recent
-// InsertBatch call on this Collection handle.
+// successful InsertBatch call on this Collection handle.
 func (c *Collection) LastInsertStats() CollectionInsertStats {
 	if c == nil {
 		return CollectionInsertStats{}

@@ -663,7 +663,7 @@ func benchmarkMetricColumns(benchmarks []benchmarkAggregate) []string {
 		"target_docs/checkpoint",
 		"insert_ns/doc",
 		"sync_ns/doc",
-		"prepare_docs_ns/doc",
+		"prepare_ns/doc",
 		"index_state_extract_ns/doc",
 		"duplicate_preflight_ns/doc",
 		"unique_preflight_ns/doc",

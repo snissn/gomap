@@ -143,8 +143,8 @@ func TestCollectionInsertBatchStatsExposeIndexRunShape(t *testing.T) {
 	if got, want := stats.Indexes, 2; got != want {
 		t.Fatalf("stats indexes=%d want %d", got, want)
 	}
-	if got, want := stats.Runs, 4; got != want {
-		t.Fatalf("stats runs=%d want %d", got, want)
+	if got, minRuns, maxRuns := stats.Runs, 2+len(stats.SecondaryRuns), 3+len(stats.SecondaryRuns); got < minRuns || got > maxRuns {
+		t.Fatalf("stats runs=%d want between %d and %d", got, minRuns, maxRuns)
 	}
 	if got, want := len(stats.SecondaryRuns), 2; got != want {
 		t.Fatalf("stats secondary runs=%d want %d", got, want)

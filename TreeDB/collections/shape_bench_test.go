@@ -45,7 +45,7 @@ func benchmarkReportCollectionInsertStats(b *testing.B, docs, batches int, stats
 			b.ReportMetric(float64(d.Nanoseconds())/float64(docs), name)
 		}
 	}
-	reportDuration("prepare_docs_ns/doc", stats.PrepareDocuments)
+	reportDuration("prepare_ns/doc", stats.PrepareDocuments)
 	reportDuration("index_state_extract_ns/doc", stats.IndexStateExtraction)
 	reportDuration("duplicate_preflight_ns/doc", stats.DuplicateDocumentPreflight)
 	reportDuration("unique_preflight_ns/doc", stats.UniqueIndexPreflight)
