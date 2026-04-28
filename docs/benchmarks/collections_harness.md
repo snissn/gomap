@@ -29,6 +29,77 @@ The default run captures:
 - top-level `collections_maintenance_summary.tsv` (always generated; may be
   header-only when maintenance metrics are not enabled or not present).
 
+## Full Matrix Replication
+
+Use this command when you need the full TreeDB-vs-SQLite collection matrix,
+including the index-leaf-in-value-log probes, maintenance compaction rows, and
+raw `unified_bench` TreeDB anchors:
+
+```bash
+OUT="/tmp/gomap_collections_$(date +%Y%m%d_%H%M%S)"
+mkdir -p "$OUT"
+TREEDB_COLLECTION_HARNESS_REPORT_VLOG_REWRITE=true \
+TREEDB_COLLECTION_HARNESS_REPORT_SQLITE_VACUUM=true \
+scripts/bench_collections_harness.sh \
+  --out "$OUT" \
+  --count 3 \
+  --benchtime 1s \
+  --batch-size 8000 \
+  --include-sqlite \
+  --include-unified \
+  --unified-keys 100000 \
+  2>&1 | tee "$OUT/harness_stdout.log"
+```
+
+The harness writes `$OUT/README.md` with the branch, commit, command settings,
+and artifact paths. Keep that file with any benchmark notes so later reviewers
+can separate code changes from host-to-host benchmark drift.
+
+The main files to read after the run are:
+
+- `$OUT/collections_user_story_summary.tsv` for ingest docs/sec, batch latency,
+  and checkpoint split timing.
+- `$OUT/collections_disk_usage_summary.tsv` for normalized `disk_bytes/doc` and
+  derived collection/index byte splits.
+- `$OUT/collections_maintenance_summary.tsv` for TreeDB value-log rewrite/GC
+  and SQLite `VACUUM` before/after totals.
+- `$OUT/collections_matrix_summary.md` for a reviewable Markdown summary with
+  links to every per-cell report.
+- `$OUT/harness_unified_index.tsv` plus `$OUT/unified_*/insights.md` for raw
+  TreeDB engine anchors.
+
+When writing conclusions, compare normalized rows, not raw total bytes. The Go
+benchmark runner may store different document counts for different engines or
+index counts. For two-index document insert comparisons, use:
+
+- TreeDB default layout:
+  `BenchmarkCollectionShapeInsertBatch/indexes_2` from
+  `collections_json_shapes` and `collections_template_v1_shapes`.
+- TreeDB index outer leaves in the value log:
+  `collections_json_index_vlog_insert2` and
+  `collections_template_v1_index_vlog_insert2`.
+- SQLite parity rows:
+  `BenchmarkSQLiteShapeInsertBatchJSON/indexes_2`,
+  `BenchmarkSQLiteShapeInsertBatchNativeColumns/indexes_2`, and the
+  `BenchmarkSQLite*WithSecondaryIndexes` rows.
+
+For optimization planning, start with the phase columns in each
+`collections_report.md`: `publish_ns/doc`, `secondary_runs_ns/doc`,
+`index_state_extract_ns/doc`, `prepare_ns/doc`, `insert_ns/doc`, and
+`sync_ns/doc`. The usual priority order is:
+
+1. Reduce publish/root-group cost when `publish_ns/doc` dominates indexed
+   inserts.
+2. Reduce secondary-run and index-state construction cost when adding indexes
+   scales poorly.
+3. Reduce read-path allocation when primary reads or secondary lookups show high
+   `B/op` and `allocs/op`.
+4. Treat value-log rewrite/GC reclaim results as meaningful only on workloads
+   with deletes, updates, or churn. Insert-only matrices should not be expected
+   to reclaim space.
+5. Judge index-leaf-in-value-log changes as a disk/throughput tradeoff: compare
+   both `disk_bytes/doc` and docs/sec against the default layout.
+
 ## Optional Baselines
 
 Add SQLite parity rows:
