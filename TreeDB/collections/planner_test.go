@@ -152,6 +152,40 @@ func TestAppendIndexScalarEncodesIntoArena(t *testing.T) {
 	}
 }
 
+func TestOrderedIndexStateForDocumentHandlesScalarAndArrayValues(t *testing.T) {
+	scalarRuntime := []indexRuntime{{
+		def:  indexDefinition{name: "email", field: "email"},
+		path: []string{"email"},
+	}}
+	scalarState, err := orderedIndexStateForDocument([]byte(`{"email":"ada@example.com"}`), scalarRuntime, collectionOptions{})
+	if err != nil {
+		t.Fatalf("scalar index state: %v", err)
+	}
+	if got, want := scalarState.valuesAt(0), [][]byte{[]byte("s:ada@example.com")}; !byteMatrixEqual(got, want) {
+		t.Fatalf("scalar values=%q want %q", got, want)
+	}
+
+	arrayRuntime := []indexRuntime{{
+		def:  indexDefinition{name: "tags", field: "tags", multiKey: true},
+		path: []string{"tags"},
+	}}
+	arrayState, err := orderedIndexStateForDocument([]byte(`{"tags":["b","a","a"]}`), arrayRuntime, collectionOptions{})
+	if err != nil {
+		t.Fatalf("array index state: %v", err)
+	}
+	if got, want := arrayState.valuesAt(0), [][]byte{[]byte("s:a"), []byte("s:b")}; !byteMatrixEqual(got, want) {
+		t.Fatalf("array values=%q want %q", got, want)
+	}
+
+	_, err = orderedIndexStateForDocument([]byte(`{"tags":["a"]}`), []indexRuntime{{
+		def:  indexDefinition{name: "tags", field: "tags"},
+		path: []string{"tags"},
+	}}, collectionOptions{})
+	if err == nil || !strings.Contains(err.Error(), "array value not allowed") {
+		t.Fatalf("err=%v want array value not allowed", err)
+	}
+}
+
 func TestBuildUniqueProbeRunsMatchesEncodedPrefixOrdering(t *testing.T) {
 	candidates := []uniqueProbeCandidate{
 		{indexName: "email", encodedValue: []byte("s:zz"), documentID: []byte("u3")},
