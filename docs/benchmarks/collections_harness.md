@@ -17,6 +17,8 @@ The default run captures:
 
 - JSON collection shape benchmarks.
 - `template-v1` collection shape benchmarks.
+- indexed insert phase metrics such as prepare, index-state extraction,
+  preflight, run build, secondary-run shape, and publish time.
 - per-cell `collections_report.{json,md,html}`.
 - per-cell `collections_cpu.pprof`, `collections_mem.pprof`, and pprof top text.
 - top-level `collections_matrix_summary.{tsv,md,html}`.

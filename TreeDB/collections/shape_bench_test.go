@@ -16,6 +16,57 @@ const (
 	defaultCollectionMixedWriteBatchSize = 128
 )
 
+func addCollectionInsertStats(dst *collections.CollectionInsertStats, src collections.CollectionInsertStats) {
+	dst.Documents += src.Documents
+	dst.Indexes += src.Indexes
+	dst.Runs += src.Runs
+	dst.PrepareDocuments += src.PrepareDocuments
+	dst.IndexStateExtraction += src.IndexStateExtraction
+	dst.DuplicateDocumentPreflight += src.DuplicateDocumentPreflight
+	dst.UniqueIndexPreflight += src.UniqueIndexPreflight
+	dst.TemplateRunBuild += src.TemplateRunBuild
+	dst.PrimaryRunBuild += src.PrimaryRunBuild
+	dst.IndexStateRunBuild += src.IndexStateRunBuild
+	dst.SecondaryRunBuild += src.SecondaryRunBuild
+	dst.Publish += src.Publish
+	dst.SecondaryEntries += src.SecondaryEntries
+	dst.SecondaryKeyBytes += src.SecondaryKeyBytes
+	dst.SecondarySortedRuns += src.SecondarySortedRuns
+	dst.SecondaryUnsortedRuns += src.SecondaryUnsortedRuns
+}
+
+func benchmarkReportCollectionInsertStats(b *testing.B, docs, batches int, stats collections.CollectionInsertStats) {
+	b.Helper()
+	if docs <= 0 {
+		return
+	}
+	reportDuration := func(name string, d time.Duration) {
+		if d > 0 {
+			b.ReportMetric(float64(d.Nanoseconds())/float64(docs), name)
+		}
+	}
+	reportDuration("prepare_docs_ns/doc", stats.PrepareDocuments)
+	reportDuration("index_state_extract_ns/doc", stats.IndexStateExtraction)
+	reportDuration("duplicate_preflight_ns/doc", stats.DuplicateDocumentPreflight)
+	reportDuration("unique_preflight_ns/doc", stats.UniqueIndexPreflight)
+	reportDuration("template_run_ns/doc", stats.TemplateRunBuild)
+	reportDuration("primary_run_ns/doc", stats.PrimaryRunBuild)
+	reportDuration("index_state_run_ns/doc", stats.IndexStateRunBuild)
+	reportDuration("secondary_runs_ns/doc", stats.SecondaryRunBuild)
+	reportDuration("publish_ns/doc", stats.Publish)
+	if stats.SecondaryEntries > 0 {
+		b.ReportMetric(float64(stats.SecondaryEntries)/float64(docs), "secondary_entries/doc")
+	}
+	if stats.SecondaryKeyBytes > 0 {
+		b.ReportMetric(float64(stats.SecondaryKeyBytes)/float64(docs), "secondary_key_bytes/doc")
+	}
+	if batches > 0 {
+		b.ReportMetric(float64(stats.Runs)/float64(batches), "roots/batch")
+		b.ReportMetric(float64(stats.SecondarySortedRuns)/float64(batches), "secondary_sorted_runs/batch")
+		b.ReportMetric(float64(stats.SecondaryUnsortedRuns)/float64(batches), "secondary_unsorted_runs/batch")
+	}
+}
+
 func collectionShapeIndexes(indexCount int) []collections.IndexDefinition {
 	switch indexCount {
 	case 0:
@@ -75,6 +126,8 @@ func benchmarkCollectionShapeInsertBatch(b *testing.B, indexCount int, checkpoin
 	startKeyFallback, startPrefixFallback := benchmarkNativeProbeFallbackCounters(b, backend)
 	var insertElapsed time.Duration
 	var syncElapsed time.Duration
+	var insertStats collections.CollectionInsertStats
+	batches := 0
 
 	metricName := "target_docs/batch"
 	if checkpoint {
@@ -97,6 +150,8 @@ func benchmarkCollectionShapeInsertBatch(b *testing.B, indexCount int, checkpoin
 		if _, err := collection.InsertBatch(ids, docs); err != nil {
 			b.Fatalf("shape insert batch indexes=%d: %v", indexCount, err)
 		}
+		addCollectionInsertStats(&insertStats, collection.LastInsertStats())
+		batches++
 		insertElapsed += time.Since(insertStart)
 		if checkpoint {
 			syncStart := time.Now()
@@ -109,6 +164,7 @@ func benchmarkCollectionShapeInsertBatch(b *testing.B, indexCount int, checkpoin
 	if checkpoint {
 		benchmarkReportCheckpointSplit(b, b.N, insertElapsed, syncElapsed)
 	}
+	benchmarkReportCollectionInsertStats(b, b.N, batches, insertStats)
 	benchmarkReportNativeProbeFallbackDeltas(b, backend, startKeyFallback, startPrefixFallback)
 }
 
@@ -137,6 +193,8 @@ func benchmarkCollectionShapeSingleStringInsertBatch(b *testing.B, indexCount in
 	startKeyFallback, startPrefixFallback := benchmarkNativeProbeFallbackCounters(b, backend)
 	var insertElapsed time.Duration
 	var syncElapsed time.Duration
+	var insertStats collections.CollectionInsertStats
+	batches := 0
 
 	metricName := "target_docs/batch"
 	if checkpoint {
@@ -159,6 +217,8 @@ func benchmarkCollectionShapeSingleStringInsertBatch(b *testing.B, indexCount in
 		if _, err := collection.InsertBatch(ids, docs); err != nil {
 			b.Fatalf("single-string insert batch indexes=%d: %v", indexCount, err)
 		}
+		addCollectionInsertStats(&insertStats, collection.LastInsertStats())
+		batches++
 		insertElapsed += time.Since(insertStart)
 		if checkpoint {
 			syncStart := time.Now()
@@ -171,6 +231,7 @@ func benchmarkCollectionShapeSingleStringInsertBatch(b *testing.B, indexCount in
 	if checkpoint {
 		benchmarkReportCheckpointSplit(b, b.N, insertElapsed, syncElapsed)
 	}
+	benchmarkReportCollectionInsertStats(b, b.N, batches, insertStats)
 	benchmarkReportNativeProbeFallbackDeltas(b, backend, startKeyFallback, startPrefixFallback)
 }
 

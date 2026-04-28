@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/buger/jsonparser"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -81,6 +82,7 @@ type insertBatchPlan struct {
 }
 
 type insertBatchPlanStats struct {
+	CollectionInsertStats
 	payloadBuilds int
 }
 
@@ -164,7 +166,13 @@ func (p insertBatchPlanner) planInsertBatchWithPreflight(ids, documents [][]byte
 	if p.buildPrimaryVal == nil {
 		p.buildPrimaryVal = borrowPrimaryDocument
 	}
+	stats := CollectionInsertStats{
+		Documents: len(documents),
+		Indexes:   len(p.indexes),
+	}
+	phaseStart := time.Now()
 	preparedDocuments, templateRecords, templateResolver, err := prepareInsertDocuments(documents, p.options)
+	stats.PrepareDocuments = time.Since(phaseStart)
 	if err != nil {
 		return nil, err
 	}
@@ -172,6 +180,7 @@ func (p insertBatchPlanner) planInsertBatchWithPreflight(ids, documents [][]byte
 		p.options.templateResolver = templateResolver
 	}
 
+	phaseStart = time.Now()
 	resultIDs, err := cloneBatchDocumentIDs(ids)
 	if err != nil {
 		return nil, err
@@ -189,20 +198,26 @@ func (p insertBatchPlanner) planInsertBatchWithPreflight(ids, documents [][]byte
 	if err := rejectDuplicateDocumentIDs(items, primaryOrder); err != nil {
 		return nil, err
 	}
+	stats.DuplicateDocumentPreflight += time.Since(phaseStart)
 
 	runtimes, err := p.indexRuntimes()
 	if err != nil {
 		return nil, err
 	}
+	phaseStart = time.Now()
 	uniqueProbes, err := p.planIndexStateAndUniqueProbes(items, runtimes)
+	stats.IndexStateExtraction = time.Since(phaseStart)
 	if err != nil {
 		return nil, err
 	}
-	sortUniqueProbeCandidates(uniqueProbes)
-	if err := rejectDuplicateUniqueProbeCandidates(uniqueProbes); err != nil {
+	phaseStart = time.Now()
+	if err := preflight.checkDocumentConflicts(items, primaryOrder, resultIDs); err != nil {
 		return nil, err
 	}
-	if err := preflight.checkDocumentConflicts(items, primaryOrder, resultIDs); err != nil {
+	stats.DuplicateDocumentPreflight += time.Since(phaseStart)
+	phaseStart = time.Now()
+	sortUniqueProbeCandidates(uniqueProbes)
+	if err := rejectDuplicateUniqueProbeCandidates(uniqueProbes); err != nil {
 		return nil, err
 	}
 	uniqueProbeRuns, err := buildUniqueProbeRunsForPreflightFromSorted(uniqueProbes, preflight)
@@ -212,28 +227,39 @@ func (p insertBatchPlanner) planInsertBatchWithPreflight(ids, documents [][]byte
 	if err := preflight.checkUniqueConflicts(uniqueProbeRuns); err != nil {
 		return nil, err
 	}
+	stats.UniqueIndexPreflight = time.Since(phaseStart)
 
 	plan := &insertBatchPlan{
 		resultIDs:       resultIDs,
 		uniqueProbeRuns: uniqueProbeRuns,
 		templateRecords: templateRecords,
+		stats:           insertBatchPlanStats{CollectionInsertStats: stats},
 	}
 	if len(templateRecords) > 0 {
+		phaseStart = time.Now()
 		if err := p.emitTemplateRun(plan, templateRecords); err != nil {
 			return nil, err
 		}
+		plan.stats.TemplateRunBuild = time.Since(phaseStart)
 	}
+	phaseStart = time.Now()
 	if err := p.emitPrimaryRun(plan, items, primaryOrder); err != nil {
 		return nil, err
 	}
+	plan.stats.PrimaryRunBuild = time.Since(phaseStart)
 	if len(runtimes) > 0 {
+		phaseStart = time.Now()
 		if err := p.emitIndexStateRun(plan, items, runtimes); err != nil {
 			return nil, err
 		}
+		plan.stats.IndexStateRunBuild = time.Since(phaseStart)
+		phaseStart = time.Now()
 		if err := p.emitSecondaryRuns(plan, items, runtimes); err != nil {
 			return nil, err
 		}
+		plan.stats.SecondaryRunBuild = time.Since(phaseStart)
 	}
+	plan.stats.Runs = len(plan.runs)
 	return plan, nil
 }
 
@@ -572,11 +598,20 @@ func (p insertBatchPlanner) emitIndexStateRun(plan *insertBatchPlan, items []ins
 
 func (p insertBatchPlanner) emitSecondaryRuns(plan *insertBatchPlan, items []insertBatchItem, runtimes []indexRuntime) error {
 	for runtimeIdx, runtime := range runtimes {
+		runStart := time.Now()
 		entryCount, keyBytes, alreadySorted, err := secondaryEntryOrderStats(items, runtimeIdx)
 		if err != nil {
 			return err
 		}
+		runStats := CollectionSecondaryRunStats{
+			IndexName:     runtime.def.name,
+			Entries:       entryCount,
+			KeyBytes:      keyBytes,
+			AlreadySorted: alreadySorted,
+		}
 		if entryCount == 0 {
+			runStats.Build = time.Since(runStart)
+			plan.stats.SecondaryRuns = append(plan.stats.SecondaryRuns, runStats)
 			continue
 		}
 		if alreadySorted {
@@ -608,6 +643,11 @@ func (p insertBatchPlanner) emitSecondaryRuns(plan *insertBatchPlan, items []ins
 				table:         table,
 				storagePolicy: runtime.def.storagePolicy,
 			})
+			runStats.Build = time.Since(runStart)
+			plan.stats.SecondaryRuns = append(plan.stats.SecondaryRuns, runStats)
+			plan.stats.SecondaryEntries += entryCount
+			plan.stats.SecondaryKeyBytes += keyBytes
+			plan.stats.SecondarySortedRuns++
 			continue
 		}
 
@@ -643,6 +683,11 @@ func (p insertBatchPlanner) emitSecondaryRuns(plan *insertBatchPlan, items []ins
 			table:         table,
 			storagePolicy: runtime.def.storagePolicy,
 		})
+		runStats.Build = time.Since(runStart)
+		plan.stats.SecondaryRuns = append(plan.stats.SecondaryRuns, runStats)
+		plan.stats.SecondaryEntries += entryCount
+		plan.stats.SecondaryKeyBytes += keyBytes
+		plan.stats.SecondaryUnsortedRuns++
 	}
 	return nil
 }

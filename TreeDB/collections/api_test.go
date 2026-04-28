@@ -105,6 +105,103 @@ func TestCollectionInsertBatchBridge_RoundTripWithSecondaryIndexes(t *testing.T)
 	}
 }
 
+func TestCollectionInsertBatchStatsExposeIndexRunShape(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Indexes: []IndexDefinition{
+			{Name: "email", Field: "email", Unique: true},
+			{Name: "city", Field: "city"},
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1"), []byte("u2")},
+		[][]byte{
+			[]byte(`{"email":"ada@example.com","city":"hnl"}`),
+			[]byte(`{"email":"grace@example.com","city":"sfo"}`),
+		},
+	); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+
+	stats := col.LastInsertStats()
+	if got, want := stats.Documents, 2; got != want {
+		t.Fatalf("stats documents=%d want %d", got, want)
+	}
+	if got, want := stats.Indexes, 2; got != want {
+		t.Fatalf("stats indexes=%d want %d", got, want)
+	}
+	if got, want := stats.Runs, 4; got != want {
+		t.Fatalf("stats runs=%d want %d", got, want)
+	}
+	if got, want := len(stats.SecondaryRuns), 2; got != want {
+		t.Fatalf("stats secondary runs=%d want %d", got, want)
+	}
+	if got, want := stats.SecondaryEntries, 4; got != want {
+		t.Fatalf("stats secondary entries=%d want %d", got, want)
+	}
+	if stats.SecondaryKeyBytes == 0 {
+		t.Fatal("stats secondary key bytes=0 want positive")
+	}
+	stats.SecondaryRuns[0].IndexName = "mutated"
+	again := col.LastInsertStats()
+	if got := again.SecondaryRuns[0].IndexName; got == "mutated" {
+		t.Fatal("LastInsertStats did not return an owned secondary-run slice")
+	}
+}
+
+func TestCollectionInsertBatchStatsExposeNoIndexFastPath(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1"), []byte("u2")},
+		[][]byte{
+			[]byte(`{"email":"ada@example.com"}`),
+			[]byte(`{"email":"grace@example.com"}`),
+		},
+	); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+
+	stats := col.LastInsertStats()
+	if got, want := stats.Documents, 2; got != want {
+		t.Fatalf("stats documents=%d want %d", got, want)
+	}
+	if got, want := stats.Indexes, 0; got != want {
+		t.Fatalf("stats indexes=%d want %d", got, want)
+	}
+	if got, want := stats.Runs, 1; got != want {
+		t.Fatalf("stats runs=%d want %d", got, want)
+	}
+	if got := len(stats.SecondaryRuns); got != 0 {
+		t.Fatalf("stats secondary runs=%d want 0", got)
+	}
+}
+
 func TestCollectionInsertBatchBridge_ReturnedIDsAndDocumentsAreOwned(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
