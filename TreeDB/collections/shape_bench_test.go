@@ -306,25 +306,42 @@ func benchmarkCollectionMixedReadWrite(b *testing.B, secondaryRead bool) {
 		}
 	}()
 
+	readerStride := runtime.GOMAXPROCS(0)
+	if readerStride <= 0 {
+		readerStride = 1
+	}
+	var readerOffsets atomic.Uint64
+	nextReaderStart := func(limit int) int {
+		if limit <= 0 {
+			return 0
+		}
+		spacing := limit / readerStride
+		if spacing <= 0 {
+			spacing = 1
+		}
+		readerID := int(readerOffsets.Add(1) - 1)
+		return (readerID * spacing) % limit
+	}
+
 	if secondaryRead {
 		b.RunParallel(func(pb *testing.PB) {
-			i := 0
+			i := nextReaderStart(seedDocs)
 			for pb.Next() {
 				email := fmt.Sprintf("user-%09d@example.com", i%seedDocs)
 				if _, err := collection.FindByIndex("email_idx", email); err != nil {
 					b.Errorf("mixed secondary read: %v", err)
 				}
-				i += runtime.GOMAXPROCS(0)
+				i += readerStride
 			}
 		})
 	} else {
 		b.RunParallel(func(pb *testing.PB) {
-			i := 0
+			i := nextReaderStart(len(ids))
 			for pb.Next() {
 				if _, err := collection.Get(ids[i%len(ids)]); err != nil {
 					b.Errorf("mixed primary read: %v", err)
 				}
-				i += runtime.GOMAXPROCS(0)
+				i += readerStride
 			}
 		})
 	}
