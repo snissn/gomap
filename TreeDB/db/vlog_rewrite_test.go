@@ -22,6 +22,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/compression"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -555,10 +556,25 @@ func TestValueLogRewriteOffline_RewritesCollectionLeafRefRoot(t *testing.T) {
 		t.Fatalf("publish collection leaf-ref root: %v", err)
 	}
 	oldRoot := rootIDs[0]
-	oldLeafPtr, ok := page.DecodeLeafRef(oldRoot)
-	if !ok {
-		t.Fatalf("collection root=%d want leaf ref", oldRoot)
+	collectionLeafPtr := func(database *DB, root uint64) page.LeafLogPtr {
+		t.Helper()
+		if leafPtr, ok := page.DecodeLeafRef(root); ok {
+			return leafPtr
+		}
+		children, allLeafRefs, err := vacuumCollectLeafRefChildrenIfComplete(database.Pager(), root)
+		if err != nil {
+			t.Fatalf("collect collection leaf-ref children for root %d: %v", root, err)
+		}
+		if !allLeafRefs || len(children) == 0 {
+			t.Fatalf("collection root=%d want leaf-ref root or leaf-ref children", root)
+		}
+		leafPtr, ok := page.DecodeLeafRef(children[0].childID)
+		if !ok {
+			t.Fatalf("collection child root=%d want leaf ref", children[0].childID)
+		}
+		return leafPtr
 	}
+	oldLeafPtr := collectionLeafPtr(db, oldRoot)
 	oldLeafPath := leafLogSegmentPath(t, dir, oldLeafPtr.FileID)
 
 	if err := leafLog.Sync(); err != nil {
@@ -619,6 +635,7 @@ func TestValueLogRewriteOffline_RewritesCollectionLeafRefRootWithPagerDefault(t 
 		LeafPrefixCompression:  true,
 		IndexColumnarLeaves:    true,
 		IndexPackedValuePtr:    true,
+		IndexInternalBaseDelta: true,
 	}
 	db, err := Open(opts)
 	if err != nil {
@@ -630,9 +647,14 @@ func TestValueLogRewriteOffline_RewritesCollectionLeafRefRootWithPagerDefault(t 
 
 	const descriptorKey = "collections/root/users/pager-default-primary"
 	docValue := bytes.Repeat([]byte("collection-leafref-pager-default|"), 24)
+	docs := memtable.NewAppendOnlyWithEntryCapacity(1024)
+	for i := 0; i < 1024; i++ {
+		docs.Set([]byte(fmt.Sprintf("doc/%04d", i)), docValue)
+	}
+	docs.Freeze()
 	_, rootIDs, err := db.PublishOrderedRootGroupWithSystemBuilder([]OrderedRootPublishInput{{
 		BaseRoot:      0,
-		Iter:          mustFrozenRawMemtable(t, "doc/p", docValue).NewIterator(nil, nil),
+		Iter:          docs.NewIterator(nil, nil),
 		StoragePolicy: OrderedRootStorageValueLogLeaves,
 	}}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
 		if len(rootIDs) != 1 {
@@ -644,10 +666,25 @@ func TestValueLogRewriteOffline_RewritesCollectionLeafRefRootWithPagerDefault(t 
 		t.Fatalf("publish collection leaf-ref root: %v", err)
 	}
 	oldRoot := rootIDs[0]
-	oldLeafPtr, ok := page.DecodeLeafRef(oldRoot)
-	if !ok {
-		t.Fatalf("collection root=%d want leaf ref", oldRoot)
+	collectionLeafPtr := func(database *DB, root uint64) page.LeafLogPtr {
+		t.Helper()
+		if leafPtr, ok := page.DecodeLeafRef(root); ok {
+			return leafPtr
+		}
+		children, allLeafRefs, err := vacuumCollectLeafRefChildrenIfComplete(database.Pager(), root)
+		if err != nil {
+			t.Fatalf("collect collection leaf-ref children for root %d: %v", root, err)
+		}
+		if !allLeafRefs || len(children) == 0 {
+			t.Fatalf("collection root=%d want leaf-ref root or leaf-ref children", root)
+		}
+		leafPtr, ok := page.DecodeLeafRef(children[0].childID)
+		if !ok {
+			t.Fatalf("collection child root=%d want leaf ref", children[0].childID)
+		}
+		return leafPtr
 	}
+	oldLeafPtr := collectionLeafPtr(db, oldRoot)
 	oldLeafPath := leafLogSegmentPath(t, dir, oldLeafPtr.FileID)
 	if err := leafLog.Sync(); err != nil {
 		t.Fatalf("sync leaf log: %v", err)
@@ -680,14 +717,11 @@ func TestValueLogRewriteOffline_RewritesCollectionLeafRefRootWithPagerDefault(t 
 	if newRoot == oldRoot {
 		t.Fatalf("collection descriptor still points at old leaf-ref root %d", oldRoot)
 	}
-	newLeafPtr, ok := page.DecodeLeafRef(newRoot)
-	if !ok {
-		t.Fatalf("rewritten collection root=%d want leaf ref", newRoot)
-	}
+	newLeafPtr := collectionLeafPtr(reopen, newRoot)
 	if lane, _ := valuelog.DecodeFileID(newLeafPtr.FileID); lane != rewriteLeafLogLaneID {
 		t.Fatalf("rewritten collection leaf file lane=%d want %d", lane, rewriteLeafLogLaneID)
 	}
-	got := readCollectionRootValue(t, reopen, descriptorKey, []byte("doc/p"))
+	got := readCollectionRootValue(t, reopen, descriptorKey, []byte("doc/0512"))
 	if !bytes.Equal(got, docValue) {
 		t.Fatalf("collection leaf-ref value mismatch after rewrite")
 	}
