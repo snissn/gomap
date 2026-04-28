@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"sort"
 
 	"github.com/snissn/gomap/TreeDB/internal/bulk"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
@@ -16,18 +17,32 @@ import (
 
 const vacuumCollectionRootDescriptorPrefix = "collections/root/"
 
+var vacuumCollectionRootDescriptorPrefixBytes = []byte(vacuumCollectionRootDescriptorPrefix)
+
 type vacuumCollectionRootDescriptor struct {
 	key    []byte
 	rootID uint64
+}
+
+type vacuumCollectionRootReplacement struct {
+	key   []byte
+	value []byte
 }
 
 type vacuumAllocator interface {
 	Alloc(hint uint64) (uint64, error)
 }
 
+type vacuumUnsafeToReader interface {
+	ReadUnsafeTo(ptr page.ValuePtr, dst []byte) ([]byte, bool, error)
+}
+
+type vacuumUnsafeAppendReader interface {
+	ReadUnsafeAppend(ptr page.ValuePtr, dst []byte) ([]byte, error)
+}
+
 func vacuumCollectionRootDescriptorPrefixEnd() []byte {
-	prefix := []byte(vacuumCollectionRootDescriptorPrefix)
-	out := append([]byte(nil), prefix...)
+	out := append([]byte(nil), vacuumCollectionRootDescriptorPrefixBytes...)
 	for i := len(out) - 1; i >= 0; i-- {
 		if out[i] != 0xff {
 			out[i]++
@@ -45,21 +60,23 @@ func vacuumCollectCollectionRootDescriptors(p *pager.Pager, reader tree.SlabRead
 		return nil, nil
 	}
 
-	start := []byte(vacuumCollectionRootDescriptorPrefix)
-	it := tree.New(p, reader, systemRootID).IteratorWithOptions(start, vacuumCollectionRootDescriptorPrefixEnd(), tree.IteratorOptions{
+	it := tree.New(p, reader, systemRootID).IteratorWithOptions(vacuumCollectionRootDescriptorPrefixBytes, vacuumCollectionRootDescriptorPrefixEnd(), tree.IteratorOptions{
 		Mode: tree.IteratorModePointerProjection,
 	})
 	defer func() { _ = it.Close() }()
 
 	var out []vacuumCollectionRootDescriptor
+	var pointerScratch []byte
 	for it.Valid() {
 		key := it.UnsafeKey()
-		if !bytes.HasPrefix(key, start) {
+		if !bytes.HasPrefix(key, vacuumCollectionRootDescriptorPrefixBytes) {
 			break
 		}
-		val, _, flags := it.UnsafeEntry()
-		if flags&node.FlagPointer != 0 {
-			return nil, fmt.Errorf("vacuum: collection root descriptor %q is pointer-backed", string(key))
+		val, ptr, flags := it.UnsafeEntry()
+		var err error
+		val, pointerScratch, err = vacuumCollectionRootDescriptorValue(reader, key, val, ptr, flags, pointerScratch)
+		if err != nil {
+			return nil, err
 		}
 		if len(val) != 8 {
 			return nil, fmt.Errorf("vacuum: collection root descriptor %q has malformed root id length %d", string(key), len(val))
@@ -76,13 +93,44 @@ func vacuumCollectCollectionRootDescriptors(p *pager.Pager, reader tree.SlabRead
 	return out, nil
 }
 
-func vacuumRewriteCollectionRoots(oldPager *pager.Pager, reader tree.SlabReader, systemRootID uint64, alloc vacuumAllocator, newPager *pager.Pager) (map[string][]byte, error) {
+func vacuumCollectionRootDescriptorValue(reader tree.SlabReader, key []byte, val []byte, ptr page.ValuePtr, flags byte, scratch []byte) ([]byte, []byte, error) {
+	if flags&node.FlagPointer == 0 {
+		return val, scratch, nil
+	}
+	if reader == nil {
+		return nil, scratch, fmt.Errorf("vacuum: collection root descriptor %q is pointer-backed without value reader", string(key))
+	}
+	if toReader, ok := reader.(vacuumUnsafeToReader); ok {
+		resolved, usedDst, err := toReader.ReadUnsafeTo(ptr, scratch[:0])
+		if err != nil {
+			return nil, scratch, fmt.Errorf("vacuum: read pointer-backed collection root descriptor %q: %w", string(key), err)
+		}
+		if usedDst {
+			scratch = resolved
+		}
+		return resolved, scratch, nil
+	}
+	if appender, ok := reader.(vacuumUnsafeAppendReader); ok {
+		resolved, err := appender.ReadUnsafeAppend(ptr, scratch[:0])
+		if err != nil {
+			return nil, scratch, fmt.Errorf("vacuum: read pointer-backed collection root descriptor %q: %w", string(key), err)
+		}
+		return resolved, resolved, nil
+	}
+	resolved, err := reader.ReadUnsafe(ptr)
+	if err != nil {
+		return nil, scratch, fmt.Errorf("vacuum: read pointer-backed collection root descriptor %q: %w", string(key), err)
+	}
+	return resolved, scratch, nil
+}
+
+func vacuumRewriteCollectionRoots(oldPager *pager.Pager, reader tree.SlabReader, systemRootID uint64, alloc vacuumAllocator, newPager *pager.Pager) ([]vacuumCollectionRootReplacement, error) {
 	descriptors, err := vacuumCollectCollectionRootDescriptors(oldPager, reader, systemRootID)
 	if err != nil || len(descriptors) == 0 {
 		return nil, err
 	}
 
-	replacements := make(map[string][]byte, len(descriptors))
+	replacements := make([]vacuumCollectionRootReplacement, 0, len(descriptors))
 	rootRemap := make(map[uint64]uint64, len(descriptors))
 	for _, descriptor := range descriptors {
 		oldRoot := descriptor.rootID
@@ -101,12 +149,18 @@ func vacuumRewriteCollectionRoots(oldPager *pager.Pager, reader tree.SlabReader,
 		if newRoot != oldRoot {
 			encoded := make([]byte, 8)
 			binary.BigEndian.PutUint64(encoded, newRoot)
-			replacements[string(descriptor.key)] = encoded
+			replacements = append(replacements, vacuumCollectionRootReplacement{
+				key:   descriptor.key,
+				value: encoded,
+			})
 		}
 	}
 	if len(replacements) == 0 {
 		return nil, nil
 	}
+	sort.Slice(replacements, func(i, j int) bool {
+		return bytes.Compare(replacements[i].key, replacements[j].key) < 0
+	})
 	return replacements, nil
 }
 
@@ -190,7 +244,7 @@ func vacuumCollectLeafRefChildrenIfComplete(p *pager.Pager, rootID uint64) ([]va
 	return out, true, nil
 }
 
-func vacuumBuildSystemRoot(oldPager *pager.Pager, reader tree.SlabReader, systemRootID uint64, alloc vacuumAllocator, newPager *pager.Pager, opts bulk.BuildOptions, replacements map[string][]byte) (uint64, error) {
+func vacuumBuildSystemRoot(oldPager *pager.Pager, reader tree.SlabReader, systemRootID uint64, alloc vacuumAllocator, newPager *pager.Pager, opts bulk.BuildOptions, replacements []vacuumCollectionRootReplacement) (uint64, error) {
 	sysIter := tree.New(oldPager, reader, systemRootID).IteratorWithOptions(nil, nil, tree.IteratorOptions{
 		Mode: tree.IteratorModePointerProjection,
 	})
@@ -207,7 +261,7 @@ func vacuumBuildSystemRoot(oldPager *pager.Pager, reader tree.SlabReader, system
 
 type vacuumSystemRootRewriteIterator struct {
 	base         iterator.UnsafeIterator
-	replacements map[string][]byte
+	replacements []vacuumCollectionRootReplacement
 }
 
 func (it *vacuumSystemRootRewriteIterator) Valid() bool {
@@ -226,8 +280,17 @@ func (it *vacuumSystemRootRewriteIterator) replacement() ([]byte, bool) {
 	if it == nil || it.base == nil || len(it.replacements) == 0 || !it.base.Valid() {
 		return nil, false
 	}
-	val, ok := it.replacements[string(it.base.UnsafeKey())]
-	return val, ok
+	key := it.base.UnsafeKey()
+	if !bytes.HasPrefix(key, vacuumCollectionRootDescriptorPrefixBytes) {
+		return nil, false
+	}
+	idx := sort.Search(len(it.replacements), func(i int) bool {
+		return bytes.Compare(it.replacements[i].key, key) >= 0
+	})
+	if idx >= len(it.replacements) || !bytes.Equal(it.replacements[idx].key, key) {
+		return nil, false
+	}
+	return it.replacements[idx].value, true
 }
 
 func (it *vacuumSystemRootRewriteIterator) UnsafeKey() []byte {

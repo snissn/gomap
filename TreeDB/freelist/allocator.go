@@ -392,6 +392,20 @@ func (a *Allocator) Stats(pageLimit uint64) (Stats, error) {
 	return out, err
 }
 
+// Counters reports cheap in-memory allocator counters without walking freelist
+// pages. Use Stats when callers explicitly need on-disk reclaimable page counts.
+func (a *Allocator) Counters() Stats {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return Stats{
+		Head:             a.head,
+		AllocPages:       a.stats.AllocPages,
+		AppendAllocPages: a.stats.AppendAllocPages,
+		ReuseAllocPages:  a.stats.ReuseAllocPages,
+		FreePages:        a.stats.FreePages,
+	}
+}
+
 func readStatsLocked(p *pager.Pager, head uint64, pageLimit uint64) (Stats, error) {
 	out := Stats{Head: head}
 	if head == 0 || pageLimit == 0 {

@@ -576,15 +576,12 @@ func (db *DB) Stats() map[string]string {
 	writeLeafGenerationMetrics(stats, db.collectLeafGenerationMetrics(state.ValueLogSet, snap.leafGenerationPinnedIDs))
 
 	stats["treedb.pages.total"] = fmt.Sprintf("%d", idx.pager.PageCount())
-	if fs, err := idx.allocator.Stats(idx.pager.PageCount()); err == nil {
-		stats["treedb.freelist.reclaimable_pages"] = fmt.Sprintf("%d", fs.ReclaimablePages())
-		stats["treedb.freelist.alloc_pages_total"] = fmt.Sprintf("%d", fs.AllocPages)
-		stats["treedb.freelist.append_alloc_pages_total"] = fmt.Sprintf("%d", fs.AppendAllocPages)
-		stats["treedb.freelist.reuse_alloc_pages_total"] = fmt.Sprintf("%d", fs.ReuseAllocPages)
-		stats["treedb.freelist.free_pages_total"] = fmt.Sprintf("%d", fs.FreePages)
-	} else {
-		stats["treedb.freelist.error"] = err.Error()
-	}
+	fs := idx.allocator.Counters()
+	stats["treedb.freelist.head"] = fmt.Sprintf("%d", fs.Head)
+	stats["treedb.freelist.alloc_pages_total"] = fmt.Sprintf("%d", fs.AllocPages)
+	stats["treedb.freelist.append_alloc_pages_total"] = fmt.Sprintf("%d", fs.AppendAllocPages)
+	stats["treedb.freelist.reuse_alloc_pages_total"] = fmt.Sprintf("%d", fs.ReuseAllocPages)
+	stats["treedb.freelist.free_pages_total"] = fmt.Sprintf("%d", fs.FreePages)
 	graveyard := idx.graveyard.Stats()
 	stats["treedb.graveyard.batches"] = fmt.Sprintf("%d", graveyard.Batches)
 	stats["treedb.graveyard.pages"] = fmt.Sprintf("%d", graveyard.Pages)
