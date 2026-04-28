@@ -388,10 +388,12 @@ cat >"$OUT_DIR/README.md" <<EOF
 - collection matrix summary html: \`$OUT_DIR/collections_matrix_summary.html\`
 - collection matrix summary tsv: \`$OUT_DIR/collections_matrix_summary.tsv\`
 - user-story throughput tsv: \`$OUT_DIR/collections_user_story_summary.tsv\`
+- disk-usage summary tsv: \`$OUT_DIR/collections_disk_usage_summary.tsv\`
 - profile index: \`$PROFILE_INDEX_TSV\`
 - unified index: \`$UNIFIED_INDEX_TSV\`
 
 Latency columns in the generated reports include adjacent throughput columns, for example \`ns/op\` with \`ops/sec\` and \`insert ns/doc\` with \`insert docs/sec\`.
+Insert-shape benchmark rows also include untimed end-of-run disk metrics, and the disk summary compares total, collection, and index bytes across matching zero-index baselines.
 
 ## Cells
 

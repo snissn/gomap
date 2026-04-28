@@ -2,7 +2,9 @@ package collections_test
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -11,6 +13,7 @@ import (
 	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/page"
 )
 
 const (
@@ -179,6 +182,72 @@ func benchmarkReportCheckpointSplit(b *testing.B, docs int, insertElapsed, syncE
 	}
 	b.ReportMetric(float64(insertElapsed.Nanoseconds())/float64(docs), "insert_ns/doc")
 	b.ReportMetric(float64(syncElapsed.Nanoseconds())/float64(docs), "sync_ns/doc")
+}
+
+func benchmarkReportDiskUsage(b *testing.B, docs int, totalBytes uint64) {
+	b.Helper()
+
+	if docs <= 0 {
+		return
+	}
+	b.ReportMetric(float64(docs), "stored_docs")
+	b.ReportMetric(float64(totalBytes), "disk_total_bytes")
+	b.ReportMetric(float64(totalBytes)/float64(docs), "disk_bytes/doc")
+}
+
+func benchmarkReportTreeDBDiskUsage(b *testing.B, backend *backenddb.DB, docs int) {
+	b.Helper()
+
+	if backend == nil {
+		return
+	}
+	if err := backend.Checkpoint(); err != nil {
+		b.Fatalf("checkpoint before TreeDB disk usage stats: %v", err)
+	}
+	totalBytes, err := benchmarkTreeDBDiskUsageBytes(backend)
+	if err != nil {
+		b.Fatalf("TreeDB disk usage stats: %v", err)
+	}
+	benchmarkReportDiskUsage(b, docs, totalBytes)
+}
+
+func benchmarkTreeDBDiskUsageBytes(backend *backenddb.DB) (uint64, error) {
+	dir := backend.Dir()
+	if dir == "" {
+		return 0, nil
+	}
+	indexPath := filepath.Clean(filepath.Join(dir, "index.db"))
+	total := backend.Pager().PageCount() * uint64(page.PageSize)
+	otherBytes, err := benchmarkDirectoryUsageBytes(dir, indexPath)
+	if err != nil {
+		return 0, err
+	}
+	return total + otherBytes, nil
+}
+
+func benchmarkDirectoryUsageBytes(root, skipPath string) (uint64, error) {
+	var total uint64
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		if skipPath != "" && filepath.Clean(path) == skipPath {
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() || info.Size() <= 0 {
+			return nil
+		}
+		total += uint64(info.Size())
+		return nil
+	})
+	return total, err
 }
 
 func TestBenchmarkCollectionStoragePolicyDefaultsProductionMainline(t *testing.T) {
@@ -503,7 +572,10 @@ func BenchmarkCollectionInsertBatchWithSecondaryIndexes(b *testing.B) {
 		inserted += batchSize
 	}
 	b.StopTimer()
+	b.ReportMetric(float64(targetBatchSize), "target_docs/batch")
+	b.ReportMetric(2, "indexes/doc")
 	benchmarkReportNativeProbeFallbackDeltas(b, backend, startKeyFallback, startPrefixFallback)
+	benchmarkReportTreeDBDiskUsage(b, backend, b.N)
 }
 
 func BenchmarkCollectionInsertBatchCheckpointWithSecondaryIndexes(b *testing.B) {
@@ -536,8 +608,11 @@ func BenchmarkCollectionInsertBatchCheckpointWithSecondaryIndexes(b *testing.B) 
 		inserted += batchSize
 	}
 	b.StopTimer()
+	b.ReportMetric(float64(targetBatchSize), "target_docs/checkpoint")
+	b.ReportMetric(2, "indexes/doc")
 	benchmarkReportCheckpointSplit(b, b.N, insertElapsed, syncElapsed)
 	benchmarkReportNativeProbeFallbackDeltas(b, backend, startKeyFallback, startPrefixFallback)
+	benchmarkReportTreeDBDiskUsage(b, backend, b.N)
 }
 
 func BenchmarkCollectionDeleteWithSecondaryIndexes(b *testing.B) {

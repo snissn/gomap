@@ -132,10 +132,13 @@ func benchmarkTimedProfileIndexedInsertBatch(b *testing.B, checkpoint bool) {
 	b.StopTimer()
 	stopProfile()
 	profileActive = false
+	b.ReportMetric(float64(targetBatchSize), metricName)
+	b.ReportMetric(2, "indexes/doc")
 	if checkpoint {
 		benchmarkReportCheckpointSplit(b, b.N, insertElapsed, syncElapsed)
 	}
 	benchmarkReportNativeProbeFallbackDeltas(b, backend, startKeyFallback, startPrefixFallback)
+	benchmarkReportTreeDBDiskUsage(b, backend, b.N)
 }
 
 func BenchmarkCollectionTimedProfileInsertBatchWithSecondaryIndexes(b *testing.B) {
