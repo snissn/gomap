@@ -1,21 +1,28 @@
 package main
 
 import (
+	"bytes"
 	"encoding/csv"
 	"encoding/json"
 	"flag"
 	"fmt"
+	"html/template"
 	"io"
 	"math"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/yuin/goldmark"
+	"github.com/yuin/goldmark/extension"
 )
 
 type config struct {
-	matrixIndexPath string
-	outDir          string
+	matrixIndexPath     string
+	outDir              string
+	availableBenchmarks bool
 }
 
 type matrixRow struct {
@@ -79,14 +86,30 @@ var benchmarkOrder = []string{
 	"BenchmarkCollectionOverheadIndexStateTemplateV1Extraction",
 	"BenchmarkCollectionOverheadPlanIndexedTemplateV1",
 	"BenchmarkCollectionOverheadPlanIndexedPrecomputedState",
+	"BenchmarkCollectionShapeInsertBatch",
+	"BenchmarkCollectionShapeInsertBatchSingleStringJSON",
 	"BenchmarkCollectionInsertBatchWithSecondaryIndexes",
+	"BenchmarkCollectionShapeInsertBatchCheckpoint",
+	"BenchmarkCollectionShapeInsertBatchCheckpointSingleStringJSON",
 	"BenchmarkCollectionInsertBatchCheckpointWithSecondaryIndexes",
 	"BenchmarkCollectionTimedProfileInsertBatchWithSecondaryIndexes",
 	"BenchmarkCollectionTimedProfileInsertBatchCheckpointWithSecondaryIndexes",
+	"BenchmarkCollectionShapeReadPrimary",
+	"BenchmarkCollectionShapeReadPrimaryParallel",
+	"BenchmarkCollectionMixedReadWritePrimary",
+	"BenchmarkCollectionMixedReadWriteSecondaryUnique",
+	"BenchmarkSQLiteShapeInsertBatchJSON",
+	"BenchmarkSQLiteShapeInsertBatchNativeColumns",
 	"BenchmarkSQLiteInsertBatchWithSecondaryIndexes",
 	"BenchmarkSQLiteInsertBatchCheckpointWithSecondaryIndexes",
 	"BenchmarkSQLiteNativeColumnsInsertBatchWithSecondaryIndexes",
 	"BenchmarkSQLiteNativeColumnsInsertBatchCheckpointWithSecondaryIndexes",
+	"BenchmarkSQLiteShapeInsertBatchCheckpointJSON",
+	"BenchmarkSQLiteShapeInsertBatchCheckpointNativeColumns",
+	"BenchmarkSQLiteShapeReadPrimaryJSON",
+	"BenchmarkSQLiteShapeReadPrimaryNativeColumns",
+	"BenchmarkSQLiteShapeSecondaryLookupJSON",
+	"BenchmarkSQLiteShapeSecondaryLookupNativeColumns",
 }
 
 func main() {
@@ -107,6 +130,7 @@ func parseFlags(args []string) (config, error) {
 	fs.SetOutput(io.Discard)
 	fs.StringVar(&cfg.matrixIndexPath, "matrix-index", "", "Path to matrix_index.tsv")
 	fs.StringVar(&cfg.outDir, "out-dir", "", "Output directory for summary artifacts")
+	fs.BoolVar(&cfg.availableBenchmarks, "available-benchmarks", false, "Summarize all benchmark rows present in each report instead of requiring the default production benchmark set")
 	if err := fs.Parse(args); err != nil {
 		return config{}, err
 	}
@@ -124,7 +148,7 @@ func run(cfg config) error {
 	if err != nil {
 		return err
 	}
-	summaryRows, err := buildSummaryRows(rows)
+	summaryRows, err := buildSummaryRows(rows, cfg.availableBenchmarks)
 	if err != nil {
 		return err
 	}
@@ -147,9 +171,18 @@ func run(cfg config) error {
 	if err := os.WriteFile(mdPath, []byte(md), 0o644); err != nil {
 		return fmt.Errorf("write markdown: %w", err)
 	}
+	htmlPath := filepath.Join(cfg.outDir, "collections_matrix_summary.html")
+	htmlDoc, err := markdownToHTMLDoc(md)
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(htmlPath, htmlDoc, 0o644); err != nil {
+		return fmt.Errorf("write html: %w", err)
+	}
 	fmt.Printf("wrote matrix summary tsv: %s\n", tsvPath)
 	fmt.Printf("wrote user story tsv:     %s\n", userStoryPath)
 	fmt.Printf("wrote matrix summary md:  %s\n", mdPath)
+	fmt.Printf("wrote matrix summary html:%s\n", htmlPath)
 	return nil
 }
 
@@ -216,7 +249,7 @@ func field(record []string, idx int) string {
 	return record[idx]
 }
 
-func buildSummaryRows(rows []matrixRow) ([]summaryRow, error) {
+func buildSummaryRows(rows []matrixRow, availableBenchmarks bool) ([]summaryRow, error) {
 	out := make([]summaryRow, 0, len(rows)*len(benchmarkOrder))
 	for _, row := range rows {
 		report, err := loadBenchmarkReport(row.ReportJSONPath)
@@ -228,6 +261,13 @@ func buildSummaryRows(rows []matrixRow) ([]summaryRow, error) {
 			if strings.TrimSpace(row.DocumentFormat) == "" {
 				row.DocumentFormat = "json"
 			}
+		}
+		if availableBenchmarks {
+			for _, name := range availableBenchmarkNames(report.Benchmarks) {
+				benchmark := report.Benchmarks[name]
+				out = append(out, buildSummaryRow(row, report.CollectionBatchSize, name, benchmark))
+			}
+			continue
 		}
 		for _, name := range requiredBenchmarkNames(row) {
 			benchmark, ok := report.Benchmarks[name]
@@ -245,6 +285,43 @@ func buildSummaryRows(rows []matrixRow) ([]summaryRow, error) {
 		}
 	}
 	return out, nil
+}
+
+func availableBenchmarkNames(benchmarks map[string]benchmarkAggregate) []string {
+	names := make([]string, 0, len(benchmarks))
+	for name := range benchmarks {
+		names = append(names, name)
+	}
+	order := make(map[string]int, len(benchmarkOrder))
+	for i, name := range benchmarkOrder {
+		order[name] = i
+	}
+	sortBenchmarkNames(names, order)
+	return names
+}
+
+func sortBenchmarkNames(names []string, order map[string]int) {
+	sort.Slice(names, func(i, j int) bool {
+		leftBase := benchmarkBaseName(names[i])
+		rightBase := benchmarkBaseName(names[j])
+		leftOrder, leftOK := order[leftBase]
+		rightOrder, rightOK := order[rightBase]
+		switch {
+		case leftOK && rightOK && leftOrder != rightOrder:
+			return leftOrder < rightOrder
+		case leftOK != rightOK:
+			return leftOK
+		default:
+			return names[i] < names[j]
+		}
+	})
+}
+
+func benchmarkBaseName(name string) string {
+	if slash := strings.IndexByte(name, '/'); slash > 0 {
+		return name[:slash]
+	}
+	return name
 }
 
 func buildSummaryRow(row matrixRow, collectionBatchSize int, name string, benchmark benchmarkAggregate) summaryRow {
@@ -591,16 +668,24 @@ func buildUserStoryRows(rows []summaryRow) []userStoryRow {
 }
 
 func userStoryLabel(benchmark string) (string, bool) {
-	switch benchmark {
+	switch benchmarkBaseName(benchmark) {
 	case "BenchmarkCollectionInsertBatchWithSecondaryIndexes",
 		"BenchmarkCollectionTimedProfileInsertBatchWithSecondaryIndexes",
+		"BenchmarkCollectionShapeInsertBatch",
+		"BenchmarkCollectionShapeInsertBatchSingleStringJSON",
 		"BenchmarkSQLiteInsertBatchWithSecondaryIndexes",
-		"BenchmarkSQLiteNativeColumnsInsertBatchWithSecondaryIndexes":
+		"BenchmarkSQLiteNativeColumnsInsertBatchWithSecondaryIndexes",
+		"BenchmarkSQLiteShapeInsertBatchJSON",
+		"BenchmarkSQLiteShapeInsertBatchNativeColumns":
 		return "bulk indexed insert", true
 	case "BenchmarkCollectionInsertBatchCheckpointWithSecondaryIndexes",
 		"BenchmarkCollectionTimedProfileInsertBatchCheckpointWithSecondaryIndexes",
+		"BenchmarkCollectionShapeInsertBatchCheckpoint",
+		"BenchmarkCollectionShapeInsertBatchCheckpointSingleStringJSON",
 		"BenchmarkSQLiteInsertBatchCheckpointWithSecondaryIndexes",
-		"BenchmarkSQLiteNativeColumnsInsertBatchCheckpointWithSecondaryIndexes":
+		"BenchmarkSQLiteNativeColumnsInsertBatchCheckpointWithSecondaryIndexes",
+		"BenchmarkSQLiteShapeInsertBatchCheckpointJSON",
+		"BenchmarkSQLiteShapeInsertBatchCheckpointNativeColumns":
 		return "checkpointed indexed insert", true
 	default:
 		return "", false
@@ -618,7 +703,7 @@ func buildDiagnosticRows(rows []summaryRow) []summaryRow {
 }
 
 func isDiagnosticBenchmark(benchmark string) bool {
-	switch benchmark {
+	switch benchmarkBaseName(benchmark) {
 	case "BenchmarkCollectionOverheadIndexStateJSONExtraction",
 		"BenchmarkCollectionOverheadIndexStateTemplateV1Extraction",
 		"BenchmarkCollectionOverheadPlanIndexedTemplateV1",
@@ -627,6 +712,39 @@ func isDiagnosticBenchmark(benchmark string) bool {
 	default:
 		return false
 	}
+}
+
+func markdownToHTMLDoc(markdown string) ([]byte, error) {
+	var body bytes.Buffer
+	md := goldmark.New(goldmark.WithExtensions(extension.GFM))
+	if err := md.Convert([]byte(markdown), &body); err != nil {
+		return nil, fmt.Errorf("render markdown: %w", err)
+	}
+	const pageTmpl = `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Collections Benchmark Matrix</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 2rem auto; max-width: 1280px; padding: 0 1rem; line-height: 1.5; }
+    table { border-collapse: collapse; width: 100%; }
+    th, td { border: 1px solid #d0d7de; padding: 0.45rem 0.65rem; vertical-align: top; }
+    th { background: #f6f8fa; text-align: left; }
+    code { background: #f6f8fa; padding: 0.1rem 0.25rem; border-radius: 4px; }
+  </style>
+</head>
+<body>{{.Body}}</body>
+</html>`
+	tmpl, err := template.New("page").Parse(pageTmpl)
+	if err != nil {
+		return nil, err
+	}
+	var doc bytes.Buffer
+	if err := tmpl.Execute(&doc, struct{ Body template.HTML }{Body: template.HTML(body.String())}); err != nil {
+		return nil, err
+	}
+	return doc.Bytes(), nil
 }
 
 func markdownLinkPath(path string) string {
