@@ -26,8 +26,8 @@ The default run captures:
 - top-level `collections_matrix_summary.{tsv,md,html}`.
 - top-level `collections_user_story_summary.tsv`.
 - top-level `collections_disk_usage_summary.tsv`.
-- top-level `collections_maintenance_summary.tsv` when maintenance metrics are
-  enabled.
+- top-level `collections_maintenance_summary.tsv` (always generated; may be
+  header-only when maintenance metrics are not enabled or not present).
 
 ## Optional Baselines
 
