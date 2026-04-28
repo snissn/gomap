@@ -276,7 +276,6 @@ func checkpointSQLiteWAL(tb testing.TB, db *sql.DB) {
 }
 
 func TestSQLiteBenchmarkSchemaExtractsIndexedFields(t *testing.T) {
-	t.Setenv("TREEDB_COLLECTION_DOCUMENT_FORMAT", "template-v1")
 	db := openBenchmarkSQLiteDB(t, "schema_extract")
 	ids, docs := benchmarkSQLiteDocumentBatch(t, 0, 1)
 	insertSQLiteDocumentBatch(t, db, ids, docs)
