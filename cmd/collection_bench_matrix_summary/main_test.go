@@ -74,7 +74,14 @@ func TestMatrixSummaryRendersBenchmarkMetrics(t *testing.T) {
             "indexes/doc": 2,
             "stored_docs": 16000,
             "disk_total_bytes": 2400000,
-            "disk_bytes/doc": 150
+            "disk_bytes/doc": 150,
+            "vlog_rewrite_ns/op": 50000000,
+            "vlog_gc_ns/op": 10000000,
+            "vlog_rewrite_disk_total_bytes_before": 2400000,
+            "vlog_rewrite_disk_total_bytes_after": 2600000,
+            "vlog_rewrite_disk_total_bytes_delta": 200000,
+            "vlog_rewrite_gc_disk_total_bytes_after": 1800000,
+            "vlog_rewrite_gc_disk_total_bytes_delta": -600000
           }
         },
         {
@@ -168,7 +175,11 @@ func TestMatrixSummaryRendersBenchmarkMetrics(t *testing.T) {
             "collection_disk_bytes": 1800000,
             "collection_disk_bytes/doc": 112.5,
             "index_disk_bytes": 1400000,
-            "index_disk_bytes/doc": 87.5
+            "index_disk_bytes/doc": 87.5,
+            "sqlite_vacuum_ns/op": 25000000,
+            "sqlite_vacuum_disk_total_bytes_before": 3200000,
+            "sqlite_vacuum_disk_total_bytes_after": 2800000,
+            "sqlite_vacuum_disk_total_bytes_delta": -400000
           }
         },
         {
@@ -248,6 +259,11 @@ func TestMatrixSummaryRendersBenchmarkMetrics(t *testing.T) {
 		"2,400,000",
 		"800,000",
 		"1,400,000",
+		"## Maintenance Compaction",
+		"| Cell | Engine | Format | Data vlog | Index vlog | Pager chunk | Pager sync | Maintenance | Benchmark | ns/op | ops/sec | GC ns/op | GC ops/sec | Before | After | Delta | After GC | Delta after GC | Report |",
+		"`treedb_vlog_rewrite`",
+		"`sqlite_vacuum`",
+		"-600,000",
 		"## Diagnostic Rows",
 		"| Cell | Engine | Format | Pager chunk | Pager sync | Diagnostic | ns/doc | ops/sec | B/doc | allocs/doc | Report |",
 		"These rows are not user stories.",
@@ -331,6 +347,17 @@ func TestMatrixSummaryRendersBenchmarkMetrics(t *testing.T) {
 	}
 	if !strings.Contains(gotDiskUsageTSV, "json\t-\t-\t-\t-\tbulk indexed insert\tBenchmarkSQLiteShapeInsertBatchJSON/indexes_2\t2\t16000\t3200000\t200\t1800000\t112.5\t1400000\t87.5\treported\t") {
 		t.Fatalf("disk usage tsv missing SQLite reported split row:\n%s", gotDiskUsageTSV)
+	}
+	maintenanceTSV, err := os.ReadFile(filepath.Join(dir, "collections_maintenance_summary.tsv"))
+	if err != nil {
+		t.Fatalf("read maintenance tsv: %v", err)
+	}
+	gotMaintenanceTSV := string(maintenanceTSV)
+	if !strings.Contains(gotMaintenanceTSV, "template-v1\ttrue\tfalse\tprofile/default\tprofile/default\ttreedb_vlog_rewrite\tBenchmarkCollectionShapeInsertBatch/indexes_2\t50000000\t20\t10000000\t100\t2400000\t2600000\t200000\t1800000\t-600000\t") {
+		t.Fatalf("maintenance tsv missing TreeDB rewrite row:\n%s", gotMaintenanceTSV)
+	}
+	if !strings.Contains(gotMaintenanceTSV, "json\t-\t-\t-\t-\tsqlite_vacuum\tBenchmarkSQLiteShapeInsertBatchJSON/indexes_2\t25000000\t40\t-\t-\t3200000\t2800000\t-400000\t-\t-\t") {
+		t.Fatalf("maintenance tsv missing SQLite vacuum row:\n%s", gotMaintenanceTSV)
 	}
 }
 

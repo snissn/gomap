@@ -74,6 +74,17 @@ type summaryRow struct {
 	CollectionDiskBPerDoc *float64
 	IndexDiskBytes        *float64
 	IndexDiskBPerDoc      *float64
+	VLogRewriteNs         *float64
+	VLogRewriteBefore     *float64
+	VLogRewriteAfter      *float64
+	VLogRewriteDelta      *float64
+	VLogRewriteAfterGC    *float64
+	VLogRewriteDeltaGC    *float64
+	VLogGCNs              *float64
+	SQLiteVacuumNs        *float64
+	SQLiteVacuumBefore    *float64
+	SQLiteVacuumAfter     *float64
+	SQLiteVacuumDelta     *float64
 }
 
 type loadedReport struct {
@@ -102,6 +113,18 @@ type diskUsageRow struct {
 	CollectionDiskBPerDocValue *float64
 	IndexDiskBytesValue        *float64
 	IndexDiskBPerDocValue      *float64
+}
+
+type maintenanceRow struct {
+	summaryRow
+	Kind       string
+	NsPerMaint *float64
+	GCNs       *float64
+	Before     *float64
+	After      *float64
+	Delta      *float64
+	AfterGC    *float64
+	DeltaGC    *float64
 }
 
 var benchmarkOrder = []string{
@@ -190,6 +213,10 @@ func run(cfg config) error {
 	if err := os.WriteFile(diskUsagePath, []byte(renderDiskUsageTSV(buildDiskUsageRows(summaryRows))), 0o644); err != nil {
 		return fmt.Errorf("write disk usage tsv: %w", err)
 	}
+	maintenancePath := filepath.Join(cfg.outDir, "collections_maintenance_summary.tsv")
+	if err := os.WriteFile(maintenancePath, []byte(renderMaintenanceTSV(buildMaintenanceRows(summaryRows))), 0o644); err != nil {
+		return fmt.Errorf("write maintenance tsv: %w", err)
+	}
 	mdPath := filepath.Join(cfg.outDir, "collections_matrix_summary.md")
 	md, err := renderMarkdown(summaryRows, cfg.outDir)
 	if err != nil {
@@ -209,6 +236,7 @@ func run(cfg config) error {
 	fmt.Printf("wrote matrix summary tsv: %s\n", tsvPath)
 	fmt.Printf("wrote user story tsv:     %s\n", userStoryPath)
 	fmt.Printf("wrote disk usage tsv:     %s\n", diskUsagePath)
+	fmt.Printf("wrote maintenance tsv:    %s\n", maintenancePath)
 	fmt.Printf("wrote matrix summary md:  %s\n", mdPath)
 	fmt.Printf("wrote matrix summary html: %s\n", htmlPath)
 	return nil
@@ -375,6 +403,17 @@ func buildSummaryRow(row matrixRow, collectionBatchSize int, name string, benchm
 		CollectionDiskBPerDoc: metricPtr(benchmark.MeanMetrics, "collection_disk_bytes/doc"),
 		IndexDiskBytes:        metricPtr(benchmark.MeanMetrics, "index_disk_bytes"),
 		IndexDiskBPerDoc:      metricPtr(benchmark.MeanMetrics, "index_disk_bytes/doc"),
+		VLogRewriteNs:         metricPtr(benchmark.MeanMetrics, "vlog_rewrite_ns/op"),
+		VLogRewriteBefore:     metricPtr(benchmark.MeanMetrics, "vlog_rewrite_disk_total_bytes_before"),
+		VLogRewriteAfter:      metricPtr(benchmark.MeanMetrics, "vlog_rewrite_disk_total_bytes_after"),
+		VLogRewriteDelta:      metricPtr(benchmark.MeanMetrics, "vlog_rewrite_disk_total_bytes_delta"),
+		VLogRewriteAfterGC:    metricPtr(benchmark.MeanMetrics, "vlog_rewrite_gc_disk_total_bytes_after"),
+		VLogRewriteDeltaGC:    metricPtr(benchmark.MeanMetrics, "vlog_rewrite_gc_disk_total_bytes_delta"),
+		VLogGCNs:              metricPtr(benchmark.MeanMetrics, "vlog_gc_ns/op"),
+		SQLiteVacuumNs:        metricPtr(benchmark.MeanMetrics, "sqlite_vacuum_ns/op"),
+		SQLiteVacuumBefore:    metricPtr(benchmark.MeanMetrics, "sqlite_vacuum_disk_total_bytes_before"),
+		SQLiteVacuumAfter:     metricPtr(benchmark.MeanMetrics, "sqlite_vacuum_disk_total_bytes_after"),
+		SQLiteVacuumDelta:     metricPtr(benchmark.MeanMetrics, "sqlite_vacuum_disk_total_bytes_delta"),
 	}
 }
 
@@ -604,6 +643,52 @@ func renderDiskUsageTSV(rows []diskUsageRow) string {
 	return sb.String()
 }
 
+func renderMaintenanceTSV(rows []maintenanceRow) string {
+	var sb strings.Builder
+	sb.WriteString("cell\tengine\tdocument_format\tdata_outer_leaves_in_vlog\tindex_outer_leaves_in_vlog\tpager_chunk_size\tpager_sync_concurrency\tmaintenance\tbenchmark\tns_per_op\tops_per_sec\tgc_ns_per_op\tgc_ops_per_sec\tdisk_total_bytes_before\tdisk_total_bytes_after\tdisk_total_bytes_delta\tdisk_total_bytes_after_gc\tdisk_total_bytes_delta_after_gc\treport_md\n")
+	for _, row := range rows {
+		sb.WriteString(row.Cell)
+		sb.WriteByte('\t')
+		sb.WriteString(row.Engine)
+		sb.WriteByte('\t')
+		sb.WriteString(row.DocumentFormat)
+		sb.WriteByte('\t')
+		sb.WriteString(row.DataOuterLeavesInVLog)
+		sb.WriteByte('\t')
+		sb.WriteString(row.IndexOuterLeavesInVLog)
+		sb.WriteByte('\t')
+		sb.WriteString(row.PagerChunkSize)
+		sb.WriteByte('\t')
+		sb.WriteString(row.PagerSyncConcurrency)
+		sb.WriteByte('\t')
+		sb.WriteString(row.Kind)
+		sb.WriteByte('\t')
+		sb.WriteString(row.Benchmark)
+		sb.WriteByte('\t')
+		sb.WriteString(formatOptionalTSVFloat(row.NsPerMaint))
+		sb.WriteByte('\t')
+		sb.WriteString(formatOptionalTSVFloat(optionalOpsPerSecFromNs(row.NsPerMaint)))
+		sb.WriteByte('\t')
+		sb.WriteString(formatOptionalTSVFloat(row.GCNs))
+		sb.WriteByte('\t')
+		sb.WriteString(formatOptionalTSVFloat(optionalOpsPerSecFromNs(row.GCNs)))
+		sb.WriteByte('\t')
+		sb.WriteString(formatOptionalTSVFloat(row.Before))
+		sb.WriteByte('\t')
+		sb.WriteString(formatOptionalTSVFloat(row.After))
+		sb.WriteByte('\t')
+		sb.WriteString(formatOptionalTSVFloat(row.Delta))
+		sb.WriteByte('\t')
+		sb.WriteString(formatOptionalTSVFloat(row.AfterGC))
+		sb.WriteByte('\t')
+		sb.WriteString(formatOptionalTSVFloat(row.DeltaGC))
+		sb.WriteByte('\t')
+		sb.WriteString(row.ReportMarkdownPath)
+		sb.WriteByte('\n')
+	}
+	return sb.String()
+}
+
 func optionalMetricPerBatchMS(nsPerDoc *float64, batchSize int) *float64 {
 	if nsPerDoc == nil || batchSize <= 0 {
 		return nil
@@ -735,6 +820,56 @@ func renderMarkdown(rows []summaryRow, outDir string) (string, error) {
 			sb.WriteString(" | `")
 			sb.WriteString(escapeTableCell(row.SplitSource))
 			sb.WriteString("` | [report](")
+			sb.WriteString(markdownLinkPath(reportPath))
+			sb.WriteString(") |\n")
+		}
+		sb.WriteString("\n")
+	}
+	maintenanceRows := buildMaintenanceRows(rows)
+	if len(maintenanceRows) > 0 {
+		sb.WriteString("## Maintenance Compaction\n\n")
+		sb.WriteString("TreeDB rows show end-of-run total disk before online value-log rewrite, after rewrite, and after a follow-up value-log GC. SQLite rows show total disk before and after full `VACUUM`.\n\n")
+		sb.WriteString("| Cell | Engine | Format | Data vlog | Index vlog | Pager chunk | Pager sync | Maintenance | Benchmark | ns/op | ops/sec | GC ns/op | GC ops/sec | Before | After | Delta | After GC | Delta after GC | Report |\n")
+		sb.WriteString("| --- | --- | --- | ---: | ---: | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |\n")
+		for _, row := range maintenanceRows {
+			reportPath := relativeReportPath(outDir, row.ReportMarkdownPath)
+			sb.WriteString("| `")
+			sb.WriteString(escapeTableCell(row.Cell))
+			sb.WriteString("` | `")
+			sb.WriteString(escapeTableCell(row.Engine))
+			sb.WriteString("` | `")
+			sb.WriteString(escapeTableCell(row.DocumentFormat))
+			sb.WriteString("` | `")
+			sb.WriteString(escapeTableCell(row.DataOuterLeavesInVLog))
+			sb.WriteString("` | `")
+			sb.WriteString(escapeTableCell(row.IndexOuterLeavesInVLog))
+			sb.WriteString("` | `")
+			sb.WriteString(escapeTableCell(row.PagerChunkSize))
+			sb.WriteString("` | `")
+			sb.WriteString(escapeTableCell(row.PagerSyncConcurrency))
+			sb.WriteString("` | `")
+			sb.WriteString(escapeTableCell(row.Kind))
+			sb.WriteString("` | `")
+			sb.WriteString(escapeTableCell(row.Benchmark))
+			sb.WriteString("` | ")
+			sb.WriteString(formatOptionalFloat(row.NsPerMaint))
+			sb.WriteString(" | ")
+			sb.WriteString(formatOptionalFloat(optionalOpsPerSecFromNs(row.NsPerMaint)))
+			sb.WriteString(" | ")
+			sb.WriteString(formatOptionalFloat(row.GCNs))
+			sb.WriteString(" | ")
+			sb.WriteString(formatOptionalFloat(optionalOpsPerSecFromNs(row.GCNs)))
+			sb.WriteString(" | ")
+			sb.WriteString(formatOptionalByteCount(row.Before))
+			sb.WriteString(" | ")
+			sb.WriteString(formatOptionalByteCount(row.After))
+			sb.WriteString(" | ")
+			sb.WriteString(formatOptionalByteCount(row.Delta))
+			sb.WriteString(" | ")
+			sb.WriteString(formatOptionalByteCount(row.AfterGC))
+			sb.WriteString(" | ")
+			sb.WriteString(formatOptionalByteCount(row.DeltaGC))
+			sb.WriteString(" | [report](")
 			sb.WriteString(markdownLinkPath(reportPath))
 			sb.WriteString(") |\n")
 		}
@@ -942,6 +1077,36 @@ func buildDiskUsageRows(rows []summaryRow) []diskUsageRow {
 			usageRow.SplitSource = "zero_index_delta"
 		}
 		out = append(out, usageRow)
+	}
+	return out
+}
+
+func buildMaintenanceRows(rows []summaryRow) []maintenanceRow {
+	out := make([]maintenanceRow, 0, len(rows))
+	for _, row := range rows {
+		if row.VLogRewriteBefore != nil || row.VLogRewriteAfter != nil || row.VLogRewriteAfterGC != nil {
+			out = append(out, maintenanceRow{
+				summaryRow: row,
+				Kind:       "treedb_vlog_rewrite",
+				NsPerMaint: row.VLogRewriteNs,
+				GCNs:       row.VLogGCNs,
+				Before:     row.VLogRewriteBefore,
+				After:      row.VLogRewriteAfter,
+				Delta:      row.VLogRewriteDelta,
+				AfterGC:    row.VLogRewriteAfterGC,
+				DeltaGC:    row.VLogRewriteDeltaGC,
+			})
+		}
+		if row.SQLiteVacuumBefore != nil || row.SQLiteVacuumAfter != nil {
+			out = append(out, maintenanceRow{
+				summaryRow: row,
+				Kind:       "sqlite_vacuum",
+				NsPerMaint: row.SQLiteVacuumNs,
+				Before:     row.SQLiteVacuumBefore,
+				After:      row.SQLiteVacuumAfter,
+				Delta:      row.SQLiteVacuumDelta,
+			})
+		}
 	}
 	return out
 }

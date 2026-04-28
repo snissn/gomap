@@ -23,12 +23,15 @@ INCLUDE_SQLITE="${TREEDB_COLLECTION_HARNESS_INCLUDE_SQLITE:-false}"
 INCLUDE_UNIFIED="${TREEDB_COLLECTION_HARNESS_INCLUDE_UNIFIED:-false}"
 PROFILE_BENCHES="${TREEDB_COLLECTION_HARNESS_PROFILE_BENCHES:-false}"
 TIMED_PROFILE_BENCHES="${TREEDB_COLLECTION_HARNESS_TIMED_PROFILE_BENCHES:-false}"
+REPORT_VLOG_REWRITE="${TREEDB_COLLECTION_HARNESS_REPORT_VLOG_REWRITE:-false}"
+REPORT_SQLITE_VACUUM="${TREEDB_COLLECTION_HARNESS_REPORT_SQLITE_VACUUM:-false}"
 SQLITE_CGO_ENABLED="${TREEDB_COLLECTION_SQLITE_CGO_ENABLED:-1}"
 UNIFIED_KEYS="${TREEDB_COLLECTION_HARNESS_UNIFIED_KEYS:-100000}"
 UNIFIED_VALSIZE="${TREEDB_COLLECTION_HARNESS_UNIFIED_VALSIZE:-128}"
 UNIFIED_TESTS="${TREEDB_COLLECTION_HARNESS_UNIFIED_TESTS:-sequential_write,random_write,batch_write,batch_random,random_read,random_read_parallel_acquire_snapshot,full_scan,prefix_scan}"
 COLLECTION_JSON_REGEX="${TREEDB_COLLECTION_HARNESS_JSON_REGEX:-Benchmark(CollectionShapeInsertBatch|CollectionShapeInsertBatchCheckpoint|CollectionShapeInsertBatchSingleStringJSON|CollectionShapeInsertBatchCheckpointSingleStringJSON|CollectionShapeReadPrimary|CollectionShapeReadPrimaryParallel|CollectionMixedReadWritePrimary|CollectionMixedReadWriteSecondaryUnique|SecondaryLookupUnique|SecondaryLookupNonUnique|CollectionOverheadPlanNoIndex|CollectionOverheadPlanIndexed|CollectionOverheadPlanIndexedTemplateV1|CollectionOverheadIndexStateJSONExtraction|CollectionOverheadIndexStateTemplateV1Extraction|CollectionOverheadPlanIndexedPrecomputedState)$}"
 COLLECTION_TEMPLATE_REGEX="${TREEDB_COLLECTION_HARNESS_TEMPLATE_REGEX:-Benchmark(CollectionShapeInsertBatch|CollectionShapeInsertBatchCheckpoint|CollectionShapeReadPrimary|CollectionShapeReadPrimaryParallel|CollectionMixedReadWritePrimary|CollectionMixedReadWriteSecondaryUnique|SecondaryLookupUnique|SecondaryLookupNonUnique|CollectionOverheadPlanNoIndex|CollectionOverheadPlanIndexed|CollectionOverheadPlanIndexedTemplateV1|CollectionOverheadIndexStateJSONExtraction|CollectionOverheadIndexStateTemplateV1Extraction|CollectionOverheadPlanIndexedPrecomputedState)$}"
+COLLECTION_INDEX_VLOG_REGEX="${TREEDB_COLLECTION_HARNESS_INDEX_VLOG_REGEX:-^BenchmarkCollectionShapeInsertBatch$/^indexes_2$}"
 SQLITE_REGEX="${TREEDB_COLLECTION_HARNESS_SQLITE_REGEX:-BenchmarkSQLite(ShapeInsertBatchJSON|ShapeInsertBatchCheckpointJSON|ShapeInsertBatchNativeColumns|ShapeInsertBatchCheckpointNativeColumns|ShapeReadPrimaryJSON|ShapeReadPrimaryNativeColumns|ShapeSecondaryLookupJSON|ShapeSecondaryLookupNativeColumns|InsertBatchWithSecondaryIndexes|InsertBatchCheckpointWithSecondaryIndexes|NativeColumnsInsertBatchWithSecondaryIndexes|NativeColumnsInsertBatchCheckpointWithSecondaryIndexes)$}"
 PROFILE_BENCH_LIST="${TREEDB_COLLECTION_HARNESS_PROFILE_BENCH_LIST:-BenchmarkCollectionShapeInsertBatch/indexes_2 BenchmarkCollectionShapeInsertBatchCheckpoint/indexes_2 BenchmarkCollectionMixedReadWritePrimary}"
 TIMED_PROFILE_BENCH_LIST="${TREEDB_COLLECTION_HARNESS_TIMED_PROFILE_BENCH_LIST:-BenchmarkCollectionTimedProfileInsertBatchWithSecondaryIndexes BenchmarkCollectionTimedProfileInsertBatchCheckpointWithSecondaryIndexes}"
@@ -168,11 +171,15 @@ echo "pager chunk size: $CHUNK_SIZE_LABEL"
 echo "pager sync concurrency: $PAGER_SYNC_CONCURRENCY_LABEL"
 echo "include sqlite: $INCLUDE_SQLITE"
 echo "include unified: $INCLUDE_UNIFIED"
+echo "report value-log rewrite: $REPORT_VLOG_REWRITE"
+echo "report sqlite vacuum: $REPORT_SQLITE_VACUUM"
 
 run_collection_cell() {
   local cell=$1
   local document_format=$2
   local regex=$3
+  local data_outer=${4:-$DATA_OUTER}
+  local index_outer=${5:-$INDEX_OUTER}
   local cell_dir="$OUT_DIR/$cell"
 
   echo
@@ -186,13 +193,14 @@ run_collection_cell() {
     TREEDB_COLLECTION_BENCH_BATCH_SIZE="$BATCH_SIZE" \
     TREEDB_COLLECTION_DOCUMENT_FORMAT="$document_format" \
     TREEDB_COLLECTION_CHUNK_SIZE="$CHUNK_SIZE" \
-    TREEDB_COLLECTION_DATA_OUTER_LEAVES_IN_VLOG="$DATA_OUTER" \
-    TREEDB_COLLECTION_INDEX_OUTER_LEAVES_IN_VLOG="$INDEX_OUTER" \
+    TREEDB_COLLECTION_DATA_OUTER_LEAVES_IN_VLOG="$data_outer" \
+    TREEDB_COLLECTION_INDEX_OUTER_LEAVES_IN_VLOG="$index_outer" \
     TREEDB_COLLECTION_PAGER_SYNC_CONCURRENCY="$PAGER_SYNC_CONCURRENCY" \
+    TREEDB_COLLECTION_REPORT_VLOG_REWRITE="$REPORT_VLOG_REWRITE" \
     scripts/bench_collections_report.sh
 
   printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
-    "$cell" "$BENCH_ENGINE" "$document_format" "$DATA_OUTER" "$INDEX_OUTER" \
+    "$cell" "$BENCH_ENGINE" "$document_format" "$data_outer" "$index_outer" \
     "$CHUNK_SIZE_LABEL" "$PAGER_SYNC_CONCURRENCY_LABEL" \
     "$cell_dir/collections_report.md" \
     "$cell_dir/collections_report.json" \
@@ -295,6 +303,7 @@ run_sqlite_cell() {
     TREEDB_COLLECTION_DOCUMENT_FORMAT="json" \
     TREEDB_COLLECTION_DATA_OUTER_LEAVES_IN_VLOG="-" \
     TREEDB_COLLECTION_INDEX_OUTER_LEAVES_IN_VLOG="-" \
+    TREEDB_COLLECTION_REPORT_SQLITE_VACUUM="$REPORT_SQLITE_VACUUM" \
     GO_TEST_TAGS="sqlite_bench" \
     CGO_ENABLED=1 \
     scripts/bench_collections_report.sh
@@ -338,6 +347,8 @@ run_unified_anchor() {
 
 run_collection_cell "collections_json_shapes" "json" "$COLLECTION_JSON_REGEX"
 run_collection_cell "collections_template_v1_shapes" "template-v1" "$COLLECTION_TEMPLATE_REGEX"
+run_collection_cell "collections_json_index_vlog_insert2" "json" "$COLLECTION_INDEX_VLOG_REGEX" "$DATA_OUTER" true
+run_collection_cell "collections_template_v1_index_vlog_insert2" "template-v1" "$COLLECTION_INDEX_VLOG_REGEX" "$DATA_OUTER" true
 
 if is_true "$PROFILE_BENCHES"; then
   run_profile_cell_benches "collections_json_shapes" "json"
@@ -380,6 +391,8 @@ cat >"$OUT_DIR/README.md" <<EOF
 - include unified bench: \`$INCLUDE_UNIFIED\`
 - profile benches: \`$PROFILE_BENCHES\`
 - timed profile benches: \`$TIMED_PROFILE_BENCHES\`
+- report value-log rewrite: \`$REPORT_VLOG_REWRITE\`
+- report sqlite vacuum: \`$REPORT_SQLITE_VACUUM\`
 
 ## Summary Artifacts
 
@@ -389,6 +402,7 @@ cat >"$OUT_DIR/README.md" <<EOF
 - collection matrix summary tsv: \`$OUT_DIR/collections_matrix_summary.tsv\`
 - user-story throughput tsv: \`$OUT_DIR/collections_user_story_summary.tsv\`
 - disk-usage summary tsv: \`$OUT_DIR/collections_disk_usage_summary.tsv\`
+- maintenance compaction tsv: \`$OUT_DIR/collections_maintenance_summary.tsv\`
 - profile index: \`$PROFILE_INDEX_TSV\`
 - unified index: \`$UNIFIED_INDEX_TSV\`
 
@@ -399,6 +413,8 @@ Insert benchmark rows may also include untimed end-of-run disk metrics, and the 
 
 - JSON collection shapes: \`$OUT_DIR/collections_json_shapes/collections_report.md\`
 - template-v1 collection shapes: \`$OUT_DIR/collections_template_v1_shapes/collections_report.md\`
+- JSON two-index insert with index outer leaves in value log: \`$OUT_DIR/collections_json_index_vlog_insert2/collections_report.md\`
+- template-v1 two-index insert with index outer leaves in value log: \`$OUT_DIR/collections_template_v1_index_vlog_insert2/collections_report.md\`
 EOF
 
 if is_true "$INCLUDE_SQLITE"; then
