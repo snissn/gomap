@@ -64,12 +64,12 @@ func openBenchmarkSQLiteDB(tb testing.TB, name string) *sql.DB {
 func benchmarkSQLiteDocumentBatch(tb testing.TB, start, count int) ([]string, []string) {
 	tb.Helper()
 
-	rawIDs, rawDocs := benchmarkDocumentBatch(tb, start, count, true)
 	ids := make([]string, count)
 	docs := make([]string, count)
-	for i := range rawIDs {
-		ids[i] = string(rawIDs[i])
-		docs[i] = string(rawDocs[i])
+	for i := 0; i < count; i++ {
+		docNum := start + i
+		ids[i] = string(benchmarkDocumentID(docNum))
+		docs[i] = string(benchmarkIndexedDocument(docNum))
 	}
 	return ids, docs
 }
@@ -118,6 +118,7 @@ func checkpointSQLiteWAL(tb testing.TB, db *sql.DB) {
 }
 
 func TestSQLiteBenchmarkSchemaExtractsIndexedFields(t *testing.T) {
+	t.Setenv("TREEDB_COLLECTION_DOCUMENT_FORMAT", "template-v1")
 	db := openBenchmarkSQLiteDB(t, "schema_extract")
 	ids, docs := benchmarkSQLiteDocumentBatch(t, 0, 1)
 	insertSQLiteDocumentBatch(t, db, ids, docs)
