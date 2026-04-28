@@ -50,6 +50,8 @@ MVP query support:
 MVP BSON/document support:
 
 - `_id` required or auto-generated.
+- MongoDB `_id` maps to the TreeDB collection document ID / primary key for the
+  MVP.
 - BSON object, string, bool, integer, double, null, array, and nested document
   values preserved on round trip.
 - Clear rejection for unsupported BSON types rather than lossy conversion.
@@ -103,7 +105,7 @@ lower-level hooks when a measured workload needs them.
      ingest, update, read, or index-extraction bottleneck.
 
 3. Query planner
-   - Map `_id` equality to primary lookup.
+   - Map `_id` equality to TreeDB primary-key lookup.
    - Map supported indexed predicates to collection secondary-index lookup.
    - Use bounded scan fallback only when it is explicit and visible in metrics.
    - Expose planner stats so benchmark output can distinguish indexed paths from
@@ -121,6 +123,34 @@ lower-level hooks when a measured workload needs them.
    - Attribute time spent in BSON decode, document re-encoding, index extraction,
      TreeDB writes, and response encoding so format work is driven by measured
      bottlenecks.
+
+## Document Identity Mapping
+
+MVP decision: MongoDB `_id` should be the TreeDB collection primary key. This
+matches the current collection API shape: callers insert with a document ID,
+primary lookup reads by that ID, and delete removes by that ID. It also gives the
+cleanest MongoDB benchmark mapping because MongoDB's `_id` index corresponds to
+TreeDB's primary-root lookup instead of an extra secondary index.
+
+Expected behavior:
+
+- If an inserted BSON document has no `_id`, the gateway generates one before
+  writing.
+- The generated `_id` should use MongoDB-compatible ObjectId semantics unless a
+  benchmark or driver compatibility test gives a reason to choose otherwise.
+- The stored document should still contain `_id` so BSON round trips preserve the
+  caller-visible document shape.
+- Updates that change `_id` should be rejected. If a future compatibility mode
+  permits them, it should be implemented as explicit delete+insert behavior, not
+  as an in-place primary-key mutation.
+- The primary-key encoding must be canonical and type-aware. It should not rely
+  on lossy stringification of BSON values.
+
+Remaining risk to measure: arbitrary or large `_id` values can make primary keys
+and secondary-index postings larger, and random ObjectIds may have different
+write-locality behavior than an internal monotonic row ID. Keep the alternative
+design, internal row ID plus unique `_id` index, as a fallback only if benchmark
+evidence shows `_id`-as-primary-key dominates disk usage or write cost.
 
 ## Collection Document Format Expansion
 
@@ -177,8 +207,10 @@ Metrics to record for every run:
 - If raw BSON storage is useful, should it be a collection-level document format
   beside JSON and template-v1, or a gateway-local optimization hidden behind the
   existing collection API?
-- Should `_id` be the TreeDB collection primary key, or should it live as a
-  normal field with an internal primary key?
+- What canonical `_id`-to-primary-key byte encoding should support ObjectId,
+  string, numeric, binary, and other MVP BSON scalar types?
+- Should the gateway impose an `_id` size limit or warning threshold to protect
+  secondary-index posting size?
 - Which BSON types need indexed ordering in the MVP?
 - Should unsupported filters fail closed, or fall back to bounded scans behind a
   feature flag?
@@ -193,6 +225,8 @@ Metrics to record for every run:
 - [ ] Write a short compatibility matrix for commands, query operators, update
       operators, and BSON types.
 - [ ] Define the initial BSON-to-TreeDB document encoding.
+- [ ] Define canonical `_id` primary-key encoding, generated ObjectId behavior,
+      and `_id` immutability tests.
 - [ ] Instrument BSON decode, document re-encoding, index extraction, and
       response encoding so the benchmark can prove whether a native BSON
       collection format is needed.
@@ -214,3 +248,6 @@ Metrics to record for every run:
   benchmarking, not a claim of full MongoDB compatibility.
 - 2026-04-28: Added native BSON collection-format planning as a benchmark-driven
   follow-up if BSON re-encoding proves expensive relative to TreeDB operations.
+- 2026-04-28: Decided the MVP should map MongoDB `_id` to the TreeDB collection
+  primary key, with remaining work focused on canonical key encoding and
+  benchmark validation of key-size/write-locality costs.
