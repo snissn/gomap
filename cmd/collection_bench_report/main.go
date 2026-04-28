@@ -108,13 +108,29 @@ var benchmarkSpecs = []benchmarkSpec{
 	{Name: "BenchmarkCollectionInsertWithSecondaryIndexes", Section: "Document Path", Description: "Insert documents while maintaining both unique and non-unique secondary indexes."},
 	{Name: "BenchmarkCollectionInsertBatchWithSecondaryIndexes", Section: "Batch Ingest Path", Description: "Batch insert documents while maintaining unique and non-unique secondary indexes; ops/sec is documents/sec."},
 	{Name: "BenchmarkCollectionInsertBatchCheckpointWithSecondaryIndexes", Section: "Batch Ingest Path", Description: "Batch insert indexed documents and force a sync boundary after each batch; ops/sec is documents/sec."},
+	{Name: "BenchmarkCollectionShapeInsertBatch", Section: "Batch Ingest Path", Description: "Batch insert collection documents while sweeping secondary index count; ops/sec is documents/sec."},
+	{Name: "BenchmarkCollectionShapeInsertBatchCheckpoint", Section: "Batch Ingest Path", Description: "Batch insert collection documents while sweeping secondary index count and forcing a sync boundary after each batch; ops/sec is documents/sec."},
+	{Name: "BenchmarkCollectionShapeInsertBatchSingleStringJSON", Section: "Batch Ingest Path", Description: "Batch insert minimal single-string JSON documents with zero or one secondary index; ops/sec is documents/sec."},
+	{Name: "BenchmarkCollectionShapeInsertBatchCheckpointSingleStringJSON", Section: "Batch Ingest Path", Description: "Batch insert minimal single-string JSON documents with zero or one secondary index and force a sync boundary after each batch; ops/sec is documents/sec."},
 	{Name: "BenchmarkCollectionTimedProfileInsertBatchWithSecondaryIndexes", Section: "Batch Ingest Path", Description: "Batch insert indexed documents with setup excluded from the optional timed CPU profile; ops/sec is documents/sec."},
 	{Name: "BenchmarkCollectionTimedProfileInsertBatchCheckpointWithSecondaryIndexes", Section: "Batch Ingest Path", Description: "Batch insert indexed documents and force a sync boundary after each batch with setup excluded from the optional timed CPU profile; ops/sec is documents/sec."},
 	{Name: "BenchmarkSQLiteInsertBatchWithSecondaryIndexes", Section: "SQLite Comparison", Description: "SQLite WAL/NORMAL batch insert using a JSON document column, stored generated columns, and unique/non-unique secondary indexes; ops/sec is documents/sec."},
 	{Name: "BenchmarkSQLiteInsertBatchCheckpointWithSecondaryIndexes", Section: "SQLite Comparison", Description: "SQLite WAL/NORMAL JSON-document batch insert with an explicit WAL checkpoint after each batch; ops/sec is documents/sec."},
 	{Name: "BenchmarkSQLiteNativeColumnsInsertBatchWithSecondaryIndexes", Section: "SQLite Comparison", Description: "SQLite WAL/NORMAL batch insert using native columns and unique/non-unique secondary indexes, with no JSON extraction during insert; ops/sec is documents/sec."},
 	{Name: "BenchmarkSQLiteNativeColumnsInsertBatchCheckpointWithSecondaryIndexes", Section: "SQLite Comparison", Description: "SQLite WAL/NORMAL native-column batch insert with an explicit WAL checkpoint after each batch; ops/sec is documents/sec."},
+	{Name: "BenchmarkSQLiteShapeInsertBatchJSON", Section: "SQLite Comparison", Description: "SQLite WAL/NORMAL batch insert using a JSON document column while sweeping secondary index count; ops/sec is documents/sec."},
+	{Name: "BenchmarkSQLiteShapeInsertBatchCheckpointJSON", Section: "SQLite Comparison", Description: "SQLite WAL/NORMAL JSON-document batch insert while sweeping secondary index count and checkpointing after each batch; ops/sec is documents/sec."},
+	{Name: "BenchmarkSQLiteShapeInsertBatchNativeColumns", Section: "SQLite Comparison", Description: "SQLite WAL/NORMAL batch insert using native columns while sweeping secondary index count; ops/sec is documents/sec."},
+	{Name: "BenchmarkSQLiteShapeInsertBatchCheckpointNativeColumns", Section: "SQLite Comparison", Description: "SQLite WAL/NORMAL native-column batch insert while sweeping secondary index count and checkpointing after each batch; ops/sec is documents/sec."},
+	{Name: "BenchmarkSQLiteShapeReadPrimaryJSON", Section: "SQLite Comparison", Description: "SQLite WAL/NORMAL primary-key reads from the JSON-document table."},
+	{Name: "BenchmarkSQLiteShapeReadPrimaryNativeColumns", Section: "SQLite Comparison", Description: "SQLite WAL/NORMAL primary-key reads from the native-column table."},
+	{Name: "BenchmarkSQLiteShapeSecondaryLookupJSON", Section: "SQLite Comparison", Description: "SQLite WAL/NORMAL secondary-index lookups from the JSON-document table."},
+	{Name: "BenchmarkSQLiteShapeSecondaryLookupNativeColumns", Section: "SQLite Comparison", Description: "SQLite WAL/NORMAL secondary-index lookups from the native-column table."},
 	{Name: "BenchmarkCollectionDeleteWithSecondaryIndexes", Section: "Document Path", Description: "Delete documents while removing postings from unique and non-unique secondary indexes."},
+	{Name: "BenchmarkCollectionShapeReadPrimary", Section: "Document Path", Description: "Lookup documents by primary `_id` while sweeping collection index shape."},
+	{Name: "BenchmarkCollectionShapeReadPrimaryParallel", Section: "Document Path", Description: "Parallel lookup of documents by primary `_id` while sweeping collection index shape."},
+	{Name: "BenchmarkCollectionMixedReadWritePrimary", Section: "Document Path", Description: "Parallel primary-key readers while a writer concurrently inserts indexed documents."},
+	{Name: "BenchmarkCollectionMixedReadWriteSecondaryUnique", Section: "Document Path", Description: "Parallel unique secondary-index readers while a writer concurrently inserts indexed documents."},
 	{Name: "BenchmarkSecondaryLookupUnique", Section: "Secondary Index Path", Description: "Resolve a unique secondary index lookup to document IDs."},
 	{Name: "BenchmarkSecondaryLookupNonUnique", Section: "Secondary Index Path", Description: "Resolve a non-unique secondary index lookup that returns multiple document IDs."},
 	{Name: "BenchmarkSecondaryUpsertFieldChange", Section: "Secondary Index Path", Description: "Rewrite a document so an indexed field changes and postings move to the new value."},
@@ -396,7 +412,7 @@ func aggregateSamples(samples []benchmarkSample) map[string]benchmarkAggregate {
 	for _, sample := range samples {
 		entry := runningByName[sample.Name]
 		if entry == nil {
-			spec := specByName[sample.Name]
+			spec := benchmarkSpecForName(specByName, sample.Name)
 			if spec.Name == "" {
 				spec = benchmarkSpec{
 					Name:        sample.Name,
@@ -467,6 +483,19 @@ func aggregateSamples(samples []benchmarkSample) map[string]benchmarkAggregate {
 	return result
 }
 
+func benchmarkSpecForName(specByName map[string]benchmarkSpec, name string) benchmarkSpec {
+	if spec := specByName[name]; spec.Name != "" {
+		return spec
+	}
+	if slash := strings.IndexByte(name, '/'); slash > 0 {
+		if spec := specByName[name[:slash]]; spec.Name != "" {
+			spec.Name = name
+			return spec
+		}
+	}
+	return benchmarkSpec{}
+}
+
 func buildSections(aggregates map[string]benchmarkAggregate) []reportSection {
 	sectionOrder := []string{"Document Path", "Batch Ingest Path", "SQLite Comparison", "Secondary Index Path", "Overhead Breakdown", "Maintenance", "Other"}
 	sections := make(map[string][]benchmarkAggregate, len(sectionOrder))
@@ -481,16 +510,19 @@ func buildSections(aggregates map[string]benchmarkAggregate) []reportSection {
 		seen[aggregate.Name] = struct{}{}
 	}
 
-	var other []benchmarkAggregate
 	for name, aggregate := range aggregates {
 		if _, ok := seen[name]; ok {
 			continue
 		}
-		other = append(other, aggregate)
+		section := aggregate.Section
+		if strings.TrimSpace(section) == "" {
+			section = "Other"
+		}
+		sections[section] = append(sections[section], aggregate)
 	}
-	sort.Slice(other, func(i, j int) bool { return other[i].Name < other[j].Name })
-	if len(other) > 0 {
-		sections["Other"] = append(sections["Other"], other...)
+	for section, benchmarks := range sections {
+		sort.SliceStable(benchmarks, func(i, j int) bool { return benchmarks[i].Name < benchmarks[j].Name })
+		sections[section] = benchmarks
 	}
 
 	var out []reportSection
@@ -626,6 +658,9 @@ func benchmarkMetricColumns(benchmarks []benchmarkAggregate) []string {
 		"insert_ns/doc",
 		"sync_ns/doc",
 		"indexes/doc",
+		"seed_docs",
+		"writer_docs/batch",
+		"writer_docs/sec",
 		"per_item_key_probe_fallback_count",
 		"per_item_prefix_probe_fallback_count",
 		"warm_native_apply",

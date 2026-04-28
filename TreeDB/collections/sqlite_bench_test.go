@@ -5,8 +5,10 @@ package collections_test
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"net/url"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -21,17 +23,36 @@ const (
 func openBenchmarkSQLiteDB(tb testing.TB, name string) *sql.DB {
 	tb.Helper()
 
+	return openBenchmarkSQLiteJSONShapeDB(tb, name, 2)
+}
+
+func openBenchmarkSQLiteNativeColumnsDB(tb testing.TB, name string) *sql.DB {
+	tb.Helper()
+
+	return openBenchmarkSQLiteNativeColumnsShapeDB(tb, name, 2)
+}
+
+func openBenchmarkSQLiteJSONShapeDB(tb testing.TB, name string, indexCount int) *sql.DB {
+	tb.Helper()
+
 	db := openBenchmarkSQLiteBaseDB(tb, name)
-	for _, stmt := range []string{
-		`CREATE TABLE documents (
-			id TEXT PRIMARY KEY,
-			document TEXT NOT NULL,
-			email TEXT GENERATED ALWAYS AS (json_extract(document, '$.email')) STORED,
-			city TEXT GENERATED ALWAYS AS (json_extract(document, '$.city')) STORED
-		) WITHOUT ROWID`,
-		`CREATE UNIQUE INDEX documents_email_idx ON documents(email)`,
-		`CREATE INDEX documents_city_idx ON documents(city)`,
-	} {
+	columns := []string{
+		"id TEXT PRIMARY KEY",
+		"document TEXT NOT NULL",
+	}
+	if indexCount >= 1 {
+		columns = append(columns, "email TEXT GENERATED ALWAYS AS (json_extract(document, '$.email')) STORED")
+	}
+	if indexCount >= 2 {
+		columns = append(columns, "city TEXT GENERATED ALWAYS AS (json_extract(document, '$.city')) STORED")
+	}
+	if indexCount >= 3 {
+		columns = append(columns, "name TEXT GENERATED ALWAYS AS (json_extract(document, '$.name')) STORED")
+	}
+	stmts := append([]string{
+		"CREATE TABLE documents (" + strings.Join(columns, ", ") + ") WITHOUT ROWID",
+	}, sqliteShapeIndexStatements(indexCount)...)
+	for _, stmt := range stmts {
 		if _, err := db.Exec(stmt); err != nil {
 			tb.Fatalf("sqlite setup %q: %v", stmt, err)
 		}
@@ -39,11 +60,11 @@ func openBenchmarkSQLiteDB(tb testing.TB, name string) *sql.DB {
 	return db
 }
 
-func openBenchmarkSQLiteNativeColumnsDB(tb testing.TB, name string) *sql.DB {
+func openBenchmarkSQLiteNativeColumnsShapeDB(tb testing.TB, name string, indexCount int) *sql.DB {
 	tb.Helper()
 
 	db := openBenchmarkSQLiteBaseDB(tb, name)
-	for _, stmt := range []string{
+	stmts := append([]string{
 		`CREATE TABLE documents (
 			id TEXT PRIMARY KEY,
 			name TEXT NOT NULL,
@@ -51,14 +72,35 @@ func openBenchmarkSQLiteNativeColumnsDB(tb testing.TB, name string) *sql.DB {
 			city TEXT NOT NULL,
 			pad TEXT NOT NULL
 		) WITHOUT ROWID`,
-		`CREATE UNIQUE INDEX documents_email_idx ON documents(email)`,
-		`CREATE INDEX documents_city_idx ON documents(city)`,
-	} {
+	}, sqliteShapeIndexStatements(indexCount)...)
+	for _, stmt := range stmts {
 		if _, err := db.Exec(stmt); err != nil {
 			tb.Fatalf("sqlite native-columns setup %q: %v", stmt, err)
 		}
 	}
 	return db
+}
+
+func sqliteShapeIndexStatements(indexCount int) []string {
+	switch indexCount {
+	case 0:
+		return nil
+	case 1:
+		return []string{`CREATE UNIQUE INDEX documents_email_idx ON documents(email)`}
+	case 2:
+		return []string{
+			`CREATE UNIQUE INDEX documents_email_idx ON documents(email)`,
+			`CREATE INDEX documents_city_idx ON documents(city)`,
+		}
+	case 3:
+		return []string{
+			`CREATE UNIQUE INDEX documents_email_idx ON documents(email)`,
+			`CREATE INDEX documents_city_idx ON documents(city)`,
+			`CREATE INDEX documents_name_idx ON documents(name)`,
+		}
+	default:
+		panic(fmt.Sprintf("unsupported sqlite benchmark index count %d", indexCount))
+	}
 }
 
 func openBenchmarkSQLiteBaseDB(tb testing.TB, name string) *sql.DB {
@@ -381,4 +423,310 @@ func BenchmarkSQLiteNativeColumnsInsertBatchCheckpointWithSecondaryIndexes(b *te
 	}
 	b.StopTimer()
 	benchmarkReportCheckpointSplit(b, b.N, insertElapsed, syncElapsed)
+}
+
+func benchmarkSQLiteShapeInsertBatchJSON(b *testing.B, indexCount int, checkpoint bool) {
+	db := openBenchmarkSQLiteJSONShapeDB(b, fmt.Sprintf("bench_shape_json_%d", indexCount), indexCount)
+	targetBatchSize := benchmarkBatchSize(b)
+	var insertElapsed time.Duration
+	var syncElapsed time.Duration
+
+	metricName := "target_docs/batch"
+	if checkpoint {
+		metricName = "target_docs/checkpoint"
+	}
+	b.ReportAllocs()
+	b.ReportMetric(float64(indexCount), "indexes/doc")
+	b.ReportMetric(float64(targetBatchSize), metricName)
+	b.ResetTimer()
+	for inserted := 0; inserted < b.N; {
+		b.StopTimer()
+		batchSize := targetBatchSize
+		if remaining := b.N - inserted; remaining < batchSize {
+			batchSize = remaining
+		}
+		ids, docs := benchmarkSQLiteDocumentBatch(b, inserted, batchSize)
+		b.StartTimer()
+
+		insertStart := time.Now()
+		insertSQLiteDocumentBatch(b, db, ids, docs)
+		insertElapsed += time.Since(insertStart)
+		if checkpoint {
+			syncStart := time.Now()
+			checkpointSQLiteWAL(b, db)
+			syncElapsed += time.Since(syncStart)
+		}
+		inserted += batchSize
+	}
+	b.StopTimer()
+	if checkpoint {
+		benchmarkReportCheckpointSplit(b, b.N, insertElapsed, syncElapsed)
+	}
+}
+
+func benchmarkSQLiteShapeInsertBatchNativeColumns(b *testing.B, indexCount int, checkpoint bool) {
+	db := openBenchmarkSQLiteNativeColumnsShapeDB(b, fmt.Sprintf("bench_shape_native_%d", indexCount), indexCount)
+	targetBatchSize := benchmarkBatchSize(b)
+	var insertElapsed time.Duration
+	var syncElapsed time.Duration
+
+	metricName := "target_docs/batch"
+	if checkpoint {
+		metricName = "target_docs/checkpoint"
+	}
+	b.ReportAllocs()
+	b.ReportMetric(float64(indexCount), "indexes/doc")
+	b.ReportMetric(float64(targetBatchSize), metricName)
+	b.ResetTimer()
+	for inserted := 0; inserted < b.N; {
+		b.StopTimer()
+		batchSize := targetBatchSize
+		if remaining := b.N - inserted; remaining < batchSize {
+			batchSize = remaining
+		}
+		docs := benchmarkSQLiteNativeColumnsDocumentBatch(b, inserted, batchSize)
+		b.StartTimer()
+
+		insertStart := time.Now()
+		insertSQLiteNativeColumnsDocumentBatch(b, db, docs)
+		insertElapsed += time.Since(insertStart)
+		if checkpoint {
+			syncStart := time.Now()
+			checkpointSQLiteWAL(b, db)
+			syncElapsed += time.Since(syncStart)
+		}
+		inserted += batchSize
+	}
+	b.StopTimer()
+	if checkpoint {
+		benchmarkReportCheckpointSplit(b, b.N, insertElapsed, syncElapsed)
+	}
+}
+
+func BenchmarkSQLiteShapeInsertBatchJSON(b *testing.B) {
+	for _, indexCount := range []int{0, 1, 2, 3} {
+		b.Run(fmt.Sprintf("indexes_%d", indexCount), func(b *testing.B) {
+			benchmarkSQLiteShapeInsertBatchJSON(b, indexCount, false)
+		})
+	}
+}
+
+func BenchmarkSQLiteShapeInsertBatchCheckpointJSON(b *testing.B) {
+	for _, indexCount := range []int{0, 1, 2, 3} {
+		b.Run(fmt.Sprintf("indexes_%d", indexCount), func(b *testing.B) {
+			benchmarkSQLiteShapeInsertBatchJSON(b, indexCount, true)
+		})
+	}
+}
+
+func BenchmarkSQLiteShapeInsertBatchNativeColumns(b *testing.B) {
+	for _, indexCount := range []int{0, 1, 2, 3} {
+		b.Run(fmt.Sprintf("indexes_%d", indexCount), func(b *testing.B) {
+			benchmarkSQLiteShapeInsertBatchNativeColumns(b, indexCount, false)
+		})
+	}
+}
+
+func BenchmarkSQLiteShapeInsertBatchCheckpointNativeColumns(b *testing.B) {
+	for _, indexCount := range []int{0, 1, 2, 3} {
+		b.Run(fmt.Sprintf("indexes_%d", indexCount), func(b *testing.B) {
+			benchmarkSQLiteShapeInsertBatchNativeColumns(b, indexCount, true)
+		})
+	}
+}
+
+func seedBenchmarkSQLiteJSON(b *testing.B, db *sql.DB, count int) []string {
+	b.Helper()
+
+	targetBatchSize := benchmarkBatchSize(b)
+	allIDs := make([]string, 0, count)
+	for inserted := 0; inserted < count; inserted += targetBatchSize {
+		batchSize := targetBatchSize
+		if remaining := count - inserted; remaining < batchSize {
+			batchSize = remaining
+		}
+		ids, docs := benchmarkSQLiteDocumentBatch(b, inserted, batchSize)
+		insertSQLiteDocumentBatch(b, db, ids, docs)
+		allIDs = append(allIDs, ids...)
+	}
+	return allIDs
+}
+
+func seedBenchmarkSQLiteNativeColumns(b *testing.B, db *sql.DB, count int) []benchmarkSQLiteNativeColumnsDocument {
+	b.Helper()
+
+	targetBatchSize := benchmarkBatchSize(b)
+	allDocs := make([]benchmarkSQLiteNativeColumnsDocument, 0, count)
+	for inserted := 0; inserted < count; inserted += targetBatchSize {
+		batchSize := targetBatchSize
+		if remaining := count - inserted; remaining < batchSize {
+			batchSize = remaining
+		}
+		docs := benchmarkSQLiteNativeColumnsDocumentBatch(b, inserted, batchSize)
+		insertSQLiteNativeColumnsDocumentBatch(b, db, docs)
+		allDocs = append(allDocs, docs...)
+	}
+	return allDocs
+}
+
+func benchmarkSQLiteShapeReadPrimaryJSON(b *testing.B, indexCount int) {
+	db := openBenchmarkSQLiteJSONShapeDB(b, fmt.Sprintf("bench_shape_read_json_%d", indexCount), indexCount)
+	ids := seedBenchmarkSQLiteJSON(b, db, collectionBenchSeedDocs)
+	checkpointSQLiteWAL(b, db)
+	stmt, err := db.Prepare(`SELECT document FROM documents WHERE id = ?`)
+	if err != nil {
+		b.Fatalf("sqlite prepare primary JSON read: %v", err)
+	}
+	defer stmt.Close()
+
+	var doc string
+	b.ReportAllocs()
+	b.ReportMetric(float64(indexCount), "indexes/doc")
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if err := stmt.QueryRow(ids[i%len(ids)]).Scan(&doc); err != nil {
+			b.Fatalf("sqlite primary JSON read: %v", err)
+		}
+	}
+}
+
+func benchmarkSQLiteShapeReadPrimaryNativeColumns(b *testing.B, indexCount int) {
+	db := openBenchmarkSQLiteNativeColumnsShapeDB(b, fmt.Sprintf("bench_shape_read_native_%d", indexCount), indexCount)
+	docs := seedBenchmarkSQLiteNativeColumns(b, db, collectionBenchSeedDocs)
+	checkpointSQLiteWAL(b, db)
+	stmt, err := db.Prepare(`SELECT name, email, city, pad FROM documents WHERE id = ?`)
+	if err != nil {
+		b.Fatalf("sqlite prepare primary native read: %v", err)
+	}
+	defer stmt.Close()
+
+	var name, email, city, pad string
+	b.ReportAllocs()
+	b.ReportMetric(float64(indexCount), "indexes/doc")
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if err := stmt.QueryRow(docs[i%len(docs)].id).Scan(&name, &email, &city, &pad); err != nil {
+			b.Fatalf("sqlite primary native read: %v", err)
+		}
+	}
+}
+
+func BenchmarkSQLiteShapeReadPrimaryJSON(b *testing.B) {
+	for _, indexCount := range []int{0, 2} {
+		b.Run(fmt.Sprintf("indexes_%d", indexCount), func(b *testing.B) {
+			benchmarkSQLiteShapeReadPrimaryJSON(b, indexCount)
+		})
+	}
+}
+
+func BenchmarkSQLiteShapeReadPrimaryNativeColumns(b *testing.B) {
+	for _, indexCount := range []int{0, 2} {
+		b.Run(fmt.Sprintf("indexes_%d", indexCount), func(b *testing.B) {
+			benchmarkSQLiteShapeReadPrimaryNativeColumns(b, indexCount)
+		})
+	}
+}
+
+func benchmarkSQLiteShapeSecondaryLookupJSON(b *testing.B, unique bool) {
+	db := openBenchmarkSQLiteJSONShapeDB(b, "bench_shape_secondary_json", 2)
+	seedBenchmarkSQLiteJSON(b, db, collectionBenchSeedDocs)
+	checkpointSQLiteWAL(b, db)
+	query := `SELECT id FROM documents WHERE email = ?`
+	if !unique {
+		query = `SELECT id FROM documents WHERE city = ?`
+	}
+	stmt, err := db.Prepare(query)
+	if err != nil {
+		b.Fatalf("sqlite prepare secondary JSON lookup: %v", err)
+	}
+	defer stmt.Close()
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if unique {
+			email := benchmarkSQLiteUserEmail(i % collectionBenchSeedDocs)
+			var id string
+			if err := stmt.QueryRow(email).Scan(&id); err != nil {
+				b.Fatalf("sqlite unique JSON lookup: %v", err)
+			}
+			continue
+		}
+		city := benchmarkSQLiteCity(i)
+		rows, err := stmt.Query(city)
+		if err != nil {
+			b.Fatalf("sqlite nonunique JSON lookup: %v", err)
+		}
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				_ = rows.Close()
+				b.Fatalf("sqlite nonunique JSON scan: %v", err)
+			}
+		}
+		if err := rows.Close(); err != nil {
+			b.Fatalf("sqlite nonunique JSON close: %v", err)
+		}
+	}
+}
+
+func benchmarkSQLiteShapeSecondaryLookupNativeColumns(b *testing.B, unique bool) {
+	db := openBenchmarkSQLiteNativeColumnsShapeDB(b, "bench_shape_secondary_native", 2)
+	seedBenchmarkSQLiteNativeColumns(b, db, collectionBenchSeedDocs)
+	checkpointSQLiteWAL(b, db)
+	query := `SELECT id FROM documents WHERE email = ?`
+	if !unique {
+		query = `SELECT id FROM documents WHERE city = ?`
+	}
+	stmt, err := db.Prepare(query)
+	if err != nil {
+		b.Fatalf("sqlite prepare secondary native lookup: %v", err)
+	}
+	defer stmt.Close()
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if unique {
+			email := benchmarkSQLiteUserEmail(i % collectionBenchSeedDocs)
+			var id string
+			if err := stmt.QueryRow(email).Scan(&id); err != nil {
+				b.Fatalf("sqlite unique native lookup: %v", err)
+			}
+			continue
+		}
+		city := benchmarkSQLiteCity(i)
+		rows, err := stmt.Query(city)
+		if err != nil {
+			b.Fatalf("sqlite nonunique native lookup: %v", err)
+		}
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				_ = rows.Close()
+				b.Fatalf("sqlite nonunique native scan: %v", err)
+			}
+		}
+		if err := rows.Close(); err != nil {
+			b.Fatalf("sqlite nonunique native close: %v", err)
+		}
+	}
+}
+
+func BenchmarkSQLiteShapeSecondaryLookupJSON(b *testing.B) {
+	b.Run("unique", func(b *testing.B) {
+		benchmarkSQLiteShapeSecondaryLookupJSON(b, true)
+	})
+	b.Run("non_unique", func(b *testing.B) {
+		benchmarkSQLiteShapeSecondaryLookupJSON(b, false)
+	})
+}
+
+func BenchmarkSQLiteShapeSecondaryLookupNativeColumns(b *testing.B) {
+	b.Run("unique", func(b *testing.B) {
+		benchmarkSQLiteShapeSecondaryLookupNativeColumns(b, true)
+	})
+	b.Run("non_unique", func(b *testing.B) {
+		benchmarkSQLiteShapeSecondaryLookupNativeColumns(b, false)
+	})
 }
