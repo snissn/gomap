@@ -219,6 +219,63 @@ func TestValueLogGC_KeepsSegmentMadeReachableBySystemDescriptorOnly(t *testing.T
 	}
 }
 
+func TestValueLogGC_KeepsSegmentMadeReachableByDeltaGroupSystemDescriptorOnly(t *testing.T) {
+	dir := t.TempDir()
+	d, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	unreferenced := appendPointersInNewSegment(t, dir, 0, 1, 80_000, 1, func(int) []byte {
+		return bytes.Repeat([]byte("delta-group-unreferenced|"), 64)
+	})[0]
+	referenced := appendPointersInNewSegment(t, dir, 0, 2, 90_000, 1, func(int) []byte {
+		return bytes.Repeat([]byte("delta-group-descriptor-live|"), 64)
+	})[0]
+	appendPointersInNewSegment(t, dir, 0, 3, 100_000, 1, func(int) []byte {
+		return bytes.Repeat([]byte("active-head|"), 64)
+	})
+	unreferencedPath := valueLogSegmentPath(t, dir, unreferenced.FileID)
+	referencedPath := valueLogSegmentPath(t, dir, referenced.FileID)
+
+	collectionRoot, err := d.PublishOrderedRootIterator(0, mustFrozenSystemPointerMemtable(t, "doc/p", referenced).NewIterator(nil, nil))
+	if err != nil {
+		t.Fatalf("publish unattached collection root: %v", err)
+	}
+	if _, err := d.referencedValueLogSegments(context.Background()); err != nil {
+		t.Fatalf("prime value-log ref tracker: %v", err)
+	}
+	if _, ok := d.valueLogRefTracker.referencedSet(d.currentCommitSeq()); !ok {
+		t.Fatal("expected primed value-log ref tracker")
+	}
+	if _, _, err := d.PublishOrderedRootDeltaGroupWithSystemBuilder(nil, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		if len(rootIDs) != 0 {
+			return nil, fmt.Errorf("rootIDs=%d want 0", len(rootIDs))
+		}
+		return mustFrozenRawMemtable(t, maintenanceTestCollectionRootKey, encodeMaintenanceRootID(collectionRoot)).NewIterator(nil, nil), nil
+	}); err != nil {
+		t.Fatalf("publish system descriptor via delta group builder: %v", err)
+	}
+	if _, ok := d.valueLogRefTracker.referencedSet(d.currentCommitSeq()); ok {
+		t.Fatal("expected delta group descriptor publish to invalidate value-log ref tracker")
+	}
+
+	stats, err := d.ValueLogGC(context.Background(), ValueLogGCOptions{})
+	if err != nil {
+		t.Fatalf("ValueLogGC: %v", err)
+	}
+	if stats.SegmentsDeleted == 0 {
+		t.Fatalf("expected GC to delete an unreferenced segment, stats=%+v", stats)
+	}
+	if _, err := os.Stat(unreferencedPath); err == nil || !os.IsNotExist(err) {
+		t.Fatalf("expected unreferenced segment to be removed, err=%v", err)
+	}
+	if _, err := os.Stat(referencedPath); err != nil {
+		t.Fatalf("expected delta-group descriptor-referenced segment %d to remain: %v", referenced.FileID, err)
+	}
+}
+
 func TestValueLogGC_RemovesSegmentAfterSystemDescriptorRemoval(t *testing.T) {
 	dir := t.TempDir()
 	d, err := Open(Options{Dir: dir})
@@ -308,6 +365,57 @@ func TestValueLogGC_RemovesSegmentAfterGroupedSystemDescriptorRemoval(t *testing
 	}
 	if _, err := os.Stat(referencedPath); err == nil || !os.IsNotExist(err) {
 		t.Fatalf("expected grouped removed-descriptor segment to be deleted, err=%v", err)
+	}
+}
+
+func TestValueLogGC_RemovesSegmentAfterDeltaGroupSystemDescriptorRemoval(t *testing.T) {
+	dir := t.TempDir()
+	d, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	referenced := appendPointersInNewSegment(t, dir, 0, 1, 110_000, 1, func(int) []byte {
+		return bytes.Repeat([]byte("delta-group-removed-descriptor-live|"), 64)
+	})[0]
+	appendPointersInNewSegment(t, dir, 0, 2, 120_000, 1, func(int) []byte {
+		return bytes.Repeat([]byte("active-head|"), 64)
+	})
+	referencedPath := valueLogSegmentPath(t, dir, referenced.FileID)
+
+	collectionRoot := publishCollectionPointerRoot(t, d, maintenanceTestCollectionRootKey, referenced)
+	refs, err := d.referencedValueLogSegments(context.Background())
+	if err != nil {
+		t.Fatalf("prime value-log ref tracker: %v", err)
+	}
+	if _, ok := refs[referenced.FileID]; !ok {
+		t.Fatalf("expected primed refs to include descriptor-referenced segment %d", referenced.FileID)
+	}
+	if _, ok := d.valueLogRefTracker.referencedSet(d.currentCommitSeq()); !ok {
+		t.Fatal("expected primed value-log ref tracker")
+	}
+	if _, _, err := d.PublishOrderedRootDeltaGroupWithSystemBuilder(nil, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		if len(rootIDs) != 0 {
+			return nil, fmt.Errorf("rootIDs=%d want 0", len(rootIDs))
+		}
+		return mustFrozenRawMemtable(t, "sys/after", encodeMaintenanceRootID(collectionRoot)).NewIterator(nil, nil), nil
+	}); err != nil {
+		t.Fatalf("remove collection descriptor via delta group builder: %v", err)
+	}
+	if _, ok := d.valueLogRefTracker.referencedSet(d.currentCommitSeq()); ok {
+		t.Fatal("expected delta group descriptor removal to invalidate value-log ref tracker")
+	}
+
+	stats, err := d.ValueLogGC(context.Background(), ValueLogGCOptions{})
+	if err != nil {
+		t.Fatalf("ValueLogGC: %v", err)
+	}
+	if stats.SegmentsDeleted == 0 {
+		t.Fatalf("expected GC to delete delta group removed-descriptor segment, stats=%+v", stats)
+	}
+	if _, err := os.Stat(referencedPath); err == nil || !os.IsNotExist(err) {
+		t.Fatalf("expected delta group removed-descriptor segment to be deleted, err=%v", err)
 	}
 }
 

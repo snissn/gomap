@@ -789,7 +789,7 @@ func (db *DB) PublishOrderedRootDeltaGroupWithSystemBuilder(ordered []OrderedRoo
 	if iter == nil {
 		return 0, nil, errors.New("nil system root iterator")
 	}
-	rootID, rootRetired, metrics, _, refDelta, err := db.publishOrderedRootIterator(baseSystemRoot, iter, systemOpts, true)
+	rootID, rootRetired, metrics, publishStats, refDelta, err := db.publishOrderedRootIterator(baseSystemRoot, iter, systemOpts, true)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -797,9 +797,12 @@ func (db *DB) PublishOrderedRootDeltaGroupWithSystemBuilder(ordered []OrderedRoo
 	retired = append(retired, rootRetired...)
 	mergeOrderedRootPublishMetrics(&merged, metrics)
 	vlogRefDelta := refDelta
-	if len(ordered) > 0 {
+	forceRefTrackerRebuild := publishStats.collectionRootDescriptorReachabilityMayChange()
+	if len(ordered) > 0 || forceRefTrackerRebuild {
 		// Non-system roots were applied from deltas, so this commit has no
-		// exact value-log ref delta for their pointer changes. Keep GC
+		// exact value-log ref delta for their pointer changes. Collection
+		// descriptors also make non-system roots part of reachability, and the
+		// system-root ref delta is not exact for those roots. Keep GC
 		// reachability conservative by invalidating the tracker after commit.
 		if vlogRefDelta != nil {
 			releaseValueLogRefDelta(vlogRefDelta)
@@ -820,7 +823,7 @@ func (db *DB) PublishOrderedRootDeltaGroupWithSystemBuilder(ordered []OrderedRoo
 		return 0, nil, errors.New("concurrent modification detected during ordered root group publish")
 	}
 
-	if len(ordered) == 0 && vlogRefDelta == nil {
+	if len(ordered) == 0 && !forceRefTrackerRebuild && vlogRefDelta == nil {
 		vlogRefDelta = db.newNoopValueLogRefDeltaIfTrackable(baseSeq)
 	}
 	if err := db.finalizeCommit(userRoot, newSystemRoot, retired, false, merged, nil, true, vlogRefDelta, nil, nil); err != nil {
