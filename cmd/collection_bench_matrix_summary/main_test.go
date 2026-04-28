@@ -212,6 +212,9 @@ func TestMatrixSummaryRendersBenchmarkMetrics(t *testing.T) {
 		t.Fatalf("read tsv: %v", err)
 	}
 	gotTSV := string(tsv)
+	if !strings.Contains(gotTSV, "writer_docs_per_sec") || strings.Contains(strings.SplitN(gotTSV, "\n", 2)[0], "writer_docs/sec") {
+		t.Fatalf("tsv should use normalized writer throughput column:\n%s", gotTSV)
+	}
 	if !strings.Contains(gotTSV, "template-v1\ttrue\tfalse\tprofile/default\tprofile/default\tBenchmarkCollectionInsertBatchWithSecondaryIndexes\t2812.5\t355555.55555555556\t1980\t30\t-\t-\t-\t-\t-\t0\t0\t") {
 		t.Fatalf("tsv missing raw numeric row:\n%s", gotTSV)
 	}

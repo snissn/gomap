@@ -235,13 +235,24 @@ func BenchmarkCollectionShapeReadPrimaryParallel(b *testing.B) {
 
 func benchmarkCollectionMixedReadWrite(b *testing.B, secondaryRead bool) {
 	indexes := collectionShapeIndexes(2)
-	backend, collection := openBenchmarkCollection(b, "bench_shape_mixed_read_write", indexes...)
+	collectionName := "bench_shape_mixed_read_write"
+	backend, seedCollection := openBenchmarkCollection(b, collectionName, indexes...)
 	seedDocs := benchmarkIntEnv(b, "TREEDB_COLLECTION_MIXED_SEED_DOCS", defaultCollectionMixedSeedDocs)
 	if seedDocs <= 0 {
 		seedDocs = defaultCollectionMixedSeedDocs
 	}
-	ids := seedBenchmarkCollection(b, collection, 0, seedDocs, true)
+	ids := seedBenchmarkCollection(b, seedCollection, 0, seedDocs, true)
 	benchmarkSyncBoundary(b, backend)
+
+	manager := collections.NewCollectionManager(backend)
+	readerCollection, err := manager.OpenCollection(collectionName)
+	if err != nil {
+		b.Fatalf("open mixed reader collection: %v", err)
+	}
+	writerCollection, err := manager.OpenCollection(collectionName)
+	if err != nil {
+		b.Fatalf("open mixed writer collection: %v", err)
+	}
 
 	writeBatchSize := benchmarkIntEnv(b, "TREEDB_COLLECTION_MIXED_WRITE_BATCH_SIZE", defaultCollectionMixedWriteBatchSize)
 	if writeBatchSize <= 0 {
@@ -295,7 +306,7 @@ func benchmarkCollectionMixedReadWrite(b *testing.B, secondaryRead bool) {
 					docs[i] = benchmarkIndexedDocument(docNum)
 				}
 			}
-			if _, err := collection.InsertBatch(ids, docs); err != nil {
+			if _, err := writerCollection.InsertBatch(ids, docs); err != nil {
 				select {
 				case errCh <- err:
 				default:
@@ -328,7 +339,7 @@ func benchmarkCollectionMixedReadWrite(b *testing.B, secondaryRead bool) {
 			i := nextReaderStart(seedDocs)
 			for pb.Next() {
 				email := fmt.Sprintf("user-%09d@example.com", i%seedDocs)
-				if _, err := collection.FindByIndex("email_idx", email); err != nil {
+				if _, err := readerCollection.FindByIndex("email_idx", email); err != nil {
 					b.Errorf("mixed secondary read: %v", err)
 				}
 				i += readerStride
@@ -338,7 +349,7 @@ func benchmarkCollectionMixedReadWrite(b *testing.B, secondaryRead bool) {
 		b.RunParallel(func(pb *testing.PB) {
 			i := nextReaderStart(len(ids))
 			for pb.Next() {
-				if _, err := collection.Get(ids[i%len(ids)]); err != nil {
+				if _, err := readerCollection.Get(ids[i%len(ids)]); err != nil {
 					b.Errorf("mixed primary read: %v", err)
 				}
 				i += readerStride
