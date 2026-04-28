@@ -296,6 +296,8 @@ Metrics to record for every run:
       operators, and BSON types.
 - [x] Prototype the small TreeDB-owned wire layer with OP_QUERY handshake,
       OP_REPLY handshake response, and OP_MSG command request/response tests.
+- [x] Prototype a minimal gateway server loop that answers `OP_QUERY`
+      `hello` / `isMaster` and `OP_MSG` `ping` without collection storage.
 - [ ] Define the initial BSON-to-TreeDB document encoding.
 - [ ] Define canonical `_id` primary-key encoding, generated ObjectId behavior,
       and `_id` immutability tests.
@@ -332,3 +334,7 @@ Metrics to record for every run:
   builds OP_REPLY responses, parses/builds single-body OP_MSG messages, rejects
   checksum-bearing and document-sequence OP_MSGs until needed, and uses the
   official driver v2 `bson.Raw` type for BSON document validation.
+- 2026-04-28: Added a minimal `mongogateway.Server` that serves one message or
+  a connection loop, responds to legacy `OP_QUERY` handshake requests with
+  `OP_REPLY`, responds to `OP_MSG` `ping` with an `OP_MSG` reply, and rejects
+  compressed messages until compression is implemented.
