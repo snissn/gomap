@@ -134,8 +134,6 @@ func benchmarkCollectionShapeInsertBatch(b *testing.B, indexCount int, checkpoin
 		metricName = "target_docs/checkpoint"
 	}
 	b.ReportAllocs()
-	b.ReportMetric(float64(targetBatchSize), metricName)
-	b.ReportMetric(float64(indexCount), "indexes/doc")
 	b.ResetTimer()
 	for inserted := 0; inserted < b.N; {
 		b.StopTimer()
@@ -164,11 +162,14 @@ func benchmarkCollectionShapeInsertBatch(b *testing.B, indexCount int, checkpoin
 		inserted += batchSize
 	}
 	b.StopTimer()
+	b.ReportMetric(float64(targetBatchSize), metricName)
+	b.ReportMetric(float64(indexCount), "indexes/doc")
 	if checkpoint {
 		benchmarkReportCheckpointSplit(b, b.N, insertElapsed, syncElapsed)
 	}
 	benchmarkReportCollectionInsertStats(b, b.N, batches, insertStats)
 	benchmarkReportNativeProbeFallbackDeltas(b, backend, startKeyFallback, startPrefixFallback)
+	benchmarkReportTreeDBDiskUsage(b, backend, b.N)
 }
 
 func BenchmarkCollectionShapeInsertBatch(b *testing.B) {
@@ -204,8 +205,6 @@ func benchmarkCollectionShapeSingleStringInsertBatch(b *testing.B, indexCount in
 		metricName = "target_docs/checkpoint"
 	}
 	b.ReportAllocs()
-	b.ReportMetric(float64(targetBatchSize), metricName)
-	b.ReportMetric(float64(indexCount), "indexes/doc")
 	b.ResetTimer()
 	for inserted := 0; inserted < b.N; {
 		b.StopTimer()
@@ -234,11 +233,14 @@ func benchmarkCollectionShapeSingleStringInsertBatch(b *testing.B, indexCount in
 		inserted += batchSize
 	}
 	b.StopTimer()
+	b.ReportMetric(float64(targetBatchSize), metricName)
+	b.ReportMetric(float64(indexCount), "indexes/doc")
 	if checkpoint {
 		benchmarkReportCheckpointSplit(b, b.N, insertElapsed, syncElapsed)
 	}
 	benchmarkReportCollectionInsertStats(b, b.N, batches, insertStats)
 	benchmarkReportNativeProbeFallbackDeltas(b, backend, startKeyFallback, startPrefixFallback)
+	benchmarkReportTreeDBDiskUsage(b, backend, b.N)
 }
 
 func BenchmarkCollectionShapeInsertBatchSingleStringJSON(b *testing.B) {
