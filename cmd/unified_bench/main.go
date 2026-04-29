@@ -301,6 +301,7 @@ type treeDBVlogRewriteReport struct {
 	BeforeUsage dirDiskUsage
 	AfterUsage  dirDiskUsage
 	AfterVacuum dirDiskUsage
+	VacuumRan   bool
 
 	BeforeTree      treeDBDiskUsage
 	AfterTree       treeDBDiskUsage
@@ -4145,12 +4146,14 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 
 			afterUsage, _ := computeDirDiskUsage(inst.Dir)
 			afterTree, _ := computeTreeDBDiskUsage(inst.Dir)
-			afterVacuumUsage := afterUsage
-			afterVacuumTree := afterTree
+			var afterVacuumUsage dirDiskUsage
+			var afterVacuumTree treeDBDiskUsage
+			vacuumRan := false
 			if *treedbVacuumAfterVlogRewriteRun {
 				if err := treedb.VacuumIndexOffline(opts); err != nil {
 					return BenchRun{}, err
 				}
+				vacuumRan = true
 				afterVacuumUsage, _ = computeDirDiskUsage(inst.Dir)
 				afterVacuumTree, _ = computeTreeDBDiskUsage(inst.Dir)
 			}
@@ -4159,6 +4162,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				BeforeUsage:     beforeUsage,
 				AfterUsage:      afterUsage,
 				AfterVacuum:     afterVacuumUsage,
+				VacuumRan:       vacuumRan,
 				BeforeTree:      beforeTree,
 				AfterTree:       afterTree,
 				AfterVacuumTree: afterVacuumTree,
@@ -4467,14 +4471,14 @@ func renderTreeDBVlogRewriteString(reports map[string]treeDBVlogRewriteReport) s
 			sb.WriteString(fmt.Sprintf("  dir: %s\n", rep.Dir))
 		}
 		sb.WriteString(fmt.Sprintf("  bytes: %s -> %s", formatBytes(rep.BeforeUsage.TotalBytes), formatBytes(rep.AfterUsage.TotalBytes)))
-		if rep.AfterVacuum.TotalBytes > 0 || rep.AfterVacuum.TotalFiles > 0 {
+		if rep.VacuumRan {
 			sb.WriteString(fmt.Sprintf(" -> %s after index vacuum", formatBytes(rep.AfterVacuum.TotalBytes)))
 		}
 		sb.WriteByte('\n')
 		if rep.BeforeTree.MainIndexBytes > 0 || rep.AfterTree.MainIndexBytes > 0 {
 			sb.WriteString(fmt.Sprintf("  maindb/index.db: %s -> %s\n", formatBytes(rep.BeforeTree.MainIndexBytes), formatBytes(rep.AfterTree.MainIndexBytes)))
 		}
-		if rep.AfterVacuumTree.MainIndexBytes > 0 && rep.AfterVacuumTree.MainIndexBytes != rep.AfterTree.MainIndexBytes {
+		if rep.VacuumRan && rep.AfterVacuumTree.MainIndexBytes != rep.AfterTree.MainIndexBytes {
 			sb.WriteString(fmt.Sprintf("  maindb/index.db after vacuum: %s\n", formatBytes(rep.AfterVacuumTree.MainIndexBytes)))
 		}
 		if rep.BeforeTree.MainWAL.TotalBytes > 0 || rep.AfterTree.MainWAL.TotalBytes > 0 {

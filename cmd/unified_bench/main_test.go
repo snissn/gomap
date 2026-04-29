@@ -1793,6 +1793,7 @@ func TestRenderTreeDBVlogRewriteString_EmitsPostVacuumBytes(t *testing.T) {
 			BeforeUsage: dirDiskUsage{TotalBytes: 8192},
 			AfterUsage:  dirDiskUsage{TotalBytes: 6144},
 			AfterVacuum: dirDiskUsage{TotalBytes: 4096},
+			VacuumRan:   true,
 			BeforeTree: treeDBDiskUsage{
 				MainIndexBytes: 4096,
 			},
@@ -1814,5 +1815,35 @@ func TestRenderTreeDBVlogRewriteString_EmitsPostVacuumBytes(t *testing.T) {
 	}
 	if !strings.Contains(out, "maindb/index.db after vacuum: 2 KiB") {
 		t.Fatalf("expected post-vacuum index line, got:\n%s", out)
+	}
+}
+
+func TestRenderTreeDBVlogRewriteString_OmitsPostVacuumBytesWhenDisabled(t *testing.T) {
+	out := renderTreeDBVlogRewriteString(map[string]treeDBVlogRewriteReport{
+		"treedb": {
+			BeforeUsage: dirDiskUsage{TotalBytes: 8192},
+			AfterUsage:  dirDiskUsage{TotalBytes: 6144},
+			AfterVacuum: dirDiskUsage{TotalBytes: 6144},
+			BeforeTree: treeDBDiskUsage{
+				MainIndexBytes: 4096,
+			},
+			AfterTree: treeDBDiskUsage{
+				MainIndexBytes: 4096,
+			},
+			AfterVacuumTree: treeDBDiskUsage{
+				MainIndexBytes: 2048,
+			},
+			SegmentsBefore: 2,
+			SegmentsAfter:  1,
+			BytesBefore:    4096,
+			BytesAfter:     2048,
+			RecordsCopied:  3,
+		},
+	})
+	if strings.Contains(out, "after index vacuum") {
+		t.Fatalf("did not expect post-vacuum total bytes line, got:\n%s", out)
+	}
+	if strings.Contains(out, "maindb/index.db after vacuum") {
+		t.Fatalf("did not expect post-vacuum index line, got:\n%s", out)
 	}
 }
