@@ -271,6 +271,8 @@ Priority workloads:
 - Current find-planner slice adds `_id` `$in`, indexed scalar equality/`$in`,
   top-level `$and`, bounded scan fallback for range predicates, single-field
   sort, skip, limit, and top-level projection.
+- Current cursor slice adds in-memory server cursor state for batched `find`,
+  `getMore`, and `killCursors`.
 
 Metrics to record for every run:
 

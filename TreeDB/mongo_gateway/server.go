@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -15,17 +16,39 @@ import (
 )
 
 const (
-	defaultMaxBSONObjectSize    = 16 * 1024 * 1024
-	defaultMaxWriteBatchSize    = 100_000
-	defaultMaxFindScanDocuments = 10_000
+	defaultMaxBSONObjectSize      = 16 * 1024 * 1024
+	defaultMaxWriteBatchSize      = 100_000
+	defaultMaxFindScanDocuments   = 10_000
+	defaultMaxCursorRetainedBytes = 64 * 1024 * 1024
+	defaultMaxOpenCursors         = 1_024
+	defaultCursorBatchSize        = 101
+	defaultCursorIdleTimeout      = 10 * time.Minute
+	defaultCursorReapInterval     = time.Second
 )
 
 type Server struct {
-	MaxMessageLength     int32
-	MaxFindScanDocuments int
-	Collections          *collections.CollectionManager
+	MaxMessageLength       int32
+	MaxFindScanDocuments   int
+	MaxCursorRetainedBytes int
+	MaxOpenCursors         int
+	CursorIdleTimeout      time.Duration
+	Collections            *collections.CollectionManager
 
-	nextResponseID atomic.Int32
+	nextResponseID   atomic.Int32
+	nextConnectionID atomic.Int64
+	nextCursorID     atomic.Int64
+	cursorMu         sync.Mutex
+	cursors          map[int64]*serverCursor
+	lastCursorReap   time.Time
+}
+
+type serverCursor struct {
+	ns         string
+	owner      int64
+	docs       []wire.Document
+	projection compiledProjection
+	pos        int
+	lastUsed   time.Time
 }
 
 func NewServer() *Server {
@@ -36,6 +59,8 @@ func NewServer() *Server {
 
 func (s *Server) ServeConn(ctx context.Context, conn net.Conn) error {
 	defer conn.Close()
+	owner := s.nextConnectionID.Add(1)
+	defer s.killCursorsForOwner(owner)
 
 	done := make(chan struct{})
 	defer close(done)
@@ -54,7 +79,7 @@ func (s *Server) ServeConn(ctx context.Context, conn net.Conn) error {
 		default:
 		}
 
-		if err := s.ServeOne(conn); err != nil {
+		if err := s.ServeOneWithOwner(conn, owner); err != nil {
 			if errors.Is(err, io.EOF) {
 				return nil
 			}
@@ -66,24 +91,35 @@ func (s *Server) ServeConn(ctx context.Context, conn net.Conn) error {
 	}
 }
 
+// ServeOne serves a single MongoDB wire message with a one-shot cursor owner.
+// Callers serving a real long-lived connection should use ServeOneWithOwner or
+// ServeConn so cursors survive across getMore/killCursors commands on the same
+// connection owner.
 func (s *Server) ServeOne(rw io.ReadWriter) error {
+	owner := s.nextConnectionID.Add(1)
+	defer s.killCursorsForOwner(owner)
+	return s.ServeOneWithOwner(rw, owner)
+}
+
+func (s *Server) ServeOneWithOwner(rw io.ReadWriter, cursorOwner int64) error {
 	h, body, err := wire.ReadMessage(rw, s.maxMessageLength())
 	if err != nil {
 		return err
 	}
-	response, err := s.handleMessage(h, body)
+	response, err := s.handleMessage(h, body, cursorOwner)
 	if err != nil {
 		return err
 	}
 	return writeFull(rw, response)
 }
 
-func (s *Server) handleMessage(h wire.Header, body []byte) ([]byte, error) {
+func (s *Server) handleMessage(h wire.Header, body []byte, cursorOwner int64) ([]byte, error) {
+	s.reapExpiredCursors()
 	switch h.OpCode {
 	case wire.OpQuery:
-		return s.handleQuery(h, body)
+		return s.handleQuery(h, body, cursorOwner)
 	case wire.OpMsg:
-		return s.handleMsg(h, body)
+		return s.handleMsg(h, body, cursorOwner)
 	case wire.OpCompressed:
 		return nil, fmt.Errorf("%w: OP_COMPRESSED", wire.ErrUnsupported)
 	default:
@@ -91,7 +127,7 @@ func (s *Server) handleMessage(h wire.Header, body []byte) ([]byte, error) {
 	}
 }
 
-func (s *Server) handleQuery(h wire.Header, body []byte) ([]byte, error) {
+func (s *Server) handleQuery(h wire.Header, body []byte, cursorOwner int64) ([]byte, error) {
 	q, err := wire.ParseQuery(body)
 	if err != nil {
 		return nil, err
@@ -101,14 +137,14 @@ func (s *Server) handleQuery(h wire.Header, body []byte) ([]byte, error) {
 		return nil, err
 	}
 
-	response, err := s.commandResponse(name, q.Query, nil)
+	response, err := s.commandResponse(name, q.Query, nil, cursorOwner)
 	if err != nil {
 		return nil, err
 	}
 	return wire.AppendReplyMessage(nil, s.nextID(), h.RequestID, 0, 0, 0, response)
 }
 
-func (s *Server) handleMsg(h wire.Header, body []byte) ([]byte, error) {
+func (s *Server) handleMsg(h wire.Header, body []byte, cursorOwner int64) ([]byte, error) {
 	msg, err := wire.ParseMsg(body)
 	if err != nil {
 		return nil, err
@@ -118,14 +154,14 @@ func (s *Server) handleMsg(h wire.Header, body []byte) ([]byte, error) {
 		return nil, err
 	}
 
-	response, err := s.commandResponse(name, msg.Body, msg.Sequences)
+	response, err := s.commandResponse(name, msg.Body, msg.Sequences, cursorOwner)
 	if err != nil {
 		return nil, err
 	}
 	return wire.AppendMsgMessage(nil, s.nextID(), h.RequestID, 0, response)
 }
 
-func (s *Server) commandResponse(name string, command wire.Document, sequences []wire.DocumentSequence) (wire.Document, error) {
+func (s *Server) commandResponse(name string, command wire.Document, sequences []wire.DocumentSequence, cursorOwner int64) (wire.Document, error) {
 	switch name {
 	case "hello", "isMaster", "ismaster":
 		return marshalDocument(helloResponse(s.maxMessageLength()))
@@ -134,7 +170,11 @@ func (s *Server) commandResponse(name string, command wire.Document, sequences [
 	case "insert":
 		return s.insertResponse(command, sequences)
 	case "find":
-		return s.findResponse(command)
+		return s.findResponse(command, cursorOwner)
+	case "getMore":
+		return s.getMoreResponse(command, cursorOwner)
+	case "killCursors":
+		return s.killCursorsResponse(command, cursorOwner)
 	case "update":
 		return s.updateResponse(command, sequences)
 	case "delete":
@@ -205,6 +245,30 @@ func (s *Server) maxFindScanDocuments() int {
 		return defaultMaxFindScanDocuments
 	}
 	return s.MaxFindScanDocuments
+}
+
+func (s *Server) maxOpenCursors() int {
+	if s.MaxOpenCursors <= 0 {
+		return defaultMaxOpenCursors
+	}
+	return s.MaxOpenCursors
+}
+
+func (s *Server) maxCursorRetainedBytes() int {
+	if s.MaxCursorRetainedBytes <= 0 {
+		return defaultMaxCursorRetainedBytes
+	}
+	return s.MaxCursorRetainedBytes
+}
+
+func (s *Server) cursorIdleTimeout() time.Duration {
+	if s.CursorIdleTimeout < 0 {
+		return 0
+	}
+	if s.CursorIdleTimeout == 0 {
+		return defaultCursorIdleTimeout
+	}
+	return s.CursorIdleTimeout
 }
 
 func (s *Server) nextID() int32 {

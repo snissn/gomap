@@ -45,6 +45,11 @@ type findPlan struct {
 	projection compiledProjection
 }
 
+type findResultSet struct {
+	docs       []wire.Document
+	projection compiledProjection
+}
+
 func parseFindPlan(command wire.Document, filter wire.Document) (findPlan, error) {
 	predicates, err := parseFindPredicates(filter)
 	if err != nil {
@@ -75,18 +80,18 @@ func parseFindPlan(command wire.Document, filter wire.Document) (findPlan, error
 	}, nil
 }
 
-func (s *Server) executeFind(col *collections.Collection, plan findPlan) (bson.A, error) {
+func (s *Server) executeFind(col *collections.Collection, plan findPlan) (findResultSet, error) {
 	// MaxFindScanDocuments is a candidate-work cap, not a page-size cap. It is
 	// intentionally enforced before later skip/limit pagination.
 	docs, err := s.findCandidateDocuments(col, plan.predicates)
 	if err != nil {
-		return nil, err
+		return findResultSet{}, err
 	}
-	filtered := docs[:0]
+	filtered := make([]wire.Document, 0, len(docs))
 	for _, doc := range docs {
 		match, err := documentMatchesPredicates(doc, plan.predicates)
 		if err != nil {
-			return nil, err
+			return findResultSet{}, err
 		}
 		if match {
 			filtered = append(filtered, doc)
@@ -114,25 +119,10 @@ func (s *Server) executeFind(col *collections.Collection, plan findPlan) (bson.A
 	if plan.limit > 0 && int(plan.limit) < len(docs) {
 		docs = docs[:plan.limit]
 	}
-	firstBatch := make(bson.A, 0, len(docs))
-	batchBytes := 0
-	maxBatchBytes := s.maxFindBatchBytes()
-	for _, doc := range docs {
-		projected, err := projectDocumentWithProjection(doc, plan.projection)
-		if err != nil {
-			return nil, err
-		}
-		docBytes := findBatchDocumentBytes(projected, len(firstBatch))
-		if findBatchOverheadBytes+docBytes > maxBatchBytes {
-			return nil, fmt.Errorf("Mongo gateway find result document exceeds max message size: docBytes=%d maxBatchBytes=%d", docBytes, maxBatchBytes)
-		}
-		if findBatchOverheadBytes+batchBytes+docBytes > maxBatchBytes {
-			return nil, fmt.Errorf("Mongo gateway find results exceed max message size: batchBytes=%d docBytes=%d maxBatchBytes=%d", batchBytes, docBytes, maxBatchBytes)
-		}
-		firstBatch = append(firstBatch, bson.Raw(projected))
-		batchBytes += docBytes
+	if len(docs) > 0 {
+		docs = append([]wire.Document(nil), docs...)
 	}
-	return firstBatch, nil
+	return findResultSet{docs: docs, projection: plan.projection}, nil
 }
 
 const (
@@ -150,7 +140,20 @@ func bsonArrayElementOverhead(index int) int {
 
 func validateFindCommandOptions(command wire.Document, filter wire.Document) error {
 	_, err := parseFindPlan(command, filter)
-	return err
+	if err != nil {
+		return err
+	}
+	batchSize, batchSizeSet, err := optionalInt32FieldWithPresence(command, "batchSize")
+	if err != nil {
+		return err
+	}
+	if _, err := normalizeBatchSize(int(batchSize), batchSizeSet, defaultCursorBatchSize); err != nil {
+		return err
+	}
+	if _, err := optionalBoolField(command, "singleBatch"); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (s *Server) maxFindBatchBytes() int {
