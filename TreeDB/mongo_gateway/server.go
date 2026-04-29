@@ -37,10 +37,11 @@ type Server struct {
 }
 
 type serverCursor struct {
-	ns    string
-	owner int64
-	docs  []wire.Document
-	pos   int
+	ns         string
+	owner      int64
+	docs       []wire.Document
+	projection compiledProjection
+	pos        int
 }
 
 func NewServer() *Server {

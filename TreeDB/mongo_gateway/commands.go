@@ -22,6 +22,8 @@ const (
 
 const primaryKeyPrefixBSONValue byte = 1
 
+var maxInt = int(^uint(0) >> 1)
+
 func (s *Server) insertResponse(command wire.Document, sequences []wire.DocumentSequence) (wire.Document, error) {
 	if s.Collections == nil {
 		return commandError(commandCodeBadValue, "BadValue", "Mongo gateway collection manager is not configured")
@@ -91,7 +93,8 @@ func (s *Server) findResponse(command wire.Document, cursorOwner int64) (wire.Do
 	if err != nil {
 		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
 	}
-	if err := validateFindCommandOptions(command, filter); err != nil {
+	plan, err := parseFindPlan(command, filter)
+	if err != nil {
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}
 	col, err := s.Collections.OpenCollection(name)
@@ -101,7 +104,7 @@ func (s *Server) findResponse(command wire.Document, cursorOwner int64) (wire.Do
 	if err != nil {
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}
-	docs, err := s.executeFind(col, command, filter)
+	results, err := s.executeFind(col, plan)
 	if err != nil {
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}
@@ -110,7 +113,7 @@ func (s *Server) findResponse(command wire.Document, cursorOwner int64) (wire.Do
 		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
 	}
 	ns := db + "." + collection
-	cursorID, firstBatch, err := s.openCursor(ns, docs, int(batchSize), batchSizeSet, defaultCursorBatchSize, cursorOwner)
+	cursorID, firstBatch, err := s.openCursor(ns, results.docs, results.projection, int(batchSize), batchSizeSet, defaultCursorBatchSize, cursorOwner)
 	if err != nil {
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}
@@ -481,10 +484,13 @@ func (s *Server) getMoreResponse(command wire.Document) (wire.Document, error) {
 	if err != nil {
 		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
 	}
+	if batchSizeSet && batchSize == 0 {
+		batchSizeSet = false
+	}
 	ns := db + "." + collection
-	nextID, nextBatch, ok, err := s.getMore(cursorID, ns, int(batchSize), batchSizeSet, int(^uint(0)>>1))
+	nextID, nextBatch, ok, err := s.getMore(cursorID, ns, int(batchSize), batchSizeSet, maxInt)
 	if err != nil {
-		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
+		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}
 	if !ok {
 		return commandError(commandCodeCursorNotFound, "CursorNotFound", fmt.Sprintf("cursor not found: %d", cursorID))
@@ -546,12 +552,12 @@ func marshalCursorResponseWithID(ns string, cursorID int64, batchKey string, bat
 	})
 }
 
-func (s *Server) openCursor(ns string, docs []wire.Document, batchSize int, explicitBatchSize bool, defaultBatchSize int, owner int64) (int64, bson.A, error) {
+func (s *Server) openCursor(ns string, docs []wire.Document, projection compiledProjection, batchSize int, explicitBatchSize bool, defaultBatchSize int, owner int64) (int64, bson.A, error) {
 	batchSize, err := normalizeBatchSize(batchSize, explicitBatchSize, defaultBatchSize)
 	if err != nil {
 		return 0, nil, err
 	}
-	firstBatch, consumed, err := documentsBatchWithLimit(docs, batchSize, s.maxFindBatchBytes())
+	firstBatch, consumed, err := documentsBatchWithLimit(docs, projection, batchSize, s.maxFindBatchBytes())
 	if err != nil {
 		return 0, nil, err
 	}
@@ -570,7 +576,7 @@ func (s *Server) openCursor(ns string, docs []wire.Document, batchSize int, expl
 	if len(s.cursors) >= s.maxOpenCursors() {
 		return 0, nil, errors.New("Mongo gateway cursor limit exceeded")
 	}
-	s.cursors[cursorID] = &serverCursor{ns: ns, owner: owner, docs: docs, pos: consumed}
+	s.cursors[cursorID] = &serverCursor{ns: ns, owner: owner, docs: docs, projection: projection, pos: consumed}
 	return cursorID, firstBatch, nil
 }
 
@@ -589,7 +595,7 @@ func (s *Server) getMore(cursorID int64, ns string, batchSize int, explicitBatch
 		return 0, nil, false, nil
 	}
 	remaining := cursor.docs[cursor.pos:]
-	batch, consumed, err := documentsBatchWithLimit(remaining, batchSize, s.maxFindBatchBytes())
+	batch, consumed, err := documentsBatchWithLimit(remaining, cursor.projection, batchSize, s.maxFindBatchBytes())
 	if err != nil {
 		return 0, nil, false, err
 	}
@@ -642,25 +648,28 @@ func normalizeBatchSize(batchSize int, explicit bool, defaultBatchSize int) (int
 }
 
 func documentsBatch(docs []wire.Document) bson.A {
-	out, _, _ := documentsBatchWithLimit(docs, len(docs), int(^uint(0)>>1))
+	out, _, _ := documentsBatchWithLimit(docs, compiledProjection{}, len(docs), maxInt)
 	return out
 }
 
-func documentsBatchWithLimit(docs []wire.Document, maxDocs int, maxBytes int) (bson.A, int, error) {
+func documentsBatchWithLimit(docs []wire.Document, projection compiledProjection, maxDocs int, maxBytes int) (bson.A, int, error) {
 	if maxDocs < 0 || maxDocs > len(docs) {
 		maxDocs = len(docs)
 	}
 	if maxBytes < 0 {
 		maxBytes = 0
 	}
-	out := make(bson.A, 0, len(docs))
+	out := make(bson.A, 0, maxDocs)
 	batchBytes := 0
 	consumed := 0
 	for consumed < maxDocs {
-		doc := docs[consumed]
+		doc, err := projectDocumentWithProjection(docs[consumed], projection)
+		if err != nil {
+			return nil, 0, err
+		}
 		docBytes := len(doc) + 16
 		if docBytes > maxBytes {
-			return nil, 0, errors.New("Mongo gateway cursor document exceeds max message size")
+			return nil, 0, fmt.Errorf("Mongo gateway cursor document exceeds max message size: docBytes=%d maxBatchBytes=%d", docBytes, maxBytes)
 		}
 		if consumed > 0 && batchBytes+docBytes > maxBytes {
 			break
