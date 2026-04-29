@@ -70,9 +70,27 @@ func TestValidateResettableTreeDBDirRejectsDangerousPaths(t *testing.T) {
 			t.Fatalf("validateResettableTreeDBDir(%q) err=nil want error", dir)
 		}
 	}
+	if cwd, err := os.Getwd(); err == nil {
+		if _, err := validateResettableTreeDBDir(filepath.Join(cwd, "unsafe-treedb")); err == nil {
+			t.Fatal("validateResettableTreeDBDir accepted checkout child")
+		}
+	}
 	safe := filepath.Join(t.TempDir(), "treedb")
 	if got, err := validateResettableTreeDBDir(safe); err != nil || got == "" {
 		t.Fatalf("validate safe dir got/err=%q/%v", got, err)
+	}
+}
+
+func TestIsPathDescendant(t *testing.T) {
+	parent := filepath.Join("tmp", "repo")
+	if !isPathDescendant(parent, filepath.Join(parent, "bench")) {
+		t.Fatal("child path not recognized as descendant")
+	}
+	if isPathDescendant(parent, parent) {
+		t.Fatal("parent path recognized as descendant")
+	}
+	if isPathDescendant(parent, filepath.Join("tmp", "repo-sibling")) {
+		t.Fatal("sibling path recognized as descendant")
 	}
 }
 

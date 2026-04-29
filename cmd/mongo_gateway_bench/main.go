@@ -144,7 +144,7 @@ func parseConfig(args []string) (config, error) {
 	fs.IntVar(&cfg.RangeReads, "range-reads", 100, "range reads with limit")
 	fs.IntVar(&cfg.Updates, "updates", 100, "$set updates by _id")
 	fs.IntVar(&cfg.Deletes, "deletes", 0, "deleteOne operations by _id")
-	fs.IntVar(&cfg.SecondaryIndexes, "secondary-indexes", 2, "secondary indexes to create: 0, 1=email, 2=email+city")
+	fs.IntVar(&cfg.SecondaryIndexes, "secondary-indexes", 2, "secondary indexes to create: 0, 1=email, 2=both single-field indexes: email and city")
 	fs.DurationVar(&cfg.Timeout, "timeout", 10*time.Minute, "overall benchmark timeout")
 	fs.StringVar(&cfg.Format, "format", "text", "output format: text or json")
 	if err := fs.Parse(args); err != nil {
@@ -308,8 +308,11 @@ func validateResettableTreeDBDir(dir string) (string, error) {
 	if home, err := os.UserHomeDir(); err == nil && (abs == home || filepath.Dir(abs) == home) {
 		return "", fmt.Errorf("unsafe treedb-dir %q", dir)
 	}
-	if cwd, err := os.Getwd(); err == nil && abs == cwd {
-		return "", fmt.Errorf("unsafe treedb-dir %q", dir)
+	if cwd, err := os.Getwd(); err == nil {
+		cwdAbs, err := filepath.Abs(cwd)
+		if err == nil && (abs == cwdAbs || isPathDescendant(cwdAbs, abs)) {
+			return "", fmt.Errorf("unsafe treedb-dir %q", dir)
+		}
 	}
 	if tmp := os.TempDir(); tmp != "" {
 		if tmpAbs, err := filepath.Abs(tmp); err == nil && abs == tmpAbs {
@@ -320,6 +323,14 @@ func validateResettableTreeDBDir(dir string) (string, error) {
 		return "", err
 	}
 	return abs, nil
+}
+
+func isPathDescendant(parent, child string) bool {
+	rel, err := filepath.Rel(parent, child)
+	if err != nil || rel == "." || rel == ".." {
+		return false
+	}
+	return !strings.HasPrefix(rel, ".."+string(os.PathSeparator))
 }
 
 func rejectSymlinkedPath(path string) error {
@@ -557,25 +568,27 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget) (*benchm
 	}
 	result.Phases = append(result.Phases, updatePhase)
 
-	deletePhase, err := measurePhase("id_delete_one", cfg.Deletes, func(sample func(time.Duration)) error {
-		for i := 0; i < cfg.Deletes; i++ {
-			id := benchmarkID(cfg.Documents - 1 - i)
-			begin := time.Now()
-			res, err := coll.DeleteOne(ctx, bson.D{{Key: "_id", Value: id}})
-			sample(time.Since(begin))
-			if err != nil {
-				return err
+	if cfg.Deletes > 0 {
+		deletePhase, err := measurePhase("id_delete_one", cfg.Deletes, func(sample func(time.Duration)) error {
+			for i := 0; i < cfg.Deletes; i++ {
+				id := benchmarkID(cfg.Documents - 1 - i)
+				begin := time.Now()
+				res, err := coll.DeleteOne(ctx, bson.D{{Key: "_id", Value: id}})
+				sample(time.Since(begin))
+				if err != nil {
+					return err
+				}
+				if res.DeletedCount != 1 {
+					return fmt.Errorf("delete deleted=%d want 1", res.DeletedCount)
+				}
 			}
-			if res.DeletedCount != 1 {
-				return fmt.Errorf("delete deleted=%d want 1", res.DeletedCount)
-			}
+			return nil
+		})
+		if err != nil {
+			return nil, err
 		}
-		return nil
-	})
-	if err != nil {
-		return nil, err
+		result.Phases = append(result.Phases, deletePhase)
 	}
-	result.Phases = append(result.Phases, deletePhase)
 
 	if err := collectFinalStats(ctx, cfg, target, result); err != nil {
 		return nil, err
