@@ -515,6 +515,72 @@ func TestServerFindPlannerIndexedAndBoundedPredicates(t *testing.T) {
 	if got, ok := firstBatch[0].Lookup("name").StringValueOK(); !ok || got != "katherine" {
 		t.Fatalf("$in sorted/skipped name=%q ok=%v want katherine", got, ok)
 	}
+
+	withoutID := serveCommand(t, server, 236, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "_id", Value: id1}}},
+		{Key: "projection", Value: bson.D{{Key: "_id", Value: int32(0)}}},
+		{Key: "$db", Value: "app"},
+	})
+	firstBatch = cursorFirstBatch(t, withoutID)
+	if len(firstBatch) != 1 {
+		t.Fatalf("_id exclude firstBatch len=%d want 1", len(firstBatch))
+	}
+	if !firstBatch[0].Lookup("_id").IsZero() {
+		t.Fatalf("_id exclude projection returned _id: %v", firstBatch[0])
+	}
+	if got, ok := firstBatch[0].Lookup("name").StringValueOK(); !ok || got != "ada" {
+		t.Fatalf("_id exclude name=%q ok=%v want ada", got, ok)
+	}
+
+	onlyID := serveCommand(t, server, 237, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "_id", Value: id1}}},
+		{Key: "projection", Value: bson.D{{Key: "_id", Value: int32(1)}}},
+		{Key: "$db", Value: "app"},
+	})
+	firstBatch = cursorFirstBatch(t, onlyID)
+	if len(firstBatch) != 1 {
+		t.Fatalf("_id include firstBatch len=%d want 1", len(firstBatch))
+	}
+	elements, err := firstBatch[0].Elements()
+	if err != nil {
+		t.Fatalf("_id include elements: %v", err)
+	}
+	if len(elements) != 1 || firstBatch[0].Lookup("_id").IsZero() {
+		t.Fatalf("_id include projection=%v want only _id", firstBatch[0])
+	}
+
+	id4 := bson.NewObjectID()
+	id5 := bson.NewObjectID()
+	assertOK(t, serveCommand(t, server, 238, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{
+			bson.D{{Key: "_id", Value: id4}, {Key: "name", Value: "large-a"}, {Key: "big", Value: int64(9007199254740992)}},
+			bson.D{{Key: "_id", Value: id5}, {Key: "name", Value: "large-b"}, {Key: "big", Value: int64(9007199254740993)}},
+		}},
+		{Key: "$db", Value: "app"},
+	}))
+	largeFind := serveCommand(t, server, 239, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "big", Value: int64(9007199254740993)}}},
+		{Key: "$db", Value: "app"},
+	})
+	firstBatch = cursorFirstBatch(t, largeFind)
+	if len(firstBatch) != 1 {
+		t.Fatalf("large int firstBatch len=%d want 1", len(firstBatch))
+	}
+	if got, ok := firstBatch[0].Lookup("name").StringValueOK(); !ok || got != "large-b" {
+		t.Fatalf("large int matched name=%q ok=%v want large-b", got, ok)
+	}
+
+	negativeSkipMissingCollection := serveCommand(t, server, 240, bson.D{
+		{Key: "find", Value: "missing"},
+		{Key: "filter", Value: bson.D{}},
+		{Key: "skip", Value: int32(-1)},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, negativeSkipMissingCollection, "BadValue")
 }
 
 func TestApplySetUpdateAppendsNewFieldsInSetOrder(t *testing.T) {
@@ -559,6 +625,18 @@ func TestApplySetUpdateAppendsNewFieldsInSetOrder(t *testing.T) {
 		if keys[i] != want[i] {
 			t.Fatalf("keys=%v want %v", keys, want)
 		}
+	}
+}
+
+func TestCompareDocumentFieldTreatsMissingAsNull(t *testing.T) {
+	missing := mustDocument(t, bson.D{{Key: "_id", Value: "missing"}})
+	nullValue := mustDocument(t, bson.D{{Key: "_id", Value: "null"}, {Key: "rank", Value: nil}})
+	numberValue := mustDocument(t, bson.D{{Key: "_id", Value: "number"}, {Key: "rank", Value: int64(1)}})
+	if cmp := compareDocumentField(missing, nullValue, "rank"); cmp != 0 {
+		t.Fatalf("missing vs null cmp=%d want 0", cmp)
+	}
+	if cmp := compareDocumentField(missing, numberValue, "rank"); cmp >= 0 {
+		t.Fatalf("missing vs number cmp=%d want <0", cmp)
 	}
 }
 

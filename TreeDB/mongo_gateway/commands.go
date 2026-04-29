@@ -90,6 +90,9 @@ func (s *Server) findResponse(command wire.Document) (wire.Document, error) {
 	if err != nil {
 		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
 	}
+	if err := validateFindCommandOptions(command, filter); err != nil {
+		return commandError(commandCodeBadValue, "BadValue", err.Error())
+	}
 	col, err := s.Collections.OpenCollection(name)
 	if errors.Is(err, collections.ErrCollectionNotFound) {
 		return marshalCursorResponse(db, collection, bson.A{})
