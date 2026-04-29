@@ -630,6 +630,50 @@ func TestServerFindPlannerIndexedAndBoundedPredicates(t *testing.T) {
 	assertCommandError(t, nonIndexableValue, "BadValue")
 }
 
+func TestServerFindNullEqualityMatchesMissingWithIndex(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	assertOK(t, serveCommand(t, server, 244, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{
+			bson.D{{Key: "_id", Value: "null"}, {Key: "city", Value: nil}},
+			bson.D{{Key: "_id", Value: "missing"}, {Key: "name", Value: "no city"}},
+			bson.D{{Key: "_id", Value: "hnl"}, {Key: "city", Value: "hnl"}},
+		}},
+		{Key: "$db", Value: "app"},
+	}))
+	assertOK(t, serveCommand(t, server, 245, bson.D{
+		{Key: "createIndexes", Value: "users"},
+		{Key: "indexes", Value: bson.A{bson.D{
+			{Key: "key", Value: bson.D{{Key: "city", Value: int32(1)}}},
+			{Key: "name", Value: "city_1"},
+		}}},
+		{Key: "$db", Value: "app"},
+	}))
+
+	nullFind := serveCommand(t, server, 246, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "city", Value: nil}}},
+		{Key: "sort", Value: bson.D{{Key: "_id", Value: int32(1)}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertBatchIDs(t, cursorFirstBatch(t, nullFind), []string{"missing", "null"})
+
+	inFind := serveCommand(t, server, 247, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "city", Value: bson.D{{Key: "$in", Value: bson.A{nil, "hnl"}}}}}},
+		{Key: "sort", Value: bson.D{{Key: "_id", Value: int32(1)}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertBatchIDs(t, cursorFirstBatch(t, inFind), []string{"hnl", "missing", "null"})
+}
+
 func TestApplySetUpdateAppendsNewFieldsInSetOrder(t *testing.T) {
 	doc, err := bson.Marshal(bson.D{
 		{Key: "_id", Value: "u1"},
@@ -902,6 +946,19 @@ func cursorFirstBatch(tb testing.TB, doc wire.Document) []bson.Raw {
 		out = append(out, doc)
 	}
 	return out
+}
+
+func assertBatchIDs(tb testing.TB, batch []bson.Raw, want []string) {
+	tb.Helper()
+	if len(batch) != len(want) {
+		tb.Fatalf("batch len=%d want %d", len(batch), len(want))
+	}
+	for i, doc := range batch {
+		got, ok := doc.Lookup("_id").StringValueOK()
+		if !ok || got != want[i] {
+			tb.Fatalf("batch[%d]._id=%q ok=%v want %q", i, got, ok, want[i])
+		}
+	}
 }
 
 func assertInt32(tb testing.TB, doc wire.Document, key string, want int32) {

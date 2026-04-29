@@ -177,6 +177,9 @@ func indexedCandidatePredicate(meta collections.CollectionMeta, predicates []fin
 		if pred.op != findPredicateEq && pred.op != findPredicateIn {
 			continue
 		}
+		if predicateContainsNull(pred) {
+			continue
+		}
 		for _, idx := range meta.Indexes {
 			if idx.Field == pred.field {
 				return pred, idx, true
@@ -400,6 +403,9 @@ func documentMatchesPredicates(doc wire.Document, predicates []findPredicate) (b
 	for _, pred := range predicates {
 		value, ok := lookupDocumentValue(doc, pred.field)
 		if !ok {
+			if missingValueMatchesPredicate(pred) {
+				continue
+			}
 			return false, nil
 		}
 		match, err := valueMatchesPredicate(value, pred)
@@ -408,6 +414,28 @@ func documentMatchesPredicates(doc wire.Document, predicates []findPredicate) (b
 		}
 	}
 	return true, nil
+}
+
+func missingValueMatchesPredicate(pred findPredicate) bool {
+	switch pred.op {
+	case findPredicateEq, findPredicateIn:
+		return predicateContainsNull(pred)
+	default:
+		return false
+	}
+}
+
+func predicateContainsNull(pred findPredicate) bool {
+	for _, value := range pred.values {
+		if rawValueIsNull(value) {
+			return true
+		}
+	}
+	return false
+}
+
+func rawValueIsNull(value bson.RawValue) bool {
+	return value.Type == bson.TypeNull
 }
 
 func valueMatchesPredicate(value bson.RawValue, pred findPredicate) (bool, error) {
