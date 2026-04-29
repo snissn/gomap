@@ -114,7 +114,7 @@ func validateFindCommandOptions(command wire.Document, filter wire.Document) err
 	if err != nil {
 		return err
 	}
-	if _, err := normalizeBatchSize(int(batchSize), batchSizeSet); err != nil {
+	if _, err := normalizeBatchSize(int(batchSize), batchSizeSet, defaultCursorBatchSize); err != nil {
 		return err
 	}
 	projection, err := commandOptionalDocument(command, "projection")

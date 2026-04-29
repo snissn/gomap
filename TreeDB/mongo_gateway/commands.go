@@ -110,7 +110,7 @@ func (s *Server) findResponse(command wire.Document, cursorOwner int64) (wire.Do
 		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
 	}
 	ns := db + "." + collection
-	cursorID, firstBatch, err := s.openCursor(ns, docs, int(batchSize), batchSizeSet, cursorOwner)
+	cursorID, firstBatch, err := s.openCursor(ns, docs, int(batchSize), batchSizeSet, defaultCursorBatchSize, cursorOwner)
 	if err != nil {
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}
@@ -482,7 +482,7 @@ func (s *Server) getMoreResponse(command wire.Document) (wire.Document, error) {
 		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
 	}
 	ns := db + "." + collection
-	nextID, nextBatch, ok, err := s.getMore(cursorID, ns, int(batchSize), batchSizeSet)
+	nextID, nextBatch, ok, err := s.getMore(cursorID, ns, int(batchSize), batchSizeSet, int(^uint(0)>>1))
 	if err != nil {
 		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
 	}
@@ -546,8 +546,8 @@ func marshalCursorResponseWithID(ns string, cursorID int64, batchKey string, bat
 	})
 }
 
-func (s *Server) openCursor(ns string, docs []wire.Document, batchSize int, explicitBatchSize bool, owner int64) (int64, bson.A, error) {
-	batchSize, err := normalizeBatchSize(batchSize, explicitBatchSize)
+func (s *Server) openCursor(ns string, docs []wire.Document, batchSize int, explicitBatchSize bool, defaultBatchSize int, owner int64) (int64, bson.A, error) {
+	batchSize, err := normalizeBatchSize(batchSize, explicitBatchSize, defaultBatchSize)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -571,11 +571,11 @@ func (s *Server) openCursor(ns string, docs []wire.Document, batchSize int, expl
 	return cursorID, firstBatch, nil
 }
 
-func (s *Server) getMore(cursorID int64, ns string, batchSize int, explicitBatchSize bool) (int64, bson.A, bool, error) {
+func (s *Server) getMore(cursorID int64, ns string, batchSize int, explicitBatchSize bool, defaultBatchSize int) (int64, bson.A, bool, error) {
 	if cursorID == 0 {
 		return 0, nil, false, nil
 	}
-	batchSize, err := normalizeBatchSize(batchSize, explicitBatchSize)
+	batchSize, err := normalizeBatchSize(batchSize, explicitBatchSize, defaultBatchSize)
 	if err != nil {
 		return 0, nil, false, err
 	}
@@ -625,9 +625,9 @@ func (s *Server) killCursors(ns string, cursorIDs []int64) ([]int64, []int64) {
 	return killed, notFound
 }
 
-func normalizeBatchSize(batchSize int, explicit bool) (int, error) {
+func normalizeBatchSize(batchSize int, explicit bool, defaultBatchSize int) (int, error) {
 	if !explicit {
-		return defaultCursorBatchSize, nil
+		return defaultBatchSize, nil
 	}
 	if batchSize < 0 {
 		return 0, errors.New("Mongo gateway cursor batchSize must be non-negative")

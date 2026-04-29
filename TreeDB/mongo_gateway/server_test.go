@@ -738,13 +738,61 @@ func TestServerFindBatchSizeZeroKeepsCursorEmpty(t *testing.T) {
 	}
 }
 
+func TestServerGetMoreWithoutBatchSizeUsesMessageLimit(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	documents := make(bson.A, 0, 4)
+	for _, name := range []string{"ada", "grace", "katherine", "mary"} {
+		documents = append(documents, bson.D{{Key: "_id", Value: name}, {Key: "name", Value: name}})
+	}
+	assertOK(t, serveCommand(t, server, 245, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: documents},
+		{Key: "$db", Value: "app"},
+	}))
+
+	findResponse := serveCommand(t, server, 246, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{}},
+		{Key: "sort", Value: bson.D{{Key: "name", Value: int32(1)}}},
+		{Key: "batchSize", Value: int32(1)},
+		{Key: "$db", Value: "app"},
+	})
+	if firstBatch := cursorFirstBatch(t, findResponse); len(firstBatch) != 1 {
+		t.Fatalf("firstBatch len=%d want 1", len(firstBatch))
+	}
+	cursorID := cursorIDFromResponse(t, findResponse)
+	if cursorID == 0 {
+		t.Fatal("cursor id=0 want open cursor")
+	}
+
+	getMoreResponse := serveCommand(t, server, 247, bson.D{
+		{Key: "getMore", Value: cursorID},
+		{Key: "collection", Value: "users"},
+		{Key: "$db", Value: "app"},
+	})
+	nextBatch := cursorNextBatch(t, getMoreResponse)
+	if len(nextBatch) != 3 {
+		t.Fatalf("nextBatch len=%d want 3", len(nextBatch))
+	}
+	if nextID := cursorIDFromResponse(t, getMoreResponse); nextID != 0 {
+		t.Fatalf("cursor id after getMore=%d want 0", nextID)
+	}
+}
+
 func TestServerCursorOwnerCleanup(t *testing.T) {
 	server := NewServer()
 	docs := []wire.Document{
 		mustDocument(t, bson.D{{Key: "_id", Value: "u1"}}),
 		mustDocument(t, bson.D{{Key: "_id", Value: "u2"}}),
 	}
-	cursorID, firstBatch, err := server.openCursor("app.users", docs, 0, true, 99)
+	cursorID, firstBatch, err := server.openCursor("app.users", docs, 0, true, defaultCursorBatchSize, 99)
 	if err != nil {
 		t.Fatalf("openCursor: %v", err)
 	}
@@ -756,7 +804,7 @@ func TestServerCursorOwnerCleanup(t *testing.T) {
 	}
 
 	server.killCursorsForOwner(99)
-	if _, _, ok, err := server.getMore(cursorID, "app.users", 1, true); err != nil || ok {
+	if _, _, ok, err := server.getMore(cursorID, "app.users", 1, true, defaultCursorBatchSize); err != nil || ok {
 		t.Fatalf("getMore after owner cleanup ok/err=%v/%v want false/nil", ok, err)
 	}
 }
@@ -768,14 +816,14 @@ func TestServerCursorLimit(t *testing.T) {
 		mustDocument(t, bson.D{{Key: "_id", Value: "u1"}}),
 	}
 
-	cursorID, _, err := server.openCursor("app.users", docs, 0, true, 1)
+	cursorID, _, err := server.openCursor("app.users", docs, 0, true, defaultCursorBatchSize, 1)
 	if err != nil {
 		t.Fatalf("openCursor first: %v", err)
 	}
 	if cursorID == 0 {
 		t.Fatal("cursor id=0 want open cursor")
 	}
-	if _, _, err := server.openCursor("app.users", docs, 0, true, 2); err == nil {
+	if _, _, err := server.openCursor("app.users", docs, 0, true, defaultCursorBatchSize, 2); err == nil {
 		t.Fatal("second openCursor err=nil want cursor limit error")
 	}
 }
@@ -789,7 +837,7 @@ func TestServerCursorBatchesRespectMessageSize(t *testing.T) {
 		mustDocument(t, bson.D{{Key: "_id", Value: "u3"}, {Key: "payload", Value: strings.Repeat("c", 900)}}),
 	}
 
-	cursorID, firstBatch, err := server.openCursor("app.users", docs, 10, true, 0)
+	cursorID, firstBatch, err := server.openCursor("app.users", docs, 10, true, defaultCursorBatchSize, 0)
 	if err != nil {
 		t.Fatalf("openCursor: %v", err)
 	}
@@ -800,7 +848,7 @@ func TestServerCursorBatchesRespectMessageSize(t *testing.T) {
 		t.Fatal("cursor id=0 want open cursor")
 	}
 
-	nextID, nextBatch, ok, err := server.getMore(cursorID, "app.users", 10, true)
+	nextID, nextBatch, ok, err := server.getMore(cursorID, "app.users", 10, true, defaultCursorBatchSize)
 	if err != nil || !ok {
 		t.Fatalf("getMore ok/err=%v/%v want true/nil", ok, err)
 	}
@@ -811,7 +859,7 @@ func TestServerCursorBatchesRespectMessageSize(t *testing.T) {
 		t.Fatalf("cursor id after getMore=%d want %d", nextID, cursorID)
 	}
 
-	finalID, finalBatch, ok, err := server.getMore(cursorID, "app.users", 10, true)
+	finalID, finalBatch, ok, err := server.getMore(cursorID, "app.users", 10, true, defaultCursorBatchSize)
 	if err != nil || !ok {
 		t.Fatalf("final getMore ok/err=%v/%v want true/nil", ok, err)
 	}
