@@ -1,6 +1,6 @@
 # Mongo Gateway Benchmark Comparison - 2026-04-29
 
-- generated_at: `2026-04-29T08:19:08Z`
+- generated_at: `2026-04-29T08:31:58Z`
 - matrix: `docs/benchmarks/mongo_gateway_compare_2026-04-29/matrix.tsv`
 - comparison cells: `6`
 - targets: `treedb`, `mongo`
@@ -61,18 +61,18 @@
 
 | docs | indexes | target | raw json |
 | ---: | ---: | --- | --- |
-| 1000 | 0 | treedb | `docs/benchmarks/mongo_gateway_compare_2026-04-29/raw/treedb_docs_1000_idx_0.json` |
-| 1000 | 0 | mongo | `docs/benchmarks/mongo_gateway_compare_2026-04-29/raw/mongo_docs_1000_idx_0.json` |
-| 1000 | 1 | treedb | `docs/benchmarks/mongo_gateway_compare_2026-04-29/raw/treedb_docs_1000_idx_1.json` |
-| 1000 | 1 | mongo | `docs/benchmarks/mongo_gateway_compare_2026-04-29/raw/mongo_docs_1000_idx_1.json` |
-| 1000 | 2 | treedb | `docs/benchmarks/mongo_gateway_compare_2026-04-29/raw/treedb_docs_1000_idx_2.json` |
-| 1000 | 2 | mongo | `docs/benchmarks/mongo_gateway_compare_2026-04-29/raw/mongo_docs_1000_idx_2.json` |
-| 10000 | 0 | treedb | `docs/benchmarks/mongo_gateway_compare_2026-04-29/raw/treedb_docs_10000_idx_0.json` |
-| 10000 | 0 | mongo | `docs/benchmarks/mongo_gateway_compare_2026-04-29/raw/mongo_docs_10000_idx_0.json` |
-| 10000 | 1 | treedb | `docs/benchmarks/mongo_gateway_compare_2026-04-29/raw/treedb_docs_10000_idx_1.json` |
-| 10000 | 1 | mongo | `docs/benchmarks/mongo_gateway_compare_2026-04-29/raw/mongo_docs_10000_idx_1.json` |
-| 10000 | 2 | treedb | `docs/benchmarks/mongo_gateway_compare_2026-04-29/raw/treedb_docs_10000_idx_2.json` |
-| 10000 | 2 | mongo | `docs/benchmarks/mongo_gateway_compare_2026-04-29/raw/mongo_docs_10000_idx_2.json` |
+| 1000 | 0 | treedb | `raw/treedb_docs_1000_idx_0.json` |
+| 1000 | 0 | mongo | `raw/mongo_docs_1000_idx_0.json` |
+| 1000 | 1 | treedb | `raw/treedb_docs_1000_idx_1.json` |
+| 1000 | 1 | mongo | `raw/mongo_docs_1000_idx_1.json` |
+| 1000 | 2 | treedb | `raw/treedb_docs_1000_idx_2.json` |
+| 1000 | 2 | mongo | `raw/mongo_docs_1000_idx_2.json` |
+| 10000 | 0 | treedb | `raw/treedb_docs_10000_idx_0.json` |
+| 10000 | 0 | mongo | `raw/mongo_docs_10000_idx_0.json` |
+| 10000 | 1 | treedb | `raw/treedb_docs_10000_idx_1.json` |
+| 10000 | 1 | mongo | `raw/mongo_docs_10000_idx_1.json` |
+| 10000 | 2 | treedb | `raw/treedb_docs_10000_idx_2.json` |
+| 10000 | 2 | mongo | `raw/mongo_docs_10000_idx_2.json` |
 
 ## Notes
 

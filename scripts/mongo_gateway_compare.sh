@@ -112,6 +112,8 @@ mkdir -p "$RAW_DIR" "$TREE_DIR" "$MONGO_DIR" "$BIN_DIR"
 BENCH_BIN="$BIN_DIR/mongo_gateway_bench"
 REPORT_BIN="$BIN_DIR/mongo_gateway_compare_report"
 ACTIVE_CONTAINERS=()
+STARTED_MONGO_CONTAINER=""
+STARTED_MONGO_URI=""
 
 cleanup() {
   local container
@@ -172,6 +174,8 @@ start_mongo_container() {
   local cell=$1
   local data_dir=$2
   local container="gomap-mongo-$(safe_label "$cell")-$$"
+  STARTED_MONGO_CONTAINER=""
+  STARTED_MONGO_URI=""
   reset_mongo_data_dir "$data_dir"
   echo "starting MongoDB container $container with data dir $data_dir" >&2
   docker run -d --rm \
@@ -192,7 +196,8 @@ start_mongo_container() {
     echo "MongoDB container did not expose a port" >&2
     exit 1
   fi
-  echo "mongodb://127.0.0.1:$port"
+  STARTED_MONGO_CONTAINER="$container"
+  STARTED_MONGO_URI="mongodb://127.0.0.1:$port"
 }
 
 stop_mongo_container() {
@@ -306,8 +311,10 @@ for docs in $DOCS_LIST; do
     fi
     cell="docs_${docs}_idx_${indexes}"
     database="${DATABASE_PREFIX}_${cell}"
-    tree_raw="$RAW_DIR/treedb_${cell}.json"
-    mongo_raw="$RAW_DIR/mongo_${cell}.json"
+    tree_raw_rel="raw/treedb_${cell}.json"
+    mongo_raw_rel="raw/mongo_${cell}.json"
+    tree_raw="$OUT_DIR/$tree_raw_rel"
+    mongo_raw="$OUT_DIR/$mongo_raw_rel"
     tree_data="$TREE_DIR/$cell"
     mongo_data="$MONGO_DIR/$cell"
 
@@ -317,14 +324,15 @@ for docs in $DOCS_LIST; do
       -treedb-dir "$tree_data" \
       -keep-treedb-dir
     tree_physical=$(du_bytes "$tree_data")
-    printf "treedb\t%s\t%s\t%s\t%s\n" "$docs" "$indexes" "$tree_raw" "$tree_physical" >>"$MATRIX"
+    printf "treedb\t%s\t%s\t%s\t%s\n" "$docs" "$indexes" "$tree_raw_rel" "$tree_physical" >>"$MATRIX"
 
     echo "==> $cell MongoDB"
     mongo_uri="$MONGO_URI"
     mongo_container=""
     if [[ "$MONGO_MODE" == "docker" ]]; then
-      mongo_uri=$(start_mongo_container "$cell" "$mongo_data")
-      mongo_container="gomap-mongo-$(safe_label "$cell")-$$"
+      start_mongo_container "$cell" "$mongo_data"
+      mongo_uri="$STARTED_MONGO_URI"
+      mongo_container="$STARTED_MONGO_CONTAINER"
       if ! wait_for_mongo "$mongo_uri" "$database"; then
         echo "MongoDB container did not become ready for $cell" >&2
         exit 1
@@ -338,7 +346,7 @@ for docs in $DOCS_LIST; do
     else
       mongo_physical=0
     fi
-    printf "mongo\t%s\t%s\t%s\t%s\n" "$docs" "$indexes" "$mongo_raw" "$mongo_physical" >>"$MATRIX"
+    printf "mongo\t%s\t%s\t%s\t%s\n" "$docs" "$indexes" "$mongo_raw_rel" "$mongo_physical" >>"$MATRIX"
   done
 done
 

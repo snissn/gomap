@@ -92,6 +92,41 @@ func TestReportRejectsIncompleteCell(t *testing.T) {
 	}
 }
 
+func TestLargestDiskCellUsesDiskMetrics(t *testing.T) {
+	cells := []cellComparison{
+		{
+			Key: cellKey{Documents: 1000, SecondaryIndexes: 0},
+			TreeDB: &runRecord{
+				Row: matrixRow{PhysicalBytes: 20_000},
+				Result: benchmarkResult{
+					TreeDBDiskAfterCheckpoint: &diskSnapshot{TotalBytes: 15_000},
+				},
+			},
+			Mongo: &runRecord{
+				Row:    matrixRow{PhysicalBytes: 10_000},
+				Result: benchmarkResult{MongoDBStatsFinal: map[string]any{"totalSize": float64(10_000)}},
+			},
+		},
+		{
+			Key: cellKey{Documents: 10_000, SecondaryIndexes: 2},
+			TreeDB: &runRecord{
+				Row: matrixRow{PhysicalBytes: 100},
+				Result: benchmarkResult{
+					TreeDBDiskAfterCheckpoint: &diskSnapshot{TotalBytes: 100},
+				},
+			},
+			Mongo: &runRecord{
+				Row:    matrixRow{PhysicalBytes: 100},
+				Result: benchmarkResult{MongoDBStatsFinal: map[string]any{"totalSize": float64(100)}},
+			},
+		},
+	}
+	got := largestDiskCell(cells)
+	if got == nil || got.Key.Documents != 1000 {
+		t.Fatalf("largestDiskCell chose %+v, want the higher-disk 1000-doc cell", got)
+	}
+}
+
 func writeFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {

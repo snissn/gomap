@@ -67,10 +67,11 @@ type diskSnapshot struct {
 }
 
 type runRecord struct {
-	Row      matrixRow
-	Result   benchmarkResult
-	RawPath  string
-	PhaseMap map[string]phaseResult
+	Row            matrixRow
+	Result         benchmarkResult
+	RawPath        string
+	DisplayRawPath string
+	PhaseMap       map[string]phaseResult
 }
 
 type cellKey struct {
@@ -176,10 +177,11 @@ func loadComparisons(matrixPath string) ([]cellComparison, error) {
 			return nil, fmt.Errorf("%s secondary_indexes mismatch: matrix has %d, result has %d", rawPath, row.SecondaryIndexes, result.SecondaryIndexes)
 		}
 		record := &runRecord{
-			Row:      row,
-			Result:   result,
-			RawPath:  rawPath,
-			PhaseMap: phaseMap(result.Phases),
+			Row:            row,
+			Result:         result,
+			RawPath:        rawPath,
+			DisplayRawPath: row.RawJSON,
+			PhaseMap:       phaseMap(result.Phases),
 		}
 		key := cellKey{Documents: row.Documents, SecondaryIndexes: row.SecondaryIndexes}
 		cell := byCell[key]
@@ -344,8 +346,8 @@ func renderReport(cfg config, cells []cellComparison, generatedAt time.Time) str
 	b.WriteString("| docs | indexes | target | raw json |\n")
 	b.WriteString("| ---: | ---: | --- | --- |\n")
 	for _, cell := range cells {
-		fmt.Fprintf(&b, "| %d | %d | treedb | `%s` |\n", cell.Key.Documents, cell.Key.SecondaryIndexes, cell.TreeDB.RawPath)
-		fmt.Fprintf(&b, "| %d | %d | mongo | `%s` |\n", cell.Key.Documents, cell.Key.SecondaryIndexes, cell.Mongo.RawPath)
+		fmt.Fprintf(&b, "| %d | %d | treedb | `%s` |\n", cell.Key.Documents, cell.Key.SecondaryIndexes, cell.TreeDB.DisplayRawPath)
+		fmt.Fprintf(&b, "| %d | %d | mongo | `%s` |\n", cell.Key.Documents, cell.Key.SecondaryIndexes, cell.Mongo.DisplayRawPath)
 	}
 	b.WriteString("\n")
 	b.WriteString("## Notes\n\n")
@@ -399,7 +401,7 @@ func highlightLines(cells []cellComparison) []string {
 	} else {
 		lines = append(lines, "No phase in this matrix had MongoDB ahead on ops/sec.")
 	}
-	if cell := largestCell(cells); cell != nil {
+	if cell := largestDiskCell(cells); cell != nil {
 		treeBytes, _ := treeDBBytes(cell.TreeDB.Result)
 		treePhysical := cell.TreeDB.Row.PhysicalBytes
 		mongoData, _ := mongoDataBytes(cell.Mongo.Result)
@@ -420,18 +422,38 @@ func highlightLines(cells []cellComparison) []string {
 	return lines
 }
 
-func largestCell(cells []cellComparison) *cellComparison {
+func largestDiskCell(cells []cellComparison) *cellComparison {
 	if len(cells) == 0 {
 		return nil
 	}
 	best := &cells[0]
 	for i := 1; i < len(cells); i++ {
-		if cells[i].Key.Documents > best.Key.Documents ||
-			(cells[i].Key.Documents == best.Key.Documents && cells[i].Key.SecondaryIndexes > best.Key.SecondaryIndexes) {
+		if cellDiskScore(cells[i]) > cellDiskScore(*best) {
 			best = &cells[i]
 		}
 	}
 	return best
+}
+
+func cellDiskScore(cell cellComparison) int64 {
+	var score int64
+	if cell.TreeDB != nil {
+		treeBytes, _ := treeDBBytes(cell.TreeDB.Result)
+		if cell.TreeDB.Row.PhysicalBytes > 0 {
+			score += cell.TreeDB.Row.PhysicalBytes
+		} else {
+			score += treeBytes
+		}
+	}
+	if cell.Mongo != nil {
+		mongoTotal, _ := mongoDBStatsTotalBytes(cell.Mongo.Result)
+		if cell.Mongo.Row.PhysicalBytes > 0 {
+			score += cell.Mongo.Row.PhysicalBytes
+		} else {
+			score += mongoTotal
+		}
+	}
+	return score
 }
 
 func renderDiskTable(b *strings.Builder, cells []cellComparison) {
