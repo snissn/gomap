@@ -812,8 +812,17 @@ func TestValueLogRewriteOnline_CollectionRootCommitUsesCurrentStoragePolicy(t *t
 	}
 	primeValueLogRefTracker(t, db)
 
+	state := db.State()
+	if state == nil {
+		t.Fatal("expected db state")
+	}
 	target := &collectionRewriteRootState{
 		descriptorKey: append([]byte(nil), maintenanceTestCollectionRootKey...),
+		descriptorAliases: [][]byte{
+			append([]byte(nil), maintenanceTestCollectionRootKey...),
+		},
+		rootID:        oldRoot,
+		systemRoot:    state.SystemRootPageID,
 		storagePolicy: OrderedRootStoragePagerLeaves, // stale scan-time policy; current root uses value-log leaves.
 	}
 	if err := db.applyRewriteSwapBatchToCollectionRoot(target, []rewriteSwap{{key: []byte("doc/p"), oldPtr: oldPtr, newPtr: newPtr}}, false); err != nil {
