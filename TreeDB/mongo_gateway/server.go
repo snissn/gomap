@@ -54,7 +54,7 @@ func (s *Server) ServeConn(ctx context.Context, conn net.Conn) error {
 			if errors.Is(err, io.EOF) {
 				return nil
 			}
-			if ctx.Err() != nil && errors.Is(err, net.ErrClosed) {
+			if ctx.Err() != nil && (errors.Is(err, net.ErrClosed) || errors.Is(err, io.ErrClosedPipe)) {
 				return ctx.Err()
 			}
 			return err
@@ -71,8 +71,7 @@ func (s *Server) ServeOne(rw io.ReadWriter) error {
 	if err != nil {
 		return err
 	}
-	_, err = rw.Write(response)
-	return err
+	return writeFull(rw, response)
 }
 
 func (s *Server) handleMessage(h wire.Header, body []byte) ([]byte, error) {
@@ -162,8 +161,25 @@ func marshalDocument(doc bson.D) (wire.Document, error) {
 	return wire.Document(raw), nil
 }
 
+func writeFull(w io.Writer, p []byte) error {
+	for len(p) > 0 {
+		n, err := w.Write(p)
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			return io.ErrShortWrite
+		}
+		p = p[n:]
+	}
+	return nil
+}
+
 func (s *Server) maxMessageLength() int32 {
 	if s.MaxMessageLength <= 0 {
+		return wire.DefaultMaxMessageLength
+	}
+	if s.MaxMessageLength > wire.DefaultMaxMessageLength {
 		return wire.DefaultMaxMessageLength
 	}
 	return s.MaxMessageLength

@@ -26,6 +26,23 @@ func (rw *readWriter) Write(p []byte) (int, error) {
 	return rw.w.Write(p)
 }
 
+type partialReadWriter struct {
+	r        io.Reader
+	w        bytes.Buffer
+	maxWrite int
+}
+
+func (rw *partialReadWriter) Read(p []byte) (int, error) {
+	return rw.r.Read(p)
+}
+
+func (rw *partialReadWriter) Write(p []byte) (int, error) {
+	if len(p) > rw.maxWrite {
+		p = p[:rw.maxWrite]
+	}
+	return rw.w.Write(p)
+}
+
 func TestServerHandlesQueryHello(t *testing.T) {
 	queryDoc := mustDocument(t, bson.D{
 		{Key: "isMaster", Value: int32(1)},
@@ -91,6 +108,35 @@ func TestServerHandlesMsgPing(t *testing.T) {
 	assertOK(t, msg.Body)
 }
 
+func TestServerHandlesPartialWrites(t *testing.T) {
+	commandDoc := mustDocument(t, bson.D{
+		{Key: "ping", Value: int32(1)},
+		{Key: "$db", Value: "admin"},
+	})
+	req, err := wire.AppendMsgMessage(nil, 201, 0, 0, commandDoc)
+	if err != nil {
+		t.Fatalf("AppendMsgMessage: %v", err)
+	}
+	rw := &partialReadWriter{r: bytes.NewReader(req), maxWrite: 5}
+
+	if err := NewServer().ServeOne(rw); err != nil {
+		t.Fatalf("ServeOne: %v", err)
+	}
+
+	h, body, err := wire.ReadMessage(bytes.NewReader(rw.w.Bytes()), 0)
+	if err != nil {
+		t.Fatalf("ReadMessage response: %v", err)
+	}
+	if h.OpCode != wire.OpMsg || h.ResponseTo != 201 {
+		t.Fatalf("response header=%+v", h)
+	}
+	msg, err := wire.ParseMsg(body)
+	if err != nil {
+		t.Fatalf("ParseMsg: %v", err)
+	}
+	assertOK(t, msg.Body)
+}
+
 func TestServerRejectsCompressedMessages(t *testing.T) {
 	req, err := wire.AppendMessage(nil, 300, 0, wire.OpCompressed, nil)
 	if err != nil {
@@ -125,6 +171,13 @@ func TestServeConnCancellationInterruptsRead(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("ServeConn did not return after context cancellation")
+	}
+}
+
+func TestServerMaxMessageLengthClampsToWireLimit(t *testing.T) {
+	server := &Server{MaxMessageLength: wire.DefaultMaxMessageLength + 1}
+	if got := server.maxMessageLength(); got != wire.DefaultMaxMessageLength {
+		t.Fatalf("maxMessageLength=%d want %d", got, wire.DefaultMaxMessageLength)
 	}
 }
 
