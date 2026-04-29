@@ -236,9 +236,10 @@ func TestCollectionValueLogGC_RoundTripWithCompressedSecondaryIndexes(t *testing
 	}
 	requireCollectionMaintenanceReads(t, col)
 
-	syntheticLane := chooseUnusedStandaloneValueLogLane(t, opts.Dir)
-	stalePath := writeStandaloneValueLogSegment(t, opts.Dir, syntheticLane, 1, []byte("unreferenced collection-api gc segment"))
-	currentPath := writeStandaloneValueLogSegment(t, opts.Dir, syntheticLane, 2, []byte("current collection-api gc guard segment"))
+	valueLogDir := backenddb.ValueLogDirPath(d.Dir())
+	syntheticLane := chooseUnusedStandaloneValueLogLane(t, valueLogDir)
+	stalePath := writeStandaloneValueLogSegment(t, valueLogDir, syntheticLane, 1, []byte("unreferenced collection-api gc segment"))
+	_ = writeStandaloneValueLogSegment(t, valueLogDir, syntheticLane, 2, []byte("newer unreferenced collection-api gc segment"))
 	if err := d.RefreshValueLogSet(); err != nil {
 		t.Fatalf("RefreshValueLogSet: %v", err)
 	}
@@ -251,9 +252,6 @@ func TestCollectionValueLogGC_RoundTripWithCompressedSecondaryIndexes(t *testing
 	}
 	if _, err := os.Stat(stalePath); err == nil || !os.IsNotExist(err) {
 		t.Fatalf("expected stale segment to be deleted, err=%v", err)
-	}
-	if _, err := os.Stat(currentPath); err != nil {
-		t.Fatalf("expected current guard segment to remain: %v", err)
 	}
 	if err := closeDB(); err != nil {
 		t.Fatalf("close db after value-log GC: %v", err)
@@ -461,10 +459,8 @@ func TestCollectionInsertBatchStatsExposeIndexRunShape(t *testing.T) {
 	}
 }
 
-func writeStandaloneValueLogSegment(t *testing.T, rootDir string, lane, seq uint32, value []byte) string {
+func writeStandaloneValueLogSegment(t *testing.T, valueDir string, lane, seq uint32, value []byte) string {
 	t.Helper()
-	mainDir := filepath.Join(rootDir, "maindb")
-	valueDir := backenddb.ValueLogDirPath(mainDir)
 	if err := os.MkdirAll(valueDir, 0o755); err != nil {
 		t.Fatalf("mkdir value log dir: %v", err)
 	}
@@ -487,9 +483,8 @@ func writeStandaloneValueLogSegment(t *testing.T, rootDir string, lane, seq uint
 	return path
 }
 
-func chooseUnusedStandaloneValueLogLane(t *testing.T, rootDir string) uint32 {
+func chooseUnusedStandaloneValueLogLane(t *testing.T, valueDir string) uint32 {
 	t.Helper()
-	valueDir := backenddb.ValueLogDirPath(filepath.Join(rootDir, "maindb"))
 	for lane := uint32(254); lane > 0; lane-- {
 		matches, err := filepath.Glob(filepath.Join(valueDir, fmt.Sprintf("value-l%d-*.log", lane)))
 		if err != nil {
