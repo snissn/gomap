@@ -484,6 +484,9 @@ func (s *Server) getMoreResponse(command wire.Document) (wire.Document, error) {
 	if err != nil {
 		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
 	}
+	if batchSizeSet && batchSize == 0 {
+		batchSizeSet = false
+	}
 	ns := db + "." + collection
 	nextID, nextBatch, ok, err := s.getMore(cursorID, ns, int(batchSize), batchSizeSet, maxInt)
 	if err != nil {

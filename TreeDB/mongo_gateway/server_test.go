@@ -744,28 +744,18 @@ func TestServerFindBatchSizeZeroKeepsCursorEmpty(t *testing.T) {
 		t.Fatal("cursor id=0 want open cursor")
 	}
 
-	emptyGetMore := serveCommand(t, server, 243, bson.D{
+	zeroGetMore := serveCommand(t, server, 243, bson.D{
 		{Key: "getMore", Value: cursorID},
 		{Key: "collection", Value: "users"},
 		{Key: "batchSize", Value: int32(0)},
 		{Key: "$db", Value: "app"},
 	})
-	if nextBatch := cursorNextBatch(t, emptyGetMore); len(nextBatch) != 0 {
-		t.Fatalf("empty getMore nextBatch len=%d want 0", len(nextBatch))
+	nextBatch := cursorNextBatch(t, zeroGetMore)
+	if len(nextBatch) != 2 {
+		t.Fatalf("zero getMore nextBatch len=%d want 2", len(nextBatch))
 	}
-	if nextID := cursorIDFromResponse(t, emptyGetMore); nextID != cursorID {
-		t.Fatalf("cursor id after empty getMore=%d want %d", nextID, cursorID)
-	}
-
-	getMoreResponse := serveCommand(t, server, 244, bson.D{
-		{Key: "getMore", Value: cursorID},
-		{Key: "collection", Value: "users"},
-		{Key: "batchSize", Value: int32(1)},
-		{Key: "$db", Value: "app"},
-	})
-	nextBatch := cursorNextBatch(t, getMoreResponse)
-	if len(nextBatch) != 1 {
-		t.Fatalf("nextBatch len=%d want 1", len(nextBatch))
+	if nextID := cursorIDFromResponse(t, zeroGetMore); nextID != 0 {
+		t.Fatalf("cursor id after zero getMore=%d want 0", nextID)
 	}
 	name, ok := nextBatch[0].Lookup("name").StringValueOK()
 	if !ok || name != "ada" {
