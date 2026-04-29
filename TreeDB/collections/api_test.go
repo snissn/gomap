@@ -2,12 +2,17 @@ package collections
 
 import (
 	"bytes"
+	"context"
+	"fmt"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 
 	treedb "github.com/snissn/gomap/TreeDB"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 )
 
 func TestCollectionGetNilDBReturnsError(t *testing.T) {
@@ -177,6 +182,78 @@ func TestCollectionValueLogRewriteOffline_RoundTripWithCompressedSecondaryIndexe
 	requireCollectionMaintenanceReads(t, reopenedCol)
 }
 
+func TestCollectionValueLogGC_RoundTripWithCompressedSecondaryIndexes(t *testing.T) {
+	opts := treedb.Options{
+		Dir:                        t.TempDir(),
+		Durability:                 treedb.DurabilityWALOffRelaxed,
+		IndexOuterLeavesInValueLog: true,
+		ValueLog: treedb.ValueLogOptions{
+			PointerThreshold: 1,
+		},
+	}
+	d, cleanup, err := treedb.OpenBackendWithCachedLeafLog(opts)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	closed := false
+	closeDB := func() error {
+		if closed {
+			return nil
+		}
+		closed = true
+		return cleanup()
+	}
+	t.Cleanup(func() { _ = closeDB() })
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DataRootStoragePolicy:   RootStorageCompressed,
+			IndexStateStoragePolicy: RootStorageCompressed,
+		},
+		Indexes: []IndexDefinition{
+			{Name: "email", Field: "email", Unique: true, StoragePolicy: RootStorageCompressed},
+			{Name: "city", Field: "city", StoragePolicy: RootStorageCompressed},
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	docs := [][]byte{
+		[]byte(`{"email":"ada@example.com","city":"hnl","pad":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`),
+		[]byte(`{"email":"grace@example.com","city":"hnl","pad":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}`),
+		[]byte(`{"email":"linus@example.com","city":"hel","pad":"cccccccccccccccccccccccccccccccc"}`),
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("u1"), []byte("u2"), []byte("u3")}, docs); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+	requireCollectionMaintenanceReads(t, col)
+
+	stalePath := writeStandaloneValueLogSegment(t, opts.Dir, 7, 1, []byte("unreferenced collection-api gc segment"))
+	currentPath := writeStandaloneValueLogSegment(t, opts.Dir, 7, 2, []byte("current collection-api gc guard segment"))
+	if err := d.RefreshValueLogSet(); err != nil {
+		t.Fatalf("RefreshValueLogSet: %v", err)
+	}
+	stats, err := d.ValueLogGC(context.Background(), backenddb.ValueLogGCOptions{})
+	if err != nil {
+		t.Fatalf("ValueLogGC: %v", err)
+	}
+	if stats.SegmentsDeleted == 0 {
+		t.Fatalf("expected GC to delete a stale segment, stats=%+v", stats)
+	}
+	if _, err := os.Stat(stalePath); err == nil || !os.IsNotExist(err) {
+		t.Fatalf("expected stale segment to be deleted, err=%v", err)
+	}
+	if _, err := os.Stat(currentPath); err != nil {
+		t.Fatalf("expected current guard segment to remain: %v", err)
+	}
+	requireCollectionMaintenanceReads(t, col)
+}
+
 func TestCollectionInsertBatchStatsExposeIndexRunShape(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
@@ -250,6 +327,32 @@ func TestCollectionInsertBatchStatsExposeIndexRunShape(t *testing.T) {
 	if got := len(empty.SecondaryRuns); got != 0 {
 		t.Fatalf("empty stats secondary runs=%d want 0", got)
 	}
+}
+
+func writeStandaloneValueLogSegment(t *testing.T, rootDir string, lane, seq uint32, value []byte) string {
+	t.Helper()
+	mainDir := filepath.Join(rootDir, "maindb")
+	valueDir := backenddb.ValueLogDirPath(mainDir)
+	if err := os.MkdirAll(valueDir, 0o755); err != nil {
+		t.Fatalf("mkdir value log dir: %v", err)
+	}
+	fileID, err := valuelog.EncodeFileID(lane, seq)
+	if err != nil {
+		t.Fatalf("EncodeFileID(%d,%d): %v", lane, seq, err)
+	}
+	path := filepath.Join(valueDir, fmt.Sprintf("value-l%d-%06d.log", lane, seq))
+	writer, err := valuelog.NewWriter(path, fileID)
+	if err != nil {
+		t.Fatalf("NewWriter(%s): %v", path, err)
+	}
+	if _, err := writer.Append(0, nil, uint64(seq), value); err != nil {
+		_ = writer.Close()
+		t.Fatalf("append value-log record: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close value-log writer: %v", err)
+	}
+	return path
 }
 
 func requireCollectionMaintenanceReads(t *testing.T, col *Collection) {
