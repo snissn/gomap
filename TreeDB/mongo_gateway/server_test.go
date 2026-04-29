@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"math"
 	"net"
 	"strings"
 	"testing"
@@ -700,6 +701,32 @@ func TestServerFindRejectsOversizedResultDocument(t *testing.T) {
 	assertCommandError(t, tooLarge, "BadValue")
 }
 
+func TestServerFindRejectsFirstBatchOverflow(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewServer()
+	server.MaxMessageLength = 5200
+	server.Collections = collections.NewCollectionManager(db)
+	assertOK(t, serveCommand(t, server, 250, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{
+			bson.D{{Key: "_id", Value: "a"}, {Key: "payload", Value: strings.Repeat("a", 700)}},
+			bson.D{{Key: "_id", Value: "b"}, {Key: "payload", Value: strings.Repeat("b", 700)}},
+		}},
+		{Key: "$db", Value: "app"},
+	}))
+	overflow := serveCommand(t, server, 251, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, overflow, "BadValue")
+}
+
 func TestServerFindCapsIndexedCandidates(t *testing.T) {
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
@@ -732,6 +759,32 @@ func TestServerFindCapsIndexedCandidates(t *testing.T) {
 		{Key: "$db", Value: "app"},
 	})
 	assertCommandError(t, tooMany, "BadValue")
+}
+
+func TestCompareRawNumbersHandlesNonFiniteDoubles(t *testing.T) {
+	raw := bson.Raw(mustDocument(t, bson.D{
+		{Key: "nan", Value: math.NaN()},
+		{Key: "pos_inf", Value: math.Inf(1)},
+		{Key: "neg_inf", Value: math.Inf(-1)},
+		{Key: "finite", Value: 1.5},
+	}))
+	nanValue := raw.Lookup("nan")
+	posInf := raw.Lookup("pos_inf")
+	negInf := raw.Lookup("neg_inf")
+	finite := raw.Lookup("finite")
+
+	if rawValuesEqual(nanValue, finite) {
+		t.Fatal("NaN compared equal to finite number")
+	}
+	if match, err := valueMatchesPredicate(nanValue, findPredicate{op: findPredicateGT, values: []bson.RawValue{finite}}); err != nil || match {
+		t.Fatalf("NaN range match/err=%v/%v want false/nil", match, err)
+	}
+	if cmp := compareRawValues(posInf, finite); cmp <= 0 {
+		t.Fatalf("+Inf vs finite cmp=%d want >0", cmp)
+	}
+	if cmp := compareRawValues(negInf, finite); cmp >= 0 {
+		t.Fatalf("-Inf vs finite cmp=%d want <0", cmp)
+	}
 }
 
 func TestApplySetUpdateAppendsNewFieldsInSetOrder(t *testing.T) {

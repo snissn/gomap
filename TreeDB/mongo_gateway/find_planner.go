@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"math"
 	"math/big"
 	"sort"
 	"strings"
@@ -106,7 +107,7 @@ func (s *Server) executeFind(col *collections.Collection, command wire.Document,
 			return nil, fmt.Errorf("Mongo gateway find result document exceeds max message size")
 		}
 		if batchBytes+docBytes > maxBatchBytes {
-			break
+			return nil, fmt.Errorf("Mongo gateway find results exceed max message size")
 		}
 		firstBatch = append(firstBatch, bson.Raw(projected))
 		batchBytes += docBytes
@@ -472,6 +473,9 @@ func valueMatchesPredicate(value bson.RawValue, pred findPredicate) (bool, error
 		}
 		return false, nil
 	case findPredicateGT, findPredicateGTE, findPredicateLT, findPredicateLTE:
+		if rawValueIsNaN(value) || rawValueIsNaN(pred.values[0]) {
+			return false, nil
+		}
 		cmp := compareRawValues(value, pred.values[0])
 		switch pred.op {
 		case findPredicateGT:
@@ -717,6 +721,9 @@ func lookupDocumentValue(doc wire.Document, field string) (bson.RawValue, bool) 
 
 func rawValuesEqual(left, right bson.RawValue) bool {
 	if left.IsNumber() && right.IsNumber() {
+		if rawValueIsNaN(left) || rawValueIsNaN(right) {
+			return false
+		}
 		return compareRawValues(left, right) == 0
 	}
 	return left.Equal(right)
@@ -755,10 +762,43 @@ func compareRawValues(left, right bson.RawValue) int {
 func compareRawNumbers(left, right bson.RawValue) int {
 	leftRat, leftOK := rawNumberRat(left)
 	rightRat, rightOK := rawNumberRat(right)
-	if !leftOK || !rightOK {
-		return compareInt(bsonTypeSortRank(left.Type), bsonTypeSortRank(right.Type))
+	if leftOK && rightOK {
+		return leftRat.Cmp(rightRat)
 	}
-	return leftRat.Cmp(rightRat)
+	leftRank := numberSortRank(left, leftOK)
+	rightRank := numberSortRank(right, rightOK)
+	if leftRank != rightRank {
+		return compareInt(leftRank, rightRank)
+	}
+	return bytes.Compare(left.Value, right.Value)
+}
+
+func numberSortRank(value bson.RawValue, finite bool) int {
+	if finite {
+		return 1
+	}
+	if value.Type == bson.TypeDouble {
+		v, ok := value.DoubleOK()
+		if ok {
+			switch {
+			case math.IsInf(v, -1):
+				return 0
+			case math.IsInf(v, 1):
+				return 2
+			case math.IsNaN(v):
+				return 3
+			}
+		}
+	}
+	return 4
+}
+
+func rawValueIsNaN(value bson.RawValue) bool {
+	if value.Type != bson.TypeDouble {
+		return false
+	}
+	v, ok := value.DoubleOK()
+	return ok && math.IsNaN(v)
 }
 
 func rawNumberRat(value bson.RawValue) (*big.Rat, bool) {
