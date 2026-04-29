@@ -301,6 +301,178 @@ func TestServerUpdateRejectsIDMutation(t *testing.T) {
 	assertCommandError(t, updateResponse, "BadValue")
 }
 
+func TestServerIndexMetadataCommands(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	createResponse := serveCommand(t, server, 227, bson.D{
+		{Key: "createIndexes", Value: "users"},
+		{Key: "indexes", Value: bson.A{bson.D{
+			{Key: "key", Value: bson.D{{Key: "email", Value: int32(1)}}},
+			{Key: "name", Value: "email_1"},
+			{Key: "unique", Value: true},
+		}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertOK(t, createResponse)
+	assertInt32(t, createResponse, "numIndexesBefore", 1)
+	assertInt32(t, createResponse, "numIndexesAfter", 2)
+
+	idempotentResponse := serveCommand(t, server, 2271, bson.D{
+		{Key: "createIndexes", Value: "users"},
+		{Key: "indexes", Value: bson.A{bson.D{
+			{Key: "key", Value: bson.D{{Key: "email", Value: int32(1)}}},
+			{Key: "name", Value: "email_1"},
+			{Key: "unique", Value: true},
+		}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertOK(t, idempotentResponse)
+	assertInt32(t, idempotentResponse, "numIndexesBefore", 2)
+	assertInt32(t, idempotentResponse, "numIndexesAfter", 2)
+
+	collectionsResponse := serveCommand(t, server, 228, bson.D{
+		{Key: "listCollections", Value: int32(1)},
+		{Key: "nameOnly", Value: true},
+		{Key: "$db", Value: "app"},
+	})
+	collectionBatch := cursorFirstBatch(t, collectionsResponse)
+	if len(collectionBatch) != 1 {
+		t.Fatalf("collection batch len=%d want 1", len(collectionBatch))
+	}
+	if got, ok := collectionBatch[0].Lookup("name").StringValueOK(); !ok || got != "users" {
+		t.Fatalf("collection name=%q ok=%v want users", got, ok)
+	}
+
+	indexesResponse := serveCommand(t, server, 229, bson.D{
+		{Key: "listIndexes", Value: "users"},
+		{Key: "$db", Value: "app"},
+	})
+	indexBatch := cursorFirstBatch(t, indexesResponse)
+	if got, want := len(indexBatch), 2; got != want {
+		t.Fatalf("index batch len=%d want %d", got, want)
+	}
+	assertIndexName(t, indexBatch[0], "_id_")
+	assertIndexName(t, indexBatch[1], "email_1")
+	assertBool(t, wire.Document(indexBatch[1]), "unique", true)
+
+	dropResponse := serveCommand(t, server, 230, bson.D{
+		{Key: "dropIndexes", Value: "users"},
+		{Key: "index", Value: "email_1"},
+		{Key: "$db", Value: "app"},
+	})
+	assertOK(t, dropResponse)
+	assertInt32(t, dropResponse, "nIndexesWas", 2)
+
+	afterDrop := serveCommand(t, server, 231, bson.D{
+		{Key: "listIndexes", Value: "users"},
+		{Key: "$db", Value: "app"},
+	})
+	indexBatch = cursorFirstBatch(t, afterDrop)
+	if got, want := len(indexBatch), 1; got != want {
+		t.Fatalf("index batch after drop len=%d want %d", got, want)
+	}
+	assertIndexName(t, indexBatch[0], "_id_")
+}
+
+func TestServerIndexMetadataRejectsInvalidCommands(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	emptyCreate := serveCommand(t, server, 232, bson.D{
+		{Key: "createIndexes", Value: "empty"},
+		{Key: "indexes", Value: bson.A{}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, emptyCreate, "BadValue")
+
+	emptyName := serveCommand(t, server, 233, bson.D{
+		{Key: "createIndexes", Value: "users"},
+		{Key: "indexes", Value: bson.A{bson.D{
+			{Key: "key", Value: bson.D{{Key: "email", Value: int32(1)}}},
+			{Key: "name", Value: ""},
+		}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, emptyName, "BadValue")
+
+	invalidListCollectionsDB := serveCommand(t, server, 234, bson.D{
+		{Key: "listCollections", Value: int32(1)},
+		{Key: "$db", Value: "bad/name"},
+	})
+	assertCommandError(t, invalidListCollectionsDB, "BadValue")
+
+	assertOK(t, serveCommand(t, server, 235, bson.D{
+		{Key: "insert", Value: "dupes"},
+		{Key: "documents", Value: bson.A{
+			bson.D{{Key: "_id", Value: "u1"}, {Key: "email", Value: "same@example.com"}},
+			bson.D{{Key: "_id", Value: "u2"}, {Key: "email", Value: "same@example.com"}},
+		}},
+		{Key: "$db", Value: "app"},
+	}))
+	uniqueConflict := serveCommand(t, server, 236, bson.D{
+		{Key: "createIndexes", Value: "dupes"},
+		{Key: "indexes", Value: bson.A{bson.D{
+			{Key: "key", Value: bson.D{{Key: "email", Value: int32(1)}}},
+			{Key: "name", Value: "email_1"},
+			{Key: "unique", Value: true},
+		}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, uniqueConflict, "DuplicateKey")
+
+	assertOK(t, serveCommand(t, server, 237, bson.D{
+		{Key: "createIndexes", Value: "users"},
+		{Key: "indexes", Value: bson.A{bson.D{
+			{Key: "key", Value: bson.D{{Key: "city", Value: int32(1)}}},
+			{Key: "name", Value: "city_1"},
+		}}},
+		{Key: "$db", Value: "app"},
+	}))
+	assertOK(t, serveCommand(t, server, 238, bson.D{
+		{Key: "createIndexes", Value: "users"},
+		{Key: "indexes", Value: bson.A{bson.D{
+			{Key: "key", Value: bson.D{{Key: "email", Value: int32(1)}}},
+			{Key: "name", Value: "email_1"},
+		}}},
+		{Key: "$db", Value: "app"},
+	}))
+	emptyDrop := serveCommand(t, server, 239, bson.D{
+		{Key: "dropIndexes", Value: "users"},
+		{Key: "index", Value: bson.A{}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, emptyDrop, "FailedToParse")
+
+	partialDrop := serveCommand(t, server, 240, bson.D{
+		{Key: "dropIndexes", Value: "users"},
+		{Key: "index", Value: bson.A{"city_1", "missing_1"}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, partialDrop, "IndexNotFound")
+	afterPartialDrop := serveCommand(t, server, 241, bson.D{
+		{Key: "listIndexes", Value: "users"},
+		{Key: "$db", Value: "app"},
+	})
+	indexBatch := cursorFirstBatch(t, afterPartialDrop)
+	if got, want := len(indexBatch), 3; got != want {
+		t.Fatalf("index batch after failed drop len=%d want %d", got, want)
+	}
+	assertIndexName(t, indexBatch[0], "_id_")
+	assertIndexName(t, indexBatch[1], "city_1")
+	assertIndexName(t, indexBatch[2], "email_1")
+}
+
 func TestApplySetUpdateAppendsNewFieldsInSetOrder(t *testing.T) {
 	doc, err := bson.Marshal(bson.D{
 		{Key: "_id", Value: "u1"},
@@ -583,5 +755,13 @@ func assertCommandError(tb testing.TB, doc wire.Document, codeName string) {
 	got, gotOK := raw.Lookup("codeName").StringValueOK()
 	if !gotOK || got != codeName {
 		tb.Fatalf("codeName=%q typeOK=%v want %q", got, gotOK, codeName)
+	}
+}
+
+func assertIndexName(tb testing.TB, doc bson.Raw, want string) {
+	tb.Helper()
+	got, ok := doc.Lookup("name").StringValueOK()
+	if !ok || got != want {
+		tb.Fatalf("index name=%q typeOK=%v want %q", got, ok, want)
 	}
 }

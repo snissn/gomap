@@ -31,6 +31,7 @@ var (
 	ErrCollectionNotFound  = errors.New("collections: collection not found")
 	ErrDocumentExists      = errors.New("collections: document already exists")
 	ErrDuplicateDocumentID = errors.New("collections: duplicate document id in batch")
+	ErrIndexNotFound       = errors.New("collections: index not found")
 	ErrUniqueIndexConflict = errors.New("collections: unique index conflict")
 	ErrConcurrentMutation  = errors.New("collections: concurrent mutation")
 
@@ -389,6 +390,55 @@ func (m *CollectionManager) OpenCollection(name string) (*Collection, error) {
 	return collection, nil
 }
 
+func (m *CollectionManager) ListCollections() ([]CollectionMeta, error) {
+	if m == nil {
+		return nil, errCollectionManagerNil
+	}
+	if m.db == nil {
+		return nil, errors.New("collections: db is nil")
+	}
+	snap := m.db.AcquireSnapshot()
+	if snap == nil {
+		return nil, backenddb.ErrClosed
+	}
+	defer func() { _ = snap.Close() }()
+	if snap.State() == nil || snap.State().SystemRootPageID == 0 {
+		return nil, nil
+	}
+	prefix := []byte(systemCollectionMetaPrefix)
+	it, err := snap.IteratorAtRoot(snap.State().SystemRootPageID, prefix, prefixEnd(prefix))
+	if errors.Is(err, tree.ErrKeyNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = it.Close() }()
+
+	var out []CollectionMeta
+	for it.Valid() {
+		key := it.UnsafeKey()
+		if !bytes.HasPrefix(key, prefix) {
+			break
+		}
+		if !it.IsDeleted() {
+			meta, err := decodeCollectionMeta(it.ValueCopy(nil))
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, meta)
+		}
+		it.Next()
+	}
+	if err := it.Error(); err != nil {
+		return nil, err
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].Name < out[j].Name
+	})
+	return out, nil
+}
+
 func (c *Collection) Name() string {
 	if c == nil {
 		return ""
@@ -489,6 +539,114 @@ func (c *Collection) CreateIndex(def IndexDefinition) (*CollectionMeta, error) {
 	}
 	c.meta = newMeta
 	nextCatalog := cloneCatalogWithRootUpdates(catalog, newMeta, plan.rootNames, rootIDs)
+	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
+	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
+	return newMeta.copy(), nil
+}
+
+func (c *Collection) DropIndex(name string) (*CollectionMeta, error) {
+	if err := ValidateIndexName(name); err != nil {
+		return nil, err
+	}
+	return c.dropIndexes(map[string]struct{}{name: {}}, false)
+}
+
+func (c *Collection) DropIndexes(names []string) (*CollectionMeta, error) {
+	if len(names) == 0 {
+		return nil, ErrIndexNotFound
+	}
+	nameSet := make(map[string]struct{}, len(names))
+	for _, name := range names {
+		if err := ValidateIndexName(name); err != nil {
+			return nil, err
+		}
+		nameSet[name] = struct{}{}
+	}
+	return c.dropIndexes(nameSet, false)
+}
+
+func (c *Collection) DropAllIndexes() (*CollectionMeta, error) {
+	return c.dropIndexes(nil, true)
+}
+
+func (c *Collection) dropIndexes(names map[string]struct{}, all bool) (*CollectionMeta, error) {
+	if c == nil {
+		return nil, errCollectionNil
+	}
+	if c.db == nil {
+		return nil, errors.New("collections: db is nil")
+	}
+	if err := c.flushBufferedNoIndex(); err != nil {
+		return nil, err
+	}
+
+	snap := c.db.AcquireSnapshot()
+	if snap == nil {
+		return nil, backenddb.ErrClosed
+	}
+	catalog, err := loadCollectionCatalog(snap, c.meta.Name)
+	if err != nil {
+		_ = snap.Close()
+		return nil, err
+	}
+	if catalog == nil {
+		_ = snap.Close()
+		return nil, errCollectionNotFound
+	}
+	baseMeta := catalog.meta
+	c.meta = baseMeta
+	baseSystemRoot := snapshotSystemRoot(snap)
+	_ = snap.Close()
+
+	nextIndexes := make([]IndexDefinition, 0, len(baseMeta.Indexes))
+	clearedRootNames := make([]string, 0, len(baseMeta.Indexes)+1)
+	dropped := 0
+	for _, idx := range baseMeta.Indexes {
+		if all {
+			dropped++
+			clearedRootNames = append(clearedRootNames, collectionSecondaryRootName(baseMeta.Name, idx.Name))
+			continue
+		}
+		if _, ok := names[idx.Name]; ok {
+			dropped++
+			clearedRootNames = append(clearedRootNames, collectionSecondaryRootName(baseMeta.Name, idx.Name))
+			continue
+		}
+		nextIndexes = append(nextIndexes, idx)
+	}
+	if !all && dropped != len(names) {
+		return nil, ErrIndexNotFound
+	}
+	if dropped == 0 {
+		c.meta = baseMeta
+		c.rememberCatalogAtSystemRoot(baseSystemRoot, catalog)
+		return baseMeta.copy(), nil
+	}
+
+	newMeta, err := normalizeCollectionMeta(CollectionMeta{
+		Name:    baseMeta.Name,
+		Options: baseMeta.Options,
+		Indexes: nextIndexes,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if len(newMeta.Indexes) == 0 {
+		clearedRootNames = append(clearedRootNames, collectionIndexStateRootName(baseMeta.Name))
+	}
+	encodedMeta, err := encodeCollectionMeta(newMeta)
+	if err != nil {
+		return nil, err
+	}
+	newSystemRoot, _, err := c.db.PublishOrderedRootDeltaGroupWithSystemDeltaBuilder(nil, func([]uint64) (iterator.UnsafeIterator, error) {
+		return c.buildSchemaOnlySystemDeltaIterator(baseMeta, encodedMeta, clearedRootNames)
+	})
+	if err != nil {
+		return nil, err
+	}
+	c.meta = newMeta
+	clearedRootIDs := make([]uint64, len(clearedRootNames))
+	nextCatalog := cloneCatalogWithRootUpdates(catalog, newMeta, clearedRootNames, clearedRootIDs)
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
 	return newMeta.copy(), nil
@@ -1800,6 +1958,31 @@ func (c *Collection) buildSchemaAndRootDescriptorSystemIterator(
 		updates[systemCollectionRootKey(rootName)] = encodeRootID(rootIDs[i])
 	}
 	return buildSystemTargetIterator(current, updates)
+}
+
+func (c *Collection) buildSchemaOnlySystemDeltaIterator(baseMeta CollectionMeta, encodedMeta []byte, clearedRootNames []string) (iterator.UnsafeIterator, error) {
+	current := c.db.AcquireSnapshot()
+	if current == nil {
+		return nil, backenddb.ErrClosed
+	}
+	defer func() { _ = current.Close() }()
+	catalog, err := loadCollectionCatalog(current, baseMeta.Name)
+	if err != nil {
+		return nil, err
+	}
+	if catalog == nil {
+		return nil, errCollectionNotFound
+	}
+	if !sameCollectionMeta(catalog.meta, baseMeta) {
+		return nil, fmt.Errorf("collections: concurrent schema modification detected for %q", baseMeta.Name)
+	}
+	updates := map[string][]byte{
+		systemCollectionMetaKey(baseMeta.Name): encodedMeta,
+	}
+	for _, rootName := range clearedRootNames {
+		updates[systemCollectionRootKey(rootName)] = encodeRootID(0)
+	}
+	return buildSystemDeltaIterator(updates)
 }
 
 func loadDeleteIndexState(snap *backenddb.Snapshot, catalog *collectionCatalog, documentID, document []byte, runtimes []indexRuntime, opts collectionOptions) (documentIndexState, error) {

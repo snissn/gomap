@@ -1,7 +1,7 @@
 # MongoDB-Compatible Gateway Plan
 
-Status: planning, work log, early wire-protocol prototype, and first
-collection-backed command path.
+Status: planning, work log, early wire-protocol prototype, first
+collection-backed command path, CRUD MVP, and collection/index metadata MVP.
 
 This folder tracks the product expansion effort to expose TreeDB collections
 through a MongoDB-compatible gateway. The near-term goal is not to claim full
@@ -258,6 +258,16 @@ Priority workloads:
 - Indexed range scan with limit.
 - Mixed insert/read workload with checkpointing enabled.
 - Disk usage after load, after checkpoint, and after maintenance.
+
+## Work Log
+
+- PR 1088 added OP_MSG document sequences plus collection-backed `insert` and
+  exact `_id` equality `find`, with a real Go driver insert/find smoke test.
+- PR 1089 adds exact `_id` equality `update`/`delete` command support for the
+  gateway CRUD MVP.
+- Current metadata slice adds `listCollections`, `createIndexes`,
+  `listIndexes`, and `dropIndexes` for single-field ascending collection
+  secondary indexes.
 
 Metrics to record for every run:
 

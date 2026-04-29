@@ -127,6 +127,39 @@ func TestCollectionInsertBatchBridge_RoundTripWithSecondaryIndexes(t *testing.T)
 	}
 }
 
+func TestCollectionManagerListCollections(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("create users: %v", err)
+	}
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name:    "orders",
+		Indexes: []IndexDefinition{{Name: "user_id", Field: "user_id"}},
+	}); err != nil {
+		t.Fatalf("create orders: %v", err)
+	}
+
+	metas, err := mgr.ListCollections()
+	if err != nil {
+		t.Fatalf("list collections: %v", err)
+	}
+	if len(metas) != 2 {
+		t.Fatalf("collection count=%d want 2: %+v", len(metas), metas)
+	}
+	if metas[0].Name != "orders" || metas[1].Name != "users" {
+		t.Fatalf("collection order=%q,%q want orders,users", metas[0].Name, metas[1].Name)
+	}
+	if len(metas[0].Indexes) != 1 || metas[0].Indexes[0].Name != "user_id" {
+		t.Fatalf("orders indexes=%+v want user_id", metas[0].Indexes)
+	}
+}
+
 func TestCollectionInsertBatchStatsExposeIndexRunShape(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
@@ -1112,6 +1145,99 @@ func TestCollectionCreateIndexBackfill_BuildsSecondaryAndIndexState(t *testing.T
 		!bytes.Equal(cityIDs[1], []byte("u2")) ||
 		!bytes.Equal(cityIDs[2], []byte("u3")) {
 		t.Fatalf("city ids after insert=%q want [u1 u2 u3]", cityIDs)
+	}
+}
+
+func TestCollectionDropIndexUpdatesSchema(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Indexes: []IndexDefinition{
+			{Name: "email", Field: "email", Unique: true},
+			{Name: "city", Field: "city"},
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.Insert([]byte("u1"), []byte(`{"email":"ada@example.com","city":"hnl"}`)); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	meta, err := col.DropIndex("city")
+	if err != nil {
+		t.Fatalf("drop index: %v", err)
+	}
+	if _, ok := findIndex(meta.Indexes, "city"); ok {
+		t.Fatalf("dropped meta still has city index: %+v", meta.Indexes)
+	}
+	if _, ok := findIndex(meta.Indexes, "email"); !ok {
+		t.Fatalf("dropped meta lost email index: %+v", meta.Indexes)
+	}
+
+	reopened, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("reopen collection: %v", err)
+	}
+	if _, ok := findIndex(reopened.Meta().Indexes, "city"); ok {
+		t.Fatalf("reopened meta still has city index: %+v", reopened.Meta().Indexes)
+	}
+	if ids, err := reopened.FindByIndex("city", "hnl"); err != nil {
+		t.Fatalf("find dropped city: %v", err)
+	} else if len(ids) != 0 {
+		t.Fatalf("find dropped city ids=%q want none", ids)
+	}
+	if ids, err := reopened.FindByIndex("email", "ada@example.com"); err != nil {
+		t.Fatalf("find retained email: %v", err)
+	} else if len(ids) != 1 || !bytes.Equal(ids[0], []byte("u1")) {
+		t.Fatalf("find retained email ids=%q want u1", ids)
+	}
+	if err := reopened.Delete([]byte("u1")); err != nil {
+		t.Fatalf("delete while city index dropped: %v", err)
+	}
+	if _, err := reopened.Insert([]byte("u2"), []byte(`{"email":"grace@example.com","city":"sfo"}`)); err != nil {
+		t.Fatalf("insert while city index dropped: %v", err)
+	}
+	if _, err := reopened.CreateIndex(IndexDefinition{Name: "city", Field: "city"}); err != nil {
+		t.Fatalf("recreate city index: %v", err)
+	}
+	if ids, err := reopened.FindByIndex("city", "hnl"); err != nil {
+		t.Fatalf("find recreated city hnl: %v", err)
+	} else if len(ids) != 0 {
+		t.Fatalf("recreated city hnl ids=%q want none", ids)
+	}
+	if ids, err := reopened.FindByIndex("city", "sfo"); err != nil {
+		t.Fatalf("find recreated city sfo: %v", err)
+	} else if len(ids) != 1 || !bytes.Equal(ids[0], []byte("u2")) {
+		t.Fatalf("recreated city sfo ids=%q want u2", ids)
+	}
+	if _, err := reopened.DropIndex("missing"); !errors.Is(err, ErrIndexNotFound) {
+		t.Fatalf("drop missing err=%v want ErrIndexNotFound", err)
+	}
+	if _, err := reopened.DropIndexes([]string{"city", "missing"}); !errors.Is(err, ErrIndexNotFound) {
+		t.Fatalf("bulk drop with missing err=%v want ErrIndexNotFound", err)
+	}
+	if _, ok := findIndex(reopened.Meta().Indexes, "city"); !ok {
+		t.Fatalf("bulk drop with missing removed city index: %+v", reopened.Meta().Indexes)
+	}
+	if _, ok := findIndex(reopened.Meta().Indexes, "email"); !ok {
+		t.Fatalf("bulk drop with missing removed email index: %+v", reopened.Meta().Indexes)
+	}
+	meta, err = reopened.DropIndexes([]string{"city", "email"})
+	if err != nil {
+		t.Fatalf("bulk drop indexes: %v", err)
+	}
+	if len(meta.Indexes) != 0 {
+		t.Fatalf("bulk drop meta indexes=%+v want none", meta.Indexes)
 	}
 }
 
