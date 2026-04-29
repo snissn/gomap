@@ -6,13 +6,14 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/adaptive"
-	"github.com/snissn/gomap/TreeDB/internal/bulk"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/pager"
 	"github.com/snissn/gomap/TreeDB/tree"
+	"github.com/snissn/gomap/TreeDB/zipper"
 )
 
 const leafRefRewriteMapInitCap = 128    // initial map capacity for small leafref rewrite batches
@@ -55,6 +56,7 @@ type leafRefRewriteCtx struct {
 
 	writer   *rewriteWriter
 	ridAlloc *rewriteRIDAllocator
+	zipper   *zipper.Zipper
 
 	sourceIDs            map[uint32]struct{}
 	sourceChunks         map[valueLogChunkKey]ValueLogRewritePlanChunk
@@ -432,180 +434,42 @@ func (c *leafRefRewriteCtx) rewriteNode(id uint64) (uint64, bool, error) {
 	}
 }
 
-func (c *leafRefRewriteCtx) rebuildSystemRootWithCollectionRootReplacements(rootID uint64, replacements []vacuumCollectionRootReplacement) (uint64, error) {
+func (c *leafRefRewriteCtx) applySystemRootCollectionRootReplacements(rootID uint64, replacements []vacuumCollectionRootReplacement) (uint64, bool, error) {
 	if c == nil {
-		return rootID, errors.New("vlog-rewrite: nil leafref rewrite ctx")
+		return rootID, false, errors.New("vlog-rewrite: nil leafref rewrite ctx")
 	}
 	if len(replacements) == 0 {
-		return rootID, nil
+		return rootID, false, nil
 	}
 	if c.db == nil {
-		return rootID, errors.New("vlog-rewrite: missing db")
+		return rootID, false, errors.New("vlog-rewrite: missing db")
 	}
-	if c.pager == nil || c.alloc == nil || c.writer == nil {
-		return rootID, errors.New("vlog-rewrite: missing system root rebuild state")
+	if c.zipper == nil {
+		return rootID, false, errors.New("vlog-rewrite: missing system root zipper")
 	}
 	if rootID == 0 {
-		return 0, nil
+		return 0, false, nil
 	}
 	if c.ctx != nil {
 		if err := c.ctx.Err(); err != nil {
-			return rootID, err
+			return rootID, false, err
 		}
 	}
 
-	tr := tree.New(c.pager, c.leafReader, rootID)
-	retired, err := tr.CollectPageIDs()
-	if err != nil {
-		return rootID, err
-	}
-	if c.ctx != nil {
-		if err := c.ctx.Err(); err != nil {
-			return rootID, err
+	delta := batch.Acquire(c.db.valueLogManager, c.db.InlineThreshold())
+	defer batch.Release(delta)
+	delta.Reserve(len(replacements))
+	for _, replacement := range replacements {
+		if err := delta.Set(replacement.key, replacement.value); err != nil {
+			return rootID, false, err
 		}
 	}
-	var iter iteratorWithEntry = tr.IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
-	iter = &vacuumSystemRootRewriteIterator{
-		base:         iter,
-		replacements: replacements,
-	}
-	iter = &contextIteratorWithEntry{ctx: c.ctx, base: iter}
-
-	newRoot, err := bulk.BuildWithOptions(iter, c.alloc, c.pager, bulk.BuildOptions{
-		LeafPrefixCompression: c.db.leafPrefixCompression,
-		LeafColumnar:          c.db.indexColumnarLeaves,
-		PackedValuePtr:        c.db.indexPackedValuePtr,
-		InternalBaseDelta:     c.db.indexInternalBaseDelta && !c.db.indexOuterLeavesInValueLog,
-		LeafPageLog:           &leafRefRewritePageAppender{ctx: c},
-	})
-	if iterErr := iter.Error(); iterErr != nil {
-		err = errors.Join(err, iterErr)
-	}
-	if closeErr := iter.Close(); closeErr != nil {
-		err = errors.Join(err, closeErr)
-	}
+	newRoot, retired, _, err := c.zipper.Apply(rootID, delta)
 	if err != nil {
-		return rootID, err
+		return rootID, false, err
 	}
 	c.retired = append(c.retired, retired...)
-	return newRoot, nil
-}
-
-type contextIteratorWithEntry struct {
-	ctx  context.Context
-	base iteratorWithEntry
-	err  error
-}
-
-func (it *contextIteratorWithEntry) contextErr() error {
-	if it == nil {
-		return nil
-	}
-	if it.err != nil {
-		return it.err
-	}
-	if it.ctx != nil {
-		it.err = it.ctx.Err()
-	}
-	return it.err
-}
-
-func (it *contextIteratorWithEntry) Valid() bool {
-	if it == nil || it.base == nil || it.contextErr() != nil {
-		return false
-	}
-	return it.base.Valid()
-}
-
-func (it *contextIteratorWithEntry) Next() {
-	if it == nil || it.base == nil || it.contextErr() != nil {
-		return
-	}
-	it.base.Next()
-}
-
-func (it *contextIteratorWithEntry) UnsafeKey() []byte {
-	if it == nil || it.base == nil {
-		return nil
-	}
-	return it.base.UnsafeKey()
-}
-
-func (it *contextIteratorWithEntry) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
-	if it == nil || it.base == nil {
-		return nil, page.ValuePtr{}, node.FlagInline
-	}
-	return it.base.UnsafeEntry()
-}
-
-func (it *contextIteratorWithEntry) IsDeleted() bool {
-	return it != nil && it.base != nil && it.base.IsDeleted()
-}
-
-func (it *contextIteratorWithEntry) UnsafeValue() []byte {
-	if it == nil || it.base == nil {
-		return nil
-	}
-	return it.base.UnsafeValue()
-}
-
-func (it *contextIteratorWithEntry) Key() []byte {
-	if it == nil || it.base == nil {
-		return nil
-	}
-	return it.base.Key()
-}
-
-func (it *contextIteratorWithEntry) Value() []byte {
-	if it == nil || it.base == nil {
-		return nil
-	}
-	return it.base.Value()
-}
-
-func (it *contextIteratorWithEntry) KeyCopy(dst []byte) []byte {
-	if it == nil || it.base == nil {
-		return dst
-	}
-	return it.base.KeyCopy(dst)
-}
-
-func (it *contextIteratorWithEntry) ValueCopy(dst []byte) []byte {
-	if it == nil || it.base == nil {
-		return dst
-	}
-	return it.base.ValueCopy(dst)
-}
-
-func (it *contextIteratorWithEntry) Error() error {
-	if err := it.contextErr(); err != nil {
-		return err
-	}
-	if it == nil || it.base == nil {
-		return nil
-	}
-	return it.base.Error()
-}
-
-func (it *contextIteratorWithEntry) Close() error {
-	if it == nil || it.base == nil {
-		return nil
-	}
-	return it.base.Close()
-}
-
-func (it *contextIteratorWithEntry) Domain() (start, end []byte) {
-	if it == nil || it.base == nil {
-		return nil, nil
-	}
-	return it.base.Domain()
-}
-
-func (it *contextIteratorWithEntry) Seek(key []byte) {
-	if it == nil || it.base == nil || it.contextErr() != nil {
-		return
-	}
-	it.base.Seek(key)
+	return newRoot, newRoot != rootID || len(retired) > 0, nil
 }
 
 func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, ridAlloc *rewriteRIDAllocator, sourceIDs map[uint32]struct{}, sourceChunks map[valueLogChunkKey]ValueLogRewritePlanChunk, sourceChunkBytes int64, singleSourceID uint32, hasSingleSourceID bool, maxCopiedBytes int64, sync bool, runStats *leafRefRewriteRunStats) (copied int, copiedBytes int64, err error) {
@@ -703,6 +567,12 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 		useSubtreeStatsPrune: len(sourceGenerationIDs) > 0,
 		maxCopiedBytes:       maxCopiedBytes,
 	}
+	leafCtx.zipper = idx.zipper.CloneWithAllocator(tracker)
+	leafCtx.zipper.SetOuterLeavesInValueLog(db.indexOuterLeavesInValueLog)
+	leafCtx.zipper.SetIndexInternalBaseDelta(db.indexInternalBaseDelta && !db.indexOuterLeavesInValueLog)
+	if db.indexOuterLeavesInValueLog {
+		leafCtx.zipper.SetLeafPageLog(&leafRefRewritePageAppender{ctx: leafCtx})
+	}
 	if runStats != nil {
 		defer func() {
 			runStats.InternalPagesVisited = leafCtx.internalVisited
@@ -730,17 +600,17 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 		newSysRoot uint64
 		sysChanged bool
 	)
+	newSysRoot, sysChanged, err = leafCtx.rewriteNode(sysRoot)
+	if err != nil {
+		return 0, 0, fmt.Errorf("vlog-rewrite: rewrite system leaf root: %w", err)
+	}
 	if len(collectionRootReplacements) > 0 {
-		newSysRoot, err = leafCtx.rebuildSystemRootWithCollectionRootReplacements(sysRoot, collectionRootReplacements)
+		replacedSysRoot, replacementChanged, err := leafCtx.applySystemRootCollectionRootReplacements(newSysRoot, collectionRootReplacements)
 		if err != nil {
-			return 0, 0, fmt.Errorf("vlog-rewrite: rewrite system leaf root with collection descriptors: %w", err)
+			return 0, 0, fmt.Errorf("vlog-rewrite: rewrite system collection descriptors: %w", err)
 		}
-		sysChanged = true
-	} else {
-		newSysRoot, sysChanged, err = leafCtx.rewriteNode(sysRoot)
-		if err != nil {
-			return 0, 0, fmt.Errorf("vlog-rewrite: rewrite system leaf root: %w", err)
-		}
+		newSysRoot = replacedSysRoot
+		sysChanged = sysChanged || replacementChanged
 	}
 	newRoot, userChanged, err := leafCtx.rewriteNode(rootID)
 	if err != nil {
