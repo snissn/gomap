@@ -508,13 +508,63 @@ func chooseStandaloneValueLogSegmentStartFromSet(set *valuelog.Set) (uint32, uin
 			}
 		}
 	}
-	for lane := uint32(valuelog.ReservedLeafLogLaneID); lane > 0; lane-- {
-		candidate := lane - 1
-		if _, used := maxSeqByLane[candidate]; !used {
-			return candidate, 0, true
+	if valuelog.ReservedLeafLogLaneID > 0 {
+		for lane := uint32(valuelog.ReservedLeafLogLaneID - 1); ; lane-- {
+			if _, used := maxSeqByLane[lane]; !used {
+				return lane, 0, true
+			}
+			if lane == 0 {
+				break
+			}
 		}
 	}
 	return 0, maxSeqByLane[0], true
+}
+
+func TestChooseStandaloneValueLogSegmentStartFromSetSkipsReservedLeafLane(t *testing.T) {
+	leafID, err := valuelog.EncodeFileID(valuelog.ReservedLeafLogLaneID, 3)
+	if err != nil {
+		t.Fatalf("EncodeFileID reserved lane: %v", err)
+	}
+	userID, err := valuelog.EncodeFileID(valuelog.ReservedLeafLogLaneID-1, 7)
+	if err != nil {
+		t.Fatalf("EncodeFileID user lane: %v", err)
+	}
+	set := &valuelog.Set{Files: map[uint32]*valuelog.File{
+		leafID: &valuelog.File{ID: leafID},
+		userID: &valuelog.File{ID: userID},
+	}}
+
+	lane, seq, ok := chooseStandaloneValueLogSegmentStartFromSet(set)
+	if !ok {
+		t.Fatal("chooseStandaloneValueLogSegmentStartFromSet ok=false")
+	}
+	if want := uint32(valuelog.ReservedLeafLogLaneID - 2); lane != want || seq != 0 {
+		t.Fatalf("lane=%d seq=%d want lane=%d seq=0", lane, seq, want)
+	}
+}
+
+func TestChooseStandaloneValueLogSegmentStartFromSetFallsBackToLaneZero(t *testing.T) {
+	files := make(map[uint32]*valuelog.File)
+	for lane := uint32(0); lane < uint32(valuelog.ReservedLeafLogLaneID); lane++ {
+		seq := uint32(1)
+		if lane == 0 {
+			seq = 9
+		}
+		id, err := valuelog.EncodeFileID(lane, seq)
+		if err != nil {
+			t.Fatalf("EncodeFileID lane=%d seq=%d: %v", lane, seq, err)
+		}
+		files[id] = &valuelog.File{ID: id}
+	}
+
+	lane, seq, ok := chooseStandaloneValueLogSegmentStartFromSet(&valuelog.Set{Files: files})
+	if !ok {
+		t.Fatal("chooseStandaloneValueLogSegmentStartFromSet ok=false")
+	}
+	if lane != 0 || seq != 9 {
+		t.Fatalf("lane=%d seq=%d want lane=0 seq=9", lane, seq)
+	}
 }
 
 func requireCollectionMaintenanceReads(t *testing.T, col *Collection) {
@@ -607,6 +657,7 @@ func collectionMaintenanceContainsID(ids [][]byte, want []byte) bool {
 	return false
 }
 
+// Non-unique index scans do not promise result ordering; assert set membership.
 func collectionMaintenanceRequireIDs(t *testing.T, got [][]byte, want ...[]byte) {
 	t.Helper()
 	if len(got) != len(want) {

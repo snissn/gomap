@@ -1242,11 +1242,8 @@ func (m *Manager) Close() error {
 }
 
 func (m *Manager) SegmentPath(id uint32) string {
-	seg := page.ValueLogSegmentID(id)
-	lane, seq := DecodeSegmentID(seg)
-	name := fmt.Sprintf("value-l%d-%06d.log", lane, seq)
 	if m == nil {
-		return name
+		return segmentPath("", id)
 	}
 	m.mu.RLock()
 	if f := m.files[id]; f != nil && strings.TrimSpace(f.Path) != "" {
@@ -1256,12 +1253,22 @@ func (m *Manager) SegmentPath(id uint32) string {
 	}
 	rootDir := m.dir
 	m.mu.RUnlock()
-	return filepath.Join(rootDir, name)
+	return segmentPath(rootDir, id)
 }
 
 // SegmentPath returns the canonical on-disk path for a value-log segment.
 func SegmentPath(dir string, id uint32) string {
-	return (&Manager{dir: dir}).SegmentPath(id)
+	return segmentPath(dir, id)
+}
+
+func segmentPath(dir string, id uint32) string {
+	seg := page.ValueLogSegmentID(id)
+	lane, seq := DecodeSegmentID(seg)
+	name := fmt.Sprintf("value-l%d-%06d.log", lane, seq)
+	if dir == "" {
+		return name
+	}
+	return filepath.Join(dir, name)
 }
 
 // HasSegment reports whether id is already registered and not marked zombie.
