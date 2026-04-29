@@ -173,6 +173,15 @@ func TestGoTestArgsIncludeSQLiteTagsOnlyForSQLiteCell(t *testing.T) {
 	}
 }
 
+func TestSQLiteBenchmarkListHasSQLite(t *testing.T) {
+	if !sqliteBenchmarkListHasSQLite([]byte("BenchmarkSQLiteShapeInsertBatchJSON/indexes_0\nok package\n")) {
+		t.Fatal("sqliteBenchmarkListHasSQLite=false want true")
+	}
+	if sqliteBenchmarkListHasSQLite([]byte("ok package\n")) {
+		t.Fatal("sqliteBenchmarkListHasSQLite=true want false")
+	}
+}
+
 func TestDefaultOutputDirIncludesSubsecondEntropy(t *testing.T) {
 	base := time.Date(2026, 4, 28, 12, 30, 45, 1, time.UTC)
 	first := defaultOutputDir(base)

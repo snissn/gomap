@@ -200,6 +200,10 @@ func run(cfg config, commandLine []string) error {
 			return fmt.Errorf("create output directory: %w", err)
 		}
 	}
+	if !cfg.skipSQLite && !cfg.dryRun && !sqliteBenchmarksAvailable(cfg) {
+		fmt.Fprintln(os.Stderr, "collection_bench_matrix: skipping sqlite cell; sqlite_bench+cgo benchmarks are unavailable")
+		cfg.skipSQLite = true
+	}
 
 	branch := gitOutput(cfg.repoRoot, "branch", "--show-current")
 	commit := gitOutput(cfg.repoRoot, "rev-parse", "--short=12", "HEAD")
@@ -453,6 +457,32 @@ func goTestArgs(cell matrixCell, cfg config) []string {
 		"-json",
 	)
 	return args
+}
+
+func sqliteBenchmarksAvailable(cfg config) bool {
+	args := []string{
+		"test",
+		"-tags", "sqlite_bench",
+		"./TreeDB/collections",
+		"-run", "^$",
+		"-list", "^BenchmarkSQLite",
+	}
+	cmd := exec.Command(cfg.goBinary, args...)
+	cmd.Dir = cfg.repoRoot
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return false
+	}
+	return sqliteBenchmarkListHasSQLite(out)
+}
+
+func sqliteBenchmarkListHasSQLite(out []byte) bool {
+	for _, line := range strings.Split(string(out), "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "BenchmarkSQLite") {
+			return true
+		}
+	}
+	return false
 }
 
 func runCellReport(cfg config, cell matrixCell, branch, commit string) error {
