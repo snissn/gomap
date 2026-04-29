@@ -323,6 +323,19 @@ func TestServerIndexMetadataCommands(t *testing.T) {
 	assertInt32(t, createResponse, "numIndexesBefore", 1)
 	assertInt32(t, createResponse, "numIndexesAfter", 2)
 
+	idempotentResponse := serveCommand(t, server, 2271, bson.D{
+		{Key: "createIndexes", Value: "users"},
+		{Key: "indexes", Value: bson.A{bson.D{
+			{Key: "key", Value: bson.D{{Key: "email", Value: int32(1)}}},
+			{Key: "name", Value: "email_1"},
+			{Key: "unique", Value: true},
+		}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertOK(t, idempotentResponse)
+	assertInt32(t, idempotentResponse, "numIndexesBefore", 2)
+	assertInt32(t, idempotentResponse, "numIndexesAfter", 2)
+
 	collectionsResponse := serveCommand(t, server, 228, bson.D{
 		{Key: "listCollections", Value: int32(1)},
 		{Key: "nameOnly", Value: true},
@@ -365,6 +378,73 @@ func TestServerIndexMetadataCommands(t *testing.T) {
 		t.Fatalf("index batch after drop len=%d want %d", got, want)
 	}
 	assertIndexName(t, indexBatch[0], "_id_")
+}
+
+func TestServerIndexMetadataRejectsInvalidCommands(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	emptyCreate := serveCommand(t, server, 232, bson.D{
+		{Key: "createIndexes", Value: "empty"},
+		{Key: "indexes", Value: bson.A{}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, emptyCreate, "BadValue")
+
+	emptyName := serveCommand(t, server, 233, bson.D{
+		{Key: "createIndexes", Value: "users"},
+		{Key: "indexes", Value: bson.A{bson.D{
+			{Key: "key", Value: bson.D{{Key: "email", Value: int32(1)}}},
+			{Key: "name", Value: ""},
+		}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, emptyName, "BadValue")
+
+	invalidListCollectionsDB := serveCommand(t, server, 234, bson.D{
+		{Key: "listCollections", Value: int32(1)},
+		{Key: "$db", Value: "bad/name"},
+	})
+	assertCommandError(t, invalidListCollectionsDB, "BadValue")
+
+	assertOK(t, serveCommand(t, server, 235, bson.D{
+		{Key: "insert", Value: "dupes"},
+		{Key: "documents", Value: bson.A{
+			bson.D{{Key: "_id", Value: "u1"}, {Key: "email", Value: "same@example.com"}},
+			bson.D{{Key: "_id", Value: "u2"}, {Key: "email", Value: "same@example.com"}},
+		}},
+		{Key: "$db", Value: "app"},
+	}))
+	uniqueConflict := serveCommand(t, server, 236, bson.D{
+		{Key: "createIndexes", Value: "dupes"},
+		{Key: "indexes", Value: bson.A{bson.D{
+			{Key: "key", Value: bson.D{{Key: "email", Value: int32(1)}}},
+			{Key: "name", Value: "email_1"},
+			{Key: "unique", Value: true},
+		}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, uniqueConflict, "DuplicateKey")
+
+	assertOK(t, serveCommand(t, server, 237, bson.D{
+		{Key: "createIndexes", Value: "users"},
+		{Key: "indexes", Value: bson.A{bson.D{
+			{Key: "key", Value: bson.D{{Key: "city", Value: int32(1)}}},
+			{Key: "name", Value: "city_1"},
+		}}},
+		{Key: "$db", Value: "app"},
+	}))
+	emptyDrop := serveCommand(t, server, 238, bson.D{
+		{Key: "dropIndexes", Value: "users"},
+		{Key: "index", Value: bson.A{}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, emptyDrop, "FailedToParse")
 }
 
 func TestApplySetUpdateAppendsNewFieldsInSetOrder(t *testing.T) {

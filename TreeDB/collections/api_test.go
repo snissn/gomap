@@ -1201,6 +1201,25 @@ func TestCollectionDropIndexUpdatesSchema(t *testing.T) {
 	} else if len(ids) != 1 || !bytes.Equal(ids[0], []byte("u1")) {
 		t.Fatalf("find retained email ids=%q want u1", ids)
 	}
+	if err := reopened.Delete([]byte("u1")); err != nil {
+		t.Fatalf("delete while city index dropped: %v", err)
+	}
+	if _, err := reopened.Insert([]byte("u2"), []byte(`{"email":"grace@example.com","city":"sfo"}`)); err != nil {
+		t.Fatalf("insert while city index dropped: %v", err)
+	}
+	if _, err := reopened.CreateIndex(IndexDefinition{Name: "city", Field: "city"}); err != nil {
+		t.Fatalf("recreate city index: %v", err)
+	}
+	if ids, err := reopened.FindByIndex("city", "hnl"); err != nil {
+		t.Fatalf("find recreated city hnl: %v", err)
+	} else if len(ids) != 0 {
+		t.Fatalf("recreated city hnl ids=%q want none", ids)
+	}
+	if ids, err := reopened.FindByIndex("city", "sfo"); err != nil {
+		t.Fatalf("find recreated city sfo: %v", err)
+	} else if len(ids) != 1 || !bytes.Equal(ids[0], []byte("u2")) {
+		t.Fatalf("recreated city sfo ids=%q want u2", ids)
+	}
 	if _, err := reopened.DropIndex("missing"); !errors.Is(err, ErrIndexNotFound) {
 		t.Fatalf("drop missing err=%v want ErrIndexNotFound", err)
 	}
