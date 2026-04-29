@@ -667,11 +667,11 @@ func documentsBatchWithLimit(docs []wire.Document, projection compiledProjection
 		if err != nil {
 			return nil, 0, err
 		}
-		docBytes := len(doc) + 16
-		if docBytes > maxBytes {
+		docBytes := findBatchDocumentBytes(doc, len(out))
+		if findBatchOverheadBytes+docBytes > maxBytes {
 			return nil, 0, fmt.Errorf("Mongo gateway cursor document exceeds max message size: docBytes=%d maxBatchBytes=%d", docBytes, maxBytes)
 		}
-		if consumed > 0 && batchBytes+docBytes > maxBytes {
+		if len(out) > 0 && findBatchOverheadBytes+batchBytes+docBytes > maxBytes {
 			break
 		}
 		out = append(out, bson.Raw(doc))
