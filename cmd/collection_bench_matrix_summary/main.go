@@ -326,6 +326,9 @@ func matrixIndexArtifactPath(baseDir, artifactPath string) (string, error) {
 	if filepath.IsAbs(artifactPath) {
 		return "", fmt.Errorf("absolute artifact path %q is not allowed in matrix index", artifactPath)
 	}
+	if filepath.VolumeName(artifactPath) != "" {
+		return "", fmt.Errorf("volume-qualified artifact path %q is not allowed in matrix index", artifactPath)
+	}
 	baseDir = filepath.Clean(baseDir)
 	joined := filepath.Clean(filepath.Join(baseDir, artifactPath))
 	rel, err := filepath.Rel(baseDir, joined)
@@ -1075,9 +1078,11 @@ func buildExecutiveSummary(userRows []userStoryRow, diskRows []diskUsageRow, mai
 		if best, ok := largestMaintenanceReduction(maintenanceRows, kind); ok {
 			delta := best.Delta
 			after := best.After
+			rateNs := best.NsPerMaint
 			if best.DeltaGC != nil {
 				delta = best.DeltaGC
 				after = best.AfterGC
+				rateNs = best.GCNs
 			}
 			lines = append(lines, fmt.Sprintf("Largest %s disk reduction: `%s` / `%s` changed total disk by %s to %s (%s ops/sec maintenance rate).",
 				kind,
@@ -1085,7 +1090,7 @@ func buildExecutiveSummary(userRows []userStoryRow, diskRows []diskUsageRow, mai
 				best.DocumentFormat,
 				formatOptionalByteCount(delta),
 				formatOptionalByteCount(after),
-				formatOptionalFloat(optionalOpsPerSecFromNs(best.NsPerMaint)),
+				formatOptionalFloat(optionalOpsPerSecFromNs(rateNs)),
 			))
 			continue
 		}

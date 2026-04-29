@@ -67,6 +67,27 @@ func TestReadMatrixIndexRejectsAbsoluteReportPath(t *testing.T) {
 	}
 }
 
+func TestReadMatrixIndexRejectsVolumeQualifiedReportPath(t *testing.T) {
+	volumePath := filepath.Join("C:cell_a", "collections_report.md")
+	if filepath.VolumeName(volumePath) == "" {
+		t.Skip("host filepath implementation does not expose volume-qualified paths")
+	}
+	dir := t.TempDir()
+	indexPath := filepath.Join(dir, "matrix_index.tsv")
+	index := strings.Join([]string{
+		"cell\tengine\tdocument_format\tdata_outer_leaves_in_vlog\tindex_outer_leaves_in_vlog\tpager_chunk_size\tpager_sync_concurrency\treport_md\treport_json",
+		"cell_a\tproduction_fast\tjson\ttrue\ttrue\tprofile/default\tprofile/default\t" + volumePath + "\tcell_a/collections_report.json",
+	}, "\n")
+	if err := os.WriteFile(indexPath, []byte(index), 0o644); err != nil {
+		t.Fatalf("write matrix index: %v", err)
+	}
+
+	_, err := readMatrixIndex(indexPath)
+	if err == nil || !strings.Contains(err.Error(), "volume-qualified artifact path") {
+		t.Fatalf("readMatrixIndex err=%v want volume-qualified path rejection", err)
+	}
+}
+
 func TestMatrixSummaryRendersBenchmarkMetrics(t *testing.T) {
 	dir := t.TempDir()
 	cellDir := filepath.Join(dir, "production_fast_data_vlog_index_leaf")
@@ -636,5 +657,39 @@ func TestExecutiveSummaryDoesNotLabelPositiveMaintenanceDeltaAsReduction(t *test
 	}
 	if !strings.Contains(got, "No treedb_vlog_rewrite disk reduction was observed") {
 		t.Fatalf("missing no-reduction summary:\n%s", got)
+	}
+}
+
+func TestExecutiveSummaryUsesGCRateForGCDelta(t *testing.T) {
+	delta := 120.0
+	after := 1120.0
+	deltaGC := -100.0
+	afterGC := 900.0
+	maintNs := 1_000_000_000.0
+	gcNs := 250_000_000.0
+	lines := buildExecutiveSummary(nil, nil, []maintenanceRow{
+		{
+			summaryRow: summaryRow{
+				matrixRow: matrixRow{
+					Cell:           "treedb_json",
+					DocumentFormat: "json",
+				},
+			},
+			Kind:       "treedb_leafgen_pack_gc",
+			NsPerMaint: &maintNs,
+			GCNs:       &gcNs,
+			Delta:      &delta,
+			After:      &after,
+			DeltaGC:    &deltaGC,
+			AfterGC:    &afterGC,
+		},
+	}, nil)
+
+	got := strings.Join(lines, "\n")
+	if !strings.Contains(got, "changed total disk by -100 to 900") {
+		t.Fatalf("summary did not use GC disk delta:\n%s", got)
+	}
+	if !strings.Contains(got, "(4 ops/sec maintenance rate)") {
+		t.Fatalf("summary did not use GC rate:\n%s", got)
 	}
 }
