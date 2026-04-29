@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -111,6 +112,32 @@ func TestBuildMatrixCellsRejectsDuplicateNames(t *testing.T) {
 	_, err = buildMatrixCells(cfg)
 	if err == nil || !strings.Contains(err.Error(), "duplicate matrix cell") {
 		t.Fatalf("build cells err=%v want duplicate matrix cell", err)
+	}
+}
+
+func TestDefaultBenchmarkPatternsCoverStrictSummary(t *testing.T) {
+	treePattern := regexp.MustCompile(defaultTreeBenchmarkPattern)
+	for _, name := range []string{
+		"BenchmarkCollectionOverheadIndexStateJSONExtraction",
+		"BenchmarkCollectionOverheadIndexStateTemplateV1Extraction",
+		"BenchmarkCollectionOverheadPlanIndexedTemplateV1",
+		"BenchmarkCollectionOverheadPlanIndexedPrecomputedState",
+		"BenchmarkCollectionInsertBatchWithSecondaryIndexes",
+		"BenchmarkCollectionInsertBatchCheckpointWithSecondaryIndexes",
+	} {
+		if !treePattern.MatchString(name) {
+			t.Fatalf("default tree pattern does not match strict benchmark %q", name)
+		}
+	}
+
+	sqlitePattern := regexp.MustCompile(defaultSQLiteBenchmarkPattern)
+	for _, name := range []string{
+		"BenchmarkSQLiteInsertBatchWithSecondaryIndexes",
+		"BenchmarkSQLiteInsertBatchCheckpointWithSecondaryIndexes",
+	} {
+		if !sqlitePattern.MatchString(name) {
+			t.Fatalf("default sqlite pattern does not match strict benchmark %q", name)
+		}
 	}
 }
 
