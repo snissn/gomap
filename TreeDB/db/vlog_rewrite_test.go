@@ -710,6 +710,75 @@ func TestValueLogRewriteOnline_RepointsAliasedCollectionRootDescriptors(t *testi
 	}
 }
 
+func TestValueLogRewriteOnline_RefreshesCollectionRootThroughDescriptorAlias(t *testing.T) {
+	dir := t.TempDir()
+
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer closeNoErr(t, db)
+
+	oldPtr := appendPointersInNewSegment(t, dir, 0, 1, 530_000, 1, func(int) []byte {
+		return []byte("old collection alias value")
+	})[0]
+	newValue := []byte("new collection alias value")
+	newPtr := appendPointersInNewSegment(t, dir, 0, 2, 531_000, 1, func(int) []byte {
+		return newValue
+	})[0]
+	if err := db.RefreshValueLogSet(); err != nil {
+		t.Fatalf("refresh value log set: %v", err)
+	}
+
+	aliasDescriptorKey := "collections/root/users/alias"
+	_, rootIDs, err := db.PublishOrderedRootGroupWithSystemBuilder([]OrderedRootPublishInput{{
+		BaseRoot:      0,
+		Iter:          mustFrozenSystemPointerMemtable(t, "doc/p", oldPtr).NewIterator(nil, nil),
+		StoragePolicy: OrderedRootStoragePagerLeaves,
+	}}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		if len(rootIDs) != 1 {
+			return nil, fmt.Errorf("rootIDs=%d want 1", len(rootIDs))
+		}
+		return mustFrozenRawMemtable(t,
+			maintenanceTestCollectionRootKey, encodeMaintenanceRootID(rootIDs[0]),
+			aliasDescriptorKey, encodeMaintenanceRootID(rootIDs[0]),
+		).NewIterator(nil, nil), nil
+	})
+	if err != nil {
+		t.Fatalf("publish aliased collection root: %v", err)
+	}
+	if len(rootIDs) != 1 {
+		t.Fatalf("rootIDs=%d want 1", len(rootIDs))
+	}
+	oldRoot := rootIDs[0]
+	state := db.State()
+	if state == nil {
+		t.Fatal("expected db state")
+	}
+	target := &collectionRewriteRootState{
+		descriptorKey: append([]byte(nil), maintenanceTestCollectionRootKey...),
+		descriptorAliases: [][]byte{
+			append([]byte(nil), maintenanceTestCollectionRootKey...),
+			[]byte(aliasDescriptorKey),
+		},
+		rootID:     oldRoot,
+		systemRoot: state.SystemRootPageID,
+	}
+
+	if _, err := db.PublishSystemRootIterator(mustFrozenRawMemtable(t, aliasDescriptorKey, encodeMaintenanceRootID(oldRoot)).NewIterator(nil, nil)); err != nil {
+		t.Fatalf("remove primary descriptor through system publish: %v", err)
+	}
+	if err := db.applyRewriteSwapBatchToCollectionRoot(target, []rewriteSwap{{key: []byte("doc/p"), oldPtr: oldPtr, newPtr: newPtr}}, false); err != nil {
+		t.Fatalf("apply collection rewrite swap through descriptor alias: %v", err)
+	}
+	if got := readCollectionRootValue(t, db, aliasDescriptorKey, []byte("doc/p")); !bytes.Equal(got, newValue) {
+		t.Fatalf("alias descriptor value=%q want %q", got, newValue)
+	}
+	if len(target.descriptorAliases) != 1 || !bytes.Equal(target.descriptorAliases[0], []byte(aliasDescriptorKey)) {
+		t.Fatalf("refreshed descriptor aliases=%q want alias only", target.descriptorAliases)
+	}
+}
+
 func TestValueLogRewriteOnline_RewritesCollectionLeafRefRootPointers(t *testing.T) {
 	db, leafLog := openLeafGenerationGCTestDB(t)
 	dir := db.dir

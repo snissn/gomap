@@ -331,9 +331,9 @@ func TestCollectionLeafGenerationPackGC_RoundTripWithTemplateV1SecondaryIndexes(
 		t.Fatalf("checkpoint: %v", err)
 	}
 
-	ctx, cancel := collectionMaintenanceTestContext(t)
-	defer cancel()
-	planBefore, err := d.LeafGenerationPlan(ctx, backenddb.LeafGenerationPlanOptions{Force: true})
+	planCtx, planCancel := collectionMaintenanceTestContext(t)
+	planBefore, err := d.LeafGenerationPlan(planCtx, backenddb.LeafGenerationPlanOptions{Force: true})
+	planCancel()
 	if err != nil {
 		t.Fatalf("LeafGenerationPlan before pack: %v", err)
 	}
@@ -347,11 +347,13 @@ func TestCollectionLeafGenerationPackGC_RoundTripWithTemplateV1SecondaryIndexes(
 		t.Fatalf("CandidateBytesDead=%d, want reclaimable bytes before pack (plan=%+v)", got, planBefore)
 	}
 
-	packStats, err := d.LeafGenerationPackFromPlan(ctx, backenddb.LeafGenerationPackFromPlanOptions{
+	packCtx, packCancel := collectionMaintenanceTestContext(t)
+	packStats, err := d.LeafGenerationPackFromPlan(packCtx, backenddb.LeafGenerationPackFromPlanOptions{
 		Force:          true,
 		MaxGenerations: 1,
 		Sync:           true,
 	})
+	packCancel()
 	if err != nil {
 		t.Fatalf("LeafGenerationPackFromPlan: %v", err)
 	}
@@ -363,7 +365,9 @@ func TestCollectionLeafGenerationPackGC_RoundTripWithTemplateV1SecondaryIndexes(
 	}
 	requireCollectionMaintenanceTemplateReads(t, col)
 
-	gcStats, err := d.LeafGenerationGC(ctx, backenddb.LeafGenerationGCOptions{})
+	gcCtx, gcCancel := collectionMaintenanceTestContext(t)
+	gcStats, err := d.LeafGenerationGC(gcCtx, backenddb.LeafGenerationGCOptions{})
+	gcCancel()
 	if err != nil {
 		t.Fatalf("LeafGenerationGC: %v", err)
 	}
