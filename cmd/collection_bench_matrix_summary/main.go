@@ -281,7 +281,10 @@ func readMatrixIndex(path string) ([]matrixRow, error) {
 	}
 
 	documentFormatIdx, hasDocumentFormat := header["document_format"]
-	baseDir := filepath.Dir(path)
+	baseDir, err := filepath.Abs(filepath.Dir(path))
+	if err != nil {
+		return nil, fmt.Errorf("resolve matrix index directory: %w", err)
+	}
 	var rows []matrixRow
 	for _, record := range records[1:] {
 		if len(record) == 0 || strings.TrimSpace(record[0]) == "" {

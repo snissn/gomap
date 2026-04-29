@@ -74,6 +74,31 @@ func TestReadMatrixIndexAllowsAbsoluteReportPathInsideMatrixDir(t *testing.T) {
 	}
 }
 
+func TestReadMatrixIndexAllowsAbsoluteReportPathWithRelativeMatrixIndex(t *testing.T) {
+	dir := t.TempDir()
+	indexPath := filepath.Join(dir, "matrix_index.tsv")
+	reportMarkdown := filepath.Join(dir, "collections_report.md")
+	index := strings.Join([]string{
+		"cell\tengine\tdocument_format\tdata_outer_leaves_in_vlog\tindex_outer_leaves_in_vlog\tpager_chunk_size\tpager_sync_concurrency\treport_md\treport_json",
+		"cell_a\tproduction_fast\tjson\ttrue\ttrue\tprofile/default\tprofile/default\t" + reportMarkdown + "\tcell_a/collections_report.json",
+	}, "\n")
+	if err := os.WriteFile(indexPath, []byte(index), 0o644); err != nil {
+		t.Fatalf("write matrix index: %v", err)
+	}
+
+	t.Chdir(filepath.Dir(dir))
+	rows, err := readMatrixIndex(filepath.Join(filepath.Base(dir), "matrix_index.tsv"))
+	if err != nil {
+		t.Fatalf("readMatrixIndex: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("rows=%d want 1", len(rows))
+	}
+	if got := rows[0].ReportMarkdownPath; got != reportMarkdown {
+		t.Fatalf("ReportMarkdownPath=%q want %q", got, reportMarkdown)
+	}
+}
+
 func TestReadMatrixIndexRejectsAbsoluteReportPathOutsideMatrixDir(t *testing.T) {
 	dir := t.TempDir()
 	indexPath := filepath.Join(dir, "matrix_index.tsv")
