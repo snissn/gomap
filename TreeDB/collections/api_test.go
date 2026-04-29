@@ -236,8 +236,9 @@ func TestCollectionValueLogGC_RoundTripWithCompressedSecondaryIndexes(t *testing
 	}
 	requireCollectionMaintenanceReads(t, col)
 
-	stalePath := writeStandaloneValueLogSegment(t, opts.Dir, 7, 1, []byte("unreferenced collection-api gc segment"))
-	currentPath := writeStandaloneValueLogSegment(t, opts.Dir, 7, 2, []byte("current collection-api gc guard segment"))
+	syntheticLane := chooseUnusedStandaloneValueLogLane(t, opts.Dir)
+	stalePath := writeStandaloneValueLogSegment(t, opts.Dir, syntheticLane, 1, []byte("unreferenced collection-api gc segment"))
+	currentPath := writeStandaloneValueLogSegment(t, opts.Dir, syntheticLane, 2, []byte("current collection-api gc guard segment"))
 	if err := d.RefreshValueLogSet(); err != nil {
 		t.Fatalf("RefreshValueLogSet: %v", err)
 	}
@@ -356,6 +357,22 @@ func writeStandaloneValueLogSegment(t *testing.T, rootDir string, lane, seq uint
 		t.Fatalf("close value-log writer: %v", err)
 	}
 	return path
+}
+
+func chooseUnusedStandaloneValueLogLane(t *testing.T, rootDir string) uint32 {
+	t.Helper()
+	valueDir := backenddb.ValueLogDirPath(filepath.Join(rootDir, "maindb"))
+	for lane := uint32(254); lane > 0; lane-- {
+		matches, err := filepath.Glob(filepath.Join(valueDir, fmt.Sprintf("value-l%d-*.log", lane)))
+		if err != nil {
+			t.Fatalf("glob value-log lane %d: %v", lane, err)
+		}
+		if len(matches) == 0 {
+			return lane
+		}
+	}
+	t.Fatal("no unused value-log lane available for standalone GC segment")
+	return 0
 }
 
 func requireCollectionMaintenanceReads(t *testing.T, col *Collection) {
