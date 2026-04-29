@@ -19,23 +19,28 @@ const (
 	defaultMaxBSONObjectSize    = 16 * 1024 * 1024
 	defaultMaxWriteBatchSize    = 100_000
 	defaultMaxFindScanDocuments = 10_000
+	defaultMaxOpenCursors       = 1_024
 	defaultCursorBatchSize      = 101
 )
 
 type Server struct {
 	MaxMessageLength     int32
 	MaxFindScanDocuments int
+	MaxOpenCursors       int
 	Collections          *collections.CollectionManager
 
-	nextResponseID atomic.Int32
-	nextCursorID   atomic.Int64
-	cursorMu       sync.Mutex
-	cursors        map[int64]*serverCursor
+	nextResponseID   atomic.Int32
+	nextConnectionID atomic.Int64
+	nextCursorID     atomic.Int64
+	cursorMu         sync.Mutex
+	cursors          map[int64]*serverCursor
 }
 
 type serverCursor struct {
-	ns   string
-	docs []wire.Document
+	ns    string
+	owner int64
+	docs  []wire.Document
+	pos   int
 }
 
 func NewServer() *Server {
@@ -46,6 +51,8 @@ func NewServer() *Server {
 
 func (s *Server) ServeConn(ctx context.Context, conn net.Conn) error {
 	defer conn.Close()
+	owner := s.nextConnectionID.Add(1)
+	defer s.killCursorsForOwner(owner)
 
 	done := make(chan struct{})
 	defer close(done)
@@ -64,7 +71,7 @@ func (s *Server) ServeConn(ctx context.Context, conn net.Conn) error {
 		default:
 		}
 
-		if err := s.ServeOne(conn); err != nil {
+		if err := s.serveOne(conn, owner); err != nil {
 			if errors.Is(err, io.EOF) {
 				return nil
 			}
@@ -77,23 +84,27 @@ func (s *Server) ServeConn(ctx context.Context, conn net.Conn) error {
 }
 
 func (s *Server) ServeOne(rw io.ReadWriter) error {
+	return s.serveOne(rw, 0)
+}
+
+func (s *Server) serveOne(rw io.ReadWriter, cursorOwner int64) error {
 	h, body, err := wire.ReadMessage(rw, s.maxMessageLength())
 	if err != nil {
 		return err
 	}
-	response, err := s.handleMessage(h, body)
+	response, err := s.handleMessage(h, body, cursorOwner)
 	if err != nil {
 		return err
 	}
 	return writeFull(rw, response)
 }
 
-func (s *Server) handleMessage(h wire.Header, body []byte) ([]byte, error) {
+func (s *Server) handleMessage(h wire.Header, body []byte, cursorOwner int64) ([]byte, error) {
 	switch h.OpCode {
 	case wire.OpQuery:
-		return s.handleQuery(h, body)
+		return s.handleQuery(h, body, cursorOwner)
 	case wire.OpMsg:
-		return s.handleMsg(h, body)
+		return s.handleMsg(h, body, cursorOwner)
 	case wire.OpCompressed:
 		return nil, fmt.Errorf("%w: OP_COMPRESSED", wire.ErrUnsupported)
 	default:
@@ -101,7 +112,7 @@ func (s *Server) handleMessage(h wire.Header, body []byte) ([]byte, error) {
 	}
 }
 
-func (s *Server) handleQuery(h wire.Header, body []byte) ([]byte, error) {
+func (s *Server) handleQuery(h wire.Header, body []byte, cursorOwner int64) ([]byte, error) {
 	q, err := wire.ParseQuery(body)
 	if err != nil {
 		return nil, err
@@ -111,14 +122,14 @@ func (s *Server) handleQuery(h wire.Header, body []byte) ([]byte, error) {
 		return nil, err
 	}
 
-	response, err := s.commandResponse(name, q.Query, nil)
+	response, err := s.commandResponse(name, q.Query, nil, cursorOwner)
 	if err != nil {
 		return nil, err
 	}
 	return wire.AppendReplyMessage(nil, s.nextID(), h.RequestID, 0, 0, 0, response)
 }
 
-func (s *Server) handleMsg(h wire.Header, body []byte) ([]byte, error) {
+func (s *Server) handleMsg(h wire.Header, body []byte, cursorOwner int64) ([]byte, error) {
 	msg, err := wire.ParseMsg(body)
 	if err != nil {
 		return nil, err
@@ -128,14 +139,14 @@ func (s *Server) handleMsg(h wire.Header, body []byte) ([]byte, error) {
 		return nil, err
 	}
 
-	response, err := s.commandResponse(name, msg.Body, msg.Sequences)
+	response, err := s.commandResponse(name, msg.Body, msg.Sequences, cursorOwner)
 	if err != nil {
 		return nil, err
 	}
 	return wire.AppendMsgMessage(nil, s.nextID(), h.RequestID, 0, response)
 }
 
-func (s *Server) commandResponse(name string, command wire.Document, sequences []wire.DocumentSequence) (wire.Document, error) {
+func (s *Server) commandResponse(name string, command wire.Document, sequences []wire.DocumentSequence, cursorOwner int64) (wire.Document, error) {
 	switch name {
 	case "hello", "isMaster", "ismaster":
 		return marshalDocument(helloResponse(s.maxMessageLength()))
@@ -144,7 +155,7 @@ func (s *Server) commandResponse(name string, command wire.Document, sequences [
 	case "insert":
 		return s.insertResponse(command, sequences)
 	case "find":
-		return s.findResponse(command)
+		return s.findResponse(command, cursorOwner)
 	case "getMore":
 		return s.getMoreResponse(command)
 	case "killCursors":
@@ -219,6 +230,13 @@ func (s *Server) maxFindScanDocuments() int {
 		return defaultMaxFindScanDocuments
 	}
 	return s.MaxFindScanDocuments
+}
+
+func (s *Server) maxOpenCursors() int {
+	if s.MaxOpenCursors <= 0 {
+		return defaultMaxOpenCursors
+	}
+	return s.MaxOpenCursors
 }
 
 func (s *Server) nextID() int32 {

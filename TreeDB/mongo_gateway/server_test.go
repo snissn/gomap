@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -323,6 +324,19 @@ func TestServerIndexMetadataCommands(t *testing.T) {
 	assertInt32(t, createResponse, "numIndexesBefore", 1)
 	assertInt32(t, createResponse, "numIndexesAfter", 2)
 
+	idempotentResponse := serveCommand(t, server, 2271, bson.D{
+		{Key: "createIndexes", Value: "users"},
+		{Key: "indexes", Value: bson.A{bson.D{
+			{Key: "key", Value: bson.D{{Key: "email", Value: int32(1)}}},
+			{Key: "name", Value: "email_1"},
+			{Key: "unique", Value: true},
+		}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertOK(t, idempotentResponse)
+	assertInt32(t, idempotentResponse, "numIndexesBefore", 2)
+	assertInt32(t, idempotentResponse, "numIndexesAfter", 2)
+
 	collectionsResponse := serveCommand(t, server, 228, bson.D{
 		{Key: "listCollections", Value: int32(1)},
 		{Key: "nameOnly", Value: true},
@@ -365,6 +379,73 @@ func TestServerIndexMetadataCommands(t *testing.T) {
 		t.Fatalf("index batch after drop len=%d want %d", got, want)
 	}
 	assertIndexName(t, indexBatch[0], "_id_")
+}
+
+func TestServerIndexMetadataRejectsInvalidCommands(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	emptyCreate := serveCommand(t, server, 232, bson.D{
+		{Key: "createIndexes", Value: "empty"},
+		{Key: "indexes", Value: bson.A{}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, emptyCreate, "BadValue")
+
+	emptyName := serveCommand(t, server, 233, bson.D{
+		{Key: "createIndexes", Value: "users"},
+		{Key: "indexes", Value: bson.A{bson.D{
+			{Key: "key", Value: bson.D{{Key: "email", Value: int32(1)}}},
+			{Key: "name", Value: ""},
+		}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, emptyName, "BadValue")
+
+	invalidListCollectionsDB := serveCommand(t, server, 234, bson.D{
+		{Key: "listCollections", Value: int32(1)},
+		{Key: "$db", Value: "bad/name"},
+	})
+	assertCommandError(t, invalidListCollectionsDB, "BadValue")
+
+	assertOK(t, serveCommand(t, server, 235, bson.D{
+		{Key: "insert", Value: "dupes"},
+		{Key: "documents", Value: bson.A{
+			bson.D{{Key: "_id", Value: "u1"}, {Key: "email", Value: "same@example.com"}},
+			bson.D{{Key: "_id", Value: "u2"}, {Key: "email", Value: "same@example.com"}},
+		}},
+		{Key: "$db", Value: "app"},
+	}))
+	uniqueConflict := serveCommand(t, server, 236, bson.D{
+		{Key: "createIndexes", Value: "dupes"},
+		{Key: "indexes", Value: bson.A{bson.D{
+			{Key: "key", Value: bson.D{{Key: "email", Value: int32(1)}}},
+			{Key: "name", Value: "email_1"},
+			{Key: "unique", Value: true},
+		}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, uniqueConflict, "DuplicateKey")
+
+	assertOK(t, serveCommand(t, server, 237, bson.D{
+		{Key: "createIndexes", Value: "users"},
+		{Key: "indexes", Value: bson.A{bson.D{
+			{Key: "key", Value: bson.D{{Key: "city", Value: int32(1)}}},
+			{Key: "name", Value: "city_1"},
+		}}},
+		{Key: "$db", Value: "app"},
+	}))
+	emptyDrop := serveCommand(t, server, 238, bson.D{
+		{Key: "dropIndexes", Value: "users"},
+		{Key: "index", Value: bson.A{}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, emptyDrop, "FailedToParse")
 }
 
 func TestServerFindPlannerIndexedAndBoundedPredicates(t *testing.T) {
@@ -435,6 +516,93 @@ func TestServerFindPlannerIndexedAndBoundedPredicates(t *testing.T) {
 	if got, ok := firstBatch[0].Lookup("name").StringValueOK(); !ok || got != "katherine" {
 		t.Fatalf("$in sorted/skipped name=%q ok=%v want katherine", got, ok)
 	}
+
+	withoutID := serveCommand(t, server, 236, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "_id", Value: id1}}},
+		{Key: "projection", Value: bson.D{{Key: "_id", Value: int32(0)}}},
+		{Key: "$db", Value: "app"},
+	})
+	firstBatch = cursorFirstBatch(t, withoutID)
+	if len(firstBatch) != 1 {
+		t.Fatalf("_id exclude firstBatch len=%d want 1", len(firstBatch))
+	}
+	if !firstBatch[0].Lookup("_id").IsZero() {
+		t.Fatalf("_id exclude projection returned _id: %v", firstBatch[0])
+	}
+	if got, ok := firstBatch[0].Lookup("name").StringValueOK(); !ok || got != "ada" {
+		t.Fatalf("_id exclude name=%q ok=%v want ada", got, ok)
+	}
+
+	onlyID := serveCommand(t, server, 237, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "_id", Value: id1}}},
+		{Key: "projection", Value: bson.D{{Key: "_id", Value: int32(1)}}},
+		{Key: "$db", Value: "app"},
+	})
+	firstBatch = cursorFirstBatch(t, onlyID)
+	if len(firstBatch) != 1 {
+		t.Fatalf("_id include firstBatch len=%d want 1", len(firstBatch))
+	}
+	elements, err := firstBatch[0].Elements()
+	if err != nil {
+		t.Fatalf("_id include elements: %v", err)
+	}
+	if len(elements) != 1 || firstBatch[0].Lookup("_id").IsZero() {
+		t.Fatalf("_id include projection=%v want only _id", firstBatch[0])
+	}
+
+	id4 := bson.NewObjectID()
+	id5 := bson.NewObjectID()
+	assertOK(t, serveCommand(t, server, 238, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{
+			bson.D{{Key: "_id", Value: id4}, {Key: "name", Value: "large-a"}, {Key: "big", Value: int64(9007199254740992)}},
+			bson.D{{Key: "_id", Value: id5}, {Key: "name", Value: "large-b"}, {Key: "big", Value: int64(9007199254740993)}},
+		}},
+		{Key: "$db", Value: "app"},
+	}))
+	largeFind := serveCommand(t, server, 239, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "big", Value: int64(9007199254740993)}}},
+		{Key: "$db", Value: "app"},
+	})
+	firstBatch = cursorFirstBatch(t, largeFind)
+	if len(firstBatch) != 1 {
+		t.Fatalf("large int firstBatch len=%d want 1", len(firstBatch))
+	}
+	if got, ok := firstBatch[0].Lookup("name").StringValueOK(); !ok || got != "large-b" {
+		t.Fatalf("large int matched name=%q ok=%v want large-b", got, ok)
+	}
+
+	negativeSkipMissingCollection := serveCommand(t, server, 240, bson.D{
+		{Key: "find", Value: "missing"},
+		{Key: "filter", Value: bson.D{}},
+		{Key: "skip", Value: int32(-1)},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, negativeSkipMissingCollection, "BadValue")
+
+	emptyAnd := serveCommand(t, server, 241, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "$and", Value: bson.A{}}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, emptyAnd, "BadValue")
+
+	mixedOperator := serveCommand(t, server, 242, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "age", Value: bson.D{{Key: "x", Value: int32(1)}, {Key: "$gte", Value: int64(40)}}}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, mixedOperator, "BadValue")
+
+	nonIndexableValue := serveCommand(t, server, 243, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "city", Value: bson.D{{Key: "nested", Value: "hnl"}}}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, nonIndexableValue, "BadValue")
 }
 
 func TestServerFindGetMoreAndKillCursors(t *testing.T) {
@@ -508,6 +676,201 @@ func TestServerFindGetMoreAndKillCursors(t *testing.T) {
 	assertCommandError(t, missingResponse, "CursorNotFound")
 }
 
+func TestServerFindBatchSizeZeroKeepsCursorEmpty(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	assertOK(t, serveCommand(t, server, 241, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{
+			bson.D{{Key: "_id", Value: "u1"}, {Key: "name", Value: "ada"}},
+			bson.D{{Key: "_id", Value: "u2"}, {Key: "name", Value: "grace"}},
+		}},
+		{Key: "$db", Value: "app"},
+	}))
+
+	findResponse := serveCommand(t, server, 242, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{}},
+		{Key: "sort", Value: bson.D{{Key: "name", Value: int32(1)}}},
+		{Key: "batchSize", Value: int32(0)},
+		{Key: "$db", Value: "app"},
+	})
+	if firstBatch := cursorFirstBatch(t, findResponse); len(firstBatch) != 0 {
+		t.Fatalf("firstBatch len=%d want 0", len(firstBatch))
+	}
+	cursorID := cursorIDFromResponse(t, findResponse)
+	if cursorID == 0 {
+		t.Fatal("cursor id=0 want open cursor")
+	}
+
+	emptyGetMore := serveCommand(t, server, 243, bson.D{
+		{Key: "getMore", Value: cursorID},
+		{Key: "collection", Value: "users"},
+		{Key: "batchSize", Value: int32(0)},
+		{Key: "$db", Value: "app"},
+	})
+	if nextBatch := cursorNextBatch(t, emptyGetMore); len(nextBatch) != 0 {
+		t.Fatalf("empty getMore nextBatch len=%d want 0", len(nextBatch))
+	}
+	if nextID := cursorIDFromResponse(t, emptyGetMore); nextID != cursorID {
+		t.Fatalf("cursor id after empty getMore=%d want %d", nextID, cursorID)
+	}
+
+	getMoreResponse := serveCommand(t, server, 244, bson.D{
+		{Key: "getMore", Value: cursorID},
+		{Key: "collection", Value: "users"},
+		{Key: "batchSize", Value: int32(1)},
+		{Key: "$db", Value: "app"},
+	})
+	nextBatch := cursorNextBatch(t, getMoreResponse)
+	if len(nextBatch) != 1 {
+		t.Fatalf("nextBatch len=%d want 1", len(nextBatch))
+	}
+	name, ok := nextBatch[0].Lookup("name").StringValueOK()
+	if !ok || name != "ada" {
+		t.Fatalf("nextBatch[0].name=%q ok=%v want ada", name, ok)
+	}
+}
+
+func TestServerGetMoreWithoutBatchSizeUsesMessageLimit(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	documents := make(bson.A, 0, 4)
+	for _, name := range []string{"ada", "grace", "katherine", "mary"} {
+		documents = append(documents, bson.D{{Key: "_id", Value: name}, {Key: "name", Value: name}})
+	}
+	assertOK(t, serveCommand(t, server, 245, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: documents},
+		{Key: "$db", Value: "app"},
+	}))
+
+	findResponse := serveCommand(t, server, 246, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{}},
+		{Key: "sort", Value: bson.D{{Key: "name", Value: int32(1)}}},
+		{Key: "batchSize", Value: int32(1)},
+		{Key: "$db", Value: "app"},
+	})
+	if firstBatch := cursorFirstBatch(t, findResponse); len(firstBatch) != 1 {
+		t.Fatalf("firstBatch len=%d want 1", len(firstBatch))
+	}
+	cursorID := cursorIDFromResponse(t, findResponse)
+	if cursorID == 0 {
+		t.Fatal("cursor id=0 want open cursor")
+	}
+
+	getMoreResponse := serveCommand(t, server, 247, bson.D{
+		{Key: "getMore", Value: cursorID},
+		{Key: "collection", Value: "users"},
+		{Key: "$db", Value: "app"},
+	})
+	nextBatch := cursorNextBatch(t, getMoreResponse)
+	if len(nextBatch) != 3 {
+		t.Fatalf("nextBatch len=%d want 3", len(nextBatch))
+	}
+	if nextID := cursorIDFromResponse(t, getMoreResponse); nextID != 0 {
+		t.Fatalf("cursor id after getMore=%d want 0", nextID)
+	}
+}
+
+func TestServerCursorOwnerCleanup(t *testing.T) {
+	server := NewServer()
+	docs := []wire.Document{
+		mustDocument(t, bson.D{{Key: "_id", Value: "u1"}}),
+		mustDocument(t, bson.D{{Key: "_id", Value: "u2"}}),
+	}
+	cursorID, firstBatch, err := server.openCursor("app.users", docs, 0, true, defaultCursorBatchSize, 99)
+	if err != nil {
+		t.Fatalf("openCursor: %v", err)
+	}
+	if cursorID == 0 {
+		t.Fatal("cursor id=0 want open cursor")
+	}
+	if len(firstBatch) != 0 {
+		t.Fatalf("firstBatch len=%d want 0", len(firstBatch))
+	}
+
+	server.killCursorsForOwner(99)
+	if _, _, ok, err := server.getMore(cursorID, "app.users", 1, true, defaultCursorBatchSize); err != nil || ok {
+		t.Fatalf("getMore after owner cleanup ok/err=%v/%v want false/nil", ok, err)
+	}
+}
+
+func TestServerCursorLimit(t *testing.T) {
+	server := NewServer()
+	server.MaxOpenCursors = 1
+	docs := []wire.Document{
+		mustDocument(t, bson.D{{Key: "_id", Value: "u1"}}),
+	}
+
+	cursorID, _, err := server.openCursor("app.users", docs, 0, true, defaultCursorBatchSize, 1)
+	if err != nil {
+		t.Fatalf("openCursor first: %v", err)
+	}
+	if cursorID == 0 {
+		t.Fatal("cursor id=0 want open cursor")
+	}
+	if _, _, err := server.openCursor("app.users", docs, 0, true, defaultCursorBatchSize, 2); err == nil {
+		t.Fatal("second openCursor err=nil want cursor limit error")
+	}
+}
+
+func TestServerCursorBatchesRespectMessageSize(t *testing.T) {
+	server := NewServer()
+	server.MaxMessageLength = 5 * 1024
+	docs := []wire.Document{
+		mustDocument(t, bson.D{{Key: "_id", Value: "u1"}, {Key: "payload", Value: strings.Repeat("a", 900)}}),
+		mustDocument(t, bson.D{{Key: "_id", Value: "u2"}, {Key: "payload", Value: strings.Repeat("b", 900)}}),
+		mustDocument(t, bson.D{{Key: "_id", Value: "u3"}, {Key: "payload", Value: strings.Repeat("c", 900)}}),
+	}
+
+	cursorID, firstBatch, err := server.openCursor("app.users", docs, 10, true, defaultCursorBatchSize, 0)
+	if err != nil {
+		t.Fatalf("openCursor: %v", err)
+	}
+	if len(firstBatch) != 1 {
+		t.Fatalf("firstBatch len=%d want 1", len(firstBatch))
+	}
+	if cursorID == 0 {
+		t.Fatal("cursor id=0 want open cursor")
+	}
+
+	nextID, nextBatch, ok, err := server.getMore(cursorID, "app.users", 10, true, defaultCursorBatchSize)
+	if err != nil || !ok {
+		t.Fatalf("getMore ok/err=%v/%v want true/nil", ok, err)
+	}
+	if len(nextBatch) != 1 {
+		t.Fatalf("nextBatch len=%d want 1", len(nextBatch))
+	}
+	if nextID != cursorID {
+		t.Fatalf("cursor id after getMore=%d want %d", nextID, cursorID)
+	}
+
+	finalID, finalBatch, ok, err := server.getMore(cursorID, "app.users", 10, true, defaultCursorBatchSize)
+	if err != nil || !ok {
+		t.Fatalf("final getMore ok/err=%v/%v want true/nil", ok, err)
+	}
+	if len(finalBatch) != 1 {
+		t.Fatalf("finalBatch len=%d want 1", len(finalBatch))
+	}
+	if finalID != 0 {
+		t.Fatalf("final cursor id=%d want 0", finalID)
+	}
+}
+
 func TestApplySetUpdateAppendsNewFieldsInSetOrder(t *testing.T) {
 	doc, err := bson.Marshal(bson.D{
 		{Key: "_id", Value: "u1"},
@@ -550,6 +913,18 @@ func TestApplySetUpdateAppendsNewFieldsInSetOrder(t *testing.T) {
 		if keys[i] != want[i] {
 			t.Fatalf("keys=%v want %v", keys, want)
 		}
+	}
+}
+
+func TestCompareDocumentFieldTreatsMissingAsNull(t *testing.T) {
+	missing := mustDocument(t, bson.D{{Key: "_id", Value: "missing"}})
+	nullValue := mustDocument(t, bson.D{{Key: "_id", Value: "null"}, {Key: "rank", Value: nil}})
+	numberValue := mustDocument(t, bson.D{{Key: "_id", Value: "number"}, {Key: "rank", Value: int64(1)}})
+	if cmp := compareDocumentField(missing, nullValue, "rank"); cmp != 0 {
+		t.Fatalf("missing vs null cmp=%d want 0", cmp)
+	}
+	if cmp := compareDocumentField(missing, numberValue, "rank"); cmp >= 0 {
+		t.Fatalf("missing vs number cmp=%d want <0", cmp)
 	}
 }
 
