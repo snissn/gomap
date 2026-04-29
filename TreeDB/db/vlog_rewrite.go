@@ -2420,7 +2420,7 @@ func (db *DB) applyRewriteSwapBatchToCollectionRoot(target *collectionRewriteRoo
 
 	if target.systemRoot != systemRoot || target.rootID == 0 || len(target.descriptorAliases) == 0 {
 		reader := newValueReader(state.ValueLogSet)
-		collectionRoot, descriptorAliases, ok, err := lookupCollectionRootDescriptorAliases(idx.pager, reader, systemRoot, target.descriptorKey)
+		collectionRoot, descriptorAliases, ok, err := lookupCollectionRootDescriptorAliases(idx.pager, reader, systemRoot, target.descriptorKey, target.descriptorAliases)
 		if err != nil {
 			return err
 		}
@@ -2525,11 +2525,11 @@ func (db *DB) canTrackRewriteValueLogRefDelta(baseSeq uint64, outerLeavesInValue
 	return db != nil && db.valueLogRefTracker != nil && db.valueLogRefTracker.canTrack(baseSeq) && !outerLeavesInValueLog
 }
 
-func lookupCollectionRootDescriptorAliases(p *pager.Pager, reader tree.SlabReader, systemRootID uint64, key []byte) (uint64, [][]byte, bool, error) {
+func lookupCollectionRootDescriptorAliases(p *pager.Pager, reader tree.SlabReader, systemRootID uint64, key []byte, aliasKeys [][]byte) (uint64, [][]byte, bool, error) {
 	if p == nil {
 		return 0, nil, false, errors.New("vlog-rewrite: missing pager")
 	}
-	if systemRootID == 0 || len(key) == 0 {
+	if systemRootID == 0 || (len(key) == 0 && len(aliasKeys) == 0) {
 		return 0, nil, false, nil
 	}
 	descriptors, err := vacuumCollectCollectionRootDescriptors(p, reader, systemRootID)
@@ -2538,10 +2538,16 @@ func lookupCollectionRootDescriptorAliases(p *pager.Pager, reader tree.SlabReade
 	}
 	var rootID uint64
 	for _, descriptor := range descriptors {
-		if bytes.Equal(descriptor.key, key) {
-			rootID = descriptor.rootID
-			break
+		if !collectionRootDescriptorKeyMatches(descriptor.key, key, aliasKeys) {
+			continue
 		}
+		if descriptor.rootID == 0 {
+			continue
+		}
+		if rootID != 0 && rootID != descriptor.rootID {
+			return 0, nil, false, fmt.Errorf("vlog-rewrite: collection descriptor aliases resolve to conflicting roots %d and %d", rootID, descriptor.rootID)
+		}
+		rootID = descriptor.rootID
 	}
 	if rootID == 0 {
 		return 0, nil, false, nil
@@ -2553,6 +2559,18 @@ func lookupCollectionRootDescriptorAliases(p *pager.Pager, reader tree.SlabReade
 		}
 	}
 	return rootID, aliases, true, nil
+}
+
+func collectionRootDescriptorKeyMatches(got, primary []byte, aliases [][]byte) bool {
+	if len(primary) > 0 && bytes.Equal(got, primary) {
+		return true
+	}
+	for _, alias := range aliases {
+		if bytes.Equal(got, alias) {
+			return true
+		}
+	}
+	return false
 }
 
 func (db *DB) applyRewriteSwapBatchOptimistic(swaps []rewriteSwap, sync bool) (bool, error) {

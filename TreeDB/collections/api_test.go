@@ -5,9 +5,9 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -197,13 +197,13 @@ func TestCollectionValueLogGC_RoundTripWithCompressedSecondaryIndexes(t *testing
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	closed := false
+	var closeOnce sync.Once
+	var closeErr error
 	closeDB := func() error {
-		if closed {
-			return nil
-		}
-		closed = true
-		return cleanup()
+		closeOnce.Do(func() {
+			closeErr = cleanup()
+		})
+		return closeErr
 	}
 	t.Cleanup(func() { _ = closeDB() })
 
@@ -236,9 +236,9 @@ func TestCollectionValueLogGC_RoundTripWithCompressedSecondaryIndexes(t *testing
 	requireCollectionMaintenanceReads(t, col)
 
 	valueLogDir := backenddb.ValueLogDirPath(d.Dir())
-	syntheticLane := chooseUnusedStandaloneValueLogLane(t, valueLogDir)
-	stalePath := writeStandaloneValueLogSegment(t, valueLogDir, syntheticLane, 1, []byte("unreferenced collection-api gc segment"))
-	_ = writeStandaloneValueLogSegment(t, valueLogDir, syntheticLane, 2, []byte("newer unreferenced collection-api gc segment"))
+	syntheticLane, staleSeq := chooseStandaloneValueLogSegmentStart(t, valueLogDir)
+	stalePath := writeStandaloneValueLogSegment(t, valueLogDir, syntheticLane, staleSeq, []byte("unreferenced collection-api gc segment"))
+	_ = writeStandaloneValueLogSegment(t, valueLogDir, syntheticLane, staleSeq+1, []byte("newer unreferenced collection-api gc segment"))
 	if err := d.RefreshValueLogSet(); err != nil {
 		t.Fatalf("RefreshValueLogSet: %v", err)
 	}
@@ -331,9 +331,9 @@ func TestCollectionLeafGenerationPackGC_RoundTripWithTemplateV1SecondaryIndexes(
 		t.Fatalf("checkpoint: %v", err)
 	}
 
-	ctx, cancel := collectionMaintenanceTestContext(t)
-	defer cancel()
-	planBefore, err := d.LeafGenerationPlan(ctx, backenddb.LeafGenerationPlanOptions{Force: true})
+	planCtx, planCancel := collectionMaintenanceTestContext(t)
+	planBefore, err := d.LeafGenerationPlan(planCtx, backenddb.LeafGenerationPlanOptions{Force: true})
+	planCancel()
 	if err != nil {
 		t.Fatalf("LeafGenerationPlan before pack: %v", err)
 	}
@@ -347,11 +347,13 @@ func TestCollectionLeafGenerationPackGC_RoundTripWithTemplateV1SecondaryIndexes(
 		t.Fatalf("CandidateBytesDead=%d, want reclaimable bytes before pack (plan=%+v)", got, planBefore)
 	}
 
-	packStats, err := d.LeafGenerationPackFromPlan(ctx, backenddb.LeafGenerationPackFromPlanOptions{
+	packCtx, packCancel := collectionMaintenanceTestContext(t)
+	packStats, err := d.LeafGenerationPackFromPlan(packCtx, backenddb.LeafGenerationPackFromPlanOptions{
 		Force:          true,
 		MaxGenerations: 1,
 		Sync:           true,
 	})
+	packCancel()
 	if err != nil {
 		t.Fatalf("LeafGenerationPackFromPlan: %v", err)
 	}
@@ -363,7 +365,9 @@ func TestCollectionLeafGenerationPackGC_RoundTripWithTemplateV1SecondaryIndexes(
 	}
 	requireCollectionMaintenanceTemplateReads(t, col)
 
-	gcStats, err := d.LeafGenerationGC(ctx, backenddb.LeafGenerationGCOptions{})
+	gcCtx, gcCancel := collectionMaintenanceTestContext(t)
+	gcStats, err := d.LeafGenerationGC(gcCtx, backenddb.LeafGenerationGCOptions{})
+	gcCancel()
 	if err != nil {
 		t.Fatalf("LeafGenerationGC: %v", err)
 	}
@@ -471,7 +475,7 @@ func writeStandaloneValueLogSegment(t *testing.T, valueDir string, lane, seq uin
 	if err != nil {
 		t.Fatalf("EncodeFileID(%d,%d): %v", lane, seq, err)
 	}
-	path := filepath.Join(valueDir, fmt.Sprintf("value-l%d-%06d.log", lane, seq))
+	path := valuelog.SegmentPath(valueDir, fileID)
 	writer, err := valuelog.NewWriter(path, fileID)
 	if err != nil {
 		t.Fatalf("NewWriter(%s): %v", path, err)
@@ -486,19 +490,48 @@ func writeStandaloneValueLogSegment(t *testing.T, valueDir string, lane, seq uin
 	return path
 }
 
-func chooseUnusedStandaloneValueLogLane(t *testing.T, valueDir string) uint32 {
+func chooseStandaloneValueLogSegmentStart(t *testing.T, valueDir string) (uint32, uint32) {
 	t.Helper()
-	for lane := uint32(254); lane > 0; lane-- {
-		matches, err := filepath.Glob(filepath.Join(valueDir, fmt.Sprintf("value-l%d-*.log", lane)))
-		if err != nil {
-			t.Fatalf("glob value-log lane %d: %v", lane, err)
-		}
-		if len(matches) == 0 {
-			return lane
+	if err := os.MkdirAll(valueDir, 0o755); err != nil {
+		t.Fatalf("mkdir value log dir: %v", err)
+	}
+	mgr, err := valuelog.NewManager(valueDir)
+	if err != nil {
+		t.Fatalf("new value-log manager for synthetic segment lane: %v", err)
+	}
+	defer func() { _ = mgr.Close() }()
+	set := mgr.CurrentSet()
+	defer func() { _ = mgr.Release(set) }()
+	lane, startSeq, ok := chooseStandaloneValueLogSegmentStartFromSet(set)
+	if !ok {
+		t.Fatal("no value-log lane hint available for standalone GC segment")
+	}
+	if startSeq >= ^uint32(0)-1 {
+		t.Fatalf("value-log lane %d sequence exhausted near %d", lane, startSeq)
+	}
+	return lane, startSeq + 1
+}
+
+func chooseStandaloneValueLogSegmentStartFromSet(set *valuelog.Set) (uint32, uint32, bool) {
+	maxSeqByLane := make(map[uint32]uint32)
+	if set != nil {
+		for fileID := range set.Files {
+			lane, seq := valuelog.DecodeFileID(fileID)
+			if lane == valuelog.ReservedLeafLogLaneID {
+				continue
+			}
+			if seq > maxSeqByLane[lane] {
+				maxSeqByLane[lane] = seq
+			}
 		}
 	}
-	t.Fatal("no unused value-log lane available for standalone GC segment")
-	return 0
+	for lane := uint32(valuelog.ReservedLeafLogLaneID); lane > 0; lane-- {
+		candidate := lane - 1
+		if _, used := maxSeqByLane[candidate]; !used {
+			return candidate, 0, true
+		}
+	}
+	return 0, maxSeqByLane[0], true
 }
 
 func requireCollectionMaintenanceReads(t *testing.T, col *Collection) {
