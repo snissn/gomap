@@ -266,6 +266,64 @@ func TestValueLogRefTracker_PreservesFastPathForUnchangedCollectionDescriptors(t
 	}
 }
 
+func TestValueLogRefTracker_PreservesFastPathForCollectionDescriptorRepresentationChange(t *testing.T) {
+	dir := t.TempDir()
+	d, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	referenced := appendPointersInNewSegment(t, dir, 0, 1, 45_000, 1, func(int) []byte {
+		return bytes.Repeat([]byte("representation-change-live|"), 64)
+	})[0]
+	collectionRoot, err := d.PublishOrderedRootIterator(0, mustFrozenSystemPointerMemtable(t, "doc/p", referenced).NewIterator(nil, nil))
+	if err != nil {
+		t.Fatalf("publish collection root: %v", err)
+	}
+	descriptorPtr := appendPointersInNewSegment(t, dir, 0, 2, 46_000, 1, func(int) []byte {
+		return encodeMaintenanceRootID(collectionRoot)
+	})[0]
+	if _, err := d.PublishSystemRootIterator(mustFrozenSystemPointerMemtable(t, maintenanceTestCollectionRootKey, descriptorPtr).NewIterator(nil, nil)); err != nil {
+		t.Fatalf("publish pointer-backed system descriptor: %v", err)
+	}
+	if _, err := d.referencedValueLogSegments(context.Background()); err != nil {
+		t.Fatalf("prime value-log ref tracker: %v", err)
+	}
+	if _, ok := d.valueLogRefTracker.referencedSet(d.currentCommitSeq()); !ok {
+		t.Fatal("expected primed value-log ref tracker")
+	}
+
+	if _, err := d.PublishSystemRootIterator(mustFrozenRawMemtable(t,
+		maintenanceTestCollectionRootKey, encodeMaintenanceRootID(collectionRoot),
+		"sys/changed", "value",
+	).NewIterator(nil, nil)); err != nil {
+		t.Fatalf("publish inline system descriptor: %v", err)
+	}
+	seq := d.currentCommitSeq()
+	incRefs, ok := d.valueLogRefTracker.referencedSet(seq)
+	if !ok {
+		t.Fatal("expected descriptor representation change to preserve value-log ref tracker")
+	}
+	fullCounts, fullSeq, err := d.scanValueLogRefCounts(context.Background())
+	if err != nil {
+		t.Fatalf("scanValueLogRefCounts: %v", err)
+	}
+	if fullSeq != seq {
+		t.Fatalf("scan seq mismatch: got=%d want=%d", fullSeq, seq)
+	}
+	fullRefs := valueLogRefSetFromCounts(fullCounts)
+	if !reflect.DeepEqual(incRefs, fullRefs) {
+		t.Fatalf("incremental/full-scan mismatch: incremental=%v full=%v", incRefs, fullRefs)
+	}
+	if _, ok := incRefs[referenced.FileID]; !ok {
+		t.Fatalf("expected collection-referenced segment %d to remain tracked", referenced.FileID)
+	}
+	if _, ok := incRefs[descriptorPtr.FileID]; ok {
+		t.Fatalf("descriptor pointer segment %d remained tracked after inline rewrite", descriptorPtr.FileID)
+	}
+}
+
 func TestValueLogGC_KeepsSegmentMadeReachableByDeltaGroupSystemDescriptorOnly(t *testing.T) {
 	dir := t.TempDir()
 	d, err := Open(Options{Dir: dir})
