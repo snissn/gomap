@@ -255,7 +255,19 @@ func TestCollectionValueLogGC_RoundTripWithCompressedSecondaryIndexes(t *testing
 	if _, err := os.Stat(currentPath); err != nil {
 		t.Fatalf("expected current guard segment to remain: %v", err)
 	}
-	requireCollectionMaintenanceReads(t, col)
+	if err := closeDB(); err != nil {
+		t.Fatalf("close db after value-log GC: %v", err)
+	}
+	reopened, reopenedCleanup, err := treedb.OpenBackendWithCachedLeafLog(opts)
+	if err != nil {
+		t.Fatalf("reopen db after value-log GC: %v", err)
+	}
+	defer func() { _ = reopenedCleanup() }()
+	reopenedCol, err := NewCollectionManager(reopened).OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection after value-log GC: %v", err)
+	}
+	requireCollectionMaintenanceReads(t, reopenedCol)
 }
 
 func TestCollectionLeafGenerationPackGC_RoundTripWithTemplateV1SecondaryIndexes(t *testing.T) {
