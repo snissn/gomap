@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -75,9 +76,40 @@ func TestValidateResettableTreeDBDirRejectsDangerousPaths(t *testing.T) {
 			t.Fatal("validateResettableTreeDBDir accepted checkout child")
 		}
 	}
-	safe := filepath.Join(t.TempDir(), "treedb")
+	safeRoot := t.TempDir()
+	if realSafeRoot, err := filepath.EvalSymlinks(safeRoot); err == nil {
+		safeRoot = realSafeRoot
+	}
+	safe := filepath.Join(safeRoot, "treedb")
 	if got, err := validateResettableTreeDBDir(safe); err != nil || got == "" {
 		t.Fatalf("validate safe dir got/err=%q/%v", got, err)
+	}
+}
+
+func TestCheckoutPathCandidatesIncludeResolvedCWD(t *testing.T) {
+	root := t.TempDir()
+	realDir := filepath.Join(root, "real")
+	if err := os.Mkdir(realDir, 0o700); err != nil {
+		t.Fatalf("mkdir real: %v", err)
+	}
+	linkDir := filepath.Join(root, "link")
+	if err := os.Symlink(realDir, linkDir); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+
+	wantReal := realDir
+	if evaluated, err := filepath.EvalSymlinks(realDir); err == nil {
+		wantReal = evaluated
+	}
+	candidates := checkoutPathCandidates(linkDir)
+	foundReal := false
+	for _, candidate := range candidates {
+		if candidate == wantReal {
+			foundReal = true
+		}
+	}
+	if !foundReal {
+		t.Fatalf("checkoutPathCandidates(%q)=%v missing real dir %q", linkDir, candidates, wantReal)
 	}
 }
 
@@ -129,6 +161,9 @@ func TestRedactMongoURI(t *testing.T) {
 }
 
 func TestParseConfigValidation(t *testing.T) {
+	if _, err := parseConfig([]string{"-bad"}); err == nil || !strings.Contains(err.Error(), "Usage of mongo_gateway_bench") {
+		t.Fatalf("bad flag err=%v want usage", err)
+	}
 	if _, err := parseConfig([]string{"-target", "bad"}); err == nil {
 		t.Fatal("bad target accepted")
 	}

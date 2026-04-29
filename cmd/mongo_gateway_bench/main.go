@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -130,7 +131,8 @@ func run(parent context.Context, args []string) error {
 func parseConfig(args []string) (config, error) {
 	cfg := config{}
 	fs := flag.NewFlagSet("mongo_gateway_bench", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
+	var flagOutput bytes.Buffer
+	fs.SetOutput(&flagOutput)
 	fs.StringVar(&cfg.Target, "target", "treedb", "benchmark target: treedb or mongo")
 	fs.StringVar(&cfg.MongoURI, "mongo-uri", "mongodb://127.0.0.1:27017", "MongoDB URI for -target mongo")
 	fs.StringVar(&cfg.TreeDBDir, "treedb-dir", "", "TreeDB directory for -target treedb; empty uses a temp dir")
@@ -148,6 +150,9 @@ func parseConfig(args []string) (config, error) {
 	fs.DurationVar(&cfg.Timeout, "timeout", 10*time.Minute, "overall benchmark timeout")
 	fs.StringVar(&cfg.Format, "format", "text", "output format: text or json")
 	if err := fs.Parse(args); err != nil {
+		if output := strings.TrimSpace(flagOutput.String()); output != "" {
+			return config{}, fmt.Errorf("%w\n%s", err, output)
+		}
 		return config{}, err
 	}
 	if cfg.Target != "treedb" && cfg.Target != "mongo" {
@@ -309,9 +314,10 @@ func validateResettableTreeDBDir(dir string) (string, error) {
 		return "", fmt.Errorf("unsafe treedb-dir %q", dir)
 	}
 	if cwd, err := os.Getwd(); err == nil {
-		cwdAbs, err := filepath.Abs(cwd)
-		if err == nil && (abs == cwdAbs || isPathDescendant(cwdAbs, abs)) {
-			return "", fmt.Errorf("unsafe treedb-dir %q", dir)
+		for _, root := range checkoutPathCandidates(cwd) {
+			if abs == root || isPathDescendant(root, abs) {
+				return "", fmt.Errorf("unsafe treedb-dir %q", dir)
+			}
 		}
 	}
 	if tmp := os.TempDir(); tmp != "" {
@@ -325,7 +331,24 @@ func validateResettableTreeDBDir(dir string) (string, error) {
 	return abs, nil
 }
 
+func checkoutPathCandidates(cwd string) []string {
+	cwdAbs, err := filepath.Abs(cwd)
+	if err != nil {
+		return nil
+	}
+	candidates := []string{filepath.Clean(cwdAbs)}
+	if realCWD, err := filepath.EvalSymlinks(cwdAbs); err == nil {
+		realCWD = filepath.Clean(realCWD)
+		if realCWD != candidates[0] {
+			candidates = append(candidates, realCWD)
+		}
+	}
+	return candidates
+}
+
 func isPathDescendant(parent, child string) bool {
+	parent = filepath.Clean(parent)
+	child = filepath.Clean(child)
 	rel, err := filepath.Rel(parent, child)
 	if err != nil || rel == "." || rel == ".." {
 		return false
@@ -420,9 +443,9 @@ func serveLoop(ctx context.Context, ln net.Listener, server *mongogateway.Server
 			serveErr <- err
 			return
 		}
-		go func() {
+		go func(conn net.Conn) {
 			_ = server.ServeConn(ctx, conn)
-		}()
+		}(conn)
 	}
 }
 
@@ -437,7 +460,9 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget) (*benchm
 		SecondaryIndexes: cfg.SecondaryIndexes,
 	}
 	if cfg.Target == "treedb" {
-		result.TreeDBDir = target.treedbDir
+		if cfg.TreeDBDir != "" || cfg.KeepTreeDBDir {
+			result.TreeDBDir = target.treedbDir
+		}
 	} else {
 		result.MongoURI = redactMongoURI(cfg.MongoURI)
 	}
