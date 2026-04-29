@@ -171,7 +171,10 @@ func (db *DB) LeafGenerationGC(ctx context.Context, opts LeafGenerationGCOptions
 	}
 
 	prePrune := manifest.clone()
-	manifest, pruned, filesDeleted := pruneDeletedLeafGenerationRecords(manifest, filePaths)
+	manifest, pruned, filesDeleted, err := db.pruneDeletedLeafGenerationRecords(manifest, filePaths)
+	if err != nil {
+		return stats, err
+	}
 	if !pruned {
 		return stats, nil
 	}
@@ -189,7 +192,10 @@ func collectLiveLeafGenerationIDs(ctx context.Context, snap *Snapshot) (map[uint
 	if snap == nil || snap.db == nil {
 		return live, nil
 	}
-	scan, err := snap.db.leafGenerationLiveStatsForSnapshot(ctx, snap)
+	// GC deletion must not trust cached subtree/live reachability. A stale cache
+	// can turn a live generation into a deletion candidate, while a fresh scan is
+	// maintenance-only work outside the write/read happy path.
+	scan, err := snap.db.leafGenerationLiveStatsForSnapshotUncached(ctx, snap)
 	if err != nil {
 		return nil, err
 	}
@@ -257,9 +263,9 @@ func leafGenerationRecordBytesTotal(gen leafGenerationRecord, filePaths map[uint
 	return total
 }
 
-func pruneDeletedLeafGenerationRecords(manifest *leafGenerationManifest, filePaths map[uint32]string) (*leafGenerationManifest, bool, int) {
+func (db *DB) pruneDeletedLeafGenerationRecords(manifest *leafGenerationManifest, filePaths map[uint32]string) (*leafGenerationManifest, bool, int, error) {
 	if manifest == nil {
-		return nil, false, 0
+		return nil, false, 0, nil
 	}
 	kept := manifest.Generations[:0]
 	pruned := false
@@ -269,14 +275,36 @@ func pruneDeletedLeafGenerationRecords(manifest *leafGenerationManifest, filePat
 			kept = append(kept, gen)
 			continue
 		}
+		if err := db.removeLeafGenerationRecordLengthIndexes(gen.FileIDs); err != nil {
+			return manifest, false, 0, err
+		}
 		pruned = true
 		filesDeleted += len(gen.FileIDs)
 	}
 	if !pruned {
-		return manifest, false, 0
+		return manifest, false, 0, nil
 	}
 	manifest.Generations = kept
-	return manifest, true, filesDeleted
+	return manifest, true, filesDeleted, nil
+}
+
+func (db *DB) removeLeafGenerationRecordLengthIndexes(fileIDs []uint32) error {
+	if db == nil || len(fileIDs) == 0 {
+		return nil
+	}
+	for _, fileID := range fileIDs {
+		if fileID == 0 {
+			continue
+		}
+		path := leafGenerationRecordLengthIndexPath(db.dir, fileID)
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("remove leaf generation record-length index %d (%s): %w", fileID, path, err)
+		}
+		db.leafGenerationRecordLengthMu.Lock()
+		delete(db.leafGenerationRecordLengthByFile, fileID)
+		db.leafGenerationRecordLengthMu.Unlock()
+	}
+	return nil
 }
 
 func leafGenerationFilesMissing(fileIDs []uint32, filePaths map[uint32]string) bool {
