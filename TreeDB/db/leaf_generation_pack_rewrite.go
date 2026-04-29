@@ -16,7 +16,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/zipper"
 )
 
-const leafRefRewriteMapInitCap = 128    // initial map capacity for small leafref rewrite batches
+const leafRefRewriteMapInitCap = 128    // initial map capacity for small leaf-ref rewrite batches
 const leafRefRewriteInlineChildCap = 64 // stack-backed child-id scratch for common small internal nodes
 const leafRefRewriteInlineRemapCap = 8  // inline remap cache before promoting to map
 
@@ -273,7 +273,7 @@ func (c *leafRefRewriteCtx) appendLeafPage(leafPage []byte) (page.LeafLogPtr, er
 func (c *leafRefRewriteCtx) rewriteNode(id uint64) (uint64, bool, error) {
 
 	if c == nil {
-		return id, false, errors.New("vlog-rewrite: nil leafref rewrite ctx")
+		return id, false, errors.New("vlog-rewrite: nil leaf-ref rewrite ctx")
 	}
 	if c.ctx != nil {
 		if err := c.ctx.Err(); err != nil {
@@ -483,6 +483,9 @@ func (c *leafRefRewriteCtx) applySystemRootCollectionRootReplacements(rootID uin
 			return rootID, false, err
 		}
 	}
+	// For this collections-only maintenance path, cancellation during Apply is
+	// observed by the leaf page appender before each rewritten outer leaf is
+	// persisted.
 	newRoot, retired, _, err := c.zipper.Apply(rootID, delta)
 	if err != nil {
 		return rootID, false, err
