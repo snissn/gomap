@@ -2348,7 +2348,7 @@ func (db *DB) applyRewriteSwapBatchToCollectionRoot(descriptorKey []byte, storag
 	}
 
 	reader := newValueReader(state.ValueLogSet)
-	collectionRoot, ok, err := lookupCollectionRootDescriptorID(idx.pager, reader, systemRoot, descriptorKey)
+	collectionRoot, descriptorAliases, ok, err := lookupCollectionRootDescriptorAliases(idx.pager, reader, systemRoot, descriptorKey)
 	if err != nil || !ok || collectionRoot == 0 {
 		return err
 	}
@@ -2370,8 +2370,10 @@ func (db *DB) applyRewriteSwapBatchToCollectionRoot(descriptorKey []byte, storag
 
 	encodedRoot := make([]byte, 8)
 	binary.BigEndian.PutUint64(encodedRoot, newCollectionRoot)
-	systemDelta := memtable.NewAppendOnlyWithEntryCapacity(1)
-	systemDelta.Set(descriptorKey, encodedRoot)
+	systemDelta := memtable.NewAppendOnlyWithEntryCapacity(len(descriptorAliases))
+	for _, aliasKey := range descriptorAliases {
+		systemDelta.Set(aliasKey, encodedRoot)
+	}
 	systemDelta.Freeze()
 	systemIter := systemDelta.NewIterator(nil, nil)
 	systemOpts := systemRootOrderedPublishOptions(db)
@@ -2417,28 +2419,34 @@ func (db *DB) applyRewriteSwapsToRootLocked(idx *indexGen, state *DBState, rootI
 	return newRoot, retired, metrics, touched, true, nil
 }
 
-func lookupCollectionRootDescriptorID(p *pager.Pager, reader tree.SlabReader, systemRootID uint64, key []byte) (uint64, bool, error) {
+func lookupCollectionRootDescriptorAliases(p *pager.Pager, reader tree.SlabReader, systemRootID uint64, key []byte) (uint64, [][]byte, bool, error) {
 	if p == nil {
-		return 0, false, errors.New("vlog-rewrite: missing pager")
+		return 0, nil, false, errors.New("vlog-rewrite: missing pager")
 	}
 	if systemRootID == 0 || len(key) == 0 {
-		return 0, false, nil
+		return 0, nil, false, nil
 	}
-	entry, err := tree.New(p, reader, systemRootID).GetEntry(key)
+	descriptors, err := vacuumCollectCollectionRootDescriptors(p, reader, systemRootID)
 	if err != nil {
-		if errors.Is(err, tree.ErrKeyNotFound) {
-			return 0, false, nil
+		return 0, nil, false, err
+	}
+	var rootID uint64
+	for _, descriptor := range descriptors {
+		if bytes.Equal(descriptor.key, key) {
+			rootID = descriptor.rootID
+			break
 		}
-		return 0, false, err
 	}
-	val, _, err := vacuumCollectionRootDescriptorValue(reader, key, entry.Value, entry.ValuePtr, entry.Flags, nil)
-	if err != nil {
-		return 0, false, err
+	if rootID == 0 {
+		return 0, nil, false, nil
 	}
-	if len(val) != 8 {
-		return 0, false, fmt.Errorf("vlog-rewrite: collection root descriptor %q has malformed root id length %d", string(key), len(val))
+	aliases := make([][]byte, 0, 1)
+	for _, descriptor := range descriptors {
+		if descriptor.rootID == rootID {
+			aliases = append(aliases, descriptor.key)
+		}
 	}
-	return binary.BigEndian.Uint64(val), true, nil
+	return rootID, aliases, true, nil
 }
 
 func (db *DB) applyRewriteSwapBatchOptimistic(swaps []rewriteSwap, sync bool) (bool, error) {

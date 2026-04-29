@@ -568,6 +568,78 @@ func TestValueLogRewriteOnline_RewritesCollectionRootPointers(t *testing.T) {
 	}
 }
 
+func TestValueLogRewriteOnline_RepointsAliasedCollectionRootDescriptors(t *testing.T) {
+	dir := t.TempDir()
+
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer closeNoErr(t, db)
+
+	ptr := appendPointersInNewSegment(t, dir, 0, 1, 515_000, 1, func(int) []byte {
+		return bytes.Repeat([]byte("collection-online-alias-pointer-live|"), 24)
+	})[0]
+	aliasDescriptorKey := "collections/root/users/alias"
+	_, rootIDs, err := db.PublishOrderedRootGroupWithSystemBuilder([]OrderedRootPublishInput{{
+		BaseRoot:      0,
+		Iter:          mustFrozenSystemPointerMemtable(t, "doc/p", ptr).NewIterator(nil, nil),
+		StoragePolicy: OrderedRootStoragePagerLeaves,
+	}}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		if len(rootIDs) != 1 {
+			return nil, fmt.Errorf("rootIDs=%d want 1", len(rootIDs))
+		}
+		return mustFrozenRawMemtable(t,
+			maintenanceTestCollectionRootKey, encodeMaintenanceRootID(rootIDs[0]),
+			aliasDescriptorKey, encodeMaintenanceRootID(rootIDs[0]),
+		).NewIterator(nil, nil), nil
+	})
+	if err != nil {
+		t.Fatalf("publish aliased collection root: %v", err)
+	}
+	if len(rootIDs) != 1 {
+		t.Fatalf("rootIDs=%d want 1", len(rootIDs))
+	}
+	oldRoot := rootIDs[0]
+
+	stats, err := db.ValueLogRewriteOnline(context.Background(), ValueLogRewriteOnlineOptions{
+		SourceFileIDs: []uint32{ptr.FileID},
+		BatchSize:     1,
+	})
+	if err != nil {
+		t.Fatalf("ValueLogRewriteOnline: %v", err)
+	}
+	if stats.RecordsCopied != 1 {
+		t.Fatalf("expected one collection pointer record to be copied, stats=%+v", stats)
+	}
+	if stats.SourceSegmentsUnreferenced != 1 {
+		t.Fatalf("source segments unreferenced=%d want 1 (stats=%+v)", stats.SourceSegmentsUnreferenced, stats)
+	}
+
+	newRoot := readCollectionRootID(t, db, maintenanceTestCollectionRootKey)
+	aliasRoot := readCollectionRootID(t, db, aliasDescriptorKey)
+	if newRoot == oldRoot {
+		t.Fatalf("primary descriptor still points at old root %d", oldRoot)
+	}
+	if aliasRoot != newRoot {
+		t.Fatalf("alias descriptor root=%d want rewritten root %d", aliasRoot, newRoot)
+	}
+	want := bytes.Repeat([]byte("collection-online-alias-pointer-live|"), 24)
+	for _, descriptorKey := range []string{maintenanceTestCollectionRootKey, aliasDescriptorKey} {
+		got := readCollectionRootValue(t, db, descriptorKey, []byte("doc/p"))
+		if !bytes.Equal(got, want) {
+			t.Fatalf("collection value mismatch through descriptor %q after online rewrite", descriptorKey)
+		}
+	}
+	referenced, err := db.referencedValueLogSegments(context.Background())
+	if err != nil {
+		t.Fatalf("referencedValueLogSegments: %v", err)
+	}
+	if _, ok := referenced[ptr.FileID]; ok {
+		t.Fatalf("source segment %d remains referenced after aliased collection rewrite: %v", ptr.FileID, referenced)
+	}
+}
+
 func TestValueLogRewriteOnline_RewritesCollectionLeafRefRootPointers(t *testing.T) {
 	db, leafLog := openLeafGenerationGCTestDB(t)
 	dir := db.dir
