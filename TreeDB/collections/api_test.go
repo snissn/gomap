@@ -1223,6 +1223,22 @@ func TestCollectionDropIndexUpdatesSchema(t *testing.T) {
 	if _, err := reopened.DropIndex("missing"); !errors.Is(err, ErrIndexNotFound) {
 		t.Fatalf("drop missing err=%v want ErrIndexNotFound", err)
 	}
+	if _, err := reopened.DropIndexes([]string{"city", "missing"}); !errors.Is(err, ErrIndexNotFound) {
+		t.Fatalf("bulk drop with missing err=%v want ErrIndexNotFound", err)
+	}
+	if _, ok := findIndex(reopened.Meta().Indexes, "city"); !ok {
+		t.Fatalf("bulk drop with missing removed city index: %+v", reopened.Meta().Indexes)
+	}
+	if _, ok := findIndex(reopened.Meta().Indexes, "email"); !ok {
+		t.Fatalf("bulk drop with missing removed email index: %+v", reopened.Meta().Indexes)
+	}
+	meta, err = reopened.DropIndexes([]string{"city", "email"})
+	if err != nil {
+		t.Fatalf("bulk drop indexes: %v", err)
+	}
+	if len(meta.Indexes) != 0 {
+		t.Fatalf("bulk drop meta indexes=%+v want none", meta.Indexes)
+	}
 }
 
 func TestCollectionScanDocumentsAndFindByIndexValue(t *testing.T) {

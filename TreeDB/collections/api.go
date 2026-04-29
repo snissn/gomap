@@ -556,6 +556,20 @@ func (c *Collection) DropIndex(name string) (*CollectionMeta, error) {
 	return c.dropIndexes(map[string]struct{}{name: {}}, false)
 }
 
+func (c *Collection) DropIndexes(names []string) (*CollectionMeta, error) {
+	if len(names) == 0 {
+		return nil, ErrIndexNotFound
+	}
+	nameSet := make(map[string]struct{}, len(names))
+	for _, name := range names {
+		if err := ValidateIndexName(name); err != nil {
+			return nil, err
+		}
+		nameSet[name] = struct{}{}
+	}
+	return c.dropIndexes(nameSet, false)
+}
+
 func (c *Collection) DropAllIndexes() (*CollectionMeta, error) {
 	return c.dropIndexes(nil, true)
 }
@@ -585,6 +599,7 @@ func (c *Collection) dropIndexes(names map[string]struct{}, all bool) (*Collecti
 		return nil, errCollectionNotFound
 	}
 	baseMeta := catalog.meta
+	c.meta = baseMeta
 	baseSystemRoot := snapshotSystemRoot(snap)
 	_ = snap.Close()
 
