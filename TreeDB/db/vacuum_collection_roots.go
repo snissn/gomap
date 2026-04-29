@@ -2,6 +2,7 @@ package db
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -55,11 +56,20 @@ func vacuumCollectionRootDescriptorPrefixEnd() []byte {
 }
 
 func vacuumCollectCollectionRootDescriptors(p *pager.Pager, reader tree.SlabReader, systemRootID uint64) ([]vacuumCollectionRootDescriptor, error) {
+	return vacuumCollectCollectionRootDescriptorsWithContext(nil, p, reader, systemRootID)
+}
+
+func vacuumCollectCollectionRootDescriptorsWithContext(ctx context.Context, p *pager.Pager, reader tree.SlabReader, systemRootID uint64) ([]vacuumCollectionRootDescriptor, error) {
 	if p == nil {
 		return nil, errors.New("vacuum: missing pager")
 	}
 	if systemRootID == 0 {
 		return nil, nil
+	}
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 	}
 
 	it := tree.New(p, reader, systemRootID).IteratorWithOptions(vacuumCollectionRootDescriptorPrefixBytes, vacuumCollectionRootDescriptorPrefixEnd(), tree.IteratorOptions{
@@ -70,6 +80,11 @@ func vacuumCollectCollectionRootDescriptors(p *pager.Pager, reader tree.SlabRead
 	var out []vacuumCollectionRootDescriptor
 	var pointerScratch []byte
 	for it.Valid() {
+		if ctx != nil {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+		}
 		key := it.UnsafeKey()
 		if !bytes.HasPrefix(key, vacuumCollectionRootDescriptorPrefixBytes) {
 			break
