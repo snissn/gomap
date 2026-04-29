@@ -87,20 +87,10 @@ type leafRefRewritePageAppender struct {
 }
 
 func (a *leafRefRewritePageAppender) AppendLeafPage(leafPage []byte) (page.LeafLogPtr, error) {
-	if a == nil || a.ctx == nil || a.ctx.writer == nil || a.ctx.ridAlloc == nil {
+	if a == nil || a.ctx == nil {
 		return page.LeafLogPtr{}, errors.New("vlog-rewrite: missing leaf-ref rewrite appender state")
 	}
-	rid, err := a.ctx.ridAlloc.Next()
-	if err != nil {
-		return page.LeafLogPtr{}, err
-	}
-	ptr, err := a.ctx.writer.appendLeafPageWithRID(rid, leafPage)
-	if err != nil {
-		return page.LeafLogPtr{}, err
-	}
-	a.ctx.copied++
-	a.ctx.copiedBytes += int64(len(leafPage))
-	return ptr, nil
+	return a.ctx.appendLeafPage(leafPage)
 }
 
 type leafRefRewriteRunStats struct {
@@ -250,6 +240,28 @@ func (c *leafRefRewriteCtx) subtreeMayContainRewriteSource(pageID uint64) bool {
 	return false
 }
 
+func (c *leafRefRewriteCtx) appendLeafPage(leafPage []byte) (page.LeafLogPtr, error) {
+	if c == nil || c.writer == nil || c.ridAlloc == nil {
+		return page.LeafLogPtr{}, errors.New("vlog-rewrite: missing leaf-ref rewrite appender state")
+	}
+	if c.ctx != nil {
+		if err := c.ctx.Err(); err != nil {
+			return page.LeafLogPtr{}, err
+		}
+	}
+	rid, err := c.ridAlloc.Next()
+	if err != nil {
+		return page.LeafLogPtr{}, err
+	}
+	ptr, err := c.writer.appendLeafPageWithRID(rid, leafPage)
+	if err != nil {
+		return page.LeafLogPtr{}, err
+	}
+	c.copied++
+	c.copiedBytes += int64(len(leafPage))
+	return ptr, nil
+}
+
 func (c *leafRefRewriteCtx) rewriteNode(id uint64) (uint64, bool, error) {
 
 	if c == nil {
@@ -299,11 +311,7 @@ func (c *leafRefRewriteCtx) rewriteNode(id uint64) (uint64, bool, error) {
 		if len(leafPage) != page.PageSize {
 			return id, false, fmt.Errorf("vlog-rewrite: leaf page has invalid size: got=%dB want=%dB", len(leafPage), page.PageSize)
 		}
-		rid, err := c.ridAlloc.Next()
-		if err != nil {
-			return id, false, err
-		}
-		leafLogPtr, err := c.writer.appendLeafPageWithRID(rid, leafPage)
+		leafLogPtr, err := c.appendLeafPage(leafPage)
 		if err != nil {
 			return id, false, err
 		}
@@ -312,8 +320,6 @@ func (c *leafRefRewriteCtx) rewriteNode(id uint64) (uint64, bool, error) {
 			return id, false, err
 		}
 		c.storeLeafRemap(id, leafID)
-		c.copied++
-		c.copiedBytes += int64(len(leafPage))
 		return leafID, true, nil
 	}
 
@@ -459,14 +465,11 @@ func (c *leafRefRewriteCtx) rebuildSystemRootWithCollectionRootReplacements(root
 		}
 	}
 	var iter iteratorWithEntry = tr.IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
-	if len(replacements) > 0 {
-		iter = &vacuumSystemRootRewriteIterator{
-			base:         iter,
-			replacements: replacements,
-		}
+	iter = &vacuumSystemRootRewriteIterator{
+		base:         iter,
+		replacements: replacements,
 	}
 	iter = &contextIteratorWithEntry{ctx: c.ctx, base: iter}
-	defer func() { _ = iter.Close() }()
 
 	newRoot, err := bulk.BuildWithOptions(iter, c.alloc, c.pager, bulk.BuildOptions{
 		LeafPrefixCompression: c.db.leafPrefixCompression,
@@ -475,6 +478,12 @@ func (c *leafRefRewriteCtx) rebuildSystemRootWithCollectionRootReplacements(root
 		InternalBaseDelta:     c.db.indexInternalBaseDelta && !c.db.indexOuterLeavesInValueLog,
 		LeafPageLog:           &leafRefRewritePageAppender{ctx: c},
 	})
+	if iterErr := iter.Error(); iterErr != nil {
+		err = errors.Join(err, iterErr)
+	}
+	if closeErr := iter.Close(); closeErr != nil {
+		err = errors.Join(err, closeErr)
+	}
 	if err != nil {
 		return rootID, err
 	}
