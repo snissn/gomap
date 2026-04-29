@@ -186,18 +186,19 @@ func (s *Server) updateResponse(command wire.Document, sequences []wire.Document
 		if !bytes.Equal(updatedKey, key) {
 			return commandError(commandCodeBadValue, "BadValue", "Mongo gateway update cannot modify _id")
 		}
-		if err := col.Delete(key); err != nil {
-			return commandError(commandCodeBadValue, "BadValue", err.Error())
+		matched++
+		if !changed {
+			continue
 		}
-		if _, err := col.Insert(key, encoded); err != nil {
+		replaced, err := col.Replace(key, encoded)
+		if err != nil {
 			code, codeName := commandCodeBadValue, "BadValue"
 			if collections.IsDuplicateKeyError(err) {
 				code, codeName = commandCodeDuplicateKey, "DuplicateKey"
 			}
 			return commandError(code, codeName, err.Error())
 		}
-		matched++
-		if changed {
+		if replaced {
 			modified++
 		}
 	}

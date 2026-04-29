@@ -215,7 +215,21 @@ func TestServerUpdateAndDeleteByID(t *testing.T) {
 	assertInt32(t, updateResponse, "n", 1)
 	assertInt32(t, updateResponse, "nModified", 1)
 
-	findResponse := serveCommand(t, server, 222, bson.D{
+	noopResponse := serveCommand(t, server, 222, bson.D{
+		{Key: "update", Value: "users"},
+		{Key: "updates", Value: bson.A{bson.D{
+			{Key: "q", Value: bson.D{{Key: "_id", Value: id}}},
+			{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{
+				{Key: "age", Value: int64(38)},
+			}}}},
+		}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertOK(t, noopResponse)
+	assertInt32(t, noopResponse, "n", 1)
+	assertInt32(t, noopResponse, "nModified", 0)
+
+	findResponse := serveCommand(t, server, 223, bson.D{
 		{Key: "find", Value: "users"},
 		{Key: "filter", Value: bson.D{{Key: "_id", Value: id}}},
 		{Key: "$db", Value: "app"},
@@ -233,7 +247,7 @@ func TestServerUpdateAndDeleteByID(t *testing.T) {
 		t.Fatalf("firstBatch city=%q ok=%v want London", gotCity, ok)
 	}
 
-	deleteResponse := serveCommand(t, server, 223, bson.D{
+	deleteResponse := serveCommand(t, server, 224, bson.D{
 		{Key: "delete", Value: "users"},
 		{Key: "deletes", Value: bson.A{bson.D{
 			{Key: "q", Value: bson.D{{Key: "_id", Value: id}}},
@@ -244,7 +258,7 @@ func TestServerUpdateAndDeleteByID(t *testing.T) {
 	assertOK(t, deleteResponse)
 	assertInt32(t, deleteResponse, "n", 1)
 
-	afterDelete := serveCommand(t, server, 224, bson.D{
+	afterDelete := serveCommand(t, server, 225, bson.D{
 		{Key: "find", Value: "users"},
 		{Key: "filter", Value: bson.D{{Key: "_id", Value: id}}},
 		{Key: "$db", Value: "app"},

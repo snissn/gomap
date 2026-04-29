@@ -1434,6 +1434,72 @@ func TestCollectionCreateIndexBackfill_RejectsUniqueConflictAtomically(t *testin
 	}
 }
 
+func TestCollectionReplaceRejectsUniqueConflictAtomically(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name:    "users",
+		Indexes: []IndexDefinition{{Name: "email", Field: "email", Unique: true}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1"), []byte("u2")},
+		[][]byte{
+			[]byte(`{"email":"ada@example.com","city":"hnl"}`),
+			[]byte(`{"email":"grace@example.com","city":"sfo"}`),
+		},
+	); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+
+	replaced, err := col.Replace([]byte("u1"), []byte(`{"email":"grace@example.com","city":"hnl"}`))
+	if !errors.Is(err, ErrUniqueIndexConflict) {
+		t.Fatalf("replace err=%v want ErrUniqueIndexConflict", err)
+	}
+	if replaced {
+		t.Fatal("replace reported success on unique conflict")
+	}
+	got, err := col.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("get u1 after failed replace: %v", err)
+	}
+	if want := []byte(`{"email":"ada@example.com","city":"hnl"}`); !bytes.Equal(got, want) {
+		t.Fatalf("u1 after failed replace=%q want %q", got, want)
+	}
+
+	replaced, err = col.Replace([]byte("u1"), []byte(`{"email":"ada2@example.com","city":"hnl"}`))
+	if err != nil {
+		t.Fatalf("replace valid: %v", err)
+	}
+	if !replaced {
+		t.Fatal("replace valid reported false")
+	}
+	ids, err := col.FindByIndex("email", "ada2@example.com")
+	if err != nil {
+		t.Fatalf("find replacement email: %v", err)
+	}
+	if len(ids) != 1 || !bytes.Equal(ids[0], []byte("u1")) {
+		t.Fatalf("replacement email ids=%q want u1", ids)
+	}
+	ids, err = col.FindByIndex("email", "ada@example.com")
+	if err != nil {
+		t.Fatalf("find old email: %v", err)
+	}
+	if len(ids) != 0 {
+		t.Fatalf("old email ids=%q want none", ids)
+	}
+}
+
 func TestCollectionInsertBatchBridge_RejectsPersistedUniqueConflictAtomically(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {

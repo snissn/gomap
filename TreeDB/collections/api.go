@@ -1326,6 +1326,183 @@ func (c *Collection) Delete(documentID []byte) error {
 	return nil
 }
 
+func (c *Collection) Replace(documentID, document []byte) (bool, error) {
+	if c == nil {
+		return false, errCollectionNil
+	}
+	if c.db == nil {
+		return false, errors.New("collections: db is nil")
+	}
+	if len(documentID) == 0 {
+		return false, errors.New("collections: document id cannot be empty")
+	}
+	if err := c.flushBufferedNoIndex(); err != nil {
+		return false, err
+	}
+
+	snap := c.db.AcquireSnapshot()
+	if snap == nil {
+		return false, backenddb.ErrClosed
+	}
+	catalog, err := c.catalogForSnapshot(snap)
+	if err != nil {
+		_ = snap.Close()
+		return false, err
+	}
+	if catalog == nil {
+		_ = snap.Close()
+		return false, errCollectionNotFound
+	}
+	c.meta = catalog.meta
+	plannerOptions, err := collectionPlannerOptions(c.meta)
+	if err != nil {
+		_ = snap.Close()
+		return false, err
+	}
+	plannerOptions = collectionOptionsWithTemplateV1Resolver(plannerOptions, snap, catalog)
+	baseSystemRoot := snapshotSystemRoot(snap)
+
+	primaryRoot := catalog.rootID(collectionPrimaryRootName(c.meta.Name))
+	if primaryRoot == 0 {
+		_ = snap.Close()
+		return false, nil
+	}
+	entry, err := snap.GetEntryAtRoot(primaryRoot, documentID)
+	if errors.Is(err, tree.ErrKeyNotFound) {
+		_ = snap.Close()
+		return false, nil
+	}
+	if err != nil {
+		_ = snap.Close()
+		return false, err
+	}
+
+	runtimes, err := (insertBatchPlanner{
+		collection: c.meta.Name,
+		indexes:    plannerIndexes(c.meta.Indexes),
+	}).indexRuntimes()
+	if err != nil {
+		_ = snap.Close()
+		return false, err
+	}
+	var oldState documentIndexState
+	var newState documentIndexState
+	if len(runtimes) > 0 {
+		oldState, err = loadDeleteIndexState(snap, catalog, documentID, entry.Value, runtimes, plannerOptions)
+		if err != nil {
+			_ = snap.Close()
+			return false, err
+		}
+		newState, err = indexStateForDocument(document, runtimes, plannerOptions)
+		if err != nil {
+			_ = snap.Close()
+			return false, err
+		}
+		if err := rejectReplaceUniqueConflicts(snap, catalog, runtimes, newState, documentID); err != nil {
+			_ = snap.Close()
+			return false, err
+		}
+	}
+
+	rootNames := []string{collectionPrimaryRootName(c.meta.Name)}
+	baseRootIDs := map[string]uint64{
+		rootNames[0]: primaryRoot,
+	}
+	policies := []backenddb.OrderedRootStoragePolicy{plannerOptions.dataStoragePolicy}
+	deltaTables := make([]memtable.Table, 0, 2+len(runtimes))
+	primaryTable := newCollectionRunTable(1)
+	setCollectionRunValue(primaryTable, bytes.Clone(documentID), document)
+	primaryTable.Freeze()
+	deltaTables = append(deltaTables, primaryTable)
+
+	if len(runtimes) > 0 {
+		stateRootName := collectionIndexStateRootName(c.meta.Name)
+		stateRootID := catalog.rootID(stateRootName)
+		rootNames = append(rootNames, stateRootName)
+		baseRootIDs[stateRootName] = stateRootID
+		policies = append(policies, plannerOptions.indexStateStoragePolicy)
+		stateTable := newCollectionRunTable(1)
+		rawState, err := encodeDocumentIndexState(newState)
+		if err != nil {
+			_ = snap.Close()
+			resetCollectionTables(append(deltaTables, stateTable))
+			return false, err
+		}
+		if len(newState) == 0 {
+			stateTable.DeleteSteal(bytes.Clone(documentID))
+		} else {
+			stateTable.SetSteal(bytes.Clone(documentID), rawState)
+		}
+		stateTable.Freeze()
+		deltaTables = append(deltaTables, stateTable)
+
+		for _, runtime := range runtimes {
+			rootName := collectionSecondaryRootName(c.meta.Name, runtime.def.name)
+			rootID := catalog.rootID(rootName)
+			table := newCollectionRunTable(0)
+			deleteKeys, err := secondaryDeleteKeysForDocument(runtime, oldState, documentID)
+			if err != nil {
+				_ = snap.Close()
+				resetCollectionTables(append(deltaTables, table))
+				return false, err
+			}
+			for _, key := range deleteKeys {
+				table.DeleteSteal(bytes.Clone(key))
+			}
+			for _, encoded := range newState[runtime.def.name] {
+				key, err := indexEntryKey(encoded, documentID)
+				if err != nil {
+					_ = snap.Close()
+					resetCollectionTables(append(deltaTables, table))
+					return false, err
+				}
+				table.SetSteal(key, nil)
+			}
+			if table.Len() == 0 {
+				resetCollectionRunTable(table)
+				continue
+			}
+			table.Freeze()
+			rootNames = append(rootNames, rootName)
+			baseRootIDs[rootName] = rootID
+			policies = append(policies, runtime.def.storagePolicy)
+			deltaTables = append(deltaTables, table)
+		}
+	}
+	_ = snap.Close()
+
+	ordered := make([]backenddb.OrderedRootDeltaPublishInput, 0, len(rootNames))
+	iterators := make([]iterator.UnsafeIterator, 0, len(rootNames))
+	defer func() {
+		for _, it := range iterators {
+			_ = it.Close()
+		}
+		resetCollectionTables(deltaTables)
+	}()
+	for i, rootName := range rootNames {
+		iter := deltaTables[i].NewIterator(nil, nil)
+		iterators = append(iterators, iter)
+		ordered = append(ordered, backenddb.OrderedRootDeltaPublishInput{
+			BaseRoot:      baseRootIDs[rootName],
+			Iter:          iter,
+			StoragePolicy: policies[i],
+		})
+	}
+	newSystemRoot, rootIDs, err := c.db.PublishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		return c.buildRootDescriptorSystemDeltaIterator(baseSystemRoot, rootNames, baseRootIDs, rootIDs)
+	})
+	if err != nil {
+		return false, err
+	}
+	if len(rootIDs) != len(rootNames) {
+		return false, errors.New("collections: ordered root publish returned unexpected root count")
+	}
+	nextCatalog := cloneCatalogWithRootUpdates(catalog, c.meta, rootNames, rootIDs)
+	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
+	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
+	return true, nil
+}
+
 func (c *Collection) catalogForSnapshot(snap *backenddb.Snapshot) (*collectionCatalog, error) {
 	if snap == nil {
 		return nil, backenddb.ErrClosed
@@ -1734,6 +1911,55 @@ func secondaryDeleteKeysForDocument(runtime indexRuntime, state documentIndexSta
 		out = append(out, key)
 	}
 	return out, nil
+}
+
+func rejectReplaceUniqueConflicts(snap *backenddb.Snapshot, catalog *collectionCatalog, runtimes []indexRuntime, state documentIndexState, documentID []byte) error {
+	if snap == nil || catalog == nil {
+		return nil
+	}
+	for _, runtime := range runtimes {
+		if !runtime.def.unique {
+			continue
+		}
+		rootID := catalog.rootID(collectionSecondaryRootName(catalog.meta.Name, runtime.def.name))
+		if rootID == 0 {
+			continue
+		}
+		for _, encoded := range state[runtime.def.name] {
+			_, prefix, err := appendIndexValuePrefixSlice(make([]byte, 0, 2+len(encoded)), encoded)
+			if err != nil {
+				return err
+			}
+			it, err := snap.IteratorAtRoot(rootID, prefix, prefixEnd(prefix))
+			if errors.Is(err, tree.ErrKeyNotFound) {
+				continue
+			}
+			if err != nil {
+				return err
+			}
+			conflict := false
+			for it.Valid() {
+				key := it.UnsafeKey()
+				if !bytes.HasPrefix(key, prefix) {
+					break
+				}
+				if !it.IsDeleted() && !bytes.Equal(key[len(prefix):], documentID) {
+					conflict = true
+					break
+				}
+				it.Next()
+			}
+			iterErr := it.Error()
+			_ = it.Close()
+			if iterErr != nil {
+				return iterErr
+			}
+			if conflict {
+				return fmt.Errorf("%w %q", ErrUniqueIndexConflict, runtime.def.name)
+			}
+		}
+	}
+	return nil
 }
 
 func (c *Collection) Get(documentID []byte) ([]byte, error) {
