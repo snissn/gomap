@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"testing"
@@ -63,5 +64,29 @@ func TestParseConfigValidation(t *testing.T) {
 	}
 	if cfg.Target != "mongo" || cfg.Documents != 10 || cfg.SecondaryIndexes != 1 || cfg.Format != "json" {
 		t.Fatalf("unexpected config: %+v", cfg)
+	}
+}
+
+func TestWriteResultSupportsGenericWriter(t *testing.T) {
+	result := &benchmarkResult{
+		Target:           "treedb",
+		Database:         "bench",
+		Collection:       "docs",
+		Documents:        1,
+		SecondaryIndexes: 1,
+		Phases: []phaseResult{{
+			Name:           "load_insert_many",
+			Operations:     1,
+			DriverCalls:    1,
+			DurationMillis: 1,
+			OpsPerSecond:   1000,
+		}},
+	}
+	var out bytes.Buffer
+	if err := writeResult(&out, "text", result); err != nil {
+		t.Fatalf("writeResult: %v", err)
+	}
+	if !bytes.Contains(out.Bytes(), []byte("target=treedb")) {
+		t.Fatalf("text output missing target: %q", out.String())
 	}
 }

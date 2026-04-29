@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"io/fs"
 	"math"
 	"net"
@@ -182,6 +183,13 @@ func openTreeDBTarget(ctx context.Context, cfg config) (*benchTarget, error) {
 		}
 		dir = tmp
 		removeDir = !cfg.KeepTreeDBDir
+	} else {
+		if err := os.RemoveAll(dir); err != nil {
+			return nil, err
+		}
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return nil, err
+		}
 	}
 
 	db, err := backenddb.Open(backenddb.Options{Dir: dir})
@@ -384,21 +392,23 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget) (*benchm
 	}
 	result.Phases = append(result.Phases, emailPhase)
 
-	rangePhase, err := measurePhase("age_range_limit_10", cfg.RangeReads*10, func(sample func(time.Duration)) error {
+	rangePhase, err := measurePhase("age_range_limit_10", cfg.RangeReads, func(sample func(time.Duration)) error {
 		for i := 0; i < cfg.RangeReads; i++ {
 			minAge := int64(20 + (i % 40))
 			begin := time.Now()
 			cursor, err := coll.Find(ctx,
 				bson.D{{Key: "age", Value: bson.D{{Key: "$gte", Value: minAge}}}},
 				options.Find().SetLimit(10))
-			sample(time.Since(begin))
 			if err != nil {
+				sample(time.Since(begin))
 				return err
 			}
 			var docs []bson.M
 			if err := cursor.All(ctx, &docs); err != nil {
+				sample(time.Since(begin))
 				return err
 			}
+			sample(time.Since(begin))
 			for _, doc := range docs {
 				age, ok := int64Value(doc["age"])
 				if !ok || age < minAge {
@@ -640,44 +650,32 @@ func percentile(sorted []time.Duration, q float64) time.Duration {
 }
 
 func collectDiskSnapshot(dir string) (diskSnapshot, error) {
-	total, err := pathSize(dir)
-	if err != nil {
-		return diskSnapshot{}, err
-	}
-	out := diskSnapshot{TotalBytes: total, Paths: make(map[string]int64)}
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return diskSnapshot{}, err
-	}
-	for _, entry := range entries {
-		size, err := pathSize(filepath.Join(dir, entry.Name()))
-		if err != nil {
-			return diskSnapshot{}, err
-		}
-		out.Paths[entry.Name()] = size
-	}
-	return out, nil
-}
-
-func pathSize(path string) (int64, error) {
-	var total int64
-	err := filepath.WalkDir(path, func(_ string, entry fs.DirEntry, err error) error {
+	out := diskSnapshot{Paths: make(map[string]int64)}
+	err := filepath.WalkDir(dir, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		if entry.Type().IsRegular() {
-			info, err := entry.Info()
-			if err != nil {
-				return err
-			}
-			total += info.Size()
+		if !entry.Type().IsRegular() {
+			return nil
 		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		size := info.Size()
+		out.TotalBytes += size
+		rel, err := filepath.Rel(dir, path)
+		if err != nil {
+			return err
+		}
+		topLevel, _, _ := strings.Cut(rel, string(os.PathSeparator))
+		out.Paths[topLevel] += size
 		return nil
 	})
-	return total, err
+	return out, err
 }
 
-func writeResult(out *os.File, format string, result *benchmarkResult) error {
+func writeResult(out io.Writer, format string, result *benchmarkResult) error {
 	switch format {
 	case "json":
 		encoder := json.NewEncoder(out)
@@ -712,7 +710,7 @@ func writeResult(out *os.File, format string, result *benchmarkResult) error {
 	}
 }
 
-func writeDiskSnapshot(out *os.File, label string, snapshot *diskSnapshot) {
+func writeDiskSnapshot(out io.Writer, label string, snapshot *diskSnapshot) {
 	fmt.Fprintf(out, "%s total_bytes=%d", label, snapshot.TotalBytes)
 	names := make([]string, 0, len(snapshot.Paths))
 	for name := range snapshot.Paths {
@@ -725,7 +723,7 @@ func writeDiskSnapshot(out *os.File, label string, snapshot *diskSnapshot) {
 	fmt.Fprintln(out)
 }
 
-func writeMongoStats(out *os.File, label string, stats map[string]any) {
+func writeMongoStats(out io.Writer, label string, stats map[string]any) {
 	keys := []string{"dataSize", "storageSize", "indexSize", "totalSize", "objects"}
 	fmt.Fprint(out, label)
 	for _, key := range keys {

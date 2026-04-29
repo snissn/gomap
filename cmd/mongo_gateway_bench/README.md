@@ -28,8 +28,10 @@ GOWORK=off go run ./cmd/mongo_gateway_bench \
 
 For `-target treedb`, the command starts an in-process TreeDB Mongo gateway on a
 loopback listener, connects with the official MongoDB Go driver, and reports
-filesystem bytes for the TreeDB directory after load and after a final
-checkpoint.
+the sum of regular file sizes for the TreeDB directory after load and after a
+final checkpoint. If `-treedb-dir` is provided and already exists, the harness
+removes and recreates it before loading deterministic fixtures so repeated runs
+are reproducible.
 
 ## MongoDB Target
 
@@ -84,12 +86,14 @@ The initial workload phases are:
 - `load_insert_many`: batched document inserts.
 - `id_find_one`: point lookup by `_id`.
 - `email_find_one`: point lookup by the `email` field.
-- `age_range_limit_10`: bounded range query with `limit: 10`.
+- `age_range_limit_10`: bounded range query with `limit: 10`; operations count
+  range queries, not returned documents.
 - `id_update_set`: `$set` update by `_id`.
 - `id_delete_one`: optional deletes; disabled unless `-deletes` is non-zero.
 
 Latency samples are per MongoDB driver call. Insert ops/sec is normalized by
 document count, while insert latency percentiles are per `InsertMany` call.
+Range-query samples include cursor materialization with `cursor.All`.
 
 ## Interpreting Results
 
@@ -98,7 +102,11 @@ currently a bounded scan in the gateway and is included to make that cost
 visible.
 
 For TreeDB, compare `treedb_disk_after_checkpoint.total_bytes` and the child
-path breakdown, especially `index.db`, `leaf_vlog`, and `value_vlog`.
+path breakdown, especially `index.db`, `leaf_vlog`, and `value_vlog`. These are
+logical bytes: the sum of regular file sizes, not allocated physical disk usage
+including block allocation, sparse-file effects, filesystem compression, or
+metadata. Capture `du` separately when physical on-disk usage is the comparison
+target.
 
 For MongoDB, compare `mongodb_stats_final.storageSize`,
 `mongodb_stats_final.indexSize`, and `mongodb_stats_final.totalSize`. If the
