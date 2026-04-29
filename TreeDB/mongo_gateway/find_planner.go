@@ -90,19 +90,12 @@ func (s *Server) executeFind(col *collections.Collection, command wire.Document,
 		return nil, err
 	}
 	out := make([]wire.Document, 0, len(docs))
-	batchBytes := 0
-	maxBatchBytes := s.maxFindBatchBytes()
 	for _, doc := range docs {
 		projected, err := projectDocument(doc, projection)
 		if err != nil {
 			return nil, err
 		}
-		docBytes := len(projected) + 16
-		if len(out) > 0 && batchBytes+docBytes > maxBatchBytes {
-			break
-		}
 		out = append(out, projected)
-		batchBytes += docBytes
 	}
 	return out, nil
 }
@@ -115,6 +108,13 @@ func validateFindCommandOptions(command wire.Document, filter wire.Document) err
 		return err
 	}
 	if _, _, err := parseFindPagination(command); err != nil {
+		return err
+	}
+	batchSize, batchSizeSet, err := optionalInt32FieldWithPresence(command, "batchSize")
+	if err != nil {
+		return err
+	}
+	if _, err := normalizeBatchSize(int(batchSize), batchSizeSet); err != nil {
 		return err
 	}
 	projection, err := commandOptionalDocument(command, "projection")
