@@ -2199,6 +2199,9 @@ func (c *Collection) FindByIndexValue(indexName string, value any) ([][]byte, er
 	return out, nil
 }
 
+// ScanDocuments flushes buffered no-index writes before acquiring a snapshot,
+// then scans the collection primary root up to maxDocuments. The returned
+// boolean is true when additional documents were present beyond the limit.
 func (c *Collection) ScanDocuments(maxDocuments int) ([]DocumentRecord, bool, error) {
 	if c == nil {
 		return nil, false, errCollectionNil

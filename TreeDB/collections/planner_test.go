@@ -131,6 +131,8 @@ func TestAppendIndexScalarEncodesIntoArena(t *testing.T) {
 		{name: "bool true", value: true, want: "b:1"},
 		{name: "bool false", value: false, want: "b:0"},
 		{name: "number", value: float64(42.5), want: "n:42.5"},
+		{name: "int32", value: int32(42), want: "n:42"},
+		{name: "int64", value: int64(9007199254740993), want: "n:9007199254740993"},
 		{name: "null", value: nil, want: "z:"},
 	}
 	for _, tc := range tests {

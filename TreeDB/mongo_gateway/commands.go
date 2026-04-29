@@ -90,7 +90,8 @@ func (s *Server) findResponse(command wire.Document) (wire.Document, error) {
 	if err != nil {
 		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
 	}
-	if err := validateFindCommandOptions(command, filter); err != nil {
+	plan, err := parseFindPlan(command, filter)
+	if err != nil {
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}
 	col, err := s.Collections.OpenCollection(name)
@@ -100,7 +101,7 @@ func (s *Server) findResponse(command wire.Document) (wire.Document, error) {
 	if err != nil {
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}
-	firstBatch, err := s.executeFind(col, command, filter)
+	firstBatch, err := s.executeFind(col, plan)
 	if err != nil {
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}

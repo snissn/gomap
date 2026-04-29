@@ -624,7 +624,15 @@ func TestServerFindPlannerIndexedAndBoundedPredicates(t *testing.T) {
 	})
 	assertCommandError(t, mixedOperator, "BadValue")
 
-	nonIndexableValue := serveCommand(t, server, 243, bson.D{
+	unsupportedSort := serveCommand(t, server, 243, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{}},
+		{Key: "sort", Value: bson.D{{Key: "$natural", Value: int32(1)}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, unsupportedSort, "BadValue")
+
+	nonIndexableValue := serveCommand(t, server, 244, bson.D{
 		{Key: "find", Value: "users"},
 		{Key: "filter", Value: bson.D{{Key: "city", Value: bson.D{{Key: "nested", Value: "hnl"}}}}},
 		{Key: "$db", Value: "app"},
@@ -767,11 +775,13 @@ func TestCompareRawNumbersHandlesNonFiniteDoubles(t *testing.T) {
 		{Key: "pos_inf", Value: math.Inf(1)},
 		{Key: "neg_inf", Value: math.Inf(-1)},
 		{Key: "finite", Value: 1.5},
+		{Key: "large_int", Value: int64(9007199254740993)},
 	}))
 	nanValue := raw.Lookup("nan")
 	posInf := raw.Lookup("pos_inf")
 	negInf := raw.Lookup("neg_inf")
 	finite := raw.Lookup("finite")
+	largeInt := raw.Lookup("large_int")
 
 	if rawValuesEqual(nanValue, finite) {
 		t.Fatal("NaN compared equal to finite number")
@@ -784,6 +794,10 @@ func TestCompareRawNumbersHandlesNonFiniteDoubles(t *testing.T) {
 	}
 	if cmp := compareRawValues(negInf, finite); cmp >= 0 {
 		t.Fatalf("-Inf vs finite cmp=%d want <0", cmp)
+	}
+	scalar, ok := indexScalarForBSONValue(largeInt)
+	if !ok || scalar != int64(9007199254740993) {
+		t.Fatalf("large int scalar=%v ok=%v want int64", scalar, ok)
 	}
 }
 

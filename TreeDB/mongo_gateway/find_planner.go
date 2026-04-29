@@ -36,18 +36,52 @@ type findSort struct {
 	desc  bool
 }
 
-func (s *Server) executeFind(col *collections.Collection, command wire.Document, filter wire.Document) (bson.A, error) {
+type findPlan struct {
+	predicates []findPredicate
+	sort       findSort
+	skip       int32
+	limit      int32
+	projection compiledProjection
+}
+
+func parseFindPlan(command wire.Document, filter wire.Document) (findPlan, error) {
 	predicates, err := parseFindPredicates(filter)
 	if err != nil {
-		return nil, err
+		return findPlan{}, err
 	}
-	docs, err := s.findCandidateDocuments(col, predicates)
+	sortSpec, err := parseFindSort(command)
+	if err != nil {
+		return findPlan{}, err
+	}
+	skip, limit, err := parseFindPagination(command)
+	if err != nil {
+		return findPlan{}, err
+	}
+	projectionDoc, err := commandOptionalDocument(command, "projection")
+	if err != nil {
+		return findPlan{}, err
+	}
+	projection, err := compileProjection(projectionDoc)
+	if err != nil {
+		return findPlan{}, err
+	}
+	return findPlan{
+		predicates: predicates,
+		sort:       sortSpec,
+		skip:       skip,
+		limit:      limit,
+		projection: projection,
+	}, nil
+}
+
+func (s *Server) executeFind(col *collections.Collection, plan findPlan) (bson.A, error) {
+	docs, err := s.findCandidateDocuments(col, plan.predicates)
 	if err != nil {
 		return nil, err
 	}
 	filtered := docs[:0]
 	for _, doc := range docs {
-		match, err := documentMatchesPredicates(doc, predicates)
+		match, err := documentMatchesPredicates(doc, plan.predicates)
 		if err != nil {
 			return nil, err
 		}
@@ -57,57 +91,40 @@ func (s *Server) executeFind(col *collections.Collection, command wire.Document,
 	}
 	docs = filtered
 
-	sortSpec, err := parseFindSort(command)
-	if err != nil {
-		return nil, err
-	}
-	if sortSpec.field != "" {
+	if plan.sort.field != "" {
 		sort.SliceStable(docs, func(i, j int) bool {
-			cmp := compareDocumentField(docs[i], docs[j], sortSpec.field)
-			if sortSpec.desc {
+			cmp := compareDocumentField(docs[i], docs[j], plan.sort.field)
+			if plan.sort.desc {
 				return cmp > 0
 			}
 			return cmp < 0
 		})
 	}
 
-	skip, limit, err := parseFindPagination(command)
-	if err != nil {
-		return nil, err
-	}
-	if skip > 0 {
-		if int(skip) >= len(docs) {
+	if plan.skip > 0 {
+		if int(plan.skip) >= len(docs) {
 			docs = nil
 		} else {
-			docs = docs[skip:]
+			docs = docs[plan.skip:]
 		}
 	}
-	if limit > 0 && int(limit) < len(docs) {
-		docs = docs[:limit]
-	}
-
-	projectionDoc, err := commandOptionalDocument(command, "projection")
-	if err != nil {
-		return nil, err
-	}
-	projection, err := compileProjection(projectionDoc)
-	if err != nil {
-		return nil, err
+	if plan.limit > 0 && int(plan.limit) < len(docs) {
+		docs = docs[:plan.limit]
 	}
 	firstBatch := make(bson.A, 0, len(docs))
 	batchBytes := 0
 	maxBatchBytes := s.maxFindBatchBytes()
 	for _, doc := range docs {
-		projected, err := projectDocumentWithProjection(doc, projection)
+		projected, err := projectDocumentWithProjection(doc, plan.projection)
 		if err != nil {
 			return nil, err
 		}
 		docBytes := len(projected) + 16
 		if docBytes > maxBatchBytes {
-			return nil, fmt.Errorf("Mongo gateway find result document exceeds max message size")
+			return nil, fmt.Errorf("Mongo gateway find result document exceeds max message size: docBytes=%d maxBatchBytes=%d", docBytes, maxBatchBytes)
 		}
 		if batchBytes+docBytes > maxBatchBytes {
-			return nil, fmt.Errorf("Mongo gateway find results exceed max message size")
+			return nil, fmt.Errorf("Mongo gateway find results exceed max message size: batchBytes=%d docBytes=%d maxBatchBytes=%d", batchBytes, docBytes, maxBatchBytes)
 		}
 		firstBatch = append(firstBatch, bson.Raw(projected))
 		batchBytes += docBytes
@@ -116,25 +133,8 @@ func (s *Server) executeFind(col *collections.Collection, command wire.Document,
 }
 
 func validateFindCommandOptions(command wire.Document, filter wire.Document) error {
-	if _, err := parseFindPredicates(filter); err != nil {
-		return err
-	}
-	if _, err := parseFindSort(command); err != nil {
-		return err
-	}
-	if _, _, err := parseFindPagination(command); err != nil {
-		return err
-	}
-	projection, err := commandOptionalDocument(command, "projection")
-	if err != nil {
-		return err
-	}
-	if projection != nil {
-		if _, _, _, _, err := parseProjection(projection); err != nil {
-			return err
-		}
-	}
-	return nil
+	_, err := parseFindPlan(command, filter)
+	return err
 }
 
 func (s *Server) maxFindBatchBytes() int {
@@ -511,6 +511,9 @@ func parseFindSort(command wire.Document) (findSort, error) {
 	if err != nil {
 		return findSort{}, err
 	}
+	if field == "" || strings.HasPrefix(field, "$") {
+		return findSort{}, errors.New("Mongo gateway find sort field must be a supported document field")
+	}
 	value := elements[0].Value()
 	if isAscendingIndexKey(value) {
 		return findSort{field: field}, nil
@@ -884,9 +887,15 @@ func indexScalarForBSONValue(value bson.RawValue) (any, bool) {
 		return nil, true
 	case bson.TypeDouble:
 		out, ok := value.DoubleOK()
+		if ok && (math.IsNaN(out) || math.IsInf(out, 0)) {
+			return nil, false
+		}
 		return out, ok
-	case bson.TypeInt32, bson.TypeInt64:
-		out, ok := value.AsFloat64OK()
+	case bson.TypeInt32:
+		out, ok := value.Int32OK()
+		return out, ok
+	case bson.TypeInt64:
+		out, ok := value.Int64OK()
 		return out, ok
 	default:
 		return nil, false
