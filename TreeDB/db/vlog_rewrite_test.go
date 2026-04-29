@@ -779,6 +779,78 @@ func TestValueLogRewriteOnline_RefreshesCollectionRootThroughDescriptorAlias(t *
 	}
 }
 
+func TestValueLogRewriteOnline_ToleratesDivergedDescriptorAlias(t *testing.T) {
+	dir := t.TempDir()
+
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer closeNoErr(t, db)
+
+	oldPtr := appendPointersInNewSegment(t, dir, 0, 1, 540_000, 1, func(int) []byte {
+		return []byte("old collection diverged alias value")
+	})[0]
+	newValue := []byte("new collection diverged alias value")
+	newPtr := appendPointersInNewSegment(t, dir, 0, 2, 541_000, 1, func(int) []byte {
+		return newValue
+	})[0]
+	if err := db.RefreshValueLogSet(); err != nil {
+		t.Fatalf("refresh value log set: %v", err)
+	}
+
+	aliasDescriptorKey := "collections/root/users/diverged-alias"
+	_, rootIDs, err := db.PublishOrderedRootGroupWithSystemBuilder([]OrderedRootPublishInput{{
+		BaseRoot:      0,
+		Iter:          mustFrozenSystemPointerMemtable(t, "doc/p", oldPtr).NewIterator(nil, nil),
+		StoragePolicy: OrderedRootStoragePagerLeaves,
+	}}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		if len(rootIDs) != 1 {
+			return nil, fmt.Errorf("rootIDs=%d want 1", len(rootIDs))
+		}
+		return mustFrozenRawMemtable(t,
+			maintenanceTestCollectionRootKey, encodeMaintenanceRootID(rootIDs[0]),
+			aliasDescriptorKey, encodeMaintenanceRootID(rootIDs[0]),
+		).NewIterator(nil, nil), nil
+	})
+	if err != nil {
+		t.Fatalf("publish aliased collection root: %v", err)
+	}
+	oldRoot := rootIDs[0]
+	otherRoot, err := db.PublishOrderedRootIterator(0, mustFrozenRawMemtable(t, "doc/other", []byte("other")).NewIterator(nil, nil))
+	if err != nil {
+		t.Fatalf("publish other root: %v", err)
+	}
+	if _, err := db.PublishSystemRootIterator(mustFrozenRawMemtable(t,
+		maintenanceTestCollectionRootKey, encodeMaintenanceRootID(otherRoot),
+		aliasDescriptorKey, encodeMaintenanceRootID(oldRoot),
+	).NewIterator(nil, nil)); err != nil {
+		t.Fatalf("diverge primary descriptor: %v", err)
+	}
+
+	target := &collectionRewriteRootState{
+		descriptorKey: append([]byte(nil), maintenanceTestCollectionRootKey...),
+		descriptorAliases: [][]byte{
+			append([]byte(nil), maintenanceTestCollectionRootKey...),
+			[]byte(aliasDescriptorKey),
+		},
+		rootID:     oldRoot,
+		systemRoot: 0,
+	}
+	if err := db.applyRewriteSwapBatchToCollectionRoot(target, []rewriteSwap{{key: []byte("doc/p"), oldPtr: oldPtr, newPtr: newPtr}}, false); err != nil {
+		t.Fatalf("apply collection rewrite swap with diverged alias: %v", err)
+	}
+	if got := readCollectionRootValue(t, db, aliasDescriptorKey, []byte("doc/p")); !bytes.Equal(got, newValue) {
+		t.Fatalf("alias descriptor value=%q want %q", got, newValue)
+	}
+	if len(target.descriptorAliases) != 1 || !bytes.Equal(target.descriptorAliases[0], []byte(aliasDescriptorKey)) {
+		t.Fatalf("refreshed descriptor aliases=%q want diverged alias only", target.descriptorAliases)
+	}
+	if gotRoot := readCollectionRootID(t, db, maintenanceTestCollectionRootKey); gotRoot != otherRoot {
+		t.Fatalf("primary descriptor root=%d want unrelated root %d", gotRoot, otherRoot)
+	}
+}
+
 func TestValueLogRewriteOnline_RewritesCollectionLeafRefRootPointers(t *testing.T) {
 	db, leafLog := openLeafGenerationGCTestDB(t)
 	dir := db.dir
@@ -4821,7 +4893,7 @@ func readCollectionRootIDFromSnapshot(t *testing.T, snap *Snapshot, descriptorKe
 func readCollectionRootValue(t *testing.T, db *DB, descriptorKey string, key []byte) []byte {
 	t.Helper()
 	snap := db.AcquireSnapshot()
-	if snap == nil {
+	if snap == nil || snap.state == nil {
 		t.Fatal("expected snapshot")
 	}
 	defer snap.Close()
@@ -4841,17 +4913,16 @@ func readCollectionProjectedPointerByKey(t *testing.T, db *DB, descriptorKey str
 	}
 	defer snap.Close()
 	rootID := readCollectionRootIDFromSnapshot(t, snap, descriptorKey)
-	it, err := snap.IteratorAtRootWithOptions(rootID, nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
+	it, err := snap.IteratorAtRootWithOptions(rootID, key, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
 	if err != nil {
 		t.Fatalf("IteratorAtRootWithOptions(%d): %v", rootID, err)
 	}
 	defer it.Close()
-	for ; it.Valid(); it.Next() {
-		if !bytes.Equal(it.UnsafeKey(), key) {
-			continue
+	if it.Valid() {
+		if bytes.Equal(it.UnsafeKey(), key) {
+			_, ptr, flags := it.UnsafeEntry()
+			return ptr, flags
 		}
-		_, ptr, flags := it.UnsafeEntry()
-		return ptr, flags
 	}
 	if err := it.Error(); err != nil {
 		t.Fatalf("collection projection iterator error: %v", err)
