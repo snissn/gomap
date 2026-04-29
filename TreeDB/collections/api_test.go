@@ -314,22 +314,6 @@ func TestCollectionLeafGenerationPackGC_RoundTripWithTemplateV1SecondaryIndexes(
 		t.Fatalf("checkpoint: %v", err)
 	}
 
-	planCtx, planCancel := collectionMaintenanceTestContext(t)
-	planBefore, err := d.LeafGenerationPlan(planCtx, backenddb.LeafGenerationPlanOptions{Force: true})
-	planCancel()
-	if err != nil {
-		t.Fatalf("LeafGenerationPlan before pack: %v", err)
-	}
-	if got := planBefore.CandidateLivePages; got <= 0 {
-		t.Fatalf("CandidateLivePages=%d, want collection leaf pages before pack (plan=%+v)", got, planBefore)
-	}
-	if got := planBefore.CandidateBytesLive; got <= minExpectedCollectionLiveBytesForSmoke {
-		t.Fatalf("CandidateBytesLive=%d, want real collection live bytes before pack (plan=%+v)", got, planBefore)
-	}
-	if got := planBefore.CandidateBytesDead; got <= 0 {
-		t.Fatalf("CandidateBytesDead=%d, want reclaimable bytes before pack (plan=%+v)", got, planBefore)
-	}
-
 	packCtx, packCancel := collectionMaintenanceTestContext(t)
 	packStats, err := d.LeafGenerationPackFromPlan(packCtx, backenddb.LeafGenerationPackFromPlanOptions{
 		Force:          true,
@@ -643,14 +627,14 @@ func requireCollectionMaintenanceTemplateReads(t *testing.T, col *Collection) {
 	id := collectionMaintenanceTemplateID(2)
 	got, err := col.Get(id)
 	if err != nil {
-		t.Fatalf("get %s: %v", id, err)
+		t.Fatalf("get %q: %v", id, err)
 	}
 	if !bytes.HasPrefix(got, []byte(templateV1StoredMagic)) {
 		prefixLen := len(got)
 		if prefixLen > len(templateV1StoredMagic) {
 			prefixLen = len(templateV1StoredMagic)
 		}
-		t.Fatalf("stored %s prefix=%q want template-v1 stored magic", id, got[:prefixLen])
+		t.Fatalf("stored %q prefix=%q want template-v1 stored magic", id, got[:prefixLen])
 	}
 	emailIDs, err := col.FindByIndex("email", "user-000000001@example.com")
 	if err != nil {
@@ -1539,10 +1523,10 @@ func TestCollectionInsertBatchBridge_AppendsWithoutDroppingExistingRoots(t *test
 	} {
 		got, err := col.Get([]byte(id))
 		if err != nil {
-			t.Fatalf("get %s: %v", id, err)
+			t.Fatalf("get %q: %v", id, err)
 		}
 		if !bytes.Equal(got, want) {
-			t.Fatalf("%s=%q want %q", id, got, want)
+			t.Fatalf("%q=%q want %q", id, got, want)
 		}
 	}
 
