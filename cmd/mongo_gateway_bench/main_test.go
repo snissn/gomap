@@ -91,6 +91,17 @@ func TestValidateResettableTreeDBDirRejectsSymlinkComponents(t *testing.T) {
 	}
 }
 
+func TestUnsafeResetPathModeRejectsLinksAndReparsePoints(t *testing.T) {
+	for _, mode := range []os.FileMode{os.ModeSymlink, os.ModeIrregular, os.ModeDir | os.ModeIrregular} {
+		if !unsafeResetPathMode(mode) {
+			t.Fatalf("unsafeResetPathMode(%v)=false want true", mode)
+		}
+	}
+	if unsafeResetPathMode(os.ModeDir) {
+		t.Fatal("plain directory marked unsafe")
+	}
+}
+
 func TestRedactMongoURI(t *testing.T) {
 	got := redactMongoURI("mongodb://user:secret@127.0.0.1:27017/db?authSource=admin")
 	want := "mongodb://user@127.0.0.1:27017/db?authSource=admin"

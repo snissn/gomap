@@ -347,11 +347,16 @@ func rejectSymlinkedPath(path string) error {
 			}
 			return err
 		}
-		if info.Mode()&os.ModeSymlink != 0 {
-			return fmt.Errorf("unsafe treedb-dir %q resolves through symlink %q", path, current)
+		if unsafeResetPathMode(info.Mode()) {
+			return fmt.Errorf("unsafe treedb-dir %q resolves through link/reparse point %q", path, current)
 		}
 	}
 	return nil
+}
+
+func unsafeResetPathMode(mode os.FileMode) bool {
+	// Go 1.23 no longer reports all Windows junction/reparse points as symlinks.
+	return mode&(os.ModeSymlink|os.ModeIrregular) != 0
 }
 
 func openMongoTarget(ctx context.Context, cfg config) (*benchTarget, error) {
