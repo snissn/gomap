@@ -638,13 +638,20 @@ func TestValueLogRewriteOnline_RepointsAliasedCollectionRootDescriptors(t *testi
 	}
 	defer closeNoErr(t, db)
 
-	ptr := appendPointersInNewSegment(t, dir, 0, 1, 515_000, 1, func(int) []byte {
-		return bytes.Repeat([]byte("collection-online-alias-pointer-live|"), 24)
-	})[0]
+	ptrs := appendPointersInNewSegment(t, dir, 0, 1, 515_000, 2, func(i int) []byte {
+		return bytes.Repeat([]byte(fmt.Sprintf("collection-online-alias-pointer-live-%d|", i)), 24)
+	})
+	rootTable, err := memtable.NewWithCapacityMode(2, memtable.ModeHashSorted)
+	if err != nil {
+		t.Fatalf("new root memtable: %v", err)
+	}
+	rootTable.SetEntry([]byte("doc/p"), nil, ptrs[0], node.FlagPointer)
+	rootTable.SetEntry([]byte("doc/q"), nil, ptrs[1], node.FlagPointer)
+	rootTable.Freeze()
 	aliasDescriptorKey := "collections/root/users/alias"
 	_, rootIDs, err := db.PublishOrderedRootGroupWithSystemBuilder([]OrderedRootPublishInput{{
 		BaseRoot:      0,
-		Iter:          mustFrozenSystemPointerMemtable(t, "doc/p", ptr).NewIterator(nil, nil),
+		Iter:          rootTable.NewIterator(nil, nil),
 		StoragePolicy: OrderedRootStoragePagerLeaves,
 	}}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
 		if len(rootIDs) != 1 {
@@ -664,14 +671,14 @@ func TestValueLogRewriteOnline_RepointsAliasedCollectionRootDescriptors(t *testi
 	oldRoot := rootIDs[0]
 
 	stats, err := db.ValueLogRewriteOnline(context.Background(), ValueLogRewriteOnlineOptions{
-		SourceFileIDs: []uint32{ptr.FileID},
+		SourceFileIDs: []uint32{ptrs[0].FileID},
 		BatchSize:     1,
 	})
 	if err != nil {
 		t.Fatalf("ValueLogRewriteOnline: %v", err)
 	}
-	if stats.RecordsCopied != 1 {
-		t.Fatalf("expected one collection pointer record to be copied, stats=%+v", stats)
+	if stats.RecordsCopied != 2 {
+		t.Fatalf("expected two collection pointer records to be copied, stats=%+v", stats)
 	}
 	if stats.SourceSegmentsUnreferenced != 1 {
 		t.Fatalf("source segments unreferenced=%d want 1 (stats=%+v)", stats.SourceSegmentsUnreferenced, stats)
@@ -685,19 +692,21 @@ func TestValueLogRewriteOnline_RepointsAliasedCollectionRootDescriptors(t *testi
 	if aliasRoot != newRoot {
 		t.Fatalf("alias descriptor root=%d want rewritten root %d", aliasRoot, newRoot)
 	}
-	want := bytes.Repeat([]byte("collection-online-alias-pointer-live|"), 24)
 	for _, descriptorKey := range []string{maintenanceTestCollectionRootKey, aliasDescriptorKey} {
-		got := readCollectionRootValue(t, db, descriptorKey, []byte("doc/p"))
-		if !bytes.Equal(got, want) {
-			t.Fatalf("collection value mismatch through descriptor %q after online rewrite", descriptorKey)
+		for i, key := range []string{"doc/p", "doc/q"} {
+			got := readCollectionRootValue(t, db, descriptorKey, []byte(key))
+			want := bytes.Repeat([]byte(fmt.Sprintf("collection-online-alias-pointer-live-%d|", i)), 24)
+			if !bytes.Equal(got, want) {
+				t.Fatalf("collection value mismatch through descriptor %q key %q after online rewrite", descriptorKey, key)
+			}
 		}
 	}
 	referenced, err := db.referencedValueLogSegments(context.Background())
 	if err != nil {
 		t.Fatalf("referencedValueLogSegments: %v", err)
 	}
-	if _, ok := referenced[ptr.FileID]; ok {
-		t.Fatalf("source segment %d remains referenced after aliased collection rewrite: %v", ptr.FileID, referenced)
+	if _, ok := referenced[ptrs[0].FileID]; ok {
+		t.Fatalf("source segment %d remains referenced after aliased collection rewrite: %v", ptrs[0].FileID, referenced)
 	}
 }
 
@@ -803,12 +812,11 @@ func TestValueLogRewriteOnline_CollectionRootCommitUsesCurrentStoragePolicy(t *t
 	}
 	primeValueLogRefTracker(t, db)
 
-	if err := db.applyRewriteSwapBatchToCollectionRoot(
-		[]byte(maintenanceTestCollectionRootKey),
-		OrderedRootStoragePagerLeaves, // stale scan-time policy; current root uses value-log leaves.
-		[]rewriteSwap{{key: []byte("doc/p"), oldPtr: oldPtr, newPtr: newPtr}},
-		false,
-	); err != nil {
+	target := &collectionRewriteRootState{
+		descriptorKey: append([]byte(nil), maintenanceTestCollectionRootKey...),
+		storagePolicy: OrderedRootStoragePagerLeaves, // stale scan-time policy; current root uses value-log leaves.
+	}
+	if err := db.applyRewriteSwapBatchToCollectionRoot(target, []rewriteSwap{{key: []byte("doc/p"), oldPtr: oldPtr, newPtr: newPtr}}, false); err != nil {
 		t.Fatalf("apply collection rewrite swap with stale policy: %v", err)
 	}
 	if _, ok := db.valueLogRefTracker.referencedSet(db.currentCommitSeq()); ok {
