@@ -4405,6 +4405,14 @@ func readCollectionRootID(t *testing.T, db *DB, descriptorKey string) uint64 {
 		t.Fatal("expected snapshot")
 	}
 	defer snap.Close()
+	return readCollectionRootIDFromSnapshot(t, snap, descriptorKey)
+}
+
+func readCollectionRootIDFromSnapshot(t *testing.T, snap *Snapshot, descriptorKey string) uint64 {
+	t.Helper()
+	if snap == nil || snap.state == nil {
+		t.Fatal("expected snapshot")
+	}
 	encoded, err := snap.GetAtRoot(snap.state.SystemRootPageID, []byte(descriptorKey))
 	if err != nil {
 		t.Fatalf("read collection descriptor %q: %v", descriptorKey, err)
@@ -4417,12 +4425,12 @@ func readCollectionRootID(t *testing.T, db *DB, descriptorKey string) uint64 {
 
 func readCollectionRootValue(t *testing.T, db *DB, descriptorKey string, key []byte) []byte {
 	t.Helper()
-	rootID := readCollectionRootID(t, db, descriptorKey)
 	snap := db.AcquireSnapshot()
-	if snap == nil {
+	if snap == nil || snap.state == nil {
 		t.Fatal("expected snapshot")
 	}
 	defer snap.Close()
+	rootID := readCollectionRootIDFromSnapshot(t, snap, descriptorKey)
 	val, err := snap.GetAtRoot(rootID, key)
 	if err != nil {
 		t.Fatalf("read collection key %q at root %d: %v", key, rootID, err)
