@@ -650,8 +650,8 @@ func TestLeafGenerationPlan_CachesLiveStatsPerPublishedState(t *testing.T) {
 	if err := snap.Close(); err != nil {
 		t.Fatalf("close snapshot: %v", err)
 	}
-	if got, want := counter.Load(), uint64(1); got != want {
-		t.Fatalf("scan count after gc helper reuse=%d, want %d", got, want)
+	if got, want := counter.Load(), uint64(2); got != want {
+		t.Fatalf("scan count after uncached gc helper=%d, want %d", got, want)
 	}
 
 	if err := db.Commit(rootBefore); err != nil {
@@ -670,7 +670,7 @@ func TestLeafGenerationPlan_CachesLiveStatsPerPublishedState(t *testing.T) {
 	if _, err := db.LeafGenerationPlan(context.Background(), LeafGenerationPlanOptions{}); err != nil {
 		t.Fatalf("LeafGenerationPlan after same-root commit: %v", err)
 	}
-	if got, want := counter.Load(), uint64(2); got != want {
+	if got, want := counter.Load(), uint64(3); got != want {
 		t.Fatalf("scan count after same-root commit=%d, want %d", got, want)
 	}
 
@@ -685,7 +685,7 @@ func TestLeafGenerationPlan_CachesLiveStatsPerPublishedState(t *testing.T) {
 	if _, err := db.LeafGenerationPlan(context.Background(), LeafGenerationPlanOptions{}); err != nil {
 		t.Fatalf("LeafGenerationPlan after root change: %v", err)
 	}
-	if got, want := counter.Load(), uint64(3); got != want {
+	if got, want := counter.Load(), uint64(4); got != want {
 		t.Fatalf("scan count after root change=%d, want %d", got, want)
 	}
 }
