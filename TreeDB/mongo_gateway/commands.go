@@ -98,11 +98,17 @@ func (s *Server) findResponse(command wire.Document) (wire.Document, error) {
 	if err != nil {
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}
-	firstBatch, err := s.executeFind(col, command, filter)
+	docs, err := s.executeFind(col, command, filter)
 	if err != nil {
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}
-	return marshalCursorResponse(db, collection, firstBatch)
+	batchSize, err := optionalInt32Field(command, "batchSize")
+	if err != nil {
+		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
+	}
+	ns := db + "." + collection
+	cursorID, firstBatch := s.openCursor(ns, docs, int(batchSize))
+	return marshalCursorResponseWithID(ns, cursorID, "firstBatch", firstBatch)
 }
 
 func (s *Server) updateResponse(command wire.Document, sequences []wire.DocumentSequence) (wire.Document, error) {
@@ -446,6 +452,55 @@ func (s *Server) dropIndexesResponse(command wire.Document) (wire.Document, erro
 	})
 }
 
+func (s *Server) getMoreResponse(command wire.Document) (wire.Document, error) {
+	cursorID, err := requiredInt64Field(command, "getMore")
+	if err != nil {
+		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
+	}
+	collection, err := commandString(command, "collection")
+	if err != nil {
+		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
+	}
+	db, err := commandString(command, "$db")
+	if err != nil {
+		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
+	}
+	batchSize, err := optionalInt32Field(command, "batchSize")
+	if err != nil {
+		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
+	}
+	ns := db + "." + collection
+	nextID, nextBatch, ok := s.getMore(cursorID, ns, int(batchSize))
+	if !ok {
+		return commandError(43, "CursorNotFound", fmt.Sprintf("cursor not found: %d", cursorID))
+	}
+	return marshalCursorResponseWithID(ns, nextID, "nextBatch", nextBatch)
+}
+
+func (s *Server) killCursorsResponse(command wire.Document) (wire.Document, error) {
+	collection, err := commandString(command, "killCursors")
+	if err != nil {
+		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
+	}
+	db, err := commandString(command, "$db")
+	if err != nil {
+		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
+	}
+	cursorIDs, err := requiredInt64ArrayField(command, "cursors")
+	if err != nil {
+		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
+	}
+	ns := db + "." + collection
+	killed, notFound := s.killCursors(ns, cursorIDs)
+	return marshalDocument(bson.D{
+		{Key: "ok", Value: 1.0},
+		{Key: "cursorsKilled", Value: int64Array(killed)},
+		{Key: "cursorsNotFound", Value: int64Array(notFound)},
+		{Key: "cursorsAlive", Value: bson.A{}},
+		{Key: "cursorsUnknown", Value: bson.A{}},
+	})
+}
+
 func marshalUpdateResponse(matched, modified int32) (wire.Document, error) {
 	return marshalDocument(bson.D{
 		{Key: "ok", Value: 1.0},
@@ -462,14 +517,90 @@ func marshalDeleteResponse(deleted int32) (wire.Document, error) {
 }
 
 func marshalCursorResponse(db, collection string, firstBatch bson.A) (wire.Document, error) {
+	return marshalCursorResponseWithID(db+"."+collection, 0, "firstBatch", firstBatch)
+}
+
+func marshalCursorResponseWithID(ns string, cursorID int64, batchKey string, batch bson.A) (wire.Document, error) {
 	return marshalDocument(bson.D{
 		{Key: "cursor", Value: bson.D{
-			{Key: "id", Value: int64(0)},
-			{Key: "ns", Value: db + "." + collection},
-			{Key: "firstBatch", Value: firstBatch},
+			{Key: "id", Value: cursorID},
+			{Key: "ns", Value: ns},
+			{Key: batchKey, Value: batch},
 		}},
 		{Key: "ok", Value: 1.0},
 	})
+}
+
+func (s *Server) openCursor(ns string, docs []wire.Document, batchSize int) (int64, bson.A) {
+	batchSize = normalizeBatchSize(batchSize)
+	if len(docs) <= batchSize {
+		return 0, documentsBatch(docs)
+	}
+	firstBatch := documentsBatch(docs[:batchSize])
+	remaining := append([]wire.Document(nil), docs[batchSize:]...)
+	cursorID := s.nextCursorID.Add(1)
+	if cursorID == 0 {
+		cursorID = s.nextCursorID.Add(1)
+	}
+	s.cursorMu.Lock()
+	if s.cursors == nil {
+		s.cursors = make(map[int64]*serverCursor)
+	}
+	s.cursors[cursorID] = &serverCursor{ns: ns, docs: remaining}
+	s.cursorMu.Unlock()
+	return cursorID, firstBatch
+}
+
+func (s *Server) getMore(cursorID int64, ns string, batchSize int) (int64, bson.A, bool) {
+	if cursorID == 0 {
+		return 0, nil, false
+	}
+	batchSize = normalizeBatchSize(batchSize)
+	s.cursorMu.Lock()
+	defer s.cursorMu.Unlock()
+	cursor := s.cursors[cursorID]
+	if cursor == nil || cursor.ns != ns {
+		return 0, nil, false
+	}
+	if len(cursor.docs) <= batchSize {
+		delete(s.cursors, cursorID)
+		return 0, documentsBatch(cursor.docs), true
+	}
+	batch := documentsBatch(cursor.docs[:batchSize])
+	cursor.docs = append([]wire.Document(nil), cursor.docs[batchSize:]...)
+	return cursorID, batch, true
+}
+
+func (s *Server) killCursors(ns string, cursorIDs []int64) ([]int64, []int64) {
+	s.cursorMu.Lock()
+	defer s.cursorMu.Unlock()
+	killed := make([]int64, 0, len(cursorIDs))
+	notFound := make([]int64, 0)
+	for _, cursorID := range cursorIDs {
+		cursor := s.cursors[cursorID]
+		if cursor == nil || cursor.ns != ns {
+			notFound = append(notFound, cursorID)
+			continue
+		}
+		delete(s.cursors, cursorID)
+		killed = append(killed, cursorID)
+	}
+	return killed, notFound
+}
+
+func normalizeBatchSize(batchSize int) int {
+	if batchSize <= 0 {
+		return defaultCursorBatchSize
+	}
+	return batchSize
+}
+
+func documentsBatch(docs []wire.Document) bson.A {
+	out := make(bson.A, 0, len(docs))
+	for _, doc := range docs {
+		out = append(out, bson.Raw(doc))
+	}
+	return out
 }
 
 func (s *Server) openOrCreateCollection(name string) (*collections.Collection, error) {
@@ -549,6 +680,49 @@ func optionalInt32Field(doc wire.Document, key string) (int32, error) {
 		return int32(out), nil
 	}
 	return 0, fmt.Errorf("Mongo command field %q must be an integer", key)
+}
+
+func requiredInt64Field(doc wire.Document, key string) (int64, error) {
+	value := bson.Raw(doc).Lookup(key)
+	if value.IsZero() {
+		return 0, fmt.Errorf("Mongo command missing %q", key)
+	}
+	if out, ok := value.AsInt64OK(); ok {
+		return out, nil
+	}
+	return 0, fmt.Errorf("Mongo command field %q must be an integer", key)
+}
+
+func requiredInt64ArrayField(doc wire.Document, key string) ([]int64, error) {
+	value := bson.Raw(doc).Lookup(key)
+	if value.IsZero() {
+		return nil, fmt.Errorf("Mongo command missing %q", key)
+	}
+	array, ok := value.ArrayOK()
+	if !ok {
+		return nil, fmt.Errorf("Mongo command field %q must be an array", key)
+	}
+	values, err := array.Values()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]int64, 0, len(values))
+	for i, value := range values {
+		item, ok := value.AsInt64OK()
+		if !ok {
+			return nil, fmt.Errorf("Mongo command field %q[%d] must be an integer", key, i)
+		}
+		out = append(out, item)
+	}
+	return out, nil
+}
+
+func int64Array(values []int64) bson.A {
+	out := make(bson.A, 0, len(values))
+	for _, value := range values {
+		out = append(out, value)
+	}
+	return out
 }
 
 func collectionNameFilter(filter wire.Document) (string, error) {

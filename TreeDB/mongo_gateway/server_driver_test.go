@@ -339,6 +339,20 @@ func TestServerOfficialGoDriverFindPlanner(t *testing.T) {
 		t.Fatalf("_id in find results=%v want katherine", results)
 	}
 
+	cursor, err = coll.Find(opCtx,
+		bson.D{},
+		options.Find().SetSort(bson.D{{Key: "name", Value: int32(1)}}).SetBatchSize(1))
+	if err != nil {
+		t.Fatalf("driver batched find: %v", err)
+	}
+	results = nil
+	if err := cursor.All(opCtx, &results); err != nil {
+		t.Fatalf("driver batched find all: %v", err)
+	}
+	if len(results) != 3 || results[0]["name"] != "ada" || results[2]["name"] != "katherine" {
+		t.Fatalf("batched find results=%v want ada..katherine", results)
+	}
+
 	cancel()
 	_ = ln.Close()
 	select {

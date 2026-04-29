@@ -34,7 +34,7 @@ type findSort struct {
 	desc  bool
 }
 
-func (s *Server) executeFind(col *collections.Collection, command wire.Document, filter wire.Document) (bson.A, error) {
+func (s *Server) executeFind(col *collections.Collection, command wire.Document, filter wire.Document) ([]wire.Document, error) {
 	predicates, err := parseFindPredicates(filter)
 	if err != nil {
 		return nil, err
@@ -95,15 +95,15 @@ func (s *Server) executeFind(col *collections.Collection, command wire.Document,
 	if err != nil {
 		return nil, err
 	}
-	firstBatch := make(bson.A, 0, len(docs))
+	out := make([]wire.Document, 0, len(docs))
 	for _, doc := range docs {
 		projected, err := projectDocument(doc, projection)
 		if err != nil {
 			return nil, err
 		}
-		firstBatch = append(firstBatch, bson.Raw(projected))
+		out = append(out, projected)
 	}
-	return firstBatch, nil
+	return out, nil
 }
 
 func (s *Server) findCandidateDocuments(col *collections.Collection, predicates []findPredicate) ([]wire.Document, error) {

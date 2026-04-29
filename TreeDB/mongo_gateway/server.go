@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -18,6 +19,7 @@ const (
 	defaultMaxBSONObjectSize    = 16 * 1024 * 1024
 	defaultMaxWriteBatchSize    = 100_000
 	defaultMaxFindScanDocuments = 10_000
+	defaultCursorBatchSize      = 101
 )
 
 type Server struct {
@@ -26,6 +28,14 @@ type Server struct {
 	Collections          *collections.CollectionManager
 
 	nextResponseID atomic.Int32
+	nextCursorID   atomic.Int64
+	cursorMu       sync.Mutex
+	cursors        map[int64]*serverCursor
+}
+
+type serverCursor struct {
+	ns   string
+	docs []wire.Document
 }
 
 func NewServer() *Server {
@@ -135,6 +145,10 @@ func (s *Server) commandResponse(name string, command wire.Document, sequences [
 		return s.insertResponse(command, sequences)
 	case "find":
 		return s.findResponse(command)
+	case "getMore":
+		return s.getMoreResponse(command)
+	case "killCursors":
+		return s.killCursorsResponse(command)
 	case "update":
 		return s.updateResponse(command, sequences)
 	case "delete":

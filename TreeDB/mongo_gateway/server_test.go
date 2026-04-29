@@ -437,6 +437,77 @@ func TestServerFindPlannerIndexedAndBoundedPredicates(t *testing.T) {
 	}
 }
 
+func TestServerFindGetMoreAndKillCursors(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	assertOK(t, serveCommand(t, server, 236, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{
+			bson.D{{Key: "_id", Value: "u1"}, {Key: "name", Value: "ada"}},
+			bson.D{{Key: "_id", Value: "u2"}, {Key: "name", Value: "grace"}},
+			bson.D{{Key: "_id", Value: "u3"}, {Key: "name", Value: "katherine"}},
+		}},
+		{Key: "$db", Value: "app"},
+	}))
+
+	findResponse := serveCommand(t, server, 237, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{}},
+		{Key: "sort", Value: bson.D{{Key: "name", Value: int32(1)}}},
+		{Key: "batchSize", Value: int32(1)},
+		{Key: "$db", Value: "app"},
+	})
+	firstBatch := cursorFirstBatch(t, findResponse)
+	if len(firstBatch) != 1 {
+		t.Fatalf("firstBatch len=%d want 1", len(firstBatch))
+	}
+	cursorID := cursorIDFromResponse(t, findResponse)
+	if cursorID == 0 {
+		t.Fatal("cursor id=0 want open cursor")
+	}
+
+	getMoreResponse := serveCommand(t, server, 238, bson.D{
+		{Key: "getMore", Value: cursorID},
+		{Key: "collection", Value: "users"},
+		{Key: "batchSize", Value: int32(1)},
+		{Key: "$db", Value: "app"},
+	})
+	nextBatch := cursorNextBatch(t, getMoreResponse)
+	if len(nextBatch) != 1 {
+		t.Fatalf("nextBatch len=%d want 1", len(nextBatch))
+	}
+	if nextID := cursorIDFromResponse(t, getMoreResponse); nextID != cursorID {
+		t.Fatalf("cursor id after first getMore=%d want %d", nextID, cursorID)
+	}
+
+	killResponse := serveCommand(t, server, 239, bson.D{
+		{Key: "killCursors", Value: "users"},
+		{Key: "cursors", Value: bson.A{cursorID}},
+		{Key: "$db", Value: "app"},
+	})
+	assertOK(t, killResponse)
+	killed, ok := bson.Raw(killResponse).Lookup("cursorsKilled").ArrayOK()
+	if !ok {
+		t.Fatal("cursorsKilled missing")
+	}
+	if values, err := killed.Values(); err != nil || len(values) != 1 {
+		t.Fatalf("cursorsKilled values len/err=%d/%v want 1/nil", len(values), err)
+	}
+
+	missingResponse := serveCommand(t, server, 240, bson.D{
+		{Key: "getMore", Value: cursorID},
+		{Key: "collection", Value: "users"},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, missingResponse, "CursorNotFound")
+}
+
 func TestServerFindByIDMissingCollectionReturnsEmptyBatch(t *testing.T) {
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
@@ -652,6 +723,44 @@ func cursorFirstBatch(tb testing.TB, doc wire.Document) []bson.Raw {
 		out = append(out, doc)
 	}
 	return out
+}
+
+func cursorNextBatch(tb testing.TB, doc wire.Document) []bson.Raw {
+	tb.Helper()
+	cursor, ok := bson.Raw(doc).Lookup("cursor").DocumentOK()
+	if !ok {
+		tb.Fatalf("cursor missing or not document in %v", bson.Raw(doc))
+	}
+	batch, ok := cursor.Lookup("nextBatch").ArrayOK()
+	if !ok {
+		tb.Fatalf("cursor.nextBatch missing or not array in %v", cursor)
+	}
+	values, err := batch.Values()
+	if err != nil {
+		tb.Fatalf("nextBatch values: %v", err)
+	}
+	out := make([]bson.Raw, 0, len(values))
+	for i, value := range values {
+		doc, ok := value.DocumentOK()
+		if !ok {
+			tb.Fatalf("nextBatch[%d] is not a document", i)
+		}
+		out = append(out, doc)
+	}
+	return out
+}
+
+func cursorIDFromResponse(tb testing.TB, doc wire.Document) int64 {
+	tb.Helper()
+	cursor, ok := bson.Raw(doc).Lookup("cursor").DocumentOK()
+	if !ok {
+		tb.Fatalf("cursor missing or not document in %v", bson.Raw(doc))
+	}
+	id, ok := cursor.Lookup("id").Int64OK()
+	if !ok {
+		tb.Fatalf("cursor.id missing or not int64 in %v", cursor)
+	}
+	return id
 }
 
 func assertInt32(tb testing.TB, doc wire.Document, key string, want int32) {
