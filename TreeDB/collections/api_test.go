@@ -1308,6 +1308,36 @@ func TestCollectionScanDocumentsAndFindByIndexValue(t *testing.T) {
 	}
 }
 
+func TestCollectionFindByIndexValueMatchesLargeJSONInteger(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name:    "users",
+		Indexes: []IndexDefinition{{Name: "big", Field: "big"}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.Insert([]byte("u1"), []byte(`{"big":9007199254740993}`)); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	ids, err := col.FindByIndexValue("big", int64(9007199254740993))
+	if err != nil {
+		t.Fatalf("find by index value: %v", err)
+	}
+	if len(ids) != 1 || !bytes.Equal(ids[0], []byte("u1")) {
+		t.Fatalf("ids=%q want u1", ids)
+	}
+}
+
 func TestCollectionCreateIndexBackfill_EmptyCollectionUpdatesSchema(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
