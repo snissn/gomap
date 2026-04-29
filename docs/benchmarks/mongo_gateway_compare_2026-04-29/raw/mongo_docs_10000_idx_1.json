@@ -1,0 +1,102 @@
+{
+  "target": "mongo",
+  "mongo_uri": "mongodb://127.0.0.1:32777",
+  "database": "mongo_gateway_compare_docs_10000_idx_1",
+  "collection": "docs",
+  "documents": 10000,
+  "secondary_indexes": 1,
+  "phases": [
+    {
+      "name": "load_insert_many",
+      "operations": 10000,
+      "driver_calls": 20,
+      "duration_ms": 109.184,
+      "ops_per_sec": 91588.24606274036,
+      "latency_micros": {
+        "p50": 4943,
+        "p95": 5498,
+        "p99": 6111
+      }
+    },
+    {
+      "name": "id_find_one",
+      "operations": 1000,
+      "driver_calls": 1000,
+      "duration_ms": 121.301,
+      "ops_per_sec": 8243.954440280422,
+      "latency_micros": {
+        "p50": 116,
+        "p95": 137,
+        "p99": 234
+      }
+    },
+    {
+      "name": "email_find_one",
+      "operations": 1000,
+      "driver_calls": 1000,
+      "duration_ms": 139.731,
+      "ops_per_sec": 7156.602983563452,
+      "latency_micros": {
+        "p50": 134,
+        "p95": 156,
+        "p99": 188
+      }
+    },
+    {
+      "name": "age_range_limit_10",
+      "operations": 100,
+      "driver_calls": 100,
+      "duration_ms": 19.916,
+      "ops_per_sec": 5020.894452263093,
+      "latency_micros": {
+        "p50": 193,
+        "p95": 224,
+        "p99": 278
+      }
+    },
+    {
+      "name": "id_update_set",
+      "operations": 100,
+      "driver_calls": 100,
+      "duration_ms": 14.285,
+      "ops_per_sec": 7000.099121403559,
+      "latency_micros": {
+        "p50": 138,
+        "p95": 152,
+        "p99": 257
+      }
+    }
+  ],
+  "mongodb_stats_after_load": {
+    "avgObjSize": 292,
+    "collections": 1,
+    "dataSize": 2920000,
+    "db": "mongo_gateway_compare_docs_10000_idx_1",
+    "fsTotalSize": 1967317549056,
+    "fsUsedSize": 1795375693824,
+    "indexSize": 8192,
+    "indexes": 2,
+    "objects": 10000,
+    "ok": 1,
+    "scaleFactor": 1,
+    "storageSize": 4096,
+    "totalSize": 12288,
+    "views": 0
+  },
+  "mongodb_stats_final": {
+    "avgObjSize": 292.3,
+    "collections": 1,
+    "dataSize": 2923000,
+    "db": "mongo_gateway_compare_docs_10000_idx_1",
+    "fsTotalSize": 1967317549056,
+    "fsUsedSize": 1795375706112,
+    "indexSize": 8192,
+    "indexes": 2,
+    "objects": 10000,
+    "ok": 1,
+    "scaleFactor": 1,
+    "storageSize": 4096,
+    "totalSize": 12288,
+    "views": 0
+  }
+}

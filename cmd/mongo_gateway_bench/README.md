@@ -53,7 +53,64 @@ For `-target mongo`, the command connects to the supplied URI, drops the
 benchmark database by default, and reports `dbStats` fields after load and at
 the end of the run.
 
-## Suggested Matrix
+## Reusable Comparison Harness
+
+Use `scripts/mongo_gateway_compare.sh` when you want a complete
+TreeDB-vs-MongoDB matrix bundle instead of hand-running each target. The
+harness builds `mongo_gateway_bench`, runs matching TreeDB and MongoDB cells,
+writes raw JSON for every target, records physical `du` bytes where available,
+and generates a Markdown report plus TSV summary.
+
+```sh
+scripts/mongo_gateway_compare.sh \
+  --out /tmp/gomap_mongo_gateway_compare \
+  --docs "1000 10000" \
+  --indexes "0 2" \
+  --mongo-mode docker
+```
+
+Docker mode starts a fresh MongoDB container and isolated data directory per
+matrix cell, which makes MongoDB physical disk usage reproducible enough for
+local comparisons. If you already have a MongoDB server, use:
+
+```sh
+scripts/mongo_gateway_compare.sh \
+  --mongo-mode external \
+  --mongo-uri mongodb://127.0.0.1:27017
+```
+
+The bundle contains:
+
+- `report.md`: reviewable Markdown with highlights, disk bytes/doc, ops/sec
+  ratios, and raw input paths.
+- `summary.tsv`: machine-readable per-phase comparison rows.
+- `matrix.tsv`: target/document/index/raw-json/physical-byte index.
+- `raw/*.json`: unmodified `mongo_gateway_bench -format json` output.
+- `treedb_data/` and, in Docker mode, `mongodb_data/`: final data directories
+  for post-run inspection.
+
+The first checked-in bundle is
+`docs/benchmarks/mongo_gateway_compare_2026-04-29/`.
+
+To regenerate only the report from an existing bundle:
+
+```sh
+GOWORK=off go run ./cmd/mongo_gateway_compare_report \
+  -matrix /tmp/gomap_mongo_gateway_compare/matrix.tsv \
+  -report /tmp/gomap_mongo_gateway_compare/report.md \
+  -summary /tmp/gomap_mongo_gateway_compare/summary.tsv
+```
+
+Useful overrides:
+
+- `DOCS_LIST="1000 10000 100000"`
+- `INDEXES_LIST="0 1 2"`
+- `READS=50000`, `RANGE_READS=5000`, `UPDATES=5000`
+- `DELETES=1000`
+- `BATCH_SIZE=1000`
+- `MONGO_IMAGE=mongo:8`
+
+## Manual Matrix
 
 Run both targets with the same values and keep the raw JSON outputs:
 
@@ -114,7 +171,9 @@ target.
 For MongoDB, compare `mongodb_stats_final.storageSize`,
 `mongodb_stats_final.indexSize`, and `mongodb_stats_final.totalSize`. If the
 MongoDB server is local, also capture a filesystem `du` of the database path for
-the final report.
+the final report. The comparison harness treats isolated physical `du` as the
+preferred local disk metric because small WiredTiger workloads can report
+`dbStats.totalSize` values that are much smaller than the actual data directory.
 
 The benchmark intentionally keeps BSON format questions visible. If TreeDB load
 or read phases spend a meaningful amount of time re-encoding documents in future
