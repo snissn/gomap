@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -589,6 +590,111 @@ func TestLeafGenerationPack_RewritesCollectionLeafRefRoot(t *testing.T) {
 	}
 }
 
+func TestLeafGenerationPack_RewritesCollectionInternalRootsBeforeGC(t *testing.T) {
+	db, leafLog, dir := openLeafGenerationPackTestDB(t)
+
+	descriptorKeys := []string{
+		"collections/root/pack/users/primary",
+		"collections/root/pack/users/index-state",
+		"collections/root/pack/users/email_idx",
+		"collections/root/pack/users/city_idx",
+	}
+	inputs := []OrderedRootPublishInput{
+		{BaseRoot: 0, Iter: collectionPackTable(t, "doc", 0, 4096, 'a').NewIterator(nil, nil), StoragePolicy: OrderedRootStorageValueLogLeaves},
+		{BaseRoot: 0, Iter: collectionPackTable(t, "state", 0, 4096, 's').NewIterator(nil, nil), StoragePolicy: OrderedRootStorageValueLogLeaves},
+		{BaseRoot: 0, Iter: collectionPackTable(t, "email", 0, 4096, 'e').NewIterator(nil, nil), StoragePolicy: OrderedRootStorageValueLogLeaves},
+		{BaseRoot: 0, Iter: collectionPackTable(t, "city", 0, 4096, 'c').NewIterator(nil, nil), StoragePolicy: OrderedRootStorageValueLogLeaves},
+	}
+	_, rootIDs, err := db.PublishOrderedRootGroupWithSystemBuilder(inputs, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		return collectionPackDescriptorIterator(t, descriptorKeys, rootIDs), nil
+	})
+	if err != nil {
+		t.Fatalf("publish collection roots: %v", err)
+	}
+	if len(rootIDs) != len(descriptorKeys) {
+		t.Fatalf("rootIDs=%d want %d", len(rootIDs), len(descriptorKeys))
+	}
+	oldLeafPath, fileID1 := currentLeafSegmentOrFatal(t, leafLog)
+	rawFileID1 := page.ValueLogSegmentID(fileID1)
+	oldLeafIndexPath := leafGenerationRecordLengthIndexPath(dir, rawFileID1)
+	if err := leafLog.Sync(); err != nil {
+		t.Fatalf("sync leaf log: %v", err)
+	}
+	if err := leafLog.rotateLeaf(); err != nil {
+		t.Fatalf("rotate leaf log: %v", err)
+	}
+
+	_, updatedRootIDs, err := db.PublishOrderedRootDeltaGroupWithSystemBuilder([]OrderedRootDeltaPublishInput{{
+		BaseRoot:      rootIDs[0],
+		Iter:          collectionPackTable(t, "doc", 0, 512, 'b').NewIterator(nil, nil),
+		StoragePolicy: OrderedRootStorageValueLogLeaves,
+	}}, func(updatedRootIDs []uint64) (iterator.UnsafeIterator, error) {
+		if len(updatedRootIDs) != 1 {
+			return nil, fmt.Errorf("updatedRootIDs=%d want 1", len(updatedRootIDs))
+		}
+		nextRootIDs := append([]uint64(nil), rootIDs...)
+		nextRootIDs[0] = updatedRootIDs[0]
+		return collectionPackDescriptorIterator(t, descriptorKeys, nextRootIDs), nil
+	})
+	if err != nil {
+		t.Fatalf("publish collection root delta: %v", err)
+	}
+	rootIDs[0] = updatedRootIDs[0]
+
+	manifest := loadLeafGenerationManifestOrFatal(t, dir)
+	gen := findLeafGenerationByFileID(t, manifest, rawFileID1)
+	planBefore, err := db.LeafGenerationPlan(context.Background(), LeafGenerationPlanOptions{Force: true})
+	if err != nil {
+		t.Fatalf("LeafGenerationPlan before pack: %v", err)
+	}
+	entryBefore := findLeafGenerationPlanEntry(t, planBefore, gen.GenerationID)
+	if got := entryBefore.LivePages; got < 16 {
+		t.Fatalf("generation %d LivePages=%d, want many live collection leaves before pack (entry=%+v)", gen.GenerationID, got, entryBefore)
+	}
+	if got := entryBefore.BytesLive; got <= 16*1024 {
+		t.Fatalf("generation %d BytesLive=%d, want >16KiB before pack (entry=%+v)", gen.GenerationID, got, entryBefore)
+	}
+	if got := entryBefore.BytesDead; got <= 0 {
+		t.Fatalf("generation %d BytesDead=%d, want >0 before pack (entry=%+v)", gen.GenerationID, got, entryBefore)
+	}
+
+	stats, err := db.LeafGenerationPack(context.Background(), LeafGenerationPackOptions{
+		GenerationIDs: []uint64{gen.GenerationID},
+		Sync:          true,
+		Force:         true,
+	})
+	if err != nil {
+		t.Fatalf("LeafGenerationPack: %v", err)
+	}
+	if got := stats.LeafPagesCopied; got < entryBefore.LivePages {
+		t.Fatalf("LeafPagesCopied=%d, want at least live collection pages %d", got, entryBefore.LivePages)
+	}
+	planAfter, err := db.LeafGenerationPlan(context.Background(), LeafGenerationPlanOptions{Force: true})
+	if err != nil {
+		t.Fatalf("LeafGenerationPlan after pack: %v", err)
+	}
+	entryAfter := findLeafGenerationPlanEntry(t, planAfter, gen.GenerationID)
+	if got := entryAfter.BytesLive; got != 0 {
+		t.Fatalf("generation %d BytesLive=%d, want 0 after pack", gen.GenerationID, got)
+	}
+
+	if _, err := db.LeafGenerationGC(context.Background(), LeafGenerationGCOptions{}); err != nil {
+		t.Fatalf("LeafGenerationGC: %v", err)
+	}
+	if err := waitForPathRemoval(oldLeafPath, 5*time.Second); err != nil {
+		t.Fatalf("waitForPathRemoval(%s): %v", oldLeafPath, err)
+	}
+	if err := waitForPathRemoval(oldLeafIndexPath, 5*time.Second); err != nil {
+		t.Fatalf("waitForPathRemoval(%s): %v", oldLeafIndexPath, err)
+	}
+
+	expectCollectionPackValue(t, db, descriptorKeys[0], "doc-0000", 'b')
+	expectCollectionPackValue(t, db, descriptorKeys[0], "doc-2048", 'a')
+	expectCollectionPackValue(t, db, descriptorKeys[1], "state-2048", 's')
+	expectCollectionPackValue(t, db, descriptorKeys[2], "email-2048", 'e')
+	expectCollectionPackValue(t, db, descriptorKeys[3], "city-2048", 'c')
+}
+
 func TestLeafGenerationPack_PrunesCachedSubtreesOutsideSelection(t *testing.T) {
 	db, leafLog, dir := openLeafGenerationPackTestDB(t)
 
@@ -679,6 +785,36 @@ func TestLeafGenerationPack_RejectsDenseGenerationByDefault(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "selection admission=reclaim_per_copy_too_low") {
 		t.Fatalf("dense generation error=%v, want reclaim_per_copy_too_low", err)
+	}
+}
+
+func collectionPackTable(t *testing.T, keyPrefix string, start, count int, fill byte) memtable.Table {
+	t.Helper()
+	kvs := make([]any, 0, count*2)
+	for i := 0; i < count; i++ {
+		kvs = append(kvs, fmt.Sprintf("%s-%04d", keyPrefix, start+i), bytes.Repeat([]byte{fill}, 32))
+	}
+	return mustFrozenRawMemtable(t, kvs...)
+}
+
+func collectionPackDescriptorIterator(t *testing.T, descriptorKeys []string, rootIDs []uint64) iterator.UnsafeIterator {
+	t.Helper()
+	if len(descriptorKeys) != len(rootIDs) {
+		t.Fatalf("descriptorKeys=%d rootIDs=%d", len(descriptorKeys), len(rootIDs))
+	}
+	kvs := make([]any, 0, len(descriptorKeys)*2)
+	for i, key := range descriptorKeys {
+		kvs = append(kvs, key, encodeMaintenanceRootID(rootIDs[i]))
+	}
+	return mustFrozenRawMemtable(t, kvs...).NewIterator(nil, nil)
+}
+
+func expectCollectionPackValue(t *testing.T, db *DB, descriptorKey, key string, fill byte) {
+	t.Helper()
+	got := readCollectionRootValue(t, db, descriptorKey, []byte(key))
+	want := bytes.Repeat([]byte{fill}, 32)
+	if !bytes.Equal(got, want) {
+		t.Fatalf("collection root %q key %q=%x, want %x", descriptorKey, key, got, want)
 	}
 }
 

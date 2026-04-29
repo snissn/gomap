@@ -106,6 +106,10 @@ type leafGenerationScanContext struct {
 	lastFileState *leafGenerationScanFileState
 }
 
+type leafGenerationLiveStatsScanOptions struct {
+	DisableCache bool
+}
+
 var leafGenerationLiveScanHook struct {
 	mu sync.Mutex
 	fn func()
@@ -551,6 +555,11 @@ func (db *DB) leafGenerationLiveStatsForSnapshot(ctx context.Context, snap *Snap
 	return stats, nil
 }
 
+func (db *DB) leafGenerationLiveStatsForSnapshotUncached(ctx context.Context, snap *Snapshot) (leafGenerationLiveScanStats, error) {
+	runLeafGenerationLiveScanHook()
+	return db.scanLeafGenerationLiveStatsWithOptions(ctx, snap, leafGenerationLiveStatsScanOptions{DisableCache: true})
+}
+
 func (db *DB) scanLeafGenerationPtrTotals(scan *leafGenerationScanContext, dst leafGenerationSubtreeStats, ptr page.LeafLogPtr) (leafGenerationSubtreeStats, error) {
 	if scan == nil {
 		return dst, fmt.Errorf("leaf generation plan: missing scan context")
@@ -655,6 +664,10 @@ func (db *DB) scanLeafGenerationSubtreeStats(ctx context.Context, scan *leafGene
 }
 
 func (db *DB) scanLeafGenerationLiveStats(ctx context.Context, snap *Snapshot) (leafGenerationLiveScanStats, error) {
+	return db.scanLeafGenerationLiveStatsWithOptions(ctx, snap, leafGenerationLiveStatsScanOptions{})
+}
+
+func (db *DB) scanLeafGenerationLiveStatsWithOptions(ctx context.Context, snap *Snapshot, opts leafGenerationLiveStatsScanOptions) (leafGenerationLiveScanStats, error) {
 	stats := leafGenerationLiveScanStats{
 		Generations: make(map[uint64]leafGenerationLiveTotals),
 	}
@@ -702,7 +715,7 @@ func (db *DB) scanLeafGenerationLiveStats(ctx context.Context, snap *Snapshot) (
 		verify:        verify,
 		fileStateByID: fileStateByID,
 		memo:          make(map[uint64]leafGenerationSubtreeStats, 64),
-		cacheEnabled:  !verifyAlways,
+		cacheEnabled:  !opts.DisableCache && !verifyAlways,
 	}
 	roots, err := maintenanceRootsForSnapshot(snap)
 	if err != nil {
