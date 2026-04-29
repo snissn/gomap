@@ -165,6 +165,9 @@ func TestGoTestArgsIncludeSQLiteTagsOnlyForSQLiteCell(t *testing.T) {
 	if !strings.Contains(treeArgs, "-benchtime 10x") {
 		t.Fatalf("tree args missing benchtime: %s", treeArgs)
 	}
+	if !strings.Contains(treeArgs, "-timeout 0") {
+		t.Fatalf("tree args missing disabled timeout: %s", treeArgs)
+	}
 
 	sqlite := matrixCell{BenchmarkPattern: "BenchmarkSQLiteShapeInsertBatchJSON", Tags: []string{"sqlite_bench"}}
 	sqliteArgs := strings.Join(goTestArgs(sqlite, cfg), " ")

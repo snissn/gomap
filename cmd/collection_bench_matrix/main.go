@@ -24,6 +24,7 @@ type config struct {
 	repoRoot               string
 	outDir                 string
 	goBinary               string
+	goTestTimeout          string
 	benchtime              string
 	count                  int
 	batchSize              int
@@ -95,6 +96,7 @@ func parseFlags(args []string) (config, error) {
 	var rawStorageCells string
 	cfg := config{
 		goBinary:               "go",
+		goTestTimeout:          "0",
 		benchtime:              "100000x",
 		count:                  1,
 		batchSize:              16000,
@@ -112,6 +114,7 @@ func parseFlags(args []string) (config, error) {
 	fs.StringVar(&cfg.repoRoot, "repo-root", "", "Repository root; defaults to git rev-parse --show-toplevel")
 	fs.StringVar(&cfg.outDir, "out-dir", "", "Output directory; defaults to /tmp/collection_bench_matrix_<timestamp>")
 	fs.StringVar(&cfg.goBinary, "go", cfg.goBinary, "go binary to execute")
+	fs.StringVar(&cfg.goTestTimeout, "go-test-timeout", cfg.goTestTimeout, "go test -timeout value for benchmark cells; 0 disables the timeout")
 	fs.StringVar(&cfg.benchtime, "benchtime", cfg.benchtime, "go test -benchtime value")
 	fs.IntVar(&cfg.count, "count", cfg.count, "go test -count value")
 	fs.IntVar(&cfg.batchSize, "batch-size", cfg.batchSize, "TREEDB_COLLECTION_BENCH_BATCH_SIZE")
@@ -187,6 +190,9 @@ func run(cfg config, commandLine []string) error {
 		return err
 	}
 	cfg.repoRoot = repoRoot
+	if strings.TrimSpace(cfg.goTestTimeout) == "" {
+		cfg.goTestTimeout = "0"
+	}
 	if cfg.outDir == "" {
 		cfg.outDir = defaultOutputDir(time.Now().UTC())
 	}
@@ -452,6 +458,7 @@ func goTestArgs(cell matrixCell, cfg config) []string {
 		"-run", "^$",
 		"-bench", cell.BenchmarkPattern,
 		"-benchmem",
+		"-timeout", cfg.goTestTimeout,
 		"-count", strconv.Itoa(cfg.count),
 		"-benchtime", cfg.benchtime,
 		"-json",

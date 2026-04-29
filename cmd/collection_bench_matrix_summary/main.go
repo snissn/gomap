@@ -339,7 +339,18 @@ func matrixIndexArtifactPath(baseDir, artifactPath string) (string, error) {
 		return "", fmt.Errorf("resolve artifact path %q: %w", artifactPath, err)
 	}
 	if rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) || filepath.IsAbs(rel) {
-		return "", fmt.Errorf("relative artifact path %q escapes matrix directory", artifactPath)
+		return "", fmt.Errorf("artifact path %q escapes matrix directory", artifactPath)
+	}
+	if resolvedBase, err := filepath.EvalSymlinks(baseDir); err == nil {
+		if resolvedJoined, err := filepath.EvalSymlinks(joined); err == nil {
+			rel, err := filepath.Rel(resolvedBase, resolvedJoined)
+			if err != nil {
+				return "", fmt.Errorf("resolve artifact path %q symlinks: %w", artifactPath, err)
+			}
+			if rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) || filepath.IsAbs(rel) {
+				return "", fmt.Errorf("resolved artifact path %q escapes matrix directory", artifactPath)
+			}
+		}
 	}
 	return joined, nil
 }

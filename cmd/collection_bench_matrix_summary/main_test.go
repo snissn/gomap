@@ -92,6 +92,35 @@ func TestReadMatrixIndexRejectsAbsoluteReportPathOutsideMatrixDir(t *testing.T) 
 	}
 }
 
+func TestReadMatrixIndexRejectsSymlinkEscapingReportPath(t *testing.T) {
+	dir := t.TempDir()
+	outsideDir := t.TempDir()
+	outside := filepath.Join(outsideDir, "collections_report.md")
+	if err := os.WriteFile(outside, []byte("# outside\n"), 0o644); err != nil {
+		t.Fatalf("write outside report: %v", err)
+	}
+	cellDir := filepath.Join(dir, "cell_a")
+	if err := os.MkdirAll(cellDir, 0o755); err != nil {
+		t.Fatalf("mkdir cell: %v", err)
+	}
+	if err := os.Symlink(outside, filepath.Join(cellDir, "collections_report.md")); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	indexPath := filepath.Join(dir, "matrix_index.tsv")
+	index := strings.Join([]string{
+		"cell\tengine\tdocument_format\tdata_outer_leaves_in_vlog\tindex_outer_leaves_in_vlog\tpager_chunk_size\tpager_sync_concurrency\treport_md\treport_json",
+		"cell_a\tproduction_fast\tjson\ttrue\ttrue\tprofile/default\tprofile/default\tcell_a/collections_report.md\tcell_a/collections_report.json",
+	}, "\n")
+	if err := os.WriteFile(indexPath, []byte(index), 0o644); err != nil {
+		t.Fatalf("write matrix index: %v", err)
+	}
+
+	_, err := readMatrixIndex(indexPath)
+	if err == nil || !strings.Contains(err.Error(), "resolved artifact path") {
+		t.Fatalf("readMatrixIndex err=%v want symlink escape rejection", err)
+	}
+}
+
 func TestReadMatrixIndexRejectsVolumeQualifiedReportPath(t *testing.T) {
 	volumePath := filepath.Join("C:cell_a", "collections_report.md")
 	if filepath.VolumeName(volumePath) == "" {
