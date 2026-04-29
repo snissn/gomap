@@ -353,6 +353,76 @@ func TestServerIndexMetadataCommands(t *testing.T) {
 	assertIndexName(t, indexBatch[0], "_id_")
 }
 
+func TestServerFindPlannerIndexedAndBoundedPredicates(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	assertOK(t, serveCommand(t, server, 232, bson.D{
+		{Key: "createIndexes", Value: "users"},
+		{Key: "indexes", Value: bson.A{bson.D{
+			{Key: "key", Value: bson.D{{Key: "city", Value: int32(1)}}},
+			{Key: "name", Value: "city_1"},
+		}}},
+		{Key: "$db", Value: "app"},
+	}))
+	id1 := bson.NewObjectID()
+	id2 := bson.NewObjectID()
+	id3 := bson.NewObjectID()
+	assertOK(t, serveCommand(t, server, 233, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{
+			bson.D{{Key: "_id", Value: id1}, {Key: "name", Value: "ada"}, {Key: "city", Value: "hnl"}, {Key: "age", Value: int64(37)}},
+			bson.D{{Key: "_id", Value: id2}, {Key: "name", Value: "grace"}, {Key: "city", Value: "hnl"}, {Key: "age", Value: int64(42)}},
+			bson.D{{Key: "_id", Value: id3}, {Key: "name", Value: "katherine"}, {Key: "city", Value: "sfo"}, {Key: "age", Value: int64(36)}},
+		}},
+		{Key: "$db", Value: "app"},
+	}))
+
+	indexedFind := serveCommand(t, server, 234, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "$and", Value: bson.A{
+			bson.D{{Key: "city", Value: "hnl"}},
+			bson.D{{Key: "age", Value: bson.D{{Key: "$gte", Value: int64(40)}}}},
+		}}}},
+		{Key: "projection", Value: bson.D{{Key: "name", Value: int32(1)}, {Key: "_id", Value: int32(0)}}},
+		{Key: "$db", Value: "app"},
+	})
+	firstBatch := cursorFirstBatch(t, indexedFind)
+	if len(firstBatch) != 1 {
+		t.Fatalf("indexed firstBatch len=%d want 1", len(firstBatch))
+	}
+	if got, ok := firstBatch[0].Lookup("name").StringValueOK(); !ok || got != "grace" {
+		t.Fatalf("projected name=%q ok=%v want grace", got, ok)
+	}
+	if !firstBatch[0].Lookup("_id").IsZero() {
+		t.Fatalf("projected document unexpectedly includes _id: %v", firstBatch[0])
+	}
+	if !firstBatch[0].Lookup("age").IsZero() {
+		t.Fatalf("projected document unexpectedly includes age: %v", firstBatch[0])
+	}
+
+	inFind := serveCommand(t, server, 235, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "_id", Value: bson.D{{Key: "$in", Value: bson.A{id3, id1}}}}}},
+		{Key: "sort", Value: bson.D{{Key: "name", Value: int32(1)}}},
+		{Key: "skip", Value: int32(1)},
+		{Key: "limit", Value: int32(1)},
+		{Key: "$db", Value: "app"},
+	})
+	firstBatch = cursorFirstBatch(t, inFind)
+	if len(firstBatch) != 1 {
+		t.Fatalf("$in firstBatch len=%d want 1", len(firstBatch))
+	}
+	if got, ok := firstBatch[0].Lookup("name").StringValueOK(); !ok || got != "katherine" {
+		t.Fatalf("$in sorted/skipped name=%q ok=%v want katherine", got, ok)
+	}
+}
+
 func TestServerFindByIDMissingCollectionReturnsEmptyBatch(t *testing.T) {
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {

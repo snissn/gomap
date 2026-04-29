@@ -15,13 +15,15 @@ import (
 )
 
 const (
-	defaultMaxBSONObjectSize = 16 * 1024 * 1024
-	defaultMaxWriteBatchSize = 100_000
+	defaultMaxBSONObjectSize    = 16 * 1024 * 1024
+	defaultMaxWriteBatchSize    = 100_000
+	defaultMaxFindScanDocuments = 10_000
 )
 
 type Server struct {
-	MaxMessageLength int32
-	Collections      *collections.CollectionManager
+	MaxMessageLength     int32
+	MaxFindScanDocuments int
+	Collections          *collections.CollectionManager
 
 	nextResponseID atomic.Int32
 }
@@ -196,6 +198,13 @@ func (s *Server) maxMessageLength() int32 {
 		return wire.DefaultMaxMessageLength
 	}
 	return s.MaxMessageLength
+}
+
+func (s *Server) maxFindScanDocuments() int {
+	if s.MaxFindScanDocuments <= 0 {
+		return defaultMaxFindScanDocuments
+	}
+	return s.MaxFindScanDocuments
 }
 
 func (s *Server) nextID() int32 {

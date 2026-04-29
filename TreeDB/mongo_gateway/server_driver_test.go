@@ -240,3 +240,113 @@ func TestServerOfficialGoDriverIndexMetadata(t *testing.T) {
 		t.Fatal("serve loop did not stop")
 	}
 }
+
+func TestServerOfficialGoDriverFindPlanner(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer func() { _ = ln.Close() }()
+
+	serveErr := make(chan error, 1)
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				if errors.Is(err, net.ErrClosed) || ctx.Err() != nil {
+					serveErr <- nil
+					return
+				}
+				serveErr <- err
+				return
+			}
+			go func() {
+				_ = server.ServeConn(ctx, conn)
+			}()
+		}
+	}()
+
+	client, err := mongo.Connect(options.Client().
+		ApplyURI("mongodb://" + ln.Addr().String()).
+		SetDirect(true).
+		SetServerSelectionTimeout(time.Second))
+	if err != nil {
+		t.Fatalf("mongo connect: %v", err)
+	}
+	defer func() { _ = client.Disconnect(context.Background()) }()
+
+	opCtx, opCancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer opCancel()
+	coll := client.Database("app").Collection("users")
+	if _, err := coll.Indexes().CreateOne(opCtx, mongo.IndexModel{
+		Keys:    bson.D{{Key: "city", Value: int32(1)}},
+		Options: options.Index().SetName("city_1"),
+	}); err != nil {
+		t.Fatalf("driver create city index: %v", err)
+	}
+	docs := []any{
+		bson.D{{Key: "_id", Value: "u1"}, {Key: "name", Value: "ada"}, {Key: "city", Value: "hnl"}, {Key: "age", Value: int64(37)}},
+		bson.D{{Key: "_id", Value: "u2"}, {Key: "name", Value: "grace"}, {Key: "city", Value: "hnl"}, {Key: "age", Value: int64(42)}},
+		bson.D{{Key: "_id", Value: "u3"}, {Key: "name", Value: "katherine"}, {Key: "city", Value: "sfo"}, {Key: "age", Value: int64(36)}},
+	}
+	if _, err := coll.InsertMany(opCtx, docs); err != nil {
+		t.Fatalf("driver insert many: %v", err)
+	}
+
+	cursor, err := coll.Find(opCtx,
+		bson.D{{Key: "$and", Value: bson.A{
+			bson.D{{Key: "city", Value: "hnl"}},
+			bson.D{{Key: "age", Value: bson.D{{Key: "$gte", Value: int64(40)}}}},
+		}}},
+		options.Find().
+			SetProjection(bson.D{{Key: "name", Value: int32(1)}, {Key: "_id", Value: int32(0)}}))
+	if err != nil {
+		t.Fatalf("driver indexed find: %v", err)
+	}
+	var results []bson.M
+	if err := cursor.All(opCtx, &results); err != nil {
+		t.Fatalf("driver indexed find all: %v", err)
+	}
+	if len(results) != 1 || results[0]["name"] != "grace" {
+		t.Fatalf("indexed find results=%v want grace", results)
+	}
+	if _, ok := results[0]["_id"]; ok {
+		t.Fatalf("indexed find projection included _id: %v", results[0])
+	}
+
+	cursor, err = coll.Find(opCtx,
+		bson.D{{Key: "_id", Value: bson.D{{Key: "$in", Value: bson.A{"u3", "u1"}}}}},
+		options.Find().SetSort(bson.D{{Key: "name", Value: int32(1)}}).SetSkip(1).SetLimit(1))
+	if err != nil {
+		t.Fatalf("driver _id in find: %v", err)
+	}
+	results = nil
+	if err := cursor.All(opCtx, &results); err != nil {
+		t.Fatalf("driver _id in find all: %v", err)
+	}
+	if len(results) != 1 || results[0]["name"] != "katherine" {
+		t.Fatalf("_id in find results=%v want katherine", results)
+	}
+
+	cancel()
+	_ = ln.Close()
+	select {
+	case err := <-serveErr:
+		if err != nil {
+			t.Fatalf("serve loop: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("serve loop did not stop")
+	}
+}

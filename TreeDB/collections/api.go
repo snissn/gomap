@@ -132,6 +132,11 @@ type CollectionSecondaryRunStats struct {
 	Build         time.Duration
 }
 
+type DocumentRecord struct {
+	ID       []byte
+	Document []byte
+}
+
 type RootStoragePolicy string
 
 const (
@@ -1791,6 +1796,10 @@ func (c *Collection) getBufferedDocument(documentID []byte) ([]byte, bool) {
 }
 
 func (c *Collection) FindByIndex(indexName, value string) ([][]byte, error) {
+	return c.FindByIndexValue(indexName, value)
+}
+
+func (c *Collection) FindByIndexValue(indexName string, value any) ([][]byte, error) {
 	if c == nil {
 		return nil, errCollectionNil
 	}
@@ -1852,6 +1861,66 @@ func (c *Collection) FindByIndex(indexName, value string) ([][]byte, error) {
 		return nil, err
 	}
 	return out, nil
+}
+
+func (c *Collection) ScanDocuments(maxDocuments int) ([]DocumentRecord, bool, error) {
+	if c == nil {
+		return nil, false, errCollectionNil
+	}
+	if c.db == nil {
+		return nil, false, errors.New("collections: db is nil")
+	}
+	if maxDocuments <= 0 {
+		return nil, false, errors.New("collections: max documents must be positive")
+	}
+	if err := c.flushBufferedNoIndex(); err != nil {
+		return nil, false, err
+	}
+	snap := c.db.AcquireSnapshot()
+	if snap == nil {
+		return nil, false, backenddb.ErrClosed
+	}
+	defer func() { _ = snap.Close() }()
+	catalog, err := c.catalogForSnapshot(snap)
+	if err != nil {
+		return nil, false, err
+	}
+	if catalog == nil {
+		return nil, false, errCollectionNotFound
+	}
+	rootID := catalog.rootID(collectionPrimaryRootName(catalog.meta.Name))
+	if rootID == 0 {
+		return nil, false, nil
+	}
+	it, err := snap.IteratorAtRoot(rootID, nil, nil)
+	if errors.Is(err, tree.ErrKeyNotFound) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	defer func() { _ = it.Close() }()
+	out := make([]DocumentRecord, 0)
+	truncated := false
+	for it.Valid() {
+		if it.IsDeleted() {
+			it.Next()
+			continue
+		}
+		if len(out) >= maxDocuments {
+			truncated = true
+			break
+		}
+		out = append(out, DocumentRecord{
+			ID:       bytes.Clone(it.UnsafeKey()),
+			Document: it.ValueCopy(nil),
+		})
+		it.Next()
+	}
+	if err := it.Error(); err != nil {
+		return nil, false, err
+	}
+	return out, truncated, nil
 }
 
 func loadCollectionCatalog(snap *backenddb.Snapshot, name string) (*collectionCatalog, error) {
