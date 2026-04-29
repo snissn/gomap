@@ -14,12 +14,19 @@ const (
 )
 
 const (
-	MsgSectionBody byte = 0
+	MsgSectionBody             byte = 0
+	MsgSectionDocumentSequence byte = 1
 )
 
 type Msg struct {
-	Flags MsgFlag
-	Body  Document
+	Flags     MsgFlag
+	Body      Document
+	Sequences []DocumentSequence
+}
+
+type DocumentSequence struct {
+	Identifier string
+	Documents  []Document
 }
 
 func ParseMsg(body []byte) (Msg, error) {
@@ -31,23 +38,46 @@ func ParseMsg(body []byte) (Msg, error) {
 		return Msg{}, err
 	}
 	rem := body[4:]
-	if rem[0] != MsgSectionBody {
-		return Msg{}, fmt.Errorf("%w: OP_MSG MVP only supports kind 0 body sections", ErrUnsupported)
+	msg := Msg{Flags: flags}
+	for len(rem) > 0 {
+		kind := rem[0]
+		rem = rem[1:]
+		switch kind {
+		case MsgSectionBody:
+			if msg.Body != nil {
+				return Msg{}, fmt.Errorf("%w: duplicate OP_MSG body section", ErrMalformed)
+			}
+			doc, next, err := readDocument(rem)
+			if err != nil {
+				return Msg{}, err
+			}
+			if err := ValidateDocument(doc); err != nil {
+				return Msg{}, err
+			}
+			msg.Body = doc
+			rem = next
+		case MsgSectionDocumentSequence:
+			seq, next, err := readDocumentSequence(rem)
+			if err != nil {
+				return Msg{}, err
+			}
+			msg.Sequences = append(msg.Sequences, seq)
+			rem = next
+		default:
+			return Msg{}, fmt.Errorf("%w: unknown OP_MSG section kind %d", ErrUnsupported, kind)
+		}
 	}
-	doc, rem, err := readDocument(rem[1:])
-	if err != nil {
-		return Msg{}, err
+	if msg.Body == nil {
+		return Msg{}, fmt.Errorf("%w: OP_MSG missing kind 0 body section", ErrMalformed)
 	}
-	if err := ValidateDocument(doc); err != nil {
-		return Msg{}, err
-	}
-	if len(rem) != 0 {
-		return Msg{}, fmt.Errorf("%w: OP_MSG MVP supports exactly one kind 0 section", ErrUnsupported)
-	}
-	return Msg{Flags: flags, Body: doc}, nil
+	return msg, nil
 }
 
 func AppendMsgBody(dst []byte, flags MsgFlag, doc Document) ([]byte, error) {
+	return AppendMsgBodyWithSequences(dst, flags, doc, nil)
+}
+
+func AppendMsgBodyWithSequences(dst []byte, flags MsgFlag, doc Document, sequences []DocumentSequence) ([]byte, error) {
 	if err := validateMsgFlags(flags); err != nil {
 		return nil, err
 	}
@@ -57,15 +87,72 @@ func AppendMsgBody(dst []byte, flags MsgFlag, doc Document) ([]byte, error) {
 	dst = appendInt32(dst, int32(flags))
 	dst = append(dst, MsgSectionBody)
 	dst = append(dst, doc...)
+	for _, seq := range sequences {
+		if err := validateCString(seq.Identifier); err != nil {
+			return nil, err
+		}
+		if seq.Identifier == "" {
+			return nil, fmt.Errorf("%w: OP_MSG document sequence identifier cannot be empty", ErrMalformed)
+		}
+		dst = append(dst, MsgSectionDocumentSequence)
+		sizeOffset := len(dst)
+		dst = appendInt32(dst, 0)
+		dst = appendCString(dst, seq.Identifier)
+		for _, doc := range seq.Documents {
+			if err := ValidateDocument(doc); err != nil {
+				return nil, err
+			}
+			dst = append(dst, doc...)
+		}
+		binary.LittleEndian.PutUint32(dst[sizeOffset:sizeOffset+4], uint32(len(dst)-sizeOffset))
+	}
 	return dst, nil
 }
 
 func AppendMsgMessage(dst []byte, requestID, responseTo int32, flags MsgFlag, doc Document) ([]byte, error) {
-	body, err := AppendMsgBody(nil, flags, doc)
+	return AppendMsgMessageWithSequences(dst, requestID, responseTo, flags, doc, nil)
+}
+
+func AppendMsgMessageWithSequences(dst []byte, requestID, responseTo int32, flags MsgFlag, doc Document, sequences []DocumentSequence) ([]byte, error) {
+	body, err := AppendMsgBodyWithSequences(nil, flags, doc, sequences)
 	if err != nil {
 		return nil, err
 	}
 	return AppendMessage(dst, requestID, responseTo, OpMsg, body)
+}
+
+func readDocumentSequence(src []byte) (DocumentSequence, []byte, error) {
+	if len(src) < 4 {
+		return DocumentSequence{}, nil, ErrMessageTooShort
+	}
+	size := int(int32(binary.LittleEndian.Uint32(src[:4])))
+	if size < 5 {
+		return DocumentSequence{}, nil, fmt.Errorf("%w: invalid OP_MSG document sequence size %d", ErrMalformed, size)
+	}
+	if size > len(src) {
+		return DocumentSequence{}, nil, fmt.Errorf("%w: truncated OP_MSG document sequence size=%d available=%d", ErrMessageTooShort, size, len(src))
+	}
+	section := src[4:size]
+	identifier, rem, err := readCString(section)
+	if err != nil {
+		return DocumentSequence{}, nil, err
+	}
+	if identifier == "" {
+		return DocumentSequence{}, nil, fmt.Errorf("%w: OP_MSG document sequence identifier cannot be empty", ErrMalformed)
+	}
+	seq := DocumentSequence{Identifier: identifier}
+	for len(rem) > 0 {
+		doc, next, err := readDocument(rem)
+		if err != nil {
+			return DocumentSequence{}, nil, err
+		}
+		if err := ValidateDocument(doc); err != nil {
+			return DocumentSequence{}, nil, err
+		}
+		seq.Documents = append(seq.Documents, doc)
+		rem = next
+	}
+	return seq, src[size:], nil
 }
 
 func validateMsgFlags(flags MsgFlag) error {

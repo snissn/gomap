@@ -302,7 +302,7 @@ func (p insertBatchPreflight) checkDocumentConflicts(items []insertBatchItem, or
 		return err
 	}
 	if exists {
-		return errors.New("collections: document already exists")
+		return ErrDocumentExists
 	}
 	return nil
 }
@@ -322,7 +322,7 @@ func (p insertBatchPreflight) checkUniqueConflicts(runs []collectionUniqueProbeR
 		}
 		for _, ok := range exists {
 			if ok {
-				return fmt.Errorf("collections: unique index %q conflict", run.indexName)
+				return fmt.Errorf("%w %q", ErrUniqueIndexConflict, run.indexName)
 			}
 		}
 	}
@@ -336,7 +336,7 @@ func borrowPrimaryDocument(_, document []byte) ([]byte, error) {
 func rejectDuplicateDocumentIDs(items []insertBatchItem, order []int) error {
 	for i := 1; i < len(items); i++ {
 		if bytes.Equal(items[orderedItemIndex(order, i-1)].id, items[orderedItemIndex(order, i)].id) {
-			return errors.New("collections: duplicate document id in batch")
+			return ErrDuplicateDocumentID
 		}
 	}
 	return nil
@@ -415,7 +415,7 @@ func rejectDuplicateUniqueProbeCandidates(candidates []uniqueProbeCandidate) err
 		if candidate.indexName == prev.indexName &&
 			bytes.Equal(candidate.encodedValue, prev.encodedValue) &&
 			!bytes.Equal(candidate.documentID, prev.documentID) {
-			return fmt.Errorf("collections: unique index %q conflict", candidate.indexName)
+			return fmt.Errorf("%w %q", ErrUniqueIndexConflict, candidate.indexName)
 		}
 	}
 	return nil

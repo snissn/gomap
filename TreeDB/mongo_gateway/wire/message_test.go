@@ -172,15 +172,43 @@ func TestParseMsgAllowsOptionalFlags(t *testing.T) {
 	}
 }
 
-func TestParseMsgRejectsDocumentSequenceUntilNeeded(t *testing.T) {
-	body := appendInt32(nil, 0)
-	body = append(body, 1) // kind 1 document sequence
-	body = appendInt32(body, 5)
-	body = append(body, 0)
-
-	_, err := ParseMsg(body)
-	if !errors.Is(err, ErrUnsupported) {
-		t.Fatalf("ParseMsg err=%v want ErrUnsupported", err)
+func TestMsgDocumentSequenceRoundTrip(t *testing.T) {
+	commandDoc := mustDocument(t, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "$db", Value: "app"},
+	})
+	docA := mustDocument(t, bson.D{{Key: "_id", Value: "a"}})
+	docB := mustDocument(t, bson.D{{Key: "_id", Value: "b"}})
+	wireBytes, err := AppendMsgMessageWithSequences(nil, 88, 0, 0, commandDoc, []DocumentSequence{{
+		Identifier: "documents",
+		Documents:  []Document{docA, docB},
+	}})
+	if err != nil {
+		t.Fatalf("AppendMsgMessageWithSequences: %v", err)
+	}
+	h, body, err := ReadMessage(bytes.NewReader(wireBytes), 0)
+	if err != nil {
+		t.Fatalf("ReadMessage: %v", err)
+	}
+	if h.OpCode != OpMsg {
+		t.Fatalf("opcode=%d want %d", h.OpCode, OpMsg)
+	}
+	msg, err := ParseMsg(body)
+	if err != nil {
+		t.Fatalf("ParseMsg: %v", err)
+	}
+	if !bytes.Equal(msg.Body, commandDoc) {
+		t.Fatalf("body mismatch")
+	}
+	if len(msg.Sequences) != 1 {
+		t.Fatalf("sequences=%d want 1", len(msg.Sequences))
+	}
+	seq := msg.Sequences[0]
+	if seq.Identifier != "documents" {
+		t.Fatalf("sequence identifier=%q want documents", seq.Identifier)
+	}
+	if len(seq.Documents) != 2 || !bytes.Equal(seq.Documents[0], docA) || !bytes.Equal(seq.Documents[1], docB) {
+		t.Fatalf("sequence documents=%d", len(seq.Documents))
 	}
 }
 

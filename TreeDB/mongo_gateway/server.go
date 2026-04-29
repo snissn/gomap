@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/snissn/gomap/TreeDB/collections"
 	"github.com/snissn/gomap/TreeDB/mongo_gateway/wire"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
@@ -20,6 +21,7 @@ const (
 
 type Server struct {
 	MaxMessageLength int32
+	Collections      *collections.CollectionManager
 
 	nextResponseID atomic.Int32
 }
@@ -97,7 +99,7 @@ func (s *Server) handleQuery(h wire.Header, body []byte) ([]byte, error) {
 		return nil, err
 	}
 
-	response, err := s.commandResponse(name)
+	response, err := s.commandResponse(name, q.Query, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -114,26 +116,25 @@ func (s *Server) handleMsg(h wire.Header, body []byte) ([]byte, error) {
 		return nil, err
 	}
 
-	response, err := s.commandResponse(name)
+	response, err := s.commandResponse(name, msg.Body, msg.Sequences)
 	if err != nil {
 		return nil, err
 	}
 	return wire.AppendMsgMessage(nil, s.nextID(), h.RequestID, 0, response)
 }
 
-func (s *Server) commandResponse(name string) (wire.Document, error) {
+func (s *Server) commandResponse(name string, command wire.Document, sequences []wire.DocumentSequence) (wire.Document, error) {
 	switch name {
 	case "hello", "isMaster", "ismaster":
 		return marshalDocument(helloResponse(s.maxMessageLength()))
 	case "ping":
 		return marshalDocument(bson.D{{Key: "ok", Value: 1.0}})
+	case "insert":
+		return s.insertResponse(command, sequences)
+	case "find":
+		return s.findResponse(command)
 	default:
-		return marshalDocument(bson.D{
-			{Key: "ok", Value: 0.0},
-			{Key: "errmsg", Value: "unsupported MongoDB gateway command: " + name},
-			{Key: "code", Value: int32(59)},
-			{Key: "codeName", Value: "CommandNotFound"},
-		})
+		return commandError(59, "CommandNotFound", "unsupported MongoDB gateway command: "+name)
 	}
 }
 
