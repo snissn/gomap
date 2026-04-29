@@ -31,6 +31,8 @@ func NewServer() *Server {
 }
 
 func (s *Server) ServeConn(ctx context.Context, conn net.Conn) error {
+	defer conn.Close()
+
 	done := make(chan struct{})
 	defer close(done)
 	go func() {
