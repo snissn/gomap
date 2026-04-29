@@ -301,6 +301,72 @@ func TestServerUpdateRejectsIDMutation(t *testing.T) {
 	assertCommandError(t, updateResponse, "BadValue")
 }
 
+func TestServerIndexMetadataCommands(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	createResponse := serveCommand(t, server, 227, bson.D{
+		{Key: "createIndexes", Value: "users"},
+		{Key: "indexes", Value: bson.A{bson.D{
+			{Key: "key", Value: bson.D{{Key: "email", Value: int32(1)}}},
+			{Key: "name", Value: "email_1"},
+			{Key: "unique", Value: true},
+		}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertOK(t, createResponse)
+	assertInt32(t, createResponse, "numIndexesBefore", 1)
+	assertInt32(t, createResponse, "numIndexesAfter", 2)
+
+	collectionsResponse := serveCommand(t, server, 228, bson.D{
+		{Key: "listCollections", Value: int32(1)},
+		{Key: "nameOnly", Value: true},
+		{Key: "$db", Value: "app"},
+	})
+	collectionBatch := cursorFirstBatch(t, collectionsResponse)
+	if len(collectionBatch) != 1 {
+		t.Fatalf("collection batch len=%d want 1", len(collectionBatch))
+	}
+	if got, ok := collectionBatch[0].Lookup("name").StringValueOK(); !ok || got != "users" {
+		t.Fatalf("collection name=%q ok=%v want users", got, ok)
+	}
+
+	indexesResponse := serveCommand(t, server, 229, bson.D{
+		{Key: "listIndexes", Value: "users"},
+		{Key: "$db", Value: "app"},
+	})
+	indexBatch := cursorFirstBatch(t, indexesResponse)
+	if got, want := len(indexBatch), 2; got != want {
+		t.Fatalf("index batch len=%d want %d", got, want)
+	}
+	assertIndexName(t, indexBatch[0], "_id_")
+	assertIndexName(t, indexBatch[1], "email_1")
+	assertBool(t, wire.Document(indexBatch[1]), "unique", true)
+
+	dropResponse := serveCommand(t, server, 230, bson.D{
+		{Key: "dropIndexes", Value: "users"},
+		{Key: "index", Value: "email_1"},
+		{Key: "$db", Value: "app"},
+	})
+	assertOK(t, dropResponse)
+	assertInt32(t, dropResponse, "nIndexesWas", 2)
+
+	afterDrop := serveCommand(t, server, 231, bson.D{
+		{Key: "listIndexes", Value: "users"},
+		{Key: "$db", Value: "app"},
+	})
+	indexBatch = cursorFirstBatch(t, afterDrop)
+	if got, want := len(indexBatch), 1; got != want {
+		t.Fatalf("index batch after drop len=%d want %d", got, want)
+	}
+	assertIndexName(t, indexBatch[0], "_id_")
+}
+
 func TestServerFindByIDMissingCollectionReturnsEmptyBatch(t *testing.T) {
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
@@ -538,5 +604,13 @@ func assertCommandError(tb testing.TB, doc wire.Document, codeName string) {
 	got, gotOK := raw.Lookup("codeName").StringValueOK()
 	if !gotOK || got != codeName {
 		tb.Fatalf("codeName=%q typeOK=%v want %q", got, gotOK, codeName)
+	}
+}
+
+func assertIndexName(tb testing.TB, doc bson.Raw, want string) {
+	tb.Helper()
+	got, ok := doc.Lookup("name").StringValueOK()
+	if !ok || got != want {
+		tb.Fatalf("index name=%q typeOK=%v want %q", got, ok, want)
 	}
 }
