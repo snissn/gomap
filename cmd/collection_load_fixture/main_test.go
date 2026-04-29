@@ -72,6 +72,15 @@ func TestEffectiveIndexVacuumAutoOnlyRunsAfterRewriteMaintenance(t *testing.T) {
 	}
 }
 
+func TestReopenVerifyReadOnlyRequiresFinalCheckpoint(t *testing.T) {
+	if !reopenVerifyReadOnly(config{Checkpoint: true}) {
+		t.Fatal("expected read-only reopen verification after final checkpoint")
+	}
+	if reopenVerifyReadOnly(config{Checkpoint: false}) {
+		t.Fatal("expected read-write reopen verification without final checkpoint for WAL replay")
+	}
+}
+
 func TestRunFixtureKeepsTemplateV1TwoIndexDatabase(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "fixture")
 	cfg, err := parseConfig([]string{

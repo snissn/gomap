@@ -557,6 +557,11 @@ func runFixture(cfg config) (loadSummary, error) {
 		closed = true
 	}
 
+	finalUsage, err := directoryUsage(cfg.Dir, cfg.Docs)
+	if err != nil {
+		return loadSummary{}, err
+	}
+
 	verify := verifySummary{Enabled: cfg.ReopenVerify}
 	if cfg.ReopenVerify {
 		samples, err := verifyReopen(cfg)
@@ -566,10 +571,6 @@ func runFixture(cfg config) (loadSummary, error) {
 		verify.Samples = samples
 	}
 
-	finalUsage, err := directoryUsage(cfg.Dir, cfg.Docs)
-	if err != nil {
-		return loadSummary{}, err
-	}
 	if err := writeMemProfile(cfg.MemProfile); err != nil {
 		return loadSummary{}, err
 	}
@@ -1256,7 +1257,7 @@ func statBool(stats map[string]string, key string) bool {
 }
 
 func verifyReopen(cfg config) (int, error) {
-	backend, cleanup, err := openBackendReadOnly(cfg, true)
+	backend, cleanup, err := openBackendReadOnly(cfg, reopenVerifyReadOnly(cfg))
 	if err != nil {
 		return 0, fmt.Errorf("reopen verify open: %w", err)
 	}
@@ -1315,6 +1316,10 @@ func verifyReopen(cfg config) (int, error) {
 		}
 	}
 	return len(samples), nil
+}
+
+func reopenVerifyReadOnly(cfg config) bool {
+	return cfg.Checkpoint
 }
 
 func expectedStoredDocument(format collections.DocumentFormat, n int) ([]byte, error) {
