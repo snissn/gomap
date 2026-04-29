@@ -32,7 +32,8 @@ the sum of regular file sizes for the TreeDB directory after load and after a
 final checkpoint. If `-treedb-dir` is provided and already exists, the harness
 removes and recreates it before loading deterministic fixtures so repeated runs
 are reproducible. Obvious unsafe reset targets such as root, the current
-checkout, the temp directory itself, or a home directory are rejected.
+checkout, the temp directory itself, a home directory, or an immediate child of
+a home directory are rejected.
 
 ## MongoDB Target
 

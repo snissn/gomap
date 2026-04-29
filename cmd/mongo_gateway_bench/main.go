@@ -99,9 +99,14 @@ func run(parent context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	ctx, cancel := context.WithCancel(parent)
+	var (
+		ctx    context.Context
+		cancel context.CancelFunc
+	)
 	if cfg.Timeout > 0 {
 		ctx, cancel = context.WithTimeout(parent, cfg.Timeout)
+	} else {
+		ctx, cancel = context.WithCancel(parent)
 	}
 	defer cancel()
 
@@ -288,8 +293,15 @@ func validateResettableTreeDBDir(dir string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	parent := filepath.Dir(abs)
+	if parent == abs {
+		return "", fmt.Errorf("unsafe treedb-dir %q", dir)
+	}
 	root := string(os.PathSeparator)
-	if abs == root || filepath.Dir(abs) == root {
+	if volume := filepath.VolumeName(abs); volume != "" {
+		root = filepath.Clean(volume + string(os.PathSeparator))
+	}
+	if abs == root || parent == root {
 		return "", fmt.Errorf("unsafe treedb-dir %q", dir)
 	}
 	if home, err := os.UserHomeDir(); err == nil && (abs == home || filepath.Dir(abs) == home) {
@@ -708,7 +720,7 @@ func percentile(sorted []time.Duration, q float64) time.Duration {
 }
 
 func collectDiskSnapshot(dir string) (diskSnapshot, error) {
-	out := diskSnapshot{Paths: make(map[string]int64)}
+	out := diskSnapshot{}
 	err := filepath.WalkDir(dir, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -727,6 +739,9 @@ func collectDiskSnapshot(dir string) (diskSnapshot, error) {
 			return err
 		}
 		topLevel, _, _ := strings.Cut(rel, string(os.PathSeparator))
+		if out.Paths == nil {
+			out.Paths = make(map[string]int64)
+		}
 		out.Paths[topLevel] += size
 		return nil
 	})
@@ -744,6 +759,9 @@ func writeResult(out io.Writer, format string, result *benchmarkResult) error {
 			result.Target, result.Database, result.Collection, result.Documents, result.SecondaryIndexes)
 		if result.TreeDBDir != "" {
 			fmt.Fprintf(out, "treedb_dir=%s\n", result.TreeDBDir)
+		}
+		if result.MongoURI != "" {
+			fmt.Fprintf(out, "mongo_uri=%s\n", result.MongoURI)
 		}
 		for _, phase := range result.Phases {
 			fmt.Fprintf(out, "%-22s ops=%d calls=%d duration_ms=%.1f ops_sec=%.1f p50_us=%.0f p95_us=%.0f p99_us=%.0f\n",

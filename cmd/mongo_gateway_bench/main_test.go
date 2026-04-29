@@ -54,6 +54,16 @@ func TestCollectDiskSnapshotBreakdown(t *testing.T) {
 	}
 }
 
+func TestCollectDiskSnapshotEmptyLeavesPathsNil(t *testing.T) {
+	snapshot, err := collectDiskSnapshot(t.TempDir())
+	if err != nil {
+		t.Fatalf("collect empty disk snapshot: %v", err)
+	}
+	if snapshot.TotalBytes != 0 || snapshot.Paths != nil {
+		t.Fatalf("empty snapshot=%+v want zero total and nil paths", snapshot)
+	}
+}
+
 func TestValidateResettableTreeDBDirRejectsDangerousPaths(t *testing.T) {
 	for _, dir := range []string{"", ".", "..", string(os.PathSeparator), os.TempDir()} {
 		if _, err := validateResettableTreeDBDir(dir); err == nil {
@@ -114,5 +124,23 @@ func TestWriteResultSupportsGenericWriter(t *testing.T) {
 	}
 	if !bytes.Contains(out.Bytes(), []byte("target=treedb")) {
 		t.Fatalf("text output missing target: %q", out.String())
+	}
+}
+
+func TestWriteResultIncludesRedactedMongoURI(t *testing.T) {
+	result := &benchmarkResult{
+		Target:           "mongo",
+		MongoURI:         "mongodb://user@127.0.0.1:27017",
+		Database:         "bench",
+		Collection:       "docs",
+		Documents:        1,
+		SecondaryIndexes: 1,
+	}
+	var out bytes.Buffer
+	if err := writeResult(&out, "text", result); err != nil {
+		t.Fatalf("writeResult: %v", err)
+	}
+	if !bytes.Contains(out.Bytes(), []byte("mongo_uri=mongodb://user@127.0.0.1:27017")) {
+		t.Fatalf("text output missing mongo_uri: %q", out.String())
 	}
 }
