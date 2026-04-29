@@ -32,6 +32,11 @@ type findPredicate struct {
 	values []bson.RawValue
 }
 
+type fieldPredicateGroup struct {
+	field      string
+	predicates []findPredicate
+}
+
 type findSort struct {
 	field string
 	desc  bool
@@ -120,17 +125,27 @@ func (s *Server) executeFind(col *collections.Collection, plan findPlan) (bson.A
 		if err != nil {
 			return nil, err
 		}
-		docBytes := len(projected) + 16
-		if docBytes > maxBatchBytes {
+		docBytes := findBatchDocumentBytes(projected, len(firstBatch))
+		if findBatchOverheadBytes+docBytes > maxBatchBytes {
 			return nil, fmt.Errorf("Mongo gateway find result document exceeds max message size: docBytes=%d maxBatchBytes=%d", docBytes, maxBatchBytes)
 		}
-		if batchBytes+docBytes > maxBatchBytes {
+		if findBatchOverheadBytes+batchBytes+docBytes > maxBatchBytes {
 			return nil, fmt.Errorf("Mongo gateway find results exceed max message size: batchBytes=%d docBytes=%d maxBatchBytes=%d", batchBytes, docBytes, maxBatchBytes)
 		}
 		firstBatch = append(firstBatch, bson.Raw(projected))
 		batchBytes += docBytes
 	}
 	return firstBatch, nil
+}
+
+const findBatchOverheadBytes = 5 // BSON document length plus trailing NUL.
+
+func findBatchDocumentBytes(doc wire.Document, index int) int {
+	return len(doc) + bsonArrayElementOverhead(index)
+}
+
+func bsonArrayElementOverhead(index int) int {
+	return 1 + len(strconv.Itoa(index)) + 1
 }
 
 func validateFindCommandOptions(command wire.Document, filter wire.Document) error {
@@ -148,25 +163,26 @@ func (s *Server) maxFindBatchBytes() int {
 
 func (s *Server) findCandidateDocuments(col *collections.Collection, predicates []findPredicate) ([]wire.Document, error) {
 	meta := col.Meta()
+	maxDocuments := s.maxFindScanDocuments()
 	if pred, ok := primaryCandidatePredicate(predicates); ok {
-		docs, err := documentsForPrimaryPredicate(col, pred)
+		docs, err := documentsForPrimaryPredicate(col, pred, maxDocuments)
 		if err != nil {
 			return nil, err
 		}
 		return s.limitCandidateDocuments(docs)
 	}
-	if docs, ok, err := s.bestIndexedCandidateDocuments(col, meta, predicates); ok || err != nil {
+	if docs, ok, err := s.bestIndexedCandidateDocuments(col, meta, predicates, maxDocuments); ok || err != nil {
 		if err != nil {
 			return nil, err
 		}
 		return s.limitCandidateDocuments(docs)
 	}
-	records, truncated, err := col.ScanDocuments(s.maxFindScanDocuments())
+	records, truncated, err := col.ScanDocuments(maxDocuments)
 	if err != nil {
 		return nil, err
 	}
 	if truncated {
-		return nil, fmt.Errorf("Mongo gateway find requires a bounded scan and exceeded %d documents", s.maxFindScanDocuments())
+		return nil, fmt.Errorf("Mongo gateway find requires a bounded scan and exceeded %d documents", maxDocuments)
 	}
 	out := make([]wire.Document, 0, len(records))
 	for _, record := range records {
@@ -186,7 +202,7 @@ func (s *Server) limitCandidateDocuments(docs []wire.Document) ([]wire.Document,
 	return docs, nil
 }
 
-func (s *Server) bestIndexedCandidateDocuments(col *collections.Collection, meta collections.CollectionMeta, predicates []findPredicate) ([]wire.Document, bool, error) {
+func (s *Server) bestIndexedCandidateDocuments(col *collections.Collection, meta collections.CollectionMeta, predicates []findPredicate, maxDocuments int) ([]wire.Document, bool, error) {
 	var best []wire.Document
 	bestSet := false
 	for _, pred := range predicates {
@@ -200,7 +216,7 @@ func (s *Server) bestIndexedCandidateDocuments(col *collections.Collection, meta
 			if idx.Field != pred.field {
 				continue
 			}
-			docs, err := documentsForIndexedPredicate(col, pred, idx)
+			docs, err := documentsForIndexedPredicate(col, pred, idx, maxDocuments)
 			if err != nil {
 				return nil, false, err
 			}
@@ -223,24 +239,7 @@ func primaryCandidatePredicate(predicates []findPredicate) (findPredicate, bool)
 	return findPredicate{}, false
 }
 
-func indexedCandidatePredicate(meta collections.CollectionMeta, predicates []findPredicate) (findPredicate, collections.IndexDefinition, bool) {
-	for _, pred := range predicates {
-		if pred.op != findPredicateEq && pred.op != findPredicateIn {
-			continue
-		}
-		if predicateContainsNull(pred) {
-			continue
-		}
-		for _, idx := range meta.Indexes {
-			if idx.Field == pred.field {
-				return pred, idx, true
-			}
-		}
-	}
-	return findPredicate{}, collections.IndexDefinition{}, false
-}
-
-func documentsForPrimaryPredicate(col *collections.Collection, pred findPredicate) ([]wire.Document, error) {
+func documentsForPrimaryPredicate(col *collections.Collection, pred findPredicate, maxDocuments int) ([]wire.Document, error) {
 	out := make([]wire.Document, 0, len(pred.values))
 	seen := make(map[string]struct{}, len(pred.values))
 	for _, value := range pred.values {
@@ -264,11 +263,14 @@ func documentsForPrimaryPredicate(col *collections.Collection, pred findPredicat
 			return nil, err
 		}
 		out = append(out, doc)
+		if len(out) > maxDocuments {
+			return out, nil
+		}
 	}
 	return out, nil
 }
 
-func documentsForIndexedPredicate(col *collections.Collection, pred findPredicate, idx collections.IndexDefinition) ([]wire.Document, error) {
+func documentsForIndexedPredicate(col *collections.Collection, pred findPredicate, idx collections.IndexDefinition, maxDocuments int) ([]wire.Document, error) {
 	out := make([]wire.Document, 0)
 	seen := make(map[string]struct{})
 	for _, value := range pred.values {
@@ -276,7 +278,7 @@ func documentsForIndexedPredicate(col *collections.Collection, pred findPredicat
 		if !ok {
 			return nil, fmt.Errorf("Mongo gateway find value cannot be represented in index %q", idx.Name)
 		}
-		ids, err := col.FindByIndexValue(idx.Name, scalar)
+		ids, _, err := col.FindByIndexValueLimit(idx.Name, scalar, maxDocuments+1)
 		if err != nil {
 			return nil, err
 		}
@@ -297,6 +299,9 @@ func documentsForIndexedPredicate(col *collections.Collection, pred findPredicat
 				return nil, err
 			}
 			out = append(out, doc)
+			if len(out) > maxDocuments {
+				return out, nil
+			}
 		}
 	}
 	return out, nil
@@ -451,33 +456,57 @@ func rangeOperator(op string) findPredicateOp {
 }
 
 func documentMatchesPredicates(doc wire.Document, predicates []findPredicate) (bool, error) {
-	for _, pred := range predicates {
-		values, ok, err := lookupDocumentPredicateValues(doc, pred.field)
+	for _, group := range groupFindPredicatesByField(predicates) {
+		values, ok, err := lookupDocumentPredicateValues(doc, group.field)
 		if err != nil {
 			return false, err
 		}
 		if !ok {
-			if missingValueMatchesPredicate(pred) {
-				continue
+			for _, pred := range group.predicates {
+				if !missingValueMatchesPredicate(pred) {
+					return false, nil
+				}
 			}
-			return false, nil
+			continue
 		}
-		matched := false
+		groupMatched := false
 		for _, value := range values {
-			match, err := valueMatchesPredicate(value, pred)
-			if err != nil {
-				return false, err
+			valueMatched := true
+			for _, pred := range group.predicates {
+				match, err := valueMatchesPredicate(value, pred)
+				if err != nil {
+					return false, err
+				}
+				if !match {
+					valueMatched = false
+					break
+				}
 			}
-			if match {
-				matched = true
+			if valueMatched {
+				groupMatched = true
 				break
 			}
 		}
-		if !matched {
+		if !groupMatched {
 			return false, nil
 		}
 	}
 	return true, nil
+}
+
+func groupFindPredicatesByField(predicates []findPredicate) []fieldPredicateGroup {
+	groups := make([]fieldPredicateGroup, 0, len(predicates))
+	groupByField := make(map[string]int, len(predicates))
+	for _, pred := range predicates {
+		index, ok := groupByField[pred.field]
+		if !ok {
+			index = len(groups)
+			groupByField[pred.field] = index
+			groups = append(groups, fieldPredicateGroup{field: pred.field})
+		}
+		groups[index].predicates = append(groups[index].predicates, pred)
+	}
+	return groups
 }
 
 func missingValueMatchesPredicate(pred findPredicate) bool {
@@ -517,6 +546,9 @@ func valueMatchesPredicate(value bson.RawValue, pred findPredicate) (bool, error
 		if rawValueIsNaN(value) || rawValueIsNaN(pred.values[0]) {
 			return false, nil
 		}
+		if !rangeValuesComparable(value, pred.values[0]) {
+			return false, nil
+		}
 		cmp := compareRawValues(value, pred.values[0])
 		switch pred.op {
 		case findPredicateGT:
@@ -531,6 +563,13 @@ func valueMatchesPredicate(value bson.RawValue, pred findPredicate) (bool, error
 	default:
 		return false, errors.New("Mongo gateway internal unknown predicate")
 	}
+}
+
+func rangeValuesComparable(left, right bson.RawValue) bool {
+	if left.IsNumber() && right.IsNumber() {
+		return true
+	}
+	return left.Type == right.Type
 }
 
 func parseFindSort(command wire.Document) (findSort, error) {
@@ -780,7 +819,18 @@ func lookupRawValuesForParts(current bson.Raw, parts []string) ([]bson.RawValue,
 		return nil, false, nil
 	}
 	if len(parts) == 1 {
-		return []bson.RawValue{value}, true, nil
+		array, ok := value.ArrayOK()
+		if !ok {
+			return []bson.RawValue{value}, true, nil
+		}
+		values, err := array.Values()
+		if err != nil {
+			return nil, false, err
+		}
+		out := make([]bson.RawValue, 0, len(values)+1)
+		out = append(out, value)
+		out = append(out, values...)
+		return out, true, nil
 	}
 	return lookupRawValueDescendants(value, parts[1:])
 }
