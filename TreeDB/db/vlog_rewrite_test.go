@@ -4821,7 +4821,7 @@ func readCollectionRootIDFromSnapshot(t *testing.T, snap *Snapshot, descriptorKe
 func readCollectionRootValue(t *testing.T, db *DB, descriptorKey string, key []byte) []byte {
 	t.Helper()
 	snap := db.AcquireSnapshot()
-	if snap == nil {
+	if snap == nil || snap.state == nil {
 		t.Fatal("expected snapshot")
 	}
 	defer snap.Close()

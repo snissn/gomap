@@ -3,6 +3,7 @@ package db
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"os"
@@ -587,6 +588,56 @@ func TestLeafGenerationPack_RewritesCollectionLeafRefRoot(t *testing.T) {
 	}
 	if err := waitForPathRemoval(oldLeafPath, 5*time.Second); err != nil {
 		t.Fatalf("waitForPathRemoval(%s): %v", oldLeafPath, err)
+	}
+}
+
+func TestLeafRefRewriteCtx_CollectionDescriptorDeltaIgnoresDurableInlineThreshold(t *testing.T) {
+	db, leafLog, _ := openLeafGenerationPackTestDB(t)
+
+	const descriptorKey = "collections/root/pack/users/primary"
+	if err := db.Set([]byte(descriptorKey), encodeMaintenanceRootID(101)); err != nil {
+		t.Fatalf("seed descriptor: %v", err)
+	}
+	state := db.State()
+	if state == nil {
+		t.Fatal("expected state")
+	}
+	rootID := state.SystemRootPageID
+	idx := db.idx.Load()
+	if idx == nil || idx.zipper == nil {
+		t.Fatal("expected zipper")
+	}
+
+	db.policy.InlineThreshold = 1
+	ctx := &leafRefRewriteCtx{
+		ctx:    context.Background(),
+		db:     db,
+		zipper: idx.zipper,
+	}
+	newRoot, changed, err := ctx.applySystemRootCollectionRootReplacements(rootID, []vacuumCollectionRootReplacement{{
+		key:   []byte(descriptorKey),
+		value: encodeMaintenanceRootID(202),
+	}})
+	if err != nil {
+		t.Fatalf("applySystemRootCollectionRootReplacements: %v", err)
+	}
+	if !changed {
+		t.Fatal("changed=false want true")
+	}
+	if err := leafLog.Flush(); err != nil {
+		t.Fatalf("flush leaf log: %v", err)
+	}
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("expected snapshot")
+	}
+	defer snap.Close()
+	got, err := snap.GetAtRoot(newRoot, []byte(descriptorKey))
+	if err != nil {
+		t.Fatalf("read rewritten descriptor: %v", err)
+	}
+	if gotID := binary.BigEndian.Uint64(got); gotID != 202 {
+		t.Fatalf("descriptor root=%d want 202", gotID)
 	}
 }
 
