@@ -2,10 +2,12 @@ package collections
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -1351,6 +1353,91 @@ func TestCollectionReplaceRejectsUniqueConflictAtomically(t *testing.T) {
 	}
 }
 
+func TestCollectionUpdateConcurrentCounterNoLostUpdates(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"count":0}`)},
+	); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	const (
+		workers    = 8
+		increments = 5
+	)
+	start := make(chan struct{})
+	errs := make(chan error, workers)
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			workerCol, err := mgr.OpenCollection("users")
+			if err != nil {
+				errs <- err
+				return
+			}
+			<-start
+			for j := 0; j < increments; j++ {
+				if _, _, err := workerCol.Update([]byte("u1"), func(current []byte) ([]byte, bool, error) {
+					var doc struct {
+						Count int `json:"count"`
+					}
+					if err := json.Unmarshal(current, &doc); err != nil {
+						return nil, false, err
+					}
+					doc.Count++
+					next, err := json.Marshal(doc)
+					if err != nil {
+						return nil, false, err
+					}
+					return next, true, nil
+				}); err != nil {
+					errs <- err
+					return
+				}
+			}
+			errs <- nil
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("update: %v", err)
+		}
+	}
+
+	got, err := col.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("get counter: %v", err)
+	}
+	var doc struct {
+		Count int `json:"count"`
+	}
+	if err := json.Unmarshal(got, &doc); err != nil {
+		t.Fatalf("unmarshal counter: %v", err)
+	}
+	if want := workers * increments; doc.Count != want {
+		t.Fatalf("count=%d want %d", doc.Count, want)
+	}
+}
+
 func TestCollectionInsertBatchBridge_RejectsPersistedUniqueConflictAtomically(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
@@ -1498,8 +1585,26 @@ func TestCollectionDeleteBridge_RemovesPrimaryAndSecondaryEntries(t *testing.T) 
 		t.Fatalf("insert batch: %v", err)
 	}
 
-	if err := col.Delete([]byte("u1")); err != nil {
+	deleted, err := col.DeleteDocument([]byte("missing"))
+	if err != nil {
+		t.Fatalf("delete missing: %v", err)
+	}
+	if deleted {
+		t.Fatal("delete missing reported deleted")
+	}
+	deleted, err = col.DeleteDocument([]byte("u1"))
+	if err != nil {
 		t.Fatalf("delete u1: %v", err)
+	}
+	if !deleted {
+		t.Fatal("delete u1 reported not deleted")
+	}
+	deleted, err = col.DeleteDocument([]byte("u1"))
+	if err != nil {
+		t.Fatalf("delete u1 again: %v", err)
+	}
+	if deleted {
+		t.Fatal("delete u1 again reported deleted")
 	}
 	got, err := col.Get([]byte("u1"))
 	if err != nil {
