@@ -1421,6 +1421,15 @@ func appendIndexScalar(dst []byte, value any) ([]byte, []byte, error) {
 		} else {
 			dst = append(dst, "b:0"...)
 		}
+	case int:
+		dst = append(dst, "n:"...)
+		dst = strconv.AppendInt(dst, int64(v), 10)
+	case int32:
+		dst = append(dst, "n:"...)
+		dst = strconv.AppendInt(dst, int64(v), 10)
+	case int64:
+		dst = append(dst, "n:"...)
+		dst = strconv.AppendInt(dst, v, 10)
 	case float64:
 		dst = append(dst, "n:"...)
 		dst = strconv.AppendFloat(dst, v, 'g', -1, 64)

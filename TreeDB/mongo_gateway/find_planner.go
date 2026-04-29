@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"math"
 	"math/big"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/snissn/gomap/TreeDB/collections"
@@ -35,20 +37,59 @@ type findSort struct {
 	desc  bool
 }
 
-func (s *Server) executeFind(col *collections.Collection, command wire.Document, filter wire.Document) ([]wire.Document, error) {
+type findPlan struct {
+	predicates []findPredicate
+	sort       findSort
+	skip       int32
+	limit      int32
+	projection compiledProjection
+}
+
+type findResultSet struct {
+	docs       []wire.Document
+	projection compiledProjection
+}
+
+func parseFindPlan(command wire.Document, filter wire.Document) (findPlan, error) {
 	predicates, err := parseFindPredicates(filter)
 	if err != nil {
-		return nil, err
+		return findPlan{}, err
 	}
-	docs, err := s.findCandidateDocuments(col, predicates)
+	sortSpec, err := parseFindSort(command)
 	if err != nil {
-		return nil, err
+		return findPlan{}, err
+	}
+	skip, limit, err := parseFindPagination(command)
+	if err != nil {
+		return findPlan{}, err
+	}
+	projectionDoc, err := commandOptionalDocument(command, "projection")
+	if err != nil {
+		return findPlan{}, err
+	}
+	projection, err := compileProjection(projectionDoc)
+	if err != nil {
+		return findPlan{}, err
+	}
+	return findPlan{
+		predicates: predicates,
+		sort:       sortSpec,
+		skip:       skip,
+		limit:      limit,
+		projection: projection,
+	}, nil
+}
+
+func (s *Server) executeFind(col *collections.Collection, plan findPlan) (findResultSet, error) {
+	docs, err := s.findCandidateDocuments(col, plan.predicates)
+	if err != nil {
+		return findResultSet{}, err
 	}
 	filtered := docs[:0]
 	for _, doc := range docs {
-		match, err := documentMatchesPredicates(doc, predicates)
+		match, err := documentMatchesPredicates(doc, plan.predicates)
 		if err != nil {
-			return nil, err
+			return findResultSet{}, err
 		}
 		if match {
 			filtered = append(filtered, doc)
@@ -56,62 +97,32 @@ func (s *Server) executeFind(col *collections.Collection, command wire.Document,
 	}
 	docs = filtered
 
-	sortSpec, err := parseFindSort(command)
-	if err != nil {
-		return nil, err
-	}
-	if sortSpec.field != "" {
+	if plan.sort.field != "" {
 		sort.SliceStable(docs, func(i, j int) bool {
-			cmp := compareDocumentField(docs[i], docs[j], sortSpec.field)
-			if sortSpec.desc {
+			cmp := compareDocumentField(docs[i], docs[j], plan.sort.field)
+			if plan.sort.desc {
 				return cmp > 0
 			}
 			return cmp < 0
 		})
 	}
 
-	skip, limit, err := parseFindPagination(command)
-	if err != nil {
-		return nil, err
-	}
-	if skip > 0 {
-		if int(skip) >= len(docs) {
+	if plan.skip > 0 {
+		if int(plan.skip) >= len(docs) {
 			docs = nil
 		} else {
-			docs = docs[skip:]
+			docs = docs[plan.skip:]
 		}
 	}
-	if limit > 0 && int(limit) < len(docs) {
-		docs = docs[:limit]
+	if plan.limit > 0 && int(plan.limit) < len(docs) {
+		docs = docs[:plan.limit]
 	}
-
-	projectionDoc, err := commandOptionalDocument(command, "projection")
-	if err != nil {
-		return nil, err
-	}
-	projection, err := compileProjection(projectionDoc)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]wire.Document, 0, len(docs))
-	for _, doc := range docs {
-		projected, err := projectDocumentWithProjection(doc, projection)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, projected)
-	}
-	return out, nil
+	return findResultSet{docs: docs, projection: plan.projection}, nil
 }
 
 func validateFindCommandOptions(command wire.Document, filter wire.Document) error {
-	if _, err := parseFindPredicates(filter); err != nil {
-		return err
-	}
-	if _, err := parseFindSort(command); err != nil {
-		return err
-	}
-	if _, _, err := parseFindPagination(command); err != nil {
+	_, err := parseFindPlan(command, filter)
+	if err != nil {
 		return err
 	}
 	batchSize, batchSizeSet, err := optionalInt32FieldWithPresence(command, "batchSize")
@@ -120,15 +131,6 @@ func validateFindCommandOptions(command wire.Document, filter wire.Document) err
 	}
 	if _, err := normalizeBatchSize(int(batchSize), batchSizeSet, defaultCursorBatchSize); err != nil {
 		return err
-	}
-	projection, err := commandOptionalDocument(command, "projection")
-	if err != nil {
-		return err
-	}
-	if projection != nil {
-		if _, _, _, _, err := parseProjection(projection); err != nil {
-			return err
-		}
 	}
 	return nil
 }
@@ -150,8 +152,7 @@ func (s *Server) findCandidateDocuments(col *collections.Collection, predicates 
 		}
 		return s.limitCandidateDocuments(docs)
 	}
-	if pred, idx, ok := indexedCandidatePredicate(meta, predicates); ok {
-		docs, err := documentsForIndexedPredicate(col, pred, idx)
+	if docs, ok, err := s.bestIndexedCandidateDocuments(col, meta, predicates); ok || err != nil {
 		if err != nil {
 			return nil, err
 		}
@@ -180,6 +181,34 @@ func (s *Server) limitCandidateDocuments(docs []wire.Document) ([]wire.Document,
 		return nil, fmt.Errorf("Mongo gateway find candidate set exceeded %d documents", s.maxFindScanDocuments())
 	}
 	return docs, nil
+}
+
+func (s *Server) bestIndexedCandidateDocuments(col *collections.Collection, meta collections.CollectionMeta, predicates []findPredicate) ([]wire.Document, bool, error) {
+	var best []wire.Document
+	bestSet := false
+	for _, pred := range predicates {
+		if pred.op != findPredicateEq && pred.op != findPredicateIn {
+			continue
+		}
+		if predicateContainsNull(pred) {
+			continue
+		}
+		for _, idx := range meta.Indexes {
+			if idx.Field != pred.field {
+				continue
+			}
+			docs, err := documentsForIndexedPredicate(col, pred, idx)
+			if err != nil {
+				return nil, false, err
+			}
+			if !bestSet || len(docs) < len(best) {
+				best = docs
+				bestSet = true
+			}
+			break
+		}
+	}
+	return best, bestSet, nil
 }
 
 func primaryCandidatePredicate(predicates []findPredicate) (findPredicate, bool) {
@@ -420,16 +449,29 @@ func rangeOperator(op string) findPredicateOp {
 
 func documentMatchesPredicates(doc wire.Document, predicates []findPredicate) (bool, error) {
 	for _, pred := range predicates {
-		value, ok := lookupDocumentValue(doc, pred.field)
+		values, ok, err := lookupDocumentPredicateValues(doc, pred.field)
+		if err != nil {
+			return false, err
+		}
 		if !ok {
 			if missingValueMatchesPredicate(pred) {
 				continue
 			}
 			return false, nil
 		}
-		match, err := valueMatchesPredicate(value, pred)
-		if err != nil || !match {
-			return match, err
+		matched := false
+		for _, value := range values {
+			match, err := valueMatchesPredicate(value, pred)
+			if err != nil {
+				return false, err
+			}
+			if match {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return false, nil
 		}
 	}
 	return true, nil
@@ -469,6 +511,9 @@ func valueMatchesPredicate(value bson.RawValue, pred findPredicate) (bool, error
 		}
 		return false, nil
 	case findPredicateGT, findPredicateGTE, findPredicateLT, findPredicateLTE:
+		if rawValueIsNaN(value) || rawValueIsNaN(pred.values[0]) {
+			return false, nil
+		}
 		cmp := compareRawValues(value, pred.values[0])
 		switch pred.op {
 		case findPredicateGT:
@@ -503,6 +548,9 @@ func parseFindSort(command wire.Document) (findSort, error) {
 	field, err := elements[0].KeyErr()
 	if err != nil {
 		return findSort{}, err
+	}
+	if field == "" || strings.HasPrefix(field, "$") {
+		return findSort{}, errors.New("Mongo gateway find sort field must be a supported document field")
 	}
 	value := elements[0].Value()
 	if isAscendingIndexKey(value) {
@@ -712,8 +760,90 @@ func lookupDocumentValue(doc wire.Document, field string) (bson.RawValue, bool) 
 	return bson.RawValue{}, false
 }
 
+func lookupDocumentPredicateValues(doc wire.Document, field string) ([]bson.RawValue, bool, error) {
+	if field == "" {
+		return nil, false, nil
+	}
+	parts := strings.Split(field, ".")
+	return lookupRawValuesForParts(bson.Raw(doc), parts)
+}
+
+func lookupRawValuesForParts(current bson.Raw, parts []string) ([]bson.RawValue, bool, error) {
+	if len(parts) == 0 {
+		return nil, false, nil
+	}
+	value := current.Lookup(parts[0])
+	if value.IsZero() {
+		return nil, false, nil
+	}
+	if len(parts) == 1 {
+		return []bson.RawValue{value}, true, nil
+	}
+	return lookupRawValueDescendants(value, parts[1:])
+}
+
+func lookupRawValueDescendants(value bson.RawValue, parts []string) ([]bson.RawValue, bool, error) {
+	if doc, ok := value.DocumentOK(); ok {
+		return lookupRawValuesForParts(doc, parts)
+	}
+	array, ok := value.ArrayOK()
+	if !ok {
+		return nil, false, nil
+	}
+	values, err := array.Values()
+	if err != nil {
+		return nil, false, err
+	}
+	if index, ok := dottedArrayIndex(parts[0]); ok {
+		if index >= len(values) {
+			return nil, false, nil
+		}
+		if len(parts) == 1 {
+			return []bson.RawValue{values[index]}, true, nil
+		}
+		return lookupRawValueDescendants(values[index], parts[1:])
+	}
+	var out []bson.RawValue
+	for _, item := range values {
+		doc, ok := item.DocumentOK()
+		if !ok {
+			continue
+		}
+		itemValues, itemOK, err := lookupRawValuesForParts(doc, parts)
+		if err != nil {
+			return nil, false, err
+		}
+		if itemOK {
+			out = append(out, itemValues...)
+		}
+	}
+	if len(out) == 0 {
+		return nil, false, nil
+	}
+	return out, true, nil
+}
+
+func dottedArrayIndex(part string) (int, bool) {
+	if part == "" {
+		return 0, false
+	}
+	for _, r := range part {
+		if r < '0' || r > '9' {
+			return 0, false
+		}
+	}
+	index, err := strconv.Atoi(part)
+	if err != nil {
+		return 0, false
+	}
+	return index, true
+}
+
 func rawValuesEqual(left, right bson.RawValue) bool {
 	if left.IsNumber() && right.IsNumber() {
+		if rawValueIsNaN(left) || rawValueIsNaN(right) {
+			return false
+		}
 		return compareRawValues(left, right) == 0
 	}
 	return left.Equal(right)
@@ -752,10 +882,43 @@ func compareRawValues(left, right bson.RawValue) int {
 func compareRawNumbers(left, right bson.RawValue) int {
 	leftRat, leftOK := rawNumberRat(left)
 	rightRat, rightOK := rawNumberRat(right)
-	if !leftOK || !rightOK {
-		return compareInt(bsonTypeSortRank(left.Type), bsonTypeSortRank(right.Type))
+	if leftOK && rightOK {
+		return leftRat.Cmp(rightRat)
 	}
-	return leftRat.Cmp(rightRat)
+	leftRank := numberSortRank(left, leftOK)
+	rightRank := numberSortRank(right, rightOK)
+	if leftRank != rightRank {
+		return compareInt(leftRank, rightRank)
+	}
+	return bytes.Compare(left.Value, right.Value)
+}
+
+func numberSortRank(value bson.RawValue, finite bool) int {
+	if finite {
+		return 1
+	}
+	if value.Type == bson.TypeDouble {
+		v, ok := value.DoubleOK()
+		if ok {
+			switch {
+			case math.IsInf(v, -1):
+				return 0
+			case math.IsInf(v, 1):
+				return 2
+			case math.IsNaN(v):
+				return 3
+			}
+		}
+	}
+	return 4
+}
+
+func rawValueIsNaN(value bson.RawValue) bool {
+	if value.Type != bson.TypeDouble {
+		return false
+	}
+	v, ok := value.DoubleOK()
+	return ok && math.IsNaN(v)
 }
 
 func rawNumberRat(value bson.RawValue) (*big.Rat, bool) {
@@ -841,9 +1004,15 @@ func indexScalarForBSONValue(value bson.RawValue) (any, bool) {
 		return nil, true
 	case bson.TypeDouble:
 		out, ok := value.DoubleOK()
+		if ok && (math.IsNaN(out) || math.IsInf(out, 0)) {
+			return nil, false
+		}
 		return out, ok
-	case bson.TypeInt32, bson.TypeInt64:
-		out, ok := value.AsFloat64OK()
+	case bson.TypeInt32:
+		out, ok := value.Int32OK()
+		return out, ok
+	case bson.TypeInt64:
+		out, ok := value.Int64OK()
 		return out, ok
 	default:
 		return nil, false
