@@ -188,6 +188,32 @@ func TestOrderedIndexStateForDocumentHandlesScalarAndArrayValues(t *testing.T) {
 	}
 }
 
+func TestOrderedIndexStateForDocumentPreservesLargeIntegerNumbers(t *testing.T) {
+	rootRuntime := []indexRuntime{{
+		def:  indexDefinition{name: "big", field: "big"},
+		path: []string{"big"},
+	}}
+	rootState, err := orderedIndexStateForDocument([]byte(`{"big":9007199254740993}`), rootRuntime, collectionOptions{})
+	if err != nil {
+		t.Fatalf("root large int index state: %v", err)
+	}
+	if got, want := rootState.valuesAt(0), [][]byte{[]byte("n:9007199254740993")}; !byteMatrixEqual(got, want) {
+		t.Fatalf("root large int values=%q want %q", got, want)
+	}
+
+	nestedRuntime := []indexRuntime{{
+		def:  indexDefinition{name: "big", field: "nested.big"},
+		path: []string{"nested", "big"},
+	}}
+	nestedState, err := orderedIndexStateForDocument([]byte(`{"nested":{"big":9007199254740993}}`), nestedRuntime, collectionOptions{})
+	if err != nil {
+		t.Fatalf("nested large int index state: %v", err)
+	}
+	if got, want := nestedState.valuesAt(0), [][]byte{[]byte("n:9007199254740993")}; !byteMatrixEqual(got, want) {
+		t.Fatalf("nested large int values=%q want %q", got, want)
+	}
+}
+
 func TestOrderedIndexStateForDocumentJSONRootFastPathPreservesFieldSemantics(t *testing.T) {
 	planner := insertBatchPlanner{
 		indexes: []indexDefinition{
