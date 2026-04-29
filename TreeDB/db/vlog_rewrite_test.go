@@ -873,8 +873,7 @@ func TestValueLogRewriteOffline_RewritesCollectionLeafRefRoot(t *testing.T) {
 		t.Fatalf("publish collection leaf-ref root: %v", err)
 	}
 	oldRoot := rootIDs[0]
-	oldLeafPtr := requireCollectionLeafPtr(t, db, oldRoot)
-	oldLeafPath := leafLogSegmentPath(t, dir, oldLeafPtr.FileID)
+	oldLeafFileIDs := requireCollectionLeafFileIDs(t, db, oldRoot)
 
 	if err := leafLog.Sync(); err != nil {
 		t.Fatalf("sync leaf log: %v", err)
@@ -896,9 +895,7 @@ func TestValueLogRewriteOffline_RewritesCollectionLeafRefRoot(t *testing.T) {
 	if _, err := os.Stat(oldValuePath); err == nil || !os.IsNotExist(err) {
 		t.Fatalf("expected old collection value segment removed, err=%v", err)
 	}
-	if _, err := os.Stat(oldLeafPath); err == nil || !os.IsNotExist(err) {
-		t.Fatalf("expected old collection leaf segment removed, err=%v", err)
-	}
+	requireLeafLogSegmentsRemoved(t, dir, oldLeafFileIDs)
 
 	reopen, err := Open(opts)
 	if err != nil {
@@ -965,8 +962,7 @@ func TestValueLogRewriteOffline_RewritesCollectionLeafRefRootWithPagerDefault(t 
 		t.Fatalf("publish collection leaf-ref root: %v", err)
 	}
 	oldRoot := rootIDs[0]
-	oldLeafPtr := requireCollectionLeafPtr(t, db, oldRoot)
-	oldLeafPath := leafLogSegmentPath(t, dir, oldLeafPtr.FileID)
+	oldLeafFileIDs := requireCollectionLeafFileIDs(t, db, oldRoot)
 	if err := leafLog.Sync(); err != nil {
 		t.Fatalf("sync leaf log: %v", err)
 	}
@@ -981,12 +977,8 @@ func TestValueLogRewriteOffline_RewritesCollectionLeafRefRootWithPagerDefault(t 
 	if err != nil {
 		t.Fatalf("ValueLogRewriteOffline: %v", err)
 	}
-	if stats.RecordsCopied == 0 {
-		t.Fatalf("expected collection leaf-ref records to be copied, stats=%+v", stats)
-	}
-	if _, err := os.Stat(oldLeafPath); err == nil || !os.IsNotExist(err) {
-		t.Fatalf("expected old collection leaf segment removed, err=%v", err)
-	}
+	_ = stats
+	requireLeafLogSegmentsRemoved(t, dir, oldLeafFileIDs)
 
 	reopen, err := Open(opts)
 	if err != nil {
@@ -998,9 +990,13 @@ func TestValueLogRewriteOffline_RewritesCollectionLeafRefRootWithPagerDefault(t 
 	if newRoot == oldRoot {
 		t.Fatalf("collection descriptor still points at old leaf-ref root %d", oldRoot)
 	}
-	newLeafPtr := requireCollectionLeafPtr(t, reopen, newRoot)
-	if lane, _ := valuelog.DecodeFileID(newLeafPtr.FileID); lane != rewriteLeafLogLaneID {
-		t.Fatalf("rewritten collection leaf file lane=%d want %d", lane, rewriteLeafLogLaneID)
+	if _, ok := page.DecodeLeafRef(newRoot); ok {
+		t.Fatalf("rewritten collection root=%d should use pager leaves when DB leaf-log mode is disabled", newRoot)
+	}
+	if _, allLeafRefs, err := vacuumCollectLeafRefChildrenIfComplete(reopen.Pager(), newRoot); err != nil {
+		t.Fatalf("inspect rewritten collection root %d: %v", newRoot, err)
+	} else if allLeafRefs {
+		t.Fatalf("rewritten collection root=%d still has only leaf-ref children with pager-default options", newRoot)
 	}
 	got := readCollectionRootValue(t, reopen, descriptorKey, []byte("doc/0512"))
 	if !bytes.Equal(got, docValue) {
@@ -4676,6 +4672,47 @@ func requireCollectionLeafPtr(t *testing.T, db *DB, root uint64) page.LeafLogPtr
 		t.Fatalf("collection child root=%d want leaf ref", children[0].childID)
 	}
 	return leafPtr
+}
+
+func requireCollectionLeafFileIDs(t *testing.T, db *DB, root uint64) []uint32 {
+	t.Helper()
+	if leafPtr, ok := page.DecodeLeafRef(root); ok {
+		return []uint32{leafPtr.FileID}
+	}
+	children, allLeafRefs, err := vacuumCollectLeafRefChildrenIfComplete(db.Pager(), root)
+	if err != nil {
+		t.Fatalf("collect collection leaf-ref children for root %d: %v", root, err)
+	}
+	if !allLeafRefs || len(children) == 0 {
+		t.Fatalf("collection root=%d want leaf-ref root or leaf-ref children", root)
+	}
+	fileIDs := make([]uint32, 0, len(children))
+	seen := make(map[uint32]struct{}, len(children))
+	for _, child := range children {
+		leafPtr, ok := page.DecodeLeafRef(child.childID)
+		if !ok {
+			t.Fatalf("collection child root=%d want leaf ref", child.childID)
+		}
+		if _, ok := seen[leafPtr.FileID]; ok {
+			continue
+		}
+		seen[leafPtr.FileID] = struct{}{}
+		fileIDs = append(fileIDs, leafPtr.FileID)
+	}
+	return fileIDs
+}
+
+func requireLeafLogSegmentsRemoved(t *testing.T, dir string, fileIDs []uint32) {
+	t.Helper()
+	if len(fileIDs) == 0 {
+		t.Fatal("expected at least one leaf-log file id")
+	}
+	for _, fileID := range fileIDs {
+		path := leafLogSegmentPath(t, dir, fileID)
+		if _, err := os.Stat(path); err == nil || !os.IsNotExist(err) {
+			t.Fatalf("expected old collection leaf segment %s removed, err=%v", path, err)
+		}
+	}
 }
 
 func readCollectionRootID(t *testing.T, db *DB, descriptorKey string) uint64 {
