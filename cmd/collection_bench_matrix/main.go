@@ -33,7 +33,9 @@ type config struct {
 	sqliteBenchmarkPattern string
 	pagerChunkSize         int64
 	pagerSyncConcurrency   int
+	leafSegmentTargetBytes int64
 	reportVLogRewrite      bool
+	reportLeafGenPackGC    bool
 	reportSQLiteVacuum     bool
 	availableBenchmarks    bool
 	skipSQLite             bool
@@ -88,6 +90,7 @@ func parseFlags(args []string) (config, error) {
 		treeBenchmarkPattern:   defaultTreeBenchmarkPattern,
 		sqliteBenchmarkPattern: defaultSQLiteBenchmarkPattern,
 		reportVLogRewrite:      true,
+		reportLeafGenPackGC:    true,
 		reportSQLiteVacuum:     true,
 		availableBenchmarks:    true,
 	}
@@ -107,7 +110,9 @@ func parseFlags(args []string) (config, error) {
 	fs.StringVar(&cfg.sqliteBenchmarkPattern, "sqlite-bench-pattern", cfg.sqliteBenchmarkPattern, "go test -bench regex for SQLite cells")
 	fs.Int64Var(&cfg.pagerChunkSize, "pager-chunk-size", 0, "Optional TREEDB_COLLECTION_CHUNK_SIZE override; 0 means profile/default")
 	fs.IntVar(&cfg.pagerSyncConcurrency, "pager-sync-concurrency", 0, "Optional TREEDB_COLLECTION_PAGER_SYNC_CONCURRENCY override; 0 means profile/default")
-	fs.BoolVar(&cfg.reportVLogRewrite, "report-vlog-rewrite", cfg.reportVLogRewrite, "Run TreeDB online value-log rewrite/GC measurement after insert-shape benchmarks")
+	fs.Int64Var(&cfg.leafSegmentTargetBytes, "leaf-segment-target-bytes", 0, "Optional TREEDB_VLOG_GENERATION_LEAF_SEGMENT_TARGET_BYTES override; 0 means engine default")
+	fs.BoolVar(&cfg.reportVLogRewrite, "report-vlog-rewrite", cfg.reportVLogRewrite, "Run TreeDB online value_vlog rewrite/GC measurement after insert-shape benchmarks")
+	fs.BoolVar(&cfg.reportLeafGenPackGC, "report-leafgen-pack-gc", cfg.reportLeafGenPackGC, "Run TreeDB leaf_vlog generation pack/GC measurement after insert-shape benchmarks")
 	fs.BoolVar(&cfg.reportSQLiteVacuum, "report-sqlite-vacuum", cfg.reportSQLiteVacuum, "Run SQLite VACUUM measurement after insert-shape benchmarks")
 	fs.BoolVar(&cfg.availableBenchmarks, "available-benchmarks", cfg.availableBenchmarks, "Summarize all benchmark rows present in each report")
 	fs.BoolVar(&cfg.skipSQLite, "skip-sqlite", false, "Skip SQLite comparison cell")
@@ -129,6 +134,9 @@ func parseFlags(args []string) (config, error) {
 	}
 	if cfg.batchSize <= 0 {
 		return config{}, fmt.Errorf("-batch-size must be positive")
+	}
+	if cfg.leafSegmentTargetBytes < 0 {
+		return config{}, fmt.Errorf("-leaf-segment-target-bytes must be >= 0")
 	}
 	if strings.TrimSpace(cfg.benchtime) == "" {
 		return config{}, fmt.Errorf("-benchtime is required")
@@ -265,6 +273,7 @@ func buildMatrixCells(cfg config) ([]matrixCell, error) {
 					"TREEDB_COLLECTION_DATA_OUTER_LEAVES_IN_VLOG=" + strconv.FormatBool(storageCell.dataOuter),
 					"TREEDB_COLLECTION_INDEX_OUTER_LEAVES_IN_VLOG=" + strconv.FormatBool(storageCell.indexOuter),
 					"TREEDB_COLLECTION_REPORT_VLOG_REWRITE=" + strconv.FormatBool(cfg.reportVLogRewrite),
+					"TREEDB_COLLECTION_REPORT_LEAFGEN_PACK_GC=" + strconv.FormatBool(cfg.reportLeafGenPackGC),
 				},
 			}
 			cell.Env = appendPagerEnv(cell.Env, cfg)
@@ -320,6 +329,9 @@ func appendPagerEnv(env []string, cfg config) []string {
 	}
 	if cfg.pagerSyncConcurrency > 0 {
 		env = append(env, "TREEDB_COLLECTION_PAGER_SYNC_CONCURRENCY="+strconv.Itoa(cfg.pagerSyncConcurrency))
+	}
+	if cfg.leafSegmentTargetBytes > 0 {
+		env = append(env, "TREEDB_VLOG_GENERATION_LEAF_SEGMENT_TARGET_BYTES="+strconv.FormatInt(cfg.leafSegmentTargetBytes, 10))
 	}
 	return env
 }
@@ -536,7 +548,7 @@ func writeRunREADME(cfg config, commandLine []string, cells []matrixCell, matrix
 	sb.WriteString("- raw matrix tsv: `collections_matrix_summary.tsv`\n")
 	sb.WriteString("- user-story tsv: `collections_user_story_summary.tsv`\n")
 	sb.WriteString("- disk usage tsv: `collections_disk_usage_summary.tsv`\n")
-	sb.WriteString("- maintenance tsv: `collections_maintenance_summary.tsv`\n")
+	sb.WriteString("- maintenance tsv: `collections_maintenance_summary.tsv` (`treedb_vlog_rewrite` is value_vlog maintenance; `treedb_leafgen_pack_gc` is leaf_vlog generation maintenance)\n")
 	sb.WriteString("- matrix index: `")
 	sb.WriteString(filepath.Base(matrixIndexPath))
 	sb.WriteString("`\n\n")

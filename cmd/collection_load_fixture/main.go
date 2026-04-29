@@ -55,12 +55,16 @@ type config struct {
 	PruneInterval              time.Duration
 	PruneMaxPages              int
 	PruneMaxDuration           time.Duration
+	LeafSegmentTargetBytes     int64
 	Checkpoint                 bool
 	CheckpointEachBatch        bool
 	ReopenVerify               bool
 	VerifySamples              int
 	ValueLogRewrite            bool
 	ValueLogGC                 bool
+	LeafGenerationPackGC       bool
+	LeafGenerationPackForce    bool
+	LeafGenerationPackMaxGen   int
 	IndexVacuum                string
 	Progress                   bool
 	JSONOutput                 bool
@@ -136,6 +140,39 @@ type rewriteSummary struct {
 	GCBytesDeleted        int64         `json:"gc_bytes_deleted,omitempty"`
 }
 
+type leafGenerationSummary struct {
+	Enabled                   bool          `json:"enabled"`
+	Force                     bool          `json:"force,omitempty"`
+	MaxGenerations            int           `json:"max_generations,omitempty"`
+	PlanTiming                timingSummary `json:"plan_timing,omitempty"`
+	PackTiming                timingSummary `json:"pack_timing,omitempty"`
+	GCTiming                  timingSummary `json:"gc_timing,omitempty"`
+	DiskBytesBefore           uint64        `json:"disk_bytes_before,omitempty"`
+	DiskBytesAfterPack        uint64        `json:"disk_bytes_after_pack,omitempty"`
+	DiskBytesAfterGC          uint64        `json:"disk_bytes_after_gc,omitempty"`
+	PlanAdmission             string        `json:"plan_admission,omitempty"`
+	CandidateGenerations      int           `json:"candidate_generations,omitempty"`
+	CandidateBytesTotal       int64         `json:"candidate_bytes_total,omitempty"`
+	CandidateBytesLive        int64         `json:"candidate_bytes_live,omitempty"`
+	CandidateBytesDead        int64         `json:"candidate_bytes_dead,omitempty"`
+	CandidateBytesToCopy      int64         `json:"candidate_bytes_to_copy,omitempty"`
+	CandidateLivePages        int           `json:"candidate_live_pages,omitempty"`
+	ExpectedReclaimBytes      int64         `json:"expected_reclaim_bytes,omitempty"`
+	ExpectedReclaimRatioPPM   int           `json:"expected_reclaim_ratio_ppm,omitempty"`
+	ExpectedReclaimPerCopyPPM int           `json:"expected_reclaim_per_copy_ppm,omitempty"`
+	PackGenerationsMatched    int           `json:"pack_generations_matched,omitempty"`
+	PackSourceBytesTotal      int64         `json:"pack_source_bytes_total,omitempty"`
+	PackSourceBytesLive       int64         `json:"pack_source_bytes_live,omitempty"`
+	PackSourceBytesDead       int64         `json:"pack_source_bytes_dead,omitempty"`
+	PackSourceBytesToCopy     int64         `json:"pack_source_bytes_to_copy,omitempty"`
+	PackLeafPagesCopied       int           `json:"pack_leaf_pages_copied,omitempty"`
+	PackBytesCopied           int64         `json:"pack_bytes_copied,omitempty"`
+	PackCreatedFiles          int           `json:"pack_created_files,omitempty"`
+	GCGenerationsDeleted      int           `json:"gc_generations_deleted,omitempty"`
+	GCFilesDeleted            int           `json:"gc_files_deleted,omitempty"`
+	GCBytesDeleted            int64         `json:"gc_bytes_deleted,omitempty"`
+}
+
 type indexStorageSummary struct {
 	IndexDBBytes                uint64 `json:"index_db_bytes,omitempty"`
 	PagesTotal                  uint64 `json:"pages_total,omitempty"`
@@ -178,43 +215,45 @@ type verifySummary struct {
 }
 
 type loadSummary struct {
-	GeneratedAt                   string              `json:"generated_at"`
-	Dir                           string              `json:"dir"`
-	CreatedTempDir                bool                `json:"created_temp_dir,omitempty"`
-	Collection                    string              `json:"collection"`
-	DocumentFormat                string              `json:"document_format"`
-	Profile                       string              `json:"profile"`
-	Docs                          int                 `json:"docs"`
-	BatchSize                     int                 `json:"batch_size"`
-	Batches                       int                 `json:"batches"`
-	IndexCount                    int                 `json:"index_count"`
-	DataOuterLeavesInValueLog     bool                `json:"data_outer_leaves_in_value_log"`
-	IndexOuterLeavesInValueLog    bool                `json:"index_outer_leaves_in_value_log"`
-	ChunkSize                     int64               `json:"chunk_size,omitempty"`
-	KeepRecent                    uint64              `json:"keep_recent"`
-	PreferAppendAlloc             bool                `json:"prefer_append_alloc"`
-	PagerSyncConcurrency          int                 `json:"pager_sync_concurrency,omitempty"`
-	DisableBackgroundPrune        bool                `json:"disable_background_prune,omitempty"`
-	PruneInterval                 string              `json:"prune_interval,omitempty"`
-	PruneMaxPages                 int                 `json:"prune_max_pages,omitempty"`
-	PruneMaxDuration              string              `json:"prune_max_duration,omitempty"`
-	WallTiming                    timingSummary       `json:"wall_timing"`
-	GenerationTiming              timingSummary       `json:"generation_timing"`
-	InsertTiming                  timingSummary       `json:"insert_timing"`
-	CheckpointTiming              timingSummary       `json:"checkpoint_timing,omitempty"`
-	InsertPhases                  insertPhaseSummary  `json:"insert_phases"`
-	IndexStorageBeforeMaintenance indexStorageSummary `json:"index_storage_before_maintenance"`
-	DiskUsageBeforeMaintenance    diskUsageSummary    `json:"disk_usage_before_maintenance"`
-	DiskUsageFinal                diskUsageSummary    `json:"disk_usage_final"`
-	Rewrite                       rewriteSummary      `json:"rewrite,omitempty"`
-	IndexVacuum                   indexVacuumSummary  `json:"index_vacuum,omitempty"`
-	IndexStorageFinal             indexStorageSummary `json:"index_storage_final"`
-	Verify                        verifySummary       `json:"verify"`
-	CPUProfile                    string              `json:"cpu_profile,omitempty"`
-	MemProfile                    string              `json:"mem_profile,omitempty"`
-	GoVersion                     string              `json:"go_version"`
-	GOOS                          string              `json:"goos"`
-	GOARCH                        string              `json:"goarch"`
+	GeneratedAt                   string                `json:"generated_at"`
+	Dir                           string                `json:"dir"`
+	CreatedTempDir                bool                  `json:"created_temp_dir,omitempty"`
+	Collection                    string                `json:"collection"`
+	DocumentFormat                string                `json:"document_format"`
+	Profile                       string                `json:"profile"`
+	Docs                          int                   `json:"docs"`
+	BatchSize                     int                   `json:"batch_size"`
+	Batches                       int                   `json:"batches"`
+	IndexCount                    int                   `json:"index_count"`
+	DataOuterLeavesInValueLog     bool                  `json:"data_outer_leaves_in_value_log"`
+	IndexOuterLeavesInValueLog    bool                  `json:"index_outer_leaves_in_value_log"`
+	ChunkSize                     int64                 `json:"chunk_size,omitempty"`
+	KeepRecent                    uint64                `json:"keep_recent"`
+	PreferAppendAlloc             bool                  `json:"prefer_append_alloc"`
+	PagerSyncConcurrency          int                   `json:"pager_sync_concurrency,omitempty"`
+	DisableBackgroundPrune        bool                  `json:"disable_background_prune,omitempty"`
+	PruneInterval                 string                `json:"prune_interval,omitempty"`
+	PruneMaxPages                 int                   `json:"prune_max_pages,omitempty"`
+	PruneMaxDuration              string                `json:"prune_max_duration,omitempty"`
+	LeafSegmentTargetBytes        int64                 `json:"leaf_segment_target_bytes,omitempty"`
+	WallTiming                    timingSummary         `json:"wall_timing"`
+	GenerationTiming              timingSummary         `json:"generation_timing"`
+	InsertTiming                  timingSummary         `json:"insert_timing"`
+	CheckpointTiming              timingSummary         `json:"checkpoint_timing,omitempty"`
+	InsertPhases                  insertPhaseSummary    `json:"insert_phases"`
+	IndexStorageBeforeMaintenance indexStorageSummary   `json:"index_storage_before_maintenance"`
+	DiskUsageBeforeMaintenance    diskUsageSummary      `json:"disk_usage_before_maintenance"`
+	DiskUsageFinal                diskUsageSummary      `json:"disk_usage_final"`
+	Rewrite                       rewriteSummary        `json:"rewrite,omitempty"`
+	LeafGeneration                leafGenerationSummary `json:"leaf_generation,omitempty"`
+	IndexVacuum                   indexVacuumSummary    `json:"index_vacuum,omitempty"`
+	IndexStorageFinal             indexStorageSummary   `json:"index_storage_final"`
+	Verify                        verifySummary         `json:"verify"`
+	CPUProfile                    string                `json:"cpu_profile,omitempty"`
+	MemProfile                    string                `json:"mem_profile,omitempty"`
+	GoVersion                     string                `json:"go_version"`
+	GOOS                          string                `json:"goos"`
+	GOARCH                        string                `json:"goarch"`
 }
 
 func main() {
@@ -259,6 +298,7 @@ func parseConfig(args []string, output io.Writer) (config, error) {
 		ReopenVerify:               true,
 		VerifySamples:              8,
 		ValueLogGC:                 true,
+		LeafGenerationPackMaxGen:   1,
 		IndexVacuum:                indexVacuumModeNone,
 		Progress:                   true,
 	}
@@ -287,12 +327,16 @@ func parseConfig(args []string, output io.Writer) (config, error) {
 	fs.DurationVar(&cfg.PruneInterval, "prune-interval", 0, "TreeDB background prune interval (0 uses engine default)")
 	fs.IntVar(&cfg.PruneMaxPages, "prune-max-pages", 0, "TreeDB max pages freed per prune tick (0 uses engine default; <0 unlimited)")
 	fs.DurationVar(&cfg.PruneMaxDuration, "prune-max-duration", 0, "TreeDB max prune duration per tick (0 uses engine default; <0 unlimited)")
+	fs.Int64Var(&cfg.LeafSegmentTargetBytes, "leaf-segment-target-bytes", 0, "TreeDB leaf_vlog generation target segment size in bytes (0 uses engine default)")
 	fs.BoolVar(&cfg.Checkpoint, "checkpoint", cfg.Checkpoint, "checkpoint after loading")
 	fs.BoolVar(&cfg.CheckpointEachBatch, "checkpoint-each-batch", false, "checkpoint after every batch")
 	fs.BoolVar(&cfg.ReopenVerify, "reopen-verify", cfg.ReopenVerify, "close, reopen, and verify sampled primary/index reads")
 	fs.IntVar(&cfg.VerifySamples, "verify-samples", cfg.VerifySamples, "sample count for -reopen-verify")
 	fs.BoolVar(&cfg.ValueLogRewrite, "vlog-rewrite", false, "run TreeDB online value-log rewrite after loading")
 	fs.BoolVar(&cfg.ValueLogGC, "vlog-gc", cfg.ValueLogGC, "run value-log GC after -vlog-rewrite")
+	fs.BoolVar(&cfg.LeafGenerationPackGC, "leafgen-pack-gc", false, "run TreeDB leaf_vlog generation pack plus GC after loading")
+	fs.BoolVar(&cfg.LeafGenerationPackForce, "leafgen-pack-force", false, "force leaf-generation pack selection when -leafgen-pack-gc is enabled")
+	fs.IntVar(&cfg.LeafGenerationPackMaxGen, "leafgen-pack-max-generations", cfg.LeafGenerationPackMaxGen, "max leaf generations to pack per run when -leafgen-pack-gc is enabled (0 means no limit)")
 	fs.StringVar(&cfg.IndexVacuum, "index-vacuum", cfg.IndexVacuum, "run index vacuum after loading: none, online, or offline")
 	fs.BoolVar(&cfg.Progress, "progress", cfg.Progress, "print load progress to stderr")
 	fs.BoolVar(&cfg.JSONOutput, "json", false, "print summary as JSON")
@@ -338,8 +382,14 @@ func parseConfig(args []string, output io.Writer) (config, error) {
 	if cfg.PruneInterval < 0 {
 		return cfg, fmt.Errorf("-prune-interval must be >= 0")
 	}
+	if cfg.LeafSegmentTargetBytes < 0 {
+		return cfg, fmt.Errorf("-leaf-segment-target-bytes must be >= 0")
+	}
 	if cfg.VerifySamples < 0 {
 		return cfg, fmt.Errorf("-verify-samples must be >= 0")
+	}
+	if cfg.LeafGenerationPackMaxGen < 0 {
+		return cfg, fmt.Errorf("-leafgen-pack-max-generations must be >= 0")
 	}
 	cfg.IndexVacuum = strings.ToLower(strings.TrimSpace(cfg.IndexVacuum))
 	switch cfg.IndexVacuum {
@@ -479,6 +529,10 @@ func runFixture(cfg config) (loadSummary, error) {
 	if err != nil {
 		return loadSummary{}, err
 	}
+	leafGeneration, err := maybePackLeafGenerations(cfg, backend)
+	if err != nil {
+		return loadSummary{}, err
+	}
 	indexVacuum, finalIndexStorage, err := maybeVacuumIndex(cfg, backend, cleanup, &closed)
 	if err != nil {
 		return loadSummary{}, err
@@ -531,6 +585,7 @@ func runFixture(cfg config) (loadSummary, error) {
 		PruneInterval:                 durationString(cfg.PruneInterval),
 		PruneMaxPages:                 cfg.PruneMaxPages,
 		PruneMaxDuration:              durationString(cfg.PruneMaxDuration),
+		LeafSegmentTargetBytes:        cfg.LeafSegmentTargetBytes,
 		WallTiming:                    timing(wallElapsed, cfg.Docs),
 		GenerationTiming:              timing(generationElapsed, cfg.Docs),
 		InsertTiming:                  timing(insertElapsed, cfg.Docs),
@@ -540,6 +595,7 @@ func runFixture(cfg config) (loadSummary, error) {
 		DiskUsageBeforeMaintenance:    beforeMaintenance,
 		DiskUsageFinal:                finalUsage,
 		Rewrite:                       rewrite,
+		LeafGeneration:                leafGeneration,
 		IndexVacuum:                   indexVacuum,
 		IndexStorageFinal:             finalIndexStorage,
 		Verify:                        verify,
@@ -606,6 +662,9 @@ func openBackend(cfg config) (*backenddb.DB, func() error, error) {
 	}
 	if cfg.PruneMaxDuration != 0 {
 		opts.PruneMaxDuration = cfg.PruneMaxDuration
+	}
+	if cfg.LeafSegmentTargetBytes > 0 {
+		opts.ValueLog.Generational.LeafSegmentTargetBytes = cfg.LeafSegmentTargetBytes
 	}
 	open := treedb.OpenBackend
 	if opts.IndexOuterLeavesInValueLog {
@@ -883,6 +942,89 @@ func maybeRewriteValueLog(cfg config, backend *backenddb.DB, beforeBytes uint64)
 		out.GCSegmentsDeleted = int(gcStats.SegmentsDeleted)
 		out.GCBytesDeleted = gcStats.BytesDeleted
 	}
+	return out, nil
+}
+
+func maybePackLeafGenerations(cfg config, backend *backenddb.DB) (leafGenerationSummary, error) {
+	out := leafGenerationSummary{
+		Enabled:        cfg.LeafGenerationPackGC,
+		Force:          cfg.LeafGenerationPackForce,
+		MaxGenerations: cfg.LeafGenerationPackMaxGen,
+	}
+	if !cfg.LeafGenerationPackGC {
+		return out, nil
+	}
+	beforeDisk, err := directoryUsage(cfg.Dir, cfg.Docs)
+	if err != nil {
+		return out, err
+	}
+	out.DiskBytesBefore = beforeDisk.TotalBytes
+
+	ctx := context.Background()
+	planStart := time.Now()
+	plan, err := backend.LeafGenerationPlan(ctx, backenddb.LeafGenerationPlanOptions{Force: cfg.LeafGenerationPackForce})
+	if err != nil {
+		return out, fmt.Errorf("leaf-generation plan: %w", err)
+	}
+	out.PlanTiming = timing(time.Since(planStart), 1)
+	out.PlanAdmission = plan.Admission
+	out.CandidateGenerations = len(plan.CandidateGenerationIDs)
+	out.CandidateBytesTotal = plan.CandidateBytesTotal
+	out.CandidateBytesLive = plan.CandidateBytesLive
+	out.CandidateBytesDead = plan.CandidateBytesDead
+	out.CandidateBytesToCopy = plan.CandidateBytesToCopy
+	out.CandidateLivePages = plan.CandidateLivePages
+	out.ExpectedReclaimBytes = plan.ExpectedReclaimBytes
+	out.ExpectedReclaimRatioPPM = plan.ExpectedReclaimRatioPPM
+	out.ExpectedReclaimPerCopyPPM = plan.ExpectedReclaimPerByteCopiedPPM
+	if len(plan.CandidateGenerationIDs) == 0 {
+		return out, nil
+	}
+
+	packStart := time.Now()
+	packStats, err := backend.LeafGenerationPackFromPlan(ctx, backenddb.LeafGenerationPackFromPlanOptions{
+		Force:          cfg.LeafGenerationPackForce,
+		MaxGenerations: cfg.LeafGenerationPackMaxGen,
+		Sync:           true,
+	})
+	if err != nil {
+		return out, fmt.Errorf("leaf-generation pack: %w", err)
+	}
+	out.PackTiming = timing(time.Since(packStart), 1)
+	out.PackGenerationsMatched = packStats.GenerationsMatched
+	out.PackSourceBytesTotal = packStats.SourceBytesTotal
+	out.PackSourceBytesLive = packStats.SourceBytesLive
+	out.PackSourceBytesDead = packStats.SourceBytesDead
+	out.PackSourceBytesToCopy = packStats.SourceBytesToCopy
+	out.PackLeafPagesCopied = packStats.LeafPagesCopied
+	out.PackBytesCopied = packStats.BytesCopied
+	out.PackCreatedFiles = len(packStats.CreatedFileIDs)
+	if err := backend.Checkpoint(); err != nil {
+		return out, fmt.Errorf("checkpoint after leaf-generation pack: %w", err)
+	}
+	afterPack, err := directoryUsage(cfg.Dir, cfg.Docs)
+	if err != nil {
+		return out, err
+	}
+	out.DiskBytesAfterPack = afterPack.TotalBytes
+
+	gcStart := time.Now()
+	gcStats, err := backend.LeafGenerationGC(ctx, backenddb.LeafGenerationGCOptions{})
+	if err != nil {
+		return out, fmt.Errorf("leaf-generation GC after pack: %w", err)
+	}
+	out.GCTiming = timing(time.Since(gcStart), 1)
+	out.GCGenerationsDeleted = gcStats.GenerationsDeleted
+	out.GCFilesDeleted = gcStats.FilesDeleted
+	out.GCBytesDeleted = gcStats.BytesDeleted
+	if err := backend.Checkpoint(); err != nil {
+		return out, fmt.Errorf("checkpoint after leaf-generation GC: %w", err)
+	}
+	afterGC, err := directoryUsage(cfg.Dir, cfg.Docs)
+	if err != nil {
+		return out, err
+	}
+	out.DiskBytesAfterGC = afterGC.TotalBytes
 	return out, nil
 }
 
@@ -1320,6 +1462,9 @@ func printHumanSummary(w io.Writer, summary loadSummary) {
 		summary.DocumentFormat, summary.IndexCount, summary.DataOuterLeavesInValueLog, summary.IndexOuterLeavesInValueLog, summary.Profile)
 	fmt.Fprintf(w, "index policy: keep_recent=%d prefer_append_alloc=%t background_prune=%t\n",
 		summary.KeepRecent, summary.PreferAppendAlloc, !summary.DisableBackgroundPrune)
+	if summary.LeafSegmentTargetBytes > 0 {
+		fmt.Fprintf(w, "leaf_vlog generation target: %s\n", humanBytes(uint64(summary.LeafSegmentTargetBytes)))
+	}
 	fmt.Fprintf(w, "loaded: docs=%d batches=%d batch_size=%d\n", summary.Docs, summary.Batches, summary.BatchSize)
 	printTiming(w, "wall", summary.WallTiming)
 	printTiming(w, "document generation", summary.GenerationTiming)
@@ -1331,12 +1476,23 @@ func printHumanSummary(w io.Writer, summary loadSummary) {
 	fmt.Fprintf(w, "disk before maintenance: %s total, %.2f bytes/doc, %d files\n",
 		humanBytes(summary.DiskUsageBeforeMaintenance.TotalBytes), summary.DiskUsageBeforeMaintenance.BytesPerDoc, summary.DiskUsageBeforeMaintenance.FileCount)
 	if summary.Rewrite.Enabled {
-		fmt.Fprintf(w, "vlog rewrite: before=%s after_rewrite=%s after_gc=%s copied_records=%d copied_value_bytes=%s\n",
+		fmt.Fprintf(w, "value_vlog rewrite: before=%s after_rewrite=%s after_gc=%s copied_records=%d copied_value_bytes=%s\n",
 			humanBytes(summary.Rewrite.DiskBytesBefore),
 			humanBytes(summary.Rewrite.DiskBytesAfterRewrite),
 			humanBytes(summary.Rewrite.DiskBytesAfterGC),
 			summary.Rewrite.RecordsCopied,
 			humanBytes(uint64(max(summary.Rewrite.ValueBytesCopied, 0))))
+	}
+	if summary.LeafGeneration.Enabled {
+		fmt.Fprintf(w, "leaf_vlog pack/gc: before=%s after_pack=%s after_gc=%s candidates=%d live=%s dead=%s pages_copied=%d files_deleted=%d\n",
+			humanBytes(summary.LeafGeneration.DiskBytesBefore),
+			humanBytes(summary.LeafGeneration.DiskBytesAfterPack),
+			humanBytes(summary.LeafGeneration.DiskBytesAfterGC),
+			summary.LeafGeneration.CandidateGenerations,
+			humanBytes(uint64(max(summary.LeafGeneration.CandidateBytesLive, 0))),
+			humanBytes(uint64(max(summary.LeafGeneration.CandidateBytesDead, 0))),
+			summary.LeafGeneration.PackLeafPagesCopied,
+			summary.LeafGeneration.GCFilesDeleted)
 	}
 	if summary.IndexVacuum.Enabled {
 		fmt.Fprintf(w, "index vacuum %s: before=%s after=%s index.db_before=%s index.db_after=%s\n",

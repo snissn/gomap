@@ -212,14 +212,15 @@ func benchmarkReportTreeDBDiskUsage(b *testing.B, backend *backenddb.DB, docs in
 		b.Fatalf("TreeDB disk usage stats: %v", err)
 	}
 	benchmarkReportDiskUsage(b, docs, totalBytes)
-	benchmarkReportTreeDBValueLogRewrite(b, backend, docs, totalBytes)
+	currentBytes := benchmarkReportTreeDBValueLogRewrite(b, backend, docs, totalBytes)
+	benchmarkReportTreeDBLeafGenerationPackGC(b, backend, docs, currentBytes)
 }
 
-func benchmarkReportTreeDBValueLogRewrite(b *testing.B, backend *backenddb.DB, docs int, beforeTotalBytes uint64) {
+func benchmarkReportTreeDBValueLogRewrite(b *testing.B, backend *backenddb.DB, docs int, beforeTotalBytes uint64) uint64 {
 	b.Helper()
 
 	if docs <= 0 || !benchmarkBoolEnv(b, "TREEDB_COLLECTION_REPORT_VLOG_REWRITE", false) {
-		return
+		return beforeTotalBytes
 	}
 	rewriteStart := time.Now()
 	rewriteStats, err := backend.ValueLogRewriteOnline(context.Background(), backenddb.ValueLogRewriteOnlineOptions{})
@@ -271,6 +272,94 @@ func benchmarkReportTreeDBValueLogRewrite(b *testing.B, backend *backenddb.DB, d
 	b.ReportMetric(float64(afterGCBytes)/float64(docs), "vlog_rewrite_gc_disk_bytes/doc_after")
 	b.ReportMetric(float64(gcStats.SegmentsDeleted), "vlog_gc_segments_deleted")
 	b.ReportMetric(float64(gcStats.BytesDeleted), "vlog_gc_bytes_deleted")
+	return afterGCBytes
+}
+
+func benchmarkReportTreeDBLeafGenerationPackGC(b *testing.B, backend *backenddb.DB, docs int, beforeTotalBytes uint64) {
+	b.Helper()
+
+	if docs <= 0 || !benchmarkBoolEnv(b, "TREEDB_COLLECTION_REPORT_LEAFGEN_PACK_GC", false) {
+		return
+	}
+	ctx := context.Background()
+	force := benchmarkBoolEnv(b, "TREEDB_COLLECTION_LEAFGEN_PACK_FORCE", false)
+	maxGenerations := benchmarkIntEnv(b, "TREEDB_COLLECTION_LEAFGEN_PACK_MAX_GENERATIONS", 1)
+
+	planStart := time.Now()
+	plan, err := backend.LeafGenerationPlan(ctx, backenddb.LeafGenerationPlanOptions{Force: force})
+	if err != nil {
+		b.Fatalf("TreeDB leaf-generation plan: %v", err)
+	}
+	planElapsed := time.Since(planStart)
+	b.ReportMetric(float64(planElapsed.Nanoseconds()), "leafgen_plan_ns/op")
+	b.ReportMetric(float64(len(plan.CandidateGenerationIDs)), "leafgen_plan_candidate_generations")
+	b.ReportMetric(float64(plan.CandidateBytesTotal), "leafgen_plan_candidate_bytes_total")
+	b.ReportMetric(float64(plan.CandidateBytesLive), "leafgen_plan_candidate_bytes_live")
+	b.ReportMetric(float64(plan.CandidateBytesDead), "leafgen_plan_candidate_bytes_dead")
+	b.ReportMetric(float64(plan.CandidateBytesToCopy), "leafgen_plan_candidate_bytes_to_copy")
+	b.ReportMetric(float64(plan.CandidateLivePages), "leafgen_plan_candidate_live_pages")
+	b.ReportMetric(float64(plan.ExpectedReclaimBytes), "leafgen_plan_expected_reclaim_bytes")
+	b.ReportMetric(float64(plan.ExpectedReclaimRatioPPM), "leafgen_plan_expected_reclaim_ratio_ppm")
+	b.ReportMetric(float64(plan.ExpectedReclaimPerByteCopiedPPM), "leafgen_plan_expected_reclaim_per_copy_ppm")
+	if len(plan.CandidateGenerationIDs) == 0 {
+		return
+	}
+
+	packStart := time.Now()
+	packStats, err := backend.LeafGenerationPackFromPlan(ctx, backenddb.LeafGenerationPackFromPlanOptions{
+		Force:          force,
+		MaxGenerations: maxGenerations,
+		Sync:           true,
+	})
+	if err != nil {
+		b.Fatalf("TreeDB leaf-generation pack: %v", err)
+	}
+	packElapsed := time.Since(packStart)
+	if err := backend.Checkpoint(); err != nil {
+		b.Fatalf("checkpoint after TreeDB leaf-generation pack: %v", err)
+	}
+	afterPackBytes, err := benchmarkTreeDBDiskUsageBytes(backend)
+	if err != nil {
+		b.Fatalf("TreeDB disk usage after leaf-generation pack: %v", err)
+	}
+
+	gcStart := time.Now()
+	gcStats, err := backend.LeafGenerationGC(ctx, backenddb.LeafGenerationGCOptions{})
+	if err != nil {
+		b.Fatalf("TreeDB leaf-generation GC after pack: %v", err)
+	}
+	gcElapsed := time.Since(gcStart)
+	if err := backend.Checkpoint(); err != nil {
+		b.Fatalf("checkpoint after TreeDB leaf-generation GC: %v", err)
+	}
+	afterGCBytes, err := benchmarkTreeDBDiskUsageBytes(backend)
+	if err != nil {
+		b.Fatalf("TreeDB disk usage after leaf-generation GC: %v", err)
+	}
+
+	b.ReportMetric(float64(packElapsed.Nanoseconds()), "leafgen_pack_ns/op")
+	b.ReportMetric(float64(beforeTotalBytes), "leafgen_pack_disk_total_bytes_before")
+	b.ReportMetric(float64(afterPackBytes), "leafgen_pack_disk_total_bytes_after")
+	b.ReportMetric(float64(int64(afterPackBytes)-int64(beforeTotalBytes)), "leafgen_pack_disk_total_bytes_delta")
+	b.ReportMetric(float64(afterPackBytes)/float64(docs), "leafgen_pack_disk_bytes/doc_after")
+	b.ReportMetric(float64(packStats.GenerationsMatched), "leafgen_pack_generations_matched")
+	b.ReportMetric(float64(packStats.SourceBytesTotal), "leafgen_pack_source_bytes_total")
+	b.ReportMetric(float64(packStats.SourceBytesLive), "leafgen_pack_source_bytes_live")
+	b.ReportMetric(float64(packStats.SourceBytesDead), "leafgen_pack_source_bytes_dead")
+	b.ReportMetric(float64(packStats.SourceBytesToCopy), "leafgen_pack_source_bytes_to_copy")
+	b.ReportMetric(float64(packStats.ExpectedReclaimBytes), "leafgen_pack_expected_reclaim_bytes")
+	b.ReportMetric(float64(packStats.ExpectedReclaimRatioPPM), "leafgen_pack_expected_reclaim_ratio_ppm")
+	b.ReportMetric(float64(packStats.ExpectedReclaimPerByteCopiedPPM), "leafgen_pack_expected_reclaim_per_copy_ppm")
+	b.ReportMetric(float64(packStats.LeafPagesCopied), "leafgen_pack_leaf_pages_copied")
+	b.ReportMetric(float64(packStats.BytesCopied), "leafgen_pack_bytes_copied")
+	b.ReportMetric(float64(len(packStats.CreatedFileIDs)), "leafgen_pack_created_files")
+	b.ReportMetric(float64(gcElapsed.Nanoseconds()), "leafgen_gc_ns/op")
+	b.ReportMetric(float64(afterGCBytes), "leafgen_pack_gc_disk_total_bytes_after")
+	b.ReportMetric(float64(int64(afterGCBytes)-int64(beforeTotalBytes)), "leafgen_pack_gc_disk_total_bytes_delta")
+	b.ReportMetric(float64(afterGCBytes)/float64(docs), "leafgen_pack_gc_disk_bytes/doc_after")
+	b.ReportMetric(float64(gcStats.GenerationsDeleted), "leafgen_gc_generations_deleted")
+	b.ReportMetric(float64(gcStats.FilesDeleted), "leafgen_gc_files_deleted")
+	b.ReportMetric(float64(gcStats.BytesDeleted), "leafgen_gc_bytes_deleted")
 }
 
 func benchmarkTreeDBDiskUsageBytes(backend *backenddb.DB) (uint64, error) {

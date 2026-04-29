@@ -48,6 +48,13 @@ Useful variants:
   -cpuprofile /tmp/collection_fixture_cpu.pprof \
   -memprofile /tmp/collection_fixture_heap.pprof
 
-# Compact the value log after loading, then report before/after disk usage.
+# Compact the persistent value_vlog after loading, then report before/after disk usage.
 ./bin/collection-load-fixture -vlog-rewrite -dir /tmp/treedb_fixture_rewritten -reset
+
+# Pack leaf_vlog generations after loading, then run leaf-generation GC and report
+# the before/after disk usage separately from value_vlog rewrite.
+./bin/collection-load-fixture -leafgen-pack-gc -dir /tmp/treedb_fixture_leafgen_packed -reset
+
+# Force a small leaf-generation target for short local leafgen smoke tests.
+./bin/collection-load-fixture -leaf-segment-target-bytes 65536 -leafgen-pack-gc -dir /tmp/treedb_fixture_leafgen_small -reset
 ```

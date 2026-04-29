@@ -81,6 +81,16 @@ type summaryRow struct {
 	VLogRewriteAfterGC    *float64
 	VLogRewriteDeltaGC    *float64
 	VLogGCNs              *float64
+	LeafGenPlanNs         *float64
+	LeafGenPlanLive       *float64
+	LeafGenPlanDead       *float64
+	LeafGenPackNs         *float64
+	LeafGenPackBefore     *float64
+	LeafGenPackAfter      *float64
+	LeafGenPackDelta      *float64
+	LeafGenPackAfterGC    *float64
+	LeafGenPackDeltaGC    *float64
+	LeafGenGCNs           *float64
 	SQLiteVacuumNs        *float64
 	SQLiteVacuumBefore    *float64
 	SQLiteVacuumAfter     *float64
@@ -410,6 +420,16 @@ func buildSummaryRow(row matrixRow, collectionBatchSize int, name string, benchm
 		VLogRewriteAfterGC:    metricPtr(benchmark.MeanMetrics, "vlog_rewrite_gc_disk_total_bytes_after"),
 		VLogRewriteDeltaGC:    metricPtr(benchmark.MeanMetrics, "vlog_rewrite_gc_disk_total_bytes_delta"),
 		VLogGCNs:              metricPtr(benchmark.MeanMetrics, "vlog_gc_ns/op"),
+		LeafGenPlanNs:         metricPtr(benchmark.MeanMetrics, "leafgen_plan_ns/op"),
+		LeafGenPlanLive:       metricPtr(benchmark.MeanMetrics, "leafgen_plan_candidate_bytes_live"),
+		LeafGenPlanDead:       metricPtr(benchmark.MeanMetrics, "leafgen_plan_candidate_bytes_dead"),
+		LeafGenPackNs:         metricPtr(benchmark.MeanMetrics, "leafgen_pack_ns/op"),
+		LeafGenPackBefore:     metricPtr(benchmark.MeanMetrics, "leafgen_pack_disk_total_bytes_before"),
+		LeafGenPackAfter:      metricPtr(benchmark.MeanMetrics, "leafgen_pack_disk_total_bytes_after"),
+		LeafGenPackDelta:      metricPtr(benchmark.MeanMetrics, "leafgen_pack_disk_total_bytes_delta"),
+		LeafGenPackAfterGC:    metricPtr(benchmark.MeanMetrics, "leafgen_pack_gc_disk_total_bytes_after"),
+		LeafGenPackDeltaGC:    metricPtr(benchmark.MeanMetrics, "leafgen_pack_gc_disk_total_bytes_delta"),
+		LeafGenGCNs:           metricPtr(benchmark.MeanMetrics, "leafgen_gc_ns/op"),
 		SQLiteVacuumNs:        metricPtr(benchmark.MeanMetrics, "sqlite_vacuum_ns/op"),
 		SQLiteVacuumBefore:    metricPtr(benchmark.MeanMetrics, "sqlite_vacuum_disk_total_bytes_before"),
 		SQLiteVacuumAfter:     metricPtr(benchmark.MeanMetrics, "sqlite_vacuum_disk_total_bytes_after"),
@@ -840,7 +860,7 @@ func renderMarkdown(rows []summaryRow, outDir string) (string, error) {
 	}
 	if len(maintenanceRows) > 0 {
 		sb.WriteString("## Maintenance Compaction\n\n")
-		sb.WriteString("TreeDB rows show end-of-run total disk before online value-log rewrite, after rewrite, and after a follow-up value-log GC. SQLite rows show total disk before and after full `VACUUM`.\n\n")
+		sb.WriteString("TreeDB `treedb_vlog_rewrite` rows measure value_vlog rewrite/GC. TreeDB `treedb_leafgen_pack_gc` rows measure leaf_vlog generation pack/GC. SQLite rows show total disk before and after full `VACUUM`.\n\n")
 		sb.WriteString("| Cell | Engine | Format | Data vlog | Index vlog | Pager chunk | Pager sync | Maintenance | Benchmark | ns/op | ops/sec | GC ns/op | GC ops/sec | Before | After | Delta | After GC | Delta after GC | Report |\n")
 		sb.WriteString("| --- | --- | --- | ---: | ---: | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |\n")
 		for _, row := range maintenanceRows {
@@ -1306,6 +1326,19 @@ func buildMaintenanceRows(rows []summaryRow) []maintenanceRow {
 				Delta:      row.VLogRewriteDelta,
 				AfterGC:    row.VLogRewriteAfterGC,
 				DeltaGC:    row.VLogRewriteDeltaGC,
+			})
+		}
+		if row.LeafGenPackBefore != nil || row.LeafGenPackAfter != nil || row.LeafGenPackAfterGC != nil {
+			out = append(out, maintenanceRow{
+				summaryRow: row,
+				Kind:       "treedb_leafgen_pack_gc",
+				NsPerMaint: row.LeafGenPackNs,
+				GCNs:       row.LeafGenGCNs,
+				Before:     row.LeafGenPackBefore,
+				After:      row.LeafGenPackAfter,
+				Delta:      row.LeafGenPackDelta,
+				AfterGC:    row.LeafGenPackAfterGC,
+				DeltaGC:    row.LeafGenPackDeltaGC,
 			})
 		}
 		if row.SQLiteVacuumBefore != nil || row.SQLiteVacuumAfter != nil {
