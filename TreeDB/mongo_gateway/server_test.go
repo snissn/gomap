@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/snissn/gomap/TreeDB/collections"
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/mongo_gateway/wire"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
@@ -106,6 +108,133 @@ func TestServerHandlesMsgPing(t *testing.T) {
 		t.Fatalf("ParseMsg: %v", err)
 	}
 	assertOK(t, msg.Body)
+}
+
+func TestServerInsertAndFindByID(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	id := bson.NewObjectID()
+	insertDoc := mustDocument(t, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "$db", Value: "app"},
+	})
+	insertPayload := mustDocument(t, bson.D{
+		{Key: "_id", Value: id},
+		{Key: "name", Value: "ada"},
+		{Key: "age", Value: int64(37)},
+		{Key: "active", Value: true},
+	})
+	insertReq, err := wire.AppendMsgMessageWithSequences(nil, 210, 0, 0, insertDoc, []wire.DocumentSequence{{
+		Identifier: "documents",
+		Documents:  []wire.Document{insertPayload},
+	}})
+	if err != nil {
+		t.Fatalf("AppendMsgMessage insert: %v", err)
+	}
+	insertRW := &readWriter{r: bytes.NewReader(insertReq)}
+
+	if err := server.ServeOne(insertRW); err != nil {
+		t.Fatalf("ServeOne insert: %v", err)
+	}
+	insertResp := readMsgResponse(t, insertRW.w.Bytes(), 210)
+	assertOK(t, insertResp)
+	assertInt32(t, insertResp, "n", 1)
+
+	findDoc := mustDocument(t, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "_id", Value: id}}},
+		{Key: "$db", Value: "app"},
+	})
+	findReq, err := wire.AppendMsgMessage(nil, 211, 0, 0, findDoc)
+	if err != nil {
+		t.Fatalf("AppendMsgMessage find: %v", err)
+	}
+	findRW := &readWriter{r: bytes.NewReader(findReq)}
+
+	if err := server.ServeOne(findRW); err != nil {
+		t.Fatalf("ServeOne find: %v", err)
+	}
+	findResp := readMsgResponse(t, findRW.w.Bytes(), 211)
+	assertOK(t, findResp)
+	firstBatch := cursorFirstBatch(t, findResp)
+	if len(firstBatch) != 1 {
+		t.Fatalf("firstBatch len=%d want 1", len(firstBatch))
+	}
+	gotID, ok := firstBatch[0].Lookup("_id").ObjectIDOK()
+	if !ok || gotID != id {
+		t.Fatalf("firstBatch _id=%v ok=%v want %v", gotID, ok, id)
+	}
+	gotAge, ok := firstBatch[0].Lookup("age").Int64OK()
+	if !ok || gotAge != 37 {
+		t.Fatalf("firstBatch age=%d ok=%v want 37", gotAge, ok)
+	}
+	assertBool(t, firstBatch[0], "active", true)
+}
+
+func TestServerFindByIDMissingCollectionReturnsEmptyBatch(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	findDoc := mustDocument(t, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "_id", Value: "missing"}}},
+		{Key: "$db", Value: "app"},
+	})
+	req, err := wire.AppendMsgMessage(nil, 212, 0, 0, findDoc)
+	if err != nil {
+		t.Fatalf("AppendMsgMessage: %v", err)
+	}
+	rw := &readWriter{r: bytes.NewReader(req)}
+
+	if err := server.ServeOne(rw); err != nil {
+		t.Fatalf("ServeOne: %v", err)
+	}
+	resp := readMsgResponse(t, rw.w.Bytes(), 212)
+	assertOK(t, resp)
+	if firstBatch := cursorFirstBatch(t, resp); len(firstBatch) != 0 {
+		t.Fatalf("firstBatch len=%d want 0", len(firstBatch))
+	}
+}
+
+func TestServerInsertRejectsUnsupportedBSONTypes(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	insertDoc := mustDocument(t, bson.D{
+		{Key: "insert", Value: "events"},
+		{Key: "documents", Value: bson.A{bson.D{
+			{Key: "_id", Value: "e1"},
+			{Key: "at", Value: time.Now()},
+		}}},
+		{Key: "$db", Value: "app"},
+	})
+	req, err := wire.AppendMsgMessage(nil, 213, 0, 0, insertDoc)
+	if err != nil {
+		t.Fatalf("AppendMsgMessage: %v", err)
+	}
+	rw := &readWriter{r: bytes.NewReader(req)}
+
+	if err := server.ServeOne(rw); err != nil {
+		t.Fatalf("ServeOne: %v", err)
+	}
+	resp := readMsgResponse(t, rw.w.Bytes(), 213)
+	assertCommandError(t, resp, "BadValue")
 }
 
 func TestServerHandlesPartialWrites(t *testing.T) {
@@ -207,5 +336,69 @@ func assertBool(tb testing.TB, doc wire.Document, key string, want bool) {
 	got, ok := value.BooleanOK()
 	if !ok || got != want {
 		tb.Fatalf("%s=%v typeOK=%v want %v", key, got, ok, want)
+	}
+}
+
+func readMsgResponse(tb testing.TB, response []byte, responseTo int32) wire.Document {
+	tb.Helper()
+	h, body, err := wire.ReadMessage(bytes.NewReader(response), 0)
+	if err != nil {
+		tb.Fatalf("ReadMessage response: %v", err)
+	}
+	if h.OpCode != wire.OpMsg || h.ResponseTo != responseTo {
+		tb.Fatalf("response header=%+v want OP_MSG responseTo=%d", h, responseTo)
+	}
+	msg, err := wire.ParseMsg(body)
+	if err != nil {
+		tb.Fatalf("ParseMsg response: %v", err)
+	}
+	return msg.Body
+}
+
+func cursorFirstBatch(tb testing.TB, doc wire.Document) []bson.Raw {
+	tb.Helper()
+	cursor, ok := bson.Raw(doc).Lookup("cursor").DocumentOK()
+	if !ok {
+		tb.Fatalf("cursor missing or not document in %v", bson.Raw(doc))
+	}
+	batch, ok := cursor.Lookup("firstBatch").ArrayOK()
+	if !ok {
+		tb.Fatalf("cursor.firstBatch missing or not array in %v", cursor)
+	}
+	values, err := batch.Values()
+	if err != nil {
+		tb.Fatalf("firstBatch values: %v", err)
+	}
+	out := make([]bson.Raw, 0, len(values))
+	for i, value := range values {
+		doc, ok := value.DocumentOK()
+		if !ok {
+			tb.Fatalf("firstBatch[%d] is not a document", i)
+		}
+		out = append(out, doc)
+	}
+	return out
+}
+
+func assertInt32(tb testing.TB, doc wire.Document, key string, want int32) {
+	tb.Helper()
+	value := bson.Raw(doc).Lookup(key)
+	got, ok := value.Int32OK()
+	if !ok || got != want {
+		tb.Fatalf("%s=%v typeOK=%v want %v", key, got, ok, want)
+	}
+}
+
+func assertCommandError(tb testing.TB, doc wire.Document, codeName string) {
+	tb.Helper()
+	raw := bson.Raw(doc)
+	value := raw.Lookup("ok")
+	ok, okType := value.DoubleOK()
+	if !okType || ok != 0.0 {
+		tb.Fatalf("ok=%v typeOK=%v want 0.0", ok, okType)
+	}
+	got, gotOK := raw.Lookup("codeName").StringValueOK()
+	if !gotOK || got != codeName {
+		tb.Fatalf("codeName=%q typeOK=%v want %q", got, gotOK, codeName)
 	}
 }

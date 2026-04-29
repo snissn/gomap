@@ -1,6 +1,7 @@
 # MongoDB-Compatible Gateway Plan
 
-Status: planning, work log, and early wire-protocol prototype.
+Status: planning, work log, early wire-protocol prototype, and first
+collection-backed command path.
 
 This folder tracks the product expansion effort to expose TreeDB collections
 through a MongoDB-compatible gateway. The near-term goal is not to claim full
@@ -272,8 +273,8 @@ Metrics to record for every run:
 
 ## Open Design Questions
 
-- Should the gateway store raw BSON bytes, canonical JSON, or a typed internal
-  document encoding?
+- Should the gateway continue bridging through canonical Extended JSON, store
+  raw BSON bytes, or use a typed internal document encoding?
 - If raw BSON storage is useful, should it be a collection-level document format
   beside JSON and template-v1, or a gateway-local optimization hidden behind the
   existing collection API?
@@ -298,16 +299,19 @@ Metrics to record for every run:
       OP_REPLY handshake response, and OP_MSG command request/response tests.
 - [x] Prototype a minimal gateway server loop that answers `OP_QUERY`
       `hello` / `isMaster` and `OP_MSG` `ping` without collection storage.
-- [ ] Define the initial BSON-to-TreeDB document encoding.
-- [ ] Define canonical `_id` primary-key encoding, generated ObjectId behavior,
-      and `_id` immutability tests.
+- [x] Prototype OP_MSG document-sequence parsing for insert-style driver
+      payloads.
+- [x] Define the initial BSON-to-TreeDB document encoding as a canonical
+      Extended JSON bridge, with native BSON storage still benchmark-gated.
+- [x] Define canonical `_id` primary-key encoding and generated ObjectId
+      behavior for inserts.
 - [ ] Instrument BSON decode, document re-encoding, index extraction, and
       response encoding so the benchmark can prove whether a native BSON
       collection format is needed.
 - [ ] If re-encoding is material, draft `DocumentFormatBSON` alongside the
       existing JSON and template-v1 collection formats.
 - [ ] Prototype driver handshake with the official MongoDB Go driver.
-- [ ] Implement `insert` and `_id` lookup against TreeDB collections.
+- [x] Implement `insert` and `_id` lookup against TreeDB collections.
 - [ ] Implement single-field index creation and indexed `find`.
 - [ ] Add protocol-level compatibility tests using a real MongoDB driver.
 - [ ] Add a reproducible MongoDB-vs-TreeDB benchmark harness.
@@ -338,3 +342,10 @@ Metrics to record for every run:
   a connection loop, responds to legacy `OP_QUERY` handshake requests with
   `OP_REPLY`, responds to `OP_MSG` `ping` with an `OP_MSG` reply, and rejects
   compressed messages until compression is implemented.
+- 2026-04-28: Added the first collection-backed command path. `insert` accepts
+  either a `documents` array or an OP_MSG `documents` document sequence,
+  auto-creates the TreeDB collection namespace, maps BSON `_id` to a type-aware
+  collection primary key, stores documents through a canonical Extended JSON
+  bridge, and `find` supports `_id` equality with a Mongo-style cursor response.
+  This is intentionally a bridge format until benchmarks prove whether native
+  BSON collection storage is needed.
