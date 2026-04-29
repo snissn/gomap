@@ -268,6 +268,9 @@ func (s *Server) listCollectionsResponse(command wire.Document) (wire.Document, 
 	if err != nil {
 		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
 	}
+	if err := validateMongoDatabaseName(db); err != nil {
+		return commandError(commandCodeBadValue, "BadValue", err.Error())
+	}
 	nameOnly, err := optionalBoolField(command, "nameOnly")
 	if err != nil {
 		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
@@ -320,6 +323,9 @@ func (s *Server) createIndexesResponse(command wire.Document) (wire.Document, er
 	if err != nil {
 		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
 	}
+	if len(indexDocs) == 0 {
+		return commandError(commandCodeBadValue, "BadValue", "Mongo gateway createIndexes requires at least one index")
+	}
 	defs := make([]collections.IndexDefinition, 0, len(indexDocs))
 	for i, indexDoc := range indexDocs {
 		def, err := parseCreateIndexDefinition(indexDoc)
@@ -347,9 +353,16 @@ func (s *Server) createIndexesResponse(command wire.Document) (wire.Document, er
 	numBefore := int32(1 + len(col.Meta().Indexes))
 	meta := col.Meta()
 	for _, def := range defs {
+		if existing, ok := findIndexDefinition(meta.Indexes, def.Name); ok && sameIndexDefinition(existing, def) {
+			continue
+		}
 		next, err := col.CreateIndex(def)
 		if err != nil {
-			return commandError(commandCodeBadValue, "BadValue", err.Error())
+			code, codeName := commandCodeBadValue, "BadValue"
+			if collections.IsDuplicateKeyError(err) {
+				code, codeName = commandCodeDuplicateKey, "DuplicateKey"
+			}
+			return commandError(code, codeName, err.Error())
 		}
 		meta = *next
 	}
@@ -635,20 +648,27 @@ func idEqualityFilterValue(filter wire.Document, commandName string) (bson.RawVa
 }
 
 func gatewayCollectionName(db, collection string) (string, error) {
-	if db == "" {
-		return "", errors.New("Mongo database name cannot be empty")
-	}
 	if collection == "" {
 		return "", errors.New("Mongo collection name cannot be empty")
 	}
-	if strings.ContainsAny(db, "\x00/:") {
-		return "", errors.New("Mongo database name contains reserved punctuation")
+	if err := validateMongoDatabaseName(db); err != nil {
+		return "", err
 	}
 	name := db + "." + collection
 	if err := collections.ValidateCollectionName(name); err != nil {
 		return "", err
 	}
 	return name, nil
+}
+
+func validateMongoDatabaseName(db string) error {
+	if db == "" {
+		return errors.New("Mongo database name cannot be empty")
+	}
+	if strings.ContainsAny(db, "\x00/:") {
+		return errors.New("Mongo database name contains reserved punctuation")
+	}
+	return nil
 }
 
 // prepareInsertDocument uses canonical Extended JSON as the temporary collection
@@ -777,11 +797,14 @@ func parseCreateIndexDefinition(doc wire.Document) (collections.IndexDefinition,
 	if !isAscendingIndexKey(elements[0].Value()) {
 		return collections.IndexDefinition{}, errors.New("Mongo gateway createIndexes currently supports ascending indexes only")
 	}
-	name, err := optionalStringField(doc, "name")
+	name, namePresent, err := optionalStringFieldWithPresence(doc, "name")
 	if err != nil {
 		return collections.IndexDefinition{}, err
 	}
-	if name == "" {
+	if namePresent && name == "" {
+		return collections.IndexDefinition{}, errors.New("Mongo gateway createIndexes index name cannot be empty")
+	}
+	if !namePresent {
 		name = field + "_1"
 	}
 	unique, err := optionalBoolField(doc, "unique")
@@ -796,15 +819,20 @@ func parseCreateIndexDefinition(doc wire.Document) (collections.IndexDefinition,
 }
 
 func optionalStringField(doc wire.Document, key string) (string, error) {
+	out, _, err := optionalStringFieldWithPresence(doc, key)
+	return out, err
+}
+
+func optionalStringFieldWithPresence(doc wire.Document, key string) (string, bool, error) {
 	value := bson.Raw(doc).Lookup(key)
 	if value.IsZero() {
-		return "", nil
+		return "", false, nil
 	}
 	out, ok := value.StringValueOK()
 	if !ok {
-		return "", fmt.Errorf("Mongo command field %q must be a string", key)
+		return "", true, fmt.Errorf("Mongo command field %q must be a string", key)
 	}
-	return out, nil
+	return out, true, nil
 }
 
 func isAscendingIndexKey(value bson.RawValue) bool {
@@ -859,6 +887,23 @@ func mongoIndexDocuments(meta collections.CollectionMeta) bson.A {
 	return out
 }
 
+func findIndexDefinition(indexes []collections.IndexDefinition, name string) (collections.IndexDefinition, bool) {
+	for _, index := range indexes {
+		if index.Name == name {
+			return index, true
+		}
+	}
+	return collections.IndexDefinition{}, false
+}
+
+func sameIndexDefinition(left, right collections.IndexDefinition) bool {
+	return left.Name == right.Name &&
+		left.Field == right.Field &&
+		left.Unique == right.Unique &&
+		left.MultiKey == right.MultiKey &&
+		left.StoragePolicy == right.StoragePolicy
+}
+
 func dropIndexNames(command wire.Document) ([]string, bool, error) {
 	value := bson.Raw(command).Lookup("index")
 	if value.IsZero() {
@@ -877,6 +922,9 @@ func dropIndexNames(command wire.Document) ([]string, bool, error) {
 	values, err := array.Values()
 	if err != nil {
 		return nil, false, err
+	}
+	if len(values) == 0 {
+		return nil, false, errors.New("Mongo command field \"index\" must not be empty")
 	}
 	names := make([]string, 0, len(values))
 	for i, value := range values {
