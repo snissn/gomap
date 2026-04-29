@@ -246,10 +246,16 @@ func (c *leafRefRewriteCtx) appendLeafPage(leafPage []byte) (page.LeafLogPtr, er
 	if c == nil || c.writer == nil || c.ridAlloc == nil {
 		return page.LeafLogPtr{}, errors.New("vlog-rewrite: missing leaf-ref rewrite appender state")
 	}
+	if len(leafPage) != page.PageSize {
+		return page.LeafLogPtr{}, fmt.Errorf("vlog-rewrite: leaf page has invalid size: got=%dB want=%dB", len(leafPage), page.PageSize)
+	}
 	if c.ctx != nil {
 		if err := c.ctx.Err(); err != nil {
 			return page.LeafLogPtr{}, err
 		}
+	}
+	if c.maxCopiedBytes > 0 && c.copiedBytes >= c.maxCopiedBytes && c.copied > 0 {
+		return page.LeafLogPtr{}, fmt.Errorf("vlog-rewrite: leaf-ref copy budget exhausted: copied=%dB max=%dB", c.copiedBytes, c.maxCopiedBytes)
 	}
 	rid, err := c.ridAlloc.Next()
 	if err != nil {
@@ -309,9 +315,6 @@ func (c *leafRefRewriteCtx) rewriteNode(id uint64) (uint64, bool, error) {
 		leafPage, err := c.readLeafPage(ptr.ValuePtr())
 		if err != nil {
 			return id, false, err
-		}
-		if len(leafPage) != page.PageSize {
-			return id, false, fmt.Errorf("vlog-rewrite: leaf page has invalid size: got=%dB want=%dB", len(leafPage), page.PageSize)
 		}
 		leafLogPtr, err := c.appendLeafPage(leafPage)
 		if err != nil {
