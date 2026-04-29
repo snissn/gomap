@@ -24,10 +24,21 @@ import (
 const collectionMetaVersion = 1
 
 var (
+	ErrCollectionNotFound  = errors.New("collections: collection not found")
+	ErrDocumentExists      = errors.New("collections: document already exists")
+	ErrDuplicateDocumentID = errors.New("collections: duplicate document id in batch")
+	ErrUniqueIndexConflict = errors.New("collections: unique index conflict")
+
 	errCollectionManagerNil = errors.New("collections: collection manager is nil")
 	errCollectionNil        = errors.New("collections: collection is nil")
-	errCollectionNotFound   = errors.New("collections: collection not found")
+	errCollectionNotFound   = ErrCollectionNotFound
 )
+
+func IsDuplicateKeyError(err error) bool {
+	return errors.Is(err, ErrDocumentExists) ||
+		errors.Is(err, ErrDuplicateDocumentID) ||
+		errors.Is(err, ErrUniqueIndexConflict)
+}
 
 const (
 	systemCollectionMetaPrefix = "collections/meta/"
@@ -540,7 +551,7 @@ func (c *Collection) insertOneNoIndexBuffered(id, document []byte) ([]byte, erro
 	}
 	if _, _, flags, found := domain.table.GetEntry(id); found && flags&node.FlagTombstone == 0 {
 		domain.mu.Unlock()
-		return nil, errors.New("collections: document already exists")
+		return nil, ErrDocumentExists
 	}
 	if domain.primaryRoot != 0 {
 		exists, err := c.persistedDocumentExists(domain.primaryRoot, id)
@@ -550,7 +561,7 @@ func (c *Collection) insertOneNoIndexBuffered(id, document []byte) ([]byte, erro
 		}
 		if exists {
 			domain.mu.Unlock()
-			return nil, errors.New("collections: document already exists")
+			return nil, ErrDocumentExists
 		}
 	}
 	domain.storagePolicy = plannerOptions.dataStoragePolicy
@@ -785,7 +796,7 @@ func (c *Collection) insertOneNoIndex(id, document []byte) ([]byte, error) {
 	if baseRoot != 0 {
 		if _, err := snap.GetEntryAtRoot(baseRoot, id); err == nil {
 			_ = snap.Close()
-			return nil, errors.New("collections: document already exists")
+			return nil, ErrDocumentExists
 		} else if !errors.Is(err, tree.ErrKeyNotFound) {
 			_ = snap.Close()
 			return nil, err
@@ -977,7 +988,7 @@ func (c *Collection) insertBatchNoIndex(
 	for i := 1; i < len(entries); i++ {
 		if bytes.Equal(entries[i-1].id, entries[i].id) {
 			_ = snap.Close()
-			return nil, errors.New("collections: duplicate document id in batch")
+			return nil, ErrDuplicateDocumentID
 		}
 	}
 
@@ -995,7 +1006,7 @@ func (c *Collection) insertBatchNoIndex(
 		}
 		if exists {
 			_ = snap.Close()
-			return nil, errors.New("collections: document already exists")
+			return nil, ErrDocumentExists
 		}
 	}
 	stats.DuplicateDocumentPreflight = time.Since(phaseStart)

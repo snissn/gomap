@@ -56,7 +56,7 @@ func (s *Server) insertResponse(command wire.Document, sequences []wire.Document
 	}
 	if _, err := col.InsertBatch(ids, stored); err != nil {
 		code, codeName := commandCodeBadValue, "BadValue"
-		if strings.Contains(err.Error(), "already exists") || strings.Contains(err.Error(), "duplicate document id") {
+		if collections.IsDuplicateKeyError(err) {
 			code, codeName = commandCodeDuplicateKey, "DuplicateKey"
 		}
 		return commandError(code, codeName, err.Error())
@@ -113,7 +113,7 @@ func (s *Server) findResponse(command wire.Document) (wire.Document, error) {
 			}
 			firstBatch = append(firstBatch, bson.Raw(doc))
 		}
-	} else if !strings.Contains(err.Error(), "collection not found") {
+	} else if !errors.Is(err, collections.ErrCollectionNotFound) {
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}
 
@@ -303,6 +303,10 @@ func encodePrimaryKey(value bson.RawValue) ([]byte, error) {
 }
 
 func validateSupportedDocument(doc bson.Raw) error {
+	return validateSupportedDocumentAt("", doc)
+}
+
+func validateSupportedDocumentAt(prefix string, doc bson.Raw) error {
 	elements, err := doc.Elements()
 	if err != nil {
 		return err
@@ -312,7 +316,11 @@ func validateSupportedDocument(doc bson.Raw) error {
 		if err != nil {
 			return err
 		}
-		if err := validateSupportedValue(key, elem.Value()); err != nil {
+		path := key
+		if prefix != "" {
+			path = prefix + "." + key
+		}
+		if err := validateSupportedValue(path, elem.Value()); err != nil {
 			return err
 		}
 	}
@@ -328,7 +336,7 @@ func validateSupportedValue(path string, value bson.RawValue) error {
 		if !ok {
 			return fmt.Errorf("Mongo document field %q is not a valid embedded document", path)
 		}
-		return validateSupportedDocument(doc)
+		return validateSupportedDocumentAt(path, doc)
 	case bson.TypeArray:
 		array, ok := value.ArrayOK()
 		if !ok {

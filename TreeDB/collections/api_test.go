@@ -2,12 +2,32 @@ package collections
 
 import (
 	"bytes"
+	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
+
+func TestCollectionErrorsAreClassifiable(t *testing.T) {
+	if !errors.Is(ErrCollectionNotFound, ErrCollectionNotFound) {
+		t.Fatal("ErrCollectionNotFound should be errors.Is-compatible")
+	}
+	for _, err := range []error{
+		ErrDocumentExists,
+		ErrDuplicateDocumentID,
+		fmt.Errorf("wrapped: %w", ErrUniqueIndexConflict),
+	} {
+		if !IsDuplicateKeyError(err) {
+			t.Fatalf("IsDuplicateKeyError(%v)=false want true", err)
+		}
+	}
+	if IsDuplicateKeyError(ErrCollectionNotFound) {
+		t.Fatal("ErrCollectionNotFound classified as duplicate key")
+	}
+}
 
 func TestCollectionGetNilDBReturnsError(t *testing.T) {
 	col := &Collection{}
