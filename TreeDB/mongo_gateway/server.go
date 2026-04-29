@@ -72,7 +72,7 @@ func (s *Server) ServeConn(ctx context.Context, conn net.Conn) error {
 		default:
 		}
 
-		if err := s.serveOne(conn, owner); err != nil {
+		if err := s.ServeOneWithOwner(conn, owner); err != nil {
 			if errors.Is(err, io.EOF) {
 				return nil
 			}
@@ -84,11 +84,14 @@ func (s *Server) ServeConn(ctx context.Context, conn net.Conn) error {
 	}
 }
 
+// ServeOne serves a single MongoDB wire message using cursor owner 0.
+// Callers serving a real long-lived connection should use ServeOneWithOwner or
+// ServeConn so opened cursors participate in owner-based cleanup.
 func (s *Server) ServeOne(rw io.ReadWriter) error {
-	return s.serveOne(rw, 0)
+	return s.ServeOneWithOwner(rw, 0)
 }
 
-func (s *Server) serveOne(rw io.ReadWriter, cursorOwner int64) error {
+func (s *Server) ServeOneWithOwner(rw io.ReadWriter, cursorOwner int64) error {
 	h, body, err := wire.ReadMessage(rw, s.maxMessageLength())
 	if err != nil {
 		return err
@@ -158,9 +161,9 @@ func (s *Server) commandResponse(name string, command wire.Document, sequences [
 	case "find":
 		return s.findResponse(command, cursorOwner)
 	case "getMore":
-		return s.getMoreResponse(command)
+		return s.getMoreResponse(command, cursorOwner)
 	case "killCursors":
-		return s.killCursorsResponse(command)
+		return s.killCursorsResponse(command, cursorOwner)
 	case "update":
 		return s.updateResponse(command, sequences)
 	case "delete":

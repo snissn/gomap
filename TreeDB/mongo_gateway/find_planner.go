@@ -85,7 +85,7 @@ func (s *Server) executeFind(col *collections.Collection, plan findPlan) (findRe
 	if err != nil {
 		return findResultSet{}, err
 	}
-	filtered := docs[:0]
+	filtered := make([]wire.Document, 0, len(docs))
 	for _, doc := range docs {
 		match, err := documentMatchesPredicates(doc, plan.predicates)
 		if err != nil {
@@ -116,6 +116,9 @@ func (s *Server) executeFind(col *collections.Collection, plan findPlan) (findRe
 	}
 	if plan.limit > 0 && int(plan.limit) < len(docs) {
 		docs = docs[:plan.limit]
+	}
+	if len(docs) > 0 {
+		docs = append([]wire.Document(nil), docs...)
 	}
 	return findResultSet{docs: docs, projection: plan.projection}, nil
 }
