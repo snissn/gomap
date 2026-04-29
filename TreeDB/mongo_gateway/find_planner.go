@@ -76,6 +76,8 @@ func parseFindPlan(command wire.Document, filter wire.Document) (findPlan, error
 }
 
 func (s *Server) executeFind(col *collections.Collection, plan findPlan) (bson.A, error) {
+	// MaxFindScanDocuments is a candidate-work cap, not a page-size cap. It is
+	// intentionally enforced before later skip/limit pagination.
 	docs, err := s.findCandidateDocuments(col, plan.predicates)
 	if err != nil {
 		return nil, err
@@ -133,7 +135,10 @@ func (s *Server) executeFind(col *collections.Collection, plan findPlan) (bson.A
 	return firstBatch, nil
 }
 
-const findBatchOverheadBytes = 5 // BSON document length plus trailing NUL.
+const (
+	findBatchOverheadBytes        = 5 // BSON document length plus trailing NUL.
+	findBatchResponseReserveBytes = 4096
+)
 
 func findBatchDocumentBytes(doc wire.Document, index int) int {
 	return len(doc) + bsonArrayElementOverhead(index)
@@ -149,7 +154,7 @@ func validateFindCommandOptions(command wire.Document, filter wire.Document) err
 }
 
 func (s *Server) maxFindBatchBytes() int {
-	max := int(s.maxMessageLength()) - 4096
+	max := int(s.maxMessageLength()) - findBatchResponseReserveBytes
 	if max < 0 {
 		return 0
 	}
@@ -202,6 +207,8 @@ func (s *Server) findCandidateDocuments(col *collections.Collection, predicates 
 }
 
 func (s *Server) limitCandidateDocuments(docs []wire.Document) ([]wire.Document, error) {
+	// This bound limits planner work and memory before predicate filtering,
+	// sorting, projection, and skip/limit pagination are applied.
 	if len(docs) > s.maxFindScanDocuments() {
 		return nil, fmt.Errorf("Mongo gateway find candidate set exceeded %d documents", s.maxFindScanDocuments())
 	}
@@ -253,10 +260,11 @@ func documentsForPrimaryPredicate(col *collections.Collection, pred findPredicat
 		if err != nil {
 			return nil, err
 		}
-		if _, ok := seen[string(key)]; ok {
+		encodedKey := string(key)
+		if _, ok := seen[encodedKey]; ok {
 			continue
 		}
-		seen[string(key)] = struct{}{}
+		seen[encodedKey] = struct{}{}
 		stored, err := col.Get(key)
 		if err != nil {
 			return nil, err
@@ -764,6 +772,13 @@ func projectionValueIncluded(value bson.RawValue) (bool, error) {
 func lookupDocumentValue(doc wire.Document, field string) (bson.RawValue, bool) {
 	if field == "" {
 		return bson.RawValue{}, false
+	}
+	if !strings.Contains(field, ".") {
+		value := bson.Raw(doc).Lookup(field)
+		if value.IsZero() {
+			return bson.RawValue{}, false
+		}
+		return value, true
 	}
 	parts := strings.Split(field, ".")
 	current := bson.Raw(doc)

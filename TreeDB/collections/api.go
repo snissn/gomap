@@ -137,6 +137,8 @@ type CollectionSecondaryRunStats struct {
 	Build         time.Duration
 }
 
+// DocumentRecord is one primary collection record returned by ScanDocuments.
+// ID and Document are cloned byte slices owned by the caller.
 type DocumentRecord struct {
 	ID       []byte
 	Document []byte
@@ -2135,11 +2137,17 @@ func (c *Collection) FindByIndex(indexName, value string) ([][]byte, error) {
 	return c.FindByIndexValue(indexName, value)
 }
 
+// FindByIndexValue returns document IDs whose named secondary index equals
+// value. Supported scalar value types are string, bool, int32, int64, float64,
+// json.Number, and nil. If indexName does not exist, it returns nil, nil.
 func (c *Collection) FindByIndexValue(indexName string, value any) ([][]byte, error) {
 	out, _, err := c.findByIndexValue(indexName, value, 0)
 	return out, err
 }
 
+// FindByIndexValueLimit is like FindByIndexValue but stops after maxResults
+// document IDs and reports whether additional matches were present. If
+// indexName does not exist, it returns nil, false, nil.
 func (c *Collection) FindByIndexValueLimit(indexName string, value any, maxResults int) ([][]byte, bool, error) {
 	if maxResults <= 0 {
 		return nil, false, errors.New("collections: max index results must be positive")
