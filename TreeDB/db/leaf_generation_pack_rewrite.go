@@ -442,11 +442,21 @@ func (c *leafRefRewriteCtx) rebuildSystemRootWithCollectionRootReplacements(root
 	if rootID == 0 {
 		return 0, nil
 	}
+	if c.ctx != nil {
+		if err := c.ctx.Err(); err != nil {
+			return rootID, err
+		}
+	}
 
 	tr := tree.New(c.pager, c.leafReader, rootID)
 	retired, err := tr.CollectPageIDs()
 	if err != nil {
 		return rootID, err
+	}
+	if c.ctx != nil {
+		if err := c.ctx.Err(); err != nil {
+			return rootID, err
+		}
 	}
 	var iter iteratorWithEntry = tr.IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
 	if len(replacements) > 0 {
@@ -455,6 +465,7 @@ func (c *leafRefRewriteCtx) rebuildSystemRootWithCollectionRootReplacements(root
 			replacements: replacements,
 		}
 	}
+	iter = &contextIteratorWithEntry{ctx: c.ctx, base: iter}
 	defer func() { _ = iter.Close() }()
 
 	newRoot, err := bulk.BuildWithOptions(iter, c.alloc, c.pager, bulk.BuildOptions{
@@ -469,6 +480,123 @@ func (c *leafRefRewriteCtx) rebuildSystemRootWithCollectionRootReplacements(root
 	}
 	c.retired = append(c.retired, retired...)
 	return newRoot, nil
+}
+
+type contextIteratorWithEntry struct {
+	ctx  context.Context
+	base iteratorWithEntry
+	err  error
+}
+
+func (it *contextIteratorWithEntry) contextErr() error {
+	if it == nil {
+		return nil
+	}
+	if it.err != nil {
+		return it.err
+	}
+	if it.ctx != nil {
+		it.err = it.ctx.Err()
+	}
+	return it.err
+}
+
+func (it *contextIteratorWithEntry) Valid() bool {
+	if it == nil || it.base == nil || it.contextErr() != nil {
+		return false
+	}
+	return it.base.Valid()
+}
+
+func (it *contextIteratorWithEntry) Next() {
+	if it == nil || it.base == nil || it.contextErr() != nil {
+		return
+	}
+	it.base.Next()
+}
+
+func (it *contextIteratorWithEntry) UnsafeKey() []byte {
+	if it == nil || it.base == nil {
+		return nil
+	}
+	return it.base.UnsafeKey()
+}
+
+func (it *contextIteratorWithEntry) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
+	if it == nil || it.base == nil {
+		return nil, page.ValuePtr{}, node.FlagInline
+	}
+	return it.base.UnsafeEntry()
+}
+
+func (it *contextIteratorWithEntry) IsDeleted() bool {
+	return it != nil && it.base != nil && it.base.IsDeleted()
+}
+
+func (it *contextIteratorWithEntry) UnsafeValue() []byte {
+	if it == nil || it.base == nil {
+		return nil
+	}
+	return it.base.UnsafeValue()
+}
+
+func (it *contextIteratorWithEntry) Key() []byte {
+	if it == nil || it.base == nil {
+		return nil
+	}
+	return it.base.Key()
+}
+
+func (it *contextIteratorWithEntry) Value() []byte {
+	if it == nil || it.base == nil {
+		return nil
+	}
+	return it.base.Value()
+}
+
+func (it *contextIteratorWithEntry) KeyCopy(dst []byte) []byte {
+	if it == nil || it.base == nil {
+		return dst
+	}
+	return it.base.KeyCopy(dst)
+}
+
+func (it *contextIteratorWithEntry) ValueCopy(dst []byte) []byte {
+	if it == nil || it.base == nil {
+		return dst
+	}
+	return it.base.ValueCopy(dst)
+}
+
+func (it *contextIteratorWithEntry) Error() error {
+	if err := it.contextErr(); err != nil {
+		return err
+	}
+	if it == nil || it.base == nil {
+		return nil
+	}
+	return it.base.Error()
+}
+
+func (it *contextIteratorWithEntry) Close() error {
+	if it == nil || it.base == nil {
+		return nil
+	}
+	return it.base.Close()
+}
+
+func (it *contextIteratorWithEntry) Domain() (start, end []byte) {
+	if it == nil || it.base == nil {
+		return nil, nil
+	}
+	return it.base.Domain()
+}
+
+func (it *contextIteratorWithEntry) Seek(key []byte) {
+	if it == nil || it.base == nil || it.contextErr() != nil {
+		return
+	}
+	it.base.Seek(key)
 }
 
 func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, ridAlloc *rewriteRIDAllocator, sourceIDs map[uint32]struct{}, sourceChunks map[valueLogChunkKey]ValueLogRewritePlanChunk, sourceChunkBytes int64, singleSourceID uint32, hasSingleSourceID bool, maxCopiedBytes int64, sync bool, runStats *leafRefRewriteRunStats) (copied int, copiedBytes int64, err error) {
