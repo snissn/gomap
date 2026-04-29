@@ -7,6 +7,32 @@ import (
 	"testing"
 )
 
+func TestReadMatrixIndexResolvesRelativeReportPaths(t *testing.T) {
+	dir := t.TempDir()
+	indexPath := filepath.Join(dir, "matrix_index.tsv")
+	index := strings.Join([]string{
+		"cell\tengine\tdocument_format\tdata_outer_leaves_in_vlog\tindex_outer_leaves_in_vlog\tpager_chunk_size\tpager_sync_concurrency\treport_md\treport_json",
+		"cell_a\tproduction_fast\tjson\ttrue\ttrue\tprofile/default\tprofile/default\tcell_a/collections_report.md\tcell_a/collections_report.json",
+	}, "\n")
+	if err := os.WriteFile(indexPath, []byte(index), 0o644); err != nil {
+		t.Fatalf("write matrix index: %v", err)
+	}
+
+	rows, err := readMatrixIndex(indexPath)
+	if err != nil {
+		t.Fatalf("readMatrixIndex: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("rows=%d want 1", len(rows))
+	}
+	if got, want := rows[0].ReportMarkdownPath, filepath.Join(dir, "cell_a", "collections_report.md"); got != want {
+		t.Fatalf("ReportMarkdownPath=%q want %q", got, want)
+	}
+	if got, want := rows[0].ReportJSONPath, filepath.Join(dir, "cell_a", "collections_report.json"); got != want {
+		t.Fatalf("ReportJSONPath=%q want %q", got, want)
+	}
+}
+
 func TestMatrixSummaryRendersBenchmarkMetrics(t *testing.T) {
 	dir := t.TempDir()
 	cellDir := filepath.Join(dir, "production_fast_data_vlog_index_leaf")

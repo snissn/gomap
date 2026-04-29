@@ -253,7 +253,7 @@ func benchmarkReportTreeDBValueLogRewrite(b *testing.B, backend *backenddb.DB, d
 	b.ReportMetric(float64(rewriteElapsed.Nanoseconds()), "vlog_rewrite_ns/op")
 	b.ReportMetric(float64(beforeTotalBytes), "vlog_rewrite_disk_total_bytes_before")
 	b.ReportMetric(float64(afterRewriteBytes), "vlog_rewrite_disk_total_bytes_after")
-	b.ReportMetric(float64(int64(afterRewriteBytes)-int64(beforeTotalBytes)), "vlog_rewrite_disk_total_bytes_delta")
+	b.ReportMetric(benchmarkSignedByteDelta(afterRewriteBytes, beforeTotalBytes), "vlog_rewrite_disk_total_bytes_delta")
 	b.ReportMetric(float64(afterRewriteBytes)/float64(docs), "vlog_rewrite_disk_bytes/doc_after")
 	b.ReportMetric(float64(rewriteStats.SegmentsBefore), "vlog_rewrite_segments_before")
 	b.ReportMetric(float64(rewriteStats.SegmentsAfter), "vlog_rewrite_segments_after")
@@ -268,7 +268,7 @@ func benchmarkReportTreeDBValueLogRewrite(b *testing.B, backend *backenddb.DB, d
 	b.ReportMetric(float64(rewriteStats.TemplateOutputBytes), "vlog_rewrite_template_output_bytes")
 	b.ReportMetric(float64(gcElapsed.Nanoseconds()), "vlog_gc_ns/op")
 	b.ReportMetric(float64(afterGCBytes), "vlog_rewrite_gc_disk_total_bytes_after")
-	b.ReportMetric(float64(int64(afterGCBytes)-int64(beforeTotalBytes)), "vlog_rewrite_gc_disk_total_bytes_delta")
+	b.ReportMetric(benchmarkSignedByteDelta(afterGCBytes, beforeTotalBytes), "vlog_rewrite_gc_disk_total_bytes_delta")
 	b.ReportMetric(float64(afterGCBytes)/float64(docs), "vlog_rewrite_gc_disk_bytes/doc_after")
 	b.ReportMetric(float64(gcStats.SegmentsDeleted), "vlog_gc_segments_deleted")
 	b.ReportMetric(float64(gcStats.BytesDeleted), "vlog_gc_bytes_deleted")
@@ -354,7 +354,7 @@ func benchmarkReportTreeDBLeafGenerationPackGC(b *testing.B, backend *backenddb.
 	b.ReportMetric(float64(packElapsed.Nanoseconds()), "leafgen_pack_ns/op")
 	b.ReportMetric(float64(beforeTotalBytes), "leafgen_pack_disk_total_bytes_before")
 	b.ReportMetric(float64(afterPackBytes), "leafgen_pack_disk_total_bytes_after")
-	b.ReportMetric(float64(int64(afterPackBytes)-int64(beforeTotalBytes)), "leafgen_pack_disk_total_bytes_delta")
+	b.ReportMetric(benchmarkSignedByteDelta(afterPackBytes, beforeTotalBytes), "leafgen_pack_disk_total_bytes_delta")
 	b.ReportMetric(float64(afterPackBytes)/float64(docs), "leafgen_pack_disk_bytes/doc_after")
 	b.ReportMetric(float64(packStats.GenerationsMatched), "leafgen_pack_generations_matched")
 	b.ReportMetric(float64(packStats.SourceBytesTotal), "leafgen_pack_source_bytes_total")
@@ -369,7 +369,7 @@ func benchmarkReportTreeDBLeafGenerationPackGC(b *testing.B, backend *backenddb.
 	b.ReportMetric(float64(len(packStats.CreatedFileIDs)), "leafgen_pack_created_files")
 	b.ReportMetric(float64(gcElapsed.Nanoseconds()), "leafgen_gc_ns/op")
 	b.ReportMetric(float64(afterGCBytes), "leafgen_pack_gc_disk_total_bytes_after")
-	b.ReportMetric(float64(int64(afterGCBytes)-int64(beforeTotalBytes)), "leafgen_pack_gc_disk_total_bytes_delta")
+	b.ReportMetric(benchmarkSignedByteDelta(afterGCBytes, beforeTotalBytes), "leafgen_pack_gc_disk_total_bytes_delta")
 	b.ReportMetric(float64(afterGCBytes)/float64(docs), "leafgen_pack_gc_disk_bytes/doc_after")
 	b.ReportMetric(float64(gcStats.GenerationsDeleted), "leafgen_gc_generations_deleted")
 	b.ReportMetric(float64(gcStats.FilesDeleted), "leafgen_gc_files_deleted")
@@ -397,11 +397,15 @@ func benchmarkReportTreeDBLeafGenerationPackGCNoop(b *testing.B, docs int, befor
 	b.ReportMetric(0, "leafgen_pack_created_files")
 	b.ReportMetric(float64(gcElapsed.Nanoseconds()), "leafgen_gc_ns/op")
 	b.ReportMetric(float64(afterGCBytes), "leafgen_pack_gc_disk_total_bytes_after")
-	b.ReportMetric(float64(int64(afterGCBytes)-int64(beforeTotalBytes)), "leafgen_pack_gc_disk_total_bytes_delta")
+	b.ReportMetric(benchmarkSignedByteDelta(afterGCBytes, beforeTotalBytes), "leafgen_pack_gc_disk_total_bytes_delta")
 	b.ReportMetric(gcBytesPerDoc, "leafgen_pack_gc_disk_bytes/doc_after")
 	b.ReportMetric(float64(gcStats.GenerationsDeleted), "leafgen_gc_generations_deleted")
 	b.ReportMetric(float64(gcStats.FilesDeleted), "leafgen_gc_files_deleted")
 	b.ReportMetric(float64(gcStats.BytesDeleted), "leafgen_gc_bytes_deleted")
+}
+
+func benchmarkSignedByteDelta(after, before uint64) float64 {
+	return float64(after) - float64(before)
 }
 
 func benchmarkTreeDBDiskUsageBytes(backend *backenddb.DB) (uint64, error) {

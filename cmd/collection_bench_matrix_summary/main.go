@@ -281,6 +281,7 @@ func readMatrixIndex(path string) ([]matrixRow, error) {
 	}
 
 	documentFormatIdx, hasDocumentFormat := header["document_format"]
+	baseDir := filepath.Dir(path)
 	var rows []matrixRow
 	for _, record := range records[1:] {
 		if len(record) == 0 || strings.TrimSpace(record[0]) == "" {
@@ -301,11 +302,18 @@ func readMatrixIndex(path string) ([]matrixRow, error) {
 			IndexOuterLeavesInVLog: field(record, header["index_outer_leaves_in_vlog"]),
 			PagerChunkSize:         field(record, header["pager_chunk_size"]),
 			PagerSyncConcurrency:   field(record, header["pager_sync_concurrency"]),
-			ReportMarkdownPath:     field(record, header["report_md"]),
-			ReportJSONPath:         field(record, header["report_json"]),
+			ReportMarkdownPath:     matrixIndexArtifactPath(baseDir, field(record, header["report_md"])),
+			ReportJSONPath:         matrixIndexArtifactPath(baseDir, field(record, header["report_json"])),
 		})
 	}
 	return rows, nil
+}
+
+func matrixIndexArtifactPath(baseDir, artifactPath string) string {
+	if strings.TrimSpace(artifactPath) == "" || filepath.IsAbs(artifactPath) {
+		return artifactPath
+	}
+	return filepath.Join(baseDir, artifactPath)
 }
 
 func field(record []string, idx int) string {

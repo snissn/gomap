@@ -175,8 +175,10 @@ func run(cfg config, commandLine []string) error {
 	if cfg.outDir == "" {
 		cfg.outDir = defaultOutputDir(time.Now().UTC())
 	}
-	if err := os.MkdirAll(cfg.outDir, 0o755); err != nil {
-		return fmt.Errorf("create output directory: %w", err)
+	if !cfg.dryRun {
+		if err := os.MkdirAll(cfg.outDir, 0o755); err != nil {
+			return fmt.Errorf("create output directory: %w", err)
+		}
 	}
 
 	branch := gitOutput(cfg.repoRoot, "branch", "--show-current")
@@ -189,8 +191,10 @@ func run(cfg config, commandLine []string) error {
 	for i := range cells {
 		cell := &cells[i]
 		cellDir := filepath.Join(cfg.outDir, cell.Name)
-		if err := os.MkdirAll(cellDir, 0o755); err != nil {
-			return fmt.Errorf("create cell directory %s: %w", cell.Name, err)
+		if !cfg.dryRun {
+			if err := os.MkdirAll(cellDir, 0o755); err != nil {
+				return fmt.Errorf("create cell directory %s: %w", cell.Name, err)
+			}
 		}
 		cell.RawJSONPath = filepath.Join(cellDir, "go_test.json")
 		cell.ReportMarkdownPath = filepath.Join(cellDir, "collections_report.md")
@@ -204,8 +208,10 @@ func run(cfg config, commandLine []string) error {
 	}
 
 	matrixIndexPath := filepath.Join(cfg.outDir, "matrix_index.tsv")
-	if err := writeMatrixIndex(matrixIndexPath, cells); err != nil {
-		return err
+	if !cfg.dryRun {
+		if err := writeMatrixIndex(matrixIndexPath, cells); err != nil {
+			return err
+		}
 	}
 	if err := runMatrixSummary(cfg, matrixIndexPath); err != nil {
 		return err
@@ -487,8 +493,8 @@ func writeMatrixIndex(path string, cells []matrixCell) error {
 			cell.IndexOuterLeavesInVLog,
 			cell.PagerChunkSize,
 			cell.PagerSyncConcurrency,
-			cell.ReportMarkdownPath,
-			cell.ReportJSONPath,
+			relativeArtifactPath(filepath.Dir(path), cell.ReportMarkdownPath),
+			relativeArtifactPath(filepath.Dir(path), cell.ReportJSONPath),
 		}); err != nil {
 			return err
 		}

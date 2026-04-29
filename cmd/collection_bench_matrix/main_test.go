@@ -193,6 +193,35 @@ func TestWriteMatrixIndex(t *testing.T) {
 	if !strings.Contains(got, "treedb_json\tproduction_fast\tjson\ttrue\tfalse\tprofile/default\tprofile/default\t") {
 		t.Fatalf("missing row:\n%s", got)
 	}
+	if strings.Contains(got, dir) {
+		t.Fatalf("matrix index contains non-portable absolute path:\n%s", got)
+	}
+	if !strings.Contains(got, filepath.Join("treedb_json", "collections_report.md")) {
+		t.Fatalf("missing relative report path:\n%s", got)
+	}
+}
+
+func TestRunDryRunDoesNotCreateArtifacts(t *testing.T) {
+	parent := t.TempDir()
+	outDir := filepath.Join(parent, "dry-run-output")
+	err := run(config{
+		repoRoot:     ".",
+		outDir:       outDir,
+		formats:      []string{"json"},
+		storageCells: []string{"index-vlog"},
+		benchtime:    "1x",
+		count:        1,
+		goBinary:     "go",
+		batchSize:    1,
+		dryRun:       true,
+		skipSQLite:   true,
+	}, []string{"collection_bench_matrix", "-dry-run"})
+	if err != nil {
+		t.Fatalf("dry run: %v", err)
+	}
+	if _, err := os.Stat(outDir); err == nil || !os.IsNotExist(err) {
+		t.Fatalf("dry run created output directory %s, err=%v", outDir, err)
+	}
 }
 
 func containsEnv(env []string, want string) bool {
