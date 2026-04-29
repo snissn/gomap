@@ -2423,11 +2423,11 @@ func (db *DB) applyRewriteSwapBatchToCollectionRoot(target *collectionRewriteRoo
 	}
 	idx := db.idx.Load()
 	if idx == nil {
-		return fmt.Errorf("missing index")
+		return fmt.Errorf("vlog-rewrite: collection root: missing index")
 	}
 	state := db.state.Load()
 	if state == nil {
-		return fmt.Errorf("missing backend state")
+		return fmt.Errorf("vlog-rewrite: collection root: missing backend state")
 	}
 
 	db.mu.RLock()
@@ -2446,6 +2446,9 @@ func (db *DB) applyRewriteSwapBatchToCollectionRoot(target *collectionRewriteRoo
 			return err
 		}
 		if !ok {
+			if target.rootID != 0 {
+				return nil
+			}
 			return fmt.Errorf("vlog-rewrite: collection root descriptor %q not found", string(target.descriptorKey))
 		}
 		if collectionRoot == 0 {
@@ -2556,27 +2559,30 @@ func lookupCollectionRootDescriptorAliases(p *pager.Pager, reader tree.SlabReade
 	if err != nil {
 		return 0, nil, false, err
 	}
-	var rootID, firstRoot uint64
+	var rootID, firstMatchedRoot uint64
 	for _, descriptor := range descriptors {
+		if preferredRoot != 0 && descriptor.rootID == preferredRoot {
+			rootID = preferredRoot
+			break
+		}
 		if !collectionRootDescriptorKeyMatches(descriptor.key, key, aliasKeys) {
 			continue
 		}
 		if descriptor.rootID == 0 {
 			continue
 		}
-		if firstRoot == 0 {
-			firstRoot = descriptor.rootID
-		}
-		if preferredRoot != 0 && descriptor.rootID == preferredRoot {
-			rootID = preferredRoot
-			break
+		if firstMatchedRoot == 0 {
+			firstMatchedRoot = descriptor.rootID
 		}
 		if rootID == 0 && bytes.Equal(descriptor.key, key) {
 			rootID = descriptor.rootID
 		}
 	}
 	if rootID == 0 {
-		rootID = firstRoot
+		if preferredRoot != 0 {
+			return 0, nil, false, nil
+		}
+		rootID = firstMatchedRoot
 	}
 	if rootID == 0 {
 		return 0, nil, false, nil

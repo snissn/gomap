@@ -56,20 +56,21 @@ func vacuumCollectionRootDescriptorPrefixEnd() []byte {
 }
 
 func vacuumCollectCollectionRootDescriptors(p *pager.Pager, reader tree.SlabReader, systemRootID uint64) ([]vacuumCollectionRootDescriptor, error) {
-	return vacuumCollectCollectionRootDescriptorsWithContext(nil, p, reader, systemRootID)
+	return vacuumCollectCollectionRootDescriptorsWithContext(context.Background(), p, reader, systemRootID)
 }
 
 func vacuumCollectCollectionRootDescriptorsWithContext(ctx context.Context, p *pager.Pager, reader tree.SlabReader, systemRootID uint64) ([]vacuumCollectionRootDescriptor, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if p == nil {
 		return nil, errors.New("vacuum: missing pager")
 	}
 	if systemRootID == 0 {
 		return nil, nil
 	}
-	if ctx != nil {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 
 	it := tree.New(p, reader, systemRootID).IteratorWithOptions(vacuumCollectionRootDescriptorPrefixBytes, vacuumCollectionRootDescriptorPrefixEnd(), tree.IteratorOptions{
@@ -80,10 +81,8 @@ func vacuumCollectCollectionRootDescriptorsWithContext(ctx context.Context, p *p
 	var out []vacuumCollectionRootDescriptor
 	var pointerScratch []byte
 	for it.Valid() {
-		if ctx != nil {
-			if err := ctx.Err(); err != nil {
-				return nil, err
-			}
+		if err := ctx.Err(); err != nil {
+			return nil, err
 		}
 		key := it.UnsafeKey()
 		if !bytes.HasPrefix(key, vacuumCollectionRootDescriptorPrefixBytes) {
