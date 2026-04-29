@@ -273,9 +273,10 @@ Priority workloads:
   sort, skip, limit, and top-level projection.
 - Current cursor slice adds in-memory server cursor state for batched `find`,
   `getMore`, and `killCursors`.
-- Current benchmark slice adds `cmd/mongo_gateway_bench`, a reproducible
-  MongoDB-driver workload that can target either the TreeDB gateway or a MongoDB
-  server and report ops/sec, latency percentiles, and storage stats.
+- Current benchmark slice adds `cmd/mongo_gateway_bench`, a reusable comparison
+  runner in `scripts/mongo_gateway_compare.sh`, and
+  `cmd/mongo_gateway_compare_report` for regenerating Markdown and TSV reports
+  from raw TreeDB/MongoDB benchmark JSON.
 
 Metrics to record for every run:
 
@@ -333,7 +334,7 @@ Metrics to record for every run:
 - [ ] Implement single-field index creation and indexed `find`.
 - [ ] Add protocol-level compatibility tests using a real MongoDB driver.
 - [x] Add a reproducible MongoDB-vs-TreeDB benchmark harness.
-- [ ] Publish first benchmark report with disk usage and ops/sec.
+- [x] Publish first benchmark report with disk usage and ops/sec.
 - [ ] Revisit scope after the first benchmark report and decide whether to
       expand compatibility or keep the gateway benchmark-only.
 
@@ -367,3 +368,7 @@ Metrics to record for every run:
   bridge, and `find` supports `_id` equality with a Mongo-style cursor response.
   This is intentionally a bridge format until benchmarks prove whether native
   BSON collection storage is needed.
+- 2026-04-29: Added the reusable Mongo gateway comparison harness and checked in
+  `docs/benchmarks/mongo_gateway_compare_2026-04-29/`, a six-cell TreeDB vs
+  MongoDB report bundle with raw JSON, matrix TSV, summary TSV, physical disk
+  `du` bytes, and ops/sec ratios.

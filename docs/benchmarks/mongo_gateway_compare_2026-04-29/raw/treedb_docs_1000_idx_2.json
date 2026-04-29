@@ -1,0 +1,88 @@
+{
+  "target": "treedb",
+  "treedb_dir": "/tmp/gomap_mongo_gateway_compare_20260429/treedb_data/docs_1000_idx_2",
+  "database": "mongo_gateway_compare_docs_1000_idx_2",
+  "collection": "docs",
+  "documents": 1000,
+  "secondary_indexes": 2,
+  "phases": [
+    {
+      "name": "load_insert_many",
+      "operations": 1000,
+      "driver_calls": 2,
+      "duration_ms": 16.659,
+      "ops_per_sec": 60024.312247432696,
+      "latency_micros": {
+        "p50": 7384,
+        "p95": 8323,
+        "p99": 8323
+      }
+    },
+    {
+      "name": "id_find_one",
+      "operations": 1000,
+      "driver_calls": 1000,
+      "duration_ms": 85.76,
+      "ops_per_sec": 11660.318051032875,
+      "latency_micros": {
+        "p50": 79,
+        "p95": 101,
+        "p99": 233
+      }
+    },
+    {
+      "name": "email_find_one",
+      "operations": 1000,
+      "driver_calls": 1000,
+      "duration_ms": 86.855,
+      "ops_per_sec": 11513.311639107234,
+      "latency_micros": {
+        "p50": 80,
+        "p95": 100,
+        "p99": 223
+      }
+    },
+    {
+      "name": "age_range_limit_10",
+      "operations": 100,
+      "driver_calls": 100,
+      "duration_ms": 928.535,
+      "ops_per_sec": 107.69644189361306,
+      "latency_micros": {
+        "p50": 9282,
+        "p95": 9568,
+        "p99": 9650
+      }
+    },
+    {
+      "name": "id_update_set",
+      "operations": 100,
+      "driver_calls": 100,
+      "duration_ms": 18.265,
+      "ops_per_sec": 5474.800724097144,
+      "latency_micros": {
+        "p50": 164,
+        "p95": 251,
+        "p99": 428
+      }
+    }
+  ],
+  "treedb_disk_after_load": {
+    "total_bytes": 1048952,
+    "paths": {
+      "LOCK": 12,
+      "format.json": 336,
+      "index.db": 1048576,
+      "vlog_ref_counts.meta": 28
+    }
+  },
+  "treedb_disk_after_checkpoint": {
+    "total_bytes": 4718968,
+    "paths": {
+      "LOCK": 12,
+      "format.json": 336,
+      "index.db": 4718592,
+      "vlog_ref_counts.meta": 28
+    }
+  }
+}

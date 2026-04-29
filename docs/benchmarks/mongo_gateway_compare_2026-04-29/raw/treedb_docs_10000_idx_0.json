@@ -1,0 +1,88 @@
+{
+  "target": "treedb",
+  "treedb_dir": "/tmp/gomap_mongo_gateway_compare_20260429/treedb_data/docs_10000_idx_0",
+  "database": "mongo_gateway_compare_docs_10000_idx_0",
+  "collection": "docs",
+  "documents": 10000,
+  "secondary_indexes": 0,
+  "phases": [
+    {
+      "name": "load_insert_many",
+      "operations": 10000,
+      "driver_calls": 20,
+      "duration_ms": 151.967,
+      "ops_per_sec": 65803.659134861,
+      "latency_micros": {
+        "p50": 6667,
+        "p95": 9062,
+        "p99": 9100
+      }
+    },
+    {
+      "name": "id_find_one",
+      "operations": 1000,
+      "driver_calls": 1000,
+      "duration_ms": 82.001,
+      "ops_per_sec": 12194.919545298768,
+      "latency_micros": {
+        "p50": 74,
+        "p95": 98,
+        "p99": 228
+      }
+    },
+    {
+      "name": "email_find_one",
+      "operations": 1000,
+      "driver_calls": 1000,
+      "duration_ms": 82276.667,
+      "ops_per_sec": 12.15411404188467,
+      "latency_micros": {
+        "p50": 81740,
+        "p95": 84363,
+        "p99": 96942
+      }
+    },
+    {
+      "name": "age_range_limit_10",
+      "operations": 100,
+      "driver_calls": 100,
+      "duration_ms": 8903.655,
+      "ops_per_sec": 11.231342390552072,
+      "latency_micros": {
+        "p50": 88904,
+        "p95": 90531,
+        "p99": 91074
+      }
+    },
+    {
+      "name": "id_update_set",
+      "operations": 100,
+      "driver_calls": 100,
+      "duration_ms": 13.617,
+      "ops_per_sec": 7343.272354554925,
+      "latency_micros": {
+        "p50": 123,
+        "p95": 190,
+        "p99": 226
+      }
+    }
+  ],
+  "treedb_disk_after_load": {
+    "total_bytes": 4456824,
+    "paths": {
+      "LOCK": 12,
+      "format.json": 336,
+      "index.db": 4456448,
+      "vlog_ref_counts.meta": 28
+    }
+  },
+  "treedb_disk_after_checkpoint": {
+    "total_bytes": 6029688,
+    "paths": {
+      "LOCK": 12,
+      "format.json": 336,
+      "index.db": 6029312,
+      "vlog_ref_counts.meta": 28
+    }
+  }
+}
