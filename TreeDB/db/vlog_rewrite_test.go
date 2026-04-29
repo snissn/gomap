@@ -5650,6 +5650,33 @@ func TestPrepareRewriteLeafDict_LiveLeafRefBootstrapBestEffort(t *testing.T) {
 	}
 }
 
+func TestPrepareRewriteLeafDict_NoUsableCallbacksSkipsWork(t *testing.T) {
+	calledCurrent := false
+	dictID, dictBytes, useRawPages, err := prepareRewriteLeafDict(
+		&DB{},
+		&DBState{ValueLogSet: &valuelog.Set{}},
+		func(context.Context, string) (uint64, error) {
+			calledCurrent = true
+			return 0, errors.New("current callback should be skipped without lookup or put")
+		},
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		compression.TrainConfig{},
+	)
+	if err != nil {
+		t.Fatalf("prepareRewriteLeafDict: %v", err)
+	}
+	if calledCurrent {
+		t.Fatal("current callback was called even though no lookup or publish callback was available")
+	}
+	if dictID != 0 || len(dictBytes) != 0 || useRawPages {
+		t.Fatalf("unexpected dict result: id=%d bytes=%d useRawPages=%t", dictID, len(dictBytes), useRawPages)
+	}
+}
+
 func TestPrepareRewriteLeafDict_CurrentClassCompactModePreserved(t *testing.T) {
 	state := &DBState{ValueLogSet: &valuelog.Set{}}
 	dictBytes := []byte("compact-leaf-dict")
