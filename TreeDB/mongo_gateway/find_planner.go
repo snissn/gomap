@@ -145,6 +145,9 @@ func validateFindCommandOptions(command wire.Document, filter wire.Document) err
 	if _, err := normalizeBatchSize(int(batchSize), batchSizeSet, defaultCursorBatchSize); err != nil {
 		return err
 	}
+	if _, err := optionalBoolField(command, "singleBatch"); err != nil {
+		return err
+	}
 	return nil
 }
 

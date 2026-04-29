@@ -21,12 +21,14 @@ const (
 	defaultMaxFindScanDocuments = 10_000
 	defaultMaxOpenCursors       = 1_024
 	defaultCursorBatchSize      = 101
+	defaultCursorIdleTimeout    = 10 * time.Minute
 )
 
 type Server struct {
 	MaxMessageLength     int32
 	MaxFindScanDocuments int
 	MaxOpenCursors       int
+	CursorIdleTimeout    time.Duration
 	Collections          *collections.CollectionManager
 
 	nextResponseID   atomic.Int32
@@ -41,7 +43,9 @@ type serverCursor struct {
 	owner      int64
 	docs       []wire.Document
 	projection compiledProjection
+	batchSize  int
 	pos        int
+	lastUsed   time.Time
 }
 
 func NewServer() *Server {
@@ -84,11 +88,14 @@ func (s *Server) ServeConn(ctx context.Context, conn net.Conn) error {
 	}
 }
 
-// ServeOne serves a single MongoDB wire message using cursor owner 0.
+// ServeOne serves a single MongoDB wire message with a one-shot cursor owner.
 // Callers serving a real long-lived connection should use ServeOneWithOwner or
-// ServeConn so opened cursors participate in owner-based cleanup.
+// ServeConn so cursors survive across getMore/killCursors commands on the same
+// connection owner.
 func (s *Server) ServeOne(rw io.ReadWriter) error {
-	return s.ServeOneWithOwner(rw, 0)
+	owner := s.nextConnectionID.Add(1)
+	defer s.killCursorsForOwner(owner)
+	return s.ServeOneWithOwner(rw, owner)
 }
 
 func (s *Server) ServeOneWithOwner(rw io.ReadWriter, cursorOwner int64) error {
@@ -104,6 +111,7 @@ func (s *Server) ServeOneWithOwner(rw io.ReadWriter, cursorOwner int64) error {
 }
 
 func (s *Server) handleMessage(h wire.Header, body []byte, cursorOwner int64) ([]byte, error) {
+	s.reapExpiredCursors()
 	switch h.OpCode {
 	case wire.OpQuery:
 		return s.handleQuery(h, body, cursorOwner)
@@ -241,6 +249,16 @@ func (s *Server) maxOpenCursors() int {
 		return defaultMaxOpenCursors
 	}
 	return s.MaxOpenCursors
+}
+
+func (s *Server) cursorIdleTimeout() time.Duration {
+	if s.CursorIdleTimeout < 0 {
+		return 0
+	}
+	if s.CursorIdleTimeout == 0 {
+		return defaultCursorIdleTimeout
+	}
+	return s.CursorIdleTimeout
 }
 
 func (s *Server) nextID() int32 {
