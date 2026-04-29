@@ -46,7 +46,7 @@ func TestServerHandlesQueryHello(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadMessage response: %v", err)
 	}
-	if h.OpCode != wire.OpReply || h.ResponseTo != 100 {
+	if h.OpCode != wire.OpReply || h.RequestID != 1 || h.ResponseTo != 100 {
 		t.Fatalf("response header=%+v", h)
 	}
 	reply, err := wire.ParseReply(body)
@@ -58,6 +58,8 @@ func TestServerHandlesQueryHello(t *testing.T) {
 	}
 	assertOK(t, reply.Documents[0])
 	assertBool(t, reply.Documents[0], "helloOk", true)
+	assertBool(t, reply.Documents[0], "ismaster", true)
+	assertBool(t, reply.Documents[0], "secondary", false)
 }
 
 func TestServerHandlesMsgPing(t *testing.T) {
@@ -79,7 +81,7 @@ func TestServerHandlesMsgPing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadMessage response: %v", err)
 	}
-	if h.OpCode != wire.OpMsg || h.ResponseTo != 200 {
+	if h.OpCode != wire.OpMsg || h.RequestID != 1 || h.ResponseTo != 200 {
 		t.Fatalf("response header=%+v", h)
 	}
 	msg, err := wire.ParseMsg(body)

@@ -26,7 +26,7 @@ type Server struct {
 
 func NewServer() *Server {
 	s := &Server{MaxMessageLength: wire.DefaultMaxMessageLength}
-	s.nextResponseID.Store(1)
+	s.nextResponseID.Store(0)
 	return s
 }
 
@@ -140,6 +140,8 @@ func helloResponse(maxMessageLength int32) bson.D {
 	return bson.D{
 		{Key: "ok", Value: 1.0},
 		{Key: "isWritablePrimary", Value: true},
+		{Key: "ismaster", Value: true},
+		{Key: "secondary", Value: false},
 		{Key: "helloOk", Value: true},
 		{Key: "minWireVersion", Value: int32(0)},
 		{Key: "maxWireVersion", Value: int32(21)},
