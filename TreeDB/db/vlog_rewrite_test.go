@@ -519,6 +519,121 @@ func TestValueLogRewriteOffline_RewritesCollectionRootPointers(t *testing.T) {
 	}
 }
 
+func TestValueLogRewriteOnline_RewritesCollectionRootPointers(t *testing.T) {
+	dir := t.TempDir()
+
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer closeNoErr(t, db)
+
+	ptr := appendPointersInNewSegment(t, dir, 0, 1, 510_000, 1, func(int) []byte {
+		return bytes.Repeat([]byte("collection-online-pointer-live|"), 32)
+	})[0]
+	publishCollectionPointerRoot(t, db, maintenanceTestCollectionRootKey, ptr)
+
+	stats, err := db.ValueLogRewriteOnline(context.Background(), ValueLogRewriteOnlineOptions{
+		SourceFileIDs: []uint32{ptr.FileID},
+		BatchSize:     1,
+	})
+	if err != nil {
+		t.Fatalf("ValueLogRewriteOnline: %v", err)
+	}
+	if stats.RecordsCopied != 1 {
+		t.Fatalf("expected one collection pointer record to be copied, stats=%+v", stats)
+	}
+	if stats.SourceSegmentsUnreferenced != 1 {
+		t.Fatalf("source segments unreferenced=%d want 1 (stats=%+v)", stats.SourceSegmentsUnreferenced, stats)
+	}
+
+	got := readCollectionRootValue(t, db, maintenanceTestCollectionRootKey, []byte("doc/p"))
+	want := bytes.Repeat([]byte("collection-online-pointer-live|"), 32)
+	if !bytes.Equal(got, want) {
+		t.Fatalf("collection value mismatch after online rewrite")
+	}
+	newPtr, flags := readCollectionProjectedPointerByKey(t, db, maintenanceTestCollectionRootKey, []byte("doc/p"))
+	if flags&node.FlagPointer == 0 {
+		t.Fatalf("collection entry flags=%#x want pointer", flags)
+	}
+	if newPtr.FileID == ptr.FileID {
+		t.Fatalf("collection pointer still references source segment %d", ptr.FileID)
+	}
+	referenced, err := db.referencedValueLogSegments(context.Background())
+	if err != nil {
+		t.Fatalf("referencedValueLogSegments: %v", err)
+	}
+	if _, ok := referenced[ptr.FileID]; ok {
+		t.Fatalf("source segment %d remains referenced after collection rewrite: %v", ptr.FileID, referenced)
+	}
+}
+
+func TestValueLogRewriteOnline_RewritesCollectionLeafRefRootPointers(t *testing.T) {
+	db, leafLog := openLeafGenerationGCTestDB(t)
+	dir := db.dir
+
+	ptr := appendPointersInNewSegment(t, dir, 0, 1, 520_000, 1, func(int) []byte {
+		return bytes.Repeat([]byte("collection-online-leafref-pointer-live|"), 24)
+	})[0]
+	if err := db.RefreshValueLogSet(); err != nil {
+		t.Fatalf("refresh value log set: %v", err)
+	}
+	_, rootIDs, err := db.PublishOrderedRootGroupWithSystemBuilder([]OrderedRootPublishInput{{
+		BaseRoot:      0,
+		Iter:          mustFrozenSystemPointerMemtable(t, "doc/p", ptr).NewIterator(nil, nil),
+		StoragePolicy: OrderedRootStorageValueLogLeaves,
+	}}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		if len(rootIDs) != 1 {
+			return nil, fmt.Errorf("rootIDs=%d want 1", len(rootIDs))
+		}
+		return mustFrozenRawMemtable(t, maintenanceTestCollectionRootKey, encodeMaintenanceRootID(rootIDs[0])).NewIterator(nil, nil), nil
+	})
+	if err != nil {
+		t.Fatalf("publish collection leaf-ref root: %v", err)
+	}
+	oldRoot := rootIDs[0]
+	if _, ok := page.DecodeLeafRef(oldRoot); !ok {
+		t.Fatalf("collection root=%d want leaf ref", oldRoot)
+	}
+	if err := leafLog.Sync(); err != nil {
+		t.Fatalf("sync leaf log: %v", err)
+	}
+
+	stats, err := db.ValueLogRewriteOnline(context.Background(), ValueLogRewriteOnlineOptions{
+		SourceFileIDs: []uint32{ptr.FileID},
+		BatchSize:     1,
+	})
+	if err != nil {
+		t.Fatalf("ValueLogRewriteOnline: %v", err)
+	}
+	if stats.RecordsCopied != 1 {
+		t.Fatalf("expected one collection leaf-ref pointer record to be copied, stats=%+v", stats)
+	}
+	if stats.SourceSegmentsUnreferenced != 1 {
+		t.Fatalf("source segments unreferenced=%d want 1 (stats=%+v)", stats.SourceSegmentsUnreferenced, stats)
+	}
+
+	newRoot := readCollectionRootID(t, db, maintenanceTestCollectionRootKey)
+	if newRoot == oldRoot {
+		t.Fatalf("collection descriptor still points at old leaf-ref root %d", oldRoot)
+	}
+	if _, ok := page.DecodeLeafRef(newRoot); !ok {
+		t.Fatalf("rewritten collection root=%d want leaf ref", newRoot)
+	}
+	got := readCollectionRootValue(t, db, maintenanceTestCollectionRootKey, []byte("doc/p"))
+	want := bytes.Repeat([]byte("collection-online-leafref-pointer-live|"), 24)
+	if !bytes.Equal(got, want) {
+		t.Fatalf("collection leaf-ref value mismatch after online rewrite")
+	}
+	newPtr, flags := readCollectionProjectedPointerByKey(t, db, maintenanceTestCollectionRootKey, []byte("doc/p"))
+	if flags&node.FlagPointer == 0 {
+		t.Fatalf("collection leaf-ref entry flags=%#x want pointer", flags)
+	}
+	if newPtr.FileID == ptr.FileID {
+		t.Fatalf("collection leaf-ref pointer still references source segment %d", ptr.FileID)
+	}
+}
+
 func TestValueLogRewriteOffline_RewritesCollectionLeafRefRoot(t *testing.T) {
 	dir := t.TempDir()
 	opts := Options{
@@ -4408,6 +4523,33 @@ func readCollectionRootValue(t *testing.T, db *DB, descriptorKey string, key []b
 		t.Fatalf("read collection key %q at root %d: %v", key, rootID, err)
 	}
 	return append([]byte(nil), val...)
+}
+
+func readCollectionProjectedPointerByKey(t *testing.T, db *DB, descriptorKey string, key []byte) (page.ValuePtr, byte) {
+	t.Helper()
+	rootID := readCollectionRootID(t, db, descriptorKey)
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("expected snapshot")
+	}
+	defer snap.Close()
+	it, err := snap.IteratorAtRootWithOptions(rootID, nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
+	if err != nil {
+		t.Fatalf("IteratorAtRootWithOptions(%d): %v", rootID, err)
+	}
+	defer it.Close()
+	for ; it.Valid(); it.Next() {
+		if !bytes.Equal(it.UnsafeKey(), key) {
+			continue
+		}
+		_, ptr, flags := it.UnsafeEntry()
+		return ptr, flags
+	}
+	if err := it.Error(); err != nil {
+		t.Fatalf("collection projection iterator error: %v", err)
+	}
+	t.Fatalf("missing collection key %q in projection iterator", key)
+	return page.ValuePtr{}, 0
 }
 
 func leafLogSegmentPath(t *testing.T, dir string, fileID uint32) string {

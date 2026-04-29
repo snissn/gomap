@@ -18,11 +18,13 @@ import (
 
 	"github.com/snissn/compress/zstd"
 	"github.com/snissn/gomap/TreeDB/batch"
+	"github.com/snissn/gomap/TreeDB/internal/adaptive"
 	"github.com/snissn/gomap/TreeDB/internal/bulk"
 	"github.com/snissn/gomap/TreeDB/internal/compression"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/leafrefscan"
 	"github.com/snissn/gomap/TreeDB/internal/lockfile"
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/outerleaf"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
@@ -1748,7 +1750,7 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 	}
 	selectedSourceBytes := int64(0)
 
-	flushBatch := func() error {
+	flushBatch := func(root maintenanceRoot, storagePolicy OrderedRootStoragePolicy) error {
 		if len(candidates) == 0 {
 			return nil
 		}
@@ -1830,7 +1832,7 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 			lastRegisteredCreatedID = id
 			hasLastRegisteredID = true
 		}
-		if err := db.applyRewriteSwapBatch(swaps, opts.SyncEachBatch); err != nil {
+		if err := db.applyRewriteSwapBatchToMaintenanceRoot(root, storagePolicy, swaps, opts.SyncEachBatch); err != nil {
 			return err
 		}
 		candidates = candidates[:0]
@@ -1843,90 +1845,127 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 	}
 
 	snap := db.AcquireSnapshot()
-	if snap == nil || snap.state == nil {
+	if snap == nil || snap.state == nil || snap.idx == nil || snap.idx.pager == nil {
 		closeRewriteSnapshot(&err, snap)
 		return stats, fmt.Errorf("missing snapshot state")
 	}
-	it := snap.tree.IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
-	for ; it.Valid(); it.Next() {
-		if err := ctx.Err(); err != nil {
-			canceledErr = err
-			break
-		}
-		_, oldPtr, flags := it.UnsafeEntry()
-		if flags&node.FlagPointer == 0 || !page.IsValueLogFileID(oldPtr.FileID) {
+	roots, err := maintenanceRootsForSnapshot(snap)
+	if err != nil {
+		closeRewriteSnapshot(&err, snap)
+		return stats, err
+	}
+	rootPolicies := make([]OrderedRootStoragePolicy, len(roots))
+	for i, root := range roots {
+		if root.kind != maintenanceRootCollection || root.rootID == 0 {
 			continue
 		}
-		if restrictSource {
-			if restrictSingleID {
-				if oldPtr.FileID != singleSourceID {
-					continue
-				}
-			} else {
-				if _, ok := sourceIDs[oldPtr.FileID]; !ok {
-					continue
-				}
-			}
-			if sourceChunkSet != nil {
-				ok, chunkErr := rewriteSourceChunkSelected(oldPtr, sourceChunkSet, sourceChunkBytes)
-				if chunkErr != nil {
-					_ = it.Close()
-					closeRewriteSnapshot(&err, snap)
-					return stats, chunkErr
-				}
-				if !ok {
-					continue
-				}
-			}
+		useLeafLog, err := valueLogRewriteCollectionRootUsesLeafLog(snap.idx.pager, root.rootID)
+		if err != nil {
+			closeRewriteSnapshot(&err, snap)
+			return stats, fmt.Errorf("vlog-rewrite: inspect collection root %q storage: %w", string(root.descriptorKey), err)
 		}
-		unsafeKey := it.UnsafeKey()
-		sourceBytes := int64(0)
-		if maxCopiedBytes > 0 {
-			recordLen, err := db.valueLogRecordLengthForRewrite(oldPtr)
-			if err != nil {
-				_ = it.Close()
-				closeRewriteSnapshot(&err, snap)
-				return stats, err
+		if useLeafLog {
+			rootPolicies[i] = OrderedRootStorageValueLogLeaves
+		} else {
+			rootPolicies[i] = OrderedRootStoragePagerLeaves
+		}
+	}
+	stopScanning := false
+	scanRoot := func(root maintenanceRoot, storagePolicy OrderedRootStoragePolicy) error {
+		if root.rootID == 0 {
+			return nil
+		}
+		it := tree.New(snap.idx.pager, &snap.reader, root.rootID).
+			IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
+		defer func() { _ = it.Close() }()
+		for ; it.Valid(); it.Next() {
+			if err := ctx.Err(); err != nil {
+				canceledErr = err
+				break
 			}
-			sourceBytes = int64(recordLen)
-			if selectedSourceBytes > 0 && selectedSourceBytes+sourceBytes > maxCopiedBytes {
+			_, oldPtr, flags := it.UnsafeEntry()
+			if flags&node.FlagPointer == 0 || !page.IsValueLogFileID(oldPtr.FileID) {
+				continue
+			}
+			if restrictSource {
+				if restrictSingleID {
+					if oldPtr.FileID != singleSourceID {
+						continue
+					}
+				} else {
+					if _, ok := sourceIDs[oldPtr.FileID]; !ok {
+						continue
+					}
+				}
+				if sourceChunkSet != nil {
+					ok, chunkErr := rewriteSourceChunkSelected(oldPtr, sourceChunkSet, sourceChunkBytes)
+					if chunkErr != nil {
+						return chunkErr
+					}
+					if !ok {
+						continue
+					}
+				}
+			}
+			unsafeKey := it.UnsafeKey()
+			sourceBytes := int64(0)
+			if maxCopiedBytes > 0 {
+				recordLen, err := db.valueLogRecordLengthForRewrite(oldPtr)
+				if err != nil {
+					return err
+				}
+				sourceBytes = int64(recordLen)
+				if selectedSourceBytes > 0 && selectedSourceBytes+sourceBytes > maxCopiedBytes {
+					stopScanning = true
+					break
+				}
+			}
+			keyStart := len(candidateKeyArena)
+			candidateKeyArena = append(candidateKeyArena, unsafeKey...)
+			key := candidateKeyArena[keyStart:len(candidateKeyArena):len(candidateKeyArena)]
+			candidates = append(candidates, rewriteCandidate{
+				key:         key,
+				oldPtr:      oldPtr,
+				sourceBytes: sourceBytes,
+			})
+			selectedSourceBytes += sourceBytes
+			if len(candidates) >= batchSize {
+				if err := flushBatch(root, storagePolicy); err != nil {
+					return err
+				}
+			}
+			if maxCopiedBytes > 0 && selectedSourceBytes >= maxCopiedBytes {
+				stopScanning = true
 				break
 			}
 		}
-		keyStart := len(candidateKeyArena)
-		candidateKeyArena = append(candidateKeyArena, unsafeKey...)
-		key := candidateKeyArena[keyStart:len(candidateKeyArena):len(candidateKeyArena)]
-		candidates = append(candidates, rewriteCandidate{
-			key:         key,
-			oldPtr:      oldPtr,
-			sourceBytes: sourceBytes,
-		})
-		selectedSourceBytes += sourceBytes
-		if len(candidates) >= batchSize {
-			if err := flushBatch(); err != nil {
-				_ = it.Close()
-				closeRewriteSnapshot(&err, snap)
-				return stats, err
-			}
+		if err := it.Error(); err != nil {
+			return err
 		}
-		if maxCopiedBytes > 0 && selectedSourceBytes >= maxCopiedBytes {
+		if canceledErr == nil {
+			if err := flushBatch(root, storagePolicy); err != nil {
+				return err
+			}
+		} else {
+			// Stop publishing further swaps after cancellation; cleanup below still
+			// reconciles already-committed rewrite batches and rewrite-created files.
+			swaps = swaps[:0]
+			candidates = candidates[:0]
+		}
+		return nil
+	}
+	for i, root := range roots {
+		if stopScanning || canceledErr != nil {
 			break
 		}
-	}
-	iterErr := it.Error()
-	_ = it.Close()
-	closeRewriteSnapshot(&err, snap)
-	if iterErr != nil {
-		return stats, iterErr
-	}
-	if canceledErr == nil {
-		if err := flushBatch(); err != nil {
+		if err := scanRoot(root, rootPolicies[i]); err != nil {
+			closeRewriteSnapshot(&err, snap)
 			return stats, err
 		}
-	} else {
-		// Stop publishing further swaps after cancellation; cleanup below still
-		// reconciles already-committed rewrite batches and rewrite-created files.
-		swaps = swaps[:0]
+	}
+	closeRewriteSnapshot(&err, snap)
+	if err != nil {
+		return stats, err
 	}
 	if err := writer.Sync(); err != nil {
 		return stats, err
@@ -2223,6 +2262,183 @@ func (db *DB) applyRewriteSwapBatch(swaps []rewriteSwap, sync bool) error {
 		}
 	}
 	return db.applyRewriteSwapBatchSerialized(swaps, sync)
+}
+
+func (db *DB) applyRewriteSwapBatchToMaintenanceRoot(root maintenanceRoot, storagePolicy OrderedRootStoragePolicy, swaps []rewriteSwap, sync bool) error {
+	switch root.kind {
+	case maintenanceRootUser:
+		return db.applyRewriteSwapBatch(swaps, sync)
+	case maintenanceRootSystem:
+		return db.applyRewriteSwapBatchToSystemRoot(swaps, sync)
+	case maintenanceRootCollection:
+		return db.applyRewriteSwapBatchToCollectionRoot(root.descriptorKey, storagePolicy, swaps, sync)
+	default:
+		return fmt.Errorf("vlog-rewrite: unknown maintenance root kind %d", root.kind)
+	}
+}
+
+func (db *DB) applyRewriteSwapBatchToSystemRoot(swaps []rewriteSwap, sync bool) error {
+	if len(swaps) == 0 {
+		return nil
+	}
+	db.writeMu.Lock()
+	defer db.writeMu.Unlock()
+
+	if db.readOnly {
+		return ErrReadOnly
+	}
+	idx := db.idx.Load()
+	if idx == nil {
+		return fmt.Errorf("missing index")
+	}
+	state := db.state.Load()
+	if state == nil {
+		return fmt.Errorf("missing backend state")
+	}
+
+	db.mu.RLock()
+	userRoot := db.meta.UserRootPageID
+	systemRoot := db.meta.SystemRootPageID
+	db.mu.RUnlock()
+	if systemRoot == 0 {
+		return nil
+	}
+
+	systemOpts := systemRootOrderedPublishOptions(db)
+	newSystemRoot, retired, metrics, touched, changed, err := db.applyRewriteSwapsToRootLocked(idx, state, systemRoot, systemOpts, swaps)
+	if err != nil || !changed {
+		return err
+	}
+	if err := db.finalizeCommit(userRoot, newSystemRoot, retired, sync, metrics, touched, systemOpts.outerLeavesInValueLog, nil, nil, nil); err != nil {
+		return err
+	}
+	db.clearLeafGenerationReachabilityCaches()
+	return nil
+}
+
+func (db *DB) applyRewriteSwapBatchToCollectionRoot(descriptorKey []byte, storagePolicy OrderedRootStoragePolicy, swaps []rewriteSwap, sync bool) error {
+	if len(swaps) == 0 {
+		return nil
+	}
+	if len(descriptorKey) == 0 {
+		return errors.New("vlog-rewrite: missing collection root descriptor key")
+	}
+
+	db.writeMu.Lock()
+	defer db.writeMu.Unlock()
+
+	if db.readOnly {
+		return ErrReadOnly
+	}
+	idx := db.idx.Load()
+	if idx == nil {
+		return fmt.Errorf("missing index")
+	}
+	state := db.state.Load()
+	if state == nil {
+		return fmt.Errorf("missing backend state")
+	}
+
+	db.mu.RLock()
+	userRoot := db.meta.UserRootPageID
+	systemRoot := db.meta.SystemRootPageID
+	db.mu.RUnlock()
+	if systemRoot == 0 {
+		return nil
+	}
+
+	reader := newValueReader(state.ValueLogSet)
+	collectionRoot, ok, err := lookupCollectionRootDescriptorID(idx.pager, reader, systemRoot, descriptorKey)
+	if err != nil || !ok || collectionRoot == 0 {
+		return err
+	}
+	rootOpts, err := db.orderedRootPublishOptionsForPolicy(storagePolicy)
+	if err != nil {
+		return err
+	}
+	newCollectionRoot, retired, metrics, touched, changed, err := db.applyRewriteSwapsToRootLocked(idx, state, collectionRoot, rootOpts, swaps)
+	if err != nil || !changed {
+		return err
+	}
+	if newCollectionRoot == collectionRoot {
+		if err := db.finalizeCommit(userRoot, systemRoot, retired, sync, metrics, touched, rootOpts.outerLeavesInValueLog, nil, nil, nil); err != nil {
+			return err
+		}
+		db.clearLeafGenerationReachabilityCaches()
+		return nil
+	}
+
+	encodedRoot := make([]byte, 8)
+	binary.BigEndian.PutUint64(encodedRoot, newCollectionRoot)
+	systemDelta := memtable.NewAppendOnlyWithEntryCapacity(1)
+	systemDelta.Set(descriptorKey, encodedRoot)
+	systemDelta.Freeze()
+	systemIter := systemDelta.NewIterator(nil, nil)
+	systemOpts := systemRootOrderedPublishOptions(db)
+	newSystemRoot, systemRetired, systemMetrics, err := db.publishOrderedRootDeltaIterator(systemRoot, systemIter, systemOpts)
+	if err != nil {
+		return err
+	}
+	retired = append(retired, systemRetired...)
+	mergeOrderedRootPublishMetrics(&metrics, systemMetrics)
+	forceValueLogRefresh := rootOpts.outerLeavesInValueLog || systemOpts.outerLeavesInValueLog
+	if err := db.finalizeCommit(userRoot, newSystemRoot, retired, sync, metrics, touched, forceValueLogRefresh, nil, nil, nil); err != nil {
+		return err
+	}
+	db.clearLeafGenerationReachabilityCaches()
+	return nil
+}
+
+func (db *DB) applyRewriteSwapsToRootLocked(idx *indexGen, state *DBState, rootID uint64, opts orderedRootPublishOptions, swaps []rewriteSwap) (uint64, []uint64, adaptive.Metrics, []uint32, bool, error) {
+	var metrics adaptive.Metrics
+	if len(swaps) == 0 || rootID == 0 {
+		return rootID, nil, metrics, nil, false, nil
+	}
+	tr := tree.New(idx.pager, newValueReader(state.ValueLogSet), rootID)
+	b := batch.Acquire(db.valueLogManager, db.InlineThreshold())
+	defer batch.Release(b)
+	b.Reserve(len(swaps))
+	if _, err := collectRewriteSwapPointerMatches(tr, b, swaps, false); err != nil {
+		return rootID, nil, metrics, nil, false, err
+	}
+	if len(b.SortedEntries()) == 0 {
+		return rootID, nil, metrics, nil, false, nil
+	}
+	noteRewriteSwapTouchedSegments(b, swaps)
+	touched := append([]uint32(nil), b.TouchedValueLogSegments()...)
+	rootZipper, err := db.orderedRootZipperForOptions(idx, opts)
+	if err != nil {
+		return rootID, nil, metrics, nil, false, err
+	}
+	newRoot, retired, metrics, err := rootZipper.Apply(rootID, b)
+	if err != nil {
+		return rootID, nil, metrics, nil, false, err
+	}
+	return newRoot, retired, metrics, touched, true, nil
+}
+
+func lookupCollectionRootDescriptorID(p *pager.Pager, reader tree.SlabReader, systemRootID uint64, key []byte) (uint64, bool, error) {
+	if p == nil {
+		return 0, false, errors.New("vlog-rewrite: missing pager")
+	}
+	if systemRootID == 0 || len(key) == 0 {
+		return 0, false, nil
+	}
+	entry, err := tree.New(p, reader, systemRootID).GetEntry(key)
+	if err != nil {
+		if errors.Is(err, tree.ErrKeyNotFound) {
+			return 0, false, nil
+		}
+		return 0, false, err
+	}
+	val, _, err := vacuumCollectionRootDescriptorValue(reader, key, entry.Value, entry.ValuePtr, entry.Flags, nil)
+	if err != nil {
+		return 0, false, err
+	}
+	if len(val) != 8 {
+		return 0, false, fmt.Errorf("vlog-rewrite: collection root descriptor %q has malformed root id length %d", string(key), len(val))
+	}
+	return binary.BigEndian.Uint64(val), true, nil
 }
 
 func (db *DB) applyRewriteSwapBatchOptimistic(swaps []rewriteSwap, sync bool) (bool, error) {
