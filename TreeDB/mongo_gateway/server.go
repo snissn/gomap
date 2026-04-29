@@ -16,26 +16,30 @@ import (
 )
 
 const (
-	defaultMaxBSONObjectSize    = 16 * 1024 * 1024
-	defaultMaxWriteBatchSize    = 100_000
-	defaultMaxFindScanDocuments = 10_000
-	defaultMaxOpenCursors       = 1_024
-	defaultCursorBatchSize      = 101
-	defaultCursorIdleTimeout    = 10 * time.Minute
+	defaultMaxBSONObjectSize      = 16 * 1024 * 1024
+	defaultMaxWriteBatchSize      = 100_000
+	defaultMaxFindScanDocuments   = 10_000
+	defaultMaxCursorRetainedBytes = 64 * 1024 * 1024
+	defaultMaxOpenCursors         = 1_024
+	defaultCursorBatchSize        = 101
+	defaultCursorIdleTimeout      = 10 * time.Minute
+	defaultCursorReapInterval     = time.Second
 )
 
 type Server struct {
-	MaxMessageLength     int32
-	MaxFindScanDocuments int
-	MaxOpenCursors       int
-	CursorIdleTimeout    time.Duration
-	Collections          *collections.CollectionManager
+	MaxMessageLength       int32
+	MaxFindScanDocuments   int
+	MaxCursorRetainedBytes int
+	MaxOpenCursors         int
+	CursorIdleTimeout      time.Duration
+	Collections            *collections.CollectionManager
 
 	nextResponseID   atomic.Int32
 	nextConnectionID atomic.Int64
 	nextCursorID     atomic.Int64
 	cursorMu         sync.Mutex
 	cursors          map[int64]*serverCursor
+	lastCursorReap   time.Time
 }
 
 type serverCursor struct {
@@ -248,6 +252,13 @@ func (s *Server) maxOpenCursors() int {
 		return defaultMaxOpenCursors
 	}
 	return s.MaxOpenCursors
+}
+
+func (s *Server) maxCursorRetainedBytes() int {
+	if s.MaxCursorRetainedBytes <= 0 {
+		return defaultMaxCursorRetainedBytes
+	}
+	return s.MaxCursorRetainedBytes
 }
 
 func (s *Server) cursorIdleTimeout() time.Duration {

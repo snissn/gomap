@@ -500,11 +500,9 @@ func (s *Server) getMoreResponse(command wire.Document, cursorOwner int64) (wire
 	if err != nil {
 		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
 	}
-	if batchSizeSet && batchSize == 0 {
-		batchSizeSet = false
-	}
+	batchSizeValue, batchSizeSet := normalizeGetMoreBatchSize(batchSize, batchSizeSet)
 	ns := db + "." + collection
-	nextID, nextBatch, ok, err := s.getMore(cursorID, ns, cursorOwner, int(batchSize), batchSizeSet, maxInt)
+	nextID, nextBatch, ok, err := s.getMore(cursorID, ns, cursorOwner, batchSizeValue, batchSizeSet, maxInt)
 	if err != nil {
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}
@@ -580,6 +578,11 @@ func (s *Server) openCursor(ns string, docs []wire.Document, projection compiled
 	if consumed >= len(docs) {
 		return 0, firstBatch, nil
 	}
+	retainedDocs := append([]wire.Document(nil), docs[consumed:]...)
+	retainedBytes := documentsBytes(retainedDocs)
+	if maxBytes := s.maxCursorRetainedBytes(); retainedBytes > maxBytes {
+		return 0, nil, fmt.Errorf("Mongo gateway cursor retained bytes exceeds limit: retainedBytes=%d maxBytes=%d", retainedBytes, maxBytes)
+	}
 	cursorID := s.nextCursorID.Add(1)
 	if cursorID == 0 {
 		cursorID = s.nextCursorID.Add(1)
@@ -594,7 +597,7 @@ func (s *Server) openCursor(ns string, docs []wire.Document, projection compiled
 	if len(s.cursors) >= s.maxOpenCursors() {
 		return 0, nil, errors.New("Mongo gateway cursor limit exceeded")
 	}
-	s.cursors[cursorID] = &serverCursor{ns: ns, owner: owner, docs: docs, projection: projection, pos: consumed, lastUsed: now}
+	s.cursors[cursorID] = &serverCursor{ns: ns, owner: owner, docs: retainedDocs, projection: projection, pos: 0, lastUsed: now}
 	return cursorID, firstBatch, nil
 }
 
@@ -628,6 +631,12 @@ func (s *Server) getMore(cursorID int64, ns string, owner int64, batchSize int, 
 
 		batch, consumed, err := documentsBatchWithLimit(remaining, projection, effectiveBatchSize, s.maxFindBatchBytes())
 		if err != nil {
+			s.cursorMu.Lock()
+			current := s.cursors[cursorID]
+			if current == cursor && current.ns == ns && current.owner == owner && current.pos == startPos {
+				delete(s.cursors, cursorID)
+			}
+			s.cursorMu.Unlock()
 			return 0, nil, false, err
 		}
 
@@ -689,9 +698,14 @@ func (s *Server) reapExpiredCursors() {
 	if timeout <= 0 {
 		return
 	}
+	now := time.Now()
 	s.cursorMu.Lock()
 	defer s.cursorMu.Unlock()
-	s.reapExpiredCursorsLocked(time.Now())
+	if !s.lastCursorReap.IsZero() && now.Sub(s.lastCursorReap) < defaultCursorReapInterval {
+		return
+	}
+	s.lastCursorReap = now
+	s.reapExpiredCursorsLocked(now)
 }
 
 func (s *Server) reapExpiredCursorsLocked(now time.Time) {
@@ -717,9 +731,29 @@ func normalizeBatchSize(batchSize int, explicit bool, defaultBatchSize int) (int
 	return batchSize, nil
 }
 
+func normalizeGetMoreBatchSize(batchSize int32, explicit bool) (int, bool) {
+	// MongoDB treats getMore batchSize: 0 like an omitted count limit; find
+	// batchSize: 0 is intentionally different and opens an empty first batch.
+	if explicit && batchSize == 0 {
+		return 0, false
+	}
+	return int(batchSize), explicit
+}
+
 func documentsBatch(docs []wire.Document) bson.A {
 	out, _, _ := documentsBatchWithLimit(docs, compiledProjection{}, len(docs), maxInt)
 	return out
+}
+
+func documentsBytes(docs []wire.Document) int {
+	total := 0
+	for _, doc := range docs {
+		if len(doc) > maxInt-total {
+			return maxInt
+		}
+		total += len(doc)
+	}
+	return total
 }
 
 func documentsBatchWithLimit(docs []wire.Document, projection compiledProjection, maxDocs int, maxBytes int) (bson.A, int, error) {
@@ -840,7 +874,7 @@ func requiredInt64Field(doc wire.Document, key string) (int64, error) {
 	if value.IsZero() {
 		return 0, fmt.Errorf("Mongo command missing %q", key)
 	}
-	if out, ok := value.AsInt64OK(); ok {
+	if out, ok := strictBSONInt64(value); ok {
 		return out, nil
 	}
 	return 0, fmt.Errorf("Mongo command field %q must be an integer", key)
@@ -861,13 +895,23 @@ func requiredInt64ArrayField(doc wire.Document, key string) ([]int64, error) {
 	}
 	out := make([]int64, 0, len(values))
 	for i, value := range values {
-		item, ok := value.AsInt64OK()
+		item, ok := strictBSONInt64(value)
 		if !ok {
 			return nil, fmt.Errorf("Mongo command field %q[%d] must be an integer", key, i)
 		}
 		out = append(out, item)
 	}
 	return out, nil
+}
+
+func strictBSONInt64(value bson.RawValue) (int64, bool) {
+	if out, ok := value.Int64OK(); ok {
+		return out, true
+	}
+	if out, ok := value.Int32OK(); ok {
+		return int64(out), true
+	}
+	return 0, false
 }
 
 func int64Array(values []int64) bson.A {

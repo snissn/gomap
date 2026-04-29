@@ -947,6 +947,32 @@ func TestServerCursorRejectsNegativeBatchSize(t *testing.T) {
 	assertCommandError(t, negativeGetMore, "BadValue")
 }
 
+func TestRequiredInt64FieldsRejectNonIntegerNumerics(t *testing.T) {
+	doc := mustDocument(t, bson.D{
+		{Key: "getMore", Value: 1.5},
+		{Key: "cursors", Value: bson.A{int32(1), int64(2), 3.5}},
+	})
+	if _, err := requiredInt64Field(doc, "getMore"); err == nil {
+		t.Fatal("requiredInt64Field accepted double cursor id")
+	}
+	values, err := requiredInt64ArrayField(doc, "cursors")
+	if err == nil {
+		t.Fatalf("requiredInt64ArrayField values=%v err=nil want double rejection", values)
+	}
+
+	okDoc := mustDocument(t, bson.D{
+		{Key: "getMore", Value: int32(7)},
+		{Key: "cursors", Value: bson.A{int32(8), int64(9)}},
+	})
+	if value, err := requiredInt64Field(okDoc, "getMore"); err != nil || value != 7 {
+		t.Fatalf("requiredInt64Field int32 value/err=%d/%v want 7/nil", value, err)
+	}
+	values, err = requiredInt64ArrayField(okDoc, "cursors")
+	if err != nil || len(values) != 2 || values[0] != 8 || values[1] != 9 {
+		t.Fatalf("requiredInt64ArrayField values/err=%v/%v want [8 9]/nil", values, err)
+	}
+}
+
 func TestServerCursorOwnerCleanup(t *testing.T) {
 	server := NewServer()
 	docs := []wire.Document{
@@ -1013,6 +1039,23 @@ func TestServerCursorLimit(t *testing.T) {
 	}
 }
 
+func TestServerCursorRetainedBytesLimit(t *testing.T) {
+	server := NewServer()
+	server.MaxCursorRetainedBytes = 1
+	docs := []wire.Document{
+		mustDocument(t, bson.D{{Key: "_id", Value: "u1"}}),
+		mustDocument(t, bson.D{{Key: "_id", Value: "u2"}}),
+	}
+
+	cursorID, firstBatch, err := server.openCursor("app.users", docs, compiledProjection{}, 1, true, defaultCursorBatchSize, 1)
+	if err == nil {
+		t.Fatalf("openCursor id=%d firstBatch=%d err=nil want retained bytes error", cursorID, len(firstBatch))
+	}
+	if cursorID != 0 || firstBatch != nil {
+		t.Fatalf("openCursor id/firstBatch=%d/%v want zero/nil on retained bytes error", cursorID, firstBatch)
+	}
+}
+
 func TestServerCursorIdleExpiry(t *testing.T) {
 	server := NewServer()
 	server.CursorIdleTimeout = time.Minute
@@ -1034,6 +1077,34 @@ func TestServerCursorIdleExpiry(t *testing.T) {
 
 	if _, _, ok, err := server.getMore(cursorID, "app.users", 1, 1, true, defaultCursorBatchSize); err != nil || ok {
 		t.Fatalf("expired getMore ok/err=%v/%v want false/nil", ok, err)
+	}
+}
+
+func TestServerBackgroundCursorReapIsThrottled(t *testing.T) {
+	server := NewServer()
+	server.CursorIdleTimeout = time.Nanosecond
+	server.cursorMu.Lock()
+	server.cursors = map[int64]*serverCursor{
+		1: {ns: "app.users", owner: 1, lastUsed: time.Now().Add(-time.Minute)},
+	}
+	server.lastCursorReap = time.Now()
+	server.cursorMu.Unlock()
+
+	server.reapExpiredCursors()
+	server.cursorMu.Lock()
+	_, stillPresent := server.cursors[1]
+	server.lastCursorReap = time.Now().Add(-2 * defaultCursorReapInterval)
+	server.cursorMu.Unlock()
+	if !stillPresent {
+		t.Fatal("cursor reaped despite throttle interval")
+	}
+
+	server.reapExpiredCursors()
+	server.cursorMu.Lock()
+	_, stillPresent = server.cursors[1]
+	server.cursorMu.Unlock()
+	if stillPresent {
+		t.Fatal("cursor not reaped after throttle interval")
 	}
 }
 
@@ -1193,6 +1264,50 @@ func TestServerFindFirstBatchOverflowOpensCursor(t *testing.T) {
 	if nextID := cursorIDFromResponse(t, getMoreResponse); nextID != 0 {
 		t.Fatalf("cursor id after getMore=%d want 0", nextID)
 	}
+}
+
+func TestServerGetMoreDropsCursorOnOversizedNextDocument(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewServer()
+	server.MaxMessageLength = 4500
+	server.Collections = collections.NewCollectionManager(db)
+	assertOK(t, serveCommand(t, server, 253, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{
+			bson.D{{Key: "_id", Value: "a"}, {Key: "payload", Value: "small"}},
+			bson.D{{Key: "_id", Value: "b"}, {Key: "payload", Value: strings.Repeat("x", 600)}},
+		}},
+		{Key: "$db", Value: "app"},
+	}))
+	findResponse := serveCommand(t, server, 254, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{}},
+		{Key: "sort", Value: bson.D{{Key: "_id", Value: int32(1)}}},
+		{Key: "batchSize", Value: int32(1)},
+		{Key: "$db", Value: "app"},
+	})
+	cursorID := cursorIDFromResponse(t, findResponse)
+	if cursorID == 0 {
+		t.Fatal("cursor id=0 want open cursor")
+	}
+
+	tooLarge := serveCommand(t, server, 255, bson.D{
+		{Key: "getMore", Value: cursorID},
+		{Key: "collection", Value: "users"},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, tooLarge, "BadValue")
+	missing := serveCommand(t, server, 256, bson.D{
+		{Key: "getMore", Value: cursorID},
+		{Key: "collection", Value: "users"},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, missing, "CursorNotFound")
 }
 
 func TestServerFindCapsIndexedCandidates(t *testing.T) {
