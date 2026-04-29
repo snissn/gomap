@@ -1259,6 +1259,11 @@ func (m *Manager) SegmentPath(id uint32) string {
 	return filepath.Join(rootDir, name)
 }
 
+// SegmentPath returns the canonical on-disk path for a value-log segment.
+func SegmentPath(dir string, id uint32) string {
+	return (&Manager{dir: dir}).SegmentPath(id)
+}
+
 // HasSegment reports whether id is already registered and not marked zombie.
 func (m *Manager) HasSegment(id uint32) bool {
 	if m == nil {
