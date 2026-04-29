@@ -2424,16 +2424,16 @@ func (db *DB) applyRewriteSwapBatchToCollectionRoot(target *collectionRewriteRoo
 		if err != nil || !ok || collectionRoot == 0 {
 			return err
 		}
-		currentStoragePolicy, err := valueLogRewriteCollectionRootStoragePolicy(idx.pager, collectionRoot)
-		if err != nil {
-			return fmt.Errorf("vlog-rewrite: inspect current collection root %q storage: %w", string(target.descriptorKey), err)
-		}
 		target.rootID = collectionRoot
 		target.descriptorAliases = descriptorAliases
 		target.systemRoot = systemRoot
-		target.storagePolicy = currentStoragePolicy
 	}
 	collectionRoot := target.rootID
+	currentStoragePolicy, err := valueLogRewriteCollectionRootStoragePolicy(idx.pager, collectionRoot)
+	if err != nil {
+		return fmt.Errorf("vlog-rewrite: inspect current collection root %q storage: %w", string(target.descriptorKey), err)
+	}
+	target.storagePolicy = currentStoragePolicy
 	rootOpts, err := db.orderedRootPublishOptionsForPolicy(target.storagePolicy)
 	if err != nil {
 		return err
@@ -2543,7 +2543,7 @@ func lookupCollectionRootDescriptorAliases(p *pager.Pager, reader tree.SlabReade
 	aliases := make([][]byte, 0, 1)
 	for _, descriptor := range descriptors {
 		if descriptor.rootID == rootID {
-			aliases = append(aliases, descriptor.key)
+			aliases = append(aliases, append([]byte(nil), descriptor.key...))
 		}
 	}
 	return rootID, aliases, true, nil
@@ -2865,12 +2865,12 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 		_ = d.Close()
 		return stats, fmt.Errorf("vlog-rewrite: collect collection root descriptors: %w", err)
 	}
-	collectionRootLeafLogUsage, collectionRootsUseLeafLog, err := valueLogRewriteCollectionRootLeafLogUsageFromDescriptors(d.Pager(), collectionRootDescriptors)
+	collectionRootLeafLogUsage, _, err := valueLogRewriteCollectionRootLeafLogUsageFromDescriptors(d.Pager(), collectionRootDescriptors)
 	if err != nil {
 		_ = d.Close()
 		return stats, err
 	}
-	rewriteUsesLeafLog := opts.IndexOuterLeavesInValueLog || collectionRootsUseLeafLog
+	rewriteUsesLeafLog := opts.IndexOuterLeavesInValueLog
 
 	var lane, startSeq uint32
 	if rewriteUsesLeafLog {
@@ -3017,12 +3017,16 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 		return buildTreeFromIterator(iter, useLeafLog)
 	}
 	buildCollectionTree := func(root uint64) (uint64, error) {
-		useLeafLog, ok := collectionRootLeafLogUsage[root]
-		if !ok {
-			var err error
-			useLeafLog, err = valueLogRewriteCollectionRootUsesLeafLog(d.Pager(), root)
-			if err != nil {
-				return 0, err
+		useLeafLog := false
+		if opts.IndexOuterLeavesInValueLog {
+			var ok bool
+			useLeafLog, ok = collectionRootLeafLogUsage[root]
+			if !ok {
+				var err error
+				useLeafLog, err = valueLogRewriteCollectionRootUsesLeafLog(d.Pager(), root)
+				if err != nil {
+					return 0, err
+				}
 			}
 		}
 		return buildTree(root, useLeafLog)
@@ -3139,17 +3143,6 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 	return stats, nil
 }
 
-func valueLogRewriteCollectionRoots(oldPager *pager.Pager, reader tree.SlabReader, systemRootID uint64, buildTree func(uint64) (uint64, error)) ([]vacuumCollectionRootReplacement, error) {
-	if buildTree == nil {
-		return nil, errors.New("vlog-rewrite: missing collection root builder")
-	}
-	descriptors, err := vacuumCollectCollectionRootDescriptors(oldPager, reader, systemRootID)
-	if err != nil {
-		return nil, fmt.Errorf("vlog-rewrite: collect collection root descriptors: %w", err)
-	}
-	return valueLogRewriteCollectionRootsFromDescriptors(descriptors, buildTree)
-}
-
 func valueLogRewriteCollectionRootsFromDescriptors(descriptors []vacuumCollectionRootDescriptor, buildTree func(uint64) (uint64, error)) ([]vacuumCollectionRootReplacement, error) {
 	if buildTree == nil {
 		return nil, errors.New("vlog-rewrite: missing collection root builder")
@@ -3157,14 +3150,6 @@ func valueLogRewriteCollectionRootsFromDescriptors(descriptors []vacuumCollectio
 	return vacuumRewriteCollectionRootDescriptors(descriptors, func(descriptor vacuumCollectionRootDescriptor) (uint64, error) {
 		return buildTree(descriptor.rootID)
 	}, "vlog-rewrite: rewrite collection root")
-}
-
-func valueLogRewriteCollectionRootLeafLogUsage(oldPager *pager.Pager, reader tree.SlabReader, systemRootID uint64) (map[uint64]bool, bool, error) {
-	descriptors, err := vacuumCollectCollectionRootDescriptors(oldPager, reader, systemRootID)
-	if err != nil {
-		return nil, false, fmt.Errorf("vlog-rewrite: collect collection root descriptors: %w", err)
-	}
-	return valueLogRewriteCollectionRootLeafLogUsageFromDescriptors(oldPager, descriptors)
 }
 
 func valueLogRewriteCollectionRootLeafLogUsageFromDescriptors(oldPager *pager.Pager, descriptors []vacuumCollectionRootDescriptor) (map[uint64]bool, bool, error) {
