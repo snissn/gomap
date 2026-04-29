@@ -95,6 +95,7 @@ The initial workload phases are:
 Latency samples are per MongoDB driver call. Insert ops/sec is normalized by
 document count, while insert latency percentiles are per `InsertMany` call.
 Range-query samples include cursor materialization with `cursor.All`.
+Use `-timeout 0` to run without an overall benchmark deadline.
 
 ## Interpreting Results
 

@@ -99,7 +99,10 @@ func run(parent context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	ctx, cancel := context.WithTimeout(parent, cfg.Timeout)
+	ctx, cancel := context.WithCancel(parent)
+	if cfg.Timeout > 0 {
+		ctx, cancel = context.WithTimeout(parent, cfg.Timeout)
+	}
 	defer cancel()
 
 	target, err := openTarget(ctx, cfg)
@@ -152,6 +155,9 @@ func parseConfig(args []string) (config, error) {
 	}
 	if cfg.Reads < 0 || cfg.RangeReads < 0 || cfg.Updates < 0 || cfg.Deletes < 0 {
 		return config{}, errors.New("operation counts cannot be negative")
+	}
+	if cfg.Timeout < 0 {
+		return config{}, errors.New("timeout cannot be negative")
 	}
 	if cfg.SecondaryIndexes < 0 || cfg.SecondaryIndexes > 2 {
 		return config{}, errors.New("secondary-indexes must be 0, 1, or 2")

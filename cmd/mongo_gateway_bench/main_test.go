@@ -85,6 +85,12 @@ func TestParseConfigValidation(t *testing.T) {
 	if cfg.Target != "mongo" || cfg.Documents != 10 || cfg.SecondaryIndexes != 1 || cfg.Format != "json" {
 		t.Fatalf("unexpected config: %+v", cfg)
 	}
+	if _, err := parseConfig([]string{"-timeout", "0"}); err != nil {
+		t.Fatalf("timeout 0 should disable deadline: %v", err)
+	}
+	if _, err := parseConfig([]string{"-timeout", "-1s"}); err == nil {
+		t.Fatal("negative timeout accepted")
+	}
 }
 
 func TestWriteResultSupportsGenericWriter(t *testing.T) {
