@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -21,13 +22,17 @@ import (
 	"github.com/snissn/gomap/TreeDB/tree"
 )
 
-const collectionMetaVersion = 1
+const (
+	collectionMetaVersion        = 1
+	maxCollectionMutationRetries = 64
+)
 
 var (
 	ErrCollectionNotFound  = errors.New("collections: collection not found")
 	ErrDocumentExists      = errors.New("collections: document already exists")
 	ErrDuplicateDocumentID = errors.New("collections: duplicate document id in batch")
 	ErrUniqueIndexConflict = errors.New("collections: unique index conflict")
+	ErrConcurrentMutation  = errors.New("collections: concurrent mutation")
 
 	errCollectionManagerNil = errors.New("collections: collection manager is nil")
 	errCollectionNil        = errors.New("collections: collection is nil")
@@ -1050,37 +1055,58 @@ func (c *Collection) insertBatchNoIndex(
 }
 
 func (c *Collection) Delete(documentID []byte) error {
+	_, err := c.DeleteDocument(documentID)
+	return err
+}
+
+// DeleteDocument removes a document and reports whether this call deleted an
+// existing primary document.
+func (c *Collection) DeleteDocument(documentID []byte) (bool, error) {
 	if c == nil {
-		return errCollectionNil
+		return false, errCollectionNil
 	}
 	if c.db == nil {
-		return errors.New("collections: db is nil")
+		return false, errors.New("collections: db is nil")
 	}
 	if len(documentID) == 0 {
-		return errors.New("collections: document id cannot be empty")
+		return false, errors.New("collections: document id cannot be empty")
 	}
 	if err := c.flushBufferedNoIndex(); err != nil {
-		return err
+		return false, err
 	}
 
+	var lastErr error
+	for attempt := 0; attempt < maxCollectionMutationRetries; attempt++ {
+		deleted, err := c.deleteDocumentOnce(documentID)
+		if errors.Is(err, ErrConcurrentMutation) {
+			lastErr = err
+			waitBeforeCollectionMutationRetry(attempt)
+			continue
+		}
+		return deleted, err
+	}
+	return false, collectionMutationRetryExhausted(lastErr)
+}
+
+func (c *Collection) deleteDocumentOnce(documentID []byte) (bool, error) {
 	snap := c.db.AcquireSnapshot()
 	if snap == nil {
-		return backenddb.ErrClosed
+		return false, backenddb.ErrClosed
 	}
 	catalog, err := c.catalogForSnapshot(snap)
 	if err != nil {
 		_ = snap.Close()
-		return err
+		return false, err
 	}
 	if catalog == nil {
 		_ = snap.Close()
-		return errCollectionNotFound
+		return false, errCollectionNotFound
 	}
 	c.meta = catalog.meta
 	plannerOptions, err := collectionPlannerOptions(c.meta)
 	if err != nil {
 		_ = snap.Close()
-		return err
+		return false, err
 	}
 	plannerOptions = collectionOptionsWithTemplateV1Resolver(plannerOptions, snap, catalog)
 	baseSystemRoot := snapshotSystemRoot(snap)
@@ -1088,16 +1114,16 @@ func (c *Collection) Delete(documentID []byte) error {
 	primaryRoot := catalog.rootID(collectionPrimaryRootName(c.meta.Name))
 	if primaryRoot == 0 {
 		_ = snap.Close()
-		return nil
+		return false, nil
 	}
 	entry, err := snap.GetEntryAtRoot(primaryRoot, documentID)
 	if errors.Is(err, tree.ErrKeyNotFound) {
 		_ = snap.Close()
-		return nil
+		return false, nil
 	}
 	if err != nil {
 		_ = snap.Close()
-		return err
+		return false, err
 	}
 
 	runtimes, err := (insertBatchPlanner{
@@ -1106,14 +1132,14 @@ func (c *Collection) Delete(documentID []byte) error {
 	}).indexRuntimes()
 	if err != nil {
 		_ = snap.Close()
-		return err
+		return false, err
 	}
 	var state documentIndexState
 	if len(runtimes) > 0 {
 		state, err = loadDeleteIndexState(snap, catalog, documentID, entry.Value, runtimes, plannerOptions)
 		if err != nil {
 			_ = snap.Close()
-			return err
+			return false, err
 		}
 	}
 
@@ -1138,7 +1164,7 @@ func (c *Collection) Delete(documentID []byte) error {
 			deleteKeys, err := secondaryDeleteKeysForDocument(runtime, state, documentID)
 			if err != nil {
 				_ = snap.Close()
-				return err
+				return false, err
 			}
 			rootName := collectionSecondaryRootName(c.meta.Name, runtime.def.name)
 			rootID := catalog.rootID(rootName)
@@ -1174,15 +1200,250 @@ func (c *Collection) Delete(documentID []byte) error {
 		return c.buildRootDescriptorSystemDeltaIterator(baseSystemRoot, rootNames, baseRootIDs, rootIDs)
 	})
 	if err != nil {
-		return err
+		return false, err
 	}
 	if len(rootIDs) != len(rootNames) {
-		return errors.New("collections: ordered root publish returned unexpected root count")
+		return false, errors.New("collections: ordered root publish returned unexpected root count")
 	}
 	nextCatalog := cloneCatalogWithRootUpdates(catalog, c.meta, rootNames, rootIDs)
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
-	return nil
+	return true, nil
+}
+
+func (c *Collection) Replace(documentID, document []byte) (bool, error) {
+	matched, _, err := c.Update(documentID, func(current []byte) ([]byte, bool, error) {
+		if bytes.Equal(current, document) {
+			return current, false, nil
+		}
+		return document, true, nil
+	})
+	return matched, err
+}
+
+// Update applies update to the latest document value and retries if another
+// collection write changes the root before this update publishes.
+func (c *Collection) Update(documentID []byte, update func(current []byte) (replacement []byte, changed bool, err error)) (bool, bool, error) {
+	if c == nil {
+		return false, false, errCollectionNil
+	}
+	if c.db == nil {
+		return false, false, errors.New("collections: db is nil")
+	}
+	if len(documentID) == 0 {
+		return false, false, errors.New("collections: document id cannot be empty")
+	}
+	if update == nil {
+		return false, false, errors.New("collections: update function is nil")
+	}
+	if err := c.flushBufferedNoIndex(); err != nil {
+		return false, false, err
+	}
+
+	var lastErr error
+	for attempt := 0; attempt < maxCollectionMutationRetries; attempt++ {
+		matched, modified, err := c.updateDocumentOnce(documentID, update)
+		if errors.Is(err, ErrConcurrentMutation) {
+			lastErr = err
+			waitBeforeCollectionMutationRetry(attempt)
+			continue
+		}
+		return matched, modified, err
+	}
+	return false, false, collectionMutationRetryExhausted(lastErr)
+}
+
+func waitBeforeCollectionMutationRetry(attempt int) {
+	if attempt < 4 {
+		runtime.Gosched()
+		return
+	}
+	shift := attempt - 4
+	if shift > 6 {
+		shift = 6
+	}
+	time.Sleep(time.Duration(1<<shift) * time.Microsecond)
+}
+
+func collectionMutationRetryExhausted(err error) error {
+	if err == nil {
+		err = ErrConcurrentMutation
+	}
+	return fmt.Errorf("%w: retry budget exceeded after %d attempts: %v", ErrConcurrentMutation, maxCollectionMutationRetries, err)
+}
+
+func (c *Collection) updateDocumentOnce(documentID []byte, update func(current []byte) (replacement []byte, changed bool, err error)) (bool, bool, error) {
+	snap := c.db.AcquireSnapshot()
+	if snap == nil {
+		return false, false, backenddb.ErrClosed
+	}
+	catalog, err := c.catalogForSnapshot(snap)
+	if err != nil {
+		_ = snap.Close()
+		return false, false, err
+	}
+	if catalog == nil {
+		_ = snap.Close()
+		return false, false, errCollectionNotFound
+	}
+	c.meta = catalog.meta
+	plannerOptions, err := collectionPlannerOptions(c.meta)
+	if err != nil {
+		_ = snap.Close()
+		return false, false, err
+	}
+	plannerOptions = collectionOptionsWithTemplateV1Resolver(plannerOptions, snap, catalog)
+	baseSystemRoot := snapshotSystemRoot(snap)
+
+	primaryRoot := catalog.rootID(collectionPrimaryRootName(c.meta.Name))
+	if primaryRoot == 0 {
+		_ = snap.Close()
+		return false, false, nil
+	}
+	entry, err := snap.GetEntryAtRoot(primaryRoot, documentID)
+	if errors.Is(err, tree.ErrKeyNotFound) {
+		_ = snap.Close()
+		return false, false, nil
+	}
+	if err != nil {
+		_ = snap.Close()
+		return false, false, err
+	}
+
+	document, changed, err := update(bytes.Clone(entry.Value))
+	if err != nil {
+		_ = snap.Close()
+		return false, false, err
+	}
+	if !changed {
+		_ = snap.Close()
+		return true, false, nil
+	}
+
+	runtimes, err := (insertBatchPlanner{
+		collection: c.meta.Name,
+		indexes:    plannerIndexes(c.meta.Indexes),
+	}).indexRuntimes()
+	if err != nil {
+		_ = snap.Close()
+		return false, false, err
+	}
+	var oldState documentIndexState
+	var newState documentIndexState
+	if len(runtimes) > 0 {
+		oldState, err = loadDeleteIndexState(snap, catalog, documentID, entry.Value, runtimes, plannerOptions)
+		if err != nil {
+			_ = snap.Close()
+			return false, false, err
+		}
+		newState, err = indexStateForDocument(document, runtimes, plannerOptions)
+		if err != nil {
+			_ = snap.Close()
+			return false, false, err
+		}
+		if err := rejectReplaceUniqueConflicts(snap, catalog, runtimes, newState, documentID); err != nil {
+			_ = snap.Close()
+			return false, false, err
+		}
+	}
+
+	rootNames := []string{collectionPrimaryRootName(c.meta.Name)}
+	baseRootIDs := map[string]uint64{
+		rootNames[0]: primaryRoot,
+	}
+	policies := []backenddb.OrderedRootStoragePolicy{plannerOptions.dataStoragePolicy}
+	deltaTables := make([]memtable.Table, 0, 2+len(runtimes))
+	primaryTable := newCollectionRunTable(1)
+	setCollectionRunValue(primaryTable, bytes.Clone(documentID), document)
+	primaryTable.Freeze()
+	deltaTables = append(deltaTables, primaryTable)
+
+	if len(runtimes) > 0 {
+		stateRootName := collectionIndexStateRootName(c.meta.Name)
+		stateRootID := catalog.rootID(stateRootName)
+		rootNames = append(rootNames, stateRootName)
+		baseRootIDs[stateRootName] = stateRootID
+		policies = append(policies, plannerOptions.indexStateStoragePolicy)
+		stateTable := newCollectionRunTable(1)
+		rawState, err := encodeDocumentIndexState(newState)
+		if err != nil {
+			_ = snap.Close()
+			resetCollectionTables(append(deltaTables, stateTable))
+			return false, false, err
+		}
+		if len(newState) == 0 {
+			stateTable.DeleteSteal(bytes.Clone(documentID))
+		} else {
+			stateTable.SetSteal(bytes.Clone(documentID), rawState)
+		}
+		stateTable.Freeze()
+		deltaTables = append(deltaTables, stateTable)
+
+		for _, runtime := range runtimes {
+			rootName := collectionSecondaryRootName(c.meta.Name, runtime.def.name)
+			rootID := catalog.rootID(rootName)
+			table := newCollectionRunTable(0)
+			deleteKeys, err := secondaryDeleteKeysForDocument(runtime, oldState, documentID)
+			if err != nil {
+				_ = snap.Close()
+				resetCollectionTables(append(deltaTables, table))
+				return false, false, err
+			}
+			for _, key := range deleteKeys {
+				table.DeleteSteal(bytes.Clone(key))
+			}
+			for _, encoded := range newState[runtime.def.name] {
+				key, err := indexEntryKey(encoded, documentID)
+				if err != nil {
+					_ = snap.Close()
+					resetCollectionTables(append(deltaTables, table))
+					return false, false, err
+				}
+				table.SetSteal(key, nil)
+			}
+			if table.Len() == 0 {
+				resetCollectionRunTable(table)
+				continue
+			}
+			table.Freeze()
+			rootNames = append(rootNames, rootName)
+			baseRootIDs[rootName] = rootID
+			policies = append(policies, runtime.def.storagePolicy)
+			deltaTables = append(deltaTables, table)
+		}
+	}
+	_ = snap.Close()
+
+	ordered := make([]backenddb.OrderedRootDeltaPublishInput, 0, len(rootNames))
+	iterators := make([]iterator.UnsafeIterator, 0, len(rootNames))
+	defer func() {
+		for _, it := range iterators {
+			_ = it.Close()
+		}
+		resetCollectionTables(deltaTables)
+	}()
+	for i, rootName := range rootNames {
+		iter := deltaTables[i].NewIterator(nil, nil)
+		iterators = append(iterators, iter)
+		ordered = append(ordered, backenddb.OrderedRootDeltaPublishInput{
+			BaseRoot:      baseRootIDs[rootName],
+			Iter:          iter,
+			StoragePolicy: policies[i],
+		})
+	}
+	newSystemRoot, rootIDs, err := c.db.PublishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		return c.buildRootDescriptorSystemDeltaIterator(baseSystemRoot, rootNames, baseRootIDs, rootIDs)
+	})
+	if err != nil {
+		return false, false, err
+	}
+	if len(rootIDs) != len(rootNames) {
+		return false, false, errors.New("collections: ordered root publish returned unexpected root count")
+	}
+	nextCatalog := cloneCatalogWithRootUpdates(catalog, c.meta, rootNames, rootIDs)
+	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
+	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
+	return true, true, nil
 }
 
 func (c *Collection) catalogForSnapshot(snap *backenddb.Snapshot) (*collectionCatalog, error) {
@@ -1481,7 +1742,7 @@ func (c *Collection) buildRootDescriptorSystemDeltaIterator(expectedSystemRoot u
 		}
 		for _, rootName := range rootNames {
 			if got, want := catalog.rootID(rootName), baseRootIDs[rootName]; got != want {
-				return nil, fmt.Errorf("collections: concurrent root modification detected for %q", rootName)
+				return nil, fmt.Errorf("%w: concurrent root modification detected for %q", ErrConcurrentMutation, rootName)
 			}
 		}
 	}
@@ -1572,6 +1833,55 @@ func secondaryDeleteKeysForDocument(runtime indexRuntime, state documentIndexSta
 		out = append(out, key)
 	}
 	return out, nil
+}
+
+func rejectReplaceUniqueConflicts(snap *backenddb.Snapshot, catalog *collectionCatalog, runtimes []indexRuntime, state documentIndexState, documentID []byte) error {
+	if snap == nil || catalog == nil {
+		return nil
+	}
+	for _, runtime := range runtimes {
+		if !runtime.def.unique {
+			continue
+		}
+		rootID := catalog.rootID(collectionSecondaryRootName(catalog.meta.Name, runtime.def.name))
+		if rootID == 0 {
+			continue
+		}
+		for _, encoded := range state[runtime.def.name] {
+			_, prefix, err := appendIndexValuePrefixSlice(make([]byte, 0, 2+len(encoded)), encoded)
+			if err != nil {
+				return err
+			}
+			it, err := snap.IteratorAtRoot(rootID, prefix, prefixEnd(prefix))
+			if errors.Is(err, tree.ErrKeyNotFound) {
+				continue
+			}
+			if err != nil {
+				return err
+			}
+			conflict := false
+			for it.Valid() {
+				key := it.UnsafeKey()
+				if !bytes.HasPrefix(key, prefix) {
+					break
+				}
+				if !it.IsDeleted() && !bytes.Equal(key[len(prefix):], documentID) {
+					conflict = true
+					break
+				}
+				it.Next()
+			}
+			iterErr := it.Error()
+			_ = it.Close()
+			if iterErr != nil {
+				return iterErr
+			}
+			if conflict {
+				return fmt.Errorf("%w %q", ErrUniqueIndexConflict, runtime.def.name)
+			}
+		}
+	}
+	return nil
 }
 
 func (c *Collection) Get(documentID []byte) ([]byte, error) {

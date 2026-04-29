@@ -1,6 +1,7 @@
 package mongogateway
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"strings"
@@ -90,7 +91,7 @@ func (s *Server) findResponse(command wire.Document) (wire.Document, error) {
 	if filter == nil {
 		return commandError(commandCodeBadValue, "BadValue", "Mongo gateway find currently requires an _id equality filter")
 	}
-	id, err := idEqualityFilterValue(filter)
+	id, err := idEqualityFilterValue(filter, "find")
 	if err != nil {
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}
@@ -124,6 +125,177 @@ func (s *Server) findResponse(command wire.Document) (wire.Document, error) {
 			{Key: "firstBatch", Value: firstBatch},
 		}},
 		{Key: "ok", Value: 1.0},
+	})
+}
+
+func (s *Server) updateResponse(command wire.Document, sequences []wire.DocumentSequence) (wire.Document, error) {
+	if s.Collections == nil {
+		return commandError(commandCodeBadValue, "BadValue", "Mongo gateway collection manager is not configured")
+	}
+	collection, err := commandString(command, "update")
+	if err != nil {
+		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
+	}
+	db, err := commandString(command, "$db")
+	if err != nil {
+		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
+	}
+	name, err := gatewayCollectionName(db, collection)
+	if err != nil {
+		return commandError(commandCodeBadValue, "BadValue", err.Error())
+	}
+	updates, err := commandDocuments(command, sequences, "updates")
+	if err != nil {
+		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
+	}
+
+	var matched int32
+	var modified int32
+	col, err := s.Collections.OpenCollection(name)
+	if err != nil {
+		if errors.Is(err, collections.ErrCollectionNotFound) {
+			return marshalUpdateResponse(0, 0)
+		}
+		return commandError(commandCodeBadValue, "BadValue", err.Error())
+	}
+
+	for i, update := range updates {
+		filter, err := requiredDocumentField(update, "q")
+		if err != nil {
+			return commandError(commandCodeFailedToParse, "FailedToParse", fmt.Sprintf("updates[%d]: %v", i, err))
+		}
+		id, err := idEqualityFilterValue(filter, "update")
+		if err != nil {
+			return commandError(commandCodeBadValue, "BadValue", fmt.Sprintf("updates[%d]: %v", i, err))
+		}
+		key, err := encodePrimaryKey(id)
+		if err != nil {
+			return commandError(commandCodeBadValue, "BadValue", fmt.Sprintf("updates[%d]: %v", i, err))
+		}
+		if multi, err := optionalBoolField(update, "multi"); err != nil {
+			return commandError(commandCodeFailedToParse, "FailedToParse", fmt.Sprintf("updates[%d]: %v", i, err))
+		} else if multi {
+			return commandError(commandCodeBadValue, "BadValue", "Mongo gateway update currently supports updateOne only")
+		}
+		if upsert, err := optionalBoolField(update, "upsert"); err != nil {
+			return commandError(commandCodeFailedToParse, "FailedToParse", fmt.Sprintf("updates[%d]: %v", i, err))
+		} else if upsert {
+			return commandError(commandCodeBadValue, "BadValue", "Mongo gateway update currently does not support upsert")
+		}
+		updateDoc, err := requiredDocumentField(update, "u")
+		if err != nil {
+			return commandError(commandCodeFailedToParse, "FailedToParse", fmt.Sprintf("updates[%d]: %v", i, err))
+		}
+
+		matchedOne, modifiedOne, err := col.Update(key, func(stored []byte) ([]byte, bool, error) {
+			raw, err := storedDocumentToBSON(stored)
+			if err != nil {
+				return nil, false, err
+			}
+			updated, changed, err := applySetUpdate(raw, updateDoc)
+			if err != nil {
+				return nil, false, fmt.Errorf("updates[%d]: %w", i, err)
+			}
+			updatedKey, encoded, err := prepareInsertDocument(updated)
+			if err != nil {
+				return nil, false, fmt.Errorf("updates[%d]: %w", i, err)
+			}
+			if !bytes.Equal(updatedKey, key) {
+				return nil, false, errors.New("Mongo gateway update cannot modify _id")
+			}
+			if !changed {
+				return nil, false, nil
+			}
+			return encoded, true, nil
+		})
+		if err != nil {
+			code, codeName := commandCodeBadValue, "BadValue"
+			if collections.IsDuplicateKeyError(err) {
+				code, codeName = commandCodeDuplicateKey, "DuplicateKey"
+			}
+			return commandError(code, codeName, err.Error())
+		}
+		if matchedOne {
+			matched++
+		}
+		if modifiedOne {
+			modified++
+		}
+	}
+	return marshalUpdateResponse(matched, modified)
+}
+
+func (s *Server) deleteResponse(command wire.Document, sequences []wire.DocumentSequence) (wire.Document, error) {
+	if s.Collections == nil {
+		return commandError(commandCodeBadValue, "BadValue", "Mongo gateway collection manager is not configured")
+	}
+	collection, err := commandString(command, "delete")
+	if err != nil {
+		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
+	}
+	db, err := commandString(command, "$db")
+	if err != nil {
+		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
+	}
+	name, err := gatewayCollectionName(db, collection)
+	if err != nil {
+		return commandError(commandCodeBadValue, "BadValue", err.Error())
+	}
+	deletes, err := commandDocuments(command, sequences, "deletes")
+	if err != nil {
+		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
+	}
+
+	col, err := s.Collections.OpenCollection(name)
+	if err != nil {
+		if errors.Is(err, collections.ErrCollectionNotFound) {
+			return marshalDeleteResponse(0)
+		}
+		return commandError(commandCodeBadValue, "BadValue", err.Error())
+	}
+
+	var deleted int32
+	for i, deleteItem := range deletes {
+		filter, err := requiredDocumentField(deleteItem, "q")
+		if err != nil {
+			return commandError(commandCodeFailedToParse, "FailedToParse", fmt.Sprintf("deletes[%d]: %v", i, err))
+		}
+		id, err := idEqualityFilterValue(filter, "delete")
+		if err != nil {
+			return commandError(commandCodeBadValue, "BadValue", fmt.Sprintf("deletes[%d]: %v", i, err))
+		}
+		if limit, err := optionalInt32Field(deleteItem, "limit"); err != nil {
+			return commandError(commandCodeFailedToParse, "FailedToParse", fmt.Sprintf("deletes[%d]: %v", i, err))
+		} else if limit != 0 && limit != 1 {
+			return commandError(commandCodeBadValue, "BadValue", "Mongo gateway delete limit must be 0 or 1")
+		}
+		key, err := encodePrimaryKey(id)
+		if err != nil {
+			return commandError(commandCodeBadValue, "BadValue", fmt.Sprintf("deletes[%d]: %v", i, err))
+		}
+		deletedOne, err := col.DeleteDocument(key)
+		if err != nil {
+			return commandError(commandCodeBadValue, "BadValue", err.Error())
+		}
+		if deletedOne {
+			deleted++
+		}
+	}
+	return marshalDeleteResponse(deleted)
+}
+
+func marshalUpdateResponse(matched, modified int32) (wire.Document, error) {
+	return marshalDocument(bson.D{
+		{Key: "ok", Value: 1.0},
+		{Key: "n", Value: matched},
+		{Key: "nModified", Value: modified},
+	})
+}
+
+func marshalDeleteResponse(deleted int32) (wire.Document, error) {
+	return marshalDocument(bson.D{
+		{Key: "ok", Value: 1.0},
+		{Key: "n", Value: deleted},
 	})
 }
 
@@ -163,6 +335,47 @@ func commandOptionalDocument(doc wire.Document, key string) (wire.Document, erro
 		return nil, fmt.Errorf("Mongo command field %q must be a document", key)
 	}
 	return wire.Document(out), nil
+}
+
+func requiredDocumentField(doc wire.Document, key string) (wire.Document, error) {
+	value := bson.Raw(doc).Lookup(key)
+	if value.IsZero() {
+		return nil, fmt.Errorf("Mongo command missing %q", key)
+	}
+	out, ok := value.DocumentOK()
+	if !ok {
+		return nil, fmt.Errorf("Mongo command field %q must be a document", key)
+	}
+	return wire.Document(out), nil
+}
+
+func optionalBoolField(doc wire.Document, key string) (bool, error) {
+	value := bson.Raw(doc).Lookup(key)
+	if value.IsZero() {
+		return false, nil
+	}
+	out, ok := value.BooleanOK()
+	if !ok {
+		return false, fmt.Errorf("Mongo command field %q must be a boolean", key)
+	}
+	return out, nil
+}
+
+func optionalInt32Field(doc wire.Document, key string) (int32, error) {
+	value := bson.Raw(doc).Lookup(key)
+	if value.IsZero() {
+		return 0, nil
+	}
+	if out, ok := value.Int32OK(); ok {
+		return out, nil
+	}
+	if out, ok := value.Int64OK(); ok {
+		if out < 0 || out > int64(^uint32(0)>>1) {
+			return 0, fmt.Errorf("Mongo command field %q is out of int32 range", key)
+		}
+		return int32(out), nil
+	}
+	return 0, fmt.Errorf("Mongo command field %q must be an integer", key)
 }
 
 func commandDocumentArray(doc wire.Document, key string) ([]wire.Document, error) {
@@ -210,20 +423,20 @@ func commandDocuments(doc wire.Document, sequences []wire.DocumentSequence, key 
 	return commandDocumentArray(doc, key)
 }
 
-func idEqualityFilterValue(filter wire.Document) (bson.RawValue, error) {
+func idEqualityFilterValue(filter wire.Document, commandName string) (bson.RawValue, error) {
 	elements, err := bson.Raw(filter).Elements()
 	if err != nil {
 		return bson.RawValue{}, err
 	}
 	if len(elements) != 1 {
-		return bson.RawValue{}, errors.New("Mongo gateway find currently supports exactly one _id equality predicate")
+		return bson.RawValue{}, fmt.Errorf("Mongo gateway %s currently supports exactly one _id equality predicate", commandName)
 	}
 	key, err := elements[0].KeyErr()
 	if err != nil {
 		return bson.RawValue{}, err
 	}
 	if key != "_id" {
-		return bson.RawValue{}, errors.New("Mongo gateway find currently requires an _id equality filter")
+		return bson.RawValue{}, fmt.Errorf("Mongo gateway %s currently requires an _id equality filter", commandName)
 	}
 	return elements[0].Value(), nil
 }
@@ -284,6 +497,107 @@ func storedDocumentToBSON(stored []byte) (wire.Document, error) {
 		return nil, err
 	}
 	return wire.Document(raw), nil
+}
+
+func applySetUpdate(doc wire.Document, update wire.Document) (wire.Document, bool, error) {
+	updateElements, err := bson.Raw(update).Elements()
+	if err != nil {
+		return nil, false, err
+	}
+	if len(updateElements) != 1 {
+		return nil, false, errors.New("Mongo gateway update currently supports exactly one $set operator")
+	}
+	operator, err := updateElements[0].KeyErr()
+	if err != nil {
+		return nil, false, err
+	}
+	if operator != "$set" {
+		return nil, false, errors.New("Mongo gateway update currently supports $set only")
+	}
+	setDoc, ok := updateElements[0].Value().DocumentOK()
+	if !ok {
+		return nil, false, errors.New("Mongo gateway $set value must be a document")
+	}
+	sets, setOrder, err := parseSetDocument(setDoc)
+	if err != nil {
+		return nil, false, err
+	}
+	if len(sets) == 0 {
+		return doc, false, nil
+	}
+
+	elements, err := bson.Raw(doc).Elements()
+	if err != nil {
+		return nil, false, err
+	}
+	out := make(bson.D, 0, len(elements)+len(sets))
+	used := make(map[string]struct{}, len(sets))
+	changed := false
+	for _, elem := range elements {
+		key, err := elem.KeyErr()
+		if err != nil {
+			return nil, false, err
+		}
+		value := elem.Value()
+		if replacement, ok := sets[key]; ok {
+			if !replacement.Equal(value) {
+				changed = true
+			}
+			value = replacement
+			used[key] = struct{}{}
+		}
+		out = append(out, bson.E{Key: key, Value: value})
+	}
+	for _, key := range setOrder {
+		if _, ok := used[key]; ok {
+			continue
+		}
+		out = append(out, bson.E{Key: key, Value: sets[key]})
+		changed = true
+	}
+	raw, err := bson.Marshal(out)
+	if err != nil {
+		return nil, false, err
+	}
+	return wire.Document(raw), changed, nil
+}
+
+func parseSetDocument(doc bson.Raw) (map[string]bson.RawValue, []string, error) {
+	elements, err := doc.Elements()
+	if err != nil {
+		return nil, nil, err
+	}
+	sets := make(map[string]bson.RawValue, len(elements))
+	order := make([]string, 0, len(elements))
+	seen := make(map[string]struct{}, len(elements))
+	for _, elem := range elements {
+		key, err := elem.KeyErr()
+		if err != nil {
+			return nil, nil, err
+		}
+		if key == "" {
+			return nil, nil, errors.New("Mongo gateway $set field name cannot be empty")
+		}
+		if key == "_id" {
+			return nil, nil, errors.New("Mongo gateway update cannot modify _id")
+		}
+		if strings.Contains(key, ".") {
+			return nil, nil, errors.New("Mongo gateway $set currently supports top-level fields only")
+		}
+		if strings.HasPrefix(key, "$") {
+			return nil, nil, errors.New("Mongo gateway $set field names cannot start with $")
+		}
+		value := elem.Value()
+		if err := validateSupportedValue(key, value); err != nil {
+			return nil, nil, err
+		}
+		if _, ok := seen[key]; !ok {
+			order = append(order, key)
+			seen[key] = struct{}{}
+		}
+		sets[key] = value
+	}
+	return sets, order, nil
 }
 
 func encodePrimaryKey(value bson.RawValue) ([]byte, error) {

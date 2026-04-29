@@ -177,6 +177,175 @@ func TestServerInsertAndFindByID(t *testing.T) {
 	assertBool(t, firstBatch[0], "active", true)
 }
 
+func TestServerUpdateAndDeleteByID(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	id := bson.NewObjectID()
+	insertResponse := serveCommand(t, server, 220, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{bson.D{
+			{Key: "_id", Value: id},
+			{Key: "name", Value: "ada"},
+			{Key: "age", Value: int64(37)},
+		}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertOK(t, insertResponse)
+
+	updateResponse := serveCommand(t, server, 221, bson.D{
+		{Key: "update", Value: "users"},
+		{Key: "updates", Value: bson.A{bson.D{
+			{Key: "q", Value: bson.D{{Key: "_id", Value: id}}},
+			{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{
+				{Key: "age", Value: int64(38)},
+				{Key: "city", Value: "London"},
+			}}}},
+			{Key: "multi", Value: false},
+			{Key: "upsert", Value: false},
+		}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertOK(t, updateResponse)
+	assertInt32(t, updateResponse, "n", 1)
+	assertInt32(t, updateResponse, "nModified", 1)
+
+	noopResponse := serveCommand(t, server, 222, bson.D{
+		{Key: "update", Value: "users"},
+		{Key: "updates", Value: bson.A{bson.D{
+			{Key: "q", Value: bson.D{{Key: "_id", Value: id}}},
+			{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{
+				{Key: "age", Value: int64(38)},
+			}}}},
+		}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertOK(t, noopResponse)
+	assertInt32(t, noopResponse, "n", 1)
+	assertInt32(t, noopResponse, "nModified", 0)
+
+	findResponse := serveCommand(t, server, 223, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "_id", Value: id}}},
+		{Key: "$db", Value: "app"},
+	})
+	firstBatch := cursorFirstBatch(t, findResponse)
+	if len(firstBatch) != 1 {
+		t.Fatalf("firstBatch len=%d want 1", len(firstBatch))
+	}
+	gotAge, ok := firstBatch[0].Lookup("age").Int64OK()
+	if !ok || gotAge != 38 {
+		t.Fatalf("firstBatch age=%d ok=%v want 38", gotAge, ok)
+	}
+	gotCity, ok := firstBatch[0].Lookup("city").StringValueOK()
+	if !ok || gotCity != "London" {
+		t.Fatalf("firstBatch city=%q ok=%v want London", gotCity, ok)
+	}
+
+	deleteResponse := serveCommand(t, server, 224, bson.D{
+		{Key: "delete", Value: "users"},
+		{Key: "deletes", Value: bson.A{bson.D{
+			{Key: "q", Value: bson.D{{Key: "_id", Value: id}}},
+			{Key: "limit", Value: int32(1)},
+		}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertOK(t, deleteResponse)
+	assertInt32(t, deleteResponse, "n", 1)
+
+	afterDelete := serveCommand(t, server, 225, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "_id", Value: id}}},
+		{Key: "$db", Value: "app"},
+	})
+	if firstBatch := cursorFirstBatch(t, afterDelete); len(firstBatch) != 0 {
+		t.Fatalf("firstBatch len=%d want 0", len(firstBatch))
+	}
+}
+
+func TestServerUpdateRejectsIDMutation(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	id := bson.NewObjectID()
+	insertResponse := serveCommand(t, server, 225, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{bson.D{
+			{Key: "_id", Value: id},
+			{Key: "name", Value: "ada"},
+		}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertOK(t, insertResponse)
+
+	updateResponse := serveCommand(t, server, 226, bson.D{
+		{Key: "update", Value: "users"},
+		{Key: "updates", Value: bson.A{bson.D{
+			{Key: "q", Value: bson.D{{Key: "_id", Value: id}}},
+			{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{
+				{Key: "_id", Value: bson.NewObjectID()},
+			}}}},
+		}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, updateResponse, "BadValue")
+}
+
+func TestApplySetUpdateAppendsNewFieldsInSetOrder(t *testing.T) {
+	doc, err := bson.Marshal(bson.D{
+		{Key: "_id", Value: "u1"},
+		{Key: "name", Value: "ada"},
+	})
+	if err != nil {
+		t.Fatalf("marshal doc: %v", err)
+	}
+	update, err := bson.Marshal(bson.D{{Key: "$set", Value: bson.D{
+		{Key: "zeta", Value: int32(1)},
+		{Key: "alpha", Value: int32(2)},
+	}}})
+	if err != nil {
+		t.Fatalf("marshal update: %v", err)
+	}
+	updated, changed, err := applySetUpdate(wire.Document(doc), wire.Document(update))
+	if err != nil {
+		t.Fatalf("apply set: %v", err)
+	}
+	if !changed {
+		t.Fatal("apply set changed=false want true")
+	}
+	elements, err := bson.Raw(updated).Elements()
+	if err != nil {
+		t.Fatalf("updated elements: %v", err)
+	}
+	keys := make([]string, 0, len(elements))
+	for _, elem := range elements {
+		key, err := elem.KeyErr()
+		if err != nil {
+			t.Fatalf("element key: %v", err)
+		}
+		keys = append(keys, key)
+	}
+	want := []string{"_id", "name", "zeta", "alpha"}
+	if len(keys) != len(want) {
+		t.Fatalf("keys=%v want %v", keys, want)
+	}
+	for i := range want {
+		if keys[i] != want[i] {
+			t.Fatalf("keys=%v want %v", keys, want)
+		}
+	}
+}
+
 func TestServerFindByIDMissingCollectionReturnsEmptyBatch(t *testing.T) {
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
@@ -317,6 +486,20 @@ func mustDocument(tb testing.TB, doc bson.D) wire.Document {
 		tb.Fatalf("marshal BSON document: %v", err)
 	}
 	return wire.Document(raw)
+}
+
+func serveCommand(tb testing.TB, server *Server, requestID int32, doc bson.D) wire.Document {
+	tb.Helper()
+	commandDoc := mustDocument(tb, doc)
+	req, err := wire.AppendMsgMessage(nil, requestID, 0, 0, commandDoc)
+	if err != nil {
+		tb.Fatalf("AppendMsgMessage: %v", err)
+	}
+	rw := &readWriter{r: bytes.NewReader(req)}
+	if err := server.ServeOne(rw); err != nil {
+		tb.Fatalf("ServeOne: %v", err)
+	}
+	return readMsgResponse(tb, rw.w.Bytes(), requestID)
 }
 
 func assertOK(tb testing.TB, doc wire.Document) {
