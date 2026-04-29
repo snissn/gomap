@@ -212,19 +212,19 @@ func run(cfg config) error {
 		return fmt.Errorf("create out dir: %w", err)
 	}
 	tsvPath := filepath.Join(cfg.outDir, "collections_matrix_summary.tsv")
-	if err := os.WriteFile(tsvPath, []byte(renderTSV(summaryRows)), 0o644); err != nil {
+	if err := os.WriteFile(tsvPath, []byte(renderTSV(summaryRows, cfg.outDir)), 0o644); err != nil {
 		return fmt.Errorf("write tsv: %w", err)
 	}
 	userStoryPath := filepath.Join(cfg.outDir, "collections_user_story_summary.tsv")
-	if err := os.WriteFile(userStoryPath, []byte(renderUserStoryTSV(buildUserStoryRows(summaryRows))), 0o644); err != nil {
+	if err := os.WriteFile(userStoryPath, []byte(renderUserStoryTSV(buildUserStoryRows(summaryRows), cfg.outDir)), 0o644); err != nil {
 		return fmt.Errorf("write user story tsv: %w", err)
 	}
 	diskUsagePath := filepath.Join(cfg.outDir, "collections_disk_usage_summary.tsv")
-	if err := os.WriteFile(diskUsagePath, []byte(renderDiskUsageTSV(buildDiskUsageRows(summaryRows))), 0o644); err != nil {
+	if err := os.WriteFile(diskUsagePath, []byte(renderDiskUsageTSV(buildDiskUsageRows(summaryRows), cfg.outDir)), 0o644); err != nil {
 		return fmt.Errorf("write disk usage tsv: %w", err)
 	}
 	maintenancePath := filepath.Join(cfg.outDir, "collections_maintenance_summary.tsv")
-	if err := os.WriteFile(maintenancePath, []byte(renderMaintenanceTSV(buildMaintenanceRows(summaryRows))), 0o644); err != nil {
+	if err := os.WriteFile(maintenancePath, []byte(renderMaintenanceTSV(buildMaintenanceRows(summaryRows), cfg.outDir)), 0o644); err != nil {
 		return fmt.Errorf("write maintenance tsv: %w", err)
 	}
 	mdPath := filepath.Join(cfg.outDir, "collections_matrix_summary.md")
@@ -587,7 +587,7 @@ func metricPtr(metrics map[string]float64, name string) *float64 {
 	return &value
 }
 
-func renderTSV(rows []summaryRow) string {
+func renderTSV(rows []summaryRow, outDir string) string {
 	var sb strings.Builder
 	sb.WriteString("cell\tengine\tdocument_format\tdata_outer_leaves_in_vlog\tindex_outer_leaves_in_vlog\tpager_chunk_size\tpager_sync_concurrency\tbenchmark\tns_per_op\tops_per_sec\tbytes_per_op\tallocs_per_op\tinsert_ns/doc\tinsert_docs_per_sec\tsync_ns/doc\tsync_docs_per_sec\twriter_docs_per_sec\tper_item_key_probe_fallback_count\tper_item_prefix_probe_fallback_count\tindexes/doc\tstored_docs\tdisk_total_bytes\tdisk_bytes/doc\tcollection_disk_bytes\tcollection_disk_bytes/doc\tindex_disk_bytes\tindex_disk_bytes/doc\treport_md\n")
 	for _, row := range rows {
@@ -645,13 +645,13 @@ func renderTSV(rows []summaryRow) string {
 		sb.WriteByte('\t')
 		sb.WriteString(formatOptionalTSVFloat(row.IndexDiskBPerDoc))
 		sb.WriteByte('\t')
-		sb.WriteString(row.ReportMarkdownPath)
+		sb.WriteString(relativeReportPath(outDir, row.ReportMarkdownPath))
 		sb.WriteByte('\n')
 	}
 	return sb.String()
 }
 
-func renderUserStoryTSV(rows []userStoryRow) string {
+func renderUserStoryTSV(rows []userStoryRow, outDir string) string {
 	var sb strings.Builder
 	sb.WriteString("cell\tengine\tdocument_format\tdata_outer_leaves_in_vlog\tindex_outer_leaves_in_vlog\tpager_chunk_size\tpager_sync_concurrency\tstory\tbenchmark\tdocs_per_batch\tns_per_doc\tdocs_per_sec\tms_per_batch\tinsert_ms_per_batch\tsync_ms_per_batch\tbatches_per_sec\treport_md\n")
 	for _, row := range rows {
@@ -687,13 +687,13 @@ func renderUserStoryTSV(rows []userStoryRow) string {
 		sb.WriteByte('\t')
 		sb.WriteString(formatTSVFloat(row.BatchesSec))
 		sb.WriteByte('\t')
-		sb.WriteString(row.ReportMarkdownPath)
+		sb.WriteString(relativeReportPath(outDir, row.ReportMarkdownPath))
 		sb.WriteByte('\n')
 	}
 	return sb.String()
 }
 
-func renderDiskUsageTSV(rows []diskUsageRow) string {
+func renderDiskUsageTSV(rows []diskUsageRow, outDir string) string {
 	var sb strings.Builder
 	sb.WriteString("cell\tengine\tdocument_format\tdata_outer_leaves_in_vlog\tindex_outer_leaves_in_vlog\tpager_chunk_size\tpager_sync_concurrency\tstory\tbenchmark\tindexes/doc\tstored_docs\tdisk_total_bytes\tdisk_bytes/doc\tcollection_disk_bytes\tcollection_disk_bytes/doc\tindex_disk_bytes\tindex_disk_bytes/doc\tsplit_source\treport_md\n")
 	for _, row := range rows {
@@ -733,13 +733,13 @@ func renderDiskUsageTSV(rows []diskUsageRow) string {
 		sb.WriteByte('\t')
 		sb.WriteString(row.SplitSource)
 		sb.WriteByte('\t')
-		sb.WriteString(row.ReportMarkdownPath)
+		sb.WriteString(relativeReportPath(outDir, row.ReportMarkdownPath))
 		sb.WriteByte('\n')
 	}
 	return sb.String()
 }
 
-func renderMaintenanceTSV(rows []maintenanceRow) string {
+func renderMaintenanceTSV(rows []maintenanceRow, outDir string) string {
 	var sb strings.Builder
 	sb.WriteString("cell\tengine\tdocument_format\tdata_outer_leaves_in_vlog\tindex_outer_leaves_in_vlog\tpager_chunk_size\tpager_sync_concurrency\tmaintenance\tbenchmark\tns_per_op\tops_per_sec\tgc_ns_per_op\tgc_ops_per_sec\tdisk_total_bytes_before\tdisk_total_bytes_after\tdisk_total_bytes_delta\tdisk_total_bytes_after_gc\tdisk_total_bytes_delta_after_gc\treport_md\n")
 	for _, row := range rows {
@@ -779,7 +779,7 @@ func renderMaintenanceTSV(rows []maintenanceRow) string {
 		sb.WriteByte('\t')
 		sb.WriteString(formatOptionalTSVFloat(row.DeltaGC))
 		sb.WriteByte('\t')
-		sb.WriteString(row.ReportMarkdownPath)
+		sb.WriteString(relativeReportPath(outDir, row.ReportMarkdownPath))
 		sb.WriteByte('\n')
 	}
 	return sb.String()

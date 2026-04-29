@@ -540,6 +540,19 @@ func TestMatrixSummaryRendersBenchmarkMetrics(t *testing.T) {
 	if !strings.Contains(gotMaintenanceTSV, "json\t-\t-\t-\t-\tsqlite_vacuum\tBenchmarkSQLiteShapeInsertBatchJSON/indexes_2\t25000000\t40\t-\t-\t3200000\t2800000\t-400000\t-\t-\t") {
 		t.Fatalf("maintenance tsv missing SQLite vacuum row:\n%s", gotMaintenanceTSV)
 	}
+	for name, content := range map[string]string{
+		"raw":         gotTSV,
+		"user story":  gotUserStoryTSV,
+		"disk usage":  gotDiskUsageTSV,
+		"maintenance": gotMaintenanceTSV,
+	} {
+		if strings.Contains(content, dir) {
+			t.Fatalf("%s tsv should use portable report paths, got absolute temp dir:\n%s", name, content)
+		}
+		if !strings.Contains(content, "production_fast_data_vlog_index_leaf/collections_report.md") {
+			t.Fatalf("%s tsv missing relative TreeDB report path:\n%s", name, content)
+		}
+	}
 }
 
 func TestMatrixSummaryAllowsLegacySQLiteReportsWithoutNativeColumns(t *testing.T) {
