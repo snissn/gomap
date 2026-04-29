@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/csv"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -520,8 +521,8 @@ func writeMatrixIndex(path string, cells []matrixCell) error {
 			cell.IndexOuterLeavesInVLog,
 			cell.PagerChunkSize,
 			cell.PagerSyncConcurrency,
-			reportMarkdownPath,
-			reportJSONPath,
+			filepath.ToSlash(reportMarkdownPath),
+			filepath.ToSlash(reportJSONPath),
 		}); err != nil {
 			return err
 		}
@@ -578,9 +579,14 @@ func writeRunREADME(cfg config, commandLine []string, cells []matrixCell, matrix
 	sb.WriteString("- commit: `")
 	sb.WriteString(commit)
 	sb.WriteString("`\n")
-	sb.WriteString("- command: `")
+	sb.WriteString("- bash command: `")
 	sb.WriteString(shellQuoteCommand(commandLine))
 	sb.WriteString("`\n")
+	if argvJSON, err := json.Marshal(commandLine); err == nil {
+		sb.WriteString("- argv json: `")
+		sb.Write(argvJSON)
+		sb.WriteString("`\n")
+	}
 	sb.WriteString("- benchtime: `")
 	sb.WriteString(cfg.benchtime)
 	sb.WriteString("`\n")

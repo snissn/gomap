@@ -328,6 +328,7 @@ func matrixIndexArtifactPath(baseDir, artifactPath string) (string, error) {
 	if filepath.IsAbs(artifactPath) {
 		joined = filepath.Clean(artifactPath)
 	} else {
+		artifactPath = filepath.FromSlash(artifactPath)
 		if filepath.VolumeName(artifactPath) != "" {
 			return "", fmt.Errorf("volume-qualified artifact path %q is not allowed in matrix index", artifactPath)
 		}

@@ -254,8 +254,43 @@ func TestWriteMatrixIndex(t *testing.T) {
 	if strings.Contains(got, dir) {
 		t.Fatalf("matrix index contains non-portable absolute path:\n%s", got)
 	}
-	if !strings.Contains(got, filepath.Join("treedb_json", "collections_report.md")) {
+	if !strings.Contains(got, "treedb_json/collections_report.md") {
 		t.Fatalf("missing relative report path:\n%s", got)
+	}
+	if strings.Contains(got, `treedb_json\collections_report.md`) {
+		t.Fatalf("matrix index contains OS-native separators:\n%s", got)
+	}
+}
+
+func TestWriteRunREADMERecordsBashCommandAndArgv(t *testing.T) {
+	dir := t.TempDir()
+	cellDir := filepath.Join(dir, "cell_a")
+	cells := []matrixCell{
+		{
+			Name:                   "cell_a",
+			Engine:                 "production_fast",
+			DocumentFormat:         "json",
+			DataOuterLeavesInVLog:  "true",
+			IndexOuterLeavesInVLog: "true",
+			BenchmarkPattern:       "^Benchmark$",
+			RawJSONPath:            filepath.Join(cellDir, "go_test.json"),
+			ReportMarkdownPath:     filepath.Join(cellDir, "collections_report.md"),
+		},
+	}
+	commandLine := []string{"go", "run", "./cmd/collection_bench_matrix", "-out-dir", "/tmp/run"}
+	if err := writeRunREADME(config{outDir: dir, benchtime: "1x", count: 1, batchSize: 42}, commandLine, cells, filepath.Join(dir, "matrix_index.tsv"), "branch", "commit"); err != nil {
+		t.Fatalf("writeRunREADME: %v", err)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "README.md"))
+	if err != nil {
+		t.Fatalf("read README: %v", err)
+	}
+	got := string(raw)
+	if !strings.Contains(got, "- bash command: `go run ./cmd/collection_bench_matrix -out-dir /tmp/run`") {
+		t.Fatalf("README missing bash command:\n%s", got)
+	}
+	if !strings.Contains(got, `- argv json: `+"`"+`["go","run","./cmd/collection_bench_matrix","-out-dir","/tmp/run"]`+"`") {
+		t.Fatalf("README missing argv json:\n%s", got)
 	}
 }
 
