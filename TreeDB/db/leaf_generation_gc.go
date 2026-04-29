@@ -267,25 +267,34 @@ func (db *DB) pruneDeletedLeafGenerationRecords(manifest *leafGenerationManifest
 	if manifest == nil {
 		return nil, false, 0, nil
 	}
-	kept := manifest.Generations[:0]
+	prune := make([]bool, len(manifest.Generations))
 	pruned := false
+	prunedRecords := 0
 	filesDeleted := 0
-	for _, gen := range manifest.Generations {
+	for i, gen := range manifest.Generations {
 		if gen.State != leafGenerationStateDeleted || !leafGenerationFilesMissing(gen.FileIDs, filePaths) {
-			kept = append(kept, gen)
 			continue
 		}
 		if err := db.removeLeafGenerationRecordLengthIndexes(gen.FileIDs); err != nil {
 			return manifest, false, 0, err
 		}
+		prune[i] = true
 		pruned = true
+		prunedRecords++
 		filesDeleted += len(gen.FileIDs)
 	}
 	if !pruned {
 		return manifest, false, 0, nil
 	}
-	manifest.Generations = kept
-	return manifest, true, filesDeleted, nil
+	kept := make([]leafGenerationRecord, 0, len(manifest.Generations)-prunedRecords)
+	for i, gen := range manifest.Generations {
+		if !prune[i] {
+			kept = append(kept, gen)
+		}
+	}
+	next := *manifest
+	next.Generations = kept
+	return &next, true, filesDeleted, nil
 }
 
 func (db *DB) removeLeafGenerationRecordLengthIndexes(fileIDs []uint32) error {

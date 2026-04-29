@@ -459,8 +459,7 @@ func (db *DB) scanValueLogRefCounts(ctx context.Context) (map[uint32]uint64, uin
 		return nil, 0, err
 	}
 	for _, root := range roots {
-		iter := tree.New(snap.idx.pager, &snap.reader, root.rootID).
-			IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
+		iter := scanValueLogRefCountRootIterator(snap, root)
 		if err := collectValueLogRefCounts(ctx, db, iter, counts); err != nil {
 			_ = iter.Close()
 			_ = snap.Close()
@@ -473,6 +472,14 @@ func (db *DB) scanValueLogRefCounts(ctx context.Context) (map[uint32]uint64, uin
 		return nil, 0, err
 	}
 	return counts, commitSeq, nil
+}
+
+func scanValueLogRefCountRootIterator(snap *Snapshot, root maintenanceRoot) iterator.UnsafeIterator {
+	opts := tree.IteratorOptions{Mode: tree.IteratorModePointerProjection}
+	if snap != nil && root.kind == maintenanceRootUser && root.rootID == snap.treeRoot {
+		return snap.tree.IteratorWithOptions(nil, nil, opts)
+	}
+	return tree.New(snap.idx.pager, &snap.reader, root.rootID).IteratorWithOptions(nil, nil, opts)
 }
 
 func collectValueLogRefCounts(ctx context.Context, db *DB, it iterator.UnsafeIterator, refs map[uint32]uint64) error {

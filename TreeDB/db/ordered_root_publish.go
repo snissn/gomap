@@ -207,10 +207,11 @@ func materializeOrderedRootTable(iter iterator.UnsafeIterator) (memtable.Table, 
 }
 
 type orderedRootCollectionDescriptorEntry struct {
-	key   []byte
-	val   []byte
-	ptr   page.ValuePtr
-	flags byte
+	key        []byte
+	val        []byte
+	ptr        page.ValuePtr
+	flags      byte
+	valueKnown bool
 }
 
 func orderedRootTableCollectionRootDescriptorEntries(table memtable.Table) ([]orderedRootCollectionDescriptorEntry, error) {
@@ -230,12 +231,16 @@ func orderedRootIteratorCollectionRootDescriptorEntries(iter iterator.UnsafeIter
 			break
 		}
 		val, ptr, flags := iter.UnsafeEntry()
-		entry := orderedRootCollectionDescriptorEntry{
-			key:   append([]byte(nil), key...),
-			ptr:   ptr,
-			flags: flags,
+		if flags&node.FlagPointer != 0 && val == nil {
+			val = iter.UnsafeValue()
 		}
-		if flags&node.FlagPointer == 0 {
+		entry := orderedRootCollectionDescriptorEntry{
+			key:        append([]byte(nil), key...),
+			ptr:        ptr,
+			flags:      flags,
+			valueKnown: flags&node.FlagPointer == 0 || val != nil,
+		}
+		if entry.valueKnown {
 			entry.val = append([]byte(nil), val...)
 		}
 		out = append(out, entry)
@@ -249,16 +254,19 @@ func orderedRootCollectionRootDescriptorEntriesEqual(a, b []orderedRootCollectio
 		return false
 	}
 	for i := range a {
-		if !bytes.Equal(a[i].key, b[i].key) || a[i].flags != b[i].flags {
+		if !bytes.Equal(a[i].key, b[i].key) {
 			return false
 		}
-		if a[i].flags&node.FlagPointer != 0 {
-			if a[i].ptr != b[i].ptr {
+		if a[i].valueKnown && b[i].valueKnown {
+			if !bytes.Equal(a[i].val, b[i].val) {
 				return false
 			}
 			continue
 		}
-		if !bytes.Equal(a[i].val, b[i].val) {
+		if a[i].flags != b[i].flags {
+			return false
+		}
+		if a[i].flags&node.FlagPointer != 0 && a[i].ptr != b[i].ptr {
 			return false
 		}
 	}
