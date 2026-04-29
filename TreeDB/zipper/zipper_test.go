@@ -65,7 +65,7 @@ type memoryLeafPageStore struct {
 	z *Zipper
 
 	next  uint32
-	pages map[uint64][]byte
+	pages map[page.LeafLogPtr][]byte
 
 	readCalls  int
 	sawCache   int
@@ -75,7 +75,7 @@ type memoryLeafPageStore struct {
 func newMemoryLeafPageStore(z *Zipper) *memoryLeafPageStore {
 	return &memoryLeafPageStore{
 		z:     z,
-		pages: make(map[uint64][]byte),
+		pages: make(map[page.LeafLogPtr][]byte),
 	}
 }
 
@@ -97,7 +97,7 @@ func (s *memoryLeafPageStore) AppendLeafPage(leafPage []byte) (page.LeafLogPtr, 
 		Offset: uint64(s.next),
 	}
 	s.next += 4096 + 32
-	s.pages[leafRefCacheKey(ptr)] = append([]byte(nil), leafPage...)
+	s.pages[ptr] = append([]byte(nil), leafPage...)
 	return ptr, nil
 }
 
@@ -107,8 +107,7 @@ func (s *memoryLeafPageStore) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	key := leafRefCacheKey(leafPtr)
-	data, ok := s.pages[key]
+	data, ok := s.pages[leafPtr]
 	if !ok {
 		return nil, io.EOF
 	}
@@ -177,7 +176,7 @@ func TestZipperLeafRefCacheAvoidsUnflushedReads(t *testing.T) {
 
 	// Simulate Apply() scope: enable the in-flight leaf-ref cache so loadNode can
 	// resolve freshly appended leaf pages before the leafPageLog is flushed.
-	z.leafRefCache = make(map[uint64][]byte)
+	z.leafRefCache = make(map[page.LeafLogPtr][]byte)
 
 	data := make([]byte, page.PageSize)
 	b := node.NewBuilder(data, page.PageTypeLeaf)

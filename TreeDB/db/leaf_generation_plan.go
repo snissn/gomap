@@ -104,7 +104,7 @@ type leafGenerationScanContext struct {
 	cacheEnabled  bool
 	lastFileID    uint32
 	lastFileState *leafGenerationScanFileState
-	childStack    []uint64
+	childStacks   [][]uint64
 }
 
 type leafGenerationLiveStatsScanOptions struct {
@@ -616,6 +616,10 @@ func (db *DB) scanLeafGenerationPtrTotals(scan *leafGenerationScanContext, dst l
 }
 
 func (db *DB) scanLeafGenerationSubtreeStats(ctx context.Context, scan *leafGenerationScanContext, pageID uint64) (leafGenerationSubtreeStats, error) {
+	return db.scanLeafGenerationSubtreeStatsDepth(ctx, scan, pageID, 0)
+}
+
+func (db *DB) scanLeafGenerationSubtreeStatsDepth(ctx context.Context, scan *leafGenerationScanContext, pageID uint64, depth int) (leafGenerationSubtreeStats, error) {
 	if scan == nil || scan.snap == nil || scan.snap.idx == nil || scan.snap.idx.pager == nil {
 		return nil, nil
 	}
@@ -644,8 +648,11 @@ func (db *DB) scanLeafGenerationSubtreeStats(ctx context.Context, scan *leafGene
 	case page.PageTypeLeaf:
 		stats = nil
 	case page.PageTypeInternal:
-		stack := scan.childStack[:0]
-		err = n.WalkInternalChildren(&stack, func(ptr page.LeafLogPtr) error {
+		for len(scan.childStacks) <= depth {
+			scan.childStacks = append(scan.childStacks, nil)
+		}
+		children := scan.childStacks[depth][:0]
+		err = n.WalkInternalChildren(&children, func(ptr page.LeafLogPtr) error {
 			var visitErr error
 			stats, visitErr = db.scanLeafGenerationPtrTotals(scan, stats, ptr)
 			return visitErr
@@ -653,9 +660,9 @@ func (db *DB) scanLeafGenerationSubtreeStats(ctx context.Context, scan *leafGene
 		if err != nil {
 			return nil, err
 		}
-		scan.childStack = stack[:0]
-		for _, childID := range stack {
-			childStats, childErr := db.scanLeafGenerationSubtreeStats(ctx, scan, childID)
+		scan.childStacks[depth] = children[:0]
+		for _, childID := range children {
+			childStats, childErr := db.scanLeafGenerationSubtreeStatsDepth(ctx, scan, childID, depth+1)
 			if childErr != nil {
 				return nil, childErr
 			}

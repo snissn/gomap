@@ -91,7 +91,7 @@ type Zipper struct {
 	leafPageLog           LeafPageLog
 	leafPageReader        LeafPageReader
 	leafRefCacheMu        sync.RWMutex
-	leafRefCache          map[uint64][]byte
+	leafRefCache          map[page.LeafLogPtr][]byte
 
 	leafReserveBytes          int
 	internalReserveBytes      int
@@ -923,7 +923,7 @@ func (z *Zipper) Apply(rootID uint64, b *batch.Batch) (uint64, []uint64, adaptiv
 		// flushed. Pure put/restore applies do not revisit those fresh leaves, so
 		// avoid retaining their page buffers for the whole commit.
 		z.leafRefCacheMu.Lock()
-		z.leafRefCache = make(map[uint64][]byte)
+		z.leafRefCache = make(map[page.LeafLogPtr][]byte)
 		z.leafRefCacheMu.Unlock()
 		defer func() {
 			z.leafRefCacheMu.Lock()
@@ -1062,7 +1062,7 @@ func (z *Zipper) loadNodeRef(ref page.ChildRef, scratchCtx *mergeScratch) (node.
 		ptr := ref.Log
 		if z.outerLeavesInValueLog {
 			z.leafRefCacheMu.RLock()
-			data, cached := z.leafRefCache[leafRefCacheKey(ptr)]
+			data, cached := z.leafRefCache[ptr]
 			z.leafRefCacheMu.RUnlock()
 			if cached {
 				if len(data) != page.PageSize {
@@ -1128,10 +1128,6 @@ func (z *Zipper) loadNodeRef(ref page.ChildRef, scratchCtx *mergeScratch) (node.
 	return node.NewNodeView(data), true, nil, false, nil
 }
 
-func leafRefCacheKey(ptr page.LeafLogPtr) uint64 {
-	return (uint64(ptr.FileID) << 32) ^ ptr.Offset ^ (uint64(ptr.SubIndex) << 48)
-}
-
 func (z *Zipper) persistLeafPage(b *node.Builder) (page.ChildRef, error) {
 	if b == nil {
 		return page.ChildRef{}, errors.New("zipper: nil leaf builder")
@@ -1148,7 +1144,7 @@ func (z *Zipper) persistLeafPage(b *node.Builder) (page.ChildRef, error) {
 	}
 	z.leafRefCacheMu.Lock()
 	if z.leafRefCache != nil {
-		z.leafRefCache[leafRefCacheKey(ptr)] = b.Data()
+		z.leafRefCache[ptr] = b.Data()
 	}
 	z.leafRefCacheMu.Unlock()
 	return page.LeafLogChildRef(ptr), nil
