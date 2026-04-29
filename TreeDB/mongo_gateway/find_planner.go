@@ -220,7 +220,7 @@ func documentsForIndexedPredicate(col *collections.Collection, pred findPredicat
 	for _, value := range pred.values {
 		scalar, ok := indexScalarForBSONValue(value)
 		if !ok {
-			continue
+			return nil, fmt.Errorf("Mongo gateway find value cannot be represented in index %q", idx.Name)
 		}
 		ids, err := col.FindByIndexValue(idx.Name, scalar)
 		if err != nil {
@@ -293,6 +293,9 @@ func parseAndPredicates(value bson.RawValue) ([]findPredicate, error) {
 	if err != nil {
 		return nil, err
 	}
+	if len(values) == 0 {
+		return nil, errors.New("Mongo gateway $and must contain at least one expression")
+	}
 	var out []findPredicate
 	for i, value := range values {
 		doc, ok := value.DocumentOK()
@@ -312,7 +315,14 @@ func parseFieldPredicate(field string, value bson.RawValue) ([]findPredicate, er
 	if field == "" || strings.HasPrefix(field, "$") {
 		return nil, fmt.Errorf("Mongo gateway unsupported find predicate %q", field)
 	}
-	if doc, ok := value.DocumentOK(); ok && operatorDocument(doc) {
+	if doc, ok := value.DocumentOK(); ok {
+		isOperatorDoc, err := operatorDocument(doc)
+		if err != nil {
+			return nil, err
+		}
+		if !isOperatorDoc {
+			return []findPredicate{{field: field, op: findPredicateEq, values: []bson.RawValue{value}}}, nil
+		}
 		elements, err := doc.Elements()
 		if err != nil {
 			return nil, err
@@ -346,13 +356,31 @@ func parseFieldPredicate(field string, value bson.RawValue) ([]findPredicate, er
 	return []findPredicate{{field: field, op: findPredicateEq, values: []bson.RawValue{value}}}, nil
 }
 
-func operatorDocument(doc bson.Raw) bool {
+func operatorDocument(doc bson.Raw) (bool, error) {
 	elements, err := doc.Elements()
-	if err != nil || len(elements) == 0 {
-		return false
+	if err != nil {
+		return false, err
 	}
-	key, err := elements[0].KeyErr()
-	return err == nil && strings.HasPrefix(key, "$")
+	if len(elements) == 0 {
+		return false, nil
+	}
+	sawOperator := false
+	sawNonOperator := false
+	for _, elem := range elements {
+		key, err := elem.KeyErr()
+		if err != nil {
+			return false, err
+		}
+		if strings.HasPrefix(key, "$") {
+			sawOperator = true
+		} else {
+			sawNonOperator = true
+		}
+		if sawOperator && sawNonOperator {
+			return false, errors.New("Mongo gateway find field predicate document cannot mix operator and non-operator keys")
+		}
+	}
+	return sawOperator, nil
 }
 
 func rangeOperator(op string) findPredicateOp {

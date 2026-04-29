@@ -581,6 +581,27 @@ func TestServerFindPlannerIndexedAndBoundedPredicates(t *testing.T) {
 		{Key: "$db", Value: "app"},
 	})
 	assertCommandError(t, negativeSkipMissingCollection, "BadValue")
+
+	emptyAnd := serveCommand(t, server, 241, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "$and", Value: bson.A{}}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, emptyAnd, "BadValue")
+
+	mixedOperator := serveCommand(t, server, 242, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "age", Value: bson.D{{Key: "x", Value: int32(1)}, {Key: "$gte", Value: int64(40)}}}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, mixedOperator, "BadValue")
+
+	nonIndexableValue := serveCommand(t, server, 243, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "city", Value: bson.D{{Key: "nested", Value: "hnl"}}}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, nonIndexableValue, "BadValue")
 }
 
 func TestApplySetUpdateAppendsNewFieldsInSetOrder(t *testing.T) {
