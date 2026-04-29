@@ -242,7 +242,9 @@ func TestCollectionValueLogGC_RoundTripWithCompressedSecondaryIndexes(t *testing
 	if err := d.RefreshValueLogSet(); err != nil {
 		t.Fatalf("RefreshValueLogSet: %v", err)
 	}
-	stats, err := d.ValueLogGC(context.Background(), backenddb.ValueLogGCOptions{})
+	gcCtx, gcCancel := collectionMaintenanceTestContext(t)
+	defer gcCancel()
+	stats, err := d.ValueLogGC(gcCtx, backenddb.ValueLogGCOptions{})
 	if err != nil {
 		t.Fatalf("ValueLogGC: %v", err)
 	}
@@ -1444,9 +1446,7 @@ func TestCollectionInsertBatchBridge_AppendsWithoutDroppingExistingRoots(t *test
 	if err != nil {
 		t.Fatalf("find city: %v", err)
 	}
-	if len(cityIDs) != 2 || !bytes.Equal(cityIDs[0], []byte("u1")) || !bytes.Equal(cityIDs[1], []byte("u2")) {
-		t.Fatalf("city ids=%q want [u1 u2]", cityIDs)
-	}
+	collectionMaintenanceRequireIDs(t, cityIDs, []byte("u1"), []byte("u2"))
 }
 
 func TestCollectionCreateIndexBackfill_BuildsSecondaryAndIndexState(t *testing.T) {
@@ -1489,9 +1489,7 @@ func TestCollectionCreateIndexBackfill_BuildsSecondaryAndIndexState(t *testing.T
 	if err != nil {
 		t.Fatalf("find city: %v", err)
 	}
-	if len(cityIDs) != 2 || !bytes.Equal(cityIDs[0], []byte("u1")) || !bytes.Equal(cityIDs[1], []byte("u2")) {
-		t.Fatalf("city ids=%q want [u1 u2]", cityIDs)
-	}
+	collectionMaintenanceRequireIDs(t, cityIDs, []byte("u1"), []byte("u2"))
 
 	snap := d.AcquireSnapshot()
 	if snap == nil {
