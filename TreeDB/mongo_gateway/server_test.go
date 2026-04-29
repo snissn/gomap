@@ -853,7 +853,7 @@ func TestServerFindDottedArrayPredicates(t *testing.T) {
 	assertBatchIDs(t, cursorFirstBatch(t, itemFind), []string{"match"})
 }
 
-func TestServerFindArrayRangePredicatesUseSameElement(t *testing.T) {
+func TestServerFindArrayRangePredicatesCanUseDifferentElements(t *testing.T) {
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("open db: %v", err)
@@ -878,7 +878,7 @@ func TestServerFindArrayRangePredicatesUseSameElement(t *testing.T) {
 		}}}},
 		{Key: "$db", Value: "app"},
 	})
-	assertBatchIDs(t, cursorFirstBatch(t, rangeFind), []string{"yes"})
+	assertBatchIDs(t, cursorFirstBatch(t, rangeFind), []string{"no", "yes"})
 }
 
 func TestServerFindRangePredicatesUseTypeBrackets(t *testing.T) {
