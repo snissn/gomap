@@ -268,6 +268,9 @@ Priority workloads:
 - Current metadata slice adds `listCollections`, `createIndexes`,
   `listIndexes`, and `dropIndexes` for single-field ascending collection
   secondary indexes.
+- Current find-planner slice adds `_id` `$in`, indexed scalar equality/`$in`,
+  top-level `$and`, bounded scan fallback for range predicates, single-field
+  sort, skip, limit, and top-level projection.
 
 Metrics to record for every run:
 

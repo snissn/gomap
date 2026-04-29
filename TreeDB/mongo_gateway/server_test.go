@@ -5,7 +5,9 @@ import (
 	"context"
 	"errors"
 	"io"
+	"math"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -473,6 +475,525 @@ func TestServerIndexMetadataRejectsInvalidCommands(t *testing.T) {
 	assertIndexName(t, indexBatch[2], "email_1")
 }
 
+func TestServerFindPlannerIndexedAndBoundedPredicates(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	assertOK(t, serveCommand(t, server, 232, bson.D{
+		{Key: "createIndexes", Value: "users"},
+		{Key: "indexes", Value: bson.A{bson.D{
+			{Key: "key", Value: bson.D{{Key: "city", Value: int32(1)}}},
+			{Key: "name", Value: "city_1"},
+		}}},
+		{Key: "$db", Value: "app"},
+	}))
+	id1 := bson.NewObjectID()
+	id2 := bson.NewObjectID()
+	id3 := bson.NewObjectID()
+	assertOK(t, serveCommand(t, server, 233, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{
+			bson.D{{Key: "_id", Value: id1}, {Key: "name", Value: "ada"}, {Key: "city", Value: "hnl"}, {Key: "age", Value: int64(37)}},
+			bson.D{{Key: "_id", Value: id2}, {Key: "name", Value: "grace"}, {Key: "city", Value: "hnl"}, {Key: "age", Value: int64(42)}},
+			bson.D{{Key: "_id", Value: id3}, {Key: "name", Value: "katherine"}, {Key: "city", Value: "sfo"}, {Key: "age", Value: int64(36)}},
+		}},
+		{Key: "$db", Value: "app"},
+	}))
+
+	indexedFind := serveCommand(t, server, 234, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "$and", Value: bson.A{
+			bson.D{{Key: "city", Value: "hnl"}},
+			bson.D{{Key: "age", Value: bson.D{{Key: "$gte", Value: int64(40)}}}},
+		}}}},
+		{Key: "projection", Value: bson.D{{Key: "name", Value: int32(1)}, {Key: "_id", Value: int32(0)}}},
+		{Key: "$db", Value: "app"},
+	})
+	firstBatch := cursorFirstBatch(t, indexedFind)
+	if len(firstBatch) != 1 {
+		t.Fatalf("indexed firstBatch len=%d want 1", len(firstBatch))
+	}
+	if got, ok := firstBatch[0].Lookup("name").StringValueOK(); !ok || got != "grace" {
+		t.Fatalf("projected name=%q ok=%v want grace", got, ok)
+	}
+	if !firstBatch[0].Lookup("_id").IsZero() {
+		t.Fatalf("projected document unexpectedly includes _id: %v", firstBatch[0])
+	}
+	if !firstBatch[0].Lookup("age").IsZero() {
+		t.Fatalf("projected document unexpectedly includes age: %v", firstBatch[0])
+	}
+
+	inFind := serveCommand(t, server, 235, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "_id", Value: bson.D{{Key: "$in", Value: bson.A{id3, id1}}}}}},
+		{Key: "sort", Value: bson.D{{Key: "name", Value: int32(1)}}},
+		{Key: "skip", Value: int32(1)},
+		{Key: "limit", Value: int32(1)},
+		{Key: "$db", Value: "app"},
+	})
+	firstBatch = cursorFirstBatch(t, inFind)
+	if len(firstBatch) != 1 {
+		t.Fatalf("$in firstBatch len=%d want 1", len(firstBatch))
+	}
+	if got, ok := firstBatch[0].Lookup("name").StringValueOK(); !ok || got != "katherine" {
+		t.Fatalf("$in sorted/skipped name=%q ok=%v want katherine", got, ok)
+	}
+
+	withoutID := serveCommand(t, server, 236, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "_id", Value: id1}}},
+		{Key: "projection", Value: bson.D{{Key: "_id", Value: int32(0)}}},
+		{Key: "$db", Value: "app"},
+	})
+	firstBatch = cursorFirstBatch(t, withoutID)
+	if len(firstBatch) != 1 {
+		t.Fatalf("_id exclude firstBatch len=%d want 1", len(firstBatch))
+	}
+	if !firstBatch[0].Lookup("_id").IsZero() {
+		t.Fatalf("_id exclude projection returned _id: %v", firstBatch[0])
+	}
+	if got, ok := firstBatch[0].Lookup("name").StringValueOK(); !ok || got != "ada" {
+		t.Fatalf("_id exclude name=%q ok=%v want ada", got, ok)
+	}
+
+	onlyID := serveCommand(t, server, 237, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "_id", Value: id1}}},
+		{Key: "projection", Value: bson.D{{Key: "_id", Value: int32(1)}}},
+		{Key: "$db", Value: "app"},
+	})
+	firstBatch = cursorFirstBatch(t, onlyID)
+	if len(firstBatch) != 1 {
+		t.Fatalf("_id include firstBatch len=%d want 1", len(firstBatch))
+	}
+	elements, err := firstBatch[0].Elements()
+	if err != nil {
+		t.Fatalf("_id include elements: %v", err)
+	}
+	if len(elements) != 1 || firstBatch[0].Lookup("_id").IsZero() {
+		t.Fatalf("_id include projection=%v want only _id", firstBatch[0])
+	}
+
+	id4 := bson.NewObjectID()
+	id5 := bson.NewObjectID()
+	assertOK(t, serveCommand(t, server, 238, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{
+			bson.D{{Key: "_id", Value: id4}, {Key: "name", Value: "large-a"}, {Key: "big", Value: int64(9007199254740992)}},
+			bson.D{{Key: "_id", Value: id5}, {Key: "name", Value: "large-b"}, {Key: "big", Value: int64(9007199254740993)}},
+		}},
+		{Key: "$db", Value: "app"},
+	}))
+	largeFind := serveCommand(t, server, 239, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "big", Value: int64(9007199254740993)}}},
+		{Key: "$db", Value: "app"},
+	})
+	firstBatch = cursorFirstBatch(t, largeFind)
+	if len(firstBatch) != 1 {
+		t.Fatalf("large int firstBatch len=%d want 1", len(firstBatch))
+	}
+	if got, ok := firstBatch[0].Lookup("name").StringValueOK(); !ok || got != "large-b" {
+		t.Fatalf("large int matched name=%q ok=%v want large-b", got, ok)
+	}
+
+	negativeSkipMissingCollection := serveCommand(t, server, 240, bson.D{
+		{Key: "find", Value: "missing"},
+		{Key: "filter", Value: bson.D{}},
+		{Key: "skip", Value: int32(-1)},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, negativeSkipMissingCollection, "BadValue")
+
+	emptyAnd := serveCommand(t, server, 241, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "$and", Value: bson.A{}}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, emptyAnd, "BadValue")
+
+	mixedOperator := serveCommand(t, server, 242, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "age", Value: bson.D{{Key: "x", Value: int32(1)}, {Key: "$gte", Value: int64(40)}}}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, mixedOperator, "BadValue")
+
+	unsupportedSort := serveCommand(t, server, 243, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{}},
+		{Key: "sort", Value: bson.D{{Key: "$natural", Value: int32(1)}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, unsupportedSort, "BadValue")
+
+	dottedSort := serveCommand(t, server, 244, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{}},
+		{Key: "sort", Value: bson.D{{Key: "profile.name", Value: int32(1)}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, dottedSort, "BadValue")
+
+	nonIndexableValue := serveCommand(t, server, 245, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "city", Value: bson.D{{Key: "nested", Value: "hnl"}}}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, nonIndexableValue, "BadValue")
+}
+
+func TestServerFindNullEqualityMatchesMissingWithIndex(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	assertOK(t, serveCommand(t, server, 244, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{
+			bson.D{{Key: "_id", Value: "null"}, {Key: "city", Value: nil}},
+			bson.D{{Key: "_id", Value: "missing"}, {Key: "name", Value: "no city"}},
+			bson.D{{Key: "_id", Value: "hnl"}, {Key: "city", Value: "hnl"}},
+		}},
+		{Key: "$db", Value: "app"},
+	}))
+	assertOK(t, serveCommand(t, server, 245, bson.D{
+		{Key: "createIndexes", Value: "users"},
+		{Key: "indexes", Value: bson.A{bson.D{
+			{Key: "key", Value: bson.D{{Key: "city", Value: int32(1)}}},
+			{Key: "name", Value: "city_1"},
+		}}},
+		{Key: "$db", Value: "app"},
+	}))
+
+	nullFind := serveCommand(t, server, 246, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "city", Value: nil}}},
+		{Key: "sort", Value: bson.D{{Key: "_id", Value: int32(1)}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertBatchIDs(t, cursorFirstBatch(t, nullFind), []string{"missing", "null"})
+
+	inFind := serveCommand(t, server, 247, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "city", Value: bson.D{{Key: "$in", Value: bson.A{nil, "hnl"}}}}}},
+		{Key: "sort", Value: bson.D{{Key: "_id", Value: int32(1)}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertBatchIDs(t, cursorFirstBatch(t, inFind), []string{"hnl", "missing", "null"})
+}
+
+func TestServerFindRejectsOversizedResultDocument(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewServer()
+	server.MaxMessageLength = 4500
+	server.Collections = collections.NewCollectionManager(db)
+	assertOK(t, serveCommand(t, server, 248, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{
+			bson.D{{Key: "_id", Value: "large"}, {Key: "payload", Value: strings.Repeat("x", 600)}},
+		}},
+		{Key: "$db", Value: "app"},
+	}))
+	tooLarge := serveCommand(t, server, 249, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "_id", Value: "large"}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, tooLarge, "BadValue")
+}
+
+func TestServerFindRejectsFirstBatchOverflow(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewServer()
+	server.MaxMessageLength = 5200
+	server.Collections = collections.NewCollectionManager(db)
+	assertOK(t, serveCommand(t, server, 250, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{
+			bson.D{{Key: "_id", Value: "a"}, {Key: "payload", Value: strings.Repeat("a", 700)}},
+			bson.D{{Key: "_id", Value: "b"}, {Key: "payload", Value: strings.Repeat("b", 700)}},
+		}},
+		{Key: "$db", Value: "app"},
+	}))
+	overflow := serveCommand(t, server, 251, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, overflow, "BadValue")
+}
+
+func TestServerFindCapsIndexedCandidates(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewServer()
+	server.MaxFindScanDocuments = 1
+	server.Collections = collections.NewCollectionManager(db)
+	assertOK(t, serveCommand(t, server, 250, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{
+			bson.D{{Key: "_id", Value: "u1"}, {Key: "city", Value: "hnl"}},
+			bson.D{{Key: "_id", Value: "u2"}, {Key: "city", Value: "hnl"}},
+		}},
+		{Key: "$db", Value: "app"},
+	}))
+	assertOK(t, serveCommand(t, server, 251, bson.D{
+		{Key: "createIndexes", Value: "users"},
+		{Key: "indexes", Value: bson.A{bson.D{
+			{Key: "key", Value: bson.D{{Key: "city", Value: int32(1)}}},
+			{Key: "name", Value: "city_1"},
+		}}},
+		{Key: "$db", Value: "app"},
+	}))
+	tooMany := serveCommand(t, server, 252, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "city", Value: "hnl"}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, tooMany, "BadValue")
+}
+
+func TestServerFindChoosesNarrowestIndexedPredicate(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewServer()
+	server.MaxFindScanDocuments = 1
+	server.Collections = collections.NewCollectionManager(db)
+	assertOK(t, serveCommand(t, server, 253, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{
+			bson.D{{Key: "_id", Value: "u1"}, {Key: "city", Value: "hnl"}, {Key: "email", Value: "one@example.com"}},
+			bson.D{{Key: "_id", Value: "u2"}, {Key: "city", Value: "hnl"}, {Key: "email", Value: "target@example.com"}},
+			bson.D{{Key: "_id", Value: "u3"}, {Key: "city", Value: "hnl"}, {Key: "email", Value: "three@example.com"}},
+		}},
+		{Key: "$db", Value: "app"},
+	}))
+	assertOK(t, serveCommand(t, server, 254, bson.D{
+		{Key: "createIndexes", Value: "users"},
+		{Key: "indexes", Value: bson.A{
+			bson.D{{Key: "key", Value: bson.D{{Key: "city", Value: int32(1)}}}, {Key: "name", Value: "city_1"}},
+			bson.D{{Key: "key", Value: bson.D{{Key: "email", Value: int32(1)}}}, {Key: "name", Value: "email_1"}},
+		}},
+		{Key: "$db", Value: "app"},
+	}))
+	findResponse := serveCommand(t, server, 255, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "$and", Value: bson.A{
+			bson.D{{Key: "city", Value: "hnl"}},
+			bson.D{{Key: "email", Value: "target@example.com"}},
+		}}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertBatchIDs(t, cursorFirstBatch(t, findResponse), []string{"u2"})
+}
+
+func TestServerFindChoosesIndexedPredicateBeforeOversizedPrimaryCandidates(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewServer()
+	server.MaxFindScanDocuments = 1
+	server.Collections = collections.NewCollectionManager(db)
+	assertOK(t, serveCommand(t, server, 256, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{
+			bson.D{{Key: "_id", Value: "u1"}, {Key: "email", Value: "one@example.com"}},
+			bson.D{{Key: "_id", Value: "u2"}, {Key: "email", Value: "target@example.com"}},
+			bson.D{{Key: "_id", Value: "u3"}, {Key: "email", Value: "three@example.com"}},
+		}},
+		{Key: "$db", Value: "app"},
+	}))
+	assertOK(t, serveCommand(t, server, 257, bson.D{
+		{Key: "createIndexes", Value: "users"},
+		{Key: "indexes", Value: bson.A{bson.D{
+			{Key: "key", Value: bson.D{{Key: "email", Value: int32(1)}}},
+			{Key: "name", Value: "email_1"},
+		}}},
+		{Key: "$db", Value: "app"},
+	}))
+	findResponse := serveCommand(t, server, 258, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "$and", Value: bson.A{
+			bson.D{{Key: "_id", Value: bson.D{{Key: "$in", Value: bson.A{"u1", "u2", "u3"}}}}},
+			bson.D{{Key: "email", Value: "target@example.com"}},
+		}}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertBatchIDs(t, cursorFirstBatch(t, findResponse), []string{"u2"})
+}
+
+func TestServerFindDottedArrayPredicates(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	assertOK(t, serveCommand(t, server, 256, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{
+			bson.D{{Key: "_id", Value: "match"}, {Key: "tags", Value: bson.A{"a", "b"}}, {Key: "items", Value: bson.A{bson.D{{Key: "sku", Value: "sku-1"}}}}},
+			bson.D{{Key: "_id", Value: "miss"}, {Key: "tags", Value: bson.A{"b"}}, {Key: "items", Value: bson.A{bson.D{{Key: "sku", Value: "sku-2"}}}}},
+		}},
+		{Key: "$db", Value: "app"},
+	}))
+	tagFind := serveCommand(t, server, 257, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "tags.0", Value: "a"}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertBatchIDs(t, cursorFirstBatch(t, tagFind), []string{"match"})
+
+	scalarTagFind := serveCommand(t, server, 258, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "tags", Value: "a"}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertBatchIDs(t, cursorFirstBatch(t, scalarTagFind), []string{"match"})
+
+	inTagFind := serveCommand(t, server, 259, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "tags", Value: bson.D{{Key: "$in", Value: bson.A{"a"}}}}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertBatchIDs(t, cursorFirstBatch(t, inTagFind), []string{"match"})
+
+	itemFind := serveCommand(t, server, 260, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "items.sku", Value: "sku-1"}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertBatchIDs(t, cursorFirstBatch(t, itemFind), []string{"match"})
+}
+
+func TestServerFindArrayRangePredicatesCanUseDifferentElements(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	assertOK(t, serveCommand(t, server, 261, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{
+			bson.D{{Key: "_id", Value: "no"}, {Key: "scores", Value: bson.A{int32(1), int32(10)}}},
+			bson.D{{Key: "_id", Value: "yes"}, {Key: "scores", Value: bson.A{int32(6), int32(7)}}},
+		}},
+		{Key: "$db", Value: "app"},
+	}))
+	rangeFind := serveCommand(t, server, 262, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "scores", Value: bson.D{
+			{Key: "$gt", Value: int32(5)},
+			{Key: "$lt", Value: int32(8)},
+		}}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertBatchIDs(t, cursorFirstBatch(t, rangeFind), []string{"no", "yes"})
+}
+
+func TestServerFindRangePredicatesUseTypeBrackets(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	assertOK(t, serveCommand(t, server, 263, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{
+			bson.D{{Key: "_id", Value: "num"}, {Key: "age", Value: int32(10)}},
+			bson.D{{Key: "_id", Value: "string"}, {Key: "age", Value: "old"}},
+			bson.D{{Key: "_id", Value: "object"}, {Key: "age", Value: bson.D{{Key: "nested", Value: true}}}},
+		}},
+		{Key: "$db", Value: "app"},
+	}))
+	rangeFind := serveCommand(t, server, 264, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "age", Value: bson.D{{Key: "$gt", Value: int32(5)}}}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertBatchIDs(t, cursorFirstBatch(t, rangeFind), []string{"num"})
+}
+
+func TestCompareRawNumbersHandlesNonFiniteDoubles(t *testing.T) {
+	decimal, err := bson.ParseDecimal128("1.50")
+	if err != nil {
+		t.Fatalf("parse decimal: %v", err)
+	}
+	raw := bson.Raw(mustDocument(t, bson.D{
+		{Key: "nan", Value: math.NaN()},
+		{Key: "pos_inf", Value: math.Inf(1)},
+		{Key: "neg_inf", Value: math.Inf(-1)},
+		{Key: "finite", Value: 1.5},
+		{Key: "decimal", Value: decimal},
+		{Key: "large_int", Value: int64(9007199254740993)},
+	}))
+	nanValue := raw.Lookup("nan")
+	posInf := raw.Lookup("pos_inf")
+	negInf := raw.Lookup("neg_inf")
+	finite := raw.Lookup("finite")
+	decimalValue := raw.Lookup("decimal")
+	largeInt := raw.Lookup("large_int")
+
+	if rawValuesEqual(nanValue, finite) {
+		t.Fatal("NaN compared equal to finite number")
+	}
+	if match, err := valueMatchesPredicate(nanValue, findPredicate{op: findPredicateGT, values: []bson.RawValue{finite}}); err != nil || match {
+		t.Fatalf("NaN range match/err=%v/%v want false/nil", match, err)
+	}
+	if cmp := compareRawValues(posInf, finite); cmp <= 0 {
+		t.Fatalf("+Inf vs finite cmp=%d want >0", cmp)
+	}
+	if cmp := compareRawValues(negInf, finite); cmp >= 0 {
+		t.Fatalf("-Inf vs finite cmp=%d want <0", cmp)
+	}
+	if cmp := compareRawValues(decimalValue, finite); cmp != 0 {
+		t.Fatalf("Decimal128 vs double cmp=%d want 0", cmp)
+	}
+	scalar, ok := indexScalarForBSONValue(largeInt)
+	if !ok || scalar != int64(9007199254740993) {
+		t.Fatalf("large int scalar=%v ok=%v want int64", scalar, ok)
+	}
+}
+
 func TestApplySetUpdateAppendsNewFieldsInSetOrder(t *testing.T) {
 	doc, err := bson.Marshal(bson.D{
 		{Key: "_id", Value: "u1"},
@@ -515,6 +1036,18 @@ func TestApplySetUpdateAppendsNewFieldsInSetOrder(t *testing.T) {
 		if keys[i] != want[i] {
 			t.Fatalf("keys=%v want %v", keys, want)
 		}
+	}
+}
+
+func TestCompareDocumentFieldTreatsMissingAsNull(t *testing.T) {
+	missing := mustDocument(t, bson.D{{Key: "_id", Value: "missing"}})
+	nullValue := mustDocument(t, bson.D{{Key: "_id", Value: "null"}, {Key: "rank", Value: nil}})
+	numberValue := mustDocument(t, bson.D{{Key: "_id", Value: "number"}, {Key: "rank", Value: int64(1)}})
+	if cmp := compareDocumentField(missing, nullValue, "rank"); cmp != 0 {
+		t.Fatalf("missing vs null cmp=%d want 0", cmp)
+	}
+	if cmp := compareDocumentField(missing, numberValue, "rank"); cmp >= 0 {
+		t.Fatalf("missing vs number cmp=%d want <0", cmp)
 	}
 }
 
@@ -733,6 +1266,19 @@ func cursorFirstBatch(tb testing.TB, doc wire.Document) []bson.Raw {
 		out = append(out, doc)
 	}
 	return out
+}
+
+func assertBatchIDs(tb testing.TB, batch []bson.Raw, want []string) {
+	tb.Helper()
+	if len(batch) != len(want) {
+		tb.Fatalf("batch len=%d want %d", len(batch), len(want))
+	}
+	for i, doc := range batch {
+		got, ok := doc.Lookup("_id").StringValueOK()
+		if !ok || got != want[i] {
+			tb.Fatalf("batch[%d]._id=%q ok=%v want %q", i, got, ok, want[i])
+		}
+	}
 }
 
 func assertInt32(tb testing.TB, doc wire.Document, key string, want int32) {

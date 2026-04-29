@@ -131,6 +131,8 @@ func TestAppendIndexScalarEncodesIntoArena(t *testing.T) {
 		{name: "bool true", value: true, want: "b:1"},
 		{name: "bool false", value: false, want: "b:0"},
 		{name: "number", value: float64(42.5), want: "n:42.5"},
+		{name: "int32", value: int32(42), want: "n:42"},
+		{name: "int64", value: int64(9007199254740993), want: "n:9007199254740993"},
 		{name: "null", value: nil, want: "z:"},
 	}
 	for _, tc := range tests {
@@ -149,6 +151,13 @@ func TestAppendIndexScalarEncodesIntoArena(t *testing.T) {
 				t.Fatalf("encoded slice is not backed by arena tail")
 			}
 		})
+	}
+}
+
+func TestAppendIndexScalarRejectsPlatformInt(t *testing.T) {
+	_, _, err := appendIndexScalar(nil, int(42))
+	if err == nil || !strings.Contains(err.Error(), "unsupported indexed value type int") {
+		t.Fatalf("appendIndexScalar(int) err=%v want unsupported int", err)
 	}
 }
 
@@ -183,6 +192,32 @@ func TestOrderedIndexStateForDocumentHandlesScalarAndArrayValues(t *testing.T) {
 	}}, collectionOptions{})
 	if err == nil || !strings.Contains(err.Error(), "array value not allowed") {
 		t.Fatalf("err=%v want array value not allowed", err)
+	}
+}
+
+func TestOrderedIndexStateForDocumentPreservesLargeIntegerNumbers(t *testing.T) {
+	rootRuntime := []indexRuntime{{
+		def:  indexDefinition{name: "big", field: "big"},
+		path: []string{"big"},
+	}}
+	rootState, err := orderedIndexStateForDocument([]byte(`{"big":9007199254740993}`), rootRuntime, collectionOptions{})
+	if err != nil {
+		t.Fatalf("root large int index state: %v", err)
+	}
+	if got, want := rootState.valuesAt(0), [][]byte{[]byte("n:9007199254740993")}; !byteMatrixEqual(got, want) {
+		t.Fatalf("root large int values=%q want %q", got, want)
+	}
+
+	nestedRuntime := []indexRuntime{{
+		def:  indexDefinition{name: "big", field: "nested.big"},
+		path: []string{"nested", "big"},
+	}}
+	nestedState, err := orderedIndexStateForDocument([]byte(`{"nested":{"big":9007199254740993}}`), nestedRuntime, collectionOptions{})
+	if err != nil {
+		t.Fatalf("nested large int index state: %v", err)
+	}
+	if got, want := nestedState.valuesAt(0), [][]byte{[]byte("n:9007199254740993")}; !byteMatrixEqual(got, want) {
+		t.Fatalf("nested large int values=%q want %q", got, want)
 	}
 }
 

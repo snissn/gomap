@@ -1241,6 +1241,103 @@ func TestCollectionDropIndexUpdatesSchema(t *testing.T) {
 	}
 }
 
+func TestCollectionScanDocumentsAndFindByIndexValue(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name:    "users",
+		Indexes: []IndexDefinition{{Name: "city", Field: "city"}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1"), []byte("u2"), []byte("u3")},
+		[][]byte{
+			[]byte(`{"city":"hnl","name":"ada"}`),
+			[]byte(`{"city":"sfo","name":"grace"}`),
+			[]byte(`{"city":"hnl","name":"katherine"}`),
+		},
+	); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+
+	ids, err := col.FindByIndexValue("city", "hnl")
+	if err != nil {
+		t.Fatalf("find by index value: %v", err)
+	}
+	if len(ids) != 2 || !bytes.Equal(ids[0], []byte("u1")) || !bytes.Equal(ids[1], []byte("u3")) {
+		t.Fatalf("ids=%q want u1,u3", ids)
+	}
+
+	ids, truncated, err := col.FindByIndexValueLimit("city", "hnl", 1)
+	if err != nil {
+		t.Fatalf("find by index value limit: %v", err)
+	}
+	if !truncated || len(ids) != 1 || !bytes.Equal(ids[0], []byte("u1")) {
+		t.Fatalf("limited ids=%q truncated=%v want u1/true", ids, truncated)
+	}
+
+	records, truncated, err := col.ScanDocuments(10)
+	if err != nil {
+		t.Fatalf("scan documents: %v", err)
+	}
+	if truncated {
+		t.Fatal("scan unexpectedly truncated")
+	}
+	if len(records) != 3 {
+		t.Fatalf("records len=%d want 3", len(records))
+	}
+	if !bytes.Equal(records[0].ID, []byte("u1")) || !bytes.Contains(records[0].Document, []byte(`"ada"`)) {
+		t.Fatalf("first record=%+v", records[0])
+	}
+	records, truncated, err = col.ScanDocuments(1)
+	if err != nil {
+		t.Fatalf("scan limited documents: %v", err)
+	}
+	if !truncated || len(records) != 1 {
+		t.Fatalf("limited scan truncated=%v len=%d want true/1", truncated, len(records))
+	}
+}
+
+func TestCollectionFindByIndexValueMatchesLargeJSONInteger(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name:    "users",
+		Indexes: []IndexDefinition{{Name: "big", Field: "big"}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.Insert([]byte("u1"), []byte(`{"big":9007199254740993}`)); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	ids, err := col.FindByIndexValue("big", int64(9007199254740993))
+	if err != nil {
+		t.Fatalf("find by index value: %v", err)
+	}
+	if len(ids) != 1 || !bytes.Equal(ids[0], []byte("u1")) {
+		t.Fatalf("ids=%q want u1", ids)
+	}
+}
+
 func TestCollectionCreateIndexBackfill_EmptyCollectionUpdatesSchema(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {

@@ -90,44 +90,22 @@ func (s *Server) findResponse(command wire.Document) (wire.Document, error) {
 	if err != nil {
 		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
 	}
-	if filter == nil {
-		return commandError(commandCodeBadValue, "BadValue", "Mongo gateway find currently requires an _id equality filter")
-	}
-	id, err := idEqualityFilterValue(filter, "find")
+	plan, err := parseFindPlan(command, filter)
 	if err != nil {
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}
-	key, err := encodePrimaryKey(id)
-	if err != nil {
-		return commandError(commandCodeBadValue, "BadValue", err.Error())
-	}
-
-	firstBatch := bson.A{}
 	col, err := s.Collections.OpenCollection(name)
-	if err == nil {
-		stored, err := col.Get(key)
-		if err != nil {
-			return commandError(commandCodeBadValue, "BadValue", err.Error())
-		}
-		if len(stored) > 0 {
-			doc, err := storedDocumentToBSON(stored)
-			if err != nil {
-				return commandError(commandCodeBadValue, "BadValue", err.Error())
-			}
-			firstBatch = append(firstBatch, bson.Raw(doc))
-		}
-	} else if !errors.Is(err, collections.ErrCollectionNotFound) {
+	if errors.Is(err, collections.ErrCollectionNotFound) {
+		return marshalCursorResponse(db, collection, bson.A{})
+	}
+	if err != nil {
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}
-
-	return marshalDocument(bson.D{
-		{Key: "cursor", Value: bson.D{
-			{Key: "id", Value: int64(0)},
-			{Key: "ns", Value: db + "." + collection},
-			{Key: "firstBatch", Value: firstBatch},
-		}},
-		{Key: "ok", Value: 1.0},
-	})
+	firstBatch, err := s.executeFind(col, plan)
+	if err != nil {
+		return commandError(commandCodeBadValue, "BadValue", err.Error())
+	}
+	return marshalCursorResponse(db, collection, firstBatch)
 }
 
 func (s *Server) updateResponse(command wire.Document, sequences []wire.DocumentSequence) (wire.Document, error) {
