@@ -460,7 +460,17 @@ func (c *leafRefRewriteCtx) applySystemRootCollectionRootReplacements(rootID uin
 	defer batch.Release(delta)
 	delta.Reserve(len(replacements))
 	for _, replacement := range replacements {
+		if c.ctx != nil {
+			if err := c.ctx.Err(); err != nil {
+				return rootID, false, err
+			}
+		}
 		if err := delta.Set(replacement.key, replacement.value); err != nil {
+			return rootID, false, err
+		}
+	}
+	if c.ctx != nil {
+		if err := c.ctx.Err(); err != nil {
 			return rootID, false, err
 		}
 	}
@@ -584,7 +594,7 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 		leafCtx.leafScratch = make([]byte, 0, page.PageSize)
 	}
 
-	descriptors, err := vacuumCollectCollectionRootDescriptors(idx.pager, &snap.reader, sysRoot)
+	descriptors, err := vacuumCollectCollectionRootDescriptorsWithContext(ctx, idx.pager, &snap.reader, sysRoot)
 	if err != nil {
 		return 0, 0, fmt.Errorf("vlog-rewrite: collect collection root descriptors: %w", err)
 	}
