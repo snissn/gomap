@@ -50,20 +50,45 @@ func TestReadMatrixIndexRejectsEscapingRelativeReportPath(t *testing.T) {
 	}
 }
 
-func TestReadMatrixIndexRejectsAbsoluteReportPath(t *testing.T) {
+func TestReadMatrixIndexAllowsAbsoluteReportPathInsideMatrixDir(t *testing.T) {
 	dir := t.TempDir()
 	indexPath := filepath.Join(dir, "matrix_index.tsv")
+	reportMarkdown := filepath.Join(dir, "collections_report.md")
 	index := strings.Join([]string{
 		"cell\tengine\tdocument_format\tdata_outer_leaves_in_vlog\tindex_outer_leaves_in_vlog\tpager_chunk_size\tpager_sync_concurrency\treport_md\treport_json",
-		"cell_a\tproduction_fast\tjson\ttrue\ttrue\tprofile/default\tprofile/default\t" + filepath.Join(dir, "collections_report.md") + "\tcell_a/collections_report.json",
+		"cell_a\tproduction_fast\tjson\ttrue\ttrue\tprofile/default\tprofile/default\t" + reportMarkdown + "\tcell_a/collections_report.json",
+	}, "\n")
+	if err := os.WriteFile(indexPath, []byte(index), 0o644); err != nil {
+		t.Fatalf("write matrix index: %v", err)
+	}
+
+	rows, err := readMatrixIndex(indexPath)
+	if err != nil {
+		t.Fatalf("readMatrixIndex: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("rows=%d want 1", len(rows))
+	}
+	if got := rows[0].ReportMarkdownPath; got != reportMarkdown {
+		t.Fatalf("ReportMarkdownPath=%q want %q", got, reportMarkdown)
+	}
+}
+
+func TestReadMatrixIndexRejectsAbsoluteReportPathOutsideMatrixDir(t *testing.T) {
+	dir := t.TempDir()
+	indexPath := filepath.Join(dir, "matrix_index.tsv")
+	outside := filepath.Join(filepath.Dir(dir), "collections_report.md")
+	index := strings.Join([]string{
+		"cell\tengine\tdocument_format\tdata_outer_leaves_in_vlog\tindex_outer_leaves_in_vlog\tpager_chunk_size\tpager_sync_concurrency\treport_md\treport_json",
+		"cell_a\tproduction_fast\tjson\ttrue\ttrue\tprofile/default\tprofile/default\t" + outside + "\tcell_a/collections_report.json",
 	}, "\n")
 	if err := os.WriteFile(indexPath, []byte(index), 0o644); err != nil {
 		t.Fatalf("write matrix index: %v", err)
 	}
 
 	_, err := readMatrixIndex(indexPath)
-	if err == nil || !strings.Contains(err.Error(), "absolute artifact path") {
-		t.Fatalf("readMatrixIndex err=%v want absolute path rejection", err)
+	if err == nil || !strings.Contains(err.Error(), "escapes matrix directory") {
+		t.Fatalf("readMatrixIndex err=%v want escape rejection", err)
 	}
 }
 

@@ -323,14 +323,16 @@ func matrixIndexArtifactPath(baseDir, artifactPath string) (string, error) {
 	if artifactPath == "" {
 		return "", fmt.Errorf("artifact path is empty")
 	}
-	if filepath.IsAbs(artifactPath) {
-		return "", fmt.Errorf("absolute artifact path %q is not allowed in matrix index", artifactPath)
-	}
-	if filepath.VolumeName(artifactPath) != "" {
-		return "", fmt.Errorf("volume-qualified artifact path %q is not allowed in matrix index", artifactPath)
-	}
 	baseDir = filepath.Clean(baseDir)
-	joined := filepath.Clean(filepath.Join(baseDir, artifactPath))
+	var joined string
+	if filepath.IsAbs(artifactPath) {
+		joined = filepath.Clean(artifactPath)
+	} else {
+		if filepath.VolumeName(artifactPath) != "" {
+			return "", fmt.Errorf("volume-qualified artifact path %q is not allowed in matrix index", artifactPath)
+		}
+		joined = filepath.Clean(filepath.Join(baseDir, artifactPath))
+	}
 	rel, err := filepath.Rel(baseDir, joined)
 	if err != nil {
 		return "", fmt.Errorf("resolve artifact path %q: %w", artifactPath, err)
