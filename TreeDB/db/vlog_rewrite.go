@@ -2299,19 +2299,27 @@ func (db *DB) applyRewriteSwapBatchToSystemRoot(swaps []rewriteSwap, sync bool) 
 	db.mu.RLock()
 	userRoot := db.meta.UserRootPageID
 	systemRoot := db.meta.SystemRootPageID
+	baseSeq := db.meta.CommitSeq
 	db.mu.RUnlock()
 	if systemRoot == 0 {
 		return nil
 	}
 
 	systemOpts := systemRootOrderedPublishOptions(db)
-	newSystemRoot, retired, metrics, touched, changed, err := db.applyRewriteSwapsToRootLocked(idx, state, systemRoot, systemOpts, swaps)
+	trackValueLogRefDelta := db.canTrackRewriteValueLogRefDelta(baseSeq, systemOpts.outerLeavesInValueLog)
+	newSystemRoot, retired, metrics, touched, vlogRefDelta, changed, err := db.applyRewriteSwapsToRootLocked(idx, state, systemRoot, systemOpts, swaps, trackValueLogRefDelta)
 	if err != nil || !changed {
 		return err
 	}
-	if err := db.finalizeCommit(userRoot, newSystemRoot, retired, sync, metrics, touched, systemOpts.outerLeavesInValueLog, nil, nil, nil); err != nil {
+	defer func() {
+		if vlogRefDelta != nil {
+			releaseValueLogRefDelta(vlogRefDelta)
+		}
+	}()
+	if err := db.finalizeCommit(userRoot, newSystemRoot, retired, sync, metrics, touched, systemOpts.outerLeavesInValueLog, vlogRefDelta, nil, nil); err != nil {
 		return err
 	}
+	vlogRefDelta = nil
 	db.clearLeafGenerationReachabilityCaches()
 	return nil
 }
@@ -2342,6 +2350,7 @@ func (db *DB) applyRewriteSwapBatchToCollectionRoot(descriptorKey []byte, storag
 	db.mu.RLock()
 	userRoot := db.meta.UserRootPageID
 	systemRoot := db.meta.SystemRootPageID
+	baseSeq := db.meta.CommitSeq
 	db.mu.RUnlock()
 	if systemRoot == 0 {
 		return nil
@@ -2356,14 +2365,21 @@ func (db *DB) applyRewriteSwapBatchToCollectionRoot(descriptorKey []byte, storag
 	if err != nil {
 		return err
 	}
-	newCollectionRoot, retired, metrics, touched, changed, err := db.applyRewriteSwapsToRootLocked(idx, state, collectionRoot, rootOpts, swaps)
+	trackValueLogRefDelta := db.canTrackRewriteValueLogRefDelta(baseSeq, rootOpts.outerLeavesInValueLog)
+	newCollectionRoot, retired, metrics, touched, vlogRefDelta, changed, err := db.applyRewriteSwapsToRootLocked(idx, state, collectionRoot, rootOpts, swaps, trackValueLogRefDelta)
 	if err != nil || !changed {
 		return err
 	}
+	defer func() {
+		if vlogRefDelta != nil {
+			releaseValueLogRefDelta(vlogRefDelta)
+		}
+	}()
 	if newCollectionRoot == collectionRoot {
-		if err := db.finalizeCommit(userRoot, systemRoot, retired, sync, metrics, touched, rootOpts.outerLeavesInValueLog, nil, nil, nil); err != nil {
+		if err := db.finalizeCommit(userRoot, systemRoot, retired, sync, metrics, touched, rootOpts.outerLeavesInValueLog, vlogRefDelta, nil, nil); err != nil {
 			return err
 		}
+		vlogRefDelta = nil
 		db.clearLeafGenerationReachabilityCaches()
 		return nil
 	}
@@ -2384,39 +2400,48 @@ func (db *DB) applyRewriteSwapBatchToCollectionRoot(descriptorKey []byte, storag
 	retired = append(retired, systemRetired...)
 	mergeOrderedRootPublishMetrics(&metrics, systemMetrics)
 	forceValueLogRefresh := rootOpts.outerLeavesInValueLog || systemOpts.outerLeavesInValueLog
-	if err := db.finalizeCommit(userRoot, newSystemRoot, retired, sync, metrics, touched, forceValueLogRefresh, nil, nil, nil); err != nil {
+	if err := db.finalizeCommit(userRoot, newSystemRoot, retired, sync, metrics, touched, forceValueLogRefresh, vlogRefDelta, nil, nil); err != nil {
 		return err
 	}
+	vlogRefDelta = nil
 	db.clearLeafGenerationReachabilityCaches()
 	return nil
 }
 
-func (db *DB) applyRewriteSwapsToRootLocked(idx *indexGen, state *DBState, rootID uint64, opts orderedRootPublishOptions, swaps []rewriteSwap) (uint64, []uint64, adaptive.Metrics, []uint32, bool, error) {
+func (db *DB) applyRewriteSwapsToRootLocked(idx *indexGen, state *DBState, rootID uint64, opts orderedRootPublishOptions, swaps []rewriteSwap, trackValueLogRefDelta bool) (uint64, []uint64, adaptive.Metrics, []uint32, *valueLogRefDelta, bool, error) {
 	var metrics adaptive.Metrics
 	if len(swaps) == 0 || rootID == 0 {
-		return rootID, nil, metrics, nil, false, nil
+		return rootID, nil, metrics, nil, nil, false, nil
 	}
 	tr := tree.New(idx.pager, newValueReader(state.ValueLogSet), rootID)
 	b := batch.Acquire(db.valueLogManager, db.InlineThreshold())
 	defer batch.Release(b)
 	b.Reserve(len(swaps))
-	if _, err := collectRewriteSwapPointerMatches(tr, b, swaps, false); err != nil {
-		return rootID, nil, metrics, nil, false, err
+	vlogRefDelta, err := collectRewriteSwapPointerMatches(tr, b, swaps, trackValueLogRefDelta)
+	if err != nil {
+		return rootID, nil, metrics, nil, nil, false, err
 	}
 	if len(b.SortedEntries()) == 0 {
-		return rootID, nil, metrics, nil, false, nil
+		releaseValueLogRefDelta(vlogRefDelta)
+		return rootID, nil, metrics, nil, nil, false, nil
 	}
 	noteRewriteSwapTouchedSegments(b, swaps)
 	touched := append([]uint32(nil), b.TouchedValueLogSegments()...)
 	rootZipper, err := db.orderedRootZipperForOptions(idx, opts)
 	if err != nil {
-		return rootID, nil, metrics, nil, false, err
+		releaseValueLogRefDelta(vlogRefDelta)
+		return rootID, nil, metrics, nil, nil, false, err
 	}
 	newRoot, retired, metrics, err := rootZipper.Apply(rootID, b)
 	if err != nil {
-		return rootID, nil, metrics, nil, false, err
+		releaseValueLogRefDelta(vlogRefDelta)
+		return rootID, nil, metrics, nil, nil, false, err
 	}
-	return newRoot, retired, metrics, touched, true, nil
+	return newRoot, retired, metrics, touched, vlogRefDelta, true, nil
+}
+
+func (db *DB) canTrackRewriteValueLogRefDelta(baseSeq uint64, outerLeavesInValueLog bool) bool {
+	return db != nil && db.valueLogRefTracker != nil && db.valueLogRefTracker.canTrack(baseSeq) && !outerLeavesInValueLog
 }
 
 func lookupCollectionRootDescriptorAliases(p *pager.Pager, reader tree.SlabReader, systemRootID uint64, key []byte) (uint64, [][]byte, bool, error) {
@@ -2479,7 +2504,7 @@ func (db *DB) applyRewriteSwapBatchOptimistic(swaps []rewriteSwap, sync bool) (b
 	defer batch.Release(b)
 	b.Reserve(len(swaps))
 
-	trackValueLogRefDelta := db.valueLogRefTracker != nil && db.valueLogRefTracker.canTrack(baseSeq) && !db.indexOuterLeavesInValueLog
+	trackValueLogRefDelta := db.canTrackRewriteValueLogRefDelta(baseSeq, db.indexOuterLeavesInValueLog)
 	rewriteDelta, err := collectRewriteSwapPointerMatches(tr, b, swaps, trackValueLogRefDelta)
 	if err != nil {
 		return false, err
@@ -2571,7 +2596,7 @@ func (db *DB) applyRewriteSwapBatchSerialized(swaps []rewriteSwap, sync bool) er
 	defer batch.Release(b)
 	b.Reserve(len(swaps))
 
-	trackValueLogRefDelta := db.valueLogRefTracker != nil && db.valueLogRefTracker.canTrack(baseSeq) && !db.indexOuterLeavesInValueLog
+	trackValueLogRefDelta := db.canTrackRewriteValueLogRefDelta(baseSeq, db.indexOuterLeavesInValueLog)
 	rewriteDelta, err := collectRewriteSwapPointerMatches(tr, b, swaps, trackValueLogRefDelta)
 	if err != nil {
 		return err

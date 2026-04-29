@@ -532,6 +532,7 @@ func TestValueLogRewriteOnline_RewritesCollectionRootPointers(t *testing.T) {
 		return bytes.Repeat([]byte("collection-online-pointer-live|"), 32)
 	})[0]
 	publishCollectionPointerRoot(t, db, maintenanceTestCollectionRootKey, ptr)
+	primeValueLogRefTracker(t, db)
 
 	stats, err := db.ValueLogRewriteOnline(context.Background(), ValueLogRewriteOnlineOptions{
 		SourceFileIDs: []uint32{ptr.FileID},
@@ -559,12 +560,72 @@ func TestValueLogRewriteOnline_RewritesCollectionRootPointers(t *testing.T) {
 	if newPtr.FileID == ptr.FileID {
 		t.Fatalf("collection pointer still references source segment %d", ptr.FileID)
 	}
+	trackerRefs := requireValueLogRefTrackerValid(t, db)
+	if _, ok := trackerRefs[ptr.FileID]; ok {
+		t.Fatalf("value-log ref tracker still references source segment %d: %v", ptr.FileID, trackerRefs)
+	}
+	if _, ok := trackerRefs[newPtr.FileID]; !ok {
+		t.Fatalf("value-log ref tracker missing rewritten segment %d: %v", newPtr.FileID, trackerRefs)
+	}
 	referenced, err := db.referencedValueLogSegments(context.Background())
 	if err != nil {
 		t.Fatalf("referencedValueLogSegments: %v", err)
 	}
 	if _, ok := referenced[ptr.FileID]; ok {
 		t.Fatalf("source segment %d remains referenced after collection rewrite: %v", ptr.FileID, referenced)
+	}
+}
+
+func TestValueLogRewriteOnline_PreservesRefTrackerForSystemRootPointers(t *testing.T) {
+	dir := t.TempDir()
+
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer closeNoErr(t, db)
+
+	ptr := appendPointersInNewSegment(t, dir, 0, 1, 512_000, 1, func(int) []byte {
+		return bytes.Repeat([]byte("system-online-pointer-live|"), 32)
+	})[0]
+	if _, err := db.PublishSystemRootIterator(mustFrozenSystemPointerMemtable(t, "sys/p", ptr).NewIterator(nil, nil)); err != nil {
+		t.Fatalf("publish system pointer root: %v", err)
+	}
+	primeValueLogRefTracker(t, db)
+
+	stats, err := db.ValueLogRewriteOnline(context.Background(), ValueLogRewriteOnlineOptions{
+		SourceFileIDs: []uint32{ptr.FileID},
+		BatchSize:     1,
+	})
+	if err != nil {
+		t.Fatalf("ValueLogRewriteOnline: %v", err)
+	}
+	if stats.RecordsCopied != 1 {
+		t.Fatalf("expected one system pointer record to be copied, stats=%+v", stats)
+	}
+
+	snap := db.AcquireSnapshot()
+	if snap == nil || snap.State() == nil {
+		t.Fatal("expected snapshot")
+	}
+	entry, err := snap.GetEntryAtRoot(snap.State().SystemRootPageID, []byte("sys/p"))
+	if err != nil {
+		_ = snap.Close()
+		t.Fatalf("read system pointer: %v", err)
+	}
+	_ = snap.Close()
+	if entry.Flags&node.FlagPointer == 0 {
+		t.Fatalf("system entry flags=%#x want pointer", entry.Flags)
+	}
+	if entry.ValuePtr.FileID == ptr.FileID {
+		t.Fatalf("system pointer still references source segment %d", ptr.FileID)
+	}
+	trackerRefs := requireValueLogRefTrackerValid(t, db)
+	if _, ok := trackerRefs[ptr.FileID]; ok {
+		t.Fatalf("value-log ref tracker still references source segment %d: %v", ptr.FileID, trackerRefs)
+	}
+	if _, ok := trackerRefs[entry.ValuePtr.FileID]; !ok {
+		t.Fatalf("value-log ref tracker missing rewritten system segment %d: %v", entry.ValuePtr.FileID, trackerRefs)
 	}
 }
 
@@ -4605,6 +4666,27 @@ func readCollectionProjectedPointerByKey(t *testing.T, db *DB, descriptorKey str
 	}
 	t.Fatalf("missing collection key %q in projection iterator", key)
 	return page.ValuePtr{}, 0
+}
+
+func primeValueLogRefTracker(t *testing.T, db *DB) {
+	t.Helper()
+	if _, err := db.referencedValueLogSegments(context.Background()); err != nil {
+		t.Fatalf("prime value-log ref tracker: %v", err)
+	}
+	requireValueLogRefTrackerValid(t, db)
+}
+
+func requireValueLogRefTrackerValid(t *testing.T, db *DB) map[uint32]struct{} {
+	t.Helper()
+	if db == nil || db.valueLogRefTracker == nil {
+		t.Fatal("missing value-log ref tracker")
+	}
+	seq := db.currentCommitSeq()
+	refs, ok := db.valueLogRefTracker.referencedSet(seq)
+	if !ok {
+		t.Fatalf("expected value-log ref tracker to remain valid at seq=%d", seq)
+	}
+	return refs
 }
 
 func leafLogSegmentPath(t *testing.T, dir string, fileID uint32) string {
