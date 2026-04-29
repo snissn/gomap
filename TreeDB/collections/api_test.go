@@ -485,24 +485,27 @@ func chooseStandaloneValueLogSegmentStart(t *testing.T, valueDir string) (uint32
 	defer func() { _ = mgr.Close() }()
 	set := mgr.CurrentSet()
 	defer func() { _ = mgr.Release(set) }()
-	lane, startSeq, ok := chooseStandaloneValueLogSegmentStartFromSet(set)
-	if !ok {
-		t.Fatal("no value-log lane hint available for standalone GC segment")
-	}
+	lane, startSeq := chooseStandaloneValueLogSegmentStartFromSet(set)
 	if startSeq >= ^uint32(0)-1 {
 		t.Fatalf("value-log lane %d sequence exhausted near %d", lane, startSeq)
 	}
 	return lane, startSeq + 1
 }
 
-func chooseStandaloneValueLogSegmentStartFromSet(set *valuelog.Set) (uint32, uint32, bool) {
+func chooseStandaloneValueLogSegmentStartFromSet(set *valuelog.Set) (uint32, uint32) {
 	maxSeqByLane := make(map[uint32]uint32)
 	usedLane := make(map[uint32]struct{})
+	var maxObservedLane uint32
+	haveObservedLane := false
 	if set != nil {
 		for fileID := range set.Files {
 			lane, seq := valuelog.DecodeFileID(fileID)
 			if lane == valuelog.ReservedLeafLogLaneID {
 				continue
+			}
+			if !haveObservedLane || lane > maxObservedLane {
+				maxObservedLane = lane
+				haveObservedLane = true
 			}
 			usedLane[lane] = struct{}{}
 			if seq > maxSeqByLane[lane] {
@@ -513,14 +516,18 @@ func chooseStandaloneValueLogSegmentStartFromSet(set *valuelog.Set) (uint32, uin
 	if valuelog.ReservedLeafLogLaneID > 0 {
 		for lane := uint32(valuelog.ReservedLeafLogLaneID - 1); ; lane-- {
 			if _, used := usedLane[lane]; !used {
-				return lane, 0, true
+				return lane, 0
 			}
 			if lane == 0 {
 				break
 			}
 		}
+		return 0, maxSeqByLane[0]
 	}
-	return 0, maxSeqByLane[0], true
+	if !haveObservedLane || maxObservedLane == ^uint32(0) {
+		return 1, 0
+	}
+	return maxObservedLane + 1, 0
 }
 
 func TestChooseStandaloneValueLogSegmentStartFromSetSkipsReservedLeafLane(t *testing.T) {
@@ -537,10 +544,7 @@ func TestChooseStandaloneValueLogSegmentStartFromSetSkipsReservedLeafLane(t *tes
 		userID: &valuelog.File{ID: userID},
 	}}
 
-	lane, seq, ok := chooseStandaloneValueLogSegmentStartFromSet(set)
-	if !ok {
-		t.Fatal("chooseStandaloneValueLogSegmentStartFromSet ok=false")
-	}
+	lane, seq := chooseStandaloneValueLogSegmentStartFromSet(set)
 	if want := uint32(valuelog.ReservedLeafLogLaneID - 2); lane != want || seq != 0 {
 		t.Fatalf("lane=%d seq=%d want lane=%d seq=0", lane, seq, want)
 	}
@@ -560,10 +564,7 @@ func TestChooseStandaloneValueLogSegmentStartFromSetFallsBackToLaneZero(t *testi
 		files[id] = &valuelog.File{ID: id}
 	}
 
-	lane, seq, ok := chooseStandaloneValueLogSegmentStartFromSet(&valuelog.Set{Files: files})
-	if !ok {
-		t.Fatal("chooseStandaloneValueLogSegmentStartFromSet ok=false")
-	}
+	lane, seq := chooseStandaloneValueLogSegmentStartFromSet(&valuelog.Set{Files: files})
 	if lane != 0 || seq != 9 {
 		t.Fatalf("lane=%d seq=%d want lane=0 seq=9", lane, seq)
 	}
@@ -578,10 +579,7 @@ func TestChooseStandaloneValueLogSegmentStartFromSetTracksSeqZero(t *testing.T) 
 		fileID: {ID: fileID},
 	}}
 
-	lane, seq, ok := chooseStandaloneValueLogSegmentStartFromSet(set)
-	if !ok {
-		t.Fatal("chooseStandaloneValueLogSegmentStartFromSet ok=false")
-	}
+	lane, seq := chooseStandaloneValueLogSegmentStartFromSet(set)
 	if want := uint32(valuelog.ReservedLeafLogLaneID - 2); lane != want || seq != 0 {
 		t.Fatalf("lane=%d seq=%d want lane=%d seq=0", lane, seq, want)
 	}
@@ -607,6 +605,8 @@ func requireCollectionMaintenanceReads(t *testing.T, col *Collection) {
 	if err != nil {
 		t.Fatalf("find city: %v", err)
 	}
+	// Nonunique index result order is intentionally not part of these
+	// maintenance smoke-test assertions.
 	collectionMaintenanceRequireIDs(t, cityIDs, []byte("u1"), []byte("u2"))
 }
 
