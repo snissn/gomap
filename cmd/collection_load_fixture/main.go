@@ -343,7 +343,7 @@ func parseConfig(args []string, output io.Writer) (config, error) {
 	fs.BoolVar(&cfg.LeafGenerationPackForce, "leafgen-pack-force", false, "force leaf-generation pack selection when -leafgen-pack-gc is enabled")
 	fs.IntVar(&cfg.LeafGenerationPackMaxGen, "leafgen-pack-max-generations", cfg.LeafGenerationPackMaxGen, "max leaf generations to pack per run when -leafgen-pack-gc is enabled (0 means no limit)")
 	fs.IntVar(&cfg.LeafGenerationPackFrameK, "leafgen-pack-frame-k", cfg.LeafGenerationPackFrameK, "leaf pages per grouped output frame during leafgen pack (0 uses engine default)")
-	fs.StringVar(&cfg.IndexVacuum, "index-vacuum", cfg.IndexVacuum, "run index vacuum after loading: auto, none, online, or offline")
+	fs.StringVar(&cfg.IndexVacuum, "index-vacuum", cfg.IndexVacuum, "run index vacuum after loading: auto, none, online, or offline (auto uses none unless -vlog-rewrite or -leafgen-pack-gc is enabled)")
 	fs.BoolVar(&cfg.Progress, "progress", cfg.Progress, "print load progress to stderr")
 	fs.BoolVar(&cfg.JSONOutput, "json", false, "print summary as JSON")
 	fs.StringVar(&cfg.CPUProfile, "cpuprofile", "", "write CPU profile to this path")
@@ -564,11 +564,18 @@ func runFixture(cfg config) (loadSummary, error) {
 
 	verify := verifySummary{Enabled: cfg.ReopenVerify}
 	if cfg.ReopenVerify {
+		verifyReadOnly := reopenVerifyReadOnly(cfg)
 		samples, err := verifyReopen(cfg)
 		if err != nil {
 			return loadSummary{}, err
 		}
 		verify.Samples = samples
+		if !verifyReadOnly {
+			finalUsage, err = directoryUsage(cfg.Dir, cfg.Docs)
+			if err != nil {
+				return loadSummary{}, err
+			}
+		}
 	}
 
 	if err := writeMemProfile(cfg.MemProfile); err != nil {

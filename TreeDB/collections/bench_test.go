@@ -2,6 +2,7 @@ package collections_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -392,6 +393,10 @@ func benchmarkReportTreeDBPostMaintenanceIndexVacuum(b *testing.B, backend *back
 
 	vacuumStart := time.Now()
 	if err := backend.VacuumIndexOnline(context.Background()); err != nil {
+		if errors.Is(err, backenddb.ErrVacuumUnsupported) {
+			b.Logf("TreeDB index vacuum after %s unsupported on this platform; skipping post-maintenance vacuum metrics", metricPrefix)
+			return afterGCBytes
+		}
 		b.Fatalf("TreeDB index vacuum after %s: %v", metricPrefix, err)
 	}
 	vacuumElapsed := time.Since(vacuumStart)
