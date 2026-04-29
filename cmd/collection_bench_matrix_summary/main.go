@@ -294,26 +294,45 @@ func readMatrixIndex(path string) ([]matrixRow, error) {
 				documentFormat = "json"
 			}
 		}
+		cell := field(record, header["cell"])
+		reportMarkdownPath, err := matrixIndexArtifactPath(baseDir, field(record, header["report_md"]))
+		if err != nil {
+			return nil, fmt.Errorf("matrix index cell %q report_md: %w", cell, err)
+		}
+		reportJSONPath, err := matrixIndexArtifactPath(baseDir, field(record, header["report_json"]))
+		if err != nil {
+			return nil, fmt.Errorf("matrix index cell %q report_json: %w", cell, err)
+		}
 		rows = append(rows, matrixRow{
-			Cell:                   field(record, header["cell"]),
+			Cell:                   cell,
 			Engine:                 field(record, header["engine"]),
 			DocumentFormat:         documentFormat,
 			DataOuterLeavesInVLog:  field(record, header["data_outer_leaves_in_vlog"]),
 			IndexOuterLeavesInVLog: field(record, header["index_outer_leaves_in_vlog"]),
 			PagerChunkSize:         field(record, header["pager_chunk_size"]),
 			PagerSyncConcurrency:   field(record, header["pager_sync_concurrency"]),
-			ReportMarkdownPath:     matrixIndexArtifactPath(baseDir, field(record, header["report_md"])),
-			ReportJSONPath:         matrixIndexArtifactPath(baseDir, field(record, header["report_json"])),
+			ReportMarkdownPath:     reportMarkdownPath,
+			ReportJSONPath:         reportJSONPath,
 		})
 	}
 	return rows, nil
 }
 
-func matrixIndexArtifactPath(baseDir, artifactPath string) string {
-	if strings.TrimSpace(artifactPath) == "" || filepath.IsAbs(artifactPath) {
-		return artifactPath
+func matrixIndexArtifactPath(baseDir, artifactPath string) (string, error) {
+	artifactPath = strings.TrimSpace(artifactPath)
+	if artifactPath == "" || filepath.IsAbs(artifactPath) {
+		return artifactPath, nil
 	}
-	return filepath.Join(baseDir, artifactPath)
+	baseDir = filepath.Clean(baseDir)
+	joined := filepath.Clean(filepath.Join(baseDir, artifactPath))
+	rel, err := filepath.Rel(baseDir, joined)
+	if err != nil {
+		return "", fmt.Errorf("resolve artifact path %q: %w", artifactPath, err)
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) || filepath.IsAbs(rel) {
+		return "", fmt.Errorf("relative artifact path %q escapes matrix directory", artifactPath)
+	}
+	return joined, nil
 }
 
 func field(record []string, idx int) string {

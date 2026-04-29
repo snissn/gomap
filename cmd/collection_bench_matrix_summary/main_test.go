@@ -33,6 +33,23 @@ func TestReadMatrixIndexResolvesRelativeReportPaths(t *testing.T) {
 	}
 }
 
+func TestReadMatrixIndexRejectsEscapingRelativeReportPath(t *testing.T) {
+	dir := t.TempDir()
+	indexPath := filepath.Join(dir, "matrix_index.tsv")
+	index := strings.Join([]string{
+		"cell\tengine\tdocument_format\tdata_outer_leaves_in_vlog\tindex_outer_leaves_in_vlog\tpager_chunk_size\tpager_sync_concurrency\treport_md\treport_json",
+		"cell_a\tproduction_fast\tjson\ttrue\ttrue\tprofile/default\tprofile/default\t../outside.md\tcell_a/collections_report.json",
+	}, "\n")
+	if err := os.WriteFile(indexPath, []byte(index), 0o644); err != nil {
+		t.Fatalf("write matrix index: %v", err)
+	}
+
+	_, err := readMatrixIndex(indexPath)
+	if err == nil || !strings.Contains(err.Error(), "escapes matrix directory") {
+		t.Fatalf("readMatrixIndex err=%v want escape rejection", err)
+	}
+}
+
 func TestMatrixSummaryRendersBenchmarkMetrics(t *testing.T) {
 	dir := t.TempDir()
 	cellDir := filepath.Join(dir, "production_fast_data_vlog_index_leaf")

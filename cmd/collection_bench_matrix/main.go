@@ -138,6 +138,12 @@ func parseFlags(args []string) (config, error) {
 	if cfg.batchSize <= 0 {
 		return config{}, fmt.Errorf("-batch-size must be positive")
 	}
+	if cfg.pagerChunkSize < 0 {
+		return config{}, fmt.Errorf("-pager-chunk-size must be >= 0")
+	}
+	if cfg.pagerSyncConcurrency < 0 {
+		return config{}, fmt.Errorf("-pager-sync-concurrency must be >= 0")
+	}
 	if cfg.leafSegmentTargetBytes < 0 {
 		return config{}, fmt.Errorf("-leaf-segment-target-bytes must be >= 0")
 	}
@@ -175,6 +181,11 @@ func run(cfg config, commandLine []string) error {
 	if cfg.outDir == "" {
 		cfg.outDir = defaultOutputDir(time.Now().UTC())
 	}
+	absOutDir, err := filepath.Abs(cfg.outDir)
+	if err != nil {
+		return fmt.Errorf("resolve output directory %q: %w", cfg.outDir, err)
+	}
+	cfg.outDir = absOutDir
 	if !cfg.dryRun {
 		if err := os.MkdirAll(cfg.outDir, 0o755); err != nil {
 			return fmt.Errorf("create output directory: %w", err)

@@ -114,6 +114,17 @@ func TestBuildMatrixCellsRejectsDuplicateNames(t *testing.T) {
 	}
 }
 
+func TestParseFlagsRejectsNegativePagerOverrides(t *testing.T) {
+	for _, args := range [][]string{
+		{"-out-dir", t.TempDir(), "-pager-chunk-size", "-1"},
+		{"-out-dir", t.TempDir(), "-pager-sync-concurrency", "-1"},
+	} {
+		if _, err := parseFlags(args); err == nil {
+			t.Fatalf("parseFlags(%v) succeeded, want error", args)
+		}
+	}
+}
+
 func TestGoTestArgsIncludeSQLiteTagsOnlyForSQLiteCell(t *testing.T) {
 	cfg, err := parseFlags([]string{"-out-dir", t.TempDir(), "-benchtime", "10x"})
 	if err != nil {
