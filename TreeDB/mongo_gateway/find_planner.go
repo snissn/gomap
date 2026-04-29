@@ -7,6 +7,7 @@ import (
 	"math"
 	"math/big"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/snissn/gomap/TreeDB/collections"
@@ -154,8 +155,7 @@ func (s *Server) findCandidateDocuments(col *collections.Collection, predicates 
 		}
 		return s.limitCandidateDocuments(docs)
 	}
-	if pred, idx, ok := indexedCandidatePredicate(meta, predicates); ok {
-		docs, err := documentsForIndexedPredicate(col, pred, idx)
+	if docs, ok, err := s.bestIndexedCandidateDocuments(col, meta, predicates); ok || err != nil {
 		if err != nil {
 			return nil, err
 		}
@@ -184,6 +184,34 @@ func (s *Server) limitCandidateDocuments(docs []wire.Document) ([]wire.Document,
 		return nil, fmt.Errorf("Mongo gateway find candidate set exceeded %d documents", s.maxFindScanDocuments())
 	}
 	return docs, nil
+}
+
+func (s *Server) bestIndexedCandidateDocuments(col *collections.Collection, meta collections.CollectionMeta, predicates []findPredicate) ([]wire.Document, bool, error) {
+	var best []wire.Document
+	bestSet := false
+	for _, pred := range predicates {
+		if pred.op != findPredicateEq && pred.op != findPredicateIn {
+			continue
+		}
+		if predicateContainsNull(pred) {
+			continue
+		}
+		for _, idx := range meta.Indexes {
+			if idx.Field != pred.field {
+				continue
+			}
+			docs, err := documentsForIndexedPredicate(col, pred, idx)
+			if err != nil {
+				return nil, false, err
+			}
+			if !bestSet || len(docs) < len(best) {
+				best = docs
+				bestSet = true
+			}
+			break
+		}
+	}
+	return best, bestSet, nil
 }
 
 func primaryCandidatePredicate(predicates []findPredicate) (findPredicate, bool) {
@@ -424,16 +452,29 @@ func rangeOperator(op string) findPredicateOp {
 
 func documentMatchesPredicates(doc wire.Document, predicates []findPredicate) (bool, error) {
 	for _, pred := range predicates {
-		value, ok := lookupDocumentValue(doc, pred.field)
+		values, ok, err := lookupDocumentPredicateValues(doc, pred.field)
+		if err != nil {
+			return false, err
+		}
 		if !ok {
 			if missingValueMatchesPredicate(pred) {
 				continue
 			}
 			return false, nil
 		}
-		match, err := valueMatchesPredicate(value, pred)
-		if err != nil || !match {
-			return match, err
+		matched := false
+		for _, value := range values {
+			match, err := valueMatchesPredicate(value, pred)
+			if err != nil {
+				return false, err
+			}
+			if match {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return false, nil
 		}
 	}
 	return true, nil
@@ -720,6 +761,85 @@ func lookupDocumentValue(doc wire.Document, field string) (bson.RawValue, bool) 
 		current = next
 	}
 	return bson.RawValue{}, false
+}
+
+func lookupDocumentPredicateValues(doc wire.Document, field string) ([]bson.RawValue, bool, error) {
+	if field == "" {
+		return nil, false, nil
+	}
+	parts := strings.Split(field, ".")
+	return lookupRawValuesForParts(bson.Raw(doc), parts)
+}
+
+func lookupRawValuesForParts(current bson.Raw, parts []string) ([]bson.RawValue, bool, error) {
+	if len(parts) == 0 {
+		return nil, false, nil
+	}
+	value := current.Lookup(parts[0])
+	if value.IsZero() {
+		return nil, false, nil
+	}
+	if len(parts) == 1 {
+		return []bson.RawValue{value}, true, nil
+	}
+	return lookupRawValueDescendants(value, parts[1:])
+}
+
+func lookupRawValueDescendants(value bson.RawValue, parts []string) ([]bson.RawValue, bool, error) {
+	if doc, ok := value.DocumentOK(); ok {
+		return lookupRawValuesForParts(doc, parts)
+	}
+	array, ok := value.ArrayOK()
+	if !ok {
+		return nil, false, nil
+	}
+	values, err := array.Values()
+	if err != nil {
+		return nil, false, err
+	}
+	if index, ok := dottedArrayIndex(parts[0]); ok {
+		if index >= len(values) {
+			return nil, false, nil
+		}
+		if len(parts) == 1 {
+			return []bson.RawValue{values[index]}, true, nil
+		}
+		return lookupRawValueDescendants(values[index], parts[1:])
+	}
+	var out []bson.RawValue
+	for _, item := range values {
+		doc, ok := item.DocumentOK()
+		if !ok {
+			continue
+		}
+		itemValues, itemOK, err := lookupRawValuesForParts(doc, parts)
+		if err != nil {
+			return nil, false, err
+		}
+		if itemOK {
+			out = append(out, itemValues...)
+		}
+	}
+	if len(out) == 0 {
+		return nil, false, nil
+	}
+	return out, true, nil
+}
+
+func dottedArrayIndex(part string) (int, bool) {
+	if part == "" {
+		return 0, false
+	}
+	for _, r := range part {
+		if r < '0' || r > '9' {
+			return 0, false
+		}
+	}
+	index, err := strconv.Atoi(part)
+	if err != nil {
+		return 0, false
+	}
+	return index, true
 }
 
 func rawValuesEqual(left, right bson.RawValue) bool {
