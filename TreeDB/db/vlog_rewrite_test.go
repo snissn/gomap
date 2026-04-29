@@ -556,25 +556,7 @@ func TestValueLogRewriteOffline_RewritesCollectionLeafRefRoot(t *testing.T) {
 		t.Fatalf("publish collection leaf-ref root: %v", err)
 	}
 	oldRoot := rootIDs[0]
-	collectionLeafPtr := func(database *DB, root uint64) page.LeafLogPtr {
-		t.Helper()
-		if leafPtr, ok := page.DecodeLeafRef(root); ok {
-			return leafPtr
-		}
-		children, allLeafRefs, err := vacuumCollectLeafRefChildrenIfComplete(database.Pager(), root)
-		if err != nil {
-			t.Fatalf("collect collection leaf-ref children for root %d: %v", root, err)
-		}
-		if !allLeafRefs || len(children) == 0 {
-			t.Fatalf("collection root=%d want leaf-ref root or leaf-ref children", root)
-		}
-		leafPtr, ok := page.DecodeLeafRef(children[0].childID)
-		if !ok {
-			t.Fatalf("collection child root=%d want leaf ref", children[0].childID)
-		}
-		return leafPtr
-	}
-	oldLeafPtr := collectionLeafPtr(db, oldRoot)
+	oldLeafPtr := requireCollectionLeafPtr(t, db, oldRoot)
 	oldLeafPath := leafLogSegmentPath(t, dir, oldLeafPtr.FileID)
 
 	if err := leafLog.Sync(); err != nil {
@@ -666,25 +648,7 @@ func TestValueLogRewriteOffline_RewritesCollectionLeafRefRootWithPagerDefault(t 
 		t.Fatalf("publish collection leaf-ref root: %v", err)
 	}
 	oldRoot := rootIDs[0]
-	collectionLeafPtr := func(database *DB, root uint64) page.LeafLogPtr {
-		t.Helper()
-		if leafPtr, ok := page.DecodeLeafRef(root); ok {
-			return leafPtr
-		}
-		children, allLeafRefs, err := vacuumCollectLeafRefChildrenIfComplete(database.Pager(), root)
-		if err != nil {
-			t.Fatalf("collect collection leaf-ref children for root %d: %v", root, err)
-		}
-		if !allLeafRefs || len(children) == 0 {
-			t.Fatalf("collection root=%d want leaf-ref root or leaf-ref children", root)
-		}
-		leafPtr, ok := page.DecodeLeafRef(children[0].childID)
-		if !ok {
-			t.Fatalf("collection child root=%d want leaf ref", children[0].childID)
-		}
-		return leafPtr
-	}
-	oldLeafPtr := collectionLeafPtr(db, oldRoot)
+	oldLeafPtr := requireCollectionLeafPtr(t, db, oldRoot)
 	oldLeafPath := leafLogSegmentPath(t, dir, oldLeafPtr.FileID)
 	if err := leafLog.Sync(); err != nil {
 		t.Fatalf("sync leaf log: %v", err)
@@ -717,7 +681,7 @@ func TestValueLogRewriteOffline_RewritesCollectionLeafRefRootWithPagerDefault(t 
 	if newRoot == oldRoot {
 		t.Fatalf("collection descriptor still points at old leaf-ref root %d", oldRoot)
 	}
-	newLeafPtr := collectionLeafPtr(reopen, newRoot)
+	newLeafPtr := requireCollectionLeafPtr(t, reopen, newRoot)
 	if lane, _ := valuelog.DecodeFileID(newLeafPtr.FileID); lane != rewriteLeafLogLaneID {
 		t.Fatalf("rewritten collection leaf file lane=%d want %d", lane, rewriteLeafLogLaneID)
 	}
@@ -4376,6 +4340,25 @@ func readProjectedPointerByKey(t *testing.T, db *DB, key []byte) (page.ValuePtr,
 	}
 	t.Fatalf("missing key %q in projection iterator", key)
 	return page.ValuePtr{}, 0
+}
+
+func requireCollectionLeafPtr(t *testing.T, db *DB, root uint64) page.LeafLogPtr {
+	t.Helper()
+	if leafPtr, ok := page.DecodeLeafRef(root); ok {
+		return leafPtr
+	}
+	children, allLeafRefs, err := vacuumCollectLeafRefChildrenIfComplete(db.Pager(), root)
+	if err != nil {
+		t.Fatalf("collect collection leaf-ref children for root %d: %v", root, err)
+	}
+	if !allLeafRefs || len(children) == 0 {
+		t.Fatalf("collection root=%d want leaf-ref root or leaf-ref children", root)
+	}
+	leafPtr, ok := page.DecodeLeafRef(children[0].childID)
+	if !ok {
+		t.Fatalf("collection child root=%d want leaf ref", children[0].childID)
+	}
+	return leafPtr
 }
 
 func readCollectionRootID(t *testing.T, db *DB, descriptorKey string) uint64 {

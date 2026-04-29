@@ -2536,7 +2536,12 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 	stats.BytesBefore = beforeBytes
 
 	reader := newValueReader(state.ValueLogSet)
-	collectionRootLeafLogUsage, collectionRootsUseLeafLog, err := valueLogRewriteCollectionRootLeafLogUsage(d.Pager(), reader, state.SystemRootPageID)
+	collectionRootDescriptors, err := vacuumCollectCollectionRootDescriptors(d.Pager(), reader, state.SystemRootPageID)
+	if err != nil {
+		_ = d.Close()
+		return stats, fmt.Errorf("vlog-rewrite: collect collection root descriptors: %w", err)
+	}
+	collectionRootLeafLogUsage, collectionRootsUseLeafLog, err := valueLogRewriteCollectionRootLeafLogUsageFromDescriptors(d.Pager(), collectionRootDescriptors)
 	if err != nil {
 		_ = d.Close()
 		return stats, err
@@ -2699,7 +2704,7 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 		return buildTree(root, useLeafLog)
 	}
 
-	collectionRootReplacements, err := valueLogRewriteCollectionRoots(d.Pager(), reader, state.SystemRootPageID, buildCollectionTree)
+	collectionRootReplacements, err := valueLogRewriteCollectionRootsFromDescriptors(collectionRootDescriptors, buildCollectionTree)
 	if err != nil {
 		_ = newPager.Close()
 		_ = d.Close()
@@ -2818,6 +2823,13 @@ func valueLogRewriteCollectionRoots(oldPager *pager.Pager, reader tree.SlabReade
 	if err != nil {
 		return nil, fmt.Errorf("vlog-rewrite: collect collection root descriptors: %w", err)
 	}
+	return valueLogRewriteCollectionRootsFromDescriptors(descriptors, buildTree)
+}
+
+func valueLogRewriteCollectionRootsFromDescriptors(descriptors []vacuumCollectionRootDescriptor, buildTree func(uint64) (uint64, error)) ([]vacuumCollectionRootReplacement, error) {
+	if buildTree == nil {
+		return nil, errors.New("vlog-rewrite: missing collection root builder")
+	}
 	return vacuumRewriteCollectionRootDescriptors(descriptors, func(descriptor vacuumCollectionRootDescriptor) (uint64, error) {
 		return buildTree(descriptor.rootID)
 	}, "vlog-rewrite: rewrite collection root")
@@ -2828,6 +2840,10 @@ func valueLogRewriteCollectionRootLeafLogUsage(oldPager *pager.Pager, reader tre
 	if err != nil {
 		return nil, false, fmt.Errorf("vlog-rewrite: collect collection root descriptors: %w", err)
 	}
+	return valueLogRewriteCollectionRootLeafLogUsageFromDescriptors(oldPager, descriptors)
+}
+
+func valueLogRewriteCollectionRootLeafLogUsageFromDescriptors(oldPager *pager.Pager, descriptors []vacuumCollectionRootDescriptor) (map[uint64]bool, bool, error) {
 	usage := make(map[uint64]bool, len(descriptors))
 	anyLeafLog := false
 	for _, descriptor := range descriptors {
