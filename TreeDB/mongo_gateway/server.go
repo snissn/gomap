@@ -43,7 +43,6 @@ type serverCursor struct {
 	owner      int64
 	docs       []wire.Document
 	projection compiledProjection
-	batchSize  int
 	pos        int
 	lastUsed   time.Time
 }
