@@ -632,7 +632,15 @@ func TestServerFindPlannerIndexedAndBoundedPredicates(t *testing.T) {
 	})
 	assertCommandError(t, unsupportedSort, "BadValue")
 
-	nonIndexableValue := serveCommand(t, server, 244, bson.D{
+	dottedSort := serveCommand(t, server, 244, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{}},
+		{Key: "sort", Value: bson.D{{Key: "profile.name", Value: int32(1)}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, dottedSort, "BadValue")
+
+	nonIndexableValue := serveCommand(t, server, 245, bson.D{
 		{Key: "find", Value: "users"},
 		{Key: "filter", Value: bson.D{{Key: "city", Value: bson.D{{Key: "nested", Value: "hnl"}}}}},
 		{Key: "$db", Value: "app"},
@@ -807,6 +815,44 @@ func TestServerFindChoosesNarrowestIndexedPredicate(t *testing.T) {
 	assertBatchIDs(t, cursorFirstBatch(t, findResponse), []string{"u2"})
 }
 
+func TestServerFindChoosesIndexedPredicateBeforeOversizedPrimaryCandidates(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewServer()
+	server.MaxFindScanDocuments = 1
+	server.Collections = collections.NewCollectionManager(db)
+	assertOK(t, serveCommand(t, server, 256, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{
+			bson.D{{Key: "_id", Value: "u1"}, {Key: "email", Value: "one@example.com"}},
+			bson.D{{Key: "_id", Value: "u2"}, {Key: "email", Value: "target@example.com"}},
+			bson.D{{Key: "_id", Value: "u3"}, {Key: "email", Value: "three@example.com"}},
+		}},
+		{Key: "$db", Value: "app"},
+	}))
+	assertOK(t, serveCommand(t, server, 257, bson.D{
+		{Key: "createIndexes", Value: "users"},
+		{Key: "indexes", Value: bson.A{bson.D{
+			{Key: "key", Value: bson.D{{Key: "email", Value: int32(1)}}},
+			{Key: "name", Value: "email_1"},
+		}}},
+		{Key: "$db", Value: "app"},
+	}))
+	findResponse := serveCommand(t, server, 258, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "$and", Value: bson.A{
+			bson.D{{Key: "_id", Value: bson.D{{Key: "$in", Value: bson.A{"u1", "u2", "u3"}}}}},
+			bson.D{{Key: "email", Value: "target@example.com"}},
+		}}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertBatchIDs(t, cursorFirstBatch(t, findResponse), []string{"u2"})
+}
+
 func TestServerFindDottedArrayPredicates(t *testing.T) {
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
@@ -908,17 +954,23 @@ func TestServerFindRangePredicatesUseTypeBrackets(t *testing.T) {
 }
 
 func TestCompareRawNumbersHandlesNonFiniteDoubles(t *testing.T) {
+	decimal, err := bson.ParseDecimal128("1.50")
+	if err != nil {
+		t.Fatalf("parse decimal: %v", err)
+	}
 	raw := bson.Raw(mustDocument(t, bson.D{
 		{Key: "nan", Value: math.NaN()},
 		{Key: "pos_inf", Value: math.Inf(1)},
 		{Key: "neg_inf", Value: math.Inf(-1)},
 		{Key: "finite", Value: 1.5},
+		{Key: "decimal", Value: decimal},
 		{Key: "large_int", Value: int64(9007199254740993)},
 	}))
 	nanValue := raw.Lookup("nan")
 	posInf := raw.Lookup("pos_inf")
 	negInf := raw.Lookup("neg_inf")
 	finite := raw.Lookup("finite")
+	decimalValue := raw.Lookup("decimal")
 	largeInt := raw.Lookup("large_int")
 
 	if rawValuesEqual(nanValue, finite) {
@@ -932,6 +984,9 @@ func TestCompareRawNumbersHandlesNonFiniteDoubles(t *testing.T) {
 	}
 	if cmp := compareRawValues(negInf, finite); cmp >= 0 {
 		t.Fatalf("-Inf vs finite cmp=%d want <0", cmp)
+	}
+	if cmp := compareRawValues(decimalValue, finite); cmp != 0 {
+		t.Fatalf("Decimal128 vs double cmp=%d want 0", cmp)
 	}
 	scalar, ok := indexScalarForBSONValue(largeInt)
 	if !ok || scalar != int64(9007199254740993) {
