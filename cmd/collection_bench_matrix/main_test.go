@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestBuildMatrixCellsDefaults(t *testing.T) {
@@ -115,6 +116,18 @@ func TestGoTestArgsIncludeSQLiteTagsOnlyForSQLiteCell(t *testing.T) {
 	sqliteArgs := strings.Join(goTestArgs(sqlite, cfg), " ")
 	if !strings.Contains(sqliteArgs, "-tags sqlite_bench") {
 		t.Fatalf("sqlite args missing tags: %s", sqliteArgs)
+	}
+}
+
+func TestDefaultOutputDirIncludesSubsecondEntropy(t *testing.T) {
+	base := time.Date(2026, 4, 28, 12, 30, 45, 1, time.UTC)
+	first := defaultOutputDir(base)
+	second := defaultOutputDir(base.Add(time.Nanosecond))
+	if first == second {
+		t.Fatalf("default output dirs collided: %q", first)
+	}
+	if !strings.Contains(filepath.Base(first), "collection_bench_matrix_20260428_123045_") {
+		t.Fatalf("default output dir missing stable prefix: %q", first)
 	}
 }
 

@@ -215,45 +215,45 @@ type verifySummary struct {
 }
 
 type loadSummary struct {
-	GeneratedAt                   string                `json:"generated_at"`
-	Dir                           string                `json:"dir"`
-	CreatedTempDir                bool                  `json:"created_temp_dir,omitempty"`
-	Collection                    string                `json:"collection"`
-	DocumentFormat                string                `json:"document_format"`
-	Profile                       string                `json:"profile"`
-	Docs                          int                   `json:"docs"`
-	BatchSize                     int                   `json:"batch_size"`
-	Batches                       int                   `json:"batches"`
-	IndexCount                    int                   `json:"index_count"`
-	DataOuterLeavesInValueLog     bool                  `json:"data_outer_leaves_in_value_log"`
-	IndexOuterLeavesInValueLog    bool                  `json:"index_outer_leaves_in_value_log"`
-	ChunkSize                     int64                 `json:"chunk_size,omitempty"`
-	KeepRecent                    uint64                `json:"keep_recent"`
-	PreferAppendAlloc             bool                  `json:"prefer_append_alloc"`
-	PagerSyncConcurrency          int                   `json:"pager_sync_concurrency,omitempty"`
-	DisableBackgroundPrune        bool                  `json:"disable_background_prune,omitempty"`
-	PruneInterval                 string                `json:"prune_interval,omitempty"`
-	PruneMaxPages                 int                   `json:"prune_max_pages,omitempty"`
-	PruneMaxDuration              string                `json:"prune_max_duration,omitempty"`
-	LeafSegmentTargetBytes        int64                 `json:"leaf_segment_target_bytes,omitempty"`
-	WallTiming                    timingSummary         `json:"wall_timing"`
-	GenerationTiming              timingSummary         `json:"generation_timing"`
-	InsertTiming                  timingSummary         `json:"insert_timing"`
-	CheckpointTiming              timingSummary         `json:"checkpoint_timing,omitempty"`
-	InsertPhases                  insertPhaseSummary    `json:"insert_phases"`
-	IndexStorageBeforeMaintenance indexStorageSummary   `json:"index_storage_before_maintenance"`
-	DiskUsageBeforeMaintenance    diskUsageSummary      `json:"disk_usage_before_maintenance"`
-	DiskUsageFinal                diskUsageSummary      `json:"disk_usage_final"`
-	Rewrite                       rewriteSummary        `json:"rewrite,omitempty"`
-	LeafGeneration                leafGenerationSummary `json:"leaf_generation,omitempty"`
-	IndexVacuum                   indexVacuumSummary    `json:"index_vacuum,omitempty"`
-	IndexStorageFinal             indexStorageSummary   `json:"index_storage_final"`
-	Verify                        verifySummary         `json:"verify"`
-	CPUProfile                    string                `json:"cpu_profile,omitempty"`
-	MemProfile                    string                `json:"mem_profile,omitempty"`
-	GoVersion                     string                `json:"go_version"`
-	GOOS                          string                `json:"goos"`
-	GOARCH                        string                `json:"goarch"`
+	GeneratedAt                   string                 `json:"generated_at"`
+	Dir                           string                 `json:"dir"`
+	CreatedTempDir                bool                   `json:"created_temp_dir,omitempty"`
+	Collection                    string                 `json:"collection"`
+	DocumentFormat                string                 `json:"document_format"`
+	Profile                       string                 `json:"profile"`
+	Docs                          int                    `json:"docs"`
+	BatchSize                     int                    `json:"batch_size"`
+	Batches                       int                    `json:"batches"`
+	IndexCount                    int                    `json:"index_count"`
+	DataOuterLeavesInValueLog     bool                   `json:"data_outer_leaves_in_value_log"`
+	IndexOuterLeavesInValueLog    bool                   `json:"index_outer_leaves_in_value_log"`
+	ChunkSize                     int64                  `json:"chunk_size,omitempty"`
+	KeepRecent                    uint64                 `json:"keep_recent"`
+	PreferAppendAlloc             bool                   `json:"prefer_append_alloc"`
+	PagerSyncConcurrency          int                    `json:"pager_sync_concurrency,omitempty"`
+	DisableBackgroundPrune        bool                   `json:"disable_background_prune,omitempty"`
+	PruneInterval                 string                 `json:"prune_interval,omitempty"`
+	PruneMaxPages                 int                    `json:"prune_max_pages,omitempty"`
+	PruneMaxDuration              string                 `json:"prune_max_duration,omitempty"`
+	LeafSegmentTargetBytes        int64                  `json:"leaf_segment_target_bytes,omitempty"`
+	WallTiming                    timingSummary          `json:"wall_timing"`
+	GenerationTiming              timingSummary          `json:"generation_timing"`
+	InsertTiming                  timingSummary          `json:"insert_timing"`
+	CheckpointTiming              timingSummary          `json:"checkpoint_timing,omitempty"`
+	InsertPhases                  insertPhaseSummary     `json:"insert_phases"`
+	IndexStorageBeforeMaintenance indexStorageSummary    `json:"index_storage_before_maintenance"`
+	DiskUsageBeforeMaintenance    diskUsageSummary       `json:"disk_usage_before_maintenance"`
+	DiskUsageFinal                diskUsageSummary       `json:"disk_usage_final"`
+	Rewrite                       rewriteSummary         `json:"rewrite,omitempty"`
+	LeafGeneration                *leafGenerationSummary `json:"leaf_generation,omitempty"`
+	IndexVacuum                   indexVacuumSummary     `json:"index_vacuum,omitempty"`
+	IndexStorageFinal             indexStorageSummary    `json:"index_storage_final"`
+	Verify                        verifySummary          `json:"verify"`
+	CPUProfile                    string                 `json:"cpu_profile,omitempty"`
+	MemProfile                    string                 `json:"mem_profile,omitempty"`
+	GoVersion                     string                 `json:"go_version"`
+	GOOS                          string                 `json:"goos"`
+	GOARCH                        string                 `json:"goarch"`
 }
 
 func main() {
@@ -945,14 +945,14 @@ func maybeRewriteValueLog(cfg config, backend *backenddb.DB, beforeBytes uint64)
 	return out, nil
 }
 
-func maybePackLeafGenerations(cfg config, backend *backenddb.DB) (leafGenerationSummary, error) {
-	out := leafGenerationSummary{
+func maybePackLeafGenerations(cfg config, backend *backenddb.DB) (*leafGenerationSummary, error) {
+	if !cfg.LeafGenerationPackGC {
+		return nil, nil
+	}
+	out := &leafGenerationSummary{
 		Enabled:        cfg.LeafGenerationPackGC,
 		Force:          cfg.LeafGenerationPackForce,
 		MaxGenerations: cfg.LeafGenerationPackMaxGen,
-	}
-	if !cfg.LeafGenerationPackGC {
-		return out, nil
 	}
 	beforeDisk, err := directoryUsage(cfg.Dir, cfg.Docs)
 	if err != nil {
@@ -978,6 +978,8 @@ func maybePackLeafGenerations(cfg config, backend *backenddb.DB) (leafGeneration
 	out.ExpectedReclaimRatioPPM = plan.ExpectedReclaimRatioPPM
 	out.ExpectedReclaimPerCopyPPM = plan.ExpectedReclaimPerByteCopiedPPM
 	if len(plan.CandidateGenerationIDs) == 0 {
+		out.DiskBytesAfterPack = beforeDisk.TotalBytes
+		out.DiskBytesAfterGC = beforeDisk.TotalBytes
 		return out, nil
 	}
 
@@ -1483,7 +1485,7 @@ func printHumanSummary(w io.Writer, summary loadSummary) {
 			summary.Rewrite.RecordsCopied,
 			humanBytes(uint64(max(summary.Rewrite.ValueBytesCopied, 0))))
 	}
-	if summary.LeafGeneration.Enabled {
+	if summary.LeafGeneration != nil && summary.LeafGeneration.Enabled {
 		fmt.Fprintf(w, "leaf_vlog pack/gc: before=%s after_pack=%s after_gc=%s candidates=%d live=%s dead=%s pages_copied=%d files_deleted=%d\n",
 			humanBytes(summary.LeafGeneration.DiskBytesBefore),
 			humanBytes(summary.LeafGeneration.DiskBytesAfterPack),

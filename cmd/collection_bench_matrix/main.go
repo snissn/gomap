@@ -170,7 +170,7 @@ func run(cfg config, commandLine []string) error {
 	}
 	cfg.repoRoot = repoRoot
 	if cfg.outDir == "" {
-		cfg.outDir = filepath.Join(os.TempDir(), "collection_bench_matrix_"+time.Now().UTC().Format("20060102_150405"))
+		cfg.outDir = defaultOutputDir(time.Now().UTC())
 	}
 	if err := os.MkdirAll(cfg.outDir, 0o755); err != nil {
 		return fmt.Errorf("create output directory: %w", err)
@@ -216,6 +216,10 @@ func run(cfg config, commandLine []string) error {
 	fmt.Printf("summary markdown: %s\n", filepath.Join(cfg.outDir, "collections_matrix_summary.md"))
 	fmt.Printf("summary html:     %s\n", filepath.Join(cfg.outDir, "collections_matrix_summary.html"))
 	return nil
+}
+
+func defaultOutputDir(now time.Time) string {
+	return filepath.Join(os.TempDir(), fmt.Sprintf("collection_bench_matrix_%s_%d", now.Format("20060102_150405"), now.UnixNano()))
 }
 
 func resolveRepoRoot(cfg config) (string, error) {

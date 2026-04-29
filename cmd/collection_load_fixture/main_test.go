@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
@@ -112,6 +113,53 @@ func TestRunFixtureKeepsTemplateV1ThreeIndexDatabase(t *testing.T) {
 	}
 	if summary.Verify.Samples == 0 {
 		t.Fatal("expected reopen verification samples")
+	}
+}
+
+func TestLeafGenerationSummaryOmittedWhenDisabled(t *testing.T) {
+	leafGeneration, err := maybePackLeafGenerations(config{}, nil)
+	if err != nil {
+		t.Fatalf("maybePackLeafGenerations disabled: %v", err)
+	}
+	if leafGeneration != nil {
+		t.Fatalf("disabled leaf generation summary=%+v, want nil", leafGeneration)
+	}
+	blob, err := json.Marshal(loadSummary{LeafGeneration: leafGeneration})
+	if err != nil {
+		t.Fatalf("marshal summary: %v", err)
+	}
+	if bytes.Contains(blob, []byte("leaf_generation")) {
+		t.Fatalf("leaf_generation should be omitted when disabled: %s", string(blob))
+	}
+}
+
+func TestRunFixtureLeafGenerationNoCandidatesPreservesDiskTotals(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "fixture")
+	cfg, err := parseConfig([]string{
+		"-dir", dir,
+		"-docs", "24",
+		"-batch-size", "24",
+		"-leafgen-pack-gc",
+		"-progress=false",
+	}, io.Discard)
+	if err != nil {
+		t.Fatalf("parse config: %v", err)
+	}
+	summary, err := runFixture(cfg)
+	if err != nil {
+		t.Fatalf("run fixture: %v", err)
+	}
+	if summary.LeafGeneration == nil || !summary.LeafGeneration.Enabled {
+		t.Fatal("expected enabled leaf generation summary")
+	}
+	if summary.LeafGeneration.CandidateGenerations != 0 {
+		t.Skipf("fixture produced %d candidate generations; no-candidate disk total path not exercised", summary.LeafGeneration.CandidateGenerations)
+	}
+	if summary.LeafGeneration.DiskBytesAfterPack != summary.LeafGeneration.DiskBytesBefore {
+		t.Fatalf("after pack bytes=%d want before bytes=%d", summary.LeafGeneration.DiskBytesAfterPack, summary.LeafGeneration.DiskBytesBefore)
+	}
+	if summary.LeafGeneration.DiskBytesAfterGC != summary.LeafGeneration.DiskBytesBefore {
+		t.Fatalf("after GC bytes=%d want before bytes=%d", summary.LeafGeneration.DiskBytesAfterGC, summary.LeafGeneration.DiskBytesBefore)
 	}
 }
 
