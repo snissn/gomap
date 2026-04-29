@@ -170,33 +170,27 @@ func (s *Server) updateResponse(command wire.Document, sequences []wire.Document
 			return commandError(commandCodeFailedToParse, "FailedToParse", fmt.Sprintf("updates[%d]: %v", i, err))
 		}
 
-		stored, err := col.Get(key)
-		if err != nil {
-			return commandError(commandCodeBadValue, "BadValue", err.Error())
-		}
-		if len(stored) == 0 {
-			continue
-		}
-		raw, err := storedDocumentToBSON(stored)
-		if err != nil {
-			return commandError(commandCodeBadValue, "BadValue", err.Error())
-		}
-		updated, changed, err := applySetUpdate(raw, updateDoc)
-		if err != nil {
-			return commandError(commandCodeBadValue, "BadValue", fmt.Sprintf("updates[%d]: %v", i, err))
-		}
-		updatedKey, encoded, err := prepareInsertDocument(updated)
-		if err != nil {
-			return commandError(commandCodeBadValue, "BadValue", fmt.Sprintf("updates[%d]: %v", i, err))
-		}
-		if !bytes.Equal(updatedKey, key) {
-			return commandError(commandCodeBadValue, "BadValue", "Mongo gateway update cannot modify _id")
-		}
-		matched++
-		if !changed {
-			continue
-		}
-		replaced, err := col.Replace(key, encoded)
+		matchedOne, modifiedOne, err := col.Update(key, func(stored []byte) ([]byte, bool, error) {
+			raw, err := storedDocumentToBSON(stored)
+			if err != nil {
+				return nil, false, err
+			}
+			updated, changed, err := applySetUpdate(raw, updateDoc)
+			if err != nil {
+				return nil, false, fmt.Errorf("updates[%d]: %w", i, err)
+			}
+			updatedKey, encoded, err := prepareInsertDocument(updated)
+			if err != nil {
+				return nil, false, fmt.Errorf("updates[%d]: %w", i, err)
+			}
+			if !bytes.Equal(updatedKey, key) {
+				return nil, false, errors.New("Mongo gateway update cannot modify _id")
+			}
+			if !changed {
+				return nil, false, nil
+			}
+			return encoded, true, nil
+		})
 		if err != nil {
 			code, codeName := commandCodeBadValue, "BadValue"
 			if collections.IsDuplicateKeyError(err) {
@@ -204,7 +198,10 @@ func (s *Server) updateResponse(command wire.Document, sequences []wire.Document
 			}
 			return commandError(code, codeName, err.Error())
 		}
-		if replaced {
+		if matchedOne {
+			matched++
+		}
+		if modifiedOne {
 			modified++
 		}
 	}
@@ -259,17 +256,13 @@ func (s *Server) deleteResponse(command wire.Document, sequences []wire.Document
 		if err != nil {
 			return commandError(commandCodeBadValue, "BadValue", fmt.Sprintf("deletes[%d]: %v", i, err))
 		}
-		stored, err := col.Get(key)
+		deletedOne, err := col.DeleteDocument(key)
 		if err != nil {
 			return commandError(commandCodeBadValue, "BadValue", err.Error())
 		}
-		if len(stored) == 0 {
-			continue
+		if deletedOne {
+			deleted++
 		}
-		if err := col.Delete(key); err != nil {
-			return commandError(commandCodeBadValue, "BadValue", err.Error())
-		}
-		deleted++
 	}
 	return marshalDeleteResponse(deleted)
 }
