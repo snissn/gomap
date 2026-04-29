@@ -450,12 +450,12 @@ func (s *Server) dropIndexesResponse(command wire.Document) (wire.Document, erro
 			if indexName == "_id_" {
 				return commandError(commandCodeBadValue, "BadValue", "cannot drop _id index")
 			}
-			if _, err := col.DropIndex(indexName); err != nil {
-				if errors.Is(err, collections.ErrIndexNotFound) {
-					return commandError(commandCodeIndexNotFound, "IndexNotFound", "index not found: "+indexName)
-				}
-				return commandError(commandCodeBadValue, "BadValue", err.Error())
+		}
+		if _, err := col.DropIndexes(names); err != nil {
+			if errors.Is(err, collections.ErrIndexNotFound) {
+				return commandError(commandCodeIndexNotFound, "IndexNotFound", "index not found")
 			}
+			return commandError(commandCodeBadValue, "BadValue", err.Error())
 		}
 	}
 	return marshalDocument(bson.D{
@@ -551,7 +551,10 @@ func (s *Server) openCursor(ns string, docs []wire.Document, batchSize int, expl
 	if err != nil {
 		return 0, nil, err
 	}
-	firstBatch, consumed := documentsBatchWithLimit(docs, batchSize, s.maxFindBatchBytes())
+	firstBatch, consumed, err := documentsBatchWithLimit(docs, batchSize, s.maxFindBatchBytes())
+	if err != nil {
+		return 0, nil, err
+	}
 	if consumed >= len(docs) {
 		return 0, firstBatch, nil
 	}
@@ -586,7 +589,10 @@ func (s *Server) getMore(cursorID int64, ns string, batchSize int, explicitBatch
 		return 0, nil, false, nil
 	}
 	remaining := cursor.docs[cursor.pos:]
-	batch, consumed := documentsBatchWithLimit(remaining, batchSize, s.maxFindBatchBytes())
+	batch, consumed, err := documentsBatchWithLimit(remaining, batchSize, s.maxFindBatchBytes())
+	if err != nil {
+		return 0, nil, false, err
+	}
 	cursor.pos += consumed
 	if cursor.pos >= len(cursor.docs) {
 		delete(s.cursors, cursorID)
@@ -636,16 +642,16 @@ func normalizeBatchSize(batchSize int, explicit bool, defaultBatchSize int) (int
 }
 
 func documentsBatch(docs []wire.Document) bson.A {
-	out, _ := documentsBatchWithLimit(docs, len(docs), int(^uint(0)>>1))
+	out, _, _ := documentsBatchWithLimit(docs, len(docs), int(^uint(0)>>1))
 	return out
 }
 
-func documentsBatchWithLimit(docs []wire.Document, maxDocs int, maxBytes int) (bson.A, int) {
+func documentsBatchWithLimit(docs []wire.Document, maxDocs int, maxBytes int) (bson.A, int, error) {
 	if maxDocs < 0 || maxDocs > len(docs) {
 		maxDocs = len(docs)
 	}
-	if maxBytes <= 0 {
-		maxBytes = int(^uint(0) >> 1)
+	if maxBytes < 0 {
+		maxBytes = 0
 	}
 	out := make(bson.A, 0, len(docs))
 	batchBytes := 0
@@ -653,6 +659,9 @@ func documentsBatchWithLimit(docs []wire.Document, maxDocs int, maxBytes int) (b
 	for consumed < maxDocs {
 		doc := docs[consumed]
 		docBytes := len(doc) + 16
+		if docBytes > maxBytes {
+			return nil, 0, errors.New("Mongo gateway cursor document exceeds max message size")
+		}
 		if consumed > 0 && batchBytes+docBytes > maxBytes {
 			break
 		}
@@ -660,7 +669,7 @@ func documentsBatchWithLimit(docs []wire.Document, maxDocs int, maxBytes int) (b
 		batchBytes += docBytes
 		consumed++
 	}
-	return out, consumed
+	return out, consumed, nil
 }
 
 func (s *Server) openOrCreateCollection(name string) (*collections.Collection, error) {

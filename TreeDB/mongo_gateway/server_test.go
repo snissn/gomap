@@ -440,12 +440,38 @@ func TestServerIndexMetadataRejectsInvalidCommands(t *testing.T) {
 		}}},
 		{Key: "$db", Value: "app"},
 	}))
-	emptyDrop := serveCommand(t, server, 238, bson.D{
+	assertOK(t, serveCommand(t, server, 238, bson.D{
+		{Key: "createIndexes", Value: "users"},
+		{Key: "indexes", Value: bson.A{bson.D{
+			{Key: "key", Value: bson.D{{Key: "email", Value: int32(1)}}},
+			{Key: "name", Value: "email_1"},
+		}}},
+		{Key: "$db", Value: "app"},
+	}))
+	emptyDrop := serveCommand(t, server, 239, bson.D{
 		{Key: "dropIndexes", Value: "users"},
 		{Key: "index", Value: bson.A{}},
 		{Key: "$db", Value: "app"},
 	})
 	assertCommandError(t, emptyDrop, "FailedToParse")
+
+	partialDrop := serveCommand(t, server, 240, bson.D{
+		{Key: "dropIndexes", Value: "users"},
+		{Key: "index", Value: bson.A{"city_1", "missing_1"}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, partialDrop, "IndexNotFound")
+	afterPartialDrop := serveCommand(t, server, 241, bson.D{
+		{Key: "listIndexes", Value: "users"},
+		{Key: "$db", Value: "app"},
+	})
+	indexBatch := cursorFirstBatch(t, afterPartialDrop)
+	if got, want := len(indexBatch), 3; got != want {
+		t.Fatalf("index batch after failed drop len=%d want %d", got, want)
+	}
+	assertIndexName(t, indexBatch[0], "_id_")
+	assertIndexName(t, indexBatch[1], "city_1")
+	assertIndexName(t, indexBatch[2], "email_1")
 }
 
 func TestServerFindPlannerIndexedAndBoundedPredicates(t *testing.T) {
@@ -871,6 +897,109 @@ func TestServerCursorBatchesRespectMessageSize(t *testing.T) {
 	}
 }
 
+func TestServerFindNullEqualityMatchesMissingWithIndex(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	assertOK(t, serveCommand(t, server, 248, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{
+			bson.D{{Key: "_id", Value: "null"}, {Key: "city", Value: nil}},
+			bson.D{{Key: "_id", Value: "missing"}, {Key: "name", Value: "no city"}},
+			bson.D{{Key: "_id", Value: "hnl"}, {Key: "city", Value: "hnl"}},
+		}},
+		{Key: "$db", Value: "app"},
+	}))
+	assertOK(t, serveCommand(t, server, 249, bson.D{
+		{Key: "createIndexes", Value: "users"},
+		{Key: "indexes", Value: bson.A{bson.D{
+			{Key: "key", Value: bson.D{{Key: "city", Value: int32(1)}}},
+			{Key: "name", Value: "city_1"},
+		}}},
+		{Key: "$db", Value: "app"},
+	}))
+
+	nullFind := serveCommand(t, server, 250, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "city", Value: nil}}},
+		{Key: "sort", Value: bson.D{{Key: "_id", Value: int32(1)}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertBatchIDs(t, cursorFirstBatch(t, nullFind), []string{"missing", "null"})
+
+	inFind := serveCommand(t, server, 251, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "city", Value: bson.D{{Key: "$in", Value: bson.A{nil, "hnl"}}}}}},
+		{Key: "sort", Value: bson.D{{Key: "_id", Value: int32(1)}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertBatchIDs(t, cursorFirstBatch(t, inFind), []string{"hnl", "missing", "null"})
+}
+
+func TestServerFindRejectsOversizedResultDocument(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewServer()
+	server.MaxMessageLength = 4500
+	server.Collections = collections.NewCollectionManager(db)
+	assertOK(t, serveCommand(t, server, 252, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{
+			bson.D{{Key: "_id", Value: "large"}, {Key: "payload", Value: strings.Repeat("x", 600)}},
+		}},
+		{Key: "$db", Value: "app"},
+	}))
+	tooLarge := serveCommand(t, server, 253, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "_id", Value: "large"}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, tooLarge, "BadValue")
+}
+
+func TestServerFindCapsIndexedCandidates(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewServer()
+	server.MaxFindScanDocuments = 1
+	server.Collections = collections.NewCollectionManager(db)
+	assertOK(t, serveCommand(t, server, 254, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{
+			bson.D{{Key: "_id", Value: "u1"}, {Key: "city", Value: "hnl"}},
+			bson.D{{Key: "_id", Value: "u2"}, {Key: "city", Value: "hnl"}},
+		}},
+		{Key: "$db", Value: "app"},
+	}))
+	assertOK(t, serveCommand(t, server, 255, bson.D{
+		{Key: "createIndexes", Value: "users"},
+		{Key: "indexes", Value: bson.A{bson.D{
+			{Key: "key", Value: bson.D{{Key: "city", Value: int32(1)}}},
+			{Key: "name", Value: "city_1"},
+		}}},
+		{Key: "$db", Value: "app"},
+	}))
+	tooMany := serveCommand(t, server, 256, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "city", Value: "hnl"}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, tooMany, "BadValue")
+}
+
 func TestApplySetUpdateAppendsNewFieldsInSetOrder(t *testing.T) {
 	doc, err := bson.Marshal(bson.D{
 		{Key: "_id", Value: "u1"},
@@ -1181,6 +1310,19 @@ func cursorIDFromResponse(tb testing.TB, doc wire.Document) int64 {
 		tb.Fatalf("cursor.id missing or not int64 in %v", cursor)
 	}
 	return id
+}
+
+func assertBatchIDs(tb testing.TB, batch []bson.Raw, want []string) {
+	tb.Helper()
+	if len(batch) != len(want) {
+		tb.Fatalf("batch len=%d want %d", len(batch), len(want))
+	}
+	for i, doc := range batch {
+		got, ok := doc.Lookup("_id").StringValueOK()
+		if !ok || got != want[i] {
+			tb.Fatalf("batch[%d]._id=%q ok=%v want %q", i, got, ok, want[i])
+		}
+	}
 }
 
 func assertInt32(tb testing.TB, doc wire.Document, key string, want int32) {
