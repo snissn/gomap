@@ -767,6 +767,67 @@ func TestValueLogRewriteOnline_RewritesCollectionLeafRefRootPointers(t *testing.
 	}
 }
 
+func TestValueLogRewriteOnline_CollectionRootCommitUsesCurrentStoragePolicy(t *testing.T) {
+	db, leafLog := openLeafGenerationGCTestDB(t)
+	dir := db.dir
+
+	oldPtr := appendPointersInNewSegment(t, dir, 0, 1, 525_000, 1, func(int) []byte {
+		return bytes.Repeat([]byte("collection-current-policy-old|"), 24)
+	})[0]
+	newValue := bytes.Repeat([]byte("collection-current-policy-new|"), 24)
+	newPtr := appendPointersInNewSegment(t, dir, 0, 2, 526_000, 1, func(int) []byte {
+		return newValue
+	})[0]
+	if err := db.RefreshValueLogSet(); err != nil {
+		t.Fatalf("refresh value log set: %v", err)
+	}
+	_, rootIDs, err := db.PublishOrderedRootGroupWithSystemBuilder([]OrderedRootPublishInput{{
+		BaseRoot:      0,
+		Iter:          mustFrozenSystemPointerMemtable(t, "doc/p", oldPtr).NewIterator(nil, nil),
+		StoragePolicy: OrderedRootStorageValueLogLeaves,
+	}}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		if len(rootIDs) != 1 {
+			return nil, fmt.Errorf("rootIDs=%d want 1", len(rootIDs))
+		}
+		return mustFrozenRawMemtable(t, maintenanceTestCollectionRootKey, encodeMaintenanceRootID(rootIDs[0])).NewIterator(nil, nil), nil
+	})
+	if err != nil {
+		t.Fatalf("publish collection leaf-ref root: %v", err)
+	}
+	oldRoot := rootIDs[0]
+	if _, ok := page.DecodeLeafRef(oldRoot); !ok {
+		t.Fatalf("collection root=%d want leaf ref", oldRoot)
+	}
+	if err := leafLog.Sync(); err != nil {
+		t.Fatalf("sync leaf log: %v", err)
+	}
+	primeValueLogRefTracker(t, db)
+
+	if err := db.applyRewriteSwapBatchToCollectionRoot(
+		[]byte(maintenanceTestCollectionRootKey),
+		OrderedRootStoragePagerLeaves, // stale scan-time policy; current root uses value-log leaves.
+		[]rewriteSwap{{key: []byte("doc/p"), oldPtr: oldPtr, newPtr: newPtr}},
+		false,
+	); err != nil {
+		t.Fatalf("apply collection rewrite swap with stale policy: %v", err)
+	}
+	if _, ok := db.valueLogRefTracker.referencedSet(db.currentCommitSeq()); ok {
+		t.Fatal("expected value-log-leaf collection rewrite to invalidate value-log ref tracker")
+	}
+
+	newRoot := readCollectionRootID(t, db, maintenanceTestCollectionRootKey)
+	if newRoot == oldRoot {
+		t.Fatalf("collection descriptor still points at old leaf-ref root %d", oldRoot)
+	}
+	if _, ok := page.DecodeLeafRef(newRoot); !ok {
+		t.Fatalf("rewritten collection root=%d want leaf ref", newRoot)
+	}
+	got := readCollectionRootValue(t, db, maintenanceTestCollectionRootKey, []byte("doc/p"))
+	if !bytes.Equal(got, newValue) {
+		t.Fatalf("collection value mismatch after stale-policy rewrite")
+	}
+}
+
 func TestValueLogRewriteOffline_RewritesCollectionLeafRefRoot(t *testing.T) {
 	dir := t.TempDir()
 	opts := Options{
@@ -4616,6 +4677,14 @@ func readCollectionRootID(t *testing.T, db *DB, descriptorKey string) uint64 {
 		t.Fatal("expected snapshot")
 	}
 	defer snap.Close()
+	return readCollectionRootIDFromSnapshot(t, snap, descriptorKey)
+}
+
+func readCollectionRootIDFromSnapshot(t *testing.T, snap *Snapshot, descriptorKey string) uint64 {
+	t.Helper()
+	if snap == nil || snap.state == nil {
+		t.Fatal("expected snapshot")
+	}
 	encoded, err := snap.GetAtRoot(snap.state.SystemRootPageID, []byte(descriptorKey))
 	if err != nil {
 		t.Fatalf("read collection descriptor %q: %v", descriptorKey, err)
@@ -4628,12 +4697,12 @@ func readCollectionRootID(t *testing.T, db *DB, descriptorKey string) uint64 {
 
 func readCollectionRootValue(t *testing.T, db *DB, descriptorKey string, key []byte) []byte {
 	t.Helper()
-	rootID := readCollectionRootID(t, db, descriptorKey)
 	snap := db.AcquireSnapshot()
 	if snap == nil {
 		t.Fatal("expected snapshot")
 	}
 	defer snap.Close()
+	rootID := readCollectionRootIDFromSnapshot(t, snap, descriptorKey)
 	val, err := snap.GetAtRoot(rootID, key)
 	if err != nil {
 		t.Fatalf("read collection key %q at root %d: %v", key, rootID, err)
@@ -4643,12 +4712,12 @@ func readCollectionRootValue(t *testing.T, db *DB, descriptorKey string, key []b
 
 func readCollectionProjectedPointerByKey(t *testing.T, db *DB, descriptorKey string, key []byte) (page.ValuePtr, byte) {
 	t.Helper()
-	rootID := readCollectionRootID(t, db, descriptorKey)
 	snap := db.AcquireSnapshot()
 	if snap == nil {
 		t.Fatal("expected snapshot")
 	}
 	defer snap.Close()
+	rootID := readCollectionRootIDFromSnapshot(t, snap, descriptorKey)
 	it, err := snap.IteratorAtRootWithOptions(rootID, nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
 	if err != nil {
 		t.Fatalf("IteratorAtRootWithOptions(%d): %v", rootID, err)
