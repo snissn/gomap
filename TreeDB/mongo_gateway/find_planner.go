@@ -85,7 +85,11 @@ func (s *Server) executeFind(col *collections.Collection, command wire.Document,
 		docs = docs[:limit]
 	}
 
-	projection, err := commandOptionalDocument(command, "projection")
+	projectionDoc, err := commandOptionalDocument(command, "projection")
+	if err != nil {
+		return nil, err
+	}
+	projection, err := compileProjection(projectionDoc)
 	if err != nil {
 		return nil, err
 	}
@@ -93,12 +97,15 @@ func (s *Server) executeFind(col *collections.Collection, command wire.Document,
 	batchBytes := 0
 	maxBatchBytes := s.maxFindBatchBytes()
 	for _, doc := range docs {
-		projected, err := projectDocument(doc, projection)
+		projected, err := projectDocumentWithProjection(doc, projection)
 		if err != nil {
 			return nil, err
 		}
 		docBytes := len(projected) + 16
-		if len(firstBatch) > 0 && batchBytes+docBytes > maxBatchBytes {
+		if docBytes > maxBatchBytes {
+			return nil, fmt.Errorf("Mongo gateway find result document exceeds max message size")
+		}
+		if batchBytes+docBytes > maxBatchBytes {
 			break
 		}
 		firstBatch = append(firstBatch, bson.Raw(projected))
@@ -131,8 +138,8 @@ func validateFindCommandOptions(command wire.Document, filter wire.Document) err
 
 func (s *Server) maxFindBatchBytes() int {
 	max := int(s.maxMessageLength()) - 4096
-	if max < 1024 {
-		return 1024
+	if max < 0 {
+		return 0
 	}
 	return max
 }
@@ -140,10 +147,18 @@ func (s *Server) maxFindBatchBytes() int {
 func (s *Server) findCandidateDocuments(col *collections.Collection, predicates []findPredicate) ([]wire.Document, error) {
 	meta := col.Meta()
 	if pred, ok := primaryCandidatePredicate(predicates); ok {
-		return documentsForPrimaryPredicate(col, pred)
+		docs, err := documentsForPrimaryPredicate(col, pred)
+		if err != nil {
+			return nil, err
+		}
+		return s.limitCandidateDocuments(docs)
 	}
 	if pred, idx, ok := indexedCandidatePredicate(meta, predicates); ok {
-		return documentsForIndexedPredicate(col, pred, idx)
+		docs, err := documentsForIndexedPredicate(col, pred, idx)
+		if err != nil {
+			return nil, err
+		}
+		return s.limitCandidateDocuments(docs)
 	}
 	records, truncated, err := col.ScanDocuments(s.maxFindScanDocuments())
 	if err != nil {
@@ -161,6 +176,13 @@ func (s *Server) findCandidateDocuments(col *collections.Collection, predicates 
 		out = append(out, doc)
 	}
 	return out, nil
+}
+
+func (s *Server) limitCandidateDocuments(docs []wire.Document) ([]wire.Document, error) {
+	if len(docs) > s.maxFindScanDocuments() {
+		return nil, fmt.Errorf("Mongo gateway find candidate set exceeded %d documents", s.maxFindScanDocuments())
+	}
+	return docs, nil
 }
 
 func primaryCandidatePredicate(predicates []findPredicate) (findPredicate, bool) {
@@ -531,19 +553,49 @@ func compareDocumentField(left, right wire.Document, field string) int {
 	return compareRawValues(leftValue, rightValue)
 }
 
-func projectDocument(doc wire.Document, projection wire.Document) (wire.Document, error) {
+type compiledProjection struct {
+	present     bool
+	mode        projectionMode
+	fields      map[string]struct{}
+	includeID   bool
+	idSpecified bool
+}
+
+func compileProjection(projection wire.Document) (compiledProjection, error) {
 	if projection == nil {
-		return doc, nil
+		return compiledProjection{}, nil
 	}
 	mode, fields, includeID, idSpecified, err := parseProjection(projection)
 	if err != nil {
+		return compiledProjection{}, err
+	}
+	return compiledProjection{
+		present:     true,
+		mode:        mode,
+		fields:      fields,
+		includeID:   includeID,
+		idSpecified: idSpecified,
+	}, nil
+}
+
+func projectDocument(doc wire.Document, projection wire.Document) (wire.Document, error) {
+	compiled, err := compileProjection(projection)
+	if err != nil {
 		return nil, err
 	}
+	return projectDocumentWithProjection(doc, compiled)
+}
+
+func projectDocumentWithProjection(doc wire.Document, projection compiledProjection) (wire.Document, error) {
+	if !projection.present {
+		return doc, nil
+	}
+	mode := projection.mode
 	if mode == projectionNone {
-		if !idSpecified {
+		if !projection.idSpecified {
 			return doc, nil
 		}
-		if includeID {
+		if projection.includeID {
 			mode = projectionInclude
 		} else {
 			mode = projectionExclude
@@ -559,10 +611,10 @@ func projectDocument(doc wire.Document, projection wire.Document) (wire.Document
 		if err != nil {
 			return nil, err
 		}
-		if key == "_id" && !includeID {
+		if key == "_id" && !projection.includeID {
 			continue
 		}
-		_, selected := fields[key]
+		_, selected := projection.fields[key]
 		if mode == projectionInclude && (selected || key == "_id") {
 			out = append(out, bson.E{Key: key, Value: elem.Value()})
 		}
