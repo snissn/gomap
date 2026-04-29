@@ -1260,10 +1260,11 @@ func TestCollectionScanDocumentsAndFindByIndexValue(t *testing.T) {
 		t.Fatalf("open collection: %v", err)
 	}
 	if _, err := col.InsertBatch(
-		[][]byte{[]byte("u1"), []byte("u2")},
+		[][]byte{[]byte("u1"), []byte("u2"), []byte("u3")},
 		[][]byte{
 			[]byte(`{"city":"hnl","name":"ada"}`),
 			[]byte(`{"city":"sfo","name":"grace"}`),
+			[]byte(`{"city":"hnl","name":"katherine"}`),
 		},
 	); err != nil {
 		t.Fatalf("insert batch: %v", err)
@@ -1273,8 +1274,16 @@ func TestCollectionScanDocumentsAndFindByIndexValue(t *testing.T) {
 	if err != nil {
 		t.Fatalf("find by index value: %v", err)
 	}
-	if len(ids) != 1 || !bytes.Equal(ids[0], []byte("u1")) {
-		t.Fatalf("ids=%q want u1", ids)
+	if len(ids) != 2 || !bytes.Equal(ids[0], []byte("u1")) || !bytes.Equal(ids[1], []byte("u3")) {
+		t.Fatalf("ids=%q want u1,u3", ids)
+	}
+
+	ids, truncated, err := col.FindByIndexValueLimit("city", "hnl", 1)
+	if err != nil {
+		t.Fatalf("find by index value limit: %v", err)
+	}
+	if !truncated || len(ids) != 1 || !bytes.Equal(ids[0], []byte("u1")) {
+		t.Fatalf("limited ids=%q truncated=%v want u1/true", ids, truncated)
 	}
 
 	records, truncated, err := col.ScanDocuments(10)
@@ -1284,8 +1293,8 @@ func TestCollectionScanDocumentsAndFindByIndexValue(t *testing.T) {
 	if truncated {
 		t.Fatal("scan unexpectedly truncated")
 	}
-	if len(records) != 2 {
-		t.Fatalf("records len=%d want 2", len(records))
+	if len(records) != 3 {
+		t.Fatalf("records len=%d want 3", len(records))
 	}
 	if !bytes.Equal(records[0].ID, []byte("u1")) || !bytes.Contains(records[0].Document, []byte(`"ada"`)) {
 		t.Fatalf("first record=%+v", records[0])

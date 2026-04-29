@@ -2136,67 +2136,84 @@ func (c *Collection) FindByIndex(indexName, value string) ([][]byte, error) {
 }
 
 func (c *Collection) FindByIndexValue(indexName string, value any) ([][]byte, error) {
+	out, _, err := c.findByIndexValue(indexName, value, 0)
+	return out, err
+}
+
+func (c *Collection) FindByIndexValueLimit(indexName string, value any, maxResults int) ([][]byte, bool, error) {
+	if maxResults <= 0 {
+		return nil, false, errors.New("collections: max index results must be positive")
+	}
+	return c.findByIndexValue(indexName, value, maxResults)
+}
+
+func (c *Collection) findByIndexValue(indexName string, value any, maxResults int) ([][]byte, bool, error) {
 	if c == nil {
-		return nil, errCollectionNil
+		return nil, false, errCollectionNil
 	}
 	if err := ValidateIndexName(indexName); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if err := c.flushBufferedNoIndex(); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	snap := c.db.AcquireSnapshot()
 	if snap == nil {
-		return nil, backenddb.ErrClosed
+		return nil, false, backenddb.ErrClosed
 	}
 	defer func() { _ = snap.Close() }()
 	catalog, err := c.catalogForSnapshot(snap)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if catalog == nil {
-		return nil, errCollectionNotFound
+		return nil, false, errCollectionNotFound
 	}
 	idx, ok := findIndex(catalog.meta.Indexes, indexName)
 	if !ok {
-		return nil, nil
+		return nil, false, nil
 	}
 	rootID := catalog.rootID(collectionSecondaryRootName(catalog.meta.Name, idx.Name))
 	if rootID == 0 {
-		return nil, nil
+		return nil, false, nil
 	}
 	var arena []byte
 	arena, encoded, err := appendIndexScalar(arena, value)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	arena, prefix, err := appendIndexValuePrefixSlice(arena, encoded)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	it, err := snap.IteratorAtRoot(rootID, prefix, prefixEnd(prefix))
 	if errors.Is(err, tree.ErrKeyNotFound) {
-		return nil, nil
+		return nil, false, nil
 	}
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	defer func() { _ = it.Close() }()
 	out := make([][]byte, 0, 1)
+	truncated := false
 	for it.Valid() {
 		key := it.UnsafeKey()
 		if !bytes.HasPrefix(key, prefix) {
 			break
 		}
 		if !it.IsDeleted() {
+			if maxResults > 0 && len(out) >= maxResults {
+				truncated = true
+				break
+			}
 			out = append(out, bytes.Clone(key[len(prefix):]))
 		}
 		it.Next()
 	}
 	if err := it.Error(); err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	return out, nil
+	return out, truncated, nil
 }
 
 // ScanDocuments flushes buffered no-index writes before acquiring a snapshot,

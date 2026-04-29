@@ -1152,12 +1152,80 @@ func TestServerFindDottedArrayPredicates(t *testing.T) {
 	})
 	assertBatchIDs(t, cursorFirstBatch(t, tagFind), []string{"match"})
 
-	itemFind := serveCommand(t, server, 258, bson.D{
+	scalarTagFind := serveCommand(t, server, 258, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "tags", Value: "a"}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertBatchIDs(t, cursorFirstBatch(t, scalarTagFind), []string{"match"})
+
+	inTagFind := serveCommand(t, server, 259, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "tags", Value: bson.D{{Key: "$in", Value: bson.A{"a"}}}}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertBatchIDs(t, cursorFirstBatch(t, inTagFind), []string{"match"})
+
+	itemFind := serveCommand(t, server, 260, bson.D{
 		{Key: "find", Value: "users"},
 		{Key: "filter", Value: bson.D{{Key: "items.sku", Value: "sku-1"}}},
 		{Key: "$db", Value: "app"},
 	})
 	assertBatchIDs(t, cursorFirstBatch(t, itemFind), []string{"match"})
+}
+
+func TestServerFindArrayRangePredicatesUseSameElement(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	assertOK(t, serveCommand(t, server, 261, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{
+			bson.D{{Key: "_id", Value: "no"}, {Key: "scores", Value: bson.A{int32(1), int32(10)}}},
+			bson.D{{Key: "_id", Value: "yes"}, {Key: "scores", Value: bson.A{int32(6), int32(7)}}},
+		}},
+		{Key: "$db", Value: "app"},
+	}))
+	rangeFind := serveCommand(t, server, 262, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "scores", Value: bson.D{
+			{Key: "$gt", Value: int32(5)},
+			{Key: "$lt", Value: int32(8)},
+		}}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertBatchIDs(t, cursorFirstBatch(t, rangeFind), []string{"yes"})
+}
+
+func TestServerFindRangePredicatesUseTypeBrackets(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	assertOK(t, serveCommand(t, server, 263, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{
+			bson.D{{Key: "_id", Value: "num"}, {Key: "age", Value: int32(10)}},
+			bson.D{{Key: "_id", Value: "string"}, {Key: "age", Value: "old"}},
+			bson.D{{Key: "_id", Value: "object"}, {Key: "age", Value: bson.D{{Key: "nested", Value: true}}}},
+		}},
+		{Key: "$db", Value: "app"},
+	}))
+	rangeFind := serveCommand(t, server, 264, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "age", Value: bson.D{{Key: "$gt", Value: int32(5)}}}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertBatchIDs(t, cursorFirstBatch(t, rangeFind), []string{"num"})
 }
 
 func TestCompareRawNumbersHandlesNonFiniteDoubles(t *testing.T) {
