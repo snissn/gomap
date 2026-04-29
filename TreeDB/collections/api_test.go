@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -117,17 +118,7 @@ func TestCollectionValueLogRewriteOffline_RoundTripWithCompressedSecondaryIndexe
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	closed := false
-	closeDB := func() error {
-		if closed {
-			return nil
-		}
-		if err := cleanup(); err != nil {
-			return err
-		}
-		closed = true
-		return nil
-	}
+	closeDB := collectionMaintenanceCloseOnce(cleanup)
 	t.Cleanup(func() { _ = closeDB() })
 
 	mgr := NewCollectionManager(d)
@@ -182,6 +173,9 @@ func TestCollectionValueLogRewriteOffline_RoundTripWithCompressedSecondaryIndexe
 }
 
 func TestCollectionLeafGenerationPackGC_RoundTripWithTemplateV1SecondaryIndexes(t *testing.T) {
+	if testing.Short() {
+		t.Skip("loads enough documents to exercise collection leaf generation pack/GC")
+	}
 	opts := treedb.Options{
 		Dir:                        t.TempDir(),
 		Durability:                 treedb.DurabilityWALOffRelaxed,
@@ -193,17 +187,7 @@ func TestCollectionLeafGenerationPackGC_RoundTripWithTemplateV1SecondaryIndexes(
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	closed := false
-	closeDB := func() error {
-		if closed {
-			return nil
-		}
-		if err := cleanup(); err != nil {
-			return err
-		}
-		closed = true
-		return nil
-	}
+	closeDB := collectionMaintenanceCloseOnce(cleanup)
 	t.Cleanup(func() { _ = closeDB() })
 
 	mgr := NewCollectionManager(d)
@@ -437,7 +421,11 @@ func requireCollectionMaintenanceTemplateReads(t *testing.T, col *Collection) {
 		t.Fatalf("get %s: %v", id, err)
 	}
 	if !bytes.HasPrefix(got, []byte(templateV1StoredMagic)) {
-		t.Fatalf("stored %s prefix=%q want template-v1 stored magic", id, got[:min(len(got), len(templateV1StoredMagic))])
+		prefixLen := len(got)
+		if prefixLen > len(templateV1StoredMagic) {
+			prefixLen = len(templateV1StoredMagic)
+		}
+		t.Fatalf("stored %s prefix=%q want template-v1 stored magic", id, got[:prefixLen])
 	}
 	emailIDs, err := col.FindByIndex("email", "user-000000001@example.com")
 	if err != nil {
@@ -491,6 +479,19 @@ func collectionMaintenanceTestContext(t *testing.T) (context.Context, context.Ca
 		}
 	}
 	return context.WithTimeout(context.Background(), timeout)
+}
+
+func collectionMaintenanceCloseOnce(cleanup func() error) func() error {
+	var once sync.Once
+	var closeErr error
+	return func() error {
+		once.Do(func() {
+			if cleanup != nil {
+				closeErr = cleanup()
+			}
+		})
+		return closeErr
+	}
 }
 
 func TestCollectionInsertBatchStatsExposeNoIndexFastPath(t *testing.T) {
