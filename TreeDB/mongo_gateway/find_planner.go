@@ -145,6 +145,9 @@ func validateFindCommandOptions(command wire.Document, filter wire.Document) err
 	if _, err := normalizeBatchSize(int(batchSize), batchSizeSet, defaultCursorBatchSize); err != nil {
 		return err
 	}
+	if _, err := optionalBoolField(command, "singleBatch"); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -159,18 +162,29 @@ func (s *Server) maxFindBatchBytes() int {
 func (s *Server) findCandidateDocuments(col *collections.Collection, predicates []findPredicate) ([]wire.Document, error) {
 	meta := col.Meta()
 	maxDocuments := s.maxFindScanDocuments()
+	var primaryDocs []wire.Document
+	primarySet := false
 	if pred, ok := primaryCandidatePredicate(predicates); ok {
 		docs, err := documentsForPrimaryPredicate(col, pred, maxDocuments)
 		if err != nil {
 			return nil, err
 		}
-		return s.limitCandidateDocuments(docs)
+		primaryDocs = docs
+		primarySet = true
 	}
 	if docs, ok, err := s.bestIndexedCandidateDocuments(col, meta, predicates, maxDocuments); ok || err != nil {
 		if err != nil {
+			if primarySet {
+				return s.limitCandidateDocuments(primaryDocs)
+			}
 			return nil, err
 		}
-		return s.limitCandidateDocuments(docs)
+		if !primarySet || len(docs) < len(primaryDocs) {
+			return s.limitCandidateDocuments(docs)
+		}
+	}
+	if primarySet {
+		return s.limitCandidateDocuments(primaryDocs)
 	}
 	records, truncated, err := col.ScanDocuments(maxDocuments)
 	if err != nil {
@@ -538,7 +552,7 @@ func valueMatchesPredicate(value bson.RawValue, pred findPredicate) (bool, error
 
 func rangeValuesComparable(left, right bson.RawValue) bool {
 	if left.IsNumber() && right.IsNumber() {
-		return true
+		return rawNumberComparable(left) && rawNumberComparable(right)
 	}
 	return left.Type == right.Type
 }
@@ -562,7 +576,7 @@ func parseFindSort(command wire.Document) (findSort, error) {
 	if err != nil {
 		return findSort{}, err
 	}
-	if field == "" || strings.HasPrefix(field, "$") {
+	if field == "" || strings.HasPrefix(field, "$") || strings.Contains(field, ".") {
 		return findSort{}, errors.New("Mongo gateway find sort field must be a supported document field")
 	}
 	value := elements[0].Value()
@@ -914,7 +928,10 @@ func compareRawNumbers(left, right bson.RawValue) int {
 	if leftRank != rightRank {
 		return compareInt(leftRank, rightRank)
 	}
-	return bytes.Compare(left.Value, right.Value)
+	if left.Type != right.Type {
+		return compareInt(bsonTypeSortRank(left.Type), bsonTypeSortRank(right.Type))
+	}
+	return 0
 }
 
 func numberSortRank(value bson.RawValue, finite bool) int {
@@ -969,9 +986,55 @@ func rawNumberRat(value bson.RawValue) (*big.Rat, bool) {
 			return nil, false
 		}
 		return rat, true
+	case bson.TypeDecimal128:
+		v, ok := value.Decimal128OK()
+		if !ok {
+			return nil, false
+		}
+		return decimal128Rat(v)
 	default:
 		return nil, false
 	}
+}
+
+func rawNumberComparable(value bson.RawValue) bool {
+	if _, ok := rawNumberRat(value); ok {
+		return true
+	}
+	return rawNumberIsNonFiniteDouble(value) && !rawValueIsNaN(value)
+}
+
+func rawNumberIsNonFiniteDouble(value bson.RawValue) bool {
+	if value.Type != bson.TypeDouble {
+		return false
+	}
+	v, ok := value.DoubleOK()
+	return ok && (math.IsInf(v, -1) || math.IsInf(v, 1) || math.IsNaN(v))
+}
+
+func decimal128Rat(value bson.Decimal128) (*big.Rat, bool) {
+	significand, exponent, err := value.BigInt()
+	if err != nil {
+		return nil, false
+	}
+	rat := new(big.Rat).SetInt(significand)
+	if exponent == 0 {
+		return rat, true
+	}
+	scale := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(absInt(exponent))), nil)
+	if exponent > 0 {
+		rat.Mul(rat, new(big.Rat).SetInt(scale))
+	} else {
+		rat.Quo(rat, new(big.Rat).SetInt(scale))
+	}
+	return rat, true
+}
+
+func absInt(value int) int {
+	if value < 0 {
+		return -value
+	}
+	return value
 }
 
 func compareInt(left, right int) int {

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/collections"
 	"github.com/snissn/gomap/TreeDB/mongo_gateway/wire"
@@ -112,7 +113,22 @@ func (s *Server) findResponse(command wire.Document, cursorOwner int64) (wire.Do
 	if err != nil {
 		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
 	}
+	singleBatch, err := optionalBoolField(command, "singleBatch")
+	if err != nil {
+		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
+	}
 	ns := db + "." + collection
+	if singleBatch {
+		normalizedBatchSize, err := normalizeBatchSize(int(batchSize), batchSizeSet, defaultCursorBatchSize)
+		if err != nil {
+			return commandError(commandCodeBadValue, "BadValue", err.Error())
+		}
+		firstBatch, _, err := documentsBatchWithLimit(results.docs, results.projection, normalizedBatchSize, s.maxFindBatchBytes())
+		if err != nil {
+			return commandError(commandCodeBadValue, "BadValue", err.Error())
+		}
+		return marshalCursorResponseWithID(ns, 0, "firstBatch", firstBatch)
+	}
 	cursorID, firstBatch, err := s.openCursor(ns, results.docs, results.projection, int(batchSize), batchSizeSet, defaultCursorBatchSize, cursorOwner)
 	if err != nil {
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
@@ -488,7 +504,7 @@ func (s *Server) getMoreResponse(command wire.Document, cursorOwner int64) (wire
 		batchSizeSet = false
 	}
 	ns := db + "." + collection
-	nextID, nextBatch, ok, err := s.getMore(cursorID, ns, cursorOwner, int(batchSize), batchSizeSet, maxInt)
+	nextID, nextBatch, ok, err := s.getMore(cursorID, ns, cursorOwner, int(batchSize), batchSizeSet, defaultCursorBatchSize)
 	if err != nil {
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}
@@ -568,15 +584,21 @@ func (s *Server) openCursor(ns string, docs []wire.Document, projection compiled
 	if cursorID == 0 {
 		cursorID = s.nextCursorID.Add(1)
 	}
+	now := time.Now()
+	storedBatchSize := batchSize
+	if storedBatchSize == 0 {
+		storedBatchSize = defaultBatchSize
+	}
 	s.cursorMu.Lock()
 	defer s.cursorMu.Unlock()
+	s.reapExpiredCursorsLocked(now)
 	if s.cursors == nil {
 		s.cursors = make(map[int64]*serverCursor)
 	}
 	if len(s.cursors) >= s.maxOpenCursors() {
 		return 0, nil, errors.New("Mongo gateway cursor limit exceeded")
 	}
-	s.cursors[cursorID] = &serverCursor{ns: ns, owner: owner, docs: docs, projection: projection, pos: consumed}
+	s.cursors[cursorID] = &serverCursor{ns: ns, owner: owner, docs: docs, projection: projection, batchSize: storedBatchSize, pos: consumed, lastUsed: now}
 	return cursorID, firstBatch, nil
 }
 
@@ -584,12 +606,16 @@ func (s *Server) getMore(cursorID int64, ns string, owner int64, batchSize int, 
 	if cursorID == 0 {
 		return 0, nil, false, nil
 	}
-	batchSize, err := normalizeBatchSize(batchSize, explicitBatchSize, defaultBatchSize)
-	if err != nil {
-		return 0, nil, false, err
+	if explicitBatchSize {
+		var err error
+		batchSize, err = normalizeBatchSize(batchSize, true, defaultBatchSize)
+		if err != nil {
+			return 0, nil, false, err
+		}
 	}
 	for {
 		s.cursorMu.Lock()
+		s.reapExpiredCursorsLocked(time.Now())
 		cursor := s.cursors[cursorID]
 		if cursor == nil || cursor.ns != ns || cursor.owner != owner {
 			s.cursorMu.Unlock()
@@ -598,9 +624,16 @@ func (s *Server) getMore(cursorID int64, ns string, owner int64, batchSize int, 
 		startPos := cursor.pos
 		remaining := cursor.docs[startPos:]
 		projection := cursor.projection
+		effectiveBatchSize := batchSize
+		if !explicitBatchSize {
+			effectiveBatchSize = cursor.batchSize
+			if effectiveBatchSize <= 0 {
+				effectiveBatchSize = defaultBatchSize
+			}
+		}
 		s.cursorMu.Unlock()
 
-		batch, consumed, err := documentsBatchWithLimit(remaining, projection, batchSize, s.maxFindBatchBytes())
+		batch, consumed, err := documentsBatchWithLimit(remaining, projection, effectiveBatchSize, s.maxFindBatchBytes())
 		if err != nil {
 			return 0, nil, false, err
 		}
@@ -616,6 +649,7 @@ func (s *Server) getMore(cursorID int64, ns string, owner int64, batchSize int, 
 			continue
 		}
 		current.pos += consumed
+		current.lastUsed = time.Now()
 		if current.pos >= len(current.docs) {
 			delete(s.cursors, cursorID)
 			s.cursorMu.Unlock()
@@ -642,6 +676,7 @@ func (s *Server) killCursorsForOwner(owner int64) {
 func (s *Server) killCursors(ns string, owner int64, cursorIDs []int64) ([]int64, []int64) {
 	s.cursorMu.Lock()
 	defer s.cursorMu.Unlock()
+	s.reapExpiredCursorsLocked(time.Now())
 	killed := make([]int64, 0, len(cursorIDs))
 	notFound := make([]int64, 0)
 	for _, cursorID := range cursorIDs {
@@ -654,6 +689,29 @@ func (s *Server) killCursors(ns string, owner int64, cursorIDs []int64) ([]int64
 		killed = append(killed, cursorID)
 	}
 	return killed, notFound
+}
+
+func (s *Server) reapExpiredCursors() {
+	timeout := s.cursorIdleTimeout()
+	if timeout <= 0 {
+		return
+	}
+	s.cursorMu.Lock()
+	defer s.cursorMu.Unlock()
+	s.reapExpiredCursorsLocked(time.Now())
+}
+
+func (s *Server) reapExpiredCursorsLocked(now time.Time) {
+	timeout := s.cursorIdleTimeout()
+	if timeout <= 0 {
+		return
+	}
+	cutoff := now.Add(-timeout)
+	for cursorID, cursor := range s.cursors {
+		if !cursor.lastUsed.IsZero() && !cursor.lastUsed.After(cutoff) {
+			delete(s.cursors, cursorID)
+		}
+	}
 }
 
 func normalizeBatchSize(batchSize int, explicit bool, defaultBatchSize int) (int, error) {

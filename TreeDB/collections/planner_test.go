@@ -154,6 +154,13 @@ func TestAppendIndexScalarEncodesIntoArena(t *testing.T) {
 	}
 }
 
+func TestAppendIndexScalarRejectsPlatformInt(t *testing.T) {
+	_, _, err := appendIndexScalar(nil, int(42))
+	if err == nil || !strings.Contains(err.Error(), "unsupported indexed value type int") {
+		t.Fatalf("appendIndexScalar(int) err=%v want unsupported int", err)
+	}
+}
+
 func TestOrderedIndexStateForDocumentHandlesScalarAndArrayValues(t *testing.T) {
 	scalarRuntime := []indexRuntime{{
 		def:  indexDefinition{name: "email", field: "email"},
