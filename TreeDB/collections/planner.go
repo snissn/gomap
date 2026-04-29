@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"sort"
 	"strconv"
@@ -817,7 +818,15 @@ func orderedIndexStateForDocumentWithArena(document []byte, runtimes []indexRunt
 		return state, err
 	}
 	var decoded any
-	if err := json.Unmarshal(document, &decoded); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(document))
+	decoder.UseNumber()
+	if err := decoder.Decode(&decoded); err != nil {
+		return nil, fmt.Errorf("collections: index extraction requires JSON document: %w", err)
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		if err == nil {
+			err = errors.New("unexpected trailing JSON value")
+		}
 		return nil, fmt.Errorf("collections: index extraction requires JSON document: %w", err)
 	}
 	obj, ok := decoded.(map[string]any)
@@ -1045,21 +1054,39 @@ func appendJSONParserIndexScalar(dst []byte, raw []byte, valueType jsonparser.Va
 			return dst, nil, fmt.Errorf("collections: unsupported indexed JSON boolean %q", raw)
 		}
 	case jsonparser.Number:
-		num, err := jsonparser.ParseFloat(raw)
-		if err != nil || math.IsInf(num, 0) {
-			if err != nil {
-				return dst, nil, fmt.Errorf("collections: unsupported indexed JSON number %q: %w", raw, err)
-			}
-			return dst, nil, fmt.Errorf("collections: unsupported indexed JSON number %q", raw)
-		}
-		dst = append(dst, "n:"...)
-		dst = strconv.AppendFloat(dst, num, 'g', -1, 64)
+		return appendJSONNumberIndexScalar(dst, string(raw))
 	case jsonparser.Null:
 		dst = append(dst, "z:"...)
 	default:
 		return dst, nil, fmt.Errorf("collections: unsupported indexed JSON value type %s", valueType)
 	}
 	return dst, dst[start:len(dst):len(dst)], nil
+}
+
+func appendJSONNumberIndexScalar(dst []byte, raw string) ([]byte, []byte, error) {
+	start := len(dst)
+	if jsonNumberLooksInteger(raw) {
+		num, err := strconv.ParseInt(raw, 10, 64)
+		if err == nil {
+			dst = append(dst, "n:"...)
+			dst = strconv.AppendInt(dst, num, 10)
+			return dst, dst[start:len(dst):len(dst)], nil
+		}
+	}
+	num, err := strconv.ParseFloat(raw, 64)
+	if err != nil || math.IsInf(num, 0) {
+		if err != nil {
+			return dst, nil, fmt.Errorf("collections: unsupported indexed JSON number %q: %w", raw, err)
+		}
+		return dst, nil, fmt.Errorf("collections: unsupported indexed JSON number %q", raw)
+	}
+	dst = append(dst, "n:"...)
+	dst = strconv.AppendFloat(dst, num, 'g', -1, 64)
+	return dst, dst[start:len(dst):len(dst)], nil
+}
+
+func jsonNumberLooksInteger(raw string) bool {
+	return !strings.ContainsAny(raw, ".eE")
 }
 
 func (a *indexEncodeArena) appendSingleValueRef(value []byte) [][]byte {
@@ -1433,6 +1460,8 @@ func appendIndexScalar(dst []byte, value any) ([]byte, []byte, error) {
 	case float64:
 		dst = append(dst, "n:"...)
 		dst = strconv.AppendFloat(dst, v, 'g', -1, 64)
+	case json.Number:
+		return appendJSONNumberIndexScalar(dst, v.String())
 	case nil:
 		dst = append(dst, "z:"...)
 	default:
