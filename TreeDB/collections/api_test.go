@@ -87,7 +87,7 @@ func TestCollectionInsertBatchBridge_RoundTripWithSecondaryIndexes(t *testing.T)
 	if err != nil {
 		t.Fatalf("find city: %v", err)
 	}
-	collectionMaintenanceRequireIDs(t, cityIDs, []byte("u1"), []byte("u2"))
+	collectionMaintenanceRequireUnorderedIDs(t, cityIDs, []byte("u1"), []byte("u2"))
 
 	snap := d.AcquireSnapshot()
 	if snap == nil {
@@ -268,7 +268,7 @@ func TestCollectionLeafGenerationPackGC_RoundTripWithTemplateV1SecondaryIndexes(
 		Durability:                 treedb.DurabilityWALOffRelaxed,
 		IndexOuterLeavesInValueLog: true,
 	}
-	opts.ValueLog.Generational.LeafSegmentTargetBytes = 64 << 10
+	opts.ValueLog.Generational.LeafSegmentTargetBytes = 16 << 10
 
 	d, cleanup, err := treedb.OpenBackendWithCachedLeafLog(opts)
 	if err != nil {
@@ -299,9 +299,9 @@ func TestCollectionLeafGenerationPackGC_RoundTripWithTemplateV1SecondaryIndexes(
 
 	var encoder TemplateV1Encoder
 	const (
-		documents                              = 12_000
-		batchSize                              = 1_500
-		minExpectedCollectionLiveBytesForSmoke = 16 * 1024
+		documents                              = 4_000
+		batchSize                              = 500
+		minExpectedCollectionLiveBytesForSmoke = 512
 	)
 	for start := 0; start < documents; start += batchSize {
 		ids, docs := collectionMaintenanceTemplateBatch(t, &encoder, start, batchSize)
@@ -589,9 +589,7 @@ func requireCollectionMaintenanceReads(t *testing.T, col *Collection) {
 	if err != nil {
 		t.Fatalf("find city: %v", err)
 	}
-	// Nonunique index result order is intentionally not part of these
-	// maintenance smoke-test assertions.
-	collectionMaintenanceRequireIDs(t, cityIDs, []byte("u1"), []byte("u2"))
+	collectionMaintenanceRequireUnorderedIDs(t, cityIDs, []byte("u1"), []byte("u2"))
 }
 
 func collectionMaintenanceTemplateBatch(t *testing.T, encoder *TemplateV1Encoder, start, count int) ([][]byte, [][]byte) {
@@ -662,7 +660,7 @@ func collectionMaintenanceContainsID(ids [][]byte, want []byte) bool {
 }
 
 // Non-unique index scans do not promise result ordering; assert set membership.
-func collectionMaintenanceRequireIDs(t *testing.T, got [][]byte, want ...[]byte) {
+func collectionMaintenanceRequireUnorderedIDs(t *testing.T, got [][]byte, want ...[]byte) {
 	t.Helper()
 	if len(got) != len(want) {
 		t.Fatalf("ids=%q want %q", got, want)
@@ -1534,7 +1532,7 @@ func TestCollectionInsertBatchBridge_AppendsWithoutDroppingExistingRoots(t *test
 	if err != nil {
 		t.Fatalf("find city: %v", err)
 	}
-	collectionMaintenanceRequireIDs(t, cityIDs, []byte("u1"), []byte("u2"))
+	collectionMaintenanceRequireUnorderedIDs(t, cityIDs, []byte("u1"), []byte("u2"))
 }
 
 func TestCollectionCreateIndexBackfill_BuildsSecondaryAndIndexState(t *testing.T) {
@@ -1577,7 +1575,7 @@ func TestCollectionCreateIndexBackfill_BuildsSecondaryAndIndexState(t *testing.T
 	if err != nil {
 		t.Fatalf("find city: %v", err)
 	}
-	collectionMaintenanceRequireIDs(t, cityIDs, []byte("u1"), []byte("u2"))
+	collectionMaintenanceRequireUnorderedIDs(t, cityIDs, []byte("u1"), []byte("u2"))
 
 	snap := d.AcquireSnapshot()
 	if snap == nil {

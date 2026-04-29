@@ -2325,12 +2325,6 @@ func cloneCollectionRootDescriptorAliases(aliases [][]byte) [][]byte {
 	return out
 }
 
-func valueLogRewriteCollectionRootDescriptorAliases(descriptors []vacuumCollectionRootDescriptor, rootID uint64) [][]byte {
-	aliasesByRoot := valueLogRewriteCollectionRootDescriptorAliasMap(descriptors)
-	aliases := cloneCollectionRootDescriptorAliases(aliasesByRoot[rootID])
-	return aliases
-}
-
 func (db *DB) applyRewriteSwapBatch(swaps []rewriteSwap, sync bool) error {
 	if len(swaps) == 0 {
 		return nil
@@ -2372,11 +2366,11 @@ func (db *DB) applyRewriteSwapBatchToSystemRoot(swaps []rewriteSwap, sync bool) 
 	}
 	idx := db.idx.Load()
 	if idx == nil {
-		return fmt.Errorf("vlog-rewrite: collection root: missing index")
+		return fmt.Errorf("vlog-rewrite: system root: missing index")
 	}
 	state := db.state.Load()
 	if state == nil {
-		return fmt.Errorf("vlog-rewrite: collection root: missing backend state")
+		return fmt.Errorf("vlog-rewrite: system root: missing backend state")
 	}
 
 	db.mu.RLock()
