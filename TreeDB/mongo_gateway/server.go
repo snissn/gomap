@@ -31,6 +31,16 @@ func NewServer() *Server {
 }
 
 func (s *Server) ServeConn(ctx context.Context, conn net.Conn) error {
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = conn.Close()
+		case <-done:
+		}
+	}()
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -41,6 +51,9 @@ func (s *Server) ServeConn(ctx context.Context, conn net.Conn) error {
 		if err := s.ServeOne(conn); err != nil {
 			if errors.Is(err, io.EOF) {
 				return nil
+			}
+			if ctx.Err() != nil && errors.Is(err, net.ErrClosed) {
+				return ctx.Err()
 			}
 			return err
 		}

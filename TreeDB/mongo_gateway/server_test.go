@@ -2,9 +2,12 @@ package mongogateway
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"io"
+	"net"
 	"testing"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/mongo_gateway/wire"
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -99,6 +102,27 @@ func TestServerRejectsCompressedMessages(t *testing.T) {
 	}
 	if rw.w.Len() != 0 {
 		t.Fatalf("unexpected response bytes=%d", rw.w.Len())
+	}
+}
+
+func TestServeConnCancellationInterruptsRead(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	defer clientConn.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- NewServer().ServeConn(ctx, serverConn)
+	}()
+
+	cancel()
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("ServeConn err=%v want context.Canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ServeConn did not return after context cancellation")
 	}
 }
 
