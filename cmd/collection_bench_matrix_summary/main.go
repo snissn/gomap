@@ -337,25 +337,51 @@ func matrixIndexArtifactPath(baseDir, artifactPath string) (string, error) {
 		}
 		joined = filepath.Clean(filepath.Join(baseDir, artifactPath))
 	}
-	rel, err := filepath.Rel(baseDir, joined)
-	if err != nil {
+	if inside, err := pathWithinDir(baseDir, joined); err != nil {
 		return "", fmt.Errorf("resolve artifact path %q: %w", artifactPath, err)
-	}
-	if rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) || filepath.IsAbs(rel) {
-		return "", fmt.Errorf("artifact path %q escapes matrix directory", artifactPath)
-	}
-	if resolvedBase, err := filepath.EvalSymlinks(baseDir); err == nil {
-		if resolvedJoined, err := filepath.EvalSymlinks(joined); err == nil {
-			rel, err := filepath.Rel(resolvedBase, resolvedJoined)
-			if err != nil {
-				return "", fmt.Errorf("resolve artifact path %q symlinks: %w", artifactPath, err)
-			}
-			if rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) || filepath.IsAbs(rel) {
-				return "", fmt.Errorf("resolved artifact path %q escapes matrix directory", artifactPath)
-			}
+	} else if !inside {
+		resolvedInside, checked, err := resolvedPathWithinDir(baseDir, joined)
+		if err != nil {
+			return "", fmt.Errorf("resolve artifact path %q symlinks: %w", artifactPath, err)
 		}
+		if !checked || !resolvedInside {
+			return "", fmt.Errorf("artifact path %q escapes matrix directory", artifactPath)
+		}
+		return joined, nil
+	}
+	if resolvedInside, checked, err := resolvedPathWithinDir(baseDir, joined); err != nil {
+		return "", fmt.Errorf("resolve artifact path %q symlinks: %w", artifactPath, err)
+	} else if checked && !resolvedInside {
+		return "", fmt.Errorf("resolved artifact path %q escapes matrix directory", artifactPath)
 	}
 	return joined, nil
+}
+
+func pathWithinDir(baseDir, target string) (bool, error) {
+	rel, err := filepath.Rel(baseDir, target)
+	if err != nil {
+		return false, err
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) || filepath.IsAbs(rel) {
+		return false, nil
+	}
+	return true, nil
+}
+
+func resolvedPathWithinDir(baseDir, target string) (inside bool, checked bool, err error) {
+	resolvedBase, err := filepath.EvalSymlinks(baseDir)
+	if err != nil {
+		return false, false, nil
+	}
+	resolvedTarget, err := filepath.EvalSymlinks(target)
+	if err != nil {
+		return false, false, nil
+	}
+	inside, err = pathWithinDir(resolvedBase, resolvedTarget)
+	if err != nil {
+		return false, true, err
+	}
+	return inside, true, nil
 }
 
 func field(record []string, idx int) string {

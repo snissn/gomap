@@ -85,8 +85,23 @@ func TestReadMatrixIndexAllowsAbsoluteReportPathWithRelativeMatrixIndex(t *testi
 	if err := os.WriteFile(indexPath, []byte(index), 0o644); err != nil {
 		t.Fatalf("write matrix index: %v", err)
 	}
+	if err := os.WriteFile(reportMarkdown, []byte("# report\n"), 0o644); err != nil {
+		t.Fatalf("write report markdown: %v", err)
+	}
 
-	t.Chdir(filepath.Dir(dir))
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	if err := os.Chdir(filepath.Dir(dir)); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	defer func() {
+		if err := os.Chdir(oldwd); err != nil {
+			t.Fatalf("restore wd: %v", err)
+		}
+	}()
+
 	rows, err := readMatrixIndex(filepath.Join(filepath.Base(dir), "matrix_index.tsv"))
 	if err != nil {
 		t.Fatalf("readMatrixIndex: %v", err)
