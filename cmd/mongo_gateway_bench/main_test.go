@@ -76,6 +76,21 @@ func TestValidateResettableTreeDBDirRejectsDangerousPaths(t *testing.T) {
 	}
 }
 
+func TestValidateResettableTreeDBDirRejectsSymlinkComponents(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "target")
+	if err := os.Mkdir(target, 0o700); err != nil {
+		t.Fatalf("mkdir target: %v", err)
+	}
+	link := filepath.Join(root, "link")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	if _, err := validateResettableTreeDBDir(filepath.Join(link, "treedb")); err == nil {
+		t.Fatal("symlinked treedb-dir accepted")
+	}
+}
+
 func TestRedactMongoURI(t *testing.T) {
 	got := redactMongoURI("mongodb://user:secret@127.0.0.1:27017/db?authSource=admin")
 	want := "mongodb://user@127.0.0.1:27017/db?authSource=admin"

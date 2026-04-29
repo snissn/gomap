@@ -130,6 +130,7 @@ func run(parent context.Context, args []string) error {
 func parseConfig(args []string) (config, error) {
 	cfg := config{}
 	fs := flag.NewFlagSet("mongo_gateway_bench", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
 	fs.StringVar(&cfg.Target, "target", "treedb", "benchmark target: treedb or mongo")
 	fs.StringVar(&cfg.MongoURI, "mongo-uri", "mongodb://127.0.0.1:27017", "MongoDB URI for -target mongo")
 	fs.StringVar(&cfg.TreeDBDir, "treedb-dir", "", "TreeDB directory for -target treedb; empty uses a temp dir")
@@ -315,7 +316,42 @@ func validateResettableTreeDBDir(dir string) (string, error) {
 			return "", fmt.Errorf("unsafe treedb-dir %q", dir)
 		}
 	}
+	if err := rejectSymlinkedPath(abs); err != nil {
+		return "", err
+	}
 	return abs, nil
+}
+
+func rejectSymlinkedPath(path string) error {
+	clean := filepath.Clean(path)
+	volume := filepath.VolumeName(clean)
+	rest := strings.TrimPrefix(clean, volume)
+	current := volume
+	if strings.HasPrefix(rest, string(os.PathSeparator)) {
+		current += string(os.PathSeparator)
+		rest = strings.TrimPrefix(rest, string(os.PathSeparator))
+	}
+	for _, part := range strings.Split(rest, string(os.PathSeparator)) {
+		if part == "" {
+			continue
+		}
+		if current == "" || strings.HasSuffix(current, string(os.PathSeparator)) {
+			current += part
+		} else {
+			current = filepath.Join(current, part)
+		}
+		info, err := os.Lstat(current)
+		if err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				return nil
+			}
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("unsafe treedb-dir %q resolves through symlink %q", path, current)
+		}
+	}
+	return nil
 }
 
 func openMongoTarget(ctx context.Context, cfg config) (*benchTarget, error) {
