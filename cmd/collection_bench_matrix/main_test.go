@@ -155,6 +155,14 @@ func TestRelativeArtifactPath(t *testing.T) {
 	}
 }
 
+func TestShellQuoteCommand(t *testing.T) {
+	got := shellQuoteCommand([]string{"collection_bench_matrix", "-out-dir", "/tmp/bench run", "-tree-bench-pattern", "^Benchmark(foo)$", "a'b"})
+	want := "collection_bench_matrix -out-dir '/tmp/bench run' -tree-bench-pattern '^Benchmark(foo)$' 'a'\"'\"'b'"
+	if got != want {
+		t.Fatalf("shellQuoteCommand=%q want %q", got, want)
+	}
+}
+
 func TestWriteMatrixIndex(t *testing.T) {
 	dir := t.TempDir()
 	cells := []matrixCell{

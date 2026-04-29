@@ -133,7 +133,7 @@ func TestLeafGenerationSummaryOmittedWhenDisabled(t *testing.T) {
 	}
 }
 
-func TestRunFixtureLeafGenerationNoCandidatesPreservesDiskTotals(t *testing.T) {
+func TestRunFixtureLeafGenerationReportsDiskTotals(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "fixture")
 	cfg, err := parseConfig([]string{
 		"-dir", dir,
@@ -152,14 +152,14 @@ func TestRunFixtureLeafGenerationNoCandidatesPreservesDiskTotals(t *testing.T) {
 	if summary.LeafGeneration == nil || !summary.LeafGeneration.Enabled {
 		t.Fatal("expected enabled leaf generation summary")
 	}
-	if summary.LeafGeneration.CandidateGenerations != 0 {
-		t.Skipf("fixture produced %d candidate generations; no-candidate disk total path not exercised", summary.LeafGeneration.CandidateGenerations)
+	if summary.LeafGeneration.DiskBytesAfterPack == 0 {
+		t.Fatal("expected non-zero disk bytes after leaf-generation pack path")
 	}
-	if summary.LeafGeneration.DiskBytesAfterPack != summary.LeafGeneration.DiskBytesBefore {
-		t.Fatalf("after pack bytes=%d want before bytes=%d", summary.LeafGeneration.DiskBytesAfterPack, summary.LeafGeneration.DiskBytesBefore)
+	if summary.LeafGeneration.DiskBytesAfterGC == 0 {
+		t.Fatal("expected non-zero disk bytes after leaf-generation GC")
 	}
-	if summary.LeafGeneration.DiskBytesAfterGC != summary.LeafGeneration.DiskBytesBefore {
-		t.Fatalf("after GC bytes=%d want before bytes=%d", summary.LeafGeneration.DiskBytesAfterGC, summary.LeafGeneration.DiskBytesBefore)
+	if summary.LeafGeneration.CandidateGenerations == 0 && summary.LeafGeneration.DiskBytesAfterPack != summary.LeafGeneration.DiskBytesBefore {
+		t.Fatalf("no-candidate after pack bytes=%d want before bytes=%d", summary.LeafGeneration.DiskBytesAfterPack, summary.LeafGeneration.DiskBytesBefore)
 	}
 }
 

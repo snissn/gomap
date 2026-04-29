@@ -979,7 +979,23 @@ func maybePackLeafGenerations(cfg config, backend *backenddb.DB) (*leafGeneratio
 	out.ExpectedReclaimPerCopyPPM = plan.ExpectedReclaimPerByteCopiedPPM
 	if len(plan.CandidateGenerationIDs) == 0 {
 		out.DiskBytesAfterPack = beforeDisk.TotalBytes
-		out.DiskBytesAfterGC = beforeDisk.TotalBytes
+		gcStart := time.Now()
+		gcStats, err := backend.LeafGenerationGC(ctx, backenddb.LeafGenerationGCOptions{})
+		if err != nil {
+			return out, fmt.Errorf("leaf-generation GC without pack candidates: %w", err)
+		}
+		out.GCTiming = timing(time.Since(gcStart), 1)
+		out.GCGenerationsDeleted = gcStats.GenerationsDeleted
+		out.GCFilesDeleted = gcStats.FilesDeleted
+		out.GCBytesDeleted = gcStats.BytesDeleted
+		if err := backend.Checkpoint(); err != nil {
+			return out, fmt.Errorf("checkpoint after leaf-generation GC without pack candidates: %w", err)
+		}
+		afterGC, err := directoryUsage(cfg.Dir, cfg.Docs)
+		if err != nil {
+			return out, err
+		}
+		out.DiskBytesAfterGC = afterGC.TotalBytes
 		return out, nil
 	}
 

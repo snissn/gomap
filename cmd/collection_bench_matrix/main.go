@@ -3,9 +3,9 @@ package main
 import (
 	"bytes"
 	"encoding/csv"
+	"errors"
 	"flag"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -69,6 +69,9 @@ type matrixCell struct {
 func main() {
 	cfg, err := parseFlags(os.Args[1:])
 	if err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			os.Exit(0)
+		}
 		fmt.Fprintf(os.Stderr, "collection_bench_matrix: %v\n", err)
 		os.Exit(2)
 	}
@@ -96,7 +99,7 @@ func parseFlags(args []string) (config, error) {
 	}
 
 	fs := flag.NewFlagSet("collection_bench_matrix", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
+	fs.SetOutput(os.Stderr)
 	fs.StringVar(&cfg.repoRoot, "repo-root", "", "Repository root; defaults to git rev-parse --show-toplevel")
 	fs.StringVar(&cfg.outDir, "out-dir", "", "Output directory; defaults to /tmp/collection_bench_matrix_<timestamp>")
 	fs.StringVar(&cfg.goBinary, "go", cfg.goBinary, "go binary to execute")
@@ -543,7 +546,7 @@ func writeRunREADME(cfg config, commandLine []string, cells []matrixCell, matrix
 	sb.WriteString(commit)
 	sb.WriteString("`\n")
 	sb.WriteString("- command: `")
-	sb.WriteString(strings.Join(commandLine, " "))
+	sb.WriteString(shellQuoteCommand(commandLine))
 	sb.WriteString("`\n")
 	sb.WriteString("- benchtime: `")
 	sb.WriteString(cfg.benchtime)
@@ -603,6 +606,24 @@ func relativeArtifactPath(baseDir, artifactPath string) string {
 		return artifactPath
 	}
 	return rel
+}
+
+func shellQuoteCommand(args []string) string {
+	quoted := make([]string, 0, len(args))
+	for _, arg := range args {
+		quoted = append(quoted, shellQuoteArg(arg))
+	}
+	return strings.Join(quoted, " ")
+}
+
+func shellQuoteArg(arg string) string {
+	if arg == "" {
+		return "''"
+	}
+	if !strings.ContainsAny(arg, " \t\n'\"\\$`!*?[]{}()<>|&;") {
+		return arg
+	}
+	return "'" + strings.ReplaceAll(arg, "'", "'\"'\"'") + "'"
 }
 
 func gitOutput(repoRoot string, args ...string) string {
