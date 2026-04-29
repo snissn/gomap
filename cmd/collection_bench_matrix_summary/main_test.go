@@ -50,6 +50,23 @@ func TestReadMatrixIndexRejectsEscapingRelativeReportPath(t *testing.T) {
 	}
 }
 
+func TestReadMatrixIndexRejectsAbsoluteReportPath(t *testing.T) {
+	dir := t.TempDir()
+	indexPath := filepath.Join(dir, "matrix_index.tsv")
+	index := strings.Join([]string{
+		"cell\tengine\tdocument_format\tdata_outer_leaves_in_vlog\tindex_outer_leaves_in_vlog\tpager_chunk_size\tpager_sync_concurrency\treport_md\treport_json",
+		"cell_a\tproduction_fast\tjson\ttrue\ttrue\tprofile/default\tprofile/default\t" + filepath.Join(dir, "collections_report.md") + "\tcell_a/collections_report.json",
+	}, "\n")
+	if err := os.WriteFile(indexPath, []byte(index), 0o644); err != nil {
+		t.Fatalf("write matrix index: %v", err)
+	}
+
+	_, err := readMatrixIndex(indexPath)
+	if err == nil || !strings.Contains(err.Error(), "absolute artifact path") {
+		t.Fatalf("readMatrixIndex err=%v want absolute path rejection", err)
+	}
+}
+
 func TestMatrixSummaryRendersBenchmarkMetrics(t *testing.T) {
 	dir := t.TempDir()
 	cellDir := filepath.Join(dir, "production_fast_data_vlog_index_leaf")
@@ -263,8 +280,8 @@ func TestMatrixSummaryRendersBenchmarkMetrics(t *testing.T) {
 	indexPath := filepath.Join(dir, "matrix_index.tsv")
 	index := strings.Join([]string{
 		"cell\tengine\tdocument_format\tdata_outer_leaves_in_vlog\tindex_outer_leaves_in_vlog\tpager_chunk_size\tpager_sync_concurrency\treport_md\treport_json\tcpu_profile\tmem_profile",
-		"production_fast_data_vlog_index_leaf\tproduction_fast\ttemplate-v1\ttrue\tfalse\tprofile/default\tprofile/default\t" + reportMarkdown + "\t" + reportJSON + "\t/cpu.pprof\t/mem.pprof",
-		sqliteCell + "\twal_custom\tjson\t-\t-\t-\t-\t" + sqliteReportMarkdown + "\t" + sqliteReportJSON + "\t/sqlite-cpu.pprof\t/sqlite-mem.pprof",
+		"production_fast_data_vlog_index_leaf\tproduction_fast\ttemplate-v1\ttrue\tfalse\tprofile/default\tprofile/default\t" + filepath.Join("production_fast_data_vlog_index_leaf", "collections_report.md") + "\t" + filepath.Join("production_fast_data_vlog_index_leaf", "collections_report.json") + "\t/cpu.pprof\t/mem.pprof",
+		sqliteCell + "\twal_custom\tjson\t-\t-\t-\t-\t" + filepath.Join(sqliteCell, "collections_report.md") + "\t" + filepath.Join(sqliteCell, "collections_report.json") + "\t/sqlite-cpu.pprof\t/sqlite-mem.pprof",
 		"",
 	}, "\n")
 	if err := os.WriteFile(indexPath, []byte(index), 0o644); err != nil {
@@ -450,7 +467,7 @@ func TestMatrixSummaryAllowsLegacySQLiteReportsWithoutNativeColumns(t *testing.T
 	indexPath := filepath.Join(dir, "matrix_index.tsv")
 	index := strings.Join([]string{
 		"cell\tengine\tdocument_format\tdata_outer_leaves_in_vlog\tindex_outer_leaves_in_vlog\tpager_chunk_size\tpager_sync_concurrency\treport_md\treport_json\tcpu_profile\tmem_profile",
-		sqliteCell + "\tsqlite_wal_normal\tjson\t-\t-\t-\t-\t" + sqliteReportMarkdown + "\t" + sqliteReportJSON + "\t/sqlite-cpu.pprof\t/sqlite-mem.pprof",
+		sqliteCell + "\tsqlite_wal_normal\tjson\t-\t-\t-\t-\t" + filepath.Join(sqliteCell, "collections_report.md") + "\t" + filepath.Join(sqliteCell, "collections_report.json") + "\t/sqlite-cpu.pprof\t/sqlite-mem.pprof",
 		"",
 	}, "\n")
 	if err := os.WriteFile(indexPath, []byte(index), 0o644); err != nil {
@@ -508,7 +525,7 @@ func TestMatrixSummaryFailsOnUnavailableReport(t *testing.T) {
 	indexPath := filepath.Join(dir, "matrix_index.tsv")
 	index := strings.Join([]string{
 		"cell\tengine\tdata_outer_leaves_in_vlog\tindex_outer_leaves_in_vlog\tpager_chunk_size\tpager_sync_concurrency\treport_md\treport_json\tcpu_profile\tmem_profile",
-		"production_fast_data_vlog_index_leaf\tproduction_fast\ttrue\tfalse\tprofile/default\tprofile/default\t" + reportMarkdown + "\t" + reportJSON + "\t/cpu.pprof\t/mem.pprof",
+		"production_fast_data_vlog_index_leaf\tproduction_fast\ttrue\tfalse\tprofile/default\tprofile/default\t" + filepath.Join("production_fast_data_vlog_index_leaf", "collections_report.md") + "\t" + filepath.Join("production_fast_data_vlog_index_leaf", "collections_report.json") + "\t/cpu.pprof\t/mem.pprof",
 		"",
 	}, "\n")
 	if err := os.WriteFile(indexPath, []byte(index), 0o644); err != nil {
@@ -555,7 +572,7 @@ func TestMatrixSummaryFailsOnMissingExpectedBenchmark(t *testing.T) {
 	indexPath := filepath.Join(dir, "matrix_index.tsv")
 	index := strings.Join([]string{
 		"cell\tengine\tdata_outer_leaves_in_vlog\tindex_outer_leaves_in_vlog\tpager_chunk_size\tpager_sync_concurrency\treport_md\treport_json\tcpu_profile\tmem_profile",
-		"production_fast_data_vlog_index_leaf\tproduction_fast\ttrue\tfalse\tprofile/default\tprofile/default\t" + reportMarkdown + "\t" + reportJSON + "\t/cpu.pprof\t/mem.pprof",
+		"production_fast_data_vlog_index_leaf\tproduction_fast\ttrue\tfalse\tprofile/default\tprofile/default\t" + filepath.Join("production_fast_data_vlog_index_leaf", "collections_report.md") + "\t" + filepath.Join("production_fast_data_vlog_index_leaf", "collections_report.json") + "\t/cpu.pprof\t/mem.pprof",
 		"",
 	}, "\n")
 	if err := os.WriteFile(indexPath, []byte(index), 0o644); err != nil {

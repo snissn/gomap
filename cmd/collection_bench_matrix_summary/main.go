@@ -320,8 +320,11 @@ func readMatrixIndex(path string) ([]matrixRow, error) {
 
 func matrixIndexArtifactPath(baseDir, artifactPath string) (string, error) {
 	artifactPath = strings.TrimSpace(artifactPath)
-	if artifactPath == "" || filepath.IsAbs(artifactPath) {
-		return artifactPath, nil
+	if artifactPath == "" {
+		return "", fmt.Errorf("artifact path is empty")
+	}
+	if filepath.IsAbs(artifactPath) {
+		return "", fmt.Errorf("absolute artifact path %q is not allowed in matrix index", artifactPath)
 	}
 	baseDir = filepath.Clean(baseDir)
 	joined := filepath.Clean(filepath.Join(baseDir, artifactPath))

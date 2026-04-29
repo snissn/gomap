@@ -496,6 +496,14 @@ func writeMatrixIndex(path string, cells []matrixCell) error {
 		return err
 	}
 	for _, cell := range cells {
+		reportMarkdownPath, err := relativeArtifactPath(filepath.Dir(path), cell.ReportMarkdownPath)
+		if err != nil {
+			return fmt.Errorf("matrix index %s report_md: %w", cell.Name, err)
+		}
+		reportJSONPath, err := relativeArtifactPath(filepath.Dir(path), cell.ReportJSONPath)
+		if err != nil {
+			return fmt.Errorf("matrix index %s report_json: %w", cell.Name, err)
+		}
 		if err := writer.Write([]string{
 			cell.Name,
 			cell.Engine,
@@ -504,8 +512,8 @@ func writeMatrixIndex(path string, cells []matrixCell) error {
 			cell.IndexOuterLeavesInVLog,
 			cell.PagerChunkSize,
 			cell.PagerSyncConcurrency,
-			relativeArtifactPath(filepath.Dir(path), cell.ReportMarkdownPath),
-			relativeArtifactPath(filepath.Dir(path), cell.ReportJSONPath),
+			reportMarkdownPath,
+			reportJSONPath,
 		}); err != nil {
 			return err
 		}
@@ -590,8 +598,14 @@ func writeRunREADME(cfg config, commandLine []string, cells []matrixCell, matrix
 	sb.WriteString("| Cell | Engine | Format | Data vlog | Index vlog | Bench pattern | Raw JSON | Report |\n")
 	sb.WriteString("| --- | --- | --- | ---: | ---: | --- | --- | --- |\n")
 	for _, cell := range cells {
-		rawRel := relativeArtifactPath(cfg.outDir, cell.RawJSONPath)
-		reportRel := relativeArtifactPath(cfg.outDir, cell.ReportMarkdownPath)
+		rawRel, err := relativeArtifactPath(cfg.outDir, cell.RawJSONPath)
+		if err != nil {
+			return fmt.Errorf("README raw artifact path for %s: %w", cell.Name, err)
+		}
+		reportRel, err := relativeArtifactPath(cfg.outDir, cell.ReportMarkdownPath)
+		if err != nil {
+			return fmt.Errorf("README report artifact path for %s: %w", cell.Name, err)
+		}
 		sb.WriteString("| `")
 		sb.WriteString(cell.Name)
 		sb.WriteString("` | `")
@@ -617,12 +631,18 @@ func writeRunREADME(cfg config, commandLine []string, cells []matrixCell, matrix
 	return nil
 }
 
-func relativeArtifactPath(baseDir, artifactPath string) string {
+func relativeArtifactPath(baseDir, artifactPath string) (string, error) {
+	if strings.TrimSpace(artifactPath) == "" {
+		return "", fmt.Errorf("artifact path is empty")
+	}
 	rel, err := filepath.Rel(baseDir, artifactPath)
 	if err != nil {
-		return artifactPath
+		return "", fmt.Errorf("make %q relative to %q: %w", artifactPath, baseDir, err)
 	}
-	return rel
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) || filepath.IsAbs(rel) {
+		return "", fmt.Errorf("artifact path %q escapes output directory %q", artifactPath, baseDir)
+	}
+	return rel, nil
 }
 
 func shellQuoteCommand(args []string) string {

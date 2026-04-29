@@ -384,6 +384,7 @@ func benchmarkReportTreeDBLeafGenerationPackGCNoop(b *testing.B, docs int, befor
 	b.ReportMetric(float64(beforeTotalBytes), "leafgen_pack_disk_total_bytes_after")
 	b.ReportMetric(0, "leafgen_pack_disk_total_bytes_delta")
 	b.ReportMetric(bytesPerDoc, "leafgen_pack_disk_bytes/doc_after")
+	b.ReportMetric(0, "leafgen_pack_ns/op")
 	b.ReportMetric(0, "leafgen_pack_generations_matched")
 	b.ReportMetric(0, "leafgen_pack_source_bytes_total")
 	b.ReportMetric(0, "leafgen_pack_source_bytes_live")
@@ -405,7 +406,10 @@ func benchmarkReportTreeDBLeafGenerationPackGCNoop(b *testing.B, docs int, befor
 }
 
 func benchmarkSignedByteDelta(after, before uint64) float64 {
-	return float64(after) - float64(before)
+	if after >= before {
+		return float64(after - before)
+	}
+	return -float64(before - after)
 }
 
 func benchmarkTreeDBDiskUsageBytes(backend *backenddb.DB) (uint64, error) {

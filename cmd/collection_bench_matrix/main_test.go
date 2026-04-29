@@ -161,8 +161,20 @@ func TestDefaultOutputDirIncludesSubsecondEntropy(t *testing.T) {
 func TestRelativeArtifactPath(t *testing.T) {
 	base := t.TempDir()
 	artifact := filepath.Join(base, "cell", "collections_report.md")
-	if got, want := relativeArtifactPath(base, artifact), filepath.Join("cell", "collections_report.md"); got != want {
+	got, err := relativeArtifactPath(base, artifact)
+	if err != nil {
+		t.Fatalf("relativeArtifactPath: %v", err)
+	}
+	if want := filepath.Join("cell", "collections_report.md"); got != want {
 		t.Fatalf("relativeArtifactPath=%q want %q", got, want)
+	}
+}
+
+func TestRelativeArtifactPathRejectsEscapes(t *testing.T) {
+	base := t.TempDir()
+	artifact := filepath.Join(filepath.Dir(base), "outside.md")
+	if _, err := relativeArtifactPath(base, artifact); err == nil || !strings.Contains(err.Error(), "escapes output directory") {
+		t.Fatalf("relativeArtifactPath err=%v want escape rejection", err)
 	}
 }
 
