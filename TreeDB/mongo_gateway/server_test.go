@@ -439,12 +439,38 @@ func TestServerIndexMetadataRejectsInvalidCommands(t *testing.T) {
 		}}},
 		{Key: "$db", Value: "app"},
 	}))
-	emptyDrop := serveCommand(t, server, 238, bson.D{
+	assertOK(t, serveCommand(t, server, 238, bson.D{
+		{Key: "createIndexes", Value: "users"},
+		{Key: "indexes", Value: bson.A{bson.D{
+			{Key: "key", Value: bson.D{{Key: "email", Value: int32(1)}}},
+			{Key: "name", Value: "email_1"},
+		}}},
+		{Key: "$db", Value: "app"},
+	}))
+	emptyDrop := serveCommand(t, server, 239, bson.D{
 		{Key: "dropIndexes", Value: "users"},
 		{Key: "index", Value: bson.A{}},
 		{Key: "$db", Value: "app"},
 	})
 	assertCommandError(t, emptyDrop, "FailedToParse")
+
+	partialDrop := serveCommand(t, server, 240, bson.D{
+		{Key: "dropIndexes", Value: "users"},
+		{Key: "index", Value: bson.A{"city_1", "missing_1"}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, partialDrop, "IndexNotFound")
+	afterPartialDrop := serveCommand(t, server, 241, bson.D{
+		{Key: "listIndexes", Value: "users"},
+		{Key: "$db", Value: "app"},
+	})
+	indexBatch := cursorFirstBatch(t, afterPartialDrop)
+	if got, want := len(indexBatch), 3; got != want {
+		t.Fatalf("index batch after failed drop len=%d want %d", got, want)
+	}
+	assertIndexName(t, indexBatch[0], "_id_")
+	assertIndexName(t, indexBatch[1], "city_1")
+	assertIndexName(t, indexBatch[2], "email_1")
 }
 
 func TestApplySetUpdateAppendsNewFieldsInSetOrder(t *testing.T) {

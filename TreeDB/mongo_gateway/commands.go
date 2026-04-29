@@ -463,12 +463,12 @@ func (s *Server) dropIndexesResponse(command wire.Document) (wire.Document, erro
 			if indexName == "_id_" {
 				return commandError(commandCodeBadValue, "BadValue", "cannot drop _id index")
 			}
-			if _, err := col.DropIndex(indexName); err != nil {
-				if errors.Is(err, collections.ErrIndexNotFound) {
-					return commandError(commandCodeIndexNotFound, "IndexNotFound", "index not found: "+indexName)
-				}
-				return commandError(commandCodeBadValue, "BadValue", err.Error())
+		}
+		if _, err := col.DropIndexes(names); err != nil {
+			if errors.Is(err, collections.ErrIndexNotFound) {
+				return commandError(commandCodeIndexNotFound, "IndexNotFound", "index not found")
 			}
+			return commandError(commandCodeBadValue, "BadValue", err.Error())
 		}
 	}
 	return marshalDocument(bson.D{
