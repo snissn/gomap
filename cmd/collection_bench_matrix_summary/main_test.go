@@ -237,6 +237,12 @@ func TestMatrixSummaryRendersBenchmarkMetrics(t *testing.T) {
 	}
 	got := string(md)
 	for _, want := range []string{
+		"## Executive Summary",
+		"Fastest bulk indexed insert",
+		"Smallest two-index bulk-insert footprint",
+		"Largest sqlite_vacuum disk reduction",
+		"Largest treedb_vlog_rewrite disk reduction",
+		"Fastest diagnostic row",
 		"## User-Facing Throughput",
 		"bulk indexed insert",
 		"checkpointed indexed insert",

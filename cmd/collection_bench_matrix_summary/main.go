@@ -730,11 +730,23 @@ func renderMarkdown(rows []summaryRow, outDir string) (string, error) {
 	var sb strings.Builder
 	sb.WriteString("# Collections Benchmark Matrix Summary\n\n")
 	userStoryRows := buildUserStoryRows(rows)
+	diskUsageRows := buildDiskUsageRows(rows)
+	maintenanceRows := buildMaintenanceRows(rows)
+	diagnosticRows := buildDiagnosticRows(rows)
+	if lines := buildExecutiveSummary(userStoryRows, diskUsageRows, maintenanceRows, diagnosticRows); len(lines) > 0 {
+		sb.WriteString("## Executive Summary\n\n")
+		for _, line := range lines {
+			sb.WriteString("- ")
+			sb.WriteString(line)
+			sb.WriteByte('\n')
+		}
+		sb.WriteString("\n")
+	}
 	if len(userStoryRows) > 0 {
 		sb.WriteString("## User-Facing Throughput\n\n")
 		sb.WriteString("Batch benchmark ops are documents, so this section reports the indexed ingest story as docs/sec, batch latency, and batches/sec. Diagnostic JSON/planner rows are separated below.\n\n")
-		sb.WriteString("| Cell | Engine | Format | Data vlog | Index vlog | Pager chunk | Pager sync | Story | Docs/batch | ns/doc | Docs/sec | ms/batch | insert ms/batch | sync ms/batch | batches/sec | Report |\n")
-		sb.WriteString("| --- | --- | --- | ---: | ---: | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |\n")
+		sb.WriteString("| Cell | Engine | Format | Data vlog | Index vlog | Pager chunk | Pager sync | Story | Benchmark | Docs/batch | ns/doc | Docs/sec | ms/batch | insert ms/batch | sync ms/batch | batches/sec | Report |\n")
+		sb.WriteString("| --- | --- | --- | ---: | ---: | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |\n")
 		for _, row := range userStoryRows {
 			reportPath := relativeReportPath(outDir, row.ReportMarkdownPath)
 			sb.WriteString("| `")
@@ -755,7 +767,9 @@ func renderMarkdown(rows []summaryRow, outDir string) (string, error) {
 			sb.WriteString(escapeTableCell(row.PagerSyncConcurrency))
 			sb.WriteString("` | ")
 			sb.WriteString(escapeTableCell(row.Story))
-			sb.WriteString(" | ")
+			sb.WriteString(" | `")
+			sb.WriteString(escapeTableCell(row.Benchmark))
+			sb.WriteString("` | ")
 			sb.WriteString(formatIntWithCommas(int64(row.CollectionBatchSize)))
 			sb.WriteString(" | ")
 			sb.WriteString(formatFloat(row.NsPerOp))
@@ -775,7 +789,6 @@ func renderMarkdown(rows []summaryRow, outDir string) (string, error) {
 		}
 		sb.WriteString("\n")
 	}
-	diskUsageRows := buildDiskUsageRows(rows)
 	if len(diskUsageRows) > 0 {
 		sb.WriteString("## Disk Usage\n\n")
 		sb.WriteString("Disk rows use benchmark-reported end-of-run bytes after an untimed flush/checkpoint. Collection/index splits use engine-reported object bytes when available; otherwise they derive index bytes from the per-doc delta against the matching zero-index row.\n\n")
@@ -825,7 +838,6 @@ func renderMarkdown(rows []summaryRow, outDir string) (string, error) {
 		}
 		sb.WriteString("\n")
 	}
-	maintenanceRows := buildMaintenanceRows(rows)
 	if len(maintenanceRows) > 0 {
 		sb.WriteString("## Maintenance Compaction\n\n")
 		sb.WriteString("TreeDB rows show end-of-run total disk before online value-log rewrite, after rewrite, and after a follow-up value-log GC. SQLite rows show total disk before and after full `VACUUM`.\n\n")
@@ -875,7 +887,6 @@ func renderMarkdown(rows []summaryRow, outDir string) (string, error) {
 		}
 		sb.WriteString("\n")
 	}
-	diagnosticRows := buildDiagnosticRows(rows)
 	if len(diagnosticRows) > 0 {
 		sb.WriteString("## Diagnostic Rows\n\n")
 		sb.WriteString("These rows are not user stories. They isolate JSON/data extraction and non-JSON planner cost so future optimization can quarantine JSON work separately from TreeDB publish/index maintenance.\n\n")
@@ -980,6 +991,168 @@ func relativeReportPath(outDir, reportPath string) string {
 		return filepath.ToSlash(rel)
 	}
 	return filepath.ToSlash(reportPath)
+}
+
+func buildExecutiveSummary(userRows []userStoryRow, diskRows []diskUsageRow, maintenanceRows []maintenanceRow, diagnosticRows []summaryRow) []string {
+	var lines []string
+	for _, story := range sortedUserStories(userRows) {
+		best, ok := fastestUserStory(userRows, story)
+		if !ok {
+			continue
+		}
+		lines = append(lines, fmt.Sprintf("Fastest %s: `%s` / `%s` / `%s` at %s docs/sec (%s ns/doc, %s ms/batch, %s batches/sec).",
+			story,
+			best.Cell,
+			best.DocumentFormat,
+			best.Benchmark,
+			formatThroughput(best.DocsPerSec),
+			formatFloat(best.NsPerOp),
+			formatFloat(best.MSPerBatch),
+			formatFloat(best.BatchesSec),
+		))
+	}
+	if best, ok := lowestTwoIndexDiskUsage(diskRows); ok {
+		lines = append(lines, fmt.Sprintf("Smallest two-index bulk-insert footprint: `%s` / `%s` at %s total (%s B/doc; index estimate %s B/doc from `%s`).",
+			best.Cell,
+			best.DocumentFormat,
+			formatByteCount(best.DiskTotalBytesValue),
+			formatFloat(best.DiskBytesPerDocValue),
+			formatOptionalFloat(best.IndexDiskBPerDocValue),
+			best.SplitSource,
+		))
+	}
+	for _, kind := range sortedMaintenanceKinds(maintenanceRows) {
+		best, ok := largestMaintenanceReduction(maintenanceRows, kind)
+		if !ok {
+			continue
+		}
+		delta := best.Delta
+		after := best.After
+		if best.DeltaGC != nil {
+			delta = best.DeltaGC
+			after = best.AfterGC
+		}
+		lines = append(lines, fmt.Sprintf("Largest %s disk reduction: `%s` / `%s` changed total disk by %s to %s (%s ops/sec maintenance rate).",
+			kind,
+			best.Cell,
+			best.DocumentFormat,
+			formatOptionalByteCount(delta),
+			formatOptionalByteCount(after),
+			formatOptionalFloat(optionalOpsPerSecFromNs(best.NsPerMaint)),
+		))
+	}
+	if best, ok := fastestDiagnostic(diagnosticRows); ok {
+		lines = append(lines, fmt.Sprintf("Fastest diagnostic row: `%s` in `%s` / `%s` at %s ops/sec (%s ns/op).",
+			best.Benchmark,
+			best.Cell,
+			best.DocumentFormat,
+			formatThroughput(opsPerSecFromNs(best.NsPerOp)),
+			formatFloat(best.NsPerOp),
+		))
+	}
+	return lines
+}
+
+func sortedUserStories(rows []userStoryRow) []string {
+	seen := make(map[string]struct{})
+	for _, row := range rows {
+		seen[row.Story] = struct{}{}
+	}
+	stories := make([]string, 0, len(seen))
+	for story := range seen {
+		stories = append(stories, story)
+	}
+	sort.Strings(stories)
+	return stories
+}
+
+func fastestUserStory(rows []userStoryRow, story string) (userStoryRow, bool) {
+	var best userStoryRow
+	var ok bool
+	for _, row := range rows {
+		if row.Story != story {
+			continue
+		}
+		if !ok || row.DocsPerSec > best.DocsPerSec {
+			best = row
+			ok = true
+		}
+	}
+	return best, ok
+}
+
+func lowestTwoIndexDiskUsage(rows []diskUsageRow) (diskUsageRow, bool) {
+	var best diskUsageRow
+	var ok bool
+	for _, row := range rows {
+		if row.Story != "bulk indexed insert" || row.IndexesPerDocValue != 2 {
+			continue
+		}
+		if !ok || row.DiskBytesPerDocValue < best.DiskBytesPerDocValue {
+			best = row
+			ok = true
+		}
+	}
+	return best, ok
+}
+
+func sortedMaintenanceKinds(rows []maintenanceRow) []string {
+	seen := make(map[string]struct{})
+	for _, row := range rows {
+		seen[row.Kind] = struct{}{}
+	}
+	kinds := make([]string, 0, len(seen))
+	for kind := range seen {
+		kinds = append(kinds, kind)
+	}
+	sort.Strings(kinds)
+	return kinds
+}
+
+func largestMaintenanceReduction(rows []maintenanceRow, kind string) (maintenanceRow, bool) {
+	var best maintenanceRow
+	var bestDelta float64
+	var ok bool
+	for _, row := range rows {
+		if row.Kind != kind {
+			continue
+		}
+		delta, hasDelta := maintenanceReductionDelta(row)
+		if !hasDelta {
+			continue
+		}
+		if !ok || delta < bestDelta {
+			best = row
+			bestDelta = delta
+			ok = true
+		}
+	}
+	return best, ok
+}
+
+func maintenanceReductionDelta(row maintenanceRow) (float64, bool) {
+	if row.DeltaGC != nil {
+		return *row.DeltaGC, true
+	}
+	if row.Delta != nil {
+		return *row.Delta, true
+	}
+	return 0, false
+}
+
+func fastestDiagnostic(rows []summaryRow) (summaryRow, bool) {
+	var best summaryRow
+	var ok bool
+	for _, row := range rows {
+		if row.NsPerOp <= 0 {
+			continue
+		}
+		if !ok || row.NsPerOp < best.NsPerOp {
+			best = row
+			ok = true
+		}
+	}
+	return best, ok
 }
 
 func buildUserStoryRows(rows []summaryRow) []userStoryRow {

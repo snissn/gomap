@@ -1,0 +1,160 @@
+package main
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+func TestBuildMatrixCellsDefaults(t *testing.T) {
+	cfg, err := parseFlags([]string{"-out-dir", t.TempDir()})
+	if err != nil {
+		t.Fatalf("parse flags: %v", err)
+	}
+	cells, err := buildMatrixCells(cfg)
+	if err != nil {
+		t.Fatalf("build cells: %v", err)
+	}
+	if got, want := len(cells), 5; got != want {
+		t.Fatalf("len(cells)=%d want %d", got, want)
+	}
+	names := make(map[string]matrixCell)
+	for _, cell := range cells {
+		names[cell.Name] = cell
+	}
+	for _, want := range []string{
+		"treedb_production_fast_json_data_vlog_index_pager",
+		"treedb_production_fast_json_data_vlog_index_vlog",
+		"treedb_production_fast_template_v1_data_vlog_index_pager",
+		"treedb_production_fast_template_v1_data_vlog_index_vlog",
+		"sqlite_wal_normal",
+	} {
+		if _, ok := names[want]; !ok {
+			t.Fatalf("missing default cell %q in %#v", want, cells)
+		}
+	}
+	tree := names["treedb_production_fast_template_v1_data_vlog_index_vlog"]
+	if tree.ExecutionPath != "native-fastpath" {
+		t.Fatalf("tree execution path=%q", tree.ExecutionPath)
+	}
+	if tree.DocumentFormat != "template-v1" {
+		t.Fatalf("tree document format=%q", tree.DocumentFormat)
+	}
+	if tree.DataOuterLeavesInVLog != "true" || tree.IndexOuterLeavesInVLog != "true" {
+		t.Fatalf("tree storage data=%q index=%q", tree.DataOuterLeavesInVLog, tree.IndexOuterLeavesInVLog)
+	}
+	if !containsEnv(tree.Env, "TREEDB_COLLECTION_REPORT_VLOG_REWRITE=true") {
+		t.Fatalf("tree env missing rewrite toggle: %#v", tree.Env)
+	}
+	sqlite := names["sqlite_wal_normal"]
+	if sqlite.ExecutionPath != "sqlite" {
+		t.Fatalf("sqlite execution path=%q", sqlite.ExecutionPath)
+	}
+	if len(sqlite.Tags) != 1 || sqlite.Tags[0] != "sqlite_bench" {
+		t.Fatalf("sqlite tags=%#v", sqlite.Tags)
+	}
+	if !containsEnv(sqlite.Env, "TREEDB_COLLECTION_REPORT_SQLITE_VACUUM=true") {
+		t.Fatalf("sqlite env missing vacuum toggle: %#v", sqlite.Env)
+	}
+}
+
+func TestBuildMatrixCellsCanSkipSQLiteAndSelectInline(t *testing.T) {
+	cfg, err := parseFlags([]string{
+		"-out-dir", t.TempDir(),
+		"-formats", "json",
+		"-storage-cells", "inline",
+		"-skip-sqlite",
+		"-batch-size", "32000",
+		"-pager-chunk-size", "65536",
+		"-pager-sync-concurrency", "8",
+	})
+	if err != nil {
+		t.Fatalf("parse flags: %v", err)
+	}
+	cells, err := buildMatrixCells(cfg)
+	if err != nil {
+		t.Fatalf("build cells: %v", err)
+	}
+	if got, want := len(cells), 1; got != want {
+		t.Fatalf("len(cells)=%d want %d", got, want)
+	}
+	cell := cells[0]
+	if cell.DataOuterLeavesInVLog != "false" || cell.IndexOuterLeavesInVLog != "false" {
+		t.Fatalf("inline cell data=%q index=%q", cell.DataOuterLeavesInVLog, cell.IndexOuterLeavesInVLog)
+	}
+	for _, want := range []string{
+		"TREEDB_COLLECTION_BENCH_BATCH_SIZE=32000",
+		"TREEDB_COLLECTION_CHUNK_SIZE=65536",
+		"TREEDB_COLLECTION_PAGER_SYNC_CONCURRENCY=8",
+	} {
+		if !containsEnv(cell.Env, want) {
+			t.Fatalf("env missing %q: %#v", want, cell.Env)
+		}
+	}
+	if cell.PagerChunkSize != "65536" || cell.PagerSyncConcurrency != "8" {
+		t.Fatalf("pager labels chunk=%q sync=%q", cell.PagerChunkSize, cell.PagerSyncConcurrency)
+	}
+}
+
+func TestGoTestArgsIncludeSQLiteTagsOnlyForSQLiteCell(t *testing.T) {
+	cfg, err := parseFlags([]string{"-out-dir", t.TempDir(), "-benchtime", "10x"})
+	if err != nil {
+		t.Fatalf("parse flags: %v", err)
+	}
+	tree := matrixCell{BenchmarkPattern: "BenchmarkCollectionShapeInsertBatch"}
+	treeArgs := strings.Join(goTestArgs(tree, cfg), " ")
+	if strings.Contains(treeArgs, "-tags") {
+		t.Fatalf("tree args unexpectedly include tags: %s", treeArgs)
+	}
+	if !strings.Contains(treeArgs, "-benchtime 10x") {
+		t.Fatalf("tree args missing benchtime: %s", treeArgs)
+	}
+
+	sqlite := matrixCell{BenchmarkPattern: "BenchmarkSQLiteShapeInsertBatchJSON", Tags: []string{"sqlite_bench"}}
+	sqliteArgs := strings.Join(goTestArgs(sqlite, cfg), " ")
+	if !strings.Contains(sqliteArgs, "-tags sqlite_bench") {
+		t.Fatalf("sqlite args missing tags: %s", sqliteArgs)
+	}
+}
+
+func TestWriteMatrixIndex(t *testing.T) {
+	dir := t.TempDir()
+	cells := []matrixCell{
+		{
+			Name:                   "treedb_json",
+			Engine:                 "production_fast",
+			DocumentFormat:         "json",
+			DataOuterLeavesInVLog:  "true",
+			IndexOuterLeavesInVLog: "false",
+			PagerChunkSize:         "profile/default",
+			PagerSyncConcurrency:   "profile/default",
+			ReportMarkdownPath:     filepath.Join(dir, "treedb_json", "collections_report.md"),
+			ReportJSONPath:         filepath.Join(dir, "treedb_json", "collections_report.json"),
+		},
+	}
+	path := filepath.Join(dir, "matrix_index.tsv")
+	if err := writeMatrixIndex(path, cells); err != nil {
+		t.Fatalf("write matrix index: %v", err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read matrix index: %v", err)
+	}
+	got := string(raw)
+	if !strings.Contains(got, "cell\tengine\tdocument_format\tdata_outer_leaves_in_vlog\tindex_outer_leaves_in_vlog\tpager_chunk_size\tpager_sync_concurrency\treport_md\treport_json") {
+		t.Fatalf("missing header:\n%s", got)
+	}
+	if !strings.Contains(got, "treedb_json\tproduction_fast\tjson\ttrue\tfalse\tprofile/default\tprofile/default\t") {
+		t.Fatalf("missing row:\n%s", got)
+	}
+}
+
+func containsEnv(env []string, want string) bool {
+	for _, got := range env {
+		if got == want {
+			return true
+		}
+	}
+	return false
+}
