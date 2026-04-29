@@ -226,41 +226,32 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 			cleanupNewPager()
 			return errors.New("vacuum: missing base snapshot state")
 		}
-		if _, ok := page.DecodeLeafRef(baseState.RootPageID); ok {
-			// Common case for very small DBs: user root is already a leafref.
-			// Reuse it directly and only vacuum the pager-backed metadata.
-			newRoot = baseState.RootPageID
-		} else {
-			// During initial open (before the cached layer wires LeafPageLog), the
-			// user tree root can still be a pager-backed leaf page. Handle that
-			// transitional state by cloning the pager tree as-is.
-			rootData, err := basePager.Get(baseState.RootPageID)
+		rootData, err := basePager.Get(baseState.RootPageID)
+		if err != nil {
+			_ = baseSnap.Close()
+			cleanupNewPager()
+			return err
+		}
+		rootNode := node.NewNode(rootData)
+		if rootNode.Type() == page.PageTypeLeaf {
+			newRoot, err = vacuumClonePagerTreeWithLeafRefs(basePager, baseState.RootPageID, newAlloc, newPager)
 			if err != nil {
 				_ = baseSnap.Close()
 				cleanupNewPager()
 				return err
 			}
-			rootNode := node.NewNode(rootData)
-			if rootNode.Type() == page.PageTypeLeaf {
-				newRoot, err = vacuumClonePagerTreeWithLeafRefs(basePager, baseState.RootPageID, newAlloc, newPager)
-				if err != nil {
-					_ = baseSnap.Close()
-					cleanupNewPager()
-					return err
-				}
-			} else {
-				leafChildren, err := vacuumCollectLeafRefChildren(basePager, baseState.RootPageID)
-				if err != nil {
-					_ = baseSnap.Close()
-					cleanupNewPager()
-					return err
-				}
-				newRoot, err = vacuumBuildInternalTreeFromChildren(newPager, newAlloc, leafChildren, db.indexInternalBaseDelta)
-				if err != nil {
-					_ = baseSnap.Close()
-					cleanupNewPager()
-					return err
-				}
+		} else {
+			leafChildren, err := vacuumCollectLeafRefChildren(basePager, baseState.RootPageID)
+			if err != nil {
+				_ = baseSnap.Close()
+				cleanupNewPager()
+				return err
+			}
+			newRoot, err = vacuumBuildInternalTreeFromChildren(newPager, newAlloc, leafChildren, db.indexInternalBaseDelta)
+			if err != nil {
+				_ = baseSnap.Close()
+				cleanupNewPager()
+				return err
 			}
 		}
 	} else {
@@ -604,8 +595,8 @@ type vacuumCloneCtx struct {
 }
 
 type vacuumLeafChild struct {
-	key     []byte
-	childID uint64
+	key      []byte
+	childRef page.ChildRef
 }
 
 func vacuumCollectLeafRefChildren(p *pager.Pager, rootID uint64) ([]vacuumLeafChild, error) {
@@ -615,16 +606,9 @@ func vacuumCollectLeafRefChildren(p *pager.Pager, rootID uint64) ([]vacuumLeafCh
 	if rootID == 0 {
 		return nil, errors.New("vacuum: missing root id")
 	}
-	if _, ok := page.DecodeLeafRef(rootID); ok {
-		return nil, errors.New("vacuum: leafref root should be handled by caller")
-	}
-
 	out := make([]vacuumLeafChild, 0, 1024)
 	var walk func(uint64) error
 	walk = func(id uint64) error {
-		if _, ok := page.DecodeLeafRef(id); ok {
-			return nil
-		}
 		data, err := p.Get(id)
 		if err != nil {
 			return err
@@ -634,18 +618,18 @@ func vacuumCollectLeafRefChildren(p *pager.Pager, rootID uint64) ([]vacuumLeafCh
 		case page.PageTypeInternal:
 			count := n.Count()
 			for i := uint16(0); i < count; i++ {
-				keyView, childID, err := n.GetInternalEntryView(i)
+				keyView, childRef, err := n.GetInternalEntryRefView(i)
 				if err != nil {
 					return err
 				}
-				if _, ok := page.DecodeLeafRef(childID); ok {
+				if childRef.Kind == page.ChildRefLeafLog {
 					out = append(out, vacuumLeafChild{
-						key:     append([]byte(nil), keyView...),
-						childID: childID,
+						key:      append([]byte(nil), keyView...),
+						childRef: childRef,
 					})
 					continue
 				}
-				if err := walk(childID); err != nil {
+				if err := walk(childRef.Page); err != nil {
 					return err
 				}
 			}
@@ -761,12 +745,11 @@ func vacuumBuildInternalTreeFromChildren(p *pager.Pager, alloc interface {
 
 	for _, child := range children {
 		key := child.key
-		childID := child.childID
 		lb := levels[0]
 		if lb.startKey == nil {
 			lb.startKey = append([]byte(nil), key...)
 		}
-		err := lb.builder.AddInternalChild(key, childID)
+		err := lb.builder.AddInternalChildRef(key, child.childRef)
 		if err == node.ErrNodeFull {
 			if err := flush(0); err != nil {
 				return 0, err
@@ -775,7 +758,7 @@ func vacuumBuildInternalTreeFromChildren(p *pager.Pager, alloc interface {
 			if lb.startKey == nil {
 				lb.startKey = append([]byte(nil), key...)
 			}
-			err = lb.builder.AddInternalChild(key, childID)
+			err = lb.builder.AddInternalChildRef(key, child.childRef)
 		}
 		if err != nil {
 			return 0, err
@@ -824,9 +807,9 @@ func vacuumBuildInternalTreeFromChildren(p *pager.Pager, alloc interface {
 	if len(levels) > 1 {
 		root := levels[len(levels)-1].builder.Finish()
 		if root.Count() == 1 {
-			childID, err := root.GetInternalChildID(0)
-			if err == nil {
-				return childID, nil
+			childRef, err := root.GetInternalChildRef(0)
+			if err == nil && childRef.Kind == page.ChildRefPage {
+				return childRef.Page, nil
 			}
 		}
 	}
@@ -837,9 +820,6 @@ func vacuumBuildInternalTreeFromChildren(p *pager.Pager, alloc interface {
 func vacuumClonePagerTreeWithLeafRefs(oldPager *pager.Pager, rootID uint64, alloc interface {
 	Alloc(hint uint64) (uint64, error)
 }, newPager *pager.Pager) (uint64, error) {
-	if _, ok := page.DecodeLeafRef(rootID); ok {
-		return rootID, nil
-	}
 	if oldPager == nil {
 		return 0, errors.New("vacuum: missing source pager")
 	}
@@ -856,9 +836,6 @@ func vacuumClonePagerTreeWithLeafRefs(oldPager *pager.Pager, rootID uint64, allo
 }
 
 func (c *vacuumCloneCtx) cloneNode(oldID uint64) (uint64, error) {
-	if _, ok := page.DecodeLeafRef(oldID); ok {
-		return oldID, nil
-	}
 	if newID, ok := c.remap[oldID]; ok {
 		return newID, nil
 	}
@@ -891,15 +868,18 @@ func (c *vacuumCloneCtx) cloneNode(oldID uint64) (uint64, error) {
 
 		count := n.Count()
 		for i := uint16(0); i < count; i++ {
-			keyView, childID, err := n.GetInternalEntryView(i)
+			keyView, childRef, err := n.GetInternalEntryRefView(i)
 			if err != nil {
 				return 0, err
 			}
-			childNew, err := c.cloneNode(childID)
-			if err != nil {
-				return 0, err
+			if childRef.Kind == page.ChildRefPage {
+				childNew, err := c.cloneNode(childRef.Page)
+				if err != nil {
+					return 0, err
+				}
+				childRef = page.PageChildRef(childNew)
 			}
-			if err := b.AddInternalChild(keyView, childNew); err != nil {
+			if err := b.AddInternalChildRef(keyView, childRef); err != nil {
 				return 0, err
 			}
 		}

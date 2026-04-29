@@ -731,6 +731,8 @@ func benchmarkMetricColumns(benchmarks []benchmarkAggregate) []string {
 		"leafgen_pack_expected_reclaim_ratio_ppm",
 		"leafgen_pack_expected_reclaim_per_copy_ppm",
 		"leafgen_pack_leaf_pages_copied",
+		"leafgen_pack_leaf_frames_written",
+		"leafgen_pack_max_leaf_frame_k",
 		"leafgen_pack_bytes_copied",
 		"leafgen_pack_created_files",
 		"leafgen_gc_ns/op",

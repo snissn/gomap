@@ -11,6 +11,38 @@ import (
 	"github.com/snissn/gomap/TreeDB/pager"
 )
 
+func newTreeWithLeafLogRoot(t *testing.T, sr SlabReader, key []byte, ptr page.LeafLogPtr) (*Tree, func()) {
+	t.Helper()
+	dir := t.TempDir()
+	p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)
+	if err != nil {
+		t.Fatalf("open pager: %v", err)
+	}
+	rootID, err := p.Alloc(1)
+	if err != nil {
+		_ = p.Close()
+		t.Fatalf("alloc root: %v", err)
+	}
+	data, err := p.GetForWrite(rootID)
+	if err != nil {
+		_ = p.Close()
+		t.Fatalf("get root: %v", err)
+	}
+	b := node.NewBuilder(data, page.PageTypeInternal)
+	b.SetPageID(rootID)
+	if key == nil {
+		key = []byte{}
+	}
+	if err := b.AddInternalChildRef(key, page.LeafLogChildRef(ptr)); err != nil {
+		_ = p.Close()
+		t.Fatalf("AddInternalChildRef: %v", err)
+	}
+	b.FinishNoNode()
+	closeFn := func() { _ = p.Close() }
+	t.Cleanup(closeFn)
+	return New(p, sr, rootID), closeFn
+}
+
 type trackedValueReader struct {
 	*mapValueReader
 	readUnsafeCalls       int
@@ -270,20 +302,14 @@ func TestTreeGetAppend_UsesAppendReaderForLeafRefPages(t *testing.T) {
 	leaf.AddLeafEntry([]byte("k"), []byte("v"), node.FlagInline, page.ValuePtr{})
 	leaf.UpdateChecksum()
 
-	leafRefID, err := page.EncodeLeafRef(page.LeafLogPtr{
+	ptr := page.LeafLogPtr{
 		FileID: 1,
 		Offset: 8,
-	})
-	if err != nil {
-		t.Fatalf("EncodeLeafRef: %v", err)
-	}
-	ptr, ok := page.DecodeLeafRef(leafRefID)
-	if !ok {
-		t.Fatalf("DecodeLeafRef failed")
 	}
 	tracked.values[ptr.ValuePtr()] = append([]byte(nil), leafData...)
 
-	tr := New(nil, tracked, leafRefID)
+	tr, closeTree := newTreeWithLeafLogRoot(t, tracked, []byte{}, ptr)
+	defer closeTree()
 	got, err := tr.GetAppend([]byte("k"), nil)
 	if err != nil {
 		t.Fatalf("GetAppend failed: %v", err)
@@ -317,19 +343,13 @@ func TestTreeGetAppend_LeafRefChecksumPolicyHonored(t *testing.T) {
 			trackedValueReader:  &trackedValueReader{mapValueReader: newMapValueReader()},
 			readChecksumEnabled: checksumEnabled,
 		}
-		leafRefID, err := page.EncodeLeafRef(page.LeafLogPtr{
+		ptr := page.LeafLogPtr{
 			FileID: 1,
 			Offset: 8,
-		})
-		if err != nil {
-			t.Fatalf("EncodeLeafRef: %v", err)
-		}
-		ptr, ok := page.DecodeLeafRef(leafRefID)
-		if !ok {
-			t.Fatalf("DecodeLeafRef failed")
 		}
 		tracked.values[ptr.ValuePtr()] = makeCorruptLeaf()
-		return New(nil, tracked, leafRefID)
+		tr, _ := newTreeWithLeafLogRoot(t, tracked, []byte{}, ptr)
+		return tr
 	}
 
 	t.Run("verify_enabled", func(t *testing.T) {

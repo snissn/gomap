@@ -490,10 +490,7 @@ func TestSplitValueLogOwnership_LeafRefStateReaderDecodesCompactLeafPages(t *tes
 	if len(refs) == 0 {
 		t.Fatal("expected at least one leaf ref")
 	}
-	ptr, ok := page.DecodeLeafRef(refs[0])
-	if !ok {
-		t.Fatal("expected leaf ref id")
-	}
+	ptr := refs[0]
 	leafPage, err := reader.ReadUnsafe(ptr.ValuePtr())
 	if err != nil {
 		t.Fatalf("ReadUnsafe: %v", err)

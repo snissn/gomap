@@ -153,6 +153,7 @@ func compareInternalSuffixAt(data []byte, suffixStart int, suffixLen int, keySuf
 type InternalEntry struct {
 	Key         []byte
 	ChildPageID uint64
+	ChildRef    page.ChildRef
 }
 
 func (n *Node) internalBaseDeltaEntryWidths() (deltaWidth int, entryHeader int) {
@@ -160,6 +161,13 @@ func (n *Node) internalBaseDeltaEntryWidths() (deltaWidth int, entryHeader int) 
 		return 2, 4
 	}
 	return 4, 6
+}
+
+func (n *Node) internalPlainEntryHeaderSize() int {
+	if n.internalLeafLogRefs() {
+		return internalLeafLogRefHeaderSize
+	}
+	return 10
 }
 
 func (n *Node) internalBaseDeltaChildIDAtIndex(meta internalBaseDeltaMeta, idx int, deltaWidth int, entryHeader int) (uint64, error) {
@@ -190,19 +198,41 @@ func (n *Node) internalBaseDeltaChildIDAtPtr(meta internalBaseDeltaMeta, ptr int
 
 // GetInternalChildID returns only the child page ID at the given index.
 func (n *Node) GetInternalChildID(index uint16) (uint64, error) {
+	ref, err := n.GetInternalChildRef(index)
+	if err != nil {
+		return 0, err
+	}
+	if ref.Kind != page.ChildRefPage {
+		return 0, ErrInvalidType
+	}
+	return ref.Page, nil
+}
+
+func (n *Node) GetInternalChildRef(index uint16) (page.ChildRef, error) {
+	if n.internalLeafLogRefs() {
+		offset, err := n.getOffset(index)
+		if err != nil {
+			return page.ChildRef{}, err
+		}
+		ptr := int(offset)
+		if ptr+internalLeafLogRefHeaderSize > len(n.data) {
+			return page.ChildRef{}, ErrCorruptedNode
+		}
+		return page.LeafLogChildRef(page.DecodeLogRecordRef(n.data[ptr+2 : ptr+2+page.LogRecordRefSize])), nil
+	}
 	if n.internalBaseDelta() {
 		meta, err := n.internalBaseDeltaMeta()
 		if err != nil {
-			return 0, err
+			return page.ChildRef{}, err
 		}
 		offset, err := n.getOffset(index)
 		if err != nil {
-			return 0, err
+			return page.ChildRef{}, err
 		}
 		ptr := int(offset)
 		deltaWidth, entryHeader := n.internalBaseDeltaEntryWidths()
 		if ptr < NodeHeaderSize || ptr+entryHeader > meta.footerStart {
-			return 0, ErrCorruptedNode
+			return page.ChildRef{}, ErrCorruptedNode
 		}
 		deltaStart := ptr + 2
 		var delta uint64
@@ -211,21 +241,21 @@ func (n *Node) GetInternalChildID(index uint16) (uint64, error) {
 		} else {
 			delta = uint64(binary.LittleEndian.Uint32(n.data[deltaStart : deltaStart+4]))
 		}
-		return meta.baseChildID + delta, nil
+		return page.PageChildRef(meta.baseChildID + delta), nil
 	}
 
 	offset, err := n.getOffset(index)
 	if err != nil {
-		return 0, err
+		return page.ChildRef{}, err
 	}
 
 	ptr := int(offset)
 	// Layout: KeyLen(2) | ChildPageID(8)
 	if ptr+10 > len(n.data) {
-		return 0, ErrCorruptedNode
+		return page.ChildRef{}, ErrCorruptedNode
 	}
 
-	return binary.LittleEndian.Uint64(n.data[ptr+2 : ptr+10]), nil
+	return page.PageChildRef(binary.LittleEndian.Uint64(n.data[ptr+2 : ptr+10])), nil
 }
 
 func (n *Node) WalkInternalChildren(stack *[]uint64, visit func(page.LeafLogPtr) error) error {
@@ -259,14 +289,6 @@ func (n *Node) WalkInternalChildren(stack *[]uint64, visit func(page.LeafLogPtr)
 			} else {
 				childID = meta.baseChildID + uint64(binary.LittleEndian.Uint32(n.data[deltaStart:deltaStart+4]))
 			}
-			if page.IsLeafRefID(childID) {
-				if visit != nil {
-					if err := visit(page.DecodeLeafRefID(childID)); err != nil {
-						return err
-					}
-				}
-				continue
-			}
 			children = append(children, childID)
 		}
 		*stack = children
@@ -280,18 +302,21 @@ func (n *Node) WalkInternalChildren(stack *[]uint64, visit func(page.LeafLogPtr)
 		}
 		ptr := int(getUint16At(n.data, dirOff))
 		dirOff += DirectoryEntrySize
-		if ptr+10 > len(n.data) {
-			return ErrCorruptedNode
-		}
-		childID := binary.LittleEndian.Uint64(n.data[ptr+2 : ptr+10])
-		if page.IsLeafRefID(childID) {
+		if n.internalLeafLogRefs() {
+			if ptr+internalLeafLogRefHeaderSize > len(n.data) {
+				return ErrCorruptedNode
+			}
 			if visit != nil {
-				if err := visit(page.DecodeLeafRefID(childID)); err != nil {
+				if err := visit(page.DecodeLogRecordRef(n.data[ptr+2 : ptr+2+page.LogRecordRefSize])); err != nil {
 					return err
 				}
 			}
 			continue
 		}
+		if ptr+10 > len(n.data) {
+			return ErrCorruptedNode
+		}
+		childID := binary.LittleEndian.Uint64(n.data[ptr+2 : ptr+10])
 		children = append(children, childID)
 	}
 	*stack = children
@@ -303,6 +328,9 @@ func (n *Node) ForEachInternalChildID(fn func(uint64) error) error {
 		return nil
 	}
 	if n.Type() != page.PageTypeInternal {
+		return ErrInvalidType
+	}
+	if n.internalLeafLogRefs() {
 		return ErrInvalidType
 	}
 	if n.internalBaseDelta() {
@@ -354,13 +382,13 @@ func (n *Node) ForEachInternalChildID(fn func(uint64) error) error {
 
 // GetInternalEntry reads the entry at the given index.
 func (n *Node) GetInternalEntry(index uint16) (InternalEntry, error) {
-	keyView, childID, err := n.GetInternalEntryView(index)
+	keyView, childRef, err := n.GetInternalEntryRefView(index)
 	if err != nil {
 		return InternalEntry{}, err
 	}
 	key := make([]byte, len(keyView))
 	copy(key, keyView)
-	return InternalEntry{Key: key, ChildPageID: childID}, nil
+	return InternalEntry{Key: key, ChildPageID: childRef.Page, ChildRef: childRef}, nil
 }
 
 // GetInternalEntryView returns a view of the entry at the given index.
@@ -371,19 +399,50 @@ func (n *Node) GetInternalEntry(index uint16) (InternalEntry, error) {
 // scratch buffer and is only valid until the next internal entry decode call
 // on the same node. Callers that need to retain the key must copy it.
 func (n *Node) GetInternalEntryView(index uint16) (key []byte, childID uint64, err error) {
+	key, childRef, err := n.GetInternalEntryRefView(index)
+	if err != nil {
+		return nil, 0, err
+	}
+	if childRef.Kind != page.ChildRefPage {
+		return nil, 0, ErrInvalidType
+	}
+	return key, childRef.Page, nil
+}
+
+func (n *Node) GetInternalEntryRefView(index uint16) (key []byte, childRef page.ChildRef, err error) {
+	if n.internalLeafLogRefs() {
+		offset, err := n.getOffset(index)
+		if err != nil {
+			return nil, page.ChildRef{}, err
+		}
+		ptr := int(offset)
+		if ptr+internalLeafLogRefHeaderSize > len(n.data) {
+			return nil, page.ChildRef{}, ErrCorruptedNode
+		}
+
+		keyLen := binary.LittleEndian.Uint16(n.data[ptr : ptr+2])
+		ref := page.DecodeLogRecordRef(n.data[ptr+2 : ptr+2+page.LogRecordRefSize])
+		ptr += internalLeafLogRefHeaderSize
+		if ptr+int(keyLen) > len(n.data) {
+			return nil, page.ChildRef{}, ErrCorruptedNode
+		}
+
+		key = n.data[ptr : ptr+int(keyLen)]
+		return key, page.LeafLogChildRef(ref), nil
+	}
 	if n.internalBaseDelta() {
 		meta, err := n.internalBaseDeltaMeta()
 		if err != nil {
-			return nil, 0, err
+			return nil, page.ChildRef{}, err
 		}
 		offset, err := n.getOffset(index)
 		if err != nil {
-			return nil, 0, err
+			return nil, page.ChildRef{}, err
 		}
 		ptr := int(offset)
 		deltaWidth, entryHeader := n.internalBaseDeltaEntryWidths()
 		if ptr < NodeHeaderSize || ptr+entryHeader > meta.footerStart {
-			return nil, 0, ErrCorruptedNode
+			return nil, page.ChildRef{}, ErrCorruptedNode
 		}
 
 		suffixLen := int(getUint16(n.data[ptr : ptr+2]))
@@ -397,7 +456,7 @@ func (n *Node) GetInternalEntryView(index uint16) (key []byte, childID uint64, e
 		suffixStart := ptr + entryHeader
 		suffixEnd := suffixStart + suffixLen
 		if suffixLen < 0 || suffixEnd > meta.footerStart {
-			return nil, 0, ErrCorruptedNode
+			return nil, page.ChildRef{}, ErrCorruptedNode
 		}
 		suffix := n.data[suffixStart:suffixEnd]
 
@@ -405,29 +464,29 @@ func (n *Node) GetInternalEntryView(index uint16) (key []byte, childID uint64, e
 		out := n.ensureKeyScratch(keyLen)
 		copy(out, meta.prefix)
 		copy(out[len(meta.prefix):], suffix)
-		return out, meta.baseChildID + delta, nil
+		return out, page.PageChildRef(meta.baseChildID + delta), nil
 	}
 
 	offset, err := n.getOffset(index)
 	if err != nil {
-		return nil, 0, err
+		return nil, page.ChildRef{}, err
 	}
 
 	ptr := int(offset)
 	if ptr+10 > len(n.data) {
-		return nil, 0, ErrCorruptedNode
+		return nil, page.ChildRef{}, ErrCorruptedNode
 	}
 
 	keyLen := binary.LittleEndian.Uint16(n.data[ptr : ptr+2])
-	childID = binary.LittleEndian.Uint64(n.data[ptr+2 : ptr+10])
+	childID := binary.LittleEndian.Uint64(n.data[ptr+2 : ptr+10])
 
 	ptr += 10
 	if ptr+int(keyLen) > len(n.data) {
-		return nil, 0, ErrCorruptedNode
+		return nil, page.ChildRef{}, ErrCorruptedNode
 	}
 
 	key = n.data[ptr : ptr+int(keyLen)]
-	return key, childID, nil
+	return key, page.PageChildRef(childID), nil
 }
 
 // InternalFenceBounds returns exact subtree bounds when persisted on this
@@ -546,13 +605,14 @@ func (n *Node) SearchInternal(key []byte) (uint16, bool) {
 	if count == 0 {
 		return 0, false
 	}
+	entryHeader := n.internalPlainEntryHeaderSize()
 	if count <= smallSearchThreshold {
 		last := -1
 		for i := 0; i < int(count); i++ {
 			offset := binary.LittleEndian.Uint16(data[NodeHeaderSize+i*2:])
 			ptr := int(offset)
 			keyLen := binary.LittleEndian.Uint16(data[ptr : ptr+2])
-			keyPtr := ptr + 10 // Skip KeyLen(2) + ChildID(8)
+			keyPtr := ptr + entryHeader
 			cmp := compareInternalSuffix(data[keyPtr:keyPtr+int(keyLen)], key)
 			if cmp <= 0 {
 				last = i
@@ -576,7 +636,7 @@ func (n *Node) SearchInternal(key []byte) (uint16, bool) {
 		offset := binary.LittleEndian.Uint16(data[NodeHeaderSize+h*2:])
 		ptr := int(offset)
 		keyLen := binary.LittleEndian.Uint16(data[ptr : ptr+2])
-		keyPtr := ptr + 10 // Skip KeyLen(2) + ChildID(8)
+		keyPtr := ptr + entryHeader
 
 		// Compare Entry.Key vs Key
 		// We want to find position where Key would be inserted
@@ -606,6 +666,16 @@ func (n *Node) SearchInternal(key []byte) (uint16, bool) {
 // search. The found return value matches SearchInternal: true when key is >= at
 // least one separator in this page.
 func (n *Node) SearchInternalChildID(key []byte) (childID uint64, found bool, err error) {
+	if n.internalLeafLogRefs() {
+		ref, found, err := n.SearchInternalChildRef(key)
+		if err != nil {
+			return 0, false, err
+		}
+		if ref.Kind != page.ChildRefPage {
+			return 0, found, ErrInvalidType
+		}
+		return ref.Page, found, nil
+	}
 	count := n.Count()
 	if count == 0 {
 		return 0, false, ErrCorruptedNode
@@ -1093,6 +1163,19 @@ func (n *Node) SearchInternalChildID(key []byte) (childID uint64, found bool, er
 	}
 	childID, err = n.internalBaseDeltaChildIDAtIndex(meta, 0, deltaWidth, entryHeader)
 	return childID, false, err
+}
+
+func (n *Node) SearchInternalChildRef(key []byte) (childRef page.ChildRef, found bool, err error) {
+	if !n.internalLeafLogRefs() {
+		childID, found, err := n.SearchInternalChildID(key)
+		if err != nil {
+			return page.ChildRef{}, false, err
+		}
+		return page.PageChildRef(childID), found, nil
+	}
+	idx, found := n.SearchInternal(key)
+	ref, err := n.GetInternalChildRef(idx)
+	return ref, found, err
 }
 
 // SearchInternalWithCompare is like SearchInternal but uses the provided compare

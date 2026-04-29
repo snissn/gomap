@@ -12,6 +12,7 @@ import (
 )
 
 const leafGenerationPackDefaultMinReclaimPerByteCopiedPPM = 10000
+const leafGenerationPackDefaultLeafFrameK = 16
 
 var leafGenerationPackRIDStartScanner = nextRewriteRIDStartFromSet
 
@@ -24,6 +25,7 @@ type LeafGenerationPackOptions struct {
 	MinReclaimPerByteCopiedPPM int
 	ReserveRIDs                func(count int) (start uint64, err error)
 	Force                      bool
+	LeafFrameK                 int
 }
 
 type LeafGenerationPackStats struct {
@@ -41,13 +43,15 @@ type LeafGenerationPackStats struct {
 	ExpectedReclaimPerByteCopiedPPM int
 	LeafPagesCopied                 int
 	BytesCopied                     int64
+	LeafFramesWritten               int
+	MaxLeafFrameK                   int
 	InternalPagesVisited            int
 	SubtreesPruned                  int
 	CreatedFileIDs                  []uint32
 	WallTimeNanos                   int64
 }
 
-// LeafGenerationPack rewrites live LeafRef pages from sealed source generations
+// LeafGenerationPack rewrites live leaf-log pages from sealed source generations
 // into a fresh leaf-log output so the old generations can later be reclaimed by
 // ordinary generation GC.
 func (db *DB) LeafGenerationPack(ctx context.Context, opts LeafGenerationPackOptions) (stats LeafGenerationPackStats, err error) {
@@ -182,9 +186,11 @@ func (db *DB) leafGenerationPackLocked(ctx context.Context, opts LeafGenerationP
 	}
 	ridAlloc := newRewriteRIDAllocator(nextRID, opts.ReserveRIDs)
 	var rewriteStats leafRefRewriteRunStats
-	stats.LeafPagesCopied, stats.BytesCopied, err = db.rewriteLeafRefsOnline(ctx, writer, ridAlloc, sourceValueIDs, nil, 0, 0, false, 0, opts.Sync, &rewriteStats)
+	stats.LeafPagesCopied, stats.BytesCopied, err = db.rewriteLeafRefsOnline(ctx, writer, ridAlloc, sourceValueIDs, nil, 0, 0, false, 0, opts.Sync, normalizeLeafGenerationPackLeafFrameK(opts.LeafFrameK), &rewriteStats)
 	stats.InternalPagesVisited = rewriteStats.InternalPagesVisited
 	stats.SubtreesPruned = rewriteStats.SubtreesPruned
+	stats.LeafFramesWritten = rewriteStats.LeafFramesWritten
+	stats.MaxLeafFrameK = rewriteStats.MaxLeafFrameK
 	if err != nil {
 		return stats, fmt.Errorf("leaf generation pack: rewrite leaf refs: %w", err)
 	}
@@ -214,6 +220,7 @@ func selectedLeafGenerationPackPlan(selection LeafGenerationPackSelection) LeafG
 }
 
 func normalizeLeafGenerationPackOptions(opts LeafGenerationPackOptions) LeafGenerationPackOptions {
+	opts.LeafFrameK = normalizeLeafGenerationPackLeafFrameK(opts.LeafFrameK)
 	if opts.Force {
 		return opts
 	}
@@ -221,6 +228,16 @@ func normalizeLeafGenerationPackOptions(opts LeafGenerationPackOptions) LeafGene
 		opts.MinReclaimPerByteCopiedPPM = leafGenerationPackDefaultMinReclaimPerByteCopiedPPM
 	}
 	return opts
+}
+
+func normalizeLeafGenerationPackLeafFrameK(k int) int {
+	if k <= 0 {
+		return leafGenerationPackDefaultLeafFrameK
+	}
+	if k > valuelog.MaxFrameK {
+		return valuelog.MaxFrameK
+	}
+	return k
 }
 
 func leafGenerationPackPlanOptions(opts LeafGenerationPackOptions) LeafGenerationPlanOptions {

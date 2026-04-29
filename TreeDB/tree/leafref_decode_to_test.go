@@ -50,15 +50,11 @@ func TestTreeGetAppend_LeafRefPrefersReadUnsafeTo(t *testing.T) {
 		Offset: 4,
 		FileID: 1,
 	}
-	leafID, err := page.EncodeLeafRef(leafPtr)
-	if err != nil {
-		t.Fatalf("EncodeLeafRef: %v", err)
-	}
 
 	leaf := make([]byte, page.PageSize)
 	n := node.NewNode(leaf)
 	n.SetType(page.PageTypeLeaf)
-	n.SetPageID(leafID)
+	n.SetPageID(0)
 	n.AddLeafEntry([]byte("k"), []byte("v"), node.FlagInline, page.ValuePtr{})
 	n.UpdateChecksum()
 
@@ -66,7 +62,8 @@ func TestTreeGetAppend_LeafRefPrefersReadUnsafeTo(t *testing.T) {
 		pageBytes: leaf,
 		useDst:    true,
 	}
-	tr := New(nil, tracked, leafID)
+	tr, closeTree := newTreeWithLeafLogRoot(t, tracked, []byte{}, leafPtr)
+	defer closeTree()
 
 	got, err := tr.GetAppend([]byte("k"), nil)
 	if err != nil {

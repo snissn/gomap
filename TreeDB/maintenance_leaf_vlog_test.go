@@ -65,6 +65,38 @@ func readMainMeta(t *testing.T, rootDir string) page.MetaPageBody {
 	}
 }
 
+func requireMainRootLeafLogChildren(t *testing.T, rootDir string, rootID uint64) {
+	t.Helper()
+	indexPath := mainIndexPath(rootDir)
+	p, err := pager.OpenReadOnly(indexPath, 256*1024)
+	if err != nil {
+		t.Fatalf("open pager: %v", err)
+	}
+	defer func() { _ = p.Close() }()
+	data, err := p.Get(rootID)
+	if err != nil {
+		t.Fatalf("get root %d: %v", rootID, err)
+	}
+	n := node.NewNodeView(data)
+	if n.Type() != page.PageTypeInternal {
+		t.Fatalf("root %d type=%d want internal leaf-log root", rootID, n.Type())
+	}
+	found := false
+	for i := uint16(0); i < n.Count(); i++ {
+		ref, err := n.GetInternalChildRef(i)
+		if err != nil {
+			t.Fatalf("GetInternalChildRef(%d): %v", i, err)
+		}
+		if ref.Kind == page.ChildRefLeafLog {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("root %d has no leaf-log children", rootID)
+	}
+}
+
 func TestVacuumIndexOnline_LeafPagesInValueLog_PreservesLeafRefWrites(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("online vacuum not supported on windows")
@@ -98,9 +130,7 @@ func TestVacuumIndexOnline_LeafPagesInValueLog_PreservesLeafRefWrites(t *testing
 	}
 
 	metaBefore := readMainMeta(t, dir)
-	if _, ok := page.DecodeLeafRef(metaBefore.UserRootPageID); !ok {
-		t.Fatalf("expected root to be a LeafRef before vacuum, got %d", metaBefore.UserRootPageID)
-	}
+	requireMainRootLeafLogChildren(t, dir, metaBefore.UserRootPageID)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -121,9 +151,7 @@ func TestVacuumIndexOnline_LeafPagesInValueLog_PreservesLeafRefWrites(t *testing
 	}
 
 	metaAfter := readMainMeta(t, dir)
-	if _, ok := page.DecodeLeafRef(metaAfter.UserRootPageID); !ok {
-		t.Fatalf("expected root to be a LeafRef after vacuum+write, got %d", metaAfter.UserRootPageID)
-	}
+	requireMainRootLeafLogChildren(t, dir, metaAfter.UserRootPageID)
 }
 
 func TestVacuumIndexOffline_LeafPagesInValueLog_ReopenParity(t *testing.T) {
@@ -377,7 +405,8 @@ func TestValueLogRewriteOffline_LeafPagesInValueLog_PreservesLeafRefRoot_WhenVal
 		t.Fatalf("open: %v", err)
 	}
 
-	// Keep the tree height 1 so meta.UserRootPageID should remain a LeafRef.
+	// Keep the tree small so the root is an internal page with explicit
+	// leaf-log children.
 	for i := 0; i < 16; i++ {
 		key := []byte(fmt.Sprintf("rew-inline-%03d", i))
 		val := bytes.Repeat([]byte{byte(i)}, 32)
@@ -395,9 +424,7 @@ func TestValueLogRewriteOffline_LeafPagesInValueLog_PreservesLeafRefRoot_WhenVal
 	}
 
 	metaBefore := readMainMeta(t, dir)
-	if _, ok := page.DecodeLeafRef(metaBefore.UserRootPageID); !ok {
-		t.Fatalf("expected root to be a LeafRef before rewrite, got %d", metaBefore.UserRootPageID)
-	}
+	requireMainRootLeafLogChildren(t, dir, metaBefore.UserRootPageID)
 
 	stats, err := treedb.ValueLogRewriteOffline(treedb.Options{Dir: dir})
 	if err != nil {
@@ -408,9 +435,7 @@ func TestValueLogRewriteOffline_LeafPagesInValueLog_PreservesLeafRefRoot_WhenVal
 	}
 
 	metaAfter := readMainMeta(t, dir)
-	if _, ok := page.DecodeLeafRef(metaAfter.UserRootPageID); !ok {
-		t.Fatalf("expected root to be a LeafRef after rewrite, got %d", metaAfter.UserRootPageID)
-	}
+	requireMainRootLeafLogChildren(t, dir, metaAfter.UserRootPageID)
 
 	reopen, err := treedb.Open(opts)
 	if err != nil {
@@ -440,7 +465,7 @@ func TestLeafGenerationGC_BackendOpenWithoutFlag_PreservesLeafRefs(t *testing.T)
 		IndexOuterLeavesInValueLog: true,
 		ValueLog: treedb.ValueLogOptions{
 			// Disable compression/dict/template so the only value-log reachability
-			// comes from LeafRef pages (mirrors the original data-loss report).
+			// comes from leaf-log child refs (mirrors the original data-loss report).
 			Compression:      treedb.ValueLogCompressionOff,
 			PointerThreshold: 127, // keep values inline (no value-log pointers)
 		},

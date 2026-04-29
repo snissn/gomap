@@ -49,6 +49,9 @@ func TestBuildMatrixCellsDefaults(t *testing.T) {
 	if !containsEnv(tree.Env, "TREEDB_COLLECTION_REPORT_VLOG_REWRITE=true") {
 		t.Fatalf("tree env missing rewrite toggle: %#v", tree.Env)
 	}
+	if !containsEnv(tree.Env, "TREEDB_COLLECTION_LEAFGEN_PACK_FRAME_K=0") {
+		t.Fatalf("tree env missing leafgen frame K: %#v", tree.Env)
+	}
 	sqlite := names["sqlite_wal_normal"]
 	if sqlite.ExecutionPath != "sqlite" {
 		t.Fatalf("sqlite execution path=%q", sqlite.ExecutionPath)
@@ -70,6 +73,7 @@ func TestBuildMatrixCellsCanSkipSQLiteAndSelectInline(t *testing.T) {
 		"-batch-size", "32000",
 		"-pager-chunk-size", "65536",
 		"-pager-sync-concurrency", "8",
+		"-leafgen-pack-frame-k", "4",
 	})
 	if err != nil {
 		t.Fatalf("parse flags: %v", err)
@@ -89,6 +93,7 @@ func TestBuildMatrixCellsCanSkipSQLiteAndSelectInline(t *testing.T) {
 		"TREEDB_COLLECTION_BENCH_BATCH_SIZE=32000",
 		"TREEDB_COLLECTION_CHUNK_SIZE=65536",
 		"TREEDB_COLLECTION_PAGER_SYNC_CONCURRENCY=8",
+		"TREEDB_COLLECTION_LEAFGEN_PACK_FRAME_K=4",
 	} {
 		if !containsEnv(cell.Env, want) {
 			t.Fatalf("env missing %q: %#v", want, cell.Env)

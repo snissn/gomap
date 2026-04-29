@@ -12,6 +12,7 @@ import (
 
 type CursorItem struct {
 	PageID uint64
+	Ref    page.ChildRef
 	Node   node.Node
 	Index  int
 }
@@ -368,7 +369,7 @@ type Iterator struct {
 	slabKeyAppender slabUnsafeKeyAppender
 	slabKeyBatcher  slabUnsafeKeyBatchAppender
 
-	prefetchPageID    uint64
+	prefetchRef       page.ChildRef
 	prefetchStart     int
 	prefetchLen       int
 	prefetchStep      int
@@ -520,10 +521,10 @@ func (it *Iterator) seekRightMost() {
 	it.leafState.resetPage()
 	it.valid = false
 	it.err = nil
-	currID := it.tree.rootPageID
+	currRef := page.PageChildRef(it.tree.rootPageID)
 
 	for {
-		n, err := it.loadNode(currID)
+		n, err := it.loadNodeRef(currRef)
 		if err != nil {
 			it.err = err
 			return
@@ -535,18 +536,18 @@ func (it *Iterator) seekRightMost() {
 		}
 
 		index := int(n.Count() - 1)
-		it.stack = append(it.stack, CursorItem{PageID: currID, Node: n, Index: index})
+		it.stack = append(it.stack, CursorItem{PageID: currRef.Page, Ref: currRef, Node: n, Index: index})
 
 		if n.Type() == page.PageTypeLeaf {
 			it.loadCurrent()
 			return
 		} else if n.Type() == page.PageTypeInternal {
-			childID, err := n.GetInternalChildID(uint16(index))
+			childRef, err := n.GetInternalChildRef(uint16(index))
 			if err != nil {
 				it.err = err
 				return
 			}
-			currID = childID
+			currRef = childRef
 		} else {
 			it.err = page.ErrInvalidPageType
 			return
@@ -568,10 +569,10 @@ func (it *Iterator) seek(key []byte) {
 	it.valOK = false
 	it.ptrOK = false
 
-	currID := it.tree.rootPageID
+	currRef := page.PageChildRef(it.tree.rootPageID)
 
 	for {
-		n, err := it.loadNode(currID)
+		n, err := it.loadNodeRef(currRef)
 		if err != nil {
 			it.err = err
 			return
@@ -609,14 +610,14 @@ func (it *Iterator) seek(key []byte) {
 				}
 			}
 
-			it.stack = append(it.stack, CursorItem{PageID: currID, Node: n, Index: index})
+			it.stack = append(it.stack, CursorItem{PageID: currRef.Page, Ref: currRef, Node: n, Index: index})
 
-			childID, err := n.GetInternalChildID(uint16(index))
+			childRef, err := n.GetInternalChildRef(uint16(index))
 			if err != nil {
 				it.err = err
 				return
 			}
-			currID = childID
+			currRef = childRef
 
 		} else if n.Type() == page.PageTypeLeaf {
 			if key == nil {
@@ -629,7 +630,7 @@ func (it *Iterator) seek(key []byte) {
 				}
 				index = int(idx)
 			}
-			it.stack = append(it.stack, CursorItem{PageID: currID, Node: n, Index: index})
+			it.stack = append(it.stack, CursorItem{PageID: currRef.Page, Ref: currRef, Node: n, Index: index})
 
 			it.loadCurrent()
 			return
@@ -709,6 +710,9 @@ func (it *Iterator) getLeafKeyFlags(top *CursorItem) (key []byte, flags byte, er
 	if top.Node.Type() != page.PageTypeLeaf {
 		return nil, 0, node.ErrInvalidType
 	}
+	if top.Ref.Kind == page.ChildRefLeafLog {
+		return top.Node.GetLeafKeyFlagsView(uint16(top.Index))
+	}
 	isCombined, err := it.leafState.init(top.PageID, &top.Node)
 	if err != nil {
 		return nil, 0, err
@@ -732,23 +736,23 @@ func (it *Iterator) stepForward() {
 				return
 			}
 
-			childID, err := top.Node.GetInternalChildID(uint16(top.Index))
+			childRef, err := top.Node.GetInternalChildRef(uint16(top.Index))
 			if err != nil {
 				it.err = err
 				it.valid = false
 				return
 			}
-			currID := childID
+			currRef := childRef
 
 			for {
-				n, err := it.loadNode(currID)
+				n, err := it.loadNodeRef(currRef)
 				if err != nil {
 					it.err = err
 					it.valid = false
 					return
 				}
 
-				item := CursorItem{PageID: currID, Node: n, Index: 0}
+				item := CursorItem{PageID: currRef.Page, Ref: currRef, Node: n, Index: 0}
 				it.stack = append(it.stack, item)
 
 				if n.Type() == page.PageTypeLeaf {
@@ -756,13 +760,13 @@ func (it *Iterator) stepForward() {
 					return
 				}
 
-				childID, err := n.GetInternalChildID(0)
+				childRef, err := n.GetInternalChildRef(0)
 				if err != nil {
 					it.err = err
 					it.valid = false
 					return
 				}
-				currID = childID
+				currRef = childRef
 			}
 		}
 		it.stack = it.stack[:idx]
@@ -783,23 +787,23 @@ func (it *Iterator) stepBackward() {
 				return
 			}
 
-			childID, err := top.Node.GetInternalChildID(uint16(top.Index))
+			childRef, err := top.Node.GetInternalChildRef(uint16(top.Index))
 			if err != nil {
 				it.err = err
 				it.valid = false
 				return
 			}
-			currID := childID
+			currRef := childRef
 
 			for {
-				n, err := it.loadNode(currID)
+				n, err := it.loadNodeRef(currRef)
 				if err != nil {
 					it.err = err
 					it.valid = false
 					return
 				}
 				count := int(n.Count())
-				item := CursorItem{PageID: currID, Node: n, Index: count - 1}
+				item := CursorItem{PageID: currRef.Page, Ref: currRef, Node: n, Index: count - 1}
 				it.stack = append(it.stack, item)
 
 				if count == 0 {
@@ -816,13 +820,13 @@ func (it *Iterator) stepBackward() {
 					return
 				}
 
-				childID, err := n.GetInternalChildID(uint16(count - 1))
+				childRef, err := n.GetInternalChildRef(uint16(count - 1))
 				if err != nil {
 					it.err = err
 					it.valid = false
 					return
 				}
-				currID = childID
+				currRef = childRef
 			}
 		}
 		it.stack = it.stack[:idx]
@@ -1006,10 +1010,15 @@ func (it *Iterator) Domain() (start, end []byte) {
 }
 
 func (it *Iterator) loadNode(pageID uint64) (node.Node, error) {
+	return it.loadNodeRef(page.PageChildRef(pageID))
+}
+
+func (it *Iterator) loadNodeRef(ref page.ChildRef) (node.Node, error) {
 	if it == nil || it.tree == nil {
 		return node.Node{}, errors.New("missing tree")
 	}
-	if ptr, ok := page.DecodeLeafRef(pageID); ok && it.slabAppender != nil {
+	if ref.Kind == page.ChildRefLeafLog && it.slabAppender != nil {
+		ptr := ref.Log
 		if cap(it.leafRefScratch) != page.PageSize {
 			it.leafRefScratch = make([]byte, 0, page.PageSize)
 		}
@@ -1018,20 +1027,20 @@ func (it *Iterator) loadNode(pageID uint64) (node.Node, error) {
 			return node.Node{}, err
 		}
 		if len(data) != page.PageSize {
-			return node.Node{}, fmt.Errorf("invalid leaf page size %d for page %d", len(data), pageID)
+			return node.Node{}, fmt.Errorf("invalid leaf page size %d for leaf-log ref file=%d offset=%d", len(data), ptr.FileID, ptr.Offset)
 		}
 		n := node.NewNodeView(data)
 		if it.tree.shouldVerifyLeafRefChecksum() && !n.VerifyChecksum() {
-			return node.Node{}, fmt.Errorf("checksum mismatch on page %d", pageID)
+			return node.Node{}, fmt.Errorf("checksum mismatch on leaf-log ref file=%d offset=%d", ptr.FileID, ptr.Offset)
 		}
 		if n.Type() != page.PageTypeLeaf {
-			return node.Node{}, fmt.Errorf("invalid page type %d at page %d", n.Type(), pageID)
+			return node.Node{}, fmt.Errorf("invalid page type %d at leaf-log ref file=%d offset=%d", n.Type(), ptr.FileID, ptr.Offset)
 		}
 		noteOuterLeafLoad(ptr.ValuePtr(), len(data), true)
 		it.leafRefScratch = data[:0]
 		return n, nil
 	}
-	return it.tree.loadNodeViewWithLoadKind(pageID, it.verifyAlways, true)
+	return it.tree.loadChildRefView(ref, it.verifyAlways, true)
 }
 
 func (it *Iterator) ensurePointerLoaded() bool {
@@ -1095,7 +1104,7 @@ func (it *Iterator) ensureInlineValueLoaded() bool {
 }
 
 func (it *Iterator) resetPointerPrefetch() {
-	it.prefetchPageID = 0
+	it.prefetchRef = page.ChildRef{}
 	it.prefetchStart = 0
 	it.prefetchLen = 0
 	it.prefetchStep = 0
@@ -1109,7 +1118,7 @@ func (it *Iterator) tryUsePrefetchedPointerValue() bool {
 		return false
 	}
 	top := &it.stack[len(it.stack)-1]
-	if it.prefetchPageID != top.PageID {
+	if it.prefetchRef != top.Ref {
 		return false
 	}
 	var pos int
@@ -1146,7 +1155,7 @@ func (it *Iterator) prefetchPointerRun() bool {
 		step = -1
 	}
 
-	it.prefetchPageID = top.PageID
+	it.prefetchRef = top.Ref
 	it.prefetchStart = top.Index
 	it.prefetchLen = 0
 	it.prefetchStep = step

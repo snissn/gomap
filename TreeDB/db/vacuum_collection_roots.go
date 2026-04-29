@@ -202,9 +202,6 @@ func vacuumCopyCollectionRoot(oldPager *pager.Pager, rootID uint64, alloc vacuum
 	if rootID == 0 {
 		return 0, nil
 	}
-	if _, ok := page.DecodeLeafRef(rootID); ok {
-		return rootID, nil
-	}
 	if oldPager == nil || newPager == nil || alloc == nil {
 		return 0, errors.New("vacuum: missing pager/allocator")
 	}
@@ -226,16 +223,10 @@ func vacuumCollectLeafRefChildrenIfComplete(p *pager.Pager, rootID uint64) ([]va
 	if rootID == 0 {
 		return nil, false, errors.New("vacuum: missing root id")
 	}
-	if _, ok := page.DecodeLeafRef(rootID); ok {
-		return nil, true, nil
-	}
 
 	out := make([]vacuumLeafChild, 0, 1024)
 	var walk func(uint64) (bool, error)
 	walk = func(id uint64) (bool, error) {
-		if _, ok := page.DecodeLeafRef(id); ok {
-			return true, nil
-		}
 		data, err := p.Get(id)
 		if err != nil {
 			return false, err
@@ -245,18 +236,18 @@ func vacuumCollectLeafRefChildrenIfComplete(p *pager.Pager, rootID uint64) ([]va
 		case page.PageTypeInternal:
 			count := n.Count()
 			for i := uint16(0); i < count; i++ {
-				keyView, childID, err := n.GetInternalEntryView(i)
+				keyView, childRef, err := n.GetInternalEntryRefView(i)
 				if err != nil {
 					return false, err
 				}
-				if _, ok := page.DecodeLeafRef(childID); ok {
+				if childRef.Kind == page.ChildRefLeafLog {
 					out = append(out, vacuumLeafChild{
-						key:     append([]byte(nil), keyView...),
-						childID: childID,
+						key:      append([]byte(nil), keyView...),
+						childRef: childRef,
 					})
 					continue
 				}
-				allLeafRefs, err := walk(childID)
+				allLeafRefs, err := walk(childRef.Page)
 				if err != nil || !allLeafRefs {
 					return allLeafRefs, err
 				}

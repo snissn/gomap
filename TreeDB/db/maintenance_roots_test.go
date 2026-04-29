@@ -577,9 +577,7 @@ func TestLeafGenerationLiveStatsCountsCollectionLeafRefRoot(t *testing.T) {
 	if len(rootIDs) != 1 {
 		t.Fatalf("rootIDs=%d want 1", len(rootIDs))
 	}
-	if _, ok := page.DecodeLeafRef(rootIDs[0]); !ok {
-		t.Fatalf("rootID=%d want leaf-ref root", rootIDs[0])
-	}
+	requireLeafLogRootChildren(t, d, rootIDs[0])
 
 	snap := d.AcquireSnapshot()
 	if snap == nil || snap.state == nil {

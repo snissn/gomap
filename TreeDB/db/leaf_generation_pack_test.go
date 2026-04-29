@@ -394,6 +394,7 @@ func TestLeafGenerationPack_MovesSparseSealedGeneration(t *testing.T) {
 	stats, err := db.LeafGenerationPack(context.Background(), LeafGenerationPackOptions{
 		GenerationIDs: []uint64{gen1.GenerationID},
 		Sync:          true,
+		LeafFrameK:    8,
 	})
 	if err != nil {
 		t.Fatalf("LeafGenerationPack: %v", err)
@@ -433,6 +434,12 @@ func TestLeafGenerationPack_MovesSparseSealedGeneration(t *testing.T) {
 	}
 	if got := stats.LeafPagesCopied; got <= 0 {
 		t.Fatalf("LeafPagesCopied=%d, want > 0", got)
+	}
+	if got := stats.LeafFramesWritten; got <= 0 || got >= stats.LeafPagesCopied {
+		t.Fatalf("LeafFramesWritten=%d, want >0 and < LeafPagesCopied=%d", got, stats.LeafPagesCopied)
+	}
+	if got := stats.MaxLeafFrameK; got <= 1 || got > 8 {
+		t.Fatalf("MaxLeafFrameK=%d, want 2..8", got)
 	}
 	if got := stats.BytesCopied; got <= 0 {
 		t.Fatalf("BytesCopied=%d, want > 0", got)
@@ -644,10 +651,7 @@ func TestLeafGenerationPack_RewritesCollectionLeafRefRoot(t *testing.T) {
 		t.Fatalf("publish collection leaf-ref root: %v", err)
 	}
 	oldRoot := rootIDs[0]
-	oldLeafPtr, ok := page.DecodeLeafRef(oldRoot)
-	if !ok {
-		t.Fatalf("collection root=%d want leaf ref", oldRoot)
-	}
+	oldLeafPtr := requireLeafLogRootChildren(t, db, oldRoot)[0]
 	oldLeafPath := leafLogSegmentPath(t, dir, oldLeafPtr.FileID)
 	rawFileID := page.ValueLogSegmentID(oldLeafPtr.FileID)
 	if err := leafLog.Sync(); err != nil {
@@ -690,10 +694,7 @@ func TestLeafGenerationPack_RewritesCollectionLeafRefRoot(t *testing.T) {
 	if newRoot == oldRoot {
 		t.Fatalf("collection descriptor still points at old leaf-ref root %d", oldRoot)
 	}
-	newLeafPtr, ok := page.DecodeLeafRef(newRoot)
-	if !ok {
-		t.Fatalf("rewritten collection root=%d want leaf ref", newRoot)
-	}
+	newLeafPtr := requireLeafLogRootChildren(t, db, newRoot)[0]
 	if newLeafPtr.FileID == oldLeafPtr.FileID && newLeafPtr.Offset == oldLeafPtr.Offset {
 		t.Fatalf("collection leaf ref was not moved: %v", newLeafPtr)
 	}

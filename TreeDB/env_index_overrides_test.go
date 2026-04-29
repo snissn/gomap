@@ -106,7 +106,7 @@ func TestOpen_EnvIndexFormatConflictWithPersistedFormat(t *testing.T) {
 		t.Fatalf("mkdir maindb: %v", err)
 	}
 	cfg := db.FormatConfig{
-		Version: 1,
+		Version: 2,
 
 		IndexOuterLeavesInValueLog: true,
 		LeafPrefixCompression:      true,

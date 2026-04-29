@@ -467,10 +467,6 @@ func BenchmarkLeafGenerationPlanLeafRefPageStats_SavedHome(b *testing.B) {
 			if rootID == 0 {
 				continue
 			}
-			if _, ok := page.DecodeLeafRef(rootID); ok {
-				leafRefs++
-				continue
-			}
 			stack = append(stack, rootID)
 		}
 		for len(stack) > 0 {
@@ -495,16 +491,16 @@ func BenchmarkLeafGenerationPlanLeafRefPageStats_SavedHome(b *testing.B) {
 			case page.PageTypeInternal:
 				count := n.Count()
 				for j := uint16(0); j < count; j++ {
-					childID, err := n.GetInternalChildID(j)
+					childRef, err := n.GetInternalChildRef(j)
 					if err != nil {
 						_ = snap.Close()
-						b.Fatalf("GetInternalChildID(%d): %v", j, err)
+						b.Fatalf("GetInternalChildRef(%d): %v", j, err)
 					}
-					if _, ok := page.DecodeLeafRef(childID); ok {
+					if childRef.Kind == page.ChildRefLeafLog {
 						leafRefs++
 						continue
 					}
-					stack = append(stack, childID)
+					stack = append(stack, childRef.Page)
 				}
 			default:
 				_ = snap.Close()

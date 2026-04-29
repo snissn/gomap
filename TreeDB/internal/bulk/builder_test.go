@@ -151,13 +151,22 @@ func TestBuildWithOptions_EmptyIteratorLeafPageLogReturnsLeafRefRoot(t *testing.
 	if err != nil {
 		t.Fatalf("BuildWithOptions: %v", err)
 	}
-	ptr, ok := page.DecodeLeafRef(rootID)
-	if !ok {
-		t.Fatalf("rootID=%d is not a leaf ref", rootID)
-	}
 	if len(leafLog.ptrs) != 1 {
 		t.Fatalf("AppendLeafPage calls=%d want 1", len(leafLog.ptrs))
 	}
+	data, err := p.Get(rootID)
+	if err != nil {
+		t.Fatalf("pager.Get(root): %v", err)
+	}
+	root := node.NewNodeView(data)
+	childRef, err := root.GetInternalChildRef(0)
+	if err != nil {
+		t.Fatalf("GetInternalChildRef: %v", err)
+	}
+	if childRef.Kind != page.ChildRefLeafLog {
+		t.Fatalf("root child kind=%d want leaf-log", childRef.Kind)
+	}
+	ptr := childRef.Log
 	if ptr.FileID != leafLog.ptrs[0].FileID || ptr.Offset != leafLog.ptrs[0].Offset {
 		t.Fatalf("root ptr=(file=%d off=%d) want (file=%d off=%d)", ptr.FileID, ptr.Offset, leafLog.ptrs[0].FileID, leafLog.ptrs[0].Offset)
 	}
@@ -200,11 +209,11 @@ func TestBuildWithOptions_NonEmptyLeafPageLogUsesLeafRefsForLeafChildren(t *test
 	}
 	foundLeafRef := false
 	for i := uint16(0); i < root.Count(); i++ {
-		childID, err := root.GetInternalChildID(i)
+		childRef, err := root.GetInternalChildRef(i)
 		if err != nil {
-			t.Fatalf("GetInternalChildID(%d): %v", i, err)
+			t.Fatalf("GetInternalChildRef(%d): %v", i, err)
 		}
-		if _, ok := page.DecodeLeafRef(childID); ok {
+		if childRef.Kind == page.ChildRefLeafLog {
 			foundLeafRef = true
 			break
 		}

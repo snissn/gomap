@@ -72,15 +72,11 @@ func TestIterator_LeafRefFallbackCountsAsIteratorLoad(t *testing.T) {
 	}()
 
 	leafPtr := page.LeafLogPtr{FileID: 1, Offset: 8}
-	leafID, err := page.EncodeLeafRef(leafPtr)
-	if err != nil {
-		t.Fatalf("EncodeLeafRef: %v", err)
-	}
 
 	leafData := make([]byte, page.PageSize)
 	leaf := node.NewNode(leafData)
 	leaf.SetType(page.PageTypeLeaf)
-	leaf.SetPageID(leafID)
+	leaf.SetPageID(0)
 	leaf.AddLeafEntry([]byte("k"), []byte("v"), node.FlagInline, page.ValuePtr{})
 	leaf.UpdateChecksum()
 
@@ -89,7 +85,8 @@ func TestIterator_LeafRefFallbackCountsAsIteratorLoad(t *testing.T) {
 			leafPtr.ValuePtr(): leafData,
 		},
 	}
-	tr := New(nil, reader, leafID)
+	tr, closeTree := newTreeWithLeafLogRoot(t, reader, []byte{}, leafPtr)
+	defer closeTree()
 	it := tr.Iterator(nil, nil)
 	defer it.Close()
 	if !it.Valid() {
@@ -124,19 +121,13 @@ func TestIterator_LeafRefChecksumPolicyHonored(t *testing.T) {
 		leaf.UpdateChecksum()
 		leafData[8] ^= 0x01 // checksum field
 
-		leafRefID, err := page.EncodeLeafRef(page.LeafLogPtr{
+		ptr := page.LeafLogPtr{
 			FileID: 1,
 			Offset: 8,
-		})
-		if err != nil {
-			t.Fatalf("EncodeLeafRef: %v", err)
-		}
-		ptr, ok := page.DecodeLeafRef(leafRefID)
-		if !ok {
-			t.Fatalf("DecodeLeafRef failed")
 		}
 		tracked.values[ptr.ValuePtr()] = leafData
-		return New(nil, tracked, leafRefID)
+		tr, _ := newTreeWithLeafLogRoot(t, tracked, []byte{}, ptr)
+		return tr
 	}
 
 	t.Run("verify_enabled", func(t *testing.T) {

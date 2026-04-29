@@ -25,6 +25,7 @@ type Builder struct {
 	leafColumnarV2        bool
 	leafPackedValuePtr    bool
 	internalBaseDelta     bool
+	internalLeafLogRefs   bool
 	internalBaseChildID   uint64
 	internalBaseDeltaW    int
 	internalBaseHasChild  bool
@@ -61,7 +62,10 @@ type Builder struct {
 	internalBaseSharedPrefix  int
 }
 
-const internalBaseDeltaFooterTailSize = 14 // u16 lowLen + u16 highLen + u16 prefixLen + u64 baseChildID
+const (
+	internalBaseDeltaFooterTailSize = 14 // u16 lowLen + u16 highLen + u16 prefixLen + u64 baseChildID
+	internalLeafLogRefHeaderSize    = 2 + page.LogRecordRefSize
+)
 
 type byteArenaHandle struct {
 	buf []byte
@@ -796,12 +800,29 @@ func (b *Builder) AddLeafEntryWithPrefix(key, value []byte, flags byte, valPtr p
 
 // AddInternalChild appends a child pointer. Assumes keys are added in sorted order.
 func (b *Builder) AddInternalChild(key []byte, childPageID uint64) error {
+	return b.AddInternalChildRef(key, page.PageChildRef(childPageID))
+}
+
+// AddInternalChildRef appends a typed child reference. All children in a single
+// internal page must have the same storage kind. Leaf-log refs use an explicit
+// first-class on-disk record instead of the historical packed uint64 LeafRef.
+//
+// TODO(treedb-format): leaf-log child pages can be compacted later by hoisting
+// common fields such as kind/file id to the page header and narrowing offsets
+// when segment sizing gives us a hard bound.
+func (b *Builder) AddInternalChildRef(key []byte, ref page.ChildRef) error {
 	if b.pType != page.PageTypeInternal {
+		return ErrInvalidType
+	}
+	if ref.Kind == page.ChildRefLeafLog {
+		return b.addInternalLeafLogChild(key, ref.Log)
+	}
+	if b.internalLeafLogRefs {
 		return ErrInvalidType
 	}
 
 	if b.internalBaseDelta {
-		return b.addInternalChildBaseDelta(key, childPageID)
+		return b.addInternalChildBaseDelta(key, ref.Page)
 	}
 
 	// Layout: KeyLen(2) + ChildPageID(8) + Key
@@ -819,7 +840,7 @@ func (b *Builder) AddInternalChild(key []byte, childPageID uint64) error {
 	keyLen := len(key)
 	b.data[ptr] = byte(keyLen)
 	b.data[ptr+1] = byte(keyLen >> 8)
-	putUint64(b.data[ptr+2:ptr+10], childPageID)
+	putUint64(b.data[ptr+2:ptr+10], ref.Page)
 	copy(b.data[ptr+10:], key)
 
 	b.data[b.dirEnd] = byte(entryStart)
@@ -829,6 +850,40 @@ func (b *Builder) AddInternalChild(key []byte, childPageID uint64) error {
 	b.dirEnd += DirectoryEntrySize
 	b.count++
 
+	return nil
+}
+
+func (b *Builder) addInternalLeafLogChild(key []byte, ref page.LogRecordRef) error {
+	if b.internalBaseDelta {
+		return ErrInvalidType
+	}
+	if b.count > 0 && !b.internalLeafLogRefs {
+		return ErrInvalidType
+	}
+	b.internalLeafLogRefs = true
+
+	entrySize := internalLeafLogRefHeaderSize + len(key)
+	required := entrySize + DirectoryEntrySize
+	freeSpace := b.heapStart - b.dirEnd
+	if freeSpace < required {
+		return ErrNodeFull
+	}
+
+	entryStart := b.heapStart - entrySize
+	ptr := entryStart
+
+	keyLen := len(key)
+	b.data[ptr] = byte(keyLen)
+	b.data[ptr+1] = byte(keyLen >> 8)
+	page.EncodeLogRecordRef(b.data[ptr+2:ptr+2+page.LogRecordRefSize], ref)
+	copy(b.data[ptr+internalLeafLogRefHeaderSize:], key)
+
+	b.data[b.dirEnd] = byte(entryStart)
+	b.data[b.dirEnd+1] = byte(entryStart >> 8)
+
+	b.heapStart = entryStart
+	b.dirEnd += DirectoryEntrySize
+	b.count++
 	return nil
 }
 
@@ -843,7 +898,6 @@ func (b *Builder) finalize() {
 	if b.pType == page.PageTypeLeaf && b.leafColumnarV2 && !b.leafPrefixCompression {
 		b.finishLeafColumnarV2()
 	}
-
 	// Write Header
 	putUint64(b.data[0:8], b.pageID)
 	// Checksum at 8-12 (written by UpdateChecksum)
@@ -865,7 +919,9 @@ func (b *Builder) finalize() {
 			flags |= leafPackedValuePtrFlag
 		}
 	} else if b.pType == page.PageTypeInternal {
-		if internalBaseDeltaApplied {
+		if b.internalLeafLogRefs {
+			flags |= internalLeafLogRefsFlag
+		} else if internalBaseDeltaApplied {
 			flags |= internalBaseDeltaFlag
 			if b.internalBaseDeltaW == 2 {
 				flags |= internalBaseDeltaU16Flag

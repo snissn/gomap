@@ -35,11 +35,12 @@ const (
 	leafColumnarV2Flag       uint16 = 0x0400
 	internalBaseDeltaU16Flag uint16 = 0x0200
 	internalFenceBoundsFlag  uint16 = 0x0100
+	internalLeafLogRefsFlag  uint16 = 0x0080
 
 	// NOTE: TreeDB is currently pre-alpha; on-disk formats are not yet stable and
 	// backward compatibility is not guaranteed. Leaf/internal flags may change.
 	leafNodeFlagMask     = leafPrefixCompressedFlag | leafColumnarFlag | leafPrefixV2Flag | leafPackedValuePtrFlag | leafColumnarV2Flag
-	internalNodeFlagMask = internalBaseDeltaFlag | internalBaseDeltaU16Flag | internalFenceBoundsFlag
+	internalNodeFlagMask = internalBaseDeltaFlag | internalBaseDeltaU16Flag | internalFenceBoundsFlag | internalLeafLogRefsFlag
 	nodeFlagMask         = leafNodeFlagMask | internalNodeFlagMask
 	pageTypeMask         = ^nodeFlagMask
 
@@ -238,6 +239,17 @@ func (n *Node) internalBaseDelta() bool {
 	return n.rawFlags()&internalBaseDeltaFlag != 0
 }
 
+func (n *Node) internalLeafLogRefs() bool {
+	if n.ptype != page.PageTypeInternal {
+		return false
+	}
+	return n.rawFlags()&internalLeafLogRefsFlag != 0
+}
+
+func (n *Node) InternalLeafLogRefsEnabled() bool {
+	return n.internalLeafLogRefs()
+}
+
 // InternalBaseDeltaEnabled reports whether this internal node uses base-delta
 // key encoding. When true, GetInternalEntryView keys are scratch-backed and
 // callers that retain keys must copy them.
@@ -265,6 +277,17 @@ func (n *Node) setInternalBaseDelta(enabled bool) {
 		flags |= internalBaseDeltaFlag
 	} else {
 		flags &^= internalBaseDeltaFlag
+	}
+	n.setRawFlags(flags)
+}
+
+func (n *Node) setInternalLeafLogRefs(enabled bool) {
+	flags := n.rawFlags()
+	if enabled {
+		flags |= internalLeafLogRefsFlag
+		flags &^= internalBaseDeltaFlag | internalBaseDeltaU16Flag
+	} else {
+		flags &^= internalLeafLogRefsFlag
 	}
 	n.setRawFlags(flags)
 }

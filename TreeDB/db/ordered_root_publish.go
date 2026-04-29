@@ -62,9 +62,9 @@ const (
 	// OrderedRootStoragePagerLeaves stores root leaves in index.db pages. It is
 	// the fast index policy and can use internal base-delta child encodings.
 	OrderedRootStoragePagerLeaves
-	// OrderedRootStorageValueLogLeaves stores root leaves as value-log LeafRefs.
-	// It is the compressed policy; internal base-delta is disabled because
-	// LeafRef child IDs use the same child-id space.
+	// OrderedRootStorageValueLogLeaves stores root leaves as leaf-log records.
+	// It is the compressed policy; leaf-log child pages use explicit LogRecordRef
+	// entries instead of base-delta page-child encoding.
 	OrderedRootStorageValueLogLeaves
 )
 

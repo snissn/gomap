@@ -37,6 +37,7 @@ type config struct {
 	pagerChunkSize         int64
 	pagerSyncConcurrency   int
 	leafSegmentTargetBytes int64
+	leafGenPackFrameK      int
 	reportVLogRewrite      bool
 	reportLeafGenPackGC    bool
 	reportSQLiteVacuum     bool
@@ -127,6 +128,7 @@ func parseFlags(args []string) (config, error) {
 	fs.Int64Var(&cfg.pagerChunkSize, "pager-chunk-size", 0, "Optional TREEDB_COLLECTION_CHUNK_SIZE override; 0 means profile/default")
 	fs.IntVar(&cfg.pagerSyncConcurrency, "pager-sync-concurrency", 0, "Optional TREEDB_COLLECTION_PAGER_SYNC_CONCURRENCY override; 0 means profile/default")
 	fs.Int64Var(&cfg.leafSegmentTargetBytes, "leaf-segment-target-bytes", 0, "Optional TREEDB_VLOG_GENERATION_LEAF_SEGMENT_TARGET_BYTES override; 0 means engine default")
+	fs.IntVar(&cfg.leafGenPackFrameK, "leafgen-pack-frame-k", 0, "Optional TREEDB_COLLECTION_LEAFGEN_PACK_FRAME_K override; 0 means engine default")
 	fs.BoolVar(&cfg.reportVLogRewrite, "report-vlog-rewrite", cfg.reportVLogRewrite, "Run TreeDB online value_vlog rewrite/GC measurement after insert-shape benchmarks")
 	fs.BoolVar(&cfg.reportLeafGenPackGC, "report-leafgen-pack-gc", cfg.reportLeafGenPackGC, "Run TreeDB leaf_vlog generation pack/GC measurement after insert-shape benchmarks")
 	fs.BoolVar(&cfg.reportSQLiteVacuum, "report-sqlite-vacuum", cfg.reportSQLiteVacuum, "Run SQLite VACUUM measurement after insert-shape benchmarks")
@@ -159,6 +161,9 @@ func parseFlags(args []string) (config, error) {
 	}
 	if cfg.leafSegmentTargetBytes < 0 {
 		return config{}, fmt.Errorf("-leaf-segment-target-bytes must be >= 0")
+	}
+	if cfg.leafGenPackFrameK < 0 {
+		return config{}, fmt.Errorf("-leafgen-pack-frame-k must be >= 0")
 	}
 	if strings.TrimSpace(cfg.benchtime) == "" {
 		return config{}, fmt.Errorf("-benchtime is required")
@@ -323,6 +328,7 @@ func buildMatrixCells(cfg config) ([]matrixCell, error) {
 					"TREEDB_COLLECTION_INDEX_OUTER_LEAVES_IN_VLOG=" + strconv.FormatBool(storageCell.indexOuter),
 					"TREEDB_COLLECTION_REPORT_VLOG_REWRITE=" + strconv.FormatBool(cfg.reportVLogRewrite),
 					"TREEDB_COLLECTION_REPORT_LEAFGEN_PACK_GC=" + strconv.FormatBool(cfg.reportLeafGenPackGC),
+					"TREEDB_COLLECTION_LEAFGEN_PACK_FRAME_K=" + strconv.Itoa(cfg.leafGenPackFrameK),
 				},
 			}
 			cell.Env = appendPagerEnv(cell.Env, cfg)

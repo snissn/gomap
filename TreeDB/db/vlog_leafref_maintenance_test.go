@@ -143,7 +143,8 @@ func TestValueLogRewriteOffline_PreservesLeafPagesInValueLogFormatConfig(t *test
 	leafLog.blockCodec = valuelog.BlockCodecSnappy
 	db.SetLeafPageLog(leafLog)
 
-	// Keep the tree as a single leaf so the root page ID itself is a leaf ref.
+	// Keep the tree as a single leaf payload so the root internal page points
+	// directly at leaf-log children.
 	value := bytes.Repeat([]byte("v"), 16)
 	for i := 0; i < 32; i++ {
 		key := []byte(fmt.Sprintf("k%04d", i))
@@ -160,7 +161,11 @@ func TestValueLogRewriteOffline_PreservesLeafPagesInValueLogFormatConfig(t *test
 		_ = db.Close()
 		t.Fatalf("missing db state")
 	}
-	if _, ok := page.DecodeLeafRef(state.RootPageID); !ok {
+	if _, allLeafRefs, err := vacuumCollectLeafRefChildrenIfComplete(db.Pager(), state.RootPageID); err != nil {
+		_ = leafLog.Close()
+		_ = db.Close()
+		t.Fatalf("inspect root leaf-log children: %v", err)
+	} else if !allLeafRefs {
 		_ = leafLog.Close()
 		_ = db.Close()
 		t.Fatalf("expected leaf-ref root page with leaf pages in vlog; root=%d", state.RootPageID)
@@ -190,7 +195,9 @@ func TestValueLogRewriteOffline_PreservesLeafPagesInValueLogFormatConfig(t *test
 	if state2 == nil {
 		t.Fatalf("missing state after rewrite reopen")
 	}
-	if _, ok := page.DecodeLeafRef(state2.RootPageID); !ok {
+	if _, allLeafRefs, err := vacuumCollectLeafRefChildrenIfComplete(reopen.Pager(), state2.RootPageID); err != nil {
+		t.Fatalf("inspect rewritten root leaf-log children: %v", err)
+	} else if !allLeafRefs {
 		t.Fatalf("expected leaf-ref root page after rewrite; root=%d", state2.RootPageID)
 	}
 

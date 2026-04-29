@@ -65,6 +65,7 @@ type config struct {
 	LeafGenerationPackGC       bool
 	LeafGenerationPackForce    bool
 	LeafGenerationPackMaxGen   int
+	LeafGenerationPackFrameK   int
 	IndexVacuum                string
 	Progress                   bool
 	JSONOutput                 bool
@@ -166,6 +167,8 @@ type leafGenerationSummary struct {
 	PackSourceBytesDead       int64         `json:"pack_source_bytes_dead,omitempty"`
 	PackSourceBytesToCopy     int64         `json:"pack_source_bytes_to_copy,omitempty"`
 	PackLeafPagesCopied       int           `json:"pack_leaf_pages_copied,omitempty"`
+	PackLeafFramesWritten     int           `json:"pack_leaf_frames_written,omitempty"`
+	PackMaxLeafFrameK         int           `json:"pack_max_leaf_frame_k,omitempty"`
 	PackBytesCopied           int64         `json:"pack_bytes_copied,omitempty"`
 	PackCreatedFiles          int           `json:"pack_created_files,omitempty"`
 	GCGenerationsDeleted      int           `json:"gc_generations_deleted,omitempty"`
@@ -337,6 +340,7 @@ func parseConfig(args []string, output io.Writer) (config, error) {
 	fs.BoolVar(&cfg.LeafGenerationPackGC, "leafgen-pack-gc", false, "run TreeDB leaf_vlog generation pack plus GC after loading")
 	fs.BoolVar(&cfg.LeafGenerationPackForce, "leafgen-pack-force", false, "force leaf-generation pack selection when -leafgen-pack-gc is enabled")
 	fs.IntVar(&cfg.LeafGenerationPackMaxGen, "leafgen-pack-max-generations", cfg.LeafGenerationPackMaxGen, "max leaf generations to pack per run when -leafgen-pack-gc is enabled (0 means no limit)")
+	fs.IntVar(&cfg.LeafGenerationPackFrameK, "leafgen-pack-frame-k", cfg.LeafGenerationPackFrameK, "leaf pages per grouped output frame during leafgen pack (0 uses engine default)")
 	fs.StringVar(&cfg.IndexVacuum, "index-vacuum", cfg.IndexVacuum, "run index vacuum after loading: none, online, or offline")
 	fs.BoolVar(&cfg.Progress, "progress", cfg.Progress, "print load progress to stderr")
 	fs.BoolVar(&cfg.JSONOutput, "json", false, "print summary as JSON")
@@ -390,6 +394,9 @@ func parseConfig(args []string, output io.Writer) (config, error) {
 	}
 	if cfg.LeafGenerationPackMaxGen < 0 {
 		return cfg, fmt.Errorf("-leafgen-pack-max-generations must be >= 0")
+	}
+	if cfg.LeafGenerationPackFrameK < 0 {
+		return cfg, fmt.Errorf("-leafgen-pack-frame-k must be >= 0")
 	}
 	cfg.IndexVacuum = strings.ToLower(strings.TrimSpace(cfg.IndexVacuum))
 	switch cfg.IndexVacuum {
@@ -1004,6 +1011,7 @@ func maybePackLeafGenerations(cfg config, backend *backenddb.DB) (*leafGeneratio
 		Force:          cfg.LeafGenerationPackForce,
 		MaxGenerations: cfg.LeafGenerationPackMaxGen,
 		Sync:           true,
+		LeafFrameK:     cfg.LeafGenerationPackFrameK,
 	})
 	if err != nil {
 		return out, fmt.Errorf("leaf-generation pack: %w", err)
@@ -1015,6 +1023,8 @@ func maybePackLeafGenerations(cfg config, backend *backenddb.DB) (*leafGeneratio
 	out.PackSourceBytesDead = packStats.SourceBytesDead
 	out.PackSourceBytesToCopy = packStats.SourceBytesToCopy
 	out.PackLeafPagesCopied = packStats.LeafPagesCopied
+	out.PackLeafFramesWritten = packStats.LeafFramesWritten
+	out.PackMaxLeafFrameK = packStats.MaxLeafFrameK
 	out.PackBytesCopied = packStats.BytesCopied
 	out.PackCreatedFiles = len(packStats.CreatedFileIDs)
 	if err := backend.Checkpoint(); err != nil {
@@ -1502,7 +1512,7 @@ func printHumanSummary(w io.Writer, summary loadSummary) {
 			humanBytes(uint64(max(summary.Rewrite.ValueBytesCopied, 0))))
 	}
 	if summary.LeafGeneration != nil && summary.LeafGeneration.Enabled {
-		fmt.Fprintf(w, "leaf_vlog pack/gc: before=%s after_pack=%s after_gc=%s candidates=%d live=%s dead=%s pages_copied=%d files_deleted=%d\n",
+		fmt.Fprintf(w, "leaf_vlog pack/gc: before=%s after_pack=%s after_gc=%s candidates=%d live=%s dead=%s pages_copied=%d frames=%d max_k=%d files_deleted=%d\n",
 			humanBytes(summary.LeafGeneration.DiskBytesBefore),
 			humanBytes(summary.LeafGeneration.DiskBytesAfterPack),
 			humanBytes(summary.LeafGeneration.DiskBytesAfterGC),
@@ -1510,6 +1520,8 @@ func printHumanSummary(w io.Writer, summary loadSummary) {
 			humanBytes(uint64(max(summary.LeafGeneration.CandidateBytesLive, 0))),
 			humanBytes(uint64(max(summary.LeafGeneration.CandidateBytesDead, 0))),
 			summary.LeafGeneration.PackLeafPagesCopied,
+			summary.LeafGeneration.PackLeafFramesWritten,
+			summary.LeafGeneration.PackMaxLeafFrameK,
 			summary.LeafGeneration.GCFilesDeleted)
 	}
 	if summary.IndexVacuum.Enabled {

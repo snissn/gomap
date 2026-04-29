@@ -17,9 +17,9 @@ import (
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
-func collectLeafRefIDsFromRoot(t *testing.T, d *DB, rootID uint64) map[uint64]struct{} {
+func collectLeafRefIDsFromRoot(t *testing.T, d *DB, rootID uint64) map[page.LeafLogPtr]struct{} {
 	t.Helper()
-	out := make(map[uint64]struct{})
+	out := make(map[page.LeafLogPtr]struct{})
 	if d == nil || rootID == 0 {
 		return out
 	}
@@ -29,11 +29,7 @@ func collectLeafRefIDsFromRoot(t *testing.T, d *DB, rootID uint64) map[uint64]st
 		}
 		return nil
 	}, func(ptr page.LeafLogPtr) error {
-		id, err := page.EncodeLeafRef(ptr)
-		if err != nil {
-			return err
-		}
-		out[id] = struct{}{}
+		out[ptr] = struct{}{}
 		return nil
 	})
 	if err != nil {

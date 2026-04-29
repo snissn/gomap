@@ -101,6 +101,7 @@ func runLeafGenerationPack(dir string, args []string) {
 	minReclaimPerByteCopiedPPM := fs.Int("min-reclaim-per-byte-copied-ppm", 10000, "Require at least this many reclaimable bytes per byte copied, in ppm, unless -force")
 	maxGenerations := fs.Int("max-generations", 0, "When -from-plan is used, pack at most this many selected candidate generations")
 	maxBytesToCopy := fs.Int64("max-bytes-to-copy", 0, "When -from-plan is used, cap the selected candidate prefix by bytes_to_copy")
+	leafFrameK := fs.Int("leaf-frame-k", 0, "Leaf pages per grouped output frame during pack (0=default)")
 	_ = fs.Parse(args)
 
 	if !*rw {
@@ -132,6 +133,7 @@ func runLeafGenerationPack(dir string, args []string) {
 			MinReclaimPerByteCopiedPPM: *minReclaimPerByteCopiedPPM,
 			MaxGenerations:             *maxGenerations,
 			MaxBytesToCopy:             *maxBytesToCopy,
+			LeafFrameK:                 *leafFrameK,
 		})
 	} else {
 		stats, err = db.LeafGenerationPack(context.Background(), treedb.LeafGenerationPackOptions{
@@ -142,6 +144,7 @@ func runLeafGenerationPack(dir string, args []string) {
 			MinExpectedReclaimRatioPPM: *minExpectedReclaimRatioPPM,
 			MinReclaimPerByteCopiedPPM: *minReclaimPerByteCopiedPPM,
 			Force:                      *force,
+			LeafFrameK:                 *leafFrameK,
 		})
 	}
 	if err != nil {
@@ -162,7 +165,7 @@ func runLeafGenerationPack(dir string, args []string) {
 		source = "plan"
 	}
 	fmt.Printf(
-		"leafgen-pack: source=%s requested=%d matched=%d source_files=%d source_dead_bytes=%d source_bytes_to_copy=%d reclaim_per_copy_ppm=%d leaf_pages_copied=%d bytes_copied=%d wall_ms=%d created_file_ids=%s\n",
+		"leafgen-pack: source=%s requested=%d matched=%d source_files=%d source_dead_bytes=%d source_bytes_to_copy=%d reclaim_per_copy_ppm=%d leaf_pages_copied=%d leaf_frames_written=%d max_leaf_frame_k=%d bytes_copied=%d wall_ms=%d created_file_ids=%s\n",
 		source,
 		stats.GenerationsRequested,
 		stats.GenerationsMatched,
@@ -171,6 +174,8 @@ func runLeafGenerationPack(dir string, args []string) {
 		stats.SourceBytesToCopy,
 		stats.ExpectedReclaimPerByteCopiedPPM,
 		stats.LeafPagesCopied,
+		stats.LeafFramesWritten,
+		stats.MaxLeafFrameK,
 		stats.BytesCopied,
 		stats.WallTimeNanos/int64(time.Millisecond),
 		formatUint32List(created),
