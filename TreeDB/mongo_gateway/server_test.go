@@ -323,6 +323,19 @@ func TestServerIndexMetadataCommands(t *testing.T) {
 	assertInt32(t, createResponse, "numIndexesBefore", 1)
 	assertInt32(t, createResponse, "numIndexesAfter", 2)
 
+	idempotentResponse := serveCommand(t, server, 2271, bson.D{
+		{Key: "createIndexes", Value: "users"},
+		{Key: "indexes", Value: bson.A{bson.D{
+			{Key: "key", Value: bson.D{{Key: "email", Value: int32(1)}}},
+			{Key: "name", Value: "email_1"},
+			{Key: "unique", Value: true},
+		}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertOK(t, idempotentResponse)
+	assertInt32(t, idempotentResponse, "numIndexesBefore", 2)
+	assertInt32(t, idempotentResponse, "numIndexesAfter", 2)
+
 	collectionsResponse := serveCommand(t, server, 228, bson.D{
 		{Key: "listCollections", Value: int32(1)},
 		{Key: "nameOnly", Value: true},
@@ -365,6 +378,73 @@ func TestServerIndexMetadataCommands(t *testing.T) {
 		t.Fatalf("index batch after drop len=%d want %d", got, want)
 	}
 	assertIndexName(t, indexBatch[0], "_id_")
+}
+
+func TestServerIndexMetadataRejectsInvalidCommands(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	emptyCreate := serveCommand(t, server, 232, bson.D{
+		{Key: "createIndexes", Value: "empty"},
+		{Key: "indexes", Value: bson.A{}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, emptyCreate, "BadValue")
+
+	emptyName := serveCommand(t, server, 233, bson.D{
+		{Key: "createIndexes", Value: "users"},
+		{Key: "indexes", Value: bson.A{bson.D{
+			{Key: "key", Value: bson.D{{Key: "email", Value: int32(1)}}},
+			{Key: "name", Value: ""},
+		}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, emptyName, "BadValue")
+
+	invalidListCollectionsDB := serveCommand(t, server, 234, bson.D{
+		{Key: "listCollections", Value: int32(1)},
+		{Key: "$db", Value: "bad/name"},
+	})
+	assertCommandError(t, invalidListCollectionsDB, "BadValue")
+
+	assertOK(t, serveCommand(t, server, 235, bson.D{
+		{Key: "insert", Value: "dupes"},
+		{Key: "documents", Value: bson.A{
+			bson.D{{Key: "_id", Value: "u1"}, {Key: "email", Value: "same@example.com"}},
+			bson.D{{Key: "_id", Value: "u2"}, {Key: "email", Value: "same@example.com"}},
+		}},
+		{Key: "$db", Value: "app"},
+	}))
+	uniqueConflict := serveCommand(t, server, 236, bson.D{
+		{Key: "createIndexes", Value: "dupes"},
+		{Key: "indexes", Value: bson.A{bson.D{
+			{Key: "key", Value: bson.D{{Key: "email", Value: int32(1)}}},
+			{Key: "name", Value: "email_1"},
+			{Key: "unique", Value: true},
+		}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, uniqueConflict, "DuplicateKey")
+
+	assertOK(t, serveCommand(t, server, 237, bson.D{
+		{Key: "createIndexes", Value: "users"},
+		{Key: "indexes", Value: bson.A{bson.D{
+			{Key: "key", Value: bson.D{{Key: "city", Value: int32(1)}}},
+			{Key: "name", Value: "city_1"},
+		}}},
+		{Key: "$db", Value: "app"},
+	}))
+	emptyDrop := serveCommand(t, server, 238, bson.D{
+		{Key: "dropIndexes", Value: "users"},
+		{Key: "index", Value: bson.A{}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, emptyDrop, "FailedToParse")
 }
 
 func TestServerFindPlannerIndexedAndBoundedPredicates(t *testing.T) {
@@ -435,6 +515,93 @@ func TestServerFindPlannerIndexedAndBoundedPredicates(t *testing.T) {
 	if got, ok := firstBatch[0].Lookup("name").StringValueOK(); !ok || got != "katherine" {
 		t.Fatalf("$in sorted/skipped name=%q ok=%v want katherine", got, ok)
 	}
+
+	withoutID := serveCommand(t, server, 236, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "_id", Value: id1}}},
+		{Key: "projection", Value: bson.D{{Key: "_id", Value: int32(0)}}},
+		{Key: "$db", Value: "app"},
+	})
+	firstBatch = cursorFirstBatch(t, withoutID)
+	if len(firstBatch) != 1 {
+		t.Fatalf("_id exclude firstBatch len=%d want 1", len(firstBatch))
+	}
+	if !firstBatch[0].Lookup("_id").IsZero() {
+		t.Fatalf("_id exclude projection returned _id: %v", firstBatch[0])
+	}
+	if got, ok := firstBatch[0].Lookup("name").StringValueOK(); !ok || got != "ada" {
+		t.Fatalf("_id exclude name=%q ok=%v want ada", got, ok)
+	}
+
+	onlyID := serveCommand(t, server, 237, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "_id", Value: id1}}},
+		{Key: "projection", Value: bson.D{{Key: "_id", Value: int32(1)}}},
+		{Key: "$db", Value: "app"},
+	})
+	firstBatch = cursorFirstBatch(t, onlyID)
+	if len(firstBatch) != 1 {
+		t.Fatalf("_id include firstBatch len=%d want 1", len(firstBatch))
+	}
+	elements, err := firstBatch[0].Elements()
+	if err != nil {
+		t.Fatalf("_id include elements: %v", err)
+	}
+	if len(elements) != 1 || firstBatch[0].Lookup("_id").IsZero() {
+		t.Fatalf("_id include projection=%v want only _id", firstBatch[0])
+	}
+
+	id4 := bson.NewObjectID()
+	id5 := bson.NewObjectID()
+	assertOK(t, serveCommand(t, server, 238, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{
+			bson.D{{Key: "_id", Value: id4}, {Key: "name", Value: "large-a"}, {Key: "big", Value: int64(9007199254740992)}},
+			bson.D{{Key: "_id", Value: id5}, {Key: "name", Value: "large-b"}, {Key: "big", Value: int64(9007199254740993)}},
+		}},
+		{Key: "$db", Value: "app"},
+	}))
+	largeFind := serveCommand(t, server, 239, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "big", Value: int64(9007199254740993)}}},
+		{Key: "$db", Value: "app"},
+	})
+	firstBatch = cursorFirstBatch(t, largeFind)
+	if len(firstBatch) != 1 {
+		t.Fatalf("large int firstBatch len=%d want 1", len(firstBatch))
+	}
+	if got, ok := firstBatch[0].Lookup("name").StringValueOK(); !ok || got != "large-b" {
+		t.Fatalf("large int matched name=%q ok=%v want large-b", got, ok)
+	}
+
+	negativeSkipMissingCollection := serveCommand(t, server, 240, bson.D{
+		{Key: "find", Value: "missing"},
+		{Key: "filter", Value: bson.D{}},
+		{Key: "skip", Value: int32(-1)},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, negativeSkipMissingCollection, "BadValue")
+
+	emptyAnd := serveCommand(t, server, 241, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "$and", Value: bson.A{}}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, emptyAnd, "BadValue")
+
+	mixedOperator := serveCommand(t, server, 242, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "age", Value: bson.D{{Key: "x", Value: int32(1)}, {Key: "$gte", Value: int64(40)}}}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, mixedOperator, "BadValue")
+
+	nonIndexableValue := serveCommand(t, server, 243, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "city", Value: bson.D{{Key: "nested", Value: "hnl"}}}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, nonIndexableValue, "BadValue")
 }
 
 func TestServerFindGetMoreAndKillCursors(t *testing.T) {
@@ -550,6 +717,18 @@ func TestApplySetUpdateAppendsNewFieldsInSetOrder(t *testing.T) {
 		if keys[i] != want[i] {
 			t.Fatalf("keys=%v want %v", keys, want)
 		}
+	}
+}
+
+func TestCompareDocumentFieldTreatsMissingAsNull(t *testing.T) {
+	missing := mustDocument(t, bson.D{{Key: "_id", Value: "missing"}})
+	nullValue := mustDocument(t, bson.D{{Key: "_id", Value: "null"}, {Key: "rank", Value: nil}})
+	numberValue := mustDocument(t, bson.D{{Key: "_id", Value: "number"}, {Key: "rank", Value: int64(1)}})
+	if cmp := compareDocumentField(missing, nullValue, "rank"); cmp != 0 {
+		t.Fatalf("missing vs null cmp=%d want 0", cmp)
+	}
+	if cmp := compareDocumentField(missing, numberValue, "rank"); cmp >= 0 {
+		t.Fatalf("missing vs number cmp=%d want <0", cmp)
 	}
 }
 

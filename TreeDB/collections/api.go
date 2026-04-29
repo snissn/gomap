@@ -589,14 +589,17 @@ func (c *Collection) dropIndexes(names map[string]struct{}, all bool) (*Collecti
 	_ = snap.Close()
 
 	nextIndexes := make([]IndexDefinition, 0, len(baseMeta.Indexes))
+	clearedRootNames := make([]string, 0, len(baseMeta.Indexes)+1)
 	dropped := 0
 	for _, idx := range baseMeta.Indexes {
 		if all {
 			dropped++
+			clearedRootNames = append(clearedRootNames, collectionSecondaryRootName(baseMeta.Name, idx.Name))
 			continue
 		}
 		if _, ok := names[idx.Name]; ok {
 			dropped++
+			clearedRootNames = append(clearedRootNames, collectionSecondaryRootName(baseMeta.Name, idx.Name))
 			continue
 		}
 		nextIndexes = append(nextIndexes, idx)
@@ -618,18 +621,22 @@ func (c *Collection) dropIndexes(names map[string]struct{}, all bool) (*Collecti
 	if err != nil {
 		return nil, err
 	}
+	if len(newMeta.Indexes) == 0 {
+		clearedRootNames = append(clearedRootNames, collectionIndexStateRootName(baseMeta.Name))
+	}
 	encodedMeta, err := encodeCollectionMeta(newMeta)
 	if err != nil {
 		return nil, err
 	}
 	newSystemRoot, _, err := c.db.PublishOrderedRootDeltaGroupWithSystemDeltaBuilder(nil, func([]uint64) (iterator.UnsafeIterator, error) {
-		return c.buildSchemaOnlySystemDeltaIterator(baseMeta, encodedMeta)
+		return c.buildSchemaOnlySystemDeltaIterator(baseMeta, encodedMeta, clearedRootNames)
 	})
 	if err != nil {
 		return nil, err
 	}
 	c.meta = newMeta
-	nextCatalog := cloneCatalogWithRootUpdates(catalog, newMeta, nil, nil)
+	clearedRootIDs := make([]uint64, len(clearedRootNames))
+	nextCatalog := cloneCatalogWithRootUpdates(catalog, newMeta, clearedRootNames, clearedRootIDs)
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
 	return newMeta.copy(), nil
@@ -1943,7 +1950,7 @@ func (c *Collection) buildSchemaAndRootDescriptorSystemIterator(
 	return buildSystemTargetIterator(current, updates)
 }
 
-func (c *Collection) buildSchemaOnlySystemDeltaIterator(baseMeta CollectionMeta, encodedMeta []byte) (iterator.UnsafeIterator, error) {
+func (c *Collection) buildSchemaOnlySystemDeltaIterator(baseMeta CollectionMeta, encodedMeta []byte, clearedRootNames []string) (iterator.UnsafeIterator, error) {
 	current := c.db.AcquireSnapshot()
 	if current == nil {
 		return nil, backenddb.ErrClosed
@@ -1959,9 +1966,13 @@ func (c *Collection) buildSchemaOnlySystemDeltaIterator(baseMeta CollectionMeta,
 	if !sameCollectionMeta(catalog.meta, baseMeta) {
 		return nil, fmt.Errorf("collections: concurrent schema modification detected for %q", baseMeta.Name)
 	}
-	return buildSystemDeltaIterator(map[string][]byte{
+	updates := map[string][]byte{
 		systemCollectionMetaKey(baseMeta.Name): encodedMeta,
-	})
+	}
+	for _, rootName := range clearedRootNames {
+		updates[systemCollectionRootKey(rootName)] = encodeRootID(0)
+	}
+	return buildSystemDeltaIterator(updates)
 }
 
 func loadDeleteIndexState(snap *backenddb.Snapshot, catalog *collectionCatalog, documentID, document []byte, runtimes []indexRuntime, opts collectionOptions) (documentIndexState, error) {
