@@ -302,6 +302,7 @@ func benchmarkReportTreeDBLeafGenerationPackGC(b *testing.B, backend *backenddb.
 	b.ReportMetric(float64(plan.ExpectedReclaimRatioPPM), "leafgen_plan_expected_reclaim_ratio_ppm")
 	b.ReportMetric(float64(plan.ExpectedReclaimPerByteCopiedPPM), "leafgen_plan_expected_reclaim_per_copy_ppm")
 	if len(plan.CandidateGenerationIDs) == 0 {
+		benchmarkReportTreeDBLeafGenerationPackGCNoop(b, docs, beforeTotalBytes)
 		return
 	}
 
@@ -360,6 +361,32 @@ func benchmarkReportTreeDBLeafGenerationPackGC(b *testing.B, backend *backenddb.
 	b.ReportMetric(float64(gcStats.GenerationsDeleted), "leafgen_gc_generations_deleted")
 	b.ReportMetric(float64(gcStats.FilesDeleted), "leafgen_gc_files_deleted")
 	b.ReportMetric(float64(gcStats.BytesDeleted), "leafgen_gc_bytes_deleted")
+}
+
+func benchmarkReportTreeDBLeafGenerationPackGCNoop(b *testing.B, docs int, beforeTotalBytes uint64) {
+	b.Helper()
+	bytesPerDoc := float64(beforeTotalBytes) / float64(docs)
+	b.ReportMetric(float64(beforeTotalBytes), "leafgen_pack_disk_total_bytes_before")
+	b.ReportMetric(float64(beforeTotalBytes), "leafgen_pack_disk_total_bytes_after")
+	b.ReportMetric(0, "leafgen_pack_disk_total_bytes_delta")
+	b.ReportMetric(bytesPerDoc, "leafgen_pack_disk_bytes/doc_after")
+	b.ReportMetric(0, "leafgen_pack_generations_matched")
+	b.ReportMetric(0, "leafgen_pack_source_bytes_total")
+	b.ReportMetric(0, "leafgen_pack_source_bytes_live")
+	b.ReportMetric(0, "leafgen_pack_source_bytes_dead")
+	b.ReportMetric(0, "leafgen_pack_source_bytes_to_copy")
+	b.ReportMetric(0, "leafgen_pack_expected_reclaim_bytes")
+	b.ReportMetric(0, "leafgen_pack_expected_reclaim_ratio_ppm")
+	b.ReportMetric(0, "leafgen_pack_expected_reclaim_per_copy_ppm")
+	b.ReportMetric(0, "leafgen_pack_leaf_pages_copied")
+	b.ReportMetric(0, "leafgen_pack_bytes_copied")
+	b.ReportMetric(0, "leafgen_pack_created_files")
+	b.ReportMetric(float64(beforeTotalBytes), "leafgen_pack_gc_disk_total_bytes_after")
+	b.ReportMetric(0, "leafgen_pack_gc_disk_total_bytes_delta")
+	b.ReportMetric(bytesPerDoc, "leafgen_pack_gc_disk_bytes/doc_after")
+	b.ReportMetric(0, "leafgen_gc_generations_deleted")
+	b.ReportMetric(0, "leafgen_gc_files_deleted")
+	b.ReportMetric(0, "leafgen_gc_bytes_deleted")
 }
 
 func benchmarkTreeDBDiskUsageBytes(backend *backenddb.DB) (uint64, error) {

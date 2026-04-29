@@ -252,6 +252,7 @@ func buildMatrixCells(cfg config) ([]matrixCell, error) {
 		return nil, err
 	}
 	var cells []matrixCell
+	seenCellNames := make(map[string]struct{})
 	for _, format := range cfg.formats {
 		format = strings.TrimSpace(format)
 		if format == "" {
@@ -259,6 +260,10 @@ func buildMatrixCells(cfg config) ([]matrixCell, error) {
 		}
 		for _, storageCell := range storage {
 			cellName := "treedb_" + sanitizeCellPart(cfg.engine) + "_" + sanitizeCellPart(format) + "_" + storageCell.name
+			if _, ok := seenCellNames[cellName]; ok {
+				return nil, fmt.Errorf("duplicate matrix cell %q from format %q and storage cell %q", cellName, format, storageCell.name)
+			}
+			seenCellNames[cellName] = struct{}{}
 			cell := matrixCell{
 				Name:                   cellName,
 				ExecutionPath:          "native-fastpath",
@@ -302,6 +307,10 @@ func buildMatrixCells(cfg config) ([]matrixCell, error) {
 				"TREEDB_COLLECTION_REPORT_SQLITE_VACUUM=" + strconv.FormatBool(cfg.reportSQLiteVacuum),
 			},
 		}
+		if _, ok := seenCellNames[cell.Name]; ok {
+			return nil, fmt.Errorf("duplicate matrix cell %q", cell.Name)
+		}
+		seenCellNames[cell.Name] = struct{}{}
 		cells = append(cells, cell)
 	}
 	if len(cells) == 0 {
@@ -561,8 +570,8 @@ func writeRunREADME(cfg config, commandLine []string, cells []matrixCell, matrix
 	sb.WriteString("| Cell | Engine | Format | Data vlog | Index vlog | Bench pattern | Raw JSON | Report |\n")
 	sb.WriteString("| --- | --- | --- | ---: | ---: | --- | --- | --- |\n")
 	for _, cell := range cells {
-		rawRel, _ := filepath.Rel(cfg.outDir, cell.RawJSONPath)
-		reportRel, _ := filepath.Rel(cfg.outDir, cell.ReportMarkdownPath)
+		rawRel := relativeArtifactPath(cfg.outDir, cell.RawJSONPath)
+		reportRel := relativeArtifactPath(cfg.outDir, cell.ReportMarkdownPath)
 		sb.WriteString("| `")
 		sb.WriteString(cell.Name)
 		sb.WriteString("` | `")
@@ -586,6 +595,14 @@ func writeRunREADME(cfg config, commandLine []string, cells []matrixCell, matrix
 		return fmt.Errorf("write run README: %w", err)
 	}
 	return nil
+}
+
+func relativeArtifactPath(baseDir, artifactPath string) string {
+	rel, err := filepath.Rel(baseDir, artifactPath)
+	if err != nil {
+		return artifactPath
+	}
+	return rel
 }
 
 func gitOutput(repoRoot string, args ...string) string {

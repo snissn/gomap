@@ -98,6 +98,22 @@ func TestBuildMatrixCellsCanSkipSQLiteAndSelectInline(t *testing.T) {
 	}
 }
 
+func TestBuildMatrixCellsRejectsDuplicateNames(t *testing.T) {
+	cfg, err := parseFlags([]string{
+		"-out-dir", t.TempDir(),
+		"-formats", "json",
+		"-storage-cells", "mainline,data-vlog",
+		"-skip-sqlite",
+	})
+	if err != nil {
+		t.Fatalf("parse flags: %v", err)
+	}
+	_, err = buildMatrixCells(cfg)
+	if err == nil || !strings.Contains(err.Error(), "duplicate matrix cell") {
+		t.Fatalf("build cells err=%v want duplicate matrix cell", err)
+	}
+}
+
 func TestGoTestArgsIncludeSQLiteTagsOnlyForSQLiteCell(t *testing.T) {
 	cfg, err := parseFlags([]string{"-out-dir", t.TempDir(), "-benchtime", "10x"})
 	if err != nil {
@@ -128,6 +144,14 @@ func TestDefaultOutputDirIncludesSubsecondEntropy(t *testing.T) {
 	}
 	if !strings.Contains(filepath.Base(first), "collection_bench_matrix_20260428_123045_") {
 		t.Fatalf("default output dir missing stable prefix: %q", first)
+	}
+}
+
+func TestRelativeArtifactPath(t *testing.T) {
+	base := t.TempDir()
+	artifact := filepath.Join(base, "cell", "collections_report.md")
+	if got, want := relativeArtifactPath(base, artifact), filepath.Join("cell", "collections_report.md"); got != want {
+		t.Fatalf("relativeArtifactPath=%q want %q", got, want)
 	}
 }
 
