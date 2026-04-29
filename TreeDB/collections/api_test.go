@@ -116,6 +116,15 @@ func TestCollectionValueLogRewriteOffline_RoundTripWithCompressedSecondaryIndexe
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
+	closed := false
+	closeDB := func() error {
+		if closed {
+			return nil
+		}
+		closed = true
+		return cleanup()
+	}
+	t.Cleanup(func() { _ = closeDB() })
 
 	mgr := NewCollectionManager(d)
 	if _, err := mgr.CreateCollection(&CollectionMeta{
@@ -129,12 +138,10 @@ func TestCollectionValueLogRewriteOffline_RoundTripWithCompressedSecondaryIndexe
 			{Name: "city", Field: "city", StoragePolicy: RootStorageCompressed},
 		},
 	}); err != nil {
-		_ = cleanup()
 		t.Fatalf("create collection: %v", err)
 	}
 	col, err := mgr.OpenCollection("users")
 	if err != nil {
-		_ = cleanup()
 		t.Fatalf("open collection: %v", err)
 	}
 	docs := [][]byte{
@@ -143,11 +150,10 @@ func TestCollectionValueLogRewriteOffline_RoundTripWithCompressedSecondaryIndexe
 		[]byte(`{"email":"linus@example.com","city":"hel","pad":"cccccccccccccccccccccccccccccccc"}`),
 	}
 	if _, err := col.InsertBatch([][]byte{[]byte("u1"), []byte("u2"), []byte("u3")}, docs); err != nil {
-		_ = cleanup()
 		t.Fatalf("insert batch: %v", err)
 	}
 	requireCollectionMaintenanceReads(t, col)
-	if err := cleanup(); err != nil {
+	if err := closeDB(); err != nil {
 		t.Fatalf("close db: %v", err)
 	}
 
