@@ -186,6 +186,14 @@ func TestShellQuoteCommand(t *testing.T) {
 	}
 }
 
+func TestReproducibleCommandLine(t *testing.T) {
+	got := reproducibleCommandLine([]string{filepath.Join(os.TempDir(), "go-build123", "collection_bench_matrix"), "-out-dir", "/tmp/run"})
+	want := []string{"go", "run", "./cmd/collection_bench_matrix", "-out-dir", "/tmp/run"}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("reproducibleCommandLine=%#v want %#v", got, want)
+	}
+}
+
 func TestWriteMatrixIndex(t *testing.T) {
 	dir := t.TempDir()
 	cells := []matrixCell{

@@ -75,10 +75,18 @@ func main() {
 		fmt.Fprintf(os.Stderr, "collection_bench_matrix: %v\n", err)
 		os.Exit(2)
 	}
-	if err := run(cfg, os.Args); err != nil {
+	if err := run(cfg, reproducibleCommandLine(os.Args)); err != nil {
 		fmt.Fprintf(os.Stderr, "collection_bench_matrix: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+func reproducibleCommandLine(args []string) []string {
+	command := []string{"go", "run", "./cmd/collection_bench_matrix"}
+	if len(args) > 1 {
+		command = append(command, args[1:]...)
+	}
+	return command
 }
 
 func parseFlags(args []string) (config, error) {
