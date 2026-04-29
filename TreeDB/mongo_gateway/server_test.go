@@ -874,8 +874,32 @@ func TestServerCursorOwnerCleanup(t *testing.T) {
 	}
 
 	server.killCursorsForOwner(99)
-	if _, _, ok, err := server.getMore(cursorID, "app.users", 1, true, defaultCursorBatchSize); err != nil || ok {
+	if _, _, ok, err := server.getMore(cursorID, "app.users", 99, 1, true, defaultCursorBatchSize); err != nil || ok {
 		t.Fatalf("getMore after owner cleanup ok/err=%v/%v want false/nil", ok, err)
+	}
+}
+
+func TestServerCursorOwnerIsolation(t *testing.T) {
+	server := NewServer()
+	docs := []wire.Document{
+		mustDocument(t, bson.D{{Key: "_id", Value: "u1"}}),
+		mustDocument(t, bson.D{{Key: "_id", Value: "u2"}}),
+	}
+	cursorID, firstBatch, err := server.openCursor("app.users", docs, compiledProjection{}, 1, true, defaultCursorBatchSize, 1)
+	if err != nil {
+		t.Fatalf("openCursor: %v", err)
+	}
+	if len(firstBatch) != 1 {
+		t.Fatalf("firstBatch len=%d want 1", len(firstBatch))
+	}
+	if _, _, ok, err := server.getMore(cursorID, "app.users", 2, 1, true, defaultCursorBatchSize); err != nil || ok {
+		t.Fatalf("wrong-owner getMore ok/err=%v/%v want false/nil", ok, err)
+	}
+	if killed, notFound := server.killCursors("app.users", 2, []int64{cursorID}); len(killed) != 0 || len(notFound) != 1 {
+		t.Fatalf("wrong-owner kill killed=%v notFound=%v want none/one", killed, notFound)
+	}
+	if nextID, batch, ok, err := server.getMore(cursorID, "app.users", 1, 1, true, defaultCursorBatchSize); err != nil || !ok || nextID != 0 || len(batch) != 1 {
+		t.Fatalf("owner getMore id=%d len=%d ok/err=%v/%v want 0/1 true/nil", nextID, len(batch), ok, err)
 	}
 }
 
@@ -918,7 +942,7 @@ func TestServerCursorBatchesRespectMessageSize(t *testing.T) {
 		t.Fatal("cursor id=0 want open cursor")
 	}
 
-	nextID, nextBatch, ok, err := server.getMore(cursorID, "app.users", 10, true, defaultCursorBatchSize)
+	nextID, nextBatch, ok, err := server.getMore(cursorID, "app.users", 0, 10, true, defaultCursorBatchSize)
 	if err != nil || !ok {
 		t.Fatalf("getMore ok/err=%v/%v want true/nil", ok, err)
 	}
@@ -929,7 +953,7 @@ func TestServerCursorBatchesRespectMessageSize(t *testing.T) {
 		t.Fatalf("cursor id after getMore=%d want %d", nextID, cursorID)
 	}
 
-	finalID, finalBatch, ok, err := server.getMore(cursorID, "app.users", 10, true, defaultCursorBatchSize)
+	finalID, finalBatch, ok, err := server.getMore(cursorID, "app.users", 0, 10, true, defaultCursorBatchSize)
 	if err != nil || !ok {
 		t.Fatalf("final getMore ok/err=%v/%v want true/nil", ok, err)
 	}
@@ -1174,7 +1198,7 @@ func TestServerFindDottedArrayPredicates(t *testing.T) {
 	assertBatchIDs(t, cursorFirstBatch(t, itemFind), []string{"match"})
 }
 
-func TestServerFindArrayRangePredicatesUseSameElement(t *testing.T) {
+func TestServerFindArrayRangePredicatesCanUseDifferentElements(t *testing.T) {
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("open db: %v", err)
@@ -1199,7 +1223,7 @@ func TestServerFindArrayRangePredicatesUseSameElement(t *testing.T) {
 		}}}},
 		{Key: "$db", Value: "app"},
 	})
-	assertBatchIDs(t, cursorFirstBatch(t, rangeFind), []string{"yes"})
+	assertBatchIDs(t, cursorFirstBatch(t, rangeFind), []string{"no", "yes"})
 }
 
 func TestServerFindRangePredicatesUseTypeBrackets(t *testing.T) {

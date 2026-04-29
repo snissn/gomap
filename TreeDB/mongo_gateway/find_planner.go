@@ -32,11 +32,6 @@ type findPredicate struct {
 	values []bson.RawValue
 }
 
-type fieldPredicateGroup struct {
-	field      string
-	predicates []findPredicate
-}
-
 type findSort struct {
 	field string
 	desc  bool
@@ -90,7 +85,7 @@ func (s *Server) executeFind(col *collections.Collection, plan findPlan) (findRe
 	if err != nil {
 		return findResultSet{}, err
 	}
-	filtered := docs[:0]
+	filtered := make([]wire.Document, 0, len(docs))
 	for _, doc := range docs {
 		match, err := documentMatchesPredicates(doc, plan.predicates)
 		if err != nil {
@@ -121,6 +116,9 @@ func (s *Server) executeFind(col *collections.Collection, plan findPlan) (findRe
 	}
 	if plan.limit > 0 && int(plan.limit) < len(docs) {
 		docs = docs[:plan.limit]
+	}
+	if len(docs) > 0 {
+		docs = append([]wire.Document(nil), docs...)
 	}
 	return findResultSet{docs: docs, projection: plan.projection}, nil
 }
@@ -453,57 +451,33 @@ func rangeOperator(op string) findPredicateOp {
 }
 
 func documentMatchesPredicates(doc wire.Document, predicates []findPredicate) (bool, error) {
-	for _, group := range groupFindPredicatesByField(predicates) {
-		values, ok, err := lookupDocumentPredicateValues(doc, group.field)
+	for _, pred := range predicates {
+		values, ok, err := lookupDocumentPredicateValues(doc, pred.field)
 		if err != nil {
 			return false, err
 		}
 		if !ok {
-			for _, pred := range group.predicates {
-				if !missingValueMatchesPredicate(pred) {
-					return false, nil
-				}
+			if missingValueMatchesPredicate(pred) {
+				continue
 			}
-			continue
+			return false, nil
 		}
-		groupMatched := false
+		matched := false
 		for _, value := range values {
-			valueMatched := true
-			for _, pred := range group.predicates {
-				match, err := valueMatchesPredicate(value, pred)
-				if err != nil {
-					return false, err
-				}
-				if !match {
-					valueMatched = false
-					break
-				}
+			match, err := valueMatchesPredicate(value, pred)
+			if err != nil {
+				return false, err
 			}
-			if valueMatched {
-				groupMatched = true
+			if match {
+				matched = true
 				break
 			}
 		}
-		if !groupMatched {
+		if !matched {
 			return false, nil
 		}
 	}
 	return true, nil
-}
-
-func groupFindPredicatesByField(predicates []findPredicate) []fieldPredicateGroup {
-	groups := make([]fieldPredicateGroup, 0, len(predicates))
-	groupByField := make(map[string]int, len(predicates))
-	for _, pred := range predicates {
-		index, ok := groupByField[pred.field]
-		if !ok {
-			index = len(groups)
-			groupByField[pred.field] = index
-			groups = append(groups, fieldPredicateGroup{field: pred.field})
-		}
-		groups[index].predicates = append(groups[index].predicates, pred)
-	}
-	return groups
 }
 
 func missingValueMatchesPredicate(pred findPredicate) bool {

@@ -467,7 +467,7 @@ func (s *Server) dropIndexesResponse(command wire.Document) (wire.Document, erro
 	})
 }
 
-func (s *Server) getMoreResponse(command wire.Document) (wire.Document, error) {
+func (s *Server) getMoreResponse(command wire.Document, cursorOwner int64) (wire.Document, error) {
 	cursorID, err := requiredInt64Field(command, "getMore")
 	if err != nil {
 		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
@@ -488,7 +488,7 @@ func (s *Server) getMoreResponse(command wire.Document) (wire.Document, error) {
 		batchSizeSet = false
 	}
 	ns := db + "." + collection
-	nextID, nextBatch, ok, err := s.getMore(cursorID, ns, int(batchSize), batchSizeSet, maxInt)
+	nextID, nextBatch, ok, err := s.getMore(cursorID, ns, cursorOwner, int(batchSize), batchSizeSet, maxInt)
 	if err != nil {
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}
@@ -498,7 +498,7 @@ func (s *Server) getMoreResponse(command wire.Document) (wire.Document, error) {
 	return marshalCursorResponseWithID(ns, nextID, "nextBatch", nextBatch)
 }
 
-func (s *Server) killCursorsResponse(command wire.Document) (wire.Document, error) {
+func (s *Server) killCursorsResponse(command wire.Document, cursorOwner int64) (wire.Document, error) {
 	collection, err := commandString(command, "killCursors")
 	if err != nil {
 		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
@@ -512,7 +512,7 @@ func (s *Server) killCursorsResponse(command wire.Document) (wire.Document, erro
 		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
 	}
 	ns := db + "." + collection
-	killed, notFound := s.killCursors(ns, cursorIDs)
+	killed, notFound := s.killCursors(ns, cursorOwner, cursorIDs)
 	return marshalDocument(bson.D{
 		{Key: "ok", Value: 1.0},
 		{Key: "cursorsKilled", Value: int64Array(killed)},
@@ -580,7 +580,7 @@ func (s *Server) openCursor(ns string, docs []wire.Document, projection compiled
 	return cursorID, firstBatch, nil
 }
 
-func (s *Server) getMore(cursorID int64, ns string, batchSize int, explicitBatchSize bool, defaultBatchSize int) (int64, bson.A, bool, error) {
+func (s *Server) getMore(cursorID int64, ns string, owner int64, batchSize int, explicitBatchSize bool, defaultBatchSize int) (int64, bson.A, bool, error) {
 	if cursorID == 0 {
 		return 0, nil, false, nil
 	}
@@ -588,23 +588,42 @@ func (s *Server) getMore(cursorID int64, ns string, batchSize int, explicitBatch
 	if err != nil {
 		return 0, nil, false, err
 	}
-	s.cursorMu.Lock()
-	defer s.cursorMu.Unlock()
-	cursor := s.cursors[cursorID]
-	if cursor == nil || cursor.ns != ns {
-		return 0, nil, false, nil
+	for {
+		s.cursorMu.Lock()
+		cursor := s.cursors[cursorID]
+		if cursor == nil || cursor.ns != ns || cursor.owner != owner {
+			s.cursorMu.Unlock()
+			return 0, nil, false, nil
+		}
+		startPos := cursor.pos
+		remaining := cursor.docs[startPos:]
+		projection := cursor.projection
+		s.cursorMu.Unlock()
+
+		batch, consumed, err := documentsBatchWithLimit(remaining, projection, batchSize, s.maxFindBatchBytes())
+		if err != nil {
+			return 0, nil, false, err
+		}
+
+		s.cursorMu.Lock()
+		current := s.cursors[cursorID]
+		if current == nil || current != cursor || current.ns != ns || current.owner != owner {
+			s.cursorMu.Unlock()
+			return 0, nil, false, nil
+		}
+		if current.pos != startPos {
+			s.cursorMu.Unlock()
+			continue
+		}
+		current.pos += consumed
+		if current.pos >= len(current.docs) {
+			delete(s.cursors, cursorID)
+			s.cursorMu.Unlock()
+			return 0, batch, true, nil
+		}
+		s.cursorMu.Unlock()
+		return cursorID, batch, true, nil
 	}
-	remaining := cursor.docs[cursor.pos:]
-	batch, consumed, err := documentsBatchWithLimit(remaining, cursor.projection, batchSize, s.maxFindBatchBytes())
-	if err != nil {
-		return 0, nil, false, err
-	}
-	cursor.pos += consumed
-	if cursor.pos >= len(cursor.docs) {
-		delete(s.cursors, cursorID)
-		return 0, batch, true, nil
-	}
-	return cursorID, batch, true, nil
 }
 
 func (s *Server) killCursorsForOwner(owner int64) {
@@ -620,14 +639,14 @@ func (s *Server) killCursorsForOwner(owner int64) {
 	}
 }
 
-func (s *Server) killCursors(ns string, cursorIDs []int64) ([]int64, []int64) {
+func (s *Server) killCursors(ns string, owner int64, cursorIDs []int64) ([]int64, []int64) {
 	s.cursorMu.Lock()
 	defer s.cursorMu.Unlock()
 	killed := make([]int64, 0, len(cursorIDs))
 	notFound := make([]int64, 0)
 	for _, cursorID := range cursorIDs {
 		cursor := s.cursors[cursorID]
-		if cursor == nil || cursor.ns != ns {
+		if cursor == nil || cursor.ns != ns || cursor.owner != owner {
 			notFound = append(notFound, cursorID)
 			continue
 		}
@@ -669,7 +688,7 @@ func documentsBatchWithLimit(docs []wire.Document, projection compiledProjection
 		}
 		docBytes := findBatchDocumentBytes(doc, len(out))
 		if findBatchOverheadBytes+docBytes > maxBytes {
-			return nil, 0, fmt.Errorf("Mongo gateway cursor document exceeds max message size: docBytes=%d maxBatchBytes=%d", docBytes, maxBytes)
+			return nil, 0, fmt.Errorf("Mongo gateway cursor document exceeds max message size: docBytes=%d maxBytes=%d", docBytes, maxBytes)
 		}
 		if len(out) > 0 && findBatchOverheadBytes+batchBytes+docBytes > maxBytes {
 			break
