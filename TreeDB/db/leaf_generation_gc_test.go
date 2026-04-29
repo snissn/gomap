@@ -141,6 +141,7 @@ func TestLeafGenerationGC_DeletesFullyDeadGeneration(t *testing.T) {
 	writeLeafGenerationKeys(t, db, "k", 64, 'a')
 	path1, fileID1 := currentLeafSegmentOrFatal(t, leafLog)
 	rawFileID1 := page.ValueLogSegmentID(fileID1)
+	indexPath1 := leafGenerationRecordLengthIndexPath(db.dir, rawFileID1)
 	if _, err := os.Stat(path1); err != nil {
 		t.Fatalf("stat first leaf segment: %v", err)
 	}
@@ -186,8 +187,14 @@ func TestLeafGenerationGC_DeletesFullyDeadGeneration(t *testing.T) {
 	if err := waitForPathRemoval(path1, 5*time.Second); err != nil {
 		t.Fatalf("waitForPathRemoval(%s): %v", path1, err)
 	}
+	if err := waitForPathRemoval(indexPath1, 5*time.Second); err != nil {
+		t.Fatalf("waitForPathRemoval(%s): %v", indexPath1, err)
+	}
 	if _, err := os.Stat(path1); !os.IsNotExist(err) {
 		t.Fatalf("expected first leaf segment removed, stat err=%v", err)
+	}
+	if _, err := os.Stat(indexPath1); !os.IsNotExist(err) {
+		t.Fatalf("expected first leaf segment record-length index removed, stat err=%v", err)
 	}
 	if _, err := os.Stat(path2); err != nil {
 		t.Fatalf("expected second leaf segment to remain, stat err=%v", err)
@@ -201,6 +208,53 @@ func TestLeafGenerationGC_DeletesFullyDeadGeneration(t *testing.T) {
 	if got, want := remaining.FileIDs[0], rawFileID2; got != want {
 		t.Fatalf("remaining generation fileID=%d, want %d", got, want)
 	}
+}
+
+func TestLeafGenerationGC_IgnoresStaleReachabilityCache(t *testing.T) {
+	db, leafLog := openLeafGenerationGCTestDB(t)
+
+	writeLeafGenerationKeys(t, db, "k", 512, 'a')
+	path1, fileID1 := currentLeafSegmentOrFatal(t, leafLog)
+	rawFileID1 := page.ValueLogSegmentID(fileID1)
+	if err := leafLog.rotateLeaf(); err != nil {
+		t.Fatalf("rotateLeaf: %v", err)
+	}
+	writeLeafGenerationKeys(t, db, "z", 1, 'z')
+
+	manifestBefore := loadLeafGenerationManifestOrFatal(t, db.dir)
+	gen1 := findLeafGenerationByFileID(t, manifestBefore, rawFileID1)
+	if got, want := gen1.State, leafGenerationStateSealed; got != want {
+		t.Fatalf("generation1 state=%q, want %q", got, want)
+	}
+	state := db.state.Load()
+	cacheKey, ok := leafGenerationLiveStatsKeyForState(state)
+	if !ok {
+		t.Fatal("expected cacheable leaf-generation state")
+	}
+
+	db.leafGenerationLiveStatsMu.Lock()
+	db.leafGenerationLiveStatsCache = leafGenerationLiveStatsCache{
+		key:   cacheKey,
+		stats: leafGenerationLiveScanStats{Generations: map[uint64]leafGenerationLiveTotals{}},
+		ok:    true,
+	}
+	db.leafGenerationLiveStatsMu.Unlock()
+
+	stats, err := db.LeafGenerationGC(context.Background(), LeafGenerationGCOptions{})
+	if err != nil {
+		t.Fatalf("LeafGenerationGC: %v", err)
+	}
+	if got := stats.GenerationsLive; got == 0 {
+		t.Fatalf("GenerationsLive=%d, want stale cache ignored (stats=%+v)", got, stats)
+	}
+	if got := stats.GenerationsDeleted; got != 0 {
+		t.Fatalf("GenerationsDeleted=%d, want 0 for live generation (stats=%+v)", got, stats)
+	}
+	if _, err := os.Stat(path1); err != nil {
+		t.Fatalf("expected live first leaf segment to remain: %v", err)
+	}
+	expectLeafGenerationValue(t, db, leafGenerationKey("k", 0), 'a')
+	expectLeafGenerationValue(t, db, leafGenerationKey("k", 511), 'a')
 }
 
 func TestLeafGenerationGC_RetiresPinnedGenerationUntilSnapshotCloses(t *testing.T) {
