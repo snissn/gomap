@@ -133,6 +133,10 @@ func (s *Server) commandResponse(name string, command wire.Document, sequences [
 		return s.insertResponse(command, sequences)
 	case "find":
 		return s.findResponse(command)
+	case "update":
+		return s.updateResponse(command, sequences)
+	case "delete":
+		return s.deleteResponse(command, sequences)
 	default:
 		return commandError(59, "CommandNotFound", "unsupported MongoDB gateway command: "+name)
 	}

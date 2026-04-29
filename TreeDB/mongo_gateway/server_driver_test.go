@@ -14,7 +14,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 )
 
-func TestServerOfficialGoDriverInsertAndFindOne(t *testing.T) {
+func TestServerOfficialGoDriverBasicCRUD(t *testing.T) {
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("open db: %v", err)
@@ -87,6 +87,42 @@ func TestServerOfficialGoDriverInsertAndFindOne(t *testing.T) {
 	}
 	if got["age"] != int64(37) {
 		t.Fatalf("decoded age=%v want 37", got["age"])
+	}
+
+	updateResult, err := coll.UpdateOne(opCtx,
+		bson.D{{Key: "_id", Value: id}},
+		bson.D{{Key: "$set", Value: bson.D{
+			{Key: "age", Value: int64(38)},
+			{Key: "city", Value: "London"},
+		}}},
+	)
+	if err != nil {
+		t.Fatalf("driver update one: %v", err)
+	}
+	if updateResult.MatchedCount != 1 || updateResult.ModifiedCount != 1 {
+		t.Fatalf("update result matched=%d modified=%d want 1/1", updateResult.MatchedCount, updateResult.ModifiedCount)
+	}
+
+	got = nil
+	if err := coll.FindOne(opCtx, bson.D{{Key: "_id", Value: id}}).Decode(&got); err != nil {
+		t.Fatalf("driver find one after update: %v", err)
+	}
+	if got["age"] != int64(38) {
+		t.Fatalf("decoded updated age=%v want 38", got["age"])
+	}
+	if got["city"] != "London" {
+		t.Fatalf("decoded city=%v want London", got["city"])
+	}
+
+	deleteResult, err := coll.DeleteOne(opCtx, bson.D{{Key: "_id", Value: id}})
+	if err != nil {
+		t.Fatalf("driver delete one: %v", err)
+	}
+	if deleteResult.DeletedCount != 1 {
+		t.Fatalf("delete result deleted=%d want 1", deleteResult.DeletedCount)
+	}
+	if err := coll.FindOne(opCtx, bson.D{{Key: "_id", Value: id}}).Decode(&got); !errors.Is(err, mongo.ErrNoDocuments) {
+		t.Fatalf("driver find one after delete err=%v want ErrNoDocuments", err)
 	}
 
 	cancel()
