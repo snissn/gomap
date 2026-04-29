@@ -459,7 +459,13 @@ func (c *leafRefRewriteCtx) applySystemRootCollectionRootReplacements(rootID uin
 		}
 	}
 
-	delta := batch.Acquire(c.db.valueLogManager, c.db.InlineThreshold())
+	inlineThreshold := c.db.InlineThreshold()
+	for _, replacement := range replacements {
+		if len(replacement.value) > inlineThreshold {
+			inlineThreshold = len(replacement.value)
+		}
+	}
+	delta := batch.Acquire(c.db.valueLogManager, inlineThreshold)
 	defer batch.Release(delta)
 	delta.Reserve(len(replacements))
 	for _, replacement := range replacements {
@@ -618,6 +624,11 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 		return 0, 0, fmt.Errorf("vlog-rewrite: rewrite system leaf root: %w", err)
 	}
 	if len(collectionRootReplacements) > 0 {
+		if sysChanged {
+			if err := writer.Flush(); err != nil {
+				return 0, 0, fmt.Errorf("vlog-rewrite: flush rewritten system leaf root: %w", err)
+			}
+		}
 		replacedSysRoot, replacementChanged, err := leafCtx.applySystemRootCollectionRootReplacements(newSysRoot, collectionRootReplacements)
 		if err != nil {
 			return 0, 0, fmt.Errorf("vlog-rewrite: rewrite system collection descriptors: %w", err)

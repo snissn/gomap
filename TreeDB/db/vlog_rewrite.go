@@ -2267,7 +2267,7 @@ func valueLogRewriteCollectionRootStates(snap *Snapshot, roots []maintenanceRoot
 		return states, nil
 	}
 	var (
-		descriptors       []vacuumCollectionRootDescriptor
+		descriptorAliases map[uint64][][]byte
 		descriptorsLoaded bool
 	)
 	for i, root := range roots {
@@ -2275,18 +2275,18 @@ func valueLogRewriteCollectionRootStates(snap *Snapshot, roots []maintenanceRoot
 			continue
 		}
 		if !descriptorsLoaded {
-			var err error
-			descriptors, err = vacuumCollectCollectionRootDescriptors(snap.idx.pager, &snap.reader, snap.state.SystemRootPageID)
+			descriptors, err := vacuumCollectCollectionRootDescriptors(snap.idx.pager, &snap.reader, snap.state.SystemRootPageID)
 			if err != nil {
 				return nil, fmt.Errorf("vlog-rewrite: collect collection root descriptors: %w", err)
 			}
+			descriptorAliases = valueLogRewriteCollectionRootDescriptorAliasMap(descriptors)
 			descriptorsLoaded = true
 		}
 		storagePolicy, err := valueLogRewriteCollectionRootStoragePolicy(snap.idx.pager, root.rootID)
 		if err != nil {
 			return nil, fmt.Errorf("vlog-rewrite: inspect collection root %q storage: %w", string(root.descriptorKey), err)
 		}
-		aliases := valueLogRewriteCollectionRootDescriptorAliases(descriptors, root.rootID)
+		aliases := cloneCollectionRootDescriptorAliases(descriptorAliases[root.rootID])
 		if len(aliases) == 0 && len(root.descriptorKey) > 0 {
 			aliases = append(aliases, append([]byte(nil), root.descriptorKey...))
 		}
@@ -2301,16 +2301,33 @@ func valueLogRewriteCollectionRootStates(snap *Snapshot, roots []maintenanceRoot
 	return states, nil
 }
 
-func valueLogRewriteCollectionRootDescriptorAliases(descriptors []vacuumCollectionRootDescriptor, rootID uint64) [][]byte {
-	if rootID == 0 {
+func valueLogRewriteCollectionRootDescriptorAliasMap(descriptors []vacuumCollectionRootDescriptor) map[uint64][][]byte {
+	if len(descriptors) == 0 {
 		return nil
 	}
-	var aliases [][]byte
+	aliasesByRoot := make(map[uint64][][]byte)
 	for _, descriptor := range descriptors {
-		if descriptor.rootID == rootID {
-			aliases = append(aliases, append([]byte(nil), descriptor.key...))
+		if descriptor.rootID != 0 {
+			aliasesByRoot[descriptor.rootID] = append(aliasesByRoot[descriptor.rootID], append([]byte(nil), descriptor.key...))
 		}
 	}
+	return aliasesByRoot
+}
+
+func cloneCollectionRootDescriptorAliases(aliases [][]byte) [][]byte {
+	if len(aliases) == 0 {
+		return nil
+	}
+	out := make([][]byte, 0, len(aliases))
+	for _, alias := range aliases {
+		out = append(out, append([]byte(nil), alias...))
+	}
+	return out
+}
+
+func valueLogRewriteCollectionRootDescriptorAliases(descriptors []vacuumCollectionRootDescriptor, rootID uint64) [][]byte {
+	aliasesByRoot := valueLogRewriteCollectionRootDescriptorAliasMap(descriptors)
+	aliases := cloneCollectionRootDescriptorAliases(aliasesByRoot[rootID])
 	return aliases
 }
 
@@ -2355,11 +2372,11 @@ func (db *DB) applyRewriteSwapBatchToSystemRoot(swaps []rewriteSwap, sync bool) 
 	}
 	idx := db.idx.Load()
 	if idx == nil {
-		return fmt.Errorf("missing index")
+		return fmt.Errorf("vlog-rewrite: collection root: missing index")
 	}
 	state := db.state.Load()
 	if state == nil {
-		return fmt.Errorf("missing backend state")
+		return fmt.Errorf("vlog-rewrite: collection root: missing backend state")
 	}
 
 	db.mu.RLock()
@@ -2424,7 +2441,7 @@ func (db *DB) applyRewriteSwapBatchToCollectionRoot(target *collectionRewriteRoo
 
 	if target.systemRoot != systemRoot || target.rootID == 0 || len(target.descriptorAliases) == 0 {
 		reader := newValueReader(state.ValueLogSet)
-		collectionRoot, descriptorAliases, ok, err := lookupCollectionRootDescriptorAliases(idx.pager, reader, systemRoot, target.descriptorKey, target.descriptorAliases)
+		collectionRoot, descriptorAliases, ok, err := lookupCollectionRootDescriptorAliases(idx.pager, reader, systemRoot, target.descriptorKey, target.descriptorAliases, target.rootID)
 		if err != nil {
 			return err
 		}
@@ -2528,7 +2545,7 @@ func (db *DB) canTrackRewriteValueLogRefDelta(baseSeq uint64, outerLeavesInValue
 	return db != nil && db.valueLogRefTracker != nil && db.valueLogRefTracker.canTrack(baseSeq) && !outerLeavesInValueLog
 }
 
-func lookupCollectionRootDescriptorAliases(p *pager.Pager, reader tree.SlabReader, systemRootID uint64, key []byte, aliasKeys [][]byte) (uint64, [][]byte, bool, error) {
+func lookupCollectionRootDescriptorAliases(p *pager.Pager, reader tree.SlabReader, systemRootID uint64, key []byte, aliasKeys [][]byte, preferredRoot uint64) (uint64, [][]byte, bool, error) {
 	if p == nil {
 		return 0, nil, false, errors.New("vlog-rewrite: missing pager")
 	}
@@ -2539,7 +2556,7 @@ func lookupCollectionRootDescriptorAliases(p *pager.Pager, reader tree.SlabReade
 	if err != nil {
 		return 0, nil, false, err
 	}
-	var rootID uint64
+	var rootID, firstRoot uint64
 	for _, descriptor := range descriptors {
 		if !collectionRootDescriptorKeyMatches(descriptor.key, key, aliasKeys) {
 			continue
@@ -2547,10 +2564,19 @@ func lookupCollectionRootDescriptorAliases(p *pager.Pager, reader tree.SlabReade
 		if descriptor.rootID == 0 {
 			continue
 		}
-		if rootID != 0 && rootID != descriptor.rootID {
-			return 0, nil, false, fmt.Errorf("vlog-rewrite: collection descriptor aliases resolve to conflicting roots %d and %d", rootID, descriptor.rootID)
+		if firstRoot == 0 {
+			firstRoot = descriptor.rootID
 		}
-		rootID = descriptor.rootID
+		if preferredRoot != 0 && descriptor.rootID == preferredRoot {
+			rootID = preferredRoot
+			break
+		}
+		if rootID == 0 && bytes.Equal(descriptor.key, key) {
+			rootID = descriptor.rootID
+		}
+	}
+	if rootID == 0 {
+		rootID = firstRoot
 	}
 	if rootID == 0 {
 		return 0, nil, false, nil
