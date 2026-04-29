@@ -272,7 +272,7 @@ func benchmarkReportTreeDBValueLogRewrite(b *testing.B, backend *backenddb.DB, d
 	b.ReportMetric(float64(afterGCBytes)/float64(docs), "vlog_rewrite_gc_disk_bytes/doc_after")
 	b.ReportMetric(float64(gcStats.SegmentsDeleted), "vlog_gc_segments_deleted")
 	b.ReportMetric(float64(gcStats.BytesDeleted), "vlog_gc_bytes_deleted")
-	return afterGCBytes
+	return benchmarkReportTreeDBPostMaintenanceIndexVacuum(b, backend, docs, beforeTotalBytes, afterGCBytes, "vlog_rewrite_gc")
 }
 
 func benchmarkReportTreeDBLeafGenerationPackGC(b *testing.B, backend *backenddb.DB, docs int, beforeTotalBytes uint64) {
@@ -317,6 +317,7 @@ func benchmarkReportTreeDBLeafGenerationPackGC(b *testing.B, backend *backenddb.
 			b.Fatalf("TreeDB disk usage after leaf-generation GC without pack candidates: %v", err)
 		}
 		benchmarkReportTreeDBLeafGenerationPackGCNoop(b, docs, beforeTotalBytes, afterGCBytes, gcElapsed, gcStats)
+		benchmarkReportTreeDBPostMaintenanceIndexVacuum(b, backend, docs, beforeTotalBytes, afterGCBytes, "leafgen_pack_gc")
 		return
 	}
 
@@ -378,6 +379,35 @@ func benchmarkReportTreeDBLeafGenerationPackGC(b *testing.B, backend *backenddb.
 	b.ReportMetric(float64(gcStats.GenerationsDeleted), "leafgen_gc_generations_deleted")
 	b.ReportMetric(float64(gcStats.FilesDeleted), "leafgen_gc_files_deleted")
 	b.ReportMetric(float64(gcStats.BytesDeleted), "leafgen_gc_bytes_deleted")
+	benchmarkReportTreeDBPostMaintenanceIndexVacuum(b, backend, docs, beforeTotalBytes, afterGCBytes, "leafgen_pack_gc")
+}
+
+func benchmarkReportTreeDBPostMaintenanceIndexVacuum(b *testing.B, backend *backenddb.DB, docs int, beforeTotalBytes, afterGCBytes uint64, metricPrefix string) uint64 {
+	b.Helper()
+
+	if backend == nil || docs <= 0 || strings.TrimSpace(metricPrefix) == "" ||
+		!benchmarkBoolEnv(b, "TREEDB_COLLECTION_REPORT_POST_MAINTENANCE_INDEX_VACUUM", true) {
+		return afterGCBytes
+	}
+
+	vacuumStart := time.Now()
+	if err := backend.VacuumIndexOnline(context.Background()); err != nil {
+		b.Fatalf("TreeDB index vacuum after %s: %v", metricPrefix, err)
+	}
+	vacuumElapsed := time.Since(vacuumStart)
+	if err := backend.Checkpoint(); err != nil {
+		b.Fatalf("checkpoint after TreeDB index vacuum after %s: %v", metricPrefix, err)
+	}
+	afterVacuumBytes, err := benchmarkTreeDBDiskUsageBytes(backend)
+	if err != nil {
+		b.Fatalf("TreeDB disk usage after index vacuum after %s: %v", metricPrefix, err)
+	}
+
+	b.ReportMetric(float64(vacuumElapsed.Nanoseconds()), metricPrefix+"_vacuum_ns/op")
+	b.ReportMetric(float64(afterVacuumBytes), metricPrefix+"_vacuum_disk_total_bytes_after")
+	b.ReportMetric(benchmarkSignedByteDelta(afterVacuumBytes, beforeTotalBytes), metricPrefix+"_vacuum_disk_total_bytes_delta")
+	b.ReportMetric(float64(afterVacuumBytes)/float64(docs), metricPrefix+"_vacuum_disk_bytes/doc_after")
+	return afterVacuumBytes
 }
 
 func benchmarkReportTreeDBLeafGenerationPackGCNoop(b *testing.B, docs int, beforeTotalBytes, afterGCBytes uint64, gcElapsed time.Duration, gcStats backenddb.LeafGenerationGCStats) {

@@ -1786,3 +1786,33 @@ func TestRenderTreeDBVlogRewriteString_EmitsLeafLog(t *testing.T) {
 		t.Fatalf("expected leaf_vlog rewrite line, got:\n%s", out)
 	}
 }
+
+func TestRenderTreeDBVlogRewriteString_EmitsPostVacuumBytes(t *testing.T) {
+	out := renderTreeDBVlogRewriteString(map[string]treeDBVlogRewriteReport{
+		"treedb": {
+			BeforeUsage: dirDiskUsage{TotalBytes: 8192},
+			AfterUsage:  dirDiskUsage{TotalBytes: 6144},
+			AfterVacuum: dirDiskUsage{TotalBytes: 4096},
+			BeforeTree: treeDBDiskUsage{
+				MainIndexBytes: 4096,
+			},
+			AfterTree: treeDBDiskUsage{
+				MainIndexBytes: 4096,
+			},
+			AfterVacuumTree: treeDBDiskUsage{
+				MainIndexBytes: 2048,
+			},
+			SegmentsBefore: 2,
+			SegmentsAfter:  1,
+			BytesBefore:    4096,
+			BytesAfter:     2048,
+			RecordsCopied:  3,
+		},
+	})
+	if !strings.Contains(out, "bytes: 8 KiB -> 6 KiB -> 4 KiB after index vacuum") {
+		t.Fatalf("expected post-vacuum total bytes line, got:\n%s", out)
+	}
+	if !strings.Contains(out, "maindb/index.db after vacuum: 2 KiB") {
+		t.Fatalf("expected post-vacuum index line, got:\n%s", out)
+	}
+}

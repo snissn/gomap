@@ -91,10 +91,11 @@ var (
 
 	flushdrainCheckpointMax = flag.Duration("flushdrain-checkpoint-max", 0, "Abort flushdrain suite if checkpoint-before-random_read exceeds this duration (0=disabled)")
 
-	settleBeforeScans           = flag.Bool("settle-before-scans", false, "Close+reopen DBs before scan tests to measure settled scan performance (flushes caches/WAL)")
-	treedbCacheStatsBeforeReads = flag.Bool("treedb-cache-stats-before-reads", false, "Print select treedb.cache.* stats before read/scan tests (treedb only)")
-	treedbCacheStatsAfterTests  = flag.Bool("treedb-cache-stats-after-tests", false, "Print select treedb.cache.* stats after each benchmark test (treedb only)")
-	treedbVlogRewriteAfterRun   = flag.Bool("treedb-vlog-rewrite-after-run", false, "Run a full TreeDB value-log rewrite after the benchmark run and report before/after disk usage (treedb only)")
+	settleBeforeScans               = flag.Bool("settle-before-scans", false, "Close+reopen DBs before scan tests to measure settled scan performance (flushes caches/WAL)")
+	treedbCacheStatsBeforeReads     = flag.Bool("treedb-cache-stats-before-reads", false, "Print select treedb.cache.* stats before read/scan tests (treedb only)")
+	treedbCacheStatsAfterTests      = flag.Bool("treedb-cache-stats-after-tests", false, "Print select treedb.cache.* stats after each benchmark test (treedb only)")
+	treedbVlogRewriteAfterRun       = flag.Bool("treedb-vlog-rewrite-after-run", false, "Run a full TreeDB value-log rewrite after the benchmark run and report before/after disk usage (treedb only)")
+	treedbVacuumAfterVlogRewriteRun = flag.Bool("treedb-vacuum-after-vlog-rewrite-run", true, "Run offline TreeDB index vacuum after -treedb-vlog-rewrite-after-run before reporting final compacted disk usage")
 )
 
 var explicitFlags = map[string]bool{}
@@ -299,9 +300,11 @@ type treeDBVlogRewriteReport struct {
 
 	BeforeUsage dirDiskUsage
 	AfterUsage  dirDiskUsage
+	AfterVacuum dirDiskUsage
 
-	BeforeTree treeDBDiskUsage
-	AfterTree  treeDBDiskUsage
+	BeforeTree      treeDBDiskUsage
+	AfterTree       treeDBDiskUsage
+	AfterVacuumTree treeDBDiskUsage
 
 	SegmentsBefore int
 	SegmentsAfter  int
@@ -4142,17 +4145,28 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 
 			afterUsage, _ := computeDirDiskUsage(inst.Dir)
 			afterTree, _ := computeTreeDBDiskUsage(inst.Dir)
+			afterVacuumUsage := afterUsage
+			afterVacuumTree := afterTree
+			if *treedbVacuumAfterVlogRewriteRun {
+				if err := treedb.VacuumIndexOffline(opts); err != nil {
+					return BenchRun{}, err
+				}
+				afterVacuumUsage, _ = computeDirDiskUsage(inst.Dir)
+				afterVacuumTree, _ = computeTreeDBDiskUsage(inst.Dir)
+			}
 			treedbRewrite[inst.Wrapper.Name()] = treeDBVlogRewriteReport{
-				Dir:            inst.Dir,
-				BeforeUsage:    beforeUsage,
-				AfterUsage:     afterUsage,
-				BeforeTree:     beforeTree,
-				AfterTree:      afterTree,
-				SegmentsBefore: stats.SegmentsBefore,
-				SegmentsAfter:  stats.SegmentsAfter,
-				BytesBefore:    stats.BytesBefore,
-				BytesAfter:     stats.BytesAfter,
-				RecordsCopied:  stats.RecordsCopied,
+				Dir:             inst.Dir,
+				BeforeUsage:     beforeUsage,
+				AfterUsage:      afterUsage,
+				AfterVacuum:     afterVacuumUsage,
+				BeforeTree:      beforeTree,
+				AfterTree:       afterTree,
+				AfterVacuumTree: afterVacuumTree,
+				SegmentsBefore:  stats.SegmentsBefore,
+				SegmentsAfter:   stats.SegmentsAfter,
+				BytesBefore:     stats.BytesBefore,
+				BytesAfter:      stats.BytesAfter,
+				RecordsCopied:   stats.RecordsCopied,
 			}
 		}
 		if usage, err := computeDirDiskUsage(inst.Dir); err == nil {
@@ -4452,9 +4466,16 @@ func renderTreeDBVlogRewriteString(reports map[string]treeDBVlogRewriteReport) s
 		if strings.TrimSpace(rep.Dir) != "" {
 			sb.WriteString(fmt.Sprintf("  dir: %s\n", rep.Dir))
 		}
-		sb.WriteString(fmt.Sprintf("  bytes: %s -> %s\n", formatBytes(rep.BeforeUsage.TotalBytes), formatBytes(rep.AfterUsage.TotalBytes)))
+		sb.WriteString(fmt.Sprintf("  bytes: %s -> %s", formatBytes(rep.BeforeUsage.TotalBytes), formatBytes(rep.AfterUsage.TotalBytes)))
+		if rep.AfterVacuum.TotalBytes > 0 || rep.AfterVacuum.TotalFiles > 0 {
+			sb.WriteString(fmt.Sprintf(" -> %s after index vacuum", formatBytes(rep.AfterVacuum.TotalBytes)))
+		}
+		sb.WriteByte('\n')
 		if rep.BeforeTree.MainIndexBytes > 0 || rep.AfterTree.MainIndexBytes > 0 {
 			sb.WriteString(fmt.Sprintf("  maindb/index.db: %s -> %s\n", formatBytes(rep.BeforeTree.MainIndexBytes), formatBytes(rep.AfterTree.MainIndexBytes)))
+		}
+		if rep.AfterVacuumTree.MainIndexBytes > 0 && rep.AfterVacuumTree.MainIndexBytes != rep.AfterTree.MainIndexBytes {
+			sb.WriteString(fmt.Sprintf("  maindb/index.db after vacuum: %s\n", formatBytes(rep.AfterVacuumTree.MainIndexBytes)))
 		}
 		if rep.BeforeTree.MainWAL.TotalBytes > 0 || rep.AfterTree.MainWAL.TotalBytes > 0 {
 			sb.WriteString(fmt.Sprintf("  maindb/wal: %s -> %s\n", formatBytes(rep.BeforeTree.MainWAL.TotalBytes), formatBytes(rep.AfterTree.MainWAL.TotalBytes)))

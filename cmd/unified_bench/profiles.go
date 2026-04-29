@@ -205,7 +205,8 @@ func treeDBUsageGroup(name string) string {
 	case "treedb-disable-wal", "treedb-relaxed-sync", "treedb-disable-read-checksum", "treedb-allow-unsafe":
 		return "TreeDB Unsafe Knobs"
 	case "treedb-vlog-compression", "treedb-vlog-block-codec", "treedb-vlog-auto-policy", "treedb-vlog-generation-policy",
-		"treedb-vlog-compression-autotune", "treedb-vlog-dict-class-mode", "treedb-vlog-rewrite-after-run":
+		"treedb-vlog-compression-autotune", "treedb-vlog-dict-class-mode", "treedb-vlog-rewrite-after-run",
+		"treedb-vacuum-after-vlog-rewrite-run":
 		return "TreeDB Compression Knobs"
 	case "treedb-flush-threshold", "treedb-chunk-size", "treedb-maintenance-mode", "treedb-memtable-mode",
 		"treedb-index-optimizations", "treedb-index-outer-leaves-in-vlog", "treedb-prefer-append-alloc",

@@ -30,6 +30,10 @@ Useful focused variants:
 # Exercise a specific grouped leaf-frame size during leaf-generation pack.
 ./bin/collection-bench-matrix -out-dir "$OUT" -benchtime 10000x -leafgen-pack-frame-k 16
 
+# Disable TreeDB post-maintenance index vacuum when you specifically need to
+# inspect pre-vacuum index.db growth.
+./bin/collection-bench-matrix -out-dir "$OUT" -report-post-maintenance-index-vacuum=false
+
 # SQLite only is not a first-class mode; use a narrow TreeDB format/storage set
 # and keep SQLite enabled when validating baseline drift.
 ./bin/collection-bench-matrix -out-dir "$OUT" -formats json -storage-cells mainline
@@ -42,7 +46,8 @@ Primary outputs:
 - `collections_matrix_summary.html`: HTML rendering of the same report.
 - `collections_user_story_summary.tsv`: user-facing throughput rows.
 - `collections_disk_usage_summary.tsv`: disk usage rows.
-- `collections_maintenance_summary.tsv`: TreeDB `value_vlog` rewrite/GC,
-  TreeDB `leaf_vlog` generation pack/GC, and SQLite VACUUM rows.
+- `collections_maintenance_summary.tsv`: TreeDB `value_vlog` rewrite/GC plus
+  post-GC index vacuum, TreeDB `leaf_vlog` generation pack/GC plus post-GC
+  index vacuum, and SQLite VACUUM rows.
 - `<cell>/collections_report.md`: per-cell detailed benchmark report.
 - `<cell>/go_test.json`: raw `go test -json` benchmark output.

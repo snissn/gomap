@@ -49,6 +49,9 @@ func TestBuildMatrixCellsDefaults(t *testing.T) {
 	if !containsEnv(tree.Env, "TREEDB_COLLECTION_REPORT_VLOG_REWRITE=true") {
 		t.Fatalf("tree env missing rewrite toggle: %#v", tree.Env)
 	}
+	if !containsEnv(tree.Env, "TREEDB_COLLECTION_REPORT_POST_MAINTENANCE_INDEX_VACUUM=true") {
+		t.Fatalf("tree env missing post-maintenance vacuum toggle: %#v", tree.Env)
+	}
 	if !containsEnv(tree.Env, "TREEDB_COLLECTION_LEAFGEN_PACK_FRAME_K=0") {
 		t.Fatalf("tree env missing leafgen frame K: %#v", tree.Env)
 	}

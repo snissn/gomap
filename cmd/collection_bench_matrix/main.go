@@ -40,6 +40,7 @@ type config struct {
 	leafGenPackFrameK      int
 	reportVLogRewrite      bool
 	reportLeafGenPackGC    bool
+	reportPostMaintVacuum  bool
 	reportSQLiteVacuum     bool
 	availableBenchmarks    bool
 	skipSQLite             bool
@@ -107,6 +108,7 @@ func parseFlags(args []string) (config, error) {
 		sqliteBenchmarkPattern: defaultSQLiteBenchmarkPattern,
 		reportVLogRewrite:      true,
 		reportLeafGenPackGC:    true,
+		reportPostMaintVacuum:  true,
 		reportSQLiteVacuum:     true,
 		availableBenchmarks:    true,
 	}
@@ -131,6 +133,7 @@ func parseFlags(args []string) (config, error) {
 	fs.IntVar(&cfg.leafGenPackFrameK, "leafgen-pack-frame-k", 0, "Optional TREEDB_COLLECTION_LEAFGEN_PACK_FRAME_K override; 0 means engine default")
 	fs.BoolVar(&cfg.reportVLogRewrite, "report-vlog-rewrite", cfg.reportVLogRewrite, "Run TreeDB online value_vlog rewrite/GC measurement after insert-shape benchmarks")
 	fs.BoolVar(&cfg.reportLeafGenPackGC, "report-leafgen-pack-gc", cfg.reportLeafGenPackGC, "Run TreeDB leaf_vlog generation pack/GC measurement after insert-shape benchmarks")
+	fs.BoolVar(&cfg.reportPostMaintVacuum, "report-post-maintenance-index-vacuum", cfg.reportPostMaintVacuum, "Run TreeDB index vacuum after post-rewrite/pack size measurements and report compacted bytes")
 	fs.BoolVar(&cfg.reportSQLiteVacuum, "report-sqlite-vacuum", cfg.reportSQLiteVacuum, "Run SQLite VACUUM measurement after insert-shape benchmarks")
 	fs.BoolVar(&cfg.availableBenchmarks, "available-benchmarks", cfg.availableBenchmarks, "Summarize all benchmark rows present in each report")
 	fs.BoolVar(&cfg.skipSQLite, "skip-sqlite", false, "Skip SQLite comparison cell")
@@ -328,6 +331,7 @@ func buildMatrixCells(cfg config) ([]matrixCell, error) {
 					"TREEDB_COLLECTION_INDEX_OUTER_LEAVES_IN_VLOG=" + strconv.FormatBool(storageCell.indexOuter),
 					"TREEDB_COLLECTION_REPORT_VLOG_REWRITE=" + strconv.FormatBool(cfg.reportVLogRewrite),
 					"TREEDB_COLLECTION_REPORT_LEAFGEN_PACK_GC=" + strconv.FormatBool(cfg.reportLeafGenPackGC),
+					"TREEDB_COLLECTION_REPORT_POST_MAINTENANCE_INDEX_VACUUM=" + strconv.FormatBool(cfg.reportPostMaintVacuum),
 					"TREEDB_COLLECTION_LEAFGEN_PACK_FRAME_K=" + strconv.Itoa(cfg.leafGenPackFrameK),
 				},
 			}
