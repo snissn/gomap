@@ -1256,7 +1256,8 @@ func (m *Manager) SegmentPath(id uint32) string {
 	return segmentPath(rootDir, id)
 }
 
-// SegmentPath returns the canonical on-disk path for a value-log segment.
+// SegmentPath returns the canonical on-disk path for an encoded value-log file
+// ID, such as an ID produced by EncodeFileID.
 func SegmentPath(dir string, id uint32) string {
 	return segmentPath(dir, id)
 }
