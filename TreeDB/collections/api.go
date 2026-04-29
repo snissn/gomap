@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -1079,11 +1080,12 @@ func (c *Collection) DeleteDocument(documentID []byte) (bool, error) {
 		deleted, err := c.deleteDocumentOnce(documentID)
 		if errors.Is(err, ErrConcurrentMutation) {
 			lastErr = err
+			waitBeforeCollectionMutationRetry(attempt)
 			continue
 		}
 		return deleted, err
 	}
-	return false, lastErr
+	return false, collectionMutationRetryExhausted(lastErr)
 }
 
 func (c *Collection) deleteDocumentOnce(documentID []byte) (bool, error) {
@@ -1210,7 +1212,10 @@ func (c *Collection) deleteDocumentOnce(documentID []byte) (bool, error) {
 }
 
 func (c *Collection) Replace(documentID, document []byte) (bool, error) {
-	matched, _, err := c.Update(documentID, func([]byte) ([]byte, bool, error) {
+	matched, _, err := c.Update(documentID, func(current []byte) ([]byte, bool, error) {
+		if bytes.Equal(current, document) {
+			return current, false, nil
+		}
 		return document, true, nil
 	})
 	return matched, err
@@ -1240,11 +1245,31 @@ func (c *Collection) Update(documentID []byte, update func(current []byte) (repl
 		matched, modified, err := c.updateDocumentOnce(documentID, update)
 		if errors.Is(err, ErrConcurrentMutation) {
 			lastErr = err
+			waitBeforeCollectionMutationRetry(attempt)
 			continue
 		}
 		return matched, modified, err
 	}
-	return false, false, lastErr
+	return false, false, collectionMutationRetryExhausted(lastErr)
+}
+
+func waitBeforeCollectionMutationRetry(attempt int) {
+	if attempt < 4 {
+		runtime.Gosched()
+		return
+	}
+	shift := attempt - 4
+	if shift > 6 {
+		shift = 6
+	}
+	time.Sleep(time.Duration(1<<shift) * time.Microsecond)
+}
+
+func collectionMutationRetryExhausted(err error) error {
+	if err == nil {
+		err = ErrConcurrentMutation
+	}
+	return fmt.Errorf("%w: retry budget exceeded after %d attempts: %v", ErrConcurrentMutation, maxCollectionMutationRetries, err)
 }
 
 func (c *Collection) updateDocumentOnce(documentID []byte, update func(current []byte) (replacement []byte, changed bool, err error)) (bool, bool, error) {
