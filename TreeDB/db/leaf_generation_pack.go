@@ -6,6 +6,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/snissn/gomap/TreeDB/internal/compression"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -161,6 +162,18 @@ func (db *DB) leafGenerationPackLocked(ctx context.Context, opts LeafGenerationP
 	writer.ConfigureLeafLog(layout.leafVLogDir, rewriteLeafLogLaneID, leafStartSeq)
 	writer.blockCompression = db.valueLogCompression != ValueLogCompressionOff
 	writer.blockCodec = valuelogBlockCodecFromDB(db.valueLogBlockCodec)
+	writer.leafBlockCodec = leafPageBlockCodecFromOptions(db.valueLogCompression, db.valueLogAutoPolicy, db.valueLogBlockCodec, db.indexOuterLeavesInValueLog)
+	if writer.blockCompression {
+		if state := db.State(); state != nil {
+			leafDictID, leafDictBytes, leafDictUseRawPages, err := prepareRewriteLeafDict(db, state, db.valueLogDictCurrentForClass, db.valueLogDictLeafPayloadMode, db.valueLogDictLookup, db.valueLogDictPut, db.valueLogDictSetCurrentForClass, db.valueLogDictSetLeafPayloadMode, compression.TrainConfig{})
+			if err != nil {
+				return stats, err
+			}
+			if leafDictID != 0 && len(leafDictBytes) > 0 {
+				writer.SetLeafDictMode(leafDictID, leafDictBytes, leafDictUseRawPages)
+			}
+		}
+	}
 	defer func() { _ = writer.Close() }()
 
 	sourceValueIDs := make(map[uint32]struct{}, len(rawSourceIDs))

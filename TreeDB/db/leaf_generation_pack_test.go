@@ -6,11 +6,13 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/snissn/compress/zstd"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
@@ -495,6 +497,131 @@ func TestLeafGenerationPack_MovesSparseSealedGeneration(t *testing.T) {
 	if err := waitForPathRemoval(path1, 5*time.Second); err != nil {
 		t.Fatalf("waitForPathRemoval(%s): %v", path1, err)
 	}
+}
+
+func TestLeafGenerationPack_UsesOuterLeafDict(t *testing.T) {
+	dir := t.TempDir()
+	const dictID = uint64(9001)
+	leafA, _, err := valuelog.MaybeCompactLeafLogPayload(buildRewriteLeafPageFixture(t, "pack-a"))
+	if err != nil {
+		t.Fatalf("MaybeCompactLeafLogPayload(a): %v", err)
+	}
+	leafB, _, err := valuelog.MaybeCompactLeafLogPayload(buildRewriteLeafPageFixture(t, "pack-b"))
+	if err != nil {
+		t.Fatalf("MaybeCompactLeafLogPayload(b): %v", err)
+	}
+	leafC, _, err := valuelog.MaybeCompactLeafLogPayload(buildRewriteLeafPageFixture(t, "pack-c"))
+	if err != nil {
+		t.Fatalf("MaybeCompactLeafLogPayload(c): %v", err)
+	}
+	dictBytes, err := zstd.BuildDict(zstd.BuildDictOptions{
+		ID:       uint32(dictID),
+		Contents: [][]byte{leafA, leafB, leafC},
+		History:  append([]byte(nil), leafA...),
+		Offsets:  [3]int{1, 4, 8},
+		Level:    zstd.SpeedFastest,
+	})
+	if err != nil {
+		t.Fatalf("BuildDict: %v", err)
+	}
+	if len(dictBytes) == 0 {
+		t.Fatal("expected non-empty outer leaf dict")
+	}
+
+	opts := Options{
+		Dir:                        dir,
+		Durability:                 DurabilityWALOffRelaxed,
+		DisableBackgroundPrune:     true,
+		IndexOuterLeavesInValueLog: true,
+		LeafPrefixCompression:      true,
+		IndexColumnarLeaves:        true,
+		IndexPackedValuePtr:        true,
+		ValueLog: ValueLogOptions{
+			Compression: ValueLogCompressionBlock,
+			BlockCodec:  ValueLogBlockLZ4,
+			DictLookup: func(id uint64) ([]byte, error) {
+				if id != dictID {
+					return nil, valuelog.ErrMissingDict
+				}
+				return append([]byte(nil), dictBytes...), nil
+			},
+			DictCurrentForClass: func(_ context.Context, class string) (uint64, error) {
+				if class == "outer_leaf" {
+					return dictID, nil
+				}
+				return 0, nil
+			},
+			DictLeafPayloadMode: func(_ context.Context, id uint64) (bool, bool, error) {
+				if id != dictID {
+					return false, false, nil
+				}
+				return false, true, nil
+			},
+		},
+	}
+	db, err := Open(opts)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	leafLog := newRewriteWriter(ValueLogDirPath(dir), 0, 0, 64<<20)
+	leafLog.ConfigureLeafLog(LeafLogDirPath(dir), rewriteLeafLogLaneID, 0)
+	db.SetLeafPageLog(leafLog)
+	defer func() {
+		closeNoErr(t, leafLog)
+		closeNoErr(t, db)
+	}()
+
+	writeLeafGenerationKeys(t, db, "dict-pack", 2048, 'a')
+	_, fileID1 := currentLeafSegmentOrFatal(t, leafLog)
+	rawFileID1 := page.ValueLogSegmentID(fileID1)
+	if err := leafLog.rotateLeaf(); err != nil {
+		t.Fatalf("rotateLeaf: %v", err)
+	}
+	writeLeafGenerationKeyRange(t, db, "dict-pack", 0, 1024, 'b')
+	writeLeafGenerationKeys(t, db, "dict-pack-live", 32, 'z')
+
+	manifest := loadLeafGenerationManifestOrFatal(t, dir)
+	gen1 := findLeafGenerationByFileID(t, manifest, rawFileID1)
+	stats, err := db.LeafGenerationPack(context.Background(), LeafGenerationPackOptions{
+		GenerationIDs: []uint64{gen1.GenerationID},
+		Force:         true,
+		Sync:          true,
+	})
+	if err != nil {
+		t.Fatalf("LeafGenerationPack: %v", err)
+	}
+	if len(stats.CreatedFileIDs) == 0 {
+		t.Fatalf("CreatedFileIDs empty, stats=%+v", stats)
+	}
+
+	header := readFirstLeafGenerationFrameHeader(t, dir, stats.CreatedFileIDs[0])
+	if header.DictID != dictID {
+		t.Fatalf("packed leaf frame dictID=%d want %d", header.DictID, dictID)
+	}
+}
+
+func readFirstLeafGenerationFrameHeader(t *testing.T, dir string, rawFileID uint32) valuelog.FrameHeader {
+	t.Helper()
+	path := leafLogSegmentPath(t, dir, rawFileID)
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("open %s: %v", path, err)
+	}
+	defer f.Close()
+	var header [valuelog.HeaderSize]byte
+	if _, err := io.ReadFull(f, header[:]); err != nil {
+		t.Fatalf("read record header: %v", err)
+	}
+	bodyLen := binary.LittleEndian.Uint32(header[16:20])
+	body := make([]byte, int(bodyLen))
+	if _, err := io.ReadFull(f, body); err != nil {
+		t.Fatalf("read frame body: %v", err)
+	}
+	frameHeader, _, _, _, err := valuelog.DecodeFrame(body)
+	if err != nil {
+		t.Fatalf("DecodeFrame: %v", err)
+	}
+	return frameHeader
 }
 
 func TestLeafGenerationPack_RewritesCollectionLeafRefRoot(t *testing.T) {

@@ -535,6 +535,21 @@ func Open(opts Options) (*DB, error) {
 		opts.ValueLog.DictLookup = func(dictID uint64) ([]byte, error) {
 			return dictStore.GetDictBytes(context.Background(), dictID)
 		}
+		opts.ValueLog.DictCurrentForClass = func(ctx context.Context, class string) (uint64, error) {
+			return dictStore.GetCurrentForClass(ctx, class)
+		}
+		opts.ValueLog.DictLeafPayloadMode = func(ctx context.Context, dictID uint64) (bool, bool, error) {
+			return dictStore.GetLeafPayloadMode(ctx, dictID)
+		}
+		opts.ValueLog.DictPut = func(ctx context.Context, dictBytes []byte) (uint64, error) {
+			return dictStore.PutDictBytes(ctx, dictBytes)
+		}
+		opts.ValueLog.DictSetCurrentForClass = func(ctx context.Context, class string, dictID uint64) error {
+			return dictStore.SetCurrentForClass(ctx, class, dictID)
+		}
+		opts.ValueLog.DictSetLeafPayloadMode = func(ctx context.Context, dictID uint64, useRawPages bool) error {
+			return dictStore.SetLeafPayloadMode(ctx, dictID, useRawPages)
+		}
 	}
 
 	if !opts.DisableSideStores && opts.ValueLog.TemplateMode != template.TemplateOff {

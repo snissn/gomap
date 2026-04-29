@@ -68,7 +68,7 @@ func (db *DB) collectLeafGenerationMetrics(set *valuelog.Set, excludePinIDs []ui
 		genFiles := len(gen.FileIDs)
 		genBytes := int64(0)
 		for _, rawFileID := range gen.FileIDs {
-			genBytes += leafGenerationRawFileSize(db.dir, set, rawFileID)
+			genBytes += leafGenerationRawFileSizeBestEffort(db.dir, set, rawFileID)
 		}
 		m.generationsTotal++
 		m.filesTotal += genFiles
@@ -116,24 +116,48 @@ func (db *DB) collectLeafGenerationMetrics(set *valuelog.Set, excludePinIDs []ui
 	return m
 }
 
-func leafGenerationRawFileSize(rootDir string, set *valuelog.Set, rawFileID uint32) int64 {
+func leafGenerationRawFileSizeBestEffort(rootDir string, set *valuelog.Set, rawFileID uint32) int64 {
 	if rawFileID == 0 {
 		return 0
 	}
-	if set != nil {
-		if f := set.Files[page.ValueLogFileID(rawFileID)]; f != nil {
-			if size := fileSize(f); size > 0 {
-				return size
-			}
-		}
+	// Stats are often read as lightweight telemetry. Preserve the cached-first
+	// path here; maintenance planning uses leafGenerationRawFilePhysicalSize.
+	cached, path := leafGenerationRawFileCachedSizeAndPath(set, rawFileID)
+	if cached > 0 {
+		return cached
 	}
-	path := leafGenerationFallbackPath(rootDir, rawFileID)
-	if path == "" {
+	return leafGenerationRawFileSizeFromPath(rootDir, rawFileID, path, 0)
+}
+
+func leafGenerationRawFilePhysicalSize(rootDir string, set *valuelog.Set, rawFileID uint32) int64 {
+	if rawFileID == 0 {
 		return 0
+	}
+	cached, path := leafGenerationRawFileCachedSizeAndPath(set, rawFileID)
+	return leafGenerationRawFileSizeFromPath(rootDir, rawFileID, path, cached)
+}
+
+func leafGenerationRawFileCachedSizeAndPath(set *valuelog.Set, rawFileID uint32) (int64, string) {
+	if set == nil || rawFileID == 0 {
+		return 0, ""
+	}
+	f := set.Files[page.ValueLogFileID(rawFileID)]
+	if f == nil {
+		return 0, ""
+	}
+	return fileSize(f), f.Path
+}
+
+func leafGenerationRawFileSizeFromPath(rootDir string, rawFileID uint32, path string, fallback int64) int64 {
+	if path == "" {
+		path = leafGenerationFallbackPath(rootDir, rawFileID)
+	}
+	if path == "" {
+		return fallback
 	}
 	info, err := os.Stat(path)
 	if err != nil {
-		return 0
+		return fallback
 	}
 	return info.Size()
 }
