@@ -1442,6 +1442,25 @@ func TestCollectionReplaceRejectsUniqueConflictAtomically(t *testing.T) {
 	if len(ids) != 0 {
 		t.Fatalf("old email ids=%q want none", ids)
 	}
+
+	beforeState := d.State()
+	if beforeState == nil {
+		t.Fatal("missing db state before identical replace")
+	}
+	replaced, err = col.Replace([]byte("u1"), []byte(`{"email":"ada2@example.com","city":"hnl"}`))
+	if err != nil {
+		t.Fatalf("replace identical: %v", err)
+	}
+	if !replaced {
+		t.Fatal("replace identical reported false")
+	}
+	afterState := d.State()
+	if afterState == nil {
+		t.Fatal("missing db state after identical replace")
+	}
+	if afterState.SystemRootPageID != beforeState.SystemRootPageID {
+		t.Fatalf("identical replace changed system root from %d to %d", beforeState.SystemRootPageID, afterState.SystemRootPageID)
+	}
 }
 
 func TestCollectionUpdateConcurrentCounterNoLostUpdates(t *testing.T) {
