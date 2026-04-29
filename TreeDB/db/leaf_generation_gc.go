@@ -271,17 +271,16 @@ func (db *DB) pruneDeletedLeafGenerationRecords(manifest *leafGenerationManifest
 	pruned := false
 	prunedRecords := 0
 	filesDeleted := 0
+	var prunedFileIDs []uint32
 	for i, gen := range manifest.Generations {
 		if gen.State != leafGenerationStateDeleted || !leafGenerationFilesMissing(gen.FileIDs, filePaths) {
 			continue
-		}
-		if err := db.removeLeafGenerationRecordLengthIndexes(gen.FileIDs); err != nil {
-			return manifest, false, 0, err
 		}
 		prune[i] = true
 		pruned = true
 		prunedRecords++
 		filesDeleted += len(gen.FileIDs)
+		prunedFileIDs = append(prunedFileIDs, gen.FileIDs...)
 	}
 	if !pruned {
 		return manifest, false, 0, nil
@@ -294,6 +293,9 @@ func (db *DB) pruneDeletedLeafGenerationRecords(manifest *leafGenerationManifest
 	}
 	next := *manifest
 	next.Generations = kept
+	if err := db.removeLeafGenerationRecordLengthIndexes(prunedFileIDs); err != nil {
+		return manifest, false, 0, err
+	}
 	return &next, true, filesDeleted, nil
 }
 
@@ -301,19 +303,21 @@ func (db *DB) removeLeafGenerationRecordLengthIndexes(fileIDs []uint32) error {
 	if db == nil || len(fileIDs) == 0 {
 		return nil
 	}
+	var errs []error
 	for _, fileID := range fileIDs {
 		if fileID == 0 {
 			continue
 		}
 		path := leafGenerationRecordLengthIndexPath(db.dir, fileID)
 		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-			return fmt.Errorf("remove leaf generation record-length index %d (%s): %w", fileID, path, err)
+			errs = append(errs, fmt.Errorf("remove leaf generation record-length index %d (%s): %w", fileID, path, err))
+			continue
 		}
 		db.leafGenerationRecordLengthMu.Lock()
 		delete(db.leafGenerationRecordLengthByFile, fileID)
 		db.leafGenerationRecordLengthMu.Unlock()
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 func leafGenerationFilesMissing(fileIDs []uint32, filePaths map[uint32]string) bool {
