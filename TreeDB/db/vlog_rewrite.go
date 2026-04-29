@@ -1854,20 +1854,24 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 
 	snap := db.AcquireSnapshot()
 	if snap == nil {
+		err = fmt.Errorf("missing snapshot")
 		closeRewriteSnapshot(&err, snap)
-		return stats, fmt.Errorf("missing snapshot")
+		return stats, err
 	}
 	if snap.state == nil {
+		err = fmt.Errorf("missing snapshot state")
 		closeRewriteSnapshot(&err, snap)
-		return stats, fmt.Errorf("missing snapshot state")
+		return stats, err
 	}
 	if snap.idx == nil {
+		err = fmt.Errorf("missing snapshot index")
 		closeRewriteSnapshot(&err, snap)
-		return stats, fmt.Errorf("missing snapshot index")
+		return stats, err
 	}
 	if snap.idx.pager == nil {
+		err = fmt.Errorf("missing snapshot pager")
 		closeRewriteSnapshot(&err, snap)
-		return stats, fmt.Errorf("missing snapshot pager")
+		return stats, err
 	}
 	roots, err := maintenanceRootsForSnapshot(snap)
 	if err != nil {
@@ -2463,8 +2467,7 @@ func (db *DB) applyRewriteSwapBatchToCollectionRoot(target *collectionRewriteRoo
 		return nil
 	}
 
-	encodedRoot := make([]byte, 8)
-	binary.BigEndian.PutUint64(encodedRoot, newCollectionRoot)
+	encodedRoot := encodeCollectionRootDescriptorRootID(newCollectionRoot)
 	systemDelta := memtable.NewAppendOnlyWithEntryCapacity(len(target.descriptorAliases))
 	for _, aliasKey := range target.descriptorAliases {
 		systemDelta.Set(aliasKey, encodedRoot)

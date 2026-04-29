@@ -178,11 +178,9 @@ func vacuumRewriteCollectionRootDescriptors(descriptors []vacuumCollectionRootDe
 			}
 		}
 		if newRoot != oldRoot {
-			encoded := make([]byte, 8)
-			binary.BigEndian.PutUint64(encoded, newRoot)
 			replacements = append(replacements, vacuumCollectionRootReplacement{
 				key:   descriptor.key,
-				value: encoded,
+				value: encodeCollectionRootDescriptorRootID(newRoot),
 			})
 		}
 	}
@@ -193,6 +191,12 @@ func vacuumRewriteCollectionRootDescriptors(descriptors []vacuumCollectionRootDe
 		return bytes.Compare(replacements[i].key, replacements[j].key) < 0
 	})
 	return replacements, nil
+}
+
+func encodeCollectionRootDescriptorRootID(rootID uint64) []byte {
+	encoded := make([]byte, 8)
+	binary.BigEndian.PutUint64(encoded, rootID)
+	return encoded
 }
 
 func vacuumCopyCollectionRoot(oldPager *pager.Pager, rootID uint64, alloc vacuumAllocator, newPager *pager.Pager) (uint64, error) {
