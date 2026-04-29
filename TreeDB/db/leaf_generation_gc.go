@@ -173,7 +173,7 @@ func (db *DB) LeafGenerationGC(ctx context.Context, opts LeafGenerationGCOptions
 	prePrune := manifest.clone()
 	manifest, pruned, filesDeleted, err := db.pruneDeletedLeafGenerationRecords(manifest, filePaths)
 	if err != nil {
-		return stats, err
+		return stats, fmt.Errorf("leaf generation gc: prune deleted generation records: %w", err)
 	}
 	if !pruned {
 		return stats, nil

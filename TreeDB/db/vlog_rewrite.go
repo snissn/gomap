@@ -2421,8 +2421,14 @@ func (db *DB) applyRewriteSwapBatchToCollectionRoot(target *collectionRewriteRoo
 	if target.systemRoot != systemRoot || target.rootID == 0 || len(target.descriptorAliases) == 0 {
 		reader := newValueReader(state.ValueLogSet)
 		collectionRoot, descriptorAliases, ok, err := lookupCollectionRootDescriptorAliases(idx.pager, reader, systemRoot, target.descriptorKey)
-		if err != nil || !ok || collectionRoot == 0 {
+		if err != nil {
 			return err
+		}
+		if !ok {
+			return fmt.Errorf("vlog-rewrite: collection root descriptor %q not found", string(target.descriptorKey))
+		}
+		if collectionRoot == 0 {
+			return fmt.Errorf("vlog-rewrite: collection root descriptor %q has empty root", string(target.descriptorKey))
 		}
 		target.rootID = collectionRoot
 		target.descriptorAliases = descriptorAliases

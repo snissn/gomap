@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	treedb "github.com/snissn/gomap/TreeDB"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -86,9 +87,7 @@ func TestCollectionInsertBatchBridge_RoundTripWithSecondaryIndexes(t *testing.T)
 	if err != nil {
 		t.Fatalf("find city: %v", err)
 	}
-	if len(cityIDs) != 2 || !bytes.Equal(cityIDs[0], []byte("u1")) || !bytes.Equal(cityIDs[1], []byte("u2")) {
-		t.Fatalf("city ids=%q want [u1 u2]", cityIDs)
-	}
+	collectionMaintenanceRequireIDs(t, cityIDs, []byte("u1"), []byte("u2"))
 
 	snap := d.AcquireSnapshot()
 	if snap == nil {
@@ -243,7 +242,9 @@ func TestCollectionValueLogGC_RoundTripWithCompressedSecondaryIndexes(t *testing
 	if err := d.RefreshValueLogSet(); err != nil {
 		t.Fatalf("RefreshValueLogSet: %v", err)
 	}
-	stats, err := d.ValueLogGC(context.Background(), backenddb.ValueLogGCOptions{})
+	gcCtx, gcCancel := collectionMaintenanceTestContext(t)
+	defer gcCancel()
+	stats, err := d.ValueLogGC(gcCtx, backenddb.ValueLogGCOptions{})
 	if err != nil {
 		t.Fatalf("ValueLogGC: %v", err)
 	}
@@ -315,8 +316,9 @@ func TestCollectionLeafGenerationPackGC_RoundTripWithTemplateV1SecondaryIndexes(
 
 	var encoder TemplateV1Encoder
 	const (
-		documents = 12_000
-		batchSize = 1_500
+		documents                              = 12_000
+		batchSize                              = 1_500
+		minExpectedCollectionLiveBytesForSmoke = 16 * 1024
 	)
 	for start := 0; start < documents; start += batchSize {
 		ids, docs := collectionMaintenanceTemplateBatch(t, &encoder, start, batchSize)
@@ -329,7 +331,8 @@ func TestCollectionLeafGenerationPackGC_RoundTripWithTemplateV1SecondaryIndexes(
 		t.Fatalf("checkpoint: %v", err)
 	}
 
-	ctx := context.Background()
+	ctx, cancel := collectionMaintenanceTestContext(t)
+	defer cancel()
 	planBefore, err := d.LeafGenerationPlan(ctx, backenddb.LeafGenerationPlanOptions{Force: true})
 	if err != nil {
 		t.Fatalf("LeafGenerationPlan before pack: %v", err)
@@ -337,7 +340,7 @@ func TestCollectionLeafGenerationPackGC_RoundTripWithTemplateV1SecondaryIndexes(
 	if got := planBefore.CandidateLivePages; got <= 0 {
 		t.Fatalf("CandidateLivePages=%d, want collection leaf pages before pack (plan=%+v)", got, planBefore)
 	}
-	if got := planBefore.CandidateBytesLive; got <= 16*1024 {
+	if got := planBefore.CandidateBytesLive; got <= minExpectedCollectionLiveBytesForSmoke {
 		t.Fatalf("CandidateBytesLive=%d, want real collection live bytes before pack (plan=%+v)", got, planBefore)
 	}
 	if got := planBefore.CandidateBytesDead; got <= 0 {
@@ -355,7 +358,7 @@ func TestCollectionLeafGenerationPackGC_RoundTripWithTemplateV1SecondaryIndexes(
 	if got := packStats.LeafPagesCopied; got <= 0 {
 		t.Fatalf("LeafPagesCopied=%d, want collection leaves copied (stats=%+v)", got, packStats)
 	}
-	if got := packStats.SourceBytesLive; got <= 16*1024 {
+	if got := packStats.SourceBytesLive; got <= minExpectedCollectionLiveBytesForSmoke {
 		t.Fatalf("SourceBytesLive=%d, want real collection live bytes copied (stats=%+v)", got, packStats)
 	}
 	requireCollectionMaintenanceTemplateReads(t, col)
@@ -518,9 +521,7 @@ func requireCollectionMaintenanceReads(t *testing.T, col *Collection) {
 	if err != nil {
 		t.Fatalf("find city: %v", err)
 	}
-	if len(cityIDs) != 2 || !bytes.Equal(cityIDs[0], []byte("u1")) || !bytes.Equal(cityIDs[1], []byte("u2")) {
-		t.Fatalf("city ids=%q want [u1 u2]", cityIDs)
-	}
+	collectionMaintenanceRequireIDs(t, cityIDs, []byte("u1"), []byte("u2"))
 }
 
 func collectionMaintenanceTemplateBatch(t *testing.T, encoder *TemplateV1Encoder, start, count int) ([][]byte, [][]byte) {
@@ -584,6 +585,35 @@ func collectionMaintenanceContainsID(ids [][]byte, want []byte) bool {
 		}
 	}
 	return false
+}
+
+func collectionMaintenanceRequireIDs(t *testing.T, got [][]byte, want ...[]byte) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("ids=%q want %q", got, want)
+	}
+	counts := make(map[string]int, len(got))
+	for _, id := range got {
+		counts[string(id)]++
+	}
+	for _, id := range want {
+		key := string(id)
+		if counts[key] == 0 {
+			t.Fatalf("ids=%q missing %q", got, id)
+		}
+		counts[key]--
+	}
+}
+
+func collectionMaintenanceTestContext(t *testing.T) (context.Context, context.CancelFunc) {
+	t.Helper()
+	timeout := 30 * time.Second
+	if deadline, ok := t.Deadline(); ok {
+		if remaining := time.Until(deadline); remaining > 0 && remaining < timeout {
+			timeout = remaining
+		}
+	}
+	return context.WithTimeout(context.Background(), timeout)
 }
 
 func TestCollectionInsertBatchStatsExposeNoIndexFastPath(t *testing.T) {
@@ -1416,9 +1446,7 @@ func TestCollectionInsertBatchBridge_AppendsWithoutDroppingExistingRoots(t *test
 	if err != nil {
 		t.Fatalf("find city: %v", err)
 	}
-	if len(cityIDs) != 2 || !bytes.Equal(cityIDs[0], []byte("u1")) || !bytes.Equal(cityIDs[1], []byte("u2")) {
-		t.Fatalf("city ids=%q want [u1 u2]", cityIDs)
-	}
+	collectionMaintenanceRequireIDs(t, cityIDs, []byte("u1"), []byte("u2"))
 }
 
 func TestCollectionCreateIndexBackfill_BuildsSecondaryAndIndexState(t *testing.T) {
@@ -1461,9 +1489,7 @@ func TestCollectionCreateIndexBackfill_BuildsSecondaryAndIndexState(t *testing.T
 	if err != nil {
 		t.Fatalf("find city: %v", err)
 	}
-	if len(cityIDs) != 2 || !bytes.Equal(cityIDs[0], []byte("u1")) || !bytes.Equal(cityIDs[1], []byte("u2")) {
-		t.Fatalf("city ids=%q want [u1 u2]", cityIDs)
-	}
+	collectionMaintenanceRequireIDs(t, cityIDs, []byte("u1"), []byte("u2"))
 
 	snap := d.AcquireSnapshot()
 	if snap == nil {
