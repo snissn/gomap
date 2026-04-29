@@ -1845,9 +1845,21 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 	}
 
 	snap := db.AcquireSnapshot()
-	if snap == nil || snap.state == nil || snap.idx == nil || snap.idx.pager == nil {
+	if snap == nil {
+		closeRewriteSnapshot(&err, snap)
+		return stats, fmt.Errorf("missing snapshot")
+	}
+	if snap.state == nil {
 		closeRewriteSnapshot(&err, snap)
 		return stats, fmt.Errorf("missing snapshot state")
+	}
+	if snap.idx == nil {
+		closeRewriteSnapshot(&err, snap)
+		return stats, fmt.Errorf("missing snapshot index")
+	}
+	if snap.idx.pager == nil {
+		closeRewriteSnapshot(&err, snap)
+		return stats, fmt.Errorf("missing snapshot pager")
 	}
 	roots, err := maintenanceRootsForSnapshot(snap)
 	if err != nil {
@@ -1859,16 +1871,12 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		if root.kind != maintenanceRootCollection || root.rootID == 0 {
 			continue
 		}
-		useLeafLog, err := valueLogRewriteCollectionRootUsesLeafLog(snap.idx.pager, root.rootID)
+		storagePolicy, err := valueLogRewriteCollectionRootStoragePolicy(snap.idx.pager, root.rootID)
 		if err != nil {
 			closeRewriteSnapshot(&err, snap)
 			return stats, fmt.Errorf("vlog-rewrite: inspect collection root %q storage: %w", string(root.descriptorKey), err)
 		}
-		if useLeafLog {
-			rootPolicies[i] = OrderedRootStorageValueLogLeaves
-		} else {
-			rootPolicies[i] = OrderedRootStoragePagerLeaves
-		}
+		rootPolicies[i] = storagePolicy
 	}
 	stopScanning := false
 	scanRoot := func(root maintenanceRoot, storagePolicy OrderedRootStoragePolicy) error {
@@ -2324,7 +2332,7 @@ func (db *DB) applyRewriteSwapBatchToSystemRoot(swaps []rewriteSwap, sync bool) 
 	return nil
 }
 
-func (db *DB) applyRewriteSwapBatchToCollectionRoot(descriptorKey []byte, storagePolicy OrderedRootStoragePolicy, swaps []rewriteSwap, sync bool) error {
+func (db *DB) applyRewriteSwapBatchToCollectionRoot(descriptorKey []byte, _ OrderedRootStoragePolicy, swaps []rewriteSwap, sync bool) error {
 	if len(swaps) == 0 {
 		return nil
 	}
@@ -2361,7 +2369,11 @@ func (db *DB) applyRewriteSwapBatchToCollectionRoot(descriptorKey []byte, storag
 	if err != nil || !ok || collectionRoot == 0 {
 		return err
 	}
-	rootOpts, err := db.orderedRootPublishOptionsForPolicy(storagePolicy)
+	currentStoragePolicy, err := valueLogRewriteCollectionRootStoragePolicy(idx.pager, collectionRoot)
+	if err != nil {
+		return fmt.Errorf("vlog-rewrite: inspect current collection root %q storage: %w", string(descriptorKey), err)
+	}
+	rootOpts, err := db.orderedRootPublishOptionsForPolicy(currentStoragePolicy)
 	if err != nil {
 		return err
 	}
@@ -3123,6 +3135,17 @@ func valueLogRewriteCollectionRootUsesLeafLog(oldPager *pager.Pager, rootID uint
 		return false, err
 	}
 	return allLeafRefs, nil
+}
+
+func valueLogRewriteCollectionRootStoragePolicy(oldPager *pager.Pager, rootID uint64) (OrderedRootStoragePolicy, error) {
+	useLeafLog, err := valueLogRewriteCollectionRootUsesLeafLog(oldPager, rootID)
+	if err != nil {
+		return OrderedRootStorageDefault, err
+	}
+	if useLeafLog {
+		return OrderedRootStorageValueLogLeaves, nil
+	}
+	return OrderedRootStoragePagerLeaves, nil
 }
 
 type rewriteCreatedSegment struct {
