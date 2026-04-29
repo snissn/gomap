@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"sort"
 	"strings"
 
 	"github.com/snissn/gomap/TreeDB/collections"
@@ -928,7 +927,6 @@ func parseSetDocument(doc bson.Raw) (map[string]bson.RawValue, []string, error) 
 		}
 		sets[key] = value
 	}
-	sort.Strings(order)
 	return sets, order, nil
 }
 

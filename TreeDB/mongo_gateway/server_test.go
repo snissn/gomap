@@ -437,6 +437,51 @@ func TestServerFindPlannerIndexedAndBoundedPredicates(t *testing.T) {
 	}
 }
 
+func TestApplySetUpdateAppendsNewFieldsInSetOrder(t *testing.T) {
+	doc, err := bson.Marshal(bson.D{
+		{Key: "_id", Value: "u1"},
+		{Key: "name", Value: "ada"},
+	})
+	if err != nil {
+		t.Fatalf("marshal doc: %v", err)
+	}
+	update, err := bson.Marshal(bson.D{{Key: "$set", Value: bson.D{
+		{Key: "zeta", Value: int32(1)},
+		{Key: "alpha", Value: int32(2)},
+	}}})
+	if err != nil {
+		t.Fatalf("marshal update: %v", err)
+	}
+	updated, changed, err := applySetUpdate(wire.Document(doc), wire.Document(update))
+	if err != nil {
+		t.Fatalf("apply set: %v", err)
+	}
+	if !changed {
+		t.Fatal("apply set changed=false want true")
+	}
+	elements, err := bson.Raw(updated).Elements()
+	if err != nil {
+		t.Fatalf("updated elements: %v", err)
+	}
+	keys := make([]string, 0, len(elements))
+	for _, elem := range elements {
+		key, err := elem.KeyErr()
+		if err != nil {
+			t.Fatalf("element key: %v", err)
+		}
+		keys = append(keys, key)
+	}
+	want := []string{"_id", "name", "zeta", "alpha"}
+	if len(keys) != len(want) {
+		t.Fatalf("keys=%v want %v", keys, want)
+	}
+	for i := range want {
+		if keys[i] != want[i] {
+			t.Fatalf("keys=%v want %v", keys, want)
+		}
+	}
+}
+
 func TestServerFindByIDMissingCollectionReturnsEmptyBatch(t *testing.T) {
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
