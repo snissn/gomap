@@ -340,18 +340,14 @@ func matrixIndexArtifactPath(baseDir, artifactPath string) (string, error) {
 	if inside, err := pathWithinDir(baseDir, joined); err != nil {
 		return "", fmt.Errorf("resolve artifact path %q: %w", artifactPath, err)
 	} else if !inside {
-		resolvedInside, checked, err := resolvedPathWithinDir(baseDir, joined)
-		if err != nil {
-			return "", fmt.Errorf("resolve artifact path %q symlinks: %w", artifactPath, err)
-		}
-		if !checked || !resolvedInside {
+		if resolvedInside, err := resolvedPathWithinDir(baseDir, joined); err != nil || !resolvedInside {
 			return "", fmt.Errorf("artifact path %q escapes matrix directory", artifactPath)
 		}
 		return joined, nil
 	}
-	if resolvedInside, checked, err := resolvedPathWithinDir(baseDir, joined); err != nil {
+	if resolvedInside, err := resolvedPathWithinDir(baseDir, joined); err != nil {
 		return "", fmt.Errorf("resolve artifact path %q symlinks: %w", artifactPath, err)
-	} else if checked && !resolvedInside {
+	} else if !resolvedInside {
 		return "", fmt.Errorf("resolved artifact path %q escapes matrix directory", artifactPath)
 	}
 	return joined, nil
@@ -368,20 +364,20 @@ func pathWithinDir(baseDir, target string) (bool, error) {
 	return true, nil
 }
 
-func resolvedPathWithinDir(baseDir, target string) (inside bool, checked bool, err error) {
+func resolvedPathWithinDir(baseDir, target string) (bool, error) {
 	resolvedBase, err := filepath.EvalSymlinks(baseDir)
 	if err != nil {
-		return false, false, nil
+		return false, err
 	}
 	resolvedTarget, err := filepath.EvalSymlinks(target)
 	if err != nil {
-		return false, false, nil
+		return false, err
 	}
-	inside, err = pathWithinDir(resolvedBase, resolvedTarget)
+	inside, err := pathWithinDir(resolvedBase, resolvedTarget)
 	if err != nil {
-		return false, true, err
+		return false, err
 	}
-	return inside, true, nil
+	return inside, nil
 }
 
 func field(record []string, idx int) string {

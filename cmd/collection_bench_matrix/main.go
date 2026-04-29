@@ -7,6 +7,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"html"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -604,35 +605,18 @@ func writeRunREADME(cfg config, commandLine []string, cells []matrixCell, matrix
 	var sb strings.Builder
 	sb.WriteString("# Collections Benchmark Matrix Run\n\n")
 	sb.WriteString("## Run Metadata\n\n")
-	sb.WriteString("- generated at: `")
-	sb.WriteString(time.Now().UTC().Format(time.RFC3339))
-	sb.WriteString("`\n")
-	sb.WriteString("- worktree: `")
-	sb.WriteString(cfg.repoRoot)
-	sb.WriteString("`\n")
-	sb.WriteString("- branch: `")
-	sb.WriteString(branch)
-	sb.WriteString("`\n")
-	sb.WriteString("- commit: `")
-	sb.WriteString(commit)
-	sb.WriteString("`\n")
-	sb.WriteString("- bash command: `")
-	sb.WriteString(shellQuoteCommand(commandLine))
-	sb.WriteString("`\n")
+	writeMarkdownCodeLine(&sb, "generated at", time.Now().UTC().Format(time.RFC3339))
+	writeMarkdownCodeLine(&sb, "worktree", cfg.repoRoot)
+	writeMarkdownCodeLine(&sb, "branch", branch)
+	writeMarkdownCodeLine(&sb, "commit", commit)
+	writeMarkdownCodeLine(&sb, "bash command", shellQuoteCommand(commandLine))
 	if argvJSON, err := json.Marshal(commandLine); err == nil {
-		sb.WriteString("- argv json: `")
-		sb.Write(argvJSON)
-		sb.WriteString("`\n")
+		writeMarkdownCodeLine(&sb, "argv json", string(argvJSON))
 	}
-	sb.WriteString("- benchtime: `")
-	sb.WriteString(cfg.benchtime)
-	sb.WriteString("`\n")
-	sb.WriteString("- count: `")
-	sb.WriteString(strconv.Itoa(cfg.count))
-	sb.WriteString("`\n")
-	sb.WriteString("- collection batch size: `")
-	sb.WriteString(strconv.Itoa(cfg.batchSize))
-	sb.WriteString("`\n\n")
+	writeMarkdownCodeLine(&sb, "benchtime", cfg.benchtime)
+	writeMarkdownCodeLine(&sb, "count", strconv.Itoa(cfg.count))
+	writeMarkdownCodeLine(&sb, "collection batch size", strconv.Itoa(cfg.batchSize))
+	sb.WriteByte('\n')
 
 	sb.WriteString("## Primary Artifacts\n\n")
 	sb.WriteString("- matrix summary markdown: `collections_matrix_summary.md`\n")
@@ -680,6 +664,24 @@ func writeRunREADME(cfg config, commandLine []string, cells []matrixCell, matrix
 		return fmt.Errorf("write run README: %w", err)
 	}
 	return nil
+}
+
+func writeMarkdownCodeLine(sb *strings.Builder, label, value string) {
+	sb.WriteString("- ")
+	sb.WriteString(label)
+	sb.WriteString(": ")
+	sb.WriteString(markdownInlineCode(value))
+	sb.WriteByte('\n')
+}
+
+func markdownInlineCode(value string) string {
+	if !strings.ContainsAny(value, "`\r\n") {
+		return "`" + value + "`"
+	}
+	value = strings.NewReplacer("\r\n", "\n", "\r", "\n").Replace(value)
+	escaped := html.EscapeString(value)
+	escaped = strings.ReplaceAll(escaped, "\n", "&#10;")
+	return "<code>" + escaped + "</code>"
 }
 
 func relativeArtifactPath(baseDir, artifactPath string) (string, error) {

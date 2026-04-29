@@ -9,6 +9,16 @@ import (
 
 func TestReadMatrixIndexResolvesRelativeReportPaths(t *testing.T) {
 	dir := t.TempDir()
+	cellDir := filepath.Join(dir, "cell_a")
+	if err := os.MkdirAll(cellDir, 0o755); err != nil {
+		t.Fatalf("mkdir cell: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(cellDir, "collections_report.md"), []byte("# report\n"), 0o644); err != nil {
+		t.Fatalf("write report markdown: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(cellDir, "collections_report.json"), []byte("{}\n"), 0o644); err != nil {
+		t.Fatalf("write report json: %v", err)
+	}
 	indexPath := filepath.Join(dir, "matrix_index.tsv")
 	index := strings.Join([]string{
 		"cell\tengine\tdocument_format\tdata_outer_leaves_in_vlog\tindex_outer_leaves_in_vlog\tpager_chunk_size\tpager_sync_concurrency\treport_md\treport_json",
@@ -50,10 +60,37 @@ func TestReadMatrixIndexRejectsEscapingRelativeReportPath(t *testing.T) {
 	}
 }
 
-func TestReadMatrixIndexAllowsAbsoluteReportPathInsideMatrixDir(t *testing.T) {
+func TestReadMatrixIndexRejectsUnverifiableReportPath(t *testing.T) {
 	dir := t.TempDir()
 	indexPath := filepath.Join(dir, "matrix_index.tsv")
+	index := strings.Join([]string{
+		"cell\tengine\tdocument_format\tdata_outer_leaves_in_vlog\tindex_outer_leaves_in_vlog\tpager_chunk_size\tpager_sync_concurrency\treport_md\treport_json",
+		"cell_a\tproduction_fast\tjson\ttrue\ttrue\tprofile/default\tprofile/default\tcell_a/missing_report.md\tcell_a/collections_report.json",
+	}, "\n")
+	if err := os.WriteFile(indexPath, []byte(index), 0o644); err != nil {
+		t.Fatalf("write matrix index: %v", err)
+	}
+
+	_, err := readMatrixIndex(indexPath)
+	if err == nil || !strings.Contains(err.Error(), "resolve artifact path") {
+		t.Fatalf("readMatrixIndex err=%v want unverifiable path rejection", err)
+	}
+}
+
+func TestReadMatrixIndexAllowsAbsoluteReportPathInsideMatrixDir(t *testing.T) {
+	dir := t.TempDir()
+	cellDir := filepath.Join(dir, "cell_a")
+	if err := os.MkdirAll(cellDir, 0o755); err != nil {
+		t.Fatalf("mkdir cell: %v", err)
+	}
+	indexPath := filepath.Join(dir, "matrix_index.tsv")
 	reportMarkdown := filepath.Join(dir, "collections_report.md")
+	if err := os.WriteFile(reportMarkdown, []byte("# report\n"), 0o644); err != nil {
+		t.Fatalf("write report markdown: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(cellDir, "collections_report.json"), []byte("{}\n"), 0o644); err != nil {
+		t.Fatalf("write report json: %v", err)
+	}
 	index := strings.Join([]string{
 		"cell\tengine\tdocument_format\tdata_outer_leaves_in_vlog\tindex_outer_leaves_in_vlog\tpager_chunk_size\tpager_sync_concurrency\treport_md\treport_json",
 		"cell_a\tproduction_fast\tjson\ttrue\ttrue\tprofile/default\tprofile/default\t" + reportMarkdown + "\tcell_a/collections_report.json",
@@ -76,6 +113,10 @@ func TestReadMatrixIndexAllowsAbsoluteReportPathInsideMatrixDir(t *testing.T) {
 
 func TestReadMatrixIndexAllowsAbsoluteReportPathWithRelativeMatrixIndex(t *testing.T) {
 	dir := t.TempDir()
+	cellDir := filepath.Join(dir, "cell_a")
+	if err := os.MkdirAll(cellDir, 0o755); err != nil {
+		t.Fatalf("mkdir cell: %v", err)
+	}
 	indexPath := filepath.Join(dir, "matrix_index.tsv")
 	reportMarkdown := filepath.Join(dir, "collections_report.md")
 	index := strings.Join([]string{
@@ -87,6 +128,9 @@ func TestReadMatrixIndexAllowsAbsoluteReportPathWithRelativeMatrixIndex(t *testi
 	}
 	if err := os.WriteFile(reportMarkdown, []byte("# report\n"), 0o644); err != nil {
 		t.Fatalf("write report markdown: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(cellDir, "collections_report.json"), []byte("{}\n"), 0o644); err != nil {
+		t.Fatalf("write report json: %v", err)
 	}
 
 	oldwd, err := os.Getwd()

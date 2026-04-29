@@ -306,6 +306,49 @@ func TestWriteRunREADMERecordsBashCommandAndArgv(t *testing.T) {
 	}
 }
 
+func TestWriteRunREADMEEscapesInlineMetadata(t *testing.T) {
+	dir := t.TempDir()
+	cellDir := filepath.Join(dir, "cell_a")
+	cells := []matrixCell{
+		{
+			Name:                   "cell_a",
+			Engine:                 "production_fast",
+			DocumentFormat:         "json",
+			DataOuterLeavesInVLog:  "true",
+			IndexOuterLeavesInVLog: "true",
+			BenchmarkPattern:       "^Benchmark$",
+			RawJSONPath:            filepath.Join(cellDir, "go_test.json"),
+			ReportMarkdownPath:     filepath.Join(cellDir, "collections_report.md"),
+		},
+	}
+	commandLine := []string{"go", "run", "./cmd/collection_bench_matrix", "-out-dir", "path`with\nnewline"}
+	cfg := config{
+		repoRoot:  "repo`root\nnext",
+		outDir:    dir,
+		benchtime: "1x",
+		count:     1,
+		batchSize: 42,
+	}
+	if err := writeRunREADME(cfg, commandLine, cells, filepath.Join(dir, "matrix_index.tsv"), "branch`name", "commit\nsha"); err != nil {
+		t.Fatalf("writeRunREADME: %v", err)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "README.md"))
+	if err != nil {
+		t.Fatalf("read README: %v", err)
+	}
+	got := string(raw)
+	for _, want := range []string{
+		"- worktree: <code>repo`root&#10;next</code>",
+		"- branch: <code>branch`name</code>",
+		"- commit: <code>commit&#10;sha</code>",
+		"- bash command: <code>go run ./cmd/collection_bench_matrix -out-dir &#39;path`with&#10;newline&#39;</code>",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("README missing escaped metadata %q:\n%s", want, got)
+		}
+	}
+}
+
 func TestRunDryRunDoesNotCreateArtifacts(t *testing.T) {
 	parent := t.TempDir()
 	outDir := filepath.Join(parent, "dry-run-output")
