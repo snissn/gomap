@@ -854,7 +854,7 @@ func TestServeOneCleansUpOneShotCursors(t *testing.T) {
 	}
 }
 
-func TestServerGetMoreWithoutBatchSizeReusesCursorBatchSize(t *testing.T) {
+func TestServerGetMoreWithoutBatchSizeUsesMessageLimit(t *testing.T) {
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("open db: %v", err)
@@ -894,11 +894,11 @@ func TestServerGetMoreWithoutBatchSizeReusesCursorBatchSize(t *testing.T) {
 		{Key: "$db", Value: "app"},
 	})
 	nextBatch := cursorNextBatch(t, getMoreResponse)
-	if len(nextBatch) != 1 {
-		t.Fatalf("nextBatch len=%d want 1", len(nextBatch))
+	if len(nextBatch) != 3 {
+		t.Fatalf("nextBatch len=%d want 3", len(nextBatch))
 	}
-	if nextID := cursorIDFromResponse(t, getMoreResponse); nextID != cursorID {
-		t.Fatalf("cursor id after getMore=%d want %d", nextID, cursorID)
+	if nextID := cursorIDFromResponse(t, getMoreResponse); nextID != 0 {
+		t.Fatalf("cursor id after getMore=%d want 0", nextID)
 	}
 }
 

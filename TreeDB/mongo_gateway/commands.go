@@ -504,7 +504,7 @@ func (s *Server) getMoreResponse(command wire.Document, cursorOwner int64) (wire
 		batchSizeSet = false
 	}
 	ns := db + "." + collection
-	nextID, nextBatch, ok, err := s.getMore(cursorID, ns, cursorOwner, int(batchSize), batchSizeSet, defaultCursorBatchSize)
+	nextID, nextBatch, ok, err := s.getMore(cursorID, ns, cursorOwner, int(batchSize), batchSizeSet, maxInt)
 	if err != nil {
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}
@@ -585,10 +585,6 @@ func (s *Server) openCursor(ns string, docs []wire.Document, projection compiled
 		cursorID = s.nextCursorID.Add(1)
 	}
 	now := time.Now()
-	storedBatchSize := batchSize
-	if storedBatchSize == 0 {
-		storedBatchSize = defaultBatchSize
-	}
 	s.cursorMu.Lock()
 	defer s.cursorMu.Unlock()
 	s.reapExpiredCursorsLocked(now)
@@ -598,7 +594,7 @@ func (s *Server) openCursor(ns string, docs []wire.Document, projection compiled
 	if len(s.cursors) >= s.maxOpenCursors() {
 		return 0, nil, errors.New("Mongo gateway cursor limit exceeded")
 	}
-	s.cursors[cursorID] = &serverCursor{ns: ns, owner: owner, docs: docs, projection: projection, batchSize: storedBatchSize, pos: consumed, lastUsed: now}
+	s.cursors[cursorID] = &serverCursor{ns: ns, owner: owner, docs: docs, projection: projection, pos: consumed, lastUsed: now}
 	return cursorID, firstBatch, nil
 }
 
@@ -626,10 +622,7 @@ func (s *Server) getMore(cursorID int64, ns string, owner int64, batchSize int, 
 		projection := cursor.projection
 		effectiveBatchSize := batchSize
 		if !explicitBatchSize {
-			effectiveBatchSize = cursor.batchSize
-			if effectiveBatchSize <= 0 {
-				effectiveBatchSize = defaultBatchSize
-			}
+			effectiveBatchSize = defaultBatchSize
 		}
 		s.cursorMu.Unlock()
 
