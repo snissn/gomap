@@ -1022,24 +1022,38 @@ func buildExecutiveSummary(userRows []userStoryRow, diskRows []diskUsageRow, mai
 		))
 	}
 	for _, kind := range sortedMaintenanceKinds(maintenanceRows) {
-		best, ok := largestMaintenanceReduction(maintenanceRows, kind)
-		if !ok {
+		if best, ok := largestMaintenanceReduction(maintenanceRows, kind); ok {
+			delta := best.Delta
+			after := best.After
+			if best.DeltaGC != nil {
+				delta = best.DeltaGC
+				after = best.AfterGC
+			}
+			lines = append(lines, fmt.Sprintf("Largest %s disk reduction: `%s` / `%s` changed total disk by %s to %s (%s ops/sec maintenance rate).",
+				kind,
+				best.Cell,
+				best.DocumentFormat,
+				formatOptionalByteCount(delta),
+				formatOptionalByteCount(after),
+				formatOptionalFloat(optionalOpsPerSecFromNs(best.NsPerMaint)),
+			))
 			continue
 		}
-		delta := best.Delta
-		after := best.After
-		if best.DeltaGC != nil {
-			delta = best.DeltaGC
-			after = best.AfterGC
+		if best, ok := smallestMaintenanceDelta(maintenanceRows, kind); ok {
+			delta := best.Delta
+			after := best.After
+			if best.DeltaGC != nil {
+				delta = best.DeltaGC
+				after = best.AfterGC
+			}
+			lines = append(lines, fmt.Sprintf("No %s disk reduction was observed; smallest total-disk delta was %s to %s in `%s` / `%s`.",
+				kind,
+				formatOptionalByteCount(delta),
+				formatOptionalByteCount(after),
+				best.Cell,
+				best.DocumentFormat,
+			))
 		}
-		lines = append(lines, fmt.Sprintf("Largest %s disk reduction: `%s` / `%s` changed total disk by %s to %s (%s ops/sec maintenance rate).",
-			kind,
-			best.Cell,
-			best.DocumentFormat,
-			formatOptionalByteCount(delta),
-			formatOptionalByteCount(after),
-			formatOptionalFloat(optionalOpsPerSecFromNs(best.NsPerMaint)),
-		))
 	}
 	if best, ok := fastestDiagnostic(diagnosticRows); ok {
 		lines = append(lines, fmt.Sprintf("Fastest diagnostic row: `%s` in `%s` / `%s` at %s ops/sec (%s ns/op).",
@@ -1110,6 +1124,30 @@ func sortedMaintenanceKinds(rows []maintenanceRow) []string {
 }
 
 func largestMaintenanceReduction(rows []maintenanceRow, kind string) (maintenanceRow, bool) {
+	var best maintenanceRow
+	var bestDelta float64
+	var ok bool
+	for _, row := range rows {
+		if row.Kind != kind {
+			continue
+		}
+		delta, hasDelta := maintenanceReductionDelta(row)
+		if !hasDelta {
+			continue
+		}
+		if delta >= 0 {
+			continue
+		}
+		if !ok || delta < bestDelta {
+			best = row
+			bestDelta = delta
+			ok = true
+		}
+	}
+	return best, ok
+}
+
+func smallestMaintenanceDelta(rows []maintenanceRow, kind string) (maintenanceRow, bool) {
 	var best maintenanceRow
 	var bestDelta float64
 	var ok bool

@@ -552,3 +552,29 @@ func TestBuildUserStoryRowsSkipsMissingBatchSize(t *testing.T) {
 		t.Fatalf("batch size=%d want 8000", got[0].CollectionBatchSize)
 	}
 }
+
+func TestExecutiveSummaryDoesNotLabelPositiveMaintenanceDeltaAsReduction(t *testing.T) {
+	delta := 170.0
+	after := 6764795.0
+	lines := buildExecutiveSummary(nil, nil, []maintenanceRow{
+		{
+			summaryRow: summaryRow{
+				matrixRow: matrixRow{
+					Cell:           "treedb_json",
+					DocumentFormat: "json",
+				},
+			},
+			Kind:    "treedb_vlog_rewrite",
+			DeltaGC: &delta,
+			AfterGC: &after,
+		},
+	}, nil)
+
+	got := strings.Join(lines, "\n")
+	if strings.Contains(got, "Largest treedb_vlog_rewrite disk reduction") {
+		t.Fatalf("positive delta was labeled as a reduction:\n%s", got)
+	}
+	if !strings.Contains(got, "No treedb_vlog_rewrite disk reduction was observed") {
+		t.Fatalf("missing no-reduction summary:\n%s", got)
+	}
+}
