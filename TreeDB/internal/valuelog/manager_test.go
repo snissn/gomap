@@ -1560,6 +1560,20 @@ func TestManagerSegmentPath_UsesRegisteredPathFromExtraScanDir(t *testing.T) {
 	}
 }
 
+func TestSegmentPathFormatsCanonicalPathWithoutManager(t *testing.T) {
+	fileID, err := EncodeFileID(7, 42)
+	if err != nil {
+		t.Fatalf("EncodeFileID: %v", err)
+	}
+	if got, want := SegmentPath("", fileID), "value-l7-000042.log"; got != want {
+		t.Fatalf("SegmentPath empty dir=%q want %q", got, want)
+	}
+	dir := t.TempDir()
+	if got, want := SegmentPath(dir, fileID), filepath.Join(dir, "value-l7-000042.log"); got != want {
+		t.Fatalf("SegmentPath dir=%q want %q", got, want)
+	}
+}
+
 func TestManagerReleaseZombieDeletesSegmentOnSuccess(t *testing.T) {
 	dir := t.TempDir()
 	segID := writeTestSegment(t, dir, 0, 1, 1, bytes.Repeat([]byte("x"), 64))
