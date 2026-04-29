@@ -223,6 +223,14 @@ type rewriteCandidate struct {
 	sourceBytes int64
 }
 
+type collectionRewriteRootState struct {
+	descriptorKey     []byte
+	descriptorAliases [][]byte
+	rootID            uint64
+	systemRoot        uint64
+	storagePolicy     OrderedRootStoragePolicy
+}
+
 type rewriteSourceSelectionStats struct {
 	ageBlockedSegments        int
 	ageBlockedBytesTotal      int64
@@ -1750,7 +1758,7 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 	}
 	selectedSourceBytes := int64(0)
 
-	flushBatch := func(root maintenanceRoot, storagePolicy OrderedRootStoragePolicy) error {
+	flushBatch := func(root maintenanceRoot, collectionState *collectionRewriteRootState) error {
 		if len(candidates) == 0 {
 			return nil
 		}
@@ -1832,7 +1840,7 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 			lastRegisteredCreatedID = id
 			hasLastRegisteredID = true
 		}
-		if err := db.applyRewriteSwapBatchToMaintenanceRoot(root, storagePolicy, swaps, opts.SyncEachBatch); err != nil {
+		if err := db.applyRewriteSwapBatchToMaintenanceRoot(root, collectionState, swaps, opts.SyncEachBatch); err != nil {
 			return err
 		}
 		candidates = candidates[:0]
@@ -1866,20 +1874,13 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		closeRewriteSnapshot(&err, snap)
 		return stats, err
 	}
-	rootPolicies := make([]OrderedRootStoragePolicy, len(roots))
-	for i, root := range roots {
-		if root.kind != maintenanceRootCollection || root.rootID == 0 {
-			continue
-		}
-		storagePolicy, err := valueLogRewriteCollectionRootStoragePolicy(snap.idx.pager, root.rootID)
-		if err != nil {
-			closeRewriteSnapshot(&err, snap)
-			return stats, fmt.Errorf("vlog-rewrite: inspect collection root %q storage: %w", string(root.descriptorKey), err)
-		}
-		rootPolicies[i] = storagePolicy
+	collectionStates, err := valueLogRewriteCollectionRootStates(snap, roots)
+	if err != nil {
+		closeRewriteSnapshot(&err, snap)
+		return stats, err
 	}
 	stopScanning := false
-	scanRoot := func(root maintenanceRoot, storagePolicy OrderedRootStoragePolicy) error {
+	scanRoot := func(root maintenanceRoot, collectionState *collectionRewriteRootState) error {
 		if root.rootID == 0 {
 			return nil
 		}
@@ -1938,7 +1939,7 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 			})
 			selectedSourceBytes += sourceBytes
 			if len(candidates) >= batchSize {
-				if err := flushBatch(root, storagePolicy); err != nil {
+				if err := flushBatch(root, collectionState); err != nil {
 					return err
 				}
 			}
@@ -1951,7 +1952,7 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 			return err
 		}
 		if canceledErr == nil {
-			if err := flushBatch(root, storagePolicy); err != nil {
+			if err := flushBatch(root, collectionState); err != nil {
 				return err
 			}
 		} else {
@@ -1966,7 +1967,7 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		if stopScanning || canceledErr != nil {
 			break
 		}
-		if err := scanRoot(root, rootPolicies[i]); err != nil {
+		if err := scanRoot(root, collectionStates[i]); err != nil {
 			closeRewriteSnapshot(&err, snap)
 			return stats, err
 		}
@@ -2256,6 +2257,59 @@ func scanValueLogFileMaxRID(seg *valuelog.File) (uint64, error) {
 	return maxRID, nil
 }
 
+func valueLogRewriteCollectionRootStates(snap *Snapshot, roots []maintenanceRoot) ([]*collectionRewriteRootState, error) {
+	states := make([]*collectionRewriteRootState, len(roots))
+	if snap == nil || snap.state == nil || snap.idx == nil || snap.idx.pager == nil {
+		return states, nil
+	}
+	var (
+		descriptors       []vacuumCollectionRootDescriptor
+		descriptorsLoaded bool
+	)
+	for i, root := range roots {
+		if root.kind != maintenanceRootCollection || root.rootID == 0 {
+			continue
+		}
+		if !descriptorsLoaded {
+			var err error
+			descriptors, err = vacuumCollectCollectionRootDescriptors(snap.idx.pager, &snap.reader, snap.state.SystemRootPageID)
+			if err != nil {
+				return nil, fmt.Errorf("vlog-rewrite: collect collection root descriptors: %w", err)
+			}
+			descriptorsLoaded = true
+		}
+		storagePolicy, err := valueLogRewriteCollectionRootStoragePolicy(snap.idx.pager, root.rootID)
+		if err != nil {
+			return nil, fmt.Errorf("vlog-rewrite: inspect collection root %q storage: %w", string(root.descriptorKey), err)
+		}
+		aliases := valueLogRewriteCollectionRootDescriptorAliases(descriptors, root.rootID)
+		if len(aliases) == 0 && len(root.descriptorKey) > 0 {
+			aliases = append(aliases, append([]byte(nil), root.descriptorKey...))
+		}
+		states[i] = &collectionRewriteRootState{
+			descriptorKey:     append([]byte(nil), root.descriptorKey...),
+			descriptorAliases: aliases,
+			rootID:            root.rootID,
+			systemRoot:        snap.state.SystemRootPageID,
+			storagePolicy:     storagePolicy,
+		}
+	}
+	return states, nil
+}
+
+func valueLogRewriteCollectionRootDescriptorAliases(descriptors []vacuumCollectionRootDescriptor, rootID uint64) [][]byte {
+	if rootID == 0 {
+		return nil
+	}
+	var aliases [][]byte
+	for _, descriptor := range descriptors {
+		if descriptor.rootID == rootID {
+			aliases = append(aliases, append([]byte(nil), descriptor.key...))
+		}
+	}
+	return aliases
+}
+
 func (db *DB) applyRewriteSwapBatch(swaps []rewriteSwap, sync bool) error {
 	if len(swaps) == 0 {
 		return nil
@@ -2272,14 +2326,14 @@ func (db *DB) applyRewriteSwapBatch(swaps []rewriteSwap, sync bool) error {
 	return db.applyRewriteSwapBatchSerialized(swaps, sync)
 }
 
-func (db *DB) applyRewriteSwapBatchToMaintenanceRoot(root maintenanceRoot, storagePolicy OrderedRootStoragePolicy, swaps []rewriteSwap, sync bool) error {
+func (db *DB) applyRewriteSwapBatchToMaintenanceRoot(root maintenanceRoot, collectionState *collectionRewriteRootState, swaps []rewriteSwap, sync bool) error {
 	switch root.kind {
 	case maintenanceRootUser:
 		return db.applyRewriteSwapBatch(swaps, sync)
 	case maintenanceRootSystem:
 		return db.applyRewriteSwapBatchToSystemRoot(swaps, sync)
 	case maintenanceRootCollection:
-		return db.applyRewriteSwapBatchToCollectionRoot(root.descriptorKey, storagePolicy, swaps, sync)
+		return db.applyRewriteSwapBatchToCollectionRoot(collectionState, swaps, sync)
 	default:
 		return fmt.Errorf("vlog-rewrite: unknown maintenance root kind %d", root.kind)
 	}
@@ -2332,11 +2386,11 @@ func (db *DB) applyRewriteSwapBatchToSystemRoot(swaps []rewriteSwap, sync bool) 
 	return nil
 }
 
-func (db *DB) applyRewriteSwapBatchToCollectionRoot(descriptorKey []byte, _ OrderedRootStoragePolicy, swaps []rewriteSwap, sync bool) error {
+func (db *DB) applyRewriteSwapBatchToCollectionRoot(target *collectionRewriteRootState, swaps []rewriteSwap, sync bool) error {
 	if len(swaps) == 0 {
 		return nil
 	}
-	if len(descriptorKey) == 0 {
+	if target == nil || len(target.descriptorKey) == 0 {
 		return errors.New("vlog-rewrite: missing collection root descriptor key")
 	}
 
@@ -2364,16 +2418,23 @@ func (db *DB) applyRewriteSwapBatchToCollectionRoot(descriptorKey []byte, _ Orde
 		return nil
 	}
 
-	reader := newValueReader(state.ValueLogSet)
-	collectionRoot, descriptorAliases, ok, err := lookupCollectionRootDescriptorAliases(idx.pager, reader, systemRoot, descriptorKey)
-	if err != nil || !ok || collectionRoot == 0 {
-		return err
+	if target.systemRoot != systemRoot || target.rootID == 0 || len(target.descriptorAliases) == 0 {
+		reader := newValueReader(state.ValueLogSet)
+		collectionRoot, descriptorAliases, ok, err := lookupCollectionRootDescriptorAliases(idx.pager, reader, systemRoot, target.descriptorKey)
+		if err != nil || !ok || collectionRoot == 0 {
+			return err
+		}
+		currentStoragePolicy, err := valueLogRewriteCollectionRootStoragePolicy(idx.pager, collectionRoot)
+		if err != nil {
+			return fmt.Errorf("vlog-rewrite: inspect current collection root %q storage: %w", string(target.descriptorKey), err)
+		}
+		target.rootID = collectionRoot
+		target.descriptorAliases = descriptorAliases
+		target.systemRoot = systemRoot
+		target.storagePolicy = currentStoragePolicy
 	}
-	currentStoragePolicy, err := valueLogRewriteCollectionRootStoragePolicy(idx.pager, collectionRoot)
-	if err != nil {
-		return fmt.Errorf("vlog-rewrite: inspect current collection root %q storage: %w", string(descriptorKey), err)
-	}
-	rootOpts, err := db.orderedRootPublishOptionsForPolicy(currentStoragePolicy)
+	collectionRoot := target.rootID
+	rootOpts, err := db.orderedRootPublishOptionsForPolicy(target.storagePolicy)
 	if err != nil {
 		return err
 	}
@@ -2398,8 +2459,8 @@ func (db *DB) applyRewriteSwapBatchToCollectionRoot(descriptorKey []byte, _ Orde
 
 	encodedRoot := make([]byte, 8)
 	binary.BigEndian.PutUint64(encodedRoot, newCollectionRoot)
-	systemDelta := memtable.NewAppendOnlyWithEntryCapacity(len(descriptorAliases))
-	for _, aliasKey := range descriptorAliases {
+	systemDelta := memtable.NewAppendOnlyWithEntryCapacity(len(target.descriptorAliases))
+	for _, aliasKey := range target.descriptorAliases {
 		systemDelta.Set(aliasKey, encodedRoot)
 	}
 	systemDelta.Freeze()
@@ -2416,6 +2477,8 @@ func (db *DB) applyRewriteSwapBatchToCollectionRoot(descriptorKey []byte, _ Orde
 		return err
 	}
 	vlogRefDelta = nil
+	target.rootID = newCollectionRoot
+	target.systemRoot = newSystemRoot
 	db.clearLeafGenerationReachabilityCaches()
 	return nil
 }
