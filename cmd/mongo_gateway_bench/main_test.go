@@ -54,6 +54,26 @@ func TestCollectDiskSnapshotBreakdown(t *testing.T) {
 	}
 }
 
+func TestValidateResettableTreeDBDirRejectsDangerousPaths(t *testing.T) {
+	for _, dir := range []string{"", ".", "..", string(os.PathSeparator), os.TempDir()} {
+		if _, err := validateResettableTreeDBDir(dir); err == nil {
+			t.Fatalf("validateResettableTreeDBDir(%q) err=nil want error", dir)
+		}
+	}
+	safe := filepath.Join(t.TempDir(), "treedb")
+	if got, err := validateResettableTreeDBDir(safe); err != nil || got == "" {
+		t.Fatalf("validate safe dir got/err=%q/%v", got, err)
+	}
+}
+
+func TestRedactMongoURI(t *testing.T) {
+	got := redactMongoURI("mongodb://user:secret@127.0.0.1:27017/db?authSource=admin")
+	want := "mongodb://user@127.0.0.1:27017/db?authSource=admin"
+	if got != want {
+		t.Fatalf("redacted URI=%q want %q", got, want)
+	}
+}
+
 func TestParseConfigValidation(t *testing.T) {
 	if _, err := parseConfig([]string{"-target", "bad"}); err == nil {
 		t.Fatal("bad target accepted")

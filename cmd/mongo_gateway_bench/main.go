@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"math"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -106,7 +107,9 @@ func run(parent context.Context, args []string) error {
 		return err
 	}
 	defer func() {
-		_ = target.cleanup(context.Background())
+		cleanupCtx, cancelCleanup := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancelCleanup()
+		_ = target.cleanup(cleanupCtx)
 	}()
 
 	result, err := runBenchmark(ctx, cfg, target)
@@ -184,10 +187,7 @@ func openTreeDBTarget(ctx context.Context, cfg config) (*benchTarget, error) {
 		dir = tmp
 		removeDir = !cfg.KeepTreeDBDir
 	} else {
-		if err := os.RemoveAll(dir); err != nil {
-			return nil, err
-		}
-		if err := os.MkdirAll(dir, 0o700); err != nil {
+		if err := resetTreeDBDir(dir); err != nil {
 			return nil, err
 		}
 	}
@@ -249,8 +249,8 @@ func openTreeDBTarget(ctx context.Context, cfg config) (*benchTarget, error) {
 		select {
 		case err := <-serveErr:
 			errs = append(errs, err)
-		case <-time.After(time.Second):
-			errs = append(errs, errors.New("timed out waiting for gateway serve loop"))
+		case <-cleanupCtx.Done():
+			errs = append(errs, cleanupCtx.Err())
 		}
 		errs = append(errs, manager.FlushAll())
 		errs = append(errs, db.Close())
@@ -260,6 +260,44 @@ func openTreeDBTarget(ctx context.Context, cfg config) (*benchTarget, error) {
 		return errors.Join(errs...)
 	}
 	return &benchTarget{client: client, db: db, collections: manager, treedbDir: dir, cleanup: cleanup}, nil
+}
+
+func resetTreeDBDir(dir string) error {
+	abs, err := validateResettableTreeDBDir(dir)
+	if err != nil {
+		return err
+	}
+	if err := os.RemoveAll(abs); err != nil {
+		return err
+	}
+	return os.MkdirAll(abs, 0o700)
+}
+
+func validateResettableTreeDBDir(dir string) (string, error) {
+	clean := filepath.Clean(strings.TrimSpace(dir))
+	if clean == "" || clean == "." || clean == ".." {
+		return "", fmt.Errorf("unsafe treedb-dir %q", dir)
+	}
+	abs, err := filepath.Abs(clean)
+	if err != nil {
+		return "", err
+	}
+	root := string(os.PathSeparator)
+	if abs == root || filepath.Dir(abs) == root {
+		return "", fmt.Errorf("unsafe treedb-dir %q", dir)
+	}
+	if home, err := os.UserHomeDir(); err == nil && (abs == home || filepath.Dir(abs) == home) {
+		return "", fmt.Errorf("unsafe treedb-dir %q", dir)
+	}
+	if cwd, err := os.Getwd(); err == nil && abs == cwd {
+		return "", fmt.Errorf("unsafe treedb-dir %q", dir)
+	}
+	if tmp := os.TempDir(); tmp != "" {
+		if tmpAbs, err := filepath.Abs(tmp); err == nil && abs == tmpAbs {
+			return "", fmt.Errorf("unsafe treedb-dir %q", dir)
+		}
+	}
+	return abs, nil
 }
 
 func openMongoTarget(ctx context.Context, cfg config) (*benchTarget, error) {
@@ -285,6 +323,20 @@ func openMongoTarget(ctx context.Context, cfg config) (*benchTarget, error) {
 			return client.Disconnect(cleanupCtx)
 		},
 	}, nil
+}
+
+func redactMongoURI(rawURI string) string {
+	parsed, err := url.Parse(rawURI)
+	if err != nil || parsed.User == nil {
+		return rawURI
+	}
+	username := parsed.User.Username()
+	if username == "" {
+		parsed.User = nil
+	} else {
+		parsed.User = url.User(username)
+	}
+	return parsed.String()
 }
 
 func serveLoop(ctx context.Context, ln net.Listener, server *mongogateway.Server, serveErr chan<- error) {
@@ -317,7 +369,7 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget) (*benchm
 	if cfg.Target == "treedb" {
 		result.TreeDBDir = target.treedbDir
 	} else {
-		result.MongoURI = cfg.MongoURI
+		result.MongoURI = redactMongoURI(cfg.MongoURI)
 	}
 
 	if err := createIndexes(ctx, coll, cfg.SecondaryIndexes); err != nil {
