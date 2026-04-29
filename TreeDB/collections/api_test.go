@@ -121,8 +121,11 @@ func TestCollectionValueLogRewriteOffline_RoundTripWithCompressedSecondaryIndexe
 		if closed {
 			return nil
 		}
+		if err := cleanup(); err != nil {
+			return err
+		}
 		closed = true
-		return cleanup()
+		return nil
 	}
 	t.Cleanup(func() { _ = closeDB() })
 
