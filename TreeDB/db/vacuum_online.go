@@ -394,19 +394,29 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 			return errors.New("vacuum: missing db state")
 		}
 
+		reader := newValueReader(state.ValueLogSet)
+		collectionRootReplacements, err := vacuumRewriteCollectionRoots(oldGen.pager, reader, state.SystemRootPageID, newAlloc, newPager)
+		if err != nil {
+			db.writeMu.Unlock()
+			cleanupNewPager()
+			return err
+		}
+		if err := checkGrowth(); err != nil {
+			db.writeMu.Unlock()
+			cleanupNewPager()
+			return err
+		}
+
 		var newSysRoot uint64
-		if db.indexOuterLeavesInValueLog {
+		if db.indexOuterLeavesInValueLog && len(collectionRootReplacements) == 0 {
 			newSysRoot, err = vacuumClonePagerTreeWithLeafRefs(oldGen.pager, state.SystemRootPageID, newAlloc, newPager)
 		} else {
-			sysIter := tree.New(oldGen.pager, newValueReader(state.ValueLogSet), state.SystemRootPageID).
-				IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
-			newSysRoot, err = bulk.BuildWithOptions(sysIter, newAlloc, newPager, bulk.BuildOptions{
+			newSysRoot, err = vacuumBuildSystemRoot(oldGen.pager, reader, state.SystemRootPageID, newAlloc, newPager, bulk.BuildOptions{
 				LeafPrefixCompression: db.leafPrefixCompression,
 				LeafColumnar:          db.indexColumnarLeaves,
 				PackedValuePtr:        db.indexPackedValuePtr,
 				InternalBaseDelta:     db.indexInternalBaseDelta,
-			})
-			_ = sysIter.Close()
+			}, collectionRootReplacements)
 		}
 		if err != nil {
 			db.writeMu.Unlock()

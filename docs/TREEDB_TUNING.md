@@ -296,7 +296,7 @@ without a separate offline tool. These hooks execute inline during shutdown.
 TreeDB exposes a few knobs that directly influence page-ID locality and index
 fragmentation under churn:
 
-- `Options.PreferAppendAlloc` (default: false in durable profile, true in fast)
+- `Options.PreferAppendAlloc` (default: false)
   - Bypasses freelist reuse and appends new pages to preserve scan locality.
   - Trades disk growth for better sequential layout; vacuum reclaims space later.
 - `Options.FreelistRegionPages` + `Options.FreelistRegionRadius`

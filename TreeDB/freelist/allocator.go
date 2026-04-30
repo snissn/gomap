@@ -20,6 +20,8 @@ type Allocator struct {
 	regionPages  uint64
 	regionRadius int
 
+	stats Stats
+
 	// preferAppend makes Alloc ignore the freelist and allocate new pages by
 	// extending the file. This improves locality at the cost of reclaiming space
 	// later via vacuum.
@@ -52,9 +54,13 @@ var TestHookFreeBeforeChecksum func()
 
 // Stats reports freelist metadata under the allocator lock.
 type Stats struct {
-	Head    uint64
-	Pages   uint64
-	FreeIDs uint64
+	Head             uint64
+	Pages            uint64
+	FreeIDs          uint64
+	AllocPages       uint64
+	AppendAllocPages uint64
+	ReuseAllocPages  uint64
+	FreePages        uint64
 }
 
 // ReclaimablePages returns the total number of reclaimable pages tracked in the freelist.
@@ -127,11 +133,14 @@ func (a *Allocator) AllocMany(count int, hint uint64) ([]uint64, error) {
 	ids := make([]uint64, 0, count)
 	for len(ids) < count {
 		if a.preferAppend || a.head == 0 {
-			id, err := a.pager.Alloc(count - len(ids))
+			allocCount := count - len(ids)
+			id, err := a.pager.Alloc(allocCount)
 			if err != nil {
 				return ids, err
 			}
-			for i := 0; i < count-len(ids); i++ {
+			a.stats.AllocPages += uint64(allocCount)
+			a.stats.AppendAllocPages += uint64(allocCount)
+			for i := 0; i < allocCount; i++ {
 				ids = append(ids, id+uint64(i))
 			}
 			a.lastAlloc = ids[len(ids)-1]
@@ -158,6 +167,8 @@ func (a *Allocator) AllocMany(count int, hint uint64) ([]uint64, error) {
 			a.head = next
 			a.pager.MarkUnverified(recycled)
 			a.lastAlloc = recycled
+			a.stats.AllocPages++
+			a.stats.ReuseAllocPages++
 			ids = append(ids, recycled)
 			continue
 		}
@@ -168,6 +179,8 @@ func (a *Allocator) AllocMany(count int, hint uint64) ([]uint64, error) {
 			clearFreelistIDAt(data, idx)
 			a.pager.MarkUnverified(id)
 			a.lastAlloc = id
+			a.stats.AllocPages++
+			a.stats.ReuseAllocPages++
 			ids = append(ids, id)
 			countFree--
 		}
@@ -183,6 +196,8 @@ func (a *Allocator) allocLocked(hint uint64) (uint64, error) {
 		id, err := a.pager.Alloc(1)
 		if err == nil {
 			a.lastAlloc = id
+			a.stats.AllocPages++
+			a.stats.AppendAllocPages++
 		}
 		return id, err
 	}
@@ -191,6 +206,8 @@ func (a *Allocator) allocLocked(hint uint64) (uint64, error) {
 		id, err := a.pager.Alloc(1)
 		if err == nil {
 			a.lastAlloc = id
+			a.stats.AllocPages++
+			a.stats.AppendAllocPages++
 		}
 		return id, err
 	}
@@ -245,6 +262,8 @@ func (a *Allocator) allocLocked(hint uint64) (uint64, error) {
 
 				a.pager.MarkUnverified(id)
 				a.lastAlloc = id
+				a.stats.AllocPages++
+				a.stats.ReuseAllocPages++
 				return id, nil
 			}
 		}
@@ -256,6 +275,8 @@ func (a *Allocator) allocLocked(hint uint64) (uint64, error) {
 
 		a.pager.MarkUnverified(id)
 		a.lastAlloc = id
+		a.stats.AllocPages++
+		a.stats.ReuseAllocPages++
 		return id, nil
 	}
 
@@ -266,6 +287,8 @@ func (a *Allocator) allocLocked(hint uint64) (uint64, error) {
 
 	a.pager.MarkUnverified(recycled)
 	a.lastAlloc = recycled
+	a.stats.AllocPages++
+	a.stats.ReuseAllocPages++
 	return recycled, nil
 }
 
@@ -290,7 +313,11 @@ func (a *Allocator) Free(id uint64) error {
 
 	if a.head == 0 {
 		// Start new list with this page
-		return a.initHead(id, 0)
+		if err := a.initHead(id, 0); err != nil {
+			return err
+		}
+		a.stats.FreePages++
+		return nil
 	}
 
 	// Load Head
@@ -316,12 +343,17 @@ func (a *Allocator) Free(id uint64) error {
 			TestHookFreeBeforeChecksum()
 		}
 		n.UpdateChecksum()
+		a.stats.FreePages++
 		return nil
 	}
 
 	// Head is full.
 	// Use `id` as NEW Head.
-	return a.initHead(id, a.head)
+	if err := a.initHead(id, a.head); err != nil {
+		return err
+	}
+	a.stats.FreePages++
+	return nil
 }
 
 func (a *Allocator) initHead(id, next uint64) error {
@@ -352,7 +384,26 @@ func (a *Allocator) initHead(id, next uint64) error {
 func (a *Allocator) Stats(pageLimit uint64) (Stats, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return readStatsLocked(a.pager, a.head, pageLimit)
+	out, err := readStatsLocked(a.pager, a.head, pageLimit)
+	out.AllocPages = a.stats.AllocPages
+	out.AppendAllocPages = a.stats.AppendAllocPages
+	out.ReuseAllocPages = a.stats.ReuseAllocPages
+	out.FreePages = a.stats.FreePages
+	return out, err
+}
+
+// Counters reports cheap in-memory allocator counters without walking freelist
+// pages. Use Stats when callers explicitly need on-disk reclaimable page counts.
+func (a *Allocator) Counters() Stats {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return Stats{
+		Head:             a.head,
+		AllocPages:       a.stats.AllocPages,
+		AppendAllocPages: a.stats.AppendAllocPages,
+		ReuseAllocPages:  a.stats.ReuseAllocPages,
+		FreePages:        a.stats.FreePages,
+	}
 }
 
 func readStatsLocked(p *pager.Pager, head uint64, pageLimit uint64) (Stats, error) {

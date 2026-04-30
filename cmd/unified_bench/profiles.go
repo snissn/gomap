@@ -64,11 +64,11 @@ func init() {
 
 	profiles = map[string]Profile{
 		"fast": {
-			Description: "Maximize throughput: disables fsync for supported DBs; for TreeDB this mirrors treedb.ProfileFast (WAL off, relaxed read integrity, append-friendly index allocation, Celestia-aligned auto/snappy/balanced value-log compression). UNSAFE for production data.",
+			Description: "Maximize throughput: disables fsync for supported DBs; for TreeDB this mirrors treedb.ProfileFast (WAL off, relaxed read integrity, normal page reuse, Celestia-aligned auto/snappy/balanced value-log compression). UNSAFE for production data.",
 			Apply:       applyFast,
 		},
 		"wal_on_fast": {
-			Description: "TreeDB fast WAL-on profile: mirrors treedb.ProfileWALOnFast (WAL on, relaxed sync/read integrity, append-friendly index allocation, Celestia-aligned auto/snappy/balanced value-log compression).",
+			Description: "TreeDB fast WAL-on profile: mirrors treedb.ProfileWALOnFast (WAL on, relaxed sync/read integrity, normal page reuse, Celestia-aligned auto/snappy/balanced value-log compression).",
 			Apply:       applyWALOnFast,
 		},
 		"unsafe": { // Alias for fast

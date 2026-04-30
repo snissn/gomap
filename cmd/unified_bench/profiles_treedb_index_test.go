@@ -314,8 +314,8 @@ func TestApplyProfile_FastAndWALOnFastEnableIndexOptimizations(t *testing.T) {
 	if got := *treedbVlogDictProbeIntervalBytes; got != 32<<20 {
 		t.Fatalf("expected fast profile to set treedb-vlog-dict-probe-interval-bytes=32MiB, got %d", got)
 	}
-	if !*treedbPreferAppendAlloc {
-		t.Fatalf("expected fast profile to set treedb-prefer-append-alloc")
+	if *treedbPreferAppendAlloc {
+		t.Fatalf("expected fast profile to leave treedb-prefer-append-alloc=false")
 	}
 	if !*treedbDisableWAL {
 		t.Fatalf("expected fast profile to disable WAL")
@@ -349,8 +349,8 @@ func TestApplyProfile_FastAndWALOnFastEnableIndexOptimizations(t *testing.T) {
 	if got := *treedbVlogDictProbeIntervalBytes; got != 32<<20 {
 		t.Fatalf("expected wal_on_fast profile to set treedb-vlog-dict-probe-interval-bytes=32MiB, got %d", got)
 	}
-	if !*treedbPreferAppendAlloc {
-		t.Fatalf("expected wal_on_fast profile to set treedb-prefer-append-alloc")
+	if *treedbPreferAppendAlloc {
+		t.Fatalf("expected wal_on_fast profile to leave treedb-prefer-append-alloc=false")
 	}
 	if *treedbDisableWAL {
 		t.Fatalf("expected wal_on_fast profile to keep WAL enabled")

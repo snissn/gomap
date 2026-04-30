@@ -21,6 +21,13 @@ type Graveyard struct {
 	retiredPages []batch // Ordered by CommitSeq
 }
 
+type GraveyardStats struct {
+	Batches uint64
+	Pages   uint64
+	MinSeq  uint64
+	MaxSeq  uint64
+}
+
 func NewGraveyard() *Graveyard {
 	return &Graveyard{
 		retiredPages: make([]batch, 0, 64),
@@ -168,4 +175,19 @@ func (g *Graveyard) Reinsert(seq uint64, pages []uint64) {
 		g.retiredPages = append(g.retiredPages[:insertIdx+1], g.retiredPages[insertIdx:]...)
 		g.retiredPages[insertIdx] = val
 	}
+}
+
+func (g *Graveyard) Stats() GraveyardStats {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	out := GraveyardStats{Batches: uint64(len(g.retiredPages))}
+	for i, b := range g.retiredPages {
+		if i == 0 {
+			out.MinSeq = b.seq
+		}
+		out.MaxSeq = b.seq
+		out.Pages += uint64(len(b.ids))
+	}
+	return out
 }
