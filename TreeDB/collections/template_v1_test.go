@@ -2,6 +2,7 @@ package collections
 
 import (
 	"bytes"
+	"strings"
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -600,6 +601,18 @@ func TestTemplateV1UnbufferedSingleInsertUsesTemplateRoot(t *testing.T) {
 		t.Fatalf("lookup template: %v", err)
 	}
 	_ = snap.Close()
+}
+
+func TestTemplateV1RejectsOversizedArrayCount(t *testing.T) {
+	pos := 0
+	_, err := decodeTemplateV1Value([]byte{
+		templateV1KindArray,
+		2,
+		templateV1KindNull,
+	}, &pos, nil)
+	if err == nil || !strings.Contains(err.Error(), "array length") {
+		t.Fatalf("decode oversized array err=%v, want array length error", err)
+	}
 }
 
 func TestTemplateV1UpdatePublishesNewTemplateShape(t *testing.T) {

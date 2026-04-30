@@ -57,7 +57,7 @@ func TestReportFromMatrix(t *testing.T) {
 		"Largest TreeDB ops/sec lead: `load_insert_many`",
 		"Largest MongoDB ops/sec lead: `id_find_one`",
 		"| 100 | 1 | `load_insert_many` | 10000 | 5000 | 2.00x | 20.0 | 40.0 |",
-		"| 100 | 1 | 1000 B | 10.0 B | 2.00 KiB | 20.5 B | 1.27 KiB | 1.46 KiB | 4.00 KiB | 41.0 B | 0.67x | 0.50x |",
+		"| 100 | 1 | checkpoint | 1000 B | 10.0 B | 2.00 KiB | 20.5 B | 1.27 KiB | 1.46 KiB | 4.00 KiB | 41.0 B | 0.67x | 0.50x |",
 	} {
 		if !strings.Contains(report, want) {
 			t.Fatalf("report missing %q\n%s", want, report)
@@ -135,6 +135,12 @@ func TestTreeDBBytesPrefersMaintenanceSnapshot(t *testing.T) {
 	})
 	if !ok || got != 1_000 {
 		t.Fatalf("treeDBBytes=%d ok=%v want maintenance snapshot", got, ok)
+	}
+	got, label, ok := treeDBBytesSnapshot(benchmarkResult{
+		TreeDBDiskAfterCheckpoint: &diskSnapshot{TotalBytes: 2_000},
+	})
+	if !ok || got != 2_000 || label != "checkpoint" {
+		t.Fatalf("treeDBBytesSnapshot=%d %q ok=%v want checkpoint", got, label, ok)
 	}
 }
 

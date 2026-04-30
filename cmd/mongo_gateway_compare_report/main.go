@@ -403,14 +403,15 @@ func highlightLines(cells []cellComparison) []string {
 		lines = append(lines, "No phase in this matrix had MongoDB ahead on ops/sec.")
 	}
 	if cell := largestDiskCell(cells); cell != nil {
-		treeBytes, _ := treeDBBytes(cell.TreeDB.Result)
+		treeBytes, treeSnapshot, _ := treeDBBytesSnapshot(cell.TreeDB.Result)
 		treePhysical := cell.TreeDB.Row.PhysicalBytes
 		mongoData, _ := mongoDataBytes(cell.Mongo.Result)
 		mongoTotal, _ := mongoDBStatsTotalBytes(cell.Mongo.Result)
 		mongoPhysical := cell.Mongo.Row.PhysicalBytes
-		lines = append(lines, fmt.Sprintf("Largest cell disk: at %d docs / %d indexes, TreeDB optimized files used %s (%s/doc), TreeDB physical du was %s, MongoDB dbStats dataSize was %s, MongoDB dbStats totalSize was %s, and MongoDB physical du was %s (%s/doc).",
+		lines = append(lines, fmt.Sprintf("Largest cell disk: at %d docs / %d indexes, TreeDB %s snapshot used %s (%s/doc), TreeDB physical du was %s, MongoDB dbStats dataSize was %s, MongoDB dbStats totalSize was %s, and MongoDB physical du was %s (%s/doc).",
 			cell.Key.Documents,
 			cell.Key.SecondaryIndexes,
+			treeSnapshot,
 			formatBytes(treeBytes),
 			formatBytesPerDoc(treeBytes, cell.Key.Documents),
 			formatOptionalBytes(treePhysical),
@@ -459,17 +460,18 @@ func cellDiskScore(cell cellComparison) int64 {
 
 func renderDiskTable(b *strings.Builder, cells []cellComparison) {
 	b.WriteString("## Disk Summary\n\n")
-	b.WriteString("| docs | indexes | TreeDB optimized | TreeDB optimized bytes/doc | TreeDB physical du | TreeDB physical bytes/doc | MongoDB dbStats dataSize | MongoDB dbStats totalSize | MongoDB physical du | MongoDB physical bytes/doc | TreeDB / MongoDB dbStats totalSize | TreeDB / MongoDB physical |\n")
-	b.WriteString("| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n")
+	b.WriteString("| docs | indexes | TreeDB snapshot | TreeDB bytes | TreeDB bytes/doc | TreeDB physical du | TreeDB physical bytes/doc | MongoDB dbStats dataSize | MongoDB dbStats totalSize | MongoDB physical du | MongoDB physical bytes/doc | TreeDB / MongoDB dbStats totalSize | TreeDB / MongoDB physical |\n")
+	b.WriteString("| ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n")
 	for _, cell := range cells {
-		treeBytes, _ := treeDBBytes(cell.TreeDB.Result)
+		treeBytes, treeSnapshot, _ := treeDBBytesSnapshot(cell.TreeDB.Result)
 		treePhysical := cell.TreeDB.Row.PhysicalBytes
 		mongoData, _ := mongoDataBytes(cell.Mongo.Result)
 		mongoTotal, _ := mongoDBStatsTotalBytes(cell.Mongo.Result)
 		mongoPhysical := cell.Mongo.Row.PhysicalBytes
-		fmt.Fprintf(b, "| %d | %d | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s |\n",
+		fmt.Fprintf(b, "| %d | %d | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s |\n",
 			cell.Key.Documents,
 			cell.Key.SecondaryIndexes,
+			treeSnapshot,
 			formatBytes(treeBytes),
 			formatBytesPerDoc(treeBytes, cell.Key.Documents),
 			formatOptionalBytes(treePhysical),
@@ -562,6 +564,7 @@ func writeSummaryTSV(path string, cells []cellComparison) error {
 		"mongo_p95_us",
 		"treedb_p99_us",
 		"mongo_p99_us",
+		"treedb_disk_snapshot",
 		"treedb_disk_bytes",
 		"treedb_physical_bytes",
 		"mongo_dbstats_data_size_bytes",
@@ -575,7 +578,7 @@ func writeSummaryTSV(path string, cells []cellComparison) error {
 	}
 	for _, cmp := range allPhaseComparisons(cells) {
 		cell := findCell(cells, cmp.Cell)
-		treeBytes, _ := treeDBBytes(cell.TreeDB.Result)
+		treeBytes, treeSnapshot, _ := treeDBBytesSnapshot(cell.TreeDB.Result)
 		treePhysical := cell.TreeDB.Row.PhysicalBytes
 		mongoData, _ := mongoDataBytes(cell.Mongo.Result)
 		mongoTotal, _ := mongoDBStatsTotalBytes(cell.Mongo.Result)
@@ -592,6 +595,7 @@ func writeSummaryTSV(path string, cells []cellComparison) error {
 			formatRawFloat(cmp.HasMongo, cmp.MongoPhase.LatencyMicros.P95),
 			formatRawFloat(cmp.HasTreeDB, cmp.TreeDBPhase.LatencyMicros.P99),
 			formatRawFloat(cmp.HasMongo, cmp.MongoPhase.LatencyMicros.P99),
+			treeSnapshot,
 			strconv.FormatInt(treeBytes, 10),
 			strconv.FormatInt(treePhysical, 10),
 			strconv.FormatInt(mongoData, 10),
@@ -618,16 +622,21 @@ func findCell(cells []cellComparison, key cellKey) cellComparison {
 }
 
 func treeDBBytes(result benchmarkResult) (int64, bool) {
+	bytes, _, ok := treeDBBytesSnapshot(result)
+	return bytes, ok
+}
+
+func treeDBBytesSnapshot(result benchmarkResult) (int64, string, bool) {
 	if result.TreeDBDiskAfterMaintenance != nil {
-		return result.TreeDBDiskAfterMaintenance.TotalBytes, true
+		return result.TreeDBDiskAfterMaintenance.TotalBytes, "maintenance", true
 	}
 	if result.TreeDBDiskAfterCheckpoint != nil {
-		return result.TreeDBDiskAfterCheckpoint.TotalBytes, true
+		return result.TreeDBDiskAfterCheckpoint.TotalBytes, "checkpoint", true
 	}
 	if result.TreeDBDiskAfterLoad != nil {
-		return result.TreeDBDiskAfterLoad.TotalBytes, true
+		return result.TreeDBDiskAfterLoad.TotalBytes, "load", true
 	}
-	return 0, false
+	return 0, "", false
 }
 
 func mongoDataBytes(result benchmarkResult) (int64, bool) {
