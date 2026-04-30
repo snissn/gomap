@@ -1018,7 +1018,7 @@ func (f *File) readViaMmapAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 		if err != nil {
 			return nil, err, true
 		}
-		dst, err = appendMaybeDecodeLeafLogPayload(f.ID, f.Path, dst[:oldLen], dst[oldLen:])
+		dst, err = f.appendMaybeDecodeLeafLogPayload(dst[:oldLen], dst[oldLen:])
 		if err != nil {
 			return nil, err, true
 		}
@@ -1074,7 +1074,7 @@ func (f *File) readViaMmapAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 				if err != nil {
 					return nil, err, true
 				}
-				dst, err = appendMaybeDecodeLeafLogPayload(f.ID, f.Path, dst[:oldLen], dst[oldLen:])
+				dst, err = f.appendMaybeDecodeLeafLogPayload(dst[:oldLen], dst[oldLen:])
 				if err != nil {
 					return nil, err, true
 				}
@@ -1124,7 +1124,7 @@ func (f *File) readViaMmapAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 		if err != nil {
 			return nil, err, true
 		}
-		dst, err = appendMaybeDecodeLeafLogPayload(f.ID, f.Path, dst[:oldLen], dst[oldLen:])
+		dst, err = f.appendMaybeDecodeLeafLogPayload(dst[:oldLen], dst[oldLen:])
 		if err != nil {
 			return nil, err, true
 		}
@@ -1151,7 +1151,7 @@ func (f *File) readViaMmapAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 		if err != nil {
 			return nil, err, true
 		}
-		dst, err = appendMaybeDecodeLeafLogPayload(f.ID, f.Path, dst[:oldLen], dst[oldLen:])
+		dst, err = f.appendMaybeDecodeLeafLogPayload(dst[:oldLen], dst[oldLen:])
 		if err != nil {
 			return nil, err, true
 		}
@@ -1214,7 +1214,7 @@ func (f *File) readViaMmapAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 		f.setCacheRawLocked(nil, false)
 		f.cacheStart.Store(start)
 		f.cacheMu.Unlock()
-		dst, err = appendMaybeDecodeLeafLogPayload(f.ID, f.Path, dst[:oldLen], dst[oldLen:oldLen+int(rawLen)])
+		dst, err = f.appendMaybeDecodeLeafLogPayload(dst[:oldLen], dst[oldLen:oldLen+int(rawLen)])
 		if err != nil {
 			return nil, err, true
 		}
@@ -1279,7 +1279,7 @@ func (f *File) readViaMmapAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 	if len(dst) < oldLen {
 		return nil, ErrCorrupt, true
 	}
-	dst, err = appendMaybeDecodeLeafLogPayload(f.ID, f.Path, dst[:oldLen], dst[oldLen:])
+	dst, err = f.appendMaybeDecodeLeafLogPayload(dst[:oldLen], dst[oldLen:])
 	if err != nil {
 		return nil, err, true
 	}
