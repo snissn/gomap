@@ -45,6 +45,9 @@ func TestCanonicalReportKnownCompressionShape(t *testing.T) {
 
 func TestPrepareRunDirRemovesPriorCanonicalArtifacts(t *testing.T) {
 	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, runDirSentinel), []byte(schemaVersion+"\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
 	staleReport := filepath.Join(dir, "timed_matrix", "stale", "collections_report.json")
 	if err := os.MkdirAll(filepath.Dir(staleReport), 0755); err != nil {
 		t.Fatal(err)
@@ -69,6 +72,9 @@ func TestPrepareRunDirRemovesPriorCanonicalArtifacts(t *testing.T) {
 	if _, err := os.Stat(keepPath); err != nil {
 		t.Fatalf("non-canonical files should be preserved: %v", err)
 	}
+	if _, err := os.Stat(filepath.Join(dir, runDirSentinel)); err != nil {
+		t.Fatalf("run-dir sentinel should be present: %v", err)
+	}
 }
 
 func TestNormalizeRunPathsMakesOutDirAbsolute(t *testing.T) {
@@ -81,6 +87,43 @@ func TestNormalizeRunPathsMakesOutDirAbsolute(t *testing.T) {
 	}
 	if !strings.HasSuffix(cfg.OutDir, filepath.Join("relative", "bench-run")) {
 		t.Fatalf("out dir lost the requested suffix: %q", cfg.OutDir)
+	}
+}
+
+func TestValidateSafeRunDirRefusesUnsafeExistingDirectory(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "unrelated.txt"), []byte("data"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	err := validateSafeRunDir(dir)
+	if err == nil || !strings.Contains(err.Error(), "not an empty canonical benchmark run dir") {
+		t.Fatalf("expected unsafe existing directory to be rejected, err=%v", err)
+	}
+}
+
+func TestValidateSafeRunDirAllowsEmptyOrSentinelDirectory(t *testing.T) {
+	emptyDir := t.TempDir()
+	if err := validateSafeRunDir(emptyDir); err != nil {
+		t.Fatalf("empty directory should be allowed: %v", err)
+	}
+
+	sentinelDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(sentinelDir, runDirSentinel), []byte(schemaVersion+"\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sentinelDir, "unrelated.txt"), []byte("data"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateSafeRunDir(sentinelDir); err != nil {
+		t.Fatalf("sentinel directory should be allowed: %v", err)
+	}
+}
+
+func TestValidateSafeRunDirRefusesFilesystemRoot(t *testing.T) {
+	root := filepath.Clean(string(os.PathSeparator))
+	err := validateSafeRunDir(root)
+	if err == nil || !strings.Contains(err.Error(), "filesystem root") {
+		t.Fatalf("expected filesystem root to be rejected, err=%v", err)
 	}
 }
 

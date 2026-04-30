@@ -21,6 +21,7 @@ import (
 
 const schemaVersion = "collections-canonical-benchmark/v1"
 const envCanonicalCommandLine = "COLLECTION_CANONICAL_BENCH_COMMAND"
+const runDirSentinel = ".collection_canonical_bench_run"
 
 const (
 	phasePostInsert               = "post_insert"
@@ -363,6 +364,9 @@ func normalizeRunPaths(cfg *config) error {
 }
 
 func prepareRunDir(cfg config) error {
+	if err := validateSafeRunDir(cfg.OutDir); err != nil {
+		return err
+	}
 	paths := []string{
 		"logs",
 		"timed_matrix",
@@ -377,7 +381,43 @@ func prepareRunDir(cfg config) error {
 			return err
 		}
 	}
-	return os.MkdirAll(filepath.Join(cfg.OutDir, "logs"), 0755)
+	if err := os.MkdirAll(filepath.Join(cfg.OutDir, "logs"), 0755); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(cfg.OutDir, runDirSentinel), []byte(schemaVersion+"\n"), 0644)
+}
+
+func validateSafeRunDir(outDir string) error {
+	if outDir == "" {
+		return errors.New("-out-dir must not be empty")
+	}
+	clean := filepath.Clean(outDir)
+	if filepath.Dir(clean) == clean {
+		return fmt.Errorf("refusing to use filesystem root as -out-dir: %s", outDir)
+	}
+	info, err := os.Stat(clean)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("stat -out-dir: %w", err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("-out-dir is not a directory: %s", outDir)
+	}
+	if _, err := os.Stat(filepath.Join(clean, runDirSentinel)); err == nil {
+		return nil
+	} else if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("stat run-dir sentinel: %w", err)
+	}
+	entries, err := os.ReadDir(clean)
+	if err != nil {
+		return fmt.Errorf("read -out-dir: %w", err)
+	}
+	if len(entries) == 0 {
+		return nil
+	}
+	return fmt.Errorf("-out-dir already exists and is not an empty canonical benchmark run dir: %s; choose a new directory or use a directory containing %s", outDir, runDirSentinel)
 }
 
 func parseConfig(args []string) (config, error) {

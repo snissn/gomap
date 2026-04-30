@@ -40,6 +40,11 @@ Use `-out-dir <dir>` to keep a specific run directory:
 ./scripts/bench_collections_canonical.sh -out-dir /tmp/collections_canonical_run
 ```
 
+For cleanup safety, a user-supplied `-out-dir` must either not exist, be empty,
+or contain the harness sentinel file `.collection_canonical_bench_run` from a
+previous canonical run. The runner refuses filesystem roots and non-empty
+directories without that sentinel.
+
 ## Canonical Phases
 
 `post_insert`
