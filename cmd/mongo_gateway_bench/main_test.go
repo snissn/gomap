@@ -246,6 +246,8 @@ func TestRedactMongoURI(t *testing.T) {
 func TestParseConfigValidation(t *testing.T) {
 	if _, err := parseConfig([]string{"-bad"}); err == nil || !strings.Contains(err.Error(), "Usage of mongo_gateway_bench") {
 		t.Fatalf("bad flag err=%v want usage", err)
+	} else if !strings.Contains(err.Error(), "default, fast, or compressed") {
+		t.Fatalf("bad flag usage did not document root-storage default: %v", err)
 	}
 	if _, err := parseConfig([]string{"-target", "bad"}); err == nil {
 		t.Fatal("bad target accepted")
