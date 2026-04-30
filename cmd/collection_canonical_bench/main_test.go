@@ -90,6 +90,56 @@ func TestCanonicalDerivedCompactedComparisons(t *testing.T) {
 	}
 }
 
+func TestCanonicalDerivedCompactedComparisonsUseConfiguredIndexCount(t *testing.T) {
+	canon := knownExampleRun()
+	canon.Config.Indexes = 1
+	canon.Results = append(canon.Results,
+		testStorageRow("sqlite_json_1_indexes", "sqlite_wal_normal", "json", "collection", phaseSQLiteVacuum, 1, 18000000, 180.0),
+		testStorageRow("sqlite_native_columns_1_indexes", "sqlite_wal_normal", "native-columns", "collection", phaseSQLiteVacuum, 1, 12000000, 120.0),
+		testStorageRow("treedb_template_v1_collection_1_indexes", "treedb_fast", "template-v1", "collection", phaseFullLeafgenPackGC, 1, 2800000, 28.0),
+	)
+	finalizeRunMetadata(canon)
+
+	comparisons := buildCompactedComparisons(canon)
+	if got := findComparison(comparisons, "treedb_template_v1_collection_1_indexes", phaseOfflineRewrite, "sqlite_native_columns_1_indexes", phaseSQLiteVacuum); got == nil {
+		t.Fatalf("missing configured one-index comparison, got %#v", comparisons)
+	}
+	if got := findComparison(comparisons, "treedb_template_v1_collection_2_indexes", phaseOfflineRewrite, "sqlite_native_columns_2_indexes", phaseSQLiteVacuum); got != nil {
+		t.Fatalf("unexpected hardcoded two-index comparison: %#v", got)
+	}
+}
+
+func TestGuardrailAllowsDetachedHeadBranchMetadata(t *testing.T) {
+	canon := knownExampleRun()
+	canon.Branch = ""
+	finalizeRunMetadata(canon)
+
+	checks := validateCanonicalRun(canon)
+	for _, check := range checks {
+		if check.Code == "missing_row_run_metadata" {
+			t.Fatalf("detached-head branch metadata should be allowed, got %#v", checks)
+		}
+	}
+}
+
+func TestExecutiveSummarySkipsZeroBytesPerDocRatios(t *testing.T) {
+	canon := knownExampleRun()
+	for i := range canon.Results {
+		if canon.Results[i].ConfigName == "treedb_template_v1_collection_2_indexes" && canon.Results[i].Phase == phaseOfflineRewrite {
+			canon.Results[i].BytesPerDoc = floatPtr(0)
+			break
+		}
+	}
+
+	summary := renderExecutiveSummary(canon)
+	if strings.Contains(summary, "+Inf") || strings.Contains(summary, "NaN") {
+		t.Fatalf("summary should not emit invalid ratios: %s", summary)
+	}
+	if !strings.Contains(summary, "fair compacted-state headline could not be generated") {
+		t.Fatalf("summary should fall back when ratio inputs are unusable: %s", summary)
+	}
+}
+
 func TestGuardrailRejectsBadCompactedComparisonBasis(t *testing.T) {
 	canon := knownExampleRun()
 	canon.Comparisons = append(canon.Comparisons, comparisonRow{
@@ -153,6 +203,25 @@ func markdownSection(md, start, end string) string {
 		return rest
 	}
 	return rest[:endIdx]
+}
+
+func testStorageRow(config, engine, format, shape, phase string, indexes int, bytes int64, bpd float64) resultRow {
+	return resultRow{
+		ConfigName:      config,
+		Engine:          engine,
+		Format:          format,
+		Shape:           shape,
+		IndexCount:      indexes,
+		DocumentCount:   100000,
+		BenchmarkName:   "test-fixture",
+		Phase:           phase,
+		MaintenanceMode: phase,
+		TotalBytes:      int64Ptr(bytes),
+		BytesPerDoc:     floatPtr(bpd),
+		BatchSize:       16000,
+		MeasurementKind: "test_fixture",
+		CompactionFlags: map[string]string{"test": "true"},
+	}
 }
 
 func knownExampleRun() *canonicalRun {

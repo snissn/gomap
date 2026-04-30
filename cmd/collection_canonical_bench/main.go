@@ -277,7 +277,7 @@ func run(argv []string) error {
 		return err
 	}
 
-	branch, _ := gitOutput(cfg.RepoRoot, "branch", "--show-current")
+	branch := resolveBranch(cfg.RepoRoot)
 	commit, _ := gitOutput(cfg.RepoRoot, "rev-parse", "--short=12", "HEAD")
 	commandLine := argv
 	if rawCommand := strings.TrimSpace(os.Getenv(envCanonicalCommandLine)); rawCommand != "" {
@@ -932,7 +932,7 @@ func validateCanonicalRun(canon *canonicalRun) []guardrailCheck {
 	}
 	add("warning", "phase.online_one_pass.partial", "online_one_pass_maintenance is partial online maintenance; do not describe it as full compaction")
 	for _, r := range canon.Results {
-		if r.GeneratedAt == "" || r.RunDir == "" || r.Branch == "" || r.Commit == "" || len(r.CommandLine) == 0 {
+		if r.GeneratedAt == "" || r.RunDir == "" || r.Worktree == "" || r.Commit == "" || len(r.CommandLine) == 0 {
 			add("error", "missing_row_run_metadata", fmt.Sprintf("%s/%s is missing row-level run metadata", r.ConfigName, r.Phase))
 		}
 		if r.TotalBytes != nil && r.DocumentCount <= 0 {
@@ -945,14 +945,17 @@ func validateCanonicalRun(canon *canonicalRun) []guardrailCheck {
 			add("error", "missing_compaction_flags", fmt.Sprintf("%s/%s is missing compaction flags", r.ConfigName, r.Phase))
 		}
 	}
-	if findResult(canon.Results, "sqlite_json_2_indexes", phaseSQLiteVacuum) == nil {
+	treeDBConfig := compactedTreeDBConfigName(canon)
+	sqliteJSONConfig := sqliteJSONConfigName(canon)
+	sqliteNativeConfig := sqliteNativeConfigName(canon)
+	if findResult(canon.Results, sqliteJSONConfig, phaseSQLiteVacuum) == nil {
 		add("error", "missing_sqlite_json_vacuum", "SQLite JSON VACUUM result is required for fair compacted-state comparison")
 	}
-	if findResult(canon.Results, "sqlite_native_columns_2_indexes", phaseSQLiteVacuum) == nil {
+	if findResult(canon.Results, sqliteNativeConfig, phaseSQLiteVacuum) == nil {
 		add("error", "missing_sqlite_native_vacuum", "SQLite native-columns VACUUM result is required for fair compacted-state comparison")
 	}
-	if findResult(canon.Results, "treedb_template_v1_collection_2_indexes", phaseOfflineRewrite) != nil &&
-		findResult(canon.Results, "sqlite_native_columns_2_indexes", phaseSQLiteVacuum) == nil {
+	if findResult(canon.Results, treeDBConfig, phaseOfflineRewrite) != nil &&
+		findResult(canon.Results, sqliteNativeConfig, phaseSQLiteVacuum) == nil {
 		add("error", "unfair_compacted_comparison", "TreeDB offline/full compaction must be compared against SQLite after VACUUM, not SQLite post-insert")
 	}
 	if findResult(canon.Results, "treedb_template_v1_raw", phaseOfflineRewrite) != nil {
@@ -964,12 +967,12 @@ func validateCanonicalRun(canon *canonicalRun) []guardrailCheck {
 		}
 	}
 	for _, treedbPhase := range []string{phaseOfflineRewrite, phaseFullLeafgenPackGC} {
-		if findResult(canon.Results, "treedb_template_v1_collection_2_indexes", treedbPhase) == nil {
+		if findResult(canon.Results, treeDBConfig, treedbPhase) == nil {
 			continue
 		}
-		for _, sqliteName := range []string{"sqlite_native_columns_2_indexes", "sqlite_json_2_indexes"} {
-			if findComparison(canon.Comparisons, "treedb_template_v1_collection_2_indexes", treedbPhase, sqliteName, phaseSQLiteVacuum) == nil {
-				add("error", "missing_compacted_ratio", fmt.Sprintf("missing derived compacted comparison for %s/%s vs %s/%s", "treedb_template_v1_collection_2_indexes", treedbPhase, sqliteName, phaseSQLiteVacuum))
+		for _, sqliteName := range []string{sqliteNativeConfig, sqliteJSONConfig} {
+			if findComparison(canon.Comparisons, treeDBConfig, treedbPhase, sqliteName, phaseSQLiteVacuum) == nil {
+				add("error", "missing_compacted_ratio", fmt.Sprintf("missing derived compacted comparison for %s/%s vs %s/%s", treeDBConfig, treedbPhase, sqliteName, phaseSQLiteVacuum))
 			}
 		}
 	}
@@ -1003,16 +1006,16 @@ func buildCompactedComparisons(canon *canonicalRun) []comparisonRow {
 		return nil
 	}
 	var comparisons []comparisonRow
-	treeDBConfig := "treedb_template_v1_collection_2_indexes"
-	sqliteConfigs := []string{"sqlite_native_columns_2_indexes", "sqlite_json_2_indexes"}
+	treeDBConfig := compactedTreeDBConfigName(canon)
+	sqliteConfigs := []string{sqliteNativeConfigName(canon), sqliteJSONConfigName(canon)}
 	for _, treedbPhase := range []string{phaseOfflineRewrite, phaseFullLeafgenPackGC} {
 		treeRow := findResult(canon.Results, treeDBConfig, treedbPhase)
-		if treeRow == nil || treeRow.BytesPerDoc == nil || *treeRow.BytesPerDoc <= 0 {
+		if !hasPositiveBytesPerDoc(treeRow) {
 			continue
 		}
 		for _, sqliteConfig := range sqliteConfigs {
 			sqliteRow := findResult(canon.Results, sqliteConfig, phaseSQLiteVacuum)
-			if sqliteRow == nil || sqliteRow.BytesPerDoc == nil || *sqliteRow.BytesPerDoc <= 0 {
+			if !hasPositiveBytesPerDoc(sqliteRow) {
 				continue
 			}
 			comparisonName := fmt.Sprintf("%s_%s_vs_%s_%s", treeDBConfig, treedbPhase, sqliteConfig, phaseSQLiteVacuum)
@@ -1201,12 +1204,12 @@ func renderMarkdownReport(canon *canonicalRun) string {
 
 func renderExecutiveSummary(canon *canonicalRun) string {
 	fastest := fastestThroughput(canon.Results)
-	offline := findResult(canon.Results, "treedb_template_v1_collection_2_indexes", phaseOfflineRewrite)
-	full := findResult(canon.Results, "treedb_template_v1_collection_2_indexes", phaseFullLeafgenPackGC)
-	sqliteJSON := findResult(canon.Results, "sqlite_json_2_indexes", phaseSQLiteVacuum)
-	sqliteNative := findResult(canon.Results, "sqlite_native_columns_2_indexes", phaseSQLiteVacuum)
-	if offline != nil && full != nil && sqliteJSON != nil && sqliteNative != nil &&
-		offline.BytesPerDoc != nil && full.BytesPerDoc != nil && sqliteJSON.BytesPerDoc != nil && sqliteNative.BytesPerDoc != nil {
+	offline := findResult(canon.Results, compactedTreeDBConfigName(canon), phaseOfflineRewrite)
+	full := findResult(canon.Results, compactedTreeDBConfigName(canon), phaseFullLeafgenPackGC)
+	sqliteJSON := findResult(canon.Results, sqliteJSONConfigName(canon), phaseSQLiteVacuum)
+	sqliteNative := findResult(canon.Results, sqliteNativeConfigName(canon), phaseSQLiteVacuum)
+	if hasPositiveBytesPerDoc(offline) && hasPositiveBytesPerDoc(full) &&
+		hasPositiveBytesPerDoc(sqliteJSON) && hasPositiveBytesPerDoc(sqliteNative) {
 		engine := "TreeDB"
 		if fastest != nil {
 			engine = fastest.ConfigName
@@ -1222,8 +1225,11 @@ func renderExecutiveSummary(canon *canonicalRun) string {
 }
 
 func writeFairComparison(sb *strings.Builder, canon *canonicalRun) {
-	sqliteJSON := findResult(canon.Results, "sqlite_json_2_indexes", phaseSQLiteVacuum)
-	sqliteNative := findResult(canon.Results, "sqlite_native_columns_2_indexes", phaseSQLiteVacuum)
+	treeDBConfig := compactedTreeDBConfigName(canon)
+	sqliteJSONConfig := sqliteJSONConfigName(canon)
+	sqliteNativeConfig := sqliteNativeConfigName(canon)
+	sqliteJSON := findResult(canon.Results, sqliteJSONConfig, phaseSQLiteVacuum)
+	sqliteNative := findResult(canon.Results, sqliteNativeConfig, phaseSQLiteVacuum)
 	comparisons := comparisonsForReport(canon)
 	sb.WriteString("SQLite compacted baselines:\n\n")
 	sb.WriteString("| Config | Phase | B/doc | Total bytes |\n")
@@ -1238,8 +1244,8 @@ func writeFairComparison(sb *strings.Builder, canon *canonicalRun) {
 	sb.WriteString("| TreeDB config | Phase | B/doc | vs SQLite native-columns VACUUM | vs SQLite JSON VACUUM |\n")
 	sb.WriteString("| --- | --- | ---: | ---: | ---: |\n")
 	for _, phase := range []string{phaseOfflineRewrite, phaseFullLeafgenPackGC} {
-		nativeCmp := findComparison(comparisons, "treedb_template_v1_collection_2_indexes", phase, "sqlite_native_columns_2_indexes", phaseSQLiteVacuum)
-		jsonCmp := findComparison(comparisons, "treedb_template_v1_collection_2_indexes", phase, "sqlite_json_2_indexes", phaseSQLiteVacuum)
+		nativeCmp := findComparison(comparisons, treeDBConfig, phase, sqliteNativeConfig, phaseSQLiteVacuum)
+		jsonCmp := findComparison(comparisons, treeDBConfig, phase, sqliteJSONConfig, phaseSQLiteVacuum)
 		if nativeCmp == nil && jsonCmp == nil {
 			continue
 		}
@@ -1257,7 +1263,7 @@ func writeFairComparison(sb *strings.Builder, canon *canonicalRun) {
 		if jsonCmp != nil {
 			jsonRatio = fmt.Sprintf("%.1fx smaller", jsonCmp.SmallerRatio)
 		}
-		sb.WriteString(fmt.Sprintf("| `%s` | `%s` | %.1f | %s | %s |\n", "treedb_template_v1_collection_2_indexes", phase, bpd, nativeRatio, jsonRatio))
+		sb.WriteString(fmt.Sprintf("| `%s` | `%s` | %.1f | %s | %s |\n", treeDBConfig, phase, bpd, nativeRatio, jsonRatio))
 	}
 	sb.WriteString("\nDerived comparison rows are also emitted in `benchmark_results.json` under `comparisons`.\n")
 }
@@ -1338,6 +1344,17 @@ func gitOutput(dir string, args ...string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
+func resolveBranch(repoRoot string) string {
+	if branch, _ := gitOutput(repoRoot, "branch", "--show-current"); branch != "" {
+		return branch
+	}
+	if branch, _ := gitOutput(repoRoot, "rev-parse", "--abbrev-ref", "HEAD"); branch != "" && branch != "HEAD" {
+		return branch
+	}
+	branch, _ := gitOutput(repoRoot, "describe", "--all", "--always", "HEAD")
+	return branch
+}
+
 func splitCSV(v string) []string {
 	var out []string
 	for _, part := range strings.Split(v, ",") {
@@ -1362,6 +1379,29 @@ func canonicalConfigName(engine, format, shape string, indexes int) string {
 		return fmt.Sprintf("%s_%s_raw", engine, format)
 	}
 	return fmt.Sprintf("%s_%s_%s_%d_indexes", engine, format, shape, indexes)
+}
+
+func compactedTreeDBConfigName(canon *canonicalRun) string {
+	return canonicalConfigName("treedb", "template-v1", "collection", canonicalIndexCount(canon))
+}
+
+func sqliteJSONConfigName(canon *canonicalRun) string {
+	return canonicalConfigName("sqlite", "json", "collection", canonicalIndexCount(canon))
+}
+
+func sqliteNativeConfigName(canon *canonicalRun) string {
+	return canonicalConfigName("sqlite", "native-columns", "collection", canonicalIndexCount(canon))
+}
+
+func canonicalIndexCount(canon *canonicalRun) int {
+	if canon != nil && canon.Config.Indexes >= 0 {
+		return canon.Config.Indexes
+	}
+	return 0
+}
+
+func hasPositiveBytesPerDoc(row *resultRow) bool {
+	return row != nil && row.BytesPerDoc != nil && *row.BytesPerDoc > 0
 }
 
 func metricDefault(metrics map[string]float64, key string, def float64) float64 {
