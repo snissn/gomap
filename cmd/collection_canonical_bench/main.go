@@ -85,6 +85,7 @@ type canonicalConfig struct {
 	FullLeafgenForce          bool     `json:"full_leafgen_force"`
 	FullLeafgenMaxGenerations int      `json:"full_leafgen_max_generations"`
 	FullLeafgenIndexVacuum    string   `json:"full_leafgen_index_vacuum"`
+	SkipSQLite                bool     `json:"skip_sqlite"`
 }
 
 type commandRecord struct {
@@ -306,6 +307,7 @@ func run(argv []string) error {
 			FullLeafgenForce:          cfg.FullLeafgenForce,
 			FullLeafgenMaxGenerations: cfg.FullLeafgenMaxGenerations,
 			FullLeafgenIndexVacuum:    cfg.FullLeafgenIndexVacuum,
+			SkipSQLite:                cfg.SkipSQLite,
 		},
 		Artifacts: map[string]string{},
 	}
@@ -948,15 +950,19 @@ func validateCanonicalRun(canon *canonicalRun) []guardrailCheck {
 	treeDBConfig := compactedTreeDBConfigName(canon)
 	sqliteJSONConfig := sqliteJSONConfigName(canon)
 	sqliteNativeConfig := sqliteNativeConfigName(canon)
-	if findResult(canon.Results, sqliteJSONConfig, phaseSQLiteVacuum) == nil {
-		add("error", "missing_sqlite_json_vacuum", "SQLite JSON VACUUM result is required for fair compacted-state comparison")
-	}
-	if findResult(canon.Results, sqliteNativeConfig, phaseSQLiteVacuum) == nil {
-		add("error", "missing_sqlite_native_vacuum", "SQLite native-columns VACUUM result is required for fair compacted-state comparison")
-	}
-	if findResult(canon.Results, treeDBConfig, phaseOfflineRewrite) != nil &&
-		findResult(canon.Results, sqliteNativeConfig, phaseSQLiteVacuum) == nil {
-		add("error", "unfair_compacted_comparison", "TreeDB offline/full compaction must be compared against SQLite after VACUUM, not SQLite post-insert")
+	if canon.Config.SkipSQLite {
+		add("warning", "sqlite.skipped", "SQLite rows were intentionally skipped; fair compacted SQLite comparisons are omitted")
+	} else {
+		if findResult(canon.Results, sqliteJSONConfig, phaseSQLiteVacuum) == nil {
+			add("error", "missing_sqlite_json_vacuum", "SQLite JSON VACUUM result is required for fair compacted-state comparison")
+		}
+		if findResult(canon.Results, sqliteNativeConfig, phaseSQLiteVacuum) == nil {
+			add("error", "missing_sqlite_native_vacuum", "SQLite native-columns VACUUM result is required for fair compacted-state comparison")
+		}
+		if findResult(canon.Results, treeDBConfig, phaseOfflineRewrite) != nil &&
+			findResult(canon.Results, sqliteNativeConfig, phaseSQLiteVacuum) == nil {
+			add("error", "unfair_compacted_comparison", "TreeDB offline/full compaction must be compared against SQLite after VACUUM, not SQLite post-insert")
+		}
 	}
 	if findResult(canon.Results, "treedb_template_v1_raw", phaseOfflineRewrite) != nil {
 		add("info", "raw_shape_labeled", "raw TreeDB rows are labeled shape=raw and should not be mixed with collection rows without that label")
@@ -966,13 +972,15 @@ func validateCanonicalRun(canon *canonicalRun) []guardrailCheck {
 			add("error", "compacted_compared_to_sqlite_post_insert", fmt.Sprintf("%s compares TreeDB compacted phase %s against SQLite phase %s", cmp.ComparisonName, cmp.TreeDBPhase, cmp.SQLitePhase))
 		}
 	}
-	for _, treedbPhase := range []string{phaseOfflineRewrite, phaseFullLeafgenPackGC} {
-		if findResult(canon.Results, treeDBConfig, treedbPhase) == nil {
-			continue
-		}
-		for _, sqliteName := range []string{sqliteNativeConfig, sqliteJSONConfig} {
-			if findComparison(canon.Comparisons, treeDBConfig, treedbPhase, sqliteName, phaseSQLiteVacuum) == nil {
-				add("error", "missing_compacted_ratio", fmt.Sprintf("missing derived compacted comparison for %s/%s vs %s/%s", treeDBConfig, treedbPhase, sqliteName, phaseSQLiteVacuum))
+	if !canon.Config.SkipSQLite {
+		for _, treedbPhase := range []string{phaseOfflineRewrite, phaseFullLeafgenPackGC} {
+			if findResult(canon.Results, treeDBConfig, treedbPhase) == nil {
+				continue
+			}
+			for _, sqliteName := range []string{sqliteNativeConfig, sqliteJSONConfig} {
+				if findComparison(canon.Comparisons, treeDBConfig, treedbPhase, sqliteName, phaseSQLiteVacuum) == nil {
+					add("error", "missing_compacted_ratio", fmt.Sprintf("missing derived compacted comparison for %s/%s vs %s/%s", treeDBConfig, treedbPhase, sqliteName, phaseSQLiteVacuum))
+				}
 			}
 		}
 	}
@@ -1218,8 +1226,8 @@ func renderExecutiveSummary(canon *canonicalRun) string {
 		fullNative := *sqliteNative.BytesPerDoc / *full.BytesPerDoc
 		offlineJSON := *sqliteJSON.BytesPerDoc / *offline.BytesPerDoc
 		fullJSON := *sqliteJSON.BytesPerDoc / *full.BytesPerDoc
-		return fmt.Sprintf("`%s` is the fastest indexed ingest row in this run. TreeDB fully compacted two-index template-v1 collection storage is %.1f B/doc via PR 1096-style offline rewrite and %.1f B/doc via full leafgen pack/GC. Compared with SQLite after `VACUUM`, offline rewrite is about %.1fx smaller than SQLite native columns and %.1fx smaller than SQLite JSON; full leafgen pack/GC is about %.1fx and %.1fx smaller, respectively.",
-			engine, *offline.BytesPerDoc, *full.BytesPerDoc, offlineNative, offlineJSON, fullNative, fullJSON)
+		return fmt.Sprintf("`%s` is the fastest indexed ingest row in this run. TreeDB fully compacted %s template-v1 collection storage is %.1f B/doc via PR 1096-style offline rewrite and %.1f B/doc via full leafgen pack/GC. Compared with SQLite after `VACUUM`, offline rewrite is about %.1fx smaller than SQLite native columns and %.1fx smaller than SQLite JSON; full leafgen pack/GC is about %.1fx and %.1fx smaller, respectively.",
+			engine, indexCountLabel(canonicalIndexCount(canon)), *offline.BytesPerDoc, *full.BytesPerDoc, offlineNative, offlineJSON, fullNative, fullJSON)
 	}
 	return "This report separates post-insert, partial online maintenance, offline rewrite, full leafgen pack/GC, and SQLite VACUUM states. Some compacted-state rows are missing, so the fair compacted-state headline could not be generated."
 }
@@ -1398,6 +1406,17 @@ func canonicalIndexCount(canon *canonicalRun) int {
 		return canon.Config.Indexes
 	}
 	return 0
+}
+
+func indexCountLabel(indexes int) string {
+	switch indexes {
+	case 1:
+		return "one-index"
+	case 2:
+		return "two-index"
+	default:
+		return fmt.Sprintf("%d-index", indexes)
+	}
 }
 
 func hasPositiveBytesPerDoc(row *resultRow) bool {

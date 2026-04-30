@@ -140,6 +140,50 @@ func TestExecutiveSummarySkipsZeroBytesPerDocRatios(t *testing.T) {
 	}
 }
 
+func TestExecutiveSummaryUsesConfiguredIndexCountLabel(t *testing.T) {
+	canon := knownExampleRun()
+	canon.Config.Indexes = 1
+	canon.Results = append(canon.Results,
+		testStorageRow("sqlite_json_1_indexes", "sqlite_wal_normal", "json", "collection", phaseSQLiteVacuum, 1, 18000000, 180.0),
+		testStorageRow("sqlite_native_columns_1_indexes", "sqlite_wal_normal", "native-columns", "collection", phaseSQLiteVacuum, 1, 12000000, 120.0),
+		testStorageRow("treedb_template_v1_collection_1_indexes", "treedb_fast", "template-v1", "collection", phaseFullLeafgenPackGC, 1, 2800000, 28.0),
+	)
+	finalizeRunMetadata(canon)
+
+	summary := renderExecutiveSummary(canon)
+	if !strings.Contains(summary, "fully compacted one-index template-v1 collection storage") {
+		t.Fatalf("summary did not use configured index count: %s", summary)
+	}
+	if strings.Contains(summary, "two-index") {
+		t.Fatalf("summary should not hardcode two-index for one-index run: %s", summary)
+	}
+}
+
+func TestGuardrailRespectsSkipSQLite(t *testing.T) {
+	canon := knownExampleRun()
+	canon.Config.SkipSQLite = true
+	var filtered []resultRow
+	for _, row := range canon.Results {
+		if strings.HasPrefix(row.ConfigName, "sqlite_") {
+			continue
+		}
+		filtered = append(filtered, row)
+	}
+	canon.Results = filtered
+	canon.Comparisons = buildCompactedComparisons(canon)
+	finalizeRunMetadata(canon)
+
+	checks := validateCanonicalRun(canon)
+	for _, check := range checks {
+		if check.Code == "missing_sqlite_json_vacuum" ||
+			check.Code == "missing_sqlite_native_vacuum" ||
+			check.Code == "missing_compacted_ratio" {
+			t.Fatalf("skip-sqlite should not fail SQLite comparison guardrails, got %#v", checks)
+		}
+	}
+	assertCheckCode(t, checks, "sqlite.skipped")
+}
+
 func TestGuardrailRejectsBadCompactedComparisonBasis(t *testing.T) {
 	canon := knownExampleRun()
 	canon.Comparisons = append(canon.Comparisons, comparisonRow{
