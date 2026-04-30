@@ -98,6 +98,7 @@ type Collection struct {
 	meta              CollectionMeta
 	catalogMu         sync.RWMutex
 	catalogSystemRoot uint64
+	catalogCommitSeq  uint64
 	catalog           *collectionCatalog
 	insertStatsMu     sync.RWMutex
 	lastInsertStats   CollectionInsertStats
@@ -206,6 +207,7 @@ type noIndexBatchEntry struct {
 }
 
 type collectionWriteDomain struct {
+	mutationMu     sync.Mutex
 	mu             sync.RWMutex
 	loaded         bool
 	meta           CollectionMeta
@@ -1401,6 +1403,10 @@ func (c *Collection) Update(documentID []byte, update func(current []byte) (repl
 	if update == nil {
 		return false, false, errors.New("collections: update function is nil")
 	}
+	if domain := c.writeDomain; domain != nil {
+		domain.mutationMu.Lock()
+		defer domain.mutationMu.Unlock()
+	}
 	if err := c.flushBufferedNoIndex(); err != nil {
 		return false, false, err
 	}
@@ -1459,6 +1465,7 @@ func (c *Collection) updateDocumentOnce(documentID []byte, update func(current [
 	}
 	plannerOptions = collectionOptionsWithTemplateV1Resolver(plannerOptions, snap, catalog)
 	baseSystemRoot := snapshotSystemRoot(snap)
+	baseCommitSeq := snapshotCommitSeq(snap)
 
 	primaryRoot := catalog.rootID(collectionPrimaryRootName(c.meta.Name))
 	if primaryRoot == 0 {
@@ -1596,7 +1603,10 @@ func (c *Collection) updateDocumentOnce(documentID []byte, update func(current [
 			StoragePolicy: policies[i],
 		})
 	}
-	newSystemRoot, rootIDs, err := c.db.PublishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+	preflight := func() error {
+		return c.requireCommitSeqForMutation(baseCommitSeq)
+	}
+	newSystemRoot, rootIDs, err := c.db.PublishOrderedRootDeltaGroupWithPreflightAndSystemDeltaBuilder(ordered, preflight, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
 		return c.buildRootDescriptorSystemDeltaIterator(baseSystemRoot, rootNames, baseRootIDs, rootIDs)
 	})
 	if err != nil {
@@ -1616,9 +1626,10 @@ func (c *Collection) catalogForSnapshot(snap *backenddb.Snapshot) (*collectionCa
 		return nil, backenddb.ErrClosed
 	}
 	systemRoot := snapshotSystemRoot(snap)
+	commitSeq := snapshotCommitSeq(snap)
 
 	c.catalogMu.RLock()
-	if cached := c.catalog; cached != nil && c.catalogSystemRoot == systemRoot {
+	if cached := c.catalog; cached != nil && c.catalogSystemRoot == systemRoot && c.catalogCommitSeq == commitSeq {
 		c.catalogMu.RUnlock()
 		return cached, nil
 	}
@@ -1642,13 +1653,25 @@ func snapshotSystemRoot(snap *backenddb.Snapshot) uint64 {
 	return 0
 }
 
+func snapshotCommitSeq(snap *backenddb.Snapshot) uint64 {
+	if snap == nil {
+		return 0
+	}
+	if state := snap.State(); state != nil {
+		return state.CommitSeq
+	}
+	return 0
+}
+
 func (c *Collection) rememberCatalog(snap *backenddb.Snapshot, catalog *collectionCatalog) {
 	if c == nil || snap == nil || catalog == nil {
 		return
 	}
 	systemRoot := snapshotSystemRoot(snap)
+	commitSeq := snapshotCommitSeq(snap)
 	c.catalogMu.Lock()
 	c.catalogSystemRoot = systemRoot
+	c.catalogCommitSeq = commitSeq
 	c.catalog = catalog
 	c.catalogMu.Unlock()
 }
@@ -1659,8 +1682,20 @@ func (c *Collection) rememberCatalogAtSystemRoot(systemRoot uint64, catalog *col
 	}
 	c.catalogMu.Lock()
 	c.catalogSystemRoot = systemRoot
+	c.catalogCommitSeq = c.commitSeqForSystemRoot(systemRoot)
 	c.catalog = catalog
 	c.catalogMu.Unlock()
+}
+
+func (c *Collection) commitSeqForSystemRoot(systemRoot uint64) uint64 {
+	if c == nil || c.db == nil {
+		return 0
+	}
+	state := c.db.State()
+	if state == nil || state.SystemRootPageID != systemRoot {
+		return 0
+	}
+	return state.CommitSeq
 }
 
 func (c *Collection) noteWriteDomainCatalog(systemRoot uint64, catalog *collectionCatalog) {
@@ -1883,6 +1918,17 @@ func (c *Collection) buildRootDescriptorSystemDeltaIterator(expectedSystemRoot u
 	if len(rootIDs) != len(rootNames) {
 		return nil, errors.New("collections: ordered root publish returned unexpected root count")
 	}
+	if err := c.validateRootDescriptorSystemDelta(expectedSystemRoot, rootNames, baseRootIDs); err != nil {
+		return nil, err
+	}
+	updates := make(map[string][]byte, len(rootNames))
+	for i, rootName := range rootNames {
+		updates[systemCollectionRootKey(rootName)] = encodeRootID(rootIDs[i])
+	}
+	return buildSystemDeltaIterator(updates)
+}
+
+func (c *Collection) validateRootDescriptorSystemDelta(expectedSystemRoot uint64, rootNames []string, baseRootIDs map[string]uint64) error {
 	currentSystemRoot := uint64(0)
 	if c != nil && c.db != nil {
 		if state := c.db.State(); state != nil {
@@ -1892,30 +1938,40 @@ func (c *Collection) buildRootDescriptorSystemDeltaIterator(expectedSystemRoot u
 	if currentSystemRoot != expectedSystemRoot {
 		current := c.db.AcquireSnapshot()
 		if current == nil {
-			return nil, backenddb.ErrClosed
+			return backenddb.ErrClosed
 		}
 		defer func() { _ = current.Close() }()
 		catalog, err := loadCollectionCatalog(current, c.meta.Name)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		if catalog == nil {
-			return nil, errCollectionNotFound
+			return errCollectionNotFound
 		}
 		if !sameCollectionMeta(catalog.meta, c.meta) {
-			return nil, fmt.Errorf("collections: concurrent schema modification detected for %q", c.meta.Name)
+			return fmt.Errorf("collections: concurrent schema modification detected for %q", c.meta.Name)
 		}
 		for _, rootName := range rootNames {
 			if got, want := catalog.rootID(rootName), baseRootIDs[rootName]; got != want {
-				return nil, fmt.Errorf("%w: concurrent root modification detected for %q", ErrConcurrentMutation, rootName)
+				return fmt.Errorf("%w: concurrent root modification detected for %q", ErrConcurrentMutation, rootName)
 			}
 		}
 	}
-	updates := make(map[string][]byte, len(rootNames))
-	for i, rootName := range rootNames {
-		updates[systemCollectionRootKey(rootName)] = encodeRootID(rootIDs[i])
+	return nil
+}
+
+func (c *Collection) requireCommitSeqForMutation(expectedCommitSeq uint64) error {
+	if c == nil || c.db == nil {
+		return backenddb.ErrClosed
 	}
-	return buildSystemDeltaIterator(updates)
+	state := c.db.State()
+	if state == nil {
+		return backenddb.ErrClosed
+	}
+	if state.CommitSeq != expectedCommitSeq {
+		return fmt.Errorf("%w: concurrent commit detected", ErrConcurrentMutation)
+	}
+	return nil
 }
 
 func (c *Collection) buildSchemaAndRootDescriptorSystemIterator(

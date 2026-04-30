@@ -2279,18 +2279,21 @@ func TestCollectionUpdateConcurrentCounterNoLostUpdates(t *testing.T) {
 		workers    = 8
 		increments = 5
 	)
+	workerCols := make([]*Collection, workers)
+	for i := range workerCols {
+		workerCol, err := mgr.OpenCollection("users")
+		if err != nil {
+			t.Fatalf("open worker collection: %v", err)
+		}
+		workerCols[i] = workerCol
+	}
 	start := make(chan struct{})
 	errs := make(chan error, workers)
 	var wg sync.WaitGroup
 	for i := 0; i < workers; i++ {
 		wg.Add(1)
-		go func() {
+		go func(workerCol *Collection) {
 			defer wg.Done()
-			workerCol, err := mgr.OpenCollection("users")
-			if err != nil {
-				errs <- err
-				return
-			}
 			<-start
 			for j := 0; j < increments; j++ {
 				if _, _, err := workerCol.Update([]byte("u1"), func(current []byte) ([]byte, bool, error) {
@@ -2312,7 +2315,7 @@ func TestCollectionUpdateConcurrentCounterNoLostUpdates(t *testing.T) {
 				}
 			}
 			errs <- nil
-		}()
+		}(workerCols[i])
 	}
 	close(start)
 	wg.Wait()

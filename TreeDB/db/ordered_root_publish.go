@@ -111,6 +111,11 @@ func closeUnconsumedOrderedRootDeltaPublishIterators(ordered []OrderedRootDeltaP
 // PublishOrderedRootGroupWithSystemBuilder.
 type OrderedRootGroupSystemBuilder func(rootIDs []uint64) (iterator.UnsafeIterator, error)
 
+// OrderedRootGroupPreflight validates that a root group can still be applied.
+// It runs while the DB write lock is held and before root-local deltas are
+// applied, so callers can reject stale base roots before old pages are read.
+type OrderedRootGroupPreflight func() error
+
 type orderedRootStableUnsafeIterator interface {
 	StableUnsafeIteratorSlices() bool
 }
@@ -889,6 +894,17 @@ func (db *DB) PublishOrderedRootDeltaGroupWithSystemBuilder(ordered []OrderedRoo
 // stream to the system root. The system delta should contain only changed
 // system-root entries; omitted system entries are preserved.
 func (db *DB) PublishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered []OrderedRootDeltaPublishInput, buildSystemDeltaIter OrderedRootGroupSystemBuilder) (uint64, []uint64, error) {
+	return db.publishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered, nil, buildSystemDeltaIter)
+}
+
+// PublishOrderedRootDeltaGroupWithPreflightAndSystemDeltaBuilder is like
+// PublishOrderedRootDeltaGroupWithSystemDeltaBuilder, but runs preflight under
+// the DB write lock before applying root-local deltas.
+func (db *DB) PublishOrderedRootDeltaGroupWithPreflightAndSystemDeltaBuilder(ordered []OrderedRootDeltaPublishInput, preflight OrderedRootGroupPreflight, buildSystemDeltaIter OrderedRootGroupSystemBuilder) (uint64, []uint64, error) {
+	return db.publishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered, preflight, buildSystemDeltaIter)
+}
+
+func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered []OrderedRootDeltaPublishInput, preflight OrderedRootGroupPreflight, buildSystemDeltaIter OrderedRootGroupSystemBuilder) (uint64, []uint64, error) {
 	if buildSystemDeltaIter == nil {
 		return 0, nil, errors.New("nil ordered root group system delta builder")
 	}
@@ -910,6 +926,11 @@ func (db *DB) PublishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered []Order
 	userRoot := db.meta.UserRootPageID
 	baseSystemRoot := db.meta.SystemRootPageID
 	db.mu.RUnlock()
+	if preflight != nil {
+		if err := preflight(); err != nil {
+			return 0, nil, err
+		}
+	}
 
 	systemOpts := systemRootOrderedPublishOptions(db)
 	rootIDs := make([]uint64, len(ordered))
