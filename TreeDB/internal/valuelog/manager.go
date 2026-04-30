@@ -59,9 +59,12 @@ type File struct {
 	templateLookup     TemplateLookup
 	templateDecodeOpts templ.DecodeOptions
 	templateDefCache   *templateDefCache
-	// compactLeafPayloadAllowed is derived once from immutable file identity and
+	// compactLeafPayloadAllowed is derived at open time from the file ID and
 	// path. Hot reads should not re-run filepath parsing for every leaf payload.
-	compactLeafPayloadAllowed bool
+	// Tests may still construct File literals directly; those fall back to
+	// deriving eligibility from ID/Path in allowsCompactLeafPayload.
+	compactLeafPayloadAllowed    bool
+	compactLeafPayloadAllowedSet bool
 
 	cacheMu    sync.Mutex
 	cacheStart atomic.Int64
@@ -120,6 +123,9 @@ func (f *File) allowsCompactLeafPayload() bool {
 	if f == nil {
 		return false
 	}
+	if !f.compactLeafPayloadAllowedSet {
+		return allowsCompactLeafLogPayload(f.ID, f.Path)
+	}
 	return f.compactLeafPayloadAllowed
 }
 
@@ -137,16 +143,17 @@ func openFile(path string, id uint32, dictLookup DictLookup, templateLookup Temp
 		return nil, err
 	}
 	vf := &File{
-		ID:                        id,
-		Path:                      path,
-		File:                      f,
-		dictLookup:                dictLookup,
-		templateLookup:            templateLookup,
-		templateDecodeOpts:        templateOpts,
-		templateDefCache:          templateCache,
-		compactLeafPayloadAllowed: allowsCompactLeafLogPayload(id, path),
-		groupedFrameCacheEntries:  defaultGroupedFrameCacheEntries,
-		groupedFrameCacheMaxRaw:   defaultGroupedFrameCacheMaxRawBytes,
+		ID:                           id,
+		Path:                         path,
+		File:                         f,
+		dictLookup:                   dictLookup,
+		templateLookup:               templateLookup,
+		templateDecodeOpts:           templateOpts,
+		templateDefCache:             templateCache,
+		compactLeafPayloadAllowed:    allowsCompactLeafLogPayload(id, path),
+		compactLeafPayloadAllowedSet: true,
+		groupedFrameCacheEntries:     defaultGroupedFrameCacheEntries,
+		groupedFrameCacheMaxRaw:      defaultGroupedFrameCacheMaxRawBytes,
 	}
 	vf.mmapData.Store([]byte(nil))
 	if info, err := f.Stat(); err == nil {

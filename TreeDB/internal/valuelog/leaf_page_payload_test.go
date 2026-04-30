@@ -67,6 +67,15 @@ func TestOpenFileCachesCompactLeafPayloadEligibility(t *testing.T) {
 	}
 }
 
+func TestFileLiteralDerivesCompactLeafPayloadEligibility(t *testing.T) {
+	path := compactLeafPayloadTestPath(t, t.TempDir(), 1)
+	fileID := mustEncodeFileID(t, ReservedLeafLogLaneID, 1)
+	f := &File{ID: fileID, Path: path}
+	if !f.allowsCompactLeafPayload() {
+		t.Fatal("File literal should derive compact leaf payload eligibility from ID and Path")
+	}
+}
+
 func newLeafPayloadTestManager(t *testing.T, dir, path string, fileID uint32) *Manager {
 	t.Helper()
 	mgr, err := NewManager(dir)
