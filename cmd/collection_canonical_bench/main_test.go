@@ -71,6 +71,19 @@ func TestPrepareRunDirRemovesPriorCanonicalArtifacts(t *testing.T) {
 	}
 }
 
+func TestNormalizeRunPathsMakesOutDirAbsolute(t *testing.T) {
+	cfg := config{OutDir: filepath.Join("relative", "bench-run")}
+	if err := normalizeRunPaths(&cfg); err != nil {
+		t.Fatal(err)
+	}
+	if !filepath.IsAbs(cfg.OutDir) {
+		t.Fatalf("out dir was not normalized to an absolute path: %q", cfg.OutDir)
+	}
+	if !strings.HasSuffix(cfg.OutDir, filepath.Join("relative", "bench-run")) {
+		t.Fatalf("out dir lost the requested suffix: %q", cfg.OutDir)
+	}
+}
+
 func TestOfflineRewriteIndexArgsIncludesConfiguredShape(t *testing.T) {
 	tests := []struct {
 		configured int

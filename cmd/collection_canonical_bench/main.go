@@ -267,6 +267,9 @@ func run(argv []string) error {
 	if cfg.OutDir == "" {
 		cfg.OutDir = filepath.Join(os.TempDir(), "collection_canonical_bench_"+time.Now().Format("20060102_150405"))
 	}
+	if err := normalizeRunPaths(&cfg); err != nil {
+		return err
+	}
 	if cfg.Benchtime == "" {
 		cfg.Benchtime = fmt.Sprintf("%dx", cfg.Docs)
 	}
@@ -347,6 +350,15 @@ func run(argv []string) error {
 	if hasErrorCheck(canon.Checks) && !cfg.AllowIncomplete {
 		return errors.New("guardrail validation failed; rerun with -allow-incomplete to keep partial results")
 	}
+	return nil
+}
+
+func normalizeRunPaths(cfg *config) error {
+	outDir, err := filepath.Abs(cfg.OutDir)
+	if err != nil {
+		return fmt.Errorf("resolve -out-dir: %w", err)
+	}
+	cfg.OutDir = outDir
 	return nil
 }
 
