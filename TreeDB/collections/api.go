@@ -513,10 +513,11 @@ func (c *Collection) CreateIndex(def IndexDefinition) (*CollectionMeta, error) {
 		return nil, err
 	}
 	plan, err := buildCreateIndexBackfillPlan(snap, catalog, newRuntime, existingRuntimes, baseOptions)
-	_ = snap.Close()
 	if err != nil {
+		_ = snap.Close()
 		return nil, err
 	}
+	defer func() { _ = snap.Close() }()
 
 	ordered := make([]backenddb.OrderedRootDeltaPublishInput, 0, len(plan.rootNames))
 	iterators := make([]iterator.UnsafeIterator, 0, len(plan.rootNames))
@@ -895,7 +896,25 @@ func (c *Collection) flushBufferedNoIndexLocked(domain *collectionWriteDomain) e
 	c.meta = meta
 	rootName := collectionPrimaryRootName(meta.Name)
 	baseRoot := domain.primaryRoot
-	baseSystemRoot := domain.baseSystemRoot
+	pin := c.db.AcquireSnapshot()
+	if pin == nil {
+		return backenddb.ErrClosed
+	}
+	defer func() { _ = pin.Close() }()
+	pinnedCatalog, err := loadCollectionCatalog(pin, meta.Name)
+	if err != nil {
+		return err
+	}
+	if pinnedCatalog == nil {
+		return errCollectionNotFound
+	}
+	if !sameCollectionMeta(pinnedCatalog.meta, meta) {
+		return fmt.Errorf("collections: concurrent schema modification detected for %q", meta.Name)
+	}
+	if got := pinnedCatalog.rootID(rootName); got != baseRoot {
+		return fmt.Errorf("collections: concurrent root modification detected for %q", meta.Name)
+	}
+	baseSystemRoot := snapshotSystemRoot(pin)
 	baseRootIDs := map[string]uint64{rootName: baseRoot}
 	table := domain.table
 	iter := table.NewIterator(nil, nil)
@@ -973,7 +992,7 @@ func (c *Collection) insertOneNoIndex(id, document []byte) ([]byte, error) {
 			return nil, err
 		}
 	}
-	_ = snap.Close()
+	defer func() { _ = snap.Close() }()
 
 	resultID := bytes.Clone(id)
 	iter := &systemTargetIterator{entries: []systemTargetEntry{{
@@ -1081,7 +1100,7 @@ func (c *Collection) InsertBatch(ids, documents [][]byte) ([][]byte, error) {
 	for _, run := range plan.runs {
 		baseRootIDs[run.name] = catalog.rootID(run.name)
 	}
-	_ = snap.Close()
+	defer func() { _ = snap.Close() }()
 
 	ordered := make([]backenddb.OrderedRootDeltaPublishInput, 0, len(plan.runs))
 	iterators := make([]iterator.UnsafeIterator, 0, len(plan.runs))
@@ -1181,7 +1200,7 @@ func (c *Collection) insertBatchNoIndex(
 		}
 	}
 	stats.DuplicateDocumentPreflight = time.Since(phaseStart)
-	_ = snap.Close()
+	defer func() { _ = snap.Close() }()
 
 	phaseStart = time.Now()
 	table := newCollectionRunTable(len(entries))
