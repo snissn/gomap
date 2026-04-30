@@ -566,7 +566,7 @@ func openBenchmarkCollection(b *testing.B, name string, indexes ...collections.I
 	manager := collections.NewCollectionManager(backend)
 	dataOuter, indexOuter := benchmarkCollectionStoragePolicy(b)
 	documentFormat := benchmarkCollectionDocumentFormat(b)
-	bufferedIndexedWrites := benchmarkBoolEnv(b, "TREEDB_COLLECTION_BUFFERED_INDEXED_WRITES", false) && len(indexes) > 0
+	bufferedIndexedWrites := benchmarkBoolEnv(b, "TREEDB_COLLECTION_BUFFERED_INDEXED_WRITES", true) && len(indexes) > 0
 	bufferedIndexedWriteMaxDocuments := benchmarkIntEnv(b, "TREEDB_COLLECTION_BUFFERED_INDEXED_WRITE_MAX_DOCUMENTS", 0)
 	bufferedIndexedWriteMaxBytes := benchmarkInt64Env(b, "TREEDB_COLLECTION_BUFFERED_INDEXED_WRITE_MAX_BYTES", 0)
 	for i := range indexes {
@@ -578,6 +578,7 @@ func openBenchmarkCollection(b *testing.B, name string, indexes ...collections.I
 			DocumentFormat:                   documentFormat,
 			DataRootStoragePolicy:            benchmarkRootStoragePolicy(dataOuter),
 			IndexStateStoragePolicy:          benchmarkRootStoragePolicy(dataOuter),
+			DisableIndexedWriteMemtables:     !bufferedIndexedWrites && len(indexes) > 0,
 			BufferedIndexedWrites:            bufferedIndexedWrites,
 			BufferedIndexedWriteMaxDocuments: bufferedIndexedWriteMaxDocuments,
 			BufferedIndexedWriteMaxBytes:     bufferedIndexedWriteMaxBytes,

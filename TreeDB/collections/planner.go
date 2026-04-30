@@ -69,13 +69,14 @@ type indexDefinition struct {
 }
 
 type insertBatchPlanner struct {
-	collection      string
-	primaryRoot     string
-	templateRoot    string
-	indexStateRoot  string
-	indexes         []indexDefinition
-	options         collectionOptions
-	buildPrimaryVal func(documentID, document []byte) ([]byte, error)
+	collection             string
+	primaryRoot            string
+	templateRoot           string
+	indexStateRoot         string
+	indexes                []indexDefinition
+	options                collectionOptions
+	buildPrimaryVal        func(documentID, document []byte) ([]byte, error)
+	cloneTemplateRunValues bool
 }
 
 type insertBatchPlan struct {
@@ -341,6 +342,10 @@ func borrowPrimaryDocument(_, document []byte) ([]byte, error) {
 	return document, nil
 }
 
+func clonePrimaryDocument(_, document []byte) ([]byte, error) {
+	return bytes.Clone(document), nil
+}
+
 func rejectDuplicateDocumentIDs(items []insertBatchItem, order []int) error {
 	for i := 1; i < len(items); i++ {
 		if bytes.Equal(items[orderedItemIndex(order, i-1)].id, items[orderedItemIndex(order, i)].id) {
@@ -530,7 +535,11 @@ func (p insertBatchPlanner) emitTemplateRun(plan *insertBatchPlan, records []tem
 	}
 	table := newCollectionRunTable(len(records))
 	if err := applyCollectionRunEntries(table, len(records), func(i int) (key, value []byte, err error) {
-		return records[i].id[:], records[i].raw, nil
+		raw := records[i].raw
+		if p.cloneTemplateRunValues {
+			raw = bytes.Clone(raw)
+		}
+		return records[i].id[:], raw, nil
 	}); err != nil {
 		return err
 	}
