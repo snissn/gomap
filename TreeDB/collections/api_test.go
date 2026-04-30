@@ -2207,6 +2207,131 @@ func TestCollectionUpdateConcurrentCounterNoLostUpdates(t *testing.T) {
 	}
 }
 
+func TestCollectionUpdateSkipsIndexRootsWhenIndexedValuesUnchanged(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Indexes: []IndexDefinition{
+			{Name: "email", Field: "email", Unique: true},
+			{Name: "city", Field: "city"},
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"email":"ada@example.com","city":"hnl","seen":false}`)},
+	); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	loadCatalog := func() *collectionCatalog {
+		t.Helper()
+		snap := d.AcquireSnapshot()
+		if snap == nil {
+			t.Fatal("expected snapshot")
+		}
+		defer func() { _ = snap.Close() }()
+		catalog, err := loadCollectionCatalog(snap, "users")
+		if err != nil {
+			t.Fatalf("load catalog: %v", err)
+		}
+		if catalog == nil {
+			t.Fatal("missing catalog")
+		}
+		return catalog
+	}
+	roots := func(catalog *collectionCatalog) map[string]uint64 {
+		t.Helper()
+		names := []string{
+			collectionPrimaryRootName("users"),
+			collectionIndexStateRootName("users"),
+			collectionSecondaryRootName("users", "email"),
+			collectionSecondaryRootName("users", "city"),
+		}
+		out := make(map[string]uint64, len(names))
+		for _, name := range names {
+			rootID := catalog.rootID(name)
+			if rootID == 0 {
+				t.Fatalf("root %q was not persisted", name)
+			}
+			out[name] = rootID
+		}
+		return out
+	}
+
+	before := roots(loadCatalog())
+	matched, modified, err := col.Update([]byte("u1"), func([]byte) ([]byte, bool, error) {
+		return []byte(`{"email":"ada@example.com","city":"hnl","seen":true}`), true, nil
+	})
+	if err != nil {
+		t.Fatalf("update non-indexed field: %v", err)
+	}
+	if !matched || !modified {
+		t.Fatalf("update matched=%v modified=%v want true/true", matched, modified)
+	}
+	after := roots(loadCatalog())
+	for _, rootName := range []string{
+		collectionIndexStateRootName("users"),
+		collectionSecondaryRootName("users", "email"),
+		collectionSecondaryRootName("users", "city"),
+	} {
+		if after[rootName] != before[rootName] {
+			t.Fatalf("root %q changed from %d to %d for non-indexed update", rootName, before[rootName], after[rootName])
+		}
+	}
+	got, err := col.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("get updated document: %v", err)
+	}
+	if !bytes.Contains(got, []byte(`"seen":true`)) {
+		t.Fatalf("updated document=%q want seen=true", got)
+	}
+
+	matched, modified, err = col.Update([]byte("u1"), func([]byte) ([]byte, bool, error) {
+		return []byte(`{"email":"ada2@example.com","city":"hnl","seen":true}`), true, nil
+	})
+	if err != nil {
+		t.Fatalf("update indexed field: %v", err)
+	}
+	if !matched || !modified {
+		t.Fatalf("indexed update matched=%v modified=%v want true/true", matched, modified)
+	}
+	afterIndexed := roots(loadCatalog())
+	for _, rootName := range []string{
+		collectionIndexStateRootName("users"),
+		collectionSecondaryRootName("users", "email"),
+	} {
+		if afterIndexed[rootName] == after[rootName] {
+			t.Fatalf("root %q did not change for indexed update", rootName)
+		}
+	}
+	ids, err := col.FindByIndexValue("email", "ada2@example.com")
+	if err != nil {
+		t.Fatalf("find new email: %v", err)
+	}
+	if len(ids) != 1 || !bytes.Equal(ids[0], []byte("u1")) {
+		t.Fatalf("new email ids=%q want u1", ids)
+	}
+	ids, err = col.FindByIndexValue("email", "ada@example.com")
+	if err != nil {
+		t.Fatalf("find old email: %v", err)
+	}
+	if len(ids) != 0 {
+		t.Fatalf("old email ids=%q want none", ids)
+	}
+}
+
 func TestCollectionInsertBatchBridge_RejectsPersistedUniqueConflictAtomically(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
