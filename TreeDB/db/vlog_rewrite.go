@@ -2535,8 +2535,21 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 	stats.SegmentsBefore = beforeSegs
 	stats.BytesBefore = beforeBytes
 
+	reader := newValueReader(state.ValueLogSet)
+	collectionRootDescriptors, err := vacuumCollectCollectionRootDescriptors(d.Pager(), reader, state.SystemRootPageID)
+	if err != nil {
+		_ = d.Close()
+		return stats, fmt.Errorf("vlog-rewrite: collect collection root descriptors: %w", err)
+	}
+	collectionRootLeafLogUsage, _, err := valueLogRewriteCollectionRootLeafLogUsageFromDescriptors(d.Pager(), collectionRootDescriptors)
+	if err != nil {
+		_ = d.Close()
+		return stats, err
+	}
+	rewriteUsesLeafLog := opts.IndexOuterLeavesInValueLog
+
 	var lane, startSeq uint32
-	if opts.IndexOuterLeavesInValueLog {
+	if rewriteUsesLeafLog {
 		lane, startSeq = chooseRewriteLane(segments, rewriteLeafLogLaneID)
 	} else {
 		lane, startSeq = chooseRewriteLane(segments)
@@ -2550,7 +2563,7 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 	if maxBytes <= 0 {
 		maxBytes = defaultValueLogRewriteSegmentBytes
 	}
-	if opts.IndexPackedValuePtr || opts.IndexOuterLeavesInValueLog {
+	if opts.IndexPackedValuePtr || rewriteUsesLeafLog {
 		// Packed on-disk pointers store Offset as u32. Ensure rewritten segments
 		// rotate so newly written pointers remain representable. LeafRef ids
 		// (outer leaves in value log) also encode Offset as u32.
@@ -2561,7 +2574,7 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 	}
 	layout := resolveStorageLayout(opts.Dir)
 	writer := newRewriteWriter(layout.valueVLogDir, lane, startSeq, maxBytes)
-	if opts.IndexOuterLeavesInValueLog {
+	if rewriteUsesLeafLog {
 		writer.ConfigureLeafLog(layout.leafVLogDir, rewriteLeafLogLaneID, maxRewriteLaneSeq(segments, rewriteLeafLogLaneID))
 	}
 	writer.nextRID = nextRID
@@ -2575,7 +2588,7 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 	}
 	writer.blockCompression = compressionMode != ValueLogCompressionOff
 	writer.blockCodec = valuelogBlockCodecFromDB(opts.ValueLog.BlockCodec)
-	writer.leafBlockCodec = leafPageBlockCodecFromOptions(compressionMode, opts.ValueLog.AutoPolicy, opts.ValueLog.BlockCodec, opts.IndexOuterLeavesInValueLog)
+	writer.leafBlockCodec = leafPageBlockCodecFromOptions(compressionMode, opts.ValueLog.AutoPolicy, opts.ValueLog.BlockCodec, rewriteUsesLeafLog)
 	if err := writer.ensureWriter(); err != nil {
 		_ = d.Close()
 		return stats, err
@@ -2609,7 +2622,7 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 		_ = d.Close()
 		return stats, err
 	}
-	if writer.blockCompression && opts.IndexOuterLeavesInValueLog {
+	if writer.blockCompression && rewriteUsesLeafLog {
 		leafDictID, leafDictBytes, leafDictUseRawPages, err := prepareRewriteLeafDict(d, state, opts.ValueLog.DictCurrentForClass, opts.ValueLog.DictLeafPayloadMode, opts.ValueLog.DictLookup, opts.ValueLog.DictPut, opts.ValueLog.DictSetCurrentForClass, opts.ValueLog.DictSetLeafPayloadMode, opts.ValueLog.DictTrain)
 		if err != nil {
 			_ = newPager.Close()
@@ -2621,9 +2634,7 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 		}
 	}
 
-	buildTree := func(root uint64) (uint64, error) {
-		iter := tree.New(d.Pager(), newValueReader(state.ValueLogSet), root).
-			IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
+	buildTreeFromIterator := func(iter iteratorWithEntry, useLeafLog bool) (uint64, error) {
 		rewriter := &rewriteIterator{
 			inner:               iter,
 			ptrMap:              ptrMap,
@@ -2643,9 +2654,9 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 			LeafPrefixCompression: opts.LeafPrefixCompression,
 			LeafColumnar:          opts.IndexColumnarLeaves,
 			PackedValuePtr:        opts.IndexPackedValuePtr,
-			InternalBaseDelta:     opts.IndexInternalBaseDelta,
+			InternalBaseDelta:     opts.IndexInternalBaseDelta && !useLeafLog,
 		}
-		if opts.IndexOuterLeavesInValueLog {
+		if useLeafLog {
 			buildOpts.LeafPageLog = writer
 		}
 		newRoot, err := bulk.BuildWithOptions(rewriter, alloc, newPager, buildOpts)
@@ -2676,15 +2687,50 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 		stats.TemplateOuterLeafReasons = copyTemplateReasonMap(writer.templateClassReasonCounts(rewriteTemplateClassOuterLeaf))
 		return newRoot, nil
 	}
+	buildTree := func(root uint64, useLeafLog bool) (uint64, error) {
+		iter := tree.New(d.Pager(), reader, root).
+			IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
+		return buildTreeFromIterator(iter, useLeafLog)
+	}
+	buildCollectionTree := func(root uint64) (uint64, error) {
+		useLeafLog := false
+		if opts.IndexOuterLeavesInValueLog {
+			var ok bool
+			useLeafLog, ok = collectionRootLeafLogUsage[root]
+			if !ok {
+				var err error
+				useLeafLog, err = valueLogRewriteCollectionRootUsesLeafLog(d.Pager(), root)
+				if err != nil {
+					return 0, err
+				}
+			}
+		}
+		return buildTree(root, useLeafLog)
+	}
 
-	sysRoot, err := buildTree(state.SystemRootPageID)
+	collectionRootReplacements, err := valueLogRewriteCollectionRootsFromDescriptors(collectionRootDescriptors, buildCollectionTree)
 	if err != nil {
 		_ = newPager.Close()
 		_ = d.Close()
 		return stats, err
 	}
 
-	userRoot, err := buildTree(state.RootPageID)
+	var sysIter iteratorWithEntry = tree.New(d.Pager(), reader, state.SystemRootPageID).
+		IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
+	if len(collectionRootReplacements) > 0 {
+		sysIter = &vacuumSystemRootRewriteIterator{
+			base:         sysIter,
+			replacements: collectionRootReplacements,
+		}
+	}
+	sysRoot, err := buildTreeFromIterator(sysIter, opts.IndexOuterLeavesInValueLog)
+	if err != nil {
+		_ = newPager.Close()
+		_ = d.Close()
+		return stats, err
+	}
+
+	userRoot, err := buildTree(state.RootPageID, opts.IndexOuterLeavesInValueLog)
 	if err != nil {
 		_ = newPager.Close()
 		_ = d.Close()
@@ -2771,6 +2817,48 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 	stats.BytesAfter = afterBytes
 
 	return stats, nil
+}
+
+func valueLogRewriteCollectionRootsFromDescriptors(descriptors []vacuumCollectionRootDescriptor, buildTree func(uint64) (uint64, error)) ([]vacuumCollectionRootReplacement, error) {
+	if buildTree == nil {
+		return nil, errors.New("vlog-rewrite: missing collection root builder")
+	}
+	return vacuumRewriteCollectionRootDescriptors(descriptors, func(descriptor vacuumCollectionRootDescriptor) (uint64, error) {
+		return buildTree(descriptor.rootID)
+	}, "vlog-rewrite: rewrite collection root")
+}
+
+func valueLogRewriteCollectionRootLeafLogUsageFromDescriptors(oldPager *pager.Pager, descriptors []vacuumCollectionRootDescriptor) (map[uint64]bool, bool, error) {
+	usage := make(map[uint64]bool, len(descriptors))
+	anyLeafLog := false
+	for _, descriptor := range descriptors {
+		if _, ok := usage[descriptor.rootID]; ok {
+			continue
+		}
+		useLeafLog, err := valueLogRewriteCollectionRootUsesLeafLog(oldPager, descriptor.rootID)
+		if err != nil {
+			return nil, false, fmt.Errorf("vlog-rewrite: inspect collection root %q storage: %w", string(descriptor.key), err)
+		}
+		usage[descriptor.rootID] = useLeafLog
+		if useLeafLog {
+			anyLeafLog = true
+		}
+	}
+	return usage, anyLeafLog, nil
+}
+
+func valueLogRewriteCollectionRootUsesLeafLog(oldPager *pager.Pager, rootID uint64) (bool, error) {
+	if rootID == 0 {
+		return false, nil
+	}
+	if _, ok := page.DecodeLeafRef(rootID); ok {
+		return true, nil
+	}
+	_, allLeafRefs, err := vacuumCollectLeafRefChildrenIfComplete(oldPager, rootID)
+	if err != nil {
+		return false, err
+	}
+	return allLeafRefs, nil
 }
 
 type rewriteCreatedSegment struct {

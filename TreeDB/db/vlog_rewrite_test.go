@@ -21,6 +21,8 @@ import (
 	batchpkg "github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/compression"
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -472,6 +474,316 @@ func TestValueLogRewriteOffline_RewritesAndShrinks(t *testing.T) {
 	}
 	if !bytes.Equal(val, bytes.Repeat([]byte{0x03}, 128)) {
 		t.Fatalf("k2 mismatch")
+	}
+}
+
+func TestValueLogRewriteOffline_RewritesCollectionRootPointers(t *testing.T) {
+	dir := t.TempDir()
+
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	ptr := appendPointersInNewSegment(t, dir, 0, 1, 500_000, 1, func(int) []byte {
+		return bytes.Repeat([]byte("collection-pointer-live|"), 32)
+	})[0]
+	oldPath := valueLogSegmentPath(t, dir, ptr.FileID)
+	publishCollectionPointerRoot(t, db, maintenanceTestCollectionRootKey, ptr)
+
+	if err := db.Close(); err != nil {
+		t.Fatalf("close before rewrite: %v", err)
+	}
+
+	stats, err := ValueLogRewriteOffline(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("ValueLogRewriteOffline: %v", err)
+	}
+	if stats.RecordsCopied == 0 {
+		t.Fatalf("expected collection pointer record to be copied, stats=%+v", stats)
+	}
+	if _, err := os.Stat(oldPath); err == nil || !os.IsNotExist(err) {
+		t.Fatalf("expected old collection pointer segment removed, err=%v", err)
+	}
+
+	reopen, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer closeNoErr(t, reopen)
+
+	got := readCollectionRootValue(t, reopen, maintenanceTestCollectionRootKey, []byte("doc/p"))
+	want := bytes.Repeat([]byte("collection-pointer-live|"), 32)
+	if !bytes.Equal(got, want) {
+		t.Fatalf("collection value mismatch after rewrite")
+	}
+}
+
+func TestValueLogRewriteOffline_RewritesCollectionLeafRefRoot(t *testing.T) {
+	dir := t.TempDir()
+	opts := Options{
+		Dir:                        dir,
+		Durability:                 DurabilityWALOffRelaxed,
+		DisableBackgroundPrune:     true,
+		IndexOuterLeavesInValueLog: true,
+		LeafPrefixCompression:      true,
+		IndexColumnarLeaves:        true,
+		IndexPackedValuePtr:        true,
+	}
+	db, err := Open(opts)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	leafLog := newRewriteWriter(ValueLogDirPath(dir), 0, 0, 64<<20)
+	leafLog.ConfigureLeafLog(LeafLogDirPath(dir), rewriteLeafLogLaneID, 0)
+	db.SetLeafPageLog(leafLog)
+
+	ptr := appendPointersInNewSegment(t, dir, 0, 1, 600_000, 1, func(int) []byte {
+		return bytes.Repeat([]byte("collection-leafref-live|"), 32)
+	})[0]
+	oldValuePath := valueLogSegmentPath(t, dir, ptr.FileID)
+	_, rootIDs, err := db.PublishOrderedRootGroupWithSystemBuilder([]OrderedRootPublishInput{{
+		BaseRoot:      0,
+		Iter:          mustFrozenSystemPointerMemtable(t, "doc/p", ptr).NewIterator(nil, nil),
+		StoragePolicy: OrderedRootStorageValueLogLeaves,
+	}}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		if len(rootIDs) != 1 {
+			return nil, fmt.Errorf("rootIDs=%d want 1", len(rootIDs))
+		}
+		return mustFrozenRawMemtable(t, maintenanceTestCollectionRootKey, encodeMaintenanceRootID(rootIDs[0])).NewIterator(nil, nil), nil
+	})
+	if err != nil {
+		t.Fatalf("publish collection leaf-ref root: %v", err)
+	}
+	oldRoot := rootIDs[0]
+	oldLeafFileIDs := requireCollectionLeafFileIDs(t, db, oldRoot)
+
+	if err := leafLog.Sync(); err != nil {
+		t.Fatalf("sync leaf log: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close before rewrite: %v", err)
+	}
+	if err := leafLog.Close(); err != nil {
+		t.Fatalf("close leaf log: %v", err)
+	}
+
+	stats, err := ValueLogRewriteOffline(opts)
+	if err != nil {
+		t.Fatalf("ValueLogRewriteOffline: %v", err)
+	}
+	if stats.RecordsCopied == 0 {
+		t.Fatalf("expected collection leaf-ref records to be copied, stats=%+v", stats)
+	}
+	if _, err := os.Stat(oldValuePath); err == nil || !os.IsNotExist(err) {
+		t.Fatalf("expected old collection value segment removed, err=%v", err)
+	}
+	requireLeafLogSegmentsRemoved(t, dir, oldLeafFileIDs)
+
+	reopen, err := Open(opts)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer closeNoErr(t, reopen)
+
+	newRoot := readCollectionRootID(t, reopen, maintenanceTestCollectionRootKey)
+	if newRoot == oldRoot {
+		t.Fatalf("collection descriptor still points at old leaf-ref root %d", oldRoot)
+	}
+	newLeafPtr, ok := page.DecodeLeafRef(newRoot)
+	if !ok {
+		t.Fatalf("rewritten collection root=%d want leaf ref", newRoot)
+	}
+	if _, err := os.Stat(leafLogSegmentPath(t, dir, newLeafPtr.FileID)); err != nil {
+		t.Fatalf("expected rewritten collection leaf segment: %v", err)
+	}
+
+	got := readCollectionRootValue(t, reopen, maintenanceTestCollectionRootKey, []byte("doc/p"))
+	want := bytes.Repeat([]byte("collection-leafref-live|"), 32)
+	if !bytes.Equal(got, want) {
+		t.Fatalf("collection leaf-ref value mismatch after rewrite")
+	}
+}
+
+func TestValueLogRewriteOffline_RewritesCollectionLeafRefRootWithPagerDefault(t *testing.T) {
+	dir := t.TempDir()
+	opts := Options{
+		Dir:                    dir,
+		Durability:             DurabilityWALOffRelaxed,
+		DisableBackgroundPrune: true,
+		LeafPrefixCompression:  true,
+		IndexColumnarLeaves:    true,
+		IndexPackedValuePtr:    true,
+		IndexInternalBaseDelta: true,
+	}
+	db, err := Open(opts)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	leafLog := newRewriteWriter(ValueLogDirPath(dir), 0, 0, 64<<20)
+	leafLog.ConfigureLeafLog(LeafLogDirPath(dir), rewriteLeafLogLaneID, 0)
+	db.SetLeafPageLog(leafLog)
+
+	const descriptorKey = "collections/root/users/pager-default-primary"
+	docValue := bytes.Repeat([]byte("collection-leafref-pager-default|"), 24)
+	docs := memtable.NewAppendOnlyWithEntryCapacity(1024)
+	for i := 0; i < 1024; i++ {
+		docs.Set([]byte(fmt.Sprintf("doc/%04d", i)), docValue)
+	}
+	docs.Freeze()
+	_, rootIDs, err := db.PublishOrderedRootGroupWithSystemBuilder([]OrderedRootPublishInput{{
+		BaseRoot:      0,
+		Iter:          docs.NewIterator(nil, nil),
+		StoragePolicy: OrderedRootStorageValueLogLeaves,
+	}}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		if len(rootIDs) != 1 {
+			return nil, fmt.Errorf("rootIDs=%d want 1", len(rootIDs))
+		}
+		return mustFrozenRawMemtable(t, descriptorKey, encodeMaintenanceRootID(rootIDs[0])).NewIterator(nil, nil), nil
+	})
+	if err != nil {
+		t.Fatalf("publish collection leaf-ref root: %v", err)
+	}
+	oldRoot := rootIDs[0]
+	oldLeafFileIDs := requireCollectionLeafFileIDs(t, db, oldRoot)
+	if err := leafLog.Sync(); err != nil {
+		t.Fatalf("sync leaf log: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close before rewrite: %v", err)
+	}
+	if err := leafLog.Close(); err != nil {
+		t.Fatalf("close leaf log: %v", err)
+	}
+
+	stats, err := ValueLogRewriteOffline(opts)
+	if err != nil {
+		t.Fatalf("ValueLogRewriteOffline: %v", err)
+	}
+	_ = stats
+	requireLeafLogSegmentsRemoved(t, dir, oldLeafFileIDs)
+
+	reopen, err := Open(opts)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer closeNoErr(t, reopen)
+
+	newRoot := readCollectionRootID(t, reopen, descriptorKey)
+	if newRoot == oldRoot {
+		t.Fatalf("collection descriptor still points at old leaf-ref root %d", oldRoot)
+	}
+	if _, ok := page.DecodeLeafRef(newRoot); ok {
+		t.Fatalf("rewritten collection root=%d should use pager leaves when DB leaf-log mode is disabled", newRoot)
+	}
+	if _, allLeafRefs, err := vacuumCollectLeafRefChildrenIfComplete(reopen.Pager(), newRoot); err != nil {
+		t.Fatalf("inspect rewritten collection root %d: %v", newRoot, err)
+	} else if allLeafRefs {
+		t.Fatalf("rewritten collection root=%d still has only leaf-ref children with pager-default options", newRoot)
+	}
+	got := readCollectionRootValue(t, reopen, descriptorKey, []byte("doc/0512"))
+	if !bytes.Equal(got, docValue) {
+		t.Fatalf("collection leaf-ref value mismatch after rewrite")
+	}
+}
+
+func TestValueLogRewriteOffline_PreservesCollectionRootStoragePolicy(t *testing.T) {
+	dir := t.TempDir()
+	opts := Options{
+		Dir:                        dir,
+		Durability:                 DurabilityWALOffRelaxed,
+		DisableBackgroundPrune:     true,
+		IndexOuterLeavesInValueLog: true,
+		LeafPrefixCompression:      true,
+		IndexColumnarLeaves:        true,
+		IndexPackedValuePtr:        true,
+	}
+	db, err := Open(opts)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	leafLog := newRewriteWriter(ValueLogDirPath(dir), 0, 0, 64<<20)
+	leafLog.ConfigureLeafLog(LeafLogDirPath(dir), rewriteLeafLogLaneID, 0)
+	db.SetLeafPageLog(leafLog)
+
+	ptr := appendPointersInNewSegment(t, dir, 0, 1, 700_000, 1, func(int) []byte {
+		return bytes.Repeat([]byte("collection-mixed-policy-live|"), 32)
+	})[0]
+	indexDescriptorKey := "collections/root/users/by-email"
+	_, rootIDs, err := db.PublishOrderedRootGroupWithSystemBuilder([]OrderedRootPublishInput{
+		{
+			BaseRoot:      0,
+			Iter:          mustFrozenSystemPointerMemtable(t, "doc/p", ptr).NewIterator(nil, nil),
+			StoragePolicy: OrderedRootStorageValueLogLeaves,
+		},
+		{
+			BaseRoot:      0,
+			Iter:          mustFrozenRawMemtable(t, "idx/email/a", "").NewIterator(nil, nil),
+			StoragePolicy: OrderedRootStoragePagerLeaves,
+		},
+	}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		if len(rootIDs) != 2 {
+			return nil, fmt.Errorf("rootIDs=%d want 2", len(rootIDs))
+		}
+		return mustFrozenRawMemtable(t,
+			maintenanceTestCollectionRootKey, encodeMaintenanceRootID(rootIDs[0]),
+			indexDescriptorKey, encodeMaintenanceRootID(rootIDs[1]),
+		).NewIterator(nil, nil), nil
+	})
+	if err != nil {
+		t.Fatalf("publish mixed collection roots: %v", err)
+	}
+	if _, ok := page.DecodeLeafRef(rootIDs[0]); !ok {
+		t.Fatalf("primary root=%d want leaf ref", rootIDs[0])
+	}
+	if _, ok := page.DecodeLeafRef(rootIDs[1]); ok {
+		t.Fatalf("index root=%d want pager root", rootIDs[1])
+	}
+
+	if err := leafLog.Sync(); err != nil {
+		t.Fatalf("sync leaf log: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close before rewrite: %v", err)
+	}
+	if err := leafLog.Close(); err != nil {
+		t.Fatalf("close leaf log: %v", err)
+	}
+
+	if _, err := ValueLogRewriteOffline(opts); err != nil {
+		t.Fatalf("ValueLogRewriteOffline: %v", err)
+	}
+
+	reopen, err := Open(opts)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer closeNoErr(t, reopen)
+
+	primaryRoot := readCollectionRootID(t, reopen, maintenanceTestCollectionRootKey)
+	if _, ok := page.DecodeLeafRef(primaryRoot); !ok {
+		t.Fatalf("rewritten primary root=%d want leaf ref", primaryRoot)
+	}
+	indexRoot := readCollectionRootID(t, reopen, indexDescriptorKey)
+	if _, ok := page.DecodeLeafRef(indexRoot); ok {
+		t.Fatalf("rewritten index root=%d want pager root", indexRoot)
+	}
+	got := readCollectionRootValue(t, reopen, maintenanceTestCollectionRootKey, []byte("doc/p"))
+	want := bytes.Repeat([]byte("collection-mixed-policy-live|"), 32)
+	if !bytes.Equal(got, want) {
+		t.Fatalf("collection mixed-policy value mismatch after rewrite")
+	}
+	snap := reopen.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("expected snapshot")
+	}
+	defer snap.Close()
+	idxVal, err := snap.GetAtRoot(indexRoot, []byte("idx/email/a"))
+	if err != nil {
+		t.Fatalf("read collection index root: %v", err)
+	}
+	if len(idxVal) != 0 {
+		t.Fatalf("collection index value=%q want empty", string(idxVal))
 	}
 }
 
@@ -4024,6 +4336,112 @@ func readProjectedPointerByKey(t *testing.T, db *DB, key []byte) (page.ValuePtr,
 	}
 	t.Fatalf("missing key %q in projection iterator", key)
 	return page.ValuePtr{}, 0
+}
+
+func requireCollectionLeafPtr(t *testing.T, db *DB, root uint64) page.LeafLogPtr {
+	t.Helper()
+	if leafPtr, ok := page.DecodeLeafRef(root); ok {
+		return leafPtr
+	}
+	children, allLeafRefs, err := vacuumCollectLeafRefChildrenIfComplete(db.Pager(), root)
+	if err != nil {
+		t.Fatalf("collect collection leaf-ref children for root %d: %v", root, err)
+	}
+	if !allLeafRefs || len(children) == 0 {
+		t.Fatalf("collection root=%d want leaf-ref root or leaf-ref children", root)
+	}
+	leafPtr, ok := page.DecodeLeafRef(children[0].childID)
+	if !ok {
+		t.Fatalf("collection child root=%d want leaf ref", children[0].childID)
+	}
+	return leafPtr
+}
+
+func requireCollectionLeafFileIDs(t *testing.T, db *DB, root uint64) []uint32 {
+	t.Helper()
+	if leafPtr, ok := page.DecodeLeafRef(root); ok {
+		return []uint32{leafPtr.FileID}
+	}
+	children, allLeafRefs, err := vacuumCollectLeafRefChildrenIfComplete(db.Pager(), root)
+	if err != nil {
+		t.Fatalf("collect collection leaf-ref children for root %d: %v", root, err)
+	}
+	if !allLeafRefs || len(children) == 0 {
+		t.Fatalf("collection root=%d want leaf-ref root or leaf-ref children", root)
+	}
+	fileIDs := make([]uint32, 0, len(children))
+	seen := make(map[uint32]struct{}, len(children))
+	for _, child := range children {
+		leafPtr, ok := page.DecodeLeafRef(child.childID)
+		if !ok {
+			t.Fatalf("collection child root=%d want leaf ref", child.childID)
+		}
+		if _, ok := seen[leafPtr.FileID]; ok {
+			continue
+		}
+		seen[leafPtr.FileID] = struct{}{}
+		fileIDs = append(fileIDs, leafPtr.FileID)
+	}
+	return fileIDs
+}
+
+func requireLeafLogSegmentsRemoved(t *testing.T, dir string, fileIDs []uint32) {
+	t.Helper()
+	if len(fileIDs) == 0 {
+		t.Fatal("expected at least one leaf-log file id")
+	}
+	for _, fileID := range fileIDs {
+		path := leafLogSegmentPath(t, dir, fileID)
+		if _, err := os.Stat(path); err == nil || !os.IsNotExist(err) {
+			t.Fatalf("expected old collection leaf segment %s removed, err=%v", path, err)
+		}
+	}
+}
+
+func readCollectionRootID(t *testing.T, db *DB, descriptorKey string) uint64 {
+	t.Helper()
+	snap := db.AcquireSnapshot()
+	if snap == nil || snap.state == nil {
+		t.Fatal("expected snapshot")
+	}
+	defer snap.Close()
+	return readCollectionRootIDFromSnapshot(t, snap, descriptorKey)
+}
+
+func readCollectionRootIDFromSnapshot(t *testing.T, snap *Snapshot, descriptorKey string) uint64 {
+	t.Helper()
+	if snap == nil || snap.state == nil {
+		t.Fatal("expected snapshot")
+	}
+	encoded, err := snap.GetAtRoot(snap.state.SystemRootPageID, []byte(descriptorKey))
+	if err != nil {
+		t.Fatalf("read collection descriptor %q: %v", descriptorKey, err)
+	}
+	if len(encoded) != 8 {
+		t.Fatalf("collection descriptor %q length=%d want 8", descriptorKey, len(encoded))
+	}
+	return binary.BigEndian.Uint64(encoded)
+}
+
+func readCollectionRootValue(t *testing.T, db *DB, descriptorKey string, key []byte) []byte {
+	t.Helper()
+	snap := db.AcquireSnapshot()
+	if snap == nil || snap.state == nil {
+		t.Fatal("expected snapshot")
+	}
+	defer snap.Close()
+	rootID := readCollectionRootIDFromSnapshot(t, snap, descriptorKey)
+	val, err := snap.GetAtRoot(rootID, key)
+	if err != nil {
+		t.Fatalf("read collection key %q at root %d: %v", key, rootID, err)
+	}
+	return append([]byte(nil), val...)
+}
+
+func leafLogSegmentPath(t *testing.T, dir string, fileID uint32) string {
+	t.Helper()
+	lane, seq := valuelog.DecodeFileID(fileID)
+	return filepath.Join(LeafLogDirPath(dir), fmt.Sprintf("value-l%d-%06d.log", lane, seq))
 }
 
 func TestSelectRewriteSourceSegments_OversizeCandidates_SelectsOne(t *testing.T) {

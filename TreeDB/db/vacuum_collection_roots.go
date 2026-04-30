@@ -29,6 +29,8 @@ type vacuumCollectionRootReplacement struct {
 	value []byte
 }
 
+type vacuumCollectionRootRewriteFunc func(vacuumCollectionRootDescriptor) (uint64, error)
+
 type vacuumAllocator interface {
 	Alloc(hint uint64) (uint64, error)
 }
@@ -130,6 +132,19 @@ func vacuumRewriteCollectionRoots(oldPager *pager.Pager, reader tree.SlabReader,
 		return nil, err
 	}
 
+	return vacuumRewriteCollectionRootDescriptors(descriptors, func(descriptor vacuumCollectionRootDescriptor) (uint64, error) {
+		return vacuumCopyCollectionRoot(oldPager, descriptor.rootID, alloc, newPager)
+	}, "vacuum: copy collection root")
+}
+
+func vacuumRewriteCollectionRootDescriptors(descriptors []vacuumCollectionRootDescriptor, rewriteRoot vacuumCollectionRootRewriteFunc, errPrefix string) ([]vacuumCollectionRootReplacement, error) {
+	if len(descriptors) == 0 {
+		return nil, nil
+	}
+	if rewriteRoot == nil {
+		return nil, errors.New(errPrefix + ": missing rewrite function")
+	}
+
 	replacements := make([]vacuumCollectionRootReplacement, 0, len(descriptors))
 	rootRemap := make(map[uint64]uint64, len(descriptors))
 	for _, descriptor := range descriptors {
@@ -139,9 +154,10 @@ func vacuumRewriteCollectionRoots(oldPager *pager.Pager, reader tree.SlabReader,
 			if existing, ok := rootRemap[oldRoot]; ok {
 				newRoot = existing
 			} else {
-				newRoot, err = vacuumCopyCollectionRoot(oldPager, oldRoot, alloc, newPager)
+				var err error
+				newRoot, err = rewriteRoot(descriptor)
 				if err != nil {
-					return nil, fmt.Errorf("vacuum: copy collection root %q: %w", string(descriptor.key), err)
+					return nil, fmt.Errorf("%s %q: %w", errPrefix, string(descriptor.key), err)
 				}
 				rootRemap[oldRoot] = newRoot
 			}
