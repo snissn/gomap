@@ -607,7 +607,7 @@ func runFixture(cfg config) (loadSummary, error) {
 		BatchSize:                     cfg.BatchSize,
 		Batches:                       batches,
 		IndexCount:                    cfg.IndexCount,
-		BufferedIndexedWrites:         cfg.BufferedIndexedWrites,
+		BufferedIndexedWrites:         cfg.BufferedIndexedWrites && cfg.IndexCount > 0,
 		DataOuterLeavesInValueLog:     cfg.DataOuterLeavesInValueLog,
 		IndexOuterLeavesInValueLog:    cfg.IndexOuterLeavesInValueLog,
 		ChunkSize:                     cfg.ChunkSize,

@@ -1557,7 +1557,7 @@ func (c *Collection) flushBufferedIndexedLocked(domain *collectionWriteDomain) e
 	}
 	for rootName, baseRoot := range domain.rootBaseIDs {
 		if got := pinnedCatalog.rootID(rootName); got != baseRoot {
-			return fmt.Errorf("collections: concurrent root modification detected for %q", meta.Name)
+			return fmt.Errorf("collections: concurrent root modification detected for %q", rootName)
 		}
 	}
 
@@ -3011,7 +3011,7 @@ func (c *Collection) getBufferedDocumentInto(documentID []byte, dst []byte) ([]b
 		return nil, false, false
 	}
 	table := domain.table
-	if table == nil && len(domain.rootRuns) > 0 {
+	if len(domain.rootRuns) > 0 {
 		name := collectionPrimaryRootName(c.meta.Name)
 		if domain.meta.Name != "" {
 			name = collectionPrimaryRootName(domain.meta.Name)
@@ -3180,9 +3180,9 @@ func (c *Collection) bufferedIndexIDs(indexName string, prefix []byte, maxResult
 	return out, truncated, nil
 }
 
-// ScanDocuments flushes buffered no-index writes before acquiring a snapshot,
-// then scans the collection primary root up to maxDocuments. The returned
-// boolean is true when additional documents were present beyond the limit.
+// ScanDocuments flushes buffered writes before acquiring a snapshot, then scans
+// the collection primary root up to maxDocuments. The returned boolean is true
+// when additional documents were present beyond the limit.
 func (c *Collection) ScanDocuments(maxDocuments int) ([]DocumentRecord, bool, error) {
 	out := make([]DocumentRecord, 0)
 	truncated, err := c.ScanDocumentsFunc(maxDocuments, func(record DocumentRecord) (bool, error) {
@@ -3195,11 +3195,10 @@ func (c *Collection) ScanDocuments(maxDocuments int) ([]DocumentRecord, bool, er
 	return out, truncated, nil
 }
 
-// ScanDocumentsFunc flushes buffered no-index writes before acquiring a
-// snapshot, then calls fn for primary collection records until maxDocuments is
-// reached, the collection is exhausted, or fn returns false. The returned
-// boolean is true only when additional documents were present beyond the
-// maxDocuments limit.
+// ScanDocumentsFunc flushes buffered writes before acquiring a snapshot, then
+// calls fn for primary collection records until maxDocuments is reached, the
+// collection is exhausted, or fn returns false. The returned boolean is true
+// only when additional documents were present beyond the maxDocuments limit.
 func (c *Collection) ScanDocumentsFunc(maxDocuments int, fn func(DocumentRecord) (bool, error)) (bool, error) {
 	if c == nil {
 		return false, errCollectionNil
