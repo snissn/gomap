@@ -71,6 +71,23 @@ func TestPrepareRunDirRemovesPriorCanonicalArtifacts(t *testing.T) {
 	}
 }
 
+func TestOfflineRewriteIndexArgsIncludesConfiguredShape(t *testing.T) {
+	tests := []struct {
+		configured int
+		want       string
+	}{
+		{configured: 0, want: "0,1,2"},
+		{configured: 2, want: "0,1,2"},
+		{configured: 3, want: "0,1,2,3"},
+	}
+	for _, tt := range tests {
+		got := strings.Join(offlineRewriteIndexArgs(tt.configured), ",")
+		if got != tt.want {
+			t.Fatalf("offlineRewriteIndexArgs(%d) = %q, want %q", tt.configured, got, tt.want)
+		}
+	}
+}
+
 func TestGuardrailRequiresSQLiteVacuumForCompactedComparison(t *testing.T) {
 	canon := knownExampleRun()
 	var filtered []resultRow

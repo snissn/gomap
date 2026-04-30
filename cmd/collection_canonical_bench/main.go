@@ -465,10 +465,11 @@ func runTimedMatrix(cfg config, canon *canonicalRun) error {
 func runOfflineRewriteMatrix(cfg config, canon *canonicalRun) error {
 	rewriteDir := filepath.Join(cfg.OutDir, "offline_rewrite")
 	env := map[string]string{
-		"RUN_DIR": rewriteDir,
-		"DOCS":    strconv.Itoa(cfg.Docs),
-		"BATCH":   strconv.Itoa(cfg.BatchSize),
-		"PROFILE": cfg.Profile,
+		"RUN_DIR":            rewriteDir,
+		"DOCS":               strconv.Itoa(cfg.Docs),
+		"BATCH":              strconv.Itoa(cfg.BatchSize),
+		"PROFILE":            cfg.Profile,
+		"COLLECTION_INDEXES": strings.Join(offlineRewriteIndexArgs(cfg.Indexes), " "),
 	}
 	if err := runLoggedCommand(cfg, canon, "offline_rewrite_matrix", env, "bash", "./scripts/treedb_collection_compression_matrix.sh"); err != nil {
 		return err
@@ -1425,6 +1426,24 @@ func canonicalIndexCount(canon *canonicalRun) int {
 		return canon.Config.Indexes
 	}
 	return 0
+}
+
+func offlineRewriteIndexArgs(configured int) []string {
+	seen := make(map[int]bool, 4)
+	var indexes []int
+	for _, idx := range []int{0, 1, 2, configured} {
+		if idx < 0 || seen[idx] {
+			continue
+		}
+		seen[idx] = true
+		indexes = append(indexes, idx)
+	}
+	sort.Ints(indexes)
+	out := make([]string, 0, len(indexes))
+	for _, idx := range indexes {
+		out = append(out, strconv.Itoa(idx))
+	}
+	return out
 }
 
 func indexCountLabel(indexes int) string {
