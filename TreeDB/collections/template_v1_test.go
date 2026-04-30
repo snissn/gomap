@@ -108,6 +108,9 @@ func TestTemplateV1CollectionInsertBatchIndexesAndTemplateRoot(t *testing.T) {
 	if len(cityIDs) != 2 || !bytes.Equal(cityIDs[0], []byte("u1")) || !bytes.Equal(cityIDs[1], []byte("u2")) {
 		t.Fatalf("city ids=%q want [u1 u2]", cityIDs)
 	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush indexed memtables: %v", err)
+	}
 
 	snap := d.AcquireSnapshot()
 	if snap == nil {
@@ -279,6 +282,9 @@ func TestTemplateV1EncoderReusesPersistedTemplateRoot(t *testing.T) {
 	if _, err := col.InsertBatch([][]byte{[]byte("u1")}, [][]byte{doc1}); err != nil {
 		t.Fatalf("insert doc1: %v", err)
 	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush first indexed memtable: %v", err)
+	}
 	snap := d.AcquireSnapshot()
 	if snap == nil {
 		t.Fatal("expected snapshot")
@@ -318,6 +324,79 @@ func TestTemplateV1EncoderReusesPersistedTemplateRoot(t *testing.T) {
 	}
 	if len(ids) != 1 || !bytes.Equal(ids[0], []byte("u2")) {
 		t.Fatalf("email ids=%q want u2", ids)
+	}
+}
+
+func TestTemplateV1IndexedWriteMemtablesResolveBufferedTemplateAcrossBatches(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatTemplateV1,
+		},
+		Indexes: []IndexDefinition{{Name: "city", Field: "city"}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+
+	var encoder TemplateV1Encoder
+	doc1, err := encoder.EncodeDocument([]string{"email", "city"}, []any{"ada@example.com", "hnl"})
+	if err != nil {
+		t.Fatalf("encode doc1: %v", err)
+	}
+	doc2, err := encoder.EncodeDocument([]string{"email", "city"}, []any{"grace@example.com", "sea"})
+	if err != nil {
+		t.Fatalf("encode doc2: %v", err)
+	}
+	if !bytes.HasPrefix(doc2, []byte(templateV1StoredMagic)) {
+		t.Fatalf("second encoded doc should reuse emitted template and be stored bytes")
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("u1")}, [][]byte{doc1}); err != nil {
+		t.Fatalf("insert first buffered batch: %v", err)
+	}
+	for i := range doc1 {
+		doc1[i] = 0
+	}
+	col.writeDomain.mu.RLock()
+	bufferedTemplateRuns := len(col.writeDomain.rootRuns[collectionTemplateRootName("users")])
+	col.writeDomain.mu.RUnlock()
+	if bufferedTemplateRuns != 1 {
+		t.Fatalf("buffered template runs=%d want 1", bufferedTemplateRuns)
+	}
+	storedDoc2, _, err := parseTemplateV1InsertDocument(doc2)
+	if err != nil {
+		t.Fatalf("parse doc2: %v", err)
+	}
+	rootDoc2, err := parseTemplateV1StoredDocument(storedDoc2)
+	if err != nil {
+		t.Fatalf("parse doc2 root: %v", err)
+	}
+	opts := collectionOptionsWithBufferedTemplateV1Resolver(collectionOptions{
+		documentFormat:   DocumentFormatTemplateV1,
+		templateResolver: nil,
+	}, col.writeDomain, "users")
+	if _, err := opts.templateResolver.lookupTemplateV1(rootDoc2.templateID); err != nil {
+		t.Fatalf("lookup buffered template directly: %v", err)
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("u2")}, [][]byte{doc2}); err != nil {
+		t.Fatalf("insert second buffered batch: %v", err)
+	}
+	ids, err := col.FindByIndex("city", "sea")
+	if err != nil {
+		t.Fatalf("find buffered city: %v", err)
+	}
+	if len(ids) != 1 || !bytes.Equal(ids[0], []byte("u2")) {
+		t.Fatalf("city ids=%q want [u2]", ids)
 	}
 }
 

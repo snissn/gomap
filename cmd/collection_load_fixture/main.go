@@ -296,23 +296,25 @@ func main() {
 
 func parseConfig(args []string, output io.Writer) (config, error) {
 	cfg := config{
-		Docs:                       defaultDocs,
-		BatchSize:                  defaultBatchSize,
-		Collection:                 defaultCollectionName,
-		DocumentFormat:             collections.DocumentFormatTemplateV1,
-		IndexCount:                 2,
-		Profile:                    treedb.ProfileFast,
-		DataOuterLeavesInValueLog:  true,
-		IndexOuterLeavesInValueLog: true,
-		KeepRecent:                 1,
-		PreferAppendAlloc:          false,
-		Checkpoint:                 true,
-		ReopenVerify:               true,
-		VerifySamples:              8,
-		ValueLogGC:                 true,
-		LeafGenerationPackMaxGen:   1,
-		IndexVacuum:                indexVacuumModeAuto,
-		Progress:                   true,
+		Docs:                        defaultDocs,
+		BatchSize:                   defaultBatchSize,
+		Collection:                  defaultCollectionName,
+		DocumentFormat:              collections.DocumentFormatTemplateV1,
+		IndexCount:                  2,
+		BufferedIndexedWrites:       true,
+		BufferedIndexedWriteMaxDocs: collections.DefaultIndexedWriteMemtableMaxDocuments,
+		Profile:                     treedb.ProfileFast,
+		DataOuterLeavesInValueLog:   true,
+		IndexOuterLeavesInValueLog:  true,
+		KeepRecent:                  1,
+		PreferAppendAlloc:           false,
+		Checkpoint:                  true,
+		ReopenVerify:                true,
+		VerifySamples:               8,
+		ValueLogGC:                  true,
+		LeafGenerationPackMaxGen:    1,
+		IndexVacuum:                 indexVacuumModeAuto,
+		Progress:                    true,
 	}
 	var documentFormat string
 	var profile string
@@ -328,8 +330,8 @@ func parseConfig(args []string, output io.Writer) (config, error) {
 	fs.StringVar(&cfg.Collection, "collection", cfg.Collection, "collection name")
 	fs.StringVar(&documentFormat, "format", string(cfg.DocumentFormat), "document format: json or template-v1")
 	fs.IntVar(&cfg.IndexCount, "indexes", cfg.IndexCount, "secondary index count for the benchmark shape: 0, 1, 2, or 3")
-	fs.BoolVar(&cfg.BufferedIndexedWrites, "buffered-indexed-writes", false, "stage indexed InsertBatch writes in collection-local memtables until flush")
-	fs.IntVar(&cfg.BufferedIndexedWriteMaxDocs, "buffered-indexed-write-max-docs", 0, "flush indexed write buffers after this many staged documents; 0 means Flush/Close only")
+	fs.BoolVar(&cfg.BufferedIndexedWrites, "buffered-indexed-writes", cfg.BufferedIndexedWrites, "use native collection-local memtables for indexed InsertBatch writes; set false for immediate-publish baseline comparisons")
+	fs.IntVar(&cfg.BufferedIndexedWriteMaxDocs, "buffered-indexed-write-max-docs", cfg.BufferedIndexedWriteMaxDocs, "flush indexed write buffers after this many staged documents; 0 uses the collection default")
 	fs.Int64Var(&cfg.BufferedIndexedWriteMaxBytes, "buffered-indexed-write-max-bytes", 0, "flush indexed write buffers after this many staged root-run bytes; 0 means Flush/Close only")
 	fs.StringVar(&profile, "profile", string(cfg.Profile), "TreeDB profile: fast, wal_on_fast, durable, or bench")
 	fs.BoolVar(&cfg.DataOuterLeavesInValueLog, "data-outer-leaves-in-vlog", cfg.DataOuterLeavesInValueLog, "store collection primary/index-state outer leaves through the value log")
@@ -751,6 +753,7 @@ func createFixtureCollection(backend *backenddb.DB, cfg config) (*collections.Co
 			DocumentFormat:                   cfg.DocumentFormat,
 			DataRootStoragePolicy:            rootStoragePolicy(cfg.DataOuterLeavesInValueLog),
 			IndexStateStoragePolicy:          rootStoragePolicy(cfg.DataOuterLeavesInValueLog),
+			DisableIndexedWriteMemtables:     !cfg.BufferedIndexedWrites && cfg.IndexCount > 0,
 			BufferedIndexedWrites:            bufferedIndexedWrites,
 			BufferedIndexedWriteMaxDocuments: bufferedIndexedWriteMaxDocs,
 			BufferedIndexedWriteMaxBytes:     bufferedIndexedWriteMaxBytes,

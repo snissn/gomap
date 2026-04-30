@@ -20,6 +20,8 @@ func addCollectionInsertStats(dst *collections.CollectionInsertStats, src collec
 	dst.Documents += src.Documents
 	dst.Indexes += src.Indexes
 	dst.Runs += src.Runs
+	dst.BufferedIndexedBatches += src.BufferedIndexedBatches
+	dst.BufferedIndexedBypassBatches += src.BufferedIndexedBypassBatches
 	dst.PrepareDocuments += src.PrepareDocuments
 	dst.IndexStateExtraction += src.IndexStateExtraction
 	dst.DuplicateDocumentPreflight += src.DuplicateDocumentPreflight
@@ -64,6 +66,12 @@ func benchmarkReportCollectionInsertStats(b *testing.B, docs, batches int, stats
 		b.ReportMetric(float64(stats.Runs)/float64(batches), "roots/batch")
 		b.ReportMetric(float64(stats.SecondarySortedRuns)/float64(batches), "secondary_sorted_runs/batch")
 		b.ReportMetric(float64(stats.SecondaryUnsortedRuns)/float64(batches), "secondary_unsorted_runs/batch")
+		if stats.BufferedIndexedBatches > 0 {
+			b.ReportMetric(float64(stats.BufferedIndexedBatches), "buffered_indexed_batches")
+		}
+		if stats.BufferedIndexedBypassBatches > 0 {
+			b.ReportMetric(float64(stats.BufferedIndexedBypassBatches), "buffered_indexed_bypass_batches")
+		}
 	}
 }
 
@@ -191,10 +199,10 @@ func benchmarkCollectionShapeInsertBatch(b *testing.B, indexCount int, checkpoin
 		if meta.Options.BufferedIndexedWriteMaxBytes > 0 {
 			b.ReportMetric(float64(meta.Options.BufferedIndexedWriteMaxBytes), "buffered_max_bytes")
 		}
-		if insertElapsed > 0 {
+		if insertStats.BufferedIndexedBatches > 0 && insertStats.BufferedIndexedBypassBatches == 0 && insertElapsed > 0 {
 			b.ReportMetric(float64(insertElapsed.Nanoseconds())/float64(b.N), "buffered_insert_ns/doc")
 		}
-		if bufferedFlushElapsed > 0 {
+		if insertStats.BufferedIndexedBatches > 0 && insertStats.BufferedIndexedBypassBatches == 0 && bufferedFlushElapsed > 0 {
 			b.ReportMetric(float64(bufferedFlushElapsed.Nanoseconds())/float64(b.N), "buffered_flush_ns/doc")
 		}
 	}
