@@ -30,6 +30,9 @@ const (
 	templateV1KindString
 	templateV1KindObject
 	templateV1KindArray
+
+	templateV1MaxArrayElements uint64 = 1 << 20
+	templateV1ArrayPreallocCap        = 4096
 )
 
 var (
@@ -547,10 +550,10 @@ func decodeTemplateV1Value(raw []byte, pos *int, resolver templateV1Resolver) (a
 		if err != nil {
 			return nil, err
 		}
-		if count > uint64(len(raw)-*pos) {
-			return nil, errors.New("collections: malformed template-v1 array length")
+		if err := validateTemplateV1ArrayCount(raw, pos, count); err != nil {
+			return nil, err
 		}
-		values := make([]any, 0, int(count))
+		values := make([]any, 0, templateV1ArrayInitialCap(count))
 		for i := uint64(0); i < count; i++ {
 			value, err := decodeTemplateV1Value(raw, pos, resolver)
 			if err != nil {
@@ -1154,7 +1157,10 @@ func templateV1AppendArrayIndexValues(raw []byte, encoder *indexEncodeArena) ([]
 	if count == 0 {
 		return nil, nil
 	}
-	values := make([][]byte, 0, int(count))
+	if err := validateTemplateV1ArrayCount(raw, &pos, count); err != nil {
+		return nil, err
+	}
+	values := make([][]byte, 0, templateV1ArrayInitialCap(count))
 	for i := uint64(0); i < count; i++ {
 		start := pos
 		if err := skipTemplateV1Value(raw, &pos, nil); err != nil {
@@ -1239,6 +1245,9 @@ func skipTemplateV1Value(raw []byte, pos *int, resolver templateV1Resolver) erro
 		if err != nil {
 			return err
 		}
+		if err := validateTemplateV1ArrayCount(raw, pos, count); err != nil {
+			return err
+		}
 		for i := uint64(0); i < count; i++ {
 			if err := skipTemplateV1Value(raw, pos, resolver); err != nil {
 				return err
@@ -1291,6 +1300,26 @@ func readTemplateV1Uvarint(raw []byte, pos *int) (uint64, error) {
 	}
 	*pos += n
 	return v, nil
+}
+
+func validateTemplateV1ArrayCount(raw []byte, pos *int, count uint64) error {
+	if pos == nil || *pos > len(raw) {
+		return errors.New("collections: malformed template-v1 array length")
+	}
+	if count > uint64(len(raw)-*pos) {
+		return errors.New("collections: malformed template-v1 array length")
+	}
+	if count > templateV1MaxArrayElements {
+		return fmt.Errorf("collections: template-v1 array length exceeds maximum %d", templateV1MaxArrayElements)
+	}
+	return nil
+}
+
+func templateV1ArrayInitialCap(count uint64) int {
+	if count > uint64(templateV1ArrayPreallocCap) {
+		return templateV1ArrayPreallocCap
+	}
+	return int(count)
 }
 
 func validateTemplateV1FieldName(field string) error {
