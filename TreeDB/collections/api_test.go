@@ -2383,6 +2383,79 @@ func TestCollectionUpdateConcurrentCounterNoLostUpdates(t *testing.T) {
 	}
 }
 
+func TestCollectionUpdateAllowsUnrelatedUserRootCommit(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"count":0}`)},
+	); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	calls := 0
+	matched, modified, err := col.Update([]byte("u1"), func(current []byte) ([]byte, bool, error) {
+		calls++
+		if err := d.Set([]byte(fmt.Sprintf("raw/unrelated/%02d", calls)), []byte("value")); err != nil {
+			return nil, false, err
+		}
+		var doc struct {
+			Count int `json:"count"`
+		}
+		if err := json.Unmarshal(current, &doc); err != nil {
+			return nil, false, err
+		}
+		doc.Count++
+		next, err := json.Marshal(doc)
+		if err != nil {
+			return nil, false, err
+		}
+		return next, true, nil
+	})
+	if err != nil {
+		t.Fatalf("update with unrelated user-root commit: %v", err)
+	}
+	if !matched || !modified {
+		t.Fatalf("update matched=%t modified=%t want true true", matched, modified)
+	}
+	if calls != 1 {
+		t.Fatalf("update callback calls=%d want 1", calls)
+	}
+
+	got, err := col.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("get updated doc: %v", err)
+	}
+	var doc struct {
+		Count int `json:"count"`
+	}
+	if err := json.Unmarshal(got, &doc); err != nil {
+		t.Fatalf("unmarshal updated doc: %v", err)
+	}
+	if doc.Count != 1 {
+		t.Fatalf("count=%d want 1", doc.Count)
+	}
+	raw, err := d.Get([]byte("raw/unrelated/01"))
+	if err != nil {
+		t.Fatalf("get unrelated raw key: %v", err)
+	}
+	if !bytes.Equal(raw, []byte("value")) {
+		t.Fatalf("raw value=%q want value", raw)
+	}
+}
+
 func TestCollectionInsertBatchBridge_RejectsPersistedUniqueConflictAtomically(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {

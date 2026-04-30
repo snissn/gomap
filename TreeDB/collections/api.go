@@ -1459,6 +1459,7 @@ func (c *Collection) updateDocumentOnce(documentID []byte, update func(current [
 		return false, false, err
 	}
 	plannerOptions = collectionOptionsWithTemplateV1Resolver(plannerOptions, snap, catalog)
+	baseUserRoot := snapshotUserRoot(snap)
 	baseSystemRoot := snapshotSystemRoot(snap)
 	baseCommitSeq := snapshotCommitSeq(snap)
 
@@ -1599,7 +1600,7 @@ func (c *Collection) updateDocumentOnce(documentID []byte, update func(current [
 		})
 	}
 	preflight := func() error {
-		return c.requireCommitSeqForMutation(baseCommitSeq)
+		return c.validateMutationRootDescriptors(baseUserRoot, baseSystemRoot, baseCommitSeq)
 	}
 	newSystemRoot, rootIDs, err := c.db.PublishOrderedRootDeltaGroupWithPreflightAndSystemDeltaBuilder(ordered, preflight, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
 		return c.buildRootDescriptorSystemDeltaIterator(baseSystemRoot, rootNames, baseRootIDs, rootIDs)
@@ -1644,6 +1645,16 @@ func snapshotSystemRoot(snap *backenddb.Snapshot) uint64 {
 	}
 	if state := snap.State(); state != nil {
 		return state.SystemRootPageID
+	}
+	return 0
+}
+
+func snapshotUserRoot(snap *backenddb.Snapshot) uint64 {
+	if snap == nil {
+		return 0
+	}
+	if state := snap.State(); state != nil {
+		return state.RootPageID
 	}
 	return 0
 }
@@ -1955,7 +1966,7 @@ func (c *Collection) validateRootDescriptorSystemDelta(expectedSystemRoot uint64
 	return nil
 }
 
-func (c *Collection) requireCommitSeqForMutation(expectedCommitSeq uint64) error {
+func (c *Collection) validateMutationRootDescriptors(expectedUserRoot, expectedSystemRoot, expectedCommitSeq uint64) error {
 	if c == nil || c.db == nil {
 		return backenddb.ErrClosed
 	}
@@ -1963,10 +1974,18 @@ func (c *Collection) requireCommitSeqForMutation(expectedCommitSeq uint64) error
 	if state == nil {
 		return backenddb.ErrClosed
 	}
-	if state.CommitSeq != expectedCommitSeq {
-		return fmt.Errorf("%w: concurrent commit detected", ErrConcurrentMutation)
+	if state.CommitSeq == expectedCommitSeq {
+		return nil
 	}
-	return nil
+	// Raw TreeDB writes advance CommitSeq and move only the user root. Those do
+	// not invalidate collection roots, so Update can still publish safely.
+	if state.SystemRootPageID == expectedSystemRoot {
+		if state.RootPageID != expectedUserRoot {
+			return nil
+		}
+		return fmt.Errorf("%w: ambiguous same-root commit detected", ErrConcurrentMutation)
+	}
+	return fmt.Errorf("%w: concurrent collection root modification detected", ErrConcurrentMutation)
 }
 
 func (c *Collection) buildSchemaAndRootDescriptorSystemIterator(
