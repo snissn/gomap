@@ -1047,10 +1047,11 @@ func (c *Collection) bufferIndexedInsertPlanLocked(catalog *collectionCatalog, b
 			return fmt.Errorf("collections: concurrent schema modification detected for %q", catalog.meta.Name)
 		}
 		for rootName, baseRoot := range domain.rootBaseIDs {
-			if got := catalog.rootID(rootName); got != baseRoot {
+			if got := currentCatalog.rootID(rootName); got != baseRoot {
 				return fmt.Errorf("%w: concurrent root modification detected for %q", ErrConcurrentMutation, rootName)
 			}
 		}
+		catalog = currentCatalog
 	} else {
 		c.initializeWriteDomainFromCatalogLocked(domain, catalog, baseCommitSeq, baseSystemRoot)
 	}
@@ -1092,8 +1093,6 @@ func (c *Collection) bufferIndexedInsertPlanLocked(catalog *collectionCatalog, b
 	domain.loaded = true
 	domain.meta = catalog.meta
 	domain.catalog = catalog
-	domain.baseCommitSeq = baseCommitSeq
-	domain.baseSystemRoot = baseSystemRoot
 	domain.primaryRoot = catalog.rootID(collectionPrimaryRootName(catalog.meta.Name))
 	domain.count += len(plan.resultIDs)
 	c.meta = catalog.meta
@@ -1194,6 +1193,12 @@ func rejectBufferedUniqueIndexConflicts(indexName string, pendingIndex []memtabl
 
 func bufferedUniqueIndexValueRun(batchIndex memtable.Table) (memtable.Table, error) {
 	table := newCollectionRunTable(max(0, batchIndex.Len()))
+	maxInt := int(^uint(0) >> 1)
+	arenaCap := batchIndex.Size()
+	if arenaCap < 0 || arenaCap > int64(maxInt) {
+		arenaCap = 0
+	}
+	arena := make([]byte, 0, int(arenaCap))
 	it := batchIndex.NewIterator(nil, nil)
 	defer func() { _ = it.Close() }()
 	for it.Valid() {
@@ -1202,7 +1207,9 @@ func bufferedUniqueIndexValueRun(batchIndex memtable.Table) (memtable.Table, err
 			resetCollectionRunTable(table)
 			return nil, err
 		}
-		setCollectionRunValue(table, prefix, nil)
+		start := len(arena)
+		arena = append(arena, prefix...)
+		setCollectionRunValue(table, arena[start:len(arena)], nil)
 		it.Next()
 	}
 	if err := it.Error(); err != nil {
@@ -3093,6 +3100,11 @@ func (c *Collection) findByIndexValue(indexName string, value any, maxResults in
 	if maxResults > 0 && len(out) >= maxResults {
 		return out, true, nil
 	}
+	// Buffered indexed writes currently stage inserts only. Primary conflict
+	// checks reject IDs that already exist in pending or persisted roots, so
+	// buffered secondary IDs cannot duplicate persisted secondary IDs. If update
+	// or delete staging is added here, this merge must account for pending
+	// tombstones before returning persisted rows.
 	rootID := catalog.rootID(collectionSecondaryRootName(catalog.meta.Name, idx.Name))
 	if rootID == 0 {
 		return out, truncated, nil
@@ -3105,13 +3117,6 @@ func (c *Collection) findByIndexValue(indexName string, value any, maxResults in
 		return nil, false, err
 	}
 	defer func() { _ = it.Close() }()
-	seen := map[string]struct{}(nil)
-	if len(out) > 0 {
-		seen = make(map[string]struct{}, len(out))
-		for _, id := range out {
-			seen[string(id)] = struct{}{}
-		}
-	}
 	for it.Valid() {
 		key := it.UnsafeKey()
 		if !bytes.HasPrefix(key, prefix) {
@@ -3119,12 +3124,6 @@ func (c *Collection) findByIndexValue(indexName string, value any, maxResults in
 		}
 		if !it.IsDeleted() {
 			id := key[len(prefix):]
-			if seen != nil {
-				if _, ok := seen[string(id)]; ok {
-					it.Next()
-					continue
-				}
-			}
 			if maxResults > 0 && len(out) >= maxResults {
 				truncated = true
 				break

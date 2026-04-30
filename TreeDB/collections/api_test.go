@@ -1238,6 +1238,12 @@ func TestCollectionIndexedWriteMemtablesReadUniqueAndFlush(t *testing.T) {
 		t.Fatalf("buffered duplicate unique err=%v want unique index conflict", err)
 	}
 	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u4")},
+		[][]byte{[]byte(`{"email":"grace@example.com","city":"sea"}`)},
+	); err == nil || !strings.Contains(err.Error(), "unique index") {
+		t.Fatalf("buffered duplicate unique after iterator advance err=%v want unique index conflict", err)
+	}
+	if _, err := col.InsertBatch(
 		[][]byte{[]byte("u1")},
 		[][]byte{[]byte(`{"email":"new@example.com","city":"sea"}`)},
 	); err == nil || !strings.Contains(err.Error(), "document already exists") {
