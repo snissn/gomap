@@ -3097,7 +3097,7 @@ func (c *Collection) findByIndexValue(indexName string, value any, maxResults in
 	if err != nil {
 		return nil, false, err
 	}
-	if maxResults > 0 && len(out) >= maxResults {
+	if maxResults > 0 && truncated {
 		return out, true, nil
 	}
 	// Buffered indexed writes currently stage inserts only. Primary conflict

@@ -1282,6 +1282,62 @@ func TestCollectionIndexedWriteMemtablesReadUniqueAndFlush(t *testing.T) {
 	}
 }
 
+func TestCollectionIndexedWriteMemtablesFindLimitExactBufferedCount(t *testing.T) {
+	dir := t.TempDir()
+	d, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedWrites: true,
+		},
+		Indexes: []IndexDefinition{{Name: "city", Field: "city"}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"city":"hnl"}`)},
+	); err != nil {
+		t.Fatalf("insert u1: %v", err)
+	}
+	ids, truncated, err := col.FindByIndexValueLimit("city", "hnl", 1)
+	if err != nil {
+		t.Fatalf("find exact buffered limit: %v", err)
+	}
+	if truncated {
+		t.Fatalf("exact buffered limit truncated=true ids=%q", ids)
+	}
+	if len(ids) != 1 || !bytes.Equal(ids[0], []byte("u1")) {
+		t.Fatalf("exact buffered limit ids=%q want [u1]", ids)
+	}
+
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u2")},
+		[][]byte{[]byte(`{"city":"hnl"}`)},
+	); err != nil {
+		t.Fatalf("insert u2: %v", err)
+	}
+	ids, truncated, err = col.FindByIndexValueLimit("city", "hnl", 1)
+	if err != nil {
+		t.Fatalf("find over buffered limit: %v", err)
+	}
+	if !truncated {
+		t.Fatalf("over buffered limit truncated=false ids=%q", ids)
+	}
+	if len(ids) != 1 {
+		t.Fatalf("over buffered limit returned %d ids want 1", len(ids))
+	}
+}
+
 func TestCollectionIndexedWriteMemtablesRejectPersistedUniqueConflict(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
