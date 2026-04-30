@@ -95,6 +95,48 @@ func TestParseConfigRejectsUnsupportedIndexCount(t *testing.T) {
 	}
 }
 
+func TestParseConfigValidatesIndexVacuum(t *testing.T) {
+	cfg, err := parseConfig([]string{"-index-vacuum", "ONLINE"})
+	if err != nil {
+		t.Fatalf("parseConfig rejected valid normalized index vacuum: %v", err)
+	}
+	if cfg.FullLeafgenIndexVacuum != "online" {
+		t.Fatalf("index vacuum was not normalized: %q", cfg.FullLeafgenIndexVacuum)
+	}
+	_, err = parseConfig([]string{"-index-vacuum", "bogus"})
+	if err == nil || !strings.Contains(err.Error(), "-index-vacuum must be one of offline, online, auto, or none") {
+		t.Fatalf("parseConfig accepted unsupported index vacuum, err=%v", err)
+	}
+}
+
+func TestParseFullLeafgenSummaryPreservesZeroIndexCount(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "summary.json")
+	summary := fixtureSummary{
+		DocumentFormat: "template-v1",
+		Profile:        "fast",
+		Docs:           100,
+		BatchSize:      16,
+		IndexCount:     0,
+		DiskUsageFinal: &diskUsageSummary{TotalBytes: 1234},
+	}
+	if err := writeJSON(path, summary); err != nil {
+		t.Fatal(err)
+	}
+	canon := knownExampleRun()
+	canon.Config.Indexes = 2
+	canon.Results = nil
+	if err := parseFullLeafgenSummary(canon, path, config{Docs: 100, Indexes: 2, FullLeafgenIndexVacuum: "offline"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(canon.Results) != 1 {
+		t.Fatalf("expected one full leafgen row, got %d", len(canon.Results))
+	}
+	row := canon.Results[0]
+	if row.IndexCount != 0 || row.ConfigName != "treedb_template_v1_collection_0_indexes" {
+		t.Fatalf("zero-index full leafgen row was mislabeled: index=%d config=%s", row.IndexCount, row.ConfigName)
+	}
+}
+
 func TestGuardrailRequiresSQLiteVacuumForCompactedComparison(t *testing.T) {
 	canon := knownExampleRun()
 	var filtered []resultRow

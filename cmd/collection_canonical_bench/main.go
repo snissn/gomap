@@ -418,6 +418,12 @@ func parseConfig(args []string) (config, error) {
 	if cfg.Indexes < 0 || cfg.Indexes > 3 {
 		return config{}, errors.New("-indexes must be 0, 1, 2, or 3")
 	}
+	cfg.FullLeafgenIndexVacuum = strings.ToLower(strings.TrimSpace(cfg.FullLeafgenIndexVacuum))
+	switch cfg.FullLeafgenIndexVacuum {
+	case "offline", "online", "auto", "none":
+	default:
+		return config{}, errors.New("-index-vacuum must be one of offline, online, auto, or none")
+	}
 	if cfg.Count <= 0 {
 		return config{}, errors.New("-count must be > 0")
 	}
@@ -863,9 +869,6 @@ func parseFullLeafgenSummary(canon *canonicalRun, path string, cfg config) error
 		docs = cfg.Docs
 	}
 	indexes := summary.IndexCount
-	if indexes == 0 {
-		indexes = cfg.Indexes
-	}
 	format := canonicalFormat(summary.DocumentFormat)
 	configName := canonicalConfigName("treedb", format, "collection", indexes)
 	if summary.DiskUsageBeforeMaintenance != nil {
