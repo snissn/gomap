@@ -939,6 +939,148 @@ func TestCollectionSingleInsertBufferedNoIndexReadsBeforeFlush(t *testing.T) {
 	}
 }
 
+func TestCollectionGetIntoReusesCallerBuffer(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"name":"ada"}`)},
+	); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
+
+	buf := make([]byte, 0, 64)
+	base := buf[:cap(buf)]
+	got, found, err := col.GetInto([]byte("u1"), buf)
+	if err != nil {
+		t.Fatalf("GetInto: %v", err)
+	}
+	if !found {
+		t.Fatal("GetInto found=false want true")
+	}
+	if want := []byte(`{"name":"ada"}`); !bytes.Equal(got, want) {
+		t.Fatalf("GetInto=%q want %q", got, want)
+	}
+	if len(got) == 0 || &got[0] != &base[0] {
+		t.Fatal("GetInto did not reuse caller buffer")
+	}
+
+	got[9] = 'x'
+	again, err := col.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("Get after caller mutation: %v", err)
+	}
+	if want := []byte(`{"name":"ada"}`); !bytes.Equal(again, want) {
+		t.Fatalf("stored document mutated through GetInto result: got %q want %q", again, want)
+	}
+}
+
+func TestCollectionGetIntoBufferedReusesCallerBuffer(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	writer, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open writer: %v", err)
+	}
+	reader, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open reader: %v", err)
+	}
+	if _, err := writer.Insert([]byte("u1"), []byte(`{"name":"ada"}`)); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	buf := make([]byte, 0, 64)
+	base := buf[:cap(buf)]
+	got, found, err := reader.GetInto([]byte("u1"), buf)
+	if err != nil {
+		t.Fatalf("GetInto buffered: %v", err)
+	}
+	if !found {
+		t.Fatal("GetInto buffered found=false want true")
+	}
+	if want := []byte(`{"name":"ada"}`); !bytes.Equal(got, want) {
+		t.Fatalf("GetInto buffered=%q want %q", got, want)
+	}
+	if len(got) == 0 || &got[0] != &base[0] {
+		t.Fatal("GetInto buffered did not reuse caller buffer")
+	}
+	got[9] = 'x'
+	again, err := writer.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("Get after buffered caller mutation: %v", err)
+	}
+	if want := []byte(`{"name":"ada"}`); !bytes.Equal(again, want) {
+		t.Fatalf("buffered document mutated through GetInto result: got %q want %q", again, want)
+	}
+}
+
+func TestCollectionGetIntoMissingAndDeleted(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+
+	buf := []byte("stale")
+	got, found, err := col.GetInto([]byte("missing"), buf)
+	if err != nil {
+		t.Fatalf("GetInto missing: %v", err)
+	}
+	if found || len(got) != 0 {
+		t.Fatalf("GetInto missing got=%q found=%t want empty false", got, found)
+	}
+
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"name":"ada"}`)},
+	); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+	if err := col.Delete([]byte("u1")); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	got, found, err = col.GetInto([]byte("u1"), buf)
+	if err != nil {
+		t.Fatalf("GetInto deleted: %v", err)
+	}
+	if found || len(got) != 0 {
+		t.Fatalf("GetInto deleted got=%q found=%t want empty false", got, found)
+	}
+}
+
 func TestCollectionSingleInsertBufferedNoIndexFlushPersistsAfterReopen(t *testing.T) {
 	dir := t.TempDir()
 	d, err := backenddb.Open(backenddb.Options{Dir: dir})
