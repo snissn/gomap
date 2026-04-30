@@ -85,6 +85,14 @@ func collectionPlannerOptions(meta CollectionMeta) (collectionOptions, error) {
 	}, nil
 }
 
+func persistIndexStateForOptions(opts collectionOptions) bool {
+	return persistIndexStateForDocumentFormat(opts.documentFormat)
+}
+
+func persistIndexStateForDocumentFormat(format DocumentFormat) bool {
+	return normalizedDocumentFormat(format) != DocumentFormatTemplateV1
+}
+
 type CollectionManager struct {
 	db              *backenddb.DB
 	closeUnregister func()
@@ -641,7 +649,7 @@ func (c *Collection) dropIndexes(names map[string]struct{}, all bool) (*Collecti
 	if err != nil {
 		return nil, err
 	}
-	if len(newMeta.Indexes) == 0 {
+	if len(newMeta.Indexes) == 0 && persistIndexStateForDocumentFormat(baseMeta.Options.DocumentFormat) {
 		clearedRootNames = append(clearedRootNames, collectionIndexStateRootName(baseMeta.Name))
 	}
 	encodedMeta, err := encodeCollectionMeta(newMeta)
@@ -1342,13 +1350,15 @@ func (c *Collection) deleteDocumentOnce(documentID []byte) (bool, error) {
 	deltaTables = append(deltaTables, buildDeleteRootDeltaTable([][]byte{documentID}))
 
 	if len(runtimes) > 0 {
-		stateRootName := collectionIndexStateRootName(c.meta.Name)
-		stateRootID := catalog.rootID(stateRootName)
-		if stateRootID != 0 {
-			rootNames = append(rootNames, stateRootName)
-			baseRootIDs[stateRootName] = stateRootID
-			policies = append(policies, plannerOptions.indexStateStoragePolicy)
-			deltaTables = append(deltaTables, buildDeleteRootDeltaTable([][]byte{documentID}))
+		if persistIndexStateForOptions(plannerOptions) {
+			stateRootName := collectionIndexStateRootName(c.meta.Name)
+			stateRootID := catalog.rootID(stateRootName)
+			if stateRootID != 0 {
+				rootNames = append(rootNames, stateRootName)
+				baseRootIDs[stateRootName] = stateRootID
+				policies = append(policies, plannerOptions.indexStateStoragePolicy)
+				deltaTables = append(deltaTables, buildDeleteRootDeltaTable([][]byte{documentID}))
+			}
 		}
 		for _, runtime := range runtimes {
 			deleteKeys, err := secondaryDeleteKeysForDocument(runtime, state, documentID)
@@ -1555,25 +1565,27 @@ func (c *Collection) updateDocumentOnce(documentID []byte, update func(current [
 	deltaTables = append(deltaTables, primaryTable)
 
 	if indexStateChanged {
-		stateRootName := collectionIndexStateRootName(c.meta.Name)
-		stateRootID := catalog.rootID(stateRootName)
-		rootNames = append(rootNames, stateRootName)
-		baseRootIDs[stateRootName] = stateRootID
-		policies = append(policies, plannerOptions.indexStateStoragePolicy)
-		stateTable := newCollectionRunTable(1)
-		rawState, err := encodeDocumentIndexState(newState)
-		if err != nil {
-			_ = snap.Close()
-			resetCollectionTables(append(deltaTables, stateTable))
-			return false, false, err
+		if persistIndexStateForOptions(plannerOptions) {
+			stateRootName := collectionIndexStateRootName(c.meta.Name)
+			stateRootID := catalog.rootID(stateRootName)
+			rootNames = append(rootNames, stateRootName)
+			baseRootIDs[stateRootName] = stateRootID
+			policies = append(policies, plannerOptions.indexStateStoragePolicy)
+			stateTable := newCollectionRunTable(1)
+			rawState, err := encodeDocumentIndexState(newState)
+			if err != nil {
+				_ = snap.Close()
+				resetCollectionTables(append(deltaTables, stateTable))
+				return false, false, err
+			}
+			if len(newState) == 0 {
+				stateTable.DeleteSteal(bytes.Clone(documentID))
+			} else {
+				stateTable.SetSteal(bytes.Clone(documentID), rawState)
+			}
+			stateTable.Freeze()
+			deltaTables = append(deltaTables, stateTable)
 		}
-		if len(newState) == 0 {
-			stateTable.DeleteSteal(bytes.Clone(documentID))
-		} else {
-			stateTable.SetSteal(bytes.Clone(documentID), rawState)
-		}
-		stateTable.Freeze()
-		deltaTables = append(deltaTables, stateTable)
 
 		for _, runtime := range runtimes {
 			rootName := collectionSecondaryRootName(c.meta.Name, runtime.def.name)
@@ -1829,7 +1841,11 @@ func buildCreateIndexBackfillPlan(
 	}
 	defer func() { _ = it.Close() }()
 
-	indexStateTable := newCollectionRunTable(0)
+	persistIndexState := persistIndexStateForOptions(opts)
+	var indexStateTable memtable.Table
+	if persistIndexState {
+		indexStateTable = newCollectionRunTable(0)
+	}
 	secondaryTable := newCollectionRunTable(0)
 	uniqueProbes := make([]uniqueProbeCandidate, 0)
 	stateRootName := collectionIndexStateRootName(catalog.meta.Name)
@@ -1852,23 +1868,25 @@ func buildCreateIndexBackfillPlan(
 		if err != nil {
 			return nil, err
 		}
-		existingState, err := loadBackfillIndexState(snap, stateRootID, documentID, document, existingRuntimes, opts)
-		if err != nil {
-			return nil, err
-		}
-		merged := cloneDocumentIndexState(existingState)
 		values := newState[newRuntime.def.name]
-		if len(values) > 0 {
-			merged[newRuntime.def.name] = values
-		} else {
-			delete(merged, newRuntime.def.name)
+		if persistIndexState {
+			existingState, err := loadBackfillIndexState(snap, stateRootID, documentID, document, existingRuntimes, opts)
+			if err != nil {
+				return nil, err
+			}
+			merged := cloneDocumentIndexState(existingState)
+			if len(values) > 0 {
+				merged[newRuntime.def.name] = values
+			} else {
+				delete(merged, newRuntime.def.name)
+			}
+			rawState, err := encodeNormalizedDocumentIndexState(merged)
+			if err != nil {
+				return nil, err
+			}
+			indexStateTable.SetSteal(bytes.Clone(documentID), rawState)
+			documentCount++
 		}
-		rawState, err := encodeNormalizedDocumentIndexState(merged)
-		if err != nil {
-			return nil, err
-		}
-		indexStateTable.SetSteal(bytes.Clone(documentID), rawState)
-		documentCount++
 
 		for _, encoded := range values {
 			key, err := indexEntryKey(encoded, documentID)
@@ -1912,7 +1930,7 @@ func buildCreateIndexBackfillPlan(
 }
 
 func loadBackfillIndexState(snap *backenddb.Snapshot, stateRootID uint64, documentID, document []byte, existingRuntimes []indexRuntime, opts collectionOptions) (documentIndexState, error) {
-	if stateRootID != 0 {
+	if persistIndexStateForOptions(opts) && stateRootID != 0 {
 		entry, err := snap.GetEntryAtRoot(stateRootID, documentID)
 		if err == nil {
 			return decodeDocumentIndexState(entry.Value)
@@ -2123,7 +2141,7 @@ func loadDeleteIndexState(snap *backenddb.Snapshot, catalog *collectionCatalog, 
 		return nil, nil
 	}
 	stateRoot := catalog.rootID(collectionIndexStateRootName(catalog.meta.Name))
-	if stateRoot != 0 {
+	if persistIndexStateForOptions(opts) && stateRoot != 0 {
 		entry, err := snap.GetEntryAtRoot(stateRoot, documentID)
 		if err == nil {
 			return decodeDocumentIndexState(entry.Value)
@@ -2851,7 +2869,7 @@ func collectionRootNames(meta CollectionMeta) []string {
 	if normalizedDocumentFormat(meta.Options.DocumentFormat) == DocumentFormatTemplateV1 {
 		out = append(out, collectionTemplateRootName(meta.Name))
 	}
-	if len(meta.Indexes) > 0 {
+	if len(meta.Indexes) > 0 && persistIndexStateForDocumentFormat(meta.Options.DocumentFormat) {
 		out = append(out, collectionIndexStateRootName(meta.Name))
 	}
 	for _, idx := range meta.Indexes {

@@ -37,6 +37,10 @@ const (
 	// 128K slice headers is enough for the current native benchmark batches
 	// while keeping speculative header memory around 3 MiB on 64-bit platforms.
 	indexEncodeArenaMaxInitialValueRefs = 128 << 10
+	// Non-unique secondary indexes often have a small number of distinct values
+	// in a large batch. Up to this point, grouping by value avoids sorting every
+	// full secondary key; above it, the generic key sort avoids quadratic scans.
+	secondaryGroupedRunMaxDistinctValues = 128
 )
 
 type collectionRootKind uint8
@@ -161,7 +165,8 @@ func (p insertBatchPlanner) planInsertBatchWithPreflight(ids, documents [][]byte
 	if p.templateRoot == "" {
 		p.templateRoot = p.collection + "/templates"
 	}
-	if len(p.indexes) > 0 && p.indexStateRoot == "" {
+	persistIndexState := persistIndexStateForOptions(p.options)
+	if len(p.indexes) > 0 && persistIndexState && p.indexStateRoot == "" {
 		p.indexStateRoot = p.collection + "/index-state"
 	}
 	if p.buildPrimaryVal == nil {
@@ -248,13 +253,15 @@ func (p insertBatchPlanner) planInsertBatchWithPreflight(ids, documents [][]byte
 	}
 	plan.stats.PrimaryRunBuild = time.Since(phaseStart)
 	if len(runtimes) > 0 {
-		phaseStart = time.Now()
-		if err := p.emitIndexStateRun(plan, items, runtimes); err != nil {
-			return nil, err
+		if persistIndexState {
+			phaseStart = time.Now()
+			if err := p.emitIndexStateRun(plan, items, runtimes); err != nil {
+				return nil, err
+			}
+			plan.stats.IndexStateRunBuild = time.Since(phaseStart)
 		}
-		plan.stats.IndexStateRunBuild = time.Since(phaseStart)
 		phaseStart = time.Now()
-		if err := p.emitSecondaryRuns(plan, items, runtimes); err != nil {
+		if err := p.emitSecondaryRuns(plan, items, runtimes, primaryOrder); err != nil {
 			return nil, err
 		}
 		plan.stats.SecondaryRunBuild = time.Since(phaseStart)
@@ -596,12 +603,20 @@ func (p insertBatchPlanner) emitIndexStateRun(plan *insertBatchPlan, items []ins
 	return nil
 }
 
-func (p insertBatchPlanner) emitSecondaryRuns(plan *insertBatchPlan, items []insertBatchItem, runtimes []indexRuntime) error {
+func (p insertBatchPlanner) emitSecondaryRuns(plan *insertBatchPlan, items []insertBatchItem, runtimes []indexRuntime, documentIDOrder []int) error {
 	for runtimeIdx, runtime := range runtimes {
 		runStart := time.Now()
-		entryCount, keyBytes, alreadySorted, err := secondaryEntryOrderStats(items, runtimeIdx)
+		entryCount, keyBytes, alreadySorted, err := secondaryEntryOrderStats(items, runtimeIdx, nil)
 		if err != nil {
 			return err
+		}
+		emitOrder := []int(nil)
+		if !alreadySorted && documentIDOrder != nil {
+			entryCount, keyBytes, alreadySorted, err = secondaryEntryOrderStats(items, runtimeIdx, documentIDOrder)
+			if err != nil {
+				return err
+			}
+			emitOrder = documentIDOrder
 		}
 		runStats := CollectionSecondaryRunStats{
 			IndexName:     runtime.def.name,
@@ -621,11 +636,12 @@ func (p insertBatchPlanner) emitSecondaryRuns(plan *insertBatchPlan, items []ins
 			valuePos := 0
 			if err := applyCollectionRunEntries(table, entryCount, func(_ int) (key, value []byte, err error) {
 				for itemPos < len(items) {
-					values := items[itemPos].state.valuesAt(runtimeIdx)
+					idx := orderedItemIndex(emitOrder, itemPos)
+					values := items[idx].state.valuesAt(runtimeIdx)
 					if valuePos < len(values) {
 						encoded := values[valuePos]
 						valuePos++
-						keyArena, key, err = appendIndexEntryKey(keyArena, encoded, items[itemPos].id)
+						keyArena, key, err = appendIndexEntryKey(keyArena, encoded, items[idx].id)
 						return key, nil, err
 					}
 					itemPos++
@@ -651,12 +667,31 @@ func (p insertBatchPlanner) emitSecondaryRuns(plan *insertBatchPlan, items []ins
 			continue
 		}
 
+		if table, ok, err := p.emitGroupedSecondaryRunTable(items, runtimeIdx, runtime.def.name, documentIDOrder, entryCount, keyBytes); err != nil {
+			return err
+		} else if ok {
+			plan.runs = append(plan.runs, collectionRootRun{
+				name:          p.collection + "/index/" + runtime.def.name,
+				kind:          collectionRootSecondary,
+				indexName:     runtime.def.name,
+				table:         table,
+				storagePolicy: runtime.def.storagePolicy,
+			})
+			runStats.Build = time.Since(runStart)
+			plan.stats.SecondaryRuns = append(plan.stats.SecondaryRuns, runStats)
+			plan.stats.SecondaryEntries += entryCount
+			plan.stats.SecondaryKeyBytes += keyBytes
+			plan.stats.SecondaryUnsortedRuns++
+			continue
+		}
+
 		keys := make([][]byte, 0, entryCount)
 		keyArena := make([]byte, 0, keyBytes)
 		for i := range items {
-			for _, encoded := range items[i].state.valuesAt(runtimeIdx) {
+			idx := orderedItemIndex(documentIDOrder, i)
+			for _, encoded := range items[idx].state.valuesAt(runtimeIdx) {
 				var key []byte
-				keyArena, key, err = appendIndexEntryKey(keyArena, encoded, items[i].id)
+				keyArena, key, err = appendIndexEntryKey(keyArena, encoded, items[idx].id)
 				if err != nil {
 					return err
 				}
@@ -692,22 +727,94 @@ func (p insertBatchPlanner) emitSecondaryRuns(plan *insertBatchPlan, items []ins
 	return nil
 }
 
-func secondaryEntryOrderStats(items []insertBatchItem, runtimeIdx int) (entryCount int, keyBytes int, alreadySorted bool, err error) {
+type secondaryValueGroup struct {
+	encoded     []byte
+	documentIDs [][]byte
+}
+
+func (p insertBatchPlanner) emitGroupedSecondaryRunTable(items []insertBatchItem, runtimeIdx int, indexName string, documentIDOrder []int, entryCount, keyBytes int) (memtable.Table, bool, error) {
+	if entryCount <= 0 {
+		return nil, false, nil
+	}
+	groups := make([]secondaryValueGroup, 0, min(entryCount, secondaryGroupedRunMaxDistinctValues))
+	for i := range items {
+		idx := orderedItemIndex(documentIDOrder, i)
+		item := &items[idx]
+		for _, encoded := range item.state.valuesAt(runtimeIdx) {
+			groupIdx := -1
+			for j := range groups {
+				if bytes.Equal(groups[j].encoded, encoded) {
+					groupIdx = j
+					break
+				}
+			}
+			if groupIdx < 0 {
+				if len(groups) >= secondaryGroupedRunMaxDistinctValues {
+					return nil, false, nil
+				}
+				groups = append(groups, secondaryValueGroup{encoded: encoded})
+				groupIdx = len(groups) - 1
+			}
+			groups[groupIdx].documentIDs = append(groups[groupIdx].documentIDs, item.id)
+		}
+	}
+	if len(groups) == 0 || len(groups) == entryCount {
+		return nil, false, nil
+	}
+	sort.Slice(groups, func(i, j int) bool {
+		return compareIndexValuePrefixEncoded(groups[i].encoded, groups[j].encoded) < 0
+	})
+
+	table := newCollectionRunTable(entryCount)
+	keyArena := make([]byte, 0, keyBytes)
+	groupPos := 0
+	documentPos := 0
+	if err := applyCollectionRunEntries(table, entryCount, func(_ int) (key, value []byte, err error) {
+		for groupPos < len(groups) {
+			group := &groups[groupPos]
+			if documentPos < len(group.documentIDs) {
+				documentID := group.documentIDs[documentPos]
+				documentPos++
+				keyArena, key, err = appendIndexEntryKey(keyArena, group.encoded, documentID)
+				return key, nil, err
+			}
+			groupPos++
+			documentPos = 0
+		}
+		return nil, nil, fmt.Errorf(
+			"collections: grouped secondary index entry count mismatch collection=%q index=%q runtimeIdx=%d entryCount=%d groups=%d groupPos=%d documentPos=%d",
+			p.collection,
+			indexName,
+			runtimeIdx,
+			entryCount,
+			len(groups),
+			groupPos,
+			documentPos,
+		)
+	}); err != nil {
+		return nil, false, err
+	}
+	table.Freeze()
+	return table, true, nil
+}
+
+func secondaryEntryOrderStats(items []insertBatchItem, runtimeIdx int, documentIDOrder []int) (entryCount int, keyBytes int, alreadySorted bool, err error) {
 	alreadySorted = true
 	var lastValue []byte
 	var lastDocumentID []byte
 	for i := range items {
-		for _, encoded := range items[i].state.valuesAt(runtimeIdx) {
+		idx := orderedItemIndex(documentIDOrder, i)
+		for _, encoded := range items[idx].state.valuesAt(runtimeIdx) {
 			if len(encoded) > 65535 {
 				return 0, 0, false, errors.New("collections: index key too large")
 			}
-			if entryCount > 0 && compareIndexEntryKeyParts(lastValue, lastDocumentID, encoded, items[i].id) > 0 {
+			if entryCount > 0 && compareIndexEntryKeyParts(lastValue, lastDocumentID, encoded, items[idx].id) > 0 {
 				alreadySorted = false
 			}
 			lastValue = encoded
-			lastDocumentID = items[i].id
+			lastDocumentID = items[idx].id
 			entryCount++
-			keyBytes += 2 + len(encoded) + len(items[i].id)
+			keyBytes += 2 + len(encoded) + len(items[idx].id)
 		}
 	}
 	return entryCount, keyBytes, alreadySorted, nil

@@ -39,6 +39,43 @@ func compactLeafPayloadTestPath(t *testing.T, root string, seq uint32) string {
 	return filepath.Join(leafDir, fmt.Sprintf("value-l%d-%06d.log", ReservedLeafLogLaneID, seq))
 }
 
+func TestOpenFileCachesCompactLeafPayloadEligibility(t *testing.T) {
+	path := compactLeafPayloadTestPath(t, t.TempDir(), 1)
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatalf("WriteFile(%q): %v", path, err)
+	}
+	fileID := mustEncodeFileID(t, ReservedLeafLogLaneID, 1)
+	f, err := openFile(path, fileID, nil, nil, templ.DecodeOptions{}, nil)
+	if err != nil {
+		t.Fatalf("openFile: %v", err)
+	}
+	defer func() {
+		if err := f.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	}()
+	if !f.allowsCompactLeafPayload() {
+		t.Fatal("leaf log file should allow compact leaf payloads")
+	}
+
+	// The path-derived classification is immutable for an opened file. Mutating
+	// the exported Path field here catches accidental reintroduction of filepath
+	// parsing on the read hot path.
+	f.Path = filepath.Join(t.TempDir(), "value_vlog", filepath.Base(path))
+	if !f.allowsCompactLeafPayload() {
+		t.Fatal("compact leaf payload eligibility should be cached at open")
+	}
+}
+
+func TestFileLiteralDerivesCompactLeafPayloadEligibility(t *testing.T) {
+	path := compactLeafPayloadTestPath(t, t.TempDir(), 1)
+	fileID := mustEncodeFileID(t, ReservedLeafLogLaneID, 1)
+	f := &File{ID: fileID, Path: path}
+	if !f.allowsCompactLeafPayload() {
+		t.Fatal("File literal should derive compact leaf payload eligibility from ID and Path")
+	}
+}
+
 func newLeafPayloadTestManager(t *testing.T, dir, path string, fileID uint32) *Manager {
 	t.Helper()
 	mgr, err := NewManager(dir)

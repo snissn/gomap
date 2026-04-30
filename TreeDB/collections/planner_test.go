@@ -73,6 +73,115 @@ func TestInsertBatchPlanner_EmitsRootLocalRunsForPrimaryIndexStateAndSecondaryRo
 	}
 }
 
+func TestInsertBatchPlanner_TemplateV1SkipsIndexStateRun(t *testing.T) {
+	planner := insertBatchPlanner{
+		collection: "users",
+		indexes: []indexDefinition{
+			{name: "email", field: "email", unique: true},
+			{name: "city", field: "city"},
+		},
+		options: collectionOptions{documentFormat: DocumentFormatTemplateV1},
+	}
+
+	plan, err := planner.planInsertBatch(
+		[][]byte{[]byte("u1"), []byte("u2")},
+		[][]byte{
+			mustTemplateV1Document(t, []string{"email", "city"}, []any{"ada@example.com", "hnl"}),
+			mustTemplateV1Document(t, []string{"email", "city"}, []any{"grace@example.com", "hnl"}),
+		},
+	)
+	if err != nil {
+		t.Fatalf("plan template-v1 insert batch: %v", err)
+	}
+	if got, want := len(plan.runs), 4; got != want {
+		t.Fatalf("runs len=%d want %d", got, want)
+	}
+	if idx := findRunIndex(plan, collectionRootIndexState, ""); idx >= 0 {
+		t.Fatalf("template-v1 plan unexpectedly emitted index-state run at %d", idx)
+	}
+	if got := plan.stats.IndexStateRunBuild; got != 0 {
+		t.Fatalf("template-v1 index-state run build=%s want 0", got)
+	}
+
+	_ = mustFindRun(t, plan, collectionRootPrimary, "")
+	_ = mustFindRun(t, plan, collectionRootTemplate, "")
+	_ = mustFindRun(t, plan, collectionRootSecondary, "email")
+	_ = mustFindRun(t, plan, collectionRootSecondary, "city")
+}
+
+func TestEmitGroupedSecondaryRunTableSortsValueGroupsByDocumentID(t *testing.T) {
+	items := []insertBatchItem{
+		{id: []byte("u3"), state: orderedDocumentIndexState{{[]byte("s:city-01")}}},
+		{id: []byte("u1"), state: orderedDocumentIndexState{{[]byte("s:city-01")}}},
+		{id: []byte("u4"), state: orderedDocumentIndexState{{[]byte("s:city-00")}}},
+		{id: []byte("u2"), state: orderedDocumentIndexState{{[]byte("s:city-00")}}},
+	}
+	order := sortedItemOrderByKey(items, func(item *insertBatchItem) []byte { return item.id })
+	entryCount, keyBytes, alreadySorted, err := secondaryEntryOrderStats(items, 0, order)
+	if err != nil {
+		t.Fatalf("secondary stats: %v", err)
+	}
+	if alreadySorted {
+		t.Fatal("test data should exercise grouped unsorted construction")
+	}
+	table, ok, err := (insertBatchPlanner{collection: "users"}).emitGroupedSecondaryRunTable(items, 0, "city", order, entryCount, keyBytes)
+	if err != nil {
+		t.Fatalf("grouped secondary run: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected grouped secondary construction")
+	}
+	entries := collectRunEntries(t, collectionRootRun{name: "city", table: table})
+	assertSortedEntries(t, entries)
+
+	want := make([][]byte, 0, 4)
+	for _, pair := range []struct {
+		encoded    []byte
+		documentID []byte
+	}{
+		{[]byte("s:city-00"), []byte("u2")},
+		{[]byte("s:city-00"), []byte("u4")},
+		{[]byte("s:city-01"), []byte("u1")},
+		{[]byte("s:city-01"), []byte("u3")},
+	} {
+		key, err := indexEntryKey(pair.encoded, pair.documentID)
+		if err != nil {
+			t.Fatalf("expected key: %v", err)
+		}
+		want = append(want, key)
+	}
+	if got := entryKeys(entries); !byteMatrixEqual(got, want) {
+		t.Fatalf("grouped keys=%q want %q", got, want)
+	}
+}
+
+func TestEmitSecondaryRunsPreservesInputOrderSortedFastPath(t *testing.T) {
+	items := []insertBatchItem{
+		{id: []byte("u2"), state: orderedDocumentIndexState{{[]byte("s:city-00")}}},
+		{id: []byte("u1"), state: orderedDocumentIndexState{{[]byte("s:city-01")}}},
+	}
+	primaryOrder := sortedItemOrderByKey(items, func(item *insertBatchItem) []byte { return item.id })
+	if primaryOrder == nil {
+		t.Fatal("test data should have different primary-key order")
+	}
+	planner := insertBatchPlanner{collection: "users"}
+	plan := &insertBatchPlan{}
+	runtimes := []indexRuntime{{
+		def: indexDefinition{name: "city", field: "city"},
+	}}
+	if err := planner.emitSecondaryRuns(plan, items, runtimes, primaryOrder); err != nil {
+		t.Fatalf("emit secondary runs: %v", err)
+	}
+	if got, want := plan.stats.SecondarySortedRuns, 1; got != want {
+		t.Fatalf("sorted runs=%d want %d", got, want)
+	}
+	if got := plan.stats.SecondaryUnsortedRuns; got != 0 {
+		t.Fatalf("unsorted runs=%d want 0", got)
+	}
+	entries := collectRunEntries(t, mustFindRun(t, plan, collectionRootSecondary, "city"))
+	assertSortedEntries(t, entries)
+}
+
 func TestInsertBatchPlanner_PreservesCallerVisibleResultOrdering(t *testing.T) {
 	planner := insertBatchPlanner{collection: "users"}
 	ids := [][]byte{[]byte("u3"), []byte("u1"), []byte("u2")}
@@ -674,12 +783,22 @@ func mustFindRun(t *testing.T, plan *insertBatchPlan, kind collectionRootKind, i
 
 func mustFindRunIndex(t *testing.T, plan *insertBatchPlan, kind collectionRootKind, indexName string) int {
 	t.Helper()
+	if idx := findRunIndex(plan, kind, indexName); idx >= 0 {
+		return idx
+	}
+	t.Fatalf("missing run kind=%d index=%q", kind, indexName)
+	return -1
+}
+
+func findRunIndex(plan *insertBatchPlan, kind collectionRootKind, indexName string) int {
+	if plan == nil {
+		return -1
+	}
 	for i, run := range plan.runs {
 		if run.kind == kind && run.indexName == indexName {
 			return i
 		}
 	}
-	t.Fatalf("missing run kind=%d index=%q", kind, indexName)
 	return -1
 }
 

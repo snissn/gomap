@@ -419,10 +419,12 @@ func overheadBenchPlanIndexedPrecomputedState(
 	if err := planner.emitPrimaryRun(plan, items, primaryOrder); err != nil {
 		return err
 	}
-	if err := planner.emitIndexStateRun(plan, items, runtimes); err != nil {
-		return err
+	if persistIndexStateForOptions(planner.options) {
+		if err := planner.emitIndexStateRun(plan, items, runtimes); err != nil {
+			return err
+		}
 	}
-	if err := planner.emitSecondaryRuns(plan, items, runtimes); err != nil {
+	if err := planner.emitSecondaryRuns(plan, items, runtimes, primaryOrder); err != nil {
 		return err
 	}
 	resetCollectionRunTables(plan.runs)

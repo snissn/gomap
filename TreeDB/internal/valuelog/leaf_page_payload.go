@@ -114,8 +114,8 @@ func allowsCompactLeafLogPayload(fileID uint32, path string) bool {
 	return filepath.Base(filepath.Dir(path)) == compactLeafPagePayloadDirName
 }
 
-func maybeDecodeLeafLogPayloadTo(fileID uint32, path string, payload, dst []byte) ([]byte, bool, bool, error) {
-	if !allowsCompactLeafLogPayload(fileID, path) {
+func maybeDecodeLeafLogPayloadToAllowed(allowed bool, payload, dst []byte) ([]byte, bool, bool, error) {
+	if !allowed {
 		return payload, false, false, nil
 	}
 	out, usedDst, decoded, err := decodeCompactLeafLogPayloadTo(payload, dst)
@@ -128,8 +128,12 @@ func maybeDecodeLeafLogPayloadTo(fileID uint32, path string, payload, dst []byte
 	return payload, false, false, nil
 }
 
-func appendMaybeDecodeLeafLogPayload(fileID uint32, path string, dst, payload []byte) ([]byte, error) {
-	if !allowsCompactLeafLogPayload(fileID, path) {
+func maybeDecodeLeafLogPayloadTo(fileID uint32, path string, payload, dst []byte) ([]byte, bool, bool, error) {
+	return maybeDecodeLeafLogPayloadToAllowed(allowsCompactLeafLogPayload(fileID, path), payload, dst)
+}
+
+func appendMaybeDecodeLeafLogPayloadAllowed(allowed bool, dst, payload []byte) ([]byte, error) {
+	if !allowed {
 		if len(payload) == 0 {
 			return dst, nil
 		}
@@ -139,4 +143,8 @@ func appendMaybeDecodeLeafLogPayload(fileID uint32, path string, dst, payload []
 		return append(dst, payload...), nil
 	}
 	return appendCompactLeafLogPayload(dst, payload)
+}
+
+func appendMaybeDecodeLeafLogPayload(fileID uint32, path string, dst, payload []byte) ([]byte, error) {
+	return appendMaybeDecodeLeafLogPayloadAllowed(allowsCompactLeafLogPayload(fileID, path), dst, payload)
 }

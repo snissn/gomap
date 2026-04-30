@@ -16,6 +16,24 @@ func mustTemplateV1Document(t *testing.T, fields []string, values []any) []byte 
 	return doc
 }
 
+func requireNoCollectionRootDescriptor(t *testing.T, snap *backenddb.Snapshot, rootName string) {
+	t.Helper()
+	raw, ok, err := getSystemValue(snap, systemCollectionRootKey(rootName))
+	if err != nil {
+		t.Fatalf("read root descriptor %q: %v", rootName, err)
+	}
+	if !ok {
+		return
+	}
+	rootID, err := decodeRootID(raw)
+	if err != nil {
+		t.Fatalf("decode root descriptor %q: %v", rootName, err)
+	}
+	if rootID != 0 {
+		t.Fatalf("root descriptor %q persisted root %d", rootName, rootID)
+	}
+}
+
 func TestEncodeTemplateV1DocumentRejectsInvalidFieldSlices(t *testing.T) {
 	if _, err := EncodeTemplateV1Document([]string{"email", "email"}, []any{"ada@example.com", "grace@example.com"}); err == nil {
 		t.Fatal("expected duplicate field error")
@@ -105,6 +123,7 @@ func TestTemplateV1CollectionInsertBatchIndexesAndTemplateRoot(t *testing.T) {
 		_ = snap.Close()
 		t.Fatal("template root was not persisted")
 	}
+	requireNoCollectionRootDescriptor(t, snap, collectionIndexStateRootName("users"))
 	root, err := parseTemplateV1StoredDocument(got)
 	if err != nil {
 		_ = snap.Close()
@@ -544,6 +563,13 @@ func TestTemplateV1CreateIndexBackfillsFromTemplateRoot(t *testing.T) {
 	if len(ids) != 1 || !bytes.Equal(ids[0], []byte("u2")) {
 		t.Fatalf("city ids=%q want u2", ids)
 	}
+
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("expected snapshot")
+	}
+	requireNoCollectionRootDescriptor(t, snap, collectionIndexStateRootName("users"))
+	_ = snap.Close()
 }
 
 func TestTemplateV1MultiKeyIndex(t *testing.T) {
