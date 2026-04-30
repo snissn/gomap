@@ -183,7 +183,14 @@ func benchmarkCollectionShapeInsertBatch(b *testing.B, indexCount int, checkpoin
 	b.ReportMetric(float64(targetBatchSize), metricName)
 	b.ReportMetric(float64(indexCount), "indexes/doc")
 	if bufferedIndexedWrites {
+		meta := collection.Meta()
 		b.ReportMetric(1, "buffered_indexed_writes")
+		if meta.Options.BufferedIndexedWriteMaxDocuments > 0 {
+			b.ReportMetric(float64(meta.Options.BufferedIndexedWriteMaxDocuments), "buffered_max_docs")
+		}
+		if meta.Options.BufferedIndexedWriteMaxBytes > 0 {
+			b.ReportMetric(float64(meta.Options.BufferedIndexedWriteMaxBytes), "buffered_max_bytes")
+		}
 		if insertElapsed > 0 {
 			b.ReportMetric(float64(insertElapsed.Nanoseconds())/float64(b.N), "buffered_insert_ns/doc")
 		}

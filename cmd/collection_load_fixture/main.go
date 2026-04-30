@@ -38,42 +38,44 @@ const (
 )
 
 type config struct {
-	Dir                        string
-	Reset                      bool
-	Docs                       int
-	BatchSize                  int
-	Collection                 string
-	DocumentFormat             collections.DocumentFormat
-	IndexCount                 int
-	BufferedIndexedWrites      bool
-	Profile                    treedb.Profile
-	DataOuterLeavesInValueLog  bool
-	IndexOuterLeavesInValueLog bool
-	ChunkSize                  int64
-	KeepRecent                 uint64
-	PreferAppendAlloc          bool
-	PagerSyncConcurrency       int
-	DisableBackgroundPrune     bool
-	PruneInterval              time.Duration
-	PruneMaxPages              int
-	PruneMaxDuration           time.Duration
-	LeafSegmentTargetBytes     int64
-	Checkpoint                 bool
-	CheckpointEachBatch        bool
-	ReopenVerify               bool
-	VerifySamples              int
-	ValueLogRewrite            bool
-	ValueLogGC                 bool
-	LeafGenerationPackGC       bool
-	LeafGenerationPackForce    bool
-	LeafGenerationPackMaxGen   int
-	LeafGenerationPackFrameK   int
-	IndexVacuum                string
-	Progress                   bool
-	JSONOutput                 bool
-	CPUProfile                 string
-	MemProfile                 string
-	createdTempDir             bool
+	Dir                          string
+	Reset                        bool
+	Docs                         int
+	BatchSize                    int
+	Collection                   string
+	DocumentFormat               collections.DocumentFormat
+	IndexCount                   int
+	BufferedIndexedWrites        bool
+	BufferedIndexedWriteMaxDocs  int
+	BufferedIndexedWriteMaxBytes int64
+	Profile                      treedb.Profile
+	DataOuterLeavesInValueLog    bool
+	IndexOuterLeavesInValueLog   bool
+	ChunkSize                    int64
+	KeepRecent                   uint64
+	PreferAppendAlloc            bool
+	PagerSyncConcurrency         int
+	DisableBackgroundPrune       bool
+	PruneInterval                time.Duration
+	PruneMaxPages                int
+	PruneMaxDuration             time.Duration
+	LeafSegmentTargetBytes       int64
+	Checkpoint                   bool
+	CheckpointEachBatch          bool
+	ReopenVerify                 bool
+	VerifySamples                int
+	ValueLogRewrite              bool
+	ValueLogGC                   bool
+	LeafGenerationPackGC         bool
+	LeafGenerationPackForce      bool
+	LeafGenerationPackMaxGen     int
+	LeafGenerationPackFrameK     int
+	IndexVacuum                  string
+	Progress                     bool
+	JSONOutput                   bool
+	CPUProfile                   string
+	MemProfile                   string
+	createdTempDir               bool
 }
 
 type timingSummary struct {
@@ -232,6 +234,8 @@ type loadSummary struct {
 	Batches                       int                    `json:"batches"`
 	IndexCount                    int                    `json:"index_count"`
 	BufferedIndexedWrites         bool                   `json:"buffered_indexed_writes,omitempty"`
+	BufferedIndexedWriteMaxDocs   int                    `json:"buffered_indexed_write_max_docs,omitempty"`
+	BufferedIndexedWriteMaxBytes  int64                  `json:"buffered_indexed_write_max_bytes,omitempty"`
 	DataOuterLeavesInValueLog     bool                   `json:"data_outer_leaves_in_value_log"`
 	IndexOuterLeavesInValueLog    bool                   `json:"index_outer_leaves_in_value_log"`
 	ChunkSize                     int64                  `json:"chunk_size,omitempty"`
@@ -325,6 +329,8 @@ func parseConfig(args []string, output io.Writer) (config, error) {
 	fs.StringVar(&documentFormat, "format", string(cfg.DocumentFormat), "document format: json or template-v1")
 	fs.IntVar(&cfg.IndexCount, "indexes", cfg.IndexCount, "secondary index count for the benchmark shape: 0, 1, 2, or 3")
 	fs.BoolVar(&cfg.BufferedIndexedWrites, "buffered-indexed-writes", false, "stage indexed InsertBatch writes in collection-local memtables until flush")
+	fs.IntVar(&cfg.BufferedIndexedWriteMaxDocs, "buffered-indexed-write-max-docs", 0, "flush indexed write buffers after this many staged documents; 0 means Flush/Close only")
+	fs.Int64Var(&cfg.BufferedIndexedWriteMaxBytes, "buffered-indexed-write-max-bytes", 0, "flush indexed write buffers after this many staged root-run bytes; 0 means Flush/Close only")
 	fs.StringVar(&profile, "profile", string(cfg.Profile), "TreeDB profile: fast, wal_on_fast, durable, or bench")
 	fs.BoolVar(&cfg.DataOuterLeavesInValueLog, "data-outer-leaves-in-vlog", cfg.DataOuterLeavesInValueLog, "store collection primary/index-state outer leaves through the value log")
 	fs.BoolVar(&cfg.IndexOuterLeavesInValueLog, "index-outer-leaves-in-vlog", cfg.IndexOuterLeavesInValueLog, "store secondary-index outer leaves through the value log")
@@ -376,6 +382,12 @@ func parseConfig(args []string, output io.Writer) (config, error) {
 	}
 	if cfg.IndexCount < 0 || cfg.IndexCount > 3 {
 		return cfg, fmt.Errorf("-indexes must be 0, 1, 2, or 3")
+	}
+	if cfg.BufferedIndexedWriteMaxDocs < 0 {
+		return cfg, fmt.Errorf("-buffered-indexed-write-max-docs must be >= 0")
+	}
+	if cfg.BufferedIndexedWriteMaxBytes < 0 {
+		return cfg, fmt.Errorf("-buffered-indexed-write-max-bytes must be >= 0")
 	}
 	if strings.TrimSpace(cfg.Collection) == "" {
 		return cfg, fmt.Errorf("-collection cannot be empty")
@@ -474,6 +486,8 @@ func runFixture(cfg config) (loadSummary, error) {
 	if err != nil {
 		return loadSummary{}, err
 	}
+	collectionMeta := collection.Meta()
+	bufferedIndexedWrites := collectionMeta.Options.BufferedIndexedWrites
 
 	var insertStats collections.CollectionInsertStats
 	secondaryRuns := make(map[string]*secondaryRunSummary)
@@ -509,7 +523,7 @@ func runFixture(cfg config) (loadSummary, error) {
 		inserted += batchSize
 
 		if cfg.CheckpointEachBatch {
-			if cfg.BufferedIndexedWrites && cfg.IndexCount > 0 {
+			if bufferedIndexedWrites {
 				flushStart := time.Now()
 				if err := collection.Flush(); err != nil {
 					return loadSummary{}, fmt.Errorf("flush after batch %d: %w", batches, err)
@@ -607,7 +621,9 @@ func runFixture(cfg config) (loadSummary, error) {
 		BatchSize:                     cfg.BatchSize,
 		Batches:                       batches,
 		IndexCount:                    cfg.IndexCount,
-		BufferedIndexedWrites:         cfg.BufferedIndexedWrites && cfg.IndexCount > 0,
+		BufferedIndexedWrites:         collectionMeta.Options.BufferedIndexedWrites,
+		BufferedIndexedWriteMaxDocs:   collectionMeta.Options.BufferedIndexedWriteMaxDocuments,
+		BufferedIndexedWriteMaxBytes:  collectionMeta.Options.BufferedIndexedWriteMaxBytes,
 		DataOuterLeavesInValueLog:     cfg.DataOuterLeavesInValueLog,
 		IndexOuterLeavesInValueLog:    cfg.IndexOuterLeavesInValueLog,
 		ChunkSize:                     cfg.ChunkSize,
@@ -722,13 +738,22 @@ func createFixtureCollection(backend *backenddb.DB, cfg config) (*collections.Co
 	for i := range indexes {
 		indexes[i].StoragePolicy = rootStoragePolicy(cfg.IndexOuterLeavesInValueLog)
 	}
+	bufferedIndexedWrites := cfg.BufferedIndexedWrites && cfg.IndexCount > 0
+	bufferedIndexedWriteMaxDocs := 0
+	var bufferedIndexedWriteMaxBytes int64
+	if bufferedIndexedWrites {
+		bufferedIndexedWriteMaxDocs = cfg.BufferedIndexedWriteMaxDocs
+		bufferedIndexedWriteMaxBytes = cfg.BufferedIndexedWriteMaxBytes
+	}
 	_, err := manager.CreateCollection(&collections.CollectionMeta{
 		Name: cfg.Collection,
 		Options: collections.CollectionOptions{
-			DocumentFormat:          cfg.DocumentFormat,
-			DataRootStoragePolicy:   rootStoragePolicy(cfg.DataOuterLeavesInValueLog),
-			IndexStateStoragePolicy: rootStoragePolicy(cfg.DataOuterLeavesInValueLog),
-			BufferedIndexedWrites:   cfg.BufferedIndexedWrites && cfg.IndexCount > 0,
+			DocumentFormat:                   cfg.DocumentFormat,
+			DataRootStoragePolicy:            rootStoragePolicy(cfg.DataOuterLeavesInValueLog),
+			IndexStateStoragePolicy:          rootStoragePolicy(cfg.DataOuterLeavesInValueLog),
+			BufferedIndexedWrites:            bufferedIndexedWrites,
+			BufferedIndexedWriteMaxDocuments: bufferedIndexedWriteMaxDocs,
+			BufferedIndexedWriteMaxBytes:     bufferedIndexedWriteMaxBytes,
 		},
 		Indexes: indexes,
 	})
@@ -1545,6 +1570,10 @@ func printHumanSummary(w io.Writer, summary loadSummary) {
 		summary.DocumentFormat, summary.IndexCount, summary.DataOuterLeavesInValueLog, summary.IndexOuterLeavesInValueLog, summary.Profile)
 	if summary.BufferedIndexedWrites {
 		fmt.Fprintln(w, "indexed write buffering: enabled")
+		if summary.BufferedIndexedWriteMaxDocs > 0 || summary.BufferedIndexedWriteMaxBytes > 0 {
+			fmt.Fprintf(w, "indexed write buffer limits: max_docs=%d max_bytes=%s\n",
+				summary.BufferedIndexedWriteMaxDocs, humanBytes(uint64(summary.BufferedIndexedWriteMaxBytes)))
+		}
 	}
 	fmt.Fprintf(w, "index policy: keep_recent=%d prefer_append_alloc=%t background_prune=%t\n",
 		summary.KeepRecent, summary.PreferAppendAlloc, !summary.DisableBackgroundPrune)

@@ -140,7 +140,7 @@ func TestRunFixtureKeepsTemplateV1ThreeIndexDatabase(t *testing.T) {
 	}
 }
 
-func TestRunFixtureReportsEffectiveBufferedIndexedWrites(t *testing.T) {
+func TestRunFixtureReportsBufferedIndexedWritesOnlyWhenIndexesUseThem(t *testing.T) {
 	noIndexDir := filepath.Join(t.TempDir(), "no-index")
 	noIndexCfg, err := parseConfig([]string{
 		"-dir", noIndexDir,
@@ -148,6 +148,9 @@ func TestRunFixtureReportsEffectiveBufferedIndexedWrites(t *testing.T) {
 		"-batch-size", "4",
 		"-indexes", "0",
 		"-buffered-indexed-writes",
+		"-buffered-indexed-write-max-docs", "16",
+		"-buffered-indexed-write-max-bytes", "1024",
+		"-reopen-verify=false",
 		"-progress=false",
 	}, io.Discard)
 	if err != nil {
@@ -160,6 +163,9 @@ func TestRunFixtureReportsEffectiveBufferedIndexedWrites(t *testing.T) {
 	if noIndexSummary.BufferedIndexedWrites {
 		t.Fatal("no-index summary reported buffered indexed writes enabled")
 	}
+	if noIndexSummary.BufferedIndexedWriteMaxDocs != 0 || noIndexSummary.BufferedIndexedWriteMaxBytes != 0 {
+		t.Fatalf("no-index buffered limits docs=%d bytes=%d want both zero", noIndexSummary.BufferedIndexedWriteMaxDocs, noIndexSummary.BufferedIndexedWriteMaxBytes)
+	}
 
 	indexedDir := filepath.Join(t.TempDir(), "indexed")
 	indexedCfg, err := parseConfig([]string{
@@ -168,6 +174,8 @@ func TestRunFixtureReportsEffectiveBufferedIndexedWrites(t *testing.T) {
 		"-batch-size", "4",
 		"-indexes", "1",
 		"-buffered-indexed-writes",
+		"-buffered-indexed-write-max-docs", "16",
+		"-buffered-indexed-write-max-bytes", "1024",
 		"-progress=false",
 	}, io.Discard)
 	if err != nil {
@@ -179,6 +187,9 @@ func TestRunFixtureReportsEffectiveBufferedIndexedWrites(t *testing.T) {
 	}
 	if !indexedSummary.BufferedIndexedWrites {
 		t.Fatal("indexed summary reported buffered indexed writes disabled")
+	}
+	if indexedSummary.BufferedIndexedWriteMaxDocs != 16 || indexedSummary.BufferedIndexedWriteMaxBytes != 1024 {
+		t.Fatalf("indexed buffered limits docs=%d bytes=%d want 16/1024", indexedSummary.BufferedIndexedWriteMaxDocs, indexedSummary.BufferedIndexedWriteMaxBytes)
 	}
 }
 
