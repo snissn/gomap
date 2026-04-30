@@ -26,6 +26,14 @@ import (
 const (
 	collectionMetaVersion        = 1
 	maxCollectionMutationRetries = 64
+
+	// DefaultIndexedWriteMemtableMaxDocuments bounds the native indexed
+	// collection write-domain before it auto-flushes to persistent roots.
+	DefaultIndexedWriteMemtableMaxDocuments = 64000
+	// DefaultIndexedWriteMemtableDirectBatchDocuments keeps large, already
+	// well-amortized InsertBatch calls on the immediate publish path. Smaller
+	// batches use the indexed write-domain memtable path by default.
+	DefaultIndexedWriteMemtableDirectBatchDocuments = DefaultIndexedWriteMemtableMaxDocuments / 4
 )
 
 var (
@@ -116,11 +124,13 @@ type Collection struct {
 // CollectionInsertStats captures phase timings and counters from the most
 // recent successful InsertBatch call on a Collection handle.
 type CollectionInsertStats struct {
-	Documents            int
-	Indexes              int
-	Runs                 int
-	PrepareDocuments     time.Duration
-	IndexStateExtraction time.Duration
+	Documents                    int
+	Indexes                      int
+	Runs                         int
+	BufferedIndexedBatches       int
+	BufferedIndexedBypassBatches int
+	PrepareDocuments             time.Duration
+	IndexStateExtraction         time.Duration
 	// DuplicateDocumentPreflight includes duplicate-ID detection and
 	// existing-document conflict checks.
 	DuplicateDocumentPreflight time.Duration
@@ -175,14 +185,20 @@ type CollectionOptions struct {
 	DocumentFormat          DocumentFormat    `json:"document_format,omitempty"`
 	DataRootStoragePolicy   RootStoragePolicy `json:"data_root_storage_policy,omitempty"`
 	IndexStateStoragePolicy RootStoragePolicy `json:"index_state_storage_policy,omitempty"`
-	// BufferedIndexedWrites stages indexed InsertBatch root deltas in the
-	// collection write domain until Flush/Close. Staged writes are visible to
-	// primary and secondary reads on the same manager, but durability remains at
-	// the explicit flush boundary, matching the existing no-index buffered path.
+	// DisableIndexedWriteMemtables opts an indexed collection out of the native
+	// write-domain memtable path. It is intended for debugging and baseline
+	// comparisons; indexed collections use memtables by default.
+	DisableIndexedWriteMemtables bool `json:"disable_indexed_write_memtables,omitempty"`
+	// BufferedIndexedWrites is normalized metadata describing whether indexed
+	// InsertBatch root deltas are staged in the collection write domain before
+	// Flush/Close or auto-flush. Staged writes are visible to primary and
+	// secondary reads on the same manager, but durability remains at the flush
+	// boundary, matching the existing no-index buffered path.
 	BufferedIndexedWrites bool `json:"buffered_indexed_writes,omitempty"`
 	// BufferedIndexedWriteMaxDocuments flushes indexed write buffers once this
-	// many staged documents are pending. Zero leaves flushing to explicit
-	// Flush/Close calls.
+	// many staged documents are pending. Zero uses the native default for indexed
+	// memtables unless DisableIndexedWriteMemtables is set or the schema has no
+	// indexes.
 	BufferedIndexedWriteMaxDocuments int `json:"buffered_indexed_write_max_documents,omitempty"`
 	// BufferedIndexedWriteMaxBytes flushes indexed write buffers once the staged
 	// root-run payload estimate reaches this many bytes. Zero leaves flushing to
@@ -1049,6 +1065,17 @@ func (c *Collection) flushBufferedNoIndexLocked(domain *collectionWriteDomain) e
 
 func (c *Collection) shouldBufferIndexedInserts(meta CollectionMeta) bool {
 	return c != nil && c.writeDomain != nil && meta.Options.BufferedIndexedWrites && len(meta.Indexes) > 0
+}
+
+func (c *Collection) shouldBufferIndexedInsertBatch(meta CollectionMeta, documentCount int) bool {
+	if !c.shouldBufferIndexedInserts(meta) {
+		return false
+	}
+	if documentCount >= DefaultIndexedWriteMemtableDirectBatchDocuments &&
+		meta.Options.BufferedIndexedWriteMaxDocuments == DefaultIndexedWriteMemtableMaxDocuments {
+		return false
+	}
+	return true
 }
 
 func (c *Collection) bufferIndexedInsertPlanLocked(catalog *collectionCatalog, baseCommitSeq, baseSystemRoot uint64, plan *insertBatchPlan) (time.Duration, error) {
@@ -2099,6 +2126,39 @@ func (c *Collection) InsertBatch(ids, documents [][]byte) ([][]byte, error) {
 		return nil, err
 	}
 	plannerOptions = collectionOptionsWithTemplateV1Resolver(plannerOptions, snap, catalog)
+	indexedMemtablesEnabled := c.shouldBufferIndexedInserts(c.meta)
+	bufferIndexedInserts := c.shouldBufferIndexedInsertBatch(c.meta, len(documents))
+	if indexedMemtablesEnabled && !bufferIndexedInserts {
+		_ = snap.Close()
+		if err := c.flushBufferedWrites(); err != nil {
+			return nil, err
+		}
+		snap = c.db.AcquireSnapshot()
+		if snap == nil {
+			return nil, backenddb.ErrClosed
+		}
+		catalog, err = c.catalogForSnapshot(snap)
+		if err != nil {
+			_ = snap.Close()
+			return nil, err
+		}
+		if catalog == nil {
+			_ = snap.Close()
+			return nil, errCollectionNotFound
+		}
+		c.meta = catalog.meta
+		plannerOptions, err = collectionPlannerOptions(c.meta)
+		if err != nil {
+			_ = snap.Close()
+			return nil, err
+		}
+		plannerOptions = collectionOptionsWithTemplateV1Resolver(plannerOptions, snap, catalog)
+		indexedMemtablesEnabled = c.shouldBufferIndexedInserts(c.meta)
+		bufferIndexedInserts = c.shouldBufferIndexedInsertBatch(c.meta, len(documents))
+	}
+	if bufferIndexedInserts {
+		plannerOptions = collectionOptionsWithBufferedTemplateV1Resolver(plannerOptions, c.writeDomain, c.meta.Name)
+	}
 	baseSystemRoot := snapshotSystemRoot(snap)
 	baseCommitSeq := snapshotCommitSeq(snap)
 
@@ -2114,6 +2174,10 @@ func (c *Collection) InsertBatch(ids, documents [][]byte) ([][]byte, error) {
 		indexes:        plannerIndexes(c.meta.Indexes),
 		options:        plannerOptions,
 	}
+	if bufferIndexedInserts {
+		planner.buildPrimaryVal = clonePrimaryDocument
+		planner.cloneTemplateRunValues = true
+	}
 	plan, err := planner.planInsertBatchWithPreflight(ids, documents, insertBatchPreflight{
 		snapshot:           snap,
 		primaryRootID:      catalog.rootID(collectionPrimaryRootName(c.meta.Name)),
@@ -2123,13 +2187,24 @@ func (c *Collection) InsertBatch(ids, documents [][]byte) ([][]byte, error) {
 		_ = snap.Close()
 		return nil, err
 	}
+	if bufferIndexedInserts {
+		plan.stats.BufferedIndexedBatches = 1
+	} else if indexedMemtablesEnabled {
+		plan.stats.BufferedIndexedBypassBatches = 1
+	}
 	if len(plan.runs) == 0 {
 		_ = snap.Close()
 		c.setLastInsertStats(plan.stats.CollectionInsertStats)
 		return plan.resultIDs, nil
 	}
 
-	if c.shouldBufferIndexedInserts(c.meta) {
+	if bufferIndexedInserts {
+		resultIDs, err := cloneBatchDocumentIDs(plan.resultIDs)
+		if err != nil {
+			_ = snap.Close()
+			resetCollectionRunTables(plan.runs)
+			return nil, err
+		}
 		bufferFlushElapsed, err := c.bufferIndexedInsertPlanLocked(catalog, baseCommitSeq, baseSystemRoot, plan)
 		_ = snap.Close()
 		if err != nil {
@@ -2138,7 +2213,7 @@ func (c *Collection) InsertBatch(ids, documents [][]byte) ([][]byte, error) {
 		}
 		plan.stats.Publish += bufferFlushElapsed
 		c.setLastInsertStats(plan.stats.CollectionInsertStats)
-		return plan.resultIDs, nil
+		return resultIDs, nil
 	}
 
 	baseRootIDs := make(map[string]uint64, len(plan.runs))
@@ -3401,6 +3476,17 @@ func (c *Collection) findByIndexValue(indexName string, value any, maxResults in
 	if err := c.flushBufferedNoIndex(); err != nil {
 		return nil, false, err
 	}
+	domain := c.writeDomain
+	domainLocked := false
+	if domain != nil {
+		domain.mu.RLock()
+		domainLocked = true
+		defer func() {
+			if domainLocked {
+				domain.mu.RUnlock()
+			}
+		}()
+	}
 	snap := c.db.AcquireSnapshot()
 	if snap == nil {
 		return nil, false, backenddb.ErrClosed
@@ -3426,12 +3512,14 @@ func (c *Collection) findByIndexValue(indexName string, value any, maxResults in
 	if err != nil {
 		return nil, false, err
 	}
-	out, truncated, err := c.bufferedIndexIDs(indexName, prefix, maxResults)
+	collectLimit := collectionIndexReadCollectLimit(maxResults)
+	bufferedIDs, bufferedTruncated, err := c.bufferedIndexIDsLocked(domain, catalog.meta.Name, indexName, prefix, collectLimit)
 	if err != nil {
 		return nil, false, err
 	}
-	if maxResults > 0 && truncated {
-		return out, true, nil
+	if domainLocked {
+		domain.mu.RUnlock()
+		domainLocked = false
 	}
 	// Buffered indexed writes currently stage inserts only. Primary conflict
 	// checks reject IDs that already exist in pending or persisted roots, so
@@ -3440,48 +3528,43 @@ func (c *Collection) findByIndexValue(indexName string, value any, maxResults in
 	// tombstones before returning persisted rows.
 	rootID := catalog.rootID(collectionSecondaryRootName(catalog.meta.Name, idx.Name))
 	if rootID == 0 {
+		out, truncated := mergeCollectionIndexIDResults(bufferedIDs, nil, maxResults, bufferedTruncated, false)
 		return out, truncated, nil
 	}
 	it, err := snap.IteratorAtRoot(rootID, prefix, prefixEnd(prefix))
 	if errors.Is(err, tree.ErrKeyNotFound) {
+		out, truncated := mergeCollectionIndexIDResults(bufferedIDs, nil, maxResults, bufferedTruncated, false)
 		return out, truncated, nil
 	}
 	if err != nil {
 		return nil, false, err
 	}
 	defer func() { _ = it.Close() }()
-	for it.Valid() {
-		key := it.UnsafeKey()
-		if !bytes.HasPrefix(key, prefix) {
-			break
-		}
-		if !it.IsDeleted() {
-			id := key[len(prefix):]
-			if maxResults > 0 && len(out) >= maxResults {
-				truncated = true
-				break
-			}
-			out = append(out, bytes.Clone(id))
-		}
-		it.Next()
-	}
-	if err := it.Error(); err != nil {
+	persistedIDs, persistedTruncated, err := collectCollectionIndexIDsFromIterator(it, prefix, collectLimit)
+	if err != nil {
 		return nil, false, err
 	}
+	out, truncated := mergeCollectionIndexIDResults(bufferedIDs, persistedIDs, maxResults, bufferedTruncated, persistedTruncated)
 	return out, truncated, nil
 }
 
-func (c *Collection) bufferedIndexIDs(indexName string, prefix []byte, maxResults int) ([][]byte, bool, error) {
-	if c == nil || c.writeDomain == nil {
+func collectionIndexReadCollectLimit(maxResults int) int {
+	if maxResults <= 0 {
+		return 0
+	}
+	if maxResults == int(^uint(0)>>1) {
+		return 0
+	}
+	return maxResults + 1
+}
+
+func (c *Collection) bufferedIndexIDsLocked(domain *collectionWriteDomain, collectionName, indexName string, prefix []byte, limit int) ([][]byte, bool, error) {
+	if c == nil || domain == nil {
 		return nil, false, nil
 	}
-	domain := c.writeDomain
-	domain.mu.RLock()
-	defer domain.mu.RUnlock()
 	if domain.count == 0 || len(domain.rootRuns) == 0 {
 		return nil, false, nil
 	}
-	collectionName := c.meta.Name
 	if domain.meta.Name != "" {
 		collectionName = domain.meta.Name
 	}
@@ -3491,6 +3574,13 @@ func (c *Collection) bufferedIndexIDs(indexName string, prefix []byte, maxResult
 	}
 	it := newBufferedRootRunsIterator(runs, prefix, prefixEnd(prefix))
 	defer func() { _ = it.Close() }()
+	return collectCollectionIndexIDsFromIterator(it, prefix, limit)
+}
+
+func collectCollectionIndexIDsFromIterator(it iterator.UnsafeIterator, prefix []byte, limit int) ([][]byte, bool, error) {
+	if it == nil {
+		return nil, false, nil
+	}
 	out := make([][]byte, 0, 1)
 	truncated := false
 	for it.Valid() {
@@ -3499,7 +3589,7 @@ func (c *Collection) bufferedIndexIDs(indexName string, prefix []byte, maxResult
 			break
 		}
 		if !it.IsDeleted() {
-			if maxResults > 0 && len(out) >= maxResults {
+			if limit > 0 && len(out) >= limit {
 				truncated = true
 				break
 			}
@@ -3511,6 +3601,51 @@ func (c *Collection) bufferedIndexIDs(indexName string, prefix []byte, maxResult
 		return nil, false, err
 	}
 	return out, truncated, nil
+}
+
+func mergeCollectionIndexIDResults(bufferedIDs, persistedIDs [][]byte, maxResults int, bufferedTruncated, persistedTruncated bool) ([][]byte, bool) {
+	total := len(bufferedIDs) + len(persistedIDs)
+	limit := collectionIndexReadCollectLimit(maxResults)
+	if limit > 0 && total > limit {
+		total = limit
+	}
+	out := make([][]byte, 0, total)
+	truncated := bufferedTruncated || persistedTruncated
+	i, j := 0, 0
+	appendID := func(id []byte) {
+		if len(out) > 0 && bytes.Equal(out[len(out)-1], id) {
+			return
+		}
+		out = append(out, id)
+	}
+	for (i < len(bufferedIDs) || j < len(persistedIDs)) && (limit == 0 || len(out) < limit) {
+		switch {
+		case i >= len(bufferedIDs):
+			appendID(persistedIDs[j])
+			j++
+		case j >= len(persistedIDs):
+			appendID(bufferedIDs[i])
+			i++
+		default:
+			cmp := bytes.Compare(bufferedIDs[i], persistedIDs[j])
+			if cmp < 0 {
+				appendID(bufferedIDs[i])
+				i++
+			} else if cmp > 0 {
+				appendID(persistedIDs[j])
+				j++
+			} else {
+				appendID(bufferedIDs[i])
+				i++
+				j++
+			}
+		}
+	}
+	if maxResults > 0 && len(out) > maxResults {
+		out = out[:maxResults]
+		truncated = true
+	}
+	return out, truncated
 }
 
 // ScanDocuments flushes buffered writes before acquiring a snapshot, then scans
@@ -3857,6 +3992,12 @@ func normalizeCollectionMeta(meta CollectionMeta) (CollectionMeta, error) {
 	if _, err := backendRootStoragePolicy(meta.Options.IndexStateStoragePolicy); err != nil {
 		return CollectionMeta{}, err
 	}
+	if meta.Options.BufferedIndexedWriteMaxDocuments < 0 {
+		return CollectionMeta{}, errors.New("collections: buffered indexed write max documents cannot be negative")
+	}
+	if meta.Options.BufferedIndexedWriteMaxBytes < 0 {
+		return CollectionMeta{}, errors.New("collections: buffered indexed write max bytes cannot be negative")
+	}
 	documentFormat, err := normalizeDocumentFormat(meta.Options.DocumentFormat)
 	if err != nil {
 		return CollectionMeta{}, err
@@ -3887,6 +4028,16 @@ func normalizeCollectionMeta(meta CollectionMeta) (CollectionMeta, error) {
 		seen[indexes[i].Name] = struct{}{}
 	}
 	meta.Indexes = indexes
+	if len(meta.Indexes) == 0 || meta.Options.DisableIndexedWriteMemtables {
+		meta.Options.BufferedIndexedWrites = false
+		meta.Options.BufferedIndexedWriteMaxDocuments = 0
+		meta.Options.BufferedIndexedWriteMaxBytes = 0
+	} else {
+		meta.Options.BufferedIndexedWrites = true
+		if meta.Options.BufferedIndexedWriteMaxDocuments == 0 && meta.Options.BufferedIndexedWriteMaxBytes == 0 {
+			meta.Options.BufferedIndexedWriteMaxDocuments = DefaultIndexedWriteMemtableMaxDocuments
+		}
+	}
 	return meta, nil
 }
 
