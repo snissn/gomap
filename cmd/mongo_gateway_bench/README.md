@@ -54,7 +54,9 @@ The TreeDB target always opens with outer leaves in the leaf value log and the
 cached leaf-log backend, so collection and secondary-index roots exercise the
 same leaf-vlog path as the optimized collection benchmarks. The `full`
 maintenance mode reports each post-load compaction step: value-log rewrite,
-value-log GC, leaf-generation pack, leaf-generation GC, and index vacuum. Use
+value-log GC, leaf-generation pack, leaf-generation GC, and offline index
+vacuum. The final vacuum closes the benchmark gateway before rewriting
+`index.db`, matching the documented compacted-state maintenance command. Use
 `-treedb-maintenance checkpoint` to reproduce the older checkpoint-only disk
 metric, or `none` to skip final TreeDB disk reporting.
 

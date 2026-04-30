@@ -58,6 +58,34 @@ func TestCollectDiskSnapshotBreakdown(t *testing.T) {
 	if snapshot.Paths["leaf_vlog"] != 6 {
 		t.Fatalf("leaf_vlog=%d want 6", snapshot.Paths["leaf_vlog"])
 	}
+	if snapshot.Paths["leaf_vlog/value.log"] != 6 {
+		t.Fatalf("leaf_vlog/value.log=%d want 6", snapshot.Paths["leaf_vlog/value.log"])
+	}
+}
+
+func TestCollectDiskSnapshotRootLayoutBreakdown(t *testing.T) {
+	dir := t.TempDir()
+	mainDir := filepath.Join(dir, "maindb")
+	if err := os.Mkdir(mainDir, 0o700); err != nil {
+		t.Fatalf("mkdir maindb: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(mainDir, "index.db"), []byte("1234"), 0o600); err != nil {
+		t.Fatalf("write index: %v", err)
+	}
+
+	snapshot, err := collectDiskSnapshot(dir)
+	if err != nil {
+		t.Fatalf("collect disk snapshot: %v", err)
+	}
+	if snapshot.TotalBytes != 4 {
+		t.Fatalf("total=%d want 4", snapshot.TotalBytes)
+	}
+	if snapshot.Paths["maindb"] != 4 {
+		t.Fatalf("maindb=%d want 4", snapshot.Paths["maindb"])
+	}
+	if snapshot.Paths["maindb/index.db"] != 4 {
+		t.Fatalf("maindb/index.db=%d want 4", snapshot.Paths["maindb/index.db"])
+	}
 }
 
 func TestCollectDiskSnapshotEmptyLeavesPathsNil(t *testing.T) {
@@ -88,6 +116,29 @@ func TestValidateResettableTreeDBDirRejectsDangerousPaths(t *testing.T) {
 	safe := filepath.Join(safeRoot, "treedb")
 	if got, err := validateResettableTreeDBDir(safe); err != nil || got == "" {
 		t.Fatalf("validate safe dir got/err=%q/%v", got, err)
+	}
+}
+
+func TestCloseBenchTargetIsIdempotent(t *testing.T) {
+	var calls int32
+	target := &benchTarget{
+		cleanup: func(context.Context) error {
+			atomic.AddInt32(&calls, 1)
+			return nil
+		},
+	}
+
+	if err := closeBenchTarget(context.Background(), target); err != nil {
+		t.Fatalf("first close: %v", err)
+	}
+	if err := closeBenchTarget(context.Background(), target); err != nil {
+		t.Fatalf("second close: %v", err)
+	}
+	if got := atomic.LoadInt32(&calls); got != 1 {
+		t.Fatalf("cleanup calls=%d want 1", got)
+	}
+	if target.cleanup != nil {
+		t.Fatal("cleanup was not cleared")
 	}
 }
 

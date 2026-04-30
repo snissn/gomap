@@ -161,7 +161,7 @@ func run(parent context.Context, args []string) error {
 	defer func() {
 		cleanupCtx, cancelCleanup := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancelCleanup()
-		_ = target.cleanup(cleanupCtx)
+		_ = closeBenchTarget(cleanupCtx, target)
 	}()
 
 	result, err := runBenchmark(ctx, cfg, target)
@@ -449,6 +449,19 @@ func openTreeDBTarget(ctx context.Context, cfg config) (*benchTarget, error) {
 		return errors.Join(errs...)
 	}
 	return &benchTarget{client: client, db: db, collections: manager, treedbDir: dir, cleanup: cleanup}, nil
+}
+
+func closeBenchTarget(ctx context.Context, target *benchTarget) error {
+	if target == nil || target.cleanup == nil {
+		return nil
+	}
+	cleanup := target.cleanup
+	target.cleanup = nil
+	err := cleanup(ctx)
+	target.client = nil
+	target.db = nil
+	target.collections = nil
+	return err
 }
 
 func resetTreeDBDir(dir string) error {
@@ -995,11 +1008,15 @@ func runTreeDBMaintenanceStack(ctx context.Context, target *benchTarget, result 
 		return err
 	}
 	if err := appendTreeDBMaintenanceStep(ctx, target, result, "index_vacuum", func() (map[string]int64, string, error) {
-		err := target.db.VacuumIndexOnline(ctx)
-		if errors.Is(err, backenddb.ErrVacuumUnsupported) {
-			return nil, "unsupported", nil
+		cleanupCtx, cancelCleanup := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancelCleanup()
+		if err := closeBenchTarget(cleanupCtx, target); err != nil {
+			return nil, "", err
 		}
-		return nil, "", err
+		if err := treedb.VacuumIndexOffline(treedb.Options{Dir: target.treedbDir}); err != nil {
+			return nil, "", err
+		}
+		return map[string]int64{"offline": 1}, "", nil
 	}); err != nil {
 		return err
 	}
@@ -1308,14 +1325,24 @@ func collectDiskSnapshot(dir string) (diskSnapshot, error) {
 		if err != nil {
 			return err
 		}
-		topLevel, _, _ := strings.Cut(rel, string(os.PathSeparator))
 		if out.Paths == nil {
 			out.Paths = make(map[string]int64)
 		}
-		out.Paths[topLevel] += size
+		addDiskSnapshotPath(out.Paths, rel, size)
 		return nil
 	})
 	return out, err
+}
+
+func addDiskSnapshotPath(paths map[string]int64, rel string, size int64) {
+	rel = filepath.ToSlash(filepath.Clean(rel))
+	if rel == "." || rel == "" {
+		return
+	}
+	parts := strings.Split(rel, "/")
+	for i := 1; i <= len(parts); i++ {
+		paths[strings.Join(parts[:i], "/")] += size
+	}
 }
 
 func writeResult(out io.Writer, format string, result *benchmarkResult) error {
