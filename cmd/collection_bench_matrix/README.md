@@ -27,6 +27,9 @@ Useful focused variants:
 # generations.
 ./bin/collection-bench-matrix -out-dir "$OUT" -benchtime 10000x -leaf-segment-target-bytes 65536
 
+# Exercise a specific grouped leaf-frame size during leaf-generation pack.
+./bin/collection-bench-matrix -out-dir "$OUT" -benchtime 10000x -leafgen-pack-frame-k 16
+
 # SQLite only is not a first-class mode; use a narrow TreeDB format/storage set
 # and keep SQLite enabled when validating baseline drift.
 ./bin/collection-bench-matrix -out-dir "$OUT" -formats json -storage-cells mainline

@@ -104,6 +104,7 @@ type leafGenerationScanContext struct {
 	cacheEnabled  bool
 	lastFileID    uint32
 	lastFileState *leafGenerationScanFileState
+	childStacks   [][]uint64
 }
 
 type leafGenerationLiveStatsScanOptions struct {
@@ -168,8 +169,8 @@ func runLeafGenerationLiveScanHook() {
 }
 
 // LeafGenerationPlan estimates reclaim opportunities for sealed leaf generations
-// by scanning the current live tree once and attributing reachable LeafRef pages
-// back to manifest generations.
+// by scanning the current live tree once and attributing reachable leaf-log
+// pages back to manifest generations.
 func (db *DB) LeafGenerationPlan(ctx context.Context, opts LeafGenerationPlanOptions) (LeafGenerationPlan, error) {
 	var plan LeafGenerationPlan
 	if db == nil {
@@ -574,8 +575,13 @@ func (db *DB) scanLeafGenerationPtrTotals(scan *leafGenerationScanContext, dst l
 		scan.lastFileID = ptr.FileID
 		scan.lastFileState = fileState
 	}
-	recordLen, hint, ok := fileState.idx.lookupWithHint(ptr.Offset, fileState.lookupHint)
-	fileState.lookupHint = hint
+	recordLen := ptr.RecordLengthHint
+	ok := recordLen != 0
+	if !ok {
+		var hint int
+		recordLen, hint, ok = fileState.idx.lookupWithHint(ptr.Offset, fileState.lookupHint)
+		fileState.lookupHint = hint
+	}
 	if !ok {
 		if !fileState.persist {
 			idx, err := db.buildLeafGenerationRecordLengthIndex(ptr.FileID, scan.snap.state.ValueLogSet)
@@ -584,6 +590,7 @@ func (db *DB) scanLeafGenerationPtrTotals(scan *leafGenerationScanContext, dst l
 			}
 			db.storeLeafGenerationRecordLengthIndex(ptr.FileID, idx)
 			fileState.idx = idx
+			var hint int
 			recordLen, hint, ok = idx.lookupWithHint(ptr.Offset, fileState.lookupHint)
 			fileState.lookupHint = hint
 		}
@@ -609,6 +616,10 @@ func (db *DB) scanLeafGenerationPtrTotals(scan *leafGenerationScanContext, dst l
 }
 
 func (db *DB) scanLeafGenerationSubtreeStats(ctx context.Context, scan *leafGenerationScanContext, pageID uint64) (leafGenerationSubtreeStats, error) {
+	return db.scanLeafGenerationSubtreeStatsDepth(ctx, scan, pageID, 0)
+}
+
+func (db *DB) scanLeafGenerationSubtreeStatsDepth(ctx context.Context, scan *leafGenerationScanContext, pageID uint64, depth int) (leafGenerationSubtreeStats, error) {
 	if scan == nil || scan.snap == nil || scan.snap.idx == nil || scan.snap.idx.pager == nil {
 		return nil, nil
 	}
@@ -637,21 +648,25 @@ func (db *DB) scanLeafGenerationSubtreeStats(ctx context.Context, scan *leafGene
 	case page.PageTypeLeaf:
 		stats = nil
 	case page.PageTypeInternal:
-		err = n.ForEachInternalChildID(func(childID uint64) error {
-			if page.IsLeafRefID(childID) {
-				var visitErr error
-				stats, visitErr = db.scanLeafGenerationPtrTotals(scan, stats, page.DecodeLeafRefID(childID))
-				return visitErr
-			}
-			childStats, childErr := db.scanLeafGenerationSubtreeStats(ctx, scan, childID)
-			if childErr != nil {
-				return childErr
-			}
-			stats = mergeLeafGenerationTotals(stats, childStats)
-			return nil
+		for len(scan.childStacks) <= depth {
+			scan.childStacks = append(scan.childStacks, nil)
+		}
+		children := scan.childStacks[depth][:0]
+		err = n.WalkInternalChildren(&children, func(ptr page.LeafLogPtr) error {
+			var visitErr error
+			stats, visitErr = db.scanLeafGenerationPtrTotals(scan, stats, ptr)
+			return visitErr
 		})
 		if err != nil {
 			return nil, err
+		}
+		scan.childStacks[depth] = children[:0]
+		for _, childID := range children {
+			childStats, childErr := db.scanLeafGenerationSubtreeStatsDepth(ctx, scan, childID, depth+1)
+			if childErr != nil {
+				return nil, childErr
+			}
+			stats = mergeLeafGenerationTotals(stats, childStats)
 		}
 	default:
 		return nil, fmt.Errorf("invalid page type %d on page %d", n.Type(), pageID)
@@ -723,14 +738,6 @@ func (db *DB) scanLeafGenerationLiveStatsWithOptions(ctx context.Context, snap *
 	}
 	for _, root := range roots {
 		rootID := root.rootID
-		if page.IsLeafRefID(rootID) {
-			var err error
-			stats.Generations, err = db.scanLeafGenerationPtrTotals(scan, stats.Generations, page.DecodeLeafRefID(rootID))
-			if err != nil {
-				return leafGenerationLiveScanStats{}, err
-			}
-			continue
-		}
 		rootStats, err := db.scanLeafGenerationSubtreeStats(ctx, scan, rootID)
 		if err != nil {
 			return leafGenerationLiveScanStats{}, err

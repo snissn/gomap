@@ -254,10 +254,6 @@ func collectLeafRefFileCounts(t *testing.T, p *pager.Pager, rootID uint64) map[u
 			continue
 		}
 		seen[pageID] = struct{}{}
-		if ptr, ok := page.DecodeLeafRef(pageID); ok {
-			out[ptr.ValueLogFileID()]++
-			continue
-		}
 		data, err := p.Get(pageID)
 		if err != nil {
 			t.Fatalf("pager.Get(%d): %v", pageID, err)
@@ -267,11 +263,15 @@ func collectLeafRefFileCounts(t *testing.T, p *pager.Pager, rootID uint64) map[u
 		case page.PageTypeLeaf:
 		case page.PageTypeInternal:
 			for i := uint16(0); i < n.Count(); i++ {
-				childID, err := n.GetInternalChildID(i)
+				childRef, err := n.GetInternalChildRef(i)
 				if err != nil {
-					t.Fatalf("GetInternalChildID(%d,%d): %v", pageID, i, err)
+					t.Fatalf("GetInternalChildRef(%d,%d): %v", pageID, i, err)
 				}
-				stack = append(stack, childID)
+				if childRef.Kind == page.ChildRefLeafLog {
+					out[childRef.Log.ValueLogFileID()]++
+					continue
+				}
+				stack = append(stack, childRef.Page)
 			}
 		default:
 			t.Fatalf("unexpected page type %d at page %d", n.Type(), pageID)
@@ -280,7 +280,7 @@ func collectLeafRefFileCounts(t *testing.T, p *pager.Pager, rootID uint64) map[u
 	return out
 }
 
-func collectLeafRefs(t *testing.T, p *pager.Pager, rootID uint64) []uint64 {
+func collectLeafRefs(t *testing.T, p *pager.Pager, rootID uint64) []page.LeafLogPtr {
 	t.Helper()
 	if p == nil || rootID == 0 {
 		return nil
@@ -288,7 +288,7 @@ func collectLeafRefs(t *testing.T, p *pager.Pager, rootID uint64) []uint64 {
 
 	stack := []uint64{rootID}
 	seen := make(map[uint64]struct{}, 1024)
-	out := make([]uint64, 0, 128)
+	out := make([]page.LeafLogPtr, 0, 128)
 	for len(stack) > 0 {
 		pageID := stack[len(stack)-1]
 		stack = stack[:len(stack)-1]
@@ -296,10 +296,6 @@ func collectLeafRefs(t *testing.T, p *pager.Pager, rootID uint64) []uint64 {
 			continue
 		}
 		seen[pageID] = struct{}{}
-		if _, ok := page.DecodeLeafRef(pageID); ok {
-			out = append(out, pageID)
-			continue
-		}
 		data, err := p.Get(pageID)
 		if err != nil {
 			t.Fatalf("pager.Get(%d): %v", pageID, err)
@@ -309,11 +305,15 @@ func collectLeafRefs(t *testing.T, p *pager.Pager, rootID uint64) []uint64 {
 		case page.PageTypeLeaf:
 		case page.PageTypeInternal:
 			for i := uint16(0); i < n.Count(); i++ {
-				childID, err := n.GetInternalChildID(i)
+				childRef, err := n.GetInternalChildRef(i)
 				if err != nil {
-					t.Fatalf("GetInternalChildID(%d,%d): %v", pageID, i, err)
+					t.Fatalf("GetInternalChildRef(%d,%d): %v", pageID, i, err)
 				}
-				stack = append(stack, childID)
+				if childRef.Kind == page.ChildRefLeafLog {
+					out = append(out, childRef.Log)
+					continue
+				}
+				stack = append(stack, childRef.Page)
 			}
 		default:
 			t.Fatalf("unexpected page type %d at page %d", n.Type(), pageID)
@@ -330,11 +330,7 @@ func collectNestedLeafValueLogFileCounts(t *testing.T, reader interface {
 	if reader == nil || p == nil || rootID == 0 {
 		return out
 	}
-	for _, id := range collectLeafRefs(t, p, rootID) {
-		ptr, ok := page.DecodeLeafRef(id)
-		if !ok {
-			continue
-		}
+	for _, ptr := range collectLeafRefs(t, p, rootID) {
 		if len(sourceSet) > 0 {
 			if _, ok := sourceSet[ptr.ValueLogFileID()]; !ok {
 				continue

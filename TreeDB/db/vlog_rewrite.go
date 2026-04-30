@@ -2949,8 +2949,9 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 	}
 	if opts.IndexPackedValuePtr || rewriteUsesLeafLog {
 		// Packed on-disk pointers store Offset as u32. Ensure rewritten segments
-		// rotate so newly written pointers remain representable. LeafRef ids
-		// (outer leaves in value log) also encode Offset as u32.
+		// rotate so newly written pointers remain representable. Leaf-log refs
+		// can store wider offsets, but the packed value-pointer path still needs
+		// this cap for now.
 		const packedMax = int64(^uint32(0)) - 4
 		if maxBytes > packedMax {
 			maxBytes = packedMax
@@ -3235,9 +3236,6 @@ func valueLogRewriteCollectionRootUsesLeafLog(oldPager *pager.Pager, rootID uint
 	if rootID == 0 {
 		return false, nil
 	}
-	if _, ok := page.DecodeLeafRef(rootID); ok {
-		return true, nil
-	}
 	_, allLeafRefs, err := vacuumCollectLeafRefChildrenIfComplete(oldPager, rootID)
 	if err != nil {
 		return false, err
@@ -3455,6 +3453,27 @@ func (w *rewriteWriter) AppendLeafPage(leafPage []byte) (page.LeafLogPtr, error)
 	return w.appendLeafPageWithRID(rid, leafPage)
 }
 
+func (w *rewriteWriter) AppendLeafPages(leafPages [][]byte) ([]page.LeafLogPtr, error) {
+	if w == nil {
+		return nil, errors.New("vlog-rewrite: nil writer")
+	}
+	if len(leafPages) == 0 {
+		return nil, nil
+	}
+	if w.nextRID == 0 {
+		w.nextRID = 1
+	}
+	startRID := w.nextRID
+	if uint64(len(leafPages)) > ^uint64(0)-startRID {
+		return nil, fmt.Errorf("value-log rid space exhausted")
+	}
+	w.nextRID += uint64(len(leafPages))
+	if w.nextRID == 0 {
+		return nil, fmt.Errorf("value-log rid space exhausted")
+	}
+	return w.appendLeafPagesWithRIDStart(startRID, leafPages)
+}
+
 func (w *rewriteWriter) LastLeafPageRecordLength() uint32 {
 	if w == nil {
 		return 0
@@ -3481,9 +3500,6 @@ func (w *rewriteWriter) appendLeafPageWithRID(rid uint64, leafPage []byte) (page
 		return w.appendLeafPageSplit(rid, encodedLeafPage)
 	}
 	if w.blockCompression && w.leafDictID != 0 && len(w.leafDict) > 0 && rewriteAllowDictForSmallPayload(encodedLeafPage) {
-		// LeafRef IDs intentionally omit grouped sub-index bits and therefore
-		// require K=1 frames. Use single-record append so decoded LeafRef pointers
-		// remain stable and do not alias another subrecord in a grouped batch.
 		ptr, err := w.appendSingleValueWithDictClass(rewriteTemplateClassOuterLeaf, w.leafDictID, w.leafDict, rid, encodedLeafPage)
 		if err == nil {
 			w.lastLeafRecordLen = page.ValuePtrRecordLength(ptr)
@@ -3507,6 +3523,109 @@ func (w *rewriteWriter) appendLeafPageWithRID(rid uint64, leafPage []byte) (page
 		return page.LeafLogPtr{}, convErr
 	}
 	return leafPtr, nil
+}
+
+func (w *rewriteWriter) appendLeafPagesWithRIDStart(startRID uint64, leafPages [][]byte) ([]page.LeafLogPtr, error) {
+	if w == nil {
+		return nil, errors.New("vlog-rewrite: nil writer")
+	}
+	if len(leafPages) == 0 {
+		return nil, nil
+	}
+	if len(leafPages) == 1 {
+		ptr, err := w.appendLeafPageWithRID(startRID, leafPages[0])
+		if err != nil {
+			return nil, err
+		}
+		return []page.LeafLogPtr{ptr}, nil
+	}
+	if w.leafDir == "" {
+		ptrs := make([]page.LeafLogPtr, len(leafPages))
+		for i, leafPage := range leafPages {
+			ptr, err := w.appendLeafPageWithRID(startRID+uint64(i), leafPage)
+			if err != nil {
+				return nil, err
+			}
+			ptrs[i] = ptr
+		}
+		return ptrs, nil
+	}
+	if err := w.ensureLeafWriter(); err != nil {
+		return nil, err
+	}
+	records := make([]valuelog.Record, len(leafPages))
+	rawPayloadBytes := 0
+	dictID := uint64(0)
+	var dict []byte
+	useDict := w.blockCompression && w.leafDictID != 0 && len(w.leafDict) > 0
+	if useDict {
+		dictID = w.leafDictID
+		dict = w.leafDict
+	}
+	for i, leafPage := range leafPages {
+		if len(leafPage) != page.PageSize {
+			return nil, fmt.Errorf("vlog-rewrite: leaf page %d has invalid size: got=%dB want=%dB", i, len(leafPage), page.PageSize)
+		}
+		encodedLeafPage := leafPage
+		if w.leafPagesUseCompactPayload() {
+			var err error
+			encodedLeafPage, _, err = valuelog.MaybeCompactLeafLogPayload(leafPage)
+			if err != nil {
+				return nil, err
+			}
+		}
+		if useDict && !rewriteAllowDictForSmallPayload(encodedLeafPage) {
+			useDict = false
+			dictID = 0
+			dict = nil
+		}
+		records[i] = valuelog.Record{
+			RID:   startRID + uint64(i),
+			Value: encodedLeafPage,
+		}
+		rawPayloadBytes += len(encodedLeafPage)
+	}
+	if useDict {
+		for i := range records {
+			beforeLen := len(records[i].Value)
+			dictID, dict, records[i].Value = w.applyTemplateCompression(rewriteTemplateClassOuterLeaf, dictID, dict, records[i].Value)
+			rawPayloadBytes += len(records[i].Value) - beforeLen
+		}
+	} else {
+		for i := range records {
+			var ignoredDict []byte
+			dictID, ignoredDict, records[i].Value = w.applyTemplateCompression(rewriteTemplateClassOuterLeaf, 0, nil, records[i].Value)
+			if dictID != 0 || len(ignoredDict) != 0 {
+				return nil, fmt.Errorf("vlog-rewrite: unexpected outer-leaf dict/template state")
+			}
+		}
+		rawPayloadBytes = 0
+		for i := range records {
+			rawPayloadBytes += len(records[i].Value)
+		}
+	}
+	if err := w.maybeRotateLeafForEstimate(rewriteDictFrameRecordLen(rawPayloadBytes, len(records))); err != nil {
+		return nil, err
+	}
+	valuePtrs := make([]page.ValuePtr, len(records))
+	valuePtrs, _, err := w.leafW.AppendFrameWithStatsInto(dictID, dict, records, valuePtrs)
+	if err != nil {
+		return nil, err
+	}
+	if len(valuePtrs) != len(records) {
+		return nil, fmt.Errorf("vlog-rewrite: leaf batch pointer count mismatch got=%d want=%d", len(valuePtrs), len(records))
+	}
+	ptrs := make([]page.LeafLogPtr, len(valuePtrs))
+	for i, ptr := range valuePtrs {
+		w.lastLeafRecordLen = page.ValuePtrRecordLength(ptr)
+		leafPtr, err := page.LeafLogPtrFromValuePtr(ptr)
+		if err != nil {
+			return nil, err
+		}
+		ptrs[i] = leafPtr
+	}
+	w.records += len(records)
+	return ptrs, nil
 }
 
 func (w *rewriteWriter) leafPagesUseCompactPayload() bool {

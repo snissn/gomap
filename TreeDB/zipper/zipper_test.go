@@ -65,7 +65,7 @@ type memoryLeafPageStore struct {
 	z *Zipper
 
 	next  uint32
-	pages map[uint64][]byte
+	pages map[page.LeafLogPtr][]byte
 
 	readCalls  int
 	sawCache   int
@@ -75,7 +75,7 @@ type memoryLeafPageStore struct {
 func newMemoryLeafPageStore(z *Zipper) *memoryLeafPageStore {
 	return &memoryLeafPageStore{
 		z:     z,
-		pages: make(map[uint64][]byte),
+		pages: make(map[page.LeafLogPtr][]byte),
 	}
 }
 
@@ -97,11 +97,7 @@ func (s *memoryLeafPageStore) AppendLeafPage(leafPage []byte) (page.LeafLogPtr, 
 		Offset: uint64(s.next),
 	}
 	s.next += 4096 + 32
-	key, err := page.EncodeLeafRef(ptr)
-	if err != nil {
-		return page.LeafLogPtr{}, err
-	}
-	s.pages[key] = append([]byte(nil), leafPage...)
+	s.pages[ptr] = append([]byte(nil), leafPage...)
 	return ptr, nil
 }
 
@@ -111,11 +107,7 @@ func (s *memoryLeafPageStore) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	key, err := page.EncodeLeafRef(leafPtr)
-	if err != nil {
-		return nil, err
-	}
-	data, ok := s.pages[key]
+	data, ok := s.pages[leafPtr]
 	if !ok {
 		return nil, io.EOF
 	}
@@ -184,7 +176,7 @@ func TestZipperLeafRefCacheAvoidsUnflushedReads(t *testing.T) {
 
 	// Simulate Apply() scope: enable the in-flight leaf-ref cache so loadNode can
 	// resolve freshly appended leaf pages before the leafPageLog is flushed.
-	z.leafRefCache = make(map[uint64][]byte)
+	z.leafRefCache = make(map[page.LeafLogPtr][]byte)
 
 	data := make([]byte, page.PageSize)
 	b := node.NewBuilder(data, page.PageTypeLeaf)
@@ -199,7 +191,7 @@ func TestZipperLeafRefCacheAvoidsUnflushedReads(t *testing.T) {
 		t.Fatalf("persistLeafPage: %v", err)
 	}
 
-	loaded, fromPager, leafScratch, leafScratchRef, err := z.loadNode(leafID, nil)
+	loaded, fromPager, leafScratch, leafScratchRef, err := z.loadNodeRef(leafID, nil)
 	if err != nil {
 		t.Fatalf("loadNode: %v", err)
 	}
@@ -432,14 +424,8 @@ func TestCoalesceInternalChildren_SkipsLeafRefsWhenOuterLeavesInValueLog(t *test
 	z := New(p, alloc)
 	z.SetOuterLeavesInValueLog(true)
 
-	leftID, err := page.EncodeLeafRef(page.LeafLogPtr{FileID: 1, Offset: 4})
-	if err != nil {
-		t.Fatalf("EncodeLeafRef left: %v", err)
-	}
-	rightID, err := page.EncodeLeafRef(page.LeafLogPtr{FileID: 1, Offset: 4096})
-	if err != nil {
-		t.Fatalf("EncodeLeafRef right: %v", err)
-	}
+	leftID := page.LeafLogChildRef(page.LeafLogPtr{FileID: 1, Offset: 4})
+	rightID := page.LeafLogChildRef(page.LeafLogPtr{FileID: 1, Offset: 4096})
 
 	entries := []internalEntry{
 		{key: []byte("a"), child: leftID},
@@ -458,7 +444,7 @@ func TestCoalesceInternalChildren_SkipsLeafRefsWhenOuterLeavesInValueLog(t *test
 	}
 	for i := range entries {
 		if !bytes.Equal(got[i].key, entries[i].key) || got[i].child != entries[i].child {
-			t.Fatalf("entry[%d]=(%q,%d) want (%q,%d)", i, got[i].key, got[i].child, entries[i].key, entries[i].child)
+			t.Fatalf("entry[%d]=(%q,%v) want (%q,%v)", i, got[i].key, got[i].child, entries[i].key, entries[i].child)
 		}
 	}
 }
@@ -500,8 +486,8 @@ func TestCoalesceLeafChildrenPrefixCompression(t *testing.T) {
 	rightID := buildLeaf([]string{"b0", "b1", "b2", "b3"}, 1000)
 
 	entries := []internalEntry{
-		{key: []byte{}, child: leftID},
-		{key: []byte("b0"), child: rightID},
+		{key: []byte{}, child: page.PageChildRef(leftID)},
+		{key: []byte("b0"), child: page.PageChildRef(rightID)},
 	}
 
 	out, _, err := z.coalesceLeafChildren(entries, nil, &adaptive.Metrics{}, nil)
@@ -511,9 +497,12 @@ func TestCoalesceLeafChildrenPrefixCompression(t *testing.T) {
 
 	var got []string
 	for _, e := range out {
-		data, err := p.Get(e.child)
+		if e.child.Kind != page.ChildRefPage {
+			t.Fatalf("child=%v want page child", e.child)
+		}
+		data, err := p.Get(e.child.Page)
 		if err != nil {
-			t.Fatalf("load leaf %d: %v", e.child, err)
+			t.Fatalf("load leaf %d: %v", e.child.Page, err)
 		}
 		n := node.NewNode(data)
 		for i := uint16(0); i < n.Count(); i++ {

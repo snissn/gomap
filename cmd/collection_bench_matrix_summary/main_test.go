@@ -485,7 +485,7 @@ func TestMatrixSummaryRendersBenchmarkMetrics(t *testing.T) {
 		"800,000",
 		"1,400,000",
 		"## Maintenance Compaction",
-		"| Cell | Engine | Format | Data vlog | Index vlog | Pager chunk | Pager sync | Maintenance | Benchmark | ns/op | ops/sec | GC ns/op | GC ops/sec | Before | After | Delta | After GC | Delta after GC | Report |",
+		"| Cell | Engine | Format | Data vlog | Index vlog | Pager chunk | Pager sync | Maintenance | Benchmark | ns/op | ops/sec | GC ns/op | GC ops/sec | Before | After | Delta | After GC | Delta after GC | Frames | Max K | Report |",
 		"`treedb_vlog_rewrite`",
 		"`sqlite_vacuum`",
 		"-600,000",

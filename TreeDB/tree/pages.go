@@ -9,7 +9,8 @@ import (
 )
 
 // WalkPages visits each pager-backed page reachable from the Tree's current
-// root exactly once. Leaf pages stored in the value log (LeafRef IDs) are
+// root exactly once. Leaf pages stored in the value log (typed leaf-log child
+// refs) are
 // skipped. It is primarily intended for diagnostics, vacuuming, and tests.
 func (t *Tree) WalkPages(fn func(pageID uint64, n node.Node) error) error {
 	if t.rootPageID == 0 {
@@ -30,13 +31,6 @@ func (t *Tree) WalkPages(fn func(pageID uint64, n node.Node) error) error {
 		pageID := stack[len(stack)-1]
 		stack = stack[:len(stack)-1]
 
-		// LeafRef ids encode value-log pointers for leaf pages; they are not
-		// pager-backed pages and must not be returned to callers that retire/free
-		// index.db page IDs.
-		if _, ok := page.DecodeLeafRef(pageID); ok {
-			continue
-		}
-
 		if _, ok := visited[pageID]; ok {
 			continue
 		}
@@ -55,16 +49,8 @@ func (t *Tree) WalkPages(fn func(pageID uint64, n node.Node) error) error {
 		case page.PageTypeLeaf:
 			// no children
 		case page.PageTypeInternal:
-			count := n.Count()
-			for i := uint16(0); i < count; i++ {
-				childID, err := n.GetInternalChildID(i)
-				if err != nil {
-					return err
-				}
-				if _, ok := page.DecodeLeafRef(childID); ok {
-					continue
-				}
-				stack = append(stack, childID)
+			if err := n.WalkInternalChildren(&stack, nil); err != nil {
+				return err
 			}
 		default:
 			return errors.New("invalid page type")
@@ -75,7 +61,7 @@ func (t *Tree) WalkPages(fn func(pageID uint64, n node.Node) error) error {
 }
 
 // CollectPageIDs returns the sorted set of pager-backed page IDs reachable from
-// the Tree root. Leaf pages stored in the value log (LeafRef IDs) are excluded.
+// the Tree root. Leaf pages stored in the value log are excluded.
 func (t *Tree) CollectPageIDs() ([]uint64, error) {
 	out := make([]uint64, 0, 1024)
 	if err := t.WalkPages(func(pageID uint64, _ node.Node) error {

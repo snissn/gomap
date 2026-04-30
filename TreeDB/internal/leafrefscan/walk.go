@@ -39,12 +39,6 @@ func walkRootsCommon(ctx context.Context, rootIDs []uint64, get GetFunc, verify 
 		if rootID == 0 {
 			continue
 		}
-		if ptr, ok := page.DecodeLeafRef(rootID); ok {
-			if err := visit(ptr); err != nil {
-				return err
-			}
-			continue
-		}
 		stack = append(stack, rootID)
 	}
 
@@ -74,13 +68,7 @@ func walkRootsCommon(ctx context.Context, rootIDs []uint64, get GetFunc, verify 
 		case page.PageTypeLeaf:
 			// no children
 		case page.PageTypeInternal:
-			if err := n.ForEachInternalChildID(func(childID uint64) error {
-				if ptr, ok := page.DecodeLeafRef(childID); ok {
-					return visit(ptr)
-				}
-				stack = append(stack, childID)
-				return nil
-			}); err != nil {
+			if err := n.WalkInternalChildren(&stack, visit); err != nil {
 				return err
 			}
 		default:

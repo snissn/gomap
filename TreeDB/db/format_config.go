@@ -11,7 +11,7 @@ import (
 
 const formatConfigFileName = "format.json"
 
-const formatConfigVersion = 1
+const formatConfigVersion = 2
 
 // FormatConfig captures the format-affecting knobs that maintenance tooling
 // should preserve when rewriting index/value-log state.
@@ -64,9 +64,9 @@ func formatConfigFromOptions(opts Options) FormatConfig {
 		ValueLogAutoPolicy:  normalizeFormatConfigMode(formatValueLogAutoPolicy(opts.ValueLog.AutoPolicy)),
 	}
 
-	// Leaf refs encode value-log pointers in internal child IDs, which are
-	// incompatible with internal base-delta encodings. Preserve the effective
-	// behavior by forcing this false in persisted config.
+	// Leaf-log child pages use an explicit LogRecordRef layout instead of page
+	// child IDs, so keep base-delta disabled for outer-leaf-in-vlog roots until
+	// mixed internal-level policy is supported.
 	if cfg.IndexOuterLeavesInValueLog && cfg.IndexInternalBaseDelta {
 		cfg.IndexInternalBaseDelta = false
 	}

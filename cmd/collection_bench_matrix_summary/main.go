@@ -90,6 +90,8 @@ type summaryRow struct {
 	LeafGenPackDelta      *float64
 	LeafGenPackAfterGC    *float64
 	LeafGenPackDeltaGC    *float64
+	LeafGenPackFrames     *float64
+	LeafGenPackMaxFrameK  *float64
 	LeafGenGCNs           *float64
 	SQLiteVacuumNs        *float64
 	SQLiteVacuumBefore    *float64
@@ -135,6 +137,8 @@ type maintenanceRow struct {
 	Delta      *float64
 	AfterGC    *float64
 	DeltaGC    *float64
+	Frames     *float64
+	MaxFrameK  *float64
 }
 
 var benchmarkOrder = []string{
@@ -501,6 +505,8 @@ func buildSummaryRow(row matrixRow, collectionBatchSize int, name string, benchm
 		LeafGenPackDelta:      metricPtr(benchmark.MeanMetrics, "leafgen_pack_disk_total_bytes_delta"),
 		LeafGenPackAfterGC:    metricPtr(benchmark.MeanMetrics, "leafgen_pack_gc_disk_total_bytes_after"),
 		LeafGenPackDeltaGC:    metricPtr(benchmark.MeanMetrics, "leafgen_pack_gc_disk_total_bytes_delta"),
+		LeafGenPackFrames:     metricPtr(benchmark.MeanMetrics, "leafgen_pack_leaf_frames_written"),
+		LeafGenPackMaxFrameK:  metricPtr(benchmark.MeanMetrics, "leafgen_pack_max_leaf_frame_k"),
 		LeafGenGCNs:           metricPtr(benchmark.MeanMetrics, "leafgen_gc_ns/op"),
 		SQLiteVacuumNs:        metricPtr(benchmark.MeanMetrics, "sqlite_vacuum_ns/op"),
 		SQLiteVacuumBefore:    metricPtr(benchmark.MeanMetrics, "sqlite_vacuum_disk_total_bytes_before"),
@@ -737,7 +743,7 @@ func renderDiskUsageTSV(rows []diskUsageRow, outDir string) string {
 
 func renderMaintenanceTSV(rows []maintenanceRow, outDir string) string {
 	var sb strings.Builder
-	sb.WriteString("cell\tengine\tdocument_format\tdata_outer_leaves_in_vlog\tindex_outer_leaves_in_vlog\tpager_chunk_size\tpager_sync_concurrency\tmaintenance\tbenchmark\tns_per_op\tops_per_sec\tgc_ns_per_op\tgc_ops_per_sec\tdisk_total_bytes_before\tdisk_total_bytes_after\tdisk_total_bytes_delta\tdisk_total_bytes_after_gc\tdisk_total_bytes_delta_after_gc\treport_md\n")
+	sb.WriteString("cell\tengine\tdocument_format\tdata_outer_leaves_in_vlog\tindex_outer_leaves_in_vlog\tpager_chunk_size\tpager_sync_concurrency\tmaintenance\tbenchmark\tns_per_op\tops_per_sec\tgc_ns_per_op\tgc_ops_per_sec\tdisk_total_bytes_before\tdisk_total_bytes_after\tdisk_total_bytes_delta\tdisk_total_bytes_after_gc\tdisk_total_bytes_delta_after_gc\tleaf_frames_written\tmax_leaf_frame_k\treport_md\n")
 	for _, row := range rows {
 		sb.WriteString(row.Cell)
 		sb.WriteByte('\t')
@@ -774,6 +780,10 @@ func renderMaintenanceTSV(rows []maintenanceRow, outDir string) string {
 		sb.WriteString(formatOptionalTSVFloat(row.AfterGC))
 		sb.WriteByte('\t')
 		sb.WriteString(formatOptionalTSVFloat(row.DeltaGC))
+		sb.WriteByte('\t')
+		sb.WriteString(formatOptionalTSVFloat(row.Frames))
+		sb.WriteByte('\t')
+		sb.WriteString(formatOptionalTSVFloat(row.MaxFrameK))
 		sb.WriteByte('\t')
 		sb.WriteString(relativeReportPath(outDir, row.ReportMarkdownPath))
 		sb.WriteByte('\n')
@@ -933,8 +943,8 @@ func renderMarkdown(rows []summaryRow, outDir string) (string, error) {
 	if len(maintenanceRows) > 0 {
 		sb.WriteString("## Maintenance Compaction\n\n")
 		sb.WriteString("TreeDB `treedb_vlog_rewrite` rows measure value_vlog rewrite/GC. TreeDB `treedb_leafgen_pack_gc` rows measure leaf_vlog generation pack/GC. SQLite rows show total disk before and after full `VACUUM`.\n\n")
-		sb.WriteString("| Cell | Engine | Format | Data vlog | Index vlog | Pager chunk | Pager sync | Maintenance | Benchmark | ns/op | ops/sec | GC ns/op | GC ops/sec | Before | After | Delta | After GC | Delta after GC | Report |\n")
-		sb.WriteString("| --- | --- | --- | ---: | ---: | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |\n")
+		sb.WriteString("| Cell | Engine | Format | Data vlog | Index vlog | Pager chunk | Pager sync | Maintenance | Benchmark | ns/op | ops/sec | GC ns/op | GC ops/sec | Before | After | Delta | After GC | Delta after GC | Frames | Max K | Report |\n")
+		sb.WriteString("| --- | --- | --- | ---: | ---: | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |\n")
 		for _, row := range maintenanceRows {
 			reportPath := relativeReportPath(outDir, row.ReportMarkdownPath)
 			sb.WriteString("| `")
@@ -973,6 +983,10 @@ func renderMarkdown(rows []summaryRow, outDir string) (string, error) {
 			sb.WriteString(formatOptionalByteCount(row.AfterGC))
 			sb.WriteString(" | ")
 			sb.WriteString(formatOptionalByteCount(row.DeltaGC))
+			sb.WriteString(" | ")
+			sb.WriteString(formatOptionalFloat(row.Frames))
+			sb.WriteString(" | ")
+			sb.WriteString(formatOptionalFloat(row.MaxFrameK))
 			sb.WriteString(" | [report](")
 			sb.WriteString(markdownLinkPath(reportPath))
 			sb.WriteString(") |\n")
@@ -1413,6 +1427,8 @@ func buildMaintenanceRows(rows []summaryRow) []maintenanceRow {
 				Delta:      row.LeafGenPackDelta,
 				AfterGC:    row.LeafGenPackAfterGC,
 				DeltaGC:    row.LeafGenPackDeltaGC,
+				Frames:     row.LeafGenPackFrames,
+				MaxFrameK:  row.LeafGenPackMaxFrameK,
 			})
 		}
 		if row.SQLiteVacuumBefore != nil || row.SQLiteVacuumAfter != nil {

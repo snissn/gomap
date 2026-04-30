@@ -249,30 +249,38 @@ func (t *Tree) loadNodeView(pageID uint64, verifyAlways bool) (node.Node, error)
 	return t.loadNodeViewWithLoadKind(pageID, verifyAlways, false)
 }
 
+func (t *Tree) loadLeafLogNodeView(ptr page.LogRecordRef, iterator bool) (node.Node, error) {
+	if t.slabReader == nil {
+		return node.Node{}, errors.New("missing slab reader")
+	}
+	data, err := t.slabReader.ReadUnsafe(ptr.ValuePtr())
+	if err != nil {
+		return node.Node{}, err
+	}
+	if len(data) != page.PageSize {
+		return node.Node{}, fmt.Errorf("invalid leaf page size %d for leaf-log ref file=%d offset=%d", len(data), ptr.FileID, ptr.Offset)
+	}
+	n := node.NewNodeView(data)
+	if t.shouldVerifyLeafRefChecksum() && !n.VerifyChecksum() {
+		return node.Node{}, fmt.Errorf("checksum mismatch on leaf-log ref file=%d offset=%d", ptr.FileID, ptr.Offset)
+	}
+	if n.Type() != page.PageTypeLeaf {
+		return node.Node{}, fmt.Errorf("invalid page type %d at leaf-log ref file=%d offset=%d", n.Type(), ptr.FileID, ptr.Offset)
+	}
+	noteOuterLeafLoad(ptr.ValuePtr(), len(data), iterator)
+	return n, nil
+}
+
+func (t *Tree) loadChildRefView(ref page.ChildRef, verifyAlways bool, iterator bool) (node.Node, error) {
+	if ref.Kind == page.ChildRefLeafLog {
+		return t.loadLeafLogNodeView(ref.Log, iterator)
+	}
+	return t.loadNodeViewWithLoadKind(ref.Page, verifyAlways, iterator)
+}
+
 func (t *Tree) loadNodeViewWithLoadKind(pageID uint64, verifyAlways bool, iterator bool) (node.Node, error) {
 	if t == nil {
 		return node.Node{}, errors.New("missing tree")
-	}
-	if ptr, ok := page.DecodeLeafRef(pageID); ok {
-		if t.slabReader == nil {
-			return node.Node{}, errors.New("missing slab reader")
-		}
-		data, err := t.slabReader.ReadUnsafe(ptr.ValuePtr())
-		if err != nil {
-			return node.Node{}, err
-		}
-		if len(data) != page.PageSize {
-			return node.Node{}, fmt.Errorf("invalid leaf page size %d for page %d", len(data), pageID)
-		}
-		n := node.NewNodeView(data)
-		if t.shouldVerifyLeafRefChecksum() && !n.VerifyChecksum() {
-			return node.Node{}, fmt.Errorf("checksum mismatch on page %d", pageID)
-		}
-		if n.Type() != page.PageTypeLeaf {
-			return node.Node{}, fmt.Errorf("invalid page type %d at page %d", n.Type(), pageID)
-		}
-		noteOuterLeafLoad(ptr.ValuePtr(), len(data), iterator)
-		return n, nil
 	}
 	if t.pager == nil {
 		return node.Node{}, errors.New("missing pager")
@@ -300,14 +308,14 @@ func (t *Tree) loadNodeViewWithLoadKind(pageID uint64, verifyAlways bool, iterat
 // CAUTION: Returned entry Key/Value might point directly to mmap memory.
 // Do not modify or hold reference for long.
 func (t *Tree) GetEntry(key []byte) (node.LeafEntry, error) {
-	currID := t.rootPageID
+	currRef := page.PageChildRef(t.rootPageID)
 	verifyAlways := false
 	if t.pager != nil {
 		verifyAlways = t.pager.VerifyOnRead()
 	}
 
 	for depth := 0; depth < 50; depth++ {
-		n, err := t.loadNodeView(currID, verifyAlways)
+		n, err := t.loadChildRefView(currRef, verifyAlways, false)
 		if err != nil {
 			return node.LeafEntry{}, err
 		}
@@ -326,11 +334,11 @@ func (t *Tree) GetEntry(key []byte) (node.LeafEntry, error) {
 					}
 				}
 			}
-			childID, _, err := n.SearchInternalChildID(key)
+			childRef, _, err := n.SearchInternalChildRef(key)
 			if err != nil {
 				return node.LeafEntry{}, err
 			}
-			currID = childID
+			currRef = childRef
 
 		case page.PageTypeLeaf:
 			idx, found, err := n.SearchLeaf(key)
@@ -355,7 +363,7 @@ func (t *Tree) GetEntry(key []byte) (node.LeafEntry, error) {
 			}, nil
 
 		default:
-			return node.LeafEntry{}, fmt.Errorf("invalid page type %d at page %d", n.Type(), currID)
+			return node.LeafEntry{}, fmt.Errorf("invalid page type %d", n.Type())
 		}
 	}
 	return node.LeafEntry{}, errors.New("tree too deep")
@@ -367,7 +375,7 @@ func (t *Tree) GetEntryExact(key []byte) (node.LeafEntry, error) {
 }
 
 func (t *Tree) lookupLeafValueView(key []byte, dst []byte, appendMode bool) ([]byte, page.ValuePtr, byte, bool, error) {
-	currID := t.rootPageID
+	currRef := page.PageChildRef(t.rootPageID)
 	verifyAlways := false
 	if t.pager != nil {
 		verifyAlways = t.pager.VerifyOnRead()
@@ -382,7 +390,8 @@ func (t *Tree) lookupLeafValueView(key []byte, dst []byte, appendMode bool) ([]b
 		)
 
 		if appendMode {
-			if ptr, ok := page.DecodeLeafRef(currID); ok && t.slabReader != nil {
+			if currRef.Kind == page.ChildRefLeafLog && t.slabReader != nil {
+				ptr := currRef.Log
 				leafScratch = getLeafRefPageScratch()
 				var (
 					data []byte
@@ -418,20 +427,20 @@ func (t *Tree) lookupLeafValueView(key []byte, dst []byte, appendMode bool) ([]b
 						if leafScratchOwned {
 							putLeafRefPageScratch(leafScratch)
 						}
-						return nil, page.ValuePtr{}, 0, false, fmt.Errorf("invalid leaf page size %d for page %d", len(data), currID)
+						return nil, page.ValuePtr{}, 0, false, fmt.Errorf("invalid leaf page size %d for leaf-log ref file=%d offset=%d", len(data), ptr.FileID, ptr.Offset)
 					}
 					n = node.NewNodeView(data)
 					if t.shouldVerifyLeafRefChecksum() && !n.VerifyChecksum() {
 						if leafScratchOwned {
 							putLeafRefPageScratch(leafScratch)
 						}
-						return nil, page.ValuePtr{}, 0, false, fmt.Errorf("checksum mismatch on page %d", currID)
+						return nil, page.ValuePtr{}, 0, false, fmt.Errorf("checksum mismatch on leaf-log ref file=%d offset=%d", ptr.FileID, ptr.Offset)
 					}
 					if n.Type() != page.PageTypeLeaf {
 						if leafScratchOwned {
 							putLeafRefPageScratch(leafScratch)
 						}
-						return nil, page.ValuePtr{}, 0, false, fmt.Errorf("invalid page type %d at page %d", n.Type(), currID)
+						return nil, page.ValuePtr{}, 0, false, fmt.Errorf("invalid page type %d at leaf-log ref file=%d offset=%d", n.Type(), ptr.FileID, ptr.Offset)
 					}
 					noteOuterLeafLoad(ptr.ValuePtr(), len(data), false)
 				}
@@ -440,7 +449,7 @@ func (t *Tree) lookupLeafValueView(key []byte, dst []byte, appendMode bool) ([]b
 
 		if !loadedLeafRef {
 			var err error
-			n, err = t.loadNodeView(currID, verifyAlways)
+			n, err = t.loadChildRefView(currRef, verifyAlways, false)
 			if err != nil {
 				return nil, page.ValuePtr{}, 0, false, err
 			}
@@ -460,11 +469,11 @@ func (t *Tree) lookupLeafValueView(key []byte, dst []byte, appendMode bool) ([]b
 					}
 				}
 			}
-			childID, _, err := n.SearchInternalChildID(key)
+			childRef, _, err := n.SearchInternalChildRef(key)
 			if err != nil {
 				return nil, page.ValuePtr{}, 0, false, err
 			}
-			currID = childID
+			currRef = childRef
 
 		case page.PageTypeLeaf:
 			idx, found, err := n.SearchLeaf(key)
@@ -507,7 +516,7 @@ func (t *Tree) lookupLeafValueView(key []byte, dst []byte, appendMode bool) ([]b
 			if leafScratchOwned {
 				putLeafRefPageScratch(leafScratch)
 			}
-			return nil, page.ValuePtr{}, 0, false, fmt.Errorf("invalid page type %d at page %d", n.Type(), currID)
+			return nil, page.ValuePtr{}, 0, false, fmt.Errorf("invalid page type %d", n.Type())
 		}
 	}
 
@@ -669,14 +678,14 @@ func (t *Tree) Get(key []byte) ([]byte, error) {
 }
 
 func (t *Tree) Has(key []byte) (bool, error) {
-	currID := t.rootPageID
+	currRef := page.PageChildRef(t.rootPageID)
 	verifyAlways := false
 	if t.pager != nil {
 		verifyAlways = t.pager.VerifyOnRead()
 	}
 
 	for depth := 0; depth < 50; depth++ {
-		n, err := t.loadNodeView(currID, verifyAlways)
+		n, err := t.loadChildRefView(currRef, verifyAlways, false)
 		if err != nil {
 			return false, err
 		}
@@ -695,11 +704,11 @@ func (t *Tree) Has(key []byte) (bool, error) {
 					}
 				}
 			}
-			childID, _, err := n.SearchInternalChildID(key)
+			childRef, _, err := n.SearchInternalChildRef(key)
 			if err != nil {
 				return false, err
 			}
-			currID = childID
+			currRef = childRef
 		case page.PageTypeLeaf:
 			idx, found, err := n.SearchLeaf(key)
 			if err != nil {
@@ -714,7 +723,7 @@ func (t *Tree) Has(key []byte) (bool, error) {
 			}
 			return false, nil
 		default:
-			return false, fmt.Errorf("invalid page type %d at page %d", n.Type(), currID)
+			return false, fmt.Errorf("invalid page type %d", n.Type())
 		}
 	}
 

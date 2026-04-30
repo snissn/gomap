@@ -66,7 +66,8 @@ type leafRefRewriteCtx struct {
 	sourceGenerationIDs  map[uint64]struct{}
 	useSubtreeStatsPrune bool
 
-	leafMap            map[uint64]uint64 // old leafref id -> new leafref id
+	leafPtrMap         map[page.LeafLogPtr]page.ChildRef
+	leafMap            map[uint64]uint64 // legacy inline cache kept until the typed rewrite code is fully simplified.
 	leafRemapInline    [leafRefRewriteInlineRemapCap]leafRefRewriteRemap
 	leafRemapInlineLen int
 
@@ -80,6 +81,9 @@ type leafRefRewriteCtx struct {
 	internalVisited int
 	subtreesPruned  int
 	maxCopiedBytes  int64
+	leafFrameK      int
+	leafFrames      int
+	maxLeafFrameK   int
 
 	readRefreshRetried bool
 }
@@ -98,6 +102,8 @@ func (a *leafRefRewritePageAppender) AppendLeafPage(leafPage []byte) (page.LeafL
 type leafRefRewriteRunStats struct {
 	InternalPagesVisited int
 	SubtreesPruned       int
+	LeafFramesWritten    int
+	MaxLeafFrameK        int
 }
 
 type leafRefRewriteRemap struct {
@@ -217,6 +223,49 @@ func (c *leafRefRewriteCtx) storeInternalRemap(oldID, newID uint64) {
 	c.internalMap[oldID] = newID
 }
 
+func (c *leafRefRewriteCtx) lookupLeafPtrRemap(ptr page.LeafLogPtr) (page.ChildRef, bool) {
+	if c == nil || c.leafPtrMap == nil {
+		return page.ChildRef{}, false
+	}
+	ref, ok := c.leafPtrMap[ptr]
+	return ref, ok
+}
+
+func (c *leafRefRewriteCtx) storeLeafPtrRemap(old page.LeafLogPtr, next page.ChildRef) {
+	if c == nil {
+		return
+	}
+	if c.leafPtrMap == nil {
+		c.leafPtrMap = make(map[page.LeafLogPtr]page.ChildRef, leafRefRewriteMapInitCap)
+	}
+	c.leafPtrMap[old] = next
+}
+
+func (c *leafRefRewriteCtx) shouldRewriteLeafRef(ptr page.LeafLogPtr) (bool, error) {
+	if c == nil {
+		return false, errors.New("vlog-rewrite: nil leaf-ref rewrite ctx")
+	}
+	if c.hasSingleID {
+		if ptr.ValueLogFileID() != c.singleSourceID {
+			return false, nil
+		}
+	} else if c.sourceIDs != nil {
+		if _, ok := c.sourceIDs[ptr.ValueLogFileID()]; !ok {
+			return false, nil
+		}
+	}
+	if c.sourceChunks != nil {
+		ok, err := rewriteSourceChunkSelected(ptr.ValuePtr(), c.sourceChunks, c.sourceChunkBytes)
+		if err != nil {
+			return false, err
+		}
+		if !ok {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
 func (c *leafRefRewriteCtx) subtreeMayContainRewriteSource(pageID uint64) bool {
 	if c == nil || !c.useSubtreeStatsPrune || c.db == nil || len(c.sourceGenerationIDs) == 0 {
 		return true
@@ -267,7 +316,118 @@ func (c *leafRefRewriteCtx) appendLeafPage(leafPage []byte) (page.LeafLogPtr, er
 	}
 	c.copied++
 	c.copiedBytes += int64(len(leafPage))
+	c.leafFrames++
+	if c.maxLeafFrameK < 1 {
+		c.maxLeafFrameK = 1
+	}
 	return ptr, nil
+}
+
+func (c *leafRefRewriteCtx) appendLeafPages(leafPages [][]byte) ([]page.LeafLogPtr, error) {
+	if c == nil || c.writer == nil || c.ridAlloc == nil {
+		return nil, errors.New("vlog-rewrite: missing leaf-ref rewrite appender state")
+	}
+	if len(leafPages) == 0 {
+		return nil, nil
+	}
+	if c.ctx != nil {
+		if err := c.ctx.Err(); err != nil {
+			return nil, err
+		}
+	}
+	if c.maxCopiedBytes > 0 && c.copiedBytes >= c.maxCopiedBytes && c.copied > 0 {
+		return nil, fmt.Errorf("vlog-rewrite: leaf-ref copy budget exhausted: copied=%dB max=%dB", c.copiedBytes, c.maxCopiedBytes)
+	}
+	for i, leafPage := range leafPages {
+		if len(leafPage) != page.PageSize {
+			return nil, fmt.Errorf("vlog-rewrite: leaf page %d has invalid size: got=%dB want=%dB", i, len(leafPage), page.PageSize)
+		}
+	}
+	startRID, err := c.ridAlloc.Reserve(len(leafPages))
+	if err != nil {
+		return nil, err
+	}
+	ptrs, err := c.writer.appendLeafPagesWithRIDStart(startRID, leafPages)
+	if err != nil {
+		return nil, err
+	}
+	if len(ptrs) != len(leafPages) {
+		return nil, fmt.Errorf("vlog-rewrite: leaf batch pointer count mismatch got=%d want=%d", len(ptrs), len(leafPages))
+	}
+	c.copied += len(leafPages)
+	c.copiedBytes += int64(len(leafPages) * page.PageSize)
+	c.leafFrames++
+	if len(leafPages) > c.maxLeafFrameK {
+		c.maxLeafFrameK = len(leafPages)
+	}
+	return ptrs, nil
+}
+
+func (c *leafRefRewriteCtx) rewriteLeafRef(ptr page.LeafLogPtr) (page.ChildRef, bool, error) {
+	if mapped, ok := c.lookupLeafPtrRemap(ptr); ok {
+		return mapped, true, nil
+	}
+	shouldRewrite, err := c.shouldRewriteLeafRef(ptr)
+	if err != nil {
+		return page.ChildRef{}, false, err
+	}
+	if !shouldRewrite {
+		return page.LeafLogChildRef(ptr), false, nil
+	}
+	if c.writer == nil || c.ridAlloc == nil {
+		return page.ChildRef{}, false, fmt.Errorf("vlog-rewrite: rewrite writer unavailable")
+	}
+	leafPage, err := c.readLeafPage(ptr.ValuePtr())
+	if err != nil {
+		return page.ChildRef{}, false, err
+	}
+	leafLogPtr, err := c.appendLeafPage(leafPage)
+	if err != nil {
+		return page.ChildRef{}, false, err
+	}
+	next := page.LeafLogChildRef(leafLogPtr)
+	c.storeLeafPtrRemap(ptr, next)
+	return next, true, nil
+}
+
+func (c *leafRefRewriteCtx) rewriteLeafRefBatch(ptrs []page.LeafLogPtr) ([]page.ChildRef, error) {
+	if len(ptrs) == 0 {
+		return nil, nil
+	}
+	out := make([]page.ChildRef, len(ptrs))
+	for start := 0; start < len(ptrs); {
+		k := c.leafFrameK
+		if k <= 0 {
+			k = 1
+		}
+		if k > valuelog.MaxFrameK {
+			k = valuelog.MaxFrameK
+		}
+		end := start + k
+		if end > len(ptrs) {
+			end = len(ptrs)
+		}
+		pages := make([][]byte, end-start)
+		for i := start; i < end; i++ {
+			leafPage, err := c.readLeafPage(ptrs[i].ValuePtr())
+			if err != nil {
+				return nil, err
+			}
+			pages[i-start] = append([]byte(nil), leafPage...)
+		}
+		newPtrs, err := c.appendLeafPages(pages)
+		if err != nil {
+			return nil, err
+		}
+		for i, newPtr := range newPtrs {
+			ref := page.LeafLogChildRef(newPtr)
+			oldPtr := ptrs[start+i]
+			c.storeLeafPtrRemap(oldPtr, ref)
+			out[start+i] = ref
+		}
+		start = end
+	}
+	return out, nil
 }
 
 func (c *leafRefRewriteCtx) rewriteNode(id uint64) (uint64, bool, error) {
@@ -285,47 +445,6 @@ func (c *leafRefRewriteCtx) rewriteNode(id uint64) (uint64, bool, error) {
 	}
 	if id == 0 {
 		return 0, false, nil
-	}
-
-	if ptr, ok := page.DecodeLeafRef(id); ok {
-		if mapped, ok := c.lookupLeafRemap(id); ok {
-			return mapped, mapped != id, nil
-		}
-		if c.hasSingleID {
-			if ptr.ValueLogFileID() != c.singleSourceID {
-				return id, false, nil
-			}
-		} else if c.sourceIDs != nil {
-			if _, ok := c.sourceIDs[ptr.ValueLogFileID()]; !ok {
-				return id, false, nil
-			}
-		}
-		if c.sourceChunks != nil {
-			ok, err := rewriteSourceChunkSelected(ptr.ValuePtr(), c.sourceChunks, c.sourceChunkBytes)
-			if err != nil {
-				return id, false, err
-			}
-			if !ok {
-				return id, false, nil
-			}
-		}
-		if c.writer == nil || c.ridAlloc == nil {
-			return id, false, fmt.Errorf("vlog-rewrite: rewrite writer unavailable")
-		}
-		leafPage, err := c.readLeafPage(ptr.ValuePtr())
-		if err != nil {
-			return id, false, err
-		}
-		leafLogPtr, err := c.appendLeafPage(leafPage)
-		if err != nil {
-			return id, false, err
-		}
-		leafID, err := page.EncodeLeafRef(leafLogPtr)
-		if err != nil {
-			return id, false, err
-		}
-		c.storeLeafRemap(id, leafID)
-		return leafID, true, nil
 	}
 
 	if mapped, ok := c.lookupInternalRemap(id); ok {
@@ -359,36 +478,96 @@ func (c *leafRefRewriteCtx) rewriteNode(id uint64) (uint64, bool, error) {
 		if count == 0 {
 			return id, false, nil
 		}
-		var childIDs []uint64
-		var childIDsInline [leafRefRewriteInlineChildCap]uint64
+		var childRefs []page.ChildRef
+		var childRefsInline [leafRefRewriteInlineChildCap]page.ChildRef
+		if int(count) <= len(childRefsInline) {
+			childRefs = childRefsInline[:int(count)]
+		} else {
+			childRefs = make([]page.ChildRef, int(count))
+		}
+		changed := false
+		type pendingLeafRewrite struct {
+			index int
+			ptr   page.LeafLogPtr
+		}
+		var pending []pendingLeafRewrite
+		var pendingInline [leafRefRewriteInlineChildCap]pendingLeafRewrite
+		pending = pendingInline[:0]
+		flushPending := func() error {
+			if len(pending) == 0 {
+				return nil
+			}
+			ptrs := make([]page.LeafLogPtr, len(pending))
+			for i := range pending {
+				ptrs[i] = pending[i].ptr
+			}
+			refs, err := c.rewriteLeafRefBatch(ptrs)
+			if err != nil {
+				return err
+			}
+			for i, ref := range refs {
+				childRefs[pending[i].index] = ref
+			}
+			changed = true
+			pending = pending[:0]
+			return nil
+		}
 		for i := uint16(0); i < count; i++ {
-			_, childID, err := n.GetInternalEntryView(i)
+			_, childRef, err := n.GetInternalEntryRefView(i)
 			if err != nil {
 				return id, false, err
 			}
-			nextChild, childChanged, err := c.rewriteNode(childID)
-			if err != nil {
-				return id, false, err
-			}
-			if childChanged && childIDs == nil {
-				if int(count) <= len(childIDsInline) {
-					childIDs = childIDsInline[:int(count)]
-				} else {
-					childIDs = make([]uint64, int(count))
-				}
-				for j := uint16(0); j < i; j++ {
-					_, prevChild, err := n.GetInternalEntryView(j)
-					if err != nil {
+			childRefs[int(i)] = childRef
+			if childRef.Kind == page.ChildRefLeafLog {
+				if mapped, ok := c.lookupLeafPtrRemap(childRef.Log); ok {
+					if err := flushPending(); err != nil {
 						return id, false, err
 					}
-					childIDs[int(j)] = prevChild
+					childRefs[int(i)] = mapped
+					changed = true
+					continue
+				}
+				shouldRewrite, err := c.shouldRewriteLeafRef(childRef.Log)
+				if err != nil {
+					return id, false, err
+				}
+				if !shouldRewrite {
+					if err := flushPending(); err != nil {
+						return id, false, err
+					}
+					continue
+				}
+				pending = append(pending, pendingLeafRewrite{index: int(i), ptr: childRef.Log})
+				k := c.leafFrameK
+				if k <= 0 {
+					k = 1
+				}
+				if k > valuelog.MaxFrameK {
+					k = valuelog.MaxFrameK
+				}
+				if len(pending) >= k {
+					if err := flushPending(); err != nil {
+						return id, false, err
+					}
+				}
+			} else {
+				if err := flushPending(); err != nil {
+					return id, false, err
+				}
+				nextID, childChanged, err := c.rewriteNode(childRef.Page)
+				if err != nil {
+					return id, false, err
+				}
+				if childChanged {
+					childRefs[int(i)] = page.PageChildRef(nextID)
+					changed = true
 				}
 			}
-			if childIDs != nil {
-				childIDs[int(i)] = nextChild
-			}
 		}
-		if childIDs == nil {
+		if err := flushPending(); err != nil {
+			return id, false, err
+		}
+		if !changed {
 			return id, false, nil
 		}
 		if c.alloc == nil {
@@ -412,11 +591,11 @@ func (c *leafRefRewriteCtx) rewriteNode(id uint64) (uint64, bool, error) {
 			b.SetInternalFenceBounds(low, high)
 		}
 		for i := uint16(0); i < count; i++ {
-			keyView, _, err := n.GetInternalEntryView(i)
+			keyView, _, err := n.GetInternalEntryRefView(i)
 			if err != nil {
 				return id, false, err
 			}
-			if err := b.AddInternalChild(keyView, childIDs[int(i)]); err != nil {
+			if err := b.AddInternalChildRef(keyView, childRefs[int(i)]); err != nil {
 				return id, false, err
 			}
 		}
@@ -494,7 +673,7 @@ func (c *leafRefRewriteCtx) applySystemRootCollectionRootReplacements(rootID uin
 	return newRoot, newRoot != rootID || len(retired) > 0, nil
 }
 
-func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, ridAlloc *rewriteRIDAllocator, sourceIDs map[uint32]struct{}, sourceChunks map[valueLogChunkKey]ValueLogRewritePlanChunk, sourceChunkBytes int64, singleSourceID uint32, hasSingleSourceID bool, maxCopiedBytes int64, sync bool, runStats *leafRefRewriteRunStats) (copied int, copiedBytes int64, err error) {
+func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, ridAlloc *rewriteRIDAllocator, sourceIDs map[uint32]struct{}, sourceChunks map[valueLogChunkKey]ValueLogRewritePlanChunk, sourceChunkBytes int64, singleSourceID uint32, hasSingleSourceID bool, maxCopiedBytes int64, sync bool, leafFrameK int, runStats *leafRefRewriteRunStats) (copied int, copiedBytes int64, err error) {
 	if db == nil {
 		return 0, 0, fmt.Errorf("missing db")
 	}
@@ -588,6 +767,7 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 		sourceGenerationIDs:  sourceGenerationIDs,
 		useSubtreeStatsPrune: len(sourceGenerationIDs) > 0,
 		maxCopiedBytes:       maxCopiedBytes,
+		leafFrameK:           leafFrameK,
 	}
 	leafCtx.zipper = idx.zipper.CloneWithAllocator(tracker)
 	leafCtx.zipper.SetOuterLeavesInValueLog(db.indexOuterLeavesInValueLog)
@@ -599,6 +779,8 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 		defer func() {
 			runStats.InternalPagesVisited = leafCtx.internalVisited
 			runStats.SubtreesPruned = leafCtx.subtreesPruned
+			runStats.LeafFramesWritten = leafCtx.leafFrames
+			runStats.MaxLeafFrameK = leafCtx.maxLeafFrameK
 		}()
 	}
 	if toer, ok := leafCtx.leafReader.(unsafeToReader); ok {

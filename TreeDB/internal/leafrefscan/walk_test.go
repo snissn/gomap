@@ -32,15 +32,20 @@ func TestWalk_NilVisitReturnsError(t *testing.T) {
 
 func TestWalk_RootLeafRefVisitsPointer(t *testing.T) {
 	want := page.LeafLogPtr{FileID: 7, Offset: 42}
-	rootID, err := page.EncodeLeafRef(want)
-	if err != nil {
-		t.Fatalf("EncodeLeafRef: %v", err)
+	rootPage := make([]byte, page.PageSize)
+	b := node.NewBuilder(rootPage, page.PageTypeInternal)
+	b.SetPageID(1)
+	if err := b.AddInternalChildRef([]byte{}, page.LeafLogChildRef(want)); err != nil {
+		t.Fatalf("AddInternalChildRef: %v", err)
 	}
+	b.FinishNoNode()
 
 	var got []page.LeafLogPtr
-	err = Walk(context.Background(), rootID, func(uint64) ([]byte, error) {
-		t.Fatal("get should not be called for root leafref")
-		return nil, nil
+	err := Walk(context.Background(), 1, func(pageID uint64) ([]byte, error) {
+		if pageID != 1 {
+			t.Fatalf("get page=%d want 1", pageID)
+		}
+		return rootPage, nil
 	}, nil, func(ptr page.LeafLogPtr) error {
 		got = append(got, ptr)
 		return nil
@@ -63,28 +68,19 @@ func TestWalk_InternalMixedChildrenVisitsOnlyLeafRefs(t *testing.T) {
 	leafNode.SetPageID(10)
 
 	rootPage := make([]byte, page.PageSize)
-	rootNode := node.NewNode(rootPage)
-	rootNode.SetType(page.PageTypeInternal)
-	rootNode.SetPageID(1)
-
 	wantPtr := page.LeafLogPtr{FileID: 9, Offset: 77}
-	leafRefID, err := page.EncodeLeafRef(wantPtr)
-	if err != nil {
-		t.Fatalf("EncodeLeafRef: %v", err)
+	b := node.NewBuilder(rootPage, page.PageTypeInternal)
+	b.SetPageID(1)
+	if err := b.AddInternalChildRef([]byte("b"), page.LeafLogChildRef(wantPtr)); err != nil {
+		t.Fatalf("AddInternalChildRef leafref: %v", err)
 	}
-	if err := rootNode.AddInternalChild([]byte("a"), 10); err != nil {
-		t.Fatalf("AddInternalChild regular: %v", err)
-	}
-	if err := rootNode.AddInternalChild([]byte("b"), leafRefID); err != nil {
-		t.Fatalf("AddInternalChild leafref: %v", err)
-	}
+	b.FinishNoNode()
 
 	pages := map[uint64][]byte{
-		1:  rootPage,
-		10: childLeaf,
+		1: rootPage,
 	}
 	var visited []page.LeafLogPtr
-	err = Walk(context.Background(), 1, func(pageID uint64) ([]byte, error) {
+	err := Walk(context.Background(), 1, func(pageID uint64) ([]byte, error) {
 		data, ok := pages[pageID]
 		if !ok {
 			return nil, errors.New("missing page")
@@ -129,42 +125,27 @@ func TestWalkRoots_MultipleRootsDeduplicatesPagerPages(t *testing.T) {
 	leafNode.SetPageID(10)
 
 	root1Page := make([]byte, page.PageSize)
-	root1Node := node.NewNode(root1Page)
-	root1Node.SetType(page.PageTypeInternal)
-	root1Node.SetPageID(1)
-
 	root2Page := make([]byte, page.PageSize)
-	root2Node := node.NewNode(root2Page)
-	root2Node.SetType(page.PageTypeInternal)
-	root2Node.SetPageID(2)
 
 	ptr1 := page.LeafLogPtr{FileID: 9, Offset: 77}
 	ptr2 := page.LeafLogPtr{FileID: 9, Offset: 88}
-	leafRefID1, err := page.EncodeLeafRef(ptr1)
-	if err != nil {
-		t.Fatalf("EncodeLeafRef ptr1: %v", err)
+	b1 := node.NewBuilder(root1Page, page.PageTypeInternal)
+	b1.SetPageID(1)
+	if err := b1.AddInternalChildRef([]byte("b"), page.LeafLogChildRef(ptr1)); err != nil {
+		t.Fatalf("root1 AddInternalChildRef leafref: %v", err)
 	}
-	leafRefID2, err := page.EncodeLeafRef(ptr2)
-	if err != nil {
-		t.Fatalf("EncodeLeafRef ptr2: %v", err)
+	b1.FinishNoNode()
+	b2 := node.NewBuilder(root2Page, page.PageTypeInternal)
+	b2.SetPageID(2)
+	if err := b2.AddInternalChildRef([]byte("b"), page.LeafLogChildRef(ptr2)); err != nil {
+		t.Fatalf("root2 AddInternalChildRef leafref: %v", err)
 	}
-	if err := root1Node.AddInternalChild([]byte("a"), 10); err != nil {
-		t.Fatalf("root1 AddInternalChild shared leaf: %v", err)
-	}
-	if err := root1Node.AddInternalChild([]byte("b"), leafRefID1); err != nil {
-		t.Fatalf("root1 AddInternalChild leafref: %v", err)
-	}
-	if err := root2Node.AddInternalChild([]byte("a"), 10); err != nil {
-		t.Fatalf("root2 AddInternalChild shared leaf: %v", err)
-	}
-	if err := root2Node.AddInternalChild([]byte("b"), leafRefID2); err != nil {
-		t.Fatalf("root2 AddInternalChild leafref: %v", err)
-	}
+	b2.FinishNoNode()
 
 	pages := map[uint64][]byte{1: root1Page, 2: root2Page, 10: leafPage}
 	getCalls := 0
 	var visited []page.LeafLogPtr
-	err = WalkRoots(context.Background(), []uint64{1, 2}, func(pageID uint64) ([]byte, error) {
+	err := WalkRoots(context.Background(), []uint64{1, 2}, func(pageID uint64) ([]byte, error) {
 		getCalls++
 		data, ok := pages[pageID]
 		if !ok {
@@ -178,7 +159,7 @@ func TestWalkRoots_MultipleRootsDeduplicatesPagerPages(t *testing.T) {
 	if err != nil {
 		t.Fatalf("WalkRoots: %v", err)
 	}
-	if got, want := getCalls, 3; got != want {
+	if got, want := getCalls, 2; got != want {
 		t.Fatalf("get calls=%d want %d", got, want)
 	}
 	if got, want := len(visited), 2; got != want {

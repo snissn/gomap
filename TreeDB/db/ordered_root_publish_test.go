@@ -438,11 +438,11 @@ func TestPublishOrderedRootGroup_UsesPerRootStoragePolicy(t *testing.T) {
 	if len(rootIDs) != 2 {
 		t.Fatalf("rootIDs=%d want 2", len(rootIDs))
 	}
-	if _, ok := page.DecodeLeafRef(rootIDs[0]); !ok {
-		t.Fatalf("compressed root id=%d, want leaf ref", rootIDs[0])
-	}
-	if _, ok := page.DecodeLeafRef(rootIDs[1]); ok {
-		t.Fatalf("fast root id=%d, want pager page", rootIDs[1])
+	requireLeafLogRootChildren(t, db, rootIDs[0])
+	if _, allLeafRefs, err := vacuumCollectLeafRefChildrenIfComplete(db.Pager(), rootIDs[1]); err != nil {
+		t.Fatalf("inspect fast root %d: %v", rootIDs[1], err)
+	} else if allLeafRefs {
+		t.Fatalf("fast root id=%d, want pager-backed leaves", rootIDs[1])
 	}
 
 	snap := db.AcquireSnapshot()
@@ -499,8 +499,10 @@ func TestPublishOrderedRootDeltaGroupWithSystemBuilder_UsesPerRootStoragePolicy(
 		if err != nil {
 			t.Fatalf("publish delta root: %v", err)
 		}
-		if _, ok := page.DecodeLeafRef(rootIDs[0]); ok {
-			t.Fatalf("delta root id=%d, want pager page", rootIDs[0])
+		if _, allLeafRefs, err := vacuumCollectLeafRefChildrenIfComplete(db.Pager(), rootIDs[0]); err != nil {
+			t.Fatalf("inspect delta root %d: %v", rootIDs[0], err)
+		} else if allLeafRefs {
+			t.Fatalf("delta root id=%d, want pager-backed leaves", rootIDs[0])
 		}
 
 		snap := db.AcquireSnapshot()
@@ -551,9 +553,7 @@ func TestPublishOrderedRootDeltaGroupWithSystemBuilder_UsesPerRootStoragePolicy(
 		if err != nil {
 			t.Fatalf("publish delta root: %v", err)
 		}
-		if _, ok := page.DecodeLeafRef(rootIDs[0]); !ok {
-			t.Fatalf("delta root id=%d, want leaf ref", rootIDs[0])
-		}
+		requireLeafLogRootChildren(t, db, rootIDs[0])
 
 		snap := db.AcquireSnapshot()
 		if snap == nil {

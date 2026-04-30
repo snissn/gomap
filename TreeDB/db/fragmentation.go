@@ -167,10 +167,6 @@ func collectionRootFragmentationStats(idx *indexGen, state *DBState) (collection
 		if rootID == 0 {
 			continue
 		}
-		if _, ok := page.DecodeLeafRef(rootID); ok {
-			out.leafRefRoots++
-			continue
-		}
 		out.pagerRoots++
 		tr := tree.New(idx.pager, reader, rootID)
 		if err := tr.WalkPages(func(pageID uint64, n node.Node) error {

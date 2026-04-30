@@ -248,32 +248,34 @@ u64 baseChildID
 
 Child page id reconstructs as `baseChildID + ChildDelta`.
 
-### 6.3 LeafRef child IDs (IndexOuterLeavesInValueLog)
+### 6.3 Leaf-Log Child Refs (IndexOuterLeavesInValueLog)
 
 When `Options.IndexOuterLeavesInValueLog` is enabled, B+Tree leaf pages are
-stored as 4096-byte value-log records instead of pager pages in `index.db`.
+stored as persistent value-log records instead of pager pages in `index.db`.
 Internal pages still live in `index.db`.
 
-To preserve the existing internal-page wire format (`u64 ChildPageID`), internal
-entries that reference a leaf page store a **LeafRef** in `ChildPageID`:
+Internal pages that point at leaf-log records use an explicit child-ref entry
+layout:
 
 ```text
-u64 ChildPageID = (u64(ValuePtr.FileID) << 32) | u32(ValuePtr.Offset)
+u16 keyLen
+u32 fileID
+u64 offset
+u32 recordLengthHint
+u16 subIndex
+bytes key
 ```
 
 Notes:
 
-- LeafRef encodes only `(FileID, Offset)`; it intentionally omits
-  `ValuePtr.Length` and always reconstructs a grouped pointer with sub-index 0.
-- Leaf pages are written as single-record grouped frames (`K=1`) in the value
-  log, so sub-index is always 0.
-- LeafRef IDs may also appear in `MetaPageBody.{User,System}RootPageID` when the
-  tree height is 1 (i.e. the root page is itself a leaf page stored in the
-  value log).
-- Offsets must fit in `u32`; value-log segment size is capped accordingly when
-  this mode is enabled.
-- Base-delta internal encoding is incompatible with LeafRef child IDs and is
-  disabled when `IndexOuterLeavesInValueLog` is enabled.
+- Roots remain normal pager page IDs; a single leaf-log leaf is represented by a
+  one-child internal root page.
+- `recordLengthHint` is best-effort. A zero hint means readers should consult
+  the value-log record header.
+- `subIndex` identifies the leaf page within a grouped value-log frame.
+- Current builders keep leaf-log children on internal pages that contain only
+  leaf-log child refs. Base-delta page-child encoding is disabled for these
+  pages.
 
 ## 7. Value-Log Record Format
 

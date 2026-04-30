@@ -23,13 +23,14 @@ func (t *Tree) UpdateValuePtrInPlace(key []byte, oldPtr, newPtr page.ValuePtr) (
 		return false, 0, errors.New("missing pager")
 	}
 
-	currID := t.rootPageID
+	currRef := page.PageChildRef(t.rootPageID)
 	verifyAlways := t.pager.VerifyOnRead()
 
 	for depth := 0; depth < 50; depth++ {
-		if _, ok := page.DecodeLeafRef(currID); ok {
+		if currRef.Kind == page.ChildRefLeafLog {
 			return false, 0, errors.New("cannot update value pointer in-place with value-log-backed leaf pages")
 		}
+		currID := currRef.Page
 		data, err := t.pager.Get(currID)
 		if err != nil {
 			return false, 0, err
@@ -48,11 +49,11 @@ func (t *Tree) UpdateValuePtrInPlace(key []byte, oldPtr, newPtr page.ValuePtr) (
 		switch n.Type() {
 		case page.PageTypeInternal:
 			idx, _ := n.SearchInternal(key)
-			childID, err := n.GetInternalChildID(idx)
+			childRef, err := n.GetInternalChildRef(idx)
 			if err != nil {
 				return false, 0, err
 			}
-			currID = childID
+			currRef = childRef
 
 		case page.PageTypeLeaf:
 			idx, found, err := n.SearchLeaf(key)

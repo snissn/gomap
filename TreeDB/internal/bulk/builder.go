@@ -14,8 +14,8 @@ type Allocator interface {
 // LeafPageAppender persists leaf pages as value-log records and returns their pointers.
 //
 // When BuildOptions.LeafPageLog is non-nil, BuildWithOptions writes leaf pages
-// via this interface and returns LeafRef ids (encoded from the returned
-// LeafLogPtr) in internal children and as the tree root when the height is 1.
+// via this interface and stores explicit leaf-log child references in the
+// bottom internal level. The returned root is always a normal index page ID.
 type LeafPageAppender interface {
 	AppendLeafPage(leafPage []byte) (page.LeafLogPtr, error)
 }
@@ -52,7 +52,7 @@ func BuildWithOptions(iter iterator.UnsafeIterator, alloc Allocator, p *pager.Pa
 			if err != nil {
 				return 0, err
 			}
-			return page.EncodeLeafRef(ptr)
+			return buildSingleLeafLogRoot(alloc, p, []byte{}, ptr)
 		}
 
 		rootID, err := alloc.Alloc(0)
@@ -120,16 +120,13 @@ func BuildWithOptions(iter iterator.UnsafeIterator, alloc Allocator, p *pager.Pa
 		lb := levels[lvl]
 		n := lb.builder.Finish()
 		childID := lb.builder.PageID()
+		childRef := page.PageChildRef(childID)
 		if lvl == 0 && leafLog != nil {
 			ptr, err := leafLog.AppendLeafPage(n.Data())
 			if err != nil {
 				return err
 			}
-			id, err := page.EncodeLeafRef(ptr)
-			if err != nil {
-				return err
-			}
-			childID = id
+			childRef = page.LeafLogChildRef(ptr)
 		} else {
 			if err := p.Write(childID, n.Data()); err != nil {
 				return err
@@ -156,7 +153,7 @@ func BuildWithOptions(iter iterator.UnsafeIterator, alloc Allocator, p *pager.Pa
 			parent.startKey = append([]byte(nil), key...)
 		}
 
-		err := parent.builder.AddInternalChild(key, childID)
+		err := parent.builder.AddInternalChildRef(key, childRef)
 		if err == node.ErrNodeFull {
 			// Parent full. Flush parent recursively.
 			if err := flush(lvl + 1); err != nil {
@@ -167,7 +164,7 @@ func BuildWithOptions(iter iterator.UnsafeIterator, alloc Allocator, p *pager.Pa
 			if parent.startKey == nil {
 				parent.startKey = append([]byte(nil), key...)
 			}
-			if err := parent.builder.AddInternalChild(key, childID); err != nil {
+			if err := parent.builder.AddInternalChildRef(key, childRef); err != nil {
 				return err
 			}
 		} else if err != nil {
@@ -231,26 +228,25 @@ func BuildWithOptions(iter iterator.UnsafeIterator, alloc Allocator, p *pager.Pa
 
 	// Finalize all levels
 	currID := uint64(0)
+	currRef := page.ChildRef{}
 	for i := 0; i < len(levels); i++ {
 		lb := levels[i]
 		n := lb.builder.Finish()
 		childID := lb.builder.PageID()
+		childRef := page.PageChildRef(childID)
 		if i == 0 && leafLog != nil {
 			ptr, err := leafLog.AppendLeafPage(n.Data())
 			if err != nil {
 				return 0, err
 			}
-			id, err := page.EncodeLeafRef(ptr)
-			if err != nil {
-				return 0, err
-			}
-			childID = id
+			childRef = page.LeafLogChildRef(ptr)
 		} else {
 			if err := p.Write(childID, n.Data()); err != nil {
 				return 0, err
 			}
 		}
 		currID = childID
+		currRef = childRef
 
 		// If this is not the top level, add to parent
 		if i < len(levels)-1 {
@@ -263,7 +259,7 @@ func BuildWithOptions(iter iterator.UnsafeIterator, alloc Allocator, p *pager.Pa
 				parent.startKey = append([]byte(nil), key...)
 			}
 
-			err := parent.builder.AddInternalChild(key, currID)
+			err := parent.builder.AddInternalChildRef(key, currRef)
 			if err == node.ErrNodeFull {
 				if err := flush(i + 1); err != nil {
 					return 0, err
@@ -272,7 +268,7 @@ func BuildWithOptions(iter iterator.UnsafeIterator, alloc Allocator, p *pager.Pa
 				if parent.startKey == nil {
 					parent.startKey = append([]byte(nil), key...)
 				}
-				if err := parent.builder.AddInternalChild(key, currID); err != nil {
+				if err := parent.builder.AddInternalChildRef(key, currRef); err != nil {
 					return 0, err
 				}
 			} else if err != nil {
@@ -285,14 +281,41 @@ func BuildWithOptions(iter iterator.UnsafeIterator, alloc Allocator, p *pager.Pa
 	if len(levels) > 1 {
 		root := levels[len(levels)-1].builder.Finish()
 		if root.Count() == 1 {
-			childID, err := root.GetInternalChildID(0)
-			if err == nil {
-				return childID, nil
+			childRef, err := root.GetInternalChildRef(0)
+			if err == nil && childRef.Kind == page.ChildRefPage {
+				return childRef.Page, nil
 			}
 		}
 	}
 
+	if leafLog != nil && currRef.Kind == page.ChildRefLeafLog {
+		key := levels[0].startKey
+		if key == nil {
+			key = []byte{}
+		}
+		return buildSingleLeafLogRoot(alloc, p, key, currRef.Log)
+	}
+
 	return currID, nil
+}
+
+func buildSingleLeafLogRoot(alloc Allocator, p *pager.Pager, key []byte, ptr page.LeafLogPtr) (uint64, error) {
+	rootID, err := alloc.Alloc(0)
+	if err != nil {
+		return 0, err
+	}
+	buf, err := p.GetForWrite(rootID)
+	if err != nil {
+		return 0, err
+	}
+	b := node.NewBuilder(buf, page.PageTypeInternal)
+	b.SetPageID(rootID)
+	b.SetInternalFenceBounds(key, nil)
+	if err := b.AddInternalChildRef(key, page.LeafLogChildRef(ptr)); err != nil {
+		return 0, err
+	}
+	b.FinishNoNode()
+	return rootID, nil
 }
 
 func newLeafBuilder(buf []byte, opts BuildOptions) *node.Builder {

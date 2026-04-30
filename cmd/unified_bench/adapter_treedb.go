@@ -584,7 +584,7 @@ func buildTreeDBOptions(dir string) (treedb.Options, treeDBOptionsReport, error)
 	}
 	if *treedbIndexOuterLeavesInVlog && internalBaseDeltaEffective {
 		internalBaseDeltaEffective = false
-		notes = append(notes, "index_internal_base_delta disabled: leaf-page LeafRef child IDs are incompatible with base-delta encoding")
+		notes = append(notes, "index_internal_base_delta disabled: leaf-log child pages use explicit LogRecordRef entries")
 	}
 
 	opts := treedb.Options{

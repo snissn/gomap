@@ -1649,23 +1649,6 @@ func (db *DB) rootPageValid(p *pager.Pager, pageID uint64) bool {
 	if pageID == 0 || p == nil {
 		return false
 	}
-	if ptr, ok := page.DecodeLeafRef(pageID); ok {
-		if db == nil || db.valueLogManager == nil {
-			return false
-		}
-		data, err := db.valueLogManager.ReadUnsafe(ptr.ValuePtr())
-		if err != nil {
-			return false
-		}
-		if len(data) != page.PageSize {
-			return false
-		}
-		n := node.NewNodeView(data)
-		if !n.VerifyChecksum() {
-			return false
-		}
-		return n.Type() == page.PageTypeLeaf
-	}
 	data, err := p.Get(pageID)
 	if err != nil {
 		return false

@@ -284,6 +284,7 @@ func benchmarkReportTreeDBLeafGenerationPackGC(b *testing.B, backend *backenddb.
 	ctx := context.Background()
 	force := benchmarkBoolEnv(b, "TREEDB_COLLECTION_LEAFGEN_PACK_FORCE", false)
 	maxGenerations := benchmarkIntEnv(b, "TREEDB_COLLECTION_LEAFGEN_PACK_MAX_GENERATIONS", 1)
+	leafFrameK := benchmarkIntEnv(b, "TREEDB_COLLECTION_LEAFGEN_PACK_FRAME_K", 0)
 
 	planStart := time.Now()
 	plan, err := backend.LeafGenerationPlan(ctx, backenddb.LeafGenerationPlanOptions{Force: force})
@@ -324,6 +325,7 @@ func benchmarkReportTreeDBLeafGenerationPackGC(b *testing.B, backend *backenddb.
 		Force:          force,
 		MaxGenerations: maxGenerations,
 		Sync:           true,
+		LeafFrameK:     leafFrameK,
 	})
 	if err != nil {
 		b.Fatalf("TreeDB leaf-generation pack: %v", err)
@@ -365,6 +367,8 @@ func benchmarkReportTreeDBLeafGenerationPackGC(b *testing.B, backend *backenddb.
 	b.ReportMetric(float64(packStats.ExpectedReclaimRatioPPM), "leafgen_pack_expected_reclaim_ratio_ppm")
 	b.ReportMetric(float64(packStats.ExpectedReclaimPerByteCopiedPPM), "leafgen_pack_expected_reclaim_per_copy_ppm")
 	b.ReportMetric(float64(packStats.LeafPagesCopied), "leafgen_pack_leaf_pages_copied")
+	b.ReportMetric(float64(packStats.LeafFramesWritten), "leafgen_pack_leaf_frames_written")
+	b.ReportMetric(float64(packStats.MaxLeafFrameK), "leafgen_pack_max_leaf_frame_k")
 	b.ReportMetric(float64(packStats.BytesCopied), "leafgen_pack_bytes_copied")
 	b.ReportMetric(float64(len(packStats.CreatedFileIDs)), "leafgen_pack_created_files")
 	b.ReportMetric(float64(gcElapsed.Nanoseconds()), "leafgen_gc_ns/op")
@@ -394,6 +398,8 @@ func benchmarkReportTreeDBLeafGenerationPackGCNoop(b *testing.B, docs int, befor
 	b.ReportMetric(0, "leafgen_pack_expected_reclaim_ratio_ppm")
 	b.ReportMetric(0, "leafgen_pack_expected_reclaim_per_copy_ppm")
 	b.ReportMetric(0, "leafgen_pack_leaf_pages_copied")
+	b.ReportMetric(0, "leafgen_pack_leaf_frames_written")
+	b.ReportMetric(0, "leafgen_pack_max_leaf_frame_k")
 	b.ReportMetric(0, "leafgen_pack_bytes_copied")
 	b.ReportMetric(0, "leafgen_pack_created_files")
 	b.ReportMetric(float64(gcElapsed.Nanoseconds()), "leafgen_gc_ns/op")

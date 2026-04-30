@@ -21,6 +21,10 @@ type LeafPageLog interface {
 	Sync() error
 }
 
+type LeafPageBatchLog interface {
+	AppendLeafPages(leafPages [][]byte) ([]page.LeafLogPtr, error)
+}
+
 // Optional interface implemented by leaf-page logs that can report their
 // current value-log segment identity.
 type leafPageLogCurrentSegmentProvider interface {
@@ -50,6 +54,46 @@ func (l *leafPageLogWithRecordLengthHints) AppendLeafPage(leafPage []byte) (page
 		}
 	}
 	return ptr, nil
+}
+
+func (l *leafPageLogWithRecordLengthHints) AppendLeafPages(leafPages [][]byte) ([]page.LeafLogPtr, error) {
+	if l == nil || l.inner == nil {
+		return nil, errors.New("leaf page log unavailable")
+	}
+	if len(leafPages) == 0 {
+		return nil, nil
+	}
+	var ptrs []page.LeafLogPtr
+	if batcher, ok := l.inner.(LeafPageBatchLog); ok {
+		var err error
+		ptrs, err = batcher.AppendLeafPages(leafPages)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		ptrs = make([]page.LeafLogPtr, len(leafPages))
+		for i, leafPage := range leafPages {
+			ptr, err := l.inner.AppendLeafPage(leafPage)
+			if err != nil {
+				return nil, err
+			}
+			ptrs[i] = ptr
+		}
+	}
+	if l.db != nil {
+		lastRecordLen := uint32(0)
+		if provider, ok := l.inner.(leafPageLogRecordLengthProvider); ok {
+			lastRecordLen = provider.LastLeafPageRecordLength()
+		}
+		for _, ptr := range ptrs {
+			recordLen := ptr.RecordLengthHint
+			if recordLen == 0 {
+				recordLen = lastRecordLen
+			}
+			l.db.noteLeafGenerationRecordLengthRaw(ptr.FileID, ptr.Offset, recordLen)
+		}
+	}
+	return ptrs, nil
 }
 
 func (l *leafPageLogWithRecordLengthHints) Flush() error {
