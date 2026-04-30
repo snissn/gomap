@@ -80,6 +80,9 @@ type summaryRow struct {
 	VLogRewriteDelta      *float64
 	VLogRewriteAfterGC    *float64
 	VLogRewriteDeltaGC    *float64
+	VLogRewriteVacuumNs   *float64
+	VLogRewriteAfterVac   *float64
+	VLogRewriteDeltaVac   *float64
 	VLogGCNs              *float64
 	LeafGenPlanNs         *float64
 	LeafGenPlanLive       *float64
@@ -90,6 +93,9 @@ type summaryRow struct {
 	LeafGenPackDelta      *float64
 	LeafGenPackAfterGC    *float64
 	LeafGenPackDeltaGC    *float64
+	LeafGenPackVacuumNs   *float64
+	LeafGenPackAfterVac   *float64
+	LeafGenPackDeltaVac   *float64
 	LeafGenPackFrames     *float64
 	LeafGenPackMaxFrameK  *float64
 	LeafGenGCNs           *float64
@@ -137,6 +143,9 @@ type maintenanceRow struct {
 	Delta      *float64
 	AfterGC    *float64
 	DeltaGC    *float64
+	VacuumNs   *float64
+	AfterVac   *float64
+	DeltaVac   *float64
 	Frames     *float64
 	MaxFrameK  *float64
 }
@@ -495,6 +504,9 @@ func buildSummaryRow(row matrixRow, collectionBatchSize int, name string, benchm
 		VLogRewriteDelta:      metricPtr(benchmark.MeanMetrics, "vlog_rewrite_disk_total_bytes_delta"),
 		VLogRewriteAfterGC:    metricPtr(benchmark.MeanMetrics, "vlog_rewrite_gc_disk_total_bytes_after"),
 		VLogRewriteDeltaGC:    metricPtr(benchmark.MeanMetrics, "vlog_rewrite_gc_disk_total_bytes_delta"),
+		VLogRewriteVacuumNs:   metricPtr(benchmark.MeanMetrics, "vlog_rewrite_gc_vacuum_ns/op"),
+		VLogRewriteAfterVac:   metricPtr(benchmark.MeanMetrics, "vlog_rewrite_gc_vacuum_disk_total_bytes_after"),
+		VLogRewriteDeltaVac:   metricPtr(benchmark.MeanMetrics, "vlog_rewrite_gc_vacuum_disk_total_bytes_delta"),
 		VLogGCNs:              metricPtr(benchmark.MeanMetrics, "vlog_gc_ns/op"),
 		LeafGenPlanNs:         metricPtr(benchmark.MeanMetrics, "leafgen_plan_ns/op"),
 		LeafGenPlanLive:       metricPtr(benchmark.MeanMetrics, "leafgen_plan_candidate_bytes_live"),
@@ -505,6 +517,9 @@ func buildSummaryRow(row matrixRow, collectionBatchSize int, name string, benchm
 		LeafGenPackDelta:      metricPtr(benchmark.MeanMetrics, "leafgen_pack_disk_total_bytes_delta"),
 		LeafGenPackAfterGC:    metricPtr(benchmark.MeanMetrics, "leafgen_pack_gc_disk_total_bytes_after"),
 		LeafGenPackDeltaGC:    metricPtr(benchmark.MeanMetrics, "leafgen_pack_gc_disk_total_bytes_delta"),
+		LeafGenPackVacuumNs:   metricPtr(benchmark.MeanMetrics, "leafgen_pack_gc_vacuum_ns/op"),
+		LeafGenPackAfterVac:   metricPtr(benchmark.MeanMetrics, "leafgen_pack_gc_vacuum_disk_total_bytes_after"),
+		LeafGenPackDeltaVac:   metricPtr(benchmark.MeanMetrics, "leafgen_pack_gc_vacuum_disk_total_bytes_delta"),
 		LeafGenPackFrames:     metricPtr(benchmark.MeanMetrics, "leafgen_pack_leaf_frames_written"),
 		LeafGenPackMaxFrameK:  metricPtr(benchmark.MeanMetrics, "leafgen_pack_max_leaf_frame_k"),
 		LeafGenGCNs:           metricPtr(benchmark.MeanMetrics, "leafgen_gc_ns/op"),
@@ -743,7 +758,7 @@ func renderDiskUsageTSV(rows []diskUsageRow, outDir string) string {
 
 func renderMaintenanceTSV(rows []maintenanceRow, outDir string) string {
 	var sb strings.Builder
-	sb.WriteString("cell\tengine\tdocument_format\tdata_outer_leaves_in_vlog\tindex_outer_leaves_in_vlog\tpager_chunk_size\tpager_sync_concurrency\tmaintenance\tbenchmark\tns_per_op\tops_per_sec\tgc_ns_per_op\tgc_ops_per_sec\tdisk_total_bytes_before\tdisk_total_bytes_after\tdisk_total_bytes_delta\tdisk_total_bytes_after_gc\tdisk_total_bytes_delta_after_gc\tleaf_frames_written\tmax_leaf_frame_k\treport_md\n")
+	sb.WriteString("cell\tengine\tdocument_format\tdata_outer_leaves_in_vlog\tindex_outer_leaves_in_vlog\tpager_chunk_size\tpager_sync_concurrency\tmaintenance\tbenchmark\tns_per_op\tops_per_sec\tgc_ns_per_op\tgc_ops_per_sec\tvacuum_ns_per_op\tvacuum_ops_per_sec\tdisk_total_bytes_before\tdisk_total_bytes_after\tdisk_total_bytes_delta\tdisk_total_bytes_after_gc\tdisk_total_bytes_delta_after_gc\tdisk_total_bytes_after_gc_vacuum\tdisk_total_bytes_delta_after_gc_vacuum\tleaf_frames_written\tmax_leaf_frame_k\treport_md\n")
 	for _, row := range rows {
 		sb.WriteString(row.Cell)
 		sb.WriteByte('\t')
@@ -771,6 +786,10 @@ func renderMaintenanceTSV(rows []maintenanceRow, outDir string) string {
 		sb.WriteByte('\t')
 		sb.WriteString(formatOptionalTSVFloat(optionalOpsPerSecFromNs(row.GCNs)))
 		sb.WriteByte('\t')
+		sb.WriteString(formatOptionalTSVFloat(row.VacuumNs))
+		sb.WriteByte('\t')
+		sb.WriteString(formatOptionalTSVFloat(optionalOpsPerSecFromNs(row.VacuumNs)))
+		sb.WriteByte('\t')
 		sb.WriteString(formatOptionalTSVFloat(row.Before))
 		sb.WriteByte('\t')
 		sb.WriteString(formatOptionalTSVFloat(row.After))
@@ -780,6 +799,10 @@ func renderMaintenanceTSV(rows []maintenanceRow, outDir string) string {
 		sb.WriteString(formatOptionalTSVFloat(row.AfterGC))
 		sb.WriteByte('\t')
 		sb.WriteString(formatOptionalTSVFloat(row.DeltaGC))
+		sb.WriteByte('\t')
+		sb.WriteString(formatOptionalTSVFloat(row.AfterVac))
+		sb.WriteByte('\t')
+		sb.WriteString(formatOptionalTSVFloat(row.DeltaVac))
 		sb.WriteByte('\t')
 		sb.WriteString(formatOptionalTSVFloat(row.Frames))
 		sb.WriteByte('\t')
@@ -942,9 +965,9 @@ func renderMarkdown(rows []summaryRow, outDir string) (string, error) {
 	}
 	if len(maintenanceRows) > 0 {
 		sb.WriteString("## Maintenance Compaction\n\n")
-		sb.WriteString("TreeDB `treedb_vlog_rewrite` rows measure value_vlog rewrite/GC. TreeDB `treedb_leafgen_pack_gc` rows measure leaf_vlog generation pack/GC. SQLite rows show total disk before and after full `VACUUM`.\n\n")
-		sb.WriteString("| Cell | Engine | Format | Data vlog | Index vlog | Pager chunk | Pager sync | Maintenance | Benchmark | ns/op | ops/sec | GC ns/op | GC ops/sec | Before | After | Delta | After GC | Delta after GC | Frames | Max K | Report |\n")
-		sb.WriteString("| --- | --- | --- | ---: | ---: | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |\n")
+		sb.WriteString("TreeDB `treedb_vlog_rewrite` rows measure value_vlog rewrite/GC followed by index vacuum when enabled. TreeDB `treedb_leafgen_pack_gc` rows measure leaf_vlog generation pack/GC followed by index vacuum when enabled. SQLite rows show total disk before and after full `VACUUM`.\n\n")
+		sb.WriteString("| Cell | Engine | Format | Data vlog | Index vlog | Pager chunk | Pager sync | Maintenance | Benchmark | ns/op | ops/sec | GC ns/op | GC ops/sec | Vacuum ns/op | Vacuum ops/sec | Before | After | Delta | After GC | Delta after GC | After GC+vacuum | Delta after GC+vacuum | Frames | Max K | Report |\n")
+		sb.WriteString("| --- | --- | --- | ---: | ---: | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |\n")
 		for _, row := range maintenanceRows {
 			reportPath := relativeReportPath(outDir, row.ReportMarkdownPath)
 			sb.WriteString("| `")
@@ -974,6 +997,10 @@ func renderMarkdown(rows []summaryRow, outDir string) (string, error) {
 			sb.WriteString(" | ")
 			sb.WriteString(formatOptionalFloat(optionalOpsPerSecFromNs(row.GCNs)))
 			sb.WriteString(" | ")
+			sb.WriteString(formatOptionalFloat(row.VacuumNs))
+			sb.WriteString(" | ")
+			sb.WriteString(formatOptionalFloat(optionalOpsPerSecFromNs(row.VacuumNs)))
+			sb.WriteString(" | ")
 			sb.WriteString(formatOptionalByteCount(row.Before))
 			sb.WriteString(" | ")
 			sb.WriteString(formatOptionalByteCount(row.After))
@@ -983,6 +1010,10 @@ func renderMarkdown(rows []summaryRow, outDir string) (string, error) {
 			sb.WriteString(formatOptionalByteCount(row.AfterGC))
 			sb.WriteString(" | ")
 			sb.WriteString(formatOptionalByteCount(row.DeltaGC))
+			sb.WriteString(" | ")
+			sb.WriteString(formatOptionalByteCount(row.AfterVac))
+			sb.WriteString(" | ")
+			sb.WriteString(formatOptionalByteCount(row.DeltaVac))
 			sb.WriteString(" | ")
 			sb.WriteString(formatOptionalFloat(row.Frames))
 			sb.WriteString(" | ")
@@ -1132,7 +1163,11 @@ func buildExecutiveSummary(userRows []userStoryRow, diskRows []diskUsageRow, mai
 			delta := best.Delta
 			after := best.After
 			rateNs := best.NsPerMaint
-			if best.DeltaGC != nil {
+			if best.DeltaVac != nil {
+				delta = best.DeltaVac
+				after = best.AfterVac
+				rateNs = best.VacuumNs
+			} else if best.DeltaGC != nil {
 				delta = best.DeltaGC
 				after = best.AfterGC
 				rateNs = best.GCNs
@@ -1150,7 +1185,10 @@ func buildExecutiveSummary(userRows []userStoryRow, diskRows []diskUsageRow, mai
 		if best, ok := smallestMaintenanceDelta(maintenanceRows, kind); ok {
 			delta := best.Delta
 			after := best.After
-			if best.DeltaGC != nil {
+			if best.DeltaVac != nil {
+				delta = best.DeltaVac
+				after = best.AfterVac
+			} else if best.DeltaGC != nil {
 				delta = best.DeltaGC
 				after = best.AfterGC
 			}
@@ -1277,6 +1315,9 @@ func smallestMaintenanceDelta(rows []maintenanceRow, kind string) (maintenanceRo
 }
 
 func maintenanceReductionDelta(row maintenanceRow) (float64, bool) {
+	if row.DeltaVac != nil {
+		return *row.DeltaVac, true
+	}
 	if row.DeltaGC != nil {
 		return *row.DeltaGC, true
 	}
@@ -1403,7 +1444,7 @@ func buildDiskUsageRows(rows []summaryRow) []diskUsageRow {
 func buildMaintenanceRows(rows []summaryRow) []maintenanceRow {
 	out := make([]maintenanceRow, 0, len(rows))
 	for _, row := range rows {
-		if row.VLogRewriteBefore != nil || row.VLogRewriteAfter != nil || row.VLogRewriteAfterGC != nil {
+		if row.VLogRewriteBefore != nil || row.VLogRewriteAfter != nil || row.VLogRewriteAfterGC != nil || row.VLogRewriteAfterVac != nil {
 			out = append(out, maintenanceRow{
 				summaryRow: row,
 				Kind:       "treedb_vlog_rewrite",
@@ -1414,9 +1455,12 @@ func buildMaintenanceRows(rows []summaryRow) []maintenanceRow {
 				Delta:      row.VLogRewriteDelta,
 				AfterGC:    row.VLogRewriteAfterGC,
 				DeltaGC:    row.VLogRewriteDeltaGC,
+				VacuumNs:   row.VLogRewriteVacuumNs,
+				AfterVac:   row.VLogRewriteAfterVac,
+				DeltaVac:   row.VLogRewriteDeltaVac,
 			})
 		}
-		if row.LeafGenPackBefore != nil || row.LeafGenPackAfter != nil || row.LeafGenPackAfterGC != nil {
+		if row.LeafGenPackBefore != nil || row.LeafGenPackAfter != nil || row.LeafGenPackAfterGC != nil || row.LeafGenPackAfterVac != nil {
 			out = append(out, maintenanceRow{
 				summaryRow: row,
 				Kind:       "treedb_leafgen_pack_gc",
@@ -1427,6 +1471,9 @@ func buildMaintenanceRows(rows []summaryRow) []maintenanceRow {
 				Delta:      row.LeafGenPackDelta,
 				AfterGC:    row.LeafGenPackAfterGC,
 				DeltaGC:    row.LeafGenPackDeltaGC,
+				VacuumNs:   row.LeafGenPackVacuumNs,
+				AfterVac:   row.LeafGenPackAfterVac,
+				DeltaVac:   row.LeafGenPackDeltaVac,
 				Frames:     row.LeafGenPackFrames,
 				MaxFrameK:  row.LeafGenPackMaxFrameK,
 			})

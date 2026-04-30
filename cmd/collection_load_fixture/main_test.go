@@ -40,8 +40,8 @@ func TestParseConfigDefaultsToInspectableTwoIndexTemplateFixture(t *testing.T) {
 	if cfg.PreferAppendAlloc {
 		t.Fatal("expected prefer append allocation to be disabled by default")
 	}
-	if cfg.IndexVacuum != indexVacuumModeNone {
-		t.Fatalf("index vacuum mode=%q want none", cfg.IndexVacuum)
+	if cfg.IndexVacuum != indexVacuumModeAuto {
+		t.Fatalf("index vacuum mode=%q want auto", cfg.IndexVacuum)
 	}
 }
 
@@ -54,6 +54,30 @@ func TestParseConfigRejectsExplicitEmptyFormat(t *testing.T) {
 func TestParseConfigRejectsInvalidIndexVacuumMode(t *testing.T) {
 	if _, err := parseConfig([]string{"-index-vacuum", "sometimes"}, io.Discard); err == nil {
 		t.Fatal("expected invalid -index-vacuum to fail")
+	}
+}
+
+func TestEffectiveIndexVacuumAutoOnlyRunsAfterRewriteMaintenance(t *testing.T) {
+	if got := effectiveIndexVacuumMode(config{IndexVacuum: indexVacuumModeAuto}); got != indexVacuumModeNone {
+		t.Fatalf("auto without rewrite maintenance=%q want none", got)
+	}
+	if got := effectiveIndexVacuumMode(config{IndexVacuum: indexVacuumModeAuto, ValueLogRewrite: true}); got != indexVacuumModeOffline {
+		t.Fatalf("auto with value-log rewrite=%q want offline", got)
+	}
+	if got := effectiveIndexVacuumMode(config{IndexVacuum: indexVacuumModeAuto, LeafGenerationPackGC: true}); got != indexVacuumModeOffline {
+		t.Fatalf("auto with leafgen pack=%q want offline", got)
+	}
+	if got := effectiveIndexVacuumMode(config{IndexVacuum: indexVacuumModeNone, LeafGenerationPackGC: true}); got != indexVacuumModeNone {
+		t.Fatalf("explicit none with leafgen pack=%q want none", got)
+	}
+}
+
+func TestReopenVerifyReadOnlyRequiresFinalCheckpoint(t *testing.T) {
+	if !reopenVerifyReadOnly(config{Checkpoint: true}) {
+		t.Fatal("expected read-only reopen verification after final checkpoint")
+	}
+	if reopenVerifyReadOnly(config{Checkpoint: false}) {
+		t.Fatal("expected read-write reopen verification without final checkpoint for WAL replay")
 	}
 }
 
@@ -160,6 +184,9 @@ func TestRunFixtureLeafGenerationReportsDiskTotals(t *testing.T) {
 	}
 	if summary.LeafGeneration.CandidateGenerations == 0 && summary.LeafGeneration.DiskBytesAfterPack != summary.LeafGeneration.DiskBytesBefore {
 		t.Fatalf("no-candidate after pack bytes=%d want before bytes=%d", summary.LeafGeneration.DiskBytesAfterPack, summary.LeafGeneration.DiskBytesBefore)
+	}
+	if !summary.IndexVacuum.Enabled || summary.IndexVacuum.Mode != indexVacuumModeOffline || summary.IndexVacuum.RequestedMode != indexVacuumModeAuto {
+		t.Fatalf("expected auto offline index vacuum after leafgen pack, got %+v", summary.IndexVacuum)
 	}
 }
 

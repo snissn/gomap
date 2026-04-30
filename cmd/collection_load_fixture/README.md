@@ -18,6 +18,9 @@ Default load shape:
 - secondary-index outer leaves in the value log
 - `fast` TreeDB profile
 - final checkpoint and reopen verification
+- automatic offline index vacuum when `-vlog-rewrite` or `-leafgen-pack-gc`
+  is requested, so post-maintenance size comparisons include both value/leaf-log
+  cleanup and index compaction
 
 Example:
 
@@ -48,12 +51,17 @@ Useful variants:
   -cpuprofile /tmp/collection_fixture_cpu.pprof \
   -memprofile /tmp/collection_fixture_heap.pprof
 
-# Compact the persistent value_vlog after loading, then report before/after disk usage.
+# Compact the persistent value_vlog after loading, then run index vacuum and
+# report before/after disk usage.
 ./bin/collection-load-fixture -vlog-rewrite -dir /tmp/treedb_fixture_rewritten -reset
 
 # Pack leaf_vlog generations after loading, then run leaf-generation GC and report
-# the before/after disk usage separately from value_vlog rewrite.
+# the before/after disk usage separately from value_vlog rewrite. The default
+# -index-vacuum=auto follows this with offline index vacuum.
 ./bin/collection-load-fixture -leafgen-pack-gc -dir /tmp/treedb_fixture_leafgen_packed -reset
+
+# Keep the pre-vacuum index.db shape for debugging.
+./bin/collection-load-fixture -leafgen-pack-gc -index-vacuum=none -dir /tmp/treedb_fixture_leafgen_no_vacuum -reset
 
 # Force a small leaf-generation target for short local leafgen smoke tests.
 ./bin/collection-load-fixture -leaf-segment-target-bytes 65536 -leafgen-pack-gc -dir /tmp/treedb_fixture_leafgen_small -reset

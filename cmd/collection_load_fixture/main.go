@@ -28,6 +28,7 @@ const (
 	defaultDocs              = 1_000_000
 	defaultBatchSize         = 8_000
 	defaultCollectionName    = "bench_shape_insert_2"
+	indexVacuumModeAuto      = "auto"
 	indexVacuumModeNone      = "none"
 	indexVacuumModeOnline    = "online"
 	indexVacuumModeOffline   = "offline"
@@ -202,6 +203,7 @@ type indexStorageSummary struct {
 
 type indexVacuumSummary struct {
 	Mode               string              `json:"mode"`
+	RequestedMode      string              `json:"requested_mode,omitempty"`
 	Enabled            bool                `json:"enabled"`
 	Timing             timingSummary       `json:"timing,omitempty"`
 	DiskBytesBefore    uint64              `json:"disk_bytes_before,omitempty"`
@@ -302,7 +304,7 @@ func parseConfig(args []string, output io.Writer) (config, error) {
 		VerifySamples:              8,
 		ValueLogGC:                 true,
 		LeafGenerationPackMaxGen:   1,
-		IndexVacuum:                indexVacuumModeNone,
+		IndexVacuum:                indexVacuumModeAuto,
 		Progress:                   true,
 	}
 	var documentFormat string
@@ -341,7 +343,7 @@ func parseConfig(args []string, output io.Writer) (config, error) {
 	fs.BoolVar(&cfg.LeafGenerationPackForce, "leafgen-pack-force", false, "force leaf-generation pack selection when -leafgen-pack-gc is enabled")
 	fs.IntVar(&cfg.LeafGenerationPackMaxGen, "leafgen-pack-max-generations", cfg.LeafGenerationPackMaxGen, "max leaf generations to pack per run when -leafgen-pack-gc is enabled (0 means no limit)")
 	fs.IntVar(&cfg.LeafGenerationPackFrameK, "leafgen-pack-frame-k", cfg.LeafGenerationPackFrameK, "leaf pages per grouped output frame during leafgen pack (0 uses engine default)")
-	fs.StringVar(&cfg.IndexVacuum, "index-vacuum", cfg.IndexVacuum, "run index vacuum after loading: none, online, or offline")
+	fs.StringVar(&cfg.IndexVacuum, "index-vacuum", cfg.IndexVacuum, "run index vacuum after loading: auto, none, online, or offline (auto uses none unless -vlog-rewrite or -leafgen-pack-gc is enabled)")
 	fs.BoolVar(&cfg.Progress, "progress", cfg.Progress, "print load progress to stderr")
 	fs.BoolVar(&cfg.JSONOutput, "json", false, "print summary as JSON")
 	fs.StringVar(&cfg.CPUProfile, "cpuprofile", "", "write CPU profile to this path")
@@ -400,11 +402,12 @@ func parseConfig(args []string, output io.Writer) (config, error) {
 	}
 	cfg.IndexVacuum = strings.ToLower(strings.TrimSpace(cfg.IndexVacuum))
 	switch cfg.IndexVacuum {
-	case "", indexVacuumModeNone:
-		cfg.IndexVacuum = indexVacuumModeNone
+	case "":
+		cfg.IndexVacuum = indexVacuumModeAuto
+	case indexVacuumModeAuto, indexVacuumModeNone:
 	case indexVacuumModeOnline, indexVacuumModeOffline:
 	default:
-		return cfg, fmt.Errorf("unsupported -index-vacuum %q; use none, online, or offline", cfg.IndexVacuum)
+		return cfg, fmt.Errorf("unsupported -index-vacuum %q; use auto, none, online, or offline", cfg.IndexVacuum)
 	}
 	return cfg, nil
 }
@@ -554,19 +557,27 @@ func runFixture(cfg config) (loadSummary, error) {
 		closed = true
 	}
 
+	finalUsage, err := directoryUsage(cfg.Dir, cfg.Docs)
+	if err != nil {
+		return loadSummary{}, err
+	}
+
 	verify := verifySummary{Enabled: cfg.ReopenVerify}
 	if cfg.ReopenVerify {
+		verifyReadOnly := reopenVerifyReadOnly(cfg)
 		samples, err := verifyReopen(cfg)
 		if err != nil {
 			return loadSummary{}, err
 		}
 		verify.Samples = samples
+		if !verifyReadOnly {
+			finalUsage, err = directoryUsage(cfg.Dir, cfg.Docs)
+			if err != nil {
+				return loadSummary{}, err
+			}
+		}
 	}
 
-	finalUsage, err := directoryUsage(cfg.Dir, cfg.Docs)
-	if err != nil {
-		return loadSummary{}, err
-	}
 	if err := writeMemProfile(cfg.MemProfile); err != nil {
 		return loadSummary{}, err
 	}
@@ -649,7 +660,12 @@ func prepareFixtureDir(cfg config) (string, bool, error) {
 }
 
 func openBackend(cfg config) (*backenddb.DB, func() error, error) {
+	return openBackendReadOnly(cfg, false)
+}
+
+func openBackendReadOnly(cfg config, readOnly bool) (*backenddb.DB, func() error, error) {
 	opts := treedb.OptionsFor(cfg.Profile, cfg.Dir)
+	opts.ReadOnly = readOnly
 	opts.IndexOuterLeavesInValueLog = cfg.DataOuterLeavesInValueLog || cfg.IndexOuterLeavesInValueLog
 	opts.IndexInternalBaseDelta = !opts.IndexOuterLeavesInValueLog
 	opts.KeepRecent = cfg.KeepRecent
@@ -1057,11 +1073,16 @@ func maybePackLeafGenerations(cfg config, backend *backenddb.DB) (*leafGeneratio
 }
 
 func maybeVacuumIndex(cfg config, backend *backenddb.DB, cleanup func() error, closed *bool) (indexVacuumSummary, indexStorageSummary, error) {
+	mode := effectiveIndexVacuumMode(cfg)
 	out := indexVacuumSummary{
-		Mode:    cfg.IndexVacuum,
-		Enabled: cfg.IndexVacuum != indexVacuumModeNone,
+		Mode:          mode,
+		RequestedMode: cfg.IndexVacuum,
+		Enabled:       mode != indexVacuumModeNone,
 	}
-	if cfg.IndexVacuum == indexVacuumModeNone {
+	if out.RequestedMode == out.Mode {
+		out.RequestedMode = ""
+	}
+	if mode == indexVacuumModeNone {
 		finalStorage, err := captureIndexStorageSummary(cfg, backend)
 		return out, finalStorage, err
 	}
@@ -1079,7 +1100,7 @@ func maybeVacuumIndex(cfg config, backend *backenddb.DB, cleanup func() error, c
 	out.StorageBefore = beforeStorage
 
 	start := time.Now()
-	switch cfg.IndexVacuum {
+	switch mode {
 	case indexVacuumModeOnline:
 		if err := backend.VacuumIndexOnline(context.Background()); err != nil {
 			return out, indexStorageSummary{}, fmt.Errorf("index vacuum online: %w", err)
@@ -1107,12 +1128,18 @@ func maybeVacuumIndex(cfg config, backend *backenddb.DB, cleanup func() error, c
 			return out, indexStorageSummary{}, fmt.Errorf("index vacuum offline: %w", err)
 		}
 	default:
-		return out, indexStorageSummary{}, fmt.Errorf("unsupported index vacuum mode %q", cfg.IndexVacuum)
+		return out, indexStorageSummary{}, fmt.Errorf("unsupported index vacuum mode %q", mode)
 	}
 	out.Timing = timing(time.Since(start), 1)
 
+	afterDisk, err := directoryUsage(cfg.Dir, cfg.Docs)
+	if err != nil {
+		return out, indexStorageSummary{}, err
+	}
+	out.DiskBytesAfter = afterDisk.TotalBytes
+
 	var afterStorage indexStorageSummary
-	if cfg.IndexVacuum == indexVacuumModeOffline {
+	if mode == indexVacuumModeOffline {
 		afterStorage, err = captureIndexStorageSummaryReopen(cfg)
 	} else {
 		afterStorage, err = captureIndexStorageSummary(cfg, backend)
@@ -1120,18 +1147,25 @@ func maybeVacuumIndex(cfg config, backend *backenddb.DB, cleanup func() error, c
 	if err != nil {
 		return out, indexStorageSummary{}, err
 	}
-	afterDisk, err := directoryUsage(cfg.Dir, cfg.Docs)
-	if err != nil {
-		return out, indexStorageSummary{}, err
-	}
-	out.DiskBytesAfter = afterDisk.TotalBytes
 	out.IndexDBBytesAfter = afterStorage.IndexDBBytes
 	out.StorageAfter = afterStorage
 	return out, afterStorage, nil
 }
 
+func effectiveIndexVacuumMode(cfg config) string {
+	switch cfg.IndexVacuum {
+	case indexVacuumModeAuto, "":
+		if cfg.ValueLogRewrite || cfg.LeafGenerationPackGC {
+			return indexVacuumModeOffline
+		}
+		return indexVacuumModeNone
+	default:
+		return cfg.IndexVacuum
+	}
+}
+
 func captureIndexStorageSummaryReopen(cfg config) (indexStorageSummary, error) {
-	backend, cleanup, err := openBackend(cfg)
+	backend, cleanup, err := openBackendReadOnly(cfg, true)
 	if err != nil {
 		return indexStorageSummary{}, fmt.Errorf("capture index storage reopen: %w", err)
 	}
@@ -1230,7 +1264,7 @@ func statBool(stats map[string]string, key string) bool {
 }
 
 func verifyReopen(cfg config) (int, error) {
-	backend, cleanup, err := openBackend(cfg)
+	backend, cleanup, err := openBackendReadOnly(cfg, reopenVerifyReadOnly(cfg))
 	if err != nil {
 		return 0, fmt.Errorf("reopen verify open: %w", err)
 	}
@@ -1289,6 +1323,10 @@ func verifyReopen(cfg config) (int, error) {
 		}
 	}
 	return len(samples), nil
+}
+
+func reopenVerifyReadOnly(cfg config) bool {
+	return cfg.Checkpoint
 }
 
 func expectedStoredDocument(format collections.DocumentFormat, n int) ([]byte, error) {
@@ -1525,8 +1563,12 @@ func printHumanSummary(w io.Writer, summary loadSummary) {
 			summary.LeafGeneration.GCFilesDeleted)
 	}
 	if summary.IndexVacuum.Enabled {
+		label := summary.IndexVacuum.Mode
+		if summary.IndexVacuum.RequestedMode != "" {
+			label = fmt.Sprintf("%s requested=%s", summary.IndexVacuum.Mode, summary.IndexVacuum.RequestedMode)
+		}
 		fmt.Fprintf(w, "index vacuum %s: before=%s after=%s index.db_before=%s index.db_after=%s\n",
-			summary.IndexVacuum.Mode,
+			label,
 			humanBytes(summary.IndexVacuum.DiskBytesBefore),
 			humanBytes(summary.IndexVacuum.DiskBytesAfter),
 			humanBytes(summary.IndexVacuum.IndexDBBytesBefore),
