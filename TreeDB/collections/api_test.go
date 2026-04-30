@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"reflect"
 	"strings"
 	"sync"
@@ -14,6 +15,7 @@ import (
 
 	treedb "github.com/snissn/gomap/TreeDB"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 )
 
 func TestCollectionErrorsAreClassifiable(t *testing.T) {
@@ -188,6 +190,91 @@ func TestCollectionValueLogRewriteOffline_RoundTripWithCompressedSecondaryIndexe
 	reopenedCol, err := NewCollectionManager(reopened).OpenCollection("users")
 	if err != nil {
 		t.Fatalf("open collection after maintenance: %v", err)
+	}
+	requireCollectionMaintenanceReads(t, reopenedCol)
+}
+
+func TestCollectionValueLogGC_RoundTripWithCompressedSecondaryIndexes(t *testing.T) {
+	opts := treedb.Options{
+		Dir:                        t.TempDir(),
+		Durability:                 treedb.DurabilityWALOffRelaxed,
+		IndexOuterLeavesInValueLog: true,
+		ValueLog: treedb.ValueLogOptions{
+			PointerThreshold: 1,
+		},
+	}
+	d, cleanup, err := treedb.OpenBackendWithCachedLeafLog(opts)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	var closeOnce sync.Once
+	var closeErr error
+	closeDB := func() error {
+		closeOnce.Do(func() {
+			closeErr = cleanup()
+		})
+		return closeErr
+	}
+	t.Cleanup(func() { _ = closeDB() })
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DataRootStoragePolicy:   RootStorageCompressed,
+			IndexStateStoragePolicy: RootStorageCompressed,
+		},
+		Indexes: []IndexDefinition{
+			{Name: "email", Field: "email", Unique: true, StoragePolicy: RootStorageCompressed},
+			{Name: "city", Field: "city", StoragePolicy: RootStorageCompressed},
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	docs := [][]byte{
+		[]byte(`{"email":"ada@example.com","city":"hnl","pad":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`),
+		[]byte(`{"email":"grace@example.com","city":"hnl","pad":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}`),
+		[]byte(`{"email":"linus@example.com","city":"hel","pad":"cccccccccccccccccccccccccccccccc"}`),
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("u1"), []byte("u2"), []byte("u3")}, docs); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+	requireCollectionMaintenanceReads(t, col)
+
+	valueLogDir := backenddb.ValueLogDirPath(d.Dir())
+	syntheticLane, staleSeq := chooseStandaloneValueLogSegmentStart(t, valueLogDir)
+	stalePath := writeStandaloneValueLogSegment(t, valueLogDir, syntheticLane, staleSeq, []byte("unreferenced collection-api gc segment"))
+	_ = writeStandaloneValueLogSegment(t, valueLogDir, syntheticLane, staleSeq+1, []byte("newer unreferenced collection-api gc segment"))
+	if err := d.RefreshValueLogSet(); err != nil {
+		t.Fatalf("RefreshValueLogSet: %v", err)
+	}
+	gcCtx, gcCancel := collectionMaintenanceTestContext(t)
+	defer gcCancel()
+	stats, err := d.ValueLogGC(gcCtx, backenddb.ValueLogGCOptions{})
+	if err != nil {
+		t.Fatalf("ValueLogGC: %v", err)
+	}
+	if stats.SegmentsDeleted == 0 {
+		t.Fatalf("expected GC to delete a stale segment, stats=%+v", stats)
+	}
+	if _, err := os.Stat(stalePath); err == nil || !os.IsNotExist(err) {
+		t.Fatalf("expected stale segment to be deleted, err=%v", err)
+	}
+	if err := closeDB(); err != nil {
+		t.Fatalf("close db after value-log GC: %v", err)
+	}
+	reopened, reopenedCleanup, err := treedb.OpenBackendWithCachedLeafLog(opts)
+	if err != nil {
+		t.Fatalf("reopen db after value-log GC: %v", err)
+	}
+	defer func() { _ = reopenedCleanup() }()
+	reopenedCol, err := NewCollectionManager(reopened).OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection after value-log GC: %v", err)
 	}
 	requireCollectionMaintenanceReads(t, reopenedCol)
 }
@@ -399,6 +486,142 @@ func TestCollectionInsertBatchStatsExposeIndexRunShape(t *testing.T) {
 	}
 }
 
+func writeStandaloneValueLogSegment(t *testing.T, valueDir string, lane, seq uint32, value []byte) string {
+	t.Helper()
+	if err := os.MkdirAll(valueDir, 0o755); err != nil {
+		t.Fatalf("mkdir value log dir: %v", err)
+	}
+	fileID, err := valuelog.EncodeFileID(lane, seq)
+	if err != nil {
+		t.Fatalf("EncodeFileID(%d,%d): %v", lane, seq, err)
+	}
+	path := valuelog.SegmentPath(valueDir, fileID)
+	writer, err := valuelog.NewWriter(path, fileID)
+	if err != nil {
+		t.Fatalf("NewWriter(%s): %v", path, err)
+	}
+	if _, err := writer.Append(0, nil, uint64(seq), value); err != nil {
+		_ = writer.Close()
+		t.Fatalf("append value-log record: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close value-log writer: %v", err)
+	}
+	return path
+}
+
+func chooseStandaloneValueLogSegmentStart(t *testing.T, valueDir string) (uint32, uint32) {
+	t.Helper()
+	if err := os.MkdirAll(valueDir, 0o755); err != nil {
+		t.Fatalf("mkdir value log dir: %v", err)
+	}
+	mgr, err := valuelog.NewManager(valueDir)
+	if err != nil {
+		t.Fatalf("new value-log manager for synthetic segment lane: %v", err)
+	}
+	defer func() { _ = mgr.Close() }()
+	set := mgr.CurrentSet()
+	defer func() { _ = mgr.Release(set) }()
+	lane, startSeq := chooseStandaloneValueLogSegmentStartFromSet(set)
+	if startSeq >= ^uint32(0)-1 {
+		t.Fatalf("value-log lane %d sequence exhausted near %d", lane, startSeq)
+	}
+	return lane, startSeq + 1
+}
+
+func chooseStandaloneValueLogSegmentStartFromSet(set *valuelog.Set) (uint32, uint32) {
+	maxSeqByLane := make(map[uint32]uint32)
+	usedLane := make(map[uint32]struct{})
+	var maxObservedLane uint32
+	haveObservedLane := false
+	if set != nil {
+		for fileID := range set.Files {
+			lane, seq := valuelog.DecodeFileID(fileID)
+			if lane == valuelog.ReservedLeafLogLaneID {
+				continue
+			}
+			if !haveObservedLane || lane > maxObservedLane {
+				maxObservedLane = lane
+				haveObservedLane = true
+			}
+			usedLane[lane] = struct{}{}
+			if seq > maxSeqByLane[lane] {
+				maxSeqByLane[lane] = seq
+			}
+		}
+	}
+	if valuelog.ReservedLeafLogLaneID > 0 {
+		for lane := uint32(valuelog.ReservedLeafLogLaneID - 1); ; lane-- {
+			if _, used := usedLane[lane]; !used {
+				return lane, 0
+			}
+			if lane == 0 {
+				break
+			}
+		}
+		return 0, maxSeqByLane[0]
+	}
+	if !haveObservedLane || maxObservedLane == ^uint32(0) {
+		return 1, 0
+	}
+	return maxObservedLane + 1, 0
+}
+
+func TestChooseStandaloneValueLogSegmentStartFromSetSkipsReservedLeafLane(t *testing.T) {
+	leafID, err := valuelog.EncodeFileID(valuelog.ReservedLeafLogLaneID, 3)
+	if err != nil {
+		t.Fatalf("EncodeFileID reserved lane: %v", err)
+	}
+	userID, err := valuelog.EncodeFileID(valuelog.ReservedLeafLogLaneID-1, 7)
+	if err != nil {
+		t.Fatalf("EncodeFileID user lane: %v", err)
+	}
+	set := &valuelog.Set{Files: map[uint32]*valuelog.File{
+		leafID: &valuelog.File{ID: leafID},
+		userID: &valuelog.File{ID: userID},
+	}}
+
+	lane, seq := chooseStandaloneValueLogSegmentStartFromSet(set)
+	if want := uint32(valuelog.ReservedLeafLogLaneID - 2); lane != want || seq != 0 {
+		t.Fatalf("lane=%d seq=%d want lane=%d seq=0", lane, seq, want)
+	}
+}
+
+func TestChooseStandaloneValueLogSegmentStartFromSetFallsBackToLaneZero(t *testing.T) {
+	files := make(map[uint32]*valuelog.File)
+	for lane := uint32(0); lane < uint32(valuelog.ReservedLeafLogLaneID); lane++ {
+		seq := uint32(1)
+		if lane == 0 {
+			seq = 9
+		}
+		id, err := valuelog.EncodeFileID(lane, seq)
+		if err != nil {
+			t.Fatalf("EncodeFileID lane=%d seq=%d: %v", lane, seq, err)
+		}
+		files[id] = &valuelog.File{ID: id}
+	}
+
+	lane, seq := chooseStandaloneValueLogSegmentStartFromSet(&valuelog.Set{Files: files})
+	if lane != 0 || seq != 9 {
+		t.Fatalf("lane=%d seq=%d want lane=0 seq=9", lane, seq)
+	}
+}
+
+func TestChooseStandaloneValueLogSegmentStartFromSetTracksSeqZero(t *testing.T) {
+	fileID, err := valuelog.EncodeFileID(valuelog.ReservedLeafLogLaneID-1, 0)
+	if err != nil {
+		t.Fatalf("EncodeFileID seq zero: %v", err)
+	}
+	set := &valuelog.Set{Files: map[uint32]*valuelog.File{
+		fileID: {ID: fileID},
+	}}
+
+	lane, seq := chooseStandaloneValueLogSegmentStartFromSet(set)
+	if want := uint32(valuelog.ReservedLeafLogLaneID - 2); lane != want || seq != 0 {
+		t.Fatalf("lane=%d seq=%d want lane=%d seq=0", lane, seq, want)
+	}
+}
+
 func requireCollectionMaintenanceReads(t *testing.T, col *Collection) {
 	t.Helper()
 	got, err := col.Get([]byte("u2"))
@@ -489,6 +712,7 @@ func collectionMaintenanceContainsID(ids [][]byte, want []byte) bool {
 	return false
 }
 
+// Non-unique index scans do not promise result ordering; assert set membership.
 func collectionMaintenanceRequireUnorderedIDs(t *testing.T, got [][]byte, want ...[]byte) {
 	t.Helper()
 	if len(got) != len(want) {
@@ -1361,9 +1585,7 @@ func TestCollectionInsertBatchBridge_AppendsWithoutDroppingExistingRoots(t *test
 	if err != nil {
 		t.Fatalf("find city: %v", err)
 	}
-	if len(cityIDs) != 2 || !bytes.Equal(cityIDs[0], []byte("u1")) || !bytes.Equal(cityIDs[1], []byte("u2")) {
-		t.Fatalf("city ids=%q want [u1 u2]", cityIDs)
-	}
+	collectionMaintenanceRequireUnorderedIDs(t, cityIDs, []byte("u1"), []byte("u2"))
 }
 
 func TestCollectionCreateIndexBackfill_BuildsSecondaryAndIndexState(t *testing.T) {
@@ -1406,9 +1628,7 @@ func TestCollectionCreateIndexBackfill_BuildsSecondaryAndIndexState(t *testing.T
 	if err != nil {
 		t.Fatalf("find city: %v", err)
 	}
-	if len(cityIDs) != 2 || !bytes.Equal(cityIDs[0], []byte("u1")) || !bytes.Equal(cityIDs[1], []byte("u2")) {
-		t.Fatalf("city ids=%q want [u1 u2]", cityIDs)
-	}
+	collectionMaintenanceRequireUnorderedIDs(t, cityIDs, []byte("u1"), []byte("u2"))
 
 	snap := d.AcquireSnapshot()
 	if snap == nil {
