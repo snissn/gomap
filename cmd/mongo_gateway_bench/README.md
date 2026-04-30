@@ -22,6 +22,10 @@ GOWORK=off go run ./cmd/mongo_gateway_bench \
   -reads 10000 \
   -range-reads 1000 \
   -updates 1000 \
+  -concurrent-readers 8 \
+  -concurrent-reads 10000 \
+  -concurrent-writers 4 \
+  -concurrent-writes 1000 \
   -secondary-indexes 2 \
   -format json
 ```
@@ -45,6 +49,10 @@ GOWORK=off go run ./cmd/mongo_gateway_bench \
   -reads 10000 \
   -range-reads 1000 \
   -updates 1000 \
+  -concurrent-readers 8 \
+  -concurrent-reads 10000 \
+  -concurrent-writers 4 \
+  -concurrent-writes 1000 \
   -secondary-indexes 2 \
   -format json
 ```
@@ -66,6 +74,10 @@ scripts/mongo_gateway_compare.sh \
   --out /tmp/gomap_mongo_gateway_compare \
   --docs "1000 10000" \
   --indexes "0 2" \
+  --concurrent-readers 8 \
+  --concurrent-reads 10000 \
+  --concurrent-writers 4 \
+  --concurrent-writes 1000 \
   --mongo-mode docker
 ```
 
@@ -107,8 +119,28 @@ Useful overrides:
 - `INDEXES_LIST="0 1 2"`
 - `READS=50000`, `RANGE_READS=5000`, `UPDATES=5000`
 - `DELETES=1000`
+- `CONCURRENT_READERS=16`, `CONCURRENT_READS=50000`
+- `CONCURRENT_WRITERS=8`, `CONCURRENT_WRITES=10000`
 - `BATCH_SIZE=1000`
 - `MONGO_IMAGE=mongo:8`
+
+For a larger MongoDB comparison that keeps the 1M-doc cell bounded enough for a
+local run, use explicit operation counts:
+
+```sh
+BATCH_SIZE=5000 scripts/mongo_gateway_compare.sh \
+  --out /tmp/gomap_mongo_gateway_compare_large \
+  --docs "100000 1000000" \
+  --indexes "2" \
+  --reads 50000 \
+  --range-reads 5000 \
+  --updates 5000 \
+  --concurrent-readers 16 \
+  --concurrent-reads 50000 \
+  --concurrent-writers 8 \
+  --concurrent-writes 10000 \
+  --timeout 120m
+```
 
 ## Manual Matrix
 
@@ -125,6 +157,10 @@ for docs in 1000 10000 100000; do
       -reads "$docs" \
       -range-reads "$((docs / 10))" \
       -updates "$((docs / 10))" \
+      -concurrent-readers 8 \
+      -concurrent-reads "$((docs / 10))" \
+      -concurrent-writers 4 \
+      -concurrent-writes "$((docs / 20))" \
       -secondary-indexes "$indexes" \
       -format json > "treedb-${docs}-${indexes}.json"
 
@@ -134,6 +170,10 @@ for docs in 1000 10000 100000; do
       -reads "$docs" \
       -range-reads "$((docs / 10))" \
       -updates "$((docs / 10))" \
+      -concurrent-readers 8 \
+      -concurrent-reads "$((docs / 10))" \
+      -concurrent-writers 4 \
+      -concurrent-writes "$((docs / 20))" \
       -secondary-indexes "$indexes" \
       -format json > "mongo-${docs}-${indexes}.json"
   done
@@ -144,10 +184,15 @@ The initial workload phases are:
 
 - `load_insert_many`: batched document inserts.
 - `id_find_one`: point lookup by `_id`.
-- `email_find_one`: point lookup by the `email` field.
+- `email_find_one`: point lookup by the `email` field; emitted only when the
+  email secondary index is part of the cell.
 - `age_range_limit_10`: bounded range query with `limit: 10`; operations count
   range queries, not returned documents.
 - `id_update_set`: `$set` update by `_id`.
+- `concurrent_id_find_one_rN`: total `_id` point reads split across `N`
+  goroutines.
+- `concurrent_id_update_set_wN`: total `$set` updates split across `N`
+  goroutines.
 - `id_delete_one`: optional deletes; disabled unless `-deletes` is non-zero.
 
 Latency samples are per MongoDB driver call. Insert ops/sec is normalized by

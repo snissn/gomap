@@ -1330,6 +1330,7 @@ func TestRootDescriptorDeltaRejectsConcurrentSchemaChange(t *testing.T) {
 		t.Fatal("expected snapshot")
 	}
 	catalog, err := loadCollectionCatalog(snap, "users")
+	baseCommitSeq := snapshotCommitSeq(snap)
 	baseSystemRoot := snapshotSystemRoot(snap)
 	_ = snap.Close()
 	if err != nil {
@@ -1352,6 +1353,7 @@ func TestRootDescriptorDeltaRejectsConcurrentSchemaChange(t *testing.T) {
 	}
 
 	iter, err := col.buildRootDescriptorSystemDeltaIterator(
+		baseCommitSeq,
 		baseSystemRoot,
 		[]string{rootName},
 		map[string]uint64{rootName: baseRoot},
@@ -1528,6 +1530,55 @@ func TestCollectionCachedCatalogRefreshesAfterCrossHandleWrite(t *testing.T) {
 	}
 	if want := []byte(`{"name":"ada"}`); !bytes.Equal(got, want) {
 		t.Fatalf("reader saw stale catalog value=%q want %q", got, want)
+	}
+}
+
+func TestCollectionCachedCatalogUsesCommitSeq(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("u1")}, [][]byte{[]byte(`{"name":"ada"}`)}); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("expected snapshot")
+	}
+	defer func() { _ = snap.Close() }()
+	catalog, err := loadCollectionCatalog(snap, "users")
+	if err != nil {
+		t.Fatalf("load catalog: %v", err)
+	}
+	rootName := collectionPrimaryRootName("users")
+	staleCatalog := cloneCatalogWithRootUpdates(catalog, catalog.meta, []string{rootName}, []uint64{^uint64(0)})
+
+	col.catalogMu.Lock()
+	col.catalog = staleCatalog
+	col.catalogSystemRoot = snapshotSystemRoot(snap)
+	col.catalogCommitSeq = snapshotCommitSeq(snap) + 1
+	col.catalogMu.Unlock()
+
+	refreshed, err := col.catalogForSnapshot(snap)
+	if err != nil {
+		t.Fatalf("catalogForSnapshot: %v", err)
+	}
+	if got := refreshed.rootID(rootName); got == ^uint64(0) {
+		t.Fatalf("catalog cache ignored commit sequence and returned stale root %d", got)
+	}
+	if got, want := refreshed.rootID(rootName), catalog.rootID(rootName); got != want {
+		t.Fatalf("refreshed root=%d want %d", got, want)
 	}
 }
 
@@ -2006,6 +2057,17 @@ func TestCollectionScanDocumentsAndFindByIndexValue(t *testing.T) {
 	if !truncated || len(records) != 1 {
 		t.Fatalf("limited scan truncated=%v len=%d want true/1", truncated, len(records))
 	}
+	var callbackIDs [][]byte
+	truncated, err = col.ScanDocumentsFunc(1, func(record DocumentRecord) (bool, error) {
+		callbackIDs = append(callbackIDs, record.ID)
+		return false, nil
+	})
+	if err != nil {
+		t.Fatalf("scan documents func: %v", err)
+	}
+	if truncated || len(callbackIDs) != 1 || !bytes.Equal(callbackIDs[0], []byte("u1")) {
+		t.Fatalf("callback scan truncated=%v ids=%q want false/[u1]", truncated, callbackIDs)
+	}
 }
 
 func TestCollectionFindByIndexValueMatchesLargeJSONInteger(t *testing.T) {
@@ -2338,7 +2400,7 @@ func TestCollectionUpdateConcurrentCounterNoLostUpdates(t *testing.T) {
 			defer wg.Done()
 			<-start
 			for j := 0; j < increments; j++ {
-				if _, _, err := workerCol.Update([]byte("u1"), func(current []byte) ([]byte, bool, error) {
+				matched, modified, err := workerCol.Update([]byte("u1"), func(current []byte) ([]byte, bool, error) {
 					var doc struct {
 						Count int `json:"count"`
 					}
@@ -2351,8 +2413,13 @@ func TestCollectionUpdateConcurrentCounterNoLostUpdates(t *testing.T) {
 						return nil, false, err
 					}
 					return next, true, nil
-				}); err != nil {
+				})
+				if err != nil {
 					errs <- err
+					return
+				}
+				if !matched || !modified {
+					errs <- fmt.Errorf("update matched=%v modified=%v", matched, modified)
 					return
 				}
 			}
@@ -2380,6 +2447,117 @@ func TestCollectionUpdateConcurrentCounterNoLostUpdates(t *testing.T) {
 	}
 	if want := workers * increments; doc.Count != want {
 		t.Fatalf("count=%d want %d", doc.Count, want)
+	}
+}
+
+func TestCollectionUpdateConcurrentIndexedNoRetryExhaustion(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Indexes: []IndexDefinition{
+			{Name: "email", Field: "email", Unique: true},
+			{Name: "city", Field: "city"},
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+
+	const documents = 32
+	ids := make([][]byte, documents)
+	docs := make([][]byte, documents)
+	for i := 0; i < documents; i++ {
+		ids[i] = []byte(fmt.Sprintf("u%02d", i))
+		docs[i] = []byte(fmt.Sprintf(`{"email":"user%02d@example.test","city":"hnl","count":0}`, i))
+	}
+	if _, err := col.InsertBatch(ids, docs); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+
+	const (
+		workers = 8
+		updates = 100
+	)
+	workerCols := make([]*Collection, workers)
+	for i := range workerCols {
+		workerCol, err := mgr.OpenCollection("users")
+		if err != nil {
+			t.Fatalf("open worker collection: %v", err)
+		}
+		workerCols[i] = workerCol
+	}
+	start := make(chan struct{})
+	errs := make(chan error, workers)
+	var wg sync.WaitGroup
+	for worker := 0; worker < workers; worker++ {
+		wg.Add(1)
+		go func(worker int, workerCol *Collection) {
+			defer wg.Done()
+			<-start
+			for update := 0; update < updates; update++ {
+				id := ids[(worker*updates+update*37)%documents]
+				matched, modified, err := workerCol.Update(id, func(current []byte) ([]byte, bool, error) {
+					var doc struct {
+						Email string `json:"email"`
+						City  string `json:"city"`
+						Count int    `json:"count"`
+					}
+					if err := json.Unmarshal(current, &doc); err != nil {
+						return nil, false, err
+					}
+					doc.Count++
+					next, err := json.Marshal(doc)
+					if err != nil {
+						return nil, false, err
+					}
+					return next, true, nil
+				})
+				if err != nil {
+					errs <- err
+					return
+				}
+				if !matched || !modified {
+					errs <- fmt.Errorf("update matched=%v modified=%v", matched, modified)
+					return
+				}
+			}
+			errs <- nil
+		}(worker, workerCols[worker])
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("update: %v", err)
+		}
+	}
+
+	total := 0
+	for _, id := range ids {
+		got, err := col.Get(id)
+		if err != nil {
+			t.Fatalf("get %q: %v", id, err)
+		}
+		var doc struct {
+			Count int `json:"count"`
+		}
+		if err := json.Unmarshal(got, &doc); err != nil {
+			t.Fatalf("unmarshal %q: %v", id, err)
+		}
+		total += doc.Count
+	}
+	if want := workers * updates; total != want {
+		t.Fatalf("total count=%d want %d", total, want)
 	}
 }
 
@@ -2453,6 +2631,131 @@ func TestCollectionUpdateAllowsUnrelatedUserRootCommit(t *testing.T) {
 	}
 	if !bytes.Equal(raw, []byte("value")) {
 		t.Fatalf("raw value=%q want value", raw)
+	}
+}
+
+func TestCollectionUpdateSkipsIndexRootsWhenIndexedValuesUnchanged(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Indexes: []IndexDefinition{
+			{Name: "email", Field: "email", Unique: true},
+			{Name: "city", Field: "city"},
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"email":"ada@example.com","city":"hnl","seen":false}`)},
+	); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	loadCatalog := func() *collectionCatalog {
+		t.Helper()
+		snap := d.AcquireSnapshot()
+		if snap == nil {
+			t.Fatal("expected snapshot")
+		}
+		defer func() { _ = snap.Close() }()
+		catalog, err := loadCollectionCatalog(snap, "users")
+		if err != nil {
+			t.Fatalf("load catalog: %v", err)
+		}
+		if catalog == nil {
+			t.Fatal("missing catalog")
+		}
+		return catalog
+	}
+	roots := func(catalog *collectionCatalog) map[string]uint64 {
+		t.Helper()
+		names := []string{
+			collectionPrimaryRootName("users"),
+			collectionIndexStateRootName("users"),
+			collectionSecondaryRootName("users", "email"),
+			collectionSecondaryRootName("users", "city"),
+		}
+		out := make(map[string]uint64, len(names))
+		for _, name := range names {
+			rootID := catalog.rootID(name)
+			if rootID == 0 {
+				t.Fatalf("root %q was not persisted", name)
+			}
+			out[name] = rootID
+		}
+		return out
+	}
+
+	before := roots(loadCatalog())
+	matched, modified, err := col.Update([]byte("u1"), func([]byte) ([]byte, bool, error) {
+		return []byte(`{"email":"ada@example.com","city":"hnl","seen":true}`), true, nil
+	})
+	if err != nil {
+		t.Fatalf("update non-indexed field: %v", err)
+	}
+	if !matched || !modified {
+		t.Fatalf("update matched=%v modified=%v want true/true", matched, modified)
+	}
+	after := roots(loadCatalog())
+	for _, rootName := range []string{
+		collectionIndexStateRootName("users"),
+		collectionSecondaryRootName("users", "email"),
+		collectionSecondaryRootName("users", "city"),
+	} {
+		if after[rootName] != before[rootName] {
+			t.Fatalf("root %q changed from %d to %d for non-indexed update", rootName, before[rootName], after[rootName])
+		}
+	}
+	got, err := col.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("get updated document: %v", err)
+	}
+	if !bytes.Contains(got, []byte(`"seen":true`)) {
+		t.Fatalf("updated document=%q want seen=true", got)
+	}
+
+	matched, modified, err = col.Update([]byte("u1"), func([]byte) ([]byte, bool, error) {
+		return []byte(`{"email":"ada2@example.com","city":"hnl","seen":true}`), true, nil
+	})
+	if err != nil {
+		t.Fatalf("update indexed field: %v", err)
+	}
+	if !matched || !modified {
+		t.Fatalf("indexed update matched=%v modified=%v want true/true", matched, modified)
+	}
+	afterIndexed := roots(loadCatalog())
+	for _, rootName := range []string{
+		collectionIndexStateRootName("users"),
+		collectionSecondaryRootName("users", "email"),
+	} {
+		if afterIndexed[rootName] == after[rootName] {
+			t.Fatalf("root %q did not change for indexed update", rootName)
+		}
+	}
+	ids, err := col.FindByIndexValue("email", "ada2@example.com")
+	if err != nil {
+		t.Fatalf("find new email: %v", err)
+	}
+	if len(ids) != 1 || !bytes.Equal(ids[0], []byte("u1")) {
+		t.Fatalf("new email ids=%q want u1", ids)
+	}
+	ids, err = col.FindByIndexValue("email", "ada@example.com")
+	if err != nil {
+		t.Fatalf("find old email: %v", err)
+	}
+	if len(ids) != 0 {
+		t.Fatalf("old email ids=%q want none", ids)
 	}
 }
 

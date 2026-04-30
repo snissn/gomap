@@ -16,6 +16,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/collections"
@@ -27,22 +29,26 @@ import (
 )
 
 type config struct {
-	Target           string
-	MongoURI         string
-	TreeDBDir        string
-	KeepTreeDBDir    bool
-	DropBeforeRun    bool
-	Database         string
-	Collection       string
-	Documents        int
-	BatchSize        int
-	Reads            int
-	RangeReads       int
-	Updates          int
-	Deletes          int
-	SecondaryIndexes int
-	Timeout          time.Duration
-	Format           string
+	Target            string
+	MongoURI          string
+	TreeDBDir         string
+	KeepTreeDBDir     bool
+	DropBeforeRun     bool
+	Database          string
+	Collection        string
+	Documents         int
+	BatchSize         int
+	Reads             int
+	RangeReads        int
+	Updates           int
+	Deletes           int
+	ConcurrentReaders int
+	ConcurrentReads   int
+	ConcurrentWriters int
+	ConcurrentWrites  int
+	SecondaryIndexes  int
+	Timeout           time.Duration
+	Format            string
 }
 
 type benchmarkResult struct {
@@ -53,6 +59,10 @@ type benchmarkResult struct {
 	Collection                string         `json:"collection"`
 	Documents                 int            `json:"documents"`
 	SecondaryIndexes          int            `json:"secondary_indexes"`
+	ConcurrentReaders         int            `json:"concurrent_readers,omitempty"`
+	ConcurrentReads           int            `json:"concurrent_reads,omitempty"`
+	ConcurrentWriters         int            `json:"concurrent_writers,omitempty"`
+	ConcurrentWrites          int            `json:"concurrent_writes,omitempty"`
 	Phases                    []phaseResult  `json:"phases"`
 	TreeDBDiskAfterLoad       *diskSnapshot  `json:"treedb_disk_after_load,omitempty"`
 	TreeDBDiskAfterCheckpoint *diskSnapshot  `json:"treedb_disk_after_checkpoint,omitempty"`
@@ -146,6 +156,10 @@ func parseConfig(args []string) (config, error) {
 	fs.IntVar(&cfg.RangeReads, "range-reads", 100, "range reads with limit")
 	fs.IntVar(&cfg.Updates, "updates", 100, "$set updates by _id")
 	fs.IntVar(&cfg.Deletes, "deletes", 0, "deleteOne operations by _id")
+	fs.IntVar(&cfg.ConcurrentReaders, "concurrent-readers", 0, "reader goroutines for the concurrent _id read phase; 0 disables the phase")
+	fs.IntVar(&cfg.ConcurrentReads, "concurrent-reads", 0, "total _id read operations for the concurrent read phase")
+	fs.IntVar(&cfg.ConcurrentWriters, "concurrent-writers", 0, "writer goroutines for the concurrent _id update phase; 0 disables the phase")
+	fs.IntVar(&cfg.ConcurrentWrites, "concurrent-writes", 0, "total update operations for the concurrent write phase")
 	fs.IntVar(&cfg.SecondaryIndexes, "secondary-indexes", 2, "secondary indexes to create: 0, 1=email, 2=both single-field indexes: email and city")
 	fs.DurationVar(&cfg.Timeout, "timeout", 10*time.Minute, "overall benchmark timeout")
 	fs.StringVar(&cfg.Format, "format", "text", "output format: text or json")
@@ -164,8 +178,17 @@ func parseConfig(args []string) (config, error) {
 	if cfg.BatchSize <= 0 {
 		return config{}, errors.New("batch-size must be > 0")
 	}
-	if cfg.Reads < 0 || cfg.RangeReads < 0 || cfg.Updates < 0 || cfg.Deletes < 0 {
+	if cfg.Reads < 0 || cfg.RangeReads < 0 || cfg.Updates < 0 || cfg.Deletes < 0 || cfg.ConcurrentReads < 0 || cfg.ConcurrentWrites < 0 {
 		return config{}, errors.New("operation counts cannot be negative")
+	}
+	if cfg.ConcurrentReaders < 0 || cfg.ConcurrentWriters < 0 {
+		return config{}, errors.New("concurrency values cannot be negative")
+	}
+	if (cfg.ConcurrentReaders == 0) != (cfg.ConcurrentReads == 0) {
+		return config{}, errors.New("concurrent-readers and concurrent-reads must both be > 0 or both be 0")
+	}
+	if (cfg.ConcurrentWriters == 0) != (cfg.ConcurrentWrites == 0) {
+		return config{}, errors.New("concurrent-writers and concurrent-writes must both be > 0 or both be 0")
 	}
 	if cfg.Timeout < 0 {
 		return config{}, errors.New("timeout cannot be negative")
@@ -453,11 +476,15 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget) (*benchm
 	db := target.client.Database(cfg.Database)
 	coll := db.Collection(cfg.Collection)
 	result := &benchmarkResult{
-		Target:           cfg.Target,
-		Database:         cfg.Database,
-		Collection:       cfg.Collection,
-		Documents:        cfg.Documents,
-		SecondaryIndexes: cfg.SecondaryIndexes,
+		Target:            cfg.Target,
+		Database:          cfg.Database,
+		Collection:        cfg.Collection,
+		Documents:         cfg.Documents,
+		SecondaryIndexes:  cfg.SecondaryIndexes,
+		ConcurrentReaders: cfg.ConcurrentReaders,
+		ConcurrentReads:   cfg.ConcurrentReads,
+		ConcurrentWriters: cfg.ConcurrentWriters,
+		ConcurrentWrites:  cfg.ConcurrentWrites,
 	}
 	if cfg.Target == "treedb" {
 		if cfg.TreeDBDir != "" || cfg.KeepTreeDBDir {
@@ -518,26 +545,28 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget) (*benchm
 	}
 	result.Phases = append(result.Phases, idPhase)
 
-	emailPhase, err := measurePhase("email_find_one", cfg.Reads, func(sample func(time.Duration)) error {
-		for i := 0; i < cfg.Reads; i++ {
-			email := benchmarkEmail((i * 17) % cfg.Documents)
-			var out bson.M
-			begin := time.Now()
-			err := coll.FindOne(ctx, bson.D{{Key: "email", Value: email}}).Decode(&out)
-			sample(time.Since(begin))
-			if err != nil {
-				return err
+	if runEmailFindPhase(cfg) {
+		emailPhase, err := measurePhase("email_find_one", cfg.Reads, func(sample func(time.Duration)) error {
+			for i := 0; i < cfg.Reads; i++ {
+				email := benchmarkEmail((i * 17) % cfg.Documents)
+				var out bson.M
+				begin := time.Now()
+				err := coll.FindOne(ctx, bson.D{{Key: "email", Value: email}}).Decode(&out)
+				sample(time.Since(begin))
+				if err != nil {
+					return err
+				}
+				if out["email"] != email {
+					return fmt.Errorf("email lookup returned email=%v want %s", out["email"], email)
+				}
 			}
-			if out["email"] != email {
-				return fmt.Errorf("email lookup returned email=%v want %s", out["email"], email)
-			}
+			return nil
+		})
+		if err != nil {
+			return nil, err
 		}
-		return nil
-	})
-	if err != nil {
-		return nil, err
+		result.Phases = append(result.Phases, emailPhase)
 	}
-	result.Phases = append(result.Phases, emailPhase)
 
 	rangePhase, err := measurePhase("age_range_limit_10", cfg.RangeReads, func(sample func(time.Duration)) error {
 		for i := 0; i < cfg.RangeReads; i++ {
@@ -593,6 +622,54 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget) (*benchm
 	}
 	result.Phases = append(result.Phases, updatePhase)
 
+	if cfg.ConcurrentReaders > 0 && cfg.ConcurrentReads > 0 {
+		concurrentReadPhase, err := measurePhase(fmt.Sprintf("concurrent_id_find_one_r%d", cfg.ConcurrentReaders), cfg.ConcurrentReads, func(sample func(time.Duration)) error {
+			return runConcurrentOperations(ctx, cfg.ConcurrentReaders, cfg.ConcurrentReads, func(op int) error {
+				id := benchmarkID((op * 17) % cfg.Documents)
+				var out bson.M
+				begin := time.Now()
+				err := coll.FindOne(ctx, bson.D{{Key: "_id", Value: id}}).Decode(&out)
+				sample(time.Since(begin))
+				if err != nil {
+					return err
+				}
+				if out["_id"] != id {
+					return fmt.Errorf("concurrent id lookup returned _id=%v want %s", out["_id"], id)
+				}
+				return nil
+			})
+		})
+		if err != nil {
+			return nil, err
+		}
+		result.Phases = append(result.Phases, concurrentReadPhase)
+	}
+
+	if cfg.ConcurrentWriters > 0 && cfg.ConcurrentWrites > 0 {
+		concurrentWritePhase, err := measurePhase(fmt.Sprintf("concurrent_id_update_set_w%d", cfg.ConcurrentWriters), cfg.ConcurrentWrites, func(sample func(time.Duration)) error {
+			return runConcurrentOperations(ctx, cfg.ConcurrentWriters, cfg.ConcurrentWrites, func(op int) error {
+				id := benchmarkID((op * 37) % cfg.Documents)
+				begin := time.Now()
+				res, err := coll.UpdateOne(ctx,
+					bson.D{{Key: "_id", Value: id}},
+					bson.D{{Key: "$set", Value: bson.D{{Key: "concurrent_updated", Value: true}, {Key: "concurrent_update_seq", Value: int64(op)}}}},
+				)
+				sample(time.Since(begin))
+				if err != nil {
+					return err
+				}
+				if res.MatchedCount != 1 {
+					return fmt.Errorf("concurrent update matched=%d want 1", res.MatchedCount)
+				}
+				return nil
+			})
+		})
+		if err != nil {
+			return nil, err
+		}
+		result.Phases = append(result.Phases, concurrentWritePhase)
+	}
+
 	if cfg.Deletes > 0 {
 		deletePhase, err := measurePhase("id_delete_one", cfg.Deletes, func(sample func(time.Duration)) error {
 			for i := 0; i < cfg.Deletes; i++ {
@@ -619,6 +696,10 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget) (*benchm
 		return nil, err
 	}
 	return result, nil
+}
+
+func runEmailFindPhase(cfg config) bool {
+	return cfg.Reads > 0 && cfg.SecondaryIndexes >= 1
 }
 
 func createIndexes(ctx context.Context, coll *mongo.Collection, secondaryIndexes int) error {
@@ -747,12 +828,65 @@ func int64Value(value any) (int64, bool) {
 
 func measurePhase(name string, operations int, run func(sample func(time.Duration)) error) (phaseResult, error) {
 	samples := make([]time.Duration, 0)
+	var samplesMu sync.Mutex
 	start := time.Now()
 	err := run(func(sample time.Duration) {
+		samplesMu.Lock()
 		samples = append(samples, sample)
+		samplesMu.Unlock()
 	})
 	duration := time.Since(start)
 	return summarizePhase(name, operations, len(samples), duration, samples), err
+}
+
+func runConcurrentOperations(ctx context.Context, workers, operations int, run func(op int) error) error {
+	if workers <= 0 || operations <= 0 {
+		return nil
+	}
+	if workers > operations {
+		workers = operations
+	}
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	var next atomic.Int64
+	var wg sync.WaitGroup
+	var errOnce sync.Once
+	var firstErr error
+	recordErr := func(err error) {
+		if err == nil {
+			return
+		}
+		errOnce.Do(func() {
+			firstErr = err
+			cancel()
+		})
+	}
+
+	for worker := 0; worker < workers; worker++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				if err := runCtx.Err(); err != nil {
+					return
+				}
+				op := int(next.Add(1) - 1)
+				if op >= operations {
+					return
+				}
+				if err := run(op); err != nil {
+					recordErr(err)
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	if firstErr != nil {
+		return firstErr
+	}
+	return ctx.Err()
 }
 
 func summarizePhase(name string, operations, driverCalls int, duration time.Duration, samples []time.Duration) phaseResult {
@@ -834,8 +968,9 @@ func writeResult(out io.Writer, format string, result *benchmarkResult) error {
 		encoder.SetIndent("", "  ")
 		return encoder.Encode(result)
 	case "text":
-		fmt.Fprintf(out, "target=%s database=%s collection=%s documents=%d secondary_indexes=%d\n",
-			result.Target, result.Database, result.Collection, result.Documents, result.SecondaryIndexes)
+		fmt.Fprintf(out, "target=%s database=%s collection=%s documents=%d secondary_indexes=%d concurrent_readers=%d concurrent_reads=%d concurrent_writers=%d concurrent_writes=%d\n",
+			result.Target, result.Database, result.Collection, result.Documents, result.SecondaryIndexes,
+			result.ConcurrentReaders, result.ConcurrentReads, result.ConcurrentWriters, result.ConcurrentWrites)
 		if result.TreeDBDir != "" {
 			fmt.Fprintf(out, "treedb_dir=%s\n", result.TreeDBDir)
 		}

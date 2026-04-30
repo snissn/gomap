@@ -3709,6 +3709,7 @@ func TestSchedulePendingVlogGenerationCheckpointKick_PrioritizesDueDeferredWake(
 	}}, true, stageObservedAt); err != nil {
 		t.Fatalf("seed staged rewrite ledger: %v", err)
 	}
+	forceRewriteStageConfirmDue(t, db)
 
 	db.vlogGenerationCheckpointKickPending.Store(true)
 	db.vlogGenerationDeferredMaintenanceRunning.Store(true)
@@ -7018,6 +7019,7 @@ func TestVlogGenerationMaintenance_CheckpointPendingYieldsToDueStageConfirm(t *t
 	}}, true, stageObservedAt); err != nil {
 		t.Fatalf("seed staged rewrite ledger: %v", err)
 	}
+	forceRewriteStageConfirmDue(t, db)
 
 	db.vlogGenerationCheckpointKickPending.Store(true)
 	t.Cleanup(func() { db.vlogGenerationCheckpointKickPending.Store(false) })

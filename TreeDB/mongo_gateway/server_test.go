@@ -1344,6 +1344,75 @@ func TestServerFindCapsIndexedCandidates(t *testing.T) {
 	assertCommandError(t, tooMany, "BadValue")
 }
 
+func TestServerFindUnindexedLimitStopsBeforeScanCap(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewServer()
+	server.MaxFindScanDocuments = 1
+	server.Collections = collections.NewCollectionManager(db)
+	assertOK(t, serveCommand(t, server, 257, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{
+			bson.D{{Key: "_id", Value: "u1"}, {Key: "city", Value: "hnl"}},
+			bson.D{{Key: "_id", Value: "u2"}, {Key: "city", Value: "hnl"}},
+		}},
+		{Key: "$db", Value: "app"},
+	}))
+	findResponse := serveCommand(t, server, 258, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "city", Value: "hnl"}}},
+		{Key: "limit", Value: int32(1)},
+		{Key: "$db", Value: "app"},
+	})
+	assertBatchIDs(t, cursorFirstBatch(t, findResponse), []string{"u1"})
+}
+
+func TestStoredDocumentMatchesPredicatesExtendedJSONScalars(t *testing.T) {
+	_, stored, err := prepareInsertDocument(mustDocument(t, bson.D{
+		{Key: "_id", Value: "u1"},
+		{Key: "city", Value: "hnl"},
+		{Key: "age", Value: int64(42)},
+		{Key: "active", Value: true},
+	}))
+	if err != nil {
+		t.Fatalf("prepare insert document: %v", err)
+	}
+	predicates := []findPredicate{
+		{field: "city", op: findPredicateEq, values: []bson.RawValue{mustRawValue(t, "hnl")}},
+		{field: "age", op: findPredicateGTE, values: []bson.RawValue{mustRawValue(t, int64(40))}},
+		{field: "active", op: findPredicateEq, values: []bson.RawValue{mustRawValue(t, true)}},
+	}
+	match, ok, err := storedDocumentMatchesPredicates(stored, predicates)
+	if err != nil {
+		t.Fatalf("match stored predicates: %v", err)
+	}
+	if !ok || !match {
+		t.Fatalf("match=%v ok=%v want true/true", match, ok)
+	}
+	match, ok, err = storedDocumentMatchesPredicates(stored, []findPredicate{
+		{field: "age", op: findPredicateLT, values: []bson.RawValue{mustRawValue(t, int64(40))}},
+	})
+	if err != nil {
+		t.Fatalf("match stored miss predicate: %v", err)
+	}
+	if !ok || match {
+		t.Fatalf("miss match=%v ok=%v want false/true", match, ok)
+	}
+	_, ok, err = storedDocumentMatchesPredicates(stored, []findPredicate{
+		{field: "profile.rank", op: findPredicateEq, values: []bson.RawValue{mustRawValue(t, int32(1))}},
+	})
+	if err != nil {
+		t.Fatalf("match unsupported dotted predicate: %v", err)
+	}
+	if ok {
+		t.Fatal("dotted predicate should fall back to BSON evaluation")
+	}
+}
+
 func TestServerFindChoosesNarrowestIndexedPredicate(t *testing.T) {
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
@@ -1758,6 +1827,15 @@ func mustDocument(tb testing.TB, doc bson.D) wire.Document {
 		tb.Fatalf("marshal BSON document: %v", err)
 	}
 	return wire.Document(raw)
+}
+
+func mustRawValue(tb testing.TB, value any) bson.RawValue {
+	tb.Helper()
+	valueType, raw, err := bson.MarshalValue(value)
+	if err != nil {
+		tb.Fatalf("marshal BSON value: %v", err)
+	}
+	return bson.RawValue{Type: valueType, Value: raw}
 }
 
 func serveCommand(tb testing.TB, server *Server, requestID int32, doc bson.D) wire.Document {

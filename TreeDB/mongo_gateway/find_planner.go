@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/buger/jsonparser"
 	"github.com/snissn/gomap/TreeDB/collections"
 	"github.com/snissn/gomap/TreeDB/mongo_gateway/wire"
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -82,7 +83,15 @@ func parseFindPlan(command wire.Document, filter wire.Document) (findPlan, error
 
 func (s *Server) executeFind(col *collections.Collection, plan findPlan) (findResultSet, error) {
 	// MaxFindScanDocuments is a candidate-work cap, not a page-size cap. It is
-	// intentionally enforced before later skip/limit pagination.
+	// enforced while scanning candidates. Unsorted collection scans can stop
+	// early once skip/limit is satisfied because later records cannot affect the
+	// result set.
+	if docs, ok, err := s.findUnsortedScanDocuments(col, plan); ok || err != nil {
+		if err != nil {
+			return findResultSet{}, err
+		}
+		return findResultSet{docs: docs, projection: plan.projection}, nil
+	}
 	docs, err := s.findCandidateDocuments(col, plan.predicates)
 	if err != nil {
 		return findResultSet{}, err
@@ -207,6 +216,363 @@ func (s *Server) findCandidateDocuments(col *collections.Collection, predicates 
 		out = append(out, doc)
 	}
 	return out, nil
+}
+
+func (s *Server) findUnsortedScanDocuments(col *collections.Collection, plan findPlan) ([]wire.Document, bool, error) {
+	if plan.sort.field != "" || findPlanHasDirectCandidate(col.Meta(), plan.predicates) {
+		return nil, false, nil
+	}
+	maxDocuments := s.maxFindScanDocuments()
+	docs := make([]wire.Document, 0)
+	matched := 0
+	truncated, err := col.ScanDocumentsFunc(maxDocuments, func(record collections.DocumentRecord) (bool, error) {
+		match, ok, err := storedDocumentMatchesPredicates(record.Document, plan.predicates)
+		if err != nil {
+			return false, err
+		}
+		if ok && !match {
+			return true, nil
+		}
+		var doc wire.Document
+		if !ok {
+			doc, err = storedDocumentToBSON(record.Document)
+			if err != nil {
+				return false, err
+			}
+			match, err = documentMatchesPredicates(doc, plan.predicates)
+			if err != nil {
+				return false, err
+			}
+		}
+		if !match {
+			return true, nil
+		}
+		if matched < int(plan.skip) {
+			matched++
+			return true, nil
+		}
+		if ok {
+			doc, err = storedDocumentToBSON(record.Document)
+			if err != nil {
+				return false, err
+			}
+		}
+		docs = append(docs, doc)
+		matched++
+		if plan.limit > 0 && len(docs) >= int(plan.limit) {
+			return false, nil
+		}
+		return true, nil
+	})
+	if err != nil {
+		return nil, true, err
+	}
+	if truncated {
+		return nil, true, fmt.Errorf("Mongo gateway find requires a bounded scan and exceeded %d documents", maxDocuments)
+	}
+	return docs, true, nil
+}
+
+func storedDocumentMatchesPredicates(stored []byte, predicates []findPredicate) (bool, bool, error) {
+	for _, pred := range predicates {
+		if isRangePredicate(pred.op) {
+			match, ok, err := storedDocumentMatchesInt64RangePredicate(stored, pred)
+			if err != nil {
+				return false, false, err
+			}
+			if ok {
+				if !match {
+					return false, true, nil
+				}
+				continue
+			}
+		}
+		value, found, ok, err := storedDocumentPredicateValue(stored, pred.field)
+		if err != nil {
+			return false, false, err
+		}
+		if !ok {
+			return false, false, nil
+		}
+		if !found {
+			if missingValueMatchesPredicate(pred) {
+				continue
+			}
+			return false, true, nil
+		}
+		match, err := valueMatchesPredicate(value, pred)
+		if err != nil {
+			return false, false, err
+		}
+		if !match {
+			return false, true, nil
+		}
+	}
+	return true, true, nil
+}
+
+func isRangePredicate(op findPredicateOp) bool {
+	switch op {
+	case findPredicateGT, findPredicateGTE, findPredicateLT, findPredicateLTE:
+		return true
+	default:
+		return false
+	}
+}
+
+func storedDocumentMatchesInt64RangePredicate(stored []byte, pred findPredicate) (bool, bool, error) {
+	if field := pred.field; field == "" || strings.Contains(field, ".") {
+		return false, false, nil
+	}
+	if len(pred.values) != 1 {
+		return false, false, nil
+	}
+	threshold, ok := rawValueInt64(pred.values[0])
+	if !ok {
+		return false, false, nil
+	}
+	raw, valueType, _, err := jsonparser.Get(stored, pred.field)
+	if err == jsonparser.KeyPathNotFoundError {
+		return false, true, nil
+	}
+	if err != nil {
+		return false, false, err
+	}
+	value, ok, err := storedJSONInt64(raw, valueType)
+	if err != nil || !ok {
+		return false, ok, err
+	}
+	switch pred.op {
+	case findPredicateGT:
+		return value > threshold, true, nil
+	case findPredicateGTE:
+		return value >= threshold, true, nil
+	case findPredicateLT:
+		return value < threshold, true, nil
+	case findPredicateLTE:
+		return value <= threshold, true, nil
+	default:
+		return false, false, nil
+	}
+}
+
+func rawValueInt64(value bson.RawValue) (int64, bool) {
+	if v, ok := value.Int64OK(); ok {
+		return v, true
+	}
+	if v, ok := value.Int32OK(); ok {
+		return int64(v), true
+	}
+	return 0, false
+}
+
+func storedJSONInt64(raw []byte, valueType jsonparser.ValueType) (int64, bool, error) {
+	switch valueType {
+	case jsonparser.Number:
+		value, err := jsonparser.ParseInt(raw)
+		if err != nil {
+			return 0, false, nil
+		}
+		return value, true, nil
+	case jsonparser.Object:
+		return storedExtendedJSONInt64(raw)
+	default:
+		return 0, false, nil
+	}
+}
+
+func storedExtendedJSONInt64(raw []byte) (int64, bool, error) {
+	var (
+		key       string
+		value     []byte
+		valueType jsonparser.ValueType
+		count     int
+	)
+	err := jsonparser.ObjectEach(raw, func(k, v []byte, t jsonparser.ValueType, _ int) error {
+		count++
+		key = string(k)
+		value = append(value[:0], v...)
+		valueType = t
+		return nil
+	})
+	if err != nil {
+		return 0, false, err
+	}
+	if count != 1 || valueType != jsonparser.String {
+		return 0, false, nil
+	}
+	text, err := jsonparser.ParseString(value)
+	if err != nil {
+		return 0, false, err
+	}
+	switch key {
+	case "$numberInt":
+		parsed, err := strconv.ParseInt(text, 10, 32)
+		if err != nil {
+			return 0, false, err
+		}
+		return parsed, true, nil
+	case "$numberLong":
+		parsed, err := strconv.ParseInt(text, 10, 64)
+		if err != nil {
+			return 0, false, err
+		}
+		return parsed, true, nil
+	default:
+		return 0, false, nil
+	}
+}
+
+func storedDocumentPredicateValue(stored []byte, field string) (bson.RawValue, bool, bool, error) {
+	if field == "" || strings.Contains(field, ".") {
+		return bson.RawValue{}, false, false, nil
+	}
+	raw, valueType, _, err := jsonparser.Get(stored, field)
+	if err == jsonparser.KeyPathNotFoundError {
+		return bson.RawValue{}, false, true, nil
+	}
+	if err != nil {
+		return bson.RawValue{}, false, false, err
+	}
+	value, ok, err := bsonRawValueFromStoredJSON(raw, valueType)
+	return value, true, ok, err
+}
+
+func bsonRawValueFromStoredJSON(raw []byte, valueType jsonparser.ValueType) (bson.RawValue, bool, error) {
+	switch valueType {
+	case jsonparser.String:
+		value, err := jsonparser.ParseString(raw)
+		if err != nil {
+			return bson.RawValue{}, false, err
+		}
+		rawValue, err := bsonRawValueFromGoValue(value)
+		return rawValue, true, err
+	case jsonparser.Number:
+		rawValue, err := bsonRawValueFromJSONNumber(raw)
+		return rawValue, true, err
+	case jsonparser.Boolean:
+		switch string(raw) {
+		case "true":
+			rawValue, err := bsonRawValueFromGoValue(true)
+			return rawValue, true, err
+		case "false":
+			rawValue, err := bsonRawValueFromGoValue(false)
+			return rawValue, true, err
+		default:
+			return bson.RawValue{}, false, jsonparser.MalformedValueError
+		}
+	case jsonparser.Null:
+		return bson.RawValue{Type: bson.TypeNull}, true, nil
+	case jsonparser.Object:
+		return bsonRawValueFromStoredExtendedJSON(raw)
+	default:
+		return bson.RawValue{}, false, nil
+	}
+}
+
+func bsonRawValueFromJSONNumber(raw []byte) (bson.RawValue, error) {
+	if !bytes.ContainsAny(raw, ".eE") {
+		if value, err := jsonparser.ParseInt(raw); err == nil {
+			return bsonRawValueFromGoValue(value)
+		}
+	}
+	value, err := jsonparser.ParseFloat(raw)
+	if err != nil {
+		return bson.RawValue{}, err
+	}
+	return bsonRawValueFromGoValue(value)
+}
+
+func bsonRawValueFromStoredExtendedJSON(raw []byte) (bson.RawValue, bool, error) {
+	var (
+		key       string
+		value     []byte
+		valueType jsonparser.ValueType
+		count     int
+	)
+	err := jsonparser.ObjectEach(raw, func(k, v []byte, t jsonparser.ValueType, _ int) error {
+		count++
+		key = string(k)
+		value = append(value[:0], v...)
+		valueType = t
+		return nil
+	})
+	if err != nil {
+		return bson.RawValue{}, false, err
+	}
+	if count != 1 || valueType != jsonparser.String {
+		return bson.RawValue{}, false, nil
+	}
+	text, err := jsonparser.ParseString(value)
+	if err != nil {
+		return bson.RawValue{}, false, err
+	}
+	switch key {
+	case "$numberInt":
+		parsed, err := strconv.ParseInt(text, 10, 32)
+		if err != nil {
+			return bson.RawValue{}, false, err
+		}
+		rawValue, err := bsonRawValueFromGoValue(int32(parsed))
+		return rawValue, true, err
+	case "$numberLong":
+		parsed, err := strconv.ParseInt(text, 10, 64)
+		if err != nil {
+			return bson.RawValue{}, false, err
+		}
+		rawValue, err := bsonRawValueFromGoValue(parsed)
+		return rawValue, true, err
+	case "$numberDouble":
+		parsed, err := parseExtendedJSONDouble(text)
+		if err != nil {
+			return bson.RawValue{}, false, err
+		}
+		rawValue, err := bsonRawValueFromGoValue(parsed)
+		return rawValue, true, err
+	default:
+		return bson.RawValue{}, false, nil
+	}
+}
+
+func parseExtendedJSONDouble(text string) (float64, error) {
+	switch text {
+	case "NaN":
+		return math.NaN(), nil
+	case "Infinity":
+		return math.Inf(1), nil
+	case "-Infinity":
+		return math.Inf(-1), nil
+	default:
+		return strconv.ParseFloat(text, 64)
+	}
+}
+
+func bsonRawValueFromGoValue(value any) (bson.RawValue, error) {
+	valueType, raw, err := bson.MarshalValue(value)
+	if err != nil {
+		return bson.RawValue{}, err
+	}
+	return bson.RawValue{Type: valueType, Value: raw}, nil
+}
+
+func findPlanHasDirectCandidate(meta collections.CollectionMeta, predicates []findPredicate) bool {
+	if _, ok := primaryCandidatePredicate(predicates); ok {
+		return true
+	}
+	for _, pred := range predicates {
+		if pred.op != findPredicateEq && pred.op != findPredicateIn {
+			continue
+		}
+		if predicateContainsNull(pred) {
+			continue
+		}
+		for _, idx := range meta.Indexes {
+			if idx.Field == pred.field {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (s *Server) limitCandidateDocuments(docs []wire.Document) ([]wire.Document, error) {

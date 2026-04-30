@@ -11,11 +11,18 @@ DOCS_LIST="${DOCS_LIST:-1000 10000}"
 INDEXES_LIST="${INDEXES_LIST:-0 2}"
 BATCH_SIZE="${BATCH_SIZE:-500}"
 READS="${READS:-}"
+READS_DIVISOR="${READS_DIVISOR:-1}"
 RANGE_READS="${RANGE_READS:-}"
 UPDATES="${UPDATES:-}"
 DELETES="${DELETES:-0}"
 RANGE_READS_DIVISOR="${RANGE_READS_DIVISOR:-10}"
 UPDATES_DIVISOR="${UPDATES_DIVISOR:-10}"
+CONCURRENT_READERS="${CONCURRENT_READERS:-0}"
+CONCURRENT_READS="${CONCURRENT_READS:-}"
+CONCURRENT_READS_DIVISOR="${CONCURRENT_READS_DIVISOR:-10}"
+CONCURRENT_WRITERS="${CONCURRENT_WRITERS:-0}"
+CONCURRENT_WRITES="${CONCURRENT_WRITES:-}"
+CONCURRENT_WRITES_DIVISOR="${CONCURRENT_WRITES_DIVISOR:-10}"
 MONGO_MODE="${MONGO_MODE:-docker}"
 MONGO_URI="${MONGO_URI:-mongodb://127.0.0.1:27017}"
 MONGO_IMAGE="${MONGO_IMAGE:-mongo:7}"
@@ -35,6 +42,18 @@ Options:
   --out DIR             Output directory. Default: mktemp under $TMPDIR or /tmp.
   --docs LIST           Space-separated document counts. Default: "1000 10000".
   --indexes LIST        Space-separated secondary-index counts. Default: "0 2".
+  --reads COUNT         Point reads per target/cell. Default: documents.
+  --range-reads COUNT   Range reads per target/cell. Default: documents / 10.
+  --updates COUNT       Updates per target/cell. Default: documents / 10.
+  --deletes COUNT       Deletes per target/cell. Default: 0.
+  --concurrent-readers N
+                        Reader goroutines for the concurrent _id read phase.
+  --concurrent-reads COUNT
+                        Concurrent point reads per target/cell.
+  --concurrent-writers N
+                        Writer goroutines for the concurrent update phase.
+  --concurrent-writes COUNT
+                        Concurrent updates per target/cell.
   --mongo-mode MODE     docker or external. Default: docker.
   --mongo-uri URI       MongoDB URI for --mongo-mode external.
   --mongo-image IMAGE   Docker image for --mongo-mode docker. Default: mongo:7.
@@ -43,9 +62,12 @@ Options:
   --help                Show this help.
 
 Environment overrides:
-  OUT_DIR, DOCS_LIST, INDEXES_LIST, BATCH_SIZE, READS, RANGE_READS, UPDATES,
-  DELETES, RANGE_READS_DIVISOR, UPDATES_DIVISOR, MONGO_MODE, MONGO_URI,
-  MONGO_IMAGE, DATABASE_PREFIX, COLLECTION, TIMEOUT, TITLE.
+  OUT_DIR, DOCS_LIST, INDEXES_LIST, BATCH_SIZE, READS, READS_DIVISOR,
+  RANGE_READS, UPDATES, DELETES, RANGE_READS_DIVISOR, UPDATES_DIVISOR,
+  CONCURRENT_READERS, CONCURRENT_READS, CONCURRENT_READS_DIVISOR,
+  CONCURRENT_WRITERS, CONCURRENT_WRITES, CONCURRENT_WRITES_DIVISOR,
+  MONGO_MODE, MONGO_URI, MONGO_IMAGE, DATABASE_PREFIX, COLLECTION, TIMEOUT,
+  TITLE.
 EOF
 }
 
@@ -61,6 +83,38 @@ while [[ $# -gt 0 ]]; do
       ;;
     --indexes)
       INDEXES_LIST="$2"
+      shift 2
+      ;;
+    --reads)
+      READS="$2"
+      shift 2
+      ;;
+    --range-reads)
+      RANGE_READS="$2"
+      shift 2
+      ;;
+    --updates)
+      UPDATES="$2"
+      shift 2
+      ;;
+    --deletes)
+      DELETES="$2"
+      shift 2
+      ;;
+    --concurrent-readers)
+      CONCURRENT_READERS="$2"
+      shift 2
+      ;;
+    --concurrent-reads)
+      CONCURRENT_READS="$2"
+      shift 2
+      ;;
+    --concurrent-writers)
+      CONCURRENT_WRITERS="$2"
+      shift 2
+      ;;
+    --concurrent-writes)
+      CONCURRENT_WRITES="$2"
       shift 2
       ;;
     --mongo-mode)
@@ -127,11 +181,19 @@ is_positive_int() {
   [[ "$1" =~ ^[0-9]+$ ]] && [[ "$1" -gt 0 ]]
 }
 
+is_nonnegative_int() {
+  [[ "$1" =~ ^[0-9]+$ ]]
+}
+
 derived_count() {
   local docs=$1
   local explicit=$2
   local divisor=$3
   if [[ -n "$explicit" ]]; then
+    if ! is_nonnegative_int "$explicit"; then
+      echo "invalid explicit operation count: $explicit" >&2
+      exit 2
+    fi
     echo "$explicit"
     return
   fi
@@ -250,7 +312,11 @@ run_target() {
   local range_reads=$7
   local updates=$8
   local deletes=$9
-  shift 9
+  local concurrent_readers=${10}
+  local concurrent_reads=${11}
+  local concurrent_writers=${12}
+  local concurrent_writes=${13}
+  shift 13
 
   "$BENCH_BIN" \
     -target "$target" \
@@ -262,6 +328,10 @@ run_target() {
     -range-reads "$range_reads" \
     -updates "$updates" \
     -deletes "$deletes" \
+    -concurrent-readers "$concurrent_readers" \
+    -concurrent-reads "$concurrent_reads" \
+    -concurrent-writers "$concurrent_writers" \
+    -concurrent-writes "$concurrent_writes" \
     -secondary-indexes "$indexes" \
     -timeout "$TIMEOUT" \
     -format json \
@@ -276,12 +346,35 @@ if [[ "$MONGO_MODE" == "docker" ]] && ! command -v docker >/dev/null 2>&1; then
   echo "MONGO_MODE=docker requires docker; use --mongo-mode external --mongo-uri URI to use an existing server" >&2
   exit 2
 fi
+for value_name in DELETES CONCURRENT_READERS CONCURRENT_WRITERS; do
+  value=${!value_name}
+  if ! is_nonnegative_int "$value"; then
+    echo "invalid $value_name=$value (want non-negative integer)" >&2
+    exit 2
+  fi
+done
+if [[ "$CONCURRENT_READERS" -eq 0 && -n "$CONCURRENT_READS" && "$CONCURRENT_READS" != "0" ]]; then
+  echo "CONCURRENT_READERS must be > 0 when CONCURRENT_READS is set" >&2
+  exit 2
+fi
+if [[ "$CONCURRENT_WRITERS" -eq 0 && -n "$CONCURRENT_WRITES" && "$CONCURRENT_WRITES" != "0" ]]; then
+  echo "CONCURRENT_WRITERS must be > 0 when CONCURRENT_WRITES is set" >&2
+  exit 2
+fi
 
 {
   echo "running Mongo gateway comparison into: $OUT_DIR"
   echo "docs list: $DOCS_LIST"
   echo "secondary-index list: $INDEXES_LIST"
   echo "batch size: $BATCH_SIZE"
+  echo "reads: ${READS:-documents / $READS_DIVISOR}"
+  echo "range reads: ${RANGE_READS:-documents / $RANGE_READS_DIVISOR}"
+  echo "updates: ${UPDATES:-documents / $UPDATES_DIVISOR}"
+  echo "deletes: $DELETES"
+  echo "concurrent readers: $CONCURRENT_READERS"
+  echo "concurrent reads: ${CONCURRENT_READS:-documents / $CONCURRENT_READS_DIVISOR when readers > 0}"
+  echo "concurrent writers: $CONCURRENT_WRITERS"
+  echo "concurrent writes: ${CONCURRENT_WRITES:-documents / $CONCURRENT_WRITES_DIVISOR when writers > 0}"
   echo "mongo mode: $MONGO_MODE"
   if [[ "$MONGO_MODE" == "docker" ]]; then
     echo "mongo image: $MONGO_IMAGE"
@@ -301,9 +394,25 @@ for docs in $DOCS_LIST; do
     echo "invalid document count: $docs" >&2
     exit 2
   fi
-  reads="${READS:-$docs}"
+  reads=$(derived_count "$docs" "$READS" "$READS_DIVISOR")
   range_reads=$(derived_count "$docs" "$RANGE_READS" "$RANGE_READS_DIVISOR")
   updates=$(derived_count "$docs" "$UPDATES" "$UPDATES_DIVISOR")
+  concurrent_reads=0
+  if [[ "$CONCURRENT_READERS" -gt 0 ]]; then
+    concurrent_reads=$(derived_count "$docs" "$CONCURRENT_READS" "$CONCURRENT_READS_DIVISOR")
+    if [[ "$concurrent_reads" -eq 0 ]]; then
+      echo "concurrent reads must be > 0 when CONCURRENT_READERS is > 0" >&2
+      exit 2
+    fi
+  fi
+  concurrent_writes=0
+  if [[ "$CONCURRENT_WRITERS" -gt 0 ]]; then
+    concurrent_writes=$(derived_count "$docs" "$CONCURRENT_WRITES" "$CONCURRENT_WRITES_DIVISOR")
+    if [[ "$concurrent_writes" -eq 0 ]]; then
+      echo "concurrent writes must be > 0 when CONCURRENT_WRITERS is > 0" >&2
+      exit 2
+    fi
+  fi
   for indexes in $INDEXES_LIST; do
     if [[ ! "$indexes" =~ ^[0-9]+$ ]]; then
       echo "invalid index count: $indexes" >&2
@@ -321,6 +430,7 @@ for docs in $DOCS_LIST; do
     echo
     echo "==> $cell TreeDB"
     run_target treedb "$docs" "$indexes" "$tree_raw" "$database" "$reads" "$range_reads" "$updates" "$DELETES" \
+      "$CONCURRENT_READERS" "$concurrent_reads" "$CONCURRENT_WRITERS" "$concurrent_writes" \
       -treedb-dir "$tree_data" \
       -keep-treedb-dir
     tree_physical=$(du_bytes "$tree_data")
@@ -339,6 +449,7 @@ for docs in $DOCS_LIST; do
       fi
     fi
     run_target mongo "$docs" "$indexes" "$mongo_raw" "$database" "$reads" "$range_reads" "$updates" "$DELETES" \
+      "$CONCURRENT_READERS" "$concurrent_reads" "$CONCURRENT_WRITERS" "$concurrent_writes" \
       -mongo-uri "$mongo_uri"
     if [[ "$MONGO_MODE" == "docker" ]]; then
       stop_mongo_container "$mongo_container"
@@ -369,10 +480,14 @@ cat >"$README" <<EOF
 - docs list: \`$DOCS_LIST\`
 - secondary-index list: \`$INDEXES_LIST\`
 - batch size: \`$BATCH_SIZE\`
-- reads: \`per-cell ${READS:-documents}\`
+- reads: \`${READS:-documents / $READS_DIVISOR}\`
 - range reads: \`${RANGE_READS:-documents / $RANGE_READS_DIVISOR}\`
 - updates: \`${UPDATES:-documents / $UPDATES_DIVISOR}\`
 - deletes: \`$DELETES\`
+- concurrent readers: \`$CONCURRENT_READERS\`
+- concurrent reads: \`${CONCURRENT_READS:-documents / $CONCURRENT_READS_DIVISOR when readers > 0}\`
+- concurrent writers: \`$CONCURRENT_WRITERS\`
+- concurrent writes: \`${CONCURRENT_WRITES:-documents / $CONCURRENT_WRITES_DIVISOR when writers > 0}\`
 - MongoDB mode: \`$MONGO_MODE\`
 - MongoDB image: \`$MONGO_IMAGE\`
 - benchmark timeout: \`$TIMEOUT\`
