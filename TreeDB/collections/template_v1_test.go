@@ -2,6 +2,7 @@ package collections
 
 import (
 	"bytes"
+	"encoding/binary"
 	"strings"
 	"testing"
 
@@ -612,6 +613,19 @@ func TestTemplateV1RejectsOversizedArrayCount(t *testing.T) {
 	}, &pos, nil)
 	if err == nil || !strings.Contains(err.Error(), "array length") {
 		t.Fatalf("decode oversized array err=%v, want array length error", err)
+	}
+}
+
+func TestTemplateV1RejectsExcessiveArrayCount(t *testing.T) {
+	count := templateV1MaxArrayElements + 1
+	raw := []byte{templateV1KindArray}
+	raw = binary.AppendUvarint(raw, count)
+	raw = append(raw, make([]byte, int(count))...)
+
+	pos := 0
+	_, err := decodeTemplateV1Value(raw, &pos, nil)
+	if err == nil || !strings.Contains(err.Error(), "exceeds maximum") {
+		t.Fatalf("decode excessive array err=%v, want maximum error", err)
 	}
 }
 
