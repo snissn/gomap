@@ -140,6 +140,48 @@ func TestRunFixtureKeepsTemplateV1ThreeIndexDatabase(t *testing.T) {
 	}
 }
 
+func TestRunFixtureReportsEffectiveBufferedIndexedWrites(t *testing.T) {
+	noIndexDir := filepath.Join(t.TempDir(), "no-index")
+	noIndexCfg, err := parseConfig([]string{
+		"-dir", noIndexDir,
+		"-docs", "8",
+		"-batch-size", "4",
+		"-indexes", "0",
+		"-buffered-indexed-writes",
+		"-progress=false",
+	}, io.Discard)
+	if err != nil {
+		t.Fatalf("parse no-index config: %v", err)
+	}
+	noIndexSummary, err := runFixture(noIndexCfg)
+	if err != nil {
+		t.Fatalf("run no-index fixture: %v", err)
+	}
+	if noIndexSummary.BufferedIndexedWrites {
+		t.Fatal("no-index summary reported buffered indexed writes enabled")
+	}
+
+	indexedDir := filepath.Join(t.TempDir(), "indexed")
+	indexedCfg, err := parseConfig([]string{
+		"-dir", indexedDir,
+		"-docs", "8",
+		"-batch-size", "4",
+		"-indexes", "1",
+		"-buffered-indexed-writes",
+		"-progress=false",
+	}, io.Discard)
+	if err != nil {
+		t.Fatalf("parse indexed config: %v", err)
+	}
+	indexedSummary, err := runFixture(indexedCfg)
+	if err != nil {
+		t.Fatalf("run indexed fixture: %v", err)
+	}
+	if !indexedSummary.BufferedIndexedWrites {
+		t.Fatal("indexed summary reported buffered indexed writes disabled")
+	}
+}
+
 func TestLeafGenerationSummaryOmittedWhenDisabled(t *testing.T) {
 	leafGeneration, err := maybePackLeafGenerations(config{}, nil)
 	if err != nil {

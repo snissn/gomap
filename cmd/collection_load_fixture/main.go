@@ -45,6 +45,7 @@ type config struct {
 	Collection                 string
 	DocumentFormat             collections.DocumentFormat
 	IndexCount                 int
+	BufferedIndexedWrites      bool
 	Profile                    treedb.Profile
 	DataOuterLeavesInValueLog  bool
 	IndexOuterLeavesInValueLog bool
@@ -230,6 +231,7 @@ type loadSummary struct {
 	BatchSize                     int                    `json:"batch_size"`
 	Batches                       int                    `json:"batches"`
 	IndexCount                    int                    `json:"index_count"`
+	BufferedIndexedWrites         bool                   `json:"buffered_indexed_writes,omitempty"`
 	DataOuterLeavesInValueLog     bool                   `json:"data_outer_leaves_in_value_log"`
 	IndexOuterLeavesInValueLog    bool                   `json:"index_outer_leaves_in_value_log"`
 	ChunkSize                     int64                  `json:"chunk_size,omitempty"`
@@ -244,6 +246,7 @@ type loadSummary struct {
 	WallTiming                    timingSummary          `json:"wall_timing"`
 	GenerationTiming              timingSummary          `json:"generation_timing"`
 	InsertTiming                  timingSummary          `json:"insert_timing"`
+	FlushTiming                   timingSummary          `json:"flush_timing,omitempty"`
 	CheckpointTiming              timingSummary          `json:"checkpoint_timing,omitempty"`
 	InsertPhases                  insertPhaseSummary     `json:"insert_phases"`
 	IndexStorageBeforeMaintenance indexStorageSummary    `json:"index_storage_before_maintenance"`
@@ -321,6 +324,7 @@ func parseConfig(args []string, output io.Writer) (config, error) {
 	fs.StringVar(&cfg.Collection, "collection", cfg.Collection, "collection name")
 	fs.StringVar(&documentFormat, "format", string(cfg.DocumentFormat), "document format: json or template-v1")
 	fs.IntVar(&cfg.IndexCount, "indexes", cfg.IndexCount, "secondary index count for the benchmark shape: 0, 1, 2, or 3")
+	fs.BoolVar(&cfg.BufferedIndexedWrites, "buffered-indexed-writes", false, "stage indexed InsertBatch writes in collection-local memtables until flush")
 	fs.StringVar(&profile, "profile", string(cfg.Profile), "TreeDB profile: fast, wal_on_fast, durable, or bench")
 	fs.BoolVar(&cfg.DataOuterLeavesInValueLog, "data-outer-leaves-in-vlog", cfg.DataOuterLeavesInValueLog, "store collection primary/index-state outer leaves through the value log")
 	fs.BoolVar(&cfg.IndexOuterLeavesInValueLog, "index-outer-leaves-in-vlog", cfg.IndexOuterLeavesInValueLog, "store secondary-index outer leaves through the value log")
@@ -475,6 +479,7 @@ func runFixture(cfg config) (loadSummary, error) {
 	secondaryRuns := make(map[string]*secondaryRunSummary)
 	var generationElapsed time.Duration
 	var insertElapsed time.Duration
+	var flushElapsed time.Duration
 	var checkpointElapsed time.Duration
 	wallStart := time.Now()
 	batches := 0
@@ -504,6 +509,13 @@ func runFixture(cfg config) (loadSummary, error) {
 		inserted += batchSize
 
 		if cfg.CheckpointEachBatch {
+			if cfg.BufferedIndexedWrites && cfg.IndexCount > 0 {
+				flushStart := time.Now()
+				if err := collection.Flush(); err != nil {
+					return loadSummary{}, fmt.Errorf("flush after batch %d: %w", batches, err)
+				}
+				flushElapsed += time.Since(flushStart)
+			}
 			checkpointStart := time.Now()
 			if err := backend.Checkpoint(); err != nil {
 				return loadSummary{}, fmt.Errorf("checkpoint after batch %d: %w", batches, err)
@@ -516,9 +528,11 @@ func runFixture(cfg config) (loadSummary, error) {
 		}
 	}
 
+	flushStart := time.Now()
 	if err := collection.Flush(); err != nil {
 		return loadSummary{}, fmt.Errorf("flush collection: %w", err)
 	}
+	flushElapsed += time.Since(flushStart)
 	if cfg.Checkpoint {
 		checkpointStart := time.Now()
 		if err := backend.Checkpoint(); err != nil {
@@ -593,6 +607,7 @@ func runFixture(cfg config) (loadSummary, error) {
 		BatchSize:                     cfg.BatchSize,
 		Batches:                       batches,
 		IndexCount:                    cfg.IndexCount,
+		BufferedIndexedWrites:         cfg.BufferedIndexedWrites && cfg.IndexCount > 0,
 		DataOuterLeavesInValueLog:     cfg.DataOuterLeavesInValueLog,
 		IndexOuterLeavesInValueLog:    cfg.IndexOuterLeavesInValueLog,
 		ChunkSize:                     cfg.ChunkSize,
@@ -607,6 +622,7 @@ func runFixture(cfg config) (loadSummary, error) {
 		WallTiming:                    timing(wallElapsed, cfg.Docs),
 		GenerationTiming:              timing(generationElapsed, cfg.Docs),
 		InsertTiming:                  timing(insertElapsed, cfg.Docs),
+		FlushTiming:                   timing(flushElapsed, cfg.Docs),
 		CheckpointTiming:              timing(checkpointElapsed, cfg.Docs),
 		InsertPhases:                  summarizeInsertPhases(insertStats, secondaryRuns, cfg.Docs, batches),
 		IndexStorageBeforeMaintenance: beforeIndexStorage,
@@ -712,6 +728,7 @@ func createFixtureCollection(backend *backenddb.DB, cfg config) (*collections.Co
 			DocumentFormat:          cfg.DocumentFormat,
 			DataRootStoragePolicy:   rootStoragePolicy(cfg.DataOuterLeavesInValueLog),
 			IndexStateStoragePolicy: rootStoragePolicy(cfg.DataOuterLeavesInValueLog),
+			BufferedIndexedWrites:   cfg.BufferedIndexedWrites && cfg.IndexCount > 0,
 		},
 		Indexes: indexes,
 	})
@@ -1526,6 +1543,9 @@ func printHumanSummary(w io.Writer, summary loadSummary) {
 	fmt.Fprintf(w, "collection: %s\n", summary.Collection)
 	fmt.Fprintf(w, "shape: format=%s indexes=%d data_outer_leaves_in_vlog=%t index_outer_leaves_in_vlog=%t profile=%s\n",
 		summary.DocumentFormat, summary.IndexCount, summary.DataOuterLeavesInValueLog, summary.IndexOuterLeavesInValueLog, summary.Profile)
+	if summary.BufferedIndexedWrites {
+		fmt.Fprintln(w, "indexed write buffering: enabled")
+	}
 	fmt.Fprintf(w, "index policy: keep_recent=%d prefer_append_alloc=%t background_prune=%t\n",
 		summary.KeepRecent, summary.PreferAppendAlloc, !summary.DisableBackgroundPrune)
 	if summary.LeafSegmentTargetBytes > 0 {
@@ -1535,6 +1555,9 @@ func printHumanSummary(w io.Writer, summary loadSummary) {
 	printTiming(w, "wall", summary.WallTiming)
 	printTiming(w, "document generation", summary.GenerationTiming)
 	printTiming(w, "insert", summary.InsertTiming)
+	if summary.FlushTiming.Seconds > 0 {
+		printTiming(w, "flush", summary.FlushTiming)
+	}
 	if summary.CheckpointTiming.Seconds > 0 {
 		printTiming(w, "checkpoint", summary.CheckpointTiming)
 	}

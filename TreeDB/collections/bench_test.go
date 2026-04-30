@@ -566,6 +566,7 @@ func openBenchmarkCollection(b *testing.B, name string, indexes ...collections.I
 	manager := collections.NewCollectionManager(backend)
 	dataOuter, indexOuter := benchmarkCollectionStoragePolicy(b)
 	documentFormat := benchmarkCollectionDocumentFormat(b)
+	bufferedIndexedWrites := benchmarkBoolEnv(b, "TREEDB_COLLECTION_BUFFERED_INDEXED_WRITES", false) && len(indexes) > 0
 	for i := range indexes {
 		indexes[i].StoragePolicy = benchmarkRootStoragePolicy(indexOuter)
 	}
@@ -575,6 +576,7 @@ func openBenchmarkCollection(b *testing.B, name string, indexes ...collections.I
 			DocumentFormat:          documentFormat,
 			DataRootStoragePolicy:   benchmarkRootStoragePolicy(dataOuter),
 			IndexStateStoragePolicy: benchmarkRootStoragePolicy(dataOuter),
+			BufferedIndexedWrites:   bufferedIndexedWrites,
 		},
 		Indexes: indexes,
 	}); err != nil {

@@ -45,6 +45,10 @@ Useful variants:
 # Disable secondary-index value-log outer leaves.
 ./bin/collection-load-fixture -index-outer-leaves-in-vlog=false -dir /tmp/treedb_two_index_template_v1_fast_index -reset
 
+# Stage indexed InsertBatch writes in collection-local memtables and publish
+# them at Flush/Close. The summary reports insert and flush timing separately.
+./bin/collection-load-fixture -buffered-indexed-writes -dir /tmp/treedb_two_index_buffered -reset
+
 # Generate machine-readable output and optional profiles.
 ./bin/collection-load-fixture \
   -json \
