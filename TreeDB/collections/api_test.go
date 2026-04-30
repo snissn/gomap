@@ -2450,6 +2450,117 @@ func TestCollectionUpdateConcurrentCounterNoLostUpdates(t *testing.T) {
 	}
 }
 
+func TestCollectionUpdateConcurrentIndexedNoRetryExhaustion(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Indexes: []IndexDefinition{
+			{Name: "email", Field: "email", Unique: true},
+			{Name: "city", Field: "city"},
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+
+	const documents = 32
+	ids := make([][]byte, documents)
+	docs := make([][]byte, documents)
+	for i := 0; i < documents; i++ {
+		ids[i] = []byte(fmt.Sprintf("u%02d", i))
+		docs[i] = []byte(fmt.Sprintf(`{"email":"user%02d@example.test","city":"hnl","count":0}`, i))
+	}
+	if _, err := col.InsertBatch(ids, docs); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+
+	const (
+		workers = 8
+		updates = 100
+	)
+	workerCols := make([]*Collection, workers)
+	for i := range workerCols {
+		workerCol, err := mgr.OpenCollection("users")
+		if err != nil {
+			t.Fatalf("open worker collection: %v", err)
+		}
+		workerCols[i] = workerCol
+	}
+	start := make(chan struct{})
+	errs := make(chan error, workers)
+	var wg sync.WaitGroup
+	for worker := 0; worker < workers; worker++ {
+		wg.Add(1)
+		go func(worker int, workerCol *Collection) {
+			defer wg.Done()
+			<-start
+			for update := 0; update < updates; update++ {
+				id := ids[(worker*updates+update*37)%documents]
+				matched, modified, err := workerCol.Update(id, func(current []byte) ([]byte, bool, error) {
+					var doc struct {
+						Email string `json:"email"`
+						City  string `json:"city"`
+						Count int    `json:"count"`
+					}
+					if err := json.Unmarshal(current, &doc); err != nil {
+						return nil, false, err
+					}
+					doc.Count++
+					next, err := json.Marshal(doc)
+					if err != nil {
+						return nil, false, err
+					}
+					return next, true, nil
+				})
+				if err != nil {
+					errs <- err
+					return
+				}
+				if !matched || !modified {
+					errs <- fmt.Errorf("update matched=%v modified=%v", matched, modified)
+					return
+				}
+			}
+			errs <- nil
+		}(worker, workerCols[worker])
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("update: %v", err)
+		}
+	}
+
+	total := 0
+	for _, id := range ids {
+		got, err := col.Get(id)
+		if err != nil {
+			t.Fatalf("get %q: %v", id, err)
+		}
+		var doc struct {
+			Count int `json:"count"`
+		}
+		if err := json.Unmarshal(got, &doc); err != nil {
+			t.Fatalf("unmarshal %q: %v", id, err)
+		}
+		total += doc.Count
+	}
+	if want := workers * updates; total != want {
+		t.Fatalf("total count=%d want %d", total, want)
+	}
+}
+
 func TestCollectionUpdateAllowsUnrelatedUserRootCommit(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {

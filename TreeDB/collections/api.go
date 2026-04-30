@@ -215,6 +215,10 @@ type noIndexBatchEntry struct {
 }
 
 type collectionWriteDomain struct {
+	// mutationMu serializes root descriptor publishes for handles opened
+	// through the same manager so optimistic retries do not starve under
+	// sustained collection write contention.
+	mutationMu     sync.Mutex
 	mu             sync.RWMutex
 	loaded         bool
 	meta           CollectionMeta
@@ -309,9 +313,19 @@ func flushCollectionWriteDomain(db *backenddb.DB, domain *collectionWriteDomain)
 		return nil
 	}
 	collection := &Collection{db: db, writeDomain: domain}
+	domain.mutationMu.Lock()
+	defer domain.mutationMu.Unlock()
 	domain.mu.Lock()
 	defer domain.mu.Unlock()
 	return collection.flushBufferedNoIndexLocked(domain)
+}
+
+func (c *Collection) lockMutation() func() {
+	if c == nil || c.writeDomain == nil {
+		return func() {}
+	}
+	c.writeDomain.mutationMu.Lock()
+	return c.writeDomain.mutationMu.Unlock
 }
 
 func (m *CollectionManager) CreateCollection(meta *CollectionMeta) (*CollectionMeta, error) {
@@ -477,6 +491,8 @@ func (c *Collection) CreateIndex(def IndexDefinition) (*CollectionMeta, error) {
 	if c.db == nil {
 		return nil, errors.New("collections: db is nil")
 	}
+	unlockMutation := c.lockMutation()
+	defer unlockMutation()
 	if err := c.flushBufferedNoIndex(); err != nil {
 		return nil, err
 	}
@@ -596,6 +612,8 @@ func (c *Collection) dropIndexes(names map[string]struct{}, all bool) (*Collecti
 	if c.db == nil {
 		return nil, errors.New("collections: db is nil")
 	}
+	unlockMutation := c.lockMutation()
+	defer unlockMutation()
 	if err := c.flushBufferedNoIndex(); err != nil {
 		return nil, err
 	}
@@ -702,6 +720,8 @@ func (c *Collection) Flush() error {
 	if c.db == nil {
 		return errors.New("collections: db is nil")
 	}
+	unlockMutation := c.lockMutation()
+	defer unlockMutation()
 	return c.flushBufferedNoIndex()
 }
 
@@ -1052,6 +1072,8 @@ func (c *Collection) InsertBatch(ids, documents [][]byte) ([][]byte, error) {
 	if c.db == nil {
 		return nil, errors.New("collections: db is nil")
 	}
+	unlockMutation := c.lockMutation()
+	defer unlockMutation()
 	if len(documents) == 0 {
 		c.setLastInsertStats(CollectionInsertStats{
 			Documents: 0,
@@ -1278,6 +1300,8 @@ func (c *Collection) DeleteDocument(documentID []byte) (bool, error) {
 	if len(documentID) == 0 {
 		return false, errors.New("collections: document id cannot be empty")
 	}
+	unlockMutation := c.lockMutation()
+	defer unlockMutation()
 	if err := c.flushBufferedNoIndex(); err != nil {
 		return false, err
 	}
@@ -1448,6 +1472,8 @@ func (c *Collection) Update(documentID []byte, update func(current []byte) (repl
 	if update == nil {
 		return false, false, errors.New("collections: update function is nil")
 	}
+	unlockMutation := c.lockMutation()
+	defer unlockMutation()
 	if err := c.flushBufferedNoIndex(); err != nil {
 		return false, false, err
 	}

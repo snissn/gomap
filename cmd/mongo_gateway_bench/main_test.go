@@ -2,9 +2,12 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -167,11 +170,21 @@ func TestParseConfigValidation(t *testing.T) {
 	if _, err := parseConfig([]string{"-target", "bad"}); err == nil {
 		t.Fatal("bad target accepted")
 	}
-	cfg, err := parseConfig([]string{"-target", "mongo", "-documents", "10", "-secondary-indexes", "1", "-format", "json"})
+	cfg, err := parseConfig([]string{
+		"-target", "mongo",
+		"-documents", "10",
+		"-secondary-indexes", "1",
+		"-format", "json",
+		"-concurrent-readers", "4",
+		"-concurrent-reads", "20",
+		"-concurrent-writers", "2",
+		"-concurrent-writes", "10",
+	})
 	if err != nil {
 		t.Fatalf("parse valid config: %v", err)
 	}
-	if cfg.Target != "mongo" || cfg.Documents != 10 || cfg.SecondaryIndexes != 1 || cfg.Format != "json" {
+	if cfg.Target != "mongo" || cfg.Documents != 10 || cfg.SecondaryIndexes != 1 || cfg.Format != "json" ||
+		cfg.ConcurrentReaders != 4 || cfg.ConcurrentReads != 20 || cfg.ConcurrentWriters != 2 || cfg.ConcurrentWrites != 10 {
 		t.Fatalf("unexpected config: %+v", cfg)
 	}
 	if _, err := parseConfig([]string{"-timeout", "0"}); err != nil {
@@ -179,6 +192,15 @@ func TestParseConfigValidation(t *testing.T) {
 	}
 	if _, err := parseConfig([]string{"-timeout", "-1s"}); err == nil {
 		t.Fatal("negative timeout accepted")
+	}
+	if _, err := parseConfig([]string{"-concurrent-readers", "-1"}); err == nil {
+		t.Fatal("negative concurrent-readers accepted")
+	}
+	if _, err := parseConfig([]string{"-concurrent-readers", "1"}); err == nil {
+		t.Fatal("concurrent-readers without concurrent-reads accepted")
+	}
+	if _, err := parseConfig([]string{"-concurrent-reads", "1"}); err == nil {
+		t.Fatal("concurrent-reads without concurrent-readers accepted")
 	}
 }
 
@@ -191,6 +213,43 @@ func TestRunEmailFindPhaseRequiresEmailIndex(t *testing.T) {
 	}
 	if runEmailFindPhase(config{Reads: 0, SecondaryIndexes: 1}) {
 		t.Fatal("email phase should be skipped when reads are disabled")
+	}
+}
+
+func TestRunConcurrentOperationsRunsAllOpsOnce(t *testing.T) {
+	var count atomic.Int64
+	seen := make([]atomic.Int64, 25)
+	err := runConcurrentOperations(context.Background(), 4, len(seen), func(op int) error {
+		if op < 0 || op >= len(seen) {
+			return os.ErrInvalid
+		}
+		seen[op].Add(1)
+		count.Add(1)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("run concurrent operations: %v", err)
+	}
+	if got := count.Load(); got != int64(len(seen)) {
+		t.Fatalf("operation count=%d want %d", got, len(seen))
+	}
+	for op := range seen {
+		if got := seen[op].Load(); got != 1 {
+			t.Fatalf("op %d ran %d times, want once", op, got)
+		}
+	}
+}
+
+func TestRunConcurrentOperationsReturnsFirstError(t *testing.T) {
+	sentinel := errors.New("boom")
+	err := runConcurrentOperations(context.Background(), 4, 100, func(op int) error {
+		if op == 3 {
+			return sentinel
+		}
+		return nil
+	})
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("err=%v want sentinel", err)
 	}
 }
 
