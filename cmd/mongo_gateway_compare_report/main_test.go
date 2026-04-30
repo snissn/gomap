@@ -199,6 +199,45 @@ func TestTreeDBBytesPrefersMaintenanceSnapshot(t *testing.T) {
 	}
 }
 
+func TestMissingTreeDBDiskSnapshotRendersNA(t *testing.T) {
+	phase := phaseResult{Name: "load_insert_many", OpsPerSecond: 100}
+	cells := []cellComparison{{
+		Key: cellKey{Documents: 100, SecondaryIndexes: 1},
+		TreeDB: &runRecord{
+			Result:   benchmarkResult{Phases: []phaseResult{phase}},
+			PhaseMap: map[string]phaseResult{phase.Name: phase},
+		},
+		Mongo: &runRecord{
+			Result: benchmarkResult{
+				Phases:            []phaseResult{phase},
+				MongoDBStatsFinal: map[string]any{"dataSize": float64(1300), "totalSize": float64(1500)},
+			},
+			PhaseMap: map[string]phaseResult{phase.Name: phase},
+		},
+	}}
+
+	lines := strings.Join(highlightLines(cells), "\n")
+	if !strings.Contains(lines, "TreeDB disk snapshot was n/a") || strings.Contains(lines, "used 0 B") {
+		t.Fatalf("highlight rendered missing TreeDB disk snapshot incorrectly:\n%s", lines)
+	}
+
+	var table strings.Builder
+	renderDiskTable(&table, cells)
+	row := "| 100 | 1 | `` | n/a | n/a | n/a | n/a | n/a | 1.27 KiB | 1.46 KiB | n/a | n/a | n/a | n/a |"
+	if !strings.Contains(table.String(), row) {
+		t.Fatalf("disk table missing n/a row %q:\n%s", row, table.String())
+	}
+
+	summaryPath := filepath.Join(t.TempDir(), "summary.tsv")
+	if err := writeSummaryTSV(summaryPath, cells); err != nil {
+		t.Fatalf("write summary: %v", err)
+	}
+	summary := readFile(t, summaryPath)
+	if !strings.Contains(summary, "\tn/a\t\t0\t1300\t1500\t0\t\t") {
+		t.Fatalf("summary TSV should leave missing TreeDB disk bytes and ratio blank:\n%s", summary)
+	}
+}
+
 func writeFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
