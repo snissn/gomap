@@ -1146,6 +1146,7 @@ func TestRootDescriptorDeltaRejectsConcurrentSchemaChange(t *testing.T) {
 		t.Fatal("expected snapshot")
 	}
 	catalog, err := loadCollectionCatalog(snap, "users")
+	baseCommitSeq := snapshotCommitSeq(snap)
 	baseSystemRoot := snapshotSystemRoot(snap)
 	_ = snap.Close()
 	if err != nil {
@@ -1168,6 +1169,7 @@ func TestRootDescriptorDeltaRejectsConcurrentSchemaChange(t *testing.T) {
 	}
 
 	iter, err := col.buildRootDescriptorSystemDeltaIterator(
+		baseCommitSeq,
 		baseSystemRoot,
 		[]string{rootName},
 		map[string]uint64{rootName: baseRoot},
@@ -1344,6 +1346,55 @@ func TestCollectionCachedCatalogRefreshesAfterCrossHandleWrite(t *testing.T) {
 	}
 	if want := []byte(`{"name":"ada"}`); !bytes.Equal(got, want) {
 		t.Fatalf("reader saw stale catalog value=%q want %q", got, want)
+	}
+}
+
+func TestCollectionCachedCatalogUsesCommitSeq(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("u1")}, [][]byte{[]byte(`{"name":"ada"}`)}); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("expected snapshot")
+	}
+	defer func() { _ = snap.Close() }()
+	catalog, err := loadCollectionCatalog(snap, "users")
+	if err != nil {
+		t.Fatalf("load catalog: %v", err)
+	}
+	rootName := collectionPrimaryRootName("users")
+	staleCatalog := cloneCatalogWithRootUpdates(catalog, catalog.meta, []string{rootName}, []uint64{^uint64(0)})
+
+	col.catalogMu.Lock()
+	col.catalog = staleCatalog
+	col.catalogSystemRoot = snapshotSystemRoot(snap)
+	col.catalogCommitSeq = snapshotCommitSeq(snap) + 1
+	col.catalogMu.Unlock()
+
+	refreshed, err := col.catalogForSnapshot(snap)
+	if err != nil {
+		t.Fatalf("catalogForSnapshot: %v", err)
+	}
+	if got := refreshed.rootID(rootName); got == ^uint64(0) {
+		t.Fatalf("catalog cache ignored commit sequence and returned stale root %d", got)
+	}
+	if got, want := refreshed.rootID(rootName), catalog.rootID(rootName); got != want {
+		t.Fatalf("refreshed root=%d want %d", got, want)
 	}
 }
 
@@ -2162,7 +2213,7 @@ func TestCollectionUpdateConcurrentCounterNoLostUpdates(t *testing.T) {
 			}
 			<-start
 			for j := 0; j < increments; j++ {
-				if _, _, err := workerCol.Update([]byte("u1"), func(current []byte) ([]byte, bool, error) {
+				matched, modified, err := workerCol.Update([]byte("u1"), func(current []byte) ([]byte, bool, error) {
 					var doc struct {
 						Count int `json:"count"`
 					}
@@ -2175,8 +2226,13 @@ func TestCollectionUpdateConcurrentCounterNoLostUpdates(t *testing.T) {
 						return nil, false, err
 					}
 					return next, true, nil
-				}); err != nil {
+				})
+				if err != nil {
 					errs <- err
+					return
+				}
+				if !matched || !modified {
+					errs <- fmt.Errorf("update matched=%v modified=%v", matched, modified)
 					return
 				}
 			}
