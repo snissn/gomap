@@ -207,7 +207,6 @@ type noIndexBatchEntry struct {
 }
 
 type collectionWriteDomain struct {
-	mutationMu     sync.Mutex
 	mu             sync.RWMutex
 	loaded         bool
 	meta           CollectionMeta
@@ -1402,10 +1401,6 @@ func (c *Collection) Update(documentID []byte, update func(current []byte) (repl
 	}
 	if update == nil {
 		return false, false, errors.New("collections: update function is nil")
-	}
-	if domain := c.writeDomain; domain != nil {
-		domain.mutationMu.Lock()
-		defer domain.mutationMu.Unlock()
 	}
 	if err := c.flushBufferedNoIndex(); err != nil {
 		return false, false, err
