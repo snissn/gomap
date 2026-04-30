@@ -81,6 +81,16 @@ type summaryRow struct {
 	VLogRewriteAfterGC    *float64
 	VLogRewriteDeltaGC    *float64
 	VLogGCNs              *float64
+	LeafGenPlanNs         *float64
+	LeafGenPlanLive       *float64
+	LeafGenPlanDead       *float64
+	LeafGenPackNs         *float64
+	LeafGenPackBefore     *float64
+	LeafGenPackAfter      *float64
+	LeafGenPackDelta      *float64
+	LeafGenPackAfterGC    *float64
+	LeafGenPackDeltaGC    *float64
+	LeafGenGCNs           *float64
 	SQLiteVacuumNs        *float64
 	SQLiteVacuumBefore    *float64
 	SQLiteVacuumAfter     *float64
@@ -202,19 +212,19 @@ func run(cfg config) error {
 		return fmt.Errorf("create out dir: %w", err)
 	}
 	tsvPath := filepath.Join(cfg.outDir, "collections_matrix_summary.tsv")
-	if err := os.WriteFile(tsvPath, []byte(renderTSV(summaryRows)), 0o644); err != nil {
+	if err := os.WriteFile(tsvPath, []byte(renderTSV(summaryRows, cfg.outDir)), 0o644); err != nil {
 		return fmt.Errorf("write tsv: %w", err)
 	}
 	userStoryPath := filepath.Join(cfg.outDir, "collections_user_story_summary.tsv")
-	if err := os.WriteFile(userStoryPath, []byte(renderUserStoryTSV(buildUserStoryRows(summaryRows))), 0o644); err != nil {
+	if err := os.WriteFile(userStoryPath, []byte(renderUserStoryTSV(buildUserStoryRows(summaryRows), cfg.outDir)), 0o644); err != nil {
 		return fmt.Errorf("write user story tsv: %w", err)
 	}
 	diskUsagePath := filepath.Join(cfg.outDir, "collections_disk_usage_summary.tsv")
-	if err := os.WriteFile(diskUsagePath, []byte(renderDiskUsageTSV(buildDiskUsageRows(summaryRows))), 0o644); err != nil {
+	if err := os.WriteFile(diskUsagePath, []byte(renderDiskUsageTSV(buildDiskUsageRows(summaryRows), cfg.outDir)), 0o644); err != nil {
 		return fmt.Errorf("write disk usage tsv: %w", err)
 	}
 	maintenancePath := filepath.Join(cfg.outDir, "collections_maintenance_summary.tsv")
-	if err := os.WriteFile(maintenancePath, []byte(renderMaintenanceTSV(buildMaintenanceRows(summaryRows))), 0o644); err != nil {
+	if err := os.WriteFile(maintenancePath, []byte(renderMaintenanceTSV(buildMaintenanceRows(summaryRows), cfg.outDir)), 0o644); err != nil {
 		return fmt.Errorf("write maintenance tsv: %w", err)
 	}
 	mdPath := filepath.Join(cfg.outDir, "collections_matrix_summary.md")
@@ -271,6 +281,10 @@ func readMatrixIndex(path string) ([]matrixRow, error) {
 	}
 
 	documentFormatIdx, hasDocumentFormat := header["document_format"]
+	baseDir, err := filepath.Abs(filepath.Dir(path))
+	if err != nil {
+		return nil, fmt.Errorf("resolve matrix index directory: %w", err)
+	}
 	var rows []matrixRow
 	for _, record := range records[1:] {
 		if len(record) == 0 || strings.TrimSpace(record[0]) == "" {
@@ -283,19 +297,87 @@ func readMatrixIndex(path string) ([]matrixRow, error) {
 				documentFormat = "json"
 			}
 		}
+		cell := field(record, header["cell"])
+		reportMarkdownPath, err := matrixIndexArtifactPath(baseDir, field(record, header["report_md"]))
+		if err != nil {
+			return nil, fmt.Errorf("matrix index cell %q report_md: %w", cell, err)
+		}
+		reportJSONPath, err := matrixIndexArtifactPath(baseDir, field(record, header["report_json"]))
+		if err != nil {
+			return nil, fmt.Errorf("matrix index cell %q report_json: %w", cell, err)
+		}
 		rows = append(rows, matrixRow{
-			Cell:                   field(record, header["cell"]),
+			Cell:                   cell,
 			Engine:                 field(record, header["engine"]),
 			DocumentFormat:         documentFormat,
 			DataOuterLeavesInVLog:  field(record, header["data_outer_leaves_in_vlog"]),
 			IndexOuterLeavesInVLog: field(record, header["index_outer_leaves_in_vlog"]),
 			PagerChunkSize:         field(record, header["pager_chunk_size"]),
 			PagerSyncConcurrency:   field(record, header["pager_sync_concurrency"]),
-			ReportMarkdownPath:     field(record, header["report_md"]),
-			ReportJSONPath:         field(record, header["report_json"]),
+			ReportMarkdownPath:     reportMarkdownPath,
+			ReportJSONPath:         reportJSONPath,
 		})
 	}
 	return rows, nil
+}
+
+func matrixIndexArtifactPath(baseDir, artifactPath string) (string, error) {
+	artifactPath = strings.TrimSpace(artifactPath)
+	if artifactPath == "" {
+		return "", fmt.Errorf("artifact path is empty")
+	}
+	baseDir = filepath.Clean(baseDir)
+	var joined string
+	if filepath.IsAbs(artifactPath) {
+		joined = filepath.Clean(artifactPath)
+	} else {
+		artifactPath = filepath.FromSlash(artifactPath)
+		if filepath.VolumeName(artifactPath) != "" {
+			return "", fmt.Errorf("volume-qualified artifact path %q is not allowed in matrix index", artifactPath)
+		}
+		joined = filepath.Clean(filepath.Join(baseDir, artifactPath))
+	}
+	if inside, err := pathWithinDir(baseDir, joined); err != nil {
+		return "", fmt.Errorf("resolve artifact path %q: %w", artifactPath, err)
+	} else if !inside {
+		if resolvedInside, err := resolvedPathWithinDir(baseDir, joined); err != nil || !resolvedInside {
+			return "", fmt.Errorf("artifact path %q escapes matrix directory", artifactPath)
+		}
+		return joined, nil
+	}
+	if resolvedInside, err := resolvedPathWithinDir(baseDir, joined); err != nil {
+		return "", fmt.Errorf("resolve artifact path %q symlinks: %w", artifactPath, err)
+	} else if !resolvedInside {
+		return "", fmt.Errorf("resolved artifact path %q escapes matrix directory", artifactPath)
+	}
+	return joined, nil
+}
+
+func pathWithinDir(baseDir, target string) (bool, error) {
+	rel, err := filepath.Rel(baseDir, target)
+	if err != nil {
+		return false, err
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) || filepath.IsAbs(rel) {
+		return false, nil
+	}
+	return true, nil
+}
+
+func resolvedPathWithinDir(baseDir, target string) (bool, error) {
+	resolvedBase, err := filepath.EvalSymlinks(baseDir)
+	if err != nil {
+		return false, err
+	}
+	resolvedTarget, err := filepath.EvalSymlinks(target)
+	if err != nil {
+		return false, err
+	}
+	inside, err := pathWithinDir(resolvedBase, resolvedTarget)
+	if err != nil {
+		return false, err
+	}
+	return inside, nil
 }
 
 func field(record []string, idx int) string {
@@ -410,6 +492,16 @@ func buildSummaryRow(row matrixRow, collectionBatchSize int, name string, benchm
 		VLogRewriteAfterGC:    metricPtr(benchmark.MeanMetrics, "vlog_rewrite_gc_disk_total_bytes_after"),
 		VLogRewriteDeltaGC:    metricPtr(benchmark.MeanMetrics, "vlog_rewrite_gc_disk_total_bytes_delta"),
 		VLogGCNs:              metricPtr(benchmark.MeanMetrics, "vlog_gc_ns/op"),
+		LeafGenPlanNs:         metricPtr(benchmark.MeanMetrics, "leafgen_plan_ns/op"),
+		LeafGenPlanLive:       metricPtr(benchmark.MeanMetrics, "leafgen_plan_candidate_bytes_live"),
+		LeafGenPlanDead:       metricPtr(benchmark.MeanMetrics, "leafgen_plan_candidate_bytes_dead"),
+		LeafGenPackNs:         metricPtr(benchmark.MeanMetrics, "leafgen_pack_ns/op"),
+		LeafGenPackBefore:     metricPtr(benchmark.MeanMetrics, "leafgen_pack_disk_total_bytes_before"),
+		LeafGenPackAfter:      metricPtr(benchmark.MeanMetrics, "leafgen_pack_disk_total_bytes_after"),
+		LeafGenPackDelta:      metricPtr(benchmark.MeanMetrics, "leafgen_pack_disk_total_bytes_delta"),
+		LeafGenPackAfterGC:    metricPtr(benchmark.MeanMetrics, "leafgen_pack_gc_disk_total_bytes_after"),
+		LeafGenPackDeltaGC:    metricPtr(benchmark.MeanMetrics, "leafgen_pack_gc_disk_total_bytes_delta"),
+		LeafGenGCNs:           metricPtr(benchmark.MeanMetrics, "leafgen_gc_ns/op"),
 		SQLiteVacuumNs:        metricPtr(benchmark.MeanMetrics, "sqlite_vacuum_ns/op"),
 		SQLiteVacuumBefore:    metricPtr(benchmark.MeanMetrics, "sqlite_vacuum_disk_total_bytes_before"),
 		SQLiteVacuumAfter:     metricPtr(benchmark.MeanMetrics, "sqlite_vacuum_disk_total_bytes_after"),
@@ -491,7 +583,7 @@ func metricPtr(metrics map[string]float64, name string) *float64 {
 	return &value
 }
 
-func renderTSV(rows []summaryRow) string {
+func renderTSV(rows []summaryRow, outDir string) string {
 	var sb strings.Builder
 	sb.WriteString("cell\tengine\tdocument_format\tdata_outer_leaves_in_vlog\tindex_outer_leaves_in_vlog\tpager_chunk_size\tpager_sync_concurrency\tbenchmark\tns_per_op\tops_per_sec\tbytes_per_op\tallocs_per_op\tinsert_ns/doc\tinsert_docs_per_sec\tsync_ns/doc\tsync_docs_per_sec\twriter_docs_per_sec\tper_item_key_probe_fallback_count\tper_item_prefix_probe_fallback_count\tindexes/doc\tstored_docs\tdisk_total_bytes\tdisk_bytes/doc\tcollection_disk_bytes\tcollection_disk_bytes/doc\tindex_disk_bytes\tindex_disk_bytes/doc\treport_md\n")
 	for _, row := range rows {
@@ -549,13 +641,13 @@ func renderTSV(rows []summaryRow) string {
 		sb.WriteByte('\t')
 		sb.WriteString(formatOptionalTSVFloat(row.IndexDiskBPerDoc))
 		sb.WriteByte('\t')
-		sb.WriteString(row.ReportMarkdownPath)
+		sb.WriteString(relativeReportPath(outDir, row.ReportMarkdownPath))
 		sb.WriteByte('\n')
 	}
 	return sb.String()
 }
 
-func renderUserStoryTSV(rows []userStoryRow) string {
+func renderUserStoryTSV(rows []userStoryRow, outDir string) string {
 	var sb strings.Builder
 	sb.WriteString("cell\tengine\tdocument_format\tdata_outer_leaves_in_vlog\tindex_outer_leaves_in_vlog\tpager_chunk_size\tpager_sync_concurrency\tstory\tbenchmark\tdocs_per_batch\tns_per_doc\tdocs_per_sec\tms_per_batch\tinsert_ms_per_batch\tsync_ms_per_batch\tbatches_per_sec\treport_md\n")
 	for _, row := range rows {
@@ -591,13 +683,13 @@ func renderUserStoryTSV(rows []userStoryRow) string {
 		sb.WriteByte('\t')
 		sb.WriteString(formatTSVFloat(row.BatchesSec))
 		sb.WriteByte('\t')
-		sb.WriteString(row.ReportMarkdownPath)
+		sb.WriteString(relativeReportPath(outDir, row.ReportMarkdownPath))
 		sb.WriteByte('\n')
 	}
 	return sb.String()
 }
 
-func renderDiskUsageTSV(rows []diskUsageRow) string {
+func renderDiskUsageTSV(rows []diskUsageRow, outDir string) string {
 	var sb strings.Builder
 	sb.WriteString("cell\tengine\tdocument_format\tdata_outer_leaves_in_vlog\tindex_outer_leaves_in_vlog\tpager_chunk_size\tpager_sync_concurrency\tstory\tbenchmark\tindexes/doc\tstored_docs\tdisk_total_bytes\tdisk_bytes/doc\tcollection_disk_bytes\tcollection_disk_bytes/doc\tindex_disk_bytes\tindex_disk_bytes/doc\tsplit_source\treport_md\n")
 	for _, row := range rows {
@@ -637,13 +729,13 @@ func renderDiskUsageTSV(rows []diskUsageRow) string {
 		sb.WriteByte('\t')
 		sb.WriteString(row.SplitSource)
 		sb.WriteByte('\t')
-		sb.WriteString(row.ReportMarkdownPath)
+		sb.WriteString(relativeReportPath(outDir, row.ReportMarkdownPath))
 		sb.WriteByte('\n')
 	}
 	return sb.String()
 }
 
-func renderMaintenanceTSV(rows []maintenanceRow) string {
+func renderMaintenanceTSV(rows []maintenanceRow, outDir string) string {
 	var sb strings.Builder
 	sb.WriteString("cell\tengine\tdocument_format\tdata_outer_leaves_in_vlog\tindex_outer_leaves_in_vlog\tpager_chunk_size\tpager_sync_concurrency\tmaintenance\tbenchmark\tns_per_op\tops_per_sec\tgc_ns_per_op\tgc_ops_per_sec\tdisk_total_bytes_before\tdisk_total_bytes_after\tdisk_total_bytes_delta\tdisk_total_bytes_after_gc\tdisk_total_bytes_delta_after_gc\treport_md\n")
 	for _, row := range rows {
@@ -683,7 +775,7 @@ func renderMaintenanceTSV(rows []maintenanceRow) string {
 		sb.WriteByte('\t')
 		sb.WriteString(formatOptionalTSVFloat(row.DeltaGC))
 		sb.WriteByte('\t')
-		sb.WriteString(row.ReportMarkdownPath)
+		sb.WriteString(relativeReportPath(outDir, row.ReportMarkdownPath))
 		sb.WriteByte('\n')
 	}
 	return sb.String()
@@ -730,11 +822,23 @@ func renderMarkdown(rows []summaryRow, outDir string) (string, error) {
 	var sb strings.Builder
 	sb.WriteString("# Collections Benchmark Matrix Summary\n\n")
 	userStoryRows := buildUserStoryRows(rows)
+	diskUsageRows := buildDiskUsageRows(rows)
+	maintenanceRows := buildMaintenanceRows(rows)
+	diagnosticRows := buildDiagnosticRows(rows)
+	if lines := buildExecutiveSummary(userStoryRows, diskUsageRows, maintenanceRows, diagnosticRows); len(lines) > 0 {
+		sb.WriteString("## Executive Summary\n\n")
+		for _, line := range lines {
+			sb.WriteString("- ")
+			sb.WriteString(line)
+			sb.WriteByte('\n')
+		}
+		sb.WriteString("\n")
+	}
 	if len(userStoryRows) > 0 {
 		sb.WriteString("## User-Facing Throughput\n\n")
 		sb.WriteString("Batch benchmark ops are documents, so this section reports the indexed ingest story as docs/sec, batch latency, and batches/sec. Diagnostic JSON/planner rows are separated below.\n\n")
-		sb.WriteString("| Cell | Engine | Format | Data vlog | Index vlog | Pager chunk | Pager sync | Story | Docs/batch | ns/doc | Docs/sec | ms/batch | insert ms/batch | sync ms/batch | batches/sec | Report |\n")
-		sb.WriteString("| --- | --- | --- | ---: | ---: | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |\n")
+		sb.WriteString("| Cell | Engine | Format | Data vlog | Index vlog | Pager chunk | Pager sync | Story | Benchmark | Docs/batch | ns/doc | Docs/sec | ms/batch | insert ms/batch | sync ms/batch | batches/sec | Report |\n")
+		sb.WriteString("| --- | --- | --- | ---: | ---: | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |\n")
 		for _, row := range userStoryRows {
 			reportPath := relativeReportPath(outDir, row.ReportMarkdownPath)
 			sb.WriteString("| `")
@@ -755,7 +859,9 @@ func renderMarkdown(rows []summaryRow, outDir string) (string, error) {
 			sb.WriteString(escapeTableCell(row.PagerSyncConcurrency))
 			sb.WriteString("` | ")
 			sb.WriteString(escapeTableCell(row.Story))
-			sb.WriteString(" | ")
+			sb.WriteString(" | `")
+			sb.WriteString(escapeTableCell(row.Benchmark))
+			sb.WriteString("` | ")
 			sb.WriteString(formatIntWithCommas(int64(row.CollectionBatchSize)))
 			sb.WriteString(" | ")
 			sb.WriteString(formatFloat(row.NsPerOp))
@@ -775,7 +881,6 @@ func renderMarkdown(rows []summaryRow, outDir string) (string, error) {
 		}
 		sb.WriteString("\n")
 	}
-	diskUsageRows := buildDiskUsageRows(rows)
 	if len(diskUsageRows) > 0 {
 		sb.WriteString("## Disk Usage\n\n")
 		sb.WriteString("Disk rows use benchmark-reported end-of-run bytes after an untimed flush/checkpoint. Collection/index splits use engine-reported object bytes when available; otherwise they derive index bytes from the per-doc delta against the matching zero-index row.\n\n")
@@ -825,10 +930,9 @@ func renderMarkdown(rows []summaryRow, outDir string) (string, error) {
 		}
 		sb.WriteString("\n")
 	}
-	maintenanceRows := buildMaintenanceRows(rows)
 	if len(maintenanceRows) > 0 {
 		sb.WriteString("## Maintenance Compaction\n\n")
-		sb.WriteString("TreeDB rows show end-of-run total disk before online value-log rewrite, after rewrite, and after a follow-up value-log GC. SQLite rows show total disk before and after full `VACUUM`.\n\n")
+		sb.WriteString("TreeDB `treedb_vlog_rewrite` rows measure value_vlog rewrite/GC. TreeDB `treedb_leafgen_pack_gc` rows measure leaf_vlog generation pack/GC. SQLite rows show total disk before and after full `VACUUM`.\n\n")
 		sb.WriteString("| Cell | Engine | Format | Data vlog | Index vlog | Pager chunk | Pager sync | Maintenance | Benchmark | ns/op | ops/sec | GC ns/op | GC ops/sec | Before | After | Delta | After GC | Delta after GC | Report |\n")
 		sb.WriteString("| --- | --- | --- | ---: | ---: | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |\n")
 		for _, row := range maintenanceRows {
@@ -875,7 +979,6 @@ func renderMarkdown(rows []summaryRow, outDir string) (string, error) {
 		}
 		sb.WriteString("\n")
 	}
-	diagnosticRows := buildDiagnosticRows(rows)
 	if len(diagnosticRows) > 0 {
 		sb.WriteString("## Diagnostic Rows\n\n")
 		sb.WriteString("These rows are not user stories. They isolate JSON/data extraction and non-JSON planner cost so future optimization can quarantine JSON work separately from TreeDB publish/index maintenance.\n\n")
@@ -980,6 +1083,208 @@ func relativeReportPath(outDir, reportPath string) string {
 		return filepath.ToSlash(rel)
 	}
 	return filepath.ToSlash(reportPath)
+}
+
+func buildExecutiveSummary(userRows []userStoryRow, diskRows []diskUsageRow, maintenanceRows []maintenanceRow, diagnosticRows []summaryRow) []string {
+	var lines []string
+	for _, story := range sortedUserStories(userRows) {
+		best, ok := fastestUserStory(userRows, story)
+		if !ok {
+			continue
+		}
+		lines = append(lines, fmt.Sprintf("Fastest %s: `%s` / `%s` / `%s` at %s docs/sec (%s ns/doc, %s ms/batch, %s batches/sec).",
+			story,
+			best.Cell,
+			best.DocumentFormat,
+			best.Benchmark,
+			formatThroughput(best.DocsPerSec),
+			formatFloat(best.NsPerOp),
+			formatFloat(best.MSPerBatch),
+			formatFloat(best.BatchesSec),
+		))
+	}
+	if best, ok := lowestTwoIndexDiskUsage(diskRows); ok {
+		lines = append(lines, fmt.Sprintf("Smallest two-index bulk-insert footprint: `%s` / `%s` at %s total (%s B/doc; index estimate %s B/doc from `%s`).",
+			best.Cell,
+			best.DocumentFormat,
+			formatByteCount(best.DiskTotalBytesValue),
+			formatFloat(best.DiskBytesPerDocValue),
+			formatOptionalFloat(best.IndexDiskBPerDocValue),
+			best.SplitSource,
+		))
+	}
+	for _, kind := range sortedMaintenanceKinds(maintenanceRows) {
+		if best, ok := largestMaintenanceReduction(maintenanceRows, kind); ok {
+			delta := best.Delta
+			after := best.After
+			rateNs := best.NsPerMaint
+			if best.DeltaGC != nil {
+				delta = best.DeltaGC
+				after = best.AfterGC
+				rateNs = best.GCNs
+			}
+			lines = append(lines, fmt.Sprintf("Largest %s disk reduction: `%s` / `%s` changed total disk by %s to %s (%s ops/sec maintenance rate).",
+				kind,
+				best.Cell,
+				best.DocumentFormat,
+				formatOptionalByteCount(delta),
+				formatOptionalByteCount(after),
+				formatOptionalFloat(optionalOpsPerSecFromNs(rateNs)),
+			))
+			continue
+		}
+		if best, ok := smallestMaintenanceDelta(maintenanceRows, kind); ok {
+			delta := best.Delta
+			after := best.After
+			if best.DeltaGC != nil {
+				delta = best.DeltaGC
+				after = best.AfterGC
+			}
+			lines = append(lines, fmt.Sprintf("No %s disk reduction was observed; smallest total-disk delta was %s to %s in `%s` / `%s`.",
+				kind,
+				formatOptionalByteCount(delta),
+				formatOptionalByteCount(after),
+				best.Cell,
+				best.DocumentFormat,
+			))
+		}
+	}
+	if best, ok := fastestDiagnostic(diagnosticRows); ok {
+		lines = append(lines, fmt.Sprintf("Fastest diagnostic row: `%s` in `%s` / `%s` at %s ops/sec (%s ns/op).",
+			best.Benchmark,
+			best.Cell,
+			best.DocumentFormat,
+			formatThroughput(opsPerSecFromNs(best.NsPerOp)),
+			formatFloat(best.NsPerOp),
+		))
+	}
+	return lines
+}
+
+func sortedUserStories(rows []userStoryRow) []string {
+	seen := make(map[string]struct{})
+	for _, row := range rows {
+		seen[row.Story] = struct{}{}
+	}
+	stories := make([]string, 0, len(seen))
+	for story := range seen {
+		stories = append(stories, story)
+	}
+	sort.Strings(stories)
+	return stories
+}
+
+func fastestUserStory(rows []userStoryRow, story string) (userStoryRow, bool) {
+	var best userStoryRow
+	var ok bool
+	for _, row := range rows {
+		if row.Story != story {
+			continue
+		}
+		if !ok || row.DocsPerSec > best.DocsPerSec {
+			best = row
+			ok = true
+		}
+	}
+	return best, ok
+}
+
+func lowestTwoIndexDiskUsage(rows []diskUsageRow) (diskUsageRow, bool) {
+	var best diskUsageRow
+	var ok bool
+	for _, row := range rows {
+		if row.Story != "bulk indexed insert" || row.IndexesPerDocValue != 2 {
+			continue
+		}
+		if !ok || row.DiskBytesPerDocValue < best.DiskBytesPerDocValue {
+			best = row
+			ok = true
+		}
+	}
+	return best, ok
+}
+
+func sortedMaintenanceKinds(rows []maintenanceRow) []string {
+	seen := make(map[string]struct{})
+	for _, row := range rows {
+		seen[row.Kind] = struct{}{}
+	}
+	kinds := make([]string, 0, len(seen))
+	for kind := range seen {
+		kinds = append(kinds, kind)
+	}
+	sort.Strings(kinds)
+	return kinds
+}
+
+func largestMaintenanceReduction(rows []maintenanceRow, kind string) (maintenanceRow, bool) {
+	var best maintenanceRow
+	var bestDelta float64
+	var ok bool
+	for _, row := range rows {
+		if row.Kind != kind {
+			continue
+		}
+		delta, hasDelta := maintenanceReductionDelta(row)
+		if !hasDelta {
+			continue
+		}
+		if delta >= 0 {
+			continue
+		}
+		if !ok || delta < bestDelta {
+			best = row
+			bestDelta = delta
+			ok = true
+		}
+	}
+	return best, ok
+}
+
+func smallestMaintenanceDelta(rows []maintenanceRow, kind string) (maintenanceRow, bool) {
+	var best maintenanceRow
+	var bestDelta float64
+	var ok bool
+	for _, row := range rows {
+		if row.Kind != kind {
+			continue
+		}
+		delta, hasDelta := maintenanceReductionDelta(row)
+		if !hasDelta {
+			continue
+		}
+		if !ok || delta < bestDelta {
+			best = row
+			bestDelta = delta
+			ok = true
+		}
+	}
+	return best, ok
+}
+
+func maintenanceReductionDelta(row maintenanceRow) (float64, bool) {
+	if row.DeltaGC != nil {
+		return *row.DeltaGC, true
+	}
+	if row.Delta != nil {
+		return *row.Delta, true
+	}
+	return 0, false
+}
+
+func fastestDiagnostic(rows []summaryRow) (summaryRow, bool) {
+	var best summaryRow
+	var ok bool
+	for _, row := range rows {
+		if row.NsPerOp <= 0 {
+			continue
+		}
+		if !ok || row.NsPerOp < best.NsPerOp {
+			best = row
+			ok = true
+		}
+	}
+	return best, ok
 }
 
 func buildUserStoryRows(rows []summaryRow) []userStoryRow {
@@ -1095,6 +1400,19 @@ func buildMaintenanceRows(rows []summaryRow) []maintenanceRow {
 				Delta:      row.VLogRewriteDelta,
 				AfterGC:    row.VLogRewriteAfterGC,
 				DeltaGC:    row.VLogRewriteDeltaGC,
+			})
+		}
+		if row.LeafGenPackBefore != nil || row.LeafGenPackAfter != nil || row.LeafGenPackAfterGC != nil {
+			out = append(out, maintenanceRow{
+				summaryRow: row,
+				Kind:       "treedb_leafgen_pack_gc",
+				NsPerMaint: row.LeafGenPackNs,
+				GCNs:       row.LeafGenGCNs,
+				Before:     row.LeafGenPackBefore,
+				After:      row.LeafGenPackAfter,
+				Delta:      row.LeafGenPackDelta,
+				AfterGC:    row.LeafGenPackAfterGC,
+				DeltaGC:    row.LeafGenPackDeltaGC,
 			})
 		}
 		if row.SQLiteVacuumBefore != nil || row.SQLiteVacuumAfter != nil {

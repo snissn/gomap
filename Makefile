@@ -3,6 +3,7 @@ TREEDB_DIR := TreeDB
 UNIFIED_BENCH_DIR := cmd/unified_bench
 BENCHPROF_DIR := cmd/benchprof
 COLLECTION_LOAD_FIXTURE_DIR := cmd/collection_load_fixture
+COLLECTION_BENCH_MATRIX_DIR := cmd/collection_bench_matrix
 BIN_DIR := bin
 
 BENCH_KEYCOUNTS ?= 1,10,100,1000,10000,100000,1000000
@@ -29,6 +30,7 @@ help:
 	@echo "  make unified-bench  - build unified bench binary"
 	@echo "  make benchprof      - build profile analyzer binary"
 	@echo "  make collection-load-fixture - build kept TreeDB collection load fixture"
+	@echo "  make collection-bench-matrix - build collection benchmark matrix runner"
 	@echo "  make clean          - remove ./$(BIN_DIR) and temp dirs"
 
 .PHONY: fmt
@@ -86,8 +88,8 @@ deps:
 docs-check:
 	bash ./scripts/docs_check.sh
 
-.PHONY: build build-hashdb build-treedb treemap treemap-bin unified-bench benchprof collection-load-fixture
-build: build-hashdb build-treedb unified-bench benchprof collection-load-fixture
+.PHONY: build build-hashdb build-treedb treemap treemap-bin unified-bench benchprof collection-load-fixture collection-bench-matrix
+build: build-hashdb build-treedb unified-bench benchprof collection-load-fixture collection-bench-matrix
 
 build-hashdb:
 	mkdir -p $(BIN_DIR)
@@ -121,6 +123,10 @@ benchprof:
 collection-load-fixture:
 	mkdir -p $(BIN_DIR)
 	cd $(COLLECTION_LOAD_FIXTURE_DIR) && go build -o ../../$(BIN_DIR)/collection-load-fixture .
+
+collection-bench-matrix:
+	mkdir -p $(BIN_DIR)
+	cd $(COLLECTION_BENCH_MATRIX_DIR) && go build -o ../../$(BIN_DIR)/collection-bench-matrix .
 
 .PHONY: bench bench-readme
 bench: unified-bench
