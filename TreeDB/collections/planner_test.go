@@ -73,6 +73,42 @@ func TestInsertBatchPlanner_EmitsRootLocalRunsForPrimaryIndexStateAndSecondaryRo
 	}
 }
 
+func TestInsertBatchPlanner_TemplateV1SkipsIndexStateRun(t *testing.T) {
+	planner := insertBatchPlanner{
+		collection: "users",
+		indexes: []indexDefinition{
+			{name: "email", field: "email", unique: true},
+			{name: "city", field: "city"},
+		},
+		options: collectionOptions{documentFormat: DocumentFormatTemplateV1},
+	}
+
+	plan, err := planner.planInsertBatch(
+		[][]byte{[]byte("u1"), []byte("u2")},
+		[][]byte{
+			mustTemplateV1Document(t, []string{"email", "city"}, []any{"ada@example.com", "hnl"}),
+			mustTemplateV1Document(t, []string{"email", "city"}, []any{"grace@example.com", "hnl"}),
+		},
+	)
+	if err != nil {
+		t.Fatalf("plan template-v1 insert batch: %v", err)
+	}
+	if got, want := len(plan.runs), 4; got != want {
+		t.Fatalf("runs len=%d want %d", got, want)
+	}
+	if idx := findRunIndex(plan, collectionRootIndexState, ""); idx >= 0 {
+		t.Fatalf("template-v1 plan unexpectedly emitted index-state run at %d", idx)
+	}
+	if got := plan.stats.IndexStateRunBuild; got != 0 {
+		t.Fatalf("template-v1 index-state run build=%s want 0", got)
+	}
+
+	_ = mustFindRun(t, plan, collectionRootPrimary, "")
+	_ = mustFindRun(t, plan, collectionRootTemplate, "")
+	_ = mustFindRun(t, plan, collectionRootSecondary, "email")
+	_ = mustFindRun(t, plan, collectionRootSecondary, "city")
+}
+
 func TestInsertBatchPlanner_PreservesCallerVisibleResultOrdering(t *testing.T) {
 	planner := insertBatchPlanner{collection: "users"}
 	ids := [][]byte{[]byte("u3"), []byte("u1"), []byte("u2")}
@@ -674,12 +710,22 @@ func mustFindRun(t *testing.T, plan *insertBatchPlan, kind collectionRootKind, i
 
 func mustFindRunIndex(t *testing.T, plan *insertBatchPlan, kind collectionRootKind, indexName string) int {
 	t.Helper()
+	if idx := findRunIndex(plan, kind, indexName); idx >= 0 {
+		return idx
+	}
+	t.Fatalf("missing run kind=%d index=%q", kind, indexName)
+	return -1
+}
+
+func findRunIndex(plan *insertBatchPlan, kind collectionRootKind, indexName string) int {
+	if plan == nil {
+		return -1
+	}
 	for i, run := range plan.runs {
 		if run.kind == kind && run.indexName == indexName {
 			return i
 		}
 	}
-	t.Fatalf("missing run kind=%d index=%q", kind, indexName)
 	return -1
 }
 
