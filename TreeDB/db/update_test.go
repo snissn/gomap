@@ -103,6 +103,52 @@ func TestUpdatePreservesEmptyValuePresence(t *testing.T) {
 	}
 }
 
+func TestUpdateUsesStableKeyAcrossCallback(t *testing.T) {
+	d, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer d.Close()
+
+	key := []byte("alpha")
+	if err := d.Set(key, []byte("seed")); err != nil {
+		t.Fatalf("Set alpha: %v", err)
+	}
+	if err := d.Set([]byte("omega"), []byte("other")); err != nil {
+		t.Fatalf("Set omega: %v", err)
+	}
+
+	calls := 0
+	if err := d.Update(key, func(old []byte) (UpdateResult, error) {
+		calls++
+		if calls != 1 {
+			return UpdateResult{}, fmt.Errorf("callback retried against mutated key with old=%q", old)
+		}
+		if !bytes.Equal(old, []byte("seed")) {
+			return UpdateResult{}, fmt.Errorf("old=%q want seed", old)
+		}
+		copy(key, []byte("omega"))
+		return SetUpdate([]byte("updated")), nil
+	}); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+
+	got, err := d.Get([]byte("alpha"))
+	if err != nil {
+		t.Fatalf("Get alpha: %v", err)
+	}
+	if !bytes.Equal(got, []byte("updated")) {
+		t.Fatalf("alpha got=%q want updated", got)
+	}
+	got, err = d.Get([]byte("omega"))
+	if err != nil {
+		t.Fatalf("Get omega: %v", err)
+	}
+	if !bytes.Equal(got, []byte("other")) {
+		t.Fatalf("omega got=%q want other", got)
+	}
+}
+
 func TestUpdateCallbackCanReenterSameKeyWithoutDeadlock(t *testing.T) {
 	d, err := Open(Options{Dir: t.TempDir()})
 	if err != nil {

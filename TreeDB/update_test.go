@@ -183,6 +183,53 @@ func TestUpdatePreservesEmptyValuePresence(t *testing.T) {
 	}
 }
 
+func TestUpdateUsesStableKeyAcrossCallback(t *testing.T) {
+	opts := treedb.OptionsFor(treedb.ProfileFast, t.TempDir())
+	db, err := treedb.Open(opts)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+
+	key := []byte("alpha")
+	if err := db.Set(key, []byte("seed")); err != nil {
+		t.Fatalf("Set alpha: %v", err)
+	}
+	if err := db.Set([]byte("omega"), []byte("other")); err != nil {
+		t.Fatalf("Set omega: %v", err)
+	}
+
+	calls := 0
+	if err := db.Update(key, func(old []byte) (treedb.UpdateResult, error) {
+		calls++
+		if calls != 1 {
+			return treedb.UpdateResult{}, fmt.Errorf("callback retried against mutated key with old=%q", old)
+		}
+		if !bytes.Equal(old, []byte("seed")) {
+			return treedb.UpdateResult{}, fmt.Errorf("old=%q want seed", old)
+		}
+		copy(key, []byte("omega"))
+		return treedb.SetUpdate([]byte("updated")), nil
+	}); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+
+	got, err := db.Get([]byte("alpha"))
+	if err != nil {
+		t.Fatalf("Get alpha: %v", err)
+	}
+	if !bytes.Equal(got, []byte("updated")) {
+		t.Fatalf("alpha got=%q want updated", got)
+	}
+	got, err = db.Get([]byte("omega"))
+	if err != nil {
+		t.Fatalf("Get omega: %v", err)
+	}
+	if !bytes.Equal(got, []byte("other")) {
+		t.Fatalf("omega got=%q want other", got)
+	}
+}
+
 func TestUpdateCallbackCanReenterSameKeyWithoutDeadlock(t *testing.T) {
 	opts := treedb.OptionsFor(treedb.ProfileFast, t.TempDir())
 	db, err := treedb.Open(opts)

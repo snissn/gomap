@@ -19405,11 +19405,12 @@ func (db *DB) update(key []byte, fn backenddb.UpdateFunc, syncWrite bool) error 
 	if fn == nil {
 		return backenddb.ErrNilUpdateFunc
 	}
+	stableKey := cloneUpdateKey(key)
 	db.waitForCheckpoint()
 
 	for {
-		unlock := db.lockUpdateKey(key)
-		old, err := db.getForUpdate(key)
+		unlock := db.lockUpdateKey(stableKey)
+		old, err := db.getForUpdate(stableKey)
 		unlock()
 		if err != nil {
 			return err
@@ -19427,8 +19428,8 @@ func (db *DB) update(key []byte, fn backenddb.UpdateFunc, syncWrite bool) error 
 			return fmt.Errorf("treedb: unknown update op %d", result.Op)
 		}
 
-		unlock = db.lockUpdateKey(key)
-		latest, err := db.getForUpdate(key)
+		unlock = db.lockUpdateKey(stableKey)
+		latest, err := db.getForUpdate(stableKey)
 		if err != nil {
 			unlock()
 			return err
@@ -19443,11 +19444,11 @@ func (db *DB) update(key []byte, fn backenddb.UpdateFunc, syncWrite bool) error 
 			unlock()
 			return nil
 		case backenddb.UpdateSet:
-			err = db.set(key, result.Value, syncWrite)
+			err = db.set(stableKey, result.Value, syncWrite)
 			unlock()
 			return err
 		case backenddb.UpdateDelete:
-			err = db.delete(key, syncWrite)
+			err = db.delete(stableKey, syncWrite)
 			unlock()
 			return err
 		default:
@@ -19455,6 +19456,10 @@ func (db *DB) update(key []byte, fn backenddb.UpdateFunc, syncWrite bool) error 
 			return fmt.Errorf("treedb: unknown update op %d", result.Op)
 		}
 	}
+}
+
+func cloneUpdateKey(key []byte) []byte {
+	return append([]byte{}, key...)
 }
 
 func (db *DB) getForUpdate(key []byte) ([]byte, error) {
@@ -26136,6 +26141,7 @@ type Batch struct {
 	ptrCopyBytes       int
 	arenaInFlightBytes int64
 	ptrValueIdxs       []int
+	ridBuf             []uint64
 	walBuf             []logRecord
 	shardIdxs          []int
 	eligibleIdxs       []int
@@ -26596,6 +26602,9 @@ func (b *Batch) Reset() {
 		b.copyArenaCap = b.db.batchCopyArenaInitCap(0)
 	}
 	b.size = 0
+	if b.ridBuf != nil {
+		b.ridBuf = b.ridBuf[:0]
+	}
 	b.walBuf = b.walBuf[:0]
 	b.streamEligible = true
 	b.streamTried = false
@@ -27656,8 +27665,14 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 		if durability == journalDurabilitySync {
 			defer b.db.releaseLaneSync(lane)
 		}
-		if !b.db.disableJournal {
-			rids = make([]uint64, len(b.entries))
+		if !b.db.disableJournal && allowPointers {
+			if cap(b.ridBuf) < len(b.entries) {
+				b.ridBuf = make([]uint64, len(b.entries))
+			} else {
+				b.ridBuf = b.ridBuf[:len(b.entries)]
+				clear(b.ridBuf)
+			}
+			rids = b.ridBuf
 		}
 	}
 
@@ -28618,6 +28633,7 @@ func (b *Batch) Close() error {
 	b.recycleCopyArenaChunks()
 	b.recyclePtrCopyArenaChunks()
 	b.entries = nil
+	b.ridBuf = nil
 	b.walBuf = nil
 	b.shardIdxs = nil
 	b.eligibleIdxs = nil

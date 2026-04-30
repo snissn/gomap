@@ -126,4 +126,20 @@ func BenchmarkDecodeCompactLeafLogPayloadTo(b *testing.B) {
 			leafPagePayloadBenchSink = out
 		}
 	})
+
+	b.Run("aliased_dst", func(b *testing.B) {
+		dst := make([]byte, page.PageSize)
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			copy(dst, payload)
+			out, _, decoded, err := decodeCompactLeafLogPayloadTo(dst[:len(payload)], dst[:0])
+			if err != nil {
+				b.Fatalf("decodeCompactLeafLogPayloadTo: %v", err)
+			}
+			if !decoded {
+				b.Fatal("expected compact payload to decode")
+			}
+			leafPagePayloadBenchSink = out
+		}
+	})
 }

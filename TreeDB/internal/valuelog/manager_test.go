@@ -92,6 +92,43 @@ func withMaxDeadMappings(t *testing.T, max int) {
 	})
 }
 
+func TestOpenFileCachesCompactLeafPayloadClassification(t *testing.T) {
+	root := t.TempDir()
+	leafDir := filepath.Join(root, compactLeafPagePayloadDirName)
+	if err := os.MkdirAll(leafDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll leaf: %v", err)
+	}
+	leafPath := filepath.Join(leafDir, "value-l255-000001.log")
+	if err := os.WriteFile(leafPath, nil, 0o644); err != nil {
+		t.Fatalf("WriteFile leaf: %v", err)
+	}
+	leafFile, err := openFile(leafPath, mustEncodeFileID(t, ReservedLeafLogLaneID, 1), nil, nil, templ.DecodeOptions{}, nil)
+	if err != nil {
+		t.Fatalf("openFile leaf: %v", err)
+	}
+	defer func() { _ = leafFile.Close() }()
+	if !leafFile.compactLeafPayloadKnown || !leafFile.compactLeafPayload || !leafFile.allowsCompactLeafPayload() {
+		t.Fatalf("expected leaf-log file to cache compact payload allowance")
+	}
+
+	valueDir := filepath.Join(root, "value_vlog")
+	if err := os.MkdirAll(valueDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll value: %v", err)
+	}
+	valuePath := filepath.Join(valueDir, "value-l0-000001.log")
+	if err := os.WriteFile(valuePath, nil, 0o644); err != nil {
+		t.Fatalf("WriteFile value: %v", err)
+	}
+	valueFile, err := openFile(valuePath, mustEncodeFileID(t, 0, 1), nil, nil, templ.DecodeOptions{}, nil)
+	if err != nil {
+		t.Fatalf("openFile value: %v", err)
+	}
+	defer func() { _ = valueFile.Close() }()
+	if !valueFile.compactLeafPayloadKnown || valueFile.compactLeafPayload || valueFile.allowsCompactLeafPayload() {
+		t.Fatalf("expected value-log file to cache compact payload disallowance")
+	}
+}
+
 func TestManagerMmapReadStatsAggregatesCounters(t *testing.T) {
 	mgr := &Manager{
 		files: map[uint32]*File{
