@@ -1343,7 +1343,7 @@ func (c *Collection) deleteDocumentOnce(documentID []byte) (bool, error) {
 			deltaTables = append(deltaTables, buildDeleteRootDeltaTable(deleteKeys))
 		}
 	}
-	_ = snap.Close()
+	defer func() { _ = snap.Close() }()
 
 	ordered := make([]backenddb.OrderedRootDeltaPublishInput, 0, len(rootNames))
 	iterators := make([]iterator.UnsafeIterator, 0, len(rootNames))
@@ -1580,7 +1580,7 @@ func (c *Collection) updateDocumentOnce(documentID []byte, update func(current [
 			deltaTables = append(deltaTables, table)
 		}
 	}
-	_ = snap.Close()
+	defer func() { _ = snap.Close() }()
 
 	ordered := make([]backenddb.OrderedRootDeltaPublishInput, 0, len(rootNames))
 	iterators := make([]iterator.UnsafeIterator, 0, len(rootNames))
