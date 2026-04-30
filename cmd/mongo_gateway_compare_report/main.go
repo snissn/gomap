@@ -636,7 +636,7 @@ func treeDBBytesSnapshot(result benchmarkResult) (int64, string, bool) {
 	if result.TreeDBDiskAfterLoad != nil {
 		return result.TreeDBDiskAfterLoad.TotalBytes, "load", true
 	}
-	return 0, "", false
+	return 0, "n/a", false
 }
 
 func mongoDataBytes(result benchmarkResult) (int64, bool) {

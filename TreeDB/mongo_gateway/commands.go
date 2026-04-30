@@ -46,20 +46,29 @@ func (s *Server) insertResponse(command wire.Document, sequences []wire.Document
 		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
 	}
 
-	col, err := s.openOrCreateCollection(name)
+	var col *collections.Collection
+	format := s.DefaultCollectionOptions.DocumentFormat
+	if existing, err := s.Collections.OpenCollection(name); err == nil {
+		col = existing
+		format = existing.Meta().Options.DocumentFormat
+	} else if !errors.Is(err, collections.ErrCollectionNotFound) {
+		return commandError(commandCodeBadValue, "BadValue", err.Error())
+	}
+	ids, stored, err := prepareInsertDocuments(documents, format)
 	if err != nil {
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}
-	format := col.Meta().Options.DocumentFormat
-	ids := make([][]byte, 0, len(documents))
-	stored := make([][]byte, 0, len(documents))
-	for _, doc := range documents {
-		key, encoded, err := prepareInsertDocument(doc, format)
+	if col == nil {
+		col, err = s.openOrCreateCollection(name)
 		if err != nil {
 			return commandError(commandCodeBadValue, "BadValue", err.Error())
 		}
-		ids = append(ids, key)
-		stored = append(stored, encoded)
+		if actualFormat := col.Meta().Options.DocumentFormat; actualFormat != format {
+			ids, stored, err = prepareInsertDocuments(documents, actualFormat)
+			if err != nil {
+				return commandError(commandCodeBadValue, "BadValue", err.Error())
+			}
+		}
 	}
 	if _, err := col.InsertBatch(ids, stored); err != nil {
 		code, codeName := commandCodeBadValue, "BadValue"
@@ -72,6 +81,20 @@ func (s *Server) insertResponse(command wire.Document, sequences []wire.Document
 		{Key: "ok", Value: 1.0},
 		{Key: "n", Value: int32(len(documents))},
 	})
+}
+
+func prepareInsertDocuments(documents []wire.Document, format collections.DocumentFormat) ([][]byte, [][]byte, error) {
+	ids := make([][]byte, 0, len(documents))
+	stored := make([][]byte, 0, len(documents))
+	for _, doc := range documents {
+		key, encoded, err := prepareInsertDocument(doc, format)
+		if err != nil {
+			return nil, nil, err
+		}
+		ids = append(ids, key)
+		stored = append(stored, encoded)
+	}
+	return ids, stored, nil
 }
 
 func (s *Server) findResponse(command wire.Document, cursorOwner int64) (wire.Document, error) {

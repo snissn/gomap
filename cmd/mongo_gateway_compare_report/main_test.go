@@ -142,6 +142,10 @@ func TestTreeDBBytesPrefersMaintenanceSnapshot(t *testing.T) {
 	if !ok || got != 2_000 || label != "checkpoint" {
 		t.Fatalf("treeDBBytesSnapshot=%d %q ok=%v want checkpoint", got, label, ok)
 	}
+	got, label, ok = treeDBBytesSnapshot(benchmarkResult{})
+	if ok || got != 0 || label != "n/a" {
+		t.Fatalf("treeDBBytesSnapshot empty=%d %q ok=%v want n/a", got, label, ok)
+	}
 }
 
 func writeFile(t *testing.T, path, content string) {

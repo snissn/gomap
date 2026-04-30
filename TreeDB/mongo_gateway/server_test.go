@@ -1878,6 +1878,9 @@ func TestServerInsertRejectsUnsupportedBSONTypes(t *testing.T) {
 	}
 	resp := readMsgResponse(t, rw.w.Bytes(), 213)
 	assertCommandError(t, resp, "BadValue")
+	if _, err := server.Collections.OpenCollection("app.events"); !errors.Is(err, collections.ErrCollectionNotFound) {
+		t.Fatalf("failed insert collection err=%v, want collection not found", err)
+	}
 }
 
 func TestServerAppliesDefaultCollectionAndIndexOptions(t *testing.T) {
