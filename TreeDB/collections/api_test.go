@@ -2,6 +2,7 @@ package collections
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,7 +10,9 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
+	treedb "github.com/snissn/gomap/TreeDB"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
 
@@ -102,9 +105,7 @@ func TestCollectionInsertBatchBridge_RoundTripWithSecondaryIndexes(t *testing.T)
 	if err != nil {
 		t.Fatalf("find city: %v", err)
 	}
-	if len(cityIDs) != 2 || !bytes.Equal(cityIDs[0], []byte("u1")) || !bytes.Equal(cityIDs[1], []byte("u2")) {
-		t.Fatalf("city ids=%q want [u1 u2]", cityIDs)
-	}
+	collectionMaintenanceRequireUnorderedIDs(t, cityIDs, []byte("u1"), []byte("u2"))
 
 	snap := d.AcquireSnapshot()
 	if snap == nil {
@@ -125,6 +126,169 @@ func TestCollectionInsertBatchBridge_RoundTripWithSecondaryIndexes(t *testing.T)
 			t.Fatalf("root %q was not persisted", rootName)
 		}
 	}
+}
+
+func TestCollectionValueLogRewriteOffline_RoundTripWithCompressedSecondaryIndexes(t *testing.T) {
+	opts := treedb.Options{
+		Dir:                        t.TempDir(),
+		Durability:                 treedb.DurabilityWALOffRelaxed,
+		IndexOuterLeavesInValueLog: true,
+	}
+	d, cleanup, err := treedb.OpenBackendWithCachedLeafLog(opts)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	closeDB := collectionMaintenanceCloseOnce(cleanup)
+	t.Cleanup(func() { _ = closeDB() })
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DataRootStoragePolicy:   RootStorageCompressed,
+			IndexStateStoragePolicy: RootStorageCompressed,
+		},
+		Indexes: []IndexDefinition{
+			{Name: "email", Field: "email", Unique: true, StoragePolicy: RootStorageCompressed},
+			{Name: "city", Field: "city", StoragePolicy: RootStorageCompressed},
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	docs := [][]byte{
+		[]byte(`{"email":"ada@example.com","city":"hnl","pad":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`),
+		[]byte(`{"email":"grace@example.com","city":"hnl","pad":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}`),
+		[]byte(`{"email":"linus@example.com","city":"hel","pad":"cccccccccccccccccccccccccccccccc"}`),
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("u1"), []byte("u2"), []byte("u3")}, docs); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+	requireCollectionMaintenanceReads(t, col)
+	if err := closeDB(); err != nil {
+		t.Fatalf("close db: %v", err)
+	}
+
+	rewriteStats, err := treedb.ValueLogRewriteOffline(opts)
+	if err != nil {
+		t.Fatalf("ValueLogRewriteOffline: %v", err)
+	}
+	if rewriteStats.RecordsCopied == 0 {
+		t.Fatalf("expected offline rewrite to copy collection leaf records, stats=%+v", rewriteStats)
+	}
+
+	reopened, reopenedCleanup, err := treedb.OpenBackendWithCachedLeafLog(opts)
+	if err != nil {
+		t.Fatalf("reopen db: %v", err)
+	}
+	defer func() { _ = reopenedCleanup() }()
+	reopenedCol, err := NewCollectionManager(reopened).OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection after maintenance: %v", err)
+	}
+	requireCollectionMaintenanceReads(t, reopenedCol)
+}
+
+func TestCollectionLeafGenerationPackGC_RoundTripWithTemplateV1SecondaryIndexes(t *testing.T) {
+	if testing.Short() {
+		t.Skip("loads enough documents to exercise collection leaf generation pack/GC")
+	}
+	opts := treedb.Options{
+		Dir:                        t.TempDir(),
+		Durability:                 treedb.DurabilityWALOffRelaxed,
+		IndexOuterLeavesInValueLog: true,
+	}
+	opts.ValueLog.Generational.LeafSegmentTargetBytes = 16 << 10
+
+	d, cleanup, err := treedb.OpenBackendWithCachedLeafLog(opts)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	closeDB := collectionMaintenanceCloseOnce(cleanup)
+	t.Cleanup(func() { _ = closeDB() })
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat:          DocumentFormatTemplateV1,
+			DataRootStoragePolicy:   RootStorageCompressed,
+			IndexStateStoragePolicy: RootStorageCompressed,
+		},
+		Indexes: []IndexDefinition{
+			{Name: "email", Field: "email", Unique: true, StoragePolicy: RootStorageCompressed},
+			{Name: "city", Field: "city", StoragePolicy: RootStorageCompressed},
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+
+	var encoder TemplateV1Encoder
+	const (
+		documents                              = 4_000
+		batchSize                              = 500
+		minExpectedCollectionLiveBytesForSmoke = 512
+	)
+	for start := 0; start < documents; start += batchSize {
+		ids, docs := collectionMaintenanceTemplateBatch(t, &encoder, start, batchSize)
+		if _, err := col.InsertBatch(ids, docs); err != nil {
+			t.Fatalf("insert batch at %d: %v", start, err)
+		}
+	}
+	requireCollectionMaintenanceTemplateReads(t, col)
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
+
+	packCtx, packCancel := collectionMaintenanceTestContext(t)
+	packStats, err := d.LeafGenerationPackFromPlan(packCtx, backenddb.LeafGenerationPackFromPlanOptions{
+		Force:          true,
+		MaxGenerations: 1,
+		Sync:           true,
+	})
+	packCancel()
+	if err != nil {
+		t.Fatalf("LeafGenerationPackFromPlan: %v", err)
+	}
+	if got := packStats.LeafPagesCopied; got <= 0 {
+		t.Fatalf("LeafPagesCopied=%d, want collection leaves copied (stats=%+v)", got, packStats)
+	}
+	if got := packStats.SourceBytesLive; got <= minExpectedCollectionLiveBytesForSmoke {
+		t.Fatalf("SourceBytesLive=%d, want real collection live bytes copied (stats=%+v)", got, packStats)
+	}
+	requireCollectionMaintenanceTemplateReads(t, col)
+
+	gcCtx, gcCancel := collectionMaintenanceTestContext(t)
+	gcStats, err := d.LeafGenerationGC(gcCtx, backenddb.LeafGenerationGCOptions{})
+	gcCancel()
+	if err != nil {
+		t.Fatalf("LeafGenerationGC: %v", err)
+	}
+	if gcStats.BytesDeleted <= 0 && gcStats.FilesDeleted <= 0 {
+		t.Fatalf("LeafGenerationGC stats=%+v, want deleted packed source generation bytes/files", gcStats)
+	}
+	requireCollectionMaintenanceTemplateReads(t, col)
+	if err := closeDB(); err != nil {
+		t.Fatalf("close db: %v", err)
+	}
+
+	reopened, reopenedCleanup, err := treedb.OpenBackendWithCachedLeafLog(opts)
+	if err != nil {
+		t.Fatalf("reopen db: %v", err)
+	}
+	defer func() { _ = reopenedCleanup() }()
+	reopenedCol, err := NewCollectionManager(reopened).OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection after leaf generation maintenance: %v", err)
+	}
+	requireCollectionMaintenanceTemplateReads(t, reopenedCol)
 }
 
 func TestCollectionManagerListCollections(t *testing.T) {
@@ -232,6 +396,138 @@ func TestCollectionInsertBatchStatsExposeIndexRunShape(t *testing.T) {
 	}
 	if got := len(empty.SecondaryRuns); got != 0 {
 		t.Fatalf("empty stats secondary runs=%d want 0", got)
+	}
+}
+
+func requireCollectionMaintenanceReads(t *testing.T, col *Collection) {
+	t.Helper()
+	got, err := col.Get([]byte("u2"))
+	if err != nil {
+		t.Fatalf("get u2: %v", err)
+	}
+	if want := []byte(`{"email":"grace@example.com","city":"hnl","pad":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}`); !bytes.Equal(got, want) {
+		t.Fatalf("u2=%q want %q", got, want)
+	}
+	emailIDs, err := col.FindByIndex("email", "ada@example.com")
+	if err != nil {
+		t.Fatalf("find email: %v", err)
+	}
+	if len(emailIDs) != 1 || !bytes.Equal(emailIDs[0], []byte("u1")) {
+		t.Fatalf("email ids=%q want [u1]", emailIDs)
+	}
+	cityIDs, err := col.FindByIndex("city", "hnl")
+	if err != nil {
+		t.Fatalf("find city: %v", err)
+	}
+	collectionMaintenanceRequireUnorderedIDs(t, cityIDs, []byte("u1"), []byte("u2"))
+}
+
+func collectionMaintenanceTemplateBatch(t *testing.T, encoder *TemplateV1Encoder, start, count int) ([][]byte, [][]byte) {
+	t.Helper()
+	ids := make([][]byte, count)
+	docs := make([][]byte, count)
+	for i := 0; i < count; i++ {
+		n := start + i
+		ids[i] = collectionMaintenanceTemplateID(n)
+		doc, err := encoder.EncodeDocument(
+			[]string{"name", "email", "city", "pad"},
+			[]any{
+				fmt.Sprintf("user-%09d", n),
+				fmt.Sprintf("user-%09d@example.com", n),
+				fmt.Sprintf("city-%02d", n%32),
+				"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			},
+		)
+		if err != nil {
+			t.Fatalf("encode template-v1 doc %d: %v", n, err)
+		}
+		docs[i] = doc
+	}
+	return ids, docs
+}
+
+func collectionMaintenanceTemplateID(n int) []byte {
+	return []byte(fmt.Sprintf("u-%09d", n))
+}
+
+func requireCollectionMaintenanceTemplateReads(t *testing.T, col *Collection) {
+	t.Helper()
+	id := collectionMaintenanceTemplateID(2)
+	got, err := col.Get(id)
+	if err != nil {
+		t.Fatalf("get %q: %v", id, err)
+	}
+	if !bytes.HasPrefix(got, []byte(templateV1StoredMagic)) {
+		prefixLen := len(got)
+		if prefixLen > len(templateV1StoredMagic) {
+			prefixLen = len(templateV1StoredMagic)
+		}
+		t.Fatalf("stored %q prefix=%q want template-v1 stored magic", id, got[:prefixLen])
+	}
+	emailIDs, err := col.FindByIndex("email", "user-000000001@example.com")
+	if err != nil {
+		t.Fatalf("find email: %v", err)
+	}
+	if len(emailIDs) != 1 || !bytes.Equal(emailIDs[0], collectionMaintenanceTemplateID(1)) {
+		t.Fatalf("email ids=%q want [u-000000001]", emailIDs)
+	}
+	cityIDs, err := col.FindByIndex("city", "city-02")
+	if err != nil {
+		t.Fatalf("find city: %v", err)
+	}
+	if !collectionMaintenanceContainsID(cityIDs, id) {
+		t.Fatalf("city ids=%q do not include %q", cityIDs, id)
+	}
+}
+
+func collectionMaintenanceContainsID(ids [][]byte, want []byte) bool {
+	for _, id := range ids {
+		if bytes.Equal(id, want) {
+			return true
+		}
+	}
+	return false
+}
+
+func collectionMaintenanceRequireUnorderedIDs(t *testing.T, got [][]byte, want ...[]byte) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("ids=%q want %q", got, want)
+	}
+	counts := make(map[string]int, len(got))
+	for _, id := range got {
+		counts[string(id)]++
+	}
+	for _, id := range want {
+		key := string(id)
+		if counts[key] == 0 {
+			t.Fatalf("ids=%q missing %q", got, id)
+		}
+		counts[key]--
+	}
+}
+
+func collectionMaintenanceTestContext(t *testing.T) (context.Context, context.CancelFunc) {
+	t.Helper()
+	timeout := 30 * time.Second
+	if deadline, ok := t.Deadline(); ok {
+		if remaining := time.Until(deadline); remaining > 0 && remaining < timeout {
+			timeout = remaining
+		}
+	}
+	return context.WithTimeout(context.Background(), timeout)
+}
+
+func collectionMaintenanceCloseOnce(cleanup func() error) func() error {
+	var once sync.Once
+	var closeErr error
+	return func() error {
+		once.Do(func() {
+			if cleanup != nil {
+				closeErr = cleanup()
+			}
+		})
+		return closeErr
 	}
 }
 
@@ -1054,10 +1350,10 @@ func TestCollectionInsertBatchBridge_AppendsWithoutDroppingExistingRoots(t *test
 	} {
 		got, err := col.Get([]byte(id))
 		if err != nil {
-			t.Fatalf("get %s: %v", id, err)
+			t.Fatalf("get %q: %v", id, err)
 		}
 		if !bytes.Equal(got, want) {
-			t.Fatalf("%s=%q want %q", id, got, want)
+			t.Fatalf("%q=%q want %q", id, got, want)
 		}
 	}
 
