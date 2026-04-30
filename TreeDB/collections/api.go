@@ -2322,63 +2322,91 @@ func (c *Collection) findByIndexValue(indexName string, value any, maxResults in
 // then scans the collection primary root up to maxDocuments. The returned
 // boolean is true when additional documents were present beyond the limit.
 func (c *Collection) ScanDocuments(maxDocuments int) ([]DocumentRecord, bool, error) {
+	out := make([]DocumentRecord, 0)
+	truncated, err := c.ScanDocumentsFunc(maxDocuments, func(record DocumentRecord) (bool, error) {
+		out = append(out, record)
+		return true, nil
+	})
+	if err != nil {
+		return nil, false, err
+	}
+	return out, truncated, nil
+}
+
+// ScanDocumentsFunc flushes buffered no-index writes before acquiring a
+// snapshot, then calls fn for primary collection records until maxDocuments is
+// reached, the collection is exhausted, or fn returns false. The returned
+// boolean is true only when additional documents were present beyond the
+// maxDocuments limit.
+func (c *Collection) ScanDocumentsFunc(maxDocuments int, fn func(DocumentRecord) (bool, error)) (bool, error) {
 	if c == nil {
-		return nil, false, errCollectionNil
+		return false, errCollectionNil
 	}
 	if c.db == nil {
-		return nil, false, errors.New("collections: db is nil")
+		return false, errors.New("collections: db is nil")
 	}
 	if maxDocuments <= 0 {
-		return nil, false, errors.New("collections: max documents must be positive")
+		return false, errors.New("collections: max documents must be positive")
+	}
+	if fn == nil {
+		return false, errors.New("collections: scan callback is nil")
 	}
 	if err := c.flushBufferedNoIndex(); err != nil {
-		return nil, false, err
+		return false, err
 	}
 	snap := c.db.AcquireSnapshot()
 	if snap == nil {
-		return nil, false, backenddb.ErrClosed
+		return false, backenddb.ErrClosed
 	}
 	defer func() { _ = snap.Close() }()
 	catalog, err := c.catalogForSnapshot(snap)
 	if err != nil {
-		return nil, false, err
+		return false, err
 	}
 	if catalog == nil {
-		return nil, false, errCollectionNotFound
+		return false, errCollectionNotFound
 	}
 	rootID := catalog.rootID(collectionPrimaryRootName(catalog.meta.Name))
 	if rootID == 0 {
-		return nil, false, nil
+		return false, nil
 	}
 	it, err := snap.IteratorAtRoot(rootID, nil, nil)
 	if errors.Is(err, tree.ErrKeyNotFound) {
-		return nil, false, nil
+		return false, nil
 	}
 	if err != nil {
-		return nil, false, err
+		return false, err
 	}
 	defer func() { _ = it.Close() }()
-	out := make([]DocumentRecord, 0)
 	truncated := false
+	scanned := 0
 	for it.Valid() {
 		if it.IsDeleted() {
 			it.Next()
 			continue
 		}
-		if len(out) >= maxDocuments {
+		if scanned >= maxDocuments {
 			truncated = true
 			break
 		}
-		out = append(out, DocumentRecord{
+		record := DocumentRecord{
 			ID:       bytes.Clone(it.UnsafeKey()),
 			Document: it.ValueCopy(nil),
-		})
+		}
+		scanned++
+		next, err := fn(record)
+		if err != nil {
+			return false, err
+		}
+		if !next {
+			return false, nil
+		}
 		it.Next()
 	}
 	if err := it.Error(); err != nil {
-		return nil, false, err
+		return false, err
 	}
-	return out, truncated, nil
+	return truncated, nil
 }
 
 func loadCollectionCatalog(snap *backenddb.Snapshot, name string) (*collectionCatalog, error) {

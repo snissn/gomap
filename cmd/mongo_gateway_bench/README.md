@@ -144,7 +144,8 @@ The initial workload phases are:
 
 - `load_insert_many`: batched document inserts.
 - `id_find_one`: point lookup by `_id`.
-- `email_find_one`: point lookup by the `email` field.
+- `email_find_one`: point lookup by the `email` field; emitted only when the
+  email secondary index is part of the cell.
 - `age_range_limit_10`: bounded range query with `limit: 10`; operations count
   range queries, not returned documents.
 - `id_update_set`: `$set` update by `_id`.

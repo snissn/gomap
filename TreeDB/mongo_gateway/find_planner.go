@@ -82,7 +82,15 @@ func parseFindPlan(command wire.Document, filter wire.Document) (findPlan, error
 
 func (s *Server) executeFind(col *collections.Collection, plan findPlan) (findResultSet, error) {
 	// MaxFindScanDocuments is a candidate-work cap, not a page-size cap. It is
-	// intentionally enforced before later skip/limit pagination.
+	// enforced while scanning candidates. Unsorted collection scans can stop
+	// early once skip/limit is satisfied because later records cannot affect the
+	// result set.
+	if docs, ok, err := s.findUnsortedScanDocuments(col, plan); ok || err != nil {
+		if err != nil {
+			return findResultSet{}, err
+		}
+		return findResultSet{docs: docs, projection: plan.projection}, nil
+	}
 	docs, err := s.findCandidateDocuments(col, plan.predicates)
 	if err != nil {
 		return findResultSet{}, err
@@ -207,6 +215,63 @@ func (s *Server) findCandidateDocuments(col *collections.Collection, predicates 
 		out = append(out, doc)
 	}
 	return out, nil
+}
+
+func (s *Server) findUnsortedScanDocuments(col *collections.Collection, plan findPlan) ([]wire.Document, bool, error) {
+	if plan.sort.field != "" || findPlanHasDirectCandidate(col.Meta(), plan.predicates) {
+		return nil, false, nil
+	}
+	maxDocuments := s.maxFindScanDocuments()
+	docs := make([]wire.Document, 0)
+	matched := 0
+	truncated, err := col.ScanDocumentsFunc(maxDocuments, func(record collections.DocumentRecord) (bool, error) {
+		doc, err := storedDocumentToBSON(record.Document)
+		if err != nil {
+			return false, err
+		}
+		match, err := documentMatchesPredicates(doc, plan.predicates)
+		if err != nil {
+			return false, err
+		}
+		if !match {
+			return true, nil
+		}
+		if matched >= int(plan.skip) {
+			docs = append(docs, doc)
+		}
+		matched++
+		if plan.limit > 0 && len(docs) >= int(plan.limit) {
+			return false, nil
+		}
+		return true, nil
+	})
+	if err != nil {
+		return nil, true, err
+	}
+	if truncated {
+		return nil, true, fmt.Errorf("Mongo gateway find requires a bounded scan and exceeded %d documents", maxDocuments)
+	}
+	return docs, true, nil
+}
+
+func findPlanHasDirectCandidate(meta collections.CollectionMeta, predicates []findPredicate) bool {
+	if _, ok := primaryCandidatePredicate(predicates); ok {
+		return true
+	}
+	for _, pred := range predicates {
+		if pred.op != findPredicateEq && pred.op != findPredicateIn {
+			continue
+		}
+		if predicateContainsNull(pred) {
+			continue
+		}
+		for _, idx := range meta.Indexes {
+			if idx.Field == pred.field {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (s *Server) limitCandidateDocuments(docs []wire.Document) ([]wire.Document, error) {

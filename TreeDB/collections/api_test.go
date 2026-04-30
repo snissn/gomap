@@ -2006,6 +2006,17 @@ func TestCollectionScanDocumentsAndFindByIndexValue(t *testing.T) {
 	if !truncated || len(records) != 1 {
 		t.Fatalf("limited scan truncated=%v len=%d want true/1", truncated, len(records))
 	}
+	var callbackIDs [][]byte
+	truncated, err = col.ScanDocumentsFunc(1, func(record DocumentRecord) (bool, error) {
+		callbackIDs = append(callbackIDs, record.ID)
+		return false, nil
+	})
+	if err != nil {
+		t.Fatalf("scan documents func: %v", err)
+	}
+	if truncated || len(callbackIDs) != 1 || !bytes.Equal(callbackIDs[0], []byte("u1")) {
+		t.Fatalf("callback scan truncated=%v ids=%q want false/[u1]", truncated, callbackIDs)
+	}
 }
 
 func TestCollectionFindByIndexValueMatchesLargeJSONInteger(t *testing.T) {

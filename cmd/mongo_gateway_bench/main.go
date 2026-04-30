@@ -518,26 +518,28 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget) (*benchm
 	}
 	result.Phases = append(result.Phases, idPhase)
 
-	emailPhase, err := measurePhase("email_find_one", cfg.Reads, func(sample func(time.Duration)) error {
-		for i := 0; i < cfg.Reads; i++ {
-			email := benchmarkEmail((i * 17) % cfg.Documents)
-			var out bson.M
-			begin := time.Now()
-			err := coll.FindOne(ctx, bson.D{{Key: "email", Value: email}}).Decode(&out)
-			sample(time.Since(begin))
-			if err != nil {
-				return err
+	if runEmailFindPhase(cfg) {
+		emailPhase, err := measurePhase("email_find_one", cfg.Reads, func(sample func(time.Duration)) error {
+			for i := 0; i < cfg.Reads; i++ {
+				email := benchmarkEmail((i * 17) % cfg.Documents)
+				var out bson.M
+				begin := time.Now()
+				err := coll.FindOne(ctx, bson.D{{Key: "email", Value: email}}).Decode(&out)
+				sample(time.Since(begin))
+				if err != nil {
+					return err
+				}
+				if out["email"] != email {
+					return fmt.Errorf("email lookup returned email=%v want %s", out["email"], email)
+				}
 			}
-			if out["email"] != email {
-				return fmt.Errorf("email lookup returned email=%v want %s", out["email"], email)
-			}
+			return nil
+		})
+		if err != nil {
+			return nil, err
 		}
-		return nil
-	})
-	if err != nil {
-		return nil, err
+		result.Phases = append(result.Phases, emailPhase)
 	}
-	result.Phases = append(result.Phases, emailPhase)
 
 	rangePhase, err := measurePhase("age_range_limit_10", cfg.RangeReads, func(sample func(time.Duration)) error {
 		for i := 0; i < cfg.RangeReads; i++ {
@@ -619,6 +621,10 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget) (*benchm
 		return nil, err
 	}
 	return result, nil
+}
+
+func runEmailFindPhase(cfg config) bool {
+	return cfg.Reads > 0 && cfg.SecondaryIndexes >= 1
 }
 
 func createIndexes(ctx context.Context, coll *mongo.Collection, secondaryIndexes int) error {
