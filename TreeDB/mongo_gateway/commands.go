@@ -195,12 +195,12 @@ func (s *Server) updateResponse(command wire.Document, sequences []wire.Document
 		}
 
 		matchedOne, modifiedOne, err := col.Update(key, func(stored []byte) ([]byte, bool, error) {
-			materializer, err := col.NewStoredDocumentJSONMaterializer()
+			materializer, err := storedDocumentMaterializerForCollection(col)
 			if err != nil {
 				return nil, false, err
 			}
 			defer func() { _ = materializer.Close() }()
-			raw, err := storedDocumentToBSON(materializer, stored)
+			raw, err := storedDocumentToBSON(col, materializer, stored)
 			if err != nil {
 				return nil, false, err
 			}
@@ -1094,13 +1094,35 @@ func prepareInsertDocument(doc wire.Document, format collections.DocumentFormat)
 	return key, stored, nil
 }
 
-func storedDocumentToBSON(materializer *collections.StoredDocumentJSONMaterializer, stored []byte) (wire.Document, error) {
+func storedDocumentMaterializerForCollection(col *collections.Collection) (*collections.StoredDocumentJSONMaterializer, error) {
+	if col == nil {
+		return nil, nil
+	}
+	switch col.Meta().Options.DocumentFormat {
+	case collections.DocumentFormatDefault, collections.DocumentFormatJSON:
+		return nil, nil
+	default:
+		return col.NewStoredDocumentJSONMaterializer()
+	}
+}
+
+func storedDocumentToBSON(col *collections.Collection, materializer *collections.StoredDocumentJSONMaterializer, stored []byte) (wire.Document, error) {
 	if materializer != nil {
-		var err error
-		stored, err = materializer.StoredDocumentJSON(stored)
+		materialized, err := materializer.StoredDocumentJSON(stored)
 		if err != nil {
-			return nil, err
+			// A reused template-v1 resolver can lag a concurrently fetched document.
+			// Retry once with a fresh snapshot before surfacing the original error.
+			if col != nil {
+				if fresh, freshErr := col.StoredDocumentJSON(stored); freshErr == nil {
+					materialized = fresh
+					err = nil
+				}
+			}
+			if err != nil {
+				return nil, err
+			}
 		}
+		stored = materialized
 	}
 	var raw bson.Raw
 	if err := bson.UnmarshalExtJSON(stored, true, &raw); err != nil {
