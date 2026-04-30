@@ -606,9 +606,17 @@ func (p insertBatchPlanner) emitIndexStateRun(plan *insertBatchPlan, items []ins
 func (p insertBatchPlanner) emitSecondaryRuns(plan *insertBatchPlan, items []insertBatchItem, runtimes []indexRuntime, documentIDOrder []int) error {
 	for runtimeIdx, runtime := range runtimes {
 		runStart := time.Now()
-		entryCount, keyBytes, alreadySorted, err := secondaryEntryOrderStats(items, runtimeIdx, documentIDOrder)
+		entryCount, keyBytes, alreadySorted, err := secondaryEntryOrderStats(items, runtimeIdx, nil)
 		if err != nil {
 			return err
+		}
+		emitOrder := []int(nil)
+		if !alreadySorted && documentIDOrder != nil {
+			entryCount, keyBytes, alreadySorted, err = secondaryEntryOrderStats(items, runtimeIdx, documentIDOrder)
+			if err != nil {
+				return err
+			}
+			emitOrder = documentIDOrder
 		}
 		runStats := CollectionSecondaryRunStats{
 			IndexName:     runtime.def.name,
@@ -628,7 +636,7 @@ func (p insertBatchPlanner) emitSecondaryRuns(plan *insertBatchPlan, items []ins
 			valuePos := 0
 			if err := applyCollectionRunEntries(table, entryCount, func(_ int) (key, value []byte, err error) {
 				for itemPos < len(items) {
-					idx := orderedItemIndex(documentIDOrder, itemPos)
+					idx := orderedItemIndex(emitOrder, itemPos)
 					values := items[idx].state.valuesAt(runtimeIdx)
 					if valuePos < len(values) {
 						encoded := values[valuePos]
@@ -659,7 +667,7 @@ func (p insertBatchPlanner) emitSecondaryRuns(plan *insertBatchPlan, items []ins
 			continue
 		}
 
-		if table, ok, err := p.emitGroupedSecondaryRunTable(items, runtimeIdx, documentIDOrder, entryCount, keyBytes); err != nil {
+		if table, ok, err := p.emitGroupedSecondaryRunTable(items, runtimeIdx, runtime.def.name, documentIDOrder, entryCount, keyBytes); err != nil {
 			return err
 		} else if ok {
 			plan.runs = append(plan.runs, collectionRootRun{
@@ -724,7 +732,7 @@ type secondaryValueGroup struct {
 	documentIDs [][]byte
 }
 
-func (p insertBatchPlanner) emitGroupedSecondaryRunTable(items []insertBatchItem, runtimeIdx int, documentIDOrder []int, entryCount, keyBytes int) (memtable.Table, bool, error) {
+func (p insertBatchPlanner) emitGroupedSecondaryRunTable(items []insertBatchItem, runtimeIdx int, indexName string, documentIDOrder []int, entryCount, keyBytes int) (memtable.Table, bool, error) {
 	if entryCount <= 0 {
 		return nil, false, nil
 	}
@@ -773,7 +781,16 @@ func (p insertBatchPlanner) emitGroupedSecondaryRunTable(items []insertBatchItem
 			groupPos++
 			documentPos = 0
 		}
-		return nil, nil, errors.New("collections: grouped secondary index entry count mismatch")
+		return nil, nil, fmt.Errorf(
+			"collections: grouped secondary index entry count mismatch collection=%q index=%q runtimeIdx=%d entryCount=%d groups=%d groupPos=%d documentPos=%d",
+			p.collection,
+			indexName,
+			runtimeIdx,
+			entryCount,
+			len(groups),
+			groupPos,
+			documentPos,
+		)
 	}); err != nil {
 		return nil, false, err
 	}

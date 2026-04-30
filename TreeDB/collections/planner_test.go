@@ -124,7 +124,7 @@ func TestEmitGroupedSecondaryRunTableSortsValueGroupsByDocumentID(t *testing.T) 
 	if alreadySorted {
 		t.Fatal("test data should exercise grouped unsorted construction")
 	}
-	table, ok, err := (insertBatchPlanner{}).emitGroupedSecondaryRunTable(items, 0, order, entryCount, keyBytes)
+	table, ok, err := (insertBatchPlanner{collection: "users"}).emitGroupedSecondaryRunTable(items, 0, "city", order, entryCount, keyBytes)
 	if err != nil {
 		t.Fatalf("grouped secondary run: %v", err)
 	}
@@ -153,6 +153,33 @@ func TestEmitGroupedSecondaryRunTableSortsValueGroupsByDocumentID(t *testing.T) 
 	if got := entryKeys(entries); !byteMatrixEqual(got, want) {
 		t.Fatalf("grouped keys=%q want %q", got, want)
 	}
+}
+
+func TestEmitSecondaryRunsPreservesInputOrderSortedFastPath(t *testing.T) {
+	items := []insertBatchItem{
+		{id: []byte("u2"), state: orderedDocumentIndexState{{[]byte("s:city-00")}}},
+		{id: []byte("u1"), state: orderedDocumentIndexState{{[]byte("s:city-01")}}},
+	}
+	primaryOrder := sortedItemOrderByKey(items, func(item *insertBatchItem) []byte { return item.id })
+	if primaryOrder == nil {
+		t.Fatal("test data should have different primary-key order")
+	}
+	planner := insertBatchPlanner{collection: "users"}
+	plan := &insertBatchPlan{}
+	runtimes := []indexRuntime{{
+		def: indexDefinition{name: "city", field: "city"},
+	}}
+	if err := planner.emitSecondaryRuns(plan, items, runtimes, primaryOrder); err != nil {
+		t.Fatalf("emit secondary runs: %v", err)
+	}
+	if got, want := plan.stats.SecondarySortedRuns, 1; got != want {
+		t.Fatalf("sorted runs=%d want %d", got, want)
+	}
+	if got := plan.stats.SecondaryUnsortedRuns; got != 0 {
+		t.Fatalf("unsorted runs=%d want 0", got)
+	}
+	entries := collectRunEntries(t, mustFindRun(t, plan, collectionRootSecondary, "city"))
+	assertSortedEntries(t, entries)
 }
 
 func TestInsertBatchPlanner_PreservesCallerVisibleResultOrdering(t *testing.T) {
