@@ -3,6 +3,7 @@ package mongogateway
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"math"
@@ -387,8 +388,8 @@ func TestServerBSONDefaultStoresNativeBSONAndUpdatesIndexes(t *testing.T) {
 	if err := bson.Raw(stored).Validate(); err != nil {
 		t.Fatalf("stored native BSON failed validation: %v", err)
 	}
-	if stored[0] == '{' {
-		t.Fatalf("stored BSON appears to be JSON: %q", stored[:min(len(stored), 32)])
+	if json.Valid(stored) {
+		t.Fatalf("stored BSON is also valid JSON: %q", stored[:min(len(stored), 32)])
 	}
 	if got, ok := bson.Raw(stored).Lookup("email").StringValueOK(); !ok || got != "ada@example.com" {
 		t.Fatalf("stored email=%q ok=%v want ada@example.com", got, ok)

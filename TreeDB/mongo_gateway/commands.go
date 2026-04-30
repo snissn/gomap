@@ -166,6 +166,11 @@ func (s *Server) updateResponse(command wire.Document, sequences []wire.Document
 		}
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}
+	materializer, err := col.NewStoredDocumentJSONMaterializer()
+	if err != nil {
+		return commandError(commandCodeBadValue, "BadValue", err.Error())
+	}
+	defer func() { _ = materializer.Close() }()
 
 	for i, update := range updates {
 		filter, err := requiredDocumentField(update, "q")
@@ -196,7 +201,7 @@ func (s *Server) updateResponse(command wire.Document, sequences []wire.Document
 		}
 
 		matchedOne, modifiedOne, err := col.Update(key, func(stored []byte) ([]byte, bool, error) {
-			raw, err := storedDocumentToBSON(col, stored)
+			raw, err := storedDocumentToBSON(materializer, stored)
 			if err != nil {
 				return nil, false, err
 			}
@@ -1093,9 +1098,9 @@ func prepareInsertDocument(doc wire.Document, format collections.DocumentFormat)
 	return key, stored, nil
 }
 
-func storedDocumentToBSON(col *collections.Collection, stored []byte) (wire.Document, error) {
-	if col != nil {
-		if col.Meta().Options.DocumentFormat == collections.DocumentFormatBSON {
+func storedDocumentToBSON(materializer *collections.StoredDocumentJSONMaterializer, stored []byte) (wire.Document, error) {
+	if materializer != nil {
+		if materializer.DocumentFormat() == collections.DocumentFormatBSON {
 			raw := bson.Raw(stored)
 			if err := raw.Validate(); err != nil {
 				return nil, err
@@ -1103,7 +1108,7 @@ func storedDocumentToBSON(col *collections.Collection, stored []byte) (wire.Docu
 			return wire.Document(raw), nil
 		}
 		var err error
-		stored, err = col.StoredDocumentJSON(stored)
+		stored, err = materializer.StoredDocumentJSON(stored)
 		if err != nil {
 			return nil, err
 		}

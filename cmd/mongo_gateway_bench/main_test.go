@@ -360,7 +360,7 @@ func runTreeDBProfileSmoke(t *testing.T, profile treedb.Profile) float64 {
 	defer func() {
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		if err := target.cleanup(cleanupCtx); err != nil {
+		if err := closeBenchTarget(cleanupCtx, target); err != nil {
 			t.Errorf("cleanup %s: %v", profile, err)
 		}
 	}()
