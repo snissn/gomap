@@ -13,6 +13,8 @@ import (
 	"strings"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
+	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/tree"
 )
 
@@ -64,6 +66,12 @@ type templateV1SnapshotResolver struct {
 	snap   *backenddb.Snapshot
 	rootID uint64
 	cache  map[string]*templateV1Template
+}
+
+type templateV1BufferedRunsResolver struct {
+	runs     []memtable.Table
+	fallback templateV1Resolver
+	cache    map[string]*templateV1Template
 }
 
 type templateV1ObjectRef struct {
@@ -118,6 +126,25 @@ func collectionOptionsWithTemplateV1Resolver(opts collectionOptions, snap *backe
 		snap:   snap,
 		rootID: catalog.rootID(collectionTemplateRootName(catalog.meta.Name)),
 		cache:  make(map[string]*templateV1Template),
+	}
+	return opts
+}
+
+func collectionOptionsWithBufferedTemplateV1Resolver(opts collectionOptions, domain *collectionWriteDomain, collectionName string) collectionOptions {
+	if normalizedDocumentFormat(opts.documentFormat) != DocumentFormatTemplateV1 || domain == nil || collectionName == "" {
+		return opts
+	}
+	rootName := collectionTemplateRootName(collectionName)
+	domain.mu.RLock()
+	runs := append([]memtable.Table(nil), domain.rootRuns[rootName]...)
+	domain.mu.RUnlock()
+	if len(runs) == 0 {
+		return opts
+	}
+	opts.templateResolver = &templateV1BufferedRunsResolver{
+		runs:     runs,
+		fallback: opts.templateResolver,
+		cache:    make(map[string]*templateV1Template),
 	}
 	return opts
 }
@@ -340,6 +367,42 @@ func (r *templateV1SnapshotResolver) lookupTemplateV1(id [32]byte) (*templateV1T
 	}
 	r.cache[key] = record.tpl
 	return record.tpl, nil
+}
+
+func (r *templateV1BufferedRunsResolver) lookupTemplateV1(id [32]byte) (*templateV1Template, error) {
+	if r == nil {
+		return nil, errTemplateV1MissingResolver
+	}
+	key := string(id[:])
+	if tpl := r.cache[key]; tpl != nil {
+		return tpl, nil
+	}
+	for i := len(r.runs) - 1; i >= 0; i-- {
+		run := r.runs[i]
+		if run == nil {
+			continue
+		}
+		value, _, flags, found := run.GetEntry(id[:])
+		if !found || flags&node.FlagTombstone != 0 {
+			continue
+		}
+		record, err := parseTemplateV1Record(value)
+		if err != nil {
+			return nil, err
+		}
+		if record.id != id {
+			return nil, errors.New("collections: template-v1 template id mismatch")
+		}
+		if r.cache == nil {
+			r.cache = make(map[string]*templateV1Template)
+		}
+		r.cache[key] = record.tpl
+		return record.tpl, nil
+	}
+	if r.fallback != nil {
+		return r.fallback.lookupTemplateV1(id)
+	}
+	return nil, errTemplateV1TemplateNotFound
 }
 
 func sortTemplateV1Records(records []templateV1Record) {

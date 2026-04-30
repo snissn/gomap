@@ -108,6 +108,9 @@ func TestCollectionInsertBatchBridge_RoundTripWithSecondaryIndexes(t *testing.T)
 		t.Fatalf("find city: %v", err)
 	}
 	collectionMaintenanceRequireUnorderedIDs(t, cityIDs, []byte("u1"), []byte("u2"))
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush indexed memtables: %v", err)
+	}
 
 	snap := d.AcquireSnapshot()
 	if snap == nil {
@@ -330,6 +333,9 @@ func TestCollectionLeafGenerationPackGC_RoundTripWithTemplateV1SecondaryIndexes(
 		}
 	}
 	requireCollectionMaintenanceTemplateReads(t, col)
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush indexed memtables: %v", err)
+	}
 	if err := d.Checkpoint(); err != nil {
 		t.Fatalf("checkpoint: %v", err)
 	}
@@ -1162,6 +1168,713 @@ func TestCollectionSingleInsertBufferedNoIndexFlushPersistsAfterReopen(t *testin
 	}
 	if want := []byte(`{"name":"ada"}`); !bytes.Equal(got, want) {
 		t.Fatalf("reopened doc=%q want %q", got, want)
+	}
+}
+
+func TestCollectionIndexedWriteMemtablesReadUniqueAndFlush(t *testing.T) {
+	dir := t.TempDir()
+	d, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedWrites: true,
+		},
+		Indexes: []IndexDefinition{
+			{Name: "email", Field: "email", Unique: true},
+			{Name: "city", Field: "city"},
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u2"), []byte("u1")},
+		[][]byte{
+			[]byte(`{"email":"grace@example.com","city":"hnl"}`),
+			[]byte(`{"email":"ada@example.com","city":"hnl"}`),
+		},
+	); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+
+	got, err := col.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("get buffered u1: %v", err)
+	}
+	if want := []byte(`{"email":"ada@example.com","city":"hnl"}`); !bytes.Equal(got, want) {
+		t.Fatalf("buffered u1=%q want %q", got, want)
+	}
+	emailIDs, err := col.FindByIndex("email", "ada@example.com")
+	if err != nil {
+		t.Fatalf("find buffered email: %v", err)
+	}
+	if len(emailIDs) != 1 || !bytes.Equal(emailIDs[0], []byte("u1")) {
+		t.Fatalf("buffered email ids=%q want [u1]", emailIDs)
+	}
+	cityIDs, err := col.FindByIndex("city", "hnl")
+	if err != nil {
+		t.Fatalf("find buffered city: %v", err)
+	}
+	collectionMaintenanceRequireUnorderedIDs(t, cityIDs, []byte("u1"), []byte("u2"))
+
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("expected snapshot")
+	}
+	catalog, err := loadCollectionCatalog(snap, "users")
+	_ = snap.Close()
+	if err != nil {
+		t.Fatalf("load catalog: %v", err)
+	}
+	if got := catalog.rootID(collectionPrimaryRootName("users")); got != 0 {
+		t.Fatalf("primary root persisted before flush: %d", got)
+	}
+
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u3")},
+		[][]byte{[]byte(`{"email":"ada@example.com","city":"sea"}`)},
+	); err == nil || !strings.Contains(err.Error(), "unique index") {
+		t.Fatalf("buffered duplicate unique err=%v want unique index conflict", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u4")},
+		[][]byte{[]byte(`{"email":"grace@example.com","city":"sea"}`)},
+	); err == nil || !strings.Contains(err.Error(), "unique index") {
+		t.Fatalf("buffered duplicate unique after iterator advance err=%v want unique index conflict", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"email":"new@example.com","city":"sea"}`)},
+	); err == nil || !strings.Contains(err.Error(), "document already exists") {
+		t.Fatalf("buffered duplicate id err=%v want document exists", err)
+	}
+
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush indexed buffer: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("close db: %v", err)
+	}
+
+	reopened, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("reopen db: %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	reopenedCol, err := NewCollectionManager(reopened).OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open reopened collection: %v", err)
+	}
+	got, err = reopenedCol.Get([]byte("u2"))
+	if err != nil {
+		t.Fatalf("get reopened u2: %v", err)
+	}
+	if want := []byte(`{"email":"grace@example.com","city":"hnl"}`); !bytes.Equal(got, want) {
+		t.Fatalf("reopened u2=%q want %q", got, want)
+	}
+	emailIDs, err = reopenedCol.FindByIndex("email", "grace@example.com")
+	if err != nil {
+		t.Fatalf("find reopened email: %v", err)
+	}
+	if len(emailIDs) != 1 || !bytes.Equal(emailIDs[0], []byte("u2")) {
+		t.Fatalf("reopened email ids=%q want [u2]", emailIDs)
+	}
+}
+
+func TestCollectionIndexedWriteMemtablesDefaultForIndexedSchemas(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	meta, err := mgr.CreateCollection(&CollectionMeta{
+		Name:    "users",
+		Indexes: []IndexDefinition{{Name: "city", Field: "city"}},
+	})
+	if err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	if !meta.Options.BufferedIndexedWrites {
+		t.Fatal("indexed collection did not enable native write memtables by default")
+	}
+	if got := meta.Options.BufferedIndexedWriteMaxDocuments; got != DefaultIndexedWriteMemtableMaxDocuments {
+		t.Fatalf("default max docs=%d want %d", got, DefaultIndexedWriteMemtableMaxDocuments)
+	}
+	if got := meta.Options.BufferedIndexedWriteMaxBytes; got != 0 {
+		t.Fatalf("default max bytes=%d want 0", got)
+	}
+
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"city":"hnl"}`)},
+	); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+	got, err := col.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("get buffered doc: %v", err)
+	}
+	if want := []byte(`{"city":"hnl"}`); !bytes.Equal(got, want) {
+		t.Fatalf("buffered doc=%q want %q", got, want)
+	}
+
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("expected snapshot")
+	}
+	catalog, err := loadCollectionCatalog(snap, "users")
+	_ = snap.Close()
+	if err != nil {
+		t.Fatalf("load catalog: %v", err)
+	}
+	if got := catalog.rootID(collectionPrimaryRootName("users")); got != 0 {
+		t.Fatalf("primary root persisted before flush: %d", got)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush default indexed memtable: %v", err)
+	}
+	snap = d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("expected post-flush snapshot")
+	}
+	catalog, err = loadCollectionCatalog(snap, "users")
+	_ = snap.Close()
+	if err != nil {
+		t.Fatalf("load post-flush catalog: %v", err)
+	}
+	if got := catalog.rootID(collectionPrimaryRootName("users")); got == 0 {
+		t.Fatal("primary root was not persisted after flush")
+	}
+}
+
+func TestCollectionIndexedWriteMemtablesDefaultSkipsNoIndexSchemas(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	meta, err := NewCollectionManager(d).CreateCollection(&CollectionMeta{Name: "users"})
+	if err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	if meta.Options.BufferedIndexedWrites {
+		t.Fatal("no-index collection enabled indexed write memtables")
+	}
+	if meta.Options.BufferedIndexedWriteMaxDocuments != 0 || meta.Options.BufferedIndexedWriteMaxBytes != 0 {
+		t.Fatalf("no-index buffered limits docs=%d bytes=%d want zero",
+			meta.Options.BufferedIndexedWriteMaxDocuments, meta.Options.BufferedIndexedWriteMaxBytes)
+	}
+}
+
+func TestCollectionIndexedWriteMemtablesCanBeDisabled(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	meta, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DisableIndexedWriteMemtables: true,
+		},
+		Indexes: []IndexDefinition{{Name: "city", Field: "city"}},
+	})
+	if err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	if meta.Options.BufferedIndexedWrites {
+		t.Fatal("disabled indexed write memtables reported enabled")
+	}
+	if meta.Options.BufferedIndexedWriteMaxDocuments != 0 || meta.Options.BufferedIndexedWriteMaxBytes != 0 {
+		t.Fatalf("disabled buffered limits docs=%d bytes=%d want zero",
+			meta.Options.BufferedIndexedWriteMaxDocuments, meta.Options.BufferedIndexedWriteMaxBytes)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"city":"hnl"}`)},
+	); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("expected snapshot")
+	}
+	catalog, err := loadCollectionCatalog(snap, "users")
+	_ = snap.Close()
+	if err != nil {
+		t.Fatalf("load catalog: %v", err)
+	}
+	if got := catalog.rootID(collectionPrimaryRootName("users")); got == 0 {
+		t.Fatal("disabled indexed write memtables did not publish primary root immediately")
+	}
+}
+
+func TestCollectionIndexedWriteMemtablesBypassDefaultLargeBatches(t *testing.T) {
+	col := &Collection{writeDomain: &collectionWriteDomain{}}
+	meta := CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedWrites:            true,
+			BufferedIndexedWriteMaxDocuments: DefaultIndexedWriteMemtableMaxDocuments,
+		},
+		Indexes: []IndexDefinition{{Name: "city", Field: "city"}},
+	}
+	if !col.shouldBufferIndexedInsertBatch(meta, DefaultIndexedWriteMemtableDirectBatchDocuments-1) {
+		t.Fatal("default indexed memtable path bypassed a below-threshold batch")
+	}
+	if col.shouldBufferIndexedInsertBatch(meta, DefaultIndexedWriteMemtableDirectBatchDocuments) {
+		t.Fatal("default indexed memtable path buffered a large direct-publish batch")
+	}
+	meta.Options.BufferedIndexedWriteMaxDocuments = 2
+	if !col.shouldBufferIndexedInsertBatch(meta, 2) {
+		t.Fatal("explicit small flush threshold should not trigger the default large-batch bypass")
+	}
+}
+
+func TestCollectionIndexedWriteMemtablesReadAfterDomainTableAllocated(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedWrites: true,
+		},
+		Indexes: []IndexDefinition{{Name: "city", Field: "city"}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"city":"hnl"}`)},
+	); err != nil {
+		t.Fatalf("seed insert: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush seed: %v", err)
+	}
+	if deleted, err := col.DeleteDocument([]byte("u1")); err != nil {
+		t.Fatalf("delete seed: %v", err)
+	} else if !deleted {
+		t.Fatal("delete seed deleted=false want true")
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u2")},
+		[][]byte{[]byte(`{"city":"hnl"}`)},
+	); err != nil {
+		t.Fatalf("buffer insert after delete: %v", err)
+	}
+	got, found, err := col.GetInto([]byte("u2"), nil)
+	if err != nil {
+		t.Fatalf("get buffered u2: %v", err)
+	}
+	if !found {
+		t.Fatal("get buffered u2 found=false want true")
+	}
+	if want := []byte(`{"city":"hnl"}`); !bytes.Equal(got, want) {
+		t.Fatalf("get buffered u2=%q want %q", got, want)
+	}
+}
+
+func TestCollectionIndexedWriteMemtablesFindLimitExactBufferedCount(t *testing.T) {
+	dir := t.TempDir()
+	d, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedWrites: true,
+		},
+		Indexes: []IndexDefinition{{Name: "city", Field: "city"}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"city":"hnl"}`)},
+	); err != nil {
+		t.Fatalf("insert u1: %v", err)
+	}
+	ids, truncated, err := col.FindByIndexValueLimit("city", "hnl", 1)
+	if err != nil {
+		t.Fatalf("find exact buffered limit: %v", err)
+	}
+	if truncated {
+		t.Fatalf("exact buffered limit truncated=true ids=%q", ids)
+	}
+	if len(ids) != 1 || !bytes.Equal(ids[0], []byte("u1")) {
+		t.Fatalf("exact buffered limit ids=%q want [u1]", ids)
+	}
+
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u2")},
+		[][]byte{[]byte(`{"city":"hnl"}`)},
+	); err != nil {
+		t.Fatalf("insert u2: %v", err)
+	}
+	ids, truncated, err = col.FindByIndexValueLimit("city", "hnl", 1)
+	if err != nil {
+		t.Fatalf("find over buffered limit: %v", err)
+	}
+	if !truncated {
+		t.Fatalf("over buffered limit truncated=false ids=%q", ids)
+	}
+	if len(ids) != 1 {
+		t.Fatalf("over buffered limit returned %d ids want 1", len(ids))
+	}
+}
+
+func TestCollectionIndexedWriteMemtablesFindLimitMergesBufferedAndPersistedOrder(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name:    "users",
+		Indexes: []IndexDefinition{{Name: "city", Field: "city"}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u0")},
+		[][]byte{[]byte(`{"city":"hnl"}`)},
+	); err != nil {
+		t.Fatalf("insert persisted row: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush persisted row: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"city":"hnl"}`)},
+	); err != nil {
+		t.Fatalf("insert buffered row: %v", err)
+	}
+	ids, truncated, err := col.FindByIndexValueLimit("city", "hnl", 1)
+	if err != nil {
+		t.Fatalf("find limited merged index rows: %v", err)
+	}
+	if !truncated || len(ids) != 1 || !bytes.Equal(ids[0], []byte("u0")) {
+		t.Fatalf("limited ids=%q truncated=%v want [u0]/true", ids, truncated)
+	}
+	ids, err = col.FindByIndexValue("city", "hnl")
+	if err != nil {
+		t.Fatalf("find merged index rows: %v", err)
+	}
+	if len(ids) != 2 || !bytes.Equal(ids[0], []byte("u0")) || !bytes.Equal(ids[1], []byte("u1")) {
+		t.Fatalf("merged ids=%q want [u0 u1]", ids)
+	}
+}
+
+func TestCollectionFindByIndexValueLimitMaxIntDoesNotOverflow(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name:    "users",
+		Indexes: []IndexDefinition{{Name: "city", Field: "city"}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"city":"hnl"}`)},
+	); err != nil {
+		t.Fatalf("insert row: %v", err)
+	}
+	ids, truncated, err := col.FindByIndexValueLimit("city", "hnl", int(^uint(0)>>1))
+	if err != nil {
+		t.Fatalf("find max-int limit: %v", err)
+	}
+	if truncated || len(ids) != 1 || !bytes.Equal(ids[0], []byte("u1")) {
+		t.Fatalf("max-int limited ids=%q truncated=%v want [u1]/false", ids, truncated)
+	}
+}
+
+func TestCollectionIndexedWriteMemtablesRejectPersistedUniqueConflict(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedWrites: true,
+		},
+		Indexes: []IndexDefinition{{Name: "email", Field: "email", Unique: true}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("u1")}, [][]byte{[]byte(`{"email":"ada@example.com"}`)}); err != nil {
+		t.Fatalf("seed insert: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush seed: %v", err)
+	}
+	_, err = col.InsertBatch(
+		[][]byte{[]byte("u2"), []byte("u3")},
+		[][]byte{
+			[]byte(`{"email":"ada@example.com"}`),
+			[]byte(`{"email":"grace@example.com"}`),
+		},
+	)
+	if err == nil || !strings.Contains(err.Error(), "unique index") {
+		t.Fatalf("persisted duplicate unique err=%v want unique index conflict", err)
+	}
+	got, err := col.Get([]byte("u3"))
+	if err != nil {
+		t.Fatalf("get failed insert: %v", err)
+	}
+	if got != nil {
+		t.Fatalf("failed insert left buffered doc=%q", got)
+	}
+}
+
+func TestCollectionIndexedWriteMemtablesAutoFlushMaxDocuments(t *testing.T) {
+	dir := t.TempDir()
+	d, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedWrites:            true,
+			BufferedIndexedWriteMaxDocuments: 2,
+		},
+		Indexes: []IndexDefinition{
+			{Name: "email", Field: "email", Unique: true},
+			{Name: "city", Field: "city"},
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"email":"ada@example.com","city":"hnl"}`)},
+	); err != nil {
+		t.Fatalf("first insert batch: %v", err)
+	}
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("expected snapshot")
+	}
+	catalog, err := loadCollectionCatalog(snap, "users")
+	_ = snap.Close()
+	if err != nil {
+		t.Fatalf("load catalog after first batch: %v", err)
+	}
+	if got := catalog.rootID(collectionPrimaryRootName("users")); got != 0 {
+		t.Fatalf("primary root persisted before threshold flush: %d", got)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u2")},
+		[][]byte{[]byte(`{"email":"grace@example.com","city":"hnl"}`)},
+	); err != nil {
+		t.Fatalf("second insert batch: %v", err)
+	}
+	snap = d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("expected snapshot after threshold flush")
+	}
+	catalog, err = loadCollectionCatalog(snap, "users")
+	_ = snap.Close()
+	if err != nil {
+		t.Fatalf("load catalog after threshold flush: %v", err)
+	}
+	if got := catalog.rootID(collectionPrimaryRootName("users")); got == 0 {
+		t.Fatal("primary root was not persisted after threshold flush")
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("close db: %v", err)
+	}
+
+	reopened, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("reopen db: %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	reopenedCol, err := NewCollectionManager(reopened).OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open reopened collection: %v", err)
+	}
+	ids, err := reopenedCol.FindByIndex("city", "hnl")
+	if err != nil {
+		t.Fatalf("find city after threshold flush: %v", err)
+	}
+	collectionMaintenanceRequireUnorderedIDs(t, ids, []byte("u1"), []byte("u2"))
+}
+
+func TestCollectionIndexedWriteMemtablesAutoFlushMaxBytes(t *testing.T) {
+	dir := t.TempDir()
+	d, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedWrites:        true,
+			BufferedIndexedWriteMaxBytes: 1,
+		},
+		Indexes: []IndexDefinition{{Name: "email", Field: "email", Unique: true}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"email":"ada@example.com"}`)},
+	); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("expected snapshot after byte threshold flush")
+	}
+	catalog, err := loadCollectionCatalog(snap, "users")
+	_ = snap.Close()
+	if err != nil {
+		t.Fatalf("load catalog after byte threshold flush: %v", err)
+	}
+	if got := catalog.rootID(collectionPrimaryRootName("users")); got == 0 {
+		t.Fatal("primary root was not persisted after byte threshold flush")
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("close db: %v", err)
+	}
+
+	reopened, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("reopen db: %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	reopenedCol, err := NewCollectionManager(reopened).OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open reopened collection: %v", err)
+	}
+	ids, err := reopenedCol.FindByIndex("email", "ada@example.com")
+	if err != nil {
+		t.Fatalf("find email after byte threshold flush: %v", err)
+	}
+	if len(ids) != 1 || !bytes.Equal(ids[0], []byte("u1")) {
+		t.Fatalf("email ids=%q want [u1]", ids)
+	}
+}
+
+func TestBufferedPrimaryIDArenaCapAvoidsOverflow(t *testing.T) {
+	if got := bufferedPrimaryIDArenaCap(2); got != 32 {
+		t.Fatalf("small arena cap=%d want 32", got)
+	}
+	maxInt := int(^uint(0) >> 1)
+	if got := bufferedPrimaryIDArenaCap(maxInt/16 + 1); got != 0 {
+		t.Fatalf("overflow arena cap=%d want 0", got)
+	}
+}
+
+func TestCollectionIndexedWriteMemtablesCloseFlushes(t *testing.T) {
+	dir := t.TempDir()
+	d, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedWrites: true,
+		},
+		Indexes: []IndexDefinition{{Name: "email", Field: "email", Unique: true}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("u1")}, [][]byte{[]byte(`{"email":"ada@example.com"}`)}); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("close db: %v", err)
+	}
+
+	reopened, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("reopen db: %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	reopenedCol, err := NewCollectionManager(reopened).OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open reopened collection: %v", err)
+	}
+	ids, err := reopenedCol.FindByIndex("email", "ada@example.com")
+	if err != nil {
+		t.Fatalf("find reopened email: %v", err)
+	}
+	if len(ids) != 1 || !bytes.Equal(ids[0], []byte("u1")) {
+		t.Fatalf("reopened email ids=%q want [u1]", ids)
 	}
 }
 
@@ -2660,6 +3373,9 @@ func TestCollectionUpdateSkipsIndexRootsWhenIndexedValuesUnchanged(t *testing.T)
 		[][]byte{[]byte(`{"email":"ada@example.com","city":"hnl","seen":false}`)},
 	); err != nil {
 		t.Fatalf("insert: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush indexed memtables: %v", err)
 	}
 
 	loadCatalog := func() *collectionCatalog {

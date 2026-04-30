@@ -25,6 +25,12 @@ func TestParseConfigDefaultsToInspectableTwoIndexTemplateFixture(t *testing.T) {
 	if cfg.IndexCount != 2 {
 		t.Fatalf("index count=%d want 2", cfg.IndexCount)
 	}
+	if !cfg.BufferedIndexedWrites {
+		t.Fatal("expected indexed write memtables enabled by default")
+	}
+	if cfg.BufferedIndexedWriteMaxDocs != collections.DefaultIndexedWriteMemtableMaxDocuments {
+		t.Fatalf("buffered indexed max docs=%d want %d", cfg.BufferedIndexedWriteMaxDocs, collections.DefaultIndexedWriteMemtableMaxDocuments)
+	}
 	if !cfg.DataOuterLeavesInValueLog {
 		t.Fatal("expected data outer leaves in value log by default")
 	}
@@ -137,6 +143,79 @@ func TestRunFixtureKeepsTemplateV1ThreeIndexDatabase(t *testing.T) {
 	}
 	if summary.Verify.Samples == 0 {
 		t.Fatal("expected reopen verification samples")
+	}
+}
+
+func TestRunFixtureReportsBufferedIndexedWritesOnlyWhenIndexesUseThem(t *testing.T) {
+	noIndexDir := filepath.Join(t.TempDir(), "no-index")
+	noIndexCfg, err := parseConfig([]string{
+		"-dir", noIndexDir,
+		"-docs", "8",
+		"-batch-size", "4",
+		"-indexes", "0",
+		"-buffered-indexed-writes",
+		"-buffered-indexed-write-max-docs", "16",
+		"-buffered-indexed-write-max-bytes", "1024",
+		"-reopen-verify=false",
+		"-progress=false",
+	}, io.Discard)
+	if err != nil {
+		t.Fatalf("parse no-index config: %v", err)
+	}
+	noIndexSummary, err := runFixture(noIndexCfg)
+	if err != nil {
+		t.Fatalf("run no-index fixture: %v", err)
+	}
+	if noIndexSummary.BufferedIndexedWrites {
+		t.Fatal("no-index summary reported buffered indexed writes enabled")
+	}
+	if noIndexSummary.BufferedIndexedWriteMaxDocs != 0 || noIndexSummary.BufferedIndexedWriteMaxBytes != 0 {
+		t.Fatalf("no-index buffered limits docs=%d bytes=%d want both zero", noIndexSummary.BufferedIndexedWriteMaxDocs, noIndexSummary.BufferedIndexedWriteMaxBytes)
+	}
+
+	indexedDir := filepath.Join(t.TempDir(), "indexed")
+	indexedCfg, err := parseConfig([]string{
+		"-dir", indexedDir,
+		"-docs", "8",
+		"-batch-size", "4",
+		"-indexes", "1",
+		"-buffered-indexed-writes",
+		"-buffered-indexed-write-max-docs", "16",
+		"-buffered-indexed-write-max-bytes", "1024",
+		"-progress=false",
+	}, io.Discard)
+	if err != nil {
+		t.Fatalf("parse indexed config: %v", err)
+	}
+	indexedSummary, err := runFixture(indexedCfg)
+	if err != nil {
+		t.Fatalf("run indexed fixture: %v", err)
+	}
+	if !indexedSummary.BufferedIndexedWrites {
+		t.Fatal("indexed summary reported buffered indexed writes disabled")
+	}
+	if indexedSummary.BufferedIndexedWriteMaxDocs != 16 || indexedSummary.BufferedIndexedWriteMaxBytes != 1024 {
+		t.Fatalf("indexed buffered limits docs=%d bytes=%d want 16/1024", indexedSummary.BufferedIndexedWriteMaxDocs, indexedSummary.BufferedIndexedWriteMaxBytes)
+	}
+
+	disabledDir := filepath.Join(t.TempDir(), "disabled")
+	disabledCfg, err := parseConfig([]string{
+		"-dir", disabledDir,
+		"-docs", "8",
+		"-batch-size", "4",
+		"-indexes", "1",
+		"-buffered-indexed-writes=false",
+		"-progress=false",
+	}, io.Discard)
+	if err != nil {
+		t.Fatalf("parse disabled config: %v", err)
+	}
+	disabledSummary, err := runFixture(disabledCfg)
+	if err != nil {
+		t.Fatalf("run disabled fixture: %v", err)
+	}
+	if disabledSummary.BufferedIndexedWrites {
+		t.Fatal("disabled summary reported buffered indexed writes enabled")
 	}
 }
 

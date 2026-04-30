@@ -20,6 +20,8 @@ func addCollectionInsertStats(dst *collections.CollectionInsertStats, src collec
 	dst.Documents += src.Documents
 	dst.Indexes += src.Indexes
 	dst.Runs += src.Runs
+	dst.BufferedIndexedBatches += src.BufferedIndexedBatches
+	dst.BufferedIndexedBypassBatches += src.BufferedIndexedBypassBatches
 	dst.PrepareDocuments += src.PrepareDocuments
 	dst.IndexStateExtraction += src.IndexStateExtraction
 	dst.DuplicateDocumentPreflight += src.DuplicateDocumentPreflight
@@ -64,6 +66,12 @@ func benchmarkReportCollectionInsertStats(b *testing.B, docs, batches int, stats
 		b.ReportMetric(float64(stats.Runs)/float64(batches), "roots/batch")
 		b.ReportMetric(float64(stats.SecondarySortedRuns)/float64(batches), "secondary_sorted_runs/batch")
 		b.ReportMetric(float64(stats.SecondaryUnsortedRuns)/float64(batches), "secondary_unsorted_runs/batch")
+		if stats.BufferedIndexedBatches > 0 {
+			b.ReportMetric(float64(stats.BufferedIndexedBatches), "buffered_indexed_batches")
+		}
+		if stats.BufferedIndexedBypassBatches > 0 {
+			b.ReportMetric(float64(stats.BufferedIndexedBypassBatches), "buffered_indexed_bypass_batches")
+		}
 	}
 }
 
@@ -125,9 +133,11 @@ func benchmarkCollectionShapeInsertBatch(b *testing.B, indexCount int, checkpoin
 	targetBatchSize := benchmarkBatchSize(b)
 	startKeyFallback, startPrefixFallback := benchmarkNativeProbeFallbackCounters(b, backend)
 	var insertElapsed time.Duration
+	var bufferedFlushElapsed time.Duration
 	var syncElapsed time.Duration
 	var insertStats collections.CollectionInsertStats
 	batches := 0
+	bufferedIndexedWrites := collection.Meta().Options.BufferedIndexedWrites
 
 	metricName := "target_docs/batch"
 	if checkpoint {
@@ -154,6 +164,13 @@ func benchmarkCollectionShapeInsertBatch(b *testing.B, indexCount int, checkpoin
 		batches++
 		if checkpoint {
 			b.StartTimer()
+			if bufferedIndexedWrites {
+				flushStart := time.Now()
+				if err := collection.Flush(); err != nil {
+					b.Fatalf("flush buffered indexed writes: %v", err)
+				}
+				bufferedFlushElapsed += time.Since(flushStart)
+			}
 			syncStart := time.Now()
 			benchmarkSyncBoundary(b, backend)
 			syncElapsed += time.Since(syncStart)
@@ -161,9 +178,34 @@ func benchmarkCollectionShapeInsertBatch(b *testing.B, indexCount int, checkpoin
 		}
 		inserted += batchSize
 	}
+	if bufferedIndexedWrites && !checkpoint {
+		b.StartTimer()
+		flushStart := time.Now()
+		if err := collection.Flush(); err != nil {
+			b.Fatalf("flush buffered indexed writes: %v", err)
+		}
+		bufferedFlushElapsed += time.Since(flushStart)
+		b.StopTimer()
+	}
 	b.StopTimer()
 	b.ReportMetric(float64(targetBatchSize), metricName)
 	b.ReportMetric(float64(indexCount), "indexes/doc")
+	if bufferedIndexedWrites {
+		meta := collection.Meta()
+		b.ReportMetric(1, "buffered_indexed_writes")
+		if meta.Options.BufferedIndexedWriteMaxDocuments > 0 {
+			b.ReportMetric(float64(meta.Options.BufferedIndexedWriteMaxDocuments), "buffered_max_docs")
+		}
+		if meta.Options.BufferedIndexedWriteMaxBytes > 0 {
+			b.ReportMetric(float64(meta.Options.BufferedIndexedWriteMaxBytes), "buffered_max_bytes")
+		}
+		if insertStats.BufferedIndexedBatches > 0 && insertStats.BufferedIndexedBypassBatches == 0 && insertElapsed > 0 {
+			b.ReportMetric(float64(insertElapsed.Nanoseconds())/float64(b.N), "buffered_insert_ns/doc")
+		}
+		if insertStats.BufferedIndexedBatches > 0 && insertStats.BufferedIndexedBypassBatches == 0 && bufferedFlushElapsed > 0 {
+			b.ReportMetric(float64(bufferedFlushElapsed.Nanoseconds())/float64(b.N), "buffered_flush_ns/doc")
+		}
+	}
 	if checkpoint {
 		benchmarkReportCheckpointSplit(b, b.N, insertElapsed, syncElapsed)
 	}

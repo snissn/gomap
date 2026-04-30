@@ -16,6 +16,9 @@ Default load shape:
 - two secondary indexes: unique `email_idx` and non-unique `city_idx`
 - collection data/index-state outer leaves in the value log
 - secondary-index outer leaves in the value log
+- native indexed write memtables enabled with a default 64000-document
+  auto-flush limit; batches at 16000 documents or larger use direct publish by
+  default because they already amortize publish overhead well
 - `fast` TreeDB profile
 - final checkpoint and reopen verification
 - automatic offline index vacuum when `-vlog-rewrite` or `-leafgen-pack-gc`
@@ -44,6 +47,22 @@ Useful variants:
 
 # Disable secondary-index value-log outer leaves.
 ./bin/collection-load-fixture -index-outer-leaves-in-vlog=false -dir /tmp/treedb_two_index_template_v1_fast_index -reset
+
+# Native indexed write memtables are enabled by default. This explicitly keeps
+# them enabled and force-bounds publishes every 64000 staged docs; very large
+# batches at the default 16000-document direct-publish threshold still bypass
+# staging.
+./bin/collection-load-fixture \
+  -buffered-indexed-writes=true \
+  -buffered-indexed-write-max-docs 64000 \
+  -dir /tmp/treedb_two_index_buffered_bounded \
+  -reset
+
+# Disable indexed write memtables for immediate-publish baseline comparisons.
+./bin/collection-load-fixture \
+  -buffered-indexed-writes=false \
+  -dir /tmp/treedb_two_index_immediate_publish \
+  -reset
 
 # Generate machine-readable output and optional profiles.
 ./bin/collection-load-fixture \
