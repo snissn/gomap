@@ -25,9 +25,6 @@ func validateBSONDocument(document []byte) error {
 
 func bsonOrderedIndexStateForDocumentWithArena(document []byte, runtimes []indexRuntime, opts collectionOptions, encoder *indexEncodeArena) (orderedDocumentIndexState, error) {
 	raw := bson.Raw(document)
-	if err := raw.Validate(); err != nil {
-		return nil, fmt.Errorf("collections: index extraction requires BSON document: %w", err)
-	}
 	state := encoder.appendState(len(runtimes))
 	for runtimeIdx, runtime := range runtimes {
 		values, found, fromArray, err := bsonIndexValuesForPath(raw, runtime.path)

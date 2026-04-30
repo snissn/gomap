@@ -132,10 +132,14 @@ func TestReportSupportsMultipleTreeDBConfigsPerMongoCell(t *testing.T) {
 		"comparison cells: `2`",
 		"| 100 | 2 | `treedb_bson` | 1.46 KiB",
 		"| 100 | 2 | `treedb_json` | 1.95 KiB",
+		"| 100 | 2 | `mongo` | mongo | `mongo.json` |",
 	} {
 		if !strings.Contains(report, want) {
 			t.Fatalf("report missing %q\n%s", want, report)
 		}
+	}
+	if got := strings.Count(report, "| 100 | 2 | `mongo` | mongo | `mongo.json` |"); got != 1 {
+		t.Fatalf("mongo raw input rows=%d want 1\n%s", got, report)
 	}
 }
 

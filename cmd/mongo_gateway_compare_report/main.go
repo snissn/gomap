@@ -406,9 +406,14 @@ func renderReport(cfg config, cells []cellComparison, generatedAt time.Time) str
 	b.WriteString("## Raw Inputs\n\n")
 	b.WriteString("| docs | indexes | config | target | raw json |\n")
 	b.WriteString("| ---: | ---: | --- | --- | --- |\n")
+	seenMongoRaw := make(map[baseCellKey]struct{})
 	for _, cell := range cells {
 		fmt.Fprintf(&b, "| %d | %d | `%s` | treedb | `%s` |\n", cell.Key.Documents, cell.Key.SecondaryIndexes, cell.Key.TreeDBConfig, cell.TreeDB.DisplayRawPath)
-		fmt.Fprintf(&b, "| %d | %d | `mongo` | mongo | `%s` |\n", cell.Key.Documents, cell.Key.SecondaryIndexes, cell.Mongo.DisplayRawPath)
+		mongoKey := baseCellKey{Documents: cell.Key.Documents, SecondaryIndexes: cell.Key.SecondaryIndexes}
+		if _, ok := seenMongoRaw[mongoKey]; !ok {
+			fmt.Fprintf(&b, "| %d | %d | `mongo` | mongo | `%s` |\n", cell.Key.Documents, cell.Key.SecondaryIndexes, cell.Mongo.DisplayRawPath)
+			seenMongoRaw[mongoKey] = struct{}{}
+		}
 	}
 	b.WriteString("\n")
 	b.WriteString("## Notes\n\n")
