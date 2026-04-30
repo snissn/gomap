@@ -180,7 +180,39 @@ func TestOrderedIndexStateForDocumentBSONHandlesScalarsAndArrays(t *testing.T) {
 	requireOrderedIndexValues(t, state, 0, "s:ada@example.com")
 	requireOrderedIndexValues(t, state, 1, "n:37")
 	requireOrderedIndexValues(t, state, 2, "s:a", "s:b")
-	requireOrderedIndexValues(t, state, 3, "z:")
+	requireOrderedIndexValues(t, state, 3)
+}
+
+func TestCollectionBSONUniqueIndexSkipsNullValues(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatBSON,
+		},
+		Indexes: []IndexDefinition{{Name: "email", Field: "email", Unique: true}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+
+	doc1 := mustBSONCollectionDocument(t, bson.D{{Key: "email", Value: nil}, {Key: "city", Value: "hnl"}})
+	doc2 := mustBSONCollectionDocument(t, bson.D{{Key: "email", Value: nil}, {Key: "city", Value: "sea"}})
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1"), []byte("u2")},
+		[][]byte{doc1, doc2},
+	); err != nil {
+		t.Fatalf("insert null unique values: %v", err)
+	}
 }
 
 func requireOrderedIndexValues(tb testing.TB, state orderedDocumentIndexState, runtimeIdx int, want ...string) {

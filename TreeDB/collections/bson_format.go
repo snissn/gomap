@@ -157,8 +157,7 @@ func appendBSONIndexScalar(dst []byte, value bson.RawValue) ([]byte, []byte, boo
 		dst, encoded, err := appendIndexScalar(dst, out)
 		return dst, encoded, true, err
 	case bson.TypeNull:
-		dst, encoded, err := appendIndexScalar(dst, nil)
-		return dst, encoded, true, err
+		return dst, nil, false, nil
 	default:
 		return dst, nil, false, fmt.Errorf("collections: unsupported indexed BSON value type %s", value.Type)
 	}
