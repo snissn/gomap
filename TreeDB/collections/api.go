@@ -1517,6 +1517,7 @@ func (c *Collection) updateDocumentOnce(documentID []byte, update func(current [
 	}
 	var oldState documentIndexState
 	var newState documentIndexState
+	indexStateChanged := false
 	if len(runtimes) > 0 {
 		oldState, err = loadDeleteIndexState(snap, catalog, documentID, entry.Value, runtimes, plannerOptions)
 		if err != nil {
@@ -1528,9 +1529,12 @@ func (c *Collection) updateDocumentOnce(documentID []byte, update func(current [
 			_ = snap.Close()
 			return false, false, err
 		}
-		if err := rejectReplaceUniqueConflicts(snap, catalog, runtimes, newState, documentID); err != nil {
-			_ = snap.Close()
-			return false, false, err
+		indexStateChanged = !documentIndexStatesEqual(oldState, newState)
+		if indexStateChanged {
+			if err := rejectReplaceUniqueConflicts(snap, catalog, runtimes, newState, documentID); err != nil {
+				_ = snap.Close()
+				return false, false, err
+			}
 		}
 	}
 
@@ -1545,7 +1549,7 @@ func (c *Collection) updateDocumentOnce(documentID []byte, update func(current [
 	primaryTable.Freeze()
 	deltaTables = append(deltaTables, primaryTable)
 
-	if len(runtimes) > 0 {
+	if indexStateChanged {
 		stateRootName := collectionIndexStateRootName(c.meta.Name)
 		stateRootID := catalog.rootID(stateRootName)
 		rootNames = append(rootNames, stateRootName)
@@ -1909,6 +1913,24 @@ func cloneDocumentIndexState(state documentIndexState) documentIndexState {
 		out[name] = normalizeEncodedIndexValues(values)
 	}
 	return out
+}
+
+func documentIndexStatesEqual(left, right documentIndexState) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for name, leftValues := range left {
+		rightValues, ok := right[name]
+		if !ok || len(leftValues) != len(rightValues) {
+			return false
+		}
+		for i := range leftValues {
+			if !bytes.Equal(leftValues[i], rightValues[i]) {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func (c *Collection) buildRootDescriptorSystemIterator(rootNames []string, baseRootIDs map[string]uint64, rootIDs []uint64) (iterator.UnsafeIterator, error) {
