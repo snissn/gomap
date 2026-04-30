@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -38,6 +40,34 @@ func TestCanonicalReportKnownCompressionShape(t *testing.T) {
 	fairSection := markdownSection(md, "## Fair Compacted-State Comparison", "## Maintenance/Compaction Details")
 	if strings.Contains(fairSection, "treedb_template_v1_raw") {
 		t.Fatalf("fair compacted comparison must not include raw TreeDB rows\n%s", fairSection)
+	}
+}
+
+func TestPrepareRunDirRemovesPriorCanonicalArtifacts(t *testing.T) {
+	dir := t.TempDir()
+	staleReport := filepath.Join(dir, "timed_matrix", "stale", "collections_report.json")
+	if err := os.MkdirAll(filepath.Dir(staleReport), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(staleReport, []byte("{}"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	keepPath := filepath.Join(dir, "keep.txt")
+	if err := os.WriteFile(keepPath, []byte("keep"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := prepareRunDir(config{OutDir: dir}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "timed_matrix")); !os.IsNotExist(err) {
+		t.Fatalf("expected stale timed_matrix to be removed, stat err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "logs")); err != nil {
+		t.Fatalf("expected fresh logs directory: %v", err)
+	}
+	if _, err := os.Stat(keepPath); err != nil {
+		t.Fatalf("non-canonical files should be preserved: %v", err)
 	}
 }
 

@@ -274,7 +274,7 @@ func run(argv []string) error {
 	if len(formats) == 0 {
 		return errors.New("-formats must contain at least one value")
 	}
-	if err := os.MkdirAll(filepath.Join(cfg.OutDir, "logs"), 0755); err != nil {
+	if err := prepareRunDir(cfg); err != nil {
 		return err
 	}
 
@@ -347,6 +347,24 @@ func run(argv []string) error {
 	return nil
 }
 
+func prepareRunDir(cfg config) error {
+	paths := []string{
+		"logs",
+		"timed_matrix",
+		"offline_rewrite",
+		"full_leafgen_pack_gc",
+		"benchmark_results.json",
+		"benchmark_summary.md",
+		"benchmark_matrix.csv",
+	}
+	for _, rel := range paths {
+		if err := os.RemoveAll(filepath.Join(cfg.OutDir, rel)); err != nil {
+			return err
+		}
+	}
+	return os.MkdirAll(filepath.Join(cfg.OutDir, "logs"), 0755)
+}
+
 func parseConfig(args []string) (config, error) {
 	cfg := config{
 		Docs:                      100000,
@@ -365,7 +383,7 @@ func parseConfig(args []string) (config, error) {
 	}
 	fs := flag.NewFlagSet("collection_canonical_bench", flag.ContinueOnError)
 	fs.StringVar(&cfg.RepoRoot, "repo-root", "", "Repository root; defaults to git rev-parse --show-toplevel")
-	fs.StringVar(&cfg.OutDir, "out-dir", "", "Output directory; defaults to /tmp/collection_canonical_bench_<timestamp>")
+	fs.StringVar(&cfg.OutDir, "out-dir", "", "Output directory; defaults under os.TempDir() as collection_canonical_bench_<timestamp>")
 	fs.IntVar(&cfg.Docs, "docs", cfg.Docs, "Document count for canonical runs")
 	fs.IntVar(&cfg.BatchSize, "batch-size", cfg.BatchSize, "Batch size for collection inserts")
 	fs.IntVar(&cfg.Indexes, "indexes", cfg.Indexes, "Secondary index count for primary comparison")
@@ -424,6 +442,7 @@ func runTimedMatrix(cfg config, canon *canonicalRun) error {
 		"run", "./cmd/collection_bench_matrix",
 		"-out-dir", matrixDir,
 		"-formats", cfg.Formats,
+		"-engine", cfg.TreeEngine,
 		"-storage-cells", cfg.StorageCells,
 		"-tree-bench-pattern", treePattern,
 		"-sqlite-bench-pattern", sqlitePattern,

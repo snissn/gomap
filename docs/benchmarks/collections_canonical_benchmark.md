@@ -23,7 +23,9 @@ Equivalent direct command:
 `make collection-canonical-bench` target is kept as a build alias for
 compatibility; it is not the canonical benchmark run target.
 
-The runner creates a timestamped directory under `/tmp` by default and writes:
+The runner creates a timestamped directory under the system temporary directory
+returned by `os.TempDir()` by default (often `/tmp` on Linux, but it may be
+another location such as `$TMPDIR` on macOS) and writes:
 
 - `benchmark_results.json`: canonical machine-readable results and guardrails.
 - `benchmark_summary.md`: human-readable report.
