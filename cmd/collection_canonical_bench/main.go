@@ -415,8 +415,8 @@ func parseConfig(args []string) (config, error) {
 	if cfg.BatchSize <= 0 {
 		return config{}, errors.New("-batch-size must be > 0")
 	}
-	if cfg.Indexes < 0 {
-		return config{}, errors.New("-indexes must be >= 0")
+	if cfg.Indexes < 0 || cfg.Indexes > 3 {
+		return config{}, errors.New("-indexes must be 0, 1, 2, or 3")
 	}
 	if cfg.Count <= 0 {
 		return config{}, errors.New("-count must be > 0")

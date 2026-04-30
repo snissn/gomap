@@ -88,6 +88,13 @@ func TestOfflineRewriteIndexArgsIncludesConfiguredShape(t *testing.T) {
 	}
 }
 
+func TestParseConfigRejectsUnsupportedIndexCount(t *testing.T) {
+	_, err := parseConfig([]string{"-indexes", "4"})
+	if err == nil || !strings.Contains(err.Error(), "-indexes must be 0, 1, 2, or 3") {
+		t.Fatalf("parseConfig accepted unsupported index count, err=%v", err)
+	}
+}
+
 func TestGuardrailRequiresSQLiteVacuumForCompactedComparison(t *testing.T) {
 	canon := knownExampleRun()
 	var filtered []resultRow
