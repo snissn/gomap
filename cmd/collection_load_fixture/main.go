@@ -486,6 +486,8 @@ func runFixture(cfg config) (loadSummary, error) {
 	if err != nil {
 		return loadSummary{}, err
 	}
+	collectionMeta := collection.Meta()
+	bufferedIndexedWrites := collectionMeta.Options.BufferedIndexedWrites
 
 	var insertStats collections.CollectionInsertStats
 	secondaryRuns := make(map[string]*secondaryRunSummary)
@@ -521,7 +523,7 @@ func runFixture(cfg config) (loadSummary, error) {
 		inserted += batchSize
 
 		if cfg.CheckpointEachBatch {
-			if cfg.BufferedIndexedWrites && cfg.IndexCount > 0 {
+			if bufferedIndexedWrites {
 				flushStart := time.Now()
 				if err := collection.Flush(); err != nil {
 					return loadSummary{}, fmt.Errorf("flush after batch %d: %w", batches, err)
@@ -619,9 +621,9 @@ func runFixture(cfg config) (loadSummary, error) {
 		BatchSize:                     cfg.BatchSize,
 		Batches:                       batches,
 		IndexCount:                    cfg.IndexCount,
-		BufferedIndexedWrites:         cfg.BufferedIndexedWrites,
-		BufferedIndexedWriteMaxDocs:   cfg.BufferedIndexedWriteMaxDocs,
-		BufferedIndexedWriteMaxBytes:  cfg.BufferedIndexedWriteMaxBytes,
+		BufferedIndexedWrites:         collectionMeta.Options.BufferedIndexedWrites,
+		BufferedIndexedWriteMaxDocs:   collectionMeta.Options.BufferedIndexedWriteMaxDocuments,
+		BufferedIndexedWriteMaxBytes:  collectionMeta.Options.BufferedIndexedWriteMaxBytes,
 		DataOuterLeavesInValueLog:     cfg.DataOuterLeavesInValueLog,
 		IndexOuterLeavesInValueLog:    cfg.IndexOuterLeavesInValueLog,
 		ChunkSize:                     cfg.ChunkSize,
@@ -736,15 +738,22 @@ func createFixtureCollection(backend *backenddb.DB, cfg config) (*collections.Co
 	for i := range indexes {
 		indexes[i].StoragePolicy = rootStoragePolicy(cfg.IndexOuterLeavesInValueLog)
 	}
+	bufferedIndexedWrites := cfg.BufferedIndexedWrites && cfg.IndexCount > 0
+	bufferedIndexedWriteMaxDocs := 0
+	var bufferedIndexedWriteMaxBytes int64
+	if bufferedIndexedWrites {
+		bufferedIndexedWriteMaxDocs = cfg.BufferedIndexedWriteMaxDocs
+		bufferedIndexedWriteMaxBytes = cfg.BufferedIndexedWriteMaxBytes
+	}
 	_, err := manager.CreateCollection(&collections.CollectionMeta{
 		Name: cfg.Collection,
 		Options: collections.CollectionOptions{
 			DocumentFormat:                   cfg.DocumentFormat,
 			DataRootStoragePolicy:            rootStoragePolicy(cfg.DataOuterLeavesInValueLog),
 			IndexStateStoragePolicy:          rootStoragePolicy(cfg.DataOuterLeavesInValueLog),
-			BufferedIndexedWrites:            cfg.BufferedIndexedWrites && cfg.IndexCount > 0,
-			BufferedIndexedWriteMaxDocuments: cfg.BufferedIndexedWriteMaxDocs,
-			BufferedIndexedWriteMaxBytes:     cfg.BufferedIndexedWriteMaxBytes,
+			BufferedIndexedWrites:            bufferedIndexedWrites,
+			BufferedIndexedWriteMaxDocuments: bufferedIndexedWriteMaxDocs,
+			BufferedIndexedWriteMaxBytes:     bufferedIndexedWriteMaxBytes,
 		},
 		Indexes: indexes,
 	})

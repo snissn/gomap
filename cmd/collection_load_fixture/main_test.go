@@ -140,6 +140,34 @@ func TestRunFixtureKeepsTemplateV1ThreeIndexDatabase(t *testing.T) {
 	}
 }
 
+func TestRunFixtureReportsBufferedIndexedWritesOnlyWhenIndexesUseThem(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "fixture")
+	cfg, err := parseConfig([]string{
+		"-dir", dir,
+		"-docs", "8",
+		"-batch-size", "4",
+		"-indexes", "0",
+		"-buffered-indexed-writes",
+		"-buffered-indexed-write-max-docs", "16",
+		"-buffered-indexed-write-max-bytes", "1024",
+		"-reopen-verify=false",
+		"-progress=false",
+	}, io.Discard)
+	if err != nil {
+		t.Fatalf("parse config: %v", err)
+	}
+	summary, err := runFixture(cfg)
+	if err != nil {
+		t.Fatalf("run fixture: %v", err)
+	}
+	if summary.BufferedIndexedWrites {
+		t.Fatal("expected indexed buffering to be reported disabled for zero-index fixture")
+	}
+	if summary.BufferedIndexedWriteMaxDocs != 0 || summary.BufferedIndexedWriteMaxBytes != 0 {
+		t.Fatalf("buffered limits docs=%d bytes=%d want both zero", summary.BufferedIndexedWriteMaxDocs, summary.BufferedIndexedWriteMaxBytes)
+	}
+}
+
 func TestLeafGenerationSummaryOmittedWhenDisabled(t *testing.T) {
 	leafGeneration, err := maybePackLeafGenerations(config{}, nil)
 	if err != nil {
