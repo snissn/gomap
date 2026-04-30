@@ -209,7 +209,7 @@ func (s *Server) findCandidateDocuments(col *collections.Collection, predicates 
 	}
 	out := make([]wire.Document, 0, len(records))
 	for _, record := range records {
-		doc, err := storedDocumentToBSON(record.Document)
+		doc, err := storedDocumentToBSON(col, record.Document)
 		if err != nil {
 			return nil, err
 		}
@@ -226,7 +226,7 @@ func (s *Server) findUnsortedScanDocuments(col *collections.Collection, plan fin
 	docs := make([]wire.Document, 0)
 	matched := 0
 	truncated, err := col.ScanDocumentsFunc(maxDocuments, func(record collections.DocumentRecord) (bool, error) {
-		match, ok, err := storedDocumentMatchesPredicates(record.Document, plan.predicates)
+		match, ok, err := storedDocumentMatchesPredicatesForCollection(col, record.Document, plan.predicates)
 		if err != nil {
 			return false, err
 		}
@@ -235,7 +235,7 @@ func (s *Server) findUnsortedScanDocuments(col *collections.Collection, plan fin
 		}
 		var doc wire.Document
 		if !ok {
-			doc, err = storedDocumentToBSON(record.Document)
+			doc, err = storedDocumentToBSON(col, record.Document)
 			if err != nil {
 				return false, err
 			}
@@ -252,7 +252,7 @@ func (s *Server) findUnsortedScanDocuments(col *collections.Collection, plan fin
 			return true, nil
 		}
 		if ok {
-			doc, err = storedDocumentToBSON(record.Document)
+			doc, err = storedDocumentToBSON(col, record.Document)
 			if err != nil {
 				return false, err
 			}
@@ -309,6 +309,18 @@ func storedDocumentMatchesPredicates(stored []byte, predicates []findPredicate) 
 		}
 	}
 	return true, true, nil
+}
+
+func storedDocumentMatchesPredicatesForCollection(col *collections.Collection, stored []byte, predicates []findPredicate) (bool, bool, error) {
+	if col == nil {
+		return storedDocumentMatchesPredicates(stored, predicates)
+	}
+	switch col.Meta().Options.DocumentFormat {
+	case collections.DocumentFormatDefault, collections.DocumentFormatJSON:
+		return storedDocumentMatchesPredicates(stored, predicates)
+	default:
+		return false, false, nil
+	}
 }
 
 func isRangePredicate(op findPredicateOp) bool {
@@ -641,7 +653,7 @@ func documentsForPrimaryPredicate(col *collections.Collection, pred findPredicat
 		if len(stored) == 0 {
 			continue
 		}
-		doc, err := storedDocumentToBSON(stored)
+		doc, err := storedDocumentToBSON(col, stored)
 		if err != nil {
 			return nil, err
 		}
@@ -677,7 +689,7 @@ func documentsForIndexedPredicate(col *collections.Collection, pred findPredicat
 			if len(stored) == 0 {
 				continue
 			}
-			doc, err := storedDocumentToBSON(stored)
+			doc, err := storedDocumentToBSON(col, stored)
 			if err != nil {
 				return nil, err
 			}

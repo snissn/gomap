@@ -10,6 +10,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	treedb "github.com/snissn/gomap/TreeDB"
 )
 
 func TestSummarizeLatencyNearestRank(t *testing.T) {
@@ -202,6 +204,93 @@ func TestParseConfigValidation(t *testing.T) {
 	if _, err := parseConfig([]string{"-concurrent-reads", "1"}); err == nil {
 		t.Fatal("concurrent-reads without concurrent-readers accepted")
 	}
+}
+
+func TestParseConfigTreeDBCorrectnessDefaults(t *testing.T) {
+	cfg, err := parseConfig(nil)
+	if err != nil {
+		t.Fatalf("parse defaults: %v", err)
+	}
+	if cfg.TreeDBProfile != treedb.ProfileWALOnFast {
+		t.Fatalf("TreeDBProfile=%q want %q", cfg.TreeDBProfile, treedb.ProfileWALOnFast)
+	}
+	if got := string(cfg.TreeDBDocumentFormat); got != "template-v1" {
+		t.Fatalf("TreeDBDocumentFormat=%q want template-v1", got)
+	}
+	if got := string(cfg.TreeDBDataRootStorage); got != "compressed" {
+		t.Fatalf("TreeDBDataRootStorage=%q want compressed", got)
+	}
+	if got := string(cfg.TreeDBIndexStateRootStorage); got != "compressed" {
+		t.Fatalf("TreeDBIndexStateRootStorage=%q want compressed", got)
+	}
+	if got := string(cfg.TreeDBIndexRootStorage); got != "compressed" {
+		t.Fatalf("TreeDBIndexRootStorage=%q want compressed", got)
+	}
+	if cfg.TreeDBMaintenance != treeDBMaintenanceFull {
+		t.Fatalf("TreeDBMaintenance=%q want %q", cfg.TreeDBMaintenance, treeDBMaintenanceFull)
+	}
+}
+
+func TestTreeDBProfileSmokeFastAndWALOnFast(t *testing.T) {
+	if testing.Short() {
+		t.Skip("profile smoke benchmark skipped in short mode")
+	}
+	fast := runTreeDBProfileSmoke(t, treedb.ProfileFast)
+	walOnFast := runTreeDBProfileSmoke(t, treedb.ProfileWALOnFast)
+	ratio := fast / walOnFast
+	if ratio < 1 {
+		ratio = 1 / ratio
+	}
+	t.Logf("fast load_insert_many ops/sec=%.1f wal_on_fast ops/sec=%.1f max ratio=%.2fx", fast, walOnFast, ratio)
+	if ratio > 4.0 {
+		t.Fatalf("fast and wal_on_fast write smoke diverged by %.2fx; fast=%.1f wal_on_fast=%.1f", ratio, fast, walOnFast)
+	}
+}
+
+func runTreeDBProfileSmoke(t *testing.T, profile treedb.Profile) float64 {
+	t.Helper()
+	cfg, err := parseConfig([]string{
+		"-target", "treedb",
+		"-treedb-dir", filepath.Join(t.TempDir(), string(profile)),
+		"-documents", "1000",
+		"-batch-size", "500",
+		"-reads", "0",
+		"-range-reads", "0",
+		"-updates", "0",
+		"-secondary-indexes", "2",
+		"-treedb-profile", string(profile),
+		"-treedb-maintenance", treeDBMaintenanceCheckpoint,
+		"-timeout", "0",
+		"-format", "json",
+	})
+	if err != nil {
+		t.Fatalf("parse smoke config: %v", err)
+	}
+	target, err := openTarget(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("open target for %s: %v", profile, err)
+	}
+	defer func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := target.cleanup(cleanupCtx); err != nil {
+			t.Errorf("cleanup %s: %v", profile, err)
+		}
+	}()
+	result, err := runBenchmark(context.Background(), cfg, target)
+	if err != nil {
+		t.Fatalf("run benchmark for %s: %v", profile, err)
+	}
+	for _, phase := range result.Phases {
+		if phase.Name == "load_insert_many" {
+			if phase.OpsPerSecond <= 0 {
+				t.Fatalf("%s load_insert_many ops/sec=%f", profile, phase.OpsPerSecond)
+			}
+			return phase.OpsPerSecond
+		}
+	}
+	t.Fatalf("%s load_insert_many phase missing: %+v", profile, result.Phases)
+	return 0
 }
 
 func TestRunEmailFindPhaseRequiresEmailIndex(t *testing.T) {

@@ -20,6 +20,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	mongogateway "github.com/snissn/gomap/TreeDB/mongo_gateway"
@@ -29,54 +30,80 @@ import (
 )
 
 type config struct {
-	Target            string
-	MongoURI          string
-	TreeDBDir         string
-	KeepTreeDBDir     bool
-	DropBeforeRun     bool
-	Database          string
-	Collection        string
-	Documents         int
-	BatchSize         int
-	Reads             int
-	RangeReads        int
-	Updates           int
-	Deletes           int
-	ConcurrentReaders int
-	ConcurrentReads   int
-	ConcurrentWriters int
-	ConcurrentWrites  int
-	SecondaryIndexes  int
-	Timeout           time.Duration
-	Format            string
+	Target                      string
+	MongoURI                    string
+	TreeDBDir                   string
+	KeepTreeDBDir               bool
+	DropBeforeRun               bool
+	Database                    string
+	Collection                  string
+	Documents                   int
+	BatchSize                   int
+	Reads                       int
+	RangeReads                  int
+	Updates                     int
+	Deletes                     int
+	ConcurrentReaders           int
+	ConcurrentReads             int
+	ConcurrentWriters           int
+	ConcurrentWrites            int
+	SecondaryIndexes            int
+	TreeDBProfile               treedb.Profile
+	TreeDBDocumentFormat        collections.DocumentFormat
+	TreeDBDataRootStorage       collections.RootStoragePolicy
+	TreeDBIndexStateRootStorage collections.RootStoragePolicy
+	TreeDBIndexRootStorage      collections.RootStoragePolicy
+	TreeDBMaintenance           string
+	PrebuildDocuments           bool
+	Timeout                     time.Duration
+	Format                      string
 }
 
 type benchmarkResult struct {
-	Target                    string         `json:"target"`
-	MongoURI                  string         `json:"mongo_uri,omitempty"`
-	TreeDBDir                 string         `json:"treedb_dir,omitempty"`
-	Database                  string         `json:"database"`
-	Collection                string         `json:"collection"`
-	Documents                 int            `json:"documents"`
-	SecondaryIndexes          int            `json:"secondary_indexes"`
-	ConcurrentReaders         int            `json:"concurrent_readers,omitempty"`
-	ConcurrentReads           int            `json:"concurrent_reads,omitempty"`
-	ConcurrentWriters         int            `json:"concurrent_writers,omitempty"`
-	ConcurrentWrites          int            `json:"concurrent_writes,omitempty"`
-	Phases                    []phaseResult  `json:"phases"`
-	TreeDBDiskAfterLoad       *diskSnapshot  `json:"treedb_disk_after_load,omitempty"`
-	TreeDBDiskAfterCheckpoint *diskSnapshot  `json:"treedb_disk_after_checkpoint,omitempty"`
-	MongoDBStatsAfterLoad     map[string]any `json:"mongodb_stats_after_load,omitempty"`
-	MongoDBStatsFinal         map[string]any `json:"mongodb_stats_final,omitempty"`
+	Target                      string              `json:"target"`
+	MongoURI                    string              `json:"mongo_uri,omitempty"`
+	TreeDBDir                   string              `json:"treedb_dir,omitempty"`
+	Database                    string              `json:"database"`
+	Collection                  string              `json:"collection"`
+	Documents                   int                 `json:"documents"`
+	SecondaryIndexes            int                 `json:"secondary_indexes"`
+	ConcurrentReaders           int                 `json:"concurrent_readers,omitempty"`
+	ConcurrentReads             int                 `json:"concurrent_reads,omitempty"`
+	ConcurrentWriters           int                 `json:"concurrent_writers,omitempty"`
+	ConcurrentWrites            int                 `json:"concurrent_writes,omitempty"`
+	TreeDBProfile               string              `json:"treedb_profile,omitempty"`
+	TreeDBDocumentFormat        string              `json:"treedb_document_format,omitempty"`
+	TreeDBDataRootStorage       string              `json:"treedb_data_root_storage,omitempty"`
+	TreeDBIndexStateRootStorage string              `json:"treedb_index_state_root_storage,omitempty"`
+	TreeDBIndexRootStorage      string              `json:"treedb_index_root_storage,omitempty"`
+	TreeDBMaintenanceMode       string              `json:"treedb_maintenance_mode,omitempty"`
+	PrebuildDocuments           bool                `json:"prebuild_documents,omitempty"`
+	Phases                      []phaseResult       `json:"phases"`
+	TreeDBDiskAfterLoad         *diskSnapshot       `json:"treedb_disk_after_load,omitempty"`
+	TreeDBDiskAfterCheckpoint   *diskSnapshot       `json:"treedb_disk_after_checkpoint,omitempty"`
+	TreeDBDiskAfterMaintenance  *diskSnapshot       `json:"treedb_disk_after_maintenance,omitempty"`
+	TreeDBMaintenance           []maintenanceResult `json:"treedb_maintenance,omitempty"`
+	MongoDBStatsAfterLoad       map[string]any      `json:"mongodb_stats_after_load,omitempty"`
+	MongoDBStatsFinal           map[string]any      `json:"mongodb_stats_final,omitempty"`
 }
 
 type phaseResult struct {
-	Name           string         `json:"name"`
-	Operations     int            `json:"operations"`
-	DriverCalls    int            `json:"driver_calls"`
-	DurationMillis float64        `json:"duration_ms"`
-	OpsPerSecond   float64        `json:"ops_per_sec"`
-	LatencyMicros  latencySummary `json:"latency_micros"`
+	Name                 string         `json:"name"`
+	Operations           int            `json:"operations"`
+	DriverCalls          int            `json:"driver_calls"`
+	DurationMillis       float64        `json:"duration_ms"`
+	OpsPerSecond         float64        `json:"ops_per_sec"`
+	DriverDurationMillis float64        `json:"driver_duration_ms,omitempty"`
+	DriverOpsPerSecond   float64        `json:"driver_ops_per_sec,omitempty"`
+	LatencyMicros        latencySummary `json:"latency_micros"`
+}
+
+type maintenanceResult struct {
+	Name           string           `json:"name"`
+	DurationMillis float64          `json:"duration_ms,omitempty"`
+	Skipped        string           `json:"skipped,omitempty"`
+	Metrics        map[string]int64 `json:"metrics,omitempty"`
+	DiskAfter      *diskSnapshot    `json:"disk_after,omitempty"`
 }
 
 type latencySummary struct {
@@ -97,6 +124,12 @@ type benchTarget struct {
 	treedbDir   string
 	cleanup     func(context.Context) error
 }
+
+const (
+	treeDBMaintenanceNone       = "none"
+	treeDBMaintenanceCheckpoint = "checkpoint"
+	treeDBMaintenanceFull       = "full"
+)
 
 func main() {
 	if err := run(context.Background(), os.Args[1:]); err != nil {
@@ -139,9 +172,23 @@ func run(parent context.Context, args []string) error {
 }
 
 func parseConfig(args []string) (config, error) {
-	cfg := config{}
+	cfg := config{
+		TreeDBProfile:               treedb.ProfileWALOnFast,
+		TreeDBDocumentFormat:        collections.DocumentFormatTemplateV1,
+		TreeDBDataRootStorage:       collections.RootStorageCompressed,
+		TreeDBIndexStateRootStorage: collections.RootStorageCompressed,
+		TreeDBIndexRootStorage:      collections.RootStorageCompressed,
+		TreeDBMaintenance:           treeDBMaintenanceFull,
+	}
 	fs := flag.NewFlagSet("mongo_gateway_bench", flag.ContinueOnError)
 	var flagOutput bytes.Buffer
+	var (
+		treeDBProfile               = string(cfg.TreeDBProfile)
+		treeDBDocumentFormat        = string(cfg.TreeDBDocumentFormat)
+		treeDBDataRootStorage       = string(cfg.TreeDBDataRootStorage)
+		treeDBIndexStateRootStorage = string(cfg.TreeDBIndexStateRootStorage)
+		treeDBIndexRootStorage      = string(cfg.TreeDBIndexRootStorage)
+	)
 	fs.SetOutput(&flagOutput)
 	fs.StringVar(&cfg.Target, "target", "treedb", "benchmark target: treedb or mongo")
 	fs.StringVar(&cfg.MongoURI, "mongo-uri", "mongodb://127.0.0.1:27017", "MongoDB URI for -target mongo")
@@ -161,6 +208,13 @@ func parseConfig(args []string) (config, error) {
 	fs.IntVar(&cfg.ConcurrentWriters, "concurrent-writers", 0, "writer goroutines for the concurrent _id update phase; 0 disables the phase")
 	fs.IntVar(&cfg.ConcurrentWrites, "concurrent-writes", 0, "total update operations for the concurrent write phase")
 	fs.IntVar(&cfg.SecondaryIndexes, "secondary-indexes", 2, "secondary indexes to create: 0, 1=email, 2=both single-field indexes: email and city")
+	fs.StringVar(&treeDBProfile, "treedb-profile", treeDBProfile, "TreeDB profile for -target treedb: fast, wal_on_fast, durable, or bench")
+	fs.StringVar(&treeDBDocumentFormat, "treedb-document-format", treeDBDocumentFormat, "TreeDB collection document format for -target treedb: json or template-v1")
+	fs.StringVar(&treeDBDataRootStorage, "treedb-data-root-storage", treeDBDataRootStorage, "TreeDB collection data root storage for -target treedb: fast or compressed")
+	fs.StringVar(&treeDBIndexStateRootStorage, "treedb-index-state-root-storage", treeDBIndexStateRootStorage, "TreeDB collection index-state root storage for -target treedb: fast or compressed")
+	fs.StringVar(&treeDBIndexRootStorage, "treedb-index-root-storage", treeDBIndexRootStorage, "TreeDB secondary index root storage for -target treedb: fast or compressed")
+	fs.StringVar(&cfg.TreeDBMaintenance, "treedb-maintenance", cfg.TreeDBMaintenance, "TreeDB final disk maintenance for -target treedb: full, checkpoint, or none")
+	fs.BoolVar(&cfg.PrebuildDocuments, "prebuild-documents", false, "prebuild benchmark documents before the timed load phase")
 	fs.DurationVar(&cfg.Timeout, "timeout", 10*time.Minute, "overall benchmark timeout")
 	fs.StringVar(&cfg.Format, "format", "text", "output format: text or json")
 	if err := fs.Parse(args); err != nil {
@@ -199,10 +253,92 @@ func parseConfig(args []string) (config, error) {
 	if cfg.Format != "text" && cfg.Format != "json" {
 		return config{}, fmt.Errorf("unknown format %q", cfg.Format)
 	}
+	profile, err := parseTreeDBProfile(treeDBProfile)
+	if err != nil {
+		return config{}, err
+	}
+	cfg.TreeDBProfile = profile
+	documentFormat, err := parseTreeDBDocumentFormat(treeDBDocumentFormat)
+	if err != nil {
+		return config{}, err
+	}
+	cfg.TreeDBDocumentFormat = documentFormat
+	dataRootStorage, err := parseTreeDBRootStoragePolicy(treeDBDataRootStorage)
+	if err != nil {
+		return config{}, fmt.Errorf("treedb-data-root-storage: %w", err)
+	}
+	cfg.TreeDBDataRootStorage = dataRootStorage
+	indexStateRootStorage, err := parseTreeDBRootStoragePolicy(treeDBIndexStateRootStorage)
+	if err != nil {
+		return config{}, fmt.Errorf("treedb-index-state-root-storage: %w", err)
+	}
+	cfg.TreeDBIndexStateRootStorage = indexStateRootStorage
+	indexRootStorage, err := parseTreeDBRootStoragePolicy(treeDBIndexRootStorage)
+	if err != nil {
+		return config{}, fmt.Errorf("treedb-index-root-storage: %w", err)
+	}
+	cfg.TreeDBIndexRootStorage = indexRootStorage
+	maintenance, err := parseTreeDBMaintenance(cfg.TreeDBMaintenance)
+	if err != nil {
+		return config{}, err
+	}
+	cfg.TreeDBMaintenance = maintenance
 	if cfg.Deletes > cfg.Documents {
 		return config{}, errors.New("deletes cannot exceed documents")
 	}
 	return cfg, nil
+}
+
+func parseTreeDBProfile(raw string) (treedb.Profile, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case string(treedb.ProfileFast):
+		return treedb.ProfileFast, nil
+	case "", string(treedb.ProfileWALOnFast):
+		return treedb.ProfileWALOnFast, nil
+	case string(treedb.ProfileDurable):
+		return treedb.ProfileDurable, nil
+	case string(treedb.ProfileBench):
+		return treedb.ProfileBench, nil
+	default:
+		return "", fmt.Errorf("unknown treedb-profile %q", raw)
+	}
+}
+
+func parseTreeDBDocumentFormat(raw string) (collections.DocumentFormat, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", string(collections.DocumentFormatTemplateV1):
+		return collections.DocumentFormatTemplateV1, nil
+	case string(collections.DocumentFormatJSON):
+		return collections.DocumentFormatJSON, nil
+	default:
+		return "", fmt.Errorf("unknown treedb-document-format %q", raw)
+	}
+}
+
+func parseTreeDBRootStoragePolicy(raw string) (collections.RootStoragePolicy, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case string(collections.RootStorageCompressed):
+		return collections.RootStorageCompressed, nil
+	case string(collections.RootStorageFast):
+		return collections.RootStorageFast, nil
+	case "", "default":
+		return collections.RootStorageDefault, nil
+	default:
+		return "", fmt.Errorf("unknown root storage policy %q", raw)
+	}
+}
+
+func parseTreeDBMaintenance(raw string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", treeDBMaintenanceFull:
+		return treeDBMaintenanceFull, nil
+	case treeDBMaintenanceCheckpoint:
+		return treeDBMaintenanceCheckpoint, nil
+	case treeDBMaintenanceNone:
+		return treeDBMaintenanceNone, nil
+	default:
+		return "", fmt.Errorf("unknown treedb-maintenance %q", raw)
+	}
 }
 
 func openTarget(ctx context.Context, cfg config) (*benchTarget, error) {
@@ -232,7 +368,14 @@ func openTreeDBTarget(ctx context.Context, cfg config) (*benchTarget, error) {
 		}
 	}
 
-	db, err := backenddb.Open(backenddb.Options{Dir: dir})
+	opts := treedb.OptionsFor(cfg.TreeDBProfile, dir)
+	opts.IndexOuterLeavesInValueLog = true
+	opts.IndexInternalBaseDelta = false
+	open := treedb.OpenBackend
+	if opts.IndexOuterLeavesInValueLog {
+		open = treedb.OpenBackendWithCachedLeafLog
+	}
+	db, backendCleanup, err := open(opts)
 	if err != nil {
 		if removeDir {
 			_ = os.RemoveAll(dir)
@@ -243,12 +386,18 @@ func openTreeDBTarget(ctx context.Context, cfg config) (*benchTarget, error) {
 	server := mongogateway.NewServer()
 	server.Collections = manager
 	server.MaxFindScanDocuments = cfg.Documents
+	server.DefaultCollectionOptions = collections.CollectionOptions{
+		DocumentFormat:          cfg.TreeDBDocumentFormat,
+		DataRootStoragePolicy:   cfg.TreeDBDataRootStorage,
+		IndexStateStoragePolicy: cfg.TreeDBIndexStateRootStorage,
+	}
+	server.DefaultIndexStoragePolicy = cfg.TreeDBIndexRootStorage
 
 	serveCtx, cancelServe := context.WithCancel(ctx)
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		cancelServe()
-		_ = db.Close()
+		_ = backendCleanup()
 		if removeDir {
 			_ = os.RemoveAll(dir)
 		}
@@ -264,7 +413,7 @@ func openTreeDBTarget(ctx context.Context, cfg config) (*benchTarget, error) {
 	if err != nil {
 		cancelServe()
 		_ = ln.Close()
-		_ = db.Close()
+		_ = backendCleanup()
 		if removeDir {
 			_ = os.RemoveAll(dir)
 		}
@@ -274,7 +423,7 @@ func openTreeDBTarget(ctx context.Context, cfg config) (*benchTarget, error) {
 		_ = client.Disconnect(context.Background())
 		cancelServe()
 		_ = ln.Close()
-		_ = db.Close()
+		_ = backendCleanup()
 		if removeDir {
 			_ = os.RemoveAll(dir)
 		}
@@ -293,7 +442,7 @@ func openTreeDBTarget(ctx context.Context, cfg config) (*benchTarget, error) {
 			errs = append(errs, cleanupCtx.Err())
 		}
 		errs = append(errs, manager.FlushAll())
-		errs = append(errs, db.Close())
+		errs = append(errs, backendCleanup())
 		if removeDir {
 			errs = append(errs, os.RemoveAll(dir))
 		}
@@ -485,17 +634,31 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget) (*benchm
 		ConcurrentReads:   cfg.ConcurrentReads,
 		ConcurrentWriters: cfg.ConcurrentWriters,
 		ConcurrentWrites:  cfg.ConcurrentWrites,
+		PrebuildDocuments: cfg.PrebuildDocuments,
 	}
 	if cfg.Target == "treedb" {
 		if cfg.TreeDBDir != "" || cfg.KeepTreeDBDir {
 			result.TreeDBDir = target.treedbDir
 		}
+		result.TreeDBProfile = string(cfg.TreeDBProfile)
+		result.TreeDBDocumentFormat = string(cfg.TreeDBDocumentFormat)
+		result.TreeDBDataRootStorage = string(cfg.TreeDBDataRootStorage)
+		result.TreeDBIndexStateRootStorage = string(cfg.TreeDBIndexStateRootStorage)
+		result.TreeDBIndexRootStorage = string(cfg.TreeDBIndexRootStorage)
+		result.TreeDBMaintenanceMode = cfg.TreeDBMaintenance
 	} else {
 		result.MongoURI = redactMongoURI(cfg.MongoURI)
 	}
 
 	if err := createIndexes(ctx, coll, cfg.SecondaryIndexes); err != nil {
 		return nil, err
+	}
+	var prebuilt []bson.D
+	if cfg.PrebuildDocuments {
+		prebuilt = make([]bson.D, cfg.Documents)
+		for i := range prebuilt {
+			prebuilt[i] = benchmarkDocument(i)
+		}
 	}
 	loadPhase, err := measurePhase("load_insert_many", cfg.Documents, func(sample func(time.Duration)) error {
 		for start := 0; start < cfg.Documents; start += cfg.BatchSize {
@@ -505,7 +668,11 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget) (*benchm
 			}
 			docs := make([]any, 0, end-start)
 			for i := start; i < end; i++ {
-				docs = append(docs, benchmarkDocument(i))
+				if prebuilt != nil {
+					docs = append(docs, prebuilt[i])
+				} else {
+					docs = append(docs, benchmarkDocument(i))
+				}
 			}
 			begin := time.Now()
 			_, err := coll.InsertMany(ctx, docs)
@@ -746,6 +913,9 @@ func collectAfterLoadStats(ctx context.Context, cfg config, target *benchTarget,
 
 func collectFinalStats(ctx context.Context, cfg config, target *benchTarget, result *benchmarkResult) error {
 	if cfg.Target == "treedb" {
+		if cfg.TreeDBMaintenance == treeDBMaintenanceNone {
+			return nil
+		}
 		if target.collections != nil {
 			if err := target.collections.FlushAll(); err != nil {
 				return err
@@ -761,6 +931,9 @@ func collectFinalStats(ctx context.Context, cfg config, target *benchTarget, res
 			return err
 		}
 		result.TreeDBDiskAfterCheckpoint = &snapshot
+		if cfg.TreeDBMaintenance == treeDBMaintenanceFull {
+			return runTreeDBMaintenanceStack(ctx, target, result)
+		}
 		return nil
 	}
 	stats, err := mongoDBStats(ctx, target.client.Database(cfg.Database))
@@ -769,6 +942,182 @@ func collectFinalStats(ctx context.Context, cfg config, target *benchTarget, res
 	}
 	result.MongoDBStatsFinal = stats
 	return nil
+}
+
+func runTreeDBMaintenanceStack(ctx context.Context, target *benchTarget, result *benchmarkResult) error {
+	if target == nil || target.db == nil {
+		return nil
+	}
+	if err := appendTreeDBMaintenanceStep(ctx, target, result, "vlog_rewrite", func() (map[string]int64, string, error) {
+		stats, err := target.db.ValueLogRewriteOnline(ctx, backenddb.ValueLogRewriteOnlineOptions{})
+		if err != nil {
+			return nil, "", err
+		}
+		return valueLogRewriteMetrics(stats), "", nil
+	}); err != nil {
+		return err
+	}
+	if err := appendTreeDBMaintenanceStep(ctx, target, result, "vlog_gc", func() (map[string]int64, string, error) {
+		stats, err := target.db.ValueLogGC(ctx, backenddb.ValueLogGCOptions{})
+		if err != nil {
+			return nil, "", err
+		}
+		return valueLogGCMetrics(stats), "", nil
+	}); err != nil {
+		return err
+	}
+	if err := appendTreeDBMaintenanceStep(ctx, target, result, "leafgen_pack", func() (map[string]int64, string, error) {
+		stats, err := target.db.LeafGenerationPackRunOnce(ctx, backenddb.LeafGenerationPackFromPlanOptions{
+			Force: true,
+			Sync:  true,
+		})
+		if err != nil {
+			return nil, "", err
+		}
+		skipped := ""
+		if !stats.Ran {
+			skipped = stats.SkipReason
+			if skipped == "" {
+				skipped = "not_applicable"
+			}
+		}
+		return leafGenerationPackRunOnceMetrics(stats), skipped, nil
+	}); err != nil {
+		return err
+	}
+	if err := appendTreeDBMaintenanceStep(ctx, target, result, "leafgen_gc", func() (map[string]int64, string, error) {
+		stats, err := target.db.LeafGenerationGC(ctx, backenddb.LeafGenerationGCOptions{})
+		if err != nil {
+			return nil, "", err
+		}
+		return leafGenerationGCMetrics(stats), "", nil
+	}); err != nil {
+		return err
+	}
+	if err := appendTreeDBMaintenanceStep(ctx, target, result, "index_vacuum", func() (map[string]int64, string, error) {
+		err := target.db.VacuumIndexOnline(ctx)
+		if errors.Is(err, backenddb.ErrVacuumUnsupported) {
+			return nil, "unsupported", nil
+		}
+		return nil, "", err
+	}); err != nil {
+		return err
+	}
+	return nil
+}
+
+func appendTreeDBMaintenanceStep(ctx context.Context, target *benchTarget, result *benchmarkResult, name string, run func() (map[string]int64, string, error)) error {
+	start := time.Now()
+	metrics, skipped, err := run()
+	duration := time.Since(start)
+	if err != nil {
+		return fmt.Errorf("%s: %w", name, err)
+	}
+	if target.db != nil {
+		if err := target.db.Checkpoint(); err != nil {
+			return fmt.Errorf("checkpoint after %s: %w", name, err)
+		}
+	}
+	snapshot, err := collectDiskSnapshot(target.treedbDir)
+	if err != nil {
+		return fmt.Errorf("disk snapshot after %s: %w", name, err)
+	}
+	step := maintenanceResult{
+		Name:           name,
+		DurationMillis: float64(duration.Microseconds()) / 1000.0,
+		Skipped:        skipped,
+		Metrics:        metrics,
+		DiskAfter:      &snapshot,
+	}
+	result.TreeDBMaintenance = append(result.TreeDBMaintenance, step)
+	result.TreeDBDiskAfterMaintenance = &snapshot
+	return nil
+}
+
+func valueLogRewriteMetrics(stats backenddb.ValueLogRewriteStats) map[string]int64 {
+	return map[string]int64{
+		"segments_before":                       int64(stats.SegmentsBefore),
+		"segments_after":                        int64(stats.SegmentsAfter),
+		"bytes_before":                          stats.BytesBefore,
+		"bytes_after":                           stats.BytesAfter,
+		"records_copied":                        int64(stats.RecordsCopied),
+		"value_records_copied":                  int64(stats.ValueRecordsCopied),
+		"value_bytes_copied":                    stats.ValueBytesCopied,
+		"source_segments_requested":             int64(stats.SourceSegmentsRequested),
+		"source_segments_unreferenced":          int64(stats.SourceSegmentsUnreferenced),
+		"source_bytes_requested":                stats.SourceBytesRequested,
+		"source_bytes_unreferenced":             stats.SourceBytesUnreferenced,
+		"template_records_attempted":            int64(stats.TemplateRecordsAttempted),
+		"template_records_kept":                 int64(stats.TemplateRecordsKept),
+		"template_input_bytes":                  stats.TemplateInputBytes,
+		"template_output_bytes":                 stats.TemplateOutputBytes,
+		"template_outer_leaf_records_attempted": int64(stats.TemplateOuterLeafRecordsAttempted),
+		"template_outer_leaf_records_kept":      int64(stats.TemplateOuterLeafRecordsKept),
+		"template_outer_leaf_input_bytes":       stats.TemplateOuterLeafInputBytes,
+		"template_outer_leaf_output_bytes":      stats.TemplateOuterLeafOutputBytes,
+	}
+}
+
+func valueLogGCMetrics(stats backenddb.ValueLogGCStats) map[string]int64 {
+	return map[string]int64{
+		"segments_total":      int64(stats.SegmentsTotal),
+		"segments_referenced": int64(stats.SegmentsReferenced),
+		"segments_active":     int64(stats.SegmentsActive),
+		"segments_protected":  int64(stats.SegmentsProtected),
+		"segments_eligible":   int64(stats.SegmentsEligible),
+		"segments_deleted":    int64(stats.SegmentsDeleted),
+		"bytes_total":         stats.BytesTotal,
+		"bytes_referenced":    stats.BytesReferenced,
+		"bytes_active":        stats.BytesActive,
+		"bytes_protected":     stats.BytesProtected,
+		"bytes_eligible":      stats.BytesEligible,
+		"bytes_deleted":       stats.BytesDeleted,
+	}
+}
+
+func leafGenerationPackRunOnceMetrics(stats backenddb.LeafGenerationPackRunOnceStats) map[string]int64 {
+	ran := int64(0)
+	if stats.Ran {
+		ran = 1
+	}
+	return map[string]int64{
+		"ran":                                ran,
+		"plan_generations":                   int64(len(stats.Plan.Generations)),
+		"plan_candidate_generations":         int64(len(stats.Plan.CandidateGenerationIDs)),
+		"plan_candidate_bytes_total":         stats.Plan.CandidateBytesTotal,
+		"plan_candidate_bytes_live":          stats.Plan.CandidateBytesLive,
+		"plan_candidate_bytes_dead":          stats.Plan.CandidateBytesDead,
+		"plan_candidate_bytes_to_copy":       stats.Plan.CandidateBytesToCopy,
+		"plan_expected_reclaim_bytes":        stats.Plan.ExpectedReclaimBytes,
+		"plan_expected_reclaim_ratio_ppm":    int64(stats.Plan.ExpectedReclaimRatioPPM),
+		"plan_expected_reclaim_per_copy_ppm": int64(stats.Plan.ExpectedReclaimPerByteCopiedPPM),
+		"selection_generations":              int64(len(stats.Selection.GenerationIDs)),
+		"selection_bytes_to_copy":            stats.Selection.BytesToCopy,
+		"pack_generations_matched":           int64(stats.Pack.GenerationsMatched),
+		"pack_source_files_requested":        int64(stats.Pack.SourceFilesRequested),
+		"pack_source_bytes_total":            stats.Pack.SourceBytesTotal,
+		"pack_source_bytes_live":             stats.Pack.SourceBytesLive,
+		"pack_source_bytes_dead":             stats.Pack.SourceBytesDead,
+		"pack_source_bytes_to_copy":          stats.Pack.SourceBytesToCopy,
+		"pack_leaf_pages_copied":             int64(stats.Pack.LeafPagesCopied),
+		"pack_leaf_frames_written":           int64(stats.Pack.LeafFramesWritten),
+		"pack_bytes_copied":                  stats.Pack.BytesCopied,
+		"pack_created_files":                 int64(len(stats.Pack.CreatedFileIDs)),
+	}
+}
+
+func leafGenerationGCMetrics(stats backenddb.LeafGenerationGCStats) map[string]int64 {
+	return map[string]int64{
+		"generations_total":    int64(stats.GenerationsTotal),
+		"generations_writable": int64(stats.GenerationsWritable),
+		"generations_live":     int64(stats.GenerationsLive),
+		"generations_retiring": int64(stats.GenerationsRetiring),
+		"generations_eligible": int64(stats.GenerationsEligible),
+		"generations_deleted":  int64(stats.GenerationsDeleted),
+		"files_deleted":        int64(stats.FilesDeleted),
+		"bytes_eligible":       stats.BytesEligible,
+		"bytes_deleted":        stats.BytesDeleted,
+	}
 }
 
 func mongoDBStats(ctx context.Context, db *mongo.Database) (map[string]any, error) {
@@ -890,15 +1239,23 @@ func runConcurrentOperations(ctx context.Context, workers, operations int, run f
 }
 
 func summarizePhase(name string, operations, driverCalls int, duration time.Duration, samples []time.Duration) phaseResult {
+	var driverDuration time.Duration
+	for _, sample := range samples {
+		driverDuration += sample
+	}
 	result := phaseResult{
-		Name:           name,
-		Operations:     operations,
-		DriverCalls:    driverCalls,
-		DurationMillis: float64(duration.Microseconds()) / 1000.0,
-		LatencyMicros:  summarizeLatency(samples),
+		Name:                 name,
+		Operations:           operations,
+		DriverCalls:          driverCalls,
+		DurationMillis:       float64(duration.Microseconds()) / 1000.0,
+		DriverDurationMillis: float64(driverDuration.Microseconds()) / 1000.0,
+		LatencyMicros:        summarizeLatency(samples),
 	}
 	if duration > 0 {
 		result.OpsPerSecond = float64(operations) / duration.Seconds()
+	}
+	if driverDuration > 0 {
+		result.DriverOpsPerSecond = float64(operations) / driverDuration.Seconds()
 	}
 	return result
 }
@@ -974,12 +1331,18 @@ func writeResult(out io.Writer, format string, result *benchmarkResult) error {
 		if result.TreeDBDir != "" {
 			fmt.Fprintf(out, "treedb_dir=%s\n", result.TreeDBDir)
 		}
+		if result.TreeDBProfile != "" {
+			fmt.Fprintf(out, "treedb_profile=%s document_format=%s data_root_storage=%s index_state_root_storage=%s index_root_storage=%s maintenance=%s\n",
+				result.TreeDBProfile, result.TreeDBDocumentFormat, result.TreeDBDataRootStorage,
+				result.TreeDBIndexStateRootStorage, result.TreeDBIndexRootStorage, result.TreeDBMaintenanceMode)
+		}
 		if result.MongoURI != "" {
 			fmt.Fprintf(out, "mongo_uri=%s\n", result.MongoURI)
 		}
 		for _, phase := range result.Phases {
-			fmt.Fprintf(out, "%-22s ops=%d calls=%d duration_ms=%.1f ops_sec=%.1f p50_us=%.0f p95_us=%.0f p99_us=%.0f\n",
+			fmt.Fprintf(out, "%-22s ops=%d calls=%d duration_ms=%.1f ops_sec=%.1f driver_ms=%.1f driver_ops_sec=%.1f p50_us=%.0f p95_us=%.0f p99_us=%.0f\n",
 				phase.Name, phase.Operations, phase.DriverCalls, phase.DurationMillis, phase.OpsPerSecond,
+				phase.DriverDurationMillis, phase.DriverOpsPerSecond,
 				phase.LatencyMicros.P50, phase.LatencyMicros.P95, phase.LatencyMicros.P99)
 		}
 		if result.TreeDBDiskAfterLoad != nil {
@@ -987,6 +1350,12 @@ func writeResult(out io.Writer, format string, result *benchmarkResult) error {
 		}
 		if result.TreeDBDiskAfterCheckpoint != nil {
 			writeDiskSnapshot(out, "treedb_after_checkpoint", result.TreeDBDiskAfterCheckpoint)
+		}
+		for _, step := range result.TreeDBMaintenance {
+			writeMaintenanceResult(out, step)
+		}
+		if result.TreeDBDiskAfterMaintenance != nil {
+			writeDiskSnapshot(out, "treedb_after_maintenance", result.TreeDBDiskAfterMaintenance)
 		}
 		if result.MongoDBStatsAfterLoad != nil {
 			writeMongoStats(out, "mongodb_after_load", result.MongoDBStatsAfterLoad)
@@ -1009,6 +1378,25 @@ func writeDiskSnapshot(out io.Writer, label string, snapshot *diskSnapshot) {
 	sort.Strings(names)
 	for _, name := range names {
 		fmt.Fprintf(out, " %s=%d", name, snapshot.Paths[name])
+	}
+	fmt.Fprintln(out)
+}
+
+func writeMaintenanceResult(out io.Writer, step maintenanceResult) {
+	fmt.Fprintf(out, "treedb_maintenance name=%s duration_ms=%.1f", step.Name, step.DurationMillis)
+	if step.Skipped != "" {
+		fmt.Fprintf(out, " skipped=%s", step.Skipped)
+	}
+	names := make([]string, 0, len(step.Metrics))
+	for name := range step.Metrics {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		fmt.Fprintf(out, " %s=%d", name, step.Metrics[name])
+	}
+	if step.DiskAfter != nil {
+		fmt.Fprintf(out, " disk_total_bytes=%d", step.DiskAfter.TotalBytes)
 	}
 	fmt.Fprintln(out)
 }

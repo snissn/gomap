@@ -2640,6 +2640,19 @@ func (c *Collection) updateDocumentOnce(documentID []byte, update func(current [
 		_ = snap.Close()
 		return true, false, nil
 	}
+	preparedDocuments, templateRecords, templateResolver, err := prepareInsertDocuments([][]byte{document}, plannerOptions)
+	if err != nil {
+		_ = snap.Close()
+		return false, false, err
+	}
+	if len(preparedDocuments) != 1 {
+		_ = snap.Close()
+		return false, false, errors.New("collections: update prepared unexpected document count")
+	}
+	document = preparedDocuments[0]
+	if templateResolver != nil {
+		plannerOptions.templateResolver = templateResolver
+	}
 
 	runtimes, err := (insertBatchPlanner{
 		collection: c.meta.Name,
@@ -2672,12 +2685,34 @@ func (c *Collection) updateDocumentOnce(documentID []byte, update func(current [
 		}
 	}
 
-	rootNames := []string{collectionPrimaryRootName(c.meta.Name)}
-	baseRootIDs := map[string]uint64{
-		rootNames[0]: primaryRoot,
-	}
-	policies := []backenddb.OrderedRootStoragePolicy{plannerOptions.dataStoragePolicy}
+	rootNames := make([]string, 0, 2+len(runtimes))
+	baseRootIDs := make(map[string]uint64, 2+len(runtimes))
+	policies := make([]backenddb.OrderedRootStoragePolicy, 0, 2+len(runtimes))
 	deltaTables := make([]memtable.Table, 0, 2+len(runtimes))
+
+	if len(templateRecords) > 0 {
+		templatePlan := &insertBatchPlan{}
+		if err := (insertBatchPlanner{
+			collection:             c.meta.Name,
+			templateRoot:           collectionTemplateRootName(c.meta.Name),
+			options:                plannerOptions,
+			cloneTemplateRunValues: true,
+		}).emitTemplateRun(templatePlan, templateRecords); err != nil {
+			_ = snap.Close()
+			return false, false, err
+		}
+		for _, run := range templatePlan.runs {
+			rootNames = append(rootNames, run.name)
+			baseRootIDs[run.name] = catalog.rootID(run.name)
+			policies = append(policies, run.storagePolicy)
+			deltaTables = append(deltaTables, run.table)
+		}
+	}
+
+	primaryRootName := collectionPrimaryRootName(c.meta.Name)
+	rootNames = append(rootNames, primaryRootName)
+	baseRootIDs[primaryRootName] = primaryRoot
+	policies = append(policies, plannerOptions.dataStoragePolicy)
 	primaryTable := newCollectionRunTable(1)
 	setCollectionRunValue(primaryTable, bytes.Clone(documentID), document)
 	primaryTable.Freeze()
@@ -3363,6 +3398,49 @@ func (c *Collection) Get(documentID []byte) ([]byte, error) {
 	owned := make([]byte, len(out))
 	copy(owned, out)
 	return owned, nil
+}
+
+// StoredDocumentJSON materializes one stored collection document as JSON bytes.
+// JSON-format collections return an owned copy of document. Template-v1
+// collections resolve the document's template from the collection template root
+// and any buffered template runs.
+func (c *Collection) StoredDocumentJSON(document []byte) ([]byte, error) {
+	if c == nil {
+		return nil, errCollectionNil
+	}
+	if c.db == nil {
+		return nil, errors.New("collections: db is nil")
+	}
+	documentFormat, err := normalizeDocumentFormat(c.meta.Options.DocumentFormat)
+	if err != nil {
+		return nil, err
+	}
+	switch documentFormat {
+	case DocumentFormatJSON:
+		return bytes.Clone(document), nil
+	case DocumentFormatTemplateV1:
+		snap := c.db.AcquireSnapshot()
+		if snap == nil {
+			return nil, backenddb.ErrClosed
+		}
+		defer func() { _ = snap.Close() }()
+		catalog, err := c.catalogForSnapshot(snap)
+		if err != nil {
+			return nil, err
+		}
+		if catalog == nil {
+			return nil, errCollectionNotFound
+		}
+		plannerOptions, err := collectionPlannerOptions(c.meta)
+		if err != nil {
+			return nil, err
+		}
+		plannerOptions = collectionOptionsWithTemplateV1Resolver(plannerOptions, snap, catalog)
+		plannerOptions = collectionOptionsWithBufferedTemplateV1Resolver(plannerOptions, c.writeDomain, c.meta.Name)
+		return templateV1StoredDocumentJSON(document, plannerOptions.templateResolver)
+	default:
+		return nil, fmt.Errorf("collections: unsupported document format %q", c.meta.Options.DocumentFormat)
+	}
 }
 
 // GetInto appends the document for documentID into dst[:0].

@@ -32,18 +32,19 @@ type matrixRow struct {
 }
 
 type benchmarkResult struct {
-	Target                    string         `json:"target"`
-	MongoURI                  string         `json:"mongo_uri,omitempty"`
-	TreeDBDir                 string         `json:"treedb_dir,omitempty"`
-	Database                  string         `json:"database"`
-	Collection                string         `json:"collection"`
-	Documents                 int            `json:"documents"`
-	SecondaryIndexes          int            `json:"secondary_indexes"`
-	Phases                    []phaseResult  `json:"phases"`
-	TreeDBDiskAfterLoad       *diskSnapshot  `json:"treedb_disk_after_load,omitempty"`
-	TreeDBDiskAfterCheckpoint *diskSnapshot  `json:"treedb_disk_after_checkpoint,omitempty"`
-	MongoDBStatsAfterLoad     map[string]any `json:"mongodb_stats_after_load,omitempty"`
-	MongoDBStatsFinal         map[string]any `json:"mongodb_stats_final,omitempty"`
+	Target                     string         `json:"target"`
+	MongoURI                   string         `json:"mongo_uri,omitempty"`
+	TreeDBDir                  string         `json:"treedb_dir,omitempty"`
+	Database                   string         `json:"database"`
+	Collection                 string         `json:"collection"`
+	Documents                  int            `json:"documents"`
+	SecondaryIndexes           int            `json:"secondary_indexes"`
+	Phases                     []phaseResult  `json:"phases"`
+	TreeDBDiskAfterLoad        *diskSnapshot  `json:"treedb_disk_after_load,omitempty"`
+	TreeDBDiskAfterCheckpoint  *diskSnapshot  `json:"treedb_disk_after_checkpoint,omitempty"`
+	TreeDBDiskAfterMaintenance *diskSnapshot  `json:"treedb_disk_after_maintenance,omitempty"`
+	MongoDBStatsAfterLoad      map[string]any `json:"mongodb_stats_after_load,omitempty"`
+	MongoDBStatsFinal          map[string]any `json:"mongodb_stats_final,omitempty"`
 }
 
 type phaseResult struct {
@@ -351,7 +352,7 @@ func renderReport(cfg config, cells []cellComparison, generatedAt time.Time) str
 	}
 	b.WriteString("\n")
 	b.WriteString("## Notes\n\n")
-	b.WriteString("- TreeDB disk bytes come from `treedb_disk_after_checkpoint.total_bytes`, with `treedb_disk_after_load.total_bytes` as a fallback.\n")
+	b.WriteString("- TreeDB disk bytes prefer `treedb_disk_after_maintenance.total_bytes`, then fall back to `treedb_disk_after_checkpoint.total_bytes` and `treedb_disk_after_load.total_bytes` for older runs.\n")
 	b.WriteString("- TreeDB physical bytes come from the matrix runner's `du` measurement of the isolated TreeDB directory.\n")
 	b.WriteString("- MongoDB `dbStats.dataSize` is uncompressed logical document size, not disk usage.\n")
 	b.WriteString("- MongoDB `dbStats.totalSize` is reported separately because it can diverge sharply from the isolated data-directory `du` measurement on small WiredTiger workloads.\n")
@@ -407,7 +408,7 @@ func highlightLines(cells []cellComparison) []string {
 		mongoData, _ := mongoDataBytes(cell.Mongo.Result)
 		mongoTotal, _ := mongoDBStatsTotalBytes(cell.Mongo.Result)
 		mongoPhysical := cell.Mongo.Row.PhysicalBytes
-		lines = append(lines, fmt.Sprintf("Largest cell disk: at %d docs / %d indexes, TreeDB checkpoint files used %s (%s/doc), TreeDB physical du was %s, MongoDB dbStats dataSize was %s, MongoDB dbStats totalSize was %s, and MongoDB physical du was %s (%s/doc).",
+		lines = append(lines, fmt.Sprintf("Largest cell disk: at %d docs / %d indexes, TreeDB optimized files used %s (%s/doc), TreeDB physical du was %s, MongoDB dbStats dataSize was %s, MongoDB dbStats totalSize was %s, and MongoDB physical du was %s (%s/doc).",
 			cell.Key.Documents,
 			cell.Key.SecondaryIndexes,
 			formatBytes(treeBytes),
@@ -458,7 +459,7 @@ func cellDiskScore(cell cellComparison) int64 {
 
 func renderDiskTable(b *strings.Builder, cells []cellComparison) {
 	b.WriteString("## Disk Summary\n\n")
-	b.WriteString("| docs | indexes | TreeDB checkpoint | TreeDB checkpoint bytes/doc | TreeDB physical du | TreeDB physical bytes/doc | MongoDB dbStats dataSize | MongoDB dbStats totalSize | MongoDB physical du | MongoDB physical bytes/doc | TreeDB / MongoDB dbStats totalSize | TreeDB / MongoDB physical |\n")
+	b.WriteString("| docs | indexes | TreeDB optimized | TreeDB optimized bytes/doc | TreeDB physical du | TreeDB physical bytes/doc | MongoDB dbStats dataSize | MongoDB dbStats totalSize | MongoDB physical du | MongoDB physical bytes/doc | TreeDB / MongoDB dbStats totalSize | TreeDB / MongoDB physical |\n")
 	b.WriteString("| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n")
 	for _, cell := range cells {
 		treeBytes, _ := treeDBBytes(cell.TreeDB.Result)
@@ -617,6 +618,9 @@ func findCell(cells []cellComparison, key cellKey) cellComparison {
 }
 
 func treeDBBytes(result benchmarkResult) (int64, bool) {
+	if result.TreeDBDiskAfterMaintenance != nil {
+		return result.TreeDBDiskAfterMaintenance.TotalBytes, true
+	}
 	if result.TreeDBDiskAfterCheckpoint != nil {
 		return result.TreeDBDiskAfterCheckpoint.TotalBytes, true
 	}

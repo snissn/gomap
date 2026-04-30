@@ -46,20 +46,20 @@ func (s *Server) insertResponse(command wire.Document, sequences []wire.Document
 		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
 	}
 
+	col, err := s.openOrCreateCollection(name)
+	if err != nil {
+		return commandError(commandCodeBadValue, "BadValue", err.Error())
+	}
+	format := col.Meta().Options.DocumentFormat
 	ids := make([][]byte, 0, len(documents))
 	stored := make([][]byte, 0, len(documents))
 	for _, doc := range documents {
-		key, encoded, err := prepareInsertDocument(doc)
+		key, encoded, err := prepareInsertDocument(doc, format)
 		if err != nil {
 			return commandError(commandCodeBadValue, "BadValue", err.Error())
 		}
 		ids = append(ids, key)
 		stored = append(stored, encoded)
-	}
-
-	col, err := s.openOrCreateCollection(name)
-	if err != nil {
-		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}
 	if _, err := col.InsertBatch(ids, stored); err != nil {
 		code, codeName := commandCodeBadValue, "BadValue"
@@ -196,7 +196,7 @@ func (s *Server) updateResponse(command wire.Document, sequences []wire.Document
 		}
 
 		matchedOne, modifiedOne, err := col.Update(key, func(stored []byte) ([]byte, bool, error) {
-			raw, err := storedDocumentToBSON(stored)
+			raw, err := storedDocumentToBSON(col, stored)
 			if err != nil {
 				return nil, false, err
 			}
@@ -204,7 +204,7 @@ func (s *Server) updateResponse(command wire.Document, sequences []wire.Document
 			if err != nil {
 				return nil, false, fmt.Errorf("updates[%d]: %w", i, err)
 			}
-			updatedKey, encoded, err := prepareInsertDocument(updated)
+			updatedKey, encoded, err := prepareInsertDocument(updated, col.Meta().Options.DocumentFormat)
 			if err != nil {
 				return nil, false, fmt.Errorf("updates[%d]: %w", i, err)
 			}
@@ -364,7 +364,7 @@ func (s *Server) createIndexesResponse(command wire.Document) (wire.Document, er
 		if err != nil {
 			return commandError(commandCodeBadValue, "BadValue", fmt.Sprintf("indexes[%d]: %v", i, err))
 		}
-		defs = append(defs, def)
+		defs = append(defs, s.applyDefaultIndexOptions(def))
 	}
 
 	createdAutomatically := false
@@ -373,7 +373,7 @@ func (s *Server) createIndexesResponse(command wire.Document) (wire.Document, er
 		if !errors.Is(err, collections.ErrCollectionNotFound) {
 			return commandError(commandCodeBadValue, "BadValue", err.Error())
 		}
-		if _, err := s.Collections.CreateCollection(&collections.CollectionMeta{Name: name}); err != nil {
+		if _, err := s.Collections.CreateCollection(s.defaultCollectionMeta(name)); err != nil {
 			return commandError(commandCodeBadValue, "BadValue", err.Error())
 		}
 		createdAutomatically = true
@@ -790,10 +790,24 @@ func (s *Server) openOrCreateCollection(name string) (*collections.Collection, e
 	if err == nil {
 		return col, nil
 	}
-	if _, createErr := s.Collections.CreateCollection(&collections.CollectionMeta{Name: name}); createErr != nil {
+	if _, createErr := s.Collections.CreateCollection(s.defaultCollectionMeta(name)); createErr != nil {
 		return nil, createErr
 	}
 	return s.Collections.OpenCollection(name)
+}
+
+func (s *Server) defaultCollectionMeta(name string) *collections.CollectionMeta {
+	return &collections.CollectionMeta{
+		Name:    name,
+		Options: s.DefaultCollectionOptions,
+	}
+}
+
+func (s *Server) applyDefaultIndexOptions(def collections.IndexDefinition) collections.IndexDefinition {
+	if def.StoragePolicy == collections.RootStorageDefault {
+		def.StoragePolicy = s.DefaultIndexStoragePolicy
+	}
+	return def
 }
 
 func commandString(doc wire.Document, key string) (string, error) {
@@ -1039,7 +1053,7 @@ func validateMongoDatabaseName(db string) error {
 
 // prepareInsertDocument uses canonical Extended JSON as the temporary collection
 // storage bridge so BSON types can round-trip before a native BSON format exists.
-func prepareInsertDocument(doc wire.Document) ([]byte, []byte, error) {
+func prepareInsertDocument(doc wire.Document, format collections.DocumentFormat) ([]byte, []byte, error) {
 	if err := wire.ValidateDocument(doc); err != nil {
 		return nil, nil, err
 	}
@@ -1067,10 +1081,23 @@ func prepareInsertDocument(doc wire.Document) ([]byte, []byte, error) {
 	if err != nil {
 		return nil, nil, err
 	}
+	if format == collections.DocumentFormatTemplateV1 {
+		stored, err = collections.EncodeTemplateV1DocumentJSON(stored)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
 	return key, stored, nil
 }
 
-func storedDocumentToBSON(stored []byte) (wire.Document, error) {
+func storedDocumentToBSON(col *collections.Collection, stored []byte) (wire.Document, error) {
+	if col != nil {
+		var err error
+		stored, err = col.StoredDocumentJSON(stored)
+		if err != nil {
+			return nil, err
+		}
+	}
 	var raw bson.Raw
 	if err := bson.UnmarshalExtJSON(stored, true, &raw); err != nil {
 		return nil, err

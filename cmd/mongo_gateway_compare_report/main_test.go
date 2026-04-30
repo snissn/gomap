@@ -127,6 +127,17 @@ func TestLargestDiskCellUsesDiskMetrics(t *testing.T) {
 	}
 }
 
+func TestTreeDBBytesPrefersMaintenanceSnapshot(t *testing.T) {
+	got, ok := treeDBBytes(benchmarkResult{
+		TreeDBDiskAfterLoad:        &diskSnapshot{TotalBytes: 3_000},
+		TreeDBDiskAfterCheckpoint:  &diskSnapshot{TotalBytes: 2_000},
+		TreeDBDiskAfterMaintenance: &diskSnapshot{TotalBytes: 1_000},
+	})
+	if !ok || got != 1_000 {
+		t.Fatalf("treeDBBytes=%d ok=%v want maintenance snapshot", got, ok)
+	}
+}
+
 func writeFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {

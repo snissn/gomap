@@ -467,6 +467,107 @@ func EncodeTemplateV1DocumentJSON(raw []byte) ([]byte, error) {
 	return encodeTemplateV1ObjectMap(obj)
 }
 
+func templateV1StoredDocumentJSON(raw []byte, resolver templateV1Resolver) ([]byte, error) {
+	root, err := parseTemplateV1StoredDocument(raw)
+	if err != nil {
+		return nil, err
+	}
+	pos := 0
+	obj, err := decodeTemplateV1ObjectFields(root.templateID, root.values, &pos, resolver)
+	if err != nil {
+		return nil, err
+	}
+	if pos != len(root.values) {
+		return nil, errors.New("collections: trailing template-v1 object values")
+	}
+	out, err := json.Marshal(obj)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func decodeTemplateV1ObjectFields(id [32]byte, raw []byte, pos *int, resolver templateV1Resolver) (map[string]any, error) {
+	if resolver == nil {
+		return nil, errTemplateV1MissingResolver
+	}
+	tpl, err := resolver.lookupTemplateV1(id)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]any, len(tpl.fields))
+	for _, field := range tpl.fields {
+		value, err := decodeTemplateV1Value(raw, pos, resolver)
+		if err != nil {
+			return nil, fmt.Errorf("collections: template-v1 field %q: %w", field, err)
+		}
+		out[field] = value
+	}
+	return out, nil
+}
+
+func decodeTemplateV1Value(raw []byte, pos *int, resolver templateV1Resolver) (any, error) {
+	if pos == nil || *pos >= len(raw) {
+		return nil, errors.New("collections: malformed template-v1 value")
+	}
+	kind := raw[*pos]
+	*pos = *pos + 1
+	switch kind {
+	case templateV1KindNull:
+		return nil, nil
+	case templateV1KindFalse:
+		return false, nil
+	case templateV1KindTrue:
+		return true, nil
+	case templateV1KindFloat64:
+		if len(raw)-*pos < 8 {
+			return nil, errors.New("collections: malformed template-v1 number")
+		}
+		v := math.Float64frombits(binary.BigEndian.Uint64(raw[*pos:]))
+		*pos += 8
+		return v, nil
+	case templateV1KindString:
+		n, err := readTemplateV1Uvarint(raw, pos)
+		if err != nil {
+			return nil, err
+		}
+		if n > uint64(len(raw)-*pos) {
+			return nil, errors.New("collections: malformed template-v1 string")
+		}
+		valueEnd := *pos + int(n)
+		value := string(raw[*pos:valueEnd])
+		*pos = valueEnd
+		return value, nil
+	case templateV1KindArray:
+		count, err := readTemplateV1Uvarint(raw, pos)
+		if err != nil {
+			return nil, err
+		}
+		if count > uint64(len(raw)) {
+			return nil, errors.New("collections: malformed template-v1 array length")
+		}
+		values := make([]any, 0, int(count))
+		for i := uint64(0); i < count; i++ {
+			value, err := decodeTemplateV1Value(raw, pos, resolver)
+			if err != nil {
+				return nil, err
+			}
+			values = append(values, value)
+		}
+		return values, nil
+	case templateV1KindObject:
+		var id [32]byte
+		if len(raw)-*pos < len(id) {
+			return nil, errors.New("collections: malformed template-v1 object")
+		}
+		copy(id[:], raw[*pos:*pos+len(id)])
+		*pos += len(id)
+		return decodeTemplateV1ObjectFields(id, raw, pos, resolver)
+	default:
+		return nil, fmt.Errorf("collections: unknown template-v1 value kind %d", kind)
+	}
+}
+
 func encodeTemplateV1ObjectMap(obj map[string]any) ([]byte, error) {
 	return encodeTemplateV1ObjectMapWithRecordFilter(obj, nil)
 }
