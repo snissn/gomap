@@ -6,15 +6,17 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/adaptive"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/pager"
 	"github.com/snissn/gomap/TreeDB/tree"
+	"github.com/snissn/gomap/TreeDB/zipper"
 )
 
-const leafRefRewriteMapInitCap = 128    // initial map capacity for small leafref rewrite batches
+const leafRefRewriteMapInitCap = 128    // initial map capacity for small leaf-ref rewrite batches
 const leafRefRewriteInlineChildCap = 64 // stack-backed child-id scratch for common small internal nodes
 const leafRefRewriteInlineRemapCap = 8  // inline remap cache before promoting to map
 
@@ -54,6 +56,7 @@ type leafRefRewriteCtx struct {
 
 	writer   *rewriteWriter
 	ridAlloc *rewriteRIDAllocator
+	zipper   *zipper.Zipper
 
 	sourceIDs            map[uint32]struct{}
 	sourceChunks         map[valueLogChunkKey]ValueLogRewritePlanChunk
@@ -79,6 +82,17 @@ type leafRefRewriteCtx struct {
 	maxCopiedBytes  int64
 
 	readRefreshRetried bool
+}
+
+type leafRefRewritePageAppender struct {
+	ctx *leafRefRewriteCtx
+}
+
+func (a *leafRefRewritePageAppender) AppendLeafPage(leafPage []byte) (page.LeafLogPtr, error) {
+	if a == nil || a.ctx == nil {
+		return page.LeafLogPtr{}, errors.New("vlog-rewrite: missing leaf-ref rewrite appender state")
+	}
+	return a.ctx.appendLeafPage(leafPage)
 }
 
 type leafRefRewriteRunStats struct {
@@ -228,10 +242,38 @@ func (c *leafRefRewriteCtx) subtreeMayContainRewriteSource(pageID uint64) bool {
 	return false
 }
 
+func (c *leafRefRewriteCtx) appendLeafPage(leafPage []byte) (page.LeafLogPtr, error) {
+	if c == nil || c.writer == nil || c.ridAlloc == nil {
+		return page.LeafLogPtr{}, errors.New("vlog-rewrite: missing leaf-ref rewrite appender state")
+	}
+	if len(leafPage) != page.PageSize {
+		return page.LeafLogPtr{}, fmt.Errorf("vlog-rewrite: leaf page has invalid size: got=%dB want=%dB", len(leafPage), page.PageSize)
+	}
+	if c.ctx != nil {
+		if err := c.ctx.Err(); err != nil {
+			return page.LeafLogPtr{}, err
+		}
+	}
+	if c.maxCopiedBytes > 0 && c.copiedBytes >= c.maxCopiedBytes && c.copied > 0 {
+		return page.LeafLogPtr{}, fmt.Errorf("vlog-rewrite: leaf-ref copy budget exhausted: copied=%dB max=%dB", c.copiedBytes, c.maxCopiedBytes)
+	}
+	rid, err := c.ridAlloc.Next()
+	if err != nil {
+		return page.LeafLogPtr{}, err
+	}
+	ptr, err := c.writer.appendLeafPageWithRID(rid, leafPage)
+	if err != nil {
+		return page.LeafLogPtr{}, err
+	}
+	c.copied++
+	c.copiedBytes += int64(len(leafPage))
+	return ptr, nil
+}
+
 func (c *leafRefRewriteCtx) rewriteNode(id uint64) (uint64, bool, error) {
 
 	if c == nil {
-		return id, false, errors.New("vlog-rewrite: nil leafref rewrite ctx")
+		return id, false, errors.New("vlog-rewrite: nil leaf-ref rewrite ctx")
 	}
 	if c.ctx != nil {
 		if err := c.ctx.Err(); err != nil {
@@ -274,14 +316,7 @@ func (c *leafRefRewriteCtx) rewriteNode(id uint64) (uint64, bool, error) {
 		if err != nil {
 			return id, false, err
 		}
-		if len(leafPage) != page.PageSize {
-			return id, false, fmt.Errorf("vlog-rewrite: leaf page has invalid size: got=%dB want=%dB", len(leafPage), page.PageSize)
-		}
-		rid, err := c.ridAlloc.Next()
-		if err != nil {
-			return id, false, err
-		}
-		leafLogPtr, err := c.writer.appendLeafPageWithRID(rid, leafPage)
+		leafLogPtr, err := c.appendLeafPage(leafPage)
 		if err != nil {
 			return id, false, err
 		}
@@ -290,8 +325,6 @@ func (c *leafRefRewriteCtx) rewriteNode(id uint64) (uint64, bool, error) {
 			return id, false, err
 		}
 		c.storeLeafRemap(id, leafID)
-		c.copied++
-		c.copiedBytes += int64(len(leafPage))
 		return leafID, true, nil
 	}
 
@@ -404,6 +437,63 @@ func (c *leafRefRewriteCtx) rewriteNode(id uint64) (uint64, bool, error) {
 	}
 }
 
+func (c *leafRefRewriteCtx) applySystemRootCollectionRootReplacements(rootID uint64, replacements []vacuumCollectionRootReplacement) (uint64, bool, error) {
+	if c == nil {
+		return rootID, false, errors.New("vlog-rewrite: nil leafref rewrite ctx")
+	}
+	if len(replacements) == 0 {
+		return rootID, false, nil
+	}
+	if c.db == nil {
+		return rootID, false, errors.New("vlog-rewrite: missing db")
+	}
+	if c.zipper == nil {
+		return rootID, false, errors.New("vlog-rewrite: missing system root zipper")
+	}
+	if rootID == 0 {
+		return 0, false, nil
+	}
+	if c.ctx != nil {
+		if err := c.ctx.Err(); err != nil {
+			return rootID, false, err
+		}
+	}
+
+	inlineThreshold := c.db.InlineThreshold()
+	for _, replacement := range replacements {
+		if len(replacement.value) > inlineThreshold {
+			inlineThreshold = len(replacement.value)
+		}
+	}
+	delta := batch.Acquire(c.db.valueLogManager, inlineThreshold)
+	defer batch.Release(delta)
+	delta.Reserve(len(replacements))
+	for _, replacement := range replacements {
+		if c.ctx != nil {
+			if err := c.ctx.Err(); err != nil {
+				return rootID, false, err
+			}
+		}
+		if err := delta.Set(replacement.key, replacement.value); err != nil {
+			return rootID, false, err
+		}
+	}
+	if c.ctx != nil {
+		if err := c.ctx.Err(); err != nil {
+			return rootID, false, err
+		}
+	}
+	// For this collections-only maintenance path, cancellation during Apply is
+	// observed by the leaf page appender before each rewritten outer leaf is
+	// persisted.
+	newRoot, retired, _, err := c.zipper.Apply(rootID, delta)
+	if err != nil {
+		return rootID, false, err
+	}
+	c.retired = append(c.retired, retired...)
+	return newRoot, newRoot != rootID || len(retired) > 0, nil
+}
+
 func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, ridAlloc *rewriteRIDAllocator, sourceIDs map[uint32]struct{}, sourceChunks map[valueLogChunkKey]ValueLogRewritePlanChunk, sourceChunkBytes int64, singleSourceID uint32, hasSingleSourceID bool, maxCopiedBytes int64, sync bool, runStats *leafRefRewriteRunStats) (copied int, copiedBytes int64, err error) {
 	if db == nil {
 		return 0, 0, fmt.Errorf("missing db")
@@ -499,6 +589,12 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 		useSubtreeStatsPrune: len(sourceGenerationIDs) > 0,
 		maxCopiedBytes:       maxCopiedBytes,
 	}
+	leafCtx.zipper = idx.zipper.CloneWithAllocator(tracker)
+	leafCtx.zipper.SetOuterLeavesInValueLog(db.indexOuterLeavesInValueLog)
+	leafCtx.zipper.SetIndexInternalBaseDelta(db.indexInternalBaseDelta && !db.indexOuterLeavesInValueLog)
+	if db.indexOuterLeavesInValueLog {
+		leafCtx.zipper.SetLeafPageLog(&leafRefRewritePageAppender{ctx: leafCtx})
+	}
 	if runStats != nil {
 		defer func() {
 			runStats.InternalPagesVisited = leafCtx.internalVisited
@@ -510,13 +606,42 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 		leafCtx.leafScratch = make([]byte, 0, page.PageSize)
 	}
 
-	newSysRoot, sysChanged, err := leafCtx.rewriteNode(sysRoot)
+	descriptors, err := vacuumCollectCollectionRootDescriptorsWithContext(ctx, idx.pager, &snap.reader, sysRoot)
+	if err != nil {
+		return 0, 0, fmt.Errorf("vlog-rewrite: collect collection root descriptors: %w", err)
+	}
+	collectionRootReplacements, err := vacuumRewriteCollectionRootDescriptors(descriptors, func(descriptor vacuumCollectionRootDescriptor) (uint64, error) {
+		newRoot, _, err := leafCtx.rewriteNode(descriptor.rootID)
+		return newRoot, err
+	}, "vlog-rewrite: rewrite collection leaf root")
 	if err != nil {
 		return 0, 0, err
 	}
+
+	var (
+		newSysRoot uint64
+		sysChanged bool
+	)
+	newSysRoot, sysChanged, err = leafCtx.rewriteNode(sysRoot)
+	if err != nil {
+		return 0, 0, fmt.Errorf("vlog-rewrite: rewrite system leaf root: %w", err)
+	}
+	if len(collectionRootReplacements) > 0 {
+		if sysChanged {
+			if err := writer.Flush(); err != nil {
+				return 0, 0, fmt.Errorf("vlog-rewrite: flush rewritten system leaf root: %w", err)
+			}
+		}
+		replacedSysRoot, replacementChanged, err := leafCtx.applySystemRootCollectionRootReplacements(newSysRoot, collectionRootReplacements)
+		if err != nil {
+			return 0, 0, fmt.Errorf("vlog-rewrite: rewrite system collection descriptors: %w", err)
+		}
+		newSysRoot = replacedSysRoot
+		sysChanged = sysChanged || replacementChanged
+	}
 	newRoot, userChanged, err := leafCtx.rewriteNode(rootID)
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, fmt.Errorf("vlog-rewrite: rewrite user leaf root: %w", err)
 	}
 	if !sysChanged && !userChanged {
 		return 0, 0, nil
@@ -526,20 +651,20 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 	// refs that point at them.
 	if sync {
 		if err := writer.Sync(); err != nil {
-			return 0, 0, err
+			return 0, 0, fmt.Errorf("vlog-rewrite: sync rewritten leaf refs: %w", err)
 		}
 	} else {
 		if err := writer.Flush(); err != nil {
-			return 0, 0, err
+			return 0, 0, fmt.Errorf("vlog-rewrite: flush rewritten leaf refs: %w", err)
 		}
 	}
 	createdIDs, err := writer.createdFileIDs()
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, fmt.Errorf("vlog-rewrite: list created leaf ref files: %w", err)
 	}
 	createdSegments, err := writer.createdSegmentsSnapshot()
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, fmt.Errorf("vlog-rewrite: snapshot created leaf ref segments: %w", err)
 	}
 	cleanupCreatedSegments := func(baseErr error) (int, int64, error) {
 		closeErr := writer.Close()
@@ -555,7 +680,7 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 		// filesystem rescan in leafref-heavy rewrite paths.
 		for _, seg := range createdSegments {
 			if err := db.valueLogManager.RegisterSegment(seg.path, seg.fileID); err != nil {
-				return cleanupCreatedSegments(err)
+				return cleanupCreatedSegments(fmt.Errorf("vlog-rewrite: register rewritten leaf segment %d: %w", seg.fileID, err))
 			}
 		}
 	}
@@ -565,7 +690,7 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 		stagedManifest := db.leafGenerationManifest.clone()
 		rawFileIDs, changed, err := noteCreatedLeafGenerationFileIDsInManifest(stagedManifest, snap.state.CommitSeq+1, createdIDs)
 		if err != nil {
-			return 0, 0, err
+			return 0, 0, fmt.Errorf("vlog-rewrite: update leaf generation manifest: %w", err)
 		}
 		if changed {
 			leafManifest = stagedManifest
@@ -575,9 +700,9 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 
 	if err := db.finalizeCommit(newRoot, newSysRoot, leafCtx.retired, sync, adaptive.Metrics{}, createdIDs, false, nil, leafManifest, leafManifestRawFileIDs); err != nil {
 		if finalizeCommitErrorAllowsCreatedSegmentCleanup(err) {
-			return cleanupCreatedSegments(err)
+			return cleanupCreatedSegments(fmt.Errorf("vlog-rewrite: finalize rewritten leaf refs: %w", err))
 		}
-		return 0, 0, err
+		return 0, 0, fmt.Errorf("vlog-rewrite: finalize rewritten leaf refs: %w", err)
 	}
 	db.invalidateLeafGenerationSubtreeStats(tracker.Pages())
 	tracker = nil
