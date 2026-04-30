@@ -1434,12 +1434,7 @@ func addBufferedPrimaryIDs(index *bufferedUniqueValueIndex, batchPrimary memtabl
 	if index == nil || batchPrimary == nil {
 		return nil
 	}
-	arenaCap := int64(batchPrimary.Len() * 16)
-	maxInt := int(^uint(0) >> 1)
-	if arenaCap < 0 || arenaCap > int64(maxInt) {
-		arenaCap = 0
-	}
-	arena := make([]byte, 0, int(arenaCap))
+	arena := make([]byte, 0, bufferedPrimaryIDArenaCap(batchPrimary.Len()))
 	it := batchPrimary.NewIterator(nil, nil)
 	defer func() { _ = it.Close() }()
 	for it.Valid() {
@@ -1456,6 +1451,18 @@ func addBufferedPrimaryIDs(index *bufferedUniqueValueIndex, batchPrimary memtabl
 		index.arenas = append(index.arenas, arena)
 	}
 	return nil
+}
+
+func bufferedPrimaryIDArenaCap(entries int) int {
+	if entries <= 0 {
+		return 0
+	}
+	const bytesPerKeyEstimate = 16
+	maxInt := int(^uint(0) >> 1)
+	if entries > maxInt/bytesPerKeyEstimate {
+		return 0
+	}
+	return entries * bytesPerKeyEstimate
 }
 
 func rebuildBufferedPrimaryIDIndex(collectionName string, runs map[string][]memtable.Table) *bufferedUniqueValueIndex {
