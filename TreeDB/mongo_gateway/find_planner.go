@@ -266,6 +266,18 @@ func (s *Server) findUnsortedScanDocuments(col *collections.Collection, plan fin
 
 func storedDocumentMatchesPredicates(stored []byte, predicates []findPredicate) (bool, bool, error) {
 	for _, pred := range predicates {
+		if isRangePredicate(pred.op) {
+			match, ok, err := storedDocumentMatchesInt64RangePredicate(stored, pred)
+			if err != nil {
+				return false, false, err
+			}
+			if ok {
+				if !match {
+					return false, true, nil
+				}
+				continue
+			}
+		}
 		value, found, ok, err := storedDocumentPredicateValue(stored, pred.field)
 		if err != nil {
 			return false, false, err
@@ -288,6 +300,118 @@ func storedDocumentMatchesPredicates(stored []byte, predicates []findPredicate) 
 		}
 	}
 	return true, true, nil
+}
+
+func isRangePredicate(op findPredicateOp) bool {
+	switch op {
+	case findPredicateGT, findPredicateGTE, findPredicateLT, findPredicateLTE:
+		return true
+	default:
+		return false
+	}
+}
+
+func storedDocumentMatchesInt64RangePredicate(stored []byte, pred findPredicate) (bool, bool, error) {
+	if field := pred.field; field == "" || strings.Contains(field, ".") {
+		return false, false, nil
+	}
+	if len(pred.values) != 1 {
+		return false, false, nil
+	}
+	threshold, ok := rawValueInt64(pred.values[0])
+	if !ok {
+		return false, false, nil
+	}
+	raw, valueType, _, err := jsonparser.Get(stored, pred.field)
+	if err == jsonparser.KeyPathNotFoundError {
+		return false, true, nil
+	}
+	if err != nil {
+		return false, false, err
+	}
+	value, ok, err := storedJSONInt64(raw, valueType)
+	if err != nil || !ok {
+		return false, ok, err
+	}
+	switch pred.op {
+	case findPredicateGT:
+		return value > threshold, true, nil
+	case findPredicateGTE:
+		return value >= threshold, true, nil
+	case findPredicateLT:
+		return value < threshold, true, nil
+	case findPredicateLTE:
+		return value <= threshold, true, nil
+	default:
+		return false, false, nil
+	}
+}
+
+func rawValueInt64(value bson.RawValue) (int64, bool) {
+	if v, ok := value.Int64OK(); ok {
+		return v, true
+	}
+	if v, ok := value.Int32OK(); ok {
+		return int64(v), true
+	}
+	return 0, false
+}
+
+func storedJSONInt64(raw []byte, valueType jsonparser.ValueType) (int64, bool, error) {
+	switch valueType {
+	case jsonparser.Number:
+		value, err := jsonparser.ParseInt(raw)
+		if err != nil {
+			return 0, false, nil
+		}
+		return value, true, nil
+	case jsonparser.Object:
+		return storedExtendedJSONInt64(raw)
+	default:
+		return 0, false, nil
+	}
+}
+
+func storedExtendedJSONInt64(raw []byte) (int64, bool, error) {
+	var (
+		key       string
+		value     []byte
+		valueType jsonparser.ValueType
+		count     int
+	)
+	err := jsonparser.ObjectEach(raw, func(k, v []byte, t jsonparser.ValueType, _ int) error {
+		count++
+		key = string(k)
+		value = append(value[:0], v...)
+		valueType = t
+		return nil
+	})
+	if err != nil {
+		return 0, false, err
+	}
+	if count != 1 || valueType != jsonparser.String {
+		return 0, false, nil
+	}
+	text, err := jsonparser.ParseString(value)
+	if err != nil {
+		return 0, false, err
+	}
+	switch key {
+	case "$numberInt":
+		parsed, err := strconv.ParseInt(text, 10, 32)
+		if err != nil {
+			return 0, false, err
+		}
+		return parsed, true, nil
+	case "$numberLong":
+		parsed, err := strconv.ParseInt(text, 10, 64)
+		if err != nil {
+			return 0, false, err
+		}
+		return parsed, true, nil
+	default:
+		return 0, false, nil
+	}
 }
 
 func storedDocumentPredicateValue(stored []byte, field string) (bson.RawValue, bool, bool, error) {
