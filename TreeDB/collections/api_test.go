@@ -939,6 +939,190 @@ func TestCollectionSingleInsertBufferedNoIndexReadsBeforeFlush(t *testing.T) {
 	}
 }
 
+func TestCollectionGetIntoReusesCallerBuffer(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"name":"ada"}`)},
+	); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
+
+	buf := make([]byte, 0, 64)
+	base := buf[:cap(buf)]
+	got, found, err := col.GetInto([]byte("u1"), buf)
+	if err != nil {
+		t.Fatalf("GetInto: %v", err)
+	}
+	if !found {
+		t.Fatal("GetInto found=false want true")
+	}
+	if want := []byte(`{"name":"ada"}`); !bytes.Equal(got, want) {
+		t.Fatalf("GetInto=%q want %q", got, want)
+	}
+	if len(got) == 0 || &got[0] != &base[0] {
+		t.Fatal("GetInto did not reuse caller buffer")
+	}
+
+	got[9] = 'x'
+	again, err := col.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("Get after caller mutation: %v", err)
+	}
+	if want := []byte(`{"name":"ada"}`); !bytes.Equal(again, want) {
+		t.Fatalf("stored document mutated through GetInto result: got %q want %q", again, want)
+	}
+}
+
+func TestCollectionGetPreservesEmptyDocument(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte{}},
+	); err != nil {
+		t.Fatalf("insert empty document: %v", err)
+	}
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
+
+	got, err := col.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("Get empty document: %v", err)
+	}
+	if got == nil || len(got) != 0 {
+		t.Fatalf("Get empty document got=%v len=%d want non-nil empty", got, len(got))
+	}
+
+	gotInto, found, err := col.GetInto([]byte("u1"), []byte("stale"))
+	if err != nil {
+		t.Fatalf("GetInto empty document: %v", err)
+	}
+	if !found || len(gotInto) != 0 {
+		t.Fatalf("GetInto empty document got=%q found=%t want empty true", gotInto, found)
+	}
+}
+
+func TestCollectionGetIntoBufferedReusesCallerBuffer(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	writer, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open writer: %v", err)
+	}
+	reader, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open reader: %v", err)
+	}
+	if _, err := writer.Insert([]byte("u1"), []byte(`{"name":"ada"}`)); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	buf := make([]byte, 0, 64)
+	base := buf[:cap(buf)]
+	got, found, err := reader.GetInto([]byte("u1"), buf)
+	if err != nil {
+		t.Fatalf("GetInto buffered: %v", err)
+	}
+	if !found {
+		t.Fatal("GetInto buffered found=false want true")
+	}
+	if want := []byte(`{"name":"ada"}`); !bytes.Equal(got, want) {
+		t.Fatalf("GetInto buffered=%q want %q", got, want)
+	}
+	if len(got) == 0 || &got[0] != &base[0] {
+		t.Fatal("GetInto buffered did not reuse caller buffer")
+	}
+	got[9] = 'x'
+	again, err := writer.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("Get after buffered caller mutation: %v", err)
+	}
+	if want := []byte(`{"name":"ada"}`); !bytes.Equal(again, want) {
+		t.Fatalf("buffered document mutated through GetInto result: got %q want %q", again, want)
+	}
+}
+
+func TestCollectionGetIntoMissingAndDeleted(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+
+	buf := []byte("stale")
+	got, found, err := col.GetInto([]byte("missing"), buf)
+	if err != nil {
+		t.Fatalf("GetInto missing: %v", err)
+	}
+	if found || len(got) != 0 {
+		t.Fatalf("GetInto missing got=%q found=%t want empty false", got, found)
+	}
+
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"name":"ada"}`)},
+	); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+	if err := col.Delete([]byte("u1")); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	got, found, err = col.GetInto([]byte("u1"), buf)
+	if err != nil {
+		t.Fatalf("GetInto deleted: %v", err)
+	}
+	if found || len(got) != 0 {
+		t.Fatalf("GetInto deleted got=%q found=%t want empty false", got, found)
+	}
+}
+
 func TestCollectionSingleInsertBufferedNoIndexFlushPersistsAfterReopen(t *testing.T) {
 	dir := t.TempDir()
 	d, err := backenddb.Open(backenddb.Options{Dir: dir})
@@ -2137,18 +2321,21 @@ func TestCollectionUpdateConcurrentCounterNoLostUpdates(t *testing.T) {
 		workers    = 8
 		increments = 5
 	)
+	workerCols := make([]*Collection, workers)
+	for i := range workerCols {
+		workerCol, err := mgr.OpenCollection("users")
+		if err != nil {
+			t.Fatalf("open worker collection: %v", err)
+		}
+		workerCols[i] = workerCol
+	}
 	start := make(chan struct{})
 	errs := make(chan error, workers)
 	var wg sync.WaitGroup
 	for i := 0; i < workers; i++ {
 		wg.Add(1)
-		go func() {
+		go func(workerCol *Collection) {
 			defer wg.Done()
-			workerCol, err := mgr.OpenCollection("users")
-			if err != nil {
-				errs <- err
-				return
-			}
 			<-start
 			for j := 0; j < increments; j++ {
 				if _, _, err := workerCol.Update([]byte("u1"), func(current []byte) ([]byte, bool, error) {
@@ -2170,7 +2357,7 @@ func TestCollectionUpdateConcurrentCounterNoLostUpdates(t *testing.T) {
 				}
 			}
 			errs <- nil
-		}()
+		}(workerCols[i])
 	}
 	close(start)
 	wg.Wait()
@@ -2193,6 +2380,79 @@ func TestCollectionUpdateConcurrentCounterNoLostUpdates(t *testing.T) {
 	}
 	if want := workers * increments; doc.Count != want {
 		t.Fatalf("count=%d want %d", doc.Count, want)
+	}
+}
+
+func TestCollectionUpdateAllowsUnrelatedUserRootCommit(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"count":0}`)},
+	); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	calls := 0
+	matched, modified, err := col.Update([]byte("u1"), func(current []byte) ([]byte, bool, error) {
+		calls++
+		if err := d.Set([]byte(fmt.Sprintf("raw/unrelated/%02d", calls)), []byte("value")); err != nil {
+			return nil, false, err
+		}
+		var doc struct {
+			Count int `json:"count"`
+		}
+		if err := json.Unmarshal(current, &doc); err != nil {
+			return nil, false, err
+		}
+		doc.Count++
+		next, err := json.Marshal(doc)
+		if err != nil {
+			return nil, false, err
+		}
+		return next, true, nil
+	})
+	if err != nil {
+		t.Fatalf("update with unrelated user-root commit: %v", err)
+	}
+	if !matched || !modified {
+		t.Fatalf("update matched=%t modified=%t want true true", matched, modified)
+	}
+	if calls != 1 {
+		t.Fatalf("update callback calls=%d want 1", calls)
+	}
+
+	got, err := col.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("get updated doc: %v", err)
+	}
+	var doc struct {
+		Count int `json:"count"`
+	}
+	if err := json.Unmarshal(got, &doc); err != nil {
+		t.Fatalf("unmarshal updated doc: %v", err)
+	}
+	if doc.Count != 1 {
+		t.Fatalf("count=%d want 1", doc.Count)
+	}
+	raw, err := d.Get([]byte("raw/unrelated/01"))
+	if err != nil {
+		t.Fatalf("get unrelated raw key: %v", err)
+	}
+	if !bytes.Equal(raw, []byte("value")) {
+		t.Fatalf("raw value=%q want value", raw)
 	}
 }
 

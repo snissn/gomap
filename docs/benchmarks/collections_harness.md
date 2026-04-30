@@ -17,6 +17,7 @@ The default run captures:
 
 - JSON collection shape benchmarks.
 - `template-v1` collection shape benchmarks.
+- primary read shapes for both `Get` and reusable-buffer `GetInto`.
 - JSON and `template-v1` two-index insert probes with index outer leaves stored
   in the value log.
 - indexed insert phase metrics such as prepare, index-state extraction,

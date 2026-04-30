@@ -98,6 +98,7 @@ type Collection struct {
 	meta              CollectionMeta
 	catalogMu         sync.RWMutex
 	catalogSystemRoot uint64
+	catalogCommitSeq  uint64
 	catalog           *collectionCatalog
 	insertStatsMu     sync.RWMutex
 	lastInsertStats   CollectionInsertStats
@@ -1458,7 +1459,9 @@ func (c *Collection) updateDocumentOnce(documentID []byte, update func(current [
 		return false, false, err
 	}
 	plannerOptions = collectionOptionsWithTemplateV1Resolver(plannerOptions, snap, catalog)
+	baseUserRoot := snapshotUserRoot(snap)
 	baseSystemRoot := snapshotSystemRoot(snap)
+	baseCommitSeq := snapshotCommitSeq(snap)
 
 	primaryRoot := catalog.rootID(collectionPrimaryRootName(c.meta.Name))
 	if primaryRoot == 0 {
@@ -1596,7 +1599,10 @@ func (c *Collection) updateDocumentOnce(documentID []byte, update func(current [
 			StoragePolicy: policies[i],
 		})
 	}
-	newSystemRoot, rootIDs, err := c.db.PublishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+	preflight := func() error {
+		return c.validateMutationRootDescriptors(baseUserRoot, baseSystemRoot, baseCommitSeq)
+	}
+	newSystemRoot, rootIDs, err := c.db.PublishOrderedRootDeltaGroupWithPreflightAndSystemDeltaBuilder(ordered, preflight, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
 		return c.buildRootDescriptorSystemDeltaIterator(baseSystemRoot, rootNames, baseRootIDs, rootIDs)
 	})
 	if err != nil {
@@ -1616,9 +1622,10 @@ func (c *Collection) catalogForSnapshot(snap *backenddb.Snapshot) (*collectionCa
 		return nil, backenddb.ErrClosed
 	}
 	systemRoot := snapshotSystemRoot(snap)
+	commitSeq := snapshotCommitSeq(snap)
 
 	c.catalogMu.RLock()
-	if cached := c.catalog; cached != nil && c.catalogSystemRoot == systemRoot {
+	if cached := c.catalog; cached != nil && c.catalogSystemRoot == systemRoot && c.catalogCommitSeq == commitSeq {
 		c.catalogMu.RUnlock()
 		return cached, nil
 	}
@@ -1642,13 +1649,35 @@ func snapshotSystemRoot(snap *backenddb.Snapshot) uint64 {
 	return 0
 }
 
+func snapshotUserRoot(snap *backenddb.Snapshot) uint64 {
+	if snap == nil {
+		return 0
+	}
+	if state := snap.State(); state != nil {
+		return state.RootPageID
+	}
+	return 0
+}
+
+func snapshotCommitSeq(snap *backenddb.Snapshot) uint64 {
+	if snap == nil {
+		return 0
+	}
+	if state := snap.State(); state != nil {
+		return state.CommitSeq
+	}
+	return 0
+}
+
 func (c *Collection) rememberCatalog(snap *backenddb.Snapshot, catalog *collectionCatalog) {
 	if c == nil || snap == nil || catalog == nil {
 		return
 	}
 	systemRoot := snapshotSystemRoot(snap)
+	commitSeq := snapshotCommitSeq(snap)
 	c.catalogMu.Lock()
 	c.catalogSystemRoot = systemRoot
+	c.catalogCommitSeq = commitSeq
 	c.catalog = catalog
 	c.catalogMu.Unlock()
 }
@@ -1659,8 +1688,20 @@ func (c *Collection) rememberCatalogAtSystemRoot(systemRoot uint64, catalog *col
 	}
 	c.catalogMu.Lock()
 	c.catalogSystemRoot = systemRoot
+	c.catalogCommitSeq = c.commitSeqForSystemRoot(systemRoot)
 	c.catalog = catalog
 	c.catalogMu.Unlock()
+}
+
+func (c *Collection) commitSeqForSystemRoot(systemRoot uint64) uint64 {
+	if c == nil || c.db == nil {
+		return 0
+	}
+	state := c.db.State()
+	if state == nil || state.SystemRootPageID != systemRoot {
+		return 0
+	}
+	return state.CommitSeq
 }
 
 func (c *Collection) noteWriteDomainCatalog(systemRoot uint64, catalog *collectionCatalog) {
@@ -1883,6 +1924,17 @@ func (c *Collection) buildRootDescriptorSystemDeltaIterator(expectedSystemRoot u
 	if len(rootIDs) != len(rootNames) {
 		return nil, errors.New("collections: ordered root publish returned unexpected root count")
 	}
+	if err := c.validateRootDescriptorSystemDelta(expectedSystemRoot, rootNames, baseRootIDs); err != nil {
+		return nil, err
+	}
+	updates := make(map[string][]byte, len(rootNames))
+	for i, rootName := range rootNames {
+		updates[systemCollectionRootKey(rootName)] = encodeRootID(rootIDs[i])
+	}
+	return buildSystemDeltaIterator(updates)
+}
+
+func (c *Collection) validateRootDescriptorSystemDelta(expectedSystemRoot uint64, rootNames []string, baseRootIDs map[string]uint64) error {
 	currentSystemRoot := uint64(0)
 	if c != nil && c.db != nil {
 		if state := c.db.State(); state != nil {
@@ -1892,30 +1944,48 @@ func (c *Collection) buildRootDescriptorSystemDeltaIterator(expectedSystemRoot u
 	if currentSystemRoot != expectedSystemRoot {
 		current := c.db.AcquireSnapshot()
 		if current == nil {
-			return nil, backenddb.ErrClosed
+			return backenddb.ErrClosed
 		}
 		defer func() { _ = current.Close() }()
 		catalog, err := loadCollectionCatalog(current, c.meta.Name)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		if catalog == nil {
-			return nil, errCollectionNotFound
+			return errCollectionNotFound
 		}
 		if !sameCollectionMeta(catalog.meta, c.meta) {
-			return nil, fmt.Errorf("collections: concurrent schema modification detected for %q", c.meta.Name)
+			return fmt.Errorf("collections: concurrent schema modification detected for %q", c.meta.Name)
 		}
 		for _, rootName := range rootNames {
 			if got, want := catalog.rootID(rootName), baseRootIDs[rootName]; got != want {
-				return nil, fmt.Errorf("%w: concurrent root modification detected for %q", ErrConcurrentMutation, rootName)
+				return fmt.Errorf("%w: concurrent root modification detected for %q", ErrConcurrentMutation, rootName)
 			}
 		}
 	}
-	updates := make(map[string][]byte, len(rootNames))
-	for i, rootName := range rootNames {
-		updates[systemCollectionRootKey(rootName)] = encodeRootID(rootIDs[i])
+	return nil
+}
+
+func (c *Collection) validateMutationRootDescriptors(expectedUserRoot, expectedSystemRoot, expectedCommitSeq uint64) error {
+	if c == nil || c.db == nil {
+		return backenddb.ErrClosed
 	}
-	return buildSystemDeltaIterator(updates)
+	state := c.db.State()
+	if state == nil {
+		return backenddb.ErrClosed
+	}
+	if state.CommitSeq == expectedCommitSeq {
+		return nil
+	}
+	// Raw TreeDB writes advance CommitSeq and move only the user root. Those do
+	// not invalidate collection roots, so Update can still publish safely.
+	if state.SystemRootPageID == expectedSystemRoot {
+		if state.RootPageID != expectedUserRoot {
+			return nil
+		}
+		return fmt.Errorf("%w: ambiguous same-root commit detected", ErrConcurrentMutation)
+	}
+	return fmt.Errorf("%w: concurrent collection root modification detected", ErrConcurrentMutation)
 }
 
 func (c *Collection) buildSchemaAndRootDescriptorSystemIterator(
@@ -2074,63 +2144,87 @@ func rejectReplaceUniqueConflicts(snap *backenddb.Snapshot, catalog *collectionC
 	return nil
 }
 
+// Get returns an owned copy of the document for documentID.
+//
+// Missing documents return (nil, nil), matching the existing collection API.
+// Present-but-empty documents return a non-nil empty slice.
 func (c *Collection) Get(documentID []byte) ([]byte, error) {
+	out, found, err := c.GetInto(documentID, nil)
+	if err != nil || !found {
+		return nil, err
+	}
+	if len(out) == 0 {
+		return []byte{}, nil
+	}
+	if cap(out) == len(out) {
+		return out, nil
+	}
+	owned := make([]byte, len(out))
+	copy(owned, out)
+	return owned, nil
+}
+
+// GetInto appends the document for documentID into dst[:0].
+//
+// The returned slice is owned by the caller. Missing documents return
+// (dst[:0], false, nil).
+func (c *Collection) GetInto(documentID []byte, dst []byte) ([]byte, bool, error) {
 	if c == nil {
-		return nil, errCollectionNil
+		return dst[:0], false, errCollectionNil
 	}
 	if c.db == nil {
-		return nil, errors.New("collections: db is nil")
+		return dst[:0], false, errors.New("collections: db is nil")
 	}
 	if len(documentID) == 0 {
-		return nil, errors.New("collections: document id cannot be empty")
+		return dst[:0], false, errors.New("collections: document id cannot be empty")
 	}
-	if value, found := c.getBufferedDocument(documentID); found {
-		return value, nil
+	if value, buffered, found := c.getBufferedDocumentInto(documentID, dst); buffered {
+		return value, found, nil
 	}
 	snap := c.db.AcquireSnapshot()
 	if snap == nil {
-		return nil, backenddb.ErrClosed
+		return dst[:0], false, backenddb.ErrClosed
 	}
 	defer func() { _ = snap.Close() }()
 	catalog, err := c.catalogForSnapshot(snap)
 	if err != nil {
-		return nil, err
+		return dst[:0], false, err
 	}
 	if catalog == nil {
-		return nil, errCollectionNotFound
+		return dst[:0], false, errCollectionNotFound
 	}
 	primaryRoot := catalog.rootID(collectionPrimaryRootName(c.meta.Name))
 	if primaryRoot == 0 {
-		return nil, nil
+		return dst[:0], false, nil
 	}
-	entry, err := snap.GetEntryAtRoot(primaryRoot, documentID)
+	out, err := snap.GetAppendAtRoot(primaryRoot, documentID, dst[:0])
 	if errors.Is(err, tree.ErrKeyNotFound) {
-		return nil, nil
+		return dst[:0], false, nil
 	}
 	if err != nil {
-		return nil, err
+		return dst[:0], false, err
 	}
-	return bytes.Clone(entry.Value), nil
+	return out, true, nil
 }
 
-func (c *Collection) getBufferedDocument(documentID []byte) ([]byte, bool) {
+func (c *Collection) getBufferedDocumentInto(documentID []byte, dst []byte) ([]byte, bool, bool) {
 	if c == nil || c.writeDomain == nil {
-		return nil, false
+		return nil, false, false
 	}
 	domain := c.writeDomain
 	domain.mu.RLock()
 	defer domain.mu.RUnlock()
 	if domain.count == 0 || domain.table == nil {
-		return nil, false
+		return nil, false, false
 	}
 	value, _, flags, found := domain.table.GetEntry(documentID)
 	if !found {
-		return nil, false
+		return nil, false, false
 	}
 	if flags&node.FlagTombstone != 0 {
-		return nil, true
+		return dst[:0], true, false
 	}
-	return bytes.Clone(value), true
+	return append(dst[:0], value...), true, true
 }
 
 func (c *Collection) FindByIndex(indexName, value string) ([][]byte, error) {

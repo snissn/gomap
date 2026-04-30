@@ -135,6 +135,8 @@ var benchmarkSpecs = []benchmarkSpec{
 	{Name: "BenchmarkCollectionDeleteWithSecondaryIndexes", Section: "Document Path", Description: "Delete documents while removing postings from unique and non-unique secondary indexes."},
 	{Name: "BenchmarkCollectionShapeReadPrimary", Section: "Document Path", Description: "Lookup documents by primary `_id` while sweeping collection index shape."},
 	{Name: "BenchmarkCollectionShapeReadPrimaryParallel", Section: "Document Path", Description: "Parallel lookup of documents by primary `_id` while sweeping collection index shape."},
+	{Name: "BenchmarkCollectionShapeReadPrimaryInto", Section: "Document Path", Description: "Lookup documents by primary `_id` into a reusable caller buffer while sweeping collection index shape."},
+	{Name: "BenchmarkCollectionShapeReadPrimaryIntoParallel", Section: "Document Path", Description: "Parallel lookup of documents by primary `_id` into reusable caller buffers while sweeping collection index shape."},
 	{Name: "BenchmarkCollectionMixedReadWritePrimary", Section: "Document Path", Description: "Parallel primary-key readers while a writer concurrently inserts indexed documents."},
 	{Name: "BenchmarkCollectionMixedReadWriteSecondaryUnique", Section: "Document Path", Description: "Parallel unique secondary-index readers while a writer concurrently inserts indexed documents."},
 	{Name: "BenchmarkSecondaryLookupUnique", Section: "Secondary Index Path", Description: "Resolve a unique secondary index lookup to document IDs."},
