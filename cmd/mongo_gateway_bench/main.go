@@ -210,7 +210,7 @@ func parseConfig(args []string) (config, error) {
 	fs.IntVar(&cfg.ConcurrentWrites, "concurrent-writes", 0, "total update operations for the concurrent write phase")
 	fs.IntVar(&cfg.SecondaryIndexes, "secondary-indexes", 2, "secondary indexes to create: 0, 1=email, 2=both single-field indexes: email and city")
 	fs.StringVar(&treeDBProfile, "treedb-profile", treeDBProfile, "TreeDB profile for -target treedb: fast, wal_on_fast, durable, or bench")
-	fs.StringVar(&treeDBDocumentFormat, "treedb-document-format", treeDBDocumentFormat, "TreeDB collection document format for -target treedb: json or template-v1")
+	fs.StringVar(&treeDBDocumentFormat, "treedb-document-format", treeDBDocumentFormat, "TreeDB collection document format for -target treedb: json, template-v1, or bson")
 	fs.StringVar(&treeDBDataRootStorage, "treedb-data-root-storage", treeDBDataRootStorage, "TreeDB collection data root storage for -target treedb: fast or compressed")
 	fs.StringVar(&treeDBIndexStateRootStorage, "treedb-index-state-root-storage", treeDBIndexStateRootStorage, "TreeDB collection index-state root storage for -target treedb: fast or compressed")
 	fs.StringVar(&treeDBIndexRootStorage, "treedb-index-root-storage", treeDBIndexRootStorage, "TreeDB secondary index root storage for -target treedb: fast or compressed")
@@ -311,6 +311,8 @@ func parseTreeDBDocumentFormat(raw string) (collections.DocumentFormat, error) {
 		return collections.DocumentFormatTemplateV1, nil
 	case string(collections.DocumentFormatJSON):
 		return collections.DocumentFormatJSON, nil
+	case string(collections.DocumentFormatBSON):
+		return collections.DocumentFormatBSON, nil
 	default:
 		return "", fmt.Errorf("unknown treedb-document-format %q", raw)
 	}

@@ -56,8 +56,8 @@ func TestReportFromMatrix(t *testing.T) {
 		"# Mongo Gateway Benchmark Comparison",
 		"Largest TreeDB ops/sec lead: `load_insert_many`",
 		"Largest MongoDB ops/sec lead: `id_find_one`",
-		"| 100 | 1 | `load_insert_many` | 10000 | 5000 | 2.00x | 20.0 | 40.0 |",
-		"| 100 | 1 | 1000 B | 10.0 B | 2.00 KiB | 20.5 B | 1.27 KiB | 1.46 KiB | 4.00 KiB | 41.0 B | 0.67x | 0.50x |",
+		"| 100 | 1 | `treedb` | `load_insert_many` | 10000 | 5000 | 2.00x | 20.0 | 40.0 |",
+		"| 100 | 1 | `treedb` | 1000 B | 10.0 B | 2.00 KiB | 20.5 B | 1.27 KiB | 1.46 KiB | 4.00 KiB | 41.0 B | 0.67x | 0.50x |",
 	} {
 		if !strings.Contains(report, want) {
 			t.Fatalf("report missing %q\n%s", want, report)
@@ -89,6 +89,53 @@ func TestReportRejectsIncompleteCell(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "incomplete comparison cell") {
 		t.Fatalf("expected incomplete cell error, got %v", err)
+	}
+}
+
+func TestReportSupportsMultipleTreeDBConfigsPerMongoCell(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "treedb_json.json"), `{
+  "target": "treedb",
+  "treedb_document_format": "json",
+  "documents": 100,
+  "secondary_indexes": 2,
+  "phases": [{"name": "load_insert_many", "operations": 100, "ops_per_sec": 1000, "latency_micros": {}}],
+  "treedb_disk_after_maintenance": {"total_bytes": 2000}
+}`)
+	writeFile(t, filepath.Join(dir, "treedb_bson.json"), `{
+  "target": "treedb",
+  "treedb_document_format": "bson",
+  "documents": 100,
+  "secondary_indexes": 2,
+  "phases": [{"name": "load_insert_many", "operations": 100, "ops_per_sec": 2000, "latency_micros": {}}],
+  "treedb_disk_after_maintenance": {"total_bytes": 1500}
+}`)
+	writeFile(t, filepath.Join(dir, "mongo.json"), `{
+  "target": "mongo",
+  "documents": 100,
+  "secondary_indexes": 2,
+  "phases": [{"name": "load_insert_many", "operations": 100, "ops_per_sec": 500, "latency_micros": {}}],
+  "mongodb_stats_final": {"dataSize": 3000, "totalSize": 4000}
+}`)
+	matrixPath := filepath.Join(dir, "matrix.tsv")
+	reportPath := filepath.Join(dir, "report.md")
+	writeFile(t, matrixPath, "target\tconfig\tdocuments\tsecondary_indexes\traw_json\tphysical_bytes\n"+
+		"treedb\ttreedb_json\t100\t2\ttreedb_json.json\t2000\n"+
+		"treedb\ttreedb_bson\t100\t2\ttreedb_bson.json\t1500\n"+
+		"mongo\tmongo\t100\t2\tmongo.json\t5000\n")
+
+	if err := run([]string{"-matrix", matrixPath, "-report", reportPath}); err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	report := readFile(t, reportPath)
+	for _, want := range []string{
+		"comparison cells: `2`",
+		"| 100 | 2 | `treedb_bson` | 1.46 KiB",
+		"| 100 | 2 | `treedb_json` | 1.95 KiB",
+	} {
+		if !strings.Contains(report, want) {
+			t.Fatalf("report missing %q\n%s", want, report)
+		}
 	}
 }
 

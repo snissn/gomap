@@ -1051,8 +1051,8 @@ func validateMongoDatabaseName(db string) error {
 	return nil
 }
 
-// prepareInsertDocument uses canonical Extended JSON as the temporary collection
-// storage bridge so BSON types can round-trip before a native BSON format exists.
+// prepareInsertDocument converts one wire BSON document into the collection's
+// configured storage format.
 func prepareInsertDocument(doc wire.Document, format collections.DocumentFormat) ([]byte, []byte, error) {
 	if err := wire.ValidateDocument(doc); err != nil {
 		return nil, nil, err
@@ -1077,6 +1077,9 @@ func prepareInsertDocument(doc wire.Document, format collections.DocumentFormat)
 	if err != nil {
 		return nil, nil, err
 	}
+	if format == collections.DocumentFormatBSON {
+		return key, bytes.Clone(raw), nil
+	}
 	stored, err := bson.MarshalExtJSON(raw, true, false)
 	if err != nil {
 		return nil, nil, err
@@ -1092,6 +1095,13 @@ func prepareInsertDocument(doc wire.Document, format collections.DocumentFormat)
 
 func storedDocumentToBSON(col *collections.Collection, stored []byte) (wire.Document, error) {
 	if col != nil {
+		if col.Meta().Options.DocumentFormat == collections.DocumentFormatBSON {
+			raw := bson.Raw(stored)
+			if err := raw.Validate(); err != nil {
+				return nil, err
+			}
+			return wire.Document(raw), nil
+		}
 		var err error
 		stored, err = col.StoredDocumentJSON(stored)
 		if err != nil {

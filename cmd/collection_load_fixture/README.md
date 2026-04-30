@@ -45,6 +45,9 @@ Useful variants:
 # JSON documents with the same two-index shape.
 ./bin/collection-load-fixture -format json -dir /tmp/treedb_two_index_json_index_vlog -reset
 
+# Native BSON documents with the same two-index shape.
+./bin/collection-load-fixture -format bson -dir /tmp/treedb_two_index_bson_index_vlog -reset
+
 # Disable secondary-index value-log outer leaves.
 ./bin/collection-load-fixture -index-outer-leaves-in-vlog=false -dir /tmp/treedb_two_index_template_v1_fast_index -reset
 

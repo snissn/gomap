@@ -60,6 +60,10 @@ vacuum. The final vacuum closes the benchmark gateway before rewriting
 `-treedb-maintenance checkpoint` to reproduce the older checkpoint-only disk
 metric, or `none` to skip final TreeDB disk reporting.
 
+`-treedb-document-format` accepts `json`, `template-v1`, and `bson`. BSON mode
+stores Mongo wire documents as native BSON collection records, avoiding the
+canonical Extended JSON bridge used by the JSON/template-v1 gateway paths.
+
 ## MongoDB Target
 
 ```sh
@@ -90,6 +94,12 @@ harness builds `mongo_gateway_bench`, runs matching TreeDB and MongoDB cells,
 writes raw JSON for every target, records physical `du` bytes where available,
 and generates a Markdown report plus TSV summary.
 
+To compare every TreeDB document format in one bundle:
+
+```sh
+TREEDB_DOCUMENT_FORMATS="json template-v1 bson" scripts/mongo_gateway_compare.sh
+```
+
 ```sh
 scripts/mongo_gateway_compare.sh \
   --out /tmp/gomap_mongo_gateway_compare \
@@ -117,7 +127,7 @@ The bundle contains:
 - `report.md`: reviewable Markdown with highlights, disk bytes/doc, ops/sec
   ratios, and raw input paths.
 - `summary.tsv`: machine-readable per-phase comparison rows.
-- `matrix.tsv`: target/document/index/raw-json/physical-byte index.
+- `matrix.tsv`: target/config/document/index/raw-json/physical-byte index.
 - `raw/*.json`: unmodified `mongo_gateway_bench -format json` output.
 - `treedb_data/` and, in Docker mode, `mongodb_data/`: final data directories
   for post-run inspection.

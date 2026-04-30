@@ -32,6 +32,7 @@ TIMEOUT="${TIMEOUT:-20m}"
 TITLE="${TITLE:-Mongo Gateway Benchmark Comparison}"
 TREEDB_PROFILE="${TREEDB_PROFILE:-wal_on_fast}"
 TREEDB_DOCUMENT_FORMAT="${TREEDB_DOCUMENT_FORMAT:-template-v1}"
+TREEDB_DOCUMENT_FORMATS="${TREEDB_DOCUMENT_FORMATS:-$TREEDB_DOCUMENT_FORMAT}"
 TREEDB_DATA_ROOT_STORAGE="${TREEDB_DATA_ROOT_STORAGE:-compressed}"
 TREEDB_INDEX_STATE_ROOT_STORAGE="${TREEDB_INDEX_STATE_ROOT_STORAGE:-compressed}"
 TREEDB_INDEX_ROOT_STORAGE="${TREEDB_INDEX_ROOT_STORAGE:-compressed}"
@@ -65,6 +66,10 @@ Options:
   --mongo-image IMAGE   Docker image for --mongo-mode docker. Default: mongo:7.
   --timeout DURATION    Per-run benchmark timeout. Default: 20m.
   --treedb-profile NAME TreeDB profile. Default: wal_on_fast.
+  --treedb-document-format FORMAT
+                        Single TreeDB document format.
+  --treedb-document-formats LIST
+                        Space-separated TreeDB formats. Example: "json template-v1 bson".
   --treedb-maintenance MODE
                         TreeDB final maintenance: full, checkpoint, or none.
   --title TITLE         Markdown report title.
@@ -76,8 +81,8 @@ Environment overrides:
   CONCURRENT_READERS, CONCURRENT_READS, CONCURRENT_READS_DIVISOR,
   CONCURRENT_WRITERS, CONCURRENT_WRITES, CONCURRENT_WRITES_DIVISOR,
   MONGO_MODE, MONGO_URI, MONGO_IMAGE, DATABASE_PREFIX, COLLECTION, TIMEOUT,
-  TREEDB_PROFILE, TREEDB_DOCUMENT_FORMAT, TREEDB_DATA_ROOT_STORAGE,
-  TREEDB_INDEX_STATE_ROOT_STORAGE, TREEDB_INDEX_ROOT_STORAGE,
+  TREEDB_PROFILE, TREEDB_DOCUMENT_FORMAT, TREEDB_DOCUMENT_FORMATS,
+  TREEDB_DATA_ROOT_STORAGE, TREEDB_INDEX_STATE_ROOT_STORAGE, TREEDB_INDEX_ROOT_STORAGE,
   TREEDB_MAINTENANCE, TITLE.
 EOF
 }
@@ -146,6 +151,15 @@ while [[ $# -gt 0 ]]; do
       ;;
     --treedb-profile)
       TREEDB_PROFILE="$2"
+      shift 2
+      ;;
+    --treedb-document-format)
+      TREEDB_DOCUMENT_FORMAT="$2"
+      TREEDB_DOCUMENT_FORMATS="$2"
+      shift 2
+      ;;
+    --treedb-document-formats)
+      TREEDB_DOCUMENT_FORMATS="$2"
       shift 2
       ;;
     --treedb-maintenance)
@@ -396,7 +410,7 @@ fi
   echo "concurrent writes: ${CONCURRENT_WRITES:-documents / $CONCURRENT_WRITES_DIVISOR when writers > 0}"
   echo "mongo mode: $MONGO_MODE"
   echo "treedb profile: $TREEDB_PROFILE"
-  echo "treedb document format: $TREEDB_DOCUMENT_FORMAT"
+  echo "treedb document formats: $TREEDB_DOCUMENT_FORMATS"
   echo "treedb root storage: data=$TREEDB_DATA_ROOT_STORAGE index_state=$TREEDB_INDEX_STATE_ROOT_STORAGE index=$TREEDB_INDEX_ROOT_STORAGE"
   echo "treedb maintenance: $TREEDB_MAINTENANCE"
   if [[ "$MONGO_MODE" == "docker" ]]; then
@@ -410,7 +424,7 @@ fi
 GOWORK=off go build -o "$BENCH_BIN" ./cmd/mongo_gateway_bench
 GOWORK=off go build -o "$REPORT_BIN" ./cmd/mongo_gateway_compare_report
 
-printf "target\tdocuments\tsecondary_indexes\traw_json\tphysical_bytes\n" >"$MATRIX"
+printf "target\tconfig\tdocuments\tsecondary_indexes\traw_json\tphysical_bytes\n" >"$MATRIX"
 
 for docs in $DOCS_LIST; do
   if ! is_positive_int "$docs"; then
@@ -443,27 +457,32 @@ for docs in $DOCS_LIST; do
     fi
     cell="docs_${docs}_idx_${indexes}"
     database="${DATABASE_PREFIX}_${cell}"
-    tree_raw_rel="raw/treedb_${cell}.json"
     mongo_raw_rel="raw/mongo_${cell}.json"
-    tree_raw="$OUT_DIR/$tree_raw_rel"
     mongo_raw="$OUT_DIR/$mongo_raw_rel"
-    tree_data="$TREE_DIR/$cell"
     mongo_data="$MONGO_DIR/$cell"
 
-    echo
-    echo "==> $cell TreeDB"
-    run_target treedb "$docs" "$indexes" "$tree_raw" "$database" "$reads" "$range_reads" "$updates" "$DELETES" \
-      "$CONCURRENT_READERS" "$concurrent_reads" "$CONCURRENT_WRITERS" "$concurrent_writes" \
-      -treedb-dir "$tree_data" \
-      -keep-treedb-dir \
-      -treedb-profile "$TREEDB_PROFILE" \
-      -treedb-document-format "$TREEDB_DOCUMENT_FORMAT" \
-      -treedb-data-root-storage "$TREEDB_DATA_ROOT_STORAGE" \
-      -treedb-index-state-root-storage "$TREEDB_INDEX_STATE_ROOT_STORAGE" \
-      -treedb-index-root-storage "$TREEDB_INDEX_ROOT_STORAGE" \
-      -treedb-maintenance "$TREEDB_MAINTENANCE"
-    tree_physical=$(du_bytes "$tree_data")
-    printf "treedb\t%s\t%s\t%s\t%s\n" "$docs" "$indexes" "$tree_raw_rel" "$tree_physical" >>"$MATRIX"
+    for tree_format in $TREEDB_DOCUMENT_FORMATS; do
+      format_label=$(safe_label "${tree_format//-/_}")
+      tree_config="treedb_${format_label}"
+      tree_raw_rel="raw/${tree_config}_${cell}.json"
+      tree_raw="$OUT_DIR/$tree_raw_rel"
+      tree_data="$TREE_DIR/${tree_config}_${cell}"
+
+      echo
+      echo "==> $cell TreeDB ($tree_format)"
+      run_target treedb "$docs" "$indexes" "$tree_raw" "$database" "$reads" "$range_reads" "$updates" "$DELETES" \
+        "$CONCURRENT_READERS" "$concurrent_reads" "$CONCURRENT_WRITERS" "$concurrent_writes" \
+        -treedb-dir "$tree_data" \
+        -keep-treedb-dir \
+        -treedb-profile "$TREEDB_PROFILE" \
+        -treedb-document-format "$tree_format" \
+        -treedb-data-root-storage "$TREEDB_DATA_ROOT_STORAGE" \
+        -treedb-index-state-root-storage "$TREEDB_INDEX_STATE_ROOT_STORAGE" \
+        -treedb-index-root-storage "$TREEDB_INDEX_ROOT_STORAGE" \
+        -treedb-maintenance "$TREEDB_MAINTENANCE"
+      tree_physical=$(du_bytes "$tree_data")
+      printf "treedb\t%s\t%s\t%s\t%s\t%s\n" "$tree_config" "$docs" "$indexes" "$tree_raw_rel" "$tree_physical" >>"$MATRIX"
+    done
 
     echo "==> $cell MongoDB"
     mongo_uri="$MONGO_URI"
@@ -486,7 +505,7 @@ for docs in $DOCS_LIST; do
     else
       mongo_physical=0
     fi
-    printf "mongo\t%s\t%s\t%s\t%s\n" "$docs" "$indexes" "$mongo_raw_rel" "$mongo_physical" >>"$MATRIX"
+    printf "mongo\tmongo\t%s\t%s\t%s\t%s\n" "$docs" "$indexes" "$mongo_raw_rel" "$mongo_physical" >>"$MATRIX"
   done
 done
 
@@ -521,7 +540,7 @@ cat >"$README" <<EOF
 - MongoDB image: \`$MONGO_IMAGE\`
 - benchmark timeout: \`$TIMEOUT\`
 - TreeDB profile: \`$TREEDB_PROFILE\`
-- TreeDB document format: \`$TREEDB_DOCUMENT_FORMAT\`
+- TreeDB document formats: \`$TREEDB_DOCUMENT_FORMATS\`
 - TreeDB root storage: \`data=$TREEDB_DATA_ROOT_STORAGE index_state=$TREEDB_INDEX_STATE_ROOT_STORAGE index=$TREEDB_INDEX_ROOT_STORAGE\`
 - TreeDB maintenance: \`$TREEDB_MAINTENANCE\`
 

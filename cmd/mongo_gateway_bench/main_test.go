@@ -309,6 +309,16 @@ func TestParseConfigTreeDBCorrectnessDefaults(t *testing.T) {
 	}
 }
 
+func TestParseConfigAcceptsTreeDBBSONDocumentFormat(t *testing.T) {
+	cfg, err := parseConfig([]string{"-treedb-document-format", "bson"})
+	if err != nil {
+		t.Fatalf("parse BSON document format: %v", err)
+	}
+	if got := string(cfg.TreeDBDocumentFormat); got != "bson" {
+		t.Fatalf("TreeDBDocumentFormat=%q want bson", got)
+	}
+}
+
 func TestTreeDBProfileSmokeFastAndWALOnFast(t *testing.T) {
 	if testing.Short() {
 		t.Skip("profile smoke benchmark skipped in short mode")

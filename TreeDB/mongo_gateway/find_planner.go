@@ -318,6 +318,9 @@ func storedDocumentMatchesPredicatesForCollection(col *collections.Collection, s
 	switch col.Meta().Options.DocumentFormat {
 	case collections.DocumentFormatDefault, collections.DocumentFormatJSON:
 		return storedDocumentMatchesPredicates(stored, predicates)
+	case collections.DocumentFormatBSON:
+		match, err := documentMatchesPredicates(wire.Document(stored), predicates)
+		return match, true, err
 	default:
 		return false, false, nil
 	}

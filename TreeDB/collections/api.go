@@ -21,6 +21,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/tree"
+	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 const (
@@ -99,7 +100,12 @@ func persistIndexStateForOptions(opts collectionOptions) bool {
 }
 
 func persistIndexStateForDocumentFormat(format DocumentFormat) bool {
-	return normalizedDocumentFormat(format) != DocumentFormatTemplateV1
+	switch normalizedDocumentFormat(format) {
+	case DocumentFormatTemplateV1, DocumentFormatBSON:
+		return false
+	default:
+		return true
+	}
 }
 
 type CollectionManager struct {
@@ -177,6 +183,7 @@ type DocumentFormat string
 const (
 	DocumentFormatDefault    DocumentFormat = ""
 	DocumentFormatJSON       DocumentFormat = "json"
+	DocumentFormatBSON       DocumentFormat = "bson"
 	DocumentFormatTemplateV1 DocumentFormat = "template-v1"
 )
 
@@ -3418,6 +3425,12 @@ func (c *Collection) StoredDocumentJSON(document []byte) ([]byte, error) {
 	switch documentFormat {
 	case DocumentFormatJSON:
 		return bytes.Clone(document), nil
+	case DocumentFormatBSON:
+		raw := bson.Raw(document)
+		if err := raw.Validate(); err != nil {
+			return nil, fmt.Errorf("collections: BSON stored document: %w", err)
+		}
+		return bson.MarshalExtJSON(raw, true, false)
 	case DocumentFormatTemplateV1:
 		snap := c.db.AcquireSnapshot()
 		if snap == nil {

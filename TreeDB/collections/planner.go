@@ -925,6 +925,8 @@ func orderedIndexStateForDocumentWithArena(document []byte, runtimes []indexRunt
 	}
 	switch normalizedDocumentFormat(opts.documentFormat) {
 	case DocumentFormatJSON:
+	case DocumentFormatBSON:
+		return bsonOrderedIndexStateForDocumentWithArena(document, runtimes, opts, encoder)
 	case DocumentFormatTemplateV1:
 		return templateV1OrderedIndexStateForDocumentWithArena(document, runtimes, opts, encoder)
 	default:
