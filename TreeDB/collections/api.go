@@ -179,6 +179,14 @@ type CollectionOptions struct {
 	// primary and secondary reads on the same manager, but durability remains at
 	// the explicit flush boundary, matching the existing no-index buffered path.
 	BufferedIndexedWrites bool `json:"buffered_indexed_writes,omitempty"`
+	// BufferedIndexedWriteMaxDocuments flushes indexed write buffers once this
+	// many staged documents are pending. Zero leaves flushing to explicit
+	// Flush/Close calls.
+	BufferedIndexedWriteMaxDocuments int `json:"buffered_indexed_write_max_documents,omitempty"`
+	// BufferedIndexedWriteMaxBytes flushes indexed write buffers once the staged
+	// root-run payload estimate reaches this many bytes. Zero leaves flushing to
+	// explicit Flush/Close calls.
+	BufferedIndexedWriteMaxBytes int64 `json:"buffered_indexed_write_max_bytes,omitempty"`
 }
 
 type IndexDefinition struct {
@@ -219,6 +227,15 @@ type noIndexBatchEntry struct {
 	document []byte
 }
 
+type bufferedIndexedCheckpoint struct {
+	count           int
+	bufferedBytes   int64
+	rootRuns        map[string][]memtable.Table
+	rootPolicies    map[string]backenddb.OrderedRootStoragePolicy
+	rootBaseIDs     map[string]uint64
+	uniqueValueRuns map[string][]memtable.Table
+}
+
 type collectionWriteDomain struct {
 	// mutationMu serializes root descriptor publishes for handles opened
 	// through the same manager so optimistic retries do not starve under
@@ -238,6 +255,7 @@ type collectionWriteDomain struct {
 	rootBaseIDs     map[string]uint64
 	uniqueValueRuns map[string][]memtable.Table
 	count           int
+	bufferedBytes   int64
 }
 
 func NewCollectionManager(database *backenddb.DB) *CollectionManager {
@@ -1024,31 +1042,31 @@ func (c *Collection) shouldBufferIndexedInserts(meta CollectionMeta) bool {
 	return c != nil && c.writeDomain != nil && meta.Options.BufferedIndexedWrites && len(meta.Indexes) > 0
 }
 
-func (c *Collection) bufferIndexedInsertPlanLocked(catalog *collectionCatalog, baseCommitSeq, baseSystemRoot uint64, plan *insertBatchPlan) error {
+func (c *Collection) bufferIndexedInsertPlanLocked(catalog *collectionCatalog, baseCommitSeq, baseSystemRoot uint64, plan *insertBatchPlan) (time.Duration, error) {
 	domain := c.writeDomain
 	if domain == nil {
-		return errors.New("collections: missing write domain")
+		return 0, errors.New("collections: missing write domain")
 	}
 	domain.mu.Lock()
 	defer domain.mu.Unlock()
 	if catalog == nil {
-		return errCollectionNotFound
+		return 0, errCollectionNotFound
 	}
 	if len(catalog.meta.Indexes) == 0 {
-		return errors.New("collections: indexed write buffer requires an indexed schema")
+		return 0, errors.New("collections: indexed write buffer requires an indexed schema")
 	}
 	if domain.count > 0 {
 		currentCommitSeq, currentSystemRoot := dbCommitSeqAndSystemRoot(c.db)
 		currentCatalog, err := c.revalidateBufferedWriteDomainLocked(domain, currentCommitSeq, currentSystemRoot)
 		if err != nil {
-			return err
+			return 0, err
 		}
 		if !sameCollectionMeta(currentCatalog.meta, catalog.meta) {
-			return fmt.Errorf("collections: concurrent schema modification detected for %q", catalog.meta.Name)
+			return 0, fmt.Errorf("collections: concurrent schema modification detected for %q", catalog.meta.Name)
 		}
 		for rootName, baseRoot := range domain.rootBaseIDs {
 			if got := currentCatalog.rootID(rootName); got != baseRoot {
-				return fmt.Errorf("%w: concurrent root modification detected for %q", ErrConcurrentMutation, rootName)
+				return 0, fmt.Errorf("%w: concurrent root modification detected for %q", ErrConcurrentMutation, rootName)
 			}
 		}
 		catalog = currentCatalog
@@ -1057,7 +1075,7 @@ func (c *Collection) bufferIndexedInsertPlanLocked(catalog *collectionCatalog, b
 	}
 
 	if err := c.rejectBufferedIndexedInsertConflictsLocked(domain, catalog.meta, plan); err != nil {
-		return err
+		return 0, err
 	}
 	if domain.rootPolicies == nil {
 		domain.rootPolicies = make(map[string]backenddb.OrderedRootStoragePolicy, len(plan.runs))
@@ -1071,14 +1089,16 @@ func (c *Collection) bufferIndexedInsertPlanLocked(catalog *collectionCatalog, b
 	if domain.uniqueValueRuns == nil {
 		domain.uniqueValueRuns = make(map[string][]memtable.Table)
 	}
+	checkpoint := checkpointBufferedIndexedDomain(domain)
 	uniqueIndexes := uniqueCollectionIndexNames(catalog.meta)
+	var stagedBytes int64
 	for _, run := range plan.runs {
 		var uniqueValueTable memtable.Table
 		if _, ok := uniqueIndexes[run.indexName]; ok && run.kind == collectionRootSecondary {
 			var err error
 			uniqueValueTable, err = bufferedUniqueIndexValueRun(run.table)
 			if err != nil {
-				return err
+				return 0, err
 			}
 		}
 		if len(domain.rootRuns[run.name]) == 0 {
@@ -1086,8 +1106,10 @@ func (c *Collection) bufferIndexedInsertPlanLocked(catalog *collectionCatalog, b
 		}
 		domain.rootPolicies[run.name] = run.storagePolicy
 		domain.rootRuns[run.name] = append(domain.rootRuns[run.name], run.table)
+		stagedBytes = saturatingAddNonNegativeInt64(stagedBytes, run.table.Size())
 		if uniqueValueTable != nil {
 			domain.uniqueValueRuns[run.indexName] = append(domain.uniqueValueRuns[run.indexName], uniqueValueTable)
+			stagedBytes = saturatingAddNonNegativeInt64(stagedBytes, uniqueValueTable.Size())
 		}
 	}
 	domain.loaded = true
@@ -1095,8 +1117,17 @@ func (c *Collection) bufferIndexedInsertPlanLocked(catalog *collectionCatalog, b
 	domain.catalog = catalog
 	domain.primaryRoot = catalog.rootID(collectionPrimaryRootName(catalog.meta.Name))
 	domain.count += len(plan.resultIDs)
+	domain.bufferedBytes = saturatingAddNonNegativeInt64(domain.bufferedBytes, stagedBytes)
 	c.meta = catalog.meta
-	return nil
+	if shouldFlushBufferedIndexedWrites(domain, catalog.meta.Options) {
+		flushStart := time.Now()
+		if err := c.flushBufferedIndexedLocked(domain); err != nil {
+			rollbackBufferedIndexedDomain(domain, checkpoint)
+			return 0, err
+		}
+		return time.Since(flushStart), nil
+	}
+	return 0, nil
 }
 
 func (c *Collection) initializeWriteDomainFromCatalogLocked(domain *collectionWriteDomain, catalog *collectionCatalog, baseCommitSeq, baseSystemRoot uint64) {
@@ -1110,6 +1141,104 @@ func (c *Collection) initializeWriteDomainFromCatalogLocked(domain *collectionWr
 	domain.rootPolicies = nil
 	domain.rootBaseIDs = nil
 	domain.uniqueValueRuns = nil
+	domain.bufferedBytes = 0
+}
+
+func shouldFlushBufferedIndexedWrites(domain *collectionWriteDomain, opts CollectionOptions) bool {
+	if domain == nil || domain.count == 0 {
+		return false
+	}
+	if opts.BufferedIndexedWriteMaxDocuments > 0 && domain.count >= opts.BufferedIndexedWriteMaxDocuments {
+		return true
+	}
+	if opts.BufferedIndexedWriteMaxBytes > 0 && domain.bufferedBytes >= opts.BufferedIndexedWriteMaxBytes {
+		return true
+	}
+	return false
+}
+
+func saturatingAddNonNegativeInt64(total, n int64) int64 {
+	if n <= 0 {
+		return total
+	}
+	const maxInt64 = int64(^uint64(0) >> 1)
+	if total > maxInt64-n {
+		return maxInt64
+	}
+	return total + n
+}
+
+func checkpointBufferedIndexedDomain(domain *collectionWriteDomain) bufferedIndexedCheckpoint {
+	if domain == nil {
+		return bufferedIndexedCheckpoint{}
+	}
+	return bufferedIndexedCheckpoint{
+		count:           domain.count,
+		bufferedBytes:   domain.bufferedBytes,
+		rootRuns:        cloneTableRunMap(domain.rootRuns),
+		rootPolicies:    cloneRootPolicyMap(domain.rootPolicies),
+		rootBaseIDs:     cloneUint64Map(domain.rootBaseIDs),
+		uniqueValueRuns: cloneTableRunMap(domain.uniqueValueRuns),
+	}
+}
+
+func rollbackBufferedIndexedDomain(domain *collectionWriteDomain, checkpoint bufferedIndexedCheckpoint) {
+	if domain == nil {
+		return
+	}
+	resetTableRunsAddedAfterCheckpoint(domain.rootRuns, checkpoint.rootRuns)
+	resetTableRunsAddedAfterCheckpoint(domain.uniqueValueRuns, checkpoint.uniqueValueRuns)
+	domain.count = checkpoint.count
+	domain.bufferedBytes = checkpoint.bufferedBytes
+	domain.rootRuns = checkpoint.rootRuns
+	domain.rootPolicies = checkpoint.rootPolicies
+	domain.rootBaseIDs = checkpoint.rootBaseIDs
+	domain.uniqueValueRuns = checkpoint.uniqueValueRuns
+}
+
+func resetTableRunsAddedAfterCheckpoint(current, checkpoint map[string][]memtable.Table) {
+	for name, runs := range current {
+		keep := 0
+		if checkpointRuns, ok := checkpoint[name]; ok {
+			keep = len(checkpointRuns)
+		}
+		for _, table := range runs[keep:] {
+			resetCollectionRunTable(table)
+		}
+	}
+}
+
+func cloneTableRunMap(in map[string][]memtable.Table) map[string][]memtable.Table {
+	if in == nil {
+		return nil
+	}
+	out := make(map[string][]memtable.Table, len(in))
+	for name, runs := range in {
+		out[name] = runs
+	}
+	return out
+}
+
+func cloneRootPolicyMap(in map[string]backenddb.OrderedRootStoragePolicy) map[string]backenddb.OrderedRootStoragePolicy {
+	if in == nil {
+		return nil
+	}
+	out := make(map[string]backenddb.OrderedRootStoragePolicy, len(in))
+	for name, policy := range in {
+		out[name] = policy
+	}
+	return out
+}
+
+func cloneUint64Map(in map[string]uint64) map[string]uint64 {
+	if in == nil {
+		return nil
+	}
+	out := make(map[string]uint64, len(in))
+	for name, value := range in {
+		out[name] = value
+	}
+	return out
 }
 
 func (c *Collection) rejectBufferedIndexedInsertConflictsLocked(domain *collectionWriteDomain, meta CollectionMeta, plan *insertBatchPlan) error {
@@ -1564,6 +1693,7 @@ func (c *Collection) flushBufferedIndexedLocked(domain *collectionWriteDomain) e
 	rootNames := orderedBufferedRootNames(meta, domain.rootRuns)
 	if len(rootNames) == 0 {
 		domain.count = 0
+		domain.bufferedBytes = 0
 		return nil
 	}
 	baseSystemRoot := snapshotSystemRoot(pin)
@@ -1608,6 +1738,7 @@ func (c *Collection) flushBufferedIndexedLocked(domain *collectionWriteDomain) e
 	oldUniqueValueRuns := domain.uniqueValueRuns
 	domain.uniqueValueRuns = nil
 	domain.count = 0
+	domain.bufferedBytes = 0
 	c.meta = meta
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	for _, runs := range oldRuns {
@@ -1800,12 +1931,13 @@ func (c *Collection) InsertBatch(ids, documents [][]byte) ([][]byte, error) {
 	}
 
 	if c.shouldBufferIndexedInserts(c.meta) {
-		err := c.bufferIndexedInsertPlanLocked(catalog, baseCommitSeq, baseSystemRoot, plan)
+		bufferFlushElapsed, err := c.bufferIndexedInsertPlanLocked(catalog, baseCommitSeq, baseSystemRoot, plan)
 		_ = snap.Close()
 		if err != nil {
 			resetCollectionRunTables(plan.runs)
 			return nil, err
 		}
+		plan.stats.Publish += bufferFlushElapsed
 		c.setLastInsertStats(plan.stats.CollectionInsertStats)
 		return plan.resultIDs, nil
 	}

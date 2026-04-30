@@ -49,6 +49,13 @@ Useful variants:
 # them at Flush/Close. The summary reports insert and flush timing separately.
 ./bin/collection-load-fixture -buffered-indexed-writes -dir /tmp/treedb_two_index_buffered -reset
 
+# Stage indexed writes but force bounded publishes every 64000 staged docs.
+./bin/collection-load-fixture \
+  -buffered-indexed-writes \
+  -buffered-indexed-write-max-docs 64000 \
+  -dir /tmp/treedb_two_index_buffered_bounded \
+  -reset
+
 # Generate machine-readable output and optional profiles.
 ./bin/collection-load-fixture \
   -json \
