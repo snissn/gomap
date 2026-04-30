@@ -1328,6 +1328,86 @@ func TestCollectionIndexedWriteMemtablesRejectPersistedUniqueConflict(t *testing
 	}
 }
 
+func TestCollectionIndexedWriteMemtablesAutoFlushMaxDocuments(t *testing.T) {
+	dir := t.TempDir()
+	d, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedWrites:            true,
+			BufferedIndexedWriteMaxDocuments: 2,
+		},
+		Indexes: []IndexDefinition{
+			{Name: "email", Field: "email", Unique: true},
+			{Name: "city", Field: "city"},
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"email":"ada@example.com","city":"hnl"}`)},
+	); err != nil {
+		t.Fatalf("first insert batch: %v", err)
+	}
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("expected snapshot")
+	}
+	catalog, err := loadCollectionCatalog(snap, "users")
+	_ = snap.Close()
+	if err != nil {
+		t.Fatalf("load catalog after first batch: %v", err)
+	}
+	if got := catalog.rootID(collectionPrimaryRootName("users")); got != 0 {
+		t.Fatalf("primary root persisted before threshold flush: %d", got)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u2")},
+		[][]byte{[]byte(`{"email":"grace@example.com","city":"hnl"}`)},
+	); err != nil {
+		t.Fatalf("second insert batch: %v", err)
+	}
+	snap = d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("expected snapshot after threshold flush")
+	}
+	catalog, err = loadCollectionCatalog(snap, "users")
+	_ = snap.Close()
+	if err != nil {
+		t.Fatalf("load catalog after threshold flush: %v", err)
+	}
+	if got := catalog.rootID(collectionPrimaryRootName("users")); got == 0 {
+		t.Fatal("primary root was not persisted after threshold flush")
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("close db: %v", err)
+	}
+
+	reopened, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("reopen db: %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	reopenedCol, err := NewCollectionManager(reopened).OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open reopened collection: %v", err)
+	}
+	ids, err := reopenedCol.FindByIndex("city", "hnl")
+	if err != nil {
+		t.Fatalf("find city after threshold flush: %v", err)
+	}
+	collectionMaintenanceRequireUnorderedIDs(t, ids, []byte("u1"), []byte("u2"))
+}
+
 func TestCollectionIndexedWriteMemtablesCloseFlushes(t *testing.T) {
 	dir := t.TempDir()
 	d, err := backenddb.Open(backenddb.Options{Dir: dir})
