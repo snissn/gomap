@@ -125,9 +125,11 @@ func benchmarkCollectionShapeInsertBatch(b *testing.B, indexCount int, checkpoin
 	targetBatchSize := benchmarkBatchSize(b)
 	startKeyFallback, startPrefixFallback := benchmarkNativeProbeFallbackCounters(b, backend)
 	var insertElapsed time.Duration
+	var bufferedFlushElapsed time.Duration
 	var syncElapsed time.Duration
 	var insertStats collections.CollectionInsertStats
 	batches := 0
+	bufferedIndexedWrites := collection.Meta().Options.BufferedIndexedWrites
 
 	metricName := "target_docs/batch"
 	if checkpoint {
@@ -154,6 +156,13 @@ func benchmarkCollectionShapeInsertBatch(b *testing.B, indexCount int, checkpoin
 		batches++
 		if checkpoint {
 			b.StartTimer()
+			if bufferedIndexedWrites {
+				flushStart := time.Now()
+				if err := collection.Flush(); err != nil {
+					b.Fatalf("flush buffered indexed writes: %v", err)
+				}
+				bufferedFlushElapsed += time.Since(flushStart)
+			}
 			syncStart := time.Now()
 			benchmarkSyncBoundary(b, backend)
 			syncElapsed += time.Since(syncStart)
@@ -161,9 +170,27 @@ func benchmarkCollectionShapeInsertBatch(b *testing.B, indexCount int, checkpoin
 		}
 		inserted += batchSize
 	}
+	if bufferedIndexedWrites && !checkpoint {
+		b.StartTimer()
+		flushStart := time.Now()
+		if err := collection.Flush(); err != nil {
+			b.Fatalf("flush buffered indexed writes: %v", err)
+		}
+		bufferedFlushElapsed += time.Since(flushStart)
+		b.StopTimer()
+	}
 	b.StopTimer()
 	b.ReportMetric(float64(targetBatchSize), metricName)
 	b.ReportMetric(float64(indexCount), "indexes/doc")
+	if bufferedIndexedWrites {
+		b.ReportMetric(1, "buffered_indexed_writes")
+		if insertElapsed > 0 {
+			b.ReportMetric(float64(insertElapsed.Nanoseconds())/float64(b.N), "buffered_insert_ns/doc")
+		}
+		if bufferedFlushElapsed > 0 {
+			b.ReportMetric(float64(bufferedFlushElapsed.Nanoseconds())/float64(b.N), "buffered_flush_ns/doc")
+		}
+	}
 	if checkpoint {
 		benchmarkReportCheckpointSplit(b, b.N, insertElapsed, syncElapsed)
 	}

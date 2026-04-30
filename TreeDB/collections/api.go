@@ -174,6 +174,11 @@ type CollectionOptions struct {
 	DocumentFormat          DocumentFormat    `json:"document_format,omitempty"`
 	DataRootStoragePolicy   RootStoragePolicy `json:"data_root_storage_policy,omitempty"`
 	IndexStateStoragePolicy RootStoragePolicy `json:"index_state_storage_policy,omitempty"`
+	// BufferedIndexedWrites stages indexed InsertBatch root deltas in the
+	// collection write domain until Flush/Close. Staged writes are visible to
+	// primary and secondary reads on the same manager, but durability remains at
+	// the explicit flush boundary, matching the existing no-index buffered path.
+	BufferedIndexedWrites bool `json:"buffered_indexed_writes,omitempty"`
 }
 
 type IndexDefinition struct {
@@ -218,17 +223,21 @@ type collectionWriteDomain struct {
 	// mutationMu serializes root descriptor publishes for handles opened
 	// through the same manager so optimistic retries do not starve under
 	// sustained collection write contention.
-	mutationMu     sync.Mutex
-	mu             sync.RWMutex
-	loaded         bool
-	meta           CollectionMeta
-	catalog        *collectionCatalog
-	baseCommitSeq  uint64
-	baseSystemRoot uint64
-	primaryRoot    uint64
-	storagePolicy  backenddb.OrderedRootStoragePolicy
-	table          memtable.Table
-	count          int
+	mutationMu      sync.Mutex
+	mu              sync.RWMutex
+	loaded          bool
+	meta            CollectionMeta
+	catalog         *collectionCatalog
+	baseCommitSeq   uint64
+	baseSystemRoot  uint64
+	primaryRoot     uint64
+	storagePolicy   backenddb.OrderedRootStoragePolicy
+	table           memtable.Table
+	rootRuns        map[string][]memtable.Table
+	rootPolicies    map[string]backenddb.OrderedRootStoragePolicy
+	rootBaseIDs     map[string]uint64
+	uniqueValueRuns map[string][]memtable.Table
+	count           int
 }
 
 func NewCollectionManager(database *backenddb.DB) *CollectionManager {
@@ -317,7 +326,7 @@ func flushCollectionWriteDomain(db *backenddb.DB, domain *collectionWriteDomain)
 	defer domain.mutationMu.Unlock()
 	domain.mu.Lock()
 	defer domain.mu.Unlock()
-	return collection.flushBufferedNoIndexLocked(domain)
+	return collection.flushBufferedWritesLocked(domain)
 }
 
 func (c *Collection) lockMutation() func() {
@@ -493,7 +502,7 @@ func (c *Collection) CreateIndex(def IndexDefinition) (*CollectionMeta, error) {
 	}
 	unlockMutation := c.lockMutation()
 	defer unlockMutation()
-	if err := c.flushBufferedNoIndex(); err != nil {
+	if err := c.flushBufferedWrites(); err != nil {
 		return nil, err
 	}
 
@@ -614,7 +623,7 @@ func (c *Collection) dropIndexes(names map[string]struct{}, all bool) (*Collecti
 	}
 	unlockMutation := c.lockMutation()
 	defer unlockMutation()
-	if err := c.flushBufferedNoIndex(); err != nil {
+	if err := c.flushBufferedWrites(); err != nil {
 		return nil, err
 	}
 
@@ -722,7 +731,7 @@ func (c *Collection) Flush() error {
 	}
 	unlockMutation := c.lockMutation()
 	defer unlockMutation()
-	return c.flushBufferedNoIndex()
+	return c.flushBufferedWrites()
 }
 
 func (c *Collection) insertOneNoIndexBuffered(id, document []byte) ([]byte, error) {
@@ -863,9 +872,17 @@ func (c *Collection) revalidateBufferedWriteDomainLocked(domain *collectionWrite
 		return nil, fmt.Errorf("collections: concurrent schema modification detected for %q", domain.meta.Name)
 	}
 
-	rootName := collectionPrimaryRootName(domain.meta.Name)
-	if rootID := catalog.rootID(rootName); rootID != domain.primaryRoot {
-		return nil, fmt.Errorf("collections: concurrent root modification detected for %q", domain.meta.Name)
+	primaryRootName := collectionPrimaryRootName(domain.meta.Name)
+	if len(domain.rootBaseIDs) > 0 {
+		for rootName, baseRootID := range domain.rootBaseIDs {
+			if rootID := catalog.rootID(rootName); rootID != baseRootID {
+				return nil, fmt.Errorf("collections: concurrent root modification detected for %q", domain.meta.Name)
+			}
+		}
+	} else {
+		if rootID := catalog.rootID(primaryRootName); rootID != domain.primaryRoot {
+			return nil, fmt.Errorf("collections: concurrent root modification detected for %q", domain.meta.Name)
+		}
 	}
 	options, err := collectionPlannerOptions(catalog.meta)
 	if err != nil {
@@ -875,7 +892,7 @@ func (c *Collection) revalidateBufferedWriteDomainLocked(domain *collectionWrite
 	domain.catalog = catalog
 	domain.baseCommitSeq = baseCommitSeq
 	domain.baseSystemRoot = baseSystemRoot
-	domain.primaryRoot = catalog.rootID(rootName)
+	domain.primaryRoot = catalog.rootID(primaryRootName)
 	domain.storagePolicy = options.dataStoragePolicy
 	c.meta = catalog.meta
 	c.rememberCatalogAtSystemRoot(baseSystemRoot, catalog)
@@ -903,6 +920,29 @@ func (c *Collection) flushBufferedNoIndex() error {
 	}
 	domain.mu.Lock()
 	defer domain.mu.Unlock()
+	if len(domain.rootRuns) > 0 {
+		return nil
+	}
+	return c.flushBufferedNoIndexLocked(domain)
+}
+
+func (c *Collection) flushBufferedWrites() error {
+	domain := c.writeDomain
+	if domain == nil {
+		return nil
+	}
+	domain.mu.Lock()
+	defer domain.mu.Unlock()
+	return c.flushBufferedWritesLocked(domain)
+}
+
+func (c *Collection) flushBufferedWritesLocked(domain *collectionWriteDomain) error {
+	if domain == nil || domain.count == 0 {
+		return nil
+	}
+	if len(domain.rootRuns) > 0 {
+		return c.flushBufferedIndexedLocked(domain)
+	}
 	return c.flushBufferedNoIndexLocked(domain)
 }
 
@@ -978,6 +1018,623 @@ func (c *Collection) flushBufferedNoIndexLocked(domain *collectionWriteDomain) e
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	resetCollectionRunTable(table)
 	return nil
+}
+
+func (c *Collection) shouldBufferIndexedInserts(meta CollectionMeta) bool {
+	return c != nil && c.writeDomain != nil && meta.Options.BufferedIndexedWrites && len(meta.Indexes) > 0
+}
+
+func (c *Collection) bufferIndexedInsertPlanLocked(catalog *collectionCatalog, baseCommitSeq, baseSystemRoot uint64, plan *insertBatchPlan) error {
+	domain := c.writeDomain
+	if domain == nil {
+		return errors.New("collections: missing write domain")
+	}
+	domain.mu.Lock()
+	defer domain.mu.Unlock()
+	if catalog == nil {
+		return errCollectionNotFound
+	}
+	if len(catalog.meta.Indexes) == 0 {
+		return errors.New("collections: indexed write buffer requires an indexed schema")
+	}
+	if domain.count > 0 {
+		currentCommitSeq, currentSystemRoot := dbCommitSeqAndSystemRoot(c.db)
+		currentCatalog, err := c.revalidateBufferedWriteDomainLocked(domain, currentCommitSeq, currentSystemRoot)
+		if err != nil {
+			return err
+		}
+		if !sameCollectionMeta(currentCatalog.meta, catalog.meta) {
+			return fmt.Errorf("collections: concurrent schema modification detected for %q", catalog.meta.Name)
+		}
+		for rootName, baseRoot := range domain.rootBaseIDs {
+			if got := catalog.rootID(rootName); got != baseRoot {
+				return fmt.Errorf("%w: concurrent root modification detected for %q", ErrConcurrentMutation, rootName)
+			}
+		}
+	} else {
+		c.initializeWriteDomainFromCatalogLocked(domain, catalog, baseCommitSeq, baseSystemRoot)
+	}
+
+	if err := c.rejectBufferedIndexedInsertConflictsLocked(domain, catalog.meta, plan); err != nil {
+		return err
+	}
+	if domain.rootPolicies == nil {
+		domain.rootPolicies = make(map[string]backenddb.OrderedRootStoragePolicy, len(plan.runs))
+	}
+	if domain.rootBaseIDs == nil {
+		domain.rootBaseIDs = make(map[string]uint64, len(plan.runs))
+	}
+	if domain.rootRuns == nil {
+		domain.rootRuns = make(map[string][]memtable.Table, len(plan.runs))
+	}
+	if domain.uniqueValueRuns == nil {
+		domain.uniqueValueRuns = make(map[string][]memtable.Table)
+	}
+	uniqueIndexes := uniqueCollectionIndexNames(catalog.meta)
+	for _, run := range plan.runs {
+		var uniqueValueTable memtable.Table
+		if _, ok := uniqueIndexes[run.indexName]; ok && run.kind == collectionRootSecondary {
+			var err error
+			uniqueValueTable, err = bufferedUniqueIndexValueRun(run.table)
+			if err != nil {
+				return err
+			}
+		}
+		if len(domain.rootRuns[run.name]) == 0 {
+			domain.rootBaseIDs[run.name] = catalog.rootID(run.name)
+		}
+		domain.rootPolicies[run.name] = run.storagePolicy
+		domain.rootRuns[run.name] = append(domain.rootRuns[run.name], run.table)
+		if uniqueValueTable != nil {
+			domain.uniqueValueRuns[run.indexName] = append(domain.uniqueValueRuns[run.indexName], uniqueValueTable)
+		}
+	}
+	domain.loaded = true
+	domain.meta = catalog.meta
+	domain.catalog = catalog
+	domain.baseCommitSeq = baseCommitSeq
+	domain.baseSystemRoot = baseSystemRoot
+	domain.primaryRoot = catalog.rootID(collectionPrimaryRootName(catalog.meta.Name))
+	domain.count += len(plan.resultIDs)
+	c.meta = catalog.meta
+	return nil
+}
+
+func (c *Collection) initializeWriteDomainFromCatalogLocked(domain *collectionWriteDomain, catalog *collectionCatalog, baseCommitSeq, baseSystemRoot uint64) {
+	domain.loaded = true
+	domain.meta = catalog.meta
+	domain.catalog = catalog
+	domain.baseCommitSeq = baseCommitSeq
+	domain.baseSystemRoot = baseSystemRoot
+	domain.primaryRoot = catalog.rootID(collectionPrimaryRootName(catalog.meta.Name))
+	domain.rootRuns = nil
+	domain.rootPolicies = nil
+	domain.rootBaseIDs = nil
+	domain.uniqueValueRuns = nil
+}
+
+func (c *Collection) rejectBufferedIndexedInsertConflictsLocked(domain *collectionWriteDomain, meta CollectionMeta, plan *insertBatchPlan) error {
+	if domain == nil || domain.count == 0 || len(domain.rootRuns) == 0 {
+		return nil
+	}
+	primaryName := collectionPrimaryRootName(meta.Name)
+	if pendingPrimary := domain.rootRuns[primaryName]; len(pendingPrimary) > 0 {
+		for _, run := range plan.runs {
+			if run.name != primaryName {
+				continue
+			}
+			if err := rejectBufferedPrimaryConflicts(pendingPrimary, run.table); err != nil {
+				return err
+			}
+			break
+		}
+	}
+	uniqueIndexes := uniqueCollectionIndexNames(meta)
+	for _, run := range plan.runs {
+		if run.kind != collectionRootSecondary {
+			continue
+		}
+		if _, ok := uniqueIndexes[run.indexName]; !ok {
+			continue
+		}
+		pending := domain.uniqueValueRuns[run.indexName]
+		if len(pending) == 0 {
+			continue
+		}
+		if err := rejectBufferedUniqueIndexConflicts(run.indexName, pending, run.table); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func rejectBufferedPrimaryConflicts(pendingPrimary []memtable.Table, batchPrimary memtable.Table) error {
+	it := batchPrimary.NewIterator(nil, nil)
+	defer func() { _ = it.Close() }()
+	for it.Valid() {
+		if _, _, flags, found := getBufferedRunEntry(pendingPrimary, it.UnsafeKey()); found && flags&node.FlagTombstone == 0 {
+			return ErrDocumentExists
+		}
+		it.Next()
+	}
+	if err := it.Error(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func uniqueCollectionIndexNames(meta CollectionMeta) map[string]struct{} {
+	uniqueIndexes := make(map[string]struct{}, len(meta.Indexes))
+	for _, idx := range meta.Indexes {
+		if idx.Unique {
+			uniqueIndexes[idx.Name] = struct{}{}
+		}
+	}
+	return uniqueIndexes
+}
+
+func rejectBufferedUniqueIndexConflicts(indexName string, pendingIndex []memtable.Table, batchIndex memtable.Table) error {
+	it := batchIndex.NewIterator(nil, nil)
+	defer func() { _ = it.Close() }()
+	for it.Valid() {
+		prefix, err := indexEntryValuePrefix(it.UnsafeKey())
+		if err != nil {
+			return err
+		}
+		if _, _, flags, found := getBufferedRunEntry(pendingIndex, prefix); found && flags&node.FlagTombstone == 0 {
+			return fmt.Errorf("%w %q", ErrUniqueIndexConflict, indexName)
+		}
+		it.Next()
+	}
+	if err := it.Error(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func bufferedUniqueIndexValueRun(batchIndex memtable.Table) (memtable.Table, error) {
+	table := newCollectionRunTable(max(0, batchIndex.Len()))
+	it := batchIndex.NewIterator(nil, nil)
+	defer func() { _ = it.Close() }()
+	for it.Valid() {
+		prefix, err := indexEntryValuePrefix(it.UnsafeKey())
+		if err != nil {
+			resetCollectionRunTable(table)
+			return nil, err
+		}
+		setCollectionRunValue(table, prefix, nil)
+		it.Next()
+	}
+	if err := it.Error(); err != nil {
+		resetCollectionRunTable(table)
+		return nil, err
+	}
+	table.Freeze()
+	return table, nil
+}
+
+func indexEntryValuePrefix(key []byte) ([]byte, error) {
+	if len(key) < 2 {
+		return nil, errors.New("collections: malformed index entry key")
+	}
+	n := int(binary.BigEndian.Uint16(key[:2]))
+	if len(key) < 2+n {
+		return nil, errors.New("collections: malformed index entry key")
+	}
+	return key[:2+n], nil
+}
+
+func getBufferedRunEntry(runs []memtable.Table, key []byte) ([]byte, page.ValuePtr, byte, bool) {
+	for i := len(runs) - 1; i >= 0; i-- {
+		if runs[i] == nil {
+			continue
+		}
+		if value, ptr, flags, found := runs[i].GetEntry(key); found {
+			return value, ptr, flags, true
+		}
+	}
+	return nil, page.ValuePtr{}, 0, false
+}
+
+type bufferedRootRunHeapItem struct {
+	idx      int
+	priority int
+	key      []byte
+}
+
+type bufferedRootRunHeap []bufferedRootRunHeapItem
+
+func (h bufferedRootRunHeap) Len() int { return len(h) }
+
+func (h bufferedRootRunHeap) Less(i, j int) bool {
+	if cmp := bytes.Compare(h[i].key, h[j].key); cmp != 0 {
+		return cmp < 0
+	}
+	return h[i].priority < h[j].priority
+}
+
+func (h bufferedRootRunHeap) Swap(i, j int) { h[i], h[j] = h[j], h[i] }
+
+func (h *bufferedRootRunHeap) push(item bufferedRootRunHeapItem) {
+	*h = append(*h, item)
+	h.up(len(*h) - 1)
+}
+
+func (h *bufferedRootRunHeap) pop() bufferedRootRunHeapItem {
+	old := *h
+	n := len(old)
+	if n == 0 {
+		return bufferedRootRunHeapItem{}
+	}
+	old.Swap(0, n-1)
+	h.down(0, n-1)
+	item := old[n-1]
+	*h = old[:n-1]
+	return item
+}
+
+func (h bufferedRootRunHeap) peek() *bufferedRootRunHeapItem {
+	if len(h) == 0 {
+		return nil
+	}
+	return &h[0]
+}
+
+func (h *bufferedRootRunHeap) up(j int) {
+	for {
+		i := (j - 1) / 2
+		if i == j || !h.Less(j, i) {
+			break
+		}
+		h.Swap(i, j)
+		j = i
+	}
+}
+
+func (h *bufferedRootRunHeap) down(i0, n int) bool {
+	i := i0
+	for {
+		j1 := 2*i + 1
+		if j1 >= n || j1 < 0 {
+			break
+		}
+		j := j1
+		if j2 := j1 + 1; j2 < n && h.Less(j2, j1) {
+			j = j2
+		}
+		if !h.Less(j, i) {
+			break
+		}
+		h.Swap(i, j)
+		i = j
+	}
+	return i > i0
+}
+
+type bufferedRootRunsIterator struct {
+	iters    []iterator.UnsafeIterator
+	heap     bufferedRootRunHeap
+	cur      bufferedRootRunHeapItem
+	hasCur   bool
+	valid    bool
+	start    []byte
+	end      []byte
+	closed   bool
+	firstErr error
+}
+
+func newBufferedRootRunsIterator(runs []memtable.Table, start, end []byte) iterator.UnsafeIterator {
+	if len(runs) == 1 {
+		return runs[0].NewIterator(start, end)
+	}
+	it := &bufferedRootRunsIterator{
+		iters: make([]iterator.UnsafeIterator, 0, len(runs)),
+		start: start,
+		end:   end,
+	}
+	for i, run := range runs {
+		if run == nil {
+			continue
+		}
+		runIter := run.NewIterator(start, end)
+		idx := len(it.iters)
+		it.iters = append(it.iters, runIter)
+		if runIter.Valid() {
+			it.heap.push(bufferedRootRunHeapItem{
+				idx:      idx,
+				priority: len(runs) - 1 - i,
+				key:      runIter.UnsafeKey(),
+			})
+		}
+	}
+	it.advance()
+	return it
+}
+
+func (it *bufferedRootRunsIterator) Valid() bool {
+	return it != nil && it.valid
+}
+
+func (it *bufferedRootRunsIterator) Next() {
+	if it == nil || !it.valid {
+		return
+	}
+	if it.hasCur {
+		it.advanceItem(it.cur)
+		it.hasCur = false
+	}
+	it.advance()
+}
+
+func (it *bufferedRootRunsIterator) Seek(key []byte) {
+	if it == nil || it.closed {
+		return
+	}
+	if it.start != nil && bytes.Compare(key, it.start) < 0 {
+		key = it.start
+	}
+	it.heap = it.heap[:0]
+	it.valid = false
+	it.hasCur = false
+	for idx, source := range it.iters {
+		source.Seek(key)
+		if source.Valid() {
+			it.heap.push(bufferedRootRunHeapItem{
+				idx:      idx,
+				priority: len(it.iters) - 1 - idx,
+				key:      source.UnsafeKey(),
+			})
+		}
+	}
+	it.advance()
+}
+
+func (it *bufferedRootRunsIterator) UnsafeKey() []byte {
+	if !it.Valid() {
+		return nil
+	}
+	return it.iters[it.cur.idx].UnsafeKey()
+}
+
+func (it *bufferedRootRunsIterator) UnsafeValue() []byte {
+	if !it.Valid() {
+		return nil
+	}
+	return it.iters[it.cur.idx].UnsafeValue()
+}
+
+func (it *bufferedRootRunsIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
+	if !it.Valid() {
+		return nil, page.ValuePtr{}, node.FlagInline
+	}
+	return it.iters[it.cur.idx].UnsafeEntry()
+}
+
+func (it *bufferedRootRunsIterator) Key() []byte {
+	return it.UnsafeKey()
+}
+
+func (it *bufferedRootRunsIterator) Value() []byte {
+	return it.UnsafeValue()
+}
+
+func (it *bufferedRootRunsIterator) KeyCopy(dst []byte) []byte {
+	if !it.Valid() {
+		return dst
+	}
+	return append(dst[:0], it.UnsafeKey()...)
+}
+
+func (it *bufferedRootRunsIterator) ValueCopy(dst []byte) []byte {
+	if !it.Valid() {
+		return dst
+	}
+	return append(dst[:0], it.UnsafeValue()...)
+}
+
+func (it *bufferedRootRunsIterator) IsDeleted() bool {
+	return it.Valid() && it.iters[it.cur.idx].IsDeleted()
+}
+
+func (it *bufferedRootRunsIterator) Error() error {
+	if it == nil {
+		return nil
+	}
+	if it.firstErr != nil {
+		return it.firstErr
+	}
+	for _, source := range it.iters {
+		if err := source.Error(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (it *bufferedRootRunsIterator) Close() error {
+	if it == nil || it.closed {
+		return nil
+	}
+	it.closed = true
+	var firstErr error
+	for _, source := range it.iters {
+		if err := source.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	it.valid = false
+	it.hasCur = false
+	it.heap = nil
+	if firstErr != nil {
+		it.firstErr = firstErr
+	}
+	return firstErr
+}
+
+func (it *bufferedRootRunsIterator) Domain() (start, end []byte) {
+	if it == nil {
+		return nil, nil
+	}
+	return it.start, it.end
+}
+
+func (it *bufferedRootRunsIterator) advance() {
+	it.valid = false
+	it.hasCur = false
+	for it.heap.Len() > 0 {
+		top := it.heap.pop()
+		key := top.key
+		if it.end != nil && bytes.Compare(key, it.end) >= 0 {
+			return
+		}
+		for it.heap.Len() > 0 {
+			next := it.heap.peek()
+			if next == nil || !bytes.Equal(next.key, key) {
+				break
+			}
+			shadowed := it.heap.pop()
+			it.advanceItem(shadowed)
+		}
+		if it.iters[top.idx].IsDeleted() {
+			it.advanceItem(top)
+			continue
+		}
+		it.cur = top
+		it.hasCur = true
+		it.valid = true
+		return
+	}
+}
+
+func (it *bufferedRootRunsIterator) advanceItem(item bufferedRootRunHeapItem) {
+	source := it.iters[item.idx]
+	source.Next()
+	if source.Valid() {
+		item.key = source.UnsafeKey()
+		it.heap.push(item)
+	} else if err := source.Error(); err != nil && it.firstErr == nil {
+		it.firstErr = err
+	}
+}
+
+func (c *Collection) flushBufferedIndexedLocked(domain *collectionWriteDomain) error {
+	if domain == nil || domain.count == 0 || len(domain.rootRuns) == 0 {
+		return nil
+	}
+	if domain.catalog == nil {
+		return errCollectionNotFound
+	}
+	currentCommitSeq, currentSystemRoot := dbCommitSeqAndSystemRoot(c.db)
+	catalog, err := c.revalidateBufferedWriteDomainLocked(domain, currentCommitSeq, currentSystemRoot)
+	if err != nil {
+		return err
+	}
+	meta := catalog.meta
+	c.meta = meta
+	pin := c.db.AcquireSnapshot()
+	if pin == nil {
+		return backenddb.ErrClosed
+	}
+	// Keep the base snapshot pinned through publish so page reuse cannot invalidate
+	// base roots before stale-root validation rejects concurrent modifications.
+	defer func() { _ = pin.Close() }()
+	pinnedCatalog, err := loadCollectionCatalog(pin, meta.Name)
+	if err != nil {
+		return err
+	}
+	if pinnedCatalog == nil {
+		return errCollectionNotFound
+	}
+	if !sameCollectionMeta(pinnedCatalog.meta, meta) {
+		return fmt.Errorf("collections: concurrent schema modification detected for %q", meta.Name)
+	}
+	for rootName, baseRoot := range domain.rootBaseIDs {
+		if got := pinnedCatalog.rootID(rootName); got != baseRoot {
+			return fmt.Errorf("collections: concurrent root modification detected for %q", meta.Name)
+		}
+	}
+
+	rootNames := orderedBufferedRootNames(meta, domain.rootRuns)
+	if len(rootNames) == 0 {
+		domain.count = 0
+		return nil
+	}
+	baseSystemRoot := snapshotSystemRoot(pin)
+	baseCommitSeq := snapshotCommitSeq(pin)
+	baseRootIDs := make(map[string]uint64, len(rootNames))
+	ordered := make([]backenddb.OrderedRootDeltaPublishInput, 0, len(rootNames))
+	iterators := make([]iterator.UnsafeIterator, 0, len(rootNames))
+	for _, rootName := range rootNames {
+		iter := newBufferedRootRunsIterator(domain.rootRuns[rootName], nil, nil)
+		iterators = append(iterators, iter)
+		baseRoot := domain.rootBaseIDs[rootName]
+		baseRootIDs[rootName] = baseRoot
+		ordered = append(ordered, backenddb.OrderedRootDeltaPublishInput{
+			BaseRoot:      baseRoot,
+			Iter:          iter,
+			StoragePolicy: domain.rootPolicies[rootName],
+		})
+	}
+	newSystemRoot, rootIDs, err := c.db.PublishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		return c.buildRootDescriptorSystemDeltaIterator(baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, rootIDs)
+	})
+	for _, it := range iterators {
+		_ = it.Close()
+	}
+	if err != nil {
+		return err
+	}
+	if len(rootIDs) != len(rootNames) {
+		return errors.New("collections: ordered root publish returned unexpected root count")
+	}
+	nextCatalog := cloneCatalogWithRootUpdates(domain.catalog, meta, rootNames, rootIDs)
+	oldRuns := domain.rootRuns
+	domain.loaded = true
+	domain.meta = meta
+	domain.catalog = nextCatalog
+	domain.baseCommitSeq = c.commitSeqForSystemRoot(newSystemRoot)
+	domain.baseSystemRoot = newSystemRoot
+	domain.primaryRoot = nextCatalog.rootID(collectionPrimaryRootName(meta.Name))
+	domain.rootRuns = nil
+	domain.rootPolicies = nil
+	domain.rootBaseIDs = nil
+	oldUniqueValueRuns := domain.uniqueValueRuns
+	domain.uniqueValueRuns = nil
+	domain.count = 0
+	c.meta = meta
+	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
+	for _, runs := range oldRuns {
+		resetCollectionTables(runs)
+	}
+	for _, runs := range oldUniqueValueRuns {
+		resetCollectionTables(runs)
+	}
+	return nil
+}
+
+func orderedBufferedRootNames(meta CollectionMeta, runs map[string][]memtable.Table) []string {
+	if len(runs) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(runs))
+	seen := make(map[string]struct{}, len(runs))
+	for _, rootName := range collectionRootNames(meta) {
+		if len(runs[rootName]) > 0 {
+			out = append(out, rootName)
+			seen[rootName] = struct{}{}
+		}
+	}
+	extra := make([]string, 0)
+	for rootName, rootRuns := range runs {
+		if _, ok := seen[rootName]; !ok {
+			if len(rootRuns) > 0 {
+				extra = append(extra, rootName)
+			}
+		}
+	}
+	sort.Strings(extra)
+	out = append(out, extra...)
+	return out
 }
 
 func (c *Collection) insertOneNoIndex(id, document []byte) ([]byte, error) {
@@ -1131,6 +1788,17 @@ func (c *Collection) InsertBatch(ids, documents [][]byte) ([][]byte, error) {
 	}
 	if len(plan.runs) == 0 {
 		_ = snap.Close()
+		c.setLastInsertStats(plan.stats.CollectionInsertStats)
+		return plan.resultIDs, nil
+	}
+
+	if c.shouldBufferIndexedInserts(c.meta) {
+		err := c.bufferIndexedInsertPlanLocked(catalog, baseCommitSeq, baseSystemRoot, plan)
+		_ = snap.Close()
+		if err != nil {
+			resetCollectionRunTables(plan.runs)
+			return nil, err
+		}
 		c.setLastInsertStats(plan.stats.CollectionInsertStats)
 		return plan.resultIDs, nil
 	}
@@ -1302,7 +1970,7 @@ func (c *Collection) DeleteDocument(documentID []byte) (bool, error) {
 	}
 	unlockMutation := c.lockMutation()
 	defer unlockMutation()
-	if err := c.flushBufferedNoIndex(); err != nil {
+	if err := c.flushBufferedWrites(); err != nil {
 		return false, err
 	}
 
@@ -1474,7 +2142,7 @@ func (c *Collection) Update(documentID []byte, update func(current []byte) (repl
 	}
 	unlockMutation := c.lockMutation()
 	defer unlockMutation()
-	if err := c.flushBufferedNoIndex(); err != nil {
+	if err := c.flushBufferedWrites(); err != nil {
 		return false, false, err
 	}
 
@@ -1817,6 +2485,10 @@ func (c *Collection) noteWriteDomainCatalog(systemRoot uint64, catalog *collecti
 	domain.baseSystemRoot = systemRoot
 	domain.primaryRoot = catalog.rootID(collectionPrimaryRootName(catalog.meta.Name))
 	domain.storagePolicy = options.dataStoragePolicy
+	domain.rootRuns = nil
+	domain.rootPolicies = nil
+	domain.rootBaseIDs = nil
+	domain.uniqueValueRuns = nil
 	if domain.table == nil {
 		domain.table = newCollectionRunTable(0)
 	}
@@ -2328,10 +3000,26 @@ func (c *Collection) getBufferedDocumentInto(documentID []byte, dst []byte) ([]b
 	domain := c.writeDomain
 	domain.mu.RLock()
 	defer domain.mu.RUnlock()
-	if domain.count == 0 || domain.table == nil {
+	if domain.count == 0 {
 		return nil, false, false
 	}
-	value, _, flags, found := domain.table.GetEntry(documentID)
+	table := domain.table
+	if table == nil && len(domain.rootRuns) > 0 {
+		name := collectionPrimaryRootName(c.meta.Name)
+		if domain.meta.Name != "" {
+			name = collectionPrimaryRootName(domain.meta.Name)
+		}
+		if value, _, flags, found := getBufferedRunEntry(domain.rootRuns[name], documentID); found {
+			if flags&node.FlagTombstone != 0 {
+				return dst[:0], true, false
+			}
+			return append(dst[:0], value...), true, true
+		}
+	}
+	if table == nil {
+		return nil, false, false
+	}
+	value, _, flags, found := table.GetEntry(documentID)
 	if !found {
 		return nil, false, false
 	}
@@ -2389,10 +3077,6 @@ func (c *Collection) findByIndexValue(indexName string, value any, maxResults in
 	if !ok {
 		return nil, false, nil
 	}
-	rootID := catalog.rootID(collectionSecondaryRootName(catalog.meta.Name, idx.Name))
-	if rootID == 0 {
-		return nil, false, nil
-	}
 	var arena []byte
 	arena, encoded, err := appendIndexScalar(arena, value)
 	if err != nil {
@@ -2402,13 +3086,78 @@ func (c *Collection) findByIndexValue(indexName string, value any, maxResults in
 	if err != nil {
 		return nil, false, err
 	}
+	out, truncated, err := c.bufferedIndexIDs(indexName, prefix, maxResults)
+	if err != nil {
+		return nil, false, err
+	}
+	if maxResults > 0 && len(out) >= maxResults {
+		return out, true, nil
+	}
+	rootID := catalog.rootID(collectionSecondaryRootName(catalog.meta.Name, idx.Name))
+	if rootID == 0 {
+		return out, truncated, nil
+	}
 	it, err := snap.IteratorAtRoot(rootID, prefix, prefixEnd(prefix))
 	if errors.Is(err, tree.ErrKeyNotFound) {
-		return nil, false, nil
+		return out, truncated, nil
 	}
 	if err != nil {
 		return nil, false, err
 	}
+	defer func() { _ = it.Close() }()
+	seen := map[string]struct{}(nil)
+	if len(out) > 0 {
+		seen = make(map[string]struct{}, len(out))
+		for _, id := range out {
+			seen[string(id)] = struct{}{}
+		}
+	}
+	for it.Valid() {
+		key := it.UnsafeKey()
+		if !bytes.HasPrefix(key, prefix) {
+			break
+		}
+		if !it.IsDeleted() {
+			id := key[len(prefix):]
+			if seen != nil {
+				if _, ok := seen[string(id)]; ok {
+					it.Next()
+					continue
+				}
+			}
+			if maxResults > 0 && len(out) >= maxResults {
+				truncated = true
+				break
+			}
+			out = append(out, bytes.Clone(id))
+		}
+		it.Next()
+	}
+	if err := it.Error(); err != nil {
+		return nil, false, err
+	}
+	return out, truncated, nil
+}
+
+func (c *Collection) bufferedIndexIDs(indexName string, prefix []byte, maxResults int) ([][]byte, bool, error) {
+	if c == nil || c.writeDomain == nil {
+		return nil, false, nil
+	}
+	domain := c.writeDomain
+	domain.mu.RLock()
+	defer domain.mu.RUnlock()
+	if domain.count == 0 || len(domain.rootRuns) == 0 {
+		return nil, false, nil
+	}
+	collectionName := c.meta.Name
+	if domain.meta.Name != "" {
+		collectionName = domain.meta.Name
+	}
+	runs := domain.rootRuns[collectionSecondaryRootName(collectionName, indexName)]
+	if len(runs) == 0 {
+		return nil, false, nil
+	}
+	it := newBufferedRootRunsIterator(runs, prefix, prefixEnd(prefix))
 	defer func() { _ = it.Close() }()
 	out := make([][]byte, 0, 1)
 	truncated := false
@@ -2465,7 +3214,7 @@ func (c *Collection) ScanDocumentsFunc(maxDocuments int, fn func(DocumentRecord)
 	if fn == nil {
 		return false, errors.New("collections: scan callback is nil")
 	}
-	if err := c.flushBufferedNoIndex(); err != nil {
+	if err := c.flushBufferedWrites(); err != nil {
 		return false, err
 	}
 	snap := c.db.AcquireSnapshot()
