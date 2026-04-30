@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/buger/jsonparser"
 	"github.com/snissn/gomap/TreeDB/collections"
 	"github.com/snissn/gomap/TreeDB/mongo_gateway/wire"
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -225,13 +226,22 @@ func (s *Server) findUnsortedScanDocuments(col *collections.Collection, plan fin
 	docs := make([]wire.Document, 0)
 	matched := 0
 	truncated, err := col.ScanDocumentsFunc(maxDocuments, func(record collections.DocumentRecord) (bool, error) {
+		match, ok, err := storedDocumentMatchesPredicates(record.Document, plan.predicates)
+		if err != nil {
+			return false, err
+		}
+		if ok && !match {
+			return true, nil
+		}
 		doc, err := storedDocumentToBSON(record.Document)
 		if err != nil {
 			return false, err
 		}
-		match, err := documentMatchesPredicates(doc, plan.predicates)
-		if err != nil {
-			return false, err
+		if !ok {
+			match, err = documentMatchesPredicates(doc, plan.predicates)
+			if err != nil {
+				return false, err
+			}
 		}
 		if !match {
 			return true, nil
@@ -252,6 +262,164 @@ func (s *Server) findUnsortedScanDocuments(col *collections.Collection, plan fin
 		return nil, true, fmt.Errorf("Mongo gateway find requires a bounded scan and exceeded %d documents", maxDocuments)
 	}
 	return docs, true, nil
+}
+
+func storedDocumentMatchesPredicates(stored []byte, predicates []findPredicate) (bool, bool, error) {
+	for _, pred := range predicates {
+		value, found, ok, err := storedDocumentPredicateValue(stored, pred.field)
+		if err != nil {
+			return false, false, err
+		}
+		if !ok {
+			return false, false, nil
+		}
+		if !found {
+			if missingValueMatchesPredicate(pred) {
+				continue
+			}
+			return false, true, nil
+		}
+		match, err := valueMatchesPredicate(value, pred)
+		if err != nil {
+			return false, false, err
+		}
+		if !match {
+			return false, true, nil
+		}
+	}
+	return true, true, nil
+}
+
+func storedDocumentPredicateValue(stored []byte, field string) (bson.RawValue, bool, bool, error) {
+	if field == "" || strings.Contains(field, ".") {
+		return bson.RawValue{}, false, false, nil
+	}
+	raw, valueType, _, err := jsonparser.Get(stored, field)
+	if err == jsonparser.KeyPathNotFoundError {
+		return bson.RawValue{}, false, true, nil
+	}
+	if err != nil {
+		return bson.RawValue{}, false, false, err
+	}
+	value, ok, err := bsonRawValueFromStoredJSON(raw, valueType)
+	return value, true, ok, err
+}
+
+func bsonRawValueFromStoredJSON(raw []byte, valueType jsonparser.ValueType) (bson.RawValue, bool, error) {
+	switch valueType {
+	case jsonparser.String:
+		value, err := jsonparser.ParseString(raw)
+		if err != nil {
+			return bson.RawValue{}, false, err
+		}
+		rawValue, err := bsonRawValueFromGoValue(value)
+		return rawValue, true, err
+	case jsonparser.Number:
+		rawValue, err := bsonRawValueFromJSONNumber(raw)
+		return rawValue, true, err
+	case jsonparser.Boolean:
+		switch string(raw) {
+		case "true":
+			rawValue, err := bsonRawValueFromGoValue(true)
+			return rawValue, true, err
+		case "false":
+			rawValue, err := bsonRawValueFromGoValue(false)
+			return rawValue, true, err
+		default:
+			return bson.RawValue{}, false, jsonparser.MalformedValueError
+		}
+	case jsonparser.Null:
+		return bson.RawValue{Type: bson.TypeNull}, true, nil
+	case jsonparser.Object:
+		return bsonRawValueFromStoredExtendedJSON(raw)
+	default:
+		return bson.RawValue{}, false, nil
+	}
+}
+
+func bsonRawValueFromJSONNumber(raw []byte) (bson.RawValue, error) {
+	if !bytes.ContainsAny(raw, ".eE") {
+		if value, err := jsonparser.ParseInt(raw); err == nil {
+			return bsonRawValueFromGoValue(value)
+		}
+	}
+	value, err := jsonparser.ParseFloat(raw)
+	if err != nil {
+		return bson.RawValue{}, err
+	}
+	return bsonRawValueFromGoValue(value)
+}
+
+func bsonRawValueFromStoredExtendedJSON(raw []byte) (bson.RawValue, bool, error) {
+	var (
+		key       string
+		value     []byte
+		valueType jsonparser.ValueType
+		count     int
+	)
+	err := jsonparser.ObjectEach(raw, func(k, v []byte, t jsonparser.ValueType, _ int) error {
+		count++
+		key = string(k)
+		value = append(value[:0], v...)
+		valueType = t
+		return nil
+	})
+	if err != nil {
+		return bson.RawValue{}, false, err
+	}
+	if count != 1 || valueType != jsonparser.String {
+		return bson.RawValue{}, false, nil
+	}
+	text, err := jsonparser.ParseString(value)
+	if err != nil {
+		return bson.RawValue{}, false, err
+	}
+	switch key {
+	case "$numberInt":
+		parsed, err := strconv.ParseInt(text, 10, 32)
+		if err != nil {
+			return bson.RawValue{}, false, err
+		}
+		rawValue, err := bsonRawValueFromGoValue(int32(parsed))
+		return rawValue, true, err
+	case "$numberLong":
+		parsed, err := strconv.ParseInt(text, 10, 64)
+		if err != nil {
+			return bson.RawValue{}, false, err
+		}
+		rawValue, err := bsonRawValueFromGoValue(parsed)
+		return rawValue, true, err
+	case "$numberDouble":
+		parsed, err := parseExtendedJSONDouble(text)
+		if err != nil {
+			return bson.RawValue{}, false, err
+		}
+		rawValue, err := bsonRawValueFromGoValue(parsed)
+		return rawValue, true, err
+	default:
+		return bson.RawValue{}, false, nil
+	}
+}
+
+func parseExtendedJSONDouble(text string) (float64, error) {
+	switch text {
+	case "NaN":
+		return math.NaN(), nil
+	case "Infinity":
+		return math.Inf(1), nil
+	case "-Infinity":
+		return math.Inf(-1), nil
+	default:
+		return strconv.ParseFloat(text, 64)
+	}
+}
+
+func bsonRawValueFromGoValue(value any) (bson.RawValue, error) {
+	valueType, raw, err := bson.MarshalValue(value)
+	if err != nil {
+		return bson.RawValue{}, err
+	}
+	return bson.RawValue{Type: valueType, Value: raw}, nil
 }
 
 func findPlanHasDirectCandidate(meta collections.CollectionMeta, predicates []findPredicate) bool {
