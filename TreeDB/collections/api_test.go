@@ -1469,6 +1469,16 @@ func TestCollectionIndexedWriteMemtablesAutoFlushMaxBytes(t *testing.T) {
 	}
 }
 
+func TestBufferedPrimaryIDArenaCapAvoidsOverflow(t *testing.T) {
+	if got := bufferedPrimaryIDArenaCap(2); got != 32 {
+		t.Fatalf("small arena cap=%d want 32", got)
+	}
+	maxInt := int(^uint(0) >> 1)
+	if got := bufferedPrimaryIDArenaCap(maxInt/16 + 1); got != 0 {
+		t.Fatalf("overflow arena cap=%d want 0", got)
+	}
+}
+
 func TestCollectionIndexedWriteMemtablesCloseFlushes(t *testing.T) {
 	dir := t.TempDir()
 	d, err := backenddb.Open(backenddb.Options{Dir: dir})
