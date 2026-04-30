@@ -3,6 +3,8 @@ package collections
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"strings"
@@ -13,6 +15,24 @@ import (
 	treedb "github.com/snissn/gomap/TreeDB"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
+
+func TestCollectionErrorsAreClassifiable(t *testing.T) {
+	if !errors.Is(ErrCollectionNotFound, ErrCollectionNotFound) {
+		t.Fatal("ErrCollectionNotFound should be errors.Is-compatible")
+	}
+	for _, err := range []error{
+		ErrDocumentExists,
+		ErrDuplicateDocumentID,
+		fmt.Errorf("wrapped: %w", ErrUniqueIndexConflict),
+	} {
+		if !IsDuplicateKeyError(err) {
+			t.Fatalf("IsDuplicateKeyError(%v)=false want true", err)
+		}
+	}
+	if IsDuplicateKeyError(ErrCollectionNotFound) {
+		t.Fatal("ErrCollectionNotFound classified as duplicate key")
+	}
+}
 
 func TestCollectionGetNilDBReturnsError(t *testing.T) {
 	col := &Collection{}
@@ -269,6 +289,39 @@ func TestCollectionLeafGenerationPackGC_RoundTripWithTemplateV1SecondaryIndexes(
 		t.Fatalf("open collection after leaf generation maintenance: %v", err)
 	}
 	requireCollectionMaintenanceTemplateReads(t, reopenedCol)
+}
+
+func TestCollectionManagerListCollections(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("create users: %v", err)
+	}
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name:    "orders",
+		Indexes: []IndexDefinition{{Name: "user_id", Field: "user_id"}},
+	}); err != nil {
+		t.Fatalf("create orders: %v", err)
+	}
+
+	metas, err := mgr.ListCollections()
+	if err != nil {
+		t.Fatalf("list collections: %v", err)
+	}
+	if len(metas) != 2 {
+		t.Fatalf("collection count=%d want 2: %+v", len(metas), metas)
+	}
+	if metas[0].Name != "orders" || metas[1].Name != "users" {
+		t.Fatalf("collection order=%q,%q want orders,users", metas[0].Name, metas[1].Name)
+	}
+	if len(metas[0].Indexes) != 1 || metas[0].Indexes[0].Name != "user_id" {
+		t.Fatalf("orders indexes=%+v want user_id", metas[0].Indexes)
+	}
 }
 
 func TestCollectionInsertBatchStatsExposeIndexRunShape(t *testing.T) {
@@ -1391,6 +1444,196 @@ func TestCollectionCreateIndexBackfill_BuildsSecondaryAndIndexState(t *testing.T
 	}
 }
 
+func TestCollectionDropIndexUpdatesSchema(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Indexes: []IndexDefinition{
+			{Name: "email", Field: "email", Unique: true},
+			{Name: "city", Field: "city"},
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.Insert([]byte("u1"), []byte(`{"email":"ada@example.com","city":"hnl"}`)); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	meta, err := col.DropIndex("city")
+	if err != nil {
+		t.Fatalf("drop index: %v", err)
+	}
+	if _, ok := findIndex(meta.Indexes, "city"); ok {
+		t.Fatalf("dropped meta still has city index: %+v", meta.Indexes)
+	}
+	if _, ok := findIndex(meta.Indexes, "email"); !ok {
+		t.Fatalf("dropped meta lost email index: %+v", meta.Indexes)
+	}
+
+	reopened, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("reopen collection: %v", err)
+	}
+	if _, ok := findIndex(reopened.Meta().Indexes, "city"); ok {
+		t.Fatalf("reopened meta still has city index: %+v", reopened.Meta().Indexes)
+	}
+	if ids, err := reopened.FindByIndex("city", "hnl"); err != nil {
+		t.Fatalf("find dropped city: %v", err)
+	} else if len(ids) != 0 {
+		t.Fatalf("find dropped city ids=%q want none", ids)
+	}
+	if ids, err := reopened.FindByIndex("email", "ada@example.com"); err != nil {
+		t.Fatalf("find retained email: %v", err)
+	} else if len(ids) != 1 || !bytes.Equal(ids[0], []byte("u1")) {
+		t.Fatalf("find retained email ids=%q want u1", ids)
+	}
+	if err := reopened.Delete([]byte("u1")); err != nil {
+		t.Fatalf("delete while city index dropped: %v", err)
+	}
+	if _, err := reopened.Insert([]byte("u2"), []byte(`{"email":"grace@example.com","city":"sfo"}`)); err != nil {
+		t.Fatalf("insert while city index dropped: %v", err)
+	}
+	if _, err := reopened.CreateIndex(IndexDefinition{Name: "city", Field: "city"}); err != nil {
+		t.Fatalf("recreate city index: %v", err)
+	}
+	if ids, err := reopened.FindByIndex("city", "hnl"); err != nil {
+		t.Fatalf("find recreated city hnl: %v", err)
+	} else if len(ids) != 0 {
+		t.Fatalf("recreated city hnl ids=%q want none", ids)
+	}
+	if ids, err := reopened.FindByIndex("city", "sfo"); err != nil {
+		t.Fatalf("find recreated city sfo: %v", err)
+	} else if len(ids) != 1 || !bytes.Equal(ids[0], []byte("u2")) {
+		t.Fatalf("recreated city sfo ids=%q want u2", ids)
+	}
+	if _, err := reopened.DropIndex("missing"); !errors.Is(err, ErrIndexNotFound) {
+		t.Fatalf("drop missing err=%v want ErrIndexNotFound", err)
+	}
+	if _, err := reopened.DropIndexes([]string{"city", "missing"}); !errors.Is(err, ErrIndexNotFound) {
+		t.Fatalf("bulk drop with missing err=%v want ErrIndexNotFound", err)
+	}
+	if _, ok := findIndex(reopened.Meta().Indexes, "city"); !ok {
+		t.Fatalf("bulk drop with missing removed city index: %+v", reopened.Meta().Indexes)
+	}
+	if _, ok := findIndex(reopened.Meta().Indexes, "email"); !ok {
+		t.Fatalf("bulk drop with missing removed email index: %+v", reopened.Meta().Indexes)
+	}
+	meta, err = reopened.DropIndexes([]string{"city", "email"})
+	if err != nil {
+		t.Fatalf("bulk drop indexes: %v", err)
+	}
+	if len(meta.Indexes) != 0 {
+		t.Fatalf("bulk drop meta indexes=%+v want none", meta.Indexes)
+	}
+}
+
+func TestCollectionScanDocumentsAndFindByIndexValue(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name:    "users",
+		Indexes: []IndexDefinition{{Name: "city", Field: "city"}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1"), []byte("u2"), []byte("u3")},
+		[][]byte{
+			[]byte(`{"city":"hnl","name":"ada"}`),
+			[]byte(`{"city":"sfo","name":"grace"}`),
+			[]byte(`{"city":"hnl","name":"katherine"}`),
+		},
+	); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+
+	ids, err := col.FindByIndexValue("city", "hnl")
+	if err != nil {
+		t.Fatalf("find by index value: %v", err)
+	}
+	if len(ids) != 2 || !bytes.Equal(ids[0], []byte("u1")) || !bytes.Equal(ids[1], []byte("u3")) {
+		t.Fatalf("ids=%q want u1,u3", ids)
+	}
+
+	ids, truncated, err := col.FindByIndexValueLimit("city", "hnl", 1)
+	if err != nil {
+		t.Fatalf("find by index value limit: %v", err)
+	}
+	if !truncated || len(ids) != 1 || !bytes.Equal(ids[0], []byte("u1")) {
+		t.Fatalf("limited ids=%q truncated=%v want u1/true", ids, truncated)
+	}
+
+	records, truncated, err := col.ScanDocuments(10)
+	if err != nil {
+		t.Fatalf("scan documents: %v", err)
+	}
+	if truncated {
+		t.Fatal("scan unexpectedly truncated")
+	}
+	if len(records) != 3 {
+		t.Fatalf("records len=%d want 3", len(records))
+	}
+	if !bytes.Equal(records[0].ID, []byte("u1")) || !bytes.Contains(records[0].Document, []byte(`"ada"`)) {
+		t.Fatalf("first record=%+v", records[0])
+	}
+	records, truncated, err = col.ScanDocuments(1)
+	if err != nil {
+		t.Fatalf("scan limited documents: %v", err)
+	}
+	if !truncated || len(records) != 1 {
+		t.Fatalf("limited scan truncated=%v len=%d want true/1", truncated, len(records))
+	}
+}
+
+func TestCollectionFindByIndexValueMatchesLargeJSONInteger(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name:    "users",
+		Indexes: []IndexDefinition{{Name: "big", Field: "big"}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.Insert([]byte("u1"), []byte(`{"big":9007199254740993}`)); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	ids, err := col.FindByIndexValue("big", int64(9007199254740993))
+	if err != nil {
+		t.Fatalf("find by index value: %v", err)
+	}
+	if len(ids) != 1 || !bytes.Equal(ids[0], []byte("u1")) {
+		t.Fatalf("ids=%q want u1", ids)
+	}
+}
+
 func TestCollectionCreateIndexBackfill_EmptyCollectionUpdatesSchema(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
@@ -1563,6 +1806,176 @@ func TestCollectionCreateIndexBackfill_RejectsUniqueConflictAtomically(t *testin
 	}
 }
 
+func TestCollectionReplaceRejectsUniqueConflictAtomically(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name:    "users",
+		Indexes: []IndexDefinition{{Name: "email", Field: "email", Unique: true}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1"), []byte("u2")},
+		[][]byte{
+			[]byte(`{"email":"ada@example.com","city":"hnl"}`),
+			[]byte(`{"email":"grace@example.com","city":"sfo"}`),
+		},
+	); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+
+	replaced, err := col.Replace([]byte("u1"), []byte(`{"email":"grace@example.com","city":"hnl"}`))
+	if !errors.Is(err, ErrUniqueIndexConflict) {
+		t.Fatalf("replace err=%v want ErrUniqueIndexConflict", err)
+	}
+	if replaced {
+		t.Fatal("replace reported success on unique conflict")
+	}
+	got, err := col.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("get u1 after failed replace: %v", err)
+	}
+	if want := []byte(`{"email":"ada@example.com","city":"hnl"}`); !bytes.Equal(got, want) {
+		t.Fatalf("u1 after failed replace=%q want %q", got, want)
+	}
+
+	replaced, err = col.Replace([]byte("u1"), []byte(`{"email":"ada2@example.com","city":"hnl"}`))
+	if err != nil {
+		t.Fatalf("replace valid: %v", err)
+	}
+	if !replaced {
+		t.Fatal("replace valid reported false")
+	}
+	ids, err := col.FindByIndex("email", "ada2@example.com")
+	if err != nil {
+		t.Fatalf("find replacement email: %v", err)
+	}
+	if len(ids) != 1 || !bytes.Equal(ids[0], []byte("u1")) {
+		t.Fatalf("replacement email ids=%q want u1", ids)
+	}
+	ids, err = col.FindByIndex("email", "ada@example.com")
+	if err != nil {
+		t.Fatalf("find old email: %v", err)
+	}
+	if len(ids) != 0 {
+		t.Fatalf("old email ids=%q want none", ids)
+	}
+
+	beforeState := d.State()
+	if beforeState == nil {
+		t.Fatal("missing db state before identical replace")
+	}
+	replaced, err = col.Replace([]byte("u1"), []byte(`{"email":"ada2@example.com","city":"hnl"}`))
+	if err != nil {
+		t.Fatalf("replace identical: %v", err)
+	}
+	if !replaced {
+		t.Fatal("replace identical reported false")
+	}
+	afterState := d.State()
+	if afterState == nil {
+		t.Fatal("missing db state after identical replace")
+	}
+	if afterState.SystemRootPageID != beforeState.SystemRootPageID {
+		t.Fatalf("identical replace changed system root from %d to %d", beforeState.SystemRootPageID, afterState.SystemRootPageID)
+	}
+}
+
+func TestCollectionUpdateConcurrentCounterNoLostUpdates(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"count":0}`)},
+	); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	const (
+		workers    = 8
+		increments = 5
+	)
+	start := make(chan struct{})
+	errs := make(chan error, workers)
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			workerCol, err := mgr.OpenCollection("users")
+			if err != nil {
+				errs <- err
+				return
+			}
+			<-start
+			for j := 0; j < increments; j++ {
+				if _, _, err := workerCol.Update([]byte("u1"), func(current []byte) ([]byte, bool, error) {
+					var doc struct {
+						Count int `json:"count"`
+					}
+					if err := json.Unmarshal(current, &doc); err != nil {
+						return nil, false, err
+					}
+					doc.Count++
+					next, err := json.Marshal(doc)
+					if err != nil {
+						return nil, false, err
+					}
+					return next, true, nil
+				}); err != nil {
+					errs <- err
+					return
+				}
+			}
+			errs <- nil
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("update: %v", err)
+		}
+	}
+
+	got, err := col.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("get counter: %v", err)
+	}
+	var doc struct {
+		Count int `json:"count"`
+	}
+	if err := json.Unmarshal(got, &doc); err != nil {
+		t.Fatalf("unmarshal counter: %v", err)
+	}
+	if want := workers * increments; doc.Count != want {
+		t.Fatalf("count=%d want %d", doc.Count, want)
+	}
+}
+
 func TestCollectionInsertBatchBridge_RejectsPersistedUniqueConflictAtomically(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
@@ -1710,8 +2123,26 @@ func TestCollectionDeleteBridge_RemovesPrimaryAndSecondaryEntries(t *testing.T) 
 		t.Fatalf("insert batch: %v", err)
 	}
 
-	if err := col.Delete([]byte("u1")); err != nil {
+	deleted, err := col.DeleteDocument([]byte("missing"))
+	if err != nil {
+		t.Fatalf("delete missing: %v", err)
+	}
+	if deleted {
+		t.Fatal("delete missing reported deleted")
+	}
+	deleted, err = col.DeleteDocument([]byte("u1"))
+	if err != nil {
 		t.Fatalf("delete u1: %v", err)
+	}
+	if !deleted {
+		t.Fatal("delete u1 reported not deleted")
+	}
+	deleted, err = col.DeleteDocument([]byte("u1"))
+	if err != nil {
+		t.Fatalf("delete u1 again: %v", err)
+	}
+	if deleted {
+		t.Fatal("delete u1 again reported deleted")
 	}
 	got, err := col.Get([]byte("u1"))
 	if err != nil {
