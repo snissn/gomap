@@ -88,14 +88,14 @@ type benchmarkResult struct {
 }
 
 type phaseResult struct {
-	Name                 string         `json:"name"`
-	Operations           int            `json:"operations"`
-	DriverCalls          int            `json:"driver_calls"`
-	DurationMillis       float64        `json:"duration_ms"`
-	OpsPerSecond         float64        `json:"ops_per_sec"`
-	DriverDurationMillis float64        `json:"driver_duration_ms,omitempty"`
-	DriverOpsPerSecond   float64        `json:"driver_ops_per_sec,omitempty"`
-	LatencyMicros        latencySummary `json:"latency_micros"`
+	Name                    string         `json:"name"`
+	Operations              int            `json:"operations"`
+	DriverCalls             int            `json:"driver_calls"`
+	DurationMillis          float64        `json:"duration_ms"`
+	OpsPerSecond            float64        `json:"ops_per_sec"`
+	DriverAggregateMillis   float64        `json:"driver_aggregate_duration_ms,omitempty"`
+	DriverMeanLatencyMicros float64        `json:"driver_mean_latency_us,omitempty"`
+	LatencyMicros           latencySummary `json:"latency_micros"`
 }
 
 type maintenanceResult struct {
@@ -1276,18 +1276,18 @@ func summarizePhase(name string, operations, driverCalls int, duration time.Dura
 		driverDuration += sample
 	}
 	result := phaseResult{
-		Name:                 name,
-		Operations:           operations,
-		DriverCalls:          driverCalls,
-		DurationMillis:       float64(duration.Microseconds()) / 1000.0,
-		DriverDurationMillis: float64(driverDuration.Microseconds()) / 1000.0,
-		LatencyMicros:        summarizeLatency(samples),
+		Name:                  name,
+		Operations:            operations,
+		DriverCalls:           driverCalls,
+		DurationMillis:        float64(duration.Microseconds()) / 1000.0,
+		DriverAggregateMillis: float64(driverDuration.Microseconds()) / 1000.0,
+		LatencyMicros:         summarizeLatency(samples),
 	}
 	if duration > 0 {
 		result.OpsPerSecond = float64(operations) / duration.Seconds()
 	}
-	if driverDuration > 0 {
-		result.DriverOpsPerSecond = float64(operations) / driverDuration.Seconds()
+	if driverCalls > 0 && driverDuration > 0 {
+		result.DriverMeanLatencyMicros = float64(driverDuration.Microseconds()) / float64(driverCalls)
 	}
 	return result
 }
@@ -1382,9 +1382,9 @@ func writeResult(out io.Writer, format string, result *benchmarkResult) error {
 			fmt.Fprintf(out, "mongo_uri=%s\n", result.MongoURI)
 		}
 		for _, phase := range result.Phases {
-			fmt.Fprintf(out, "%-22s ops=%d calls=%d duration_ms=%.1f ops_sec=%.1f driver_ms=%.1f driver_ops_sec=%.1f p50_us=%.0f p95_us=%.0f p99_us=%.0f\n",
+			fmt.Fprintf(out, "%-22s ops=%d calls=%d duration_ms=%.1f ops_sec=%.1f driver_aggregate_ms=%.1f driver_mean_us=%.0f p50_us=%.0f p95_us=%.0f p99_us=%.0f\n",
 				phase.Name, phase.Operations, phase.DriverCalls, phase.DurationMillis, phase.OpsPerSecond,
-				phase.DriverDurationMillis, phase.DriverOpsPerSecond,
+				phase.DriverAggregateMillis, phase.DriverMeanLatencyMicros,
 				phase.LatencyMicros.P50, phase.LatencyMicros.P95, phase.LatencyMicros.P99)
 		}
 		if result.TreeDBDiskAfterLoad != nil {

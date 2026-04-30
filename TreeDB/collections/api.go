@@ -121,6 +121,39 @@ type Collection struct {
 	lastInsertStats   CollectionInsertStats
 }
 
+// StoredDocumentJSONMaterializer reuses any resources needed to materialize
+// stored collection documents as JSON.
+type StoredDocumentJSONMaterializer struct {
+	documentFormat   DocumentFormat
+	templateResolver templateV1Resolver
+	closeFn          func() error
+}
+
+// Close releases resources held by the materializer.
+func (m *StoredDocumentJSONMaterializer) Close() error {
+	if m == nil || m.closeFn == nil {
+		return nil
+	}
+	closeFn := m.closeFn
+	m.closeFn = nil
+	return closeFn()
+}
+
+// StoredDocumentJSON materializes one stored collection document as JSON bytes.
+func (m *StoredDocumentJSONMaterializer) StoredDocumentJSON(document []byte) ([]byte, error) {
+	if m == nil {
+		return nil, errCollectionNil
+	}
+	switch m.documentFormat {
+	case DocumentFormatJSON:
+		return bytes.Clone(document), nil
+	case DocumentFormatTemplateV1:
+		return templateV1StoredDocumentJSON(document, m.templateResolver)
+	default:
+		return nil, fmt.Errorf("collections: unsupported document format %q", m.documentFormat)
+	}
+}
+
 // CollectionInsertStats captures phase timings and counters from the most
 // recent successful InsertBatch call on a Collection handle.
 type CollectionInsertStats struct {
@@ -3400,11 +3433,11 @@ func (c *Collection) Get(documentID []byte) ([]byte, error) {
 	return owned, nil
 }
 
-// StoredDocumentJSON materializes one stored collection document as JSON bytes.
-// JSON-format collections return an owned copy of document. Template-v1
-// collections resolve the document's template from the collection template root
-// and any buffered template runs.
-func (c *Collection) StoredDocumentJSON(document []byte) ([]byte, error) {
+// NewStoredDocumentJSONMaterializer prepares a reusable materializer for stored
+// collection documents. Callers that materialize multiple template-v1 documents
+// should reuse one materializer so the backend snapshot and template resolver
+// are shared across the request.
+func (c *Collection) NewStoredDocumentJSONMaterializer() (*StoredDocumentJSONMaterializer, error) {
 	if c == nil {
 		return nil, errCollectionNil
 	}
@@ -3417,13 +3450,18 @@ func (c *Collection) StoredDocumentJSON(document []byte) ([]byte, error) {
 	}
 	switch documentFormat {
 	case DocumentFormatJSON:
-		return bytes.Clone(document), nil
+		return &StoredDocumentJSONMaterializer{documentFormat: documentFormat}, nil
 	case DocumentFormatTemplateV1:
 		snap := c.db.AcquireSnapshot()
 		if snap == nil {
 			return nil, backenddb.ErrClosed
 		}
-		defer func() { _ = snap.Close() }()
+		closeOnErr := true
+		defer func() {
+			if closeOnErr {
+				_ = snap.Close()
+			}
+		}()
 		catalog, err := c.catalogForSnapshot(snap)
 		if err != nil {
 			return nil, err
@@ -3437,10 +3475,28 @@ func (c *Collection) StoredDocumentJSON(document []byte) ([]byte, error) {
 		}
 		plannerOptions = collectionOptionsWithTemplateV1Resolver(plannerOptions, snap, catalog)
 		plannerOptions = collectionOptionsWithBufferedTemplateV1Resolver(plannerOptions, c.writeDomain, c.meta.Name)
-		return templateV1StoredDocumentJSON(document, plannerOptions.templateResolver)
+		closeOnErr = false
+		return &StoredDocumentJSONMaterializer{
+			documentFormat:   documentFormat,
+			templateResolver: plannerOptions.templateResolver,
+			closeFn:          snap.Close,
+		}, nil
 	default:
 		return nil, fmt.Errorf("collections: unsupported document format %q", c.meta.Options.DocumentFormat)
 	}
+}
+
+// StoredDocumentJSON materializes one stored collection document as JSON bytes.
+// JSON-format collections return an owned copy of document. Template-v1
+// collections resolve the document's template from the collection template root
+// and any buffered template runs.
+func (c *Collection) StoredDocumentJSON(document []byte) ([]byte, error) {
+	materializer, err := c.NewStoredDocumentJSONMaterializer()
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = materializer.Close() }()
+	return materializer.StoredDocumentJSON(document)
 }
 
 // GetInto appends the document for documentID into dst[:0].
