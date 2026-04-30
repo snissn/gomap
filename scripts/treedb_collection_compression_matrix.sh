@@ -7,6 +7,7 @@ DOCS="${DOCS:-100000}"
 BATCH="${BATCH:-16000}"
 RUN_DIR="${RUN_DIR:-/tmp/treedb_collection_compression_$(date +%Y%m%d_%H%M%S)}"
 PROFILE="${PROFILE:-fast}"
+COLLECTION_INDEXES="${COLLECTION_INDEXES:-0 1 2}"
 
 mkdir -p "$RUN_DIR"/{dbs,logs}
 
@@ -292,9 +293,19 @@ run_collection_case() {
 printf 'mode\tindexes\tphase\ttotal_bytes\ttotal_gzip_bytes\ttotal_bytes_per_gzip_byte\tleaf_vlog_bytes\tleaf_vlog_bytes_per_gzip_byte\tindex_db_bytes\tvalue_vlog_bytes\n' >"$tsv"
 
 run_raw_case
-run_collection_case 0
-run_collection_case 1
-run_collection_case 2
+read -r -a collection_index_values <<<"$COLLECTION_INDEXES"
+if [[ "${#collection_index_values[@]}" -eq 0 ]]; then
+	echo "COLLECTION_INDEXES must include at least one index count" >&2
+	exit 1
+fi
+
+for indexes in "${collection_index_values[@]}"; do
+	if [[ ! "$indexes" =~ ^[0-9]+$ ]]; then
+		echo "invalid COLLECTION_INDEXES entry: $indexes" >&2
+		exit 1
+	fi
+	run_collection_case "$indexes"
+done
 
 {
 	printf '# TreeDB Collection Compression Matrix\n\n'
@@ -303,7 +314,7 @@ run_collection_case 2
 	printf -- '- Batch size: `%s`\n' "$BATCH"
 	printf -- '- Document shape: template-v1 fixture fields `name`, `email`, `city`, `pad`\n'
 	printf -- '- Raw TreeDB case: generated template-v1 payloads stored directly by key\n'
-	printf -- '- Collection cases: generated template-v1 payloads inserted through collection mode with 0, 1, and 2 indexes\n'
+	printf -- '- Collection cases: generated template-v1 payloads inserted through collection mode with indexes `%s`\n' "$COLLECTION_INDEXES"
 	printf -- '- Offline rewrite: `treemap vlog-rewrite <dir> -rw`\n'
 	printf -- '- Gzip ratio is `bytes/gzip_bytes`; lower is closer to gzip-compressed density already being present on disk.\n\n'
 	printf '| Mode | Indexes | Before bytes | Before gzip | Before bytes/gzip | After rewrite bytes | After rewrite gzip | After bytes/gzip | Disk delta | Gzip delta | After leaf_vlog bytes | After leaf bytes/gzip | After index.db bytes | After value_vlog bytes |\n'
@@ -312,7 +323,7 @@ run_collection_case 2
 		if [[ "$mode" == "raw_treedb" ]]; then
 			index_values=("-")
 		else
-			index_values=(0 1 2)
+			index_values=("${collection_index_values[@]}")
 		fi
 		for indexes in "${index_values[@]}"; do
 			before_line="$(awk -F '\t' -v mode="$mode" -v idx="$indexes" '$1 == mode && $2 == idx && $3 == "before_rewrite" { print; exit }' "$tsv")"

@@ -4,6 +4,7 @@ UNIFIED_BENCH_DIR := cmd/unified_bench
 BENCHPROF_DIR := cmd/benchprof
 COLLECTION_LOAD_FIXTURE_DIR := cmd/collection_load_fixture
 COLLECTION_BENCH_MATRIX_DIR := cmd/collection_bench_matrix
+COLLECTION_CANONICAL_BENCH_DIR := cmd/collection_canonical_bench
 BIN_DIR := bin
 
 BENCH_KEYCOUNTS ?= 1,10,100,1000,10000,100000,1000000
@@ -31,6 +32,8 @@ help:
 	@echo "  make benchprof      - build profile analyzer binary"
 	@echo "  make collection-load-fixture - build kept TreeDB collection load fixture"
 	@echo "  make collection-bench-matrix - build collection benchmark matrix runner"
+	@echo "  make collection-canonical-bench-bin - build canonical collection benchmark runner"
+	@echo "  make bench-collections-canonical - run canonical TreeDB collections vs SQLite benchmark"
 	@echo "  make clean          - remove ./$(BIN_DIR) and temp dirs"
 
 .PHONY: fmt
@@ -88,8 +91,8 @@ deps:
 docs-check:
 	bash ./scripts/docs_check.sh
 
-.PHONY: build build-hashdb build-treedb treemap treemap-bin unified-bench benchprof collection-load-fixture collection-bench-matrix
-build: build-hashdb build-treedb unified-bench benchprof collection-load-fixture collection-bench-matrix
+.PHONY: build build-hashdb build-treedb treemap treemap-bin unified-bench benchprof collection-load-fixture collection-bench-matrix collection-canonical-bench-bin collection-canonical-bench
+build: build-hashdb build-treedb unified-bench benchprof collection-load-fixture collection-bench-matrix collection-canonical-bench-bin
 
 build-hashdb:
 	mkdir -p $(BIN_DIR)
@@ -128,12 +131,22 @@ collection-bench-matrix:
 	mkdir -p $(BIN_DIR)
 	cd $(COLLECTION_BENCH_MATRIX_DIR) && go build -o ../../$(BIN_DIR)/collection-bench-matrix .
 
+collection-canonical-bench-bin:
+	mkdir -p $(BIN_DIR)
+	cd $(COLLECTION_CANONICAL_BENCH_DIR) && go build -o ../../$(BIN_DIR)/collection-canonical-bench .
+
+collection-canonical-bench: collection-canonical-bench-bin
+
 .PHONY: bench bench-readme
 bench: unified-bench
 	./$(BIN_DIR)/unified-bench
 
 bench-readme: unified-bench
 	./$(BIN_DIR)/unified-bench -suite readme -format markdown -seed 1 -keycounts "$(BENCH_KEYCOUNTS)" -valsize "$(BENCH_VALSIZE)" -batchsize "$(BENCH_BATCHSIZE)" -range-queries "$(BENCH_RANGE_QUERIES)" -range-span "$(BENCH_RANGE_SPAN)" -outdir "$(BENCH_OUTDIR)" -progress=false | go run ./scripts/update_readme_bench.go
+
+.PHONY: bench-collections-canonical
+bench-collections-canonical:
+	./scripts/bench_collections_canonical.sh
 
 .PHONY: benchmark-all benchmark-quick
 benchmark-all: build-hashdb
