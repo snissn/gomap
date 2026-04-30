@@ -217,32 +217,36 @@ func (s *Server) updateResponse(command wire.Document, sequences []wire.Document
 			return commandError(commandCodeFailedToParse, "FailedToParse", fmt.Sprintf("updates[%d]: %v", i, err))
 		}
 
-		matchedOne, modifiedOne, err := col.Update(key, func(stored []byte) ([]byte, bool, error) {
-			materializer, err := storedDocumentMaterializerForCollection(col)
-			if err != nil {
-				return nil, false, err
+		materializer, err := storedDocumentMaterializerForCollection(col)
+		if err != nil {
+			return commandError(commandCodeBadValue, "BadValue", fmt.Sprintf("updates[%d]: %v", i, err))
+		}
+		matchedOne, modifiedOne, err := func() (bool, bool, error) {
+			if materializer != nil {
+				defer func() { _ = materializer.Close() }()
 			}
-			defer func() { _ = materializer.Close() }()
-			raw, err := storedDocumentToBSON(col, materializer, stored)
-			if err != nil {
-				return nil, false, err
-			}
-			updated, changed, err := applySetUpdate(raw, updateDoc)
-			if err != nil {
-				return nil, false, fmt.Errorf("updates[%d]: %w", i, err)
-			}
-			updatedKey, encoded, err := prepareInsertDocument(updated, col.Meta().Options.DocumentFormat)
-			if err != nil {
-				return nil, false, fmt.Errorf("updates[%d]: %w", i, err)
-			}
-			if !bytes.Equal(updatedKey, key) {
-				return nil, false, errors.New("Mongo gateway update cannot modify _id")
-			}
-			if !changed {
-				return nil, false, nil
-			}
-			return encoded, true, nil
-		})
+			return col.Update(key, func(stored []byte) ([]byte, bool, error) {
+				raw, err := storedDocumentToBSON(col, materializer, stored)
+				if err != nil {
+					return nil, false, err
+				}
+				updated, changed, err := applySetUpdate(raw, updateDoc)
+				if err != nil {
+					return nil, false, fmt.Errorf("updates[%d]: %w", i, err)
+				}
+				updatedKey, encoded, err := prepareInsertDocument(updated, col.Meta().Options.DocumentFormat)
+				if err != nil {
+					return nil, false, fmt.Errorf("updates[%d]: %w", i, err)
+				}
+				if !bytes.Equal(updatedKey, key) {
+					return nil, false, errors.New("Mongo gateway update cannot modify _id")
+				}
+				if !changed {
+					return nil, false, nil
+				}
+				return encoded, true, nil
+			})
+		}()
 		if err != nil {
 			code, codeName := commandCodeBadValue, "BadValue"
 			if collections.IsDuplicateKeyError(err) {
