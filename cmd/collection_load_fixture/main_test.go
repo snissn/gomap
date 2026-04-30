@@ -141,9 +141,9 @@ func TestRunFixtureKeepsTemplateV1ThreeIndexDatabase(t *testing.T) {
 }
 
 func TestRunFixtureReportsBufferedIndexedWritesOnlyWhenIndexesUseThem(t *testing.T) {
-	dir := filepath.Join(t.TempDir(), "fixture")
-	cfg, err := parseConfig([]string{
-		"-dir", dir,
+	noIndexDir := filepath.Join(t.TempDir(), "no-index")
+	noIndexCfg, err := parseConfig([]string{
+		"-dir", noIndexDir,
 		"-docs", "8",
 		"-batch-size", "4",
 		"-indexes", "0",
@@ -154,17 +154,42 @@ func TestRunFixtureReportsBufferedIndexedWritesOnlyWhenIndexesUseThem(t *testing
 		"-progress=false",
 	}, io.Discard)
 	if err != nil {
-		t.Fatalf("parse config: %v", err)
+		t.Fatalf("parse no-index config: %v", err)
 	}
-	summary, err := runFixture(cfg)
+	noIndexSummary, err := runFixture(noIndexCfg)
 	if err != nil {
-		t.Fatalf("run fixture: %v", err)
+		t.Fatalf("run no-index fixture: %v", err)
 	}
-	if summary.BufferedIndexedWrites {
-		t.Fatal("expected indexed buffering to be reported disabled for zero-index fixture")
+	if noIndexSummary.BufferedIndexedWrites {
+		t.Fatal("no-index summary reported buffered indexed writes enabled")
 	}
-	if summary.BufferedIndexedWriteMaxDocs != 0 || summary.BufferedIndexedWriteMaxBytes != 0 {
-		t.Fatalf("buffered limits docs=%d bytes=%d want both zero", summary.BufferedIndexedWriteMaxDocs, summary.BufferedIndexedWriteMaxBytes)
+	if noIndexSummary.BufferedIndexedWriteMaxDocs != 0 || noIndexSummary.BufferedIndexedWriteMaxBytes != 0 {
+		t.Fatalf("no-index buffered limits docs=%d bytes=%d want both zero", noIndexSummary.BufferedIndexedWriteMaxDocs, noIndexSummary.BufferedIndexedWriteMaxBytes)
+	}
+
+	indexedDir := filepath.Join(t.TempDir(), "indexed")
+	indexedCfg, err := parseConfig([]string{
+		"-dir", indexedDir,
+		"-docs", "8",
+		"-batch-size", "4",
+		"-indexes", "1",
+		"-buffered-indexed-writes",
+		"-buffered-indexed-write-max-docs", "16",
+		"-buffered-indexed-write-max-bytes", "1024",
+		"-progress=false",
+	}, io.Discard)
+	if err != nil {
+		t.Fatalf("parse indexed config: %v", err)
+	}
+	indexedSummary, err := runFixture(indexedCfg)
+	if err != nil {
+		t.Fatalf("run indexed fixture: %v", err)
+	}
+	if !indexedSummary.BufferedIndexedWrites {
+		t.Fatal("indexed summary reported buffered indexed writes disabled")
+	}
+	if indexedSummary.BufferedIndexedWriteMaxDocs != 16 || indexedSummary.BufferedIndexedWriteMaxBytes != 1024 {
+		t.Fatalf("indexed buffered limits docs=%d bytes=%d want 16/1024", indexedSummary.BufferedIndexedWriteMaxDocs, indexedSummary.BufferedIndexedWriteMaxBytes)
 	}
 }
 

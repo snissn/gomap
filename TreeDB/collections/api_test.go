@@ -1282,6 +1282,58 @@ func TestCollectionIndexedWriteMemtablesReadUniqueAndFlush(t *testing.T) {
 	}
 }
 
+func TestCollectionIndexedWriteMemtablesReadAfterDomainTableAllocated(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedWrites: true,
+		},
+		Indexes: []IndexDefinition{{Name: "city", Field: "city"}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"city":"hnl"}`)},
+	); err != nil {
+		t.Fatalf("seed insert: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush seed: %v", err)
+	}
+	if deleted, err := col.DeleteDocument([]byte("u1")); err != nil {
+		t.Fatalf("delete seed: %v", err)
+	} else if !deleted {
+		t.Fatal("delete seed deleted=false want true")
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u2")},
+		[][]byte{[]byte(`{"city":"hnl"}`)},
+	); err != nil {
+		t.Fatalf("buffer insert after delete: %v", err)
+	}
+	got, found, err := col.GetInto([]byte("u2"), nil)
+	if err != nil {
+		t.Fatalf("get buffered u2: %v", err)
+	}
+	if !found {
+		t.Fatal("get buffered u2 found=false want true")
+	}
+	if want := []byte(`{"city":"hnl"}`); !bytes.Equal(got, want) {
+		t.Fatalf("get buffered u2=%q want %q", got, want)
+	}
+}
+
 func TestCollectionIndexedWriteMemtablesFindLimitExactBufferedCount(t *testing.T) {
 	dir := t.TempDir()
 	d, err := backenddb.Open(backenddb.Options{Dir: dir})
