@@ -164,11 +164,13 @@ func TestOrderedIndexStateForDocumentBSONHandlesScalarsAndArrays(t *testing.T) {
 		{def: indexDefinition{name: "email", field: "email"}, path: []string{"email"}},
 		{def: indexDefinition{name: "age", field: "age"}, path: []string{"age"}},
 		{def: indexDefinition{name: "tag", field: "tags", multiKey: true}, path: []string{"tags"}},
+		{def: indexDefinition{name: "deleted_at", field: "deleted_at"}, path: []string{"deleted_at"}},
 	}
 	doc := mustBSONCollectionDocument(t, bson.D{
 		{Key: "email", Value: "ada@example.com"},
 		{Key: "age", Value: int64(37)},
 		{Key: "tags", Value: bson.A{"b", "a", "a"}},
+		{Key: "deleted_at", Value: nil},
 	})
 
 	state, err := orderedIndexStateForDocument(doc, runtimes, collectionOptions{documentFormat: DocumentFormatBSON})
@@ -178,6 +180,7 @@ func TestOrderedIndexStateForDocumentBSONHandlesScalarsAndArrays(t *testing.T) {
 	requireOrderedIndexValues(t, state, 0, "s:ada@example.com")
 	requireOrderedIndexValues(t, state, 1, "n:37")
 	requireOrderedIndexValues(t, state, 2, "s:a", "s:b")
+	requireOrderedIndexValues(t, state, 3, "z:")
 }
 
 func requireOrderedIndexValues(tb testing.TB, state orderedDocumentIndexState, runtimeIdx int, want ...string) {

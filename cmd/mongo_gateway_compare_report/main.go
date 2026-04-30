@@ -167,9 +167,9 @@ func loadComparisons(matrixPath string) ([]cellComparison, error) {
 	}
 	matrixDir := filepath.Dir(matrixPath)
 	type groupedCell struct {
-		mongo  *runRecord
-		trees  map[string]*runRecord
-		treeks []string
+		mongo          *runRecord
+		trees          map[string]*runRecord
+		treeConfigKeys []string
 	}
 	byCell := make(map[baseCellKey]*groupedCell)
 	for _, row := range rows {
@@ -210,7 +210,7 @@ func loadComparisons(matrixPath string) ([]cellComparison, error) {
 				return nil, fmt.Errorf("duplicate treedb row for documents=%d secondary_indexes=%d config=%q", key.Documents, key.SecondaryIndexes, record.Row.Config)
 			}
 			cell.trees[record.Row.Config] = record
-			cell.treeks = append(cell.treeks, record.Row.Config)
+			cell.treeConfigKeys = append(cell.treeConfigKeys, record.Row.Config)
 		case "mongo":
 			if cell.mongo != nil {
 				return nil, fmt.Errorf("duplicate mongo row for documents=%d secondary_indexes=%d", key.Documents, key.SecondaryIndexes)
@@ -225,8 +225,8 @@ func loadComparisons(matrixPath string) ([]cellComparison, error) {
 		if len(cell.trees) == 0 || cell.mongo == nil {
 			return nil, fmt.Errorf("incomplete comparison cell documents=%d secondary_indexes=%d", key.Documents, key.SecondaryIndexes)
 		}
-		sort.Strings(cell.treeks)
-		for _, config := range cell.treeks {
+		sort.Strings(cell.treeConfigKeys)
+		for _, config := range cell.treeConfigKeys {
 			cells = append(cells, cellComparison{
 				Key: cellKey{
 					Documents:        key.Documents,

@@ -3408,9 +3408,10 @@ func (c *Collection) Get(documentID []byte) ([]byte, error) {
 }
 
 // StoredDocumentJSON materializes one stored collection document as JSON bytes.
-// JSON-format collections return an owned copy of document. Template-v1
-// collections resolve the document's template from the collection template root
-// and any buffered template runs.
+// JSON-format collections return an owned copy of document. BSON-format
+// collections return canonical Extended JSON. Template-v1 collections resolve
+// the document's template from the collection template root and any buffered
+// template runs.
 func (c *Collection) StoredDocumentJSON(document []byte) ([]byte, error) {
 	if c == nil {
 		return nil, errCollectionNil
