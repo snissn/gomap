@@ -1101,7 +1101,11 @@ func (c *Collection) bufferIndexedInsertPlanLocked(catalog *collectionCatalog, b
 	if domain.uniqueValueIndex == nil {
 		domain.uniqueValueIndex = make(map[string]*bufferedUniqueValueIndex)
 	}
-	checkpoint := checkpointBufferedIndexedDomain(domain)
+	autoFlushEnabled := bufferedIndexedAutoFlushEnabled(catalog.meta.Options)
+	var checkpoint bufferedIndexedCheckpoint
+	if autoFlushEnabled {
+		checkpoint = checkpointBufferedIndexedDomain(domain)
+	}
 	uniqueIndexes := uniqueCollectionIndexNames(catalog.meta)
 	var stagedBytes int64
 	for _, run := range plan.runs {
@@ -1111,7 +1115,9 @@ func (c *Collection) bufferIndexedInsertPlanLocked(catalog *collectionCatalog, b
 			var err error
 			uniqueValueTable, uniquePrefixes, err = bufferedUniqueIndexValueRun(run.table)
 			if err != nil {
-				rollbackBufferedIndexedDomain(domain, checkpoint)
+				if autoFlushEnabled {
+					rollbackBufferedIndexedDomain(domain, checkpoint)
+				}
 				return 0, err
 			}
 		}
@@ -1126,7 +1132,9 @@ func (c *Collection) bufferIndexedInsertPlanLocked(catalog *collectionCatalog, b
 				domain.primaryIDIndex = newBufferedUniqueValueIndex(max(1, run.table.Len()))
 			}
 			if err := addBufferedPrimaryIDs(domain.primaryIDIndex, run.table); err != nil {
-				rollbackBufferedIndexedDomain(domain, checkpoint)
+				if autoFlushEnabled {
+					rollbackBufferedIndexedDomain(domain, checkpoint)
+				}
 				return 0, err
 			}
 		}
@@ -1186,6 +1194,10 @@ func shouldFlushBufferedIndexedWrites(domain *collectionWriteDomain, opts Collec
 		return true
 	}
 	return false
+}
+
+func bufferedIndexedAutoFlushEnabled(opts CollectionOptions) bool {
+	return opts.BufferedIndexedWriteMaxDocuments > 0 || opts.BufferedIndexedWriteMaxBytes > 0
 }
 
 func saturatingAddNonNegativeInt64(total, n int64) int64 {

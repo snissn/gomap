@@ -1464,6 +1464,67 @@ func TestCollectionIndexedWriteMemtablesAutoFlushMaxDocuments(t *testing.T) {
 	collectionMaintenanceRequireUnorderedIDs(t, ids, []byte("u1"), []byte("u2"))
 }
 
+func TestCollectionIndexedWriteMemtablesAutoFlushMaxBytes(t *testing.T) {
+	dir := t.TempDir()
+	d, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedWrites:        true,
+			BufferedIndexedWriteMaxBytes: 1,
+		},
+		Indexes: []IndexDefinition{{Name: "email", Field: "email", Unique: true}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"email":"ada@example.com"}`)},
+	); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("expected snapshot after byte threshold flush")
+	}
+	catalog, err := loadCollectionCatalog(snap, "users")
+	_ = snap.Close()
+	if err != nil {
+		t.Fatalf("load catalog after byte threshold flush: %v", err)
+	}
+	if got := catalog.rootID(collectionPrimaryRootName("users")); got == 0 {
+		t.Fatal("primary root was not persisted after byte threshold flush")
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("close db: %v", err)
+	}
+
+	reopened, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("reopen db: %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	reopenedCol, err := NewCollectionManager(reopened).OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open reopened collection: %v", err)
+	}
+	ids, err := reopenedCol.FindByIndex("email", "ada@example.com")
+	if err != nil {
+		t.Fatalf("find email after byte threshold flush: %v", err)
+	}
+	if len(ids) != 1 || !bytes.Equal(ids[0], []byte("u1")) {
+		t.Fatalf("email ids=%q want [u1]", ids)
+	}
+}
+
 func TestCollectionIndexedWriteMemtablesCloseFlushes(t *testing.T) {
 	dir := t.TempDir()
 	d, err := backenddb.Open(backenddb.Options{Dir: dir})
