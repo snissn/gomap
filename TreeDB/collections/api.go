@@ -2128,13 +2128,14 @@ func rejectReplaceUniqueConflicts(snap *backenddb.Snapshot, catalog *collectionC
 // Get returns an owned copy of the document for documentID.
 //
 // Missing documents return (nil, nil), matching the existing collection API.
-// Present-but-empty documents also return (nil, nil), because Get does not
-// expose the found flag returned by GetInto. Callers that need to distinguish
-// those cases should use GetInto.
+// Present-but-empty documents return a non-nil empty slice.
 func (c *Collection) Get(documentID []byte) ([]byte, error) {
 	out, found, err := c.GetInto(documentID, nil)
 	if err != nil || !found {
 		return nil, err
+	}
+	if len(out) == 0 {
+		return []byte{}, nil
 	}
 	if cap(out) == len(out) {
 		return out, nil

@@ -990,6 +990,48 @@ func TestCollectionGetIntoReusesCallerBuffer(t *testing.T) {
 	}
 }
 
+func TestCollectionGetPreservesEmptyDocument(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte{}},
+	); err != nil {
+		t.Fatalf("insert empty document: %v", err)
+	}
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
+
+	got, err := col.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("Get empty document: %v", err)
+	}
+	if got == nil || len(got) != 0 {
+		t.Fatalf("Get empty document got=%v len=%d want non-nil empty", got, len(got))
+	}
+
+	gotInto, found, err := col.GetInto([]byte("u1"), []byte("stale"))
+	if err != nil {
+		t.Fatalf("GetInto empty document: %v", err)
+	}
+	if !found || len(gotInto) != 0 {
+		t.Fatalf("GetInto empty document got=%q found=%t want empty true", gotInto, found)
+	}
+}
+
 func TestCollectionGetIntoBufferedReusesCallerBuffer(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
