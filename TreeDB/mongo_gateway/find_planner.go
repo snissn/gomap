@@ -233,11 +233,12 @@ func (s *Server) findUnsortedScanDocuments(col *collections.Collection, plan fin
 		if ok && !match {
 			return true, nil
 		}
-		doc, err := storedDocumentToBSON(record.Document)
-		if err != nil {
-			return false, err
-		}
+		var doc wire.Document
 		if !ok {
+			doc, err = storedDocumentToBSON(record.Document)
+			if err != nil {
+				return false, err
+			}
 			match, err = documentMatchesPredicates(doc, plan.predicates)
 			if err != nil {
 				return false, err
@@ -246,9 +247,17 @@ func (s *Server) findUnsortedScanDocuments(col *collections.Collection, plan fin
 		if !match {
 			return true, nil
 		}
-		if matched >= int(plan.skip) {
-			docs = append(docs, doc)
+		if matched < int(plan.skip) {
+			matched++
+			return true, nil
 		}
+		if ok {
+			doc, err = storedDocumentToBSON(record.Document)
+			if err != nil {
+				return false, err
+			}
+		}
+		docs = append(docs, doc)
 		matched++
 		if plan.limit > 0 && len(docs) >= int(plan.limit) {
 			return false, nil

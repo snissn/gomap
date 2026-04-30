@@ -526,6 +526,8 @@ func (c *Collection) CreateIndex(def IndexDefinition) (*CollectionMeta, error) {
 		_ = snap.Close()
 		return nil, err
 	}
+	// Keep the base snapshot pinned through publish so page reuse cannot invalidate
+	// base roots before stale-root validation rejects concurrent modifications.
 	defer func() { _ = snap.Close() }()
 
 	ordered := make([]backenddb.OrderedRootDeltaPublishInput, 0, len(plan.rootNames))
@@ -907,6 +909,8 @@ func (c *Collection) flushBufferedNoIndexLocked(domain *collectionWriteDomain) e
 	if pin == nil {
 		return backenddb.ErrClosed
 	}
+	// Keep the base snapshot pinned through publish so page reuse cannot invalidate
+	// base roots before stale-root validation rejects concurrent modifications.
 	defer func() { _ = pin.Close() }()
 	pinnedCatalog, err := loadCollectionCatalog(pin, meta.Name)
 	if err != nil {
@@ -1002,6 +1006,8 @@ func (c *Collection) insertOneNoIndex(id, document []byte) ([]byte, error) {
 			return nil, err
 		}
 	}
+	// Keep the base snapshot pinned through publish so page reuse cannot invalidate
+	// base roots before stale-root validation rejects concurrent modifications.
 	defer func() { _ = snap.Close() }()
 
 	resultID := bytes.Clone(id)
@@ -1111,6 +1117,8 @@ func (c *Collection) InsertBatch(ids, documents [][]byte) ([][]byte, error) {
 	for _, run := range plan.runs {
 		baseRootIDs[run.name] = catalog.rootID(run.name)
 	}
+	// Keep the base snapshot pinned through publish so page reuse cannot invalidate
+	// base roots before stale-root validation rejects concurrent modifications.
 	defer func() { _ = snap.Close() }()
 
 	ordered := make([]backenddb.OrderedRootDeltaPublishInput, 0, len(plan.runs))
@@ -1212,6 +1220,8 @@ func (c *Collection) insertBatchNoIndex(
 		}
 	}
 	stats.DuplicateDocumentPreflight = time.Since(phaseStart)
+	// Keep the base snapshot pinned through publish so page reuse cannot invalidate
+	// base roots before stale-root validation rejects concurrent modifications.
 	defer func() { _ = snap.Close() }()
 
 	phaseStart = time.Now()
@@ -1377,6 +1387,8 @@ func (c *Collection) deleteDocumentOnce(documentID []byte) (bool, error) {
 			deltaTables = append(deltaTables, buildDeleteRootDeltaTable(deleteKeys))
 		}
 	}
+	// Keep the base snapshot pinned through publish so page reuse cannot invalidate
+	// base roots before stale-root validation rejects concurrent modifications.
 	defer func() { _ = snap.Close() }()
 
 	ordered := make([]backenddb.OrderedRootDeltaPublishInput, 0, len(rootNames))
@@ -1620,6 +1632,8 @@ func (c *Collection) updateDocumentOnce(documentID []byte, update func(current [
 			deltaTables = append(deltaTables, table)
 		}
 	}
+	// Keep the base snapshot pinned through publish so page reuse cannot invalidate
+	// base roots before stale-root validation rejects concurrent modifications.
 	defer func() { _ = snap.Close() }()
 
 	ordered := make([]backenddb.OrderedRootDeltaPublishInput, 0, len(rootNames))
