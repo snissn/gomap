@@ -220,7 +220,7 @@ func (db *DB) LeafGenerationPlan(ctx context.Context, opts LeafGenerationPlanOpt
 			PinnedCount:  db.leafGenerationPins.count(gen.GenerationID),
 		}
 		for _, rawFileID := range gen.FileIDs {
-			entry.BytesTotal += leafGenerationRawFileSize(db.dir, set, rawFileID)
+			entry.BytesTotal += leafGenerationRawFilePhysicalSize(db.dir, set, rawFileID)
 		}
 		if live := liveScan.Generations[gen.GenerationID]; live.LiveBytes > 0 || live.LivePages > 0 {
 			entry.BytesLive = live.LiveBytes

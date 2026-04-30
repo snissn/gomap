@@ -704,12 +704,17 @@ func prepareRewriteLeafDict(d *DB, state *DBState, currentForClass func(context.
 	if d == nil || state == nil {
 		return 0, nil, false, nil
 	}
-	if currentForClass != nil {
+	canLookupDict := dictLookup != nil
+	canPublishDict := dictPut != nil
+	if !canLookupDict && !canPublishDict {
+		return 0, nil, false, nil
+	}
+	if currentForClass != nil && canLookupDict {
 		dictID, err := currentForClass(context.Background(), "outer_leaf")
 		if err != nil {
 			return 0, nil, false, err
 		}
-		if dictID != 0 && dictLookup != nil {
+		if dictID != 0 {
 			dictBytes, err := dictLookup(dictID)
 			if err == nil && len(dictBytes) > 0 {
 				useRawPages, err := resolveRewriteLeafDictUseRawPages(dictLeafPayloadMode, dictID, false)
@@ -720,31 +725,33 @@ func prepareRewriteLeafDict(d *DB, state *DBState, currentForClass func(context.
 			}
 		}
 	}
-	if preferredLeafDict, err := scanValueLogSetPreferredLeafDictID(state.ValueLogSet); err != nil {
-		return 0, nil, false, err
-	} else if preferredLeafDict != 0 && dictLookup != nil {
-		dictBytes, err := dictLookup(preferredLeafDict)
-		if err == nil && len(dictBytes) > 0 {
-			useRawPages, err := resolveRewriteLeafDictUseRawPages(dictLeafPayloadMode, preferredLeafDict, true)
-			if err != nil {
-				return 0, nil, false, err
+	if canLookupDict {
+		if preferredLeafDict, err := scanValueLogSetPreferredLeafDictID(state.ValueLogSet); err != nil {
+			return 0, nil, false, err
+		} else if preferredLeafDict != 0 {
+			dictBytes, err := dictLookup(preferredLeafDict)
+			if err == nil && len(dictBytes) > 0 {
+				useRawPages, err := resolveRewriteLeafDictUseRawPages(dictLeafPayloadMode, preferredLeafDict, true)
+				if err != nil {
+					return 0, nil, false, err
+				}
+				return preferredLeafDict, dictBytes, useRawPages, nil
 			}
-			return preferredLeafDict, dictBytes, useRawPages, nil
+		}
+		if preferredDictGlobal, err := scanValueLogSetPreferredDictID(state.ValueLogSet); err != nil {
+			return 0, nil, false, err
+		} else if preferredDictGlobal != 0 {
+			dictBytes, err := dictLookup(preferredDictGlobal)
+			if err == nil && len(dictBytes) > 0 {
+				useRawPages, err := resolveRewriteLeafDictUseRawPages(dictLeafPayloadMode, preferredDictGlobal, true)
+				if err != nil {
+					return 0, nil, false, err
+				}
+				return preferredDictGlobal, dictBytes, useRawPages, nil
+			}
 		}
 	}
-	if preferredDictGlobal, err := scanValueLogSetPreferredDictID(state.ValueLogSet); err != nil {
-		return 0, nil, false, err
-	} else if preferredDictGlobal != 0 && dictLookup != nil {
-		dictBytes, err := dictLookup(preferredDictGlobal)
-		if err == nil && len(dictBytes) > 0 {
-			useRawPages, err := resolveRewriteLeafDictUseRawPages(dictLeafPayloadMode, preferredDictGlobal, true)
-			if err != nil {
-				return 0, nil, false, err
-			}
-			return preferredDictGlobal, dictBytes, useRawPages, nil
-		}
-	}
-	if dictPut == nil {
+	if !canPublishDict {
 		return 0, nil, false, nil
 	}
 	dictBytes, err := trainRewriteLeafDictFromLiveLeafRefs(d, state, cfg)

@@ -606,6 +606,43 @@ func TestLeafGenerationRecordLengthForPlan_UsesSealedIndex(t *testing.T) {
 	}
 }
 
+func TestLeafGenerationPlan_UsesPhysicalFileSizeWhenCachedSizeIsStale(t *testing.T) {
+	db, leafLog := openLeafGenerationGCTestDB(t)
+
+	writeLeafGenerationKeys(t, db, "k", 2048, 'a')
+	path1, fileID1 := currentLeafSegmentOrFatal(t, leafLog)
+	rawFileID1 := page.ValueLogSegmentID(fileID1)
+	infoBefore, err := os.Stat(path1)
+	if err != nil {
+		t.Fatalf("stat leaf file before extension: %v", err)
+	}
+	if err := leafLog.rotateLeaf(); err != nil {
+		t.Fatalf("rotateLeaf: %v", err)
+	}
+	writeLeafGenerationKeyRange(t, db, "k", 0, 64, 'b')
+
+	const extraDeadBytes = int64(1 << 20)
+	physicalSize := infoBefore.Size() + extraDeadBytes
+	if err := os.Truncate(path1, physicalSize); err != nil {
+		t.Fatalf("extend sealed leaf file: %v", err)
+	}
+
+	plan, err := db.LeafGenerationPlan(context.Background(), LeafGenerationPlanOptions{Force: true})
+	if err != nil {
+		t.Fatalf("LeafGenerationPlan: %v", err)
+	}
+	gen := findLeafGenerationPlanEntry(t, plan, findLeafGenerationByFileID(t, loadLeafGenerationManifestOrFatal(t, db.dir), rawFileID1).GenerationID)
+	if gen.BytesTotal < physicalSize {
+		t.Fatalf("generation bytes_total=%d, want at least physical size %d", gen.BytesTotal, physicalSize)
+	}
+	if gen.BytesDead < extraDeadBytes {
+		t.Fatalf("generation bytes_dead=%d, want at least injected dead bytes %d", gen.BytesDead, extraDeadBytes)
+	}
+	if !gen.Eligible {
+		t.Fatalf("generation eligible=%t skip=%q, want eligible after physical dead bytes", gen.Eligible, gen.SkipReason)
+	}
+}
+
 func TestLeafGenerationPlan_CachesLiveStatsPerPublishedState(t *testing.T) {
 	db, leafLog := openLeafGenerationGCTestDB(t)
 	counter := withLeafGenerationLiveScanCounter(t)
