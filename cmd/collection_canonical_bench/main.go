@@ -279,7 +279,10 @@ func run(argv []string) error {
 	}
 
 	branch := resolveBranch(cfg.RepoRoot)
-	commit, _ := gitOutput(cfg.RepoRoot, "rev-parse", "--short=12", "HEAD")
+	commit, err := gitOutput(cfg.RepoRoot, "rev-parse", "--short=12", "HEAD")
+	if err != nil {
+		return fmt.Errorf("resolve git commit: %w", err)
+	}
 	commandLine := argv
 	if rawCommand := strings.TrimSpace(os.Getenv(envCanonicalCommandLine)); rawCommand != "" {
 		commandLine = []string{rawCommand}
@@ -970,8 +973,12 @@ func validateCanonicalRun(canon *canonicalRun) []guardrailCheck {
 	treeDBConfig := compactedTreeDBConfigName(canon)
 	sqliteJSONConfig := sqliteJSONConfigName(canon)
 	sqliteNativeConfig := sqliteNativeConfigName(canon)
+	sqliteRows := hasSQLiteRows(canon.Results)
+	sqliteSkipped := canon.Config.SkipSQLite || !sqliteRows
 	if canon.Config.SkipSQLite {
 		add("warning", "sqlite.skipped", "SQLite rows were intentionally skipped; fair compacted SQLite comparisons are omitted")
+	} else if !sqliteRows {
+		add("warning", "sqlite.auto_skipped", "SQLite rows are absent; treating them as auto-skipped because SQLite benchmarks may be unavailable")
 	} else {
 		if findResult(canon.Results, sqliteJSONConfig, phaseSQLiteVacuum) == nil {
 			add("error", "missing_sqlite_json_vacuum", "SQLite JSON VACUUM result is required for fair compacted-state comparison")
@@ -992,7 +999,7 @@ func validateCanonicalRun(canon *canonicalRun) []guardrailCheck {
 			add("error", "compacted_compared_to_sqlite_post_insert", fmt.Sprintf("%s compares TreeDB compacted phase %s against SQLite phase %s", cmp.ComparisonName, cmp.TreeDBPhase, cmp.SQLitePhase))
 		}
 	}
-	if !canon.Config.SkipSQLite {
+	if !sqliteSkipped {
 		for _, treedbPhase := range []string{phaseOfflineRewrite, phaseFullLeafgenPackGC} {
 			if findResult(canon.Results, treeDBConfig, treedbPhase) == nil {
 				continue
@@ -1005,6 +1012,15 @@ func validateCanonicalRun(canon *canonicalRun) []guardrailCheck {
 		}
 	}
 	return checks
+}
+
+func hasSQLiteRows(rows []resultRow) bool {
+	for _, r := range rows {
+		if strings.HasPrefix(r.ConfigName, "sqlite_") || strings.HasPrefix(r.Engine, "sqlite") {
+			return true
+		}
+	}
+	return false
 }
 
 func finalizeRunMetadata(canon *canonicalRun) {
@@ -1336,7 +1352,8 @@ func writeCSV(path string, rows []resultRow) error {
 			return err
 		}
 	}
-	return nil
+	w.Flush()
+	return w.Error()
 }
 
 func writeJSON(path string, v any) error {
@@ -1657,11 +1674,32 @@ func markdownEscape(v string) string {
 	return v
 }
 
+func markdownInlineCode(v string) string {
+	v = markdownEscape(v)
+	maxRun := 0
+	run := 0
+	for _, r := range v {
+		if r == '`' {
+			run++
+			if run > maxRun {
+				maxRun = run
+			}
+			continue
+		}
+		run = 0
+	}
+	fence := strings.Repeat("`", maxRun+1)
+	if strings.HasPrefix(v, "`") || strings.HasSuffix(v, "`") {
+		return fence + " " + v + " " + fence
+	}
+	return fence + v + fence
+}
+
 func writeKVTable(sb *strings.Builder, rows [][2]string) {
 	sb.WriteString("| Key | Value |\n")
 	sb.WriteString("| --- | --- |\n")
 	for _, row := range rows {
-		sb.WriteString(fmt.Sprintf("| `%s` | `%s` |\n", row[0], markdownEscape(row[1])))
+		sb.WriteString(fmt.Sprintf("| %s | %s |\n", markdownInlineCode(row[0]), markdownInlineCode(row[1])))
 	}
 }
 

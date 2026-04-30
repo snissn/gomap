@@ -231,6 +231,30 @@ func TestGuardrailRespectsSkipSQLite(t *testing.T) {
 	assertCheckCode(t, checks, "sqlite.skipped")
 }
 
+func TestGuardrailTreatsAbsentSQLiteRowsAsAutoSkipped(t *testing.T) {
+	canon := knownExampleRun()
+	var filtered []resultRow
+	for _, row := range canon.Results {
+		if strings.HasPrefix(row.ConfigName, "sqlite_") {
+			continue
+		}
+		filtered = append(filtered, row)
+	}
+	canon.Results = filtered
+	canon.Comparisons = buildCompactedComparisons(canon)
+	finalizeRunMetadata(canon)
+
+	checks := validateCanonicalRun(canon)
+	for _, check := range checks {
+		if check.Code == "missing_sqlite_json_vacuum" ||
+			check.Code == "missing_sqlite_native_vacuum" ||
+			check.Code == "missing_compacted_ratio" {
+			t.Fatalf("auto-skipped SQLite should not fail SQLite comparison guardrails, got %#v", checks)
+		}
+	}
+	assertCheckCode(t, checks, "sqlite.auto_skipped")
+}
+
 func TestGuardrailRejectsBadCompactedComparisonBasis(t *testing.T) {
 	canon := knownExampleRun()
 	canon.Comparisons = append(canon.Comparisons, comparisonRow{
@@ -271,6 +295,17 @@ func TestGuardrailRequiresExplicitShapeLabel(t *testing.T) {
 	canon.Results[0].Shape = ""
 	checks := validateCanonicalRun(canon)
 	assertCheckCode(t, checks, "missing_shape_label")
+}
+
+func TestMarkdownInlineCodeHandlesBackticks(t *testing.T) {
+	got := markdownInlineCode("run `quoted` value")
+	if got != "``run `quoted` value``" {
+		t.Fatalf("markdownInlineCode with embedded backticks = %q", got)
+	}
+	got = markdownInlineCode("`edge`")
+	if got != "`` `edge` ``" {
+		t.Fatalf("markdownInlineCode with edge backticks = %q", got)
+	}
 }
 
 func assertCheckCode(t *testing.T, checks []guardrailCheck, code string) {
