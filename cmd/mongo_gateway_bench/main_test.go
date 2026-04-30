@@ -251,7 +251,6 @@ func runTreeDBProfileSmoke(t *testing.T, profile treedb.Profile) float64 {
 	t.Helper()
 	cfg, err := parseConfig([]string{
 		"-target", "treedb",
-		"-treedb-dir", filepath.Join(t.TempDir(), string(profile)),
 		"-documents", "1000",
 		"-batch-size", "500",
 		"-reads", "0",
