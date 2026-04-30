@@ -161,7 +161,8 @@ func (p insertBatchPlanner) planInsertBatchWithPreflight(ids, documents [][]byte
 	if p.templateRoot == "" {
 		p.templateRoot = p.collection + "/templates"
 	}
-	if len(p.indexes) > 0 && p.indexStateRoot == "" {
+	persistIndexState := persistIndexStateForOptions(p.options)
+	if len(p.indexes) > 0 && persistIndexState && p.indexStateRoot == "" {
 		p.indexStateRoot = p.collection + "/index-state"
 	}
 	if p.buildPrimaryVal == nil {
@@ -248,11 +249,13 @@ func (p insertBatchPlanner) planInsertBatchWithPreflight(ids, documents [][]byte
 	}
 	plan.stats.PrimaryRunBuild = time.Since(phaseStart)
 	if len(runtimes) > 0 {
-		phaseStart = time.Now()
-		if err := p.emitIndexStateRun(plan, items, runtimes); err != nil {
-			return nil, err
+		if persistIndexState {
+			phaseStart = time.Now()
+			if err := p.emitIndexStateRun(plan, items, runtimes); err != nil {
+				return nil, err
+			}
+			plan.stats.IndexStateRunBuild = time.Since(phaseStart)
 		}
-		plan.stats.IndexStateRunBuild = time.Since(phaseStart)
 		phaseStart = time.Now()
 		if err := p.emitSecondaryRuns(plan, items, runtimes); err != nil {
 			return nil, err

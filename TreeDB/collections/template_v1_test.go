@@ -105,6 +105,10 @@ func TestTemplateV1CollectionInsertBatchIndexesAndTemplateRoot(t *testing.T) {
 		_ = snap.Close()
 		t.Fatal("template root was not persisted")
 	}
+	if stateRoot := catalog.rootID(collectionIndexStateRootName("users")); stateRoot != 0 {
+		_ = snap.Close()
+		t.Fatalf("template-v1 collection persisted index-state root %d", stateRoot)
+	}
 	root, err := parseTemplateV1StoredDocument(got)
 	if err != nil {
 		_ = snap.Close()
@@ -543,6 +547,19 @@ func TestTemplateV1CreateIndexBackfillsFromTemplateRoot(t *testing.T) {
 	}
 	if len(ids) != 1 || !bytes.Equal(ids[0], []byte("u2")) {
 		t.Fatalf("city ids=%q want u2", ids)
+	}
+
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("expected snapshot")
+	}
+	catalog, err := loadCollectionCatalog(snap, "users")
+	_ = snap.Close()
+	if err != nil {
+		t.Fatalf("load catalog: %v", err)
+	}
+	if stateRoot := catalog.rootID(collectionIndexStateRootName("users")); stateRoot != 0 {
+		t.Fatalf("template-v1 create-index backfill persisted index-state root %d", stateRoot)
 	}
 }
 
