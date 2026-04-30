@@ -142,6 +142,33 @@ func TestCloseBenchTargetIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestCloseBenchTargetKeepDirPreservesTempDir(t *testing.T) {
+	dir := t.TempDir()
+	target := &benchTarget{
+		treedbDir:       dir,
+		removeTreeDBDir: true,
+		cleanup: func(context.Context) error {
+			return nil
+		},
+	}
+
+	if err := closeBenchTargetKeepDir(context.Background(), target); err != nil {
+		t.Fatalf("close keep dir: %v", err)
+	}
+	if _, err := os.Stat(dir); err != nil {
+		t.Fatalf("dir removed by keep-dir close: %v", err)
+	}
+	if !target.removeTreeDBDir {
+		t.Fatal("removeTreeDBDir was cleared before final cleanup")
+	}
+	if err := closeBenchTarget(context.Background(), target); err != nil {
+		t.Fatalf("final close: %v", err)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("dir still exists after final close: %v", err)
+	}
+}
+
 func TestCheckoutPathCandidatesIncludeResolvedCWD(t *testing.T) {
 	root := t.TempDir()
 	realDir := filepath.Join(root, "real")

@@ -118,11 +118,12 @@ type diskSnapshot struct {
 }
 
 type benchTarget struct {
-	client      *mongo.Client
-	db          *backenddb.DB
-	collections *collections.CollectionManager
-	treedbDir   string
-	cleanup     func(context.Context) error
+	client          *mongo.Client
+	db              *backenddb.DB
+	collections     *collections.CollectionManager
+	treedbDir       string
+	removeTreeDBDir bool
+	cleanup         func(context.Context) error
 }
 
 const (
@@ -443,15 +444,29 @@ func openTreeDBTarget(ctx context.Context, cfg config) (*benchTarget, error) {
 		}
 		errs = append(errs, manager.FlushAll())
 		errs = append(errs, backendCleanup())
-		if removeDir {
-			errs = append(errs, os.RemoveAll(dir))
-		}
 		return errors.Join(errs...)
 	}
-	return &benchTarget{client: client, db: db, collections: manager, treedbDir: dir, cleanup: cleanup}, nil
+	return &benchTarget{
+		client:          client,
+		db:              db,
+		collections:     manager,
+		treedbDir:       dir,
+		removeTreeDBDir: removeDir,
+		cleanup:         cleanup,
+	}, nil
 }
 
 func closeBenchTarget(ctx context.Context, target *benchTarget) error {
+	err := closeBenchTargetKeepDir(ctx, target)
+	if target == nil || !target.removeTreeDBDir || target.treedbDir == "" {
+		return err
+	}
+	removeErr := os.RemoveAll(target.treedbDir)
+	target.removeTreeDBDir = false
+	return errors.Join(err, removeErr)
+}
+
+func closeBenchTargetKeepDir(ctx context.Context, target *benchTarget) error {
 	if target == nil || target.cleanup == nil {
 		return nil
 	}
@@ -1010,7 +1025,7 @@ func runTreeDBMaintenanceStack(ctx context.Context, target *benchTarget, result 
 	if err := appendTreeDBMaintenanceStep(ctx, target, result, "index_vacuum", func() (map[string]int64, string, error) {
 		cleanupCtx, cancelCleanup := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancelCleanup()
-		if err := closeBenchTarget(cleanupCtx, target); err != nil {
+		if err := closeBenchTargetKeepDir(cleanupCtx, target); err != nil {
 			return nil, "", err
 		}
 		if err := treedb.VacuumIndexOffline(treedb.Options{Dir: target.treedbDir}); err != nil {
