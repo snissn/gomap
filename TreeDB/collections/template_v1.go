@@ -547,7 +547,7 @@ func decodeTemplateV1Value(raw []byte, pos *int, resolver templateV1Resolver) (a
 		if err != nil {
 			return nil, err
 		}
-		if count > uint64(len(raw)) {
+		if count > uint64(len(raw)-*pos) {
 			return nil, errors.New("collections: malformed template-v1 array length")
 		}
 		values := make([]any, 0, int(count))

@@ -82,7 +82,7 @@ func parseFindPlan(command wire.Document, filter wire.Document) (findPlan, error
 }
 
 func (s *Server) executeFind(col *collections.Collection, plan findPlan) (findResultSet, error) {
-	materializer, err := col.NewStoredDocumentJSONMaterializer()
+	materializer, err := storedDocumentMaterializerForCollection(col)
 	if err != nil {
 		return findResultSet{}, err
 	}
@@ -215,7 +215,7 @@ func (s *Server) findCandidateDocuments(col *collections.Collection, materialize
 	}
 	out := make([]wire.Document, 0, len(records))
 	for _, record := range records {
-		doc, err := storedDocumentToBSON(materializer, record.Document)
+		doc, err := storedDocumentToBSON(col, materializer, record.Document)
 		if err != nil {
 			return nil, err
 		}
@@ -241,7 +241,7 @@ func (s *Server) findUnsortedScanDocuments(col *collections.Collection, material
 		}
 		var doc wire.Document
 		if !ok {
-			doc, err = storedDocumentToBSON(materializer, record.Document)
+			doc, err = storedDocumentToBSON(col, materializer, record.Document)
 			if err != nil {
 				return false, err
 			}
@@ -258,7 +258,7 @@ func (s *Server) findUnsortedScanDocuments(col *collections.Collection, material
 			return true, nil
 		}
 		if ok {
-			doc, err = storedDocumentToBSON(materializer, record.Document)
+			doc, err = storedDocumentToBSON(col, materializer, record.Document)
 			if err != nil {
 				return false, err
 			}
@@ -662,7 +662,7 @@ func documentsForPrimaryPredicate(col *collections.Collection, materializer *col
 		if len(stored) == 0 {
 			continue
 		}
-		doc, err := storedDocumentToBSON(materializer, stored)
+		doc, err := storedDocumentToBSON(col, materializer, stored)
 		if err != nil {
 			return nil, err
 		}
@@ -698,7 +698,7 @@ func documentsForIndexedPredicate(col *collections.Collection, materializer *col
 			if len(stored) == 0 {
 				continue
 			}
-			doc, err := storedDocumentToBSON(materializer, stored)
+			doc, err := storedDocumentToBSON(col, materializer, stored)
 			if err != nil {
 				return nil, err
 			}
