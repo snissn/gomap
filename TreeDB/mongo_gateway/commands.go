@@ -166,12 +166,6 @@ func (s *Server) updateResponse(command wire.Document, sequences []wire.Document
 		}
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}
-	materializer, err := col.NewStoredDocumentJSONMaterializer()
-	if err != nil {
-		return commandError(commandCodeBadValue, "BadValue", err.Error())
-	}
-	defer func() { _ = materializer.Close() }()
-
 	for i, update := range updates {
 		filter, err := requiredDocumentField(update, "q")
 		if err != nil {
@@ -201,6 +195,11 @@ func (s *Server) updateResponse(command wire.Document, sequences []wire.Document
 		}
 
 		matchedOne, modifiedOne, err := col.Update(key, func(stored []byte) ([]byte, bool, error) {
+			materializer, err := col.NewStoredDocumentJSONMaterializer()
+			if err != nil {
+				return nil, false, err
+			}
+			defer func() { _ = materializer.Close() }()
 			raw, err := storedDocumentToBSON(materializer, stored)
 			if err != nil {
 				return nil, false, err

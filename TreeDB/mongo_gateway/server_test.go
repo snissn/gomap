@@ -439,6 +439,69 @@ func TestServerBSONDefaultStoresNativeBSONAndUpdatesIndexes(t *testing.T) {
 	}
 }
 
+func TestServerUpdateTemplateV1RefreshesMaterializerBetweenStatements(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	server.DefaultCollectionOptions = collections.CollectionOptions{
+		DocumentFormat: collections.DocumentFormatTemplateV1,
+	}
+	id := bson.NewObjectID()
+	assertOK(t, serveCommand(t, server, 2254, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{bson.D{
+			{Key: "_id", Value: id},
+			{Key: "name", Value: "ada"},
+		}}},
+		{Key: "$db", Value: "app"},
+	}))
+
+	updateResponse := serveCommand(t, server, 2255, bson.D{
+		{Key: "update", Value: "users"},
+		{Key: "updates", Value: bson.A{
+			bson.D{
+				{Key: "q", Value: bson.D{{Key: "_id", Value: id}}},
+				{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{
+					{Key: "city", Value: "London"},
+				}}}},
+			},
+			bson.D{
+				{Key: "q", Value: bson.D{{Key: "_id", Value: id}}},
+				{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{
+					{Key: "score", Value: int32(7)},
+				}}}},
+			},
+		}},
+		{Key: "$db", Value: "app"},
+	})
+	assertOK(t, updateResponse)
+	assertInt32(t, updateResponse, "n", 2)
+	assertInt32(t, updateResponse, "nModified", 2)
+
+	findResponse := serveCommand(t, server, 2256, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "_id", Value: id}}},
+		{Key: "$db", Value: "app"},
+	})
+	firstBatch := cursorFirstBatch(t, findResponse)
+	if len(firstBatch) != 1 {
+		t.Fatalf("firstBatch len=%d want 1", len(firstBatch))
+	}
+	gotCity, ok := firstBatch[0].Lookup("city").StringValueOK()
+	if !ok || gotCity != "London" {
+		t.Fatalf("firstBatch city=%q ok=%v want London", gotCity, ok)
+	}
+	gotScore, ok := firstBatch[0].Lookup("score").Int32OK()
+	if !ok || gotScore != 7 {
+		t.Fatalf("firstBatch score=%d ok=%v want 7", gotScore, ok)
+	}
+}
+
 func TestServerUpdateRejectsIDMutation(t *testing.T) {
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
