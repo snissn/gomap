@@ -34,11 +34,13 @@ const (
 var orderedRootDeltaBatchInlineThreshold = int(^uint(0) >> 1)
 
 type orderedRootPublishStats struct {
-	warmAttempts            uint64
-	warmNativeApplyAttempts uint64
-	warmRebuildFallbacks    uint64
-	warmPreservedPages      uint64
-	warmRewrittenPages      uint64
+	warmAttempts                          uint64
+	warmNativeApplyAttempts               uint64
+	warmRebuildFallbacks                  uint64
+	warmPreservedPages                    uint64
+	warmRewrittenPages                    uint64
+	collectionRootDescriptorBaseEntries   []orderedRootCollectionDescriptorEntry
+	collectionRootDescriptorTargetEntries []orderedRootCollectionDescriptorEntry
 }
 
 type orderedRootPublishOptions struct {
@@ -202,6 +204,77 @@ func materializeOrderedRootTable(iter iterator.UnsafeIterator) (memtable.Table, 
 	}
 	table.Freeze()
 	return table, nil
+}
+
+type orderedRootCollectionDescriptorEntry struct {
+	key        []byte
+	val        []byte
+	ptr        page.ValuePtr
+	flags      byte
+	valueKnown bool
+}
+
+func orderedRootTableCollectionRootDescriptorEntries(table memtable.Table) ([]orderedRootCollectionDescriptorEntry, error) {
+	iter := table.NewIterator(collectionRootDescriptorPrefixBytes, collectionRootDescriptorPrefixEnd())
+	defer func() { _ = iter.Close() }()
+	return orderedRootIteratorCollectionRootDescriptorEntries(iter)
+}
+
+func orderedRootIteratorCollectionRootDescriptorEntries(iter iterator.UnsafeIterator) ([]orderedRootCollectionDescriptorEntry, error) {
+	if iter == nil {
+		return nil, nil
+	}
+	var out []orderedRootCollectionDescriptorEntry
+	for iter.Valid() {
+		key := iter.UnsafeKey()
+		if !bytes.HasPrefix(key, collectionRootDescriptorPrefixBytes) {
+			break
+		}
+		val, ptr, flags := iter.UnsafeEntry()
+		if flags&node.FlagPointer != 0 && val == nil {
+			val = iter.UnsafeValue()
+		}
+		entry := orderedRootCollectionDescriptorEntry{
+			key:        append([]byte(nil), key...),
+			ptr:        ptr,
+			flags:      flags,
+			valueKnown: flags&node.FlagPointer == 0 || val != nil,
+		}
+		if entry.valueKnown {
+			entry.val = append([]byte(nil), val...)
+		}
+		out = append(out, entry)
+		iter.Next()
+	}
+	return out, iter.Error()
+}
+
+func orderedRootCollectionRootDescriptorEntriesEqual(a, b []orderedRootCollectionDescriptorEntry) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if !bytes.Equal(a[i].key, b[i].key) {
+			return false
+		}
+		if a[i].valueKnown && b[i].valueKnown {
+			if !bytes.Equal(a[i].val, b[i].val) {
+				return false
+			}
+			continue
+		}
+		if a[i].flags != b[i].flags {
+			return false
+		}
+		if a[i].flags&node.FlagPointer != 0 && a[i].ptr != b[i].ptr {
+			return false
+		}
+	}
+	return true
+}
+
+func (s orderedRootPublishStats) collectionRootDescriptorReachabilityMayChange() bool {
+	return !orderedRootCollectionRootDescriptorEntriesEqual(s.collectionRootDescriptorBaseEntries, s.collectionRootDescriptorTargetEntries)
 }
 
 func orderedRootEntryEqual(baseIter, targetIter iterator.UnsafeIterator) bool {
@@ -473,6 +546,14 @@ func (db *DB) publishOrderedRootIterator(baseRoot uint64, iter iterator.UnsafeIt
 		collectBasePageIDs := func() ([]uint64, error) {
 			return rootTree.CollectPageIDs()
 		}
+		if trackValueLogRefs {
+			baseDescriptorIter := rootTree.Iterator(collectionRootDescriptorPrefixBytes, collectionRootDescriptorPrefixEnd())
+			stats.collectionRootDescriptorBaseEntries, err = orderedRootIteratorCollectionRootDescriptorEntries(baseDescriptorIter)
+			_ = baseDescriptorIter.Close()
+			if err != nil {
+				return
+			}
+		}
 
 		baseProbe := rootTree.Iterator(nil, nil)
 		hasExistingEntries := baseProbe.Valid()
@@ -487,6 +568,12 @@ func (db *DB) publishOrderedRootIterator(baseRoot uint64, iter iterator.UnsafeIt
 		if materializeErr != nil {
 			err = materializeErr
 			return
+		}
+		if trackValueLogRefs {
+			stats.collectionRootDescriptorTargetEntries, err = orderedRootTableCollectionRootDescriptorEntries(targetTable)
+			if err != nil {
+				return
+			}
 		}
 		if !hasExistingEntries {
 			if trackValueLogRefs {
@@ -559,6 +646,10 @@ func (db *DB) publishOrderedRootIterator(baseRoot uint64, iter iterator.UnsafeIt
 			targetTable, materializeErr := materializeOrderedRootTable(iter)
 			if materializeErr != nil {
 				err = materializeErr
+				return
+			}
+			stats.collectionRootDescriptorTargetEntries, err = orderedRootTableCollectionRootDescriptorEntries(targetTable)
+			if err != nil {
 				return
 			}
 			vlogRefDelta, err = collectValueLogRefDeltaFromIterator(targetTable.NewIterator(nil, nil))
@@ -749,7 +840,7 @@ func (db *DB) PublishOrderedRootDeltaGroupWithSystemBuilder(ordered []OrderedRoo
 	if iter == nil {
 		return 0, nil, errors.New("nil system root iterator")
 	}
-	rootID, rootRetired, metrics, _, refDelta, err := db.publishOrderedRootIterator(baseSystemRoot, iter, systemOpts, true)
+	rootID, rootRetired, metrics, publishStats, refDelta, err := db.publishOrderedRootIterator(baseSystemRoot, iter, systemOpts, true)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -757,9 +848,12 @@ func (db *DB) PublishOrderedRootDeltaGroupWithSystemBuilder(ordered []OrderedRoo
 	retired = append(retired, rootRetired...)
 	mergeOrderedRootPublishMetrics(&merged, metrics)
 	vlogRefDelta := refDelta
-	if len(ordered) > 0 {
+	forceRefTrackerRebuild := publishStats.collectionRootDescriptorReachabilityMayChange()
+	if len(ordered) > 0 || forceRefTrackerRebuild {
 		// Non-system roots were applied from deltas, so this commit has no
-		// exact value-log ref delta for their pointer changes. Keep GC
+		// exact value-log ref delta for their pointer changes. Collection
+		// descriptors also make non-system roots part of reachability, and the
+		// system-root ref delta is not exact for those roots. Keep GC
 		// reachability conservative by invalidating the tracker after commit.
 		if vlogRefDelta != nil {
 			releaseValueLogRefDelta(vlogRefDelta)
@@ -780,7 +874,7 @@ func (db *DB) PublishOrderedRootDeltaGroupWithSystemBuilder(ordered []OrderedRoo
 		return 0, nil, errors.New("concurrent modification detected during ordered root group publish")
 	}
 
-	if len(ordered) == 0 && vlogRefDelta == nil {
+	if len(ordered) == 0 && !forceRefTrackerRebuild && vlogRefDelta == nil {
 		vlogRefDelta = db.newNoopValueLogRefDeltaIfTrackable(baseSeq)
 	}
 	if err := db.finalizeCommit(userRoot, newSystemRoot, retired, false, merged, nil, true, vlogRefDelta, nil, nil); err != nil {
@@ -965,7 +1059,18 @@ func (db *DB) publishOrderedRootGroup(systemIter iterator.UnsafeIterator, ordere
 		return 0, nil, errors.New("concurrent modification detected during ordered root group publish")
 	}
 
-	if vlogRefDelta == nil {
+	forceRefTrackerRebuild := systemStats.collectionRootDescriptorReachabilityMayChange()
+	if forceRefTrackerRebuild {
+		// Collection descriptors make non-system roots part of value-log
+		// reachability. The system-root ref delta alone is not an exact commit
+		// delta for those roots, so force the tracker to rebuild from the full
+		// maintenance root set.
+		if vlogRefDelta != nil {
+			releaseValueLogRefDelta(vlogRefDelta)
+		}
+		vlogRefDelta = nil
+	}
+	if vlogRefDelta == nil && !forceRefTrackerRebuild {
 		vlogRefDelta = db.newNoopValueLogRefDeltaIfTrackable(baseSeq)
 	}
 	if err := db.finalizeCommit(userRoot, newSystemRoot, retired, false, merged, nil, true, vlogRefDelta, nil, nil); err != nil {

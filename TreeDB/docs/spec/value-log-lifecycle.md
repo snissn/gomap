@@ -25,7 +25,9 @@ Reachability is defined by pointer references found in index trees.
 `ValueLogGC` computes this by scanning:
 
 - user tree,
-- system tree.
+- system tree,
+- collection root trees referenced by system-tree descriptors under
+  `collections/root/...`.
 
 Entries with `node.FlagPointer` and `IsValueLogFileID(ptr.FileID)` mark a segment as referenced.
 

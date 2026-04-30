@@ -704,10 +704,12 @@ func (db *DB) scanLeafGenerationLiveStats(ctx context.Context, snap *Snapshot) (
 		memo:          make(map[uint64]leafGenerationSubtreeStats, 64),
 		cacheEnabled:  !verifyAlways,
 	}
-	for _, rootID := range []uint64{snap.state.RootPageID, snap.state.SystemRootPageID} {
-		if rootID == 0 {
-			continue
-		}
+	roots, err := maintenanceRootsForSnapshot(snap)
+	if err != nil {
+		return leafGenerationLiveScanStats{}, err
+	}
+	for _, root := range roots {
+		rootID := root.rootID
 		if page.IsLeafRefID(rootID) {
 			var err error
 			stats.Generations, err = db.scanLeafGenerationPtrTotals(scan, stats.Generations, page.DecodeLeafRefID(rootID))
