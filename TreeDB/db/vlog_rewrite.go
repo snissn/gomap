@@ -18,11 +18,13 @@ import (
 
 	"github.com/snissn/compress/zstd"
 	"github.com/snissn/gomap/TreeDB/batch"
+	"github.com/snissn/gomap/TreeDB/internal/adaptive"
 	"github.com/snissn/gomap/TreeDB/internal/bulk"
 	"github.com/snissn/gomap/TreeDB/internal/compression"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/leafrefscan"
 	"github.com/snissn/gomap/TreeDB/internal/lockfile"
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/outerleaf"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
@@ -219,6 +221,14 @@ type rewriteCandidate struct {
 	key         []byte
 	oldPtr      page.ValuePtr
 	sourceBytes int64
+}
+
+type collectionRewriteRootState struct {
+	descriptorKey     []byte
+	descriptorAliases [][]byte
+	rootID            uint64
+	systemRoot        uint64
+	storagePolicy     OrderedRootStoragePolicy
 }
 
 type rewriteSourceSelectionStats struct {
@@ -1748,7 +1758,7 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 	}
 	selectedSourceBytes := int64(0)
 
-	flushBatch := func() error {
+	flushBatch := func(root maintenanceRoot, collectionState *collectionRewriteRootState) error {
 		if len(candidates) == 0 {
 			return nil
 		}
@@ -1830,7 +1840,7 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 			lastRegisteredCreatedID = id
 			hasLastRegisteredID = true
 		}
-		if err := db.applyRewriteSwapBatch(swaps, opts.SyncEachBatch); err != nil {
+		if err := db.applyRewriteSwapBatchToMaintenanceRoot(root, collectionState, swaps, opts.SyncEachBatch); err != nil {
 			return err
 		}
 		candidates = candidates[:0]
@@ -1843,90 +1853,132 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 	}
 
 	snap := db.AcquireSnapshot()
-	if snap == nil || snap.state == nil {
+	if snap == nil {
+		err = fmt.Errorf("missing snapshot")
 		closeRewriteSnapshot(&err, snap)
-		return stats, fmt.Errorf("missing snapshot state")
+		return stats, err
 	}
-	it := snap.tree.IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
-	for ; it.Valid(); it.Next() {
-		if err := ctx.Err(); err != nil {
-			canceledErr = err
-			break
+	if snap.state == nil {
+		err = fmt.Errorf("missing snapshot state")
+		closeRewriteSnapshot(&err, snap)
+		return stats, err
+	}
+	if snap.idx == nil {
+		err = fmt.Errorf("missing snapshot index")
+		closeRewriteSnapshot(&err, snap)
+		return stats, err
+	}
+	if snap.idx.pager == nil {
+		err = fmt.Errorf("missing snapshot pager")
+		closeRewriteSnapshot(&err, snap)
+		return stats, err
+	}
+	roots, err := maintenanceRootsForSnapshot(snap)
+	if err != nil {
+		closeRewriteSnapshot(&err, snap)
+		return stats, err
+	}
+	collectionStates, err := valueLogRewriteCollectionRootStates(snap, roots)
+	if err != nil {
+		closeRewriteSnapshot(&err, snap)
+		return stats, err
+	}
+	stopScanning := false
+	scanRoot := func(root maintenanceRoot, collectionState *collectionRewriteRootState) error {
+		if root.rootID == 0 {
+			return nil
 		}
-		_, oldPtr, flags := it.UnsafeEntry()
-		if flags&node.FlagPointer == 0 || !page.IsValueLogFileID(oldPtr.FileID) {
-			continue
-		}
-		if restrictSource {
-			if restrictSingleID {
-				if oldPtr.FileID != singleSourceID {
-					continue
+		it := tree.New(snap.idx.pager, &snap.reader, root.rootID).
+			IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
+		defer func() { _ = it.Close() }()
+		for ; it.Valid(); it.Next() {
+			if err := ctx.Err(); err != nil {
+				canceledErr = err
+				break
+			}
+			_, oldPtr, flags := it.UnsafeEntry()
+			if flags&node.FlagPointer == 0 || !page.IsValueLogFileID(oldPtr.FileID) {
+				continue
+			}
+			if restrictSource {
+				if restrictSingleID {
+					if oldPtr.FileID != singleSourceID {
+						continue
+					}
+				} else {
+					if _, ok := sourceIDs[oldPtr.FileID]; !ok {
+						continue
+					}
 				}
-			} else {
-				if _, ok := sourceIDs[oldPtr.FileID]; !ok {
-					continue
+				if sourceChunkSet != nil {
+					ok, chunkErr := rewriteSourceChunkSelected(oldPtr, sourceChunkSet, sourceChunkBytes)
+					if chunkErr != nil {
+						return chunkErr
+					}
+					if !ok {
+						continue
+					}
 				}
 			}
-			if sourceChunkSet != nil {
-				ok, chunkErr := rewriteSourceChunkSelected(oldPtr, sourceChunkSet, sourceChunkBytes)
-				if chunkErr != nil {
-					_ = it.Close()
-					closeRewriteSnapshot(&err, snap)
-					return stats, chunkErr
+			unsafeKey := it.UnsafeKey()
+			sourceBytes := int64(0)
+			if maxCopiedBytes > 0 {
+				recordLen, err := db.valueLogRecordLengthForRewrite(oldPtr)
+				if err != nil {
+					return err
 				}
-				if !ok {
-					continue
+				sourceBytes = int64(recordLen)
+				if selectedSourceBytes > 0 && selectedSourceBytes+sourceBytes > maxCopiedBytes {
+					stopScanning = true
+					break
 				}
 			}
-		}
-		unsafeKey := it.UnsafeKey()
-		sourceBytes := int64(0)
-		if maxCopiedBytes > 0 {
-			recordLen, err := db.valueLogRecordLengthForRewrite(oldPtr)
-			if err != nil {
-				_ = it.Close()
-				closeRewriteSnapshot(&err, snap)
-				return stats, err
+			keyStart := len(candidateKeyArena)
+			candidateKeyArena = append(candidateKeyArena, unsafeKey...)
+			key := candidateKeyArena[keyStart:len(candidateKeyArena):len(candidateKeyArena)]
+			candidates = append(candidates, rewriteCandidate{
+				key:         key,
+				oldPtr:      oldPtr,
+				sourceBytes: sourceBytes,
+			})
+			selectedSourceBytes += sourceBytes
+			if len(candidates) >= batchSize {
+				if err := flushBatch(root, collectionState); err != nil {
+					return err
+				}
 			}
-			sourceBytes = int64(recordLen)
-			if selectedSourceBytes > 0 && selectedSourceBytes+sourceBytes > maxCopiedBytes {
+			if maxCopiedBytes > 0 && selectedSourceBytes >= maxCopiedBytes {
+				stopScanning = true
 				break
 			}
 		}
-		keyStart := len(candidateKeyArena)
-		candidateKeyArena = append(candidateKeyArena, unsafeKey...)
-		key := candidateKeyArena[keyStart:len(candidateKeyArena):len(candidateKeyArena)]
-		candidates = append(candidates, rewriteCandidate{
-			key:         key,
-			oldPtr:      oldPtr,
-			sourceBytes: sourceBytes,
-		})
-		selectedSourceBytes += sourceBytes
-		if len(candidates) >= batchSize {
-			if err := flushBatch(); err != nil {
-				_ = it.Close()
-				closeRewriteSnapshot(&err, snap)
-				return stats, err
-			}
+		if err := it.Error(); err != nil {
+			return err
 		}
-		if maxCopiedBytes > 0 && selectedSourceBytes >= maxCopiedBytes {
+		if canceledErr == nil {
+			if err := flushBatch(root, collectionState); err != nil {
+				return err
+			}
+		} else {
+			// Stop publishing further swaps after cancellation; cleanup below still
+			// reconciles already-committed rewrite batches and rewrite-created files.
+			swaps = swaps[:0]
+			candidates = candidates[:0]
+		}
+		return nil
+	}
+	for i, root := range roots {
+		if stopScanning || canceledErr != nil {
 			break
 		}
-	}
-	iterErr := it.Error()
-	_ = it.Close()
-	closeRewriteSnapshot(&err, snap)
-	if iterErr != nil {
-		return stats, iterErr
-	}
-	if canceledErr == nil {
-		if err := flushBatch(); err != nil {
+		if err := scanRoot(root, collectionStates[i]); err != nil {
+			closeRewriteSnapshot(&err, snap)
 			return stats, err
 		}
-	} else {
-		// Stop publishing further swaps after cancellation; cleanup below still
-		// reconciles already-committed rewrite batches and rewrite-created files.
-		swaps = swaps[:0]
+	}
+	closeRewriteSnapshot(&err, snap)
+	if err != nil {
+		return stats, err
 	}
 	if err := writer.Sync(); err != nil {
 		return stats, err
@@ -2209,6 +2261,70 @@ func scanValueLogFileMaxRID(seg *valuelog.File) (uint64, error) {
 	return maxRID, nil
 }
 
+func valueLogRewriteCollectionRootStates(snap *Snapshot, roots []maintenanceRoot) ([]*collectionRewriteRootState, error) {
+	states := make([]*collectionRewriteRootState, len(roots))
+	if snap == nil || snap.state == nil || snap.idx == nil || snap.idx.pager == nil {
+		return states, nil
+	}
+	var (
+		descriptorAliases map[uint64][][]byte
+		descriptorsLoaded bool
+	)
+	for i, root := range roots {
+		if root.kind != maintenanceRootCollection || root.rootID == 0 {
+			continue
+		}
+		if !descriptorsLoaded {
+			descriptors, err := vacuumCollectCollectionRootDescriptors(snap.idx.pager, &snap.reader, snap.state.SystemRootPageID)
+			if err != nil {
+				return nil, fmt.Errorf("vlog-rewrite: collect collection root descriptors: %w", err)
+			}
+			descriptorAliases = valueLogRewriteCollectionRootDescriptorAliasMap(descriptors)
+			descriptorsLoaded = true
+		}
+		storagePolicy, err := valueLogRewriteCollectionRootStoragePolicy(snap.idx.pager, root.rootID)
+		if err != nil {
+			return nil, fmt.Errorf("vlog-rewrite: inspect collection root %q storage: %w", string(root.descriptorKey), err)
+		}
+		aliases := cloneCollectionRootDescriptorAliases(descriptorAliases[root.rootID])
+		if len(aliases) == 0 && len(root.descriptorKey) > 0 {
+			aliases = append(aliases, append([]byte(nil), root.descriptorKey...))
+		}
+		states[i] = &collectionRewriteRootState{
+			descriptorKey:     append([]byte(nil), root.descriptorKey...),
+			descriptorAliases: aliases,
+			rootID:            root.rootID,
+			systemRoot:        snap.state.SystemRootPageID,
+			storagePolicy:     storagePolicy,
+		}
+	}
+	return states, nil
+}
+
+func valueLogRewriteCollectionRootDescriptorAliasMap(descriptors []vacuumCollectionRootDescriptor) map[uint64][][]byte {
+	if len(descriptors) == 0 {
+		return nil
+	}
+	aliasesByRoot := make(map[uint64][][]byte)
+	for _, descriptor := range descriptors {
+		if descriptor.rootID != 0 {
+			aliasesByRoot[descriptor.rootID] = append(aliasesByRoot[descriptor.rootID], append([]byte(nil), descriptor.key...))
+		}
+	}
+	return aliasesByRoot
+}
+
+func cloneCollectionRootDescriptorAliases(aliases [][]byte) [][]byte {
+	if len(aliases) == 0 {
+		return nil
+	}
+	out := make([][]byte, 0, len(aliases))
+	for _, alias := range aliases {
+		out = append(out, append([]byte(nil), alias...))
+	}
+	return out
+}
+
 func (db *DB) applyRewriteSwapBatch(swaps []rewriteSwap, sync bool) error {
 	if len(swaps) == 0 {
 		return nil
@@ -2223,6 +2339,267 @@ func (db *DB) applyRewriteSwapBatch(swaps []rewriteSwap, sync bool) error {
 		}
 	}
 	return db.applyRewriteSwapBatchSerialized(swaps, sync)
+}
+
+func (db *DB) applyRewriteSwapBatchToMaintenanceRoot(root maintenanceRoot, collectionState *collectionRewriteRootState, swaps []rewriteSwap, sync bool) error {
+	switch root.kind {
+	case maintenanceRootUser:
+		return db.applyRewriteSwapBatch(swaps, sync)
+	case maintenanceRootSystem:
+		return db.applyRewriteSwapBatchToSystemRoot(swaps, sync)
+	case maintenanceRootCollection:
+		return db.applyRewriteSwapBatchToCollectionRoot(collectionState, swaps, sync)
+	default:
+		return fmt.Errorf("vlog-rewrite: unknown maintenance root kind %d", root.kind)
+	}
+}
+
+func (db *DB) applyRewriteSwapBatchToSystemRoot(swaps []rewriteSwap, sync bool) error {
+	if len(swaps) == 0 {
+		return nil
+	}
+	db.writeMu.Lock()
+	defer db.writeMu.Unlock()
+
+	if db.readOnly {
+		return ErrReadOnly
+	}
+	idx := db.idx.Load()
+	if idx == nil {
+		return fmt.Errorf("vlog-rewrite: system root: missing index")
+	}
+	state := db.state.Load()
+	if state == nil {
+		return fmt.Errorf("vlog-rewrite: system root: missing backend state")
+	}
+
+	db.mu.RLock()
+	userRoot := db.meta.UserRootPageID
+	systemRoot := db.meta.SystemRootPageID
+	baseSeq := db.meta.CommitSeq
+	db.mu.RUnlock()
+	if systemRoot == 0 {
+		return nil
+	}
+
+	systemOpts := systemRootOrderedPublishOptions(db)
+	trackValueLogRefDelta := db.canTrackRewriteValueLogRefDelta(baseSeq, systemOpts.outerLeavesInValueLog)
+	newSystemRoot, retired, metrics, touched, vlogRefDelta, changed, err := db.applyRewriteSwapsToRootLocked(idx, state, systemRoot, systemOpts, swaps, trackValueLogRefDelta)
+	if err != nil || !changed {
+		return err
+	}
+	defer func() {
+		if vlogRefDelta != nil {
+			releaseValueLogRefDelta(vlogRefDelta)
+		}
+	}()
+	if err := db.finalizeCommit(userRoot, newSystemRoot, retired, sync, metrics, touched, systemOpts.outerLeavesInValueLog, vlogRefDelta, nil, nil); err != nil {
+		return err
+	}
+	vlogRefDelta = nil
+	db.clearLeafGenerationReachabilityCaches()
+	return nil
+}
+
+func (db *DB) applyRewriteSwapBatchToCollectionRoot(target *collectionRewriteRootState, swaps []rewriteSwap, sync bool) error {
+	if len(swaps) == 0 {
+		return nil
+	}
+	if target == nil || len(target.descriptorKey) == 0 {
+		return errors.New("vlog-rewrite: missing collection root descriptor key")
+	}
+
+	db.writeMu.Lock()
+	defer db.writeMu.Unlock()
+
+	if db.readOnly {
+		return ErrReadOnly
+	}
+	idx := db.idx.Load()
+	if idx == nil {
+		return fmt.Errorf("vlog-rewrite: collection root: missing index")
+	}
+	state := db.state.Load()
+	if state == nil {
+		return fmt.Errorf("vlog-rewrite: collection root: missing backend state")
+	}
+
+	db.mu.RLock()
+	userRoot := db.meta.UserRootPageID
+	systemRoot := db.meta.SystemRootPageID
+	baseSeq := db.meta.CommitSeq
+	db.mu.RUnlock()
+	if systemRoot == 0 {
+		return nil
+	}
+
+	if target.systemRoot != systemRoot || target.rootID == 0 || len(target.descriptorAliases) == 0 {
+		reader := newValueReader(state.ValueLogSet)
+		collectionRoot, descriptorAliases, ok, err := lookupCollectionRootDescriptorAliases(idx.pager, reader, systemRoot, target.descriptorKey, target.descriptorAliases, target.rootID)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			if target.rootID != 0 {
+				return nil
+			}
+			return fmt.Errorf("vlog-rewrite: collection root descriptor %q not found", string(target.descriptorKey))
+		}
+		if collectionRoot == 0 {
+			return fmt.Errorf("vlog-rewrite: collection root descriptor %q has empty root", string(target.descriptorKey))
+		}
+		target.rootID = collectionRoot
+		target.descriptorAliases = descriptorAliases
+		target.systemRoot = systemRoot
+	}
+	collectionRoot := target.rootID
+	currentStoragePolicy, err := valueLogRewriteCollectionRootStoragePolicy(idx.pager, collectionRoot)
+	if err != nil {
+		return fmt.Errorf("vlog-rewrite: inspect current collection root %q storage: %w", string(target.descriptorKey), err)
+	}
+	target.storagePolicy = currentStoragePolicy
+	rootOpts, err := db.orderedRootPublishOptionsForPolicy(target.storagePolicy)
+	if err != nil {
+		return err
+	}
+	trackValueLogRefDelta := db.canTrackRewriteValueLogRefDelta(baseSeq, rootOpts.outerLeavesInValueLog)
+	newCollectionRoot, retired, metrics, touched, vlogRefDelta, changed, err := db.applyRewriteSwapsToRootLocked(idx, state, collectionRoot, rootOpts, swaps, trackValueLogRefDelta)
+	if err != nil || !changed {
+		return err
+	}
+	defer func() {
+		if vlogRefDelta != nil {
+			releaseValueLogRefDelta(vlogRefDelta)
+		}
+	}()
+	if newCollectionRoot == collectionRoot {
+		if err := db.finalizeCommit(userRoot, systemRoot, retired, sync, metrics, touched, rootOpts.outerLeavesInValueLog, vlogRefDelta, nil, nil); err != nil {
+			return err
+		}
+		vlogRefDelta = nil
+		db.clearLeafGenerationReachabilityCaches()
+		return nil
+	}
+
+	encodedRoot := encodeCollectionRootDescriptorRootID(newCollectionRoot)
+	systemDelta := memtable.NewAppendOnlyWithEntryCapacity(len(target.descriptorAliases))
+	for _, aliasKey := range target.descriptorAliases {
+		systemDelta.Set(aliasKey, encodedRoot)
+	}
+	systemDelta.Freeze()
+	systemIter := systemDelta.NewIterator(nil, nil)
+	systemOpts := systemRootOrderedPublishOptions(db)
+	newSystemRoot, systemRetired, systemMetrics, err := db.publishOrderedRootDeltaIterator(systemRoot, systemIter, systemOpts)
+	if err != nil {
+		return err
+	}
+	retired = append(retired, systemRetired...)
+	mergeOrderedRootPublishMetrics(&metrics, systemMetrics)
+	forceValueLogRefresh := rootOpts.outerLeavesInValueLog || systemOpts.outerLeavesInValueLog
+	if err := db.finalizeCommit(userRoot, newSystemRoot, retired, sync, metrics, touched, forceValueLogRefresh, vlogRefDelta, nil, nil); err != nil {
+		return err
+	}
+	vlogRefDelta = nil
+	target.rootID = newCollectionRoot
+	target.systemRoot = newSystemRoot
+	db.clearLeafGenerationReachabilityCaches()
+	return nil
+}
+
+func (db *DB) applyRewriteSwapsToRootLocked(idx *indexGen, state *DBState, rootID uint64, opts orderedRootPublishOptions, swaps []rewriteSwap, trackValueLogRefDelta bool) (uint64, []uint64, adaptive.Metrics, []uint32, *valueLogRefDelta, bool, error) {
+	var metrics adaptive.Metrics
+	if len(swaps) == 0 || rootID == 0 {
+		return rootID, nil, metrics, nil, nil, false, nil
+	}
+	tr := tree.New(idx.pager, newValueReader(state.ValueLogSet), rootID)
+	b := batch.Acquire(db.valueLogManager, db.InlineThreshold())
+	defer batch.Release(b)
+	b.Reserve(len(swaps))
+	vlogRefDelta, err := collectRewriteSwapPointerMatches(tr, b, swaps, trackValueLogRefDelta)
+	if err != nil {
+		return rootID, nil, metrics, nil, nil, false, err
+	}
+	if len(b.SortedEntries()) == 0 {
+		releaseValueLogRefDelta(vlogRefDelta)
+		return rootID, nil, metrics, nil, nil, false, nil
+	}
+	noteRewriteSwapTouchedSegments(b, swaps)
+	touched := append([]uint32(nil), b.TouchedValueLogSegments()...)
+	rootZipper, err := db.orderedRootZipperForOptions(idx, opts)
+	if err != nil {
+		releaseValueLogRefDelta(vlogRefDelta)
+		return rootID, nil, metrics, nil, nil, false, err
+	}
+	newRoot, retired, metrics, err := rootZipper.Apply(rootID, b)
+	if err != nil {
+		releaseValueLogRefDelta(vlogRefDelta)
+		return rootID, nil, metrics, nil, nil, false, err
+	}
+	return newRoot, retired, metrics, touched, vlogRefDelta, true, nil
+}
+
+func (db *DB) canTrackRewriteValueLogRefDelta(baseSeq uint64, outerLeavesInValueLog bool) bool {
+	return db != nil && db.valueLogRefTracker != nil && db.valueLogRefTracker.canTrack(baseSeq) && !outerLeavesInValueLog
+}
+
+func lookupCollectionRootDescriptorAliases(p *pager.Pager, reader tree.SlabReader, systemRootID uint64, key []byte, aliasKeys [][]byte, preferredRoot uint64) (uint64, [][]byte, bool, error) {
+	if p == nil {
+		return 0, nil, false, errors.New("vlog-rewrite: missing pager")
+	}
+	if systemRootID == 0 || (len(key) == 0 && len(aliasKeys) == 0) {
+		return 0, nil, false, nil
+	}
+	descriptors, err := vacuumCollectCollectionRootDescriptors(p, reader, systemRootID)
+	if err != nil {
+		return 0, nil, false, err
+	}
+	var rootID, firstMatchedRoot uint64
+	for _, descriptor := range descriptors {
+		if preferredRoot != 0 && descriptor.rootID == preferredRoot {
+			rootID = preferredRoot
+			break
+		}
+		if !collectionRootDescriptorKeyMatches(descriptor.key, key, aliasKeys) {
+			continue
+		}
+		if descriptor.rootID == 0 {
+			continue
+		}
+		if firstMatchedRoot == 0 {
+			firstMatchedRoot = descriptor.rootID
+		}
+		if rootID == 0 && bytes.Equal(descriptor.key, key) {
+			rootID = descriptor.rootID
+		}
+	}
+	if rootID == 0 {
+		if preferredRoot != 0 {
+			return 0, nil, false, nil
+		}
+		rootID = firstMatchedRoot
+	}
+	if rootID == 0 {
+		return 0, nil, false, nil
+	}
+	aliases := make([][]byte, 0, 1)
+	for _, descriptor := range descriptors {
+		if descriptor.rootID == rootID {
+			aliases = append(aliases, append([]byte(nil), descriptor.key...))
+		}
+	}
+	return rootID, aliases, true, nil
+}
+
+func collectionRootDescriptorKeyMatches(got, primary []byte, aliases [][]byte) bool {
+	if len(primary) > 0 && bytes.Equal(got, primary) {
+		return true
+	}
+	for _, alias := range aliases {
+		if bytes.Equal(got, alias) {
+			return true
+		}
+	}
+	return false
 }
 
 func (db *DB) applyRewriteSwapBatchOptimistic(swaps []rewriteSwap, sync bool) (bool, error) {
@@ -2255,7 +2632,7 @@ func (db *DB) applyRewriteSwapBatchOptimistic(swaps []rewriteSwap, sync bool) (b
 	defer batch.Release(b)
 	b.Reserve(len(swaps))
 
-	trackValueLogRefDelta := db.valueLogRefTracker != nil && db.valueLogRefTracker.canTrack(baseSeq) && !db.indexOuterLeavesInValueLog
+	trackValueLogRefDelta := db.canTrackRewriteValueLogRefDelta(baseSeq, db.indexOuterLeavesInValueLog)
 	rewriteDelta, err := collectRewriteSwapPointerMatches(tr, b, swaps, trackValueLogRefDelta)
 	if err != nil {
 		return false, err
@@ -2347,7 +2724,7 @@ func (db *DB) applyRewriteSwapBatchSerialized(swaps []rewriteSwap, sync bool) er
 	defer batch.Release(b)
 	b.Reserve(len(swaps))
 
-	trackValueLogRefDelta := db.valueLogRefTracker != nil && db.valueLogRefTracker.canTrack(baseSeq) && !db.indexOuterLeavesInValueLog
+	trackValueLogRefDelta := db.canTrackRewriteValueLogRefDelta(baseSeq, db.indexOuterLeavesInValueLog)
 	rewriteDelta, err := collectRewriteSwapPointerMatches(tr, b, swaps, trackValueLogRefDelta)
 	if err != nil {
 		return err
@@ -2859,6 +3236,17 @@ func valueLogRewriteCollectionRootUsesLeafLog(oldPager *pager.Pager, rootID uint
 		return false, err
 	}
 	return allLeafRefs, nil
+}
+
+func valueLogRewriteCollectionRootStoragePolicy(oldPager *pager.Pager, rootID uint64) (OrderedRootStoragePolicy, error) {
+	useLeafLog, err := valueLogRewriteCollectionRootUsesLeafLog(oldPager, rootID)
+	if err != nil {
+		return OrderedRootStorageDefault, err
+	}
+	if useLeafLog {
+		return OrderedRootStorageValueLogLeaves, nil
+	}
+	return OrderedRootStoragePagerLeaves, nil
 }
 
 type rewriteCreatedSegment struct {
