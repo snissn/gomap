@@ -182,6 +182,18 @@ func TestParseConfigValidation(t *testing.T) {
 	}
 }
 
+func TestRunEmailFindPhaseRequiresEmailIndex(t *testing.T) {
+	if runEmailFindPhase(config{Reads: 10, SecondaryIndexes: 0}) {
+		t.Fatal("email phase should be skipped without an email index")
+	}
+	if !runEmailFindPhase(config{Reads: 10, SecondaryIndexes: 1}) {
+		t.Fatal("email phase should run when the email index exists")
+	}
+	if runEmailFindPhase(config{Reads: 0, SecondaryIndexes: 1}) {
+		t.Fatal("email phase should be skipped when reads are disabled")
+	}
+}
+
 func TestWriteResultSupportsGenericWriter(t *testing.T) {
 	result := &benchmarkResult{
 		Target:           "treedb",
