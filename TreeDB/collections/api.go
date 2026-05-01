@@ -38,7 +38,6 @@ const (
 	DefaultIndexedWriteMemtableDirectBatchDocuments = DefaultIndexedWriteMemtableMaxDocuments / 4
 	defaultCollectionUpdateCombineMaxBatch          = 256
 	collectionUpdateCombineIdleTTL                  = 30 * time.Second
-	collectionUpdateCombinerStopTimeout             = 5 * time.Second
 )
 
 var (
@@ -3331,7 +3330,7 @@ func (combiner *collectionUpdateCombiner) stop() {
 		return
 	}
 	_ = combiner.closeRequests()
-	combiner.waitDoneWithTimeout(collectionUpdateCombinerStopTimeout)
+	combiner.waitDone()
 }
 
 func (combiner *collectionUpdateCombiner) waitDone() {
@@ -3339,28 +3338,6 @@ func (combiner *collectionUpdateCombiner) waitDone() {
 		return
 	}
 	<-combiner.done
-}
-
-func (combiner *collectionUpdateCombiner) waitDoneWithTimeout(timeout time.Duration) bool {
-	if combiner == nil || combiner.done == nil {
-		return true
-	}
-	if timeout <= 0 {
-		select {
-		case <-combiner.done:
-			return true
-		default:
-			return false
-		}
-	}
-	timer := time.NewTimer(timeout)
-	defer timer.Stop()
-	select {
-	case <-combiner.done:
-		return true
-	case <-timer.C:
-		return false
-	}
 }
 
 func (combiner *collectionUpdateCombiner) closeRequests() bool {
