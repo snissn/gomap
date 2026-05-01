@@ -3381,8 +3381,17 @@ func (combiner *collectionUpdateCombiner) runBatch(batch []collectionUpdateCombi
 			Update:     recoverCollectionUpdateCallback(req.update),
 		}
 	}
-	results, err := batch[0].collection.UpdateBatch(items)
+	results, batched, err := batch[0].collection.UpdateBatchIfNoSecondaryUniqueIndexes(items)
+	if !batched && err == nil {
+		for _, req := range batch {
+			completeUpdateCombineRequest(req, runUpdateCombineDirect(req))
+		}
+		return
+	}
 	if err != nil {
+		if completeUpdateCombineBatchWithItemFallback(batch, err) {
+			return
+		}
 		completeUpdateCombineBatchWithError(batch, err)
 		return
 	}
@@ -3429,6 +3438,28 @@ func completeUpdateCombineBatchWithError(batch []collectionUpdateCombineRequest,
 	for _, req := range batch {
 		completeUpdateCombineRequest(req, collectionUpdateCombineResult{err: err})
 	}
+}
+
+func completeUpdateCombineBatchWithItemFallback(batch []collectionUpdateCombineRequest, err error) bool {
+	var itemErr *UpdateBatchItemError
+	if !errors.As(err, &itemErr) {
+		return false
+	}
+	if itemErr.Index < 0 || itemErr.Index >= len(batch) {
+		return false
+	}
+	for i, req := range batch {
+		if i == itemErr.Index {
+			reqErr := itemErr.Err
+			if reqErr == nil {
+				reqErr = err
+			}
+			completeUpdateCombineRequest(req, collectionUpdateCombineResult{err: reqErr})
+			continue
+		}
+		completeUpdateCombineRequest(req, runUpdateCombineDirect(req))
+	}
+	return true
 }
 
 func completeUpdateCombineRequest(req collectionUpdateCombineRequest, result collectionUpdateCombineResult) {
