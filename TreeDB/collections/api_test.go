@@ -42,8 +42,41 @@ func TestCollectionGetNilDBReturnsError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	if !strings.Contains(err.Error(), "db is nil") {
+	if !errors.Is(err, errCollectionDBNil) {
 		t.Fatalf("Get nil db error=%v", err)
+	}
+}
+
+func TestCollectionManagerOpenCollectionNilDBReturnsErrCollectionDBNil(t *testing.T) {
+	mgr := NewCollectionManager(nil)
+	_, err := mgr.OpenCollection("users")
+	if !errors.Is(err, errCollectionDBNil) {
+		t.Fatalf("OpenCollection nil db err=%v want errCollectionDBNil", err)
+	}
+}
+
+func TestCollectionManagerOpenCollectionCacheRejectsClosedDB(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	if _, err := mgr.OpenCollection("users"); err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("close db: %v", err)
+	}
+
+	if _, err := mgr.OpenCollection("users"); !errors.Is(err, backenddb.ErrClosed) {
+		t.Fatalf("OpenCollection after close err=%v want ErrClosed", err)
+	}
+	if _, err := mgr.OpenCollection(""); !errors.Is(err, backenddb.ErrClosed) {
+		t.Fatalf("OpenCollection invalid name after close err=%v want ErrClosed", err)
 	}
 }
 
@@ -2292,6 +2325,122 @@ func TestCollectionCachedCatalogUsesCommitSeq(t *testing.T) {
 	}
 	if got, want := refreshed.rootID(rootName), catalog.rootID(rootName); got != want {
 		t.Fatalf("refreshed root=%d want %d", got, want)
+	}
+}
+
+func TestOpenCollectionWriteDomainCatalogCacheUsesCommitSeq(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("u1")}, [][]byte{[]byte(`{"name":"ada"}`)}); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	state := d.State()
+	domain := mgr.existingWriteDomainForCollection("users")
+	cached := cachedWriteDomainCatalogForState(domain, state.SystemRootPageID, state.CommitSeq)
+	if cached == nil {
+		t.Fatal("expected populated write-domain catalog cache")
+	}
+	cachedRoot := cached.rootID(collectionPrimaryRootName("users"))
+	if cachedRoot == 0 {
+		t.Fatal("write-domain catalog cache did not include primary root")
+	}
+	if stale := cachedWriteDomainCatalogForState(domain, state.SystemRootPageID, state.CommitSeq+1); stale != nil {
+		t.Fatal("write-domain catalog cache ignored commit sequence")
+	}
+	if err := d.Set([]byte("raw/unrelated"), []byte("value")); err != nil {
+		t.Fatalf("raw set: %v", err)
+	}
+	rawState := d.State()
+	if rawState.SystemRootPageID != state.SystemRootPageID {
+		t.Fatalf("raw write changed system root from %d to %d", state.SystemRootPageID, rawState.SystemRootPageID)
+	}
+	if rawState.CommitSeq == state.CommitSeq {
+		t.Fatalf("raw write did not advance commit seq: before=%d after=%d", state.CommitSeq, rawState.CommitSeq)
+	}
+
+	reopened, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("reopen collection: %v", err)
+	}
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("expected snapshot")
+	}
+	defer func() { _ = snap.Close() }()
+	reopenedCatalog, err := reopened.catalogForSnapshot(snap)
+	if err != nil {
+		t.Fatalf("catalogForSnapshot: %v", err)
+	}
+	if got := reopenedCatalog.rootID(collectionPrimaryRootName("users")); got != cachedRoot {
+		t.Fatalf("OpenCollection refreshed root=%d want %d", got, cachedRoot)
+	}
+	if fresh := cachedWriteDomainCatalogForState(domain, rawState.SystemRootPageID, rawState.CommitSeq); fresh == nil || fresh.rootID(collectionPrimaryRootName("users")) != reopenedCatalog.rootID(collectionPrimaryRootName("users")) {
+		t.Fatal("OpenCollection did not refresh write-domain catalog cache for new commit sequence")
+	}
+	if got, err := reopened.Get([]byte("u1")); err != nil || !bytes.Equal(got, []byte(`{"name":"ada"}`)) {
+		t.Fatalf("reopened get got=%q err=%v", got, err)
+	}
+}
+
+func TestNoIndexInsertAfterRawCommitDoesNotReenterWriteDomainLock(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if err := d.Set([]byte("raw/unrelated"), []byte("value")); err != nil {
+		t.Fatalf("raw set: %v", err)
+	}
+
+	timeout := 5 * time.Second
+	if deadline, ok := t.Deadline(); ok {
+		if remaining := time.Until(deadline) / 2; remaining > 0 && remaining < timeout {
+			timeout = remaining
+		}
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := col.Insert([]byte("u1"), []byte(`{"name":"ada"}`))
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("insert: %v", err)
+		}
+	case <-timer.C:
+		_ = d.Close()
+		select {
+		case err := <-done:
+			t.Fatalf("insert unblocked after timeout with err=%v", err)
+		case <-time.After(time.Second):
+		}
+		t.Fatal("insert blocked while refreshing write-domain catalog after raw commit")
 	}
 }
 
