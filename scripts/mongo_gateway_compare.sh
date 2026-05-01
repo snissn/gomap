@@ -30,6 +30,12 @@ DATABASE_PREFIX="${DATABASE_PREFIX:-mongo_gateway_compare}"
 COLLECTION="${COLLECTION:-docs}"
 TIMEOUT="${TIMEOUT:-20m}"
 TITLE="${TITLE:-Mongo Gateway Benchmark Comparison}"
+TREEDB_PROFILE="${TREEDB_PROFILE:-wal_on_fast}"
+TREEDB_DOCUMENT_FORMAT="${TREEDB_DOCUMENT_FORMAT:-template-v1}"
+TREEDB_DATA_ROOT_STORAGE="${TREEDB_DATA_ROOT_STORAGE:-compressed}"
+TREEDB_INDEX_STATE_ROOT_STORAGE="${TREEDB_INDEX_STATE_ROOT_STORAGE:-compressed}"
+TREEDB_INDEX_ROOT_STORAGE="${TREEDB_INDEX_ROOT_STORAGE:-compressed}"
+TREEDB_MAINTENANCE="${TREEDB_MAINTENANCE:-full}"
 
 usage() {
   cat <<'EOF'
@@ -58,6 +64,9 @@ Options:
   --mongo-uri URI       MongoDB URI for --mongo-mode external.
   --mongo-image IMAGE   Docker image for --mongo-mode docker. Default: mongo:7.
   --timeout DURATION    Per-run benchmark timeout. Default: 20m.
+  --treedb-profile NAME TreeDB profile. Default: wal_on_fast.
+  --treedb-maintenance MODE
+                        TreeDB final maintenance: full, checkpoint, or none.
   --title TITLE         Markdown report title.
   --help                Show this help.
 
@@ -67,7 +76,9 @@ Environment overrides:
   CONCURRENT_READERS, CONCURRENT_READS, CONCURRENT_READS_DIVISOR,
   CONCURRENT_WRITERS, CONCURRENT_WRITES, CONCURRENT_WRITES_DIVISOR,
   MONGO_MODE, MONGO_URI, MONGO_IMAGE, DATABASE_PREFIX, COLLECTION, TIMEOUT,
-  TITLE.
+  TREEDB_PROFILE, TREEDB_DOCUMENT_FORMAT, TREEDB_DATA_ROOT_STORAGE,
+  TREEDB_INDEX_STATE_ROOT_STORAGE, TREEDB_INDEX_ROOT_STORAGE,
+  TREEDB_MAINTENANCE, TITLE.
 EOF
 }
 
@@ -131,6 +142,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --timeout)
       TIMEOUT="$2"
+      shift 2
+      ;;
+    --treedb-profile)
+      TREEDB_PROFILE="$2"
+      shift 2
+      ;;
+    --treedb-maintenance)
+      TREEDB_MAINTENANCE="$2"
       shift 2
       ;;
     --title)
@@ -376,6 +395,10 @@ fi
   echo "concurrent writers: $CONCURRENT_WRITERS"
   echo "concurrent writes: ${CONCURRENT_WRITES:-documents / $CONCURRENT_WRITES_DIVISOR when writers > 0}"
   echo "mongo mode: $MONGO_MODE"
+  echo "treedb profile: $TREEDB_PROFILE"
+  echo "treedb document format: $TREEDB_DOCUMENT_FORMAT"
+  echo "treedb root storage: data=$TREEDB_DATA_ROOT_STORAGE index_state=$TREEDB_INDEX_STATE_ROOT_STORAGE index=$TREEDB_INDEX_ROOT_STORAGE"
+  echo "treedb maintenance: $TREEDB_MAINTENANCE"
   if [[ "$MONGO_MODE" == "docker" ]]; then
     echo "mongo image: $MONGO_IMAGE"
   else
@@ -432,7 +455,13 @@ for docs in $DOCS_LIST; do
     run_target treedb "$docs" "$indexes" "$tree_raw" "$database" "$reads" "$range_reads" "$updates" "$DELETES" \
       "$CONCURRENT_READERS" "$concurrent_reads" "$CONCURRENT_WRITERS" "$concurrent_writes" \
       -treedb-dir "$tree_data" \
-      -keep-treedb-dir
+      -keep-treedb-dir \
+      -treedb-profile "$TREEDB_PROFILE" \
+      -treedb-document-format "$TREEDB_DOCUMENT_FORMAT" \
+      -treedb-data-root-storage "$TREEDB_DATA_ROOT_STORAGE" \
+      -treedb-index-state-root-storage "$TREEDB_INDEX_STATE_ROOT_STORAGE" \
+      -treedb-index-root-storage "$TREEDB_INDEX_ROOT_STORAGE" \
+      -treedb-maintenance "$TREEDB_MAINTENANCE"
     tree_physical=$(du_bytes "$tree_data")
     printf "treedb\t%s\t%s\t%s\t%s\n" "$docs" "$indexes" "$tree_raw_rel" "$tree_physical" >>"$MATRIX"
 
@@ -491,6 +520,10 @@ cat >"$README" <<EOF
 - MongoDB mode: \`$MONGO_MODE\`
 - MongoDB image: \`$MONGO_IMAGE\`
 - benchmark timeout: \`$TIMEOUT\`
+- TreeDB profile: \`$TREEDB_PROFILE\`
+- TreeDB document format: \`$TREEDB_DOCUMENT_FORMAT\`
+- TreeDB root storage: \`data=$TREEDB_DATA_ROOT_STORAGE index_state=$TREEDB_INDEX_STATE_ROOT_STORAGE index=$TREEDB_INDEX_ROOT_STORAGE\`
+- TreeDB maintenance: \`$TREEDB_MAINTENANCE\`
 
 Regenerate from the raw run index:
 

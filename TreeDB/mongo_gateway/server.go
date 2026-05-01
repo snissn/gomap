@@ -27,12 +27,14 @@ const (
 )
 
 type Server struct {
-	MaxMessageLength       int32
-	MaxFindScanDocuments   int
-	MaxCursorRetainedBytes int
-	MaxOpenCursors         int
-	CursorIdleTimeout      time.Duration
-	Collections            *collections.CollectionManager
+	MaxMessageLength          int32
+	MaxFindScanDocuments      int
+	MaxCursorRetainedBytes    int
+	MaxOpenCursors            int
+	CursorIdleTimeout         time.Duration
+	Collections               *collections.CollectionManager
+	DefaultCollectionOptions  collections.CollectionOptions
+	DefaultIndexStoragePolicy collections.RootStoragePolicy
 
 	nextResponseID   atomic.Int32
 	nextConnectionID atomic.Int64

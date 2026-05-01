@@ -46,20 +46,29 @@ func (s *Server) insertResponse(command wire.Document, sequences []wire.Document
 		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
 	}
 
-	ids := make([][]byte, 0, len(documents))
-	stored := make([][]byte, 0, len(documents))
-	for _, doc := range documents {
-		key, encoded, err := prepareInsertDocument(doc)
+	var col *collections.Collection
+	format := s.DefaultCollectionOptions.DocumentFormat
+	if existing, err := s.Collections.OpenCollection(name); err == nil {
+		col = existing
+		format = existing.Meta().Options.DocumentFormat
+	} else if !errors.Is(err, collections.ErrCollectionNotFound) {
+		return commandError(commandCodeBadValue, "BadValue", err.Error())
+	}
+	ids, stored, err := prepareInsertDocuments(documents, format)
+	if err != nil {
+		return commandError(commandCodeBadValue, "BadValue", err.Error())
+	}
+	if col == nil {
+		col, err = s.openOrCreateCollection(name)
 		if err != nil {
 			return commandError(commandCodeBadValue, "BadValue", err.Error())
 		}
-		ids = append(ids, key)
-		stored = append(stored, encoded)
-	}
-
-	col, err := s.openOrCreateCollection(name)
-	if err != nil {
-		return commandError(commandCodeBadValue, "BadValue", err.Error())
+		if actualFormat := col.Meta().Options.DocumentFormat; actualFormat != format {
+			ids, stored, err = prepareInsertDocuments(documents, actualFormat)
+			if err != nil {
+				return commandError(commandCodeBadValue, "BadValue", err.Error())
+			}
+		}
 	}
 	if _, err := col.InsertBatch(ids, stored); err != nil {
 		code, codeName := commandCodeBadValue, "BadValue"
@@ -72,6 +81,20 @@ func (s *Server) insertResponse(command wire.Document, sequences []wire.Document
 		{Key: "ok", Value: 1.0},
 		{Key: "n", Value: int32(len(documents))},
 	})
+}
+
+func prepareInsertDocuments(documents []wire.Document, format collections.DocumentFormat) ([][]byte, [][]byte, error) {
+	ids := make([][]byte, 0, len(documents))
+	stored := make([][]byte, 0, len(documents))
+	for _, doc := range documents {
+		key, encoded, err := prepareInsertDocument(doc, format)
+		if err != nil {
+			return nil, nil, err
+		}
+		ids = append(ids, key)
+		stored = append(stored, encoded)
+	}
+	return ids, stored, nil
 }
 
 func (s *Server) findResponse(command wire.Document, cursorOwner int64) (wire.Document, error) {
@@ -166,7 +189,6 @@ func (s *Server) updateResponse(command wire.Document, sequences []wire.Document
 		}
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}
-
 	for i, update := range updates {
 		filter, err := requiredDocumentField(update, "q")
 		if err != nil {
@@ -195,27 +217,36 @@ func (s *Server) updateResponse(command wire.Document, sequences []wire.Document
 			return commandError(commandCodeFailedToParse, "FailedToParse", fmt.Sprintf("updates[%d]: %v", i, err))
 		}
 
-		matchedOne, modifiedOne, err := col.Update(key, func(stored []byte) ([]byte, bool, error) {
-			raw, err := storedDocumentToBSON(stored)
-			if err != nil {
-				return nil, false, err
+		materializer, err := storedDocumentMaterializerForCollection(col)
+		if err != nil {
+			return commandError(commandCodeBadValue, "BadValue", fmt.Sprintf("updates[%d]: %v", i, err))
+		}
+		matchedOne, modifiedOne, err := func() (bool, bool, error) {
+			if materializer != nil {
+				defer func() { _ = materializer.Close() }()
 			}
-			updated, changed, err := applySetUpdate(raw, updateDoc)
-			if err != nil {
-				return nil, false, fmt.Errorf("updates[%d]: %w", i, err)
-			}
-			updatedKey, encoded, err := prepareInsertDocument(updated)
-			if err != nil {
-				return nil, false, fmt.Errorf("updates[%d]: %w", i, err)
-			}
-			if !bytes.Equal(updatedKey, key) {
-				return nil, false, errors.New("Mongo gateway update cannot modify _id")
-			}
-			if !changed {
-				return nil, false, nil
-			}
-			return encoded, true, nil
-		})
+			return col.Update(key, func(stored []byte) ([]byte, bool, error) {
+				raw, err := storedDocumentToBSON(col, materializer, stored)
+				if err != nil {
+					return nil, false, err
+				}
+				updated, changed, err := applySetUpdate(raw, updateDoc)
+				if err != nil {
+					return nil, false, fmt.Errorf("updates[%d]: %w", i, err)
+				}
+				updatedKey, encoded, err := prepareInsertDocument(updated, col.Meta().Options.DocumentFormat)
+				if err != nil {
+					return nil, false, fmt.Errorf("updates[%d]: %w", i, err)
+				}
+				if !bytes.Equal(updatedKey, key) {
+					return nil, false, errors.New("Mongo gateway update cannot modify _id")
+				}
+				if !changed {
+					return nil, false, nil
+				}
+				return encoded, true, nil
+			})
+		}()
 		if err != nil {
 			code, codeName := commandCodeBadValue, "BadValue"
 			if collections.IsDuplicateKeyError(err) {
@@ -364,7 +395,7 @@ func (s *Server) createIndexesResponse(command wire.Document) (wire.Document, er
 		if err != nil {
 			return commandError(commandCodeBadValue, "BadValue", fmt.Sprintf("indexes[%d]: %v", i, err))
 		}
-		defs = append(defs, def)
+		defs = append(defs, s.applyDefaultIndexOptions(def))
 	}
 
 	createdAutomatically := false
@@ -373,7 +404,7 @@ func (s *Server) createIndexesResponse(command wire.Document) (wire.Document, er
 		if !errors.Is(err, collections.ErrCollectionNotFound) {
 			return commandError(commandCodeBadValue, "BadValue", err.Error())
 		}
-		if _, err := s.Collections.CreateCollection(&collections.CollectionMeta{Name: name}); err != nil {
+		if _, err := s.Collections.CreateCollection(s.defaultCollectionMeta(name)); err != nil {
 			return commandError(commandCodeBadValue, "BadValue", err.Error())
 		}
 		createdAutomatically = true
@@ -790,10 +821,24 @@ func (s *Server) openOrCreateCollection(name string) (*collections.Collection, e
 	if err == nil {
 		return col, nil
 	}
-	if _, createErr := s.Collections.CreateCollection(&collections.CollectionMeta{Name: name}); createErr != nil {
+	if _, createErr := s.Collections.CreateCollection(s.defaultCollectionMeta(name)); createErr != nil {
 		return nil, createErr
 	}
 	return s.Collections.OpenCollection(name)
+}
+
+func (s *Server) defaultCollectionMeta(name string) *collections.CollectionMeta {
+	return &collections.CollectionMeta{
+		Name:    name,
+		Options: s.DefaultCollectionOptions,
+	}
+}
+
+func (s *Server) applyDefaultIndexOptions(def collections.IndexDefinition) collections.IndexDefinition {
+	if def.StoragePolicy == collections.RootStorageDefault {
+		def.StoragePolicy = s.DefaultIndexStoragePolicy
+	}
+	return def
 }
 
 func commandString(doc wire.Document, key string) (string, error) {
@@ -1039,7 +1084,7 @@ func validateMongoDatabaseName(db string) error {
 
 // prepareInsertDocument uses canonical Extended JSON as the temporary collection
 // storage bridge so BSON types can round-trip before a native BSON format exists.
-func prepareInsertDocument(doc wire.Document) ([]byte, []byte, error) {
+func prepareInsertDocument(doc wire.Document, format collections.DocumentFormat) ([]byte, []byte, error) {
 	if err := wire.ValidateDocument(doc); err != nil {
 		return nil, nil, err
 	}
@@ -1067,10 +1112,45 @@ func prepareInsertDocument(doc wire.Document) ([]byte, []byte, error) {
 	if err != nil {
 		return nil, nil, err
 	}
+	if format == collections.DocumentFormatTemplateV1 {
+		stored, err = collections.EncodeTemplateV1DocumentJSON(stored)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
 	return key, stored, nil
 }
 
-func storedDocumentToBSON(stored []byte) (wire.Document, error) {
+func storedDocumentMaterializerForCollection(col *collections.Collection) (*collections.StoredDocumentJSONMaterializer, error) {
+	if col == nil {
+		return nil, nil
+	}
+	switch col.Meta().Options.DocumentFormat {
+	case collections.DocumentFormatDefault, collections.DocumentFormatJSON:
+		return nil, nil
+	default:
+		return col.NewStoredDocumentJSONMaterializer()
+	}
+}
+
+func storedDocumentToBSON(col *collections.Collection, materializer *collections.StoredDocumentJSONMaterializer, stored []byte) (wire.Document, error) {
+	if materializer != nil {
+		materialized, err := materializer.StoredDocumentJSON(stored)
+		if err != nil {
+			// A reused template-v1 resolver can lag a concurrently fetched document.
+			// Retry once with a fresh snapshot before surfacing the original error.
+			if col != nil {
+				if fresh, freshErr := col.StoredDocumentJSON(stored); freshErr == nil {
+					materialized = fresh
+					err = nil
+				}
+			}
+			if err != nil {
+				return nil, err
+			}
+		}
+		stored = materialized
+	}
 	var raw bson.Raw
 	if err := bson.UnmarshalExtJSON(stored, true, &raw); err != nil {
 		return nil, err

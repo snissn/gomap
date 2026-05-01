@@ -10,6 +10,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	treedb "github.com/snissn/gomap/TreeDB"
 )
 
 func TestSummarizeLatencyNearestRank(t *testing.T) {
@@ -56,6 +58,34 @@ func TestCollectDiskSnapshotBreakdown(t *testing.T) {
 	if snapshot.Paths["leaf_vlog"] != 6 {
 		t.Fatalf("leaf_vlog=%d want 6", snapshot.Paths["leaf_vlog"])
 	}
+	if snapshot.Paths["leaf_vlog/value.log"] != 6 {
+		t.Fatalf("leaf_vlog/value.log=%d want 6", snapshot.Paths["leaf_vlog/value.log"])
+	}
+}
+
+func TestCollectDiskSnapshotRootLayoutBreakdown(t *testing.T) {
+	dir := t.TempDir()
+	mainDir := filepath.Join(dir, "maindb")
+	if err := os.Mkdir(mainDir, 0o700); err != nil {
+		t.Fatalf("mkdir maindb: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(mainDir, "index.db"), []byte("1234"), 0o600); err != nil {
+		t.Fatalf("write index: %v", err)
+	}
+
+	snapshot, err := collectDiskSnapshot(dir)
+	if err != nil {
+		t.Fatalf("collect disk snapshot: %v", err)
+	}
+	if snapshot.TotalBytes != 4 {
+		t.Fatalf("total=%d want 4", snapshot.TotalBytes)
+	}
+	if snapshot.Paths["maindb"] != 4 {
+		t.Fatalf("maindb=%d want 4", snapshot.Paths["maindb"])
+	}
+	if snapshot.Paths["maindb/index.db"] != 4 {
+		t.Fatalf("maindb/index.db=%d want 4", snapshot.Paths["maindb/index.db"])
+	}
 }
 
 func TestCollectDiskSnapshotEmptyLeavesPathsNil(t *testing.T) {
@@ -86,6 +116,56 @@ func TestValidateResettableTreeDBDirRejectsDangerousPaths(t *testing.T) {
 	safe := filepath.Join(safeRoot, "treedb")
 	if got, err := validateResettableTreeDBDir(safe); err != nil || got == "" {
 		t.Fatalf("validate safe dir got/err=%q/%v", got, err)
+	}
+}
+
+func TestCloseBenchTargetIsIdempotent(t *testing.T) {
+	var calls int32
+	target := &benchTarget{
+		cleanup: func(context.Context) error {
+			atomic.AddInt32(&calls, 1)
+			return nil
+		},
+	}
+
+	if err := closeBenchTarget(context.Background(), target); err != nil {
+		t.Fatalf("first close: %v", err)
+	}
+	if err := closeBenchTarget(context.Background(), target); err != nil {
+		t.Fatalf("second close: %v", err)
+	}
+	if got := atomic.LoadInt32(&calls); got != 1 {
+		t.Fatalf("cleanup calls=%d want 1", got)
+	}
+	if target.cleanup != nil {
+		t.Fatal("cleanup was not cleared")
+	}
+}
+
+func TestCloseBenchTargetKeepDirPreservesTempDir(t *testing.T) {
+	dir := t.TempDir()
+	target := &benchTarget{
+		treedbDir:       dir,
+		removeTreeDBDir: true,
+		cleanup: func(context.Context) error {
+			return nil
+		},
+	}
+
+	if err := closeBenchTargetKeepDir(context.Background(), target); err != nil {
+		t.Fatalf("close keep dir: %v", err)
+	}
+	if _, err := os.Stat(dir); err != nil {
+		t.Fatalf("dir removed by keep-dir close: %v", err)
+	}
+	if !target.removeTreeDBDir {
+		t.Fatal("removeTreeDBDir was cleared before final cleanup")
+	}
+	if err := closeBenchTarget(context.Background(), target); err != nil {
+		t.Fatalf("final close: %v", err)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("dir still exists after final close: %v", err)
 	}
 }
 
@@ -166,6 +246,8 @@ func TestRedactMongoURI(t *testing.T) {
 func TestParseConfigValidation(t *testing.T) {
 	if _, err := parseConfig([]string{"-bad"}); err == nil || !strings.Contains(err.Error(), "Usage of mongo_gateway_bench") {
 		t.Fatalf("bad flag err=%v want usage", err)
+	} else if !strings.Contains(err.Error(), "default, fast, or compressed") {
+		t.Fatalf("bad flag usage did not document root-storage default: %v", err)
 	}
 	if _, err := parseConfig([]string{"-target", "bad"}); err == nil {
 		t.Fatal("bad target accepted")
@@ -202,6 +284,92 @@ func TestParseConfigValidation(t *testing.T) {
 	if _, err := parseConfig([]string{"-concurrent-reads", "1"}); err == nil {
 		t.Fatal("concurrent-reads without concurrent-readers accepted")
 	}
+}
+
+func TestParseConfigTreeDBCorrectnessDefaults(t *testing.T) {
+	cfg, err := parseConfig(nil)
+	if err != nil {
+		t.Fatalf("parse defaults: %v", err)
+	}
+	if cfg.TreeDBProfile != treedb.ProfileWALOnFast {
+		t.Fatalf("TreeDBProfile=%q want %q", cfg.TreeDBProfile, treedb.ProfileWALOnFast)
+	}
+	if got := string(cfg.TreeDBDocumentFormat); got != "template-v1" {
+		t.Fatalf("TreeDBDocumentFormat=%q want template-v1", got)
+	}
+	if got := string(cfg.TreeDBDataRootStorage); got != "compressed" {
+		t.Fatalf("TreeDBDataRootStorage=%q want compressed", got)
+	}
+	if got := string(cfg.TreeDBIndexStateRootStorage); got != "compressed" {
+		t.Fatalf("TreeDBIndexStateRootStorage=%q want compressed", got)
+	}
+	if got := string(cfg.TreeDBIndexRootStorage); got != "compressed" {
+		t.Fatalf("TreeDBIndexRootStorage=%q want compressed", got)
+	}
+	if cfg.TreeDBMaintenance != treeDBMaintenanceFull {
+		t.Fatalf("TreeDBMaintenance=%q want %q", cfg.TreeDBMaintenance, treeDBMaintenanceFull)
+	}
+}
+
+func TestTreeDBProfileSmokeFastAndWALOnFast(t *testing.T) {
+	if testing.Short() {
+		t.Skip("profile smoke benchmark skipped in short mode")
+	}
+	fast := runTreeDBProfileSmoke(t, treedb.ProfileFast)
+	walOnFast := runTreeDBProfileSmoke(t, treedb.ProfileWALOnFast)
+	ratio := fast / walOnFast
+	if ratio < 1 {
+		ratio = 1 / ratio
+	}
+	t.Logf("fast load_insert_many ops/sec=%.1f wal_on_fast ops/sec=%.1f max ratio=%.2fx", fast, walOnFast, ratio)
+	if ratio > 4.0 {
+		t.Fatalf("fast and wal_on_fast write smoke diverged by %.2fx; fast=%.1f wal_on_fast=%.1f", ratio, fast, walOnFast)
+	}
+}
+
+func runTreeDBProfileSmoke(t *testing.T, profile treedb.Profile) float64 {
+	t.Helper()
+	cfg, err := parseConfig([]string{
+		"-target", "treedb",
+		"-documents", "1000",
+		"-batch-size", "500",
+		"-reads", "0",
+		"-range-reads", "0",
+		"-updates", "0",
+		"-secondary-indexes", "2",
+		"-treedb-profile", string(profile),
+		"-treedb-maintenance", treeDBMaintenanceCheckpoint,
+		"-timeout", "0",
+		"-format", "json",
+	})
+	if err != nil {
+		t.Fatalf("parse smoke config: %v", err)
+	}
+	target, err := openTarget(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("open target for %s: %v", profile, err)
+	}
+	defer func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := closeBenchTarget(cleanupCtx, target); err != nil {
+			t.Errorf("cleanup %s: %v", profile, err)
+		}
+	}()
+	result, err := runBenchmark(context.Background(), cfg, target)
+	if err != nil {
+		t.Fatalf("run benchmark for %s: %v", profile, err)
+	}
+	for _, phase := range result.Phases {
+		if phase.Name == "load_insert_many" {
+			if phase.OpsPerSecond <= 0 {
+				t.Fatalf("%s load_insert_many ops/sec=%f", profile, phase.OpsPerSecond)
+			}
+			return phase.OpsPerSecond
+		}
+	}
+	t.Fatalf("%s load_insert_many phase missing: %+v", profile, result.Phases)
+	return 0
 }
 
 func TestRunEmailFindPhaseRequiresEmailIndex(t *testing.T) {

@@ -82,17 +82,23 @@ func parseFindPlan(command wire.Document, filter wire.Document) (findPlan, error
 }
 
 func (s *Server) executeFind(col *collections.Collection, plan findPlan) (findResultSet, error) {
+	materializer, err := storedDocumentMaterializerForCollection(col)
+	if err != nil {
+		return findResultSet{}, err
+	}
+	defer func() { _ = materializer.Close() }()
+
 	// MaxFindScanDocuments is a candidate-work cap, not a page-size cap. It is
 	// enforced while scanning candidates. Unsorted collection scans can stop
 	// early once skip/limit is satisfied because later records cannot affect the
 	// result set.
-	if docs, ok, err := s.findUnsortedScanDocuments(col, plan); ok || err != nil {
+	if docs, ok, err := s.findUnsortedScanDocuments(col, materializer, plan); ok || err != nil {
 		if err != nil {
 			return findResultSet{}, err
 		}
 		return findResultSet{docs: docs, projection: plan.projection}, nil
 	}
-	docs, err := s.findCandidateDocuments(col, plan.predicates)
+	docs, err := s.findCandidateDocuments(col, materializer, plan.predicates)
 	if err != nil {
 		return findResultSet{}, err
 	}
@@ -173,20 +179,20 @@ func (s *Server) maxFindBatchBytes() int {
 	return max
 }
 
-func (s *Server) findCandidateDocuments(col *collections.Collection, predicates []findPredicate) ([]wire.Document, error) {
+func (s *Server) findCandidateDocuments(col *collections.Collection, materializer *collections.StoredDocumentJSONMaterializer, predicates []findPredicate) ([]wire.Document, error) {
 	meta := col.Meta()
 	maxDocuments := s.maxFindScanDocuments()
 	var primaryDocs []wire.Document
 	primarySet := false
 	if pred, ok := primaryCandidatePredicate(predicates); ok {
-		docs, err := documentsForPrimaryPredicate(col, pred, maxDocuments)
+		docs, err := documentsForPrimaryPredicate(col, materializer, pred, maxDocuments)
 		if err != nil {
 			return nil, err
 		}
 		primaryDocs = docs
 		primarySet = true
 	}
-	if docs, ok, err := s.bestIndexedCandidateDocuments(col, meta, predicates, maxDocuments); ok || err != nil {
+	if docs, ok, err := s.bestIndexedCandidateDocuments(col, materializer, meta, predicates, maxDocuments); ok || err != nil {
 		if err != nil {
 			if primarySet {
 				return s.limitCandidateDocuments(primaryDocs)
@@ -209,7 +215,7 @@ func (s *Server) findCandidateDocuments(col *collections.Collection, predicates 
 	}
 	out := make([]wire.Document, 0, len(records))
 	for _, record := range records {
-		doc, err := storedDocumentToBSON(record.Document)
+		doc, err := storedDocumentToBSON(col, materializer, record.Document)
 		if err != nil {
 			return nil, err
 		}
@@ -218,7 +224,7 @@ func (s *Server) findCandidateDocuments(col *collections.Collection, predicates 
 	return out, nil
 }
 
-func (s *Server) findUnsortedScanDocuments(col *collections.Collection, plan findPlan) ([]wire.Document, bool, error) {
+func (s *Server) findUnsortedScanDocuments(col *collections.Collection, materializer *collections.StoredDocumentJSONMaterializer, plan findPlan) ([]wire.Document, bool, error) {
 	if plan.sort.field != "" || findPlanHasDirectCandidate(col.Meta(), plan.predicates) {
 		return nil, false, nil
 	}
@@ -226,7 +232,7 @@ func (s *Server) findUnsortedScanDocuments(col *collections.Collection, plan fin
 	docs := make([]wire.Document, 0)
 	matched := 0
 	truncated, err := col.ScanDocumentsFunc(maxDocuments, func(record collections.DocumentRecord) (bool, error) {
-		match, ok, err := storedDocumentMatchesPredicates(record.Document, plan.predicates)
+		match, ok, err := storedDocumentMatchesPredicatesForCollection(col, record.Document, plan.predicates)
 		if err != nil {
 			return false, err
 		}
@@ -235,7 +241,7 @@ func (s *Server) findUnsortedScanDocuments(col *collections.Collection, plan fin
 		}
 		var doc wire.Document
 		if !ok {
-			doc, err = storedDocumentToBSON(record.Document)
+			doc, err = storedDocumentToBSON(col, materializer, record.Document)
 			if err != nil {
 				return false, err
 			}
@@ -252,7 +258,7 @@ func (s *Server) findUnsortedScanDocuments(col *collections.Collection, plan fin
 			return true, nil
 		}
 		if ok {
-			doc, err = storedDocumentToBSON(record.Document)
+			doc, err = storedDocumentToBSON(col, materializer, record.Document)
 			if err != nil {
 				return false, err
 			}
@@ -309,6 +315,18 @@ func storedDocumentMatchesPredicates(stored []byte, predicates []findPredicate) 
 		}
 	}
 	return true, true, nil
+}
+
+func storedDocumentMatchesPredicatesForCollection(col *collections.Collection, stored []byte, predicates []findPredicate) (bool, bool, error) {
+	if col == nil {
+		return storedDocumentMatchesPredicates(stored, predicates)
+	}
+	switch col.Meta().Options.DocumentFormat {
+	case collections.DocumentFormatDefault, collections.DocumentFormatJSON:
+		return storedDocumentMatchesPredicates(stored, predicates)
+	default:
+		return false, false, nil
+	}
 }
 
 func isRangePredicate(op findPredicateOp) bool {
@@ -584,7 +602,7 @@ func (s *Server) limitCandidateDocuments(docs []wire.Document) ([]wire.Document,
 	return docs, nil
 }
 
-func (s *Server) bestIndexedCandidateDocuments(col *collections.Collection, meta collections.CollectionMeta, predicates []findPredicate, maxDocuments int) ([]wire.Document, bool, error) {
+func (s *Server) bestIndexedCandidateDocuments(col *collections.Collection, materializer *collections.StoredDocumentJSONMaterializer, meta collections.CollectionMeta, predicates []findPredicate, maxDocuments int) ([]wire.Document, bool, error) {
 	var best []wire.Document
 	bestSet := false
 	for _, pred := range predicates {
@@ -598,7 +616,7 @@ func (s *Server) bestIndexedCandidateDocuments(col *collections.Collection, meta
 			if idx.Field != pred.field {
 				continue
 			}
-			docs, err := documentsForIndexedPredicate(col, pred, idx, maxDocuments)
+			docs, err := documentsForIndexedPredicate(col, materializer, pred, idx, maxDocuments)
 			if err != nil {
 				return nil, false, err
 			}
@@ -621,7 +639,7 @@ func primaryCandidatePredicate(predicates []findPredicate) (findPredicate, bool)
 	return findPredicate{}, false
 }
 
-func documentsForPrimaryPredicate(col *collections.Collection, pred findPredicate, maxDocuments int) ([]wire.Document, error) {
+func documentsForPrimaryPredicate(col *collections.Collection, materializer *collections.StoredDocumentJSONMaterializer, pred findPredicate, maxDocuments int) ([]wire.Document, error) {
 	out := make([]wire.Document, 0, len(pred.values))
 	seen := make(map[string]struct{}, len(pred.values))
 	for _, value := range pred.values {
@@ -641,7 +659,7 @@ func documentsForPrimaryPredicate(col *collections.Collection, pred findPredicat
 		if len(stored) == 0 {
 			continue
 		}
-		doc, err := storedDocumentToBSON(stored)
+		doc, err := storedDocumentToBSON(col, materializer, stored)
 		if err != nil {
 			return nil, err
 		}
@@ -653,7 +671,7 @@ func documentsForPrimaryPredicate(col *collections.Collection, pred findPredicat
 	return out, nil
 }
 
-func documentsForIndexedPredicate(col *collections.Collection, pred findPredicate, idx collections.IndexDefinition, maxDocuments int) ([]wire.Document, error) {
+func documentsForIndexedPredicate(col *collections.Collection, materializer *collections.StoredDocumentJSONMaterializer, pred findPredicate, idx collections.IndexDefinition, maxDocuments int) ([]wire.Document, error) {
 	out := make([]wire.Document, 0)
 	seen := make(map[string]struct{})
 	for _, value := range pred.values {
@@ -677,7 +695,7 @@ func documentsForIndexedPredicate(col *collections.Collection, pred findPredicat
 			if len(stored) == 0 {
 				continue
 			}
-			doc, err := storedDocumentToBSON(stored)
+			doc, err := storedDocumentToBSON(col, materializer, stored)
 			if err != nil {
 				return nil, err
 			}

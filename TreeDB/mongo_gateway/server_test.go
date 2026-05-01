@@ -270,6 +270,139 @@ func TestServerUpdateAndDeleteByID(t *testing.T) {
 	}
 }
 
+func TestServerUpdateTemplateV1DefaultAddsFields(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	server.DefaultCollectionOptions = collections.CollectionOptions{
+		DocumentFormat: collections.DocumentFormatTemplateV1,
+	}
+	id := bson.NewObjectID()
+	insertResponse := serveCommand(t, server, 2251, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{bson.D{
+			{Key: "_id", Value: id},
+			{Key: "name", Value: "ada"},
+		}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertOK(t, insertResponse)
+
+	updateResponse := serveCommand(t, server, 2252, bson.D{
+		{Key: "update", Value: "users"},
+		{Key: "updates", Value: bson.A{bson.D{
+			{Key: "q", Value: bson.D{{Key: "_id", Value: id}}},
+			{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{
+				{Key: "city", Value: "London"},
+				{Key: "updated", Value: true},
+			}}}},
+		}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertOK(t, updateResponse)
+	assertInt32(t, updateResponse, "n", 1)
+	assertInt32(t, updateResponse, "nModified", 1)
+
+	findResponse := serveCommand(t, server, 2253, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "_id", Value: id}}},
+		{Key: "$db", Value: "app"},
+	})
+	firstBatch := cursorFirstBatch(t, findResponse)
+	if len(firstBatch) != 1 {
+		t.Fatalf("firstBatch len=%d want 1", len(firstBatch))
+	}
+	gotCity, ok := firstBatch[0].Lookup("city").StringValueOK()
+	if !ok || gotCity != "London" {
+		t.Fatalf("firstBatch city=%q ok=%v want London", gotCity, ok)
+	}
+	assertBool(t, firstBatch[0], "updated", true)
+
+	col, err := server.Collections.OpenCollection("app.users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	key, _, err := prepareInsertDocument(mustDocument(t, bson.D{{Key: "_id", Value: id}}), collections.DocumentFormatJSON)
+	if err != nil {
+		t.Fatalf("encode id key: %v", err)
+	}
+	stored, err := col.Get(key)
+	if err != nil {
+		t.Fatalf("get stored doc: %v", err)
+	}
+	if _, err := col.StoredDocumentJSON(stored); err != nil {
+		t.Fatalf("materialize stored doc: %v", err)
+	}
+}
+
+func TestServerUpdateTemplateV1RefreshesMaterializerBetweenStatements(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	server.DefaultCollectionOptions = collections.CollectionOptions{
+		DocumentFormat: collections.DocumentFormatTemplateV1,
+	}
+	id := bson.NewObjectID()
+	assertOK(t, serveCommand(t, server, 2254, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{bson.D{
+			{Key: "_id", Value: id},
+			{Key: "name", Value: "ada"},
+		}}},
+		{Key: "$db", Value: "app"},
+	}))
+
+	updateResponse := serveCommand(t, server, 2255, bson.D{
+		{Key: "update", Value: "users"},
+		{Key: "updates", Value: bson.A{
+			bson.D{
+				{Key: "q", Value: bson.D{{Key: "_id", Value: id}}},
+				{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{
+					{Key: "city", Value: "London"},
+				}}}},
+			},
+			bson.D{
+				{Key: "q", Value: bson.D{{Key: "_id", Value: id}}},
+				{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{
+					{Key: "score", Value: int32(7)},
+				}}}},
+			},
+		}},
+		{Key: "$db", Value: "app"},
+	})
+	assertOK(t, updateResponse)
+	assertInt32(t, updateResponse, "n", 2)
+	assertInt32(t, updateResponse, "nModified", 2)
+
+	findResponse := serveCommand(t, server, 2256, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "_id", Value: id}}},
+		{Key: "$db", Value: "app"},
+	})
+	firstBatch := cursorFirstBatch(t, findResponse)
+	if len(firstBatch) != 1 {
+		t.Fatalf("firstBatch len=%d want 1", len(firstBatch))
+	}
+	gotCity, ok := firstBatch[0].Lookup("city").StringValueOK()
+	if !ok || gotCity != "London" {
+		t.Fatalf("firstBatch city=%q ok=%v want London", gotCity, ok)
+	}
+	gotScore, ok := firstBatch[0].Lookup("score").Int32OK()
+	if !ok || gotScore != 7 {
+		t.Fatalf("firstBatch score=%d ok=%v want 7", gotScore, ok)
+	}
+}
+
 func TestServerUpdateRejectsIDMutation(t *testing.T) {
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
@@ -1377,7 +1510,7 @@ func TestStoredDocumentMatchesPredicatesExtendedJSONScalars(t *testing.T) {
 		{Key: "city", Value: "hnl"},
 		{Key: "age", Value: int64(42)},
 		{Key: "active", Value: true},
-	}))
+	}), collections.DocumentFormatJSON)
 	if err != nil {
 		t.Fatalf("prepare insert document: %v", err)
 	}
@@ -1745,6 +1878,77 @@ func TestServerInsertRejectsUnsupportedBSONTypes(t *testing.T) {
 	}
 	resp := readMsgResponse(t, rw.w.Bytes(), 213)
 	assertCommandError(t, resp, "BadValue")
+	if _, err := server.Collections.OpenCollection("app.events"); !errors.Is(err, collections.ErrCollectionNotFound) {
+		t.Fatalf("failed insert collection err=%v, want collection not found", err)
+	}
+}
+
+func TestServerAppliesDefaultCollectionAndIndexOptions(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	server.DefaultCollectionOptions = collections.CollectionOptions{
+		DocumentFormat:          collections.DocumentFormatTemplateV1,
+		DataRootStoragePolicy:   collections.RootStorageCompressed,
+		IndexStateStoragePolicy: collections.RootStorageCompressed,
+	}
+	server.DefaultIndexStoragePolicy = collections.RootStorageCompressed
+
+	col, err := server.openOrCreateCollection("app.inserted")
+	if err != nil {
+		t.Fatalf("openOrCreateCollection: %v", err)
+	}
+	meta := col.Meta()
+	if meta.Options.DocumentFormat != collections.DocumentFormatTemplateV1 {
+		t.Fatalf("document format=%q want %q", meta.Options.DocumentFormat, collections.DocumentFormatTemplateV1)
+	}
+	if meta.Options.DataRootStoragePolicy != collections.RootStorageCompressed {
+		t.Fatalf("data root storage=%q want %q", meta.Options.DataRootStoragePolicy, collections.RootStorageCompressed)
+	}
+	if meta.Options.IndexStateStoragePolicy != collections.RootStorageCompressed {
+		t.Fatalf("index state storage=%q want %q", meta.Options.IndexStateStoragePolicy, collections.RootStorageCompressed)
+	}
+
+	commandDoc := mustDocument(t, bson.D{
+		{Key: "createIndexes", Value: "indexed"},
+		{Key: "indexes", Value: bson.A{bson.D{
+			{Key: "key", Value: bson.D{{Key: "email", Value: int32(1)}}},
+			{Key: "name", Value: "email_1"},
+			{Key: "unique", Value: true},
+		}}},
+		{Key: "$db", Value: "app"},
+	})
+	req, err := wire.AppendMsgMessage(nil, 214, 0, 0, commandDoc)
+	if err != nil {
+		t.Fatalf("AppendMsgMessage: %v", err)
+	}
+	rw := &readWriter{r: bytes.NewReader(req)}
+	if err := server.ServeOne(rw); err != nil {
+		t.Fatalf("ServeOne: %v", err)
+	}
+	resp := readMsgResponse(t, rw.w.Bytes(), 214)
+	assertOK(t, resp)
+
+	indexed, err := server.Collections.OpenCollection("app.indexed")
+	if err != nil {
+		t.Fatalf("open indexed collection: %v", err)
+	}
+	indexedMeta := indexed.Meta()
+	if indexedMeta.Options.DocumentFormat != collections.DocumentFormatTemplateV1 {
+		t.Fatalf("auto-created document format=%q want %q", indexedMeta.Options.DocumentFormat, collections.DocumentFormatTemplateV1)
+	}
+	def, ok := findIndexDefinition(indexedMeta.Indexes, "email_1")
+	if !ok {
+		t.Fatalf("email_1 index missing from %+v", indexedMeta.Indexes)
+	}
+	if def.StoragePolicy != collections.RootStorageCompressed {
+		t.Fatalf("index storage=%q want %q", def.StoragePolicy, collections.RootStorageCompressed)
+	}
 }
 
 func TestServerHandlesPartialWrites(t *testing.T) {

@@ -32,18 +32,19 @@ type matrixRow struct {
 }
 
 type benchmarkResult struct {
-	Target                    string         `json:"target"`
-	MongoURI                  string         `json:"mongo_uri,omitempty"`
-	TreeDBDir                 string         `json:"treedb_dir,omitempty"`
-	Database                  string         `json:"database"`
-	Collection                string         `json:"collection"`
-	Documents                 int            `json:"documents"`
-	SecondaryIndexes          int            `json:"secondary_indexes"`
-	Phases                    []phaseResult  `json:"phases"`
-	TreeDBDiskAfterLoad       *diskSnapshot  `json:"treedb_disk_after_load,omitempty"`
-	TreeDBDiskAfterCheckpoint *diskSnapshot  `json:"treedb_disk_after_checkpoint,omitempty"`
-	MongoDBStatsAfterLoad     map[string]any `json:"mongodb_stats_after_load,omitempty"`
-	MongoDBStatsFinal         map[string]any `json:"mongodb_stats_final,omitempty"`
+	Target                     string         `json:"target"`
+	MongoURI                   string         `json:"mongo_uri,omitempty"`
+	TreeDBDir                  string         `json:"treedb_dir,omitempty"`
+	Database                   string         `json:"database"`
+	Collection                 string         `json:"collection"`
+	Documents                  int            `json:"documents"`
+	SecondaryIndexes           int            `json:"secondary_indexes"`
+	Phases                     []phaseResult  `json:"phases"`
+	TreeDBDiskAfterLoad        *diskSnapshot  `json:"treedb_disk_after_load,omitempty"`
+	TreeDBDiskAfterCheckpoint  *diskSnapshot  `json:"treedb_disk_after_checkpoint,omitempty"`
+	TreeDBDiskAfterMaintenance *diskSnapshot  `json:"treedb_disk_after_maintenance,omitempty"`
+	MongoDBStatsAfterLoad      map[string]any `json:"mongodb_stats_after_load,omitempty"`
+	MongoDBStatsFinal          map[string]any `json:"mongodb_stats_final,omitempty"`
 }
 
 type phaseResult struct {
@@ -351,7 +352,7 @@ func renderReport(cfg config, cells []cellComparison, generatedAt time.Time) str
 	}
 	b.WriteString("\n")
 	b.WriteString("## Notes\n\n")
-	b.WriteString("- TreeDB disk bytes come from `treedb_disk_after_checkpoint.total_bytes`, with `treedb_disk_after_load.total_bytes` as a fallback.\n")
+	b.WriteString("- TreeDB disk bytes prefer `treedb_disk_after_maintenance.total_bytes`, then fall back to `treedb_disk_after_checkpoint.total_bytes` and `treedb_disk_after_load.total_bytes` for older runs.\n")
 	b.WriteString("- TreeDB physical bytes come from the matrix runner's `du` measurement of the isolated TreeDB directory.\n")
 	b.WriteString("- MongoDB `dbStats.dataSize` is uncompressed logical document size, not disk usage.\n")
 	b.WriteString("- MongoDB `dbStats.totalSize` is reported separately because it can diverge sharply from the isolated data-directory `du` measurement on small WiredTiger workloads.\n")
@@ -402,16 +403,23 @@ func highlightLines(cells []cellComparison) []string {
 		lines = append(lines, "No phase in this matrix had MongoDB ahead on ops/sec.")
 	}
 	if cell := largestDiskCell(cells); cell != nil {
-		treeBytes, _ := treeDBBytes(cell.TreeDB.Result)
+		treeBytes, treeSnapshot, treeOK := treeDBBytesSnapshot(cell.TreeDB.Result)
 		treePhysical := cell.TreeDB.Row.PhysicalBytes
 		mongoData, _ := mongoDataBytes(cell.Mongo.Result)
 		mongoTotal, _ := mongoDBStatsTotalBytes(cell.Mongo.Result)
 		mongoPhysical := cell.Mongo.Row.PhysicalBytes
-		lines = append(lines, fmt.Sprintf("Largest cell disk: at %d docs / %d indexes, TreeDB checkpoint files used %s (%s/doc), TreeDB physical du was %s, MongoDB dbStats dataSize was %s, MongoDB dbStats totalSize was %s, and MongoDB physical du was %s (%s/doc).",
+		treeSnapshotClause := "TreeDB disk snapshot was n/a"
+		if treeOK {
+			treeSnapshotClause = fmt.Sprintf("TreeDB %s snapshot used %s (%s/doc)",
+				treeSnapshot,
+				formatBytes(treeBytes),
+				formatBytesPerDoc(treeBytes, cell.Key.Documents),
+			)
+		}
+		lines = append(lines, fmt.Sprintf("Largest cell disk: at %d docs / %d indexes, %s, TreeDB physical du was %s, MongoDB dbStats dataSize was %s, MongoDB dbStats totalSize was %s, and MongoDB physical du was %s (%s/doc).",
 			cell.Key.Documents,
 			cell.Key.SecondaryIndexes,
-			formatBytes(treeBytes),
-			formatBytesPerDoc(treeBytes, cell.Key.Documents),
+			treeSnapshotClause,
 			formatOptionalBytes(treePhysical),
 			formatBytes(mongoData),
 			formatBytes(mongoTotal),
@@ -458,26 +466,27 @@ func cellDiskScore(cell cellComparison) int64 {
 
 func renderDiskTable(b *strings.Builder, cells []cellComparison) {
 	b.WriteString("## Disk Summary\n\n")
-	b.WriteString("| docs | indexes | TreeDB checkpoint | TreeDB checkpoint bytes/doc | TreeDB physical du | TreeDB physical bytes/doc | MongoDB dbStats dataSize | MongoDB dbStats totalSize | MongoDB physical du | MongoDB physical bytes/doc | TreeDB / MongoDB dbStats totalSize | TreeDB / MongoDB physical |\n")
-	b.WriteString("| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n")
+	b.WriteString("| docs | indexes | TreeDB snapshot | TreeDB bytes | TreeDB bytes/doc | TreeDB physical du | TreeDB physical bytes/doc | MongoDB dbStats dataSize | MongoDB dbStats totalSize | MongoDB physical du | MongoDB physical bytes/doc | TreeDB / MongoDB dbStats totalSize | TreeDB / MongoDB physical |\n")
+	b.WriteString("| ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n")
 	for _, cell := range cells {
-		treeBytes, _ := treeDBBytes(cell.TreeDB.Result)
+		treeBytes, treeSnapshot, treeOK := treeDBBytesSnapshot(cell.TreeDB.Result)
 		treePhysical := cell.TreeDB.Row.PhysicalBytes
 		mongoData, _ := mongoDataBytes(cell.Mongo.Result)
 		mongoTotal, _ := mongoDBStatsTotalBytes(cell.Mongo.Result)
 		mongoPhysical := cell.Mongo.Row.PhysicalBytes
-		fmt.Fprintf(b, "| %d | %d | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s |\n",
+		fmt.Fprintf(b, "| %d | %d | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s |\n",
 			cell.Key.Documents,
 			cell.Key.SecondaryIndexes,
-			formatBytes(treeBytes),
-			formatBytesPerDoc(treeBytes, cell.Key.Documents),
+			treeSnapshot,
+			formatMeasuredBytes(treeOK, treeBytes),
+			formatMeasuredBytesPerDoc(treeOK, treeBytes, cell.Key.Documents),
 			formatOptionalBytes(treePhysical),
 			formatOptionalBytesPerDoc(treePhysical, cell.Key.Documents),
 			formatBytes(mongoData),
 			formatBytes(mongoTotal),
 			formatOptionalBytes(mongoPhysical),
 			formatOptionalBytesPerDoc(mongoPhysical, cell.Key.Documents),
-			formatRatio(safeRatio(float64(treeBytes), float64(mongoTotal))),
+			formatMeasuredRatio(treeOK, treeBytes, mongoTotal),
 			formatRatio(safeRatio(float64(treePhysical), float64(mongoPhysical))),
 		)
 	}
@@ -561,6 +570,7 @@ func writeSummaryTSV(path string, cells []cellComparison) error {
 		"mongo_p95_us",
 		"treedb_p99_us",
 		"mongo_p99_us",
+		"treedb_disk_snapshot",
 		"treedb_disk_bytes",
 		"treedb_physical_bytes",
 		"mongo_dbstats_data_size_bytes",
@@ -574,7 +584,7 @@ func writeSummaryTSV(path string, cells []cellComparison) error {
 	}
 	for _, cmp := range allPhaseComparisons(cells) {
 		cell := findCell(cells, cmp.Cell)
-		treeBytes, _ := treeDBBytes(cell.TreeDB.Result)
+		treeBytes, treeSnapshot, treeOK := treeDBBytesSnapshot(cell.TreeDB.Result)
 		treePhysical := cell.TreeDB.Row.PhysicalBytes
 		mongoData, _ := mongoDataBytes(cell.Mongo.Result)
 		mongoTotal, _ := mongoDBStatsTotalBytes(cell.Mongo.Result)
@@ -591,12 +601,13 @@ func writeSummaryTSV(path string, cells []cellComparison) error {
 			formatRawFloat(cmp.HasMongo, cmp.MongoPhase.LatencyMicros.P95),
 			formatRawFloat(cmp.HasTreeDB, cmp.TreeDBPhase.LatencyMicros.P99),
 			formatRawFloat(cmp.HasMongo, cmp.MongoPhase.LatencyMicros.P99),
-			strconv.FormatInt(treeBytes, 10),
+			treeSnapshot,
+			formatRawInt(treeOK, treeBytes),
 			strconv.FormatInt(treePhysical, 10),
 			strconv.FormatInt(mongoData, 10),
 			strconv.FormatInt(mongoTotal, 10),
 			strconv.FormatInt(cell.Mongo.Row.PhysicalBytes, 10),
-			formatRawRatio(safeRatio(float64(treeBytes), float64(mongoTotal))),
+			formatRawMeasuredRatio(treeOK, treeBytes, mongoTotal),
 			formatRawRatio(safeRatio(float64(treePhysical), float64(cell.Mongo.Row.PhysicalBytes))),
 		}
 		if err := writer.Write(row); err != nil {
@@ -617,13 +628,21 @@ func findCell(cells []cellComparison, key cellKey) cellComparison {
 }
 
 func treeDBBytes(result benchmarkResult) (int64, bool) {
+	bytes, _, ok := treeDBBytesSnapshot(result)
+	return bytes, ok
+}
+
+func treeDBBytesSnapshot(result benchmarkResult) (int64, string, bool) {
+	if result.TreeDBDiskAfterMaintenance != nil {
+		return result.TreeDBDiskAfterMaintenance.TotalBytes, "maintenance", true
+	}
 	if result.TreeDBDiskAfterCheckpoint != nil {
-		return result.TreeDBDiskAfterCheckpoint.TotalBytes, true
+		return result.TreeDBDiskAfterCheckpoint.TotalBytes, "checkpoint", true
 	}
 	if result.TreeDBDiskAfterLoad != nil {
-		return result.TreeDBDiskAfterLoad.TotalBytes, true
+		return result.TreeDBDiskAfterLoad.TotalBytes, "load", true
 	}
-	return 0, false
+	return 0, "n/a", false
 }
 
 func mongoDataBytes(result benchmarkResult) (int64, bool) {
@@ -710,11 +729,25 @@ func formatOptionalBytes(value int64) string {
 	return formatBytes(value)
 }
 
+func formatMeasuredBytes(ok bool, value int64) string {
+	if !ok {
+		return "n/a"
+	}
+	return formatBytes(value)
+}
+
 func formatBytesPerDoc(value int64, documents int) string {
 	if value <= 0 || documents <= 0 {
 		return "0 B"
 	}
 	return fmt.Sprintf("%.1f B", float64(value)/float64(documents))
+}
+
+func formatMeasuredBytesPerDoc(ok bool, value int64, documents int) string {
+	if !ok {
+		return "n/a"
+	}
+	return formatBytesPerDoc(value, documents)
 }
 
 func formatOptionalBytesPerDoc(value int64, documents int) string {
@@ -747,6 +780,13 @@ func formatRatio(value float64) string {
 	return fmt.Sprintf("%.2fx", value)
 }
 
+func formatMeasuredRatio(ok bool, numerator int64, denominator int64) string {
+	if !ok {
+		return "n/a"
+	}
+	return formatRatio(safeRatio(float64(numerator), float64(denominator)))
+}
+
 func formatPhaseOps(ok bool, value float64) string {
 	if !ok {
 		return "n/a"
@@ -766,6 +806,20 @@ func formatRawFloat(ok bool, value float64) string {
 		return ""
 	}
 	return strconv.FormatFloat(value, 'f', 6, 64)
+}
+
+func formatRawInt(ok bool, value int64) string {
+	if !ok {
+		return ""
+	}
+	return strconv.FormatInt(value, 10)
+}
+
+func formatRawMeasuredRatio(ok bool, numerator int64, denominator int64) string {
+	if !ok {
+		return ""
+	}
+	return formatRawRatio(safeRatio(float64(numerator), float64(denominator)))
 }
 
 func formatRawRatio(value float64) string {

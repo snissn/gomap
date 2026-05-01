@@ -32,12 +32,33 @@ GOWORK=off go run ./cmd/mongo_gateway_bench \
 
 For `-target treedb`, the command starts an in-process TreeDB Mongo gateway on a
 loopback listener, connects with the official MongoDB Go driver, and reports
-the sum of regular file sizes for the TreeDB directory after load and after a
-final checkpoint. If `-treedb-dir` is provided and already exists, the harness
+the sum of regular file sizes for the TreeDB directory after load, after a final
+checkpoint, and by default after the full TreeDB maintenance stack. If
+`-treedb-dir` is provided and already exists, the harness
 removes and recreates it before loading deterministic fixtures so repeated runs
 are reproducible. Obvious unsafe reset targets such as root, the current
 checkout, the temp directory itself, a home directory, or an immediate child of
 a home directory are rejected.
+
+The TreeDB benchmark target defaults are intended to match the optimized
+collection benchmark profile:
+
+- `-treedb-profile wal_on_fast`
+- `-treedb-document-format template-v1`
+- `-treedb-data-root-storage compressed`
+- `-treedb-index-state-root-storage compressed`
+- `-treedb-index-root-storage compressed`
+- `-treedb-maintenance full`
+
+The TreeDB target always opens with outer leaves in the leaf value log and the
+cached leaf-log backend, so collection and secondary-index roots exercise the
+same leaf-vlog path as the optimized collection benchmarks. The `full`
+maintenance mode reports each post-load compaction step: value-log rewrite,
+value-log GC, leaf-generation pack, leaf-generation GC, and offline index
+vacuum. The final vacuum closes the benchmark gateway before rewriting
+`index.db`, matching the documented compacted-state maintenance command. Use
+`-treedb-maintenance checkpoint` to reproduce the older checkpoint-only disk
+metric, or `none` to skip final TreeDB disk reporting.
 
 ## MongoDB Target
 
@@ -200,18 +221,23 @@ document count, while insert latency percentiles are per `InsertMany` call.
 Range-query samples include cursor materialization with `cursor.All`.
 Use `-timeout 0` to run without an overall benchmark deadline.
 
+The package test `TestTreeDBProfileSmokeFastAndWALOnFast` runs a small write-only
+TreeDB gateway smoke against both `fast` and `wal_on_fast` to catch large
+profile regressions without making the smoke a replacement for the full matrix.
+
 ## Interpreting Results
 
 `-secondary-indexes 2` creates `email_1` and `city_1`; the age range phase is
 currently a bounded scan in the gateway and is included to make that cost
 visible.
 
-For TreeDB, compare `treedb_disk_after_checkpoint.total_bytes` and the child
-path breakdown, especially `index.db`, `leaf_vlog`, and `value_vlog`. These are
-logical bytes: the sum of regular file sizes, not allocated physical disk usage
-including block allocation, sparse-file effects, filesystem compression, or
-metadata. Capture `du` separately when physical on-disk usage is the comparison
-target.
+For TreeDB, prefer `treedb_disk_after_maintenance.total_bytes` when present, and
+use `treedb_disk_after_checkpoint.total_bytes` for checkpoint-only runs. The
+child path breakdown, especially `index.db`, `leaf_vlog`, and `value_vlog`,
+shows where bytes landed. These are logical bytes: the sum of regular file
+sizes, not allocated physical disk usage including block allocation, sparse-file
+effects, filesystem compression, or metadata. Capture `du` separately when
+physical on-disk usage is the comparison target.
 
 For MongoDB, compare `mongodb_stats_final.storageSize`,
 `mongodb_stats_final.indexSize`, and `mongodb_stats_final.totalSize`. If the

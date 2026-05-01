@@ -2,6 +2,8 @@ package collections
 
 import (
 	"bytes"
+	"encoding/binary"
+	"strings"
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -600,6 +602,101 @@ func TestTemplateV1UnbufferedSingleInsertUsesTemplateRoot(t *testing.T) {
 		t.Fatalf("lookup template: %v", err)
 	}
 	_ = snap.Close()
+}
+
+func TestTemplateV1RejectsOversizedArrayCount(t *testing.T) {
+	pos := 0
+	_, err := decodeTemplateV1Value([]byte{
+		templateV1KindArray,
+		2,
+		templateV1KindNull,
+	}, &pos, nil)
+	if err == nil || !strings.Contains(err.Error(), "array length") {
+		t.Fatalf("decode oversized array err=%v, want array length error", err)
+	}
+}
+
+func TestTemplateV1RejectsExcessiveArrayCount(t *testing.T) {
+	count := templateV1MaxArrayElements + 1
+	raw := []byte{templateV1KindArray}
+	raw = binary.AppendUvarint(raw, count)
+	raw = append(raw, make([]byte, int(count))...)
+
+	pos := 0
+	_, err := decodeTemplateV1Value(raw, &pos, nil)
+	if err == nil || !strings.Contains(err.Error(), "exceeds maximum") {
+		t.Fatalf("decode excessive array err=%v, want maximum error", err)
+	}
+}
+
+func TestTemplateV1UpdatePublishesNewTemplateShape(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatTemplateV1,
+		},
+		Indexes: []IndexDefinition{
+			{Name: "email", Field: "email", Unique: true},
+			{Name: "city", Field: "city"},
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+
+	doc := mustTemplateV1Document(t, []string{"email", "city"}, []any{"ada@example.com", "hnl"})
+	if _, err := col.InsertBatch([][]byte{[]byte("u1")}, [][]byte{doc}); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+
+	replacement, err := EncodeTemplateV1DocumentJSON([]byte(`{"email":"ada@example.com","city":"hnl","updated":true,"update_seq":1}`))
+	if err != nil {
+		t.Fatalf("encode replacement: %v", err)
+	}
+	if !bytes.HasPrefix(replacement, []byte(templateV1InputMagic)) {
+		t.Fatalf("replacement prefix=%q want template envelope", replacement[:min(len(replacement), len(templateV1InputMagic))])
+	}
+	matched, modified, err := col.Update([]byte("u1"), func([]byte) ([]byte, bool, error) {
+		return replacement, true, nil
+	})
+	if err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if !matched || !modified {
+		t.Fatalf("update matched=%v modified=%v want true,true", matched, modified)
+	}
+
+	got, err := col.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("get u1: %v", err)
+	}
+	if !bytes.HasPrefix(got, []byte(templateV1StoredMagic)) {
+		t.Fatalf("stored u1 prefix=%q want template-v1 stored magic", got[:min(len(got), len(templateV1StoredMagic))])
+	}
+	jsonDoc, err := col.StoredDocumentJSON(got)
+	if err != nil {
+		t.Fatalf("materialize stored document: %v", err)
+	}
+	if !bytes.Contains(jsonDoc, []byte(`"updated":true`)) || !bytes.Contains(jsonDoc, []byte(`"update_seq":1`)) {
+		t.Fatalf("materialized update json=%s", jsonDoc)
+	}
+	emailIDs, err := col.FindByIndex("email", "ada@example.com")
+	if err != nil {
+		t.Fatalf("find email: %v", err)
+	}
+	if len(emailIDs) != 1 || !bytes.Equal(emailIDs[0], []byte("u1")) {
+		t.Fatalf("email ids=%q want u1", emailIDs)
+	}
 }
 
 func TestTemplateV1CreateIndexBackfillsFromTemplateRoot(t *testing.T) {

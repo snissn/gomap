@@ -30,6 +30,9 @@ const (
 	templateV1KindString
 	templateV1KindObject
 	templateV1KindArray
+
+	templateV1MaxArrayElements uint64 = 1 << 20
+	templateV1ArrayPreallocCap        = 4096
 )
 
 var (
@@ -465,6 +468,107 @@ func EncodeTemplateV1DocumentJSON(raw []byte) ([]byte, error) {
 		return nil, errors.New("collections: template-v1 JSON input must be an object")
 	}
 	return encodeTemplateV1ObjectMap(obj)
+}
+
+func templateV1StoredDocumentJSON(raw []byte, resolver templateV1Resolver) ([]byte, error) {
+	root, err := parseTemplateV1StoredDocument(raw)
+	if err != nil {
+		return nil, err
+	}
+	pos := 0
+	obj, err := decodeTemplateV1ObjectFields(root.templateID, root.values, &pos, resolver)
+	if err != nil {
+		return nil, err
+	}
+	if pos != len(root.values) {
+		return nil, errors.New("collections: trailing template-v1 object values")
+	}
+	out, err := json.Marshal(obj)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func decodeTemplateV1ObjectFields(id [32]byte, raw []byte, pos *int, resolver templateV1Resolver) (map[string]any, error) {
+	if resolver == nil {
+		return nil, errTemplateV1MissingResolver
+	}
+	tpl, err := resolver.lookupTemplateV1(id)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]any, len(tpl.fields))
+	for _, field := range tpl.fields {
+		value, err := decodeTemplateV1Value(raw, pos, resolver)
+		if err != nil {
+			return nil, fmt.Errorf("collections: template-v1 field %q: %w", field, err)
+		}
+		out[field] = value
+	}
+	return out, nil
+}
+
+func decodeTemplateV1Value(raw []byte, pos *int, resolver templateV1Resolver) (any, error) {
+	if pos == nil || *pos >= len(raw) {
+		return nil, errors.New("collections: malformed template-v1 value")
+	}
+	kind := raw[*pos]
+	*pos = *pos + 1
+	switch kind {
+	case templateV1KindNull:
+		return nil, nil
+	case templateV1KindFalse:
+		return false, nil
+	case templateV1KindTrue:
+		return true, nil
+	case templateV1KindFloat64:
+		if len(raw)-*pos < 8 {
+			return nil, errors.New("collections: malformed template-v1 number")
+		}
+		v := math.Float64frombits(binary.BigEndian.Uint64(raw[*pos:]))
+		*pos += 8
+		return v, nil
+	case templateV1KindString:
+		n, err := readTemplateV1Uvarint(raw, pos)
+		if err != nil {
+			return nil, err
+		}
+		if n > uint64(len(raw)-*pos) {
+			return nil, errors.New("collections: malformed template-v1 string")
+		}
+		valueEnd := *pos + int(n)
+		value := string(raw[*pos:valueEnd])
+		*pos = valueEnd
+		return value, nil
+	case templateV1KindArray:
+		count, err := readTemplateV1Uvarint(raw, pos)
+		if err != nil {
+			return nil, err
+		}
+		if err := validateTemplateV1ArrayCount(raw, pos, count); err != nil {
+			return nil, err
+		}
+		values := make([]any, 0, templateV1ArrayInitialCap(count))
+		for i := uint64(0); i < count; i++ {
+			value, err := decodeTemplateV1Value(raw, pos, resolver)
+			if err != nil {
+				return nil, err
+			}
+			values = append(values, value)
+		}
+		return values, nil
+	case templateV1KindObject:
+		var id [32]byte
+		if len(raw)-*pos < len(id) {
+			return nil, errors.New("collections: malformed template-v1 object")
+		}
+		copy(id[:], raw[*pos:*pos+len(id)])
+		*pos += len(id)
+		return decodeTemplateV1ObjectFields(id, raw, pos, resolver)
+	default:
+		return nil, fmt.Errorf("collections: unknown template-v1 value kind %d", kind)
+	}
 }
 
 func encodeTemplateV1ObjectMap(obj map[string]any) ([]byte, error) {
@@ -1049,7 +1153,10 @@ func templateV1AppendArrayIndexValues(raw []byte, encoder *indexEncodeArena) ([]
 	if count == 0 {
 		return nil, nil
 	}
-	values := make([][]byte, 0, int(count))
+	if err := validateTemplateV1ArrayCount(raw, &pos, count); err != nil {
+		return nil, err
+	}
+	values := make([][]byte, 0, templateV1ArrayInitialCap(count))
 	for i := uint64(0); i < count; i++ {
 		start := pos
 		if err := skipTemplateV1Value(raw, &pos, nil); err != nil {
@@ -1134,6 +1241,9 @@ func skipTemplateV1Value(raw []byte, pos *int, resolver templateV1Resolver) erro
 		if err != nil {
 			return err
 		}
+		if err := validateTemplateV1ArrayCount(raw, pos, count); err != nil {
+			return err
+		}
 		for i := uint64(0); i < count; i++ {
 			if err := skipTemplateV1Value(raw, pos, resolver); err != nil {
 				return err
@@ -1186,6 +1296,26 @@ func readTemplateV1Uvarint(raw []byte, pos *int) (uint64, error) {
 	}
 	*pos += n
 	return v, nil
+}
+
+func validateTemplateV1ArrayCount(raw []byte, pos *int, count uint64) error {
+	if pos == nil || *pos > len(raw) {
+		return errors.New("collections: malformed template-v1 array length")
+	}
+	if count > uint64(len(raw)-*pos) {
+		return errors.New("collections: malformed template-v1 array length")
+	}
+	if count > templateV1MaxArrayElements {
+		return fmt.Errorf("collections: template-v1 array length exceeds maximum %d", templateV1MaxArrayElements)
+	}
+	return nil
+}
+
+func templateV1ArrayInitialCap(count uint64) int {
+	if count > uint64(templateV1ArrayPreallocCap) {
+		return templateV1ArrayPreallocCap
+	}
+	return int(count)
 }
 
 func validateTemplateV1FieldName(field string) error {
