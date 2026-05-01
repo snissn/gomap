@@ -2612,6 +2612,14 @@ func TestCollectionLockAndValidateInsertBatchPlanAllowsDisjointRootDrift(t *test
 	}
 }
 
+func TestCollectionValidateInsertBatchPlanAfterPlanningLockedNilSnapshot(t *testing.T) {
+	col := &Collection{}
+	pin, catalog, err := col.validateInsertBatchPlanAfterPlanningLocked(true, insertBatchValidationContext{})
+	if pin != nil || catalog != nil || !errors.Is(err, backenddb.ErrClosed) {
+		t.Fatalf("pin=%v catalog=%v err=%v want ErrClosed without panic", pin, catalog, err)
+	}
+}
+
 func TestOpenCollectionWriteDomainCatalogCacheUsesCommitSeq(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
