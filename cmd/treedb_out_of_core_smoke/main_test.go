@@ -156,6 +156,27 @@ func TestMongoGatewayResultRowLabelsOptInWorkload(t *testing.T) {
 	}
 }
 
+func TestRawDiskUsageForPhasePrefersPhaseSnapshot(t *testing.T) {
+	summary := rawWorkerSummary{
+		DiskUsageFinal: diskUsage{TotalBytes: 300},
+		DiskUsageByPhase: map[string]diskUsage{
+			"post_insert":    {TotalBytes: 100, TopFiles: []fileSummary{{Path: "index.db", Bytes: 80}}},
+			"post_overwrite": {TotalBytes: 200},
+		},
+	}
+	insert := rawDiskUsageForPhase(summary, "post_insert")
+	if insert.TotalBytes != 100 {
+		t.Fatalf("post_insert bytes=%d want 100", insert.TotalBytes)
+	}
+	components := componentBytesFromDiskUsage(insert)
+	if components["index.db"] != 80 {
+		t.Fatalf("components=%v want index.db=80", components)
+	}
+	if got := rawDiskUsageForPhase(summary, "unknown").TotalBytes; got != 300 {
+		t.Fatalf("fallback bytes=%d want final 300", got)
+	}
+}
+
 func TestPrepareRunDirRequiresSentinelAndExplicitReuse(t *testing.T) {
 	nonSmoke := t.TempDir()
 	if err := os.WriteFile(filepath.Join(nonSmoke, "unrelated.txt"), []byte("x"), 0o644); err != nil {
