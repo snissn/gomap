@@ -1680,17 +1680,14 @@ func collectFinalStats(ctx context.Context, cfg config, target *benchTarget, res
 			return err
 		}
 		result.TreeDBDiskAfterCheckpoint = &snapshot
+		if target.db != nil {
+			result.TreeDBStatsFinal = target.db.Stats()
+		}
 		if cfg.TreeDBMaintenance == treeDBMaintenanceFull {
 			if err := runTreeDBMaintenanceStack(ctx, target, result); err != nil {
 				return err
 			}
-			if target.db != nil {
-				result.TreeDBStatsFinal = target.db.Stats()
-			}
 			return nil
-		}
-		if target.db != nil {
-			result.TreeDBStatsFinal = target.db.Stats()
 		}
 		return nil
 	}
@@ -2393,13 +2390,19 @@ func writeTreeDBStats(out io.Writer, label string, stats map[string]string) {
 		"treedb.publish.watermark.lock_delay_share_pct",
 		"treedb.publish.watermark.latency_p99_ms",
 	}
-	fmt.Fprintf(out, "%s", label)
+	wroteAny := false
 	for _, key := range keys {
 		if value, ok := stats[key]; ok {
+			if !wroteAny {
+				fmt.Fprintf(out, "%s", label)
+				wroteAny = true
+			}
 			fmt.Fprintf(out, " %s=%s", key, value)
 		}
 	}
-	fmt.Fprintln(out)
+	if wroteAny {
+		fmt.Fprintln(out)
+	}
 }
 
 func writeMaintenanceResult(out io.Writer, step maintenanceResult) {

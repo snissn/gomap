@@ -3671,8 +3671,15 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem) (*updateBatch
 
 	primaryRoot := catalog.rootID(collectionPrimaryRootName(meta.Name))
 	if primaryRoot == 0 {
-		_ = snap.Close()
-		return &updateBatchPlan{results: results, meta: meta, catalog: catalog}, nil
+		return &updateBatchPlan{
+			results:        results,
+			meta:           meta,
+			catalog:        catalog,
+			snap:           snap,
+			baseUserRoot:   baseUserRoot,
+			baseSystemRoot: baseSystemRoot,
+			baseCommitSeq:  baseCommitSeq,
+		}, nil
 	}
 	runtimes, err := (insertBatchPlanner{
 		collection: meta.Name,
@@ -3722,8 +3729,15 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem) (*updateBatch
 		changedDocuments = append(changedDocuments, bytes.Clone(document))
 	}
 	if len(changed) == 0 {
-		_ = snap.Close()
-		return &updateBatchPlan{results: results, meta: meta, catalog: catalog}, nil
+		return &updateBatchPlan{
+			results:        results,
+			meta:           meta,
+			catalog:        catalog,
+			snap:           snap,
+			baseUserRoot:   baseUserRoot,
+			baseSystemRoot: baseSystemRoot,
+			baseCommitSeq:  baseCommitSeq,
+		}, nil
 	}
 
 	preparedDocuments, templateRecords, templateResolver, err := prepareInsertDocuments(changedDocuments, plannerOptions)
@@ -3911,7 +3925,6 @@ func (c *Collection) publishUpdateBatchPlanLocked(plan *updateBatchPlan) ([]Upda
 		return plan.results, nil
 	}
 
-	c.meta = plan.meta
 	ordered := make([]backenddb.OrderedRootDeltaPublishInput, 0, len(plan.rootNames))
 	iterators := make([]iterator.UnsafeIterator, 0, len(plan.rootNames))
 	defer func() {
@@ -3941,6 +3954,7 @@ func (c *Collection) publishUpdateBatchPlanLocked(plan *updateBatchPlan) ([]Upda
 		return nil, errors.New("collections: ordered root publish returned unexpected root count")
 	}
 	nextCatalog := cloneCatalogWithRootUpdates(plan.catalog, plan.meta, plan.rootNames, rootIDs)
+	c.meta = plan.meta
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
 	return plan.results, nil
