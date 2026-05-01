@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math/bits"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -1303,6 +1304,23 @@ func TestBenchmarkDocumentOrdinalAvoidsIntOverflow(t *testing.T) {
 	}
 	if got < 0 || got >= documents {
 		t.Fatalf("ordinal=%d out of range [0,%d)", got, documents)
+	}
+}
+
+func TestBenchmarkUpdatedCityIndexAvoidsIntOverflow(t *testing.T) {
+	maxInt := int(^uint(0) >> 1)
+	cycle := 65521
+	got := benchmarkUpdatedCityIndex(maxInt, maxInt-1, maxInt-2, cycle)
+	seed := (uint64(maxInt)+1)*0x9e3779b185ebca87 ^
+		bits.RotateLeft64((uint64(maxInt-1)+1)*0xc2b2ae3d27d4eb4f, 17) ^
+		bits.RotateLeft64((uint64(maxInt-2)+1)*0x165667b19e3779f9, 31)
+	seed += 0x9e3779b97f4a7c15
+	seed = (seed ^ (seed >> 30)) * 0xbf58476d1ce4e5b9
+	seed = (seed ^ (seed >> 27)) * 0x94d049bb133111eb
+	seed ^= seed >> 31
+	want := int(seed % uint64(cycle))
+	if got != want {
+		t.Fatalf("updated city index=%d want %d", got, want)
 	}
 }
 

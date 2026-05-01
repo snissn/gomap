@@ -64,7 +64,7 @@ Options:
   --profile NAME         TreeDB profile. Default: wal_on_fast.
   --maintenance MODE     TreeDB maintenance mode. Default: none.
   --update-indexed-field Include the city field in update phases to exercise
-                         secondary-index maintenance when the city index exists.
+                         secondary-index maintenance; requires INDEXES=2.
   --timeout DURATION     Per-cell timeout. Default: 60m.
   --title TITLE          Report title.
   --help                 Show this help.
