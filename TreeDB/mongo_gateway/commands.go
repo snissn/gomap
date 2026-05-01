@@ -225,8 +225,9 @@ func (s *Server) updateResponse(command wire.Document, sequences []wire.Document
 			modified = 1
 		}
 	} else if len(parsed) > 1 && !hasDuplicateKey && !collectionHasSecondaryUniqueIndexes(col) {
-		matched, modified, err = runMongoUpdateBatch(col, parsed)
-		if err != nil {
+		var batched bool
+		matched, modified, batched, err = runMongoUpdateBatch(col, parsed)
+		if err != nil || !batched {
 			matched, modified, err = runMongoUpdatesSequential(col, parsed)
 		}
 	} else {
@@ -343,13 +344,13 @@ func runMongoUpdateOne(col *collections.Collection, update mongoUpdateItem) (boo
 	})
 }
 
-func runMongoUpdateBatch(col *collections.Collection, updates []mongoUpdateItem) (int32, int32, error) {
-	results, err := runMongoUpdateBatchResults(col, updates)
-	if err != nil {
-		return 0, 0, err
-	}
+func runMongoUpdateBatch(col *collections.Collection, updates []mongoUpdateItem) (int32, int32, bool, error) {
+	results, batched, err := runMongoUpdateBatchResults(col, updates)
 	var matched int32
 	var modified int32
+	if err != nil || !batched {
+		return matched, modified, batched, err
+	}
 	for _, result := range results {
 		if result.Matched {
 			matched++
@@ -358,13 +359,13 @@ func runMongoUpdateBatch(col *collections.Collection, updates []mongoUpdateItem)
 			modified++
 		}
 	}
-	return matched, modified, nil
+	return matched, modified, true, nil
 }
 
-func runMongoUpdateBatchResults(col *collections.Collection, updates []mongoUpdateItem) ([]collections.UpdateBatchResult, error) {
+func runMongoUpdateBatchResults(col *collections.Collection, updates []mongoUpdateItem) ([]collections.UpdateBatchResult, bool, error) {
 	materializer, err := storedDocumentMaterializerForCollection(col)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if materializer != nil {
 		defer func() { _ = materializer.Close() }()
@@ -379,11 +380,14 @@ func runMongoUpdateBatchResults(col *collections.Collection, updates []mongoUpda
 			},
 		}
 	}
-	results, err := col.UpdateBatch(items)
-	if err != nil {
-		return nil, err
+	results, batched, err := col.UpdateBatchIfNoSecondaryUniqueIndexes(items)
+	if !batched {
+		return nil, false, err
 	}
-	return results, nil
+	if err != nil {
+		return nil, true, err
+	}
+	return results, true, nil
 }
 
 func applyMongoUpdateToStoredDocument(col *collections.Collection, materializer *collections.StoredDocumentJSONMaterializer, update mongoUpdateItem, stored []byte) ([]byte, bool, error) {
@@ -719,8 +723,8 @@ func (c *mongoUpdateCoalescer) runBatch(batch []mongoUpdateCoalescerRequest) {
 	for i, req := range batch {
 		updates[i] = req.item
 	}
-	results, err := runMongoUpdateBatchResults(batch[0].col, updates)
-	if err != nil || len(results) != len(batch) {
+	results, batched, err := runMongoUpdateBatchResults(batch[0].col, updates)
+	if err != nil || !batched || len(results) != len(batch) {
 		runMongoUpdateCoalescerSequential(batch)
 		return
 	}
