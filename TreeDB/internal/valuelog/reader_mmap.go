@@ -49,6 +49,7 @@ const (
 	enableAdaptiveCapEnvKey         = "TREEDB_VLOG_ADAPTIVE_DEAD_MAPPINGS"
 	enableCurrentWritableEnvKey     = "TREEDB_VLOG_ENABLE_CURRENT_WRITABLE_MMAP"
 	enableCurrentLeafWritableEnvKey = "TREEDB_VLOG_ENABLE_CURRENT_LEAF_WRITABLE_MMAP"
+	currentWritableMapTargetEnvKey  = "TREEDB_VLOG_CURRENT_WRITABLE_MMAP_TARGET_BYTES"
 	maxMappedSealedEnvKey           = "TREEDB_VLOG_MAX_MAPPED_SEALED_SEGMENTS"
 	maxMappedSealedBytesEnvKey      = "TREEDB_VLOG_MAX_MAPPED_SEALED_BYTES"
 	maxMappedLeafSealedEnvKey       = "TREEDB_VLOG_MAX_MAPPED_LEAF_SEALED_SEGMENTS"
@@ -58,17 +59,19 @@ const (
 	defaultMaxMappedSealedBytes     = 64 << 20
 	defaultMaxMappedLeafSealed      = defaultMaxMappedSealed * 4
 	defaultMaxMappedLeafSealedBytes = defaultMaxMappedSealedBytes * 4
+	defaultCurrentWritableMapTarget = 32 << 20
 )
 
 var (
-	maxDeadMappingsExplicit       bool
-	adaptiveDeadMappings                = defaultAdaptiveCapEnabled
-	enableCurrentWritableMmap           = false
-	enableCurrentLeafWritableMmap       = true
-	MaxMappedSealedSegments             = defaultMaxMappedSealed
-	MaxMappedSealedBytes          int64 = defaultMaxMappedSealedBytes
-	MaxMappedLeafSealedSegments         = defaultMaxMappedLeafSealed
-	MaxMappedLeafSealedBytes      int64 = defaultMaxMappedLeafSealedBytes
+	maxDeadMappingsExplicit        bool
+	adaptiveDeadMappings                 = defaultAdaptiveCapEnabled
+	enableCurrentWritableMmap            = false
+	enableCurrentLeafWritableMmap        = true
+	CurrentWritableMmapTargetBytes       = int64(defaultCurrentWritableMapTarget)
+	MaxMappedSealedSegments              = defaultMaxMappedSealed
+	MaxMappedSealedBytes           int64 = defaultMaxMappedSealedBytes
+	MaxMappedLeafSealedSegments          = defaultMaxMappedLeafSealed
+	MaxMappedLeafSealedBytes       int64 = defaultMaxMappedLeafSealedBytes
 )
 
 func init() {
@@ -100,6 +103,11 @@ func init() {
 			enableCurrentLeafWritableMmap = false
 		case "1", "true", "on", "yes":
 			enableCurrentLeafWritableMmap = true
+		}
+	}
+	if raw := strings.TrimSpace(os.Getenv(currentWritableMapTargetEnvKey)); raw != "" {
+		if v, err := strconv.ParseInt(raw, 10, 64); err == nil && v >= 0 {
+			CurrentWritableMmapTargetBytes = v
 		}
 	}
 	if raw := strings.TrimSpace(os.Getenv(maxMappedSealedEnvKey)); raw != "" {
@@ -300,6 +308,22 @@ func (f *File) sealedLazyMmapTargetSize() int64 {
 	return targetSize
 }
 
+func currentWritableMmapTargetSize(currentSize int64) int64 {
+	if currentSize <= 0 || CurrentWritableMmapTargetBytes <= 0 {
+		return currentSize
+	}
+	target := CurrentWritableMmapTargetBytes
+	const maxInt64 = int64(^uint64(0) >> 1)
+	if currentSize >= maxInt64-target {
+		return currentSize
+	}
+	rem := currentSize % target
+	if rem == 0 {
+		return currentSize
+	}
+	return currentSize + target - rem
+}
+
 func (f *File) retirePersistentMmapToDead() {
 	if f == nil {
 		return
@@ -420,7 +444,11 @@ func (f *File) remapToFileSizeWithPolicy(requirePersistent bool) {
 		return
 	}
 
-	if data != nil && int64(len(data)) >= currentSize {
+	mapSize := currentSize
+	if f.currentWritablePersistentMmapEnabled() {
+		mapSize = currentWritableMmapTargetSize(currentSize)
+	}
+	if data != nil && int64(len(data)) >= mapSize {
 		return
 	}
 	if data != nil {
@@ -429,7 +457,7 @@ func (f *File) remapToFileSizeWithPolicy(requirePersistent bool) {
 		f.deadMappedBytes.Add(uint64(len(data)))
 	}
 
-	b, err := mmapReadOnly(f.File, int(currentSize))
+	b, err := mmapReadOnly(f.File, int(mapSize))
 	if err != nil {
 		return
 	}

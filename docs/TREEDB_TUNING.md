@@ -205,6 +205,25 @@ Notes / gotchas:
 - Dict training is CPU-heavy and is disabled by default.
 - Trained dictionaries are persisted in `dictdb/` and used to decode values after reopen.
 
+### Leaf value-log mmap growth
+
+TreeDB maps current writable `leaf_vlog` files ahead to a bounded segment-scale
+target so recently appended outer leaf pages stay on the mmap read path without
+remapping on every append.
+
+- `TREEDB_VLOG_CURRENT_WRITABLE_MMAP_TARGET_BYTES` sets the map-ahead target
+  for current writable value-log files. The default is 32 MiB, matching the
+  default leaf segment scale. Set to `0` to map only the current file size.
+- `TREEDB_VLOG_MAX_DEAD_MAPPINGS` still caps retained stale mappings for safety;
+  frequent current-writable remaps can hit this cap and force `ReadAt` fallback.
+
+Useful stats:
+- `treedb.vlog.mmap_current_writable_map_target_bytes`
+- `treedb.vlog.mmap_remaps`
+- `treedb.vlog.mmap_dead_mappings`
+- `treedb.vlog.mmap_read.fallback_readat`
+- `treedb.vlog.mmap_read.miss_dead_mapping_cap`
+
 ### Leaf key compression (`Options.LeafPrefixCompression`)
 
 TreeDB can compress keys stored in **leaf pages** using a front-coding scheme
