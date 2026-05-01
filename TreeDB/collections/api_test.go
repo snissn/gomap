@@ -2376,14 +2376,15 @@ func TestRollbackBufferedIndexedDomainRestoresMetadata(t *testing.T) {
 		roots: map[string]uint64{collectionPrimaryRootName("users"): 42},
 	}
 	domain := &collectionWriteDomain{
-		loaded:         true,
-		meta:           catalog.meta,
-		catalog:        catalog,
-		baseCommitSeq:  7,
-		baseSystemRoot: 11,
-		primaryRoot:    42,
-		count:          3,
-		bufferedBytes:  99,
+		loaded:          true,
+		meta:            catalog.meta,
+		catalog:         catalog,
+		baseCommitSeq:   7,
+		baseSystemRoot:  11,
+		primaryRoot:     42,
+		count:           3,
+		bufferedBytes:   99,
+		writeGeneration: 12,
 		rootRuns: map[string][]memtable.Table{
 			collectionPrimaryRootName("users"): nil,
 		},
@@ -2407,6 +2408,7 @@ func TestRollbackBufferedIndexedDomainRestoresMetadata(t *testing.T) {
 	domain.primaryRoot = 300
 	domain.count = 400
 	domain.bufferedBytes = 500
+	domain.writeGeneration = 600
 	domain.rootRuns = map[string][]memtable.Table{collectionPrimaryRootName("other"): nil}
 	domain.rootPolicies = nil
 	domain.rootBaseIDs = nil
@@ -2419,8 +2421,8 @@ func TestRollbackBufferedIndexedDomainRestoresMetadata(t *testing.T) {
 	if domain.baseCommitSeq != 7 || domain.baseSystemRoot != 11 || domain.primaryRoot != 42 {
 		t.Fatalf("roots after rollback commit=%d system=%d primary=%d", domain.baseCommitSeq, domain.baseSystemRoot, domain.primaryRoot)
 	}
-	if domain.count != 3 || domain.bufferedBytes != 99 {
-		t.Fatalf("counters after rollback count=%d bytes=%d", domain.count, domain.bufferedBytes)
+	if domain.count != 3 || domain.bufferedBytes != 99 || domain.writeGeneration != 12 {
+		t.Fatalf("counters after rollback count=%d bytes=%d generation=%d", domain.count, domain.bufferedBytes, domain.writeGeneration)
 	}
 	if _, ok := domain.rootRuns[collectionPrimaryRootName("users")]; !ok {
 		t.Fatalf("rootRuns=%v missing users primary root", domain.rootRuns)
@@ -4453,6 +4455,75 @@ func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesAppendsToBufferedUp
 	flushed := d.State()
 	if flushed.CommitSeq != before.CommitSeq+1 {
 		t.Fatalf("flush advanced commit seq by %d, want 1", flushed.CommitSeq-before.CommitSeq)
+	}
+}
+
+func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesRejectsStaleBufferedPlan(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Indexes: []IndexDefinition{
+			{Name: "email", Field: "email", Unique: true},
+			{Name: "city", Field: "city"},
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"email":"a@example.com","city":"hnl"}`)},
+	); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush insert buffer: %v", err)
+	}
+	if _, batched, err := col.UpdateBatchIfNoSecondaryUniqueIndexChanges([]UpdateBatchItem{
+		{DocumentID: []byte("u1"), Update: setJSONCity("sea")},
+	}); err != nil {
+		t.Fatalf("first UpdateBatchIfNoSecondaryUniqueIndexChanges: %v", err)
+	} else if !batched {
+		t.Fatalf("first batch was declined")
+	}
+
+	plan, err := col.buildUpdateBatchPlan([]UpdateBatchItem{
+		{DocumentID: []byte("u1"), Update: setJSONCity("sfo")},
+	}, updateBatchModeNoSecondaryUniqueIndexChanges, true)
+	if err != nil {
+		t.Fatalf("build stale plan: %v", err)
+	}
+	defer plan.close()
+	if !plan.bufferedBase || plan.bufferedReadGeneration == 0 {
+		t.Fatalf("plan bufferedBase=%v generation=%d want buffered read", plan.bufferedBase, plan.bufferedReadGeneration)
+	}
+
+	if _, batched, err := col.UpdateBatchIfNoSecondaryUniqueIndexChanges([]UpdateBatchItem{
+		{DocumentID: []byte("u1"), Update: setJSONCity("oak")},
+	}); err != nil {
+		t.Fatalf("second UpdateBatchIfNoSecondaryUniqueIndexChanges: %v", err)
+	} else if !batched {
+		t.Fatalf("second batch was declined")
+	}
+
+	err = col.withMutationLock(func() error {
+		buffered, err := col.bufferUpdateBatchPlanLocked(plan)
+		if buffered {
+			t.Fatalf("stale plan buffered successfully")
+		}
+		return err
+	})
+	if !errors.Is(err, ErrConcurrentMutation) {
+		t.Fatalf("buffer stale plan err=%v want ErrConcurrentMutation", err)
 	}
 }
 
