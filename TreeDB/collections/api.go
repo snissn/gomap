@@ -28,6 +28,7 @@ import (
 const (
 	collectionMetaVersion        = 1
 	maxCollectionMutationRetries = 64
+	maxCollectionInt             = int(^uint(0) >> 1)
 
 	// DefaultIndexedWriteMemtableMaxDocuments bounds the native indexed
 	// collection write-domain before it auto-flushes to persistent roots.
@@ -1768,8 +1769,7 @@ func bufferedPrimaryIDArenaCap(entries int) int {
 		return 0
 	}
 	const bytesPerKeyEstimate = 16
-	maxInt := int(^uint(0) >> 1)
-	if entries > maxInt/bytesPerKeyEstimate {
+	if entries > maxCollectionInt/bytesPerKeyEstimate {
 		return 0
 	}
 	return entries * bytesPerKeyEstimate
@@ -1826,9 +1826,8 @@ func rejectBufferedUniqueIndexConflicts(indexName string, pendingIndex *buffered
 
 func bufferedUniqueIndexValueRun(batchIndex memtable.Table) (memtable.Table, [][]byte, error) {
 	table := newCollectionRunTable(max(0, batchIndex.Len()))
-	maxInt := int(^uint(0) >> 1)
 	arenaCap := batchIndex.Size()
-	if arenaCap < 0 || arenaCap > int64(maxInt) {
+	if arenaCap < 0 || arenaCap > int64(maxCollectionInt) {
 		arenaCap = 0
 	}
 	arena := make([]byte, 0, int(arenaCap))
@@ -5541,7 +5540,7 @@ func (c *Collection) findByIndexValue(indexName string, value any, maxResults in
 	return collectMergedCollectionIndexIDs(bufferedIt, persistedIt, prefix, maxResults)
 }
 
-// bufferedIndexTableLocked materializes the buffered overlay for one secondary
+// bufferedIndexTableLocked materializes buffered entries for one secondary
 // index prefix while domain.mu is held. The returned pooled table is owned by
 // the caller and must be released with resetCollectionRunTable.
 func bufferedIndexTableLocked(domain *collectionWriteDomain, collectionName, indexName string, prefix []byte, maxResults int) (memtable.Table, error) {
@@ -5559,10 +5558,7 @@ func bufferedIndexTableLocked(domain *collectionWriteDomain, collectionName, ind
 		return nil, nil
 	}
 	table := newCollectionRunTable(0)
-	liveLimit := 0
-	if maxResults > 0 && maxResults < int(^uint(0)>>1) {
-		liveLimit = maxResults + 1
-	}
+	liveLimit := collectionLimitedResultSentinel(maxResults)
 	liveCount := 0
 	it := newBufferedRootRunsIteratorWithDeleted(runs, prefix, prefixEnd(prefix), true)
 	defer func() { _ = it.Close() }()
@@ -5595,10 +5591,7 @@ func bufferedIndexTableLocked(domain *collectionWriteDomain, collectionName, ind
 }
 
 func collectMergedCollectionIndexIDs(bufferedIt, persistedIt iterator.UnsafeIterator, prefix []byte, maxResults int) ([][]byte, bool, error) {
-	limit := 0
-	if maxResults > 0 && maxResults < int(^uint(0)>>1) {
-		limit = maxResults + 1
-	}
+	limit := collectionLimitedResultSentinel(maxResults)
 	capHint := 16
 	if limit > 0 {
 		capHint = limit
@@ -5664,6 +5657,13 @@ func collectMergedCollectionIndexIDs(bufferedIt, persistedIt iterator.UnsafeIter
 		truncated = true
 	}
 	return out, truncated, nil
+}
+
+func collectionLimitedResultSentinel(maxResults int) int {
+	if maxResults <= 0 || maxResults >= maxCollectionInt {
+		return 0
+	}
+	return maxResults + 1
 }
 
 func collectionIndexIteratorID(it iterator.UnsafeIterator, prefix []byte) ([]byte, bool) {

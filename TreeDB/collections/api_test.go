@@ -1824,7 +1824,7 @@ func TestCollectionIndexedWriteMemtablesFindSkipsBufferedSecondaryTombstone(t *t
 	}
 	table := newCollectionRunTable(2)
 	table.DeleteSteal(oldKey)
-	table.SetSteal(newKey, nil)
+	setCollectionRunValue(table, newKey, nil)
 	table.Freeze()
 	domain := col.writeDomain
 	domain.mu.Lock()
