@@ -393,10 +393,11 @@ scripts/mongo_gateway_scaling_bench.sh \
 
 The default sweep is TreeDB-only, using `wal_on_fast`, native BSON collection
 storage, `driver-command-raw`, prebuilt BSON documents, and no final maintenance
-so the measured phases focus on concurrency. Add `--include-mongo --mongo-uri
-mongodb://127.0.0.1:27017` to run matching cells against an existing MongoDB
-server. The bundle contains `report.md`, `summary.tsv`, `matrix.tsv`, raw JSON,
-and kept TreeDB data directories for profile follow-up.
+so the measured phases focus on concurrency. Add
+`--include-mongo --mongo-uri mongodb://127.0.0.1:27017` to run matching cells
+against an existing MongoDB server. The bundle contains `report.md`,
+`summary.tsv`, `matrix.tsv`, raw JSON, and kept TreeDB data directories for
+profile follow-up.
 
 ## Gateway Profiling Benchmarks
 

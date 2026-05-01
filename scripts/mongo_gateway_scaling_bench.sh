@@ -163,17 +163,18 @@ is_positive_int() {
   [[ "$1" =~ ^[0-9]+$ ]] && [[ "$1" -gt 0 ]]
 }
 
-for value_name in DOCS BATCH_SIZE INSERT_PRODUCERS CONCURRENT_WRITES CONCURRENT_READS MONGO_MAX_POOL_SIZE MONGO_MIN_POOL_SIZE MONGO_MAX_CONNECTING; do
+for value_name in DOCS BATCH_SIZE INSERT_PRODUCERS CONCURRENT_WRITES CONCURRENT_READS; do
   value=${!value_name}
-  if ! is_positive_int "$value" && [[ "$value_name" != MONGO_MIN_POOL_SIZE && "$value_name" != MONGO_MAX_POOL_SIZE && "$value_name" != MONGO_MAX_CONNECTING ]]; then
+  if ! is_positive_int "$value"; then
     echo "invalid $value_name=$value (want positive integer)" >&2
     exit 2
   fi
-  if [[ "$value_name" == MONGO_MIN_POOL_SIZE || "$value_name" == MONGO_MAX_POOL_SIZE || "$value_name" == MONGO_MAX_CONNECTING ]]; then
-    if ! is_nonnegative_int "$value"; then
-      echo "invalid $value_name=$value (want non-negative integer)" >&2
-      exit 2
-    fi
+done
+for value_name in MONGO_MAX_POOL_SIZE MONGO_MIN_POOL_SIZE MONGO_MAX_CONNECTING; do
+  value=${!value_name}
+  if ! is_nonnegative_int "$value"; then
+    echo "invalid $value_name=$value (want non-negative integer)" >&2
+    exit 2
   fi
 done
 for value_name in INDEXES READS RANGE_READS UPDATES DELETES; do
