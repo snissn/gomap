@@ -92,6 +92,45 @@ func TestReportRejectsIncompleteCell(t *testing.T) {
 	}
 }
 
+func TestReportAllowsIncompleteTreeDBOnlyCell(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "treedb.json"), `{
+  "target": "treedb",
+  "documents": 10,
+  "secondary_indexes": 0,
+  "phases": [{"name": "concurrent_id_update_set_w4", "operations": 40, "ops_per_sec": 4000, "sampled_ops_per_sec": 5000, "sampled_ns_per_op": 200, "latency_micros": {"p50": 1, "p95": 2, "p99": 3}}],
+  "treedb_disk_after_checkpoint": {"total_bytes": 100}
+}`)
+	matrixPath := filepath.Join(dir, "matrix.tsv")
+	reportPath := filepath.Join(dir, "report.md")
+	summaryPath := filepath.Join(dir, "summary.tsv")
+	writeFile(t, matrixPath, "target\tconfig\tdocuments\tsecondary_indexes\traw_json\tphysical_bytes\n"+
+		"treedb\ttreedb_bson_writers_4\t10\t0\ttreedb.json\t100\n")
+
+	if err := run([]string{
+		"-matrix", matrixPath,
+		"-report", reportPath,
+		"-summary", summaryPath,
+		"-allow-incomplete",
+	}); err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	report := readFile(t, reportPath)
+	for _, want := range []string{
+		"- targets: `treedb`",
+		"No MongoDB baseline rows were present",
+		"| 10 | 0 | `treedb_bson_writers_4` | `concurrent_id_update_set_w4` | 4000 | 5000 | n/a | n/a | n/a | n/a | 2.00 | n/a |",
+	} {
+		if !strings.Contains(report, want) {
+			t.Fatalf("report missing %q\n%s", want, report)
+		}
+	}
+	summary := readFile(t, summaryPath)
+	if !strings.Contains(summary, "concurrent_id_update_set_w4\t4000.000000\t5000.000000\t200.000000\t\t\t\t\t") {
+		t.Fatalf("summary missing TreeDB-only row:\n%s", summary)
+	}
+}
+
 func TestReportSupportsMultipleTreeDBConfigsPerMongoCell(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "treedb_json.json"), `{

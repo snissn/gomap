@@ -370,6 +370,34 @@ For insert-scaling investigations, run the same command repeatedly with
 investigations, keep the load shape fixed and vary `-concurrent-writers` /
 `-concurrent-writes`.
 
+## Reader/Writer Scaling Wrapper
+
+Use `scripts/mongo_gateway_scaling_bench.sh` for a repeatable reader/writer
+scaling sweep. It runs `mongo_gateway_bench` for each reader and writer count,
+writes raw JSON for every cell, then feeds the matrix into
+`mongo_gateway_compare_report` so the output shape matches the normal
+TreeDB-vs-MongoDB comparison bundle.
+
+```sh
+scripts/mongo_gateway_scaling_bench.sh \
+  --out /tmp/gomap_mongo_gateway_scaling \
+  --docs 100000 \
+  --indexes 2 \
+  --batch-size 10000 \
+  --insert-producers 8 \
+  --writers "1 2 4 8 16" \
+  --readers "1 2 4 8 16" \
+  --concurrent-writes 80000 \
+  --concurrent-reads 80000
+```
+
+The default sweep is TreeDB-only, using `wal_on_fast`, native BSON collection
+storage, `driver-command-raw`, prebuilt BSON documents, and no final maintenance
+so the measured phases focus on concurrency. Add `--include-mongo --mongo-uri
+mongodb://127.0.0.1:27017` to run matching cells against an existing MongoDB
+server. The bundle contains `report.md`, `summary.tsv`, `matrix.tsv`, raw JSON,
+and kept TreeDB data directories for profile follow-up.
+
 ## Gateway Profiling Benchmarks
 
 The package also includes benchmark-only entry points for isolating Mongo
