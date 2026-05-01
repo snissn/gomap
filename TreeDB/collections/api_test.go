@@ -1482,6 +1482,121 @@ func TestCollectionIndexedWriteMemtablesBypassDefaultLargeBatches(t *testing.T) 
 	}
 }
 
+func TestCollectionInsertPlanningKeepsLockForIndexedMemtableBypass(t *testing.T) {
+	tests := []struct {
+		name                    string
+		documentFormat          DocumentFormat
+		indexedMemtablesEnabled bool
+		bufferIndexedInserts    bool
+		wantUnlock              bool
+	}{
+		{
+			name:           "json-no-indexed-memtables",
+			documentFormat: DocumentFormatJSON,
+			wantUnlock:     true,
+		},
+		{
+			name:                    "json-buffered-indexed-memtables",
+			documentFormat:          DocumentFormatJSON,
+			indexedMemtablesEnabled: true,
+			bufferIndexedInserts:    true,
+			wantUnlock:              true,
+		},
+		{
+			name:                    "json-direct-indexed-memtable-bypass",
+			documentFormat:          DocumentFormatJSON,
+			indexedMemtablesEnabled: true,
+			bufferIndexedInserts:    false,
+			wantUnlock:              false,
+		},
+		{
+			name:           "bson-no-indexed-memtables",
+			documentFormat: DocumentFormatBSON,
+			wantUnlock:     true,
+		},
+		{
+			name:                    "bson-direct-indexed-memtable-bypass",
+			documentFormat:          DocumentFormatBSON,
+			indexedMemtablesEnabled: true,
+			bufferIndexedInserts:    false,
+			wantUnlock:              false,
+		},
+		{
+			name:           "template-v1",
+			documentFormat: DocumentFormatTemplateV1,
+			wantUnlock:     false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := shouldUnlockInsertPlanning(
+				collectionOptions{documentFormat: tt.documentFormat},
+				tt.indexedMemtablesEnabled,
+				tt.bufferIndexedInserts,
+			)
+			if got != tt.wantUnlock {
+				t.Fatalf("shouldUnlockInsertPlanning()=%v want %v", got, tt.wantUnlock)
+			}
+		})
+	}
+}
+
+func TestCollectionInsertRetryRetriesWrappedConcurrentMutation(t *testing.T) {
+	attempts := 0
+	result, err := retryInsertBatchMutation(func() ([][]byte, error) {
+		attempts++
+		if attempts < 3 {
+			return nil, fmt.Errorf("wrapped attempt %d: %w", attempts, ErrConcurrentMutation)
+		}
+		return [][]byte{[]byte("u1")}, nil
+	})
+	if err != nil {
+		t.Fatalf("retryInsertBatchMutation err=%v want nil", err)
+	}
+	if attempts != 3 {
+		t.Fatalf("attempts=%d want 3", attempts)
+	}
+	if len(result) != 1 || !bytes.Equal(result[0], []byte("u1")) {
+		t.Fatalf("result=%q want [u1]", result)
+	}
+}
+
+func TestCollectionInsertRetryReturnsNonRetryableImmediately(t *testing.T) {
+	attempts := 0
+	wantErr := errors.New("boom")
+	_, err := retryInsertBatchMutation(func() ([][]byte, error) {
+		attempts++
+		return nil, wantErr
+	})
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("retryInsertBatchMutation err=%v want %v", err, wantErr)
+	}
+	if attempts != 1 {
+		t.Fatalf("attempts=%d want 1", attempts)
+	}
+}
+
+func TestCollectionInsertRetryExhaustionWrapsLastConcurrentMutation(t *testing.T) {
+	attempts := 0
+	lastErr := fmt.Errorf("last stale root: %w", ErrConcurrentMutation)
+	_, err := retryInsertBatchMutation(func() ([][]byte, error) {
+		attempts++
+		return nil, lastErr
+	})
+	if !errors.Is(err, ErrConcurrentMutation) {
+		t.Fatalf("retryInsertBatchMutation err=%v want ErrConcurrentMutation", err)
+	}
+	if !strings.Contains(err.Error(), lastErr.Error()) {
+		t.Fatalf("retryInsertBatchMutation err=%q want last error %q", err, lastErr)
+	}
+	if got := strings.Count(err.Error(), ErrConcurrentMutation.Error()); got != 1 {
+		t.Fatalf("retryInsertBatchMutation err=%q contains ErrConcurrentMutation text %d times, want 1", err, got)
+	}
+	if attempts != maxCollectionMutationRetries {
+		t.Fatalf("attempts=%d want %d", attempts, maxCollectionMutationRetries)
+	}
+}
+
 func TestCollectionIndexedWriteMemtablesReadAfterDomainTableAllocated(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
@@ -2326,6 +2441,162 @@ func TestCollectionCachedCatalogUsesCommitSeq(t *testing.T) {
 	}
 	if got, want := refreshed.rootID(rootName), catalog.rootID(rootName); got != want {
 		t.Fatalf("refreshed root=%d want %d", got, want)
+	}
+}
+
+func TestCollectionValidateInsertBatchPlanLockedClassifiesRaces(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("u1")}, [][]byte{[]byte(`{"name":"ada"}`)}); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("expected snapshot")
+	}
+	defer func() { _ = snap.Close() }()
+	catalog, err := loadCollectionCatalog(snap, "users")
+	if err != nil {
+		t.Fatalf("load catalog: %v", err)
+	}
+	rootName := collectionPrimaryRootName("users")
+	plan := &insertBatchPlan{
+		resultIDs:   [][]byte{[]byte("u2")},
+		primaryKeys: [][]byte{[]byte("u2")},
+		runs:        []collectionRootRun{{name: rootName}},
+	}
+	rootNames, baseRootIDs := insertBatchPlanRootNamesAndBaseIDs(plan, catalog)
+	staleRootIDs := map[string]uint64{rootName: baseRootIDs[rootName] + 1}
+	validation := insertBatchValidationContext{
+		meta:        catalog.meta,
+		rootNames:   rootNames,
+		baseRootIDs: staleRootIDs,
+		plan:        plan,
+	}
+	if current, _, err := col.validateInsertBatchPlanLocked(validation); current != nil || !errors.Is(err, ErrConcurrentMutation) {
+		if current != nil {
+			_ = current.Close()
+		}
+		t.Fatalf("root mismatch current=%v err=%v want ErrConcurrentMutation", current, err)
+	} else if !strings.Contains(err.Error(), `collection="users"`) || !strings.Contains(err.Error(), `root="users/primary"`) {
+		t.Fatalf("root mismatch err=%v missing collection/root context", err)
+	}
+	validation.baseRootIDs = map[string]uint64{}
+	if current, _, err := col.validateInsertBatchPlanLocked(validation); current != nil || err == nil || errors.Is(err, ErrConcurrentMutation) || !strings.Contains(err.Error(), `collection="users"`) || !strings.Contains(err.Error(), `root="users/primary"`) {
+		if current != nil {
+			_ = current.Close()
+		}
+		t.Fatalf("missing base root current=%v err=%v want non-retryable missing base root error", current, err)
+	}
+
+	schemaMeta := catalog.meta
+	schemaMeta.Options.AllowArrayValuesInIndex = !schemaMeta.Options.AllowArrayValuesInIndex
+	validation.meta = schemaMeta
+	validation.baseRootIDs = baseRootIDs
+	if current, _, err := col.validateInsertBatchPlanLocked(validation); current != nil || err == nil || errors.Is(err, ErrConcurrentMutation) {
+		if current != nil {
+			_ = current.Close()
+		}
+		t.Fatalf("schema mismatch current=%v err=%v want non-retryable schema error", current, err)
+	}
+}
+
+func TestCollectionLockAndValidateInsertBatchPlanAllowsDisjointRootDrift(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DisableIndexedWriteMemtables: true,
+		},
+		Indexes: []IndexDefinition{{Name: "city", Field: "city"}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("u1")}, [][]byte{[]byte(`{"city":"a"}`)}); err != nil {
+		t.Fatalf("insert initial: %v", err)
+	}
+
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("expected snapshot")
+	}
+	catalog, err := loadCollectionCatalog(snap, "users")
+	if err != nil {
+		_ = snap.Close()
+		t.Fatalf("load catalog: %v", err)
+	}
+	meta := catalog.meta
+	plannerOptions, err := collectionPlannerOptions(meta)
+	if err != nil {
+		_ = snap.Close()
+		t.Fatalf("planner options: %v", err)
+	}
+	plannerOptions = collectionOptionsWithTemplateV1Resolver(plannerOptions, snap, catalog)
+	plan, err := (insertBatchPlanner{
+		collection:     meta.Name,
+		primaryRoot:    collectionPrimaryRootName(meta.Name),
+		templateRoot:   collectionTemplateRootName(meta.Name),
+		indexStateRoot: collectionIndexStateRootName(meta.Name),
+		indexes:        plannerIndexes(meta.Indexes),
+		options:        plannerOptions,
+	}).planInsertBatch([][]byte{[]byte("u2")}, [][]byte{[]byte(`{"city":"b"}`)})
+	_ = snap.Close()
+	if err != nil {
+		t.Fatalf("plan insert: %v", err)
+	}
+	defer resetCollectionRunTables(plan.runs)
+	rootNames, baseRootIDs := insertBatchPlanRootNamesAndBaseIDs(plan, catalog)
+	oldPrimaryRoot := baseRootIDs[collectionPrimaryRootName("users")]
+
+	if _, err := col.InsertBatch([][]byte{[]byte("u3")}, [][]byte{[]byte(`{"city":"c"}`)}); err != nil {
+		t.Fatalf("insert disjoint concurrent row: %v", err)
+	}
+
+	mutationLocked := false
+	unlockMutation := func() {}
+	pin, currentCatalog, _, _, err := col.lockAndValidateInsertBatchPlan(&mutationLocked, &unlockMutation, nil, catalog, meta, rootNames, baseRootIDs, plan)
+	if err != nil {
+		t.Fatalf("validate disjoint root drift: %v", err)
+	}
+	defer unlockMutation()
+	defer func() { _ = pin.Close() }()
+	currentPrimaryRoot := currentCatalog.rootID(collectionPrimaryRootName("users"))
+	if currentPrimaryRoot == oldPrimaryRoot {
+		t.Fatal("test did not create primary root drift")
+	}
+	if got := baseRootIDs[collectionPrimaryRootName("users")]; got != currentPrimaryRoot {
+		t.Fatalf("rebased primary root=%d want %d", got, currentPrimaryRoot)
+	}
+}
+
+func TestCollectionValidateInsertBatchPlanAfterPlanningLockedNilSnapshot(t *testing.T) {
+	col := &Collection{}
+	pin, catalog, err := col.validateInsertBatchPlanAfterPlanningLocked(true, insertBatchValidationContext{})
+	if pin != nil || catalog != nil || !errors.Is(err, backenddb.ErrClosed) {
+		t.Fatalf("pin=%v catalog=%v err=%v want ErrClosed without panic", pin, catalog, err)
 	}
 }
 

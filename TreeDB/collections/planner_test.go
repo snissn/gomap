@@ -456,6 +456,9 @@ func TestInsertBatchPlanner_BuildsUniqueProbePrefixesOnlyForPersistedRoots(t *te
 	if got, want := len(plan.uniqueProbeRuns), 1; got != want {
 		t.Fatalf("unique probe runs=%d want %d", got, want)
 	}
+	if got, want := len(plan.allUniqueProbeRuns), 2; got != want {
+		t.Fatalf("all unique probe runs=%d want %d", got, want)
+	}
 	if got, want := plan.uniqueProbeRuns[0].indexName, "email"; got != want {
 		t.Fatalf("unique probe index=%q want %q", got, want)
 	}
@@ -472,6 +475,124 @@ func TestInsertBatchPlanner_BuildsUniqueProbePrefixesOnlyForPersistedRoots(t *te
 	}
 	if got, want := probe.lastHasPrefixesRootID, uint64(77); got != want {
 		t.Fatalf("HasPrefixesAtRoot root=%d want %d", got, want)
+	}
+
+	noRootProbe := &recordingRootSnapshotProbe{}
+	planWithoutPersistedRoots, err := planner.planInsertBatchWithPreflight(
+		[][]byte{[]byte("u3")},
+		[][]byte{[]byte(`{"email":"katherine@example.com","username":"katherine"}`)},
+		insertBatchPreflight{snapshot: noRootProbe},
+	)
+	if err != nil {
+		t.Fatalf("plan insert batch without persisted roots: %v", err)
+	}
+	if !planWithoutPersistedRoots.allUniqueProbeRunsBuilt {
+		t.Fatal("all unique probe runs were not built")
+	}
+	if got, want := len(planWithoutPersistedRoots.allUniqueProbeRuns), 2; got != want {
+		t.Fatalf("all unique probe runs without persisted roots=%d want %d", got, want)
+	}
+	if noRootProbe.hasPrefixesCalls != 0 {
+		t.Fatalf("HasPrefixesAtRoot calls without persisted roots=%d want 0", noRootProbe.hasPrefixesCalls)
+	}
+}
+
+func TestInsertBatchPreflightCheckUniqueConflictsSkipsMissingRoots(t *testing.T) {
+	probe := &recordingRootSnapshotProbe{}
+	preflight := insertBatchPreflight{
+		snapshot: probe,
+		uniqueIndexRootIDs: map[string]uint64{
+			"email": 77,
+		},
+	}
+	err := preflight.checkUniqueConflicts([]collectionUniqueProbeRun{
+		{indexName: "username", prefixes: [][]byte{[]byte("ada")}},
+		{indexName: "email", prefixes: [][]byte{[]byte("ada@example.com")}},
+	})
+	if err != nil {
+		t.Fatalf("check unique conflicts: %v", err)
+	}
+	if got, want := probe.hasPrefixesCalls, 1; got != want {
+		t.Fatalf("HasPrefixesAtRoot calls=%d want %d", got, want)
+	}
+	if got, want := probe.lastHasPrefixesRootID, uint64(77); got != want {
+		t.Fatalf("HasPrefixesAtRoot root=%d want %d", got, want)
+	}
+}
+
+func TestInsertBatchPlanCheckPersistedConflictsRejectsMissingInputs(t *testing.T) {
+	tests := []struct {
+		name    string
+		plan    *insertBatchPlan
+		catalog *collectionCatalog
+		want    string
+	}{
+		{name: "plan", want: "missing plan"},
+		{name: "snapshot", plan: &insertBatchPlan{}, catalog: &collectionCatalog{meta: CollectionMeta{Name: "users"}}, want: "missing snapshot"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.plan.checkPersistedConflicts(nil, tt.catalog)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("checkPersistedConflicts err=%v want %q", err, tt.want)
+			}
+		})
+	}
+
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("expected snapshot")
+	}
+	defer func() { _ = snap.Close() }()
+	err = (&insertBatchPlan{}).checkPersistedConflicts(snap, nil)
+	if err == nil || !strings.Contains(err.Error(), "missing catalog") {
+		t.Fatalf("checkPersistedConflicts err=%v want missing catalog", err)
+	}
+}
+
+func TestInsertBatchPlanCheckPersistedConflictsRejectsIncompleteDerivedInputs(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("expected snapshot")
+	}
+	defer func() { _ = snap.Close() }()
+
+	catalog := &collectionCatalog{
+		meta:  CollectionMeta{Name: "users"},
+		roots: map[string]uint64{},
+	}
+	err = (&insertBatchPlan{resultIDs: [][]byte{[]byte("u1")}}).checkPersistedConflicts(snap, catalog)
+	if err == nil || !strings.Contains(err.Error(), "missing primary keys") {
+		t.Fatalf("checkPersistedConflicts err=%v want missing primary keys", err)
+	}
+
+	catalog.meta.Indexes = []IndexDefinition{{Name: "email", Field: "email", Unique: true}}
+	catalog.roots[collectionSecondaryRootName("users", "email")] = 2
+	err = (&insertBatchPlan{
+		resultIDs:   [][]byte{[]byte("u1")},
+		primaryKeys: [][]byte{[]byte("u1")},
+	}).checkPersistedConflicts(snap, catalog)
+	if err == nil || !strings.Contains(err.Error(), "missing unique probe candidates") {
+		t.Fatalf("checkPersistedConflicts err=%v want missing unique probe candidates", err)
+	}
+
+	err = (&insertBatchPlan{
+		resultIDs:               [][]byte{[]byte("u1")},
+		primaryKeys:             [][]byte{[]byte("u1")},
+		allUniqueProbeRunsBuilt: true,
+	}).checkPersistedConflicts(snap, catalog)
+	if err != nil {
+		t.Fatalf("checkPersistedConflicts with built empty probes: %v", err)
 	}
 }
 

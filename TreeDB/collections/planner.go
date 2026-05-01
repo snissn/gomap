@@ -81,11 +81,16 @@ type insertBatchPlanner struct {
 }
 
 type insertBatchPlan struct {
-	resultIDs       [][]byte
-	runs            []collectionRootRun
-	uniqueProbeRuns []collectionUniqueProbeRun
-	templateRecords []templateV1Record
-	stats           insertBatchPlanStats
+	resultIDs                  [][]byte
+	primaryKeys                [][]byte
+	runs                       []collectionRootRun
+	uniqueProbeCandidates      []uniqueProbeCandidate
+	uniqueProbeCandidatesBuilt bool
+	uniqueProbeRuns            []collectionUniqueProbeRun
+	allUniqueProbeRuns         []collectionUniqueProbeRun
+	allUniqueProbeRunsBuilt    bool
+	templateRecords            []templateV1Record
+	stats                      insertBatchPlanStats
 }
 
 type insertBatchPlanStats struct {
@@ -207,7 +212,8 @@ func (p insertBatchPlanner) planInsertBatchWithPreflight(ids, documents [][]byte
 	if err := rejectDuplicateDocumentIDs(items, primaryOrder); err != nil {
 		return nil, err
 	}
-	if err := preflight.checkDocumentConflicts(items, primaryOrder, resultIDs); err != nil {
+	primaryKeys := sortedDocumentIDKeys(items, primaryOrder, resultIDs)
+	if err := preflight.checkDocumentConflictKeys(primaryKeys); err != nil {
 		return nil, err
 	}
 	stats.DuplicateDocumentPreflight = time.Since(phaseStart)
@@ -227,20 +233,33 @@ func (p insertBatchPlanner) planInsertBatchWithPreflight(ids, documents [][]byte
 	if err := rejectDuplicateUniqueProbeCandidates(uniqueProbes); err != nil {
 		return nil, err
 	}
-	uniqueProbeRuns, err := buildUniqueProbeRunsForPreflightFromSorted(uniqueProbes, preflight)
-	if err != nil {
-		return nil, err
+	var uniqueProbeRuns []collectionUniqueProbeRun
+	var allUniqueProbeRuns []collectionUniqueProbeRun
+	allUniqueProbeRunsBuilt := true
+	if len(uniqueProbes) > 0 {
+		allUniqueProbeRuns, err = buildUniqueProbeRunsFromSorted(uniqueProbes, nil)
+		if err != nil {
+			return nil, err
+		}
 	}
-	if err := preflight.checkUniqueConflicts(uniqueProbeRuns); err != nil {
-		return nil, err
+	if preflight.snapshot != nil && len(preflight.uniqueIndexRootIDs) > 0 {
+		uniqueProbeRuns = uniqueProbeRunsForPreflight(allUniqueProbeRuns, preflight)
+		if err := preflight.checkUniqueConflicts(uniqueProbeRuns); err != nil {
+			return nil, err
+		}
 	}
 	stats.UniqueIndexPreflight = time.Since(phaseStart)
 
 	plan := &insertBatchPlan{
-		resultIDs:       resultIDs,
-		uniqueProbeRuns: uniqueProbeRuns,
-		templateRecords: templateRecords,
-		stats:           insertBatchPlanStats{CollectionInsertStats: stats},
+		resultIDs:                  resultIDs,
+		primaryKeys:                primaryKeys,
+		uniqueProbeCandidates:      uniqueProbes,
+		uniqueProbeCandidatesBuilt: true,
+		uniqueProbeRuns:            uniqueProbeRuns,
+		allUniqueProbeRuns:         allUniqueProbeRuns,
+		allUniqueProbeRunsBuilt:    allUniqueProbeRunsBuilt,
+		templateRecords:            templateRecords,
+		stats:                      insertBatchPlanStats{CollectionInsertStats: stats},
 	}
 	if len(templateRecords) > 0 {
 		phaseStart = time.Now()
@@ -295,17 +314,12 @@ func cloneBatchDocumentIDs(ids [][]byte) ([][]byte, error) {
 }
 
 func (p insertBatchPreflight) checkDocumentConflicts(items []insertBatchItem, order []int, presortedIDs [][]byte) error {
+	return p.checkDocumentConflictKeys(sortedDocumentIDKeys(items, order, presortedIDs))
+}
+
+func (p insertBatchPreflight) checkDocumentConflictKeys(keys [][]byte) error {
 	if p.snapshot == nil || p.primaryRootID == 0 {
 		return nil
-	}
-	// sortedItemOrderByKey returns nil only when items are already sorted by ID,
-	// so the caller-owned presortedIDs slice is safe to reuse only in that case.
-	keys := presortedIDs
-	if order != nil || len(keys) != len(items) {
-		keys = make([][]byte, len(items))
-		for i := range items {
-			keys[i] = items[orderedItemIndex(order, i)].id
-		}
 	}
 	exists, err := p.snapshot.HasAnySortedAtRoot(p.primaryRootID, keys)
 	if err != nil {
@@ -317,13 +331,70 @@ func (p insertBatchPreflight) checkDocumentConflicts(items []insertBatchItem, or
 	return nil
 }
 
+func sortedDocumentIDKeys(items []insertBatchItem, order []int, presortedIDs [][]byte) [][]byte {
+	// sortedItemOrderByKey returns nil only when items are already sorted by ID,
+	// so the caller-owned presortedIDs slice is safe to reuse only in that case.
+	if order == nil && len(presortedIDs) == len(items) {
+		return presortedIDs
+	}
+	keys := make([][]byte, len(items))
+	for i := range items {
+		keys[i] = items[orderedItemIndex(order, i)].id
+	}
+	return keys
+}
+
+func (plan *insertBatchPlan) checkPersistedConflicts(snap *backenddb.Snapshot, catalog *collectionCatalog) error {
+	if plan == nil {
+		return errors.New("collections: insert conflict check missing plan")
+	}
+	if snap == nil {
+		return errors.New("collections: insert conflict check missing snapshot")
+	}
+	if catalog == nil {
+		return errors.New("collections: insert conflict check missing catalog")
+	}
+	if len(plan.primaryKeys) != len(plan.resultIDs) {
+		return fmt.Errorf("collections: insert conflict check missing primary keys: got %d, want %d", len(plan.primaryKeys), len(plan.resultIDs))
+	}
+	uniqueRootIDs := uniqueIndexRootIDs(catalog)
+	uniqueProbeRuns, err := plan.uniqueProbeRunsForPersistedConflicts(uniqueRootIDs)
+	if err != nil {
+		return err
+	}
+	preflight := insertBatchPreflight{
+		snapshot:           snap,
+		primaryRootID:      catalog.rootID(collectionPrimaryRootName(catalog.meta.Name)),
+		uniqueIndexRootIDs: uniqueRootIDs,
+	}
+	if err := preflight.checkDocumentConflictKeys(plan.primaryKeys); err != nil {
+		return err
+	}
+	return preflight.checkUniqueConflicts(uniqueProbeRuns)
+}
+
+func (plan *insertBatchPlan) uniqueProbeRunsForPersistedConflicts(uniqueRootIDs map[string]uint64) ([]collectionUniqueProbeRun, error) {
+	if plan == nil || len(plan.resultIDs) == 0 || len(uniqueRootIDs) == 0 {
+		return nil, nil
+	}
+	if plan.allUniqueProbeRunsBuilt {
+		return plan.allUniqueProbeRuns, nil
+	}
+	if !plan.uniqueProbeCandidatesBuilt {
+		return nil, errors.New("collections: insert conflict check missing unique probe candidates")
+	}
+	return buildUniqueProbeRunsFromSorted(plan.uniqueProbeCandidates, func(indexName string) bool {
+		return uniqueRootIDs[indexName] != 0
+	})
+}
+
 func (p insertBatchPreflight) checkUniqueConflicts(runs []collectionUniqueProbeRun) error {
 	if p.snapshot == nil || len(p.uniqueIndexRootIDs) == 0 {
 		return nil
 	}
 	for _, run := range runs {
-		rootID := p.uniqueIndexRootIDs[run.indexName]
-		if rootID == 0 {
+		rootID, ok := p.uniqueIndexRootIDs[run.indexName]
+		if !ok || rootID == 0 {
 			continue
 		}
 		exists, err := p.snapshot.HasPrefixesAtRoot(rootID, run.prefixes)
@@ -455,13 +526,19 @@ func estimateUniqueProbePrefixBytes(candidates []uniqueProbeCandidate) int {
 	return total
 }
 
-func buildUniqueProbeRunsForPreflightFromSorted(candidates []uniqueProbeCandidate, preflight insertBatchPreflight) ([]collectionUniqueProbeRun, error) {
-	if preflight.snapshot == nil || len(preflight.uniqueIndexRootIDs) == 0 {
-		return nil, nil
+func uniqueProbeRunsForPreflight(runs []collectionUniqueProbeRun, preflight insertBatchPreflight) []collectionUniqueProbeRun {
+	if preflight.snapshot == nil || len(preflight.uniqueIndexRootIDs) == 0 || len(runs) == 0 {
+		return nil
 	}
-	return buildUniqueProbeRunsFromSorted(candidates, func(indexName string) bool {
-		return preflight.uniqueIndexRootIDs[indexName] != 0
-	})
+	out := make([]collectionUniqueProbeRun, 0, len(runs))
+	for _, run := range runs {
+		rootID, ok := preflight.uniqueIndexRootIDs[run.indexName]
+		if !ok || rootID == 0 {
+			continue
+		}
+		out = append(out, run)
+	}
+	return out
 }
 
 func buildUniqueProbeRunsFromSorted(candidates []uniqueProbeCandidate, includeIndex func(indexName string) bool) ([]collectionUniqueProbeRun, error) {
