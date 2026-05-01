@@ -81,14 +81,14 @@ type insertBatchPlanner struct {
 }
 
 type insertBatchPlan struct {
-	resultIDs          [][]byte
-	primaryKeys        [][]byte
-	runs               []collectionRootRun
-	uniqueProbeRuns    []collectionUniqueProbeRun
-	allUniqueProbeRuns []collectionUniqueProbeRun
-	uniqueProbeRunsSet bool
-	templateRecords    []templateV1Record
-	stats              insertBatchPlanStats
+	resultIDs               [][]byte
+	primaryKeys             [][]byte
+	runs                    []collectionRootRun
+	uniqueProbeRuns         []collectionUniqueProbeRun
+	allUniqueProbeRuns      []collectionUniqueProbeRun
+	allUniqueProbeRunsBuilt bool
+	templateRecords         []templateV1Record
+	stats                   insertBatchPlanStats
 }
 
 type insertBatchPlanStats struct {
@@ -242,13 +242,13 @@ func (p insertBatchPlanner) planInsertBatchWithPreflight(ids, documents [][]byte
 	stats.UniqueIndexPreflight = time.Since(phaseStart)
 
 	plan := &insertBatchPlan{
-		resultIDs:          resultIDs,
-		primaryKeys:        primaryKeys,
-		uniqueProbeRuns:    uniqueProbeRuns,
-		allUniqueProbeRuns: allUniqueProbeRuns,
-		uniqueProbeRunsSet: true,
-		templateRecords:    templateRecords,
-		stats:              insertBatchPlanStats{CollectionInsertStats: stats},
+		resultIDs:               resultIDs,
+		primaryKeys:             primaryKeys,
+		uniqueProbeRuns:         uniqueProbeRuns,
+		allUniqueProbeRuns:      allUniqueProbeRuns,
+		allUniqueProbeRunsBuilt: true,
+		templateRecords:         templateRecords,
+		stats:                   insertBatchPlanStats{CollectionInsertStats: stats},
 	}
 	if len(templateRecords) > 0 {
 		phaseStart = time.Now()
@@ -347,7 +347,7 @@ func (plan *insertBatchPlan) checkPersistedConflicts(snap *backenddb.Snapshot, c
 		return fmt.Errorf("collections: insert conflict check missing primary keys: got %d, want %d", len(plan.primaryKeys), len(plan.resultIDs))
 	}
 	uniqueRootIDs := uniqueIndexRootIDs(catalog)
-	if len(plan.resultIDs) > 0 && len(uniqueRootIDs) > 0 && !plan.uniqueProbeRunsSet {
+	if len(plan.resultIDs) > 0 && len(uniqueRootIDs) > 0 && !plan.allUniqueProbeRunsBuilt {
 		return errors.New("collections: insert conflict check missing unique probe runs")
 	}
 	preflight := insertBatchPreflight{
