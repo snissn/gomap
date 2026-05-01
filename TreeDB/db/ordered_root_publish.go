@@ -820,10 +820,17 @@ func (db *DB) PublishOrderedRootDeltaGroupWithSystemBuilder(ordered []OrderedRoo
 		db.writeMu.Unlock()
 		db.observeOrderedRootDeltaGroupPublish(wait, hold, rootsObserved, err)
 	}
+	cleanupIterators := func() {}
+	// finishPublish intentionally runs before iterator cleanup: caller-provided
+	// iterator Close paths can do arbitrary cleanup and should not extend the
+	// write-lock hold time reported for the publish itself.
+	defer func() {
+		finishPublish()
+		cleanupIterators()
+	}()
 
 	if db.readOnly {
 		err = ErrReadOnly
-		finishPublish()
 		return 0, nil, err
 	}
 
@@ -836,11 +843,9 @@ func (db *DB) PublishOrderedRootDeltaGroupWithSystemBuilder(ordered []OrderedRoo
 	systemOpts := systemRootOrderedPublishOptions(db)
 	rootIDs = make([]uint64, len(ordered))
 	orderedConsumed := make([]bool, len(ordered))
-	// finishPublish intentionally runs before iterator cleanup: caller-provided
-	// iterator Close paths can do arbitrary cleanup and should not extend the
-	// write-lock hold time reported for the publish itself.
-	defer closeUnconsumedOrderedRootDeltaPublishIterators(ordered, orderedConsumed)
-	defer finishPublish()
+	cleanupIterators = func() {
+		closeUnconsumedOrderedRootDeltaPublishIterators(ordered, orderedConsumed)
+	}
 	var retired []uint64
 	var merged adaptive.Metrics
 	for idx := range ordered {
