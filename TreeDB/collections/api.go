@@ -2425,18 +2425,8 @@ func (c *Collection) insertBatchOnce(ids, documents [][]byte, trustedValidBSON b
 			mutationLocked = true
 		}
 		c.meta = meta
-		pin := snap
-		currentCatalog := catalog
-		if plannedWithMutationLocked {
-			err = c.validateInsertBatchPlanWithSnapshotLocked(snap, catalog, meta, rootNames, baseRootIDs, plan)
-		} else {
-			pin, currentCatalog, err = c.validateInsertBatchPlanLocked(meta, rootNames, baseRootIDs, plan)
-			_ = snap.Close()
-		}
+		pin, currentCatalog, err := c.validateInsertBatchPlanAfterPlanningLocked(plannedWithMutationLocked, snap, catalog, meta, rootNames, baseRootIDs, plan)
 		if err != nil {
-			if plannedWithMutationLocked {
-				_ = snap.Close()
-			}
 			resetCollectionRunTables(plan.runs)
 			return nil, err
 		}
@@ -2457,18 +2447,8 @@ func (c *Collection) insertBatchOnce(ids, documents [][]byte, trustedValidBSON b
 		mutationLocked = true
 	}
 	c.meta = meta
-	pin := snap
-	currentCatalog := catalog
-	if plannedWithMutationLocked {
-		err = c.validateInsertBatchPlanWithSnapshotLocked(snap, catalog, meta, rootNames, baseRootIDs, plan)
-	} else {
-		pin, currentCatalog, err = c.validateInsertBatchPlanLocked(meta, rootNames, baseRootIDs, plan)
-		_ = snap.Close()
-	}
+	pin, currentCatalog, err := c.validateInsertBatchPlanAfterPlanningLocked(plannedWithMutationLocked, snap, catalog, meta, rootNames, baseRootIDs, plan)
 	if err != nil {
-		if plannedWithMutationLocked {
-			_ = snap.Close()
-		}
 		resetCollectionRunTables(plan.runs)
 		return nil, err
 	}
@@ -2537,6 +2517,22 @@ func insertBatchPlanRootNamesAndBaseIDs(plan *insertBatchPlan, catalog *collecti
 		}
 	}
 	return rootNames, baseRootIDs
+}
+
+func (c *Collection) validateInsertBatchPlanAfterPlanningLocked(plannedWithMutationLocked bool, snap *backenddb.Snapshot, catalog *collectionCatalog, meta CollectionMeta, rootNames []string, baseRootIDs map[string]uint64, plan *insertBatchPlan) (*backenddb.Snapshot, *collectionCatalog, error) {
+	if plannedWithMutationLocked {
+		if err := c.validateInsertBatchPlanWithSnapshotLocked(snap, catalog, meta, rootNames, baseRootIDs, plan); err != nil {
+			_ = snap.Close()
+			return nil, nil, err
+		}
+		return snap, catalog, nil
+	}
+	current, currentCatalog, err := c.validateInsertBatchPlanLocked(meta, rootNames, baseRootIDs, plan)
+	_ = snap.Close()
+	if err != nil {
+		return nil, nil, err
+	}
+	return current, currentCatalog, nil
 }
 
 func (c *Collection) validateInsertBatchPlanLocked(meta CollectionMeta, rootNames []string, baseRootIDs map[string]uint64, plan *insertBatchPlan) (*backenddb.Snapshot, *collectionCatalog, error) {
