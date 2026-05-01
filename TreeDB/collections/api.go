@@ -3489,6 +3489,8 @@ func cachedWriteDomainCatalogForState(domain *collectionWriteDomain, systemRoot,
 	if !domain.loaded || domain.catalog == nil || domain.baseSystemRoot != systemRoot || domain.baseCommitSeq != commitSeq {
 		return nil
 	}
+	// The write domain owns this catalog. Callers may read it directly, but must
+	// copy before retaining it in another cache.
 	return domain.catalog
 }
 
