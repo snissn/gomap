@@ -20,19 +20,21 @@ const (
 )
 
 type profileRecorder struct {
-	dir                  string
-	blockRate            int
-	mutexFraction        int
-	traceEnabled         bool
-	heapGC               bool
-	createdAt            time.Time
-	resultPath           string
-	manifestPath         string
-	mu                   sync.Mutex
-	phaseMu              sync.Mutex
-	seenNames            map[string]int
-	artifacts            []profilePhaseArtifact
-	profilingRatesActive bool
+	dir                   string
+	blockRate             int
+	mutexFraction         int
+	traceEnabled          bool
+	heapGC                bool
+	createdAt             time.Time
+	resultPath            string
+	manifestPath          string
+	mu                    sync.Mutex
+	phaseMu               sync.Mutex
+	seenNames             map[string]int
+	artifacts             []profilePhaseArtifact
+	blockProfileActive    bool
+	mutexProfileActive    bool
+	previousMutexFraction int
 }
 
 type profileManifest struct {
@@ -98,11 +100,11 @@ func newProfileRecorder(cfg config) (*profileRecorder, error) {
 	}
 	if recorder.blockRate > 0 {
 		runtime.SetBlockProfileRate(recorder.blockRate)
-		recorder.profilingRatesActive = true
+		recorder.blockProfileActive = true
 	}
 	if recorder.mutexFraction > 0 {
-		runtime.SetMutexProfileFraction(recorder.mutexFraction)
-		recorder.profilingRatesActive = true
+		recorder.previousMutexFraction = runtime.SetMutexProfileFraction(recorder.mutexFraction)
+		recorder.mutexProfileActive = true
 	}
 	return recorder, nil
 }
@@ -129,12 +131,17 @@ func (r *profileRecorder) ResultPath() string {
 }
 
 func (r *profileRecorder) Close() {
-	if r == nil || !r.profilingRatesActive {
+	if r == nil {
 		return
 	}
-	runtime.SetBlockProfileRate(0)
-	runtime.SetMutexProfileFraction(0)
-	r.profilingRatesActive = false
+	// Block and mutex profiling knobs are process-global. The runtime exposes
+	// the previous mutex fraction but not the previous block profile rate, so
+	// Close restores only the setting it can restore without guessing.
+	if r.mutexProfileActive {
+		runtime.SetMutexProfileFraction(r.previousMutexFraction)
+		r.mutexProfileActive = false
+	}
+	r.blockProfileActive = false
 }
 
 func (r *profileRecorder) RunPhase(name string, run func() (phaseResult, error)) (result phaseResult, err error) {
@@ -317,7 +324,7 @@ func (p *activeProfilePhase) writeRuntimeProfiles() []error {
 	return errs
 }
 
-func writeRuntimeProfile(name, path string) error {
+func writeRuntimeProfile(name, path string) (err error) {
 	profile := pprof.Lookup(name)
 	if profile == nil {
 		return fmt.Errorf("runtime profile %q is unavailable", name)
@@ -326,16 +333,20 @@ func writeRuntimeProfile(name, path string) error {
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	defer func() {
+		err = errors.Join(err, file.Close())
+	}()
 	return profile.WriteTo(file, 0)
 }
 
-func writeProfileJSONFile(path string, value any) error {
+func writeProfileJSONFile(path string, value any) (err error) {
 	file, err := createProfileFile(path)
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	defer func() {
+		err = errors.Join(err, file.Close())
+	}()
 	encoder := json.NewEncoder(file)
 	encoder.SetIndent("", "  ")
 	return encoder.Encode(value)
