@@ -3376,8 +3376,7 @@ func TestCollectionUpdateDirectRecoversCallbackPanic(t *testing.T) {
 		t.Fatalf("insert batch: %v", err)
 	}
 
-	directCol := *col
-	directCol.writeDomain = nil
+	directCol := &Collection{db: d, meta: col.Meta()}
 	matched, modified, err := directCol.Update([]byte("u1"), func([]byte) ([]byte, bool, error) {
 		panic("bad callback")
 	})
