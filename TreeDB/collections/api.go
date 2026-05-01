@@ -71,6 +71,7 @@ type UpdateBatchItem struct {
 type UpdateBatchResult struct {
 	Matched  bool
 	Modified bool
+	Err      error
 }
 
 func IsDuplicateKeyError(err error) bool {
@@ -3032,15 +3033,14 @@ func (c *Collection) updateCombiner() *collectionUpdateCombiner {
 		}
 		if domain.updateCombiner != nil {
 			combiner := domain.updateCombiner
-			done := combiner.done
 			if !combiner.isStopped() {
 				domain.updateCombineMu.Unlock()
 				return combiner
 			}
-			domain.updateCombineMu.Unlock()
-			if done != nil {
-				<-done
+			if domain.updateCombiner == combiner {
+				domain.updateCombiner = nil
 			}
+			domain.updateCombineMu.Unlock()
 			continue
 		}
 		combiner := &collectionUpdateCombiner{
@@ -3255,8 +3255,15 @@ func (combiner *collectionUpdateCombiner) runBatch(batch []collectionUpdateCombi
 	}
 	for i, req := range batch {
 		result := results[i]
-		completeUpdateCombineRequest(req, collectionUpdateCombineResult{matched: result.Matched, modified: result.Modified})
+		completeUpdateCombineRequest(req, updateCombineResultFromBatchResult(result))
 	}
+}
+
+func updateCombineResultFromBatchResult(result UpdateBatchResult) collectionUpdateCombineResult {
+	if result.Err != nil {
+		return collectionUpdateCombineResult{err: result.Err}
+	}
+	return collectionUpdateCombineResult{matched: result.Matched, modified: result.Modified}
 }
 
 func runUpdateCombineDirect(req collectionUpdateCombineRequest) collectionUpdateCombineResult {

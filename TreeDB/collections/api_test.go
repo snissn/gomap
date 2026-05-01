@@ -2810,6 +2810,17 @@ func TestCollectionUpdateCombinerRunBatchIsolatesItemErrors(t *testing.T) {
 	}
 }
 
+func TestUpdateCombineResultFromBatchResultPropagatesPerItemError(t *testing.T) {
+	itemErr := errors.New("item failed")
+	result := updateCombineResultFromBatchResult(UpdateBatchResult{Matched: true, Modified: true, Err: itemErr})
+	if !errors.Is(result.err, itemErr) {
+		t.Fatalf("result err=%v want %v", result.err, itemErr)
+	}
+	if result.matched || result.modified {
+		t.Fatalf("matched=%v modified=%v want false,false when err is set", result.matched, result.modified)
+	}
+}
+
 func TestCollectionUpdateCombinerRunBatchRecoversCallbackPanic(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
@@ -3043,6 +3054,47 @@ func TestCollectionManagerCloseStopsUpdateCombiners(t *testing.T) {
 	}
 	if got := col.updateCombiner(); got != nil {
 		t.Fatal("closed manager created a new combiner")
+	}
+}
+
+func TestCollectionUpdateCombinerReplacesStoppedCachedCombinerWithoutWaiting(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	stopped := &collectionUpdateCombiner{done: make(chan struct{})}
+	stopped.mu.Lock()
+	stopped.stopped = true
+	stopped.mu.Unlock()
+	col.writeDomain.updateCombineMu.Lock()
+	col.writeDomain.updateCombiner = stopped
+	col.writeDomain.updateCombineMu.Unlock()
+
+	gotCh := make(chan *collectionUpdateCombiner, 1)
+	go func() {
+		gotCh <- col.updateCombiner()
+	}()
+	select {
+	case got := <-gotCh:
+		if got == nil {
+			t.Fatal("updateCombiner returned nil")
+		}
+		if got == stopped {
+			t.Fatal("updateCombiner reused stopped combiner")
+		}
+		got.stop()
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("updateCombiner waited for stopped combiner done channel")
 	}
 }
 
