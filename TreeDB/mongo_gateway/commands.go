@@ -209,7 +209,16 @@ func (s *Server) updateResponse(command wire.Document, sequences []wire.Document
 		parsed = append(parsed, item)
 	}
 	var matched, modified int32
-	if len(parsed) > 1 && !hasDuplicateKey {
+	if len(parsed) == 1 {
+		var matchedOne, modifiedOne bool
+		matchedOne, modifiedOne, err = s.runMongoUpdateCoalesced(name, col, parsed[0])
+		if matchedOne {
+			matched = 1
+		}
+		if modifiedOne {
+			modified = 1
+		}
+	} else if len(parsed) > 1 && !hasDuplicateKey {
 		matched, modified, err = runMongoUpdateBatch(col, parsed)
 	} else {
 		matched, modified, err = runMongoUpdatesSequential(col, parsed)
@@ -310,9 +319,27 @@ func runMongoUpdateOne(col *collections.Collection, update mongoUpdateItem) (boo
 }
 
 func runMongoUpdateBatch(col *collections.Collection, updates []mongoUpdateItem) (int32, int32, error) {
-	materializer, err := storedDocumentMaterializerForCollection(col)
+	results, err := runMongoUpdateBatchResults(col, updates)
 	if err != nil {
 		return 0, 0, err
+	}
+	var matched int32
+	var modified int32
+	for _, result := range results {
+		if result.Matched {
+			matched++
+		}
+		if result.Modified {
+			modified++
+		}
+	}
+	return matched, modified, nil
+}
+
+func runMongoUpdateBatchResults(col *collections.Collection, updates []mongoUpdateItem) ([]collections.UpdateBatchResult, error) {
+	materializer, err := storedDocumentMaterializerForCollection(col)
+	if err != nil {
+		return nil, err
 	}
 	if materializer != nil {
 		defer func() { _ = materializer.Close() }()
@@ -329,19 +356,9 @@ func runMongoUpdateBatch(col *collections.Collection, updates []mongoUpdateItem)
 	}
 	results, err := col.UpdateBatch(items)
 	if err != nil {
-		return 0, 0, err
+		return nil, err
 	}
-	var matched int32
-	var modified int32
-	for _, result := range results {
-		if result.Matched {
-			matched++
-		}
-		if result.Modified {
-			modified++
-		}
-	}
-	return matched, modified, nil
+	return results, nil
 }
 
 func applyMongoUpdateToStoredDocument(col *collections.Collection, materializer *collections.StoredDocumentJSONMaterializer, update mongoUpdateItem, stored []byte) ([]byte, bool, error) {
@@ -364,6 +381,133 @@ func applyMongoUpdateToStoredDocument(col *collections.Collection, materializer 
 		return nil, false, nil
 	}
 	return encoded, true, nil
+}
+
+type mongoUpdateCoalescer struct {
+	maxDelay time.Duration
+	maxBatch int
+	requests chan mongoUpdateCoalescerRequest
+}
+
+type mongoUpdateCoalescerRequest struct {
+	col  *collections.Collection
+	item mongoUpdateItem
+	done chan mongoUpdateCoalescerResult
+}
+
+type mongoUpdateCoalescerResult struct {
+	matched  bool
+	modified bool
+	err      error
+}
+
+func (s *Server) runMongoUpdateCoalesced(name string, col *collections.Collection, update mongoUpdateItem) (bool, bool, error) {
+	coalescer := s.mongoUpdateCoalescer(name)
+	if coalescer == nil {
+		return runMongoUpdateOne(col, update)
+	}
+	done := make(chan mongoUpdateCoalescerResult, 1)
+	coalescer.requests <- mongoUpdateCoalescerRequest{col: col, item: update, done: done}
+	result := <-done
+	return result.matched, result.modified, result.err
+}
+
+func (s *Server) mongoUpdateCoalescer(name string) *mongoUpdateCoalescer {
+	if s == nil || s.UpdateCoalescingMaxBatch <= 1 || s.UpdateCoalescingMaxDelay < 0 {
+		return nil
+	}
+	maxBatch := s.UpdateCoalescingMaxBatch
+	if maxBatch <= 1 {
+		return nil
+	}
+	maxDelay := s.UpdateCoalescingMaxDelay
+	s.updateMu.Lock()
+	defer s.updateMu.Unlock()
+	if s.updateCoalescers == nil {
+		s.updateCoalescers = make(map[string]*mongoUpdateCoalescer)
+	}
+	if coalescer := s.updateCoalescers[name]; coalescer != nil {
+		return coalescer
+	}
+	coalescer := &mongoUpdateCoalescer{
+		maxDelay: maxDelay,
+		maxBatch: maxBatch,
+		requests: make(chan mongoUpdateCoalescerRequest, maxBatch*4),
+	}
+	s.updateCoalescers[name] = coalescer
+	go coalescer.run()
+	return coalescer
+}
+
+func (c *mongoUpdateCoalescer) run() {
+	for first := range c.requests {
+		batch := []mongoUpdateCoalescerRequest{first}
+		if c.maxDelay > 0 {
+			timer := time.NewTimer(c.maxDelay)
+		collect:
+			for len(batch) < c.maxBatch {
+				select {
+				case req := <-c.requests:
+					batch = append(batch, req)
+				case <-timer.C:
+					break collect
+				}
+			}
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+		}
+		for len(batch) < c.maxBatch {
+			select {
+			case req := <-c.requests:
+				batch = append(batch, req)
+			default:
+				goto drained
+			}
+		}
+	drained:
+		c.runBatch(batch)
+	}
+}
+
+func (c *mongoUpdateCoalescer) runBatch(batch []mongoUpdateCoalescerRequest) {
+	if len(batch) == 1 || mongoUpdateCoalescerHasDuplicateKeys(batch) {
+		for _, req := range batch {
+			matched, modified, err := runMongoUpdateOne(req.col, req.item)
+			req.done <- mongoUpdateCoalescerResult{matched: matched, modified: modified, err: err}
+		}
+		return
+	}
+	updates := make([]mongoUpdateItem, len(batch))
+	for i, req := range batch {
+		updates[i] = req.item
+	}
+	results, err := runMongoUpdateBatchResults(batch[0].col, updates)
+	if err != nil {
+		for _, req := range batch {
+			req.done <- mongoUpdateCoalescerResult{err: err}
+		}
+		return
+	}
+	for i, req := range batch {
+		result := results[i]
+		req.done <- mongoUpdateCoalescerResult{matched: result.Matched, modified: result.Modified}
+	}
+}
+
+func mongoUpdateCoalescerHasDuplicateKeys(batch []mongoUpdateCoalescerRequest) bool {
+	seen := make(map[string]struct{}, len(batch))
+	for _, req := range batch {
+		key := string(req.item.key)
+		if _, ok := seen[key]; ok {
+			return true
+		}
+		seen[key] = struct{}{}
+	}
+	return false
 }
 
 func (s *Server) deleteResponse(command wire.Document, sequences []wire.DocumentSequence) (wire.Document, error) {

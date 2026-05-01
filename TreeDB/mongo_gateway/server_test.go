@@ -9,6 +9,7 @@ import (
 	"math"
 	"net"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -584,6 +585,63 @@ func TestServerUpdateBatchesDistinctIDs(t *testing.T) {
 		if !ok || gotScore != tc.score {
 			t.Fatalf("%s score=%d ok=%v want %d", tc.id, gotScore, ok, tc.score)
 		}
+	}
+}
+
+func TestServerUpdateCoalescesConcurrentDistinctIDs(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	server.DefaultCollectionOptions = collections.CollectionOptions{
+		DocumentFormat: collections.DocumentFormatBSON,
+	}
+	server.UpdateCoalescingMaxDelay = 20 * time.Millisecond
+	server.UpdateCoalescingMaxBatch = 8
+	assertOK(t, serveCommand(t, server, 2260, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{
+			bson.D{{Key: "_id", Value: "u1"}, {Key: "score", Value: int32(0)}},
+			bson.D{{Key: "_id", Value: "u2"}, {Key: "score", Value: int32(0)}},
+		}},
+		{Key: "$db", Value: "app"},
+	}))
+
+	before := db.State()
+	start := make(chan struct{})
+	responses := make(chan wire.Document, 2)
+	var wg sync.WaitGroup
+	for i, id := range []string{"u1", "u2"} {
+		i, id := i, id
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			responses <- serveCommand(t, server, int32(2261+i), bson.D{
+				{Key: "update", Value: "users"},
+				{Key: "updates", Value: bson.A{bson.D{
+					{Key: "q", Value: bson.D{{Key: "_id", Value: id}}},
+					{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "score", Value: int32(10 + i)}}}}},
+				}}},
+				{Key: "$db", Value: "app"},
+			})
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(responses)
+	for response := range responses {
+		assertOK(t, response)
+		assertInt32(t, response, "n", 1)
+		assertInt32(t, response, "nModified", 1)
+	}
+	after := db.State()
+	if after.CommitSeq != before.CommitSeq+1 {
+		t.Fatalf("coalesced updates advanced commit seq by %d, want 1", after.CommitSeq-before.CommitSeq)
 	}
 }
 

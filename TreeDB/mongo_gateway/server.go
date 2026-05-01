@@ -24,14 +24,22 @@ const (
 	defaultCursorBatchSize        = 101
 	defaultCursorIdleTimeout      = 10 * time.Minute
 	defaultCursorReapInterval     = time.Second
+	defaultUpdateCoalescingDelay  = 0
+	defaultUpdateCoalescingBatch  = 256
 )
 
 type Server struct {
-	MaxMessageLength          int32
-	MaxFindScanDocuments      int
-	MaxCursorRetainedBytes    int
-	MaxOpenCursors            int
-	CursorIdleTimeout         time.Duration
+	MaxMessageLength       int32
+	MaxFindScanDocuments   int
+	MaxCursorRetainedBytes int
+	MaxOpenCursors         int
+	CursorIdleTimeout      time.Duration
+	// UpdateCoalescingMaxDelay waits for additional same-collection update
+	// commands before publishing a batch. Zero batches only already-queued work;
+	// negative disables coalescing.
+	UpdateCoalescingMaxDelay time.Duration
+	// UpdateCoalescingMaxBatch caps one coalesced same-collection update publish.
+	UpdateCoalescingMaxBatch  int
 	Collections               *collections.CollectionManager
 	DefaultCollectionOptions  collections.CollectionOptions
 	DefaultIndexStoragePolicy collections.RootStoragePolicy
@@ -42,6 +50,8 @@ type Server struct {
 	cursorMu         sync.Mutex
 	cursors          map[int64]*serverCursor
 	lastCursorReap   time.Time
+	updateMu         sync.Mutex
+	updateCoalescers map[string]*mongoUpdateCoalescer
 }
 
 type serverCursor struct {
@@ -54,7 +64,11 @@ type serverCursor struct {
 }
 
 func NewServer() *Server {
-	s := &Server{MaxMessageLength: wire.DefaultMaxMessageLength}
+	s := &Server{
+		MaxMessageLength:         wire.DefaultMaxMessageLength,
+		UpdateCoalescingMaxDelay: defaultUpdateCoalescingDelay,
+		UpdateCoalescingMaxBatch: defaultUpdateCoalescingBatch,
+	}
 	s.nextResponseID.Store(0)
 	return s
 }
