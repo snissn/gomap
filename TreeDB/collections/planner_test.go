@@ -477,8 +477,22 @@ func TestOrderedIndexStateForDocumentJSONRootFastPathRejectsOutOfRangeNumber(t *
 		t.Fatalf("index runtimes: %v", err)
 	}
 	_, err = orderedIndexStateForDocument([]byte(`{"score":1e999}`), runtimes, collectionOptions{})
-	if err == nil || !strings.Contains(err.Error(), "unsupported indexed JSON double") {
+	if err == nil || !strings.Contains(err.Error(), "unsupported indexed JSON") {
 		t.Fatalf("err=%v want unsupported indexed JSON number", err)
+	}
+}
+
+func TestOrderedIndexStateForDocumentJSONRootFastPathRejectsRoundedExponentInteger(t *testing.T) {
+	planner := insertBatchPlanner{
+		indexes: []indexDefinition{{name: "score", field: "score", valueType: IndexValueDouble}},
+	}
+	runtimes, err := planner.indexRuntimes()
+	if err != nil {
+		t.Fatalf("index runtimes: %v", err)
+	}
+	_, err = orderedIndexStateForDocument([]byte(`{"score":9007199254740993e0}`), runtimes, collectionOptions{})
+	if err == nil || !strings.Contains(err.Error(), "cannot be represented exactly as double") {
+		t.Fatalf("err=%v want exact double representation error", err)
 	}
 }
 
