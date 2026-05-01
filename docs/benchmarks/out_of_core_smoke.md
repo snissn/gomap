@@ -31,8 +31,8 @@ Useful overrides:
   -max-dead-mappings 2
 ```
 
-The script creates a timestamped run directory under `/tmp` unless `-out-dir` is
-provided.
+The script creates a timestamped run directory under the host `os.TempDir()`
+location unless `-out-dir` is provided.
 
 ## Outputs
 
