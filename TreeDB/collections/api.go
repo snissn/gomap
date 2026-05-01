@@ -356,6 +356,12 @@ type noIndexBatchEntry struct {
 }
 
 type bufferedIndexedCheckpoint struct {
+	loaded          bool
+	meta            CollectionMeta
+	catalog         *collectionCatalog
+	baseCommitSeq   uint64
+	baseSystemRoot  uint64
+	primaryRoot     uint64
 	count           int
 	bufferedBytes   int64
 	rootRuns        map[string][]memtable.Table
@@ -1473,7 +1479,7 @@ func shouldFlushBufferedIndexedWrites(domain *collectionWriteDomain, opts Collec
 	return false
 }
 
-func shouldFlushBufferedIndexedWritesAfter(domain *collectionWriteDomain, opts CollectionOptions, addedCount int, addedBytes int64) bool {
+func shouldFlushBufferedIndexedWritesAfterAdding(domain *collectionWriteDomain, opts CollectionOptions, addedCount int, addedBytes int64) bool {
 	if domain == nil || addedCount <= 0 {
 		return false
 	}
@@ -1508,6 +1514,12 @@ func checkpointBufferedIndexedDomain(domain *collectionWriteDomain) bufferedInde
 		return bufferedIndexedCheckpoint{}
 	}
 	return bufferedIndexedCheckpoint{
+		loaded:          domain.loaded,
+		meta:            domain.meta,
+		catalog:         domain.catalog,
+		baseCommitSeq:   domain.baseCommitSeq,
+		baseSystemRoot:  domain.baseSystemRoot,
+		primaryRoot:     domain.primaryRoot,
 		count:           domain.count,
 		bufferedBytes:   domain.bufferedBytes,
 		rootRuns:        cloneTableRunMap(domain.rootRuns),
@@ -1523,12 +1535,18 @@ func rollbackBufferedIndexedDomain(domain *collectionWriteDomain, checkpoint buf
 	}
 	resetTableRunsAddedAfterCheckpoint(domain.rootRuns, checkpoint.rootRuns)
 	resetTableRunsAddedAfterCheckpoint(domain.uniqueValueRuns, checkpoint.uniqueValueRuns)
+	domain.loaded = checkpoint.loaded
+	domain.meta = checkpoint.meta
+	domain.catalog = checkpoint.catalog
+	domain.baseCommitSeq = checkpoint.baseCommitSeq
+	domain.baseSystemRoot = checkpoint.baseSystemRoot
+	domain.primaryRoot = checkpoint.primaryRoot
 	domain.count = checkpoint.count
 	domain.bufferedBytes = checkpoint.bufferedBytes
 	domain.rootRuns = checkpoint.rootRuns
 	domain.rootPolicies = checkpoint.rootPolicies
 	domain.rootBaseIDs = checkpoint.rootBaseIDs
-	domain.primaryIDIndex = rebuildBufferedPrimaryIDIndex(domain.meta.Name, checkpoint.rootRuns)
+	domain.primaryIDIndex = rebuildBufferedPrimaryIDIndex(checkpoint.meta.Name, checkpoint.rootRuns)
 	domain.uniqueValueRuns = checkpoint.uniqueValueRuns
 	domain.uniqueValueIndex = rebuildBufferedUniqueValueIndexes(checkpoint.uniqueValueRuns)
 }
@@ -4454,8 +4472,9 @@ func (c *Collection) bufferUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, e
 	if domain.rootRuns == nil {
 		domain.rootRuns = make(map[string][]memtable.Table, len(plan.rootNames))
 	}
-	autoFlushEnabled := shouldFlushBufferedIndexedWritesAfter(domain, plan.meta.Options, modifiedCount, stagedBytes)
+	autoFlushEnabled := shouldFlushBufferedIndexedWritesAfterAdding(domain, plan.meta.Options, modifiedCount, stagedBytes)
 	var checkpoint bufferedIndexedCheckpoint
+	collectionMetaCheckpoint := c.meta
 	if autoFlushEnabled {
 		checkpoint = checkpointBufferedIndexedDomain(domain)
 	}
@@ -4488,6 +4507,7 @@ func (c *Collection) bufferUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, e
 		if err := c.flushBufferedIndexedLocked(domain); err != nil {
 			if autoFlushEnabled {
 				rollbackBufferedIndexedDomain(domain, checkpoint)
+				c.meta = collectionMetaCheckpoint
 			}
 			return false, err
 		}
