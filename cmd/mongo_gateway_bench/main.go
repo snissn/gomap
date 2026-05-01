@@ -10,6 +10,7 @@ import (
 	"io"
 	"io/fs"
 	"math"
+	"math/bits"
 	"net"
 	"net/url"
 	"os"
@@ -1128,7 +1129,7 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget, profiler
 			documentOrdinal := (i * 31) % cfg.Documents
 			id := benchmarkID(documentOrdinal)
 			filter := bson.D{{Key: "_id", Value: id}}
-			update := benchmarkSetUpdate(i, documentOrdinal, false, cfg.UpdateIndexedField)
+			update := benchmarkSetUpdate(i, documentOrdinal, cfg.Documents, false, cfg.UpdateIndexedField)
 			// Sample the driver/gateway/DB call; request construction is outside
 			// the update latency window and documented in the README.
 			begin := time.Now()
@@ -1179,7 +1180,7 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget, profiler
 				documentOrdinal := (op * 37) % cfg.Documents
 				id := benchmarkID(documentOrdinal)
 				filter := bson.D{{Key: "_id", Value: id}}
-				update := benchmarkSetUpdate(op, documentOrdinal, true, cfg.UpdateIndexedField)
+				update := benchmarkSetUpdate(op, documentOrdinal, cfg.Documents, true, cfg.UpdateIndexedField)
 				// Sample the driver/gateway/DB call; request construction is outside
 				// the update latency window and documented in the README.
 				begin := time.Now()
@@ -1988,7 +1989,7 @@ func benchmarkDocument(i int) bson.D {
 	}
 }
 
-func benchmarkSetUpdate(i int, documentOrdinal int, concurrentPhase bool, updateIndexedField bool) bson.D {
+func benchmarkSetUpdate(i int, documentOrdinal int, documentCount int, concurrentPhase bool, updateIndexedField bool) bson.D {
 	set := make(bson.D, 0, 3)
 	updatedKey := "updated"
 	updateSeqKey := "update_seq"
@@ -2001,7 +2002,7 @@ func benchmarkSetUpdate(i int, documentOrdinal int, concurrentPhase bool, update
 		bson.E{Key: updateSeqKey, Value: int64(i)},
 	)
 	if updateIndexedField {
-		set = append(set, bson.E{Key: "city", Value: benchmarkUpdatedCity(i, documentOrdinal)})
+		set = append(set, bson.E{Key: "city", Value: benchmarkUpdatedCity(i, documentOrdinal, documentCount)})
 	}
 	return bson.D{{Key: "$set", Value: set}}
 }
@@ -2018,14 +2019,34 @@ func benchmarkCity(i int) string {
 	return benchmarkCities[i%len(benchmarkCities)]
 }
 
-func benchmarkUpdatedCity(i int, documentOrdinal int) string {
+func benchmarkUpdatedCity(i int, documentOrdinal int, documentCount int) string {
 	prewarmBenchmarkUpdatedCities()
 	cycle := len(benchmarkUpdatedCityValues)
 	if cycle == 0 {
 		return ""
 	}
-	index := (i%cycle + i/cycle + documentOrdinal) % cycle
+	index := benchmarkUpdatedCityIndex(i, documentOrdinal, documentCount, cycle)
+	if documentCount > 0 && i >= documentCount {
+		previousIndex := benchmarkUpdatedCityIndex(i-documentCount, documentOrdinal, documentCount, cycle)
+		if index == previousIndex {
+			index = (index + 1) % cycle
+		}
+	}
 	return benchmarkUpdatedCityValues[index]
+}
+
+func benchmarkUpdatedCityIndex(i int, documentOrdinal int, documentCount int, cycle int) int {
+	if cycle <= 0 {
+		return 0
+	}
+	seed := uint64(i+1)*0x9e3779b185ebca87 ^
+		bits.RotateLeft64(uint64(documentOrdinal+1)*0xc2b2ae3d27d4eb4f, 17) ^
+		bits.RotateLeft64(uint64(documentCount+1)*0x165667b19e3779f9, 31)
+	seed += 0x9e3779b97f4a7c15
+	seed = (seed ^ (seed >> 30)) * 0xbf58476d1ce4e5b9
+	seed = (seed ^ (seed >> 27)) * 0x94d049bb133111eb
+	seed ^= seed >> 31
+	return int(seed % uint64(cycle))
 }
 
 func prewarmBenchmarkUpdatedCities() {
