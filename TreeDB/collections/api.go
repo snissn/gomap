@@ -3026,9 +3026,6 @@ func (c *Collection) Update(documentID []byte, update func(current []byte) (repl
 	if combiner := c.updateCombiner(); combiner != nil {
 		return combiner.update(c, documentID, update)
 	}
-	if err := c.ensureWriteDomainOpen(); err != nil {
-		return false, false, err
-	}
 	return c.updateDirect(documentID, recoverCollectionUpdateCallback(update))
 }
 
@@ -3333,21 +3330,8 @@ func (combiner *collectionUpdateCombiner) stop() {
 	if combiner == nil {
 		return
 	}
-	closed := combiner.closeRequests()
-	if !closed {
-		return
-	}
-	if combiner.running.Load() {
-		return
-	}
-	if combiner.done != nil {
-		timer := time.NewTimer(collectionUpdateCombinerStopTimeout)
-		defer timer.Stop()
-		select {
-		case <-combiner.done:
-		case <-timer.C:
-		}
-	}
+	_ = combiner.closeRequests()
+	combiner.waitDoneWithTimeout(collectionUpdateCombinerStopTimeout)
 }
 
 func (combiner *collectionUpdateCombiner) waitDone() {
@@ -3355,6 +3339,28 @@ func (combiner *collectionUpdateCombiner) waitDone() {
 		return
 	}
 	<-combiner.done
+}
+
+func (combiner *collectionUpdateCombiner) waitDoneWithTimeout(timeout time.Duration) bool {
+	if combiner == nil || combiner.done == nil {
+		return true
+	}
+	if timeout <= 0 {
+		select {
+		case <-combiner.done:
+			return true
+		default:
+			return false
+		}
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-combiner.done:
+		return true
+	case <-timer.C:
+		return false
+	}
 }
 
 func (combiner *collectionUpdateCombiner) closeRequests() bool {
@@ -3478,7 +3484,7 @@ func (combiner *collectionUpdateCombiner) runBatch(batch []collectionUpdateCombi
 			completeUpdateCombineBatchWithError(batch, collectionUpdatePanicError("combiner", recovered))
 		}
 	}()
-	if len(batch) == 1 || collectionUpdateCombineHasDuplicateIDs(batch) {
+	if len(batch) == 1 || collectionUpdateCombineHasDuplicateIDs(batch) || !collectionUpdateCombineSameCollection(batch) {
 		for _, req := range batch {
 			completeUpdateCombineRequest(req, runUpdateCombineDirect(req))
 		}
@@ -3513,6 +3519,26 @@ func (combiner *collectionUpdateCombiner) runBatch(batch []collectionUpdateCombi
 		result := results[i]
 		completeUpdateCombineRequest(req, collectionUpdateCombineResult{matched: result.Matched, modified: result.Modified})
 	}
+}
+
+func collectionUpdateCombineSameCollection(batch []collectionUpdateCombineRequest) bool {
+	if len(batch) == 0 {
+		return true
+	}
+	first := batch[0].collection
+	var firstDomain *collectionWriteDomain
+	if first != nil {
+		firstDomain = first.writeDomain
+	}
+	for _, req := range batch[1:] {
+		if req.collection == first {
+			continue
+		}
+		if req.collection == nil || firstDomain == nil || req.collection.writeDomain != firstDomain {
+			return false
+		}
+	}
+	return true
 }
 
 func runUpdateCombineDirect(req collectionUpdateCombineRequest) collectionUpdateCombineResult {
