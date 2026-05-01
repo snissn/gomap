@@ -189,3 +189,81 @@ func TestMmapSafety_Concurrent_Remap(t *testing.T) {
 
 	wg.Wait()
 }
+
+func TestCurrentWritableMmapTargetMapsAheadWithinLeafSegment(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("mmap not supported on windows")
+	}
+	prevCurrent := enableCurrentWritableMmap
+	prevLeaf := enableCurrentLeafWritableMmap
+	enableCurrentWritableMmap = false
+	enableCurrentLeafWritableMmap = true
+	withMaxDeadMappings(t, 1)
+	withCurrentWritableMmapTargetBytes(t, 64<<10)
+	defer func() {
+		enableCurrentWritableMmap = prevCurrent
+		enableCurrentLeafWritableMmap = prevLeaf
+	}()
+
+	dir := t.TempDir()
+	fileID := mustEncodeFileID(t, ReservedLeafLogLaneID, 1)
+	path := filepath.Join(dir, "value-l255-000001.log")
+	w, err := NewWriter(path, fileID)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	defer func() { _ = w.Close() }()
+
+	first := bytes.Repeat([]byte("a"), 1024)
+	ptr, err := w.Append(0, nil, 1, first)
+	if err != nil {
+		t.Fatalf("Append first: %v", err)
+	}
+	if err := w.Flush(); err != nil {
+		t.Fatalf("Flush first: %v", err)
+	}
+
+	f, err := openFile(path, fileID, nil, nil, templ.DecodeOptions{}, nil)
+	if err != nil {
+		t.Fatalf("openFile: %v", err)
+	}
+	f.currentWritable.Store(true)
+	defer func() { _ = f.Close() }()
+
+	got, err := f.ReadUnsafe(ptr, false)
+	if err != nil {
+		t.Fatalf("ReadUnsafe first: %v", err)
+	}
+	if !bytes.Equal(got, first) {
+		t.Fatalf("first read mismatch")
+	}
+	data, _ := f.mmapData.Load().([]byte)
+	if gotLen := len(data); gotLen < 64<<10 {
+		t.Fatalf("mapped length=%d, want at least target", gotLen)
+	}
+
+	for i := 0; i < 20; i++ {
+		value := bytes.Repeat([]byte{byte('b' + i%20)}, 1024)
+		ptr, err := w.Append(0, nil, uint64(2+i), value)
+		if err != nil {
+			t.Fatalf("Append %d: %v", i, err)
+		}
+		if err := w.Flush(); err != nil {
+			t.Fatalf("Flush %d: %v", i, err)
+		}
+		got, err := f.ReadUnsafe(ptr, false)
+		if err != nil {
+			t.Fatalf("ReadUnsafe %d: %v", i, err)
+		}
+		if !bytes.Equal(got, value) {
+			t.Fatalf("read %d mismatch", i)
+		}
+	}
+
+	if dead := f.deadMappingsCount.Load(); dead != 0 {
+		t.Fatalf("mapped-ahead current leaf should not churn dead mappings within target, got=%d", dead)
+	}
+	if fallbacks := f.mmapReadFallbackReadAt.Load(); fallbacks != 0 {
+		t.Fatalf("mapped-ahead current leaf should avoid ReadAt fallback, got=%d", fallbacks)
+	}
+}

@@ -92,6 +92,15 @@ func withMaxDeadMappings(t *testing.T, max int) {
 	})
 }
 
+func withCurrentWritableMmapTargetBytes(t *testing.T, target int64) {
+	t.Helper()
+	prev := CurrentWritableMmapTargetBytes
+	CurrentWritableMmapTargetBytes = target
+	t.Cleanup(func() {
+		CurrentWritableMmapTargetBytes = prev
+	})
+}
+
 func TestManagerMmapReadStatsAggregatesCounters(t *testing.T) {
 	mgr := &Manager{
 		files: map[uint32]*File{
@@ -477,6 +486,7 @@ func TestManagerPromoteCurrentWritable_KeepsLeafCurrentMmapWhenSealedBudgetAllow
 	enableCurrentLeafWritableMmap = true
 	withMappedLeafSealedBudget(t, 1)
 	withMappedLeafSealedBytesBudget(t, 1<<20)
+	withCurrentWritableMmapTargetBytes(t, 64<<10)
 	t.Cleanup(func() {
 		waitForRemapIdle(t, files...)
 		enableCurrentWritableMmap = prevCurrent
@@ -569,6 +579,7 @@ func TestManagerPromoteCurrentWritable_ExcludesNextCurrentFromSealedBudget(t *te
 	enableCurrentLeafWritableMmap = true
 	withMappedLeafSealedBudget(t, 1)
 	withMappedLeafSealedBytesBudget(t, 1<<20)
+	withCurrentWritableMmapTargetBytes(t, 64<<10)
 	t.Cleanup(func() {
 		waitForRemapIdle(t, files...)
 		enableCurrentWritableMmap = prevCurrent
@@ -637,6 +648,7 @@ func TestManagerPromoteCurrentWritable_RetiresDemotedLeafWhenSealedBudgetAlready
 	enableCurrentLeafWritableMmap = true
 	withMappedLeafSealedBudget(t, 1)
 	withMappedLeafSealedBytesBudget(t, 1<<20)
+	withCurrentWritableMmapTargetBytes(t, 64<<10)
 	t.Cleanup(func() {
 		waitForRemapIdle(t, files...)
 		enableCurrentWritableMmap = prevCurrent
@@ -798,6 +810,7 @@ func TestManagerPromoteCurrentWritable_DeadMappingCapKeepsDemotedLeafMapped(t *t
 	withMappedLeafSealedBudget(t, 1)
 	withMappedLeafSealedBytesBudget(t, 1<<20)
 	withMaxDeadMappings(t, 1)
+	withCurrentWritableMmapTargetBytes(t, 64<<10)
 	t.Cleanup(func() {
 		waitForRemapIdle(t, files...)
 		enableCurrentWritableMmap = prevCurrent

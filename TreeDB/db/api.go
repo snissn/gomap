@@ -646,6 +646,7 @@ func (db *DB) Stats() map[string]string {
 		stats["treedb.vlog.mmap_remaps"] = fmt.Sprintf("%d", vlogRemaps)
 		stats["treedb.vlog.mmap_dead_mappings"] = fmt.Sprintf("%d", vlogDeadMappings)
 		stats["treedb.vlog.mmap_dead_mappings.cap_base"] = fmt.Sprintf("%d", valuelog.MaxDeadMappings)
+		stats["treedb.vlog.mmap_current_writable_map_target_bytes"] = fmt.Sprintf("%d", valuelog.CurrentWritableMmapTargetBytes)
 		stats["treedb.vlog.mmap_max_mapped_sealed_segments"] = fmt.Sprintf("%d", valuelog.MaxMappedSealedSegments)
 		stats["treedb.vlog.mmap_max_mapped_sealed_bytes"] = fmt.Sprintf("%d", valuelog.MaxMappedSealedBytes)
 		currentSegments, currentBytes, sealedSegments, sealedBytes, _, deadBytes := db.valueLogManager.MmapResidencyStats()

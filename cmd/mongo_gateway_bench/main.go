@@ -2612,6 +2612,14 @@ func newSelectedTreeDBExactStatKeySet(keys []string) map[string]struct{} {
 var selectedTreeDBStatPrefixes = [...]string{
 	"treedb.publish.ordered_root_delta_group.",
 	"treedb.publish.watermark.",
+	"treedb.cache.vlog_mmap.",
+	"treedb.vlog.mmap",
+	"treedb.cache.vlog_zombie.",
+	"treedb.process.memory.vlog_zombie",
+	"treedb.vlog.outer_leaf_block_cache.",
+	"treedb.process.read_path.outer_leaf.",
+	"treedb.cache.vlog_generation.",
+	"treedb.cache.vlog_retained_prune.",
 }
 
 func isSelectedTreeDBStatKey(key string) bool {
