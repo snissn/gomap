@@ -79,23 +79,25 @@ type config struct {
 }
 
 type benchmarkResult struct {
-	Target                      string              `json:"target"`
-	MongoURI                    string              `json:"mongo_uri,omitempty"`
-	TreeDBDir                   string              `json:"treedb_dir,omitempty"`
-	Database                    string              `json:"database"`
-	Collection                  string              `json:"collection"`
-	Documents                   int                 `json:"documents"`
-	BatchSize                   int                 `json:"batch_size"`
-	InsertProducers             int                 `json:"insert_producers"`
-	MongoMaxPoolSize            int                 `json:"mongo_max_pool_size,omitempty"`
-	MongoMinPoolSize            int                 `json:"mongo_min_pool_size,omitempty"`
-	MongoMaxConnecting          int                 `json:"mongo_max_connecting,omitempty"`
-	SecondaryIndexes            int                 `json:"secondary_indexes"`
-	ClientMode                  string              `json:"client_mode"`
-	ConcurrentReaders           int                 `json:"concurrent_readers,omitempty"`
-	ConcurrentReads             int                 `json:"concurrent_reads,omitempty"`
-	ConcurrentWriters           int                 `json:"concurrent_writers,omitempty"`
-	ConcurrentWrites            int                 `json:"concurrent_writes,omitempty"`
+	Target             string `json:"target"`
+	MongoURI           string `json:"mongo_uri,omitempty"`
+	TreeDBDir          string `json:"treedb_dir,omitempty"`
+	Database           string `json:"database"`
+	Collection         string `json:"collection"`
+	Documents          int    `json:"documents"`
+	BatchSize          int    `json:"batch_size"`
+	InsertProducers    int    `json:"insert_producers"`
+	MongoMaxPoolSize   int    `json:"mongo_max_pool_size,omitempty"`
+	MongoMinPoolSize   int    `json:"mongo_min_pool_size,omitempty"`
+	MongoMaxConnecting int    `json:"mongo_max_connecting,omitempty"`
+	SecondaryIndexes   int    `json:"secondary_indexes"`
+	ClientMode         string `json:"client_mode"`
+	ConcurrentReaders  int    `json:"concurrent_readers,omitempty"`
+	ConcurrentReads    int    `json:"concurrent_reads,omitempty"`
+	ConcurrentWriters  int    `json:"concurrent_writers,omitempty"`
+	ConcurrentWrites   int    `json:"concurrent_writes,omitempty"`
+	// Always emit this knob so benchmark artifacts distinguish default false
+	// runs from older runs that predate indexed-field update coverage.
 	UpdateIndexedField          bool                `json:"update_indexed_field"`
 	TreeDBProfile               string              `json:"treedb_profile,omitempty"`
 	TreeDBDocumentFormat        string              `json:"treedb_document_format,omitempty"`
@@ -521,6 +523,9 @@ func parseConfig(args []string) (config, error) {
 	}
 	if cfg.SecondaryIndexes < 0 || cfg.SecondaryIndexes > 2 {
 		return config{}, errors.New("secondary-indexes must be 0, 1, or 2")
+	}
+	if cfg.UpdateIndexedField && cfg.SecondaryIndexes < 2 {
+		return config{}, errors.New("update-indexed-field requires secondary-indexes=2 so city_1 exists")
 	}
 	if cfg.Format != "text" && cfg.Format != "json" {
 		return config{}, fmt.Errorf("unknown format %q", cfg.Format)

@@ -278,7 +278,7 @@ func TestParseConfigValidation(t *testing.T) {
 		"-mongo-max-pool-size", "32",
 		"-mongo-min-pool-size", "8",
 		"-mongo-max-connecting", "16",
-		"-secondary-indexes", "1",
+		"-secondary-indexes", "2",
 		"-format", "json",
 		"-concurrent-readers", "4",
 		"-concurrent-reads", "20",
@@ -289,7 +289,7 @@ func TestParseConfigValidation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse valid config: %v", err)
 	}
-	if cfg.Target != "mongo" || cfg.Documents != 10 || cfg.SecondaryIndexes != 1 || cfg.Format != "json" ||
+	if cfg.Target != "mongo" || cfg.Documents != 10 || cfg.SecondaryIndexes != 2 || cfg.Format != "json" ||
 		cfg.ClientMode != clientModeDriver ||
 		cfg.BatchSize != 5 || cfg.InsertProducers != 4 ||
 		cfg.MongoMaxPoolSize != 32 || cfg.MongoMinPoolSize != 8 || cfg.MongoMaxConnecting != 16 ||
@@ -370,6 +370,9 @@ func TestParseConfigValidation(t *testing.T) {
 	}
 	if _, err := parseConfig([]string{"-mongo-min-pool-size", "100"}); err != nil {
 		t.Fatalf("mongo-min-pool-size equal to default mongo-max-pool-size rejected: %v", err)
+	}
+	if _, err := parseConfig([]string{"-secondary-indexes", "1", "-update-indexed-field"}); err == nil {
+		t.Fatal("update-indexed-field accepted without city index")
 	}
 }
 

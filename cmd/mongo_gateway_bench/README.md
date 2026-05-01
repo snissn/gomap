@@ -299,8 +299,10 @@ Update phases change only non-indexed fields by default. Add
 `-update-indexed-field` when `city_1` exists to also change the indexed `city`
 field and exercise secondary-index maintenance in the update path.
 
-Latency samples are per MongoDB driver/gateway call. `ops_sec` is normalized by
-document count over the whole phase loop; `sampled_ops_sec` and
+Latency samples are per MongoDB driver/gateway call. Update phases build the
+filter and update document before starting the sampled timer, so update samples
+focus on the driver/gateway/DB call rather than request construction. `ops_sec`
+is normalized by document count over the whole phase loop; `sampled_ops_sec` and
 `sampled_ns_per_op` are derived from the aggregate sampled call duration. Prefer
 sampled values when investigating gateway/client overhead with prebuilt
 fixtures, and wall `ops_sec` when measuring the full benchmark loop. Insert
